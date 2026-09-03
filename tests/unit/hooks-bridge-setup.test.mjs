@@ -217,8 +217,8 @@ test('verify：未安装时明确报未安装，不谎报成功', () => {
 
 // L2 探活的硬约束：只做 TCP 握手，绝不向 server 发 HTTP 请求。
 //
-// 为什么这条值一个测试：HTTP 鉴权与 socket 握手【共用同一个限速桶】（src/server/http.js 的
-// createHttpAuth 与 src/server/app.js 的 io.use 共享 rlStates），所以一次不带 token 的 /health
+// 为什么这条值一个测试：HTTP 鉴权与 socket 握手【共用同一个限速桶】（app/src/server/http.js 的
+// createHttpAuth 与 app/src/server/app.js 的 io.use 共享 rlStates），所以一次不带 token 的 /health
 // 就是一次货真价实的鉴权失败——它会给 ip:127.0.0.1 上一把退避锁，把机主浏览器的 socket 握手
 // 一起拖下水；连续 8 次直接锁 15 分钟。scripts/service.js 的纪律 2 早已写明这个坑并规避
 // （探活只用 launchctl + 纯 TCP，"带 token 的 /health 只在 health 子命令里打一次"），

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createInstanceManager } from '../../src/server/instance-manager.js';
+import { createInstanceManager } from '../../app/src/server/instance-manager.js';
 
 test('instance manager owns IDs, per-instance preferences, lookup, and teardown', () => {
   const manager = createInstanceManager();

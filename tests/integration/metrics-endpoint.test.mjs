@@ -23,13 +23,13 @@ async function startServer() {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = TOKEN;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, TOKEN);
 }
@@ -51,7 +51,7 @@ test.describe('/metrics 端点（NFR-15）', () => {
   test.after(async () => { await cleanup(); });
 
   // 「无 token → 401」故意触发一次鉴权失败，会被 rate-limiter 记入退避窗口（阻塞后续同 sourceKey
-  // 请求，见 src/auth/rate-limiter.js「统一门」设计），因此放最后一个跑，避免误伤前面的正常路径用例。
+  // 请求，见 app/src/auth/rate-limiter.js「统一门」设计），因此放最后一个跑，避免误伤前面的正常路径用例。
 
   test('带正确 token → 200 + 指标最小集结构完整', async () => {
     const { status, body } = await get('/metrics', TOKEN);

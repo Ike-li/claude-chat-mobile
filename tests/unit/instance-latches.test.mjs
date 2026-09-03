@@ -2,10 +2,10 @@
 // 承接 P1-4「已中止独立状态」：done/error 已有的成对处理容易在补 aborted 时留下不对称疏漏
 // （只在非 viewing 时才 add done/error，但 aborted 若也照搬这个规则，会在"前台中止"这个最常见场景下
 // 从不触发；而 result 事件的清除若只对 viewing 或非 viewing 单独处理，会漏清另一侧的 aborted）。
-// 抽成纯函数集中处理，避免这类疏漏散落在 server.js 的大回调里。
+// 抽成纯函数集中处理，避免这类疏漏散落在 app/server.js 的大回调里。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveLatches } from '../../src/server/instance-latches.js';
+import { deriveLatches } from '../../app/src/server/instance-latches.js';
 
 const base = { inDone: false, inError: false, inAborted: false, isViewing: false };
 

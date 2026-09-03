@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createSocketEventRegistrar } from '../../src/server/socket.js';
+import { createSocketEventRegistrar } from '../../app/src/server/socket.js';
 
 function fakeSocket({ approved = true } = {}) {
   const handlers = new Map();

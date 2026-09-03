@@ -5,7 +5,7 @@
 //
 // 审计 TC-005 复核修正：本文件曾在同一进程内先后起两个 test.describe（默认 lane + 新增的
 // RUN_CLAUDE_INTEGRATION 专用 lane），各自 test.before(startServer)/test.after(cleanup)，但
-// startServer() 用的是 ESM 动态 import('../../server.js')——同 claude-lifecycle.test.mjs/
+// startServer() 用的是 ESM 动态 import('../../app/server.js')——同 claude-lifecycle.test.mjs/
 // websocket-events.test.mjs 修复前的病灶：第一个 describe 的 cleanup() 关掉真实 httpServer/io 后，
 // 第二个 describe 的 startServer() 再次 import 同一 URL，ESM 模块缓存只会返回同一个（已关闭的）
 // 引用，第二个 describe 的用例永远连不上、必超时。改用 tests/integration/_spawn-server.mjs 真起
@@ -18,7 +18,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { validateAttachments, saveAttachments, sanitizeName } from '../../src/files/uploads.js';
+import { validateAttachments, saveAttachments, sanitizeName } from '../../app/src/files/uploads.js';
 import { spawnServer, killServer } from './_spawn-server.mjs';
 
 let port, dataDir, serverProc;
@@ -45,7 +45,7 @@ async function startServer() {
 
 // 创建 socket 客户端
 function createClient() {
-  // 从 .env 文件读取 AUTH_TOKEN（server.js 会在模块加载时读取它）
+  // 从 .env 文件读取 AUTH_TOKEN（app/server.js 会在模块加载时读取它）
   const authToken = 'ccm-integration-test-token';   // 与 spawnServer 传给子进程的一致（§1.9 起必须有 token）
   const socket = ioClient(`http://127.0.0.1:${port}`, {
     auth: { token: authToken },  // 传递 AUTH_TOKEN
@@ -265,8 +265,8 @@ test.describe('文件上传安全集成测试', () => {
 
   // ── Socket.IO 附件发送集成测试 ──
   // TC-005："发送合法附件成功" 这一个 case 移到下面的 RUN_CLAUDE_INTEGRATION 专用 describe 了——
-  // 校验通过后 server.js 会走 resolveTarget → 懒建 AgentSession → a.send()，真实调用 Claude；
-  // 下面两个"过大/过多"case 在 validateAttachments 校验失败时短路返回（server.js:1582-1587），
+  // 校验通过后 app/server.js 会走 resolveTarget → 懒建 AgentSession → a.send()，真实调用 Claude；
+  // 下面两个"过大/过多"case 在 validateAttachments 校验失败时短路返回（app/server.js:1582-1587），
   // 从不创建 AgentSession，不触发真实 turn，留在默认 lane。
   test('Socket.IO: 发送过大附件被拒绝', async () => {
     const client = createClient();
@@ -314,7 +314,7 @@ test.describe('文件上传安全集成测试', () => {
   });
 });
 
-// TC-005：合法附件通过校验后，server.js 走 resolveTarget → 懒建 AgentSession → a.send()，真实调用
+// TC-005：合法附件通过校验后，app/server.js 走 resolveTarget → 懒建 AgentSession → a.send()，真实调用
 // Claude——此前这个 case 留在默认 lane（只受 CI-skip 门控，本机 npm test 会真实发一次 turn 耗 token），
 // 且 waitForEvent('result') 超时/异常被 try/catch 全吞，什么都不断言，缺 result 也照样通过（假绿）。
 // 改为门控进 RUN_CLAUDE_INTEGRATION 专用 describe（同 claude-lifecycle.test.mjs 等三件套的 opt-in

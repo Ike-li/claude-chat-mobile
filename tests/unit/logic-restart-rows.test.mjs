@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatAgoShort, formatRestartRows } from '../../public/js/logic.js';
+import { formatAgoShort, formatRestartRows } from '../../app/public/js/logic.js';
 
 const NOW = 1786600000000;
 const HOUR = 3600_000;

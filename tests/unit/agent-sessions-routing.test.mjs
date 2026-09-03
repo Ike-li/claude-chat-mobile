@@ -1,5 +1,5 @@
 // tests/unit/agent-sessions-routing.test.mjs —— Bug B 端到端回归。
-// 验证 src/agent/agent.js 的 onSessionId 触发链 × src/sessions/sessions.js 的路由代次守卫，
+// 验证 app/src/agent/agent.js 的 onSessionId 触发链 × app/src/sessions/sessions.js 的路由代次守卫，
 // 在真实的"同一实例两次触发 system/init"（模拟 session:new 之后、未被 dispose 的旧实例因
 // 后台任务汇报等原因又跑了一轮）场景下正确协作——不需要真实 CLI 子进程或新的 mock 基建，
 // 复用既有 tests/helpers/agent-unit.mjs（makeSession）+ 现有测试通用的 s.map() 直接注入手法。
@@ -17,7 +17,7 @@ test.describe('session:new 后旧实例路由代次守卫（Bug B 回归）', ()
   test.before(async () => {
     TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-agent-sessions-routing-test-'));
     process.env.CCM_SESSIONS_FILE = join(TMP_DIR, 'sessions.json'); // 必须在 import 前设
-    S = await import('../../src/sessions/sessions.js');
+    S = await import('../../app/src/sessions/sessions.js');
   });
 
   test.after(() => {
@@ -32,7 +32,7 @@ test.describe('session:new 后旧实例路由代次守卫（Bug B 回归）', ()
     const { s } = makeSession({
       cwd,
       onSessionId(sid, firstMessage, model) {
-        // 与 src/server/app.js 的 onSessionId 回调对齐：把闭包捕获的 generation 一并传给 upsertSession
+        // 与 app/src/server/app.js 的 onSessionId 回调对齐：把闭包捕获的 generation 一并传给 upsertSession
         S.upsertSession({ id: sid, title: firstMessage, cwd, model, generation });
       },
     });

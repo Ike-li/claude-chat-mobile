@@ -1,11 +1,11 @@
-// tests/unit/config-file.test.mjs —— src/ops/config-file.js（统一配置文件 ccm.config.json）
+// tests/unit/config-file.test.mjs —— app/src/ops/config-file.js（统一配置文件 ccm.config.json）
 //
 // P1a 的验证面。这一层替换的是「.env + dotenv」，而被替换的那套有过两次 fail-open 事故
 // （值以 `\` 结尾 / 含单引号时 dotenv 与 shell 解析分叉），所以这里的断言重点不是「能读能写」，
 // 而是三条**换格式之后必须仍然成立**的不变量：
 //
 //   ① 优先级链 shell env > 配置文件 > 内置默认 —— 与 dotenv「不覆盖已存在 key」的语义等价
-//   ② ANTHROPIC_* 只认真实 shell export —— 配置文件里写了照样剥除（src/ops/config.js:21 的立场）
+//   ② ANTHROPIC_* 只认真实 shell export —— 配置文件里写了照样剥除（app/src/ops/config.js:21 的立场）
 //   ③ 投影回 process.env 之后，现有那 7 处消费点的字面量判据一字不变地成立
 //      （app.js:1229 `=== 'off'`、config.js:65 `=== '1'`、log-terminal.js:33 `!== 'on'` …）
 //
@@ -31,7 +31,7 @@ import {
   reloadKindOf,
   resolveConfigValues,
   structuredToStringValues,
-} from '../../src/ops/config-file.js';
+} from '../../app/src/ops/config-file.js';
 
 // safe-rm: mkdtemp 一次性目录，路径由 mkdtempSync 返回值直接传入，不经任何拼接
 const withTempDir = (fn) => {
@@ -364,7 +364,7 @@ test.describe('resolveConfigValues —— 优先级链', () => {
 //
 // 为什么值得一条断言：仓库里还有 5 个**独立读 .env** 的 CLI 消费者（scripts/doctor.js:468、
 // scripts/service.js:699、scripts/device.js:9、scripts/hooks-bridge-setup.js:254、
-// src/ops/doctor-runtime.js:12），它们尚未接入统一配置层。若有人在 P1b 顺手加个「启动时自动建
+// app/src/ops/doctor-runtime.js:12），它们尚未接入统一配置层。若有人在 P1b 顺手加个「启动时自动建
 // ccm.config.json」，那 5 个消费者会当场进入「读一个已被忽略的文件」的状态 —— 而且是静默的：
 // doctor 会对着空 .env 报「未设置 AUTH_TOKEN」，用户照着改了却毫无效果。
 //

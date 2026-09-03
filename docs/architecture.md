@@ -20,13 +20,13 @@ Claude Chat Mobile 是一层本机转发与同步服务：
 ```mermaid
 graph LR
     subgraph Phone["手机 / PWA"]
-        UI["public/ 单页应用<br/>消息·工具卡片·审批·文件"]
+        UI["app/public/ 单页应用<br/>消息·工具卡片·审批·文件"]
     end
     subgraph Edge["可选公网入口"]
         CF["Cloudflare Tunnel + Access"]
     end
     subgraph Host["本机"]
-        S["server.js + src/server/<br/>Express · Socket.io · 鉴权 · 路由"]
+        S["app/server.js + app/src/server/<br/>Express · Socket.io · 鉴权 · 路由"]
         A["AgentSession<br/>SDK 流 · 权限闸门 · 事件缓冲"]
         SDK["Claude Agent SDK"]
         CLI["本机 claude CLI"]
@@ -90,7 +90,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 5. **Web 接管发送前**，若 transcript 相对现有 SDK 实例有外部增长，server 先 dispose 旧实例并 resume 吸收，再发送新消息。
 
 **这五条是默认路径，不是硬约束。** 项目管得住自己的 SDK 实例，管不住终端里那个独立进程：镜像锁只作用于 Web 端的输入，
-用户仍可在只读态下点「强制立即续接」/「仍要续接」显式解锁（`public/js/app.js` 的 `requestMirrorResume` /
+用户仍可在只读态下点「强制立即续接」/「仍要续接」显式解锁（`app/public/js/app.js` 的 `requestMirrorResume` /
 `appendForceResumeAction`，两条路径都要过一次写明分叉风险的确认框）。解锁只是撤掉 Web 侧的锁，**不会停止终端进程**——
 若终端此后继续写同一会话，仍会形成两条 transcript 分支。这个逃生口是有意保留的：用户常常比判定链更早知道终端已经关掉。
 
@@ -113,8 +113,8 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 }
 ```
 
-- `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
-  出向另有一道**前端接收面覆盖**检查：`public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
+- `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `app/src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
+  出向另有一道**前端接收面覆盖**检查：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
 - `sessionId` 与 `instanceId` 分开，避免同一 CLI 会话的逻辑身份和当前 Web 进程实例混淆。
@@ -140,7 +140,7 @@ Agent 工具审批或用户直接文件编辑
 
 第一层是**前提而非选项**（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）：没有 `AUTH_TOKEN`
 连 server 都起不来，本机浏览器打开也一样，所以下游各层永远建立在「对方已持令牌」之上。
-第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `src/auth/auth-strategy.js`
+第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js`
 的接口形状；Cloudflare Access 是当前唯一实现，换 IdP 不该动核心。
 
 这些边界互不替代：
@@ -168,12 +168,12 @@ Agent 工具审批或用户直接文件编辑
 
 ## 代码入口
 
-- `server.js`：兼容启动入口；实际装配在 `src/server/app.js`。
-- `src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
-- `src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
-- `src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
-- `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
-- `public/js/app.js` 与 `public/js/app/`：客户端状态、事件派发与交互模块。
+- `app/server.js`：兼容启动入口；实际装配在 `app/src/server/app.js`。
+- `app/src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
+- `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
+- `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
+- `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
+- `app/public/js/app.js` 与 `app/public/js/app/`：客户端状态、事件派发与交互模块。
 - `tests/gates/contract-check.js`：双向 Socket.io 事件契约门禁。
 
 完整目录职责与文件清单见[仓库地图](repository-map.md)；模型、effort 与 statusline 的跨层变换见[展示契约](display-contracts.md)；n=1 取舍与已决技术债见[硬性规则索引](hard-rules.md)。

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createNotifyChannels } from '../../src/ops/notify-channels.js';
+import { createNotifyChannels } from '../../app/src/ops/notify-channels.js';
 
 function tempDataDir(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-notify-'));

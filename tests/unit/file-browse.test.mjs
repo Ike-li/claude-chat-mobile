@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { listDir, readFile, writeFileInScope, MAX_BROWSE_ENTRIES, MAX_BROWSE_BYTES } from '../../src/files/file-browse.js';
+import { listDir, readFile, writeFileInScope, MAX_BROWSE_ENTRIES, MAX_BROWSE_BYTES } from '../../app/src/files/file-browse.js';
 
 const sha256 = s => createHash('sha256').update(s).digest('hex');
 

@@ -1,6 +1,6 @@
 // tests/integration/file-browse.test.mjs —— browse:list / browse:read 接线集成测试
 // （docs/design.md FileBrowseHandler，承接 AD-12/FR-07）
-// 纯逻辑单测见 tests/unit/file-browse.test.mjs + tests/unit/workdir-scope-guard.test.mjs；本文件验证 server.js
+// 纯逻辑单测见 tests/unit/file-browse.test.mjs + tests/unit/workdir-scope-guard.test.mjs；本文件验证 app/server.js
 // 接线：①正常 list/read 走通；②越界 relPath 被拒（fail-closed，不进程崩溃/不误放行）；③鉴权门未过时不可达。
 // 鉴权模式同 tests/integration/rate-limit.test.mjs：测试专用 token + 清 CF_ACCESS_* + 重新 initCfAccess()
 // （机主本机 .env 已配真实鉴权，dotenv 会在 delete 后重新注入——不可用"delete AUTH_TOKEN"假装无鉴权）。
@@ -20,7 +20,7 @@ async function startServer() {
   mkdirSync(join(projectDir, 'src'), { recursive: true });
   writeFileSync(join(projectDir, 'README.md'), '# demo project');
   writeFileSync(join(projectDir, 'src', 'index.js'), 'console.log(1)');
-  // macOS tmpdir() 返回 /var/folders/...（符号链接到 /private/var/folders/...），而 server.js 的
+  // macOS tmpdir() 返回 /var/folders/...（符号链接到 /private/var/folders/...），而 app/server.js 的
   // workDirs 经 resolveWorkdirs() realpath 归一后存的是 /private/... 形式——不 realpath 这里的
   // projectDir，下面测试传入的 cwd 会与 workDirs 内的值字面不等，routeCwd 判"越界"后静默回退到
   // 默认查看目录（恰好也是这个项目目录，会让测试"意外通过"但没有真正测到"cwd 命中白名单"这条路径）。
@@ -34,13 +34,13 @@ async function startServer() {
   process.env.WORK_DIR = projectDir;
   process.env.AUTH_TOKEN = 'browse-test-token';
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, 'browse-test-token');
 }
@@ -105,7 +105,7 @@ test.describe('browse:list / browse:read 接线集成测试', () => {
   // FR-19 最小审计记录（承接 Phase 4）：上面两个越界用例应各留一条 scope_violation 审计记录——
   // 复用同一个已鉴权 server 实例，audit.js 落盘目标已被 CCM_DATA_DIR 隔离到本测试的临时目录。
   test('越界拒绝会各写一条 scope_violation 审计记录（via=browse:list / browse:read）', async () => {
-    const AU = await import('../../src/ops/audit.js');
+    const AU = await import('../../app/src/ops/audit.js');
     const rows = AU.listRecent({ limit: 100, action: 'scope_violation' });
     assert.ok(rows.some(r => r.meta?.via === 'browse:list'), `应有 browse:list 越界审计，实际：${JSON.stringify(rows)}`);
     assert.ok(rows.some(r => r.meta?.via === 'browse:read'), `应有 browse:read 越界审计，实际：${JSON.stringify(rows)}`);

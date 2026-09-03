@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import {
   decideHookEventActions,
   HOOK_PUSH_MAX_AGE_MS,
-} from '../../src/ops/cli-hooks-bridge.js';
-import { notificationForCliHook, throttleNotify } from '../../src/ops/notifications.js';
+} from '../../app/src/ops/cli-hooks-bridge.js';
+import { notificationForCliHook, throttleNotify } from '../../app/src/ops/notifications.js';
 
 const CWD = '/Users/you/code/demo';
 const OTHER = '/Users/you/code/other';

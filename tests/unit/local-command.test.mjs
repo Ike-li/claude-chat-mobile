@@ -6,7 +6,7 @@
 // live 侧把四个标签当正文原样上屏且 isError 误判为 false。同一条消息，刷新前后两个样。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLocalCommandOutput } from '../../src/shared/local-command.js';
+import { parseLocalCommandOutput } from '../../app/src/shared/local-command.js';
 
 const STDOUT = '<local-command-stdout>OUT</local-command-stdout>';
 const STDERR = '<local-command-stderr>ERR</local-command-stderr>';

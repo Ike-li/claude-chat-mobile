@@ -87,14 +87,14 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test('全部 key 都被引用 → 无 problems', async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', `
+    await writeFixture(root, 'app/public/js/i18n.js', `
       export const EN_DICT = Object.freeze({
         '设置': 'Settings',
         '提示音': 'Sound',
       });
     `);
-    await writeFixture(root, 'public/index.html', `<span>提示音</span>`);
-    await writeFixture(root, 'public/js/app.js', `someFn(t('设置'));`);
+    await writeFixture(root, 'app/public/index.html', `<span>提示音</span>`);
+    await writeFixture(root, 'app/public/js/app.js', `someFn(t('设置'));`);
 
     const result = checkI18n({ rootDir: root });
     assert.deepEqual(result.problems, []);
@@ -103,13 +103,13 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test('词典里有但代码/HTML 都没再引用的 key → 报孤儿', async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', `
+    await writeFixture(root, 'app/public/js/i18n.js', `
       export const EN_DICT = Object.freeze({
         '设置': 'Settings',
         '已废弃的旧文案': 'Deprecated old copy',
       });
     `);
-    await writeFixture(root, 'public/index.html', `<span>设置</span>`);
+    await writeFixture(root, 'app/public/index.html', `<span>设置</span>`);
 
     const result = checkI18n({ rootDir: root });
     assert.deepEqual(result.problems.map(p => p.key), ['已废弃的旧文案']);
@@ -119,11 +119,11 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test('跨文件引用也算数（app.js 里 t()，另一个模块文件也算）', async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', `
+    await writeFixture(root, 'app/public/js/i18n.js', `
       export const EN_DICT = Object.freeze({ '保存': 'Save' });
     `);
-    await writeFixture(root, 'public/index.html', '<div></div>');
-    await writeFixture(root, 'public/js/app/file-browser.js', `btn.onclick = () => t('保存');`);
+    await writeFixture(root, 'app/public/index.html', '<div></div>');
+    await writeFixture(root, 'app/public/js/app/file-browser.js', `btn.onclick = () => t('保存');`);
 
     const result = checkI18n({ rootDir: root });
     assert.deepEqual(result.problems, []);
@@ -134,11 +134,11 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test("key 只作为常量表里的字面量出现、经 t(变量) 使用 → 不算孤儿", async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', `
+    await writeFixture(root, 'app/public/js/i18n.js', `
       export const EN_DICT = Object.freeze({ '已暂存': 'Staged' });
     `);
-    await writeFixture(root, 'public/index.html', '<div></div>');
-    await writeFixture(root, 'public/js/app/git-changes.js', `
+    await writeFixture(root, 'app/public/index.html', '<div></div>');
+    await writeFixture(root, 'app/public/js/app/git-changes.js', `
       const SECTION_META = [{ key: 'staged', title: '已暂存' }];
       export const render = () => append(t(SECTION_META[0].title));
     `);
@@ -150,11 +150,11 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test('key 在源码里彻底不出现 → 仍报孤儿（放宽引用判定不等于关掉这道闸）', async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', `
+    await writeFixture(root, 'app/public/js/i18n.js', `
       export const EN_DICT = Object.freeze({ '谁也没引用的文案': 'Nobody references this' });
     `);
-    await writeFixture(root, 'public/index.html', '<div></div>');
-    await writeFixture(root, 'public/js/app.js', `const x = 1;`);
+    await writeFixture(root, 'app/public/index.html', '<div></div>');
+    await writeFixture(root, 'app/public/js/app.js', `const x = 1;`);
 
     const result = checkI18n({ rootDir: root });
     assert.deepEqual(result.problems.map(p => p.key), ['谁也没引用的文案']);
@@ -163,7 +163,7 @@ test.describe('checkI18n：孤儿 key 扫描（EN_DICT 有、但代码/HTML 里�
   test('无 public 目录 / 空词典 → 不抛错，无 problems', async t => {
     const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-empty-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    await writeFixture(root, 'public/js/i18n.js', 'export const EN_DICT = Object.freeze({});');
+    await writeFixture(root, 'app/public/js/i18n.js', 'export const EN_DICT = Object.freeze({});');
     assert.doesNotThrow(() => checkI18n({ rootDir: root }));
   });
 });

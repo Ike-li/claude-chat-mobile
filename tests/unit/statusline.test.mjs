@@ -4,9 +4,9 @@
 // 绝不按模型名猜窗口——猜错会把 532k/1M(53%) 显示成 532k/200k(封顶 100%)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, shouldFetchContextUsage, invalidateCtxOccupancy, clearCtxWindowCache, strongerStatusRefreshReason, statusRefreshReasonForEnvelope, CONTEXT_USAGE_INFLIGHT_MAX_MS } from '../../src/ops/statusline.js';
-import { getDiagLogs } from '../../src/agent/diag-log.js';
-import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../src/ops/usage-snapshot.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, shouldFetchContextUsage, invalidateCtxOccupancy, clearCtxWindowCache, strongerStatusRefreshReason, statusRefreshReasonForEnvelope, CONTEXT_USAGE_INFLIGHT_MAX_MS } from '../../app/src/ops/statusline.js';
+import { getDiagLogs } from '../../app/src/agent/diag-log.js';
+import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../app/src/ops/usage-snapshot.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 

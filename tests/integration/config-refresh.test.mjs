@@ -38,7 +38,7 @@ async function startServer() {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = TOKEN;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
@@ -46,7 +46,7 @@ async function startServer() {
   // 覆盖 dotenv 加载的 CF Access 配置（同 auth-token.test.mjs 套路）：连接走 127.0.0.1 本不会撞
   // isPublicHost，但显式关闭更稳妥、不依赖 host 匹配细节。
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
 
   await sleep(500); // 等启动时 ensureCliDefaults(WORK_DIR) 首次读盘落缓存（非 force，见 app.js:2767）

@@ -19,7 +19,7 @@ const finish = () => {
 // ───────────────────────────── --unit ─────────────────────────────
 if (process.argv.includes('--unit')) {
   const { sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, UPLOAD_DIR } =
-    await import('../../../src/files/uploads.js');
+    await import('../../../app/src/files/uploads.js');
   const b64 = s => Buffer.from(s).toString('base64');
 
   // U1 sanitizeName：basename 去路径、去前导点、显式去分隔字符、空回退

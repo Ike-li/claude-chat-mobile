@@ -1,4 +1,4 @@
-import { AgentSession } from '../../src/agent/agent.js';
+import { AgentSession } from '../../app/src/agent/agent.js';
 
 export function makeSession(opts = {}) {
   const events = [];

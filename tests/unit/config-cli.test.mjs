@@ -366,7 +366,7 @@ test.describe('runConfigCommand —— schema', () => {
 // （doc-consistency 查死链/npm scripts/版本号/契约计数，没有这一维）。从 ENV_SCHEMA 生成的
 // 清单不会有这个问题 —— 加配置项只改一个文件，文档自动跟上。
 test('schema 无 --json 时输出人类可读清单，覆盖全部配置项', async () => {
-  const { ENV_SCHEMA } = await import('../../src/ops/env-schema.js');
+  const { ENV_SCHEMA } = await import('../../app/src/ops/env-schema.js');
   const r = runConfigCommand({ command: 'schema', positionals: [], flags: {}, assignments: [] }, { dir: '/tmp' });
 
   assert.ok(r.messages.length > 0, 'schema 必须有人类可读输出，否则用户看到的是空白');

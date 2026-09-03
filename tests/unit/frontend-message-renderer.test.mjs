@@ -4,8 +4,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createMessageRenderer } from '../../app/public/js/app/message-renderer.js';
 
 test('message renderer owns markdown sanitization dependencies from app context', () => {
   const calls = [];

@@ -12,13 +12,13 @@ import {
   WRITABLE_KEYS,
   buildEnvView,
   validateEnvChanges,
-} from '../../src/ops/env-schema.js';
+} from '../../app/src/ops/env-schema.js';
 // 跨模块引一次 doctor 的 D18：本文件末尾那条「判据同源」断言要拿它当对照物。
-import { envOverrideDiagnostic } from '../../src/ops/doctor-checks.js';
+import { envOverrideDiagnostic } from '../../app/src/ops/doctor-checks.js';
 // 同理，末尾 CCM_AGENT_PROGRESS_SUMMARIES 那组要把「配置侧投影」与「消费侧判据」串起来跑，
 // 单独断言任何一边的字面量都挡不住两边一起改错。
-import { projectToEnv } from '../../src/ops/config-file.js';
-import { buildAgentQueryOptions } from '../../src/agent/agent.js';
+import { projectToEnv } from '../../app/src/ops/config-file.js';
+import { buildAgentQueryOptions } from '../../app/src/agent/agent.js';
 
 const deps = (over = {}) => ({
   fileExists: () => true,
@@ -337,7 +337,7 @@ test.describe('buildEnvView —— 下发给前端的视图', () => {
 // 且全面板搜「环境变量/覆盖/压过」零命中。用户在手机上改完、保存成功、运行时仍是 A —— 零症状。
 // 根因是 buildEnvView 只投影配置文件，连 shell env 都不看。
 //
-// 为什么快照必须由调用方传进来：src/ops/config.js 会把文件值**投影回 process.env**
+// 为什么快照必须由调用方传进来：app/src/ops/config.js 会把文件值**投影回 process.env**
 // （只填还没有的 key），所以在这一层现读 process.env 分不出来源，做出来的是永远不报的假功能。
 test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', () => {
   const values = { WORK_DIR: '/from/config/file', PORT: '3000' };

@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings } from '../../helpers/playwright';
 
 // zh 原文即词典 key 的运行时 t()，en locale 查表、未收录静默回落中文。本 spec 是唯一跑 en 的用例，
-// 其余 P0 spec 全部保持 zh 断言不变（见 public/js/i18n.js 头注 + tests/gates/i18n-check.js 孤儿扫描）。
+// 其余 P0 spec 全部保持 zh 断言不变（见 app/public/js/i18n.js 头注 + tests/gates/i18n-check.js 孤儿扫描）。
 // 静态外壳靠 applyI18nToDocument 整树扫描（文本节点 + title/placeholder/aria-label/alt），
 // app.js/logic.js 的运行时模板各自包 t()——两条路径都要在这里守住。
 test.describe('P0 日常零 token Mock UI 回归', () => {

@@ -26,8 +26,8 @@ process.env.HOME = FAKE_HOME;
 const test = (await import('node:test')).default;
 const assert = (await import('node:assert/strict')).default;
 const { getProjectDir, listSessionsPage, peekSessionListTitle, __setSdkListSessionsForTest, __setSdkGetSessionInfoForTest } =
-  await import('../../src/sessions/history.js');
-const { MAX_SESSION_LIMIT } = await import('../../src/sessions/workdirs.js');
+  await import('../../app/src/sessions/history.js');
+const { MAX_SESSION_LIMIT } = await import('../../app/src/sessions/workdirs.js');
 
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 

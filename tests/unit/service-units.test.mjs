@@ -1,4 +1,4 @@
-// tests/unit/service-units.test.mjs —— src/ops/service-units.js 单测（LaunchAgent 服务管理纯逻辑）
+// tests/unit/service-units.test.mjs —— app/src/ops/service-units.js 单测（LaunchAgent 服务管理纯逻辑）
 //
 // 本文件的核心是「语义等价 ≠ 字节相等」那一组用例：手写的 plist 与模板渲染结果**必然**字节不同
 // （模板正文有行内注释、给路径加了双引号），若漂移判定用 sha256 就会把正在跑的生产 unit 判成陌生
@@ -22,7 +22,7 @@ import {
   renderVarsFor,
   unitFromLabel,
   validateManifest,
-} from '../../src/ops/service-units.js';
+} from '../../app/src/ops/service-units.js';
 
 // 机主机器上实测的 plutil -convert json 输出形状（路径已换成 /Users/you，见 identity 清洗纪律）。
 // 关键特征：ProgramArguments[2] 里的路径**没有**双引号，而模板渲染出来的**有**。
@@ -31,7 +31,7 @@ const HANDWRITTEN_SERVER_PLIST = {
   ProgramArguments: [
     '/bin/zsh',
     '-lc',
-    'cd /Users/you/code/claude-chat-mobile && exec /opt/homebrew/bin/node server.js',
+    'cd /Users/you/code/claude-chat-mobile && exec /opt/homebrew/bin/node app/server.js',
   ],
   RunAtLoad: true,
   KeepAlive: true,
@@ -45,7 +45,7 @@ const RENDERED_SERVER_PLIST = {
   ProgramArguments: [
     '/bin/zsh',
     '-lc',
-    'cd "/Users/you/code/claude-chat-mobile" && exec "/opt/homebrew/bin/node" server.js',
+    'cd "/Users/you/code/claude-chat-mobile" && exec "/opt/homebrew/bin/node" app/server.js',
   ],
 };
 
@@ -220,7 +220,7 @@ test.describe('extractUnitFacts', () => {
   test('server：路径含空格且带引号时不被切断', () => {
     const facts = extractUnitFacts('server', {
       ...HANDWRITTEN_SERVER_PLIST,
-      ProgramArguments: ['/bin/zsh', '-lc', 'cd "/Users/you/My Code/repo" && exec "/opt/homebrew/bin/node" server.js'],
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd "/Users/you/My Code/repo" && exec "/opt/homebrew/bin/node" app/server.js'],
     });
     assert.equal(facts.repo, '/Users/you/My Code/repo');
   });
@@ -259,7 +259,7 @@ test.describe('extractUnitFacts', () => {
   test('形态对不上（用户整个换掉了 ProgramArguments）→ 事实为 null 而非抛错', () => {
     const facts = extractUnitFacts('server', {
       Label: 'com.ccm.server',
-      ProgramArguments: ['/usr/local/bin/pm2', 'start', 'server.js'],
+      ProgramArguments: ['/usr/local/bin/pm2', 'start', 'app/server.js'],
     });
     assert.equal(facts.repo, null);
     assert.equal(facts.node, null);
@@ -285,7 +285,7 @@ test.describe('diffUnitSemantics', () => {
     const expected = extractUnitFacts('server', RENDERED_SERVER_PLIST);
     const actual = extractUnitFacts('server', {
       ...HANDWRITTEN_SERVER_PLIST,
-      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/old/repo && exec /opt/homebrew/bin/node server.js'],
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/old/repo && exec /opt/homebrew/bin/node app/server.js'],
     });
     assert.deepEqual(diffUnitSemantics('server', expected, actual), ['repo-path']);
   });
@@ -294,7 +294,7 @@ test.describe('diffUnitSemantics', () => {
     const expected = extractUnitFacts('server', RENDERED_SERVER_PLIST);
     const actual = extractUnitFacts('server', {
       ...HANDWRITTEN_SERVER_PLIST,
-      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/code/claude-chat-mobile && exec /Users/you/.nvm/versions/node/v20.11.0/bin/node server.js'],
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/code/claude-chat-mobile && exec /Users/you/.nvm/versions/node/v20.11.0/bin/node app/server.js'],
     });
     assert.deepEqual(diffUnitSemantics('server', expected, actual), ['node-path']);
   });
@@ -319,7 +319,7 @@ test.describe('diffUnitSemantics', () => {
     const expected = extractUnitFacts('server', RENDERED_SERVER_PLIST);
     const actual = extractUnitFacts('server', {
       ...HANDWRITTEN_SERVER_PLIST,
-      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/old && exec /usr/bin/node server.js'],
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/old && exec /usr/bin/node app/server.js'],
       KeepAlive: false,
     });
     assert.deepEqual(diffUnitSemantics('server', expected, actual), ['repo-path', 'node-path', 'keepalive']);

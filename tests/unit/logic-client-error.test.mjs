@@ -1,7 +1,7 @@
 // logic.js 前端全局错误上报域纯函数单测：错误事件→上报载荷/签名、去重+限流门步进。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildClientErrorReport, clientErrorGateStep } from '../../public/js/logic.js';
+import { buildClientErrorReport, clientErrorGateStep } from '../../app/public/js/logic.js';
 
 test.describe('buildClientErrorReport', () => {
   test('error 事件：message/source/line/col/stack 进载荷，签名含定位', () => {

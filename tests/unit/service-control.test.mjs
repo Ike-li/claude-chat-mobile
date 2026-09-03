@@ -1,8 +1,8 @@
 // tests/unit/service-control.test.mjs —— scripts/service.js 的控制路径（start/stop/restart/health）
 //
 // 本文件里最重要的一组是 health 的「401 绝不重试」：
-// src/server/http.js:94-105 对鉴权失败无条件计数、src/server/app.js:309 让 loopback 也进限速、
-// src/auth/rate-limiter.js:9-13 阈值 8 锁 15 分钟。一个会重试的健康检查能在 40 秒内
+// app/src/server/http.js:94-105 对鉴权失败无条件计数、app/src/server/app.js:309 让 loopback 也进限速、
+// app/src/auth/rate-limiter.js:9-13 阈值 8 锁 15 分钟。一个会重试的健康检查能在 40 秒内
 // 把机主连同手机一起关在门外 15 分钟。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ const SERVER_PLIST = `${HOME}/Library/LaunchAgents/com.ccm.server.plist`;
 
 const SERVER_OBJ = {
   Label: 'com.ccm.server',
-  ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec /opt/homebrew/bin/node server.js`],
+  ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec /opt/homebrew/bin/node app/server.js`],
   RunAtLoad: true,
   KeepAlive: true,
   StandardOutPath: `${HOME}/Library/Logs/ccm-server.log`,
@@ -111,7 +111,7 @@ test.describe('start / stop', () => {
     assert.match(r.error, /Could not find service/);
   });
 
-  // 先 npm start 再点桌面端「启动」：kickstart 会再拉一个 server.js，EADDRINUSE 后
+  // 先 npm start 再点桌面端「启动」：kickstart 会再拉一个 app/server.js，EADDRINUSE 后
   // KeepAlive 空转。端口上的 pid 对不上 LaunchAgent 时必须先拒绝。
   test('start 在端口被非 LaunchAgent 进程占用时拒绝，且不 kickstart', () => {
     const { mgr, calls } = setup({ portListenerPid: () => 4242 });

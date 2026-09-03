@@ -31,4 +31,4 @@ cat <<'EOF'
 EOF
 
 cd /app
-exec node --watch server.js
+exec node --watch app/server.js

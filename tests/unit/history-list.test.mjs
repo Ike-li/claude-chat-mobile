@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../src/sessions/history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -42,7 +42,7 @@ test('listSessions: 提取 title / model / entrypoint', async () => {
 });
 
 // entrypoint-marker 是本仓自己写的假行（伪装 entrypoint:'cli' 骗 CLI /resume 选择器显示 web 会话，
-// 见 src/server/app.js writeSessionEntrypoint），恒在文件头、早于真实消息行。readHeadMeta 不该把它
+// 见 app/src/server/app.js writeSessionEntrypoint），恒在文件头、早于真实消息行。readHeadMeta 不该把它
 // 当成真实来源——否则所有 web 会话的 entrypoint 全部被误判成 cli（数据层面判错，即使当前无 UI 消费）。
 test('listSessions: entrypoint-marker 假行不冒充真实 entrypoint（真实行 sdk-ts 不被 marker 的 cli 抢先）', async () => {
   const cwd = '/test/marker-shadow';

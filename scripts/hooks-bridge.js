@@ -13,7 +13,7 @@ import {
   normalizeCliHookInput,
   resolveHookDirs,
   writeCliHookEvent,
-} from '../src/ops/cli-hooks-bridge.js';
+} from '../app/src/ops/cli-hooks-bridge.js';
 
 const DEBUG = process.env.CCM_HOOKS_DEBUG === '1';
 // 看门狗：正常路径 <100ms 就结束；stdin 永不 EOF 之类的异常不能把 hook 挂住拖慢用户的回合。

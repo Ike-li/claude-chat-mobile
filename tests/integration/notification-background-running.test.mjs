@@ -1,14 +1,14 @@
 // tests/integration/notification-background-running.test.mjs —— presence 跳变触发「后台运行中」提示
-// 的判定链集成测试（PWA 切后台锁屏看不到应用还活着，硬边界见 src/server/app.js on(socket,'client:presence',…)
+// 的判定链集成测试（PWA 切后台锁屏看不到应用还活着，硬边界见 app/src/server/app.js on(socket,'client:presence',…)
 // 调用点注释：做不到锁屏常驻实时指示，这只是有活轮次时补一条"别担心，跑完会通知你"）。
 //
-// 背景/根因：详见 src/ops/notifications.js shouldNotifyBackgroundRunning 与 src/server/app.js
+// 背景/根因：详见 app/src/ops/notifications.js shouldNotifyBackgroundRunning 与 app/src/server/app.js
 // on(socket,'client:presence',…) 里对它的调用。该 handler 在 hidden:true 上报时，于真正 mutate
 // socket.data.hidden 前后各调一次 hasForegroundApprovedClient，喂 shouldNotifyBackgroundRunning 判定
 // 是否发生"approved 房间从有前台变为无前台"的跳变；只有跳变发生【且】此刻确有实例在跑（busy）才推。
 //
 // 验证手法：与 tests/integration/notification-presence.test.mjs 同一套边界——本文件不产生真实 claude
-// turn（省 token，符合"不要跑 RUN_CLAUDE_INTEGRATION=1"的要求）。server.js/app.js 只导出
+// turn（省 token，符合"不要跑 RUN_CLAUDE_INTEGRATION=1"的要求）。app/server.js/app.js 只导出
 // {httpServer,io,port}，没有暴露 agents/openInstance 之类的内部钩子可以绕开真实 CLI 子进程合成一个
 // "busy 实例"，因此本测试用"真实运行的 server + 真实 socket.io 连接 + 真实（非 mock）的
 // hasForegroundApprovedClient/shouldNotifyBackgroundRunning 纯函数"验证判定链本身：
@@ -22,7 +22,7 @@
 //     shouldNotifyBackgroundRunning 的契约手工提供 true/false 两种取值，验证判定链的组合结果——与
 //     notification-presence.test.mjs 对 result 事件的处理方式（该文件同样只验证判定链，未覆盖
 //     app.js onEvent 内部 wiring 本身）保持同一诚实边界。
-// 未覆盖（如实登记）：src/server/app.js on(socket,'client:presence',…) handler 内部那段"遍历 agents、
+// 未覆盖（如实登记）：app/src/server/app.js on(socket,'client:presence',…) handler 内部那段"遍历 agents、
 // 对 busy 实例调用 pushNotify/ntfyNotify"的具体 wiring，没有被一次真实的"跳变+有 busy 实例"场景穿过——
 // 这需要一个真实在跑的 AgentSession 实例，本测试手法无法在不消耗真实 CLI turn 的前提下构造。
 import test from 'node:test';
@@ -31,7 +31,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { hasForegroundApprovedClient, shouldNotifyBackgroundRunning } from '../../src/ops/notifications.js';
+import { hasForegroundApprovedClient, shouldNotifyBackgroundRunning } from '../../app/src/ops/notifications.js';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 // 同 notification-presence.test.mjs：显式给非空测试 token，绕开 dotenv 空串回填的既有环境红
@@ -50,7 +50,7 @@ async function startServer() {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = TOKEN;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
@@ -58,7 +58,7 @@ async function startServer() {
   // 覆盖 dotenv 加载的 CF Access 配置（同 notification-presence.test.mjs 套路）：连接走 127.0.0.1 本不会
   // 撞 isPublicHost，但显式关闭更稳妥、不依赖 host 匹配细节。
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
 }
 

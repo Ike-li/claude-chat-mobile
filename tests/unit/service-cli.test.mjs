@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createServiceManager, describeUnit, formatStatus, formatControlResult, resolveEventsPath } from '../../scripts/service.js';
-import { extractSchedule } from '../../src/ops/service-units.js';
+import { extractSchedule } from '../../app/src/ops/service-units.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'service.js');
@@ -25,7 +25,7 @@ const NODE = '/opt/homebrew/bin/node';
 const HANDWRITTEN = {
   [`${HOME}/Library/LaunchAgents/com.ccm.server.plist`]: {
     Label: 'com.ccm.server',
-    ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec ${NODE} server.js`],
+    ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec ${NODE} app/server.js`],
     RunAtLoad: true,
     KeepAlive: true,
     StandardOutPath: `${HOME}/Library/Logs/ccm-server.log`,
@@ -238,7 +238,7 @@ test.describe('status —— 漂移与归属', () => {
       ...HANDWRITTEN,
       [`${HOME}/Library/LaunchAgents/com.ccm.server.plist`]: {
         ...HANDWRITTEN[`${HOME}/Library/LaunchAgents/com.ccm.server.plist`],
-        ProgramArguments: ['/bin/zsh', '-lc', `cd ${HOME}/old/repo && exec ${NODE} server.js`],
+        ProgramArguments: ['/bin/zsh', '-lc', `cd ${HOME}/old/repo && exec ${NODE} app/server.js`],
       },
     };
     const u = makeManager({ plists: moved }).status().units.find((x) => x.unit === 'server');
@@ -272,7 +272,7 @@ test.describe('status —— 漂移与归属', () => {
       ...HANDWRITTEN,
       [`${HOME}/Library/LaunchAgents/com.ccm.server.plist`]: {
         Label: 'com.ccm.server',
-        ProgramArguments: ['/usr/local/bin/pm2', 'start', 'server.js'],
+        ProgramArguments: ['/usr/local/bin/pm2', 'start', 'app/server.js'],
       },
     };
     const u = makeManager({ plists: pm2 }).status().units.find((x) => x.unit === 'server');
@@ -282,7 +282,7 @@ test.describe('status —— 漂移与归属', () => {
 });
 
 test.describe('status —— 探活只走 TCP，绝不碰 HTTP', () => {
-  // src/server/http.js:94-105 对鉴权失败无条件计数，8 次锁 15min，且 app.js:309 让 loopback
+  // app/src/server/http.js:94-105 对鉴权失败无条件计数，8 次锁 15min，且 app.js:309 让 loopback
   // 也进限速 —— 轮询若打 /health，40 秒就能把机主自己连同手机一起关在门外。
   test('server 的 listen 探活用注入的 tcpProbe，不发任何 HTTP 请求', () => {
     let probed = null;

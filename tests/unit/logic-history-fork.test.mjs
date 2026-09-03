@@ -1,7 +1,7 @@
 // tests/unit/logic-history-fork.test.mjs —— 历史消息「从这里分叉」纯逻辑（零 token）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveForkAnchorUuid } from '../../public/js/logic.js';
+import { resolveForkAnchorUuid } from '../../app/public/js/logic.js';
 
 test.describe('resolveForkAnchorUuid（历史消息分叉锚点）', () => {
   test('长按 assistant 气泡 → 用它自己的 uuid', () => {

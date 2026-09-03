@@ -1,6 +1,6 @@
 // tests/unit/service-sampler.test.mjs —— 重启历史采样器的 glue 层
 //
-// 这一层此前整个住在 src/server/app.js 里，**零测试**：`rg 'sampleServiceEvents' tests/` 无命中。
+// 这一层此前整个住在 app/src/server/app.js 里，**零测试**：`rg 'sampleServiceEvents' tests/` 无命中。
 // 而它恰恰是 2026-08-14 第三轮审查里出问题最多的地方——快照只在内存（server 自身重启记不到）、
 // 缺 mkdirSync（全新安装静默丢事件）、写失败时快照已推进（事件永久丢失）、搭了别人的开关。
 // 判定逻辑在 service-events.js 且测得不错，**出事的全是 glue**。所以按 createServiceManager
@@ -8,9 +8,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createServiceSampler } from '../../src/ops/service-sampler.js';
+import { createServiceSampler } from '../../app/src/ops/service-sampler.js';
 // 读路径必须真的走一遍：只断言「写下去了什么」会漏掉 kind 白名单这一环。
-import { classifyRestartPattern, validateServiceEvents } from '../../src/ops/service-events.js';
+import { classifyRestartPattern, validateServiceEvents } from '../../app/src/ops/service-events.js';
 
 const T0 = 1786600000000;
 

@@ -1,11 +1,11 @@
 // tests/unit/shared-data-dir.test.mjs —— data-dir.js 单测（运行时状态根 CCM_DATA_DIR 的唯一解析点）。
-// 关键不变量：解析必须发生在【调用期】而非模块求值期——src/ops/config.js 在 .env 加载之前就被
+// 关键不变量：解析必须发生在【调用期】而非模块求值期——app/src/ops/config.js 在 .env 加载之前就被
 // import，模块顶层读 env 会读到加载前的空环境，导致 CCM_DATA_DIR 静默失效、状态写回仓库 data/。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveDataDir, dataFile } from '../../src/shared/data-dir.js';
+import { resolveDataDir, dataFile } from '../../app/src/shared/data-dir.js';
 
 // 仓库根从本文件位置推导（tests/unit → ../..），不得硬编码检出目录名：本仓库常驻多个 worktree
 // （../claude-chat-mobile-<分支名>），写死名字的断言换个检出位就红——首版就是这么红在 dev 上的。
@@ -46,7 +46,7 @@ test.describe('data-dir.js', () => {
     }
   });
 
-  test('默认 projectRoot 是仓库根（data/ 就在其下），不是模块自身所在的 src/shared/', () => {
+  test('默认 projectRoot 是仓库根（data/ 就在其下），不是模块自身所在的 app/src/shared/', () => {
     assert.equal(resolveDataDir({}), join(REPO_ROOT, 'data'));
     assert.equal(dataFile('sessions.json', {}), join(REPO_ROOT, 'data', 'sessions.json'));
   });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { approvalRetentionMs, expireOrphanedPending, startApprovalRetentionSweep } from '../../src/agent/approval-lifecycle.js';
+import { approvalRetentionMs, expireOrphanedPending, startApprovalRetentionSweep } from '../../app/src/agent/approval-lifecycle.js';
 
 test.describe('approvalRetentionMs（APPROVAL_RETENTION_DAYS 解析）', () => {
   const DAY = 24 * 60 * 60 * 1000;

@@ -7,14 +7,14 @@ import {
   formatLifecycleSessionError,
   formatLifecycleGatewayStall,
   buildAgentQueryOptions,
-} from '../../src/agent/agent.js';
+} from '../../app/src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
-import { getDiagLogs } from '../../src/agent/diag-log.js';
+import { getSessionLogs } from '../../app/src/agent/interaction-log.js';
+import { getDiagLogs } from '../../app/src/agent/diag-log.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir } from '../../src/sessions/history.js';
+import { getProjectDir } from '../../app/src/sessions/history.js';
 
 // 本地 slash 命令进度相关用例共用的磁盘 fixture（隔离 tmpdir，绝不打真实 ~/.claude）
 const LOCALCMD_BASE = join(tmpdir(), `ccm-lifecycle-localcmd-${process.pid}`);

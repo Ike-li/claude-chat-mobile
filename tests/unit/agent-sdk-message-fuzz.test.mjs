@@ -23,7 +23,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { AGENT_EVENT_TYPES } from '../../src/shared/protocol.js';
+import { AGENT_EVENT_TYPES } from '../../app/src/shared/protocol.js';
 
 const KNOWN_TYPES = new Set(AGENT_EVENT_TYPES);
 const SEEDS = Number(process.env.CCM_FUZZ_SEEDS || 40);

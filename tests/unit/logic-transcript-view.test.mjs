@@ -6,7 +6,7 @@ import {
   resolveTurnEndScroll,
   resolveComposerPlaceholder,
   resolveComposerPrimaryMode,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 test('resolveTurnEndScroll：有文件汇总卡 → 锚定卡；否则落底', () => {
   assert.equal(resolveTurnEndScroll({ hasFileChangesCard: true }), 'file-changes');

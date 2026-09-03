@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 
-import { extractCliObservedState, readCliObservedState } from '../../src/agent/cli-mirror-state.js';
-import { encodeProjectDir } from '../../src/shared/project-dir.js';
+import { extractCliObservedState, readCliObservedState } from '../../app/src/agent/cli-mirror-state.js';
+import { encodeProjectDir } from '../../app/src/shared/project-dir.js';
 
 const BASE = join(tmpdir(), `ccm-cli-mirror-${process.pid}`);
 test.after(async () => { await rm(BASE, { recursive: true, force: true }); });
@@ -118,7 +118,7 @@ test('readCliObservedState: 只观察 512KB 尾窗并跳过首尾半行', async 
 });
 
 // F1（2026-08-09 审查）：本文件曾自带第三份 project 目录名编码（`cwd.replace(/[^a-zA-Z0-9]/g,'-')`），
-// 与 history/workdirs 收敛到 src/shared/project-dir.js 的口径分叉——那份没有 CLI 的 200 字符截断 + hash 后缀。
+// 与 history/workdirs 收敛到 app/src/shared/project-dir.js 的口径分叉——那份没有 CLI 的 200 字符截断 + hash 后缀。
 // 后果不是报错而是**不对称的静默失效**：同一个超长 workdir 下，会话历史能正常同步（history 侧已按 CLI 口径
 // 定位），而镜像观察态因为拼错目录名读不到文件、被 catch 吞成 {model:null,permissionMode:null}，
 // 表现为「消息在更新，但 CLI 当前模型/权限模式永久未知」。收敛前两边一起坏，反而看不出来。

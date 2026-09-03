@@ -34,7 +34,7 @@ async function startServer() {
   delete process.env.CF_ACCESS_AUD;
 
   // 动态导入 server 模块
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;

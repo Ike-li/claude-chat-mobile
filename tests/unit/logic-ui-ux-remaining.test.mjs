@@ -11,7 +11,7 @@ import {
   pickBannerToShow,
   formatStreamPreviewIntervalMs,
   statusIconSpec,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 // 条数 = SDK 条数；标题 = 真实 wire id
 test('resolveModelTileDisplay: 无 resolved 时标题用 displayName，value 原样', () => {

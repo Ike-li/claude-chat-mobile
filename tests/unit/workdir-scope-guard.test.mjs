@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isInScope } from '../../src/files/workdir-scope-guard.js';
+import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 
 test.describe('isInScope', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-scope-'));

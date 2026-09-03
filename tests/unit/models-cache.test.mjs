@@ -9,7 +9,7 @@ import {
   isCwdDefaultModel,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
-} from '../../src/agent/models-cache.js';
+} from '../../app/src/agent/models-cache.js';
 
 const DS = { models: [{ value: 'opus', displayName: 'deepseek-v4-pro[1m]' }] };
 const REAL = { models: [{ value: 'opus', displayName: 'Claude Opus 4.8' }] };

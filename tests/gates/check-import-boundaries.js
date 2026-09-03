@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // 扫描根：运行时源码三处。tests/scripts 不设边界（工具与测试可跨域引用）。
-const SCAN_ROOTS = ['src', 'public/js'];
-const EXTRA_FILES = ['server.js'];
+const SCAN_ROOTS = ['app/src', 'app/public/js'];
+const EXTRA_FILES = ['app/server.js'];
 
 // 静态 import/export-from（行首锚定）；动态 import('...') 单独一条（可出现在行中任意位置，
 // 如 `const m = await import('./x.js')`——不锚定行首，否则边界规则可被动态 import 绕过）。
@@ -24,27 +24,27 @@ const DYNAMIC_IMPORT_RE = /(?<![.\w])import\s*\(\s*['"]([^'"]+)['"]/g;
 export const BOUNDARY_RULES = [
   {
     name: 'frontend-no-backend',
-    describe: '前端（public/js）不得 import 后端（src/）',
-    from: p => p.startsWith('public/js/'),
-    to: p => p.startsWith('src/'),
+    describe: '前端（app/public/js）不得 import 后端（app/src/）',
+    from: p => p.startsWith('app/public/js/'),
+    to: p => p.startsWith('app/src/'),
   },
   {
     name: 'backend-no-frontend',
-    describe: '后端（src/、server.js）不得 import 前端（public/js），共享纯逻辑除外',
-    from: p => p.startsWith('src/') || p === 'server.js',
-    to: p => p.startsWith('public/js/'),
+    describe: '后端（app/src/、app/server.js）不得 import 前端（app/public/js），共享纯逻辑除外',
+    from: p => p.startsWith('app/src/') || p === 'app/server.js',
+    to: p => p.startsWith('app/public/js/'),
   },
   {
     name: 'shared-is-leaf',
-    describe: 'src/shared 是叶子层，不得反向 import 其他后端域',
-    from: p => p.startsWith('src/shared/'),
-    to: p => p.startsWith('src/') && !p.startsWith('src/shared/'),
+    describe: 'app/src/shared 是叶子层，不得反向 import 其他后端域',
+    from: p => p.startsWith('app/src/shared/'),
+    to: p => p.startsWith('app/src/') && !p.startsWith('app/src/shared/'),
   },
   {
     name: 'server-is-sink',
-    describe: 'src/server 是组装根，只有 server.js 与 src/server 自身可以 import 它',
-    from: p => !p.startsWith('src/server/') && p !== 'server.js',
-    to: p => p.startsWith('src/server/'),
+    describe: 'app/src/server 是组装根，只有 app/server.js 与 app/src/server 自身可以 import 它',
+    from: p => !p.startsWith('app/src/server/') && p !== 'app/server.js',
+    to: p => p.startsWith('app/src/server/'),
   },
   {
     name: 'runtime-no-tooling',
@@ -57,7 +57,7 @@ export const BOUNDARY_RULES = [
 // 前后端共享的框架无关纯逻辑：浏览器 <script> 与 node:test 同时消费，两侧 import 合法。
 // 收窄到具体文件而非目录，避免变成「随便跨界」的后门。
 export const SHARED_ALLOWLIST = new Set([
-  'public/js/canonicalize.js', // src/auth/fingerprint.js 与浏览器共用规范化
+  'app/public/js/canonicalize.js', // app/src/auth/fingerprint.js 与浏览器共用规范化
 ]);
 
 function listFiles(root) {

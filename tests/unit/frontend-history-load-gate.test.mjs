@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createHistoryLoadGate } from '../../public/js/app/history-load-gate.js';
+import { createHistoryLoadGate } from '../../app/public/js/app/history-load-gate.js';
 
 const ev = (instanceId, n) => ({ instanceId, type: 'history_append', payload: { messages: [n] } });
 

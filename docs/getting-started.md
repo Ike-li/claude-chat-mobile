@@ -289,7 +289,7 @@ node scripts/device.js deny <ID>
 ```
 
 跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` / `127.0.0.1` / `::1`（空 Host 不算）。
-经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
+经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
 

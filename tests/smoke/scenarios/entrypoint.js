@@ -9,11 +9,11 @@ import { readFileSync, unlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { listSessions, getProjectDir } from '../../../src/sessions/history.js';
+import { listSessions, getProjectDir } from '../../../app/src/sessions/history.js';
 
 const PORT = process.env.PORT || 3100;
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
-// realpathSync 与 server.js preflight 对 WORK_DIR 的归一化对齐。runner 用 mkdtemp(tmpdir())
+// realpathSync 与 app/server.js preflight 对 WORK_DIR 的归一化对齐。runner 用 mkdtemp(tmpdir())
 // 给出的是 /var/folders/…，而 macOS 上 /var 是指向 /private/var 的符号链接：server 归一化后
 // CLI 按 /private/var/… 落盘，getProjectDir(未归一化路径) 却算出 `-var-folders-…`，于是
 // readFileSync 恒 ENOENT——报出来像「transcript 没写」，实际是**在错误的目录名下找**。

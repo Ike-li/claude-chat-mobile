@@ -28,10 +28,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const REGISTRY_DOC = 'docs/hard-rules.md';
 // 扫描面 = 运行时源码，与 check-import-boundaries.js 的 SCAN_ROOTS + EXTRA_FILES 同口径
-// （server.js 今天只有几行，但它是运行时入口，将来放进状态就该能登记；漏掉它会让那个位置
+// （app/server.js 今天只有几行，但它是运行时入口，将来放进状态就该能登记；漏掉它会让那个位置
 //   「登记就红、不登记也红」两头堵）。scripts/ 与 tests/ 不在面内：那里没有产品状态。
-const SCAN_ROOTS = ['src', 'public/js'];
-const SCAN_EXTRA_FILES = ['server.js'];
+const SCAN_ROOTS = ['app/src', 'app/public/js'];
+const SCAN_EXTRA_FILES = ['app/server.js'];
 
 const ID_RE = /N1-[A-Z0-9][A-Z0-9-]*/g;
 // 标记识别分两步，故意不合成一条正则：

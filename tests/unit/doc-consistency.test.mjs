@@ -32,7 +32,7 @@ test('doc consistency reports unknown documented npm scripts and dependency vers
   t.after(() => rm(root, { recursive: true, force: true }));
 
   await writeFixture(root, 'package.json', JSON.stringify({
-    scripts: { start: 'node server.js', check: 'node --check server.js' },
+    scripts: { start: 'node app/server.js', check: 'node --check app/server.js' },
     dependencies: { '@anthropic-ai/claude-agent-sdk': '0.3.201' },
   }));
   await writeFixture(root, 'README.md', `

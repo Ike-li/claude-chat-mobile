@@ -23,9 +23,9 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
 import { resolveManifestPath, resolveUninstallConfirm } from './service.js';
-import { SERVICE_UNIT_LOG_NAMES } from '../src/ops/service-units.js';
-import { readConfigFileValues } from '../src/ops/config-file.js';
-import { claudeSettingsPath, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
+import { SERVICE_UNIT_LOG_NAMES } from '../app/src/ops/service-units.js';
+import { readConfigFileValues } from '../app/src/ops/config-file.js';
+import { claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(HERE);
@@ -286,7 +286,7 @@ export function createUninstaller({
           const p = join(dataDir, dname);
           if (!existsSync(p)) continue;
           // safe-rm: 目录名恒为字面量 'worktree-settings'，内容全部是 server 按 cwd 哈希生成的
-          // 0600 settings 快照（src/server/app.js WORKTREE_SETTINGS_DIR），无用户手写文件
+          // 0600 settings 快照（app/src/server/app.js WORKTREE_SETTINGS_DIR），无用户手写文件
           if (!dryRun) rmSync(p, { recursive: true, force: true });
           removed++;
         }

@@ -3,7 +3,7 @@
 // 只做在一条写入路径上、另一条握手路径裸 set 绕过上限。收敛成函数后，测试也只需写一份。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setCapped, setLru } from '../../src/shared/bounded-map.js';
+import { setCapped, setLru } from '../../app/src/shared/bounded-map.js';
 
 const keys = m => [...m.keys()];
 

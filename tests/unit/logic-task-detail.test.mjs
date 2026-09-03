@@ -8,7 +8,7 @@ import {
   formatProgressTimestamp,
   groupBgTasksForList,
   taskDetailState,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 test.describe('formatProgressHistoryEntry（后台任务进度历史条目）', () => {
   test('summary 优先于 description', () => {

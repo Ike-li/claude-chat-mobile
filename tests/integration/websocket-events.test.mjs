@@ -9,7 +9,7 @@
 // ②WS-1 断言 "init 应该在 instances 之前"——这只在"已有 lastInit 的重连/重放"场景成立；本测试是全新
 //   连接首次建会话，实际顺序是 instances（连接时无条件重放）先于 init（首条消息触发懒建后才产生）。
 //   断言方向反了，改成 instances < init。
-// ③WS-5（切 AUTH_TOKEN）、WS-6（模拟"重启"）此前都靠 cleanup() + 再次 import('../../server.js')，但
+// ③WS-5（切 AUTH_TOKEN）、WS-6（模拟"重启"）此前都靠 cleanup() + 再次 import('../../app/server.js')，但
 //   ESM 按 URL 缓存模块，第二次 import 拿到同一个（已 close 的）httpServer/io 引用，模块顶层读取的
 //   AUTH_TOKEN 也不会重新求值——WS-5 测的其实还是第一次 import 时的（无 auth）配置，WS-6 的"重启"什么
 //   都没重启。改为 spawnServer()/killServer() 真起真杀子进程（tests/integration/_spawn-server.mjs，同

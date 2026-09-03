@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import {
   normalizeCliStatusInput,
   writeCliStatusSnapshot,
-} from '../src/ops/cli-statusline-bridge.js';
+} from '../app/src/ops/cli-statusline-bridge.js';
 
 async function readStdin() {
   const chunks = [];

@@ -157,7 +157,7 @@ test.describe('权限闸门', () => {
   // 审批完整性绑定（docs/design.md，承接 AD-7/NFR-17，"所批即所行"）
   test.describe('审批完整性绑定（NFR-17）', () => {
     test('askPermission：permission_request payload 附 fp，且等于 fingerprintSync({tool,args,cwd})', async () => {
-      const { fingerprintSync } = await import('../../src/auth/fingerprint.js');
+      const { fingerprintSync } = await import('../../app/src/auth/fingerprint.js');
       const { s, events } = makeSession({ cwd: '/tmp/proj' });
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls -la' }, { signal: ac.signal, toolUseID: 't1' });
@@ -219,7 +219,7 @@ test.describe('权限闸门', () => {
     });
 
     test('pendingRequestsSnapshot()：真实 askPermission 产生的 fp 原样出现在快照里（非手造数据）', async () => {
-      const { fingerprintSync } = await import('../../src/auth/fingerprint.js');
+      const { fingerprintSync } = await import('../../app/src/auth/fingerprint.js');
       const { s } = makeSession({ cwd: '/tmp/proj' });
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
@@ -235,7 +235,7 @@ test.describe('权限闸门', () => {
   // tests/setup/preload-env.mjs 重定向到一次性临时文件，不碰真实 data/approval-requests.json。
   test.describe('审批持久化台账（NFR-16/19，Phase 4）', () => {
     test('askPermission：立即在台账里生成一条 status=pending 记录', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession({ cwd: '/tmp/proj-store-1' });
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'echo a' }, { signal: ac.signal, toolUseID: 'store-t1' });
@@ -250,7 +250,7 @@ test.describe('权限闸门', () => {
     });
 
     test('resolvePermission(allow)：台账 status 更新为 allow，返回值为 "allow"', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession();
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t2' });
@@ -261,7 +261,7 @@ test.describe('权限闸门', () => {
     });
 
     test('resolvePermission(deny)：台账 status 更新为 deny，返回值为 "deny"', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession();
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t3' });
@@ -272,7 +272,7 @@ test.describe('权限闸门', () => {
     });
 
     test('resolvePermission：完整性校验失败 → 台账 status=integrity_mismatch，返回值同 outcome', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession();
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t4' });
@@ -283,7 +283,7 @@ test.describe('权限闸门', () => {
     });
 
     test('已过期 → 到期 timer 主动结算：台账 status=expired，过期后再提交扑空（BE-003）', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession({ approvalTtlMs: 1 });
       const ac = new AbortController();
       const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t5' });
@@ -306,7 +306,7 @@ test.describe('权限闸门', () => {
     });
 
     test('abort：台账 status 更新为 aborted', async () => {
-      const AS = await import('../../src/agent/approval-store.js');
+      const AS = await import('../../app/src/agent/approval-store.js');
       const { s } = makeSession();
       const ac = new AbortController();
       s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t6' });

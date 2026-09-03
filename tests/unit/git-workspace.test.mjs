@@ -9,7 +9,7 @@ import {
   readGitDiff,
   MAX_GIT_ENTRIES,
   MAX_GIT_DIFF_BYTES,
-} from '../../src/files/git-workspace.js';
+} from '../../app/src/files/git-workspace.js';
 
 describe('parsePorcelainZ：解析 git status --porcelain=v1 -z', () => {
   test('空输出 → 空数组', () => {

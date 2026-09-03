@@ -14,7 +14,7 @@ import {
   readLogTerminalState,
   writeLogTerminalState,
   clearLogTerminalState,
-} from '../../src/ops/log-terminal.js';
+} from '../../app/src/ops/log-terminal.js';
 
 const HOME = '/Users/you';
 

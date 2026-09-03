@@ -8,7 +8,7 @@
 //   lastInit 为空，服务端 connection 时只重放 instances 等合成状态，真正的 init 只在首条消息触发懒建
 //   AgentSession 后才产生——等待顺序与当前 lazy-start 协议相反，先于消息等 init 会死等到超时。改为
 //   连接后只等 instances（这个在连接时就无条件重放），发消息后如需要 init 里的字段再另外等。
-// ②CL-2 需要用不同 IDLE_TIMEOUT_MS 重启服务器；此前用 cleanup() + 再次 import('../../server.js')
+// ②CL-2 需要用不同 IDLE_TIMEOUT_MS 重启服务器；此前用 cleanup() + 再次 import('../../app/server.js')
 //   模拟"重启"，但 ESM 按 URL 缓存模块，第二次 import 拿到同一个（已 close 的）httpServer/io 引用，
 //   模块顶层读取的 IDLE_TIMEOUT_MS 也不会重新求值，测的其实还是 CL-1 那个旧超时值。改为 spawnServer()
 //   真起子进程（tests/integration/_spawn-server.mjs，同 tests/integration/server.test.mjs 已验证过的

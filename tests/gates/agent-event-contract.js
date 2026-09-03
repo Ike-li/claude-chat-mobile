@@ -1,9 +1,9 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
-// 契约真相源在 src/shared/protocol.js（运行时也 import 同一份，出向 emit 据此自检）。这里 import 后
+// 契约真相源在 app/src/shared/protocol.js（运行时也 import 同一份，出向 emit 据此自检）。这里 import 后
 // 原样再导出：既有 import 面不变（tests/unit/agent-event-contract.test.mjs 直接从本模块取用），
 // 本文件内部两个 check 的默认参数也仍拿得到本地绑定。
-import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../../src/shared/protocol.js';
+import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../../app/src/shared/protocol.js';
 
 export { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS };
 
@@ -11,12 +11,12 @@ const ROOT = join(import.meta.dirname, '..', '..');
 
 
 // 出向真实发射面。agent.js 走 agent-session 提取器（AgentSession 的 this.emit(...)）；其余一律按
-// `xxx.emit('agent:event', {...})` 提取。**目录递归而非手写文件清单**——与入向 serverDirs=['src'] 同口径。
-// 手写清单的代价是实测出来的：src/auth/device-gate.js（device_status/pending_devices）与
-// src/server/socket.js（error）一直在发 agent:event，却完全在门禁视野外；在 src/ 下新建模块发一个未登记
+// `xxx.emit('agent:event', {...})` 提取。**目录递归而非手写文件清单**——与入向 serverDirs=['app/src'] 同口径。
+// 手写清单的代价是实测出来的：app/src/auth/device-gate.js（device_status/pending_devices）与
+// app/src/server/socket.js（error）一直在发 agent:event，却完全在门禁视野外；在 app/src/ 下新建模块发一个未登记
 // type，npm run check 照样全绿，而前端 dispatcher 对未知 type 是静默丢弃——正是这道门禁存在的理由。
-const REAL_SESSION_SOURCE = Object.freeze({ path: 'src/agent/agent.js', kind: 'agent-session' });
-const REAL_EMIT_DIRS = Object.freeze(['src']);
+const REAL_SESSION_SOURCE = Object.freeze({ path: 'app/src/agent/agent.js', kind: 'agent-session' });
+const REAL_EMIT_DIRS = Object.freeze(['app/src']);
 
 function defaultRealSources(rootDir) {
   const emitFiles = REAL_EMIT_DIRS.flatMap(dir => listJsFiles(rootDir, dir));
@@ -380,7 +380,7 @@ export function formatContractProblems(result) {
 // 出向 agent:event 的 type 有上方 allowlist 机器校验；入向事件名此前只活在
 // docs/interfaces.md 的手写表格里，漂移无人拦——本节把它升级为同等保真：
 // server 注册面 = 契约（双向相等）、前端 emit 面 ⊆ 契约、visual mock 注册面 ⊆ 契约。
-// 清单本身已上移至 src/shared/protocol.js（见文件头）。
+// 清单本身已上移至 app/src/shared/protocol.js（见文件头）。
 
 // socket.io 内建连接生命周期事件：属传输层而非业务契约
 const BUILTIN_SOCKET_EVENTS = new Set([
@@ -462,8 +462,8 @@ const MOCK_INBOUND_EXEMPT = Object.freeze({
 export function checkInboundSocketContract({
   rootDir = ROOT,
   contractEvents = new Set(INBOUND_SOCKET_EVENTS),
-  serverDirs = ['src'],
-  clientDirs = ['public/js'],
+  serverDirs = ['app/src'],
+  clientDirs = ['app/public/js'],
   mockDirs = ['tests/e2e/mock'],
   mockExemptEvents = MOCK_INBOUND_EXEMPT,
 } = {}) {
@@ -558,12 +558,12 @@ export function checkInboundSocketContract({
 // 「与 createAgentEventDispatcher 的 outOfBand 表同口径」的注释绑定。只验 handle ∪ outOfBand
 // 等于契约是够不着它的：给 outOfBand 加第 6 个类型并同步 protocol.js，那道断言照样绿，而漏改
 // 这份副本就会让新类型被 replay buffer 误入队——正是上面这段注释描述的永久丢失。故一并锁死。
-const FRONTEND_DISPATCH_FILE = 'public/js/app.js';
+const FRONTEND_DISPATCH_FILE = 'app/public/js/app.js';
 const DISPATCH_TABLE_ANCHORS = Object.freeze([
   { name: 'handle', pattern: /\bconst\s+handle\s*=\s*\{/ },
   { name: 'outOfBand', pattern: /\boutOfBand\s*:\s*\{/ },
 ]);
-const REPLAY_OOB_FILE = 'public/js/app/event-dispatch.js';
+const REPLAY_OOB_FILE = 'app/public/js/app/event-dispatch.js';
 const REPLAY_OOB_ANCHOR = /\bconst\s+DEFAULT_REPLAY_OOB_TYPES\s*=\s*new\s+Set\s*\(\s*\[/;
 
 // 对象字面量的顶层键名。两种形态都认：`key: value` 与方法简写 `key(args) {}`。

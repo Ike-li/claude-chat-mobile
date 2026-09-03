@@ -1,7 +1,7 @@
 // tests/unit/interaction.test.mjs —— interaction-log.js 纯逻辑单测
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as ilog from '../../src/agent/interaction-log.js';
+import * as ilog from '../../app/src/agent/interaction-log.js';
 
 test.describe('interaction-log', () => {
   // enabled 在模块加载时由 LOG_INTERACTIONS 求值（运行中不可改）。用动态 import + 受控 env 测两个方向，
@@ -10,7 +10,7 @@ test.describe('interaction-log', () => {
     const saved = process.env.LOG_INTERACTIONS;
     process.env.LOG_INTERACTIONS = '1';
     try {
-      const mod = await import('../../src/agent/interaction-log.js?enabled-on');
+      const mod = await import('../../app/src/agent/interaction-log.js?enabled-on');
       assert.equal(mod.enabled, true);
     } finally {
       if (saved === undefined) delete process.env.LOG_INTERACTIONS;
@@ -22,7 +22,7 @@ test.describe('interaction-log', () => {
     const saved = process.env.LOG_INTERACTIONS;
     delete process.env.LOG_INTERACTIONS;
     try {
-      const mod = await import('../../src/agent/interaction-log.js?enabled-off');
+      const mod = await import('../../app/src/agent/interaction-log.js?enabled-off');
       assert.equal(mod.enabled, false);
     } finally {
       if (saved === undefined) delete process.env.LOG_INTERACTIONS;

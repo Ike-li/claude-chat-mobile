@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, promptWorkDirs, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
-import { ACCESS_PROFILES } from '../../src/ops/env-schema.js';
+import { ACCESS_PROFILES } from '../../app/src/ops/env-schema.js';
 
 const SETUP = new URL('../../scripts/setup.js', import.meta.url);
 
@@ -154,7 +154,7 @@ test.describe('--desktop：桌面控制台', () => {
   });
 
   // 非 macOS 上没有桌面端可装。静默忽略会让用户以为装上了，明确拒绝才有信息量 ——
-  // 同 src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
+  // 同 app/src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
   test('非 macOS 上显式 --desktop=on 被拒绝并说明原因', () => {
     const r = resolveSetupPlan({
       args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=on']),

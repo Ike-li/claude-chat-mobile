@@ -17,7 +17,7 @@ import {
   diffRunningState,
   serializeSnapshot,
   validateServiceEvents,
-} from '../../src/ops/service-events.js';
+} from '../../app/src/ops/service-events.js';
 
 const snap = (pairs) => new Map(Object.entries(pairs).map(([k, v]) => [k, v]));
 const T = 1786600000000;

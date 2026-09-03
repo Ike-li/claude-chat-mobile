@@ -29,9 +29,9 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 | 层 | 职责 | 典型文件 |
 |----|------|----------|
-| SDK 边界 | 拉真值、映射 subtype → emit | `src/agent/agent.js` |
-| Server 合成 | statusline 组装、effort 归一、缓存重放 | `src/server/app.js`, `src/ops/statusline.js` |
-| FE 展示 | 可读化、磁贴/pill 策略 | `public/js/logic/`（`logic.js` 是 re-export barrel）, `public/js/app.js` |
+| SDK 边界 | 拉真值、映射 subtype → emit | `app/src/agent/agent.js` |
+| Server 合成 | statusline 组装、effort 归一、缓存重放 | `app/src/server/app.js`, `app/src/ops/statusline.js` |
+| FE 展示 | 可读化、磁贴/pill 策略 | `app/public/js/logic/`（`logic.js` 是 re-export barrel）, `app/public/js/app.js` |
 
 ---
 
@@ -174,7 +174,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 `getContextUsage` 在 CLI 侧是 `/context` 拆账（按类别 `count_tokens`），不是读内存。statusline 的 10s tick 只刷新 git；占用结果缓存在 `agent.ctxWindowCache`，只在无窗口 / 模型变 / `compact_boundary` 失效时重拉。流式 `onUsage` 用 lastUsage 单调上调占用，不重打 RPC。
 
-**锚点**：`src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/unit/statusline.test.mjs`（tick 不重打）
+**锚点**：`app/src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/unit/statusline.test.mjs`（tick 不重打）
 
 ---
 
@@ -207,7 +207,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 | 契约 | 实现 | 测试 |
 |------|------|------|
-| 模型磁贴 N + wire 标题 | `public/js/logic/models-effort.js` `resolveModelTileDisplay` | `display-contracts` · `logic-ui-ux-remaining` |
+| 模型磁贴 N + wire 标题 | `app/public/js/logic/models-effort.js` `resolveModelTileDisplay` | `display-contracts` · `logic-ui-ux-remaining` |
 | 发送 pin wire | `resolveSendModel` | `display-contracts` · `logic-session` |
 | Pill 显 wire | `resolveModelPillText` | `logic-session` · E2E P0-09 |
 | Effort UI→SDK | `normalizeEffortUiLevel` | `display-contracts` · `cli-settings-defaults` |

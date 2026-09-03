@@ -5,12 +5,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { CCM_PERMISSION_MODES } from '../../src/agent/cli-settings-defaults.js';
+import { CCM_PERMISSION_MODES } from '../../app/src/agent/cli-settings-defaults.js';
 import {
   SDK_PERMISSION_MODES,
   permissionModeTileSpecs,
   isSdkPermissionMode,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 function readSdkPermissionModes() {
   const dts = readFileSync(

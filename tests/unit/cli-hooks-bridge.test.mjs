@@ -17,7 +17,7 @@ import {
   isVerifyEvent,
   writeHookVerifyAck,
   readHookVerifyAck,
-} from '../../src/ops/cli-hooks-bridge.js';
+} from '../../app/src/ops/cli-hooks-bridge.js';
 
 const CWD = '/Users/you/code/demo';
 const SID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';

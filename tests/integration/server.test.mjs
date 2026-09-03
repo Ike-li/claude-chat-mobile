@@ -1,4 +1,4 @@
-// tests/integration/server.test.mjs —— server.js 集成测试（零 token、零 agent 创建）
+// tests/integration/server.test.mjs —— app/server.js 集成测试（零 token、零 agent 创建）
 // 启动 server 子进程 → socket.io-client 连接 → 验证事件流与 HTTP 端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +18,7 @@ let serverProc;
 let tmpDir;
 
 // 本文件起真 server 子进程。CI 上 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh（见 workflow），
-// preflight 因此过关，HTTP/socket 接线用例照常跑——这是 CI 里唯一执行真实 src/server/app.js 的路径。
+// preflight 因此过关，HTTP/socket 接线用例照常跑——这是 CI 里唯一执行真实 app/src/server/app.js 的路径。
 // 唯一例外是 scout：它要真 claude 才能拉到模型清单，stub 给不了，单独用 REAL_CLI_ONLY 挡住。
 const REAL_CLI_ONLY = process.env.CI
   ? { skip: 'scout 需真 claude CLI 拉模型清单；CI 用的是 tests/fixtures/fake-claude.sh stub' }
@@ -43,7 +43,7 @@ test.before(async () => {
   // status:ok，还要求 /health 回显本 nonce（确认是本轮 spawn 的 server）；并监听子进程 early exit（bind 失败等）
   // 立即失败，不空等满 10s、也绝不对错误进程发有状态事件。
   const buildNonce = `srvtest-${randomUUID()}`;
-  serverProc = spawn('node', ['server.js'], {
+  serverProc = spawn('node', ['app/server.js'], {
     env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIR: tmpDir,
       // CCM_DATA_DIR 隔离（同其余 tests/integration/*.test.mjs 惯例）：此前本文件唯独漏设，子进程
       // sessions.js/devices.js/approval-store.js/audit.js 全部落到真实 data/ 目录——sessions.js 的

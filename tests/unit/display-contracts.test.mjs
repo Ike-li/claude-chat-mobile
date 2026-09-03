@@ -13,17 +13,17 @@ import {
   resolvePanelState,
   formatStatuslineCollapsedSummary,
   formatStatuslineCtxBrief,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 import {
   normalizeEffortUiLevel,
   normalizeEffortLevel,
   CCM_EFFORT_LEVELS,
   UI_EFFORT_LEVELS,
-} from '../../src/agent/cli-settings-defaults.js';
+} from '../../app/src/agent/cli-settings-defaults.js';
 import {
   buildWebStatusLine,
   buildCliStatusLine,
-} from '../../src/ops/statusline.js';
+} from '../../app/src/ops/statusline.js';
 
 // ─── §1 Models ─────────────────────────────────────────────
 

@@ -8,7 +8,7 @@
 // namespace 下未导出成员是 undefined，调用即在【单个】用例里失败，不连累同文件其余用例。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as H from '../../src/sessions/history.js';
+import * as H from '../../app/src/sessions/history.js';
 
 // 与 history.test.mjs 同款消息构造器（那边是文件内局部、未导出，这里重定义）。
 const M = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
@@ -34,7 +34,7 @@ test.skip('发现2 已知边界（不修）：外部写入撞进本地 turn 的 
 // ══════════════════════════════════════════════════════════════════════════════
 // 发现 1：只读镜像锁没有任何自动释放路径 —— 一次外部写入把移动端输入锁死到手动切会话/接管为止。
 // ──────────────────────────────────────────────────────────────────────────────
-// 现状：setMirror(true)（server.js:763）只在观测到外部写入时上锁；setMirror(false) 仅在
+// 现状：setMirror(true)（app/server.js:763）只在观测到外部写入时上锁；setMirror(false) 仅在
 //   "无查看会话"(740) 和"切了会话"(750) 触发。锁上后若无【新的】外部增长，catchUpTick 在
 //   `if (!emit.length ...) return`（758）提前返回，永不解锁 → 终端静默 10 分钟锁仍在。
 // 提议：抽纯函数 mirrorReleaseStep(state, {externalWrite, localBusy}) → {readonly, state}，

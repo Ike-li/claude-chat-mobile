@@ -1,12 +1,12 @@
 // tests/integration/approval-restart-recovery.test.mjs —— 重启后 pending 审批 fail-closed 处置的
 // 集成测试（重启 fail-closed 语义见 docs/design.md §4）。
 //
-// 不需要真 claude 子进程/token——重启恢复是 server.js 模块顶层的一段同步逻辑（在 httpServer.listen
-// 之前跑完），只要能触发一次 server.js 的模块求值就能验证，走"可靠集成"档（默认 npm test 就跑，
+// 不需要真 claude 子进程/token——重启恢复是 app/server.js 模块顶层的一段同步逻辑（在 httpServer.listen
+// 之前跑完），只要能触发一次 app/server.js 的模块求值就能验证，走"可靠集成"档（默认 npm test 就跑，
 // 不像 claude-lifecycle 那样需要 RUN_CLAUDE_INTEGRATION）。
 //
 // 手法：先手写一份 approval-requests.json（模拟"上一个进程留下的 pending 审批"），再动态 import
-// server.js 触发它的启动流程，验证该记录被标记为 expired + decidedBy='system:restart'，且写了一条
+// app/server.js 触发它的启动流程，验证该记录被标记为 expired + decidedBy='system:restart'，且写了一条
 // 汇总 audit_record。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,12 +51,12 @@ async function startServerWithSeededPendingApproval() {
     ]
   }, null, 2));
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
 }
 
@@ -71,7 +71,7 @@ test.describe('重启后 pending 审批 fail-closed 处置（Phase 4）', () => 
   test.after(async () => { await cleanup(); });
 
   test('遗留 pending 记录在启动时被标记 expired，decidedBy=system:restart；已终态记录不受影响', async () => {
-    const AS = await import('../../src/agent/approval-store.js');
+    const AS = await import('../../app/src/agent/approval-store.js');
     const leftover = AS.getByReqId('leftover-1');
     assert.equal(leftover.status, 'expired');
     assert.equal(leftover.decidedBy, 'system:restart');
@@ -83,7 +83,7 @@ test.describe('重启后 pending 审批 fail-closed 处置（Phase 4）', () => 
   });
 
   test('重启恢复写了一条汇总 audit_record（不含被处置记录的具体内容）', async () => {
-    const AU = await import('../../src/ops/audit.js');
+    const AU = await import('../../app/src/ops/audit.js');
     const rows = AU.listRecent({ limit: 100, action: 'approval_restart_expired' });
     assert.ok(rows.length >= 1);
     const r = rows[0];
@@ -95,10 +95,10 @@ test.describe('重启后 pending 审批 fail-closed 处置（Phase 4）', () => 
   });
 
   test('NFR-16 留存治理：启动时超过保留期的终态记录被清理，写了汇总 audit_record', async () => {
-    const AS = await import('../../src/agent/approval-store.js');
+    const AS = await import('../../app/src/agent/approval-store.js');
     assert.equal(AS.getByReqId('ancient-terminal'), null); // 1970 年的终态记录应已被清理
 
-    const AU = await import('../../src/ops/audit.js');
+    const AU = await import('../../app/src/ops/audit.js');
     const rows = AU.listRecent({ limit: 100, action: 'retention_cleanup' });
     assert.ok(rows.length >= 1);
     const r = rows[0];

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// i18n-check.js —— i18n 的孤儿词典 key 扫描（public/js/i18n.js EN_DICT 有、但 index.html 的界面文案
+// i18n-check.js —— i18n 的孤儿词典 key 扫描（app/public/js/i18n.js EN_DICT 有、但 index.html 的界面文案
 // 与各 js 的 t('原文') 调用里再没有它）。zh 原文即 key 的设计下，改文案 = 改 key，
 // 旧 key 容易变成词典孤儿——本脚本挂进 npm run check 兜住漂移，不做翻译完整性检查（未翻译=静默回落
-// 中文是设计内行为，见 public/js/i18n.js 头注，不是错误）。
+// 中文是设计内行为，见 app/public/js/i18n.js 头注，不是错误）。
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +23,7 @@ function walkFiles(rootDir, dir, pattern) {
   return files.sort();
 }
 
-// EN_DICT 字面量里的单引号字符串 key（与 public/js/i18n.js 的写法约定一致：'中文 key': '译文'）。
+// EN_DICT 字面量里的单引号字符串 key（与 app/public/js/i18n.js 的写法约定一致：'中文 key': '译文'）。
 export function extractDictKeys(source) {
   const bodyMatch = /EN_DICT\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/.exec(source);
   if (!bodyMatch) return [];
@@ -72,7 +72,7 @@ export function extractHtmlCopyKeys(html) {
 }
 
 // t('...') / t("...") / t(`...`) 调用的字符串字面量参数（无模板插值场景——本仓 t() 用法目前恒为
-// 静态字面量，见 public/js/i18n.js t() 签名）。非字符串参数（变量/三元表达式的非字面量分支）安全跳过。
+// 静态字面量，见 app/public/js/i18n.js t() 签名）。非字符串参数（变量/三元表达式的非字面量分支）安全跳过。
 export function extractTCallKeys(source) {
   const keys = [];
   const callRe = /\bt\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1/g;
@@ -95,20 +95,20 @@ export function keyAppearsAsLiteral(source, key) {
 }
 
 export function checkI18n({ rootDir = ROOT } = {}) {
-  const i18nFile = join(rootDir, 'public/js/i18n.js');
+  const i18nFile = join(rootDir, 'app/public/js/i18n.js');
   if (!existsSync(i18nFile)) return { rootDir, dictKeys: [], problems: [] };
   const dictKeys = extractDictKeys(readFileSync(i18nFile, 'utf8'));
 
   const usedKeys = new Set();
-  const htmlFile = join(rootDir, 'public/index.html');
+  const htmlFile = join(rootDir, 'app/public/index.html');
   if (existsSync(htmlFile)) {
     for (const key of extractHtmlCopyKeys(readFileSync(htmlFile, 'utf8'))) usedKeys.add(key);
   }
   const sources = [];
-  for (const relPath of walkFiles(rootDir, 'public/js', /\.(?:js|mjs)$/)) {
+  for (const relPath of walkFiles(rootDir, 'app/public/js', /\.(?:js|mjs)$/)) {
     const text = readFileSync(join(rootDir, relPath), 'utf8');
     // 词典文件自身不算引用来源：每个 key 都写在它的 EN_DICT 里，算进去等于这道闸永远绿。
-    if (relPath.replace(/\\/g, '/') !== 'public/js/i18n.js') sources.push(text);
+    if (relPath.replace(/\\/g, '/') !== 'app/public/js/i18n.js') sources.push(text);
     for (const key of extractTCallKeys(text)) usedKeys.add(key);
   }
 

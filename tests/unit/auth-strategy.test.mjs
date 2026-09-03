@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createCfAccessStrategy, NULL_AUTH_STRATEGY } from '../../src/auth/auth-strategy.js';
+import { createCfAccessStrategy, NULL_AUTH_STRATEGY } from '../../app/src/auth/auth-strategy.js';
 
 // 策略的每个成员都可注入，便于在不碰 cf-access 模块级状态的前提下断言接线。
 const stubDeps = (over = {}) => ({

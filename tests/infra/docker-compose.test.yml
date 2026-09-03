@@ -3,7 +3,7 @@
 # 用法见 package.json 的 test:docker* 脚本；直接用也行：
 #   docker compose -f docker-compose.test.yml run --rm test            # 默认 test:unit
 #   docker compose -f docker-compose.test.yml run --rm test npm run check
-#   docker compose -f docker-compose.test.yml run --rm test npm run mutate -- src/x.js
+#   docker compose -f docker-compose.test.yml run --rm test npm run mutate -- app/src/x.js
 services:
   test:
     build:

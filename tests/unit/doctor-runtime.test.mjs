@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot } from '../../src/ops/doctor-runtime.js';
-import { modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
-import { resolveBindPlan } from '../../src/shared/bind-host.js';
+import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot } from '../../app/src/ops/doctor-runtime.js';
+import { modelSettingsConflictDiagnostic } from '../../app/src/ops/doctor-checks.js';
+import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
   test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', () => {

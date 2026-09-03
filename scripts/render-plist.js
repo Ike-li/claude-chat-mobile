@@ -35,7 +35,7 @@ export function parseKeyValueArgs(pairs) {
 }
 
 // shell **双引号串内**的转义。TC-009 修的是 sed 那一层，这是它的下一层：
-// server 模板那行是 `/bin/zsh -lc 'cd "__REPO__" && exec "__NODE__" server.js'`，
+// server 模板那行是 `/bin/zsh -lc 'cd "__REPO__" && exec "__NODE__" app/server.js'`，
 // 双引号里 `$`、反引号、`\` 仍会被 zsh 解释。路径含 `$` 时不会报错，只会静默走偏 ——
 // `/Users/x/code/my$proj` 变成 `cd "/Users/x/code/my"`，bootstrap 照样成功（launchctl 只管
 // 加载 plist），随后 node 起不来、KeepAlive 把它变成无限崩溃重启循环，而 CLI 只说一句

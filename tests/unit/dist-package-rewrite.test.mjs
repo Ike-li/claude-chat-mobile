@@ -16,7 +16,7 @@ import { shippedFiles } from '../helpers/worktree-tree.mjs';
 const ROOT = join(import.meta.dirname, '..', '..');
 
 const SHIPPED = new Set([
-  'server.js', 'package.json',
+  'app/server.js', 'package.json',
   'scripts/setup.js', 'scripts/doctor.js', 'scripts/service.js', 'scripts/app-build.js',
 ]);
 
@@ -27,8 +27,8 @@ function rewrite(pkg) {
 test('保留引用文件仍在包内的命令', () => {
   const out = rewrite({
     scripts: {
-      start: 'node server.js',
-      dev: 'node --watch server.js',
+      start: 'node app/server.js',
+      dev: 'node --watch app/server.js',
       setup: 'node scripts/setup.js',
       'service:status': 'node scripts/service.js status',
     },
@@ -39,7 +39,7 @@ test('保留引用文件仍在包内的命令', () => {
 test('删除引用了被裁文件的命令', () => {
   const out = rewrite({
     scripts: {
-      start: 'node server.js',
+      start: 'node app/server.js',
       'test:unit': 'node --test tests/unit/*.test.mjs',
       mutate: 'node tests/gates/mutate.js',
       'test:docker': 'docker compose -f docker-compose.test.yml run --rm test npm test',
@@ -51,7 +51,7 @@ test('删除引用了被裁文件的命令', () => {
 test('删除依赖 devDependency 二进制的命令（eslint / playwright）', () => {
   const out = rewrite({
     scripts: {
-      start: 'node server.js',
+      start: 'node app/server.js',
       lint: 'eslint .',
       'lint:fix': 'eslint . --fix',
       'test:e2e': 'playwright test',
@@ -64,7 +64,7 @@ test('删除依赖 devDependency 二进制的命令（eslint / playwright）', (
 test('递归删除转发到已删命令的别名', () => {
   const out = rewrite({
     scripts: {
-      start: 'node server.js',
+      start: 'node app/server.js',
       'test:e2e': 'playwright test',
       'test:visual': 'npm run test:e2e',
       'test:all': 'npm run test:visual && npm run start',
@@ -75,7 +75,7 @@ test('递归删除转发到已删命令的别名', () => {
 
 test('保留转发到仍存活命令的别名', () => {
   const out = rewrite({
-    scripts: { start: 'node server.js', serve: 'npm run start' },
+    scripts: { start: 'node app/server.js', serve: 'npm run start' },
   });
   assert.deepEqual(Object.keys(out.scripts).sort(), ['serve', 'start']);
 });
@@ -87,7 +87,7 @@ test('删掉 devDependencies，dependencies 与其余字段原样保留', () => 
     private: true,
     type: 'module',
     engines: { node: '>=20' },
-    scripts: { start: 'node server.js' },
+    scripts: { start: 'node app/server.js' },
     dependencies: { express: '^5.0.0' },
     devDependencies: { eslint: '^9.0.0' },
   });
@@ -131,7 +131,7 @@ test('端到端：真实 package.json 改写后，保留的命令引用的文件
 
 test('不改动入参（打包脚本会先读原文件再写新文件）', () => {
   const input = {
-    scripts: { start: 'node server.js', lint: 'eslint .' },
+    scripts: { start: 'node app/server.js', lint: 'eslint .' },
     devDependencies: { eslint: '^9.0.0' },
   };
   rewrite(input);

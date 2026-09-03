@@ -19,9 +19,9 @@
 
 - **公网入口**：固定域名，Cloudflare Access 把守（Email OTP 或 Google/Microsoft 2FA），公网**不带 `#token=`**。
 - **两个要一直跑着的进程**（桌面端会帮你拉；headless 自己保持）：
-  - server：`node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
+  - server：`node app/server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
-- **鉴权分层**：公网走 Access JWT（服务端 `src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
+- **鉴权分层**：公网走 Access JWT（服务端 `app/src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
   > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。
 
 > **Cloudflare 是默认路径，不是硬依赖。** `CF_ACCESS_*` 三项留空即整层关闭，server 侧零改动，
@@ -120,7 +120,7 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 菜单里的安装 / 启停调的就是这些命令。SSH 上机器、人不在 GUI 前时才直接跑。
 
 ```bash
-npm run service:install -- server      # node server.js，RunAtLoad + KeepAlive
+npm run service:install -- server      # node app/server.js，RunAtLoad + KeepAlive
 npm run service:install -- tunnel      # cloudflared tunnel run（读 §1 的 config.yml）
 npm run service:install -- logrotate   # 每天 03:47 轮转日志
 npm run service:install -- menubar     # 桌面控制台随登录自启
@@ -136,7 +136,7 @@ npm run service:status
 
 仓库 `desktop/launchd/` 下有四份占位符模板，是桌面端 / `service.js` 的数据源（`scripts/service.js` 直接读它们渲染），不是可以删掉的附件。
 
-- [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
+- [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node app/server.js`，经 `zsh -lc 'cd <repo> && exec <node> app/server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`desktop/launchd/tunnel.plist.template`](../desktop/launchd/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
 - [`desktop/launchd/log-rotate.plist.template`](../desktop/launchd/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
 - [`desktop/launchd/menubar.plist.template`](../desktop/launchd/menubar.plist.template) —— `/usr/bin/open CCM.app`。刻意不设 `KeepAlive`（设了的话用户从菜单点「退出」会被 launchd 立刻拉起，再也关不掉）。
@@ -182,7 +182,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ```
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
@@ -226,12 +226,12 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（配置文件里的 `ANTHROPIC_*` 启动期被剥除，只能来自 shell） |
-| 回复只有工具卡片、无正文 | 网关可能不流式 → `src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
+| 回复只有工具卡片、无正文 | 网关可能不流式 → `app/src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
 
 ## 不用 Cloudflare 的公网入口
 
-`CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
+`CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`app/src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
 server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬约束，各方案自身的安装配置以其官方文档为准。
 
 选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|direct|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
@@ -319,7 +319,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 
 后两行需要展开：
 
-**设备审批会自己回来。** `shouldBypassDeviceApproval`（`src/auth/rate-limiter.js`）第一行是
+**设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）第一行是
 `if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
@@ -344,12 +344,12 @@ IPv4 不受影响，仍按整地址分桶。
 - PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
   但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
 - `CF_ACCESS_*` 三项留空。配置面板清空时会警告「公网域名退化成只靠 AUTH_TOKEN 校验」
-  （`src/ops/env-schema.js` 的 `checkTogether`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
+  （`app/src/ops/env-schema.js` 的 `checkTogether`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
   切换方案时面板还会提醒把它一并更新，避免声明指着旧方案。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
-  （`src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
+  （`app/src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
-- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`src/server/http.js` 的 `reachableIPv4s`）
+- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/server/http.js` 的 `reachableIPv4s`）
   按**地址段**判定、不看接口名，所以 macOS 上 WireGuard / Tailscale 的 `utun*` 地址会和局域网地址
   一起列出。TUN 代理占用的 RFC 2544 假段（198.18/15）与 link-local 仍被排除。
   隧道地址没出现，说明隧道本身没起来，不是日志不显示它。

@@ -48,7 +48,7 @@ let cfAccess;
 
 async function reloadModule() {
   // 动态导入 + 缓存破除以获取干净模块状态
-  cfAccess = await import(`../../src/auth/cf-access.js?v=${Date.now()}`);
+  cfAccess = await import(`../../app/src/auth/cf-access.js?v=${Date.now()}`);
 }
 
 // ---- 环境变量辅助 ----

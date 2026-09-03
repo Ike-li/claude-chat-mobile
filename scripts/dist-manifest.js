@@ -15,7 +15,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 // 用户装机/运维真正会执行的入口：package.json 里非测试的 scripts + 文档里的 `node scripts/xxx.js`。
 // 门禁类（check-*/contract-check/repo-inventory/mutate/…）刻意不在此列——它们是维护者工具。
 export const DIST_ENTRIES = Object.freeze([
-  'server.js',                          // npm start / npm run dev
+  'app/server.js',                          // npm start / npm run dev
   'scripts/setup.js',                   // npm run setup
   'scripts/doctor.js',                  // node scripts/doctor.js
   'scripts/device.js',                  // node scripts/device.js
@@ -31,7 +31,7 @@ export const DIST_ENTRIES = Object.freeze([
 
 // import 图看不见的运行时依赖：代码里以【路径字符串】引用，静态分析扫不到。
 export const EXTRA_RUNTIME_FILES = Object.freeze([
-  'scripts/rotate-logs.sh',                        // src/ops/service-units.js 的 ROTATE_SUFFIX
+  'scripts/rotate-logs.sh',                        // app/src/ops/service-units.js 的 ROTATE_SUFFIX
   'desktop/launchd/log-rotate.plist.template',     // service-units.js:115
   'desktop/launchd/menubar.plist.template',        // service-units.js:131
   'desktop/launchd/server.plist.template',         // 受管 server unit
@@ -42,7 +42,7 @@ export const EXTRA_RUNTIME_FILES = Object.freeze([
   'desktop/ccm-menubar.swift',
   'desktop/ccm-config-window.swift',
   'desktop/ccm-console-window.swift',
-  'public/js/canonicalize.js',                     // 前后端共用（边界豁免），也被 src/ import
+  'app/public/js/canonicalize.js',                     // 前后端共用（边界豁免），也被 app/src/ import
   'package.json',
   'package-lock.json',
 ]);
@@ -51,7 +51,7 @@ export const EXTRA_RUNTIME_FILES = Object.freeze([
  * 从源码里提取所有 import 说明符（静态 + 动态）。
  *
  * 【为什么要逐行剥注释】动态 import 的正则无法像静态那样做行首锚定，于是会扫进散文里的
- * 示例代码——实测 src/shared/log-time.js 的头注释写着「入口在 server.js 的动态 import('app.js') 之前安装」，
+ * 示例代码——实测 app/src/shared/log-time.js 的头注释写着「入口在 app/server.js 的动态 import('app.js') 之前安装」，
  * 裸匹配把 'app.js' 当成了一个未声明的 npm 包。判据收窄成「跳过 trim 后以 // 、* 、/* 开头的行」：
  * 真实的 import 语句不会以这三者开头，而这三者覆盖了行注释与块注释的续行。
  */
@@ -116,7 +116,7 @@ export function rewritePackageJson(pkg, { shipped, devBins = DEV_BINARIES } = {}
   const isRunnable = (cmd) => {
     if (devBins.some((bin) => new RegExp(`(^|\\s|/)${bin}(\\s|$)`).test(cmd))) return false;
     // 命令里出现的仓库内路径：目录形式（tests/unit/）与文件形式（scripts/x.js、a.yml）都要认。
-    const refs = [...cmd.matchAll(/(?:^|\s|-f\s*)((?:scripts|tests|src|public|desktop|playground)\/[\w./*-]+|[\w.-]+\.(?:yml|ts|js|mjs))/g)]
+    const refs = [...cmd.matchAll(/(?:^|\s|-f\s*)((?:app|scripts|tests|desktop)\/[\w./*-]+|[\w.-]+\.(?:yml|ts|js|mjs))/g)]
       .map((m) => m[1].replace(/\*.*$/, ''));   // tests/unit/*.test.mjs → tests/unit/
     return refs.every((ref) => (ref.endsWith('/')
       ? [...shipped].some((f) => f.startsWith(ref))
@@ -220,6 +220,6 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
     console.log(`✅ 分发包覆盖全部 ${closure.length} 个生产必需文件（打包 ${shipped.size} 项）。`);
   } else {
     console.log(closure.join('\n'));
-    console.error(`\n共 ${closure.length} 个文件（不含整目录保留的 public/ docs/ desktop/）。`);
+    console.error(`\n共 ${closure.length} 个文件（不含整目录保留的 app/public/ docs/ desktop/）。`);
   }
 }

@@ -247,7 +247,7 @@ async function runContract() {
     closeA2?.ok === true && !idsAfter.includes(iA2) && idsAfter.includes(iA1), `after=${idsAfter.join(',')}`);
 
   // 9) 显式传一个【不存在的】instanceId 时不切档、也不误伤 viewing 实例。
-  //    `resolveInstanceId` 对 stale id 返回 null（src/server/app.js「显式 stale → null，不再回退
+  //    `resolveInstanceId` 对 stale id 返回 null（app/src/server/app.js「显式 stale → null，不再回退
   //    viewing」），handler 于是走 echo 拨回分支：回一条当前档的 permission_mode，不做任何修改。
   //    这条性质是安全相关的——旧行为会把 stale id 落回 viewing，那样前端拿着一个过期 id 切档，
   //    就会改到另一个会话的权限档上去。
@@ -302,7 +302,7 @@ async function runE2E() {
 }
 
 async function run() {
-  server = spawn(process.execPath, [join(ROOT, 'server.js')], {
+  server = spawn(process.execPath, [join(ROOT, 'app/server.js')], {
     cwd: ROOT,
     env: {
       ...stripInheritedEnv(process.env),   // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 runner.js 的 SMOKE_ENV_BLOCKLIST）

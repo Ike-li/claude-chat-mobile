@@ -1,4 +1,4 @@
-// 审批弹窗控制器（public/js/app/approval-questions.js#createApprovalController）的行为域单测。
+// 审批弹窗控制器（app/public/js/app/approval-questions.js#createApprovalController）的行为域单测。
 //
 // 这个模块是 2026-08-02 从 app.js 顶层整体搬出来的 419 行状态机，搬出来时没带测试。
 // 本文件只覆盖「跨卡片/跨会话的残留状态」这一域——那是整体搬迁最容易漏的一类：
@@ -8,8 +8,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createInteractionQueueState, createApprovalController } from '../../public/js/app/approval-questions.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createInteractionQueueState, createApprovalController } from '../../app/public/js/app/approval-questions.js';
 
 // ── 最小 DOM 替身 ────────────────────────────────────────────────────────────
 // 只做控制器真正碰到的那几件事：class 增删查、文本、点击回调、子节点。
@@ -84,7 +84,7 @@ test('指纹不符时挂警示条（本文件其余用例的前提，先把它�
   assert.equal(warnHidden(), false, '指纹对不上却没有警示条');
 });
 
-// ★ 本文件的正题。requestId 在 toolUseID 缺失时回落成 `perm_${++this.permSeq}`（src/agent/agent.js），
+// ★ 本文件的正题。requestId 在 toolUseID 缺失时回落成 `perm_${++this.permSeq}`（app/src/agent/agent.js），
 // 而 permSeq 是 AgentSession 的实例字段、构造期归零——dispose+resume / 切会话 / /clear 都会造出
 // 新实例，重新从 perm_1 发号。前端这个 Set 却活在页面生命周期里：clearAll() 若不清它，
 // 一次真实的指纹不符之后，后面同号的【正常】审批卡会被误挂"内容可能被篡改"。

@@ -1,7 +1,7 @@
 // tests/unit/logic-composer-mention.test.mjs —— composer「@ 文件引用」纯逻辑（零 token）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectAtMentionQuery, applyAtMentionPick } from '../../public/js/logic.js';
+import { detectAtMentionQuery, applyAtMentionPick } from '../../app/public/js/logic.js';
 
 test.describe('detectAtMentionQuery（composer @ 文件引用触发检测）', () => {
   test('行首 @query → 命中，matchStart 指向 @ 本身', () => {

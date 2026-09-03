@@ -11,7 +11,7 @@ import {
   notifySessionTag,
   lookupNotifySessionTitle,
   otherWorkspaceNotifyOpts,
-} from '../../public/js/logic/session-search.js';
+} from '../../app/public/js/logic/session-search.js';
 
 test('matchesSessionTitle: 空/空白 query 全匹配', () => {
   assert.equal(matchesSessionTitle('Hello', ''), true);

@@ -6,21 +6,23 @@
 
 当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。
 Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
-新功能的状态别再落 `public/js/app.js` / `src/server/app.js` 顶层作用域：前端新状态进 `public/js/app/` 模块（工厂 + context 注入，样板见 `public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
+新功能的状态别再落 `app/public/js/app.js` / `app/src/server/app.js` 顶层作用域：前端新状态进 `app/public/js/app/` 模块（工厂 + context 注入，样板见 `app/public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
 
-双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播（四个入口：桌面端菜单栏、web 端已信任设备远程准入、headless 终端回车/deny（要 TTY，launchd 起的 server 没有）、`scripts/device.js`）；新设备入列会推一条不含 ID/IP 的通知（5 分钟节流）；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `src/ops/notifications.js`、`notify-channels.js`）。
+双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播（四个入口：桌面端菜单栏、web 端已信任设备远程准入、headless 终端回车/deny（要 TTY，launchd 起的 server 没有）、`scripts/device.js`）；新设备入列会推一条不含 ID/IP 的通知（5 分钟节流）；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `app/src/ops/notifications.js`、`notify-channels.js`）。
 
 **产品立场 n=1 自托管**（单机主、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
 ## 代码地图与模块边界
 
-后端 `src/` 按域分层：`agent/`（SDK 会话驱动 agent.js、审批生命周期/存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp 在 history.js、工作区、「需要你」聚合）· `server/`（组装根：app.js 存量顶层态、http/socket 接线、instance-* 多实例管理、mirror-engine 只读镜像、hooks 投递箱）· `auth/`（AUTH_TOKEN 限速、CF Access、设备指纹/信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置 env-schema/config-file、doctor、通知与推送通道、statusline 与额度快照、metrics、审计、两个 CLI 桥的 server 侧、受管服务 service-*）· `shared/`（叶子工具层；protocol.js 是事件契约真相源）。
+**运行时代码住在 `app/`**（`app/src/` 后端 · `app/public/` 前端 · `app/server.js` 入口）；`scripts/`（用户装机/运维命令）与 `desktop/`（macOS 菜单栏）留在仓库根——前者是用户要敲的命令（`node scripts/doctor.js`，加一层前缀纯属体验退化），后者不是 web 运行时。**注意两个脆弱点**：① `app/src/**` 里算「项目根」是**三层**向上（`app/src/server/app.js` 的 `HERE`、`app/src/shared/data-dir.js` 的 `PROJECT_ROOT`）——`data/`、`scripts/`、`ccm.config.json` 都在仓库根、不随代码进 `app/`，少一层会让它们全部解析到 `app/` 下且无任何报错；② `desktop/launchd/server.plist.template` 的启动命令 `exec <node> app/server.js` 与 `app/src/ops/service-units.js` 解析它的后缀必须逐字一致，漏改一边会让服务面板的 repo/node 恒为 null。
+
+后端 `app/src/` 按域分层：`agent/`（SDK 会话驱动 agent.js、审批生命周期/存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp 在 history.js、工作区、「需要你」聚合）· `server/`（组装根：app.js 存量顶层态、http/socket 接线、instance-* 多实例管理、mirror-engine 只读镜像、hooks 投递箱）· `auth/`（AUTH_TOKEN 限速、CF Access、设备指纹/信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置 env-schema/config-file、doctor、通知与推送通道、statusline 与额度快照、metrics、审计、两个 CLI 桥的 server 侧、受管服务 service-*）· `shared/`（叶子工具层；protocol.js 是事件契约真相源）。
 
 **测试与门禁全部住在 `tests/` 下**：`tests/{unit,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（`Dockerfile.test`、三份 compose、两份 playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是 `npm run check` 的 12 个门禁脚本。`scripts/` 只剩用户装机/运维会执行的命令 + 四个维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
 
-边界是 `tests/gates/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `public/js/canonicalize.js`，指纹规范化两侧共用）· `src/shared` 是叶子，不得反向 import 其他后端域 · `src/server` 是组装根，只有 server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
+边界是 `tests/gates/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `app/public/js/canonicalize.js`，指纹规范化两侧共用）· `app/src/shared` 是叶子，不得反向 import 其他后端域 · `app/src/server` 是组装根，只有 app/server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
 
-前端三层：`public/js/app.js`（存量编排层）→ `public/js/app/*`（域模块，见上）→ `public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
+前端三层：`app/public/js/app.js`（存量编排层）→ `app/public/js/app/*`（域模块，见上）→ `app/public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
 
 文档索引：[docs/architecture.md](docs/architecture.md)（双通道/单驾驶员/回放详解）· [docs/display-contracts.md](docs/display-contracts.md)（模型/effort/statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻/隧道/CF Access 运维）· [docs/getting-started.md](docs/getting-started.md)（装机教程）· [docs/repository-map.md](docs/repository-map.md)（**生成物**，全文件清单与归类）· README.md（产品入口，含安全边界）。增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
 
@@ -65,11 +67,11 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 > ⚠️ **启动只有两条入口**：headless = 终端 `npm start`；macOS 还可走 `desktop/` 的 CCM.app。桌面端占着 3000 时**勿再手动 `npm start`**。改配置/代码后，桌面端菜单里 server 一行点「重启」，headless 重启那个进程。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
 
-配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `src/ops/env-schema.js`，读写与类型归一在 `src/ops/config-file.js`（读写必须同源，写错源＝假成功）。环境变量始终压过文件。
+配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `app/src/ops/env-schema.js`，读写与类型归一在 `app/src/ops/config-file.js`（读写必须同源，写错源＝假成功）。环境变量始终压过文件。
 
 ```bash
-npm start          # node server.js（默认端口 3000）
-npm run dev        # node --watch server.js
+npm start          # node app/server.js（默认端口 3000）
+npm run dev        # node --watch app/server.js
 npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性（含契约计数：文档写的「当前 N 种/个」按 `protocol.js` 真值校验）+ n=1 假设面登记簿（`docs/hard-rules.md` §2 表格 ⇔ 代码 `// n1: <ID>` 标记双向相等）+ i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + desktop swiftc typecheck 与 CCMCore 单测（app-build --test-only）+ inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；其中需真 agent turn 的 7 个由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步

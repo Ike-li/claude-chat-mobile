@@ -8,7 +8,7 @@ import { platform } from 'node:os';
 import {
   rejectableSymlinkComponent, writeOwnerOnlyFile, isOwnerOnly, fixPermissions, checkPermissions,
   resolveExecutableViaPath,
-} from '../../src/files/file-security.js';
+} from '../../app/src/files/file-security.js';
 
 const isWindows = platform() === 'win32';
 

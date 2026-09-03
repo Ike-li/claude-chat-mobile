@@ -20,13 +20,13 @@ It is not remote desktop software, a TTY multiplexer, or a multi-tenant hosted s
 ```mermaid
 graph LR
     subgraph Phone["Phone / PWA"]
-        UI["public/ single-page app<br/>messages · tools · approvals · files"]
+        UI["app/public/ single-page app<br/>messages · tools · approvals · files"]
     end
     subgraph Edge["Optional public edge"]
         CF["Cloudflare Tunnel + Access"]
     end
     subgraph Host["Local computer"]
-        S["server.js + src/server/<br/>Express · Socket.io · auth · routing"]
+        S["app/server.js + app/src/server/<br/>Express · Socket.io · auth · routing"]
         A["AgentSession<br/>SDK stream · permission gate · event buffer"]
         SDK["Claude Agent SDK"]
         CLI["Local claude CLI"]
@@ -87,7 +87,7 @@ The project reduces that risk with these rules:
 4. **After the terminal turn ends and passes the quiet-period check**, the mirror lock is released and Web may resume.
 5. **Before a Web takeover send**, if the transcript has grown beyond the current SDK instance, the server disposes that stale instance and resumes from disk before sending.
 
-**These five rules are the default path, not a hard constraint.** The project controls its own SDK instance; it cannot control the independent process running in your terminal. The mirror lock only gates input on the Web side, and the user can still unlock it explicitly from the read-only state via "force resume now" / "resume anyway" (`requestMirrorResume` / `appendForceResumeAction` in `public/js/app.js`, both behind a confirmation that spells out the fork risk). Unlocking merely drops the Web-side lock and **does not stop the terminal process** — if the terminal keeps writing to the same session afterwards, the transcript can still fork into two branches. The escape hatch is deliberate: users often know the terminal is already closed well before the detection chain can prove it.
+**These five rules are the default path, not a hard constraint.** The project controls its own SDK instance; it cannot control the independent process running in your terminal. The mirror lock only gates input on the Web side, and the user can still unlock it explicitly from the read-only state via "force resume now" / "resume anyway" (`requestMirrorResume` / `appendForceResumeAction` in `app/public/js/app.js`, both behind a confirmation that spells out the fork risk). Unlocking merely drops the Web-side lock and **does not stop the terminal process** — if the terminal keeps writing to the same session afterwards, the transcript can still fork into two branches. The escape hatch is deliberate: users often know the terminal is already closed well before the detection chain can prove it.
 
 Polling leaves an observation window of up to one check interval. Session switches, manual mirror refresh, and hook signals can schedule an earlier check, but none of them proves control over another live process.
 
@@ -108,8 +108,8 @@ Outbound Socket.io traffic uses one `agent:event` envelope:
 }
 ```
 
-- `type` comes from a closed event set. `tests/gates/contract-check.js` checks consistency across **backend senders** (recursive scan of `src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
-  A separate **front-end dispatch coverage** check closes the receiving side: the union of the `handle` and `outOfBand` table keys in `public/js/app.js` must equal `AGENT_EVENT_TYPES` exactly (a missing key means events are silently dropped on arrival; an extra one is a dead key), and a type appearing in both tables is rejected as well (`outOfBand` wins at dispatch time, so the `handle` entry would become dead code). `DEFAULT_REPLAY_OOB_TYPES` in `event-dispatch.js` is a parallel copy of the `outOfBand` table and is pinned to match it verbatim — letting it drift makes a new OOB type get queued in the replay buffer and lost permanently when `resolve('reload')` discards the queue.
+- `type` comes from a closed event set. `tests/gates/contract-check.js` checks consistency across **backend senders** (recursive scan of `app/src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
+  A separate **front-end dispatch coverage** check closes the receiving side: the union of the `handle` and `outOfBand` table keys in `app/public/js/app.js` must equal `AGENT_EVENT_TYPES` exactly (a missing key means events are silently dropped on arrival; an extra one is a dead key), and a type appearing in both tables is rejected as well (`outOfBand` wins at dispatch time, so the `handle` entry would become dead code). `DEFAULT_REPLAY_OOB_TYPES` in `event-dispatch.js` is a parallel copy of the `outOfBand` table and is pinned to match it verbatim — letting it drift makes a new OOB type get queued in the replay buffer and lost permanently when `resolve('reload')` discards the queue.
 - `seq` increases within one `AgentSession` and lets the front end deduplicate.
 - `epoch` identifies a server/instance generation; a change resets the client's old deduplication baseline.
 - `sessionId` and `instanceId` remain separate so persisted CLI-session identity is not confused with a current Web process.
@@ -137,7 +137,7 @@ The first layer is a prerequisite, not an option ([hard-rules §1, "auth is a st
 prerequisite"](hard-rules.md)): without `AUTH_TOKEN` the server refuses to start — including for a
 browser on this machine — so every layer below it always assumes the caller already holds the token.
 The second layer is named for the role rather than the product because core code only knows the
-interface shape in `src/auth/auth-strategy.js`; Cloudflare Access is today's only implementation, and
+interface shape in `app/src/auth/auth-strategy.js`; Cloudflare Access is today's only implementation, and
 swapping the IdP should not touch the core.
 
 These boundaries do not replace each other:
@@ -165,12 +165,12 @@ See the [README security model](../README.en.md#security-model) for the concise 
 
 ## Code entrypoints
 
-- `server.js`: compatibility launcher; assembly lives in `src/server/app.js`.
-- `src/agent/agent.js`: `AgentSession`, SDK mapping, permission gate, and ring buffer.
-- `src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
-- `src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
-- `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
-- `public/js/app.js` and `public/js/app/`: client state, event dispatch, and interaction modules.
+- `app/server.js`: compatibility launcher; assembly lives in `app/src/server/app.js`.
+- `app/src/agent/agent.js`: `AgentSession`, SDK mapping, permission gate, and ring buffer.
+- `app/src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
+- `app/src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
+- `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
+- `app/public/js/app.js` and `app/public/js/app/`: client state, event dispatch, and interaction modules.
 - `tests/gates/contract-check.js`: bidirectional Socket.io event-contract gate.
 
 See the [repository map](repository-map.md) for complete directory ownership and file inventory, the [display contracts](display-contracts.md) (Chinese) for cross-layer model, effort, and statusline transformations, and [hard rules](hard-rules.md) (Chinese) for n=1 tradeoffs and deferred tech debt.

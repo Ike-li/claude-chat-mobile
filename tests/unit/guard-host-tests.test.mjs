@@ -15,9 +15,9 @@ const allowed = cmd => assert.equal(decide(cmd), null, `不该拦: ${cmd}`);
 
 // ── 必须拦（漏一个就是上次那种事故的入口）──────────────────────────────────
 test('拦: 变异检查——上次删库的直接凶手', () => {
-  blocked('npm run mutate -- src/sessions/history.js');
-  blocked('npm run mutate -- src/x.js --limit=25');
-  blocked('node tests/gates/mutate.js src/x.js');
+  blocked('npm run mutate -- app/src/sessions/history.js');
+  blocked('npm run mutate -- app/src/x.js --limit=25');
+  blocked('node tests/gates/mutate.js app/src/x.js');
 });
 
 test('拦: 集成测试（起真 server + spawn claude，且有用例按设计操作真实 ~/.claude）', () => {
@@ -53,7 +53,7 @@ test('拦: 裸 node --test 跑单测（没有 preload-env，会写真实 data/�
 // ★ 第二个洞：旧实现只要命令里【任何位置】出现 docker 就整条放行，
 // 文件头自己都写了 `echo docker && npm run mutate` 能绕过。改成按段判定后不再成立。
 test('拦: 借 docker 字样蒙混过关（判定按段做，不看整条命令）', () => {
-  blocked('echo docker && npm run mutate -- src/x.js');
+  blocked('echo docker && npm run mutate -- app/src/x.js');
   blocked('docker ps && npm test');
   blocked('npm run check && npm test');
 });
@@ -69,8 +69,8 @@ test('拦: 测试域内、但不在白名单上的形态', () => {
 // 于是 `npm run test:unit & npm run mutate` 整条只有一段；而白名单又只取段内【第一个】
 // npm run 脚本名，命中 test:unit 就 return null——8/2 删库那条命令原样放行。
 test('拦: 单个 & 背景符不能让后半段蒙混过关', () => {
-  blocked('npm run test:unit & npm run mutate -- src/sessions/history.js');
-  blocked('npm run lint & npm run mutate -- src/x.js');
+  blocked('npm run test:unit & npm run mutate -- app/src/sessions/history.js');
+  blocked('npm run lint & npm run mutate -- app/src/x.js');
   blocked('npm run check & npm test');
 });
 
@@ -96,7 +96,7 @@ test('拦: tests/unit/../integration 路径穿越', () => {
 // ★ 反向代价：域判据在【整段文本】上匹配，不区分命令头与参数，于是只读命令仅仅因为
 // 提到某个脚本路径或变量名就被拦。钩子挂在每一次 Bash 上，误拦一次就是一轮人工确认。
 test('放行: 只读命令仅仅提到测试脚本名 / 变量名', () => {
-  allowed('grep -rn RUN_CLAUDE_INTEGRATION src/');
+  allowed('grep -rn RUN_CLAUDE_INTEGRATION app/src/');
   allowed('git diff -- tests/gates/mutate.js');
   allowed('cat tests/gates/mutate.js');
   allowed('wc -l tests/integration/session-delete.test.mjs');
@@ -117,7 +117,7 @@ test('放行: 已经走容器的形态', () => {
   allowed('npm run test:docker');
   allowed('npm run test:docker:e2e');
   allowed('npm run test:docker:playground');
-  allowed('npm run mutate:docker -- src/sessions/history.js');
+  allowed('npm run mutate:docker -- app/src/sessions/history.js');
   allowed('docker compose -f docker-compose.test.yml run --rm test npm run test:integration');
   allowed('docker compose -f docker-compose.playground.yml run --rm probe');
 });
@@ -139,7 +139,7 @@ test('放行: 与测试无关的日常命令', () => {
   allowed('ls -la');
   allowed('npm run inventory:update');
   allowed('npm run doctor');
-  allowed('grep -rn "test" src/');
+  allowed('grep -rn "test" app/src/');
 });
 
 test('放行: 空命令 / 非字符串不误判', () => {
@@ -161,5 +161,5 @@ test('边界: test:unit / test:docker 不被 `npm test` 规则误伤', () => {
 test('理由必须具体到可判断，不是一句「有风险」', () => {
   assert.match(decide('npm test'), /session-delete|~\/\.claude/);
   assert.match(decide('node --test tests/unit/x.test.mjs'), /preload-env/);
-  assert.match(decide('npm run mutate -- src/x.js'), /改坏/);
+  assert.match(decide('npm run mutate -- app/src/x.js'), /改坏/);
 });

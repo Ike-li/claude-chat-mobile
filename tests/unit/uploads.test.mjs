@@ -6,7 +6,7 @@ import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, UPLOAD_DIR
-} from '../../src/files/uploads.js';
+} from '../../app/src/files/uploads.js';
 
 test.describe('sanitizeName', () => {
   test('纯文件名原样返回', () => {

@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from '../../src/server/unread-tracker.js';
+import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from '../../app/src/server/unread-tracker.js';
 
 test.describe('isInstanceBeingWatched', () => {
   test('非当前查看实例：无论房间是否有人都判定为未在看', () => {
@@ -53,7 +53,7 @@ test.describe('unreadOnEntryForSync', () => {
   });
 
   test('app.js sync:since 必须把 live 交给 unreadOnEntryForSync（只回快照会让 PWA 后台路径胶囊恒 0）', () => {
-    const src = readFileSync(new URL('../../src/server/app.js', import.meta.url), 'utf8');
+    const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
     assert.match(src, /unreadOnEntryForSync/);
     assert.match(src, /live:\s*unreadCounts\.get/);
   });

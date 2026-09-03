@@ -1,6 +1,6 @@
 // tests/integration/notification-presence.test.mjs —— client:presence 上报解锁 result 完成通知集成测试
 //
-// 背景/根因（详见 src/ops/notifications.js hasForegroundApprovedClient 与 src/server/app.js onEvent 里
+// 背景/根因（详见 app/src/ops/notifications.js hasForegroundApprovedClient 与 app/src/server/app.js onEvent 里
 // hasClients 的计算）：approved 房间"连着 socket"不等于"看得见"——PWA 切后台后 socket 常常还没断（要等
 // OS 冻结页面才真正断连），若只按"approved 房间是否有 socket"判定 hasClients，会把"背景里还连着但看不见"
 // 误判为"有人在看"，result 完成通知因此被永久吞掉（用户反馈"切后台收不到完成通知"的根因）。前端在
@@ -25,7 +25,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { hasForegroundApprovedClient, notificationForEvent } from '../../src/ops/notifications.js';
+import { hasForegroundApprovedClient, notificationForEvent } from '../../app/src/ops/notifications.js';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 // 同 config-refresh.test.mjs：显式给非空测试 token，绕开 dotenv 空串回填的既有环境红
@@ -44,7 +44,7 @@ async function startServer() {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = TOKEN;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
@@ -52,7 +52,7 @@ async function startServer() {
   // 覆盖 dotenv 加载的 CF Access 配置（同 config-refresh.test.mjs 套路）：连接走 127.0.0.1 本不会撞
   // isPublicHost，但显式关闭更稳妥、不依赖 host 匹配细节。
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
 }
 

@@ -39,7 +39,7 @@ export default defineConfig({
   webServer: {
     // cwd 必须显式指向仓库根：Playwright 默认用 config 文件所在目录（本文件移进 tests/infra/ 后
     // 就是那里），于是 `node tests/e2e/mock/server.js` 会被解析成 tests/infra/tests/e2e/…；
-    // 而且 mock server 自身按仓库根的相对路径读 public/，cwd 错了即使找得到文件也跑不对。
+    // 而且 mock server 自身按仓库根的相对路径读 app/public/，cwd 错了即使找得到文件也跑不对。
     cwd: '../..',
     command: `CCM_BUILD_NONCE=${buildNonce} PORT=${port} node tests/e2e/mock/server.js`,
     url: `${baseURL}/__ready?nonce=${buildNonce}`, // 仅本轮 nonce 匹配才 200，拒绝端口上的陈旧/他者进程

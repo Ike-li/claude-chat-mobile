@@ -160,7 +160,7 @@ func childEnvironment(base: [String: String], loginPath: String?) -> [String: St
 
 /// 菜单栏 tooltip 与菜单首行的那句话。
 /// staleSeconds 非 nil 表示上一次探测失败了 —— 此时**保留旧状态**并标注它有多旧，
-/// 而不是清空（清空会让用户以为服务没了，同 public/js/app.js 断线时的做法）。
+/// 而不是清空（清空会让用户以为服务没了，同 app/public/js/app.js 断线时的做法）。
 func summaryLine(status: ServiceStatus?, problem: EnvProblem, lastError: String?, staleSeconds: Int?) -> String {
     switch problem {
     case .noRepo: return "找不到仓库 —— 点开菜单重新定位"
@@ -305,7 +305,7 @@ func webUIURL(status: ServiceStatus?) -> String {
 /// 菜单关着时只需要给灯上色，菜单打开时用户在盯着。
 func probeInterval(menuOpen: Bool) -> TimeInterval { menuOpen ? 2 : 10 }
 
-// MARK: - 配置 schema（L1 的输出契约，对应 src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION）
+// MARK: - 配置 schema（L1 的输出契约，对应 app/src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION）
 //
 // 数据来自 `node scripts/config.js schema --json`。与 ServiceStatus 同一条失败模式纪律：
 // **除 schemaVersion 外全部可选** —— Node 侧加字段是常事，而一个字段变 null 就让整份解码失败、
@@ -373,7 +373,7 @@ struct ConfigItem: Decodable {
         return value ?? ""
     }
 
-    /// toggle 当前是开还是关。方向由「哪一侧字面量是空串」决定，同 src/ops/config-file.js
+    /// toggle 当前是开还是关。方向由「哪一侧字面量是空串」决定，同 app/src/ops/config-file.js
     /// 的 toggleDefaultsOn —— 空串那侧是默认态，因为空值写不进配置文件。
     var toggleIsOn: Bool { ConfigItem.decodedToggle(self, current: value ?? "") }
 
@@ -390,7 +390,7 @@ struct ConfigItem: Decodable {
     /// 关着的开不了，状态栏还报「已保存 1 项」。
     ///
     /// 未设置的项不在 `get` 的输出里，`current` 为空 —— 那时才回落到 values 判默认方向
-    /// （空串那侧是默认态，同 src/ops/config-file.js 的 toggleDefaultsOn）。
+    /// （空串那侧是默认态，同 app/src/ops/config-file.js 的 toggleDefaultsOn）。
     static func decodedToggle(_ item: ConfigItem, current: String) -> Bool {
         guard item.kindName == "toggle" else { return false }
 
@@ -430,7 +430,7 @@ struct ConfigSchema: Decodable {
     func isCompatible(with supported: Int) -> Bool { (schemaVersion ?? 0) == supported }
 }
 
-/// 本 app 支持的配置 schema 版本。与 src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION 对齐；
+/// 本 app 支持的配置 schema 版本。与 app/src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION 对齐；
 /// tests/unit/desktop-schema-contract.test.mjs 双向校验，改一边另一边会红。
 let SUPPORTED_CONFIG_SCHEMA_VERSION = 1
 
@@ -704,7 +704,7 @@ let HEARTBEAT_OK_KEY = "CCMLastProbeOk"   // 上一轮探测是否成功
 // MARK: - 设备审批（对应 scripts/device.js 的 `list --json`，schemaVersion = 1）
 //
 // 桌面端此前完全没有设备审批入口。后果是装了 GUI 反而比 headless 少两条路：终端里的
-// 「回车批准 / deny 拒绝」只在 `process.stdin.isTTY` 下注册（src/server/app.js），而
+// 「回车批准 / deny 拒绝」只在 `process.stdin.isTTY` 下注册（app/src/server/app.js），而
 // launchd 拉起的 server 没有 TTY，那两条自动失效——机主只剩下开终端敲 device.js 一条路。
 //
 // 数据取自 CLI 而不是 server 的 HTTP 面：审批恰恰是「server 在跑但你还连不上」时要用的东西，

@@ -11,7 +11,7 @@ import {
   canDeleteSessionGuard,
   externalDirtyBusyNack,
   resolveEffortBroadcast,
-} from '../../src/server/instance-routing.js';
+} from '../../app/src/server/instance-routing.js';
 
 test.describe('resolveInstanceTarget（BE-001：区分缺省回退 / 命中 / 显式 stale）', () => {
   const live = new Set(['inst_a', 'inst_b']);

@@ -11,8 +11,8 @@ import {
   setSecurityHeaders,
   tokenMatches,
   registerOperationalRoutes,
-} from '../../src/server/http.js';
-import { createCfAccessStrategy } from '../../src/auth/auth-strategy.js';
+} from '../../app/src/server/http.js';
+import { createCfAccessStrategy } from '../../app/src/auth/auth-strategy.js';
 
 // 鉴权策略桩：刻意复用**真实的** createCfAccessStrategy 而不手写一个对象字面量 ——
 // 「从哪个头取 JWT」是 Cloudflare 侧的外部契约，手写桩会把它复制一份，两边就能各自漂移
@@ -20,7 +20,7 @@ import { createCfAccessStrategy } from '../../src/auth/auth-strategy.js';
 const strategyStub = ({ ownsHost = () => false, verify = async () => {}, isEnabled = () => false } = {}) =>
   createCfAccessStrategy({ init: () => true, isEnabled, ownsHost, verify, env: {} });
 
-// 前端拆到 public/js/app/* 后，若只给 logic.js 打 ?v=，connection-sync 等子模块会吃浏览器缓存——
+// 前端拆到 app/public/js/app/* 后，若只给 logic.js 打 ?v=，connection-sync 等子模块会吃浏览器缓存——
 // 手机顶栏「延迟」改文案却不生效就是这个坑。与 e2e mock transport 对齐：所有相对 import + css 都戳版本。
 test('rewriteAppModuleImports versions every relative ESM import, not only logic.js', () => {
   const src = [
@@ -119,7 +119,7 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
   const states = new Map();
   let locked = 0;
   let now = 1_000_000;
-  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const { onAuthResult } = await import('../../app/src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: 'secret',
     strategy: strategyStub(),
@@ -167,7 +167,7 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
 test('createHttpAuth：退避冷却期内 → 401 unauthorized，不是 429 rate_limited', async () => {
   const states = new Map();
   let now = 1_000_000;
-  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const { onAuthResult } = await import('../../app/src/auth/rate-limiter.js');
   const mkAuth = () => createHttpAuth({
     authToken: 'secret',
     strategy: strategyStub(),
@@ -230,7 +230,7 @@ test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响
   const states = new Map();
   const onResultCalls = [];
   let now = 3_000_000;
-  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const { onAuthResult } = await import('../../app/src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: 'secret',
     strategy: strategyStub(),
@@ -264,7 +264,7 @@ test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响
 test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失败（AUTH-NEW-1）', async () => {
   const states = new Map();
   let now = 2_000_000;
-  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const { onAuthResult } = await import('../../app/src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: '', // 无 AUTH_TOKEN
     strategy: strategyStub({
@@ -390,11 +390,11 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
   function mount(options = {}) {
     const root = mkdtempSync(join(tmpdir(), 'ccm-http-shell-'));
     roots.push(root);
-    mkdirSync(join(root, 'public/js/app'), { recursive: true });
-    writeFileSync(join(root, 'public/index.html'), '<body ><script src="/js/app.js"></script></body>');
-    writeFileSync(join(root, 'public/js/app.js'), "import './app/sub.js';\n");
+    mkdirSync(join(root, 'app/public/js/app'), { recursive: true });
+    writeFileSync(join(root, 'app/public/index.html'), '<body ><script src="/js/app.js"></script></body>');
+    writeFileSync(join(root, 'app/public/js/app.js'), "import './app/sub.js';\n");
     writeFileSync(
-      join(root, 'public/js/app/sub.js'),
+      join(root, 'app/public/js/app/sub.js'),
       "import { esc } from '../logic.js';\nexport const BUILD = 'startup';\n",
     );
 
@@ -438,7 +438,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
   // 让断言依赖跑测试那台机器的环境变量，就是在制造只有某些机器才红的用例。
   test('请求期零磁盘访问：启动后改盘，路由仍发启动时那份（且相对 import 已戳版本）', () => {
     const { root, run } = mount({ hotReloadJs: false });
-    writeFileSync(join(root, 'public/js/app/sub.js'), "export const BUILD = 'mutated-after-boot';\n");
+    writeFileSync(join(root, 'app/public/js/app/sub.js'), "export const BUILD = 'mutated-after-boot';\n");
 
     const out = run('/js/app/sub.js');
     assert.equal(out.status, 200);
@@ -488,7 +488,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
   // 启动横幅恰恰关在 if (!hotReloadJs) 里，热读模式下什么都不打印，没有任何线索能解释陈旧。
   test('hotReloadJs：/js/app.js 也必须热读（它是前端改动的主要落点）', () => {
     const { root, invoke } = mount({ hotReloadJs: true });
-    writeFileSync(join(root, 'public/js/app.js'), "import { BUILD } from './app/sub.js';\nexport const MAIN = 'edited-after-boot';\n");
+    writeFileSync(join(root, 'app/public/js/app.js'), "import { BUILD } from './app/sub.js';\nexport const MAIN = 'edited-after-boot';\n");
     const out = invoke('/js/app.js', '/js/app.js');
     assert.equal(out.status, 200);
     assert.match(out.body, /edited-after-boot/, '开着热读却发启动快照 = 开关名不副实');
@@ -497,26 +497,26 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
   test('hotReloadJs：index.html 也热读', () => {
     const { root, invoke } = mount({ hotReloadJs: true });
-    writeFileSync(join(root, 'public/index.html'), '<body ><!--edited-after-boot--><script src="/js/app.js"></script></body>');
+    writeFileSync(join(root, 'app/public/index.html'), '<body ><!--edited-after-boot--><script src="/js/app.js"></script></body>');
     const out = invoke('/,/index.html', '/');
     assert.match(out.body, /edited-after-boot/);
   });
 
   test('生产档（hotReloadJs:false）仍是启动快照，不因热读改造回退成逐请求读盘', () => {
     const { root, invoke } = mount({ hotReloadJs: false });
-    writeFileSync(join(root, 'public/js/app.js'), "export const MAIN = 'mutated-after-boot';\n");
+    writeFileSync(join(root, 'app/public/js/app.js'), "export const MAIN = 'mutated-after-boot';\n");
     const out = invoke('/js/app.js', '/js/app.js');
     assert.doesNotMatch(out.body, /mutated-after-boot/, '生产档请求期不该读盘');
   });
 
   // 开发期必须能改完就刷新看到。启动预读是 2026-08-02 为"请求期零磁盘访问"加的，但它把
-  // public/js 下【除 app.js 外的全部子模块】从"逐请求读盘"变成了启动冻结（index.html 与
+  // app/public/js 下【除 app.js 外的全部子模块】从"逐请求读盘"变成了启动冻结（index.html 与
   // app.js 本来就是启动读的，子模块不是）。而 `npm run dev` 的 node --watch 只监视被 import
-  // 的模块，public/js/** 不在服务端的 import 图里 → 改完刷新拿到的还是旧代码、且零提示。
+  // 的模块，app/public/js/** 不在服务端的 import 图里 → 改完刷新拿到的还是旧代码、且零提示。
   test('hotReloadJs：开发期逐请求读盘，改完刷新即生效（且相对 import 照样戳版本）', () => {
     const { root, run } = mount({ hotReloadJs: true });
     writeFileSync(
-      join(root, 'public/js/app/sub.js'),
+      join(root, 'app/public/js/app/sub.js'),
       "import { esc } from '../logic.js';\nexport const BUILD = 'edited-after-boot';\n",
     );
 
@@ -528,7 +528,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
   test('hotReloadJs：启动后新建的子模块也能取到（生产走表、这里走盘）', () => {
     const { root, run } = mount({ hotReloadJs: true });
-    writeFileSync(join(root, 'public/js/app/born-later.js'), "export const N = 1;\n");
+    writeFileSync(join(root, 'app/public/js/app/born-later.js'), "export const N = 1;\n");
 
     const out = run('/js/app/born-later.js');
     assert.equal(out.status, 200);
@@ -546,7 +546,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     const saved = { hot: process.env.ASSET_HOT_RELOAD, dev: process.env.DEV_MODE };
     const bodyOf = () => {
       const { root, run } = mount(); // 不传 hotReloadJs → 走默认推导
-      writeFileSync(join(root, 'public/js/app/sub.js'), "export const BUILD = 'edited-after-boot';\n");
+      writeFileSync(join(root, 'app/public/js/app/sub.js'), "export const BUILD = 'edited-after-boot';\n");
       return run('/js/app/sub.js').body;
     };
     try {

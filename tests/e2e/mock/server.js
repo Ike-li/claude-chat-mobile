@@ -143,8 +143,8 @@ let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线�
 // rateLimitLockout/clientError（判定化告警）由 test:service-incidents 注入
 const MOCK_SERVICE_STARTED_AT = Date.now();
 
-// 配置面板夹具。与 src/ops/env-schema.js 的 buildEnvView 同形状，但**手写一份**——
-// 本 mock 刻意零 import src/（改 src/ 不该让 E2E 变红）。只放够断言的最小集：
+// 配置面板夹具。与 app/src/ops/env-schema.js 的 buildEnvView 同形状，但**手写一份**——
+// 本 mock 刻意零 import app/src/（改 app/src/ 不该让 E2E 变红）。只放够断言的最小集：
 // 一个只读敏感项、一个普通值、一个未设置的空值、一个可写敏感项、一个开关。
 const mockLabel = (zh, en) => ({ zh, en });
 function buildMockEnvView() {
@@ -309,7 +309,7 @@ function addMockSessionLog(instanceId, text, type = 'sys_info') {
   return entry;
 }
 
-// 镜像/排队/停止诊断时间线（真 server: src/agent/diag-log.js）的 mock 同款——同一 seq:0/epoch:'server'
+// 镜像/排队/停止诊断时间线（真 server: app/src/agent/diag-log.js）的 mock 同款——同一 seq:0/epoch:'server'
 // 旁路广播，供 test:diag-sample 场景注入合成事件，验证 console modal 三态过滤 + formatDiagLogEntry 渲染。
 function addMockDiagLog(instanceId, subsystem, event, detail = {}) {
   const inst = mockInstances.find(i => i.instanceId === instanceId);
@@ -1089,7 +1089,7 @@ io.on('connection', socket => {
     if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
   });
 
-  // P0-FORK：镜像真实 session:fork handler 的收尾（src/server/app.js）——建/聚焦新实例、广播 instances、ack。
+  // P0-FORK：镜像真实 session:fork handler 的收尾（app/src/server/app.js）——建/聚焦新实例、广播 instances、ack。
   // 只认 mock-session-archived → mock-session-forked 这一条固定映射，够验前端长按→confirm→切视图链路。
   // uuid 白名单只收 assistant 侧（a-archived-*）：user 气泡长按理应解析出前一条 assistant 的 uuid、不是
   // 自己的（u-archived-*）——若前端解析回归成送自己的 uuid，这里会拒绝，P0-FORKc 能抓到。
@@ -1151,7 +1151,7 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof rawCallback !== 'function') return;
-    // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 src/sessions/history.js）。
+    // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 app/src/sessions/history.js）。
     // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
     // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
     const callback = res => rawCallback(stampHistoryMessages(res));
@@ -1235,7 +1235,7 @@ io.on('connection', socket => {
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
-          // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 src/sessions/history.js）。
+          // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 app/src/sessions/history.js）。
           // 两轮对话：验证长按第二条 user 气泡时前端解析出的是前一条 assistant 的 uuid（a-archived-1），
           // 不是它自己的 uuid（u-archived-2）——见下方 session:fork handler 只认 assistant uuid。
           { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
@@ -1275,7 +1275,7 @@ io.on('connection', socket => {
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-long-history') {
-      // Part B：长会话切入分块渲染压测——2000 条触达 HISTORY_MAX_MESSAGES 上限（src/sessions/history.js）
+      // Part B：长会话切入分块渲染压测——2000 条触达 HISTORY_MAX_MESSAGES 上限（app/src/sessions/history.js）
       const messages = [];
       for (let i = 0; i < 2000; i++) {
         messages.push({
@@ -2185,7 +2185,7 @@ io.on('connection', socket => {
     },
     {
       // 真 server 读 ~/.claude 出错时（文件损坏/权限变更）会广播 state:'unknown'
-      // （src/ops/cli-hooks-bridge.js:322 的 catch）。这一档早先被前端判成"整段不渲染"，
+      // （app/src/ops/cli-hooks-bridge.js:322 的 catch）。这一档早先被前端判成"整段不渲染"，
       // 而它是手机上唯一能看到 hooks 桥的入口——消失即彻底失联。
       command: 'test:hooks-unknown',
       run: async () => {
@@ -3697,7 +3697,7 @@ io.on('connection', socket => {
       }
       return;
     }
-    // REL-01：真实 server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
+    // REL-01：真实 app/server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
     if (typeof ack === 'function') ack({ ok: true });
     const messagePayload = payload && typeof payload === 'object' ? payload : {};

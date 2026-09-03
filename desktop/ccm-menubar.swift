@@ -287,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.maybeShowWizard(s)
                 case .failed(let e):
                     // **不清空 latest**：断一次就清空会让用户以为服务没了。保留旧值 +
-                    // 在摘要行标注「状态已过期 Ns」，同 public/js/app.js 断线时的做法。
+                    // 在摘要行标注「状态已过期 Ns」，同 app/public/js/app.js 断线时的做法。
                     self.lastError = e
                 }
                 // 同理保留旧值：拉失败时宁可显示一份可能过期的待审列表，也好过让整段消失——

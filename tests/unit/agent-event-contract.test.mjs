@@ -37,14 +37,14 @@ test('agent event contract reports mock event types that real paths do not emit'
   const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/agent/agent.js', `
+  await writeFixture(root, 'app/src/agent/agent.js', `
     class AgentSession {
       run() {
         this.emit('init', {});
       }
     }
   `);
-  await writeFixture(root, 'src/server/app.js', `
+  await writeFixture(root, 'app/src/server/app.js', `
     io.emit('agent:event', { type: 'init', payload: {} });
   `);
   await writeFixture(root, 'tests/e2e/mock/server.js', `
@@ -64,22 +64,22 @@ test('agent event contract reports mock event types that real paths do not emit'
   assert.equal(result.problems[0].type, 'mock_only');
 });
 
-// 出向扫描面此前是手写两文件清单（agent.js + server/app.js），而真实仓库里 src/auth/device-gate.js
-// 与 src/server/socket.js 也在发 agent:event —— 它们完全在门禁视野外。对比：入向检查用 serverDirs=['src']
+// 出向扫描面此前是手写两文件清单（agent.js + server/app.js），而真实仓库里 app/src/auth/device-gate.js
+// 与 app/src/server/socket.js 也在发 agent:event —— 它们完全在门禁视野外。对比：入向检查用 serverDirs=['src']
 // 递归扫描，注释还写着「新增模块自动纳入扫描面，不靠手工登记文件清单」。出向没享受到同一待遇：
-// 在 src/ 下新建模块发一个未登记 type，npm run check 全绿，前端 dispatcher 收到未知 type 静默丢弃。
-test('出向扫描面递归覆盖 src/：手写清单外的模块发未登记 type 也要被拦', async t => {
+// 在 app/src/ 下新建模块发一个未登记 type，npm run check 全绿，前端 dispatcher 收到未知 type 静默丢弃。
+test('出向扫描面递归覆盖 app/src/：手写清单外的模块发未登记 type 也要被拦', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-scan-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/agent/agent.js', `
+  await writeFixture(root, 'app/src/agent/agent.js', `
     class AgentSession { run() { this.emit('init', {}); } }
   `);
-  await writeFixture(root, 'src/server/app.js', `
+  await writeFixture(root, 'app/src/server/app.js', `
     io.emit('agent:event', { type: 'init', payload: {} });
   `);
   // 既不是 agent.js 也不是 server/app.js —— 真实仓库里 device-gate.js 就是这种位置
-  await writeFixture(root, 'src/auth/device-gate.js', `
+  await writeFixture(root, 'app/src/auth/device-gate.js', `
     socket.emit('agent:event', { type: 'device_locked', payload: {} });
   `);
 
@@ -93,20 +93,20 @@ test('出向扫描面递归覆盖 src/：手写清单外的模块发未登记 ty
   assert.ok(codes.includes('real_type_not_contract'), `未登记 type 必须被拦，实际 problems=${JSON.stringify(result.problems)}`);
 });
 
-// SEC-01：server.js 用 io.to('approved').emit('agent:event', ...) 做下行隔离（房间过滤），
+// SEC-01：app/server.js 用 io.to('approved').emit('agent:event', ...) 做下行隔离（房间过滤），
 // 这是合法的链式广播调用、非动态类型——静态扫描须识别，否则会把仍在真实发出的类型误判为「real 不再发出」。
 test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调用', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/agent/agent.js', `
+  await writeFixture(root, 'app/src/agent/agent.js', `
     class AgentSession {
       run() {
         this.emit('init', {});
       }
     }
   `);
-  await writeFixture(root, 'src/server/app.js', `
+  await writeFixture(root, 'app/src/server/app.js', `
     io.to('approved').emit('agent:event', { type: 'session_log', payload: {} });
   `);
   await writeFixture(root, 'tests/e2e/mock/server.js', `
@@ -132,7 +132,7 @@ test('出向契约里没人发的死 type 必须被拦（contract ⊆ real）', 
   const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-dead-type-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/agent/agent.js', `
+  await writeFixture(root, 'app/src/agent/agent.js', `
     class AgentSession { run() { this.emit('init', {}); } }
   `);
   await writeFixture(root, 'tests/e2e/mock/server.js', `
@@ -173,12 +173,12 @@ test('inbound contract flags server registrations missing from the contract', as
   const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/server/app.js', `
+  await writeFixture(root, 'app/src/server/app.js', `
     on(socket, 'user:message', () => {});
     on(socket, 'user:rogue', () => {});
     socket.on('disconnect', () => {});
   `);
-  await writeFixture(root, 'public/js/app.js', `socket.emit('user:message', {});`);
+  await writeFixture(root, 'app/public/js/app.js', `socket.emit('user:message', {});`);
   await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});`);
 
   const result = checkInboundSocketContract({
@@ -195,8 +195,8 @@ test('inbound contract flags stale contract entries no longer registered by the 
   const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/server/app.js', `on(socket, 'user:message', () => {});`);
-  await writeFixture(root, 'public/js/app.js', `socket.emit('user:message', {});`);
+  await writeFixture(root, 'app/src/server/app.js', `on(socket, 'user:message', () => {});`);
+  await writeFixture(root, 'app/public/js/app.js', `socket.emit('user:message', {});`);
   await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});`);
 
   const result = checkInboundSocketContract({
@@ -213,8 +213,8 @@ test('inbound contract flags client emits and mock handlers outside the contract
   const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'src/server/app.js', `on(socket, 'user:message', () => {});`);
-  await writeFixture(root, 'public/js/app/extra.js', `sock.emit('user:unhandled', {});`);
+  await writeFixture(root, 'app/src/server/app.js', `on(socket, 'user:message', () => {});`);
+  await writeFixture(root, 'app/public/js/app/extra.js', `sock.emit('user:unhandled', {});`);
   await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});
 socket.on('mock:invented', () => {});`);
 
@@ -248,7 +248,7 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   // （曾含 worktree:sessions：git linked worktree 自动发现；已拆除——worktree 路径须显式写入 workdirs.json）
   //      + env:get / env:set（服务与配置面板：在手机上改 .env。同 hooks:setup 的理由——主界面在
   //        手机上而改配置只能上电脑，40 个配置项里绝大多数移动端用户永远碰不到。三条纪律见
-  //        src/server/app.js 的 handler 头注：只写文件不动 process.env、key 白名单（env-schema）、
+  //        app/src/server/app.js 的 handler 头注：只写文件不动 process.env、key 白名单（env-schema）、
   //        日志与 ack 只记 key 名不记值。env:set 因为要真写 .env 而进 MOCK_INBOUND_EXEMPT）
   // （曾含 session:delete：L1 软隐藏；2026-08-26 移除——制造 CLI/web 不等价且无反隐藏入口；
   //   只留 session:deletePermanent 真删。session:* 由 9 变 8，入向总数 42→41）
@@ -294,13 +294,13 @@ test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 26 种一致', () => {
 test('出向：real 发得出而 mock 从不产出的 type 要被拦（real ⊆ mock 方向）', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-real-not-mock-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFixture(root, 'src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
+  await writeFixture(root, 'app/src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
   await writeFixture(root, 'tests/e2e/mock/server.js', "io.emit('agent:event', { type: 'init' });\n");
 
   const result = checkAgentEventContract({
     rootDir: root,
     contractTypes: new Set(['init', 'brand_new_type']),
-    realSources: [{ path: 'src/agent/agent.js', kind: 'agent-session' }],
+    realSources: [{ path: 'app/src/agent/agent.js', kind: 'agent-session' }],
     mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
   });
 
@@ -314,13 +314,13 @@ test('出向：real 发得出而 mock 从不产出的 type 要被拦（real ⊆ 
 test('出向：显式豁免的 type 不再报（豁免清单生效）', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-real-not-mock-exempt-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFixture(root, 'src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
+  await writeFixture(root, 'app/src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
   await writeFixture(root, 'tests/e2e/mock/server.js', "io.emit('agent:event', { type: 'init' });\n");
 
   const result = checkAgentEventContract({
     rootDir: root,
     contractTypes: new Set(['init', 'brand_new_type']),
-    realSources: [{ path: 'src/agent/agent.js', kind: 'agent-session' }],
+    realSources: [{ path: 'app/src/agent/agent.js', kind: 'agent-session' }],
     mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
     mockExemptTypes: new Set(['brand_new_type']),
   });
@@ -331,8 +331,8 @@ test('出向：显式豁免的 type 不再报（豁免清单生效）', async t 
 test('入向：契约里有、mock 没 handler 又没登记豁免 → 报；豁免登记后放行', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-not-mocked-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFixture(root, 'src/server/socket.js', "socket.on('user:message', () => {});\nsocket.on('ops:only', () => {});\n");
-  await writeFixture(root, 'public/js/app.js', "socket.emit('user:message', {});\nsocket.emit('ops:only', {});\n");
+  await writeFixture(root, 'app/src/server/socket.js', "socket.on('user:message', () => {});\nsocket.on('ops:only', () => {});\n");
+  await writeFixture(root, 'app/public/js/app.js', "socket.emit('user:message', {});\nsocket.emit('ops:only', {});\n");
   await writeFixture(root, 'tests/e2e/mock/server.js', "socket.on('user:message', () => {});\n");
   const args = { rootDir: root, contractEvents: new Set(['user:message', 'ops:only']) };
 
@@ -349,8 +349,8 @@ test('入向：契约里有、mock 没 handler 又没登记豁免 → 报；豁�
 test('入向：豁免清单里残留已下线的事件名 → 报（防豁免变许愿池）', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-stale-exempt-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFixture(root, 'src/server/socket.js', "socket.on('user:message', () => {});\n");
-  await writeFixture(root, 'public/js/app.js', "socket.emit('user:message', {});\n");
+  await writeFixture(root, 'app/src/server/socket.js', "socket.on('user:message', () => {});\n");
+  await writeFixture(root, 'app/public/js/app.js', "socket.emit('user:message', {});\n");
   await writeFixture(root, 'tests/e2e/mock/server.js', "socket.on('user:message', () => {});\n");
 
   const result = checkInboundSocketContract({
@@ -415,7 +415,7 @@ test('前端接收面：锚点定位不到必须报错，不能静默通过（�
   t.after(() => rm(root, { recursive: true, force: true }));
 
   // 表被改名/挪走后的样子：文件在，两张表都不在
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const somethingElse = { alpha: 1 };
   `);
 
@@ -432,7 +432,7 @@ test('前端接收面：锚点命中多处 → 报歧义而不是随便取第一
   const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-ambiguous-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: 1 };
     function other() { const handle = { beta: 2 }; }
     const d = createAgentEventDispatcher({ outOfBand: { gamma: 3 } });
@@ -446,7 +446,7 @@ test('前端接收面：键提取跳过嵌套对象、箭头函数参数、注�
   const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-parse-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = {
       alpha(payload) { const inner = { not_a_key: 1 }; },
       // commented_key: 注释里的不算
@@ -461,7 +461,7 @@ test('前端接收面：键提取跳过嵌套对象、箭头函数参数、注�
       },
     });
   `);
-  await writeFixture(root, 'public/js/app/event-dispatch.js',
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js',
     `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma', 'delta']);`);
 
   const result = checkFrontendDispatchCoverage({
@@ -478,11 +478,11 @@ test('前端接收面：引号键不被识别——已知局限，且失败方�
   const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-quoted-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: 1, 'quoted_key': 2 };
     const d = createAgentEventDispatcher({ outOfBand: { gamma: 3 } });
   `);
-  await writeFixture(root, 'public/js/app/event-dispatch.js',
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js',
     `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
 
   const result = checkFrontendDispatchCoverage({
@@ -497,11 +497,11 @@ test('前端接收面：同一 type 落在两张表里 → 报重复，不靠并
   const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-dup-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: onAlpha, gamma: onGammaHandled };
     const d = createAgentEventDispatcher({ outOfBand: { gamma: onGammaOob } });
   `);
-  await writeFixture(root, 'public/js/app/event-dispatch.js',
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js',
     `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
 
   // 并集恰好等于契约，光比并集是发现不了的——outOfBand 在派发时优先，handle 那条成了死代码
@@ -517,12 +517,12 @@ test('replay OOB 镜像：outOfBand 有而副本漏了 → 报，指出会永久
   const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-missing-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: onAlpha };
     const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma, delta: onDelta } });
   `);
   // 副本漏了 delta —— 正是「加了第 6 个 OOB 类型忘了同步」的形状
-  await writeFixture(root, 'public/js/app/event-dispatch.js',
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js',
     `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
 
   const result = checkFrontendDispatchCoverage({
@@ -536,11 +536,11 @@ test('replay OOB 镜像：副本残留了已下线的类型 → 报陈旧', asyn
   const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-stale-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: onAlpha };
     const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma } });
   `);
-  await writeFixture(root, 'public/js/app/event-dispatch.js',
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js',
     `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma', 'removed_type']);`);
 
   const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
@@ -551,11 +551,11 @@ test('replay OOB 镜像：副本定位不到也必须报错，不能静默跳过
   const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-anchor-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  await writeFixture(root, 'public/js/app.js', `
+  await writeFixture(root, 'app/public/js/app.js', `
     const handle = { alpha: onAlpha };
     const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma } });
   `);
-  await writeFixture(root, 'public/js/app/event-dispatch.js', `const SOMETHING_ELSE = new Set(['gamma']);`);
+  await writeFixture(root, 'app/public/js/app/event-dispatch.js', `const SOMETHING_ELSE = new Set(['gamma']);`);
 
   const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
   assert.deepEqual(result.problems.map(p => p.code), ['replay_oob_table_not_found']);

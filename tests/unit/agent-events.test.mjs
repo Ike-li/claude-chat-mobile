@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession } from '../../src/agent/agent.js';
+import { AgentSession } from '../../app/src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 // ---- map() SDK 消息映射 ----

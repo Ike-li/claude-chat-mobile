@@ -1,8 +1,8 @@
-// tests/integration/_spawn-server.mjs —— 集成测试共用：起真实 server.js 子进程（非 ESM 动态 import）。
+// tests/integration/_spawn-server.mjs —— 集成测试共用：起真实 app/server.js 子进程（非 ESM 动态 import）。
 //
 // 审计 TC-004：claude-lifecycle.test.mjs（CL-2 需要用不同 IDLE_TIMEOUT_MS 重配置）与
 // websocket-events.test.mjs（WS-5 需要切换 AUTH_TOKEN、WS-6 需要真实"重启"）此前都靠
-// cleanup() + 再次 import('../../server.js') 模拟"重启/重配置"，但 ESM 按 URL 缓存模块——
+// cleanup() + 再次 import('../../app/server.js') 模拟"重启/重配置"，但 ESM 按 URL 缓存模块——
 // 第二次 import 拿到的是同一个（已 close 的）httpServer/io 引用，模块顶层读取的 env
 // （IDLE_TIMEOUT_MS/AUTH_TOKEN 等）也不会重新求值，不会真的重启或应用新配置。
 //
@@ -60,7 +60,7 @@ export function createServerSpawner({
     // 调用方显式传 PORT 时一律照用（如 WS-6 要求「重启后端口不变」），只有不传时才向 OS 要空闲端口。
     const port = envOverrides.PORT ? Number(envOverrides.PORT) : await pickPort();
     const buildNonce = `inttest-${randomUUID()}`;
-    const proc = spawnProcess('node', ['server.js'], {
+    const proc = spawnProcess('node', ['app/server.js'], {
       env: {
         // 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等，见 tests/helpers/spawn-env.mjs）。
         // 排在 envOverrides 之前：摘的是「继承来的」，不是「调用方显式要的」——cf-access-gate
@@ -144,7 +144,7 @@ export async function waitForCondition(fn, { timeoutMs = 5000, intervalMs = 50, 
   }
 }
 
-// in-process 起 server 的测试文件（await import('../../server.js')）此前一律用 `await sleep(500)` 当就绪
+// in-process 起 server 的测试文件（await import('../../app/server.js')）此前一律用 `await sleep(500)` 当就绪
 // 信号——既是猜（慢机器上可能不够）又是浪费（快机器上白等）。改成探真 /health：设了 AUTH_TOKEN 时必须
 // 带上，否则一路 401 被当成「还没起来」空等到超时。
 export async function waitForServerReady(port, token = null, { timeoutMs = 10_000 } = {}) {

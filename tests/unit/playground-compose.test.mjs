@@ -87,11 +87,10 @@ test('playground compose：镜像、端口、overlay、profiles、零插值、�
   assert.doesNotMatch(yaml, /^\s+-\s+["']?(?:\.|\.\.\/\.\.):\/app["']?\s*$/m);
   assert.doesNotMatch(yaml, /^\s+- .*:\/app\/\.env/m);
   assert.doesNotMatch(yaml, /^\s+- .*:\/app\/ccm\.config\.json/m);
-  assert.match(yaml, /\.\.\/\.\.\/src:\/app\/src/);
-  assert.match(yaml, /\.\.\/\.\.\/public:\/app\/public/);
+  // 运行时代码整体在 app/ 下，一条挂载即可；容器内路径与仓库结构一致（/app 恒等于仓库根）。
+  assert.match(yaml, /\.\.\/\.\.\/app:\/app\/app/);
   assert.match(yaml, /\.\.\/\.\.\/scripts:\/app\/scripts/);
   assert.match(yaml, /\.\.\/\.\.\/tests:\/app\/tests/);
-  assert.match(yaml, /\.\.\/\.\.\/server\.js:\/app\/server\.js/);
   // 夹具（tests/infra/playground/）随 ../../tests 挂载一起进容器，不再单独挂一条。
   // 所以这里断言的不是挂载，而是【容器里那条路径真能找到入口脚本】——挂载写对了但
   // command 指向旧路径的话，容器会以 "No such file" 起不来，而挂载断言看不出来。

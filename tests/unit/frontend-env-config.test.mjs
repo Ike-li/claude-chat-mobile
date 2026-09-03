@@ -8,13 +8,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createEnvConfigPanel } from '../../public/js/app/env-config.js';
+import { createEnvConfigPanel } from '../../app/public/js/app/env-config.js';
 // 夹具用**真实**的 buildEnvView 产出，不手编形状 —— 手编的外部契约一旦编错，
 // 测试与实现会互相印证并恒绿（这个仓库在 git fixture 上栽过一次）。
-// 前端源码不许 import src/，但测试不受模块边界约束（check-import-boundaries.js:13 明写）。
-import { buildEnvView } from '../../src/ops/env-schema.js';
+// 前端源码不许 import app/src/，但测试不受模块边界约束（check-import-boundaries.js:13 明写）。
+import { buildEnvView } from '../../app/src/ops/env-schema.js';
 
-// sheets.js 的 CONFIRM_TONES 是工厂内部常量、不导出，只能在这里复述键集（public/js/app/sheets.js:97-101）。
+// sheets.js 的 CONFIRM_TONES 是工厂内部常量、不导出，只能在这里复述键集（app/public/js/app/sheets.js:97-101）。
 // 复述的风险是「那边加了新 tone、这边没跟上」——但那只会让本断言把一个其实有效的 tone 判红，
 // 是安全方向的失败，不会恒绿放过一个无效值（`tone: 'warn'` 正是被这条抓住的）。
 const CONFIRM_TONES = new Set(['default', 'warning', 'danger']);
@@ -99,7 +99,7 @@ function harness({ ackQueue = [], canRestart = () => true, confirmAnswer = true 
     $: (id) => dom[id],
     socket,
     openSheet: () => {}, closeSheet: () => {},
-    // 桩必须与真实 appConfirm（public/js/app/sheets.js:102）同构地解构对象。
+    // 桩必须与真实 appConfirm（app/public/js/app/sheets.js:102）同构地解构对象。
     // 此前它写成 `async (msg) => ...` 收字符串，于是「传字符串进去」这个 bug 在测试里
     // 恒绿：解构字符串原始值不报错，只是每个字段都得 undefined，而 textContent = undefined
     // 会落成空串（DOMString? 的可空转换先把 undefined 变成 null），确认框全空一个字都没有。
@@ -119,7 +119,7 @@ function harness({ ackQueue = [], canRestart = () => true, confirmAnswer = true 
   };
 }
 
-// env:get 的 ack 就是 { ok, ...buildEnvView(current), envFileExists }（src/server/app.js:2837）
+// env:get 的 ack 就是 { ok, ...buildEnvView(current), envFileExists }（app/src/server/app.js:2837）
 const VIEW_ACK = { ok: true, ...buildEnvView({ PORT: '3000' }), envFileExists: true };
 
 // ack 走微任务，open() 返回时表单还没渲染出来 —— 让出几轮再断言

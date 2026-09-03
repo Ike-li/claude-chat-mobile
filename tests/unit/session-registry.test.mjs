@@ -13,7 +13,7 @@ import {
   terminalStateKey,
   cliPresenceStep,
   findBlockingLiveAgent,
-} from '../../src/sessions/session-registry.js';
+} from '../../app/src/sessions/session-registry.js';
 
 const CWD = '/Users/you/code/demo';
 const SID = '11111111-2222-3333-4444-555555555555';

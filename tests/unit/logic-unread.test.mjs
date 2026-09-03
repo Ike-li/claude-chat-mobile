@@ -3,7 +3,7 @@
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge } from '../../public/js/logic/unread.js';
+import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge } from '../../app/public/js/logic/unread.js';
 
 const T0 = 1_700_000_000_000; // 基线
 const MIN = 60_000;

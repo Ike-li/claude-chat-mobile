@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { attributePath, buildDiff, readPreview } from '../../src/files/file-preview.js';
+import { attributePath, buildDiff, readPreview } from '../../app/src/files/file-preview.js';
 
 const WORK = ['/home/u/repo', '/home/u/other'];
 

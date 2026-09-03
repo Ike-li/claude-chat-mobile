@@ -84,7 +84,7 @@ async function stopServer(child) {
 }
 
 async function startServer(env) {
-  const child = spawn(process.execPath, ['server.js'], {
+  const child = spawn(process.execPath, ['app/server.js'], {
     cwd: ROOT,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

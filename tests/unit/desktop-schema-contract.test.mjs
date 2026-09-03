@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { CONFIG_SCHEMA_VERSION } from '../../src/ops/config-file.js';
+import { CONFIG_SCHEMA_VERSION } from '../../app/src/ops/config-file.js';
 
 const readSwift = (name) => readFileSync(new URL(`../../desktop/${name}`, import.meta.url), 'utf8');
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -33,7 +33,7 @@ test('Swift 的 SUPPORTED_CONFIG_SCHEMA_VERSION 与 JS 的 CONFIG_SCHEMA_VERSION
 // Swift 那边不会报错，只会**静默解码成 nil** —— 整列控件消失而没有任何提示。
 // 这条断言把「schema 输出里有哪些字段」钉住：真要改，两边一起改。
 test('schema 输出的字段名与 Swift 的 Decodable 属性对齐', async () => {
-  const { buildEnvView } = await import('../../src/ops/env-schema.js');
+  const { buildEnvView } = await import('../../app/src/ops/env-schema.js');
   const view = buildEnvView({ PORT: '3000', AUTH_TOKEN: 'x' });
   const src = readSwift('CCMCore.swift');
 
@@ -74,7 +74,7 @@ test('分组字段对齐（groups 的 id/label/items）', () => {
 // CCMCore.swift 头注那句「除 schemaVersion 外全部可选…宁可少渲染一行」对**缺失/null** 成立，
 // 对**类型变化**不成立。所以 JS 侧任何一个 min/max/default/unit 的类型调整都会炸窗口。
 test('schema 下发值的类型与 Swift 声明的类型一致', async () => {
-  const { buildEnvView } = await import('../../src/ops/env-schema.js');
+  const { buildEnvView } = await import('../../app/src/ops/env-schema.js');
   const src = readSwift('CCMCore.swift');
 
   // Swift 类型 → 期望的 JS typeof。复合类型统一按 object 比。
@@ -192,7 +192,7 @@ const NODE_PATH = '/opt/homebrew/bin/node';
 const PLISTS = {
   [`${HOME}/Library/LaunchAgents/com.ccm.server.plist`]: {
     Label: 'com.ccm.server',
-    ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO_PATH} && exec ${NODE_PATH} server.js`],
+    ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO_PATH} && exec ${NODE_PATH} app/server.js`],
     RunAtLoad: true,
     KeepAlive: true,
     StandardOutPath: `${HOME}/Library/Logs/ccm-server.log`,

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createMessageTimeline } from '../../public/js/app/message-timeline.js';
+import { createMessageTimeline } from '../../app/public/js/app/message-timeline.js';
 
 // —— 极简假 DOM ——
 function fakeNode(attrs = {}) {

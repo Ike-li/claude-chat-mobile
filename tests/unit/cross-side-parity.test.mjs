@@ -92,8 +92,8 @@ const PAIRS = {
 };
 
 test('前后端所有同名 export 都已登记对照用例（新增孪生实现必须进闸）', () => {
-  const fe = collect(join(ROOT, 'public/js/logic'));
-  const be = collect(join(ROOT, 'src'));
+  const fe = collect(join(ROOT, 'app/public/js/logic'));
+  const be = collect(join(ROOT, 'app', 'src'));
   const twins = [...fe.keys()].filter(n => be.has(n)).sort();
   const registered = Object.keys(PAIRS).sort();
 
@@ -108,9 +108,9 @@ test('前后端所有同名 export 都已登记对照用例（新增孪生实现
   assert.deepEqual(stale, [], `PAIRS 里登记的对已不存在于两侧：${stale.join(', ')}`);
 });
 
-// ★ 只 import「静态扫描定位到的那几个文件」，绝不遍历 import 整个 src/。
+// ★ 只 import「静态扫描定位到的那几个文件」，绝不遍历 import 整个 app/src/。
 //
-// 初版就是那么写的，代价当场兑现：`src/server/app.js` 是组装根，import 它 = **真的启动一个
+// 初版就是那么写的，代价当场兑现：`app/src/server/app.js` 是组装根，import 它 = **真的启动一个
 // server** —— 加载 CF Access 证书、起 hooks 桥文件监听、绑 3000 端口。本机恰好被生产 server
 // 占着端口才炸出来；换台干净机器就是测试里悄悄跑起一个真服务，还可能往真实 data/ 落盘
 // （这正是 CCM_DATA_DIR 隔离那组断言存在的理由）。
@@ -125,8 +125,8 @@ async function loadPair(name, feIndex, beIndex) {
 }
 
 test('每一对孪生实现在所有登记输入下输出一致', async () => {
-  const feIndex = collect(join(ROOT, 'public/js/logic'));
-  const beIndex = collect(join(ROOT, 'src'));
+  const feIndex = collect(join(ROOT, 'app/public/js/logic'));
+  const beIndex = collect(join(ROOT, 'app', 'src'));
 
   for (const [name, cases] of Object.entries(PAIRS)) {
     const { feFile, beFile, fe, be } = await loadPair(name, feIndex, beIndex);

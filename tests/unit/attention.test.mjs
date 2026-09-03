@@ -6,7 +6,7 @@
 // - others = sessions 中未出现在 needsYou 的部分，按 cwd 分组、lastActiveAt 降序
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveAttention } from '../../src/sessions/attention.js';
+import { deriveAttention } from '../../app/src/sessions/attention.js';
 
 test.describe('deriveAttention', () => {
   test('空输入：needsYou 与 others 均为空数组', () => {

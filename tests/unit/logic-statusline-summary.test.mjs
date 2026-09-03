@@ -9,7 +9,7 @@ import {
   formatStatuslineCopyText,
   formatWorkspaceChangeBadge,
   statuslineFmtTok,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
   assert.equal(
@@ -22,7 +22,7 @@ test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
 
 // 顶栏 pill 的「未提交改动数」角标：让工作区入口自己招手，用户不必先点进去才知道有「改动」这一功能。
 // 口径取 changed（porcelain 行数，一文件一条）而非 staged+modified+untracked 之和——三分不互斥，
-// `MM`（既暂存又有新改动）会被双计，见 src/ops/statusline.js parsePorcelain。
+// `MM`（既暂存又有新改动）会被双计，见 app/src/ops/statusline.js parsePorcelain。
 test('formatWorkspaceChangeBadge：有改动显数字', () => {
   assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 3 }), '3');
   assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 1 }), '1');

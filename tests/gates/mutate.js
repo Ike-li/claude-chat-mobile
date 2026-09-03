@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tests/gates/mutate.js —— 变异检查：按需、单文件、看「测试会不会开口」
 //
-// 用法：npm run mutate -- src/server/mirror-engine.js [--lines=200-260] [--tests a.test.mjs,b.test.mjs] [--limit N]
+// 用法：npm run mutate -- app/src/server/mirror-engine.js [--lines=200-260] [--tests a.test.mjs,b.test.mjs] [--limit N]
 //
 // ⚠️ 跑的期间会反复改写目标源文件，别和 npm test / npm run check 并行跑（会读到变异态）。
 //
@@ -207,7 +207,7 @@ function listTestFiles(rootDir) {
 //   还原源文件"的保护一起卡死，把变异后的代码留在了工作树里（2026-08-02 实际踩到）。
 //   超时即判"杀死"：把代码改坏到测试跑不完，本来就属于被测试发现了。
 // ★★ 变异体会把「算路径的代码」改成算出【别的路径】，而测试会拿那个路径去 rmSync。
-// 2026-08-02 真实事故：对 src/sessions/history.js 跑变异时，算子把 getProjectDir 里的
+// 2026-08-02 真实事故：对 app/src/sessions/history.js 跑变异时，算子把 getProjectDir 里的
 //   `String(cwd || '')` 改成 `String(cwd && '')` ⇒ 对任意 cwd 恒返回 ''，于是
 //   session-delete.test.mjs 的 `projectDir = join(PROJECTS_ROOT, getProjectDir(workDir))`
 //   塌成 PROJECTS_ROOT 本身，它的 cleanup 再 `rmSync(projectDir, {recursive, force})`

@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveBindPlan, resolveBindHost, bindsPublicly, isLoopbackBindHost, isBlankToken } from '../../src/shared/bind-host.js';
+import { resolveBindPlan, resolveBindHost, bindsPublicly, isLoopbackBindHost, isBlankToken } from '../../app/src/shared/bind-host.js';
 
 // ★ 鉴权是启动前提（hard-rules §1.9，2026-09-01 机主拍板）：
 // 「web 访问必须填 token，局域网也要填」。此前无 token 时静默降级绑 loopback，而那个状态下

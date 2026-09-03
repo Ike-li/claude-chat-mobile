@@ -4,14 +4,14 @@
 //
 // ★ 为什么是「每个用例一台全新 server 子进程」而不是共享一台（2026-08-02 修）
 // 此前本文件 8 个用例共用一台 in-process 起的 server，实测 5 个确定性红、actual 全是 429。
-// 根因不是环境、不是 .env：src/auth/rate-limiter.js 的指数退避是【强制短锁】（经 lockUntil 生效，
+// 根因不是环境、不是 .env：app/src/auth/rate-limiter.js 的指数退避是【强制短锁】（经 lockUntil 生效，
 // 非仅 Retry-After 建议头），baseBackoffMs=500。第一个「失败鉴权」用例把 127.0.0.1 锁 500ms，
 // 同文件后续所有 HTTP 断言（含正向对照的 200）在窗口内一律拿 429 —— 于是整份鉴权测试零信号：
 // 被测行为对或错都是红的，测试区分不了。不是 8 次阈值长锁，是第 1 次失败就触发。
 //
-// 限速状态 rlStates 是 server 进程内的 Map（见 src/server/app.js），换进程即清零，所以隔离必须做在
+// 限速状态 rlStates 是 server 进程内的 Map（见 app/src/server/app.js），换进程即清零，所以隔离必须做在
 // 进程级。改用 _spawn-server.mjs 的 spawnServer 起真子进程，顺带甩掉 in-process `await import
-// ('../../server.js')` —— 那个写法因 ESM 按 URL 缓存本就无法真重启/真重配置（见 _spawn-server.mjs 文件头）。
+// ('../../app/server.js')` —— 那个写法因 ESM 按 URL 缓存本就无法真重启/真重配置（见 _spawn-server.mjs 文件头）。
 //
 // ★ 每个用例只允许产生【一次】失败鉴权。第二次会落进上一次的 500ms 退避窗口拿 429。要断言两条
 //   失败路径就拆成两个用例（各自一台 server），别在同一个用例里连发。

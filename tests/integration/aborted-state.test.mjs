@@ -14,7 +14,7 @@ import { waitForServerReady } from './_spawn-server.mjs';
 let port, dataDir, httpServer, io;
 
 // 注：不能靠 delete AUTH_TOKEN 假装"无鉴权"——机主本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
-// server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
+// app/server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
 // 导致测试客户端因未带正确 token 被拒连接、卡死等 init 超时（本次实测踩过）。改用与其余集成测试
 // 一致、已验证工作的模式：显式设一个测试专用 AUTH_TOKEN，客户端显式携带同一 token。
 async function startServer(authToken = 'aborted-state-test-token') {
@@ -27,13 +27,13 @@ async function startServer(authToken = 'aborted-state-test-token') {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, authToken);
 }
@@ -125,7 +125,7 @@ test.describe(
       await client.waitFor(e => e.type === 'system' && e.payload?.kind === 'interrupted', 15000);
 
       // 核心断言①：中断后该 instanceId 应仍可接受新消息——若已被 dispose，resolveInstanceTarget 会判
-      // 它 stale，ack 会带 {ok:false, error:'stale_instance', stale:true}（见 src/server/app.js user:message 处理器）。
+      // 它 stale，ack 会带 {ok:false, error:'stale_instance', stale:true}（见 app/src/server/app.js user:message 处理器）。
       const ack = await new Promise(resolve => {
         client.socket.emit('user:message', { text: '1+1 等于几？只回答阿拉伯数字', instanceId }, resolve);
       });

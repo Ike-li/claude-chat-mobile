@@ -3,8 +3,8 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../public/js/logic.js';
-import { rlSourceKey } from '../../src/auth/rate-limiter.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
   test('非法/负 → 空串（接线层据此显「未知」）', () => {
@@ -265,7 +265,7 @@ test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
 
 // ---- 安全日志段（2026-09-02）----
 // 起因：审计记录自始就写在 data/audit-records.json（限速来源、设备批准/拒绝、越界访问…），
-// 但整个 public/ 对 "audit" 零命中——web 端没有任何读取面。于是「⛔ 有人在暴力尝试你的入口」
+// 但整个 app/public/ 对 "audit" 零命中——web 端没有任何读取面。于是「⛔ 有人在暴力尝试你的入口」
 // 这条告警在手机上无从下钻：既看不到是哪个 IP，也看不到历史上发生过几次、是不是同一个来源。
 // 本函数把一条记录译成一行人话 + severity，接线层只管渲染。
 test.describe('formatAuditEntry：审计记录 → 一行人话', () => {

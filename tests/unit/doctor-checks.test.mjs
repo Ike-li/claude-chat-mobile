@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBindPlan } from '../../src/shared/bind-host.js';
+import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   UPLOADS_FOOTPRINT_WARN_BYTES,
@@ -27,7 +27,7 @@ import {
   summarizeDangerous,
   uploadsFootprintDiagnostic,
   menubarLivenessDiagnostic,
-} from '../../src/ops/doctor-checks.js';
+} from '../../app/src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -883,17 +883,17 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
 test.describe('identifySelfServer —— headless npm start 也要认得出是自家 server', () => {
   const REPO = '/Users/you/code/claude-chat-mobile';
 
-  test('本仓的 node server.js（cwd 落在仓库根）→ 认领', () => {
+  test('本仓的 node app/server.js（cwd 落在仓库根）→ 认领', () => {
     const r = identifySelfServer({
-      processes: [{ pid: 39090, command: 'node server.js', cwd: REPO }],
+      processes: [{ pid: 39090, command: 'node app/server.js', cwd: REPO }],
       repoRoot: REPO,
     });
     assert.deepEqual(r, { pid: 39090, cwd: REPO });
   });
 
-  test('★ 隔壁仓库的同名 server.js → 不认领（本机 codex-chat-mobile 就是真实反例）', () => {
+  test('★ 隔壁仓库的同名 app/server.js → 不认领（本机 codex-chat-mobile 就是真实反例）', () => {
     const r = identifySelfServer({
-      processes: [{ pid: 50021, command: 'node server.js', cwd: '/Users/you/code/codex-chat-mobile' }],
+      processes: [{ pid: 50021, command: 'node app/server.js', cwd: '/Users/you/code/codex-chat-mobile' }],
       repoRoot: REPO,
     });
     assert.equal(r, null, '同名不等于同一个，cwd 对不上就不是自己');

@@ -12,7 +12,7 @@ test.describe('audit.js 单元测试', () => {
   test.before(async () => {
     TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-audit-test-'));
     process.env.CCM_AUDIT_FILE = join(TMP_DIR, 'audit-records.json');
-    AU = await import('../../src/ops/audit.js');
+    AU = await import('../../app/src/ops/audit.js');
   });
 
   test.after(() => {
@@ -74,7 +74,7 @@ test.describe('audit.js 单元测试', () => {
     const prevCap = process.env.AUDIT_RECORD_CAP;
     process.env.CCM_AUDIT_FILE = isoFile;
     process.env.AUDIT_RECORD_CAP = '3'; // 小上限，便于快速验证轮转
-    const iso = await import(`../../src/ops/audit.js?t=ring-iso`); // 缓存穿透：独立模块实例，读取新的 CAP 值
+    const iso = await import(`../../app/src/ops/audit.js?t=ring-iso`); // 缓存穿透：独立模块实例，读取新的 CAP 值
 
     assert.equal(iso.capacity(), 3);
     const ids = [];
@@ -102,7 +102,7 @@ test.describe('audit.js 单元测试', () => {
     writeFileSync(badFile, 'not json{{{');
     const prevFile = process.env.CCM_AUDIT_FILE;
     process.env.CCM_AUDIT_FILE = badFile;
-    const fresh = await import(`../../src/ops/audit.js?t=badjson`);
+    const fresh = await import(`../../app/src/ops/audit.js?t=badjson`);
     assert.deepEqual(fresh.getAll(), []);
     process.env.CCM_AUDIT_FILE = prevFile;
     rmSync(badDir, { recursive: true, force: true });

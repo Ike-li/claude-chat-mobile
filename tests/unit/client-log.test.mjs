@@ -2,8 +2,8 @@
 // localStorage/时钟是外部边界，注入 fake：验证恢复/节流写/flush/clear/异常兜底，不碰真 storage。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClientLogger } from '../../public/js/app/client-log.js';
-import { serializeClientLogs } from '../../public/js/logic.js';
+import { createClientLogger } from '../../app/public/js/app/client-log.js';
+import { serializeClientLogs } from '../../app/public/js/logic.js';
 
 function fakeStorage(initial = {}) {
   const map = new Map(Object.entries(initial));

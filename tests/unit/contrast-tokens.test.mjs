@@ -1,12 +1,12 @@
 // UI-001：设计 token 对比度程序化断言（WCAG 2.x AA 正文 ≥4.5）。
-// 色值与 public/css/app.css :root 两主题保持同步；改 token 必改本表。
+// 色值与 app/public/css/app.css :root 两主题保持同步；改 token 必改本表。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const cssPath = join(dirname(fileURLToPath(import.meta.url)), '../../public/css/app.css');
+const cssPath = join(dirname(fileURLToPath(import.meta.url)), '../../app/public/css/app.css');
 const css = readFileSync(cssPath, 'utf8');
 
 function lin(c) {

@@ -3,7 +3,7 @@
 // 只有 live 侧带循环引用护栏。本模块取超集合并，这里锚定合并后的口径。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { truncate, stringify, redactBase64, toolSummary, TOOL_SUMMARY_CAP } from '../../src/shared/tool-summary.js';
+import { truncate, stringify, redactBase64, toolSummary, TOOL_SUMMARY_CAP } from '../../app/src/shared/tool-summary.js';
 
 test.describe('truncate', () => {
   test('超过 cap 截断并加尾标', () => {

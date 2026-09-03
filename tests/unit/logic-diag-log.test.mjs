@@ -1,7 +1,7 @@
 // tests/unit/logic-diag-log.test.mjs —— 诊断时间线前端渲染纯函数单测（零 DOM/零 token）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatDiagLogEntry, filterConsoleEntries } from '../../public/js/logic.js';
+import { formatDiagLogEntry, filterConsoleEntries } from '../../app/public/js/logic.js';
 
 test.describe('formatDiagLogEntry：判定过的一句话 + severity，不裸吐 JSON', () => {
   test('*/race_settle 成功 → 中性文案带 tag 中文名与耗时', () => {
@@ -65,7 +65,7 @@ test.describe('formatDiagLogEntry：判定过的一句话 + severity，不裸吐
   });
 
   // 2026-07-30：resume 不再释放（SIGTERM）CLI 后台锁，hadLock 这一路连同「先释放后台锁」文案一并撤掉。
-  // 若哪天又冒出「锁」字样，说明那套破坏性逻辑被加回来了——见 src/ops/cli-bg-session-lock.js 头注释。
+  // 若哪天又冒出「锁」字样，说明那套破坏性逻辑被加回来了——见 app/src/ops/cli-bg-session-lock.js 头注释。
   test('resume/settled：带 ms 的简短文案，不再提「锁」', () => {
     const r = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { ms: 850 } });
     assert.ok(r.text.includes('850'));

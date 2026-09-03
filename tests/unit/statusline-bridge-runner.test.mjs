@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readCliStatusSnapshot } from '../../src/ops/cli-statusline-bridge.js';
+import { readCliStatusSnapshot } from '../../app/src/ops/cli-statusline-bridge.js';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const RUNNER = join(ROOT, 'scripts', 'statusline-bridge.js');

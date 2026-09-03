@@ -2,19 +2,19 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createClientLogger } from '../../public/js/app/client-log.js';
-import { createAlertController } from '../../public/js/app/alerts.js';
-import { createAttachmentController, createStoredPreviewLoader } from '../../public/js/app/attachments.js';
-import { createRttMonitor } from '../../public/js/app/connection-sync.js';
-import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
-import { createReplayBuffer } from '../../public/js/app/event-dispatch.js';
-import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-browser.js';
-import { createSettingsController } from '../../public/js/app/settings.js';
-import { createSessionWorkspaceState } from '../../public/js/app/session-workspaces.js';
-import { createInteractionQueueState } from '../../public/js/app/approval-questions.js';
-import { createUnreadTracker } from '../../public/js/app/unread-tracker.js';
-import { attachLongPress } from '../../public/js/app/long-press.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createClientLogger } from '../../app/public/js/app/client-log.js';
+import { createAlertController } from '../../app/public/js/app/alerts.js';
+import { createAttachmentController, createStoredPreviewLoader } from '../../app/public/js/app/attachments.js';
+import { createRttMonitor } from '../../app/public/js/app/connection-sync.js';
+import { createMessageRenderer } from '../../app/public/js/app/message-renderer.js';
+import { createReplayBuffer } from '../../app/public/js/app/event-dispatch.js';
+import { formatFileSize, cmModeForFileName } from '../../app/public/js/app/file-browser.js';
+import { createSettingsController } from '../../app/public/js/app/settings.js';
+import { createSessionWorkspaceState } from '../../app/public/js/app/session-workspaces.js';
+import { createInteractionQueueState } from '../../app/public/js/app/approval-questions.js';
+import { createUnreadTracker } from '../../app/public/js/app/unread-tracker.js';
+import { attachLongPress } from '../../app/public/js/app/long-press.js';
 
 test('app context owns shared DOM, state, dependencies and the active socket', () => {
   const dom = { messages: { id: 'messages' } };
@@ -64,8 +64,8 @@ test('client logger uses the real ring buffer and reads current state from app c
 });
 
 test('the HTML shell loads app.css and contains no inline style block', async () => {
-  const html = await readFile(new URL('../../public/index.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('../../public/css/app.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../../app/public/index.html', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../../app/public/css/app.css', import.meta.url), 'utf8');
 
   assert.match(html, /<link rel="stylesheet" href="\/css\/app\.css">/);
   assert.doesNotMatch(html, /<style(?:\s|>)/i);

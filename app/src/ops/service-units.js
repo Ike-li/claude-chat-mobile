@@ -47,7 +47,9 @@ function stripQuotes(value) {
   return t;
 }
 
-// server 的 ProgramArguments 形如 ['/bin/zsh', '-lc', 'cd <repo> && exec <node> server.js']。
+// server 的 ProgramArguments 形如 ['/bin/zsh', '-lc', 'cd <repo> && exec <node> app/server.js']。
+// 后缀必须与 desktop/launchd/server.plist.template 逐字一致——运行时入口移进 app/ 后两边一起改，
+// 漏改这里会让 repo/node 恒解析成 null（服务面板显示不出归属，且无任何报错）。
 // 刻意按 ' && exec ' 切两半再各自剥引号，不用一个大正则：路径可能含空格，正则的非贪婪边界在
 // 「无引号 + 含空格」时会切错，而这个分隔符本身是模板固定写死的，稳。
 function parseServerCommand(argv) {
@@ -59,10 +61,10 @@ function parseServerCommand(argv) {
   const left = parts[0].trim();
   if (!left.startsWith('cd ')) return { repo: null, node: null };
   const right = parts[1].trim();
-  if (!right.endsWith(' server.js')) return { repo: null, node: null };
+  if (!right.endsWith(' app/server.js')) return { repo: null, node: null };
   return {
     repo: str(unescapeShellDq(stripQuotes(left.slice(3)))),
-    node: str(unescapeShellDq(stripQuotes(right.slice(0, -' server.js'.length)))),
+    node: str(unescapeShellDq(stripQuotes(right.slice(0, -' app/server.js'.length)))),
   };
 }
 

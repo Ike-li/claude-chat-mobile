@@ -4,7 +4,7 @@ import { makeSession } from '../helpers/agent-unit.mjs';
 import {
   USAGE_MIN_INTERVAL_MS, USAGE_THIRD_PARTY_INTERVAL_MS,
   USAGE_FAIL_BACKOFF_AFTER, USAGE_BACKOFF_MAX_MS, usageBackoffWindow,
-} from '../../src/agent/agent.js';
+} from '../../app/src/agent/agent.js';
 
 test.describe('logMeta()', () => {
   test('全空 → 兜底 default / model-default / default', () => {

@@ -66,7 +66,7 @@ const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的�
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
 
 // 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
-// `grep -rn RUN_CLAUDE_INTEGRATION src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
+// `grep -rn RUN_CLAUDE_INTEGRATION app/src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
 // 都会落进闸里要人确认（2026-08-04 实测，本钩子挂在每一次 Bash 上，误拦即一轮人工往返）。
 const TEST_RUNNERS = new Set(['npm', 'npx', 'node', 'pnpm', 'yarn', 'bun']);
 

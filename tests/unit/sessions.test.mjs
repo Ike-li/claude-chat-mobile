@@ -16,7 +16,7 @@ test.describe('sessions.js 单元测试', () => {
   test.before(async () => {
     TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-sessions-test-'));
     process.env.CCM_SESSIONS_FILE = join(TMP_DIR, 'sessions.json'); // 必须在 import 前设——sessions.js 加载即 load(FILE)
-    S = await import('../../src/sessions/sessions.js');
+    S = await import('../../app/src/sessions/sessions.js');
   });
 
   test.after(() => {
@@ -273,7 +273,7 @@ test.describe('sessions.js 单元测试', () => {
   });
 
   // 注：原 defaultModelForCwd 单测已随该函数删除（A1，2026-06-22）——空首页不再推断/显示模型，
-  // 改显「不指定（沿用当前）」、首条消息后由 init.model 校正。空首页权限/思考强度档解析在 server.js
+  // 改显「不指定（沿用当前）」、首条消息后由 init.model 校正。空首页权限/思考强度档解析在 app/server.js
   // （新会话用 CLI 启动默认、不继承），属需起服务端的集成行为，不在此纯逻辑单测覆盖。
   //
   // 原 L1 hideSession/unhideSession 单测已随 API 删除（2026-08-26）。彻底删除见

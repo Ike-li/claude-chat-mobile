@@ -294,7 +294,7 @@ node scripts/device.js deny <ID>
 ```
 
 Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` / `127.0.0.1` / `::1` (an empty Host does not count).
-Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `src/auth/rate-limiter.js`.
+Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js`.
 
 ## 8. Complete the first-run check
 

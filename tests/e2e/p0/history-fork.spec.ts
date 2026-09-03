@@ -6,7 +6,7 @@ import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
 // 长按历史气泡「从这里分叉新会话」：session:fork（forkSession upToMessageId）。长按靠真实 550ms
-// setTimeout 触发（见 public/js/app.js bindForkLongPress），不用 waitForTimeout（禁用模式）——
+// setTimeout 触发（见 app/public/js/app.js bindForkLongPress），不用 waitForTimeout（禁用模式）——
 // 派发 touchstart 后直接轮询等确认弹层出现，天然把这段延迟吃掉。
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-FORK 长按 assistant 气泡可从该点分叉新会话', async ({ page }) => {

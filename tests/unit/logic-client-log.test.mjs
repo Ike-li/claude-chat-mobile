@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   serializeClientLogs, deserializeClientLogs, shouldPersistLog, formatLogsForCopy, isRestoredBoundary,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 const mk = (over = {}) => ({ ts: 1000, type: 'client_conn', text: 'connected', instanceId: null, ...over });
 

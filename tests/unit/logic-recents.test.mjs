@@ -4,7 +4,7 @@
 // worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../../public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../../app/public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。

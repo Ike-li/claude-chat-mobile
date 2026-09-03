@@ -1,15 +1,15 @@
 // tests/unit/logic-instance-destroyed.test.mjs —— 点停止顿一下直接跳主页（回归修复）的纯逻辑单测。
-// 覆盖 wasViewingInstanceDestroyed / resolveEmptySurface 的 instanceDestroyed 接线（见 public/js/logic.js
+// 覆盖 wasViewingInstanceDestroyed / resolveEmptySurface 的 instanceDestroyed 接线（见 app/public/js/logic.js
 // 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
 //
 // 背景：中断失败（不限时超时——任何原因 SDK interrupt() reject 都会走 agent.js settleForce 强杀子进程）
 // → 子进程退出 → onExit → 该 instanceId 从 agents Map 删除、且无同 cwd 存活实例可回退
-// （src/server/instance-routing.js reselectViewingTarget 默认 allowCrossWorkspace=false）→
+// （app/src/server/instance-routing.js reselectViewingTarget 默认 allowCrossWorkspace=false）→
 // viewingInstanceId 广播为 null。前端旧逻辑把"viewingInstanceId 变 null"一律当"该显示空表面
 // (home/compose)"处理，导致用户刚点停止就被静默弹回主页。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectServerRestart, resolveEmptySurface, wasViewingInstanceDestroyed } from '../../public/js/logic.js';
+import { detectServerRestart, resolveEmptySurface, wasViewingInstanceDestroyed } from '../../app/public/js/logic.js';
 
 test('wasViewingInstanceDestroyed: 实例真的被摧毁（曾在列表、现从列表消失、newViewing 变 null）→ 命中', () => {
   const prevIds = new Set(['inst_1']);
@@ -77,7 +77,7 @@ test('wasViewingInstanceDestroyed: explicitCloseInstanceId 命中同一实例—
 // server 重启检测（「server 重启都会跳'会话已中断'页」误判修复）：整机重启时 agents Map/viewingInstanceId
 // 全部归零，重连后首条 instances 广播的形态（正在看的实例从列表消失 + viewing 变 null）与「实例被单独
 // 摧毁」完全同构，wasViewingInstanceDestroyed 无法自辨。区分信号 = 广播恒带的 service.startedAt
-// （src/server/app.js SERVICE_STARTED_AT，进程级常量，重启必变）：前后两条广播的 startedAt 不同 → 重启。
+// （app/src/server/app.js SERVICE_STARTED_AT，进程级常量，重启必变）：前后两条广播的 startedAt 不同 → 重启。
 test('detectServerRestart: 前后两条广播 startedAt 都在且不同 → 命中重启', () => {
   assert.equal(detectServerRestart({ prevStartedAt: 1000, newStartedAt: 2000 }), true);
 });

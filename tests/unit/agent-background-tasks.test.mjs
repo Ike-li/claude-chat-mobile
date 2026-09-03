@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
-import { buildAgentQueryOptions } from '../../src/agent/agent.js';
+import { getSessionLogs } from '../../app/src/agent/interaction-log.js';
+import { buildAgentQueryOptions } from '../../app/src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir } from '../../src/sessions/history.js';
+import { getProjectDir } from '../../app/src/sessions/history.js';
 
 test.describe('buildAgentQueryOptions — 后台进度加强开关', () => {
   test('默认 agentProgressSummaries=true（~30s AI 进度 summary）', () => {
@@ -379,12 +379,12 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
     const { s, events } = makeSession();
     // 实测生产 task_progress 真实形状：无 message/task_type，有 description/subagent_type/last_tool_name/usage
     s.map({ type: 'system', subtype: 'task_progress', task_id: 'a1', subagent_type: 'Plan',
-      description: 'Reading public/js/app.js', last_tool_name: 'Read', usage: { tool_uses: 16 } });
+      description: 'Reading app/public/js/app.js', last_tool_name: 'Read', usage: { tool_uses: 16 } });
     const sum = s.bgTaskSummary();
     assert.equal(sum.taskType, 'local_agent', '有 subagent_type → 归为 local_agent（server 映射 🤖）');
-    assert.equal(sum.message, 'Plan：Reading public/js/app.js', 'description 作进度文案 + subagent_type 前缀');
+    assert.equal(sum.message, 'Plan：Reading app/public/js/app.js', 'description 作进度文案 + subagent_type 前缀');
     const prog = events.find(e => e.type === 'task_progress');
-    assert.equal(prog.payload.message, 'Plan：Reading public/js/app.js', '横幅拿到真实活动文案（修旧代码读不存在的 msg.message 恒空）');
+    assert.equal(prog.payload.message, 'Plan：Reading app/public/js/app.js', '横幅拿到真实活动文案（修旧代码读不存在的 msg.message 恒空）');
     assert.ok(Array.isArray(prog.payload.tasks), 'task_progress 附带全量 tasks 快照供前端列表明细');
     assert.equal(prog.payload.tasks.length, 1);
     assert.equal(prog.payload.tasks[0].taskId, 'a1');

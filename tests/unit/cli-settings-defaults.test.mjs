@@ -14,7 +14,7 @@ import {
   decideWorktreeSettingsAction,
   parseWorktreeCanonicalRoot,
   CCM_PERMISSION_MODES,
-} from '../../src/agent/cli-settings-defaults.js';
+} from '../../app/src/agent/cli-settings-defaults.js';
 
 test.describe('normalizePermissionMode', () => {
   test('合法 CCM 档原样通过', () => {

@@ -28,31 +28,33 @@ test('默认门槛贴近实测（缓冲不超过 5 个点，防再次拉开 12 �
 
 test('findUnloadedProductionFiles：报告里出现过的文件不算缺口，没出现的按 0% 挑出来', () => {
   const report = [
-    'ℹ src                       |        |          |         | ',
-    'ℹ  agent.js                 |  95.66 |    87.28 |   92.24 | 358-374',
+    'ℹ app                       |        |          |         | ',
+    'ℹ  src                      |        |          |         | ',
+    'ℹ   agent.js                |  95.66 |    87.28 |   92.24 | 358-374',
     'ℹ all files                 |  77.51 |    81.91 |   74.22 | ',
   ].join('\n');
-  const listFiles = (_root, dir) => (dir === 'src' ? ['src/agent.js', 'src/never-loaded.js'] : []);
+  const listFiles = (_root, dir) => (dir === 'app/src' ? ['app/src/agent.js', 'app/src/never-loaded.js'] : []);
 
   const unloaded = findUnloadedProductionFiles(report, '/fake', listFiles);
 
-  assert.deepEqual(unloaded, ['src/never-loaded.js'], '只有报告里没出现过的才算缺口');
+  assert.deepEqual(unloaded, ['app/src/never-loaded.js'], '只有报告里没出现过的才算缺口');
 });
 
 test('findUnloadedProductionFiles：全部加载过时返回空（不制造假缺口）', () => {
   const report = [
-    'ℹ src                       |        |          |         | ',
-    'ℹ  a.js                     | 100.00 |   100.00 |  100.00 | ',
-    'ℹ  nested                   |        |          |         | ',
-    'ℹ   b.js                    |  50.00 |    50.00 |   50.00 | 3',
+    'ℹ app                       |        |          |         | ',
+    'ℹ  src                      |        |          |         | ',
+    'ℹ   a.js                    | 100.00 |   100.00 |  100.00 | ',
+    'ℹ   nested                  |        |          |         | ',
+    'ℹ    b.js                   |  50.00 |    50.00 |   50.00 | 3',
   ].join('\n');
-  const listFiles = (_root, dir) => (dir === 'src' ? ['src/a.js', 'src/nested/b.js'] : []);
+  const listFiles = (_root, dir) => (dir === 'app/src' ? ['app/src/a.js', 'app/src/nested/b.js'] : []);
 
   assert.deepEqual(findUnloadedProductionFiles(report, '/fake', listFiles), []);
 });
 
 // 报告是目录树、叶子行只有 basename。按 basename 判「加载过没有」会让同名文件互相顶替：
-// src/server/app.js 一旦有了首个单测，public/js/app.js（全仓最大的 0% 覆盖文件）就会从缺口
+// app/src/server/app.js 一旦有了首个单测，app/public/js/app.js（全仓最大的 0% 覆盖文件）就会从缺口
 // 名单里静默消失——而这个函数存在的唯一理由就是"别把漂亮的百分比读成安全"。
 test('findUnloadedProductionFiles：同名文件不互相顶替（只加载了一个 app.js，另一个仍算缺口）', () => {
   const report = [
@@ -62,14 +64,14 @@ test('findUnloadedProductionFiles：同名文件不互相顶替（只加载了�
     'ℹ all files                 |  20.00 |    20.00 |   20.00 | ',
   ].join('\n');
   const listFiles = (_root, dir) => ({
-    src: ['src/server/app.js'],
-    'public/js': ['public/js/app.js'],
+    src: ['app/src/server/app.js'],
+    'app/public/js': ['app/public/js/app.js'],
   }[dir] ?? []);
 
   assert.deepEqual(
     findUnloadedProductionFiles(report, '/fake', listFiles),
-    ['public/js/app.js'],
-    'src/server/app.js 被加载过，不该把同名的 public/js/app.js 一起算成已加载',
+    ['app/public/js/app.js'],
+    'app/src/server/app.js 被加载过，不该把同名的 app/public/js/app.js 一起算成已加载',
   );
 });
 
@@ -85,16 +87,17 @@ test('缺口扫描真的接进主流程并会打印（算了不说等于没算�
 // 实测那个标志只是过滤报告里【已加载】的文件，补不上缺口——所以只能把限定条件说清楚。
 test('summarizeCoverageGap：把分母覆盖面按文件数与行数一起算出来', () => {
   const report = [
-    'ℹ src                       |        |          |         | ',
-    'ℹ  agent.js                 |  95.66 |    87.28 |   92.24 | 358-374',
+    'ℹ app                       |        |          |         | ',
+    'ℹ  src                      |        |          |         | ',
+    'ℹ   agent.js                |  95.66 |    87.28 |   92.24 | 358-374',
     'ℹ all files                 |  77.51 |    81.91 |   74.22 | ',
   ].join('\n');
-  const listFiles = (_root, dir) => (dir === 'src' ? ['src/agent.js', 'src/huge-untested.js'] : []);
-  const countLines = (_root, file) => ({ 'src/agent.js': 100, 'src/huge-untested.js': 300 }[file] ?? 0);
+  const listFiles = (_root, dir) => (dir === 'app/src' ? ['app/src/agent.js', 'app/src/huge-untested.js'] : []);
+  const countLines = (_root, file) => ({ 'app/src/agent.js': 100, 'app/src/huge-untested.js': 300 }[file] ?? 0);
 
   const gap = summarizeCoverageGap(report, { rootDir: '/fake', listFiles, countLines });
 
-  assert.deepEqual(gap.unloaded, ['src/huge-untested.js']);
+  assert.deepEqual(gap.unloaded, ['app/src/huge-untested.js']);
   assert.equal(gap.loadedFiles, 1);
   assert.equal(gap.totalFiles, 2);
   assert.equal(gap.gapLines, 300);
@@ -102,12 +105,12 @@ test('summarizeCoverageGap：把分母覆盖面按文件数与行数一起算出
 });
 
 test('summarizeCoverageGap：算不出行数时 gapPercent 是 null，不是 0（别让「不知道」伪装成「没缺口」）', () => {
-  const listFiles = (_root, dir) => (dir === 'src' ? ['src/a.js'] : []);
+  const listFiles = (_root, dir) => (dir === 'app/src' ? ['app/src/a.js'] : []);
   const gap = summarizeCoverageGap('', { rootDir: '/fake', listFiles, countLines: () => 0 });
 
   assert.equal(gap.gapPercent, null);
   assert.equal(gap.gapLines, 0);
-  assert.deepEqual(gap.unloaded, ['src/a.js']);
+  assert.deepEqual(gap.unloaded, ['app/src/a.js']);
 });
 
 // ── 2026-08-17：谁在守这个门槛 ──────────────────────────────────────────────

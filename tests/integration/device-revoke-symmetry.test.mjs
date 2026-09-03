@@ -41,15 +41,15 @@ async function startServer(authToken = 'secret-token') {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken; // host 绑 0.0.0.0，LAN IP 可达
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
-  devicesModule = await import('../../src/auth/devices.js');
+  devicesModule = await import('../../app/src/auth/devices.js');
   await waitForServerReady(port, authToken);
 }
 
@@ -118,7 +118,7 @@ test.describe(
       assert.equal(client.disconnected, true, 'CLI 吊销后已连接的 approved socket 应被断开（SEC-03 对称修复）');
 
       // FR-19 最小审计记录（承接 Phase 4）：CLI 批准/吊销都应各留一条 audit_record（via=cli）。
-      const AU = await import('../../src/ops/audit.js');
+      const AU = await import('../../app/src/ops/audit.js');
       const approved = AU.listRecent({ limit: 100, action: 'device_approved' });
       const revoked = AU.listRecent({ limit: 100, action: 'device_revoked' });
       assert.ok(approved.some(r => r.target === token && r.actor.via === 'cli'), `应有本 token 的 CLI 批准审计，实际：${JSON.stringify(approved)}`);

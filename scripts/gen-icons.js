@@ -1,4 +1,4 @@
-// scripts/gen-icons.js —— 从 public/icons/icon.svg 派生全部 PWA / 通知 / apple-touch 位图。
+// scripts/gen-icons.js —— 从 app/public/icons/icon.svg 派生全部 PWA / 通知 / apple-touch 位图。
 //
 // 源：icon.svg（any 构图：圆角底 + 主图形）。
 // maskable：Android/iOS 遮罩会裁边——背景铺满无圆角，内容缩到中心 72%（四周 ~14% > 规范 10% safe-zone）。
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 
 const HERE = import.meta.dirname;
-const ICONS = join(HERE, '..', 'public', 'icons');
+const ICONS = join(HERE, '..', 'app', 'public', 'icons');
 const SRC = join(ICONS, 'icon.svg');
 
 const BG = '#AE5238';

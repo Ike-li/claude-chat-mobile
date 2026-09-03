@@ -56,9 +56,9 @@ test('① 生产闭包一个文件都不被 export-ignore', () => {
     '这些生产必需文件会被 git archive 裁掉，用户下载后跑不起来',
   );
   // 闭包本身要覆盖到全部运行时源码，否则说明入口清单漏了分支。
-  const srcFiles = git(['ls-files', 'src']).trim().split('\n');
+  const srcFiles = git(['ls-files', 'app/src']).trim().split('\n');
   const uncovered = srcFiles.filter(f => !closure.includes(f));
-  assert.deepEqual(uncovered, [], 'src/ 有文件不在生产闭包里：要么是死代码，要么入口清单漏了');
+  assert.deepEqual(uncovered, [], 'app/src/ 有文件不在生产闭包里：要么是死代码，要么入口清单漏了');
 });
 
 // 测试树、测试基建（tests/infra/）与全部门禁（tests/gates/）都在 tests/ 下，所以这里是

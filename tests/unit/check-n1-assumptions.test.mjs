@@ -18,7 +18,7 @@ async function buildFixture(root, { registered, marked }) {
     '## 2. n=1 取舍', '', '| ID | 含义 | 代码 |', '|----|------|------|', rows, '',
   ].join('\n'));
   const body = marked.map((id, i) => `// n1: ${id} 说明文字\nlet state${i} = null;`).join('\n');
-  await writeFixture(root, 'src/server/app.js', body || '// 无标记\n');
+  await writeFixture(root, 'app/src/server/app.js', body || '// 无标记\n');
 }
 
 test('n=1 门禁：文档登记了但代码里没有对应标记 → 报缺失', async t => {
@@ -78,7 +78,7 @@ test('n=1 门禁：只有表格行算登记，正文里的叙述性引用不算'
     '| ID | 含义 | 代码 |', '|----|------|------|',
     '| `N1-REAL` | 真登记 | 某处 |', '',
   ].join('\n'));
-  await writeFixture(root, 'src/server/app.js', '// n1: N1-REAL 说明\nlet x = null;\n');
+  await writeFixture(root, 'app/src/server/app.js', '// n1: N1-REAL 说明\nlet x = null;\n');
 
   const result = checkN1Assumptions({ rootDir: root });
 
@@ -96,7 +96,7 @@ test('n=1 门禁：// n1: 开头但格式不合 → 显式报错，不静默忽�
   await writeFixture(root, 'docs/hard-rules.md', [
     '## 2. n=1 取舍', '', '| ID | 含义 |', '|----|------|', '| `N1-OK` | 已登记 |', '',
   ].join('\n'));
-  await writeFixture(root, 'src/server/app.js', [
+  await writeFixture(root, 'app/src/server/app.js', [
     '// n1: N1-OK 有理由，合格',
     'let ok = null;',
     '// n1: N1-NO-REASON',            // 缺理由

@@ -6,7 +6,7 @@
 // 服务端补上 retryAfter 之后，这一层负责把它翻成人话。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeHandshakeError, shouldAttemptReconnect } from '../../public/js/logic/connection.js';
+import { describeHandshakeError, shouldAttemptReconnect } from '../../app/public/js/logic/connection.js';
 
 test.describe('describeHandshakeError：把握手拒绝翻成人话', () => {
   test('rate_limited + 秒级等待 → 说清还要等多久', () => {

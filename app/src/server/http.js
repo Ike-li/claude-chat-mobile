@@ -243,7 +243,8 @@ export function configureHttpShell({
     next();
   });
 
-  const publicDir = join(projectRoot, 'public');
+  // 前端资源随运行时代码住在 app/ 下，而 projectRoot 是仓库根（data/、scripts/ 在那）。
+  const publicDir = join(projectRoot, 'app', 'public');
   const vendorDir = join(publicDir, 'vendor');
   const selfJsDir = join(publicDir, 'js');
   // SW 必须在站点根才能拿到覆盖 / 的 scope（见 public/sw.js 与 app/notifications.js 的注释）

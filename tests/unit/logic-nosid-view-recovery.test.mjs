@@ -19,7 +19,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldReloadOnEnter, syncAckAction, resolveReplayBufferAction } from '../../public/js/logic.js';
+import { shouldReloadOnEnter, syncAckAction, resolveReplayBufferAction } from '../../app/public/js/logic.js';
 
 test.describe('shouldReloadOnEnter：无 sessionId 时不得清屏换磁盘（bindView 切视图入场）', () => {
   test('无缓存 + replayed>0 → keep（缓冲是唯一真相，清屏换空 = 自毁）', () => {

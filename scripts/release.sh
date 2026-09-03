@@ -81,7 +81,7 @@ say "  ✓ CI 模拟通过"
 # CLI 版本是【外部事实】：它属于跑发版的这台机器，不属于仓库。所以只声称"验证于"，绝不写成
 # "需要/使用"。取不到不中止——下方"展示计划 + [y/N] 确认"那道闸就是这里的守卫：维护者会先
 # 看到 unknown 再决定要不要按 y。
-# 只取第一个 token：`claude --version` 输出形如 "2.1.220 (Claude Code)"，与 src/ops/statusline.js
+# 只取第一个 token：`claude --version` 输出形如 "2.1.220 (Claude Code)"，与 app/src/ops/statusline.js
 # 对 versions.cli 的切法保持同一约定。
 CLI_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 CLI_VER="unknown"

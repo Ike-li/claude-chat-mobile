@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { escapeXml, parseKeyValueArgs, renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 // 转义与解析必须成对验证：只测渲染侧看不出「解析回来多了几个反斜杠」这种恒久漂移。
-import { diffUnitSemantics, extractUnitFacts } from '../../src/ops/service-units.js';
+import { diffUnitSemantics, extractUnitFacts } from '../../app/src/ops/service-units.js';
 
 test.describe('escapeXml', () => {
   test('转义 & < >', () => {
@@ -44,7 +44,7 @@ test.describe('parseKeyValueArgs', () => {
 // 而 CLI 只会说一句「重启后未能确认新进程」。
 // 这与本文件开头那条 TC-009 是同一个错误的下一层：sed 那层修好了，shell 这层还漏着。
 test.describe('__SHQ_KEY__ —— shell 双引号上下文的占位符', () => {
-  const tpl = '<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>';
+  const tpl = '<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" app/server.js</string>';
 
   test('普通路径恒等 —— 不能因为加了转义就让既有安装判成漂移', () => {
     const out = renderTemplate(tpl, { REPO: '/Users/you/code/repo', NODE: '/opt/homebrew/bin/node' });
@@ -83,7 +83,7 @@ test.describe('__SHQ_KEY__ —— shell 双引号上下文的占位符', () => {
   // doctor D16 恒亮 warn。那等于给这个修复要服务的那批用户换了个新毛病。
   test('★★ 渲染→解析往返：含 shell 元字符的路径不能被判成漂移', () => {
     for (const repo of ['/Users/you/code/my$proj', '/tmp/`whoami`/repo', '/tmp/a"b/repo', '/tmp/a\\b/repo', '/Users/John Doe/code/repo', '/Users/you/code/ccm']) {
-      const xml = renderTemplate('<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>',
+      const xml = renderTemplate('<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" app/server.js</string>',
         { REPO: repo, NODE: '/opt/homebrew/bin/node' });
       const cmd = xml.replace(/<\/?string>/g, '').replace(/&amp;/g, '&');
       const facts = extractUnitFacts('server', {
@@ -102,7 +102,7 @@ test.describe('__SHQ_KEY__ —— shell 双引号上下文的占位符', () => {
   test('手写的 plist（没转义、也没引号）照旧解析得出 —— 反转义对它们是恒等的', () => {
     const facts = extractUnitFacts('server', {
       Label: 'com.ccm.server',
-      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/code/repo && exec /opt/homebrew/bin/node server.js'],
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/code/repo && exec /opt/homebrew/bin/node app/server.js'],
     });
     assert.equal(facts.repo, '/Users/you/code/repo');
     assert.equal(facts.node, '/opt/homebrew/bin/node');
@@ -146,11 +146,11 @@ test.describe('renderTemplate', () => {
   });
 
   test('路径含空格：模板已加双引号，替换后仍是单个 shell token', () => {
-    const out = renderTemplate('cd "__REPO__" &amp;&amp; exec "__NODE__" server.js', {
+    const out = renderTemplate('cd "__REPO__" &amp;&amp; exec "__NODE__" app/server.js', {
       REPO: '/Users/John Doe/code/repo',
       NODE: '/opt/homebrew/bin/node',
     });
-    assert.equal(out, 'cd "/Users/John Doe/code/repo" &amp;&amp; exec "/opt/homebrew/bin/node" server.js');
+    assert.equal(out, 'cd "/Users/John Doe/code/repo" &amp;&amp; exec "/opt/homebrew/bin/node" app/server.js');
   });
 
   test('多个占位符各自独立替换', () => {

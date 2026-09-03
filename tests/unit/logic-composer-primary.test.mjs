@@ -30,9 +30,9 @@ import {
   shouldClearInterruptPendingOnSystem,
   systemBarClass,
   INTERRUPT_PENDING_TIMEOUT_MS,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 // F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
-import { externalDirtyBusyNack } from '../../src/server/instance-routing.js';
+import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
   const out = resolveComposerPrimaryMode({});
@@ -829,7 +829,7 @@ test.describe('presentOfflineResendAck: busy 拒收', () => {
       externalDirtyBusyNack({ bgTaskCount: 2 }),
     ];
     for (const nack of nacks) {
-      // 逐字段对齐 src/server/app.js externalDirty 分支的 ack 转发形状
+      // 逐字段对齐 app/src/server/app.js externalDirty 分支的 ack 转发形状
       const ack = { ok: false, error: nack.error, busy: nack.busy === true, retryable: nack.retryable, reason: nack.reason };
       const off = presentOfflineResendAck(null, ack);
       assert.equal(off.outcome, 'blocked', `${nack.reason}: 离线必须落终态待手动重发`);

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents } from '../../src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -355,7 +355,7 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
 });
 
 // ── 原始同步 bug 复现（web 额度耗尽 → CLI 外部 resume+compact 写入 → web 重开看不到 CLI 新输出）────────
-// 忠实复刻 server catchUpTick（server.js:737-764）的决策链：它就是「切入时 baseline = getSessionHistory().length
+// 忠实复刻 server catchUpTick（app/server.js:737-764）的决策链：它就是「切入时 baseline = getSessionHistory().length
 // 做种、后续 tick 再喂 catchUpStep」。这里用【同一个】getSessionHistory（真实读临时 transcript）+【同一个】
 // catchUpStep，只在数据流层复刻，不起 socket——造真实 viewing 实例需 claude turn/token（集成测试整块默认 skip）。
 // 覆盖的是 server 侧盲区；前端「有缓存/活缓冲就跳过 loadHistory」（app.js:2144/2149）那半段属浏览器行为，不在此。
@@ -372,13 +372,13 @@ test('catchUpTick 盲区复现：web 离开期间的外部写入，切回后被�
     { type: 'assistant', message: { role: 'assistant', content: 'CLI-外部-5' } }, // 磁盘全长 = 5
   ]);
 
-  // T3 web 切回：复刻 catchUpTick 切入分支（server.js:744-751）——key 变 → seedLen = getSessionHistory().length
+  // T3 web 切回：复刻 catchUpTick 切入分支（app/server.js:744-751）——key 变 → seedLen = getSessionHistory().length
   // （此刻磁盘已含 CLI 外部写入）→ baseline = seedLen、本 tick 不推。
   const diskOnEnter = await getSessionHistory(sid, cwd, HISTORY_MAX_MESSAGES, { baseDir: BASE });
   assert.equal(diskOnEnter.length, 5, '切回时磁盘已含 web 未显示的外部写入');
-  const state = { baseline: diskOnEnter.length, wasBusy: false }; // ← server.js:749 现行 seeding：磁盘全长做种
+  const state = { baseline: diskOnEnter.length, wasBusy: false }; // ← app/server.js:749 现行 seeding：磁盘全长做种
 
-  // 后续 catchUpTick tick（server.js:754-762）：磁盘无新增 → catchUpStep 判有无超出 baseline 的新消息。
+  // 后续 catchUpTick tick（app/server.js:754-762）：磁盘无新增 → catchUpStep 判有无超出 baseline 的新消息。
   const diskLater = await getSessionHistory(sid, cwd, HISTORY_MAX_MESSAGES, { baseDir: BASE });
   const { emit } = catchUpStep(state, { messages: diskLater, localBusy: false });
 
@@ -388,7 +388,7 @@ test('catchUpTick 盲区复现：web 离开期间的外部写入，切回后被�
   // 对照修复靶心：若切入 baseline 以「前端实际显示位置(N=2)」做种（而非磁盘全长），同一 catchUpStep 立刻把 3 条追平。
   const fixed = catchUpStep({ baseline: 2, wasBusy: false }, { messages: diskLater, localBusy: false });
   assert.deepEqual(fixed.emit.map(m => m.content), ['CLI-外部-3', 'CLI-外部-4', 'CLI-外部-5'],
-    '病灶在 server.js:746/749 的 baseline 基准——用「磁盘全长」而非「前端已显示位置」做种');
+    '病灶在 app/server.js:746/749 的 baseline 基准——用「磁盘全长」而非「前端已显示位置」做种');
 });
 
 // ── lastPermissionMode / readLastPermissionMode ──────────────────────────────

@@ -1,9 +1,9 @@
 // tests/unit/mirror-engine.test.mjs —— 只读镜像 / catchUp 编排引擎单测（临时夹具根，零真实 ~/.claude）
 //
-// 【为什么补这份】src/server/mirror-engine.js 是 P0–P4 重构专门从 app.js 抽出来的「状态与编排的唯一
+// 【为什么补这份】app/src/server/mirror-engine.js 是 P0–P4 重构专门从 app.js 抽出来的「状态与编排的唯一
 // 所有者」（416 行 / 15 个状态量 / 工厂 + 全注入），可测性是刻意做出来的——但抽出来之后没有任何测试
 // 跟进：2026-08-02 实测它【根本不出现在覆盖率报告里】，即没有任何单测加载过它。唯一 import 者
-// src/server/app.js 同样零单测覆盖，而 E2E 打的是 mock server 不是真 server。
+// app/src/server/app.js 同样零单测覆盖，而 E2E 打的是 mock server 不是真 server。
 //
 // 判定规则的纯函数（mirrorEntryLock / mirrorStaleFlag / mirrorReleaseStep / catchUpStep）本就在
 // history.js 里被充分覆盖（98%+），本文件【不重复测它们】。这里只测编排层自己的行为：
@@ -21,8 +21,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createMirrorEngine } from '../../src/server/mirror-engine.js';
-import { getProjectDir, MIRROR_STALE_PENDING_MS } from '../../src/sessions/history.js';
+import { createMirrorEngine } from '../../app/src/server/mirror-engine.js';
+import { getProjectDir, MIRROR_STALE_PENDING_MS } from '../../app/src/sessions/history.js';
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -517,7 +517,7 @@ test('等审批期间终端写入、随后 state 翻 idle 时重连 → 仍须�
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 以下用例由 `npm run mutate -- src/server/mirror-engine.js` 反推补齐（2026-08-02）。
+// 以下用例由 `npm run mutate -- app/src/server/mirror-engine.js` 反推补齐（2026-08-02）。
 // 上面那批用例首轮全绿，但变异检查显示 129 个变异体里存活 67 个——存活的意思是「这行被
 // 执行到了，改掉之后却没有任何测试变红」。下面只挑其中**行为上真有意义**的那些补，
 // 不追求把等价变异（默认参数、立刻被覆盖的初值、值本就是 null 的 ??）也清零：为杀变异体

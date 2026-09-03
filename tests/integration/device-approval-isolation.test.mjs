@@ -39,15 +39,15 @@ async function startServer(authToken = 'secret-token') {
   process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
-  process.env.AUTH_TOKEN = authToken; // host 会绑 0.0.0.0（见 server.js host 逻辑），LAN IP 才可达
+  process.env.AUTH_TOKEN = authToken; // host 会绑 0.0.0.0（见 app/server.js host 逻辑），LAN IP 才可达
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, authToken);
 }

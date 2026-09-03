@@ -6,13 +6,13 @@ import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, sessionRowByInstance } from '../../helpers/p0-ui';
 
 // 修「点击在跑的会话的停止按钮时，点完会顿一下，然后直接跳到主页」：中断失败（不限时超时——任何
-// 原因 SDK interrupt() reject 都会走 src/agent/agent.js settleForce() 强杀子进程，见
+// 原因 SDK interrupt() reject 都会走 app/src/agent/agent.js settleForce() 强杀子进程，见
 // tests/unit/agent-control.test.mjs）→ 子进程退出 → onExit → 该 instanceId 从 agents Map 删除、
-// 且无同 cwd 存活实例可回退（src/server/instance-routing.js reselectViewingTarget 默认
+// 且无同 cwd 存活实例可回退（app/src/server/instance-routing.js reselectViewingTarget 默认
 // allowCrossWorkspace=false）→ viewingInstanceId 广播为 null。前端旧逻辑把"viewingInstanceId 变
 // null"一律当作该显示空表面(home/compose)处理，导致用户刚点停止就被静默弹回主页，看不到任何反馈。
 //
-// 修复：public/js/logic.js 新增 wasViewingInstanceDestroyed 纯函数，区分"正在查看的实例真的被摧毁"
+// 修复：app/public/js/logic.js 新增 wasViewingInstanceDestroyed 纯函数，区分"正在查看的实例真的被摧毁"
 // 与"用户主动导航离开"（返回主页/新建会话/切到其他会话——这些场景 viewingInstanceId 同样会变化，
 // 但原实例仍在 instances 列表里，或者有下一个可看的目标，不应误判）；resolveEmptySurface 新增
 // 'destroyed' 返回值（优先于 home/compose/none），bindView 命中时渲染专属提示
@@ -113,7 +113,7 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
   // server 重启误报修复：整机重启（常驻服务部署后重启是机主的常规操作）时 agents Map/viewingInstanceId
   // 全部归零，重连后首条 instances 广播形态与「实例被单独摧毁」完全同构——修复前每次重启都弹
   // 「停止操作未能正常结束」（用户根本没点停止，纯误导）。区分信号 = 广播恒带的 service.startedAt
-  //（进程级常量，重启必变），前端 detectServerRestart（public/js/logic.js）识别后换准确文案 +
+  //（进程级常量，重启必变），前端 detectServerRestart（app/public/js/logic.js）识别后换准确文案 +
   // 「继续此会话」一键重开（走既有 session:switch 打开路径；不自动切换，尊重「重启后不自动
   // session:switch」的既有产品决策——按钮是用户主动点的）。
   test('P0-DESTROY-6 server 重启：显示「服务已重启」提示 + 「继续此会话」按钮，而非误导性的停止失败文案', async ({ page }) => {

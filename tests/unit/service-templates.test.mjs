@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SERVICE_UNIT_NAMES, renderVarsFor, templateFor } from '../../src/ops/service-units.js';
+import { SERVICE_UNIT_NAMES, renderVarsFor, templateFor } from '../../app/src/ops/service-units.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');

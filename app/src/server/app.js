@@ -116,7 +116,9 @@ import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 const authStrategy = createCfAccessStrategy();
 authStrategy.init();
 
-const HERE = join(import.meta.dirname, '..', '..'); // 项目根；从任何 cwd 启动都一致
+// 三层向上：本文件在 app/src/server/，仓库根在 app/ 之外——data/、scripts/、ccm.config.json
+// 都住在仓库根，不随运行时代码进 app/。少一层会让它们全部解析到 app/ 下（且无语法错误）。
+const HERE = join(import.meta.dirname, '..', '..', '..'); // 项目根；从任何 cwd 启动都一致
 const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
 const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
 

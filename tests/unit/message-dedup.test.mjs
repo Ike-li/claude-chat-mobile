@@ -1,7 +1,7 @@
 // tests/unit/message-dedup.test.mjs —— 客户端消息 ID 去重纯函数单测（承接 REL-01：离线输入幂等）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkAndRecord, isProcessed, commitProcessed, DEDUP_CAP, isInFlight, claimInFlight, releaseInFlight } from '../../src/agent/message-dedup.js';
+import { checkAndRecord, isProcessed, commitProcessed, DEDUP_CAP, isInFlight, claimInFlight, releaseInFlight } from '../../app/src/agent/message-dedup.js';
 
 test.describe('checkAndRecord', () => {
   test('首次出现的 clientMessageId → 不重复，记录', () => {
@@ -168,7 +168,7 @@ test.describe('isInFlight / claimInFlight / releaseInFlight（并发去重：处
 });
 
 // ── 2026-08-04 code review：登记时机的顺序不变量 ──────────────────────────────
-// 这条不变量活在 src/server/app.js 的 user:message handler 里，那段没有单测入口（要 socket +
+// 这条不变量活在 app/src/server/app.js 的 user:message handler 里，那段没有单测入口（要 socket +
 // 真实例），但它极易被"顺手挪一行"破坏，且破坏后的症状是【同一条 prompt 投给 Claude 两次】——
 // 昂贵且难复现。故在源码层面钉住相对顺序。
 //
@@ -179,7 +179,7 @@ test.describe('isInFlight / claimInFlight / releaseInFlight（并发去重：处
 // 加 try/finally 之前，那条陈旧的 in-flight 占用反而会挡住重试（卡到重启，但至多一次）。
 test('user:message：commitProcessed 排在 send 成功后的所有副作用之前（防重复投递）', async () => {
   const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('../../src/server/app.js', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
 
   const start = src.indexOf("if (!sent) {");
   assert.ok(start > 0, '未找到 send 失败分支，app.js 结构已变，请同步本测试');

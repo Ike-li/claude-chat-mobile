@@ -6,7 +6,7 @@
 // 隧道 LastExitStatus=-9（崩过又被 KeepAlive 拉起）这种事，只有公网报 1033 时才发现。
 //
 // 本文件是那一层的唯一实现。菜单栏 app、doctor D16、web 面板都只消费它的 --json 输出，
-// **绝不各自解析 launchctl** —— 同 hooks-bridge-setup.js 与 src/ops/cli-hooks-bridge.js 的分工。
+// **绝不各自解析 launchctl** —— 同 hooks-bridge-setup.js 与 app/src/ops/cli-hooks-bridge.js 的分工。
 //
 // ## 三条纪律
 //
@@ -14,14 +14,14 @@
 //    com.ccm.tunnel-watch 模板里压根没有。它们被识别为 adoptable/unknown：可以看、可以启停，
 //    但永不 install/uninstall/覆写。adopt 只写 manifest，一个字节都不碰 plist。
 //
-// 2. **轮询路径绝不碰 HTTP。** src/server/http.js:94-105 对鉴权失败无条件计数、
-//    src/server/app.js:309 让 loopback 也进限速、rate-limiter 阈值 8 锁 15 分钟 ——
+// 2. **轮询路径绝不碰 HTTP。** app/src/server/http.js:94-105 对鉴权失败无条件计数、
+//    app/src/server/app.js:309 让 loopback 也进限速、rate-limiter 阈值 8 锁 15 分钟 ——
 //    每 5s 打一次不带 token 的 /health，40 秒就能把机主连同手机一起关在门外。
 //    所以探活只用 `launchctl list`（进程在不在）+ `nc -z`（端口通不通，纯 TCP 握手不发
 //    请求行，express 根本不路由）。带 token 的 /health 只在 `health` 子命令里打一次。
 //
 // 3. **可注入工厂。** 全部 IO 走 deps，宿主机 npm run test:unit 能覆盖判定逻辑而永不真调
-//    launchctl —— 范式同 src/server/http.js 的 createHttpAuth。
+//    launchctl —— 范式同 app/src/server/http.js 的 createHttpAuth。
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -30,12 +30,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 
-import { writeOwnerOnlyFile } from '../src/files/file-security.js';
+import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
 import { renderTemplate, stripLeadingComment } from './render-plist.js';
 
-import { classifyRestartPattern, validateServiceEvents } from '../src/ops/service-events.js';
-import { CONFIG_FILE_NAME, readConfigFileValues } from '../src/ops/config-file.js';
-import { DEFAULT_PORT } from '../src/ops/env-schema.js';
+import { classifyRestartPattern, validateServiceEvents } from '../app/src/ops/service-events.js';
+import { CONFIG_FILE_NAME, readConfigFileValues } from '../app/src/ops/config-file.js';
+import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 import {
   DEFAULT_LABEL_PREFIX,
   SERVICE_UNIT_NAMES,
@@ -52,7 +52,7 @@ import {
   templateFor,
   unitFromLabel,
   validateManifest,
-} from '../src/ops/service-units.js';
+} from '../app/src/ops/service-units.js';
 
 export const STATUS_SCHEMA_VERSION = 1;
 
@@ -130,7 +130,7 @@ export function createServiceManager(deps = {}) {
       generatedAt: now(),
       setup: { envExists: envFileExists(), port: null, lanUrl: null },
       units: [],
-      // 明确 reason 而不是静默假成功 —— 同 src/ops/log-terminal.js:33-36 的立场。
+      // 明确 reason 而不是静默假成功 —— 同 app/src/ops/log-terminal.js:33-36 的立场。
       // 指路只能指向本仓真有的东西：非 macOS 的入口就是 headless `npm start`，
       // 保活方式（tmux / 自建 systemd unit / docker）由用户自己定，仓库不提供 unit。
       warnings: [`LaunchAgent 服务管理仅支持 macOS（当前平台：${platform}）。非 macOS 用 npm start 启动，保活方式自选，见 docs/deployment.md`],
@@ -301,7 +301,7 @@ export function createServiceManager(deps = {}) {
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? DEFAULT_PORT;
 
-    // 重启历史由 server 进程周期采样落盘（见 src/server/app.js 的 sampleServiceEvents）。
+    // 重启历史由 server 进程周期采样落盘（见 app/src/server/app.js 的 sampleServiceEvents）。
     // 这里只读不写：status 可能被菜单栏每 2s 调一次，写盘会打架。
     const events = validateServiceEvents(readEvents());
 
@@ -651,7 +651,7 @@ export function createServiceManager(deps = {}) {
   // `Could not find service`。而 guardControllable 只检查 plist **文件**存在（bootout 不删文件），
   // 所以护栏放行、直接撞上失败：菜单栏点「停止」再点「启动」必失败，CLI 同理。
   //
-  // 更糟的是 src/ops/doctor-checks.js 对 stopped 态给的修复建议恰恰就是这条 start 命令。
+  // 更糟的是 app/src/ops/doctor-checks.js 对 stopped 态给的修复建议恰恰就是这条 start 命令。
   //
   // 所以按 domain 里在不在分流：在 → kickstart（bootstrap 会报 already loaded）；
   // 不在 → bootstrap 把 plist 重新载入。两条路径都只在**我们自己前缀**下的 label 上跑
@@ -664,7 +664,7 @@ export function createServiceManager(deps = {}) {
     return !r || r.status !== 0 ? launchctlErr(r) : null;
   }
 
-  // 端口上的监听 pid 对不上 LaunchAgent 时禁止再 kickstart：否则第二个 server.js
+  // 端口上的监听 pid 对不上 LaunchAgent 时禁止再 kickstart：否则第二个 app/server.js
   // EADDRINUSE 退出，KeepAlive 空转，菜单还报成功。常见情况是终端里先开了 npm start。
   function serverPortConflict(unit) {
     if (unit !== 'server') return null;
@@ -802,7 +802,7 @@ export function createServiceManager(deps = {}) {
   }
 
   // **唯一会碰 HTTP 鉴权层的路径**，因此规矩最严：任何非 200 都不重试。
-  // src/server/http.js:94-105 对失败无条件计数 + app.js:309 让 loopback 也进限速
+  // app/src/server/http.js:94-105 对失败无条件计数 + app.js:309 让 loopback 也进限速
   // + rate-limiter 阈值 8 锁 15 分钟 ⇒ 一个会重试的健康检查能把机主连同手机一起关在门外。
   function health() {
     const env = readEnv() || {};
@@ -1035,11 +1035,11 @@ function realListAgentLabels(home) {
 
 // manifest 必须与 server / doctor 落在同一个数据目录。
 //
-// 坑：本文件是独立 CLI，**不走 server.js 的 loadRuntimeEnvironment**，所以只读 process.env
+// 坑：本文件是独立 CLI，**不走 app/server.js 的 loadRuntimeEnvironment**，所以只读 process.env
 // 会漏掉 .env 里的 CCM_DATA_DIR —— manifest 写进仓库 data/，而生产状态在
 // ~/Library/Application Support/… 下，两边永远对不上，adopt 完下次 status 又变回 adoptable。
 // 优先级与 dotenv 的「不覆盖已有 env」语义一致：shell > .env > 默认。空串按未设置处理
-// （同 src/ops/config.js 的 normalizeLoadedEnvironment 与 src/shared/data-dir.js:17）。
+// （同 app/src/ops/config.js 的 normalizeLoadedEnvironment 与 app/src/shared/data-dir.js:17）。
 export function resolveManifestPath(shellEnv = process.env, fileEnv = {}, root = ROOT) {
   const dir = shellEnv?.CCM_DATA_DIR || fileEnv?.CCM_DATA_DIR || join(root, 'data');
   return join(dir, 'service-install.json');

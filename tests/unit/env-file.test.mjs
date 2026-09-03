@@ -1,4 +1,4 @@
-// tests/unit/env-file.test.mjs —— src/ops/env-file.js（.env 的结构化读写）
+// tests/unit/env-file.test.mjs —— app/src/ops/env-file.js（.env 的结构化读写）
 //
 // serializeEnvValue 是最容易写错的一块：dotenv 会剥成对引号、双引号内展开 \n、裸值被行内 #
 // 截断。写错的后果不是「配置没生效」而是**server 起不来**。所以这里拿 dotenv 自己的 parser
@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { applyEnvChanges, isSerializableEnvValue, maskSecret, serializeEnvValue } from '../../src/ops/env-file.js';
+import { applyEnvChanges, isSerializableEnvValue, maskSecret, serializeEnvValue } from '../../app/src/ops/env-file.js';
 
 // ★ oracle 必须是**多行** .env，不能是单行。
 //
@@ -78,7 +78,7 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
   // 文件给出不同结果，与反引号那次同型、方向相反。个数无关：`'x\\'` 的第一个 `\` 被 `[^']` 吃掉，
   // 第二个与闭合引号组成 `\'` 照样命中转义分支。
   //
-  // 后果是 fail-open：被吞掉的 key 若是 CF_ACCESS_* 之一，src/auth/cf-access.js 的
+  // 后果是 fail-open：被吞掉的 key 若是 CF_ACCESS_* 之一，app/src/auth/cf-access.js 的
   // `enabled = !!(hostname && team && aud)` 会让公网 2FA 整层静默关闭。
   test('以反斜杠结尾 → 抛错，且错误信息说清为什么', () => {
     for (const v of ['C:\\Users\\you\\', 'https://ntfy.sh/a\\', 'x\\\\', '\\']) {
@@ -215,7 +215,7 @@ test.describe('applyEnvChanges —— 保结构改写', () => {
     assert.equal(dotenv.parse(out).MY_CUSTOM_THING, 'keepme');
   });
 
-  // null = 删除整行，不是写 `KEY=`。src/ops/config.js:22,39-43 启动时会删掉所有空串 key，
+  // null = 删除整行，不是写 `KEY=`。app/src/ops/config.js:22,39-43 启动时会删掉所有空串 key，
   // 留一行 `KEY=` 毫无意义，还会挡住从 shell export 同名变量。
   test('null → 整行删除，不留 KEY= 空行', () => {
     const out = applyEnvChanges(SAMPLE, { LOG_STDERR: null });

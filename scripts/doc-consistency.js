@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../src/shared/protocol.js';
+import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../app/src/shared/protocol.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -170,7 +170,7 @@ const CONTRACT_ANCHORS = Object.freeze([
   ['INBOUND_SOCKET_EVENTS', 'inbound', '入向 socket 事件'],
 ]);
 
-// 文档里的契约计数必须与 src/shared/protocol.js 一致。
+// 文档里的契约计数必须与 app/src/shared/protocol.js 一致。
 //
 // 【为什么加这条】两份清单的长度此前只活在散文里，靠 hard-rules 一句「散文数字若漂移以代码为准」
 // 兜底——而给数字写免责声明等于承认这条信息不可信。2026-08-15 实测：文档写「入向当前 40 个」，
@@ -218,7 +218,7 @@ function checkContractCounts({ rootDir, docFiles, contractCounts }) {
           kind,
           documented,
           actual,
-          message: `${rel}:${index + 1} 写 ${label} 当前 ${documented} 项，实际 ${actual} 项（真相源 src/shared/protocol.js）`,
+          message: `${rel}:${index + 1} 写 ${label} 当前 ${documented} 项，实际 ${actual} 项（真相源 app/src/shared/protocol.js）`,
         });
       }
     });

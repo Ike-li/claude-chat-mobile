@@ -17,7 +17,7 @@ const finish = () => {
 
 // ───────────────────────────── --unit ─────────────────────────────
 if (process.argv.includes('--unit')) {
-  const { buildWebStatusLine, gitStatus } = await import('../../../src/ops/statusline.js');
+  const { buildWebStatusLine, gitStatus } = await import('../../../app/src/ops/statusline.js');
 
   // U1 组装：model/ctx/cost/duration + cache 命中率（无 cwd → 无 git 段）
   const fakeAgent = {

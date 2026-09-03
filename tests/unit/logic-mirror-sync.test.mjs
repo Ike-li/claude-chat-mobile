@@ -3,7 +3,7 @@
 // 自 logic-ui-state.test.mjs 拆出（monolith 行数门 800，见 source-layout.test.mjs）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { armedTakeoverStep, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
+import { armedTakeoverStep, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../app/public/js/logic.js';
 
 // ── armedTakeoverStep：排队接管状态机（接管=等终端本轮完结再放行，纯 web 侧） ──
 // armed 期间只有三个出口：本轮完结自动放行(unlock-focus) / 等待中疑似中断自动完成接管(unlock-stale)

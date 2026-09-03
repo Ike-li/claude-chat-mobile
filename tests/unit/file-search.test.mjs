@@ -10,7 +10,7 @@ import {
   clearFileSearchCache,
   FILE_SEARCH_LIMIT,
   FILE_SEARCH_MAX_DEPTH,
-} from '../../src/files/file-search.js';
+} from '../../app/src/files/file-search.js';
 
 describe('matchFiles：纯匹配排序', () => {
   const paths = ['src/app.js', 'src/widgets/app-icon.svg', 'src/app/config.js', 'src/agent/agent.js', 'README.md'];

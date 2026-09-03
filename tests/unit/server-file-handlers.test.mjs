@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { registerFileSocketHandlers } from '../../src/server/socket-files.js';
-import { attributePath as realAttributePath } from '../../src/files/file-preview.js';
+import { registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
+import { attributePath as realAttributePath } from '../../app/src/files/file-preview.js';
 // R10 归属断言用真实 attributePath（纯函数、零 I/O）：手写 stub 曾把契约编错——它对 relPath 直接看
 // 前缀，而真实实现先 resolve(cwd, relPath)，于是测试与实现互相印证、恒绿。
 
@@ -99,13 +99,13 @@ test('git:diff 合法 path 透传', async () => {
   const { handlers } = register({
     readGitDiff: async (cwd, path, side) => {
       assert.equal(cwd, '/repo');
-      assert.equal(path, 'src/a.js');
+      assert.equal(path, 'app/src/a.js');
       assert.equal(side, 'staged');
       return { ok: true, path, side, patch: '+hi', binary: false, truncated: false, empty: false };
     },
   });
   let response;
-  await handlers.get('git:diff')({ path: 'src/a.js', side: 'staged' }, value => { response = value; });
+  await handlers.get('git:diff')({ path: 'app/src/a.js', side: 'staged' }, value => { response = value; });
   assert.equal(response.ok, true);
   assert.equal(response.patch, '+hi');
   assert.equal(response.side, 'staged');
@@ -132,13 +132,13 @@ test('files:search 合法透传 cwd/query/limit', async () => {
       assert.equal(cwd, '/repo');
       assert.equal(query, 'app');
       assert.equal(opts.limit, 5);
-      return ['src/app.js'];
+      return ['app/src/app.js'];
     },
   });
   let response;
   await handlers.get('files:search')({ query: 'app', limit: 5 }, value => { response = value; });
   assert.equal(response.ok, true);
-  assert.deepEqual(response.paths, ['src/app.js']);
+  assert.deepEqual(response.paths, ['app/src/app.js']);
 });
 
 test('files:search 无 ack 时忽略', async () => {
@@ -172,7 +172,7 @@ test('files:write 合法透传 cwd/relPath/content/baseHash，成功记 file_wri
   const { handlers, audits } = register({
     writeFileInScope: (cwd, relPath, content, scopeDirs, opts) => {
       assert.equal(cwd, '/repo');
-      assert.equal(relPath, 'src/a.js');
+      assert.equal(relPath, 'app/src/a.js');
       assert.equal(content, 'new content');
       assert.deepEqual(scopeDirs, ['/repo']);
       assert.equal(opts.baseHash, 'oldhash');
@@ -180,7 +180,7 @@ test('files:write 合法透传 cwd/relPath/content/baseHash，成功记 file_wri
     },
   });
   let response;
-  await handlers.get('files:write')({ relPath: 'src/a.js', content: 'new content', baseHash: 'oldhash' }, value => { response = value; });
+  await handlers.get('files:write')({ relPath: 'app/src/a.js', content: 'new content', baseHash: 'oldhash' }, value => { response = value; });
   assert.equal(response.ok, true);
   assert.equal(response.contentHash, 'newhash');
   assert.equal(audits.length, 1);

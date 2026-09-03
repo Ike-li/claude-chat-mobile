@@ -6,15 +6,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Script, createContext } from 'node:vm';
-import { createAppContext } from '../../public/js/app/context.js';
-import { createNotificationController } from '../../public/js/app/notifications.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createNotificationController } from '../../app/public/js/app/notifications.js';
 
 const HERE = import.meta.dirname;
-// sw.js 住在 public/ 根而不是 public/js/：SW 的默认 scope 就是脚本所在目录，放根目录才能控制整站。
+// sw.js 住在 app/public/ 根而不是 app/public/js/：SW 的默认 scope 就是脚本所在目录，放根目录才能控制整站。
 // 放 /js/ 下就得靠服务端发 Service-Worker-Allowed 头提权，而那个头会被 CDN 缓存吃掉（2026-07-27
 // 真机实测：Cloudflare 后面浏览器只看到 max scope '/js/'，注册直接失败）。少一个中间层依赖 = 少一个故障点。
-const swSrc = readFileSync(join(HERE, '..', '..', 'public', 'sw.js'), 'utf8');
-const cleanupSrc = readFileSync(join(HERE, '..', '..', 'public', 'js', 'sw-cleanup.js'), 'utf8');
+const swSrc = readFileSync(join(HERE, '..', '..', 'app', 'public', 'sw.js'), 'utf8');
+const cleanupSrc = readFileSync(join(HERE, '..', '..', 'app', 'public', 'js', 'sw-cleanup.js'), 'utf8');
 
 // ---- 辅助：在 mock 环境中执行脚本 ----
 function runInMock(scriptSrc, globals = {}) {

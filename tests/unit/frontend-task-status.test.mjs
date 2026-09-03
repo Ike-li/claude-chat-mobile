@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createTaskStatusController } from '../../public/js/app/task-status.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createTaskStatusController } from '../../app/public/js/app/task-status.js';
 
 test('task status controller ignores other instances and updates the current progress banner', () => {
   const hidden = new Set(['hidden']);

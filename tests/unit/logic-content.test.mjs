@@ -1,9 +1,9 @@
-// tests/unit/logic.test.mjs —— public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
+// tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
 // 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -75,7 +75,7 @@ test('formatPermInputDisplay: 空/缺省安全', () => {
 
 // UX-002：工具卡收起态标题「工具名 · inputSummary 截断」——扫读对象，不必逐张展开。
 test('formatToolCardTitle: 有摘要 → 工具名 · 摘要', () => {
-  assert.equal(formatToolCardTitle('read_file', 'public/js/app.js'), 'read_file · public/js/app.js');
+  assert.equal(formatToolCardTitle('read_file', 'app/public/js/app.js'), 'read_file · app/public/js/app.js');
   assert.equal(formatToolCardTitle('run_command', 'npm test'), 'run_command · npm test');
 });
 
@@ -102,8 +102,8 @@ test('formatToolCardTitle: maxLen=0 是显式值，夹到下限 8 而非回落�
 
 test('formatToolCardTitle: JSON 摘要取首个可读短字段（path/command 等）', () => {
   assert.equal(
-    formatToolCardTitle('Read', JSON.stringify({ file_path: 'src/a.js', offset: 1 })),
-    'Read · src/a.js',
+    formatToolCardTitle('Read', JSON.stringify({ file_path: 'app/src/a.js', offset: 1 })),
+    'Read · app/src/a.js',
   );
   assert.equal(
     formatToolCardTitle('Bash', JSON.stringify({ command: 'ls -la' })),

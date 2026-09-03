@@ -6,9 +6,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createConnectionBannerController } from '../../public/js/app/connection-banner.js';
-import { setLang } from '../../public/js/i18n.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createConnectionBannerController } from '../../app/public/js/app/connection-banner.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 // 桩 DOM：只用 className / textContent 字符串赋值（对齐项目既有 connDot.className 整串覆盖风格），
 // 桩就不必实现 classList，保持与 frontend-app-modules.test.mjs 的 RTT monitor 用例同款极简。
@@ -247,7 +247,7 @@ test('顶栏角标用的连接快照住在横幅控制器里：首连中不点�
 });
 
 test('app.js 不得再持有 everConnected / headerSocketOnline 顶层状态', () => {
-  const src = readFileSync(new URL('../../public/js/app.js', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../app/public/js/app.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /\blet everConnected\b/);
   assert.doesNotMatch(src, /\blet headerSocketOnline\b/);
   assert.match(src, /connBanner\.isConnected\(\)/);

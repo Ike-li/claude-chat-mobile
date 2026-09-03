@@ -2,11 +2,11 @@
 //
 // 2026-07-30：本文件曾覆盖 findBgLocksForSession / shouldReleaseBgLock / releaseBgLocksForSession /
 // prepareSessionForWebResume / parseAgentsJson / prepareResumeInParallel 一整套「web resume 前
-// SIGTERM 掉占用者」的自动释放逻辑，随该逻辑一并删除（理由见 src/ops/cli-bg-session-lock.js 头注释）。
+// SIGTERM 掉占用者」的自动释放逻辑，随该逻辑一并删除（理由见 app/src/ops/cli-bg-session-lock.js 头注释）。
 // 「谁算占用者」的判据现在归 session-registry.js 的 findBlockingLiveAgent，测试在 session-registry.test.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatSessionLockError } from '../../src/ops/cli-bg-session-lock.js';
+import { formatSessionLockError } from '../../app/src/ops/cli-bg-session-lock.js';
 
 test.describe('formatSessionLockError', () => {
   test('background / interactive 文案可区分，且不含「历史被清理」', () => {

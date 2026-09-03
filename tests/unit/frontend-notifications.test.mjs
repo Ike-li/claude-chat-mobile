@@ -1,12 +1,12 @@
-// 推送通知控制器（public/js/app/notifications.js）的行为域单测。
+// 推送通知控制器（app/public/js/app/notifications.js）的行为域单测。
 // 从 frontend-app-modules.test.mjs 分出来：按行为域拆分是硬门禁（见 tests/unit/source-layout.test.mjs），
 // 通知这一域已自成一块——订阅 POST 体、前台通知门槛、铃铛显隐与去向。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createNotificationController } from '../../public/js/app/notifications.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createNotificationController } from '../../app/public/js/app/notifications.js';
 
 test('notification controller only raises foreground notifications when explicitly forced', () => {
   const raised = [];
@@ -91,7 +91,7 @@ test('notification controller strips sensitive body when content preview is off'
 });
 
 // ⑧ 推送内容预览：subscribe() 把 storage 里的本地偏好一并 POST 给服务端（per-device prefs.preview），
-// 服务端按它决定这条订阅该收 body 还是 previewBody（见 src/ops/notify-channels.js pushNotify）。
+// 服务端按它决定这条订阅该收 body 还是 previewBody（见 app/src/ops/notify-channels.js pushNotify）。
 test('notification controller subscribe() includes prefs.preview from storage in the POST body', async () => {
   const fetchCalls = [];
   const fakeSubscription = {

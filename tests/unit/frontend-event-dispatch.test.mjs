@@ -5,8 +5,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAppContext } from '../../public/js/app/context.js';
-import { createAgentEventDispatcher } from '../../public/js/app/event-dispatch.js';
+import { createAppContext } from '../../app/public/js/app/context.js';
+import { createAgentEventDispatcher } from '../../app/public/js/app/event-dispatch.js';
 
 test('agent event dispatcher keeps instance, epoch and sequence boundaries in shared state', () => {
   const handled = [];
@@ -162,7 +162,7 @@ test('agent event dispatcher isolates handler exceptions so the chain keeps flow
 
 // handler 除 payload 外还要拿到整个信封 —— 消息流时间戳要用信封上的 ts。
 // 【为什么不能用客户端 Date.now() 代替】sync:since 补发是 { ...envelope, replay: true } 原样转发
-// 环形缓冲里的旧信封（src/server/app.js），ts 是事件真实发生时刻。离开三小时后切回，那整批回放
+// 环形缓冲里的旧信封（app/src/server/app.js），ts 是事件真实发生时刻。离开三小时后切回，那整批回放
 // 若按 Date.now() 记，跨天分隔不出现、HH:mm 全错；而刷新页面后同一批消息改从磁盘 timestamp 渲染，
 // 时间当场变了。这不是毫秒级偏差，是分钟到小时级的自相矛盾。
 test('dispatch 把完整信封作为第二参交给 handler，回放批次带的是事件原始时刻', () => {

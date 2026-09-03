@@ -430,10 +430,10 @@ export function createStatusScenarios(getContext) {
     {
       // 修复回归（点停止顿一下直接跳主页）：模拟"中断失败 → agent.js settleForce() 强杀子进程 →
       // onExit → 该实例从 agents Map 删除、且无同 cwd 存活实例可回退 → viewingInstanceId 广播为 null"
-      // 这条链路的终态广播——不需要真的走完整 SDK abort 链路（那是 src/agent/agent.js
+      // 这条链路的终态广播——不需要真的走完整 SDK abort 链路（那是 app/src/agent/agent.js
       // interrupt()/settleForce() 的既有职责，已有单测覆盖），只需要构造出"正在查看的实例从
       // instances 列表消失 + viewingInstanceId 变 null"这个广播形态，供前端 wasViewingInstanceDestroyed
-      // + resolveEmptySurface（public/js/logic.js）验证：不静默 showDashboard()，而是渲染
+      // + resolveEmptySurface（app/public/js/logic.js）验证：不静默 showDashboard()，而是渲染
       // "会话已中断"提示。先 emit 一条「已中断」系统消息，对齐真实 settleForce() 的第一步。
       command: 'test:instance-destroyed',
       run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId }) => {
@@ -463,7 +463,7 @@ export function createStatusScenarios(getContext) {
       //（纯内存态），重连后首条 instances 广播形态（实例从列表消失 + viewing 变 null）与上面
       // test:instance-destroyed 完全同构——唯一区分信号是广播恒带的 service.startedAt（进程级常量，
       // 重启必变）。本场景构造这个终态：清空全部实例 + 拨 startedAt + 带 service 的 instances 广播，
-      // 供前端 detectServerRestart（public/js/logic.js）验证：显示「服务已重启」提示 +「继续此会话」
+      // 供前端 detectServerRestart（app/public/js/logic.js）验证：显示「服务已重启」提示 +「继续此会话」
       // 一键重开（走既有 session:switch 打开路径），而非误导性的「停止操作未能正常结束」。
       command: 'test:server-restart',
       run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload }) => {

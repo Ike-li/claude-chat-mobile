@@ -15,12 +15,12 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, 
 import { join, resolve, sep } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { getProjectDir } from '../../src/sessions/history.js';
+import { getProjectDir } from '../../app/src/sessions/history.js';
 import { waitForServerReady } from './_spawn-server.mjs';
 
 const PROJECTS_ROOT = join(homedir(), '.claude', 'projects'); // 真实 CLI transcript 根（SDK deleteSession 与 history 同源）
 // 显式测试专用 token（客户端握手带上它）：不能用 delete AUTH_TOKEN 假装无鉴权——dotenv 在 import
-// server.js 时会从 .env 重新注入真实 AUTH_TOKEN，client 不带 token 就握手失败（rate-limit.test.mjs 同款）。
+// app/server.js 时会从 .env 重新注入真实 AUTH_TOKEN，client 不带 token 就握手失败（rate-limit.test.mjs 同款）。
 const TOKEN = 'session-delete-test-token';
 let port, dataDir, workDir, projectDir, httpServer, io;
 
@@ -52,8 +52,8 @@ function writeFakeSession(sessionId, { quiet = true } = {}) {
 
 async function startServer() {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-session-delete-test-'));
-  // realpathSync 与 server.js preflight 内部对 WORK_DIR 的归一化对齐——否则 macOS 的 /var→/private/var
-  // 符号链接会让 getProjectDir(workDir) 算出的目录名与 server.js 实际读写的目录名不一致。
+  // realpathSync 与 app/server.js preflight 内部对 WORK_DIR 的归一化对齐——否则 macOS 的 /var→/private/var
+  // 符号链接会让 getProjectDir(workDir) 算出的目录名与 app/server.js 实际读写的目录名不一致。
   workDir = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-session-delete-wd-')));
   projectDir = join(PROJECTS_ROOT, getProjectDir(workDir));
 
@@ -66,13 +66,13 @@ async function startServer() {
   process.env.AUTH_TOKEN = TOKEN; // 显式设，dotenv config 时已存在→不覆盖，server 用本值
   process.env.SESSION_DELETE_QUIET_MS = '1000'; // 1s：测试用短阈值，避免真等 5 分钟
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, TOKEN);
 }
@@ -163,7 +163,7 @@ test.describe(
     });
 
     test('删除后写 audit_record（不含被删内容）', async () => {
-      const AU = await import('../../src/ops/audit.js');
+      const AU = await import('../../app/src/ops/audit.js');
       const l2Rows = AU.listRecent({ limit: 100, action: 'session_delete_l2' });
       const l2 = l2Rows.find(r => r.target === '22222222-2222-4222-8222-222222222222');
       assert.ok(l2);

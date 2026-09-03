@@ -1,9 +1,9 @@
-// tests/unit/i18n.test.mjs —— public/js/i18n.js 运行时词典（零构建步骤，zh 原文即 key）。
+// tests/unit/i18n.test.mjs —— app/public/js/i18n.js 运行时词典（零构建步骤，zh 原文即 key）。
 // 核心契约：zh locale 下 t() 恒等——不改变任何既有断言中文文案的测试；en locale 下查字典，
 // 未收录 key 静默回落中文（渐进式覆盖，不是"未翻译就报错"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../public/js/i18n.js';
+import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
 
 test.afterEach(() => setLang('zh')); // 每个用例后复位，测试间不串扰全局 currentLang
 
@@ -131,7 +131,7 @@ test.describe('writeLangPref', () => {
 test.describe('登录帮助把 AUTH_TOKEN 指到现行配置文件', () => {
   test('index.html 不再让用户去 .env 找令牌', async () => {
     const { readFileSync } = await import('node:fs');
-    const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../../app/public/index.html', import.meta.url), 'utf8');
     assert.match(html, /ccm\.config\.json/);
     assert.doesNotMatch(html, /服务器 <code[^>]*>\.env<\/code>/);
     assert.doesNotMatch(html, /改代码\/\.env/);

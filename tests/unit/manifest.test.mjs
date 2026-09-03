@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HERE = import.meta.dirname;
-const PUB = join(HERE, '..', '..', 'public');
+const PUB = join(HERE, '..', '..', 'app', 'public');
 const manifest = JSON.parse(readFileSync(join(PUB, 'manifest.webmanifest'), 'utf8'));
 const html = readFileSync(join(PUB, 'index.html'), 'utf8');
 

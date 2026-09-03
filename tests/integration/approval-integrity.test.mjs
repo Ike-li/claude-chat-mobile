@@ -11,7 +11,7 @@
 // ②两条用例分处两个 WORK_DIRS 白名单目录（dirA/dirB）、各自独立 AgentSession——同一 cwd 内 Write 一旦
 //   被批准，SDK 会隐含下发 setMode→acceptEdits suggestion（resolvePermission 对 modeUpdate 无条件应用，
 //   见 agent.js 注释），导致同会话后续 Write 调用直接跳过 canUseTool；若两个用例共用一个会话，第二个
-//   永远等不到 permission_request。用两个 cwd 而非重启 server：server.js 用动态 import()，同进程二次
+//   永远等不到 permission_request。用两个 cwd 而非重启 server：app/server.js 用动态 import()，同进程二次
 //   import 会命中 ESM 模块缓存、不会真正重新执行 preflight/listen（实测验证过，故不用「重启」方案）。
 //   ③user:message 的 payload.cwd 只在「当前无可路由实例」时才生效（routeInstance(undefined) 优先回落到
 //   viewingInstanceId，实测第一版直接在第二条消息带 cwd:dirB 仍复用了第一条消息留下的 dirA 实例）——
@@ -30,7 +30,7 @@ async function startServer(authToken = 'nfr17-test-token') {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-approval-integrity-test-'));
   dirA = join(dataDir, 'proj-a'); mkdirSync(dirA);
   dirB = join(dataDir, 'proj-b'); mkdirSync(dirB);
-  dirA = realpathSync(dirA); dirB = realpathSync(dirB); // 与 server.js 内部 realpathSync 归一化的路径对齐
+  dirA = realpathSync(dirA); dirB = realpathSync(dirB); // 与 app/server.js 内部 realpathSync 归一化的路径对齐
 
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'WORK_DIRS', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
@@ -41,13 +41,13 @@ async function startServer(authToken = 'nfr17-test-token') {
   process.env.WORK_DIRS = dirB;
   process.env.AUTH_TOKEN = authToken;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, authToken);
 }

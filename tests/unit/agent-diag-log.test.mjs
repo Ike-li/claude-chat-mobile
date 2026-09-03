@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import * as diagLog from '../../src/agent/diag-log.js';
+import * as diagLog from '../../app/src/agent/diag-log.js';
 
 test.describe('_raceControlRequest → diag-log race_settle（4 个共享通道调用点）', () => {
   test('set_model 成功 → control/race_settle(ok:true)', async () => {
@@ -154,7 +154,7 @@ test.describe('interrupt() 整体结果 → diag-log interrupt/settled', () => {
 // 契约反转（2026-08-01）：fetchUsage 此前自己写 statusline/rate_reason_change，但 agent 层看不到
 // 下游的快照回落结果，只能以「这一拍 RPC 成不成功」为准——单拍超时即翻转、下一拍成功再翻回，
 // 一次瞬时抖动被放大成两条醒目日志，而那一刻状态栏上的额度其实一直在（rateFromSnapshot 垫底）。
-// 判定与写入现已【整体上移】到 src/ops/statusline.js#resolveRateReason / recordRateReasonIfChanged，
+// 判定与写入现已【整体上移】到 app/src/ops/statusline.js#resolveRateReason / recordRateReasonIfChanged，
 // 那里能看到 p.rate 的最终值。本层只留结构化事实，不写任何 diag。别把判定挪回来。
 test.describe('fetchUsage() 只留结构化事实，自己不写 diag（判定已上移 statusline 层）', () => {
   const statuslineEntries = s => diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');

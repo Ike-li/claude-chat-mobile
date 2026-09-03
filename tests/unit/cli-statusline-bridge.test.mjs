@@ -28,7 +28,7 @@ import {
   selectStatusSource,
   snapshotFilePath,
   writeCliStatusSnapshot,
-} from '../../src/ops/cli-statusline-bridge.js';
+} from '../../app/src/ops/cli-statusline-bridge.js';
 
 test('normalizeCliStatusInput：把 CLI statusline JSON 规范化为版本化白名单快照', () => {
   const capturedAt = 1_784_102_400_000;
@@ -379,7 +379,7 @@ test('writeCliStatusSnapshot：rename 前失败也清理唯一 tmp，不留下�
 
 test('writeCliStatusSnapshot：多进程同 session 争写后仍只有一个完整快照', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-statusline-concurrent-'));
-  const moduleUrl = pathToFileURL(join(process.cwd(), 'src', 'ops', 'cli-statusline-bridge.js')).href;
+  const moduleUrl = pathToFileURL(join(process.cwd(), 'app', 'src', 'ops', 'cli-statusline-bridge.js')).href;
   const worker = `
     import { writeCliStatusSnapshot } from ${JSON.stringify(moduleUrl)};
     const dir = process.argv[1];

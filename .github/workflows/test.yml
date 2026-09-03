@@ -58,7 +58,7 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
-      # 集成测试是【唯一执行真实 src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
+      # 集成测试是【唯一执行真实 app/src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
       # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
       # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的
       # 两个文件在 CI 零执行。2026-08-02 改：CLAUDE_BIN 指向 stub 让 preflight 过关，接线类测试
@@ -68,7 +68,7 @@ jobs:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
       # ★ 覆盖率门槛的【唯一】自动执行点。doctor 的 D11 默认跳过它（装机预检不该让新用户等一分钟
       #   单测），而 npm run check 的脚本链里从来没有它 —— 两件事叠起来就是门槛一个执行点都不剩。
-      #   排在 integration 之后：那是唯一执行真实 src/server/app.js 的一层，它红了比覆盖率跌了更该先看见。
+      #   排在 integration 之后：那是唯一执行真实 app/src/server/app.js 的一层，它红了比覆盖率跌了更该先看见。
       #   只在 24 上跑：门槛是全仓一个数，两个 node 版本各算一遍只是把同一批单测再跑 70 秒。
       - run: node tests/gates/coverage-check.js
         if: matrix.node == '24'

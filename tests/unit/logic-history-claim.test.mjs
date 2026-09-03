@@ -5,7 +5,7 @@
 // 判据必须与 app.js 里 handle.user_message 的 matchedBubble 保持同源，见被测函数注释。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findHistoryClaimForPending } from '../../public/js/logic.js';
+import { findHistoryClaimForPending } from '../../app/public/js/logic.js';
 
 const userMsg = (content, extra = {}) => ({ role: 'user', content, uuid: `u-${content}`, ...extra });
 

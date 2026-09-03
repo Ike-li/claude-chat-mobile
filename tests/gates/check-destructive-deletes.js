@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tests/gates/check-destructive-deletes.js —— 测试里的递归删除，目标必须是一次性目录
 //
-// 【为什么有这条闸】2026-08-02 出过一次真实数据丢失：变异检查把 src/sessions/history.js 的
+// 【为什么有这条闸】2026-08-02 出过一次真实数据丢失：变异检查把 app/src/sessions/history.js 的
 // getProjectDir 改成恒返回 ''，而 tests/unit/history-list.test.mjs 与
 // tests/integration/session-delete.test.mjs 都在做
 //     rmSync(join(<真实根>, getProjectDir(cwd)), { recursive: true, force: true })
@@ -23,8 +23,8 @@ import { maskCodePositions } from './mutate.js';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const TEST_DIRS = ['tests'];
-const SRC_DIRS = ['src', 'scripts'];
-const SRC_FILES = ['server.js'];
+const SRC_DIRS = ['app/src', 'scripts'];
+const SRC_FILES = ['app/server.js'];
 const SAFE_SOURCE = /\bmkdtemp(Sync)?\b|\btmpdir\s*\(/;
 // ★ 两条规则用【两种】标记，不能共用一个。
 // 第一版共用 safe-rm，结果为「单文件删除、目录段算出来」写的豁免，把同一行改成

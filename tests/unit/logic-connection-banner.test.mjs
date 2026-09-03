@@ -11,8 +11,8 @@ import {
   CONN_BANNER_DISCONNECT_DELAY_MS,
   CONN_BANNER_RETRY_DELAY_MS,
   CONN_BANNER_RECONNECTED_LINGER_MS,
-} from '../../public/js/logic.js';
-import { setLang } from '../../public/js/i18n.js';
+} from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 // ---- 阈值常量：接线层与测试共用同一份，别在两处各写一个魔数 ----
 

@@ -24,7 +24,7 @@ export const SPAWN_ENV_BLOCKLIST = Object.freeze([
  * 从继承环境里摘掉不该带进被测实例的键。
  *
  * 删除而不是置空串：loadRuntimeEnvironment 确实会把空串当「未设置」删掉，但在它跑到之前
- * 任何一个消费者若先读到空串，语义就分叉了（见 src/ops/config.js 的 SH-001 注释）。
+ * 任何一个消费者若先读到空串，语义就分叉了（见 app/src/ops/config.js 的 SH-001 注释）。
  * 调用方的 envOverrides 应排在本函数结果【之后】展开——摘的是「继承来的」，不是「显式要的」，
  * cf-access-gate 那批用例正要显式构造 CF 场景。
  */

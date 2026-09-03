@@ -25,7 +25,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readConfigFileValues } from '../src/ops/config-file.js';
+import { readConfigFileValues } from '../app/src/ops/config-file.js';
 
 import {
   HOOK_EVENT_LIST,
@@ -39,8 +39,8 @@ import {
   readHooksManifest,
   resolveHookDirs,
   scanHookEvents,
-} from '../src/ops/cli-hooks-bridge.js';
-import { claudeHome, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
+} from '../app/src/ops/cli-hooks-bridge.js';
+import { claudeHome, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RUNNER = join(ROOT, 'scripts', 'hooks-bridge.js');
@@ -48,7 +48,7 @@ const VERIFY_FILE_TIMEOUT_MS = 5000;
 const VERIFY_ACK_TIMEOUT_MS = 3000;
 const VERIFY_POLL_MS = 50;
 
-// 路径与安装态判定全部复用 src/ops/cli-hooks-bridge.js——server 侧（启动日志 / UI 按钮）也要判
+// 路径与安装态判定全部复用 app/src/ops/cli-hooks-bridge.js——server 侧（启动日志 / UI 按钮）也要判
 // 同一件事，两处各写一份迟早分叉。
 const pathsForHome = hooksPathsForHome;
 
@@ -239,8 +239,8 @@ function sleepSync(ms) {
 // 知道 AUTH_TOKEN，也就不必去读配置里的密钥（这一点与旧的不带 token 打 /health 相同）。
 //
 // 两条理由各自都足以否决 `fetch('/health')`：
-//  ① 限速：HTTP 鉴权与 socket 握手共用同一个桶（src/server/http.js 的 createHttpAuth 与
-//     src/server/app.js 的 io.use 共享 rlStates）。一次不带 token 的请求就是一次货真价实的
+//  ① 限速：HTTP 鉴权与 socket 握手共用同一个桶（app/src/server/http.js 的 createHttpAuth 与
+//     app/src/server/app.js 的 io.use 共享 rlStates）。一次不带 token 的请求就是一次货真价实的
 //     鉴权失败，会给来源上退避锁、连累机主浏览器的 socket 握手。scripts/service.js 的纪律 2
 //     早已写明并规避这个坑（探活只用 launchctl + 纯 TCP），这里是同一条纪律的补齐。
 //  ② 鲁棒性：HTTP 探活要求 server 的**事件循环有空**才会回响应，于是「server 在跑但正忙」

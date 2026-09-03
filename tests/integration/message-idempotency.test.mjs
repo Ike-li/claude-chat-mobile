@@ -14,7 +14,7 @@ import { waitForServerReady } from './_spawn-server.mjs';
 let port, dataDir, httpServer, io;
 
 // 不能靠 delete AUTH_TOKEN 假装"无鉴权"——机主本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
-// server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
+// app/server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
 // 致测试客户端未带正确 token 被拒连接（P1-4 aborted-state.test.mjs 已踩过、这里应直接复用教训）。
 async function startServer(authToken = 'msg-idempotency-test-token') {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-msg-idempotency-test-'));
@@ -26,13 +26,13 @@ async function startServer(authToken = 'msg-idempotency-test-token') {
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken;
 
-  const serverModule = await import('../../server.js');
+  const serverModule = await import('../../app/server.js');
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
 
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
-  const cfAccess = await import('../../src/auth/cf-access.js');
+  const cfAccess = await import('../../app/src/auth/cf-access.js');
   cfAccess.initCfAccess();
   await waitForServerReady(port, authToken);
 }

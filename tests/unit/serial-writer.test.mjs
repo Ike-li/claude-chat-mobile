@@ -2,7 +2,7 @@
 // 覆盖：串行不并发 · 在飞期间多次请求合并成一个尾随写 · drain 排空 · fence 作废在飞写（shutdown 同步 flush 权威）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSerialWriter } from '../../src/shared/serial-writer.js';
+import { createSerialWriter } from '../../app/src/shared/serial-writer.js';
 
 const delay = (ms = 5) => new Promise(r => setTimeout(r, ms));
 function deferred() { let resolve; const promise = new Promise(r => (resolve = r)); return { promise, resolve }; }

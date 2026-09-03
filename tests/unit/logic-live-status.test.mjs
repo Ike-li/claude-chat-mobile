@@ -14,7 +14,7 @@ import {
   LIVE_STALE_HINT_SEC,
   LIVE_STALE_WARN_SEC,
   resolveLiveWaitPhase,
-} from '../../public/js/logic.js';
+} from '../../app/public/js/logic.js';
 
 test('SPINNER_VERBS: 非空冻结词表，含 CLI 同款动词', () => {
   assert.ok(Array.isArray(SPINNER_VERBS) && SPINNER_VERBS.length > 50);

@@ -6,12 +6,12 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createHooksInbox } from '../../src/server/hooks-inbox.js';
+import { createHooksInbox } from '../../app/src/server/hooks-inbox.js';
 import {
   normalizeCliHookInput,
   writeCliHookEvent,
   readHookVerifyAck,
-} from '../../src/ops/cli-hooks-bridge.js';
+} from '../../app/src/ops/cli-hooks-bridge.js';
 
 const SID = 'sess-inbox';
 const CWD = '/Users/you/code/demo';

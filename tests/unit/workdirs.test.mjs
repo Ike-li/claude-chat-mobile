@@ -10,7 +10,7 @@ import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
-} from '../../src/sessions/workdirs.js';
+} from '../../app/src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
 test.describe('normalizeWorkdirEntries', () => {
@@ -294,7 +294,7 @@ test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
     const zh = readFileSync(join(root, 'docs/getting-started.md'), 'utf8');
     const en = readFileSync(join(root, 'docs/getting-started.en.md'), 'utf8');
-    const schema = readFileSync(join(root, 'src/ops/env-schema.js'), 'utf8');
+    const schema = readFileSync(join(root, 'app/src/ops/env-schema.js'), 'utf8');
     assert.doesNotMatch(zh, /优先级低于 `WORKDIRS`/);
     assert.doesNotMatch(en, /rank below `WORKDIRS`/);
     assert.doesNotMatch(schema, /优先级高于 WORK_DIRS_FILE 与 WORK_DIRS/);

@@ -13,7 +13,7 @@ test.describe('approval-store.js 单元测试', () => {
   test.before(async () => {
     TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-approval-store-test-'));
     process.env.CCM_APPROVAL_STORE_FILE = join(TMP_DIR, 'approval-requests.json');
-    AS = await import('../../src/agent/approval-store.js');
+    AS = await import('../../app/src/agent/approval-store.js');
   });
 
   test.after(() => {
@@ -95,7 +95,7 @@ test.describe('approval-store.js 单元测试', () => {
     const isoFile = join(isoDir, 'approval-requests.json');
     const prevFile = process.env.CCM_APPROVAL_STORE_FILE;
     process.env.CCM_APPROVAL_STORE_FILE = isoFile;
-    const iso = await import(`../../src/agent/approval-store.js?t=purge-iso`); // 缓存穿透：独立模块实例，不受其他测试共享状态影响
+    const iso = await import(`../../app/src/agent/approval-store.js?t=purge-iso`); // 缓存穿透：独立模块实例，不受其他测试共享状态影响
 
     iso.recordCreated({ reqId: 'a', sessionId: 's', tool: 'Bash', args: {}, cwd: '/x', fingerprint: 'f', createdAt: 1, expiresAt: 2 });
     iso.recordDecided('a', { status: 'deny', decidedBy: 'user', decidedAt: 100 });
@@ -120,7 +120,7 @@ test.describe('approval-store.js 单元测试', () => {
     writeFileSync(badFile, '{not valid json');
     const prevFile = process.env.CCM_APPROVAL_STORE_FILE;
     process.env.CCM_APPROVAL_STORE_FILE = badFile;
-    const fresh = await import(`../../src/agent/approval-store.js?t=badjson`); // 缓存穿透强制重新求值模块顶层 load()
+    const fresh = await import(`../../app/src/agent/approval-store.js?t=badjson`); // 缓存穿透强制重新求值模块顶层 load()
     assert.deepEqual(fresh.getAll(), []);
     process.env.CCM_APPROVAL_STORE_FILE = prevFile;
     rmSync(badDir, { recursive: true, force: true });
@@ -138,7 +138,7 @@ test('recordDecided 落到仍 pending 的那条，不改写同 reqId 的历史�
   const isoDir = mkdtempSync(join(tmpdir(), 'ccm-approval-store-dup-iso-'));
   const prevFile = process.env.CCM_APPROVAL_STORE_FILE;
   process.env.CCM_APPROVAL_STORE_FILE = join(isoDir, 'approval-requests.json');
-  const iso = await import('../../src/agent/approval-store.js?t=dup-reqid-iso');
+  const iso = await import('../../app/src/agent/approval-store.js?t=dup-reqid-iso');
   try {
     const reqId = 'dup-reqid';
     const base = { reqId, sessionId: 's1', tool: 'Bash', args: { command: 'ls' }, cwd: '/tmp/p', fingerprint: 'fp', createdAt: 1, expiresAt: 9_999_999_999_999 };

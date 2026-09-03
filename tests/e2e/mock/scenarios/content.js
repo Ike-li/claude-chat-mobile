@@ -140,7 +140,7 @@ export function createContentScenarios(getContext) {
     },
     {
       // 历史里的 API Error 差异化渲染。走 history_append（前端 onHistoryAppend → renderHistoryBubbles，
-      // 与刷新后 loadHistory 同一渲染器），字段形态复刻 src/sessions/history.js 真实产出：
+      // 与刷新后 loadHistory 同一渲染器），字段形态复刻 app/src/sessions/history.js 真实产出：
       // isApiErrorMessage/apiErrorStatus/apiError 只挂文本条。apiErrorStatus 有 null 的真形态
       // （连接错误无 HTTP 响应），这里两种都给。
       command: 'test:history-apierror',
@@ -484,7 +484,7 @@ export function createContentScenarios(getContext) {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'tool_use', payload: {
             toolUseId: 't_sa_read', name: 'Read',
-            inputSummary: JSON.stringify({ file_path: 'src/auth.js' }),
+            inputSummary: JSON.stringify({ file_path: 'app/src/auth.js' }),
             parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
           }
         });
@@ -620,7 +620,7 @@ export function createContentScenarios(getContext) {
     },
     {
       // P0-TS5：信封 ts 保真。事件带的是 26 小时前的时刻（模拟 sync:since 从环形缓冲补发离开期间
-      // 攒下的事件——src/server/app.js 是 { ...envelope, replay:true } 原样转发，ts 是事件真实发生
+      // 攒下的事件——app/src/server/app.js 是 { ...envelope, replay:true } 原样转发，ts 是事件真实发生
       // 时刻而非补发时刻）。客户端若拿 Date.now() 顶替信封 ts，日期行会显示「今天」；正确实现显示
       // 「昨天」。没有这条，「传信封 ts」这个决策在 E2E 层结构性无法失败——mock 其余 replay 事件的
       // ts 就是 Date.now()，两种实现渲染结果完全相同。
@@ -735,7 +735,7 @@ export function createContentScenarios(getContext) {
           type: 'thinking_delta', payload: { messageId: 'msg_long_1', text: '<thinking>Starting a long-running analysis task...</thinking>' }
         });
         // ★ 回合号必须在【进入本轮时】快照，不能等 delay 之后再取：新的 test: 命令会在拦截处把
-        // turnSeq 自增并把 aborted 清回 false（见 server.js），若那条命令恰好落在下面这段 delay 里，
+        // turnSeq 自增并把 aborted 清回 false（见 app/server.js），若那条命令恰好落在下面这段 delay 里，
         // 醒来读到的就是【新】回合号，于是 `turnSeq !== myTurn` 恒为 false、aborted 也刚被清掉——
         // 两条退出路径同时失效，本循环跑满 16s 并把迟到事件泼进后续 spec。
         const myTurn = activeInst.turnSeq;
@@ -748,7 +748,7 @@ export function createContentScenarios(getContext) {
           // 之后的用例会收到本轮迟到事件）。检测到中断即停：不再发 delta、不发终态 result（interrupt 已发 system）。
           if (activeInst.aborted) { console.log('[mock] stream-long aborted by interrupt'); return; }
           // WS-008b：单靠 aborted 会被「中断后立刻发下一条」漏过——新命令进来时会把 aborted 清回 false
-          // （见 server.js 的 test: 拦截处），而本循环那时还睡在 delay 里，醒来就当作没被中断过继续跑满。
+          // （见 app/server.js 的 test: 拦截处），而本循环那时还睡在 delay 里，醒来就当作没被中断过继续跑满。
           // 回合号是自己那一轮的身份证：换了轮次就说明这个循环已经过气，必须立刻收摊。
           if (activeInst.turnSeq !== myTurn) { console.log('[mock] stream-long 已被新回合取代，停止续发'); return; }
           socket.emit('agent:event', {
@@ -875,5 +875,5 @@ export function createContentScenarios(getContext) {
   ];
 }
 
-// 与 server.js MOCK_ATTACH_PNG 字节数一致（1×1 PNG fixture 的解码长度）；仅用于 meta.size 展示，无行为语义。
+// 与 app/server.js MOCK_ATTACH_PNG 字节数一致（1×1 PNG fixture 的解码长度）；仅用于 meta.size 展示，无行为语义。
 const MOCK_PNG_SIZE = 70;

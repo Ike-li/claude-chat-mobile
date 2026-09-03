@@ -12,8 +12,8 @@
 //
 // ## 三条纪律
 //
-// 1. **判定全在 src/ops**（env-schema 的校验、config-file 的类型归一）。本文件只做参数解析、
-//    IO 与呈现 —— 同 scripts/service.js ↔ src/ops/service-units.js 的分工。CLI 若自带一套判据，
+// 1. **判定全在 app/src/ops**（env-schema 的校验、config-file 的类型归一）。本文件只做参数解析、
+//    IO 与呈现 —— 同 scripts/service.js ↔ app/src/ops/service-units.js 的分工。CLI 若自带一套判据，
 //    「面板能存进去的值 CLI 存不进去」这类分叉是迟早的事。
 //
 // 2. **CLI 不是配置文件的特权通道。** 写入必须过 validateEnvChanges，挡住面板的东西照样挡住它。
@@ -26,7 +26,7 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync, realpat
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { writeOwnerOnlyFile } from '../src/files/file-security.js';
+import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
 import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
@@ -38,10 +38,10 @@ import {
   readConfigFileValues,
   reloadKindOf,
   structuredToStringValues,
-} from '../src/ops/config-file.js';
-import { isSerializableEnvValue } from '../src/ops/env-file.js';
-import { resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
-import { buildEnvView, ENV_SCHEMA, validateEnvChanges } from '../src/ops/env-schema.js';
+} from '../app/src/ops/config-file.js';
+import { isSerializableEnvValue } from '../app/src/ops/env-file.js';
+import { resolveWorkdirsFilePath } from '../app/src/sessions/workdirs.js';
+import { buildEnvView, ENV_SCHEMA, validateEnvChanges } from '../app/src/ops/env-schema.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 

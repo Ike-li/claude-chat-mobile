@@ -1,7 +1,7 @@
 // scripts/device.js —— CLI 工具：管理待确认和受信任的设备指纹。
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuntimeEnvironment } from '../src/ops/config.js';
+import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -11,8 +11,8 @@ loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
 // devices.js 在模块初始化时锚定数据路径，必须先加载 .env 再动态导入。
 // 信任表一律经 getTrustedDeviceIds 读，不在这里自己 join 路径：devices.js 除 CCM_DATA_DIR 外
 // 还支持 CCM_*_DEVICES_FILE 文件级重定向，本文件自己算的话，list 与 approve 会认不同的源。
-const { getPendingDevices, getTrustedDeviceIds, approveDevice, denyDevice } = await import('../src/auth/devices.js');
-const { resolveDataDir } = await import('../src/shared/data-dir.js');
+const { getPendingDevices, getTrustedDeviceIds, approveDevice, denyDevice } = await import('../app/src/auth/devices.js');
+const { resolveDataDir } = await import('../app/src/shared/data-dir.js');
 
 // 「我动的是哪个数据目录」。一台机器上可能装着不止一份（本仓 + fork + 演练用的 fresh clone），
 // 而本文件按【当前目录的配置】解析数据根 —— 在 A 的目录下批准 B 的设备会如实报成功，
@@ -36,7 +36,7 @@ CCM 设备审批工具
 }
 
 // 两种输出的唯一数据源。deviceToken → deviceId 的改名与 socket 侧 pendingDevicesPayload
-// （src/auth/device-gate.js）保持一致：同一份东西在两条通道上不该有两个名字。
+// （app/src/auth/device-gate.js）保持一致：同一份东西在两条通道上不该有两个名字。
 function snapshot() {
   return {
     schemaVersion: 1,
@@ -82,7 +82,7 @@ function handleApprove(id) {
     console.error('❌ 错误：请提供需要批准的设备 ID。可以用 list 命令查看。');
     process.exit(1);
   }
-  // 纵深防御：只批准"确在待审批列表里"的设备 token，同 server.js 远程批准路径的既有防线
+  // 纵深防御：只批准"确在待审批列表里"的设备 token，同 app/server.js 远程批准路径的既有防线
   // （防打错 ID / 传入陈旧 ID 被静默加入信任列表——approveDevice 本身对任意非空字符串来者不拒）。
   if (!getPendingDevices().some(d => d.deviceToken === id)) {
     console.error(`❌ 错误：设备 ID「${id}」不在待审批列表里，未批准 ${dataDirNote()}。`

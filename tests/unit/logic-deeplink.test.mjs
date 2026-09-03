@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveDeepLinkTarget } from '../../public/js/logic.js';
+import { resolveDeepLinkTarget } from '../../app/public/js/logic.js';
 
 // ---- resolveDeepLinkTarget：通知深链落地 + instanceId 失效回退（②2c）----
 test.describe('resolveDeepLinkTarget：通知深链落地策略', () => {

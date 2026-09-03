@@ -1,14 +1,14 @@
 // tests/unit/fingerprint.test.mjs —— 审批完整性绑定后端侧同步哈希单测（docs/design.md，承接 AD-7/NFR-17）
 // fingerprint.js 是纯逻辑模块（node:crypto 同步 API），此前完全没有测试覆盖——补齐两类风险：
-// ①fingerprintSync/verifyIntegritySync 自身行为；②与前端 public/js/canonicalize.js 的
+// ①fingerprintSync/verifyIntegritySync 自身行为；②与前端 app/public/js/canonicalize.js 的
 // fingerprintHex（crypto.subtle 异步）是否产生同一哈希——这条不是"锦上添花"：真正的安全门槛
 // （agent.js#resolvePermission）双端都用后端 fingerprintSync 比对、不依赖跨实现一致；但前端
 // app.js 的"谨慎确认"预检警示条用 fingerprintHex 比对服务端下发的 fp，若两套实现不一致，
 // 预检会对每一次合法审批都误报"完整性预检异常"，把功能变成一直哭狼来的噪音。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fingerprintSync, verifyIntegritySync } from '../../src/auth/fingerprint.js';
-import { fingerprintHex } from '../../public/js/canonicalize.js';
+import { fingerprintSync, verifyIntegritySync } from '../../app/src/auth/fingerprint.js';
+import { fingerprintHex } from '../../app/public/js/canonicalize.js';
 
 test.describe('fingerprintSync / verifyIntegritySync', () => {
   test('相同 op → 同指纹（sha256 十六进制，64 字符）', () => {

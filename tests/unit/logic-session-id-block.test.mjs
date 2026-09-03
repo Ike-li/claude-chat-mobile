@@ -9,7 +9,7 @@
 // 「已发送但 init 未回」那个短窗里，说「你还没发」就是在说谎。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionIdBlockView } from '../../public/js/logic.js';
+import { sessionIdBlockView } from '../../app/public/js/logic.js';
 
 test('sessionIdBlockView: 有 session id 时显示复制行、不出说明', () => {
   const view = sessionIdBlockView({ sessionId: '9f3c1a20-1111-2222-3333-444455556666' });
@@ -46,7 +46,7 @@ test('sessionIdBlockView: 未发送态的文案只描述机制，不断言用户
 });
 
 // 「分配在途」与「还没发」是两件事，不能同文案。判据是实例的有无：服务端实例是懒开的
-// （src/server/app.js:833「session:new 后 viewingInstanceId=null（懒创建无实例）」、2187「无可路由
+// （app/src/server/app.js:833「session:new 后 viewingInstanceId=null（懒创建无实例）」、2187「无可路由
 // 实例则懒开一个」），所以「实例在、id 不在」只可能是消息已发出、正在等 SDK 首个 init。
 // 真机 bc29ccc2（P0-NOSID）里这个窗口持续了 31 分钟——那时告诉用户「发出第一条消息后才会分配」
 // 是把一个正在等待的状态说成了一个尚未开始的状态。

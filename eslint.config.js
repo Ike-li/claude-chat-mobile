@@ -10,8 +10,8 @@ export default [
     // vendor 为第三方压缩产物、docs 为落地页产物、其余为运行时/测试生成物
     ignores: [
       'node_modules/**',
-      'public/vendor/**',
-      'public/test-snapshots/**',
+      'app/public/vendor/**',
+      'app/public/test-snapshots/**',
       'docs/**',
       'data/**',
       '.ccm-uploads/**',
@@ -46,15 +46,15 @@ export default [
   },
   // Node 侧：后端源码、维护脚本、测试
   {
-    files: ['server.js', 'src/**/*.js', 'scripts/**/*.js', 'tests/**/*.{js,mjs}'],
+    files: ['app/server.js', 'app/src/**/*.js', 'scripts/**/*.js', 'tests/**/*.{js,mjs}'],
     languageOptions: { globals: { ...globals.node } },
   },
   // 浏览器侧：native-ESM PWA
   {
-    files: ['public/js/**/*.js'],
+    files: ['app/public/js/**/*.js'],
     languageOptions: { globals: { ...globals.browser } },
     rules: {
-      // `t` 在前端专属 i18n（public/js/i18n.js）。把它当临时变量名会静默遮蔽成
+      // `t` 在前端专属 i18n（app/public/js/i18n.js）。把它当临时变量名会静默遮蔽成
       // 「t is not a function」——页面运行时才炸，而 no-undef 看不出问题（t 确实有定义）。
       // 这类 bug 只有真跑 E2E 才会暴露，代价太高，所以在这里一次性拦掉。
       'no-restricted-syntax': [
@@ -100,14 +100,14 @@ export default [
     },
   },
   // i18n.js 是 t() 的【定义处】，上面那组「别用 t 作标识符」的规则对它不适用（否则
-  // `export function t(zh)` 自己就被判违规）。只豁免这一个文件，其余 public/js/** 照常受管。
+  // `export function t(zh)` 自己就被判违规）。只豁免这一个文件，其余 app/public/js/** 照常受管。
   {
-    files: ['public/js/i18n.js'],
+    files: ['app/public/js/i18n.js'],
     rules: { 'no-restricted-syntax': 'off' },
   },
   // 经典 <script>（非 ESM）：tw-config 写入 tailwind 全局、sw-cleanup 操作 navigator
   {
-    files: ['public/js/tw-config.js', 'public/js/sw-cleanup.js'],
+    files: ['app/public/js/tw-config.js', 'app/public/js/sw-cleanup.js'],
     languageOptions: {
       sourceType: 'script',
       globals: { ...globals.browser, tailwind: 'writable' },
@@ -115,7 +115,7 @@ export default [
   },
   // Service Worker 上下文
   {
-    files: ['public/sw.js'],
+    files: ['app/public/sw.js'],
     languageOptions: {
       sourceType: 'script',
       globals: { ...globals.serviceworker },

@@ -26,7 +26,7 @@ const HANDWRITTEN_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
   <key>Label</key><string>com.ccm.server</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/zsh</string><string>-lc</string><string>cd ${REPO} &amp;&amp; exec ${NODE} server.js</string></array>
+  <array><string>/bin/zsh</string><string>-lc</string><string>cd ${REPO} &amp;&amp; exec ${NODE} app/server.js</string></array>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${HOME}/Library/Logs/ccm-server.log</string>
   <key>StandardErrorPath</key><string>${HOME}/Library/Logs/ccm-server.log</string>
@@ -36,7 +36,7 @@ const HANDWRITTEN_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 const HANDWRITTEN_OBJ = {
   Label: 'com.ccm.server',
-  ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec ${NODE} server.js`],
+  ProgramArguments: ['/bin/zsh', '-lc', `cd ${REPO} && exec ${NODE} app/server.js`],
   RunAtLoad: true,
   KeepAlive: true,
   StandardOutPath: `${HOME}/Library/Logs/ccm-server.log`,
@@ -545,7 +545,7 @@ test.describe('uninstall —— CAS 保护', () => {
 });
 
 // manifest 落在哪：必须与 server / doctor 解析出同一个 CCM_DATA_DIR。
-// service.js 是独立 CLI、不走 server.js 的 loadRuntimeEnvironment，只读 process.env 会漏掉
+// service.js 是独立 CLI、不走 app/server.js 的 loadRuntimeEnvironment，只读 process.env 会漏掉
 // .env 里的 CCM_DATA_DIR —— 那样 manifest 写进仓库 data/，而生产状态在别处，两边对不上。
 test.describe('resolveManifestPath', () => {
   const ROOT = '/repo';

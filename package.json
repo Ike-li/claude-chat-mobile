@@ -33,7 +33,7 @@
     "claudeCli": "2.1.245"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node app/server.js",
     "setup": "node scripts/setup.js",
     "uninstall": "node scripts/uninstall.js",
     "config": "node scripts/config.js",
@@ -56,7 +56,7 @@
     "app:build": "node scripts/app-build.js",
     "app:install": "node scripts/app-build.js --install",
     "app:test": "node scripts/app-build.js --test-only",
-    "dev": "node --watch server.js",
+    "dev": "node --watch app/server.js",
     "check": "eslint . && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-visual-mock-registry.js && node tests/gates/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

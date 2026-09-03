@@ -1,7 +1,7 @@
 // tests/unit/metrics.test.mjs —— metrics.js 单测（docs/design.md MetricsCollector + StateProbe，承接 NFR-15）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inc, gauge, label, getLabel, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../src/ops/metrics.js';
+import { inc, gauge, label, getLabel, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../app/src/ops/metrics.js';
 
 test.describe('MetricsCollector（docs/design.md 指标最小集）', () => {
   test.beforeEach(() => reset());

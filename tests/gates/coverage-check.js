@@ -7,14 +7,14 @@
 // ★ 这个百分比的分母只含【被单测加载过的文件】——node 的 --experimental-test-coverage 不统计
 //   从未 import 过的文件，它们既不出现在报告里、也不拉低百分比。所以 77% 不是"77% 的生产代码
 //   被测到了"，而是"在已经有人写过测试的那些文件里测到了 77%"。最大的两个缺口是
-//   public/js/app.js 与 src/server/app.js，两者合计就占生产代码的三成。
+//   app/public/js/app.js 与 app/src/server/app.js，两者合计就占生产代码的三成。
 //
 //   ★ 这个缺口补不上，别再提案了（2026-08-03 实测）：
 //   · --test-coverage-include 只是【过滤】报告里已有的文件，不会把从未加载的文件拉进分母。
 //     实测三种 glob（相对/递归/绝对）都一样：未加载的文件照旧不出现，百分比纹丝不动。
 //     V8 只对加载过的文件有覆盖数据，这是原理层面的，不是标志用法问题。
-//   · "写个 barrel 把生产文件全 import 一遍"也不行：public/js/app.js 一加载就碰 document，
-//     src/server/app.js 会真起服务。
+//   · "写个 barrel 把生产文件全 import 一遍"也不行：app/public/js/app.js 一加载就碰 document，
+//     app/src/server/app.js 会真起服务。
 //   所以门槛的语义就只能是"【已经被测的那些文件】别退化"，不是"整体安全"。下面的缺口摘要把
 //   分母覆盖面按文件数与行数一起打出来，让这个限定条件出现在每次输出里，而不是躺在注释里。
 
@@ -33,7 +33,7 @@ export function unitTestFiles(rootDir = ROOT) {
 }
 
 // 生产代码扫描面：与覆盖率百分比的分母口径对照用。刻意不含 tests/ 与仓库根脚本。
-const PRODUCTION_DIRS = Object.freeze(['src', 'public/js', 'scripts']);
+const PRODUCTION_DIRS = Object.freeze(['app/src', 'app/public/js', 'scripts']);
 
 function listProductionFiles(rootDir, dir) {
   const out = [];
@@ -53,9 +53,9 @@ function listProductionFiles(rootDir, dir) {
 //     ℹ  server    |  …
 //     ℹ   app.js   |  …
 // 所以要按缩进深度把路径还原回完整相对路径。只比 basename 会在同名文件上认错人——本仓
-// app.js（src/server + public/js）与 notifications.js（src/ops + public/js/app）各有两份，
+// app.js（app/src/server + app/public/js）与 notifications.js（app/src/ops + app/public/js/app）各有两份，
 // 而认错是【静默】的：本文件拿它算「哪些生产文件从未被加载」，认错就让最该报的那个文件从缺口
-// 名单里消失（src/server/app.js 一旦有了首个单测，public/js/app.js 这个全仓最大的 0% 文件
+// 名单里消失（app/src/server/app.js 一旦有了首个单测，app/public/js/app.js 这个全仓最大的 0% 文件
 // 就会被它的同名兄弟顶掉）；tests/gates/mutate.js 拿它挑「哪些行被覆盖过」，认错则把变异体生成到
 // 错的行集合上——要么全存活（假警报），要么跳过真被覆盖的行（假绿）。
 //

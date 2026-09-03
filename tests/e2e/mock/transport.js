@@ -7,7 +7,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'public');
+const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'app', 'public');
 const DEFAULT_REJECTED_TOKENS = ['bad-token', 'invalid-token', 'expired-token'];
 
 function javascriptFiles(directory) {
@@ -76,7 +76,7 @@ export function createMockTransport({
   });
 
   // /js/** 全部子模块都要改写相对 import 的 ?v=，与真 server 的 rewriteAppModuleImports 同款正则
-  // （src/server/http.js）—— 两处必须一致，否则 mock 下会出现真 server 没有的模块双实例：
+  // （app/src/server/http.js）—— 两处必须一致，否则 mock 下会出现真 server 没有的模块双实例：
   // app.js 引入的是 logic.js?v=xxx，而 app/*.js 里的 `../logic.js` 未戳版本 → 浏览器按 URL 缓存
   // 模块，两份 logic.js 各自 import 出一份 i18n.js，setLang() 只作用在其中一份。纯函数看不出问题，
   // 一旦子模块调到依赖 i18n 模块级 currentLang 的东西（如 t()），语言就永远停在默认值。

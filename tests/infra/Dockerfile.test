@@ -1,6 +1,6 @@
 # Dockerfile.test —— 跑测试用的隔离环境
 #
-# 【为什么要有它】2026-08-02：npm run mutate 把变异后的 src/sessions/history.js 与测试一起跑，
+# 【为什么要有它】2026-08-02：npm run mutate 把变异后的 app/src/sessions/history.js 与测试一起跑，
 # getProjectDir 被改成恒返回 ''，测试里的 rmSync 目标塌成 ~/.claude/projects 本身，
 # 机主 70 个项目的 transcript 与 memory 一次删光。
 #

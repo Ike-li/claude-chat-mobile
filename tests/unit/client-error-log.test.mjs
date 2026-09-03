@@ -2,7 +2,7 @@
 // （logs:clientError 载荷校验/钳制/单行化/脱敏 + per-socket 限流）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatClientErrorLine, createSocketErrorLimiter } from '../../src/ops/client-error-log.js';
+import { formatClientErrorLine, createSocketErrorLimiter } from '../../app/src/ops/client-error-log.js';
 
 test.describe('formatClientErrorLine', () => {
   test('正常载荷 → 单行含 kind/message/定位/stack（换行折叠）', () => {

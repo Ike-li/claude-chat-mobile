@@ -11,7 +11,7 @@ import {
   shouldTrustCfConnectingIp,
   shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
-} from '../../src/auth/rate-limiter.js';
+} from '../../app/src/auth/rate-limiter.js';
 
 const T0 = 1_000_000; // 基准时刻（远大于 decayMs 起点，避免衰减分支歧义）
 
@@ -108,7 +108,7 @@ test.describe('onAuthResult 纯函数状态机', () => {
 });
 
 test.describe('rlSourceKey 来源识别', () => {
-  const norm = (x) => (x || '').replace(/^::ffff:/, ''); // 同 server.js clientIp
+  const norm = (x) => (x || '').replace(/^::ffff:/, ''); // 同 app/server.js clientIp
 
   test('公网路径 trustCfConnectingIp=true → 优先 CF-Connecting-IP', () => {
     const hs = { address: '127.0.0.1', headers: { 'cf-connecting-ip': '203.0.113.7' } };
@@ -249,7 +249,7 @@ test.describe('退避冷却与阈值长锁必须分开说', () => {
   });
 
   // 三处调用方此前各自手写 `now < state.lockUntil` 再硬编码 verdict：onAuthResult 内、
-  // src/server/app.js 的 io.use、src/server/http.js 的 createHttpAuth。只改其中一处修不干净。
+  // app/src/server/app.js 的 io.use、app/src/server/http.js 的 createHttpAuth。只改其中一处修不干净。
   test('gateCheck 是三处锁定门的单一事实源', () => {
     assert.equal(gateCheck(freshState(), T0, CFG), null, '无锁 → 放行');
     const backoffState = onAuthResult(freshState(), false, T0, CFG).next;

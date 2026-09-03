@@ -1,7 +1,7 @@
 // tests/unit/sanitizer.test.mjs —— sanitizer.js 纯函数单测（零 IO、零依赖）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitize, stripControlSequences, maskToken, sanitizePath } from '../../src/shared/sanitizer.js';
+import { sanitize, stripControlSequences, maskToken, sanitizePath } from '../../app/src/shared/sanitizer.js';
 
 // ── stripControlSequences ──────────────────────────────────────────────────
 

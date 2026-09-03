@@ -5,8 +5,8 @@ import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
-// Part B 性能优化：长会话（2000 条，触达 src/sessions/history.js 的 HISTORY_MAX_MESSAGES 上限）切入时
-// renderHistoryBubbles 改成分块渲染（public/js/app.js），验证：①最终结果与同步版等价（不丢/不重复）；
+// Part B 性能优化：长会话（2000 条，触达 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 上限）切入时
+// renderHistoryBubbles 改成分块渲染（app/public/js/app.js），验证：①最终结果与同步版等价（不丢/不重复）；
 // ②分块确实多次让出主线程（而非一次性同步任务）；③渲染中途切走不残留半渲染气泡。
 test.describe('P0 长会话切入分块渲染', () => {
   test('P0-LH1 渲染完毕消息总数与输入等价，不丢不重复', async ({ page }) => {
@@ -88,7 +88,7 @@ test.describe('P0 长会话切入分块渲染', () => {
     await expect(page.locator('#messages')).not.toContainText('Long history stress message');
 
     // 即使浏览器之后才姗姗来迟地触发那个被冻结的续块回调，也不该污染已经切换到的会话 DOM
-    // （displayedInstanceId 快照守卫，见 public/js/app.js renderHistoryBubbles 的 processChunk）。
+    // （displayedInstanceId 快照守卫，见 app/public/js/app.js renderHistoryBubbles 的 processChunk）。
     await page.evaluate(() => {
       const w = window as unknown as { __frozenIdleCallback: IdleRequestCallback | null };
       w.__frozenIdleCallback?.({ didTimeout: false, timeRemaining: () => 0 } as IdleDeadline);

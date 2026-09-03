@@ -1,7 +1,7 @@
 // tests/unit/log-time.test.mjs —— log-time.js 单测（服务端日志行时间戳前缀）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTimestamp, wrapConsole } from '../../src/shared/log-time.js';
+import { formatTimestamp, wrapConsole } from '../../app/src/shared/log-time.js';
 
 const TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
 

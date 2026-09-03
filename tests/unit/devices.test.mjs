@@ -16,7 +16,7 @@ import {
   denyDevice,
   persistTrustedChange,
   MAX_PENDING_DEVICES
-} from '../../src/auth/devices.js';
+} from '../../app/src/auth/devices.js';
 
 // 路径
 const HERE = import.meta.dirname;

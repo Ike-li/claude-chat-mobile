@@ -42,7 +42,7 @@
          __SHQ_ 前缀表示「该占位符落在 shell 双引号串内」，render-plist.js 会先做 shell 转义再做 XML
          转义 —— 双引号里 $、反引号、\ 仍会被 zsh 解释，而路径含它们时不报错、只会静默 cd 到别处，
          随后 KeepAlive 把 node 起不来变成无限崩溃重启循环。字面双引号现在也支持了。 -->
-    <string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>
+    <string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" app/server.js</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

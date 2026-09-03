@@ -20,7 +20,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
+import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
 

@@ -59,11 +59,9 @@ services:
     environment:
       <<: *runtime-env
     volumes:
-      - ../../src:/app/src
-      - ../../public:/app/public
+      - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
-      - ../../server.js:/app/server.js
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test
@@ -87,11 +85,9 @@ services:
       PORT: "3100"
       CCM_MOCK_BIND: "0.0.0.0"
     volumes:
-      - ../../src:/app/src
-      - ../../public:/app/public
+      - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
-      - ../../server.js:/app/server.js
       - ../../package.json:/app/package.json
       - /app/node_modules
     ports:
@@ -124,11 +120,9 @@ services:
     environment:
       <<: *runtime-env
     volumes:
-      - ../../src:/app/src
-      - ../../public:/app/public
+      - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
-      - ../../server.js:/app/server.js
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test
@@ -152,11 +146,9 @@ services:
     environment:
       <<: *runtime-env
     volumes:
-      - ../../src:/app/src
-      - ../../public:/app/public
+      - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
-      - ../../server.js:/app/server.js
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test

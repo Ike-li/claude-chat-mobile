@@ -12,7 +12,8 @@
 // 不能改成内部直读 process.env，否则纯度和既有测试一起丢。
 import { join } from 'node:path';
 
-const PROJECT_ROOT = join(import.meta.dirname, '..', '..');
+// 三层：本文件在 app/src/shared/，而 data/ 在仓库根（不进 app/）。见 server/app.js 的 HERE。
+const PROJECT_ROOT = join(import.meta.dirname, '..', '..', '..');
 
 // 空串按「未设置」处理，与 config.js 的 normalizeLoadedEnvironment 同口径（.env 里写 CCM_DATA_DIR= 不应把状态根打空）。
 export function resolveDataDir(env = process.env, projectRoot = PROJECT_ROOT) {

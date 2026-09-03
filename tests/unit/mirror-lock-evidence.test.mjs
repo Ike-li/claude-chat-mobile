@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mirrorReleaseStep, mirrorEntryLock, MIRROR_RELEASE_QUIET_TICKS } from '../../src/sessions/history.js';
+import { mirrorReleaseStep, mirrorEntryLock, MIRROR_RELEASE_QUIET_TICKS } from '../../app/src/sessions/history.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -124,7 +124,7 @@ test('同一组事实下，入口与出口的判定必须一致', () => {
 
 /** 从源码里抠出某个 export function 的解构参数名集合。 */
 function evidenceKeysOf(fnName) {
-  const src = readFileSync(join(ROOT, 'src/sessions/history.js'), 'utf8');
+  const src = readFileSync(join(ROOT, 'app/src/sessions/history.js'), 'utf8');
   const start = src.indexOf(`export function ${fnName}(`);
   assert.notEqual(start, -1, `history.js 里找不到 export function ${fnName}——函数改名了就同步改这里`);
   const sig = src.slice(start, src.indexOf('{\n', src.indexOf(') {', start)) + 1);

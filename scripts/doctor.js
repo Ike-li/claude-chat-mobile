@@ -12,7 +12,7 @@
 // 7. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 // 8. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
 // 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
-// 10. 前端 JS 语法（递归检查 public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
+// 10. 前端 JS 语法（递归检查 app/public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
 // 11. 测试覆盖率门槛（仅 --full；默认跳过——装机预检不该跑完整单测）
 // 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 // 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
@@ -31,11 +31,11 @@ import { homedir, platform } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
-import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
-import { resolveWorkdirSource as loadWorkdirSource } from '../src/sessions/workdirs.js';
-import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
-import { loadRuntimeEnvironment } from '../src/ops/config.js';
-import { resolveBindPlan } from '../src/shared/bind-host.js';
+import { isOwnerOnly, fixPermissions } from '../app/src/files/file-security.js';
+import { resolveWorkdirSource as loadWorkdirSource } from '../app/src/sessions/workdirs.js';
+import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
+import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
+import { resolveBindPlan } from '../app/src/shared/bind-host.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
   authTokenDiagnostic,
@@ -57,12 +57,12 @@ import {
   identifySelfServer,
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
-} from '../src/ops/doctor-checks.js';
-import { ALL_CONFIG_KEYS } from '../src/ops/config-file.js';
-import { CONFIG_FILE_NAMES, probeClaudeBin } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude 探测
+} from '../app/src/ops/doctor-checks.js';
+import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
+import { CONFIG_FILE_NAMES, probeClaudeBin } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
-import { DEFAULT_PORT } from '../src/ops/env-schema.js';
+import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -99,7 +99,7 @@ function print() {
 
 // D1: AUTH_TOKEN
 //
-// 判定与措辞全部走共用的 authTokenDiagnostic（src/ops/doctor-checks.js），与 web 体检同一份。
+// 判定与措辞全部走共用的 authTokenDiagnostic（app/src/ops/doctor-checks.js），与 web 体检同一份。
 // 此前这里自己写了一份，纯空白 token 被说成「已设置但为空 → 仅监听 127.0.0.1」——而 server 的
 // `resolveBindHost('   ')` 返回 0.0.0.0，**安全语义正好说反**。共用之后，这一格只剩排版。
 function checkAuthToken() {
@@ -118,9 +118,9 @@ function checkAuthToken() {
 
 // D2: CLAUDE_BIN 可执行
 //
-// 探测（probeClaudeBin，有副作用）与判定（claudeBinDiagnostic，纯函数）都在 src/ops 下，
+// 探测（probeClaudeBin，有副作用）与判定（claudeBinDiagnostic，纯函数）都在 app/src/ops 下，
 // web 体检调的是同一对函数、喂同一形状的结果 —— 这一格不再有两份判据。
-// 探测函数不能留在本文件：src/server/app.js 要用它，而运行时代码禁止 import scripts/（边界闸）。
+// 探测函数不能留在本文件：app/src/server/app.js 要用它，而运行时代码禁止 import scripts/（边界闸）。
 function checkClaudeBin() {
   const d = claudeBinDiagnostic({ ...probeClaudeBin(), lang: LANG });
   ({ ok, warn, fail })[d.status]('CLAUDE_BIN', d.detail);
@@ -479,14 +479,14 @@ function checkDocConsistency() {
   }
 }
 
-// D10: 前端 JS 语法（递归 public/js/**/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
+// D10: 前端 JS 语法（递归 app/public/js/**/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
 // 的语法错会潜伏（2026-06-14 实有：app.js 括号失配→浏览器整体不执行→页面死在「未连接」）。
 function checkFrontendSyntax() {
   let files;
   try {
-    files = collectSyntaxFiles(HERE).filter(file => file.startsWith('public/js/'));
+    files = collectSyntaxFiles(HERE).filter(file => file.startsWith('app/public/js/'));
   } catch {
-    warn(bi('前端 JS 语法', 'Frontend JS syntax'), bi('public/js/ 不存在，跳过', 'public/js/ not found, skipped'));
+    warn(bi('前端 JS 语法', 'Frontend JS syntax'), bi('app/public/js/ 不存在，跳过', 'app/public/js/ not found, skipped'));
     return;
   }
   const bad = [];
@@ -501,7 +501,7 @@ function checkFrontendSyntax() {
   if (bad.length > 0) {
     fail(bi('前端 JS 语法', 'Frontend JS syntax'), bad.join('\n  ') + bi('\n  （浏览器脚本无单测覆盖，语法错会致页面死在「未连接」）', '\n  (browser scripts have no unit tests; a syntax error leaves the page stuck on the not-connected screen)'));
   } else {
-    ok(bi('前端 JS 语法', 'Frontend JS syntax'), bi(`public/js/ ${files.length} 个文件（含 app/ 子模块）语法通过`, `public/js/: ${files.length} files (including app/ submodules) parse cleanly`));
+    ok(bi('前端 JS 语法', 'Frontend JS syntax'), bi(`app/public/js/ ${files.length} 个文件（含 app/ 子模块）语法通过`, `app/public/js/: ${files.length} files (including app/ submodules) parse cleanly`));
   }
 }
 
@@ -684,7 +684,7 @@ function effectiveConfigFiles() {
 
 // D20: 文件编辑器直写 × 公网迹象（R45，2026-08-30 拍板：默认开不动，只提示）。判定在
 // doctor-checks.fileEditExposureDiagnostic；公网信号只认显式声明——CF_ACCESS_* 三键齐设
-//（与 src/auth/cf-access.js 同一组键）或 PUBLIC_URL 非空。须在 loadRuntimeEnvironment 之后跑：
+//（与 app/src/auth/cf-access.js 同一组键）或 PUBLIC_URL 非空。须在 loadRuntimeEnvironment 之后跑：
 // FILE_EDIT 可能来自配置文件，投影进 process.env 才读得到。
 function checkFileEditExposure() {
   const set = k => String(process.env[k] || '').trim() !== '';

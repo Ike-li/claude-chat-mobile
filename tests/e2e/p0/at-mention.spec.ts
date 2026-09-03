@@ -4,8 +4,8 @@
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 
-// composer「@ 文件引用」：files:search 候选 + 点选回填相对路径文本（见 public/js/app.js checkAtMention/
-// pickAtMention，纯逻辑在 public/js/logic.js detectAtMentionQuery/applyAtMentionPick）。
+// composer「@ 文件引用」：files:search 候选 + 点选回填相对路径文本（见 app/public/js/app.js checkAtMention/
+// pickAtMention，纯逻辑在 app/public/js/logic.js detectAtMentionQuery/applyAtMentionPick）。
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-MENTION 打 @ 触发候选 chips，点选回填相对路径', async ({ page }) => {
     await gotoMock(page);

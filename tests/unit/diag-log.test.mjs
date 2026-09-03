@@ -1,7 +1,7 @@
 // tests/unit/diag-log.test.mjs —— diag-log.js 纯逻辑单测
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as diag from '../../src/agent/diag-log.js';
+import * as diag from '../../app/src/agent/diag-log.js';
 
 test.describe('diag-log', () => {
   test('getDiagLogs：null/undefined/空 sessionKey → []', () => {
@@ -91,7 +91,7 @@ test.describe('diag-log', () => {
   // FRESH 首轮：sessionId 未到前用 provisionalKey 缓冲，init 后 rebind 并入真 sessionId。
   // provisionalKey 直接复用 interaction-log.js 的实现，两模块 key 语义必须一致。
   test('provisionalKey：与 interaction-log 共用同一实现', async () => {
-    const ilog = await import('../../src/agent/interaction-log.js');
+    const ilog = await import('../../app/src/agent/interaction-log.js');
     assert.equal(diag.provisionalKey, ilog.provisionalKey);
     assert.equal(diag.provisionalKey('inst_fresh'), 'inst:inst_fresh');
     assert.equal(diag.provisionalKey(null), null);

@@ -1,11 +1,11 @@
 // tests/unit/agent-event-type-guard.test.mjs —— AgentSession 出向 type 的运行时自检。
-// 契约清单（src/shared/protocol.js）此前只被门禁脚本消费，运行时看不见它：漏登记的 type 一路发到前端，
+// 契约清单（app/src/shared/protocol.js）此前只被门禁脚本消费，运行时看不见它：漏登记的 type 一路发到前端，
 // 前端 handle 表没有对应项就静默丢弃，除非提交时跑了 npm run check 否则无人察觉。
 // 这里锚定「记录但不拦截」的语义——n=1 生产稳定优先，门禁负责挡提交，运行时只负责让问题可见。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { AGENT_EVENT_TYPES } from '../../src/shared/protocol.js';
+import { AGENT_EVENT_TYPES } from '../../app/src/shared/protocol.js';
 
 function captureConsoleError(fn) {
   const original = console.error;

@@ -8,7 +8,7 @@ import {
   rememberUsage,
   fallbackUsage,
   USAGE_SNAPSHOT_TTL_MS,
-} from '../../src/ops/usage-snapshot.js';
+} from '../../app/src/ops/usage-snapshot.js';
 
 test.describe('USAGE_SNAPSHOT_TTL_MS：默认 TTL', () => {
   test('默认 15 分钟', () => {

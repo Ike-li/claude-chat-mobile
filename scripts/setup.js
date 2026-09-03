@@ -20,9 +20,9 @@ import { stdin, stdout } from 'node:process';
 import { basename, join, dirname, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { writeOwnerOnlyFile } from '../src/files/file-security.js';
-import { applyConfigChanges, CONFIG_FILE_NAME } from '../src/ops/config-file.js';
-import { ACCESS_PROFILES } from '../src/ops/env-schema.js';
+import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
+import { applyConfigChanges, CONFIG_FILE_NAME } from '../app/src/ops/config-file.js';
+import { ACCESS_PROFILES } from '../app/src/ops/env-schema.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -38,7 +38,7 @@ export function generateToken(bytes = 32) {
 // 结构化构造：写出去的就是数据本身，不存在旧模板替换时代「正则没匹配上就静默不生效」的
 // 失败模式（那套 buildEnvContent + .env.example 已于 2026-08-17 随「生成旧格式」能力一并
 // 退役——它面向的人群在新格式成为默认后趋近于零；读取已存在 .env 的回落链不受影响，
-// 见 src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
+// 见 app/src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
 // .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
 export function buildConfigContent({ authToken, workDir, workDirs, fileEdit, accessProfile } = {}) {
   const config = applyConfigChanges({}, {
@@ -155,7 +155,7 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
     return refuse('invalid_access_profile', String(args.accessProfile));
   }
   // 桌面控制台只有 macOS 有。静默忽略会让用户以为装上了 —— 明确拒绝才有信息量，
-  // 同 src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
+  // 同 app/src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
   if (args.desktop === 'on' && platform !== 'darwin') {
     return refuse('desktop_unsupported', platform);
   }

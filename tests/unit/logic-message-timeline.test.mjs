@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import {
   normalizeMessageTs, isSameLocalDay, resolveMessageTimeMarker, MESSAGE_TIME_GAP_MS,
   formatClockHm, formatCalendarDayLabel, formatMessageTimeMarker,
-} from '../../public/js/logic.js';
-import { setLang } from '../../public/js/i18n.js';
+} from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 // 用本地时间构造，避免 UTC 换算把「本地日历日」判定测偏（判定层全程走 getFullYear/getMonth/getDate）。
 const at = (y, m, d, hh = 0, mm = 0) => new Date(y, m - 1, d, hh, mm).getTime();

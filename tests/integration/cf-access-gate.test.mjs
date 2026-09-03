@@ -1,5 +1,5 @@
 // tests/integration/cf-access-gate.test.mjs —— 公网 CF Access 鉴权判决集成测试
-// 覆盖 auth-token.test.mjs 刻意禁用、从未验证过的公网分支（src/server/app.js httpAuth / io.use）：
+// 覆盖 auth-token.test.mjs 刻意禁用、从未验证过的公网分支（app/src/server/app.js httpAuth / io.use）：
 // isPublicHost=true 时强制 Access JWT、验签失败 fail-closed、且禁 token 回退（堵"不发 JWT 头改走 token 路"后门）。
 // 用无 JWT / 乱码 JWT 触发 verifyAccessJwt 早期 throw——不需真 CF 签名、不触发网络。
 //

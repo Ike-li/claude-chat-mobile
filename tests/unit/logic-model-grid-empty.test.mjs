@@ -1,7 +1,7 @@
 // tests/unit/logic-model-grid-empty.test.mjs —— 会话设置「✨ 模型」块拿不到候选时的空态。
 //
 // 可达性（查过链路，不是假想）：前端 modelsList 初值是 []，且 localStorage 里并没有模型缓存
-// （只存了 auth_token / current_session / slash_commands 等，models 不在其中——src/server/app.js:556
+// （只存了 auth_token / current_session / slash_commands 等，models 不在其中——app/src/server/app.js:556
 // 那句「前端保留 localStorage 缓存」对 models 并不成立）。服务端 pushModelsForCwd 在无缓存时刻意
 // 不推（推空会摧毁网格），改由 openScoutInstance 起一个 scout 进程去取。于是首次连接 / 新工作区
 // 到 scout 返回之间，网格确实是空的；scout 失败时则持续空着。
@@ -11,7 +11,7 @@
 // 只陈述事实 + 给出路（面板右上角那个 ⟳ 恒可见，data-testid="settings-config-refresh"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelGridEmptyHint } from '../../public/js/logic.js';
+import { modelGridEmptyHint } from '../../app/public/js/logic.js';
 
 test('modelGridEmptyHint: 网格里有磁贴就不出说明', () => {
   assert.equal(modelGridEmptyHint({ tileCount: 5 }), null);

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs, isSafeSessionId, getSessionHistory, classifyTranscriptTail, readLastPermissionMode } from '../../src/sessions/history.js';
+import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs, isSafeSessionId, getSessionHistory, classifyTranscriptTail, readLastPermissionMode } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });

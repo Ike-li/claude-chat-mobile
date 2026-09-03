@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createDeviceGate } from '../../src/auth/device-gate.js';
+import { createDeviceGate } from '../../app/src/auth/device-gate.js';
 
 function tempDataDir(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-device-gate-'));
