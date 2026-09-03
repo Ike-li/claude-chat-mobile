@@ -57,7 +57,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
-import { onAuthResult, freshState, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, gateCheck, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
@@ -431,6 +431,11 @@ const httpAuth = createHttpAuth({
       metrics.label('rate_limit_last_source', key); // 面板据此分辨本机手滑 / 局域网 / 公网暴破（见 describeRateLimitSource）
     },
   },
+  // 逐次失败也要留痕，与 socket 侧的 [conn] 日志对称。此前 HTTP 只在达阈值那一刻打一行，
+  // 于是「谁把本机桶打到锁定」在日志里无迹可寻（2026-09-02 实例：审计有锁定记录，前后 10 分钟空白）。
+  onAuthFailure: ({ path, key, reason }) => {
+    console.warn(`[http-auth] 鉴权失败（${reason}）path=${path || '?'} source=${key || 'n/a'}`);
+  },
 });
 
 // 具名提取（原 registerOperationalRoutes 内联箭头）：仅 HTTP /metrics 巡检端点消费（机器可读原料）。
@@ -687,12 +692,16 @@ io.use(async (socket, next) => {
   });
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把机主越锁越久 = 自我 DoS）
+    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
+    // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
-      const now = Date.now();
-      if (now < st.lockUntil) {
-        console.warn(`[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil((st.lockUntil - now) / 1000)}s，source=${rlKey}）`);
-        return next(rejectHandshake({ verdict: 'locked', retryAfterMs: st.lockUntil - now }));
+      const gated = gateCheck(st, Date.now());
+      if (gated) {
+        console.warn(gated.verdict === 'locked'
+          ? `[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil(gated.retryAfterMs / 1000)}s，source=${rlKey}）`
+          : `[conn] ${ip} 上次鉴权失败的退避冷却中（剩 ${gated.retryAfterMs}ms），拒握手（source=${rlKey}）`);
+        return next(rejectHandshake(gated));
       }
     }
 

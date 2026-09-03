@@ -6,7 +6,7 @@
 // 服务端补上 retryAfter 之后，这一层负责把它翻成人话。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeHandshakeError } from '../../public/js/logic/connection.js';
+import { describeHandshakeError, shouldAttemptReconnect } from '../../public/js/logic/connection.js';
 
 test.describe('describeHandshakeError：把握手拒绝翻成人话', () => {
   test('rate_limited + 秒级等待 → 说清还要等多久', () => {
@@ -53,5 +53,42 @@ test.describe('describeHandshakeError：把握手拒绝翻成人话', () => {
       assert.ok(typeof r.text === 'string' && r.text.length > 0, `应给出非空文案，输入 ${JSON.stringify(bad)}`);
       assert.doesNotMatch(r.text, /NaN|undefined/, `不得漏出 NaN/undefined，输入 ${JSON.stringify(bad)}`);
     }
+  });
+});
+
+// ── 该不该【发起】握手（上游那一半）──────────────────────────────────────────
+// 2026-09-02 生产复现：打开 http://127.0.0.1:3000 而 localStorage 无令牌时，屏幕上必现
+// 「登录尝试过多，请 1 秒后再试」——而用户只失败了一次。服务端语义已单独修（gateCheck），
+// 这里修触发源：
+//   · 四个重连入口（visibilitychange / online / pageshow / 连接横幅「立即重试」）没有一个
+//     检查凭据门是否开着。用户还没输令牌，页面就替他发了一次注定失败的握手，唯一效果是
+//     把退避锁越推越长（500ms→1s→2s→…→30s），切够 8 次标签页即 15 分钟长锁。
+//   · pageshow 在【普通页面加载】时同样触发（persisted=false，Playwright 实测 t=+0ms 即 fire），
+//     而监听器的注释写的是「从 bfcache 恢复」——注释描述的契约与代码执行的契约分叉了。
+//     后果：io() 首次握手失败后 200ms 再补一枪，稳稳落在那把 500ms 退避锁内。
+test.describe('shouldAttemptReconnect：凭据门开着时不许自动重连', () => {
+  test('令牌门开着 → 不重连（必然失败，只会把退避越推越长）', () => {
+    assert.equal(shouldAttemptReconnect({ authGateOpen: true }), false);
+  });
+
+  test('Access 重登门开着 → 同样不重连（公网侧压根没有令牌可试）', () => {
+    assert.equal(shouldAttemptReconnect({ accessReloginOpen: true }), false);
+  });
+
+  test('pageshow 普通加载（persisted=false）→ 不重连：io() 刚刚才连过', () => {
+    assert.equal(shouldAttemptReconnect({ persisted: false }), false);
+  });
+
+  test('pageshow 从 bfcache 恢复（persisted=true）→ 重连，这才是那个监听器的本意', () => {
+    assert.equal(shouldAttemptReconnect({ persisted: true }), true);
+  });
+
+  test('非 pageshow 入口（visibilitychange / online / 手动重试）不带 persisted → 正常重连', () => {
+    assert.equal(shouldAttemptReconnect({}), true);
+    assert.equal(shouldAttemptReconnect(), true, '无参调用不得崩');
+  });
+
+  test('凭据门优先于 bfcache：门开着时从 bfcache 回来也不许自动重连', () => {
+    assert.equal(shouldAttemptReconnect({ authGateOpen: true, persisted: true }), false);
   });
 });

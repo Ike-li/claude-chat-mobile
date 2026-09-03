@@ -7,6 +7,7 @@ import {
   rlSourceKey,
   ipRateBucket,
   authRejection,
+  gateCheck,
   shouldTrustCfConnectingIp,
   shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
@@ -213,6 +214,53 @@ test.describe('rlSourceKey：IPv6 按 /64 归桶（防换源地址绕过限速�
   });
 });
 
+// ── 退避冷却 ≠ 尝试过多 ─────────────────────────────────────────────────────
+// 生产复现（2026-09-02 10:48:57，本机 127.0.0.1，ccm-server.log 有两行铁证）：
+//   t=0     io() 握手，localStorage 无 token → 失败 #1 → backoff，顺带上 500ms 退避短锁
+//   t=235   pageshow(persisted=false) 触发 reconnectIfNeeded，其 200ms 定时器发出第二次握手
+//   → 撞进那把还没过期的退避锁。旧实现的统一门无条件回 'locked'，authRejection 据此翻成
+//     rate_limited + retryAfterSeconds=max(1,ceil(265/1000))=1，屏幕上是「登录尝试过多，请 1 秒
+//     后再试」——而用户【只失败了一次】，且这一次请求根本没校验过令牌。
+//
+// 说错话的代价不只是文案：它把行动指引从「你的令牌不对，重输」错换成「你手太快，等一下」，
+// 用户于是等一秒再点，又撞一次，观感就是「老是出现」。
+// 判据：未达阈值的退避锁 = 冷却（语义仍是「令牌不对」）；达阈值的长锁 = 才是「尝试过多」。
+test.describe('退避冷却与阈值长锁必须分开说', () => {
+  test('只失败 1 次，退避期内的下一次请求 → cooldown，不得判成 locked', () => {
+    const first = onAuthResult(freshState(), false, T0, CFG);
+    assert.equal(first.verdict, 'backoff');
+    const second = onAuthResult(first.next, false, T0 + 235, CFG); // 生产实测的 235ms
+    assert.equal(second.verdict, 'cooldown', '失败 1 次不是「尝试过多」');
+    assert.equal(second.next.failCount, 1, '冷却期内同样不计数（防自我 DoS 的老不变量不能破）');
+  });
+
+  test('cooldown 对客户端说 unauthorized（令牌不对），不说 rate_limited', () => {
+    const r = authRejection({ verdict: 'cooldown', retryAfterMs: 265 });
+    assert.equal(r.reason, 'unauthorized');
+    assert.equal(r.httpStatus, 401);
+    assert.equal(r.retryAfterMs, null, '不带重试提示：真正的问题是令牌不对，不是「等等就能进」');
+  });
+
+  test('达阈值后的长锁期内仍是 locked/rate_limited（真·尝试过多不能被顺手放过）', () => {
+    const { state } = failN(CFG.threshold);
+    const r = onAuthResult(state, false, state.lockUntil - 1000, CFG);
+    assert.equal(r.verdict, 'locked');
+    assert.equal(authRejection(r).reason, 'rate_limited');
+  });
+
+  // 三处调用方此前各自手写 `now < state.lockUntil` 再硬编码 verdict：onAuthResult 内、
+  // src/server/app.js 的 io.use、src/server/http.js 的 createHttpAuth。只改其中一处修不干净。
+  test('gateCheck 是三处锁定门的单一事实源', () => {
+    assert.equal(gateCheck(freshState(), T0, CFG), null, '无锁 → 放行');
+    const backoffState = onAuthResult(freshState(), false, T0, CFG).next;
+    assert.equal(gateCheck(backoffState, T0 + 235, CFG).verdict, 'cooldown');
+    assert.equal(gateCheck(backoffState, T0 + CFG.baseBackoffMs, CFG), null, '退避窗过完即放行');
+    const { state } = failN(CFG.threshold);
+    assert.equal(gateCheck(state, state.lockUntil - 1, CFG).verdict, 'locked');
+    assert.equal(gateCheck(state, state.lockUntil - 1, CFG).retryAfterMs, 1);
+  });
+});
+
 // authRejection：被拒时给客户端什么原因 + 重试提示。
 // HTTP 与 socket 此前【各自】判断这件事，于是在「本次失败恰好触发锁定」那一刻分叉：
 // HTTP 已经是 429 rate_limited + Retry-After，socket 却仍回 unauthorized 且不带任何重试提示。
@@ -236,6 +284,9 @@ test.describe('authRejection：HTTP 与 socket 的拒绝语义单一事实源', 
   });
 
   test('retryAfterSeconds 向上取整，不给出 0（0 会被读成「立刻可重试」）', () => {
+    // 这里的 retryAfterMs=1 只可能来自【长锁】末尾——退避冷却期已由 gateCheck 归到 'cooldown'，
+    // 走不到这个分支。曾经它也能从退避末尾来，于是这条断言在无意中把「只错一次却报尝试过多」
+    // 的输出当成了正确行为钉住（见上面「退避冷却与阈值长锁必须分开说」）。
     assert.equal(authRejection({ verdict: 'locked', retryAfterMs: 1 }).retryAfterSeconds, 1);
     assert.equal(authRejection({ verdict: 'locked', retryAfterMs: 1001 }).retryAfterSeconds, 2);
   });

@@ -17,16 +17,35 @@ export function freshState() {
   return { failCount: 0, lockUntil: 0, lastFailTs: 0 };
 }
 
+// 锁定门判定 —— 三处调用方的【单一事实源】：本模块的 onAuthResult、src/server/app.js 的 io.use
+// 握手门、src/server/http.js 的 createHttpAuth。三处此前各自手写 `now < state.lockUntil` 并硬编码
+// verdict:'locked'，于是同一个语义错误要在三个地方分别犯一次（而修的时候容易只修到一处）。
+//
+// 返回 null = 放行；否则 { verdict, retryAfterMs }，verdict 分两种，区别不是程度而是【该对用户说什么】：
+//   'cooldown' 未达阈值的退避短锁。上一次请求真的校验了令牌并失败，这把锁只是顺带上的。
+//              此刻用户的真实处境仍然是「令牌不对」——说成「尝试过多」会把行动指引从「重输令牌」
+//              错换成「等一下」。生产实测：只失败 1 次的用户被告知「登录尝试过多，请 1 秒后再试」
+//              （2026-09-02，本机 127.0.0.1，前端 pageshow 的 200ms 重连撞进 500ms 退避锁）。
+//   'locked'   failCount 已达阈值的长锁。这才是真·尝试过多，也只有它配得上 429 + Retry-After。
+export function gateCheck(s, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
+  const state = s || freshState();
+  if (now >= state.lockUntil) return null;
+  return {
+    verdict: state.failCount >= cfg.threshold ? 'locked' : 'cooldown',
+    retryAfterMs: state.lockUntil - now,
+  };
+}
+
 // 纯函数状态机：给定当前状态 + 本次鉴权结果 ok + now(ms) + 配置，返回 { next, verdict, retryAfterMs? }。
-// verdict: 'allow' | 'backoff' | 'locked'。调用方据 verdict 放行/拒绝，并把 next 写回 Map。
+// verdict: 'allow' | 'backoff' | 'cooldown' | 'locked'。调用方据 verdict 放行/拒绝，并把 next 写回 Map。
 export function onAuthResult(s, ok, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
   const state = s || freshState();
 
   // 1. 统一门：锁定期（长锁）或退避期（短锁）内一律拦截，且【不计数】
   //    —— 避免攻击者在锁定期持续戳、把机主自己越锁越久（自我 DoS）；持续尝试的审计由调用方记。
-  if (now < state.lockUntil) {
-    return { next: state, verdict: 'locked', retryAfterMs: state.lockUntil - now };
-  }
+  //    两种锁对客户端说的话不同，判定收敛在 gateCheck。
+  const gated = gateCheck(state, now, cfg);
+  if (gated) return { next: state, ...gated };
 
   // 2. 成功 → 清零
   if (ok) {
@@ -124,9 +143,11 @@ export function ipRateBucket(ip) {
 // 表现出来就是同一个来源、同一次失败，手机上看到的是「令牌不对」，curl 看到的是「被限速了，
 // 15 分钟后再来」——前者会让人反复重试，而每次重试都只是撞在锁上。
 //
-// 判据是 verdict 而不是 failCount：'locked' 涵盖两种情形——本次达阈值上的长锁，以及退避/锁定
-// 期内被门拦下。两者对客户端的含义相同（现在别再试了，等这么久）。'backoff' 不算：那一次请求
-// 真的做了 token 校验并失败了，只是顺带上了把短锁，说 rate_limited 会说反话。
+// 判据是 verdict 而不是 failCount。只有 'locked' 才是 rate_limited——本次达阈值上的长锁，或长锁
+// 期内被门拦下，两者对客户端的含义相同（现在别再试了，等这么久）。另外两种都不算：
+//   'backoff'  那一次请求真的做了 token 校验并失败了，只是顺带上了把短锁，说 rate_limited 会说反话。
+//   'cooldown' 退避短锁期内被拦。同样说反话，而且更伤——用户只错了一次，却被告知「尝试过多」，
+//              于是去等待而不是去改令牌。2026-09-02 的生产误报正是这条（见 gateCheck 头注）。
 export function authRejection({ verdict, retryAfterMs = null } = {}) {
   if (verdict !== 'locked') {
     // unauthorized 不带 retryAfter：给了就等于暗示「等等就能进」，而它真正的问题是令牌不对。

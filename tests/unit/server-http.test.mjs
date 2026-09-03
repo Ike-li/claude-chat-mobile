@@ -161,6 +161,68 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
   assert.equal(locked, 1);
 });
 
+// 退避冷却期内的请求必须回 401 unauthorized，不能回 429 rate_limited（见 rate-limiter.js gateCheck）。
+// HTTP 侧与 socket 握手共用同一个限速桶，所以本机随便一个脚本用错令牌打一次 /health，
+// 就会把浏览器的 socket 握手一起拖进这把 500ms 短锁——那时说「登录尝试过多」同样是在说反话。
+test('createHttpAuth：退避冷却期内 → 401 unauthorized，不是 429 rate_limited', async () => {
+  const states = new Map();
+  let now = 1_000_000;
+  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const mkAuth = () => createHttpAuth({
+    authToken: 'secret',
+    strategy: strategyStub(),
+    rateLimit: {
+      active: true,
+      sourceKey: () => 'ip:127.0.0.1',
+      getState: (k) => states.get(k),
+      setState: (k, st) => { states.set(k, st); },
+      onResult: onAuthResult,
+      now: () => now,
+    },
+  });
+  const run = async () => {
+    const response = { statusCode: 200, body: null, headers: new Map() };
+    const res = {
+      status(code) { response.statusCode = code; return this; },
+      json(body) { response.body = body; return this; },
+      setHeader(k, v) { response.headers.set(k, v); return this; },
+    };
+    await mkAuth()({ headers: { host: 'localhost' }, query: {}, socket: { remoteAddress: '127.0.0.1' } }, res, () => {});
+    return response;
+  };
+  const first = await run();                       // 失败 #1：真校验了令牌 → 401 + 上 500ms 退避锁
+  assert.equal(first.statusCode, 401);
+  now += 235;                                      // 生产实测的 235ms（pageshow → 200ms 重连）
+  const second = await run();                      // 撞进退避锁：没校验令牌，但也不是「尝试过多」
+  assert.equal(second.statusCode, 401, '只错一次，不得升级成 429');
+  assert.equal(second.body?.status, 'unauthorized');
+  assert.equal(second.headers.get('Retry-After'), undefined, 'unauthorized 不带 Retry-After');
+  assert.equal(states.get('ip:127.0.0.1').failCount, 1, '冷却期内不计数');
+});
+
+// 2026-09-02：HTTP 侧此前只在「达阈值锁定」那一刻打一行日志，逐次失败连打的哪个端点都不记。
+// 审计里那条 `ip:127.0.0.1 锁 900s（via:http）`，前后 10 分钟日志全空白——事后完全无法归因
+// 是谁在打。socket 侧每次失败都有 [conn] 日志，两侧不对称。
+test('createHttpAuth：每次鉴权失败都经 onAuthFailure 上报，且绝不带出令牌值', async () => {
+  const seen = [];
+  const auth = createHttpAuth({
+    authToken: 'secret',
+    strategy: strategyStub(),
+    onAuthFailure: (info) => seen.push(info),
+  });
+  const res = { status() { return this; }, json() { return this; }, setHeader() { return this; } };
+  await auth({ headers: { host: 'localhost' }, query: { token: 'wrong-token-value' }, path: '/health' }, res, () => {});
+  await auth({ headers: { host: 'localhost' }, query: {}, path: '/metrics' }, res, () => {});
+
+  assert.equal(seen.length, 2, '两次失败都要能被看见');
+  assert.equal(seen[0].path, '/health');
+  assert.equal(seen[0].reason, 'bad_token', '带了令牌但不匹配');
+  assert.equal(seen[1].path, '/metrics');
+  assert.equal(seen[1].reason, 'no_token', '压根没带令牌——与「带错了」是不同的排查方向');
+  const dumped = JSON.stringify(seen);
+  assert.doesNotMatch(dumped, /wrong-token-value|secret/, '日志载荷里不得出现任何令牌值');
+});
+
 // 2026-08-06 R6：try 不得把 next() 圈进去。下游 handler（/metrics 聚合、/push/subscribe 解析等）
 // 的同步抛错不是鉴权失败——圈进 catch 会给【已通过鉴权】的来源计一次失败（连续 8 次即 15min 锁定，
 // 机主被自家某个 handler 的 bug 锁在门外），且在响应可能已写出后二次 res.status(401)。

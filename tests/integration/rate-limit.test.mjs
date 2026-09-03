@@ -1,7 +1,13 @@
-// tests/integration/rate-limit.test.mjs —— 鉴权门口防暴破限速接线集成测试（承接 NFR-03 / docs/design.md）
-// 纯函数状态机的单测见 tests/unit/rate-limiter.test.mjs；本文件验证握手中间件的接线：
-//   ①正确 token 正常握手不被限速误伤；②失败后 backoff 短锁在时间窗内拦截后续尝试。
+// tests/integration/rate-limit.test.mjs —— 鉴权门口防暴破限速接线集成测试（承接 NFR-03）
+// 纯函数状态机的单测见 tests/unit/rate-limiter.test.mjs；本文件只验握手中间件的【接线】：
+//   ①正确 token 不被限速误伤；②退避短锁期内仍报 unauthorized；③真令牌错误不带重试提示。
 // 独立文件 = 独立进程 = 独立 server 单例，不与 auth-token.test.mjs 的失败计数耦合。
+//
+// 【为什么这里不覆盖「达阈值长锁 → rate_limited + retryAfter」】制造它需要 8 次【真】失败，
+// 而每两次之间必须等过退避（锁内尝试不计数）：500+1000+2000+4000+8000+16000+30000 = 61.5 秒。
+// 一条一分钟的集成用例不值得，且它验的是状态机而非接线。那条契约由单测用注入时钟覆盖：
+// rate-limiter.test.mjs 的 authRejection/gateCheck 组，与 server-http.test.mjs 的
+// 「连续失败锁定 → 429」（rateLimit.now 可注入，直接快进到阈值）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -77,36 +83,28 @@ test.describe('鉴权限速接线集成测试', () => {
     await connectExpectOk('secret-token');
   });
 
-  // 失败后 backoff 短锁在时间窗内拦截后续尝试：串行连错 token，首次 unauthorized、随后应出现 rate_limited
-  test('鉴权失败后 backoff 短锁拦截后续握手（出现 rate_limited）', async () => {
+  // 退避短锁期内被拦下的那些尝试，对客户端【仍然是 unauthorized】。
+  //
+  // 这条用例此前断言的恰好相反（名字就叫「出现 rate_limited」），把一个真实缺陷当契约钉住了：
+  // 用户只输错一次令牌，紧接着的第二次握手（浏览器侧由 pageshow 的 200ms 重连发出）撞进那把
+  // 500ms 退避锁，屏幕上就是「登录尝试过多，请 1 秒后再试」——行动指引从「重输令牌」被错换成
+  // 「等一下」，于是用户等一秒再点，又撞一次。2026-09-02 在机主本机 127.0.0.1 实测复现。
+  // 判据收敛到 rate-limiter.js 的 gateCheck：未达阈值的退避锁 = cooldown（仍是令牌不对），
+  // 只有 failCount 达 threshold 的长锁才配叫 rate_limited。
+  test('退避短锁期内仍报 unauthorized（只错一次不是「尝试过多」）', async () => {
     const results = [];
     for (let i = 0; i < 3; i++) {
       results.push(await connectExpectError('wrong-token'));
     }
     const msgs = results.map(r => r.message);
-    assert.match(msgs[0], /unauthorized/, `首次失败应为 unauthorized，实际：${msgs[0]}`);
-    assert.ok(
-      msgs.some(m => /rate_limited/.test(m)),
-      `失败后应被限速短锁拦截（出现 rate_limited），实际全部：${JSON.stringify(msgs)}`,
-    );
-  });
-
-  // socket 侧此前一个重试数字都不给：客户端只知道「连不上」，不知道要等多久，于是盲目重连——
-  // 而每次重连都只是撞在刚上的锁上。HTTP 侧一直有 Retry-After 头，握手没有响应头可用，
-  // socket.io 的 err.data 是唯一通道。
-  test('被限速拒绝时带重试提示（对应 HTTP 的 Retry-After）', async () => {
-    const results = [];
-    for (let i = 0; i < 3; i++) {
-      results.push(await connectExpectError('wrong-token'));
+    // 第 1 次是真做了 token 校验并失败（backoff）；第 2、3 次是撞进退避锁没校验（cooldown）。
+    // 两者对客户端的含义相同：你的令牌不对。
+    assert.deepEqual(msgs, ['unauthorized', 'unauthorized', 'unauthorized'],
+      `退避期内不得升级成 rate_limited，实际：${JSON.stringify(msgs)}`);
+    for (const [i, r] of results.entries()) {
+      assert.equal(r.data?.retryAfterMs, undefined,
+        `第 ${i + 1} 次不该带 retryAfterMs——给了就等于暗示「等等就能进」，而真正的问题是令牌不对`);
     }
-    const limited = results.find(r => /rate_limited/.test(r.message));
-    assert.ok(limited, `本用例前提是至少出现一次 rate_limited，实际：${JSON.stringify(results.map(r => r.message))}`);
-    assert.ok(limited.data, 'rate_limited 必须带 data 负载');
-    assert.equal(limited.data.reason, 'rate_limited');
-    assert.ok(Number.isFinite(limited.data.retryAfterMs) && limited.data.retryAfterMs > 0,
-      `retryAfterMs 应为正数，实际 ${limited.data.retryAfterMs}`);
-    assert.ok(Number.isInteger(limited.data.retryAfterSeconds) && limited.data.retryAfterSeconds >= 1,
-      'retryAfterSeconds 至少为 1——0 会被读成「立刻可重试」，与锁定的意思相反');
   });
 
   // 反向：单纯的令牌错误不该带重试提示，否则等于暗示「等等就能进」，而它真正的问题是令牌不对。

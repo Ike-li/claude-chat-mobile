@@ -4,7 +4,7 @@ import { networkInterfaces } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import compression from 'compression';
 import express from 'express';
-import { authRejection } from '../auth/rate-limiter.js';   // 拒绝语义与 socket 握手共用
+import { authRejection, gateCheck } from '../auth/rate-limiter.js';   // 拒绝语义与锁定门都与 socket 握手共用
 
 export const clientIp = value => (value || '').toString().replace(/^::ffff:/, '');
 
@@ -70,8 +70,17 @@ function rateLimitActive(rl, req) {
 // strategy 是「公网身份提供方」（src/auth/auth-strategy.js）：本模块只认那个接口形状，
 // 不认识任何具体 IdP。没有配置公网鉴权时传 NULL_AUTH_STRATEGY —— 它不认领任何 Host，
 // 于是全部请求走下面的 AUTH_TOKEN 路。
-export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
+// onAuthFailure（可选）：每一次鉴权失败都回调一次，供调用方打日志/归因。
+// 存在理由：此前 HTTP 侧只在「连续失败达阈值锁定」那一刻打一行日志，逐次失败连打的哪个端点都不记。
+// 2026-09-02 审计里那条 `ip:127.0.0.1 锁 900s（via:http）` 前后 10 分钟日志全空白，事后无从查起，
+// 而 socket 侧每次失败都有 [conn] 日志——同一件事两侧可观测性不对称。
+// 载荷只带 path / 来源桶 / 失败类别，【绝不带令牌值】：这条日志的读者是机主，不是攻击者，
+// 而日志文件的权限边界比 AUTH_TOKEN 本身宽。
+export function createHttpAuth({ authToken, strategy, rateLimit = null, onAuthFailure = null }) {
   return async function httpAuth(req, res, next) {
+    const reportFailure = (reason, key = null) => {
+      try { onAuthFailure?.({ path: req.path ?? req.url ?? '', key, reason }); } catch { /* 日志失败不挡鉴权 */ }
+    };
     try {
       const publicHost = strategy.ownsHost(req.headers.host);
       const rl = rateLimit;
@@ -79,9 +88,14 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
         const key = rl.sourceKey(req);
         const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
         const now = rl.now ? rl.now() : Date.now();
-        if (now < st.lockUntil) {
-          res.setHeader?.('Retry-After', String(Math.ceil((st.lockUntil - now) / 1000)));
-          return res.status(429).json({ status: 'rate_limited' });
+        // gateCheck 区分「未达阈值的退避冷却」与「达阈值的长锁」——前者语义仍是令牌不对（401），
+        // 说成 429 rate_limited 会把行动指引从「重输令牌」错换成「等一下」。
+        const gated = gateCheck(st, now);
+        if (gated) {
+          const rej = authRejection(gated);
+          if (rej.retryAfterSeconds !== null) res.setHeader?.('Retry-After', String(rej.retryAfterSeconds));
+          reportFailure(gated.verdict, key);
+          return res.status(rej.httpStatus).json({ status: rej.reason });
         }
       }
 
@@ -103,8 +117,10 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
         authPassed = true;
       }
 
+      let failKey = null;
       if (rateLimitActive(rl, req)) {
         const key = rl.sourceKey(req);
+        failKey = key;
         const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
         const now = rl.now ? rl.now() : Date.now();
         const r = rl.onResult(st, authPassed, now);
@@ -113,30 +129,42 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
           rl.onLocked?.(key, r);
           const rej = authRejection(r);   // 与 socket 握手共用同一份拒绝语义
           res.setHeader?.('Retry-After', String(rej.retryAfterSeconds));
+          reportFailure('locked', key);
           return res.status(rej.httpStatus).json({ status: rej.reason });
         }
       }
 
-      if (!authPassed) return res.status(401).json({ status: 'unauthorized' });
+      if (!authPassed) {
+        // 「带了令牌但不匹配」与「压根没带」是两个不同的排查方向：前者指向配置漂移
+        // （某个脚本/客户端还揣着旧令牌），后者指向探针或扫描器。只记类别，不记值。
+        const offered = req.query?.token ?? req.headers?.['x-auth-token'];
+        reportFailure(offered ? 'bad_token' : 'no_token', failKey);
+        return res.status(401).json({ status: 'unauthorized' });
+      }
     } catch {
       // JWT 失败等：若启用了限速，计一次失败（与 socket 失败路径对齐）
       const rl = rateLimit;
+      let failKey = null;
       if (rateLimitActive(rl, req)) {
         try {
           const key = rl.sourceKey(req);
+          failKey = key;
           const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
           const now = rl.now ? rl.now() : Date.now();
-          if (now >= st.lockUntil) {
+          if (!gateCheck(st, now)) {   // 锁定门（长锁或退避冷却）未拦下时才计数，同上面的主路径
             const r = rl.onResult(st, false, now);
             rl.setState(key, r.next);
             if (r.verdict === 'locked') {
               rl.onLocked?.(key, r);
-              res.setHeader?.('Retry-After', String(Math.ceil((r.retryAfterMs || 0) / 1000)));
-              return res.status(429).json({ status: 'rate_limited' });
+              const rej = authRejection(r);
+              res.setHeader?.('Retry-After', String(rej.retryAfterSeconds));
+              reportFailure('locked', key);
+              return res.status(rej.httpStatus).json({ status: rej.reason });
             }
           }
         } catch { /* 限速辅助失败不挡 401 */ }
       }
+      reportFailure('access_jwt', failKey);
       return res.status(401).json({ status: 'unauthorized' });
     }
     // 鉴权已通过。next() 必须在 try 外（R6/2026-08-06）：下游 handler 的同步抛错不是鉴权失败——
