@@ -4,6 +4,8 @@
 
 This is the source of truth for what belongs in the repository. Run `npm run inventory:update` after intentionally adding, moving, or deleting files. `npm run inventory:check` rejects unclassified files and stale output.
 
+> **Scope: the full repository, not the release package.** The distribution tarball is a trimmed subset — `tests/` (which holds the test tree, the test infrastructure, and every gate) and maintainer-only entries under `scripts/` are dropped via `.gitattributes` `export-ignore`. A file listed below can therefore be legitimately absent from a downloaded tarball; see [hard-rules.md](hard-rules.md) §4.1.1.
+
 ## Runtime entrypoints
 
 - `app/server.js` is the compatibility launcher used by `npm start`, the macOS desktop LaunchAgent, and integration tests.
@@ -49,12 +51,12 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Project configuration | 6 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
-| Test configuration | 16 |
+| Test configuration | 15 |
 | Test support | 13 |
 | Unit test | 175 |
 | Vendored asset | 21 |
 
-Total classified files: **506**.
+Total classified files: **505**.
 
 ## Complete file inventory
 
@@ -343,7 +345,6 @@ Total classified files: **506**.
 | `tests/infra/playground/nginx/default.conf` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/infra/playground/runtime.env` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/infra/playground/seed/app-config.json` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
-| `tests/infra/playground/seed/empty.env` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/infra/playground/seed/workspace/hello.js` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/infra/playground/seed/workspace/README.md` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/infra/playwright.config.ts` | Test configuration | Test infrastructure: container image, compose topologies, Playwright configs, playground fixtures | `npm run test:e2e` | Authored and reviewed manually | keep |

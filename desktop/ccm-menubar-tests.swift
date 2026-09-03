@@ -983,9 +983,17 @@ extension CCMCoreTests {
 
         // 端到端：登录 shell 的 PATH 至少要覆盖当前进程的（zsh -lc 只会往上加，不会减）。
         // 在 GUI 血统里这条差异就是本 bug；在终端血统里两者相等，断言同样成立。
+        //
+        // 判据是【集合覆盖】而不是字符长度：长度只是覆盖关系的代理指标，PATH 里有重复条目时
+        // 长度会变大却不增加覆盖。2026-09-03 实测撞上：跑测试的进程 PATH 里
+        // /Users/x/.local/bin 出现了两次，比登录 shell 长 25 字符，这条就红了——
+        // 而两者的覆盖关系完全成立。报缺失项而不是报字符数，红的时候也能直接看出少了谁。
         let ownPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        check(injected.count >= ownPath.count || injected == ownPath,
-              "登录 shell PATH 不该比自身的更短（got \(injected.count) vs \(ownPath.count) 字符）")
+        let ownEntries = Set(ownPath.split(separator: ":").map(String.init))
+        let injectedEntries = Set(injected.split(separator: ":").map(String.init))
+        let missing = ownEntries.subtracting(injectedEntries)
+        check(missing.isEmpty,
+              "登录 shell PATH 应覆盖当前进程的，缺：\(missing.sorted().joined(separator: ", "))")
     }
 
     /// 源码闸：新增 spawn 点时忘了注入环境，是这个 bug 唯一的复发路径。

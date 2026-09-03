@@ -165,6 +165,8 @@ export function renderRepositoryMap(files) {
     '',
     'This is the source of truth for what belongs in the repository. Run `npm run inventory:update` after intentionally adding, moving, or deleting files. `npm run inventory:check` rejects unclassified files and stale output.',
     '',
+    '> **Scope: the full repository, not the release package.** The distribution tarball is a trimmed subset — `tests/` (which holds the test tree, the test infrastructure, and every gate) and maintainer-only entries under `scripts/` are dropped via `.gitattributes` `export-ignore`. A file listed below can therefore be legitimately absent from a downloaded tarball; see [hard-rules.md](hard-rules.md) §4.1.1.',
+    '',
     '## Runtime entrypoints',
     '',
     '- `app/server.js` is the compatibility launcher used by `npm start`, the macOS desktop LaunchAgent, and integration tests.',
