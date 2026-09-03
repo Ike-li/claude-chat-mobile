@@ -1,7 +1,7 @@
 // tests/unit/metrics.test.mjs —— metrics.js 单测（docs/design.md MetricsCollector + StateProbe，承接 NFR-15）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inc, gauge, label, getLabel, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../app/src/ops/metrics.js';
+import { inc, gauge, label, getLabel, snapshot, reset, classifyProbeState, recentDeliveryFailure, recentIncident } from '../../app/src/ops/metrics.js';
 
 test.describe('MetricsCollector（docs/design.md 指标最小集）', () => {
   test.beforeEach(() => reset());
@@ -70,33 +70,33 @@ test.describe('label：非数值上下文（与 counters/gauges 命名空间独�
   });
 });
 
-test.describe('classifyState（docs/design.md StateProbe.classify——后端可产出的四类）', () => {
+test.describe('classifyProbeState（StateProbe：后端可产出的四类；勿与 service-units.classifyState 混淆）', () => {
   // 语义：failed/awaiting 是当前实时观测；notifyFailed 是进程生命周期内累计（重启清零）——一旦发生过
   // 推送失败即持续提示运维去查审计（诚实的诊断信号，非"必然还在失败中"）；mobileClients 为当前连接数。
-  // host_offline 不在此列（docs/design.md 明说不由后端产生，由客户端心跳缺席判定）。
+  // host_offline 不在此列（不由后端产生，由客户端心跳缺席判定）。
   test('全正常且有移动端连接 → null（无需关注的状态）', () => {
-    assert.equal(classifyState({ failed: 0, awaiting: 0, notifyFailed: 0, mobileClients: 1 }), null);
+    assert.equal(classifyProbeState({ failed: 0, awaiting: 0, notifyFailed: 0, mobileClients: 1 }), null);
   });
 
   test('failed 优先级最高（盖过其余）', () => {
-    assert.equal(classifyState({ failed: 1, awaiting: 2, notifyFailed: 3, mobileClients: 0 }), 'failed');
+    assert.equal(classifyProbeState({ failed: 1, awaiting: 2, notifyFailed: 3, mobileClients: 0 }), 'failed');
   });
 
   test('awaiting 次于 failed', () => {
-    assert.equal(classifyState({ failed: 0, awaiting: 1, notifyFailed: 1, mobileClients: 1 }), 'awaiting');
+    assert.equal(classifyProbeState({ failed: 0, awaiting: 1, notifyFailed: 1, mobileClients: 1 }), 'awaiting');
   });
 
   test('notify_failed 次于 awaiting', () => {
-    assert.equal(classifyState({ failed: 0, awaiting: 0, notifyFailed: 1, mobileClients: 1 }), 'notify_failed');
+    assert.equal(classifyProbeState({ failed: 0, awaiting: 0, notifyFailed: 1, mobileClients: 1 }), 'notify_failed');
   });
 
   test('mobile_offline：当前无移动端连接（最低优先级、中性状态）', () => {
-    assert.equal(classifyState({ failed: 0, awaiting: 0, notifyFailed: 0, mobileClients: 0 }), 'mobile_offline');
+    assert.equal(classifyProbeState({ failed: 0, awaiting: 0, notifyFailed: 0, mobileClients: 0 }), 'mobile_offline');
   });
 
   test('缺省字段按 0/正常处理（防御性）', () => {
-    assert.equal(classifyState({}), 'mobile_offline'); // 无字段 → mobileClients 视为 0
-    assert.equal(classifyState({ mobileClients: 2 }), null);
+    assert.equal(classifyProbeState({}), 'mobile_offline'); // 无字段 → mobileClients 视为 0
+    assert.equal(classifyProbeState({ mobileClients: 2 }), null);
   });
 });
 

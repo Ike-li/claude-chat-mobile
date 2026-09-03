@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { createInstanceManager } from '../../app/src/server/instance-manager.js';
+
+const APP_JS = join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js');
 
 test('instance manager owns IDs, per-instance preferences, lookup, and teardown', () => {
   const manager = createInstanceManager();
@@ -85,6 +90,39 @@ test('instance state priority is permission, busy, aborted, error, done, idle', 
   assert.equal(manager.stateOf(id), 'busy');
   agent.pendingPermissions.set('p', {});
   assert.equal(manager.stateOf(id), 'permission');
+});
+
+// /health.busy 与 instances.turnRunning 同口径：只认在途轮。stateOf 把 hasBgTasks 折进 'busy'
+// （抽屉/角标该亮），但发送按钮和 /health 不得被后台任务锁死——composer 注释写过这条。
+test('anyTurnRunning 只认 pendingTurns，后台任务不算（与 stateOf busy 正确地不同）', () => {
+  const manager = createInstanceManager();
+  const id = manager.nextId();
+  const agent = {
+    instanceId: id,
+    sessionId: 's-bg',
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => true,
+    dispose() {},
+  };
+  manager.agents.set(id, agent);
+
+  assert.equal(manager.stateOf(id), 'busy', '抽屉/instances.state 把后台任务算运行中');
+  assert.equal(manager.anyTurnRunning(), false, '/health.busy 被后台任务点亮 = 把「可发送」说成「有在途轮」');
+
+  agent.pendingTurns = 1;
+  assert.equal(manager.anyTurnRunning(), true);
+  agent.pendingTurns = 0;
+  agent.hasBgTasks = () => false;
+  assert.equal(manager.anyTurnRunning(), false);
+  assert.equal(manager.stateOf(id), 'idle');
+});
+
+test('/health.busy 必须走 anyTurnRunning，不得自行用 stateOf', () => {
+  const src = readFileSync(APP_JS, 'utf8');
+  assert.match(src, /busy:\s*instanceManager\.anyTurnRunning\(\)/,
+    '抽出函数却不接线，等于没钉住 /health 这条消费方');
 });
 
 test('captureUnreadSnapshot freezes the live counter into the entry snapshot and zeroes the counter', () => {

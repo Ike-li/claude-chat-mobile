@@ -56,12 +56,14 @@ export function reset() {
   labels.clear();
 }
 
-// StateProbe.classify——把当前系统观测归为五类中后端可产出的四类之一，或 null（无需
+// classifyProbeState——把当前系统观测归为五类中后端可产出的四类之一，或 null（无需
 // 关注）。返回单个优先级最高的类：failed > awaiting > notify_failed > mobile_offline。host_offline 不在
 // 此列（后端存活即主机在线，由客户端心跳缺席判定，不由后端探针产生）。纯函数、不依赖模块状态，
 // 调用方（src/server/app.js 的 /metrics）传入当下实时观测——failed/awaiting 为当前计数，notifyFailed 为进程内累计
 // （>0 即持续提示去查审计，非"必然仍在失败"），mobileClients 为当前已连接的客户端数。
-export function classifyState({ failed = 0, awaiting = 0, notifyFailed = 0, mobileClients = 0 } = {}) {
+// 不叫 classifyState：service-units.js 已占用这个名字（launchd unit 的 running/stopped/crashed），
+// 同名会让 grep 把两套完全不同的判据搜到一起。
+export function classifyProbeState({ failed = 0, awaiting = 0, notifyFailed = 0, mobileClients = 0 } = {}) {
   if (failed > 0) return 'failed';
   if (awaiting > 0) return 'awaiting';
   if (notifyFailed > 0) return 'notify_failed';
@@ -69,7 +71,7 @@ export function classifyState({ failed = 0, awaiting = 0, notifyFailed = 0, mobi
   return null;
 }
 
-// 服务状态可见性（「用户可观察状态」）——刻意不复用 classifyState：
+// 服务状态可见性（「用户可观察状态」）——刻意不复用 classifyProbeState：
 // 那是给 /metrics 外部消费的粗分类（failed/awaiting 已被会话 ❗ 角标与"需要你(N)"聚合覆盖，重复无意义；
 // mobile_offline 对正在看 UI 的设备是自指悖论）。这里只取"推送投递健康"这一条真正没有 UI 覆盖过的信号，
 // 且必须带时间语义——notifyFailed 计数器进程重启前累计不衰减，原样展示布尔值会有"狼来了/过期红灯"问题，

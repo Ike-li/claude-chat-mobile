@@ -469,7 +469,7 @@ const getMetricsPayload = () => {
       hookEventsIgnored: counters.hook_events_ignored ?? 0,
       hookPushes: counters.hook_pushes ?? 0,
     },
-    state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
+    state: metrics.classifyProbeState({ failed, awaiting, notifyFailed, mobileClients }),
     states: { failed, awaiting, notifyFailed, mobileClients },
     timestamp: Date.now(),
   };
@@ -481,7 +481,8 @@ registerOperationalRoutes({
   getHealth: () => ({
     status: 'ok',
     sessionId: agents.get(viewingInstanceId)?.sessionId ?? null,
-    busy: [...agents.values()].some(agent => agent.pendingTurns > 0),
+    // 只认在途轮，不是 stateOf==='busy'（后者含后台任务）。口径见 instance-manager.anyTurnRunning。
+    busy: instanceManager.anyTurnRunning(),
     versions,
     buildNonce: process.env.CCM_BUILD_NONCE || null,
     timestamp: Date.now(),
@@ -892,7 +893,7 @@ function computeNeedsYou() {
 // "ccm 这个服务本身有没有出过岔子"——判定化信号，全部带时效窗自动退场（不做不衰减的常驻布尔）：
 // 推送投递健康（recentDeliveryFailure）+ 服务启动时刻（供前端与本地基线比对判定重启）+ 登录限速锁定
 // （=有人在暴力尝试入口，安全信号）+ 前端错误（=界面自身坏了，详情在日志面板）。
-// 刻意不接 classifyState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
+// 刻意不接 classifyProbeState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
 // mobile_offline 对正在看 UI 的设备是自指悖论——原样接入会制造重复信号，见方案 Context。
 // ── 桌面端服务的重启历史采样 ──────────────────────────────────────────────
 //

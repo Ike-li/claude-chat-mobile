@@ -47,6 +47,16 @@ export function createInstanceManager() {
     return 'idle';
   }
 
+  // /health.busy 与 instances.turnRunning 同口径：只认在途轮。不得复用 stateOf === 'busy'——
+  // 那把 hasBgTasks 也折进去，后台任务期抽屉会显示运行中，但发送仍放行（见 app.js turnRunning 注释）。
+  // health 若跟 stateOf 对齐，巡检会把「有后台任务」说成「有在途轮」。
+  function anyTurnRunning() {
+    for (const agent of agents.values()) {
+      if (agent.pendingTurns > 0) return true;
+    }
+    return false;
+  }
+
   // 只清表、不 dispose。onExit 与 remove 共用这一份——两处各自手写九行 delete 时曾漏掉
   // unread* 三张表（2026-08-03 F3），instanceId 自增不复用，条目永远无人再读。收敛后加新表只改这里。
   function clearTables(id) {
@@ -96,6 +106,7 @@ export function createInstanceManager() {
     forSession,
     inheritedEffort,
     stateOf,
+    anyTurnRunning,
     captureUnreadSnapshot,
     clearTables,
     remove,
