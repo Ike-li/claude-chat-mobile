@@ -125,15 +125,32 @@ function formatAgo(ms) {
 
 // 服务状态面板「终端会话推送」行：CLI hooks 桥的安装态 + 该给什么按钮。
 // 这是手机上唯一能开关它的入口（npm 命令只能在电脑终端跑），所以文案要说清"开了能多得到什么"。
-// 两处刻意不给按钮：① env 停用时——正解是改 .env 重启，给按钮等于误导；② 漂移时——用户自己动过
-// settings.json，一键覆盖会踩掉他的改动，交给他自己 hooks:status 决断。
-// 旧 server 不带 hooksBridge / 读不出状态 → 返回 null 整段不渲染，宁可缺席也不误报"未安装"。
+// 三处刻意不给按钮：① env 停用时——正解是改 .env 重启，给按钮等于误导；② 漂移时——用户自己动过
+// settings.json，一键覆盖会踩掉他的改动，交给他自己 hooks:status 决断；③ 状态读不出时——盲点
+// "开启"可能覆盖一份其实存在、只是没读成功的配置。
+//
+// 缺席只留给「不知道有没有这功能」这一种：旧 server 不带 hooksBridge 字段时前端无从判断，返回 null
+// 整段不渲染。而 state==='unknown' 是 server 明确说「读 ~/.claude 出错了」（cli-hooks-bridge.js:322
+// 的 catch），功能确定存在——早先把它一并判成 null，等于让一个已知故障表现得像"这里从来没东西"，
+// 而这一段是手机上唯一能看到/操作 hooks 桥的入口，消失即彻底失联。改为就地说明：既不误报未装
+// （原判据要守的正是这条），也不留白。
 export function formatHooksBridgeRow(hooksBridge) {
   const state = hooksBridge?.state;
-  if (!state || state === 'unknown') return null;
+  if (!state) return null;
   const label = t('终端会话推送');
+  // off 先判：它由 env 直接决定、不经读盘，比「安装态读不出」更确定也更要紧——功能整体停用时
+  // 装没装都不影响它不工作，先报读取失败会把人引去修一个修好了也没用的东西。
   if (hooksBridge.off) {
     return { label, value: t('已停用（CLI_HOOKS_BRIDGE=off）'), tone: 'muted', action: null };
+  }
+  if (state === 'unknown') {
+    return {
+      label,
+      value: t('状态读取失败'),
+      tone: 'warn',
+      action: null,
+      hint: t('读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看'),
+    };
   }
   if (state === 'installed') {
     return { label, value: t('已启用'), tone: 'ok', action: 'uninstall', actionText: t('关闭') };

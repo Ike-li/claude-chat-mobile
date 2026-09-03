@@ -43,6 +43,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 服务端读 ~/.claude 出错（文件损坏/权限变更）时广播 state:'unknown'。这一档早先与「旧 server 不带
+  // 该字段」同判 null，整段静默消失——而这是手机上唯一能看到 hooks 桥的入口（见本文件头注），消失
+  // 即彻底失联：既不知道有这功能，也无从判断是不是坏了。现在就地说明，且仍不误报成"未启用"。
+  test('P0-25c 安装态读取失败：整段不消失，说读不出来而不是说没装', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:hooks-unknown');
+
+    await openGeneralSettings(page);
+    const section = page.locator('#hooksBridgeSection');
+    // 核心：段落还在。修复前这里是 hidden——用户在手机上再也看不到这个功能存在过
+    await expect(section).toBeVisible();
+    await expect(section).toContainText('状态读取失败');
+    await expect(section).toContainText('settings.json');
+    // 不得误报装了或没装（原判据要守住的正是这条，不能为了不留白就退回误报）
+    await expect(section).not.toContainText('未启用');
+    await expect(section).not.toContainText('已启用');
+    // 状态未知时不给一键按钮：盲点「开启」可能覆盖一份其实存在、只是没读成功的配置
+    await expect(section.locator('[data-testid="hooks-bridge-action"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 「发一条测试推送」：今晚这条链路的教训——用户没有任何办法自证推送通不通，只能等真事件，
   // 于是"从未订阅成功"被误当成"这功能没用"。未订阅时必须明说，而不是假装发出去了。
   test('P0-26 测试推送：未订阅时如实告知没有收件人，不谎报成功', async ({ page }) => {

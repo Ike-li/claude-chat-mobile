@@ -553,7 +553,11 @@ function unlockSocket(socket) {
       }
     });
   }
-  // models 校正到当前查看 tab 的 cwd：未知工作区不重放（前端保留 localStorage 缓存、真 models 到达即校正），绝不回退别区清单
+  // models 校正到当前查看 tab 的 cwd：未知工作区不重放，绝不回退别区清单（拿别的 cwd 的候选顶上
+  // ＝谎报这个工作区能选什么）。不重放≠推空，理由同 pushModelsForCwd：推空会摧毁前端网格。
+  // 注意前端此时确实是空的——modelsList 是内存态，localStorage 里没有 models 缓存（只存了
+  // auth_token / current_session / slash_commands 等）。空网格由 #modelGridEmpty 就地说明，
+  // 真 models 由后续 scout/实例 fetchModels 补发时校正。
   const replayModels = modelsCache.get(agents.get(viewingInstanceId)?.cwd ?? viewingCwd);
   if (replayModels) {
     socket.emit('agent:event', {

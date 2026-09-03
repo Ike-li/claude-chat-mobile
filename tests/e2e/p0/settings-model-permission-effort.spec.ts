@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -149,6 +149,50 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#settingsSessionHint')).toContainText('第一条消息');
     // 说明必须真的可见（不是被别的规则压在 0 高度里），否则等于没修
     await expect(page.locator('#settingsSessionHint')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 空态的另一档「会话创建中」（sessionIdBlockView 的 assigning 分支）没有 E2E，是可达性问题而非漏测：
+  // 本面板唯一入口 #pillDefaults 在 #composerFooter 内、随 composer 显隐（index.html:615-618），
+  // 而无 sid 时 composer 只在 composeReady / pendingFirstSend / freshInterrupted 下可见。于是
+  //   · 实例活着但 CLI 迟迟不吐 init（真机 bc29ccc2 那 31 分钟）——composer 隐藏，面板根本打不开；
+  //     曾按这个场景写过一条用例，红在 #pillDefaults 点不到，是场景选错而非实现有误，已撤。
+  //   · 空首页首发在途——可达，但窗口只有一次 socket 往返，稳定断言它要么靠 sleep（缺陷窗口的负片），
+  //     要么新造 mock 夹具；两者的代价都高于它保住的那点接线。
+  // 该档的四种输入组合（含「首轮被中断不许说创建中」这条说谎边界）由
+  // tests/unit/logic-session-id-block.test.mjs 全覆盖，并做过手工变异确认判别力。
+
+  // 同一条立场的第三处。「✨ 模型」标题恒显而 #customModelGrid 可空：真 server 在该 cwd 无 models
+  // 缓存时刻意不推（pushModelsForCwd 的 `if (!p) return`，推空会摧毁网格），改由 openScoutInstance
+  // 起进程去取——首次连接 / 新工作区到 scout 返回之间网格就是空的，scout 起不来则一直空着。
+  // 前端也没有 localStorage 兜底（只缓存了 slash_commands，models 不在其中）。
+  // 「✨ 模型」标题恒显而 #customModelGrid 可空：真 server 在该 cwd 无 models 缓存时刻意不推
+  // （pushModelsForCwd 的 `if (!p) return`，推空会摧毁网格），改由 openScoutInstance 起进程去取。
+  // 空网格＝又一个孤儿标题，故补 #modelGridEmpty 就地说明。
+  //
+  // 这条测的是那个说明【不该】出现的时候——判据是网格里的磁贴数，不是 models 列表长度。磁贴有三个
+  // 来源：候选列表、init 报的当前模型、以及当前实例的 inst.model（app.js:3852，经 ensureModelOption
+  // 去重后合成一张）。首版实现只看 modelsList，于是 models 事件没来但另两路补了卡时，会一边说
+  // 「还没拿到清单」一边摆着一张卡——同屏自相矛盾，比原来的空白更糟。是这条实测把它顶回去的。
+  //
+  // 「一张都没有」那半边没有 E2E：它还要求当前无实例（否则 inst.model 必补一张），而 mock 预置了
+  // inst_1/inst_2 并在握手就广播，那张卡加进去后不随 session:new 清除。真要构造得改 instances 契约，
+  // 连锁影响远超这半条用例的价值。真实世界里它可达（全新安装首次打开 + 点＋进 compose），
+  // 判定逻辑由 tests/unit/logic-model-grid-empty.test.mjs 覆盖。
+  test('P0-09x 模型候选未到达但有兜底磁贴：不得说「没清单」——有卡就不能说没有', async ({ page }) => {
+    await gotoMock(page); // 内部 POST /__reset，故武装必须在它之后
+    await page.request.post('/__arm-no-models');
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionSettings(page);
+
+    // models 事件整条没发，候选列表为空；但 init/inst.model 仍补出一张「当前加载模型」
+    const tiles = page.locator('.model-tile');
+    await expect(tiles).toHaveCount(1);
+    await expect(tiles.first()).toContainText('当前加载模型');
+    // 有卡就不能说没有
+    await expect(page.locator('#modelGridEmpty')).toHaveClass(/hidden/);
 
     await expectNoBrowserErrors(page);
   });

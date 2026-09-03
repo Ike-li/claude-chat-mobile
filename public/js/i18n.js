@@ -184,9 +184,12 @@ export const EN_DICT = Object.freeze({
   '这台手机': 'This phone',
   '这台电脑': 'This computer',
   '会话标识': 'Session ID',
+  // 模型候选还没到（scout 在途）或取不到：不承诺进度，只给事实与出路
+  '还没拿到这个工作区的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。': 'No model list for this workspace yet. Tap ⟳ above to re-read it, or send a message and it will fill in.',
   // 懒创建期的就地说明。只讲机制、不讲用户做没做——首条已发出而 init 未回的短窗里，
   // 「你还没发消息」是假话（见 logic/panel-state.js sessionIdBlockView）。
   '发出第一条消息后，CLI 才会创建会话并分配 ID。': 'The CLI creates the session and assigns an ID once the first message is sent.',
+  '会话创建中，CLI 分配 ID 后显示在这里。': 'Creating the session — the ID appears here once the CLI assigns it.',
   // '诊断' 已在上方（服务状态那组）收录，此处复用同一条，勿重复添加
   '访问与帮助': 'Access & help',
   // 设置分块标题：'模型' 已在下方（服务状态那组）收录，此处复用同一条。
@@ -728,6 +731,9 @@ export const EN_DICT = Object.freeze({
   '已启用': 'On',
   '未启用': 'Off',
   '配置已被改动': 'Config was modified',
+  // 安装态读不出来（服务端读 ~/.claude 抛错）：只说读不出，不说装没装
+  '状态读取失败': 'Cannot read status',
+  '读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看': 'Cannot read the install record in ~/.claude/settings.json — the file may be corrupted or its permissions changed. Run npm run hooks:status on your computer to check.',
   '开启': 'Turn on',
   '开启后，你在电脑终端里跑的会话完成或需要你时，手机会收到通知': 'Once on, sessions you run in your computer terminal will notify your phone when they finish or need you',
   '开启终端会话推送？': 'Turn on terminal session alerts?',

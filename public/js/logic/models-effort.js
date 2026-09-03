@@ -69,6 +69,20 @@ export function resolveModelTileDisplay(models) {
   });
 }
 
+// 「✨ 模型」块一张磁贴都没有时的就地说明。标题恒显而网格可空——首次连接 / 新工作区到 scout 返回
+// 之间（服务端 pushModelsForCwd 无缓存刻意不推，改由 openScoutInstance 起进程去取），以及 scout
+// 起不来时的持续空白，都会让标题独自挂在那儿。
+//
+// 判据刻意是「网格里最终有几张卡」而不是「models 列表长度」：磁贴有两个来源，rebuildCustomModelGrid
+// 渲染的候选列表，和 ensureModelOption（app.js:156）在它之外追加的那张「当前加载模型」。只看列表的话，
+// 冷启动下会一边说「还没拿到清单」一边摆着一张卡——自相矛盾比原来的空白更糟（E2E 实测撞出来的）。
+// 不写「正在读取…」：scout 可能早就失败了，那句话会永远停着说一件不再为真的事。只陈述事实 +
+// 指向面板右上角那个恒可见的 ⟳（settings-config-refresh），让用户有一个真能按的出路。
+export function modelGridEmptyHint({ tileCount } = {}) {
+  if (Number.isFinite(tileCount) && tileCount > 0) return null;
+  return t('还没拿到这个工作区的模型清单。点上方 ⟳ 重新读取，或发一条消息后自动补齐。');
+}
+
 /** value=default 条目的 resolvedModel（wire），无则 '' */
 export function defaultResolvedModel(modelsList) {
   if (!Array.isArray(modelsList)) return '';

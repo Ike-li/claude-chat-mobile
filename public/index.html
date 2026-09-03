@@ -639,6 +639,8 @@
           <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
           <span class="text-[10px] text-ink-faint ml-1">下一条消息起效</span>
         </div>
+        <!-- 候选还没到（scout 在途）或取不到时的就地说明，替代空网格 + 孤儿标题 -->
+        <div id="modelGridEmpty" class="hidden text-xs text-ink-soft leading-relaxed"></div>
         <div id="customModelGrid" class="grid grid-cols-2 gap-1.5">
           <!-- 动态生成的模型卡片 -->
         </div>

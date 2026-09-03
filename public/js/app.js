@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, sessionIdBlockView, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, shouldAttemptReconnect, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, formatAgoShort, formatAuditEntry, isLanOrLocalHostname, authFailurePath, summarizeRecentsLoad} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, modelGridEmptyHint, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, sessionIdBlockView, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, shouldAttemptReconnect, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, formatAgoShort, formatAuditEntry, isLanOrLocalHostname, authFailurePath, summarizeRecentsLoad} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
@@ -172,6 +172,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         syncModelUI(value);
       };
       customModelGrid.appendChild(card);
+      syncModelGridEmptyHint(); // 这张兜底卡也算磁贴：加上它之后就不能再说「一张都没有」
     }
   }
   // 两个弹窗容器留在 app.js：通用 sheet 开关与视图切换仍要用；其余 perm*/question* DOM 引用
@@ -300,10 +301,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 短 session_id 胶囊：显前 8 位、点按复制完整 id。便于对照 CLI /resume、日志、多设备定位同一会话。
   // 无 id 时不再只藏行——那会在面板底部留下一个没人管的「🆔 会话标识」标题（标题恒显），形似渲染故障；
   // 改为收起胶囊 + 就地说明懒创建（判定与文案见 logic/panel-state.js sessionIdBlockView）。
-  function updatePillSession(sid) {
+  function updatePillSession(sid, emptyCtx = {}) {
     const pill = $('pillSession'), txt = $('pillSessionText'), row = $('settingsSessionRow');
     if (!pill || !txt) return;
-    const view = sessionIdBlockView(sid);
+    const view = sessionIdBlockView({ sessionId: sid, ...emptyCtx });
     currentSessionIdForCopy = view.showRow ? sid : null;
     txt.textContent = view.showRow ? sid.slice(0, 8) : '';
     pill.classList.toggle('hidden', !view.showRow);
@@ -400,6 +401,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       };
       customModelGrid.appendChild(card);
     });
+    syncModelGridEmptyHint();
+  }
+
+  // 「✨ 模型」标题恒显，网格却可能一张卡都没有（该 cwd 无 models 缓存时服务端不推、等 scout；
+  // scout 起不来则一直空着）——空白＝又一个孤儿标题。这里按【实际渲染出的磁贴数】判，而不是按
+  // models 列表长度：磁贴有两个来源（本函数上方的候选列表 + ensureModelOption 追加的「当前加载
+  // 模型」），只看列表会一边说没清单一边摆着一张卡。故两个产出点都要调用本函数收口。
+  function syncModelGridEmptyHint() {
+    const emptyEl = $('modelGridEmpty');
+    if (!emptyEl || !customModelGrid) return;
+    const hint = modelGridEmptyHint({ tileCount: customModelGrid.querySelectorAll('.model-tile').length });
+    emptyEl.textContent = hint || '';
+    emptyEl.classList.toggle('hidden', !hint);
   }
 
   function updateModelAndSuffix(rawModel) {
@@ -4061,8 +4075,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // canRestart 与 devMode 是两维：devMode 管上面这个常驻按钮组，canRestart 管配置面板
     // 保存成功后要不要给「立即重启」入口（生产 DEV_MODE=0 但被 launchd 托管时应为 true）。
     _canRestart = p?.canRestart === true;
-    // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无会话（空首页/未获 id）隐藏
-    updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
+    // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无 id 时收起胶囊并就地说明缺席原因。
+    // 两个空态参数在此处求值：实例懒开于首条消息，故「有 newViewing 却无 sid」＝id 分配在途；
+    // _pendingFirstSend 覆盖空首页首发到懒开广播回来之间那一瞬（此时 newViewing 仍是 null）。
+    // 必须读本行上方尚未被 4122 消费掉的 _pendingFirstSend，顺序不可与 bindView 分支对调。
+    updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null, {
+      viewingInstanceId: newViewing,
+      pendingFirstSend: _pendingFirstSend,
+      // 首轮被中断的全新会话：实例还在但那轮作废了，没有 id 在路上（同 5886 处的算法）
+      freshInterrupted: Boolean(newViewing) && newViewing === freshInterruptedInstanceId,
+    });
     // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示
     syncTopContextPillVisibility(newViewing, instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     // 输入条同上：必须无条件同步，不能只靠下面 bindView 那条路。CLI 迟到的 init 只会让广播多出一个

@@ -297,12 +297,34 @@ export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) 
 // 会话设置底部「🆔 会话标识」块：session id 是懒创建的（新会话懒开时 entry.sessionId=null，
 // 要等 SDK 首个 init 事件才有），此前那行整条隐藏，只剩标题孤零零挂着——凭空少一栏，用户只会
 // 以为界面坏了（与 effort 不支持时的处理同一条立场）。故不留白：没有 id 就就地说清为什么没有。
-// 文案只描述机制、不断言用户做没做——「首条已发出、init 尚未回 session_id」的短窗里，说
-// 「你还没发消息」是假话；说「发出第一条消息后由 CLI 创建」在三种空态下都为真。
-export function sessionIdBlockView(sessionId) {
+//
+// 空态分两档，判据是服务端实例的有无——实例本身也是懒开的（src/server/app.js:833「session:new 后
+// viewingInstanceId=null（懒创建无实例）」、2187「无可路由实例则懒开一个」），所以「实例在、id 不在」
+// 只可能是消息已发出、正在等 SDK 首个 init；pendingFirstSend 补上空首页首发到懒开广播回来之间那一瞬。
+//   · 尚未发送 —— 说机制（发了才会有），这是用户能采取的行动
+//   · 分配在途 —— 说等待（正在创建），别把等待中说成尚未开始：真机 bc29ccc2 那次 CLI 卡了 31 分钟
+//     没吐 init，实例活着、内容在流，此时告诉用户「发出第一条消息后才会分配」是答非所问
+// freshInterrupted 是「实例在但没有 id 在路上」的例外（app.js:2384 的设置条件恰是「有实例、无 sid」）：
+// 全新会话首轮被中断，那一轮已经作废，说「创建中」就是把已停止说成进行中——归回未发送档，
+// 因为用户此时确实要再发一条才会有 id。两档都不写「你还没发消息」：那句话在分配在途时是假的。
+//
+// 可达性（决定这两档各自能被谁看见）：本块所在的会话设置 sheet 唯一入口是底栏 #pillDefaults，
+// 它在 #composerFooter 内、随 composer 显隐（index.html:615-618）。无 sid 时 composer 只在
+// composeReady / pendingFirstSend / freshInterrupted 三种情况下可见（shouldShowComposer），
+// 也就是说「实例在、sid 迟迟不来」（真机 bc29ccc2 那 31 分钟）用户其实打不开这个面板。
+// 分配在途档因此覆盖的是首发那一小段窗口，不是长时间卡住的那种——别据此以为它能报卡顿。
+export function sessionIdBlockView({
+  sessionId, viewingInstanceId = null, pendingFirstSend = false, freshInterrupted = false,
+} = {}) {
   const sid = typeof sessionId === 'string' ? sessionId.trim() : '';
   if (sid) return { showRow: true, hint: null };
-  return { showRow: false, hint: t('发出第一条消息后，CLI 才会创建会话并分配 ID。') };
+  const assigning = (Boolean(viewingInstanceId) || pendingFirstSend === true) && freshInterrupted !== true;
+  return {
+    showRow: false,
+    hint: assigning
+      ? t('会话创建中，CLI 分配 ID 后显示在这里。')
+      : t('发出第一条消息后，CLI 才会创建会话并分配 ID。'),
+  };
 }
 
 // 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。

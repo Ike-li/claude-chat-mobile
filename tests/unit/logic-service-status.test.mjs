@@ -220,7 +220,6 @@ test.describe('限速告警文案按来源分叉（不再无条件说「有人�
 // 旧 server 不带 hooksBridge 字段 → 整段优雅缺席，不显示误导性的"未安装"。
 test('formatHooksBridgeRow：四态文案 + 按钮动作，旧 server 缺字段则不渲染', () => {
   assert.equal(formatHooksBridgeRow(undefined), null, '旧 server 无此字段 → 不渲染整段');
-  assert.equal(formatHooksBridgeRow({ state: 'unknown' }), null, '读不出安装态 → 宁可不显示，也不误报未装');
 
   const off = formatHooksBridgeRow({ state: 'installed', off: true });
   assert.match(off.value, /已停用|off/i);
@@ -238,6 +237,30 @@ test('formatHooksBridgeRow：四态文案 + 按钮动作，旧 server 缺字段�
   const drifted = formatHooksBridgeRow({ state: 'drifted' });
   assert.equal(drifted.tone, 'warn');
   assert.equal(drifted.action, null, '漂移时不给一键覆盖——用户自己动过配置，得他自己决断');
+});
+
+// 「字段缺失」与「明确读不出」不是一回事，此前两者同判 null（整段消失），是把两种不同的事实
+// 压成同一种形态：
+//   · undefined —— 旧 server 根本不带这个字段，前端无从知道这台机器有没有这功能 → 缺席是诚实的
+//   · 'unknown' —— server 明确说「我读 ~/.claude 出错了」（cli-hooks-bridge.js:322 的 catch）。
+//     功能确定存在，只是状态读不出。整段消失等于把一个已知的故障演成「这里从来没东西」，
+//     而这一段是手机上唯一能看到/操作 hooks 桥的入口（手机跑不了 npm）——消失即彻底失联。
+// 原判据要防的是「误报未装」，那个约束依然守住：不说未启用，只说读不出来。
+test('formatHooksBridgeRow：读不出安装态时就地说明，不整段消失、也不误报未装', () => {
+  const unknown = formatHooksBridgeRow({ state: 'unknown' });
+  assert.ok(unknown, '读取失败是已知事实，不该退化成「这里没有这功能」');
+  assert.equal(unknown.tone, 'warn');
+  assert.doesNotMatch(unknown.value, /未启用|已启用/, '不得把读不出来说成装了或没装');
+  assert.equal(unknown.action, null, '状态未知时不给一键按钮——盲点「开启」可能覆盖用户已有配置');
+  assert.match(unknown.hint || '', /settings\.json/, '要说得出去哪儿看');
+});
+
+// off 由 env 直接决定、不经读盘，是比「读不出安装态」更确定也更要紧的事实：功能整体停用时，
+// 装没装都不影响它不工作。两者同时成立时先说停用，否则用户会去修一个修好了也没用的东西。
+test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
+  const row = formatHooksBridgeRow({ state: 'unknown', off: true });
+  assert.match(row.value, /已停用/);
+  assert.equal(row.action, null);
 });
 
 // ---- 安全日志段（2026-09-02）----

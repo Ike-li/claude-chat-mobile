@@ -77,6 +77,8 @@ let terminalCloseRaceOtherArmed = false;
 // hydration 广播的还是它，故 flag 必须是模块级、不随连接重置），sync:since 照常回放 live 事件。
 // 用 HTTP 端点而非 test:* 消息武装：整页刷新前后都得生效，且不需要先有一个能发消息的会话。
 let noSessionIdMode = false;
+// 握手不发 models 事件：复现真 server「该 cwd 无 models 缓存 → 不推、等 scout」的窗口。见 /__arm-no-models。
+let noModelsMode = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
@@ -241,6 +243,7 @@ function resetMockState() {
   terminalRaceListCount = 0;
   terminalCloseRaceOtherArmed = false;
   noSessionIdMode = false;
+  noModelsMode = false;
   mockHooksState = 'not-installed';
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
@@ -376,6 +379,15 @@ function emitPendingDevices() {
 
 app.post('/__reset', (_req, res) => {
   resetMockState();
+  res.json({ ok: true });
+});
+
+// 真 server 在该 cwd 无 models 缓存时刻意不推 models（pushModelsForCwd 的 `if (!p) return`——推空会
+// 摧毁前端网格），改由 openScoutInstance 起进程去取。首次连接 / 新工作区到 scout 返回之间，前端
+// modelsList 就是初值 []（localStorage 里没有 models 缓存）。武装后握手不发 models 事件，复现该窗口。
+// 同 noSessionIdMode：flag 必须模块级，整页刷新后仍生效。
+app.post('/__arm-no-models', (_req, res) => {
+  noModelsMode = true;
   res.json({ ok: true });
 });
 
@@ -569,8 +581,8 @@ io.on('connection', socket => {
       }
     });
 
-    // 2. models
-    socket.emit('agent:event', {
+    // 2. models（noModelsMode 武装时整条不发——复现真 server 无缓存不推、等 scout 的窗口）
+    if (!noModelsMode) socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'models', payload: {
         models: [
@@ -2160,6 +2172,25 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:hooks-installed — 配置面板「终端会话推送」显示已启用');
         mockHooksState = 'installed';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload(),
+          },
+        });
+      },
+    },
+    {
+      // 真 server 读 ~/.claude 出错时（文件损坏/权限变更）会广播 state:'unknown'
+      // （src/ops/cli-hooks-bridge.js:322 的 catch）。这一档早先被前端判成"整段不渲染"，
+      // 而它是手机上唯一能看到 hooks 桥的入口——消失即彻底失联。
+      command: 'test:hooks-unknown',
+      run: async () => {
+        console.log('[mock] test:hooks-unknown — 安装态读取失败（服务端 catch 分支）');
+        mockHooksState = 'unknown';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
