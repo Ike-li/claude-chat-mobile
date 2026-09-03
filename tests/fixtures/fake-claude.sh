@@ -1,30 +1,100 @@
 #!/bin/sh
 # tests/fixtures/fake-claude.sh —— CI 用的 claude CLI 占位可执行文件。
 #
-# 为什么需要它：app/src/server/app.js 的 preflight() 在找不到 claude 时 process.exit(1)，于是 21 个集成
-# 测试文件此前全带 `process.env.CI ? {skip}`，理由写的是「CI 无本机 claude CLI」。后果是 CI 里
-# 【没有任何 job 执行过真实后端接线】—— quality 是纯静态、unit-test 不加载 app/src/server/app.js、
-# e2e 打的是 tests/e2e/mock/server.js 而非真 server。仓库最大的两个文件（app/public/js/app.js 6960 行、
-# app/src/server/app.js 2966 行）在 CI 里零执行。
+# 默认模式只负责让真实 server 通过 preflight，并吞掉 SDK stdin；它绝不能伪造 turn，避免普通
+# integration 用例在不知道的情况下把「fake 成功」当成真实 Agent 行为。
 #
-# 但那个限制比看上去松得多：preflight 只要求 CLAUDE_BIN 指向一个存在的文件，并（可选地）能回
-# `--version`。真正需要跑 agent turn 的测试另有 RUN_CLAUDE_INTEGRATION 这道门把着——那才是
-# 「需要真 CLI」的正确判据。本 stub 让不需要 turn 的接线测试在 CI 跑起来，turn 类测试照旧跳过。
+# Playground 的 Browser -> Real App E2E 需要再往前走一层，验证真实 Socket/Agent 接线和消息渲染。
+# 只有显式设置 CCM_FAKE_CLAUDE_TURNS=1 时，才启用下面的最小 stream-json 协议：
+# initialize/user -> system:init + assistant + result。零 token、无网络、回复完全确定。
 #
-# 边界：它只应答 --version。任何真起 agent turn 的调用都会拿到这里的空输出而失败——这是有意的，
-# 失败即说明该测试被错误地归进了「不需要真 turn」那一类，应该给它加回 RUN_CLAUDE_INTEGRATION 门。
-#
-# ⚠️ 非 --version 分支必须【读完 stdin 再退出】，不能直接 exit 0。
-# 真 CLI 在 SDK 模式下是长驻的：SDK spawn 它之后立刻往 stdin 写控制消息。stub 若立即退出，
-# 管道读端已关闭，SDK 那次 write 抛 EPIPE —— 且它在 SDK 内部（sdk.mjs 的 xy.write）不被 catch，
-# 直接冒成 uncaughtException 打死整个测试进程。
-# 表现：config-refresh.test.mjs 在 CI 报 `before hook generated asynchronous activity after the
-# test ended`（客户端一连接、server 懒开 SDK 实例就触发，与该用例断言的行为无关）。
-# 本地不复现——本地 CLAUDE_BIN 指向真 claude，它不会提前关掉管道。
-# 这类接线测试无法避免 spawn：server 在客户端连接时就会懒开实例。所以 stub 得活着承受这次
-# spawn，安静吞掉输入、不产出任何响应（"拿到空输出而失败"的语义不变，只是失败方式从
-# 打死进程变回可控的等不到响应）。
+# ⚠️ 默认非 --version 分支必须读完 stdin 再退出，不能直接 exit 0。SDK 会在 spawn 后立刻写控制消息；
+# 提前关闭管道会触发 SDK 内部 EPIPE，把本来只想测接线的 integration 进程直接打死。
 case "$1" in
-  --version|-v) echo "0.0.0-fake (Claude Code CI stub)" ;;
-  *) cat > /dev/null 2>&1; exit 0 ;;
+  --version|-v)
+    echo "0.0.0-fake (Claude Code CI stub)"
+    ;;
+  *)
+    if [ "${CCM_FAKE_CLAUDE_TURNS:-}" = "1" ]; then
+      exec node --input-type=module -e '
+        import readline from "node:readline";
+        import { randomUUID } from "node:crypto";
+
+        const sessionId = randomUUID();
+        const model = "claude-fake-test";
+        let initialized = false;
+        let turn = 0;
+
+        const send = message => process.stdout.write(`${JSON.stringify(message)}\n`);
+        const sendInit = () => {
+          if (initialized) return;
+          initialized = true;
+          send({
+            type: "system", subtype: "init", session_id: sessionId,
+            apiKeySource: "none", cwd: process.cwd(), tools: [], mcp_servers: [],
+            model, permissionMode: "default", claude_code_version: "0.0.0-fake",
+            slash_commands: [], skills: [], agents: [], plugins: [],
+          });
+        };
+        const controlResponse = requestId => send({
+          type: "control_response",
+          response: { subtype: "success", request_id: requestId, response: {} },
+        });
+        const extractUserText = message => {
+          const content = message?.message?.content;
+          if (typeof content === "string") return content;
+          if (!Array.isArray(content)) return "";
+          return content
+            .filter(block => block && block.type === "text" && typeof block.text === "string")
+            .map(block => block.text)
+            .join("\n");
+        };
+        const completeTurn = userText => {
+          sendInit();
+          turn += 1;
+          const reply = `CCM deterministic fake reply: ${userText}`;
+          const usage = {
+            input_tokens: 1,
+            output_tokens: Math.max(1, reply.length),
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          };
+          send({
+            type: "assistant", session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(),
+            message: {
+              id: `msg_fake_${turn}`, type: "message", role: "assistant", model,
+              content: [{ type: "text", text: reply }], stop_reason: "end_turn",
+              stop_sequence: null, usage,
+            },
+          });
+          send({
+            type: "result", subtype: "success", is_error: false,
+            duration_ms: 1, duration_api_ms: 1, num_turns: 1, result: reply,
+            session_id: sessionId, total_cost_usd: 0, usage, modelUsage: {},
+            permission_denials: [], uuid: randomUUID(),
+          });
+        };
+
+        const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+        rl.on("line", line => {
+          if (!line.trim()) return;
+          let message;
+          try { message = JSON.parse(line); }
+          catch (error) {
+            process.stderr.write(`[fake-claude] invalid JSON: ${error.message}\n`);
+            process.exitCode = 1;
+            return;
+          }
+          if (message.type === "control_request") {
+            controlResponse(message.request_id);
+            if (message.request?.subtype === "initialize") sendInit();
+            return;
+          }
+          if (message.type === "user") completeTurn(extractUserText(message));
+        });
+      ' "$@"
+    fi
+    cat > /dev/null 2>&1
+    exit 0
+    ;;
 esac

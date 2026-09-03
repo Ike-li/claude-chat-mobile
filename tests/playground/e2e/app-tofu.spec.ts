@@ -50,6 +50,28 @@ test.describe.serial('playground app TOFU', () => {
     await expect(page.locator('#btnNew')).toBeVisible();
   });
 
+  test('first chat turn traverses browser -> real app -> Agent SDK -> deterministic Claude fixture -> browser', async () => {
+    const userText = 'hello from real app e2e';
+    const expectedReply = `CCM deterministic fake reply: ${userText}`;
+
+    await page.locator('#btnNew').click();
+    const input = page.locator('#input');
+    await expect(input).toBeVisible();
+    await expect(input).toBeEditable();
+    await input.fill(userText);
+
+    const send = page.locator('#btnSend');
+    await expect(send).toBeVisible();
+    await expect(send).toBeEnabled();
+    await send.click();
+
+    // 这两条一起证明不是浏览器本地造假：user bubble 先走 production socket，assistant 文本由
+    // deterministic stream-json CLI fixture 根据收到的 user payload 回显，再经 AgentSession 映射回浏览器。
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText(userText);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText(expectedReply, { timeout: 15_000 });
+    await expect(send).not.toHaveAttribute('data-mode', 'stop', { timeout: 10_000 });
+  });
+
   test('workspace is the seeded container project', async () => {
     await page.locator('#btnSessions').click();
     await expect(page.locator(`#sessionPanel div[data-dir="${WORKSPACE}"]`)).toBeVisible();

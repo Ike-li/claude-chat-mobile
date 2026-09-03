@@ -58,6 +58,8 @@ services:
       - playground/runtime.env
     environment:
       <<: *runtime-env
+      # 只给真实 app 启用 deterministic turn。probe/browser 继承基础环境但不应改变 fake CLI 语义。
+      CCM_FAKE_CLAUDE_TURNS: "1"
     volumes:
       - ../../app:/app/app
       - ../../scripts:/app/scripts
