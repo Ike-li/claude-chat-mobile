@@ -561,6 +561,8 @@ export const EN_DICT = Object.freeze({
   '——公网': ' — public IP',
   '在暴力尝试你的入口': 'is brute-forcing your entry point',
   '🔔 推送最近失败于': '🔔 Push last failed at',
+  '连不上推送服务': 'can\'t reach the push service',
+  '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
 
@@ -806,6 +808,7 @@ export const EN_DICT = Object.freeze({
   '📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。': '📲 On iOS, push needs "Add to Home Screen" first: tap the share button at the bottom → Add to Home Screen, then open this site from the home-screen icon to enable notifications.',
   '🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。': '🚫 This browser doesn\'t support Web Push (iOS needs 16.4+ with the site added to the home screen).',
   '⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。': '⚠️ Subscription failed: the server has Web Push keys disabled or misconfigured, or they didn\'t load. Check the VAPID environment variables and restart the service.',
+  '⚠️ 订阅失败：连不上推送服务（Google FCM）。开启代理后重试一次即可完成订阅——订阅成功后关掉代理仍能正常收推送。若长期无代理，可改用 ntfy 通道（见部署文档）。': '⚠️ Subscription failed: can\'t reach the push service (Google FCM). Turn on a proxy/VPN and retry once to finish subscribing — you can turn it back off afterwards and still receive pushes. If you have no proxy long term, use the ntfy channel instead (see the deployment docs).',
   '当前浏览器/环境不支持 Notification API': 'This browser/environment doesn\'t support the Notification API',
   '🔔 成功订阅推送通知！': '🔔 Subscribed to push notifications!',
   '⚠️ 订阅未成功：': '⚠️ Subscription failed: ',

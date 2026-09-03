@@ -45,6 +45,30 @@ export function pushEnvHint({ isSecureContext, isIOS, isStandalone, hasPushManag
   return 'ready';
 }
 
+// 订阅失败原因分类（2026-09-03）。pushEnvHint 判的是订阅【之前】就能同步看出的本地前提；
+// 这里判的是订阅【失败之后】拿到的那句 error.message——网络可达性是异步、外部、会变的，
+// 进不了上面那个纯环境判定。
+//
+// 【为什么值得单独判一类】Chromium 系（Android Chrome/Edge/三星）的 Web Push 由 Google FCM 承载，
+// subscribe() 要先向 Google 的注册端点注册。无法访问 Google 的网络下这一步必然失败，而浏览器
+// 只抛一句 'Registration failed - push service error'，原样透给用户等于天书（实测机主在中国大陆
+// 网络下正是卡在这里）。判出来才能告诉他「开代理重试一次就好，之后不用一直开」。
+//
+// 【iOS 恒 null】那条路走 Apple 的 web.push.apple.com，压根不经 Google。给 iPhone 用户提代理
+// 是把人指向完全错误的排查方向，比不解释更糟。
+//
+// 【permission 必须先判】'Registration failed - permission denied' 同时含 "registration failed"，
+// 顺序反了会把「权限被拒」误报成「网络不通」——两者的下一步动作毫无交集。
+export function describeSubscribeError(message, { isIOS = false } = {}) {
+  if (isIOS) return null;
+  const msg = String(message ?? '');
+  if (!msg) return null;
+  if (/permission (denied|blocked)/i.test(msg)) return null;
+  if (/push (service|server)/i.test(msg)) return 'push-service-unreachable';
+  if (/registration failed/i.test(msg)) return 'push-service-unreachable';
+  return null;
+}
+
 // 推送订阅状态行（配置面板「推送内容」段上方）。
 // 为什么需要它：推送不通时此前界面上**没有任何痕迹**——铃铛按钮本身在"权限被拒"时会被隐藏、
 // 在"已授权但订阅失败"时压根不出现，用户只会得出"这功能没用"的结论（实测机主机器上
@@ -267,6 +291,11 @@ export function describeRateLimitSource(source) {
   return { scope: 'public', addr };
 }
 
+// 「连不上」与「对方答了话但拒绝了」是两类根因，下一步动作毫无交集（前者查网络/代理，
+// 后者查 VAPID/token 配置），故只翻译前者。整串精确匹配而非子串：describeDeliveryError 的输出
+// 要么是裸 errno、要么是 'HTTP <code>'、要么是清洗过的短语，不会是长句，宽松匹配只会误伤。
+const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|network error)$/i;
+
 export function formatServiceNotices({ service, now } = {}) {
   const notices = [];
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');
@@ -287,7 +316,13 @@ export function formatServiceNotices({ service, now } = {}) {
     // reason 已由后端 describeDeliveryError 清洗（不含 endpoint URL，见 src/ops/notifications.js）。
     // 空串也要当缺席处理，否则行尾留一个孤零零的冒号。
     const reason = String(df.reason ?? '').trim();
-    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reason ? `：${reason}` : ''}`);
+    // 网络不可达类是裸 errno，对用户是天书，而它恰恰是最常见的一类——宿主机连不出去时推送全灭，
+    // 手机端却一切正常（订阅还在、铃铛已收起），这行是唯一的可见面。errno 保留在括号里给排查用。
+    // 不写死「Google FCM」：iOS 订阅的 endpoint 在 Apple，同一条路也会走到这里。
+    const reasonText = reason && DELIVERY_NET_UNREACHABLE.test(reason)
+      ? `${df.channel === 'ntfy' ? t('连不上 ntfy 服务') : t('连不上推送服务')}（${reason}）`
+      : reason;
+    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`);
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {

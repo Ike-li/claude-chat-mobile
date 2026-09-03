@@ -87,6 +87,38 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       ['🔔 推送最近失败于 3 小时前（push，累计 6 次）：HTTP 502']
     );
   });
+  // 网络不可达类的 reason 是裸 errno（ENOTFOUND/ETIMEDOUT/…），对用户是天书。它恰恰是
+  // 最常见的一类：宿主机连不出去时推送全灭，而手机端一切正常、毫无痕迹，这行是唯一的可见面。
+  // 保留 errno 在括号里——排查的人要看的就是它。
+  test('网络不可达类 errno → 译成人话，errno 保留在括号里', () => {
+    const now = 100 * 60_000;
+    for (const code of ['ENOTFOUND', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EAI_AGAIN', 'network error']) {
+      assert.deepEqual(
+        formatServiceNotices({ service: { deliveryFailure: { channel: 'push', at: now - 60_000, count: 1, reason: code } }, now }),
+        [`🔔 推送最近失败于 1 分钟前（push，累计 1 次）：连不上推送服务（${code}）`],
+        code
+      );
+    }
+  });
+  // 通道不同，"连不上"的对象就不同：ntfy 多半是自建实例挂了/域名写错，跟 Google 毫无关系。
+  // 两条通道共用 delivery_failure_reason 这一个 label，说错话的代价是把人指向错误的排查方向。
+  test('ntfy 通道说 ntfy，不能顺嘴说成推送服务', () => {
+    const now = 100 * 60_000;
+    assert.deepEqual(
+      formatServiceNotices({ service: { deliveryFailure: { channel: 'ntfy', at: now - 60_000, count: 1, reason: 'ECONNREFUSED' } }, now }),
+      ['🔔 推送最近失败于 1 分钟前（ntfy，累计 1 次）：连不上 ntfy 服务（ECONNREFUSED）']
+    );
+  });
+  test('HTTP 状态码不动：服务端答了话就不是"连不上"，混为一谈会误导排查方向', () => {
+    const now = 100 * 60_000;
+    for (const reason of ['HTTP 502', 'HTTP 401', 'unknown', 'socket hang up']) {
+      assert.deepEqual(
+        formatServiceNotices({ service: { deliveryFailure: { channel: 'push', at: now - 60_000, count: 1, reason } }, now }),
+        [`🔔 推送最近失败于 1 分钟前（push，累计 1 次）：${reason}`],
+        reason
+      );
+    }
+  });
   test('reason 缺席/空串（旧 server ack、或进程重启后 label 已清）→ 不留孤零零的冒号', () => {
     const now = 100 * 60_000;
     for (const reason of [undefined, null, '', '  ']) {

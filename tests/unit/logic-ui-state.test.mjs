@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -29,6 +29,35 @@ test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   test('缺省入参不抛（环境未知时保守回 need-https）', () => {
     assert.doesNotThrow(() => pushEnvHint());
     assert.equal(pushEnvHint(), 'need-https');
+  });
+});
+
+// ---- describeSubscribeError：订阅失败原因分类（2026-09-03）----
+// 背景：Chromium 系的 Web Push 由 Google FCM 承载，订阅那一步要连 Google 的注册端点。
+// 无法访问 Google 的网络下这一步必失败，而 subscribe() 只抛一句 'Registration failed -
+// push service error'——原样透给用户等于天书。此处把它判成一类可操作的原因。
+test.describe('describeSubscribeError：订阅失败原因分类', () => {
+  test('Chrome 连不上 FCM 的原话 → push-service-unreachable', () => {
+    assert.equal(describeSubscribeError('Registration failed - push service error'), 'push-service-unreachable');
+    assert.equal(describeSubscribeError('AbortError: Registration failed - push service error'), 'push-service-unreachable');
+    assert.equal(describeSubscribeError('Failed to register: could not connect to push server'), 'push-service-unreachable');
+  });
+  test('权限被拒不算网络问题——措辞完全不同，误判会把人指向错误的排查方向', () => {
+    assert.equal(describeSubscribeError('Registration failed - permission denied'), null);
+    assert.equal(describeSubscribeError('Registration failed - permission blocked'), null);
+  });
+  test('iOS 恒 null：那条路走 Apple web.push.apple.com，不经 Google，提代理是误导', () => {
+    assert.equal(describeSubscribeError('Registration failed - push service error', { isIOS: true }), null);
+  });
+  test('无法归类的错误回 null，调用方保留原文（原文比一句错的解释有用）', () => {
+    assert.equal(describeSubscribeError('HTTP 401'), null);
+    assert.equal(describeSubscribeError('some unknown failure'), null);
+  });
+  test('空/缺省入参不抛也不误判', () => {
+    assert.doesNotThrow(() => describeSubscribeError());
+    assert.equal(describeSubscribeError(), null);
+    assert.equal(describeSubscribeError(''), null);
+    assert.equal(describeSubscribeError(null), null);
   });
 });
 

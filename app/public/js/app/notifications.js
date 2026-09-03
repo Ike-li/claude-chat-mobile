@@ -1,5 +1,5 @@
 import { urlBase64ToUint8Array } from '../logic/format.js';
-import { pushEnvHint, readPushPreviewPref } from '../logic/service-diag.js';
+import { pushEnvHint, describeSubscribeError, readPushPreviewPref } from '../logic/service-diag.js';
 import { t } from '../i18n.js';
 
 export function createNotificationController(context, {
@@ -171,7 +171,11 @@ export function createNotificationController(context, {
         const ok = await subscribe();
         if (ok) explain(t('🔔 成功订阅推送通知！'), 'text-success');
         // 带上真实原因：手机上没有 console，笼统的"稍后重试"让人（和排查的人）无从下手。
-        else explain(`${t('⚠️ 订阅未成功：')}${lastSubscribeError || t('原因未知')}`, 'text-warning');
+        // 能判出"连不上 FCM"就别吐 'Registration failed - push service error' 原文——后者对用户
+        // 是天书，而这一类恰恰有明确的下一步（开代理重试一次），且要当场回答"是不是得一直开着"。
+        else if (describeSubscribeError(lastSubscribeError, { isIOS: environment().isIOS }) === 'push-service-unreachable') {
+          explain(t('⚠️ 订阅失败：连不上推送服务（Google FCM）。开启代理后重试一次即可完成订阅——订阅成功后关掉代理仍能正常收推送。若长期无代理，可改用 ntfy 通道（见部署文档）。'), 'text-warning');
+        } else explain(`${t('⚠️ 订阅未成功：')}${lastSubscribeError || t('原因未知')}`, 'text-warning');
       } else {
         // 被拒后**不隐藏**铃铛：那正是用户最需要这个入口的时刻（点它能看到状态与下一步）。
         // 此前这里 add('hidden') 与 setup() 里 denied 时 remove('hidden') 直接打架——

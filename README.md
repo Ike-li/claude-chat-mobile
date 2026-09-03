@@ -68,7 +68,7 @@ Claude Chat Mobile 是为官方路径**进不去、或不接受其控制面**的
 * **远程控制 Claude Code**：新建和续接会话、流式查看输出、回答问题、审批工具、停止任务、切换模型 / 权限档 / effort。
 * **会话与工作区**：多个工作区、多个会话，并可续接本机已有 Claude CLI 会话。
 * **项目内容交互**：查看工具调用、Edit / Write diff、Read 内容、浏览和编辑授权工作区中的文件，支持上传文件、图片和粘贴截图。
-* **通知**：通过 Web Push / ntfy 接收审批、提问和任务结果通知，并可选接入 Claude CLI hooks bridge。
+* **通知**：通过 Web Push / ntfy 接收审批、提问和任务结果通知，并可选接入 Claude CLI hooks bridge。Android 上 Web Push 由 Google FCM 承载，中国大陆网络下订阅需要代理（iOS 走 Apple、ntfy 不经 Google），详见[首次使用指南](docs/getting-started.md)。
 * **断线恢复**：手机网络中断后重新连接，可以补齐缺失的会话事件。
 * **本机运维**：提供 `doctor` 启动自检；macOS 还可选安装桌面控制台管理配置、日志、服务和设备审批。
 * **PWA**：支持安装到手机主屏幕，并提供完整中英文界面。
