@@ -11,7 +11,7 @@
 //        · 非法 instanceId 路由缺省落 viewingInstanceId（setPermissionMode 广播作用于 viewing）
 //        · 事件信封带 instanceId（permission_mode 合成事件 + 实例事件）
 //   2) 并行 e2e（需 token，`--e2e`）：**同一 cwd** 两会话各发消息 spawn 两实例，断言会话1 result 不被
-//      开会话2 影响（同 cwd 互不打断的语义级断言，docs/design.md A15）。
+//      开会话2 影响（同 cwd 互不打断的语义级断言，A15）。
 //
 //   快速上手：
 //     1. 确保已设置 ANTHROPIC_API_KEY（或 ANTHROPIC_AUTH_TOKEN）：

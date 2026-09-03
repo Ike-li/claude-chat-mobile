@@ -1,4 +1,4 @@
-// tests/unit/workdir-scope-guard.test.mjs —— WorkdirScopeGuard 范围判定单测（docs/design.md，承接 AD-12/FR-23）
+// tests/unit/workdir-scope-guard.test.mjs —— WorkdirScopeGuard 范围判定单测（承接 AD-12/FR-23）
 // isInScope(candidate, scopeDirs)：web 侧目录可达性（会话发起/文件浏览/附件输入）的唯一裁决点。
 // 与 §5.5 canonicalize 刻意相反——此处必须 resolve 符号链接（范围是权限边界，不 resolve 则一个指向
 // 范围外的 symlink 即逃逸）；用真实临时目录 + 真实 symlink 测试（同 tests/unit/workdirs.test.mjs 的 tmpdir 惯例），

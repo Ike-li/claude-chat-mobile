@@ -1,4 +1,3 @@
-// spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 // 服务状态面板（NFR-15 可见性，判定化改造后）：设置入口 → 两段式 sheet（基础/异常告警），
 // 裸计数器段已撤（原始计数留 /metrics 巡检端点）；数据走鉴权 service:status ack（mock 确定性 payload）。

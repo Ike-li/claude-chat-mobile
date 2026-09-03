@@ -258,7 +258,7 @@ test('permission_request 缺 input → previewBody 只有工具名', () => {
   assert.equal(n.previewBody, 'Bash');
 });
 
-// ── cwdBase（docs/design.md/OQ-08 已决：默认显示，不设隐藏配置项）——多工作区场景分辨通知来自哪个项目 ──
+// ── cwdBase（OQ-08 已决：默认显示，不设隐藏配置项）——多工作区场景分辨通知来自哪个项目 ──
 
 test('permission_request 带 cwd → title 追加目录尾段（仅 basename，非完整路径）', () => {
   const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true, cwd: '/Users/me/secret-proj' });
@@ -516,7 +516,7 @@ test('ntfyRequestInit: meta 的 tags/priority/click 进 body', () => {
   assert.equal(b.click, 'https://x/#instance=i1');
 });
 
-// ── throttleNotify / clearNotifyPending：per-会话推送节流（docs/design.md TriggerPolicy，承接 FR-14 另一半）──
+// ── throttleNotify / clearNotifyPending：per-会话推送节流（TriggerPolicy，承接 FR-14 另一半）──
 // 两层规则：①同一会话同一类别已有未决通知（未被 request_resolved 清除）不重复推；
 // ②即便已清除，同类事件最小间隔内仍抑制。纯函数、状态外置（EP-2）。
 test.describe('throttleNotify', () => {

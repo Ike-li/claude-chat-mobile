@@ -1,4 +1,4 @@
-// tests/unit/audit.test.mjs —— audit.js 单测（docs/design.md audit_record 表，承接 FR-19/NFR-06/NFR-16）
+// tests/unit/audit.test.mjs —— audit.js 单测（audit_record 表，承接 FR-19/NFR-06/NFR-16）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';

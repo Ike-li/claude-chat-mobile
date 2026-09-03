@@ -1,4 +1,4 @@
-// tests/unit/rate-limiter.test.mjs —— 鉴权端口防暴破限速纯函数状态机单测（零依赖，承接 docs/design.md / NFR-03）
+// tests/unit/rate-limiter.test.mjs —— 鉴权端口防暴破限速纯函数状态机单测（零依赖，承接 NFR-03）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

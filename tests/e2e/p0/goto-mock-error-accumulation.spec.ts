@@ -1,4 +1,4 @@
-// Regression contract: docs/testing.md (Playwright test-infrastructure coverage).
+// Regression contract: Playwright test-infrastructure coverage.
 // helpers: tests/helpers/playwright.ts
 //
 // TC-006 回归防护：captureBrowserErrors 曾经每次调用都重装监听器 + 把 page.__ccmErrors 指向新数组，

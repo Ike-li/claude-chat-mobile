@@ -1,4 +1,3 @@
-// spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 // 服务与配置面板：设置入口 → 表单由服务端 env:get 下发（前端零硬编码配置项名）→ 敏感项只显示遮罩。
 // 最重要的一条是「敏感项永远拿不到明文」——服务端只下发 { set, length }，页面上不该出现任何密钥值。

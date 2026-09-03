@@ -1,6 +1,6 @@
-// tests/unit/canonicalize.test.mjs —— 审批完整性绑定核心单测（docs/design.md，承接 AD-7/NFR-17）
+// tests/unit/canonicalize.test.mjs —— 审批完整性绑定核心单测（承接 AD-7/NFR-17）
 // canonicalizeOp/fingerprintHex/verifyIntegrity：前后端共享的同一份 app/public/js/canonicalize.js
-// （机制强度==双端一致性强度）。测试覆盖 docs/design.md 明文列出的完整检查清单。
+// （机制强度==双端一致性强度）。测试覆盖该模块实现的完整检查清单。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalizeOp, fingerprintHex, verifyIntegrity } from '../../app/public/js/canonicalize.js';

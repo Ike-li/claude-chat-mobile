@@ -97,7 +97,7 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
-  // 审批 TTL（docs/design.md，承接 OQ-05 fail-closed）
+  // 审批 TTL（承接 OQ-05 fail-closed）
   test('askPermission：permission_request payload 附 createdAt/expiresAt（expiresAt=createdAt+TTL）', () => {
     const { s, events } = makeSession({ approvalTtlMs: 5000 });
     const ac = new AbortController();
@@ -154,7 +154,7 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
-  // 审批完整性绑定（docs/design.md，承接 AD-7/NFR-17，"所批即所行"）
+  // 审批完整性绑定（承接 AD-7/NFR-17，"所批即所行"）
   test.describe('审批完整性绑定（NFR-17）', () => {
     test('askPermission：permission_request payload 附 fp，且等于 fingerprintSync({tool,args,cwd})', async () => {
       const { fingerprintSync } = await import('../../app/src/auth/fingerprint.js');
@@ -230,7 +230,7 @@ test.describe('权限闸门', () => {
     });
   });
 
-  // 持久化台账（docs/design.md approval_request 表，承接 NFR-16/19/22，Phase 4）——askPermission/resolvePermission
+  // 持久化台账（approval_request 表，承接 NFR-16/19/22，Phase 4）——askPermission/resolvePermission
   // 写穿透到 approval-store.js。测试用真实模块（非 mock）：CCM_APPROVAL_STORE_FILE 由
   // tests/setup/preload-env.mjs 重定向到一次性临时文件，不碰真实 data/approval-requests.json。
   test.describe('审批持久化台账（NFR-16/19，Phase 4）', () => {

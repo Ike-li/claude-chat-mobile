@@ -685,9 +685,9 @@ extension CCMCoreTests {
               "用户自己的 ~/Applications 同样稳定")
 
         // ★ 必须比到分隔符：本仓的平级 worktree 检出位就是 `<repo>-<分支名>`（见 CLAUDE.md），
-        // 裸 hasPrefix(repo) 会把 claude-chat-mobile-promo 误判成 claude-chat-mobile 内部。
-        check(!isRunningFromRepoBuild(bundlePath: "\(repo)-promo/desktop/build/CCM.app", repo: repo),
-              "平级 worktree（<repo>-promo）不是本仓内部，别误判")
+        // 裸 hasPrefix(repo) 会把 claude-chat-mobile-feature 误判成 claude-chat-mobile 内部。
+        check(!isRunningFromRepoBuild(bundlePath: "\(repo)-feature/desktop/build/CCM.app", repo: repo),
+              "平级 worktree（<repo>-feature）不是本仓内部，别误判")
         check(!isRunningFromRepoBuild(bundlePath: repo, repo: repo),
               "路径恰好等于仓库根（不可能是 app）也不算")
     }
@@ -907,9 +907,9 @@ extension CCMCoreTests {
                               bundlePath: repoBuild, repo: repo).hasSuffix("⚠ 仓库构建产物"),
               "跑的是仓库构建产物要显著标出来")
 
-        // 平级 worktree（<repo>-promo）不能被误判成仓库内 —— 同 isRunningFromRepoBuild 的既有断言
+        // 平级 worktree（<repo>-feature）不能被误判成仓库内 —— 同 isRunningFromRepoBuild 的既有断言
         check(!appIdentityLine(version: "1.6.0", buildTime: nil, commit: nil,
-                               bundlePath: "\(repo)-promo/desktop/build/CCM.app", repo: repo)
+                               bundlePath: "\(repo)-feature/desktop/build/CCM.app", repo: repo)
                 .hasSuffix("⚠ 仓库构建产物"),
               "平级 worktree 不是本仓库的构建产物")
 

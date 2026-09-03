@@ -1,4 +1,4 @@
-// smoke runner `core` —— M1 冒烟验收（docs/design.md）：
+// smoke runner `core` —— M1 冒烟验收：
 //   phase1: A6 中断不毁会话 → A2 干活能力 → A1 会话连续（运行中多轮）→ A4 工具事件
 //   phase2（server 重启后）: A1 重启 resume
 // 用法：npm run test:smoke -- --scenario core（runner 自动执行 phase2）

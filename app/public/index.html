@@ -209,7 +209,7 @@
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
-      <!-- 审批完整性预检警示（NFR-17，承接 docs/design.md 协议步骤4）：默认隐藏，前端重算指纹与服务端不符时显示。
+      <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
            不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
       <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
@@ -312,7 +312,7 @@
     </div>
   </div>
 
-  <!-- 工作区面板：文件浏览（FR-07，docs/design.md FileBrowseHandler）+ git 改动，两个 tab 同壳。
+  <!-- 工作区面板：文件浏览（FR-07，FileBrowseHandler）+ git 改动，两个 tab 同壳。
        原先是「顶栏 pill → chooser 二选一 sheet → 目标面板」三层，chooser 那层零信息量：用户点开
        之前无从知晓背后有什么，点开后还要再点一次；从「文件」切到「改动」得关面板重走一遍。
        合并成 tab 后点一次 pill 就同时看见两个能力，互切零成本。

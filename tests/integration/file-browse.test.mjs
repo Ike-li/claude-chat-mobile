@@ -1,5 +1,5 @@
 // tests/integration/file-browse.test.mjs —— browse:list / browse:read 接线集成测试
-// （docs/design.md FileBrowseHandler，承接 AD-12/FR-07）
+// （FileBrowseHandler，承接 AD-12/FR-07）
 // 纯逻辑单测见 tests/unit/file-browse.test.mjs + tests/unit/workdir-scope-guard.test.mjs；本文件验证 app/server.js
 // 接线：①正常 list/read 走通；②越界 relPath 被拒（fail-closed，不进程崩溃/不误放行）；③鉴权门未过时不可达。
 // 鉴权模式同 tests/integration/rate-limit.test.mjs：测试专用 token + 清 CF_ACCESS_* + 重新 initCfAccess()

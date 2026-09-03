@@ -1,4 +1,4 @@
-// tests/integration/approval-integrity.test.mjs —— 审批完整性绑定端到端集成测试（docs/design.md，承接 AD-7/NFR-17）
+// tests/integration/approval-integrity.test.mjs —— 审批完整性绑定端到端集成测试（承接 AD-7/NFR-17）
 // 单测（tests/unit/fingerprint.test.mjs + tests/unit/agent.test.mjs「审批完整性绑定」）已覆盖 askPermission/
 // resolvePermission 的纯逻辑分支，但那些测试直接调用 AgentSession 方法、绕开了真实 SDK canUseTool
 // 回调与真实 socket.io 传输层——协议改动（permission_request 新增 fp / user:approve 新增 op）真正的

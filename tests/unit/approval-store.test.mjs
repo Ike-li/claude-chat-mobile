@@ -1,4 +1,4 @@
-// tests/unit/approval-store.test.mjs —— approval-store.js 单测（docs/design.md approval_request 表，承接 NFR-16/17/FR-19/22）
+// tests/unit/approval-store.test.mjs —— approval-store.js 单测（approval_request 表，承接 NFR-16/17/FR-19/22）
 // 同 sessions.test.mjs 模式：CCM_APPROVAL_STORE_FILE 指向临时文件，彻底隔离真实 data/。
 import test from 'node:test';
 import assert from 'node:assert/strict';

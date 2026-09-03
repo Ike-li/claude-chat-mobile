@@ -1,5 +1,5 @@
 // tests/integration/claude-lifecycle.test.mjs —— claude 子进程生命周期集成测试
-// 覆盖：CL-1 ~ CL-6；测试分层与验收边界见 docs/testing.md。
+// 覆盖：CL-1 ~ CL-6。
 // 运行：npm test -- tests/integration/claude-lifecycle.test.mjs
 // 要求：claude CLI 可用（PATH 中）
 //

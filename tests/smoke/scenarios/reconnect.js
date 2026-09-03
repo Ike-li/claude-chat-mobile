@@ -1,4 +1,4 @@
-// smoke runner `reconnect` —— M3 碎片化验收（docs/design.md A5 自动化版）：
+// smoke runner `reconnect` —— M3 碎片化验收（A5 自动化版）：
 // 模拟"锁屏"：客户端强制断开 → 任务在服务端继续（4c）→ 重连 sync:since 续传 →
 // 断言事件无缺口无重复、文本完整、任务正常收尾。
 // 用法：npm run test:smoke -- --scenario reconnect

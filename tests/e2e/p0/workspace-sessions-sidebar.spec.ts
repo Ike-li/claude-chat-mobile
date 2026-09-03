@@ -1,4 +1,3 @@
-// spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';

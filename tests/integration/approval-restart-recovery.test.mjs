@@ -1,5 +1,5 @@
 // tests/integration/approval-restart-recovery.test.mjs —— 重启后 pending 审批 fail-closed 处置的
-// 集成测试（重启 fail-closed 语义见 docs/design.md §4）。
+// 集成测试。
 //
 // 不需要真 claude 子进程/token——重启恢复是 app/server.js 模块顶层的一段同步逻辑（在 httpServer.listen
 // 之前跑完），只要能触发一次 app/server.js 的模块求值就能验证，走"可靠集成"档（默认 npm test 就跑，

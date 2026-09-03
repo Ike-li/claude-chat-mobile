@@ -1,4 +1,4 @@
-// tests/integration/metrics-endpoint.test.mjs —— /metrics 端点集成测试（docs/design.md，承接 NFR-15）
+// tests/integration/metrics-endpoint.test.mjs —— /metrics 端点集成测试（承接 NFR-15）
 // 验证：①鉴权保护（"不开无鉴权数据端点"）；②返回结构（指标最小集 + 状态分类）；③StateProbe 分类
 // 随连接状态变化。零 token 成本（不起真 claude turn），走"可靠集成"档。
 import test from 'node:test';
@@ -56,7 +56,7 @@ test.describe('/metrics 端点（NFR-15）', () => {
   test('带正确 token → 200 + 指标最小集结构完整', async () => {
     const { status, body } = await get('/metrics', TOKEN);
     assert.equal(status, 200);
-    // 指标最小集 5 项（docs/design.md）
+    // 指标最小集 5 项
     for (const k of ['activeSessions', 'events', 'catchUpHits', 'catchUpReloads', 'rateLimitLockouts', 'pushSuccess', 'pushFailure']) {
       assert.equal(typeof body.metrics[k], 'number', `metrics.${k} 应为数字`);
     }

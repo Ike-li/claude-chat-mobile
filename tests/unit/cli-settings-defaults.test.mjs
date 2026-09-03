@@ -235,14 +235,14 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
 // ── worktree 网关隔离（2026-07-30 实证复现） ─────────────────────────────────────
 // CLI 2.1.211+ 在 linked worktree 里把 local settings source 解析到 canonical repo root，
 // 于是主 checkout 的 .claude/settings.local.json 的 env 块污染所有 worktree 会话
-// （真实症状：third-party 的会话打到主 checkout 配的 amux 网关 → 503 No available channel）。
+// （真实症状：third-party 的会话打到主 checkout 配的第三方网关 → 503 No available channel）。
 // 实证结论决定本函数的两条设计：
 //   · 该污染压不过——子进程 env 注入无效（CLI 的 settings.env 优先级更高），只能走 flag settings；
 //   · 空 env 块擦不掉——必须对「canonical 有而 worktree 没有」的键显式写空串中和。
 test.describe('buildWorktreeGatewayEnv（worktree 网关隔离）', () => {
   test('worktree 无 env、canonical 配了网关 → 逐键显式空串中和', () => {
     const out = buildWorktreeGatewayEnv(undefined, {
-      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com',
       ANTHROPIC_AUTH_TOKEN: 'sk-xxx',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5',
     });
@@ -256,7 +256,7 @@ test.describe('buildWorktreeGatewayEnv（worktree 网关隔离）', () => {
   test('worktree 有自己的网关 → 原样生效；canonical 独有的键仍被中和', () => {
     const out = buildWorktreeGatewayEnv(
       { ANTHROPIC_BASE_URL: 'https://own.example.com' },
-      { ANTHROPIC_BASE_URL: 'https://api.amux.ai', ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5' },
+      { ANTHROPIC_BASE_URL: 'https://gateway.example.com', ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5' },
     );
     assert.equal(out.ANTHROPIC_BASE_URL, 'https://own.example.com');
     assert.equal(out.ANTHROPIC_DEFAULT_OPUS_MODEL, '', 'canonical 独有的模型映射必须中和，否则别名仍被改写');
@@ -275,7 +275,7 @@ test.describe('buildWorktreeGatewayEnv（worktree 网关隔离）', () => {
   test('非白名单 key 一律不进结果（不中和 PORT/AUTH_TOKEN，安全边界同 filterSafeResolvedEnv）', () => {
     const out = buildWorktreeGatewayEnv(
       { PORT: '9999' },
-      { PORT: '3000', AUTH_TOKEN: 'real', CCM_DATA_DIR: '/real', ANTHROPIC_BASE_URL: 'https://api.amux.ai' },
+      { PORT: '3000', AUTH_TOKEN: 'real', CCM_DATA_DIR: '/real', ANTHROPIC_BASE_URL: 'https://gateway.example.com' },
     );
     assert.equal('PORT' in out, false, 'PORT 不该被中和——那会打断服务端/子进程的正常变量');
     assert.equal('AUTH_TOKEN' in out, false);
@@ -289,7 +289,7 @@ test.describe('buildWorktreeGatewayEnv（worktree 网关隔离）', () => {
   });
 
   test('__proto__ 不污染原型', () => {
-    const canonical = JSON.parse('{"__proto__": {"polluted": "yes"}, "ANTHROPIC_BASE_URL": "https://api.amux.ai"}');
+    const canonical = JSON.parse('{"__proto__": {"polluted": "yes"}, "ANTHROPIC_BASE_URL": "https://gateway.example.com"}');
     const out = buildWorktreeGatewayEnv(undefined, canonical);
     assert.equal({}.polluted, undefined);
     assert.equal(out.ANTHROPIC_BASE_URL, '');
@@ -331,7 +331,7 @@ test.describe('parseWorktreeCanonicalRoot（从 .git 指针定位 canonical repo
 test.describe('buildWorktreeGatewayEnv — 非路由类偏好不中和', () => {
   test('CLAUDE_CODE_ATTRIBUTION_HEADER / DISABLE_NONESSENTIAL_TRAFFIC / EFFORT_LEVEL 保留给 worktree 会话', () => {
     const out = buildWorktreeGatewayEnv(undefined, {
-      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com',
       CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_EFFORT_LEVEL: 'max',
@@ -354,7 +354,7 @@ test.describe('buildWorktreeGatewayEnv — 非路由类偏好不中和', () => {
   test('worktree 自己显式配了非路由键 → 照常下发（排除清单只挡「中和」，不挡 worktree 自己的意图）', () => {
     const out = buildWorktreeGatewayEnv(
       { CLAUDE_CODE_ATTRIBUTION_HEADER: '1' },
-      { ANTHROPIC_BASE_URL: 'https://api.amux.ai' },
+      { ANTHROPIC_BASE_URL: 'https://gateway.example.com' },
     );
     assert.equal(out.CLAUDE_CODE_ATTRIBUTION_HEADER, '1');
     assert.equal(out.ANTHROPIC_BASE_URL, '');
@@ -375,7 +375,7 @@ test.describe('countNeutralizableGatewayKeys（污染源计数：只数会污染
 
   test('网关键逐个计数', () => {
     assert.equal(countNeutralizableGatewayKeys({
-      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com',
       ANTHROPIC_AUTH_TOKEN: 'sk-xxx',
     }), 2);
   });

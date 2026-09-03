@@ -1,5 +1,5 @@
 // tests/integration/websocket-events.test.mjs —— WebSocket 事件流集成测试
-// 覆盖：WS-1 ~ WS-6；测试分层与验收边界见 docs/testing.md。
+// 覆盖：WS-1 ~ WS-6。
 // 运行：npm test -- tests/integration/websocket-events.test.mjs
 //
 // 审计 TC-004：三处协议漂移已修——

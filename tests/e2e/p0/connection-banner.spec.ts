@@ -1,4 +1,3 @@
-// spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 //
 // 连接状态横幅的端到端可见性。阈值边界（799/800、4999/5000 等）由纯逻辑单测

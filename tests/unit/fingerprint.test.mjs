@@ -1,4 +1,4 @@
-// tests/unit/fingerprint.test.mjs —— 审批完整性绑定后端侧同步哈希单测（docs/design.md，承接 AD-7/NFR-17）
+// tests/unit/fingerprint.test.mjs —— 审批完整性绑定后端侧同步哈希单测（承接 AD-7/NFR-17）
 // fingerprint.js 是纯逻辑模块（node:crypto 同步 API），此前完全没有测试覆盖——补齐两类风险：
 // ①fingerprintSync/verifyIntegritySync 自身行为；②与前端 app/public/js/canonicalize.js 的
 // fingerprintHex（crypto.subtle 异步）是否产生同一哈希——这条不是"锦上添花"：真正的安全门槛

@@ -756,7 +756,7 @@ func deviceKindLabel(_ ua: String?) -> String {
 /// gitignore 的产物上，git clean / 换分支之后静默失效（2026-08-18 真机实证）。
 ///
 /// **必须比到分隔符**：本仓的平级 worktree 检出位就是 `<repo>-<分支名>`（见 CLAUDE.md），
-/// 裸 hasPrefix(repo) 会把 claude-chat-mobile-promo 误判成 claude-chat-mobile 的内部路径。
+/// 裸 hasPrefix(repo) 会把 claude-chat-mobile-feature 误判成 claude-chat-mobile 的内部路径。
 /// 与 scripts/service.js 里那条 status 警告用同一判据，两侧不该给出不同结论。
 func isRunningFromRepoBuild(bundlePath: String, repo: String) -> Bool {
     bundlePath.hasPrefix(repo + "/")

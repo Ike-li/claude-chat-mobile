@@ -1,6 +1,6 @@
 // tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
 // 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
-// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
+// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';

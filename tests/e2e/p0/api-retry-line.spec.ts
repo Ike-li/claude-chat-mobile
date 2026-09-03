@@ -1,4 +1,3 @@
-// spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 //
 // 终端等价性回归：CLI 遇到 5xx/429 会自动重试，期间把整条 spinner 行顶替成

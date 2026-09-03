@@ -1,4 +1,4 @@
-// tests/unit/attention.test.mjs —— "等我"聚合纯函数单测（需求与状态语义见 docs/design.md §3）
+// tests/unit/attention.test.mjs —— "等我"聚合纯函数单测
 // deriveAttention(sessions, pendingApprovals) → { needsYou, others }：
 // - needsYou 按 waitingSince 升序（等得越久排越前，OQ-01 已决）
 // - 数据源两条互不重叠：审批维度直接来自 pendingApprovals（每项即一条 needsYou）、
