@@ -83,7 +83,7 @@ export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
 
 // Task 清单工具（CLI 内建 todo：TaskCreate/TaskUpdate/TaskList/TaskGet）。
 // CLI 对这组工具 renderToolUseMessage=null + 专用任务面板；web 无面板，
-// 折中为流内特化渲染：标题去 JSON 噪音、结果显 ☐/◐/☒ 清单（机主 7/17 拍板）。
+// 折中为流内特化渲染：标题去 JSON 噪音、结果显 ☐/◐/☒ 清单（维护者 7/17 拍板）。
 const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
 const TASK_STATUS_ICONS = { pending: '☐', in_progress: '◐', completed: '☒' };
 const taskStatusIcon = s => TASK_STATUS_ICONS[s] ?? `[${s}]`;
@@ -312,7 +312,7 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
   return msg;
 }
 
-// 子 agent 可折叠卡片标题（默认收起；机主选「可折叠卡片」形态）。
+// 子 agent 可折叠卡片标题（默认收起；维护者选定「可折叠卡片」形态）。
 // running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
 export function formatSubagentCardTitle({ subagentType, running = true } = {}) {

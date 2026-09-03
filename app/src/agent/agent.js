@@ -271,7 +271,7 @@ function nextEpoch() {
   return `${Date.now()}.${++instanceCounter}`;
 }
 
-// 模型展示名「原样透传」（机主 2026-06-15 决定）：不再维护项目自己的友好名映射表——
+// 模型展示名「原样透传」（维护者 2026-06-15 决定）：不再维护项目自己的友好名映射表——
 // web 端 select 直接显示 SDK supportedModels() 返回的 displayName/value、init.model 用裸名。
 // 理由：手维护的映射会跑偏（曾把裸 claude-opus-4-8 误标「(1M context)」与真 [1m] 变体撞车成双 Opus）；
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
@@ -486,7 +486,7 @@ export class AgentSession {
     this._localCmdProgressTimer = null; // 命令在途期间的 subagents 进度轮询表（见 _startLocalCommandProgress）
     this._localCmdTaskIds = new Set();  // 本轮由扫盘产出的 bgTasks 键，命令收尾时统一清
     // transcript 根目录：生产恒为 undefined（history.js 内默认 ~/.claude/projects）。
-    // 单测注入 tmpdir 用——扫盘类逻辑若只能打真实目录，测试就得在机主的会话树上跑（曾出过事故）。
+    // 单测注入 tmpdir 用——扫盘类逻辑若只能打真实目录，测试就得在真实会话树上跑（曾出过事故）。
     this.transcriptBaseDir = transcriptBaseDir;
   }
 

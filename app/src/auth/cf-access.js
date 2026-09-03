@@ -22,7 +22,7 @@ let localJwks = null;         // 内存中的 JWKS JSON 对象
 let localResolver = null;     // jose 本地 Key Set 查找解析器
 let lastFetchTime = 0;        // 上次远程拉取的时间戳（防止短时间内恶意刷未知 kid 导致频繁网络调用）
 const FETCH_COOLDOWN_MS = 30000; // 30 秒网络拉取冷却时间
-// 证书拉取超时：Clash 直连裸拉实测 ~2.5s，2s 必超 → 启动拉证书失败致公网 fail-closed 锁死。
+// 证书拉取超时：经本地代理出网时实测 ~2.5s，2s 必超 → 启动拉证书失败致公网 fail-closed 锁死。
 // 与 ntfy 的 NTFY_TIMEOUT_MS 同为 8s，但是两件独立的事（证书 vs 推送），不抽共享常量——改一边不该牵动另一边。
 const CERTS_FETCH_TIMEOUT_MS = 8000;
 

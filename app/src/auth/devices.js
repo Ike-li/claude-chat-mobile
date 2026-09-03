@@ -33,7 +33,7 @@ export function loadTrustedDevices() {
       trustedDevices = new Set();
     }
   } catch (err) {
-    // 保留 last-good：瞬时读失败不把全部设备当未信任（flap 锁死机主机）
+    // 保留 last-good：瞬时读失败不把全部设备当未信任（flap 锁死本机）
     console.error('[devices] 读取 trusted-devices.json 失败（保留内存 last-good）:', err.message);
   }
 }
@@ -43,7 +43,7 @@ export function getTrustedCount() {
   return trustedDevices ? trustedDevices.size : 0;
 }
 
-// 受信任设备 ID 列表（供 CLI 与桌面端菜单展示、给机主核对）。与 getTrustedCount 的区别是
+// 受信任设备 ID 列表（供 CLI 与桌面端菜单展示、给用户核对）。与 getTrustedCount 的区别是
 // 它返回 ID 本身，所以只该喂给已经过鉴权的本机通道，不进任何网络响应。
 // 每次重读磁盘，同 isDeviceTrusted 的理由：CLI 与 server 是两个进程，内存副本会过期。
 // 这个 getter 存在的意义是让 scripts/device.js 不必自己 join 路径——它自己算的话就只认

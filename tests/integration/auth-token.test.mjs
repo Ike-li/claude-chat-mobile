@@ -36,7 +36,7 @@ async function startServer() {
     WORK_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 本文件测的是 LAN token 路，CF Access 必须关闭。空串 + _spawn-server 已设的
-    // CCM_TEST_PRESERVE_EMPTY_ENV=1 组合：空值保留到 dotenv 结束（挡住机主 .env 回填真实
+    // CCM_TEST_PRESERVE_EMPTY_ENV=1 组合：空值保留到 dotenv 结束（挡住本机 .env 回填真实
     // CF 配置），随后 normalizeLoadedEnvironment 删空串 → 进程当「未设置」跑。见 config.js:39。
     CF_ACCESS_HOSTNAME: '',
     CF_ACCESS_TEAM: '',

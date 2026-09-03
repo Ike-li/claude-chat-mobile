@@ -1,7 +1,7 @@
 // tests/unit/service-events.test.mjs —— 重启事件的采集与频率判定
 //
 // 为什么需要这一层：`launchctl list` 只给 `LastExitStatus`，那是**瞬时值**，回答不了
-// 「这正常吗」。机主机器上的实证——隧道的 -9 不是崩溃，是自建看门狗每天按 DHCP 漂移
+// 「这正常吗」。实测环境中的实证——隧道的 -9 不是崩溃，是自建看门狗每天按 DHCP 漂移
 // kickstart 一次留下的痕迹。用瞬时值判 flapping 等于每天误报一次，而恒亮的告警比没有告警更糟：
 // 它会训练用户忽略这个图标，等真出事那天也不会多看一眼。
 //
@@ -117,7 +117,7 @@ test.describe('classifyRestartPattern —— 频率判据（取代「最后一�
   const HOUR = 3600_000;
 
   test('一天一次的 DHCP 漂移重启 → 不算 flapping', () => {
-    // 机主机器上的真实模式：路由器每天换一次 IP，看门狗 kickstart 一次
+    // 实测环境中的真实模式：路由器每天换一次 IP，看门狗 kickstart 一次
     // 用 23h/47h 而不是整 24h/48h：整数倍恰好压在窗口边界上，测的就成了 < 与 <= 的区别，
     // 而不是「一天一次算不算 flapping」这个真正的意图。
     const events = [ev(T - 71 * HOUR), ev(T - 47 * HOUR), ev(T - 23 * HOUR), ev(T - 2 * HOUR)];
@@ -280,7 +280,7 @@ test.describe('validateServiceEvents —— 读盘校验', () => {
 
 // ── 第三轮审查修复：短命周期 job 不再被算成重启 ──────────────────────────
 //
-// 机主机器上的实证：`com.ccm.tunnel-watch`（每 30s 检测 en0 的 DHCP 漂移）与 `com.ccm.logrotate`
+// 实测环境中的实证：`com.ccm.tunnel-watch`（每 30s 检测 en0 的 DHCP 漂移）与 `com.ccm.logrotate`
 // 在 `launchctl list` 里 pid 恒为 `-` —— 它们是**短命周期 job**，不是常驻进程。采样器每 60s 抓
 // 一次，抓到在跑就产 started、下次抓到已退出就产 stopped。把 started 计入频率的后果是：
 // 一小时抓到三次就报 flapping ——**这正是本功能立意要消灭的「恒亮告警」，只是换了个 label**。

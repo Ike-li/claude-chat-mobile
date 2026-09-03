@@ -241,7 +241,7 @@ function sleepSync(ms) {
 // 两条理由各自都足以否决 `fetch('/health')`：
 //  ① 限速：HTTP 鉴权与 socket 握手共用同一个桶（app/src/server/http.js 的 createHttpAuth 与
 //     app/src/server/app.js 的 io.use 共享 rlStates）。一次不带 token 的请求就是一次货真价实的
-//     鉴权失败，会给来源上退避锁、连累机主浏览器的 socket 握手。scripts/service.js 的纪律 2
+//     鉴权失败，会给来源上退避锁、连累用户浏览器的 socket 握手。scripts/service.js 的纪律 2
 //     早已写明并规避这个坑（探活只用 launchctl + 纯 TCP），这里是同一条纪律的补齐。
 //  ② 鲁棒性：HTTP 探活要求 server 的**事件循环有空**才会回响应，于是「server 在跑但正忙」
 //     （长回合、同步文件遍历等）会被误判成「server 未运行」，报告去说「跳过消费验证」。

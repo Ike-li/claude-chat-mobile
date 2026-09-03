@@ -15,7 +15,7 @@ import { io as ioClient } from 'socket.io-client';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 // 同 metrics-endpoint.test.mjs：显式设一个非空测试 token 而非删空——dotenv 默认不覆盖已存在的非空
-// key（config.js 的预清空只针对空串），删空反而会被机主真实 .env 里的 AUTH_TOKEN/CF Access 回填
+// key（config.js 的预清空只针对空串），删空反而会被本机真实 .env 里的 AUTH_TOKEN/CF Access 回填
 // （ccm-integration-tests-env-redness 记忆条目）。给真实非空值可绕开这整类既有环境红。
 const TOKEN = 'config-refresh-test-token';
 let port, dataDir, httpServer, io;

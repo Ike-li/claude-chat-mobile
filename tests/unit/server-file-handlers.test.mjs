@@ -208,7 +208,7 @@ test('files:write 无 ack 时忽略', async () => {
 });
 
 // R10（2026-08-06 BUG hunting review）：审计归属。
-// scopeDirsFor 返回全量 workDirs（n=1 下机主即 root，跨 workdir 的 relPath 不构成越权，是有意的宽 scope），
+// scopeDirsFor 返回全量 workDirs（n=1 下用户即 root，跨 workdir 的 relPath 不构成越权，是有意的宽 scope），
 // 但审计把 target 记成【请求声明的 cwd】——文件实际落在另一个 workdir 时，事后查「谁动过 B 项目的文件」
 // 会显示 A。安全性不变，修的是审计准确性：target 必须是真实落点所属的 workdir。
 test('R10：files:write 落到别的 workdir 时，审计 target 记真实落点而非声明的 cwd', async () => {

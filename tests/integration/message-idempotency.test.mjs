@@ -13,7 +13,7 @@ import { waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, httpServer, io;
 
-// 不能靠 delete AUTH_TOKEN 假装"无鉴权"——机主本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
+// 不能靠 delete AUTH_TOKEN 假装"无鉴权"——本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
 // app/server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
 // 致测试客户端未带正确 token 被拒连接（P1-4 aborted-state.test.mjs 已踩过、这里应直接复用教训）。
 async function startServer(authToken = 'msg-idempotency-test-token') {

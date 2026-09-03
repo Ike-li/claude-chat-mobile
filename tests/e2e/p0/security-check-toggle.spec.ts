@@ -3,7 +3,7 @@
 //
 // 为什么锁这一条：报告是内联长列表（十几项 + WHITELIST 明细），而诊断区另两个入口是 bottom sheet
 // 自带 ✕ 关闭。第一版这里只做了 classList.remove('hidden')——展开后没有任何回程路径，报告把设置
-// 列表整个顶出屏幕（机主真机复现）。收起路径有两条（按钮本身 + 报告尾行），两条都要锁。
+// 列表整个顶出屏幕（真机复现）。收起路径有两条（按钮本身 + 报告尾行），两条都要锁。
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings } from '../../helpers/playwright';

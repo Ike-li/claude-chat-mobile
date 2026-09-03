@@ -1,6 +1,6 @@
 // tests/unit/file-browse.test.mjs —— FileBrowseHandler 单测（docs/design.md，承接 AD-12/FR-07"浏览项目文件"）
 // listDir/readFile：请求-响应型只读文件浏览，弱网上限（分页/截断）、二进制检测、symlink 如实标注。
-// 敏感文件（.env 等）不做内容过滤——docs/design.md 显式抉择（机主即 root + 透明性，防线在范围门不在内容审查），
+// 敏感文件（.env 等）不做内容过滤——docs/design.md 显式抉择（用户即 root + 透明性，防线在范围门不在内容审查），
 // 故本文件不测"过滤"，只测"范围门挡越界 + 弱网上限正确"。真实临时目录测试，同 workdir-scope-guard 惯例。
 import test from 'node:test';
 import assert from 'node:assert/strict';

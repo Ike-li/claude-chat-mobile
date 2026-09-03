@@ -5,7 +5,7 @@ import * as ilog from '../../app/src/agent/interaction-log.js';
 
 test.describe('interaction-log', () => {
   // enabled 在模块加载时由 LOG_INTERACTIONS 求值（运行中不可改）。用动态 import + 受控 env 测两个方向，
-  // 不硬断言 false——否则机主 shell 常驻的 LOG_INTERACTIONS=1 会让本地 npm test 挂（此前真实发生过）。
+  // 不硬断言 false——否则本机 shell 常驻的 LOG_INTERACTIONS=1 会让本地 npm test 挂（此前真实发生过）。
   test('enabled=true 当 LOG_INTERACTIONS=1', async () => {
     const saved = process.env.LOG_INTERACTIONS;
     process.env.LOG_INTERACTIONS = '1';

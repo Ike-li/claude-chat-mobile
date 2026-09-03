@@ -9,7 +9,7 @@
 //
 // 【为什么非拆不可】这段测试原先跑在【真实 ~/.claude/projects】上：它在那里建目录、写 jsonl、
 // 再 rmSync 掉。2026-08-02 出过事——变异检查把 getProjectDir 改成恒返回 ''，
-// `join(CLAUDE_DIR, '')` 塌成根目录本身，recursive+force 把机主 70 个项目的 transcript 与
+// `join(CLAUDE_DIR, '')` 塌成根目录本身，recursive+force 把70 个项目的 transcript 与
 // memory 一次删光（靠 APFS 快照恢复）。当时以为"碰真实目录的只有集成测试"，其实这个单测也碰，
 // 而且是每次 npm test 都碰。详见 [[ccm-mutate-deleted-real-data-2026-08-02]]。
 //
@@ -33,7 +33,7 @@ const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 
 // 自检：HOME 真的换掉了、且 history.js 内部算出的根与这里一致，否则本文件就是在真实目录上跑，
 // 那正是要避免的事。断在最前面，不让后面的删除动作在错误的根上执行。
-test('前置自检: CLAUDE_DIR 落在一次性 HOME 内，未指向机主真实目录', () => {
+test('前置自检: CLAUDE_DIR 落在一次性 HOME 内，未指向真实目录', () => {
   assert.equal(process.env.HOME, FAKE_HOME);
   assert.ok(CLAUDE_DIR.startsWith(FAKE_HOME), `CLAUDE_DIR 应在假 HOME 内，实际=${CLAUDE_DIR}`);
 });
@@ -45,7 +45,7 @@ function rmProjectDir(dir) {
     throw new Error(`拒绝删除 CLAUDE_DIR 本身（getProjectDir 返回了空值？）: ${JSON.stringify(dir)}`);
   }
   // safe-rm: 双保险——① 本文件整体跑在 mkdtemp 出来的假 HOME 下，CLAUDE_DIR 根本不指向
-  // 机主真实目录（文件头有前置自检断言）；② 上面那两行护栏挡住「塌成根」的形态。
+  // 真实目录（文件头有前置自检断言）；② 上面那两行护栏挡住「塌成根」的形态。
   rmSync(dir, { recursive: true, force: true });
 }
 

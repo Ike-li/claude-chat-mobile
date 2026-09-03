@@ -3,10 +3,10 @@
 // 不进事件信封/RingBuffer——非会话进展，断线重来即可，无"错过"概念（src/server/socket-files.js 侧以普通 ack 回调接线，不走 broadcast）。
 // 写路径唯一入口 writeFileInScope（socket 层 files:write）：只改【已存在】的文件（不带 O_CREAT，不新建
 // 不删）、≤MAX_BROWSE_BYTES、baseHash 与磁盘现状不符即拒（防覆盖 Claude 并发改动）、写前后都过范围门，
-// 落盘即审计（src/server/socket-files.js 的 audit.recordAudit file_write）；这是机主本人在编辑器里的显式操作，语义等同
+// 落盘即审计（src/server/socket-files.js 的 audit.recordAudit file_write）；这是用户本人在编辑器里的显式操作，语义等同
 // ssh+vim，不走 agent 行为的审批链（approval-store 是给 canUseTool 设计的，不是给人)。部署方仍可用
 // .env FILE_EDIT=off 整体回到只读（src/server/app.js 读取，见其 fileEditOff 判定）。
-// 透明性权衡（显式抉择）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
+// 透明性权衡（显式抉择）：范围内内容不做敏感过滤（.env 等照读）——用户即 root +
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
 import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, chmodSync, fsyncSync, constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';

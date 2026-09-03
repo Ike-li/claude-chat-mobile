@@ -130,7 +130,7 @@ export function createNotificationController(context, {
     }
     if (NotificationApi?.permission === 'granted') {
       // 订阅失败时也要把入口露出来：此前 subscribe() 返回 false 就没下文了，用户既收不到推送、
-      // 界面上也没有任何痕迹（实测机主机器上从未有过 push-subscription.json 却毫不知情）。
+      // 界面上也没有任何痕迹（真机实测中从未有过 push-subscription.json 却毫不知情）。
       void subscribe().then(ok => {
         if (!ok) context.dom.btnPush?.classList.remove('hidden');
       });

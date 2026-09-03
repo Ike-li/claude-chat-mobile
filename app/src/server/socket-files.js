@@ -70,7 +70,7 @@ export function registerFileSocketHandlers({
   }
 
   // browse/write 的 scopeDirs：白名单即可（显式 workdir 已在列表内）。
-  // 【为什么不收紧到单个 cwd】n=1 自托管、机主即 root：跨 workdir 的 relPath 读到的仍是机主自己的
+  // 【为什么不收紧到单个 cwd】n=1 自托管、用户即 root：跨 workdir 的 relPath 读到的仍是用户自己的
   // 文件（直接切到那个工作区就能读），不构成越权。宽 scope 是有意的，收紧反而会挡掉「在 A 项目里
   // 让 claude 参考 B 项目代码」这类正常用法。真正的问题在审计归属，见 auditTargetFor（R10）。
   function scopeDirsFor(_cwd, workDirs) {
@@ -206,7 +206,7 @@ export function registerFileSocketHandlers({
   // 编辑器保存：V1 只改已存在文件（见 file-browse.js writeFileInScope 头注——不带 O_CREAT）。
   // writeFileInScope 自带范围门 + baseHash 冲突检测，这里只判「有没有开这个能力」（FILE_EDIT=off 时
   // app.js 不传 writeFileInScope，走 unavailable）+ 记审计（scope 违规复用标准 action，其余结果落
-  // file_write——机主本人显式操作，不经 approval-store，审计是唯一事后可追溯的记录）。
+  // file_write——用户本人显式操作，不经 approval-store，审计是唯一事后可追溯的记录）。
   on(socket, 'files:write', (payload, ack) => {
     if (typeof ack !== 'function') return;
     if (typeof writeFileInScope !== 'function') {

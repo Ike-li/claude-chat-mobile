@@ -225,7 +225,7 @@ test('createHttpAuth：每次鉴权失败都经 onAuthFailure 上报，且绝不
 
 // 2026-08-06 R6：try 不得把 next() 圈进去。下游 handler（/metrics 聚合、/push/subscribe 解析等）
 // 的同步抛错不是鉴权失败——圈进 catch 会给【已通过鉴权】的来源计一次失败（连续 8 次即 15min 锁定，
-// 机主被自家某个 handler 的 bug 锁在门外），且在响应可能已写出后二次 res.status(401)。
+// 用户被自家某个 handler 的 bug 锁在门外），且在响应可能已写出后二次 res.status(401)。
 test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响应、异常向外传播', async () => {
   const states = new Map();
   const onResultCalls = [];
@@ -256,7 +256,7 @@ test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响
     /downstream boom/,
   );
   assert.deepEqual(onResultCalls, [true], '只该有鉴权成功那一次计数，绝不能出现 ok=false');
-  assert.equal((states.get('ip:7.7.7.7')?.failCount ?? 0), 0, '失败计数必须为 0——否则 8 个下游 bug 就把机主锁 15 分钟');
+  assert.equal((states.get('ip:7.7.7.7')?.failCount ?? 0), 0, '失败计数必须为 0——否则 8 个下游 bug 就把用户锁 15 分钟');
   assert.deepEqual(statusCalls, [], '下游抛错后不得二次写响应（401/429 都不行）');
 });
 
@@ -315,7 +315,7 @@ test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失�
 
 // A1 的「仅已批准设备可登记推送」在 bypass 拓扑下是 fail-closed 用错了地方：socket 侧 io.use 对
 // 「CF Access 已验」与「真本机直连」走 bypass 分支，而那条分支【不调 addPendingDevice】——这类设备
-// 结构上永远进不了待审列表；approveDevice 的三个入口又都要求先在待审列表里，机主在 UI/CLI 上看不到它、
+// 结构上永远进不了待审列表；approveDevice 的三个入口又都要求先在待审列表里，用户在 UI/CLI 上看不到它、
 // 无从批准。于是只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
 // 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。
 test.describe('/push/subscribe 的第二因子：bypass 级信任必须与信任表等价放行', () => {
@@ -540,7 +540,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     assert.equal(mount({ hotReloadJs: true }).run('/js/never-existed.js').nextCalled, true);
   });
 
-  // 判据必须是专用开关，不能是 DEV_MODE：机主的生产 .env 里 DEV_MODE=1（.env.example 明确说
+  // 判据必须是专用开关，不能是 DEV_MODE：真实生产 .env 里 DEV_MODE=1（.env.example 明确说
   // dogfooding 常驻部署可以开），复用它等于在生产把启动预读悄悄撤回去。
   test('默认档跟随 ASSET_HOT_RELOAD，且不受 DEV_MODE 影响', () => {
     const saved = { hot: process.env.ASSET_HOT_RELOAD, dev: process.env.DEV_MODE };

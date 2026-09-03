@@ -154,7 +154,7 @@ export const EN_DICT = Object.freeze({
   '回车键': 'Enter',
   '一键同意最新设备，或在该项目目录下执行：': 'to approve the latest device, or run this from that project directory:',
   '设备未获授权': 'Device not authorized',
-  '机主已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。': 'The owner denied this device. If that was a mistake, request access again and approve it from a trusted signed-in device or the host terminal.',
+  '主机所有者已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。': 'The owner denied this device. If that was a mistake, request access again and approve it from a trusted signed-in device or the host terminal.',
   '重新请求接入': 'Request access again',
   '查看访问帮助': 'View access help',
   '如何连接与使用': 'How to connect and use',

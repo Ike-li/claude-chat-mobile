@@ -13,7 +13,7 @@ import { waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, httpServer, io;
 
-// 注：不能靠 delete AUTH_TOKEN 假装"无鉴权"——机主本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
+// 注：不能靠 delete AUTH_TOKEN 假装"无鉴权"——本机 .env 若已配置真实 AUTH_TOKEN/CF Access，
 // app/server.js 顶层 dotenv.config() 会在 delete 后重新从 .env 注入（变量变回"不存在"触发重新注入），
 // 导致测试客户端因未带正确 token 被拒连接、卡死等 init 超时（本次实测踩过）。改用与其余集成测试
 // 一致、已验证工作的模式：显式设一个测试专用 AUTH_TOKEN，客户端显式携带同一 token。

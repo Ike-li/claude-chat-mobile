@@ -450,7 +450,7 @@ test('presentOfflineResendAck: 仅 error=stale_instance（无 stale 字段）也
 });
 
 // 重发横幅无归属过滤 → 队列项发往别的会话，横幅却贴在当前会话消息流里，
-// 读起来像「这条排队消息在本会话发了」（现场：机主在 Official 看到 third-party 的重发提示）。
+// 读起来像「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
 test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
   test('全部目标为当前 viewing → 原文案，不加其它会话标注', () => {
     const out = planOutboxDrainNotice({

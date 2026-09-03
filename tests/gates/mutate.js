@@ -211,7 +211,7 @@ function listTestFiles(rootDir) {
 //   `String(cwd || '')` 改成 `String(cwd && '')` ⇒ 对任意 cwd 恒返回 ''，于是
 //   session-delete.test.mjs 的 `projectDir = join(PROJECTS_ROOT, getProjectDir(workDir))`
 //   塌成 PROJECTS_ROOT 本身，它的 cleanup 再 `rmSync(projectDir, {recursive, force})`
-//   —— 整个 ~/.claude/projects 被递归删除，机主积累的 104 个 memory 文件一起没了（靠 APFS 快照才捞回来）。
+//   —— 整个 ~/.claude/projects 被递归删除，积累的 104 个 memory 文件一起没了（靠 APFS 快照才捞回来）。
 //
 // 两层防护，缺一不可：
 //   ① 自动关联只取 tests/unit（见 listTestFiles）——真正碰真实目录的是集成测试。

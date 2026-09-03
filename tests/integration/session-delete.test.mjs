@@ -87,7 +87,7 @@ async function cleanup() {
   for (const d of [dataDir, workDir, projectDir]) {
     if (!d || !existsSync(d)) continue;
     // ★ projectDir 是 join(PROJECTS_ROOT, getProjectDir(workDir))——【被测代码算出来的】。
-    // getProjectDir 一旦返回 ''，它就塌成 PROJECTS_ROOT 本身，下面这个 recursive+force 会把机主
+    // getProjectDir 一旦返回 ''，它就塌成 PROJECTS_ROOT 本身，下面这个 recursive+force 会把本机
     // 所有项目的 transcript 与 memory 一次删光。2026-08-02 真实发生过：变异检查把 getProjectDir 的
     // `String(cwd || '')` 改成 `&&` ⇒ 恒返回 ''，整棵 ~/.claude/projects 没了（靠 APFS 快照恢复）。
     // 同型第二处在 tests/unit/history-list-sdk-fastpath.test.mjs（那边另外还跑在假 HOME 下）。

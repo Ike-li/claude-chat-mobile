@@ -54,7 +54,7 @@ export const ENV_SCHEMA = {
       'Required: the server refuses to start without it (every client needs the token, including on this machine). Run npm run setup to rotate it.'),
   },
   // 声明式「公网访问方案」。空 = 未声明：一切消费点回落现状推断（CF_ACCESS_* 齐设与否），
-  // 既有部署零行为变化 —— 不设 default 'lan'：机主生产环境三键已设、未声明，默认 lan 会
+  // 既有部署零行为变化 —— 不设 default 'lan'：既有生产部署三键已设、未声明，默认 lan 会
   // 让升级即触发「声明与实际矛盾」告警。消费点（doctor / D20 信号）一律严格 === 比较，
   // 手改配置绕过校验写进未知值时按未声明处理（未知值不得抑制任何告警，fail-closed）。
   ACCESS_PROFILE: {

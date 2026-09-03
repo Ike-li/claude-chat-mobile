@@ -433,7 +433,7 @@ test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是
     assert.equal(shouldReloadOnEnter({ replayed: 50, gap: false, hasCache: false, diskLen: 200, seenDiskLen: 0 }), 'reload');
   });
   // 空闲回收后：缓冲里常只剩 error/system 横幅类事件(replayed>0)，但 hasCache=false（clearView 后无 DOM）。
-  // 必须走 reload 拉磁盘全量历史——否则只见「进程已回收」条、聊天区空白（机主 7134c083 复现）。
+  // 必须走 reload 拉磁盘全量历史——否则只见「进程已回收」条、聊天区空白（7134c083 复现）。
   test('无缓存 + 仅有回收类缓冲回放 → 仍 reload 拉磁盘历史', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 1, gap: false, hasCache: false, diskLen: 123, seenDiskLen: 0 }), 'reload');
   });

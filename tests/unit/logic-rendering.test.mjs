@@ -182,7 +182,7 @@ test.describe('resolveUnreadAnchorIndex', () => {
 
 
 // 推送订阅状态行：这一整段是"我从来没收到过推送、界面上却看不出任何异常"逼出来的——
-// 实测机主机器上 push-subscription.json 压根不存在（从未订阅），而 UI 里没有任何地方显示这件事，
+// 真机实测中 push-subscription.json 压根不存在（从未订阅），而 UI 里没有任何地方显示这件事，
 // 铃铛按钮在"权限被拒"时还会永久隐藏。状态必须能被看见，且看得出下一步该做什么。
 test.describe('formatPushStatusRow：推送订阅状态可见化', () => {
   test('已订阅 → ok 态、无动作按钮', () => {

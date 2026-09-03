@@ -126,7 +126,7 @@ struct CCMCoreTests {
         eq(statusWith("\(running),\(#"{"unit":"tunnel","state":"running","flapping":true}"#)")?.symbol,
            "exclamationmark.triangle", "任一 unit flapping → 三角")
 
-        // ★ shape 漂移不算问题：用户换了启动方式（机主的隧道用自写包装脚本）是有意配置。
+        // ★ shape 漂移不算问题：用户换了启动方式（用户自建的隧道 unit 用自写包装脚本）是有意配置。
         eq(statusWith("\(running),\(#"{"unit":"tunnel","state":"running","drift":["shape"]}"#)")?.symbol,
            "checkmark.circle", "只有 shape 漂移 → 仍是对勾")
         eq(statusWith("\(running),\(#"{"unit":"tunnel","state":"running","drift":["repo-path"]}"#)")?.symbol,
@@ -169,13 +169,13 @@ struct CCMCoreTests {
         // 没有 pid 时不该拼出「运行中 ()」这种空括号
         eq(unitTitle(unit(#"{"unit":"x","state":"running"}"#)!).contains("("), false, "无 pid 时不留空括号")
 
-        // ── UI 可理解性（2026-08-17 机主反馈「不知道谁是干嘛的」）────────────────
+        // ── UI 可理解性（2026-08-17 用户反馈「不知道谁是干嘛的」）────────────────
         // stopped 的状态词按**调度形态**定制：定时器与打火即退任务的「停止」是健康待机，
         // 照写「已停止」会被读成故障（用户真的来问过）。server/tunnel 的 stopped 才是真没跑。
         //
         // ★ 2026-08-18：判据从 unit 名字表换成 status --json 里的 schedule 字段。
-        // 名字表只硬编码了 logrotate/menubar 两个自家模板，机主自建的 com.ccm.tunnel-watch
-        // （每 30s 救一次隧道）落进 default 仍被标「已停止」—— 机主本人因此来问「这个要启用吗」。
+        // 名字表只硬编码了 logrotate/menubar 两个自家模板，用户自建的 com.ccm.tunnel-watch
+        // （每 30s 救一次隧道）落进 default 仍被标「已停止」—— 用户本人因此来问「这个要启用吗」。
         // 用户随时可能再加一个 watch，名字表永远追不上；plist 里的调度形态是现成的事实。
         eq(unitTitle(unit(#"{"unit":"logrotate","state":"stopped","schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#)!).contains("待机 · 每天 03:47"),
            true, "时刻由 plist 算出，模板改了文案跟着变")
@@ -192,7 +192,7 @@ struct CCMCoreTests {
         // service-units.js 的 extractSchedule 只判 `typeof === 'object'`（数组也满足）后原样透传，
         // 所以数组会真的到达这里。而 Swift 的 optional 容忍 null / 缺字段，**不容忍类型不匹配**：
         // `[String: Int]?` 撞上数组 → 整个 ServiceStatus 解码失败 → 菜单永久显示「读不到状态」，
-        // 没有 unit、没有启停项。机主本机就跑着手写的 com.ccm.tunnel-watch，buildUnknownUnits
+        // 没有 unit、没有启停项。用户可能手写了 com.ccm.tunnel-watch 这类 unit，buildUnknownUnits
         // 会把任意 com.ccm.* 收进来，所以这不是假想场景。
         // JS 侧对同一形态是优雅降级的（describeSchedule 说「待机 · 定时触发」），两侧不能分叉。
         check(decode(#"{"schemaVersion":1,"units":[{"unit":"backup","state":"stopped","schedule":{"kind":"periodic","calendar":[{"Hour":9},{"Hour":21}]}}]}"#) != nil,
@@ -504,7 +504,7 @@ func testTaskSteps() {
     eq(uninstallSteps(unit: "tunnel", repo: repo).first?.argv.last, "--yes", "卸载须显式确认")
 
     // unit 子菜单「查看日志」直接打开内嵌日志窗口并预选该 unit 的源。此前的 unitLogSteps
-    // （任务窗口里跑 service.js logs 打一段文本）已于 2026-08-17 退役——机主反馈「都是让去
+    // （任务窗口里跑 service.js logs 打一段文本）已于 2026-08-17 退役——用户反馈「都是让去
     // 某某文件看」：一次性文本输出不是日志视图。source title 恰好 = unit 名；LOG_FILE
     // 自定义路径时 server 源的 title 是「server（LOG_FILE）」，按前缀也要能选中。
     let srcs = [LogSource(title: "server（LOG_FILE）", path: "/x"),
@@ -516,7 +516,7 @@ func testTaskSteps() {
        0, "只有 LOG_FILE 形态时按前缀选中")
     eq(logSourceIndex(forUnit: "logrotate", in: srcs), nil, "无此源返回 nil（窗口保持默认选中）")
 
-    // 「更新桌面端」一键项（2026-08-17 机主反馈「没有一个总的重启按钮」）：
+    // 「更新桌面端」一键项（2026-08-17 用户反馈「没有一个总的重启按钮」）：
     // 重新编译并装进 /Applications；成功后自动 relaunch 属 GUI 层（onSuccess 回调）。
     let upd = updateAppSteps(repo: repo)
     eq(upd.count, 1, "更新一步到位（app-build --install 内含编译+安装）")
@@ -609,7 +609,7 @@ func testPortConflictPresentation() {
 //
 // 这一组的存在理由跟 ServiceStatus 那组一样：Node 侧的字段是会变的，而"一个字段变 null
 // 就整份解码失败"在这里的后果格外隐蔽——菜单里「设备审批」永远空着，看起来跟"没有设备
-// 在等"一模一样，机主根本不会察觉自己漏掉了一台待批设备。
+// 在等"一模一样，用户根本不会察觉自己漏掉了一台待批设备。
 func decodeDevices(_ json: String) -> DeviceSnapshot? {
     guard let d = json.data(using: .utf8) else { return nil }
     return try? JSONDecoder().decode(DeviceSnapshot.self, from: d)
@@ -638,7 +638,7 @@ extension CCMCoreTests {
 
     // MARK: 待审设备怎么显示给人看
     //
-    // 核对是这道门的全部意义所在：机主要判断"在敲门的到底是不是我那台手机"。
+    // 核对是这道门的全部意义所在：用户要判断"在敲门的到底是不是我那台手机"。
     // 32 位 hex 直接铺在菜单里既放不下也没法核对，所以要截断成能和手机上那串对上的短形式，
     // 再补一个人能直接认出的设备类型。
     static func testDevicePresentation() {
@@ -670,7 +670,7 @@ extension CCMCoreTests {
 
 // MARK: 勾「开机自启」前的风险判据
 //
-// 2026-08-18 在机主真机上踩到：菜单里勾自启用的是 Bundle.main.bundlePath，而
+// 2026-08-18 在真机实测中踩到：菜单里勾自启用的是 Bundle.main.bundlePath，而
 // getting-started.md 恰好教了一条「只想先看一眼」的路——`npm run app:build && open
 // desktop/build/CCM.app`。看完觉得不错顺手勾上自启，LaunchAgent 就钉死在 gitignore
 // 的构建产物上，git clean / 换分支之后静默失效，且 status 与 doctor 当时都看不出来。
@@ -886,7 +886,7 @@ extension CCMCoreTests {
 }
 
 // ── appIdentityLine ────────────────────────────────────────────────────────
-// 2026-08-24：机主问「Spotlight 里为什么老是两个 CCM」。实测两份 bundle 的
+// 2026-08-24：有人问「Spotlight 里为什么老是两个 CCM」。实测两份 bundle 的
 // CFBundleShortVersionString 一模一样（都是 1.6.0），LaunchServices 里记的 version 也一样
 // —— **版本号在这个问题上零判别力**，排障时只能去 stat 二进制的 mtime。
 // 真正能回答「我跑的是哪一份、含不含某个修复」的是：装在哪 · 编译于何时 · 哪个 commit。
@@ -937,7 +937,7 @@ extension CCMCoreTests {
 }
 
 // ── 子进程环境 ─────────────────────────────────────────────────────────────
-// 2026-08-27：机主报「web 的体检说 CLAUDE_BIN 好好的，desktop 的体检说找不到 claude」。
+// 2026-08-27：有反馈称「web 的体检说 CLAUDE_BIN 好好的，desktop 的体检说找不到 claude」。
 // 根因是 GUI 启动的 app 继承 launchd 的 `PATH=/usr/bin:/bin:/usr/sbin:/sbin`，而 claude 装在
 // ~/.local/bin —— doctor.js 在这个 PATH 下 `which claude` 必然落空，退出码非零，后面十几项
 // 检查全被腰斩。server 没这个毛病只因为它的 plist 用 `zsh -lc` 起。

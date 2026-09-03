@@ -105,7 +105,7 @@ test.describe('infoPlistVars', () => {
 });
 
 // ── autostartTargetPath ────────────────────────────────────────────────────
-// 2026-08-18 在机主真机上踩到：跑 npm run app:install 的人，看到的最后一条可复制命令
+// 2026-08-18 在真机实测中踩到：跑 npm run app:install 的人，看到的最后一条可复制命令
 // 是 `service.js install menubar --app="<repo>/desktop/build/CCM.app"` —— 那条提示排在
 // --install 分支【之前】，固定打印构建产物路径。照着做，开机自启就钉在一个 gitignore
 // 的目录上，git clean / 换分支之后静默失效。
@@ -168,7 +168,7 @@ test.describe('APP_SOURCES 覆盖 desktop 下每一个产品 .swift', () => {
 });
 
 // ── shouldRemoveBuildArtifact ──────────────────────────────────────────────
-// 2026-08-24 机主报「Spotlight 里老是有两个 CCM」。实测 LaunchServices 把两个 bundle
+// 2026-08-24 有反馈称「Spotlight 里老是有两个 CCM」。实测 LaunchServices 把两个 bundle
 // 注册到了**同一个 identifier**（com.ccm.menubar）下：/Applications 那份和
 // desktop/build 那份 —— 同名、同图标、同版本号，界面上分不出哪个是哪个。
 // 根因是构建管线：app-build 永远先编到 desktop/build/CCM.app，--install 只是 ditto 一份
@@ -216,7 +216,7 @@ test.describe('shouldRemoveBuildArtifact', () => {
 });
 
 // ── 构建身份 ───────────────────────────────────────────────────────────────
-// 2026-08-24：机主问「Spotlight 里为什么两个 CCM」。实测两份 bundle 的
+// 2026-08-24：有人问「Spotlight 里为什么两个 CCM」。实测两份 bundle 的
 // CFBundleShortVersionString 完全相同（都是 package.json 的 1.6.0），LaunchServices 里
 // 记的 version 字段也一样 —— 版本号在这个问题上**零判别力**。排障时只能去 stat 二进制
 // 的 mtime。commit 与构建号才是能回答「我跑的是哪一份、含不含某个修复」的字段。

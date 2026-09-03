@@ -10,7 +10,7 @@
 //
 // ## 漂移判定为什么不能用 sha256（2026-08-13 实测）
 //
-// 机主手写的 ~/Library/LaunchAgents/com.ccm.server.plist 与 desktop/launchd/server.plist.template 经
+// 用户手写的 ~/Library/LaunchAgents/com.ccm.server.plist 与 desktop/launchd/server.plist.template 经
 // render-plist.js 渲染的结果**字节必然不同**，两处差异：
 //   ① 模板正文里 ProgramArguments 内的那条行内注释（stripLeadingComment 只剥首段，正文的保留）
 //   ② 模板给路径加了双引号（TC-009 防 word-split），手写的没加
@@ -22,7 +22,7 @@
 
 const MANIFEST_SCHEMA_VERSION = 1;
 
-// 默认 label 前缀。机主既有的四个手工装 unit 用的就是 com.ccm.*，换前缀会一个都认不出来、
+// 默认 label 前缀。既有的手工装 unit 用的就是 com.ccm.*，换前缀会一个都认不出来、
 // adopt 直接失效。
 //
 // 2026-08-16 前各 plist 模板（时称 deploy/，今 desktop/launchd/）与 docs/deployment.md 的示例写的是 com.you.ccm-，
@@ -75,7 +75,7 @@ function parseServerCommand(argv) {
 // stripQuotes 不反转义的话，解析出来的 repo 比期望值多几个反斜杠 → diffUnitSemantics 判
 // repo-path 漂移 → doctor D16 恒亮 warn。恰恰是这个改动要服务的那批用户换来一个新毛病。
 //
-// 对不含反斜杠的普通路径（含机主手写的那些 plist）是恒等的，所以既有安装不受影响。
+// 对不含反斜杠的普通路径（含用户手写的那些 plist）是恒等的，所以既有安装不受影响。
 function unescapeShellDq(value) {
   return String(value ?? '').replace(/\\([\\$`"])/g, '$1');
 }
@@ -218,7 +218,7 @@ export function templateFor(unit) {
   return def.template;
 }
 
-// label → unit 名。前缀命中但不是已知 unit（机主自建的 com.ccm.tunnel-watch）返回 null——
+// label → unit 名。前缀命中但不是已知 unit（用户自建的 com.ccm.tunnel-watch）返回 null——
 // 调用方据此判 ownership='unknown'：可以看、可以启停，但永不 install/uninstall。
 export function unitFromLabel(label, prefix = DEFAULT_LABEL_PREFIX) {
   const name = str(label);
@@ -248,7 +248,7 @@ export function parseLaunchctlList(tsv) {
 // 生命周期状态。
 //
 // ★ 这里**不再产出 flapping**。早前的版本用「最后一次退出码 ≠ 0」判它，而那是个瞬时值：
-// 机主的 com.ccm.tunnel 恒为 -9，因为自建看门狗 com.ccm.tunnel-watch 每 30s 检测 en0 的
+// 用户自建的隧道 unit 恒为 -9，因为自建看门狗 com.ccm.tunnel-watch 每 30s 检测 en0 的
 // DHCP 漂移、发现变了就 `launchctl kickstart -k`（-k 先 SIGKILL）。路由器每天换一次 IP，
 // 于是这个「异常退出」每天都在 —— 用瞬时值判 flapping 等于每天误报一次。
 // 恒亮的告警比没有告警更糟：它会训练用户忽略图标，真出事那天也不会多看一眼
@@ -297,8 +297,8 @@ export function extractUnitFacts(unit, plist) {
 }
 
 // 调度形态：这个 unit **期望常驻吗**。判据全在 plist 里，不查 UNITS 表 ——
-// 最需要这个判断的恰恰是表里没有的 unit（机主自建的 com.ccm.tunnel-watch 每 30s 救一次隧道，
-// 面板却照 launchd 的说法标「已停止」，机主本人因此来问过「这个要启用吗」）。
+// 最需要这个判断的恰恰是表里没有的 unit（用户自建的 com.ccm.tunnel-watch 每 30s 救一次隧道，
+// 面板却照 launchd 的说法标「已停止」，曾因此被误读、来问过「这个要启用吗」）。
 //
 // launchd 的 stopped 只说「此刻没有进程」，而那对三类 unit 含义相反：
 //   resident  KeepAlive → stopped 是**故障**

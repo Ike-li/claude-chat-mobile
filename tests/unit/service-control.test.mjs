@@ -3,7 +3,7 @@
 // 本文件里最重要的一组是 health 的「401 绝不重试」：
 // app/src/server/http.js:94-105 对鉴权失败无条件计数、app/src/server/app.js:309 让 loopback 也进限速、
 // app/src/auth/rate-limiter.js:9-13 阈值 8 锁 15 分钟。一个会重试的健康检查能在 40 秒内
-// 把机主连同手机一起关在门外 15 分钟。
+// 把用户连同手机一起关在门外 15 分钟。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -90,8 +90,8 @@ test.describe('start / stop', () => {
   });
 
   // 归属护栏管的是「写」：install/uninstall 会改盘上的 plist。启停不改任何配置，
-  // 所以机主自建的 tunnel-watch 也该能从菜单栏开关 —— 否则「看得见管不着」。
-  test('unknown unit（机主自建的 tunnel-watch）允许启停', () => {
+  // 所以用户自建的 tunnel-watch 也该能从菜单栏开关 —— 否则「看得见管不着」。
+  test('unknown unit（用户自建的 tunnel-watch）允许启停', () => {
     const { mgr, calls } = setup({ extraPlists: [`${HOME}/Library/LaunchAgents/com.ccm.tunnel-watch.plist`] });
     const r = mgr.start('tunnel-watch');
     assert.equal(r.ok, true, '前缀命中的 unit 应可启停，只是不能 install/uninstall');

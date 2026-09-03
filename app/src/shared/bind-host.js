@@ -95,7 +95,7 @@ export function resolveBindHost(authToken) {
 
 /**
  * token 里全是空白 —— 最危险的那一格：既绑了公网，认证又几乎不设防
- * （攻击者不必猜中「三个空格」，而是**机主自己以为没设 token**，于是不会去想公网暴露的事）。
+ * （攻击者不必猜中「三个空格」，而是**用户自己以为没设 token**，于是不会去想公网暴露的事）。
  *
  * 之所以能走到这一步：loadRuntimeEnvironment 只删严格空串 `''`，不 trim，所以 '   ' 活到运行时。
  */

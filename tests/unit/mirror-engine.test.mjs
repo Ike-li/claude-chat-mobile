@@ -14,7 +14,7 @@
 //   · setMirror 的抑重早退与解锁归零、单飞、定时器启停
 //
 // 磁盘夹具走 createMirrorEngine 的 transcriptBaseDir / sessionRegistryDir（生产恒 null）。绝不碰真实
-// ~/.claude/projects 与 ~/.claude/sessions：前者是机主的会话记录，后者塞进带活 pid 的条目会让机主
+// ~/.claude/projects 与 ~/.claude/sessions：前者是用户的会话记录，后者塞进带活 pid 的条目会让用户
 // 正在跑的 server 看到幻影「终端会话」。
 import test from 'node:test';
 import assert from 'node:assert/strict';

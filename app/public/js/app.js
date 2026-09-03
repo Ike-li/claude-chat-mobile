@@ -965,7 +965,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     offlineQueue = []; // 本批取出；requeue 的再 enqueue
     persistOutbox();
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
-    // 「这条排队消息在本会话发了」（现场：机主在 Official 看到 third-party 的重发提示）。
+    // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
     const notice = planOutboxDrainNotice({ items, viewingInstanceId, viewingCwd: currentCwd });
     addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
@@ -2115,7 +2115,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       setBusy(true);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
-      // 预建会留下「🤖 workflow 已完成」空壳（机主反馈怪），故等首条 parentToolUseId 事件再建卡。
+      // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
       if (!isSubagentPayload(p) && isSpawnToolName(p.name)) {
         agentToolIds.add(p.toolUseId);
         if (p.name !== 'Workflow') {
@@ -4845,7 +4845,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
 
   // 配置面板「推送内容」段顶部的订阅状态行。推送不通时此前 UI 上零痕迹——铃铛按钮在权限被拒或
-  // 订阅失败时都不显示，用户查不出自己为什么收不到（实测：机主机器上从未订阅成功过而毫不知情）。
+  // 订阅失败时都不显示，用户查不出自己为什么收不到（实测：实测环境中从未订阅成功过而毫不知情）。
   const pushStatusRowEl = $('pushStatusRow'), pushPreviewInertNote = $('pushPreviewInertNote');
   async function renderPushStatusRow() {
     if (!pushStatusRowEl) return;
@@ -5931,7 +5931,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     topContextChanges.classList.toggle('hidden', !text);
     topContextChanges.dataset.cwd = currentCwd || '';
   }
-  // 顶栏主 pill 文案：固定工作区 basename（机主拍板不要会话标题——同仓多会话靠侧栏区分）。
+  // 顶栏主 pill 文案：固定工作区 basename（维护者拍板不要会话标题——同仓多会话靠侧栏区分）。
   // #topTitleText 仍 hidden；title 挂完整 cwd 供长按辨认。
   function syncTopContextLabel() {
     const project = baseName(currentCwd);
@@ -6121,7 +6121,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→
   // 无同 cwd 存活实例可回退，见 wasViewingInstanceDestroyed）时的专属提示态——不静默 showDashboard()，
-  // 让用户先看到"发生了什么"，自己决定下一步（回首页 / 新建会话）。不做自动导航（机主已否决"自动
+  // 让用户先看到"发生了什么"，自己决定下一步（回首页 / 新建会话）。不做自动导航（维护者已否决"自动
   // 静默 resume 接管"方案，这里同理：不能因为实现方便就悄悄跳转）。
   // 视觉语言复用两处既有约定：标题行走 addBar 同款 msg-frame 系统提示条样式（对齐 interrupted/
   // queue_dropped 的系统提示行）；外层卡片 + 操作按钮走 showDashboard/showComposeSurface 同款
@@ -6954,7 +6954,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     //   是单例全局（一次只跟踪一个会话的锁）。readonly=false 这里【无条件解锁】——两台设备同时看不同会话时，
     //   给会话 B 的解锁会误解锁正看着会话 A 的另一端。属"单活跃查看者"架构限制，仅多设备-不同会话场景触发；
     //   彻底修需把 viewing/catchup/mirror 全改 per-socket + 定向 emit（大改），单用户工具不值，故保留。
-    //   （2026-07-12 机主确认 Phase 8 不做 per-socket 大改、保留现状；见 docs/hard-rules.md §5 AD-5 / mirror-engine 登记。）
+    //   （2026-07-12 维护者确认 Phase 8 不做 per-socket 大改、保留现状；见 docs/hard-rules.md §5 AD-5 / mirror-engine 登记。）
     const readonly = !!ev.payload?.readonly;
     const stale = !!ev.payload?.stale;
     // server 是否见过真实 CLI 注册表条目（entrypoint=cli）。缺省（旧服务端/视觉 mock 不带）保守当

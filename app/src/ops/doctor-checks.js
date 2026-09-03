@@ -358,11 +358,11 @@ export function computeReadiness(checks = []) {
 export const LOG_ROTATE_THRESHOLD_BYTES = 20 * 1024 * 1024;
 
 // R9-uploads（2026-08-06）：附件目录只报可见性，【刻意不自动清理】。
-// .ccm-uploads/ 落在机主真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——按 TTL 或
+// .ccm-uploads/ 落在用户真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——按 TTL 或
 // 容量删会让老对话的图片预览全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，那要扫全部
 // transcript 做引用计数，复杂度与风险都不匹配实测增长率（22 天 2.5MB）。对比 statusline 快照：那边过期
 // 即无用（读出来必是 stale），所以那边治、这边不治。同样的「只写不清」症状，处置完全相反。
-// 阈值 200MB：远高于正常使用量级，越过它才值得机主分神去看一眼。
+// 阈值 200MB：远高于正常使用量级，越过它才值得用户分神去看一眼。
 export const UPLOADS_FOOTPRINT_WARN_BYTES = 200 * 1024 * 1024;
 
 const mb = bytes => Math.round(bytes / 1024 / 1024);
@@ -511,10 +511,10 @@ export function claudeConfigDirDiagnostic({ configDir = '', lang = 'zh' } = {}) 
 //
 // 判据分级的理由：
 //   crashed  → fail：装了却没在跑，是明确故障，值得让 doctor 退出码变 1
-//   flapping → warn：在跑但崩过（机主的隧道就是 -9 被 KeepAlive 拉起）。只看 PID 会一直显绿，
+//   flapping → warn：在跑但崩过（用户自建的隧道 unit 就是 -9 被 KeepAlive 拉起）。只看 PID 会一直显绿，
 //                    这一档不报出来，隧道挂了只能等公网 1033 才发现
 //   drift    → warn：仓库移动 / node 换版本，重启才会暴露，提前说
-//   shape 漂移的 foreign unit → **不算问题**：自定义启动方式（机主的隧道用自写包装脚本绕代理
+//   shape 漂移的 foreign unit → **不算问题**：自定义启动方式（用户自建的隧道 unit 用自写包装脚本绕代理
 //                    TUN 劫持）是有意配置，年年报黄只会训练用户忽略告警
 export function serviceUnitsDiagnostic({ platform = '', supported = false, units = null, lang = 'zh' } = {}) {
   const name = 'LaunchAgent';
@@ -559,7 +559,7 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
     }
     // shape 漂移分两种来源，只有 foreign 那种才是"有意配置"（头注一直这么写，实现此前漏了
     // ownership 这一维、把两者一起滤掉）：
-    //   · foreign  = 用户自己换掉了启动方式（机主的隧道用自写包装脚本绕代理 TUN 劫持）→ 不报
+    //   · foreign  = 用户自己换掉了启动方式（用户自建的隧道 unit 用自写包装脚本绕代理 TUN 劫持）→ 不报
     //   · managed  = 这份 plist 是本工具渲染的，形态却对不上当前模板 ⇒ 升级后模板变了而
     //                ~/Library/LaunchAgents 里那份没更新（2026-09-03 运行时入口 server.js →
     //                app/server.js 就是这样），服务多半已经起不来 → 必须报，且要说得出为什么
@@ -604,12 +604,12 @@ export function resolveServicePortOwner({ status = null, port = null } = {}) {
 
 // ── D4：端口占用判定 ────────────────────────────────────────────────────
 //
-// 旧实现把「端口连得上」无条件判成 fail。但常驻部署——文档主推、也是机主实际用的拓扑——下
+// 旧实现把「端口连得上」无条件判成 fail。但常驻部署——文档主推、也是实际部署常用的拓扑——下
 // 端口本来就该被自家 server 占着，于是 doctor 在生产机器上**恒红**一项。恒红的检查项等于没有检查项。
 // 「占着端口的是不是本仓自己的 headless server」。resolveServicePortOwner 只认 launchd 托管那一种，
 // 而 headless `npm start` 是文档主推的两条入口之一——认不出它，D4 对 headless 用户就是恒红一项
 // （同本节头注那条「恒红的检查项等于没有检查项」，2026-08-19 新装演练实测撞上）。
-// cwd 必须比对：本机就跑着一个隔壁仓库的同名 node server.js（codex-chat-mobile），只匹配命令行会认错人。
+// cwd 必须比对：同机可能跑着另一个仓库的同名 node server.js，只匹配命令行会认错人。
 export function identifySelfServer({ processes = [], repoRoot = '' } = {}) {
   for (const p of processes) {
     const command = String(p?.command || '');
@@ -680,7 +680,7 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
     };
   }
   // 清除方式只给「真能清掉」的两条。**别建议 exec**：exec 只换进程映像、环境原样继承
-  // （2026-08-19 机主照旧提示跑 exec zsh，doctor 输出一字未变）。同理开新标签页也没用——
+  // （2026-08-19 照提示跑 exec zsh，doctor 输出一字未变）。同理开新标签页也没用——
   // 变量若在终端 app 进程上，每个新标签页都继承，只有整个 app 退出重开才换得掉。
   const unsetCmd = `unset ${hits.join(' ')}`;
   return {
@@ -700,7 +700,7 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
 
 // ── 菜单栏 app 的活性 ──────────────────────────────────────────────────────
 //
-// 【为什么需要这一项】2026-08-23，机主的菜单栏 app 被一个沉到别人窗口后面的确认框冻死
+// 【为什么需要这一项】2026-08-23，菜单栏 app 被一个沉到别人窗口后面的确认框冻死
 // **63 小时**，期间系统里没有任何信号：menubar unit 因为 `open` + KeepAlive=false 恒显示
 // 「待机」（与 app 是活着、崩了还是卡死完全无关），`service.js health` 只打 server 的
 // HTTP，D16 只看 server。进程活着、图标还在、菜单还能弹出（状态栏菜单由系统侧渲染），
@@ -776,7 +776,7 @@ export function menubarLivenessDiagnostic({
 // 运行中的那份 bundle 落后仓库多少。返回 null = 无话可说（拿不到 commit，或本来就是最新）。
 //
 // 为什么值得单独说：D19 最初只能讲「多半是不带心跳的旧版」——因为它无从知道运行中的
-// 二进制是哪个 commit。而这恰恰是机主真正想知道的（「我跑的这份含不含那个修复」）。
+// 二进制是哪个 commit。而这恰恰是用户真正想知道的（「我跑的这份含不含那个修复」）。
 // bundle 里烘进 CCMBuildCommit 之后才答得上来。
 //
 // commitsBehind 算不出来时（换过分支、该 commit 不是 HEAD 祖先、非 git 检出）只说「不同」：

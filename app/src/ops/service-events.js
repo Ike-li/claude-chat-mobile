@@ -3,7 +3,7 @@
 // ## 为什么需要历史，而不是直接看 LastExitStatus
 //
 // launchd 只保留「最后一次怎么退出的」——那是瞬时值，回答不了「这正常吗」。
-// 机主机器上的实证（2026-08-14）：隧道的 `LastExitStatus = -9` 看着像崩溃，实际是自建看门狗
+// 实测环境中的实证（2026-08-14）：隧道的 `LastExitStatus = -9` 看着像崩溃，实际是自建看门狗
 // `com.ccm.tunnel-watch` 每 30s 检测 en0 的 DHCP 漂移、发现变了就 `launchctl kickstart -k`
 // 留下的痕迹（`-k` 先 SIGKILL）。路由器每天换一次 IP，于是这个「异常退出」每天都在。
 //
@@ -28,7 +28,7 @@ const KINDS = new Set(['restarted', 'started', 'stopped', 'restart-requested']);
 // ## 只有 restarted 计入频率（2026-08-14 第三轮审查修正）
 //
 // 上一版把 started 也算进来，后果是**把刚消灭的恒亮告警搬到了另一个 label 上**：
-// 机主机器上的 `com.ccm.tunnel-watch`（每 30s 检测 DHCP 漂移）与 `com.ccm.logrotate` 在
+// 实测环境中的 `com.ccm.tunnel-watch`（每 30s 检测 DHCP 漂移）与 `com.ccm.logrotate` 在
 // `launchctl list` 里 pid 恒为 `-` —— 它们是短命周期 job 不是常驻进程。采样器 60s 抓一次，
 // 抓到在跑产 started、下次抓到已退出产 stopped，一小时抓够三次就误报 flapping。
 //

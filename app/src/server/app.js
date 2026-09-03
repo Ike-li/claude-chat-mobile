@@ -382,7 +382,7 @@ configureHttpShell({
 
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
 // 鉴权限速状态（socket + HTTP 共用）。仅鉴权门口，重启清零可接受。
-// n1: N1-RATE-LIMIT 进程内单例、重启清零，且只挡鉴权口暴破——不对已鉴权的操作面限速（机主即 root，
+// n1: N1-RATE-LIMIT 进程内单例、重启清零，且只挡鉴权口暴破——不对已鉴权的操作面限速（用户即 root，
 //     给自己的操作限速违背产品目的，见 hard-rules §2.3）。多租户下这两条都得重来：状态要持久化，操作面要分账号配额。
 const rlStates = new Map(); // sourceKey → RateLimitState
 // 有界上限。这张表由【未鉴权的公网流量】驱动：服务挂在固定域名上，任何扫描器请求一次 /health
@@ -683,7 +683,7 @@ function rejectHandshake(rlResult) {
 // 鉴权门口防暴破限速：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
 // 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。
 // CF-Connecting-IP 仅公网 Host 采信；LAN 只认连接 IP（防伪造头拆分限速桶）。
-// 状态内存态 Map（与 HTTP createHttpAuth 共用 rlStates；重启清零 = 机主误锁时的逃生口）。
+// 状态内存态 Map（与 HTTP createHttpAuth 共用 rlStates；重启清零 = 用户误锁时的逃生口）。
 // ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
   const ip = clientIp(socket.handshake.address);
@@ -697,7 +697,7 @@ io.use(async (socket, next) => {
     }, clientIp),
   });
   try {
-    // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把机主越锁越久 = 自我 DoS）
+    // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
     // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
     // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
     if (rlActive) {
@@ -777,7 +777,7 @@ io.use(async (socket, next) => {
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
-        // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，机主锁屏或在别的 app 时整道
+        // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，用户锁屏或在别的 app 时整道
         // 审批完全静默——而"人不在电脑前"恰是本项目的主用例。直推是安全的：/push/subscribe 对
         // 未批准设备恒 403（见 bypassDeviceApproval 注释），订阅表里只可能是已批准设备，不会把
         // "有新设备在等"告诉那台正在等批准的设备自己。
@@ -797,7 +797,7 @@ io.use(async (socket, next) => {
         console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
-        // 「电脑控制台」曾让机主满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
+        // 「电脑控制台」曾让用户满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
         // 那个窗口里，直接指认它即可。非交互分支同理带上项目目录：命令按当前目录的配置决定数据根，
         // 机器上装着不止一份时（fork / 演练用的 clone），在别处跑会如实报成功却批到另一个实例上。
         if (process.stdin.isTTY) {
@@ -897,7 +897,7 @@ function computeNeedsYou() {
 // ── 桌面端服务的重启历史采样 ──────────────────────────────────────────────
 //
 // launchd 只保留「最后一次怎么退出的」，那是瞬时值。要回答「这正常吗」必须有时间序列 ——
-// 机主机器上的实证：隧道的 LastExitStatus 恒为 -9，因为自建看门狗每天按 DHCP 漂移
+// 实测环境中的实证：隧道的 LastExitStatus 恒为 -9，因为自建看门狗每天按 DHCP 漂移
 // kickstart 一次。单看退出码会每天误报一次，而恒亮的告警比没有告警更糟。
 //
 // 采样放在 server 进程里而不是新起一个 LaunchAgent：这里本来就常驻，一次 `launchctl list`
@@ -1968,7 +1968,7 @@ function openScoutInstance(cwd) {
           // 今天无害的唯一理由是这里用的是 unlinkSync（单文件）：目标不存在就抛、被 catch 吞掉，
           // 且它对目录会直接抛 EISDIR，删不动任何一棵树。
           // ⚠️ 谁要把这里改成 rmSync(..., { recursive: true })（比如为了顺带删子 agent 的 transcript
-          // 子目录），先想清楚这一段：2026-08-02 删掉机主 70 个项目 / 291 memory / 2990 transcript 的，
+          // 子目录），先想清楚这一段：2026-08-02 删掉 70 个项目 / 291 memory / 2990 transcript 的，
           // 就是同一形态的递归版本——同一个 getProjectDir 被变异成恒返回 ''，join 塌成真实根本身。
           // 真要递归，必须先在删除点加护栏：resolve(target) === resolve(根) 就抛错。
           unlinkSync(file);
@@ -2962,7 +2962,7 @@ registerSocketConnection(io, socket => {
     });
   });
 
-  // 测试推送：自己验"推送到底通不通"，不必等真事件。今晚的教训——机主一直以为推送在工作，
+  // 测试推送：自己验"推送到底通不通"，不必等真事件。今晚的教训——曾一直以为推送在工作，
   // 实际上从未订阅成功过，而界面上没有任何办法自证。与「▶ 试听提示音」同一心智（那个验本地
   // 提示音，这个验远端推送链路）。没有订阅时如实回报"没有收件人"，这本身就是最有用的诊断。
   on(socket, 'push:test', async (_payload, ack) => {
@@ -3154,7 +3154,7 @@ registerSocketConnection(io, socket => {
 
   // 安全日志：审计记录的**唯一**读取面（2026-09-02）。此前 audit-records.json 只写不读——
   // 限速锁定的来源 IP、设备批准/拒绝、越界访问全都记着，但手机上一条也看不到，于是「⛔ 有人在
-  // 暴力尝试你的入口」这类告警无从下钻（机主实际遇到的两次锁定来源都是 ip:127.0.0.1）。
+  // 暴力尝试你的入口」这类告警无从下钻（实测遇到的两次锁定来源都是 ip:127.0.0.1）。
   //
   // 只读、无副作用、走 on() 的 deviceApproved 闸（与其余 socket 事件同一道门）。不开 HTTP 端点：
   // 守「不开无鉴权数据端点」，且审计里有设备指纹与来源 IP，比会话列表更该留在鉴权面内。

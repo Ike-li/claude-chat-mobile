@@ -446,7 +446,7 @@ test('ntfyMetaFor: background_running（presence 跳变触发的后台运行中�
   assert.deepEqual(m.tags, ['hourglass_flowing_sand']);
 });
 
-// 设备审批与 permission_request 同级：机主不处理，那台新设备就一直用不了——属于"需即时响应"。
+// 设备审批与 permission_request 同级：用户不处理，那台新设备就一直用不了——属于"需即时响应"。
 test('ntfyMetaFor: device_request → 高优先级 5 + 专属标签', () => {
   const m = ntfyMetaFor('device_request', {}, '');
   assert.equal(m.priority, 5);
@@ -461,7 +461,7 @@ test('ntfyMetaFor: device_request 无 click 深链（无 instanceId）', () => {
 // device 类别刻意【不】走 approval 的"未决"语义：CLI 审批路径（trusted-devices.json 文件监听，
 // 在 device-gate.js 里）够不到 app.js 持有的节流状态，无法清 pending——一旦用 pending 语义，
 // 从 CLI 批准后这条状态永远解不开，之后真有新设备也不再推。改用纯最小间隔，代价是同一批待审
-// 设备每隔一个窗口会再提醒一次，而那反倒是想要的（机主可能错过第一条）。
+// 设备每隔一个窗口会再提醒一次，而那反倒是想要的（用户可能错过第一条）。
 test('throttleNotify: device 类别只受最小间隔约束，不留未决标记', () => {
   const r1 = throttleNotify('__devices__', 'device', 1000, new Map(), 300000);
   assert.equal(r1.throttled, false);

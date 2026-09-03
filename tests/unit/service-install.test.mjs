@@ -1,6 +1,6 @@
 // tests/unit/service-install.test.mjs —— scripts/service.js 的写路径（install / adopt / uninstall）
 //
-// 核心不变量：**只对 manifest 里记着的 unit 做写操作**。机主机器上有四个手工装的 unit，
+// 核心不变量：**只对 manifest 里记着的 unit 做写操作**。实测环境中有四个手工装的 unit，
 // 其中 com.ccm.tunnel 用的是自写包装脚本、com.ccm.tunnel-watch 模板里压根没有 —— 它们必须
 // 只读。这里的用例大半是在证明「我们没碰不该碰的东西」。
 //
@@ -43,7 +43,7 @@ const HANDWRITTEN_OBJ = {
   StandardErrorPath: `${HOME}/Library/Logs/ccm-server.log`,
 };
 
-// 用户自写包装脚本的隧道（机主真实形态：/bin/bash ~/.cloudflared/xxx.sh）
+// 用户自写包装脚本的隧道（真实形态：/bin/bash ~/.cloudflared/xxx.sh）
 const CUSTOM_TUNNEL_OBJ = {
   Label: 'com.ccm.tunnel',
   ProgramArguments: ['/bin/bash', `${HOME}/.cloudflared/ccm-tunnel-run.sh`],
@@ -195,7 +195,7 @@ test.describe('install —— 全新安装', () => {
         units: {
           server: {
             label: 'com.ccm.server', plistPath: SERVER_PLIST,
-            // template 故意保留 2026-08-17 搬移前的旧路径：机主生产机的 manifest 里就是这个值。
+            // template 故意保留 2026-08-17 搬移前的旧路径：真实生产机的 manifest 里就是这个值。
             // 它钉住「manifest 的 template 字段只做非空校验、绝不被拿去读文件」——recover 走
             // templateFor(unit) 重算路径，stale 值必须无害；若有人把它接进 readFileSync，此处即红。
             sha256: 'a'.repeat(64), template: 'deploy/server.plist.template',
@@ -548,7 +548,7 @@ test.describe('uninstall —— CAS 保护', () => {
     assert.ok(fs.has(SERVER_PLIST), '不是我们装的，一个字节都不能碰');
   });
 
-  test('unknown unit 拒绝卸载（机主自建的 tunnel-watch）', () => {
+  test('unknown unit 拒绝卸载（用户自建的 tunnel-watch）', () => {
     const { mgr } = setup();
     const r = mgr.uninstall('tunnel-watch', { confirmed: true });
     assert.equal(r.ok, false);
@@ -746,7 +746,7 @@ test.describe('resolveUninstallConfirm', () => {
 
 // ── install —— 已装但参数变了 ──────────────────────────────────────────────
 //
-// 2026-08-18 在机主真机上实测到的死循环：status 报「开机自启指向仓库构建产物」，照它给的
+// 2026-08-18 在真机实测中实测到的死循环：status 报「开机自启指向仓库构建产物」，照它给的
 // 命令跑 `install menubar --app=/Applications/CCM.app`，CLI 回「已是目标状态，无需改动」，
 // plist 纹丝不动，下一次 status 警告照旧。
 //

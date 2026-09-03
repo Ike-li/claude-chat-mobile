@@ -388,7 +388,7 @@ test.describe('shouldBypassDeviceApproval', () => {
 // 项目内没有任何调用方发空 Host（浏览器 / socket.io-client / fetch 全都带），而 /health、/metrics
 // 根本不走 bypass（只过 httpAuth）。留着它等于：反代若配成 proxy_set_header Host ""，公网请求
 // 就被当成真本机直连、跳过设备审批——一行配置错误打穿一层防护。
-// 收紧代价极轻：真发空 Host 的客户端落入待审列表，机主批准一次即可，不是硬拒绝。
+// 收紧代价极轻：真发空 Host 的客户端落入待审列表，维护者批准一次即可，不是硬拒绝。
 test.describe('shouldBypassDeviceApproval：空 Host 不算本机（R8）', () => {
   const norm = (x) => (x || '').replace(/^::ffff:/, '');
 

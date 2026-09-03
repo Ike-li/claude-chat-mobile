@@ -33,8 +33,8 @@ export function createMirrorEngine({
   // 夹具根注入（仅单测用；生产两者恒为 null → 下面展开成 {}，各 reader 用自己的默认根，行为零变化）。
   // 与 history.js 既有约定同款（"baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR"）。
   // 没有这个口子，本模块的四条 tick 分支（切入预锁 / localBusy / 正常追平 / 无会话）就只能靠写
-  // 真实 ~/.claude/projects 与 ~/.claude/sessions 来测——那会污染机主的 CLI 目录，且往
-  // ~/.claude/sessions 塞活 pid 条目会让机主正在跑的 server 看到幻影「终端会话」。
+  // 真实 ~/.claude/projects 与 ~/.claude/sessions 来测——那会污染用户的 CLI 目录，且往
+  // ~/.claude/sessions 塞活 pid 条目会让用户正在跑的 server 看到幻影「终端会话」。
   transcriptBaseDir = null,
   sessionRegistryDir = null,
 } = {}) {
@@ -53,7 +53,7 @@ export function createMirrorEngine({
   // n1: N1-MIRROR-LOCK 全局单值 + io.to('approved') 全局广播，非 per-(sessionId,connId)：两台设备看不同
   //     会话时，给会话 B 的 mirror_state 会误解锁正看会话 A 的那一端。完整修法即下方登记的 AD-5。
   let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」（全局单值，非 per-连接）
-  // 【已评估：不做 AD-5 per-连接锁粒度（2026-07-12 机主确认，Phase 8 技术债）】mirrorReadonly 是全局单值 +
+  // 【已评估：不做 AD-5 per-连接锁粒度（2026-07-12 维护者确认，Phase 8 技术债）】mirrorReadonly 是全局单值 +
   // io.to('approved') 全局广播 + viewingInstanceId 单例全局——已知缺陷：两台设备看不同会话时，
   // 给会话 B 的 mirror_state 会误解锁正看会话 A 的另一端（前端 onMirrorState 注释同款登记）。AD-5 的完整修复
   // （viewing/catchup/mirror 全改 per-(sessionId,connId) + readonly_changed 定向下发）是改动面很广的大改，触发

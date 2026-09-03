@@ -51,7 +51,7 @@ export function pushEnvHint({ isSecureContext, isIOS, isStandalone, hasPushManag
 //
 // 【为什么值得单独判一类】Chromium 系（Android Chrome/Edge/三星）的 Web Push 由 Google FCM 承载，
 // subscribe() 要先向 Google 的注册端点注册。无法访问 Google 的网络下这一步必然失败，而浏览器
-// 只抛一句 'Registration failed - push service error'，原样透给用户等于天书（实测机主在中国大陆
+// 只抛一句 'Registration failed - push service error'，原样透给用户等于天书（实测在中国大陆
 // 网络下正是卡在这里）。判出来才能告诉他「开代理重试一次就好，之后不用一直开」。
 //
 // 【iOS 恒 null】那条路走 Apple 的 web.push.apple.com，压根不经 Google。给 iPhone 用户提代理
@@ -71,7 +71,7 @@ export function describeSubscribeError(message, { isIOS = false } = {}) {
 
 // 推送订阅状态行（配置面板「推送内容」段上方）。
 // 为什么需要它：推送不通时此前界面上**没有任何痕迹**——铃铛按钮本身在"权限被拒"时会被隐藏、
-// 在"已授权但订阅失败"时压根不出现，用户只会得出"这功能没用"的结论（实测机主机器上
+// 在"已授权但订阅失败"时压根不出现，用户只会得出"这功能没用"的结论（真机实测中
 // push-subscription.json 从未存在过，而 UI 一个字都没说）。状态必须看得见，且看得出下一步做什么。
 export function formatPushStatusRow({ hint = 'ready', permission = 'default', subscribed = false } = {}) {
   const label = t('推送通知');
@@ -126,7 +126,7 @@ export function writeAlertPref(setItem, key, enabled) {
 
 // ⑧ 推送内容预览开关——与上面 ALERT_PREF_KEYS 反极性：默认关，仅显式存 '1' 为开。web-push 通道本身
 // 已是 RFC 8291 端到端加密（push service/FCM 读不到明文），但仍是"锁屏可见明文"的泄露面，默认最小化、
-// 要更详细的通知内容需机主本人主动选择（订阅时随 prefs.preview 一并 POST，见 app/notifications.js）。
+// 要更详细的通知内容需用户主动选择（订阅时随 prefs.preview 一并 POST，见 app/notifications.js）。
 export const PUSH_PREVIEW_PREF_KEY = 'ccm_push_preview';
 export function readPushPreviewPref(getItem) {
   const g = typeof getItem === 'function' ? getItem : () => null;
@@ -200,7 +200,7 @@ export function formatHooksBridgeRow(hooksBridge) {
 // 「重启记录」段的行。
 //
 // 判定化而不是给裸计数器：`launchctl` 的 LastExitStatus 是瞬时值，回答不了「这正常吗」。
-// 机主机器上的实证——隧道恒为 -9，因为自建看门狗每天按 DHCP 漂移 kickstart 一次。
+// 实测环境中的实证——隧道恒为 -9，因为自建看门狗每天按 DHCP 漂移 kickstart 一次。
 // 所以这里展示的是**频率 + 时间线**：每天一次一眼看得出是例行的，密集连发才是真出事了。
 export function formatRestartRows({ restarts, now = Date.now() } = {}) {
   const units = restarts?.units || [];
@@ -263,7 +263,7 @@ export function formatAgoShort(ms) {
 // /64 前缀），也就是**限速真正计数的那个粒度**——刻意不另算一套「客户端 IP」，否则面板说的地址
 // 和被锁的桶会是两回事。
 //
-// 【为什么必须分叉】(2026-09-02) 告警行此前无条件拼「可能有人在暴力尝试你的入口」。机主看到后
+// 【为什么必须分叉】(2026-09-02) 告警行此前无条件拼「可能有人在暴力尝试你的入口」。用户看到后
 // 翻 audit-records.json 才发现两次锁定的 target 都是 ip:127.0.0.1 —— 本机自己的旧 token 连试八次。
 // 一条把「自己手滑」讲成「有人在攻击你」的红色告警，比不报还糟：真出事那天它已经被当成噪音了。
 const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', 'localhost']);

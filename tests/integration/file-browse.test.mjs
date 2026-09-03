@@ -3,7 +3,7 @@
 // 纯逻辑单测见 tests/unit/file-browse.test.mjs + tests/unit/workdir-scope-guard.test.mjs；本文件验证 app/server.js
 // 接线：①正常 list/read 走通；②越界 relPath 被拒（fail-closed，不进程崩溃/不误放行）；③鉴权门未过时不可达。
 // 鉴权模式同 tests/integration/rate-limit.test.mjs：测试专用 token + 清 CF_ACCESS_* + 重新 initCfAccess()
-// （机主本机 .env 已配真实鉴权，dotenv 会在 delete 后重新注入——不可用"delete AUTH_TOKEN"假装无鉴权）。
+// （本机 .env 已配真实鉴权，dotenv 会在 delete 后重新注入——不可用"delete AUTH_TOKEN"假装无鉴权）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';

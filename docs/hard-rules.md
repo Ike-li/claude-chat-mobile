@@ -1,7 +1,7 @@
 # 硬性规则与技术债索引
 
 > **定位**：维护者在改代码前应对照的「产品 + 架构 + 工程」硬约束清单。  
-> **产品立场（2026-08 仍有效）**：**n=1 自托管**——单机主、权限等同本机账号，不做多租户 / 多账号隔离。  
+> **产品立场（2026-08 仍有效）**：**n=1 自托管**——单用户、权限等同本机账号，不做多租户 / 多账号隔离。  
 > **与其它文档的关系**：
 >
 > | 文档 | 管什么 |
@@ -20,15 +20,15 @@
 | 规则 | 说明 | 锚点 |
 |------|------|------|
 | 终端等价 | Web ≈ 本机对 claude 打字；CLI 有什么 Web 就有什么 | `CLAUDE.md`、Agent SDK |
-| 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
+| 单用户 = 主机所有者 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
+| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
-| **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 机主确认；`app/src/agent/agent.js:107`「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
-| **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 机主确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
-| **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 机主确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/unit/bind-host.test.mjs` |
-| **公网入口只提供两条** | 产品内建的只有 **Cloudflare**（Tunnel + Access）与**局域网直连**两条路。`cloudflared` 是**唯一受管的第三方进程**（有 unit 模板、install/uninstall、菜单栏主服务位）；VPN / 反向代理 / 其它隧道一律只在文档指路，产品不装、不起、不管理。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 机主确认；`app/src/auth/auth-strategy.js`；`app/src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
+| **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js:107`「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
+| **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 维护者确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
+| **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/unit/bind-host.test.mjs` |
+| **公网入口只提供两条** | 产品内建的只有 **Cloudflare**（Tunnel + Access）与**局域网直连**两条路。`cloudflared` 是**唯一受管的第三方进程**（有 unit 模板、install/uninstall、菜单栏主服务位）；VPN / 反向代理 / 其它隧道一律只在文档指路，产品不装、不起、不管理。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 维护者确认；`app/src/auth/auth-strategy.js`；`app/src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
 
 ---
 
@@ -56,7 +56,7 @@
 | ID | 状态 | 取舍 | 持有者 |
 |----|------|------|--------|
 | `N1-RATE-LIMIT` | 鉴权限速 Map | 内存；重启清零（残余风险可接受） | `app/src/server/app.js` 的 `rlStates` |
-| `N1-METRICS` | `/metrics` 计数 | 内存；重启清零；**JSON 快照**，非 Prometheus 文本（单机主无 scraper 的默认运维面） | `app/src/ops/metrics.js` |
+| `N1-METRICS` | `/metrics` 计数 | 内存；重启清零；**JSON 快照**，非 Prometheus 文本（单用户无 scraper 的默认运维面） | `app/src/ops/metrics.js` |
 | `N1-USAGE-SNAPSHOT` | 额度 / rate 快照 | 单例、不分账号 | `app/src/ops/statusline.js`（`usage-snapshot.js` 自身是纯函数，状态由调用方持有） |
 | `N1-MSG-DEDUP` | 消息去重 | 内存即可 | `app/src/server/app.js` 的 `messageDedupState`（`message-dedup.js` 同为纯函数） |
 
@@ -66,9 +66,9 @@
 
 | 规则 | 说明 |
 |------|------|
-| 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；机主即 root，对操作面限速违背产品目的 |
+| 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；用户即 root，对操作面限速违背产品目的 |
 | 工作区白名单 | 路径门，不决定 Claude 工具是否自动放行 |
-| 范围内文件不敏感过滤 | `.env` 等照读——与「机主即 root」一致 |
+| 范围内文件不敏感过滤 | `.env` 等照读——与「用户即 root」一致 |
 | 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*`。`app/src/shared/child-env.js` 只有两处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据）。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
 
 ---
@@ -193,7 +193,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 
 | ID | 内容 | 决定 | 登记处 |
 |----|------|------|--------|
-| **AD-5** | per-(sessionId, connId) 镜像锁 + `readonly_changed` 定向下发 | **不做**（2026-07-12 机主确认，Phase 8） | `mirror-engine.js`、`app.js` 注释 |
+| **AD-5** | per-(sessionId, connId) 镜像锁 + `readonly_changed` 定向下发 | **不做**（2026-07-12 维护者确认，Phase 8） | `mirror-engine.js`、`app.js` 注释 |
 | **SP-10** | busy→idle 吸收完整闭合（前端 uuid 幂等 + live 记 uuid） | **不做**（同上） | `history.js` `catchUpStep` 头注 |
 | **OQ-09** | 审批时延等「人机/价值」埋点遥测 | **拒绝**；管道健康指标可走 `/metrics` | `metrics.js` |
 | **UP-1** | 让 web 端 slash 像终端那样 inline 跑（见 §5.1） | **做不到**（上游约束，2026-08-05 查证） | `agent.js#_claimSessionIdEarly` 注释 |
@@ -260,7 +260,7 @@ Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不�
 | 展示语义 | `display-contracts` 测试 → 实现 → [display-contracts.md](display-contracts.md) |
 | 事件名/type | `app/src/shared/protocol.js` → emit/handler/mock → `npm run check` |
 | 模块分层 | `check-import-boundaries` 规则 + 拆依赖 |
-| n=1 立场 / AD-5 / SP-10 | **先改本文 §2 / §5 与机主确认**，再开实现 |
+| n=1 立场 / AD-5 / SP-10 | **先改本文 §2 / §5 与维护者确认**，再开实现 |
 | 仅措辞 | 改本文 + 必要时 `CLAUDE.md` / README 导航；跑 `npm run check` |
 
 ---
@@ -268,7 +268,7 @@ Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不�
 ## 8. 速查
 
 ```
-产品：n=1 机主 · 终端等价 · 非多租户 · 非共享 TTY（假设面登记簿见 §2，枚举用 grep -rn '// n1:' app/src/ app/public/js/）
+产品：n=1 单用户 · 终端等价 · 非多租户 · 非共享 TTY（假设面登记簿见 §2，枚举用 grep -rn '// n1:' app/src/ app/public/js/）
 架构：单驾驶员 · agent:event 闭合（protocol.js）· viewing 全局单值
 状态：新逻辑不进 app.js 顶层 · import 边界硬闸
 安全：五层分立 · fail-closed · 推送 body 最小化

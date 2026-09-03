@@ -177,7 +177,7 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     await expectNoBrowserErrors(page);
   });
 
-  // P0-NOSID-B（真机 c1ccd055 续）：上一条修好「刷新后看得到内容」之后，机主发现输入条再也不出现，
+  // P0-NOSID-B（真机 c1ccd055 续）：上一条修好「刷新后看得到内容」之后，实测发现输入条再也不出现，
   // 而换个浏览器新开页面却是正常的。根因：CLI 迟到的 init 只会让 instances 广播多出一个 sessionId，
   // viewingInstanceId 没变 → setInstances 的 `newViewing !== displayedInstanceId` 不成立 → 不重新
   // bindView。而 setInstances 里 updatePillSession / syncTopContextPillVisibility 都是无条件同步的，

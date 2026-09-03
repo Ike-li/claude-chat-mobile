@@ -20,7 +20,7 @@ const HOME = '/Users/you';
 const REPO = '/Users/you/code/claude-chat-mobile';
 const NODE = '/opt/homebrew/bin/node';
 
-// 机主机器上的真实形态：server/tunnel/logrotate 三个手工装的（语义等价、无 manifest）
+// 实测环境中的真实形态：server/tunnel/logrotate 三个手工装的（语义等价、无 manifest）
 // + tunnel-watch 一个模板里没有的自建 unit。
 const HANDWRITTEN = {
   [`${HOME}/Library/LaunchAgents/com.ccm.server.plist`]: {
@@ -49,7 +49,7 @@ const HANDWRITTEN = {
     StandardOutPath: `${HOME}/Library/Logs/ccm-logrotate.log`,
     StandardErrorPath: `${HOME}/Library/Logs/ccm-logrotate.log`,
   },
-  // 机主真机 plist 的形态（2026-08-18 读自 ~/Library/LaunchAgents/，路径按 identity 纪律换成 /Users/you）：
+  // 真机 plist 的形态（2026-08-18 读自 ~/Library/LaunchAgents/，路径按 identity 纪律换成 /Users/you）：
   // 每 30s 检测 en0 的 DHCP 漂移，变了就 kickstart 隧道。**它没有 KeepAlive** —— 打一枪即退，
   // 所以 launchctl list 里 pid 恒为 `-`，而那正是它健康工作时的样子。
   [`${HOME}/Library/LaunchAgents/com.ccm.tunnel-watch.plist`]: {
@@ -127,7 +127,7 @@ test.describe('status —— 平台降级', () => {
   });
 });
 
-test.describe('status —— 机主既有安装的识别', () => {
+test.describe('status —— 既有安装的识别', () => {
   test('三个手工装的已知 unit 判 adoptable（语义等价，可安全接管）', () => {
     const units = makeManager().status().units;
     const by = Object.fromEntries(units.map((u) => [u.label, u]));
@@ -168,7 +168,7 @@ test.describe('status —— 状态与 flapping', () => {
     assert.equal(u.flapping, false);
   });
 
-  // ★ 机主的隧道恒为 LastExitStatus=-9，但那**不是崩溃**：自建看门狗 com.ccm.tunnel-watch
+  // ★ 用户自建的隧道 unit 恒为 LastExitStatus=-9，但那**不是崩溃**：自建看门狗 com.ccm.tunnel-watch
   // 每 30s 检测 en0 的 DHCP 漂移，变了就 `launchctl kickstart -k`（-k 先 SIGKILL）。
   // 路由器每天换一次 IP ⇒ 用「最后一次退出码」判 flapping 等于每天误报一次。
   // 现在退出码只记录事实（lastExitAbnormal），告警交给重启频率。
@@ -283,7 +283,7 @@ test.describe('status —— 漂移与归属', () => {
 
 test.describe('status —— 探活只走 TCP，绝不碰 HTTP', () => {
   // app/src/server/http.js:94-105 对鉴权失败无条件计数，8 次锁 15min，且 app.js:309 让 loopback
-  // 也进限速 —— 轮询若打 /health，40 秒就能把机主自己连同手机一起关在门外。
+  // 也进限速 —— 轮询若打 /health，40 秒就能把用户自己连同手机一起关在门外。
   test('server 的 listen 探活用注入的 tcpProbe，不发任何 HTTP 请求', () => {
     let probed = null;
     const mgr = makeManager({ tcpProbe: (port) => { probed = port; return true; } });
@@ -387,7 +387,7 @@ test.describe('CLI 端到端', () => {
 // ── 待机 ≠ 故障 ───────────────────────────────────────────────────────────
 //
 // launchd 的 stopped 只说「此刻没有进程」。5 个 unit 里有 3 个（tunnel-watch / logrotate /
-// menubar）健康工作时就该是这个状态，而面板一律标「已停止」——机主本人因此来问过
+// menubar）健康工作时就该是这个状态，而面板一律标「已停止」——曾因此被误读、来问过
 // 「tunnel-watch 要启用吗」。判据来自 plist 里的调度形态，不是 unit 名字表：后者必然漏掉
 // 用户自建的 unit，而那恰恰是最容易被误读的一类（它还同时带着「非本仓」标签）。
 test.describe('周期 job 的 stopped 是待机，不是故障', () => {
@@ -420,7 +420,7 @@ test.describe('周期 job 的 stopped 是待机，不是故障', () => {
     const out = formatStatus(makeManager().status());
     const line = out.split('\n').find((l) => l.includes('com.ccm.tunnel-watch'));
     assert.ok(line, 'tunnel-watch 应出现在面板里');
-    assert.doesNotMatch(line, /stopped/, '「stopped」这个词正是让机主以为它没启用的原因');
+    assert.doesNotMatch(line, /stopped/, '「stopped」这个词正是让用户以为它没启用的原因');
   });
 });
 
@@ -467,7 +467,7 @@ test.describe('formatControlResult —— 弱判据必须出现在人眼前', ()
 // uninstall 一直是宽容的（见那里的注释：「那不是失败是本来就没跑」），stop 这一侧一直缺着；
 // 叠加「被 bootout 的 unit 仍显示成健康待机」这个盲区，用户根本无从知道它已经停了。
 // loaded 这一位要在**两条构建路径**上都成立，而不是只有已知 unit 有。
-// 机主本机就跑着手写的 com.ccm.tunnel-watch —— 自建 unit 恰恰是最容易被误读成「装了没启用」的那类。
+// 用户可能手写了 com.ccm.tunnel-watch 这类 unit —— 自建 unit 恰恰是最容易被误读成「装了没启用」的那类。
 test.describe('loaded —— 自建 unit 与 list 失败时的诚实度', () => {
   const WATCH_PLIST = `${HOME}/Library/LaunchAgents/com.ccm.tunnel-watch.plist`;
   const watchPlists = {
@@ -614,7 +614,7 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
     assert.match(d, /uninstall|重装|重新安装/, '要给出出路，否则用户只知道坏了不知道怎么办');
   });
 
-  test('foreign 的 unit 报 shape 漂移 → 仍说「自定义，不接管」（机主的自写包装脚本隧道）', () => {
+  test('foreign 的 unit 报 shape 漂移 → 仍说「自定义，不接管」（自写包装脚本的隧道）', () => {
     const d = describeUnit({ ...base, drift: ['shape'], ownership: 'foreign', restarts: R() });
     assert.match(d, /自定义启动方式/);
     assert.doesNotMatch(d, /重装/, '别劝用户重装一份本来就该由他自己管的 unit');
@@ -630,10 +630,10 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
     assert.doesNotMatch(d, /上次非正常退出/);
   });
 
-  // 夹具此前用的是 base（ownership='managed'），与用例名说的「机主自写包装脚本」不符——
+  // 夹具此前用的是 base（ownership='managed'），与用例名说的「自写包装脚本」不符——
   // 那种 unit manifest 里没有记录，是 foreign。写成 managed 等于把「本工具装的也叫自定义」
   // 这个缺陷当契约钉住了。
-  test('shape 漂移说「不接管」而不是暗示出错（机主隧道用自写包装脚本）', () => {
+  test('shape 漂移说「不接管」而不是暗示出错（隧道用自写包装脚本）', () => {
     const d = describeUnit({ ...base, ownership: 'foreign', restarts: R(), drift: ['shape'] });
     assert.match(d, /自定义启动方式，本工具不接管/);
     assert.doesNotMatch(d, /配置与模板不一致/);
@@ -686,7 +686,7 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
 
 // resolveEventsPath 此前零测试，而它的孪生函数 resolveManifestPath 有一整组 —— 正因为
 // 「数据目录算错」的后果是静默的：server 往 A 写、CLI/菜单栏从 B 读，重启记录永远空白且无报错。
-// 机主的 .env 真设了 CCM_DATA_DIR，**这条路径在生产上承重**。
+// 真实 .env 里设了 CCM_DATA_DIR，**这条路径在生产上承重**。
 test.describe('resolveEventsPath —— 与 data-dir.js 必须同口径', () => {
   const ROOT = '/repo';
 
@@ -712,7 +712,7 @@ test.describe('resolveEventsPath —— 与 data-dir.js 必须同口径', () => 
 
 // formatStatus 的 darwin 渲染路径此前完全没有断言：唯一那条用例设 CCM_TEST_PLATFORM=linux，
 // 只走 `!s.supported` 的两行早退。把整段人类可读表格换成 `return '仅支持 macOS\n'`，
-// 全套单测照样绿——而那正是机主在终端里唯一会看到的东西。
+// 全套单测照样绿——而那正是用户在终端里唯一会看到的东西。
 test.describe('formatStatus —— 人类可读表格（darwin 路径）', () => {
   const base = {
     supported: true, generatedAt: 1786600000000, warnings: [],
@@ -779,7 +779,7 @@ test.describe('formatStatus —— 人类可读表格（darwin 路径）', () =>
 
 // ── menubar 自启指向的 app ──────────────────────────────────────────────────
 //
-// 这一组补的是 2026-08-18 在机主真机上发现的坑：com.ccm.menubar 的 plist 指向
+// 这一组补的是 2026-08-18 在真机实测中发现的坑：com.ccm.menubar 的 plist 指向
 // <repo>/desktop/build/CCM.app —— 一个 gitignore 的构建产物。git clean / 换分支
 // 把它删掉，开机自启就静默失效，而当时三条自查路径全都显示正常。
 //

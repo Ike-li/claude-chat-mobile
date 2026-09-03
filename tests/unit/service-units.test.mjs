@@ -24,7 +24,7 @@ import {
   validateManifest,
 } from '../../app/src/ops/service-units.js';
 
-// 机主机器上实测的 plutil -convert json 输出形状（路径已换成 /Users/you，见 identity 清洗纪律）。
+// 实测环境中实测的 plutil -convert json 输出形状（路径已换成 /Users/you，见 identity 清洗纪律）。
 // 关键特征：ProgramArguments[2] 里的路径**没有**双引号，而模板渲染出来的**有**。
 const HANDWRITTEN_SERVER_PLIST = {
   Label: 'com.ccm.server',
@@ -57,7 +57,7 @@ const CTX = {
 };
 
 test.describe('label 计算', () => {
-  test('默认前缀是 com.ccm（机主既有安装用的就是它，换前缀会认不出来）', () => {
+  test('默认前缀是 com.ccm（既有安装用的就是它，换前缀会认不出来）', () => {
     assert.equal(DEFAULT_LABEL_PREFIX, 'com.ccm');
   });
 
@@ -71,7 +71,7 @@ test.describe('label 计算', () => {
     assert.equal(unitFromLabel('com.ccm.tunnel', 'com.ccm'), 'tunnel');
   });
 
-  test('前缀命中但不是已知 unit → null（如机主自建的 tunnel-watch）', () => {
+  test('前缀命中但不是已知 unit → null（如用户自建的 tunnel-watch）', () => {
     assert.equal(unitFromLabel('com.ccm.tunnel-watch', 'com.ccm'), null);
   });
 
@@ -118,7 +118,7 @@ test.describe('parseLaunchctlList', () => {
 
 test.describe('classifyState', () => {
   // ★ 这里**不再产出 flapping**。早前用「最后一次退出码 ≠ 0」判它，而那是瞬时值：
-  // 机主的隧道恒为 -9（自建看门狗每天按 DHCP 漂移 kickstart -k 一次），于是每天误报。
+  // 用户自建的隧道 unit 恒为 -9（自建看门狗每天按 DHCP 漂移 kickstart -k 一次），于是每天误报。
   // flapping 改由 service-events.js 按重启频率判定，见那个文件的测试。
   test('未安装：plist 不存在时压过一切', () => {
     assert.deepEqual(
@@ -272,7 +272,7 @@ test.describe('extractUnitFacts', () => {
 });
 
 test.describe('diffUnitSemantics', () => {
-  // 本方案最关键的一条：机主手写的 plist 与模板渲染结果**字节必然不同**（模板正文有行内注释、
+  // 本方案最关键的一条：用户手写的 plist 与模板渲染结果**字节必然不同**（模板正文有行内注释、
   // 路径带双引号），任何基于 sha256 的判定都会把正在跑的生产 unit 判成陌生 unit。
   // 判据必须落在「提取出的路径值」这一层。
   test('手写 plist 对模板渲染结果判零漂移（引号差异不算漂移）', () => {
@@ -367,7 +367,7 @@ test.describe('classifyOwnership', () => {
     );
   });
 
-  // 机主的 com.ccm.server / tunnel / logrotate 都落在这一档：手工装的、语义等价、可安全接管。
+  // 既有的 com.ccm.server / tunnel / logrotate 都落在这一档：手工装的、语义等价、可安全接管。
   test('无 manifest 但语义等价 → adoptable', () => {
     assert.equal(
       classifyOwnership({ knownUnit: true, plistExists: true, inManifest: false, drift: [] }),
@@ -382,7 +382,7 @@ test.describe('classifyOwnership', () => {
     );
   });
 
-  // 机主的 com.ccm.tunnel-watch：前缀命中但模板里没这个 unit。
+  // 用户自建的 com.ccm.tunnel-watch 这类 unit：前缀命中但模板里没这个 unit。
   test('前缀命中但不是已知 unit → unknown', () => {
     assert.equal(
       classifyOwnership({ knownUnit: false, plistExists: true, inManifest: false, drift: [] }),
@@ -499,8 +499,8 @@ test.describe('isSupervised', () => {
 //
 // launchd 眼里「此刻没有进程」只有一个词 —— stopped。但那对 KeepAlive 常驻服务是故障信号，
 // 对定时器/打火即退任务是**健康待机**。同一个枚举值承载两种相反含义，UI 只能靠 unit 名字猜，
-// 于是 default 分支必然漏掉没被硬编码的 unit：机主自建的 com.ccm.tunnel-watch 每 30s 救一次
-// 隧道，面板照样标「已停止」，机主本人因此来问过「这个要启用吗」。
+// 于是 default 分支必然漏掉没被硬编码的 unit：用户自建的 com.ccm.tunnel-watch 每 30s 救一次
+// 隧道，面板照样标「已停止」，曾因此被误读、来问过「这个要启用吗」。
 //
 // 判据不该是名字表，而是 plist 里本来就写着的事实。**刻意不走 extractUnitFacts**：那个函数
 // 对不在 UNITS 表里的 unit 直接抛错，而最需要这个判断的恰恰是 unknown unit。

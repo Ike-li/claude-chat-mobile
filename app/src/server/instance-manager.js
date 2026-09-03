@@ -20,7 +20,7 @@ export function createInstanceManager() {
       if (agent.sessionId !== sessionId) continue;
       // 空闲回收 checkIdle 置 terminating 后、onExit 删 Map 前有竞态窗：若仍命中这份「正在死」
       // 的实例，session:switch 会 bind 到即将消失的 instanceId → 历史分块渲染中途被 reselect
-      // 打断 → 聊天区只剩「加载了 N 条」/回收横幅、气泡未落地（机主 7134c083 复现）。
+      // 打断 → 聊天区只剩「加载了 N 条」/回收横幅、气泡未落地（7134c083 复现）。
       // disposed 同理（dispose 后 onExit 可能尚未删 Map）。跳过，让调用方走 fresh resume。
       if (agent.terminating || agent.disposed) continue;
       return agent;

@@ -283,7 +283,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   if (process.argv.includes('--test-only')) {
     // ★ 这条路径挂在 `npm run check` 里，所以「跑不了」必须是**跳过**而不是失败：
     // CI 的三个 job 全在 ubuntu-latest（没有 swiftc），Linux 用户也不该因为编译不了 Swift
-    // 就过不了门禁。而在机主的 Mac 上它会真跑 —— 此前 CCMCore 的 80 条断言不在任何门禁里，
+    // 就过不了门禁。而在真实 macOS 环境上它会真跑 —— 此前 CCMCore 的 80 条断言不在任何门禁里，
     // 只有人手动敲 `npm run app:test` 才会执行。
     if (process.platform !== 'darwin') {
       process.stdout.write('非 macOS，跳过 Swift 测试\n');

@@ -499,7 +499,7 @@ test('buildConfigContent：给了 workDirs 就写 WORKDIRS 数组（自文档化
 });
 
 // ── R45(2026-08-30 拍板)：文件编辑器直写进配置向导 ─────────────────────────
-// 默认值不动（FILE_EDIT 缺省=开，机主即 root，hard-rules §2.3）；但它是唯一绕过
+// 默认值不动（FILE_EDIT 缺省=开，用户即 root，hard-rules §2.3）；但它是唯一绕过
 // Agent 审批链的写入通道，hard-rules §1「可选功能逐项问」的名单此前漏了它——
 // 补上询问：答「n」才写 FILE_EDIT=off，回车维持默认。非交互路径行为不变（不新增必填项）。
 test.describe('setup 向导 —— 文件编辑器直写要问一句（R45）', () => {

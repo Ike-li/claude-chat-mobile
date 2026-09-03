@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { resolveBindPlan, resolveBindHost, bindsPublicly, isLoopbackBindHost, isBlankToken } from '../../app/src/shared/bind-host.js';
 
-// ★ 鉴权是启动前提（hard-rules §1.9，2026-09-01 机主拍板）：
+// ★ 鉴权是启动前提（hard-rules §1.9，2026-09-01 维护者拍板）：
 // 「web 访问必须填 token，局域网也要填」。此前无 token 时静默降级绑 loopback，而那个状态下
 // 本机浏览器打开就是一个**零凭证的全权控制台**（连上即免设备审批，可发消息、跑工具、读写工作区）。
 // 现在不再有「无 token 部署」这个状态：任何绑定模式下缺 token 一律拒绝启动。
@@ -64,7 +64,7 @@ test.describe('resolveBindPlan —— 有 token 时的绑定行为（默认路�
   });
 });
 
-test.describe('resolveBindPlan —— loopback 模式（机主的 SSH 隧道用法）', () => {
+test.describe('resolveBindPlan —— loopback 模式（SSH 隧道用法）', () => {
   test('有 token 也强制 127.0.0.1（这正是「我自己转发，产品别管公网」）', () => {
     const p = resolveBindPlan({ authToken: 'x', bindMode: 'loopback' });
     assert.equal(p.host, '127.0.0.1');

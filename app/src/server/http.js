@@ -14,7 +14,7 @@ export const clientIp = value => (value || '').toString().replace(/^::ffff:/, ''
 // 判据是**地址段**，不是接口名。曾按 /^(utun|tun|tap|ppp)/ 排除整个接口，前提是「虚拟网卡上的
 // 地址手机不可达」——该前提对 VPN 类入口恰好是反的：走隧道时那个地址是手机唯一可达的。
 // 且接口名是 OS 实现细节，同一个 WireGuard 在 macOS 叫 utun0、Linux 叫 wg0，旧判据只滤掉前者。
-// 真正要挡的 TUN 代理假地址（Clash 等占 198.18/15）由下面的地址段规则独立挡住，与接口名无关。
+// 真正要挡的 TUN 代理假地址（198.18/15）由下面的地址段规则独立挡住，与接口名无关。
 // 名字用 reachable 而非 lan：结果里可能有隧道内地址（Tailscale 的 100.x、WireGuard 的自定义段），
 // 那些不是局域网地址，调用点的日志文案也不能再写「同 WiFi」。
 // interfaces 可注入（默认 os.networkInterfaces()）便于单测。
@@ -74,7 +74,7 @@ function rateLimitActive(rl, req) {
 // 存在理由：此前 HTTP 侧只在「连续失败达阈值锁定」那一刻打一行日志，逐次失败连打的哪个端点都不记。
 // 2026-09-02 审计里那条 `ip:127.0.0.1 锁 900s（via:http）` 前后 10 分钟日志全空白，事后无从查起，
 // 而 socket 侧每次失败都有 [conn] 日志——同一件事两侧可观测性不对称。
-// 载荷只带 path / 来源桶 / 失败类别，【绝不带令牌值】：这条日志的读者是机主，不是攻击者，
+// 载荷只带 path / 来源桶 / 失败类别，【绝不带令牌值】：这条日志的读者是主机所有者，不是攻击者，
 // 而日志文件的权限边界比 AUTH_TOKEN 本身宽。
 export function createHttpAuth({ authToken, strategy, rateLimit = null, onAuthFailure = null }) {
   return async function httpAuth(req, res, next) {
@@ -168,7 +168,7 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null, onAuthFa
       return res.status(401).json({ status: 'unauthorized' });
     }
     // 鉴权已通过。next() 必须在 try 外（R6/2026-08-06）：下游 handler 的同步抛错不是鉴权失败——
-    // 圈进上面的 catch 会给已通过鉴权的来源计一次失败（连续 8 次即 15min 锁定，机主被自家某个
+    // 圈进上面的 catch 会给已通过鉴权的来源计一次失败（连续 8 次即 15min 锁定，用户被自家某个
     // handler 的 bug 锁在门外、审计被污染成「有人暴破」），并在响应可能已写出后二次 res.status(401)。
     // 下游异常原样向外传播，交给 Express 5 的错误处理（async 中间件的 rejection 会被其接住）。
     return next();
@@ -232,7 +232,7 @@ export function configureHttpShell({
   //
   // 为什么另起一个变量而不复用 DEV_MODE：① DEV_MODE 还管着 dev:restart（远程重启 server），
   // 静态资源热读不该顺带把那个能力面一起打开；② 本仓 env-schema 把 DEV_MODE 定位成
-  // 「dogfooding 的长跑实例也可以开」，机主自己的配置里就是开着的 —— 拿它当判据等于悄悄
+  // 「dogfooding 的长跑实例也可以开」，用户自己的配置里就是开着的 —— 拿它当判据等于悄悄
   // 把启动预读撤回去，那正是这次优化想避免的。
   // 也不去嗅 node --watch：实测 --watch 被 node 自己消费掉，子进程的 process.execArgv 是空数组。
   hotReloadJs = process.env.ASSET_HOT_RELOAD === '1',
@@ -367,7 +367,7 @@ export function registerOperationalRoutes({
     // 第二因子：仅已批准设备可登记推送（A1）。deviceToken 来自身体或头，与 socket auth 同源。
     // bypass 级信任必须同样放行 —— 否则这道 fail-closed 用错了地方：socket 侧 io.use 对
     // 「CF Access 已验」与「真本机直连」走 bypass 分支，那条分支【不调 addPendingDevice】，于是这类设备
-    // 永远进不了待审列表；而 approveDevice 的三个入口都要求先在待审列表里，机主在 UI/CLI 上根本看不到它、
+    // 永远进不了待审列表；而 approveDevice 的三个入口都要求先在待审列表里，用户在 UI/CLI 上根本看不到它、
     // 无从批准。结果：只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
     // 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。纯 localhost 部署同理。
     const bypassTrusted = typeof bypassDeviceApproval === 'function' && bypassDeviceApproval(req) === true;

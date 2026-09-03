@@ -72,10 +72,10 @@ test('readiness 成功：保留调用方对 child 的收尾责任', async () => 
   assert.deepEqual(signals, []);
 });
 
-// 机主 .env 常开 LOG_TERMINAL=on（生产桌面日志窗）。集成测每起一个 server 子进程若继承它，
+// 本机 .env 常开 LOG_TERMINAL=on（生产桌面日志窗）。集成测每起一个 server 子进程若继承它，
 // 就会 osascript 开 Terminal.app 窗口；kill 时 zsh/tail 又常弹「是否终止进程」确认框，窗口堆满桌面。
 // 必须在 spawn 侧强制关掉——关窗路径（stopLogTerminalSync）依赖优雅退出，SIGKILL/竞态下不可靠。
-test('spawn 强制 LOG_TERMINAL=off：隔离机主 .env，且忽略 envOverrides 试图重新打开', async () => {
+test('spawn 强制 LOG_TERMINAL=off：隔离本机 .env，且忽略 envOverrides 试图重新打开', async () => {
   const child = new EventEmitter();
   child.exitCode = null;
   child.signalCode = null;

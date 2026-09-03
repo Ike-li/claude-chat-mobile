@@ -560,9 +560,9 @@ test('logSwitchDiagnostic: logFileBytes 缺省 → 按「未超阈值」处理�
 });
 
 // R9-uploads（2026-08-06 BUG hunting review）：只报可见性，【不自动清理】。
-// .ccm-uploads/ 落在机主真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——
+// .ccm-uploads/ 落在用户真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——
 // 按 TTL/容量删会让老对话的图片预览全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，
-// 复杂度与风险不匹配实测增长率（22 天 2.5MB）。故只给体积可见性，清不清由机主判断。
+// 复杂度与风险不匹配实测增长率（22 天 2.5MB）。故只给体积可见性，清不清由用户判断。
 test.describe('uploadsFootprintDiagnostic（R9：附件目录可见性，不自动删）', () => {
   test('无附件目录 → ok 且不啰嗦', () => {
     const r = uploadsFootprintDiagnostic({ dirs: [] });
@@ -576,7 +576,7 @@ test.describe('uploadsFootprintDiagnostic（R9：附件目录可见性，不自�
     assert.match(r.detail, /5 MB|12/);
   });
 
-  test('超阈值 → warn，且明说不会自动清理、要机主自己删', () => {
+  test('超阈值 → warn，且明说不会自动清理、要用户自己删', () => {
     const r = uploadsFootprintDiagnostic({
       dirs: [{ cwd: '/repo', bytes: UPLOADS_FOOTPRINT_WARN_BYTES + 1, files: 400 }],
     });
@@ -676,7 +676,7 @@ test.describe('serviceUnitsDiagnostic', () => {
     assert.match(r.detail, /npm start|headless/, '要点明另一条入口本来就不需要它');
   });
 
-  // 机主的隧道就是这个状态。只看 PID 会一直显绿灯，而它其实在反复崩溃重启。
+  // 用户自建的隧道 unit 就是这个状态。只看 PID 会一直显绿灯，而它其实在反复崩溃重启。
   test('flapping → warn 并点名是哪个 unit', () => {
     const r = serviceUnitsDiagnostic({
       platform: 'darwin', supported: true,
@@ -858,7 +858,7 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
     assert.equal(d.detail.includes('super-secret-team'), false, '值可能是密钥，只许出现键名');
   });
 
-  // 2026-08-19 真机证伪：机主照着旧提示跑了 exec zsh，doctor 输出一字未变——exec 只换进程映像，
+  // 2026-08-19 真机证伪：照着旧提示跑了 exec zsh，doctor 输出一字未变——exec 只换进程映像，
   // 环境原样继承。提示必须给「真能清掉」的动作，且带上具体键名可直接粘贴。
   test('提示是可直接粘贴的 unset 命令，且绝不建议 exec', () => {
     for (const lang of ['zh', 'en']) {
@@ -905,9 +905,9 @@ test.describe('identifySelfServer —— headless npm start 也要认得出是�
     assert.deepEqual(r, { pid: 39090, cwd: REPO });
   });
 
-  test('★ 隔壁仓库的同名 app/server.js → 不认领（本机 codex-chat-mobile 就是真实反例）', () => {
+  test('★ 隔壁仓库的同名 app/server.js → 不认领（同机常有另一个项目跑着同名入口）', () => {
     const r = identifySelfServer({
-      processes: [{ pid: 50021, command: 'node app/server.js', cwd: '/Users/you/code/codex-chat-mobile' }],
+      processes: [{ pid: 50021, command: 'node app/server.js', cwd: '/Users/you/code/another-project' }],
       repoRoot: REPO,
     });
     assert.equal(r, null, '同名不等于同一个，cwd 对不上就不是自己');
@@ -930,7 +930,7 @@ test('portOccupancyDiagnostic：端口被自家 headless server 占着是 ok，�
 });
 
 // ── menubarLivenessDiagnostic ──────────────────────────────────────────────
-// 2026-08-23：机主的菜单栏 app 被一个沉到别人窗口后面的确认框冻死 **63 小时**，
+// 2026-08-23：菜单栏 app 被一个沉到别人窗口后面的确认框冻死 **63 小时**，
 // 期间系统里没有任何信号 —— menubar unit 因为 `open` + KeepAlive=false 恒显示「待机」，
 // service.js health 只打 server 的 HTTP，doctor D16 只看 server。进程活着、图标还在，
 // 但主线程回不到事件循环，点什么都没反应（连「退出」）。
@@ -1029,7 +1029,7 @@ test.describe('menubarLivenessDiagnostic', () => {
 
 // ── D20: 文件编辑器直写 × 公网迹象 ─────────────────────────────────────────
 // 背景（2026-08-30 需求合稿 R45 拍板）：FILE_EDIT 是唯一绕过 Agent 审批链的写入通道，
-// 默认开维持不动（机主即 root，hard-rules §2.3）；doctor 只在「用户自己声明了公网入口」
+// 默认开维持不动（用户即 root，hard-rules §2.3）；doctor 只在「用户自己声明了公网入口」
 // 时提示复核。判据只认两个显式声明：CF_ACCESS_* 三键齐设、PUBLIC_URL 非空——
 // server 观测不到进程外的隧道（fail-open 教训），所以不猜「是否真的暴露」，只认声明。
 test.describe('fileEditExposureDiagnostic（R45：直写通道 × 公网迹象提示）', () => {

@@ -101,7 +101,7 @@ export function isVerifyEvent(event) {
 // server 启动时自建投递箱目录：目录存在 watch 才建得起来，否则"装完 hooks 得重启 server 才生效"。
 // 注意这只创建 ccm 自己命名空间下的目录（~/.claude/ccm/hooks-v1/）。
 // 写用户 CLI 配置（~/.claude/settings.json）的红线是：**只在用户显式动作时写**——CLI 侧跑安装器，
-// 或已鉴权设备在服务状态面板点「开启终端会话推送」（socket hooks:setup，2026-07-26 机主批准开的口子，
+// 或已鉴权设备在服务状态面板点「开启终端会话推送」（socket hooks:setup，2026-07-26 维护者批准开的口子，
 // 理由：手机上跑不了 npm，只留 CLI 入口等于让移动端用户永远发现不了这个能力）。
 // 启动、连接、任何后台时机一律不写。
 export function ensureHooksDirectory(dir) {

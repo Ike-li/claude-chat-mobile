@@ -291,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.lastError = e
                 }
                 // 同理保留旧值：拉失败时宁可显示一份可能过期的待审列表，也好过让整段消失——
-                // 「没有设备在等」和「我没拉到」在菜单上长得一模一样，而后者会让机主漏掉一台设备。
+                // 「没有设备在等」和「我没拉到」在菜单上长得一模一样，而后者会让用户漏掉一台设备。
                 if case .ok(let d) = devices { self.latestDevices = d }
                 self.writeHeartbeat(ok: probeSucceeded)
                 self.render()
@@ -520,7 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// 待审设备一行 + 准入/拒绝子菜单。完整 ID 放 tooltip：菜单标题里塞不下 32 位 hex，
-    /// 而机主核对时需要看到全量——手机屏幕上显示的就是全量那串。
+    /// 而用户核对时需要看到全量——手机屏幕上显示的就是全量那串。
     private func pendingDeviceItem(_ d: PendingDevice) -> NSMenuItem {
         let item = NSMenuItem(title: pendingDeviceTitle(d), action: nil, keyEquivalent: "")
         item.toolTip = "完整 ID：\(d.id)\n先和手机屏幕上显示的 ID 核对，再决定是否准入。"
@@ -632,7 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch verb {
         case "logs":
             // 直接打开内嵌日志窗口并预选该 unit 的源——此前在任务窗口跑 service.js logs
-            // 打一段一次性文本，被机主读成「让我去某某文件看」（2026-08-17 反馈）。
+            // 打一段一次性文本，被用户读成「让我去某某文件看」（2026-08-17 反馈）。
             openLogsWindow(preferUnit: unit)
             return
         case "install":
@@ -938,7 +938,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 把模态窗抬到**所有 app 的普通窗口之上**，且不依赖「这个 app 能不能被激活」。
     ///
-    /// 【这道防线的代价是实测出来的，2026-08-23】机主点了「停止 server」，确认框好端端地
+    /// 【这道防线的代价是实测出来的，2026-08-23】用户点了「停止 server」，确认框好端端地
     /// 待在 (830,215)、260×218、没有最小化，只是被别的窗口盖住；主线程就此冻在
     /// `-[NSAlert runModal]` 里 **63 小时**。表现是「菜单能弹出、能高亮、点什么都没反应，
     /// 连『退出』也没反应」—— 状态栏菜单由系统侧（NSContextMenuImpl）渲染，所以照样弹得

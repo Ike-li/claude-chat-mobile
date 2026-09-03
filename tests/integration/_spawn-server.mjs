@@ -66,13 +66,13 @@ export function createServerSpawner({
         // 排在 envOverrides 之前：摘的是「继承来的」，不是「调用方显式要的」——cf-access-gate
         // 那批用例正要自己构造 CF 场景。
         ...stripInheritedEnv(baseEnv),
-        DEV_MODE: '0', // 同 server.test.mjs：隔离机主 .env 里的 DEV_MODE，防 dev:restart 误触发
+        DEV_MODE: '0', // 同 server.test.mjs：隔离本机 .env 里的 DEV_MODE，防 dev:restart 误触发
         ...envOverrides,
         PORT: String(port),        // 覆盖 envOverrides 里可能的 PORT，确保和上面算出的 port 一致
         CCM_BUILD_NONCE: buildNonce,
         // 让 config 保留调用方明确传入的空 AUTH/CF 值直到 dotenv 结束，防主 .env 回填测试认证配置。
         CCM_TEST_PRESERVE_EMPTY_ENV: '1',
-        // 桌面日志窗（osascript→Terminal.app）：测试永不启。机主 .env 的 LOG_TERMINAL=on 会经
+        // 桌面日志窗（osascript→Terminal.app）：测试永不启。本机 .env 的 LOG_TERMINAL=on 会经
         // ...process.env 继承；关窗依赖优雅退出，SIGKILL/zsh job 确认框下常留窗。放在 overrides 之后，
         // 调用方也不能误开。用非空 'off'（只认 'on' 才启用）——空串在 dotenv 规整路径可能被清掉后回填。
         LOG_TERMINAL: 'off',

@@ -10,13 +10,13 @@
 //
 // ## 三条纪律
 //
-// 1. **只对 manifest 里记着的 unit 做写操作。** 机主机器上有四个手工装的 unit，其中
+// 1. **只对 manifest 里记着的 unit 做写操作。** 实测环境中有四个手工装的 unit，其中
 //    com.ccm.tunnel-watch 模板里压根没有。它们被识别为 adoptable/unknown：可以看、可以启停，
 //    但永不 install/uninstall/覆写。adopt 只写 manifest，一个字节都不碰 plist。
 //
 // 2. **轮询路径绝不碰 HTTP。** app/src/server/http.js:94-105 对鉴权失败无条件计数、
 //    app/src/server/app.js:309 让 loopback 也进限速、rate-limiter 阈值 8 锁 15 分钟 ——
-//    每 5s 打一次不带 token 的 /health，40 秒就能把机主连同手机一起关在门外。
+//    每 5s 打一次不带 token 的 /health，40 秒就能把用户连同手机一起关在门外。
 //    所以探活只用 `launchctl list`（进程在不在）+ `nc -z`（端口通不通，纯 TCP 握手不发
 //    请求行，express 根本不路由）。带 token 的 /health 只在 `health` 子命令里打一次。
 //
@@ -191,7 +191,7 @@ export function createServiceManager(deps = {}) {
     // ——app 是安装期参数，status 侧没有期望值可比（expectedFactsFor 里 app 恒为 ctx.app ?? null），
     // 塞进去会 expected=null vs actual=有值、每次都报假漂移，见 service-units.js 头注那条纪律。
     // 代价是它失效时三条自查路径全绿：status 的 drift 是空数组，doctor 只消费 drift，菜单栏读同一份。
-    // 2026-08-18 在机主真机上实证过这个盲区：自启指向 <repo>/desktop/build/CCM.app —— gitignore
+    // 2026-08-18 在真机实测中实证过这个盲区：自启指向 <repo>/desktop/build/CCM.app —— gitignore
     // 的构建产物，git clean 一下开机自启就没了，而没有任何地方会告诉他。所以改判 actual 值本身。
     if (unit === 'menubar' && facts?.app) {
       if (!fileExists(facts.app)) {
@@ -234,7 +234,7 @@ export function createServiceManager(deps = {}) {
     };
   }
 
-  // 前缀命中但不在模板表里的 unit（机主自建的 com.ccm.tunnel-watch）。看得见才管得住 ——
+  // 前缀命中但不在模板表里的 unit（用户自建的 com.ccm.tunnel-watch）。看得见才管得住 ——
   // 它占着我们的 label 命名空间，status 里不列出来等于假装它不存在。
   function buildUnknownUnits({ live, liveKnown, warnings, knownLabels, events }) {
     const labels = new Set();
@@ -253,7 +253,7 @@ export function createServiceManager(deps = {}) {
       const plistExists = !!plist;
       const running = live.get(label) || { pid: null, lastExit: null };
       const schedule = extractSchedule(plist);
-      // 自建 unit（机主的 com.ccm.tunnel-watch）同样要能看出「已被 bootout」——
+      // 自建 unit（用户自建的 com.ccm.tunnel-watch 这类 unit）同样要能看出「已被 bootout」——
       // 它们恰恰是最容易被读成「装了但没启用」的那类，少了这一位就只能靠猜。
       const { state, lastExitAbnormal, loaded } = classifyState({
         ...running, plistExists, plistFileExists, loaded: liveKnown ? live.has(label) : null,
@@ -276,7 +276,7 @@ export function createServiceManager(deps = {}) {
         schedule,
         listen: null,
         // 待机说明排在前面：自建 unit 同时带着「非本仓」与 stopped 两个标签，最容易被读成
-        // 「装了但没启用」——机主的 tunnel-watch 就是这么被问的。先说它在正常待机。
+        // 「装了但没启用」——用户自建的 tunnel-watch 就是这么被问的。先说它在正常待机。
         // 但「待机」的前提是它还在 launchd 域里，被 bootout 之后那句话就是假的。
         detail: [
           state === 'stopped' ? idleOrStoppedText(schedule, loaded) : null,
@@ -328,7 +328,7 @@ export function createServiceManager(deps = {}) {
   // ---------- 写路径 ----------
   //
   // 全部三个动作共享一条护栏：**只对 manifest 里记着的 unit 做写操作**。盘上已有但不在 manifest
-  // 的（机主手工装的三个）一律走 adopt；语义不等价的（自写包装脚本的隧道）连 adopt 都拒绝 ——
+  // 的（手工装的那几个）一律走 adopt；语义不等价的（自写包装脚本的隧道）连 adopt 都拒绝 ——
   // 接管了就意味着将来会被覆写，而那份配置是用户特意写的。
 
   function guardUnit(unit) {
@@ -351,7 +351,7 @@ export function createServiceManager(deps = {}) {
   }
 
   // 装 tunnel 前必须已有 ~/.cloudflared/config.yml：没有它 cloudflared 起不来，
-  // 而 KeepAlive=true 会把失败变成一个无限崩溃重启循环（机主的 -9 就是这么来的）。
+  // 而 KeepAlive=true 会把失败变成一个无限崩溃重启循环（那个 -9 就是这么来的）。
   function precheck(unit, opts) {
     // menubar 的 APP 无人把关时，escapeXml(undefined) 会把字面量 "undefined" 写进 plist，
     // 还报「✓ 已安装并加载」；而 menubar 的 driftFields 只有 log-path，status 会一直显示
@@ -644,7 +644,7 @@ export function createServiceManager(deps = {}) {
   // ---------- 控制路径 ----------
   //
   // 与写路径的护栏不同：install/uninstall 会改盘上的 plist，所以只允许 managed；
-  // **启停不改任何配置**，所以机主自建的 com.ccm.tunnel-watch 也该能从菜单栏开关 ——
+  // **启停不改任何配置**，所以用户自建的 com.ccm.tunnel-watch 也该能从菜单栏开关 ——
   // 否则「看得见管不着」。唯一的限制是 label 必须落在我们的前缀命名空间内。
   function guardControllable(unit) {
     if (platform !== 'darwin') return `LaunchAgent 管理仅支持 macOS（当前：${platform}）`;
@@ -826,7 +826,7 @@ export function createServiceManager(deps = {}) {
 
   // **唯一会碰 HTTP 鉴权层的路径**，因此规矩最严：任何非 200 都不重试。
   // app/src/server/http.js:94-105 对失败无条件计数 + app.js:309 让 loopback 也进限速
-  // + rate-limiter 阈值 8 锁 15 分钟 ⇒ 一个会重试的健康检查能把机主连同手机一起关在门外。
+  // + rate-limiter 阈值 8 锁 15 分钟 ⇒ 一个会重试的健康检查能把用户连同手机一起关在门外。
   function health() {
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? DEFAULT_PORT;
@@ -900,17 +900,17 @@ export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistEx
     const word = idleOrStoppedText(schedule, loaded);
     if (word) parts.push(word);
   }
-  // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 机主的隧道恒为 -9
+  // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 用户自建的隧道 unit 恒为 -9
   // （看门狗按 DHCP 漂移每天 kickstart 一次），那样说等于每天误报。
   if (restarts?.flapping) parts.push(`1 小时内重启 ${restarts.lastHour} 次`);
   else if (restarts?.last24h > 0) parts.push(`24 小时内重启 ${restarts.last24h} 次`);
   else if (lastExitAbnormal && state === 'running') parts.push('上次非正常退出（已重新拉起）');
   // shape 漂移有两个来源，措辞必须分开，否则会把因果说反：
-  //   · foreign（manifest 里没有）—— 用户自己写的启动方式（机主的隧道就是 /bin/bash
+  //   · foreign（manifest 里没有）—— 用户自己写的启动方式（用户自建的隧道 unit 就是 /bin/bash
   //     ~/.cloudflared/xxx.sh，多半为绕过代理 TUN 劫持）。说「不接管」，不暗示出错。
   //   · managed（manifest 里有 ⇒ 这份 plist 是本工具渲染的）—— 用户什么都没改，是**产品自己
   //     升级后模板变了**，而已经落到 ~/Library/LaunchAgents 的那份不会跟着更新。
-  //     2026-09-03 实证：运行时入口从 server.js 挪到 app/server.js 后，机主的 server unit
+  //     2026-09-03 实证：运行时入口从 server.js 挪到 app/server.js 后，实测环境的 server unit
   //     直接起不来，而这里却告诉他「自定义启动方式」——他没有自定义过任何东西。
   if (drift.includes('shape')) {
     parts.push(ownership === 'managed'
@@ -1190,7 +1190,7 @@ const STATE_ICON = {
 };
 
 // stopped 分两种，面板必须用两个词：常驻服务停了是故障，周期 job / 打火即退任务停着是
-// 健康待机。混用一个词的后果实测过——5 个 unit 里 3 个健康的被标 stopped，机主本人来问
+// 健康待机。混用一个词的后果实测过——5 个 unit 里 3 个健康的被标 stopped，用户本人来问
 // 「tunnel-watch 要启用吗」。**只改呈现，不改 state 字段**：JSON 契约仍是 launchd 的四个取值，
 // 消费方（desktop）拿 schedule 自己判，判据与呈现分开。
 function stateWord(u) {

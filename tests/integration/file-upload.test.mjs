@@ -32,7 +32,7 @@ async function startServer() {
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 空串而非 delete：_spawn-server 注入测试标记，使 config 在 dotenv 前保留这些空值，
-    // 防机主真实 .env 回填 AUTH/CF 配置；本文件不启用 AUTH_TOKEN 或 CF Access。
+    // 防本机真实 .env 回填 AUTH/CF 配置；本文件不启用 AUTH_TOKEN 或 CF Access。
     CF_ACCESS_HOSTNAME: '',
     CF_ACCESS_TEAM: '',
     CF_ACCESS_AUD: '',

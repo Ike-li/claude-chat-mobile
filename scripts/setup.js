@@ -465,7 +465,7 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
     if (accessProfile) console.log(c.dim(t.accessChosenNote(accessProfile)));
 
     // 文件编辑器直写：唯一绕过 Agent 工具审批链的写入通道（R45，2026-08-30）。回车=维持
-    // schema 默认开（机主即 root，hard-rules §2.3），答 n 才写 FILE_EDIT=off。必须在写文件
+    // schema 默认开（用户即 root，hard-rules §2.3），答 n 才写 FILE_EDIT=off。必须在写文件
     // 之前问——它是配置项，不像 hooks/desktop 是写完配置后才执行的安装动作。
     const fileEditAns = (await rl.question(`\n${t.fileEditPrompt}`)).trim().toLowerCase();
     const fileEdit = fileEditAns === 'n' || fileEditAns === 'no' ? 'off' : undefined;

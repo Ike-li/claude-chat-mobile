@@ -10,7 +10,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播（四个入口：桌面端菜单栏、web 端已信任设备远程准入、headless 终端回车/deny（要 TTY，launchd 起的 server 没有）、`scripts/device.js`）；新设备入列会推一条不含 ID/IP 的通知（5 分钟节流）；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `app/src/ops/notifications.js`、`notify-channels.js`）。
 
-**产品立场 n=1 自托管**（单机主、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
+**产品立场 n=1 自托管**（单用户、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
 ## 代码地图与模块边界
 
@@ -48,7 +48,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 > 宿主机路径的指针文件，容器里解析不到。`check` 本来就在宿主机白名单里，留在宿主机跑即可。
 
 > **为什么是白名单，不是"危险命令清单"**
-> 2026-08-02 那次把机主 `~/.claude/projects` 整棵树删光（70 个项目 / 291 memory / 2990 transcript），
+> 2026-08-02 那次把用户的 `~/.claude/projects` 整棵树删光（70 个项目 / 291 memory / 2990 transcript），
 > 根因不是没看见警告，是**没把 `npm run mutate` 归类成破坏性操作**——它会故意把源码改坏再跑测试，
 > 而被改坏的恰恰可能是算删除路径的代码（当时 `getProjectDir` 被改成恒返回 `''`，
 > `join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了）。

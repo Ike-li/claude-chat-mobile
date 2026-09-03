@@ -562,7 +562,7 @@
        没有“替别人审批”这回事）。 -->
   <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-30 p-3 space-y-2 pointer-events-none"></div>
 
-  <!-- 本设备被机主拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
+  <!-- 本设备被主机所有者拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
   <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6 text-center" style="box-shadow:var(--shadow-pop)">
       <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sunk text-danger mb-4">
@@ -571,7 +571,7 @@
         </svg>
       </div>
       <div class="text-xl font-semibold text-ink mb-2">设备未获授权</div>
-      <p class="text-sm text-ink-soft mb-5 leading-relaxed">机主已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。</p>
+      <p class="text-sm text-ink-soft mb-5 leading-relaxed">主机所有者已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。</p>
       <button id="deviceDeniedRetry" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium mb-3">重新请求接入</button>
       <button id="deviceDeniedHelp" class="text-xs text-ink-faint underline">查看访问帮助</button>
     </div>

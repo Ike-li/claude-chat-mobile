@@ -5,7 +5,7 @@
 // getProjectDir 改成恒返回 ''，而 tests/unit/history-list.test.mjs 与
 // tests/integration/session-delete.test.mjs 都在做
 //     rmSync(join(<真实根>, getProjectDir(cwd)), { recursive: true, force: true })
-// 路径当场塌成真实根本身，机主 70 个项目的 transcript 与 memory 一次删光（靠 APFS 快照恢复）。
+// 路径当场塌成真实根本身，70 个项目的 transcript 与 memory 一次删光（靠 APFS 快照恢复）。
 //
 // 当时补了两处护栏，但那只覆盖【已知的两处】——明天谁新写一个 rmSync(算出来的路径)，没有任何
 // 东西会拦。这条闸把「只覆盖已知」变成「覆盖所有未来的」：
@@ -403,7 +403,7 @@ function main() {
     console.error('\n  这类调用【今天多半是安全的】——单文件删除代价有界。要求写一行');
     console.error('  `// safe-path: <为什么这段目录不会算错 / 算错了为什么无害>`，');
     console.error('  是为了让下一个把它改成 rmSync(recursive) 的人先看见这句话：');
-    console.error('  2026-08-02 删掉机主 70 个项目的，就是同一个形态的递归版本。\n');
+    console.error('  2026-08-02 删掉 70 个项目的，就是同一个形态的递归版本。\n');
   }
   process.exitCode = 1;
 }

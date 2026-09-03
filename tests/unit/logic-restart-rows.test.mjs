@@ -1,7 +1,7 @@
 // tests/unit/logic-restart-rows.test.mjs —— 服务状态面板「重启记录」段的行渲染
 //
 // 这一段存在的理由：launchd 只保留 LastExitStatus（最后一次怎么退出的），那是**瞬时值**，
-// 回答不了「这正常吗」。机主机器上的实证——隧道恒为 -9，因为自建看门狗 com.ccm.tunnel-watch
+// 回答不了「这正常吗」。实测环境中的实证——隧道恒为 -9，因为自建看门狗 com.ccm.tunnel-watch
 // 每 30s 检测 en0 的 DHCP 漂移、变了就 kickstart -k（-k 先 SIGKILL）。
 // 用瞬时值告警等于每天误报一次，而恒亮的告警会训练用户忽略它。
 // 频率 + 时间线才分得清：每天一次是路由器换 IP，一小时内三次才是真出事。
@@ -20,7 +20,7 @@ test.describe('formatRestartRows', () => {
     assert.equal(formatRestartRows({}).empty, true);
   });
 
-  // ★ 机主机器上的真实模式
+  // ★ 实测环境中的真实模式
   test('每天一次的看门狗重启 → 出现在摘要里但不标黄', () => {
     const view = formatRestartRows({
       restarts: {

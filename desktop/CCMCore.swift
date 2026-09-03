@@ -35,7 +35,7 @@ struct ScheduleInfo: Decodable {
     /// 而本文件「字段全 optional，一个坏字段杀不死解码」的纪律只覆盖 null 与缺字段 ——
     /// Swift 的 optional **不容忍类型不匹配**：`[String: Int]?` 撞上数组会抛 typeMismatch，
     /// 冲出整个 ServiceStatus 的解码，菜单于是永久停在「读不到状态」，没有 unit、没有启停项。
-    /// 机主本机就跑着手写的 com.ccm.tunnel-watch，而 buildUnknownUnits 会收编任意 com.ccm.*，
+    /// 用户可能手写了 com.ccm.tunnel-watch 这类 unit，而 buildUnknownUnits 会收编任意 com.ccm.*，
     /// 所以这不是假想场景。JS 侧对同一形态是优雅降级的（「待机 · 定时触发」），两侧不能分叉。
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -94,7 +94,7 @@ struct UnitStatus: Decodable {
     /// 能不能对它做 install / uninstall。判据来自 L1 的 ownership，本文件不重算归属。
     var isWritable: Bool { ownership == "managed" || ownership == "adoptable" }
 
-    /// 「非 shape 的漂移」才算问题。shape 表示用户换了启动方式（如机主的隧道用自写包装脚本），
+    /// 「非 shape 的漂移」才算问题。shape 表示用户换了启动方式（如用户自建的隧道 unit 用自写包装脚本），
     /// 那是有意配置，年年报黄只会训练用户忽略告警。
     var realDrift: [String] { driftReasons.filter { $0 != "shape" } }
 }
@@ -218,8 +218,8 @@ func unitTitle(_ u: UnitStatus) -> String {
 /// stopped 的语义化文案，由 plist 里的调度形态算出（与 service-units.js 的 describeSchedule 同口径）。
 ///
 /// ★ 判据**不是 unit 名字表**。名字表只能覆盖仓库自带的模板，而最容易被误读的恰恰是用户自建的
-/// unit —— 机主的 com.ccm.tunnel-watch 每 30s 救一次隧道，落进 default 被标「已停止」，
-/// 它还同时挂着「非本仓」，读起来就像装了没启用；机主本人为此来问过。用户随时可能再加一个
+/// unit —— 用户自建的 com.ccm.tunnel-watch 这类 unit 每 30s 救一次隧道，落进 default 被标「已停止」，
+/// 它还同时挂着「非本仓」，读起来就像装了没启用；用户本人为此来问过。用户随时可能再加一个
 /// watch，名字表永远追不上，而 plist 里 KeepAlive / StartInterval / StartCalendarInterval
 /// 本来就写着答案。
 ///
@@ -314,7 +314,7 @@ func probeInterval(menuOpen: Bool) -> TimeInterval { menuOpen ? 2 : 10 }
 struct LocalizedText: Decodable {
     let zh: String?
     let en: String?
-    /// 中文优先：这个 app 的读者是机主本人，界面其余部分也是中文。
+    /// 中文优先：这个 app 的读者是主机所有者本人，界面其余部分也是中文。
     var text: String { zh ?? en ?? "" }
 }
 
@@ -589,7 +589,7 @@ func updateAppSteps(repo: String) -> [TaskStep] {
 /// unit 子菜单「查看日志」预选源的下标：精确 title == unit 优先；LOG_FILE 自定义路径时
 /// server 源的 title 是「server（LOG_FILE）」，按前缀兜底。找不到返回 nil（窗口保持默认选中）。
 /// （此前这里是 unitLogSteps——任务窗口跑 `service.js logs` 打一段一次性文本，2026-08-17
-/// 按机主反馈退役：点「查看日志」应直接看到持续刷新的日志视图，而不是被指去某个文件。）
+/// 按用户反馈退役：点「查看日志」应直接看到持续刷新的日志视图，而不是被指去某个文件。）
 func logSourceIndex(forUnit unit: String, in sources: [LogSource]) -> Int? {
     if let exact = sources.firstIndex(where: { $0.title == unit }) { return exact }
     return sources.firstIndex(where: { $0.title.hasPrefix(unit + "（") })
@@ -705,7 +705,7 @@ let HEARTBEAT_OK_KEY = "CCMLastProbeOk"   // 上一轮探测是否成功
 //
 // 桌面端此前完全没有设备审批入口。后果是装了 GUI 反而比 headless 少两条路：终端里的
 // 「回车批准 / deny 拒绝」只在 `process.stdin.isTTY` 下注册（app/src/server/app.js），而
-// launchd 拉起的 server 没有 TTY，那两条自动失效——机主只剩下开终端敲 device.js 一条路。
+// launchd 拉起的 server 没有 TTY，那两条自动失效——用户只剩下开终端敲 device.js 一条路。
 //
 // 数据取自 CLI 而不是 server 的 HTTP 面：审批恰恰是「server 在跑但你还连不上」时要用的东西，
 // 依赖 server 在线就本末倒置了。device.js 直接读写那两个 JSON，server 靠 fs.watch 感知。
@@ -729,7 +729,7 @@ struct DeviceSnapshot: Decodable {
 }
 
 /// 32 位 hex 的设备指纹在菜单里既放不下也没法读。截成 前8…后4：手机上那串是全量显示的，
-/// 两端各留一截足够机主一眼对上，而 8 位十六进制的碰撞空间在单用户场景下绰绰有余。
+/// 两端各留一截足够用户一眼对上，而 8 位十六进制的碰撞空间在单用户场景下绰绰有余。
 func shortDeviceId(_ id: String) -> String {
     if id.isEmpty { return "（无 ID）" }
     guard id.count > 16 else { return id }

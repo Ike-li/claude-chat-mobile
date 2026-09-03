@@ -220,13 +220,13 @@ export const NOTIFY_CATEGORY = Object.freeze({
 // device-gate.js 的文件监听器处理）根本够不到 app.js 持有的节流状态——用了未决语义，从 CLI
 // 批准之后这条状态就永远解不开，之后真有新设备也不再推。
 // 窗口比会话类通知长得多（5min vs 60s）：「有设备在等你批准」没有回合完成那样的时效性，
-// 每分钟提醒一次纯属打扰；反过来跨窗口再提醒一次是好事，机主可能错过了第一条。
+// 每分钟提醒一次纯属打扰；反过来跨窗口再提醒一次是好事，用户可能错过了第一条。
 export const DEVICE_NOTIFY_KEY = '__devices__';
 export const DEVICE_NOTIFY_INTERVAL_MS = 300000;
 
 // 静默告警（stall 类别）的专用节流窗。告警源在坏天气下每 90–120s 一条（2026-08-17 真机 4d4443ce
 // 一轮 24 连发），套 60s 通用窗≈每条都推；10min 窗把最坏情况压到每轮个位数，同时保留「还卡着」
-// 这个事实的跨窗口再提醒（同 DEVICE 的取舍：跨窗口重提是好事，机主可能错过了第一条）。
+// 这个事实的跨窗口再提醒（同 DEVICE 的取舍：跨窗口重提是好事，用户可能错过了第一条）。
 export const STALL_NOTIFY_INTERVAL_MS = 600000;
 
 // 有界窗口（同 message-dedup DEDUP_CAP / interaction-log MAX_SESSIONS 的 always-on 有界纪律）：
@@ -281,7 +281,7 @@ export function ntfyMetaFor(type, data = {}, publicUrl = '') {
     type === 'permission_request'
     || type === 'question'
     || type === 'cli_hook_notification'
-    || type === 'device_request' // 机主不处理，那台新设备就一直用不了——同属"需即时响应"
+    || type === 'device_request' // 用户不处理，那台新设备就一直用不了——同属"需即时响应"
   ) ? 5 : 3;
   const tags = NTFY_TAGS[type] || [];
   let click;

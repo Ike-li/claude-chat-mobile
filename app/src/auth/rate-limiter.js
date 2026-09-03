@@ -1,6 +1,6 @@
 // rate-limiter.js —— 鉴权端口防暴破限速（纯函数状态机）
 //
-// 边界：只在鉴权门口用、不限已鉴权操作（单操作者/机主即 root，已鉴权=全权，对操作面限速违背产品目的）。
+// 边界：只在鉴权门口用、不限已鉴权操作（单操作者/用户即 root，已鉴权=全权，对操作面限速违背产品目的）。
 // 机制：按 sourceKey 计数 + 指数退避 + 阈值锁定，静默衰减不永久惩罚。状态由调用方存于内存 Map（n=1 瘦快；
 // 重启清零 = 残余风险、已接受）。本模块只含纯函数状态转移，sourceKey 取值与审计由调用方（src/server/app.js）负责。
 
@@ -42,7 +42,7 @@ export function onAuthResult(s, ok, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
   const state = s || freshState();
 
   // 1. 统一门：锁定期（长锁）或退避期（短锁）内一律拦截，且【不计数】
-  //    —— 避免攻击者在锁定期持续戳、把机主自己越锁越久（自我 DoS）；持续尝试的审计由调用方记。
+  //    —— 避免攻击者在锁定期持续戳、把用户自己越锁越久（自我 DoS）；持续尝试的审计由调用方记。
   //    两种锁对客户端说的话不同，判定收敛在 gateCheck。
   const gated = gateCheck(state, now, cfg);
   if (gated) return { next: state, ...gated };
@@ -207,6 +207,6 @@ export function shouldBypassDeviceApproval({
   // 但实测项目内无任何调用方发空 Host（浏览器 / socket.io-client / fetch 全带），而 /health、/metrics
   // 也不走本判据（只过 httpAuth）。留着它等于：反代若配成 proxy_set_header Host ""，公网请求会被当成
   // 真本机直连、跳过设备审批——一行配置错误打穿一层防护。真发空 Host 的客户端落入待审列表、
-  // 机主批准一次即可（非硬拒绝）。公网域名（含 tunnel）本就不 bypass。
+  // 维护者批准一次即可（非硬拒绝）。公网域名（含 tunnel）本就不 bypass。
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }

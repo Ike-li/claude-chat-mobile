@@ -42,7 +42,7 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expect(newBtn).toBeVisible();
     // 反向守卫（P0-DESTROY-6 引入「继续此会话」后）：单实例被摧毁（非 server 重启，广播不带
     // service.startedAt 变化）不该出现重启专属的「继续此会话」按钮——SDK 子进程被强杀后
-    // 不能引导用户一键 resume（机主已否决该场景的自动/快捷 resume）。
+    // 不能引导用户一键 resume（维护者已否决该场景的自动/快捷 resume）。
     await expect(page.locator('[data-testid="instance-destroyed-resume"]')).toHaveCount(0);
 
     // 点击后能正常导航到主页——不是死胡同。
@@ -110,7 +110,7 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
   // "被摧毁"完全相同（viewingInstanceId 变 null + 该实例从列表消失），但这是用户自己确认过的操作，
   // 不该显示"会话已中断"。前端在点击时记录 explicitCloseInstanceId（app.js）供
   // wasViewingInstanceDestroyed 排除；本测试验证按钮真实点击路径（不止纯函数单测）。
-  // server 重启误报修复：整机重启（常驻服务部署后重启是机主的常规操作）时 agents Map/viewingInstanceId
+  // server 重启误报修复：整机重启（常驻服务部署后重启是常规运维操作）时 agents Map/viewingInstanceId
   // 全部归零，重连后首条 instances 广播形态与「实例被单独摧毁」完全同构——修复前每次重启都弹
   // 「停止操作未能正常结束」（用户根本没点停止，纯误导）。区分信号 = 广播恒带的 service.startedAt
   //（进程级常量，重启必变），前端 detectServerRestart（app/public/js/logic.js）识别后换准确文案 +

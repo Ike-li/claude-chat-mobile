@@ -224,7 +224,7 @@ test.describe('resolveWorkdirsFilePath', () => {
 // pickWorkdirSource：工作区列表来源的优先级。
 // CLAUDE.md 的通用规则是「环境变量始终压过文件」，但此前 app.js 的 readWorkdirSource 把配置文件
 // 里的内联 WORKDIRS 无条件排在最前——于是显式 `export WORK_DIRS=...` 收窄不了白名单。
-// 2026-09-01 真机实测的后果：smoke 起的隔离实例继承了机主 ccm.config.json 里的 7 个真实工作区，
+// 2026-09-01 真机实测的后果：smoke 起的隔离实例继承了真实 ccm.config.json 里的 7 个真实工作区，
 // 而它明明传了 WORK_DIRS=<临时目录>。
 test.describe('pickWorkdirSource：env 压过配置文件（CLAUDE.md 通用规则）', () => {
   const inline = ['/from/config/a', '/from/config/b'];
@@ -272,7 +272,7 @@ test.describe('pickWorkdirSource：env 压过配置文件（CLAUDE.md 通用规�
 
 // resolveWorkdirSource：把 pick 的选择兑现成 doctor D3 / 启动自检要用的 { result, from }。
 // 2026-09-02 实测：server 已改 env 优先，CLI doctor 仍 `if (Array.isArray(inline)) return WORKDIRS`，
-// `WORK_DIRS=/tmp/isolated node scripts/doctor.js` 扫的是机主真实工作区。
+// `WORK_DIRS=/tmp/isolated node scripts/doctor.js` 扫的是真实工作区。
 test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
   test('显式 WORK_DIRS 压过内联 WORKDIRS', () => {
     const r = resolveWorkdirSource({

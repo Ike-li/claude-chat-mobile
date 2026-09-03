@@ -178,7 +178,7 @@ test('uninstall：用户改过我们的条目 → status=drifted 且 CAS 拒绝�
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-// 机主硬性要求：装完必须明确告知成功与否。L1 文件级验证离线可做——安装器用合成 stdin 真执行一遍
+// 产品硬性要求：装完必须明确告知成功与否。L1 文件级验证离线可做——安装器用合成 stdin 真执行一遍
 // 刚写进 settings 的那条命令，断言事件文件落盘（验的是 CLI 将来会走的完整链路：node 路径、脚本
 // 路径、目录可建可写、权限正确）。
 test('install 内嵌 L1 回环验证：真跑一次装好的命令并确认事件落盘，人类可读报告', () => {
@@ -219,7 +219,7 @@ test('verify：未安装时明确报未安装，不谎报成功', () => {
 //
 // 为什么这条值一个测试：HTTP 鉴权与 socket 握手【共用同一个限速桶】（app/src/server/http.js 的
 // createHttpAuth 与 app/src/server/app.js 的 io.use 共享 rlStates），所以一次不带 token 的 /health
-// 就是一次货真价实的鉴权失败——它会给 ip:127.0.0.1 上一把退避锁，把机主浏览器的 socket 握手
+// 就是一次货真价实的鉴权失败——它会给 ip:127.0.0.1 上一把退避锁，把用户浏览器的 socket 握手
 // 一起拖下水；连续 8 次直接锁 15 分钟。scripts/service.js 的纪律 2 早已写明这个坑并规避
 // （探活只用 launchctl + 纯 TCP，"带 token 的 /health 只在 health 子命令里打一次"），
 // 而本安装器此前仍在 `fetch('http://127.0.0.1:<port>/health')`，是同一个坑的漏网之鱼。
@@ -237,7 +237,7 @@ test('L2 探活只做 TCP 握手，绝不向 server 发 HTTP 请求（否则撞�
     const res = runSetup(home, 'install', { PORT: String(port) });
     assert.equal(res.status, 0, res.stderr);
     assert.equal(httpRequests, 0,
-      '探活发了 HTTP 请求：每一次都是一次鉴权失败，会把机主自己连同手机一起锁在门外');
+      '探活发了 HTTP 请求：每一次都是一次鉴权失败，会把用户自己连同手机一起锁在门外');
     // 「确实探到了」用 serviceLevel 判，不用 server 端的 connection 计数：TCP 握手在内核的
     // listen backlog 上完成、探针立刻 destroy，等本进程的事件循环从 spawnSync 里回来时那条
     // 连接早没了，'connection' 事件根本不派发（实测恒 0）——拿它当判据是在观测一个观测不到的
