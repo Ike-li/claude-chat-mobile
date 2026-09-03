@@ -143,10 +143,44 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('[data-testid="general-section-nav"]')).toBeVisible();
     await page.locator('[data-scroll-to="generalSectionHelp"]').click();
+    // 注意这句验的是「滚动确实发生了」，不是「落点可读」——toBeInViewport 走 IntersectionObserver，
+    // 被 sticky 导航压在底下的元素它照样判为在视口内。想验遮挡得自己比矩形（nav.bottom vs 目标.top），
+    // 但该面板实测 maxScroll < clientHeight，目标段根本滚不到容器顶，遮挡场景构造不出来，故不加。
     await expect(page.locator('#generalSectionHelp')).toBeInViewport({ timeout: 3_000 });
     await expect(page.locator('#generalDiagDetails')).toBeVisible();
     // 诊断默认折叠（无 open 属性）
     await expect(page.locator('#generalDiagDetails')).toHaveJSProperty('open', false);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // sticky 分段导航必须贴住滚动容器的**最顶边**。#generalSheetBody 是 `overflow-y-auto py-3`，
+  // 而 `sticky top-0` 粘的是 content box 内边缘（= border box + padding-top），于是顶部那 12px
+  // padding 成了无人认领的缝：滚动内容从它下面穿过去，chip 行上方会浮出半行幽灵文字和勾选框。
+  // 判据取几何而非像素比对（本项目 E2E 约定），两条缺一不可——贴顶了但背景透明照样透内容。
+  test('P0-28h 分段导航贴住面板顶边且背景不透明，滚动内容不从上缘漏出', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+
+    // 滚到 nav 已进入 sticky 状态（下方内容正从它底下穿过）
+    await page.locator('#generalSheetBody').evaluate((el) => { el.scrollTop = 300; });
+
+    const geo = await page.evaluate(() => {
+      const body = document.getElementById('generalSheetBody');
+      const nav = body?.querySelector('[data-testid="general-section-nav"]');
+      if (!body || !nav) return null;
+      return {
+        gap: nav.getBoundingClientRect().top - body.getBoundingClientRect().top,
+        bg: getComputedStyle(nav).backgroundColor
+      };
+    });
+
+    // gap > 0 即代表 nav 上方存在一条滚动内容可以穿过的可见带
+    expect(geo?.gap).toBeLessThanOrEqual(0.5);
+    expect(geo?.bg).not.toMatch(/transparent|rgba\([^)]*,\s*0(\.0+)?\)/);
 
     await expectNoBrowserErrors(page);
   });
