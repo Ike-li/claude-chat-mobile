@@ -125,6 +125,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 同一条「不留白」立场的第二个应用点。session id 是懒创建的（app.js FE-001：新会话懒开时
+  // entry.sessionId=null，要等 SDK 首个 init 才有），此前 #settingsSessionRow 整行 hidden，而它
+  // 上面那个「🆔 会话标识」标题没人管、永远显示——面板底部就剩一个孤儿标题，看着像渲染坏了。
+  // 用户恰恰是为了拿 id（复制去 claude --resume）才打开这块，留白时最需要知道的正是「为什么没有」。
+  test('P0-09y 会话标识：没有 session id 时就地说明，不留孤儿标题', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+
+    // 有 id 的会话：复制胶囊在，说明收起
+    await expect(page.locator('#settingsSessionRow')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#pillSessionText')).toHaveText('mock-ses');
+    await expect(page.locator('#settingsSessionHint')).toHaveClass(/hidden/);
+    await closeSettings(page);
+
+    // 新会话尚未发消息（懒创建未完成）：复制胶囊收起，但标题下面必须有说明而不是空白
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await openSessionSettings(page);
+    await expect(page.locator('#settingsSessionRow')).toHaveClass(/hidden/);
+    await expect(page.locator('#settingsSessionHint')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#settingsSessionHint')).toContainText('第一条消息');
+    // 说明必须真的可见（不是被别的规则压在 0 高度里），否则等于没修
+    await expect(page.locator('#settingsSessionHint')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09b 设置选择会随下一条消息发送并可见回显', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

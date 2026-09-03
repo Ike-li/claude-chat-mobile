@@ -294,6 +294,17 @@ export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) 
   return !shouldShowStartScreen({ viewingInstanceId, sessionId });
 }
 
+// 会话设置底部「🆔 会话标识」块：session id 是懒创建的（新会话懒开时 entry.sessionId=null，
+// 要等 SDK 首个 init 事件才有），此前那行整条隐藏，只剩标题孤零零挂着——凭空少一栏，用户只会
+// 以为界面坏了（与 effort 不支持时的处理同一条立场）。故不留白：没有 id 就就地说清为什么没有。
+// 文案只描述机制、不断言用户做没做——「首条已发出、init 尚未回 session_id」的短窗里，说
+// 「你还没发消息」是假话；说「发出第一条消息后由 CLI 创建」在三种空态下都为真。
+export function sessionIdBlockView(sessionId) {
+  const sid = typeof sessionId === 'string' ? sessionId.trim() : '';
+  if (sid) return { showRow: true, hint: null };
+  return { showRow: false, hint: t('发出第一条消息后，CLI 才会创建会话并分配 ID。') };
+}
+
 // 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。
 // 状态行仍可由接线层带延迟数字，不依赖芯片可见。
 export function shouldShowRttChip(ms) {

@@ -184,6 +184,9 @@ export const EN_DICT = Object.freeze({
   '这台手机': 'This phone',
   '这台电脑': 'This computer',
   '会话标识': 'Session ID',
+  // 懒创建期的就地说明。只讲机制、不讲用户做没做——首条已发出而 init 未回的短窗里，
+  // 「你还没发消息」是假话（见 logic/panel-state.js sessionIdBlockView）。
+  '发出第一条消息后，CLI 才会创建会话并分配 ID。': 'The CLI creates the session and assigns an ID once the first message is sent.',
   // '诊断' 已在上方（服务状态那组）收录，此处复用同一条，勿重复添加
   '访问与帮助': 'Access & help',
   // 设置分块标题：'模型' 已在下方（服务状态那组）收录，此处复用同一条。
