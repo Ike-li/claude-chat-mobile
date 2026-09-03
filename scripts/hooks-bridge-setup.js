@@ -235,15 +235,29 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// L2 探活：任何 HTTP 响应（含 401）都证明 server 在跑——刻意不带 token，安装器因此完全不需要
-// 知道 AUTH_TOKEN，也就不必去读 .env 里的密钥。
+// L2 探活：只做一次 TCP 握手确认端口有人监听，【绝不发 HTTP 请求】。安装器因此完全不需要
+// 知道 AUTH_TOKEN，也就不必去读配置里的密钥（这一点与旧的不带 token 打 /health 相同）。
+//
+// 两条理由各自都足以否决 `fetch('/health')`：
+//  ① 限速：HTTP 鉴权与 socket 握手共用同一个桶（src/server/http.js 的 createHttpAuth 与
+//     src/server/app.js 的 io.use 共享 rlStates）。一次不带 token 的请求就是一次货真价实的
+//     鉴权失败，会给来源上退避锁、连累机主浏览器的 socket 握手。scripts/service.js 的纪律 2
+//     早已写明并规避这个坑（探活只用 launchctl + 纯 TCP），这里是同一条纪律的补齐。
+//  ② 鲁棒性：HTTP 探活要求 server 的**事件循环有空**才会回响应，于是「server 在跑但正忙」
+//     （长回合、同步文件遍历等）会被误判成「server 未运行」，报告去说「跳过消费验证」。
+//     TCP 握手由内核在 listen backlog 上完成，进程忙不影响它应答，判「端口有人监听」更准。
+//
+// 判据强度与原来等价——都只能证明「这个端口有人应答」，证明不了那是我们的 server。后者由
+// 下一步的 ack 回执负责（探到了但没人消费 ⇒ serviceLevel='unconsumed'，报告会列出排查项）。
+// 用 net 而不是 `nc`：hooks 桥跨平台，而 service.js 的 `/usr/bin/nc -z -G` 是 macOS 专用写法。
 function probeServerAlive(port) {
   const result = spawnSync(process.execPath, ['-e', `
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 1000);
-    fetch('http://127.0.0.1:${port}/health', { signal: ctrl.signal })
-      .then(() => { clearTimeout(timer); process.exit(0); })
-      .catch(() => { clearTimeout(timer); process.exit(1); });
+    const net = require('node:net');
+    const socket = net.connect(${Number(port)}, '127.0.0.1');
+    socket.setTimeout(1000);
+    socket.on('connect', () => { socket.destroy(); process.exit(0); });
+    socket.on('timeout', () => { socket.destroy(); process.exit(1); });
+    socket.on('error', () => { process.exit(1); });
   `], { timeout: 3000 });
   return result.status === 0;
 }

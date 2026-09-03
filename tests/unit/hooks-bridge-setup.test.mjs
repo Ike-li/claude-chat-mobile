@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
@@ -212,4 +213,39 @@ test('verify：未安装时明确报未安装，不谎报成功', () => {
     assert.notEqual(res.status, 0);
     assert.match(res.stderr + res.stdout, /未安装/);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// L2 探活的硬约束：只做 TCP 握手，绝不向 server 发 HTTP 请求。
+//
+// 为什么这条值一个测试：HTTP 鉴权与 socket 握手【共用同一个限速桶】（src/server/http.js 的
+// createHttpAuth 与 src/server/app.js 的 io.use 共享 rlStates），所以一次不带 token 的 /health
+// 就是一次货真价实的鉴权失败——它会给 ip:127.0.0.1 上一把退避锁，把机主浏览器的 socket 握手
+// 一起拖下水；连续 8 次直接锁 15 分钟。scripts/service.js 的纪律 2 早已写明这个坑并规避
+// （探活只用 launchctl + 纯 TCP，"带 token 的 /health 只在 health 子命令里打一次"），
+// 而本安装器此前仍在 `fetch('http://127.0.0.1:<port>/health')`，是同一个坑的漏网之鱼。
+//
+// 判据用「server 端收到几个 HTTP 请求」而不是「源码里有没有 fetch」：前者是外部可观察行为，
+// 换成 got/axios/原生 http.request 照样管得住。
+test('L2 探活只做 TCP 握手，绝不向 server 发 HTTP 请求（否则撞限速桶）', async () => {
+  const home = makeHome();
+  const server = createServer((_req, res) => { res.end('should-not-be-reached'); });
+  let httpRequests = 0;
+  server.on('request', () => { httpRequests += 1; });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const res = runSetup(home, 'install', { PORT: String(port) });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(httpRequests, 0,
+      '探活发了 HTTP 请求：每一次都是一次鉴权失败，会把机主自己连同手机一起锁在门外');
+    // 「确实探到了」用 serviceLevel 判，不用 server 端的 connection 计数：TCP 握手在内核的
+    // listen backlog 上完成、探针立刻 destroy，等本进程的事件循环从 spawnSync 里回来时那条
+    // 连接早没了，'connection' 事件根本不派发（实测恒 0）——拿它当判据是在观测一个观测不到的
+    // 东西，恒红。serviceLevel 反而正是用户在报告里读到的那一行。
+    assert.notEqual(parse(res).verify.serviceLevel, 'skipped',
+      '端口明明通着，却报「server 未运行，跳过消费验证」——探活没探到');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    rmSync(home, { recursive: true, force: true });
+  }
 });
