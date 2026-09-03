@@ -105,6 +105,39 @@ function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false,
   };
 }
 
+// 升级把模板本身改了（运行时入口 server.js → app/server.js）而安装参数一个都没变的情况。
+// 这一档此前完全漏网：install 只比 vars，vars 一致就早退回 already，plist 纹丝不动。
+// 用户的实际体验是「命令说成功了，服务还是起不来」，比直接报错更难排查。
+test.describe('install —— 模板升级后盘上那份过期了', () => {
+  // 旧模板渲染的形态：ProgramArguments 里还写着仓库根的 server.js
+  const STALE_SERVER_OBJ = {
+    ...HANDWRITTEN_OBJ,
+    ProgramArguments: ['/bin/zsh', '-lc', `cd "${REPO}" && exec "${NODE}" server.js`],
+  };
+
+  test('vars 没变但 plist 是旧模板渲染的 → 不得回「已是目标状态」，要指出重装路径', () => {
+    const h = setup();
+    const first = h.mgr.install('server');
+    assert.equal(first.ok, true, '前置：先正常装一次');
+
+    // 模拟升级：仓库里的模板已经变了，而 ~/Library/LaunchAgents 里那份还是旧的
+    h.plists[SERVER_PLIST] = STALE_SERVER_OBJ;
+
+    const r = h.mgr.install('server');
+    assert.notEqual(r.action, 'already', '报「已是目标状态」= 用户跑了命令、看到成功、问题依旧');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /uninstall/, '要给出唯一的出路，而不只是说不行');
+  });
+
+  test('plist 与当前模板语义等价时仍走原来的 already 早退（不制造假报错）', () => {
+    const h = setup();
+    h.mgr.install('server');
+    const r = h.mgr.install('server');
+    assert.equal(r.ok, true);
+    assert.equal(r.action, 'already');
+  });
+});
+
 test.describe('install —— 全新安装', () => {
   test('渲染 plist 落盘 + 写 manifest + bootstrap，三步都做', () => {
     const { mgr, fs, calls, manifestNow } = setup();

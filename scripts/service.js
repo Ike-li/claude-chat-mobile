@@ -437,6 +437,29 @@ export function createServiceManager(deps = {}) {
             + `node scripts/service.js uninstall ${unit} --yes`,
         };
       }
+      // vars 一致 ≠ 盘上那份就是当前模板渲染的：**模板自身**可能在升级里变了（2026-09-03
+      // 运行时入口从 server.js 挪到 app/server.js 就是这样），那时 vars 一个都没变，而
+      // ~/Library/LaunchAgents 里那份是安装时渲染的、不会跟着更新，服务直接起不来。
+      // 不比对内容的话这里会回「已是目标状态」——用户跑了命令、看到成功、问题依旧，
+      // 比直接报错更难排查。上面那段注释记的 2026-08-18 死循环只补了「vars 变了」这一维。
+      // 同款风格：不就地改写正在跑的 unit（要连带 bootout + bootstrap，风险面大于收益），
+      // 只报错 + 指出唯一的出路。
+      // driftOf 在「plist 读不出来」时返回 ['shape']——那是给 status 的保守默认（宁可说不接管）。
+      // 这里不能照单全收：读不出来是 plutil 解析失败，不是模板过期，据此拦住 install 会把
+      // 「plutil 抽风」升级成「装不上」。只在真解析出内容时才判定。
+      const stalePlist = readPlistFile(plistPath) ? driftOf(unit, plistPath) : [];
+      if (stalePlist.length) {
+        return {
+          ok: false,
+          unit,
+          label,
+          plistPath,
+          error: `${label} 已安装，但盘上那份与当前模板不一致（${stalePlist.join(' / ')}）——`
+            + '多半是升级后没重装。先卸载再装：'
+            + `node scripts/service.js uninstall ${unit} --yes`,
+        };
+      }
+
       // 别急着说 already：bootstrap 可能上次失败了（macOS 的 "Load failed: 5" 很常见），
       // 那时 plist 与 manifest 都在盘上、launchd 却不认识这个 unit。早前这里无条件早退，
       // 用户就困在死路里 —— install 说「已是目标状态」+ exit 0，start 却报 Could not find service，
@@ -882,9 +905,18 @@ export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistEx
   if (restarts?.flapping) parts.push(`1 小时内重启 ${restarts.lastHour} 次`);
   else if (restarts?.last24h > 0) parts.push(`24 小时内重启 ${restarts.last24h} 次`);
   else if (lastExitAbnormal && state === 'running') parts.push('上次非正常退出（已重新拉起）');
-  // shape 漂移不等于故障：机主的隧道用的是自写包装脚本（/bin/bash ~/.cloudflared/xxx.sh，
-  // 多半为绕过代理 TUN 劫持），那是有意的配置。文案要说清「不接管」而不是暗示出错。
-  if (drift.includes('shape')) parts.push('自定义启动方式，本工具不接管（只可查看与启停）');
+  // shape 漂移有两个来源，措辞必须分开，否则会把因果说反：
+  //   · foreign（manifest 里没有）—— 用户自己写的启动方式（机主的隧道就是 /bin/bash
+  //     ~/.cloudflared/xxx.sh，多半为绕过代理 TUN 劫持）。说「不接管」，不暗示出错。
+  //   · managed（manifest 里有 ⇒ 这份 plist 是本工具渲染的）—— 用户什么都没改，是**产品自己
+  //     升级后模板变了**，而已经落到 ~/Library/LaunchAgents 的那份不会跟着更新。
+  //     2026-09-03 实证：运行时入口从 server.js 挪到 app/server.js 后，机主的 server unit
+  //     直接起不来，而这里却告诉他「自定义启动方式」——他没有自定义过任何东西。
+  if (drift.includes('shape')) {
+    parts.push(ownership === 'managed'
+      ? '启动方式与当前模板不一致：本工具装的，但盘上这份是旧模板渲染的（升级后没重装）——先 uninstall 再 install'
+      : '自定义启动方式，本工具不接管（只可查看与启停）');
+  }
   else if (drift.length) parts.push(`配置与模板不一致：${drift.join('、')}`);
   if (ownership === 'foreign' && !drift.includes('shape')) parts.push('手工装的，adopt 前不会被改写');
   if (state === 'crashed') parts.push('上次异常退出且当前未运行');

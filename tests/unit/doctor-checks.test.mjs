@@ -724,6 +724,20 @@ test.describe('serviceUnitsDiagnostic', () => {
     assert.equal(r.status, 'ok');
   });
 
+  // 上面那条的对偶：managed 的 shape 漂移不是"有意配置"，是产品自己升级后模板变了、
+  // 而已经渲染到用户机器上的那份没跟着更新（2026-09-03 运行时入口 server.js → app/server.js）。
+  // 本文件 517 行的注释一直写的是"foreign unit 不算问题"，实现却漏了 ownership 这一维、
+  // 把两者一起过滤掉——于是这类故障 doctor 只报得出 crashed，说不出为什么。
+  test('shape 漂移的 managed unit 要计入问题（那是升级后没重装，不是用户自定义）', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ ownership: 'managed', state: 'running', drift: ['shape'] })],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /模板/, '要说清是模板变了');
+    assert.match(r.detail, /重装|uninstall/, '要给出出路');
+  });
+
   test('detail 里绝不出现 plist 绝对路径（脱敏纪律）', () => {
     const r = serviceUnitsDiagnostic({
       platform: 'darwin', supported: true,

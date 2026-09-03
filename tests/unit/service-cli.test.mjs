@@ -603,6 +603,23 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
     assert.doesNotMatch(d, /1 小时内/);
   });
 
+  // 升级把模板改了（如运行时入口从 server.js 挪到 app/server.js），已经渲染到用户机器上的那份
+  // plist 不会跟着变 → extractUnitFacts 提不出 repo/node → diffUnitSemantics 报 shape。
+  // 这时说「自定义启动方式」是把因果说反了：用户什么都没改，是产品自己的模板变了。
+  // ownership 是唯一能分开这两者的信号——manifest 里有记录 ⇒ 这份 plist 是我们渲染的。
+  test('managed 的 unit 报 shape 漂移 → 说「模板变了、要重装」，不得说成用户自定义', () => {
+    const d = describeUnit({ ...base, state: 'crashed', drift: ['shape'], restarts: R() });
+    assert.doesNotMatch(d, /自定义启动方式/, '这份 plist 是本工具渲染的，说「自定义」等于把升级说成用户改动');
+    assert.match(d, /模板/, '要点明是模板变了');
+    assert.match(d, /uninstall|重装|重新安装/, '要给出出路，否则用户只知道坏了不知道怎么办');
+  });
+
+  test('foreign 的 unit 报 shape 漂移 → 仍说「自定义，不接管」（机主的自写包装脚本隧道）', () => {
+    const d = describeUnit({ ...base, drift: ['shape'], ownership: 'foreign', restarts: R() });
+    assert.match(d, /自定义启动方式/);
+    assert.doesNotMatch(d, /重装/, '别劝用户重装一份本来就该由他自己管的 unit');
+  });
+
   test('单次异常退出且在跑 → 陈述事实，不下告警结论', () => {
     const d = describeUnit({ ...base, restarts: R(), lastExitAbnormal: true });
     assert.match(d, /上次非正常退出（已重新拉起）/);
@@ -613,8 +630,11 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
     assert.doesNotMatch(d, /上次非正常退出/);
   });
 
+  // 夹具此前用的是 base（ownership='managed'），与用例名说的「机主自写包装脚本」不符——
+  // 那种 unit manifest 里没有记录，是 foreign。写成 managed 等于把「本工具装的也叫自定义」
+  // 这个缺陷当契约钉住了。
   test('shape 漂移说「不接管」而不是暗示出错（机主隧道用自写包装脚本）', () => {
-    const d = describeUnit({ ...base, restarts: R(), drift: ['shape'] });
+    const d = describeUnit({ ...base, ownership: 'foreign', restarts: R(), drift: ['shape'] });
     assert.match(d, /自定义启动方式，本工具不接管/);
     assert.doesNotMatch(d, /配置与模板不一致/);
   });

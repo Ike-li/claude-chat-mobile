@@ -557,7 +557,20 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
         `${u.label} 1 小时内重启 ${Number.isFinite(n) ? n : '多'} 次（疑似崩溃重启循环）`,
         `${u.label} restarted ${Number.isFinite(n) ? n : 'several'} times in the last hour (looks like a crash loop)`));
     }
-    // shape = 用户换掉了启动方式，属有意配置，不计入问题
+    // shape 漂移分两种来源，只有 foreign 那种才是"有意配置"（头注一直这么写，实现此前漏了
+    // ownership 这一维、把两者一起滤掉）：
+    //   · foreign  = 用户自己换掉了启动方式（机主的隧道用自写包装脚本绕代理 TUN 劫持）→ 不报
+    //   · managed  = 这份 plist 是本工具渲染的，形态却对不上当前模板 ⇒ 升级后模板变了而
+    //                ~/Library/LaunchAgents 里那份没更新（2026-09-03 运行时入口 server.js →
+    //                app/server.js 就是这样），服务多半已经起不来 → 必须报，且要说得出为什么
+    if (u.drift?.includes('shape') && u.ownership === 'managed') {
+      problems.push(bi(lang,
+        `${u.label} 的启动方式与当前模板不一致——本工具装的，但盘上那份是旧模板渲染的（升级后没重装）。`
+          + '先卸载再装：node scripts/service.js uninstall <unit> --yes',
+        `${u.label} does not match the current template — this unit was installed by this tool, but the `
+          + 'file on disk was rendered from an older template (an upgrade without a reinstall). '
+          + 'Uninstall and install again: node scripts/service.js uninstall <unit> --yes'));
+    }
     const realDrift = (u.drift || []).filter((d) => d !== 'shape');
     if (realDrift.length) {
       problems.push(bi(lang,
