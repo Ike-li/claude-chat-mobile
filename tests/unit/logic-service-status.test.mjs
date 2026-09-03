@@ -197,6 +197,15 @@ test.describe('describeRateLimitSource：限速桶 key → 来源画像', () => 
     assert.equal(describeRateLimitSource(key).scope, 'local');
     assert.equal(describeRateLimitSource(key).addr, '0:0:0:0::/64');
   });
+  test('IPv4-mapped IPv6 loopback 必须先还原成 127.0.0.1，不能塌进 /64 桶', () => {
+    // BIND_HOST=:: 双栈下，IPv4 客户端的 remoteAddress 是 ::ffff:127.0.0.1。
+    // 少了还原，前 4 组 hextet 全是 0 → 落进 0:0:0:0::/64。那个桶恰好也被判 local，
+    // 所以只钉 scope === 'local' 删掉还原块后仍然全绿——必须钉还原后的字面量。
+    const key = rlSourceKey({ address: '::ffff:127.0.0.1', headers: {} });
+    assert.equal(key, 'ip:127.0.0.1');
+    assert.equal(describeRateLimitSource(key).scope, 'local');
+    assert.equal(describeRateLimitSource(key).addr, '127.0.0.1');
+  });
   test('私网 / CGNAT / Tailscale 100.64/10 / IPv6 ULA·link-local → lan', () => {
     for (const [key, addr] of [
       ['ip:192.168.1.5', '192.168.1.5'], ['ip:10.0.0.9', '10.0.0.9'],
