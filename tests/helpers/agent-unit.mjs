@@ -9,6 +9,7 @@ export function makeSession(opts = {}) {
     model: opts.model || null,
     permissionMode: opts.permissionMode || 'default',
     effort: opts.effort || null,
+    ultracode: opts.ultracode || false,
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
     instanceIdleReclaimMs: opts.instanceIdleReclaimMs,
     approvalTtlMs: opts.approvalTtlMs,

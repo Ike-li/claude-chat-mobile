@@ -14,7 +14,7 @@ import { setCapped } from '../shared/bounded-map.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
-import { normalizePermissionMode } from './cli-settings-defaults.js';
+import { normalizePermissionMode, normalizeEffortUiLevel } from './cli-settings-defaults.js';
 import { scanSubagents } from '../sessions/history.js';
 import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.js';
 
@@ -94,6 +94,7 @@ const CONTROL_TAG_SUBSYSTEM = {
   stop_task: 'interrupt',
   set_model: 'control',
   set_permission_mode: 'control',
+  apply_flag_settings: 'control',
 };
 
 // fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
@@ -434,8 +435,11 @@ export class AgentSession {
     // 当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
     // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
     this.permissionMode = permissionMode || 'default';
-    // 思考强度档（spawn 时注入 --effort），null=模型默认不传。运行时不可改——
-    // SDK 无 effort 控制请求，切档由 server 置换实例（dispose + 下条消息懒重生 resume）
+    // 思考强度档（spawn 时注入 --effort），null=模型默认不传。
+    // 【2026-09-03 实测更正】运行时可改：CLI 确无 set_effort 控制请求，但 apply_flag_settings
+    // 认 effortLevel/ultracode 且中途下发即生效——启动时的 Options.effort 不构成阻挡（CLI 里那句
+    // "launch-effort pin holds effort" 只在 /effort 斜杠命令路径上，不在 apply_flag_settings 路径）。
+    // 切档走 setEffort()，不再置换实例；唯一例外是「回模型默认档」(null)，见该方法注释 ③。
     // ultracode：CLI /effort 菜单最高档；SDK Options.effort 不认该字面量——正式路径是
     // Settings.ultracode + effort xhigh（会话级 flag，不落盘），禁止改写用户消息塞关键词。
     this.ultracode = Boolean(ultracode);
@@ -667,6 +671,8 @@ export class AgentSession {
       try {
         await this._raceControlRequest(() => this.q?.setModel(target), 'set_model');
         this.activeModel = target;
+        // 切模型会连带重置 effort（实测），补下发一次把用户选的档钉回去。见 _reassertEffort。
+        await this._reassertEffort();
       } catch (err) {
         // 区分两类失败：超时=CLI 侧可能已切也可能没切（诚实说"未确认"）；
         // 明确 reject（如 model not found）=确定没切，原模型继续。两者都不动 activeModel。
@@ -1126,6 +1132,60 @@ export class AgentSession {
   // flag（allowDangerouslySkipPermissions），那会连 default 审批一起跳过；bypass 改由 handleCanUseTool 放行。
   sdkPermissionMode() {
     return this.permissionMode === 'bypassPermissions' ? 'default' : this.permissionMode;
+  }
+
+  // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
+  // 与 logMeta() 的口径同源，差别只在这里用 null 表示「模型默认」而非 'model-default' 字面量。
+  uiEffort() {
+    return this.ultracode ? 'ultracode' : (this.effort || null);
+  }
+
+  /**
+   * 思考强度切档（与 setPermissionMode / send 的 setModel 同型：差分 + _raceControlRequest）。
+   *
+   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有三个【静默失败】边界
+   * （都返回成功、都不抛错，2026-09-03 零 token 实测），全部在本方法挡住：
+   *  ① 非法档位被 CLI 的 zod `.catch(void 0)` 静默吞掉、档位不变却回 OK
+   *     → 先 normalizeEffortUiLevel 再发，非法值根本不出门。
+   *  ② `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落
+   *     → 两个字段【始终成对】下发，不做「只发变化的那个」的优化。
+   *  ③ `{effortLevel:null}` 清不回「模型默认」：CLI 的 applied.effort 恒是具体档
+   *     （不传 --effort 启动时也是模型自身的默认档），没有「未 pin」态可回
+   *     → 这个方向不在本方法处理，返回 needsSwap 让 server 置换实例还原启动态。
+   *
+   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | null=模型默认）
+   * @returns {Promise<{ok:true}|{ok:false,needsSwap:true}|{ok:false,error:string}>}
+   */
+  async setEffort(uiLevel) {
+    const norm = normalizeEffortUiLevel(uiLevel);
+    if (!norm) return { ok: false, error: `未知思考强度档：${uiLevel}` };   // ①
+    if (norm.ui === this.uiEffort()) return { ok: true };                   // 差分：无变化不调 SDK
+    if (norm.ui === null) return { ok: false, needsSwap: true };            // ③
+    if (!this.q) return { ok: false, needsSwap: true };                     // 半开/已弃用实例：无控制通道
+    try {
+      await this._raceControlRequest(
+        () => this.q?.applyFlagSettings({ effortLevel: norm.sdk, ultracode: norm.ultracode }), // ②
+        'apply_flag_settings');
+      if (this.disposed) return { ok: false, error: '实例已关闭' };  // S3：await 间隙可能已被 dispose
+      this.effort = norm.sdk;
+      this.ultracode = norm.ultracode;
+      return { ok: true };
+    } catch (err) {
+      // 超时与明确 reject 都不改本地档位——不对前端谎报未生效的档（同 setModel 的处理）
+      return { ok: false, error: String(err?.message || err) };
+    }
+  }
+
+  // 切模型后重申思考强度。切模型会连带影响 effort（实测：切到不支持 effort 的模型，
+  // CLI 的 applied.effort 直接变 null），不补发的话用户选的档会在切模型后静默丢失。
+  // 尽力而为：档位是体验项，不该让「切模型」这一轮因为它发不出去，失败只吞不报。
+  async _reassertEffort() {
+    if (!this.effort || !this.q || this.disposed) return;
+    try {
+      await this._raceControlRequest(
+        () => this.q?.applyFlagSettings({ effortLevel: this.effort, ultracode: this.ultracode }),
+        'apply_flag_settings');
+    } catch { /* 见上：静默 */ }
   }
 
   async setPermissionMode(mode) {

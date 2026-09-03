@@ -103,9 +103,30 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 非法 | `null` | 拒切 / 回落 |
 
 | **禁止** | 把字面量 `ultracode` 塞进 `Options.effort`；靠改写用户正文注入 `ultracode` 关键词（关键词仅用户自写时保留） |
-| **允许** | 切档 dispose+resume 换实例（SDK 无 runtime setEffort） |
+| **切档路径** | 见 §2.2.1——**具体档走控制请求，只有 `null` 走 dispose+resume** |
 | **日志/chip** | UI 显 `ultracode` 时 `logMeta().effort === 'ultracode'`；SDK 实际仍是 xhigh |
 | **锚点** | `normalizeEffortUiLevel` · `AgentSession` ultracode 构造 · display-contracts · E2E P0-02e |
+
+### 2.2.1 切档路径（不对称，勿"统一"）
+
+CLI 无 `set_effort` 控制请求，但 `apply_flag_settings` 认 `effortLevel`/`ultracode`，中途下发即生效
+（启动时的 `Options.effort` 不构成阻挡——CLI 里 "launch-effort pin" 那道闸只在 `/effort` 斜杠命令路径上）。
+
+| 目标档 | 路径 | 理由 |
+|--------|------|------|
+| `low`…`max` / `ultracode` | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例 |
+| **`null`（模型默认）** | 返回 `needsSwap` → server `dispose + resume` | CLI 的 `applied.effort` **恒是具体档**（不传 `--effort` 启动时也是模型自身默认档），没有"未 pin"态可回，`effortLevel:null` 清不回去 |
+
+CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛错，全部由 `setEffort()` 挡住：
+
+| # | CLI 行为 | 防护 |
+|---|---------|------|
+| ① | 非法档位被 zod `.catch(void 0)` 吞掉，档位不变却回 OK | 先 `normalizeEffortUiLevel` 再发，非法值不出门 |
+| ② | `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落 | `effortLevel` 与 `ultracode` **始终成对**下发，禁止"只发变化的那个" |
+| ③ | `{effortLevel:null}` 清不回模型默认 | 该方向不走控制请求，返回 `needsSwap` |
+| ④ | `setModel()` 会连带重置 effort（切到不支持 effort 的模型 → `applied.effort` 变 `null`） | `send()` 里 setModel 成功后 `_reassertEffort()` 补下发 |
+
+| **锚点** | `AgentSession.setEffort` `_reassertEffort` · `app.js` `user:setEffort` · `agent-control.test.mjs` §setEffort |
 
 ### 2.3 候选列表与展示态
 

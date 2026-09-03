@@ -2456,7 +2456,11 @@ registerSocketConnection(io, socket => {
     });
   });
 
-  // 台阶3：切思考强度档。SDK 无 effort 运行时控制 → 置换实例（dispose+resume）。
+  // 台阶3：切思考强度档。
+  // 【2026-09-03 实测更正】具体档之间互切走 apply_flag_settings 控制请求，运行时生效、不置换实例
+  //（此前注释写的「SDK 无 effort 运行时控制」已不成立，见 agent.setEffort 注释）。
+  // 唯一仍需置换的方向是「回模型默认档」(level===null)：CLI 的 applied.effort 恒是具体档，
+  // 没有「未 pin」态可回，只有重开实例（不传 --effort）才能真正还原。
   // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（模型默认）。
   on(socket, 'user:setEffort', async payload => {
     const rawLevel = payload?.level ?? null;
@@ -2496,6 +2500,27 @@ registerSocketConnection(io, socket => {
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
     }
+    // 轻路径：具体档互切走控制请求。三条 SDK 静默失败边界由 agent.setEffort 统一挡住
+    //（非法值 / ultracode 不回落 / null 清不回默认），这里只负责接线与广播。
+    const light = await a.setEffort(level);
+    if (light.ok) {
+      effortByInstance.set(id, level);
+      // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
+      sessions.updateSessionPrefs(sid, { effort: sdkEffort });
+      interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level}${ultracode ? ' (Settings.ultracode)' : ''}, 运行时生效（未置换实例）`);
+      io.to('approved').emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
+        type: 'effort_mode', payload: { level }
+      });
+      broadcastInstances();
+      return;
+    }
+    if (!light.needsSwap) {
+      // 明确失败（超时 / CLI reject）：档位没动，如实拨回，不谎报成功
+      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '模型默认'}」`, true);
+      return effortTo(socket);
+    }
+    // needsSwap → 落到下面的置换实例路径（回模型默认档，或实例尚无控制通道）
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
     // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
     if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });

@@ -1130,3 +1130,146 @@ test.describe('F1 回归的孪生（result 带 uuid，走精确出槽分支）',
     s.dispose();
   });
 });
+
+// ---- setEffort()（2026-09-03）----
+// 思考强度改走 apply_flag_settings 控制请求（此前是 dispose+resume 置换实例）。
+// CLI 侧这条路有三个【静默失败】边界——都返回成功、都不抛错，只能靠这里的用例钉住：
+//   ① 非法档位被 CLI 的 zod .catch(void 0) 吞掉，档位不变却回 OK
+//   ② {ultracode:false} 只关 ultracode，effort 停在 xhigh 不回落
+//   ③ {effortLevel:null} 清不回「模型默认」（CLI 无未 pin 态）
+// 若有人把 ①②的防护「优化」掉，SDK 不会报错，只有这些用例会红。
+test.describe('setEffort()', () => {
+  const spyQ = () => {
+    const calls = [];
+    return { calls, q: { applyFlagSettings(s) { calls.push(s); return Promise.resolve(); } } };
+  };
+
+  test('① 非法档位 → 拒绝且绝不下发（SDK 会静默吞掉，防线只能在这里）', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    const { calls, q } = spyQ(); s.q = q;
+    const r = await s.setEffort('bogus');
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('未知思考强度档'));
+    assert.equal(calls.length, 0, '非法值不得出门——CLI 收到也只会静默忽略并回 OK');
+    assert.equal(s.effort, 'low', '本地档位不得被非法输入改动');
+    s.dispose();
+  });
+
+  test('差分：档位无变化 → ok 但不调 SDK', async () => {
+    const { s } = makeSession({ effort: 'high' });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.deepEqual(await s.setEffort('high'), { ok: true });
+    assert.equal(calls.length, 0);
+    s.dispose();
+  });
+
+  test('② 具体档互切 → effortLevel 与 ultracode 成对下发', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.deepEqual(await s.setEffort('xhigh'), { ok: true });
+    assert.deepEqual(calls, [{ effortLevel: 'xhigh', ultracode: false }]);
+    assert.equal(s.effort, 'xhigh');
+    assert.equal(s.ultracode, false);
+    s.dispose();
+  });
+
+  test('② ultracode → xhigh + Settings.ultracode', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.deepEqual(await s.setEffort('ultracode'), { ok: true });
+    assert.deepEqual(calls, [{ effortLevel: 'xhigh', ultracode: true }]);
+    assert.equal(s.uiEffort(), 'ultracode');
+    s.dispose();
+  });
+
+  // ②的关键回归：只发 {ultracode:false} 的话 CLI 侧 effort 会停在 xhigh 不回落，
+  // 用户从 ultracode 切到 high 会得到「UI 显示 high、实际仍 xhigh」的分叉。
+  test('② ultracode → high：必须带上 effortLevel，不能只关 ultracode', async () => {
+    const { s } = makeSession({ effort: 'xhigh', ultracode: true });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.equal(s.uiEffort(), 'ultracode');
+    assert.deepEqual(await s.setEffort('high'), { ok: true });
+    assert.deepEqual(calls, [{ effortLevel: 'high', ultracode: false }],
+      'ultracode:false 不会让 effort 回落，必须同时显式下发目标档');
+    assert.equal(s.uiEffort(), 'high');
+    s.dispose();
+  });
+
+  test('③ 回模型默认档 → needsSwap，不下发（CLI 无「未 pin」态可回）', async () => {
+    const { s } = makeSession({ effort: 'high' });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.deepEqual(await s.setEffort(null), { ok: false, needsSwap: true });
+    assert.equal(calls.length, 0, 'effortLevel:null 清不回默认，发了也只是白等一次往返');
+    assert.equal(s.effort, 'high', '未置换前本地档位不得先行改动');
+    s.dispose();
+  });
+
+  test('实例无控制通道（半开/未 start）→ needsSwap', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    s.q = null;
+    assert.deepEqual(await s.setEffort('high'), { ok: false, needsSwap: true });
+    s.dispose();
+  });
+
+  test('SDK 抛错 → ok:false 且本地档位不谎报', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    s.q = { applyFlagSettings() { return Promise.reject(new Error('boom')); } };
+    const r = await s.setEffort('high');
+    assert.equal(r.ok, false);
+    assert.equal(r.needsSwap, undefined, '明确失败不该被当成「去置换」');
+    assert.ok(r.error.includes('boom'));
+    assert.equal(s.effort, 'low', '失败后仍为原档');
+    s.dispose();
+  });
+
+  test('await 间隙被 dispose → 不写回档位（S3）', async () => {
+    const { s } = makeSession({ effort: 'low' });
+    s.q = { applyFlagSettings() { s.dispose(); return Promise.resolve(); } };
+    const r = await s.setEffort('high');
+    assert.equal(r.ok, false);
+    assert.equal(s.effort, 'low');
+  });
+});
+
+// ---- ④ 切模型后重申 effort ----
+// 实测：切到不支持 effort 的模型，CLI 的 applied.effort 直接变 null。不补发的话
+// 用户选的档会在切模型后静默丢失（UI 仍显示旧档 = 又一处 UI/实际分叉）。
+test.describe('send() 切模型后重申 effort', () => {
+  test('setModel 成功 → 补下发一次 applyFlagSettings', async () => {
+    const { s } = makeSession({ model: 'sonnet', effort: 'high' });
+    const calls = [];
+    s.q = { setModel: () => Promise.resolve(), applyFlagSettings(x) { calls.push(x); return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'opus'), true);
+    assert.deepEqual(calls, [{ effortLevel: 'high', ultracode: false }]);
+    s.dispose();
+  });
+
+  test('模型默认档（effort=null）→ 不补发（避免把 CLI 的档位钉死成某个具体值）', async () => {
+    const { s } = makeSession({ model: 'sonnet' });
+    const calls = [];
+    s.q = { setModel: () => Promise.resolve(), applyFlagSettings(x) { calls.push(x); return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'opus'), true);
+    assert.equal(calls.length, 0);
+    s.dispose();
+  });
+
+  test('重申失败 → 不影响本轮发送（档位是体验项，不该卡住发消息）', async () => {
+    const { s } = makeSession({ model: 'sonnet', effort: 'high' });
+    s.q = {
+      setModel: () => Promise.resolve(),
+      applyFlagSettings: () => Promise.reject(new Error('nope')),
+    };
+    assert.equal(await s.send('hi', 'opus'), true, '重申失败不得让 send 返回 false');
+    assert.equal(s.activeModel, 'opus');
+    s.dispose();
+  });
+
+  test('模型未变 → 不调 setModel，也不重申 effort', async () => {
+    const { s } = makeSession({ model: 'sonnet', effort: 'high' });
+    const calls = [];
+    s.q = { setModel() { throw new Error('should not call'); }, applyFlagSettings(x) { calls.push(x); return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'sonnet'), true);
+    assert.equal(calls.length, 0);
+    s.dispose();
+  });
+});
