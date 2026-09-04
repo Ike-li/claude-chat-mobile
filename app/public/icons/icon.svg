@@ -1,12 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Claude Chat Mobile</title>
-  <desc id="desc">A mobile conversation bubble containing a terminal prompt.</desc>
-  <rect width="512" height="512" rx="112" fill="#AE5238"/>
+  <desc id="desc">An original radial spark with a terminal prompt cut from its center.</desc>
+  <rect width="512" height="512" rx="112" fill="#D97757"/>
 
-  <rect x="104" y="76" width="304" height="328" rx="76" fill="#FFF7ED"/>
-  <path d="M270 386 344 450 344 370Z" fill="#FFF7ED"/>
-  <rect x="148" y="120" width="216" height="240" rx="36" fill="#AE5238"/>
+  <defs>
+    <path id="ray-long" d="M239 203 224 78Q223 65 236 59L248 61Q258 64 260 77L267 203Z"/>
+    <path id="ray-medium" d="M241 204 229 96Q228 83 240 78L251 80Q261 83 262 96L267 204Z"/>
+    <path id="ray-short" d="M242 204 233 116Q232 103 244 99L253 101Q263 104 263 117L267 204Z"/>
+  </defs>
 
-  <path d="m204 204 52 52-52 52" fill="none" stroke="#FFF7ED" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M278 308h54" fill="none" stroke="#FFF7ED" stroke-width="32" stroke-linecap="round"/>
+  <g fill="#FFF7ED">
+    <use href="#ray-long" transform="rotate(-4 256 256)"/>
+    <use href="#ray-medium" transform="rotate(27 256 256)"/>
+    <use href="#ray-long" transform="rotate(58 256 256)"/>
+    <use href="#ray-short" transform="rotate(87 256 256)"/>
+    <use href="#ray-medium" transform="rotate(116 256 256)"/>
+    <use href="#ray-short" transform="rotate(147 256 256)"/>
+    <use href="#ray-long" transform="rotate(178 256 256)"/>
+    <use href="#ray-medium" transform="rotate(209 256 256)"/>
+    <use href="#ray-long" transform="rotate(239 256 256)"/>
+    <use href="#ray-short" transform="rotate(269 256 256)"/>
+    <use href="#ray-medium" transform="rotate(300 256 256)"/>
+    <use href="#ray-short" transform="rotate(331 256 256)"/>
+    <circle cx="256" cy="256" r="92"/>
+  </g>
+
+  <path d="M211 215 253 256 211 297" fill="none" stroke="#D97757" stroke-width="31" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M280 297H327" fill="none" stroke="#D97757" stroke-width="31" stroke-linecap="round"/>
 </svg>
