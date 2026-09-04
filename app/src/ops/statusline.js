@@ -7,7 +7,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import * as diagLog from '../agent/diag-log.js';
-import { createUsageSnapshotStore, rememberUsage, fallbackUsage } from './usage-snapshot.js';
+import { createUsageSnapshotStore, rememberUsage, fallbackUsage, snapshotAgeMs, clampRateMonotonic, RATE_WINDOW_KEYS } from './usage-snapshot.js';
 
 // 状态栏 project 字段：从 cwd 取末段目录名。原 `cwd.split('/').pop()` 手写实现只认 `/`，
 // server 跑在 Windows 上时 cwd 是 `C:\...`（无 `/`），会退化成整条路径。改用 path.win32/posix
@@ -98,6 +98,57 @@ const usageSnapshotStore = createUsageSnapshotStore();
 // 共用同一份数据——三处任一路径写入的温热值，都能被另外两处拿来垫底；单测可传独立 store 隔离。
 export function getFallbackUsageRate(now, usageStore = usageSnapshotStore) {
   return fallbackUsage(usageStore, now);
+}
+
+// 同上，返回那份回落值的年龄（毫秒）。给 app.js 的 cli-unavailable 分支用——它绕开了
+// buildWebStatusLine/buildCliStatusLine 自己组装 payload，新鲜度字段得单独补上。
+export function getFallbackUsageAgeMs(now, usageStore = usageSnapshotStore) {
+  return snapshotAgeMs(usageStore, now);
+}
+
+// 额度读数超过这个年龄就在 UI 上标"非实时"。
+// 【为什么是 90s 而不是 60s】fetchUsage 的常规节流窗是 60s（USAGE_MIN_INTERVAL_MS），窗内每一拍
+// 都复用 _usageCached，所以缓存年龄天然在 [0,60s] 游走——阈值贴着窗口取会在边界反复闪。1.5 倍留出
+// 余量后，常规档【永远不该触发】这个标记：它只在数据真的卡住时才亮（例如 RPC 迟到认领后本方又
+// 一直没能重打），是个护栏而非常态提示。
+// 【为什么不无条件标】60 秒的陈旧度对按分钟变化的 5h/7d 额度毫无危害，10s 刷新下 6 拍里 5 拍是
+// 缓存，无条件标注等于把常驻噪音钉在状态栏上，反而稀释了真正该被看见的那次。
+export const RATE_STALE_AFTER_MS = 90_000;
+
+// diag key 的降级读法：既有测试 mock 多是裸对象、无 logKey 方法；缺 sessionId 时 diagLog.record
+// 内部会安全吞掉。与 recordRateReasonIfChanged 同源，避免两处各写一遍。
+function diagKeyOf(agent) {
+  return typeof agent?.logKey === 'function' ? agent.logKey() : agent?.sessionId;
+}
+
+// 单调护栏挡下一次倒退时留痕。这是【唯一】能在事后证明"额度确实倒退过、来源是哪一侧"的通道——
+// 护栏本身把症状盖住了，不留痕就等于把可观测性一起盖掉。低频（只有真倒退才写），不会刷屏。
+function noteRateClamped(diagKey, before, after, source) {
+  const detail = { source };
+  for (const key of RATE_WINDOW_KEYS) {
+    const got = before?.[key]?.usedPercent, kept = after?.[key]?.usedPercent;
+    if (got !== kept) detail[key] = { got, kept, resetsAt: after?.[key]?.resetsAt };
+  }
+  diagLog.record(diagKey, 'statusline', 'rate_clamped', detail);
+}
+
+// 额度新鲜度：三条来源（本轮实时 / 节流窗内复用的缓存 / 账号级快照回落）在 payload 里形状完全
+// 相同，用户在 UI 上无从分辨。把采样年龄作为结构化事实一并透出，判定阈值留在后端（跨前后端
+// 各存一份常量必然漂移）。sampledAt = 这份数据描述的是哪一刻的账号状态：SDK 路径是那一发 RPC
+// 的发出时刻（agent.lastUsageSampledAt），CLI 路径是 bridge 快照的 capturedAt。
+// markStale=false：只透出年龄、不下"非实时"的判定。CLI 路径用它——那条路的新鲜度已经由 bridge
+// 自己的 fresh 闸把过（selectStatusSource，30-180s），在这里再叠一个阈值等于两个闸打架：快照
+// 明明被判 fresh 却在 UI 上被标成陈值。
+function applyRateFreshness(p, { sampledAt, usageStore, markStale = true }) {
+  if (!p.rate) return;
+  const now = Date.now();
+  const age = p.rateFromSnapshot
+    ? snapshotAgeMs(usageStore, now)
+    : (Number.isFinite(sampledAt) ? now - sampledAt : null);
+  if (!Number.isFinite(age) || age < 0) return;
+  p.rateAgeMs = age;
+  // rateFromSnapshot 已有更具体的文案（"账号级旧值"），不再叠一个泛泛的 stale 标记。
+  if (markStale && !p.rateFromSnapshot && age > RATE_STALE_AFTER_MS) p.rateStale = true;
 }
 
 // ---- 上下文窗口大小：只认运行时真值，绝不按 model 名猜 ----
@@ -509,13 +560,19 @@ export async function buildWebStatusLine({
       // 只有拿到 usage 对象且 bits.rate 为空（第三方/越界）才是「明确无额度」。
       if (usage != null) {
         const bits = usageBitsForStatusLine(usage);
-        Object.assign(p, bits);
         // 写入点 A：本轮成功拿到额度 → 记进账号级快照，供下次断档时垫上（见 usage-snapshot.js）。
         if (bits.rate) {
-          rememberUsage(usageStore, bits.rate, Date.now());
+          // 单调护栏：拿温热的上一份当下界钳一道。写回 store 的必须是【钳位后】的值——存原始低值
+          // 的话，下一拍又从那个低值起步，护栏只在被倒退命中的那一拍生效，等于形同虚设。
+          const at = Date.now();
+          const clamped = clampRateMonotonic(fallbackUsage(usageStore, at), bits.rate);
+          if (clamped !== bits.rate) noteRateClamped(diagKeyOf(agent), bits.rate, clamped, 'sdk');
+          bits.rate = clamped;
+          rememberUsage(usageStore, clamped, at);
         } else {
           allowRateFallback = false; // 明确无额度：禁止垫旧值
         }
+        Object.assign(p, bits);
       }
     } catch (err) {
       // 真实 fetchUsage 不抛（内部已 try/catch 回 null）；兜住意外抛出，否则下面会把「异常」误判成「恢复」。
@@ -535,6 +592,7 @@ export async function buildWebStatusLine({
     const fallback = fallbackUsage(usageStore, Date.now());
     if (fallback) { p.rate = fallback; p.rateFromSnapshot = true; }
   }
+  applyRateFreshness(p, { sampledAt: agent?.lastUsageSampledAt, usageStore });
   // 唯一判定点，且必须在回落【之后】：此刻 p.rate 才是"用户实际看到的东西"（见 resolveRateReason）。
   if (rateAttempted) {
     const f = thrownFailure || agent.lastUsageFetchFailure;
@@ -599,8 +657,11 @@ export async function buildCliStatusLine({ snapshot, cwd, usageStore = usageSnap
   // 写入点 B：本次 fresh bridge 快照解出有效额度 → 记进账号级快照——与 SDK 路径共享同一份单例
   // （两条路径描述的是同一个 Anthropic 账号，谁刚拿到新数据都值得给对方垫底）。
   if (Object.keys(rate).length) {
-    p.rate = rate;
-    rememberUsage(usageStore, rate, Date.now());
+    const at = Date.now(); // 单调护栏，与 SDK 路径同款（理由见 buildWebStatusLine 写入点 A）
+    const clamped = clampRateMonotonic(fallbackUsage(usageStore, at), rate);
+    if (clamped !== rate) noteRateClamped(s.sessionId, rate, clamped, 'cli');
+    p.rate = clamped;
+    rememberUsage(usageStore, clamped, at);
   }
 
   if (typeof s.cliVersion === 'string' && s.cliVersion) p.version = s.cliVersion.split(/\s+/)[0];
@@ -611,5 +672,6 @@ export async function buildCliStatusLine({ snapshot, cwd, usageStore = usageSnap
     const fallback = fallbackUsage(usageStore, Date.now());
     if (fallback) { p.rate = fallback; p.rateFromSnapshot = true; }
   }
+  applyRateFreshness(p, { sampledAt: s.capturedAt, usageStore, markStale: false });
   return p;
 }

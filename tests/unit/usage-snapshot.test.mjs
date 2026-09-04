@@ -7,6 +7,8 @@ import {
   createUsageSnapshotStore,
   rememberUsage,
   fallbackUsage,
+  snapshotAgeMs,
+  clampRateMonotonic,
   USAGE_SNAPSHOT_TTL_MS,
 } from '../../app/src/ops/usage-snapshot.js';
 
@@ -110,5 +112,92 @@ test.describe('fallbackUsage：TTL 窗口内回落 / 超窗 null / 未写入 nul
   test('store=null/undefined → null（防御性，不抛）', () => {
     assert.equal(fallbackUsage(null, 1_000), null);
     assert.equal(fallbackUsage(undefined, 1_000), null);
+  });
+});
+
+test.describe('snapshotAgeMs：回落值的年龄（与 fallbackUsage 的边界严格同步）', () => {
+  const rate = { fiveHour: { usedPercent: 40 } };
+
+  test('未写入过 → null', () => {
+    assert.equal(snapshotAgeMs(createUsageSnapshotStore(), 1_000), null);
+  });
+
+  test('TTL 内 → 返回年龄毫秒数', () => {
+    const store = createUsageSnapshotStore();
+    rememberUsage(store, rate, 1_000);
+    assert.equal(snapshotAgeMs(store, 61_000), 60_000);
+  });
+
+  test('超 TTL → null，且与 fallbackUsage 同时失效（两者不得给出矛盾判断）', () => {
+    const store = createUsageSnapshotStore();
+    rememberUsage(store, rate, 1_000);
+    const past = 1_000 + USAGE_SNAPSHOT_TTL_MS + 1;
+    assert.equal(snapshotAgeMs(store, past), null);
+    assert.equal(fallbackUsage(store, past), null);
+  });
+
+  test('恰好等于 TTL → 仍温热（复用 `>` 而非 `>=` 语义）', () => {
+    const store = createUsageSnapshotStore();
+    rememberUsage(store, rate, 1_000);
+    const edge = 1_000 + USAGE_SNAPSHOT_TTL_MS;
+    assert.equal(snapshotAgeMs(store, edge), USAGE_SNAPSHOT_TTL_MS);
+    assert.ok(fallbackUsage(store, edge));
+  });
+});
+
+// 不变量：固定窗口内 utilization 只增不减。见 clampRateMonotonic 的注释。
+test.describe('clampRateMonotonic：同一 reset 窗口内额度百分比不许回退', () => {
+  const R = '2026-09-03T20:00:00Z';
+
+  test('同窗口内 next 更低 → 钳回 prev 的高位，并返回新对象（调用方可用 !== 检出）', () => {
+    const prev = { fiveHour: { usedPercent: 82, resetsAt: R } };
+    const next = { fiveHour: { usedPercent: 68, resetsAt: R } };
+    const out = clampRateMonotonic(prev, next);
+    assert.notEqual(out, next);
+    assert.equal(out.fiveHour.usedPercent, 82);
+    assert.equal(out.fiveHour.resetsAt, R);
+    assert.equal(next.fiveHour.usedPercent, 68, '纯函数：不得改入参');
+    assert.equal(prev.fiveHour.usedPercent, 82);
+  });
+
+  test('同窗口内 next 更高（正常增长）→ 原样返回 next 引用', () => {
+    const next = { fiveHour: { usedPercent: 90, resetsAt: R } };
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: 82, resetsAt: R } }, next), next);
+  });
+
+  test('resetsAt 变了 = 窗口已重置 → 放行下降（否则额度栏再也归不了零）', () => {
+    const next = { fiveHour: { usedPercent: 3, resetsAt: '2026-09-04T01:00:00Z' } };
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: 82, resetsAt: R } }, next), next);
+    assert.equal(next.fiveHour.usedPercent, 3);
+  });
+
+  test('任一侧 resetsAt 缺失 → 无法证明同窗口，放行（宁可漏挡，不可钉死）', () => {
+    const a = { fiveHour: { usedPercent: 20 } };
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: 82, resetsAt: R } }, a), a);
+    const b = { fiveHour: { usedPercent: 20, resetsAt: R } };
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: 82 } }, b), b);
+  });
+
+  test('两个窗口各自独立判断：5h 钳、7d 放行', () => {
+    const R7 = '2026-09-10T20:00:00Z';
+    const out = clampRateMonotonic(
+      { fiveHour: { usedPercent: 82, resetsAt: R }, sevenDay: { usedPercent: 20, resetsAt: R7 } },
+      { fiveHour: { usedPercent: 68, resetsAt: R }, sevenDay: { usedPercent: 21, resetsAt: R7 } },
+    );
+    assert.equal(out.fiveHour.usedPercent, 82);
+    assert.equal(out.sevenDay.usedPercent, 21);
+  });
+
+  test('prev 缺失 / next 缺失 / 非对象 → 原样返回 next（防御性，不抛）', () => {
+    const next = { fiveHour: { usedPercent: 5, resetsAt: R } };
+    assert.equal(clampRateMonotonic(null, next), next);
+    assert.equal(clampRateMonotonic(undefined, next), next);
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: 9, resetsAt: R } }, null), null);
+    assert.equal(clampRateMonotonic({}, next), next);
+  });
+
+  test('usedPercent 非数字 → 不参与钳位（越界值早在 usageBitsForStatusLine 就被丢弃）', () => {
+    const next = { fiveHour: { usedPercent: 10, resetsAt: R } };
+    assert.equal(clampRateMonotonic({ fiveHour: { usedPercent: null, resetsAt: R } }, next), next);
   });
 });

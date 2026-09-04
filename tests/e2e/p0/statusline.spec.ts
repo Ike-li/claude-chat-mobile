@@ -81,6 +81,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // SDK 路径的额度陈值与"快照回落"是两件事：来源不同、文案不同。混用会把判断依据说错——
+  // 用户看到"账号级旧值"会以为这是别处垫来的数，而实际上它是本会话自己的读数只是卡住了。
+  test('P0-10g SDK 额度陈值标 (非实时) 且说得出多旧，不冒用"账号级旧值"文案', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:statusline-rate-stale');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    await expect(page.locator('#cliStatus')).toContainText('5h 82%');
+    await expect(page.locator('#cliStatus')).toContainText('(非实时)');
+    await expect(page.locator('#cliStatus')).toContainText('3 分钟前');
+    await expect(page.locator('#cliStatus')).not.toContainText('账号级旧值');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-10d CLI 镜像状态线标明唯一来源，快照不可用时不回退 SDK 陈值', async ({ page }) => {
     await gotoMock(page);
 
@@ -113,6 +127,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliStatus')).toContainText('5h 42%');
     await expect(page.locator('#cliStatus')).toContainText('7d 11%');
     await expect(page.locator('#cliStatus')).toContainText('非实时');
+    await expect(page.locator('#cliStatus')).toContainText('3 分钟前'); // 回落值必须说得出多旧（rateAgeMs=200s）
 
     // 2. 反向场景：cli-unavailable 但没有 rate 字段（本修复前的原始行为）——必须仍是干净的
     //    "CLI 状态暂不可用"，不能把上一条消息里的额度回落残留下来（防止本次改动引入"清空不彻底"的新 bug）。

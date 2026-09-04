@@ -34,3 +34,47 @@ export function fallbackUsage(store, now, ttl = USAGE_SNAPSHOT_TTL_MS) {
   if (now - store.at > ttl) return null;
   return store.rate;
 }
+
+// 快照年龄（毫秒）。超 TTL 或从未写入 → null，与 fallbackUsage 的取舍边界严格一致：
+// 那个函数返回值时这个函数必返回数字，反之亦然，两者不会给出互相矛盾的判断。
+// 用途是让 statusline 把"这份额度是多久前采的"作为结构化事实透给前端（p.rateAgeMs），
+// 而不是只丢一个二元的"非实时"——15 分钟窗口里第 1 分钟和第 14 分钟的可信度差着数量级。
+export function snapshotAgeMs(store, now, ttl = USAGE_SNAPSHOT_TTL_MS) {
+  if (!store?.rate) return null;
+  const age = now - store.at;
+  return age > ttl ? null : age;
+}
+
+// 额度窗口的两个 key。CLI 与 SDK 两条路径解析后都归一到这个形状（见 statusline.js 的
+// usageBitsForStatusLine / buildCliStatusLine），故钳位函数只认这两个。
+export const RATE_WINDOW_KEYS = ['fiveHour', 'sevenDay'];
+
+// ---- 单调性护栏 ----
+// 【不变量】固定窗口内 utilization 只增不减：5h/7d 都带明确的 resets_at，用量在窗口内累加、
+// 到点归零重来，中途绝不下降。所以"同一个 resetsAt 上百分比变小了"这件事本身就是错的——
+// 无论错在 CCM 自己（旧发迟到覆盖新值）、CLI 侧（响应头缓存回退）还是服务端（多副本聚合
+// 短时不一致），呈现给用户的都是"额度好像变多了"这个方向的谎，而那正是最危险的方向：
+// 用户会据此以为还能接着跑。钳位统一挡在展示层，与真因无关，是这三种可能的公共下界。
+//
+// 【故意不钳的两种情况】
+//  · resetsAt 任一侧缺失或两侧不相等 → 无法证明是同一个窗口，一律放行。宁可漏挡一次，
+//    也不能在窗口真的重置后把上一窗的高位百分比永久钉死（那会让额度栏再也归不了零）。
+//  · prev 已超 TTL → 调用方拿到的 prev 本就是 null（见 fallbackUsage），自然不参与钳位。
+//
+// 【已知代价，显式接受】若额度真的会因退款/统计修正而下降，这里会把它按住，直到窗口重置或
+// prev 过期（≤15 分钟）。偏高比偏低安全，故取这一侧。
+// 纯函数：不改入参；没发生钳位时【原样返回 next 引用】，调用方可用 `!==` 判断这一拍是否挡下过倒退。
+export function clampRateMonotonic(prev, next) {
+  if (!next || typeof next !== 'object' || !prev || typeof prev !== 'object') return next;
+  let out = null;
+  for (const key of RATE_WINDOW_KEYS) {
+    const before = prev[key], after = next[key];
+    if (!before || !after) continue;
+    if (!before.resetsAt || !after.resetsAt || before.resetsAt !== after.resetsAt) continue;
+    if (!Number.isFinite(before.usedPercent) || !Number.isFinite(after.usedPercent)) continue;
+    if (before.usedPercent <= after.usedPercent) continue;
+    if (!out) out = { ...next };
+    out[key] = { ...after, usedPercent: before.usedPercent };
+  }
+  return out || next;
+}

@@ -734,6 +734,33 @@ test.describe('fetchUsage() 在途去重（本地超时 ≠ CLI 侧请求结束�
     assert.equal(calls, 2);
     s.dispose();
   });
+  // 【复现】超龄放行（>USAGE_BACKOFF_MAX_MS）后两发并飞，旧发迟到 settle 时 _adoptUsage 无条件
+  // 覆盖 _usageCached——_clearUsageInFlight 有身份守卫，_adoptUsage 没有。后果：statusline 的
+  // 5h/7d 百分比会在同一个 reset 窗口内向下跳（真值只增不减），且因走的是"RPC 成功"路径，
+  // 不带 rateFromSnapshot 标记，用户无从分辨那是陈值。
+  test('超龄放行后旧发迟到 → 不得把陈旧额度覆盖回更新的读数', async () => {
+    const { s } = makeSession();
+    const OLD = { rate_limits: { five_hour: { utilization: 68, resets_at: 'R' } } };
+    const NEW = { rate_limits: { five_hour: { utilization: 82, resets_at: 'R' } } };
+    let calls = 0, resolveOld;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return calls === 1 ? new Promise(r => { resolveOld = r; }) : Promise.resolve(NEW);
+      },
+    };
+    assert.equal(await s.fetchUsage(10, { now: 1_000 }), null);        // 第一发本地超时，CLI 侧仍在飞
+    const fresh = await s.fetchUsage(1500, { now: 1_000 + USAGE_BACKOFF_MAX_MS + 1 }); // 超龄放行第二发
+    assert.equal(calls, 2);
+    assert.equal(fresh.rate_limits.five_hour.utilization, 82);
+    resolveOld(OLD);                                                   // 旧发带着 10 分钟前的读数迟到
+    await new Promise(r => setImmediate(r));
+    const next = await s.fetchUsage(1500, { now: 1_000 + USAGE_BACKOFF_MAX_MS + 2_000 }); // 节流窗内读缓存
+    assert.equal(next.rate_limits.five_hour.utilization, 82,
+      '旧发迟到覆盖了新值：额度百分比会在同一 reset 窗口内向下跳');
+    s.dispose();
+  });
+
 });
 
 // 【为什么在途去重之外还要退避】去重只挡得住"挂住"那一种失败：RPC 快速 reject 时它已经 settle，

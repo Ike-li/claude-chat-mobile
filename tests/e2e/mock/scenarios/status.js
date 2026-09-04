@@ -29,6 +29,30 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // SDK 路径的额度陈值（对应 statusline.js applyRateFreshness / RATE_STALE_AFTER_MS）：本轮 RPC
+      // 是"成功"的、不是快照回落，但数据采样于阈值之前。前端必须标"(非实时)"并说出多旧，而不是
+      // 冒用只属于快照回落的"账号级旧值"文案——两者来源不同，混用会把判断依据说错。
+      command: 'test:statusline-rate-stale',
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId }) => {
+        const now = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: now,
+          type: 'status_line', payload: {
+            ts: now,
+            model: 'Opus 4.8', project: 'claude-chat-mobile', cwd: '/Users/you/code/claude-chat-mobile',
+            rate: { fiveHour: { usedPercent: 82, resetsAt: new Date(now + 2 * 3600_000).toISOString() } },
+            rateAgeMs: 200_000,
+            rateStale: true,
+            source: { kind: 'sdk' },
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'statusline rate stale' },
+        });
+      }),
+    },
+    {
       command: 'test:cli-statusline-unavailable',
       run: run(async ({ io, socket, activeEpoch, viewingInstanceId }) => {
         io.emit('agent:event', {
@@ -61,6 +85,7 @@ export function createStatusScenarios(getContext) {
               sevenDay: { usedPercent: 11, resetsAt: new Date(now + 3 * 86400_000).toISOString() },
             },
             rateFromSnapshot: true,
+            rateAgeMs: 200_000, // 回落值的年龄：前端要说得出"多旧"，二元的"非实时"信息量不够
           },
         });
         socket.emit('agent:event', {

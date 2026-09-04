@@ -468,6 +468,7 @@ export const EN_DICT = Object.freeze({
   // —— statusline / CLI 侧状态 ——
   'CLI 状态暂不可用': 'CLI status unavailable',
   '(账号级旧值，非实时)': '(account-level stale value, not live)',
+  '(非实时)': '(not live)',
   'statusline · CLI 暂不可用（额度沿用旧值）': 'statusline · CLI unavailable (usage shows stale values)',
   'statusline · CLI 暂不可用': 'statusline · CLI unavailable',
   '复制状态摘要': 'Copy status summary',

@@ -4,9 +4,9 @@
 // 绝不按模型名猜窗口——猜错会把 532k/1M(53%) 显示成 532k/200k(封顶 100%)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, shouldFetchContextUsage, invalidateCtxOccupancy, clearCtxWindowCache, strongerStatusRefreshReason, statusRefreshReasonForEnvelope, CONTEXT_USAGE_INFLIGHT_MAX_MS } from '../../app/src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, RATE_STALE_AFTER_MS, shouldFetchContextUsage, invalidateCtxOccupancy, clearCtxWindowCache, strongerStatusRefreshReason, statusRefreshReasonForEnvelope, CONTEXT_USAGE_INFLIGHT_MAX_MS } from '../../app/src/ops/statusline.js';
 import { getDiagLogs } from '../../app/src/agent/diag-log.js';
-import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../app/src/ops/usage-snapshot.js';
+import { createUsageSnapshotStore, rememberUsage, USAGE_SNAPSHOT_TTL_MS } from '../../app/src/ops/usage-snapshot.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -1149,5 +1149,108 @@ test.describe('statusRefreshReasonForEnvelope：压缩边界也要立刻刷 stat
     assert.equal(statusRefreshReasonForEnvelope('system', { kind: 'compact_boundary' }), 'event');
     assert.equal(statusRefreshReasonForEnvelope('system', { message: '上下文已压缩' }), null);
     assert.equal(statusRefreshReasonForEnvelope('text_delta', {}), null);
+  });
+});
+
+// 现场：2026-09-03，web statusline 的 5h 在同一个 reset 窗口内从 82% 掉到 68%（Claude Desktop 同刻
+// 报 82%）。真因是 agent._adoptUsage 缺时序守卫、旧发迟到覆盖了新值（见 agent-control.test.mjs）。
+// 这一组守的是与真因无关的那层护栏：不管倒退来自 CCM 自己、CLI 侧还是服务端，展示层都不放行。
+test.describe('buildWebStatusLine：额度单调护栏（同一 reset 窗口内不许往下跳）', () => {
+  const R = '2026-09-03T20:00:00Z';
+  const agentWith = pct => ({
+    activeModel: 'm', lastUsage: usage(1), disposed: false,
+    sessionId: 'clamp-session',
+    fetchUsage: async () => ({
+      rate_limits_available: true,
+      rate_limits: { five_hour: { utilization: pct, resets_at: R } },
+    }),
+  });
+
+  test('上一拍 82% → 这一拍 RPC 回 68%（同窗口）：展示仍是 82%，并留下 rate_clamped 诊断', async () => {
+    const store = createUsageSnapshotStore();
+    const high = await buildWebStatusLine({ agent: agentWith(82), usageStore: store });
+    assert.equal(high.rate.fiveHour.usedPercent, 82);
+
+    const low = await buildWebStatusLine({ agent: agentWith(68), usageStore: store });
+    assert.equal(low.rate.fiveHour.usedPercent, 82, '倒退必须被挡在展示层外');
+    assert.equal(low.rateFromSnapshot, undefined, '这是钳位后的活数据，不是快照回落');
+
+    const clamped = getDiagLogs('clamp-session').filter(e => e.event === 'rate_clamped');
+    assert.equal(clamped.length, 1, '护栏盖住症状的同时必须留痕，否则可观测性一起没了');
+    assert.deepEqual(clamped[0].detail.fiveHour, { got: 68, kept: 82, resetsAt: R });
+    assert.equal(clamped[0].detail.source, 'sdk');
+  });
+
+  test('钳位后的值要写回 store：下一拍再来一次低值，仍被同一个高位挡住', async () => {
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent: agentWith(82), usageStore: store });
+    await buildWebStatusLine({ agent: agentWith(68), usageStore: store });
+    const third = await buildWebStatusLine({ agent: agentWith(68), usageStore: store });
+    assert.equal(third.rate.fiveHour.usedPercent, 82, '存原始低值会让护栏只生效一拍');
+  });
+
+  test('窗口重置（resetsAt 变了）→ 放行归零，不被上一窗的高位钉死', async () => {
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent: agentWith(82), usageStore: store });
+    const nextWindow = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 4, resets_at: '2026-09-04T01:00:00Z' } },
+      }),
+    };
+    const p = await buildWebStatusLine({ agent: nextWindow, usageStore: store });
+    assert.equal(p.rate.fiveHour.usedPercent, 4);
+  });
+
+  test('正常增长不受影响，也不写诊断', async () => {
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent: agentWith(60), usageStore: store });
+    const up = await buildWebStatusLine({ agent: { ...agentWith(75), sessionId: 'grow-session' }, usageStore: store });
+    assert.equal(up.rate.fiveHour.usedPercent, 75);
+    assert.equal(getDiagLogs('grow-session').filter(e => e.event === 'rate_clamped').length, 0);
+  });
+});
+
+test.describe('buildWebStatusLine：额度新鲜度（rateAgeMs / rateStale）', () => {
+  const mk = sampledAt => ({
+    activeModel: 'm', lastUsage: usage(1), disposed: false, lastUsageSampledAt: sampledAt,
+    fetchUsage: async () => ({
+      rate_limits_available: true,
+      rate_limits: { five_hour: { utilization: 30, resets_at: '2026-09-03T20:00:00Z' } },
+    }),
+  });
+
+  test('刚取的值 → 带 rateAgeMs，但不标 stale（常规节流窗内不该有噪音）', async () => {
+    const p = await buildWebStatusLine({ agent: mk(Date.now()), usageStore: createUsageSnapshotStore() });
+    assert.ok(p.rateAgeMs < 5_000);
+    assert.equal(p.rateStale, undefined);
+  });
+
+  test('采样时刻超过 RATE_STALE_AFTER_MS → 标 stale（数据卡住的护栏）', async () => {
+    const p = await buildWebStatusLine({
+      agent: mk(Date.now() - RATE_STALE_AFTER_MS - 10_000), usageStore: createUsageSnapshotStore(),
+    });
+    assert.equal(p.rateStale, true);
+    assert.ok(p.rateAgeMs > RATE_STALE_AFTER_MS);
+  });
+
+  test('agent 没有 lastUsageSampledAt（旧实例/mock）→ 两个字段都不出现，不造假年龄', async () => {
+    const agent = mk(undefined);
+    const p = await buildWebStatusLine({ agent, usageStore: createUsageSnapshotStore() });
+    assert.equal(p.rateAgeMs, undefined);
+    assert.equal(p.rateStale, undefined);
+  });
+
+  test('快照回落 → 年龄取自 store，且不叠 rateStale（已有更具体的"账号级旧值"文案）', async () => {
+    const store = createUsageSnapshotStore();
+    rememberUsage(store, { fiveHour: { usedPercent: 55 } }, Date.now() - 200_000);
+    const p = await buildWebStatusLine({
+      agent: { activeModel: 'm', lastUsage: usage(1), disposed: false, fetchUsage: async () => null },
+      usageStore: store,
+    });
+    assert.equal(p.rateFromSnapshot, true);
+    assert.ok(p.rateAgeMs >= 200_000);
+    assert.equal(p.rateStale, undefined);
   });
 });

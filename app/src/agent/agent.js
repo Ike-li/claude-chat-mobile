@@ -451,12 +451,15 @@ export class AgentSession {
     this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点。【唯一写者 = ops/statusline.js】——判定要看快照回落后 p.rate 的最终值，本层看不到
     this.lastUsageFetchFailure = null;     // 最近一次 fetchUsage 失败的结构化原因 {reason,message,timedOut,ms}，供 statusline 判定；本身不写日志
     this.lastUsageOkMs = null;             // 最近一次 fetchUsage 成功耗时：get_usage 在 CLI 侧含网络请求+全量 transcript 扫盘，给"超时值是否太紧"留实测依据
+    this.lastUsageSampledAt = null;        // 已认领额度的【采样时刻】= 那一发 RPC 的发出时刻（不是 settle 时刻）——额度读数描述的是请求发出那一刻的账号状态。statusline 用它算 rateAgeMs，把"节流窗内复用的缓存"与"刚取的实时值"区分开
     this._usageFetchAt = 0;                // 节流窗起点（见 USAGE_MIN_INTERVAL_MS）
     this._usageCached = null;              // 节流窗内复用的上次结果
     this._usageThirdParty = false;         // 上次 CLI 自报 rate_limits_available:false（无订阅额度）→ 降到 USAGE_THIRD_PARTY_INTERVAL_MS 档
     this._usageInFlight = null;            // 在途 RPC promise：本地超时后 CLI 侧仍在跑，未 settle 前不得再发（见 fetchUsage）
     this._usageInFlightAt = 0;             // 在途起点：给上一行的去重加年龄上限，防"一去不回"永久熄火
     this._usageFailStreak = 0;             // 连续失败次数 → 节流窗退避档位（见 usageBackoffWindow）；成功即清零
+    this._usageSeq = 0;                    // 每发 get_usage 的单调序号（发出顺序）
+    this._usageAdoptedSeq = 0;             // 已认领结果的最高序号：超龄放行后两发并飞时，旧发迟到不得覆盖新值（见 _adoptUsage）
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
     this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
@@ -1071,6 +1074,7 @@ export class AgentSession {
     // 不刷新在途起点以外的状态：在途早退不算"问过一次"，RPC 回来后按原窗口正常轮到下一次。
     this._usageFetchAt = now;
     const startedAt = Date.now();
+    const seq = ++this._usageSeq; // 发出顺序：settle 顺序可能与它相反（见 _adoptUsage 的时序守卫）
     let timer = null;
     try {
       const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET());
@@ -1083,7 +1087,7 @@ export class AgentSession {
       //    "慢但每次都健康"就会被读成"一直失败"——值被弃、failStreak 空涨，而降档判据
       //    rate_limits_available 恰恰只能从那份被弃的值里读到（死结的另一半）。
       rpc.then(
-        usage => { this._adoptUsage(usage, startedAt); this._clearUsageInFlight(rpc); },
+        usage => { this._adoptUsage(usage, startedAt, seq); this._clearUsageInFlight(rpc); },
         () => { this._clearUsageInFlight(rpc); }, // 失败侧不再 ++：本次的账已由下面的 catch 记过
       );
       // 成功路径的状态写入已由上面的 then 完成（它先于 race 注册，故 await 返回时必已跑过）。
@@ -1111,8 +1115,18 @@ export class AgentSession {
   // 覆盖 catch 分支写下的失败态、清零退避、重判鉴权档。
   // 鉴权类型双向自适应：CLI 说没有订阅额度就降档，说有就回常规档。只读 CLI 的权威自报，
   // 不做展示层判定（额度到底显不显示仍由 ops/statusline.js#resolveRateReason 决定）。
-  _adoptUsage(usage, startedAt) {
+  //
+  // ★时序守卫（seq）：认领的是"最新发出的那一发的结果"，不是"最后 settle 的那一份"。超龄放行
+  // （见 fetchUsage 的 USAGE_BACKOFF_MAX_MS 在途年龄上限）后会有两发同时在飞，旧发若后 settle，
+  // 无守卫的 last-write-wins 就把十多分钟前的额度写回 _usageCached，statusline 随即在同一个
+  // reset 窗口内把 5h/7d 百分比往【下】跳（真值只增不减），且走的是 RPC 成功路径、不带
+  // rateFromSnapshot 标记，用户无从分辨那是陈值。_clearUsageInFlight 原有的身份守卫只护住了
+  // 在途标记，护不到数据本身——这里补上数据侧的那一半。
+  _adoptUsage(usage, startedAt, seq = this._usageSeq) {
+    if (seq < this._usageAdoptedSeq) return; // 旧发迟到：整份丢弃（含失败态清零/鉴权档重判），不留半份陈状态
+    this._usageAdoptedSeq = seq;
     this.lastUsageFetchFailure = null;
+    this.lastUsageSampledAt = startedAt;
     this.lastUsageOkMs = Date.now() - startedAt;
     this._usageFailStreak = 0; // 恢复即刻自愈：下一次按常规档问，不背历史失败的债
     this._usageCached = usage;

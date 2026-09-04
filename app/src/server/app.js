@@ -46,7 +46,7 @@ import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
 import { dataFile } from '../shared/data-dir.js';
 import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
 import { createServiceSampler } from '../ops/service-sampler.js';
-import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
+import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
@@ -1439,13 +1439,15 @@ async function refreshStatusLine(reason = 'event') {
         // 意味着它内部那两个回落点（写入点 B / 回落点）都摸不到：此前这一分支组装的 payload 100%
         // 没有 rate 字段——即使账号级快照里还留着最近一次温热数据。这里额外叠一层同源回落，
         // 与 buildWebStatusLine/buildCliStatusLine 共享同一账号级单例（见 statusline.js）。
-        const fallbackRate = getFallbackUsageRate(Date.now());
+        const at = Date.now();
+        const fallbackRate = getFallbackUsageRate(at);
+        const fallbackAgeMs = fallbackRate ? getFallbackUsageAgeMs(at) : null; // 新鲜度与另两条路径同源（见 statusline.js applyRateFreshness）
         payload = {
-          ts: Date.now(), cwd,
+          ts: at, cwd,
           ...(cwd ? { project: projectNameFromCwd(cwd) } : {}),
           ...(va.sessionId ? { session: { id: va.sessionId } } : {}),
           source: { kind: 'cli-unavailable', reason: selected.reason, ...(Number.isFinite(selected.ageMs) ? { ageMs: selected.ageMs } : {}) },
-          ...(fallbackRate ? { rate: fallbackRate, rateFromSnapshot: true } : {}),
+          ...(fallbackRate ? { rate: fallbackRate, rateFromSnapshot: true, ...(Number.isFinite(fallbackAgeMs) ? { rateAgeMs: fallbackAgeMs } : {}) } : {}),
         };
       }
     }

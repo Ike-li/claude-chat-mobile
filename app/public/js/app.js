@@ -2510,6 +2510,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         return segs;
       };
+      // 额度新鲜度标注：三条来源（本轮实时 / 节流窗内复用的缓存 / 账号级快照回落）在 payload 里
+      // 形状完全相同，这一段是用户唯一的分辨依据。阈值判定留在后端（statusline.js
+      // applyRateFreshness / RATE_STALE_AFTER_MS）——跨前后端各存一份常量必然漂移。
+      const rateFreshnessSeg = () => {
+        if (!p.rateFromSnapshot && !p.rateStale) return null;
+        const label = p.rateFromSnapshot ? t('(账号级旧值，非实时)') : t('(非实时)');
+        const age = Number.isFinite(p.rateAgeMs) ? ` · ${formatAgoShort(p.rateAgeMs)}` : '';
+        return { text: `${label}${age}`, cls: 'text-ink-faint' };
+      };
       const linesArr = [];
 
       if (p.source?.kind === 'cli-unavailable') {
@@ -2524,7 +2533,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 等）仍严格遵守下面 return 处的注释、绝不混入陈旧字段，此处不因为顺手展示额度而放宽。
         const staleRateSegs = (p.rate && p.rateFromSnapshot) ? buildRateSegs(p.rate) : [];
         if (staleRateSegs.length) {
-          staleRateSegs.push({ text: t('(账号级旧值，非实时)'), cls: 'text-ink-faint' });
+          const fresh = rateFreshnessSeg();
+          if (fresh) staleRateSegs.push(fresh);
           const staleRateRow = row(staleRateSegs);
           if (staleRateRow) cliStatusEl.appendChild(staleRateRow);
         }
@@ -2596,8 +2606,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // rateFromSnapshot：正常路径也必须标注"非实时"——否则 SDK/CLI 回落值会看起来像活数据
       // （code review：此前只在 cli-unavailable 分支加了 disclaimer，正常行漏标）。
       const rateSegs = buildRateSegs(p.rate);
-      if (rateSegs.length && p.rateFromSnapshot) {
-        rateSegs.push({ text: t('(账号级旧值，非实时)'), cls: 'text-ink-faint' });
+      if (rateSegs.length) {
+        const fresh = rateFreshnessSeg();
+        if (fresh) rateSegs.push(fresh);
       }
       // 行B（遥测，对齐 CLI 次行）：5h/7d │ uncached/response │ cache%+write/read
       linesArr.push(row([
