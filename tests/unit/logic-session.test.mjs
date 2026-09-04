@@ -76,6 +76,26 @@ test('resolveDrawerStatusChip: 需要你/出错仍优先；空闲与 CLI 挂着�
   assert.equal(resolveDrawerStatusChip(), null);
 });
 
+// ── 2026-09-04：terminalState='waiting'（CLI 卡在对话框上等人，含权限审批框）─────────────
+// 在这之前，等审批的终端会话在抽屉里与「终端开着但闲着」完全同形——只有一句副文本「终端已打开」。
+// 那是最需要用户注意的状态，却被归进了最不需要的那一档（根因见 session-registry.js 的 status 枚举）。
+test('resolveDrawerStatus: terminal waiting（终端等你按键）排在 busy 之前——它才是要人动手的那个', () => {
+  assert.equal(resolveDrawerStatus({ terminalState: 'waiting' }), 'terminal_waiting');
+  // Web 自己在跑 + CLI 卡在审批上：先说 CLI 那件事，跑完的会自己跑完，等人的不会
+  assert.equal(resolveDrawerStatus({ liveState: 'busy', terminalState: 'waiting' }), 'terminal_waiting');
+  assert.equal(resolveDrawerStatus({ liveState: 'idle', terminalState: 'waiting' }), 'terminal_waiting');
+  // 但 Web 自己的审批/出错仍优先：那两个在手机上点一下就能处理，终端那个得走到电脑前
+  assert.equal(resolveDrawerStatus({ liveState: 'permission', terminalState: 'waiting' }), 'permission');
+  assert.equal(resolveDrawerStatus({ liveState: 'error', terminalState: 'waiting' }), 'error');
+});
+
+test('resolveDrawerStatusChip: terminal waiting → 「终端需要你」，与 Web 侧「需要你」区分开', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'waiting' }), { status: 'terminal_waiting', label: '终端需要你' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', terminalState: 'waiting' }), { status: 'terminal_waiting', label: '终端需要你' });
+  // 措辞必须不同：Web 的「需要你」点开就能批，终端的批不了，只能去电脑上按
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'permission' }), { status: 'permission', label: '需要你' });
+});
+
 test('formatSessionRowSubtitle: CLI 空闲来源提到时间前面；busy 不再把「终端」塞进副行', () => {
   assert.equal(
     formatSessionRowSubtitle({ whenText: '8/27', liveOpen: true, shortId: 'abcdef12' }),

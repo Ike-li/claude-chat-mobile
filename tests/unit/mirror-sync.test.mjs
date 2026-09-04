@@ -360,6 +360,47 @@ test('mirrorStaleFlag：registryBusy=true 压制"疑似中断"（新鲜自报=�
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '不传 → 既有 stale 行为不变');
 });
 
+// ── 2026-09-04：registryWaiting——终端卡在对话框上等人（status:"waiting"，含权限审批框）─────
+// 与 registryBusy 刻意【不】同权：busy 是"终端在跑"可无中生有地上锁；waiting 只是"终端停下来等人"，
+// 给它同样的造锁权会让「电脑上开着 /model 对话框忘了关」把手机永久锁成只读。
+// 因此 waiting 的三项作用都限定在"轮次确实卡在中间"（尾部 pending）这个前提上：
+//   ①豁免陈旧检查（等审批可以远超 5 分钟，那不代表没人管）②维持已有的锁 ③压制"疑似中断"文案。
+test('mirrorEntryLock：registryWaiting 豁免陈旧检查但不无中生有造锁（尾部 settled 仍不锁）', () => {
+  const now = 1_800_000_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  // 核心场景：CLI 卡在审批框上超 5 分钟后手机才切进来。磁盘形态与「隔天打开的无人会话」完全同构，
+  // 唯一能区分的就是注册表——终端进程还活着，正等着人按键。漏认它 → 不预锁 → 手机可写 → 分叉。
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true }), true);
+  // 但不给它 busy 那种"无视尾部形态"的特权：轮次已收尾时开着对话框，写权仍归手机
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryWaiting: true }), false);
+  // 己方 SDK 写的 pending 尾部仍不锁（自锁防线优先级更高）
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true, tailEntrypoint: 'sdk-ts' }), false);
+  // localBusy 仍豁免
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, registryWaiting: true }), false);
+  // 不传 → 既有行为不变（陈旧 pending 照旧不锁）
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false);
+});
+
+test('mirrorReleaseStep：registryWaiting 维持已有的锁，但未锁时不造锁', () => {
+  // 已锁 + 终端在等人 → 维持、静默清零（等审批可长达 30 分钟，不能被 12.5s 静默窗解锁）
+  let r = H.mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true });
+  assert.deepEqual(r, { readonly: true, state: { readonly: true, quietTicks: 0 } });
+  // 未锁 → 不造锁（与 registryBusy 的关键差别）
+  r = H.mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryWaiting: true });
+  assert.equal(r.readonly, false);
+  // 不传 → 既有行为不变（已锁且真静默 → 照常累计 quietTicks）
+  r = H.mirrorReleaseStep({ readonly: true, quietTicks: 0 }, {});
+  assert.equal(r.state.quietTicks, 1);
+});
+
+test('mirrorStaleFlag：registryWaiting 压制"疑似中断"——等你按键不是进程死了', () => {
+  const now = 1_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true }), false);
+  // 连负证据都压不过它：cli 条目还在（正是它自报的 waiting），谈不上"曾在→消失"
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true, cliRegistryVanished: true }), false);
+});
+
 // 服务重启腰斩（2026-07-28 真机 b06fb05d）：web 自己的回合跑到一半，server 被重启，SDK 子进程随之
 // 被杀——transcript 永远停在 tool_result（形态 pending），但没有任何驾驶员还活着。重启后几十秒内打开
 // 该会话时：陈旧豁免（5 分钟）还没生效 → mirrorEntryLock 预锁；registryBusy 只认 entrypoint=cli 的

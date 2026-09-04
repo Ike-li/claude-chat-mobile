@@ -5,6 +5,12 @@
 //   ②输入维度——来自 sessions 里 status==='awaiting_input' 的项（waitingSince=awaitingSince）。
 // 边界（已知盲区，如实登记非缺陷）：纯终端会话的输入等待在后端不可见，其审批也仅在经后端拦截时才出现在
 // pendingApprovals 里——两条数据源天然只覆盖 web 后端拦截/驱动过的会话，不假装全知。
+//
+// 2026-09-04 补正：终端会话「卡在审批框上」这件事本身**现在可观测了**（CLI 进程注册表自报
+// status:"waiting"，见 session-registry.js#registryIndicatesTerminalWaiting），抽屉会话行与工作区
+// 目录角标已据此显示「终端需要你」。但它**刻意不并入这里的 needsYou 聚合**：顶栏 chip / 角标只表达
+// 「点一下就能处理」的待办，而 CLI 的审批 prompt 活在那个终端进程的 TUI 里，web 端替不了用户按键。
+// 混进来会让顶栏出现一条点开什么也做不了的待办（与「运维告警不进待办轴」同一条产品规则）。
 
 // risk 字段仅展示标签（已决：不自建风险分类，判定权完全归上游 SDK），当前无上游提供的分级来源时保持
 // undefined，不臆造分类；不参与排序（已决）。

@@ -269,6 +269,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 端 classifyTranscriptTail 查到 harness marker），而非真不知道来源的「大概率终端」——只影响横幅措辞，
   // 不影响是否只读（见 logic.js formatMirrorBannerText/formatMirrorComposerHint 的 autonomous 参数）。
   let mirrorAutonomousFlag = false;
+  // mirrorWaitingFlag=终端此刻卡在一个对话框上等人按键（含权限审批框；server 端 registry status:"waiting"）。
+  // 同 autonomous：只影响措辞不影响是否只读。此前这个状态走 driving 默认句「终端会话运行中」——终端
+  // 并没有在运行，而且提示承诺的「等终端静默后自动可写」在等审批时永远兑现不了（等审批本身就是静默）。
+  let mirrorWaitingFlag = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
   // 点输入区/附件/禁发钮时的说明节流（同文案 2.5s 内不刷屏；换 armed/stale 文案立即放行）
@@ -495,9 +499,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
   // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
   const expandedAllDirs = new Set();
-  // session:list 附带的 CLI registry 快照：每个 cwd 是否至少有一条 terminal=busy。与 Web workdirStates
-  // 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
-  const terminalBusyByDir = new Map();
+  // session:list 附带的 CLI registry 快照：每个 cwd 的终端聚合态（'waiting' | 'busy'，无则不存键）。
+  // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
+  // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
+  const terminalStateByDir = new Map();
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
   let sessionPanelRevalidateTimer = null;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
@@ -4608,9 +4613,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 抽屉主状态只保留三种 kind：需要你 / 出错 / 运行中。目录角标和顶部点用三态原文；
   // 会话行 busy 在 CLI 干活时写成「终端运行中」，来源不再塞进副行。
+  // 注意：这张表是 resolveDrawerStatus 的**渲染侧白名单**——appendSessionStatusChip 拿不到 meta
+  // 就直接 return。给纯函数加了新状态却漏了这里，chip 会静默不显示（判据全绿、界面照旧）。
   const DRAWER_STATUS_META = {
     busy: { icon: 'busy', tone: 'text-accent', label: '运行中' },
     permission: { icon: 'warn', tone: 'text-warning', label: '需要你' },
+    // 与 Web 侧 permission 同色（都是"要人动手"），文案区分谁能处理它
+    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: '终端需要你' },
     error: { icon: 'error', tone: 'text-danger', label: '出错' },
   };
   function drawerStatusMeta(state) {
@@ -4620,7 +4629,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function drawerStateForDir(cwd) {
     return resolveDrawerStatus({
       liveState: workdirStates[cwd],
-      terminalState: terminalBusyByDir.get(cwd) ? 'busy' : null,
+      terminalState: terminalStateByDir.get(cwd) ?? null,
     });
   }
   function applyBadge(badge, state) {
@@ -4752,15 +4761,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     connDotWrap.classList.toggle('hidden', !spec.visible);
     updateHeaderAttentionChip();
   }
-  function updateTerminalBusyForDir(cwd, sessions, terminalBusy) {
-    // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外 busy；旧服务端回落当前返回行。
-    const next = typeof terminalBusy === 'boolean'
-      ? terminalBusy
-      : Array.isArray(sessions) && sessions.some(s => s?.terminal === 'busy');
-    const prev = terminalBusyByDir.get(cwd) === true;
+  function updateTerminalStateForDir(cwd, sessions, terminalBusy, terminalWaiting) {
+    // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外的条目；旧服务端回落当前返回行。
+    const rowHas = state => Array.isArray(sessions) && sessions.some(s => s?.terminal === state);
+    const busy = typeof terminalBusy === 'boolean' ? terminalBusy : rowHas('busy');
+    const waiting = typeof terminalWaiting === 'boolean' ? terminalWaiting : rowHas('waiting');
+    // 等人 > 在跑：目录行只有一个角标位，卡在审批上的那个才是要用户动手的
+    const next = waiting ? 'waiting' : busy ? 'busy' : null;
+    const prev = terminalStateByDir.get(cwd) ?? null;
     if (next === prev) return;
-    if (next) terminalBusyByDir.set(cwd, true);
-    else terminalBusyByDir.delete(cwd);
+    if (next) terminalStateByDir.set(cwd, next);
+    else terminalStateByDir.delete(cwd);
     refreshDirBadges();
     updateSessionsDot();
   }
@@ -5581,7 +5592,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
               const nextHasMore = !!state?.hasMore;
               const nextTotal = Number.isFinite(state?.total) ? state.total : null;
               unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
-              updateTerminalBusyForDir(cwd, all, state?.terminalBusy);
+              updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
               sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '' });
               renderRows(all, nextHasMore, nextTotal);
             });
@@ -5661,7 +5672,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
         const readChanged = unread.hydrate(state?.readState);
-        updateTerminalBusyForDir(cwd, sessions, state?.terminalBusy);
+        updateTerminalStateForDir(cwd, sessions, state?.terminalBusy, state?.terminalWaiting);
         const prevEntry = sessionsCache.get(cwd);
         const willRerender = shouldRerenderSessionList({
           hasPrevEntry: !!prevEntry && String(prevEntry.query || '') === query,
@@ -5774,9 +5785,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function stopSessionPanelRevalidator() {
     if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
     sessionPanelRevalidateTimer = null;
-    // 抽屉不可见时不再刷新 CLI registry；与其让顶部/目录无限保留旧 busy，不如撤下这条临时信号。
-    if (terminalBusyByDir.size) {
-      terminalBusyByDir.clear();
+    // 抽屉不可见时不再刷新 CLI registry；与其让顶部/目录无限保留旧状态，不如撤下这条临时信号。
+    if (terminalStateByDir.size) {
+      terminalStateByDir.clear();
       refreshDirBadges();
       updateSessionsDot();
     }
@@ -6870,7 +6881,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: !mirrorCliSeenFlag });
+    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, waiting: mirrorWaitingFlag, isWebInitiated: !mirrorCliSeenFlag });
     maybeHintHooksBridge();
     // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
     if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
@@ -6911,7 +6922,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: !mirrorCliSeenFlag });
+    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, waiting: mirrorWaitingFlag, isWebInitiated: !mirrorCliSeenFlag });
     const now = Date.now();
     if (!shouldEmitThrottledHint({
       lastText: _mirrorComposerHintLast.text,
@@ -6930,7 +6941,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     } catch { /* scroll/classList 在极端 DOM 下可忽略 */ }
   }
 
-  function applyMirror(readonly, sessionId, stale = false, observedCli, autonomous = false) {
+  function applyMirror(readonly, sessionId, stale = false, observedCli, autonomous = false, waiting = false) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -6947,6 +6958,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     mirrorReadonlySid = effective ? sessionId : null;
     mirrorStaleFlag = effective && stale;
     mirrorAutonomousFlag = effective && autonomous;
+    mirrorWaitingFlag = effective && waiting;
     if (effective) {
       // observed CLI state 只是镜像展示层，不能写回 Web 实例偏好；未知字段也必须保持未知。
       renderCliPanelState();
@@ -6970,8 +6982,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       btnAttach.disabled = effective;
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
+      // 与横幅/composer 提示同源的三档措辞（第三处文案面，改一处必须扫这三处）
       btnAttach.title = effective
-        ? (mirrorAutonomousFlag ? t('只读镜像：本会话自主循环执行中——点右侧续接可在手机继续') : t('只读镜像：终端会话运行中——点右侧续接可在手机继续'))
+        ? (mirrorWaitingFlag ? t('只读镜像：终端正在等你操作——点右侧续接可在手机继续')
+          : mirrorAutonomousFlag ? t('只读镜像：本会话自主循环执行中——点右侧续接可在手机继续')
+            : t('只读镜像：终端会话运行中——点右侧续接可在手机继续'))
         : t('添加附件');
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
@@ -7019,7 +7034,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         return;
       }
     }
-    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, !!ev.payload?.autonomous);
+    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, !!ev.payload?.autonomous, !!ev.payload?.waiting);
   }
   // 排队续接的「强制立即续接」入口（2026-07-28 真机 b06fb05d）：用户刚亲手杀掉终端时，他比判定链
   // 更早知道终端已死——排队只承诺「最长约 5 分钟」自动判定，这里给一条不等判定的显式出口（须确认
@@ -7053,13 +7068,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!mirrorReadonlySid) return;
     if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的续接，回退只读态
       armedTakeoverSid = null;
-      // 保留 autonomous 标志，避免本地 apply 把「自主循环」文案抹成「终端会话」（C1）
-      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag);
+      // 保留 autonomous / waiting 标志，避免本地 apply 把「自主循环」「终端在等你」文案抹成「终端会话」（C1）
+      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag, mirrorWaitingFlag);
       return;
     }
     if (!mirrorStaleFlag) { // 运行中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
-      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag);
+      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag, mirrorWaitingFlag);
       const bar = addBar(t('已请求续接 CLI 会话：终端当前操作完成后自动切换；若终端已被关闭，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销'), 'text-ink-faint');
       appendForceResumeAction(bar, mirrorReadonlySid);
       return;

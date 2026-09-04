@@ -818,6 +818,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-09-04：CLI 卡在权限审批框上时，注册表自报 status:"waiting"——这条通道此前被漏认，等审批的
+  // 会话在抽屉里与「终端开着但闲着」完全同形（都只有一句副文本「终端已打开」）。
+  // 这条用例守的是**渲染层最后一米**：判据/纯函数都在单测里绿了，但 chip 还要过 DRAWER_STATUS_META
+  // 这道白名单——漏登记就静默不显示，判据全绿、界面照旧。单测碰不到这一段。
+  test('P0-11ag CLI 等审批显示「终端需要你」，与 busy/alive 三态互不同形', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-waiting');
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+
+    // 目录角标：抽屉折叠时用户只看得到这一行，等人的状态必须能穿透到这里
+    await expect(mainDir.locator('.dir-badge')).toHaveText('终端需要你');
+
+    // 会话行 chip：措辞与 Web 侧「需要你」区分开——终端那个在手机上批不了
+    const waitingRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+    await expect(waitingRow.locator('[data-session-status]')).toHaveText('终端需要你');
+    await expect(waitingRow).not.toContainText('终端运行中');
+
+    // 同屏对照：alive 仍只有副文本、无 chip。三态同形才是这次要修的缺陷本身
+    const aliveRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
+    await expect(aliveRow.locator('[data-session-status]')).toHaveCount(0);
+    await expect(aliveRow).toContainText('终端已打开');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11z 抽屉保持打开时低频刷新 CLI 运行态，无需 instances 结构变化', async ({ page }) => {
     await gotoMock(page);
 

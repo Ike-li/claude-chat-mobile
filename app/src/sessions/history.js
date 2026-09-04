@@ -371,9 +371,12 @@ export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror
 //   · registryBusy（P1，7/26 CCD 调研吸收）：~/.claude/sessions/<PID>.json 的 status:"busy" 权威自报
 //     （session-registry.js，已含 pid 验活+新鲜度）→ 比 keepAlive/tailPending 强一档：【可上锁也可维持】——
 //     它不是从磁盘形态猜的，是活着的终端进程自己说"我在跑"，堵「终端开跑但首条 text 未落盘」的上锁空窗。
+//   · registryWaiting（2026-09-04）：注册表自报终端卡在对话框上等人（含权限审批框）→ 与 keepAlive
+//     同权（维持已有的锁、不造锁）。等审批可长达 30 分钟且期间零写盘，没有它，12.5s 静默窗会在
+//     人还没走到电脑前时就解锁。刻意不给造锁权，理由见 mirrorEntryLock 处的说明。
 export function mirrorReleaseStep(state, {
   externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
-  registryBusy = false, tailEntrypoint = null,
+  registryBusy = false, registryWaiting = false, tailEntrypoint = null,
   releaseTicks = MIRROR_RELEASE_QUIET_TICKS,
 } = {}) {
   const prevReadonly = Boolean(state?.readonly);
@@ -388,7 +391,7 @@ export function mirrorReleaseStep(state, {
   // 缺了这半边会自锁：web 等一条 ExitPlanMode 审批时尾部恒 pending ⇒ 锁恒维持 ⇒ 手机只读 ⇒
   // 点不到「批准」⇒ 审批永远 pending。keepAlive/externalWrite/registryBusy 三条兜底不受影响：
   // 真有人在写盘或注册表自报在跑时，照锁不误。
-  if (keepAlive || (tailPending && !isOwnSdkTail(tailEntrypoint))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
+  if (keepAlive || registryWaiting || (tailPending && !isOwnSdkTail(tailEntrypoint))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/等人按键/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < need;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
@@ -1194,12 +1197,20 @@ const SDK_TAIL_ENTRYPOINTS = new Set(['sdk-ts']);
 // 锁就永远解不掉，手机只读、点不到「批准」、审批永远 pending，闭环自锁。
 // 判据只许有这一处；两侧证据是否对称由 tests/unit/mirror-lock-evidence.test.mjs 的自动闸守。
 function isOwnSdkTail(tailEntrypoint) { return SDK_TAIL_ENTRYPOINTS.has(tailEntrypoint); }
-export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, prevReadonly = false, tailEntrypoint = null } = {}) {
+// registryWaiting（2026-09-04）：注册表自报 status:"waiting"——终端进程活着、正卡在一个对话框上
+// 等人按键（含权限审批框，见 session-registry.js#registryIndicatesTerminalWaiting）。
+// 它只做一件事：【豁免陈旧检查】。因为等审批期间 CLI 一个字节都不写，磁盘形态与"隔天打开的无人
+// 会话"完全同构（都是尾部 pending + 主链长时间零写入），陈旧豁免会把真有人卡在那儿的会话误判成
+// 没人管 → 不预锁 → 手机可写 → 两端并发写同一 JSONL 分叉。
+// 位置在 tailVerdict/isOwnSdkTail 检查【之后】是要害：不给它 registryBusy 那种"无视尾部形态直接
+// 上锁"的特权——轮次已收尾时开着对话框（比如 /model 忘了关）不该把手机锁成只读。
+export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, registryWaiting = false, prevReadonly = false, tailEntrypoint = null } = {}) {
   if (localBusy) return false;
   if (registryBusy) return true;
   if (tailVerdict !== 'pending') return false;
   if (isOwnSdkTail(tailEntrypoint)) return false;
   if (prevReadonly) return true;
+  if (registryWaiting) return true;
   if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
   return true;
 }
@@ -1229,8 +1240,11 @@ export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastCh
 // cliRegistryVanished（2026-07-28 真机 b06fb05d 续集）：注册表负证据——cli 条目「曾在→消失」
 // （session-registry.js cliPresenceStep）说明写下 pending 尾部的终端进程已死/已退，立即判 stale，
 // 不必干等 5 分钟；registryBusy（终端关了又开新进程）是更新的活证据，仍然优先压制。
-export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false, serverStartedAt = null, cliRegistryVanished = false } = {}) {
-  if (registryBusy) return false;
+// registryWaiting（2026-09-04）：终端卡在对话框上等人 —— 进程活着，只是在等你按键，同样不是"疑似
+// 中断"。压制位置与 registryBusy 并列（都在 cliRegistryVanished 之前）：正在自报 waiting 的那条
+// cli 条目本身就证明进程还在，"曾在→消失"的负证据与它直接矛盾，此时该信活证据。
+export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false, registryWaiting = false, serverStartedAt = null, cliRegistryVanished = false } = {}) {
+  if (registryBusy || registryWaiting) return false;
   if (!readonly || !tailPending || lastChainTs == null) return false;
   if (cliRegistryVanished) return true;
   if (now - lastChainTs > MIRROR_STALE_PENDING_MS) return true;

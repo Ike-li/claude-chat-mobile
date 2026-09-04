@@ -39,7 +39,12 @@ export function armedTakeoverStep(state = {}, signal = {}) {
 // 「疑似中断」这类推断态。armed 不在抑制之列——那是用户刚点下「续接」的显式操作，任何来源都必须
 // 如实反馈（原实现用提前 return 连 armed 一起吞了，而 app.js 两个调用点又硬编码 isWebInitiated:true，
 // 导致「已请求续接」文案在生产中完全不可达，图标却照常切成 ⏳，自相矛盾）。
-export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false, isWebInitiated = false } = {}) {
+// waiting（2026-09-04）：注册表自报终端卡在对话框上等人按键（含权限审批框）。此前它走 driving 默认句，
+// 于是横幅说「终端会话运行中」——终端并没有在运行，它停下来等人了。措辞必须换掉：这不是信息不足，
+// 是说错话，而且会让用户以为"再等等就好"，而实际上不去电脑上按一下，它永远不会自己动。
+// 排在 stale 之后：生产里两者互斥（后端 mirrorStaleFlag 已被 registryWaiting 压制），但真撞上时
+// 「疑似中断」是更要紧的判断。
+export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false, waiting = false, isWebInitiated = false } = {}) {
   if (armed) return autonomous
     ? t('只读镜像：已请求续接，等待自主循环当前操作完成…')
     : t('只读镜像：已请求续接，等待终端当前操作完成…');
@@ -48,6 +53,7 @@ export function formatMirrorBannerText({ armed = false, stale = false, autonomou
   if (stale && !isWebInitiated) return autonomous
     ? t('只读镜像：自主循环疑似中断——确认已停可续接')
     : t('只读镜像：终端疑似中断——确认已停可续接');
+  if (waiting) return t('只读镜像：终端正在等你操作，移动端当前只读');
   if (autonomous) return t('只读镜像：本会话自主循环执行中，移动端当前只读');
   return t('只读镜像：终端会话运行中，移动端当前只读');
 }
@@ -55,7 +61,7 @@ export function formatMirrorBannerText({ armed = false, stale = false, autonomou
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 // isWebInitiated 语义同 formatMirrorBannerText：只抑制 stale 这类推断态，绝不抑制 armed。
-export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false, isWebInitiated = false } = {}) {
+export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false, waiting = false, isWebInitiated = false } = {}) {
   // 等待上界「最长约 5 分钟」锚定 server 端 history.js MIRROR_STALE_PENDING_MS（注册表负证据命中时
   // 秒级；这里写保守上界）——2026-07-28 真机：用户杀掉 CLI 后以为排队永远不放行，点了重启服务。
   if (armed) return autonomous
@@ -64,6 +70,10 @@ export function formatMirrorComposerHint({ armed = false, stale = false, autonom
   if (stale && !isWebInitiated) return autonomous
     ? t('只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。')
     : t('只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。');
+  // waiting 的出口与 driving 【不同】：driving 说"等静默后自动可写"，而等审批本身就是静默的——
+  // 那个承诺在这里兑现不了（CLI 会一直等到有人按键或 30 分钟 TTL 到期）。所以只给两条真出口：
+  // 去电脑上按，或者放弃它、点续接强行接管。
+  if (waiting) return t('只读镜像：终端正在等你操作（多半是一条待批准的工具调用）· 不能：打字/发图/改模型权限思考 · 处理办法：到电脑上的终端里按键回应 · 不想管它：点右侧「续接」强行接管（终端那边的操作会被放弃，有分叉风险）');
   if (autonomous) return t('只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）');
   return t('只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）');
 }

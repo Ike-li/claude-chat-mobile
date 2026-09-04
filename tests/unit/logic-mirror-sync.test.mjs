@@ -94,6 +94,31 @@ test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   });
 });
 
+// ── 2026-09-04：waiting（终端卡在对话框上等人，含权限审批框）─────────────────────────────
+// 在这之前这个状态走的是 driving 默认句，于是横幅说「终端会话运行中」——终端并没有在运行，它停下来
+// 等人按键。更糟的是 composer 提示承诺「等终端静默后自动可写」：等审批本就是静默的，用户可能盯着
+// 一个永远不会自己解开的锁干等（30 分钟 APPROVAL_TTL 之后才可能变化）。这不是信息不足，是说错话。
+test.describe('formatMirrorBannerText / Hint：waiting 态不得再说「运行中」', () => {
+  test('横幅：说明终端在等人，且不谎称在运行', () => {
+    const s = formatMirrorBannerText({ waiting: true });
+    assert.match(s, /只读镜像/);
+    assert.match(s, /等你/);
+    assert.doesNotMatch(s, /运行中/, '终端停下来等人的时候不能说它在运行');
+  });
+  test('提示：指明要去终端处理，不再承诺「等静默后自动可写」', () => {
+    const s = formatMirrorComposerHint({ waiting: true });
+    assert.match(s, /终端/);
+    assert.match(s, /等你/);
+    assert.doesNotMatch(s, /静默后自动可写/, '等审批本身就是静默，这个承诺兑现不了');
+    assert.match(s, /续接/, '出口仍要给：用户可以放弃终端那边的操作、强行接管');
+  });
+  test('armed / stale 仍优先：用户刚点的续接、以及疑似中断，都比"在等人"更该先说', () => {
+    assert.match(formatMirrorBannerText({ waiting: true, armed: true }), /已请求续接/);
+    assert.match(formatMirrorBannerText({ waiting: true, stale: true }), /疑似中断/);
+    assert.match(formatMirrorComposerHint({ waiting: true, armed: true }), /已请求续接/);
+  });
+});
+
 // 7/24 真机复现：本会话被 ScheduleWakeup/CronCreate 自主循环唤起时，尾部形态和「终端接管」在磁盘上
 // 完全同构，history.js#classifyTranscriptTail 已能算出 autonomous 字段区分两者（见 mirror-sync.test.mjs）。
 // 这里只验证文案层：autonomous=true 时三态都不该再断言"终端"，且不能因为加了这个字段就影响默认行为。

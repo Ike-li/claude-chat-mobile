@@ -13,7 +13,7 @@ import {
   catchUpStep, mirrorReleaseStep, mirrorEntryLock, mirrorStaleFlag,
   externalGrowthWhilePaused, rebaselineAbsorbedExternal, describeMirrorEntryLock,
 } from '../sessions/history.js';
-import { readSessionRegistry, registryIndicatesTerminalBusy, cliPresenceStep } from '../sessions/session-registry.js';
+import { readSessionRegistry, registryIndicatesTerminalBusy, registryIndicatesTerminalWaiting, cliPresenceStep } from '../sessions/session-registry.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import * as diagLog from '../agent/diag-log.js';
 import * as metrics from '../ops/metrics.js';
@@ -65,6 +65,10 @@ export function createMirrorEngine({
   // 「大概率终端」——前端据此挑更准确的横幅文案，不改变是否上锁（2026-07-24 真机复现：web-only 会话被
   // 自主循环唤起时尾部形态和终端接管完全同构，横幅误说「终端会话运行中」）。
   let mirrorAutonomous = false;
+  // waiting=注册表自报终端卡在对话框上等人按键（含权限审批框，registryIndicatesTerminalWaiting）。
+  // 与 autonomous 同款：不改变是否上锁，只让前端挑对文案——此前这个状态走 driving 默认句
+  // 「终端会话运行中」，而终端并没有在运行，且提示承诺的「等静默后自动可写」在等审批时兑现不了。
+  let mirrorWaiting = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorSessionId = null, mirrorInstanceId = null; // 锁/观察态的归属；切视图空窗不得把 A 的全局锁套到 B
   function normalizeMirrorObserved(observed, readonly) {
@@ -105,7 +109,7 @@ export function createMirrorEngine({
     const need = mirrorReleaseTicksNeeded(readonly);
     return Math.max(0, (need - quietTicks) * interval);
   }
-  function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = getViewingInstanceId(), reason = null, autonomous = mirrorAutonomous) {
+  function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = getViewingInstanceId(), reason = null, autonomous = mirrorAutonomous, waiting = mirrorWaiting) {
     // forInstanceId = 调用方冻结的 viewing 快照（catchUpTick 入口 id）。切视图后旧 tick 不得改全局锁——
     // 否则 A 的解锁会误解锁 B，A 的上锁会以「当下 viewing」重贴到 B（跨工作区误锁根因）。
     // force 仅给 clearMirrorOnViewChange / 接管后显式解锁：允许在 viewing 已变时推权威态。
@@ -114,6 +118,7 @@ export function createMirrorEngine({
     const nextSessionId = readonly ? (sessionId ?? null) : null;
     const nextInstanceId = readonly ? forInstanceId : null;
     const nextAutonomous = readonly ? Boolean(autonomous) : false; // 解锁态下这个字段没有意义，归零同 sessionId/instanceId
+    const nextWaiting = readonly ? Boolean(waiting) : false;        // 同上：锁都没了，"终端在等人"这个瞬时事实不该继续挂着
     const quietTicks = Number(mirrorRelease?.quietTicks) || 0;
     // 用【目标】readonly 算 remaining，勿读旧 mirrorReadonly（上锁瞬间旧值仍是 false 会算成 0）
     const remainingMs = mirrorRemainingMs({ readonly, quietTicks });
@@ -121,7 +126,7 @@ export function createMirrorEngine({
     if (!force && readonly === mirrorReadonly && stale === mirrorStale
         && nextSessionId === mirrorSessionId && nextInstanceId === mirrorInstanceId
         && sameMirrorObserved(nextObserved, mirrorObservedCli)
-        && nextAutonomous === mirrorAutonomous
+        && nextAutonomous === mirrorAutonomous && nextWaiting === mirrorWaiting
         && remainingMs === (mirrorLastEmittedRemainingMs ?? -1)) return;
     // 诊断时间线：只在真正要广播状态变化时才记（上面的早退已过滤掉稳态轮询噪音）。
     // key 优先用目标 sessionId，解锁广播（sessionId=null）时退回当前实例的 sessionId，仍找不到就诚实丢弃。
@@ -131,7 +136,7 @@ export function createMirrorEngine({
     }
     // observedCli 也参与变化判定：CLI 在同一只读轮次里 /model 或 /permissions 后，readonly/stale 不变，
     // 仍必须推一条 mirror_state；否则 Web 会永远停在旧模型/模式。
-    mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved; mirrorAutonomous = nextAutonomous;
+    mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved; mirrorAutonomous = nextAutonomous; mirrorWaiting = nextWaiting;
     mirrorSessionId = nextSessionId; mirrorInstanceId = nextInstanceId;
     mirrorLastEmittedRemainingMs = remainingMs;
     io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
@@ -142,7 +147,7 @@ export function createMirrorEngine({
       // cliSeen：本次观察期内是否见过 entrypoint=cli 的活注册表条目（cliPresenceStep 的 seen 槽）——
       // 即「确实有终端进程在/曾在驾驶」这一事实。false 时锁是靠 transcript 尾部形态【推断】出来的，
       // 前端据此决定 stale 要不要说成「终端疑似中断」：没见过终端就别断言终端，只说只读。
-      payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs, autonomous: nextAutonomous, cliSeen: mirrorCliSeen },
+      payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs, autonomous: nextAutonomous, waiting: nextWaiting, cliSeen: mirrorCliSeen },
     });
     scheduleStatusRefresh(); // 驾驶方或 CLI 观察态变化时立即切换/刷新 statusline 来源
     rescheduleCatchUp(); // 锁态变 → 追平间隔在 1s/2.5s 间切换
@@ -243,6 +248,7 @@ export function createMirrorEngine({
       // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
       const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       const registryBusy = registryIndicatesTerminalBusy(entryRegistryEntry);
+      const registryWaiting = registryIndicatesTerminalWaiting(entryRegistryEntry);
       if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
           || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
@@ -259,12 +265,14 @@ export function createMirrorEngine({
         lastChainTs: tail.lastChainTs,
         now: Date.now(),
         registryBusy,
+        registryWaiting,
         prevReadonly: entryPrevReadonly,
         // 谁写下这条 pending 尾部（磁盘自报）：sdk-ts=己方残留、不是终端驾驶 → 不预锁（见 mirrorEntryLock）
         tailEntrypoint: tail.lastChainEntrypoint,
       });
-      // 注册表证实是活终端在驾驶 → 压制 autonomous 标记（marker 启发式的"同窗口先自主循环后真终端接管"盲区）
-      const entryAutonomous = registryBusy ? false : tail.autonomous;
+      // 注册表证实是活终端在驾驶 → 压制 autonomous 标记（marker 启发式的"同窗口先自主循环后真终端接管"盲区）。
+      // waiting 同样算证实：卡在对话框上等人的也是一个活着的终端进程，不是被定时唤起的本会话。
+      const entryAutonomous = (registryBusy || registryWaiting) ? false : tail.autonomous;
       mirrorRelease = { readonly: entryLock, quietTicks: 0 };
       diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
         tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: entryAutonomous, registryBusy,
@@ -272,8 +280,8 @@ export function createMirrorEngine({
       }));
       setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
         // serverStartedAt：pending 尾部若落盘于本进程启动前 → 是被服务重启腰斩的残留，不是活驾驶员（见 mirrorStaleFlag）
-        mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: serviceStartedAt }),
-        observedCli, id, 'entry_lock', entryAutonomous);
+        mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, registryWaiting, serverStartedAt: serviceStartedAt }),
+        observedCli, id, 'entry_lock', entryAutonomous, registryWaiting);
       return;
     }
     if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
@@ -295,6 +303,7 @@ export function createMirrorEngine({
         ]);
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
+      const busyRegistryWaiting = registryIndicatesTerminalWaiting(busyRegistryEntry);
       if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
           || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
@@ -321,12 +330,15 @@ export function createMirrorEngine({
           lastChainTs: busyTail.lastChainTs,
           now: Date.now(),
           registryBusy: busyRegistryBusy,
+          registryWaiting: busyRegistryWaiting,
           serverStartedAt: serviceStartedAt, // 与切入/正常分支同口径，否则文案在两态间闪烁
           cliRegistryVanished: busyCliPresence.vanished,
         }),
         undefined,
         id,
         'busy_tail',
+        undefined,            // autonomous：本分支不重算，沿用当前值
+        busyRegistryWaiting,
       );
       return;
     }
@@ -337,6 +349,7 @@ export function createMirrorEngine({
     let observedCli;
     let registryEntry;
     let registryBusy;
+    let registryWaiting;
     try {
       const sizeP = sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1);
       const histP = getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts);
@@ -352,6 +365,7 @@ export function createMirrorEngine({
       observedCli = mergeCliObserved(await cliP, a.sessionId, a.cwd);
       registryEntry = await regP;
       registryBusy = registryIndicatesTerminalBusy(registryEntry);
+      registryWaiting = registryIndicatesTerminalWaiting(registryEntry);
     } catch {
       return; // history 失败则整 tick 放弃（与旧 try/catch return 一致）
     }
@@ -387,15 +401,15 @@ export function createMirrorEngine({
     }
     const tailPending = tail.verdict === 'pending';
     const rel = mirrorReleaseStep(mirrorRelease, {
-      externalWrite, keepAlive, tailPending, localBusy: false, registryBusy,
+      externalWrite, keepAlive, tailPending, localBusy: false, registryBusy, registryWaiting,
       tailEntrypoint: tail.lastChainEntrypoint, // 己方 SDK 写的 pending 撑不住锁（见 mirrorReleaseStep）
       releaseTicks: mirrorReleaseTicksNeeded(),
-    }); // 外部 text 写入/注册表自报 busy→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
+    }); // 外部 text 写入/注册表自报 busy→锁；文件仍在长/轮次未完结/终端等人按键→维持锁；真静默→累计、达阈值自动解锁
     mirrorRelease = rel.state;
     setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
       // serverStartedAt 必须与切入分支同口径：只在切入传会让下一 tick 把「服务重启腰斩」的 stale 覆盖回「驾驶中」文案闪烁
-      mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: serviceStartedAt, cliRegistryVanished: cliPresence.vanished }),
-      observedCli, id, 'normal_tick', registryBusy ? false : tail.autonomous);
+      mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, registryWaiting, serverStartedAt: serviceStartedAt, cliRegistryVanished: cliPresence.vanished }),
+      observedCli, id, 'normal_tick', (registryBusy || registryWaiting) ? false : tail.autonomous, registryWaiting);
   }
   let catchUpInFlight = null;
   function catchUpTick() {
@@ -452,7 +466,7 @@ export function createMirrorEngine({
     // 重连权威快照用的只读视图。注意 payload 形状与 setMirror 广播【有意不同】
     // （不含 quietTicks/remainingMs/cliSeen），是既有线上契约，勿统一。
     snapshot() {
-      return { stale: mirrorStale, observedCli: mirrorObservedCli, autonomous: mirrorAutonomous };
+      return { stale: mirrorStale, observedCli: mirrorObservedCli, autonomous: mirrorAutonomous, waiting: mirrorWaiting };
     },
   };
 }

@@ -496,6 +496,9 @@ export const EN_DICT = Object.freeze({
   '个运行中': 'running',
   '运行中': 'Running',
   '终端运行中': 'Terminal running',
+  // 「终端需要你」刻意不译成 "Needs you"（那是 Web 侧 permission 的词）：这条得走到电脑前按，
+  // 措辞要能读出"在哪儿处理"。对齐 CLI 自己 fleet 视图里的 "Needs input"。
+  '终端需要你': 'Terminal needs input',
   '已打开': 'open',
   '终端已打开': 'Terminal open',
   '子代理': 'Subagents',

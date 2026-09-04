@@ -192,6 +192,80 @@ test('切入陈旧 pending（超 5 分钟无写入）→ 不预锁：那是没�
   assert.equal(h.engine.isReadonly(), false, '陈旧豁免：隔天打开的旧会话不得误锁死手机输入');
 });
 
+// 2026-09-04：上面那条陈旧豁免有个致命的同构盲区——「CLI 卡在权限审批框上，人走开了」在磁盘上
+// 与「隔天打开的无人会话」一模一样（都是尾部 pending + 主链长时间零写入），因为等审批期间 CLI
+// 一个字节都不写。唯一能区分两者的是进程注册表：终端还活着，正卡在一个 dialog 上等人按键。
+// 而 registryIndicatesTerminalBusy 只认 busy/shell，等审批时 CLI 自报的是第四个取值 waiting
+// （二进制枚举 `["busy","shell","idle","waiting"]`，pty 实证见 session-registry.test.mjs）
+// ⇒ 这条本该最权威的通道恒假 ⇒ 切入不预锁 ⇒ 手机输入框可写 ⇒ 两端并发写同一 JSONL 分叉。
+test('切入陈旧 pending 但注册表自报 waiting（CLI 卡在审批框）→ 仍预锁，且不说成"疑似中断"', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-await');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-await', pendingTail(Date.now() - MIRROR_STALE_PENDING_MS - 60_000));
+  writeRegistry(h.roots.sessionRegistryDir, { sessionId: 'sess-await', cwd: a.cwd, entrypoint: 'cli', status: 'waiting' });
+
+  await h.engine.catchUpTick();
+
+  assert.equal(h.engine.isReadonly(), true, '注册表证实终端进程活着且持有会话 → 陈旧豁免不适用');
+  assert.equal(h.lastMirror().payload.stale, false, '等人按键不是"疑似中断"，不该出可接管文案');
+});
+
+// 锁上了还不够：横幅得说对话。此前 waiting 走 driving 默认句「终端会话运行中」——终端并没有在
+// 运行，它停下来等人了，而提示还承诺「等终端静默后自动可写」（等审批本身就是静默的，兑现不了）。
+// payload.waiting 是前端换掉那句话的唯一依据。
+test('mirror_state 透出 waiting，供前端把「终端会话运行中」换成「终端正在等你操作」', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-await2');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-await2', pendingTail(Date.now() - 5_000));
+  writeRegistry(h.roots.sessionRegistryDir, { sessionId: 'sess-await2', cwd: a.cwd, entrypoint: 'cli', status: 'waiting' });
+
+  await h.engine.catchUpTick();
+
+  assert.equal(h.lastMirror().payload.waiting, true);
+  assert.equal(h.engine.snapshot().waiting, true, '重连快照也要带上，否则刷新后横幅退回错误文案');
+});
+
+test('mirror_state：终端在跑（busy）时 waiting=false——两个状态不能同时成立', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-busy2');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busy2', pendingTail(Date.now() - 5_000));
+  writeRegistry(h.roots.sessionRegistryDir, { sessionId: 'sess-busy2', cwd: a.cwd, entrypoint: 'cli', status: 'busy' });
+
+  await h.engine.catchUpTick();
+
+  assert.equal(h.lastMirror().payload.readonly, true);
+  assert.equal(h.lastMirror().payload.waiting, false);
+});
+
+// 解锁后必须归零：waiting 是"此刻终端在等人"的瞬时事实，锁都没了还挂着它，下一条解锁广播会让
+// 前端拿着陈旧的 waiting 去挑文案（与 autonomous/sessionId 同款处理）。
+test('mirror_state：解锁时 waiting 归零', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-await3');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-await3', pendingTail(Date.now() - 5_000));
+  writeRegistry(h.roots.sessionRegistryDir, { sessionId: 'sess-await3', cwd: a.cwd, entrypoint: 'cli', status: 'waiting' });
+  await h.engine.catchUpTick();
+  assert.equal(h.lastMirror().payload.waiting, true);
+
+  h.engine.clearMirrorOnViewChange();
+
+  assert.equal(h.lastMirror().payload.readonly, false);
+  assert.equal(h.lastMirror().payload.waiting, false);
+});
+
+// 与上一条成对：waiting 不得获得 busy 那种"无视尾部形态"的造锁权。电脑上开着 /model 对话框
+// （轮次早已收尾、尾部 settled）忘了关，不该把手机永久锁成只读。
+test('切入尾部 settled + 注册表 waiting（终端只是开着对话框）→ 不预锁，写权仍归手机', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-dialog');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-dialog', settledTail(Date.now() - 3_000));
+  writeRegistry(h.roots.sessionRegistryDir, { sessionId: 'sess-dialog', cwd: a.cwd, entrypoint: 'cli', status: 'waiting' });
+
+  await h.engine.catchUpTick();
+
+  assert.equal(h.engine.isReadonly(), false, '轮次已收尾，开着对话框不构成"终端在驾驶"');
+});
+
 // ── 归属守卫：2026-07-16「跨工作区镜像锁误挂」──────────────────────────────
 
 // 打的是 catchUpTickOnce 各分支里【每个 await 之后】那道 tick 级归属守卫

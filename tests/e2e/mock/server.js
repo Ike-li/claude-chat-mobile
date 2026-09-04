@@ -93,6 +93,9 @@ let reconnectSettleMarkerArmed = false;
 // （~/.claude/sessions/<PID>.json）给 session:list 行标 terminal:'busy'|'alive'；mock 直接给两条
 // 无 live 实例的会话打上这两态，验证抽屉文字状态与来源副文本。
 let terminalBadgeArmed = false;
+// P0-11ag：第三态 terminal:'waiting'（CLI 卡在对话框上等人，含权限审批框）。与 badge 分开一个开关，
+// 是因为它要断言的恰恰是「与 busy/alive 都不同形」——共用开关就没法在同一屏里对比三态。
+let terminalWaitingArmed = false;
 // P0-11z：抽屉保持打开时，第二次 session:list 才出现 terminal=busy；期间不发 instances，
 // 验证前端低频 revalidate 能独立刷新 CLI 状态。
 let terminalRefreshArmed = false;
@@ -267,6 +270,7 @@ function resetMockState() {
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
+  terminalWaitingArmed = false;
   terminalRefreshArmed = false;
   terminalRefreshListCount = 0;
   terminalSummaryOtherArmed = false;
@@ -534,14 +538,14 @@ function mainCwdSessions() {
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 600000,
       entrypoint: 'sdk-ts',
-      ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
+      ...(terminalWaitingArmed ? { terminal: 'waiting' } : terminalBadgeArmed ? { terminal: 'busy' } : {}),
     },
     {
       id: 'mock-session-gap',
       title: 'Archived Gap Session',
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 750000,
-      ...(terminalBadgeArmed ? { terminal: 'alive' } : {}),
+      ...(terminalBadgeArmed || terminalWaitingArmed ? { terminal: 'alive' } : {}),
       entrypoint: 'sdk-ts'
     },
     {
@@ -950,6 +954,7 @@ io.on('connection', socket => {
             currentSessionId: 'mock-session-visual-test',
             sessions: matched,
             terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
+            terminalWaiting: terminalWaitingArmed,
             hasMore: false,
             total: sessions.length,
           });
@@ -966,6 +971,7 @@ io.on('connection', socket => {
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
           terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
+          terminalWaiting: terminalWaitingArmed,
           hasMore,
           total,
         });
@@ -2284,6 +2290,13 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');
         terminalBadgeArmed = true;
+      },
+    },
+    {
+      command: 'test:terminal-waiting',
+      run: async () => {
+        console.log('[mock] test:terminal-waiting — archived=waiting / gap=alive，验证第三态与 busy/alive 不同形');
+        terminalWaitingArmed = true;
       },
     },
     {

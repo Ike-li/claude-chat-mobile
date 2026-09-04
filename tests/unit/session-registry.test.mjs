@@ -7,9 +7,11 @@ import { join } from 'node:path';
 import {
   readSessionRegistry,
   registryIndicatesTerminalBusy,
+  registryIndicatesTerminalWaiting,
   listTerminalSessionStates,
   applyTerminalStatesToSessions,
   hasBusyTerminalSessionForCwd,
+  hasWaitingTerminalSessionForCwd,
   terminalStateKey,
   cliPresenceStep,
   findBlockingLiveAgent,
@@ -137,6 +139,59 @@ test('listTerminalSessionStates：目录不存在 → 空 Map（fail-open，列�
   assert.equal(map.size, 0);
 });
 
+// 2026-09-04：第三态 'waiting'。此前 status:"waiting"（终端卡在对话框上等人，含权限审批框）落进
+// else 分支被标成 'alive'，于是抽屉里「CLI 正等你批准」与「终端开着但闲着」完全同形——最需要
+// 注意的状态被归进了最不需要的那一档。
+test('listTerminalSessionStates：status:"waiting" 单列第三态，不被折进 alive', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId, extra) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, entrypoint: 'cli', ...extra }),
+  );
+  try {
+    put(1, 'sid-waiting', { status: 'waiting', waitingFor: 'permission prompt' });
+    put(2, 'sid-idle', { status: 'idle' });
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-waiting')), 'waiting');
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-idle')), 'alive', '闲着的终端仍是 alive，两者必须可区分');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// 同一会话挂多个 PID 时的优先级（7/26 实测 sdk-ts 与 cli 并存；同会话也可能有多个 cli 进程）。
+// busy > waiting > alive：在跑压过等人，等人压过闲着——信息量从高到低，绝不能被后来的低信息量条目覆盖。
+test('listTerminalSessionStates：同会话多 PID 时 busy > waiting > alive，顺序无关', async () => {
+  const dir = tempDir();
+  const put = (pid, status) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId: 'sid-multi', cwd: CWD, entrypoint: 'cli', ...(status ? { status } : {}) }),
+  );
+  try {
+    put(1, 'idle');      // 先写低优先级的，确保后来的高优先级能覆盖
+    put(2, 'waiting');
+    let map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-multi')), 'waiting', 'waiting 压过 alive');
+    put(3, 'busy');
+    map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-multi')), 'busy', 'busy 压过 waiting');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// applyTerminalStatesToSessions 是 Map → 会话行的唯一注入面，它自带一层取值白名单。
+// 只加 listTerminalSessionStates 的第三态而漏了这里，waiting 会在最后一米被静默丢掉。
+test('applyTerminalStatesToSessions：waiting 能落到会话行上（注入面白名单不得漏）', () => {
+  const states = new Map([
+    [terminalStateKey(CWD, 's1'), 'waiting'],
+    [terminalStateKey(CWD, 's2'), 'busy'],
+    [terminalStateKey(CWD, 's3'), 'alive'],
+    [terminalStateKey(CWD, 's4'), 'bogus'], // 未知取值仍要被挡掉
+  ]);
+  const rows = applyTerminalStatesToSessions(CWD, [{ id: 's1' }, { id: 's2' }, { id: 's3' }, { id: 's4' }], states);
+  assert.equal(rows[0].terminal, 'waiting');
+  assert.equal(rows[1].terminal, 'busy');
+  assert.equal(rows[2].terminal, 'alive');
+  assert.equal('terminal' in rows[3], false, '白名单外的取值不注入');
+});
+
 test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧 terminal，不污染缓存对象', () => {
   const sessions = [
     { id: 'sid-busy', title: 'Busy', terminal: 'alive' },
@@ -182,6 +237,23 @@ test('hasBusyTerminalSessionForCwd：独立于分页行判断整个 cwd 是否�
   assert.equal(hasBusyTerminalSessionForCwd('/Users/you/other', states), true);
   assert.equal(hasBusyTerminalSessionForCwd('/Users/you/none', states), false);
   assert.equal(hasBusyTerminalSessionForCwd(CWD, undefined), false);
+});
+
+// 2026-09-04：目录级同样要认 waiting——抽屉折叠时用户只看得到目录行，会话行的 chip 再准也看不见。
+// 与 busy 并列成两个布尔而不是合成一个三态：同一个 cwd 下完全可能一个会话在跑、另一个卡在审批上，
+// 三态字符串必然丢掉其中一个。
+test('hasWaitingTerminalSessionForCwd：独立于分页行判断整个 cwd 是否有终端在等人', () => {
+  const states = new Map([
+    [terminalStateKey(CWD, 'awaiting-approval'), 'waiting'],
+    [terminalStateKey(CWD, 'idle-session'), 'alive'],
+    [terminalStateKey('/Users/you/other', 'other-busy'), 'busy'],
+  ]);
+  assert.equal(hasWaitingTerminalSessionForCwd(CWD, states), true);
+  assert.equal(hasWaitingTerminalSessionForCwd('/Users/you/other', states), false, 'busy 不是 waiting');
+  assert.equal(hasWaitingTerminalSessionForCwd('/Users/you/none', states), false);
+  assert.equal(hasWaitingTerminalSessionForCwd(CWD, undefined), false);
+  // 两条判据互不吞并：跑着的那个仍要被 busy 判据看见
+  assert.equal(hasBusyTerminalSessionForCwd(CWD, states), false);
 });
 
 // 负证据（2026-07-28 真机 b06fb05d：杀掉 CLI 后 web 排队续接卡满 5 分钟）：注册表条目「曾观测到
@@ -236,6 +308,29 @@ test('registryIndicatesTerminalBusy：cli+busy → true；非 cli / idle / 空�
   assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli' }), false);
   // null 条目
   assert.equal(registryIndicatesTerminalBusy(null), false);
+});
+
+// 2026-09-04：CLI 的 status 枚举其实有【四】个取值——二进制里就写着 `["busy","shell","idle","waiting"]`。
+// 前两次补判据（只认 busy → 补 shell）都是"发现一个补一个"，没去把枚举读全，于是 waiting 一直漏着。
+// waiting 的含义是「终端停下来等人」：CLI 侧任何 dialog 打开都会写它（zHe/dRo），其中就包括权限审批框
+// ——审批框在 dialog 注册表里没有显式 waitingFor，走的是兜底字面量 `?? "permission prompt"`。
+// pty 实证（CLI 2.1.260）：打开 /model 对话框后条目变成 status:"waiting" + waitingFor:"dialog open"。
+test('registryIndicatesTerminalWaiting：cli+waiting（终端卡在对话框上等人）→ true', () => {
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli', status: 'waiting' }), true);
+  // 在跑不是在等：两个判据互斥，各自表达一件事
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli', status: 'busy' }), false);
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli', status: 'shell' }), false);
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli', status: 'idle' }), false);
+  // 非 cli / 空条目：同 busy 判据，sdk 系是 ccm 自己的实例
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'sdk-ts', status: 'waiting' }), false);
+  assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli' }), false);
+  assert.equal(registryIndicatesTerminalWaiting(null), false);
+});
+
+// 刻意【不】把 waiting 并进 busy：抽屉据 busy 显示"运行中"，而等审批的终端并没有在运行——
+// 混进去就是在说错话。两个判据分开，让上层各取所需（镜像锁两个都要，抽屉文案只认 busy）。
+test('registryIndicatesTerminalBusy：waiting 不算 busy——「等你」不是「在跑」', () => {
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'waiting' }), false);
 });
 
 // ── findBlockingLiveAgent：resume 会被 CLI 拒绝的占用者 ────────────────────────

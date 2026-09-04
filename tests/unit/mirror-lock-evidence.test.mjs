@@ -138,6 +138,7 @@ function evidenceKeysOf(fnName) {
 const DRIVER_EVIDENCE = {
   tailEntrypoint: '链尾那条记录自报的写入方（cli / sdk-ts）——2026-09-02 死锁就是出口缺了它',
   registryBusy: 'CLI 进程注册表权威自报在跑（pid 已验活）',
+  registryWaiting: 'CLI 进程注册表权威自报卡在对话框上等人（含权限审批框，pid 已验活）',
 };
 
 test('「谁在驾驶」类证据，锁的建立与释放两侧都必须看得到', () => {
@@ -159,6 +160,12 @@ const KNOWN_KEYS = {
   // 两侧都有
   localBusy: '两侧都有：己方在跑，不能把己方 turn 的形态当外部驱动',
   registryBusy: '两侧都有：注册表权威自报（DRIVER_EVIDENCE）',
+  // 两侧都收它，但作用【有意不同】——这不构成本文件要防的那种不对称：
+  //   入口：仅在尾部已 pending 时豁免陈旧检查而上锁（不像 registryBusy 那样无视尾部形态）；
+  //   出口：与 keepAlive 同权，维持已有的锁、不造锁。
+  // 于是不存在「入口不建锁、出口不释放」的自锁闭环：入口不建锁的唯一情形是尾部 settled，
+  // 那时 prevReadonly=false，出口在 `if (!prevReadonly)` 就早退了。
+  registryWaiting: '两侧都有：注册表权威自报终端等人（DRIVER_EVIDENCE）',
   tailEntrypoint: '两侧都有：链尾自报写入方（DRIVER_EVIDENCE）',
   // 仅入口——都是「切入这一刻」才有意义的量
   tailVerdict: '仅入口：与出口的 tailPending 同源，只是入口拿到的是三态 verdict 字符串',

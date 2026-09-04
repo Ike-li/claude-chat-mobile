@@ -112,11 +112,16 @@ export function resolvePanelState({ mirrorReadonly = false, observedCli, web } =
   };
 }
 
-// 工作区抽屉只显示需要用户理解/处理的三态。terminal 独立于 live 实例合并，避免 idle/done live tab
+// 工作区抽屉只显示需要用户理解/处理的四态。terminal 独立于 live 实例合并，避免 idle/done live tab
 // 遮住同会话正在运行的终端进程；done/aborted/idle 都是普通终态，不占抽屉主状态位。
+//
+// terminal_waiting（2026-09-04）：CLI 卡在对话框上等人按键（含权限审批框，registry status:"waiting"）。
+// 排在 busy 之前——「在跑」不需要人动手，「等人」需要。排在 Web 侧 permission/error 之后——那两个
+// 在手机上点一下就能处理，终端那个只能走到电脑前按，优先级理应更低。
 export function resolveDrawerStatus({ liveState, terminalState } = {}) {
   if (liveState === 'permission') return 'permission';
   if (liveState === 'error') return 'error';
+  if (terminalState === 'waiting') return 'terminal_waiting';
   if (liveState === 'busy' || terminalState === 'busy') return 'busy';
   return null;
 }
@@ -124,6 +129,9 @@ export function resolveDrawerStatus({ liveState, terminalState } = {}) {
 const DRAWER_STATUS_LABELS = {
   permission: '需要你',
   error: '出错',
+  // 措辞刻意与 Web 侧「需要你」区分：那个点开就能批，这个批不了——审批 prompt 活在 CLI 进程的
+  // TUI 里，不经过 web 后端的 canUseTool，web 端替不了你按键。说成「需要你」会给出错误的操作预期。
+  terminal_waiting: '终端需要你',
   busy: '运行中',
 };
 

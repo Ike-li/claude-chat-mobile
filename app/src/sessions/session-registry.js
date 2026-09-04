@@ -13,11 +13,23 @@ import { join, resolve } from 'node:path';
 import { claudeHome } from '../shared/claude-home.js';
 
 const DEFAULT_SESSION_REGISTRY_DIR = join(claudeHome(), 'sessions');
-// 「终端此刻在干活」的自报取值集合。7/29 pty 实证（CLI 2.1.220，四轮）：跑 Bash 命令、等后台
-// 子代理期间自报的是 "shell" 而不是 "busy"（CLI 侧 `eu==="idle" && 有 shell 活动 ? "shell" : eu`）。
+// CLI 自报 status 的【完整】取值域，抄自 CLI 2.1.260 二进制里的枚举（下面两个集合合起来该覆盖它，
+// 剩下的 idle 是明确的"不背书"档）：
+//   var Ke = ["busy","shell","idle","waiting"];  function We(e){ return Ke.includes(e) ? e : void 0 }
+// 写下全集是有代价换来的：前两次都是"发现一个补一个"（原本只认 busy，7/29 补 shell），每次都没去
+// 把枚举读全，于是 waiting 一直漏着，直到 2026-09-04 才发现（详见 registryIndicatesTerminalWaiting）。
+// 白名单判据在上游枚举扩张时是【静默】失效的——多出来的取值不报错，只让判定恒假。CLI 升级后若又
+// 多出取值，先回二进制搜 `var Ke=[` 核对这一行，别再靠撞见症状去补。
+//
+// 「终端此刻在干活」。7/29 pty 实证（CLI 2.1.220，四轮）：跑 Bash 命令、等后台子代理期间自报的是
+// "shell" 而不是 "busy"（CLI 侧 `eu==="idle" && 有 shell 活动 ? "shell" : eu`）。
 // 原先只认 "busy" → 整段长命令/后台子代理窗口这条通道恒假，而那恰是主链零增长、尾部又已 settled
 // 的窗口（四判据同时失效 → 手机侧误判可写）。收尾时 CLI 会主动写 idle，那才是解锁的正路。
 const TERMINAL_BUSY_STATUSES = new Set(['busy', 'shell']);
+// 「终端停下来等人」。与 busy 分开是刻意的：抽屉据 busy 显示"运行中"，把等审批说成运行中就是在
+// 说错话；而镜像锁两者都要（都意味着终端进程持有这个会话）。CLI 自己也是这么分的——它的 fleet
+// 视图把 busy/shell 归 "live"、waiting 归 "needs"。
+const TERMINAL_WAITING_STATUSES = new Set(['waiting']);
 // 实测条目 ~300 字节；16KB 已是量级余量，超出视为异常文件跳过。
 const MAX_REGISTRY_FILE_BYTES = 16 * 1024;
 
@@ -147,8 +159,12 @@ export function terminalStateKey(cwd, sessionId) {
   return `${resolve(String(cwd ?? ''))}\u0000${String(sessionId ?? '')}`;
 }
 
+// 会话行上 terminal 字段的取值域。**这是 Map → 会话行的最后一米**：只加 listTerminalSessionStates
+// 的新状态而漏了这里，新状态会在注入面被静默丢掉（2026-09-04 加 'waiting' 时的现成陷阱）。
+const TERMINAL_ROW_STATES = new Set(['busy', 'waiting', 'alive']);
+
 // 给 session:list 行附加当前终端状态。listSessionsPage 可能返回缓存对象，禁止原地写 terminal：
-// 每行浅拷贝并先清旧值，再按本次 registry 快照注入，确保 busy/alive 消失后不会残留。
+// 每行浅拷贝并先清旧值，再按本次 registry 快照注入，确保状态消失后不会残留。
 export function applyTerminalStatesToSessions(cwd, sessions, states = new Map()) {
   const rows = Array.isArray(sessions) ? sessions : [];
   const stateMap = states instanceof Map ? states : new Map();
@@ -158,26 +174,40 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
     delete copy.terminal;
     if (copy.id) {
       const state = stateMap.get(terminalStateKey(cwd, copy.id));
-      if (state === 'busy' || state === 'alive') copy.terminal = state;
+      if (TERMINAL_ROW_STATES.has(state)) copy.terminal = state;
     }
     return copy;
   });
 }
 
 // session:list 可能分页，只看返回行会漏掉页外的 busy CLI；目录/顶部汇总改从完整 registry Map 判 cwd。
-export function hasBusyTerminalSessionForCwd(cwd, states) {
+function hasTerminalStateForCwd(cwd, states, want) {
   if (!(states instanceof Map)) return false;
   const prefix = terminalStateKey(cwd, '');
   for (const [key, state] of states) {
-    if (state === 'busy' && key.startsWith(prefix)) return true;
+    if (state === want && key.startsWith(prefix)) return true;
   }
   return false;
 }
 
-// 批量：返回 Map<terminalStateKey, 'busy'|'alive'>，只收 entrypoint=cli 且 pid 存活的条目。
-// 'busy' = 自报 busy/shell；'alive' = 终端进程活着但自报 idle/无自报（进程还在但不在跑）。
+export function hasBusyTerminalSessionForCwd(cwd, states) {
+  return hasTerminalStateForCwd(cwd, states, 'busy');
+}
+
+// 目录级的 waiting 汇总（2026-09-04）。抽屉折叠时用户只看得到目录行，会话行的 chip 再准也看不见。
+// 与 busy 并列成两个判据而不是合成一个三态：同一 cwd 下完全可能一个会话在跑、另一个卡在审批上。
+export function hasWaitingTerminalSessionForCwd(cwd, states) {
+  return hasTerminalStateForCwd(cwd, states, 'waiting');
+}
+
+// 批量：返回 Map<terminalStateKey, 'busy'|'waiting'|'alive'>，只收 entrypoint=cli 且 pid 存活的条目。
+//   'busy'    = 自报 busy/shell（终端在跑）
+//   'waiting' = 自报 waiting（终端卡在对话框上等人，含权限审批框）—— 2026-09-04 新增，此前被折进
+//               alive，于是抽屉里「CLI 正等你批准」与「终端开着但闲着」完全同形
+//   'alive'   = 终端进程活着但自报 idle / 无自报（进程还在但不在跑）
 // 刻意排除 sdk-ts/sdk-cli/claude-desktop：那些会话在 web 列表里
 // 要么已有 live 实例徽标（ccm 自己开的），要么不是本项目要标的"终端直跑"语义，标了只会双份/误导。
+const TERMINAL_STATE_RANK = { busy: 3, waiting: 2, alive: 1 };
 export async function listTerminalSessionStates({
   dir = DEFAULT_SESSION_REGISTRY_DIR,
   isAlive = defaultIsAlive,
@@ -187,9 +217,15 @@ export async function listTerminalSessionStates({
     if (entry.entrypoint !== 'cli') continue;
     if (!isAlive(entry.pid)) continue;
     const key = terminalStateKey(entry.cwd, entry.sessionId);
-    const busy = registryIndicatesTerminalBusy(entry);
-    if (busy) map.set(key, 'busy');
-    else if (!map.has(key)) map.set(key, 'alive'); // 同会话多 PID：busy 优先，不被后来的 alive 覆盖
+    const state = registryIndicatesTerminalBusy(entry) ? 'busy'
+      : registryIndicatesTerminalWaiting(entry) ? 'waiting'
+        : 'alive';
+    // 同会话多 PID：按信息量取高者（busy > waiting > alive），与扫盘顺序无关。
+    // 原实现是 `if (busy) set; else if (!has) set('alive')`——两态时等价，加了第三态就会漏
+    // （先扫到 waiting 后扫到 alive 时，has 已为真，waiting 侥幸留住；反过来则 alive 永远压不掉，
+    //  但 waiting 也永远盖不住先到的 alive）。改成显式排名，把顺序依赖彻底去掉。
+    const prev = map.get(key);
+    if (prev === undefined || TERMINAL_STATE_RANK[state] > TERMINAL_STATE_RANK[prev]) map.set(key, state);
   }
   return map;
 }
@@ -218,4 +254,21 @@ export function cliPresenceStep(prevSeen, entry) {
 export function registryIndicatesTerminalBusy(entry) {
   if (!entry || entry.entrypoint !== 'cli') return false;
   return TERMINAL_BUSY_STATUSES.has(entry.status);
+}
+
+// 纯判定：注册表条目是否构成「终端停下来等人」。仅 entrypoint=cli 且 status==='waiting'。
+//
+// 【waiting 是什么】CLI 侧任何对话框打开都会写它（二进制 zHe/dRo：`topDialogWaitingFor !== undefined
+// → {status:"waiting", waitingFor:H}`），其中就包括**权限审批框**——审批框在 CLI 的 dialog 注册表里
+// 没有登记显式 waitingFor，走的是兜底字面量 `ib[kind]?.waitingFor ?? "permission prompt"`。
+// pty 实证（CLI 2.1.260）：打开 /model 对话框后条目变成 status:"waiting" + waitingFor:"dialog open"。
+//
+// 【为什么不并进 registryIndicatesTerminalBusy】两件事，两个词：
+//   · busy/shell = 终端在跑 ⇒ 可以无中生有地上锁（堵"开跑但首条 text 未落盘"的空窗）；
+//   · waiting    = 终端在等人 ⇒ 只做三件事：豁免陈旧检查、维持已有的锁、压制"疑似中断"文案。
+// 给 waiting 同等的造锁权会把「电脑上开着 /model 对话框忘了关」变成手机永久只读——那不是防分叉，
+// 是自伤。三项作用都限定在"轮次确实卡在中间"（尾部 pending）这个前提上，见 history.js 的三个判定。
+export function registryIndicatesTerminalWaiting(entry) {
+  if (!entry || entry.entrypoint !== 'cli') return false;
+  return TERMINAL_WAITING_STATUSES.has(entry.status);
 }

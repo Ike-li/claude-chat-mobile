@@ -61,7 +61,7 @@ import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -2125,7 +2125,7 @@ registerSocketConnection(io, socket => {
       payload: {
         readonly: mirrorReadonly,
         stale: mirrorReadonly && mirrorSnapshot.stale,
-        ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous } : {}),
+        ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous, waiting: mirrorSnapshot.waiting } : {}),
       }
     });
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
@@ -2796,6 +2796,9 @@ registerSocketConnection(io, socket => {
     return {
       list: applyTerminalStatesToSessions(cwd, list, states),
       terminalBusy: hasBusyTerminalSessionForCwd(cwd, states),
+      // terminalWaiting（2026-09-04）：该 cwd 下是否有终端卡在对话框上等人（含权限审批框）。
+      // 与 terminalBusy 并列而非取代——同一 cwd 可能一个会话在跑、另一个在等人，合成一个字段会丢信息。
+      terminalWaiting: hasWaitingTerminalSessionForCwd(cwd, states),
     };
   }
 
