@@ -155,7 +155,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 |---|---|---|
 | Claude conversations | `~/.claude/projects/` transcript | CLI/Web resume and stable history |
 | Web instance runtime | In-memory `AgentSession` | Streaming turns, approvals, event buffer |
-| CCM control plane | `CCM_DATA_DIR` | Session pointers, devices, approvals, audit, push, and caches |
+| CCM control plane | `CCM_DATA_DIR` | Session pointers, devices, approvals, audit, push, read markers, and caches |
 | Workspace allowlist | `WORK_DIR` / `WORKDIRS` | Limits visible and operable directories |
 | Web-driver status line | SDK events | Current model, context, cost, and effort |
 | CLI-driver status line | Optional statusline snapshots | Read-only terminal-session status |

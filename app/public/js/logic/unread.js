@@ -10,6 +10,15 @@
 // 手动未读（2026-09-02，长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据；
 // 唯一的自动清除点是「再次打开该会话」（tracker 的 markEntered），离场记 seen 不动它——
 // 否则「正看着时标一下、离开就被离场记录清掉」，标记形同虚设。
+//
+// 跨设备共享（2026-09-03）：已读位点搬到服务端（data/read-state.json），localStorage 降级为离线缓存。
+// 此前全存本地，换设备后 seen 表为空、全部回落到「本设备首次打开时刻」这个很老的基线，
+// 在另一台读过的会话会整屏复亮。两条合并语义写在这一层，两端各自实现（前后端不得互相 import）：
+//   · baselineTs 服务端权威、建档时钉一次——取 min 会把最老设备的基线传染给全体（正是那个 bug 的
+//     放大器），取 max 会吞掉「app 关着时来的新活动」，都不行；
+//   · seen/manual 逐会话取较晚时间戳（LWW）。前提是手动未读判据从「manual 里有条目」改成
+//     `manual[id] > seen[id]`（见 isManualUnreadNow）：旧语义下「标为已读」是【删除条目】，
+//     而删除在 LWW 里会被别的设备的旧条目复活。改后合并退化成纯 max()，幂等、与顺序无关。
 
 import { t } from '../i18n.js';
 
@@ -39,6 +48,52 @@ export function resolveDirUnreadBadge(count) {
   }
   if (count === 0) return { state: 'none', visible: false, text: '' };
   return { state: 'unread', visible: true, text: t('{n} 未读').replace('{n}', String(count)) };
+}
+
+// 手动未读的当前判据：标记时刻是否晚于已看时刻。相等算已读（与 `lastUsedAt > seenBar` 的
+// 「恰好相等不亮」同向）。脏值/缺失一律 false——失败方向是「不亮」，不制造无法消除的假未读。
+export function isManualUnreadNow(manual, seen, sessionId) {
+  if (!sessionId) return false;
+  const markedAt = numOrNull(manual?.[sessionId]);
+  if (markedAt === null) return false;
+  const seenAt = numOrNull(seen?.[sessionId]);
+  return seenAt === null || markedAt > seenAt;
+}
+
+// 服务端权威态并入本地态。remote 无效（离线、ack 超时、老服务端不认这个事件）时原样返回 local：
+// 功能降级回「每设备独立」，绝不清空——本地已读表丢一次，用户面前就是一整屏假未读。
+export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 } = {}) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)
+    || typeof remote.baselineTs !== 'number' || !Number.isFinite(remote.baselineTs)) {
+    return local;
+  }
+  return {
+    baselineTs: remote.baselineTs,
+    seen: capNewest(mergeLatest(local?.seen, remote.seen), seenCap),
+    manual: capNewest(mergeLatest(local?.manual, remote.manual), manualCap),
+  };
+}
+
+// 逐 key 取较晚的时间戳；两侧的非数字值都丢弃。
+function mergeLatest(a, b) {
+  const out = numericMap(a);
+  for (const [k, v] of Object.entries(numericMap(b))) {
+    if (!(k in out) || v > out[k]) out[k] = v;
+  }
+  return out;
+}
+
+// 超出上限时按 ts 淘汰最旧（与 markSeenEntry 同一套 LRU by ts）。
+function capNewest(map, cap) {
+  const keys = Object.keys(map);
+  if (keys.length <= cap) return map;
+  keys.sort((x, y) => map[x] - map[y]);
+  for (const k of keys.slice(0, keys.length - cap)) delete map[k];
+  return map;
+}
+
+function numOrNull(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 // 记「本设备已看过该会话到 now」。不可变更新；超过 cap 时按 ts 淘汰最旧（新记录后写，必留）。

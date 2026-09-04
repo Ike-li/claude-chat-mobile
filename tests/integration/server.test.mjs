@@ -184,6 +184,74 @@ test.describe('session:list — 空工作目录', () => {
   });
 });
 
+// 跨设备已读位点（2026-09-03）。此前位点只存各设备的 localStorage，换台设备 seen 表为空、全部回落到
+// 「本设备首次打开时刻」这个很老的基线 → 在另一台读过的会话整屏复亮。判定仍在前端纯函数里（有单测），
+// 这里验的是真 server 那两个 handler 的接线与归并语义——E2E 打的是 mock server，走不到这段代码。
+test.describe('read:sync / read:mark — 跨设备已读位点', () => {
+  const emitAck = (s, event, payload) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${event} timeout`)), 3000);
+    s.emit(event, payload, res => { clearTimeout(t); resolve(res); });
+  });
+  const connect = async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    return s;
+  };
+
+  test('read:sync 归并客户端上报并回权威态；客户端基线一律被忽略', async () => {
+    const s = await connect();
+    const first = await emitAck(s, 'read:sync', { baselineTs: 1, seen: { 'sess-a': 1000 }, manual: {} });
+    assert.equal(first.ok, true);
+    assert.equal(first.state.seen['sess-a'], 1000);
+    assert.ok(first.state.baselineTs > 1, '服务端建档的基线不得被客户端上报的值覆盖');
+
+    // 另一台设备上报更晚的位点 → 取较晚的那个（LWW）；更早的上报不得把位点拨旧
+    const second = await emitAck(s, 'read:sync', { baselineTs: 9e12, seen: { 'sess-a': 2000 }, manual: {} });
+    assert.equal(second.state.seen['sess-a'], 2000);
+    assert.equal(second.state.baselineTs, first.state.baselineTs);
+    const third = await emitAck(s, 'read:sync', { seen: { 'sess-a': 500 }, manual: {} });
+    assert.equal(third.state.seen['sess-a'], 2000);
+    s.disconnect();
+  });
+
+  test('read:mark 的单条增量对后来的连接可见（这就是「换设备」那一跳）', async () => {
+    const writer = await connect();
+    writer.emit('read:mark', { sessionId: 'sess-b', seenAt: 4000 });
+    writer.emit('read:mark', { sessionId: 'sess-c', manual: true, at: 5000 });
+    // 无 ack 的 fire-and-forget：用一次带 ack 的往返给它排序，确保上面两条已被处理
+    await emitAck(writer, 'read:sync', {});
+    writer.disconnect();
+
+    const reader = await connect(); // 扮演第二台设备：本地什么都没有
+    const state = (await emitAck(reader, 'read:sync', {})).state;
+    assert.equal(state.seen['sess-b'], 4000);
+    assert.equal(state.manual['sess-c'], 5000);
+    reader.disconnect();
+  });
+
+  test('session:list 搭车回该页行的位点（渲染时列表数据与未读判定必须同帧）', async () => {
+    const s = await connect();
+    const ack = await emitAck(s, 'session:list', { cwd: tmpDir });
+    assert.equal(typeof ack.readState?.baselineTs, 'number');
+    assert.deepEqual(ack.readState.seen, {}, '空列表 → 裁剪后不带任何行位点');
+    s.disconnect();
+  });
+
+  test('脏入参不写表也不断连（sessionId 非字符串 / 时间戳非数字）', async () => {
+    const s = await connect();
+    for (const bad of [null, 42, {}, '']) s.emit('read:mark', { sessionId: bad, seenAt: 1000 });
+    s.emit('read:mark', { sessionId: 'sess-d', seenAt: 'later' });
+    const state = (await emitAck(s, 'read:sync', {})).state;
+    assert.equal(state.seen['sess-d'], undefined);
+    assert.equal(s.connected, true);
+    s.disconnect();
+  });
+});
+
 test.describe('session:switch — 非法 sessionId 被拒', () => {
   test('含 ../ 的 sessionId → ack { ok: false }', async () => {
     const s = connectSocket();

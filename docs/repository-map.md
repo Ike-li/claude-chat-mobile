@@ -35,7 +35,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 4 |
-| Backend source | 69 |
+| Backend source | 70 |
 | Desktop integration | 11 |
 | Documentation | 10 |
 | E2E test | 50 |
@@ -53,10 +53,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 15 |
 | Test support | 13 |
-| Unit test | 175 |
+| Unit test | 176 |
 | Vendored asset | 21 |
 
-Total classified files: **505**.
+Total classified files: **507**.
 
 ## Complete file inventory
 
@@ -205,6 +205,7 @@ Total classified files: **505**.
 | `app/src/server/unread-tracker.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `app/src/sessions/attention.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `app/src/sessions/history.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `app/src/sessions/read-state.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `app/src/sessions/session-registry.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `app/src/sessions/sessions.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `app/src/sessions/workdirs.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -529,6 +530,7 @@ Total classified files: **505**.
 | `tests/unit/playwright-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/rate-limiter.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/reachable-ipv4s.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/read-state.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/render-plist.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/repository-inventory.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/sanitizer.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

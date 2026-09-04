@@ -3,7 +3,7 @@
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge } from '../../app/public/js/logic/unread.js';
+import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge, isManualUnreadNow, mergeReadState } from '../../app/public/js/logic/unread.js';
 
 const T0 = 1_700_000_000_000; // 基线
 const MIN = 60_000;
@@ -171,5 +171,94 @@ test.describe('resolveDirUnreadBadge：未知 ≠ 确定没有', () => {
     for (const bad of [undefined, NaN, -1, '2', {}]) {
       assert.equal(resolveDirUnreadBadge(bad).state, 'pending', String(bad));
     }
+  });
+});
+
+// ---- 跨设备共享已读位点（2026-09-03）----
+// 起因：抽屉未读全存 localStorage，换设备后 seen 表是空的、全部回落到「本设备首次打开时刻」这个
+// 很老的基线 → 在别的设备上读过的会话又整屏亮起。修法是把已读位点搬到服务端共享，本地降级为离线缓存。
+//
+// 手动未读的判据必须同时改造：旧语义「manual 里有条目 = 未读」，而「标为已读」表现为【删除条目】——
+// 删除在多设备 last-write-wins 合并里会被别的设备的旧条目复活。改成比时间戳后，合并退化成纯 max()，
+// 幂等、与顺序无关，存储形状一个字节都不用改（manual 存的本来就是标记时刻）。
+test.describe('isManualUnreadNow：手动未读判据从「存在」改为「比 seen 新」', () => {
+  test('标过但从没看过 → 未读', () => {
+    assert.equal(isManualUnreadNow({ a: T0 }, {}, 'a'), true);
+  });
+
+  test('标记晚于已看（看完之后又标「稍后再看」）→ 未读', () => {
+    assert.equal(isManualUnreadNow({ a: T0 + MIN }, { a: T0 }, 'a'), true);
+  });
+
+  test('★ 已看晚于标记（在另一台设备上打开过）→ 已读，这是跨设备合并的核心', () => {
+    assert.equal(isManualUnreadNow({ a: T0 }, { a: T0 + MIN }, 'a'), false);
+  });
+
+  test('时间戳相等 → 已读（与 lastUsedAt 判据「恰好相等不亮」同向）', () => {
+    assert.equal(isManualUnreadNow({ a: T0 }, { a: T0 }, 'a'), false);
+  });
+
+  test('没标过 / 缺 id / 脏值 → 已读，不崩', () => {
+    assert.equal(isManualUnreadNow({}, { a: T0 }, 'a'), false);
+    assert.equal(isManualUnreadNow({ a: T0 }, {}, ''), false);
+    assert.equal(isManualUnreadNow(null, null, 'a'), false);
+    assert.equal(isManualUnreadNow({ a: 'x' }, {}, 'a'), false);
+  });
+});
+
+test.describe('mergeReadState：服务端权威态并入本地', () => {
+  const local = { baselineTs: T0, seen: { a: T0 + MIN, b: T0 + 2 * MIN }, manual: { c: T0 } };
+
+  test('★ baselineTs 一律取服务端值——全局单一基线才是「换设备不再整屏复亮」的根因修复', () => {
+    const merged = mergeReadState(local, { baselineTs: T0 + 99 * MIN, seen: {}, manual: {} });
+    assert.equal(merged.baselineTs, T0 + 99 * MIN);
+  });
+
+  test('seen 逐会话取较晚的一个（LWW），两边独有的都保留', () => {
+    const merged = mergeReadState(local, {
+      baselineTs: T0,
+      seen: { a: T0, b: T0 + 5 * MIN, z: T0 + MIN },
+      manual: {},
+    });
+    assert.equal(merged.seen.a, T0 + MIN, '本地更晚 → 保本地');
+    assert.equal(merged.seen.b, T0 + 5 * MIN, '远端更晚 → 取远端');
+    assert.equal(merged.seen.z, T0 + MIN, '远端独有 → 补进来');
+  });
+
+  test('manual 同样取较晚，与 seen 各自独立合并', () => {
+    const merged = mergeReadState(local, { baselineTs: T0, seen: {}, manual: { c: T0 + MIN, d: T0 } });
+    assert.deepEqual(merged.manual, { c: T0 + MIN, d: T0 });
+  });
+
+  test('★ 远端无效（离线 / 老服务端不认这个事件）→ 原样返回本地，功能降级回每设备独立而不是清空', () => {
+    for (const bad of [null, undefined, {}, [], 'x', { baselineTs: 'no' }]) {
+      assert.deepEqual(mergeReadState(local, bad), local, JSON.stringify(bad));
+    }
+  });
+
+  test('不原地改本地对象（渲染层可能仍持旧引用）', () => {
+    const before = JSON.parse(JSON.stringify(local));
+    mergeReadState(local, { baselineTs: T0 + 1, seen: { a: T0 + 9 * MIN }, manual: { c: T0 + 9 * MIN } });
+    assert.deepEqual(local, before);
+  });
+
+  test('合并后仍受容量上限约束，淘汰最旧', () => {
+    const merged = mergeReadState(
+      { baselineTs: T0, seen: { a: T0, b: T0 + MIN }, manual: {} },
+      { baselineTs: T0, seen: { c: T0 + 2 * MIN }, manual: {} },
+      { seenCap: 2 },
+    );
+    assert.equal(Object.keys(merged.seen).length, 2);
+    assert.equal(merged.seen.a, undefined, '最旧的被淘汰');
+    assert.equal(merged.seen.c, T0 + 2 * MIN);
+  });
+
+  test('远端 seen/manual 里的非数字值被丢弃（服务端也可能被手改）', () => {
+    const merged = mergeReadState(
+      { baselineTs: T0, seen: {}, manual: {} },
+      { baselineTs: T0, seen: { a: 'x', b: T0 }, manual: { c: null, d: T0 } },
+    );
+    assert.deepEqual(merged.seen, { b: T0 });
+    assert.deepEqual(merged.manual, { d: T0 });
   });
 });

@@ -24,6 +24,10 @@ process.env.CCM_APPROVAL_STORE_FILE = join(dir, 'approval-requests.json');
 process.env.CCM_AUDIT_FILE = join(dir, 'audit-records.json');
 process.env.CCM_TRUSTED_DEVICES_FILE = join(dir, 'trusted-devices.json');
 process.env.CCM_PENDING_DEVICES_FILE = join(dir, 'pending-devices.json');
+// CCM_READ_STATE_FILE（2026-09-03 跨设备已读位点）：read-state.js 的默认实例在 import 时锁定路径，
+// 任何静态 import 到 server/app.js 的用例一旦触发写入就会改真实 data/read-state.json——那是使用者
+// 各设备共享的未读位点，被单测覆盖等于凭空清掉一屏未读。
+process.env.CCM_READ_STATE_FILE = join(dir, 'read-state.json');
 // 桌面日志窗：集成测 in-process import app/server.js 时也会走 startLogTerminal。
 // 本机 .env 常 LOG_TERMINAL=on；dotenv 不覆盖已存在的非空 key，钉 'off' 挡住回填（见 _spawn-server）。
 process.env.LOG_TERMINAL = 'off';

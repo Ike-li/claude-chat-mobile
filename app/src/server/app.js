@@ -24,6 +24,7 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
+import * as readState from '../sessions/read-state.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
@@ -2821,7 +2822,40 @@ registerSocketConnection(io, socket => {
     });
     const terminal = await annotateTerminalStates(cwd, list);
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
-    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore, total });
+    // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
+    // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
+    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore, total, readState: readStateForRows(terminal.list) });
+  });
+
+  // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
+  // 全部回落到「本设备首次打开时刻」这个很老的基线 → 在另一台读过的会话整屏复亮。
+  // read:sync = 连上时把本地表推来归并、取回权威态（升级前攒的记录与离线期间的记录都由这趟迁移）；
+  // read:mark = 单条增量，刻意不带 ack——丢一条不致命，下次 read:sync 的全量归并会把它补回来。
+
+  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 500 条（约 27KB），而抽屉每 12 秒
+  // 就 revalidate 一次、多目录并发，全量搭车纯属浪费手机流量。裁剪安全的前提是前端 hydrate 逐 key
+  // 取 max、只增不减——少回的 key 不会把本地已有的位点抹掉，最坏只是这一趟没带来新信息。
+  function readStateForRows(rows) {
+    const state = readState.getReadState();
+    const seen = {};
+    const manual = {};
+    for (const row of rows || []) {
+      if (!row?.id) continue;
+      if (state.seen[row.id] !== undefined) seen[row.id] = state.seen[row.id];
+      if (state.manual[row.id] !== undefined) manual[row.id] = state.manual[row.id];
+    }
+    return { baselineTs: state.baselineTs, seen, manual };
+  }
+  on(socket, 'read:sync', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, state: readState.applyClientReadState(payload) });
+  });
+
+  on(socket, 'read:mark', payload => {
+    const sessionId = payload?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) return;
+    if (typeof payload?.manual === 'boolean') readState.setManualUnread(sessionId, payload.manual, payload.at);
+    else readState.markRead(sessionId, payload?.seenAt);
   });
 
   // 彻底删除：显式二次确认（前端弹窗把关）——真删底层 transcript 文件，不可恢复。
@@ -3544,6 +3578,7 @@ function shutdown(sig) {
   // 但那本该是清晰的用户可见 deny，不该退化成一条不知情由的系统失效记录）。
   approvalStore.flushSaveSync();
   audit.flushSaveSync();
+  readState.flushSaveSync(); // 同上：防抖窗内的已读位点不落盘，换设备就会看到一屏假未读
   io.close(() => process.exit(0)); // 主动关所有 socket 连接再关底层 http server；否则 WS 长连接把 close 回调拖到 3s 兜底才退（实测断连窗口 ~3.5s → 近乎即时）
   setTimeout(() => process.exit(0), 3000).unref(); // 兜底：io.close 万一挂起仍强退
 }

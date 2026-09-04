@@ -57,6 +57,36 @@ const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔�
 // 未读」当场失效。留一段前置量把它推到页面加载之后，同时旧会话（-600s 等）仍稳稳在基线之前。
 const MOCK_LIST_CLOCK_LEAD_MS = 5_000;
 let mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
+// 跨设备共享的已读位点（真 server 是 data/read-state.json）。baselineTs 必须钉在 reset 时刻、
+// 即 mockListClockBase 之前 LEAD 那一段：它会【覆盖】前端本地基线，取得太晚会把偏移 0 的
+// mock-session-another 压到基线之前，P0-11u 赖以成立的「基线后有活动＝亮未读」当场失效。
+let mockReadState = null;
+function resetReadState() {
+  mockReadState = { baselineTs: mockListClockBase - MOCK_LIST_CLOCK_LEAD_MS, seen: {}, manual: {} };
+}
+resetReadState();
+function readStateSnapshot() {
+  return { baselineTs: mockReadState.baselineTs, seen: { ...mockReadState.seen }, manual: { ...mockReadState.manual } };
+}
+// session:list 搭车的裁剪版（同真 server 的 readStateForRows）。
+function readStateForRows(rows) {
+  const seen = {};
+  const manual = {};
+  for (const row of rows || []) {
+    if (!row?.id) continue;
+    if (mockReadState.seen[row.id] !== undefined) seen[row.id] = mockReadState.seen[row.id];
+    if (mockReadState.manual[row.id] !== undefined) manual[row.id] = mockReadState.manual[row.id];
+  }
+  return { baselineTs: mockReadState.baselineTs, seen, manual };
+}
+// 逐 key 取较晚时间戳，与真 server 的 read-state.js#mergeLatest 同语义。
+function mergeIntoReadState(field, incoming) {
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
+  for (const [k, v] of Object.entries(incoming)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    if (!(k in mockReadState[field]) || v > mockReadState[field][k]) mockReadState[field][k] = v;
+  }
+}
 let reconnectDrawerTitleChanged = false;
 let reconnectSettleMarkerArmed = false;
 // P0-11y（P1）：终端直跑状态夹具。真 server 由 listTerminalSessionStates 读 CLI 进程注册表
@@ -233,6 +263,7 @@ function resetMockState() {
   historyOverflowMode = false;
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
+  resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
@@ -388,6 +419,22 @@ app.post('/__reset', (_req, res) => {
 // 同 noSessionIdMode：flag 必须模块级，整页刷新后仍生效。
 app.post('/__arm-no-models', (_req, res) => {
   noModelsMode = true;
+  res.json({ ok: true });
+});
+
+// 跨设备已读位点：模拟「这个会话已经在另一台设备上读过了」——直接往服务端共享位点写一条 seen。
+// 本设备的 localStorage 里没有任何该会话的记录，正是换设备后的真实处境。
+// 服务端共享位点的读出面，供 E2E 断言「本机的已读/标记确实上报了」——真 server 那边这是
+// read:sync 的 ack，但前端 socket 不挂在 window 上，从测试里发不出去。
+app.get('/__read-state', (_req, res) => {
+  res.json(readStateSnapshot());
+});
+
+// 走 query string：这个 mock server 没装 body parser（其余 __arm-* 端点全是无参的）。
+app.post('/__arm-read-elsewhere', (req, res) => {
+  const sessionId = req.query?.sessionId;
+  if (!sessionId) return res.status(400).json({ ok: false });
+  mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
   res.json({ ok: true });
 });
 
@@ -848,7 +895,15 @@ io.on('connection', socket => {
   });
 
   // Handle session list request for sidebar directory browsing
-  socket.on('session:list', (payload, callback) => {
+  socket.on('session:list', (payload, rawCallback) => {
+    // 已读位点搭 session:list 回去（与真 server 一致：不另开广播，保证行数据与未读判定同帧）。
+    // 包一层统一注入而不是逐个 callback 出口加——这个 handler 有五个以上返回分支，漏一个就会让
+    // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
+    // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
+    // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
+    const callback = typeof rawCallback === 'function'
+      ? (res) => rawCallback({ ...res, readState: readStateForRows(res?.sessions) })
+      : rawCallback;
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
@@ -1507,6 +1562,28 @@ io.on('connection', socket => {
   // client:presence（PWA 前台/后台上报，与真 server 对齐）：无 ack，mock 无推送判定逻辑可影响，
   // no-op 接收即可（仅需满足入向事件契约扫描，见 tests/gates/agent-event-contract.js）。
   socket.on('client:presence', () => {});
+
+  // 跨设备已读位点（与真 server 对齐）：read:sync 归并客户端本地表并回权威态，read:mark 收单条增量。
+  // 客户端上报的 baselineTs 一律忽略——全局单一基线正是「换设备整屏复亮」的根因修复。
+  socket.on('read:sync', (payload, ack) => {
+    mergeIntoReadState('seen', payload?.seen);
+    mergeIntoReadState('manual', payload?.manual);
+    if (typeof ack === 'function') ack({ ok: true, state: readStateSnapshot() });
+  });
+
+  socket.on('read:mark', payload => {
+    const sessionId = payload?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) return;
+    if (typeof payload?.manual === 'boolean') {
+      if (payload.manual) mergeIntoReadState('manual', { [sessionId]: payload.at ?? Date.now() });
+      else {
+        delete mockReadState.manual[sessionId];
+        mergeIntoReadState('seen', { [sessionId]: payload.at ?? Date.now() });
+      }
+    } else {
+      mergeIntoReadState('seen', { [sessionId]: payload.seenAt ?? Date.now() });
+    }
+  });
 
   // config:refresh（CLI 配置刷新按钮，与真 server 对齐）：mock 无真实 CLI settings 可重读，ack ok 即可；
   // 小延迟让 E2E 能稳定抓到按钮的禁用→转圈→恢复这段瞬态（真 server 那边 sdkResolveSettings 本身也非零耗时）。

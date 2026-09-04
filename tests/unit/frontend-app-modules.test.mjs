@@ -653,6 +653,97 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     tracker.setManualUnread(null, true);
     assert.equal(tracker.isUnread({ id: null, lastUsedAt: T0 + 1 }), false);
   });
+
+  // ---- 跨设备共享（2026-09-03）：本地表降级为离线缓存，权威位点在服务端 ----
+  test('★ 离场 markSeen 在手动未读态下必须跳过记 seen——新判据 manual>seen 下写了就等于当场清掉标记', () => {
+    let now = T0 + 10;
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => now });
+    tracker.setManualUnread('s1', true);
+    now += 5;
+    tracker.markSeen('s1');
+    assert.equal(JSON.parse(storage.dump()).seen.s1, undefined, 'seen 不得被写进去');
+    assert.equal(tracker.isUnread({ id: 's1', lastUsedAt: T0 - 1000 }), true, '标记活过离开');
+  });
+
+  test('hydrate：服务端基线覆盖本地，seen/manual 取较晚，结果落盘', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { a: T0 + 10 }, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    tracker.hydrate({ baselineTs: T0 + 100, seen: { a: T0 + 5, b: T0 + 200 }, manual: {} });
+    const persisted = JSON.parse(storage.dump());
+    assert.equal(persisted.baselineTs, T0 + 100);
+    assert.equal(persisted.seen.a, T0 + 10, '本地更晚 → 保本地');
+    assert.equal(persisted.seen.b, T0 + 200, '远端独有 → 补进来');
+  });
+
+  test('★ 跨设备主场景：本设备从没看过、但服务端有更晚的 seen → 不再亮（就是这次要修的那屏假未读）', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    const s = { id: 's9', lastUsedAt: T0 + 100 };
+    assert.equal(tracker.isUnread(s), true, '修复前：本设备没看过 + 活动晚于本机基线 → 亮');
+    tracker.hydrate({ baselineTs: T0, seen: { s9: T0 + 200 }, manual: {} });
+    assert.equal(tracker.isUnread(s), false, '另一台设备读过 → 不亮');
+  });
+
+  test('★ 手动未读跨设备：另一台设备在标记之后打开过 → 标记失效（时间戳比大小，不靠删条目）', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: { s1: T0 + 100 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    const s = { id: 's1', lastUsedAt: T0 - 1000 };
+    assert.equal(tracker.isUnread(s), true);
+    tracker.hydrate({ baselineTs: T0, seen: { s1: T0 + 200 }, manual: { s1: T0 + 100 } });
+    assert.equal(tracker.isUnread(s), false, 'seen 晚于 manual → 已读');
+    assert.equal(tracker.isManualUnread('s1'), false, '长按菜单也要跟着改口，否则显示「标为已读」点了没反应');
+  });
+
+  // session:list 每趟都捎一份 readState 回来。hydrate 恒 true 会让每次 SWR revalidate 都重建列表
+  // DOM 子树，打掉 shouldRerenderSessionList 的省渲优化——返回值必须是「内容真变了吗」。
+  test('★ hydrate 返回「内容是否真变」：同一份远端态重复灌入 → false，不触发重渲染', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    const remote = { baselineTs: T0, seen: { a: T0 + 5 }, manual: {} };
+    assert.equal(tracker.hydrate(remote), true, '第一次带来新信息');
+    assert.equal(tracker.hydrate(remote), false, '第二次内容没变');
+    assert.equal(tracker.hydrate({ baselineTs: T0, seen: { a: T0 + 1 }, manual: {} }), false, '更旧的远端值被 max 吃掉，内容仍没变');
+    assert.equal(tracker.hydrate({ baselineTs: T0, seen: { a: T0 + 9 }, manual: {} }), true);
+  });
+
+  test('hydrate 拿到无效远端态（离线 / ack 超时）→ 本地原样保留，绝不清空', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { a: T0 + 10 }, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    for (const bad of [null, undefined, {}, 'x']) tracker.hydrate(bad);
+    assert.deepEqual(tracker.snapshot(), { baselineTs: T0, seen: { a: T0 + 10 }, manual: {} });
+  });
+
+  test('snapshot 供连上后上推本地表；返回副本，调用方改不动内部状态', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { a: T0 }, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 });
+    const snap = tracker.snapshot();
+    snap.seen.hacked = T0;
+    assert.deepEqual(tracker.snapshot().seen, { a: T0 });
+  });
+
+  test('onChange 在三个写入点上报增量，供 app.js 转成 read:mark（hydrate 不回声）', () => {
+    const events = [];
+    const tracker = createUnreadTracker({
+      storage: memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {} })),
+      now: () => T0 + 10,
+      onChange: e => events.push(e),
+    });
+    tracker.markEntered('s1');
+    tracker.setManualUnread('s2', true);
+    tracker.setManualUnread('s2', false);
+    tracker.hydrate({ baselineTs: T0, seen: { s5: T0 }, manual: {} });
+    assert.deepEqual(events, [
+      { sessionId: 's1', seenAt: T0 + 10 },
+      { sessionId: 's2', manual: true, at: T0 + 10 },
+      { sessionId: 's2', manual: false, at: T0 + 10 },
+    ], 'hydrate 是下行同步，回声会绕成写放大');
+  });
+
+  test('onChange 未注入时（离线壳 / 老接线）三个写入点照常工作', () => {
+    const tracker = createUnreadTracker({ storage: memoryStorage(), now: () => T0 });
+    assert.doesNotThrow(() => { tracker.markEntered('s1'); tracker.markSeen('s1'); tracker.setManualUnread('s2', true); });
+  });
 });
 
 // ---- attachLongPress：抽屉会话行的长按手势（触屏/鼠标走 Pointer Events 计时，桌面右键同效）----

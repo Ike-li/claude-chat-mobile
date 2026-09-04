@@ -646,6 +646,50 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       try { return typeof JSON.parse(localStorage.getItem('ccm-unread-v1') || '{}').seen?.['mock-session-needsyou']; } catch { return 'error'; }
     })).toBe('number');
 
+    // 同一笔已读还要上报到服务端共享位点（2026-09-03），否则换台设备又会亮成未读。
+    await expect.poll(async () => {
+      const state = await (await page.request.get('/__read-state')).json();
+      return typeof state?.seen?.['mock-session-needsyou'];
+    }).toBe('number');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 2026-09-03 真机症状：换一台设备打开，读过的会话又整屏亮成「未读」。根因是已读位点只存
+  // localStorage——新设备的 seen 表是空的，所有会话都回落去跟「本设备首次打开时刻」这个很老的
+  // 基线比。位点搬到服务端共享后，此处钉住修复：本地基线老 + 本地无记录 + 服务端有记录 = 不亮。
+  test('P0-11af 跨设备已读位点：另一台设备读过的会话，在本机不再复亮', async ({ page }) => {
+    await gotoMock(page);
+
+    // 必须用另一工作区：全局基线钉在 /__reset 时刻，主工作区所有会话（-10s 起）都在它之前，会先被
+    // 「基线不追溯」挡掉——用它们做对照，这条用例就分辨不出 seen 位点到底有没有生效。另一工作区那组
+    // 恒在基线之后（见 mock server 的 MOCK_LIST_CLOCK_LEAD_MS 注释），是唯一能把 seen 单独测出来的一组。
+    await sendChatMessage(page, 'test:needsyou');
+    await waitForIdle(page);
+
+    // 另一台设备读过这一个会话（直接写服务端共享位点，本机 localStorage 里没有任何痕迹）
+    await page.request.post('/__arm-read-elsewhere?sessionId=mock-session-another');
+
+    // 造出「换设备」的处境：这台设备很久以前首次打开过（基线老），但那几次阅读都发生在另一台上
+    // （本地 seen 空）。修复前这两条合起来就是那屏假未读。
+    await page.evaluate(() => localStorage.setItem(
+      'ccm-unread-v1',
+      JSON.stringify({ baselineTs: Date.now() - 3_600_000, seen: {}, manual: {} }),
+    ));
+    await page.reload();
+    await waitUntilConnected(page);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+
+    // 对照组先断言：同一工作区里同样晚于基线、同样没有本地 seen 记录的另一行仍然亮——没有这条，
+    // 下面那句「不亮」会在任何把未读整体关掉的回归里恒绿。
+    const stillUnread = page.locator('[data-testid="session-row"][data-session-id="mock-session-another-done"]');
+    await expect(stillUnread.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+
+    const readElsewhere = page.locator('[data-testid="session-row"][data-session-id="mock-session-another"]');
+    await expect(readElsewhere.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+
     await expectNoBrowserErrors(page);
   });
 

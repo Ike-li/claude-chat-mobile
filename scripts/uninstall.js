@@ -45,6 +45,7 @@ export const DATA_FILE_WHITELIST = Object.freeze([
   'service-snapshot.json',
   'service-install.json',
   'log-terminal.json',
+  'read-state.json',
 ]);
 const DATA_DIR_WHITELIST = Object.freeze(['worktree-settings']);
 const CONFIG_FILES = Object.freeze(['ccm.config.json', '.env', 'workdirs.json']);

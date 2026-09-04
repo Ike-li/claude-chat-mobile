@@ -480,7 +480,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
   let displayedSessionId = null;
-  const unread = createUnreadTracker(); // R65 未读点：已读表状态在模块内，此处只持句柄
+  // R65 未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
+  // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
+  // 刻意不带 ack：丢一条不致命，下次 connect 的 read:sync 全量归并会补回来。
+  const unread = createUnreadTracker({
+    onChange: mark => { if (socket?.connected) socket.emit('read:mark', mark); },
+  });
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let needsYouList = [];                // "等我"聚合（AttentionDeriver），按 waitingSince 升序（等得越久排越前）
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
@@ -1184,6 +1189,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // PWA 后台推送修复：重连后服务端对这个新 socket 的 presence 是全新的（socket.data.hidden 从
     // undefined 起算），需要重新对齐当前 document.hidden，避免重连瞬间被误判为"前台"或"后台"。
     socket.emit('client:presence', { hidden: document.hidden });
+
+    // 已读位点归并（2026-09-03）：把本地表推上去、取回全局权威态。这一趟同时干三件事——
+    // 迁移升级前只存在于 localStorage 的记录、补上离线期间攒的位点、把本设备的基线换成全局基线。
+    // 最后一件才是「换设备整屏复亮」的根因修复：本地基线是「本设备首次打开时刻」，在另一台设备上
+    // 读过的会话对它来说全是「基线之后有活动、又没有 seen 记录」。
+    socket.emit('read:sync', unread.snapshot(), res => {
+      if (unread.hydrate(res?.state)) refreshUnreadMarks();
+    });
 
     // 触发离线发送队列重发
     processOfflineQueue();
@@ -5556,6 +5569,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
               const all = state?.sessions || [];
               const nextHasMore = !!state?.hasMore;
               const nextTotal = Number.isFinite(state?.total) ? state.total : null;
+              unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
               updateTerminalBusyForDir(cwd, all, state?.terminalBusy);
               sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '' });
               renderRows(all, nextHasMore, nextTotal);
@@ -5632,6 +5646,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const sessions = state?.sessions || [];
         const hasMore = !!state?.hasMore;
         const total = Number.isFinite(state?.total) ? state.total : null;
+        // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
+        // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
+        // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
+        const readChanged = unread.hydrate(state?.readState);
         updateTerminalBusyForDir(cwd, sessions, state?.terminalBusy);
         const prevEntry = sessionsCache.get(cwd);
         const willRerender = shouldRerenderSessionList({
@@ -5644,7 +5662,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           nextTotal: total,
         });
         sessionsCache.set(cwd, { sessions, hasMore, total, query });
-        if (willRerender) renderRows(sessions, hasMore, total);
+        if (willRerender || readChanged) renderRows(sessions, hasMore, total);
       });
     };
 
@@ -5727,6 +5745,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       old.subtree.replaceWith(next.subtree);
       dirSectionNodes.set(d, next);
     }
+  }
+
+  // 已读位点被服务端刷新后（read:sync 归并回来）重画未读标记。每个目录小节的渲染逻辑是 buildDirSection
+  // 的闭包，外部够不着，只能整段重建；面板还没渲染过时 dirSectionNodes 为空，什么都不做——下次
+  // openSessionPanel 自然用新位点。首页最近列表不走这里：它在自己的 session:list 回调里 hydrate，
+  // 与列表数据同帧渲染。
+  function refreshUnreadMarks() {
+    if (dirSectionNodes?.size) rebuildDirSections([...dirSectionNodes.keys()]);
   }
 
   function isSessionPanelRevalidateActive() {
@@ -6365,7 +6391,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const done = (sessions, timedOut = false) => {
           if (!settled) { settled = true; resolve({ cwd, sessions, timedOut }); }
         };
-        socket.emit('session:list', { cwd }, state => done(state?.sessions || []));
+        socket.emit('session:list', { cwd }, state => {
+          unread.hydrate(state?.readState); // 首页最近行也画未读 chip；Promise.all 之后才渲染，天然同帧
+          done(state?.sessions || []);
+        });
         setTimeout(() => done([], true), 4000); // 单目录超时不挡整表，但要说出来
       });
       Promise.all(dirs.map(listMain)).then((mainLists) => {

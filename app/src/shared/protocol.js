@@ -64,6 +64,8 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'logs:clientError',
   'logs:get',
   'mirror:syncNow',
+  'read:mark',
+  'read:sync',
   'service:status',
   'session:close',
   'session:deletePermanent',

@@ -54,6 +54,8 @@ export const CONFIG_FILE_NAMES = [
   // 含 p256dh/auth 推送密钥材料（notify-channels.js 自己写着「绝不能裸 writeFileSync」），
   // 却一直不在权限清单里 —— CLI doctor 查不到、--fix 也修不了。
   join('data', 'push-subscription.json'),
+  // 跨设备已读位点（2026-09-03）：内容是会话 id 清单 + 阅读时刻，与 sessions.json 同档。
+  join('data', 'read-state.json'),
 ];
 
 // BE-013：统计权限过宽（非 0600）的配置文件数，供 UI doctor 传入 runDoctor。

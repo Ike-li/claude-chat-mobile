@@ -256,7 +256,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        只写不读——限速锁定的来源 IP、设备批准/拒绝、越界访问全记着但 web 一条也看不到，于是
   //        「⛔ 有人在暴力尝试你的入口」这类告警无从下钻。只读、过 deviceApproved 闸、不开 HTTP 端点。
   //        入向总数 41→42）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 42);
+  //      + read:sync / read:mark（2026-09-03，跨设备共享已读位点：抽屉未读此前全存 localStorage，
+  //        换设备后 seen 表为空、全部回落到「本设备首次打开时刻」这个很老的基线 → 在另一台读过的
+  //        会话整屏复亮。位点搬进 data/read-state.json，本地降级为离线缓存。入向总数 42→44）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 44);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('read:sync'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('read:mark'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('audit:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:set'));
