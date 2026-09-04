@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // scripts/doctor.js —— 启动前配置自检
-// 用法: node scripts/doctor.js [--env=path/to/.env] [--fix] [--full]
+// 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（22 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（21 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -13,20 +13,19 @@
 // 8. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
 // 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
 // 10. 前端 JS 语法（递归检查 app/public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
-// 11. 测试覆盖率门槛（仅 --full；默认跳过——装机预检不该跑完整单测）
-// 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
-// 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
-// 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
-// 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
-// 16. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
-// 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
-// 18. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
-// 19. 菜单栏 app 活性（进程在但主线程卡死时，系统里此前零信号——见 doctor-checks.menubarLivenessDiagnostic）
-// 20. 文件编辑器直写 × 公网迹象（唯一绕过 Agent 审批链的写入通道；只在 CF_ACCESS_*/PUBLIC_URL/ACCESS_PROFILE 显式声明公网时提示，见 doctor-checks.fileEditExposureDiagnostic）
-// 21. 公网访问方案自洽性（ACCESS_PROFILE 声明 vs CF_ACCESS_*/PUBLIC_URL/AUTH_TOKEN/通知配置的稳态核对，见 doctor-checks.accessProfileDiagnostic）
-// 22. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
+// 11. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
+// 12. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
+// 13. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
+// 14. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
+// 15. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
+// 16. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
+// 17. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
+// 18. 菜单栏 app 活性（进程在但主线程卡死时，系统里此前零信号——见 doctor-checks.menubarLivenessDiagnostic）
+// 19. 文件编辑器直写 × 公网迹象（唯一绕过 Agent 审批链的写入通道；只在 CF_ACCESS_*/PUBLIC_URL/ACCESS_PROFILE 显式声明公网时提示，见 doctor-checks.fileEditExposureDiagnostic）
+// 20. 公网访问方案自洽性（ACCESS_PROFILE 声明 vs CF_ACCESS_*/PUBLIC_URL/AUTH_TOKEN/通知配置的稳态核对，见 doctor-checks.accessProfileDiagnostic）
+// 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -505,33 +504,6 @@ function checkFrontendSyntax() {
   }
 }
 
-// D11: 测试覆盖率门槛（npm test --experimental-test-coverage）。
-// 门槛与实测值都从子进程输出里读，不在这里复述常量——此处曾写死「≥ 65%」，而
-// tests/gates/coverage-check.js 的默认门槛早已是 75，doctor 于是对着用户报了一个不存在的数字。
-// 覆盖率是会持续变的量，任何抄写都会再次漂移，只能转述真实输出。
-//
-// 默认跳过：装机预检会因此再跑一遍完整单测（约一分钟），新用户只想知道 token/CLI/端口是否可用。
-// 跳过后门槛由 CI 的 unit-test job 守（`.github/workflows/test.yml` 直接跑 coverage-check.js）；
-// 本地要立刻知道就 `node scripts/doctor.js --full`。
-// ★ 这里【不要】点名 `npm run check`：它的脚本链里没有 coverage-check，写上去就是又一次
-//   「对着用户报一个不存在的东西」。tests/unit/coverage-check.test.mjs 会按 package.json 核对本段里
-//   提到的每个 npm script。
-function checkCoverageThreshold({ full = false } = {}) {
-  if (!full) {
-    ok(bi('测试覆盖率', 'Test coverage'), bi('已跳过（装机预检默认不跑单测；本地用 --full，CI 每次推送都跑）', 'Skipped (first-run doctor does not run the unit suite; use --full locally, CI runs it on every push)'));
-    return;
-  }
-  try {
-    const stdout = execSync('node tests/gates/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
-    const actual = stdout.match(/行覆盖率:\s*([\d.]+)%/)?.[1];
-    const threshold = stdout.match(/门槛:\s*([\d.]+)%/)?.[1];
-    ok(bi('测试覆盖率', 'Test coverage'), actual && threshold ? bi(`行覆盖率 ${actual}%（门槛 ${threshold}%）`, `Line coverage ${actual}% (threshold ${threshold}%)`) : bi('达标', 'meets threshold'));
-  } catch (err) {
-    const msg = (err.stderr?.toString() || err.message || '').split('\n').filter(Boolean).slice(-3).join(' | ');
-    warn(bi('测试覆盖率', 'Test coverage'), bi(`覆盖率检查未通过: ${msg || '超时或无法运行'}`, `Coverage check failed: ${msg || 'timed out or could not run'}`));
-  }
-}
-
 // D13: 日志开关长开。DEBUG_SDK_MESSAGES 长开曾把日志刷到 149MB 而事后才被发现（2026-07-18 归档实测），
 // 此前 doctor 对三个开关零感知，服务状态面板是唯一可见性（app.js logging 字段）——那要人主动去看。
 //
@@ -630,10 +602,9 @@ function checkConfigFormat() {
 
 // ──────────────────────── 主流程 ────────────────────────
 
-// 解析命令行 --env / --fix / --full
+// 解析命令行 --env / --fix
 const envArg = process.argv.find(a => a.startsWith('--env='));
 const shouldFix = process.argv.includes('--fix');
-const shouldFull = process.argv.includes('--full');
 const envFile = envArg ? envArg.split('=')[1] : join(HERE, '.env');
 if (envArg && !existsSync(envFile)) {
   console.error(`错误: 指定的 .env 文件不存在: ${envFile}`);
@@ -747,7 +718,6 @@ function checkBind() {
   checkConfigFormat();
   checkDocConsistency();
   checkFrontendSyntax();
-  checkCoverageThreshold({ full: shouldFull });
   checkHooksBridge();
   checkLogSwitches();
   checkClaudeConfigDir();

@@ -173,4 +173,4 @@ See the [README security model](../README.en.md#security-model) for the concise 
 - `app/public/js/app.js` and `app/public/js/app/`: client state, event dispatch, and interaction modules.
 - `tests/gates/contract-check.js`: bidirectional Socket.io event-contract gate.
 
-See the [repository map](repository-map.md) for complete directory ownership and file inventory, the [display contracts](display-contracts.md) (Chinese) for cross-layer model, effort, and statusline transformations, and [hard rules](hard-rules.md) (Chinese) for n=1 tradeoffs and deferred tech debt.
+See [hard rules](hard-rules.md) (Chinese) §3.3 for directory ownership and module boundaries — that index also covers n=1 tradeoffs and deferred tech debt — and the [display contracts](display-contracts.md) (Chinese) for cross-layer model, effort, and statusline transformations.

@@ -137,7 +137,7 @@ test('放行: 带 preload-env 的单测单文件跑法（TDD 循环）', () => {
 test('放行: 与测试无关的日常命令', () => {
   allowed('git status');
   allowed('ls -la');
-  allowed('npm run inventory:update');
+  allowed('npm run inventory:check');
   allowed('npm run doctor');
   allowed('grep -rn "test" app/src/');
 });

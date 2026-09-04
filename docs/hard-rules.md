@@ -8,7 +8,6 @@
 > |------|--------|
 > | [架构说明](architecture.md) | Web/CLI 双通道、单驾驶员、事件信封 |
 > | [展示契约](display-contracts.md) | 模型 / effort / statusline 允许的变换 |
-> | [仓库地图](repository-map.md) | 文件归属与 inventory |
 > | 本文 | **不变量、n=1 取舍、已决「不做」、门禁锚点** |
 >
 > 历史 design 规格文档已下线。代码注释里残留的 design 文档路径 / `AD-*` / `NFR-*` / `SP-*` 引用，以**本文 + 当前实现 + 单测**为准，不必再找那份文件。
@@ -149,7 +148,9 @@
 
 ### 4.3 `npm run check` 包
 
-ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · visual mock registry · Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· inventory。
+ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+
+链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 
 删除豁免标记（不通用）：
 

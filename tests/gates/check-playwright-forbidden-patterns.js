@@ -2,8 +2,14 @@
 // test.only/test.skip/test.fixme/networkidle/waitForTimeout 会隐藏回归或引入不确定等待；
 // 本脚本把禁止清单落成 npm run check / CI 都执行的确定性门禁。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { join, extname, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+// 锚在脚本自身位置，不用 cwd：从别处调用时扫的仍是这个仓库，而不是碰巧的当前目录。
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// ★ tests/e2e 这个路径在仓库里有第二份真相：tests/infra/playwright.config.ts 的 testDir。
+//   改 config 而漏改这里，结果是 E2E 照跑、本门禁静默扫 0 个文件、npm run check 全绿——
+//   所以下面扫完必须断言扫描面非空，绝不能让「一个文件都没找到」表现为「没有违规」。
 const TARGET_DIRS = ['tests/e2e', 'tests/playground/e2e'];
 // 只扫描 Playwright E2E 树；Node 单元测试里的平台条件 skip 是合法的。未来若加 .js/.mjs/.cjs 的
 // Playwright spec 也必须纳入，避免扩展名死角。
@@ -30,17 +36,32 @@ function walk(dir, files = []) {
   return files;
 }
 
+// 根目录可注入（argv[2]），供自测在临时夹具上跑；缺省锚 ROOT。
+const rootDir = process.argv[2] ? resolve(process.argv[2]) : ROOT;
+
+const scanned = [];
 const violations = [];
 for (const dir of TARGET_DIRS) {
-  if (!existsSync(dir)) continue;
-  for (const file of walk(dir)) {
+  const absDir = join(rootDir, dir);
+  if (!existsSync(absDir)) continue;
+  for (const file of walk(absDir)) {
+    scanned.push(file);
+    const rel = file.slice(rootDir.length + 1);
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
       for (const { pattern, label } of FORBIDDEN) {
-        if (pattern.test(line)) violations.push(`${file}:${i + 1}: 禁止模式 "${label}" —— ${line.trim()}`);
+        if (pattern.test(line)) violations.push(`${rel}:${i + 1}: 禁止模式 "${label}" —— ${line.trim()}`);
       }
     });
   }
+}
+
+// 扫描面塌了必须红。「一个 spec 都没找到」与「没有违规」在输出上无法区分，而前者意味着这道闸
+// 已经失明——TARGET_DIRS 与 playwright.config.ts 的 testDir 是两份独立真相，改一边漏一边就是这个下场。
+if (scanned.length === 0) {
+  console.error(`❌ Playwright 禁止模式检查：在 ${TARGET_DIRS.join(' / ')} 下没扫到任何 spec 文件。`);
+  console.error('   这不是「没有违规」，是扫描面塌了——核对目录是否被改名/移动（另一份真相在 tests/infra/playwright.config.ts 的 testDir）。');
+  process.exit(1);
 }
 
 if (violations.length > 0) {
@@ -50,4 +71,4 @@ if (violations.length > 0) {
   console.error('若确认某用例需要暂时隔离，须经人工审阅后显式处理，不得由自动化 agent 自主写入 test.fixme。');
   process.exit(1);
 }
-console.log('✅ Playwright 测试基建禁止模式检查通过（tests/e2e 与 tests/playground/e2e 下无 test.only/skip/fixme/networkidle/waitForTimeout）。');
+console.log(`✅ Playwright 测试基建禁止模式检查通过（扫了 ${scanned.length} 个 spec，无 test.only/skip/fixme/networkidle/waitForTimeout）。`);

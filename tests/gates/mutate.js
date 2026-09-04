@@ -24,7 +24,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCoverageRows } from './coverage-check.js';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 
@@ -67,12 +66,36 @@ export function maskCodePositions(source) {
 }
 
 // ── 覆盖率报告解析 ──────────────────────────────────────────────────────────
+// node --experimental-test-coverage 的报告是【目录树】，叶子行只有 basename：
+//     ℹ src        |  …
+//     ℹ  server    |  …
+//     ℹ   app.js   |  …
+// 所以要按缩进深度把路径还原回完整相对路径。只比 basename 会在同名文件上认错人——本仓
+// app.js（app/src/server + app/public/js）与 notifications.js（app/src/ops + app/public/js/app）
+// 各有两份，而认错是【静默】的：本文件拿它挑「哪些行被覆盖过」，认错就把变异体生成到错的行集合
+// 上——要么全存活（假警报），要么跳过真被覆盖的行（假绿）。
+export function parseCoverageRows(reportText) {
+  const rows = [];
+  const stack = [];
+  for (const raw of String(reportText ?? '').split('\n')) {
+    const line = raw.replace(/^ℹ\s?/, '');
+    const cells = line.split('|');
+    if (cells.length < 5) continue;                                  // 分隔线等非表格行
+    const name = cells[0].trim();
+    if (!name || name === 'file' || name === 'all files') continue;  // 表头与汇总行
+    const depth = cells[0].length - cells[0].trimStart().length;     // 缩进即层级
+    stack.length = depth;                                            // 回到本行所属父级
+    stack[depth] = name;
+    if (!/\.[cm]?js$/.test(name)) continue;                          // 目录行只进栈、不产出
+    rows.push({ path: stack.filter(Boolean).join('/'), cells });
+  }
+  return rows;
+}
+
 // 返回未覆盖行号集合；目标文件不在报告里返回 null —— 那是「不知道」，绝不能当成「全覆盖」。
 //
-// ★ filePath 是【仓库相对路径】，不是 basename。报告是目录树、叶子行只有文件名，按 basename
-// 匹配会在同名文件上认错人（本仓 app.js / notifications.js 各有两份），而且那个「不在报告里
-// → null → 改为全文件变异」的诚实回落会因为总能撞上同名兄弟而永远不触发。
-// 路径还原见 coverage-check.js#parseCoverageRows。
+// ★ filePath 是【仓库相对路径】，不是 basename。那个「不在报告里 → null → 改为全文件变异」的
+// 诚实回落，正是靠上面的路径还原才不会因为总能撞上同名兄弟而永远不触发。
 export function parseUncoveredLines(reportText, filePath) {
   for (const row of parseCoverageRows(reportText)) {
     if (row.path !== filePath) continue;

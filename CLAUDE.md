@@ -61,10 +61,9 @@
 - [docs/display-contracts.md](docs/display-contracts.md) — 模型、effort、statusline 展示语义。**改契约先改 `tests/unit/display-contracts.test.mjs`**
 - [docs/deployment.md](docs/deployment.md) — 常驻 / 隧道 / CF Access 运维
 - [docs/getting-started.md](docs/getting-started.md) — 装机教程
-- [docs/repository-map.md](docs/repository-map.md) — **生成物**，全文件清单与归类
 - README.md — 产品入口，含安全边界
 
-增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
+新增文件必须落进 `tests/gates/repo-inventory.js` 的某条目录前缀；往 `docs/` 加文档还要在那份 `ROOT_FILES` 里逐篇登记，否则 check 里的 inventory 拒绝（这道闸挡的是一次性产物——审计报告、进度笔记、提案——悄悄回堆）。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
 
 ## 分支纪律
 
@@ -116,8 +115,9 @@
 npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
 npm run check      # ESLint + 模块边界 + 双向事件契约 + 文档一致性 + n=1 登记簿 + i18n 孤儿 key
-                   # + 破坏性删除守卫 + visual mock registry + 禁止模式 + desktop typecheck/单测 + inventory
-                   # 零 token、最快；每个门禁失败时会自己说清违反了什么，不必预先背清单
+                   # + 破坏性删除守卫 + Playwright 禁止模式 + desktop typecheck/单测 + 未分类文件
+                   # 零 token、最快；每个门禁失败时会自己说清违反了什么，不必预先背清单。
+                   # 链上成员由 tests/unit/gate-wiring.test.mjs 钉住：新门禁忘了接线会红
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；
                    # 需真 agent turn 的由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。

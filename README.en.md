@@ -241,8 +241,6 @@ Architectural invariants, design tradeoffs, and what the project has decided not
 **[Display contracts](docs/display-contracts.md)** (Chinese)
 Sources of truth and display rules for model, effort, and status-line information.
 
-**[Repository map](docs/repository-map.md)**
-Code entrypoints, directory ownership, and the repository file structure.
 
 ### Security
 

@@ -243,8 +243,6 @@ Web / CLI 双通道、Agent SDK、事件同步、断线恢复和会话接管。
 **[展示契约](docs/display-contracts.md)**
 模型、思考强度、状态栏等 UI 信息的事实源和展示规则。
 
-**[仓库地图](docs/repository-map.md)**
-代码入口、目录职责和仓库文件结构。
 
 ### 安全
 

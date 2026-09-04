@@ -197,7 +197,6 @@ node scripts/doctor.js
 ```
 
 它会检查 token、CLI 路径、工作区、端口、网关环境、文件权限、bridge 状态和文档/前端一致性。
-默认不跑单测覆盖率（要跑一遍完整单测，约一分钟）；那道门槛由 CI 守着，维护者本地想立刻看就加 `--full`。
 若提示 3000 已被桌面端占用，不要再执行下一步的 `npm start`，从桌面端菜单里 server 一行点「重启」。
 
 权限类问题可让 doctor 做最小修复：
@@ -448,7 +447,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
    如果配置文件已存在就停下来，不要自行加 --force。
-5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。不要加 --full，除非我要求。
+5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
 6. 确认 3000 没被桌面端或另一个 npm start 占用后，用 `npm start` 启动（headless）。
    用鉴权后的 /health JSON 验证，不要只看进程是否存在。
 7. 告诉我启动日志中的局域网手机地址，但不要把 AUTH_TOKEN 写进任何会外传的文件或报告。

@@ -202,7 +202,6 @@ node scripts/doctor.js
 ```
 
 The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, and documentation/front-end consistency.
-It does not run the unit-test coverage suite by default (that means a full unit run, about a minute); CI guards that threshold, and maintainers can pass `--full` to see it locally.
 If it says port 3000 is held by the desktop app, do not run `npm start` next — restart from the desktop menu.
 
 For permission-only repairs:
@@ -434,7 +433,7 @@ Follow these steps in order and verify each result before continuing:
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
    If a config file already exists, stop instead of adding --force yourself.
-5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair. Do not pass --full unless I ask.
+5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
 6. Confirm port 3000 is not held by the desktop app or another npm start, then start with `npm start` (headless).
    Verify authenticated /health JSON; do not rely only on the process existing.
 7. Give me the LAN phone URL from startup logs, but never write AUTH_TOKEN into any file or report that may leave

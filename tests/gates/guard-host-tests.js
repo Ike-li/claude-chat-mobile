@@ -40,7 +40,7 @@ const HOST_ALLOWED_SCRIPTS = new Set([
 ]);
 
 // 「这一段会跑测试 / 执行被改坏的源码」——本钩子的管辖范围。
-// 命中即进入白名单判定；不命中直接放行（git/ls/grep/npm run inventory:update 一概不打扰）。
+// 命中即进入白名单判定；不命中直接放行（git/ls/grep/npm run inventory:check 一概不打扰）。
 const TEST_DOMAIN = [
   /\bnpm\s+(?:run\s+)?[\w:.-]*test[\w:.-]*/,   // npm test / npm run test:xxx / npm run pretest
   /\bnpm\s+t\b/,
@@ -140,7 +140,7 @@ function segmentReason(segment) {
   if (!TEST_RUNNERS.has(head)) return null;                          // 命令头不是解释器 → 不归本钩子管
   const script = segment.match(/\bnpm\s+run\s+([\w:.-]+)/)?.[1];
   if (inContainer(head, script)) return null;                        // 这一段已进容器
-  if (!TEST_DOMAIN.some(re => re.test(segment))) return null;        // 域外（npm run inventory:update 等）
+  if (!TEST_DOMAIN.some(re => re.test(segment))) return null;        // 域外（npm run inventory:check 等）
   if (whitelistedRun(segment, script)) return null;
   if (!script && isIsolatedUnitRun(segment)) return null;
   return REASONS.find(({ re }) => re.test(segment))?.why ?? FALLBACK_REASON;
