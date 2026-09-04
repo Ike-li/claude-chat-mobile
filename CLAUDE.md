@@ -4,33 +4,73 @@
 
 技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.3.201 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + Playwright（移动端 UI E2E，断言基于 DOM 状态非像素比对）。
 
-当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。
-Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
-新功能的状态别再落 `app/public/js/app.js` / `app/src/server/app.js` 顶层作用域：前端新状态进 `app/public/js/app/` 模块（工厂 + context 注入，样板见 `app/public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
-
-双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播（四个入口：桌面端菜单栏、web 端已信任设备远程准入、headless 终端回车/deny（要 TTY，launchd 起的 server 没有）、`scripts/device.js`）；新设备入列会推一条不含 ID/IP 的通知（5 分钟节流）；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `app/src/ops/notifications.js`、`notify-channels.js`）。
-
 **产品立场 n=1 自托管**（单用户、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
+
+## 动手前
+
+- 不知道某个功能该怎么做时：**CLI 有什么 web 就有什么**，先去找 claude code CLI 是怎么实现的。Agent SDK 文档在 https://code.claude.com/docs/en/agent-sdk/overview ，尽量不重复造轮子。
+- 新功能的状态**别再落** `app/public/js/app.js` / `app/src/server/app.js` 顶层作用域：前端新状态进 `app/public/js/app/` 模块（工厂 + context 注入，样板见 `app/public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
+- 前端逻辑能写成纯函数就先落 `app/public/js/logic/*`（数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 零构建共用同一份文件。`logic.js` 仅是 re-export barrel）。
+- 改动涉及同步链路、推送、镜像锁、事件回放时，**先读 [docs/architecture.md](docs/architecture.md)**——判据都在那里，凭直觉改这几处基本会错。
+
+## 同步与通道
+
+双向实时同步走 Socket.io，出向统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验双向事件契约）。并存的通道：Web 驾驶走 Agent SDK 双向流；CLI 终端驾驶**不经过 SDK**，靠磁盘 transcript 轮询同步只读镜像，「单驾驶员模型」防两端同时写分叉；设备审批走文件监听广播；离线唤醒走 web-push/ntfy。机制、判据与参数全在 [docs/architecture.md](docs/architecture.md)。
+
+几条最容易改错的，摆在这里：
+
+- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。
+- **服务告警与「需要你(N)」是不同轴，绝不混判**：顶栏 chip / 角标只表达「点一下就能处理」的待办，服务告警只活在抽屉「服务」小节与服务状态面板。
+- **限速锁定的措辞按来源分档**：本机来源**绝不说成「有人在暴力尝试」**。
+- **不开无鉴权的 HTTP 数据端点**：`/health`、`/metrics`、历史回显都过鉴权。
 
 ## 代码地图与模块边界
 
-**运行时代码住在 `app/`**（`app/src/` 后端 · `app/public/` 前端 · `app/server.js` 入口）；`scripts/`（用户装机/运维命令）与 `desktop/`（macOS 菜单栏）留在仓库根——前者是用户要敲的命令（`node scripts/doctor.js`，加一层前缀纯属体验退化），后者不是 web 运行时。**注意两个脆弱点**：① `app/src/**` 里算「项目根」是**三层**向上（`app/src/server/app.js` 的 `HERE`、`app/src/shared/data-dir.js` 的 `PROJECT_ROOT`）——`data/`、`scripts/`、`ccm.config.json` 都在仓库根、不随代码进 `app/`，少一层会让它们全部解析到 `app/` 下且无任何报错；② `desktop/launchd/server.plist.template` 的启动命令 `exec <node> app/server.js` 与 `app/src/ops/service-units.js` 解析它的后缀必须逐字一致，漏改一边会让服务面板的 repo/node 恒为 null。
+**运行时代码住在 `app/`**（`app/src/` 后端 · `app/public/` 前端 · `app/server.js` 入口）；`scripts/`（用户装机/运维命令）与 `desktop/`（macOS 菜单栏）留在仓库根——前者是用户要敲的命令（`node scripts/doctor.js`，加一层前缀纯属体验退化），后者不是 web 运行时。
 
-后端 `app/src/` 按域分层：`agent/`（SDK 会话驱动 agent.js、审批生命周期/存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp 在 history.js、工作区、「需要你」聚合）· `server/`（组装根：app.js 存量顶层态、http/socket 接线、instance-* 多实例管理、mirror-engine 只读镜像、hooks 投递箱）· `auth/`（AUTH_TOKEN 限速、CF Access、设备指纹/信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置 env-schema/config-file、doctor、通知与推送通道、statusline 与额度快照、metrics、审计、两个 CLI 桥的 server 侧、受管服务 service-*）· `shared/`（叶子工具层；protocol.js 是事件契约真相源）。
+**注意两个脆弱点**：
 
-**测试与门禁全部住在 `tests/` 下**：`tests/{unit,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（`Dockerfile.test`、三份 compose、两份 playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是 `npm run check` 的 12 个门禁脚本。`scripts/` 只剩用户装机/运维会执行的命令 + 四个维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+1. `app/src/**` 里算「项目根」是**三层**向上（`app/src/server/app.js` 的 `HERE`、`app/src/shared/data-dir.js` 的 `PROJECT_ROOT`）——`data/`、`scripts/`、`ccm.config.json` 都在仓库根、不随代码进 `app/`，少一层会让它们全部解析到 `app/` 下且**无任何报错**。
+2. `desktop/launchd/server.plist.template` 的启动命令 `exec <node> app/server.js` 与 `app/src/ops/service-units.js` 解析它的后缀**必须逐字一致**，漏改一边会让服务面板的 repo/node 恒为 null。
 
-边界是 `tests/gates/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `app/public/js/canonicalize.js`，指纹规范化两侧共用）· `app/src/shared` 是叶子，不得反向 import 其他后端域 · `app/src/server` 是组装根，只有 app/server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
+后端 `app/src/` 按域分层：
 
-前端三层：`app/public/js/app.js`（存量编排层）→ `app/public/js/app/*`（域模块，见上）→ `app/public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
+| 域 | 职责 |
+|---|---|
+| `agent/` | SDK 会话驱动、审批生命周期与存储、CLI 镜像态判定 |
+| `sessions/` | 会话注册表、transcript 历史与 catchUp、工作区、「需要你」聚合 |
+| `server/` | 组装根：接线、多实例管理、mirror-engine、hooks 投递箱 |
+| `auth/` | 限速、CF Access、设备指纹与信任门 |
+| `files/` | 浏览/预览/搜索/上传、git 变更、工作区范围门 |
+| `ops/` | 配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务 |
+| `shared/` | 叶子工具层；`protocol.js` 是事件契约真相源 |
 
-文档索引：[docs/architecture.md](docs/architecture.md)（双通道/单驾驶员/回放详解）· [docs/display-contracts.md](docs/display-contracts.md)（模型/effort/statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻/隧道/CF Access 运维）· [docs/getting-started.md](docs/getting-started.md)（装机教程）· [docs/repository-map.md](docs/repository-map.md)（**生成物**，全文件清单与归类）· README.md（产品入口，含安全边界）。增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+
+模块边界由 `tests/gates/check-import-boundaries.js` **硬闸执行**（check 一环）。违反时它会自己说清违反了哪条，不必背，骨架是：
+
+- 前后端互不 import（唯一豁免 `app/public/js/canonicalize.js`，指纹规范化两侧共用）
+- `app/src/shared` 是叶子，不得反向 import 其他后端域
+- `app/src/server` 是组装根，只有 `app/server.js` 与它自身能 import 它
+- 运行时代码禁止 import `scripts/`（维护者工具）与 `tests/`
+- 零循环依赖
+
+文档索引：
+
+- [docs/architecture.md](docs/architecture.md) — 双通道 / 单驾驶员 / 回放 / 推送 / 可观测详解
+- [docs/display-contracts.md](docs/display-contracts.md) — 模型、effort、statusline 展示语义。**改契约先改 `tests/unit/display-contracts.test.mjs`**
+- [docs/deployment.md](docs/deployment.md) — 常驻 / 隧道 / CF Access 运维
+- [docs/getting-started.md](docs/getting-started.md) — 装机教程
+- [docs/repository-map.md](docs/repository-map.md) — **生成物**，全文件清单与归类
+- README.md — 产品入口，含安全边界
+
+增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
 
 ## 分支纪律
 
 **日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。发版会顺带用 `git archive` 打一个裁剪过的分发 tarball 传上 Release（装机 `curl` 那条指向它）：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
-其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`，如 `claude-chat-mobile-promo`=宣传创作区、`claude-chat-mobile-gh-pages`=展示站、`claude-chat-mobile-third-party`=三方代理专用），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
+其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
@@ -59,60 +99,59 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
 和仓库里那三层代码级防护（`mutate` 的沙箱 HOME、删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
 
-**两档例外不进容器**（需要真凭据，得单独授权）：
-`RUN_CLAUDE_INTEGRATION=1`（7 个需真 agent turn 的文件）与 `npm run test:smoke`。
-其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
+写删除相关代码时会撞上 `check-destructive-deletes` 门禁：测试里的 recursive 删除必须可追溯到 `mkdtemp`，
+否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`。
+**两种标记不通用**——为单文件删除批的豁免不放行递归删除。
+
+**两档例外不进容器**（需要真凭据，得单独授权）：`RUN_CLAUDE_INTEGRATION=1`（需真 agent turn 的那批文件）
+与 `npm run test:smoke`。其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
 
 ## 常用命令
 
 > ⚠️ **启动只有两条入口**：headless = 终端 `npm start`；macOS 还可走 `desktop/` 的 CCM.app。桌面端占着 3000 时**勿再手动 `npm start`**。改配置/代码后，桌面端菜单里 server 一行点「重启」，headless 重启那个进程。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
 
-配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `app/src/ops/env-schema.js`，读写与类型归一在 `app/src/ops/config-file.js`（读写必须同源，写错源＝假成功）。环境变量始终压过文件。
+配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `app/src/ops/env-schema.js`，读写与类型归一在 `app/src/ops/config-file.js`（**读写必须同源，写错源＝假成功**）。环境变量始终压过文件。
 
 ```bash
 npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
-npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性（含契约计数：文档写的「当前 N 种/个」按 `protocol.js` 真值校验）+ n=1 假设面登记簿（`docs/hard-rules.md` §2 表格 ⇔ 代码 `// n1: <ID>` 标记双向相等）+ i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + desktop swiftc typecheck 与 CCMCore 单测（app-build --test-only）+ inventory（零 token、最快）
+npm run check      # ESLint + 模块边界 + 双向事件契约 + 文档一致性 + n=1 登记簿 + i18n 孤儿 key
+                   # + 破坏性删除守卫 + visual mock registry + 禁止模式 + desktop typecheck/单测 + inventory
+                   # 零 token、最快；每个门禁失败时会自己说清违反了什么，不必预先背清单
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
-npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；其中需真 agent turn 的 7 个由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
-npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn claude、不起 server（最快）。注意「单测」不等于「纯函数」——相当一部分文件会用 mkdtemp 临时目录或 spawnSync 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录
-npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
-RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency/approval-integrity 整份 + file-upload 一个 describe)
-npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
-npm run test:visual # test:e2e 的兼容别名
-npm run playground:up              # 维护者 Docker playground（干净 Linux HOME，http://127.0.0.1:13000；不是产品入口）
-npm run test:docker:playground     # 容器内装机路径 + 拓扑探针 + 薄 Playwright TOFU
+npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；
+                   # 需真 agent turn 的由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。
+                   # CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
+npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn claude、不起 server（最快）。
+                   # 注意「单测」不等于「纯函数」——相当一部分文件会用 mkdtemp 临时目录或 spawnSync
+                   # 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录
+npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向
+                         # tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
+RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）：
+                                   # claude-lifecycle / session-switch / websocket-events / aborted-state /
+                                   # message-idempotency / approval-integrity 整份 + file-upload 一个 describe
+npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
 
 # 装机与配置
-npm run setup      # 交互装机向导（写 ccm.config.json；可选功能逐项问；非交互下会动全局的项缺省 off、危险回落直接拒绝——见 hard-rules §1）
-node scripts/config.js get|set|unset|check|migrate|schema   # headless 配置 CLI（与 web 配置面板同一读写源 config-file.js；secret 明文须显式 --reveal）
+npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）
+node scripts/config.js         # headless 配置 CLI：get|set|unset|check|migrate|schema；secret 明文须显式 --reveal
+node scripts/doctor.js         # 启动自检（鉴权/CLI 路径/工作区/端口/两个桥/配置/公网暴露面自洽性…）。
+                               # 跑一次看输出，别背清单。--env=prod.env 指定 .env
 
-# 启动前自检配置
-node scripts/doctor.js              # 启动自检（22 项）：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/statusline 桥/hooks 桥/ANTHROPIC_*/配置权限/配置格式/文档一致性/前端语法/覆盖率(仅 --full)/日志开关长开/CLAUDE_CONFIG_DIR/附件占用/桌面端服务安装态/菜单栏 app 活性/shell env 压过文件配置时列出键名/文件编辑直写×公网迹象(FILE_EDIT)/公网访问方案自洽性(ACCESS_PROFILE)/监听地址自洽性(BIND_MODE)
-node scripts/doctor.js --env=prod.env  # 指定 .env 文件
+# 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除。机制见 architecture.md）
+npm run statusline:install|status|uninstall
+npm run hooks:install|status|verify|uninstall
 
-# 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除）
-npm run statusline:install|status|uninstall    # statusline 桥：把 CLI 会话的 statusline 数据落成快照，供 web 只读镜像展示
-npm run hooks:install|status|verify|uninstall  # hooks 桥：把「回合结束/需要你」的轮询变即时信号（机制见概述段）
+# macOS 桌面端（第二条入口；service:* 是它背后的 CLI，一般不用手敲）
+npm run app:install   # 编译并装进 /Applications。装过之后升级走菜单「更新桌面端（重新编译）」一步到位
+npm run app:build     # 只编译到 desktop/build/CCM.app。check 里的 app:test 已含 swiftc -typecheck，
+                      # 所以「check 全绿」蕴含「能编译」；但 typecheck 不产出 bundle，
+                      # **改了菜单栏要真跑起来仍需 app:build/app:install**
+npm run service:status                             # 各 unit 运行态/归属/漂移；--json 供菜单栏与 doctor 消费
+npm run service:install|adopt|restart|logs|health  # adopt=接管手工安装（只写 manifest 不碰 plist）
+npm run uninstall -- [--purge] [--dry-run] --yes   # 一键卸载。**只删产品自己装的**，manifest 外的 unit /
+                                                   # ~/.cloudflared / ~/.claude/projects 永不碰
 
-# macOS 桌面端（第二条入口；下面 service:* 是它背后的 CLI，一般不用手敲）
-npm run app:install                 # 首次编译并装进 /Applications —— Spotlight/Launchpad 可搜。装过之后升级走菜单「更新桌面端（重新编译）」一步到位（编译→安装→自动重启）；「重启应用」只重启不编译，用于 app 行为异常
-npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
-#   check 里的 app:test 会先对全部 desktop/*.swift 跑一次 swiftc -typecheck（约 1.5s），所以「check 全绿」已蕴含「能编译」；
-#   但 typecheck 不产出 bundle，改了菜单栏要真跑起来仍需 app:build/app:install
-npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
-npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
-npm run uninstall -- [--purge] [--dry-run] --yes    # 一键卸载（受管服务+残留 menubar 进程+CCM.app+偏好域+两个桥+~/.claude/ccm；--purge 连数据根白名单/配置/受管日志）；只删产品自己装的，manifest 外的 unit/~/.cloudflared/~/.claude/projects 永不碰
-
-# 设备指纹审批与管理
-node scripts/device.js list         # 列出所有受信任和等待确认的设备
-node scripts/device.js list --json  # 机读快照（桌面端菜单栏「🔐 N 台新设备等待批准」的数据源）
-node scripts/device.js approve <ID> # 批准指定设备 ID
-node scripts/device.js deny <ID>    # 拒绝/删除指定设备 ID
-
-# 冒烟验收（真实调用 claude 消耗 token；runner 自动使用随机端口和临时 CCM_DATA_DIR）
-npm run test:smoke -- --list
-npm run test:smoke -- --scenario core
+node scripts/device.js list [--json] | approve <ID> | deny <ID>   # 设备审批的 headless 入口
+                                                                  # （另三个入口见 architecture.md）
 ```
-
-健康检查：`GET /health` → `{status, sessionId, busy, versions, buildNonce, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure,clientErrors,hookEventsConsumed,hookEventsIgnored,hookPushes}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；**鉴权 JSON 快照**，非 Prometheus 文本（n=1 自托管默认无 scraper；多实例 scrape 需先改 [docs/hard-rules.md](docs/hard-rules.md) 立场）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。服务状态可见性（判定化）：`instances` 广播额外带 `service{startedAt,deliveryFailure,rateLimitLockout,clientError}` 字段（startedAt 供面板"运行时长/启动于"展示 + 推送投递健康 + 登录限速锁定 + 前端错误告警，告警均带 24h 时效窗自动退场；**与"需要你(N)"聚合是不同轴，绝不混判——顶栏 chip/角标只表达"点一下就能处理"的待办，服务告警只活在抽屉「服务」小节与服务状态面板**）；服务状态面板渲染 基础 + 判定化告警 + 安全日志 + 重启记录 四段，不展示裸计数器（对人无参照系不可解读，原始计数留 `/metrics` 巡检端点）。告警要说得出"是谁/为什么"：限速锁定带 `source`（限速桶 key，前端 `describeRateLimitSource` 分 本机/局域网/公网 三档改措辞与判色——**本机来源绝不说成"有人在暴力尝试"**），投递失败带 `reason`（后端 `describeDeliveryError` 清洗，保证不含 endpoint URL）；两者都走 `metrics.label()` 这张非数值上下文表，不进 `/metrics` 数值面。安全日志段读 `audit:get`（`data/audit-records.json` 的唯一读取面，只读、过 deviceApproved 闸、不开 HTTP 端点）。

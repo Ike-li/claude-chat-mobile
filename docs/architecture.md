@@ -64,7 +64,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 1. 用户在电脑终端直接运行 `claude`。这个进程不经过 Claude Chat Mobile 的 Agent SDK 子进程。
 2. CLI 把已经完成的消息写入 `~/.claude/projects/` 下的 transcript。
 3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。
-4. 可选 hooks bridge 把 Stop / Notification 写入文件投递箱；`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
+4. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
 5. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
 
 因此只读镜像有明确限制：
@@ -152,6 +152,26 @@ Agent 工具审批或用户直接文件编辑
 
 安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。
 
+### 设备审批的四个入口
+
+设备信任层的事实源是 `trusted-devices.json`，server 用文件监听把变更广播给在线客户端，因此任一入口批准后其余入口即时生效：
+
+- 桌面端菜单栏（macOS CCM.app）
+- Web 端由**已受信任的设备**远程准入
+- headless 终端里直接回车 / deny —— **要求 TTY**，launchd 起的 server 没有 TTY，这条入口在受管服务下不可用
+- `node scripts/device.js approve|deny <ID>`
+
+新设备入列时会推一条通知，**正文不含设备 ID 与 IP**（推送通道未必端到端加密），并按 5 分钟节流避免同一设备反复重试刷屏。
+
+### 离线唤醒与推送抑制
+
+离线唤醒走 web-push / ntfy。抑制策略按「用户是否可能看不到」分档，而不是按事件重要性：
+
+- **审批、提问、后台任务完成：无条件推。** 这三类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。
+- **回合完成的 `result`：仅当 approved 房间存在前台可见连接时抑制。** 前台判据是客户端主动上报的 `client:presence`，**不是 socket 是否连着**——手机切后台时 socket 常常还活着，拿连接状态当判据会让用户收不到本该收到的完成通知。
+
+推送 body 默认最小化、不含消息正文；用户可按设备开启「推送内容预览」，之后改发 `previewBody`。实现见 `app/src/ops/notifications.js` 与 `app/src/ops/notify-channels.js`。
+
 ## 状态与持久化
 
 | 数据 | 事实源 | 用途 |
@@ -165,6 +185,37 @@ Agent 工具审批或用户直接文件编辑
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |
 
 `CCM_DATA_DIR` 不保存 Claude 原始 transcript。清理它会影响 CCM 的控制面状态，但不会等同删除全部 Claude 会话；SDK 真删会话是另一条显式操作。
+
+## 运行时可观测与服务可见性
+
+### 两个鉴权端点
+
+- `GET /health` → `{status, sessionId, busy, versions, buildNonce, timestamp}`
+- `GET /metrics` → `{metrics{activeSessions, events, catchUpHits, catchUpReloads, rateLimitLockouts, pushSuccess, pushFailure, ntfyFailure, clientErrors, hookEventsConsumed, hookEventsIgnored, hookPushes}, state, states, timestamp}`
+
+设了 `AUTH_TOKEN` 时两者都需带 `?token=` 或 `x-auth-token` 头，否则 401。`state` / `states` 是 StateProbe 的状态分类：后端产出其中四类，`host_offline` 由客户端心跳判定，后端无从知道自己已经联系不上。
+
+`/metrics` 是**鉴权 JSON 快照，不是 Prometheus 文本**——n=1 自托管默认没有 scraper，多实例 scrape 属于要先改立场的事（见 [hard-rules](hard-rules.md)）。历史回显同样走鉴权的 `session:history` socket 事件；**项目不开无鉴权的 HTTP 数据端点**。
+
+### 服务状态面板：判定化，不是计数器
+
+面板渲染四段：基础信息 + 判定化告警 + 安全日志 + 重启记录。**不展示裸计数器**——一个孤零零的 `pushFailure: 3` 对人没有参照系、无法解读，原始计数留给 `/metrics` 巡检。
+
+告警随 `instances` 广播的 `service{startedAt, deliveryFailure, rateLimitLockout, clientError}` 字段下发，均带 24h 时效窗自动退场。每条告警都要说得出「是谁、为什么」：
+
+- **限速锁定**带 `source`（限速桶 key），前端 `describeRateLimitSource` 分本机 / 局域网 / 公网三档改措辞与判色。**本机来源绝不说成「有人在暴力尝试」**——自己输错一次密码不是攻击。
+- **投递失败**带 `reason`，由后端 `describeDeliveryError` 清洗，保证不含 endpoint URL。
+
+两者都走 `metrics.label()` 这张非数值上下文表，不进 `/metrics` 的数值面。
+
+安全日志段读 `audit:get`，这是 `data/audit-records.json` 的唯一读取面：只读、过 deviceApproved 闸、不开 HTTP 端点。
+
+### 服务告警与「需要你」是不同轴，绝不混判
+
+- 顶栏 chip / 角标只表达「点一下就能处理」的待办（审批、提问）。
+- 服务告警只活在抽屉「服务」小节与服务状态面板里。
+
+把推送投递失败混进「需要你(N)」会让那个数字失去含义：用户点进去发现无事可做，下次就不再信它。
 
 ## 代码入口
 
