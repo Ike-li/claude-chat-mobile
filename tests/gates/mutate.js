@@ -30,9 +30,46 @@ const ROOT = join(import.meta.dirname, '..', '..');
 // ── 代码位置掩码 ────────────────────────────────────────────────────────────
 // 字符串/模板串/注释里的 `&&`、`===` 是文案不是运算符，改了只会造出无意义的变异体（还可能破坏
 // 断言消息）。同 tests/gates/agent-event-contract.js 的 skipQuoted/skipLineComment 一路做法。
+//
+// ★ 2026-09-05：加上正则字面量。此前不认它，后果是【静默少报】而不是报错——
+// `app/src/files/uploads.js:29` 的 `/[/\\:*?"<>|]/g` 里那个 `"` 被当成字符串开头，
+// 从那行起到文件末尾（或下一个 `"`）整片被掩掉：25 处运算符只生成出 1 个变异体，
+// 而输出里写着「✅ 全部被杀死」。sanitizer.js 更彻底，4 条运算符行全掩、产出 0 个变异体。
+// 这比没有工具更糟——它给的是一份看起来干净的假报告。
+
+// `/` 是正则起始还是除号，取决于前一个有意义的 token 能不能【结束一个表达式】。
+// 这些关键词结尾的位置不可能是除号（`return /re/.test(x)` 里的 return 是词字符，
+// 只看「前一个字符是不是字母」会把它误判成除号）。
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+  'throw', 'case', 'do', 'else', 'yield', 'await',
+]);
+
+// lastSig：最近一个非空白、非注释的代码字符；lastWord：若它是词字符，所属的完整标识符。
+function slashStartsRegex(lastSig, lastWord) {
+  if (lastSig === '') return true;                        // 文件开头
+  if (')]}'.includes(lastSig)) return false;              // 表达式结尾 → 除号
+  if (/[A-Za-z0-9_$]/.test(lastSig)) return REGEX_PRECEDING_KEYWORDS.has(lastWord);
+  return true;                                            // ( , = : [ ! & | ? ; + - * % 等之后只能是正则
+}
+
 export function maskCodePositions(source) {
   const mask = new Array(source.length).fill(true);
   let i = 0;
+  let lastSig = '';   // 最近一个有意义的代码字符（跳过空白与注释）
+  let lastWord = '';  // lastSig 为词字符时，它所属的完整标识符
+  let prevChar = '';  // 上一个【原始】字符（含空白）——判断词是否连续，不能用 lastSig
+  const noteSignificant = (ch) => {
+    if (/[A-Za-z0-9_$]/.test(ch)) {
+      // 用 prevChar 而不是 lastSig：后者跳过了空白，`x case` 会被拼成 'xcase' 而认不出关键字。
+      lastWord = /[A-Za-z0-9_$]/.test(prevChar) ? lastWord + ch : ch;
+      lastSig = ch;
+    } else if (!/\s/.test(ch)) {
+      lastWord = '';
+      lastSig = ch;
+    }
+    prevChar = ch;
+  };
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
@@ -58,8 +95,37 @@ export function maskCodePositions(source) {
         i += 1;
         if (closing) break;
       }
+      lastSig = ch; lastWord = '';   // 字符串是一个能结束表达式的 token → 其后的 `/` 是除号
       continue;
     }
+    // 正则字面量。字符类 `[...]` 里的 `/` 不终结正则（`/[/\\:*?"<>|]/g` 正是这个形态），
+    // 所以必须跟一个 inClass 状态；漏掉它会在第一个 `/` 处提前收尾，把剩下的 `"` 又漏出去。
+    //
+    // 【先探后掩】正则不跨行：先扫到本行内的闭合 `/`，找到了才真去掩。没找到说明我们把除号
+    // 误判成了正则——那时【一个字符都不掩】。反过来（先掩再发现没闭合）会静默吃掉一整行代码上的
+    // 变异体，正是本次要修的那个方向的失效。
+    if (ch === '/' && slashStartsRegex(lastSig, lastWord)) {
+      let j = i + 1;
+      let inClass = false;
+      let end = -1;
+      while (j < source.length && source[j] !== '\n') {
+        const c = source[j];
+        if (c === '\\') { j += 2; continue; }
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) { end = j; break; }
+        j += 1;
+      }
+      if (end !== -1) {
+        let stop = end + 1;
+        while (stop < source.length && /[a-z]/.test(source[stop])) stop += 1;  // dgimsuvy 标志位
+        for (; i < stop; i += 1) mask[i] = false;
+        lastSig = ')'; lastWord = '';   // 正则字面量是一个完整表达式 → 其后的 `/` 是除号
+        continue;
+      }
+      // 未闭合：按除号处理，落到下面的常规路径。
+    }
+    noteSignificant(ch);
     i += 1;
   }
   return mask;

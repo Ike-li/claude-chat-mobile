@@ -51,6 +51,56 @@ test('maskCodePositions：行注释与块注释内部不算代码', () => {
   assert.equal(mask[src.lastIndexOf('c;')], true, '块注释之后要恢复成代码');
 });
 
+// ── 正则字面量（2026-09-05 修复的静默少报）────────────────────────────────────
+// 此前不认正则字面量，后果不是报错而是【假的干净报告】：正则里的一个 `"` 被当成字符串开头，
+// 从那里到下一个 `"`（常常是文件末尾）整片被掩掉，变异体一个都生成不出来，
+// 输出却写着「✅ 全部被杀死」。实测受害者：app/src/files/uploads.js（25 处运算符 → 1 个变异体）、
+// app/src/shared/sanitizer.js（4 条运算符行全掩 → 0 个变异体）。
+test('maskCodePositions：正则里的引号不得开启字符串（本次修复的核心形态）', () => {
+  const src = `const s = x.replace(/[/\\\\:*?"<>|]/g, '_');\nif (a === b) return c;`;
+  const mask = maskCodePositions(src);
+  const tail = src.indexOf('a === b');
+  assert.equal(mask[tail], true, '正则之后的代码必须仍是代码——这正是此前塌掉的地方');
+  assert.equal(mask[tail + 2], true, '`===` 本身要可变异');
+  assert.equal(mask[src.indexOf('"')], false, '正则内部（含那个引号）不是代码');
+});
+
+test('maskCodePositions：字符类里的 / 不终结正则', () => {
+  // `[/...]` 里的第一个 `/` 若被当成结束符，后面的 `"` 就又漏成字符串开头了。
+  const src = `x.replace(/[/"]/g, '');\nlet y = p && q;`;
+  const mask = maskCodePositions(src);
+  assert.equal(mask[src.indexOf('p &&') + 2], true, '正则闭合位置算错会把后一行一起吃掉');
+});
+
+test('maskCodePositions：除号不得被当成正则起始（会静默吃掉整行）', () => {
+  const src = 'const mb = bytes / 1048576; if (mb >= 10) drop();';
+  const mask = maskCodePositions(src);
+  assert.equal(mask[src.indexOf('>=')], true, '`bytes /` 是除法，后面的 >= 必须仍可变异');
+  assert.ok(mask.every(Boolean), '整行都是代码，不该有任何一个字符被掩掉');
+});
+
+test('maskCodePositions：关键词之后的 / 是正则（return /re/ 这类）', () => {
+  const src = 'function f(s) { return /a"b/.test(s); }\nlet z = m || n;';
+  const mask = maskCodePositions(src);
+  assert.equal(mask[src.indexOf('"')], false, 'return 后是正则，里面的引号不是字符串开头');
+  assert.equal(mask[src.indexOf('m ||') + 2], true, '正则之后恢复成代码');
+});
+
+test('maskCodePositions：正则标志位一并掩掉，且其后立刻恢复', () => {
+  const src = 'const r = /ab/gimsuy; const t = u === v;';
+  const mask = maskCodePositions(src);
+  assert.equal(mask[src.indexOf('gimsuy')], false, '标志位属于字面量');
+  assert.equal(mask[src.indexOf('u ===') + 2], true);
+});
+
+test('maskCodePositions：本行内未闭合的 / 按除号处理，不掩任何字符', () => {
+  // 判错方向必须是保守的：宁可把正则当除号（少掩、多产几个无意义变异体），
+  // 也不能把除号当正则（多掩、静默丢掉真变异体）。
+  const src = 'const q = (a) / b;\nconst w = c && d;';
+  const mask = maskCodePositions(src);
+  assert.ok(mask.every(Boolean));
+});
+
 // ── 覆盖率报告解析 ──────────────────────────────────────────────────────────
 // node --experimental-test-coverage 的报告是【目录树】，叶子行只有 basename：
 //   ℹ src        |  …
