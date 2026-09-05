@@ -304,3 +304,16 @@ test.describe('cf-connecting-ip：存在、是字符串、非空白，三者缺�
     assert.equal(rlSourceKey({ address: '::ffff:127.0.0.1', headers: {} }), 'ip:127.0.0.1');
   });
 });
+
+test.describe('shouldBypassDeviceApproval 的默认参数：缺省必须是「不放行」', () => {
+  test('不传 accessEnabled 时不得默认 bypass（默认值写成 true 等于设备门形同虚设）', () => {
+    // 这是第二因子。默认值一旦反向，任何忘记传参的调用方都会静默跳过设备审批，
+    // 而症状是「一切正常」——新设备直接就能操作。
+    assert.equal(shouldBypassDeviceApproval({ peerAddress: '203.0.113.9', hostHeader: 'chat.example.com' }), false);
+    assert.equal(shouldBypassDeviceApproval({}), false, '空参数必须落到拒绝侧');
+  });
+
+  test('显式 accessEnabled=true 才 bypass（CF Access 已验是合法豁免）', () => {
+    assert.equal(shouldBypassDeviceApproval({ accessEnabled: true, peerAddress: '203.0.113.9', hostHeader: 'x.com' }), true);
+  });
+});

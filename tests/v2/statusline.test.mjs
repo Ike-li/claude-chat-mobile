@@ -338,6 +338,13 @@ test.describe('shouldFetchContextUsage：什么时候值得再打一次 RPC', ()
     assert.equal(shouldFetchContextUsage({ ...base, cache: winOnly, hasLastUsage: false, reason: 'event' }), true);
   });
 
+  test('不传 hasLastUsage 时按「没有 usage 可垫」处理 → 该打就打', () => {
+    // 默认值若写成 true，任何忘传该参数的调用方都会被判成「有值可垫」而跳过取数，
+    // 状态栏就一直显示不出 ctx%——而且没有任何报错。
+    const winOnly = { model: 'opus', maxTokens: 200000 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: winOnly, reason: 'event' }), true);
+  });
+
   test('tick / usage 触发且已试过一次 → 不再打；event 触发不受 attempted 限制', () => {
     const attempted = { model: 'opus', attempted: true };
     assert.equal(shouldFetchContextUsage({ ...base, cache: attempted, reason: 'tick' }), false);
@@ -363,6 +370,8 @@ test.describe('invalidateCtxOccupancy：压缩后作废占用，但【保留窗�
       '百分比同样要作废——只清 totalTokens 会让 ctx% 停在压缩前的 94%');
     assert.equal(agent.ctxWindowCache.staleOccupancy, true);
     assert.equal(agent.ctxWindowCache.attempted, false, 'attempted 清零才允许紧接着再拉一次权威占用');
+    assert.equal(agent.ctxWindowCache.inFlight, false, '在途标记必须清掉，否则下一拍会被「已有在途」挡住而永不重打');
+    assert.equal(agent.ctxWindowCache.inFlightAt, 0);
     assert.equal(agent._ctxUsageGen, 4, '代数必须推进，否则在途的迟到结果会写回已失效的占用');
   });
 

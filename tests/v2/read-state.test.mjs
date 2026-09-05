@@ -224,7 +224,10 @@ test.describe('落盘位点在重启后读得回来', () => {
   test('baselineTs 不是有限数 → 退化成未建档，绝不把 NaN 当基线', () => {
     // 基线是「这个时间点之前的都算已读」。NaN 基线会让所有比较恒假，
     // 表现为整屏未读永远清不掉。
-    for (const bad of ['"1700000000000"', 'null', 'true']) {
+    // 注：JSON 不支持 NaN / Infinity 字面量，写进文件会在 JSON.parse 阶段就抛错走 catch，
+    // 所以 `!Number.isFinite(baselineTs)` 那道守卫从【文件加载路径】不可达——它防的是
+    // 别的调用方直接传入的内存对象。这里只覆盖 typeof 那道。
+    for (const bad of ['"1700000000000"', 'null', 'true', 'NaN', 'Infinity']) {
       const s = loadWith(`bad-base-${bad.replace(/\W/g, '')}`, `{"baselineTs":${bad},"seen":{},"manual":{}}`);
       assert.equal(s.baselineTs, T_NOW, `baselineTs=${bad} 应退化成未建档`);
     }

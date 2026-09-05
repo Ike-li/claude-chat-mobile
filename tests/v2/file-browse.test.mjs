@@ -347,3 +347,64 @@ test.describe('FILE-01 & FILE-02: writeFileInScope 编辑器写回与并发保�
     assert.equal(statSync(secret).mode & 0o777, 0o600);
   });
 });
+
+// ── 写回的三种拒绝：失败必须报成失败 ────────────────────────────────────────
+// 本节补的是新旧测试【共同的缺口】——三条 `return { ok: false, ... }` 里的 false
+// 改成 true 之后没有任何断言变红。后果方向是 fail-open 里最坏的一种：
+// 写回被拒绝，UI 却显示「已保存」，用户关掉编辑器，改动凭空消失。
+test.describe('writeFileInScope 的拒绝必须带 ok:false，不能只靠 code 区分', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-write-reject-'));
+  const cwd = realpathSync(base);
+  const scopeDirs = [cwd];
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+
+  test('越界路径 → ok:false 且 code:scope', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'ccm-v2-write-outside-'));
+    try {
+      writeFileSync(join(outside, 'target.txt'), 'original');
+      const res = writeFileInScope(cwd, join(outside, 'target.txt'), 'PWNED', scopeDirs, { baseHash: 'x' });
+      assert.equal(res.ok, false, '越界必须报失败——报成功会让用户以为改动已保存');
+      assert.equal(res.code, 'scope');
+      assert.equal(readFileSync(join(outside, 'target.txt'), 'utf8'), 'original', '被拒绝的写不得有副作用');
+    } finally {
+      rmSync(outside, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
+  });
+
+  test('目标是目录 → ok:false 且 code:not_file', () => {
+    mkdirSync(join(cwd, 'a-dir'), { recursive: true });
+    const res = writeFileInScope(cwd, 'a-dir', 'content', scopeDirs, { baseHash: 'x' });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'not_file');
+  });
+
+  test('已存在文件超出可编辑上限 → ok:false 且 code:too_large', () => {
+    // 超过上限就无法核对基线（读不全就算不出 baseHash），此时写回等于盲写。
+    const big = join(cwd, 'huge.txt');
+    writeFileSync(big, 'x'.repeat(MAX_BROWSE_BYTES + 1));
+    const res = writeFileInScope(cwd, 'huge.txt', 'small', scopeDirs, { baseHash: 'x' });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'too_large');
+    assert.equal(readFileSync(big, 'utf8').length, MAX_BROWSE_BYTES + 1, '原文件不得被截断或覆盖');
+  });
+
+  test('不存在的文件 → ok:false（编辑器写回不负责新建）', () => {
+    const res = writeFileInScope(cwd, 'never-existed.txt', 'x', scopeDirs, { baseHash: 'x' });
+    assert.equal(res.ok, false);
+  });
+});
+
+test('空字符串 baseHash 与缺失同等拒绝（typeof 判串挡不住空串）', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-basehash-'));
+  const cwd = realpathSync(base);
+  try {
+    writeFileSync(join(cwd, 'f.txt'), 'x');
+    for (const bad of ['', undefined, null, 123]) {
+      const res = writeFileInScope(cwd, 'f.txt', 'new', [cwd], { baseHash: bad });
+      assert.equal(res.ok, false, `baseHash=${JSON.stringify(bad)} 必须拒绝`);
+      assert.equal(res.code, 'bad_base_hash');
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});

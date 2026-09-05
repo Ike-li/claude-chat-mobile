@@ -269,3 +269,29 @@ test.describe('isDir 默认参数：不传时必须按【文件】判定，不�
     assert.equal(statSync(d).mode & 0o777, 0o700);
   });
 });
+
+test.describe('checkPermissions 的 isDir 默认参数同样必须是 false', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-checkperm-'));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+
+  test('批量检查缺省按文件（0600）判定，不按目录（0700）', () => {
+    // doctor 用它批量体检控制面文件。默认值反了的话，所有 0600 的文件都会被报成
+    // 权限不合格，用户照着「修」反而修出带执行位的 0700。
+    const good = join(base, 'ok.json');
+    writeFileSync(good, '{}');
+    chmodSync(good, 0o600);
+    assert.deepEqual(checkPermissions([good]), [], '0600 文件在缺省参数下不应进问题列表');
+
+    const bad = join(base, 'loose.json');
+    writeFileSync(bad, '{}');
+    chmodSync(bad, 0o644);
+    assert.equal(checkPermissions([bad]).length, 1, '0644 才是问题');
+  });
+
+  test('显式 isDir=true 时按 0700 判定', () => {
+    const d = join(base, 'sub');
+    mkdirSync(d, { recursive: true });
+    chmodSync(d, 0o700);
+    assert.deepEqual(checkPermissions([d], true), []);
+  });
+});
