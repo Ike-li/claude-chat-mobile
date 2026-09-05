@@ -21,6 +21,14 @@ import {
   strongerStatusRefreshReason,
   statusRefreshReasonForEnvelope,
   RATE_STALE_AFTER_MS,
+  readCachedCtxWindow,
+  shouldFetchContextUsage,
+  lastUsageInputTokens,
+  invalidateCtxOccupancy,
+  webContextCost,
+  getContextUsageSafe,
+  CONTEXT_USAGE_INFLIGHT_MAX_MS,
+  clearCtxWindowCache,
 } from '../../app/src/ops/statusline.js';
 
 const withRate = (five, seven) => ({
@@ -250,4 +258,186 @@ test('额度陈旧阈值取 90s：贴着 60s 节流窗会在边界反复闪', ()
   // 否则常规档就会亮「非实时」，把护栏变成常驻噪音。
   assert.equal(RATE_STALE_AFTER_MS, 90_000);
   assert.ok(RATE_STALE_AFTER_MS > 60_000, '必须严格大于节流窗，否则常规刷新就会误标非实时');
+});
+
+// ── context usage 子系统 ────────────────────────────────────────────────────
+// 本节补的是变异对比里 v2 相对旧测试【整块缺失】的覆盖面（约 17 个变异点）：
+// ctx 窗口缓存的读取与作废、是否重打 RPC 的节流判据、web 侧 token/成本口径、RPC 兜底。
+// 这些函数决定状态栏上的 ctx% 准不准；算错的表现是「压缩后百分比跳回 94%」这类幽灵数字。
+test.describe('readCachedCtxWindow：模型不匹配的缓存一律作废', () => {
+  const cached = (over = {}) => ({ ctxWindowCache: { model: 'opus', maxTokens: 200000, ...over } });
+
+  test('模型一致且窗口有效 → 返回窗口大小', () => {
+    assert.equal(readCachedCtxWindow(cached(), 'opus'), 200000);
+  });
+
+  test('模型变了 → null（切模型后窗口可能完全不同，用旧值会算出错误百分比）', () => {
+    assert.equal(readCachedCtxWindow(cached(), 'haiku'), null);
+  });
+
+  test('空模型名与 undefined 视为同一种「没有模型」，不误判为不匹配', () => {
+    assert.equal(readCachedCtxWindow({ ctxWindowCache: { model: '', maxTokens: 100 } }, undefined), 100);
+    assert.equal(readCachedCtxWindow({ ctxWindowCache: { model: '', maxTokens: 100 } }, ''), 100);
+  });
+
+  test('窗口非有限数或 ≤0 → null，绝不拿它当除数', () => {
+    for (const bad of [0, -1, NaN, Infinity, undefined, '200000']) {
+      assert.equal(readCachedCtxWindow(cached({ maxTokens: bad }), 'opus'), null, `maxTokens=${String(bad)} 不可用`);
+    }
+  });
+
+  test('无 agent / 无缓存 → null，不抛错', () => {
+    assert.equal(readCachedCtxWindow(null, 'opus'), null);
+    assert.equal(readCachedCtxWindow({}, 'opus'), null);
+  });
+});
+
+test.describe('shouldFetchContextUsage：什么时候值得再打一次 RPC', () => {
+  // getContextUsage 不是读内存——CLI 要按类别 count_tokens，冷路径数秒。
+  // 10s tick 是给 git 段的，占用缓存热时不得重打，否则每 10 秒烧一次昂贵调用。
+  const base = { hasQ: true, disposed: false, model: 'opus', now: 1_000_000 };
+
+  test('已 dispose 或没有 q → 一律不打', () => {
+    assert.equal(shouldFetchContextUsage({ ...base, disposed: true }), false);
+    assert.equal(shouldFetchContextUsage({ ...base, hasQ: false }), false);
+    assert.equal(shouldFetchContextUsage({}), false, '空参数不得误判为「该打」');
+  });
+
+  test('在途未超时 → 不重复打；超过上限则允许重打（防 RPC 卡死后永不恢复）', () => {
+    const inFlight = { model: 'opus', inFlight: true, inFlightAt: base.now - 1000 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: inFlight }), false);
+
+    const stuck = { model: 'opus', inFlight: true, inFlightAt: base.now - CONTEXT_USAGE_INFLIGHT_MAX_MS - 1 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: stuck }), true, '超时的在途标记不得永久堵住重打');
+  });
+
+  test('占用被标脏（压缩后）→ 立刻重打，优先级高于「窗口齐全」', () => {
+    const stale = { model: 'opus', maxTokens: 200000, totalTokens: 100, staleOccupancy: true };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: stale }), true,
+      '压缩后占用作废，不重打会让 ctx% 停在压缩前的旧值');
+  });
+
+  test('模型变了 → 重打', () => {
+    assert.equal(shouldFetchContextUsage({ ...base, cache: { model: 'haiku', maxTokens: 1, totalTokens: 1 } }), true);
+  });
+
+  test('窗口与占用都在 → 不打（这正是 10s tick 不该烧 RPC 的场景）', () => {
+    const hot = { model: 'opus', maxTokens: 200000, totalTokens: 12345 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: hot, reason: 'tick' }), false);
+    assert.equal(shouldFetchContextUsage({ ...base, cache: hot, reason: 'event' }), false);
+  });
+
+  test('占用为 0 也算「有占用」（0 是合法读数，不是缺失）', () => {
+    const zero = { model: 'opus', maxTokens: 200000, totalTokens: 0 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: zero }), false);
+  });
+
+  test('只有窗口没有占用，但本轮有 usage 可垫 → 不打', () => {
+    const winOnly = { model: 'opus', maxTokens: 200000 };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: winOnly, hasLastUsage: true }), false);
+    assert.equal(shouldFetchContextUsage({ ...base, cache: winOnly, hasLastUsage: false, reason: 'event' }), true);
+  });
+
+  test('tick / usage 触发且已试过一次 → 不再打；event 触发不受 attempted 限制', () => {
+    const attempted = { model: 'opus', attempted: true };
+    assert.equal(shouldFetchContextUsage({ ...base, cache: attempted, reason: 'tick' }), false);
+    assert.equal(shouldFetchContextUsage({ ...base, cache: attempted, reason: 'usage' }), false);
+    assert.equal(shouldFetchContextUsage({ ...base, cache: attempted, reason: 'event' }), true,
+      'init/result/压缩边界是真事件，值得重新取权威占用');
+  });
+});
+
+test.describe('invalidateCtxOccupancy：压缩后作废占用，但【保留窗口】', () => {
+  test('占用清空、窗口留下——与 clearCtxWindowCache 的关键区别', () => {
+    // 压缩改变的是「用了多少」，不是「窗口多大」。若连窗口一起丢，下一拍必须重打一次
+    // 昂贵的 count_tokens 才能算出百分比；保留窗口则只补占用即可。
+    const agent = {
+      ctxWindowCache: { model: 'opus', maxTokens: 200000, totalTokens: 999, percentage: 94 },
+      _ctxUsageGen: 3,
+    };
+    invalidateCtxOccupancy(agent);
+    assert.equal(agent.ctxWindowCache.maxTokens, 200000, '窗口必须保留');
+    assert.equal(agent.ctxWindowCache.model, 'opus');
+    assert.equal(agent.ctxWindowCache.totalTokens, undefined, '占用必须作废');
+    assert.equal(agent.ctxWindowCache.percentage, undefined,
+      '百分比同样要作废——只清 totalTokens 会让 ctx% 停在压缩前的 94%');
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+    assert.equal(agent.ctxWindowCache.attempted, false, 'attempted 清零才允许紧接着再拉一次权威占用');
+    assert.equal(agent._ctxUsageGen, 4, '代数必须推进，否则在途的迟到结果会写回已失效的占用');
+  });
+
+  test('clearCtxWindowCache 才是整份丢弃（换会话用），两者不可混用', () => {
+    const agent = { ctxWindowCache: { model: 'opus', maxTokens: 200000 }, _ctxUsageGen: 1 };
+    clearCtxWindowCache(agent);
+    assert.equal(agent.ctxWindowCache, null, '换会话时窗口也不能留——新会话可能是别的模型');
+    assert.equal(agent._ctxUsageGen, 2);
+  });
+
+  test('无缓存 → 留下一个标脏的空壳，让下一拍必定重打', () => {
+    const agent = {};
+    invalidateCtxOccupancy(agent);
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+    assert.equal(agent.ctxWindowCache.attempted, false, 'attempted 清零才允许紧接着再拉一次');
+    assert.equal(agent.ctxWindowCache.inFlight, false);
+  });
+
+  test('agent 为空 → 静默返回，不抛错', () => {
+    assert.doesNotThrow(() => invalidateCtxOccupancy(null));
+    assert.doesNotThrow(() => invalidateCtxOccupancy(undefined));
+  });
+});
+
+test.describe('token 与成本口径', () => {
+  test('lastUsageInputTokens 把三类输入 token 相加，缺字段按 0', () => {
+    assert.equal(lastUsageInputTokens({ input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 2 }), 17);
+    assert.equal(lastUsageInputTokens({ input_tokens: 10 }), 10, '缓存类字段缺失按 0，不产出 NaN');
+    assert.equal(lastUsageInputTokens(null), 0);
+    assert.equal(lastUsageInputTokens(undefined), 0);
+  });
+
+  test('webContextCost：无 usage 时不产出 context 字段', () => {
+    assert.deepEqual(webContextCost({ agent: {} }), {});
+    assert.deepEqual(webContextCost({}), {});
+  });
+
+  test('webContextCost：totalInputTokens 与 lastUsageInputTokens 同口径', () => {
+    const u = { input_tokens: 100, output_tokens: 7, cache_creation_input_tokens: 20, cache_read_input_tokens: 3 };
+    const r = webContextCost({ agent: { lastUsage: u } });
+    assert.equal(r.context.totalInputTokens, 123, '口径是三类输入之和，不含 output');
+    assert.equal(r.context.totalInputTokens, lastUsageInputTokens(u), '两处口径必须一致，否则 ctx% 与明细对不上');
+    assert.equal(r.context.usage.output_tokens, 7);
+  });
+
+  test('cost 只在真有花费或时长时出现（避免状态栏常驻一个 $0.00）', () => {
+    assert.equal(webContextCost({ agent: { lastUsage: { input_tokens: 1 } } }).cost, undefined);
+    const withCost = webContextCost({ agent: { totalCostUsd: 0.5, historicalCostUsd: 1.25, totalDurationMs: 900 } });
+    assert.equal(withCost.cost.usedUsd, 1.75, '历史成本与本会话成本相加');
+    assert.equal(withCost.cost.durationMs, 900);
+  });
+
+  test('只有时长没有花费也算有成本信息', () => {
+    assert.equal(webContextCost({ agent: { totalDurationMs: 5 } }).cost?.durationMs, 5);
+  });
+});
+
+test.describe('getContextUsageSafe：RPC 层兜底，不判生命周期', () => {
+  test('q 没有 getContextUsage → null', async () => {
+    assert.equal(await getContextUsageSafe(null), null);
+    assert.equal(await getContextUsageSafe({}), null);
+  });
+
+  test('正常返回原样透传', async () => {
+    const payload = { maxTokens: 200000, percentage: 12 };
+    assert.deepEqual(await getContextUsageSafe({ getContextUsage: async () => payload }), payload);
+  });
+
+  test('超时 → null（先发陈旧值，回来再补发，不阻塞状态栏）', async () => {
+    const never = { getContextUsage: () => new Promise(() => {}) };
+    assert.equal(await getContextUsageSafe(never, 20), null);
+  });
+
+  test('抛错 → null，不把异常冒泡到状态栏组装', async () => {
+    const boom = { getContextUsage: async () => { throw new Error('rpc down'); } };
+    assert.equal(await getContextUsageSafe(boom, 100), null);
+  });
 });
