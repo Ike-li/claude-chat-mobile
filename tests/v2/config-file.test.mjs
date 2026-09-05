@@ -1,6 +1,5 @@
 // tests/v2/config-file.test.mjs —— 配置读取的源选择、优先级与 .env 可表达性
-// 守护：CONFIG-01（读写同源、shell 压过文件、ANTHROPIC_* 只认真实 shell、未登记键读宽写严）、
-//       CONFIG-02（.env 的 dotenv 与 shell source 两个消费者必须同时安全）
+// 守护：CONFIG-01（读写同源、shell 压过文件、ANTHROPIC_* 只认真实 shell、未登记键读宽写严）、CONFIG-02（.env 的 dotenv 与 shell source 两个消费者必须同时安全）
 // 覆盖：新旧文件优先级 + 坏 JSON fail-loud 不回落 + 各类键的来源规则 + 单引号/尾反斜杠拒绝表达
 // 槽位：S1（纯函数 + 一次性目录上的真实读盘，不 mock fs）
 //

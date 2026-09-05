@@ -1,6 +1,5 @@
 // tests/v2/statusline.test.mjs —— 状态栏字段的来源约束与越界值处理
-// 守护：OPS-2（utilization 必须夹在 [0,100]，越界值不得进 UI）、
-//       DISPLAY-01（statusline 字段只做允许的变换，CLI 与 Web 两条路径不混拼）
+// 守护：OPS-2（utilization 必须夹在 [0,100]，越界值不得进 UI）、DISPLAY-01（statusline 字段只做允许的变换，CLI 与 Web 两条路径不混拼）
 // 覆盖：额度越界丢弃 + 额度缺席时不产出空壳 + git porcelain 三分计数 + repo/项目名解析
 //       + 刷新原因的强弱合并 + 陈旧阈值常量
 // 槽位：S1（纯函数，零 IO；不 spawn git、不起 server）

@@ -1,6 +1,5 @@
 // tests/v2/server/files-scope.test.mjs —— socket 文件面的范围门与审计留痕
-// 守护：SCOPE-01（socket 上的 browse/read/write 与纯函数层走同一道范围门）、
-//       越界必须记审计（无 approval-store 的写路径唯一事后可追溯记录）
+// 守护：SCOPE-01（socket 上的 browse/read/write 与纯函数层走同一道范围门；越界必须记审计，那是无 approval-store 的写路径唯一事后可追溯记录）
 // 覆盖：合法路径放行 + ../ 与绝对路径越界拒绝 + 越界记 scope_violation + 拒绝不泄漏服务端绝对路径
 // 槽位：S2（真 app/server.js 子进程 + 一次性 WORK_DIR / CCM_DATA_DIR）
 //

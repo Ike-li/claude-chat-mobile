@@ -1,6 +1,5 @@
 // tests/v2/notifications.test.mjs —— 推送抑制矩阵、正文最小化与深链构造
-// 守护：NOTIFY-01（只有 result 会被抑制，判据是前台可见而非 socket 连着）、
-//       SEC-04（正文不进第三方明文通道，body 只留工具名，input 正文另走 previewBody）
+// 守护：NOTIFY-01（只有 result 会被抑制，判据是前台可见而非 socket 连着）、SEC-04（正文不进第三方明文通道，body 只留工具名，input 正文另走 previewBody）
 // 覆盖：抑制矩阵 + 发送时刻取 live/snapshot 的分流 + 前台判据的保守方向
 //       + ntfy 深链不带完整 cwd + 标题身份拼接
 // 槽位：S1（纯函数，零 IO、不发网络）

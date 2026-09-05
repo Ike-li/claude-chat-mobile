@@ -25,6 +25,25 @@ const HERE = import.meta.dirname;
 const TRUSTED_DEVICES_FILE = process.env.CCM_TRUSTED_DEVICES_FILE || join(HERE, '..', '..', 'data', 'trusted-devices.json');
 const PENDING_DEVICES_FILE = process.env.CCM_PENDING_DEVICES_FILE || join(HERE, '..', '..', 'data', 'pending-devices.json');
 
+// ★ 结构性护栏：没有 preload 注入时【拒绝运行】，而不是静默操作生产文件。
+//
+// 上面那个 `||` 回退是本仓唯一一处「测试路径可能落在生产 data/ 上」的地方，而本文件随后会
+// renameSync 它做备份/还原。隔离此前完全依赖 `--import ./tests/setup/preload-env.mjs` 被带上——
+// 那是调用方的习惯，不是结构保证。一句 `node --test tests/unit/devices.test.mjs` 就绕过了它：
+// 真实的 data/trusted-devices.json 被 rename 走，中途中断则只剩 .bak，
+// 表现为所有已批准设备集体失权、而且没有任何报错说明发生了什么。
+//
+// 判据锚在「路径是不是被注入的」而不是「路径长什么样」：注入即视为隔离环境，
+// 未注入则一律拒绝，不去猜某个具体路径安不安全。
+if (!process.env.CCM_TRUSTED_DEVICES_FILE || !process.env.CCM_PENDING_DEVICES_FILE) {
+  throw new Error(
+    '[devices.test.mjs] 拒绝在未隔离的环境下运行：CCM_TRUSTED_DEVICES_FILE / CCM_PENDING_DEVICES_FILE 未注入，'
+    + '本文件会 rename 这两个路径，未注入时它们指向生产 data/。\n'
+    + '请用 `npm run test:unit`（已带 --import ./tests/setup/preload-env.mjs），'
+    + '或自行注入这两个环境变量指向一次性目录。',
+  );
+}
+
 const TRUSTED_BACKUP = TRUSTED_DEVICES_FILE + '.bak';
 const PENDING_BACKUP = PENDING_DEVICES_FILE + '.bak';
 

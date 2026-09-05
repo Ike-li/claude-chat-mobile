@@ -1,6 +1,5 @@
 // tests/v2/server/device-gate.test.mjs —— 设备审批门在真组装根上的第二因子
-// 守护：DEVICE-01（bypass 必须 peer 本机【且】Host 本机；否则未审批设备不得进入数据面）、
-//       SEC-01（未审批 socket 不加入 approved 房间，收不到任何会话内容广播）
+// 守护：DEVICE-01（bypass 必须 peer 本机【且】Host 本机；否则未审批设备不得进入数据面）、SEC-01（未审批 socket 不加入 approved 房间，收不到任何会话内容广播）
 // 覆盖：本机直连 bypass + 非本机 Host 落待审 + 待审设备只收自身状态
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR）
 //

@@ -30,3 +30,33 @@ services:
       CLAUDE_BIN: /app/tests/fixtures/fake-claude.sh
     # 集成测试起的 server 只在容器内自连自测，不需要往宿主机暴露端口。
     network_mode: bridge
+
+  # 变异专用：源码【只读】挂载，容器内复制一份再改。
+  #
+  # 上面的 test service 是 rw 挂载，而变异会故意把源码改坏——那意味着两件事：
+  #  ① 容器被 kill 或变异中断时，改坏的源码残留在宿主机上（mutate.js 有 finally 恢复，
+  #     但那又回到「安全性依赖代码正确性」，正是本仓 2026-08-02 事故的形状）；
+  #  ② 变异运行期间宿主机不能跑任何测试——它会读到被改坏的源码，报出与自己无关的失败
+  #     （2026-09-05 实测踩到：并发时 fail 1，串行重跑 fail 0）。
+  #
+  # 只读挂载把变异的隔离也变成「不依赖代码正确性」，与 HOME 隔离同一个轴。
+  mutate:
+    image: claude-chat-mobile-test:local
+    volumes:
+      - ../..:/repo:ro
+    working_dir: /work
+    init: true
+    environment:
+      CI: "true"
+      CLAUDE_BIN: /work/tests/fixtures/fake-claude.sh
+    # 排除 node_modules（用镜像里平台匹配的那份）与 .git（worktree 的 .git 是指向宿主机的
+    # 指针文件，容器里解析不到；变异也不需要它）。末尾 `--` 让 `exec "$@"` 能接住追加参数。
+    entrypoint:
+      - sh
+      - -lc
+      - >-
+        mkdir -p /work &&
+        tar -C /repo -cf - --exclude=./node_modules --exclude=./.git . | tar -C /work -xf - &&
+        ln -sfn /app/node_modules /work/node_modules &&
+        exec "$@"
+      - --

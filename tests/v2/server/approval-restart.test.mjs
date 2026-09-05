@@ -1,6 +1,5 @@
 // tests/v2/server/approval-restart.test.mjs —— 重启后遗留审批的 fail-closed 处置
-// 守护：APPROVAL-02（进程启动时磁盘上残留的 pending 一律 expired、decidedBy=system:restart，
-//       不可再批准执行；台账写失败不得阻塞启动——台账不是执行门槛）
+// 守护：APPROVAL-02（进程启动时磁盘上残留的 pending 一律 expired、decidedBy=system:restart，不可再批准执行；台账写失败不得阻塞启动）
 // 覆盖：真重启后 pending → expired + 终态记录不被改写 + 台账损坏/缺失不阻塞启动
 // 槽位：S2（真组装根 app/server.js 子进程 + 一次性 CCM_DATA_DIR，模型回合是假的）
 //
