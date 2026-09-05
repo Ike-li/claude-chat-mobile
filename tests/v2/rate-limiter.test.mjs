@@ -237,3 +237,70 @@ test.describe('DEVICE-01: shouldBypassDeviceApproval 设备审批跳过判定', 
     }, norm), false);
   });
 });
+
+// ── IPv6 解析与 CF-IP 提取的边界 ────────────────────────────────────────────
+// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的四个点（117/132/176×2）。
+// 共同点是【两个条件必须同时成立】，写成 || 都不会让任何既有用例变红。
+test.describe('ipRateBucket：畸形 IPv6 一律原样返回，绝不猜着分桶', () => {
+  test('段数不足但格式合法 → 原样（长度与格式是两道独立校验）', () => {
+    // `parts.length !== 8 || 格式非法` 若写成 &&，'1:2:3' 会被当合法地址继续算 /64，
+    // 产出一个凭空捏造的桶——保守方向是宁可多分桶，绝不误合并。
+    assert.equal(ipRateBucket('1:2:3'), '1:2:3');
+  });
+
+  test('段数正确但含非法字符 → 原样', () => {
+    assert.equal(ipRateBucket('gggg:1:2:3:4:5:6:7'), 'gggg:1:2:3:4:5:6:7');
+  });
+
+  test('多个 :: 或 :: 填不出一组零 → 原样', () => {
+    assert.equal(ipRateBucket('1::2::3'), '1::2::3');
+    assert.equal(ipRateBucket('1:2:3:4:5:6:7::8'), '1:2:3:4:5:6:7::8');
+  });
+
+  test('IPv4 与空串原样返回', () => {
+    assert.equal(ipRateBucket('192.168.1.1'), '192.168.1.1');
+    assert.equal(ipRateBucket(''), '');
+    assert.equal(ipRateBucket(null), '');
+  });
+});
+
+test.describe('IPv4-mapped 识别：前 5 段全零【且】第 6 段是 ffff', () => {
+  // 少了这一步，::ffff:x.x.x.x 段所有地址的前 4 组 hextet 都是 0 → 全世界 IPv4 来源
+  // 塌成同一个桶，一台机器触发锁定就把所有 IPv4 客户端一起锁死。
+  // 但判据放松成「或」同样危险：会把普通 IPv6 地址误还原成点分十进制，凭空并桶。
+  test('真正的 IPv4-mapped 还原成点分十进制，按整地址计桶', () => {
+    assert.equal(ipRateBucket('::ffff:127.0.0.1'), '127.0.0.1');
+    assert.equal(ipRateBucket('::ffff:7f00:1'), '127.0.0.1');
+  });
+
+  test('前 5 段全零但第 6 段不是 ffff → 仍按 /64，不得当成 IPv4', () => {
+    assert.equal(ipRateBucket('::1:2:3'), '0:0:0:0::/64');
+  });
+
+  test('第 6 段是 ffff 但前 5 段不全零 → 仍按 /64', () => {
+    assert.equal(ipRateBucket('1::ffff:2:3'), '1:0:0:0::/64');
+  });
+});
+
+test.describe('cf-connecting-ip：存在、是字符串、非空白，三者缺一不可', () => {
+  test('非字符串的 CF-IP 不采用，回落到 peer 地址', () => {
+    // `cfip && typeof cfip === 'string' && cfip.trim()` 三个条件任一写成 ||，
+    // 数字型 CF-IP 要么被当成合法值分桶、要么在 .trim() 上直接抛 TypeError。
+    for (const bad of [123, true, {}, []]) {
+      const hs = { address: '10.0.0.7', headers: { 'cf-connecting-ip': bad } };
+      assert.equal(rlSourceKey(hs, x => x, { trustCfConnectingIp: true }), 'ip:10.0.0.7',
+        `CF-IP=${JSON.stringify(bad)} 不是字符串，必须回落 peer`);
+    }
+  });
+
+  test('空白字符串的 CF-IP 不采用', () => {
+    const hs = { address: '10.0.0.7', headers: { 'cf-connecting-ip': '   ' } };
+    assert.equal(rlSourceKey(hs, x => x, { trustCfConnectingIp: true }), 'ip:10.0.0.7');
+  });
+
+  test('缺省 normalizeIp 是恒等函数：IPv4-mapped 的 peer 地址会真走到还原分支', () => {
+    // 调用方通常注入剥前缀的 normalizeIp，但缺省是恒等——BIND_HOST=:: 双栈监听下
+    // 客户端 address 本来就长这样，这条路随时会真走到。
+    assert.equal(rlSourceKey({ address: '::ffff:127.0.0.1', headers: {} }), 'ip:127.0.0.1');
+  });
+});

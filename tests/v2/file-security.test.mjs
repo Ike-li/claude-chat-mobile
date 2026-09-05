@@ -204,3 +204,68 @@ test.describe('resolveExecutableViaPath: PATH 查找与防注入', () => {
     assert.equal(res, '');
   });
 });
+
+// ── 可执行名白名单与 isDir 默认参数 ─────────────────────────────────────────
+// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的三个点（22:32 / 83:43 / 102:46）。
+test.describe('resolveExecutableViaPath：类型与字符集是两道独立校验', () => {
+  test('非字符串输入直接返回空串，不进 execFile', () => {
+    // `typeof name !== 'string' || !SAFE_EXECUTABLE_NAME.test(name)` 写成 && 时，
+    // 非字符串会掉进正则测试（对象被 String 化后可能意外通过），进而被拼进命令查找。
+    for (const bad of [null, undefined, 42, {}, ['node']]) {
+      assert.equal(resolveExecutableViaPath(bad), '', `${JSON.stringify(bad)} 不是字符串，必须直接拒绝`);
+    }
+  });
+
+  test('是字符串但含 shell 元字符 → 拒绝（白名单只放行字母数字与 ._-）', () => {
+    for (const bad of ['node; id', 'no de', 'node$(id)', '../node', 'node|cat', "node'x"]) {
+      assert.equal(resolveExecutableViaPath(bad), '', `${JSON.stringify(bad)} 含危险字符，必须拒绝`);
+    }
+  });
+
+  test('合法名字放行到查找逻辑（注入 execFile 观察，不真跑 which）', () => {
+    let seen = null;
+    const fake = (bin, args) => { seen = { bin, args }; return '/usr/bin/node\n'; };
+    const got = resolveExecutableViaPath('node', { platform: 'linux', execFile: fake });
+    assert.equal(got, '/usr/bin/node');
+    assert.equal(seen.bin, 'which', 'POSIX 用 which');
+    assert.deepEqual(seen.args, ['node'], '必须走参数数组，不拼 shell 字符串');
+  });
+
+  test('win32 改用 where', () => {
+    let seen = null;
+    resolveExecutableViaPath('node', { platform: 'win32', execFile: (bin) => { seen = bin; return 'C:\\node.exe\n'; } });
+    assert.equal(seen, 'where');
+  });
+});
+
+test.describe('isDir 默认参数：不传时必须按【文件】判定，不是目录', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-isdir-'));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+
+  test('isOwnerOnly 缺省按 0600 判定（默认值写成 true 会把 0600 文件判成不合格）', () => {
+    const f = join(base, 'perm-file.txt');
+    writeFileSync(f, 'x', { mode: 0o600 });
+    chmodSync(f, 0o600);
+    assert.equal(isOwnerOnly(f), true, '0600 的文件在缺省参数下应判为合格');
+    chmodSync(f, 0o644);
+    assert.equal(isOwnerOnly(f), false, '0644 的文件应判为不合格');
+  });
+
+  test('fixPermissions 缺省修成 0600 而不是 0700', () => {
+    // 默认值若是 true，普通配置文件会被修成 0700（带执行位），
+    // 而 doctor 的权限检查按 0600 判 → 修完仍报不合格，陷入死循环。
+    const f = join(base, 'perm-fix.txt');
+    writeFileSync(f, 'x');
+    chmodSync(f, 0o644);
+    fixPermissions(f);
+    assert.equal(statSync(f).mode & 0o777, 0o600, '缺省必须按文件修成 0600');
+  });
+
+  test('显式传 isDir=true 时才按 0700', () => {
+    const d = join(base, 'perm-dir');
+    mkdirSync(d, { recursive: true });
+    chmodSync(d, 0o755);
+    fixPermissions(d, true);
+    assert.equal(statSync(d).mode & 0o777, 0o700);
+  });
+});

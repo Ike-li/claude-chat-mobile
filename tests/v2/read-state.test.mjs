@@ -183,3 +183,54 @@ test.describe('READ-01: 容量限制与持久化健壮性', () => {
     assert.equal(content.seen['s-sec'], T0 + MIN);
   });
 });
+
+// ── 从磁盘加载既有位点 ──────────────────────────────────────────────────────
+// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的两个点（129:26 / 130:30）。
+// 原先的用例都从空 store 起步，从没走过「文件里已有合法数据」这条加载路径——
+// 于是 `typeof raw !== 'object'` 与 `typeof raw.baselineTs !== 'number'` 两个守卫
+// 反转后也没人变红：跨设备共享的位点在重启后能不能读回来，从来没被证明过。
+test.describe('落盘位点在重启后读得回来', () => {
+  // 判据用「基线来自文件还是来自 now()」区分：加载成功则保留盘上的旧基线，
+  // 加载失败则退化成未建档、由首次 getState 现场建档（read-state.js:56）。
+  const T_NOW = 1_800_000_000_000;   // 与盘上时间戳明显不同，便于区分来源
+  const loadWith = (name, content) => {
+    const file = join(TMP_DIR, `${name}.json`);
+    writeFileSync(file, content);
+    return createReadStateStore({ file, now: () => T_NOW }).getState();
+  };
+
+  test('合法文件被完整加载：baselineTs 与 seen/manual 都还原', () => {
+    const s = loadWith('existing-read-state', JSON.stringify({
+      baselineTs: T0,
+      seen: { 's-a': T0 + MIN },
+      manual: { 's-b': T0 + 2 * MIN },
+    }));
+    assert.equal(s.baselineTs, T0, '基线必须来自文件，不是重新建档为 now()');
+    assert.notEqual(s.baselineTs, T_NOW);
+    assert.equal(s.seen['s-a'], T0 + MIN, '跨设备已读位点要能在重启后读回来');
+    assert.equal(s.manual['s-b'], T0 + 2 * MIN);
+  });
+
+  test('顶层是数组或标量 → 退化成未建档，现场重建基线', () => {
+    // `typeof raw !== 'object'` 反转后，合法对象反而会被判为坏档；
+    // 而 Array.isArray 那道单独的守卫负责挡住「数组也是 object」。
+    for (const bad of ['[]', '"str"', '42', 'null']) {
+      const s = loadWith(`bad-top-${bad.replace(/\W/g, '')}`, bad);
+      assert.equal(s.baselineTs, T_NOW, `顶层 ${bad} 应退化成未建档并现场建档`);
+      assert.deepEqual(s.seen, {});
+    }
+  });
+
+  test('baselineTs 不是有限数 → 退化成未建档，绝不把 NaN 当基线', () => {
+    // 基线是「这个时间点之前的都算已读」。NaN 基线会让所有比较恒假，
+    // 表现为整屏未读永远清不掉。
+    for (const bad of ['"1700000000000"', 'null', 'true']) {
+      const s = loadWith(`bad-base-${bad.replace(/\W/g, '')}`, `{"baselineTs":${bad},"seen":{},"manual":{}}`);
+      assert.equal(s.baselineTs, T_NOW, `baselineTs=${bad} 应退化成未建档`);
+    }
+  });
+
+  test('文件内容不是合法 JSON → 退化成未建档，不抛错阻塞启动', () => {
+    assert.equal(loadWith('corrupt-json', '{ not json').baselineTs, T_NOW);
+  });
+});

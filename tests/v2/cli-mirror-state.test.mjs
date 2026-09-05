@@ -207,3 +207,46 @@ test.describe('SESSION-01: 镜像锁判定规则纯函数收敛（history.js）'
     assert.equal(suppressed, false);
   });
 });
+
+// ── transcript 条目过滤的三个独立守卫 ────────────────────────────────────────
+// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的三个点（21:16 / 21:37 / 29:19）。
+// 三者都是【任一成立就跳过】的或条件，写成 && 不会让任何既有用例变红。
+test.describe('extractCliObservedState：三道跳过条件互相独立', () => {
+  const assistant = (model, over = {}) => ({ type: 'assistant', message: { model }, ...over });
+
+  test('空洞条目（null / undefined）被跳过，不因取属性而抛错', () => {
+    // `!entry || isSidechain || parent_tool_use_id` 写成 && 时，null 条目会走到
+    // entry.isSidechain 上直接 TypeError——整个镜像态提取跟着炸。
+    const r = extractCliObservedState([null, undefined, assistant('claude-opus-4')]);
+    assert.equal(r.model, 'claude-opus-4', '空洞条目应被静默跳过，后续条目照常生效');
+  });
+
+  test('子代理（isSidechain）的模型不得污染主会话镜像态', () => {
+    // 子代理可能跑在另一个模型上，把它的 model 当成主会话的会让状态栏显示错的档位。
+    const r = extractCliObservedState([
+      assistant('claude-opus-4'),
+      assistant('claude-haiku-4-5', { isSidechain: true }),
+    ]);
+    assert.equal(r.model, 'claude-opus-4', 'sidechain 条目必须被跳过');
+  });
+
+  test('工具子调用（parent_tool_use_id）同样被跳过', () => {
+    const r = extractCliObservedState([
+      assistant('claude-opus-4'),
+      assistant('claude-haiku-4-5', { parent_tool_use_id: 'toolu_x' }),
+    ]);
+    assert.equal(r.model, 'claude-opus-4');
+  });
+
+  test('空字符串 model 不得被采纳（`candidate && ...` 两个条件缺一不可）', () => {
+    // 写成 || 时，空串会满足 `'' !== "<synthetic>"` 而被当成有效模型名，
+    // 状态栏 pill 会渲染出一个空白档位。
+    const r = extractCliObservedState([assistant('claude-opus-4'), assistant('   ')]);
+    assert.equal(r.model, 'claude-opus-4', '空白模型名应被忽略，保留上一个有效值');
+  });
+
+  test('<synthetic> 占位模型不得被采纳', () => {
+    const r = extractCliObservedState([assistant('claude-opus-4'), assistant('<synthetic>')]);
+    assert.equal(r.model, 'claude-opus-4');
+  });
+});
