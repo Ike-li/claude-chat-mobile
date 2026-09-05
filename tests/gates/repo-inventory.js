@@ -64,6 +64,7 @@ const PREFIX_RULES = [
   // ROOT_FILES 里的 6 个根配置条目与 12 个门禁的逐个登记。
   ['tests/infra/', 'Test configuration'],
   ['tests/gates/', 'Maintainer tooling'],
+  ['tests/v2/', 'Unit test'],
   ['tests/unit/', 'Unit test'],
   ['tests/integration/', 'Integration test'],
   ['tests/e2e/', 'E2E test'],

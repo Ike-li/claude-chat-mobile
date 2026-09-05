@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 // 且文本度量类断言在 Linux 容器下与 macOS 字体不同，宿主机跑反而更贴近真实渲染。
 const HOST_ALLOWED_SCRIPTS = new Set([
   'lint', 'lint:fix', 'check',
-  'test:unit', 'test:e2e', 'test:visual', 'test:playwright', 'test:playwright:p0',
+  'test:unit', 'test:v2', 'test:e2e', 'test:visual', 'test:playwright', 'test:playwright:p0',
   // app:test = swiftc 编译 desktop/CCMCore.swift + 断言集，产物落 desktop/build/（已 gitignore）。
   // 不起 server、不 spawn claude、不碰 ~/.claude —— 与前三条同档。它现在还是 `npm run check`
   // 的一环（见 package.json），不放行的话连 check 都会被自己的钩子拦下来。
@@ -105,6 +105,9 @@ function testTargets(text) {
 // 会在真实 ~/.claude/projects 上跑那个删除用例（preload-env 明确不隔离 transcript 目录）。
 const SCRIPT_TEST_SCOPE = {
   'test:unit': 'tests/unit/',
+  // v2 与 unit 同档：纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude。
+  // scope 必须写，否则 `npm run test:v2 -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
+  'test:v2': 'tests/v2/',
   'test:e2e': 'tests/e2e/', 'test:visual': 'tests/e2e/',
   'test:playwright': 'tests/e2e/', 'test:playwright:p0': 'tests/e2e/',
 };

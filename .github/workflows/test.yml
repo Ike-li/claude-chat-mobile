@@ -58,6 +58,10 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
+      # v2 测试树（tests/v2/）：test:unit 的 glob 是 tests/unit/*.test.mjs，捞不到它。
+      # 不接这一步的话，v2 写多少条都不会在 CI 上跑——写了等于没有回归保护。
+      # 与 test:unit 同档（纯函数 + 一次性目录真磁盘），故同 job、不另起 runner。
+      - run: npm run test:v2
       # 集成测试是【唯一执行真实 app/src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
       # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
       # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的
