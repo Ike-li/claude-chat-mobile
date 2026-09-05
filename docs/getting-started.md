@@ -493,7 +493,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 这不是产品入口，用户装机仍走上面的 `npm run setup` / `npm start` / 桌面端。playground 把测试环境放进容器：空 `HOME`、fake-claude、不碰宿主机 `~/.claude`。
 
 ```bash
-npm run docker:build                 # 首次，以及 image 标签落地后再打一次 ccm-test:local
+npm run docker:build                 # 首次，以及 image 标签落地后再打一次 claude-chat-mobile-test:local
 npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
 npm run playground:device -- list
 npm run playground:device -- approve <ID>

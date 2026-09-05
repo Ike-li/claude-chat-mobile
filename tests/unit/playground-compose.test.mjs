@@ -75,7 +75,9 @@ test('runtime.env 钉死隔离键，不把 HOME 当工作区，不设 CI', () =>
 test('playground compose：镜像、端口、overlay、profiles、零插值、映射 environment', () => {
   const yaml = read(COMPOSE);
   assert.match(yaml, /dockerfile:\s*tests\/infra\/Dockerfile\.test/);
-  assert.match(yaml, /image:\s*ccm-test:local/);
+  // 镜像名必须带仓库区分度：docker 镜像名全机共享，通用名（如 ccm-test:local）会被本机
+  // 其它项目的构建覆盖，而 compose run 见镜像已存在就直接用 → 测试静默跑在别人的 node_modules 上。
+  assert.match(yaml, /image:\s*claude-chat-mobile-test:local/);
   assert.match(yaml, /pull_policy:\s*never/);
   assert.match(yaml, /127\.0\.0\.1:13000:3000/);
   assert.match(yaml, /127\.0\.0\.1:13100:3100/);
@@ -124,9 +126,11 @@ test('playground compose：镜像、端口、overlay、profiles、零插值、�
   }
 });
 
-test('test compose 仍不发端口，并与 playground 共享 ccm-test:local 标签', () => {
+test('test compose 仍不发端口，并与 playground 共享 claude-chat-mobile-test:local 标签', () => {
   const yaml = read(TEST_COMPOSE);
-  assert.match(yaml, /image:\s*ccm-test:local/);
+  // 镜像名必须带仓库区分度：docker 镜像名全机共享，通用名（如 ccm-test:local）会被本机
+  // 其它项目的构建覆盖，而 compose run 见镜像已存在就直接用 → 测试静默跑在别人的 node_modules 上。
+  assert.match(yaml, /image:\s*claude-chat-mobile-test:local/);
   assert.doesNotMatch(yaml, /^\s+ports:/m);
 });
 

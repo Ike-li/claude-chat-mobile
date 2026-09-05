@@ -1,6 +1,6 @@
 # docker-compose.playground.yml —— 维护者本机 playground（测试基础设施，不是产品入口）
 #
-# 与 docker-compose.test.yml 共用 Dockerfile.test / ccm-test:local。
+# 与 docker-compose.test.yml 共用 Dockerfile.test / claude-chat-mobile-test:local。
 # 拓扑用 profiles：默认 app；mock 聊天 UI；proxy 公网 Host 夹具。
 # probe / browser 只 `run --rm`，禁止 `up --profile probe|browser`。
 name: ccm-playground
@@ -9,7 +9,8 @@ x-ccm-image: &ccm-image
   build:
     context: ../..
     dockerfile: tests/infra/Dockerfile.test
-  image: ccm-test:local
+  # 与 docker-compose.test.yml 同名同源（见那里的注释：镜像名全机共享，通用名会被别的项目覆盖）
+  image: claude-chat-mobile-test:local
   pull_policy: never
   working_dir: /app
 

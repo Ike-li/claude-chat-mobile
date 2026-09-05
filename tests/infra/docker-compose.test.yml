@@ -9,7 +9,12 @@ services:
     build:
       context: ../..
       dockerfile: tests/infra/Dockerfile.test
-    image: ccm-test:local
+    # 镜像名必须带仓库区分度，不能用 `ccm-test:local` 这种通用名：docker 的镜像名是【全机共享】的，
+    # 同名镜像会被本机上任何一个项目的构建覆盖掉。而 `docker compose run` 见镜像已存在就直接用、
+    # 不重建——于是本仓的测试会静默跑在别的项目的镜像里：node_modules 是那边的，
+    # 本仓特有依赖（jose / @anthropic-ai/claude-agent-sdk）不存在，一大批测试连模块都加载不了。
+    # 症状具有迷惑性：宿主机全绿、容器里一片红，看起来像"测试有平台兼容问题"。
+    image: claude-chat-mobile-test:local
     volumes:
       # 源码挂进来：改一行代码不用重建镜像。
       - ../..:/app
