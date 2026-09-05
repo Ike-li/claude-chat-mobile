@@ -31,6 +31,21 @@ export function resolveExecutableViaPath(name, { platform: platformOverride = pl
 }
 
 /**
+ * 特殊文件闸：只允许常规文件或符号链接进入 openSync。
+ * POSIX 下 open(FIFO, O_RDONLY) 在没有 writer 时无限阻塞，O_NOFOLLOW 不改变这一点；
+ * 字符设备与 unix socket 同理。必须在 open 之前拦截。
+ * lstat 不跟随 symlink：symlink 自身放行，后续由 O_NOFOLLOW 或真实落点复核处理。
+ */
+export function isOpenableTarget(real) {
+  try {
+    const st = lstatSync(real);
+    return st.isFile() || st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 检查路径中是否包含可疑的 symlink（用户可写目录中的 symlink）
  * 返回可疑 symlink 路径，或 null（安全）
  *

@@ -2,6 +2,7 @@
 // 安全红线：attributePath 是唯一闸门——预览的 diff 与 snippet 都必须在它之后，绝不能变成任意文件读。
 import { resolve, relative, sep, basename } from 'node:path';
 import { openSync, readSync, closeSync, fstatSync, constants } from 'node:fs';
+import { isOpenableTarget } from './file-security.js';
 
 // 路径归属 + 安全裁决（零 IO，只 path.resolve）。相对 filePath 锚 instance.cwd。
 // 返回 { workDir, relPath, resolved } 表示属于某白名单工作目录；null = 不属任何 → 调用方一律拒绝。
@@ -41,6 +42,8 @@ export function buildDiff(name, input = {}) {
 // 图片：按魔数识别常见格式，体积未超 maxBytes 时回 image{mimeType,base64} 供前端 <img>；
 // 超大图片不回完整 base64（同样防 socket 撑爆），只给可读占位。
 export function readPreview(resolved, { maxBytes = 64 * 1024, maxLines = 400 } = {}) {
+  // FILE-02：特殊文件闸——FIFO/设备/socket 在 openSync 会永久阻塞单进程 Node，必须在 open 前挡
+  if (!isOpenableTarget(resolved)) return null;
   const NUL = String.fromCharCode(0);
   const NOFOLLOW = constants.O_NOFOLLOW || 0;
   // FILES-3：O_NOFOLLOW——叶节点在 realpath 与 open 之间被换成外向 symlink 时 ELOOP，不跟出 scope。

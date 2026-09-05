@@ -13,6 +13,7 @@ import { isUtf8 } from 'node:buffer';
 import { join, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { isInScope } from './workdir-scope-guard.js';
+import { isOpenableTarget } from './file-security.js';
 
 // 256KB/片、500 条/页：本模块把它们同时当默认值与硬顶——弱网上限的含义是"每次最多这么多"，
 // 客户端可请求更小的页（省流量），但不能请求更大的页绕过分页语义；不做成可无限调大的可配置项。
@@ -24,21 +25,6 @@ export const MAX_BROWSE_BYTES = 256 * 1024;
 function resolveInScope(cwd, relPath, scopeDirs) {
   const candidate = join(cwd, relPath || '.');
   return isInScope(candidate, scopeDirs) ? candidate : null;
-}
-
-// 特殊文件闸，必须在 open 【之前】跑。POSIX 下 open(FIFO, O_RDONLY) 在没有 writer 时【无限阻塞】，
-// O_NOFOLLOW 不改变这一点，也没有任何超时；而下方 fstat 的类型检查在 open 之后才执行，救不了。
-// 单进程 Node 一旦卡在这个同步调用上，所有会话、socket、statusline、catchUpTick、/health 全部停摆，
-// 无自愈路径，只能人工上机杀进程重启。触发不需要攻击者——工作目录里存在一个 mkfifo 出来的管道，
-// 用户在文件浏览器里点一下即可（listDir 此前把它归类成普通 file）。字符设备与 unix socket 同理。
-// lstat 不跟随 symlink：symlink 目标仍由 O_NOFOLLOW 负责拒绝，此处只放行 symlink 自身与常规文件。
-function isOpenableTarget(real) {
-  try {
-    const st = lstatSync(real);
-    return st.isFile() || st.isSymbolicLink();
-  } catch {
-    return false;
-  }
 }
 
 // 按固定字节数分片读取文本文件时，分片边界可能恰好切在一个多字节 UTF-8 字符中间（中文/emoji 等）——
