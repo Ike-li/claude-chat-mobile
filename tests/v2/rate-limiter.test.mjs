@@ -223,6 +223,28 @@ test.describe('DEVICE-01: shouldBypassDeviceApproval 设备审批跳过判定', 
     }, norm), false);
   });
 
+  // ★ 变异实测（2026-09-05）：把 peerLocal 那行三个 === 里的任意一个改成 !==，本 describe 的
+  // 其余用例【全绿】。原因是它们的 Host 也非本机（公网域名 / LAN IP / 空），第二道闸兜住了结果
+  // ——于是「peer 那半边到底有没有在守」测试根本不知道，谁把它简化掉都不会红。
+  //
+  // 双条件的两半必须各有一条用例【只让那一半说话】：上面「隧道终止在本机」固定 peer 为 loopback、
+  // 只动 Host；这一条反过来固定 Host 为本机样、只动 peer。缺了本条，变异后 LAN 客户端只要发
+  // `Host: localhost` 就跳过设备审批（peerLocal 对任何非 localhost 的 IP 都为真）。
+  //
+  // Host 不取 '::1'：split(':')[0] 会得到空串，落不到 localhost 分支，那样本条会因为第二道闸
+  // 而非第一道闸通过——用例就白写了。
+  test('非 loopback peer + 本机样 Host 不得跳过审批（只让 peer 那一半说话）', () => {
+    for (const peerAddress of ['192.168.1.100', '203.0.113.9', '10.0.0.7']) {
+      for (const hostHeader of ['localhost:3000', 'localhost', '127.0.0.1']) {
+        assert.equal(
+          shouldBypassDeviceApproval({ accessEnabled: false, peerAddress, hostHeader }, norm),
+          false,
+          `peer=${peerAddress} host=${hostHeader} 必须落入待审批，不得当成真本机直连`,
+        );
+      }
+    }
+  });
+
   test('空 Host 或缺失 Host 绝不视为本机（防反代置空 Host 绕过）', () => {
     assert.equal(shouldBypassDeviceApproval({
       accessEnabled: false,
