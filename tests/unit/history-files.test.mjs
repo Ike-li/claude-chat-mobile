@@ -109,6 +109,26 @@ test('getProjectDir: 截断后的 hash 后缀与 CLI 逐字节一致（钉死已
   );
 });
 
+// ★ 阈值本身的两侧。2026-09-05 变异实测：project-dir.js:41 的 `sanitized.length <= MAX_SEGMENT`
+// 改成 `<` 时【没有任何用例变红】——上面两条样本 sanitize 后是 211 / 314 字符，离 200 太远，
+// 改成 `<`、`<=`、甚至 `< 199` 都一样走截断分支。
+//
+// 差一个字符不是美观问题：200 是与 CLI 的 Co() 逐字节对齐的常量。本仓算出的目录名一旦和 CLI
+// 写的不同，join(CLAUDE_DIR, ...) 是精确拼接、没有 SDK 那层前缀扫描兜底，该 workdir 的会话
+// 直接一个都读不到，而 CLI 自己完全正常——正是本文件上面那段注释描述的失效形态。
+test('getProjectDir: 200 字符阈值的两侧（恰好 200 原样返回，201 才截断+hash）', () => {
+  // sanitize 后恰好 200：'/' → '-'，再加 199 个 a。
+  const exact200 = getProjectDir('/' + 'a'.repeat(199));
+  assert.equal(exact200.length, 200, '恰好压线的名字不该被截断');
+  assert.equal(exact200, '-' + 'a'.repeat(199), '未超阈值必须原样返回，不得追加 hash 后缀');
+
+  // 再多一个字符就必须走截断分支，且前 200 字符与上面那条完全一致。
+  const at201 = getProjectDir('/' + 'a'.repeat(200));
+  assert.ok(at201.length > 200, '超阈值必须截断+接 hash，长度不可能仍是 201');
+  assert.equal(at201.slice(0, 200), exact200, '截断保留的前 200 字符与压线样本必须逐字相同');
+  assert.match(at201.slice(200), /^-[0-9a-z]+$/, '截断后必须接 "-" + 36 进制 hash');
+});
+
 // ── sessionFileExists ──────────────────────────────────────────────────────
 
 test('sessionFileExists: 含 . 的路径穿越被拒', async () => {
