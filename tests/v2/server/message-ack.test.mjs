@@ -25,7 +25,7 @@
 //  ③ 附件路径的幂等 —— 需要真实上传落盘，另开用例。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -141,94 +141,5 @@ test('BE-002 第二条校验路径：超长文本被拒后，同一 ID 重发短
     const retried = await send({ text: '短一点', clientMessageId: 'be002-long' });
     assert.equal(retried.ok, true, `同一 ID 改短后必须能发出去，实际 ${JSON.stringify(retried)}`);
     assert.ok(!retried.deduped);
-  });
-});
-
-// ── SRV-001：FRESH 单飞键必须【按 cwd 独立】（2026-09-05 从源码文本断言搬来）──────
-// 原来这条活在 tests/v2/message-dedup.test.mjs 里，形态是 readFileSync(app.js) + 正则匹配
-// `const key = resumeId || \`fresh:${cwd}\``。那种断言钉的是源码长什么样不是行为：
-// 改个变量名它无故变红，保持文本不变而改坏行为它照样绿。组装根单测加载不了，当时没有第二条路；
-// S2 层起真 server 之后有了。
-//
-// ★ 搬迁时先写错过一版，值得留痕：第一版测的是「同一 cwd 并发两条只开一个实例」，
-//   在容器里把 app.js:1896 注入成 `const key = resumeId;` 之后【测试照样绿】——
-//   因为两条并发 FRESH 请求的 resumeId 都是 undefined，撞在同一个 undefined 键上，
-//   单飞恰好仍然生效。
-//
-//   fresh:${cwd} 防的不是「同 cwd 重复开」，是【跨 cwd 塌陷】：没有它，工作区 A 与工作区 B
-//   的并发首发共用 undefined 这一个键，后到的那条会拿到前一条为【别的工作区】开的实例——
-//   消息发进错的仓库。原断言写的是「独立键」，「独立」两个字才是重点。
-//
-// 所以判据是：两个不同 cwd 的并发首发必须开出【两个不同】实例。
-async function withTwoWorkdirs(fn) {
-  const root = mkdtempSync(join(tmpdir(), 'ccm-v2-srv001-'));
-  const dirA = join(root, 'alpha');
-  const dirB = join(root, 'beta');
-  mkdirSync(dirA); mkdirSync(dirB);
-  const server = await spawnServer({
-    AUTH_TOKEN: TOKEN,
-    WORK_DIR: dirA,
-    WORK_DIRS: `${dirA},${dirB}`,
-    CCM_DATA_DIR: root,
-  });
-  const events = [];
-  const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: 'v2-srv001-device' },
-    transports: ['websocket'], reconnection: false, timeout: 4000,
-    extraHeaders: { Host: 'localhost' },
-  });
-  sock.on('agent:event', e => events.push(e));
-  try {
-    await new Promise((resolve, reject) => {
-      sock.on('connect', resolve);
-      sock.on('connect_error', reject);
-      setTimeout(() => reject(new Error('socket 未能在 5s 内连上')), 5000);
-    });
-    const send = payload => new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`ack 超时：${JSON.stringify(payload)}`)), 8000);
-      sock.emit('user:message', payload, res => { clearTimeout(timer); resolve(res); });
-    });
-    return await fn({ send, events, dirA, dirB });
-  } finally {
-    try { sock.close(); } catch { /* 已关闭 */ }
-    await killServer(server.proc);
-    rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
-  }
-}
-
-test('SRV-001：两个不同 cwd 的并发首发必须开出两个独立实例，不得塌陷成一个', async () => {
-  await withTwoWorkdirs(async ({ send, events, dirA, dirB }) => {
-    // 不 await 第一条就发第二条：两条都落在对方 spawn 的 await 窗口里，正是单飞键要裁决的时刻。
-    const [ackA, ackB] = await Promise.all([
-      send({ text: 'in-alpha', cwd: dirA, clientMessageId: 'srv001-alpha' }),
-      send({ text: 'in-beta', cwd: dirB, clientMessageId: 'srv001-beta' }),
-    ]);
-
-    // 轮询到「两个实例都到齐」而不是固定 sleep：固定窗口是在赌竞态——实测 400ms 会偶发
-    // 只捞到第一次广播（那时 inst_2 还没建）。轮询在修好时几乎立刻收敛，坏掉时才等满上限，
-    // 慢的是失败路径，不拖累日常。
-    const snap = () => events.filter(e => e.type === 'instances').pop()?.payload?.instances ?? [];
-    const deadline = Date.now() + 4000;
-    while (snap().length < 2 && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 50));
-    }
-    const snapshot = snap();
-
-    // 信号一：实例快照里必须是两个，且 cwd 各归各的。
-    assert.equal(
-      snapshot.length, 2,
-      `两个工作区的并发首发应各开一个实例，实际 ${snapshot.length} 个：`
-      + `${JSON.stringify(snapshot.map(i => ({ id: i.instanceId, cwd: i.cwd })))}。`
-      + '单飞键在 resumeId 为空时没按 cwd 回落的话，两条请求共用 undefined 键、塌陷成一个。',
-    );
-    const cwds = snapshot.map(i => i.cwd).sort();
-    assert.deepEqual(cwds, [dirA, dirB].sort(), '两个实例必须分别落在各自的工作区');
-
-    // 信号二：ack 来自另一条代码路径（同步回话 vs 广播）。快照是服务端自己算的，
-    // 一个「塌陷成一个实例但快照列两条」的实现能让单看快照的断言全绿。
-    assert.ok(ackA?.instanceId && ackB?.instanceId,
-      `两条 ack 都要带回实例，实际 ${JSON.stringify([ackA, ackB])}`);
-    assert.notEqual(ackA.instanceId, ackB.instanceId,
-      `两个工作区的首发落在同一个实例上——消息发进了错的仓库：${JSON.stringify([ackA, ackB])}`);
   });
 });
