@@ -57,6 +57,7 @@ const REASONS = [
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, why: '冒烟测试真实调用 claude，消耗额度' },
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
+  { re: /\bnpm\s+run\s+test:v2:env\b/, why: 'tests/v2/env/ 跑的是卸载器：它的隔离【依赖被测代码正确性】——createUninstaller 若不认注入的 home/root/appPath 而回落 homedir()/REPO_ROOT//Applications/CCM.app，rmSync 就打在真实家目录上，与 8/2 删库同形态' },
   { re: /\bnpm\s+(?:test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态' },
   // ★ 白名单反转补上的洞：approval-store / audit / devices 的落盘路径是【模块级常量】，在 import
   // 求值那一刻就锁定了，只有 --import 预加载改得动。裸 node --test 会把它们写进真实 data/。

@@ -24,7 +24,8 @@ import { createInterface } from 'node:readline/promises';
 
 import { resolveManifestPath, resolveUninstallConfirm } from './service.js';
 import { SERVICE_UNIT_LOG_NAMES } from '../app/src/ops/service-units.js';
-import { readConfigFileValues } from '../app/src/ops/config-file.js';
+import { readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
+import { resolveWorkdirSource } from '../app/src/sessions/workdirs.js';
 import { claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,6 +83,9 @@ export function createUninstaller({
   out = (line) => process.stdout.write(`${line}\n`),
 } = {}) {
   const fileEnv = readConfigFileValues(root).values;
+  // 内联 WORKDIRS 必须在【构造期】读：6b 会把 ccm.config.json 删掉，等到 6d 再读就恒为 null，
+  // 工作区列表凭空变空、.ccm-uploads 一个都报不出来（与 managedUnits 取卸载前快照同一个理由）。
+  const inlineWorkdirs = readConfigFileRaw(root)?.WORKDIRS ?? null;
   const manifestPath = resolveManifestPath(env, fileEnv, root);
   const dataDir = dirname(manifestPath);
   const settingsPath = claudeSettingsPath(home);
@@ -334,10 +338,25 @@ export function createUninstaller({
       }
 
       // 6d. 各工作区 .ccm-uploads：只报不删（历史消息附件预览要读它）。
-      const workdirs = Array.isArray(fileEnv.WORKDIRS)
-        ? fileEnv.WORKDIRS.map((w) => (typeof w === 'string' ? w : w?.dir || w?.path)).filter(Boolean)
-        : [];
-      for (const dir of workdirs) {
+      //
+      // 工作区来源走 workdirs.js 的 resolveWorkdirSource，与 server 的 readWorkdirSource
+      // 和 doctor 的 workdirPaths 同一优先级（WORK_DIRS env > WORK_DIRS_FILE env > 内联 WORKDIRS）。
+      //
+      // 此前这里读 fileEnv.WORKDIRS 判 Array.isArray —— 而 fileEnv 来自 readConfigFileValues，
+      // 那条路径会把 list 类型**整个键丢掉**（structuredToStringValues → projectToEnv 对 list
+      // 返回 null），于是判定恒为 false：这段报告从 2026-08-19 落地起一次都没打印过。
+      // workdirs.js 的 resolveWorkdirSource 头注释早就写了「不能自己 if (Array.isArray(inline))」，
+      // 当时那句是写给 doctor D3 的，这里没照做。
+      const workdirs = [
+        env.WORK_DIR || fileEnv.WORK_DIR || home,   // 主工作区：server 里恒占 workDirs[0]
+        ...(resolveWorkdirSource({
+          envList: (env.WORK_DIRS || fileEnv.WORK_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
+          envFile: env.WORK_DIRS_FILE || fileEnv.WORK_DIRS_FILE || '',
+          inline: inlineWorkdirs,
+          here: root,
+        }).result?.entries ?? []).map((e) => e.path),
+      ].filter(Boolean);
+      for (const dir of new Set(workdirs)) {
         const uploads = join(dir, '.ccm-uploads');
         if (existsSync(uploads)) out(`  ⚠ 保留（只报不删，删了历史附件预览会断链）：${uploads}`);
       }

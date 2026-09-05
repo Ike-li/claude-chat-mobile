@@ -74,9 +74,14 @@
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
-（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
+（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，
+外加与 `test:unit` 同档的 `test:v2`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
+
+> ⚠️ **`test:v2` 的两个兄弟不在白名单上，别照着后缀类推**：`test:v2:server` 起真 `app/server.js` 子进程；
+> `test:v2:env` 跑的是卸载器（`tests/v2/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
+> ——回落成 `homedir()` / `/Applications/CCM.app` 就打在真实家目录上，与 8/2 删库同形态。两条都进容器。
 
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、
 `npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`

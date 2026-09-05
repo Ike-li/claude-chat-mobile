@@ -102,6 +102,22 @@ test('全新机器（什么都没装）：所有步骤跳过、退出成功、�
   assert.ok(result.steps.every((s) => s.status === 'skip'), JSON.stringify(result.steps));
 });
 
+test('settings.json 已被用户手动删掉：桥判「未安装」，~/.claude/ccm 残余照样清干净', () => {
+  // 这条分支容易被漏掉：没有 settings.json ⇒ 桥无从卸载，但产品此前写下的
+  // ~/.claude/ccm/<桥目录> 仍在。若此时不认「未安装 = 可清残余」，卸载完会留下一堆孤儿文件，
+  // 而用户看到的每一行都是「✓ 跳过」。
+  const { u, home } = makeUninstaller();
+  const residue = join(home, '.claude', 'ccm', 'statusline-v1');
+  mkdirSync(residue, { recursive: true });
+  writeFileSync(join(residue, 'snapshot.json'), '{}');
+  assert.equal(existsSync(join(home, '.claude', 'settings.json')), false, '前提：settings.json 不存在');
+
+  const result = u.run({ purge: false });
+  assert.equal(result.ok, true, JSON.stringify(result.steps));
+  assert.equal(existsSync(join(home, '.claude', 'ccm')), false,
+    '桥「未安装」也要清掉它留下的残余目录，否则卸载报全绿而磁盘上还有孤儿文件');
+});
+
 test('真装两个桥后卸载：settings 恢复原样、manifest 与 ~/.claude/ccm 整目录清空、数据根不动', () => {
   const { u, home, dataDir, env } = makeUninstaller();
   const settingsPath = installBridges(home, env);
@@ -211,21 +227,24 @@ test('launchd：manifest 里的 unit 逐个经 service.js 卸载；「未安装�
   assert.deepEqual(states, { 'unit:server': 'done', 'unit:menubar': 'skip' });
 });
 
-test('残留菜单栏进程：按 appPath 锚定探测，SIGTERM 后复查确认退出', () => {
+test('残留菜单栏进程：按 appPath 锚定探测，SIGTERM 后复查确认退出；PID ≤ 1 与非数字行一律丢弃', () => {
   let probes = 0;
   const killed = [];
   const { u } = makeUninstaller({
     stubs: {
-      // 第一次探测命中两个 PID，SIGTERM 后复查为空
+      // 第一次探测命中两个真 PID + 一批必须被丢掉的行，SIGTERM 后复查为空。
+      // `0` / `1` 不是理论边界：kill(1) 打的是 init/launchd，kill(0) 在 POSIX 上是
+      // 「向本进程组全体发信号」—— 一个只判 Number.isInteger 的实现会把它们照单发出去。
       pgrep: () => (probes++ === 0
-        ? { status: 0, stdout: '87128\n87999\n', stderr: '' }
+        ? { status: 0, stdout: '87128\n0\n1\n-3\nnot-a-pid\n\n87999\n', stderr: '' }
         : { status: 1, stdout: '', stderr: '' }),
     },
     factory: { kill: (pid, sig) => killed.push([pid, sig]), sleep: () => {} },
   });
   const result = u.run({ purge: false });
   assert.equal(result.ok, true, JSON.stringify(result.steps));
-  assert.deepEqual(killed, [[87128, 'SIGTERM'], [87999, 'SIGTERM']]);
+  assert.deepEqual(killed, [[87128, 'SIGTERM'], [87999, 'SIGTERM']],
+    'pgrep 输出里只有 > 1 的整数才是可发信号的目标');
   const step = result.steps.find((s) => s.name === 'app-process');
   assert.equal(step.status, 'done');
 });
