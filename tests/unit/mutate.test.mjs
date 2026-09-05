@@ -4,15 +4,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   maskCodePositions,
   parseUncoveredLines,
   generateMutants,
   inferTestFiles,
+  listTestFiles,
   sampleMutants,
   isKilled,
   parseLineRanges,
 } from '../../tests/gates/mutate.js';
+
+const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 // ── 代码位置掩码：字符串/注释/正则字面量里的字符不得被当成可变异的代码 ──────
 
@@ -227,11 +232,33 @@ test('generateMutants：同一行多个变异点用 column 区分（否则报告
   assert.ok(mutants.every(m => m.line === 1));
 });
 
-test('自动关联只取单测：集成测试起真 server、会把变异循环吊死，要用就 --tests= 显式点名', () => {
-  const source = readFileSync(new URL('../../tests/gates/mutate.js', import.meta.url), 'utf8');
-  const listFn = source.slice(source.indexOf('function listTestFiles'), source.indexOf('function listTestFiles') + 300);
-  assert.ok(listFn.includes("'tests/unit'"));
-  assert.ok(!listFn.includes('tests/integration'), '自动关联面不得包含集成测试目录');
+test('自动关联只取秒级档：unit + v2 直下，集成测试与 v2 的起 server 档一律排除', () => {
+  // 真跑而不是读源码：这条以前断言的是「源码里出现过 'tests/unit' 字样」，
+  // 而 tests/v2 整个在盲区时那句照样成立 —— 只被 v2 覆盖的模块会被报成「没有关联测试」。
+  const files = listTestFiles(ROOT);
+  assert.ok(files.some(f => f.startsWith('tests/unit/')), '单测必须在自动关联面内');
+  assert.ok(files.some(f => f.startsWith('tests/v2/') && f.split('/').length === 3),
+    'v2 直下的 S0/S1 用例必须在自动关联面内，否则只被 v2 覆盖的模块查不到任何测试');
+  for (const excluded of ['tests/integration/', 'tests/v2/server/', 'tests/v2/env/', 'tests/e2e/', 'tests/smoke/']) {
+    assert.ok(!files.some(f => f.startsWith(excluded)),
+      `${excluded} 会起真 server / 分钟级，卷进每一个变异体就把循环废了`);
+  }
+  assert.ok(files.every(f => f.endsWith('.test.mjs')), '只收测试文件');
+});
+
+test('自动关联能找到只被 v2 覆盖的模块（旧单测已退役的那批）', () => {
+  // 具体复现 2026-09-05 撞到的形态：message-dedup 的旧单测在 v2 化时删掉了，
+  // 修复前 `npm run mutate -- app/src/agent/message-dedup.js` 报「没有测试文件提到」。
+  //
+  // 副作用注记：inferTestFiles 是字符串包含匹配，所以下面这两个路径字面量会让【本文件】
+  // 也被算成它们的关联测试——真跑 mutate 时会看到 tests/unit/mutate.test.mjs 混在关联表里。
+  // 无害（纯函数、毫秒级），但别以为那是配错了。想消掉就得放弃点名具体形态，不值当。
+  const files = listTestFiles(ROOT);
+  const read = f => readFileSync(join(ROOT, f), 'utf8');
+  for (const target of ['app/src/agent/message-dedup.js', 'app/src/sessions/read-state.js']) {
+    assert.ok(inferTestFiles(target, files, read).length > 0,
+      `${target} 有 v2 测试却关联不到 —— 变异是本仓验收假绿的判据，判据自己失明比没有更糟`);
+  }
 });
 
 // ── 破坏性隔离（2026-08-02 真实事故的回归）─────────────────────────────────
