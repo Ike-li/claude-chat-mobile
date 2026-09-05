@@ -66,6 +66,7 @@
     "test": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --import ./tests/setup/preload-env.mjs --test tests/unit/*.test.mjs",
     "test:v2": "node --import ./tests/setup/preload-env.mjs --test tests/v2/*.test.mjs",
+    "test:v2:server": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/v2/server/*.test.mjs",
     "test:integration": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/*.test.mjs",
     "test:coverage": "node --import ./tests/setup/preload-env.mjs --experimental-test-coverage --test tests/unit/*.test.mjs",
     "test:e2e": "playwright test -c tests/infra/playwright.config.ts",

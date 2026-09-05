@@ -62,6 +62,12 @@ jobs:
       # 不接这一步的话，v2 写多少条都不会在 CI 上跑——写了等于没有回归保护。
       # 与 test:unit 同档（纯函数 + 一次性目录真磁盘），故同 job、不另起 runner。
       - run: npm run test:v2
+      # v2 的 S2 层（tests/v2/server/）：起真 app/server.js 子进程，宿主机上不允许跑
+      # （不在 guard-host-tests 白名单里），但 CI runner 本身是一次性的，隔离强于本机容器。
+      # CLAUDE_BIN 指向 stub 让 preflight 过关；需要真 agent turn 的断言不在这一层。
+      - run: npm run test:v2:server
+        env:
+          CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
       # 集成测试是【唯一执行真实 app/src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
       # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
       # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的
