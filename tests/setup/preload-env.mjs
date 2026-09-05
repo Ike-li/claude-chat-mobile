@@ -15,11 +15,24 @@
 // 注：transcript 目录（~/.claude/projects）不在此隔离——L2 删除走 SDK deleteSession 只认真实根，隔离
 // 本模块的读只会和 SDK 的删分叉（见 history.js CLAUDE_DIR 注释）；session-delete 集成测试改用真实目录
 // 下的一次性随机子目录 + before 扫清 + after 清理自保。
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const dir = mkdtempSync(join(tmpdir(), 'ccm-test-data-'));
+
+// ★ 把 TMPDIR 收进本进程的一次性目录，让所有测试文件的 mkdtemp 都落在它下面。
+//
+// 为什么需要这一层，而不是让每个测试文件自己清干净：多数文件【已经】有 before/after 里的 rmSync，
+// 却照样漏——因为被测模块的异步/防抖落盘发生在 after 【之后】，其 mkdirSync(..., {recursive:true})
+// 把刚删掉的目录重建出来（sessions.js 的 200ms 防抖是实证过的一例，见 tests/unit/sessions.test.mjs
+// 的 after 注释）。逐个去找每个模块的 flush API 只能一次修一个，而下一个引入防抖写的模块又会漏。
+// 把根收在这里，exit 时连根删——那时 JS 已不再执行，没有任何东西能再重建它。
+//
+// 路径仍在系统临时区下（只多一层），macOS 的 /var→/private/var 语义不变；
+// 长度只增约 30 字节，本仓没有走 tmpdir() 的 unix socket（CLI 的 cc-socks 在 /tmp 下、不经这里）。
+process.env.TMPDIR = join(dir, 'tmp');
+mkdirSync(process.env.TMPDIR, { recursive: true });
 
 // 退出时回收。本脚本在【每个测试子进程】里都跑一次（node --test 逐文件 fork），而此前只建不删：
 // 2026-09-05 查出时 /tmp 下已攒了 9781 个 ccm-test-data-*，一次 npm run test:unit 就加 150+ 个。

@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,9 +26,24 @@ const STATUSLINE_SETUP = join(ROOT, 'scripts', 'statusline-bridge-setup.js');
 const HOOKS_SETUP = join(ROOT, 'scripts', 'hooks-bridge-setup.js');
 const UNINSTALL = join(ROOT, 'scripts', 'uninstall.js');
 
+// 每个用例要 2~4 个一次性目录（home/root，CLI 用例另加 clihome/clidata），此前建了从不删——
+// 一次全量 test:unit 就在 /tmp 留 20 个，2026-09-05 清理时这个文件贡献了 1092 个（占所有
+// 非 preload 泄漏的一半以上）。收进数组由文件级 after 统一回收：用例内不删，因为
+// makeUninstaller 的目录要活到断言读完。
+const TMP_DIRS = [];
 function makeTmp(tag) {
-  return mkdtempSync(join(tmpdir(), `ccm-uninstall-${tag}-`));
+  const dir = mkdtempSync(join(tmpdir(), `ccm-uninstall-${tag}-`));
+  TMP_DIRS.push(dir);
+  return dir;
 }
+
+test.after(() => {
+  for (const dir of TMP_DIRS) {
+    try {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: 本文件 makeTmp 建的 mkdtemp 一次性目录
+    } catch { /* 尽力而为：清理失败不该把测试结论搞脏 */ }
+  }
+});
 
 function testEnvFor(home, dataDir) {
   return {
