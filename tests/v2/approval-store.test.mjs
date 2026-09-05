@@ -220,3 +220,63 @@ test.describe('APPROVAL-02: 重启 fail-closed 与留存治理边界', () => {
     assert.ok(Array.isArray(content.requests));
   });
 });
+
+// ── 边界：台账两端 ──────────────────────────────────────────────────────────
+// 2026-09-05 变异实测补的两条。放在文件最后，因为第一条会先把共享台账清空。
+test.describe('APPROVAL-02: 索引 0 与保留期分界', () => {
+  // 共享同一个模块实例，先确定性清空：把残留 pending 全部终态化，再用一个【高于所有可能
+  // decidedAt】的 cutoff 清掉全部终态记录。cutoff 必须够大——前面的用例用了 250/1200/1500
+  // 这类时间戳，随手写个小 cutoff 会把它们留在台账里，让本节的计数断言从一开始就对不上。
+  const emptyStore = () => {
+    AS.expireAllPending({ decidedBy: 'system:test-reset', decidedAt: 1 });
+    AS.purgeTerminalOlderThan(Number.MAX_SAFE_INTEGER);
+  };
+
+  // ★ approval-store.js:84 的 `i >= 0` 改成 `i > 0` 时，此前【没有一条用例变红】。
+  // 那个倒序循环不是随手写的：注释详述它是为修「张冠李戴」而来的——原来的 find 取首个匹配＝
+  // 最旧那条，用户这次的批准被写到早已 expired 的历史记录上，本次的新记录永远停在 pending。
+  //
+  // `i > 0` 让【索引 0 永不被检查】。既有用例全都在台账里已有别的记录之后才建目标记录
+  // （模块状态整份文件共享），目标从来不在索引 0 上，所以恒绿。而索引 0 恰恰是最常见的场景：
+  // 全新安装上的第一次审批——那一次的决定会被静默丢弃，台账里查不到任何人批准过。
+  test('★ 台账里只有一条记录时也必须找得到（索引 0 不得被跳过）', () => {
+    emptyStore();
+    AS.recordCreated({
+      reqId: 'req-solo',
+      sessionId: 'sess-solo',
+      tool: 'Bash',
+      args: { command: 'ls' },
+      cwd: '/workspace',
+      fingerprint: 'fp-solo',
+      createdAt: 1000,
+      expiresAt: 2000,
+    });
+
+    AS.recordDecided('req-solo', { status: 'approved', decidedBy: 'user:device_1', decidedAt: 1500 });
+
+    const entry = AS.getByReqId('req-solo');
+    assert.ok(entry, '唯一一条记录必须仍在台账里');
+    assert.equal(entry.status, 'approved', '索引 0 被跳过时它会停在 pending —— 决定被静默丢弃');
+    assert.equal(entry.decidedBy, 'user:device_1');
+    assert.equal(entry.decidedAt, 1500);
+  });
+
+  // purgeTerminalOlderThan 的判据是 `(r.decidedAt ?? 0) >= cutoffTs` 才【保留】。
+  // 改成 `>` 时恰好等于分界的那条会被清掉，而既有用例用的是 250 vs 500（离分界很远），两侧都清。
+  test('保留期分界：decidedAt 恰好等于 cutoffTs 的记录必须保留', () => {
+    emptyStore();
+    const CUTOFF = 5000;
+    for (const [reqId, decidedAt] of [['req-at-edge', CUTOFF], ['req-just-below', CUTOFF - 1]]) {
+      AS.recordCreated({
+        reqId, sessionId: 's', tool: 'Bash', args: {}, cwd: '/w',
+        fingerprint: `fp-${reqId}`, createdAt: 1, expiresAt: 2,
+      });
+      AS.recordDecided(reqId, { status: 'approved', decidedBy: 'user', decidedAt });
+    }
+
+    const purged = AS.purgeTerminalOlderThan(CUTOFF);
+    assert.equal(purged, 1, '只该清掉严格早于分界的那一条');
+    assert.ok(AS.getByReqId('req-at-edge'), 'decidedAt === cutoffTs 属于保留侧');
+    assert.equal(AS.getByReqId('req-just-below'), null);
+  });
+});
