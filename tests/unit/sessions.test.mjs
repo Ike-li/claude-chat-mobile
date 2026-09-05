@@ -20,8 +20,16 @@ test.describe('sessions.js 单元测试', () => {
   });
 
   test.after(() => {
+    // ★ 必须先 flush 再删：sessions.js 的 save() 是 200ms 防抖，最后几个用例排下的定时器很可能
+    // 还挂着。直接 rmSync 会出现「删了又回来」——定时器随后触发，落盘路径里的
+    // mkdirSync(dirname(FILE), { recursive: true }) 把整个临时目录重建出来，再写进 sessions.json，
+    // 于是每跑一次就在 /tmp 留一个带 sessions.json 的孤儿目录（2026-09-05 查出时已攒了 60 个）。
+    // 这个现象在进程内看不出来：after 里的 existsSync 返回 false 是真的，重建发生在它之后。
+    // flushSaveSync 正是为「进程正常退出不丢最后一次保存」写的，它 clearTimeout 后同步写完，
+    // 用它排空在飞写入是这里唯一正确的顺序。
+    S?.flushSaveSync?.();
     delete process.env.CCM_SESSIONS_FILE;
-    if (TMP_DIR) rmSync(TMP_DIR, { recursive: true, force: true });
+    if (TMP_DIR) rmSync(TMP_DIR, { recursive: true, force: true }); // safe-rm: 本 describe 的 mkdtemp 一次性目录
   });
 
   // ── getCurrent / setCurrent ──────────────────────────────────────────────

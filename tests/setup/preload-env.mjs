@@ -15,11 +15,24 @@
 // 注：transcript 目录（~/.claude/projects）不在此隔离——L2 删除走 SDK deleteSession 只认真实根，隔离
 // 本模块的读只会和 SDK 的删分叉（见 history.js CLAUDE_DIR 注释）；session-delete 集成测试改用真实目录
 // 下的一次性随机子目录 + before 扫清 + after 清理自保。
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const dir = mkdtempSync(join(tmpdir(), 'ccm-test-data-'));
+
+// 退出时回收。本脚本在【每个测试子进程】里都跑一次（node --test 逐文件 fork），而此前只建不删：
+// 2026-09-05 查出时 /tmp 下已攒了 9781 个 ccm-test-data-*，一次 npm run test:unit 就加 150+ 个。
+// 无害但确实是泄漏，且与本仓「删除必须可追溯到一次性目录」的纪律方向相反——这里正好是最好追溯的
+// 那一种：dir 就是上一行 mkdtemp 出来的，同文件同作用域。
+//
+// 用 'exit' 而不是 SIGINT/SIGTERM：它对正常结束与 process.exit()（--test-force-exit 走这条）都触发，
+// 且只允许同步操作 —— rmSync 正好是同步的。被 SIGKILL 时收不到，那种情况留残留可以接受。
+process.on('exit', () => {
+  try {
+    rmSync(dir, { recursive: true, force: true }); // safe-rm: 本文件上一行 mkdtemp 建的一次性目录
+  } catch { /* 退出路径不抛：清理失败顶多留个空目录，不该把测试进程的退出码搞脏 */ }
+});
 process.env.CCM_APPROVAL_STORE_FILE = join(dir, 'approval-requests.json');
 process.env.CCM_AUDIT_FILE = join(dir, 'audit-records.json');
 process.env.CCM_TRUSTED_DEVICES_FILE = join(dir, 'trusted-devices.json');
