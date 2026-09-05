@@ -171,21 +171,15 @@ test.describe('MSG-01 & SRV-001: 生产代码关键顺序与并发懒开单飞�
     assert.ok(commitIdx < broadcastIdx, 'commitProcessed 必须在 broadcastInstances 之前');
   });
 
-  test('SRV-001: FRESH 路径（resumeId 空）并发懒开会话必须使用 fresh:cwd 单飞键去重', () => {
-    const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
-
-    // 检查 dedupedResume 的键生成逻辑包含 resumeId || `fresh:${cwd}`
-    assert.match(
-      src,
-      /const\s+key\s*=\s*resumeId\s*\|\|\s*`fresh:\$\{cwd\}`/,
-      'SRV-001: dedupedResume 必须对空 resumeId 采用 fresh:${cwd} 独立键',
-    );
-
-    // 检查 user:message 中的懒开分支调用 dedupedResume(cwd, saved?.id ?? null)
-    assert.match(
-      src,
-      /dedupedResume\(cwd,\s*saved\?\.id\s*\?\?\s*null\)/,
-      'SRV-001: user:message 懒开会话必须通过 dedupedResume 统一收敛 FRESH 与 RESUME',
-    );
-  });
+  // SRV-001（FRESH 单飞键按 cwd 独立）2026-09-05 搬去 S2：
+  //   tests/v2/server/message-ack.test.mjs 的「两个不同 cwd 的并发首发必须开出两个独立实例」。
+  //
+  // 原来这里是 readFileSync(app.js) + 正则匹配 `const key = resumeId || \`fresh:${cwd}\``。
+  // 那种断言钉的是源码长什么样：改个变量名无故变红，保持文本不变而改坏行为照样绿。
+  // 当时没有第二条路（组装根单测加载不了），S2 层起真 server 之后有了。
+  //
+  // 搬迁时的实测记录（两条都做过才算验收）：注入 `const key = resumeId;` 后 S2 用例变红、
+  // 正常代码下绿。而第一版 S2 用例测的是「同一 cwd 并发只开一个」——注入后【照样绿】，
+  // 因为两条 FRESH 请求的 resumeId 都是 undefined，撞在同一个键上单飞恰好仍生效。
+  // fresh:${cwd} 防的是跨 cwd 塌陷，不是同 cwd 重复开。
 });
