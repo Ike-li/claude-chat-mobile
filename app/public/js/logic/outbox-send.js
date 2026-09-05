@@ -51,8 +51,16 @@ export function presentOnlineSendAck(ack) {
     };
   }
   const permanent = Boolean(ack?.permanent);
-  const retryable = Boolean(ack?.retryable) || (!permanent && !ack?.stale);
-  const stale = Boolean(ack?.stale);
+  // stale 认两种形态：标志位与裸协议串。服务端当前两者同发（app.js 的两处 ack 都是
+  // `{ ok:false, error:'stale_instance', stale:true }`），但离线路径 presentOfflineResendAck
+  // 早就同时认，且它的注释写着「判据与在线路径 presentOnlineSendAck 逐字对齐」——
+  // 而这里此前只把裸串用于【文案】（下面那个 if），决策仍只看 ack.stale。
+  // 于是只要哪天服务端少发一个（比如重构时觉得 stale:true 冗余），在线路径就会把死信
+  // 当可重试塞进 outbox，表现为「每次重连重发一遍、永不退场」，而离线路径正常。
+  // 两端表现不一致的缺陷最难查，这里把判据补齐，让那句「逐字对齐」真的成立
+  // （2026-09-05 由跨路径一致性断言发现，见 tests/v2/logic-outbox-ack.test.mjs）。
+  const stale = Boolean(ack?.stale) || error === 'stale_instance';
+  const retryable = Boolean(ack?.retryable) || (!permanent && !stale);
   let message = error;
   if (error === 'stale_instance' || stale) {
     message = t('目标会话已关闭，请刷新后重发');

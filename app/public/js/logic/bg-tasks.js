@@ -197,12 +197,18 @@ export function formatCliSpinnerLine({
   sinceLastEventSec = null,
 } = {}) {
   const v = String(verb || '').trim() || 'Working';
-  // 秒表行 token 带 1 位小数；≥1000.0k 抬 m（对齐 statuslineFmtTok 边界）
+  // 秒表行 token 带 1 位小数（与 statuslineFmtTok 的整数档刻意不同：这行是逐秒刷新的，
+  // 1 位小数能看出增长；状态行是稳态展示，整数更干净）。两处共同的意图是【不出现 "1000.0k"】。
+  //
+  // 抬 m 的判据是 999.95 而不是 1000：k 只用于显示，进位发生在 toFixed(1) 里，
+  // (999.95).toFixed(1) === '1000.0'。写 `k >= 1000` 是死代码——上一行已经把 n >= 1e6 拦掉，
+  // 此处 k 恒 < 1000，那个分支永远进不去，于是 999999 实际输出 "1000.0k"，
+  // 与本注释声称的"对齐"正好相反（2026-09-05 变异检查发现：该行的变异体存活正是死代码的信号）。
   const fmtTok = n => {
     if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
     if (n >= 1e3) {
       const k = n / 1e3;
-      if (k >= 1000) return `${(k / 1000).toFixed(1)}m`;
+      if (k >= 999.95) return `${(n / 1e6).toFixed(1)}m`;
       return `${k.toFixed(1)}k`;
     }
     return String(n);
