@@ -24,7 +24,18 @@
 # 这类接线测试无法避免 spawn：server 在客户端连接时就会懒开实例。所以 stub 得活着承受这次
 # spawn，安静吞掉输入、不产出任何响应（"拿到空输出而失败"的语义不变，只是失败方式从
 # 打死进程变回可控的等不到响应）。
+# CCM_FAKE_CLAUDE_MODE 置位时改走可驱动的 Node 实现（应答 initialize、吐 system/init，
+# turn 档还会吐 result 让回合收尾）。不置位时【一个字节都不变】走下面的默认分支——
+# 5 个 S2 文件与 21 个集成测试文件都建在「stub 永不产出、实例恒 busy」这个前提上，
+# 默认行为一改就会打穿它们（socket-lifecycle 的「在途轮仍占着槽」、health-busy 的
+# 「busy=true」都是直接断言这个前提的）。所以新能力只能是显式 opt-in。
 case "$1" in
-  --version|-v) echo "0.0.0-fake (Claude Code CI stub)" ;;
-  *) cat > /dev/null 2>&1; exit 0 ;;
+  --version|-v) echo "0.0.0-fake (Claude Code CI stub)"; exit 0 ;;
 esac
+
+if [ -n "${CCM_FAKE_CLAUDE_MODE:-}" ]; then
+  exec node "$(dirname "$0")/fake-claude.mjs" "$@"
+fi
+
+cat > /dev/null 2>&1
+exit 0
