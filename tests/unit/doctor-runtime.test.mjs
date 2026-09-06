@@ -79,6 +79,28 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
     assert.ok(rep.checks.some(c => c.id === 'FILE_EDIT'));
     assert.ok(['ready', 'caution', 'blocked'].includes(rep.readiness.level));
   });
+
+  // 2026-09-06：此前 CF_ACCESS 未启用恒 warn，而 computeReadiness 把任一 warn 算成 caution ——
+  // 于是 LAN / Tailscale / 反代 / 直连的部署**永远到不了 ready**，体检在对不用 Cloudflare 的
+  // 用户说「你还差一样东西」，可基线（AUTH_TOKEN + 逐设备审批）他们一样都不少。
+  test('CF Access 未启用 + 其余全净 → CF_ACCESS 为 ok 且 readiness 为 ready（Access 是可选加层，不是就绪条件）', () => {
+    const rep = runDoctor({
+      authToken: 'x'.repeat(32),
+      home: '/nonexistent-ccm',
+      workDirs: ['/nonexistent-ccm-work'],
+      cfEnabled: false,
+      probeClaudeBin: () => STUB_PROBE,
+      claudeVersion: STUB_PROBE.version,
+      configPermsProblems: 0,
+      pushEnabled: true,          // PUSH_VAPID 未配另有一条 warn，与本条无关，注入成已配把它排除掉
+      shellEnv: {},
+    });
+    const cf = rep.checks.find(c => c.id === 'CF_ACCESS');
+    assert.equal(cf.status, 'ok', `未开 Access 不是缺陷：${cf.detail}`);
+    assert.equal(cf.safe.enabled, false);
+    const notOk = rep.checks.filter(c => c.status !== 'ok').map(c => `${c.id}=${c.status}`);
+    assert.equal(rep.readiness.level, 'ready', `不用 Cloudflare 也必须能到 ready；非 ok 项：${notOk.join(', ') || '无'}`);
+  });
 });
 
 // ── CLAUDE_BIN 实时探测 ────────────────────────────────────────────────────

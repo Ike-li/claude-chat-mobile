@@ -440,8 +440,14 @@ test.describe('validateEnvChanges —— 清空 CF_ACCESS_* 必须先警告', ()
       { current }
     );
     const warns = r.results.filter((x) => x.level === 'warn');
-    assert.ok(warns.length > 0, '清空公网 2FA 不能零告警');
-    assert.match(warns.map((w) => w.message).join(' '), /2FA|公网|关闭/, '要说清关掉的是什么');
+    assert.ok(warns.length > 0, '清空 Cloudflare Access 加层不能零告警');
+    const text = warns.map((w) => w.message).join(' ');
+    assert.match(text, /Cloudflare Access/, '要说清关掉的是什么');
+    assert.match(text, /可选|加层/, '要说清它是加层，不是基线');
+    assert.match(text, /设备审批/, '要说清清空后公网靠的基线是什么');
+    // 2026-09-06：「退化成只靠 AUTH_TOKEN」「降低防护等级」把基线说成单因子。对换用 Tailscale /
+    // 反代的用户这是误报——他们清空三键是预期操作，公网照样有 token + 设备审批两道门。
+    assert.doesNotMatch(text, /退化|降低防护等级/, '不得再把关闭加层说成防护退化');
   });
 
   test('本来就没配 → 不告警（没有东西被关掉）', () => {
@@ -553,8 +559,8 @@ test.describe('validateEnvChanges —— ACCESS_PROFILE 声明与实际键失配
       { current: cfSet },
     );
     const warns = r.results.filter((x) => x.level === 'warn');
-    assert.equal(warns.length, 1, '只应剩 teardown 的 2FA 警告');
-    assert.match(warns[0].message, /2FA/);
+    assert.equal(warns.length, 1, '只应剩 teardown 那条「移除 Cloudflare Access 加层」警告');
+    assert.match(warns[0].message, /Cloudflare Access/);
   });
 
   test('只清三键、声明留在 cloudflare → teardown + 失配两条 warn 互补（各有独立行动项）', () => {

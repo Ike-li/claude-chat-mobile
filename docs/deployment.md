@@ -308,11 +308,13 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 
 ### 换掉入口后，CCM 侧的四处连带变化
 
-这四条对**所有**非 Cloudflare 方案共通，与选哪种拓扑无关。
+这四条对**所有**非 Cloudflare 方案共通，与选哪种拓扑无关。先说口径：**公网基线 = `AUTH_TOKEN` + 逐设备审批**，
+对所有拓扑相同；Cloudflare Access 是基线之上的**可选加层**，开着时替代设备审批、关着时设备审批自动顶上，
+两种状态都是完整的两道门。下表的「变化」是加层的有无，不是防护等级的升降。
 
-| | 现状（Access 开启） | `CF_ACCESS_*` 留空后 |
+| | Access 加层开启 | `CF_ACCESS_*` 留空后 |
 |---|---|---|
-| 公网 2FA | Access JWT，fail-closed | **整层消失**，需自行在入口层补 |
+| Cloudflare Access（可选加层） | 公网 Host 强制 Access JWT，fail-closed | **不生效**；基线不变。想再加一层可在入口层自行补（反代类拓扑） |
 | `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
 | 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
 | 登录限速粒度 | per 真实来源（IPv6 按 /64） | **退化为按连接 IP** |
@@ -343,9 +345,9 @@ IPv4 不受影响，仍按整地址分桶。
   不是降级绑 `127.0.0.1`——任何拓扑都得先有令牌。
 - PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
   但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
-- `CF_ACCESS_*` 三项留空。配置面板清空时会警告「公网域名退化成只靠 AUTH_TOKEN 校验」
-  （`app/src/ops/env-schema.js` 的 `checkTogether`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
-  切换方案时面板还会提醒把它一并更新，避免声明指着旧方案。
+- `CF_ACCESS_*` 三项留空。配置面板清空时会弹一次确认「会移除 Cloudflare Access 这层可选公网加层」
+  （`app/src/ops/env-schema.js` 的 `checkCfAccessTeardown`），它问的是「你是不是已经换好了别的入口」，
+  换方案时点「仍然保存」即可。若声明了 `ACCESS_PROFILE`，面板还会提醒把它一并更新，避免声明指着旧方案。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`app/src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
@@ -381,8 +383,9 @@ location / {
 单个 `location /` 全量代理即可，不必为 `/socket.io/` 另开一段。Caddy / Traefik 等价配置同理，
 关键仍是这两条。**不要**依赖 `X-Forwarded-For`：CCM 不读该头（理由见上一节），配了不生效。
 
-由于公网 2FA 层已消失，反代层建议自行补一层认证（mTLS、OIDC / forward auth、Basic Auth 等均可），
-否则公网只剩 `AUTH_TOKEN` + 设备审批。
+公网基线（`AUTH_TOKEN` + 设备审批）在反代下照常生效。反代与 Cloudflare 的差别只在「有没有加层」：
+Cloudflare 有 Access，反代要加就在入口层自己补（mTLS、OIDC / forward auth、Basic Auth 等均可）。
+入口 URL 谁都能打开时，这层加层的价值是把暴破尝试挡在 CCM 之外，不是补齐什么缺口。
 
 **托管隧道类**（同属 `reverse-proxy` 档，归类判据见上文）：不用写上面这段配置——Host 透传与
 WebSocket 升级由服务商那端负责，主流几家默认就满足。本机只需 `<工具> http://localhost:3000` 之类的一条命令。
@@ -436,8 +439,8 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
    设备审批的判据读这个头，配成空值或写死会打穿一层防护。
 3. 反代必须支持 WebSocket 升级（Upgrade / Connection 头），Socket.io 依赖它。
 4. CCM 不读 X-Forwarded-For，配了不生效，不要靠它传递真实来源 IP。
-5. CF_ACCESS_* 三项要留空，此时公网 2FA 层关闭、设备审批自动生效。
-   如果选了反代类拓扑，提醒我在反代层补一层认证。
+5. CF_ACCESS_* 三项要留空，此时 Cloudflare Access 这层可选加层不生效、设备审批自动顶上；
+   公网基线（AUTH_TOKEN + 设备审批）不变。如果选了反代类拓扑，提醒我可以在反代层再加一层认证。
 6. PWA 与 Web Push 需要 HTTPS 或 localhost，裸 IP 的 http 下不可用。
 7. 如果我要用通知，PUBLIC_URL 必须显式设成入口地址。它平时回落 CF_ACCESS_HOSTNAME，
    而这个场景下没有该值，不设就会变成「通知能收到、点击不跳转」。

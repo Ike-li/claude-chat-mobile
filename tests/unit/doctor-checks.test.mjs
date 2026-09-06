@@ -429,12 +429,16 @@ test.describe('classifyDeviceGateTopology（AUTH-003）', () => {
     assert.equal(r.status, 'ok');
     assert.equal(r.safe.risk, 'none');
   });
-  test('有 AUTH_TOKEN 无 CF Access → ok（Host 感知设备门，A2 不再误报 tunnel 跳过）', () => {
+  test('有 AUTH_TOKEN 无 CF Access → ok（Host 感知设备门，A2 不再误报 tunnel 跳过；Access 是可选加层，不劝加 2FA）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: true, cfEnabled: false });
     assert.equal(r.status, 'ok');
     assert.equal(r.safe.risk, 'none');
     assert.equal(r.safe.note, 'host_aware_device_gate');
-    assert.match(r.detail, /设备门|CF Access/);
+    assert.match(r.detail, /设备审批|设备门/, '要说清公网 Host 上设备审批仍在');
+    assert.match(r.detail, /可选/, 'Cloudflare Access 必须被描述成可选加层');
+    // 2026-09-06：基线 = AUTH_TOKEN + 逐设备审批。「未开 CF 时建议加 2FA」把基线说成了单因子，
+    // 对不用 Cloudflare 的用户是误导——他们已经有两道门。
+    assert.doesNotMatch(r.detail, /建议加 2FA|加深防护/, '不得再把关闭 Access 说成缺一道门');
   });
   test('无 AUTH_TOKEN → ok（仅本机）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: false, cfEnabled: false });
@@ -1119,11 +1123,14 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.match(r.detail, /tailscale/);
   });
 
-  test('cloudflare：三键不齐 → warn；齐 → ok 提 2FA 生效', () => {
-    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'cloudflare' }).status, 'warn');
+  test('cloudflare：三键不齐 → warn 且说清此时走的是基线；齐 → ok 把 Access 描述成可选加层', () => {
+    const incomplete = accessProfileDiagnostic({ ...clean, profile: 'cloudflare' });
+    assert.equal(incomplete.status, 'warn');
+    assert.match(incomplete.detail, /AUTH_TOKEN/, '未配齐时要告诉用户公网现在靠什么');
     const ok = accessProfileDiagnostic({ ...clean, profile: 'cloudflare', cfConfigured: true });
     assert.equal(ok.status, 'ok');
-    assert.match(ok.detail, /2FA/);
+    assert.match(ok.detail, /可选|加层/);
+    assert.doesNotMatch(ok.detail, /2FA/, '「公网 2FA」把基线说成单因子，已弃用这个说法');
   });
 
   test('vpn：三键反而齐 → warn；token 未设 → warn 提隧道另一端连不上；通知已配但 PUBLIC_URL 空 → warn 提深链', () => {

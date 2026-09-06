@@ -480,6 +480,10 @@ const NOISY_TOGGLES = {
 //
 // 不做成 readonly：那会让「在手机上配 CF Access」彻底没法做。改成 warn —— 前端对 warn 会弹
 // appConfirm 再重发，用户至少被明确告知自己在关掉什么。
+//
+// 措辞（2026-09-06）：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同；Cloudflare Access 是
+// 基线之上的可选加层。此前写「退化成只靠 AUTH_TOKEN」「实质降低防护等级」——对换用 Tailscale /
+// 反代的用户，清空三键是预期操作，那两句是把两道门说成一道的误报。
 const CF_ACCESS_KEYS = ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'];
 
 function checkCfAccessTeardown(changes, current) {
@@ -494,8 +498,8 @@ function checkCfAccessTeardown(changes, current) {
   return [{
     key: cleared[0],
     level: 'warn',
-    message: `会关闭公网 2FA（Cloudflare Access）：清空 ${cleared.join(' / ')} 后，公网域名退化成只靠 AUTH_TOKEN 校验。`
-      + '若这台 server 暴露在公网上，这一步会实质降低防护等级。',
+    message: `会移除 Cloudflare Access 这层可选公网加层：清空 ${cleared.join(' / ')} 后，公网 Host 改走 AUTH_TOKEN + 设备审批基线（与其他拓扑相同）。`
+      + '请确认已换用别的入口方案再保存；若这台 server 仍经 Cloudflare 暴露，这一步会少一道门。',
   }];
 }
 
@@ -519,7 +523,7 @@ function checkAccessProfileConsistency(changes, current) {
     return [{
       key: 'ACCESS_PROFILE',
       level: 'warn',
-      message: '已声明方案为 Cloudflare，但 CF_ACCESS_* 三项未配齐——公网 2FA 实际未生效。补全三项，或把 ACCESS_PROFILE 改为实际使用的方案。',
+      message: '已声明方案为 Cloudflare，但 CF_ACCESS_* 三项未配齐——Access 加层实际未生效，公网目前只有 AUTH_TOKEN + 设备审批基线。补全三项，或把 ACCESS_PROFILE 改为实际使用的方案。',
     }];
   }
   if (profile && profile !== 'cloudflare' && ACCESS_PROFILES.includes(profile) && cfComplete) {

@@ -302,23 +302,25 @@ export function claudeBinDiagnostic({
   return { status: 'ok', detail: `${path} — ${version}`, safe: { found: true, version } };
 }
 
-// localhost / 反代到 127.0.0.1 的隧道会跳过设备指纹审批（trustBasis=bypass），
-// 公网只剩 AUTH_TOKEN 一层。CF Access 已开则 JWT 是公网门，不警告。
+// 设备审批（第二因子）在哪些连接上被跳过：真本机直连（peer 与 Host 都是本机样），或 Cloudflare Access
+// 已验的连接（Access 替代设备审批，不替代 token）。反代到 127.0.0.1 的隧道 Host 是公网域名，**不**跳过。
 // 返回 { status, detail, safe } 供 runDoctor 挂 checks。
 export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {
   if (cfEnabled) {
     return {
       status: 'ok',
-      detail: '公网经 CF Access 2FA；本机/Access 跳过设备门为设计路径',
+      detail: '公网经 Cloudflare Access 已验的连接跳过设备审批（Access 替代第二因子）；本机直连同样跳过，均为设计路径',
       safe: { risk: 'none', cfEnabled: true },
     };
   }
   if (authTokenSet) {
     // 与 shouldBypassDeviceApproval 对齐（A2）：peer loopback 且 Host 为公网域名时**不会** bypass 设备门；
     // 仅「真本机直连」(Host 本机样) 或 CF Access 已验才跳过。旧文案夸大了隧道跳过风险。
+    // 2026-09-06：不再劝「未开 CF Access 建议加 2FA」——基线 = AUTH_TOKEN + 逐设备审批已是两道门，
+    // 那句话把不用 Cloudflare 的部署说成单因子，是误报。
     return {
       status: 'ok',
-      detail: 'AUTH_TOKEN 已设；设备门对公网 Host（含 tunnel 反代到 127.0.0.1）仍生效，仅本机直连或 CF Access 跳过。未开 CF Access 时公网仍建议加 2FA 加深防护',
+      detail: 'AUTH_TOKEN 已设；设备审批对公网 Host（含反代到 127.0.0.1 的隧道）仍生效，仅真本机直连跳过。Cloudflare Access 是可选加层，开了才替代设备审批',
       safe: { risk: 'none', cfEnabled: false, authTokenSet: true, note: 'host_aware_device_gate' },
     };
   }
@@ -903,8 +905,8 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
       status: 'ok', name,
       detail: cfConfigured
         ? bi(lang,
-          '未声明（按 CF_ACCESS_* 推断当前 = Cloudflare 公网 2FA）。设 ACCESS_PROFILE 可获得按方案的针对性检查。',
-          'Undeclared (inferred from CF_ACCESS_*: Cloudflare public 2FA). Set ACCESS_PROFILE for profile-specific checks.')
+          '未声明（按 CF_ACCESS_* 推断当前 = Cloudflare Tunnel + Access 加层）。设 ACCESS_PROFILE 可获得按方案的针对性检查。',
+          'Undeclared (inferred from CF_ACCESS_*: Cloudflare Tunnel + Access layer). Set ACCESS_PROFILE for profile-specific checks.')
         : bi(lang,
           '未声明（CF_ACCESS_* 未配，推断为局域网或自建拓扑）。设 ACCESS_PROFILE 可获得按方案的针对性检查。',
           'Undeclared (CF_ACCESS_* unset; assuming LAN or self-hosted topology). Set ACCESS_PROFILE for profile-specific checks.'),
@@ -924,13 +926,15 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
       return {
         status: 'warn', name,
         detail: bi(lang,
-          '已声明 Cloudflare，但 CF_ACCESS_* 三项未配齐——公网 2FA 实际未生效。补全三项，或把 ACCESS_PROFILE 改为实际方案。',
-          'Declared cloudflare but CF_ACCESS_* is incomplete — public 2FA is not actually in effect. Complete all three, or change ACCESS_PROFILE.'),
+          '已声明 Cloudflare，但 CF_ACCESS_* 三项未配齐——Access 加层实际未生效，公网目前只有 AUTH_TOKEN + 设备审批基线。补全三项，或把 ACCESS_PROFILE 改为实际方案。',
+          'Declared cloudflare but CF_ACCESS_* is incomplete — the Access layer is not in effect; the public surface currently has only the AUTH_TOKEN + device-approval baseline. Complete all three, or change ACCESS_PROFILE.'),
       };
     }
     return {
       status: 'ok', name,
-      detail: bi(lang, 'Cloudflare Tunnel + Access：公网 2FA 生效。', 'Cloudflare Tunnel + Access: public 2FA in effect.'),
+      detail: bi(lang,
+        'Cloudflare Tunnel + Access：公网 Host 强制 Access JWT，为 AUTH_TOKEN + 设备审批基线之上的可选加层。',
+        'Cloudflare Tunnel + Access: public hosts require an Access JWT — an optional layer on top of the AUTH_TOKEN + device-approval baseline.'),
     };
   }
 

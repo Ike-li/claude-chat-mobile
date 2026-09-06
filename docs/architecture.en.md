@@ -143,7 +143,7 @@ swapping the IdP should not touch the core.
 These boundaries do not replace each other:
 
 - `AUTH_TOKEN` proves possession of the instance secret; it does not prove that a device was approved.
-- Cloudflare Access adds public-edge identity; it does not expand workspace scope. It replaces device approval (the second factor), never the token.
+- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it replaces device approval (the second factor), never the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
 - `WORK_DIR` / `WORKDIRS` constrain paths; they do not decide which Claude tools run automatically (a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
 - Agent `canUseTool` approvals govern autonomous Agent actions. Clicking Save in the file editor is a direct user write with separate scope, size, content-hash, and audit controls.
 

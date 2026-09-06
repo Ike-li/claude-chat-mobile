@@ -207,7 +207,18 @@ export function runDoctor(ctx = {}) {
     safe: { problemCount: cppChecked ? cpp : null, checked: cppChecked },
   });
 
-  checks.push({ id: 'CF_ACCESS', status: ctx.cfEnabled ? 'ok' : 'warn', detail: ctx.cfEnabled ? '已启用公网 2FA' : '未启用（回退纯 AUTH_TOKEN）', safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet } }); // AUD 仅布尔
+  // Cloudflare Access 是**可选加层**，不是就绪条件：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同。
+  // 此前未启用恒 warn，而 computeReadiness 把任一 warn 算成 caution —— LAN / Tailscale / 反代 / 直连的
+  // 部署永远到不了 ready，体检在对不用 Cloudflare 的用户说「你还差一样」，可基线他们一样不少（2026-09-06）。
+  // 各拓扑真正该查的东西（token、PUBLIC_URL、绑定面…）在下面 ACCESS_PROFILE 那格按声明分别查。
+  checks.push({
+    id: 'CF_ACCESS',
+    status: 'ok',
+    detail: ctx.cfEnabled
+      ? '已启用：公网 Host 强制 Cloudflare Access JWT（AUTH_TOKEN + 设备审批基线之上的可选加层）'
+      : '未启用；公网基线 = AUTH_TOKEN + 设备审批，按拓扑的针对性检查见 ACCESS_PROFILE 项',
+    safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet }, // AUD 仅布尔
+  });
 
   // D21 的手机端出口：方案声明（ACCESS_PROFILE）就住在 web 配置面板里，切换后的自洽核对
   // 也该在手机上看得到。判定与 scripts/doctor.js D21 共用 accessProfileDiagnostic；

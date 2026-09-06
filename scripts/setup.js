@@ -190,7 +190,7 @@ export const MESSAGES = {
     shadowWarning: (existing, target) =>
       `⚠️  检测到 ${existing}，但本次将写入 ${target}。\n`
       + `   新文件优先级更高：${existing} 会原样留在磁盘上，却从此完全失效——\n`
-      + '   CCM_DATA_DIR（会话与已信任设备）、PORT、VAPID_*（推送）、CF_ACCESS_*（公网 2FA）全部不再生效。\n'
+      + '   CCM_DATA_DIR（会话与已信任设备）、PORT、VAPID_*（推送）、CF_ACCESS_*（Cloudflare Access 加层）全部不再生效。\n'
       + '   想保留这些请改用 node scripts/config.js migrate 迁移，而不是在这里新写一份。\n'
       + '   仍要继续? [y/N] ',
     cancelled: '已取消，现有配置未改动。',
@@ -209,7 +209,7 @@ export const MESSAGES = {
     publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
     accessPrompt: '你打算怎么从手机访问？（决定 doctor 与安全体检按哪套方案帮你检查；详见 docs/deployment.md）\n'
       + '  1) 仅局域网 —— 同一 WiFi 直连\n'
-      + '  2) Cloudflare Tunnel + Access —— 固定域名 + 公网 2FA\n'
+      + '  2) Cloudflare Tunnel + Access —— 固定域名 + Access 身份加层\n'
       + '  3) 加密隧道 / VPN —— WireGuard、Tailscale tailnet、ZeroTier…\n'
       + '  4) 反向代理 / 托管隧道 —— nginx、Caddy、frp、ngrok、Tailscale Funnel…\n'
       + '  5) 公网直连 —— 公网 IP + 端口转发，无中间节点\n'
@@ -267,7 +267,7 @@ export const MESSAGES = {
     shadowWarning: (existing, target) =>
       `⚠️  Found ${existing}, but this run will write ${target}.\n`
       + `   The new file takes precedence: ${existing} stays on disk untouched yet stops applying entirely —\n`
-      + '   CCM_DATA_DIR (sessions and trusted devices), PORT, VAPID_* (push) and CF_ACCESS_* (public 2FA) all go dead.\n'
+      + '   CCM_DATA_DIR (sessions and trusted devices), PORT, VAPID_* (push) and CF_ACCESS_* (Cloudflare Access layer) all go dead.\n'
       + '   To keep them, run node scripts/config.js migrate instead of writing a fresh file here.\n'
       + '   Continue anyway? [y/N] ',
     cancelled: 'Cancelled. Your existing config was left untouched.',
@@ -286,7 +286,7 @@ export const MESSAGES = {
     publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
     accessPrompt: 'How will your phone reach this machine? (decides which profile doctor and the security check tailor to; see docs/deployment.md)\n'
       + '  1) LAN only — same-WiFi direct access\n'
-      + '  2) Cloudflare Tunnel + Access — fixed domain + public 2FA\n'
+      + '  2) Cloudflare Tunnel + Access — fixed domain + Access identity layer\n'
       + '  3) Encrypted tunnel / VPN — WireGuard, Tailscale tailnet, ZeroTier…\n'
       + '  4) Reverse proxy / hosted tunnel — nginx, Caddy, frp, ngrok, Tailscale Funnel…\n'
       + '  5) Direct public exposure — public IP + port forward, no middlebox\n'

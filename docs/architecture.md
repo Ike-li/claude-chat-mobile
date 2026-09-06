@@ -146,7 +146,7 @@ Agent 工具审批或用户直接文件编辑
 这些边界互不替代：
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
-- Cloudflare Access 是公网身份层，不扩大工作区；它替代设备审批（第二因子），不替代 token。
+- Cloudflare Access 是**可选的**公网身份层，不扩大工作区；开着时替代设备审批（第二因子），不替代 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
 - `WORK_DIR` / `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
