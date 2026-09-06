@@ -266,7 +266,7 @@ func unitTooltip(_ u: UnitStatus) -> String {
     var text: String
     switch u.unitName {
     case "server": text = "ccm 本体：手机连接的就是它。改配置后需要重启它才生效。"
-    case "tunnel": text = "Cloudflare 公网隧道：手机在外网访问全靠它。"
+    case "tunnel": text = "cloudflared 命名隧道：走 Cloudflare 公网入口时，手机在外网访问靠它。用 Tailscale / 自建反代的话本行可忽略，显示「已停止」是正常态。"
     case "logrotate": text = "日志轮转定时器：每天 03:47 醒来跑一次即退，平时显示待机是正常的。"
     case "menubar": text = "本 app 的「随登录启动」项：登录时拉起 app 后即退，平时显示待机是正常的。"
     default: text = "非本项目模板的 LaunchAgent（com.ccm.* 前缀被一并纳入显示）。"

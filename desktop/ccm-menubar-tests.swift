@@ -247,6 +247,11 @@ struct CCMCoreTests {
               "server tooltip 提到改配置后要重启")
         check(unitTooltip(foreign).contains("手工配置"), "foreign tooltip 解释「手工配置」")
         check(unitTooltip(unknown).contains("非本仓"), "unknown tooltip 解释「非本仓」")
+        // 2026-09-06：tunnel 这个 unit 就是 cloudflared，但「手机在外网访问全靠它」只对走 Cloudflare 的人成立。
+        // 用 Tailscale / 反代的用户看到这一行是「已停止」是正常态，tooltip 必须说清可忽略，别把它读成故障。
+        let tunnelTip = unitTooltip(unit(#"{"unit":"tunnel","state":"stopped"}"#)!)
+        check(tunnelTip.contains("cloudflared"), "tunnel tooltip 点名它是 cloudflared，而不是泛指「公网隧道」")
+        check(tunnelTip.contains("可忽略"), "tunnel tooltip 要告诉不走 Cloudflare 的用户本行可忽略")
     }
 
     // MARK: 摘要行

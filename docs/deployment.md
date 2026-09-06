@@ -384,7 +384,7 @@ IPv4 不受影响，仍按整地址分桶。
   （`app/src/ops/env-schema.js` 的 `checkCfAccessTeardown`），它问的是「你是不是已经换好了别的入口」，
   换方案时点「仍然保存」即可。若声明了 `ACCESS_PROFILE`，面板还会提醒把它一并更新，避免声明指着旧方案。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
-  （`app/src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
+  （`app/src/ops/notify-channels.js` 的 `publicUrl`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
 - **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/server/http.js` 的 `reachableIPv4s`）
   按**地址段**判定、不看接口名，所以 macOS 上 WireGuard / Tailscale 的 `utun*` 地址会和局域网地址

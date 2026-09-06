@@ -489,6 +489,17 @@ test.describe('ACCESS_PROFILE —— enum 成员校验', () => {
   });
 });
 
+// ── PUBLIC_URL 的帮助文案（2026-09-06）────────────────────────────────────
+// 深链回落 CF_ACCESS_HOSTNAME 是行为（notify-channels.test.mjs 钉着），这里只管说法：英文此前丢了
+// 回落语义，两边都没说「不走 Cloudflare 的拓扑必须填」——而那正是通知点开不跳转的头号原因。
+test('PUBLIC_URL help 中英对称：都要交代回落 Cloudflare 域名，以及非 Cloudflare 拓扑必须填', () => {
+  const help = ENV_SCHEMA.PUBLIC_URL.help;
+  for (const lang of ['zh', 'en']) {
+    assert.match(String(help[lang]), /Cloudflare/, `${lang}：要说清留空时回落的是什么`);
+    assert.match(String(help[lang]), /Tailscale|反代|reverse proxy/i, `${lang}：要点名哪些拓扑必须填`);
+  }
+});
+
 // ── TRUSTED_PROXY：采信 X-Forwarded-For 的显式开关（2026-09-06）─────────────
 //
 // 它是一个「开错等于关掉限速」的安全开关：透传型反代 / ssh -R / frp tcp 会把客户端自带的 XFF

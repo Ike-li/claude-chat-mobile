@@ -380,7 +380,8 @@ export function isLanOrLocalHostname(h) {
 }
 
 // unauthorized 后走哪扇门：token-gate（弹令牌输入框）还是 access-relogin（公网无 token 可输，提示 Access 重登）。
-// data-cf-access 注入契约是 '1' | '0'（src/server/http.js 对 index.html 的替换）——"0" 是非空字符串，
+// data-cf-access 表示「公网 IdP 加层是否生效」（当前唯一实现是 Cloudflare Access；属性名保留，它是内部契约不是文案）。
+// 注入契约是 '1' | '0'（src/server/http.js 对 index.html 的替换）——"0" 是非空字符串，
 // 真值判断恒 true，曾把「CF 未启用」分支彻底堵死（非 CF 拓扑 token 失效后无门可弹的死路）。
 // 唯一合法的「已启用」是 === '1'；dataset 缺失（替换没匹配上）同样落 token 门，失败方向必须有门可弹。
 export function authFailurePath({ lanOrLocal, cfAccessFlag } = {}) {

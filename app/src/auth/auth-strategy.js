@@ -2,8 +2,9 @@
 //
 // 【为什么有这一层】此前核心代码分四处各自取用 cf-access.js：HTTP 鉴权（src/server/http.js
 // 的 createHttpAuth）已经是**注入式**——它收 isPublicHost/verifyAccessJwt 两个函数，压根不认识
-// Cloudflare；而 socket 握手（app.js 的 io.use）、index.html 的 data-cf-access 注入、doctor ctx
-// 与启动横幅则是**直接 import 调用**。同一份判据两种拿法，加第二种 IdP 时要在四个地方各改一遍，
+// Cloudflare；而 socket 握手（app.js 的 io.use）、index.html 的 data-cf-access 注入（语义是「公网 IdP
+// 加层是否生效」，属性名沿用）、doctor ctx 与启动横幅则是**直接 import 调用**。同一份判据两种拿法，
+// 加第二种 IdP 时要在四个地方各改一遍，
 // 而其中任何一处漏改都是「一条通道仍按旧判据放行」——鉴权分叉从来不会自己报错。
 //
 // 收敛之后核心只认这个对象的形状，具体实现（当前只有 Cloudflare Access）由组装根注入。

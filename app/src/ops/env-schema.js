@@ -229,7 +229,8 @@ export const ENV_SCHEMA = {
   PUBLIC_URL: {
     group: 'push', kind: 'url',
     label: t('公网地址', 'Public URL'),
-    help: t('通知深链用。留空回退到 CF_ACCESS_HOSTNAME。', 'Used for notification deep links.'),
+    help: t('通知深链用。配了 Cloudflare Access 时留空会回退到它的域名；其他拓扑（Tailscale / 反代 / 直连）必须填手机可达的 https 地址，否则通知能收到、点开不跳转。',
+      'Used for notification deep links. With Cloudflare Access configured, leaving it empty falls back to that hostname; on any other topology (Tailscale / reverse proxy / direct) set the https address your phone can reach, or notifications arrive but tapping them goes nowhere.'),
   },
 
   // ── 功能开关 ────────────────────────────────────────────────────────
