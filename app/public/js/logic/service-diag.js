@@ -259,9 +259,10 @@ export function formatAgoShort(ms) {
   return `${Math.floor(h / 24)} ${t('天前')}`;
 }
 
-// 限速桶 key → 来源画像。入参是后端 rlSourceKey 的产物（'ip:<桶>' / 'cfip:<桶>'，IPv6 已归成
-// /64 前缀），也就是**限速真正计数的那个粒度**——刻意不另算一套「客户端 IP」，否则面板说的地址
-// 和被锁的桶会是两回事。
+// 限速桶 key → 来源画像。入参是后端 rlSourceKey 的产物（'ip:<桶>' / 'cfip:<桶>' / 'xff:<桶>'，IPv6
+// 已归成 /64 前缀），也就是**限速真正计数的那个粒度**——刻意不另算一套「客户端 IP」，否则面板说的
+// 地址和被锁的桶会是两回事。前缀集由后端定义，本侧只负责剥掉；两侧对照见
+// tests/unit/logic-service-status.test.mjs 的「前缀集跨侧契约」用例。
 //
 // 【为什么必须分叉】(2026-09-02) 告警行此前无条件拼「可能有人在暴力尝试你的入口」。用户看到后
 // 翻 audit-records.json 才发现两次锁定的 target 都是 ip:127.0.0.1 —— 本机自己的旧 token 连试八次。
@@ -284,7 +285,7 @@ function isLoopbackAddr(addr) {
 }
 export function describeRateLimitSource(source) {
   const raw = String(source ?? '').trim();
-  const addr = raw.replace(/^(?:cfip|ip):/, '');
+  const addr = raw.replace(/^(?:cfip|xff|ip):/, '');
   if (!addr) return { scope: 'unknown', addr: '' };
   if (isLoopbackAddr(addr)) return { scope: 'local', addr };
   if (isPrivateAddr(addr)) return { scope: 'lan', addr };

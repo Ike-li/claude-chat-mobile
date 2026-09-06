@@ -234,12 +234,15 @@ export function runDoctor(ctx = {}) {
     // 复用上面 D22 已经算好的那份，不再自己 resolveBindPlan 一次——同一次体检里两条检查
     // 用两个各自算的 plan，是「同一事实两套判据」的经典形状（见 single-source-of-truth.test.mjs）。
     publiclyReachable: bindChk.safe.publiclyReachable,
+    // 采信 XFF 的开关（server 从 parseServerConfig 拿归一后的值传入；缺省 = 未开）。
+    trustedProxy: ctx.trustedProxy || '',
     lang: ctx.lang,
   });
   checks.push({
     id: 'ACCESS_PROFILE', status: ap.status, detail: ap.detail,
     safe: {
       declared: apProfile !== '',
+      trustedProxy: ctx.trustedProxy === 'loopback' ? 'loopback' : '',
       // 未知值归一成 'unknown'：safe 只出枚举字面量，用户手写的任意串不进结构化字段（detail 里已点名）。
       profile: !apProfile || ACCESS_PROFILES.includes(apProfile) ? apProfile : 'unknown',
       cfConfigured: !!ctx.cfEnabled,

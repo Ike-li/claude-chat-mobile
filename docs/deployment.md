@@ -280,8 +280,9 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 ### 托管隧道（ngrok / Quick Tunnel / Funnel…）归哪一档
 
 **归 `ACCESS_PROFILE=reverse-proxy`，不新增枚举值。** 判据是下一节那四条连带变化在托管隧道下**逐条相同**：
-`CF_ACCESS_*` 留空导致 Access 层整层消失、设备审批自动顶上、TLS 终止在对方那边、
-本机 agent 回连 3000 使所有公网客户端的连接 IP 都是 `127.0.0.1` 从而**共用一个限速桶**。
+`CF_ACCESS_*` 留空导致 Access 加层不生效、设备审批自动顶上、TLS 终止在对方那边、
+本机 agent 回连 3000 使所有公网客户端的连接 IP 都是 `127.0.0.1` 从而**默认共用一个限速桶**
+（能否用 `TRUSTED_PROXY=loopback` 拆桶，取决于那家会不会自己追加 `X-Forwarded-For`，去它的文档确认）。
 既然判据没有一条不同，多一个枚举值只会多一份要同步维护的检查矩阵。
 
 明文可见方**看 TLS 在哪一跳终止，不看厂商是不是"隧道"**：终止在服务商那边，服务商就能看到明文
@@ -317,7 +318,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | Cloudflare Access（可选加层） | 公网 Host 强制 Access JWT，fail-closed | **不生效**；基线不变。想再加一层可在入口层自行补（反代类拓扑） |
 | `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
 | 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
-| 登录限速粒度 | per 真实来源（IPv6 按 /64） | **退化为按连接 IP** |
+| 登录限速粒度 | per 真实来源（`CF-Connecting-IP`，IPv6 按 /64） | 反代类**默认按连接 IP 合桶**；反代自己追加 `X-Forwarded-For` 时可声明 `TRUSTED_PROXY=loopback` 按末跳分桶。vpn / direct 天然分桶 |
 
 后两行需要展开：
 
@@ -325,12 +326,25 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 `if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
-**限速桶会合并。** `shouldTrustCfConnectingIp` 要求 `publicHost` 为真，而该条件在三项留空时恒
-false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，所有公网客户端的连接 IP
-都是 `127.0.0.1`，共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。这是刻意取舍
-（宁可粒度粗，也不采信可伪造的 `X-Forwarded-For`，见 `rlSourceKey` 头注），不是配置错误，
-也无法通过加转发头绕开。VPN 与公网直连两类不受影响：连接 IP 就是客户端本身（隧道内地址 /
-真实公网 IP），天然分桶——公网直连甚至是全部拓扑里限速粒度最准的一个，代价见下节。
+**限速桶默认会合并，拆桶要显式声明。** `shouldTrustCfConnectingIp` 要求 `publicHost` 为真，而该条件在
+三项留空时恒 false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，所有公网客户端的连接 IP
+都是 `127.0.0.1`，默认共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。
+
+要按真实来源分桶，设 `TRUSTED_PROXY=loopback`：此时 CCM 取反代**追加**的 `X-Forwarded-For` **末跳**作为
+限速来源（`xff:` 前缀；IPv6 同样按 /64 归桶）。两个前提缺一不可，缺了就回落合桶，不会报错：
+
+- 反代必须 `proxy_pass` 到 `127.0.0.1`（peer 不是 loopback 时不采信）；
+- **反代必须自己追加/改写该头**（nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，
+  Caddy / Traefik 默认就是这样）。
+
+**这项不是「反代就能开」**：没配转发头的 nginx 会把客户端自带的 `X-Forwarded-For` 原样转发，
+`ssh -R`、frp tcp 之类纯 TCP 转发同理——那时整条头都是客户端写的，开了等于让攻击者自己填限速桶，
+限速形同虚设，比合桶更糟。服务端分不出「反代追加的」和「客户端自带的」，所以它只能是你确认过
+反代行为后的显式 opt-in，不随 `ACCESS_PROFILE=reverse-proxy` 自动打开。`doctor` 的 D21 会在
+反代档未开时提示合桶、在别的档开着或写错值时告警。
+
+VPN 与公网直连两类不受影响：连接 IP 就是客户端本身（隧道内地址 / 真实公网 IP），天然分桶——
+公网直连甚至是全部拓扑里限速粒度最准的一个，代价见下节。
 
 限速桶还有第二个合并维度，与选哪种拓扑无关：**IPv6 客户端按 /64 前缀归桶**（`ipRateBucket`）。
 终端用户拿到的最小分配就是一整个 /64，逐地址计桶等于换个源地址就重置失败计数、暴破限速形同虚设。
@@ -377,11 +391,16 @@ location / {
 
     # 长连接，读超时别设过短（Socket.io 有心跳，但空闲会话仍可能被过短的超时切断）
     proxy_read_timeout 3600s;
+
+    # 可选：要让登录限速按真实来源分桶，让 nginx **追加**（不是透传）X-Forwarded-For，
+    # 再在 CCM 配 TRUSTED_PROXY=loopback。只配这一行、不开开关 = CCM 照旧不读，无副作用
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 
 单个 `location /` 全量代理即可，不必为 `/socket.io/` 另开一段。Caddy / Traefik 等价配置同理，
-关键仍是这两条。**不要**依赖 `X-Forwarded-For`：CCM 不读该头（理由见上一节），配了不生效。
+关键仍是前两条。`X-Forwarded-For` **默认不读**；只有反代自己追加它、且你显式声明
+`TRUSTED_PROXY=loopback` 时才用于限速分桶（前提与反例见上节「限速桶默认会合并」）。
 
 公网基线（`AUTH_TOKEN` + 设备审批）在反代下照常生效。反代与 Cloudflare 的差别只在「有没有加层」：
 Cloudflare 有 Access，反代要加就在入口层自己补（mTLS、OIDC / forward auth、Basic Auth 等均可）。
@@ -399,8 +418,8 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 - **暴露面最大。** 端口直接挂在公网上，扫描器会持续敲。**没有前置认证层**——Access 没有、
   反代层也没有，`AUTH_TOKEN` + 设备审批就是全部防线。因此日志里偶尔出现登录限速锁定属于正常现象，
   不是有人一定攻进来了；真要收紧就回头选一种带前置认证的拓扑，而不是在这一档上加固。
-- **限速粒度最准。** 连接 IP 就是真实客户端（IPv6 按 /64 归桶），不像反代那样全塌成 `127.0.0.1`
-  一个桶，所以暴破退避是逐来源生效的——这是它唯一强过反代的地方。
+- **限速粒度最准，且不用配。** 连接 IP 就是真实客户端（IPv6 按 /64 归桶），不像反代那样默认塌成
+  `127.0.0.1` 一个桶、要靠 `TRUSTED_PROXY` 拆，所以暴破退避天然逐来源生效——这是它唯一强过反代的地方。
 
 另外三条配置注意：`BIND_MODE` **不要**设成 `loopback`（端口转发会没有转发目标，外部一台也连不上；
 `doctor` 与手机端体检会把这个矛盾当场报出来）；TLS 得自己解决（没有反代替你终止，裸 `http://`
@@ -438,7 +457,9 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 2. 反代必须原样透传 Host 头（nginx 里是 proxy_set_header Host $host;）。
    设备审批的判据读这个头，配成空值或写死会打穿一层防护。
 3. 反代必须支持 WebSocket 升级（Upgrade / Connection 头），Socket.io 依赖它。
-4. CCM 不读 X-Forwarded-For，配了不生效，不要靠它传递真实来源 IP。
+4. X-Forwarded-For 默认不读。只有反代自己追加它（nginx 的 $proxy_add_x_forwarded_for，Caddy / Traefik 默认）
+   且 proxy_pass 到 127.0.0.1 时，才可在 CCM 配 TRUSTED_PROXY=loopback 让登录限速按真实来源分桶；
+   ssh -R、frp tcp、没配转发头的 nginx 这类透传路径绝不能开这项——开了等于关掉限速。
 5. CF_ACCESS_* 三项要留空，此时 Cloudflare Access 这层可选加层不生效、设备审批自动顶上；
    公网基线（AUTH_TOKEN + 设备审批）不变。如果选了反代类拓扑，提醒我可以在反代层再加一层认证。
 6. PWA 与 Web Push 需要 HTTPS 或 localhost，裸 IP 的 http 下不可用。

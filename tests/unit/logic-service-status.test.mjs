@@ -221,6 +221,28 @@ test.describe('describeRateLimitSource：限速桶 key → 来源画像', () => 
   test('cfip: 前缀（CF 边缘注入的真实客户端 IP）同样剥前缀后判定', () => {
     assert.deepEqual(describeRateLimitSource('cfip:203.0.113.7'), { scope: 'public', addr: '203.0.113.7' });
   });
+  test('xff: 前缀（TRUSTED_PROXY=loopback 下反代追加的末跳）同样剥前缀后判定', () => {
+    assert.deepEqual(describeRateLimitSource('xff:203.0.113.7'), { scope: 'public', addr: '203.0.113.7' });
+    assert.deepEqual(describeRateLimitSource('xff:192.168.1.5'), { scope: 'lan', addr: '192.168.1.5' });
+    assert.deepEqual(describeRateLimitSource('xff:2408:8207:1:2::/64'), { scope: 'public', addr: '2408:8207:1:2::/64' });
+  });
+  // 跨侧契约：前缀集由后端 rlSourceKey 定义、前端 describeRateLimitSource 消费，两侧不能互相 import。
+  // 后端每多一种前缀而前端没跟上，面板会把那类来源判成 unknown——不报错、只是告警文案变哑。
+  // 这条把两侧真的接在一起跑：后端能产出的每一种前缀，前端都必须剥得掉。
+  test('后端 rlSourceKey 能产出的每种前缀，前端都剥得掉（前缀集跨侧契约）', () => {
+    const hs = { address: '127.0.0.1', headers: { 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '198.51.100.9, 203.0.113.8' } };
+    const keys = [
+      rlSourceKey(hs, x => x),                                                        // ip:
+      rlSourceKey(hs, x => x, { trustCfConnectingIp: true }),                          // cfip:
+      rlSourceKey(hs, x => x, { trustForwardedFor: true }),                            // xff:
+    ];
+    assert.deepEqual(keys.map(k => k.split(':')[0]).sort(), ['cfip', 'ip', 'xff'], '后端前缀集变了，本用例的枚举要跟着改');
+    for (const key of keys) {
+      const r = describeRateLimitSource(key);
+      assert.notEqual(r.scope, 'unknown', `${key} 被前端判成 unknown = 前缀没剥掉`);
+      assert.equal(`${key.split(':')[0]}:${r.addr}`, key, `${key} 剥前缀后的 addr 必须与桶一致`);
+    }
+  });
   test('172.15/172.32 是公网（私网段边界不能多吃）', () => {
     assert.equal(describeRateLimitSource('ip:172.15.0.1').scope, 'public');
     assert.equal(describeRateLimitSource('ip:172.32.0.1').scope, 'public');

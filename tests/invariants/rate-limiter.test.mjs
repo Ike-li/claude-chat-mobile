@@ -1,6 +1,6 @@
 // tests/invariants/rate-limiter.test.mjs —— 鉴权端口防暴破限速与来源分桶单测
-// 守护：AUTH-03（限速仅打鉴权口，退避冷却与长锁定分档提示，防自我 DoS）、AUTH-04（不可信网络来源绝不采信可伪造标头）、DEVICE-01（双本机 bypass 判定，空 Host 不得绕过）
-// 测什么：onAuthResult 纯函数状态机转移与指数退避；gateCheck 单一事实源；authRejection 统一拒绝语义；rlSourceKey 来源分桶与 IPv6 /64 归一化；IPv4-mapped 防过度归并；shouldTrustCfConnectingIp 判定；shouldBypassDeviceApproval 双本机与空 Host 守卫
+// 守护：AUTH-03（限速仅打鉴权口，退避冷却与长锁定分档提示，防自我 DoS）、AUTH-04（只在声明的可信拓扑下采信边缘注入头，其余一律不采信）、DEVICE-01（双本机 bypass 判定，空 Host 不得绕过）
+// 测什么：onAuthResult 纯函数状态机转移与指数退避；gateCheck 单一事实源；authRejection 统一拒绝语义；rlSourceKey 来源分桶与 IPv6 /64 归一化；IPv4-mapped 防过度归并；shouldTrustCfConnectingIp / shouldTrustForwardedFor 两个采信判定（后者是 TRUSTED_PROXY=loopback 的显式 opt-in，取 XFF 末跳）；shouldBypassDeviceApproval 双本机与空 Host 守卫
 // 不测什么 + 为什么：不测真实 Express 中间件或 Socket.io 握手流程——纯函数与边界计算在此层全覆盖
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,6 +12,7 @@ import {
   authRejection,
   gateCheck,
   shouldTrustCfConnectingIp,
+  shouldTrustForwardedFor,
   shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
 } from '../../app/src/auth/rate-limiter.js';
@@ -140,9 +141,60 @@ test.describe('AUTH-04: 来源识别、防伪造与 IPv6 归桶', () => {
     assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: false }), 'ip:192.168.1.50');
   });
 
-  test('绝不采信 X-Forwarded-For 标头', () => {
-    const hs = { address: '10.0.0.5', headers: { 'x-forwarded-for': '1.1.1.1' } };
-    assert.equal(rlSourceKey(hs, norm), 'ip:10.0.0.5');
+  // ── X-Forwarded-For：默认不采信；只有 TRUSTED_PROXY=loopback 显式 opt-in 且 peer 是 loopback 才取末跳 ──
+  //
+  // 为什么是 opt-in 而不是「声明了 reverse-proxy 就自动信」（2026-09-06）：透传型反代（没配
+  // proxy_set_header 的 nginx 会原样转发客户端头；ssh -R、frp tcp 是纯 TCP 转发）会把客户端
+  // 自称的 XFF 一字不改送进来，此时整条头都是攻击者写的，采信 = 一个源无限拆桶 = 限速失效，
+  // 比全塌成一个桶更糟。服务端分不出「反代追加的」和「客户端自带的」，所以只能由用户断言
+  // 「我的反代会改写它」。失败方向保持「不采信 = 合桶」。
+  test('默认（未开 TRUSTED_PROXY）绝不采信 X-Forwarded-For——peer 是不是 loopback 都一样', () => {
+    for (const address of ['10.0.0.5', '127.0.0.1']) {
+      const hs = { address, headers: { 'x-forwarded-for': '1.1.1.1' } };
+      assert.equal(rlSourceKey(hs, norm), `ip:${address}`, `peer=${address} 缺省不得采信 XFF`);
+      assert.equal(rlSourceKey(hs, norm, { trustForwardedFor: false }), `ip:${address}`);
+    }
+  });
+
+  test('trustForwardedFor=true：采信 XFF 的**末跳**——那是自己的反代追加的，首跳是客户端自称的', () => {
+    const hs = { address: '127.0.0.1', headers: { 'x-forwarded-for': '198.51.100.9, 203.0.113.7' } };
+    assert.equal(rlSourceKey(hs, norm, { trustForwardedFor: true }), 'xff:203.0.113.7',
+      '取了首跳 = 把限速桶交给客户端自己填');
+  });
+
+  test('XFF 末跳：单跳带空白 / 尾随逗号 / IPv6 都归一到桶', () => {
+    const key = (xff) => rlSourceKey({ address: '127.0.0.1', headers: { 'x-forwarded-for': xff } }, norm, { trustForwardedFor: true });
+    assert.equal(key(' 203.0.113.7 '), 'xff:203.0.113.7');
+    assert.equal(key('203.0.113.7, '), 'xff:203.0.113.7', '尾随逗号后的空段不算一跳');
+    assert.equal(key('2408:8207:1:2::1'), 'xff:2408:8207:1:2::/64', 'IPv6 客户端同样按 /64 归桶，换地址不能拆桶');
+  });
+
+  test('XFF 缺席 / 空白 / 非字符串 → 回落 peer，不抛', () => {
+    for (const bad of [undefined, '', '   ', ',', ' , ', 123, true, ['1.1.1.1'], {}]) {
+      const hs = { address: '127.0.0.1', headers: bad === undefined ? {} : { 'x-forwarded-for': bad } };
+      assert.equal(rlSourceKey(hs, norm, { trustForwardedFor: true }), 'ip:127.0.0.1',
+        `XFF=${JSON.stringify(bad)} 不是可用的地址串，必须回落 peer`);
+    }
+  });
+
+  test('cfip 与 xff 同时开、同时存在 → cfip 优先（Cloudflare 边缘注入的比反代追加的更靠近客户端）', () => {
+    const hs = { address: '127.0.0.1', headers: { 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '198.51.100.9' } };
+    assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true, trustForwardedFor: true }), 'cfip:203.0.113.7');
+  });
+
+  test('shouldTrustForwardedFor：只认 trustedProxy === "loopback" 且 peer 为 loopback，未知值一律 false', () => {
+    for (const peer of ['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']) {
+      assert.equal(shouldTrustForwardedFor({ trustedProxy: 'loopback', peerAddress: peer }, norm), true, `peer=${peer}`);
+    }
+    // 反代跑在容器 / 别的主机上 → peer 不是 loopback → 不采信（静默合桶，文档要求 proxy_pass 到 127.0.0.1）
+    assert.equal(shouldTrustForwardedFor({ trustedProxy: 'loopback', peerAddress: '192.168.1.20' }, norm), false);
+    assert.equal(shouldTrustForwardedFor({ trustedProxy: 'loopback', peerAddress: '203.0.113.9' }, norm), false);
+    // 开关未开 / 写错 / 写成别的真值：fail-closed
+    for (const off of ['', undefined, null, 'LOOPBACK', '1', 'on', 'true', true, 'reverse-proxy']) {
+      assert.equal(shouldTrustForwardedFor({ trustedProxy: off, peerAddress: '127.0.0.1' }, norm), false,
+        `trustedProxy=${JSON.stringify(off)} 不是合法开关值，必须不采信`);
+    }
+    assert.equal(shouldTrustForwardedFor({}), false, '空参数必须落到不采信侧');
   });
 
   test('IPv6 按 /64 前缀分桶，同一 /64 内的不同地址共用限速桶', () => {

@@ -895,10 +895,13 @@ export function bindDiagnostic({ bindPlan, lang = 'zh' } = {}) {
 // publiclyReachable 由调用方从 bindPlan 取（两处：scripts/doctor.js D21 与 doctor-runtime）。
 // 默认 null = 「调用方没说」，此时不做监听面相关的任何断言 —— 默认成 true 会让忘记接线的调用方
 // 静默丢掉一整条检查，默认成 false 则会对所有不关心绑定的调用方误报。
-export function accessProfileDiagnostic({ profile = '', cfConfigured = false, publicUrl = '', authTokenSet = false, notifyConfigured = false, publiclyReachable = null, lang = 'zh' } = {}) {
+// trustedProxy（2026-09-06）：采信 X-Forwarded-For 的显式开关，只对 reverse-proxy 档有意义。别处开着
+// 或写成非法值都要点出来——这是「开错等于关掉限速」的开关，而运行时对它的 fail-closed 是静默的。
+export function accessProfileDiagnostic({ profile = '', cfConfigured = false, publicUrl = '', authTokenSet = false, notifyConfigured = false, publiclyReachable = null, trustedProxy = '', lang = 'zh' } = {}) {
   const name = 'ACCESS_PROFILE';
   const p = String(profile || '').trim();
   const urlSet = String(publicUrl || '').trim() !== '';
+  const tp = String(trustedProxy || '').trim();
 
   if (p === '') {
     return {
@@ -921,14 +924,29 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     };
   }
 
+  // TRUSTED_PROXY 与方案的自洽：对所有档都查（cloudflare 也查——那一档限速已按 CF-Connecting-IP 分桶，
+  // 这个开关多余且暗示用户误解了拓扑）。运行时对非法值静默按未开处理，这里必须说出来，
+  // 否则用户以为开了、实际限速还在合桶。
+  const proxyProblems = [];
+  if (tp && tp !== 'loopback') {
+    proxyProblems.push(bi(lang,
+      `TRUSTED_PROXY 写成 ${tp}，不是合法值——运行时按未开处理（限速仍合桶）。唯一合法值是 loopback`,
+      `TRUSTED_PROXY is set to ${tp}, which is not a valid value — treated as off at runtime (rate limiting still shares one bucket). The only valid value is loopback`));
+  } else if (tp === 'loopback' && p !== 'reverse-proxy') {
+    proxyProblems.push(bi(lang,
+      `TRUSTED_PROXY=loopback 已开，但方案声明为 ${p}——这个开关只对反向代理拓扑有意义，别处开着要么不生效、要么把本机自己发的 X-Forwarded-For 当真。确认真有 loopback 反代再开，否则清掉`,
+      `TRUSTED_PROXY=loopback is on, but the profile is ${p} — this switch only makes sense behind a reverse proxy; elsewhere it is either inert or trusts a locally forged X-Forwarded-For. Keep it only if a loopback reverse proxy really exists`));
+  }
+
   if (p === 'cloudflare') {
+    const cfProblems = [...proxyProblems];
     if (!cfConfigured) {
-      return {
-        status: 'warn', name,
-        detail: bi(lang,
-          '已声明 Cloudflare，但 CF_ACCESS_* 三项未配齐——Access 加层实际未生效，公网目前只有 AUTH_TOKEN + 设备审批基线。补全三项，或把 ACCESS_PROFILE 改为实际方案。',
-          'Declared cloudflare but CF_ACCESS_* is incomplete — the Access layer is not in effect; the public surface currently has only the AUTH_TOKEN + device-approval baseline. Complete all three, or change ACCESS_PROFILE.'),
-      };
+      cfProblems.push(bi(lang,
+        '已声明 Cloudflare，但 CF_ACCESS_* 三项未配齐——Access 加层实际未生效，公网目前只有 AUTH_TOKEN + 设备审批基线。补全三项，或把 ACCESS_PROFILE 改为实际方案',
+        'Declared cloudflare but CF_ACCESS_* is incomplete — the Access layer is not in effect; the public surface currently has only the AUTH_TOKEN + device-approval baseline. Complete all three, or change ACCESS_PROFILE'));
+    }
+    if (cfProblems.length) {
+      return { status: 'warn', name, detail: cfProblems.join(bi(lang, '；', '; ')) };
     }
     return {
       status: 'ok', name,
@@ -939,7 +957,7 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
   }
 
   // vpn / reverse-proxy / lan 共通：CF 层不该配着；vpn/reverse-proxy 还要 token 与深链可用。
-  const problems = [];
+  const problems = [...proxyProblems];
   if (cfConfigured) {
     problems.push(bi(lang,
       `CF_ACCESS_* 仍配着——与 ${p} 声明矛盾，确认换方案请一并清空三项`,
@@ -991,11 +1009,20 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     };
   }
   if (p === 'reverse-proxy') {
+    // 限速分桶那句按开关分两版：默认合桶是安全方向，只提示不告警；开了要把前提（反代自己追加 XFF）
+    // 复述一遍——透传型反代下开着它等于关掉限速，而这是用户唯一会再看到这个前提的地方。
+    const bucketing = tp === 'loopback'
+      ? bi(lang,
+        '登录限速按 X-Forwarded-For 末跳分桶（TRUSTED_PROXY=loopback）——前提是反代自己追加/改写该头（nginx $proxy_add_x_forwarded_for），透传型反代或 ssh -R / frp 下请关掉',
+        'Login rate limiting is bucketed by the last X-Forwarded-For hop (TRUSTED_PROXY=loopback) — valid only if the proxy itself appends/rewrites that header (nginx $proxy_add_x_forwarded_for); turn it off behind a pass-through proxy, ssh -R or frp')
+      : bi(lang,
+        '登录限速按连接 IP 合桶（所有公网客户端共用同一个限速桶，一处试错会波及其余）；反代会自己追加 X-Forwarded-For 时可设 TRUSTED_PROXY=loopback 按真实来源分桶',
+        'Login rate limiting shares one bucket for all public clients (the proxy connects from 127.0.0.1); if the proxy itself appends X-Forwarded-For, set TRUSTED_PROXY=loopback to bucket by real source');
     return {
       status: 'ok', name,
       detail: bi(lang,
-        '反向代理 / 托管隧道：建议在入口层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。',
-        'Reverse proxy / hosted tunnel: consider an extra auth layer at the entry point; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).'),
+        `反向代理 / 托管隧道：${bucketing}；建议在入口层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。`,
+        `Reverse proxy / hosted tunnel: ${bucketing}; consider an extra auth layer at the entry point; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).`),
     };
   }
   if (p === 'direct') {

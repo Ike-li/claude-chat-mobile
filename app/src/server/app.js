@@ -58,7 +58,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
-import { onAuthResult, freshState, gateCheck, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, gateCheck, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
@@ -161,6 +161,8 @@ const {
   devMode: DEV_MODE,
   bindMode: BIND_MODE,
   bindHost: BIND_HOST,
+  trustedProxy: TRUSTED_PROXY,       // 采信 XFF 的开关，已归一（只可能是 '' 或 'loopback'）
+  accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
   workDir: configuredWorkDir,
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
@@ -409,12 +411,16 @@ const httpAuth = createHttpAuth({
     sourceKey: (req) => {
       // 公网 Host 且 peer=loopback（隧道）才采信 CF-Connecting-IP；
       // LAN 伪造 Host+CF-IP 只回落连接 IP，防拆限速桶。
+      // XFF 末跳只在 TRUSTED_PROXY=loopback 显式声明 + peer=loopback 时采信（AUTH-04）。
       const publicHost = authStrategy.ownsHost(req.headers?.host);
       const peer = req.socket?.remoteAddress || req.ip || '';
       return rlSourceKey(
         { address: peer, headers: req.headers || {} },
         clientIp,
-        { trustCfConnectingIp: shouldTrustCfConnectingIp({ publicHost, peerAddress: peer }, clientIp) },
+        {
+          trustCfConnectingIp: shouldTrustCfConnectingIp({ publicHost, peerAddress: peer }, clientIp),
+          trustForwardedFor: shouldTrustForwardedFor({ trustedProxy: TRUSTED_PROXY, peerAddress: peer }, clientIp),
+        },
       );
     },
     getState: (key) => rlStates.get(key),
@@ -691,10 +697,15 @@ io.use(async (socket, next) => {
   const ip = clientIp(socket.handshake.address);
   const publicHost = authStrategy.ownsHost(socket.handshake.headers.host);
   const rlActive = publicHost || !!AUTH_TOKEN;
-  // AUTH-NEW-2：与 HTTP sourceKey 同判据——Host spoof 从 LAN 直连时不信 CF-IP
+  // AUTH-NEW-2：与 HTTP sourceKey 同判据——Host spoof 从 LAN 直连时不信 CF-IP；
+  // XFF 末跳同样只在 TRUSTED_PROXY=loopback + peer loopback 时采信（AUTH-04）。
   const rlKey = rlSourceKey(socket.handshake, clientIp, {
     trustCfConnectingIp: shouldTrustCfConnectingIp({
       publicHost,
+      peerAddress: socket.handshake.address,
+    }, clientIp),
+    trustForwardedFor: shouldTrustForwardedFor({
+      trustedProxy: TRUSTED_PROXY,
       peerAddress: socket.handshake.address,
     }, clientIp),
   });
@@ -3070,10 +3081,12 @@ registerSocketConnection(io, socket => {
       fileEditOff: process.env.FILE_EDIT === 'off',
       publicUrl: process.env.PUBLIC_URL || '',
       // D21：方案声明 + 「通知已配」判定（Web Push 或 ntfy 任一即算——两条通道都吃 PUBLIC_URL 深链）。
-      accessProfile: process.env.ACCESS_PROFILE || '',
+      accessProfile: ACCESS_PROFILE,
       notifyConfigured: pushEnabled || !!(process.env.NTFY_URL && process.env.NTFY_TOPIC),
       // 实际生效的监听计划（server 才拿得到）：让体检里「绑哪个地址」的措辞与真相一致。
       bindPlan,
+      // 采信 XFF 的开关：传归一后的值——server 真正用的就是它，体检说的必须与限速真在做的一致。
+      trustedProxy: TRUSTED_PROXY,
     }));
   });
 
@@ -3521,9 +3534,9 @@ httpServer.listen(port, host, () => {
     const isWildcard = host === '0.0.0.0' || host === '::';
     const reachable = isWildcard ? reachableIPv4s() : [host];
 
-    // 公网那两行按声明的方案给：产品只内建 Cloudflare 与局域网两条路（hard-rules §1.10），
-    // 声明了别的拓扑还硬教 cloudflared 就是答非所问——那些方案产品不管，只指路文档。
-    const profile = String(process.env.ACCESS_PROFILE || '').trim();
+    // 公网那两行按声明的方案给：受管的只有 cloudflared（hard-rules §1「公网入口」），
+    // 声明了别的拓扑还硬教 cloudflared 就是答非所问——那些方案产品不管进程，只指路文档。
+    const profile = ACCESS_PROFILE;
     const publicHint = (tokenPart) => (profile && profile !== 'cloudflare'
       ? [`  公网:   已声明 ACCESS_PROFILE=${profile}，落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」`]
       : [

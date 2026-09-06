@@ -1169,6 +1169,33 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.match(r.detail, /deployment/);
   });
 
+  // ── TRUSTED_PROXY（2026-09-06）：反代下限速桶默认合并，显式声明后按 XFF 末跳分桶 ──
+  test('reverse-proxy 未开 TRUSTED_PROXY → ok 但要点名「限速合桶」与开关名（默认合桶是安全方向，不是告警）', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'reverse-proxy', publicUrl: 'https://x.example.com', trustedProxy: '' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /TRUSTED_PROXY/, '要告诉用户开关叫什么');
+    assert.match(r.detail, /合桶|同一个限速桶|共用/, '要说清不开的后果');
+  });
+  test('reverse-proxy + TRUSTED_PROXY=loopback → ok，说清按 XFF 末跳分桶且前提是反代真会改写它', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'reverse-proxy', publicUrl: 'https://x.example.com', trustedProxy: 'loopback' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /X-Forwarded-For|XFF/);
+    assert.match(r.detail, /追加|改写/, '要把「反代必须自己追加 XFF」这个前提说出来——透传型反代开了等于关限速');
+  });
+  test('TRUSTED_PROXY=loopback 但方案不是 reverse-proxy → warn（开关只对反代拓扑有意义，别处开着是自伤）', () => {
+    for (const profile of ['lan', 'vpn', 'direct', 'cloudflare']) {
+      const r = accessProfileDiagnostic({ ...clean, profile, trustedProxy: 'loopback', cfConfigured: profile === 'cloudflare', publiclyReachable: true });
+      assert.equal(r.status, 'warn', `${profile} 下开着 TRUSTED_PROXY 必须 warn`);
+      assert.match(r.detail, /TRUSTED_PROXY/);
+    }
+  });
+  test('TRUSTED_PROXY 写成未知值 → 按未开处理，不放行也不额外告警（fail-closed 由运行时保证，doctor 只提示）', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'reverse-proxy', publicUrl: 'https://x.example.com', trustedProxy: 'on' });
+    assert.equal(r.status, 'warn', '写错的值要被指出来，否则用户以为开了');
+    assert.match(r.detail, /TRUSTED_PROXY/);
+    assert.match(r.detail, /loopback/, '要告诉用户唯一合法值');
+  });
+
   test('lan：三键齐 / PUBLIC_URL 设了 / token 未设 → 各自 warn；全净 → ok', () => {
     assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan', cfConfigured: true }).status, 'warn');
     assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan', publicUrl: 'https://x.example.com' }).status, 'warn');

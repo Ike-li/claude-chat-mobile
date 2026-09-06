@@ -262,3 +262,24 @@ test('parseServerConfig falls back safely for invalid numeric configuration', ()
   assert.equal(config.sessionDeleteQuietMs, 300000);
   assert.equal(config.dataDir, join('/repo', 'data'));
 });
+
+// ── TRUSTED_PROXY / ACCESS_PROFILE 的运行时归一（2026-09-06）──
+// 两个键此前都是 app.js 裸读 process.env；限速采信开关必须走这里归一：未知值归空 = 不采信（fail-closed），
+// 否则 app.js 里任何一处「truthy 就算开」的写法都会把 '1' / 'on' 当成开关。
+test('parseServerConfig：TRUSTED_PROXY 只认字面量 loopback，其余一律归空', () => {
+  const base = { AUTH_TOKEN: 'x'.repeat(32) };
+  assert.equal(parseServerConfig({ ...base, TRUSTED_PROXY: 'loopback' }, { home: '/h', projectRoot: '/repo' }).trustedProxy, 'loopback');
+  for (const bad of [undefined, '', 'LOOPBACK', '1', 'on', 'true', 'reverse-proxy']) {
+    assert.equal(parseServerConfig({ ...base, TRUSTED_PROXY: bad }, { home: '/h', projectRoot: '/repo' }).trustedProxy, '',
+      `TRUSTED_PROXY=${JSON.stringify(bad)} 不是合法开关值，必须归空`);
+  }
+});
+
+test('parseServerConfig：ACCESS_PROFILE 合法值原样、未知值归空（与 doctor 的「未知按未声明」同口径）', () => {
+  const opts = { home: '/h', projectRoot: '/repo' };
+  for (const p of ['cloudflare', 'vpn', 'reverse-proxy', 'direct', 'lan']) {
+    assert.equal(parseServerConfig({ ACCESS_PROFILE: p }, opts).accessProfile, p);
+  }
+  assert.equal(parseServerConfig({ ACCESS_PROFILE: 'tailscale' }, opts).accessProfile, '');
+  assert.equal(parseServerConfig({}, opts).accessProfile, '');
+});

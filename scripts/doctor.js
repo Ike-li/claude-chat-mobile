@@ -688,6 +688,8 @@ function checkAccessProfile() {
       bindMode: process.env.BIND_MODE,
       bindHost: process.env.BIND_HOST,
     }).publiclyReachable,
+    // 原样传（不在这里归一）：判定函数要能看见写错的值并点名，运行时那侧才做 fail-closed 归一。
+    trustedProxy: process.env.TRUSTED_PROXY || '',
     lang: LANG,
   }));
 }

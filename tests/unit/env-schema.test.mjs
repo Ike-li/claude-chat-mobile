@@ -489,6 +489,39 @@ test.describe('ACCESS_PROFILE —— enum 成员校验', () => {
   });
 });
 
+// ── TRUSTED_PROXY：采信 X-Forwarded-For 的显式开关（2026-09-06）─────────────
+//
+// 它是一个「开错等于关掉限速」的安全开关：透传型反代 / ssh -R / frp tcp 会把客户端自带的 XFF
+// 原样送进来，开了就是让攻击者自己填限速桶。所以 (1) 合法值只有一个字面量，enum 校验挡住
+// '1' / 'on' 这类顺手写法；(2) help 必须把前提与反例写出来——这是用户唯一会读到的说明。
+test.describe('TRUSTED_PROXY —— 采信 XFF 的显式开关', () => {
+  test('auth 组的 enum，合法值只有空与 loopback', () => {
+    const def = ENV_SCHEMA.TRUSTED_PROXY;
+    assert.equal(def.group, 'auth');
+    assert.equal(def.kind, 'enum');
+    assert.deepEqual(def.options.map((o) => o.value), ['', 'loopback']);
+  });
+  test('写 loopback / 空 / null 通过；on、1、true、LOOPBACK 一律 error 且列出允许值', () => {
+    for (const v of ['loopback', '', null]) {
+      assert.equal(validateEnvChanges({ TRUSTED_PROXY: v }, { current: {} }).ok, true, String(v));
+    }
+    for (const bad of ['on', '1', 'true', 'LOOPBACK']) {
+      const r = validateEnvChanges({ TRUSTED_PROXY: bad }, { current: {} });
+      assert.deepEqual(errorsOf(r), ['TRUSTED_PROXY'], `TRUSTED_PROXY=${bad} 必须被 enum 校验挡住`);
+      assert.match(r.results[0].message, /loopback/, '文案要列出唯一合法值');
+    }
+  });
+  test('help 中英都要交代「只有反代自己追加 XFF 才能开」与反例（ssh -R / frp）', () => {
+    const def = ENV_SCHEMA.TRUSTED_PROXY;
+    for (const lang of ['zh', 'en']) {
+      const h = String(def.help?.[lang] || '');
+      assert.match(h, /X-Forwarded-For/, `${lang} help 要点名头名`);
+      assert.match(h, /ssh -R|frp/, `${lang} help 要给出不能开的反例`);
+      assert.match(h, /重启|restart/i, `${lang} help 要说改了要重启`);
+    }
+  });
+});
+
 // ── ACCESS_PROFILE 的选项文案：能不能让人选对 ──────────────────────────────
 //
 // 这两条不是「文案好不好看」，是**选错档的后果不可见**。声明值一旦落错，doctor 的针对性检查

@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 
 import { loadConfigSources, projectToEnv, resolveConfigValues } from './config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
-import { DEFAULT_PORT } from './env-schema.js';
+import { ACCESS_PROFILES, DEFAULT_PORT } from './env-schema.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);
@@ -112,6 +112,11 @@ export function parseServerConfig(env, {
     //（server 与两个 doctor 共用那一份，此处再判一次就又有分叉余地了）。
     bindMode: env.BIND_MODE || '',
     bindHost: env.BIND_HOST || '',
+    // 采信 X-Forwarded-For 的开关：只认字面量 'loopback'，其余一律归空 = 不采信（AUTH-04，fail-closed）。
+    // 这里归一一次，app.js 两个限速调用点与 doctor 共用同一个值——不留「truthy 就算开」的口子。
+    trustedProxy: env.TRUSTED_PROXY === 'loopback' ? 'loopback' : '',
+    // 声明的公网方案：未知值归空，与 doctor「未知按未声明」同口径。此前 app.js 两处裸读 process.env。
+    accessProfile: ACCESS_PROFILES.includes(String(env.ACCESS_PROFILE || '').trim()) ? String(env.ACCESS_PROFILE).trim() : '',
     workDir: env.WORK_DIR || home,
     // 走带参重载而非无参形式：本函数是可注入纯函数（单测传 projectRoot 断言回落），
     // 且它在 .env 加载前就被求值，绝不能让状态根解析退化成读 process.env。

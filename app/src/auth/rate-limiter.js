@@ -163,19 +163,36 @@ export function authRejection({ verdict, retryAfterMs = null } = {}) {
 }
 
 // sourceKey：限速计数的来源标识。
-// 优先级：边缘层可信注入的真实来源(CF-Connecting-IP) → 连接 IP。两条路径都过 ipRateBucket 归桶：
-// CF-Connecting-IP 是客户端的真实地址，IPv6 客户端换地址同样能拆桶，是同一个绕过面。
-// 信任边界：只信自己边缘层（Cloudflare）注入的头，【绝不信客户端自称的 X-Forwarded-For】——
-// 后者可伪造，用它做 key 等于给攻击者一把绕过 per-source 限速的钥匙。normalizeIp 由调用方注入（去 ::ffff: 前缀）。
+// 优先级：CF-Connecting-IP（Cloudflare 边缘注入）→ X-Forwarded-For 末跳（自己的 loopback 反代追加）
+// → 连接 IP。三条路径都过 ipRateBucket 归桶：前两者是客户端的真实地址，IPv6 客户端换地址同样能拆桶，
+// 是同一个绕过面。normalizeIp 由调用方注入（去 ::ffff: 前缀）。
 //
-// CF-Connecting-IP 仅在 trustCfConnectingIp=true 时采信（调用方应只在 isPublicHost 公网
-// Access 路径下置 true）。LAN/直连上该头可被客户端伪造，采信会把限速状态拆成无限 source key 绕过。
-export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false } = {}) {
+// 信任边界：只信**自己的边缘层**注入的头。两个开关都由调用方按拓扑判定后传入，本函数不猜：
+//   · trustCfConnectingIp —— 调用方只在 isPublicHost 公网 Access 路径 + peer loopback 时置 true
+//     （shouldTrustCfConnectingIp）。LAN/直连上该头可被客户端伪造，采信会把限速拆成无限 source key。
+//   · trustForwardedFor —— 调用方只在 TRUSTED_PROXY=loopback 显式声明 + peer loopback 时置 true
+//     （shouldTrustForwardedFor）。取**末跳**：那一跳是反代追加的，首跳是客户端自称的。
+//     【默认绝不采信】：透传型反代 / ssh -R / frp tcp 会把客户端自带的 XFF 原样送进来，那时整条头
+//     都是攻击者写的，采信 = 限速失效，比合桶更糟；服务端分不出两种情况，所以必须由用户 opt-in。
+export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false, trustForwardedFor = false } = {}) {
   if (trustCfConnectingIp) {
     const cfip = handshake?.headers?.['cf-connecting-ip'];
     if (cfip && typeof cfip === 'string' && cfip.trim()) return `cfip:${ipRateBucket(cfip)}`;
   }
+  if (trustForwardedFor) {
+    const xff = handshake?.headers?.['x-forwarded-for'];
+    if (typeof xff === 'string') {
+      const hops = xff.split(',').map((s) => s.trim()).filter(Boolean);
+      if (hops.length) return `xff:${ipRateBucket(hops[hops.length - 1])}`;
+    }
+  }
   return `ip:${ipRateBucket(normalizeIp(handshake?.address || ''))}`;
+}
+
+// peer 是不是本机 loopback（三个判定共用一份字面量：两个采信开关 + 设备审批 bypass）。
+function isLoopbackPeer(peerAddress, normalizeIp = (x) => x) {
+  const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
+  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
 }
 
 // AUTH-NEW-2：是否采信 CF-Connecting-IP。
@@ -185,8 +202,18 @@ export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnecti
 // （否则攻击者 Host spoof + 随机 CF-Connecting-IP 可无限拆限速桶）。
 export function shouldTrustCfConnectingIp({ publicHost, peerAddress }, normalizeIp = (x) => x) {
   if (!publicHost) return false;
-  const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
-  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+  return isLoopbackPeer(peerAddress, normalizeIp);
+}
+
+// 是否采信 X-Forwarded-For 末跳（2026-09-06，AUTH-04）。
+// 两个条件缺一不可：TRUSTED_PROXY 严格等于 'loopback'（用户显式断言「我的反代会追加/改写 XFF」；
+// 未知值、'1'、'on' 之类全部 fail-closed），且 peer 是 loopback（反代跑在容器或别的主机上时 peer
+// 不是 loopback，不采信、静默合桶——文档要求 proxy_pass 到 127.0.0.1）。
+// 不复用 ACCESS_PROFILE=reverse-proxy 自动开：那会让用 ssh -R / frp tcp / 没配转发头的 nginx 的用户
+// 一声明就把限速交给攻击者，失败方向是放行。
+export function shouldTrustForwardedFor({ trustedProxy, peerAddress } = {}, normalizeIp = (x) => x) {
+  if (trustedProxy !== 'loopback') return false;
+  return isLoopbackPeer(peerAddress, normalizeIp);
 }
 
 // 设备审批 bypass（SEC 第二因子）：仅当 CF Access 已验，或「真·本机直连」才跳过 deviceToken。
@@ -199,9 +226,7 @@ export function shouldBypassDeviceApproval({
   hostHeader = '',
 } = {}, normalizeIp = (x) => x) {
   if (accessEnabled) return true;
-  const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
-  const peerLocal = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
-  if (!peerLocal) return false;
+  if (!isLoopbackPeer(peerAddress, normalizeIp)) return false;
   const host = String(hostHeader || '').split(':')[0].toLowerCase();
   // R8（2026-08-06）：空 Host【不】视为本机。旧判据把它与 localhost 并列，理由是「本机工具/健康探针」，
   // 但实测项目内无任何调用方发空 Host（浏览器 / socket.io-client / fetch 全带），而 /health、/metrics

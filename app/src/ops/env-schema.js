@@ -102,6 +102,22 @@ export const ENV_SCHEMA = {
     help: t('仅当监听地址模式为「自定义」时生效。:: 表示 IPv4/IPv6 双栈；也可填某块网卡的地址只对它开放。',
       'Only used when the mode is custom. :: means dual stack (IPv4+IPv6); or set a specific interface address.'),
   },
+  // 采信 X-Forwarded-For 的显式开关（2026-09-06，AUTH-04）。反代终止在 loopback 后所有公网客户端的
+  // 连接 IP 都是 127.0.0.1，登录限速默认合成一个桶；开了它才按反代追加的 XFF 末跳分桶。
+  // 刻意不复用 ACCESS_PROFILE=reverse-proxy 自动开：透传型反代 / ssh -R / frp tcp 会把客户端自带的
+  // XFF 原样送进来，那时整条头都是攻击者写的，采信 = 限速失效。服务端分不出两种反代，只能由用户断言
+  // 「我的反代会追加它」。合法值只有一个字面量：enum 校验挡住 '1' / 'on' 这类顺手写法，运行时再严格
+  // === 一次（config.js parseServerConfig），两道都 fail-closed。
+  TRUSTED_PROXY: {
+    group: 'auth', kind: 'enum',
+    options: [
+      { value: '', label: t('不采信任何转发头（默认；反代下所有公网客户端共用一个限速桶）', 'Trust no forwarding header (default; behind a proxy all public clients share one rate-limit bucket)') },
+      { value: 'loopback', label: t('采信 loopback 反代追加的 X-Forwarded-For 末跳', 'Trust the last X-Forwarded-For hop appended by a loopback reverse proxy') },
+    ],
+    label: t('可信反代（限速来源）', 'Trusted proxy (rate-limit source)'),
+    help: t('只在反代**自己追加** X-Forwarded-For 时才能开（nginx 的 $proxy_add_x_forwarded_for；Caddy / Traefik 默认如此），且反代必须 proxy_pass 到 127.0.0.1。ssh -R、frp tcp、没配转发头的 nginx 会把客户端伪造的头原样送进来，开了等于关闭登录限速。改这项要重启。',
+      'Enable only when the reverse proxy itself appends X-Forwarded-For (nginx $proxy_add_x_forwarded_for; Caddy / Traefik do by default) and proxies to 127.0.0.1. ssh -R, frp tcp, or nginx without a forwarding header pass a client-forged header straight through — enabling it there disables login rate limiting. Requires a restart.'),
+  },
   CF_ACCESS_HOSTNAME: {
     group: 'auth', kind: 'text',
     label: t('Cloudflare Access 域名', 'Cloudflare Access hostname'),
