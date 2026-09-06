@@ -47,7 +47,15 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
     try {
       mkdirSync(join(home, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)', 'Write(//r/**)'] } }));
-      const rep = runDoctor({ authToken: 'x'.repeat(32), home, workDirs: [], cfEnabled: false });
+      // 必须注入 CLI 探测，理由同下一条用例：不注入的话 runDoctor 会真的 which + 跑
+      // `claude --version`，而末尾那条 readiness 断言是 15 个 check 的综合判定——CLI 探不到
+      // 就判 fail，readiness 被拉到 'blocked'，与这条用例要测的白名单毫无关系。
+      // 2026-09-06 CI 实测：本地（有真 claude）绿、容器（compose 设了 CLAUDE_BIN）绿、
+      // CI 的 test:unit step（两者都没有）红——同一条用例三个环境三种答案，红的还是无关的那一维。
+      const rep = runDoctor({
+        authToken: 'x'.repeat(32), home, workDirs: [], cfEnabled: false,
+        probeClaudeBin: () => STUB_PROBE,
+      });
       const wl = rep.checks.find(c => c.id === 'WHITELIST');
       assert.equal(wl.safe.ruleCount, 2);
       assert.equal(wl.safe.dangerous.length, 1); // 仅 Bash(*)
