@@ -1,4 +1,9 @@
-// tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
+// tests/unit/history-messages.test.mjs —— transcript JSONL → 消息列表的解析
+// getSessionHistory 是 web 端「打开一个会话看到什么」的唯一来源，它在别人写的格式上做防御式解析。
+// 覆盖：文件不存在/空文件的空数组回落 · user/assistant 文本提取
+//       · uuid 只透给主链文本消息（「从这里分叉」靠它定位；tool_use/tool_result/thinking
+//         与 sidechain 子 agent 都不带，否则会分叉到一个不能续接的点）
+// 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';

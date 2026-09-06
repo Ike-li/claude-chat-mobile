@@ -1,3 +1,8 @@
+// tests/unit/devices.test.mjs —— 设备信任表的状态机（DEVICE-02 的存储侧）
+// 覆盖：pending 增删与最新优先排序 · 批准/拒绝 · pending 容量上限（防随机指纹刷盘）
+//       · persistTrustedChange 落盘成功才提交（BE-011）——写盘失败返回 null 而不是谎报成功，
+//         原集合也不得被就地修改，否则内存与磁盘会分叉
+// 门禁接线与 socket 失权在 tests/invariants/device-gate.test.mjs 与 server/device-gate.test.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';

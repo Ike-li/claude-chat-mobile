@@ -1,3 +1,8 @@
+// tests/unit/i18n-check.test.mjs —— i18n 孤儿 key 门禁自身的解析正确性
+// 被测的是 tests/gates/i18n-check.js。这个门禁只查一个方向（字典有、代码里没人用），
+// 反向（代码用了字典没有）查不到——因为本项目 i18n key 就是中文原文，改文案即改 key。
+// 覆盖：EN_DICT key 抽取 · HTML 可翻译文案抽取（含中文文本节点，不需要 data-i18n 标注）
+//       · JS 里 t( 调用的 key 抽取 · 孤儿 key 扫描 · 无 EN_DICT 时返回空而不抛
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

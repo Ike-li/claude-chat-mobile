@@ -1,6 +1,10 @@
-// tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
-// 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
-// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机）。
+// tests/unit/logic-content.test.mjs —— 消息内容的格式化（logic.js 的「文本进、文本出」这一层）
+// 全是纯函数，浏览器与 node 零构建共用同一份源文件。
+// 覆盖：esc 的 HTML 元字符转义 · formatToolSummary 把紧凑 JSON 展开成 2 空格缩进
+//       · 非 JSON 纯文本原样返回（Bash 命令、脱敏占位符、错误串）
+//       · 【截断后的残缺 JSON 不得抛】——agent 的 TOOL_SUMMARY 会截断，抛了就整条消息渲染不出来
+// 这份从原 logic.test.mjs 拆出（monolith 行数门 800，见 source-layout.test.mjs），
+// 同源的还有 -rendering（ANSI/环形缓冲）、-session（会话态聚合）、-ui-state（UI 判定）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';

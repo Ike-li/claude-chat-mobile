@@ -1,6 +1,9 @@
-// tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
-// 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
-// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机）。
+// tests/unit/logic-ui-state.test.mjs —— UI 各处的可见性/可用性判定（本树最大的一份，165 个用例）
+// 全是「给定一组状态，这个东西该不该显示/能不能点」的纯函数。判错不会崩，只会让人看不见
+// 或点不动，而这类缺陷在手工点测里最容易漏——所以这里穷举矩阵。
+// 覆盖举例：推送订阅可用性（局域网 http 非 secure context → need-https 优先级压过一切；
+//   iOS 未加主屏 → ios-add-home，因为 Safari 标签页没有 PushManager；旧 iOS <16.4 → unsupported）
+// 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';

@@ -1,3 +1,6 @@
+// tests/unit/mock-transport.test.mjs —— E2E 假后端的就绪探针绑定
+// 探针必须绑到【本轮 spawn 的 server】（nonce 匹配）——端口上残留的旧进程回 409，
+// 否则 Playwright 会对着一个错误的进程跑完整套 P0 契约并给出假绿/假红。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

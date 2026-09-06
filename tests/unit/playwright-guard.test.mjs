@@ -1,3 +1,7 @@
+// tests/unit/playwright-guard.test.mjs —— Playwright 禁止模式门禁自身
+// 那道闸禁的是 test.only/skip/fixme 与 networkidle/waitForTimeout（前者让 e2e 静默少跑，
+// 后者制造随机红）。本文件证明它扫得到 tests/e2e 与 tests/playground/e2e 两处，
+// 且【扫描面为空时报错】——扫不到文件必须是红，不能当成「没有违规」。
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

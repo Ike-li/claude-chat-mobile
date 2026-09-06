@@ -1,3 +1,8 @@
+// tests/unit/server-http.test.mjs —— HTTP 层：鉴权、安全头、静态壳的模块路由
+// 覆盖：tokenMatches 的常数时间比较（AUTH-01）· 安全响应头 · 鉴权失败计入共享限速（AUTH-03）
+//       · /push/subscribe 的第二因子——bypass 级信任必须与信任表等价放行，两条路径不能分叉
+//       · /js/** 子模块路由与 import 改写：每个相对 import 都要带版本号，
+//         否则浏览器会拿旧缓存的模块拼新代码，症状是「改了没生效」且无任何报错
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

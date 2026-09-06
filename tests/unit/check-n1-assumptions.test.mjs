@@ -1,3 +1,8 @@
+// tests/unit/check-n1-assumptions.test.mjs —— n=1 假设面登记簿门禁自身
+// 那道闸是双向的：文档登记了代码却没标记 → 报缺失；代码有标记文档没登记 → 报未登记。
+// 它不能【发现】新增的 n=1 假设（那没有语法特征），只保证登记簿本身不漂移——
+// 这条边界写在门禁头注里，本文件负责证明两个方向都真的会红。
+// 覆盖：双向差集 · 双向一致时零 problem · 只有表格行算登记（正文里的叙述性引用不算）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

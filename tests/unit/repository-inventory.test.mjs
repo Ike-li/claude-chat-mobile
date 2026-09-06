@@ -1,3 +1,7 @@
+// tests/unit/repository-inventory.test.mjs —— 未分类文件闸自身
+// 覆盖：真实仓库每个文件都命中一条规则 · docs/ 不通配放行（新 .md 必须显式登记）
+//       · 拒绝历史遗留根目录与散落的测试文件
+//       · 【扫描面为空时报错】——git ls-files 返回空必须是红，不能当成「没有未分类文件」
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';

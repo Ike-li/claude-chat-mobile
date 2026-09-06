@@ -1,3 +1,8 @@
+// tests/unit/logic-composer-primary.test.mjs —— 输入区主按钮与发送 ack 的纯函数
+// 一个按钮位承载「发送 / 停止 / 续接」三态，判错的后果是用户按下去发生了他没预期的事。
+// 覆盖：resolveComposerPrimaryMode 的空闲/忙碌 × 有无内容矩阵 · 发送按钮隐藏判据 · 权限档位色调
+//       · presentOnlineSendAck 的乐观气泡去留 · 离线重发横幅的归属标注（三处共用同一判据）
+//       · 发送时序常量之间的序关系不变量（跨前后端的常量失配是同源漏修高发区）
 // 发送钮双态 + 流内 live 状态文案：纯逻辑单测（零 DOM/零 token）
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,3 +1,9 @@
+// tests/unit/frontend-app-modules.test.mjs —— app/public/js/app/ 下各工厂模块的【所有权边界】
+// 这一层的问法不是「功能对不对」，是「状态归谁、依赖从哪注入」：每个工厂只持自己的状态，
+// 共享的东西一律经 context 注入（样板见 app/event-dispatch.js），不许再落 app.js 顶层作用域。
+// 覆盖：context 的共享 DOM/state/依赖 · client-log 环形缓冲 · alerts 持久化偏好 · attachments 待发队列
+//       · createReplayBuffer（OOB 旁路 + 超时决策）· createUnreadTracker 手动未读生命周期
+//       · attachLongPress（位移/抬手取消，并吞掉紧随的 click）
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';

@@ -1,3 +1,8 @@
+// tests/unit/cli-statusline-bridge.test.mjs —— CLI statusline 桥的快照读写（动 ~/.claude 的两个桥之一）
+// 这条链把终端里的 statusline 数据落盘、再喂给手机端。它处理的是别人写的 JSON，且要落到用户家目录，
+// 所以每一步都按「不信任输入 + 最小权限」写：版本化白名单规范化、0700 目录内原子落 0600、
+// 快照同时绑 session 与规范化 cwd（错配拒绝返回）、超 TTL 只报 stale 不冒充当前状态。
+// 删除面只认自家 sha256 命名形态（同 hooks 侧 R5，2026-08-06）——目录是用户可配的，不许删别人的文件。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

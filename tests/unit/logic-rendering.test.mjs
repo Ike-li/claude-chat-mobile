@@ -1,6 +1,8 @@
-// tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
-// 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
-// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机）。
+// tests/unit/logic-rendering.test.mjs —— 终端输出的渲染（ANSI → HTML）与环形缓冲
+// ansiToHtml 的输出直接进 innerHTML，所以两条硬约束：先 esc 再着色，且【任何输入都不得留下游离 span】
+// ——未闭合的标签会把后面整页的 DOM 结构吃掉。
+// 覆盖：24-bit 前景色 · 未闭合 span 的结尾配平 · 空 reset（\x1b[m）也闭合 · 非颜色 SGR 吞序列保留文本
+// 这份从原 logic.test.mjs 拆出，同源的还有 -content、-session、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex, formatPushStatusRow } from '../../app/public/js/logic.js';

@@ -1,3 +1,6 @@
+// tests/unit/smoke-runner.test.mjs —— 真 Claude 冒烟 runner 的准入约束（不跑真回合）
+// 那批用例要花真 token，所以 runner 必须：需要显式点名场景（不许默认全跑）、
+// 不硬编码模型名、复用与集成测试同一份环境隔离清单（少一件就可能写到真实 HOME）。
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';

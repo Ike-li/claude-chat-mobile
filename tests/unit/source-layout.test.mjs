@@ -1,3 +1,8 @@
+// tests/unit/source-layout.test.mjs —— 目录布局与接线的静态不变量（S0）
+// 不测行为，测「东西有没有放对地方、线有没有接上」——这类问题不会让任何用例变红，只会慢慢长歪。
+// 覆盖：后端域模块必须在 app/src/ 下 · 根 app/server.js 只是兼容启动器
+//       · 配置面板与安全体检都必须拿到 shell env 快照（少接一根线 = 静默假绿）
+//       · 单测按行为域拆分而不是照搬生产文件（monolith 行数门 800）
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';

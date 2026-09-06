@@ -1,3 +1,7 @@
+// tests/unit/visual-mock-scenarios.test.mjs —— E2E 假后端的场景注册表
+// 假后端要与真 server 说同一套协议，注册表的分派必须精确匹配、不许重复注册
+// （重复 = 后注册的静默覆盖前一个，E2E 就在测一个不存在的场景）。
+// 覆盖：精确分派 · 命令式场景分派 · 重复注册被拒 · 业务域模块各自暴露自己的场景
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createVisualMockScenarioRegistry } from '../e2e/mock/registry.js';

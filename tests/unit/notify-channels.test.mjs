@@ -1,3 +1,8 @@
+// tests/unit/notify-channels.test.mjs —— 推送订阅的存储与双通道分发
+// 订阅文件是长期演进的用户数据，读入侧必须兼容旧格式且能滤掉坏条目——读不动就等于所有推送静默丢失。
+// 覆盖：旧版单对象格式向后兼容读成数组 · 无 endpoint 的坏条目滤除 · 按 endpoint 去重覆盖落盘
+//       · 通道开关与失败上报（OPS-3：notify_failed 必须覆盖 push 与 ntfy 两条，只计 push 会让
+//         纯 ntfy 用户的失败永不翻状态）· pushNotify 按订阅 prefs 选择收件人
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';

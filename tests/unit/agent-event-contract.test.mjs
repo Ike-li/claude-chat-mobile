@@ -1,3 +1,8 @@
+// tests/unit/agent-event-contract.test.mjs —— PROTO-01 的扫描器自身（不是名单本身）
+// 名单真相源是 app/src/shared/protocol.js，四方一致性由 tests/gates/contract-check.js 在 check 上执行；
+// 本文件测的是【那个扫描器会不会看漏】：出向扫描面必须递归覆盖 app/src/（手写清单外的模块发未登记
+// type 也要拦）、认得出 io.to(room).emit(、能抓住「契约里有但没人发」的死 type。
+// 扫描器失明的后果是静默的——contract-check 照常打绿，而浏览器那边在丢事件。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';

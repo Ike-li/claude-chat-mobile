@@ -1,3 +1,8 @@
+// tests/unit/agent-permissions.test.mjs —— 工具审批闸（APPROVAL-01/02 的会话侧）
+// 「所批即所行」的第一道现场：canUseTool 的每条分支都决定一次「模型能不能真的动手」。
+// 覆盖：sdkPermissionMode 的 bypass → default 映射 · AskUserQuestion 走提问而非审批
+//       · dontAsk → deny（防御纵深，不是主闸）· bypassPermissions → allow
+//       · 审批完整性绑定（指纹不符不执行）· 持久化台账 · 跨实例隔离（跨 tab 回答不串台）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession, awaitTtlSettled } from '../helpers/agent-unit.mjs';

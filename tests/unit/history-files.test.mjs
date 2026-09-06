@@ -1,4 +1,8 @@
-// tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
+// tests/unit/history-files.test.mjs —— 会话文件的【路径编码】（history.js 的目录/文件名这一层）
+// getProjectDir 要与 CLI 的编码口径逐字一致：算错一个字符，整个工作区的会话就在 web 端消失。
+// 覆盖：斜杠/点/下划线一律替换为 -（仅保留字母数字）· 超长路径按 CLI 口径截断+hash（含 200 字符
+//       的分界本身）· NFD 与 NFC 形式的同一路径必须编码相同（对齐 CLI 的无条件归一）
+// 这份从原 history.test.mjs 拆出，同源的还有 -list（列表扫描）、-messages（消息解析）、-sync（尾部形态）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, realpathSync, statSync, utimesSync } from 'node:fs';

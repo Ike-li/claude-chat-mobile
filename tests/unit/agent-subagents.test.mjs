@@ -1,3 +1,7 @@
+// tests/unit/agent-subagents.test.mjs —— 子 agent 消息的分流
+// 子 agent 的文本/思考/工具调用要带 parent 标记单独走，【绝不能污染主 agent 的文本缓冲】——
+// 混进去会让主对话凭空多出几段不属于它的内容。
+// 覆盖：text_delta / thinking_delta / tool_use 的分流与 parent 归属 · 主缓冲不受污染
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';

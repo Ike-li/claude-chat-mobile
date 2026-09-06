@@ -1,4 +1,9 @@
-// tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
+// tests/unit/history-list.test.mjs —— 会话列表的扫描与元数据提取
+// listSessions 决定抽屉里看到哪些会话、每条显示什么标题/模型/驱动方，读的是 CLI 写的 JSONL 目录。
+// 覆盖：目录不存在/无 jsonl 的空数组回落 · title/model/entrypoint 提取
+//       · entrypoint-marker 假行不得冒充真实 entrypoint（判错驱动方会打穿单驾驶员模型）
+//       · ai-title 优先于首条 user 文本 · peekSessionListTitle 与 listSessions 同源
+// 这份从原 history.test.mjs 拆出，同源的还有 -files（路径编码）、-messages、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';

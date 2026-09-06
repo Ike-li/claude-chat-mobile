@@ -1,3 +1,10 @@
+// tests/unit/agent-lifecycle.test.mjs —— AgentSession 的【生命周期与退出对称性】
+// 核心问法：进程怎么死的都要留下同样干净的现场——dispose / checkIdle 回收 / consume 自然退出
+// 三条路径必须清同一批表（静默看护、delta 攒批、待决权限），漏一条就是永久 busy 或幽灵事件。
+// 覆盖：formatLifecycle* 文案（含 gatewayStall「报秒数但不宣称已中断」）· 三条退出路径的清理对称性
+//       · lastActivity 刷新规则 · pendingRequestsSnapshot
+// ⚠ 本文件混着两批 review 的 RN 编号：R1/R2/R3 是 2026-08-10 真机排障，R3(08-06)/R4(08-06) 是
+//    2026-08-06 BUG hunting review。看到 RN 先看它旁边的日期。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

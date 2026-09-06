@@ -1,3 +1,8 @@
+// tests/unit/reachable-ipv4s.test.mjs —— 「手机能连的地址」枚举
+// 启动横幅与二维码用它。判据【与接口名无关】：不按 en0/utun 这种名字猜，只看地址段——
+// 假网段在哪种接口上都排除，好地址在哪种接口上都保留（隧道接口上的私网地址同样要显示，
+// 那是 WireGuard/Tailscale 用户的唯一入口）。
+// 覆盖：物理网卡常规局域网地址 · 隧道接口私网地址 · 排除 loopback/link-local/RFC2544 基准段
 import test from 'node:test';
 import assert from 'node:assert/strict';
 

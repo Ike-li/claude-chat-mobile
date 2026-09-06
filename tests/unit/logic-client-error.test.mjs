@@ -1,3 +1,7 @@
+// tests/unit/logic-client-error.test.mjs —— 前端错误上报的载荷构造与限流闸
+// 上报本身不能变成新的故障源：超长 message/stack 要钳制、空 message 要有占位符、
+// 同签名错误在窗口内只放一次（一个渲染循环里的重复报错会瞬间打爆通道）。
+// 覆盖：error 与 unhandledrejection 两种事件的载荷 · 签名含定位信息 · 钳制 · 同签名限流
 // logic.js 前端全局错误上报域纯函数单测：错误事件→上报载荷/签名、去重+限流门步进。
 import test from 'node:test';
 import assert from 'node:assert/strict';

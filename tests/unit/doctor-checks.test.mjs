@@ -1,3 +1,8 @@
+// tests/unit/doctor-checks.test.mjs —— doctor 的【纯判定函数】逐条
+// 每个 xxxDiagnostic 都是「读一份快照 → 出一条 ok/warn/fail + 可操作 detail」，这里只测判定本身，
+// 不起 server、不碰真实 HOME（组装与 readiness 汇总在 doctor-runtime.test.mjs）。
+// 覆盖：危险白名单分级 · AUTH_TOKEN 绝不回显明文 · 监听地址自洽（D22）· 设备门拓扑 · 模型档位冲突
+//       · 附件目录只报可见性不自动删（R9，2026-08-06）· 直写通道 × 公网迹象（R45，2026-08-30）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';

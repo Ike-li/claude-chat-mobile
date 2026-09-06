@@ -1,3 +1,7 @@
+// tests/unit/server-socket.test.mjs —— socket 事件注册器的统一闸
+// 所有入向事件都经这一层，所以鉴权、设备门、错误转 nack 只在这里写一次。
+// 覆盖：未鉴权连接的业务事件一律拒 · handler 抛错转成 nack 而不是打死进程
+//       · 带尾随 ack 的调用在失败时也要 nack（否则客户端永远在等）· 未审批设备被拒
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createSocketEventRegistrar } from '../../app/src/server/socket.js';

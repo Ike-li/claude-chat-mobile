@@ -1,3 +1,8 @@
+// tests/unit/statusline-bridge-runner.test.mjs —— statusline wrapper 在 CLI 侧的运行时行为
+// 它套在用户原本的 statusline 命令外面，所以第一纪律是【透明】：原命令的 stdout 与非零退出码
+// 必须原样传出去，绝不因为快照写失败就改变用户看到的 statusline。
+// 覆盖：web-sdk origin 不 capture · standalone CLI 透明渲染并写新鲜快照
+//       · 未传 --snapshot-dir 时尊重 CLI_STATUSLINE_DIR · renderer 非零退出码保持透明
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

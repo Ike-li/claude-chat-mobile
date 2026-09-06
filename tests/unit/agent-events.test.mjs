@@ -1,3 +1,8 @@
+// tests/unit/agent-events.test.mjs —— SDK 消息 → agent:event 契约事件的【翻译层】
+// map() 是唯一的翻译点，错一条 type 或漏一个字段，浏览器就静默少一块 UI。
+// 覆盖：system/init 的 sessionId 更新与 /clear 换会话重置 · permissionMode 的漂移对账
+//       （本地 plan vs SDK default 要纠正，bypass 是例外要保留用户档；旧 CLI 无该字段则跳过对账）
+//       · per-turn 的 turnStartedAt / turnOutputTokens 归属
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSession } from '../../app/src/agent/agent.js';

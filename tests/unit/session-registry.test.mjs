@@ -1,3 +1,8 @@
+// tests/unit/session-registry.test.mjs —— ~/.claude/sessions/<PID>.json 的读取与活性判定
+// 这是判断「终端是不是正驾驶着这个会话」的权威来源（比尾部形态猜测强一档），镜像锁与 stale 文案都用它。
+// 它读的是别人写的目录，因此全程 fail-open + 防御式解析：pid 验活、cwd/sessionId 双匹配、
+// 损坏 JSON/symlink/非 json 一律跳过、目录不存在返回 null 而不抛。
+// 覆盖：上述判据 + 同 sessionId 多 PID（sdk 与 cli 并存的实测形态）+ cliPresenceStep 的负证据推进
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';

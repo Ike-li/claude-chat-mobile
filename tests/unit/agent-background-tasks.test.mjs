@@ -1,3 +1,8 @@
+// tests/unit/agent-background-tasks.test.mjs —— 后台任务（子 agent / 纯后台 ⏳）与 query 选项装配
+// 覆盖：buildAgentQueryOptions 的开关与 env 白名单（防 worktree 的 settings 把服务端 PORT/AUTH_TOKEN
+//       覆盖掉——只放行 ANTHROPIC_* / CLAUDE_CODE_* 前缀，大小写不绕过）
+//       · task_notification 通知 · 活的后台任务注册表 bgTasks · background_tasks_changed 全量 reconcile
+//       · 本地 slash 命令的进度归并
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getSessionLogs } from '../../app/src/agent/interaction-log.js';

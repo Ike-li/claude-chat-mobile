@@ -1,3 +1,7 @@
+// tests/unit/statusline-bridge-setup.test.mjs —— statusline 桥的安装/卸载（会动用户的 ~/.claude/settings.json）
+// 这是两个「显式安装才动全局」的桥之一，纪律比功能重要：status 只读不写、install 先原子备份原命令再包
+// 透明 wrapper、重复执行幂等（不覆盖原始备份、不把 wrapper 再套一层）、win32 明确拒绝而不是写坏。
+// 卸载必须对称——把备份的原命令放回去，而不是删成空。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

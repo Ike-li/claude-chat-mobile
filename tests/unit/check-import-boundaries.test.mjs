@@ -1,3 +1,7 @@
+// tests/unit/check-import-boundaries.test.mjs —— 模块边界门禁自身
+// 第一条用例拿【真实仓库】跑，保护当前的干净分层；其余用最小假树逐条验四条规则会不会误判/漏判。
+// 覆盖：前端 import 后端 → 违规 · shared 反向 import 上层域 → 违规（叶子层规则）
+//       · 白名单内的前后端共享纯逻辑不报（canonicalize / logic）· 循环依赖检测
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

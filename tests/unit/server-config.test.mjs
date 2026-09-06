@@ -1,3 +1,8 @@
+// tests/unit/server-config.test.mjs —— 启动时的配置装载优先级（CONFIG-01 的读取侧）
+// 唯一要钉死的事：面板/CLI 写入的那份，必须就是启动时读的那份；写错源 = 假成功。
+// 覆盖：ccm.config.json 优先、缺失才回落 .env · shell env 始终压过文件
+//       · shell 里的空串 AUTH_TOKEN/CCM_DATA_DIR 算「显式置空」而不是「未设置」
+//       · 测试子进程的显式空认证配置不被 .env 悄悄填回来
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -1,3 +1,6 @@
+// tests/unit/logic-session-search.test.mjs —— 会话抽屉的标题搜索（纯函数）
+// 覆盖：空/空白 query 全匹配 · 大小写不敏感子串 · 搜索键的收集顺序（summary/aiTitle/首条 user 文本）
+//       · remainingOlderSessionCount 折叠计数
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

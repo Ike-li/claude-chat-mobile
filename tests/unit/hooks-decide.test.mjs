@@ -1,3 +1,9 @@
+// tests/unit/hooks-decide.test.mjs —— CLI hooks 投递箱事件的分派判定
+// 决定一条 hook 事件要不要触发 catchUp、要不要推送、要不要丢弃。
+// 覆盖：命中当前查看会话 → 触发一次 catchUp（多条事件不重复置位）
+//       · 非当前查看会话 → 不 catchUp 但仍失效该 cwd 的列表缓存
+//       · cwd 不在工作区白名单 → 整条丢弃并计数（这台机器上别的项目的会话不该干扰本产品）
+//       · verify 事件只出 ack（安装回环验证专用，不推送不刷新）
 // hook 事件 → 动作的决策层（纯函数，推送/刷新/白名单/节流全在这层可测）。
 import test from 'node:test';
 import assert from 'node:assert/strict';

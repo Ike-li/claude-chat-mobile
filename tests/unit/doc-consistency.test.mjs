@@ -1,3 +1,7 @@
+// tests/unit/doc-consistency.test.mjs —— 文档一致性门禁自身（被测的是 scripts/doc-consistency.js）
+// 它守着「文档里写的东西还成立吗」：死链、引用了不存在的 npm script、依赖版本漂移、契约计数漂移。
+// 覆盖：npm script 提取只认 package 里真有的 · major 版本漂移拦截（不只 SDK）
+//       · 契约计数漂移（出向 type 数 / 入向事件数，中英文档都要拦——只守中文会造成守卫不对称）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

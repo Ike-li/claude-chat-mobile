@@ -1,3 +1,5 @@
+// tests/unit/collect-source-files.test.mjs —— 语法检查的文件遍历器
+// 覆盖：递归发现项目 JS、跳过 node_modules（扫进依赖会让语法门禁在别人的代码上报错）。
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -1,6 +1,10 @@
-// tests/unit/logic.test.mjs —— app/public/js/logic.js 纯逻辑单测（node 内置 test runner，零依赖）。
-// 跑法：npm test （= node --test）。覆盖 model 桥接 / effort 档位 / 状态优先级 / ANSI 配平 / esc。
-// 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机）。
+// tests/unit/logic-session.test.mjs —— 会话/工作区维度的状态聚合（抽屉与首页角标的判据）
+// 覆盖：aggregateStates 的状态优先级 permission>error>busy>done>idle
+//       · worktree cwd 归入最长前缀父仓（K2 角标）· 实例 cwd 不在 dirs 时也要计入
+//       · resolveDrawerStatus——「需要你」与「出错」优先于 Web/终端运行态
+// 这里的优先级不是审美选择：把「需要你」排在运行态后面，用户就会看着一个转圈图标等一个
+// 其实在等他回答的会话。
+// 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';

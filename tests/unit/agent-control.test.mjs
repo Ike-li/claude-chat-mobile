@@ -1,3 +1,8 @@
+// tests/unit/agent-control.test.mjs —— AgentSession 的【控制面】：谁能发、谁能打断、谁能停
+// 覆盖：logMeta 的模型/档位回落链 · send() 的在途轮闸（拒收时不得留下半条账目）
+//       · interrupt() · stopTask()（停单个后台任务 = 终端 Ctrl+X Ctrl+K，不碰主队列）
+//       · fetchUsage() 那套昂贵 RPC 的节流 / 在途去重 / 连续失败退避
+// 不含生命周期与事件映射：dispose/checkIdle/consume 在 agent-lifecycle，SDK 消息翻译在 agent-events。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';

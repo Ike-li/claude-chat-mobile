@@ -1,3 +1,8 @@
+// tests/unit/server-file-handlers.test.mjs —— socket 文件面的 handler（SCOPE-01 的接线侧）
+// 所有文件操作共用一张门表：越界一律 fail-closed 且【记审计】，审计的 target 记真实落点所属
+// workdir 而不是请求声明的 cwd（R10，2026-08-06——记错了归属，事后追责会指向错误的项目）。
+// 覆盖：browse/read/write/search/git 各自的范围门 · 越界审计的 via 标注 · 无 ack 时的静默路径
+// 纯函数判据在 tests/invariants/workdir-scope-guard.test.mjs，真组装根在 server/files-scope.test.mjs。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { registerFileSocketHandlers } from '../../app/src/server/socket-files.js';

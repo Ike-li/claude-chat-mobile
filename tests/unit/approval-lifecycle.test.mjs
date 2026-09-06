@@ -1,3 +1,7 @@
+// tests/unit/approval-lifecycle.test.mjs —— 审批的保留期与遗留 pending 处置（APPROVAL-02 的纯函数侧）
+// 覆盖：APPROVAL_RETENTION_DAYS 的解析（0/负数/非数字回落默认 90 天，不让脏配置把台账清空）
+//       · expireOrphanedPending 把重启后遗留的 pending 标 expired 并记 decidedBy
+// 真组装根上的重启行为在 tests/invariants/server/approval-restart.test.mjs（S2）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 

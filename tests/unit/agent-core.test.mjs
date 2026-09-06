@@ -1,3 +1,8 @@
+// tests/unit/agent-core.test.mjs —— AgentSession 的基础件：构造、忙判定、事件环形缓冲
+// isBusy 是【综合】忙判定（BE-008）：pendingTurns 与后台任务任一非空都算忙。
+// 这一点与 /health.busy 只认 pendingTurns（OPS-04）刻意不同——切 effort 档要用综合判定，
+// 否则会在后台任务还跑着的时候误杀它；而运维探针要的是「有没有在途轮」。两个判据别混用。
+// 覆盖：isBusy 各组合 · 构造函数 · emit/buffer/eventsSince · sdkChildEnv 的 origin 标记不可被调用方覆盖
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSession } from '../../app/src/agent/agent.js';

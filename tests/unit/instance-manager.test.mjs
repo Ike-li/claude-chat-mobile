@@ -1,3 +1,8 @@
+// tests/unit/instance-manager.test.mjs —— 多实例注册表：ID、每实例偏好、状态优先级
+// 覆盖：forSession 跳过正在终止/已 dispose 的实例（bind 到即将消失的实例会让历史渲染中途空屏）
+//       · 实例状态优先级 permission > busy > aborted > idle
+//       · anyTurnRunning 只认 pendingTurns，后台任务不算——它与 stateOf 是两个判据，
+//         /health.busy 用的是前者（OPS-04），混用会把「有后台任务但空闲」报成忙
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

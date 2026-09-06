@@ -1,4 +1,10 @@
-// tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
+// tests/unit/history-sync.test.mjs —— 磁盘 transcript 的【尾部形态判定与外部增长追平】
+// classifyTranscriptTail 从尾部条目读出「轮次完结没有」，镜像锁据此决定手机能不能写——
+// 判错两个方向都伤：该锁不锁 → 两端并发写、会话分叉；该解不解 → 手机输入框永久只读。
+// 覆盖：tail 的 settled/pending 六种形态（含只落 thinking、子 agent 开着 tool_use）
+//       · rebaselineAbsorbedExternal（BE-009）· 等审批期间的终端写入必须标脏 · scanSubagents
+// 文件里两条 test.skip 是【有意保留的已知边界基线】，不是待修 bug。
+// 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-messages。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
