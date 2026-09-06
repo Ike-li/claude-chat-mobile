@@ -127,11 +127,11 @@ test('拦: 宿主机原生 test:playground（必须走 test:docker:playground）
 });
 
 // 白名单靠精确相等匹配，而这三个脚本名只差一个后缀。脚本名捕获的字符类一旦漏掉 `:`
-// 就会把 test:v2:env 截成 test:v2 命中白名单 —— 洞开在「看起来更严格」的方向上，不会有人察觉。
-test('边界: test:v2 放行，但 test:v2:env / test:v2:server 必须拦下（只差后缀）', () => {
-  allowed('npm run test:v2');
-  blocked('npm run test:v2:server');   // 起真 app/server.js 子进程
-  blocked('npm run test:v2:env');      // 跑卸载器：隔离依赖被测代码认注入的 home/root/appPath
+// 就会把 test:invariants:env 截成 test:invariants 命中白名单 —— 洞开在「看起来更严格」的方向上，不会有人察觉。
+test('边界: test:invariants 放行，但 test:invariants:env / test:invariants:server 必须拦下（只差后缀）', () => {
+  allowed('npm run test:invariants');
+  blocked('npm run test:invariants:server');   // 起真 app/server.js 子进程
+  blocked('npm run test:invariants:env');      // 跑卸载器：隔离依赖被测代码认注入的 home/root/appPath
 });
 
 // TDD 单文件循环必须留出来，否则「写一个失败测试→最小实现」这一步会被钩子逐次打断，

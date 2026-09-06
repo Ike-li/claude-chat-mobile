@@ -1,14 +1,31 @@
-// tests/unit/mirror-sync.test.mjs —— 同步主线 code-review 发现的【红灯/待修】测试。
+// tests/unit/mirror-sync.test.mjs —— 只读镜像锁的四个决策纯函数（history.js）：
+//   mirrorReleaseStep（每 tick 决定上锁/维持/解锁）· mirrorEntryLock（切入会话瞬间的预锁判定）
+//   mirrorStaleFlag（锁着但疑似终端已死 → 文案转「可接管」）· describeMirrorEntryLock（诊断打包）
+// 加上 catchUpStep 的 busy→idle 吸收边界，与 classifyTailEntries 的尾部形态判定。
 //
-// ⚠️ 本文件里的 RED 用例【当前故意失败】，用来把两个 review 发现钉成可复现的红灯，作为"实现前 review 关口"。
-//    确认修复方向后再最小实现让它们转绿；在此之前它们会让 test:unit 变红（预期内）。
-//    每个 RED 用例都把"内置的设计假设"写在注释里——那正是需要你拍板的分叉点。
+// 这四个函数是单驾驶员模型（web / CLI 不得同时写同一条 JSONL）的判据所在，判错的两个方向都伤：
+// 该锁不锁 → 两端并发写、会话从旧位置分叉；该解不解 → 手机输入框永久只读，用户以为坏了。
+// 文件里几乎每条用例背后都是一次真实故障（长工具零写盘误解锁 · 重连重评丢锁 · 陈旧 pending 每次
+// 打开都弹接管横幅 · 杀掉 CLI 后续接卡死 · 开着审批框忘关把手机锁死），注释里写了当时的现场。
 //
-// 用 namespace import：mirrorReleaseStep 尚未导出，具名 import 会在 ESM 链接期整文件报错；
-// namespace 下未导出成员是 undefined，调用即在【单个】用例里失败，不连累同文件其余用例。
+// 【文件名与"发现 1 / 发现 2"的由来】本文起初是同步主线 code-review 的【红灯关口】——两个 review
+// 发现先写成必然失败的用例，等拍板了修复方向再实现让它转绿。那四个函数当时都还没有，所以原来用
+// namespace import + 每条开头一句 typeof 存在性断言来兜住"未导出"。2026-09-05 收尾：函数早已全部
+// 实现、用例早已全绿，遗留的"RED"命名与"待实现"断言消息会在真出问题时把人指向错误方向（它会说
+// "这功能还没实现"，而实际是"有人把导出改坏了"），一并清掉。改回具名 import 后，导出缺失在 ESM
+// 链接期就报错，比运行时断言更早也更准。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as H from '../../app/src/sessions/history.js';
+import {
+  catchUpStep,
+  classifyTailEntries,
+  describeMirrorEntryLock,
+  mirrorEntryLock,
+  mirrorReleaseStep,
+  mirrorStaleFlag,
+  MIRROR_RELEASE_QUIET_TICKS,
+  MIRROR_STALE_PENDING_MS,
+} from '../../app/src/sessions/history.js';
 
 // 与 history.test.mjs 同款消息构造器（那边是文件内局部、未导出，这里重定义）。
 const M = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
@@ -19,7 +36,8 @@ const M = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' 
 // 决策（见对话）：【记为已知边界，不修】。触发面窄（用户须停留不切走 + 恰好在自己 turn 运行期间终端并发写
 //   同一会话），切走时前端 diskLen 重载（logic.js shouldReloadOnEnter）能兜住大部分；稳健修复（server 传
 //   ownDelta 计数 / 内容比对）代价不划算、易 off-by-N 反造重复。已在 history.js catchUpStep 注释标注该边界。
-// 下面这条 RED 用 skip 保留，作为「已知边界」的活文档：若将来有人想修，取消 skip 即得复现基线。
+// 下面这条是本文件唯一一条仍然故意失败的用例（靠 skip 挂着），作为「已知边界」的活文档：
+// 想修时取消 skip 即得复现基线。别把它当成待修 bug 反复报——不修是决策，不是遗漏。
 // 「整段吸收是有意契约」的正向护栏已由 history.test.mjs 的
 //   'catchUpStep: busy→idle → 吸收己方 turn 写盘（重置 baseline、不推）' 覆盖（改坏即红）。
 
@@ -27,7 +45,7 @@ test.skip('发现2 已知边界（不修）：外部写入撞进本地 turn 的 
   // 复现基线（想修时取消 skip）：turn 前 baseline=2；本地 turn 自写 2 条(m2,m3)；同窗口终端外部写 1 条(m4)。
   // busy→idle 那一 tick，catchUpStep 走 wasBusy 分支整段吸收 → emit []、baseline=5；外部的 m4 停留期间不回显，
   // 须切走该会话经前端 diskLen 重载才追平。若未来实现区分己方/外部（ownDelta / 内容比对），此处应能追平 m4。
-  const r = H.catchUpStep({ baseline: 2, wasBusy: true }, { messages: M(5), localBusy: false });
+  const r = catchUpStep({ baseline: 2, wasBusy: true }, { messages: M(5), localBusy: false });
   assert.deepEqual(r.emit.map(m => m.content), ['m4'], '想修时的靶心：外部 m4 应追平（现状 emit [] = 已知边界）');
 });
 
@@ -46,63 +64,57 @@ test.skip('发现2 已知边界（不修）：外部写入撞进本地 turn 的 
 //    · 或不自动解锁、只改 UX（如横幅显式提示"点此接管"更醒目）——那本发现就降级为设计取舍而非 bug。
 //    下面按"自动解锁"方向把期望钉红；若你选"不自动解锁"，删掉本节即可。
 
-test('发现1 RED：终端静默 + web idle 后，只读锁应自动释放（当前实现永不释放）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function',
-    '待实现：history.js 尚未导出 mirrorReleaseStep（当前只读锁的释放逻辑内联在 catchUpTick、无纯函数、无自动释放）');
+test('mirrorReleaseStep：终端静默 + web idle 满阈值后自动释放只读锁', () => {
   let s = { readonly: false, quietTicks: 0 };
   // 观测到外部写入 → 上锁
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false });
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false });
   assert.equal(r.readonly, true, '外部写入应上只读锁'); s = r.state;
   // 此后终端静默、web idle：连续若干 tick 后应自动解锁
-  for (let i = 0; i < 5; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 5; i++) { r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; }
   assert.equal(r.readonly, false, '终端静默 5 tick 后应自动解锁；现状无任何释放路径 → 永远 true');
 });
 
 test('阈值边界钉点（code-review P2）：恰好 QUIET_TICKS-1 个静默 tick 仍应保持只读，不早不晚', () => {
   // 此前只测了 tick=1（远未到阈值）和 tick=5（达阈值），漏了阈值前一步这个最容易被 < / <= 改错的边界。
-  assert.equal(typeof H.MIRROR_RELEASE_QUIET_TICKS, 'number');
+  assert.equal(typeof MIRROR_RELEASE_QUIET_TICKS, 'number');
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
-  for (let i = 0; i < H.MIRROR_RELEASE_QUIET_TICKS - 1; i++) {
-    r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state;
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  for (let i = 0; i < MIRROR_RELEASE_QUIET_TICKS - 1; i++) {
+    r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state;
   }
-  assert.equal(r.readonly, true, `恰好 ${H.MIRROR_RELEASE_QUIET_TICKS - 1} 个静默 tick（阈值前一步）仍应保持只读`);
+  assert.equal(r.readonly, true, `恰好 ${MIRROR_RELEASE_QUIET_TICKS - 1} 个静默 tick（阈值前一步）仍应保持只读`);
 });
 
-test('发现1 RED：静默未达阈值前不得提前解锁（防并发写分叉）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+test('mirrorReleaseStep：静默未达阈值前不得提前解锁（防并发写分叉）', () => {
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
   // 仅 1 个静默 tick：远未到阈值，必须仍锁（保守，避免终端只是 turn 内短暂停顿就解锁）
-  r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false });
+  r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false });
   assert.equal(r.readonly, true, '单个静默 tick 不足以判定终端已停 → 仍应保持只读');
 });
 
-test('发现1 RED：静默期间又见外部写入 → 重新计时（不得因之前攒的静默而马上解锁）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+test('mirrorReleaseStep：静默期间又见外部写入 → 重新计时（不得因之前攒的静默而马上解锁）', () => {
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state;
-  for (let i = 0; i < 4; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; } // 攒 4 个静默
-  r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 又来外部写入 → 应清零重计
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state;
+  for (let i = 0; i < 4; i++) { r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; } // 攒 4 个静默
+  r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 又来外部写入 → 应清零重计
   assert.equal(r.readonly, true, '仍锁');
-  r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false });
+  r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false });
   assert.equal(r.readonly, true, 'quietTicks 应已被新外部写入清零，不能凭旧的 4 个静默立刻解锁');
 });
 
-test('发现1：web 自己在跑 turn(localBusy) → 保持当前锁态、不借己方忙碌攒静默', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+test('mirrorReleaseStep：web 自己在跑 turn(localBusy) → 保持当前锁态、不借己方忙碌攒静默', () => {
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
   // web 自己忙：终端静默无从判断 → 锁态不变、quietTicks 清零（不能靠己方 turn 把静默攒够而误解锁）
-  for (let i = 0; i < 9; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: true }); s = r.state; }
+  for (let i = 0; i < 9; i++) { r = mirrorReleaseStep(s, { externalWrite: false, localBusy: true }); s = r.state; }
   assert.equal(r.readonly, true, '整段 localBusy 期间应保持只读，不因己方忙碌累计静默而解锁');
   assert.equal(s.quietTicks, 0, 'localBusy 每 tick 清零 quietTicks');
 });
 
-test('发现1：未上锁时 idle 不产生锁、quietTicks 恒 0（无终端活动不误锁）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+test('mirrorReleaseStep：未上锁时 idle 不产生锁、quietTicks 恒 0（无终端活动不误锁）', () => {
   let s = { readonly: false, quietTicks: 0 };
-  for (let i = 0; i < 3; i++) { const r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 3; i++) { const r = mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state; }
   assert.equal(s.readonly, false, '从未观测外部写入 → 不应凭空上锁');
   assert.equal(s.quietTicks, 0);
 });
@@ -116,31 +128,28 @@ test('发现1：未上锁时 idle 不产生锁、quietTicks 恒 0（无终端活
 // 优先级：externalWrite（上锁）> localBusy（保持）> 未锁（不上锁）> keepAlive（已锁则维持）> 静默累计。
 
 test('keepAlive：已锁 + 文件持续增长（终端跑工具、无 text 新消息）→ 维持锁、不累计静默、绝不误解锁', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
   // 此后 12 tick 均无 text 新消息(externalWrite=false)，但文件在长(keepAlive=true)=终端在跑工具/思考
-  for (let i = 0; i < 12; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 12; i++) { r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
   assert.equal(r.readonly, true, 'keepAlive 期间终端仍在写盘 → 横幅应维持，绝不因静默累计而熄');
   assert.equal(s.quietTicks, 0, 'keepAlive 每 tick 把 quietTicks 清零');
 });
 
 test('keepAlive：未上锁时文件增长不上锁（上锁只靠 text externalWrite，不误判 web 自身写盘）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  for (let i = 0; i < 8; i++) { const r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 8; i++) { const r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
   assert.equal(s.readonly, false, '从未 text 写入 → 即便文件在长也不上锁');
 });
 
 test('keepAlive：终端「跑工具」转「真静默」→ keepAlive 停止后连续 5 静默 tick 才自动解锁', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
-  for (let i = 0; i < 6; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; } // 跑工具中
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  for (let i = 0; i < 6; i++) { r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; } // 跑工具中
   assert.equal(r.readonly, true, '跑工具期间(文件在长)仍锁');
-  for (let i = 0; i < 4; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false }); s = r.state; } // 终端真停、文件不再长
+  for (let i = 0; i < 4; i++) { r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false }); s = r.state; } // 终端真停、文件不再长
   assert.equal(r.readonly, true, '真静默 4 tick 未达阈值 → 仍锁');
-  r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false });
+  r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false });
   assert.equal(r.readonly, false, '真静默满 5 tick → 自动解锁');
 });
 
@@ -154,32 +163,29 @@ test('keepAlive：终端「跑工具」转「真静默」→ keepAlive 停止后
 // （assistant 中途 text 落盘紧跟 tool_use 的落盘间隙），tailPending 罩长工具零写入窗。
 
 test('tailPending：已锁 + 长工具调用零写入（文件不长、无 text）→ 维持锁、绝不因静默累计误解锁', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
   // 此后 12 tick(30s)：终端卡在一条长 bash 上，磁盘零写入——keepAlive=false、externalWrite=false，
   // 但尾部形态=tool_use 未见结果 → tailPending=true。原实现第 5 tick 就误解锁（用户报的 bug）。
-  for (let i = 0; i < 12; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 12; i++) { r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
   assert.equal(r.readonly, true, '尾部形态=轮次未完结 → 不管磁盘静默多久都维持锁');
   assert.equal(s.quietTicks, 0, 'tailPending 每 tick 把 quietTicks 清零');
 });
 
 test('tailPending：未上锁时不凭空造锁（上锁只靠 externalWrite / 切入预判，形态误判不锁死输入）', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  for (let i = 0; i < 8; i++) { const r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
+  for (let i = 0; i < 8; i++) { const r = mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
   assert.equal(s.readonly, false, '未锁 + tailPending → 保持未锁');
 });
 
 test('tailPending：轮次收尾（pending→settled）后走原静默解锁——连续 5 静默 tick 才解', () => {
-  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
-  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state;      // 上锁
-  for (let i = 0; i < 8; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: true, localBusy: false }); s = r.state; } // 长工具中
+  let r = mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state;      // 上锁
+  for (let i = 0; i < 8; i++) { r = mirrorReleaseStep(s, { externalWrite: false, tailPending: true, localBusy: false }); s = r.state; } // 长工具中
   assert.equal(r.readonly, true);
-  for (let i = 0; i < 4; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false }); s = r.state; } // 收尾且真静默
+  for (let i = 0; i < 4; i++) { r = mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false }); s = r.state; } // 收尾且真静默
   assert.equal(r.readonly, true, 'settled 后静默 4 tick 未达阈值 → 仍锁');
-  r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false });
+  r = mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false });
   assert.equal(r.readonly, false, 'settled 后真静默满 5 tick → 解锁');
 });
 
@@ -192,21 +198,20 @@ test('tailPending：轮次收尾（pending→settled）后走原静默解锁—�
 //   轮次没写完就死了：前端从「终端驾驶中」转「疑似中断、可接管」文案。仅在锁态下才有意义。
 
 test('mirrorEntryLock：切入时尾部 pending 且 web 空闲 → 预锁；settled / 己方在跑 → 不锁', () => {
-  assert.equal(typeof H.mirrorEntryLock, 'function', '待实现：mirrorEntryLock');
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false }), true, '外部驱动中 → 预锁');
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false }), false, '已收尾 → 不锁');
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true }), false, '己方 turn 的 pending 形态 → 不误锁');
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false }), true, '外部驱动中 → 预锁');
+  assert.equal(mirrorEntryLock({ tailVerdict: 'settled', localBusy: false }), false, '已收尾 → 不锁');
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: true }), false, '己方 turn 的 pending 形态 → 不误锁');
 });
 
 test('mirrorEntryLock：陈旧 pending（lastChainTs 超 5 分钟）→ 切入不预锁（修每次重启/打开都弹接管横幅）', () => {
   // 真机：Official 工作区尾部是用户发完就走的骂人消息（~16h 前），形态 pending 但无活终端。
   // 旧实现预锁 + stale → 每次 server 重启 / 切入都弹「疑似中断、可接管」。
   const now = 1_800_000_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
-  const under = now - H.MIRROR_STALE_PENDING_MS + 1000;
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false, '陈旧 pending → 不预锁');
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now }), true, '新鲜 pending → 仍预锁（可能是长工具）');
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now }), true, '无时间戳 → 保守预锁（形态仍 pending）');
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
+  const under = now - MIRROR_STALE_PENDING_MS + 1000;
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false, '陈旧 pending → 不预锁');
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now }), true, '新鲜 pending → 仍预锁（可能是长工具）');
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now }), true, '无时间戳 → 保守预锁（形态仍 pending）');
 });
 
 // 2026-07-29：陈旧 pending 豁免撞上「重连必重评」= 长回合期间一次网络抖动就永久丢锁。
@@ -219,31 +224,30 @@ test('mirrorEntryLock：陈旧 pending（lastChainTs 超 5 分钟）→ 切入�
 // 上一刻还锁着，那就不是"隔天打开"，应当维持。stale 文案照旧由 mirrorStaleFlag 给（锁着但提示可接管）。
 test('mirrorEntryLock：同会话重连重评时 prevReadonly 维持已有锁，不被陈旧 pending 豁免清掉', () => {
   const now = 1_800_000_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
     true, '上一刻锁着 + 形态仍 pending → 维持锁（长工具跨过 5 分钟不该丢锁）');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: false }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: false }),
     false, '真会话切换（无前序锁）→ 陈旧豁免照旧生效，不误锁');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
+    mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
     false, '形态已收尾 → 即便上一刻锁着也不维持（终端真收工了，交回写权）');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, prevReadonly: true }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, prevReadonly: true }),
     false, 'localBusy 豁免优先级不变：己方 turn 的 pending 形态不算外部驾驶');
 });
 
 test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未超/未锁/已收尾/无时间戳 → 非 stale', () => {
-  assert.equal(typeof H.mirrorStaleFlag, 'function', '待实现：mirrorStaleFlag');
-  assert.equal(typeof H.MIRROR_STALE_PENDING_MS, 'number');
+  assert.equal(typeof MIRROR_STALE_PENDING_MS, 'number');
   const now = 1_800_000_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1, under = now - H.MIRROR_STALE_PENDING_MS + 1000;
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '超阈值 → 疑似中断');
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now }), false, '未超阈值 → 仍算驾驶中');
-  assert.equal(H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: over, now }), false, '未锁 → stale 无意义');
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: over, now }), false, '已收尾 → 非中断');
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
+  const over = now - MIRROR_STALE_PENDING_MS - 1, under = now - MIRROR_STALE_PENDING_MS + 1000;
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '超阈值 → 疑似中断');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now }), false, '未超阈值 → 仍算驾驶中');
+  assert.equal(mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: over, now }), false, '未锁 → stale 无意义');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: over, now }), false, '已收尾 → 非中断');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
 });
 
 test('mirrorStaleFlag：cli 注册表负证据（曾在→消失）→ 立即 stale 不等 5 分钟；registryBusy 仍压制', () => {
@@ -251,44 +255,43 @@ test('mirrorStaleFlag：cli 注册表负证据（曾在→消失）→ 立即 st
   // 尾部 pending 与「长工具零写盘」形态相同，唯一能提前区分的是注册表负证据（条目曾在→消失）。
   const now = 1_800_000_000_000;
   const under = now - 60_000; // 仅 1 分钟前，远未到 5 分钟阈值
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), true, '负证据 → 立即 stale');
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: false }), false, '无负证据 → 维持 5 分钟保守窗');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), true, '负证据 → 立即 stale');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: false }), false, '无负证据 → 维持 5 分钟保守窗');
   // 终端关了又开新进程（busy 新鲜自报）→ 活驾驶员优先于历史负证据
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true, registryBusy: true }), false, '新活终端压制');
-  assert.equal(H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), false, '未锁 → 无意义');
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: under, now, cliRegistryVanished: true }), false, '已收尾 → 非中断');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true, registryBusy: true }), false, '新活终端压制');
+  assert.equal(mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), false, '未锁 → 无意义');
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: under, now, cliRegistryVanished: true }), false, '已收尾 → 非中断');
 });
 
 // describeMirrorEntryLock：诊断时间线用——只打包 catchUpTickOnce 已经算出的 mirrorEntryLock 判定
 // 供诊断记录展示，不重复判定逻辑本身（locked 由调用方传入，这里只加一个 agedOutStale 派生字段）。
 test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段（不重复判定逻辑）', () => {
-  assert.equal(typeof H.describeMirrorEntryLock, 'function', '待实现：describeMirrorEntryLock');
   const now = 1_800_000_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
-  const under = now - H.MIRROR_STALE_PENDING_MS + 1000;
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
+  const under = now - MIRROR_STALE_PENDING_MS + 1000;
 
   assert.deepEqual(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
+    describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
     '新鲜 pending 且已锁 → agedOutStale=false',
   );
 
   assert.deepEqual(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
+    describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
     '陈旧 pending 且未锁 → agedOutStale=true，与 mirrorEntryLock 的不锁判定一致',
   );
 
   // 同会话重连维持锁的那条路径：agedOutStale=true 却 locked=true，若不记 prevReadonly，
   // 事后读诊断时间线会觉得两个字段自相矛盾、看不出锁是被谁维持的。
   assert.deepEqual(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: true, prevReadonly: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: true, tailEntrypoint: null },
+    describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: true, prevReadonly: true }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: true, tailEntrypoint: null },
     '陈旧 pending 但同会话重连维持锁 → prevReadonly=true 解释了 locked 与 agedOutStale 并存',
   );
 
   assert.equal(
-    H.describeMirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, locked: false }).agedOutStale,
+    describeMirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, locked: false }).agedOutStale,
     false,
     '无时间戳 → agedOutStale 保守为 false（无法判断"多陈旧"）',
   );
@@ -298,11 +301,11 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
 // 诊断时间线要能看出"这次锁是自主循环还是真不知道来源"，之前查一次真实卡死花了大量取证时间正因为看不到这个。
 test('describeMirrorEntryLock：透传 autonomous（不重新判定，只回显调用方传入值）', () => {
   assert.equal(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true, autonomous: true }).autonomous,
+    describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true, autonomous: true }).autonomous,
     true,
   );
   assert.equal(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true }).autonomous,
+    describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true }).autonomous,
     false,
     '未传 autonomous → 默认 false，不影响既有调用方',
   );
@@ -312,9 +315,9 @@ test('describeMirrorEntryLock：透传 autonomous（不重新判定，只回显�
 // 否则多子代理长期 localBusy 会掩盖「主链 5 分钟无写入」的疑似中断。此处锁纯函数契约。
 test('localBusy 路径仍须能标 stale（readonly+pending+超 5 分钟）', () => {
   const now = 1_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
   assert.equal(
-    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }),
+    mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }),
     true,
     'web busy 期间若只读锁仍挂着且主链陈旧 pending → 必须 stale=true',
   );
@@ -328,36 +331,36 @@ test('localBusy 路径仍须能标 stale（readonly+pending+超 5 分钟）', ()
 test('mirrorEntryLock：registryBusy=true 时无视尾部形态与陈旧豁免直接预锁（localBusy 仍豁免）', () => {
   const now = 1_800_000_000_000;
   // 尾部 settled（长工具首刻常见形态）也锁——注册表说终端在跑
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryBusy: true }), true);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryBusy: true }), true);
   // 陈旧 pending 豁免被覆盖：注册表自报 + pid 验活已证实终端活着
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryBusy: true }), true);
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryBusy: true }), true);
   // web 自己在跑：己方 turn 不因注册表误锁
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: true, lastChainTs: null, now, registryBusy: true }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'settled', localBusy: true, lastChainTs: null, now, registryBusy: true }), false);
   // 不传 registryBusy → 既有行为不变
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now }), false);
 });
 
 test('mirrorReleaseStep：registryBusy 可上锁也可维持锁（比 keepAlive/tailPending 强一档）', () => {
   // 未锁 + 注册表 busy → 直接上锁（堵「终端开跑但首条 text 未落盘」窗）
-  let r = H.mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryBusy: true });
+  let r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryBusy: true });
   assert.deepEqual(r, { readonly: true, state: { readonly: true, quietTicks: 0 } });
   // 已锁 + 注册表 busy → 维持锁、静默清零
-  r = H.mirrorReleaseStep({ readonly: true, quietTicks: 3 }, { registryBusy: true });
+  r = mirrorReleaseStep({ readonly: true, quietTicks: 3 }, { registryBusy: true });
   assert.deepEqual(r, { readonly: true, state: { readonly: true, quietTicks: 0 } });
   // localBusy 优先：己方在跑保持现态，不因注册表上锁
-  r = H.mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryBusy: true, localBusy: true });
+  r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryBusy: true, localBusy: true });
   assert.equal(r.readonly, false);
   // 不传 → 既有行为不变（未锁不造锁）
-  r = H.mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { keepAlive: true });
+  r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { keepAlive: true });
   assert.equal(r.readonly, false);
 });
 
 test('mirrorStaleFlag：registryBusy=true 压制"疑似中断"（新鲜自报=终端活着）', () => {
   const now = 1_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryBusy: true }), false);
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '不传 → 既有 stale 行为不变');
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryBusy: true }), false);
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '不传 → 既有 stale 行为不变');
 });
 
 // ── 2026-09-04：registryWaiting——终端卡在对话框上等人（status:"waiting"，含权限审批框）─────
@@ -367,38 +370,38 @@ test('mirrorStaleFlag：registryBusy=true 压制"疑似中断"（新鲜自报=�
 //   ①豁免陈旧检查（等审批可以远超 5 分钟，那不代表没人管）②维持已有的锁 ③压制"疑似中断"文案。
 test('mirrorEntryLock：registryWaiting 豁免陈旧检查但不无中生有造锁（尾部 settled 仍不锁）', () => {
   const now = 1_800_000_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
   // 核心场景：CLI 卡在审批框上超 5 分钟后手机才切进来。磁盘形态与「隔天打开的无人会话」完全同构，
   // 唯一能区分的就是注册表——终端进程还活着，正等着人按键。漏认它 → 不预锁 → 手机可写 → 分叉。
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true }), true);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true }), true);
   // 但不给它 busy 那种"无视尾部形态"的特权：轮次已收尾时开着对话框，写权仍归手机
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryWaiting: true }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryWaiting: true }), false);
   // 己方 SDK 写的 pending 尾部仍不锁（自锁防线优先级更高）
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true, tailEntrypoint: 'sdk-ts' }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryWaiting: true, tailEntrypoint: 'sdk-ts' }), false);
   // localBusy 仍豁免
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, registryWaiting: true }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, registryWaiting: true }), false);
   // 不传 → 既有行为不变（陈旧 pending 照旧不锁）
-  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false);
+  assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false);
 });
 
 test('mirrorReleaseStep：registryWaiting 维持已有的锁，但未锁时不造锁', () => {
   // 已锁 + 终端在等人 → 维持、静默清零（等审批可长达 30 分钟，不能被 12.5s 静默窗解锁）
-  let r = H.mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true });
+  let r = mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true });
   assert.deepEqual(r, { readonly: true, state: { readonly: true, quietTicks: 0 } });
   // 未锁 → 不造锁（与 registryBusy 的关键差别）
-  r = H.mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryWaiting: true });
+  r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryWaiting: true });
   assert.equal(r.readonly, false);
   // 不传 → 既有行为不变（已锁且真静默 → 照常累计 quietTicks）
-  r = H.mirrorReleaseStep({ readonly: true, quietTicks: 0 }, {});
+  r = mirrorReleaseStep({ readonly: true, quietTicks: 0 }, {});
   assert.equal(r.state.quietTicks, 1);
 });
 
 test('mirrorStaleFlag：registryWaiting 压制"疑似中断"——等你按键不是进程死了', () => {
   const now = 1_000_000;
-  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true }), false);
+  const over = now - MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true }), false);
   // 连负证据都压不过它：cli 条目还在（正是它自报的 waiting），谈不上"曾在→消失"
-  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true, cliRegistryVanished: true }), false);
+  assert.equal(mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now, registryWaiting: true, cliRegistryVanished: true }), false);
 });
 
 // 服务重启腰斩（2026-07-28 真机 b06fb05d）：web 自己的回合跑到一半，server 被重启，SDK 子进程随之
@@ -415,28 +418,28 @@ test('mirrorStaleFlag：pending 尾部早于本次 server 启动 + 注册表不�
   const beforeRestart = serverStartedAt - 14_000; // 末条落盘比启动早 14 秒（真机实测差值）
   const afterRestart = serverStartedAt + 5_000;   // 启动之后才落盘 = 真有人在驾驶
   assert.equal(
-    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
+    mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
     true, '腰斩残留：未超 5 分钟也应判 stale');
   assert.equal(
-    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: afterRestart, now, serverStartedAt }),
+    mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: afterRestart, now, serverStartedAt }),
     false, '本进程启动后仍在写 → 真驾驶中，不得误标中断');
   assert.equal(
-    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt, registryBusy: true }),
+    mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt, registryBusy: true }),
     false, 'registryBusy 权威自报优先：终端确实活着（长工具卡住）→ 压制');
   assert.equal(
-    H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
+    mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
     false, '未锁 → stale 无意义（与既有语义一致）');
   assert.equal(
-    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now }),
+    mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now }),
     false, '不传 serverStartedAt → 既有行为不变（未超阈值不 stale）');
 });
 
 test('describeMirrorEntryLock：透传 registryBusy 供诊断时间线回放', () => {
   assert.equal(
-    H.describeMirrorEntryLock({ tailVerdict: 'settled', locked: true, registryBusy: true }).registryBusy,
+    describeMirrorEntryLock({ tailVerdict: 'settled', locked: true, registryBusy: true }).registryBusy,
     true,
   );
-  assert.equal(H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).registryBusy, false);
+  assert.equal(describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).registryBusy, false);
 });
 
 // ── web 回合失败后「续接」永久卡死（2026-07-30 真机 5ed3eb8c）───────────────────────────────
@@ -460,7 +463,7 @@ test('classifyTailEntries：web 回合被 503 打断（user 裸 slash + system/l
     webEntry({ type: 'user', message: { role: 'user', content: '/code-review max 整个分支代码库，最多同时 3 个子代理' } }),
     webEntry({ type: 'system', subtype: 'local_command', isMeta: false, content: LOCAL_CMD_STDOUT, timestamp: '2026-07-31T03:28:17.905Z' }),
   ];
-  assert.equal(H.classifyTailEntries(entries).verdict, 'settled', '回合已以错误告终 → 不得判成「终端轮次未完结」');
+  assert.equal(classifyTailEntries(entries).verdict, 'settled', '回合已以错误告终 → 不得判成「终端轮次未完结」');
 });
 
 // 分叉红线（2026-07-30 子代理审查在真实盘上抓到）：本地命令输出只能给【它自己那条 slash】收尾，绝不能
@@ -477,7 +480,7 @@ test('classifyTailEntries：终端真实请求未回复 + 期间敲了别的本�
     cliEntry({ type: 'system', subtype: 'local_command', content: '<command-name>/status</command-name>', timestamp: '2026-07-16T00:43:40.565Z' }),
     cliEntry({ type: 'system', subtype: 'local_command', content: '<local-command-stdout>Settings dialog dismissed</local-command-stdout>', timestamp: '2026-07-16T00:43:40.565Z' }),
   ];
-  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '终端回合仍在进行 → 必须维持锁，否则双写分叉');
+  assert.equal(classifyTailEntries(entries).verdict, 'pending', '终端回合仍在进行 → 必须维持锁，否则双写分叉');
 });
 
 test('classifyTailEntries：本地命令的 command-name 回显不算收尾（只有 stdout/stderr 才是输出）', () => {
@@ -485,7 +488,7 @@ test('classifyTailEntries：本地命令的 command-name 回显不算收尾（�
     webEntry({ type: 'user', message: { role: 'user', content: '/status' } }),
     webEntry({ type: 'system', subtype: 'local_command', content: '<command-name>/status</command-name>' }),
   ];
-  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '只回显了命令名、输出还没落 → 轮次未完结');
+  assert.equal(classifyTailEntries(entries).verdict, 'pending', '只回显了命令名、输出还没落 → 轮次未完结');
 });
 
 // 普通消息（非 slash）被 503 打断：形态与上面的分叉红线【无法区分】，故这里刻意【不】判 settled——
@@ -495,24 +498,24 @@ test('classifyTailEntries：普通消息被打断仍 pending（与终端场景�
     webEntry({ type: 'user', message: { role: 'user', content: '你好' } }),
     webEntry({ type: 'system', subtype: 'local_command', isMeta: false, content: LOCAL_CMD_STDOUT }),
   ];
-  const r = H.classifyTailEntries(entries);
+  const r = classifyTailEntries(entries);
   assert.equal(r.verdict, 'pending', '不得靠放宽形态判据来修它——那会打穿单驾驶员模型');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: r.verdict, localBusy: false, lastChainTs: Date.now(), now: Date.now(), tailEntrypoint: r.lastChainEntrypoint }),
+    mirrorEntryLock({ tailVerdict: r.verdict, localBusy: false, lastChainTs: Date.now(), now: Date.now(), tailEntrypoint: r.lastChainEntrypoint }),
     false, '己方 SDK 写下的 pending → 由切口 2 拦住，不预锁');
 });
 
 test('classifyTailEntries：user 文本之后【没有】本地命令输出 → 仍 pending（不得放宽成「user 尾一律收尾」）', () => {
   const entries = [webEntry({ type: 'user', message: { role: 'user', content: '你好' } })];
-  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '等 assistant 回复中：这是真 pending，必须保留');
+  assert.equal(classifyTailEntries(entries).verdict, 'pending', '等 assistant 回复中：这是真 pending，必须保留');
 });
 
 test('classifyTailEntries：回传链尾条目自报的 entrypoint（谁写下这条 pending）', () => {
   const cliTail = [webEntry({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: '继续' } })];
-  assert.equal(H.classifyTailEntries(cliTail).lastChainEntrypoint, 'cli');
+  assert.equal(classifyTailEntries(cliTail).lastChainEntrypoint, 'cli');
   const sdkTail = [webEntry({ type: 'user', message: { role: 'user', content: '继续' } })];
-  assert.equal(H.classifyTailEntries(sdkTail).lastChainEntrypoint, 'sdk-ts');
-  assert.equal(H.classifyTailEntries([]).lastChainEntrypoint, null, '无链条目 → null（回落既有判定）');
+  assert.equal(classifyTailEntries(sdkTail).lastChainEntrypoint, 'sdk-ts');
+  assert.equal(classifyTailEntries([]).lastChainEntrypoint, null, '无链条目 → null（回落既有判定）');
 });
 
 // 纵深防御（切口 2）：即便将来又冒出一种「web 自己写出 pending 尾部」的新形态（切口 1 的形态判据
@@ -524,29 +527,29 @@ test('mirrorEntryLock：pending 尾部由本项目 SDK 自己写下（entrypoint
   const now = 1_800_000_000_000;
   const fresh = now - 10_000; // 新鲜 pending：陈旧豁免够不着，只有本判据能拦
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts' }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts' }),
     false, 'sdk-ts 写的 pending = 己方残留，不是终端驾驶');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'cli' }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'cli' }),
     true, 'CLI 写的 pending → 照旧预锁');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now }),
     true, '不传 → 既有行为不变');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'claude-desktop' }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'claude-desktop' }),
     true, '白名单外的未知来源 → 保守预锁（宁可误锁不可误放行）');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', registryBusy: true }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', registryBusy: true }),
     true, 'registryBusy：活着的 CLI 自报在跑 → 压过磁盘推断');
   assert.equal(
-    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', prevReadonly: true }),
+    mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', prevReadonly: true }),
     false, '压过 prevReadonly：锁本就不该存在，同会话重连不得把它续下去');
 });
 
 test('describeMirrorEntryLock：透传 tailEntrypoint（事后回放能看出「这次没锁是因为尾部是己方写的」）', () => {
   assert.equal(
-    H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: false, tailEntrypoint: 'sdk-ts' }).tailEntrypoint,
+    describeMirrorEntryLock({ tailVerdict: 'pending', locked: false, tailEntrypoint: 'sdk-ts' }).tailEntrypoint,
     'sdk-ts',
   );
-  assert.equal(H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).tailEntrypoint, null);
+  assert.equal(describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).tailEntrypoint, null);
 });

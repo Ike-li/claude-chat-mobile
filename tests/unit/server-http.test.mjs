@@ -114,8 +114,8 @@ test('createHttpAuth uses Access JWT for public hosts and token fallback for loc
   assert.deepEqual(verified, ['jwt']);
 });
 
-// AUTH-001：HTTP 鉴权失败计入共享限速，达阈值 → 429
-test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', async () => {
+// AUTH-03：HTTP 鉴权失败计入共享限速，达阈值 → 429
+test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-03）', async () => {
   const states = new Map();
   let locked = 0;
   let now = 1_000_000;

@@ -1,13 +1,13 @@
-// tests/v2/server/auth-gate.test.mjs —— 真组装根上的门：数据面拒绝、静态壳放行
+// tests/invariants/server/auth-gate.test.mjs —— 真组装根上的门：数据面拒绝、静态壳放行
 // 守护：AUTH-01（未持令牌不得进入数据面与操作面，静态壳除外；HTTP 与 Socket 握手共用拒绝语义）
 // 覆盖：/health 与 /metrics 的令牌校验 + 静态壳未登录可取 + Socket 握手拒绝 + 空/错令牌同等对待
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR）
 //
 // 不测什么 + 为什么：
-//  ① tokenMatches 的常数时间比较、限速状态机 —— 纯函数，属 S1（tests/v2/rate-limiter.test.mjs）。
-//  ② CF Access JWT 验签 —— 策略层纯函数已在 tests/v2/auth-strategy.test.mjs；
+//  ① tokenMatches 的常数时间比较、限速状态机 —— 纯函数，属 S1（tests/invariants/rate-limiter.test.mjs）。
+//  ② CF Access JWT 验签 —— 策略层纯函数已在 tests/invariants/auth-strategy.test.mjs；
 //     真 CF 环境需要外部服务，不进 PR。
-//  ③ 设备审批门 —— 另一道闸，见 tests/v2/server/device-gate.test.mjs。
+//  ③ 设备审批门 —— 另一道闸，见 tests/invariants/server/device-gate.test.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -16,13 +16,13 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-auth-gate-token';
-const WRONG = 'v2-auth-gate-wrong';
+const TOKEN = 'inv-auth-gate-token';
+const WRONG = 'inv-auth-gate-wrong';
 
 let dir, server;
 
 test.before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'ccm-v2-auth-'));
+  dir = mkdtempSync(join(tmpdir(), 'ccm-inv-auth-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {

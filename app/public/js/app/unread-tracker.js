@@ -1,4 +1,4 @@
-// public/js/app/unread-tracker.js —— R65 未读点：「看过哪个会话到什么时候」的持有者。
+// public/js/app/unread-tracker.js —— R65（2026-08-30 需求合稿）未读点：「看过哪个会话到什么时候」的持有者。
 // 状态在本模块内（app.js 顶层零新增状态）；判定全走 logic/unread.js 纯函数。
 // 语义红线：点=看过即清；「需要你」chip/聚合=答过才清。分层不合并（见 logic/unread.js 头注）。
 //

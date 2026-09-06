@@ -18,7 +18,7 @@ const shardSuffix = process.env.CCM_PLAYWRIGHT_SHARD_SUFFIX || '';
 
 export default defineConfig({
   testDir: '../e2e',
-  testMatch: 'p0/**/*.spec.ts',
+  testMatch: 'specs/**/*.spec.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 45_000,

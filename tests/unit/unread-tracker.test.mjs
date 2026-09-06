@@ -51,7 +51,7 @@ test.describe('unreadOnEntryForSync', () => {
     assert.equal(unreadOnEntryForSync({ instanceId: null, viewingInstanceId: null, snapshot: 2, live: 2 }), 0);
   });
 
-  // 接线断言 2026-09-05 搬去 S2：tests/v2/server/unread-on-entry.test.mjs
+  // 接线断言 2026-09-05 搬去 S2：tests/invariants/server/unread-on-entry.test.mjs
   //   —— 前台跑一轮 unreadOnEntry=0；上报 hidden 后再跑一轮，ack 必须带回 >0。
   // 原来这里是 readFileSync(app.js) + 正则匹配 /unreadOnEntryForSync/ 与
   // /live:\s*unreadCounts\.get/，钉的是源码长什么样：改个变量名无故变红，

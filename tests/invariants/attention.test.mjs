@@ -1,4 +1,4 @@
-// tests/v2/attention.test.mjs —— 「需要你」跨会话聚合的读模型投影
+// tests/invariants/attention.test.mjs —— 「需要你」跨会话聚合的读模型投影
 // 守护：ALERT-01（待办轴只收「点一下就能处理」的事）在本层的可测部分
 // 覆盖：审批/输入两维度的字段映射 + SS-005 跨维度去重 + 非法 awaitingSince 降级不丢会话
 //       + needsYou 按等待时长升序（risk 不参与）+ others 的 cwd/lastActiveAt 二级排序 + 入参不可变

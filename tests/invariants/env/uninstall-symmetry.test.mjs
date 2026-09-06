@@ -1,9 +1,9 @@
-// tests/v2/env/uninstall-symmetry.test.mjs —— 卸载对称性：删干净【且】没多删
+// tests/invariants/env/uninstall-symmetry.test.mjs —— 卸载对称性：删干净【且】没多删
 // 守护：DIST-01（uninstall 只删产品自己写下的白名单，永删不到 ~/.claude/projects、~/.cloudflared、manifest 外的 unit、工作区代码）
 // 覆盖：整树快照差集（删除面 == 预期集）+ 幸存面逐字节相等 + 真 CLI 在复制出的仓库根上跑 --purge --yes
 // 槽位：环境级（一次性 HOME + 一次性仓库根 + 一次性工作区）
 //
-// ⚠ 为什么必须进容器（`npm run test:v2:env` 不在宿主机白名单里）：
+// ⚠ 为什么必须进容器（`npm run test:invariants:env` 不在宿主机白名单里）：
 //   本文件的隔离**依赖被测代码正确性**——`createUninstaller` 若不认注入的 home/root/appPath
 //   而回落 `homedir()` / `REPO_ROOT` / `/Applications/CCM.app`，进程内的 rmSync 就打在真实家目录上。
 //   这正是 2026-08-02 删树事故的形状：被改坏的恰恰是算删除路径的那段代码。
@@ -377,7 +377,7 @@ test('run() 不带参数时默认不 purge：破坏性开关的缺省方向必�
 // 这三段按 platform 整段跳过，才是安全的执行位。
 // ---------------------------------------------------------------------------
 const SKIP_ON_DARWIN = process.platform === 'darwin'
-  ? 'darwin 上 CLI 会碰真实 /Applications/CCM.app 与偏好域，改跑 npm run test:v2:env（容器）'
+  ? 'darwin 上 CLI 会碰真实 /Applications/CCM.app 与偏好域，改跑 npm run test:invariants:env（容器）'
   : false;
 
 function makeFakeRepo() {

@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 // 且文本度量类断言在 Linux 容器下与 macOS 字体不同，宿主机跑反而更贴近真实渲染。
 const HOST_ALLOWED_SCRIPTS = new Set([
   'lint', 'lint:fix', 'check',
-  'test:unit', 'test:v2', 'test:e2e', 'test:visual', 'test:playwright', 'test:playwright:p0',
+  'test:unit', 'test:invariants', 'test:e2e', 'test:visual', 'test:playwright',
   // app:test = swiftc 编译 desktop/CCMCore.swift + 断言集，产物落 desktop/build/（已 gitignore）。
   // 不起 server、不 spawn claude、不碰 ~/.claude —— 与前三条同档。它现在还是 `npm run check`
   // 的一环（见 package.json），不放行的话连 check 都会被自己的钩子拦下来。
@@ -57,7 +57,7 @@ const REASONS = [
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, why: '冒烟测试真实调用 claude，消耗额度' },
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
-  { re: /\bnpm\s+run\s+test:v2:env\b/, why: 'tests/v2/env/ 跑的是卸载器：它的隔离【依赖被测代码正确性】——createUninstaller 若不认注入的 home/root/appPath 而回落 homedir()/REPO_ROOT//Applications/CCM.app，rmSync 就打在真实家目录上，与 8/2 删库同形态' },
+  { re: /\bnpm\s+run\s+test:invariants:env\b/, why: 'tests/invariants/env/ 跑的是卸载器：它的隔离【依赖被测代码正确性】——createUninstaller 若不认注入的 home/root/appPath 而回落 homedir()/REPO_ROOT//Applications/CCM.app，rmSync 就打在真实家目录上，与 8/2 删库同形态' },
   { re: /\bnpm\s+(?:test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态' },
   // ★ 白名单反转补上的洞：approval-store / audit / devices 的落盘路径是【模块级常量】，在 import
   // 求值那一刻就锁定了，只有 --import 预加载改得动。裸 node --test 会把它们写进真实 data/。
@@ -106,11 +106,11 @@ function testTargets(text) {
 // 会在真实 ~/.claude/projects 上跑那个删除用例（preload-env 明确不隔离 transcript 目录）。
 const SCRIPT_TEST_SCOPE = {
   'test:unit': 'tests/unit/',
-  // v2 与 unit 同档：纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude。
-  // scope 必须写，否则 `npm run test:v2 -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
-  'test:v2': 'tests/v2/',
+  // 不变量树与 unit 同档：纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude。
+  // scope 必须写，否则 `npm run test:invariants -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
+  'test:invariants': 'tests/invariants/',
   'test:e2e': 'tests/e2e/', 'test:visual': 'tests/e2e/',
-  'test:playwright': 'tests/e2e/', 'test:playwright:p0': 'tests/e2e/',
+  'test:playwright': 'tests/e2e/',
 };
 
 function whitelistedRun(segment, script) {

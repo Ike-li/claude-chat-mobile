@@ -1,4 +1,4 @@
-// tests/v2/uploads.test.mjs —— 附件落盘与防穿越安全测试
+// tests/invariants/uploads.test.mjs —— 附件落盘与防穿越安全测试
 // 守护：SCOPE-02（sanitize / 大小上限 / 路径不泄露）、FILES-2（symlink 检查与 realpath 归一）、FILES-4（缩略图服务端长度硬限）
 // 测什么：sanitizeName 清洗恶意路径与 BOM 前导点；validateAttachments 单文件/总量/数量/缩略图硬限；saveAttachments 真实落盘 0600 权限与 symlink 攻击拦截；buildPromptText 注入提示词；toEventMeta 剥离服务端绝对路径
 // 不测什么 + 为什么：不测客户端 canvas 降采样生成逻辑——属于前端职责，服务端实施防御性硬闸
@@ -115,7 +115,7 @@ test.describe('SCOPE-02 & FILES-2: saveAttachments 真实落盘与 symlink 防�
   let tmpDir;
 
   test.beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), 'ccm-v2-uploads-'));
+    tmpDir = await mkdtemp(join(tmpdir(), 'ccm-inv-uploads-'));
   });
 
   test.afterEach(async () => {
@@ -153,7 +153,7 @@ test.describe('SCOPE-02 & FILES-2: saveAttachments 真实落盘与 symlink 防�
   });
 
   test('FILES-2: 上传目录路径包含可疑符号链接时拒绝落盘', { skip: process.platform === 'win32' }, async () => {
-    const base = await mkdtemp(join(tmpdir(), 'ccm-v2-uplink-'));
+    const base = await mkdtemp(join(tmpdir(), 'ccm-inv-uplink-'));
     try {
       const real = join(base, 'real-work');
       const link = join(base, 'link-work');

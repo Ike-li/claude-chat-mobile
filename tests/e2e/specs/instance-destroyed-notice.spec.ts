@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, sessionRowByInstance } from '../../helpers/p0-ui';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, sessionRowByInstance } from '../../helpers/sidebar-ui';
 
 // 修「点击在跑的会话的停止按钮时，点完会顿一下，然后直接跳到主页」：中断失败（不限时超时——任何
 // 原因 SDK interrupt() reject 都会走 app/src/agent/agent.js settleForce() 强杀子进程，见

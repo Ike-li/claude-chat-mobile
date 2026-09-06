@@ -1,5 +1,5 @@
-// tests/v2/logic-outbox-ack.test.mjs —— 发送 ack 的客户端行为契约（在线 / transport / 离线重发三条路径）
-// 守护：MSG-01 / REL-01 的【前端半边】——服务端保证同一 clientMessageId 至多驱动一次 agent（见 tests/v2/server/message-ack.test.mjs），
+// tests/invariants/logic-outbox-ack.test.mjs —— 发送 ack 的客户端行为契约（在线 / transport / 离线重发三条路径）
+// 守护：MSG-01 / REL-01 的【前端半边】——服务端保证同一 clientMessageId 至多驱动一次 agent（见 tests/invariants/server/message-ack.test.mjs），
 //       前端保证收到各种 ack 后做对事：要不要重试、要不要回填草稿、气泡留还是撤、在跑那轮的状态行动不动
 // 覆盖：presentOnlineSendAck 三分支 · presentOnlineSendTransport 的超时分支 · presentOfflineResendAck 五分支 · 两条路径的 stale 判据一致性
 // 槽位：S1（纯函数，数据进数据出）

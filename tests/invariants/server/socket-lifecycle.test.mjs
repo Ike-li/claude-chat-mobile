@@ -1,4 +1,4 @@
-// tests/v2/server/socket-lifecycle.test.mjs —— 连接生命周期与 Agent 生命周期是两件事
+// tests/invariants/server/socket-lifecycle.test.mjs —— 连接生命周期与 Agent 生命周期是两件事
 // 守护：SOCKET-01（socket 断开不得杀 Agent：任务独立于连接存活；断开也不得产生任何对外广播副作用）
 // 覆盖：驾驶 socket 断开后实例仍在且 turnRunning + 断开不惊动其他在线 socket + 断开后在途轮仍占着槽（busy 为独立证据）
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
@@ -26,13 +26,13 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-socket-lifecycle-token';
+const TOKEN = 'inv-socket-lifecycle-token';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let dir, server;
 
 test.before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'ccm-v2-socket-'));
+  dir = mkdtempSync(join(tmpdir(), 'ccm-inv-socket-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
@@ -44,7 +44,7 @@ test.after(async () => {
 async function connect(tag) {
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: `v2-socket-${tag}` },
+    auth: { token: TOKEN, deviceToken: `inv-socket-${tag}` },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },   // 本机直连：bypass 设备门，本文件只测连接生命周期
   });

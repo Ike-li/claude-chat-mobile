@@ -12,7 +12,7 @@ import {
   openWorkspaceSession,
   sessionButtonByTitle,
   workspaceRow
-} from '../../helpers/p0-ui';
+} from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-17 后台 task_progress 横幅原地刷新', async ({ page }) => {

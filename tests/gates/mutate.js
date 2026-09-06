@@ -282,18 +282,18 @@ export function inferTestFiles(targetPath, testFiles, read) {
 // 集成测试卷进来后直接挂死 10 分钟）。变异检查要的是秒级反馈。确实想拿集成测试杀变异体，
 // 用 --tests= 显式点名。
 //
-// tests/v2 必须在列（2026-09-05 补）：v2 化过程中一批旧单测已退役，只被 v2 覆盖的模块
+// tests/invariants 必须在列（2026-09-05 补）：2026-09 按不变量重组测试树时一批旧单测已退役，只被该树覆盖的模块
 // （message-dedup / read-state 等）在这里查不到任何关联测试，`npm run mutate -- <它>`
 // 直接报「没有测试文件提到」——而它明明有测试。更隐蔽的是 rate-limiter 这类两边都有的：
-// 只算旧测试会得出偏低的 kill rate，诱人去补一条其实早已被 v2 咬住的断言。
+// 只算旧测试会得出偏低的 kill rate，诱人去补一条其实早已被不变量树咬住的断言。
 // 变异是本仓验收假绿的判据（方案 §-1 F），判据工具自己失明比没有工具更糟。
 //
-// ⚠ 只取 tests/v2 直下：readdirSync 不递归，tests/v2/server（起真 app/server.js 子进程）与
-// tests/v2/env（跑卸载器）天然落在外面——它们与集成测试同一档，理由同上。加子目录前先想清楚
+// ⚠ 只取 tests/invariants 直下：readdirSync 不递归，tests/invariants/server（起真 app/server.js 子进程）与
+// tests/invariants/env（跑卸载器）天然落在外面——它们与集成测试同一档，理由同上。加子目录前先想清楚
 // 那一条：把分钟级、会 spawn server 的用例卷进每一个变异体，循环就废了。
 export function listTestFiles(rootDir) {
   const out = [];
-  for (const dir of ['tests/unit', 'tests/v2']) {
+  for (const dir of ['tests/unit', 'tests/invariants']) {
     let entries;
     try { entries = readdirSync(join(rootDir, dir)); } catch { continue; }
     for (const name of entries) if (name.endsWith('.test.mjs')) out.push(`${dir}/${name}`);

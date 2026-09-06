@@ -58,20 +58,20 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
-      # v2 测试树（tests/v2/）：test:unit 的 glob 是 tests/unit/*.test.mjs，捞不到它。
-      # 不接这一步的话，v2 写多少条都不会在 CI 上跑——写了等于没有回归保护。
+      # 不变量测试树（tests/invariants/）：test:unit 的 glob 是 tests/unit/*.test.mjs，捞不到它。
+      # 不接这一步的话，它写多少条都不会在 CI 上跑——写了等于没有回归保护。
       # 与 test:unit 同档（纯函数 + 一次性目录真磁盘），故同 job、不另起 runner。
-      - run: npm run test:v2
-      # v2 的 S2 层（tests/v2/server/）：起真 app/server.js 子进程，宿主机上不允许跑
+      - run: npm run test:invariants
+      # 不变量树的 S2 层（tests/invariants/server/）：起真 app/server.js 子进程，宿主机上不允许跑
       # （不在 guard-host-tests 白名单里），但 CI runner 本身是一次性的，隔离强于本机容器。
       # CLAUDE_BIN 指向 stub 让 preflight 过关；需要真 agent turn 的断言不在这一层。
-      - run: npm run test:v2:server
+      - run: npm run test:invariants:server
         env:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
-      # v2 的环境级槽（tests/v2/env/）：卸载器的对称性。它的隔离依赖被测代码认注入的
+      # 不变量树的环境级槽（tests/invariants/env/）：卸载器的对称性。它的隔离依赖被测代码认注入的
       # home/root/appPath，宿主机上不允许跑；runner 是一次性 Linux 机器，且 platform 非 darwin
       # ⇒ launchd / CCM.app / 偏好域三段整段跳过，真 CLI 那条用例才有安全的执行位。
-      - run: npm run test:v2:env
+      - run: npm run test:invariants:env
       # 集成测试是【唯一执行真实 app/src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
       # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
       # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的

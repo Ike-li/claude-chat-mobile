@@ -43,6 +43,10 @@ const ROOT_FILES = new Map([
   ['docs/getting-started.en.md', 'Documentation'],
   ['docs/getting-started.md', 'Documentation'],
   ['docs/hard-rules.md', 'Documentation'],
+  ['docs/testing.md', 'Documentation'],
+  // 测试树的地图与不变量词汇表。逐个登记而不是给 tests/ 开一条兜底前缀——那条前缀会让
+  // 任何落在 tests/ 根的文件都过闸，正是这道闸要挡的（一次性产物悄悄回堆）。
+  ['tests/README.md', 'Documentation'],
 ]);
 
 // 前缀先匹配先赢，所以更具体的必须排在通配之前。
@@ -64,7 +68,7 @@ const PREFIX_RULES = [
   // ROOT_FILES 里的 6 个根配置条目与 12 个门禁的逐个登记。
   ['tests/infra/', 'Test configuration'],
   ['tests/gates/', 'Maintainer tooling'],
-  ['tests/v2/', 'Unit test'],
+  ['tests/invariants/', 'Unit test'],
   ['tests/unit/', 'Unit test'],
   ['tests/integration/', 'Integration test'],
   ['tests/e2e/', 'E2E test'],

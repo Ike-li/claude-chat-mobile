@@ -12,7 +12,7 @@
 //   ① live 豁免（resolveEmptySurface / shouldShowStartScreen，见 logic-instance-destroyed.test.mjs）
 //      —— 实例在跑就不落空首页，让 bindView 继续往下走；
 //   ② hasSessionId 闸（本文件三个函数）—— 门开了之后别再清屏换一个拿不到的磁盘。
-// 两层各自都有 E2E 探针验证过（tests/e2e/p0/replay-buffer.spec.ts 的 P0-NOSID：任一摘掉即当场变红）。
+// 两层各自都有 E2E 探针验证过（tests/e2e/specs/replay-buffer.spec.ts 的 P0-NOSID：任一摘掉即当场变红）。
 //
 // 所有新参数一律缺省 true / false 保持既有行为，既有调用方零连坐——下面每组最后一条就是固化这点的。
 

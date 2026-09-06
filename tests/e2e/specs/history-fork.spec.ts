@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 长按历史气泡「从这里分叉新会话」：session:fork（forkSession upToMessageId）。长按靠真实 550ms
 // setTimeout 触发（见 app/public/js/app.js bindForkLongPress），不用 waitForTimeout（禁用模式）——

@@ -9,7 +9,7 @@ import {
   openSessionsSidebar,
   openWorkspaceSession,
   sessionRowByInstance
-} from '../../helpers/p0-ui';
+} from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-13 跨 tab 审批弹窗清理与错路由防护', async ({ page }) => {

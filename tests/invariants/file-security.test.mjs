@@ -1,4 +1,4 @@
-// tests/v2/file-security.test.mjs —— 文件安全守卫关键路径测试
+// tests/invariants/file-security.test.mjs —— 文件安全守卫关键路径测试
 // 守护：FILE-03（owner-only 权限）、FILES-2（symlink 检查与路径归一）、FILE-02（特殊文件白名单闸）
 // 测什么：isOpenableTarget 白名单放行与特殊文件拦截；rejectableSymlinkComponent 检出可写目录与中间路径的软链；writeOwnerOnlyFile 原子写 0600 与错误回滚；权限校验与跨平台可执行文件解析
 // 不测什么 + 为什么：不测特定平台系统命令（which/where）真机返回值，通过注入 execFile 保持测试确定性与零外部依赖
@@ -19,7 +19,7 @@ import {
 } from '../../app/src/files/file-security.js';
 
 test.describe('FILE-02: isOpenableTarget 特殊文件白名单闸', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-target-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-target-'));
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
   test('常规文件放行（返回 true）', () => {
@@ -54,7 +54,7 @@ test.describe('FILE-02: isOpenableTarget 特殊文件白名单闸', () => {
 });
 
 test.describe('rejectableSymlinkComponent: 符号链接越界防护', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-sym-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-sym-'));
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
   test('普通路径与不存在路径返回 null', () => {
@@ -80,7 +80,7 @@ test.describe('rejectableSymlinkComponent: 符号链接越界防护', () => {
 });
 
 test.describe('FILE-03: writeOwnerOnlyFile 原子写与 0600 权限', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-owner-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-owner-'));
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
   test('写入内容并完整读回', () => {
@@ -108,7 +108,7 @@ test.describe('FILE-03: writeOwnerOnlyFile 原子写与 0600 权限', () => {
 });
 
 test.describe('isOwnerOnly / fixPermissions / checkPermissions 权限审计与修复', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-perms-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-perms-'));
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
   test('isOwnerOnly 精确区分 0600/0644 文件与 0700/0755 目录', { skip: process.platform === 'win32' }, () => {
@@ -206,7 +206,7 @@ test.describe('resolveExecutableViaPath: PATH 查找与防注入', () => {
 });
 
 // ── 可执行名白名单与 isDir 默认参数 ─────────────────────────────────────────
-// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的三个点（22:32 / 83:43 / 102:46）。
+// 本节补的是变异对比里「已退役的旧测试独占咬住、本文件原先漏掉」的三个点（22:32 / 83:43 / 102:46）。
 test.describe('resolveExecutableViaPath：类型与字符集是两道独立校验', () => {
   test('非字符串输入直接返回空串，不进 execFile', () => {
     // `typeof name !== 'string' || !SAFE_EXECUTABLE_NAME.test(name)` 写成 && 时，
@@ -239,7 +239,7 @@ test.describe('resolveExecutableViaPath：类型与字符集是两道独立校�
 });
 
 test.describe('isDir 默认参数：不传时必须按【文件】判定，不是目录', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-isdir-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-isdir-'));
   test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
   test('isOwnerOnly 缺省按 0600 判定（默认值写成 true 会把 0600 文件判成不合格）', () => {
@@ -271,7 +271,7 @@ test.describe('isDir 默认参数：不传时必须按【文件】判定，不�
 });
 
 test.describe('checkPermissions 的 isDir 默认参数同样必须是 false', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-checkperm-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-checkperm-'));
   test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
   test('批量检查缺省按文件（0600）判定，不按目录（0700）', () => {

@@ -32,6 +32,10 @@
 # 两个必须一起排除：只排 CLAUDE.md 会在包里留下一个断链的 AGENTS.md 符号链接。
 /CLAUDE.md                  export-ignore
 /AGENTS.md                  export-ignore
+# docs/testing.md 同判据：写测试的规范，通篇引用 tests/ 下的路径与 mutate:docker / test:invariants:*
+# 这类命令——而分发包里 tests/ 已被裁、package.json 也把引用被裁文件的 script 改写掉了。
+# 留着它等于在包里放一份满是死链与不存在命令的文档（dist-manifest.test.mjs 的第三条会红）。
+/docs/testing.md            export-ignore
 
 # ── scripts/ 里的维护者工具（其余是用户运维命令，必须留）──
 # 判据是「用户装机/运维会不会执行它」：发版、图标生成、上游版本监控、分发打包都不会。

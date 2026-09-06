@@ -1,5 +1,5 @@
-// tests/v2/logic-message-time.test.mjs —— 消息流里时间分隔行的插入判定
-// 守护：时间标记的「稀疏」语义——只在用户回来发言时插一行，不是每条都显
+// tests/unit/logic-message-time.test.mjs —— 消息流里时间分隔行的插入判定
+// 钉住：时间标记的「稀疏」语义——只在用户回来发言时插一行，不是每条都显
 // 覆盖：resolveMessageTimeMarker 的六条判据（坏时间戳 / 首条 / 时间倒流 / 跨天 / 角色过滤 / 间隔阈值）
 // 槽位：S1（纯函数）
 //

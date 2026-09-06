@@ -586,7 +586,7 @@ test('approval and question state caps answered IDs and recognizes grouped quest
   assert.equal(interactions.isQuestionAnswered('group#4'), true);
 });
 
-// ---- createUnreadTracker：R65 未读点的本设备已读表 + 手动未读（长按「标为未读」）----
+// ---- createUnreadTracker：R65（2026-08-30 需求合稿）未读点的本设备已读表 + 手动未读（长按「标为未读」）----
 // 纯判定在 logic-unread.test.mjs；这里钉 tracker 的生命周期契约：离场记 seen 不清手动标记、
 // 再次打开（markEntered）才清、标为已读同时记 seen、落盘形状、存储不可用时静默降级。
 function memoryStorage(initial = null) {

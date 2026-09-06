@@ -58,7 +58,7 @@ export function presentOnlineSendAck(ack) {
   // 于是只要哪天服务端少发一个（比如重构时觉得 stale:true 冗余），在线路径就会把死信
   // 当可重试塞进 outbox，表现为「每次重连重发一遍、永不退场」，而离线路径正常。
   // 两端表现不一致的缺陷最难查，这里把判据补齐，让那句「逐字对齐」真的成立
-  // （2026-09-05 由跨路径一致性断言发现，见 tests/v2/logic-outbox-ack.test.mjs）。
+  // （2026-09-05 由跨路径一致性断言发现，见 tests/invariants/logic-outbox-ack.test.mjs）。
   const stale = Boolean(ack?.stale) || error === 'stale_instance';
   const retryable = Boolean(ack?.retryable) || (!permanent && !stale);
   let message = error;

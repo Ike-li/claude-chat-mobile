@@ -282,22 +282,22 @@ test('generateMutants：同一行多个变异点用 column 区分（否则报告
   assert.ok(mutants.every(m => m.line === 1));
 });
 
-test('自动关联只取秒级档：unit + v2 直下，集成测试与 v2 的起 server 档一律排除', () => {
+test('自动关联只取秒级档：unit + invariants 直下，集成测试与不变量树的起 server 档一律排除', () => {
   // 真跑而不是读源码：这条以前断言的是「源码里出现过 'tests/unit' 字样」，
-  // 而 tests/v2 整个在盲区时那句照样成立 —— 只被 v2 覆盖的模块会被报成「没有关联测试」。
+  // 而 tests/invariants 整个在盲区时那句照样成立 —— 只被不变量树覆盖的模块会被报成「没有关联测试」。
   const files = listTestFiles(ROOT);
   assert.ok(files.some(f => f.startsWith('tests/unit/')), '单测必须在自动关联面内');
-  assert.ok(files.some(f => f.startsWith('tests/v2/') && f.split('/').length === 3),
-    'v2 直下的 S0/S1 用例必须在自动关联面内，否则只被 v2 覆盖的模块查不到任何测试');
-  for (const excluded of ['tests/integration/', 'tests/v2/server/', 'tests/v2/env/', 'tests/e2e/', 'tests/smoke/']) {
+  assert.ok(files.some(f => f.startsWith('tests/invariants/') && f.split('/').length === 3),
+    'invariants 直下的 S0/S1 用例必须在自动关联面内，否则只被不变量树覆盖的模块查不到任何测试');
+  for (const excluded of ['tests/integration/', 'tests/invariants/server/', 'tests/invariants/env/', 'tests/e2e/', 'tests/smoke/']) {
     assert.ok(!files.some(f => f.startsWith(excluded)),
       `${excluded} 会起真 server / 分钟级，卷进每一个变异体就把循环废了`);
   }
   assert.ok(files.every(f => f.endsWith('.test.mjs')), '只收测试文件');
 });
 
-test('自动关联能找到只被 v2 覆盖的模块（旧单测已退役的那批）', () => {
-  // 具体复现 2026-09-05 撞到的形态：message-dedup 的旧单测在 v2 化时删掉了，
+test('自动关联能找到只被不变量树覆盖的模块（旧单测已退役的那批）', () => {
+  // 具体复现 2026-09-05 撞到的形态：message-dedup 的旧单测在按不变量重组时删掉了，
   // 修复前 `npm run mutate -- app/src/agent/message-dedup.js` 报「没有测试文件提到」。
   //
   // 副作用注记：inferTestFiles 是字符串包含匹配，所以下面这两个路径字面量会让【本文件】
@@ -307,7 +307,7 @@ test('自动关联能找到只被 v2 覆盖的模块（旧单测已退役的那�
   const read = f => readFileSync(join(ROOT, f), 'utf8');
   for (const target of ['app/src/agent/message-dedup.js', 'app/src/sessions/read-state.js']) {
     assert.ok(inferTestFiles(target, files, read).length > 0,
-      `${target} 有 v2 测试却关联不到 —— 变异是本仓验收假绿的判据，判据自己失明比没有更糟`);
+      `${target} 有不变量树测试却关联不到 —— 变异是本仓验收假绿的判据，判据自己失明比没有更糟`);
   }
 });
 

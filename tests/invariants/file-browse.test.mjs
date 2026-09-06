@@ -1,4 +1,4 @@
-// tests/v2/file-browse.test.mjs —— 文件浏览与编辑器写回关键路径测试
+// tests/invariants/file-browse.test.mjs —— 文件浏览与编辑器写回关键路径测试
 // 守护：SCOPE-01（范围门）、FILE-01（baseHash 防静默覆盖）、FILE-02（读写两路特殊文件闸）、FILES-1（目录浏览范围复核）
 // 测什么：listDir 目录分页、symlink/special 标记与越界拒绝；readFile 文本分片、UTF-8 字符边界对齐、base64 模式与 FIFO 拦截；writeFileInScope 的 baseHash 并发冲突、权限保持与 FIFO 保护
 // 不测什么 + 为什么：不测敏感文件内容过滤——用户即 root，防线在范围门不在内容审查
@@ -33,7 +33,7 @@ import {
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-browse-list-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-browse-list-'));
   test.after(() => rmSync(base, { recursive: true, force: true }));
 
   const cwd = join(base, 'workspace');
@@ -140,7 +140,7 @@ test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
 });
 
 test.describe('SCOPE-01 & FILE-02: readFile 内容分片与特殊文件闸', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-browse-read-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-browse-read-'));
   test.after(() => rmSync(base, { recursive: true, force: true }));
 
   const cwd = join(base, 'workspace');
@@ -239,7 +239,7 @@ test.describe('SCOPE-01 & FILE-02: readFile 内容分片与特殊文件闸', () 
 });
 
 test.describe('FILE-01 & FILE-02: writeFileInScope 编辑器写回与并发保护', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-browse-write-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-browse-write-'));
   test.after(() => rmSync(base, { recursive: true, force: true }));
 
   const cwd = join(base, 'workspace');
@@ -353,13 +353,13 @@ test.describe('FILE-01 & FILE-02: writeFileInScope 编辑器写回与并发保�
 // 改成 true 之后没有任何断言变红。后果方向是 fail-open 里最坏的一种：
 // 写回被拒绝，UI 却显示「已保存」，用户关掉编辑器，改动凭空消失。
 test.describe('writeFileInScope 的拒绝必须带 ok:false，不能只靠 code 区分', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-write-reject-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-write-reject-'));
   const cwd = realpathSync(base);
   const scopeDirs = [cwd];
   test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
   test('越界路径 → ok:false 且 code:scope', () => {
-    const outside = mkdtempSync(join(tmpdir(), 'ccm-v2-write-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'ccm-inv-write-outside-'));
     try {
       writeFileSync(join(outside, 'target.txt'), 'original');
       const res = writeFileInScope(cwd, join(outside, 'target.txt'), 'PWNED', scopeDirs, { baseHash: 'x' });
@@ -395,7 +395,7 @@ test.describe('writeFileInScope 的拒绝必须带 ok:false，不能只靠 code 
 });
 
 test('空字符串 baseHash 与缺失同等拒绝（typeof 判串挡不住空串）', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-basehash-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-basehash-'));
   const cwd = realpathSync(base);
   try {
     writeFileSync(join(cwd, 'f.txt'), 'x');

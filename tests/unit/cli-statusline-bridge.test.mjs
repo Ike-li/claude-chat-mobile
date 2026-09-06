@@ -446,7 +446,7 @@ test.describe('sweepStatusSnapshots（R9：过期快照清扫）', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test('只认自家 sha256 命名形态，别人的 json 不碰（同 hooks 侧 R5 的删除面纪律）', () => {
+  test('只认自家 sha256 命名形态，别人的 json 不碰（同 hooks 侧 R5（2026-08-06）的删除面纪律）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ccm-statusline-sweep-'));
     try {
       const now = 1_800_000_000_000;

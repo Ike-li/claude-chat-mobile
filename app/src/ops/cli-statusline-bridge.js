@@ -170,7 +170,7 @@ export function normalizeCliStatusInput(raw, {
 // 对齐 hooks 投递箱的 HOOK_EVENT_TTL_MS 治理形态（此前两个同构模块只有一边有闸）。
 export const STATUSLINE_SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
 
-// 只认自家命名形态（sha256 十六进制 + .json）。删除面纪律同 hooks 侧 R5：目录是用户可配的
+// 只认自家命名形态（sha256 十六进制 + .json）。删除面纪律同 hooks 侧 R5（2026-08-06）：目录是用户可配的
 // （CLI_STATUSLINE_DIR），绝不能把别人的 *.json 卷进来。
 const SNAPSHOT_FILE_RE = /^[0-9a-f]{64}\.json$/;
 

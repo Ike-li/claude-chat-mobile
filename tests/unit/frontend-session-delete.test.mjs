@@ -1,5 +1,5 @@
-// tests/v2/session-delete.test.mjs —— 彻底删除会话的前端控制器
-// 守护：破坏性操作的三条可见性契约 —— 必须先确认、取消即不发、失败不得谎报成功
+// tests/unit/frontend-session-delete.test.mjs —— 彻底删除会话的前端控制器
+// 钉住：破坏性操作的三条可见性契约 —— 必须先确认、取消即不发、失败不得谎报成功
 // 覆盖：appConfirm 取消/确认两侧 · emit 载荷 · ok/失败/无响应三种回执 · onDeleted 只在成功时调
 //       · title 缺失时的 label 回落 · 确认框的 danger 语气与按钮文案 · 挂进 context.state
 // 槽位：S1（纯逻辑 + 假 socket，零 IO）

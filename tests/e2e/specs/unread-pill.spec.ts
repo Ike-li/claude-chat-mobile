@@ -2,7 +2,7 @@
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expectSidebarClosed, openWorkspaceSession, openSessionsSidebar } from '../../helpers/p0-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expectSidebarClosed, openWorkspaceSession, openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 // P0-24d/e：未读胶囊第三条自动确认已读路径——用户手动滚动贴近底部（与既有「点击胶囊」「Intersection
 // Observer 扫到锚点」并存，见 app.js showUnreadPillIfAny/ackUnread）。核心难点：切入积压未读的会话时，

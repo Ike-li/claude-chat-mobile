@@ -51,7 +51,7 @@ const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔�
 // 一次请求」时才碰巧通过。真实 server 的 lastUsedAt 取自 transcript 落盘时间，不会这样漂。
 // 每次 /__reset 刷新，所以跨用例仍是「刚刚活跃过」，不会随 server 长跑越显越旧。
 //
-// 为什么要 +LEAD 而不是取 Date.now() 本身：R65 未读的基线是【页面加载时刻】（parseUnreadState 用
+// 为什么要 +LEAD 而不是取 Date.now() 本身：R65（2026-08-30 需求合稿）未读的基线是【页面加载时刻】（parseUnreadState 用
 // 首次加载的 now），而 /__reset 发生在 gotoMock 的 page.goto 之前。若基准就取 reset 时刻，偏移为
 // 0 的「新活动」会话（mock-session-another）会落在基线之前，P0-11u 赖以成立的「基线后有活动＝亮
 // 未读」当场失效。留一段前置量把它推到页面加载之后，同时旧会话（-600s 等）仍稳稳在基线之前。

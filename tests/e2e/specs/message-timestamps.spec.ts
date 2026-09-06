@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 消息流时间戳（稀疏式）：跨天插日期分隔行，用户发言间隔 ≥5 分钟插一次 HH:mm。
 // 只作用于主链 user/assistant 气泡；工具卡 / thinking / 子 agent 正文 / 系统条一律不夹。

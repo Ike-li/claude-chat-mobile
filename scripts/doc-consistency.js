@@ -13,6 +13,9 @@ export const DEFAULT_DOC_GLOBS = Object.freeze([
   'SECURITY.md',
   '.github/copilot-instructions.md',
   'docs/*.md',
+  // 测试树的地图与不变量词汇表。它逐条写出 npm script 名与文档链接，不接进来的话
+  // 改个 script 名它就静默失效——而它恰恰是别人「不认识某个编号时去查」的那一份。
+  'tests/README.md',
 ]);
 
 // 文档里会写出版本号的依赖。只列 CLAUDE.md 技术栈行对外宣称的那几个——升 major 时最容易

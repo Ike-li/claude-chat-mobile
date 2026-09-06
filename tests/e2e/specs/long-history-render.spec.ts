@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // Part B 性能优化：长会话（2000 条，触达 app/src/sessions/history.js 的 HISTORY_MAX_MESSAGES 上限）切入时
 // renderHistoryBubbles 改成分块渲染（app/public/js/app.js），验证：①最终结果与同步版等价（不丢/不重复）；

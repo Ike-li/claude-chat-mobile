@@ -4,7 +4,7 @@
 // 需真实 claude agent turn（懒创建 AgentSession 即会 spawn 真实 claude 子进程），默认跳过，
 // 本机设 RUN_CLAUDE_INTEGRATION=1 运行；成本低于 P1-4 的验证（不需等待任何模型文本输出）。
 //
-// ⚠ 默认路径（不带 RUN_CLAUDE_INTEGRATION）的覆盖已搬到 tests/v2/server/message-ack.test.mjs：
+// ⚠ 默认路径（不带 RUN_CLAUDE_INTEGRATION）的覆盖已搬到 tests/invariants/server/message-ack.test.mjs：
 // 那份用 CLAUDE_BIN stub 起真 server，断言更强（除 ack 外还数 user_message 气泡 = SDK send 次数，
 // 并覆盖 BE-002 的两条校验失败路径），且在 CI 与 test:docker 里每次都真跑。
 // 本文件保留的价值只剩一档：**带真 claude 的端到端**——它是唯一会让真实模型跑起来再验幂等的路径。

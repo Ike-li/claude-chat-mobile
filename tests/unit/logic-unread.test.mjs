@@ -1,5 +1,5 @@
-// tests/unit/logic-unread.test.mjs —— R65 未读点判定（纯函数，浏览器与 node 共用）
-// 语义红线（见 draft/plan-unread-dot-fable-5.md）：点=看过即清（lastUsedAt > seenAt），
+// tests/unit/logic-unread.test.mjs —— R65（2026-08-30 需求合稿）未读点判定（纯函数，浏览器与 node 共用）
+// 语义红线：点=看过即清（lastUsedAt > seenAt），
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';

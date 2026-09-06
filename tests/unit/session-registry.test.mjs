@@ -261,7 +261,6 @@ test('hasWaitingTerminalSessionForCwd：独立于分页行判断整个 cwd 是�
 // 但它的注册表条目会消失（正常退出删文件；强杀留陈尸文件但 pid 验活过不了）。调用方逐 tick 喂
 // 本次 readSessionRegistry 结果，vanished=true 时 mirrorStaleFlag 立即判 stale，不必干等 5 分钟。
 test('cliPresenceStep：曾见 cli 条目→消失/仅剩 sdk = vanished；未曾见/仍在 → 非', () => {
-  assert.equal(typeof cliPresenceStep, 'function', '待实现：cliPresenceStep');
   assert.deepEqual(cliPresenceStep(false, null), { seen: false, vanished: false }, '从未见过 → 无证据');
   assert.deepEqual(cliPresenceStep(false, { entrypoint: 'cli' }), { seen: true, vanished: false }, '首次观测 cli → 记住');
   assert.deepEqual(cliPresenceStep(true, null), { seen: true, vanished: true }, '曾见→条目没了 = 死亡强证据');

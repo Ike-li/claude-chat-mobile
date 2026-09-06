@@ -27,7 +27,7 @@ function runShard({ shard, port, suffix }) {
   return new Promise(resolvePromise => {
     const child = spawn(
       'npx',
-      ['playwright', 'test', 'tests/e2e/p0', `--shard=${shard}`, '--reporter=list'],
+      ['playwright', 'test', 'tests/e2e/specs', `--shard=${shard}`, '--reporter=list'],
       {
         cwd: ROOT,
         env: {

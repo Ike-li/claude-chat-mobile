@@ -1,4 +1,4 @@
-// tests/v2/file-preview.test.mjs —— 工具卡片文件预览纯逻辑与有界读盘
+// tests/invariants/file-preview.test.mjs —— 工具卡片文件预览纯逻辑与有界读盘
 // 守护：FILE-02（缺口路径修复）、FILES-3（O_NOFOLLOW 防逃逸）、SCOPE-01（attributePath 范围裁决）
 // 测什么：attributePath 归属判定与前缀保护；buildDiff 各种工具差异生成；readPreview 文本截断、二进制与图片魔数识别；FIFO 在 openSync 前拒绝且不卡死
 // 不测什么 + 为什么：不测编辑器写回或审批状态——属于 file-browse 与 approval 域
@@ -105,7 +105,7 @@ test.describe('buildDiff: 变更摘要提取', () => {
 });
 
 test.describe('readPreview: 有界读盘与 FILE-02 防护', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-preview-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-preview-'));
   const touchedFiles = [];
   const touch = (name, content) => {
     const p = join(dir, name);
@@ -183,7 +183,7 @@ test.describe('readPreview: 有界读盘与 FILE-02 防护', () => {
 
   // §18-A: FIFO 必须在 open 前挡住，绝不无限阻塞事件循环
   test('FILE-02 / §18-A: readPreview 拒绝 FIFO，绝不调用 openSync 阻塞事件循环', { skip: process.platform === 'win32' }, () => {
-    const fifoDir = mkdtempSync(join(tmpdir(), 'ccm-v2-preview-fifo-'));
+    const fifoDir = mkdtempSync(join(tmpdir(), 'ccm-inv-preview-fifo-'));
     const fifo = join(fifoDir, 'test.fifo');
     try {
       execFileSync('mkfifo', [fifo]);
@@ -220,7 +220,7 @@ test.describe('readPreview: 有界读盘与 FILE-02 防护', () => {
   // isOpenableTarget 的白名单放行 symlink（isFile() || isSymbolicLink()），所以闸不挡它，
   // 挡它的只有 O_NOFOLLOW —— 丢掉标志位就会顺着链接把目标读出来，正是要防的逃逸。
   test('FILES-3: readPreview 对 symlink 直接 ELOOP，不跟出去读目标', { skip: process.platform === 'win32' }, () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-preview-nofollow-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-preview-nofollow-'));
     try {
       const target = join(dir, 'secret.txt');
       const link = join(dir, 'link.txt');
@@ -249,7 +249,7 @@ test.describe('readPreview: 有界读盘与 FILE-02 防护', () => {
 // 长度守卫用【恰好等于】的样本钉住：`buf.length >= 8` 写成 `>` 时，恰好 8 字节的 PNG 会被漏判。
 test.describe('FILE-02 邻域：detectImageMime 只认内容不认后缀', () => {
   let dir;
-  test.before(() => { dir = mkdtempSync(join(tmpdir(), 'ccm-v2-magic-')); });
+  test.before(() => { dir = mkdtempSync(join(tmpdir(), 'ccm-inv-magic-')); });
   test.after(() => { rmSync(dir, { recursive: true, force: true }); }); // safe-rm: 上一行 mkdtemp 的一次性目录
 
   const write = (name, bytes) => {

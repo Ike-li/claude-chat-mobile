@@ -1,4 +1,4 @@
-// tests/v2/rate-limiter.test.mjs —— 鉴权端口防暴破限速与来源分桶单测
+// tests/invariants/rate-limiter.test.mjs —— 鉴权端口防暴破限速与来源分桶单测
 // 守护：AUTH-03（限速仅打鉴权口，退避冷却与长锁定分档提示，防自我 DoS）、AUTH-04（不可信网络来源绝不采信可伪造标头）、DEVICE-01（双本机 bypass 判定，空 Host 不得绕过）
 // 测什么：onAuthResult 纯函数状态机转移与指数退避；gateCheck 单一事实源；authRejection 统一拒绝语义；rlSourceKey 来源分桶与 IPv6 /64 归一化；IPv4-mapped 防过度归并；shouldTrustCfConnectingIp 判定；shouldBypassDeviceApproval 双本机与空 Host 守卫
 // 不测什么 + 为什么：不测真实 Express 中间件或 Socket.io 握手流程——纯函数与边界计算在此层全覆盖
@@ -261,7 +261,7 @@ test.describe('DEVICE-01: shouldBypassDeviceApproval 设备审批跳过判定', 
 });
 
 // ── IPv6 解析与 CF-IP 提取的边界 ────────────────────────────────────────────
-// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的四个点（117/132/176×2）。
+// 本节补的是变异对比里「已退役的旧测试独占咬住、本文件原先漏掉」的四个点（117/132/176×2）。
 // 共同点是【两个条件必须同时成立】，写成 || 都不会让任何既有用例变红。
 test.describe('ipRateBucket：畸形 IPv6 一律原样返回，绝不猜着分桶', () => {
   test('段数不足但格式合法 → 原样（长度与格式是两道独立校验）', () => {

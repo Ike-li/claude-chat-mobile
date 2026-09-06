@@ -1,4 +1,4 @@
-// tests/v2/device-gate.test.mjs —— 设备准入网关与信任管理单测
+// tests/invariants/device-gate.test.mjs —— 设备准入网关与信任管理单测
 // 守护：DEVICE-01（双本机与未审批设备拦截）、DEVICE-02（CLI 吊销/批准通过原子文件监听即时生效；落盘失败不提交变更；待审列表容量有界防 flood）、DEVICE-03（网络响应与待审推送信封隔离敏感数据）
 // 测什么：createDeviceGate 初始化文件存在性；unlockDeviceSockets 与 disconnectDeviceSockets 生命周期；broadcastPendingDevices 仅推向可信端；pendingDevices 有界队列 (MAX_PENDING_DEVICES)；persistTrustedChange 原子持久化事务；getTrustedDeviceIds 隔离边界
 // 不测什么 + 为什么：不测物理硬件指纹采集与操作系统真实推送通道——分别属于前端采集与 ops/push
@@ -37,7 +37,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
   let tempDir;
 
   test.beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'ccm-device-gate-v2-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'ccm-device-gate-inv-'));
   });
 
   test.afterEach(() => {

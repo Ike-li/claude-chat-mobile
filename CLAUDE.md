@@ -45,7 +45,17 @@
 | `ops/` | 配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务 |
 | `shared/` | 叶子工具层；`protocol.js` 是事件契约真相源 |
 
-**测试与门禁全部住在 `tests/` 下**：`tests/{unit,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+
+`unit/` 与 `invariants/` **执行槽相同**（纯函数 + 一次性目录真磁盘，CI 同 job），分的是组织轴：前者按被测模块，后者按不变量（文件头声明守护哪条 `XXX-NN`、不测什么）。目录职责、执行槽 S0–S7、以及那两套并存的编号（新的 `AUTH-01` 类 与生产代码注释里先有的 `FILES-1`/`SEC-01`/`SRV-003` 类）都在 [tests/README.md](tests/README.md)——**看到 `// 守护：SRV-003` 不知道是什么就去查那份**，别照着编号猜。
+
+**要新增、修改或删除任何测试文件之前，先读 [docs/testing.md](docs/testing.md)。** 那里有三件在这个仓库里判错过、且不读就一定会判错的事：
+
+1. **文件放 `tests/unit/` 还是 `tests/invariants/`** —— 判据唯一：编号表里查得到就进 `invariants/` 并写 `// 守护：<编号>`，查不到就进 `unit/` 且不写守护行。`check-invariant-ids.js` 硬闸执行（四种失效形态各自会红）。
+2. **失败方向** —— 本产品的 fail-closed 是**逐条选过的**，有两条的正确方向恰恰是「不拒绝」（`trusted-devices.json` 瞬时读失败保留 last-good；鉴权通过后 handler 抛 500 不得计入限速）。按「所有异常都该拒绝」写会把它们测反。
+3. **怎么证明这条测试不是永远绿的** —— 两侧验收的证据写进 commit 的 `Tested:` trailer（注入了什么、哪条红了），不写就是没做。
+
+**看着漂亮却永不变红的测试比没有更坏**，它占着「这里测过了」的位置。
 
 模块边界由 `tests/gates/check-import-boundaries.js` **硬闸执行**（check 一环）。违反时它会自己说清违反了哪条，不必背，骨架是：
 
@@ -58,6 +68,7 @@
 文档索引：
 
 - [docs/architecture.md](docs/architecture.md) — 双通道 / 单驾驶员 / 回放 / 推送 / 可观测详解
+- [docs/testing.md](docs/testing.md) — **写测试前先读**：三条铁律、选槽的判据、怎么知道自己没写出假绿、增删改功能时分别做什么。配套 [tests/README.md](tests/README.md)（目录地图 + 执行槽 + 不变量编号词汇表）
 - [docs/display-contracts.md](docs/display-contracts.md) — 模型、effort、statusline 展示语义。**改契约先改 `tests/unit/display-contracts.test.mjs`**
 - [docs/deployment.md](docs/deployment.md) — 常驻 / 隧道 / CF Access 运维
 - [docs/getting-started.md](docs/getting-started.md) — 装机教程
@@ -74,13 +85,13 @@
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
-（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，
-外加与 `test:unit` 同档的 `test:v2`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
+（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`app:test`，
+外加与 `test:unit` 同档的 `test:invariants`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
 
-> ⚠️ **`test:v2` 的两个兄弟不在白名单上，别照着后缀类推**：`test:v2:server` 起真 `app/server.js` 子进程；
-> `test:v2:env` 跑的是卸载器（`tests/v2/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
+> ⚠️ **`test:invariants` 的两个兄弟不在白名单上，别照着后缀类推**：`test:invariants:server` 起真 `app/server.js` 子进程；
+> `test:invariants:env` 跑的是卸载器（`tests/invariants/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
 > ——回落成 `homedir()` / `/Applications/CCM.app` 就打在真实家目录上，与 8/2 删库同形态。两条都进容器。
 
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、

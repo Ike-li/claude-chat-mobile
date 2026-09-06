@@ -1,9 +1,9 @@
-// tests/v2/logic-mirror.test.mjs —— 只读镜像态的接受判定（前端侧）
+// tests/invariants/logic-mirror.test.mjs —— 只读镜像态的接受判定（前端侧）
 // 守护：SESSION-01 的前端半边（CLI 在 A 会话驾驶时，只读锁不得挂到 B 会话上）
 // 覆盖：acceptMirrorState 的四条判据（非只读放行 / 缺 instanceId 拒 / 空首页拒 / 指向别的 tab 拒）
 // 槽位：S1（纯函数）
 //
-// 后端的镜像态判定在 tests/v2/cli-mirror-state.test.mjs（app/src/agent/cli-mirror-state.js），
+// 后端的镜像态判定在 tests/invariants/cli-mirror-state.test.mjs（app/src/agent/cli-mirror-state.js），
 // 两回事：那边判「终端到底在不在驾驶」，这边判「这条广播该不该被当前视图采纳」。
 //
 // ⚠ 关于变异：本函数有两个存活变异体（`eventInstanceId == null || === ''` 与 viewing 那条的 ||→&&），

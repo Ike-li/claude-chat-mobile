@@ -1,4 +1,4 @@
-// tests/v2/message-dedup.test.mjs —— 同一 clientMessageId 对 Claude send 至多一次
+// tests/invariants/message-dedup.test.mjs —— 同一 clientMessageId 对 Claude send 至多一次
 // 守护：MSG-01、REL-01（两阶段提交 + in-flight claim/release）、SRV-001（FRESH 分支同样需要单飞去重）
 // 覆盖：REL-01 两阶段提交（查询/提交分离）+ 并发 in-flight claim/release + SRV-001 FRESH 单飞并发去重
 // 槽位：S1（纯函数 + 状态机 + 源码契约）

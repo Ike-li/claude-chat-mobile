@@ -336,7 +336,7 @@ export const EN_DICT = Object.freeze({
   '其他工作区': 'Other workspaces',
   '模型': 'Model',
   '需要你': 'Needs you',
-  // —— 会话行未读（R65）+ 长按标为未读/已读 ——
+  // —— 会话行未读（R65，2026-08-30 需求合稿）+ 长按标为未读/已读 ——
   '未读': 'Unread',
   '{n} 未读': '{n} unread',
   '未读数加载中': 'Loading unread count',

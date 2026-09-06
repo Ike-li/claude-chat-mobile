@@ -1,4 +1,4 @@
-// tests/v2/workdir-scope-guard.test.mjs —— 工作区范围裁决点单测
+// tests/invariants/workdir-scope-guard.test.mjs —— 工作区范围裁决点单测
 // 守护：SCOPE-01
 // 测什么：isInScope 在 realpath 之后判定候选路径是否落在授权工作区内，拦截越界、../ 穿越、symlink 逃逸与前缀碰撞
 // 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
-  const base = mkdtempSync(join(tmpdir(), 'ccm-v2-scope-'));
+  const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
   test.after(() => rmSync(base, { recursive: true, force: true }));
 
   // 拓扑构造：

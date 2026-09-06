@@ -2,7 +2,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
-import { expectSidebarClosed, openSessionsSidebar } from '../../helpers/p0-ui';
+import { expectSidebarClosed, openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 // CM5 官方约定：编辑器容器 DOM 节点挂 .CodeMirror 反向引用指回实例——不用给 app.js 加测试专用钩子。
 // 只测我方保存/取消/冲突接线，不测 CM5 自己的键入渲染（那是 vendor 库的事，已有上游测试）。

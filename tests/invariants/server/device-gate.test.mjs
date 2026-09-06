@@ -1,11 +1,11 @@
-// tests/v2/server/device-gate.test.mjs —— 设备审批门在真组装根上的第二因子
+// tests/invariants/server/device-gate.test.mjs —— 设备审批门在真组装根上的第二因子
 // 守护：DEVICE-01（bypass 必须 peer 本机【且】Host 本机；否则未审批设备不得进入数据面）、SEC-01（未审批 socket 不加入 approved 房间，收不到任何会话内容广播）
 // 覆盖：本机直连 bypass + 非本机 Host 落待审 + 待审设备只收自身状态
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR）
 //
 // 不测什么 + 为什么：
-//  ① 空 Host 不视为本机（R8）—— socket.io-client 与 fetch 都必带 Host 头，从客户端侧构造不出来；
-//     那是 shouldBypassDeviceApproval 的纯函数分支，已在 tests/v2/device-gate.test.mjs（S1）覆盖。
+//  ① 空 Host 不视为本机（R8，2026-08-06）—— socket.io-client 与 fetch 都必带 Host 头，从客户端侧构造不出来；
+//     那是 shouldBypassDeviceApproval 的纯函数分支，已在 tests/invariants/device-gate.test.mjs（S1）覆盖。
 //  ② 吊销后已连连接失权 —— 依赖 trusted-devices.json 的文件监听与 macOS/Linux 的 watch 差异
 //     （SEC-03 修过的坑），需要等待窗口，属另开的用例；本文件只钉「进不进得来」。
 //  ③ 推送正文不含设备 ID（DEVICE-03）—— 那是 notifications 的 body 构造，属 S1。
@@ -19,12 +19,12 @@ import { randomUUID } from 'node:crypto';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-device-gate-token';
+const TOKEN = 'inv-device-gate-token';
 
 let dir, server;
 
 test.before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'ccm-v2-device-'));
+  dir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {

@@ -1,4 +1,4 @@
-// tests/v2/auth-strategy.test.mjs —— 公网身份验证策略与 Cloudflare Access 门禁单测
+// tests/invariants/auth-strategy.test.mjs —— 公网身份验证策略与 Cloudflare Access 门禁单测
 // 守护：AUTH-01（未授权客户端拦截）、AUTH-02（公网 Host ownsHost 命中时强制 JWT 验签，不得回退 token）
 // 测什么：createCfAccessStrategy 策略封装；NULL_AUTH_STRATEGY fail-closed 默认；initCfAccess 三要素判定；isPublicHost 大小写与端口剥离；verifyAccessJwt 各失败态（缺头、坏头、过期、aud/iss 不匹配、无证书）
 // 不测什么 + 为什么：不测真实 Cloudflare 网络拉取——单测中离线运行，使用本地生成密钥对与本地缓存
@@ -93,7 +93,7 @@ test.describe('cf-access.js 运行时凭据与 JWT 校验', () => {
   const savedEnv = { ...process.env };
 
   test.beforeEach(async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'ccm-cf-access-v2-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'ccm-cf-access-inv-'));
     process.env.CCM_DATA_DIR = tempDir;
     cacheFile = join(tempDir, 'cf-access-certs.json');
     // 动态 import 破除模块级状态缓存

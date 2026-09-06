@@ -1,4 +1,4 @@
-// tests/v2/read-state.test.mjs —— 未读位点跨设备单调合并与防整屏复亮
+// tests/invariants/read-state.test.mjs —— 未读位点跨设备单调合并与防整屏复亮
 // 守护：READ-01（LWW 单调递增；手动标未读不用「删条目」表达已读，否则会被别的设备复活）
 // 覆盖：多设备增量归并（LWW 单调递增）+ baselineTs 免疫污染 + 手动标已读记 seen 阻断旧 manual 复活 + 乱序上报不整屏复亮
 // 槽位：S1（纯函数 + 一次性目录状态机）
@@ -27,7 +27,7 @@ function createStore(opts = {}) {
 }
 
 test.before(() => {
-  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-v2-read-state-'));
+  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-inv-read-state-'));
 });
 test.after(() => {
   if (TMP_DIR) rmSync(TMP_DIR, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
@@ -185,7 +185,7 @@ test.describe('READ-01: 容量限制与持久化健壮性', () => {
 });
 
 // ── 从磁盘加载既有位点 ──────────────────────────────────────────────────────
-// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的两个点（129:26 / 130:30）。
+// 本节补的是变异对比里「已退役的旧测试独占咬住、本文件原先漏掉」的两个点（129:26 / 130:30）。
 // 原先的用例都从空 store 起步，从没走过「文件里已有合法数据」这条加载路径——
 // 于是 `typeof raw !== 'object'` 与 `typeof raw.baselineTs !== 'number'` 两个守卫
 // 反转后也没人变红：跨设备共享的位点在重启后能不能读回来，从来没被证明过。

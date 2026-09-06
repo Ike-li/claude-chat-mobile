@@ -3,7 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
-import { openSessionsSidebar } from '../../helpers/p0-ui';
+import { openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-GIT-1 顶部 pill → 切「改动」tab → 列表与 diff', async ({ page }) => {

@@ -1,5 +1,5 @@
-// tests/v2/server/health-busy.test.mjs —— /health.busy 反映在途轮，不是「有实例」
-// 守护：/health 的 busy 字段必须跟着 anyTurnRunning() 走（app.js:486 的接线）
+// tests/invariants/server/health-busy.test.mjs —— /health.busy 反映在途轮，不是「有实例」
+// 守护：OPS-04（/health 的 busy 反映在途轮次而非「有实例」，app.js:486 的接线）
 // 覆盖：无实例 → false；开出实例且轮次在跑 → true；两次读取之间只有「发了一条消息」这一个变量
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
 //
@@ -16,7 +16,7 @@
 // 不测什么 + 为什么：
 //  ① 轮次结束后 busy 落回 false —— stub 永不产出 result，pendingTurns 恒为 1，S2 造不出「轮次结束」。
 //     那一侧由 tests/unit/instance-manager.test.mjs 的 anyTurnRunning 纯函数用例覆盖。
-//  ② /health 的鉴权 —— 归 tests/v2/server/auth-gate.test.mjs。
+//  ② /health 的鉴权 —— 归 tests/invariants/server/auth-gate.test.mjs。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,12 +26,12 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-health-busy-token';
+const TOKEN = 'inv-health-busy-token';
 
 let dir, server;
 
 test.before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'ccm-v2-health-'));
+  dir = mkdtempSync(join(tmpdir(), 'ccm-inv-health-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
@@ -56,7 +56,7 @@ test('起来但没人发过消息 → busy=false', async () => {
 
 test('发出一条消息、轮次在跑 → busy=true', async () => {
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: 'v2-health-device' },
+    auth: { token: TOKEN, deviceToken: 'inv-health-device' },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },   // 本机直连 bypass 设备门，本文件不测设备
   });

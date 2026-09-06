@@ -1,4 +1,4 @@
-// tests/v2/logic-statusline.test.mjs —— 状态行前端展示逻辑：取值优先级、边界、diff
+// tests/invariants/logic-statusline.test.mjs —— 状态行前端展示逻辑：取值优先级、边界、diff
 // 守护：DISPLAY-01（statusline 的展示语义；契约见 docs/display-contracts.md）
 // 覆盖：token 短格式的 k/m 抬升边界 · git 三选一 · ctx 剩余量的四档取值优先级与 0/负值语义 · 复制文本的来源标签 · Edit 卡 diff 的 LCS 边界
 // 槽位：S1（纯函数，数据进数据出，不碰 DOM/window/socket）
@@ -8,7 +8,7 @@
 // 11 和 1，属变异盲区、不是覆盖差）。存活的 14 个里逐条判过，下面每条断言都对准其中一个——
 // 不是为了把数字刷上去，是那些存活体改坏之后用户真会看到错的东西。
 //
-// 后端那份 statusline 在 tests/v2/statusline.test.mjs（app/src/ops/statusline.js），两回事，别搞混。
+// 后端那份 statusline 在 tests/invariants/statusline.test.mjs（app/src/ops/statusline.js），两回事，别搞混。
 //
 // 不测什么 + 为什么（都是判过的等价/不现实变异，重跑变异看到它们别再追一遍）：
 //  ① `n >= 1e6` 翻成 `>`：n=1e6 时走下面的 k 分支，Math.round(1e6/1e3)=1000 ≥1000 照样输出 "1.0m"，

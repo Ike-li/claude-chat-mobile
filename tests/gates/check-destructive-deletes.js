@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // tests/gates/check-destructive-deletes.js —— 测试里的递归删除，目标必须是一次性目录
 //
+// 守护：TEST-01（测试不得以真实 HOME / ~/.claude / 生产 CCM_DATA_DIR 为删除或写入目标）。
+// 这条是对【所有】测试文件的全局约束，不是某个模块的行为，所以由本门禁守而不是某个用例守。
+// 编号写在这里是为了让 tests/README.md 的登记表与守护者之间的链接闭合。
+// ⚠ 它只是三道防线之一，且是最弱的那道——真正挡住 8/2 事故的是容器里的一次性 HOME，
+// 因为静态闸挡不住「被变异改坏的路径计算函数」。
+//
 // 【为什么有这条闸】2026-08-02 出过一次真实数据丢失：变异检查把 app/src/sessions/history.js 的
 // getProjectDir 改成恒返回 ''，而 tests/unit/history-list.test.mjs 与
 // tests/integration/session-delete.test.mjs 都在做

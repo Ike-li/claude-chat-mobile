@@ -1,4 +1,4 @@
-// tests/v2/server/message-ack.test.mjs —— user:message 的幂等接线：ack 语义 + 真实 send 计数
+// tests/invariants/server/message-ack.test.mjs —— user:message 的幂等接线：ack 语义 + 真实 send 计数
 // 守护：MSG-01 / REL-01（离线重发幂等：同一 clientMessageId 只驱动一次 agent）、BE-002（校验失败的 ID 不得记入去重表，否则重发被当成功 → 消息永久丢失）
 // 覆盖：ack 四态（ok / deduped / permanent / busy）+ user_message 气泡计数 + 去重按 ID 而非全记 + 空消息与超长文本两条校验失败路径的重试可达
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
@@ -19,7 +19,7 @@
 //
 // 不测什么 + 为什么：
 //  ① in-flight 并发占用（claim/release）—— ack 只有 14ms，靠 emit 抢时序撞窗口不稳定，
-//     而不稳定的测试比没有更糟。纯函数判定已在 tests/v2/message-dedup.test.mjs（S1）逐分支覆盖。
+//     而不稳定的测试比没有更糟。纯函数判定已在 tests/invariants/message-dedup.test.mjs（S1）逐分支覆盖。
 //  ② 断线重连后的历史回放 —— 属回放机制（SYNC-01），不是幂等。实测裸连收不到气泡、
 //     session:open 无 ack，入口尚未查清；在查清之前写它必定是假绿。
 //  ③ 附件路径的幂等 —— 需要真实上传落盘，另开用例。
@@ -31,15 +31,15 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-message-ack-token';
+const TOKEN = 'inv-message-ack-token';
 
 // 一台隔离 server + 一条已连上的 socket，跑完必定收尸。
 async function withClient(fn) {
-  const dir = mkdtempSync(join(tmpdir(), 'ccm-v2-msg-'));
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-msg-'));
   const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: 'v2-msg-device' },
+    auth: { token: TOKEN, deviceToken: 'inv-msg-device' },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },   // 本机直连：bypass 设备门，本文件只测幂等
   });

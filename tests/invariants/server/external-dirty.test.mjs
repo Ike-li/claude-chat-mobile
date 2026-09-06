@@ -1,11 +1,11 @@
-// tests/v2/server/external-dirty.test.mjs —— SRV-003：终端写过之后，web 发送前必须置换实例
+// tests/invariants/server/external-dirty.test.mjs —— SRV-003：终端写过之后，web 发送前必须置换实例
 // 守护：SESSION-01 / SRV-003（externalDirty 为真且空闲时 dispose+resume 吸收外部轮次，
 //       否则 SDK 子进程内存里没有那些轮次 → 模型看不到 → 从旧位置分叉出第二条 parentUuid 链）
 // 覆盖：真实 transcript 外部增长 → catchUpTick 观察到 → 下一条 web 消息落在【新实例】上
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 //
 // 【从哪来】2026-09-05 阶段 3：把源码文本断言换成行为断言。
-// tests/v2/cli-mirror-state.test.mjs 里那条是 readFileSync(app.js) + indexOf 比三个源码字符串的
+// tests/invariants/cli-mirror-state.test.mjs 里那条是 readFileSync(app.js) + indexOf 比三个源码字符串的
 // 先后（`if (a.externalDirty && a.sessionId)` → `if (a.isBusy())` → `await dedupedResume`）。
 // 那种断言钉的是源码长什么样：改个变量名无故变红，保持文本不变而改坏行为照样绿。
 //
@@ -37,7 +37,7 @@ import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
 
-const TOKEN = 'v2-external-dirty-token';
+const TOKEN = 'inv-external-dirty-token';
 const SESSION_ID = '11111111-2222-3333-4444-555555555555';
 const TICK_MS = 2500;   // mirror-engine 的 CATCH_UP_INTERVAL_MS
 
@@ -59,13 +59,13 @@ function transcriptLine(type, text, cwd, parentUuid = null) {
 }
 
 test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的新实例上', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccm-v2-extdirty-'));
+  const root = mkdtempSync(join(tmpdir(), 'ccm-inv-extdirty-'));
   const ws = join(root, 'ws');
   mkdirSync(ws);
   const cwd = realpathSync(ws);
 
   // 一次性 cwd ⇒ encodeProjectDir 出来的项目目录也是一次性的，不会撞上别的会话。
-  // 只在容器 / CI 跑（test:v2:server 不在宿主机白名单），那里的 HOME 本身就是一次性目录。
+  // 只在容器 / CI 跑（test:invariants:server 不在宿主机白名单），那里的 HOME 本身就是一次性目录。
   const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(cwd));
   mkdirSync(projectDir, { recursive: true });
   const transcript = join(projectDir, `${SESSION_ID}.jsonl`);
@@ -85,7 +85,7 @@ test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的
 
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: 'v2-extdirty-device' },
+    auth: { token: TOKEN, deviceToken: 'inv-extdirty-device' },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },
   });

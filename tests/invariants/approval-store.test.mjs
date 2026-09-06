@@ -1,4 +1,4 @@
-// tests/v2/approval-store.test.mjs —— 审批持久化台账与重启 fail-closed
+// tests/invariants/approval-store.test.mjs —— 审批持久化台账与重启 fail-closed
 // 守护：APPROVAL-02（重启后 pending 全部 expired、decidedBy=system:restart，不可再执行）
 // 覆盖：重启 pending 变 expired（decidedBy=system:restart）+ 单向终态 + 重复 reqId 溯源 + 留存清理防越界 + 容错不阻塞
 // 槽位：S1（纯函数 + 状态机 + 一次性文件落盘）
@@ -16,7 +16,7 @@ let TMP_DIR;
 let STORE_FILE;
 
 test.before(async () => {
-  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-v2-approval-store-'));
+  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-inv-approval-store-'));
   STORE_FILE = join(TMP_DIR, 'approval-requests.json');
   process.env.CCM_APPROVAL_STORE_FILE = STORE_FILE;
   AS = await import('../../app/src/agent/approval-store.js');

@@ -1,4 +1,4 @@
-// tests/v2/cli-mirror-state.test.mjs —— 单驾驶员仲裁与终端只读镜像态
+// tests/invariants/cli-mirror-state.test.mjs —— 单驾驶员仲裁与终端只读镜像态
 // 守护：SESSION-01（终端驾驶时 Web 不得写入）、SRV-003（externalDirty 该置换时置换 / 忙碌时禁置换，两侧都钉）
 // 覆盖：CLI 观察态提取/只读限制 + 安全路径门 + SRV-003 两侧（忙碌禁置换 / 空闲吸收终端轮次）+ 镜像锁收敛
 // 槽位：S1（纯函数 + 一次性目录真 fs 读写 + 源码契约）
@@ -22,7 +22,7 @@ import {
 
 let TMP_BASE;
 test.before(() => {
-  TMP_BASE = mkdtempSync(join(tmpdir(), 'ccm-v2-cli-mirror-'));
+  TMP_BASE = mkdtempSync(join(tmpdir(), 'ccm-inv-cli-mirror-'));
 });
 test.after(() => {
   if (TMP_BASE) rmSync(TMP_BASE, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
@@ -140,7 +140,7 @@ test.describe('SESSION-01 & SRV-003: externalDirty 吸收终端写入与忙碌�
   });
 
   // SRV-003「空闲时必须置换」2026-09-05 搬去 S2：
-  //   tests/v2/server/external-dirty.test.mjs —— 真 transcript 外部增长 → catchUpTick 观察到
+  //   tests/invariants/server/external-dirty.test.mjs —— 真 transcript 外部增长 → catchUpTick 观察到
   //   → 下一条 web 消息落在【新实例】上，且新实例仍绑同一会话。
   //
   // 原来这里是 readFileSync(app.js) + indexOf 比三个源码字符串的先后。那种断言钉的是源码
@@ -209,7 +209,7 @@ test.describe('SESSION-01: 镜像锁判定规则纯函数收敛（history.js）'
 });
 
 // ── transcript 条目过滤的三个独立守卫 ────────────────────────────────────────
-// 本节补的是变异对比里「旧测试独占咬住、v2 原先漏掉」的三个点（21:16 / 21:37 / 29:19）。
+// 本节补的是变异对比里「已退役的旧测试独占咬住、本文件原先漏掉」的三个点（21:16 / 21:37 / 29:19）。
 // 三者都是【任一成立就跳过】的或条件，写成 && 不会让任何既有用例变红。
 test.describe('extractCliObservedState：三道跳过条件互相独立', () => {
   const assistant = (model, over = {}) => ({ type: 'assistant', message: { model }, ...over });

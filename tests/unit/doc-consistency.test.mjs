@@ -19,12 +19,12 @@ test('extractDocumentedNpmScripts finds only package-backed npm commands', () =>
     npm start
     npm test
     npm run check
-    npm run test:playwright:p0 -- --project=chromium
+    npm run test:e2e -- --project=chromium
     npm install --omit=dev
     npm ci
   `);
 
-  assert.deepEqual(commands, new Set(['start', 'test', 'check', 'test:playwright:p0']));
+  assert.deepEqual(commands, new Set(["start", "test", "check", "test:e2e"]));
 });
 
 test('doc consistency reports unknown documented npm scripts and dependency version drift', async t => {

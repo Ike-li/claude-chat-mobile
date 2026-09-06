@@ -1,4 +1,4 @@
-// tests/v2/logic-bg-tasks.test.mjs —— CLI 式动态状态行的 token 短格式边界
+// tests/invariants/logic-bg-tasks.test.mjs —— CLI 式动态状态行的 token 短格式边界
 // 守护：DISPLAY-01（秒表行的 token 展示；与 statuslineFmtTok 是两份【有意不同】的实现，共同意图是不出现 "1000.0k"）
 // 覆盖：k/m 抬升边界（含修复前会漏出 "1000.0k" 的那一档）· 省略 token 段的条件
 // 槽位：S1（纯函数）

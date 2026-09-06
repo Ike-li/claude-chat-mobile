@@ -1,4 +1,4 @@
-// tests/v2/server/unread-on-entry.test.mjs —— sync:since 必须把 live 未读算进 unreadOnEntry
+// tests/invariants/server/unread-on-entry.test.mjs —— sync:since 必须把 live 未读算进 unreadOnEntry
 // 守护：READ-01 邻域 —— PWA 切后台（socket 未断、presence 上报 hidden）期间累积的未读，
 //       重连/切回时必须随 sync:since 的 ack 带回，否则聊天页的未读胶囊恒 0
 // 覆盖：前台时 unreadOnEntry=0（没有未读）· 后台累积后 >0 · 非当前查看实例一律 0
@@ -18,7 +18,7 @@
 //  ① 判据纯函数 unreadOnEntryForSync 的分支（instanceId 不匹配、脏入参）已在
 //     tests/unit/unread-tracker.test.mjs 逐条覆盖，本层只钉「接线有没有把 live 交进去」。
 //  ② 前端胶囊怎么渲染 —— 属 S3。
-//  ③ 跨设备已读位点合并（READ-01 本体）—— 归 tests/v2/read-state.test.mjs。
+//  ③ 跨设备已读位点合并（READ-01 本体）—— 归 tests/invariants/read-state.test.mjs。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,12 +28,12 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-unread-entry-token';
+const TOKEN = 'inv-unread-entry-token';
 const SESSION_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 test('sync:since 的 unreadOnEntry 必须含后台期间累积的 live 未读', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccm-v2-unread-'));
+  const root = mkdtempSync(join(tmpdir(), 'ccm-inv-unread-'));
   const ws = join(root, 'ws');
   mkdirSync(ws);
   const cwd = realpathSync(ws);
@@ -46,7 +46,7 @@ test('sync:since 的 unreadOnEntry 必须含后台期间累积的 live 未读', 
 
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: 'v2-unread-device' },
+    auth: { token: TOKEN, deviceToken: 'inv-unread-device' },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },
   });

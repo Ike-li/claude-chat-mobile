@@ -1,4 +1,4 @@
-// tests/v2/resource-hygiene.test.mjs —— RESOURCE-01：开合 N 次后句柄不随 N 涨
+// tests/invariants/resource-hygiene.test.mjs —— RESOURCE-01：开合 N 次后句柄不随 N 涨
 // 守护：RESOURCE-01（方案 §6）——「开合 N 次后 FD / listener / timer / child / watcher
 //       不随 N 线性涨」。不测 QPS、不做 soak（方案 §17 明确不做）。
 // 覆盖：approval-store 防抖写的 timer 复用（真 timer，进程句柄表可见）
@@ -38,7 +38,7 @@ let AS;
 let TMP_DIR;
 
 test.before(async () => {
-  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-v2-res-'));
+  TMP_DIR = mkdtempSync(join(tmpdir(), 'ccm-inv-res-'));
   process.env.CCM_APPROVAL_STORE_FILE = join(TMP_DIR, 'approval-requests.json');
   AS = await import('../../app/src/agent/approval-store.js');
 });

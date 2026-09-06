@@ -484,7 +484,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
   let displayedSessionId = null;
-  // R65 未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
+  // R65（2026-08-30 需求合稿）未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
   // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
   // 刻意不带 ack：丢一条不致命，下次 connect 的 read:sync 全量归并会补回来。
   const unread = createUnreadTracker({

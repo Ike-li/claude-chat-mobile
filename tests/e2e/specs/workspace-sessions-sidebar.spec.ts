@@ -17,7 +17,7 @@ import {
   sessionRowByInstance,
   startNewSessionInWorkspace,
   workspaceRow
-} from '../../helpers/p0-ui';
+} from '../../helpers/sidebar-ui';
 
 // P3 抽屉局部重建 + SWR 保鲜回归专用：给指定工作区 subtree 下所有会话行元素打一个自定义 JS 属性
 // （不是 DOM attribute）——如果这个目录的 DOM 子树曾被整段拆掉重建，新节点不会带着这个属性，重连
@@ -598,7 +598,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // R65 未读点（2026-08-30，替代当天撤除的 H1 聚合卡，计划见 draft/plan-unread-dot-fable-5.md）：
+  // R65 未读点（2026-08-30，替代当天撤除的 H1 聚合卡）：
   // 抽屉行与首页最近行上，「本设备上次打开后有新活动」的会话亮色点。
   // mock 的 lastUsedAt 相对请求时刻生成：旧会话（-600s 等）恒在基线（页面加载）前＝不亮；
   // 'Another App Concurrency' 恒为请求时刻＝基线后＝亮——恰好覆盖「基线不追溯」与「新活动亮点」。

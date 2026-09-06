@@ -2,7 +2,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitUntilConnected } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 修「切到一个离开期间产生了很多聊天回复的会话时，从离开点逐条吐到最新（打字机效果）」：sync:since
 // 是服务端先把该实例环形缓冲里离开期间攒的事件逐条 agent:event(replay:true) 发完才 ack；客户端在

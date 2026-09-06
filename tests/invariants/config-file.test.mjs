@@ -1,4 +1,4 @@
-// tests/v2/config-file.test.mjs —— 配置读取的源选择、优先级与 .env 可表达性
+// tests/invariants/config-file.test.mjs —— 配置读取的源选择、优先级与 .env 可表达性
 // 守护：CONFIG-01（读写同源、shell 压过文件、ANTHROPIC_* 只认真实 shell、未登记键读宽写严）、CONFIG-02（.env 的 dotenv 与 shell source 两个消费者必须同时安全）
 // 覆盖：新旧文件优先级 + 坏 JSON fail-loud 不回落 + 各类键的来源规则 + 单引号/尾反斜杠拒绝表达
 // 槽位：S1（纯函数 + 一次性目录上的真实读盘，不 mock fs）
@@ -21,7 +21,7 @@ import {
 } from '../../app/src/ops/env-file.js';
 
 let base;
-test.before(() => { base = mkdtempSync(join(tmpdir(), 'ccm-v2-config-')); });
+test.before(() => { base = mkdtempSync(join(tmpdir(), 'ccm-inv-config-')); });
 test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
 let seq = 0;
@@ -191,7 +191,7 @@ test.describe('CONFIG-02 .env 可表达性：两个消费者必须同时安全',
 });
 
 // ── 热加载分类、写入侧归一与 .env 文本编辑 ─────────────────────────────────
-// 本节补的是变异对比里 v2 相对旧测试【整块缺失】的覆盖面（约 37 个变异点）。
+// 本节补的是变异对比里本文件相对已退役旧测试【整块缺失】的覆盖面（约 37 个变异点）。
 test.describe('热加载分类：漏报比误报危险得多', () => {
   test('只有 schema 标 reload:hot 的键能热加载，其余一律 restart', () => {
     // 缺省 restart 是刻意的保守方向：误报重启只是让用户多操作一次，

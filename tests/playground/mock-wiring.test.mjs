@@ -1,4 +1,4 @@
-// playground mock profile 接线。聊天契约仍由 tests/e2e/p0 + test:docker:e2e 覆盖。
+// playground mock profile 接线。聊天契约仍由 tests/e2e/specs + test:docker:e2e 覆盖。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 

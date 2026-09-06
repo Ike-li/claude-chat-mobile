@@ -1,4 +1,4 @@
-// tests/v2/notifications.test.mjs —— 推送抑制矩阵、正文最小化与深链构造
+// tests/invariants/notifications.test.mjs —— 推送抑制矩阵、正文最小化与深链构造
 // 守护：NOTIFY-01（只有 result 会被抑制，判据是前台可见而非 socket 连着）、SEC-04（正文不进第三方明文通道，body 只留工具名，input 正文另走 previewBody）
 // 覆盖：抑制矩阵 + 发送时刻取 live/snapshot 的分流 + 前台判据的保守方向
 //       + ntfy 深链不带完整 cwd + 标题身份拼接
@@ -239,7 +239,7 @@ test.describe('标题身份：让用户一眼看出是哪个项目哪个会话',
 });
 
 // ── 非 envelope 触发的三类通知 ──────────────────────────────────────────────
-// 本节补的是变异对比里 v2 相对旧测试【整块缺失】的覆盖面（约 28 个变异点）。
+// 本节补的是变异对比里本文件相对已退役旧测试【整块缺失】的覆盖面（约 28 个变异点）。
 // 这三类的触发源都不是 agent:event，所以刻意与 notificationForEvent 分列，
 // 免得「type 对应真实 envelope 类型」那条隐含契约变模糊。
 test.describe('后台运行提示：只在「刚离开前台且确实在跑」时发', () => {

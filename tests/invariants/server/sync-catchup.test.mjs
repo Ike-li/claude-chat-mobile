@@ -1,4 +1,4 @@
-// tests/v2/server/sync-catchup.test.mjs —— 重连补缺口：sync:since 的 ack 契约与回放形态
+// tests/invariants/server/sync-catchup.test.mjs —— 重连补缺口：sync:since 的 ack 契约与回放形态
 // 守护：SYNC-01（重连用 sync:since 补环形缓冲内缺口；补发必须标 replay；实例对不上要说 found=false 让客户端清屏重载，而不是把残缺当完整）
 // 覆盖：全量/增量/零补三档 + replay 标记 + 补发内容与原件逐字段一致 + found=false 两条独立判据 + diskLen 的读取条件 + 幂等 + epoch 稳定
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR；CLAUDE_BIN 走 stub，无真 turn）
@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-sync-catchup-token';
+const TOKEN = 'inv-sync-catchup-token';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let dir, server, seeder, instanceId, seededEvent;
@@ -37,7 +37,7 @@ let dir, server, seeder, instanceId, seededEvent;
 async function connect(tag) {
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
-    auth: { token: TOKEN, deviceToken: `v2-sync-${tag}` },
+    auth: { token: TOKEN, deviceToken: `inv-sync-${tag}` },
     transports: ['websocket'], reconnection: false, timeout: 4000,
     extraHeaders: { Host: 'localhost' },   // 本机直连：bypass 设备门，本文件只测补缺口
   });
@@ -69,7 +69,7 @@ async function connect(tag) {
 }
 
 test.before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'ccm-v2-sync-'));
+  dir = mkdtempSync(join(tmpdir(), 'ccm-inv-sync-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
   // 播一条种子消息，让环形缓冲里有一件确定存在的对话内容（user_message，seq=1）。
   seeder = await connect('seeder');

@@ -251,7 +251,7 @@ test('顶栏角标用的连接快照住在横幅控制器里：首连中不点�
 // 而一个把状态搬回顶层、维护得也正确的实现在行为层完全合格、恰恰是这条要挡的东西。
 //
 // 2026-09-05 删掉了原本并列的两条 `assert.match(src, /connBanner\.isConnected\(\)/)` 接线断言：
-// 它们的行为已由 tests/e2e/p0/connection-banner.spec.ts 覆盖。实证过——把 app.js 里那两个调用
+// 它们的行为已由 tests/e2e/specs/connection-banner.spec.ts 覆盖。实证过——把 app.js 里那两个调用
 // 换成常量 true 之后，P0-02g 与 P0-02h 立刻变红。留着源码版只会在重构改名时无故变红。
 test('app.js 不得再持有 everConnected / headerSocketOnline 顶层状态', () => {
   const src = readFileSync(new URL('../../app/public/js/app.js', import.meta.url), 'utf8');

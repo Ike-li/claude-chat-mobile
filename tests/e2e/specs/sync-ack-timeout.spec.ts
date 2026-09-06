@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // bindView 的 sync:since 曾用裸 ack（F3/2026-08-06）：断线时回调被 socket.io-client 的 _clearAcks()
 // 删掉且【不调用】——loadHistory 在同文件为此专门改用 socket.timeout 并写明禁令，但 bindView 与

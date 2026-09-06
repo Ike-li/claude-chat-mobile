@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // 修「切回会话停在旧位置 + 内容像重播一样慢慢滚到最新」：切走再切回同一会话时，shouldReloadOnEnter
 // 的 'keep' 分支恢复的是【离开时缓存的旧内容】底部；离开期间产生的新内容随后才作为 sync:since 补发

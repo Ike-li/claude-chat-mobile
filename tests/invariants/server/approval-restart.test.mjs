@@ -1,4 +1,4 @@
-// tests/v2/server/approval-restart.test.mjs —— 重启后遗留审批的 fail-closed 处置
+// tests/invariants/server/approval-restart.test.mjs —— 重启后遗留审批的 fail-closed 处置
 // 守护：APPROVAL-02（进程启动时磁盘上残留的 pending 一律 expired、decidedBy=system:restart，不可再批准执行；台账写失败不得阻塞启动）
 // 覆盖：真重启后 pending → expired + 终态记录不被改写 + 台账损坏/缺失不阻塞启动
 // 槽位：S2（真组装根 app/server.js 子进程 + 一次性 CCM_DATA_DIR，模型回合是假的）
@@ -9,7 +9,7 @@
 //   「进程真的重启过」正是 APPROVAL-02 唯一要证明的事。
 //
 // 不测什么 + 为什么：
-//  ① 审批的批准/拒绝流程本身 —— 属 approval-store 的 S1 测点，已在 tests/v2/approval-store.test.mjs。
+//  ① 审批的批准/拒绝流程本身 —— 属 approval-store 的 S1 测点，已在 tests/invariants/approval-store.test.mjs。
 //  ② canUseTool 回调真的不再被兑现 —— 需要真 Claude 挂起一个工具调用，属 S5。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,10 +18,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
-const TOKEN = 'v2-approval-restart-token';
+const TOKEN = 'inv-approval-restart-token';
 
 let base;
-test.before(() => { base = mkdtempSync(join(tmpdir(), 'ccm-v2-approval-')); });
+test.before(() => { base = mkdtempSync(join(tmpdir(), 'ccm-inv-approval-')); });
 test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
 let seq = 0;
