@@ -4,7 +4,7 @@
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN，
 //   否则拒绝启动」——向导默认帮你生成。
-//   公网固定部署（Cloudflare Access 2FA / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
+//   公网固定部署（Cloudflare Access 加层 / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
 //   界面语言按环境 locale 自动选：zh_* → 中文，其余 → 英文。
 //
 // 为什么有非交互模式：README 一直建议「把安装丢给编程 agent 代跑」，但 agent 的 shell 没有 TTY，
@@ -206,7 +206,7 @@ export const MESSAGES = {
     nextSteps: '下一步:',
     stepDoctor: '# 预检配置',
     stepStart: '# 启动；日志会打印手机可用的局域网地址',
-    publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
+    publicNote: '公网访问（固定域名 / Cloudflare Access 加层 / 常驻）见 docs/deployment.md。',
     accessPrompt: '你打算怎么从手机访问？（决定 doctor 与安全体检按哪套方案帮你检查；详见 docs/deployment.md）\n'
       + '  1) 仅局域网 —— 同一 WiFi 直连\n'
       + '  2) Cloudflare Tunnel + Access —— 固定域名 + Access 身份加层\n'
@@ -218,7 +218,7 @@ export const MESSAGES = {
     accessInvalid: '请输入 1-5，或直接回车跳过',
     accessChosenNote: p => `已声明公网访问方案：${p}（写入 ACCESS_PROFILE；doctor 与安全体检会按它做针对性检查）`,
     accessNotes: {
-      cloudflare: '公网搭建步骤（固定域名 / Cloudflare Tunnel / Access 2FA / 常驻）见 docs/deployment.md「从零搭建」。',
+      cloudflare: '公网搭建步骤（固定域名 / Cloudflare Tunnel / Access 加层 / 常驻）见 docs/deployment.md「从零搭建」。',
       vpn: '加密隧道 / VPN 的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：手机用隧道内地址访问，'
         + '要收通知须显式设 PUBLIC_URL。用 Tailscale 的话，跑一次 tailscale serve --bg <端口> 就有 HTTPS（PWA / 推送靠它），'
         + 'node scripts/doctor.js 会打印 MagicDNS 地址。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
@@ -284,7 +284,7 @@ export const MESSAGES = {
     nextSteps: 'Next steps:',
     stepDoctor: '# pre-flight your config',
     stepStart: '# start; the log prints a LAN URL you can open on your phone',
-    publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
+    publicNote: 'Public access (fixed domain / Cloudflare Access layer / daemon): see docs/deployment.md.',
     accessPrompt: 'How will your phone reach this machine? (decides which profile doctor and the security check tailor to; see docs/deployment.md)\n'
       + '  1) LAN only — same-WiFi direct access\n'
       + '  2) Cloudflare Tunnel + Access — fixed domain + Access identity layer\n'
@@ -296,7 +296,7 @@ export const MESSAGES = {
     accessInvalid: 'Enter 1-5, or press Enter to skip',
     accessChosenNote: p => `Access profile declared: ${p} (written as ACCESS_PROFILE; doctor and the security check tailor to it)`,
     accessNotes: {
-      cloudflare: 'Public setup steps (fixed domain / Cloudflare Tunnel / Access 2FA / daemon): see docs/deployment.md, section "从零搭建" (from scratch).',
+      cloudflare: 'Public setup steps (fixed domain / Cloudflare Tunnel / Access layer / daemon): see docs/deployment.md, section "从零搭建" (from scratch).',
       vpn: 'Encrypted tunnel / VPN essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — reach the phone via the in-tunnel address, '
         + 'and set PUBLIC_URL explicitly if you want notification deep links. With Tailscale, one `tailscale serve --bg <port>` gives you HTTPS (PWA / push need it) '
         + 'and node scripts/doctor.js prints the MagicDNS address. That section ends with a prompt you can paste to a coding agent.',

@@ -524,7 +524,7 @@ function checkCfAccessTeardown(changes, current) {
 //
 // 一律 warn 不 error：error 会挡死「先声明 cloudflare、下一批再补三键」的合法过渡序列
 // （面板是全或无写入，一条 error 整批拒写），而失配不产生安全洞——server 照常启动，
-// 只是声明与现实没对齐。与 checkCfAccessTeardown 互补：那条管「2FA 被关掉」这个动作本身，
+// 只是声明与现实没对齐。与 checkCfAccessTeardown 互补：那条管「加层被关掉」这个动作本身，
 // 这条管「声明还指着旧方案」；同批清三键+改声明 vpn 时终态一致，本检查静默、只剩 teardown。
 // 触发条件同 checkTogether：本批没碰这组键就不管——否则改个 PORT 都会重弹存量失配的
 // 确认框（稳态失配是 doctor 的活，写入侧只管「这一笔改动造成/维持了失配」）。

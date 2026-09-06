@@ -283,7 +283,7 @@ export function createEnvConfigPanel({
       // 这里曾经传字符串 + 第二个参数：解构字符串原始值不报错，只是每个字段都是 undefined，
       // 而 textContent = undefined 会落成空串（DOMString? 先把 undefined 转成 null），
       // 于是弹出来的是一个**标题空、正文被 hidden 隐藏**的框——只有两个按钮，警告原文全丢。
-      // 用户就这样把公网 2FA 关掉了。tone 也必须是 CONFIRM_TONES 里有的值，'warn' 不是。
+      // 用户就这样把公网 Access 加层关掉了。tone 也必须是 CONFIRM_TONES 里有的值，'warn' 不是。
       const okToGo = await appConfirm({
         title: t('保存前请确认'),
         body: `${lines}\n\n${t('仍然保存？')}`,

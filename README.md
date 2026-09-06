@@ -208,7 +208,7 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORK_DIR` / `WORKDIRS`，不要为了方便把整个 Home 目录加入工作区。
 4. **新设备需要信任。** 除本机直连或已经通过公网身份层（当前实现为 Cloudflare Access，可选）的连接外，持有正确 Token 的新设备仍需要一次设备审批。Token + 设备审批就是公网基线，对 Tailscale、反向代理、直连等拓扑一视同仁。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有 Claude Code 权限规则会继续生效，公网使用前应检查 Bash、Write 等自动放行规则。
-6. **文件编辑属于直接写入。** 内置文件编辑器**不经过 Agent 的工具审批链**，只能修改授权工作区内已存在的文件，并做范围校验、大小限制、哈希冲突检测和审计记录；不需要时可以通过 `FILE_EDIT=off` 关闭。长期公网暴露建议关闭——配置了公网入口（Cloudflare Access / `PUBLIC_URL`）时 `doctor` 会提示，装机向导也会问这一项。
+6. **文件编辑属于直接写入。** 内置文件编辑器**不经过 Agent 的工具审批链**，只能修改授权工作区内已存在的文件，并做范围校验、大小限制、哈希冲突检测和审计记录；不需要时可以通过 `FILE_EDIT=off` 关闭。长期公网暴露建议关闭——声明了公网入口（Cloudflare Access / `PUBLIC_URL` / 公网类 `ACCESS_PROFILE`）时 `doctor` 会提示，装机向导也会问这一项。
 
 如果计划长期暴露到公网，请先阅读 [部署与运维](docs/deployment.md)。
 

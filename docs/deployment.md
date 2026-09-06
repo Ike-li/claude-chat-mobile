@@ -298,7 +298,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | Tailscale Funnel | 任何浏览器打开公开 URL | `reverse-proxy` | **有，全公网可达** |
 
 选错的方向恰好朝放松：`vpn` 不在 doctor 的公网信号集里（`fileEditExposureDiagnostic` 只认
-`cloudflare` 与 `reverse-proxy`），于是文件编辑器直写不会提示关闭、体检还会说"入网资格由隧道承担"——
+`cloudflare` / `reverse-proxy` / `direct`），于是文件编辑器直写不会提示关闭、体检还会说"入网资格由隧道承担"——
 对 Funnel 是假话。手机「设置」里的选项与装机向导都点名了这一条，改声明的时候别按产品名对号入座。
 
 #### Tailscale 五分钟配方（`vpn` 档，不经 Cloudflare 的推荐路径）
@@ -319,8 +319,12 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 **别顺手开 Funnel。** `tailscale funnel` 会把这个地址暴露到全公网，那是另一档拓扑（`reverse-proxy`，见上表）；
 `serve` 只在 tailnet 内可达，未入网的设备根本触达不到端口。
 
-限速与设备审批照常：连接 IP 是手机的隧道内地址，天然逐设备分桶，不需要 `TRUSTED_PROXY`；
-`CF_ACCESS_*` 留空，设备审批自动顶上。
+设备审批照常：Host 是 MagicDNS 名而不是 localhost，不会触发本机免审；`CF_ACCESS_*` 留空，设备审批自动顶上。
+登录限速在 `tailscale serve` 下**合桶**：Serve 是跑在 tailscaled 里的本地反代，固定把请求代理到 `127.0.0.1:<PORT>`，
+CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限速桶（一台输错几次会把另一台一起锁住；
+桶里只有你自己的设备，通常可接受）。别为此开 `TRUSTED_PROXY`：Serve 虽然会覆盖写 `X-Forwarded-For`、采信本身安全，
+但那个开关只对 `reverse-proxy` 档放行，`vpn` 档下 doctor 会对它告警。要逐设备分桶就让手机直连裸隧道地址
+`http://100.x.y.z:<PORT>`，代价是没有 HTTPS。
 
 **托管隧道特有的一条：URL 会漂。** Quick Tunnel 和 ngrok 免费档每次启动分配的域名可能不同。
 `PUBLIC_URL` 是通知深链的来源（见下节），域名一变就指向失效地址——通知照常送达，点开却打不开。
@@ -339,7 +343,7 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | Cloudflare Access（可选加层） | 公网 Host 强制 Access JWT，fail-closed | **不生效**；基线不变。想再加一层可在入口层自行补（反代类拓扑） |
 | `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
 | 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
-| 登录限速粒度 | per 真实来源（`CF-Connecting-IP`，IPv6 按 /64） | 反代类**默认按连接 IP 合桶**；反代自己追加 `X-Forwarded-For` 时可声明 `TRUSTED_PROXY=loopback` 按末跳分桶。vpn / direct 天然分桶 |
+| 登录限速粒度 | per 真实来源（`CF-Connecting-IP`，IPv6 按 /64） | 反代类**默认按连接 IP 合桶**；反代自己追加 `X-Forwarded-For` 时可声明 `TRUSTED_PROXY=loopback` 按末跳分桶。direct 与直连裸隧道地址的 vpn 天然分桶；经 `tailscale serve` 这类本地反代的 vpn 同反代档合桶 |
 
 后两行需要展开：
 
@@ -364,8 +368,9 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 反代行为后的显式 opt-in，不随 `ACCESS_PROFILE=reverse-proxy` 自动打开。`doctor` 的 D21 会在
 反代档未开时提示合桶、在别的档开着或写错值时告警。
 
-VPN 与公网直连两类不受影响：连接 IP 就是客户端本身（隧道内地址 / 真实公网 IP），天然分桶——
-公网直连甚至是全部拓扑里限速粒度最准的一个，代价见下节。
+手机直连裸隧道地址的 VPN 与公网直连两类不受影响：连接 IP 就是客户端本身（隧道内地址 / 真实公网 IP），天然分桶——
+公网直连甚至是全部拓扑里限速粒度最准的一个，代价见下节。VPN 若经 `tailscale serve` 这类本地反代接入
+（它固定代理到 127.0.0.1），则与反代档一样合桶，见上文「Tailscale 五分钟配方」。
 
 限速桶还有第二个合并维度，与选哪种拓扑无关：**IPv6 客户端按 /64 前缀归桶**（`ipRateBucket`）。
 终端用户拿到的最小分配就是一整个 /64，逐地址计桶等于换个源地址就重置失败计数、暴破限速形同虚设。
