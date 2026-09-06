@@ -57,6 +57,8 @@ struct CCMCoreTests {
         testChildEnvironment()
         testChildEnvironmentReachesSubprocess()
         testEverySpawnInjectsEnvironment()
+        testRunSyncDrainsBothPipesConcurrently()
+        testRunSyncLeavesNoZombie()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -1014,5 +1016,92 @@ extension CCMCoreTests {
                       + "GUI 血统的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，装在 ~/.local/bin 的 claude 找不到")
             }
         }
+    }
+}
+
+// MARK: runSync 的两条 §11 点名项（2026-09-05 补）
+//
+// desktop/CCMProcess.swift 的头注写着「两个 pipe 必须并发排空，超时不能建立在
+// readDataToEndOfFile 上」与「断言无 zombie」，但这两条形态一直没有对应用例：
+// 既有的 testRunSyncResourceHygiene 覆盖的是 fd 泄漏、超时、SIGKILL 升格、GCD 线程池。
+extension CCMCoreTests {
+
+    /// ① stdout / stderr 同时突发大输出。
+    ///
+    /// 这条不需要注入缺陷就有判别力：pipe 缓冲区只有 64KB，若实现是「先把 stdout 读完再读
+    /// stderr」，子进程写满 stderr 缓冲后就阻塞，stdout 也永远等不到 EOF —— 双向互锁，
+    /// runSync 只能超时返回 nil。所以「拿到两份完整的 10MB」本身就是并发排空的证据。
+    ///
+    /// 用 yes|head 而不是 /dev/zero：NUL 字节在 String(data:encoding:.utf8) 上的行为
+    /// 依赖实现，断言字节数会变成断言解码规则。可打印数据让长度比对是它字面的意思。
+    static func testRunSyncDrainsBothPipesConcurrently() {
+        let bytes = 10 * 1024 * 1024
+        let script = "yes ccmout | head -c \(bytes) & yes ccmerr | head -c \(bytes) >&2; wait"
+        let started = Date()
+        // 10MB×2 在本机约 1-2s；给 30s 是为了慢机器，不是为了掩盖互锁——
+        // 互锁的表现是【返回 nil】，不是变慢。
+        let r = runSync("/bin/sh", ["-c", script], timeout: 30, drainGrace: 5)
+
+        check(r != nil, "stdout/stderr 同时突发 \(bytes / 1024 / 1024)MB 时 runSync 返回了 nil —— "
+              + "顺序排空会在 pipe 缓冲写满时互锁，这正是它的表现")
+        guard let r else { return }
+
+        eq(r.status, Int32(0), "两条 pipe 都排空后子进程应正常退出")
+        eq(r.stdout.utf8.count, bytes, "stdout 收全")
+        eq(r.stderr.utf8.count, bytes, "stderr 收全")
+        check(Date().timeIntervalSince(started) < 25,
+              "耗时接近超时上限说明有一侧在等，不是并发排空")
+    }
+
+    /// ② 收尸：正常退出的子进程不得留下僵尸。
+    ///
+    /// 判据是「本进程名下 state=Z 的子进程数」。数它需要先证明这个数法看得见僵尸——
+    /// 否则「0 个僵尸」和「数不到僵尸」长得一模一样，用例永远绿。
+    /// 所以先用 posix_spawn 故意造一个不收的子进程当正对照。
+    static func zombieChildCount() -> Int {
+        let me = ProcessInfo.processInfo.processIdentifier
+        guard let out = runSync("/bin/ps", ["-o", "stat=,ppid=", "-ax"], timeout: 10) else { return -1 }
+        return out.stdout.split(separator: "\n").filter { line in
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard f.count >= 2, let ppid = Int32(f[1]) else { return false }
+            return ppid == me && f[0].hasPrefix("Z")
+        }.count
+    }
+
+    static func testRunSyncLeavesNoZombie() {
+        // ★ 正对照：故意 spawn 一个不 wait 的子进程，它退出后必是僵尸。
+        // 数不到它就说明 zombieChildCount 失明，下面那条断言是空过的。
+        var zpid: pid_t = 0
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/usr/bin/true"), nil]
+        defer { argv.forEach { free($0) } }
+        let spawned = posix_spawn(&zpid, "/usr/bin/true", nil, nil, argv, environ)
+        check(spawned == 0, "正对照 spawn 失败（\(spawned)），本用例无法自证数法有效")
+        if spawned == 0 {
+            // 给它一点时间退出并进入 Z 态。
+            var seen = 0
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                seen = zombieChildCount()
+                if seen >= 1 { break }
+                usleep(50_000)
+            }
+            check(seen >= 1, "数法自检：未 wait 的子进程应被数成僵尸，实际 \(seen) —— "
+                  + "这一条红说明 zombieChildCount 看不见僵尸，下面的断言全部空过")
+            var st: Int32 = 0
+            waitpid(zpid, &st, 0)   // 收掉正对照，别污染下面的计数
+        }
+
+        // 正题：连续跑若干条正常命令，runSync 的 tryReap 必须把它们都收掉。
+        let before = zombieChildCount()
+        for _ in 0..<8 {
+            _ = runSync("/bin/sh", ["-c", "printf hi; printf oops >&2; exit 0"], timeout: 5)
+        }
+        // 收尸是同步的（waitpid 在 runSync 自己的循环里），但 ps 自身也是 runSync 起的子进程，
+        // 给一点余量避免把 ps 的瞬时态算进去。
+        usleep(200_000)
+        let after = zombieChildCount()
+        check(after <= before,
+              "8 次正常 runSync 之后僵尸数从 \(before) 涨到 \(after) —— tryReap 没收干净，"
+              + "长跑的菜单栏进程会一路攒僵尸")
     }
 }
