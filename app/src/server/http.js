@@ -206,6 +206,19 @@ function computeAssetVersion(selfJsDir, publicDir, files) {
 }
 
 // index.html：/js/**/*.js 与 /css/**/*.css 统一打 ?v=（已带 query 的不重复追加）。
+// data-cf-access：告诉前端「公网 IdP 加层是否生效」（'1' | '0'，消费方 logic/connection.js 的 authFailurePath）。
+// index.html 的 <body> 自带 ="0"（静态壳离线也要有确定值），这里改写它的值；没有预置时才插入。
+// 此前是无条件往 `<body ` 后再插一个 ="1"，同名属性出现两次，全靠 HTML 解析器「取第一个」才成立——
+// 属性顺序一换就静默翻成 0，公网用户令牌失效后会被送去 token 门而不是 Access 重登（2026-09-06 发现）。
+export function injectCfAccessFlag(html, enabled) {
+  const value = enabled ? '1' : '0';
+  return String(html).replace(/<body\b([^>]*)>/, (_m, attrs) => (
+    /\bdata-cf-access="[^"]*"/.test(attrs)
+      ? `<body${attrs.replace(/\bdata-cf-access="[^"]*"/, `data-cf-access="${value}"`)}>`
+      : `<body data-cf-access="${value}"${attrs}>`
+  ));
+}
+
 export function rewriteIndexAssetUrls(html, assetVersion) {
   return html.replace(
     /(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g,
@@ -237,6 +250,10 @@ export function configureHttpShell({
   // 也不去嗅 node --watch：实测 --watch 被 node 自己消费掉，子进程的 process.execArgv 是空数组。
   hotReloadJs = process.env.ASSET_HOT_RELOAD === '1',
 }) {
+  // Express 默认给每个响应加 `X-Powered-By: Express`：对使用者零价值，对扫描器是一条免费情报
+  // （「这台跑 Express，按它的已知漏洞选武器」）。只能在 app 级关——Express 是在路由响应时才加这个头，
+  // 而下面那个中间件跑在更早，那时头还不存在，在 setSecurityHeaders 里 removeHeader 抓不到它。
+  app.disable('x-powered-by');
   app.use(compression());
   app.use((_req, res, next) => {
     setSecurityHeaders(res);
@@ -265,10 +282,10 @@ export function configureHttpShell({
   };
   const readIndexHtml = () => {
     try {
-      return rewriteIndexAssetUrls(
+      return injectCfAccessFlag(rewriteIndexAssetUrls(
         readFileSync(join(publicDir, 'index.html'), 'utf8'),
         assetVersion,
-      ).replace('<body ', `<body data-cf-access="${strategy.isEnabled() ? '1' : '0'}" `);
+      ), strategy.isEnabled());
     } catch {
       return null; // served as 500 below
     }

@@ -16,6 +16,7 @@ import {
   setSecurityHeaders,
   tokenMatches,
   registerOperationalRoutes,
+  injectCfAccessFlag,
 } from '../../app/src/server/http.js';
 import { createCfAccessStrategy } from '../../app/src/auth/auth-strategy.js';
 
@@ -404,7 +405,8 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     );
 
     const routes = new Map();
-    const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h) };
+    const disabled = [];
+    const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h), disable: (k) => disabled.push(k) };
     configureHttpShell({ app, projectRoot: root, strategy: strategyStub(), ...options });
 
     const handlers = routes.get(String(/^\/js\/.+\.js$/i));
@@ -436,7 +438,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
       hs[hs.length - 1]({ path }, res, () => { out.nextCalled = true; });
       return out;
     };
-    return { root, run, invoke };
+    return { root, run, invoke, disabled };
   }
 
   // 生产档显式传 hotReloadJs:false —— 默认值读的是 process.env.ASSET_HOT_RELOAD，
@@ -566,4 +568,40 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
       if (saved.dev === undefined) delete process.env.DEV_MODE; else process.env.DEV_MODE = saved.dev;
     }
   });
+});
+
+// 2026-09-06 容器演练：index.html 的 <body> 自带 data-cf-access="0"（静态壳离线也要有确定值），此前服务端启用
+// Access 时是往 body 前面再插一个 ="1"，页面上同名属性出现两次，全靠 HTML 解析器「取第一个」才成立——
+// 属性顺序一换就静默翻成 0，而 0 的含义是「非 CF 拓扑」，公网用户令牌失效后会被送去错误的那扇门。
+test('injectCfAccessFlag：改写既有属性值而不是再插一个，body 上同名属性恰好出现一次', () => {
+  const html = '<html><body data-cf-access="0" class="h-full"><div data-cf-access="0"></div></body></html>';
+  const on = injectCfAccessFlag(html, true);
+  const bodyTag = on.match(/<body[^>]*>/)[0];
+  assert.equal((bodyTag.match(/data-cf-access=/g) || []).length, 1, 'body 上同名属性不止一个，正确性只剩解析器取首个这一根稻草');
+  assert.match(on, /<body data-cf-access="1" class="h-full">/);
+  assert.match(on, /<div data-cf-access="0">/, 'body 之外的同名属性不该被碰');
+  assert.match(injectCfAccessFlag(html, false), /<body data-cf-access="0" class="h-full">/);
+  // 没有预置属性的壳也要能注入（失败方向必须有门可弹：缺属性 = token 门）
+  assert.equal(injectCfAccessFlag('<body class="x">', true), '<body data-cf-access="1" class="x">');
+});
+
+// 2026-09-06 容器黑盒探测：响应头里 `X-Powered-By: Express` 在裸奔——对使用者零价值，对扫描器等于
+// 「按 Express 的已知漏洞选武器」。它只能在 app 级关：Express 是在路由响应时才加这个头，而
+// setSecurityHeaders 跑在中间件早期，那时头还不存在，res.removeHeader 抓不到（写成那样是永远绿的假修）。
+test('configureHttpShell 关掉 X-Powered-By：不向扫描器自报技术栈', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-http-xpb-'));
+  try {
+    mkdirSync(join(root, 'app/public/js/app'), { recursive: true });
+    writeFileSync(join(root, 'app/public/index.html'), '<body ></body>');
+    writeFileSync(join(root, 'app/public/js/app.js'), 'export const A = 1;\n');
+    const disabled = [];
+    const app = { use: () => {}, get: () => {}, disable: (k) => disabled.push(k) };
+    configureHttpShell({ app, projectRoot: root, strategy: strategyStub() });
+    assert.ok(
+      disabled.includes('x-powered-by'),
+      'X-Powered-By 仍会随每个响应自报 Express 版本栈——扫描器据此挑现成的 Express 漏洞',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
