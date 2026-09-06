@@ -246,12 +246,17 @@ test('顶栏角标用的连接快照住在横幅控制器里：首连中不点�
   assert.equal(banner.hasEverConnected(), true, '重连中不得把 everConnected 清掉，否则角标会退回首连态');
 });
 
+// 架构守卫：状态不得回落 app.js 顶层作用域（CLAUDE.md「新状态进 app/public/js/app/ 模块」）。
+// 这【本来就该】是源码断言——「某个变量不存在」没有行为等价物，行为层看到的只是「徽标是对的」，
+// 而一个把状态搬回顶层、维护得也正确的实现在行为层完全合格、恰恰是这条要挡的东西。
+//
+// 2026-09-05 删掉了原本并列的两条 `assert.match(src, /connBanner\.isConnected\(\)/)` 接线断言：
+// 它们的行为已由 tests/e2e/p0/connection-banner.spec.ts 覆盖。实证过——把 app.js 里那两个调用
+// 换成常量 true 之后，P0-02g 与 P0-02h 立刻变红。留着源码版只会在重构改名时无故变红。
 test('app.js 不得再持有 everConnected / headerSocketOnline 顶层状态', () => {
   const src = readFileSync(new URL('../../app/public/js/app.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /\blet everConnected\b/);
   assert.doesNotMatch(src, /\blet headerSocketOnline\b/);
-  assert.match(src, /connBanner\.isConnected\(\)/);
-  assert.match(src, /connBanner\.hasEverConnected\(\)/);
 });
 
 test('en：文案走 t()，detail 单位随之英文', () => {
