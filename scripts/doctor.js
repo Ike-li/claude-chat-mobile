@@ -2,7 +2,8 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（21 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（22 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单。
+// 各函数头注里的 Dn 编号比这份清单大 1——历史遗留，两套都在用，别按其中一套去改另一套）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -24,6 +25,7 @@
 // 19. 文件编辑器直写 × 公网迹象（唯一绕过 Agent 审批链的写入通道；只在 CF_ACCESS_*/PUBLIC_URL/ACCESS_PROFILE 显式声明公网时提示，见 doctor-checks.fileEditExposureDiagnostic）
 // 20. 公网访问方案自洽性（ACCESS_PROFILE 声明 vs CF_ACCESS_*/PUBLIC_URL/AUTH_TOKEN/通知配置的稳态核对，见 doctor-checks.accessProfileDiagnostic）
 // 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
+// 22. Tailscale 检测（不经 Cloudflare 的推荐公网路径；只探测 + 指路，不装不起不保活，见 doctor-checks.tailscaleDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -56,9 +58,10 @@ import {
   identifySelfServer,
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
+  tailscaleDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
-import { CONFIG_FILE_NAMES, probeClaudeBin } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude 探测
+import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
@@ -707,6 +710,17 @@ function checkBind() {
   }));
 }
 
+// D23: Tailscale 检测（2026-09-06）。判定在 doctor-checks.tailscaleDiagnostic，探测与 web 体检共用
+// doctor-runtime.probeTailscale；产品对它只探测、指路——不装、不起、不保活（hard-rules §1「公网入口」）。
+function checkTailscale() {
+  results.push(tailscaleDiagnostic({
+    ...probeTailscale(),
+    accessProfile: process.env.ACCESS_PROFILE || '',
+    port: parseInt(process.env.PORT || String(DEFAULT_PORT), 10),
+    lang: LANG,
+  }));
+}
+
 // 执行 22 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
@@ -730,6 +744,7 @@ function checkBind() {
   checkFileEditExposure();
   checkAccessProfile();
   checkBind();
+  checkTailscale();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

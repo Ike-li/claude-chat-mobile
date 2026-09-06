@@ -258,7 +258,19 @@ cloudflared tunnel --url http://localhost:3000
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 2FA 见[部署指南](deployment.md)。
+随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 加层见[部署指南](deployment.md)；不想经过 Cloudflare 看下一节。
+
+### Tailscale（不经 Cloudflare 的推荐路径）
+
+不想让流量经过 Cloudflare、也不想买域名，用 Tailscale：电脑与手机装好并登录同一账号，在电脑上跑一次
+
+```bash
+tailscale serve --bg 3000
+```
+
+然后手机打开 `https://<机器名>.<tailnet>.ts.net/#token=<AUTH_TOKEN>`（地址用 `node scripts/doctor.js` 的 TAILSCALE 项直接看）。
+HTTPS 由 Tailscale 自动签发，PWA 与 Web Push 都能用；只有入了你 tailnet 的设备才触达得到，设备审批仍然生效。
+完整步骤与「别顺手开 Funnel」的提醒见[部署指南](deployment.md)「Tailscale 五分钟配方」。
 
 ## 7. 批准手机设备
 
@@ -508,6 +520,7 @@ npm run playground:reset             # down -v，清设备信任表
 ## 下一步
 
 - 长期公网使用：[部署与运维](deployment.md)
+- 不经 Cloudflare 的公网路径：[部署与运维](deployment.md)「Tailscale 五分钟配方」
 - 理解 Web/CLI 双通道：[架构说明](architecture.md)
 - 理解模型、effort、statusline 展示来源：[展示契约](display-contracts.md)
 - 维护者：n=1 硬性规则与技术债索引：[hard-rules.md](hard-rules.md)

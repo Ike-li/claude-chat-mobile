@@ -220,7 +220,8 @@ export const MESSAGES = {
     accessNotes: {
       cloudflare: '公网搭建步骤（固定域名 / Cloudflare Tunnel / Access 2FA / 常驻）见 docs/deployment.md「从零搭建」。',
       vpn: '加密隧道 / VPN 的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：手机用隧道内地址访问，'
-        + '要收通知须显式设 PUBLIC_URL。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
+        + '要收通知须显式设 PUBLIC_URL。用 Tailscale 的话，跑一次 tailscale serve --bg <端口> 就有 HTTPS（PWA / 推送靠它），'
+        + 'node scripts/doctor.js 会打印 MagicDNS 地址。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
       'reverse-proxy': '反向代理 / 托管隧道的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：Host 透传与 WebSocket 升级'
         + '是硬要求（托管隧道通常自带），建议在入口层再补一层认证；用托管隧道还要留意换 URL 后同步改 PUBLIC_URL，'
         + '否则推送深链指向失效地址。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
@@ -297,7 +298,8 @@ export const MESSAGES = {
     accessNotes: {
       cloudflare: 'Public setup steps (fixed domain / Cloudflare Tunnel / Access 2FA / daemon): see docs/deployment.md, section "从零搭建" (from scratch).',
       vpn: 'Encrypted tunnel / VPN essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — reach the phone via the in-tunnel address, '
-        + 'and set PUBLIC_URL explicitly if you want notification deep links. That section ends with a prompt you can paste to a coding agent.',
+        + 'and set PUBLIC_URL explicitly if you want notification deep links. With Tailscale, one `tailscale serve --bg <port>` gives you HTTPS (PWA / push need it) '
+        + 'and node scripts/doctor.js prints the MagicDNS address. That section ends with a prompt you can paste to a coding agent.',
       'reverse-proxy': 'Reverse proxy / hosted tunnel essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — Host passthrough and '
         + 'WebSocket upgrade are hard requirements (hosted tunnels usually handle both); consider an extra auth layer at the entry point, and if your '
         + 'tunnel URL changes, update PUBLIC_URL too or push deep links will point at a dead address. That section ends with a prompt you can paste to a coding agent.',

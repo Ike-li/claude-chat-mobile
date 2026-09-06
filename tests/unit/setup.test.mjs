@@ -686,6 +686,11 @@ test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE�
       assert.match(MESSAGES.zh.accessNotes[p], /agent/i);
       assert.match(MESSAGES.en.accessNotes[p], /deployment/);
     }
+    // 2026-09-06：Tailscale 是不经 Cloudflare 的推荐路径，选了 vpn 的人多半就是它——
+    // HTTPS（PWA / 推送）那一步靠 tailscale serve，向导要在这里就把命令名说出来。
+    for (const lang of ['zh', 'en']) {
+      assert.match(MESSAGES[lang].accessNotes.vpn, /tailscale serve/, `${lang} vpn 提示要点名 tailscale serve`);
+    }
     assert.equal(typeof MESSAGES.zh.refuse.invalid_access_profile, 'function');
     assert.equal(typeof MESSAGES.en.refuse.invalid_access_profile, 'function');
   });

@@ -263,7 +263,19 @@ Then open:
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain and Access 2FA, see the [deployment guide](deployment.md).
+A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain and the Access layer, see the [deployment guide](deployment.md); to keep traffic off Cloudflare, see the next section.
+
+### Tailscale (the recommended path off Cloudflare)
+
+If you would rather not route traffic through Cloudflare or buy a domain, use Tailscale: install it on this machine and your phone under the same account, then run once on this machine
+
+```bash
+tailscale serve --bg 3000
+```
+
+Then open `https://<machine>.<tailnet>.ts.net/#token=<AUTH_TOKEN>` on your phone (the TAILSCALE line of `node scripts/doctor.js` prints the exact address).
+Tailscale issues the HTTPS certificate for you, so PWA installation and Web Push both work; only devices in your tailnet can reach it, and device approval still applies.
+Full steps and the "do not turn on Funnel by accident" note are in the [deployment guide](deployment.md) (Chinese), section "Tailscale 五分钟配方".
 
 ## 7. Approve the phone
 
@@ -497,6 +509,7 @@ Sending a message will not complete an agent turn (fake-claude). An accidental s
 ## Next steps
 
 - Long-term public access: [Deployment and operations](deployment.md) (Chinese)
+- Public access without Cloudflare: the Tailscale recipe in [Deployment and operations](deployment.md) (Chinese)
 - Understand the Web/CLI paths: [Architecture](architecture.en.md)
 - Understand model, effort, and statusline sources: [Display contracts](display-contracts.md) (Chinese)
 - Maintainers — n=1 hard rules and the technical-debt index: [hard-rules.md](hard-rules.md) (Chinese)

@@ -183,7 +183,7 @@ Claude Chat Mobile supports everything from LAN access to a long-lived public en
 | Same Wi-Fi       | LAN address                                 | the simplest first run         |
 | Temporary public | Cloudflare Quick Tunnel, ngrok, other hosted tunnels | trials and demos      |
 | Long-term public | fixed domain + Cloudflare Tunnel + Access   | regular access from outside    |
-| Self-hosted entry | encrypted tunnel / VPN, self-hosted reverse proxy | keeping traffic off Cloudflare |
+| Off Cloudflare   | Tailscale (recommended; `tailscale serve` provides HTTPS), other encrypted tunnels / VPNs, self-hosted reverse proxy | keeping traffic off Cloudflare |
 
 The setup wizard asks how your phone will reach this machine; the answer is stored as `ACCESS_PROFILE`, and `doctor` plus the phone security check tailor their checks to it (the product never installs third-party tunnel tools — it only points to the docs). Skipping is fine; you can pick a profile later in the phone Settings.
 

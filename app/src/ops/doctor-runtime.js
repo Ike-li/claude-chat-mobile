@@ -3,12 +3,13 @@
 // 脱敏原则：绝不回显明文 token / 绝对路径 / AUD / 密钥——只出布尔、计数、以及危险白名单规则串（用户须据此收紧）。
 import { readFileSync, existsSync, accessSync, constants } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { platform } from 'node:os';
 import { join } from 'node:path';
 import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
-import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic } from './doctor-checks.js';
+import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -34,6 +35,47 @@ export function probeClaudeBin({ env = process.env } = {}) {
     return { explicit, resolvedPath, exists: true, executable: true, version };
   } catch (err) {
     return { explicit, resolvedPath, exists: true, executable: true, versionError: err.message };
+  }
+}
+
+// Tailscale 的实时探测（2026-09-06）。与 probeClaudeBin 同一形态：有副作用（which + 跑一次
+// `tailscale status --json`），所以不在 doctor-checks.js；判定用 tailscaleDiagnostic(probeTailscale())，
+// CLI 与 web 两个 doctor 同一对。产品对 Tailscale 只探测、指路——不装、不起、不保活（hard-rules §1）。
+// macOS 上官方 .app 版的 CLI 不在 PATH（藏在 bundle 里），launchd 拉起的 server 又只有最小 PATH，
+// which 找不到再试几个固定路径。任何异常都吞成事实对象，不抛：体检不能因为一个可选工具而整体失败。
+const TAILSCALE_FALLBACK_PATHS = [
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+  '/opt/homebrew/bin/tailscale',
+  '/usr/local/bin/tailscale',
+];
+export function probeTailscale({ platform: plat = platform(), execFile = execFileSync } = {}) {
+  let bin = resolveExecutableViaPath('tailscale', { execFile });
+  if (!bin && plat === 'darwin') bin = TAILSCALE_FALLBACK_PATHS.find((p) => existsSync(p)) || '';
+  if (!bin) return { found: false };
+  // status --json 在 Stopped / NeedsLogin 下也会把 JSON 打到 stdout，但退出码可能非零——
+  // 抛出来的 err.stdout 里仍是完整 JSON，先试着解析它再放弃。
+  const parse = (raw) => {
+    const st = JSON.parse(String(raw || ''));
+    return {
+      found: true,
+      backendState: String(st?.BackendState || ''),
+      dnsName: String(st?.Self?.DNSName || '').replace(/\.$/, ''),
+    };
+  };
+  try {
+    return parse(execFile(bin, ['status', '--json'], { encoding: 'utf8', timeout: 3000 }));
+  } catch (err) {
+    try {
+      return parse(err?.stdout);
+    } catch {
+      // 2026-09-06 本机实测：CLI 在、守护进程没跑时 stdout 空、stderr「failed to connect to local
+      // Tailscale service; is Tailscale running?」。这不是 Tailscale 的 BackendState 枚举值，给它一个
+      // CCM 侧的名字——用户该做的是「启动 Tailscale」，不是「tailscale up」（up 同样连不上守护进程）。
+      if (/failed to connect to local tailscale/i.test(String(err?.stderr || ''))) {
+        return { found: true, backendState: 'DaemonNotRunning', dnsName: '' };
+      }
+      return { found: true, backendState: '', dnsName: '', error: String(err?.message || err) };
+    }
   }
 }
 
@@ -160,8 +202,8 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
 
 // 编排运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
 // 项数以下方 checks.push 为准，并由 tests/unit/doctor-runtime.test.mjs 的
-// `assert.equal(rep.checks.length, 12)` 硬锁——增删项会让那条断言红，据它更新即可。
-// （此前注释写死的「6 项」在陆续加到 11 项后一直没人更新，是没有任何闸门盯着的注释计数。）
+// `assert.equal(rep.checks.length, N)` 硬锁——增删项会让那条断言红，据它更新即可。
+// （这里刻意不写具体数字：此前写死的「6 项」「12 项」都在陆续加项后失真过，注释计数没有闸门盯着。）
 export function runDoctor(ctx = {}) {
   const checks = [];
 
@@ -250,6 +292,12 @@ export function runDoctor(ctx = {}) {
       notifyConfigured: !!ctx.notifyConfigured,
     },
   });
+
+  // TAILSCALE（D23 的手机端出口，2026-09-06）：不经 Cloudflare 的推荐路径，只探测 + 指路。
+  // 探测可注入（测试 / 不想 spawn 的调用方），缺省真探；port 由 server 传（serve 提示要带实际端口）。
+  const ts = (ctx.probeTailscale || probeTailscale)();
+  const tsd = tailscaleDiagnostic({ ...ts, accessProfile: apProfile, port: ctx.port, lang: ctx.lang });
+  checks.push({ id: 'TAILSCALE', status: tsd.status, detail: tsd.detail, safe: tsd.safe });
 
   // token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
   // 纯空白 token 现在判 fail（绑了公网却不设防），于是这里也正确地不再把它当成一道认证门 ——

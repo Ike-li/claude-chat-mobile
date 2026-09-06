@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot } from '../../app/src/ops/doctor-runtime.js';
+import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot, probeTailscale } from '../../app/src/ops/doctor-runtime.js';
 import { modelSettingsConflictDiagnostic } from '../../app/src/ops/doctor-checks.js';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 
@@ -69,10 +69,11 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
   test('report 含 15 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT / ACCESS_PROFILE / BIND）', () => {
     // 注入探测：不注入的话 runDoctor 会真的 which + 跑一次 claude --version，
     // 让这条断言的结果取决于跑测试的机器上装没装 CLI。
-    const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE });
-    assert.equal(rep.checks.length, 15);
+    const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, probeTailscale: () => STUB_TS_ABSENT });
+    assert.equal(rep.checks.length, 16);
     assert.ok(rep.checks.some(c => c.id === 'BIND'));
     assert.ok(rep.checks.some(c => c.id === 'ACCESS_PROFILE'));
+    assert.ok(rep.checks.some(c => c.id === 'TAILSCALE'));
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
     assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
     assert.ok(rep.checks.some(c => c.id === 'ENV_OVERRIDE'));
@@ -94,6 +95,7 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       configPermsProblems: 0,
       pushEnabled: true,          // PUSH_VAPID 未配另有一条 warn，与本条无关，注入成已配把它排除掉
       shellEnv: {},
+      probeTailscale: () => STUB_TS_ABSENT,   // 不注入会真跑 which tailscale；本条与 Tailscale 无关
     });
     const cf = rep.checks.find(c => c.id === 'CF_ACCESS');
     assert.equal(cf.status, 'ok', `未开 Access 不是缺陷：${cf.detail}`);
@@ -110,6 +112,84 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
 // 现在与 scripts/doctor.js 共用 probeClaudeBin + claudeBinDiagnostic，两边同一判据。
 const STUB_PROBE = { explicit: '/usr/local/bin/claude', exists: true, executable: true, version: '2.1.247 (Claude Code)' };
 const claudeCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], ...ctx }).checks.find(c => c.id === 'CLAUDE_BIN');
+
+// ── TAILSCALE 探测注入（2026-09-06）───────────────────────────────────────
+// 与 probeClaudeBin 同一形态：有副作用的探测可注入，判定走 doctor-checks.tailscaleDiagnostic。
+// 不注入时 runDoctor 会真的 which tailscale（找到还会跑 tailscale status --json），
+// 结果取决于跑测试的机器装没装 Tailscale——凡是断言计数 / readiness / TAILSCALE 本身的用例都要注入。
+const STUB_TS_ABSENT = { found: false };
+const STUB_TS_RUNNING = { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net', ipCount: 1 };
+
+test.describe('TAILSCALE：探测可注入，safe 脱敏，port 透传进 serve 提示', () => {
+  const tsCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }).checks.find(c => c.id === 'TAILSCALE');
+
+  test('注入 Running 事实 + port → ok，detail 带 MagicDNS https 地址与 serve --bg <port>', () => {
+    const c = tsCheck({ probeTailscale: () => STUB_TS_RUNNING, port: 3456, accessProfile: 'vpn' });
+    assert.equal(c.status, 'ok');
+    assert.match(c.detail, /https:\/\/mac\.tail1234\.ts\.net/);
+    assert.match(c.detail, /tailscale serve[^\n]*3456/, 'server 的实际端口必须透传进提示，写死 3000 会误导改过端口的人');
+  });
+
+  test('注入 未安装 + 未声明 → ok（不是缺陷）；未安装 + vpn → warn', () => {
+    assert.equal(tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: '' }).status, 'ok');
+    assert.equal(tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: 'vpn' }).status, 'warn');
+  });
+
+  test('★ safe 不回显 MagicDNS 名（报告会被贴进 issue / 聊天）', () => {
+    const c = tsCheck({ probeTailscale: () => STUB_TS_RUNNING, accessProfile: 'vpn' });
+    assert.doesNotMatch(JSON.stringify(c.safe), /tail1234/);
+    assert.equal(c.safe.hasDnsName, true);
+  });
+});
+
+// ── probeTailscale：execFile 可注入，四种真实返回形态都归成扁平事实，绝不抛 ──
+// 2026-09-06 本机实测：Homebrew 装了 CLI 但守护进程没跑时，`tailscale status --json` 退出码 1、
+// stdout 空、stderr「failed to connect to local Tailscale service」——第一版把它归成 unknown，
+// 用户看不出下一步该做什么。这个形态要有自己的名字。
+test.describe('probeTailscale：四种返回形态', () => {
+  const which = (bin) => (cmd, args) => {
+    if (cmd === 'which' && args[0] === 'tailscale') { if (bin) return `${bin}\n`; throw new Error('not found'); }
+    throw new Error(`unexpected ${cmd}`);
+  };
+  const withStatus = (bin, handler) => (cmd, args, opts) => (cmd === 'which' ? which(bin)(cmd, args) : handler(cmd, args, opts));
+
+  test('PATH 里没有（非 darwin 不试固定路径）→ found:false', () => {
+    assert.deepEqual(probeTailscale({ platform: 'linux', execFile: which('') }), { found: false });
+  });
+
+  test('Running：解析 BackendState 与去尾点的 Self.DNSName', () => {
+    const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', (cmd, args) => {
+      assert.equal(cmd, '/usr/bin/tailscale'); assert.deepEqual(args, ['status', '--json']);
+      return JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'mac.tail1234.ts.net.', TailscaleIPs: ['100.64.0.1'] } });
+    }) });
+    assert.deepEqual(r, { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net' });
+  });
+
+  test('NeedsLogin 退出码非零但 stdout 仍是 JSON → 照样解析', () => {
+    const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', () => {
+      const err = new Error('exit 1'); err.status = 1; err.stdout = JSON.stringify({ BackendState: 'NeedsLogin', Self: { DNSName: '' } }); err.stderr = '';
+      throw err;
+    }) });
+    assert.deepEqual(r, { found: true, backendState: 'NeedsLogin', dnsName: '' });
+  });
+
+  test('守护进程没跑（stderr「failed to connect to local Tailscale service」）→ backendState DaemonNotRunning，不抛', () => {
+    const r = probeTailscale({ platform: 'darwin', execFile: withStatus('/opt/homebrew/bin/tailscale', () => {
+      const err = new Error('Command failed'); err.status = 1; err.stdout = ''; err.stderr = 'failed to connect to local Tailscale service; is Tailscale running?\n';
+      throw err;
+    }) });
+    assert.equal(r.found, true);
+    assert.equal(r.backendState, 'DaemonNotRunning');
+    assert.equal(r.dnsName, '');
+  });
+
+  test('其他失败（超时 / 非 JSON 输出）→ found:true 且 backendState 空，带 error，不抛', () => {
+    const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', () => { const e = new Error('ETIMEDOUT'); e.stdout = 'garbage'; throw e; }) });
+    assert.equal(r.found, true);
+    assert.equal(r.backendState, '');
+    assert.match(String(r.error), /ETIMEDOUT/);
+  });
+});
 
 test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {
   test('探得到且与启动快照一致 → ok，detail 带路径与版本', () => {

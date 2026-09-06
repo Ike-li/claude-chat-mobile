@@ -1043,3 +1043,72 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     detail: bi(lang, '仅局域网：同一 WiFi 直连，无公网面。', 'LAN only: same-WiFi direct access, no public surface.'),
   };
 }
+
+// TAILSCALE / D23（2026-09-06）：不经 Cloudflare 的推荐公网路径。产品对它只**探测 + 指路**：
+// 不装、不起、不保活（hard-rules §1「公网入口」——tailscaled 本来就是系统守护进程，没有任何东西需要
+// CCM 保活，这正是它与 cloudflared 的差别）。探测事实由 doctor-runtime.probeTailscale 采集（有副作用），
+// 这里纯判定。两条不能反的方向：
+//   · 未安装只在声明 vpn 时 warn——其余档它是「还有这条路」的提示，把没装 Tailscale 说成缺陷是误报；
+//   · MagicDNS 名只进 detail 不进 safe——与 CF_ACCESS_HOSTNAME 同一敏感度，报告会被贴进 issue / 聊天。
+export function tailscaleDiagnostic({ found = false, backendState = '', dnsName = '', accessProfile = '', port = 3000, lang = 'zh' } = {}) {
+  const name = 'TAILSCALE';
+  const p = String(accessProfile || '').trim();
+  const state = String(backendState || '').trim();
+  const dns = String(dnsName || '').trim().replace(/\.$/, '');
+  const safe = { found: !!found, backendState: found ? (state || 'unknown') : null, hasDnsName: !!dns };
+
+  if (!found) {
+    if (p === 'vpn') {
+      return {
+        status: 'warn', name, safe,
+        detail: bi(lang,
+          '已声明加密隧道 / VPN，但未找到 tailscale CLI。用 WireGuard / ZeroTier 等其他方案可忽略本条；用 Tailscale 请先安装并登录',
+          'Profile is vpn, but no tailscale CLI was found. Ignore this if you use WireGuard / ZeroTier or another VPN; otherwise install Tailscale and log in'),
+      };
+    }
+    return {
+      status: 'ok', name, safe,
+      detail: bi(lang,
+        '未检测到 Tailscale。不经 Cloudflare 的推荐公网路径：手机与电脑装 Tailscale 登录同一账号，tailscale serve 拿 HTTPS——配方见 docs/deployment.md「Tailscale 五分钟配方」',
+        'Tailscale not detected. Recommended public path without Cloudflare: install Tailscale on your phone and this machine under one account and get HTTPS via tailscale serve — see the Tailscale recipe in docs/deployment.md'),
+    };
+  }
+
+  if (state === 'Running' && dns) {
+    const parts = [bi(lang,
+      `Tailscale 在线：手机入网后打开 https://${dns}（HTTPS 需先跑一次 tailscale serve --bg ${port}，PWA / 推送靠它）`,
+      `Tailscale is up: once your phone joins the tailnet, open https://${dns} (run tailscale serve --bg ${port} once for HTTPS; PWA / push need it)`)];
+    if (p === '') {
+      parts.push(bi(lang, '建议声明 ACCESS_PROFILE=vpn 以获得针对性检查', 'consider declaring ACCESS_PROFILE=vpn for profile-specific checks'));
+    }
+    return { status: 'ok', name, safe, detail: parts.join(bi(lang, '；', '; ')) };
+  }
+
+  // 守护进程没跑（CLI 在、tailscaled 不在）：下一步是启动 Tailscale，不是 tailscale up——up 同样连不上守护进程。
+  if (state === 'DaemonNotRunning') {
+    const fix = bi(lang,
+      '先启动 Tailscale（macOS 打开 Tailscale.app；Linux 起 tailscaled），再 tailscale up 登录',
+      'start Tailscale first (open Tailscale.app on macOS; start tailscaled on Linux), then run tailscale up');
+    return p === 'vpn'
+      ? { status: 'warn', name, safe, detail: bi(lang, `已声明加密隧道 / VPN，但 Tailscale 守护进程没在跑——手机现在连不上这台机器。${fix}`, `Profile is vpn, but the Tailscale daemon is not running — your phone cannot reach this machine right now. Please ${fix}`) }
+      : { status: 'ok', name, safe, detail: bi(lang, `Tailscale 已安装但守护进程没在跑；要走这条路${fix}（配方见 docs/deployment.md）`, `Tailscale is installed but its daemon is not running; if you want this path, ${fix} (see docs/deployment.md)`) };
+  }
+
+  // 装了但没登录 / 已停 / Running 却拿不到 MagicDNS 名（管理台关了 MagicDNS）
+  const label = state || 'unknown';
+  const noDns = state === 'Running';
+  if (p === 'vpn') {
+    return {
+      status: 'warn', name, safe,
+      detail: bi(lang,
+        `已声明加密隧道 / VPN，但 Tailscale 状态是 ${label}${noDns ? '（未拿到 MagicDNS 名，检查管理台是否关闭了 MagicDNS）' : ''}——手机现在连不上这台机器，跑 tailscale up 登录后重试`,
+        `Profile is vpn, but Tailscale reports ${label}${noDns ? ' (no MagicDNS name; check whether MagicDNS is disabled in the admin console)' : ''} — your phone cannot reach this machine right now; run tailscale up and retry`),
+    };
+  }
+  return {
+    status: 'ok', name, safe,
+    detail: bi(lang,
+      `Tailscale 已安装但状态是 ${label}；要走这条路先 tailscale up 登录（配方见 docs/deployment.md）`,
+      `Tailscale is installed but reports ${label}; run tailscale up first if you want this path (see docs/deployment.md)`),
+  };
+}

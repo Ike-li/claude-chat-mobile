@@ -20,6 +20,7 @@ import {
   envOverrideDiagnostic,
   fileEditExposureDiagnostic,
   accessProfileDiagnostic,
+  tailscaleDiagnostic,
   bindDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
@@ -1268,5 +1269,84 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.match(r.detail, /refuses to start/);
     assert.match(r.detail, /AUTH_TOKEN/i);
     assert.doesNotMatch(r.detail, /[一-鿿]/, '英文分支不得混中文');
+  });
+});
+
+// ── Tailscale 检测（2026-09-06）：不用 Cloudflare 的推荐公网路径，产品只探测、指路，不装不起不保活 ──
+//
+// 判定是纯函数：探测事实（有没有 CLI、BackendState、MagicDNS 名）由 doctor-runtime.probeTailscale 采集。
+// 两条不能反的方向：
+//   · 未安装时只有声明了 vpn 才 warn——其余档它就是一条「还有这条路」的提示，不能把没装 Tailscale 说成缺陷；
+//   · MagicDNS 名只进 detail，不进 safe——safe 会被贴进 issue / 聊天，域名等同 CF_ACCESS_HOSTNAME 的敏感度。
+test.describe('tailscaleDiagnostic（TAILSCALE / D23：检测 + 指路，不管进程）', () => {
+  const running = { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net', ipCount: 2, port: 3000 };
+
+  test('未安装 + 声明 vpn → warn，但要说明用 WireGuard / ZeroTier 的可忽略', () => {
+    const r = tailscaleDiagnostic({ found: false, accessProfile: 'vpn' });
+    assert.equal(r.status, 'warn');
+    assert.equal(r.name, 'TAILSCALE');
+    assert.match(r.detail, /tailscale/i);
+    assert.match(r.detail, /WireGuard|ZeroTier/, 'vpn 档不只有 Tailscale 一种实现，别把别家用户说成配错');
+  });
+
+  test('未安装 + 未声明 / cloudflare / lan → ok，且指路 deployment.md 的配方（这是推荐路径的入口，不是缺陷）', () => {
+    for (const accessProfile of ['', 'cloudflare', 'lan', 'reverse-proxy', 'direct']) {
+      const r = tailscaleDiagnostic({ found: false, accessProfile });
+      assert.equal(r.status, 'ok', `profile=${accessProfile || '(空)'} 没装 Tailscale 不是缺陷`);
+      assert.match(r.detail, /Tailscale/);
+      assert.match(r.detail, /deployment/);
+    }
+  });
+
+  test('Running + 有 MagicDNS → ok，detail 给出 https 地址与 tailscale serve 命令（含端口）', () => {
+    const r = tailscaleDiagnostic({ ...running, accessProfile: 'vpn' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /https:\/\/mac\.tail1234\.ts\.net/, '用户要的就是这个地址');
+    assert.match(r.detail, /tailscale serve[^\n]*3000/, 'HTTPS（PWA / 推送）靠 serve，命令要带上实际端口');
+  });
+
+  test('Running + 未声明 profile → ok 并建议声明 vpn；已声明 vpn / cloudflare 都不再劝', () => {
+    const undeclared = tailscaleDiagnostic({ ...running, accessProfile: '' });
+    assert.equal(undeclared.status, 'ok');
+    assert.match(undeclared.detail, /ACCESS_PROFILE=vpn/);
+    for (const accessProfile of ['vpn', 'cloudflare']) {
+      const r = tailscaleDiagnostic({ ...running, accessProfile });
+      assert.equal(r.status, 'ok', `${accessProfile} 与 Tailscale 并存合法`);
+      assert.doesNotMatch(r.detail, /ACCESS_PROFILE=vpn/, `${accessProfile} 已声明，不该再劝声明`);
+    }
+  });
+
+  test('守护进程没跑（DaemonNotRunning）：要说的是「先启动 Tailscale」，不是「tailscale up」——up 也连不上守护进程', () => {
+    const w = tailscaleDiagnostic({ found: true, backendState: 'DaemonNotRunning', accessProfile: 'vpn' });
+    assert.equal(w.status, 'warn');
+    assert.match(w.detail, /启动|Tailscale\.app|tailscaled/);
+    const o = tailscaleDiagnostic({ found: true, backendState: 'DaemonNotRunning', accessProfile: '' });
+    assert.equal(o.status, 'ok');
+    assert.match(o.detail, /启动|Tailscale\.app|tailscaled/);
+    assert.doesNotMatch(tailscaleDiagnostic({ found: true, backendState: 'DaemonNotRunning', accessProfile: '', lang: 'en' }).detail, /[一-鿿]/);
+  });
+
+  test('装了但 NeedsLogin / Stopped：声明 vpn → warn 并点名状态；其余 → ok 附状态', () => {
+    for (const backendState of ['NeedsLogin', 'Stopped']) {
+      const w = tailscaleDiagnostic({ found: true, backendState, dnsName: '', accessProfile: 'vpn' });
+      assert.equal(w.status, 'warn', `vpn + ${backendState} 手机根本连不上，必须 warn`);
+      assert.match(w.detail, new RegExp(backendState));
+      const o = tailscaleDiagnostic({ found: true, backendState, dnsName: '', accessProfile: '' });
+      assert.equal(o.status, 'ok');
+      assert.match(o.detail, new RegExp(backendState));
+    }
+  });
+
+  test('★ 脱敏：safe 只出 found / backendState / hasDnsName，MagicDNS 名与端口都不进 safe', () => {
+    const r = tailscaleDiagnostic({ ...running, accessProfile: 'vpn' });
+    assert.deepEqual(Object.keys(r.safe).sort(), ['backendState', 'found', 'hasDnsName']);
+    assert.equal(r.safe.hasDnsName, true);
+    assert.doesNotMatch(JSON.stringify(r.safe), /tail1234|3000/);
+  });
+
+  test('英文分支不混中文', () => {
+    for (const input of [{ found: false, accessProfile: 'vpn' }, { found: false, accessProfile: '' }, { ...running, accessProfile: '' }, { found: true, backendState: 'NeedsLogin', accessProfile: 'vpn' }]) {
+      assert.doesNotMatch(tailscaleDiagnostic({ ...input, lang: 'en' }).detail, /[一-鿿]/);
+    }
   });
 });

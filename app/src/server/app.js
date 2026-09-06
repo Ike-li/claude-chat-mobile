@@ -3087,6 +3087,8 @@ registerSocketConnection(io, socket => {
       bindPlan,
       // 采信 XFF 的开关：传归一后的值——server 真正用的就是它，体检说的必须与限速真在做的一致。
       trustedProxy: TRUSTED_PROXY,
+      // TAILSCALE 项的 serve 提示要带实际端口。
+      port,
     }));
   });
 
@@ -3536,12 +3538,15 @@ httpServer.listen(port, host, () => {
 
     // 公网那两行按声明的方案给：受管的只有 cloudflared（hard-rules §1「公网入口」），
     // 声明了别的拓扑还硬教 cloudflared 就是答非所问——那些方案产品不管进程，只指路文档。
+    // 未声明时两条路并列：Cloudflare Quick Tunnel 最快能拿到 https，Tailscale 是不经 Cloudflare 的推荐路径。
+    // 这里不探测 Tailscale（启动期不多 spawn），地址由 doctor 打印。
     const profile = ACCESS_PROFILE;
     const publicHint = (tokenPart) => (profile && profile !== 'cloudflare'
       ? [`  公网:   已声明 ACCESS_PROFILE=${profile}，落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」`]
       : [
         `  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`,
         `          再开 https://<随机域名>.trycloudflare.com${tokenPart}  ← 装 PWA 走这条（需 https）`,
+        `          不想经 Cloudflare：装 Tailscale 后 tailscale serve --bg ${port}，地址见 node scripts/doctor.js`,
       ]);
 
     if (isFirstRun) {

@@ -301,6 +301,27 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 `cloudflare` 与 `reverse-proxy`），于是文件编辑器直写不会提示关闭、体检还会说"入网资格由隧道承担"——
 对 Funnel 是假话。手机「设置」里的选项与装机向导都点名了这一条，改声明的时候别按产品名对号入座。
 
+#### Tailscale 五分钟配方（`vpn` 档，不经 Cloudflare 的推荐路径）
+
+先说硬限制：**PWA 与 Web Push 需要 HTTPS。** 这条路上 HTTPS 由 `tailscale serve` 提供（证书由 Tailscale 自动签发），
+不用买域名、不用碰任何控制台。产品对 Tailscale 只探测、指路——不装、不起、不保活：tailscaled 本来就是
+系统守护进程，没有任何东西需要 CCM 保活，这正是它与 `cloudflared` 的差别。
+
+1. 电脑与手机都装 Tailscale，登录**同一个账号**。手机入网后就能触达电脑的隧道内地址（`100.x.y.z`）。
+2. 在电脑上看 MagicDNS 名：`tailscale status`，形如 `<机器名>.<tailnet>.ts.net`。
+   `node scripts/doctor.js` 的 TAILSCALE 项会直接打印 `https://` 地址与下一步命令。
+3. 拿 HTTPS：`tailscale serve --bg 3000`（端口换成你的 `PORT`）。电脑上只跑一次，之后
+   `https://<机器名>.<tailnet>.ts.net` 就指向本机的 3000。若提示 HTTPS 未启用，去管理台 DNS 页打开
+   「HTTPS Certificates」再跑。
+4. 手机打开 `https://<机器名>.<tailnet>.ts.net/#token=<AUTH_TOKEN>`，批准设备审批，装 PWA。
+5. 配置里声明 `ACCESS_PROFILE=vpn`；要收通知就把 `PUBLIC_URL` 设成上面那个 `https://` 地址。
+
+**别顺手开 Funnel。** `tailscale funnel` 会把这个地址暴露到全公网，那是另一档拓扑（`reverse-proxy`，见上表）；
+`serve` 只在 tailnet 内可达，未入网的设备根本触达不到端口。
+
+限速与设备审批照常：连接 IP 是手机的隧道内地址，天然逐设备分桶，不需要 `TRUSTED_PROXY`；
+`CF_ACCESS_*` 留空，设备审批自动顶上。
+
 **托管隧道特有的一条：URL 会漂。** Quick Tunnel 和 ngrok 免费档每次启动分配的域名可能不同。
 `PUBLIC_URL` 是通知深链的来源（见下节），域名一变就指向失效地址——通知照常送达，点开却打不开。
 要长期用，选带固定域名的档位；临时用则每次改 `PUBLIC_URL`，或干脆别配通知。

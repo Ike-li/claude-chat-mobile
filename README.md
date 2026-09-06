@@ -185,7 +185,7 @@ Claude Chat Mobile 支持从局域网到长期公网访问的不同方式：
 | 同一 Wi-Fi | 局域网地址                             | 最简单的首次使用  |
 | 临时公网     | Cloudflare Quick Tunnel、ngrok 等托管隧道 | 临时试用、演示   |
 | 长期公网     | 固定域名 + Cloudflare Tunnel + Access | 长期从外部网络访问 |
-| 自建入口     | 加密隧道 / VPN、自建反向代理                 | 不希望流量经过 Cloudflare |
+| 不经 Cloudflare | Tailscale（推荐，`tailscale serve` 自带 HTTPS）、其他加密隧道 / VPN、自建反向代理 | 不希望流量经过 Cloudflare |
 
 装机向导会问「你打算怎么从手机访问」，答案写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查（产品不安装任何第三方隧道工具，只指路文档）；跳过也不影响使用，随时可在手机「设置」里补选。
 
