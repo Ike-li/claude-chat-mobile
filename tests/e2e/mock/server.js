@@ -584,7 +584,7 @@ function mainCwdSessions() {
   return sessions;
 }
 
-// E18 附件预览：browse:read base64 分片的上传文件夹 fixture——1×1 PNG，覆盖 live meta（storedName）
+// E18 附件预览：attachment:read base64 分片的附件 fixture——1×1 PNG，覆盖 live meta（storedName）
 // 与历史 [附件] 解析两条点击路径；不在 Map 里的 storedName 走 ok:false（文件已删降级路径）。
 const MOCK_ATTACH_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -1468,11 +1468,10 @@ io.on('connection', socket => {
   let mockDemoJsContent = 'function greet(name) {\n  return `Hello, ${name}!`;\n}\n';
   const mockHashOf = text => `mockhash:${text}`;
 
-  // E18 附件预览：browse:read（契约内事件；仅实现 base64 分片路径——文本浏览走真实 server 的集成面）。
-  // 固定 fixture：.ccm-uploads/<storedName> 命中 MOCK_UPLOAD_FILES 才回内容，其余 ok:false（文件已删场景）。
+  // 文件浏览：browse:read（契约内事件；仅实现文本 fixture——附件的 base64 分片已归 attachment:read）。
   socket.on('browse:read', (payload, callback) => {
     if (typeof callback !== 'function') return;
-    const { relPath, offset = 0, maxBytes = 256 * 1024, encoding } = payload || {};
+    const { relPath, offset = 0, encoding } = payload || {};  // maxBytes 随附件分片一起挪去 attachment:read
     // 文本路径：工作区 untracked 预览 fixture
     if (encoding !== 'base64' && String(relPath || '') === 'new-file.js') {
       const text = 'console.log("untracked");\n';
@@ -1493,10 +1492,22 @@ io.on('connection', socket => {
       const text = 'const x = 1;\n';
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: 'conflict-fixture-hash' });
     }
-    const m = /^\.ccm-uploads\/(.+)$/.exec(String(relPath || ''));
-    const bytes = m && encoding === 'base64' ? MOCK_UPLOAD_FILES.get(m[1]) : null;
-    console.log(`[mock] browse:read relPath=${relPath} offset=${offset} hit=${Boolean(bytes)}`);
-    if (!bytes) return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });
+    // 附件不再走本通道（2026-09-06 搬家后归 attachment:read），这里不再有 .ccm-uploads 分支。
+    console.log(`[mock] browse:read relPath=${relPath} offset=${offset} encoding=${encoding} 未命中 fixture`);
+    return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });
+  });
+
+  // E18 附件预览：attachment:read（契约内事件）。入参只有 storedName——与真实 server 一致，目录由
+  // 服务端算，客户端无从表达路径。命中 MOCK_UPLOAD_FILES 才回内容，其余 ok:false（文件已删场景）。
+  socket.on('attachment:read', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    const { storedName, offset = 0, maxBytes = 256 * 1024 } = payload || {};
+    const name = String(storedName || '');
+    // 镜像真实 server 的 isBareStoredName 闸：带分隔符或前导点的一律当不存在，回同一句。
+    const bare = name && !/[/\\]/.test(name) && !name.startsWith('.');
+    const bytes = bare ? MOCK_UPLOAD_FILES.get(name) : null;
+    console.log(`[mock] attachment:read storedName=${name} offset=${offset} hit=${Boolean(bytes)}`);
+    if (!bytes) return callback({ ok: false, error: '附件不存在或已被删除' });
     const slice = bytes.subarray(offset, offset + maxBytes);
     callback({
       ok: true,

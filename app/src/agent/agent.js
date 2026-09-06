@@ -17,6 +17,7 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode, normalizeEffortUiLevel } from './cli-settings-defaults.js';
 import { scanSubagents } from '../sessions/history.js';
 import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.js';
+import { uploadsRoot, ensureUploadsRoot } from '../files/uploads.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -218,6 +219,10 @@ export function buildAgentQueryOptions(session, env = process.env) {
     // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
     ...(settings ? { settings } : {}),
     permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
+    // 附件已不落在 cwd 内（见 files/uploads.js 头注释），这一行把附件根纳入权限范围，Read 才免审批。
+    // 映射到 CLI 的 --add-dir。**只加 uploads 这一个子目录**，绝不是整个 dataDir——那里有设备信任
+    // 与审批台账。实测三组对照见 uploads.js 头注释；去掉这行的直接后果是手机上每发一个附件弹一次审批。
+    additionalDirectories: [uploadsRoot(env)],
     // 不注入 options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow
     canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
     settingSources: ['user', 'project', 'local'],
@@ -519,6 +524,13 @@ export class AgentSession {
 
   start() {
     this.abort = new AbortController();
+    // additionalDirectories 是**启动时快照**，不是路径前缀规则的动态求值：CLI 在 spawn 那一刻解析
+    // 它，**不存在的目录被直接丢弃**，之后再创建也补不进权限范围。全新安装恰好是这个形态——
+    // data/uploads/ 要到第一次上传才被 mkdir 出来，于是那第一个附件会在手机上弹一次审批。
+    // 2026-09-06 双组实测：根不存在 + 运行中创建 → canUseTool 被回调（弹）；根存在（空）+ 运行中
+    // 创建子目录与文件 → 不回调（免审批，且真读到内容）。可见只需保证【根】先在，子目录后建无妨。
+    // 删掉这一行的代价就是全新用户的第一张图必弹审批，且重启会话前一直如此。
+    ensureUploadsRoot();
     const q = query({
       prompt: this.inputStream(),
       options: buildAgentQueryOptions(this),

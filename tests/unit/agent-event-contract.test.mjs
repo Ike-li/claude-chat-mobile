@@ -264,7 +264,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + read:sync / read:mark（2026-09-03，跨设备共享已读位点：抽屉未读此前全存 localStorage，
   //        换设备后 seen 表为空、全部回落到「本设备首次打开时刻」这个很老的基线 → 在另一台读过的
   //        会话整屏复亮。位点搬进 data/read-state.json，本地降级为离线缓存。入向总数 42→44）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 44);
+  //      + attachment:read（2026-09-06，附件从 <workDir>/.ccm-uploads/ 搬进 <dataDir>/uploads/<桶>/ 时新开：
+  //        搬家后 browse:read 读不到附件了——那条通道的 scope 是 workDirs，附件根不在其中会 fail-closed。
+  //        与其把附件根塞进通用文件通道的 scope，不如开这条专用的：入参只有裸文件名，目录由服务端算，
+  //        客户端无从表达任意路径，比原先复用 browse:read 更窄。入向总数 44→45）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 45);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('attachment:read'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:sync'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:mark'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('audit:get'));

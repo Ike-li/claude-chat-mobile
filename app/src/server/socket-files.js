@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { assertSafeRelPath } from '../files/git-workspace.js';
+import { isBareStoredName } from '../files/uploads.js';
 
 export function registerFileSocketHandlers({
   socket,
@@ -9,6 +10,7 @@ export function registerFileSocketHandlers({
   getWorkDirs,
   listDir,
   browseReadFile,
+  locateStoredAttachment,
   listGitChanges,
   readGitDiff,
   searchFiles,
@@ -58,6 +60,39 @@ export function registerFileSocketHandlers({
       });
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
     }
+    return ack({ ok: true, ...result });
+  });
+
+  // E18 附件预览专用通道（2026-09-06 附件搬家时新开）。搬进 dataDir 后 browse:read 读不到附件了：
+  // 那条通道的 scope 是 workDirs，附件根不在其中，会 fail-closed 拒绝。与其把附件根塞进通用文件
+  // 通道的 scope（等于让文件浏览器凭空多出一块可达区域），不如开这条专用的——**入参只有裸文件名**，
+  // 目录全由服务端算，客户端无法表达任意路径，比原先复用 browse:read 时的攻击面更窄。
+  // 新老两处落点都由 locateStoredAttachment 定位，搬家前的旧对话附件照常预览。
+  on(socket, 'attachment:read', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof locateStoredAttachment !== 'function' || typeof browseReadFile !== 'function') {
+      return ack({ ok: false, error: '附件预览不可用' });
+    }
+    const { cwd: requestedCwd, storedName, offset, maxBytes } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    const loc = locateStoredAttachment(cwd, storedName);
+    if (!loc) {
+      // 两种失败合成同一句：storedName 不是裸名（可疑输入）与文件确实不在（已删/从未上传）。
+      // 分开回等于告诉调用方「这名字合法但文件不存在」，白送一个存在性探测器。只有前者进审计。
+      if (!isBareStoredName(storedName)) {
+        logger.warn(`[scope] 附件读取越界拒绝：cwd=${cwd} storedName=${JSON.stringify(storedName)}`);
+        audit.recordAudit({
+          actor: actorFromSocket(socket),
+          action: 'scope_violation',
+          target: cwd,
+          outcome: 'denied',
+          meta: { via: 'attachment:read', storedName: typeof storedName === 'string' ? storedName.slice(0, 120) : null },
+        });
+      }
+      return ack({ ok: false, error: '附件不存在或已被删除' });
+    }
+    const result = browseReadFile(loc.baseDir, loc.storedName, loc.scopeDirs, { offset, maxBytes, encoding: 'base64' });
+    if (result === null) return ack({ ok: false, error: '附件不存在或已被删除' });
     return ack({ ok: true, ...result });
   });
 

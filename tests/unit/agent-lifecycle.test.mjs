@@ -18,7 +18,7 @@ import {
 import { makeSession } from '../helpers/agent-unit.mjs';
 import { getSessionLogs } from '../../app/src/agent/interaction-log.js';
 import { getDiagLogs } from '../../app/src/agent/diag-log.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir } from '../../app/src/sessions/history.js';
@@ -1132,4 +1132,23 @@ test.describe('退出路径清理对称性', () => {
     s.dispose();
     assert.equal(events.filter(e => e.payload?.kind === 'queue_dropped').length, 0);
   });
+});
+
+// ── 附件根必须先于 SDK spawn 建出来 ─────────────────────────────────────────────
+// 这条只能做源码级顺序断言：真正验证它要起一个 CLI 进程并观察 canUseTool 是否被回调，属 S5。
+// 但顺序一旦被挪动，代价是全新用户的第一张图必弹审批，且在重启会话前一直如此——值得钉住。
+test('start() 必须在 query() 之前 ensureUploadsRoot（additionalDirectories 是启动时快照）', () => {
+  const src = readFileSync(new URL('../../app/src/agent/agent.js', import.meta.url), 'utf8');
+
+  const startIdx = src.indexOf('\n  start() {');
+  assert.ok(startIdx > 0, '必须存在 start() 方法');
+  const bodyEnd = src.indexOf('this.consume(q)', startIdx);
+  assert.ok(bodyEnd > startIdx, 'start() 里必须有 this.consume(q)');
+  const body = src.slice(startIdx, bodyEnd);
+
+  const ensureIdx = body.indexOf('ensureUploadsRoot(');
+  const queryIdx = body.indexOf('query({');
+  assert.ok(ensureIdx > 0, 'start() 必须调用 ensureUploadsRoot —— CLI 会丢弃 spawn 时不存在的 --add-dir 目录');
+  assert.ok(queryIdx > 0, 'start() 必须调用 query({');
+  assert.ok(ensureIdx < queryIdx, 'ensureUploadsRoot 必须排在 query() 之前，否则附件根在首次上传前不存在');
 });

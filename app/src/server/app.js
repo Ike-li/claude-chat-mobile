@@ -48,7 +48,7 @@ import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/servic
 import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
-import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
+import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
 import {
   createModelsCache,
@@ -2938,6 +2938,7 @@ registerSocketConnection(io, socket => {
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
+    locateStoredAttachment,
     listGitChanges,
     readGitDiff,
     searchFiles,

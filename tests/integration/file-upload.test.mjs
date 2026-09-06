@@ -14,11 +14,11 @@
 // 直接在 spawn 的子进程 env 里显式传空字符串即可（dotenv 默认不覆盖已存在的 env key，即便是空串）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { validateAttachments, saveAttachments, sanitizeName } from '../../app/src/files/uploads.js';
+import { validateAttachments, saveAttachments, sanitizeName, bucketFor } from '../../app/src/files/uploads.js';
 import { spawnServer, killServer } from './_spawn-server.mjs';
 
 let port, dataDir, serverProc;
@@ -215,52 +215,58 @@ test.describe('文件上传安全集成测试', () => {
   });
 
   // ── saveAttachments 集成测试 ──
-  test('saveAttachments: 正常落盘', async () => {
+  // 附件落点 2026-09-06 从 <workDir>/.ccm-uploads/ 搬到 <dataDir>/uploads/<桶>/，于是这三条**必须
+  // 显式注入一次性 CCM_DATA_DIR**：preload-env 有意不碰这个变量（集成测试各自设置），不注入的话
+  // 每跑一次就往仓库真实 data/uploads/ 里堆文件。
+  const withDirs = async (fn) => {
     const workDir = mkdtempSync(join(tmpdir(), 'ccm-save-test-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'ccm-save-data-'));
     try {
+      await fn(workDir, dataDir, { CCM_DATA_DIR: dataDir });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  };
+
+  test('saveAttachments: 正常落盘到 <dataDir>/uploads/<桶>/', async () => {
+    await withDirs(async (workDir, dataDir, env) => {
       const attachments = [
         { data: Buffer.from('hello').toString('base64'), name: 'test.txt', mimeType: 'text/plain' },
       ];
-      const saved = await saveAttachments(workDir, attachments);
+      const saved = await saveAttachments(workDir, attachments, env);
 
       assert.equal(saved.length, 1);
-      assert.equal(dirname(saved[0].absPath), join(realpathSync(workDir), '.ccm-uploads'));
+      assert.equal(dirname(saved[0].absPath), realpathSync(join(dataDir, 'uploads', bucketFor(workDir))));
       assert.equal(saved[0].name, 'test.txt');
       assert.equal(saved[0].size, 5);
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+      assert.equal(existsSync(join(workDir, '.ccm-uploads')), false, '工作目录不得再被写入');
+    });
   });
 
   test('saveAttachments: 路径穿越被拦截', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'ccm-save-test-'));
-    try {
+    await withDirs(async (workDir, dataDir, env) => {
       const attachments = [
         { data: Buffer.from('hack').toString('base64'), name: '../../../etc/passwd', mimeType: 'text/plain' },
       ];
       // sanitizeName 会把 ../ 清除，所以文件名变成 passwd，不会逃出目录
-      const saved = await saveAttachments(workDir, attachments);
-      assert.ok(saved[0].absPath.includes('.ccm-uploads'));
+      const saved = await saveAttachments(workDir, attachments, env);
+      assert.ok(saved[0].absPath.startsWith(realpathSync(join(dataDir, 'uploads')) + sep));
       assert.ok(!saved[0].absPath.includes('etc'));
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+    });
   });
 
   test('saveAttachments: 文件权限为 0600', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'ccm-save-test-'));
-    try {
+    await withDirs(async (workDir, _dataDir, env) => {
       const attachments = [
         { data: Buffer.from('secret').toString('base64'), name: 'secret.txt', mimeType: 'text/plain' },
       ];
-      const saved = await saveAttachments(workDir, attachments);
+      const saved = await saveAttachments(workDir, attachments, env);
 
       const { statSync } = await import('node:fs');
       const stat = statSync(saved[0].absPath);
       assert.equal(stat.mode & 0o777, 0o600, '文件权限应为 0600');
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+    });
   });
 
   // ── Socket.IO 附件发送集成测试 ──

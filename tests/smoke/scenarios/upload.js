@@ -1,8 +1,8 @@
 // smoke runner `upload` —— E17 文件/图片上传真实验收。
-// 用法：npm run test:smoke -- --scenario upload；零 token 逻辑由 tests/unit/uploads.test.mjs 覆盖。
+// 用法：npm run test:smoke -- --scenario upload；零 token 逻辑由 tests/invariants/uploads.test.mjs 覆盖。
 //     e2e 证：上传 .txt → 落盘 → 路径注入 → claude Read → 暗号原样回显；user_message 回执仅元数据无完整 data
 import { io } from 'socket.io-client';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,7 +18,7 @@ const finish = () => {
 
 // ───────────────────────────── --unit ─────────────────────────────
 if (process.argv.includes('--unit')) {
-  const { sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, UPLOAD_DIR } =
+  const { sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, uploadsRoot, bucketFor } =
     await import('../../../app/src/files/uploads.js');
   const b64 = s => Buffer.from(s).toString('base64');
 
@@ -40,14 +40,17 @@ if (process.argv.includes('--unit')) {
   const big = b64('x'.repeat(11 * 1024 * 1024));
   check('U2-单文件超限', /过大/.test(validateAttachments([{ name: 'big', mimeType: 't', data: big }]) || ''));
 
-  // U3 saveAttachments：真写盘 + 落点在 .ccm-uploads 内 + 内容正确 + 恶意名仍不逃逸
+  // U3 saveAttachments：真写盘 + 落点在 <dataDir>/uploads/<桶>/ 内 + 内容正确 + 恶意名仍不逃逸。
+  // dataDir 必须是一次性目录：附件 2026-09-06 搬出工作目录后，不注入就会写进仓库真实 data/uploads/。
   const tmp = mkdtempSync(join(tmpdir(), 'ccm-upload-'));
+  const tmpData = mkdtempSync(join(tmpdir(), 'ccm-upload-data-'));
+  const env = { CCM_DATA_DIR: tmpData };
   try {
     const saved = await saveAttachments(tmp, [
       { name: 'note.txt', mimeType: 'text/plain', data: b64('暗号 BANANA') },
       { name: '../../../evil.sh', mimeType: 'text/plain', data: b64('rm -rf') }
-    ]);
-    const dir = join(tmp, UPLOAD_DIR);
+    ], env);
+    const dir = realpathSync(join(uploadsRoot(env), bucketFor(tmp)));
     check('U3-落盘子目录', saved.every(s => s.absPath.startsWith(dir + '/')), saved.map(s => s.absPath).join(' , '));
     check('U3-内容正确', readFileSync(saved[0].absPath, 'utf8') === '暗号 BANANA');
     check('U3-恶意名不逃逸', saved[1].absPath.startsWith(dir + '/'), saved[1].absPath);
@@ -67,6 +70,7 @@ if (process.argv.includes('--unit')) {
       && meta[0].name === 'a' && meta[0].size === 3 && meta[0].thumb === 'data:img');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmpData, { recursive: true, force: true });
   }
   finish();
 }

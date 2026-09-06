@@ -360,29 +360,56 @@ export function computeReadiness(checks = []) {
 export const LOG_ROTATE_THRESHOLD_BYTES = 20 * 1024 * 1024;
 
 // R9-uploads（2026-08-06）：附件目录只报可见性，【刻意不自动清理】。
-// .ccm-uploads/ 落在用户真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——按 TTL 或
-// 容量删会让老对话的图片预览全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，那要扫全部
-// transcript 做引用计数，复杂度与风险都不匹配实测增长率（22 天 2.5MB）。对比 statusline 快照：那边过期
-// 即无用（读出来必是 stale），所以那边治、这边不治。同样的「只写不清」症状，处置完全相反。
+// 历史消息回显要读这些文件（附件预览走 attachment:read）——按 TTL 或容量删会让老对话的图片预览
+// 全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，那要扫全部 transcript 做引用计数，
+// 复杂度与风险都不匹配实测增长率（22 天 2.5MB）。对比 statusline 快照：那边过期即无用（读出来
+// 必是 stale），所以那边治、这边不治。同样的「只写不清」症状，处置完全相反。
 // 阈值 200MB：远高于正常使用量级，越过它才值得用户分神去看一眼。
+//
+// 2026-09-06 附件搬家后本项要看【两处】：新落点 <dataDir>/uploads/<桶>/，以及搬家前留在各工作
+// 目录里的 .ccm-uploads/。后者由 dirs[].legacy 标记，单独点名——那是长在用户自己项目里的陌生
+// 目录（正是这次搬家要消除的东西），他多半想清掉；新落点在数据目录里，不碍着谁。
 export const UPLOADS_FOOTPRINT_WARN_BYTES = 200 * 1024 * 1024;
 
-const mb = bytes => Math.round(bytes / 1024 / 1024);
+// 不用「向下取整到 MB」：遗留目录常是几百 KB，那样会印成「0 MB」，读起来像没占地方。
+const size = bytes => (bytes >= 1024 * 1024
+  ? `${Math.round(bytes / 1048576)} MB`
+  : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
-// dirs: [{ cwd, bytes, files }]，由调用方扫盘得到（本函数纯判定、不读盘）。
+// dirs: [{ cwd, bytes, files, legacy? }]，由调用方扫盘得到（本函数纯判定、不读盘）。
+// legacy=true 表示这条来自搬家前的 <workDir>/.ccm-uploads/，而非新落点。
 export function uploadsFootprintDiagnostic({ dirs = [], lang = 'zh' } = {}) {
   const list = (Array.isArray(dirs) ? dirs : []).filter(d => d && Number(d.bytes) > 0);
-  if (!list.length) return { status: 'ok', detail: bi(lang, '无附件占用（.ccm-uploads 为空或不存在）', 'No attachment footprint (.ccm-uploads is empty or absent)') };
+  if (!list.length) return { status: 'ok', detail: bi(lang, '无附件占用（附件目录为空或不存在）', 'No attachment footprint (the attachment dir is empty or absent)') };
 
   const totalBytes = list.reduce((sum, d) => sum + Number(d.bytes || 0), 0);
   const totalFiles = list.reduce((sum, d) => sum + Number(d.files || 0), 0);
   const biggest = list.reduce((max, d) => (Number(d.bytes) > Number(max.bytes) ? d : max), list[0]);
   const base = bi(lang,
-    `手机上传的附件共 ${mb(totalBytes)} MB / ${totalFiles} 个文件（最大：${biggest.cwd}）`,
-    `Attachments uploaded from your phone: ${mb(totalBytes)} MB across ${totalFiles} files (largest: ${biggest.cwd})`);
+    `手机上传的附件共 ${size(totalBytes)} / ${totalFiles} 个文件（最大：${biggest.cwd}）`,
+    `Attachments uploaded from your phone: ${size(totalBytes)} across ${totalFiles} files (largest: ${biggest.cwd})`);
+
+  // 遗留部分单独成段：它长在用户自己的项目里，是这次搬家要消除的东西，值得点名到具体目录。
+  // **不按 bytes 过滤**（所以从入参 dirs 取，不是从已过滤的 list）：附件被删光后剩下的空
+  // .ccm-uploads/ 同样是长在用户项目里的残留。git 不追踪空目录、它也不占空间，所以不进总量，
+  // 但清理时照样得点名——否则用户照着这份报告删完，项目里还杵着几个空壳。
+  const legacyDirs = (Array.isArray(dirs) ? dirs : []).filter(d => d && d.legacy);
+  let legacyNote = '';
+  if (legacyDirs.length) {
+    const legacyBytes = legacyDirs.reduce((sum, d) => sum + Number(d.bytes || 0), 0);
+    const paths = legacyDirs
+      .map(d => `    ${d.cwd}${Number(d.bytes) > 0 ? '' : bi(lang, '（空目录）', ' (empty)')}`)
+      .join('\n');
+    legacyNote = '\n' + bi(lang,
+      `  另有 ${legacyDirs.length} 处工作目录还留着附件改落数据目录【之前】的 .ccm-uploads/（合计 ${size(legacyBytes)}）：\n${paths}\n`
+      + '  新附件不再写进你的项目了。这批旧的可以直接删——代价只是那几条老消息的图片预览失效，对话正文不受影响。',
+      `  ${legacyDirs.length} workdir(s) still hold a .ccm-uploads/ from before the move into the data dir (${size(legacyBytes)} total):\n${paths}\n`
+      + '  New attachments no longer touch your projects. These leftovers are safe to delete — only the previews\n'
+      + '  in those old messages stop working; the conversation text is unaffected.');
+  }
 
   if (totalBytes <= UPLOADS_FOOTPRINT_WARN_BYTES) {
-    return { status: 'ok', detail: base };
+    return { status: 'ok', detail: base + legacyNote };
   }
   return {
     status: 'warn',
@@ -391,7 +418,7 @@ export function uploadsFootprintDiagnostic({ dirs = [], lang = 'zh' } = {}) {
       + '  需要回收空间时手动删（删掉的那几条历史里预览会失效，对话正文不受影响）。',
       '  The product never cleans these up: attachment previews in your history read these files, so deleting\n'
       + '  by age or size would break images in old conversations. Delete them by hand when you need the space\n'
-      + '  (previews in those messages stop working; the conversation text is unaffected).'),
+      + '  (previews in those messages stop working; the conversation text is unaffected).') + legacyNote,
   };
 }
 

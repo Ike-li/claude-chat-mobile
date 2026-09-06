@@ -267,8 +267,8 @@ export function createAttachmentController(context, options = {}) {
 }
 
 // ── E18 附件按需预览 loader ──────────────────────────────────────────────────────
-// 气泡（live user_message / 历史 chip）点击附件 → browse:read base64 分页拉原图字节（复用鉴权+设备门+
-// scope guard 的既有通道；256KB 小片不阻塞弱网下的 live 事件流）→ Uint8Array 按 offset 拼装 →
+// 气泡（live user_message / 历史 chip）点击附件 → attachment:read base64 分页拉原图字节（专用通道，
+// 仍走鉴权+设备门；256KB 小片不阻塞弱网下的 live 事件流）→ Uint8Array 按 offset 拼装 →
 // Blob → FileReader.readAsDataURL（CSP img-src data: 已允许，不引入 blob: URL）→ 灯箱 openPreviewUrl。
 // 失败降级：文件被删/越界/超时 → toast；meta 里有 thumb（live 路径）则退回放大缩略图。
 const PREVIEW_CHUNK_BYTES = 256 * 1024;      // 与服务端 MAX_BROWSE_BYTES 硬顶对齐
@@ -290,13 +290,15 @@ export function createStoredPreviewLoader(context, options = {}) {
   const cache = new Map(); // `${cwd}\0${storedName}` → dataURL（Map 插入序当 LRU：命中重插尾部）
   const inflight = new Set();
 
-  function readChunk(cwd, relPath, offset) {
+  // 只传 storedName（裸文件名），不再自己拼 `.ccm-uploads/<name>` 相对路径：附件已搬到 dataDir，
+  // 目录由服务端按 cwd 算（新家优先、旧对话回落老位置），前端无从、也不需要表达任意路径。
+  function readChunk(cwd, storedName, offset) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (!settled) { settled = true; reject(new Error(t('读取超时'))); }
       }, PREVIEW_CHUNK_TIMEOUT_MS);
-      context.socket?.emit('browse:read', { cwd, relPath, offset, maxBytes: chunkBytes, encoding: 'base64' }, res => {
+      context.socket?.emit('attachment:read', { cwd, storedName, offset, maxBytes: chunkBytes }, res => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -350,8 +352,7 @@ export function createStoredPreviewLoader(context, options = {}) {
     if (inflight.has(key)) return; // 同一附件正在拉取：忽略重复点击
     inflight.add(key);
     try {
-      const relPath = `.ccm-uploads/${storedName}`;
-      const first = await readChunk(cwd, relPath, 0);
+      const first = await readChunk(cwd, storedName, 0);
       const totalSize = first.totalSize;
       if (!Number.isFinite(totalSize) || totalSize <= 0) throw new Error(t('附件为空'));
       if (totalSize > maxTotalBytes) {
@@ -369,7 +370,7 @@ export function createStoredPreviewLoader(context, options = {}) {
       const worker = async () => {
         while (next < offsets.length) {
           const off = offsets[next++];
-          const res = await readChunk(cwd, relPath, off);
+          const res = await readChunk(cwd, storedName, off);
           const chunk = base64ToBytes(res.content);
           bytes.set(chunk, off);
           received += chunk.length;

@@ -467,8 +467,11 @@ npm run uninstall -- --purge --yes  # additionally delete the data dir (known fi
 It only removes what this product installed or produced: launchd units outside the service
 manifest (for example a hand-installed cloudflared tunnel), `~/.claude/projects`, `~/.cloudflared`,
 and anything in settings.json beyond the two bridge entries are never touched. Per-workdir
-`.ccm-uploads/` is reported but never deleted (attachment previews in old transcripts read from it).
-Unrecognized files in the data dir (manual backups etc.) are kept and listed. Browser/phone-side
+both attachment directories are reported but never deleted, because previews in old transcripts read
+from them: `uploads/` in the data dir (the current location — `--purge` leaves it alone too) and
+per-workdir `.ccm-uploads/` (left over from before the 2026-09-06 move). Other unrecognized files in
+the data dir (manual backups etc.) are kept and listed as well. Run `node scripts/doctor.js` to see
+how much each one holds. Browser/phone-side
 site data and the installed PWA must be cleared manually.
 
 ## Troubleshooting

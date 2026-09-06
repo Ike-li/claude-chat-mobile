@@ -247,9 +247,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // E18 附件预览：三条点击路径（fixture 由 mock 场景 test:attach-preview + mock browse:read 提供）——
+  // E18 附件预览：三条点击路径（fixture 由 mock 场景 test:attach-preview + mock attachment:read 提供）——
   // live 气泡缩略图（meta.storedName 按需拉原图）、历史 chip（history.js [附件] 解析形态、无 thumb）、
-  // 已删文件（browse:read ok:false → toast 降级、不开灯箱）。断言基于 DOM 状态非像素。
+  // 已删文件（attachment:read ok:false → toast 降级、不开灯箱）。断言基于 DOM 状态非像素。
   test('P0-18i 点击气泡附件可预览：live 缩略图 / 历史 chip / 已删文件降级', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:attach-preview');

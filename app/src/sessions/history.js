@@ -430,10 +430,14 @@ const HISTORY_THINKING_CAP = 4000;
 // 历史回显把该块剥离出 attachments meta（{name, storedName}）——与 live user_message 事件的
 // displayText/attachments 语义对齐（气泡不显路径、chip 可点击预览），且对改动上线前的旧消息追溯生效。
 // 解析必须保守（防误伤普通用户文本）：只认【尾部】块——从尾往前找 header 行，其后每个非空行都必须是
-// /.ccm-uploads/ 直下的绝对路径；任一行不符 → 整体不解析、原文返回。header 措辞用宽松尾注（可用 .+ 读取：）
+// 附件目录直下的绝对路径；任一行不符 → 整体不解析、原文返回。header 措辞用宽松尾注（可用 .+ 读取：）
 // 兼容将来注入文案微调。name 恢复：storedName 去 `<Date.now()>-<hex8>-` 前缀（saveAttachments 命名约定）。
-const ATTACH_BLOCK_HEADER_RE = /^\[附件\] 已上传到工作目录，可用 .+ 读取：$/;
-const ATTACH_PATH_RE = /^\/.*\/\.ccm-uploads\/([^/\\]+)$/;
+//
+// 【新老两种落点都要认】2026-09-06 附件从 <workDir>/.ccm-uploads/ 搬到 <dataDir>/uploads/<桶>/。
+// transcript 是不可变的：搬家前写下的消息永远是老路径 + 老措辞（「已上传到工作目录」），把任一侧
+// 从这两条正则里删掉，对应那批旧对话的附件 chip 会当场全部消失。两条各留了一个可选分支。
+const ATTACH_BLOCK_HEADER_RE = /^\[附件\] 已上传(?:到工作目录)?，可用 .+ 读取：$/;
+const ATTACH_PATH_RE = /^\/.*\/(?:\.ccm-uploads|uploads\/[^/\\]+)\/([^/\\]+)$/;
 export function splitAttachmentBlock(text) {
   const raw = String(text ?? '');
   if (!raw.includes('[附件]')) return { text: raw, attachments: [] }; // 快速路径：绝大多数消息零成本通过

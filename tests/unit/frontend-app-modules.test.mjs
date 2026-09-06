@@ -234,7 +234,7 @@ test('attachment makeThumb loads via data URL and never creates a blob: object U
 });
 
 // ── E18 附件预览：createStoredPreviewLoader ──────────────────────────────────────
-// 气泡附件点击 → browse:read base64 分页拉原图 → Blob → FileReader.readAsDataURL → 灯箱。
+// 气泡附件点击 → attachment:read base64 分页拉原图 → Blob → FileReader.readAsDataURL → 灯箱。
 // fake FileReader 用真 Blob.arrayBuffer() 还原字节再拼 data URL——端到端验证分片拼装正确性。
 function makePreviewHarness({ fileBytes, chunkBytes = 10, ackOverride = null, deferFirstChunk = false } = {}) {
   const emits = [];
@@ -281,9 +281,11 @@ test('stored preview loader fetches a single-chunk image and opens the lightbox 
   const { loader, emits, opened, bars } = makePreviewHarness({ fileBytes, chunkBytes: 100 });
   await loader.open({ cwd: '/w', storedName: '123-abcd1234-p.png', name: 'p.png', mimeType: 'image/png' });
   assert.equal(emits.length, 1);
-  assert.equal(emits[0].event, 'browse:read');
-  assert.equal(emits[0].payload.relPath, '.ccm-uploads/123-abcd1234-p.png');
-  assert.equal(emits[0].payload.encoding, 'base64');
+  assert.equal(emits[0].event, 'attachment:read');
+  // 只带裸文件名：附件搬进 dataDir 后目录由服务端按 cwd 算（新家优先、旧对话回落老位置），
+  // 前端不再自己拼 `.ccm-uploads/<name>`——它连附件根在哪都不知道，也不需要知道。
+  assert.equal(emits[0].payload.storedName, '123-abcd1234-p.png');
+  assert.equal(emits[0].payload.relPath, undefined, '不得再发相对路径');
   assert.equal(emits[0].payload.cwd, '/w');
   assert.equal(opened.length, 1);
   assert.equal(opened[0].name, 'p.png');

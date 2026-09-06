@@ -168,7 +168,7 @@ chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
 # ccm.config.json: { "CCM_DATA_DIR": "/Users/you/Library/Application Support/claude-chat-mobile/data" }
 ```
 
-目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；上传附件仍在各工作目录的 `.ccm-uploads/`。迁移前先停掉 server（桌面端菜单或 headless 那个终端）并备份，迁完跑 `node scripts/doctor.js` 再按原入口拉起。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
+目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；手机上传的附件落在本目录的 `uploads/<工作区桶>/` 下（2026-09-06 起——此前落在各工作目录的 `.ccm-uploads/`，那批文件不迁移也不删除，历史消息预览会自动回落过去读）。迁移前先停掉 server（桌面端菜单或 headless 那个终端）并备份，迁完跑 `node scripts/doctor.js` 再按原入口拉起。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
 
 ### 4. 通知（可选：ntfy + 深链）
 

@@ -17,7 +17,7 @@
 // 11. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 // 12. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
 // 13. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
-// 14. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
+// 14. 附件占用可见性（数据目录 uploads/ + 各工作区遗留的 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
 // 15. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
 // 16. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
 // 17. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
@@ -33,6 +33,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../app/src/files/file-security.js';
+import { uploadsRoot, bucketFor, LEGACY_UPLOAD_DIR } from '../app/src/files/uploads.js';
 import { resolveWorkdirSource as loadWorkdirSource } from '../app/src/sessions/workdirs.js';
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
@@ -570,21 +571,44 @@ function workdirPaths() {
   return [...new Set(out)];
 }
 
+// 单个目录的体积/文件数。目录不存在返回 null（＝这里没传过附件）。
+function scanDirSize(dir) {
+  let bytes = 0;
+  let files = 0;
+  try {
+    for (const name of readdirSync(dir)) {
+      try { bytes += statSync(join(dir, name)).size; files += 1; }
+      catch { /* 读取中被删/无权限：跳过该文件 */ }
+    }
+  } catch { return null; }
+  return { bytes, files };
+}
+
 // R9：手机上传附件的磁盘占用可见性。只报不删——理由见 uploadsFootprintDiagnostic 的头注释。
+// 2026-09-06 附件搬家后要扫【两处】，漏掉任一处都会给出误导性的「无附件占用」：
+//   · 新落点 <dataDir>/uploads/<桶>/  —— 今天所有的上传都在这
+//   · 各工作区的 .ccm-uploads/        —— 搬家前的遗留，标 legacy 由判定函数单独点名
 function checkUploadsFootprint() {
   const dirs = [];
+
+  // 桶名（-Users-x-proj）反查回真实路径：拿白名单工作区各自算一次 bucketFor 建映射。查不到的桶
+  // 说明那个工作区已从白名单移除——此时退回显示桶名本身，总比丢掉这条占用不报要好。
+  const byBucket = new Map(workdirPaths().map(p => [bucketFor(p), p]));
+  const root = uploadsRoot();
+  try {
+    for (const bucket of readdirSync(root)) {
+      const hit = scanDirSize(join(root, bucket));
+      if (hit) dirs.push({ cwd: byBucket.get(bucket) ?? bucket, ...hit });
+    }
+  } catch { /* 根不存在 = 还没传过任何附件 */ }
+
+  // 空的 .ccm-uploads/ 也要送进去（hit.bytes 可能为 0）：判定函数对 legacy 条目不按体积过滤，
+  // 空壳同样会被点名。漏送的话用户照着报告清完，项目里还留着几个空目录。
   for (const cwd of workdirPaths()) {
-    const dir = join(cwd, '.ccm-uploads');
-    let bytes = 0;
-    let files = 0;
-    try {
-      for (const name of readdirSync(dir)) {
-        try { bytes += statSync(join(dir, name)).size; files += 1; }
-        catch { /* 读取中被删/无权限：跳过该文件 */ }
-      }
-    } catch { continue; } // 目录不存在 = 该工作区没传过附件
-    dirs.push({ cwd, bytes, files });
+    const hit = scanDirSize(join(cwd, LEGACY_UPLOAD_DIR));
+    if (hit) dirs.push({ cwd, ...hit, legacy: true });
   }
+
   const r = uploadsFootprintDiagnostic({ dirs, lang: LANG });
   (r.status === 'warn' ? warn : ok)(bi('附件占用', 'Attachment footprint'), r.detail);
 }

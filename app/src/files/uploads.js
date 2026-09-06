@@ -1,14 +1,78 @@
 // uploads.js —— E17：附件落盘 + 路径注入 + 防穿越。
-// 落盘方案（维护者 2026-06-12 定）：完整文件字节写入 WORK_DIR/.ccm-uploads/，
-// 把绝对路径注入 prompt 文本，claude 用 Read（白名单内、cwd 内免审批）读取——最贴终端等价。
+// 落盘方案（2026-09-06 改）：完整文件字节写入 <CCM_DATA_DIR>/uploads/<workdir 桶>/，把绝对路径
+// 注入 prompt 文本，claude 用 Read 读取——靠 SDK 的 additionalDirectories（映射到 CLI --add-dir）
+// 把该根目录纳入权限范围，所以落在 cwd 外仍然免审批。
+//
+// 【为什么不再写进 WORK_DIR/.ccm-uploads/】原方案（2026-06-12 定）把附件塞进用户工作目录，唯一
+// 理由是「cwd 内 Read 免审批」。代价是**每个用过附件的项目都被种进一个 .ccm-uploads/**——那些
+// 项目并不知道本产品存在，本仓库能靠 .gitignore 挡住，用户其它仓库只会多出一个陌生的未跟踪目录。
+// SDK 0.3 起 Options.additionalDirectories 能直接扩权限范围，那条约束就不再成立了。
+//
+// 【实测（2026-09-06，CLI 2.1.261，三组对照，permissionMode 全程 default）】
+//   cwd 内 / 无 add-dir → 不弹审批    原设计的前提仍然成立
+//   cwd 外 / 无 add-dir → **弹审批**  对照组：证明这实验有区分度
+//   cwd 外 / 有 add-dir → 不弹审批    承重点：canUseTool 根本没被回调
+// 判据是 canUseTool 有没有被调用，不是看模型输出的文字。缺中间那组，实验就恒绿、等于没测。
+//
 // 缩略图（thumb）由前端 canvas 降采样生成、经 user_message 投送，此处只透传不生成（零图片依赖）。
 import { mkdir, open, realpath, rm } from 'node:fs/promises';
 import { join, resolve, basename, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { constants, realpathSync } from 'node:fs';
+import { constants, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { rejectableSymlinkComponent } from './file-security.js';
+import { resolveDataDir } from '../shared/data-dir.js';
 
-export const UPLOAD_DIR = '.ccm-uploads';     // WORK_DIR 下的落盘子目录（点前缀，gitignore 友好）
+export const LEGACY_UPLOAD_DIR = '.ccm-uploads';  // 搬家前的落点（WORK_DIR 下）；只读回落，永不再写
+export const UPLOADS_SUBDIR = 'uploads';          // 新家：<dataDir>/uploads/<bucket>/
+
+// 附件根。**只有这一个子目录**进 additionalDirectories——绝不是整个 dataDir：那里躺着
+// trusted-devices.json / approval-requests.json / cf-access-certs.json，整目录放行等于把设备信任
+// 与审批台账交给模型读。加宽这个返回值前先想清楚这一条。
+export function uploadsRoot(env = process.env) {
+  return join(resolveDataDir(env), UPLOADS_SUBDIR);
+}
+
+// 把附件根建出来。**必须在 SDK query spawn 之前调用**——理由见 agent.js#start 那段注释，
+// 一句话：--add-dir 是启动时快照，根目录那一刻不存在就会被 CLI 直接丢弃，之后再建也补不回来。
+// 失败不抛：目录建不出来时附件功能本来就用不了，但不该连带让整个会话起不来（saveAttachments
+// 会在真正上传时报出准确的磁盘错误）。
+export function ensureUploadsRoot(env = process.env) {
+  const root = uploadsRoot(env);
+  try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+  } catch { /* best-effort，见上 */ }
+  return root;
+}
+
+// workDir → 落盘桶名，与 CLI 的 ~/.claude/projects/ 同构（路径分隔符换 '-'），可读且能反查。
+// 结果**必须是单个路径段**：残留任何分隔符都会让落点越出 uploadsRoot，故分隔符与前导点一并清掉。
+// 碰撞（/a/b 与 /a-b 同名）在 n=1 单用户下可忽略，且撞了也只是两个项目的附件同桶——storedName
+// 自带时间戳+随机段仍唯一，预览不受影响，退化的只有 doctor 报告里的归属。
+export function bucketFor(workDir) {
+  const raw = String(workDir ?? '').trim();
+  if (!raw) return 'default';
+  const flat = resolve(raw).replace(/[\\/:]/g, '-').replace(/^\.+/, '');
+  return flat || 'default';
+}
+
+// storedName 必须是裸文件名：无路径分隔符、无前导点。与前端 attachments.js 的同款前置检查对齐
+// （那边省一次往返，这边才是闸）。
+export function isBareStoredName(name) {
+  return typeof name === 'string' && name.length > 0 && !/[/\\]/.test(name) && !name.startsWith('.');
+}
+
+// symlink 检查锚定在 root 之下：root 自身及其祖先由 CCM_DATA_DIR 决定，用户有意把数据目录指向
+// 哪里是他自己的配置（能改那条链的人早已能改 data/ 里的信任台账），不该因此拒绝落盘。真正要防的
+// TOCTOU 面是 saveAttachments 刚 mkdir 出来的那个桶目录，在 mkdir 与 open 之间被换成外向 symlink。
+function rejectableBelowRoot(path, root) {
+  const hit = rejectableSymlinkComponent(path);
+  if (!hit) return null;
+  // 两侧口径必须一致：rejectableSymlinkComponent 返回的是 resolve() 后、**未解析 symlink** 的分量，
+  // 所以锚点也只能 resolve、不能 realpath——拿它跟 realpath 过的根比前缀，在 macOS 上
+  // （/var → /private/var）永远匹配不上，这道闸会静默变成永远放行。
+  // 严格「之下」（不含锚点自身）：root 本身或其祖先是 symlink 属于用户对 CCM_DATA_DIR 的配置，不拦。
+  return hit.startsWith(resolve(root) + sep) ? hit : null;
+}
 
 // 三个上限**前端也各有一份**（public/js/app/attachments.js 的 MAX_COUNT / MAX_FILE / MAX_TOTAL）——
 // 边界闸禁止前后端互相 import，只能各写各的。tests/unit/single-source-of-truth.test.mjs 逐个比对，
@@ -53,16 +117,26 @@ export function validateAttachments(attachments) {
   return null;
 }
 
-// 落盘（假定已 validate）：写 WORK_DIR/.ccm-uploads/<ts>-<rand>-<safe>，resolve 校验落点不逃出该目录。
-// 增强安全：symlink 检查 + O_NOFOLLOW 标志（POSIX 平台防 TOCTOU 攻击）。
+// 落盘（假定已 validate）：写 <dataDir>/uploads/<bucket>/<ts>-<rand>-<safe>，resolve 校验落点不逃出
+// 附件根。增强安全：symlink 检查 + O_NOFOLLOW 标志（POSIX 平台防 TOCTOU 攻击）。
 // FILES-2：mkdir 后再检一次 symlink；用 realpath 后的目录做前缀校验，挡中间路径被换成外向 symlink。
 // 返回 [{ absPath, name, mimeType, size, thumb? }]（含 absPath 供注入 prompt；thumb 原样透传给 user_message）。
-export async function saveAttachments(workDir, attachments) {
-  const dir = join(workDir, UPLOAD_DIR);
-  await mkdir(dir, { recursive: true });
+export async function saveAttachments(workDir, attachments, env = process.env) {
+  const root = uploadsRoot(env);
+  const dir = join(root, bucketFor(workDir));
+  await mkdir(dir, { recursive: true, mode: 0o700 }); // 0700：附件根住在 data/ 里，随那边的 owner-only 规矩
+
+  // 锚点取 realpath 后的 root：允许 CCM_DATA_DIR 自身是 symlink（理由见 rejectableBelowRoot 头注释），
+  // 但此后所有前缀校验一律以解析后的真实根为准。
+  let rootReal;
+  try {
+    rootReal = await realpath(root);
+  } catch {
+    rootReal = resolve(root);
+  }
 
   // 写前 + 写后双检：mkdir 与 open 之间 dir 可能被换成外向 symlink
-  let symlink = rejectableSymlinkComponent(dir);
+  let symlink = rejectableBelowRoot(dir, root);
   if (symlink) {
     throw new Error(`上传目录路径包含可疑符号链接: ${symlink}`);
   }
@@ -73,18 +147,17 @@ export async function saveAttachments(workDir, attachments) {
   } catch {
     dirResolved = resolve(dir);
   }
-  // FILES-2：realpath 后必须仍落在 workDir 真实路径树内（挡中间路径换成外向 symlink）
-  let workReal = resolve(workDir);
-  try { workReal = realpathSync(workDir); } catch { /* keep resolve */ }
-  if (dirResolved !== workReal && !dirResolved.startsWith(workReal + sep)) {
-    throw new Error('上传目录解析后越出工作目录');
+  // FILES-2：realpath 后必须仍落在附件根的真实路径树内（挡中间路径换成外向 symlink）
+  if (dirResolved !== rootReal && !dirResolved.startsWith(rootReal + sep)) {
+    throw new Error('上传目录解析后越出附件根目录');
   }
 
   const saved = [];
 
   for (const a of attachments) {
-    // 每文件写前再检一次（FILES-2 中间窗口）
-    symlink = rejectableSymlinkComponent(dirResolved);
+    // 每文件写前再检一次（FILES-2 中间窗口）。锚点跟随第一个参数的口径：这里查的是 realpath 过的
+    // dirResolved，锚点就必须用 rootReal；上面查未解析的 dir，锚点才是未解析的 root。混用即哑闸。
+    symlink = rejectableBelowRoot(dirResolved, rootReal);
     if (symlink) {
       throw new Error(`上传目录路径包含可疑符号链接: ${symlink}`);
     }
@@ -115,7 +188,7 @@ export async function saveAttachments(workDir, attachments) {
     } catch {
       parentReal = null;
     }
-    if (!parentReal || (parentReal !== dirResolved && !parentReal.startsWith(workReal + sep))) {
+    if (!parentReal || (parentReal !== dirResolved && !parentReal.startsWith(rootReal + sep))) {
       try { await rm(absPath, { force: true }); } catch { /* best-effort */ }
       throw new Error('上传目录在写入窗口内被替换为越界路径，已拒绝');
     }
@@ -139,12 +212,45 @@ export async function saveAttachments(workDir, attachments) {
   return saved;
 }
 
+// 预览定位：(workDir, storedName) → 该文件的真实所在，新家优先、miss 回落搬家前的老位置。
+// 老位置的文件**不迁移也不删除**：transcript 里注入的绝对路径永久指向那里，回落这一条就是旧对话
+// 附件不断链的全部保证。返回 { baseDir, storedName, scopeDirs, legacy } 供调用方走既有的 scope 校验读取。
+export function locateStoredAttachment(workDir, storedName, env = process.env) {
+  if (!isBareStoredName(storedName)) return null;
+  const root = uploadsRoot(env);
+  const dir = join(root, bucketFor(workDir));
+  if (existsSync(join(dir, storedName))) {
+    return { baseDir: dir, storedName, scopeDirs: [realOrSelf(root)], legacy: false };
+  }
+  const raw = String(workDir ?? '').trim();
+  if (raw) {
+    const legacyDir = join(raw, LEGACY_UPLOAD_DIR);
+    if (existsSync(join(legacyDir, storedName))) {
+      return { baseDir: legacyDir, storedName, scopeDirs: [realOrSelf(raw)], legacy: true };
+    }
+  }
+  return null;
+}
+
+// scopeDirs 必须是【已解析符号链接的】路径：isInScope 拿 realpathSync(candidate) 与 scopeDirs 原样
+// 比前缀，一侧解析一侧不解析，在 macOS 上（/var → /private/var、/tmp → /private/tmp）会让合法读取
+// 恒被 fail-closed 拒掉——这个坑本仓踩过一次。解析失败时回退原值，交由 isInScope 自己拒。
+function realOrSelf(p) {
+  try {
+    return realpathSync(resolve(p));
+  } catch {
+    return resolve(p);
+  }
+}
+
 // 路径注入：原文末尾追加 [附件] 段（绝对路径逐行）。原文空（纯附件）时仅留附件段。
 // 这是「告诉 claude 文件在哪」的静态标注，非中间层智能——等价终端里你说「看下 X 文件」。
 export function buildPromptText(text, saved) {
   const base = (text || '').trim();
   if (!saved || saved.length === 0) return base;
-  const block = '[附件] 已上传到工作目录，可用 FileRead / Read 读取：\n' + saved.map(s => s.absPath).join('\n');
+  // 文案不再说「工作目录」——附件已搬进 dataDir，说错位置会误导模型去 cwd 里找。
+  // 旧 transcript 里仍是老措辞，history.js 的 header 正则两种都认。
+  const block = '[附件] 已上传，可用 FileRead / Read 读取：\n' + saved.map(s => s.absPath).join('\n');
   return base ? `${base}\n\n${block}` : block;
 }
 

@@ -23,7 +23,9 @@ ccm.config.json.*
 # 不 ignore 的话，它存在的瞬间会被 inventory 扫成「未分类文件」，随机打红 check 与单测。
 .codex-chat-rpc.jsonl
 
-# 上传附件落盘区（E17/ADR-013：本仓库被当 WORK_DIR 测试时会出现于此）
+# 上传附件的【旧】落盘区。2026-09-06 起附件写进 <CCM_DATA_DIR>/uploads/（已被上面的 /data/ 盖住），
+# 本仓库被当 WORK_DIR 时不再产生这个目录。这条规则留着是为了挡住搬家前的历史残留——那批文件
+# 不迁移也不删除（历史消息的附件预览仍会回落过去读），删掉这行它们就会集体冒进 git status。
 .ccm-uploads/
 
 # Claude Code 会话产物（plan、skill 历史等，非项目资产）

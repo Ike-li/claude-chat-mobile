@@ -608,6 +608,59 @@ test.describe('uploadsFootprintDiagnostic（R9：附件目录可见性，不自�
     const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/repo', bytes: 0, files: 0 }] });
     assert.equal(r.status, 'ok');
   });
+
+  // 2026-09-06 附件搬家：新落点在数据目录，搬家前的那批还留在用户各个项目里。后者才是用户想清掉的
+  // （长在自己项目里的陌生目录），所以必须【点名到具体目录】而不是只报个总量。
+  test('legacy 目录单独成段并点名到路径，且说明删了只影响老图片预览', () => {
+    const r = uploadsFootprintDiagnostic({
+      dirs: [
+        { cwd: '/Users/x/proj', bytes: 3 * 1024 * 1024, files: 5 },
+        { cwd: '/Users/x/unrelated-project', bytes: 700 * 1024, files: 9, legacy: true },
+      ],
+    });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /unrelated-project/, '遗留目录必须点名到具体路径——用户要知道去哪删');
+    assert.match(r.detail, /之前|遗留|predates/, '必须说清这是搬家前的遗留，否则用户不知道能不能删');
+    assert.match(r.detail, /预览|preview/, '必须讲明删除的代价');
+  });
+
+  test('没有 legacy 条目时不出现遗留段（不制造无谓的清理焦虑）', () => {
+    const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/Users/x/proj', bytes: 1024 * 1024, files: 2 }] });
+    assert.equal(r.status, 'ok');
+    assert.doesNotMatch(r.detail, /\.ccm-uploads/);
+  });
+
+  test('超阈值 + 有 legacy：不清理说明与遗留段并存，互不吃掉', () => {
+    const r = uploadsFootprintDiagnostic({
+      dirs: [
+        { cwd: '/Users/x/proj', bytes: UPLOADS_FOOTPRINT_WARN_BYTES + 1, files: 400 },
+        { cwd: '/Users/x/unrelated-project', bytes: 2 * 1024 * 1024, files: 3, legacy: true },
+      ],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /不会自动清理|手动|never cleans/);
+    assert.match(r.detail, /unrelated-project/);
+  });
+
+  // 附件被删光后剩下的空 .ccm-uploads/ 仍是长在用户项目里的残留。它不占空间、git 也不追踪空目录，
+  // 所以不进总量——但照着这份报告清理的人必须看得到它，否则删完项目里还杵着几个空壳。
+  test('空的遗留目录同样点名并标注为空（清理时不该漏）', () => {
+    const r = uploadsFootprintDiagnostic({
+      dirs: [
+        { cwd: '/Users/x/proj', bytes: 2 * 1024 * 1024, files: 3 },
+        { cwd: '/Users/x/emptied-project', bytes: 0, files: 0, legacy: true },
+      ],
+    });
+    assert.match(r.detail, /emptied-project/, '空壳也是残留，必须点名');
+    assert.match(r.detail, /空目录|empty/, '要标出它是空的，否则用户以为里面还有东西');
+  });
+
+  // 遗留目录常是几百 KB。向下取整到 MB 会印成「0 MB」，读起来像「没占地方」，正好劝退清理。
+  test('不足 1MB 用 KB 表述，不得出现 0 MB', () => {
+    const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/Users/x/proj', bytes: 704 * 1024, files: 14 }] });
+    assert.match(r.detail, /KB/);
+    assert.doesNotMatch(r.detail, /\b0 MB\b/);
+  });
 });
 
 // ── claudeConfigDirDiagnostic ─────────────────────────────────────────────

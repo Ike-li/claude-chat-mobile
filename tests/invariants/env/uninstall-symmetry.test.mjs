@@ -103,6 +103,10 @@ function makeSandbox() {
   w(join(home, 'Library', 'Logs', 'SomeOtherApp', 'app.log'), 'other\n');
   w(join(work, 'src', 'index.js'), 'export const a = 1;\n');
   w(join(work, '.ccm-uploads', 'photo.png'), 'PNG-BYTES');                        // 只报不删
+  // 2026-09-06 起的新落点：数据根下的 uploads/<桶>/。它【必须】活过 --purge——若有人把 uploads
+  // 加进 DATA_DIR_WHITELIST，上面那张「删除面恰好等于预期集」的表会当场多出条目而变红。
+  // 代价的量级：删掉它 = 用户历史消息里的图片全部打不开（对话正文不受影响）。
+  w(join(data, 'uploads', '-fake-workdir', '1700000000-abcd1234-new.png'), 'PNG-NEW');
   w(join(primary, 'src', 'main.js'), 'export const b = 2;\n');
   w(join(primary, '.ccm-uploads', 'shot.png'), 'PNG-BYTES-2');                    // 同上，走 env.WORK_DIR
   w(join(fromConfig, '.ccm-uploads', 'cfg.png'), 'PNG-BYTES-3');                  // 同上，走文件里的 WORK_DIR
@@ -241,6 +245,15 @@ test('--purge 的删除面恰好等于预期集：多删一项就红', () => {
     `内联 WORKDIRS 里的工作区上传目录必须报告，实际输出：\n${text}`);
   assert.ok(text.includes(join(sb.primary, '.ccm-uploads')),
     'WORK_DIR 主工作区的上传目录必须报告——单工作区是最常见形态，漏它等于这段报告形同虚设');
+
+  // 数据根下的新落点同样只报不删，且**不能**被归进「未识别，保留」那一档：说成未识别，用户会
+  // 当成没清干净的垃圾顺手删掉，而那正是我们要避免的结果（历史消息里的图片会集体打不开）。
+  const uploadsHome = join(sb.data, 'uploads');
+  assert.ok(text.includes(uploadsHome), `数据根下的附件目录必须在输出里点名，实际输出：\n${text}`);
+  const uploadsLine = lines.find(l => l.includes(uploadsHome));
+  assert.doesNotMatch(uploadsLine, /未识别/,
+    `附件目录是刻意保留、不是残留垃圾，措辞不得与「未识别」同档：${uploadsLine}`);
+  assert.match(uploadsLine, /预览|附件/, `必须讲明它是什么、删了会怎样：${uploadsLine}`);
 });
 
 test('~/.claude/projects 与 ~/.cloudflared 逐字节不变（不是「还在」，是「没被改过」）', () => {

@@ -5,8 +5,9 @@
 //   （service-install.json 的 unit 表、DATA_FILE_WHITELIST）。不 glob、不删「看起来像我们的」、
 //   不信磁盘 JSON 里存的路径。
 //   永不动：~/.claude/projects、~/.cloudflared、不在 manifest 的 launchd unit（含手工装的
-//   com.ccm.tunnel*）、settings.json 里桥条目以外的内容、各工作区 .ccm-uploads（只报不删——
-//   历史消息附件预览要读它，沿用 doctor 的立场）。
+//   com.ccm.tunnel*）、settings.json 里桥条目以外的内容、**两处附件目录**（只报不删——历史消息
+//   的附件预览要读它们，沿用 doctor 的立场）：数据根下的 uploads/（2026-09-06 起的落点，刻意
+//   不进 DATA_DIR_WHITELIST，所以 --purge 也不删），以及各工作区搬家前遗留的 .ccm-uploads/。
 //
 // 两档语义：默认只卸安装面（launchd 受管 unit / CCM.app / 偏好域 / 两个 CLI 桥及其
 // ~/.claude/ccm 残余）；--purge 追加数据面（数据根白名单逐项、仓库根配置文件、受管 unit 日志）。
@@ -27,6 +28,7 @@ import { SERVICE_UNIT_LOG_NAMES } from '../app/src/ops/service-units.js';
 import { readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { resolveWorkdirSource } from '../app/src/sessions/workdirs.js';
 import { claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import { UPLOADS_SUBDIR, LEGACY_UPLOAD_DIR } from '../app/src/files/uploads.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(HERE);
@@ -48,6 +50,9 @@ export const DATA_FILE_WHITELIST = Object.freeze([
   'log-terminal.json',
   'read-state.json',
 ]);
+// ⚠ uploads/ **有意不在这张表里**：它进来就意味着 --purge 会删光用户所有附件，而历史消息里的
+// 图片预览全部依赖这些文件（对话正文不受影响，但图片会集体变成打不开）。这与 doctor 的立场一致，
+// 由 tests/invariants/env/uninstall-symmetry.test.mjs 的一条断言钉住——加进来会当场变红。
 const DATA_DIR_WHITELIST = Object.freeze(['worktree-settings']);
 const CONFIG_FILES = Object.freeze(['ccm.config.json', '.env', 'workdirs.json']);
 
@@ -298,7 +303,12 @@ export function createUninstaller({
         const leftovers = readdirSync(dataDir).filter((f) => !dryRun
           || (!DATA_FILE_WHITELIST.includes(f) && !DATA_DIR_WHITELIST.includes(f)));
         if (leftovers.length) {
-          for (const f of leftovers) out(`  · 未识别，保留：${join(dataDir, f)}`);
+          for (const f of leftovers) {
+            // uploads/ 不是「未识别」，是**刻意保留**——说成未识别会让用户以为是没清干净的垃圾而手动删掉，
+            // 那正好是我们要避免的结果。它仍留在 leftovers 里参与计数，所以下面的 rmdir 分支不会误触发。
+            if (f === UPLOADS_SUBDIR) out(`  ⚠ 保留（附件目录，删了历史消息的图片预览会断链）：${join(dataDir, f)}`);
+            else out(`  · 未识别，保留：${join(dataDir, f)}`);
+          }
           push('purge:data', dryRun ? 'plan' : 'done', `白名单 ${removed} 项${dryRun ? '将' : '已'}删除；${leftovers.length} 项未识别内容保留在 ${dataDir}`);
         } else {
           if (!dryRun) rmdirSync(dataDir); // safe-path: 非递归 rmdir，仅目录已空时执行
@@ -337,7 +347,8 @@ export function createUninstaller({
         }
       }
 
-      // 6d. 各工作区 .ccm-uploads：只报不删（历史消息附件预览要读它）。
+      // 6d. 各工作区搬家前遗留的 .ccm-uploads：只报不删（历史消息的附件预览仍会回落到这里读）。
+      //     新落点（数据根下的 uploads/）由上面 6a 的 leftovers 分支报告，不在这里重复打印。
       //
       // 工作区来源走 workdirs.js 的 resolveWorkdirSource，与 server 的 readWorkdirSource
       // 和 doctor 的 workdirPaths 同一优先级（WORK_DIRS env > WORK_DIRS_FILE env > 内联 WORKDIRS）。
@@ -357,8 +368,8 @@ export function createUninstaller({
         }).result?.entries ?? []).map((e) => e.path),
       ].filter(Boolean);
       for (const dir of new Set(workdirs)) {
-        const uploads = join(dir, '.ccm-uploads');
-        if (existsSync(uploads)) out(`  ⚠ 保留（只报不删，删了历史附件预览会断链）：${uploads}`);
+        const uploads = join(dir, LEGACY_UPLOAD_DIR);
+        if (existsSync(uploads)) out(`  ⚠ 保留（附件改落数据目录前的遗留，只报不删）：${uploads}`);
       }
     }
 

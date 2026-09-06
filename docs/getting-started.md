@@ -479,8 +479,9 @@ npm run uninstall -- --purge --yes  # 追加删除数据目录（按白名单逐
 
 只删本产品安装/运行产生的东西：不在 service manifest 里的 launchd unit（比如手工装的
 cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 里桥条目以外的内容一律不碰；
-各工作区的 `.ccm-uploads/` 只报告不删除（历史消息的附件预览要读它）。数据目录里不认识的文件
-（手动备份等）会保留并列出。浏览器/手机侧的站点数据和 PWA 需要手动清。
+两处附件目录都只报告、不删除——历史消息的附件预览要读它们：数据目录下的 `uploads/`（当前落点，
+`--purge` 也不删），以及各工作区的 `.ccm-uploads/`（2026-09-06 改落数据目录之前的遗留）。
+数据目录里其它不认识的文件（手动备份等）同样保留并列出。跑 `node scripts/doctor.js` 能看到它们各占多少。浏览器/手机侧的站点数据和 PWA 需要手动清。
 
 ## 常见问题
 
