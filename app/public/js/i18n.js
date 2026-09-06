@@ -496,11 +496,15 @@ export const EN_DICT = Object.freeze({
   '个运行中': 'running',
   '运行中': 'Running',
   '终端运行中': 'Terminal running',
+  // 桌面端 Code 模式（Claude.app 里的 Code 标签）驾驶的会话。它跑的是同一份 claude 二进制，但
+  // 说成"终端"会给出错误的处理预期——用户要去的是桌面 app 的窗口，不是某个终端标签页。
+  '桌面端运行中': 'Desktop app running',
   // 「终端需要你」刻意不译成 "Needs you"（那是 Web 侧 permission 的词）：这条得走到电脑前按，
   // 措辞要能读出"在哪儿处理"。对齐 CLI 自己 fleet 视图里的 "Needs input"。
   '终端需要你': 'Terminal needs input',
   '已打开': 'open',
   '终端已打开': 'Terminal open',
+  '桌面端已打开': 'Desktop app open',
   '子代理': 'Subagents',
   '后台命令': 'Commands',
   '工作流': 'Workflow',

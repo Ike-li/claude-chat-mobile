@@ -142,11 +142,16 @@ const DRAWER_STATUS_LABELS = {
 //   两边同时 busy（续接重叠、CLI --resume 抢走尚未 settle）→ 终端运行中
 //     （registry busy 是「终端正在写」的权威信号，必须写在标题行，不能再藏进副行）
 // 目录角标/顶部点仍用 resolveDrawerStatus 的三态，不把来源抬到工作区层。
-export function resolveDrawerStatusChip({ liveState, terminalState } = {}) {
+//
+// terminalSource（2026-09-06）：外部驾驶员不只有终端了。桌面端 Code 模式（Claude.app 的 Code
+// 标签，entrypoint=claude-desktop）驾驶时说"终端运行中"是在说错话——用户会去翻终端标签页，
+// 而那个回合其实跑在桌面 app 的窗口里。状态轴不变（都是 busy），只换措辞。
+// 未知/缺失 source 回落"终端"：与本字段引入之前完全同形，老服务端的行不会塌成无 chip。
+export function resolveDrawerStatusChip({ liveState, terminalState, terminalSource = null } = {}) {
   const status = resolveDrawerStatus({ liveState, terminalState });
   if (!status) return null;
   const label = (status === 'busy' && terminalState === 'busy')
-    ? '终端运行中'
+    ? (terminalSource === 'claude-desktop' ? '桌面端运行中' : '终端运行中')
     : (DRAWER_STATUS_LABELS[status] || '运行中');
   return { status, label };
 }
@@ -157,10 +162,11 @@ export function formatSessionRowSubtitle({
   whenText = '',
   liveOpen = false,
   terminalState = null,
+  terminalSource = null,
   shortId = null,
 } = {}) {
   const parts = [];
-  if (terminalState === 'alive') parts.push(t('终端已打开'));
+  if (terminalState === 'alive') parts.push(terminalSource === 'claude-desktop' ? t('桌面端已打开') : t('终端已打开'));
   if (whenText) parts.push(whenText);
   if (liveOpen) parts.push(t('已打开'));
   if (shortId) parts.push(String(shortId));

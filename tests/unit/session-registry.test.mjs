@@ -129,11 +129,11 @@ test('listTerminalSessionStates：按 cwd+sessionId 归键返回 busy/alive，�
     put(6, 'sid-shell', { status: 'shell', statusUpdatedAt: now - 500 }); // 跑命令中
     put(7, 'sid-nostatus', {});                                          // cli 活着但无自报
     const map = await listTerminalSessionStates({ dir, isAlive: pid => pid !== 5 });
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-busy')), 'busy');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-idle')), 'alive');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-longrun')), 'busy');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-shell')), 'busy');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-nostatus')), 'alive');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-busy')), { state: 'busy', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-idle')), { state: 'alive', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-longrun')), { state: 'busy', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-shell')), { state: 'busy', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-nostatus')), { state: 'alive', source: 'cli' });
     assert.equal(map.has(terminalStateKey(CWD, 'sid-sdk')), false, 'sdk 系条目不进结果');
     assert.equal(map.has(terminalStateKey(CWD, 'sid-dead')), false, '陈尸 pid 不进结果');
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -157,8 +157,8 @@ test('listTerminalSessionStates：status:"waiting" 单列第三态，不被折�
     put(1, 'sid-waiting', { status: 'waiting', waitingFor: 'permission prompt' });
     put(2, 'sid-idle', { status: 'idle' });
     const map = await listTerminalSessionStates({ dir, isAlive: () => true });
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-waiting')), 'waiting');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-idle')), 'alive', '闲着的终端仍是 alive，两者必须可区分');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-waiting')), { state: 'waiting', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-idle')), { state: 'alive', source: 'cli' }, '闲着的终端仍是 alive，两者必须可区分');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -174,10 +174,98 @@ test('listTerminalSessionStates：同会话多 PID 时 busy > waiting > alive，
     put(1, 'idle');      // 先写低优先级的，确保后来的高优先级能覆盖
     put(2, 'waiting');
     let map = await listTerminalSessionStates({ dir, isAlive: () => true });
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-multi')), 'waiting', 'waiting 压过 alive');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-multi')), { state: 'waiting', source: 'cli' }, 'waiting 压过 alive');
     put(3, 'busy');
     map = await listTerminalSessionStates({ dir, isAlive: () => true });
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-multi')), 'busy', 'busy 压过 waiting');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-multi')), { state: 'busy', source: 'cli' }, 'busy 压过 waiting');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── 桌面端 Code 模式（2026-09-06） ───────────────────────────────────────────────
+// Claude.app 的 Code 标签驱动的会话：跑的是【同一份 claude 二进制】（Claude.app 自带副本，
+// --input-format stream-json headless 驱动），transcript 与注册表都自报 entrypoint='claude-desktop'。
+// 实测（2.1.260）：它写活体条目、进程退出照样删文件，但【从不写 status】。
+// 此前它和 sdk 系一起被 `entrypoint !== 'cli'` 挡在门外，后果是桌面端会话在列表里【没有任何运行
+// 标识】——只剩一个未读点（未读走 transcript 增长那条轴，不看 entrypoint，所以一直是好的）。
+// 缺的那半边证据靠磁盘补：注册表说"进程还在"，尾部形态说"轮次收没收尾"，两条拼起来 ≡ 缺失的 status。
+test('listTerminalSessionStates：桌面端条目无 status → 尾部 pending 判 busy、settled 判 alive', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId, extra = {}) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, entrypoint: 'claude-desktop', kind: 'interactive', ...extra }),
+  );
+  try {
+    put(1, 'sid-running');   // 尾部 pending = 回合没收尾 = 在跑
+    put(2, 'sid-idleing');   // 尾部 settled = 窗口开着但闲着
+    put(3, 'sid-dead');      // 陈尸条目：pid 验活挡掉，与 cli 同规矩
+    const classifyTail = async (sessionId) => ({ verdict: sessionId === 'sid-running' ? 'pending' : 'settled' });
+    const map = await listTerminalSessionStates({ dir, isAlive: pid => pid !== 3, classifyTail });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-running')), { state: 'busy', source: 'claude-desktop' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-idleing')), { state: 'alive', source: 'claude-desktop' });
+    assert.equal(map.has(terminalStateKey(CWD, 'sid-dead')), false, '陈尸 pid 不进结果');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// 磁盘判据只能【补】自报，绝不能【压过】自报，也不能拖累 cli 那条路径多付一次读盘。
+// 反过来写（无条件读盘）会让 cli 的 status:"busy" 被一次陈旧的尾部 settled 推翻——那是把这个仓库
+// 7/29 好不容易实证出来的"陈旧 busy 仍可信"又丢一遍。
+test('listTerminalSessionStates：有 status 自报的条目不读盘（cli 路径零回归）', async () => {
+  const dir = tempDir();
+  const calls = [];
+  const classifyTail = async (sessionId) => { calls.push(sessionId); return { verdict: 'settled' }; };
+  try {
+    writeFileSync(join(dir, '1.json'), JSON.stringify({ pid: 1, sessionId: 'sid-cli-busy', cwd: CWD, entrypoint: 'cli', status: 'busy' }));
+    writeFileSync(join(dir, '2.json'), JSON.stringify({ pid: 2, sessionId: 'sid-cli-wait', cwd: CWD, entrypoint: 'cli', status: 'waiting' }));
+    // idle 是最容易漏的一档：它落在 state==='alive' 分支上，若判据只看 state 不看 status，
+    // 这一条会白付一次读盘，并且尾部 pending 时把 CLI 明确自报的 idle 【推翻】成 busy
+    // ——那正是 7/29 实证"陈旧 busy 仍可信"的反面：自报永远压过磁盘推断。
+    writeFileSync(join(dir, '4.json'), JSON.stringify({ pid: 4, sessionId: 'sid-cli-idle', cwd: CWD, entrypoint: 'cli', status: 'idle' }));
+    // 面向未来：上游哪天给桌面端补上 status，自报立刻压过磁盘推断（也省掉这次读盘）
+    writeFileSync(join(dir, '3.json'), JSON.stringify({ pid: 3, sessionId: 'sid-desk-busy', cwd: CWD, entrypoint: 'claude-desktop', status: 'shell' }));
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-cli-busy')), { state: 'busy', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-cli-wait')), { state: 'waiting', source: 'cli' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-desk-busy')), { state: 'busy', source: 'claude-desktop' },
+      '桌面端一旦自报 status，按自报走，不再回落磁盘');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-cli-idle')), { state: 'alive', source: 'cli' },
+      'CLI 自报 idle 就是 idle，不得被磁盘尾部推断升成 busy');
+    assert.deepEqual(calls, [], '有自报就不该读盘：既是省 IO，也是不让磁盘推断推翻权威自报');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// fail-open 的方向是【刻意选的】：读不动磁盘时说"开着"，绝不说"在跑"。
+// 反方向（fail 成 busy）会让列表长期挂着假运行中——2026-09-06 实测本机就有 3 个 3.8~4.0 小时前
+// 的桌面端会话尾部仍是 pending（进程早没了，注册表条目也没了）。谎报在跑比少报更坏：它会让人
+// 以为电脑上还有东西在跑而不敢动手。
+test('listTerminalSessionStates：classifyTail 缺失/抛错 → alive，绝不谎报 busy', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, entrypoint: 'claude-desktop' }),
+  );
+  try {
+    put(1, 'sid-a');
+    // 未注入判据（调用方没给 / 老接线）：只知道进程活着
+    let map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-a')), { state: 'alive', source: 'claude-desktop' });
+    // 读盘抛错：同样落 alive，且不得让整次扫盘塌掉
+    map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail: async () => { throw new Error('EIO'); } });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-a')), { state: 'alive', source: 'claude-desktop' });
+    // 判据返回畸形值：同样不得升成 busy
+    map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail: async () => null });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-a')), { state: 'alive', source: 'claude-desktop' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// sdk 系仍然排除：那是 ccm 自己（或别的 SDK 工具）驱动的会话，列表里已有 live 实例徽标，
+// 标了会双份。放宽 entrypoint 白名单时最容易顺手把它们一起放进来。
+test('listTerminalSessionStates：sdk-ts / sdk-cli 仍不进结果（即使给了 classifyTail）', async () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(join(dir, '1.json'), JSON.stringify({ pid: 1, sessionId: 'sid-sdk-ts', cwd: CWD, entrypoint: 'sdk-ts' }));
+    writeFileSync(join(dir, '2.json'), JSON.stringify({ pid: 2, sessionId: 'sid-sdk-cli', cwd: CWD, entrypoint: 'sdk-cli' }));
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail: async () => ({ verdict: 'pending' }) });
+    assert.equal(map.size, 0, 'sdk 系不参与终端标注');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -185,16 +273,25 @@ test('listTerminalSessionStates：同会话多 PID 时 busy > waiting > alive，
 // 只加 listTerminalSessionStates 的第三态而漏了这里，waiting 会在最后一米被静默丢掉。
 test('applyTerminalStatesToSessions：waiting 能落到会话行上（注入面白名单不得漏）', () => {
   const states = new Map([
-    [terminalStateKey(CWD, 's1'), 'waiting'],
-    [terminalStateKey(CWD, 's2'), 'busy'],
-    [terminalStateKey(CWD, 's3'), 'alive'],
-    [terminalStateKey(CWD, 's4'), 'bogus'], // 未知取值仍要被挡掉
+    [terminalStateKey(CWD, 's1'), { state: 'waiting', source: 'cli' }],
+    [terminalStateKey(CWD, 's2'), { state: 'busy', source: 'cli' }],
+    [terminalStateKey(CWD, 's3'), { state: 'alive', source: 'cli' }],
+    [terminalStateKey(CWD, 's4'), { state: 'bogus', source: 'cli' }], // 未知状态仍要被挡掉
+    [terminalStateKey(CWD, 's5'), { state: 'busy', source: 'claude-desktop' }],
+    [terminalStateKey(CWD, 's6'), { state: 'busy', source: 'brand-new-frontend' }], // 未登记来源
   ]);
-  const rows = applyTerminalStatesToSessions(CWD, [{ id: 's1' }, { id: 's2' }, { id: 's3' }, { id: 's4' }], states);
+  const rows = applyTerminalStatesToSessions(
+    CWD, [{ id: 's1' }, { id: 's2' }, { id: 's3' }, { id: 's4' }, { id: 's5' }, { id: 's6' }], states,
+  );
   assert.equal(rows[0].terminal, 'waiting');
   assert.equal(rows[1].terminal, 'busy');
   assert.equal(rows[2].terminal, 'alive');
   assert.equal('terminal' in rows[3], false, '白名单外的取值不注入');
+  assert.equal(rows[4].terminalSource, 'claude-desktop', '来源要能落到会话行上（前端据它选文案）');
+  assert.equal(rows[1].terminalSource, 'cli');
+  // 未登记来源：状态照常注入，只是不带来源 → 前端回落"终端"文案，不塌成无 chip
+  assert.equal(rows[5].terminal, 'busy');
+  assert.equal('terminalSource' in rows[5], false, '未登记来源不注入，但不得连状态一起丢');
 });
 
 test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧 terminal，不污染缓存对象', () => {
@@ -202,13 +299,14 @@ test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧
     { id: 'sid-busy', title: 'Busy', terminal: 'alive' },
     { id: 'sid-alive', title: 'Alive' },
     { id: 'sid-gone', title: 'Gone', terminal: 'busy' },
-    { id: 'sid-other-cwd', title: 'Other cwd', terminal: 'busy' },
+    // 上一轮标过桌面端：状态与来源都必须被清掉，不能只清一半（残留 source 会让文案永远说"桌面端"）
+    { id: 'sid-other-cwd', title: 'Other cwd', terminal: 'busy', terminalSource: 'claude-desktop' },
   ];
   const before = structuredClone(sessions);
   const states = new Map([
-    [terminalStateKey(CWD, 'sid-busy'), 'busy'],
-    [terminalStateKey(CWD, 'sid-alive'), 'alive'],
-    [terminalStateKey('/Users/you/other', 'sid-other-cwd'), 'busy'],
+    [terminalStateKey(CWD, 'sid-busy'), { state: 'busy', source: 'cli' }],
+    [terminalStateKey(CWD, 'sid-alive'), { state: 'alive', source: 'cli' }],
+    [terminalStateKey('/Users/you/other', 'sid-other-cwd'), { state: 'busy', source: 'cli' }],
   ]);
 
   const result = applyTerminalStatesToSessions(CWD, sessions, states);
@@ -216,8 +314,8 @@ test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧
   assert.notEqual(result, sessions);
   result.forEach((row, i) => assert.notEqual(row, sessions[i]));
   assert.deepEqual(result, [
-    { id: 'sid-busy', title: 'Busy', terminal: 'busy' },
-    { id: 'sid-alive', title: 'Alive', terminal: 'alive' },
+    { id: 'sid-busy', title: 'Busy', terminal: 'busy', terminalSource: 'cli' },
+    { id: 'sid-alive', title: 'Alive', terminal: 'alive', terminalSource: 'cli' },
     { id: 'sid-gone', title: 'Gone' },
     { id: 'sid-other-cwd', title: 'Other cwd' },
   ]);
@@ -226,7 +324,7 @@ test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧
 
 test('applyTerminalStatesToSessions：空状态/空输入安全，旧 terminal 仍会被清除', () => {
   assert.deepEqual(
-    applyTerminalStatesToSessions(CWD, [{ id: SID, terminal: 'busy' }], new Map()),
+    applyTerminalStatesToSessions(CWD, [{ id: SID, terminal: 'busy', terminalSource: 'cli' }], new Map()),
     [{ id: SID }],
   );
   assert.deepEqual(applyTerminalStatesToSessions(CWD, undefined, new Map()), []);
@@ -234,9 +332,9 @@ test('applyTerminalStatesToSessions：空状态/空输入安全，旧 terminal �
 
 test('hasBusyTerminalSessionForCwd：独立于分页行判断整个 cwd 是否有 busy CLI', () => {
   const states = new Map([
-    [terminalStateKey(CWD, 'older-session-outside-page'), 'busy'],
-    [terminalStateKey(CWD, 'idle-session'), 'alive'],
-    [terminalStateKey('/Users/you/other', 'other-busy'), 'busy'],
+    [terminalStateKey(CWD, 'older-session-outside-page'), { state: 'busy', source: 'cli' }],
+    [terminalStateKey(CWD, 'idle-session'), { state: 'alive', source: 'cli' }],
+    [terminalStateKey('/Users/you/other', 'other-busy'), { state: 'busy', source: 'claude-desktop' }],
   ]);
   assert.equal(hasBusyTerminalSessionForCwd(CWD, states), true);
   assert.equal(hasBusyTerminalSessionForCwd('/Users/you/other', states), true);
@@ -249,9 +347,9 @@ test('hasBusyTerminalSessionForCwd：独立于分页行判断整个 cwd 是否�
 // 三态字符串必然丢掉其中一个。
 test('hasWaitingTerminalSessionForCwd：独立于分页行判断整个 cwd 是否有终端在等人', () => {
   const states = new Map([
-    [terminalStateKey(CWD, 'awaiting-approval'), 'waiting'],
-    [terminalStateKey(CWD, 'idle-session'), 'alive'],
-    [terminalStateKey('/Users/you/other', 'other-busy'), 'busy'],
+    [terminalStateKey(CWD, 'awaiting-approval'), { state: 'waiting', source: 'cli' }],
+    [terminalStateKey(CWD, 'idle-session'), { state: 'alive', source: 'cli' }],
+    [terminalStateKey('/Users/you/other', 'other-busy'), { state: 'busy', source: 'cli' }],
   ]);
   assert.equal(hasWaitingTerminalSessionForCwd(CWD, states), true);
   assert.equal(hasWaitingTerminalSessionForCwd('/Users/you/other', states), false, 'busy 不是 waiting');
@@ -329,6 +427,28 @@ test('registryIndicatesTerminalWaiting：cli+waiting（终端卡在对话框上�
   assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'sdk-ts', status: 'waiting' }), false);
   assert.equal(registryIndicatesTerminalWaiting({ entrypoint: 'cli' }), false);
   assert.equal(registryIndicatesTerminalWaiting(null), false);
+});
+
+// 2026-09-06：两个 status 判定函数的 entrypoint 白名单参数化了（列表侧要认 claude-desktop），
+// 而**默认值必须保持只认 cli**——这两个函数同时喂着镜像锁，那条路上的 registryBusy 有"无视尾部
+// 形态直接上锁"的特权（mirrorEntryLock 第二行）。放宽默认值 = 悄悄改动 SESSION-01 的判据面：
+// 桌面端会话会凭一个 status 字段就把手机侧锁成只读，而这个仓库从没为它论证过。
+// 默认值是那道屏障的【唯一】实现，所以它需要一条自己的用例——否则改掉它不会让任何东西变红。
+test('registryIndicatesTerminalBusy/Waiting：默认白名单只认 cli，放宽必须显式传参', () => {
+  const desktopBusy = { entrypoint: 'claude-desktop', status: 'busy' };
+  const desktopWaiting = { entrypoint: 'claude-desktop', status: 'waiting' };
+  // 默认（镜像锁侧的调用形态）：不背书
+  assert.equal(registryIndicatesTerminalBusy(desktopBusy), false, '默认不认 claude-desktop——镜像锁语义不得被顺手放宽');
+  assert.equal(registryIndicatesTerminalWaiting(desktopWaiting), false);
+  // 显式传入（列表标注侧的调用形态）：认
+  const opts = { entrypoints: new Set(['cli', 'claude-desktop']) };
+  assert.equal(registryIndicatesTerminalBusy(desktopBusy, opts), true);
+  assert.equal(registryIndicatesTerminalWaiting(desktopWaiting, opts), true);
+  // 传了白名单也不改 status 判据本体：idle 仍不是 busy，busy 仍不是 waiting
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'claude-desktop', status: 'idle' }, opts), false);
+  assert.equal(registryIndicatesTerminalWaiting(desktopBusy, opts), false);
+  // 历史调用形态（第二参传 { now }）不受影响：now 早已不参与判定，白名单仍取默认
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'busy' }, { now: 1 }), true);
 });
 
 // 刻意【不】把 waiting 并进 busy：抽屉据 busy 显示"运行中"，而等审批的终端并没有在运行——

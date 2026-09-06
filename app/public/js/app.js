@@ -4647,9 +4647,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       badge.removeAttribute('aria-label');
     }
   }
-  function appendSessionStatusChip(head, liveState, terminalState) {
+  function appendSessionStatusChip(head, liveState, terminalState, terminalSource = null) {
     head.querySelector('[data-session-status]')?.remove();
-    const spec = resolveDrawerStatusChip({ liveState, terminalState });
+    const spec = resolveDrawerStatusChip({ liveState, terminalState, terminalSource });
     const meta = spec ? DRAWER_STATUS_META[spec.status] : null;
     if (!spec || !meta) return;
     const label = t(spec.label);
@@ -4789,7 +4789,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
       const head = row.querySelector('[data-session-head]');
       if (!head) return;
-      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null);
+      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null);
     });
   }
   // 顶部点位空间极小，继续用 SVG；但只汇总需要你/出错/运行中，正常完成和中止不再持续点亮。
@@ -5334,6 +5334,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 行内容 (可滑动的前景卡片)
       const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
       rowContent.dataset.terminalState = s.terminal || '';
+      rowContent.dataset.terminalSource = s.terminalSource || '';
       const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
       btn.title = s.title || t('新会话');
       const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
@@ -5361,7 +5362,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         titleSpan.after(mark);
       };
       applyUnreadMark();
-      appendSessionStatusChip(head, liveInst?.state, s.terminal);
+      appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource);
       btn.appendChild(head);
       const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
       const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('新会话（未保存）');
@@ -5370,6 +5371,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         whenText: when,
         liveOpen: Boolean(liveInst),
         terminalState: s.terminal || null,
+        terminalSource: s.terminalSource || null,
         shortId: s.id ? s.id.slice(0, 8) : null,
       });
       btn.appendChild(sub);

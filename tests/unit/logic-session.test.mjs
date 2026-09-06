@@ -100,6 +100,43 @@ test('resolveDrawerStatusChip: terminal waiting → 「终端需要你」，与 
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'permission' }), { status: 'permission', label: '需要你' });
 });
 
+// 2026-09-06：外部驾驶员不只有终端了。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
+// claude 二进制，但把它说成"终端"会给出错的处理预期——用户会去翻终端标签页，而回合其实跑在
+// 桌面 app 的窗口里。状态轴不变（都是 busy/alive），只有措辞按来源分。
+test('resolveDrawerStatusChip: 桌面端 Code 模式驾驶 → 桌面端运行中，不冒充"终端"', () => {
+  assert.deepEqual(
+    resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'claude-desktop' }),
+    { status: 'busy', label: '桌面端运行中' },
+  );
+  // Web 侧同时 busy 时仍以外部驾驶员为准（与 cli 同规矩），只是措辞跟着来源走
+  assert.deepEqual(
+    resolveDrawerStatusChip({ liveState: 'busy', terminalState: 'busy', terminalSource: 'claude-desktop' }),
+    { status: 'busy', label: '桌面端运行中' },
+  );
+  // 来源明确是 cli / 缺失 / 未知取值：一律回落"终端运行中"（= 引入本字段之前的行为）
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'cli' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'brand-new' }), { status: 'busy', label: '终端运行中' });
+  // 纯 Web 回合不受来源影响：terminalState 不是 busy 时来源无意义
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', terminalSource: 'claude-desktop' }), { status: 'busy', label: '运行中' });
+});
+
+test('formatSessionRowSubtitle: 桌面端已打开与终端已打开分开说', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/6', terminalState: 'alive', terminalSource: 'claude-desktop', shortId: 'abcdef12' }),
+    '桌面端已打开 · 9/6 · abcdef12',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/6', terminalState: 'alive', terminalSource: 'cli', shortId: 'abcdef12' }),
+    '终端已打开 · 9/6 · abcdef12',
+  );
+  // 来源缺失回落终端（老服务端的行）
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/6', terminalState: 'alive', shortId: 'abcdef12' }),
+    '终端已打开 · 9/6 · abcdef12',
+  );
+});
+
 test('formatSessionRowSubtitle: CLI 空闲来源提到时间前面；busy 不再把「终端」塞进副行', () => {
   assert.equal(
     formatSessionRowSubtitle({ whenText: '8/27', liveOpen: true, shortId: 'abcdef12' }),

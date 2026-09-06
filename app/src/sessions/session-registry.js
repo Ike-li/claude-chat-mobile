@@ -30,6 +30,8 @@ const TERMINAL_BUSY_STATUSES = new Set(['busy', 'shell']);
 // 说错话；而镜像锁两者都要（都意味着终端进程持有这个会话）。CLI 自己也是这么分的——它的 fleet
 // 视图把 busy/shell 归 "live"、waiting 归 "needs"。
 const TERMINAL_WAITING_STATUSES = new Set(['waiting']);
+// 两个 status 判定函数的默认 entrypoint 白名单。默认收窄到 cli 是刻意的，理由见函数处注释。
+const CLI_ONLY_ENTRYPOINTS = new Set(['cli']);
 // 实测条目 ~300 字节；16KB 已是量级余量，超出视为异常文件跳过。
 const MAX_REGISTRY_FILE_BYTES = 16 * 1024;
 
@@ -159,11 +161,13 @@ export function terminalStateKey(cwd, sessionId) {
   return `${resolve(String(cwd ?? ''))}\u0000${String(sessionId ?? '')}`;
 }
 
-// 会话行上 terminal 字段的取值域。**这是 Map → 会话行的最后一米**：只加 listTerminalSessionStates
-// 的新状态而漏了这里，新状态会在注入面被静默丢掉（2026-09-04 加 'waiting' 时的现成陷阱）。
+// 会话行上 terminal / terminalSource 字段的取值域。**这是 Map → 会话行的最后一米**：只加
+// listTerminalSessionStates 的新状态而漏了这里，新状态会在注入面被静默丢掉（2026-09-04 加
+// 'waiting' 时的现成陷阱）。来源同理——漏登记会让桌面端会话退回"终端"文案，且没有任何报错。
 const TERMINAL_ROW_STATES = new Set(['busy', 'waiting', 'alive']);
+const TERMINAL_ROW_SOURCES = new Set(['cli', 'claude-desktop']);
 
-// 给 session:list 行附加当前终端状态。listSessionsPage 可能返回缓存对象，禁止原地写 terminal：
+// 给 session:list 行附加当前终端状态与来源。listSessionsPage 可能返回缓存对象，禁止原地写：
 // 每行浅拷贝并先清旧值，再按本次 registry 快照注入，确保状态消失后不会残留。
 export function applyTerminalStatesToSessions(cwd, sessions, states = new Map()) {
   const rows = Array.isArray(sessions) ? sessions : [];
@@ -172,9 +176,14 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
     if (!session || typeof session !== 'object') return session;
     const copy = { ...session };
     delete copy.terminal;
+    delete copy.terminalSource;
     if (copy.id) {
-      const state = stateMap.get(terminalStateKey(cwd, copy.id));
-      if (TERMINAL_ROW_STATES.has(state)) copy.terminal = state;
+      const info = stateMap.get(terminalStateKey(cwd, copy.id));
+      if (info && TERMINAL_ROW_STATES.has(info.state)) {
+        copy.terminal = info.state;
+        // 来源缺失/未登记时只留状态：前端回落"终端"文案（与本改动之前完全同形），不塌成无状态。
+        if (TERMINAL_ROW_SOURCES.has(info.source)) copy.terminalSource = info.source;
+      }
     }
     return copy;
   });
@@ -184,8 +193,8 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
 function hasTerminalStateForCwd(cwd, states, want) {
   if (!(states instanceof Map)) return false;
   const prefix = terminalStateKey(cwd, '');
-  for (const [key, state] of states) {
-    if (state === want && key.startsWith(prefix)) return true;
+  for (const [key, info] of states) {
+    if (info?.state === want && key.startsWith(prefix)) return true;
   }
   return false;
 }
@@ -200,33 +209,73 @@ export function hasWaitingTerminalSessionForCwd(cwd, states) {
   return hasTerminalStateForCwd(cwd, states, 'waiting');
 }
 
-// 批量：返回 Map<terminalStateKey, 'busy'|'waiting'|'alive'>，只收 entrypoint=cli 且 pid 存活的条目。
-//   'busy'    = 自报 busy/shell（终端在跑）
+// 参与会话列表「外部驾驶员在驾驶」标注的 entrypoint，以及各自的状态取数方式：
+//   cli            —— 自报 status（busy/shell/idle/waiting），权威且与回合长度无关。
+//   claude-desktop —— 桌面端 Code 模式。Claude.app 拉起【同一份 claude 二进制】（自带副本
+//                     ~/Library/Application Support/Claude/claude-code/<ver>/），用
+//                     --input-format stream-json headless 驱动、自己画 UI 与权限框；transcript
+//                     每行自报 entrypoint='claude-desktop'。2026-09-06 实测（2.1.260）：它写活体
+//                     条目、进程退出照样删文件，但【从不写 status】——所以"在不在跑"拿不到自报，
+//                     只能回落磁盘尾部形态（classifyTail）。此前它和 sdk 系一起被排除，后果是
+//                     桌面端会话在列表里【没有任何运行标识】，只剩一个未读点（未读走 transcript
+//                     增长那条轴，与 entrypoint 无关，所以照常工作）。
+// 仍然排除 sdk-ts/sdk-cli：那是 ccm 自己或别的 SDK 工具驱动的，列表里已有 live 实例徽标，标了会双份。
+const TERMINAL_ENTRYPOINTS = new Set(['cli', 'claude-desktop']);
+
+// 批量：返回 Map<terminalStateKey, { state, source }>，只收 TERMINAL_ENTRYPOINTS 且 pid 存活的条目。
+//   'busy'    = 在跑。cli 看自报 busy/shell；桌面端无自报 → 看尾部形态 pending
 //   'waiting' = 自报 waiting（终端卡在对话框上等人，含权限审批框）—— 2026-09-04 新增，此前被折进
-//               alive，于是抽屉里「CLI 正等你批准」与「终端开着但闲着」完全同形
-//   'alive'   = 终端进程活着但自报 idle / 无自报（进程还在但不在跑）
-// 刻意排除 sdk-ts/sdk-cli/claude-desktop：那些会话在 web 列表里
-// 要么已有 live 实例徽标（ccm 自己开的），要么不是本项目要标的"终端直跑"语义，标了只会双份/误导。
+//               alive，于是抽屉里「CLI 正等你批准」与「终端开着但闲着」完全同形。
+//               桌面端拿不到这一档（无 status），它的等审批状态在列表上与 alive 同形。
+//   'alive'   = 进程活着但不在跑（cli 自报 idle / 无自报；桌面端尾部 settled）
+// source = 该状态的来源 entrypoint，只用于选文案（把桌面端说成"终端"是在说错话）。
+// 状态轴与来源轴刻意保持正交：合成一个枚举（desktop_busy…）会让取值域随来源×状态爆炸，
+// 且 hasBusyTerminalSessionForCwd 这类汇总判据每加一个来源都要改一次。
 const TERMINAL_STATE_RANK = { busy: 3, waiting: 2, alive: 1 };
 export async function listTerminalSessionStates({
   dir = DEFAULT_SESSION_REGISTRY_DIR,
   isAlive = defaultIsAlive,
+  classifyTail = null,
 } = {}) {
   const map = new Map();
+  // 同会话多 PID：按信息量取高者（busy > waiting > alive），与扫盘顺序无关。
+  // 原实现是 `if (busy) set; else if (!has) set('alive')`——两态时等价，加了第三态就会漏
+  // （先扫到 waiting 后扫到 alive 时，has 已为真，waiting 侥幸留住；反过来则 alive 永远压不掉，
+  //  但 waiting 也永远盖不住先到的 alive）。改成显式排名，把顺序依赖彻底去掉。
+  const merge = (key, state, source) => {
+    const prev = map.get(key);
+    if (prev === undefined || TERMINAL_STATE_RANK[state] > TERMINAL_STATE_RANK[prev.state]) {
+      map.set(key, { state, source });
+    }
+  };
+  const pendingTail = [];
   for (const entry of await readAllEntries(dir)) {
-    if (entry.entrypoint !== 'cli') continue;
+    if (!TERMINAL_ENTRYPOINTS.has(entry.entrypoint)) continue;
     if (!isAlive(entry.pid)) continue;
     const key = terminalStateKey(entry.cwd, entry.sessionId);
-    const state = registryIndicatesTerminalBusy(entry) ? 'busy'
-      : registryIndicatesTerminalWaiting(entry) ? 'waiting'
+    const opts = { entrypoints: TERMINAL_ENTRYPOINTS };
+    const state = registryIndicatesTerminalBusy(entry, opts) ? 'busy'
+      : registryIndicatesTerminalWaiting(entry, opts) ? 'waiting'
         : 'alive';
-    // 同会话多 PID：按信息量取高者（busy > waiting > alive），与扫盘顺序无关。
-    // 原实现是 `if (busy) set; else if (!has) set('alive')`——两态时等价，加了第三态就会漏
-    // （先扫到 waiting 后扫到 alive 时，has 已为真，waiting 侥幸留住；反过来则 alive 永远压不掉，
-    //  但 waiting 也永远盖不住先到的 alive）。改成显式排名，把顺序依赖彻底去掉。
-    const prev = map.get(key);
-    if (prev === undefined || TERMINAL_STATE_RANK[state] > TERMINAL_STATE_RANK[prev]) map.set(key, state);
+    // 注册表不背书（无 status 自报）且调用方给了磁盘判据 → 回落尾部形态补判 busy。
+    // 条件写成 `!entry.status` 而不是 `entrypoint === 'claude-desktop'`：上游哪天给桌面端补上
+    // status，自报立刻【压过】磁盘推断（自报更权威，也更省一次读盘），无需再改这里。
+    if (state === 'alive' && !nonEmptyString(entry.status) && typeof classifyTail === 'function') {
+      pendingTail.push({ key, entry });
+      continue;
+    }
+    merge(key, state, entry.entrypoint);
   }
+  // 并发补判。fail-open 到 'alive'：读不动磁盘时只说"进程开着"，绝不谎报"在跑"——
+  // 误报运行中会让列表长期挂着假状态（陈尸尾部实测就有，见 tests/unit/session-registry.test.mjs）。
+  await Promise.all(pendingTail.map(async ({ key, entry }) => {
+    let pending = false;
+    try {
+      const tail = await classifyTail(entry.sessionId, entry.cwd);
+      pending = tail?.verdict === 'pending';
+    } catch { /* fail-open */ }
+    merge(key, pending ? 'busy' : 'alive', entry.entrypoint);
+  }));
   return map;
 }
 
@@ -251,8 +300,12 @@ export function cliPresenceStep(prevSeen, entry) {
 // 所以陈旧的 busy/shell 可信；进程崩溃留下的陈尸条目由 pid 验活挡掉。代价是 CLI 进程真挂起
 // （活着但状态机停摆）时会持续锁住手机侧——那种情况下锁着本就更安全（防两端并发写分叉），且
 // mirrorStaleFlag 的「超 5 分钟无写入 → 可立即接管」文案 + 手动接管仍是出口。
-export function registryIndicatesTerminalBusy(entry) {
-  if (!entry || entry.entrypoint !== 'cli') return false;
+// entrypoints（2026-09-06）：默认只认 cli，**镜像锁侧一律用默认值**——那条路上的 registryBusy
+// 有"无视尾部形态直接上锁"的特权（见 mirrorEntryLock），放宽它等于改动 SESSION-01 的判据面，
+// 得单独论证，不能顺着列表标注的需要一起放。列表侧显式传 TERMINAL_ENTRYPOINTS 拿放宽语义。
+// 判据本体（status 白名单）仍然只有这一份，不因来源分叉。
+export function registryIndicatesTerminalBusy(entry, { entrypoints = CLI_ONLY_ENTRYPOINTS } = {}) {
+  if (!entry || !entrypoints.has(entry.entrypoint)) return false;
   return TERMINAL_BUSY_STATUSES.has(entry.status);
 }
 
@@ -268,7 +321,7 @@ export function registryIndicatesTerminalBusy(entry) {
 //   · waiting    = 终端在等人 ⇒ 只做三件事：豁免陈旧检查、维持已有的锁、压制"疑似中断"文案。
 // 给 waiting 同等的造锁权会把「电脑上开着 /model 对话框忘了关」变成手机永久只读——那不是防分叉，
 // 是自伤。三项作用都限定在"轮次确实卡在中间"（尾部 pending）这个前提上，见 history.js 的三个判定。
-export function registryIndicatesTerminalWaiting(entry) {
-  if (!entry || entry.entrypoint !== 'cli') return false;
+export function registryIndicatesTerminalWaiting(entry, { entrypoints = CLI_ONLY_ENTRYPOINTS } = {}) {
+  if (!entry || !entrypoints.has(entry.entrypoint)) return false;
   return TERMINAL_WAITING_STATUSES.has(entry.status);
 }

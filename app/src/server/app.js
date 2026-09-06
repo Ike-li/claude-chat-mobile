@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -2798,14 +2798,20 @@ registerSocketConnection(io, socket => {
     if (typeof ack === 'function') ack({ ok: true, viewingInstanceId });
   });
 
-  // P1（7/26 CCD 调研吸收）：给会话列表行标注「终端直跑」状态。数据源是 CLI 自报的进程注册表
+  // P1（7/26 CCD 调研吸收）：给会话列表行标注「外部驾驶员在驾驶」状态。数据源是进程注册表
   // （~/.claude/sessions/<PID>.json），一次扫盘标注整页——此前纯外部终端会话在列表里没有任何运行
   // 徽标（徽标只来自 live instances 条目，外部会话无 live 实例即无徽标）。注册表读不动 → 空 Map，
   // 返回不带 terminal 的克隆列表（fail-open，且不污染 listSessionsPage 的缓存对象）。
+  //
+  // classifyTranscriptTail 注入（2026-09-06）：桌面端 Code 模式（entrypoint=claude-desktop）写活体
+  // 条目但不写 status，"在不在跑"只能看磁盘尾部形态。注入而非让 session-registry 直接 import，是为
+  // 了保住它的叶子性（它现在只依赖 shared/claude-home）并让判定可注入假函数单测。
+  // 成本：只对【无 status 自报且进程活着】的条目读一次尾窗（实测本机 6 个，远少于列表候选窗的 51 个），
+  // 且与镜像锁走同一个 classifyTranscriptTail —— 判据同源，不另造一份 64KB 版本。
   async function annotateTerminalStates(cwd, list) {
     let states = new Map();
     try {
-      states = await listTerminalSessionStates();
+      states = await listTerminalSessionStates({ classifyTail: classifyTranscriptTail });
     } catch { /* fail-open */ }
     return {
       list: applyTerminalStatesToSessions(cwd, list, states),

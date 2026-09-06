@@ -818,6 +818,50 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-09-06：外部驾驶员不只有终端。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
+  // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop 但【不写 status】。
+  // 此前它和 sdk 系一起被排除在终端标注之外，桌面端会话在抽屉里【只有一个未读点】，没有任何运行标识。
+  // 这条守的是**渲染层最后一米**（与 P0-11ag 同理）：判据、Map 注入、纯函数文案都在单测里绿了，
+  // 但字段还要过 dataset 往返 + DRAWER_STATUS_META 白名单——漏一环就静默显示成"终端"或干脆没有。
+  test('P0-11ah 桌面端 Code 模式驾驶：显示「桌面端运行中」而非冒充终端', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:desktop-badge');
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+
+    // 目录角标走状态轴，不带来源：桌面端在跑同样点亮工作区（此前完全不亮）
+    await expect(mainDir.locator('.dir-badge')).toHaveText('运行中');
+
+    // 同一会话已有 idle Web live 实例时不得被 liveInst 分支遮蔽（与 cli 同规矩）
+    await expectSessionStatusChip(page, 'inst_1', '桌面端运行中');
+
+    const busyRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+    await expect(busyRow.locator('[data-session-status]')).toHaveText('桌面端运行中');
+    // 措辞必须真的换掉：说成"终端"会让人去翻终端标签页，而回合跑在桌面 app 的窗口里
+    await expect(busyRow).not.toContainText('终端运行中');
+
+    // alive 档同样按来源分：桌面端窗口开着但闲着
+    const aliveRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
+    await expect(aliveRow.locator('[data-session-status]')).toHaveCount(0);
+    await expect(aliveRow).toContainText('桌面端已打开');
+    await expect(aliveRow).not.toContainText('终端已打开');
+
+    // 无终端状态的会话不凭空长出状态
+    const plainRow = page.locator('[data-testid="session-row"]', { hasText: 'Deleted Remote Session' });
+    await expect(plainRow.locator('[data-session-status]')).toHaveCount(0);
+
+    // 增量重绘后来源不得丢。夹具 1.5s 后只改 inst_1 的 state 再广播 instances，前端走
+    // 「非结构变化 → refreshSessionStatusChips」增量分支，逐行【从 row.dataset 重建 chip】。
+    // dataset 少写一个 terminalSource，这里就静默退回"终端运行中"——而首次渲染完全看不出来
+    // （它读的是 session:list 的原始行）。inst_1 变「需要你」是广播已到达的锚点。
+    await expectSessionStatusChip(page, 'inst_1', '需要你');
+    await expect(busyRow.locator('[data-session-status]')).toHaveText('桌面端运行中');
+    await expect(busyRow).not.toContainText('终端运行中');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 2026-09-04：CLI 卡在权限审批框上时，注册表自报 status:"waiting"——这条通道此前被漏认，等审批的
   // 会话在抽屉里与「终端开着但闲着」完全同形（都只有一句副文本「终端已打开」）。
   // 这条用例守的是**渲染层最后一米**：判据/纯函数都在单测里绿了，但 chip 还要过 DRAWER_STATUS_META

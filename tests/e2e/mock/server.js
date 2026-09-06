@@ -96,6 +96,9 @@ let terminalBadgeArmed = false;
 // P0-11ag：第三态 terminal:'waiting'（CLI 卡在对话框上等人，含权限审批框）。与 badge 分开一个开关，
 // 是因为它要断言的恰恰是「与 busy/alive 都不同形」——共用开关就没法在同一屏里对比三态。
 let terminalWaitingArmed = false;
+// 2026-09-06：桌面端 Code 模式（entrypoint=claude-desktop）驾驶的会话。与 terminalBadgeArmed 的
+// 区别只在 terminalSource——状态轴相同，验的是渲染层是否按来源换措辞。
+let desktopBadgeArmed = false;
 // P0-11z：抽屉保持打开时，第二次 session:list 才出现 terminal=busy；期间不发 instances，
 // 验证前端低频 revalidate 能独立刷新 CLI 状态。
 let terminalRefreshArmed = false;
@@ -271,6 +274,7 @@ function resetMockState() {
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
   terminalWaitingArmed = false;
+  desktopBadgeArmed = false;
   terminalRefreshArmed = false;
   terminalRefreshListCount = 0;
   terminalSummaryOtherArmed = false;
@@ -530,7 +534,8 @@ function mainCwdSessions() {
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 10000,
       entrypoint: 'sdk-ts',
-      ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
+      ...(desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
+        : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {}),
     },
     {
       id: 'mock-session-archived',
@@ -538,14 +543,17 @@ function mainCwdSessions() {
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 600000,
       entrypoint: 'sdk-ts',
-      ...(terminalWaitingArmed ? { terminal: 'waiting' } : terminalBadgeArmed ? { terminal: 'busy' } : {}),
+      ...(terminalWaitingArmed ? { terminal: 'waiting', terminalSource: 'cli' }
+        : desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
+          : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {}),
     },
     {
       id: 'mock-session-gap',
       title: 'Archived Gap Session',
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 750000,
-      ...(terminalBadgeArmed || terminalWaitingArmed ? { terminal: 'alive' } : {}),
+      ...(desktopBadgeArmed ? { terminal: 'alive', terminalSource: 'claude-desktop' }
+        : terminalBadgeArmed || terminalWaitingArmed ? { terminal: 'alive', terminalSource: 'cli' } : {}),
       entrypoint: 'sdk-ts'
     },
     {
@@ -953,7 +961,7 @@ io.on('connection', socket => {
           callback({
             currentSessionId: 'mock-session-visual-test',
             sessions: matched,
-            terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
+            terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
             terminalWaiting: terminalWaitingArmed,
             hasMore: false,
             total: sessions.length,
@@ -970,7 +978,7 @@ io.on('connection', socket => {
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
-          terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
+          terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
           terminalWaiting: terminalWaitingArmed,
           hasMore,
           total,
@@ -2301,6 +2309,30 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');
         terminalBadgeArmed = true;
+      },
+    },
+    {
+      command: 'test:desktop-badge',
+      run: async () => {
+        console.log('[mock] test:desktop-badge — archived/visual=busy、gap=alive，来源均 claude-desktop');
+        desktopBadgeArmed = true;
+        // 1.5s 后只改一个 live 实例的 state 并广播 instances（实例集合不变）。前端据此走
+        // 「非结构变化 → refreshDirBadges + refreshSessionStatusChips」增量分支，逐行【从
+        // row.dataset 重建 chip】——这正是首次渲染路径覆盖不到的那一段。用例拿 inst_1 变成
+        // 「需要你」当广播到达的锚点，再断言无 live 实例的那行来源没丢。
+        setTimeout(() => {
+          const live = mockInstances.find(i => i.instanceId === 'inst_1');
+          if (live) live.state = 'permission';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { canRestart: mockCanRestart,
+              viewingInstanceId,
+              viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+              dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+              instances: mockInstances, service: mockServicePayload(),
+            },
+          });
+        }, 1500);
       },
     },
     {
