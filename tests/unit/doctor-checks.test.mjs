@@ -17,6 +17,7 @@ import {
   computeReadiness,
   configFormatDiagnostic,
   identifySelfServer,
+  parseProcNetTcpListeners,
   envOverrideDiagnostic,
   fileEditExposureDiagnostic,
   accessProfileDiagnostic,
@@ -929,6 +930,34 @@ test.describe('identifySelfServer —— headless npm start 也要认得出是�
       repoRoot: REPO,
     }), null);
     assert.equal(identifySelfServer({ processes: [], repoRoot: REPO }), null);
+  });
+});
+
+// 2026-09-06 容器演练：Linux 上 doctor 的 PORT 恒报「被不明进程占用」——取数写死了 /usr/sbin/lsof 与 /bin/ps
+// 两个 macOS 路径，Linux 一步都走不到就落回「认不出来」。Linux 的取数改走 /proc，这里是它的纯解析半边：
+// /proc/net/tcp{,6} 的行 → 监听指定端口的 socket inode。地址是小端十六进制、端口是大端十六进制、st 0A = LISTEN。
+test.describe('parseProcNetTcpListeners —— /proc/net/tcp 行到监听 inode', () => {
+  const TCP = [
+    '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+    '   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41234 1 0000000000000000 100 0 0 10 0',
+    '   1: 0100007F:0BB8 0200007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 41999 1 0000000000000000 20 4 30 10 -1',
+    '   2: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 52000 1 0000000000000000 100 0 0 10 0',
+    '',
+  ].join('\n');
+  const TCP6 = [
+    '  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+    '   0: 00000000000000000000000000000000:0BB8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 61000 1 0000000000000000 100 0 0 10 0',
+  ].join('\n');
+
+  test('只取 st=0A（LISTEN）且端口匹配的行：已建立的连接（st=01）同端口也不算', () => {
+    assert.deepEqual(parseProcNetTcpListeners(TCP, 3000), ['41234'], '把已建立连接当成了监听者，或漏了监听行');
+    assert.deepEqual(parseProcNetTcpListeners(TCP, 8080), ['52000']);
+    assert.deepEqual(parseProcNetTcpListeners(TCP, 4000), []);
+  });
+  test('tcp6 的 32 位十六进制地址同样解析；表头、空行、畸形行不抛', () => {
+    assert.deepEqual(parseProcNetTcpListeners(TCP6, 3000), ['61000']);
+    assert.deepEqual(parseProcNetTcpListeners('', 3000), []);
+    assert.deepEqual(parseProcNetTcpListeners('garbage line\n   x: nope', 3000), []);
   });
 });
 

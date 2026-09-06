@@ -58,7 +58,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
-import { onAuthResult, freshState, gateCheck, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
@@ -699,7 +699,7 @@ io.use(async (socket, next) => {
   const rlActive = publicHost || !!AUTH_TOKEN;
   // AUTH-NEW-2：与 HTTP sourceKey 同判据——Host spoof 从 LAN 直连时不信 CF-IP；
   // XFF 末跳同样只在 TRUSTED_PROXY=loopback + peer loopback 时采信（AUTH-04）。
-  const rlKey = rlSourceKey(socket.handshake, clientIp, {
+  const rlTrust = {
     trustCfConnectingIp: shouldTrustCfConnectingIp({
       publicHost,
       peerAddress: socket.handshake.address,
@@ -708,7 +708,8 @@ io.use(async (socket, next) => {
       trustedProxy: TRUSTED_PROXY,
       peerAddress: socket.handshake.address,
     }, clientIp),
-  });
+  };
+  const rlKey = rlSourceKey(socket.handshake, clientIp, rlTrust);
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
     // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
@@ -786,7 +787,9 @@ io.use(async (socket, next) => {
         socket.trustBasis = 'device-token'; // SEC-03：受信任表控制——CLI 从表中移除该 token 时须检测并断连（见文件监听器）
       } else {
         socket.deviceApproved = false;
-        const ip = clientIp(socket.handshake.address);
+        // 卡片上给人核对的来源 IP 与限速桶同一份判据（AUTH-04）：反代已声明 TRUSTED_PROXY 时是 XFF 末跳，
+        // 否则是 peer。此前直接取 peer，反代后每张卡都是 127.0.0.1，「核对再批」无从核对（2026-09-06 容器演练）。
+        const ip = clientSourceAddress(socket.handshake, clientIp, rlTrust).address;
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）

@@ -1,0 +1,17 @@
+# cloudflare 档的「伪造边缘」：模拟 Cloudflare 边缘在 Access 放行后回源时注入的三样东西——
+# 公网 Host、Cf-Access-Jwt-Assertion（由 prepare.mjs 用一次性密钥签发，JWKS 预置进 CCM 的证书缓存）、
+# CF-Connecting-IP。验的是 CCM 对 Access 层的处理，不是 Cloudflare 本身。
+server {
+    listen 8081;
+    server_name __HOSTNAME__;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host __HOSTNAME__;
+        proxy_set_header Cf-Access-Jwt-Assertion "__JWT__";
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+}

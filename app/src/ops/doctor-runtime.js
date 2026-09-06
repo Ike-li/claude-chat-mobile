@@ -1,7 +1,7 @@
 // doctor-runtime.js —— UI 安全体检（④）的运行时编排：读合并白名单 + 6 项检查 + 脱敏聚合。
 // server 的 doctor:run 事件调 runDoctor(ctx)，ctx 由 server 喂（env + 已在内存的 workDirs/版本/pushEnabled/设备数）。
 // 脱敏原则：绝不回显明文 token / 绝对路径 / AUD / 密钥——只出布尔、计数、以及危险白名单规则串（用户须据此收紧）。
-import { readFileSync, existsSync, accessSync, constants } from 'node:fs';
+import { readFileSync, existsSync, accessSync, constants, readdirSync, readlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
-import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
+import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -43,6 +43,56 @@ export function probeClaudeBin({ env = process.env } = {}) {
 // CLI 与 web 两个 doctor 同一对。产品对 Tailscale 只探测、指路——不装、不起、不保活（hard-rules §1）。
 // macOS 上官方 .app 版的 CLI 不在 PATH（藏在 bundle 里），launchd 拉起的 server 又只有最小 PATH，
 // which 找不到再试几个固定路径。任何异常都吞成事实对象，不抛：体检不能因为一个可选工具而整体失败。
+// D4 取数：谁在 listen 这个端口（pid + 命令行 + cwd），判定在 doctor-checks.identifySelfServer。
+// Linux 走 /proc（零外部工具：slim 容器里连 ps 都没有）；macOS 走 lsof / ps，但只按 PATH 查找——
+// 此前 scripts/doctor.js 写死 /usr/sbin/lsof 与 /bin/ps，Linux 一步都走不到，server 跑着时 D4 恒报
+// 「被不明进程占用」（2026-09-06 容器演练）。任何一步失败都返回空数组：认不出来只会退回 fail 分支，不会误认自己人。
+export function probeListeningProcesses(port, { platform: plat = platform(), procRoot = '/proc', execFile = execFileSync } = {}) {
+  try {
+    return plat === 'linux' ? listenersViaProc(port, procRoot) : listenersViaLsof(port, execFile);
+  } catch {
+    return [];
+  }
+}
+
+function listenersViaProc(port, procRoot) {
+  const readOr = (p) => { try { return readFileSync(p, 'utf8'); } catch { return ''; } };
+  const inodes = new Set([
+    ...parseProcNetTcpListeners(readOr(join(procRoot, 'net', 'tcp')), port),
+    ...parseProcNetTcpListeners(readOr(join(procRoot, 'net', 'tcp6')), port),
+  ]);
+  if (!inodes.size) return [];
+  const out = [];
+  for (const entry of readdirSync(procRoot)) {
+    if (!/^\d+$/.test(entry)) continue;
+    let fds;
+    try { fds = readdirSync(join(procRoot, entry, 'fd')); } catch { continue; } // 别人的进程读不到 fd，跳过
+    const holds = fds.some((fd) => {
+      try {
+        const m = readlinkSync(join(procRoot, entry, 'fd', fd)).match(/^socket:\[(\d+)\]$/);
+        return !!m && inodes.has(m[1]);
+      } catch { return false; }
+    });
+    if (!holds) continue;
+    const command = readOr(join(procRoot, entry, 'cmdline')).split('\0').filter(Boolean).join(' ');
+    let cwd = null;
+    try { cwd = readlinkSync(join(procRoot, entry, 'cwd')); } catch { /* 无权限读别人的 cwd：留 null，identifySelfServer 不会认领 */ }
+    out.push({ pid: Number(entry), command, cwd });
+  }
+  return out;
+}
+
+function listenersViaLsof(port, execFile) {
+  const run = (cmd, args) => execFile(cmd, args, { encoding: 'utf8', timeout: 3000 });
+  const pids = run('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']).split('\n').map((s) => s.trim()).filter(Boolean);
+  return pids.map((pid) => {
+    const command = run('ps', ['-o', 'command=', '-p', pid]).trim();
+    // lsof -F 输出：`p<pid>` 行后跟 `n<路径>` 行，n 是字段标记
+    const cwd = run('lsof', ['-a', '-d', 'cwd', '-p', pid, '-Fn']).split('\n').find((l) => l.startsWith('n'))?.slice(1) || null;
+    return { pid: Number(pid), command, cwd };
+  });
+}
+
 const TAILSCALE_FALLBACK_PATHS = [
   '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
   '/opt/homebrew/bin/tailscale',

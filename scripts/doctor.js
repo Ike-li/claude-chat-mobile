@@ -37,7 +37,7 @@ import { resolveWorkdirSource as loadWorkdirSource } from '../app/src/sessions/w
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { resolveBindPlan } from '../app/src/shared/bind-host.js';
-import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
+import { checkDocConsistency as runDocConsistency, formatDocConsistency, isDistributionInstall } from './doc-consistency.js';
 import {
   authTokenDiagnostic,
   claudeBinDiagnostic,
@@ -61,7 +61,7 @@ import {
   tailscaleDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
-import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
+import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
@@ -194,21 +194,11 @@ function servicePortOwner(port) {
 }
 
 // 取数：谁在 listen 这个端口（pid + 命令行 + cwd）。同样只取数，判定在 identifySelfServer。
+// 取数本体在 doctor-runtime.probeListeningProcesses（Linux 走 /proc，macOS 走 PATH 上的 lsof/ps）——
+// 此前这里写死 /usr/sbin/lsof 与 /bin/ps，Linux 上 server 跑着时 D4 恒报「被不明进程占用」（2026-09-06 容器演练）。
 // 任何一步失败都返回空数组——认不出来只会退回原来的 fail 分支，不会误判成自己人。
 function listenerProcesses(port) {
-  try {
-    const pids = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 3000 })
-      .split('\n').map(s => s.trim()).filter(Boolean);
-    return pids.map((pid) => {
-      const command = execFileSync('/bin/ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8', timeout: 3000 }).trim();
-      // lsof 的 cwd 行形如 `n/Users/you/code/…`（-F 输出，n 前缀是字段标记）
-      const cwd = execFileSync('/usr/sbin/lsof', ['-a', '-d', 'cwd', '-p', pid, '-Fn'], { encoding: 'utf8', timeout: 3000 })
-        .split('\n').find(l => l.startsWith('n'))?.slice(1) || null;
-      return { pid: Number(pid), command, cwd };
-    });
-  } catch {
-    return [];
-  }
+  return probeListeningProcesses(port);
 }
 
 // D4: PORT 未被占用（或被自家 server unit 占用——桌面端拉着服务时那是正常态，不是故障）
@@ -473,6 +463,14 @@ function checkConfigPermissions() {
 // D9: 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本）。机械化背书单一事实源纪律：
 // PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
 function checkDocConsistency() {
+  // 分发包（tests/ 已被裁掉）里 README 仍写着 npm run check / npm test，而 package.json 按可达性删了它们——
+  // 这是维护者防漂移门禁，对裁剪后的安装树不适用，否则每台用户机上 D9 恒红（2026-09-06 容器演练）。
+  if (isDistributionInstall(HERE)) {
+    ok(bi('文档一致性', 'Docs consistency'), bi(
+      '分发包安装（无 tests/ 目录）：维护者防漂移门禁，对裁剪后的安装树不适用',
+      'Distribution install (no tests/ directory): maintainer anti-drift gate, not applicable to a trimmed install tree'));
+    return;
+  }
   const result = runDocConsistency({ rootDir: HERE });
   if (result.problems.length > 0) {
     fail(bi('文档一致性', 'Docs consistency'), formatDocConsistency(result) + bi('\n  （单一事实源/防漂移纪律）', '\n  (single-source-of-truth / anti-drift discipline)'));
@@ -658,7 +656,8 @@ function effectiveConfigFiles() {
 
 // D20: 文件编辑器直写 × 公网迹象（R45，2026-08-30 拍板：默认开不动，只提示）。判定在
 // doctor-checks.fileEditExposureDiagnostic；公网信号只认显式声明——CF_ACCESS_* 三键齐设
-//（与 app/src/auth/cf-access.js 同一组键）或 PUBLIC_URL 非空。须在 loadRuntimeEnvironment 之后跑：
+//（与 app/src/auth/cf-access.js 同一组键）、PUBLIC_URL 非空（vpn 档除外），或 ACCESS_PROFILE 声明为
+// cloudflare / reverse-proxy / direct。须在 loadRuntimeEnvironment 之后跑：
 // FILE_EDIT 可能来自配置文件，投影进 process.env 才读得到。
 function checkFileEditExposure() {
   const set = k => String(process.env[k] || '').trim() !== '';

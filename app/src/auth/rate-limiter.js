@@ -174,19 +174,28 @@ export function authRejection({ verdict, retryAfterMs = null } = {}) {
 //     （shouldTrustForwardedFor）。取**末跳**：那一跳是反代追加的，首跳是客户端自称的。
 //     【默认绝不采信】：透传型反代 / ssh -R / frp tcp 会把客户端自带的 XFF 原样送进来，那时整条头
 //     都是攻击者写的，采信 = 限速失效，比合桶更糟；服务端分不出两种情况，所以必须由用户 opt-in。
-export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false, trustForwardedFor = false } = {}) {
+//
+// clientSourceAddress 是「这个连接的来源是谁」的**唯一**判据：限速桶（本函数）与待审设备卡片上给人核对的 IP
+// （app.js 的 addPendingDevice）都从它拿。2026-09-06 容器演练：卡片此前直接取 peer，反代后每张卡都是 127.0.0.1，
+// 而桶已按 XFF 末跳拆——同一个问题两处各答一份、答案还不一样。它返回原样地址（卡片要给人看），归桶是这里的事。
+export function clientSourceAddress(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false, trustForwardedFor = false } = {}) {
   if (trustCfConnectingIp) {
     const cfip = handshake?.headers?.['cf-connecting-ip'];
-    if (cfip && typeof cfip === 'string' && cfip.trim()) return `cfip:${ipRateBucket(cfip)}`;
+    if (cfip && typeof cfip === 'string' && cfip.trim()) return { source: 'cfip', address: cfip.trim() };
   }
   if (trustForwardedFor) {
     const xff = handshake?.headers?.['x-forwarded-for'];
     if (typeof xff === 'string') {
       const hops = xff.split(',').map((s) => s.trim()).filter(Boolean);
-      if (hops.length) return `xff:${ipRateBucket(hops[hops.length - 1])}`;
+      if (hops.length) return { source: 'xff', address: hops[hops.length - 1] };
     }
   }
-  return `ip:${ipRateBucket(normalizeIp(handshake?.address || ''))}`;
+  return { source: 'ip', address: normalizeIp(handshake?.address || '') };
+}
+
+export function rlSourceKey(handshake, normalizeIp = (x) => x, opts = {}) {
+  const { source, address } = clientSourceAddress(handshake, normalizeIp, opts);
+  return `${source}:${ipRateBucket(address)}`;
 }
 
 // peer 是不是本机 loopback（三个判定共用一份字面量：两个采信开关 + 设备审批 bypass）。

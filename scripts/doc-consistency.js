@@ -230,6 +230,13 @@ function checkContractCounts({ rootDir, docFiles, contractCounts }) {
   return problems;
 }
 
+// 分发包安装态的唯一判据：被 export-ignore 的 tests/ 前缀在不在。与分发裁剪同源，不另立标记文件——
+// 标记会漂（打包时忘写、用户复制时丢），目录前缀是裁剪本身留下的痕迹。住在这里而不是 dist-manifest.js：
+// 后者是维护者工具、随包裁掉，doctor 在用户机上 import 不到它。
+export function isDistributionInstall(rootDir) {
+  return !existsSync(join(rootDir, 'tests'));
+}
+
 export function checkDocConsistency({
   rootDir = ROOT,
   docGlobs = DEFAULT_DOC_GLOBS,

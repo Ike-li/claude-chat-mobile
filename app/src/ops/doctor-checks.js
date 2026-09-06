@@ -1044,6 +1044,25 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
   };
 }
 
+// ── D4 的 Linux 取数半边：/proc/net/tcp{,6} 的行 → 监听指定端口的 socket inode ──
+// 行形如 `   0: 0100007F:0BB8 00000000:0000 0A … uid timeout inode`：local_address 是「小端十六进制地址:十六进制端口」，
+// st 0A = LISTEN。只认监听行——同端口的已建立连接（st 01）也在这张表里，算进去会把客户端连接认成监听者。
+// 纯解析；取数（读 /proc、反查 pid）在 doctor-runtime.probeListeningProcesses，macOS 不走这里。
+export function parseProcNetTcpListeners(text, port) {
+  const want = Number(port);
+  const inodes = [];
+  for (const line of String(text || '').split('\n')) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 10 || !/^\d+:$/.test(cols[0])) continue;
+    const [, local, , st] = cols;
+    if (st !== '0A') continue;
+    const hexPort = local.split(':')[1];
+    if (!hexPort || parseInt(hexPort, 16) !== want) continue;
+    if (!inodes.includes(cols[9])) inodes.push(cols[9]);
+  }
+  return inodes;
+}
+
 // TAILSCALE / D23（2026-09-06）：不经 Cloudflare 的推荐公网路径。产品对它只**探测 + 指路**：
 // 不装、不起、不保活（hard-rules §1「公网入口」——tailscaled 本来就是系统守护进程，没有任何东西需要
 // CCM 保活，这正是它与 cloudflared 的差别）。探测事实由 doctor-runtime.probeTailscale 采集（有副作用），

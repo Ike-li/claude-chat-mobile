@@ -9,6 +9,7 @@
 // ② 是这里唯一的人工清单，也是最容易漏的一类——漏了不会有任何静态报错，
 // 只在用户跑到那一步时炸（如 service:install 找不到 plist 模板）。
 import { execFileSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
@@ -176,6 +177,28 @@ export function productionClosure(root) {
   return [...seen].sort();
 }
 
+// 打分发 tarball。收口到一个函数是因为 2026-09-06 在 macOS 上打的包到了 Linux 用户机上多出 212 个 ._* 文件：
+// macOS 的 bsdtar 默认把每个文件的 xattr（解包出来的文件都带 com.apple.provenance）写成 `LIBARCHIVE.xattr.*` pax
+// 扩展头；包里没有 ._ 条目，但 Linux 的 GNU tar 解包时把这些头**物化成 ._<名字> 文件**并逐条刷
+// 「Ignoring unknown extended header keyword」，doctor 的「Frontend JS syntax」直接红（实测 2026-09-06）。
+// --no-xattrs 两家 tar 都认；--no-mac-metadata（AppleDouble 分叉）只有 bsdtar 认，GNU tar 会拒绝；
+// COPYFILE_DISABLE 是同一件事的环境变量开关。打完自检：解压看原始 tar 字节里还有没有 LIBARCHIVE.xattr，
+// 有就抛——宁可发版失败也不把它发给用户（看条目名查不出来，pax 头不在列表里）。
+export function packDistTarball({ stageRoot, dirName, out, execFile = execFileSync }) {
+  const version = execFile('tar', ['--version'], { encoding: 'utf8' });
+  const flags = ['--no-xattrs', ...(/bsdtar/i.test(version) ? ['--no-mac-metadata'] : [])];
+  execFile('tar', [...flags, '-czf', out, '-C', stageRoot, dirName], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' });
+  if (tarballCarriesXattrs(out)) {
+    throw new Error(`分发包带着 LIBARCHIVE.xattr pax 头，Linux 解包会长出 ._* 文件：${out}`);
+  }
+  return out;
+}
+
+/** 原始 tar 字节里有没有 xattr 扩展头（pax 头以明文 `LIBARCHIVE.xattr.<name>=` 记录，列条目看不见）。 */
+export function tarballCarriesXattrs(path) {
+  return gunzipSync(readFileSync(path)).includes('LIBARCHIVE.xattr.');
+}
+
 /** 递归列出目录下所有文件的相对路径（供 --rewrite-package 算 shipped 集合）。 */
 function listFiles(dir, base = dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -187,9 +210,21 @@ function listFiles(dir, base = dir, out = []) {
 }
 
 // CLI：`node scripts/dist-manifest.js` 打印闭包；`--check` 对比 git archive 的实际输出；
-// `--rewrite-package <staged-dir>` 就地改写解包目录里的 package.json（发版打包用）。
+// `--rewrite-package <staged-dir>` 就地改写解包目录里的 package.json（发版打包用）；
+// `--pack <解包根目录> <包内目录名> <输出 .tar.gz>` 打分发包（release.sh 与 tests/infra/newuser 共用同一条路）。
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
   const root = join(import.meta.dirname, '..');
+  const packAt = process.argv.indexOf('--pack');
+  if (packAt !== -1) {
+    const [stageRoot, dirName, out] = process.argv.slice(packAt + 1, packAt + 4);
+    if (!stageRoot || !dirName || !out) {
+      console.error('✗ --pack <解包根目录> <包内目录名> <输出 .tar.gz>');
+      process.exit(2);
+    }
+    packDistTarball({ stageRoot, dirName, out });
+    console.log(`✅ 已打包 ${out}`);
+    process.exit(0);
+  }
   const rewriteAt = process.argv.indexOf('--rewrite-package');
   if (rewriteAt !== -1) {
     const stage = process.argv[rewriteAt + 1];

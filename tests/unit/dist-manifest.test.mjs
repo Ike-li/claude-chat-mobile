@@ -10,11 +10,12 @@
 // 后者要重新实现一遍 gitattributes 的匹配与优先级规则（越靠后的规则覆盖前面的），必然分叉。
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { bareImports, DIST_ENTRIES, EXTRA_RUNTIME_FILES, productionClosure } from '../../scripts/dist-manifest.js';
+import { bareImports, DIST_ENTRIES, EXTRA_RUNTIME_FILES, packDistTarball, productionClosure, tarballCarriesXattrs } from '../../scripts/dist-manifest.js';
+import { isDistributionInstall } from '../../scripts/doc-consistency.js';
 import { worktreeTree } from '../helpers/worktree-tree.mjs';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -137,3 +138,47 @@ test('③ 裁剪后的树自洽：保留的文档不链接到被裁掉的文件'
     rmSync(dir, { recursive: true, force: true }); // safe-rm: dir 来自本用例的 mkdtemp
   }
 });
+
+// 2026-09-06 容器演练：分发包用户跑 doctor，D9「文档一致性」恒红——README 写着 npm run check / npm test，
+// 而 --rewrite-package 已按可达性把这两条裁掉。D9 是维护者门禁，对裁剪后的树不适用；判据只有一个：
+// 被 export-ignore 的 tests/ 前缀还在不在（与分发裁剪同源，不另立标记）。
+test('isDistributionInstall：仓库检出有 tests/ → false；裁剪后的树（无 tests/）→ true', () => {
+  assert.equal(isDistributionInstall(ROOT), false, '把维护者检出当成了分发包，D9 会在开发机上被静默跳过');
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-dist-'));
+  try {
+    writeFileSync(join(dir, 'package.json'), '{}');
+    assert.equal(isDistributionInstall(dir), true, '分发包没被认出来，用户机上 D9 继续恒红');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 2026-09-06 容器演练：在 macOS 上打的分发包到 Linux 用户机上多出 212 个 ._* 文件。包里并没有 ._ 条目——
+// bsdtar 把 xattr 写成 LIBARCHIVE.xattr.* pax 头，GNU tar 解包时把它们物化成 ._ 文件并刷警告，doctor 直接红。
+// 打包收口到一个函数，这里两侧验收：裸 tar 在同一目录上必须带 pax xattr 头（仪器先证明自己看得见），
+// packDistTarball 必须不带。看的是解压后的原始字节，不是条目名（条目名永远查不出来，这正是当时漏掉的原因）。
+test('packDistTarball：macOS 打包不得带 xattr 扩展头（正对照：裸 tar 在同一目录上会带）',
+  { skip: process.platform !== 'darwin' && '只有 macOS 的 bsdtar 会写 LIBARCHIVE.xattr 头，别处这条无法变红' }, () => {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-pack-'));
+    try {
+      const dirName = 'claude-chat-mobile-0.0.0';
+      const stageRoot = join(root, 'stage');
+      mkdirSync(join(stageRoot, dirName, 'app'), { recursive: true });
+      const file = join(stageRoot, dirName, 'app', 'a.js');
+      writeFileSync(file, 'export const a = 1;\n');
+      const x = spawnSync('xattr', ['-w', 'com.example.ccm-test', '1', file], { encoding: 'utf8' });
+      assert.equal(x.status, 0, `xattr 写不上，仪器搭不起来：${x.stderr}`);
+
+      const naive = join(root, 'naive.tgz');
+      assert.equal(spawnSync('tar', ['-czf', naive, '-C', stageRoot, dirName], { encoding: 'utf8' }).status, 0);
+      assert.equal(tarballCarriesXattrs(naive), true, '仪器失明：裸 tar 没写 LIBARCHIVE.xattr 头，本用例证明不了任何事');
+
+      const out = join(root, 'dist.tgz');
+      packDistTarball({ stageRoot, dirName, out });
+      assert.equal(tarballCarriesXattrs(out), false, '分发包又带上了 xattr 扩展头，Linux 用户解包会长出 ._ 文件、doctor 会红');
+      const list = spawnSync('tar', ['-tzf', out], { encoding: 'utf8' }).stdout;
+      assert.match(list, /\/app\/a\.js$/m, '正常文件丢了');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });

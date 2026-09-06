@@ -181,7 +181,9 @@ STAGE="$DIST_DIR/claude-chat-mobile-$NEW_VER"
 mkdir -p "$STAGE"
 git archive --format=tar "$TAG" | tar x -C "$STAGE"
 node scripts/dist-manifest.js --rewrite-package "$STAGE" || die "package.json 改写失败"
-tar czf "$DIST" -C "$DIST_DIR" "claude-chat-mobile-$NEW_VER"
+# 不直接 tar czf：macOS 的 bsdtar 默认把 xattr 写成 pax 扩展头，Linux 的 GNU tar 解包时会把它们物化成 ._* 文件、
+# 逐条刷警告，用户机上 doctor 直接见红（2026-09-06 实测）。打包与自检都在 --pack 里。
+node scripts/dist-manifest.js --pack "$DIST_DIR" "claude-chat-mobile-$NEW_VER" "$DIST" || die "分发包打包失败"
 
 # 发版护栏：包里混进测试树 = 裁剪规则失效；缺 lock = 用户无法 npm ci 复现依赖。
 # 两条都在这里拦，而不是等用户下载后才发现。
@@ -191,6 +193,10 @@ if tar tzf "$DIST" | grep -qE "/(tests|playground)/"; then
   die "分发包混进了测试树，检查 .gitattributes"
 fi
 tar tzf "$DIST" | grep -q "/package-lock.json$" || die "分发包缺 package-lock.json，用户无法 npm ci"
+# pax 扩展头不在条目列表里，要看解压后的原始字节；grep -a 把二进制当文本。
+if gzip -dc "$DIST" | LC_ALL=C grep -aq 'LIBARCHIVE.xattr.'; then
+  die "分发包带着 xattr 扩展头（Linux 解包会长出 ._* 文件），检查 dist-manifest.js --pack 的打包参数"
+fi
 # 改写没生效 = 用户敲 npm test/check/lint 拿到 ENOENT，等于「配置也隔离了」这句话是假的。
 node -e '
   const pkg = require(process.argv[1]);

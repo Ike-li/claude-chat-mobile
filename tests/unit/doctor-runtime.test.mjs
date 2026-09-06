@@ -1,11 +1,11 @@
 // tests/unit/doctor-runtime.test.mjs —— UI 安全体检编排（④）。重点：白名单合并容错 + 报告脱敏（明文绝不外泄）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot, probeTailscale } from '../../app/src/ops/doctor-runtime.js';
-import { modelSettingsConflictDiagnostic } from '../../app/src/ops/doctor-checks.js';
+import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot, probeTailscale, probeListeningProcesses } from '../../app/src/ops/doctor-runtime.js';
+import { modelSettingsConflictDiagnostic, identifySelfServer } from '../../app/src/ops/doctor-checks.js';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
@@ -501,5 +501,58 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
       bindPlan: resolveBindPlan({ authToken: 'x'.repeat(32), bindMode: 'lan' }),
     });
     assert.equal(c.status, 'ok', c.detail);
+  });
+});
+
+// 2026-09-06 容器演练：Linux 上 doctor 的 PORT 恒报「被不明进程占用」——取数写死了 /usr/sbin/lsof 与 /bin/ps。
+// Linux 改走 /proc（零外部工具），macOS 仍用 lsof/ps 但只允许 PATH 查找。这里用一次性目录造一棵假 /proc 树，
+// 与 identifySelfServer 接成整条链：端口 → inode → pid → 命令行/cwd → 认出是自家 server。
+test.describe('probeListeningProcesses —— 端口监听者取数', () => {
+  test('linux：/proc/net/tcp 的 inode 经 /proc/<pid>/fd 反查到 pid，cmdline 的 NUL 还原成空格，cwd 走 readlink', () => {
+    const proc = mkdtempSync(join(tmpdir(), 'ccm-fakeproc-'));
+    const repo = mkdtempSync(join(tmpdir(), 'ccm-repo-'));
+    try {
+      mkdirSync(join(proc, 'net'));
+      writeFileSync(join(proc, 'net', 'tcp'), [
+        '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+        '   0: 00000000:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41234 1 0000000000000000 100 0 0 10 0',
+        '',
+      ].join('\n'));
+      // 自家 server：pid 4242 持有 inode 41234
+      mkdirSync(join(proc, '4242', 'fd'), { recursive: true });
+      symlinkSync('socket:[41234]', join(proc, '4242', 'fd', '7'));
+      symlinkSync('/dev/null', join(proc, '4242', 'fd', '0'));
+      writeFileSync(join(proc, '4242', 'cmdline'), 'node\0app/server.js\0');
+      symlinkSync(repo, join(proc, '4242', 'cwd'));
+      // 干扰项：别的进程持有别的 socket；非数字目录；fd 读不到的进程
+      mkdirSync(join(proc, '4300', 'fd'), { recursive: true });
+      symlinkSync('socket:[999]', join(proc, '4300', 'fd', '3'));
+      writeFileSync(join(proc, '4300', 'cmdline'), 'nginx\0');
+      mkdirSync(join(proc, 'self'));
+      mkdirSync(join(proc, '4400'));
+      const r = probeListeningProcesses(3000, { platform: 'linux', procRoot: proc });
+      assert.deepEqual(r, [{ pid: 4242, command: 'node app/server.js', cwd: repo }], 'Linux 取数没把端口反查到自家进程');
+      assert.deepEqual(identifySelfServer({ processes: r, repoRoot: repo }), { pid: 4242, cwd: repo }, '取数与判定接不上');
+      assert.deepEqual(probeListeningProcesses(4000, { platform: 'linux', procRoot: proc }), []);
+    } finally {
+      rmSync(proc, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+  test('linux：/proc 不可读 → 空数组不抛（认不出来只会退回原来的 fail 分支）', () => {
+    assert.deepEqual(probeListeningProcesses(3000, { platform: 'linux', procRoot: '/nonexistent-ccm-proc' }), []);
+  });
+  test('darwin：lsof / ps 只按 PATH 查找，不写死 /usr/sbin 与 /bin', () => {
+    const calls = [];
+    const execFile = (cmd, args) => {
+      calls.push(cmd);
+      if (cmd === 'lsof' && args.includes('-t')) return '39090\n';
+      if (cmd === 'ps') return 'node app/server.js\n';
+      if (cmd === 'lsof' && args.includes('cwd')) return 'p39090\nn/Users/you/code/claude-chat-mobile\n';
+      throw new Error(`unexpected ${cmd}`);
+    };
+    const r = probeListeningProcesses(3000, { platform: 'darwin', execFile });
+    assert.deepEqual(r, [{ pid: 39090, command: 'node app/server.js', cwd: '/Users/you/code/claude-chat-mobile' }]);
+    assert.ok(calls.length > 0 && calls.every((c) => !c.startsWith('/')), `写死了绝对路径：${calls.join(',')}`);
   });
 });

@@ -14,6 +14,7 @@ import {
   shouldTrustCfConnectingIp,
   shouldTrustForwardedFor,
   shouldBypassDeviceApproval,
+  clientSourceAddress,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
 } from '../../app/src/auth/rate-limiter.js';
 
@@ -232,6 +233,37 @@ test.describe('AUTH-04: 来源识别、防伪造与 IPv6 归桶', () => {
     assert.equal(ipRateBucket('FE80::1'), 'fe80:0:0:0::/64');
     assert.equal(ipRateBucket('192.168.1.1'), '192.168.1.1');
     assert.equal(ipRateBucket(null), '');
+  });
+});
+
+// 2026-09-06 容器演练：反代后待审设备卡片上的 IP 恒 127.0.0.1——卡片取的是 peer，限速桶却按 XFF 末跳，
+// 同一个「来源是谁」两处各算一份。收敛成一份判据后，卡片拿原样地址（给人核对），桶拿 /64 归桶。
+test.describe('AUTH-04: clientSourceAddress —— 限速桶与待审设备卡片共用同一份来源判据', () => {
+  const norm = (x) => (x || '').replace(/^::ffff:/, '');
+  const hs = (address, headers = {}) => ({ address, headers });
+
+  test('默认（两个采信开关都关）：带 CF-IP 与 XFF 也只认 peer，且 peer 经 normalizeIp 去 ::ffff:', () => {
+    const r = clientSourceAddress(hs('::ffff:192.168.65.1', { 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.7' }), norm);
+    assert.deepEqual(r, { source: 'ip', address: '192.168.65.1' }, '未声明可信拓扑却采信了客户端可写的头');
+  });
+  test('trustForwardedFor：取 XFF 末跳的原样地址（卡片要给人核对，不是 /64 桶）', () => {
+    const r = clientSourceAddress(hs('127.0.0.1', { 'x-forwarded-for': '1.1.1.1, 2001:db8:1:2:3:4:5:6' }), norm, { trustForwardedFor: true });
+    assert.deepEqual(r, { source: 'xff', address: '2001:db8:1:2:3:4:5:6' }, '末跳没取到、或被归成了 /64 桶');
+  });
+  test('两个开关同开且两头都在 → cfip 优先，值 trim 过', () => {
+    const r = clientSourceAddress(hs('127.0.0.1', { 'cf-connecting-ip': ' 203.0.113.9 ', 'x-forwarded-for': '9.9.9.9' }), norm, { trustCfConnectingIp: true, trustForwardedFor: true });
+    assert.deepEqual(r, { source: 'cfip', address: '203.0.113.9' });
+  });
+  test('rlSourceKey 恒等于 source:ipRateBucket(address)——两个消费者不允许各算一份', () => {
+    const cases = [
+      [hs('::ffff:10.0.0.5', { 'x-forwarded-for': '8.8.8.8' }), {}],
+      [hs('127.0.0.1', { 'x-forwarded-for': '1.1.1.1, 2001:db8:1:2:3:4:5:6' }), { trustForwardedFor: true }],
+      [hs('127.0.0.1', { 'cf-connecting-ip': '203.0.113.9' }), { trustCfConnectingIp: true }],
+    ];
+    for (const [h, opts] of cases) {
+      const { source, address } = clientSourceAddress(h, norm, opts);
+      assert.equal(rlSourceKey(h, norm, opts), `${source}:${ipRateBucket(address)}`, '限速桶与来源判据分叉了');
+    }
   });
 });
 

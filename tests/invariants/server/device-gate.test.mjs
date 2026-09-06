@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
@@ -98,4 +99,61 @@ test('带端口的本机 Host 仍算本机（判据取冒号前那段）', async
   const events = await collectEvents(`localhost:${server.port}`);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0, 'Host 头带端口是常态，不能因此把本机判成远程');
+});
+
+// 2026-09-06 容器演练：反代（TRUSTED_PROXY=loopback，nginx 追加 XFF）后待审设备卡片上的 IP 恒 127.0.0.1——
+// 卡片取的是 peer，限速桶却按 XFF 末跳，同一个来源两处各答一份。接线修成同一份判据后，这里在真组装根上钉住：
+// 声明了 TRUSTED_PROXY 且 peer 是 loopback（本测试客户端就是）→ 卡片记 XFF 末跳；未声明 → 仍记 peer（不采信客户端可写的头）。
+// 观察面用产品自己的 `node scripts/device.js list --json`：那是维护者「核对再批」时真正看到的东西。
+test.describe('待审设备卡片的来源 IP 与限速桶同一份判据（AUTH-04 × DEVICE-01）', () => {
+  const ROOT = join(import.meta.dirname, '..', '..', '..');
+  const XFF = '203.0.113.9, 198.51.100.7';
+  let pdir, pserver;
+
+  test.before(async () => {
+    pdir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-xff-'));
+    pserver = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: pdir, CCM_DATA_DIR: pdir, TRUSTED_PROXY: 'loopback' });
+  });
+  test.after(async () => {
+    if (pserver) await killServer(pserver.proc);
+    if (pdir) rmSync(pdir, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  });
+
+  function connectOnce(port, deviceToken) {
+    return new Promise((resolve) => {
+      const sock = ioClient(`http://127.0.0.1:${port}`, {
+        auth: { token: TOKEN, deviceToken },
+        transports: ['websocket'],
+        reconnection: false,
+        timeout: 4000,
+        extraHeaders: { Host: 'ccm.proxy.test', 'X-Forwarded-For': XFF },
+      });
+      const done = () => { try { sock.close(); } catch { /* 已关闭 */ } resolve(); };
+      sock.on('connect', () => setTimeout(done, 800));
+      sock.on('connect_error', done);
+      setTimeout(done, 5000);
+    });
+  }
+
+  function pendingIpOf(dataDir, deviceToken) {
+    const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'device.js'), 'list', '--json'], {
+      cwd: ROOT, encoding: 'utf8', env: { ...process.env, CCM_DATA_DIR: dataDir },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const rec = JSON.parse(r.stdout).pending.find((p) => p.deviceId === deviceToken);
+    assert.ok(rec, '设备没进待审列表，用例前提不成立');
+    return rec.ip;
+  }
+
+  test('TRUSTED_PROXY=loopback：卡片记 XFF 末跳（反代追加的那一跳），不是首跳、不是 peer', async () => {
+    const token = randomUUID();
+    await connectOnce(pserver.port, token);
+    assert.equal(pendingIpOf(pdir, token), '198.51.100.7', '反代后卡片仍给不出真实来源，「核对再批」无从核对');
+  });
+
+  test('未声明 TRUSTED_PROXY：同样的 XFF 不采信，卡片记 peer', async () => {
+    const token = randomUUID();
+    await connectOnce(server.port, token);
+    assert.equal(pendingIpOf(dir, token), '127.0.0.1', '未声明可信反代却采信了客户端可写的 XFF');
+  });
 });
