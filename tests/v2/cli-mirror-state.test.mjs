@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -139,19 +139,19 @@ test.describe('SESSION-01 & SRV-003: externalDirty 吸收终端写入与忙碌�
     assert.match(r.detail, /permissions=1/);
   });
 
-  test('SRV-003 侧二: 源码契约验证 —— externalDirty 为真且空闲时，必须置换实例吸收外部轮次', () => {
-    const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
-
-    // 检查 app.js 中外部脏标记守卫
-    const dirtyGuardIdx = src.indexOf('if (a.externalDirty && a.sessionId) {');
-    assert.ok(dirtyGuardIdx > 0, 'app.js 必须包含 externalDirty 上下文守卫');
-
-    const busyCheckIdx = src.indexOf('if (a.isBusy()) {', dirtyGuardIdx);
-    assert.ok(busyCheckIdx > dirtyGuardIdx, '必须首先检查 a.isBusy() 并拒绝置换');
-
-    const replaceIdx = src.indexOf('await dedupedResume(cwd, sid', busyCheckIdx);
-    assert.ok(replaceIdx > busyCheckIdx, '在 a.isBusy() 检查之后，必须调用 dedupedResume 吸收外部轮次');
-  });
+  // SRV-003「空闲时必须置换」2026-09-05 搬去 S2：
+  //   tests/v2/server/external-dirty.test.mjs —— 真 transcript 外部增长 → catchUpTick 观察到
+  //   → 下一条 web 消息落在【新实例】上，且新实例仍绑同一会话。
+  //
+  // 原来这里是 readFileSync(app.js) + indexOf 比三个源码字符串的先后。那种断言钉的是源码
+  // 长什么样：改个变量名无故变红，保持文本不变而改坏行为照样绿。
+  // 以前写不了行为版是因为 fake-claude.sh 不产出输出 ⇒ a.sessionId 恒 null ⇒ 守卫整条不可达；
+  // 可驱动档（CCM_FAKE_CLAUDE_MODE=turn）解除了这个前提。
+  //
+  // 另一侧「忙碌时不得置换」不在 S2 —— mirror-engine 的 localBusy 分支有意把忙碌期间的磁盘
+  // 增长归因为己方写入、不标 externalDirty（2026-07-18 修的就是这条），所以那个前置态在 S2
+  // 造不干净。它的判定纯函数 externalDirtyBusyNack 已在 tests/unit/instance-routing.test.mjs
+  // 逐维覆盖（11 处断言）。
 });
 
 test.describe('SESSION-01: 镜像锁判定规则纯函数收敛（history.js）', () => {
