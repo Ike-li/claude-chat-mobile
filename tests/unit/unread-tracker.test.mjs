@@ -3,7 +3,6 @@
 // 两个独立判断（有没有人在看 / 这条事件是不是一条新的顶层消息），混在 onEvent 大回调里写容易漏分支。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from '../../app/src/server/unread-tracker.js';
 
 test.describe('isInstanceBeingWatched', () => {
@@ -52,11 +51,14 @@ test.describe('unreadOnEntryForSync', () => {
     assert.equal(unreadOnEntryForSync({ instanceId: null, viewingInstanceId: null, snapshot: 2, live: 2 }), 0);
   });
 
-  test('app.js sync:since 必须把 live 交给 unreadOnEntryForSync（只回快照会让 PWA 后台路径胶囊恒 0）', () => {
-    const src = readFileSync(new URL('../../app/src/server/app.js', import.meta.url), 'utf8');
-    assert.match(src, /unreadOnEntryForSync/);
-    assert.match(src, /live:\s*unreadCounts\.get/);
-  });
+  // 接线断言 2026-09-05 搬去 S2：tests/v2/server/unread-on-entry.test.mjs
+  //   —— 前台跑一轮 unreadOnEntry=0；上报 hidden 后再跑一轮，ack 必须带回 >0。
+  // 原来这里是 readFileSync(app.js) + 正则匹配 /unreadOnEntryForSync/ 与
+  // /live:\s*unreadCounts\.get/，钉的是源码长什么样：改个变量名无故变红，
+  // 保持文本不变而改坏行为照样绿。
+  // 双向验收记录：把 app.js 里的 `live: unreadCounts.get(...)` 注入成 `live: 0` 之后，
+  // 那条 S2 用例精确变红（实际 0）；本文件上面那些纯函数分支照常全绿——正说明
+  // 「接线断了」这件事只有行为层看得见。
 });
 
 test.describe('resolveUnreadDelta', () => {
