@@ -182,6 +182,30 @@ test.describe('session:list — 空工作目录', () => {
     assert.equal(ack.sessions.length, 0); // 空工作目录无历史
     s.disconnect();
   });
+
+  // terminalBusy / terminalWaiting 是 annotateTerminalStates 算出的一对 cwd 级汇总，存在的唯一理由是
+  // 「默认分页只回 6 行，页外条目的终端状态否则完全看不见」。真 server 曾只把 terminalBusy 放上 ack，
+  // waiting 半边算了却没上线（2026-09-06 修复）——前端对两个字段各自判 `typeof === 'boolean'`，
+  // 缺的那个静默回落成只扫本页返回行，且漏传与「连的是旧服务端」在客户端完全不可区分，无任何报错。
+  //
+  // 这一层只有这里能守：E2E 打的是 tests/e2e/mock/server.js（独立实现、零 import app/src），删掉真
+  // server 的字段它照样全绿；而 hasWaitingTerminalSessionForCwd 的单测只管判定本身，管不到上不上得了线。
+  // 因此断言故意只问「在不在 ack 上」（空目录下两者都必然是 false，问值等于什么都没问）。
+  test('session:list ack 必须【成对】带上 cwd 级终端汇总（漏一个 → 前端静默退化成只看本页行）', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout')), 3000);
+      s.emit('session:list', { cwd: tmpDir }, res => { clearTimeout(t); resolve(res); });
+    });
+    assert.equal(typeof ack.terminalBusy, 'boolean', 'terminalBusy 未上 ack：页外「终端在跑」将只能靠本页行判定');
+    assert.equal(typeof ack.terminalWaiting, 'boolean', 'terminalWaiting 未上 ack：页外「终端卡在审批框上」将只能靠本页行判定');
+    s.disconnect();
+  });
 });
 
 // 跨设备已读位点（2026-09-03）。此前位点只存各设备的 localStorage，换台设备 seen 表为空、全部回落到

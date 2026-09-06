@@ -937,6 +937,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // P0-11ai（2026-09-06）：terminalBusy / terminalWaiting 是 session:list ack 上的一对 cwd 级汇总，
+  // 存在的唯一理由是「默认分页只回 6 行，页外的终端状态否则完全看不见」。真 server 此前只回传了
+  // terminalBusy 半边，waiting 漏传——前端 updateTerminalStateForDir 对两个字段各自判
+  // `typeof === 'boolean'`，缺的那个静默回落成 rowHas('waiting')，只扫本页返回行。
+  //
+  // 这个缺陷为什么能活下来：页内有 waiting 行时回落照样点亮，P0-11ag 因此一直是绿的；而漏传与
+  // 「连的是旧服务端」在客户端完全不可区分，所以没有任何报错。漏掉的还恰是更要紧的半边——
+  // 目录行只有一个角标位，waiting 的优先级高于 busy（等人的那个才要用户动手）。
+  //
+  // 夹具与 P0-11aa 同形，只换汇总的那一位：另一工作区返回 5 行、全部不带 terminal 字段，
+  // 运行态只可能来自 cwd 级 terminalWaiting。据此，「返回行无 [data-session-status]」这条断言不是
+  // 装饰，它是本用例的仪器校验——没有它，角标亮了也说不清是汇总起的作用还是行回落起的作用。
+  test('P0-11ai 页外 CLI 等审批仍点亮工作区汇总（waiting 半边不得只靠页内行回落）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-summary-waiting');
+    await openSessionsSidebar(page);
+    const otherDir = await expandWorkspace(page, ANOTHER_WORKSPACE);
+
+    // 汇总里 terminalBusy=false、terminalWaiting=true：角标必须是「终端需要你」而不是「运行中」，
+    // 也不得因为字段没到而整个消失（漏传时 next 塌成 null → .dir-badge hidden）。
+    await expect(otherDir.locator('.dir-badge')).toHaveText('终端需要你');
+
+    // 仪器校验：这一页 5 行没有任何一行带 terminal，行回落判不出 waiting。
+    const otherSubtree = otherDir.locator('xpath=following-sibling::*[1]');
+    await expect(otherSubtree.locator('[data-session-status]')).toHaveCount(0);
+
+    // 顶栏那一个位子按既有准入表只放 permission/error（见 logic OTHER_WORKSPACE_CHIP_TONE）：
+    // 终端里的审批 prompt 活在 CLI 的 TUI 里，手机上批不了，不该占「点开就能处理」的槽位。
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-11ae（2026-09-02 真机报告）：刷新后打开抽屉，折叠工作区的「N 未读」要等满一个 12s 周期才
   // 出现——移动端 onOpened 是三条打开路径里唯一没传 immediate 的（桌面 toggleSessions、
   // visibilitychange 回前台都传了），而移动端恰恰是本产品主场景。更糟的是空窗期不是「像在加载」：

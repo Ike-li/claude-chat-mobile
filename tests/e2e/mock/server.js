@@ -104,6 +104,10 @@ let desktopBadgeArmed = false;
 let terminalRefreshArmed = false;
 let terminalRefreshListCount = 0;
 let terminalSummaryOtherArmed = false;
+// P0-11ai：terminalBusy 的孪生半边。同样是「返回行都不带 terminal，运行态只来自 cwd 级汇总」，
+// 但汇总的是 waiting——它是两个字段里更要紧的那个（等人的终端点开就能去处理，在跑的只是环境感知），
+// 却因为 server 的 ack 漏传而一直只能靠页内行回落显示。
+let terminalSummaryOtherWaitingArmed = false;
 let terminalRaceArmed = false;
 let terminalRaceListCount = 0;
 let terminalCloseRaceOtherArmed = false;
@@ -278,6 +282,7 @@ function resetMockState() {
   terminalRefreshArmed = false;
   terminalRefreshListCount = 0;
   terminalSummaryOtherArmed = false;
+  terminalSummaryOtherWaitingArmed = false;
   terminalRaceArmed = false;
   terminalRaceListCount = 0;
   terminalCloseRaceOtherArmed = false;
@@ -1082,6 +1087,7 @@ io.on('connection', socket => {
             }
           ],
           terminalBusy: terminalSummaryOtherArmed,
+          terminalWaiting: terminalSummaryOtherWaitingArmed,
         });
       }
     } else {
@@ -2355,6 +2361,23 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:terminal-summary — 另一工作区仅 terminalBusy 汇总为 true，返回行均无 terminal');
         terminalSummaryOtherArmed = true;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: '/Users/you/code/claude-chat-mobile',
+            dirs: ['/Users/you/code/claude-chat-mobile', '/Users/you/code/another-react-project'],
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
+        });
+      },
+    },
+    {
+      command: 'test:terminal-summary-waiting',
+      run: async () => {
+        console.log('[mock] test:terminal-summary-waiting — 另一工作区仅 terminalWaiting 汇总为 true，返回行均无 terminal');
+        terminalSummaryOtherWaitingArmed = true;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,

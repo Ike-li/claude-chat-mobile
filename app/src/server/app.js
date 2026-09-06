@@ -2849,7 +2849,11 @@ registerSocketConnection(io, socket => {
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
-    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore, total, readState: readStateForRows(terminal.list) });
+    // terminalBusy / terminalWaiting 必须【成对】上线：前端 updateTerminalStateForDir 对每个字段各自
+    // 判 `typeof === 'boolean'`，缺哪个就把哪个静默回落成「只扫本页返回行」——而这两个汇总存在的理由
+    // 恰恰是覆盖页外条目。漏传不报错、页内场景照常显示，缺陷只在「等人的那个终端恰好在分页窗口外」
+    // 时现形（waiting 半边曾这样漏了两天）。
+    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows(terminal.list) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
