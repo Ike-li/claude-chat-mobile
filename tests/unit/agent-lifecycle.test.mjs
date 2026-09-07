@@ -12,6 +12,7 @@ import {
   formatLifecycleIdleReclaim,
   formatLifecycleProcessExited,
   formatLifecycleSessionError,
+  stripProcessExitPrefix,
   formatLifecycleGatewayStall,
   buildAgentQueryOptions,
 } from '../../app/src/agent/agent.js';
@@ -51,6 +52,41 @@ test.describe('formatLifecycle*', () => {
     assert.equal(formatLifecycleProcessExited(), '进程已退出：可重新发送消息继续（会话历史仍在）');
     assert.match(formatLifecycleSessionError('boom'), /^进程异常：boom$/);
     assert.match(formatLifecycleSessionError(''), /进程异常/);
+  });
+  // SDK 0.3.211 起，process-exit Error 的 message 里会拼上 CLI 的 stderr 尾部
+  // （`Claude Code process exited with code 1. stderr: …`，上游截到 2048 字符）。这条 detail 直接
+  // 进气泡且下游无任何长度闸（server 的 agent:event 信封不截断），不设闸时一次崩溃就能糊满整屏。
+  // 三种形态共用这一条出口，加闸只需加在这里：exit code / terminated by signal /
+  // “Cannot write to process that exited with error: …”（后者的 message 本身已含 stderr 尾）。
+  test('sessionError：超长 detail 截断并留省略号（SDK 0.3.211+ 会把 CLI stderr 拼进来）', () => {
+    const long = `Claude Code process exited with code 1. stderr: ${'x'.repeat(2048)}`;
+    const msg = formatLifecycleSessionError(long);
+    assert.equal(msg.length < 400, true, `不得把 2048 字符 stderr 原样上屏（实际 ${msg.length}）`);
+    assert.match(msg, /^进程异常：Claude Code process exited with code 1\. stderr: x+…$/);
+    // 截断只对超长生效：正常长度的原因必须逐字保留，否则排障信息被闸吃掉
+    assert.equal(formatLifecycleSessionError('spawn ENOENT'), '进程异常：spawn ENOENT');
+  });
+  // 同一个 0.3.211 变更的第二处后果：resume 失败文案的字符预算只有 120，而上游前缀就占掉约 47，
+  // 只剩 72 个字符留给 CLI 真正说的那句话。剥掉前缀，把预算全给真实原因。
+  test('stripProcessExitPrefix：剥掉 SDK 拼的 process-exit 前缀，保留 CLI 原文', () => {
+    assert.equal(
+      stripProcessExitPrefix('Claude Code process exited with code 1. stderr: Session abc is currently running as a background agent (bg)'),
+      'Session abc is currently running as a background agent (bg)',
+    );
+    // signal 形态同样要剥——外部 SIGKILL 打死 CLI 时走的是这条
+    assert.equal(
+      stripProcessExitPrefix('Claude Code process terminated by signal SIGKILL. stderr: out of memory'),
+      'out of memory',
+    );
+    // 无前缀（旧 CLI、非 exit 类错误）原样返回，不改变既有形态
+    assert.equal(stripProcessExitPrefix('spawn ENOENT'), 'spawn ENOENT');
+    // stderr 为空时保留原文：不能把「进程退出了」这个唯一事实也一起吃掉
+    assert.equal(
+      stripProcessExitPrefix('Claude Code process exited with code 1. stderr: '),
+      'Claude Code process exited with code 1. stderr:',
+    );
+    assert.equal(stripProcessExitPrefix(''), '');
+    assert.equal(stripProcessExitPrefix(null), '');
   });
   test('gatewayStall：报静默秒数 + 自动中断上界 + 可操作建议，不宣称已中断', () => {
     const msg = formatLifecycleGatewayStall(95, 10);

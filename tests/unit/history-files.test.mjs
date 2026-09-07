@@ -33,7 +33,7 @@ test('getProjectDir: 纯字母数字路径原样', () => {
   assert.equal(getProjectDir('abc123'), 'abc123');
 });
 
-// CLI/SDK 对 sanitize 后超过 200 字符的结果会截断并接一段 hash 后缀（sdk.mjs 的 Co()）。那个 200
+// CLI/SDK 对 sanitize 后超过 200 字符的结果会截断并接一段 hash 后缀（见 sdk.mjs）。那个 200
 // 不是美观阈值，是贴着文件系统单段 255 字节上限设的：本仓若原样返回全长，算出的名字根本建不出目录，
 // join(CLAUDE_DIR, getProjectDir(cwd)) 的 stat/read 一律 ENAMETOOLONG，且 history.js 里那些
 // `catch { return null }` 会把异常吞成「没有会话」——表现为该 workdir 会话列表恒空、镜像同步失效，
@@ -41,7 +41,7 @@ test('getProjectDir: 纯字母数字路径原样', () => {
 //
 // ★ 本用例能保住什么、不能保住什么（2026-08-09 审查修正——原注释宣称它验证了整个编码，是错的）：
 // 保住「截断确实发生」（全长 314 字符会撞 assert 的 255 上限）与「前 200 字符正确」。
-// **保不住 hash 后缀**：SDK 的候选目录函数 It() 在名字被截断时会做前缀扫描，凡以 `前200字符-` 开头的
+// **保不住 hash 后缀**：SDK 的候选目录函数在名字被截断时会做前缀扫描，凡以 `前200字符-` 开头的
 // 目录都算候选——实测把后缀换成 `-ZZZZZZZZ` 它照样找得到。而本仓 join(CLAUDE_DIR, ...) 是精确拼接、
 // 没有这层兜底，hash 错了就直接找不到。hash 的正确性由下面那条钉死期望值的用例负责。
 test('getProjectDir: 超长路径按 CLI 口径截断+hash（真实 SDK 能据此定位会话）', async () => {
@@ -77,8 +77,9 @@ test('getProjectDir: 超长路径按 CLI 口径截断+hash（真实 SDK 能据�
 });
 
 // Unicode 归一必须**无条件**做，不能只在 darwin 做。
-// 上游这两者本身不一致（2026-08-09 分别对着两个产物读出来的）：
-//   SDK 0.3.201  Pr(e) = process.platform === "darwin" ? e.normalize("NFC") : e   ← 平台门控
+// 上游这两者本身不一致（2026-08-09 分别对着两个产物读出来的；SDK 侧 2026-09-07 升 0.3.263 时复核，
+// 分歧依旧。不写 minified 符号名——它每次发版都重排，理由见 app/src/shared/project-dir.js 头部）：
+//   SDK 0.3.263  (e) => process.platform === "darwin" ? e.normalize("NFC") : e    ← 平台门控
 //   CLI 2.1.225  xp(e) = e.normalize("NFC")                                        ← 无条件
 // 写 transcript 的是 CLI，所以要对齐的是后者。
 // 失败场景：Linux 上 headless 跑（npm start）+ workdir 含 NFD 形式的非 ASCII（例如从 macOS
@@ -117,7 +118,7 @@ test('getProjectDir: 截断后的 hash 后缀与 CLI 逐字节一致（钉死已
 // 改成 `<` 时【没有任何用例变红】——上面两条样本 sanitize 后是 211 / 314 字符，离 200 太远，
 // 改成 `<`、`<=`、甚至 `< 199` 都一样走截断分支。
 //
-// 差一个字符不是美观问题：200 是与 CLI 的 Co() 逐字节对齐的常量。本仓算出的目录名一旦和 CLI
+// 差一个字符不是美观问题：200 是与 CLI 逐字节对齐的常量（SDK 侧 0.3.263 里它已提成变量，值仍是 200）。本仓算出的目录名一旦和 CLI
 // 写的不同，join(CLAUDE_DIR, ...) 是精确拼接、没有 SDK 那层前缀扫描兜底，该 workdir 的会话
 // 直接一个都读不到，而 CLI 自己完全正常——正是本文件上面那段注释描述的失效形态。
 test('getProjectDir: 200 字符阈值的两侧（恰好 200 原样返回，201 才截断+hash）', () => {

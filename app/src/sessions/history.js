@@ -65,7 +65,7 @@ export function getProjectDir(cwd) {
 // 读取会话历史消息（user/assistant 文本 + 主链 tool_use/tool_result；过滤 thinking/子 agent/CLI 噪音）。
 // 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
 //
-// 【已评估：不迁 SDK 官方 getSessionMessages（2026-07-12 实证）】SDK 0.3.201 有官方 getSessionMessages，但
+// 【已评估：不迁 SDK 官方 getSessionMessages（2026-07-12 实证，0.3.263 仍适用）】SDK 有官方 getSessionMessages，但
 // SS-003：sessionId 进入路径前统一字符集校验（与 sessionFileExists 同规则）。
 // 拒绝含 / \ . 等的穿越形态；非法 id 调用方返回空/settled/-1，不拼进 join。
 export function isSafeSessionId(id) {
@@ -775,7 +775,7 @@ async function scanSessionsViaSdk(cwd, limit) {
   }))).filter(Boolean);
 
   // 补齐 SDK 漏报的会话（2026-08-05 真机）：SDK 的 listSessions/getSessionInfo 会跳过「无可提取
-  // summary」的会话（sdk.d.ts:687 原话：…is a sidechain session, or has no extractable summary）。
+  // summary」的会话（sdk.d.ts 原话：…is a sidechain session, or has no extractable summary）。
   // 本地 slash 命令（/code-review 等）跑在 fork 上下文里，主链 transcript 只落 entrypoint-marker /
   // queue-operation / mode，一条 user/assistant 都没有 ⇒ 提不出 summary ⇒ 整个会话从抽屉里消失，
   // 而它在盘上活得好好的（CLI 自己的 /resume 列表把它显示成 "(session)"，同一个原因）。

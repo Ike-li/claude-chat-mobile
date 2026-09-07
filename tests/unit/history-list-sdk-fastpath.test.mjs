@@ -157,7 +157,7 @@ test.after(() => { try { rmSync(FAKE_HOME, { recursive: true, force: true }); } 
 
 // 2026-08-05 真机：新会话首条发 /code-review，跑完后【整个会话从抽屉里消失】。
 // 根因不在 ccm——SDK 的 listSessions/getSessionInfo 会跳过「无可提取 summary」的会话
-// （sdk.d.ts:687 原话：Returns undefined if the session file is not found, is a sidechain
+// （sdk.d.ts 原话：Returns undefined if the session file is not found, is a sidechain
 // session, or has no extractable summary）。而本地 slash 命令跑在 fork 上下文里，主链 transcript
 // 只落 entrypoint-marker / queue-operation / mode，一条 user/assistant 都没有 ⇒ 提不出 summary。
 // 实测：getSessionInfo('8f064e08…') → undefined，CLI 自己的 /resume 列表也只显示 "(session)"。

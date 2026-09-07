@@ -342,13 +342,31 @@ function clearCtxInFlight(agent, gen) {
   }
 }
 
+// 这一发该要 full 还是 summary（SDK 0.3.257+ 的 getContextUsage detail）。纯函数，供接线 + 单测。
+//
+// 'full' 按类别打 count_tokens（system/tools/MCP/skills/memory），就是本文件 :169 说的「冷路径数秒」
+// ——而超时闸是 1.5s，所以冷路径**必然超时**、回落陈旧值。'summary' 从上次响应的 usage + 本地估算
+// 作答，不打那几发。
+//
+// 分档判据是「窗口知不知道」，不是「第几次拉」：maxTokens 只有 full 给，但它对同一模型是常量，
+// 拿到一次就够；之后每次要的只是 percentage/totalTokens，那正是 summary 便宜提供的。
+// 换模型时 readCachedCtxWindow 因 model 指纹不匹配返回 null，自动退回 full 重取窗口。
+// 安全性来自 adoptContextUsage 三个字段各自独立采纳：summary 不带 maxTokens 只是不刷新窗口，
+// 不会把已缓存的抹掉，ctx% 照显。
+export function contextUsageDetail(agent, model) {
+  return readCachedCtxWindow(agent, model) ? 'summary' : 'full';
+}
+
 // 真正发 RPC。超时只放弃等待，CLI 侧仍在跑；迟到成功由 then 写入缓存并 onAdopted 补刷。
-async function fetchAndAdoptContextUsage(agent, { timeoutMs = 1500, onAdopted, now = Date.now() } = {}) {
+export async function fetchAndAdoptContextUsage(agent, { timeoutMs = 1500, onAdopted, now = Date.now() } = {}) {
   const q = agent?.q;
   if (!q?.getContextUsage) return;
   const model = agent.activeModel || agent.reportedModel || '';
+  // 在 beginCtxFetch 之前算：先定这一发要什么，再开始记账。（两个位置当前等价——beginCtxFetch 换模型时
+  // 丢 maxTokens，而 readCachedCtxWindow 本就带 model 指纹校验——但摆在前面就不依赖那条内部细节。）
+  const detail = contextUsageDetail(agent, model);
   const gen = beginCtxFetch(agent, model, now);
-  const rpc = Promise.resolve().then(() => q.getContextUsage());
+  const rpc = Promise.resolve().then(() => q.getContextUsage({ detail }));
   let waiting = true;
   rpc.then(
     sdk => {

@@ -971,9 +971,11 @@ test.describe('result 精确出槽（user_message_uuid）', () => {
 // terminal_reason（2026-08-09 真 turn 探针实测）：result 上 CLI 给的**权威死因**，正常完成是
 // "completed"，被 interrupt 打断是 "aborted_streaming"，另有 max_turns / hook_stopped /
 // budget_exhausted / api_error / prompt_too_long 等。
-// ★ 枚举以**运行中的 CLI** 为准：2.1.225 二进制里实测 19 个值都在。装机 SDK 0.3.201 的 sdk.d.ts
-// 只列了 13 个（0.3.226 才补齐到 19）——SDK 类型定义滞后于 CLI 产出是常态（command_lifecycle 干脆
-// 任何一版 d.ts 都没有，却照样收得到），拿 d.ts 当权威会得出错误结论。
+// ★ 枚举以**运行中的 CLI** 为准：2.1.225 二进制里实测 19 个值都在。上游 changelog 把这批值记在
+// 0.3.204；SDK 0.3.201 的 sdk.d.ts 只列 13 个，装机的 0.3.263 已列全 19 个。
+// （2026-09-07 更正：原注释写「0.3.226 才补齐到 19」，但 0.3.226 是个只有 parity 一行的空版本，
+// 这个归属是错的。）SDK 类型定义滞后于 CLI 产出仍是常态——command_lifecycle 干脆任何一版 d.ts
+// 都没有，却照样收得到，拿 d.ts 当权威会得出错误结论。
 //
 // 本仓原先只能靠自己的 _awaitingInterruptResult 标志判断「这条 result 是不是中断导致的」——那是
 // 「我发过 interrupt」而不是「它真的被中断了」。abort 若来自本仓之外的路径（看门狗、收口、CLI 自身），

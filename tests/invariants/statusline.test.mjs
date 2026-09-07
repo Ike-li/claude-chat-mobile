@@ -26,6 +26,8 @@ import {
   invalidateCtxOccupancy,
   webContextCost,
   getContextUsageSafe,
+  contextUsageDetail,
+  fetchAndAdoptContextUsage,
   CONTEXT_USAGE_INFLIGHT_MAX_MS,
   clearCtxWindowCache,
 } from '../../app/src/ops/statusline.js';
@@ -447,5 +449,47 @@ test.describe('getContextUsageSafe：RPC 层兜底，不判生命周期', () => 
   test('抛错 → null，不把异常冒泡到状态栏组装', async () => {
     const boom = { getContextUsage: async () => { throw new Error('rpc down'); } };
     assert.equal(await getContextUsageSafe(boom, 100), null);
+  });
+});
+
+// SDK 0.3.257 给 getContextUsage 加了 detail:'summary'——从上次响应的 usage + 本地估算作答，
+// 不打按类别 count_tokens 的那几发。本文件 :169 早就写着这个 RPC「冷路径数秒」，而超时闸是 1.5s，
+// 也就是冷路径**必然超时**、回落陈旧值。分档拿回这一档：
+//   窗口未知（冷启动 / 刚换模型）→ 'full'，因为只有它给 maxTokens；
+//   窗口已知               → 'summary'，此时要的只是 percentage/totalTokens。
+// 之所以能这么分：maxTokens 对同一模型是常量，且 adoptContextUsage 的三个字段各自独立采纳
+// （maxTokens 缺席只是不刷新窗口，不会把已缓存的抹掉）。
+test.describe('contextUsageDetail：按「窗口已知否」分档，冷路径才付 full 的钱', () => {
+  test('无窗口缓存 → full（只有它给 maxTokens）', () => {
+    assert.equal(contextUsageDetail({}, 'opus'), 'full');
+    assert.equal(contextUsageDetail(null, 'opus'), 'full');
+  });
+
+  test('窗口已知且同模型 → summary', () => {
+    const agent = { ctxWindowCache: { model: 'opus', maxTokens: 200000 } };
+    assert.equal(contextUsageDetail(agent, 'opus'), 'summary');
+  });
+
+  test('换了模型 → 回到 full：窗口随模型作废，不能拿上一个模型的窗口当已知', () => {
+    const agent = { ctxWindowCache: { model: 'opus', maxTokens: 200000 } };
+    assert.equal(contextUsageDetail(agent, 'haiku'), 'full');
+  });
+});
+
+// ★ 上面三条只钉住「档位算得对」。若接线处漏传参数，它们照样全绿——那正是假绿的形状。
+// 这一条钉的是「算出来的档真的到了 RPC 上」。
+test.describe('fetchAndAdoptContextUsage：把档位真的传给 SDK', () => {
+  test('冷启动发 full，拿到窗口后再发 summary', async () => {
+    const seen = [];
+    const agent = {
+      q: { getContextUsage: async (opts) => { seen.push(opts); return { maxTokens: 200000, percentage: 12, totalTokens: 24000 }; } },
+      activeModel: 'opus',
+    };
+    await fetchAndAdoptContextUsage(agent, { timeoutMs: 500 });
+    assert.deepEqual(seen[0], { detail: 'full' }, '冷启动必须要 full，否则永远拿不到 maxTokens');
+    assert.equal(agent.ctxWindowCache.maxTokens, 200000, '前提：这一发确实把窗口存下来了');
+
+    await fetchAndAdoptContextUsage(agent, { timeoutMs: 500 });
+    assert.deepEqual(seen[1], { detail: 'summary' }, '窗口已知后不该再付 count_tokens 的钱');
   });
 });

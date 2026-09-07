@@ -31,6 +31,21 @@ test.describe('buildAgentQueryOptions — 后台进度加强开关', () => {
     assert.equal(opts.agentProgressSummaries, false);
     s.dispose();
   });
+
+  // SDK 0.3.246 起的 perTaskStopAffordance。**缺席即 fail-closed**：不声明时 CLI 认为本消费者
+  // 没有逐任务停止的手段，于是一次 interrupt() 连带杀掉所有在跑的后台 agent/workflow。
+  // 本仓明明有那个手段（stopTask 通道 + 前端后台任务面板的停止按钮），只是从没声明过——
+  // 表现为用户点顶部「停止」想掐掉当前这一轮，后台任务被一起杀，UI 上没有任何信号。
+  // 声明的前提是「真的能逐个停」，所以这条断言把 stopTask 一起钉住：哪天它被删了，这里必须红，
+  // 否则就会剩下一个「声称能停、实际停不了」的声明——那比不声明更糟（跑飞的任务再没人能停）。
+  test('perTaskStopAffordance=true：interrupt 只掐当前轮，不连坐后台任务', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.perTaskStopAffordance, true);
+    assert.equal(typeof s.stopTask, 'function', '声明了逐任务停止就必须真的提供它，否则跑飞的任务无人能停');
+    s.dispose();
+  });
 });
 
 // 2270453 fix(security): resolvedEnv（worktree settings.local.json 的 env 块）曾不加过滤直接 spread 进

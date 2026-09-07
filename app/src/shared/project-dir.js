@@ -1,15 +1,20 @@
 // CLI 的 project 目录名编码 —— 与 claude CLI / Agent SDK 逐字节对齐的唯一实现。
 //
 // ~/.claude/projects/<encodeProjectDir(cwd)>/<sessionId>.jsonl 是 CLI 落 transcript 的位置，
-// 本仓要读它就必须算出**完全相同**的目录名。规则（截断与 hash 取自 sdk.mjs 的 Co()/EZ()/v_()，
+// 本仓要读它就必须算出**完全相同**的目录名。规则（截断与 hash 取自 sdk.mjs，
 // 已与 CLI 2.1.225 二进制里的 gw()/T$g() 逐条核对同源）：
 //   1. 先 NFC 归一，**无条件、不分平台**（理由见下）
 //   2. 非字母数字 → '-'
 //   3. 结果超过 200 字符则截到 200，再接 '-' + hash 的 36 进制
 //
-// ★ 归一这步要对齐 CLI，不是对齐 SDK —— 上游这两者本身不一致（2026-08-09 分别从两个产物直接读出）：
-//     SDK 0.3.201  Pr(e) = process.platform === "darwin" ? e.normalize("NFC") : e   ← 平台门控
+// ★ 归一这步要对齐 CLI，不是对齐 SDK —— 上游这两者本身不一致（2026-08-09 分别从两个产物直接读出，
+//   SDK 侧 2026-09-07 升级到 0.3.263 时复核，分歧依旧）：
+//     SDK 0.3.263  (e) => process.platform === "darwin" ? e.normalize("NFC") : e    ← 平台门控
 //     CLI 2.1.225  xp(e) = e.normalize("NFC")                                        ← 无条件
+//   【不写 minified 符号名】那批名字每次发版都重排：0.3.201 的 Co()/EZ()/v_()/Pr() 在 0.3.263 里
+//   分别是 xu()/qje()/iT()/at()，而 NFC 那个函数在 0.3.263 里干脆有两份同形拷贝（lN 与 at），
+//   写死任何一个都是猜。要复核就按函数体去搜（`normalize("NFC")` / `replace(/[^a-zA-Z0-9]/g,"-")`），
+//   算法本身十几个版本没动过。
 //   写 transcript 的是 CLI，跟它。macOS 上两种写法行为完全相同，分歧只在 Linux（headless
 //   那条入口的常见平台）且路径含 NFD 形式非 ASCII 时显形：那时 SDK 式写法会把同一个目录编成两个名字。
 //   对应回归用例在 tests/unit/history-files.test.mjs，且**只有 Linux 容器能鉴别它**（macOS 上恒绿）。

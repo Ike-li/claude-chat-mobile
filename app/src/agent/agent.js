@@ -167,9 +167,29 @@ export function formatLifecycleGatewayStall(seconds, timeoutMins, turnSeconds) {
 export function formatLifecycleProcessExited() {
   return '进程已退出：可重新发送消息继续（会话历史仍在）';
 }
+// 「进程异常」气泡里 detail 的长度闸。SDK 0.3.211 起 getProcessExitError 会把 CLI 的 stderr 尾部
+// 拼进 Error.message（`… . stderr: <上游截到 2048 字符>`），而这条 detail 直接进气泡、下游全程无闸
+// （server 的 agent:event 信封不截断）——不设闸时一次崩溃就把整屏糊掉。同一出口覆盖三种形态：
+// `exited with code N` / `terminated by signal SIG*` / `Cannot write to process that exited with
+// error: …`（末者的 message 本身已含 stderr 尾）。300 字符 = 上游前缀（约 47）+ 250 字符真实原因，
+// 够看清报错行；要完整 stderr 去 LOG_STDERR，那是另一条通道。
+const SESSION_ERROR_DETAIL_MAX = 300;
+
+// 剥掉 SDK 拼在 CLI stderr 前面的那截样板（同为 0.3.211 的后果）。resume 失败文案的字符预算只有
+// 120，而 `Claude Code process exited with code 1. stderr: ` 就占掉约 47——不剥就等于把一半预算
+// 让给了对用户零信息量的样板（exit code 恒为 1）。
+// 不匹配时原样返回，这一条同时兜住两种情况：旧 CLI / 非 exit 类错误（本就没有该前缀），
+// 以及 stderr 为空——入参先 trim 过，`stderr: ` 的尾空格被削掉后正则不再命中，于是「进程退出了」
+// 这个仅存的事实得以保留。也正因为先 trim 过，命中即意味着其后必有非空白内容，无需再兜空结果。
+export function stripProcessExitPrefix(message) {
+  const s = message != null ? String(message).trim() : '';
+  const m = /^Claude Code process (?:exited with code \d+|terminated by signal \w+)\. stderr: /.exec(s);
+  return m ? s.slice(m[0].length).trim() : s;
+}
 export function formatLifecycleSessionError(detail) {
   const d = detail != null ? String(detail).trim() : '';
-  return d ? `进程异常：${d}` : '进程异常：未知错误（可重新发送继续）';
+  if (!d) return '进程异常：未知错误（可重新发送继续）';
+  return `进程异常：${d.length > SESSION_ERROR_DETAIL_MAX ? `${d.slice(0, SESSION_ERROR_DETAIL_MAX)}…` : d}`;
 }
 
 // resolvedEnv 白名单：只放行网关/模型相关变量，防 worktree settings 覆盖 PORT/AUTH_TOKEN/CCM_DATA_DIR 等服务端关键变量。
@@ -183,11 +203,12 @@ function filterSafeResolvedEnv(env) {
 }
 
 // CLI stderr 尾部缓冲上限。
-// 【为什么必须自己接住 stderr】装机的 SDK 0.3.201 的 getProcessExitError 只造
-// `Claude Code process exited with code N`，不含 CLI 输出（上游 0.3.211 才把 stderr 拼进 process-exit
-// error）。而 CLI 把 resume 失败的真实原因——尤其 `Session <id> is currently running as a background
-// agent (bg)`——只写在 stderr。不接住它，F4 就永远只能吐「process exited with code 1」这种对用户
-// 毫无信息量的文案（该断链曾被一条喂了理想形态错误对象的单测掩盖）。
+// 【为什么仍要自己接住 stderr】SDK 0.3.211 起 getProcessExitError 会把 stderr 尾部拼进 message
+// （装机的 0.3.263 已是这样），但**不能因此删掉这套自采集**：上游只截 2048 字符且是整段拼接，
+// 报错行后若还有建议行/栈，`/background agent/i` 就落空；而 CLI 把 resume 失败的真实原因——尤其
+// `Session <id> is currently running as a background agent (bg)`——只写在 stderr。
+// _sessionLockLineFromStderr 从末行往前逐行扫，正是为兜住这一档（该断链曾被一条喂了理想形态
+// 错误对象的单测掩盖）。另：本缓冲与 process-exit error 是两条独立通道，非 throw 路径只有这一条。
 // 只留尾部：报错行总在最末，长跑会话的 stderr 不会把内存撑大。4000 字符足够容纳 CLI 的多行报错。
 const STDERR_TAIL_MAX = 4000;
 
@@ -215,6 +236,13 @@ export function buildAgentQueryOptions(session, env = process.env) {
     includePartialMessages: true,                        // E4 流式
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
     agentProgressSummaries: progressOn,                  // ~30s AI 进度 → task_progress.summary（默认开）
+    // SDK 0.3.246+。声明「本消费者有逐任务停止的手段」——本仓确实有：stopTask() 经 socket 的
+    // task:stop 接到前端后台任务面板的停止按钮。**缺席是 fail-closed 的**：不声明时 CLI 认定没手段，
+    // 一次 interrupt() 就连带杀光在跑的后台 agent/workflow（用户只想掐当前这一轮，后台任务陪葬且无信号）。
+    // 该声明在 initialize 帧一次性下发、运行时改不了，多客户端下 first-attached-client wins。
+    // 例外（上游写死，不归本仓管）：一次性 -p / 字符串 prompt 那种 stdin 关闭的跑法仍会杀——
+    // stdin 一关，stop_task 控制请求就送不进去，fail-closed 照旧。本仓是长驻 streaming input，不走那条。
+    perTaskStopAffordance: true,
     effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
     // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
     ...(settings ? { settings } : {}),
@@ -606,11 +634,12 @@ export class AgentSession {
         // resumeFailed 让 server 清 currentSessionId，打破"重试→resume 同一失效 id→循环"死锁。
         // sessionFileExists 已通过时「历史被清理」常误导：优先透传 CLI 真实原因（含 background agent 独占）。
         this.resumeFailed = true;
-        const reason = caught?.message ? sanitize(String(caught.message)).slice(0, 200) : '';
+        const reason = caught?.message ? stripProcessExitPrefix(sanitize(String(caught.message))).slice(0, 200) : '';
         // 独占锁原因有两个可能来源，按可靠性排序取第一个命中的：
-        //  · reason —— SDK 0.3.211+ 才会把 CLI stderr 拼进 process-exit error；装机的 0.3.201 不会。
-        //  · stderr 尾部 —— CLI 任何版本都往这写，与 SDK 版本无关。
-        // 两条都留：升级后 reason 自带原文走第一条，不升级也不瞎。
+        //  · reason —— SDK 0.3.211+ 把 CLI stderr 拼进 process-exit error；装机的 0.3.263 会，故**常**命中。
+        //    但不是必然：上游尾部截到 2048 字符，报错行后若还有建议行/栈，/background agent/i 会落空。
+        //  · stderr 尾部 —— CLI 任何版本都往这写，与 SDK 版本无关；从末行往前扫，兜住上面落空的情况。
+        // 两条都留：第一条常命中不等于总命中，删掉第二条会让那部分情况退回无信息量的文案。
         const lockRaw = /background agent/i.test(reason) ? reason : this._sessionLockLineFromStderr();
         let message;
         if (lockRaw) {
@@ -2510,6 +2539,15 @@ export class AgentSession {
         } else if (msg.subtype === 'task_started') {
           // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故显式识别静默吞——
           // 不重复处理、也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
+          //
+          // 【已评估：spawn_depth 不接（2026-09-07，升 SDK 0.3.263 时查证）】0.3.238 给本消息加了
+          // spawn_depth，看着像是「子代理面板分不清父子层级」的解，实际两条都不成立：
+          //  · 默认配置下它恒为 1 —— d.ts 原话「1 for a top-level spawn, N+1 when spawned from
+          //    inside a depth-N agent」，而 0.3.217 已把嵌套上限从 5 降到 1（要放开得设
+          //    CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH，本仓没设）。接进来就是个永不变化的字段。
+          //  · 通道也对不上 —— 那个面板是 scanSubagents 扫磁盘 agent-*.meta.json 得来的，
+          //    与本条 SDK 消息不同源，spawn_depth 送不进去。
+          // 哪天真放开了嵌套深度，再从这里接。
         } else if (msg.subtype === 'api_retry') {
           // CLI 会在 TUI 显示 "Retrying in Ns · attempt i/max"。web 对齐为瞬时横幅：
           // emitTransient（不进 buffer、不占 seq），前端原地覆盖同一条，避免聊天流堆重试行。
@@ -2868,8 +2906,10 @@ export class AgentSession {
         this._clearLocalCommandProgress(); // 本轮收尾（含被中断/出错）：无论命令是否产出，豁免都到此为止
         this._flushText(); this._flushThink();
         // CLI 给的权威死因。取值以**运行中的 CLI** 为准（2.1.225 实测 19 值：含 budget_exhausted /
-        // api_error / turn_setup_failed 等）——注意装机 SDK 0.3.201 的 sdk.d.ts 里只列了 13 个，
-        // 类型定义滞后于 CLI 产出，别拿它当权威。旧 CLI 不发这个字段 → null，各判据自动退回原样。
+        // api_error / turn_setup_failed 等）。上游在 0.3.204 补上这批值，装机的 0.3.263 的 sdk.d.ts
+        // 已列全 19 个（0.3.201 时只有 13）——但「d.ts 滞后于 CLI 产出、别拿它当权威」这条依旧成立：
+        // command_lifecycle 至今任何一版 d.ts 都没有，却照样收得到。本仓不按枚举写 switch，只做
+        // 前缀判定 + 原样透传，正是为此；旧 CLI 不发这个字段 → null，各判据自动退回原样。
         const terminalReason = typeof msg.terminal_reason === 'string' ? msg.terminal_reason : null;
         // settle 槽：uuid 精确出槽 → 中断跳过 force 槽 → FIFO 回落，三路见 _settleOneResultTurn
         this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
