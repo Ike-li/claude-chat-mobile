@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, bgTaskStatusView, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
+import { bgTaskListCollapsed, bgTaskStatusView, bgTaskUsageText, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
 import { formatBgTaskRowLabel } from '../logic/tool-cards.js';
 import { t } from '../i18n.js';
 
@@ -210,6 +210,8 @@ export function createTaskStatusController(context, {
 
         const metaParts = [];
         if (statusView?.error) metaParts.push(statusView.error); // 失败原因排在最前，别被 truncate 吃掉
+        const usageText = bgTaskUsageText({ durationMs: task.durationMs, totalTokens: task.totalTokens });
+        if (usageText) metaParts.push(usageText); // B3：耗时/用量紧随其后（对标 Desktop 的 `Bash 3m 06s`）
         if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
         if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
           metaParts.push(String(task.subagentType));
@@ -303,6 +305,8 @@ export function createTaskStatusController(context, {
           truncated: item.truncated || false,
           status: item.status ?? null,
           error: item.error ?? null,
+          durationMs: item.durationMs ?? null,
+          totalTokens: item.totalTokens ?? null,
         });
       }
       if (typeof payload.taskId === 'string' && payload.taskId && tasks.has(payload.taskId)) {
@@ -327,6 +331,8 @@ export function createTaskStatusController(context, {
         truncated: payload?.truncated || prev.truncated || false,
         status: payload?.status ?? prev.status ?? null,
         error: payload?.error ?? prev.error ?? null,
+        durationMs: payload?.durationMs ?? prev.durationMs ?? null,
+        totalTokens: payload?.totalTokens ?? prev.totalTokens ?? null,
       });
       return true;
     }

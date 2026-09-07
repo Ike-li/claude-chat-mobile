@@ -1063,3 +1063,48 @@ test.describe('map() — task_updated 接线到出向快照（B1）', () => {
     s.dispose();
   });
 });
+
+// B3（2026-09-07）：task_progress.usage 此前一个字段都没读。
+test.describe('task_progress.usage → 任务耗时/用量（B3）', () => {
+  test('usage 落进快照并随 wire 发出', () => {
+    const { s, events } = makeSession();
+    events.length = 0;
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'u1', task_type: 'local_bash',
+      description: '跑 e2e', usage: { total_tokens: 1234, tool_uses: 7, duration_ms: 186_000 } });
+    const row = events.find(e => e.type === 'task_progress').payload.tasks.find(x => x.taskId === 'u1');
+    assert.equal(row.durationMs, 186_000);
+    assert.equal(row.totalTokens, 1234);
+    s.dispose();
+  });
+
+  // 关键：usage 只有 task_progress 带。别的 upsert 来源不带，不沿用就会在两种来源交替时闪烁归零。
+  test('无 usage 的后续 upsert 不得抹掉耗时', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'u2', task_type: 'local_bash',
+      description: '跑容器', usage: { total_tokens: 500, duration_ms: 60_000 } });
+    s.bgTaskUpsert('u2', 'local_bash', '跑容器'); // 模拟不带 usage 的来源
+    const row = s.bgTasksList()[0];
+    assert.equal(row.durationMs, 60_000, 'upsert 后耗时必须还在');
+    assert.equal(row.totalTokens, 500);
+    s.dispose();
+  });
+
+  test('全量快照 reconcile 后耗时仍在（快照不携带 usage）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'u3', task_type: 'local_bash',
+      description: '跑 lint', usage: { total_tokens: 300, duration_ms: 30_000 } });
+    s.reconcileBgTasks([{ task_id: 'u3', task_type: 'local_bash', description: '跑 lint' }]);
+    assert.equal(s.bgTasksList()[0].durationMs, 30_000, 'reconcile 后耗时必须还在');
+    s.dispose();
+  });
+
+  test('usage 缺失或非法不写坏字段', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'u4', task_type: 'local_bash', description: '无 usage' });
+    assert.equal(s.bgTasksList()[0].durationMs, null);
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'u5', task_type: 'local_bash',
+      description: '坏 usage', usage: { duration_ms: 'abc', total_tokens: null } });
+    assert.equal(s.bgTasksList().find(t => t.taskId === 'u5').durationMs, null);
+    s.dispose();
+  });
+});

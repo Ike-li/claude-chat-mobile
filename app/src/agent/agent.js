@@ -1705,6 +1705,10 @@ export class AgentSession {
       // 就等于每拍心跳都把 paused/error 抹回 null——面板会在"暂停"和"运行中"之间来回跳。
       status: prev?.status ?? null,
       error: prev?.error ?? null,
+      // B3：只有 task_progress 携带 usage，其余 upsert 来源（localcmd 扫盘等）不带 → 必须沿用，
+      // 否则任务行的耗时会在两种来源交替时闪烁归零。
+      durationMs: meta.durationMs ?? prev?.durationMs ?? null,
+      totalTokens: meta.totalTokens ?? prev?.totalTokens ?? null,
     });
     // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
     // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
@@ -1812,6 +1816,8 @@ export class AgentSession {
         // （CLI 2.1.263 wire schema 实证），不含状态。不沿用 prev 就是每次快照都清空运行态。
         status: prev?.status ?? null,
         error: prev?.error ?? null,
+        durationMs: prev?.durationMs ?? null,
+        totalTokens: prev?.totalTokens ?? null,
       });
     }
     // localcmd:* 不参与 reconcile：它们不是 SDK 报来的任务，本就不会出现在这份快照里，
@@ -1987,6 +1993,8 @@ export class AgentSession {
         truncated: t.truncated || false,
         status: t.status ?? null,
         error: t.error ?? null,
+        durationMs: t.durationMs ?? null,
+        totalTokens: t.totalTokens ?? null,
       }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
@@ -2421,11 +2429,16 @@ export class AgentSession {
             || '';
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           const bgDescTruncated = String(bgDesc).length > TOOL_SUMMARY_CAP;
+          // B3：usage 是【累计值】（SDK: {total_tokens, tool_uses, duration_ms}），直接覆盖不累加。
+          // 只有 task_progress 带它——localcmd 扫盘等其它 upsert 来源没有，故下游一律 ?? prev 沿用。
+          const bgUsage = msg.usage && typeof msg.usage === 'object' ? msg.usage : null;
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage, {
             lastToolName: bgLastTool,
             description: bgDesc ? truncate(String(bgDesc), TOOL_SUMMARY_CAP) : null,
             subagentType: bgSubagent,
             truncated: bgDescTruncated,
+            durationMs: Number.isFinite(bgUsage?.duration_ms) ? bgUsage.duration_ms : null,
+            totalTokens: Number.isFinite(bgUsage?.total_tokens) ? bgUsage.total_tokens : null,
           });
           // 附带全量 tasks 快照：前端据此画「跑了哪些任务 + 每条详情」，而非只显示最新一句
           this.emitBgTasksSnapshot({

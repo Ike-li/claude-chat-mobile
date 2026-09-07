@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   bgTaskStatusView,
+  bgTaskUsageText,
   classifyBgTaskKind,
   formatBgTaskBannerCopy,
   formatProgressHistoryEntry,
@@ -205,5 +206,28 @@ test.describe('bgTaskStatusView（后台任务运行态展示）', () => {
     assert.equal(bgTaskStatusView({ status: 'failed', error: 'exit 1' }).error, 'exit 1');
     assert.equal(bgTaskStatusView({ status: 'failed', error: '   ' }).error, null);
     assert.equal(bgTaskStatusView({ status: 'failed' }).error, null);
+  });
+});
+
+// B3（2026-09-07）：后台任务耗时/用量。来源 CLI task_progress.usage（累计值）。
+test.describe('bgTaskUsageText（后台任务耗时/用量）', () => {
+  test('时长 + token 组合', () => {
+    assert.equal(bgTaskUsageText({ durationMs: 186_000, totalTokens: 1234 }), '3m 6s · 1.2k tok');
+  });
+  test('只有其一时不留空段', () => {
+    assert.equal(bgTaskUsageText({ durationMs: 45_000 }), '45s');
+    assert.equal(bgTaskUsageText({ totalTokens: 856 }), '856 tok');
+  });
+  // 反向档：没有这条，函数写成恒返回一个字符串也能让上面几条过。
+  test('无数据 / 0 / 负值 → null（不显示「0s」这种伪信息）', () => {
+    assert.equal(bgTaskUsageText({}), null);
+    assert.equal(bgTaskUsageText(), null);
+    assert.equal(bgTaskUsageText({ durationMs: 0, totalTokens: 0 }), null);
+    assert.equal(bgTaskUsageText({ durationMs: -1 }), null);
+    assert.equal(bgTaskUsageText({ durationMs: null, totalTokens: undefined }), null);
+  });
+  test('token 千位以下显整数，不强套 k', () => {
+    assert.equal(bgTaskUsageText({ totalTokens: 999 }), '999 tok');
+    assert.equal(bgTaskUsageText({ totalTokens: 1000 }), '1.0k tok');
   });
 });

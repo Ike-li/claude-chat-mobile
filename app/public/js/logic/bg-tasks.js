@@ -137,6 +137,21 @@ export function bgTaskStatusView({ status, error } = {}) {
   };
 }
 
+// B3：后台任务的耗时/用量（数据→数据）。来源 CLI task_progress.usage（累计值）。
+// Desktop 的任务卡副标题是 `Bash 3m 06s`——耗时是「这东西跑多久了」最直接的答案，此前 ccm 一个字都没显示。
+// token 一并带上：n=1 自托管下用户自己付额度，后台代理烧了多少是他真正关心的量。
+// 两者都缺 → null，调用方据此决定要不要占位（不显示「0s」这种伪信息）。
+export function bgTaskUsageText({ durationMs, totalTokens } = {}) {
+  const parts = [];
+  const ms = Number(durationMs);
+  if (Number.isFinite(ms) && ms > 0) parts.push(formatCliDuration(ms));
+  const tok = Number(totalTokens);
+  if (Number.isFinite(tok) && tok > 0) {
+    parts.push(tok >= 1000 ? `${(tok / 1000).toFixed(1)}k tok` : `${Math.round(tok)} tok`);
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
 // 后台任务详情面板：进度历史条目格式化。
 // description = 工具态即时更新（如 "Running tests..."），summary = AI ~30s 进度摘要。
 // 两者择一显示（summary 优先，因更语义化；description 兜底）。
