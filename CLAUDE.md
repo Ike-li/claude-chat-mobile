@@ -72,7 +72,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 文档索引：
 
 - [docs/architecture.md](docs/architecture.md) — 双通道 / 单驾驶员 / 回放 / 推送 / 可观测详解
-- [docs/testing.md](docs/testing.md) — **写测试前先读**：三条铁律、选槽的判据、怎么知道自己没写出假绿、增删改功能时分别做什么。配套 [tests/README.md](tests/README.md)（目录地图 + 执行槽 + 不变量编号词汇表）
+- [docs/testing.md](docs/testing.md) — **写测试前先读**：三条铁律、选槽的判据、怎么知道自己没写出假绿、怎么知道自己写慢了、增删改功能时分别做什么。配套 [tests/README.md](tests/README.md)（目录地图 + 执行槽 + 不变量编号词汇表）
 - [docs/display-contracts.md](docs/display-contracts.md) — 模型、effort、statusline 展示语义。**改契约先改 `tests/unit/display-contracts.test.mjs`**
 - [docs/deployment.md](docs/deployment.md) — 常驻 / 隧道 / CF Access 运维
 - [docs/getting-started.md](docs/getting-started.md) — 装机教程

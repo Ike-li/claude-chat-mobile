@@ -20,6 +20,18 @@
 | `infra/` | 测试基建：Dockerfile、compose、playwright config、分片编排 | — | — |
 | `fixtures/` `helpers/` `setup/` | 假 CLI、共用 UI helper、preload 隔离 | — | — |
 
+### ⚠ `infra/` 的编排脚本不在任何门禁覆盖范围
+
+上表最后几行没有「怎么跑」是有代价的：`infra/` 下的编排脚本既不在 `npm run check` 链上，
+也不在 CI 里，改坏了不会有任何东西变红。`e2e-parallel.js` 就这么坏过——2026-09-03（`74fc46e`）把
+`playwright.config.ts` 从仓库根移进 `infra/` 时，`package.json` 的 `test:e2e` 补了 `-c`
+而它漏了，Playwright 静默回落内建默认（workers 变成 CPU/2、完全不起 webServer），266 条
+全红，一直到 2026-09-07 才被发现——因为在那之前没有任何路径会执行到它。
+
+**改 `infra/` 下的东西，必须手动跑一次它编排的那条命令**，check 和 CI 都不会替你发现。
+（同类的第二份真相已经消除：分片子进程现在直接 spawn `npm run test:e2e --`，config 路径
+只有 `package.json` 一处。）
+
 ### `unit/` 与 `invariants/` 是两根轴，不是新旧
 
 两者**执行槽相同**（纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude），CI 里同一个 job 跑。
