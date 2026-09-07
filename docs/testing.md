@@ -13,7 +13,8 @@
 违反这三条会毁掉这台机器上的真实数据，不是"测试写得不好"的量级。
 
 **① 宿主机只允许跑四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
-（加同档的 `npm run test:invariants`，以及若干同源别名，名单在 `tests/gates/guard-host-tests.js`）。
+（加同档的 `npm run test:invariants`、分片并行的 `npm run test:e2e:parallel`，以及若干同源别名，
+名单在 `tests/gates/guard-host-tests.js`）。
 **其余一切会跑测试的命令一律进容器。**
 
 这是白名单不是黑名单。黑名单要求「每遇到一个新命令都正确归类」，而那正是 2026-08-02 失败的那一步——

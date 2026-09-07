@@ -33,6 +33,11 @@ import { readFileSync } from 'node:fs';
 const HOST_ALLOWED_SCRIPTS = new Set([
   'lint', 'lint:fix', 'check',
   'test:unit', 'test:invariants', 'test:e2e', 'test:visual', 'test:playwright',
+  // test:e2e:parallel = tests/infra/e2e-parallel.js，它并行 spawn 的每个分片【就是 `npm run test:e2e --`】
+  // 本身（2026-09-07 起不再自己拼 playwright 命令），只多了 --shard 与端口/产物目录错开。
+  // 安全面与 test:e2e 逐字同源：打 mock server、零外部依赖、不起真 server、不 spawn claude、不碰 ~/.claude。
+  // 不放行它等于把 8.2 分钟压到 2.8 分钟的那条路每次都要人点一下确认——那条路就不会有人走。
+  'test:e2e:parallel',
   // app:test = swiftc 编译 desktop/CCMCore.swift + 断言集，产物落 desktop/build/（已 gitignore）。
   // 不起 server、不 spawn claude、不碰 ~/.claude —— 与前三条同档。它现在还是 `npm run check`
   // 的一环（见 package.json），不放行的话连 check 都会被自己的钩子拦下来。
@@ -110,7 +115,7 @@ const SCRIPT_TEST_SCOPE = {
   // scope 必须写，否则 `npm run test:invariants -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
   'test:invariants': 'tests/invariants/',
   'test:e2e': 'tests/e2e/', 'test:visual': 'tests/e2e/',
-  'test:playwright': 'tests/e2e/',
+  'test:playwright': 'tests/e2e/', 'test:e2e:parallel': 'tests/e2e/',
 };
 
 function whitelistedRun(segment, script) {

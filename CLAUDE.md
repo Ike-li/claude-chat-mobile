@@ -90,7 +90,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
 （钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`app:test`，
-外加与 `test:unit` 同档的 `test:invariants`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
+外加与 `test:unit` 同档的 `test:invariants`、与 `test:e2e` 同源的 `test:e2e:parallel`，
+见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
 
@@ -151,6 +152,11 @@ RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑
                                    # claude-lifecycle / session-switch / websocket-events / aborted-state /
                                    # message-idempotency / approval-integrity 整份 + file-upload 一个 describe
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
+                   # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
+npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自适应，CCM_E2E_SHARDS=N 可覆盖）。
+                   # 每个分片就是一条 `npm run test:e2e --`，安全面同源。
+                   # 实测 10 核：串行 8.2 分钟 → 4 分片 2.8 分钟；加到 8 片一秒都不快
+                   # （Playwright 按文件分片、不拆单个 spec，最大的那个文件就要 2.8 分钟）
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）
