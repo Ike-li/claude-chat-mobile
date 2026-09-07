@@ -949,7 +949,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 夹具与 P0-11aa 同形，只换汇总的那一位：另一工作区返回 5 行、全部不带 terminal 字段，
   // 运行态只可能来自 cwd 级 terminalWaiting。据此，「返回行无 [data-session-status]」这条断言不是
   // 装饰，它是本用例的仪器校验——没有它，角标亮了也说不清是汇总起的作用还是行回落起的作用。
-  test('P0-11ai 页外 CLI 等审批仍点亮工作区汇总（waiting 半边不得只靠页内行回落）', async ({ page }) => {
+  //
+  // 同一条用例还守第二个面：抽屉一折叠，目录角标就没了，#sessionsDot 是页外等审批唯一的出口，而
+  // summarizeOtherWorkspaces 的 rank 表此前也漏了 terminal_waiting。两个面在这里同屏才说得清完整的
+  // 分流：图标点亮、顶栏安静——「让你知道」与「喊你去处理」是两件事。
+  test('P0-11ai 页外 CLI 等审批必须可见：目录角标 + 顶部图标都点亮，顶栏 chip 仍安静', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-summary-waiting');
@@ -964,8 +968,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const otherSubtree = otherDir.locator('xpath=following-sibling::*[1]');
     await expect(otherSubtree.locator('[data-session-status]')).toHaveCount(0);
 
-    // 顶栏那一个位子按既有准入表只放 permission/error（见 logic OTHER_WORKSPACE_CHIP_TONE）：
-    // 终端里的审批 prompt 活在 CLI 的 TUI 里，手机上批不了，不该占「点开就能处理」的槽位。
+    // #sessionsDot：抽屉一折叠，目录角标就看不见了，顶部这颗图标是页外等审批唯一的出口。
+    // summarizeOtherWorkspaces 的 rank 表此前不含 terminal_waiting（未登记 → rank 缺省 0 静默吞掉），
+    // 于是这里恒隐藏；更糟的是同目录只要另有个在跑的会话反倒会亮「运行中」，更轻的盖过更重的。
+    // 单测钉的是 rank 表本身，钉不到「图标真的画出来了」——那还要过 DRAWER_STATUS_META 这道渲染白名单。
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '终端需要你');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 终端需要你');
+
+    // 但顶栏文字 chip 必须【仍然】安静。图标与 chip 出自同一个 summarizeOtherWorkspaces，分流全靠
+    // 两张表（DRAWER_STATUS_META 渲染白名单 / OTHER_WORKSPACE_CHIP_TONE 准入表）——给 rank 表加状态
+    // 不得顺带从顶栏漏出去。终端里的审批 prompt 活在 CLI 的 TUI 里，手机上按不了键，不占「点开就能
+    // 处理」的槽位。这一条与上面两条同屏，正是「图标点亮 ≠ 喊人」这个区分本身。
     await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);

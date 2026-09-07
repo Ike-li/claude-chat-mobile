@@ -200,10 +200,22 @@ export function aggregateStates(instances, dirs) {
   return out;
 }
 
-// 汇总「其他工作区」状态给左上角按钮角标：只提示需要你/出错/运行中三态；完成、中止、空闲
+// 汇总「其他工作区」状态给左上角按钮角标：只提示需要你/终端需要你/出错/运行中；完成、中止、空闲
 // 都是普通终态，不持续点亮入口。排除 currentCwd（当前工作区动静在聊天视图内呈现）。
+//
+// ★ 这张 rank 表是 resolveDrawerStatus 四个返回值的【完整枚举】，不是子集。未登记的状态 rank 缺省 0
+// 会被静默吞掉——terminal_waiting 就这样漏了：抽屉折叠时「页外的终端卡在审批框上」在顶部毫无表示，
+// 而同一目录只要另有个在跑的会话反倒亮「运行中」，更轻的状态盖过更重的（2026-09-06 修）。
+// 序刻意与 resolveDrawerStatus 逐字同源，不另立一套：同样这四个状态在产品里出现两套优先级，
+// 迟早分叉，且分叉后两边各自都"看着对"。给 resolveDrawerStatus 加状态时这里必须同步。
+//
+// 出口有两个消费者，语义不同、靠两张表分开，不在本函数里判：
+//   · #sessionsDot 图标 —— 走 DRAWER_STATUS_META（渲染白名单，含 terminal_waiting）
+//   · 顶栏文字 chip   —— 走 OTHER_WORKSPACE_CHIP_TONE（准入表，只放 permission/error）
+// 所以 terminal_waiting 从这里出去后会点亮图标、而顶栏仍然安静——那正是想要的：图标是被动的
+// 环境感知，而终端里的审批 prompt 手机上按不了键，不该占「点开就能处理」的槽位。
 export function summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd) {
-  const rank = { busy: 1, error: 2, permission: 3 };
+  const rank = { busy: 1, terminal_waiting: 2, error: 3, permission: 4 };
   let top = null, topRank = 0;
   for (const d of (availableDirs || [])) {
     if (d === currentCwd) continue;

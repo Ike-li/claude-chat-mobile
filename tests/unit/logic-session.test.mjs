@@ -172,7 +172,7 @@ test('summarizeOtherWorkspaces: 排除 current，单个其他目录取其状态'
   assert.equal(summarizeOtherWorkspaces({ '/cur': 'permission' }, ['/cur'], '/cur'), null);
 });
 
-test('summarizeOtherWorkspaces: 只汇总需要关注的 permission>error>busy，忽略正常终态', () => {
+test('summarizeOtherWorkspaces: 只汇总需要关注的 permission>error>terminal_waiting>busy，忽略正常终态', () => {
   const dirs = ['/a', '/b'];
   assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'permission' }, dirs, '/cur'), 'permission');
   assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'error' }, dirs, '/cur'), 'error');
@@ -234,6 +234,21 @@ test('presentTurnResult: 缺字段安全（durationMs 缺省 0 → for 0s）', (
   assert.equal(ui.kind, 'success');
   assert.equal(ui.statusBar.text, '✻ Baked for 0s');
   assert.equal(presentTurnResult(null).kind, 'success'); // payload=null 仍安全
+});
+
+// terminal_waiting（2026-09-06）：#sessionsDot 此前对它完全失明——rank 表只登记了 busy/error/
+// permission，未登记的状态 rank 缺省 0 被静默吞掉。后果是「页外的终端卡在审批框上」在抽屉折叠时
+// 顶部毫无表示，而同一个目录只要另有个在跑的会话反倒会亮「运行中」——更轻的状态盖过更重的。
+// 序与 resolveDrawerStatus 逐字同源（permission > error > terminal_waiting > busy），刻意不另立
+// 一套：同样这四个状态在产品里出现两套优先级，迟早分叉，且分叉后两边都"看着对"。
+test('summarizeOtherWorkspaces: terminal_waiting 点亮顶部，序与 resolveDrawerStatus 同源', () => {
+  const dirs = ['/a', '/b'];
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'terminal_waiting' }, ['/a'], '/cur'), 'terminal_waiting');
+  // 比 busy 重：等人的终端不会自己走完，在跑的会
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'terminal_waiting' }, dirs, '/cur'), 'terminal_waiting');
+  // 比 error / permission 轻：那两个点开就能看见/就能批，这个手机上批不了
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'terminal_waiting', '/b': 'error' }, dirs, '/cur'), 'error');
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'terminal_waiting', '/b': 'permission' }, dirs, '/cur'), 'permission');
 });
 
 test('summarizeOtherWorkspaces: aborted 不点亮顶部，但不遮蔽 error', () => {

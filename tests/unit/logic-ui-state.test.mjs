@@ -270,6 +270,18 @@ test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).tone, 'danger');
   });
 
+  // 2026-09-06：terminal_waiting 进了 summarizeOtherWorkspaces 的 rank 表（#sessionsDot 要显示它），
+  // 于是它现在会作为 otherWorkspaceStatus 传到这里来。顶栏必须【仍然】隐藏：CLI 的审批 prompt 活在
+  // 它自己的 TUI 里，web 端替不了按键，占「点开就能处理」的槽位是在给错误的操作预期。
+  // 这条守的正是两张表的解耦——给 rank 表加状态不得顺带从顶栏漏出去（准入表 OTHER_WORKSPACE_CHIP_TONE
+  // 既是色调表也是白名单，靠的就是「不在表里就没色调、没色调就不显示」这一条）。
+  test('其他工作区 terminal_waiting → 顶栏仍隐藏（手机上批不了，只归 #sessionsDot）', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'terminal_waiting' });
+    assert.equal(r.visible, false);
+    assert.equal(r.reason, 'ok');
+    assert.equal(r.text, '');
+  });
+
   // 2026-09-02：busy 与推送失败同罪出局。运行中是「状态」不是「事件」——能持续几十分钟，多工作区
   // 并行时接近常驻，长期亮着会训练用户忽略这个位置，反而拉低同槽位「需要你/出错」的信号强度；
   // 且点开抽屉也没有任何可执行动作。#sessionsDot 图标仍照常显示 busy（低成本环境感知，不喊人）。
