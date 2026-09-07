@@ -1186,3 +1186,27 @@ test.describe('recordFinishedTask — 完成留存与 output_file（B2）', () =
     s.dispose();
   });
 });
+
+// B4（2026-09-07）：skip_transcript 透传。前端据它决定要不要写消息流/弹通知。
+test.describe('task_notification.skip_transcript 透传（B4）', () => {
+  test('skip_transcript=true 原样出 wire', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'a1',
+      status: 'completed', summary: 'watcher', skip_transcript: true });
+    const ev = events.find(e => e.type === 'task_notification');
+    assert.equal(ev.payload.skipTranscript, true);
+    s.dispose();
+  });
+
+  // 反向档：缺省必须是 false 而不是 undefined —— 前端用 === true 判定，
+  // 但这里若透传 undefined，任何改成真值判断的下游都会把普通任务误判成 housekeeping。
+  test('缺省 / 非布尔一律归一成 false（普通任务不得被误吞）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'a2', status: 'completed' });
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'a3', status: 'completed', skip_transcript: 'yes' });
+    const evs = events.filter(e => e.type === 'task_notification');
+    assert.equal(evs[0].payload.skipTranscript, false);
+    assert.equal(evs[1].payload.skipTranscript, false, '非布尔真值不算数，只认 === true');
+    s.dispose();
+  });
+});

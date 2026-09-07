@@ -395,6 +395,25 @@ export function createTaskStatusController(context, {
   function onComplete(event) {
     const payload = event.payload || {};
     const failed = payload.status === 'failed' || payload.status === 'error';
+    // B4：housekeeping 任务（CLI 的 skip_transcript）不写消息流、不弹通知。
+    // CLI 原话只管 transcript —— 但「消息流里查无此事、却弹一条通知说它完成了」是自相矛盾的，
+    // 二者是同一个"告知用户"的动作，要么都做要么都不做。
+    // 面板仍照常显示（CLI 明确允许 "it may still appear in a tasks panel"）：横幅/列表由
+    // task_progress 与 background_tasks_changed 驱动，不经过本函数。
+    // 【范围外】服务端的 web-push 不在此抑制 —— 推送是 ccm 自有的一层，CLI 没有规定它，
+    // 「skip_transcript 就不该推」是推断而非明文，留待显式决策。
+    if (payload.skipTranscript === true) {
+      // 仍要把它从活任务表里摘掉，否则横幅会一直挂着一条永不消失的任务
+      const ambientId = payload.taskId;
+      if (typeof ambientId === 'string' && ambientId && tasks.has(ambientId)) {
+        tasks.delete(ambientId);
+        pruneStaleProgressHistory();
+        if (activeTaskId === ambientId) activeTaskId = tasks.size ? [...tasks.keys()][0] : null;
+        if (tasks.size === 0) hideProgress();
+        else { showBanner(); renderTaskList(); }
+      }
+      return true;
+    }
     notify(
       failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
       (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),

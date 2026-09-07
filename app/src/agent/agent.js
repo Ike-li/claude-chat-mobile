@@ -2451,7 +2451,11 @@ export class AgentSession {
             status: msg.status ?? null,
             summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
             toolUseId: msg.tool_use_id ?? null,
-            outputFile: msg.output_file || null
+            outputFile: msg.output_file || null,
+            // B4：CLI 对 housekeeping 任务的明文要求 —— "Ambient/housekeeping task. Consumers should
+            // hide this from the inline transcript; it may still appear in a tasks panel."
+            // 透传给前端决定要不要写进消息流；面板照常显示（CLI 允许）。
+            skipTranscript: msg.skip_transcript === true
           });
           this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
           this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）

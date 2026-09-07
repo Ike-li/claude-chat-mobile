@@ -433,3 +433,70 @@ test('task status 混合列表：组头不抢点击，第一张卡是被提前�
 });
 
 
+
+// B4（2026-09-07）：CLI 的 skip_transcript = housekeeping 任务。
+// 原话："Ambient/housekeeping task. Consumers should hide this from the inline transcript;
+// it may still appear in a tasks panel."ccm 此前零消费——live-update watcher 之类跑完
+// 照样往消息流打一条「🔔 后台任务完成」并弹通知。
+function completeHarness() {
+  const hidden = new Set(['hidden']);
+  const banner = {
+    classList: {
+      contains: name => hidden.has(name),
+      add: name => hidden.add(name),
+      remove: name => hidden.delete(name),
+    },
+  };
+  const bars = [];
+  const notes = [];
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText: { textContent: '' } },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, {
+    autoBind: false,
+    addBar: (text, cls) => { bars.push({ text, cls }); return null; },
+    notify: (title, body) => notes.push({ title, body }),
+  });
+  return { status, bars, notes, hidden };
+}
+
+test('B4：skip_transcript 的任务不写消息流、不弹通知', () => {
+  const { status, bars, notes } = completeHarness();
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'amb1', status: 'completed', summary: 'watcher 收工', skipTranscript: true },
+  });
+  assert.equal(bars.length, 0, 'housekeeping 任务不得写进消息流');
+  assert.equal(notes.length, 0, '消息流里查无此事却弹通知是自相矛盾的');
+});
+
+// 反向档：没有这条，实现写成「一律不打」也能让上面那条过。
+test('B4 反向：普通后台任务照常写消息流并通知（防修过头）', () => {
+  const { status, bars, notes } = completeHarness();
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'normal1', status: 'completed', summary: '跑完了' },
+  });
+  assert.equal(bars.length, 1, '普通任务必须照常留痕');
+  assert.match(bars[0].text, /后台任务完成/);
+  assert.equal(notes.length, 1);
+
+  // skipTranscript 显式 false 同样照常
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'normal2', status: 'completed', skipTranscript: false },
+  });
+  assert.equal(bars.length, 2);
+});
+
+test('B4：skip_transcript 任务仍从活任务表摘掉，横幅不会挂着一条永不消失的任务', () => {
+  const { status, hidden } = completeHarness();
+  status.onProgress({ instanceId: 'inst-1', payload: { taskId: 'amb2', message: 'watching…' } });
+  assert.equal(hidden.has('hidden'), false, '横幅此时可见');
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'amb2', status: 'completed', skipTranscript: true },
+  });
+  assert.equal(hidden.has('hidden'), true, '摘掉最后一条后横幅须收起');
+});
