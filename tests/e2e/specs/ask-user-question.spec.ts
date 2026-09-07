@@ -142,6 +142,66 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // P0-08h（2026-09-07）：多选这一档此前在整套 E2E 里【不可达】——mock 从不发 multiSelect，于是
+  // approval-questions.js:235 的 `const multi = Boolean(activeQuestion.multiSelect)` 恒 false，☐ 前缀、
+  // 提示行、「确认选择」按钮、optionIndexes 回程四段代码一行都没被走过。刺眼的是 mock 的【入站】handler
+  // 早就解析 optionIndexes 了（server.js 的 user:answer 分支有完整的 multi label 合并），回程建好了、
+  // 去程从未建起来。真机后果：模型问多选题，用户看到单选卡片，手指点中第一个想选的弹窗就关，
+  // 模型拿着残缺答案继续跑，界面上没有任何东西提示他这题本可多选。
+  // 单选仍然「点一下就关」的对照档由上面的 P0-08 钉住（第 21-22 行），此处不重复。
+  test('P0-08h AskUserQuestion 多选：☐ 勾选累积、计数按钮、一次提交多项', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question-multi');
+    await expect(page.locator('#questionModal')).toBeVisible();
+
+    // header 与 multiSelect 是同一批补上的去程字段，一起断言
+    await expect(page.locator('#questionHeader')).toBeVisible();
+    await expect(page.locator('#questionHeader')).toHaveText('Deploy targets');
+    await expect(page.locator('#questionMultiHint')).toBeVisible();
+
+    const submit = page.locator('#questionMultiSubmit');
+    await expect(submit).toBeVisible();
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveText('确认选择');
+
+    const opts = page.locator('#questionOptions button');
+    await expect(opts).toHaveText([
+      '☐ main (Stable Production)',
+      '☐ dev (Bleeding-Edge Integration)',
+      '☐ release-v1.0 (LTS)'
+    ]);
+
+    // 勾一项 → 变 ☑、按钮启用并带计数
+    await opts.nth(0).click();
+    await expect(opts.nth(0)).toHaveText('☑ main (Stable Production)');
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveText('确认选择 (1)');
+    // 弹窗【不】关闭——这正是与单选路径的分水岭
+    await expect(page.locator('#questionModal')).toBeVisible();
+
+    // 再勾一项 → 计数累积
+    await opts.nth(2).click();
+    await expect(submit).toHaveText('确认选择 (2)');
+
+    // 取消勾选 → 回落
+    await opts.nth(0).click();
+    await expect(opts.nth(0)).toHaveText('☐ main (Stable Production)');
+    await expect(submit).toHaveText('确认选择 (1)');
+
+    // 补回来后一次提交两项，回程走 optionIndexes（mock 侧的 multi label 合并分支此前不可达）
+    await opts.nth(1).click();
+    await expect(submit).toHaveText('确认选择 (2)');
+    await submit.click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    const answer = page.locator('[data-testid="assistant-message"]').last();
+    await expect(answer).toContainText('dev (Bleeding-Edge Integration)');
+    await expect(answer).toContainText('release-v1.0 (LTS)');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-08g AskUserQuestion 可跳过并按取消收敛', async ({ page }) => {
     await gotoMock(page);
 

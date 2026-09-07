@@ -22,6 +22,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // P0-04h（2026-09-07）：「已 send、还没送达 SDK」的窄窗被停止时，那颗气泡要落灰色终态并挂上
+  // 「已随停止取消，未发送」。此前 mock 从不发 system.clientMessageIds，于是 app.js:1977 的
+  // markMessageDropped 整条路径在 E2E 里【不可达】，前端也没有任何单测碰它（logic-composer-primary
+  // 只钉了 queue_dropped 的条颜色，没碰气泡标记）。
+  // 它失效的后果比看起来重：气泡保持 opacity 1、外观与正常已发送消息完全一致，用户只看到一条中性灰
+  // 系统条说「有消息被取消了」却看不出是哪一条；而他照原文重发会命中服务端 commitProcessed 去重被
+  // 当成功——消息永久消失且屏幕上不留任何痕迹。
+  test('P0-04h 停止时未送达的消息：那一条被点名标「已随停止取消，未发送」', async ({ page }) => {
+    await gotoMock(page);
+
+    // mock 收下这条但【不回显】，模拟真 server 里消息还停在 this.queue 的窄窗
+    await sendChatMessage(page, 'test:queue-drop');
+
+    // 乐观气泡先要在屏幕上（app.js:3101 打的 data-client-message-id 是 markMessageDropped 的定位依据）
+    const bubble = page.locator('#messages [data-client-message-id]').last();
+    await expect(bubble).toBeVisible();
+    await expect(bubble).toContainText('test:queue-drop');
+    await expect(bubble.locator('.dropped-indicator')).toHaveCount(0);
+
+    await page.locator('#btnSend[data-mode="stop"]').click();
+
+    // 核心：这一条被点名标记，而不是只在消息流里留一句「有消息被取消了」
+    await expect(bubble.locator('.dropped-indicator')).toHaveText('已随停止取消，未发送');
+    await expect(page.locator('#messages')).toContainText('尚未送达的消息已随停止取消');
+
+    // 【已知失效，本轮未修】markMessageDropped 还会 `b.style.opacity = '0.55'`（app.js:1982）想把气泡
+    // 压灰，但 app.css:171 的 `#messages > * { animation: msg-in .2s ease both; }` 里 fill-mode=both
+    // 让末帧 opacity:1 永久留在【动画层】，而动画层在 CSS 层叠里压过内联样式——实测 style.opacity 确为
+    // '0.55' 而 getComputedStyle 恒为 '1'。所以这里【不】断言 opacity：断言它会红，而红的是 CSS 不是本用例
+    // 要守的行为；断言 style.opacity 则是在测一个没有视觉效果的实现细节。文字标记是真正到达用户的那一半。
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-04b 停止后旧长流不再继续追加到旧消息', async ({ page }) => {
     await gotoMock(page);
 

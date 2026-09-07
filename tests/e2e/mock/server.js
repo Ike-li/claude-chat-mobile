@@ -2,6 +2,26 @@ import { createVisualMockScenarioRegistry } from './registry.js';
 import { createContentScenarios } from './scenarios/content.js';
 import { createStatusScenarios } from './scenarios/status.js';
 import { createMockTransport } from './transport.js';
+import { createHash } from 'node:crypto';
+// 审批指纹只此一份规范化实现：app/public/js/canonicalize.js 是 CLAUDE.md 里唯一被指定「前后端共用」
+// 的叶子（模块边界闸的原文豁免项），本 mock 是它的第三个消费者。mock 若自己再写一遍规范化，就正好复制了
+// 本次要消除的那类分歧——而且前端会拿 verifyIntegrity 校验这个 fp，算错等于在每张审批卡上挂一条假的
+// 完整性告警。哈希用 node 同步版而非 fingerprintHex（Web Crypto，异步）：会漂移的是规范化不是 SHA-256，
+// 两者逐字节等价已实测。注意这不违反本文件「零 import app/src/」的约束——canonicalize.js 住在 app/public/js。
+import { canonicalizeOp } from '../../../app/public/js/canonicalize.js';
+
+const mockFingerprint = (name, input, cwd) =>
+  createHash('sha256').update(canonicalizeOp({ tool: name, args: input, cwd })).digest('hex');
+
+// permission_request 与真 server 逐字段对齐（agent.js:1283 live / :2339 快照——那两处本就要求逐字段一致，
+// 所以 mock 的 live 与 sync 快照也必须同源）。缺 fp 时前端那句 `if (!p.fp) return;`
+// （approval-questions.js:85）会把整条完整性预检【静默跳过】，于是「⚠️ 完整性预检异常」这条警示从未在
+// E2E 里被走到过；发错 fp 则等于在每张审批卡上挂一条假告警。两种都不可接受，故只此一处算。
+const mockPermFields = (name, input, cwd, at = Date.now()) => ({
+  fp: mockFingerprint(name, input, cwd),
+  createdAt: at,
+  expiresAt: at + 10 * 60_000,
+});
 
 const PORT = process.env.PORT || 3100;
 const { app, httpServer, io } = createMockTransport();
@@ -30,6 +50,9 @@ function createDefaultInstances() {
 
 const mockInstances = createDefaultInstances();
 
+// 「已 send 但还没送达 SDK」的窄窗（真 server：send() 返回 true 后消息可能仍在 this.queue）。
+// test:queue-drop 把消息收下但不回显、记在这里，等 user:interrupt 时走 queue_dropped 带 clientMessageIds。
+let queuedUndeliveredClientMessageIds = [];
 let pendingPermission = null;
 let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
@@ -268,6 +291,7 @@ function resetMockState() {
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
+  queuedUndeliveredClientMessageIds = [];
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   mockUnreadOnEntry = 0;
@@ -509,7 +533,8 @@ function emitLateClosedSessionEvents(closedInstanceId) {
       requestId: 'req_closed_session_stale',
       name: 'run_command',
       input: 'rm -rf /tmp/closed-session-stale',
-      cwd: staleCwd
+      cwd: staleCwd,
+      ...mockPermFields('run_command', 'rm -rf /tmp/closed-session-stale', staleCwd)
     }
   });
   io.emit('agent:event', {
@@ -1998,7 +2023,7 @@ io.on('connection', socket => {
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
     })),
     {
-      commands: ['test:question', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
+      commands: ['test:question', 'test:question-multi', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -2028,10 +2053,13 @@ io.on('connection', socket => {
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
+        const questMulti = cmd === 'test:question-multi';
         pendingQuestion = {
           requestId: `${questToolId}#0`,
           toolUseId: questToolId,
           messageId: questMsgId,
+          header: questMulti ? 'Deploy targets' : undefined,
+          multiSelect: questMulti,
           options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
         };
 
@@ -2040,6 +2068,12 @@ io.on('connection', socket => {
           type: 'question', payload: {
             requestId: pendingQuestion.requestId,
             text: 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?',
+            // header / multiSelect 与真 server 逐字段对齐（agent.js:1445-1453）。此前 mock 一条都不发，于是
+            // approval-questions.js 的整个多选分支（☐ 前缀 / 提示行 /「确认选择」按钮 / optionIndexes 回程）在
+            // E2E 里不可达——而 mock 的【入站】handler 早就解析 optionIndexes 了（本文件 user:answer 分支）：
+            // 回程建好了、去程从未建起来，正是平行实现漂移的形状。test:question-multi 撑开这一档。
+            header: pendingQuestion.header,
+            multiSelect: pendingQuestion.multiSelect,
             options: pendingQuestion.options
           }
         };
@@ -2156,7 +2190,8 @@ io.on('connection', socket => {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
             input: pendingPermission.input,
-            cwd: pendingPermission.cwd
+            cwd: pendingPermission.cwd,
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
           }
         });
 
@@ -2590,7 +2625,8 @@ io.on('connection', socket => {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
             input: pendingPermission.input,
-            cwd: pendingPermission.cwd
+            cwd: pendingPermission.cwd,
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
           }],
           questions: []
         };
@@ -2793,7 +2829,12 @@ io.on('connection', socket => {
             summary: failedTask ? 'mock background task failed' : '后台任务已完成',
             // B2：真服务端从 CLI 的 task_notification.output_file 透传此字段；前端据它挂「查看输出」。
             // mock 只需给一个非空值——路径本身不被前端使用（前端只发 taskId，路径在服务端侧解析）。
-            outputFile: '/tmp/mock-task-output.log'
+            outputFile: '/tmp/mock-task-output.log',
+            // 与真 server 逐字段对齐（agent.js:2448-2459）。skipTranscript 是 housekeeping 任务的静音开关，
+            // 漏发会让 CLI 的常驻/清理任务每完成一次就往聊天流打一条完成条并弹通知——正是 dd82cd9 修掉的现象。
+            // 前端只认 === true（task-status.js:405），所以这里发 false 与真 server 的常规任务同形。
+            toolUseId: 'toolu_mock_bgtask_1',
+            skipTranscript: false
           }
         });
         await delay(150);
@@ -2860,7 +2901,7 @@ io.on('connection', socket => {
         });
         socket.emit('agent:event', {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd, ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd) }
         });
       },
     },
@@ -3427,7 +3468,8 @@ io.on('connection', socket => {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
             input: pendingPermission.input,
-            cwd: pendingPermission.cwd
+            cwd: pendingPermission.cwd,
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
           }],
           questions: []
         };
@@ -3481,7 +3523,8 @@ io.on('connection', socket => {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
             input: pendingPermission.input,
-            cwd: pendingPermission.cwd
+            cwd: pendingPermission.cwd,
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
           }],
           questions: []
         };
@@ -3524,14 +3567,14 @@ io.on('connection', socket => {
         });
         pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', messageId: 'msg_cross_1', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
         syncPendingSnapshot = {
-          permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }],
+          permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd, ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd) }],
           questions: []
         };
         syncPendingSnapshotInstanceId = 'inst_1';
         // 独立 epoch：前端见新 epoch 即重置 seq 去重基线，避免被前序 TC 累积的 lastSeq 误吞
         socket.emit('agent:event', {
           seq: 1, epoch: 'mock-epoch-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
-          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd, ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd) }
         });
 
         // 弹窗渲染后自动「切到 inst_2」（viewing 变化）→ 前端 bindView → clearView 应清掉 inst_1 的审批弹窗。
@@ -3683,7 +3726,8 @@ io.on('connection', socket => {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
             input: pendingPermission.input,
-            cwd: pendingPermission.cwd
+            cwd: pendingPermission.cwd,
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
           }],
           questions: []
         };
@@ -3946,6 +3990,17 @@ io.on('connection', socket => {
 
     // Always echo user message back
     const echoClientMessageId = typeof messagePayload.clientMessageId === 'string' ? messagePayload.clientMessageId : undefined;
+
+    // 「已 send、还没送达 SDK」的窄窗：真 server 里 send() 返回 true 后消息可能仍在 this.queue，此时点停止
+    // 会走 agent.js:947/997 的 queue_dropped 并带上 clientMessageIds，前端据此把那颗气泡标成灰色终态
+    // （app.js:1977 markMessageDropped）。mock 此前从不发这个字段，整条路径在 E2E 里不可达——而它失效的
+    // 后果是「消息永久消失且屏幕不留任何痕迹」：气泡看起来正常已发送，用户照原文重发会命中服务端
+    // commitProcessed 去重被当成功。这里收下消息但【不回显】，等 user:interrupt 收口。
+    if (cmd === 'test:queue-drop') {
+      if (echoClientMessageId) queuedUndeliveredClientMessageIds.push(echoClientMessageId);
+      console.log(`[mock] test:queue-drop — 收下不回显，等 user:interrupt 走 queue_dropped（${echoClientMessageId}）`);
+      return;
+    }
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
       type: 'user_message', payload: {
@@ -4235,6 +4290,22 @@ io.on('connection', socket => {
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
+    // 尚未送达 SDK 的消息随停止落终态（真 server：agent.js:947 超时强制收口 / :997 正常 interrupt 路径）。
+    // 与 request_resolved 分开发：真 server 里这两件事本就无先后依赖。
+    if (queuedUndeliveredClientMessageIds.length) {
+      // epoch:'server' + seq:0 是本 mock 对「合成/无主事件」的既有约定（同函数末尾那条『已中断』同形）：
+      // event-dispatch.js:85 只对【非 server epoch】做 seq 去重，而 `event.seq <= state.lastSeq` 会把
+      // seq:0 当成重复【静默丢弃】——第一版我按真 epoch 发，事件到了浏览器却一个字都不显示。
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, instanceId: targetId, ts: Date.now(),
+        type: 'system', payload: {
+          message: '尚未送达的消息已随停止取消',
+          kind: 'queue_dropped',
+          clientMessageIds: queuedUndeliveredClientMessageIds.splice(0),
+        }
+      });
+    }
+
     // 挂起的 AskUserQuestion：按真实 abort 路径关闭
     // 真实 agent 对每道题 emit request_resolved({ requestId: `${toolUseID}#${i}`, outcome:'aborted' })
     // ——requestId 用带 #i 的完整 id，前端 matchQ 直接相等命中；seq 接在 question(seq:3) 之后。
@@ -4254,7 +4325,9 @@ io.on('connection', socket => {
       if (q.messageId) {
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
-          type: 'result', payload: { messageId: q.messageId, durationMs: 200, costUsd: 0, isError: false, models: [activeModel] }
+          // interrupted 与真 server 对齐（agent.js:2906）：前端 presentTurnResult 用它【压过】isError 分流，
+          // 漏发会把「你按了停止」渲染成红色「出错：」条 + 推送标题「⚠️ 任务出错」。
+          type: 'result', payload: { messageId: q.messageId, durationMs: 200, costUsd: 0, isError: false, interrupted: true, models: [activeModel] }
         });
       }
       pendingQuestion = null;
