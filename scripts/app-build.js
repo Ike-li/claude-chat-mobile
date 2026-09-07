@@ -11,6 +11,7 @@
 // 不会被拦），而是为了让 bundle identity 跨重建保持稳定 —— 否则 UserDefaults 每次重新编译
 // 就重置，用户设过的「重新定位仓库」会莫名其妙丢掉。
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -171,10 +172,48 @@ function run(cmd, args, label) {
 // 跑 CCMCore 的断言集。Foundation 就够，不链 AppKit（测试里没有 GUI 类型）。
 //
 // 先全量 typecheck 再编测试：GUI 语法错应该最先炸，不必等测试编译完。这一步覆盖的是
+// 验证指纹：把 runTests 的【全部输入】压成一个串——两组源文件的内容、两条 swiftc 命令的完整
+// 参数（编译参数的单一事实源就是那两个函数）、以及 swiftc 自身的版本串（Xcode 升级会换掉它，
+// 连带 SDK 与 AppKit）。少算任何一项，都会变成「该重编时没重编」的假绿，比不缓存更坏。
+//
+// 存在理由：app:test 占 npm run check 的 78%（2026-09-07 实测 22.0s 里 17.1s），而在没动
+// desktop/ 的日子里它每次都在把同样的源文件编译成同样的结果。
+//
+// ★ CI 不受影响：全新 checkout 没有 desktop/build/，指纹文件不存在 = 必然 miss，照常全量编译。
+// 这个缓存只作用于本机的重复运行，不削弱任何一次把关。CCM_FORCE_SWIFT_VERIFY=1 可强制重跑。
+function verifyFingerprint() {
+  const h = createHash('sha256');
+  for (const f of [...new Set([...APP_SOURCES, ...TEST_SOURCES])].sort()) {
+    h.update(f).update('\0');
+    h.update(existsSync(f) ? readFileSync(f) : Buffer.from('<missing>')).update('\0');
+  }
+  h.update(JSON.stringify(typecheckArgs({ sources: APP_SOURCES }))).update('\0');
+  h.update(JSON.stringify(swiftcArgs({ sources: TEST_SOURCES, out: TEST_BIN, frameworks: [] }))).update('\0');
+  const ver = spawnSync('swiftc', ['--version'], { encoding: 'utf8' });
+  h.update(String(ver?.stdout || ver?.stderr || 'swiftc-unavailable'));
+  return h.digest('hex');
+}
+
 // 断言集永远够不到的那 1842 行 —— @main 冲突让 ccm-menubar.swift 进不了测试编译单元，
 // 而测试二进制不链 AppKit，GUI 类型也抽不进 CCMCore。类型检查是这里唯一还能做的机器验证。
 export function runTests() {
   mkdirSync(BUILD, { recursive: true });
+
+  // 三个条件同时成立才跳过：指纹一致、戳还在、上次编出的测试二进制也还在（有人手删 build/
+  // 里的产物而戳还留着时，必须重编——否则下一步 spawnSync 会对着不存在的路径失败）。
+  const stampFile = join(BUILD, '.verify-stamp');
+  const fingerprint = verifyFingerprint();
+  const forced = process.env.CCM_FORCE_SWIFT_VERIFY === '1';
+  if (!forced && existsSync(stampFile) && existsSync(TEST_BIN)) {
+    let prev = '';
+    try { prev = readFileSync(stampFile, 'utf8').trim(); } catch { /* 读不到就当没缓存，走全量 */ }
+    if (prev === fingerprint) {
+      process.stdout.write('desktop/*.swift 与 swiftc 版本均未变，跳过类型检查与 CCMCore 测试'
+        + '（CCM_FORCE_SWIFT_VERIFY=1 可强制重跑）\n');
+      return;
+    }
+  }
+
   process.stdout.write('类型检查 desktop/*.swift…\n');
   const tc = run('swiftc', typecheckArgs({ sources: APP_SOURCES }), 'swiftc(typecheck)');
   // 成功时也把 stderr 打出来。run() 默认只在失败时回显捕获的输出，而 swiftc 的**告警**
@@ -190,6 +229,8 @@ export function runTests() {
     process.stderr.write('✗ CCMCore 测试未通过\n');
     process.exit(1);
   }
+  // 只有全绿才落戳。失败路径上面已 process.exit，走到这里意味着 typecheck、编译、断言集三步都过了。
+  writeFileSync(stampFile, `${fingerprint}\n`);
 }
 
 export function main({ test = true } = {}) {

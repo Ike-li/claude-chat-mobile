@@ -173,6 +173,9 @@ npm run app:install   # 编译并装进 /Applications。装过之后升级走菜
 npm run app:build     # 只编译到 desktop/build/CCM.app。check 里的 app:test 已含 swiftc -typecheck，
                       # 所以「check 全绿」蕴含「能编译」；但 typecheck 不产出 bundle，
                       # **改了菜单栏要真跑起来仍需 app:build/app:install**
+                      # app:test 按指纹缓存（desktop/*.swift 内容 + swiftc 版本 + 编译参数）：
+                      # 没动 desktop/ 时跳过，check 从 22s 降到 5s。改了内容必重编，
+                      # CI 全新 checkout 无戳、必然全量。CCM_FORCE_SWIFT_VERIFY=1 强制重跑
 npm run service:status                             # 各 unit 运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 npm run service:install|adopt|restart|logs|health  # adopt=接管手工安装（只写 manifest 不碰 plist）
 npm run uninstall -- [--purge] [--dry-run] --yes   # 一键卸载。**只删产品自己装的**，manifest 外的 unit /
