@@ -50,6 +50,43 @@ const TOOL_SUMMARY_KEYS = [
   'file_path', 'filePath', 'path', 'command', 'cmd', 'pattern', 'query',
   'url', 'description', 'plan',
 ];
+
+// A1：收起态标题优先取【模型自己写的语义描述】，而不是命令原文。
+// Claude Code 的 Bash/Agent/Task schema 强制模型给一句 5–10 词主动语态 description
+// （"Find env filtering helpers"），Desktop 的 Code 面板正是拿它当行标题。后端发的 inputSummary
+// 是整个 input 对象的 JSON，description 一直在里面——只是上面那张全局表把 command 排在
+// description 前面，于是 Bash 卡永远显示 `Bash · grep -rn "sdkChildEnv\|filterSafeResolv…`，
+// 截断后什么都读不出（手机窄屏尤其）。
+//
+// 【为什么不能直接调换全局表的顺序】Read/Edit/Grep/Glob 根本没有 description 参数，它们的信息
+// 在 file_path / pattern 上。一刀切换顺序对这些工具毫无影响，却会让维护者误以为「description
+// 优先」是全局规则。故按工具名登记优先键，未登记的工具照旧走 TOOL_SUMMARY_KEYS 回落——
+// 包括 MCP 工具与 mock/历史里的小写别名（read_file 等），它们的行为一个字节都不变。
+const TOOL_TITLE_KEYS = Object.freeze({
+  Bash: ['description', 'command'],
+  BashOutput: ['description', 'bash_id'],
+  KillShell: ['description', 'shell_id'],
+  Agent: ['description', 'prompt'],
+  Task: ['description', 'prompt'],
+  Workflow: ['description', 'name'],
+  Read: ['file_path', 'notebook_path'],
+  Edit: ['file_path'],
+  Write: ['file_path'],
+  MultiEdit: ['file_path'],
+  NotebookEdit: ['notebook_path', 'file_path'],
+  Grep: ['pattern', 'glob', 'path'],
+  Glob: ['pattern', 'path'],
+  WebFetch: ['url'],
+  WebSearch: ['query'],
+});
+
+// 路径的关键信息在【尾部】（文件名），命令与自然语言的关键信息在【头部】。
+// 统一从尾部截断会把 `app/public/js/logic/tool-cards.js` 砍成 `app/public/js/logic/tool-c…`——
+// 正好丢掉唯一能区分它的那一段。含 / 且无空格才判定为路径，避免把 `grep -rn "a/b" src` 这类
+// 命令行误判（命令行几乎必然带空格）。
+function looksLikePath(str) {
+  return str.includes('/') && !/\s/.test(str);
+}
 // UX-019：空态（empty-start）不向消息区打档位变更系统条；有消息后仍可留痕。
 // 审批留痕（已允许/已拒绝）不走此闸，由调用方直接 addBar。
 export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
@@ -65,7 +102,7 @@ export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        for (const k of TOOL_SUMMARY_KEYS) {
+        for (const k of (TOOL_TITLE_KEYS[name] || TOOL_SUMMARY_KEYS)) {
           if (typeof parsed[k] === 'string' && parsed[k].trim()) {
             snippet = parsed[k].trim();
             break;
@@ -77,7 +114,11 @@ export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   snippet = snippet.replace(/\s+/g, ' ');
   const n = Number(maxLen);
   const cap = Math.max(8, Number.isNaN(n) ? 48 : n); // 0 是显式值须夹到下限 8，不当「未传」回落默认
-  if (snippet.length > cap) snippet = snippet.slice(0, cap - 1) + '…';
+  if (snippet.length > cap) {
+    snippet = looksLikePath(snippet)
+      ? '…' + snippet.slice(-(cap - 1))   // 路径：留尾巴（文件名）
+      : snippet.slice(0, cap - 1) + '…';  // 其余：留开头
+  }
   return `${name} · ${snippet}`;
 }
 

@@ -462,3 +462,66 @@ test.describe('unifiedDiffLines（行级 LCS diff）', () => {
     assert.ok(Number.isInteger(MAX_DIFF_LINES_FOR_LCS) && MAX_DIFF_LINES_FOR_LCS > 0);
   });
 });
+
+// A1（2026-09-07）：工具卡标题优先取模型写的 description，而非命令原文。
+test.describe('formatToolCardTitle：按工具名选优先键（A1）', () => {
+  const bashInput = JSON.stringify({
+    command: 'grep -rn "sdkChildEnv\\|filterSafeResolvedEnv" -A 25 app/src/agent/agent.js | head -70',
+    description: 'Find env filtering helpers',
+  });
+
+  test('Bash：description 压过 command——这是缺口本体', () => {
+    assert.equal(formatToolCardTitle('Bash', bashInput), 'Bash · Find env filtering helpers');
+  });
+
+  test('Bash 无 description 时回落 command（不能因为改了优先级就丢信息）', () => {
+    const only = JSON.stringify({ command: 'npm test' });
+    assert.equal(formatToolCardTitle('Bash', only), 'Bash · npm test');
+  });
+
+  test('Agent / Task：description 压过 prompt（prompt 常是整段提示词，做标题必然截断成噪音）', () => {
+    const inp = JSON.stringify({ prompt: '你是一个严谨的审查者，请逐行检查……', description: 'Review auth diff' });
+    assert.equal(formatToolCardTitle('Agent', inp), 'Agent · Review auth diff');
+    assert.equal(formatToolCardTitle('Task', inp), 'Task · Review auth diff');
+  });
+
+  // 反向档：这几个工具【没有】description 参数，一刀切换全局顺序对它们毫无意义。
+  test('Read / Edit：仍取 file_path，不受 description 优先规则影响', () => {
+    const inp = JSON.stringify({ file_path: 'app/src/agent/agent.js' });
+    assert.equal(formatToolCardTitle('Read', inp), 'Read · app/src/agent/agent.js');
+    assert.equal(formatToolCardTitle('Edit', inp), 'Edit · app/src/agent/agent.js');
+  });
+
+  test('Grep / Glob：取 pattern', () => {
+    assert.equal(formatToolCardTitle('Grep', JSON.stringify({ pattern: 'bgTaskPatch', path: 'app/src' })), 'Grep · bgTaskPatch');
+    assert.equal(formatToolCardTitle('Glob', JSON.stringify({ pattern: '**/*.mjs' })), 'Glob · **/*.mjs');
+  });
+
+  test('未登记工具（MCP / 小写别名）照旧走全局回落表，行为一字不变', () => {
+    const inp = JSON.stringify({ file_path: 'utils/date.js', description: '不该被选中' });
+    // read_file 不在 TOOL_TITLE_KEYS 里 → 走 TOOL_SUMMARY_KEYS，file_path 排在 description 前
+    assert.equal(formatToolCardTitle('read_file', inp), 'read_file · utils/date.js');
+  });
+});
+
+test.describe('formatToolCardTitle：截断方向按内容形态（A1）', () => {
+  test('路径从头截断、留尾巴——文件名才是唯一能区分它的那段', () => {
+    const p = JSON.stringify({ file_path: 'app/public/js/logic/deeply/nested/tool-cards.js' });
+    const out = formatToolCardTitle('Read', p, 24);
+    assert.ok(out.includes('tool-cards.js'), `尾部文件名必须保留，实际: ${out}`);
+    assert.ok(out.includes('…'), '应有截断标记');
+  });
+
+  test('命令/自然语言仍从尾截断、留开头（动词在前）', () => {
+    const c = JSON.stringify({ description: 'Find env filtering helpers across the whole repository tree' });
+    const out = formatToolCardTitle('Bash', c, 20);
+    assert.ok(out.startsWith('Bash · Find'), `开头必须保留，实际: ${out}`);
+    assert.ok(out.endsWith('…'), '截断标记在尾部');
+  });
+
+  test('带空格的命令行不被误判成路径（含 / 但有空格）', () => {
+    const c = JSON.stringify({ command: 'grep -rn "a/b" app/src/agent/agent.js and more words here' });
+    const out = formatToolCardTitle('Bash', c, 20);
+    assert.ok(out.startsWith('Bash · grep -rn'), `命令须留开头，实际: ${out}`);
+  });
+});

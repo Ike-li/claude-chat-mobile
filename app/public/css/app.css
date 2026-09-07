@@ -116,8 +116,14 @@ details > summary::-webkit-details-marker { display: none; }
   padding-bottom: 0.4rem;
 }
 /* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
-.toolcard { border-left: 3px solid var(--accent-bright) !important; }
+/* A2：工具卡是【过程痕迹】，正文才是主角。3px 强调色竖条在真实会话（一屏 10–30 张卡）里
+   会连成一堵彩色的墙，把读者的视线从回答本身拽走。降成 1px 中性线，只保留「这段是工具」的锚点。
+   注意 --line 在明暗两套 token 下都是可见的分隔线色（#E3E0D6 / #2E2C2A），不会消失。 */
+.toolcard { border-left: 1px solid var(--line) !important; }
 /* 思考块：内心独白——serif 斜体淡色 */
+/* A2 收尾：思考块与工具卡同属【过程痕迹】，视觉重量必须一致。
+   只降工具卡会留下更刺眼的断层——一屏里工具是轻行、思考却还是带边框的白卡片。 */
+.thinking { border-left: 1px solid var(--line); }
 .thinking .t-body { font-family: var(--font-read); font-style: italic; }
 
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
@@ -877,7 +883,9 @@ body.ccm-sheet-open #messages {
   color: var(--activity);
   border-color: color-mix(in srgb, var(--activity) 40%, transparent);
 }
-.toolcard { border-left-color: var(--activity) !important; }
+/* A2：工具卡不再跟随活动强调色——见上方 .toolcard 的降级说明。
+   #activityBanner / #streamLiveStatus 仍用 --activity，它们是「此刻在发生什么」的单条状态，
+   数量恒为 1，用强调色不会堆叠成墙。 */
 
 /* UX-016：思考进行中 shimmer */
 @keyframes thinking-shimmer {

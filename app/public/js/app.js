@@ -2043,11 +2043,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开；Task 清单工具特化
       const cardTitle = formatTaskToolTitle(p.name, p.inputSummary) ?? formatToolCardTitle(p.name, p.inputSummary);
       const card = el(`
-        <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
-          <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-            <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
+        <details class="msg-frame toolcard text-xs">
+          <summary class="pl-2 pr-1 py-1 flex items-center gap-2 min-w-0">
+            <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name text-ink-soft truncate">${esc(cardTitle)}</span>
           </summary>
-          <div class="px-3 pb-2 space-y-1">
+          <div class="pl-2 pr-1 pb-2 space-y-1">
             <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
             <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
@@ -2727,7 +2727,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let entry = thinkings.get(key);
     if (!entry) {
       const wrap = el(`
-        <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
+        <details class="msg-frame thinking text-xs text-ink-faint">
           <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
           <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
         </details>`);
@@ -2810,7 +2810,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let entry = sa.thinkings.get(key);
     if (!entry) {
       const wrap = el(`
-        <details class="thinking rounded-lg bg-sunk/40 border border-line-soft text-xs text-ink-faint">
+        <details class="thinking text-xs text-ink-faint">
           <summary class="px-2 py-1">${t('💭 思考过程')}</summary>
           <pre class="t-body px-2 pb-1 whitespace-pre-wrap"></pre>
         </details>`);
@@ -6724,7 +6724,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       if (msg?.kind === 'thinking') {
         const wrap = el(`
-          <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
+          <details class="msg-frame thinking text-xs text-ink-faint">
             <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
@@ -6736,11 +6736,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // UX-002：历史回显与 live 一致——收起态带 inputSummary 截断；Task 清单工具特化
         const histTitle = formatTaskToolTitle(msg.name, msg.inputSummary) ?? formatToolCardTitle(msg.name || 'tool', msg.inputSummary);
         const card = el(`
-          <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
-            <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-              <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
+          <details class="msg-frame toolcard text-xs">
+            <summary class="pl-2 pr-1 py-1 flex items-center gap-2 min-w-0">
+              <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name text-ink-soft truncate">${esc(histTitle)}</span>
             </summary>
-            <div class="px-3 pb-2 space-y-1">
+            <div class="pl-2 pr-1 pb-2 space-y-1">
               <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
               <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
             </div>
@@ -6769,12 +6769,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const card = msg.toolUseId ? histToolCards.get(msg.toolUseId) : null;
         if (!card) {
           const orphan = el(`
-            <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
-              <summary class="px-3 py-2 flex items-center gap-2">
+            <details class="msg-frame toolcard text-xs">
+              <summary class="pl-2 pr-1 py-1 flex items-center gap-2">
                 <span class="t-status status-icon shrink-0"></span>
-                <span class="font-mono font-semibold text-ink">tool</span>
+                <span class="text-ink-soft">tool</span>
               </summary>
-              <div class="px-3 pb-2 space-y-1">
+              <div class="pl-2 pr-1 pb-2 space-y-1">
                 <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint"><code></code></pre>
               </div>
             </details>`);
