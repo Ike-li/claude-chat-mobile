@@ -415,7 +415,11 @@ test('markdown sanitizer forbids clickjacking and form-exfiltration primitives',
 
 // 回放缓冲：OOB 不入队 / 超时按阈值决策 / discard 清队列（code review 修复回归）
 test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => {
-  function makeBuffer(opts = {}) {
+  // t 必传：begin() 会挂一条真实 setTimeout(timeoutMs)，用例里为「大到不触发」常传 60_000。
+  // 它挂在事件循环上，进程要等它烧完才肯退出——2026-09-07 实测本文件因此单跑 60.2s（CPU 仅 0.22s），
+  // 而 test:unit 并行度 9 下的 wall time 恰由最长文件决定，整条 unit 槽被这一个定时器锚成 62s。
+  // 清理放在 helper 里而不是逐个用例末尾加 discard()：后者每新增一个用例都要记得写，漏一次就复发。
+  function makeBuffer(t, opts = {}) {
     const dispatched = [];
     const scrolls = [];
     let seq = 0;
@@ -430,11 +434,12 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
       decideTimeoutAction: opts.decideTimeoutAction,
       isOutOfBand: opts.isOutOfBand,
     });
+    t.after(() => buf.discard()); // 无条件：已 resolve 过的 buf 再 discard 是空操作（active 为 null 直接 return）
     return { buf, dispatched, scrolls, getSeq: () => seq, getEpoch: () => epoch };
   }
 
-  test('offer：同 instance 的对话流事件入队；OOB（mirror_state/history_append）不入队', () => {
-    const { buf, dispatched } = makeBuffer({ timeoutMs: 60_000 });
+  test('offer：同 instance 的对话流事件入队；OOB（mirror_state/history_append）不入队', (t) => {
+    const { buf, dispatched } = makeBuffer(t, { timeoutMs: 60_000 });
     buf.begin('inst-1');
     assert.equal(buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }), true);
     assert.equal(buf.offer({ type: 'mirror_state', instanceId: 'inst-1', epoch: 'server', seq: 0 }), false);
@@ -444,8 +449,8 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.deepEqual(dispatched, []);
   });
 
-  test("resolve('reload')：只推进基线、不派发缓冲事件", () => {
-    const { buf, dispatched, getSeq, getEpoch } = makeBuffer({ timeoutMs: 60_000 });
+  test("resolve('reload')：只推进基线、不派发缓冲事件", (t) => {
+    const { buf, dispatched, getSeq, getEpoch } = makeBuffer(t, { timeoutMs: 60_000 });
     const h = buf.begin('inst-1');
     buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 5 });
     buf.offer({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 6 });
@@ -456,8 +461,8 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(buf.bufferedCount('inst-1'), 0);
   });
 
-  test('超时：decideTimeoutAction 返回 reload → 只推进基线，不 flush 成打字机', async () => {
-    const { buf, dispatched, getSeq } = makeBuffer({
+  test('超时：decideTimeoutAction 返回 reload → 只推进基线，不 flush 成打字机', async (t) => {
+    const { buf, dispatched, getSeq } = makeBuffer(t, {
       timeoutMs: 20,
       decideTimeoutAction: ({ bufferedCount }) => (bufferedCount >= 2 ? 'reload' : 'flush'),
     });
@@ -469,8 +474,8 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(getSeq(), 2);
   });
 
-  test('超时：decideTimeoutAction 返回 flush → 按序派发', async () => {
-    const { buf, dispatched } = makeBuffer({
+  test('超时：decideTimeoutAction 返回 flush → 按序派发', async (t) => {
+    const { buf, dispatched } = makeBuffer(t, {
       timeoutMs: 20,
       decideTimeoutAction: () => 'flush',
     });
@@ -481,8 +486,8 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(dispatched[0].seq, 1);
   });
 
-  test("resolve(handle, 'discard')：清队列不推进基线、不派发", () => {
-    const { buf, dispatched, getSeq } = makeBuffer({ timeoutMs: 60_000 });
+  test("resolve(handle, 'discard')：清队列不推进基线、不派发", (t) => {
+    const { buf, dispatched, getSeq } = makeBuffer(t, { timeoutMs: 60_000 });
     const h = buf.begin('inst-1');
     buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 9 });
     buf.resolve(h, 'discard');

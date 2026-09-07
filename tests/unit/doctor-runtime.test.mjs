@@ -8,6 +8,17 @@ import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_
 import { modelSettingsConflictDiagnostic, identifySelfServer } from '../../app/src/ops/doctor-checks.js';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 
+// ── 探测 stub 的统一底座（2026-09-07 性能修复）─────────────────────────────
+// runDoctor 未注入探测时会真的跑 `which claude` + `claude --version` + `which tailscale`
+// + `tailscale status --json`，每个 execFileSync 带 timeout: 3000 —— 一次裸调用约 10 秒。
+// 本文件此前逐个用例手工注入，漏了十余处：实测单跑 56.8s，而其中 CPU 仅 1.49s，全在等子进程。
+// 因为 test:unit 并行度 9 下 wall time 由最长文件决定，这一个文件就把整条槽钉在近一分钟。
+//
+// 统一前置成缺省，用例自己传的 probe* 靠 spread 顺序照常覆盖（`{ ...stubProbes(), ...ctx }`），
+// 断言语义一条不变。写成函数而不是对象常量：STUB_PROBE / STUB_TS_ABSENT 定义在本文件靠后
+// （紧贴各自的成因注释，不宜上移），函数体到调用时才求值，绕开 const 的 TDZ。
+const stubProbes = () => ({ probeClaudeBin: () => STUB_PROBE, probeTailscale: () => STUB_TS_ABSENT });
+
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
   test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', () => {
     const home = mkdtempSync(join(tmpdir(), 'ccm-home-'));
@@ -36,7 +47,7 @@ test.describe('readMergedPermissions：合并 global/project/local + 容错', ()
 
 test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
   test('AUTH_TOKEN 明文绝不出现在报告里', () => {
-    const rep = runDoctor({ authToken: 'super-secret-token-1234', home: '/nonexistent-ccm', workDirs: [] });
+    const rep = runDoctor({ ...stubProbes(), authToken: 'super-secret-token-1234', home: '/nonexistent-ccm', workDirs: [] });
     assert.equal(JSON.stringify(rep).includes('super-secret-token-1234'), false);
     const t = rep.checks.find(c => c.id === 'AUTH_TOKEN');
     assert.equal(t.safe.isSet, true);
@@ -53,6 +64,7 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       // 2026-09-06 CI 实测：本地（有真 claude）绿、容器（compose 设了 CLAUDE_BIN）绿、
       // CI 的 test:unit step（两者都没有）红——同一条用例三个环境三种答案，红的还是无关的那一维。
       const rep = runDoctor({
+        ...stubProbes(),
         authToken: 'x'.repeat(32), home, workDirs: [], cfEnabled: false,
         probeClaudeBin: () => STUB_PROBE,
       });
@@ -111,7 +123,7 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
 // 当天现场 CLI 已升到 2.1.247，web 体检仍显示 2.1.246 且判 ok；claude 被卸载/移走同理。
 // 现在与 scripts/doctor.js 共用 probeClaudeBin + claudeBinDiagnostic，两边同一判据。
 const STUB_PROBE = { explicit: '/usr/local/bin/claude', exists: true, executable: true, version: '2.1.247 (Claude Code)' };
-const claudeCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], ...ctx }).checks.find(c => c.id === 'CLAUDE_BIN');
+const claudeCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], ...ctx }).checks.find(c => c.id === 'CLAUDE_BIN');
 
 // ── TAILSCALE 探测注入（2026-09-06）───────────────────────────────────────
 // 与 probeClaudeBin 同一形态：有副作用的探测可注入，判定走 doctor-checks.tailscaleDiagnostic。
@@ -121,7 +133,7 @@ const STUB_TS_ABSENT = { found: false };
 const STUB_TS_RUNNING = { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net', ipCount: 1 };
 
 test.describe('TAILSCALE：探测可注入，safe 脱敏，port 透传进 serve 提示', () => {
-  const tsCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }).checks.find(c => c.id === 'TAILSCALE');
+  const tsCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }).checks.find(c => c.id === 'TAILSCALE');
 
   test('注入 Running 事实 + port → ok，detail 带 MagicDNS https 地址与 serve --bg <port>', () => {
     const c = tsCheck({ probeTailscale: () => STUB_TS_RUNNING, port: 3456, accessProfile: 'vpn' });
@@ -230,7 +242,7 @@ test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {
 // 手机端两个入口（配置面板 / 安全体检）都看不到它——「env 恒压过配置文件而被压侧无症状」
 // 这句话本身就写在 scripts/doctor.js:23，产品自己承认它危险，却只报给最不需要的那类用户。
 test.describe('ENV_OVERRIDE：把 doctor D18 接进手机端的安全体检', () => {
-  const base = { home: '/nonexistent-ccm', workDirs: [] };
+  const base = { ...stubProbes(), home: '/nonexistent-ccm', workDirs: [] };
 
   test('有 shell env 覆盖 → warn，且逐个列出键名', () => {
     const rep = runDoctor({ ...base, shellEnv: { WORK_DIR: '/from/shell', DEV_MODE: '1' } });
@@ -261,24 +273,24 @@ test.describe('ENV_OVERRIDE：把 doctor D18 接进手机端的安全体检', ()
 test.describe('BE-013：CONFIG_PERMS 不得在「未检查」时假绿 ok', () => {
   test('未传 configPermsProblems（缺省 undefined）→ 不显 ok（应 warn/未知）', () => {
     // 旧实现把缺省 undefined 当 0 → 恒显「0600 安全」ok 假绿。修复后：未检查必须显 warn。
-    const cp = runDoctor({ home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+    const cp = runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.notEqual(cp.status, 'ok');
     assert.equal(cp.safe.checked, false);
   });
   test('configPermsProblems=null（平台无法检查）→ warn 未知，safe.checked=false', () => {
-    const cp = runDoctor({ configPermsProblems: null, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+    const cp = runDoctor({ ...stubProbes(), configPermsProblems: null, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'warn');
     assert.equal(cp.safe.checked, false);
     assert.equal(cp.safe.problemCount, null);
   });
   test('configPermsProblems=0（已检查、干净）→ ok', () => {
-    const cp = runDoctor({ configPermsProblems: 0, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+    const cp = runDoctor({ ...stubProbes(), configPermsProblems: 0, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'ok');
     assert.equal(cp.safe.checked, true);
     assert.equal(cp.safe.problemCount, 0);
   });
   test('configPermsProblems=3（已检查、有过宽）→ warn 且 detail 含数量', () => {
-    const cp = runDoctor({ configPermsProblems: 3, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+    const cp = runDoctor({ ...stubProbes(), configPermsProblems: 3, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'warn');
     assert.equal(cp.safe.problemCount, 3);
     assert.match(cp.detail, /3/);
@@ -346,7 +358,7 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
       mkdirSync(join(proj, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
       writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
-      const wl = runDoctor({ authToken: 'x'.repeat(32), home, workDirs: [proj] }).checks.find(c => c.id === 'WHITELIST');
+      const wl = runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [proj] }).checks.find(c => c.id === 'WHITELIST');
       assert.equal(wl.safe.dangerous.length, 1); // 去重：同一条不重复列
       assert.match(wl.safe.dangerous[0].scope, /global/);
       assert.match(wl.safe.dangerous[0].scope, /project/);
@@ -360,7 +372,7 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
     try {
       mkdirSync(join(home, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
-      const wl = runDoctor({ authToken: 'x'.repeat(32), home, workDirs: [] }).checks.find(c => c.id === 'WHITELIST');
+      const wl = runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [] }).checks.find(c => c.id === 'WHITELIST');
       assert.equal(wl.safe.dangerous.length, 1);
       assert.equal(wl.safe.dangerous[0].scope, 'global');
     } finally {
@@ -422,7 +434,7 @@ test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映�
 // ——受众重合度比 CLI 侧更高。判定与 scripts/doctor.js D20 共用 fileEditExposureDiagnostic；
 // 公网信号 = CF Access 实际启用（ctx.cfEnabled，auth 层权威判定）或 PUBLIC_URL 已声明。
 test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => {
-  const feCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+  const feCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
     .checks.find(c => c.id === 'FILE_EDIT');
 
   test('公网启用 + 直写开 → warn，点名审批链与出路', () => {
@@ -458,7 +470,7 @@ test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => 
 // 判定与 scripts/doctor.js D21 共用 accessProfileDiagnostic；cfConfigured 用 ctx.cfEnabled
 // （auth 层权威判定）。safe 只出布尔/枚举字面量，绝不回显 PUBLIC_URL 值。
 test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检）', () => {
-  const apCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+  const apCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
     .checks.find(c => c.id === 'ACCESS_PROFILE');
 
   test('未声明 → ok（既有部署零新告警）', () => {
