@@ -1,23 +1,32 @@
 #!/usr/bin/env node
-// scripts/upstream-watch.js —— 上游版本守望：本仓库钉的 Agent SDK / claude CLI 落后了没有
+// scripts/upstream-watch.js —— 上游版本守望：本仓库钉的 Agent SDK 落后了没有
 //
-// 本项目与两个上游强绑定：package.json 钉死 @anthropic-ai/claude-agent-sdk，
-// verifiedWith.claudeCli 记录实测背书过的 CLI 版本（README 徽章直接读它）。两者都升级得快，
-// 此前没有任何机制知道上游发了新版——SDK 曾在无人察觉的情况下落后 19 个版本近三周。
+// 【手动拉取，不再每日推送】原设计每天开 / 更新一条 issue 发邮件，实测失效：那条 issue 挂了
+// 35 天、27 条「上游又前进了」评论、零人类响应。两个原因叠加：
+// · **报的指标不对** —— 对 `0.3.202→0.3.226` 共 67 条 changelog 逐条核对的结论是「SDK 是瘦
+//   transport，真命中只有 3 条，别被版本差数吓到」。而它每天报的恰恰就是版本差数。
+// · **降噪判据选错了轴** —— 原设计让标题只含落后版数、不含日期，指望「只在版数前进时才发邮件」
+//   来降噪；但上游几乎天天发版，这个条件也就天天成立，降噪率约等于 0。判据得选在「我该不该
+//   行动」上，选在「数字变没变」上必然退化成全量噪音。
+// 所以改成：想核对的时候自己跑，拿一份带判据的 changelog 摘录。这也正是它唯一兑现过价值的
+// 形态 —— 那次逐条核对抓出了 stderr 未接住、projectDir 漏截断两个真 bug。
 //
-// 本脚本每天由 .github/workflows/upstream-watch.yml 跑一次：查 npm registry，与 package.json
-// 对比，落后就开 issue（GitHub 把它发成邮件），并从上游 CHANGELOG.md 摘出这期间改了什么。
+// 【为什么不再监控 claude CLI】原先拿 `verifiedWith.claudeCli` 比上游 latest。那个字段是
+// `scripts/release.sh` 发版时写入的**实测背书快照**，语义是历史存档；而本仓库
+// `pathToClaudeCodeExecutable` 指向的是使用者机器上的 CLI —— CLI 是运行时环境，不是本仓库
+// 钉住的依赖。拿一个只随发版更新的快照去比每天发版的上游，落后是结构性必然，报出来对应不到
+// 任何行动。同理删掉了 patch 号配对检查：它在这两个字段上恒亮警告。
+//
+// 产出去哪：
+// · 本地 `npm run watch:upstream` —— 报告走 stdout，进度走 stderr，不落任何文件
+// · GitHub Actions 手动 Run workflow —— 同一份报告进 job summary 那一页
 //
 // 设计约束：
 // · 零依赖 —— Node 内置 fetch，不给本仓库增加任何 npm 包。
-// · 无状态 —— 对比基准就是 package.json 里钉的版本，它本身就是状态，不需要 state 文件。
-//   （这也意味着升级 package.json 后 issue 会自动追平关闭，不需要手工同步任何东西。）
-// · 退出码恒 0 —— 上游发版不是本仓库的错，不该把 job 染红。结论走 stdout / GITHUB_OUTPUT。
+// · 无状态 —— 对比基准就是 package.json 里钉的版本，它本身就是状态。
 // · 网络集中在 fetchJson / fetchText 两处且可注入 —— 其余是纯函数，单测不打网。
-//
-// 本地手动跑：npm run watch:upstream
 
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
@@ -25,25 +34,19 @@ import { realpathSync } from 'node:fs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRY = 'https://registry.npmjs.org';
 
-// 展开最近几个版本的完整条目，更早的折进 <details>。CLI 跨 18 版的 changelog 实测 62088 字符，
-// 而 issue body 上限 65536——全展开会直接撑爆，且 519 行没人读得完。
+// 展开最近几个版本的完整条目，更早的折进 <details>。跨几十版的 changelog 实测能到 6 万字符，
+// 全展开没人读得完，job summary 也有 1MB 上限。
 export const EXPAND_RECENT = 5;
 // 折叠区的硬预算：超出就截断并注明还剩多少版没列，绝不悄悄吞掉。
 export const COLLAPSED_BUDGET = 12_000;
 
-// 监控对象。sdk 比对 package.json 的 dependencies，cli 比对 verifiedWith.claudeCli。
+// 监控对象。只剩 sdk 一条轴（CLI 为何移除见文件头），但保留表结构，将来加包是零成本的。
 export const WATCHED = {
   sdk: {
     pkg: '@anthropic-ai/claude-agent-sdk',
     label: 'Agent SDK',
     changelog: 'https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/CHANGELOG.md',
     repo: 'anthropics/claude-agent-sdk-typescript',
-  },
-  cli: {
-    pkg: '@anthropic-ai/claude-code',
-    label: 'claude CLI',
-    changelog: 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md',
-    repo: 'anthropics/claude-code',
   },
 };
 
@@ -61,14 +64,10 @@ export async function fetchText(url, { fetchImpl = fetch } = {}) {
   return res.text();
 }
 
-// package.json 是对比基准：SDK 看 dependencies 的钉死值，CLI 看 verifiedWith.claudeCli
-// （全仓库唯一记录它的地方，release.sh 发版时写入，README 徽章也读这里）。
+// package.json 的 dependencies 是对比基准：SDK 在这里钉死。
 export function readPinned(rootDir = ROOT) {
   const pkg = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
-  return {
-    sdk: pkg.dependencies?.[WATCHED.sdk.pkg] ?? null,
-    cli: pkg.verifiedWith?.claudeCli ?? null,
-  };
+  return { sdk: pkg.dependencies?.[WATCHED.sdk.pkg] ?? null };
 }
 
 // ──────────────────────── 版本比较 ────────────────────────
@@ -97,7 +96,7 @@ export function countBehind(allVersions, pinned, latest) {
 
 // ──────────────────────── CHANGELOG 解析 ────────────────────────
 
-// 上游两份 CHANGELOG 都是 `## <版本号>` 分段。解析成 [{version, body}]，保持原文顺序（新→旧）。
+// 上游 CHANGELOG 是 `## <版本号>` 分段。解析成 [{version, body}]，保持原文顺序（新→旧）。
 export function parseChangelog(text) {
   const out = [];
   const re = /^## +(.+?) *$/gm;
@@ -147,31 +146,40 @@ export function renderChangelog(sections, { expand = EXPAND_RECENT, budget = COL
   return lines.join('\n\n');
 }
 
-// ──────────────────────── 汇总与文案 ────────────────────────
+// ──────────────────────── 报告 ────────────────────────
 
-// 实测：CLI 2.1.N 与 SDK 0.3.N 由同一条流水线产出（采样 201/205/210/215/220 跨 3 周，
-// SDK 恒早 2 秒发布），patch 号严格配对。据此可判断本仓库钉的两个版本是否属于同一批。
-export function patchOf(v) {
-  const p = parseVersion(v);
-  return p ? p[2] : null;
-}
+// 判据段落。**这是这份报告最重要的部分**：没有它，读者看到「落后 62 版」的第一反应就是升级，
+// 而那个反应已经被一次 67 条的逐条核对否定过了。判据跟着报告走，才不会每次重新踩一遍。
+export const TRIAGE_NOTE = [
+  '### 怎么读这份报告',
+  '',
+  '**版本差数不是风险指标。** SDK 的 transport 对 CLI stdout 是纯透传（无 type 白名单、无 schema',
+  '校验、不 strip 未知字段），而本仓库 `pathToClaudeCodeExecutable` 用的是使用者机器上的 CLI。',
+  '于是每条 changelog 先分两类，只有 A 类才是"落后 = 真没修"：',
+  '',
+  '- **A 类：`sdk.mjs` 自己的 JS 逻辑** —— 落后就是真没修。只有四块：进程错误构造',
+  '  （`getProcessExitError` / stderr 拼接）、abort 监听、`canUseTool` 协议、以及不经 CLI、',
+  '  SDK 自己读磁盘的 `listSessions` / `forkSession` / `deleteSession`。',
+  '- **B 类：CLI 侧行为，或 CLI 新产出的字段** —— 随使用者机器上的 CLI 到手，与 SDK 版本无关，',
+  '  **今天就能用，不必等升级**。新事件类型、新 meta 字段、子代理调度、工具行为改动都在这一类。',
+  '',
+  '判不了某条属 A 还是 B 时，最硬的工具是 SDK 包里的 `manifest.json` —— 直接写着配对的 CLI',
+  '版本、commit 与各平台二进制 checksum。**纯文本 diff 完全无用**：minifier 每版重排标识符，',
+  '相邻两版能差出近万处改名噪音；要比就比包内符号计数。',
+].join('\n');
 
-export function pairingNote(sdkVersion, cliVersion) {
-  const a = patchOf(sdkVersion);
-  const b = patchOf(cliVersion);
-  if (a === null || b === null) return null;
-  if (a === b) return `本仓库钉的两个版本配对：SDK \`${sdkVersion}\` ↔ CLI \`${cliVersion}\`（同一批发布）。`;
-  return `⚠️ **本仓库钉的两个版本不是同一批**：SDK \`${sdkVersion}\` ↔ CLI \`${cliVersion}\`（patch 号 ${a} vs ${b}）。上游这两个包由同一条流水线同步发布，patch 号本该相同。`;
-}
-
-export function buildIssue(report, { now = new Date() } = {}) {
+export function buildReport(report, { now = new Date() } = {}) {
   const behind = report.items.filter(i => i.behind > 0);
-  const parts = behind.map(i => `${i.label} 落后 ${i.behind} 版`);
-  // 标题**不带日期**：workflow 靠「标题是否变化」判断该不该再发一次通知。带日期的话每天都算变化，
-  // 天天来一封邮件；只在落后版数真的前进时才变，才是有信息量的提醒节奏。
-  const title = `依赖落后上游：${parts.join('，')}`;
+  const summary = behind.length
+    ? `依赖落后上游：${behind.map(i => `${i.label} 落后 ${i.behind} 版`).join('，')}`
+    : '依赖已追平上游';
 
-  const body = ['| 依赖 | 本仓库钉的 | 上游 latest | 落后 | 上游发布于 |', '| --- | --- | --- | --- | --- |'];
+  const body = [
+    `## ${summary}`,
+    '',
+    '| 依赖 | 本仓库钉的 | 上游 latest | 落后 | 上游发布于 |',
+    '| --- | --- | --- | --- | --- |',
+  ];
   for (const i of report.items) {
     const when = i.latestPublishedAt ? i.latestPublishedAt.slice(0, 10) : '—';
     const behindText = i.behind > 0 ? `**${i.behind} 版**` : '—';
@@ -179,47 +187,37 @@ export function buildIssue(report, { now = new Date() } = {}) {
   }
   body.push('');
 
-  if (report.stable) {
-    body.push(`CLI 另有 \`stable\` 线，当前 \`${report.stable}\` —— 想稳一点可以升到它而不是 \`latest\`。`, '');
-  }
-
-  const note = pairingNote(report.pinned.sdk, report.pinned.cli);
-  if (note) body.push(note, '');
-
-  for (const i of behind) {
-    if (!i.changelog) continue;
-    body.push('---', '', `### ${i.label}：\`${i.pinned}\` → \`${i.latest}\` 改了什么`, '', i.changelog, '');
+  if (behind.length) {
+    body.push(TRIAGE_NOTE, '');
+    for (const i of behind) {
+      if (!i.changelog) continue;
+      body.push('---', '', `### ${i.label}：\`${i.pinned}\` → \`${i.latest}\` 改了什么`, '', i.changelog, '');
+    }
   }
 
   body.push(
     '---',
     '',
-    `<sub>由 [upstream-watch.yml](../blob/master/.github/workflows/upstream-watch.yml) 每日检查，最后更新 ${now.toISOString().slice(0, 16).replace('T', ' ')} UTC。`,
-    '升级 `package.json` 后本 issue 会在下次检查时自动关闭 —— 不需要手工同步任何状态。',
-    '`verifiedWith.claudeCli` 是**实测背书**语义，请本机验过再由 `scripts/release.sh` 写入，不要手改。</sub>',
+    // 这里不放相对链接：原先的 `../blob/master/...` 是贴着 issue 页面 URL 写的，报告改进
+    // job summary（/actions/runs/<id>）后同一个相对路径会解析成坏链，本地终端里更没意义。
+    `<sub>由 \`npm run watch:upstream\` 或 Actions 里手动 Run workflow`,
+    `（\`.github/workflows/upstream-watch.yml\`）生成，${now.toISOString().slice(0, 16).replace('T', ' ')} UTC。`,
+    '本报告不落文件、不开 issue、不发通知。</sub>',
   );
 
-  return { title, body: body.join('\n') };
+  return { summary, body: body.join('\n') };
 }
 
 // ──────────────────────── 主流程 ────────────────────────
 
-function emitOutput(key, value) {
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
-}
-
 export async function collect({ fetchImpl = fetch, rootDir = ROOT } = {}) {
   const pinned = readPinned(rootDir);
   const items = [];
-  let stable = null;
 
   for (const [key, meta] of Object.entries(WATCHED)) {
     const pin = pinned[key];
     const packument = await fetchJson(`${REGISTRY}/${meta.pkg}`, { fetchImpl });
-    const tags = packument['dist-tags'] ?? {};
-    const latest = tags.latest ?? null;
-    if (key === 'cli' && tags.stable) stable = tags.stable;
-
+    const latest = packument['dist-tags']?.latest ?? null;
     const behind = countBehind(Object.keys(packument.versions ?? {}), pin, latest) ?? 0;
 
     let changelog = '';
@@ -228,7 +226,7 @@ export async function collect({ fetchImpl = fetch, rootDir = ROOT } = {}) {
         const sections = sliceChangelog(parseChangelog(await fetchText(meta.changelog, { fetchImpl })), pin, latest);
         changelog = renderChangelog(sections, { changelogUrl: `https://github.com/${meta.repo}/blob/main/CHANGELOG.md` });
       } catch {
-        // CHANGELOG 抓不到不该让整条通知失败——落后这件事本身才是重点。
+        // CHANGELOG 抓不到不该让整份报告失败——落后这件事本身才是重点。
         changelog = `_（CHANGELOG 抓取失败，见 [上游仓库](https://github.com/${meta.repo}/blob/main/CHANGELOG.md)）_`;
       }
     }
@@ -239,31 +237,23 @@ export async function collect({ fetchImpl = fetch, rootDir = ROOT } = {}) {
     });
   }
 
-  return { pinned, items, stable, behind: items.some(i => i.behind > 0) };
+  return { pinned, items, behind: items.some(i => i.behind > 0) };
 }
 
-export async function main({ fetchImpl = fetch, rootDir = ROOT, log = console.log } = {}) {
-  const report = await collect({ fetchImpl, rootDir });
+// 进度走 log（stderr），报告走 out（stdout）。分开是为了让 workflow 里一行
+// `node scripts/upstream-watch.js >> "$GITHUB_STEP_SUMMARY"` 只拿到 markdown 报告本身。
+export async function main({ fetchImpl = fetch, rootDir = ROOT, log = console.error, out = console.log } = {}) {
+  const collected = await collect({ fetchImpl, rootDir });
 
-  for (const i of report.items) {
+  for (const i of collected.items) {
     log(i.behind > 0
       ? `⚠️  ${i.label}: 钉 ${i.pinned}，上游 ${i.latest} —— 落后 ${i.behind} 版`
       : `✅ ${i.label}: ${i.pinned} 已是最新`);
   }
 
-  if (!report.behind) {
-    emitOutput('behind', 'false');
-    return report;
-  }
-
-  const issue = buildIssue(report);
-  writeFileSync(join(rootDir, 'upstream-issue.md'), issue.body + '\n');
-  log(`\n标题：${issue.title}`);
-  log(`正文 ${issue.body.length} 字符，已写入 upstream-issue.md`);
-
-  emitOutput('behind', 'true');
-  emitOutput('issue_title', issue.title);
-  return { ...report, issue };
+  const report = buildReport(collected);
+  out(report.body);
+  return { ...collected, report };
 }
 
 // 直接运行才跑 main；被测试 import 时不执行。

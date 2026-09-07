@@ -1,7 +1,7 @@
 // tests/unit/upstream-watch.test.mjs —— 上游版本守望的纯逻辑单测，不打网络。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,9 +12,8 @@ import {
   parseChangelog,
   sliceChangelog,
   renderChangelog,
-  patchOf,
-  pairingNote,
-  buildIssue,
+  buildReport,
+  TRIAGE_NOTE,
   readPinned,
   collect,
   main,
@@ -130,189 +129,168 @@ test('无变更区间时渲染成空串而不是空的 details 壳', () => {
   assert.equal(renderChangelog([]), '');
 });
 
-// ──────────────────────── patch 配对 ────────────────────────
+// ──────────────────────── 报告文案 ────────────────────────
 
-test('patch 号相同判为同一批发布', () => {
-  assert.match(pairingNote('0.3.220', '2.1.220'), /配对/);
-  assert.doesNotMatch(pairingNote('0.3.220', '2.1.220'), /⚠️/);
-});
-
-test('patch 号不同时明确警告（本仓库当前就是这个状态）', () => {
-  const note = pairingNote('0.3.201', '2.1.220');
-
-  assert.match(note, /⚠️/);
-  assert.match(note, /不是同一批/);
-  assert.match(note, /201 vs 220/);
-});
-
-test('版本无法解析时不下配对结论', () => {
-  assert.equal(pairingNote('nonsense', '2.1.220'), null);
-});
-
-test('patchOf 取第三段', () => {
-  assert.equal(patchOf('2.1.220'), 220);
-  assert.equal(patchOf('bad'), null);
-});
-
-// ──────────────────────── issue 文案 ────────────────────────
-
-const report = ({ sdkBehind = 19, cliBehind = 0 } = {}) => ({
-  pinned: { sdk: '0.3.201', cli: '2.1.220' },
-  stable: '2.1.212',
+const report = ({ sdkBehind = 19 } = {}) => ({
+  pinned: { sdk: '0.3.201' },
   items: [
     { key: 'sdk', pkg: WATCHED.sdk.pkg, label: 'Agent SDK', pinned: '0.3.201', latest: '0.3.220', behind: sdkBehind, changelog: '#### 0.3.220\n\n- parity', latestPublishedAt: '2026-07-24T23:11:19.727Z' },
-    { key: 'cli', pkg: WATCHED.cli.pkg, label: 'claude CLI', pinned: '2.1.220', latest: '2.1.220', behind: cliBehind, changelog: '', latestPublishedAt: '2026-07-24T23:11:21.821Z' },
   ],
 });
 
-test('标题只列真正落后的那些依赖', () => {
-  const { title } = buildIssue(report(), { now: new Date('2026-08-03T00:00:00Z') });
+test('落后时报告开头一句话说清落后多少', () => {
+  const { summary, body } = buildReport(report(), { now: new Date('2026-09-07T00:00:00Z') });
 
-  assert.equal(title, '依赖落后上游：Agent SDK 落后 19 版');
-  assert.doesNotMatch(title, /claude CLI/, '没落后的不该出现在标题里');
+  assert.equal(summary, '依赖落后上游：Agent SDK 落后 19 版');
+  assert.match(body, /^## 依赖落后上游：Agent SDK 落后 19 版/, '摘要要当 markdown 标题打头，job summary 才有层级');
 });
 
-test('标题不含日期——workflow 靠标题是否变化决定要不要再发一封邮件', () => {
-  const a = buildIssue(report(), { now: new Date('2026-08-03T00:00:00Z') }).title;
-  const b = buildIssue(report(), { now: new Date('2026-08-09T00:00:00Z') }).title;
+test('追平时不说成落后，也不附判据与 changelog', () => {
+  const { summary, body } = buildReport(report({ sdkBehind: 0 }));
 
-  assert.equal(a, b, '同样的落后状态隔几天再查，标题必须一致，否则会天天来一封重复邮件');
-  assert.notEqual(
-    buildIssue(report({ sdkBehind: 20 })).title,
-    buildIssue(report({ sdkBehind: 19 })).title,
-    '落后版数真的前进了则标题必须变，这才触发新通知',
-  );
+  assert.equal(summary, '依赖已追平上游');
+  assert.doesNotMatch(body, /怎么读这份报告/, '没有要核对的东西就不该占篇幅');
+  assert.doesNotMatch(body, /改了什么/);
 });
 
-test('表格列出所有被监控依赖（含未落后的，便于一眼看全）', () => {
-  const { body } = buildIssue(report());
+test('表格列出被监控依赖的钉死值与上游 latest', () => {
+  const { body } = buildReport(report());
 
   assert.match(body, /Agent SDK \| `0\.3\.201`/);
-  assert.match(body, /claude CLI \| `2\.1\.220`/);
   assert.match(body, /\*\*19 版\*\*/);
 });
 
+test('落后时必须带上 A/B 判据段落', () => {
+  const { body } = buildReport(report());
+
+  // 这份报告存在的意义就是「带判据的摘录」。少了判据，读者看到落后 N 版的第一反应
+  // 就是升级，而那个反应已经被一次 67 条的逐条核对否定过了。
+  assert.ok(body.includes(TRIAGE_NOTE), '判据段落必须整段进报告');
+  assert.match(body, /版本差数不是风险指标/);
+  assert.match(body, /getProcessExitError/, 'A 类四块要点名，否则"分两类"是句空话');
+  assert.match(body, /listSessions/);
+});
+
+test('报告不再提 issue / 邮件这套已经拆掉的机制', () => {
+  const { body } = buildReport(report());
+
+  assert.match(body, /不落文件、不开 issue、不发通知/, '读者要一眼知道这东西不会再自己冒出来');
+});
+
 test('只为落后的依赖附 changelog 段落', () => {
-  const { body } = buildIssue(report());
-
-  assert.match(body, /### Agent SDK：`0\.3\.201` → `0\.3\.220` 改了什么/);
-  assert.doesNotMatch(body, /### claude CLI：.*改了什么/, '没落后就没有变更区间可列');
-});
-
-test('正文带上 stable 线提示与配对警告', () => {
-  const { body } = buildIssue(report());
-
-  assert.match(body, /stable.*`2\.1\.212`/s);
-  assert.match(body, /不是同一批/);
-});
-
-test('正文提示 verifiedWith 是实测背书、不要手改', () => {
-  const { body } = buildIssue(report());
-
-  assert.match(body, /verifiedWith\.claudeCli.*实测背书/s, 'CI 自动改这个字段等于伪造背书，必须写清楚');
+  assert.match(buildReport(report()).body, /### Agent SDK：`0\.3\.201` → `0\.3\.220` 改了什么/);
+  assert.doesNotMatch(buildReport(report({ sdkBehind: 0 })).body, /改了什么/, '没落后就没有变更区间可列');
 });
 
 // ──────────────────────── readPinned ────────────────────────
 
-test('readPinned 从 package.json 取两个基准值', () => {
+test('readPinned 从 package.json 的 dependencies 取基准值', () => {
   const dir = mkdtempSync(join(tmpdir(), 'upstream-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({
     dependencies: { [WATCHED.sdk.pkg]: '0.3.201' },
     verifiedWith: { claudeCli: '2.1.220' },
   }));
 
-  assert.deepEqual(readPinned(dir), { sdk: '0.3.201', cli: '2.1.220' });
+  // verifiedWith.claudeCli 是发版时写入的实测背书快照，不是本仓库钉住的依赖，
+  // 拿它比上游 latest 落后是结构性必然 —— 故意不读。
+  assert.deepEqual(readPinned(dir), { sdk: '0.3.201' });
 });
 
 test('readPinned 在字段缺失时给 null 而不是崩', () => {
   const dir = mkdtempSync(join(tmpdir(), 'upstream-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x' }));
 
-  assert.deepEqual(readPinned(dir), { sdk: null, cli: null });
+  assert.deepEqual(readPinned(dir), { sdk: null });
 });
 
 // ──────────────────────── collect / main（假网络）────────────────────────
 
-function fakeNet({ sdkLatest = '0.3.220', cliLatest = '2.1.220', sdkVersions, cliVersions, changelogFails = false } = {}) {
-  const packument = (latest, versions, extraTags = {}) => ({
-    'dist-tags': { latest, ...extraTags },
-    versions: Object.fromEntries((versions ?? [latest]).map(v => [v, {}])),
-    time: { [latest]: '2026-07-24T23:11:19.727Z' },
-  });
+function fakeNet({ sdkLatest = '0.3.220', sdkVersions, changelogFails = false } = {}) {
   return async url => {
-    const u = String(url);
-    if (u.includes('CHANGELOG.md')) {
+    if (String(url).includes('CHANGELOG.md')) {
       if (changelogFails) return { ok: false, status: 500, text: async () => '' };
       return { ok: true, text: async () => SAMPLE };
     }
-    if (u.includes(encodeURIComponent(WATCHED.sdk.pkg)) || u.includes(WATCHED.sdk.pkg)) {
-      return { ok: true, json: async () => packument(sdkLatest, sdkVersions) };
-    }
-    return { ok: true, json: async () => packument(cliLatest, cliVersions, { stable: '2.1.212' }) };
+    return {
+      ok: true,
+      json: async () => ({
+        'dist-tags': { latest: sdkLatest },
+        versions: Object.fromEntries((sdkVersions ?? [sdkLatest]).map(v => [v, {}])),
+        time: { [sdkLatest]: '2026-07-24T23:11:19.727Z' },
+      }),
+    };
   };
 }
 
-function fixtureRoot(pinnedSdk = '0.3.201', pinnedCli = '2.1.220') {
+function fixtureRoot(pinnedSdk = '0.3.201') {
   const dir = mkdtempSync(join(tmpdir(), 'upstream-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({
     dependencies: { [WATCHED.sdk.pkg]: pinnedSdk },
-    verifiedWith: { claudeCli: pinnedCli },
+    verifiedWith: { claudeCli: '2.1.220' },
   }));
   return dir;
 }
 
-test('collect 算出落后数并只给落后项抓 changelog', async () => {
-  const rootDir = fixtureRoot();
+test('collect 算出落后数并抓 changelog', async () => {
   const out = await collect({
     fetchImpl: fakeNet({ sdkVersions: ['0.3.201', '0.3.218', '0.3.219', '0.3.220'] }),
-    rootDir,
+    rootDir: fixtureRoot(),
   });
 
-  const sdk = out.items.find(i => i.key === 'sdk');
-  const cli = out.items.find(i => i.key === 'cli');
-
-  assert.equal(sdk.behind, 3);
-  assert.equal(cli.behind, 0, 'CLI 钉的就是 latest');
-  assert.ok(sdk.changelog.length > 0);
-  assert.equal(cli.changelog, '', '没落后就不该去抓 changelog');
-  assert.equal(out.stable, '2.1.212');
+  assert.equal(out.items.length, 1, '只监控 SDK 一条轴');
+  assert.equal(out.items[0].behind, 3);
+  assert.ok(out.items[0].changelog.length > 0);
   assert.equal(out.behind, true);
+});
+
+test('追平时不去抓 changelog', async () => {
+  const out = await collect({ fetchImpl: fakeNet({ sdkVersions: ['0.3.220'] }), rootDir: fixtureRoot('0.3.220') });
+
+  assert.equal(out.items[0].behind, 0);
+  assert.equal(out.items[0].changelog, '');
+  assert.equal(out.behind, false);
 });
 
 test('CHANGELOG 抓取失败不影响「落后」这个结论本身', async () => {
-  const rootDir = fixtureRoot();
   const out = await collect({
     fetchImpl: fakeNet({ sdkVersions: ['0.3.201', '0.3.220'], changelogFails: true }),
-    rootDir,
+    rootDir: fixtureRoot(),
   });
 
-  const sdk = out.items.find(i => i.key === 'sdk');
-  assert.equal(sdk.behind, 1, '抓不到 changelog 也要照报落后');
-  assert.match(sdk.changelog, /抓取失败/);
+  assert.equal(out.items[0].behind, 1, '抓不到 changelog 也要照报落后');
+  assert.match(out.items[0].changelog, /抓取失败/);
 });
 
-test('全部追平时 main 不产出 issue 文件', async () => {
-  const rootDir = fixtureRoot('0.3.220', '2.1.220');
-  const out = await main({
-    fetchImpl: fakeNet({ sdkVersions: ['0.3.220'] }),
-    rootDir,
-    log: () => {},
-  });
+// main 的输出分流：workflow 靠 `node scripts/upstream-watch.js >> "$GITHUB_STEP_SUMMARY"`
+// 把报告送进 job summary。进度行若漏进 stdout，那一页就会被 "⚠️ Agent SDK: ..." 污染。
+function runMain(rootDir, fetchImpl) {
+  const stderr = [];
+  const stdout = [];
+  return main({ fetchImpl, rootDir, log: l => stderr.push(l), out: o => stdout.push(o) })
+    .then(res => ({ res, stderr: stderr.join('\n'), stdout: stdout.join('\n') }));
+}
 
-  assert.equal(out.behind, false);
-  assert.equal(out.issue, undefined);
-  assert.equal(existsSync(join(rootDir, 'upstream-issue.md')), false);
+test('报告走 stdout、进度走 stderr，两边不串', async () => {
+  const { stdout, stderr } = await runMain(fixtureRoot(), fakeNet({ sdkVersions: ['0.3.201', '0.3.219', '0.3.220'] }));
+
+  assert.match(stdout, /^## 依赖落后上游/, 'stdout 第一行就得是 markdown，重定向进 job summary 才干净');
+  assert.doesNotMatch(stdout, /⚠️ {2}Agent SDK/, '进度行不能混进报告');
+  assert.match(stderr, /⚠️ {2}Agent SDK: 钉 0\.3\.201/, '进度仍要看得见，否则本地跑没有反馈');
+  assert.doesNotMatch(stderr, /## 依赖落后上游/);
 });
 
-test('落后时 main 把正文写进 upstream-issue.md', async () => {
+test('追平时同样出报告，不是静默退出', async () => {
+  const { stdout, res } = await runMain(fixtureRoot('0.3.220'), fakeNet({ sdkVersions: ['0.3.220'] }));
+
+  assert.equal(res.behind, false);
+  assert.match(stdout, /## 依赖已追平上游/, '手动跑一次总该看到结论，"没输出"和"脚本挂了"分不开');
+});
+
+test('main 不在仓库里落任何文件', async () => {
   const rootDir = fixtureRoot();
-  const out = await main({
-    fetchImpl: fakeNet({ sdkVersions: ['0.3.201', '0.3.219', '0.3.220'] }),
-    rootDir,
-    log: () => {},
-  });
+  const before = readdirSync(rootDir);
 
-  assert.equal(out.behind, true);
-  assert.match(out.issue.title, /Agent SDK 落后 2 版/);
-  assert.equal(readFileSync(join(rootDir, 'upstream-issue.md'), 'utf8').trim(), out.issue.body.trim());
+  await runMain(rootDir, fakeNet({ sdkVersions: ['0.3.201', '0.3.220'] }));
+
+  assert.deepEqual(readdirSync(rootDir), before, '报告是拿来看的，不该留中间产物给门禁扫到');
 });

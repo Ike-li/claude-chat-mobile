@@ -75,10 +75,6 @@ reasonix.toml
 # 必须忽略：否则会被 git ls-files --others 扫到，污染 repo-inventory / doc 一致性等按文件清单工作的门禁。
 *.mutate-backup
 
-# scripts/upstream-watch.js 产出的 issue 正文，workflow 拿它当 --body-file 用完即弃。
-# 同上：不忽略会被按文件清单工作的门禁扫到。
-upstream-issue.md
-
 # 菜单栏 app 的编译产物：烘着绝对路径且与 CPU 架构绑定，换机器就不对（npm run app:build 重建）
 desktop/build/
 
