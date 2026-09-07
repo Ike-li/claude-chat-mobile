@@ -863,6 +863,29 @@ test.describe('attachLongPress：长按/右键触发，位移与抬手取消，�
     assert.equal(fired.length, 1);
   });
 
+  // 2026-09-07：桌面右键连按两次，第二次静默无反应。根因是 swallowNextClick 一个标志同时承担
+  // 两件生命周期不同的事——「吞掉长按松手补发的那次 click」（到下一次 click 或 pointerdown 为止）
+  // 与「去重 Android 长按补发的 contextmenu」（本次指针手势内）。右键既不走主键 pointerdown
+  // （button !== 0 提前 return）也不派发 click（派发的是 auxclick），两条清除路都不走，闩永久卡住。
+  // 修法：只有【计时器】那条路置闩——它同时是这两件事唯一正当的触发源，contextmenu 不该置。
+  test('★ 桌面右键连按两次 → 触发两次（此前第二次被 swallowNextClick 永久闩死）', () => {
+    const { el, fired } = mountLongPress();
+    el.fire('pointerdown', { ...DOWN, button: 2 });
+    assert.equal(el.fire('contextmenu').defaultPrevented, true);
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+
+    el.fire('pointerdown', { ...DOWN, button: 2 });
+    assert.equal(el.fire('contextmenu').defaultPrevented, true);
+    assert.deepEqual(fired, ['contextmenu', 'contextmenu'], '右键全程不产生 click，闩没有任何清除时机');
+  });
+
+  test('★ 右键触发后紧随的 click 照常放行（吞 click 只为长按松手，右键不产生 click）', () => {
+    const { el, fired } = mountLongPress();
+    el.fire('contextmenu');
+    assert.equal(fired.length, 1);
+    assert.equal(el.fire('click').defaultPrevented, false, '右键标记之后第一次左键点这一行不该被吃掉');
+  });
+
   test('第二根手指（isPrimary=false）不参与；重复 pointerdown 只保留最后一个计时', () => {
     const { el, timers, fired } = mountLongPress();
     el.fire('pointerdown', { ...DOWN, isPrimary: false });

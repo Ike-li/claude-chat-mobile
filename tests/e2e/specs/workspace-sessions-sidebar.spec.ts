@@ -1134,15 +1134,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
 
     // 标回已读同样当场生效：菜单此前靠 isManualUnread 旁路才能改口，现在 isUnread 一个口就够。
-    // 这一次走触屏长按（本套件的主路径）而非再来一次 contextmenu——long-press.js 的 swallowNextClick
-    // 闩只由 pointerdown 或被吞掉的 click 清除，桌面右键两条都不走，于是【同一行连续右键第二次静默无反应】。
-    // 那是与本用例无关的另一个缺陷（2026-09-07 发现，未修）；P0-11ad 两次之间恰好 dispatch 了 click 才没撞上。
-    await viewingRow.dispatchEvent('pointerdown', { pointerId: 2, button: 0, isPrimary: true, clientX: 120, clientY: 200 });
-    // 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，恒绿
+    // 这里连着第二次 contextmenu 是有意的——它同时是 long-press.js swallowNextClick 闩的集成层见证：
+    // 那个闩此前由 contextmenu 也置起，而右键既不走主键 pointerdown 也不派发 click，两条清除路都不走，
+    // 于是同一行右键第二次起静默无反应（2026-09-07 同批修复；P0-11ad 两次之间恰好夹了个 click 才没撞上）。
+    await viewingRow.dispatchEvent('contextmenu');
+    // 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，这条断言会恒绿
     await expect(modal).toHaveClass(/sheet-open/);
     await expect(page.locator('#confirmOk')).toHaveText('标为已读');
     await page.locator('#confirmOk').click();
-    await viewingRow.dispatchEvent('pointerup', { pointerId: 2, clientX: 120, clientY: 200 });
     await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
 
