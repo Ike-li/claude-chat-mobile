@@ -77,6 +77,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'session:new',
   'session:switch',
   'sync:since',
+  'task:output',
   'task:stop',
   'tool:full',
   'tool:preview',

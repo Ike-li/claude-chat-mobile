@@ -2790,7 +2790,10 @@ io.on('connection', socket => {
             source: 'system',
             taskId: 'bg_task_1',
             status: failedTask ? 'failed' : 'completed',
-            summary: failedTask ? 'mock background task failed' : '后台任务已完成'
+            summary: failedTask ? 'mock background task failed' : '后台任务已完成',
+            // B2：真服务端从 CLI 的 task_notification.output_file 透传此字段；前端据它挂「查看输出」。
+            // mock 只需给一个非空值——路径本身不被前端使用（前端只发 taskId，路径在服务端侧解析）。
+            outputFile: '/tmp/mock-task-output.log'
           }
         });
         await delay(150);
@@ -4076,6 +4079,16 @@ io.on('connection', socket => {
       syncPendingSnapshot = null;
       syncPendingSnapshotInstanceId = null;
     }
+  });
+
+  // B2：后台任务输出（对齐 server task:output）。真服务端只收 taskId、路径从自己记录的 CLI
+  // 上报值取（客户端永远不传路径），mock 同样只按 taskId 分发，不接受任何路径入参。
+  socket.on('task:output', ({ taskId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    if (taskId === 'bg_task_1') {
+      return ack({ ok: true, text: 'MOCK_TASK_OUTPUT_LINE\n=== e2e finished ok ===', truncated: false, size: 42 });
+    }
+    ack({ ok: false, error: '输出不可用（mock 未记录该任务）' });
   });
 
   // 工具全文展开（对齐 server tool:full）：mock 对已知 toolUseId 返回全文

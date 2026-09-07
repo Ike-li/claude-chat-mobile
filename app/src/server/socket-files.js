@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { realpathSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { basename } from 'node:path';
 import { assertSafeRelPath } from '../files/git-workspace.js';
 import { isBareStoredName } from '../files/uploads.js';
@@ -285,6 +285,46 @@ export function registerFileSocketHandlers({
       return ack({ ok: true, text: text.slice(0, MAX_TOOL_FULL_BYTES), truncated: true, totalLength: text.length });
     }
     return ack({ ok: true, text });
+  });
+
+  // B2：读后台任务的输出文件（CLI 的 task_notification.output_file）。
+  //
+  // 【安全模型 — 为什么这里【不】套 attributePath 白名单】
+  // output_file 位于 CLI 自己的临时目录，天然不在工作区白名单内；套 attributePath 会恒拒，
+  // 等于这个功能不存在。改用一条更强的约束替代：**客户端只传 taskId，从不传路径**。
+  // 路径的唯一来源是本会话记录的 CLI 上报值（agent.recordFinishedTask），客户端无法构造、
+  // 无法遍历、无法猜测——这与 tool:preview 传 toolUseId 而非路径是同一个模式，且比白名单更严：
+  // 白名单允许客户端在白名单内任选路径，这里客户端连"选"都做不到。
+  //
+  // 【诚实标注没做什么】没有加 symlink 闸。要让 output_file 指向别处，攻击者必须先能左右
+  // CLI 上报的值——那意味着 CLI 已被攻破，而被攻破的 CLI 本就能直接读任何文件，这道闸拦不住它，
+  // 只会制造"已加固"的错觉。真正有价值的两条防御在下面：非常规文件拒读（/dev/zero 之类会无限读），
+  // 以及只读尾部（日志可能几百 MB，全读会撑爆内存并阻塞事件循环）。
+  const OUTPUT_TAIL_MAX = 64 * 1024; // 只读尾部 64KB：错误与结论总在末尾，够看且不撑爆
+  on(socket, 'task:output', async ({ instanceId, taskId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const agent = routeInstance(instanceId);
+    if (!agent) return ack({ ok: false, error: '实例不存在' });
+    const file = agent.getTaskOutputFile(taskId);
+    if (!file) return ack({ ok: false, error: '输出不可用（任务未完成、CLI 未提供输出文件，或记录已淘汰）' });
+
+    let fd;
+    try {
+      fd = openSync(file, 'r');
+      // fstat 而非 stat：对【已打开的 fd】取属性，杜绝 open 与 stat 之间被换掉的 TOCTOU 窗口
+      const st = fstatSync(fd);
+      if (!st.isFile()) return ack({ ok: false, error: '输出不是常规文件，已拒绝' });
+      const start = Math.max(0, st.size - OUTPUT_TAIL_MAX);
+      const len = st.size - start;
+      if (len <= 0) return ack({ ok: true, text: '', truncated: false, size: st.size });
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, start);
+      return ack({ ok: true, text: buf.toString('utf8'), truncated: start > 0, size: st.size });
+    } catch (error) {
+      return ack({ ok: false, error: `读取失败：${error.message}` });
+    } finally {
+      if (fd !== undefined) { try { closeSync(fd); } catch { /* 关闭失败不影响已读到的内容 */ } }
+    }
   });
 
   on(socket, 'tool:preview', async ({ instanceId, toolUseId } = {}, ack) => {

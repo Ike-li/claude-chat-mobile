@@ -1108,3 +1108,81 @@ test.describe('task_progress.usage → 任务耗时/用量（B3）', () => {
     s.dispose();
   });
 });
+
+// B2（2026-09-07）：完成任务转存 finishedTasks + output_file 记录。
+// E2E 打的是 mock（独立实现、零 import app/src），删掉这里的真实现 E2E 照旧全绿——故必须有本组。
+test.describe('recordFinishedTask — 完成留存与 output_file（B2）', () => {
+  test('完成后转存，且【绝不留在 bgTasks】——否则会话永不 idle', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('f1', 'local_bash', '跑 e2e');
+    assert.equal(s.hasBgTasks(), true);
+
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'f1',
+      status: 'completed', summary: '全部通过', output_file: '/tmp/f1.output',
+      usage: { total_tokens: 2048, duration_ms: 90_000 } });
+
+    // 核心约束：hasBgTasks() 喂 checkIdle 豁免与 isBusy()，留一条已完成的进去就是永久忙碌
+    assert.equal(s.hasBgTasks(), false, '完成任务不得留在活注册表');
+    assert.equal(s.bgTasksList().length, 0);
+
+    const fin = s.finishedTasksList();
+    assert.equal(fin.length, 1);
+    assert.equal(fin[0].taskId, 'f1');
+    assert.equal(fin[0].status, 'completed');
+    assert.equal(fin[0].outputFile, '/tmp/f1.output');
+    assert.equal(fin[0].taskType, 'local_bash', 'taskType 只有活注册表里有，须在删除前取走');
+    assert.equal(fin[0].durationMs, 90_000);
+    assert.equal(fin[0].totalTokens, 2048);
+    s.dispose();
+  });
+
+  test('getTaskOutputFile：只认已记录的 taskId，未知 id 返回 null', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('f2', 'local_bash', 'x');
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'f2', status: 'completed', output_file: '/tmp/f2.output' });
+    assert.equal(s.getTaskOutputFile('f2'), '/tmp/f2.output');
+    assert.equal(s.getTaskOutputFile('ghost'), null, '未记录的 id 不得返回路径');
+    assert.equal(s.getTaskOutputFile(''), null);
+    assert.equal(s.getTaskOutputFile(null), null);
+    s.dispose();
+  });
+
+  test('无 output_file 的完成任务照常留存，但路径为 null（不伪造）', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('f3', 'local_agent', '子代理');
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'f3', status: 'completed', summary: 'ok' });
+    assert.equal(s.finishedTasksList()[0].outputFile, null);
+    assert.equal(s.getTaskOutputFile('f3'), null);
+    s.dispose();
+  });
+
+  test('合成键不记：__notask_* 与 localcmd:* 在 SDK 侧不存在、也不会有 output_file', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'task_notification', task_id: '__notask_local_bash', status: 'completed' });
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'localcmd:abc', status: 'completed' });
+    assert.equal(s.finishedTasksList().length, 0);
+    s.dispose();
+  });
+
+  test('容量上限：超出后淘汰最旧，不随会话长度无限涨', () => {
+    const { s } = makeSession();
+    for (let i = 0; i < 25; i++) {
+      s.map({ type: 'system', subtype: 'task_notification', task_id: `cap${i}`, status: 'completed', output_file: `/tmp/${i}.out` });
+    }
+    const fin = s.finishedTasksList();
+    assert.equal(fin.length, 20, 'FINISHED_TASK_MAX=20');
+    assert.equal(s.getTaskOutputFile('cap0'), null, '最旧的已被淘汰');
+    assert.equal(s.getTaskOutputFile('cap24'), '/tmp/24.out', '最新的还在');
+    s.dispose();
+  });
+
+  test('finished 随 task_progress 快照出 wire（前端据此挂「查看输出」）', () => {
+    const { s, events } = makeSession();
+    s.bgTaskUpsert('f4', 'local_bash', '跑容器');
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'f4', status: 'completed', output_file: '/tmp/f4.output' });
+    const ev = events.filter(e => e.type === 'task_progress').pop();
+    assert.ok(Array.isArray(ev.payload.finished), 'finished 必须随快照发出');
+    assert.equal(ev.payload.finished[0].outputFile, '/tmp/f4.output');
+    s.dispose();
+  });
+});

@@ -303,6 +303,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // B2（2026-09-07）：后台任务完成后从完成条读 CLI 落盘的 stdout。
+  // 入口刻意挂在【消息流的完成条】而非任务面板——面板在没有活任务时整个隐藏，
+  // 而「跑完了回头看输出」恰恰发生在那个时刻。
+  test('P0-17p 后台任务完成条可展开查看 CLI 输出，再点收起', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:taskprogress');
+
+    // 等任务跑完：完成条落进消息流，且带「查看输出」入口（mock 的 task_notification 带 outputFile）
+    const btn = page.locator('[data-testid="bg-task-output"]');
+    await expect(btn).toBeVisible({ timeout: 15_000 });
+    await waitForIdle(page);
+    // 横幅此时已撤下——正是这个入口存在的理由
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    // 点开 → 读到 mock 的输出正文。断言【可见性】而不是 textContent：收起用的是 hidden 类，
+    // 文本仍留在 DOM 里，用 not.toContainText 判收起会恒绿（本仓踩过的坑）。
+    const outBody = page.locator('[data-testid="bg-task-output-body"]');
+    await expect(outBody).toBeHidden();
+    await btn.click();
+    await expect(outBody).toBeVisible({ timeout: 10_000 });
+    await expect(outBody).toContainText('MOCK_TASK_OUTPUT_LINE');
+    await expect(outBody).toContainText('=== e2e finished ok ===');
+
+    // 再点 → 收起（不是一次性展开）
+    await btn.click();
+    await expect(outBody).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-17k 点击任务行展开详情面板显示进度历史，再次点击收起', async ({ page }) => {
     await gotoMock(page);
 

@@ -237,6 +237,9 @@ export function buildAgentQueryOptions(session, env = process.env) {
   };
 }
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
+// B2：已完成后台任务的留存条数。面板只用来「回头看一眼刚跑完的那批」，不是历史归档——
+// 20 条足够覆盖一次会话里的并发批次，且上限恒定、不随会话长度涨。
+const FINISHED_TASK_MAX = 20;
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
 // AskUserQuestion 选项归一：字符串 → {label}；对象保留 description/preview（对齐 CLI 自动 Other 之外的完整呈现）
@@ -475,6 +478,9 @@ export class AgentSession {
     this.totalApiDurationMs = 0;  // += result.duration_api_ms
     this.stderrTail = '';         // CLI stderr 尾部（有界，见 _recordStderr）：resume 失败时唯一的原因来源
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
+    // B2：已完成任务（含 outputFile）。【必须与 bgTasks 分开】——hasBgTasks() 喂 checkIdle 豁免
+    // 与 isBusy()，把已完成的留在 bgTasks 会让会话永不 idle、永远显示忙碌。
+    this.finishedTasks = new Map(); // taskId → { taskType, message, status, summary, outputFile, usage…, finishedAt }
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
     // stream_event（text/thinking delta）与 user（tool_result）都不带。缓存供后二者补标签——否则纯文本子 agent
@@ -1755,6 +1761,41 @@ export class AgentSession {
     this.emitBgTasksSnapshot();
     return true;
   }
+  // B2：完成信号到达时把任务转存进 finishedTasks。必须在 bgTaskDone 之前调用——后者会把条目
+  // 从 bgTasks 删掉，届时 taskType / 累计 usage 这些只有活注册表里才有的字段就取不到了。
+  // 合成键不记：__notask_* 在 SDK 侧不存在、localcmd:* 是我们扫盘造的，两者都不会有 output_file。
+  recordFinishedTask(msg) {
+    const id = msg?.task_id ?? msg?.taskId ?? null;
+    if (typeof id !== 'string' || !id) return false;
+    if (id.startsWith('__notask_') || id.startsWith(LOCAL_CMD_TASK_PREFIX)) return false;
+    const prev = this.bgTasks.get(id);
+    const usage = msg.usage && typeof msg.usage === 'object' ? msg.usage : null;
+    const summary = msg.summary != null ? truncate(stringify(msg.summary), TOOL_SUMMARY_CAP) : '';
+    setCapped(this.finishedTasks, id, {
+      taskId: id,
+      taskType: prev?.taskType ?? null,
+      message: prev?.message || summary || id.slice(0, 12),
+      status: typeof msg.status === 'string' && msg.status ? msg.status : 'completed',
+      summary,
+      // 路径只从 CLI 上报值取，客户端永远不参与构造——这是 task:output 的主防线（见 socket-files.js）
+      outputFile: typeof msg.output_file === 'string' && msg.output_file ? msg.output_file : null,
+      durationMs: Number.isFinite(usage?.duration_ms) ? usage.duration_ms : (prev?.durationMs ?? null),
+      totalTokens: Number.isFinite(usage?.total_tokens) ? usage.total_tokens : (prev?.totalTokens ?? null),
+      finishedAt: Date.now(),
+    }, FINISHED_TASK_MAX);
+    return true;
+  }
+
+  // 供 socket 层取路径：只暴露 taskId → 路径，不在 agent 域内读文件（agent.js 不碰 fs）。
+  getTaskOutputFile(taskId) {
+    const rec = typeof taskId === 'string' && taskId ? this.finishedTasks.get(taskId) : null;
+    return rec?.outputFile || null;
+  }
+
+  finishedTasksList() {
+    return [...this.finishedTasks.values()].sort((a, b) => b.finishedAt - a.finishedAt);
+  }
+
   bgTaskDone(taskId) {
     const had = this.bgTasks.size;
     // 实测：完成信号可靠带 task_id（system task_notification 41/41 + user 注入 <task-id>），且 workflow/agent 的完成 id
@@ -1845,6 +1886,7 @@ export class AgentSession {
       subagentType: latest?.subagentType ?? null,
       truncated: latest?.truncated || false,
       tasks, // 全量明细：前端以它为准 reconcile
+      finished: this.finishedTasksList(), // B2：已完成批次（独立容器，不参与「是否忙」判定）
       ...extra,
     });
   }
@@ -2411,6 +2453,7 @@ export class AgentSession {
             toolUseId: msg.tool_use_id ?? null,
             outputFile: msg.output_file || null
           });
+          this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
           this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
         } else if (msg.subtype === 'task_progress') {
           // 后台任务进行中进度。瞬时广播——emitTransient 不进 buffer、不占 seq；不武装 pendingAutoTurn。

@@ -268,7 +268,13 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        搬家后 browse:read 读不到附件了——那条通道的 scope 是 workDirs，附件根不在其中会 fail-closed。
   //        与其把附件根塞进通用文件通道的 scope，不如开这条专用的：入参只有裸文件名，目录由服务端算，
   //        客户端无从表达任意路径，比原先复用 browse:read 更窄。入向总数 44→45）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 45);
+  //      + task:output（2026-09-07，后台任务完成后读 CLI 落盘的 stdout：路径由 task_notification
+  //        的 output_file 给出，位于 CLI 自己的临时目录。理由同 attachment:read——不能复用
+  //        browse:read，那条通道的 scope 是 workDirs，CLI 临时目录不在其中会 fail-closed；而把
+  //        临时目录塞进通用文件通道的 scope 等于开一个更宽的洞。这条专用通道的入参只有 taskId，
+  //        路径由服务端从自己记录的 CLI 上报值取，客户端连"选路径"都做不到。入向总数 45→46）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 46);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('task:output'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('attachment:read'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:sync'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:mark'));

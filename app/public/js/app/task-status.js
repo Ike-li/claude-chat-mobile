@@ -142,6 +142,39 @@ export function createTaskStatusController(context, {
     setTimeout(() => done(true), 1500);
   }
 
+  // B2：完成条上挂「查看输出」。CLI 把后台任务的 stdout 落在一个文件里，路径由
+  // task_notification.output_file 给出——后端一直在透传，前端此前一次都没读过。
+  //
+  // 【为什么入口在完成条、不在任务面板】面板在没有活任务时整个隐藏（renderTaskList 的
+  // tasks.size===0 分支），而「跑完了回头看输出」恰恰发生在没有活任务的时刻。消息流里的
+  // 完成条则永久留存、可回滚，也更贴近 CLI 把结果打进流里的形态。
+  //
+  // 【安全】只发 taskId，路径由服务端从自己记录的 CLI 上报值取（见 socket-files.js 的 task:output）。
+  function attachTaskOutputButton(bar, payload) {
+    if (!bar || !createElement) return;
+    const taskId = payload?.taskId;
+    if (!payload?.outputFile || typeof taskId !== 'string' || !taskId) return;
+    // instanceId 在【挂载时】定住：切视图后这条 bar 仍留在 DOM，点击时才读会把 A 的 taskId 发到 B
+    const inst = context.state.viewingInstanceId;
+    const wrap = createElement('<div class="mt-1"></div>');
+    const btn = createElement('<button type="button" class="text-info underline" data-testid="bg-task-output"></button>');
+    const body = createElement('<pre class="hidden mt-1 text-left overflow-x-auto whitespace-pre-wrap break-words text-ink-faint" data-testid="bg-task-output-body"></pre>');
+    btn.textContent = t('查看输出');
+    let loaded = false;
+    btn.onclick = () => {
+      body.classList.toggle('hidden');
+      if (loaded) return;
+      loaded = true;
+      context.socket?.emit('task:output', { instanceId: inst, taskId }, res => {
+        if (!res?.ok) { body.textContent = res?.error || t('输出不可用'); return; }
+        const head = res.truncated ? t('…（仅显示末尾）') + '\n' : '';
+        body.textContent = head + (res.text || t('（空输出）'));
+      });
+    };
+    wrap.append(btn, body);
+    bar.appendChild(wrap);
+  }
+
   function renderTaskList() {
     const list = taskList();
     if (!list) return;
@@ -404,7 +437,8 @@ export function createTaskStatusController(context, {
       addBar(t('🔔 后台任务完成，Claude 正在汇报结果…'), 'text-info');
     } else {
       const tail = payload.summary ? `：${payload.summary}` : '';
-      addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
+      const bar = addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
+      attachTaskOutputButton(bar, payload); // B2：有 output_file 才挂，无则静默略过
     }
     return true;
   }
