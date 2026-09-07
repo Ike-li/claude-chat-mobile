@@ -177,6 +177,7 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
     const copy = { ...session };
     delete copy.terminal;
     delete copy.terminalSource;
+    delete copy.bgLocked;
     if (copy.id) {
       const info = stateMap.get(terminalStateKey(cwd, copy.id));
       if (info && TERMINAL_ROW_STATES.has(info.state)) {
@@ -184,6 +185,10 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
         // 来源缺失/未登记时只留状态：前端回落"终端"文案（与本改动之前完全同形），不塌成无状态。
         if (TERMINAL_ROW_SOURCES.has(info.source)) copy.terminalSource = info.source;
       }
+      // bgLocked 与 terminal 是两条独立的轴，故【不】写在上面那个 if 里：占用者可能是个
+      // 连 state 都没有的条目（非 TERMINAL_ENTRYPOINTS 的 sdk 系 bg agent），那种条目在
+      // stateMap 里 state 为 null，套进状态白名单就会被整条丢掉，而它恰恰是最该预警的一类。
+      if (info?.blocked) copy.bgLocked = true;
     }
     return copy;
   });
@@ -249,9 +254,19 @@ export async function listTerminalSessionStates({
     }
   };
   const pendingTail = [];
+  // 「点了也打不开」的会话集合。判据逐条抄 findBlockingLiveAgent（kind 存在 && kind !== 'interactive'
+  // && pid 活），因为它就是 session:switch 真正的拒绝判据——列表预警若用另一套判据，两处必然漂移，
+  // 预警要么虚报（标了却能开）要么漏报（没标却开不了），后者正是本改动要消灭的那次困惑。
+  // 【刻意不看 entrypoint】：占用者可能是 sdk 系条目，而 TERMINAL_ENTRYPOINTS 只收 cli/claude-desktop。
+  // 【仍按 cwd 归键】：与 findBlockingLiveAgent 的唯一差异。同一会话的进程 cwd 天然等于会话 cwd，
+  // 理论上的跨 cwd 占用只会漏标（fail-open 到"不预警"，点开后仍有拒绝兜底），绝不会虚报。
+  const blockedKeys = new Set();
   for (const entry of await readAllEntries(dir)) {
-    if (!TERMINAL_ENTRYPOINTS.has(entry.entrypoint)) continue;
+    // isAlive 提到 entrypoint 过滤之前：blocked 判定要看全部条目，不能只在白名单里验活。
     if (!isAlive(entry.pid)) continue;
+    const kind = nonEmptyString(entry.kind);
+    if (kind && kind !== 'interactive') blockedKeys.add(terminalStateKey(entry.cwd, entry.sessionId));
+    if (!TERMINAL_ENTRYPOINTS.has(entry.entrypoint)) continue;
     const key = terminalStateKey(entry.cwd, entry.sessionId);
     const opts = { entrypoints: TERMINAL_ENTRYPOINTS };
     const state = registryIndicatesTerminalBusy(entry, opts) ? 'busy'
@@ -276,6 +291,14 @@ export async function listTerminalSessionStates({
     } catch { /* fail-open */ }
     merge(key, pending ? 'busy' : 'alive', entry.entrypoint);
   }));
+  // blocked 必须在所有 merge 之后合入：merge 整体替换 value，先写的 blocked 会被它悄悄抹掉。
+  // 反过来也不能让 blocked 影响状态轴——state 留 null 而不是编一个 'blocked' 档，是因为
+  // hasBusyTerminalSessionForCwd / hasWaitingTerminalSessionForCwd 拿这张表喂镜像锁与单驾驶员
+  // 判定（SESSION-01 的输入面）。往状态轴里塞新取值 = 悄悄改那条红线的判据面。
+  for (const key of blockedKeys) {
+    const prev = map.get(key);
+    map.set(key, prev ? { ...prev, blocked: true } : { state: null, source: null, blocked: true });
+  }
   return map;
 }
 

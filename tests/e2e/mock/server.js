@@ -99,6 +99,9 @@ let terminalWaitingArmed = false;
 // 2026-09-06：桌面端 Code 模式（entrypoint=claude-desktop）驾驶的会话。与 terminalBadgeArmed 的
 // 区别只在 terminalSource——状态轴相同，验的是渲染层是否按来源换措辞。
 let desktopBadgeArmed = false;
+// 2026-09-07：会话被 `claude agents` 的后台 job 独占。与上面几个 terminal 开关分开，因为它验的是
+// 另一条轴——不是「谁在驾驶」，是「点了打不开」：session:list 行带 bgLocked，session:switch 直接拒。
+let bgLockedArmed = false;
 // P0-11z：抽屉保持打开时，第二次 session:list 才出现 terminal=busy；期间不发 instances，
 // 验证前端低频 revalidate 能独立刷新 CLI 状态。
 let terminalRefreshArmed = false;
@@ -279,6 +282,7 @@ function resetMockState() {
   terminalBadgeArmed = false;
   terminalWaitingArmed = false;
   desktopBadgeArmed = false;
+  bgLockedArmed = false;
   terminalRefreshArmed = false;
   terminalRefreshListCount = 0;
   terminalSummaryOtherArmed = false;
@@ -557,8 +561,9 @@ function mainCwdSessions() {
       title: 'Archived Gap Session',
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 750000,
-      ...(desktopBadgeArmed ? { terminal: 'alive', terminalSource: 'claude-desktop' }
-        : terminalBadgeArmed || terminalWaitingArmed ? { terminal: 'alive', terminalSource: 'cli' } : {}),
+      ...(bgLockedArmed ? { terminal: 'alive', terminalSource: 'cli', bgLocked: true }
+        : desktopBadgeArmed ? { terminal: 'alive', terminalSource: 'claude-desktop' }
+          : terminalBadgeArmed || terminalWaitingArmed ? { terminal: 'alive', terminalSource: 'cli' } : {}),
       entrypoint: 'sdk-ts'
     },
     {
@@ -1128,6 +1133,16 @@ io.on('connection', socket => {
         title: 'Long History Session'
       }
     };
+    if (bgLockedArmed && sessionId === 'mock-session-gap') {
+      // 逐字对齐 app/src/ops/cli-bg-session-lock.js 的 kind='bg' 分支：落地页显示的就是这句，
+      // 措辞漂了用例照样绿，但用户读到的会是另一句话。
+      if (typeof callback === 'function') callback({
+        ok: false,
+        error: '会话正被 CLI 后台任务「ECS 部署审查」占用（pid 11557）。从 web 打开会中断它，'
+          + '所以没有打开——请在本机 `claude agents` 接管，或等它跑完再开',
+      });
+      return;
+    }
     const meta = knownArchived[sessionId];
     if (!meta || cwd !== '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
@@ -2315,6 +2330,13 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');
         terminalBadgeArmed = true;
+      },
+    },
+    {
+      command: 'test:bg-locked',
+      run: async () => {
+        console.log('[mock] test:bg-locked — gap 会话被后台 agent 独占：列表带 bgLocked，switch 一律拒');
+        bgLockedArmed = true;
       },
     },
     {

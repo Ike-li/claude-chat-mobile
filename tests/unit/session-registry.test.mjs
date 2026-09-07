@@ -506,3 +506,73 @@ test('findBlockingLiveAgent：无 kind 字段的条目不背书（对齐 _Pe 的
     assert.equal(await findBlockingLiveAgent('', { dir, isAlive: () => true }), null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── 列表侧的「点了也打不开」预警（2026-09-06）─────────────────────────────────
+// 起因：web 上点一个被 CLI bg agent 占用的会话，session:switch 被拒，而列表行在点之前
+// 没有任何迹象。判据必须与 findBlockingLiveAgent 逐条同源——它才是真正的拒绝判据，
+// 列表另立一套必然漂移成「标了却能开」或「没标却开不了」。
+// blocked 只准影响自己那条轴：state 留 null 而不是新增一档，因为 hasBusy/hasWaiting 拿
+// 同一张表喂镜像锁与单驾驶员判定（SESSION-01 的输入面），往状态轴塞取值＝悄悄改那条红线。
+
+test('listTerminalSessionStates：bg 条目标 blocked，三个否定档（无 kind / interactive / 陈尸）一个都不标', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 1, { sessionId: 'sid-bg', kind: 'bg', status: 'idle' });
+    writeEntry(dir, 2, { sessionId: 'sid-interactive', kind: 'interactive', status: 'idle' });
+    writeEntry(dir, 3, { sessionId: 'sid-nokind', kind: undefined, status: 'idle' });
+    writeEntry(dir, 4, { sessionId: 'sid-bg-dead', kind: 'bg', status: 'idle' });
+    const map = await listTerminalSessionStates({ dir, isAlive: pid => pid !== 4 });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-bg')), { state: 'alive', source: 'cli', blocked: true },
+      'bg 占用者：状态轴照旧 alive（它自报 idle），另加 blocked');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-interactive')), { state: 'alive', source: 'cli' },
+      'interactive 是 CLI 放行的一档，不得标 blocked（标了就是虚报「打不开」）');
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-nokind')), { state: 'alive', source: 'cli' },
+      '无 kind 不背书，对齐 findBlockingLiveAgent 的 kind 存在性判据');
+    assert.equal(map.has(terminalStateKey(CWD, 'sid-bg-dead')), false, '陈尸 pid 不进结果，更不该预警');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('listTerminalSessionStates：sdk 系 bg 占用者也要预警，且不得混进 busy/waiting 汇总', async () => {
+  const dir = tempDir();
+  try {
+    // entrypoint=sdk-ts 不在 TERMINAL_ENTRYPOINTS 里（列表不给它画运行徽标），但 CLI 的 resume
+    // 前置检查不看 entrypoint——它照样会让 --resume 失败，所以照样要预警。
+    writeEntry(dir, 1, { sessionId: 'sid-sdk-bg', kind: 'bg', entrypoint: 'sdk-ts' });
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-sdk-bg')), { state: null, source: null, blocked: true },
+      '没有状态可报就留 null，不得编一个状态值出来');
+    assert.equal(hasBusyTerminalSessionForCwd(CWD, map), false, 'blocked 不是 busy：喂给镜像锁的那条轴必须原样');
+    assert.equal(hasWaitingTerminalSessionForCwd(CWD, map), false, 'blocked 更不是 waiting');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('listTerminalSessionStates：占用者同时在跑时 busy 与 blocked 并存，互不吞掉', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 1, { sessionId: 'sid-bg-busy', kind: 'bg', status: 'busy' });
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-bg-busy')), { state: 'busy', source: 'cli', blocked: true });
+    assert.equal(hasBusyTerminalSessionForCwd(CWD, map), true, 'blocked 合入不得把已有的 busy 抹掉');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('applyTerminalStatesToSessions：bgLocked 注入到行上，且不随缓存对象残留', async () => {
+  const states = new Map([
+    [terminalStateKey(CWD, 'sid-bg'), { state: 'alive', source: 'cli', blocked: true }],
+    [terminalStateKey(CWD, 'sid-sdk-bg'), { state: null, source: null, blocked: true }],
+    [terminalStateKey(CWD, 'sid-plain'), { state: 'alive', source: 'cli' }],
+  ]);
+  const rows = applyTerminalStatesToSessions(CWD, [
+    { id: 'sid-bg', title: 'A' },
+    { id: 'sid-sdk-bg', title: 'B' },
+    { id: 'sid-plain', title: 'C' },
+  ], states);
+  assert.equal(rows[0].bgLocked, true);
+  assert.equal(rows[1].bgLocked, true, '连状态都没有的占用者也要标——它是最容易漏的一类');
+  assert.equal(rows[1].terminal, undefined, 'state 为 null 时不得注入 terminal（状态白名单仍然管用）');
+  assert.equal(rows[2].bgLocked, undefined, '没被占用的行不得带这个字段');
+  // listSessionsPage 可能返回缓存对象：占用者退出后再拉一次，标记必须消失
+  const after = applyTerminalStatesToSessions(CWD, rows, new Map());
+  assert.equal(after[0].bgLocked, undefined, '占用者已退出，预警必须跟着消失（残留＝永远打不开的假象）');
+  assert.equal(rows[0].bgLocked, true, '禁止原地写入调用方传进来的行对象');
+});

@@ -118,17 +118,25 @@ export function resolvePanelState({ mirrorReadonly = false, observedCli, web } =
 // terminal_waiting（2026-09-04）：CLI 卡在对话框上等人按键（含权限审批框，registry status:"waiting"）。
 // 排在 busy 之前——「在跑」不需要人动手，「等人」需要。排在 Web 侧 permission/error 之后——那两个
 // 在手机上点一下就能处理，终端那个只能走到电脑前按，优先级理应更低。
-export function resolveDrawerStatus({ liveState, terminalState } = {}) {
+// bgLocked（2026-09-06）：这个会话被 CLI 后台 agent 独占，web 点了会被 session:switch 拒。
+// 排在最低档是刻意的——它是「此路不通」的说明，不是待办，更不该压过「需要你」这种点一下就能处理的。
+// 目录角标/顶部点不传这个参数（drawerStateForDir 只喂 liveState+terminalState），会话级的
+// 「打不开」不该抬到工作区层：整个工作区并没有出事，只是其中一个会话被占着。
+export function resolveDrawerStatus({ liveState, terminalState, bgLocked = false } = {}) {
   if (liveState === 'permission') return 'permission';
   if (liveState === 'error') return 'error';
   if (terminalState === 'waiting') return 'terminal_waiting';
   if (liveState === 'busy' || terminalState === 'busy') return 'busy';
+  if (bgLocked) return 'bg_locked';
   return null;
 }
 
 const DRAWER_STATUS_LABELS = {
   permission: '需要你',
   error: '出错',
+  // 「占用」不说成「运行中」：被占的会话可能自报 idle（后台 agent 挂着一个长跑 Bash 就是这形态），
+  // 说它在运行是编造状态。这条 chip 唯一要传达的是「点了打不开」。
+  bg_locked: '后台占用',
   // 措辞刻意与 Web 侧「需要你」区分：那个点开就能批，这个批不了——审批 prompt 活在 CLI 进程的
   // TUI 里，不经过 web 后端的 canUseTool，web 端替不了你按键。说成「需要你」会给出错误的操作预期。
   terminal_waiting: '终端需要你',
@@ -147,12 +155,16 @@ const DRAWER_STATUS_LABELS = {
 // 标签，entrypoint=claude-desktop）驾驶时说"终端运行中"是在说错话——用户会去翻终端标签页，
 // 而那个回合其实跑在桌面 app 的窗口里。状态轴不变（都是 busy），只换措辞。
 // 未知/缺失 source 回落"终端"：与本字段引入之前完全同形，老服务端的行不会塌成无 chip。
-export function resolveDrawerStatusChip({ liveState, terminalState, terminalSource = null } = {}) {
-  const status = resolveDrawerStatus({ liveState, terminalState });
+export function resolveDrawerStatusChip({ liveState, terminalState, terminalSource = null, bgLocked = false } = {}) {
+  const status = resolveDrawerStatus({ liveState, terminalState, bgLocked });
   if (!status) return null;
-  const label = (status === 'busy' && terminalState === 'busy')
-    ? (terminalSource === 'claude-desktop' ? '桌面端运行中' : '终端运行中')
-    : (DRAWER_STATUS_LABELS[status] || '运行中');
+  // busy × bgLocked 不是二选一：占用者自己在跑时两件事都真，措辞要同时带上。说成「终端运行中」
+  // 会把人指向错误的接管路径——那不是一个终端窗口，是 `claude agents` 里的后台 job，走到电脑前
+  // 打开终端也看不到它。
+  const label = (status === 'busy' && bgLocked) ? '后台任务运行中'
+    : (status === 'busy' && terminalState === 'busy')
+      ? (terminalSource === 'claude-desktop' ? '桌面端运行中' : '终端运行中')
+      : (DRAWER_STATUS_LABELS[status] || '运行中');
   return { status, label };
 }
 

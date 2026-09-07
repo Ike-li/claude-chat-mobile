@@ -202,6 +202,34 @@
     <span id="unreadPillCount">0</span> 条未读 ↑
   </button>
 
+  <!-- 会话打不开时的落地页（2026-09-07）。**不是弹窗，是一张属于目标会话的页面**：
+       此前 session:switch 被拒时只在【当前正看着的那个会话】的消息流里插一条红字，而视图根本没动过，
+       于是「blog_static 的会话打不开」这句话出现在 third-party 的工具卡中间，读起来像是当前会话出了事。
+       盖满视口（z-20 压住 header 与 composer，仍在侧栏/审批弹窗之下——从这里要能直接翻会话列表），
+       自带标题行声明身份，关掉即回到原会话。
+       **刻意不清空 #messages**：与 instance-destroyed 那张空表面的区别就在这里——那时实例已经没了，
+       而这里当前会话很可能正在跑，清掉它的 DOM 会让后续流式事件追加到一片废墟上。 -->
+  <div id="sessionBlockedSurface" class="hidden fixed inset-0 z-20 bg-canvas flex flex-col" role="dialog" aria-modal="true" aria-label="会话打不开" data-testid="session-blocked-surface">
+    <!-- 标题栏刻意用 div 而不是 <header>：页面已有一个顶栏 <header>，再来一个会让 `locator('header')`
+         / `querySelector('header')` 变成歧义选择器（P0-02i 当场撞红）。它在 dialog 内部，语义靠
+         aria-label 表达即可。 -->
+    <div class="flex items-center gap-2 px-3 py-2.5 bg-surface border-b border-line shrink-0">
+      <button id="sessionBlockedBack" type="button" class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft active:bg-sunk" aria-label="返回" data-testid="session-blocked-back">←</button>
+      <div class="min-w-0 flex-1">
+        <div id="sessionBlockedTitle" class="truncate font-medium text-ink text-sm" data-testid="session-blocked-title"></div>
+        <div id="sessionBlockedProject" class="truncate text-[11px] text-ink-faint" data-testid="session-blocked-project"></div>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto flex flex-col items-center px-3 py-8">
+      <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">⛔ 这个会话现在打不开</div>
+      <p id="sessionBlockedReason" class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2" data-testid="session-blocked-reason"></p>
+      <div class="flex flex-col gap-2 w-full max-w-xs">
+        <button id="sessionBlockedRetry" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-retry">重试打开</button>
+        <button id="sessionBlockedSessions" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 权限审批弹窗（底部 sheet） -->
   <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">

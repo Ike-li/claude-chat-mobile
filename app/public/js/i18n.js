@@ -502,6 +502,11 @@ export const EN_DICT = Object.freeze({
   // 「终端需要你」刻意不译成 "Needs you"（那是 Web 侧 permission 的词）：这条得走到电脑前按，
   // 措辞要能读出"在哪儿处理"。对齐 CLI 自己 fleet 视图里的 "Needs input"。
   '终端需要你': 'Terminal needs input',
+  // 被 `claude agents` 的后台 job 独占的会话。译文用 "background agent" 而非 "background task"：
+  // 前者是 CLI 自己报错时用的词（"is currently running as a background agent"），用户拿这句话
+  // 去搜或去问 CLI 都对得上。
+  '后台占用': 'Held by agent',
+  '后台任务运行中': 'Background agent running',
   '已打开': 'open',
   '终端已打开': 'Terminal open',
   '桌面端已打开': 'Desktop app open',
@@ -652,6 +657,13 @@ export const EN_DICT = Object.freeze({
   '显示全部会话…': 'Show all sessions…',
   '在此工作区新建会话': 'New session in this workspace',
   '深链目标会话已不可用': 'The linked session is no longer available',
+  // —— 会话打不开的落地页（session:switch 被拒时的四合一落地） ——
+  '会话打不开': "Can't open session",
+  '⛔ 这个会话现在打不开': "⛔ This session can't be opened right now",
+  '重试打开': 'Try again',
+  '选择其他会话': 'Pick another session',
+  '返回': 'Back',
+  '会话': 'Session',
   '这是最早一条消息，前面没有可分叉的起点': 'This is the earliest message — there\'s nothing before it to fork from',
   '从这里分叉新会话？': 'Fork a new session from here?',
   '会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。': 'Copies the conversation up to this message into a separate new session; the original is untouched.',

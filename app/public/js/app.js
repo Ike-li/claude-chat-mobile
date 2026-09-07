@@ -3996,7 +3996,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     } else if (r.action === 'switch') {
       closeLeftSidebar();
       socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        if (!res?.ok) addBar(res?.error || t('深链目标会话已不可用'), 'text-warning');
+        // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
+        // 会被读成"我点开的这个会话出错了"。
+        if (!res?.ok) showSessionBlockedSurface({
+          sessionId: r.sessionId, cwd: r.cwd,
+          // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
+          title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
+          message: res?.error || t('深链目标会话已不可用'),
+        });
       });
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
@@ -4621,6 +4628,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 与 Web 侧 permission 同色（都是"要人动手"），文案区分谁能处理它
     terminal_waiting: { icon: 'warn', tone: 'text-warning', label: '终端需要你' },
     error: { icon: 'error', tone: 'text-danger', label: '出错' },
+    // 中性色不是随手选的：warning 这一档在本产品里专指「点一下就能处理」的待办（宪法里
+    // 「需要你(N)」那条轴），而被后台 agent 占用恰恰是【处理不了】——手机上点它只会被拒。
+    // 用 warning 会让它去抢待办的注意力预算，最后是真正要人批的审批被淹掉。
+    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: '后台占用' },
   };
   function drawerStatusMeta(state) {
     const meta = DRAWER_STATUS_META[state];
@@ -4647,9 +4658,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       badge.removeAttribute('aria-label');
     }
   }
-  function appendSessionStatusChip(head, liveState, terminalState, terminalSource = null) {
+  function appendSessionStatusChip(head, liveState, terminalState, terminalSource = null, bgLocked = false) {
     head.querySelector('[data-session-status]')?.remove();
-    const spec = resolveDrawerStatusChip({ liveState, terminalState, terminalSource });
+    const spec = resolveDrawerStatusChip({ liveState, terminalState, terminalSource, bgLocked });
     const meta = spec ? DRAWER_STATUS_META[spec.status] : null;
     if (!spec || !meta) return;
     const label = t(spec.label);
@@ -4789,7 +4800,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
       const head = row.querySelector('[data-session-head]');
       if (!head) return;
-      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null);
+      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null,
+        row.dataset.bgLocked === '1');
     });
   }
   // 顶部点位空间极小，继续用 SVG；但只汇总需要你/出错/运行中，正常完成和中止不再持续点亮。
@@ -5335,6 +5347,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
       rowContent.dataset.terminalState = s.terminal || '';
       rowContent.dataset.terminalSource = s.terminalSource || '';
+      rowContent.dataset.bgLocked = s.bgLocked ? '1' : '';
       const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
       btn.title = s.title || t('新会话');
       const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
@@ -5362,7 +5375,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         titleSpan.after(mark);
       };
       applyUnreadMark();
-      appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource);
+      appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource, Boolean(s.bgLocked));
       btn.appendChild(head);
       const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
       const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('新会话（未保存）');
@@ -5396,8 +5409,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
           closeLeftSidebar();
           let acked = false;
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || t('切换失败'), 'text-danger'); });
-          setTimeout(() => { if (!acked) addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); }, 4000);
+          const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) blocked(res?.error || t('切换失败')); });
+          setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
         }
       };
       rowContent.appendChild(btn);
@@ -6169,6 +6183,64 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     queueMicrotask(() => refreshComposeDefaultsSummary());
   }
 
+  // 会话打不开时的落地页（2026-09-07）。**四个 session:switch 入口共用的失败路径**：侧栏会话行 /
+  // 首页最近列表 / 通知深链落地 / 重启后「继续此会话」。此前它们各自 addBar，而 addBar 落在
+  // #messages —— 也就是【当时正看着的那个会话】的消息流里。视图从头到尾没动过，于是「blog_static 的
+  // 会话被后台任务占用」这句话出现在 third-party 会话的工具卡中间，读起来像是当前会话出了事；点击时
+  // 又已经先 closeLeftSidebar()，连"我刚点了别的会话"这个上下文都没了（2026-09-06 用户实撞）。
+  //
+  // 与 showInstanceDestroyedSurface 的关键区别：那张空表面直接 messagesEl.innerHTML = ''，因为那时
+  // 实例真的没了；这里当前会话很可能【正在跑】，清空会让后续流式事件追加到一片废墟上。所以这里是
+  // 覆盖层，不碰 #messages，关掉即回到原会话。
+  let blockedSurfaceTarget = null;
+  let blockedSurfaceWired = false;
+  function setBlockedReason(text) {
+    const reasonEl = $('sessionBlockedReason');
+    if (reasonEl) reasonEl.textContent = text;
+  }
+  function hideSessionBlockedSurface() {
+    blockedSurfaceTarget = null;
+    $('sessionBlockedSurface')?.classList.add('hidden');
+  }
+  function retryBlockedSession() {
+    const target = blockedSurfaceTarget;
+    if (!target?.sessionId) return;
+    const btn = $('sessionBlockedRetry');
+    // 乐观禁用 + 4s 兜底恢复：与四个入口原本各自的 ack/超时约定同形，不新造一套。
+    if (btn) btn.disabled = true;
+    let acked = false;
+    socket.emit('session:switch', { sessionId: target.sessionId, cwd: target.cwd }, res => {
+      acked = true;
+      if (btn) btn.disabled = false;
+      // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
+      if (res?.ok) hideSessionBlockedSurface();
+      else setBlockedReason(res?.error || t('切换失败'));
+    });
+    setTimeout(() => {
+      if (acked) return;
+      if (btn) btn.disabled = false;
+      setBlockedReason(t('切换无响应，请刷新页面后重试'));
+    }, 4000);
+  }
+  function showSessionBlockedSurface({ sessionId = null, cwd = null, title = '', message = '' } = {}) {
+    const surface = $('sessionBlockedSurface');
+    if (!surface) return;
+    blockedSurfaceTarget = { sessionId, cwd };
+    const titleEl = $('sessionBlockedTitle'), projectEl = $('sessionBlockedProject');
+    // 标题回落短 id：深链与「继续此会话」两条路只有 {sessionId, cwd}，拿不到标题。宁可显示
+    // 8 位 id 也不写"会话"——用户要靠这行确认自己点的是不是那一个。
+    if (titleEl) titleEl.textContent = title || (sessionId ? sessionId.slice(0, 8) : t('会话'));
+    if (projectEl) projectEl.textContent = cwd ? baseName(cwd) : '';
+    setBlockedReason(message || t('切换失败'));
+    if (!blockedSurfaceWired) {
+      blockedSurfaceWired = true;
+      $('sessionBlockedBack').onclick = () => { haptic('tap'); hideSessionBlockedSurface(); };
+      $('sessionBlockedRetry').onclick = () => { haptic('tap'); retryBlockedSession(); };
+      $('sessionBlockedSessions').onclick = () => { haptic('tap'); hideSessionBlockedSurface(); openLeftSidebar(); };
+    }
+    surface.classList.remove('hidden');
+  }
+
   // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→
   // 无同 cwd 存活实例可回退，见 wasViewingInstanceDestroyed）时的专属提示态——不静默 showDashboard()，
   // 让用户先看到"发生了什么"，自己决定下一步（回首页 / 新建会话）。不做自动导航（维护者已否决"自动
@@ -6214,11 +6286,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 成功路径不必手动导航——服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
         resumeBtn.disabled = true;
         let acked = false;
+        const blocked = message => {
+          resumeBtn.disabled = false;
+          showSessionBlockedSurface({ sessionId: resume.sessionId, cwd: resume.cwd, message });
+        };
         socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
           acked = true;
-          if (!res?.ok) { resumeBtn.disabled = false; addBar(res?.error || t('切换失败'), 'text-danger'); }
+          if (!res?.ok) blocked(res?.error || t('切换失败'));
         });
-        setTimeout(() => { if (!acked) { resumeBtn.disabled = false; addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); } }, 4000);
+        setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       };
     }
     container.querySelector('.instance-destroyed-home').onclick = (e) => {
@@ -6309,11 +6385,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     const switchToSession = (s) => {
       let acked = false;
+      const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: s.cwd, title: s.title, message });
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
-        if (!res?.ok) addBar(res?.error || t('切换失败'), 'text-danger');
+        if (!res?.ok) blocked(res?.error || t('切换失败'));
       });
-      setTimeout(() => { if (!acked) addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); }, 4000);
+      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
 
     const renderDashRecents = (recent) => {

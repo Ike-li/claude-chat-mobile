@@ -409,10 +409,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Deleted Remote Session');
 
     await expectSidebarClosed(page);
+    // 「不切走」的原意保持不变：viewing 实例没换，当前会话的历史也没被清掉
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
-    await expect(page.locator('#messages')).toContainText('mock session not found');
     await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+    // 2026-09-07 起失败原因落在【目标会话自己的】落地页上。此前它走 addBar 插进 #messages，
+    // 也就是当前会话的消息流——「不切走」做到了，但那句话读起来像是当前会话出的事。
+    await expect(page.locator('[data-testid="session-blocked-title"]')).toHaveText('Deleted Remote Session');
+    await expect(page.locator('[data-testid="session-blocked-reason"]')).toContainText('mock session not found');
+    await expect(page.locator('#messages')).not.toContainText('mock session not found');
 
     await expectNoBrowserErrors(page);
   });
@@ -1095,6 +1100,56 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(rowAfter.locator('[data-testid="unread-mark"]')).toHaveCount(0);
     await expect(rowAfter.locator('[data-session-head] > span').first()).not.toHaveClass(/font-semibold/);
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+  // P0-11aj（2026-09-07 真机撞出）：会话被 `claude agents` 的后台 job 独占时，web 打不开它。
+  // 修之前的形态：session:switch 被拒 → addBar 落进 #messages，而 #messages 是【当时正看着的
+  // 那个会话】的消息流，视图从头到尾没动过；点击时又已经先关了侧栏。于是「blog_static 的会话被
+  // 占用」这句话出现在另一个工作区会话的工具卡中间，读起来像是当前会话出了事。
+  // 三条断言各自独立会红：①行上的预警 ②落地页自报的是目标会话 ③当前会话流一个字都没多。
+  test('P0-11aj: 被后台 agent 独占的会话——行上先预警，点开落到目标会话自己的页面', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:bg-locked');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+
+    const gapRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
+    // ① 点之前就看得出来。占用者自报 idle（terminal='alive'），所以这一行在修之前【完全没有 chip】
+    const chip = gapRow.locator('[data-session-status]');
+    await expect(chip).toHaveText('后台占用');
+    await expect(chip).toHaveAttribute('aria-label', '后台占用');
+
+    // 当前会话流的红字条数——这是本次回归真正要钉住的量
+    const dangerBars = page.locator('#messages .text-danger');
+    const dangerBefore = await dangerBars.count();
+
+    await openSessionByTitle(page, 'Archived Gap Session');
+
+    // ② 落地页出现，并且自报的身份是【目标】会话，不是当前会话
+    const surface = page.locator('[data-testid="session-blocked-surface"]');
+    await expect(surface).toBeVisible();
+    await expect(page.locator('[data-testid="session-blocked-title"]')).toHaveText('Archived Gap Session');
+    await expect(page.locator('[data-testid="session-blocked-project"]')).toHaveText('claude-chat-mobile');
+    await expect(page.locator('[data-testid="session-blocked-reason"]')).toContainText('后台任务');
+    await expect(page.locator('[data-testid="session-blocked-reason"]')).toContainText('claude agents');
+
+    // ③ 当前会话的消息流一个字都没多
+    await expect(page.locator('#messages')).not.toContainText('后台任务');
+    expect(await dangerBars.count()).toBe(dangerBefore);
+
+    // ④ 重试仍被拒：留在原地刷新原因，不跳走也不叠加第二份
+    await page.locator('[data-testid="session-blocked-retry"]').click();
+    await expect(surface).toBeVisible();
+    await expect(page.locator('[data-testid="session-blocked-reason"]')).toContainText('后台任务');
+    await expect(page.locator('[data-testid="session-blocked-retry"]')).toBeEnabled();
+    expect(await dangerBars.count()).toBe(dangerBefore);
+
+    // ⑤ 返回 → 落地页收起，原会话原样还在（没被清空过）
+    await page.locator('[data-testid="session-blocked-back"]').click();
+    await expect(surface).toBeHidden();
+    await expect(page.locator('#messages')).toContainText('test:bg-locked');
 
     await expectNoBrowserErrors(page);
   });

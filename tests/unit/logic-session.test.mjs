@@ -782,3 +782,34 @@ test.describe('applyGatewaySuffix：候选内的 wire 不得被二次贴后缀',
     assert.equal(applyGatewaySuffix(undefined, '[1m]', list), undefined);
   });
 });
+
+// ── 2026-09-07：bgLocked（会话被 `claude agents` 的后台 job 独占，web 点了会被拒）──────────
+// 在这之前这类会话在抽屉里是【完全无 chip】的（占用者自报 idle → terminalState='alive' → 三态全不命中），
+// 副文本只有一句「终端已打开」。用户点下去才知道打不开，而且当时那条错误还落在别的会话里。
+// 优先级刻意排在最低：它是「此路不通」的说明，不是待办，不该压过点一下就能处理的「需要你」。
+test('resolveDrawerStatus: bgLocked 是最低档，任何真状态都压过它', () => {
+  assert.equal(resolveDrawerStatus({ bgLocked: true }), 'bg_locked');
+  assert.equal(resolveDrawerStatus({ liveState: 'idle', terminalState: 'alive', bgLocked: true }), 'bg_locked');
+  assert.equal(resolveDrawerStatus({ liveState: 'permission', bgLocked: true }), 'permission');
+  assert.equal(resolveDrawerStatus({ liveState: 'error', bgLocked: true }), 'error');
+  assert.equal(resolveDrawerStatus({ terminalState: 'waiting', bgLocked: true }), 'terminal_waiting');
+  assert.equal(resolveDrawerStatus({ terminalState: 'busy', bgLocked: true }), 'busy');
+  // 不传这一维时行为必须与引入之前完全一致——目录角标走的就是这条路（drawerStateForDir 不喂 bgLocked）
+  assert.equal(resolveDrawerStatus({ liveState: 'idle', terminalState: 'alive' }), null);
+});
+
+test('resolveDrawerStatusChip: 占用者闲着 → 后台占用；占用者在跑 → 后台任务运行中', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'alive', bgLocked: true }),
+    { status: 'bg_locked', label: '后台占用' });
+  // busy × bgLocked 两件事都真，措辞要同时带上：说成「终端运行中」会把人指向错误的接管路径
+  // （那不是一个终端窗口，走到电脑前打开终端也看不到它）。
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', bgLocked: true }),
+    { status: 'busy', label: '后台任务运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', bgLocked: true }),
+    { status: 'busy', label: '后台任务运行中' });
+  // 没被占用时一个字都不能变
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'claude-desktop' }),
+    { status: 'busy', label: '桌面端运行中' });
+  assert.equal(resolveDrawerStatusChip({ terminalState: 'alive' }), null);
+});
