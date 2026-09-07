@@ -1,6 +1,7 @@
 // tests/invariants/read-state.test.mjs —— 未读位点跨设备单调合并与防整屏复亮
 // 守护：READ-01（LWW 单调递增；手动标未读不用「删条目」表达已读，否则会被别的设备复活）
 // 覆盖：多设备增量归并（LWW 单调递增）+ baselineTs 免疫污染 + 手动标已读记 seen 阻断旧 manual 复活 + 乱序上报不整屏复亮
+//       + 已读盖过手动标记后清干净（消除本地删/服务端留的不对称）+ 两条写入路径的 seen 都单调不回退
 // 槽位：S1（纯函数 + 一次性目录状态机）
 // 不测什么 + 为什么：不测浏览器 localStorage 与真实 DOM 渲染（属于 S3 UI/E2E 槽）
 
@@ -106,6 +107,39 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
     // 配合前端 isManualUnreadNow 判定：因为 seen >= manual，该会话绝不点亮！
     const isUnread = isManualUnreadNow(authoritative.manual, authoritative.seen, 'sess-target');
     assert.equal(isUnread, false, '旧 manual 条目不得导致会话整屏复亮！');
+  });
+
+  // 前端 markEntered（再次打开会话）只发 seenAt、不发 manual 字段，服务端因此走 markRead 分支。
+  // 而它在【本地】是直接把 manual 条目删掉的 —— 服务端若留着，本地删、服务端留，下一趟 hydrate
+  // 的 LWW 合并又把它搬回本地，形成永不收敛的不对称。判定上通常被 seen 盖住看不出来，但两台设备
+  // 时钟有偏移时那份复活的旧标记就会翻成假未读。清理的判据必须是时间戳比较，不是无条件删。
+  test('markRead 盖过手动标记后必须清掉该 manual 条目：不留下会被 hydrate 搬回来的不对称', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('session-1', true, T0 + 1 * MIN);   // 设备 A 长按「标为未读」
+    s.markRead('session-1', T0 + 2 * MIN);          // 设备 B 打开该会话（markEntered 只发 seenAt）
+
+    const st = s.getState();
+    assert.equal(st.seen['session-1'], T0 + 2 * MIN);
+    assert.equal('session-1' in st.manual, false, '被这笔已读盖过的手动标记必须清掉，不能留成垃圾键');
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'session-1'), false);
+  });
+
+  test('markRead 不得清掉晚于它的手动标记：乱序到达的旧已读不能吃掉「稍后再看」', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('session-1', true, T0 + 5 * MIN);   // 标记在后
+    s.markRead('session-1', T0 + 2 * MIN);          // 较早的一笔已读乱序到达
+
+    const st = s.getState();
+    assert.equal('session-1' in st.manual, true, '晚于这笔已读的手动标记必须原样保留');
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'session-1'), true, '用户显式标的未读不得被旧已读清掉');
+  });
+
+  test('setManual(false) 的 seen 也单调不回退：乱序旧「标为已读」不得把位点拨回过去', () => {
+    const s = createStore({ now: () => T0 });
+    s.markRead('session-1', T0 + 5 * MIN);
+    s.setManual('session-1', false, T0 + 1 * MIN);  // 另一台设备很久以前那笔「标为已读」晚到
+
+    assert.equal(s.getState().seen['session-1'], T0 + 5 * MIN, '位点被拨回过去会让早已读过的内容重新变未读');
   });
 
   test('多设备乱序交织上报：最终状态收敛且判定幂等', () => {

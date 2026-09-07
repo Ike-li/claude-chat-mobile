@@ -698,6 +698,79 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-09-07 真机报告：在手机上读完回复直接锁屏，换一台设备打开，那个会话又亮成「未读」。
+  // 记 seen 的两个入口都在 bindView 里，两个都要求用户【主动切走】：入场记的是「进入那一刻」，
+  // 离场要真的切到别的会话或首页才触发。而移动端最常见的退出方式是不切任何东西——读完就锁屏、
+  // 切 app、关标签页。于是「进入之后才到达的那条回复」永远晚于位点，seen 停在进入时刻。
+  // 这笔陈旧位点在原设备上完全不显形（isViewing 让当前会话恒不亮），只有换一台设备才看得见。
+  test('P0-11al 切后台即落已读位点：不切走会话直接锁屏，位点也要推进到此刻', async ({ page }) => {
+    await gotoMock(page);
+
+    const seenOf = async (id: string): Promise<unknown> => {
+      const state = await (await page.request.get('/__read-state')).json();
+      return state?.seen?.[id];
+    };
+
+    // 进入会话时 markEntered 记下的那一笔——修复前这是整条路径上唯一的一笔
+    await expect.poll(async () => typeof (await seenOf('mock-session-visual-test'))).toBe('number');
+    const atEntry = Number(await seenOf('mock-session-visual-test'));
+
+    // 【不切走任何东西】直接切后台——iOS 锁屏、切到别的 app、切标签页走的都是这一条。
+    // 这里不发新消息：mock 的普通消息走 scenarioRegistry 后不收尾回合（waitForIdle 会挂死），
+    // 而位点推进用的是「切后台那一刻」，与这期间有没有新内容无关——真实场景里正是那条
+    // 「进入之后才到达的回复」把 lastUsedAt 推到了 atEntry 之后，位点不跟上就是假未读。
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // 位点必须推进到切后台那一刻；停在 atEntry 就等于在另一台设备上亮假未读
+    await expect.poll(async () => Number(await seenOf('mock-session-visual-test'))).toBeGreaterThan(atEntry);
+
+    // 对照组：没在看的那些会话不得被顺手盖章。没有这条，「切后台把所有会话一律标已读」这种假修复
+    // 同样能让上面那句变绿，而它会静默吃掉真正的未读。
+    const after = await (await page.request.get('/__read-state')).json();
+    expect(after?.seen?.['mock-session-archived']).toBeUndefined();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 首页最近列表是「重连后停在原地」最常见的落点：手机锁屏再打开必然重连，而 read:sync 只在
+  // connect 那一趟发。归并回来的位点若只重建抽屉（refreshUnreadMarks 原本只认 dirSectionNodes），
+  // 已经画在屏幕上的首页行就会一直停在旧判定——在另一台设备上早已读过的会话，这里仍写着「未读」，
+  // 直到用户自己离开首页再回来。ensureEmptySurface 不在重连路径上，首页不会被顺带重画。
+  test('P0-11am 首页停在原地时，read:sync 归并回来的位点要落到已画出的最近行上', async ({ page }) => {
+    await gotoMock(page);
+
+    // 另一工作区那组恒在全局基线之后，是唯一能在首页亮出未读的一组（同 P0-11af 的理由）
+    await sendChatMessage(page, 'test:needsyou');
+    await waitForIdle(page);
+
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
+    const row = page.locator('#dashRecentsList .dash-recent-item[data-session-id="mock-session-another"]');
+    await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+
+    // 另一台设备读了它：只动服务端共享位点，本机 DOM 与 localStorage 都还停在「未读」
+    await page.request.post('/__arm-read-elsewhere?sessionId=mock-session-another');
+
+    // 断线重连，用户全程停在首页没动过任何东西
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    // 已经画出来的那一行必须跟着灭掉
+    await expect(row.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+
+    // 对照：同工作区里没被别人读过的那一行仍然亮——否则「重连后把首页所有 chip 都抹掉」也能变绿
+    const stillUnread = page.locator('#dashRecentsList .dash-recent-item[data-session-id="mock-session-another-done"]');
+    await expect(stillUnread.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P3 抽屉局部重建 + SWR 保鲜（切到后台重连后抽屉卡顿的修复）三条回归：
   // t 断线重连零变化 → 两个目录 DOM 原样保留、不出现骨架屏；
   // v 断线期间真实标题变化 → 抽屉必须显示新内容（防缓存优化引入"不刷新"回归）；

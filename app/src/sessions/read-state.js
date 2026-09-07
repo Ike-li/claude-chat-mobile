@@ -81,7 +81,13 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
     if (!isId(sessionId) || ts === null) return snapshot();
     ensureBaseline();
     if (!((state.seen[sessionId] ?? -Infinity) < ts)) return snapshot(); // 单调不回退：乱序旧 ack 不拨旧位点
-    state = { ...state, seen: capNewest({ ...state.seen, [sessionId]: ts }, seenCap) };
+    // 顺带清掉已被这笔已读盖过的手动标记。判据是 manual[id] > seen[id]，被盖过的条目已经不影响任何
+    // 判定，留着只是随 read:sync 在设备间来回搬；而前端 markEntered 在本地是直接删掉它的（它只发
+    // seenAt、不发 manual 字段），这里不清就形成「本地删了、服务端留着、下一趟 hydrate 又合并回本地」
+    // 的长期不对称——两台设备时钟偏移时那份复活的旧标记会翻成假未读。
+    const manual = { ...state.manual };
+    if ((manual[sessionId] ?? Infinity) <= ts) delete manual[sessionId];
+    state = { ...state, seen: capNewest({ ...state.seen, [sessionId]: ts }, seenCap), manual };
     save();
     return snapshot();
   }
@@ -97,7 +103,12 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
     } else {
       const manual = { ...state.manual };
       delete manual[sessionId];
-      state = { ...state, manual, seen: capNewest({ ...state.seen, [sessionId]: ts }, seenCap) };
+      // seen 也必须单调不回退。这条路径原先无条件覆盖，于是一个乱序到达的旧「标为已读」会把位点
+      // 拨回过去，让此后早已读过的内容重新变成未读——markRead 那侧一直有这道闸，两侧必须同向。
+      const seen = (state.seen[sessionId] ?? -Infinity) < ts
+        ? capNewest({ ...state.seen, [sessionId]: ts }, seenCap)
+        : state.seen;
+      state = { ...state, manual, seen };
     }
     save();
     return snapshot();

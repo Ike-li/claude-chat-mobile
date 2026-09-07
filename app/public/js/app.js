@@ -532,10 +532,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     return offlineQueue;
   }
-  window.addEventListener('pagehide', () => { try { persistOutbox(); } catch { /* noop */ } });
+  // 「读完直接锁屏」的已读落地（2026-09-07 真机报告）。此前记 seen 的两个入口都在 bindView 里，
+  // 两个都要求用户【主动切走】：入场记的是「进入那一刻」，离场要真的切到别的会话或首页才触发。
+  // 而移动端最常见的退出方式是不切任何东西——读完就锁屏。于是「进入之后才到达的那条回复」永远
+  // 晚于位点，seen 停在进入时刻；本机因为 isViewing 让当前会话恒不亮，这笔陈旧位点在原设备上
+  // 完全不显形，换一台设备打开才是那屏假未读。
+  //
+  // 复用 markSeen 而不是 markEntered：前者带「当前是手动未读态就跳过」的守卫——用户刚长按标了
+  // 「稍后再看」就切后台，不能被这一笔当场清掉（markEntered 会连手动标记一起作废）。
+  function markActiveSessionSeen() {
+    if (displayedSessionId) unread.markSeen(displayedSessionId);
+  }
+  window.addEventListener('pagehide', () => {
+    try { persistOutbox(); } catch { /* noop */ }
+    // pagehide 时 socket 多半已来不及把 read:mark 发出去，但 markSeen 的 localStorage 落盘是同步的：
+    // 下次连上时 read:sync 会把整表推给服务端归并。两条监听合起来才覆盖到「直接杀进程」。
+    try { markActiveSessionSeen(); } catch { /* noop */ }
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       try { persistOutbox(); } catch { /* noop */ }
+      try { markActiveSessionSeen(); } catch { /* noop */ }
     }
   });
 
@@ -5792,6 +5809,36 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 与列表数据同帧渲染。
   function refreshUnreadMarks() {
     if (dirSectionNodes?.size) rebuildDirSections([...dirSectionNodes.keys()]);
+    refreshDashRecentUnreadMarks();
+  }
+
+  // 首页最近行的未读 chip 就地重算。首页是「重连后停在原地」最常见的落点（锁屏再打开必然重连），
+  // 而 read:sync 只在 connect 那一趟发；只重建抽屉的话，已经画在屏幕上的首页行会一直停在旧判定，
+  // 直到用户自己离开首页再回来——在另一台设备上读过的会话，这里仍写着「未读」。
+  // 判定所需字段取自行自己的 dataset（渲染时留下），不保存列表快照：多一份状态就多一处会和 DOM 漂移。
+  function refreshDashRecentUnreadMarks() {
+    for (const item of document.querySelectorAll('#dashRecentsList .dash-recent-item[data-session-id]')) {
+      const title = item.querySelector('.dash-recent-title');
+      if (!title) continue;
+      const id = item.dataset.sessionId;
+      const lastUsedAt = Number(item.dataset.lastUsedAt);
+      const shouldMark = unread.isUnread(
+        { id, lastUsedAt: Number.isFinite(lastUsedAt) ? lastUsedAt : undefined },
+        { isViewing: id === displayedSessionId },
+      );
+      const existing = title.querySelector('[data-testid="unread-mark"]');
+      if (shouldMark === Boolean(existing)) continue;
+      if (existing) existing.remove();
+      else title.prepend(dashUnreadMark());
+    }
+  }
+
+  // 首页最近行与抽屉行共用的「未读」chip 构造：渲染侧与就地重算侧各写一份必然漂移。
+  function dashUnreadMark() {
+    const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip text-accent mr-1.5 align-middle"></span>`);
+    mark.textContent = t('未读');
+    mark.setAttribute('aria-label', t('未读'));
+    return mark;
   }
 
   function isSessionPanelRevalidateActive() {
@@ -6431,7 +6478,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
-              <div class="font-bold text-xs text-ink truncate"></div>
+              <div class="dash-recent-title font-bold text-xs text-ink truncate"></div>
               <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5 min-w-0">
                 <span class="shrink-0 dash-ws-icon"></span>
                 <span class="truncate dash-ws"></span>
@@ -6442,13 +6489,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             <div class="text-xs text-accent font-bold shrink-0">${t('进入 ➔')}</div>
           </div>
         `);
-        item.querySelector('.font-bold').textContent = s.title || t('无标题会话');
+        item.querySelector('.dash-recent-title').textContent = s.title || t('无标题会话');
+        // 判定所需的两个字段留在行上：位点晚到时（read:sync 归并）要能就地重算，而 renderDashRecents
+        // 是 showDashboard 的闭包、外部够不着。存 DOM 不存快照——省掉一份会和界面漂移的状态。
+        if (s.id) item.dataset.sessionId = s.id;
+        if (Number.isFinite(s.lastUsedAt)) item.dataset.lastUsedAt = String(s.lastUsedAt);
         // R65 未读（首页最近行）：与抽屉同款「未读」chip，inline-flex 前置进 truncate 容器，不改其块级截断语义。
         if (s.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) {
-          const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip text-accent mr-1.5 align-middle"></span>`);
-          mark.textContent = t('未读');
-          mark.setAttribute('aria-label', t('未读'));
-          item.querySelector('.font-bold').prepend(mark);
+          item.querySelector('.dash-recent-title').prepend(dashUnreadMark());
         }
         item.querySelector('.dash-ws-icon').textContent = '📁';
         item.querySelector('.dash-ws').textContent = s.workspaceName;
