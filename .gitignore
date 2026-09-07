@@ -84,3 +84,7 @@ desktop/build/
 
 # 讨论中的文稿，未进产品文档。不入库：否则会被 inventory 扫成未分类文件。
 /draft/
+
+# E2E 分片的本机时长测量值（tests/infra/e2e-parallel.js 自动生成/更新）。
+# 是本机测量结果，不进版本库——进了就成为一份会漂移的第二真相。
+/tests/infra/.e2e-durations.json
