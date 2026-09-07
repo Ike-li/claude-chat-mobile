@@ -951,3 +951,115 @@ test.describe('本地 slash 命令进度：subagents → bgTasks', () => {
     s.dispose();
   });
 });
+
+// B1（2026-09-07）：task_updated 曾与 task_started 一起被静默吞，理由写的是「background_tasks_changed
+// 全量快照已覆盖增删」。该理由对【增删】成立、对【状态】不成立——快照条目只有
+// task_id/task_type/description/ambient（CLI 2.1.263 zod schema 实证），是 REPLACE 语义的集合成员表达。
+// 于是 status:'paused' 的任务照旧在快照里，面板一律显示「运行中」，是在对用户说假话。
+test.describe('bgTaskPatch — task_updated 的运行态（B1）', () => {
+  test('paused 落进快照，且【心跳不得抹掉】', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('t1', 'local_bash', '跑测试');
+    assert.equal(s.bgTasksList()[0].status, null, '初始无状态');
+
+    assert.equal(s.bgTaskPatch('t1', { status: 'paused' }), true);
+    assert.equal(s.bgTasksList()[0].status, 'paused');
+
+    // 关键：bgTaskUpsert 是整体 set 而非合并。少了 `status: prev?.status ?? null` 这一行，
+    // 每拍心跳都会把 paused 抹回 null——面板在「暂停」与「运行中」之间来回跳。
+    s.bgTaskUpsert('t1', 'local_bash', '跑测试');
+    assert.equal(s.bgTasksList()[0].status, 'paused', '心跳后 paused 必须还在');
+    s.dispose();
+  });
+
+  test('paused 经全量快照 reconcile 后仍在（快照不携带状态，必须沿用 prev）', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('t2', 'local_bash', '跑容器');
+    s.bgTaskPatch('t2', { status: 'paused' });
+
+    // background_tasks_changed 的真实形态：只有这四个字段，没有 status
+    s.reconcileBgTasks([{ task_id: 't2', task_type: 'local_bash', description: '跑容器' }]);
+    assert.equal(s.bgTasksList()[0].status, 'paused', 'reconcile 后 paused 必须还在');
+    s.dispose();
+  });
+
+  test('不补建：patch 一个不存在的 id 不产生条目', () => {
+    const { s } = makeSession();
+    assert.equal(s.bgTaskPatch('ghost', { status: 'paused' }), false);
+    assert.equal(s.bgTasksList().length, 0, '创建权威是快照/progress，此处补建会与 REPLACE 语义打架');
+    s.dispose();
+  });
+
+  test('error 只增不清：后续 patch 不带 error 不得擦掉失败原因', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('t3', 'local_agent', '子代理');
+    s.bgTaskPatch('t3', { status: 'failed', error: 'exit code 1' });
+    assert.equal(s.bgTasksList()[0].error, 'exit code 1');
+
+    // CLI 的 patch 是增量：字段没变就整个不出现。「patch 里没有 error」≠「错误已消失」
+    s.bgTaskPatch('t3', { status: 'killed' });
+    assert.equal(s.bgTasksList()[0].error, 'exit code 1', 'error 不得被后续 patch 清空');
+    assert.equal(s.bgTasksList()[0].status, 'killed');
+    s.dispose();
+  });
+
+  test('终态只记录、不删条目（删除权威在 task_notification + 快照移除）', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('t4', 'local_bash', '跑 e2e');
+    s.bgTaskPatch('t4', { status: 'failed' });
+    assert.equal(s.bgTasksList().length, 1, '抢删会绕过 bgTaskDone 的节流与对账');
+    assert.equal(s.bgTasksList()[0].status, 'failed');
+    s.dispose();
+  });
+
+  test('无实质变化不重复推快照（状态心跳不刷成噪音）', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('t5', 'local_bash', '跑 lint');
+    assert.equal(s.bgTaskPatch('t5', { status: 'paused' }), true);
+    assert.equal(s.bgTaskPatch('t5', { status: 'paused' }), false, '同值再来一次不算变化');
+    assert.equal(s.bgTaskPatch('t5', {}), false, '空 patch 不算变化');
+    assert.equal(s.bgTaskPatch('t5', null), false);
+    s.dispose();
+  });
+});
+
+// B1 接线（2026-09-07）：上面那组直接调 bgTaskPatch，测的是【方法本身】。若只有那组，
+// 把 map() 里 `this.bgTaskPatch(...)` 整行删掉，79 条依旧全绿——接线洞正是本仓库反复吃过亏的形态
+// （「E2E mock 是独立实现，删掉真 server 的字段三条全绿」）。故此处从 SDK 消息一路断言到出向 payload。
+test.describe('map() — task_updated 接线到出向快照（B1）', () => {
+  test('system/task_updated → 落进 bgTasks 且随 task_progress 快照发出', () => {
+    const { s, events } = makeSession();
+    s.bgTaskUpsert('t9', 'local_bash', '跑 e2e');
+    events.length = 0;
+
+    s.map({ type: 'system', subtype: 'task_updated', task_id: 't9', patch: { status: 'paused' } });
+
+    assert.equal(s.bgTasksList()[0].status, 'paused', '内部注册表已更新');
+    const ev = events.find(e => e.type === 'task_progress');
+    assert.ok(ev, 'task_updated 必须触发一次全量快照，否则前端永远看不到状态变化');
+    const row = ev.payload.tasks.find(x => x.taskId === 't9');
+    assert.equal(row.status, 'paused', 'status 必须随 wire 出去（前端就靠这个字段渲染）');
+    s.dispose();
+  });
+
+  test('patch.error 一并出 wire', () => {
+    const { s, events } = makeSession();
+    s.bgTaskUpsert('ta', 'local_agent', '子代理');
+    events.length = 0;
+    s.map({ type: 'system', subtype: 'task_updated', task_id: 'ta',
+      patch: { status: 'failed', error: 'boom' } });
+    const row = events.find(e => e.type === 'task_progress').payload.tasks.find(x => x.taskId === 'ta');
+    assert.equal(row.status, 'failed');
+    assert.equal(row.error, 'boom');
+    s.dispose();
+  });
+
+  test('task_started 仍静默吞（防修过头：新增只该覆盖 task_updated）', () => {
+    const { s, events } = makeSession();
+    events.length = 0;
+    s.map({ type: 'system', subtype: 'task_started', task_id: 'tb', description: '新任务' });
+    assert.equal(s.bgTasksList().length, 0, '创建权威在 background_tasks_changed，task_started 不建条目');
+    assert.equal(events.find(e => e.type === 'task_progress'), undefined, '不该推快照');
+    s.dispose();
+  });
+});

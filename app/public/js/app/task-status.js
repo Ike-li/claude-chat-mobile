@@ -1,6 +1,13 @@
-import { bgTaskListCollapsed, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
+import { bgTaskListCollapsed, bgTaskStatusView, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
 import { formatBgTaskRowLabel } from '../logic/tool-cards.js';
 import { t } from '../i18n.js';
+
+// bgTaskStatusView 的 tone → 语义色类。只用无 alpha token（同本文件下方任务卡的配色约束）。
+const BG_TASK_TONE_CLASS = Object.freeze({
+  warning: 'text-warning',
+  danger: 'text-danger',
+  muted: 'text-ink-faint',
+});
 
 export function createTaskStatusController(context, {
   addBar = () => {},
@@ -184,16 +191,25 @@ export function createTaskStatusController(context, {
         // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
         // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
         // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
+        // 运行态标记：仅在与「运行中」这一默认预期不符时出现（判据见 logic 的 bgTaskStatusView）。
+        // 缺口本体是 paused —— 它仍在 background_tasks_changed 快照里，此前一律被渲染成运行中。
+        const statusView = bgTaskStatusView({ status: task.status, error: task.error });
         const rowStop = taskStopUiState({ taskId, bannerVisible: true });
+        const tail = [];
+        if (statusView) {
+          const chip = createElement(`<span class="shrink-0 ${BG_TASK_TONE_CLASS[statusView.tone] || BG_TASK_TONE_CLASS.muted}" data-testid="bg-task-status"></span>`);
+          chip.textContent = statusView.label;
+          tail.push(chip);
+        }
         if (rowStop.canStop) {
           const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
           stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
-          top.append(label, stop);
-        } else {
-          top.append(label);
+          tail.push(stop);
         }
+        top.append(label, ...tail);
 
         const metaParts = [];
+        if (statusView?.error) metaParts.push(statusView.error); // 失败原因排在最前，别被 truncate 吃掉
         if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
         if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
           metaParts.push(String(task.subagentType));
@@ -285,6 +301,8 @@ export function createTaskStatusController(context, {
           description: item.description ?? null,
           subagentType: item.subagentType ?? item.subagent_type ?? null,
           truncated: item.truncated || false,
+          status: item.status ?? null,
+          error: item.error ?? null,
         });
       }
       if (typeof payload.taskId === 'string' && payload.taskId && tasks.has(payload.taskId)) {
@@ -307,6 +325,8 @@ export function createTaskStatusController(context, {
         description: payload?.description ?? prev.description ?? null,
         subagentType: payload?.subagentType ?? prev.subagentType ?? null,
         truncated: payload?.truncated || prev.truncated || false,
+        status: payload?.status ?? prev.status ?? null,
+        error: payload?.error ?? prev.error ?? null,
       });
       return true;
     }

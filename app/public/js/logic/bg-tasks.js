@@ -109,6 +109,34 @@ export function formatBgTaskBannerCopy(tasks = []) {
   };
 }
 
+// 后台任务运行态展示（数据→数据）。来源：CLI task_updated.patch.status，经后端 bgTaskPatch 落进快照。
+//
+// null / running / pending 一律【不出标记】——「在跑」本就是任务列表的默认预期，给每行都挂个
+// 「运行中」纯属噪音；需要说出来的只有【与默认预期不符】的那几档。缺口本体是 paused：
+// 它在 background_tasks_changed 快照里照旧存在（快照只表达集合成员），面板此前显示成「运行中」。
+//
+// 状态字面量取自 CLI 2.1.263 的 zod 枚举（pending/running/completed/failed/killed/paused）。
+// 未知值原样透出而非吞掉：CLI 后续加档时宁可显示一个陌生词，也好过悄悄按「正常运行」渲染。
+// 表里存中文原文、取用点才 t()——顶层直接 t() 会在 import 阶段求值，把语言钉死在 zh。
+const BG_TASK_STATUS_VIEW = Object.freeze({
+  paused: { key: '已暂停', tone: 'warning' },
+  failed: { key: '失败', tone: 'danger' },
+  killed: { key: '已终止', tone: 'danger' },
+  completed: { key: '已完成', tone: 'muted' },
+});
+
+export function bgTaskStatusView({ status, error } = {}) {
+  const s = typeof status === 'string' ? status.trim() : '';
+  if (!s || s === 'running' || s === 'pending') return null;
+  const hit = BG_TASK_STATUS_VIEW[s];
+  const err = typeof error === 'string' ? error.trim() : '';
+  return {
+    label: hit ? t(hit.key) : s,
+    tone: hit ? hit.tone : 'muted',
+    error: err || null,
+  };
+}
+
 // 后台任务详情面板：进度历史条目格式化。
 // description = 工具态即时更新（如 "Running tests..."），summary = AI ~30s 进度摘要。
 // 两者择一显示（summary 优先，因更语义化；description 兜底）。

@@ -1701,10 +1701,55 @@ export class AgentSession {
       description: descRaw,
       subagentType: meta.subagentType ?? prev?.subagentType ?? null,
       truncated: meta.truncated || prev?.truncated || false,
+      // 运行态只由 task_updated 写入（见 bgTaskPatch）。这里是整体 set 而非合并，不显式沿用 prev
+      // 就等于每拍心跳都把 paused/error 抹回 null——面板会在"暂停"和"运行中"之间来回跳。
+      status: prev?.status ?? null,
+      error: prev?.error ?? null,
     });
     // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
     // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
     if (!prev || prev.taskType !== type) this.onBgTaskChange?.();
+  }
+  // task_updated 的 patch 合并（CLI 2.1.263 wire schema：status/description/end_time/
+  // total_paused_ms/error/is_backgrounded）。本方法只取 status 与 error 两项，其余留待需要时再接。
+  //
+  // 【为什么必须单独接，不能跟 task_started 一起吞】
+  // 原先两条一并静默吞，理由写的是「background_tasks_changed 全量快照紧邻投递、已覆盖增删」。
+  // 该理由对【增删】成立，对【状态】不成立：快照条目只有 task_id/task_type/description/ambient
+  // （CLI bundle 里的 zod schema 实证），是 REPLACE 语义 —— 它表达「谁还活着」这个集合成员关系，
+  // 不表达成员的内部状态。于是 status:'paused' 的任务照旧留在快照里，面板一律显示「运行中」，
+  // 是在对用户说假话。paused 正是唯一「在快照内但并未运行」的状态，也是本次要修的缺口本体。
+  //
+  // 只 patch【已存在】的条目、不补建：任务的创建权威是 background_tasks_changed / task_progress。
+  // 此处补建会与 reconcile 的 REPLACE 语义打架 —— 下一拍快照没有它就又删掉，面板闪烁。
+  //
+  // 终态（completed/failed/killed）只记录不删条目：完成的权威通道是 task_notification + 快照移除，
+  // 抢删会绕过 bgTaskDone 的节流与 onBgTaskChange 对账。短暂显示「已失败但仍在列表」优于显示「运行中」。
+  //
+  // 不碰 onBgTaskChange / hasBgTasks：角标与镜像锁的「在跑」判据面不在本次范围内 —— 放宽它等于
+  // 悄悄改 SESSION-01 判据。paused 任务仍算活任务，只是面板如实说明它停着。
+  bgTaskPatch(taskId, patch) {
+    const id = typeof taskId === 'string' && taskId ? taskId : null;
+    if (!id || !patch || typeof patch !== 'object') return false;
+    const prev = this.bgTasks.get(id);
+    if (!prev) return false; // 见上：不补建
+    const next = { ...prev };
+    let changed = false;
+    if (typeof patch.status === 'string' && patch.status && next.status !== patch.status) {
+      next.status = patch.status;
+      changed = true;
+    }
+    // error 只增不清：CLI 的 patch 是增量，未变更的字段整个不出现在 patch 里，
+    // 「patch 里没有 error」不等于「错误已消失」，据此清空会把失败原因擦掉。
+    if (patch.error != null) {
+      const err = truncate(String(patch.error), TOOL_SUMMARY_CAP);
+      if (next.error !== err) { next.error = err; changed = true; }
+    }
+    if (!changed) return false; // 无实质变化不推快照，避免状态心跳把前端刷成噪音
+    next.lastSeenAt = Date.now();
+    this.bgTasks.set(id, next);
+    this.emitBgTasksSnapshot();
+    return true;
   }
   bgTaskDone(taskId) {
     const had = this.bgTasks.size;
@@ -1763,6 +1808,10 @@ export class AgentSession {
         description: desc ? truncate(descStr, TOOL_SUMMARY_CAP) : prev?.description ?? null,
         subagentType: subType,
         truncated: messageTruncated || descTruncated || false,
+        // 同 bgTaskUpsert：background_tasks_changed 的条目只有 task_id/task_type/description/ambient
+        // （CLI 2.1.263 wire schema 实证），不含状态。不沿用 prev 就是每次快照都清空运行态。
+        status: prev?.status ?? null,
+        error: prev?.error ?? null,
       });
     }
     // localcmd:* 不参与 reconcile：它们不是 SDK 报来的任务，本就不会出现在这份快照里，
@@ -1936,6 +1985,8 @@ export class AgentSession {
         description: t.description ?? null,
         subagentType: t.subagentType ?? null,
         truncated: t.truncated || false,
+        status: t.status ?? null,
+        error: t.error ?? null,
       }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
@@ -2392,9 +2443,12 @@ export class AgentSession {
           // 只认 task_progress，而 background bash 不发它）、供 stopTask 的 taskId、停止/完成自动熄 ⏳。
           // reconcile 末尾 emitBgTasksSnapshot → 前端任务列表与 CLI 权威态对齐。
           this.reconcileBgTasks(msg.tasks);
-        } else if (msg.subtype === 'task_started' || msg.subtype === 'task_updated') {
-          // 后台任务开始 / 状态变更（task_updated.patch.status: killed/…）的细粒度事件。
-          // background_tasks_changed 全量快照紧邻投递、已覆盖增删，故此二者显式识别静默吞——
+        } else if (msg.subtype === 'task_updated') {
+          // 状态变更：快照只表达集合成员、不表达成员状态，吞掉它会把 paused 显示成「运行中」。
+          // 判据与边界全写在 bgTaskPatch 上。
+          this.bgTaskPatch(msg.task_id ?? msg.taskId ?? null, msg.patch);
+        } else if (msg.subtype === 'task_started') {
+          // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故显式识别静默吞——
           // 不重复处理、也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
         } else if (msg.subtype === 'api_retry') {
           // CLI 会在 TUI 显示 "Retrying in Ns · attempt i/max"。web 对齐为瞬时横幅：

@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  bgTaskStatusView,
   classifyBgTaskKind,
   formatBgTaskBannerCopy,
   formatProgressHistoryEntry,
@@ -167,5 +168,42 @@ test.describe('groupBgTasksForList（混合才分组，组内保序）', () => {
   test('空输入：不混合、无组', () => {
     assert.deepEqual(groupBgTasksForList([]), { mixed: false, groups: [] });
     assert.deepEqual(groupBgTasksForList(), { mixed: false, groups: [] });
+  });
+});
+
+// B1（2026-09-07）：后台任务运行态标记。数据来自 CLI task_updated.patch.status。
+test.describe('bgTaskStatusView（后台任务运行态展示）', () => {
+  test('paused 出标记——这是缺口本体：它仍在快照里，此前被渲染成「运行中」', () => {
+    const v = bgTaskStatusView({ status: 'paused' });
+    assert.equal(v.label, '已暂停');
+    assert.equal(v.tone, 'warning');
+  });
+
+  // 反向档：没有这几条，函数写成「恒返回 {label:'已暂停'}」也能让上面那条过。
+  test('running / pending / 缺省 一律【不出标记】（在跑是默认预期，标了就是噪音）', () => {
+    assert.equal(bgTaskStatusView({ status: 'running' }), null);
+    assert.equal(bgTaskStatusView({ status: 'pending' }), null);
+    assert.equal(bgTaskStatusView({ status: null }), null);
+    assert.equal(bgTaskStatusView({ status: '  ' }), null, '空白串按缺省处理');
+    assert.equal(bgTaskStatusView({}), null);
+    assert.equal(bgTaskStatusView(), null);
+  });
+
+  test('failed / killed 归 danger，completed 归 muted', () => {
+    assert.equal(bgTaskStatusView({ status: 'failed' }).tone, 'danger');
+    assert.equal(bgTaskStatusView({ status: 'killed' }).tone, 'danger');
+    assert.equal(bgTaskStatusView({ status: 'completed' }).tone, 'muted');
+  });
+
+  test('未知状态原样透出、不吞——CLI 后续加档时宁可显示陌生词，也好过悄悄按正常渲染', () => {
+    const v = bgTaskStatusView({ status: 'quarantined' });
+    assert.equal(v.label, 'quarantined');
+    assert.equal(v.tone, 'muted');
+  });
+
+  test('error 带出；空串归一成 null（调用方据此决定要不要占一行）', () => {
+    assert.equal(bgTaskStatusView({ status: 'failed', error: 'exit 1' }).error, 'exit 1');
+    assert.equal(bgTaskStatusView({ status: 'failed', error: '   ' }).error, null);
+    assert.equal(bgTaskStatusView({ status: 'failed' }).error, null);
   });
 });

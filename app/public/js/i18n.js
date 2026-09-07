@@ -369,6 +369,8 @@ export const EN_DICT = Object.freeze({
   '已复制': 'Copied',
   '复制失败': 'Copy failed',
   '失败': 'Failed',
+  '已暂停': 'Paused',
+  '已终止': 'Killed',
   '改写后重发': 'Edit and resend',
   '改写重发': 'Edit & resend',
   '语音朗读': 'Read aloud',
