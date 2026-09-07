@@ -108,7 +108,8 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
     });
   }
 
-  // 正看着的会话 isUnread 恒 false（红线），长按菜单要知道它「是否已标过」得单独问。
+  // 「是否手动标过」的独立查询口，与 isUnread（含时间判据）区分开。2026-09-07 前长按菜单靠它绕开
+  // 「正看着的 isUnread 恒 false」；那条短路已按管辖面收窄、菜单改问 isUnread，此口现只剩测试直读内部表。
   function isManualUnread(sessionId) {
     return isManualUnreadNow(state.manual, state.seen, sessionId);
   }

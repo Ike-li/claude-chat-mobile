@@ -619,8 +619,8 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
 
     tracker.setManualUnread('s1', true);
     assert.equal(tracker.isUnread(old), true);
-    assert.equal(tracker.isUnread(old, { isViewing: true }), false, '正在看的不亮（与自动未读同一条红线）');
-    assert.equal(tracker.isManualUnread('s1'), true, '长按菜单据此对正看着的会话给出「标为已读」');
+    assert.equal(tracker.isUnread(old, { isViewing: true }), true, '正看着时标的「稍后再看」当场就要亮（2026-09-07 翻向）');
+    assert.equal(tracker.isManualUnread('s1'), true, '手动标记表的直读口（长按菜单已改问 isUnread）');
     assert.equal(tracker.isManualUnread('other'), false);
     assert.equal(JSON.parse(storage.dump()).manual.s1, now, '标记落盘');
 

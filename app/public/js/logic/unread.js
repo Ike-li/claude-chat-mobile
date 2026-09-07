@@ -7,7 +7,7 @@
 // 判据字段是 session:list 行的 lastUsedAt：上游（src/sessions/history.js scanViaReaddir 头注）
 // 已保证它取「最后主链消息时间、无则回落 mtime」，元数据写盘不会推它——假未读风险在上游消化。
 //
-// 手动未读（2026-09-02，长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据；
+// 手动未读（2026-09-02，长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据与「正在看」；
 // 唯一的自动清除点是「再次打开该会话」（tracker 的 markEntered），离场记 seen 不动它——
 // 否则「正看着时标一下、离开就被离场记录清掉」，标记形同虚设。
 //
@@ -22,11 +22,19 @@
 
 import { t } from '../i18n.js';
 
-// 未读判定。never-seen 会话对比基线（首装不追溯历史）；看过的对比 seenAt；正在看的恒不亮；
+// 未读判定。never-seen 会话对比基线（首装不追溯历史）；看过的对比 seenAt；正在看的不走时间判据；
 // manual=true 时不看时间（标记不依赖 lastUsedAt 字段）。
+//
+// 两条短路的顺序不能反（2026-09-07 修）——它们管辖的是不同的信息源：
+//   · isViewing 否定的是【时间判据的可信度】：你正看着的内容不算「没看过」，而 lastUsedAt 还会一直
+//     往前推，不挡就是消不掉的噪音。它的管辖面到此为止。
+//   · manual 是【用户显式输入的待办标记】，isViewing 对它没有管辖权。用户最常标「稍后再看」的时刻，
+//     恰恰是正读着这个会话、意识到「等下要回来处理」的那一刻。旧顺序下那一刻点不亮，而确认框刚
+//     承诺「这一行会一直显示未读」——屏幕上什么都没发生，切到别的会话才浮出来（真机报告 2026-09-07）。
+//     同一时刻 read:mark 已上报服务端，别的设备上其实已经亮了，标记的这台反而是唯一看不见的。
 export function isSessionUnread({ lastUsedAt, seenAt, baselineTs = 0, isViewing = false, manual = false } = {}) {
-  if (isViewing) return false;
   if (manual) return true;
+  if (isViewing) return false;
   if (typeof lastUsedAt !== 'number' || !Number.isFinite(lastUsedAt)) return false;
   const seenBar = typeof seenAt === 'number' && Number.isFinite(seenAt) ? seenAt : baselineTs;
   return lastUsedAt > seenBar;

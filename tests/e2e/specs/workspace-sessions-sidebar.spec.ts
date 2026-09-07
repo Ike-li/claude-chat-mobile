@@ -1103,6 +1103,51 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-11ak（2026-09-07 真机报告）：在【当前正打开的】会话上长按标未读，屏幕上什么都没发生——
+  // 确认框刚承诺「这一行会一直显示未读」，得切到别的会话才看见它浮出来。根因是 isSessionUnread 里
+  // isViewing 短路排在 manual 前面，把「时间判据不可信」这条理由错施加到了用户的显式输入上。
+  // 上面的 P0-11ad 标的是非当前会话（mock-session-archived），结构上走不到这条路径，故单开一条。
+  // 夹具选 mock-session-visual-test：它既是 inst_1 正在看的会话，lastUsedAt 又落在基线之前
+  // （时间判据对它恒为「不亮」）——所以下面出现的 chip 只可能来自手动标记这一条路径。
+  // 「没有手动标记时 isViewing 仍压住时间判据」那一反向档在 logic-unread 单测里（E2E 控不住时间戳）。
+  test('P0-11ak 当前会话标为未读：chip 与目录计数当场出现，不必先切走', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    const viewingRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-visual-test"]');
+    await expect(viewingRow).toBeVisible();
+    await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
+
+    await viewingRow.dispatchEvent('contextmenu');
+    const modal = page.locator('#confirmModal');
+    await expect(modal).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
+    await page.locator('#confirmOk').click();
+    await expect(modal).not.toHaveClass(/sheet-open/);
+
+    // 核心：没有切会话、没有刷新，这一行当场就带上 chip（修复前此处恒为 0，正是那份真机报告）
+    await expectSidebarOpen(page);
+    await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+    await expect(viewingRow.locator('[data-session-head] > span').first()).toHaveClass(/font-semibold/);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
+
+    // 标回已读同样当场生效：菜单此前靠 isManualUnread 旁路才能改口，现在 isUnread 一个口就够。
+    // 这一次走触屏长按（本套件的主路径）而非再来一次 contextmenu——long-press.js 的 swallowNextClick
+    // 闩只由 pointerdown 或被吞掉的 click 清除，桌面右键两条都不走，于是【同一行连续右键第二次静默无反应】。
+    // 那是与本用例无关的另一个缺陷（2026-09-07 发现，未修）；P0-11ad 两次之间恰好 dispatch 了 click 才没撞上。
+    await viewingRow.dispatchEvent('pointerdown', { pointerId: 2, button: 0, isPrimary: true, clientX: 120, clientY: 200 });
+    // 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，恒绿
+    await expect(modal).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmOk')).toHaveText('标为已读');
+    await page.locator('#confirmOk').click();
+    await viewingRow.dispatchEvent('pointerup', { pointerId: 2, clientX: 120, clientY: 200 });
+    await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
   // P0-11aj（2026-09-07 真机撞出）：会话被 `claude agents` 的后台 job 独占时，web 打不开它。
   // 修之前的形态：session:switch 被拒 → addBar 落进 #messages，而 #messages 是【当时正看着的
   // 那个会话】的消息流，视图从头到尾没动过；点击时又已经先关了侧栏。于是「blog_static 的会话被

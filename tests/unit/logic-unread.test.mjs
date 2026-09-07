@@ -34,7 +34,7 @@ test.describe('isSessionUnread：四态判定', () => {
 });
 
 // 手动未读（长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据——哪怕活动在基线前、
-// 哪怕早就看过；只有「正在看」仍然不亮（自己正看着的内容不算未读，和自动未读同一条红线）。
+// 哪怕早就看过、哪怕正看着（2026-09-07 起）。isViewing 只管辖时间判据那一支，见被测函数的顺序注。
 test.describe('isSessionUnread：手动未读压过时间判据', () => {
   test('手动标记 + 活动在基线前（本来永不亮的历史会话）→ 亮', () => {
     assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: true }), true);
@@ -48,8 +48,16 @@ test.describe('isSessionUnread：手动未读压过时间判据', () => {
     assert.equal(isSessionUnread({ lastUsedAt: null, baselineTs: T0, manual: true }), true);
   });
 
-  test('★ 手动标记 + 正在看 → 不亮', () => {
-    assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: true, isViewing: true }), false);
+  // 2026-09-07 翻向。旧行为：isViewing 短路排在 manual 前面，正看着的会话标「稍后再看」当场不亮，
+  // 而确认框刚说完「这一行会一直显示未读」——切到别的会话才浮出来。
+  // 第二条断言是这条用例的立身之本：它证明修法是【收窄 isViewing 的管辖面】而不是【删掉 isViewing】。
+  // 只写第一条的话，把那行短路整个删除也能让本用例全绿。
+  test('★ 手动标记 + 正在看 → 亮（显式输入不受「正在看」管辖）', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: true, isViewing: true }), true);
+    assert.equal(
+      isSessionUnread({ lastUsedAt: T0 + 3 * MIN, seenAt: T0, baselineTs: T0, isViewing: true }), false,
+      '反向档：没有手动标记时，isViewing 仍压住时间判据（红线未被削弱）',
+    );
   });
 
   test('manual 缺省/false → 行为与改动前完全一致', () => {

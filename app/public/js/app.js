@@ -5417,12 +5417,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       rowContent.appendChild(btn);
 
       // 长按（触屏按住 / 鼠标按住 / 桌面右键）→ 标为未读 / 标为已读。只有落盘会话（有 id）才有「未读」可言。
-      // 正看着的会话也能标「稍后再看」：isUnread 对它恒 false，另用 isManualUnread 判当前是否已标。
+      // 正看着的会话同样能标「稍后再看」并当场亮起：手动标记不受 isViewing 管辖（见 logic/unread.js
+      // 里那两条短路的顺序注），所以这里问 isUnread 一个就够，不必再叠 isManualUnread。
       if (s.id) {
         attachLongPress(rowContent, async () => {
           if (rowContent.getAttribute('data-preventClick') === 'true') return; // 已被侧滑手势认领
           haptic('tap');
-          const wasUnread = unread.isUnread(s, { isViewing: isViewingRow }) || unread.isManualUnread(s.id);
+          const wasUnread = unread.isUnread(s, { isViewing: isViewingRow });
           const ok = await appConfirm({
             title: s.title || t('新会话'),
             body: wasUnread
