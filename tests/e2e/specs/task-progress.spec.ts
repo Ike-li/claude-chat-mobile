@@ -336,8 +336,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-17k 点击任务行展开详情面板显示进度历史，再次点击收起', async ({ page }) => {
     await gotoMock(page);
 
-    // 发送 test:taskprogress，mock 推送 3 条 task_progress 心跳
-    await sendChatMessage(page, 'test:taskprogress');
+    // -hold 变体：同样 3 条 task_progress 心跳（两个变体走 mock 里同一段代码，只是末尾 delay 不同），
+    // 但三拍之后长驻 8s 再收尾。必须用它：默认变体从「步骤 3/3」到 task_notification 撤横幅只有
+    // 600ms，而下面是「点开 → 断言面板 → 断言 3 条历史 → 再点收起」的多步联动，600ms 装不下——
+    // 低负载下勉强挤得进所以一直是绿的，2026-09-07 把 E2E 并发提到 8 分片后当场暴露：
+    // locator.click 等不到元素 stable，45s 超时。同文件的 P0-17m / P0-17n 一直用的就是 -hold。
+    await sendChatMessage(page, 'test:taskprogress-hold');
     await expect(page.locator('#taskProgressBanner')).toBeVisible();
     await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 3/3', { timeout: 10_000 });
 
