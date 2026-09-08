@@ -95,7 +95,6 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet 
 }
 
 export function parseServerConfig(env, {
-  home,
   projectRoot,
 } = {}) {
   return {
@@ -117,7 +116,11 @@ export function parseServerConfig(env, {
     trustedProxy: env.TRUSTED_PROXY === 'loopback' ? 'loopback' : '',
     // 声明的公网方案：未知值归空，与 doctor「未知按未声明」同口径。此前 app.js 两处裸读 process.env。
     accessProfile: ACCESS_PROFILES.includes(String(env.ACCESS_PROFILE || '').trim()) ? String(env.ACCESS_PROFILE).trim() : '',
-    workDir: env.WORK_DIR || home,
+    // 【这里曾经是 `workDir: env.WORK_DIR || home`】2026-09-08 删除。WORK_DIR 已并入 WORKDIRS
+    // （主工作目录 = 工作区列表首项），而那个 `|| home` 回落是一条实测可达的静默塌陷：手工删掉
+    // 配置里的 WORK_DIR 行，整个家目录就成了工作区首位，零报错。README 明写「不要把整个 Home
+    // 目录加入工作区」，装机向导也有 work_dir_is_home 专门拒绝这种输入 —— 只有这条路绕开了两者。
+    // 工作区列表现在只有一个来源：workdirs.js 的 resolveWorkdirSource（守护：SCOPE-03）。
     // 走带参重载而非无参形式：本函数是可注入纯函数（单测传 projectRoot 断言回落），
     // 且它在 .env 加载前就被求值，绝不能让状态根解析退化成读 process.env。
     dataDir: resolveDataDir(env, projectRoot),

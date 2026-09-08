@@ -28,7 +28,7 @@ async function startServer() {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-upload-test-'));
   const started = await spawnServer({
     AUTH_TOKEN: 'ccm-integration-test-token',
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 空串而非 delete：_spawn-server 注入测试标记，使 config 在 dotenv 前保留这些空值，

@@ -1,6 +1,6 @@
 // smoke runner `concurrency` —— 同仓库会话并发真实验收。
 // 两部分：
-//   1) 契约部分（默认跑，需少量 token ~$0.01）：自起 server（WORK_DIR=dirA, WORK_DIRS=dirA,dirB），用
+//   1) 契约部分（默认跑，需少量 token ~$0.01）：自起 server（WORK_DIRS=dirA,dirB，首项即主工作目录），用
 //      user:message 懒创建实例（原设计用 fixture resume 零 token，但 CLI 对 jsonl 格式要求严格、
 //      最小 fixture 仍 resume 失败，改用真实消息确保实例存活），验证台阶3 的实例内核契约：
 //        · instances 事件 shape（viewingInstanceId/dirs/instances:[{instanceId,cwd,sessionId,title,state}]）
@@ -308,7 +308,7 @@ async function run() {
       ...stripInheritedEnv(process.env),   // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 runner.js 的 SMOKE_ENV_BLOCKLIST）
       AUTH_TOKEN: 'ccm-smoke-test-token',
       PORT: String(APP_PORT),
-      WORK_DIR: dirA,
+      // 首项即主工作目录（=旧 WORK_DIR=dirA 的等价写法）
       WORK_DIRS: `${dirA},${dirB}`,
       CCM_DATA_DIR: DATA_DIR,
       LOG_TERMINAL: 'off', // 禁桌面日志窗，防 smoke 堆 Terminal.app

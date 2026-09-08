@@ -101,7 +101,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, with the first as the default `WORK_DIR`. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
+2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
 3. Asks how your phone will reach this machine (LAN only / Cloudflare / encrypted tunnel VPN / reverse proxy and hosted tunnels / direct public exposure). Press Enter to skip; if you pick one it is stored as `ACCESS_PROFILE`, `doctor` and the phone security check tailor their checks to it, and the wizard ends with the matching docs pointer.
 4. Asks whether to enable the phone file editor's direct writes (the only write path that bypasses the Agent tool-approval chain). Enter keeps the default on; answering `n` writes `FILE_EDIT=off`.
 5. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
@@ -118,7 +118,7 @@ All configuration lives in `ccm.config.json` at the project root — one JSON fi
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "…",
-  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": ["/Users/you/code/project-a"],
   "PORT": 3000,
   "WEB_STATUSLINE": false
 }
@@ -197,11 +197,10 @@ node scripts/setup.js \
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
 - Use `--config <path>` to place the config file elsewhere. That path is independent of any existing project-root config — a repo that already has `ccm.config.json` will not block it.
 
-For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`:
+For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`. **The first entry is the one your phone opens by default** (before 2026-09-08 a separate `WORK_DIR` key held the same path; it has been merged — an old config's `WORK_DIR` line is still recognised, folded into the first slot, and reported as safe to delete):
 
 ```json
 {
-  "WORK_DIR": "/Users/you/code/project-a",
   "WORKDIRS": [
     "/Users/you/code/project-a",
     {
@@ -464,9 +463,9 @@ Follow these steps in order and verify each result before continuing:
 1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
    Stop and tell me if any check fails; do not install or sign in to claude yourself.
 2. Run npm ci --omit=dev.
-3. Ask me for the absolute WORK_DIR and whether to install the CLI hooks bridge.
+3. Ask me for the absolute workspace path and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
-4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR PORT
+4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT
    CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
@@ -585,7 +584,7 @@ site data and the installed PWA must be cleared manually.
 | The server refuses to start, saying `AUTH_TOKEN` is missing | The token is a startup prerequisite; it no longer degrades to a loopback bind. Run `npm run setup` to generate one, then restart |
 | Startup logs list only the local URL, no phone URL | `BIND_MODE=loopback` binds `127.0.0.1` only, so nothing is listening on those LAN addresses. Switch back to the default or `lan` for direct phone access |
 | An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
-| doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
+| doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |

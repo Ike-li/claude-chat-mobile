@@ -23,7 +23,7 @@ test('non-interactive setup writes 0600 config in HOME and leaves the overlay al
   assert.equal(st.mode & 0o777, 0o600);
   const written = JSON.parse(readFileSync(HOME_CONFIG, 'utf8'));
   assert.ok(written.AUTH_TOKEN);
-  assert.equal(written.WORK_DIR, '/home/ccm-test/workspace');
+  assert.deepEqual(written.WORKDIRS, ['/home/ccm-test/workspace'], 'WORK_DIR 已并入 WORKDIRS 首项');
   assert.equal(existsSync('/home/ccm-test/.claude/settings.json'), false);
 
   assert.equal(existsSync('/app/.env'), false, '宿主机 .env 不得出现在容器 /app');

@@ -36,7 +36,7 @@ function caseDir() {
 async function withServer(dir, storeFile, fn) {
   const started = await spawnServer({
     AUTH_TOKEN: TOKEN,
-    WORK_DIR: dir,
+    WORK_DIRS: dir,
     CCM_DATA_DIR: dir,
     CCM_APPROVAL_STORE_FILE: storeFile,
   });

@@ -33,7 +33,7 @@ let dir, server;
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-socket-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);

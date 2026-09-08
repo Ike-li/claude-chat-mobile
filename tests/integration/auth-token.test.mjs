@@ -33,7 +33,7 @@ async function startServer() {
   const spawned = await spawnServer({
     AUTH_TOKEN,
     CCM_DATA_DIR: dataDir,
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 本文件测的是 LAN token 路，CF Access 必须关闭。空串 + _spawn-server 已设的
     // CCM_TEST_PRESERVE_EMPTY_ENV=1 组合：空值保留到 dotenv 结束（挡住本机 .env 回填真实

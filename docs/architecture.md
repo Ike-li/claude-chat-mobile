@@ -131,7 +131,7 @@ AUTH_TOKEN（必备，无它不启动）
         ↓
 设备信任（真·本机直连豁免此层，不豁免 token）
         ↓
-WORK_DIR / WORKDIRS 范围门
+WORKDIRS 范围门
         ↓
 CLI permissions.allow + Web 当前权限档
         ↓
@@ -147,7 +147,7 @@ Agent 工具审批或用户直接文件编辑
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
 - Cloudflare Access 是**可选的**公网身份层，不扩大工作区；开着时替代设备审批（第二因子），不替代 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
-- `WORK_DIR` / `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
+- `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
 安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。
@@ -179,7 +179,7 @@ Agent 工具审批或用户直接文件编辑
 | Claude 对话 | `~/.claude/projects/` transcript | CLI/Web 续接与稳定历史 |
 | Web 实例运行态 | 内存中的 `AgentSession` | 流式 turn、审批、事件缓冲 |
 | CCM 控制面 | `CCM_DATA_DIR` | 会话指针、设备、审批、审计、推送、已读位点与缓存 |
-| 工作区白名单 | `WORK_DIR` / `WORKDIRS` | 限定可见与可操作目录 |
+| 工作区白名单 | `WORKDIRS` | 限定可见与可操作目录（首项 = 主工作目录） |
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |

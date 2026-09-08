@@ -358,15 +358,19 @@ export function createUninstaller({
       // 返回 null），于是判定恒为 false：这段报告从 2026-08-19 落地起一次都没打印过。
       // workdirs.js 的 resolveWorkdirSource 头注释早就写了「不能自己 if (Array.isArray(inline))」，
       // 当时那句是写给 doctor D3 的，这里没照做。
-      const workdirs = [
-        env.WORK_DIR || fileEnv.WORK_DIR || home,   // 主工作区：server 里恒占 workDirs[0]
-        ...(resolveWorkdirSource({
-          envList: (env.WORK_DIRS || fileEnv.WORK_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
-          envFile: env.WORK_DIRS_FILE || fileEnv.WORK_DIRS_FILE || '',
-          inline: inlineWorkdirs,
-          here: root,
-        }).result?.entries ?? []).map((e) => e.path),
-      ].filter(Boolean);
+      //
+      // 【这里曾经以 `env.WORK_DIR || fileEnv.WORK_DIR || home` 打头】2026-09-08 随 WORK_DIR 退役删除。
+      // 那个 `|| home` 会让「没配工作区」的机器把整个家目录当成工作区去扫遗留附件目录 —— 与
+      // config.js / doctor.js 里的两处同型（守护：SCOPE-03）。退役中的 WORK_DIR 现在由
+      // resolveWorkdirSource 按来源分档折进列表首位，这里不再自己算一份。
+      const workdirs = (resolveWorkdirSource({
+        envList: (env.WORK_DIRS || fileEnv.WORK_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
+        envFile: env.WORK_DIRS_FILE || fileEnv.WORK_DIRS_FILE || '',
+        inline: inlineWorkdirs,
+        here: root,
+        envPrimary: env.WORK_DIR || '',
+        inlinePrimary: fileEnv.WORK_DIR || '',
+      }).result?.entries ?? []).map((e) => e.path).filter(Boolean);
       for (const dir of new Set(workdirs)) {
         const uploads = join(dir, LEGACY_UPLOAD_DIR);
         if (existsSync(uploads)) out(`  ⚠ 保留（附件改落数据目录前的遗留，只报不删）：${uploads}`);

@@ -25,7 +25,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 3. 普通项渲染出当前值
     await expect(body.locator('input[data-key="PORT"]')).toHaveValue('3000');
-    await expect(body.locator('input[data-key="WORK_DIR"]')).toHaveValue('/Users/you/code');
+    await expect(body.locator('input[data-key="CLAUDE_BIN"]')).toHaveValue('/Users/you/bin/claude');
 
     // 4. ★ 敏感项只显示「已设置（N 字符）」，页面上不得出现明文
     await expect(body).toContainText('已设置（64 字符）'); // AUTH_TOKEN
@@ -108,7 +108,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await openGeneralDiagSection(page);
     await page.locator('#btnEnvConfig').click();
 
-    // 表单里有 PORT / WORK_DIR / NTFY_TOPIC / DEV_MODE / 两个敏感项，只改一个
+    // 表单里有 PORT / CLAUDE_BIN / NTFY_TOPIC / DEV_MODE / 两个敏感项，只改一个
     await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
     await page.locator('#envConfigSave').click();
 

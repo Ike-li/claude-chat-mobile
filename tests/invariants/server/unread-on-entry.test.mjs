@@ -39,7 +39,7 @@ test('sync:since 的 unreadOnEntry 必须含后台期间累积的 live 未读', 
   const cwd = realpathSync(ws);
 
   const server = await spawnServer({
-    AUTH_TOKEN: TOKEN, WORK_DIR: cwd, CCM_DATA_DIR: root,
+    AUTH_TOKEN: TOKEN, WORK_DIRS: cwd, CCM_DATA_DIR: root,
     CCM_FAKE_CLAUDE_MODE: 'turn',                 // 回合会收尾，才发得出第二条
     CCM_FAKE_CLAUDE_SESSION_ID: SESSION_ID,
   });

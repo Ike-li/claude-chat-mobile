@@ -20,7 +20,6 @@ x-runtime-env: &runtime-env
   HOME: /home/ccm-test
   AUTH_TOKEN: playground-local-not-a-secret
   CCM_DATA_DIR: /home/ccm-test/ccm-data
-  WORK_DIR: /home/ccm-test/workspace
   WORK_DIRS: /home/ccm-test/workspace
   WORK_DIRS_FILE: ""
   CLAUDE_BIN: /app/tests/fixtures/fake-claude.sh

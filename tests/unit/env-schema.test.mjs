@@ -22,7 +22,6 @@ import { buildAgentQueryOptions } from '../../app/src/agent/agent.js';
 
 const deps = (over = {}) => ({
   fileExists: () => true,
-  isWritable: () => true,
   isExecutable: () => true,
   probePort: () => false, // false = 端口空闲
   current: {},
@@ -163,11 +162,7 @@ test.describe('类型校验', () => {
   });
 
   test('路径不存在 → error', () => {
-    assert.equal(validateEnvChanges({ WORK_DIR: '/nope' }, deps({ fileExists: () => false })).ok, false);
-  });
-
-  test('路径不可写 → error', () => {
-    assert.equal(validateEnvChanges({ WORK_DIR: '/ro' }, deps({ isWritable: () => false })).ok, false);
+    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: '/nope' }, deps({ fileExists: () => false })).ok, false);
   });
 
   test('CLAUDE_BIN 不可执行 → error', () => {
@@ -175,7 +170,7 @@ test.describe('类型校验', () => {
   });
 
   test('相对路径 → error（启动后 cwd 未必是仓库根）', () => {
-    assert.equal(validateEnvChanges({ WORK_DIR: './rel' }, deps()).ok, false);
+    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: './rel' }, deps()).ok, false);
   });
 
   test('toggle 只接受声明过的字面量', () => {
@@ -216,7 +211,7 @@ test.describe('类型校验', () => {
   });
 
   test('null（删除）跳过类型校验', () => {
-    assert.equal(validateEnvChanges({ PORT: null, WORK_DIR: null }, deps()).ok, true);
+    assert.equal(validateEnvChanges({ PORT: null, WORK_DIRS_FILE: null }, deps()).ok, true);
   });
 });
 
@@ -268,9 +263,9 @@ test.describe('成套配置：全设或全空', () => {
 
 test.describe('全或无', () => {
   test('一项 error 就整体拒写，即使其它项都合法', () => {
-    const r = validateEnvChanges({ PORT: '8080', WORK_DIR: '/nope' }, deps({ fileExists: (p) => p !== '/nope' }));
+    const r = validateEnvChanges({ PORT: '8080', WORK_DIRS_FILE: '/nope' }, deps({ fileExists: (p) => p !== '/nope' }));
     assert.equal(r.ok, false);
-    assert.deepEqual(errorsOf(r), ['WORK_DIR']);
+    assert.deepEqual(errorsOf(r), ['WORK_DIRS_FILE']);
   });
 
   test('warn 不阻断（但要报出来让 UI 弹确认）', () => {
@@ -340,16 +335,16 @@ test.describe('buildEnvView —— 下发给前端的视图', () => {
 // 为什么快照必须由调用方传进来：app/src/ops/config.js 会把文件值**投影回 process.env**
 // （只填还没有的 key），所以在这一层现读 process.env 分不出来源，做出来的是永远不报的假功能。
 test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', () => {
-  const values = { WORK_DIR: '/from/config/file', PORT: '3000' };
+  const values = { CLAUDE_BIN: '/from/config/file', PORT: '3000' };
   const itemOf = (view, key) => view.groups.flatMap((g) => g.items).find((i) => i.key === key);
 
   test('被 shell env 压过的键标 overriddenByEnv —— 面板据此告诉用户「这里改了不生效」', () => {
-    const view = buildEnvView(values, { shellEnv: { WORK_DIR: '/from/shell/env' } });
-    assert.equal(itemOf(view, 'WORK_DIR').overriddenByEnv, true);
+    const view = buildEnvView(values, { shellEnv: { CLAUDE_BIN: '/from/shell/env' } });
+    assert.equal(itemOf(view, 'CLAUDE_BIN').overriddenByEnv, true);
   });
 
   test('没被压过的键是 false 而不是 undefined —— 前端要能直接判真假', () => {
-    const view = buildEnvView(values, { shellEnv: { WORK_DIR: '/from/shell/env' } });
+    const view = buildEnvView(values, { shellEnv: { CLAUDE_BIN: '/from/shell/env' } });
     assert.equal(itemOf(view, 'PORT').overriddenByEnv, false);
   });
 
@@ -368,7 +363,7 @@ test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', (
   // 拿 buildEnvView({}) 当配置项文档下发给桌面端，那条通道上没有 shell 上下文，
   // 给 false 就是一句没有根据的断言。
   test('★ 没传快照时字段整个缺席，而不是下发 false（那是把「没查」说成「没问题」）', () => {
-    const item = buildEnvView(values).groups.flatMap((g) => g.items).find((i) => i.key === 'WORK_DIR');
+    const item = buildEnvView(values).groups.flatMap((g) => g.items).find((i) => i.key === 'CLAUDE_BIN');
     assert.equal(Object.hasOwn(item, 'overriddenByEnv'), false);
   });
 
@@ -376,7 +371,7 @@ test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', (
   // 分叉之后**两边都不会报错**——面板说「没被覆盖」、doctor 说「被覆盖了」，只有用户被误导。
   // 2026-08-05 的 stale 死信正是这个形状（两个函数注释都写「与对方对齐」，而那一维从没对齐）。
   test('★ 与 doctor D18 判据同源：同一份 shellEnv 下两者认定的键集必须逐字相等', () => {
-    const shellEnv = { WORK_DIR: '/a', PORT: '', DEV_MODE: '1', AUTH_TOKEN: 'x', PATH: '/usr/bin' };
+    const shellEnv = { CLAUDE_BIN: '/a', PORT: '', DEV_MODE: '1', AUTH_TOKEN: 'x', PATH: '/usr/bin' };
     const fromView = buildEnvView({}, { shellEnv })
       .groups.flatMap((g) => g.items).filter((i) => i.overriddenByEnv).map((i) => i.key).sort();
     const fromDoctor = envOverrideDiagnostic({
@@ -710,24 +705,24 @@ test.describe('buildEnvView —— enum 项下发 options 供前端渲染 select
 // 两道防线：① buildEnvView 把 list 标成只读，前端不给编辑；② 这里的校验拒收任何非数组，
 // 保护所有写入路径（含将来的 CLI 与 desktop）。② 比 ① 重要 —— 前端是可绕过的。
 test('validateEnvChanges: WORKDIRS 必须是数组，字符串一律拒收', () => {
-  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   const r = validateEnvChanges({ WORKDIRS: '/a,/b' }, d);
   assert.equal(r.ok, false);
   assert.match(r.results[0].message, /数组/);
 });
 
 test('validateEnvChanges: WORKDIRS 接受路径字符串与 {path,sessionLimit} 混用', () => {
-  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   assert.equal(validateEnvChanges({ WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] }, d).ok, true);
 });
 
-test('validateEnvChanges: WORKDIRS 空数组合法（= 只保留 WORK_DIR 一个工作区）', () => {
-  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+test('validateEnvChanges: WORKDIRS 空数组本身合法（列表是否为空由 server preflight 判，见 SCOPE-03）', () => {
+  const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   assert.equal(validateEnvChanges({ WORKDIRS: [] }, d).ok, true);
 });
 
 test('validateEnvChanges: WORKDIRS 条目形状不对时拒收，不静默丢条目', () => {
-  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   assert.equal(validateEnvChanges({ WORKDIRS: [{ dir: '/a' }] }, d).ok, false);
   assert.equal(validateEnvChanges({ WORKDIRS: [123] }, d).ok, false);
 });

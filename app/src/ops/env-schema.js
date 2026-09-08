@@ -140,15 +140,15 @@ export const ENV_SCHEMA = {
     group: 'runtime', kind: 'number', min: 1, max: 65535, default: String(DEFAULT_PORT),
     label: t('监听端口', 'Port'),
   },
-  WORK_DIR: {
-    group: 'runtime', kind: 'path', mustExist: true, writable: true,
-    label: t('主工作目录', 'Primary work directory'),
-    help: t('claude 的默认工作目录。', 'Default working directory for claude.'),
-  },
   // ── 工作区列表：统一配置文件里的内联形态（P1b）────────────────────────
   //
   // 优先级：shell WORK_DIRS > shell WORK_DIRS_FILE > 本项。两个 env 都没设时才用这里（生产路径）。
   // 判定在 pickWorkdirSource。那两个 env 键保留是为了不打断现有部署（migrate 会把它们内联进这里）。
+  //
+  // **首项即主工作目录**（手机端默认打开的那个）。2026-09-08 前另有一个独立的 WORK_DIR 项，
+  // 而装机向导写出去的必然是 `{WORK_DIR: dirs[0], WORKDIRS: dirs}` —— 同一个路径在配置文件里
+  // 出现两遍，用户打开只会问「这俩什么关系」。已合并；旧键由 workdirs.js 的 foldPrimaryWorkdir
+  // 折进首位并告警，不静默改行为。
   //
   // `reload: 'hot'` 是全表唯一一个：改完即生效、无需重启。其余项缺省 'restart'。
   // 这个标记不是文档，是**行为**：ccm.config.json 变更时，server 只热应用标了 hot 的 key，
@@ -156,10 +156,11 @@ export const ENV_SCHEMA = {
   WORKDIRS: {
     group: 'runtime', kind: 'list', reload: 'hot',
     label: t('工作区列表', 'Workspaces'),
-    help: t('每项是绝对路径，或 {path, sessionLimit}。改完即生效，无需重启。当前列表见工作区抽屉；'
-      + '编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
-      'Each entry is an absolute path, or {path, sessionLimit}. Hot-reloads without a restart. '
-      + 'See the workspace drawer for the current list; edit via CLI or desktop (read-only here).'),
+    help: t('每项是绝对路径，或 {path, sessionLimit}。**第一项就是手机端默认打开的目录**。'
+      + '改完即生效，无需重启。当前列表见工作区抽屉；编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
+      'Each entry is an absolute path, or {path, sessionLimit}. **The first entry is the one your '
+      + 'phone opens by default.** Hot-reloads without a restart. See the workspace drawer for the '
+      + 'current list; edit via CLI or desktop (read-only here).'),
   },
   WORK_DIRS_FILE: {
     group: 'runtime', kind: 'path', mustExist: true,
@@ -425,7 +426,6 @@ function checkOne(key, value, def, d) {
   if (def.kind === 'path') {
     if (!value.startsWith('/')) return `${def.label.zh} 必须是绝对路径（启动后 cwd 未必是仓库根）`;
     if (def.mustExist && !d.fileExists(value)) return `路径不存在：${value}`;
-    if (def.writable && !d.isWritable(value)) return `路径不可写：${value}`;
     if (def.executable && !d.isExecutable(value)) return `文件不可执行：${value}`;
     return null;
   }

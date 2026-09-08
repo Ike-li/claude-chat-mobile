@@ -272,8 +272,8 @@ test.describe('env-config 渲染 —— 被环境变量压过的行必须看得�
   // 夹具仍用真实 buildEnvView，避免手编外部契约编错后测试与实现互相印证（本仓在 git fixture 上栽过）
   const overriddenAck = {
     ok: true,
-    ...buildEnvView({ PORT: '3000', WORK_DIR: '/from/config/file' },
-      { shellEnv: { WORK_DIR: '/from/shell/env' } }),
+    ...buildEnvView({ PORT: '3000', CLAUDE_BIN: '/from/config/file' },
+      { shellEnv: { CLAUDE_BIN: '/from/shell/env' } }),
     envFileExists: true,
   };
 

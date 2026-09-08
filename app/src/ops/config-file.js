@@ -47,6 +47,9 @@ const VERSION_KEY = '$schemaVersion';
 export const PASSTHROUGH_KEYS = Object.freeze([
   'CCM_DATA_DIR',        // src/shared/data-dir.js —— 改它是迁移不是设置，故意不进 UI
   'WORK_DIRS',           // src/server/app.js:180 —— 逗号分隔的内联工作区（P1b 并入结构化 WORKDIRS）
+  'WORK_DIR',            // 已退役（2026-09-08 并入 WORKDIRS 首项）。仍登记在此的唯一理由：shell 里
+                         // 可能还 export 着它，app.js 把它当 envPrimary 折进列表首位并告警。
+                         // 不进 ENV_SCHEMA = 配置面板不再显示，migrate 会把它折走。
   'CLI_HOOKS_DIR',       // src/ops/cli-hooks-bridge.js:51
   'CLI_STATUSLINE_DIR',  // src/server/app.js:1078
 ]);
@@ -389,6 +392,27 @@ export function readConfigFileRaw(dir) {
 //
 // workdirsEntries === null 表示外部文件读不出来：**保留 WORK_DIRS_FILE 并告警**，不静默丢弃。
 // 丢掉的后果是用户迁移后只剩 WORK_DIR 一个工作区，而迁移过程报的是成功。
+//
+// 【WORK_DIR 这一档为什么在最后做】它是「主工作目录」，语义上是列表的**首项**，所以必须等上面
+// 三条路径把列表定下来之后再折。折叠而不是丢弃的理由同上：谁的 WORK_DIR 不在列表里（或不是第一项），
+// 静默丢掉就等于悄悄换了手机端默认打开的目录，而迁移过程报的是「成功」。
+function foldPrimaryIntoWorkdirs(config, primary, warnings) {
+  const path = String(primary ?? '').trim();
+  if (!path) return;
+  delete config.WORK_DIR;
+
+  const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
+  const pathOf = e => (typeof e === 'string' ? e : e?.path);
+  const idx = list.findIndex(e => pathOf(e) === path);
+  if (idx === 0) {
+    warnings.push('WORK_DIR 已并入 WORKDIRS（它本来就是第一项，主工作目录 = 列表首项）');
+    return;
+  }
+  // 已在列表里就提位（保留它自己的 sessionLimit），不在就插到最前 —— 旧语义里 WORK_DIR 恒占首位。
+  config.WORKDIRS = idx === -1 ? [path, ...list] : [list[idx], ...list.filter((_, i) => i !== idx)];
+  warnings.push(`WORK_DIR 已并入 WORKDIRS 首项（主工作目录 = 列表首项）：${path}`);
+}
+
 function foldWorkdirs(config, envValues, workdirsEntries, warnings) {
   if (envValues.WORK_DIRS_FILE) {
     if (Array.isArray(workdirsEntries)) {
@@ -435,6 +459,8 @@ export function migrateEnvValues(envValues = {}, { workdirsEntries } = {}) {
   }
 
   foldWorkdirs(config, envValues, workdirsEntries, warnings);
+  // 必须在 foldWorkdirs 之后：它是列表的首项，得等列表定下来。
+  foldPrimaryIntoWorkdirs(config, envValues.WORK_DIR, warnings);
 
   return { config, warnings };
 }

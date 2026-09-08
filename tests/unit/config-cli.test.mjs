@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -87,7 +87,7 @@ test.describe('parseCliValue —— 人在终端敲的值', () => {
   });
 
   test('文本类原样通过', () => {
-    assert.equal(parseCliValue('WORK_DIR', '/Users/you/code').value, '/Users/you/code');
+    assert.equal(parseCliValue('CLAUDE_BIN', '/Users/you/bin/claude').value, '/Users/you/bin/claude');
   });
 });
 
@@ -233,6 +233,35 @@ test.describe('runConfigCommand —— migrate', () => {
     assert.equal(Object.hasOwn(cfg, 'WORK_DIRS_FILE'), false);
   }));
 
+  // WORK_DIR 于 2026-09-08 退役（并入 WORKDIRS 首项）。迁移必须**折叠**而不是丢弃：
+  // 谁的 WORK_DIR 不是列表第一项，静默丢掉就等于悄悄换了手机端默认打开的目录，
+  // 而迁移过程报的是「成功」。同 WORK_DIRS_FILE 那一档的纪律。
+  test('WORK_DIR 折进 WORKDIRS 首项，旧键不再写出去', () => withTempDir((dir) => {
+    writeFileSync(join(dir, '.env'), 'AUTH_TOKEN=tok\nWORK_DIR=/tmp/primary\nWORK_DIRS=/tmp/a,/tmp/primary,/tmp/b\n');
+    const r = runConfigCommand({ command: 'migrate', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, true);
+    const cfg = readConfig(dir);
+    // 提位而不是原地保留：旧语义里 WORK_DIR 恒占白名单首位
+    assert.deepEqual(cfg.WORKDIRS, ['/tmp/primary', '/tmp/a', '/tmp/b']);
+    assert.equal(Object.hasOwn(cfg, 'WORK_DIR'), false);
+  }));
+
+  test('WORK_DIR 不在列表里 → 插到首位（旧语义里它无条件在白名单内）', () => withTempDir((dir) => {
+    writeFileSync(join(dir, '.env'), 'AUTH_TOKEN=tok\nWORK_DIR=/tmp/solo\nWORK_DIRS=/tmp/a\n');
+    const r = runConfigCommand({ command: 'migrate', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, true);
+    assert.deepEqual(readConfig(dir).WORKDIRS, ['/tmp/solo', '/tmp/a']);
+  }));
+
+  test('只有 WORK_DIR、没有列表 → 它自己成为唯一工作区', () => withTempDir((dir) => {
+    writeFileSync(join(dir, '.env'), 'AUTH_TOKEN=tok\nWORK_DIR=/tmp/only\n');
+    const r = runConfigCommand({ command: 'migrate', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, true);
+    const cfg = readConfig(dir);
+    assert.deepEqual(cfg.WORKDIRS, ['/tmp/only']);
+    assert.equal(Object.hasOwn(cfg, 'WORK_DIR'), false);
+  }));
+
   test('目标已存在时拒绝 —— 迁移不是覆盖', () => withTempDir((dir) => {
     writeFileSync(join(dir, '.env'), 'AUTH_TOKEN=tok\n');
     writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ AUTH_TOKEN: 'existing' }));
@@ -329,19 +358,20 @@ test.describe('runConfigCommand —— set 的路径校验必须与手机面板�
     assert.equal(set(dir, 'CLAUDE_BIN', bin).ok, true);
   }));
 
-  // root 绕过一切 mode 位，chmod 0555 对它不构成「不可写」——容器里跑的正是 root。
-  // 这里跳过而不是放宽断言：断言本身是对的，只是它的前提（进程受 mode 位约束）在 root 下不成立。
-  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
-  test('★ WORK_DIR 指向不可写目录 → 拒绝', { skip: isRoot ? 'root 不受 mode 位约束，此场景在 root 下无法构造' : false }, () => withTempDir((dir) => {
+  // 【这里曾经有一条「★ WORK_DIR 指向不可写目录 → 拒绝」】2026-09-08 随 WORK_DIR 退役删除。
+  //
+  // 删而不是改键，因为它测的 `writable: true` 是**全表唯一**挂在 WORK_DIR 上的 schema 能力：
+  // 那个项没了之后既没有消费者，也无法再被测到（validateEnvChanges 按 key 查真 ENV_SCHEMA，
+  // 造不出一个带 writable 的假项）。能力与它的校验依赖 isWritable 一并删除。
+  //
+  // ⚠ 顺带记下这条测试**为什么不能只改个键名留着**：WORK_DIR 从 schema 移走之后它其实仍是绿的
+  // ——`set` 因为「未知 key」而返回 ok:false，断言照过。测的东西已经完全变了，绿灯却没变。
+  // 这正是「看着漂亮却永不变红」的形态：它会一直为一个不存在的防护背书。
+  test('★ 已退役的 WORK_DIR：set 明确拒绝并指向 WORKDIRS，而不是静默写进一个没人读的键', () => withTempDir((dir) => {
     init(dir);
-    const ro = join(dir, 'readonly-dir');
-    mkdirSync(ro, { mode: 0o555 });
-    try {
-      const r = set(dir, 'WORK_DIR', ro);
-      assert.equal(r.ok, false, '不可写的工作目录会让上传/写文件在运行时才炸');
-    } finally {
-      chmodSync(ro, 0o755); // 还原，否则 rmSync 删不掉
-    }
+    const r = set(dir, 'WORK_DIR', dir);
+    assert.equal(r.ok, false, '写进去也没人读 —— 静默接受等于给用户一个假成功');
+    assert.equal(Object.hasOwn(readConfig(dir), 'WORK_DIR'), false, '拒绝就不能落盘');
   }));
 });
 

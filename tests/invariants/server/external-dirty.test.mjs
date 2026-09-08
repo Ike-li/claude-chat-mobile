@@ -78,7 +78,7 @@ test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的
   );
 
   const server = await spawnServer({
-    AUTH_TOKEN: TOKEN, WORK_DIR: cwd, CCM_DATA_DIR: root,
+    AUTH_TOKEN: TOKEN, WORK_DIRS: cwd, CCM_DATA_DIR: root,
     CCM_FAKE_CLAUDE_MODE: 'turn',                 // 回合会收尾 → 空闲 → 走「该置换」那一侧
     CCM_FAKE_CLAUDE_SESSION_ID: SESSION_ID,       // 钉死 sid，好算出 transcript 落点
   });

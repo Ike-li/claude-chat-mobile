@@ -93,7 +93,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，第一个作为默认打开的 `WORK_DIR`。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
+2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
 3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 反向代理与托管隧道 / 公网直连）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
 4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
 5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
@@ -110,7 +110,7 @@ npm run setup
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "……",
-  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": ["/Users/you/code/project-a"],
   "PORT": 3000,
   "WEB_STATUSLINE": false
 }
@@ -183,11 +183,12 @@ node scripts/setup.js \
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 
-多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`：
+多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`。
+**第一项就是手机端默认打开的那个**（2026-09-08 前另有一个独立的 `WORK_DIR` 键写同一个路径，已合并；
+旧配置里那一行仍被识别、折进列表首位并提示可以删掉）：
 
 ```json
 {
-  "WORK_DIR": "/Users/you/code/project-a",
   "WORKDIRS": [
     "/Users/you/code/project-a",
     {
@@ -469,9 +470,9 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
 2. 运行 npm ci --omit=dev。
-3. 先跟我确认 WORK_DIR 的绝对路径，以及是否安装 CLI hooks bridge。
-   不要把整个家目录当 WORK_DIR；hooks=on 会修改 ~/.claude/settings.json。
-4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR PORT CCM_DATA_DIR
+3. 先跟我确认工作区的绝对路径，以及是否安装 CLI hooks bridge。
+   不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
+4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT CCM_DATA_DIR
    WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
@@ -580,7 +581,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | server 起不来，日志说没有 `AUTH_TOKEN` | 令牌是启动前提，不再降级绑本机。跑 `npm run setup` 生成一个后重启 |
 | 启动日志只列了本机地址，没有手机地址 | `BIND_MODE=loopback` 只绑 `127.0.0.1`，那些局域网地址上没人在听。要手机直连改回默认或 `lan` |
 | agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
-| doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
+| doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |

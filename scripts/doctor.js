@@ -129,15 +129,22 @@ function checkClaudeBin() {
   ({ ok, warn, fail })[d.status]('CLAUDE_BIN', d.detail);
 }
 
-// D3: WORK_DIR / WORK_DIRS 可写
+// D3: 工作区白名单各目录可写
+//
+// 【这里曾经有一行 `checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir())`】2026-09-08 随
+// WORK_DIR 的退役一并删除。那个 `|| homedir()` 会让「没配工作区」的机器被 doctor 报成
+// 「WORK_DIR 可写 ✓」—— 检查的是家目录，而用户以为检查的是他的项目目录。
 function checkWorkDir() {
-  checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir());
-  // 多 repo 台阶1：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
-  // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
+  // 白名单各目录需可写。soft：问题用 warn（server 启动期对单个无效项告警跳过、不挡启动，
+  // doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server readWorkdirSource 单一事实源）：条目支持 string 或 {path, sessionLimit}。
-  const { result, from, filePath } = resolveWorkdirSource();
+  const { result, from, filePath, warnings: srcWarnings } = resolveWorkdirSource();
   if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
+  for (const w of srcWarnings || []) warn('WORK_DIR', w);
   if (result) {
+    // SCOPE-03：一个可用工作区都没有 = server 会拒绝启动，doctor 必须先把它报成 fail 而不是
+    // 沉默 —— 这条正是 doctor 存在的意义（启动前就说清为什么起不来）。
+    if (!result.entries.length) fail(from, '没有配置任何工作区：server 会拒绝启动');
     // 标签用**实际来源键名**（from：WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），不再硬编码成旧的
     // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
@@ -561,15 +568,18 @@ function resolveWorkdirSource() {
     envFile: process.env.WORK_DIRS_FILE || '',
     inline: envArg ? null : readConfigFileRaw(HERE)?.WORKDIRS,
     here: HERE,
+    // 退役中的 WORK_DIR：折进列表首位并告警，与 server 同一份判据（按来源分档，env 压过文件）。
+    envPrimary: process.env.WORK_DIR || '',
+    inlinePrimary: envArg ? '' : (readConfigFileRaw(HERE)?.WORK_DIR || ''),
   });
 }
 
 // 白名单工作目录清单（与 checkWorkDir 同一解析口径，只取路径不做可写校验）。
+// 【曾经以 `process.env.WORK_DIR || homedir()` 打头】同 checkWorkDir：那个回落会把家目录
+// 混进「工作区清单」，附件体积扫描等消费者据此扫的就是整个家目录。
 function workdirPaths() {
-  const out = [process.env.WORK_DIR || homedir()];
   const { result } = resolveWorkdirSource();
-  if (result) for (const { path } of result.entries) out.push(path);
-  return [...new Set(out)];
+  return [...new Set((result?.entries || []).map(e => e.path))];
 }
 
 // 单个目录的体积/文件数。目录不存在返回 null（＝这里没传过附件）。

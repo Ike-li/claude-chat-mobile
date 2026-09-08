@@ -29,7 +29,7 @@ test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', as
   });
 
   await assert.rejects(
-    spawnServer({ AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
+    spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
     /Server startup timeout/
   );
 
@@ -60,7 +60,7 @@ test('readiness 成功：保留调用方对 child 的收尾责任', async () => 
 
   const result = await spawnServer({
     AUTH_TOKEN: '',
-    WORK_DIR: '/tmp/ccm-test',
+    WORK_DIRS: '/tmp/ccm-test',
     CCM_DATA_DIR: '/tmp/ccm-test',
     CCM_TEST_PRESERVE_EMPTY_ENV: '0',
   });
@@ -98,7 +98,7 @@ test('spawn 强制 LOG_TERMINAL=off：隔离本机 .env，且忽略 envOverrides
     });
     await spawnServer({
       AUTH_TOKEN: '',
-      WORK_DIR: '/tmp/ccm-test',
+      WORK_DIRS: '/tmp/ccm-test',
       CCM_DATA_DIR: '/tmp/ccm-test',
       LOG_TERMINAL: 'on', // 调用方误传也不得放行
     });
@@ -155,7 +155,7 @@ test('不传 PORT 时向 OS 要空闲端口，而不是随机抽签', async () =
     pickPort: async () => { pickCalls += 1; return 45678; },
   });
 
-  const result = await spawnServer({ AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+  const result = await spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
 
   assert.equal(pickCalls, 1, '未指定 PORT 时必须问 OS 要，不能自己抽');
   assert.equal(result.port, 45678);
@@ -176,7 +176,7 @@ test('显式传 PORT 时照用，不去问 OS（重启同端口的用法不能�
     pickPort: async () => { pickCalls += 1; return 45678; },
   });
 
-  const result = await spawnServer({ PORT: '31999', AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+  const result = await spawnServer({ PORT: '31999', AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
 
   assert.equal(pickCalls, 0);
   assert.equal(result.port, 31999);
@@ -198,7 +198,7 @@ test('reserveFreePort 真的给出可立即绑定的空闲端口（不是占着�
   });
   // maxAttempts=0 直接走超时分支，但端口已由真实 reserveFreePort 选出并写进错误信息
   await assert.rejects(
-    spawnServer({ AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
+    spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
     err => {
       const port = Number(err.message.match(/端口 (\d+)/)?.[1]);
       assert.ok(Number.isInteger(port) && port > 1024, `应拿到合法端口，得到 ${port}`);
@@ -234,14 +234,14 @@ test('spawn 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等），但保留
     maxAttempts: 1,
   });
 
-  await spawnServer({ AUTH_TOKEN: 't', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+  await spawnServer({ AUTH_TOKEN: 't', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
 
   for (const key of SPAWN_ENV_BLOCKLIST) {
     assert.equal(key in spawnOptions.env, false, `${key} 不该传给被测 server`);
   }
   assert.equal(spawnOptions.env.PATH, '/usr/bin', '无关键必须保留');
   assert.equal(spawnOptions.env.HOME, '/home/someone');
-  assert.equal(spawnOptions.env.WORK_DIR, '/tmp/ccm-test', 'envOverrides 照常生效');
+  assert.equal(spawnOptions.env.WORK_DIRS, '/tmp/ccm-test', 'envOverrides 照常生效');
 });
 
 test('调用方显式传入的键不受 blocklist 影响（overrides 排在 strip 之后）', async () => {
@@ -260,6 +260,6 @@ test('调用方显式传入的键不受 blocklist 影响（overrides 排在 stri
   });
 
   // cf-access-gate 那批用例要显式构造 CF 场景——摘的是「继承来的」，不是「显式要的」。
-  await spawnServer({ CF_ACCESS_TEAM: 'test-team', AUTH_TOKEN: 't', WORK_DIR: '/tmp/x', CCM_DATA_DIR: '/tmp/x' });
+  await spawnServer({ CF_ACCESS_TEAM: 'test-team', AUTH_TOKEN: 't', WORK_DIRS: '/tmp/x', CCM_DATA_DIR: '/tmp/x' });
   assert.equal(spawnOptions.env.CF_ACCESS_TEAM, 'test-team');
 });

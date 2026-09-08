@@ -28,7 +28,7 @@ async function startServer() {
   const spawned = await spawnServer({
     AUTH_TOKEN,
     CCM_DATA_DIR: dataDir,
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 启用 CF Access（三项齐全 → enabled=true；与 auth-token.test.mjs 相反，它刻意传空串关掉）。
     // 「三项真的生效了」由下面「公网 Host + 正确 token → 仍 401」那两个用例行为性地证明：若 CF 配置

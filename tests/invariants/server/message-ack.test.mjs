@@ -36,7 +36,7 @@ const TOKEN = 'inv-message-ack-token';
 // 一台隔离 server + 一条已连上的 socket，跑完必定收尸。
 async function withClient(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-msg-'));
-  const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
     auth: { token: TOKEN, deviceToken: 'inv-msg-device' },

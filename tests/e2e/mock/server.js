@@ -234,7 +234,7 @@ function buildMockEnvView() {
         label: mockLabel('运行时', 'Runtime'),
         items: [
           { key: 'PORT', kind: 'number', label: mockLabel('监听端口', 'Port'), readonly: false, secret: false, value: '3000', min: 1, max: 65535 },
-          { key: 'WORK_DIR', kind: 'path', label: mockLabel('主工作目录', 'Primary work directory'), readonly: false, secret: false, value: '/Users/you/code' },
+          { key: 'CLAUDE_BIN', kind: 'path', label: mockLabel('claude 可执行文件', 'claude binary'), readonly: false, secret: false, value: '/Users/you/bin/claude' },
         ],
       },
       {

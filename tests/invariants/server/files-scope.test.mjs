@@ -31,7 +31,7 @@ test.before(async () => {
 
   auditFile = join(dir, 'audit-records.json');
   server = await spawnServer({
-    AUTH_TOKEN: TOKEN, WORK_DIR: workdir, CCM_DATA_DIR: dir, CCM_AUDIT_FILE: auditFile,
+    AUTH_TOKEN: TOKEN, WORK_DIRS: workdir, CCM_DATA_DIR: dir, CCM_AUDIT_FILE: auditFile,
   });
 
   sock = ioClient(`http://127.0.0.1:${server.port}`, {

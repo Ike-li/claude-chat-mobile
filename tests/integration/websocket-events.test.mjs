@@ -37,7 +37,7 @@ async function startServer(options = {}) {
   dataDir = reuseDataDir || mkdtempSync(join(tmpdir(), 'ccm-ws-test-'));
   const started = await spawnServer({
     AUTH_TOKEN: authEnabled ? 'test-token-123' : 'ccm-integration-test-token',   // §1.9：无 token 起不来，非 auth 用例也要给
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     ...(pinnedPort ? { PORT: String(pinnedPort) } : {}),

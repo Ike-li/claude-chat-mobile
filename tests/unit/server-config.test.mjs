@@ -231,12 +231,11 @@ test('parseServerConfig preserves public defaults and supports external CCM_DATA
     AUTH_TOKEN: 'token',
     INSTANCE_IDLE_RECLAIM_MS: '0',
     CCM_DATA_DIR: '/external/ccm-data',
-  }, { home: '/home/example', projectRoot: '/repo' });
+  }, { projectRoot: '/repo' });
 
   assert.equal(config.port, 3100);
   assert.equal(config.authToken, 'token');
   assert.equal(config.instanceIdleReclaimMs, 0);
-  assert.equal(config.workDir, '/home/example');
   assert.equal(config.dataDir, '/external/ccm-data');
   assert.equal(config.idleTimeoutMs, 600000);
   assert.equal(config.approvalTtlMs, 1800000);

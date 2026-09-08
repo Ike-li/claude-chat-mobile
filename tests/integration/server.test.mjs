@@ -47,7 +47,7 @@ test.before(async () => {
   // 立即失败，不空等满 10s、也绝不对错误进程发有状态事件。
   const buildNonce = `srvtest-${randomUUID()}`;
   serverProc = spawn('node', ['app/server.js'], {
-    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIR: tmpDir,
+    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIRS: tmpDir,
       // CCM_DATA_DIR 隔离（同其余 tests/integration/*.test.mjs 惯例）：此前本文件唯独漏设，子进程
       // sessions.js/devices.js/approval-store.js/audit.js 全部落到真实 data/ 目录——sessions.js 的
       // 写入此前一直静默污染，只是没人注意；Phase 4 新增的 approval-store.js/audit.js 让污染第一次

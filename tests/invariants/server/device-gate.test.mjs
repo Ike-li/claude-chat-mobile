@@ -26,7 +26,7 @@ let dir, server;
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);
@@ -112,7 +112,7 @@ test.describe('待审设备卡片的来源 IP 与限速桶同一份判据（AUTH
 
   test.before(async () => {
     pdir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-xff-'));
-    pserver = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: pdir, CCM_DATA_DIR: pdir, TRUSTED_PROXY: 'loopback' });
+    pserver = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: pdir, CCM_DATA_DIR: pdir, TRUSTED_PROXY: 'loopback' });
   });
   test.after(async () => {
     if (pserver) await killServer(pserver.proc);

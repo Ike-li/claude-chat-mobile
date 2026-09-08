@@ -7,7 +7,7 @@
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, constants as fsConstants } from 'node:fs';
+import { statSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, constants as fsConstants } from 'node:fs';
 import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken } from '../shared/sanitizer.js';
@@ -78,7 +78,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath, pickWorkdirSource } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath, resolveWorkdirSource } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -163,16 +163,18 @@ const {
   bindHost: BIND_HOST,
   trustedProxy: TRUSTED_PROXY,       // 采信 XFF 的开关，已归一（只可能是 '' 或 'loopback'）
   accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
-  workDir: configuredWorkDir,
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
 
-// WORK_DIR 单列为 let：preflight 通过存在性检查后经 realpathSync 规范化（与 CLI 的
-// ~/.claude/projects 命名一致，令会话列表 cwd 隔离匹配稳健，如 /tmp→/private/tmp）。
-let WORK_DIR = configuredWorkDir;
-// 多 repo 台阶1：可在 web 内切换的工作目录白名单（WORK_DIR + WORK_DIRS，preflight 内构建）。
+// 多 repo 台阶1：可在 web 内切换的工作目录白名单（preflight 内构建，热加载可变）。
+// 各项已在 resolveWorkdirs 里经 realpathSync 规范化（与 CLI 的 ~/.claude/projects 命名一致，
+// 令会话列表 cwd 隔离匹配稳健，如 /tmp→/private/tmp）。
 let workDirs = [];
-// 每工作区历史会话显示条数（session:list 默认截断量）；WORK_DIR 及未指定的目录用 DEFAULT_SESSION_LIMIT。
+// 主工作目录 = 列表首项。2026-09-08 前它是独立配置项 WORK_DIR，与 WORKDIRS 在装机向导里
+// 必然重复第一项（setup 写的就是 `{workDir: dirs[0], workDirs: dirs}`），用户打开配置只看到
+// 同一个路径写了两遍。取派生量而非另存一份：两份就会分叉，而热加载只会更新其中一份。
+const primaryWorkDir = () => workDirs[0];
+// 每工作区历史会话显示条数（session:list 默认截断量）；未指定的目录用 DEFAULT_SESSION_LIMIT。
 let sessionLimitByDir = new Map();
 
 let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId → {[category]:{notifiedAt,pending}}；
@@ -214,50 +216,64 @@ function emitNotify(pn, ntfyType) {
 //
 // 每次调用重读文件而不是用启动时的快照：热加载路径本来就要重读，而这个 JSON 只有几 KB。
 // 换来的是零新增模块级状态 —— 与 CLAUDE.md「新状态别再落 app.js 顶层」一致。
-function readInlineWorkdirs() {
-  if (!usingConfigJson()) return null;
+// 一次读出配置文件里跟工作区有关的两项：列表本身，以及退役中的 WORK_DIR。
+// 分两次读文件会在编辑器保存到一半时读出互相矛盾的两半。
+function readInlineWorkdirConfig() {
+  if (!usingConfigJson()) return { list: null, primary: '' };
   try {
     const parsed = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-    return Array.isArray(parsed?.WORKDIRS) ? parsed.WORKDIRS : null;
+    return {
+      list: Array.isArray(parsed?.WORKDIRS) ? parsed.WORKDIRS : null,
+      primary: typeof parsed?.WORK_DIR === 'string' ? parsed.WORK_DIR : '',
+    };
   } catch {
-    return null; // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，这里静默回落即可
+    return { list: null, primary: '' }; // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，这里静默回落即可
   }
 }
 
+// 返回 { result, warnings }；result === null 表示读/解析失败（调用方保留旧白名单，不清空）。
+//
+// 优先级判定与主目录折叠都在 workdirs.js 的 resolveWorkdirSource（纯函数、有单测），
+// 这里只负责读 env / 读文件这两件带副作用的事。CLI doctor 的 D3 走同一个函数 —— 判据分叉过一次，
+// 那次是 doctor 自己写了 `if (Array.isArray(inline)) return`，把 WORK_DIRS env 吃掉了。
 function readWorkdirSource() {
-  // 优先级：WORK_DIRS > WORK_DIRS_FILE > 内联 WORKDIRS。判定本身在 workdirs.js 的
-  // pickWorkdirSource（纯函数、有单测），这里只负责读 env / 读文件这两件带副作用的事。
-  // 此前内联 WORKDIRS 排在最前，与 CLAUDE.md「环境变量始终压过文件」相反——详见该函数头注。
-  const picked = pickWorkdirSource({
+  const inline = readInlineWorkdirConfig();
+  const { result, warnings } = resolveWorkdirSource({
     envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
     envFile: process.env.WORK_DIRS_FILE,
-    inline: readInlineWorkdirs(),
+    inline: inline.list,
+    here: HERE,
+    envPrimary: process.env.WORK_DIR || '',
+    inlinePrimary: inline.primary,
   });
-  if (picked.kind === 'env-file') {
-    return loadWorkdirsFile(resolveWorkdirsFilePath(picked.value, HERE)); // null=读/解析失败
-  }
-  return normalizeWorkdirEntries(picked.value);
+  return { result, warnings };
 }
-// 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。WORK_DIR 恒首位（其 limit 若在文件里指定则采用）。
+// 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
 // 返回 warnings[]（调用方决定打印）。
+//
+// 【这里曾经是 `const nextDirs = [WORK_DIR]`】那句无条件插入让显式 `export WORK_DIRS=...` 收窄不了
+// 白名单的首位 —— 2026-09-01 修「内联 WORKDIRS 压过 env」时漏掉的同族分支，2026-09-08 容器内实测
+// 确认仍在。顺序现在完全由来源决定，主目录的折叠在 workdirs.js 的 resolveWorkdirSource 里按来源分档。
 function applyWorkdirs(source) {
   const { dirs, limits, warnings: rw } = resolveWorkdirs(source.entries);
-  const nextDirs = [WORK_DIR];
-  const nextLimits = new Map([[WORK_DIR, limits.get(WORK_DIR) ?? DEFAULT_SESSION_LIMIT]]);
-  for (const d of dirs) {
-    if (nextLimits.has(d)) continue;
-    nextDirs.push(d);
-    nextLimits.set(d, limits.get(d));
-  }
-  workDirs = nextDirs;
-  sessionLimitByDir = nextLimits;
+  workDirs = dirs;
+  sessionLimitByDir = limits;
   return [...source.warnings, ...rw];
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
 // 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
 function reloadWorkdirs() {
-  const source = readWorkdirSource();
+  const { result: source, warnings: srcWarnings } = readWorkdirSource();
   if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
+  for (const w of srcWarnings) console.warn(`⚠️  [workdirs 热加载] ${w}`);
+  // 热加载路径上「一个都不剩」不能像启动期那样 exit —— 那会把正在跑的回合一起杀掉，
+  // 而起因可能只是编辑器写到一半、或外置盘临时掉线。保留旧白名单是这里的正确失败方向
+  //（与 source === null 同档）；SCOPE-03 的拒绝只发生在启动期，那时还没有东西可失去。
+  const { dirs: probe } = resolveWorkdirs(source.entries);
+  if (!probe.length) {
+    console.warn('⚠️  [workdirs 热加载] 新配置里没有一个可用工作区，保留旧白名单（未生效）');
+    return;
+  }
   const prevKey = workDirs.join('|');
   for (const w of applyWorkdirs(source)) console.warn(`⚠️  [workdirs 热加载] ${w}`);
   // 被移除目录的已开实例保留运行、新开被拒；但若 viewingCwd 停在已移除目录且其上无实例，
@@ -282,18 +298,22 @@ function preflight() {
     console.error(`\n❌ 启动失败：${msg}\n`);
     process.exit(1);
   };
-  try {
-    if (!statSync(WORK_DIR).isDirectory()) fail(`WORK_DIR 不是目录：${WORK_DIR}`);
-  } catch {
-    fail(`WORK_DIR 不存在：${WORK_DIR}（请在 .env 中设置有效路径）`);
-  }
-  WORK_DIR = realpathSync(WORK_DIR); // 规范化（解符号链接/相对段）：存储与查找的 cwd 同 CLI 命名，cwd 隔离匹配稳健
-  // 多 repo 台阶1：白名单 = WORK_DIR（首位）+ WORK_DIRS_FILE（JSON 数组文件，条目支持 string 或 {path,sessionLimit}），
-  // 若未设 WORK_DIRS_FILE 则回退 WORK_DIRS（逗号分隔，向后兼容）。解析/校验/去重逻辑在 workdirs.js（doctor.js D3 共用）。
-  // 无效项告警跳过不挡启动。只设 WORK_DIR 则 workDirs=[WORK_DIR]，前端目录切换器隐藏（退化单目录）。
-  const source = readWorkdirSource();
-  for (const w of applyWorkdirs(source ?? { entries: [], warnings: ['WORK_DIRS_FILE 读取/解析失败，仅用 WORK_DIR'] })) {
+  // 工作区白名单：条目支持 string 或 {path,sessionLimit}，来源优先级与主目录折叠都在 workdirs.js
+  //（doctor.js D3 共用同一份）。单个无效项告警跳过、不挡启动；列表只剩一个的话目录切换器隐藏。
+  const { result: source, warnings: srcWarnings } = readWorkdirSource();
+  for (const w of srcWarnings) console.warn(`⚠️  ${w}`);
+  for (const w of applyWorkdirs(source ?? { entries: [], warnings: ['WORK_DIRS_FILE 读取/解析失败'] })) {
     console.warn(`⚠️  ${w}`);
+  }
+  // SCOPE-03：一个可用工作区都没有时拒绝启动。
+  //
+  // 这里曾经不可能触发 —— WORK_DIR 无条件占首位，而它自己回落 $HOME，所以白名单最少也有一项，
+  // 那一项恰好是整个家目录。删掉那条回落之后，「全部无效」就成了一个必须显式处理的真实状态：
+  // 用户删了项目目录、外置盘没挂载、路径手滑写错。fail-loud 是唯一正确的方向 —— 静默起一个
+  // 什么都打不开的 server，用户只会看到手机端空列表，无从知道是配置问题。
+  if (!workDirs.length) {
+    fail('没有可用的工作区：WORKDIRS 里的目录一个都不存在或不可达。\n'
+      + `   请检查 ${CONFIG_FILE_NAME} 的 WORKDIRS，或用 node scripts/config.js set 重设。`);
   }
   let claudeBin = process.env.CLAUDE_BIN || '';
   if (!claudeBin) {
@@ -336,9 +356,9 @@ const claudeBin = preflight();
 //     前一台的视图一起改掉。多用户/多机独立视图要先改 hard-rules §2 立场，再全链路改 per-(连接) 分流。
 let viewingInstanceId = null;
 // viewingCwd = 当前查看实例的工作目录上下文（新建会话选目录 / statusline git 段 / 白名单维度）。
-// 必须在 preflight 之后取（WORK_DIR 在 preflight 内才 realpathSync 规范化，否则 cwd 隔离失灵）。
+// 必须在 preflight 之后取（workDirs 在 preflight 内才建好并经 realpathSync 规范化，否则 cwd 隔离失灵）。
 // n1: N1-VIEWING-CWD 同上，全局单值：随 viewingInstanceId 一起被最后切换的那台设备决定。
-let viewingCwd = WORK_DIR;
+let viewingCwd = primaryWorkDir();
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
 // BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
 // 刚移除实例的 cwd（它是最后实际查看的），避免裸 viewingCwd 停在更早旧值致新会话选目录/statusline 跳回旧工作区。
@@ -2259,7 +2279,7 @@ registerSocketConnection(io, socket => {
           || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
-          // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
+          // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
           viewingCwd = a.cwd;
           broadcastInstances();
         }
@@ -3175,7 +3195,6 @@ registerSocketConnection(io, socket => {
     const verdict = validateEnvChanges(changes, {
       current,
       fileExists: existsSync,
-      isWritable: p => canAccessPath(p, fsConstants.W_OK),
       isExecutable: p => canAccessPath(p, fsConstants.X_OK),
       probePort: () => portBusy,
     });
@@ -3211,7 +3230,7 @@ registerSocketConnection(io, socket => {
     const keys = Object.keys(changes);
     // 服务端留痕：事后要能查到「这台机器的配置是谁什么时候改的」。只记 key 名 —— 值里有密钥。
     console.log(`[env] 经 UI 修改 ${keys.length} 项：${keys.join(', ')}（需重启生效）`);
-    // 进审计环而不只是 console：改写 CF_ACCESS_*（公网 2FA）/ WORK_DIR（claude 的文件作用域）
+    // 进审计环而不只是 console：改写 CF_ACCESS_*（公网 2FA）/ WORKDIRS（claude 的文件作用域）
     // / CLAUDE_BIN（被执行的二进制）的安全含义不低于 device_approved，而后者一直在记。
     // 只记 key 名与「哪些是被清空的」，绝不记值 —— 那里面有 token 与密钥。
     audit.recordAudit({
@@ -3531,7 +3550,7 @@ httpServer.listen(port, host, () => {
   startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
   console.log('========================================');
   console.log('  Claude Chat Mobile v2');
-  console.log(`  工作目录: ${WORK_DIR}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`);
+  console.log(`  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`);
   console.log(`  claude: ${claudeBin} (${versions.cli})`);
   console.log(`  工具放行: 由 .claude/settings.json 的 permissions 决定（投屏层不注入白名单）`);
   // 无 AUTH_TOKEN 的分支已删除：那个状态到不了这里——resolveBindPlan 会在 listen 之前
@@ -3598,8 +3617,8 @@ httpServer.listen(port, host, () => {
   // 启动不再自动 resume 上次会话为 viewing tab——产品决策：重启后永远停在空首页，
   // 由前端 showDashboard 展示跨工作区最近列表，用户手点才 session:switch。
   // 仍预取初始 cwd 的 CLI settings 默认，空首页 / FRESH 懒开不必等首条消息才 resolveSettings。
-  // （历史：曾预热 WORK_DIR 指针并设 viewingInstanceId 省冷启动；现改为列表手选，首点会 resume 冷启。）
-  ensureCliDefaults(WORK_DIR).then(() => {
+  // （历史：曾预热主工作目录指针并设 viewingInstanceId 省冷启动；现改为列表手选，首点会 resume 冷启。）
+  ensureCliDefaults(primaryWorkDir()).then(() => {
     if (!viewingInstanceId) broadcastInstances();
   }).catch(err => console.warn('[cli-settings] 启动预取失败:', err?.message || err));
 });

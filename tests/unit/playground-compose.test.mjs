@@ -52,10 +52,10 @@ test('runtime.env 钉死隔离键，不把 HOME 当工作区，不设 CI', () =>
   const env = parseEnvFile(read(RUNTIME_ENV));
   assert.equal(env.AUTH_TOKEN, PLAYGROUND_TOKEN);
   assert.equal(env.HOME, HOME);
-  assert.equal(env.WORK_DIR, WORK_DIR);
   assert.equal(env.WORK_DIRS, WORK_DIR);
-  assert.notEqual(env.WORK_DIR, env.HOME);
-  assert.ok(env.WORK_DIR.startsWith(`${HOME}/`));
+  assert.equal(Object.hasOwn(env, 'WORK_DIR'), false, 'WORK_DIR 已退役（并入 WORKDIRS 首项），夹具不该再注入');
+  assert.notEqual(env.WORK_DIRS, env.HOME);
+  assert.ok(env.WORK_DIRS.startsWith(`${HOME}/`));
   assert.ok(env.CCM_DATA_DIR.startsWith(`${HOME}/`));
   assert.equal(env.CLAUDE_BIN, '/app/tests/fixtures/fake-claude.sh');
   assert.equal(env.CCM_TEST_PRESERVE_EMPTY_ENV, '1');

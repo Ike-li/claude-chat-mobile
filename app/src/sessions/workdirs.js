@@ -84,19 +84,80 @@ export function pickWorkdirSource({ envList = [], envFile = '', inline = null } 
   return { kind: 'none', value: [] };
 }
 
-// 把 pickWorkdirSource 的选择兑现成 { result, from, filePath? }。
+// 把已退役的「主工作目录」（WORK_DIR）折进工作区列表首位。
+//
+// 【为什么是折叠而不是直接不认】WORK_DIR 曾是独立配置项：恒占白名单首位、决定手机端默认打开哪个
+// 目录。它与 WORKDIRS 在装机向导里必然重复第一项（setup 写的就是 `{workDir: dirs[0], workDirs: dirs}`），
+// 用户打开配置文件只看到「同一个路径写了两遍」。现已取消，主工作目录 = 列表首项。
+//
+// 但直接不认会**静默改行为**：谁的 WORK_DIR 不是 WORKDIRS 的第一项（甚至根本不在列表里），
+// 升级后手机端默认打开的目录就换了一个，而且一行日志都没有。所以这里折叠 + 由调用方告警，
+// 与 WORK_DIRS / WORK_DIRS_FILE 两条旧路径的退役方式同一形状（见 config-file.js 的 foldWorkdirs）。
+//
+// 提到首位而不是追加末尾：旧语义里 WORK_DIR 恒首位，提首位才是「行为不变」。
+// 已在列表里时保留它原有的 sessionLimit —— 用户显式配过的数字不该因为换了个位置就丢。
+export function foldPrimaryWorkdir(entries = [], primary = '') {
+  const path = String(primary ?? '').trim();
+  if (!path) return { entries: [...entries], warnings: [] };
+
+  const idx = entries.findIndex(e => e.path === path);
+  const warnings = [
+    idx === 0
+      ? 'WORK_DIR 已退役：它就是工作区列表的第一项，可以从配置里删掉这一行'
+      : `WORK_DIR 已退役：已把「${path}」提到工作区列表首位（主工作目录 = 列表首项）；请把它写进 WORKDIRS 后删掉 WORK_DIR`,
+  ];
+  if (idx === -1) return { entries: [{ path, sessionLimit: DEFAULT_SESSION_LIMIT }, ...entries], warnings };
+  return { entries: [entries[idx], ...entries.filter((_, i) => i !== idx)], warnings };
+}
+
+// 选出该折叠哪一个「主工作目录」——**按来源分档，不是无条件取配置文件里那个**。
+//
+// 【这是 2026-09-01 那条教训的漏网分支】当时把「内联 WORKDIRS 压过 env」改成 env 优先，理由是
+// 显式 `export WORK_DIRS=...` 必须能收窄白名单（smoke 起的隔离实例曾继承到 7 个真实工作区）。
+// 但 app.js 的 applyWorkdirs 里还有一句无条件的 `nextDirs = [WORK_DIR]`，配置文件里的 WORK_DIR
+// 照样被塞进首位 —— 于是「显式 WORK_DIRS 收窄不了白名单」这件事在**首位**上一直还成立。
+// 2026-09-08 容器里实测确认：设了 WORK_DIRS=<临时目录> 之后，preflight 仍在校验配置文件的 WORK_DIR。
+//
+// 分档规则与「环境变量始终压过文件」同一条：
+//   · shell 里的 WORK_DIR 与 env 列表同级，任何来源下都折叠；
+//   · 配置文件里的 WORK_DIR 只在**列表也来自配置文件**（inline）时才折叠，env 来源生效时一并让位。
+export function pickPrimaryWorkdir({ kind, envPrimary = '', inlinePrimary = '' } = {}) {
+  const fromEnv = String(envPrimary ?? '').trim();
+  if (fromEnv) return fromEnv;
+  return kind === 'inline' ? String(inlinePrimary ?? '').trim() : '';
+}
+
+// 把 pickWorkdirSource 的选择兑现成 { result, from, filePath?, warnings }。
 // doctor D3 必须走这里，不能自己 `if (Array.isArray(inline)) return`——那会把 WORK_DIRS env 吃掉。
-export function resolveWorkdirSource({ envList = [], envFile = '', inline = null, here = '' } = {}) {
+//
+// 退役中的 WORK_DIR 在这一层折进列表首位（见 foldPrimaryWorkdir），于是三个消费者
+//（server preflight、server 热加载、CLI doctor）自动同步，不会各留一份「主目录从哪来」的判据。
+export function resolveWorkdirSource({
+  envList = [], envFile = '', inline = null, here = '', envPrimary = '', inlinePrimary = '',
+} = {}) {
   const picked = pickWorkdirSource({ envList, envFile, inline });
+  const primary = pickPrimaryWorkdir({ kind: picked.kind, envPrimary, inlinePrimary });
+
+  // result === null 表示外部文件读不出来（整体非法回退语义）：原样透传，不在这里替调用方决定，
+  // 也不折叠 —— 往一份「读失败」的结果里塞进一个目录会让调用方的「保留旧白名单」判据失真。
+  const fold = (result) => {
+    if (result === null) return { result, warnings: [] };
+    const folded = foldPrimaryWorkdir(result.entries, primary);
+    return {
+      result: { entries: folded.entries, warnings: result.warnings },
+      warnings: folded.warnings,
+    };
+  };
+
   if (picked.kind === 'env-file') {
     const filePath = resolveWorkdirsFilePath(picked.value, here);
-    return { result: loadWorkdirsFile(filePath), from: 'WORK_DIRS_FILE', filePath };
+    return { ...fold(loadWorkdirsFile(filePath)), from: 'WORK_DIRS_FILE', filePath };
   }
   if (picked.kind === 'inline') {
-    return { result: normalizeWorkdirEntries(picked.value), from: 'WORKDIRS' };
+    return { ...fold(normalizeWorkdirEntries(picked.value)), from: 'WORKDIRS' };
   }
   return {
-    result: normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : []),
+    ...fold(normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : [])),
     from: 'WORK_DIRS',
   };
 }

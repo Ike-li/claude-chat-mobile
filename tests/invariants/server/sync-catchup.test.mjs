@@ -70,7 +70,7 @@ async function connect(tag) {
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-sync-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
   // 播一条种子消息，让环形缓冲里有一件确定存在的对话内容（user_message，seq=1）。
   seeder = await connect('seeder');
   const ack = await seeder.call('user:message', { text: '种子消息', clientMessageId: 'sync-seed' });

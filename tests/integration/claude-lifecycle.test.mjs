@@ -33,7 +33,7 @@ async function startServer(options = {}) {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-cl-test-'));
   const started = await spawnServer({
     AUTH_TOKEN: 'ccm-integration-test-token', // §1.9：没有 token 就不启动，测试必须显式给一个
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: String(idleTimeoutMs),
   });
