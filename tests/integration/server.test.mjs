@@ -484,6 +484,15 @@ const ACK_SHAPES = [
   { event: 'session:close', branch: '实例不存在', payload: () => ({ instanceId: 'nope' }), required: ['ok', 'error'] },
   { event: 'session:fork', branch: '会话不存在', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
 
+  // 抽屉的主数据源。成功支免夹具（空工作区照样返回完整键集），所以这里能覆盖到——本表里少数
+  // 不是拒绝支的一条。pinned（手动标「稍后再看」但被 limit 挤出本页的会话）尤其需要它：E2E 的 mock
+  // 是平行实现，真 server 把这个字段删掉，抽屉那一组只是静默变空，E2E 与前端单测都不会红。
+  { event: 'session:list', branch: '空工作区', payload: () => ({ cwd: tmpDir }),
+    required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState'],
+    check: ack => {
+      assert.ok(Array.isArray(ack.pinned), 'pinned 必须是数组——前端无条件对它做 .length/展开');
+      assert.ok(Array.isArray(ack.sessions), 'sessions 必须是数组');
+    } },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },

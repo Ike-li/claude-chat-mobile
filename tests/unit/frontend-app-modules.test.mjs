@@ -4,6 +4,7 @@
 // 覆盖：context 的共享 DOM/state/依赖 · client-log 环形缓冲 · alerts 持久化偏好 · attachments 待发队列
 //       · createReplayBuffer（OOB 旁路 + 超时决策）· createUnreadTracker 手动未读生命周期
 //       · attachLongPress（位移/抬手取消，并吞掉紧随的 click）
+//       · createDrawerUnreadJump（未读行游标循环、折叠态先展开再补跳、子树重建后游标仍有效）
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -21,6 +22,7 @@ import { createSessionWorkspaceState } from '../../app/public/js/app/session-wor
 import { createInteractionQueueState } from '../../app/public/js/app/approval-questions.js';
 import { createUnreadTracker } from '../../app/public/js/app/unread-tracker.js';
 import { attachLongPress } from '../../app/public/js/app/long-press.js';
+import { createDrawerUnreadJump } from '../../app/public/js/app/drawer-unread-jump.js';
 
 test('app context owns shared DOM, state, dependencies and the active socket', () => {
   const dom = { messages: { id: 'messages' } };
@@ -896,4 +898,118 @@ test.describe('attachLongPress：长按/右键触发，位移与抬手取消，�
     timers.flush();
     assert.equal(fired.length, 1);
   });
+});
+
+
+// ── createDrawerUnreadJump ─────────────────────────────────────────────────
+// 目录头「N 未读」角标点击 → 依次跳到下一条未读行。游标必须活过目录子树的整段替换
+// （rebuildDirSections 会换掉 dirRow/subtree 节点），所以它归模块自己持有、不挂 DOM。
+function fakeRow(hasUnreadMark) {
+  const classes = new Set();
+  return {
+    classes,
+    offsetWidth: 0,
+    classList: {
+      add: c => classes.add(c),
+      remove: c => classes.delete(c),
+    },
+    querySelector: sel => (hasUnreadMark && sel === '[data-testid="unread-mark"]' ? {} : null),
+  };
+}
+function fakeSection(rows, { connected = true } = {}) {
+  return {
+    dirRow: {},
+    subtree: {
+      isConnected: connected,
+      querySelectorAll: sel => (sel === '[data-testid="session-row"]' ? rows : []),
+    },
+  };
+}
+
+test('drawer unread jump cycles through unread rows and wraps around', () => {
+  const rows = [fakeRow(false), fakeRow(true), fakeRow(false), fakeRow(true)];
+  const scrolled = [];
+  const jump = createDrawerUnreadJump({
+    getSection: () => fakeSection(rows),
+    scroll: node => scrolled.push(rows.indexOf(node)),
+    setTimer: () => {},
+  });
+
+  assert.equal(jump.request('/w'), true);
+  assert.equal(jump.request('/w'), true);
+  assert.equal(jump.request('/w'), true);
+  // 只落在带未读标记的两行上，第三次绕回第一条——只跳第一条的话 4 条未读里另外 3 条永远够不着
+  assert.deepEqual(scrolled, [1, 3, 1]);
+  assert.equal(rows[1].classes.has('drawer-row-flash'), true, '落点要闪一下，否则用户不知道跳到哪了');
+  assert.equal(rows[0].classes.has('drawer-row-flash'), false);
+});
+
+test('drawer unread jump reports false when there is nothing unread to jump to', () => {
+  const jump = createDrawerUnreadJump({ getSection: () => fakeSection([fakeRow(false)]), setTimer: () => {} });
+  assert.equal(jump.request('/w'), false);
+});
+
+test('drawer unread jump does not touch a subtree that was replaced out of the DOM', () => {
+  const jump = createDrawerUnreadJump({
+    getSection: () => fakeSection([fakeRow(true)], { connected: false }),
+    setTimer: () => {},
+  });
+  assert.equal(jump.request('/w'), false);
+  assert.equal(jump.request('/nope'), false); // getSection 返回 undefined 的分支同样不抛
+});
+
+test('drawer unread jump on a collapsed dir expands first, then jumps when rows arrive', () => {
+  let expanded = false;
+  const rows = [fakeRow(true)];
+  const scrolled = [];
+  const jump = createDrawerUnreadJump({
+    getSection: () => fakeSection(rows),
+    isExpanded: () => expanded,
+    expandDir: () => { expanded = true; },
+    scroll: node => scrolled.push(node),
+    setTimer: () => {},
+  });
+
+  // 折叠态：子树还没渲染出行，同步跳只会跳空——先展开，记下意图
+  assert.equal(jump.request('/w'), false);
+  assert.equal(expanded, true);
+  assert.deepEqual(scrolled, []);
+
+  // renderRows 末尾把跳转补上，且只补一次：不然此后每 12 秒一次的 background revalidate 都会重跳
+  assert.equal(jump.flushPendingJump('/w'), true);
+  assert.equal(scrolled.length, 1);
+  assert.equal(jump.flushPendingJump('/w'), false);
+  assert.equal(scrolled.length, 1);
+});
+
+test('drawer unread jump only flushes for the dir that was actually requested', () => {
+  const jump = createDrawerUnreadJump({
+    getSection: () => fakeSection([fakeRow(true)]),
+    isExpanded: () => false,
+    scroll: () => {},
+    setTimer: () => {},
+  });
+  jump.request('/w');
+  assert.equal(jump.flushPendingJump('/other'), false, '别的目录渲染完不该顺手把这次跳转消费掉');
+  assert.equal(jump.flushPendingJump('/w'), true);
+});
+
+test('drawer unread jump keeps its cursor across subtree rebuilds, and resets on collapse', () => {
+  const scrolled = [];
+  let rows = [fakeRow(true), fakeRow(true)];
+  const jump = createDrawerUnreadJump({
+    // 每次都返回新 section 对象：模拟 rebuildDirSections 换掉 dirRow/subtree 节点
+    getSection: () => fakeSection(rows),
+    scroll: node => scrolled.push(rows.indexOf(node)),
+    setTimer: () => {},
+  });
+
+  jump.request('/w');
+  rows = [fakeRow(true), fakeRow(true)]; // 子树整段重建（read:sync 回来重画未读标记就会触发）
+  jump.request('/w');
+  assert.deepEqual(scrolled, [0, 1], '游标挂在 DOM 上的话这里会退回 0，用户连点两次都跳同一行');
+
+  jump.resetCursor('/w'); // 折叠目录：下次点开从第一条重新数起
+  jump.request('/w');
+  assert.deepEqual(scrolled, [0, 1, 0]);
 });

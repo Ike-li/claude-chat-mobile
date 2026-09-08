@@ -594,9 +594,11 @@ export function shouldRerenderSessionList({
   prevSessions,
   prevHasMore = false,
   prevTotal = null,
+  prevPinned,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
+  nextPinned,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
@@ -606,6 +608,10 @@ export function shouldRerenderSessionList({
   const signature = list => (Array.isArray(list) ? list : [])
     .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
     .join('|');
+  // pinned（手动标「稍后再看」、被 limit 挤出本页而单独补回的那组）必须单独进判据：它的成员来自
+  // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
+  // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
+  if (signature(prevPinned) !== signature(nextPinned)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 

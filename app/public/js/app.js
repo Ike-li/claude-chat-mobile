@@ -169,6 +169,7 @@ import { createHistoryLoadGate } from './app/history-load-gate.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
+import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
 import { attachLongPress } from './app/long-press.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
@@ -665,6 +666,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // dirRow/subtree 节点引用表（cwd → {dirRow, subtree}），供 rebuildDirSections 定位要替换的旧节点；
   // 每次 openSessionPanel() 全量重建时重新填充。
   let dirSectionNodes = new Map();
+  // 目录头「N 未读」角标 → 依次跳到下一条未读行。角标此前是纯展示：它准确报出「有 N 条未读」，
+  // 却答不了「在哪」——列表按时间排、未读判据逐条独立，一条未读完全可能在第 30 行（见模块头注）。
+  const drawerUnreadJump = createDrawerUnreadJump({
+    getSection: cwd => dirSectionNodes.get(cwd),
+    isExpanded: cwd => expandedDirs.has(cwd),
+    expandDir: cwd => dirSectionNodes.get(cwd)?.expand?.(),
+  });
   // 发送 outbox（在线 timeout/retryable + 离线共用）：内存队列 + localStorage 耐久。
   // bubbleEl 仅内存；落盘只写可序列化字段（见 dumpDurableOutbox）。PWA 杀进程后靠 clientMessageId 恢复重试。
   let offlineQueue = [];
@@ -5029,11 +5037,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 目录头「N 未读」：按该目录已加载的会话页（SWR 缓存）计。搜索态缓存不是全量、不作数；没缓存
   // （从未展开、后台保鲜还没回来）就不显示——不显示 0，也不为了这个数字多发一次 session:list。
+  //
+  // pinned（手动标「稍后再看」、被 limit 挤出本页而由服务端单独补回的那组）必须一起数：它们在屏幕上
+  // 有行、有「未读」chip，漏数就成了反方向的同一个毛病——行亮着而角标说 0。数字与 chip 必须同源，
+  // 这也是这两处共用 unread.isUnread 而不是各判一次的原因。
   function unreadCountForDir(cwd) {
     const entry = sessionsCache.get(cwd);
     if (!entry || String(entry.query || '')) return null;
     let n = 0;
-    for (const s of entry.sessions || []) {
+    for (const s of [...(entry.sessions || []), ...(entry.pinned || [])]) {
       if (s?.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) n += 1;
     }
     return n;
@@ -5049,6 +5061,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (spec.state === 'pending') {
       badge.title = t('未读数加载中');
       badge.setAttribute('aria-label', t('未读数加载中'));
+    } else if (spec.state === 'unread') {
+      // 手机没有 hover，title 基本等于不存在——但 aria-label 是读屏用户唯一能听到的那句，
+      // 「4 未读」和「4 未读，点按跳到下一条」的差别正是「知道有」与「知道怎么去」。
+      const label = `${spec.text} · ${t('点按跳到下一条')}`;
+      badge.title = label;
+      badge.setAttribute('aria-label', label);
     } else {
       badge.title = spec.text;
       if (spec.text) badge.setAttribute('aria-label', spec.text);
@@ -5439,8 +5457,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     applyBadge(badge, drawerStateForDir(d));
     // 右侧角标组 [N 未读][运行中/需要你/出错]：未读数让折叠着的目录也能看出里面有没看过的会话
     // （行内标记在折叠态下根本不可见）。计数按已加载的会话页算，见 applyDirUnreadBadge。
-    const unreadBadge = el(`<span class="dir-unread drawer-status-chip shrink-0 text-accent hidden" data-testid="dir-unread"></span>`);
+    // 角标是按钮不是标签：点它跳到下一条未读行（见 app/drawer-unread-jump.js 头注）。用 <span
+    // role=button> 而非 <button>——它嵌在 toggleBtn（也是 <button>）里，按钮套按钮是非法 HTML，
+    // 浏览器会把内层甩出去，整个角标组的位置就散了。
+    const unreadBadge = el(`<span class="dir-unread drawer-status-chip shrink-0 text-accent hidden" data-testid="dir-unread" role="button" tabindex="0"></span>`);
     applyDirUnreadBadge(unreadBadge, d);
+    // stopPropagation 是必须的：不拦就冒泡到 toggleBtn，点「跳到未读」的结果是把整个目录折叠起来。
+    const onBadgeActivate = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (unreadBadge.dataset.state !== 'unread') return; // pending（数字还不知道）时点了不该有反应
+      haptic('tap');
+      drawerUnreadJump.request(d);
+    };
+    unreadBadge.onclick = onBadgeActivate;
+    unreadBadge.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') onBadgeActivate(e); };
     const badgeGroup = el(`<span class="ml-auto shrink-0 flex items-center gap-1"></span>`);
     badgeGroup.appendChild(unreadBadge);
     badgeGroup.appendChild(badge);
@@ -5754,7 +5785,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
       // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
-      const renderRows = (sessions, hasMore, total = null) => {
+      const renderRows = (sessions, hasMore, total = null, pinned = []) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
         mountSearch();
@@ -5764,6 +5795,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (!query) {
           for (const inst of freshTabs) {
             rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
+          // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。
+          // 置顶而不是按时间插回原位：插回原位等于没补——它本来就是因为排得太后才看不见的。
+          // 带一行小标，否则「一条上周的会话排在最上面」读起来像排序坏了。
+          if (pinned.length) {
+            const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
+            pinnedHead.textContent = t('稍后再看');
+            rowsHost.appendChild(pinnedHead);
+            for (const s of pinned) {
+              rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+            }
           }
         }
         for (const s of sessions) {
@@ -5788,10 +5830,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
               const all = state?.sessions || [];
               const nextHasMore = !!state?.hasMore;
               const nextTotal = Number.isFinite(state?.total) ? state.total : null;
+              const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
               unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
               updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '' });
-              renderRows(all, nextHasMore, nextTotal);
+              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned });
+              renderRows(all, nextHasMore, nextTotal, nextPinned);
             });
           };
           rowsHost.appendChild(more);
@@ -5805,6 +5848,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           rowsHost.appendChild(hint);
         }
         refreshDirUnreadCounts(); // 行数据（含 lastUsedAt）刚更新，目录头「N 未读」随之重算
+        // 折叠态点角标 → 先展开、发 session:list、等 ack 回来渲染完行，跳转才有落点，就是这里。
+        drawerUnreadJump.flushPendingJump(cwd);
       };
 
       if (!background) {
@@ -5814,7 +5859,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const cachedEntry = sessionsCache.get(cwd);
         const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
         if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null);
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || []);
         } else {
           const rowsHost = bindSessionRowsHost(container, el);
           rowsHost.innerHTML = '';
@@ -5865,6 +5910,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const sessions = state?.sessions || [];
         const hasMore = !!state?.hasMore;
         const total = Number.isFinite(state?.total) ? state.total : null;
+        // pinned：手动标记但被 limit 挤出本页的会话，服务端单独补回（旧服务端不发这个字段 → 空数组，
+        // 功能静默退回「标了就可能找不回来」，但不报错、不影响本页任何一行）。
+        const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
         // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
@@ -5876,12 +5924,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           prevSessions: prevEntry?.sessions,
           prevHasMore: prevEntry?.hasMore,
           prevTotal: prevEntry?.total ?? null,
+          prevPinned: prevEntry?.pinned,
           nextSessions: sessions,
           nextHasMore: hasMore,
           nextTotal: total,
+          nextPinned: pinned,
         });
-        sessionsCache.set(cwd, { sessions, hasMore, total, query });
-        if (willRerender || readChanged) renderRows(sessions, hasMore, total);
+        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned });
+        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned);
       });
     };
 
@@ -5891,6 +5941,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
 
     // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
+    // 展开抽成具名函数：折叠态点未读角标时也要走这条路（先展开，行渲染完再由 flushPendingJump
+    // 补上跳转），两个入口共用一份，不各写一遍展开动作。
+    const expandDir = () => {
+      expandedDirs.add(d);
+      try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
+      subtree.classList.add('expanded');
+      arrow.classList.add('rotated');
+      icon.textContent = '📂';
+      populateSubtree(d, subtree);
+    };
     toggleBtn.onclick = () => {
       haptic('tap');
       if (expandedDirs.has(d)) {
@@ -5899,25 +5959,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         subtree.classList.remove('expanded');
         arrow.classList.remove('rotated');
         icon.textContent = '📁';
+        drawerUnreadJump.resetCursor(d); // 下次点开从第一条未读重新数起
       } else {
-        expandedDirs.add(d);
-        try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
-        subtree.classList.add('expanded');
-        arrow.classList.add('rotated');
-        icon.textContent = '📂';
-        populateSubtree(d, subtree);
+        expandDir();
       }
     };
 
     return {
       dirRow,
       subtree,
+      expand: expandDir,
       revalidate: () => populateSubtree(d, subtree, { background: true }),
     };
   }
 
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+    drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
     // UX-007：当前工作区默认展开 + 记忆用户展开态
     try {
       const saved = JSON.parse(localStorage.getItem('ccm_expanded_dirs') || '[]');
@@ -6706,6 +6764,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         };
         socket.emit('session:list', { cwd }, state => {
           unread.hydrate(state?.readState); // 首页最近行也画未读 chip；Promise.all 之后才渲染，天然同帧
+          // 刻意不合并 ack 的 pinned（手动标「稍后再看」但排在分页窗外的那些）：这个列表叫「最近」，
+          // 语义是时间序的前 8 条，塞进上周的会话既名不副实，又会挤掉真正最近的。待办入口在抽屉。
           done(state?.sessions || []);
         });
         setTimeout(() => done([], true), 4000); // 单目录超时不挡整表，但要说出来

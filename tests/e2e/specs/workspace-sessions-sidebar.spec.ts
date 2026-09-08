@@ -1199,6 +1199,81 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 长按标未读的公共动作：桌面右键走与触屏长按同一个入口（见 P0-11ad）。
+  async function markRowUnread(page: Page, sessionId: string) {
+    const row = page.locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`);
+    await expect(row).toBeVisible();
+    await row.dispatchEvent('contextmenu');
+    const modal = page.locator('#confirmModal');
+    await expect(modal).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
+    await page.locator('#confirmOk').click();
+    await expect(modal).not.toHaveClass(/sheet-open/);
+  }
+
+  // P0-11ao（2026-09-08）：session:list 按 limit 截断（默认 6 条），手动标「稍后再看」的会话滑出
+  // 窗口就从抽屉里消失——标记还在 read-state 里，UI 上再也找不回来，而长按确认框刚承诺过
+  // 「会一直显示未读，直到你再次打开它」。服务端现在把这些会话单独补回（ack 的 pinned 字段），
+  // 前端渲染成列表顶部的「稍后再看」一组。
+  test('P0-11ao 手动标记的会话被 limit 挤出本页后，仍在列表顶部「稍后再看」组里', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:history-overflow');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+
+    // 前置条件：截断态下这条确实不在列表里。少了这两句，用例在「服务端根本没截断」时也会绿。
+    await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
+    await expect(page.getByTestId('session-pinned-head')).toHaveCount(0);
+
+    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
+    await markRowUnread(page, 'mock-session-older-migration');
+
+    // 刷新回到截断态（「显示全部」是内存态，不落盘）——这正是缺陷现场：标记还在，承载它的行没了
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    const dirAfter = await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
+
+    await expect(page.getByTestId('session-pinned-head')).toHaveText('稍后再看');
+    const pinnedRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-older-migration"]');
+    await expect(pinnedRow).toBeVisible();
+    await expect(pinnedRow.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+    // 角标必须把这一行一起数进去：漏数就是反方向的同一个毛病——行亮着而角标说 0
+    await expect(dirAfter.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-11ap（2026-09-08）：抽屉列表按 lastUsedAt 降序排，未读判据是逐条独立的 lastUsedAt > seenAt——
+  // 两条轴毫无关联，一条未读完全可能排在第 30 行。角标此前是纯展示的 span：准确报出「有 N 条未读」，
+  // 却答不了「在哪」（真机报告：顶栏说 4 条、首屏一条都看不见）。
+  test('P0-11ap 目录头「N 未读」角标可点：依次跳到下一条未读行，且不折叠目录', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    await markRowUnread(page, 'mock-session-archived');
+    await markRowUnread(page, 'mock-session-gap');
+
+    const badge = mainDir.locator('[data-testid="dir-unread"]');
+    await expect(badge).toHaveText('2 未读');
+    const archived = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+    const gap = page.locator('[data-testid="session-row"][data-session-id="mock-session-gap"]');
+
+    await badge.click();
+    await expect(archived).toHaveClass(/drawer-row-flash/);
+    await expect(gap).not.toHaveClass(/drawer-row-flash/);
+    // 角标嵌在展开/折叠按钮里：不 stopPropagation 的话，点「跳到未读」的结果是把目录整个折叠起来
+    await expect(page.getByTestId('session-pinned-head').or(archived)).toBeVisible();
+
+    // 第二次点：轮到下一条。只跳第一条的话，散在列表里的其余未读永远够不着
+    await badge.click();
+    await expect(gap).toHaveClass(/drawer-row-flash/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-11ak（2026-09-07 真机报告）：在【当前正打开的】会话上长按标未读，屏幕上什么都没发生——
   // 确认框刚承诺「这一行会一直显示未读」，得切到别的会话才看见它浮出来。根因是 isSessionUnread 里
   // isViewing 短路排在 manual 前面，把「时间判据不可信」这条理由错施加到了用户的显式输入上。

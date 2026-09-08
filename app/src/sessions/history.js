@@ -950,6 +950,46 @@ export async function listSessions(cwd, opts = {}) {
   return (await listSessionsPage(cwd, opts)).sessions;
 }
 
+// 按 id 精确取列表行，绕过 limit 截断（2026-09-08）：手动标「稍后再看」的会话不该因为分页窗口
+// 往前滑就从抽屉里消失——那是用户显式输入的待办，确认框还承诺了「会一直显示未读」。
+//
+// 行形状与 scanViaReaddir 逐字段对齐（id/title/model/entrypoint/lastUsedAt），否则前端 sessionRow
+// 会在这些行上缺字段。标题走 peekSessionListTitleTimed（SDK summary 优先、回落 readHeadMeta）而不是
+// 直接用 readHeadMeta：被补进来的会话【可能仍在 SDK 候选窗内】——本页只有 6 条，而候选窗 ≈51，
+// 排第 10 位的会话就会既在候选窗内、又不在本页。只读盘的话，同一条会话从主列表滑进这一组的瞬间
+// 标题会从 CLI 的 ai-title 变成首条 user 消息（实测差距很大：「对」↔ 一条文件路径），看起来像换了个会话。
+// 代价是多一次 stat + 头窗读，换的是不在这里造第二份标题解析——那种分叉迟早会静默漂移。
+//
+// 不存在 / 不属于本 cwd / id 非法一律静默跳过（allSettled）：调用方拿到的就是「确实还在这个工作区里」
+// 的那些。会话被删掉后 manual 标记会残留在 read-state 里（那张表不知道文件没了），这里正是它的收口。
+export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {}) {
+  const wanted = [...new Set(ids || [])].filter(id => isSafeSessionId(id));
+  if (!wanted.length) return [];
+  const dir = join(baseDir, getProjectDir(cwd));
+  const settled = await Promise.allSettled(wanted.map(async id => {
+    const file = join(dir, `${id}.jsonl`);
+    const st = await stat(file);
+    const [activityAt, meta, peeked] = await Promise.all([
+      readLastMessageActivityMs(file, st.size).catch(() => null),
+      readHeadMeta(file, st.size),
+      // 带超时：session:list 是抽屉的关键路径，SDK 挂住时宁可用读盘标题也不能让整个列表等着。
+      peekSessionListTitleTimed(cwd, id, { baseDir }),
+    ]);
+    return {
+      id,
+      title: peeked || (meta && meta.title) || '(无标题)',
+      model: (meta && meta.model) || null,
+      entrypoint: (meta && meta.entrypoint) || null,
+      lastUsedAt: Math.round(activityAt ?? st.mtimeMs),
+    };
+  }));
+  return settled
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value)
+    // 与列表主体同一套排序（活动时间降序，同值按 id 稳定），避免两次 list 之间这一组顺序抖动。
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
+}
+
 // B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不等待 TTL 过期）。
 // 键现含 limit → 删该 dir 的所有 limit 变体。
 export function invalidateListCache(cwd) {

@@ -106,6 +106,20 @@ function readStateForRows(rows) {
   }
   return { baselineTs: mockReadState.baselineTs, seen, manual };
 }
+// pinned（2026-09-08）：手动标「稍后再看」但被分页挤出本页的会话，服务端 session:list 单独补回。
+// mock 必须一起实现——否则真 server 把这个字段删掉，E2E 照样全绿（这正是 ack 形状守卫存在的理由）。
+// 判据与 read-state.js#manualUnreadIds 同义：manual[id] > seen[id]，缺 seen 算未读、相等算已读。
+//
+// 池 = 该 cwd 的全部 mock 会话。只有主 cwd 会截断（historyOverflowMode 下只回前 3 条），其余 cwd
+// 全量返回，于是它们的 manual 标记必然在页内、pinned 恒空——与真 server 同构，不是偷懒。
+function pinnedRowsFor(cwd, rows) {
+  const inPage = new Set((rows || []).map(s => s && s.id));
+  const pool = cwd === '/Users/you/code/claude-chat-mobile'
+    ? mainCwdSessions().filter(s => !deletedSessionIds.has(s.id))
+    : [];
+  return pool.filter(s => s && s.id && !inPage.has(s.id)
+    && (mockReadState.manual[s.id] ?? -Infinity) > (mockReadState.seen[s.id] ?? -Infinity));
+}
 // 逐 key 取较晚时间戳，与真 server 的 read-state.js#mergeLatest 同语义。
 function mergeIntoReadState(field, incoming) {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
@@ -961,11 +975,17 @@ io.on('connection', socket => {
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
     // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
-    const callback = typeof rawCallback === 'function'
-      ? (res) => rawCallback({ ...res, readState: readStateForRows(res?.sessions) })
-      : rawCallback;
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
+    // pinned 与 readState 一样在包装层统一注入：这个 handler 有五个以上返回分支，漏一个就会让那条
+    // 路径下的「稍后再看」组凭空消失。搜索态不补（同真 server）：往结果里塞未匹配的行是污染搜索语义。
+    const callback = typeof rawCallback === 'function'
+      ? (res) => {
+        const rows = res?.sessions || [];
+        const pinned = query ? [] : pinnedRowsFor(cwd, rows);
+        rawCallback({ ...res, pinned, readState: readStateForRows([...rows, ...pinned]) });
+      }
+      : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {

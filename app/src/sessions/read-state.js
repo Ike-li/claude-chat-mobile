@@ -124,7 +124,18 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
     writeOwnerOnlyFile(file, JSON.stringify(state, null, 2));
   }
 
-  return { getState: snapshot, applyClientState, markRead, setManual, flushSaveSync };
+  // 「此刻仍是手动未读」的 id 列表。判据 manual[id] > seen[id] 与前端 logic/unread.js#isManualUnreadNow
+  // 同义（前后端不得互相 import，两侧各实现一份）：缺 seen 记录算未读，相等算已读——与
+  // `lastUsedAt > seenBar` 的「恰好相等不亮」同向。
+  //
+  // 用途是让 session:list 把这些会话补进列表（绕过分页截断）。上限 100（MANUAL_CAP）已由存储层保证，
+  // 这里不再截断——截了就等于让「第 101 条标记」静默消失，而它恰恰是用户最近标的那条。
+  function manualUnreadIds() {
+    const s = ensureBaseline();
+    return Object.keys(s.manual).filter(id => s.manual[id] > (s.seen[id] ?? -Infinity));
+  }
+
+  return { getState: snapshot, applyClientState, markRead, setManual, manualUnreadIds, flushSaveSync };
 }
 
 const EMPTY = () => ({ baselineTs: null, seen: {}, manual: {} });
@@ -186,4 +197,5 @@ export const getReadState = store.getState;
 export const applyClientReadState = store.applyClientState;
 export const markRead = store.markRead;
 export const setManualUnread = store.setManual;
+export const manualUnreadIds = store.manualUnreadIds;
 export const flushSaveSync = store.flushSaveSync;

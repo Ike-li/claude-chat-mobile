@@ -994,6 +994,23 @@ details.thinking.thinking-live > summary::before {
   border-radius: 0.75rem;
 }
 
+/* 抽屉里「跳到下一条未读」后的落点高亮。不复用 .unread-anchor-flash：那条动画在 0%/100% 把
+   background-color 打成 transparent，会盖掉会话行自己的 bg-surface / bg-accent-wash（当前会话
+   那一行是浅色底），跳完反而留下一行"背景没了"的怪行。改用 outline——它不参与布局、不挤动相邻
+   行，也不和任何背景色打架。 */
+@keyframes drawer-row-flash {
+  0%, 100% { outline-color: transparent; }
+  35% { outline-color: var(--accent); }
+}
+.drawer-row-flash {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  animation: drawer-row-flash 2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-row-flash { animation: none; outline-color: var(--accent); }
+}
+
 /* 两侧横线夹文字（仿微信），与消息气泡视觉区分开——它们不是对话内容：
    .unread-divider = "以下为新消息"；.msg-day-divider = 消息流的跨天日期行。
    时间行（同一天内的 HH:mm）不用横线，只是居中细字，见 message-timeline.js。 */

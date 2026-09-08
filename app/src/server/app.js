@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, listSessionsByIds, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -2876,7 +2876,24 @@ registerSocketConnection(io, socket => {
       query: query || undefined,
       excludeIds: pendingDeleteIds.size ? new Set(pendingDeleteIds) : undefined,
     });
-    const terminal = await annotateTerminalStates(cwd, list);
+    // 手动标「稍后再看」的会话不受分页截断（2026-09-08）：limit 只管时间序的那一页，而手动标记是
+    // 用户显式输入的待办——长按确认框承诺「这一行会一直显示未读，直到你再次打开它」，被 limit 滑出
+    // 窗口就是当场食言：标记还在 read-state 里，UI 上却再也找不回来，只能靠标题搜索。
+    // 触发不需要极端条件——默认窗口只有 6 条（DEFAULT_SESSION_LIMIT），活跃工作区几天就能把一条
+    // 标记挤出去；「显示全部」的 50 条硬顶只是把期限拉长。
+    // 与 isSessionUnread 里 `if (manual) return true` 压过所有时间判据同向：显式标记同样压过时间截断。
+    //
+    // 搜索态不补：搜索是另一条轴，往结果里塞未匹配的行等于污染搜索语义（用户搜 "foo" 却看见 "bar"）。
+    // 已在本页的不补：那条已经有行了，补进来就是同一会话两行。
+    const inPage = new Set(list.map(s => s.id));
+    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id));
+    const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds) : [];
+    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
+    // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
+    // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
+    const terminal = await annotateTerminalStates(cwd, pinned.length ? [...list, ...pinned] : list);
+    const pinnedRows = pinned.length ? terminal.list.slice(list.length) : [];
+    const pageRows = pinned.length ? terminal.list.slice(0, list.length) : terminal.list;
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
@@ -2884,7 +2901,10 @@ registerSocketConnection(io, socket => {
     // 判 `typeof === 'boolean'`，缺哪个就把哪个静默回落成「只扫本页返回行」——而这两个汇总存在的理由
     // 恰恰是覆盖页外条目。漏传不报错、页内场景照常显示，缺陷只在「等人的那个终端恰好在分页窗口外」
     // 时现形（waiting 半边曾这样漏了两天）。
-    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows(terminal.list) });
+    // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
+    // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
+    // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
