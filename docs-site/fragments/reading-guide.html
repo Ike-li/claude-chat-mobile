@@ -1,38 +1,40 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">读者打开手册后应立刻知道：怎么读、读哪条线、按什么顺序。主线兜底，速览与角色线是捷径。</p>
+<p class="lead-extra">全景手册按读者认知顺序编排，读者可按需选择通读路线或针对特定模块重点突破。</p>
 
 <h2>主线通读</h2>
-<p>主线 = 七部分的天然顺序，与侧栏一致：</p>
-<pre><code>起点 → 认识 → 演进 → 方法论 → 实现 → 数据 → 运维 → 规范</code></pre>
-<p>预计 2–3 小时。适合第一次完整接手。每页可独立读懂，但仍建议按序建立心智模型。</p>
+<p>主线 = 七部分的天然认知演化顺序，与侧栏目录结构完全一致：</p>
+<pre><code>起点 → 认识项目 → 演进历程 → 核心方法论 → 核心实现 → 数据与集成 → 部署与运维 → 参考与规范</code></pre>
+<p>预计用时 2–3 小时。适合需要完整接手、审计或进行二次开发的工程师。各章节虽自成一体，但按序阅读最容易建立一致的心智模型。</p>
 
 <h2>30 分钟速览</h2>
 <ol class="steps">
-  <li><strong>封面与总览。</strong><a href="../index.html">封面</a> → <a href="overview.html">项目总览</a>：一句话定位与场景。</li>
-  <li><strong>架构与边界。</strong><a href="architecture.html">系统架构</a> → <a href="boundaries.html">职责边界</a>：分层与「不做什么」。</li>
-  <li><strong>方法论三页。</strong><a href="terminal-parity.html">终端等价</a> → <a href="security-model.html">安全模型</a> → <a href="single-driver.html">单驾驶员</a>。</li>
-  <li><strong>能跑起来。</strong><a href="quickstart.html">快速开始</a>；若要公网再扫<a href="production-deploy.html">生产部署</a>标题。</li>
-  <li><strong>校准事实。</strong><a href="drift.html">漂移清单</a>：文档与代码不一致处以代码为准。</li>
+  <li><strong>封面与总览。</strong><a href="index.html">封面</a> → <a href="overview.html">项目总览</a>：建立一句话定位与 n=1 自托管核心认知。</li>
+  <li><strong>架构与边界。</strong><a href="architecture.html">系统架构</a> → <a href="boundaries.html">职责边界</a>：看清运行时目录分层、数据流向以及明确「不做」的技术债。</li>
+  <li><strong>核心方法论。</strong><a href="terminal-parity.html">终端等价</a> → <a href="security-model.html">安全模型</a> → <a href="single-driver.html">单驾驶员</a>：掌握双向流、设备 TOFU 与防写分叉机制。</li>
+  <li><strong>快速跑通。</strong><a href="quickstart.html">快速开始</a>：掌握交互式配置向导、doctor 自检与最短启动链路。</li>
+  <li><strong>校准事实。</strong><a href="drift.html">漂移清单</a>：核对当前版本真实边界与代码事实。</li>
 </ol>
 
 <h2>按角色切入</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>角色</th><th>先读</th><th>再补</th></tr></thead>
+<thead><tr><th>关注角色</th><th>优先研读</th><th>进阶参考</th></tr></thead>
 <tbody>
-<tr><td>自托管运维</td><td>快速开始、生产部署、运维排错、环境变量</td><td>安全模型、鉴权与设备</td></tr>
-<tr><td>后端 / 同步</td><td>架构、AgentSession、事件信封、单驾驶员、数据全景</td><td>会话与历史、契约门禁</td></tr>
-<tr><td>前端 / PWA</td><td>前端与 PWA、事件信封、API 事件参考</td><td>通知与状态栏</td></tr>
-<tr><td>安全审查</td><td>安全模型、鉴权与设备、文件上传、职责边界</td><td>生产部署中的反代警告</td></tr>
-<tr><td>贡献者</td><td>项目规范、契约门禁、术语表</td><td>演进主线、漂移清单</td></tr>
+<tr><td>自托管运维</td><td><a href="quickstart.html">快速开始</a>、<a href="production-deploy.html">生产部署</a>、<a href="ops-troubleshoot.html">运维排错</a>、<a href="env-reference.html">环境变量参考</a></td><td><a href="security-model.html">安全模型</a>、<a href="auth-device.html">鉴权与设备信赖</a></td></tr>
+<tr><td>后端与同步开发</td><td><a href="architecture.html">系统架构</a>、<a href="agent-session.html">AgentSession</a>、<a href="events-sync.html">事件信封</a>、<a href="single-driver.html">单驾驶员</a>、<a href="data-store.html">数据全景</a></td><td><a href="sessions-history.html">会话与历史</a>、<a href="contracts-gates.html">契约与工程门禁</a></td></tr>
+<tr><td>前端与交互开发</td><td><a href="frontend-pwa.html">前端与 PWA</a>、<a href="events-sync.html">事件信封</a>、<a href="api-events.html">事件参考</a></td><td><a href="notify-status.html">通知与状态栏</a></td></tr>
+<tr><td>安全合规审计</td><td><a href="security-model.html">安全模型</a>、<a href="auth-device.html">鉴权与设备信赖</a>、<a href="files-upload.html">文件上传</a>、<a href="boundaries.html">职责边界</a></td><td><a href="production-deploy.html">生产部署</a>（拓扑与反代防护）</td></tr>
+<tr><td>代码贡献者</td><td><a href="project-rules.html">项目规范</a>、<a href="contracts-gates.html">契约与工程门禁</a>、<a href="glossary.html">术语表</a></td><td><a href="evolution.html">架构演进主线</a>、<a href="drift.html">漂移清单</a></td></tr>
 </tbody>
 </table>
+</div>
 
 <h2>事实基线约定</h2>
 <div class="callout drift"><div class="body">
-<strong>以代码为准</strong>手册基于 dev 源码交叉核对（探针 HEAD <code>2de707b</code>），<strong>不是</strong>持续自动同步。注释里若仍出现 <code>docs/design.md</code>，该文件已从仓库移除；权威安全叙述在 README「安全模型」节。矛盾点集中记在<a href="drift.html">漂移清单</a>。
+<strong>以代码为准</strong>手册基于 dev 源码深度核对（基线 HEAD <code>687bca3</code>），紧密对齐 <code>docs/hard-rules.md</code> 与各项架构不变量。代码若持续演进，以生产代码和自动化门禁为准，所有已知出入透明沉淀于<a href="drift.html">漂移清单</a>。
 </div></div>
 
 <div class="callout tip"><div class="body">
-<strong>搜索</strong>任意页按 <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> 打开全文搜索。深浅色由顶栏切换，偏好写入 <code>localStorage</code>。
+<strong>全局搜索与深浅色</strong>在手册任意页面按下 <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> 可快速调起全文即时搜索。点击顶栏月亮/太阳图标或按下键盘快捷键 <kbd>T</kbd> 即可平滑切换深浅色模式，首屏加载内置防闪白机制。
 </div></div>

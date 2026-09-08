@@ -1,68 +1,43 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">契约与门禁把「脑子里的分层约定」变成 <code>npm run check</code> 硬闸：事件名与类型不许漂移，import 不许缠死，仓库清单不许悄悄回堆。</p>
+<p class="lead-extra">契约与门禁是防止代码库在多会话、重度自动化演化过程中腐化的核心武器。将「口头约定」转化为 <code>npm run check</code> 中的硬性拦截卡口，做到违规即红灯。</p>
 
-<h2>npm run check 组成</h2>
-<pre><code>eslint .
-node scripts/check-import-boundaries.js
-node scripts/contract-check.js
-node scripts/doc-consistency.js
-node scripts/check-visual-mock-registry.js
-node scripts/check-playwright-forbidden-patterns.js
-npm run inventory:check</code></pre>
+<h2>npm run check 门禁矩阵</h2>
+<p>在根目录下执行 <code>npm run check</code> 是零 Token、耗时最短（本地通常 5–15 秒）的综合健康检查。它由以下核心环节链接而成：</p>
+<div class="table-wrap">
 <table>
-<thead><tr><th>步骤</th><th>职责</th></tr></thead>
+<thead><tr><th>门禁脚本 / 环节</th><th>守护不变量与拦截范围</th><th>失效后果</th></tr></thead>
 <tbody>
-<tr><td>ESLint</td><td>语法与基础风格、死代码、未定义引用</td></tr>
-<tr><td>check-import-boundaries</td><td>分层边界 + 零循环依赖</td></tr>
-<tr><td>contract-check</td><td>出向事件类型与入向 socket 事件双向保真</td></tr>
-<tr><td>doc-consistency</td><td>残留文档/注释与约定一致性抽查</td></tr>
-<tr><td>visual mock registry</td><td>视觉 mock 场景注册面 ⊆ 契约</td></tr>
-<tr><td>playwright forbidden</td><td>禁止脆弱选择器/反模式</td></tr>
-<tr><td>inventory:check</td><td>仓库文件分类与生成物不过期</td></tr>
+<tr><td><code>npm run lint</code></td><td>ESLint 规则：语法正确性、无未定义引用、禁止死代码</td><td>代码风格散乱，隐式全局变量泄露</td></tr>
+<tr><td><code>check-import-boundaries.js</code></td><td>架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖）</td><td>分层被穿透，模块相互缠绕演变为巨型单体</td></tr>
+<tr><td><code>contract-check.js</code></td><td>出向 <code>agent:event</code>（27 种）与入向 <code>socket</code> 事件在代码、前端与 Mock 中的双向一致性</td><td>协议静默失效，前端收不到特定类型事件</td></tr>
+<tr><td><code>check-invariant-ids.js</code></td><td>测试命名规范：<code>tests/invariants/</code> 内的用例必须以 <code>// 守护：&lt;编号&gt;</code> 声明守护条目</td><td>不变量与测试脱节，出现无法追踪的假测试</td></tr>
+<tr><td><code>check-destructive-deletes.js</code></td><td>破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免</td><td>防止测试代码意外删除真实开发数据</td></tr>
+<tr><td><code>check-playwright-forbidden-patterns.js</code></td><td>E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码</td><td>E2E 测试出现偶发假红，耗费排查精力</td></tr>
+<tr><td><code>repo-inventory.js</code></td><td>文件树前缀管控：新增文件必须显式归类于受控目录前缀或文档登记</td><td>临时审计、提案和日志文件悄悄回堆污染主树</td></tr>
 </tbody>
 </table>
-
-<h2>import 边界：BOUNDARY_RULES</h2>
-<p>扫描根为 src/、public/js/ 与 server.js。五条规则：</p>
-<table>
-<thead><tr><th>规则名</th><th>不变量</th></tr></thead>
-<tbody>
-<tr><td>frontend-no-backend</td><td>public/js 不得 import src/</td></tr>
-<tr><td>backend-no-frontend</td><td>src/、server.js 不得 import public/js（共享白名单除外）</td></tr>
-<tr><td>shared-is-leaf</td><td>src/shared 不得反向 import 其他后端域</td></tr>
-<tr><td>server-is-sink</td><td>只有 server.js 与 src/server 自身可 import src/server</td></tr>
-<tr><td>runtime-no-tooling</td><td>运行时源码不得 import scripts/ 或 tests/</td></tr>
-</tbody>
-</table>
-<p>另做<strong>零循环依赖</strong>检测（含动态 import() 扫描，不能靠动态 import 绕边界）。</p>
-<pre><code>SHARED_ALLOWLIST =
-  public/js/canonicalize.js  // 与指纹规范化共用
-  public/js/logic.js         // 前后端共用纯决策声明；单测直接覆盖</code></pre>
-<div class="callout tip"><div class="body">
-<strong>建议</strong>新增「前后端都要引用」的逻辑时，优先放进已有白名单文件的纯函数，或先扩展门禁白名单并写清理由；不要让 public/js 直接 import src/。
-</div></div>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>tests/ 与 scripts/ 不设 import 边界（工具与测试可跨域引用），但运行时源码不得反向依赖它们（runtime-no-tooling）。
-</div></div>
-
-<h2>事件契约</h2>
-<p>权威列表在 scripts/agent-event-contract.js，由 contract-check 与源码/前端/mock 注册面交叉比对。</p>
-<ul>
-  <li><strong>出向</strong>：agent:event 的 type 必须在 AGENT_EVENT_TYPES allowlist（真实路径与 visual mock 对照）。</li>
-  <li><strong>入向</strong>：客户端 emit 的 socket 事件名必须在 INBOUND_SOCKET_EVENTS；server 注册面与契约双向相等。</li>
-  <li>前端 emit 面 ⊆ 契约；visual mock ⊆ 契约。漏注册或多注册都会红。</li>
-</ul>
-<p>完整列表见<a href="api-events.html">事件与端点参考</a>。</p>
-
-<h2>Inventory</h2>
-<div class="kv">
-  <div class="row"><div class="key">inventory:update</div><div class="val">node scripts/repo-inventory.js --write，有意增删文件后更新清单与 docs/repository-map.md</div></div>
-  <div class="row"><div class="key">inventory:check</div><div class="val">node scripts/repo-inventory.js --check，拒绝未分类文件与过期生成物</div></div>
 </div>
-<p>新文件进入仓库前须能归类；审计笔记、一次性提案等不应悄悄回到主树。check 红时先看是契约漂移还是 inventory 未更新。</p>
 
-<div class="callout tip"><div class="body">
-<strong>建议</strong>推送带 CI 的仓库前，可用 <code>CI=true npm test</code> 模拟 CI 行为。
-</div></div>
+<h2>架构分层硬门禁：check-import-boundaries</h2>
+<p>该脚本对全仓执行静态 AST 依赖分析（包含动态 <code>import()</code> 扫描），强制执行以下铁律：</p>
+<pre><code>1. 前后端互不 import：app/public/js 与 app/src 严格禁止互相引入（唯一豁免规范化工具 canonicalize.js）。
+2. shared 是纯叶子层：app/src/shared 严禁反向引入其他任何后端领域模块。
+3. server 是组装根：除入口 app/server.js 和自身外，任何域模块禁止反向依赖 app/src/server。
+4. 运行时禁止引入测试与工具：生产代码绝对禁止 import scripts/ 或 tests/。
+5. 全局零循环依赖：任何形式的依赖环直接拦截。</code></pre>
+
+<h2>测试体系与防假绿铁律</h2>
+<p>根据 <code>docs/testing.md</code> 的规范，编写与修改测试遵循三大铁律：</p>
+<div class="cards">
+  <div class="card"><span class="k">01</span><h4>测试放哪里唯一判据</h4><p>在编号表中查得到编号的进 <code>tests/invariants/</code> 并标注守护行；查不到进 <code>tests/unit/</code> 且不写守护行。</p></div>
+  <div class="card"><span class="k">02</span><h4>失败方向严格受控</h4><p>产品的 Fail-Closed 是逐条权衡的（如配置读取异常保留 last-good），按盲目拒绝编写会把测试测反。</p></div>
+  <div class="card"><span class="k">03</span><h4>必须反向证明不恒绿</h4><p>在 Commit Message 的 <code>Tested:</code> 中写明曾注入什么错误使得测试变红。看着漂亮却永不变红的测试比没有更危险。</p></div>
+</div>
+
+<h2>宿主机只跑白名单，其余进容器</h2>
+<p>为杜绝类似 2026-08-02 误删本地数据的事故重演，仓库设立了严密的物理隔离界限（由 <code>tests/gates/guard-host-tests.js</code> 守卫）：</p>
+<ul>
+  <li><strong>宿主机允许运行白名单</strong>：仅允许 <code>npm run lint</code>、<code>npm run check</code>、<code>npm run test:unit</code> 和 <code>npm run test:e2e</code>（打纯内存 Mock Server）。</li>
+  <li><strong>进容器运行的黑盒测试</strong>：所有会拉起真实后台进程、测试卸载器或执行变异测试的指令（如 <code>test:docker</code>、<code>mutate:docker</code>、<code>test:invariants:env</code>），一律强制在 Docker 容器中执行，容器内 <code>HOME</code> 为一次性虚拟挂载，物理切断对开发机家目录的破坏能力。</li>
+</ul>

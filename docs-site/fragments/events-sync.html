@@ -1,74 +1,52 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">同步的单位是带序号的事件信封，而不是「整页 HTML」。客户端靠 seq / epoch 去重与补洞；磁盘侧另有 catch-up 追平 CLI 写入。</p>
+<p class="lead-extra">系统同步的最小单位是带单调序号的事件信封（Envelope），而不是整页重新渲染。客户端依靠 <code>seq</code> 与 <code>epoch</code> 实现高效去重与丢包补全；磁盘侧辅以 Catch-up 机制追平终端 CLI 写入。</p>
 
-<h2>信封</h2>
+<h2>标准事件信封 (agent:event)</h2>
 <pre><code>{
-  seq, epoch, sessionId, instanceId, cwd, ts,
-  type,   // 契约内 agent:event type
-  payload
+  seq,         // 实例内单调自增序号 (1, 2, 3...)
+  epoch,       // 实例世代 ID，实例重建后递增
+  sessionId,   // 关联的 Claude 会话 UUID
+  instanceId,  // 内存 Agent 实体代号 (如 inst_1)
+  cwd,         // 运行工作目录
+  ts,          // 服务端生成的精确 ISO 时戳
+  type,        // 契约白名单内的事件类型 (当前共 27 种)
+  payload      // 业务具体数据载荷
 }</code></pre>
 <ul>
-  <li><code>seq</code>：实例内单调递增；用于 <code>sync:since</code>。</li>
-  <li><code>epoch</code>：实例世代；换实例（effort 的 dispose+resume、dirty 置换、reclaim 等）后变大，客户端必须重置 lastSeq 基线。</li>
-  <li>入环形缓冲 cap=<strong>2000</strong>（<code>BUFFER_CAP</code>）；溢出丢最旧并可能标 gap。</li>
-  <li><code>emitTransient</code>：不占 seq、不进缓冲（如 <code>task_progress</code> 心跳）。</li>
+  <li><strong>序列号 seq：</strong>实例内唯一单调自增，用于客户端网络断开重连后的 <code>sync:since</code> 增量补发。</li>
+  <li><strong>世代号 epoch：</strong>用于标示实例生命周期变更。当发生外部变脏（<code>externalDirty</code>）导致的销毁置换或实例回收重建时递增。客户端一旦检测到 epoch 变更，必须重置 lastSeq 去重基线。</li>
+  <li><strong>环形缓冲：</strong>每个会话在内存维护容量为 <strong>2000</strong> 条的环形队列（<code>BUFFER_CAP</code>），溢出时丢弃最旧数据，若客户端落后过多则提示 gap。</li>
 </ul>
 
-<h2>广播策略</h2>
+<h2>分流与广播控制策略</h2>
 <ul>
-  <li>默认发往已批准设备房间 <code>approved</code>（<code>io.to('approved').emit('agent:event', …)</code>）。</li>
-  <li>高频 <code>text_delta</code> / <code>thinking_delta</code>：仅当该实例是当前 <code>viewingInstanceId</code> 时广播；后台 tab 仍写入缓冲，切回后用 <code>sync:since</code> 回放。</li>
-  <li>边界事件驱动角标 latch、推送节流、会话活动 touch。</li>
+  <li><strong>房间广播。</strong>业务事件统一广播给已批准设备的 Socket 房间（<code>approved</code> 命名空间）。</li>
+  <li><strong>高频流式节流（Bandwidth Saver）。</strong>高频的文本流（<code>text_delta</code>）与思考流（<code>thinking_delta</code>），仅当该实例是用户当前聚焦查看的 <code>viewingInstanceId</code> 时才下发。后台标签页只将事件写入环形缓冲，切回前台时通过 <code>sync:since</code> 批量回放，极大节约移动端蜂窝流量。</li>
+  <li><strong>跨设备已读位点共享。</strong>服务端统一记录会话的已读游标。手动置为未读通过时间戳比对（<code>manual &gt; seen</code>）合并，保证手机端长按标为未读的状态能在桌面端和其他设备同步展现。</li>
 </ul>
 
-<div class="callout tip"><div class="body">
-<strong>建议</strong>调试「后台会话像没字」时，先确认是否仅靠 live 流、是否切回后触发了 sync；后台不播高频 delta 是带宽设计，不是丢失。
-</div></div>
-
-<h2>视图守卫与 ack（2026-07-20）</h2>
-<ul>
-  <li>server 对 send / cancelQueued 等写路径的 ack 须校验当前 viewing：切会话后不得把旧会话的 ack/错误刷到新 tab。</li>
-  <li>前端 <code>pendingSendBusy</code> 等发送锁须按会话隔离，禁止跨会话污染（A 在忙导致 B 误显示忙碌）。</li>
-  <li>message-dedup：clientMessageId 幂等提交须防 TOCTOU（检查与 commit 之间并发重复发送）。</li>
-  <li><code>catchUpTickOnce</code>：两分支（有会话 / 无会话）写全局 catchUp/mirror 状态时，须在视图守卫通过之后再提交，防止旧 tick 写脏新 viewing。</li>
-</ul>
-
-<h2>sync:since</h2>
+<h2>断线快速重连：sync:since 协议</h2>
 <ol class="steps">
-  <li>客户端发送 <code>{ sessionId, lastSeq, instanceId }</code>。</li>
-  <li>服务端 <code>eventsSince(lastSeq)</code>：过滤已 resolve 的审批/提问（避免重弹）。</li>
-  <li>若缓冲被 trim 且存在空洞 → 标记 <code>gap</code> 并提示。</li>
-  <li>ack 可含 <code>pending</code> 快照（重建审批卡片）与 <code>diskLen</code>（对账终端写入量）。</li>
-  <li><code>epoch</code> 变化 = 新实例 → 客户端重置 lastSeq，不可混接旧流。</li>
+  <li>手机端从后台切回或网络闪断重连后，主动发送 <code>sync:since { sessionId, lastSeq, instanceId }</code>。</li>
+  <li>服务端提取环形缓冲中大于 <code>lastSeq</code> 的事件子集。</li>
+  <li>自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。</li>
+  <li>若客户端请求的 <code>lastSeq</code> 早于环形缓冲中最旧的一条，回传携带 <code>gap: true</code>，客户端触发完整历史拉取。</li>
 </ol>
 
-<div class="callout warn"><div class="body">
-<strong>留意</strong>已 resolve 的审批不会从缓冲回放——必须以 pending 快照为准。极长轮次可能 gap，需依赖 history 全量或提示用户。
-</div></div>
-
-<h2>与 catch-up / mirror 的分工</h2>
+<h2>出向 27 种契约事件分组</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>机制</th><th>数据源</th><th>用途</th></tr></thead>
+<thead><tr><th>业务功能分组</th><th>出向事件类型 (type)</th></tr></thead>
 <tbody>
-<tr><td>环形缓冲 + sync:since</td><td>进程内存信封</td><td>Web 驾驶时的断线补发、切 tab 回放</td></tr>
-<tr><td>catchUpTick / history_append</td><td>磁盘 jsonl</td><td>CLI 驾驶时只读追平；标 externalDirty</td></tr>
-<tr><td>session:history</td><td>磁盘 jsonl 冷读</td><td>打开会话时全量/分页历史</td></tr>
+<tr><td>流式输出</td><td><code>text_delta</code>、<code>thinking_delta</code>、<code>result</code></td></tr>
+<tr><td>工具调用</td><td><code>tool_use</code>、<code>tool_result</code></td></tr>
+<tr><td>人机交互与审批</td><td><code>permission_request</code>、<code>question</code>、<code>request_resolved</code></td></tr>
+<tr><td>系统与控制</td><td><code>init</code>、<code>system</code>、<code>error</code>、<code>user_message</code></td></tr>
+<tr><td>会话状态与配置</td><td><code>status_line</code>、<code>permission_mode</code>、<code>effort_mode</code>、<code>models</code>、<code>mirror_state</code>、<code>instances</code>、<code>worktree_status</code></td></tr>
+<tr><td>后台任务与子代理</td><td><code>task_notification</code>、<code>task_progress</code>、<code>api_retry</code>、<code>background_tasks_changed</code></td></tr>
+<tr><td>设备与元数据</td><td><code>device_status</code>、<code>pending_devices</code>、<code>session_log</code>、<code>history_append</code></td></tr>
 </tbody>
 </table>
-<p>详见<a href="single-driver.html">单驾驶员模型</a>。</p>
-
-<h2>出向 type 分组</h2>
-<table>
-<thead><tr><th>组</th><th>type</th></tr></thead>
-<tbody>
-<tr><td>流式内容</td><td><code>text_delta</code> <code>thinking_delta</code> <code>result</code></td></tr>
-<tr><td>工具</td><td><code>tool_use</code> <code>tool_result</code></td></tr>
-<tr><td>审批/提问</td><td><code>permission_request</code> <code>question</code> <code>request_resolved</code></td></tr>
-<tr><td>会话控制</td><td><code>init</code> <code>system</code> <code>error</code> <code>user_message</code></td></tr>
-<tr><td>状态</td><td><code>status_line</code> <code>permission_mode</code> <code>effort_mode</code> <code>models</code> <code>mirror_state</code> <code>instances</code></td></tr>
-<tr><td>任务</td><td><code>task_notification</code> <code>task_progress</code> <code>api_retry</code></td></tr>
-<tr><td>设备/日志</td><td><code>device_status</code> <code>pending_devices</code> <code>session_log</code> <code>history_append</code></td></tr>
-</tbody>
-</table>
-<p>完整 allowlist：出向 25 type、入向 32 事件——见<a href="api-events.html">事件与端点参考</a>。契约由 <code>npm run check</code> 中的 contract-check 硬闸；与源码冲突时以 <code>scripts/agent-event-contract.js</code> 为准。</p>
+</div>
+<p>事件定义真相源唯一维护于 <code>app/src/shared/protocol.js</code>。门禁 <code>tests/gates/agent-event-contract.js</code> 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。</p>

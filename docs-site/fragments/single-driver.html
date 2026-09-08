@@ -1,77 +1,51 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">同一 <code>sessionId</code> 在同一时刻只允许一个驾驶员写入。Web 与本机 CLI 不能并行写同一会话；后到的一方只读镜像或置换冷读，避免 transcript 分叉。</p>
+<p class="lead-extra">同一 <code>sessionId</code> 在任意时刻只允许存在单一写入者（Driver）。Web 端与终端 CLI 严禁并发向同一会话追加输入；后介入的一方退化为只读镜像或主动接管，彻底杜绝 Transcript 分叉。</p>
 
-<h2>为什么需要单驾驶员</h2>
-<p>会话内容的权威落点是 CLI transcript（jsonl）。若 Web 侧 SDK 子进程与终端里正在跑的 CLI 同时向同一 sessionId 追加轮次，会出现双 parent 链、模型上下文滞后、手机与终端各说各话。单驾驶员把「谁可以 send」收成互斥问题，而不是事后合并冲突。</p>
+<h2>单驾驶员模型解决的核心痛点</h2>
+<p>会话历史（Transcript）的唯一真相源存储在磁盘的 <code>~/.claude/projects/&lt;project&gt;/&lt;session_id&gt;.jsonl</code> 中。如果 Web 进程与终端 CLI 同时向同一个文件追加消息轮次，不仅会造成消息父子关联（parent link）混乱、上下文断裂，还会导致两端出现无法调和的视图漂移。单驾驶员模型将可能引发并发冲突的数据写入，在入口处收敛为严格互斥的锁状态机。</p>
 
 <div class="cards">
-  <div class="card"><span class="k">CLI 驾</span><h4>Web 只读镜像</h4><p>追平磁盘 transcript，输入锁为只读。</p></div>
-  <div class="card"><span class="k">Web 驾</span><h4>SDK 长驻 query</h4><p>正常发送、审批、中断。</p></div>
-  <div class="card"><span class="k">外部脏</span><h4>externalDirty</h4><p>磁盘已超前于 SDK 内存，发送前须置换。</p></div>
+  <div class="card"><span class="k">终端驾驶</span><h4>Web 保持只读镜像</h4><p>输入框自动挂起只读锁，后台引擎毫秒级追平磁盘追加的内容。</p></div>
+  <div class="card"><span class="k">Web 驾驶</span><h4>长驻 SDK Query 流</h4><p>持有写入权限，输入、审批和中断等控制指令正常下发。</p></div>
+  <div class="card"><span class="k">外部变脏</span><h4>标记 externalDirty</h4><p>感知到终端追加了新轮次，Web 下次发送前强制置换实例冷读。</p></div>
 </div>
 
-<h2>三种形态</h2>
+<h2>三种驾驶状态与流转模型</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>形态</th><th>写入者</th><th>Web 行为</th></tr></thead>
+<thead><tr><th>运行状态</th><th>当前持有者</th><th>Web 端交互行为</th><th>底层机制</th></tr></thead>
 <tbody>
-<tr><td>Web 驾驶</td><td>本进程 AgentSession</td><td>正常发送；状态栏取 SDK</td></tr>
-<tr><td>CLI 驾驶（只读镜像）</td><td>终端 CLI</td><td>输入锁定；catch-up 追 transcript；可选 statusline bridge</td></tr>
-<tr><td>接管</td><td>Web 在镜像下成功 send</td><td>清 mirrorReadonly；dispose+resume 后 Web 驾驶</td></tr>
+<tr><td>Web 驾驶态</td><td>CCM AgentSession 实例</td><td>完全可写；实时推流文本与工具卡片</td><td>SDK 双向流占用；输入即时响应</td></tr>
+<tr><td>CLI 驾驶态（只读镜像）</td><td>终端正在执行的 CLI</td><td>输入框显示「终端会话运行中」并锁定，只读观看</td><td>通过 Mirror Engine 轮询增量并以 <code>history_append</code> 广播</td></tr>
+<tr><td>接管状态 (Takeover)</td><td>Web 端主动发起接管</td><td>终端静默超时后，用户可点击发送强行接管写入</td><td>触发 <code>externalDirty</code> 置换逻辑，先冷读磁盘再建新 query</td></tr>
 </tbody>
 </table>
-
-<h2>镜像机制</h2>
-<div class="kv">
-  <div class="row"><div class="key">catchUpTick</div><div class="val">轮询当前查看会话的 jsonl 增量 → history_append；只读时约 1s 一拍，常态约 2.5s</div></div>
-  <div class="row"><div class="key">mirror_state</div><div class="val">广播只读锁与观察态（model/permission 等）</div></div>
-  <div class="row"><div class="key">mirrorEntryLock</div><div class="val">切入会话时预锁（尾部 pending）</div></div>
-  <div class="row"><div class="key">mirrorReleaseStep</div><div class="val">安静约 12.5s 后自动释放只读锁（文件仍增长则 keepAlive）</div></div>
-  <div class="row"><div class="key">cli-mirror-state</div><div class="val">只读观察 CLI 落盘偏好，不写回 Web 实例偏好</div></div>
-  <div class="row"><div class="key">forInstanceId 守卫</div><div class="val">setMirror / catchUp 写入带 viewing 快照；切视图后旧 tick 不得改全局锁</div></div>
-  <div class="row"><div class="key">clearMirrorOnViewChange</div><div class="val">切会话/视图立即 force 清全局 mirror，防 A 会话锁套到 B（跨工作区误锁）</div></div>
 </div>
 
-<div class="callout tip"><div class="body">
-<strong>建议</strong>2026-07-20 修复点：镜像误重锁（解锁后不该被旧逻辑再次锁上）；<code>catchUpTickOnce</code> 两分支的状态提交延后到视图守卫之后，避免切 tab 后旧 tick 写脏全局 mirror / catchUp 状态。
-</div></div>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>Web resume 是<strong>冷读</strong> transcript，不能 attach 正在运行的 CLI 活进程。正在终端里跑的会话，Web 侧只能镜像或等其结束后再 resume。
-</div></div>
-
-<div class="callout warn"><div class="body">
-<strong>留意</strong>长工具若长时间不写盘，仅靠「文件增长」会误判静默；实现用 tailPending / keepAlive 等互补判据，避免横幅误灭成「感觉没在跑」。
-</div></div>
-
-<h2>externalDirty 与发送</h2>
+<h2>活体识别与 Tail Attribution 判据</h2>
+<p>在识别「终端是否仍在活跃执行」时，存在复杂的边缘时序。系统历经多次迭代确立了精确的判定准则：</p>
 <ol class="steps">
-  <li>catch-up 或 rebaseline 发现磁盘已超前 → 标记 <code>externalDirty</code>。</li>
-  <li>用户发送时若实例 <strong>idle</strong>：dispose + resume，冷读磁盘后再发（吸收终端写入）。</li>
-  <li>若实例 <strong>busy</strong>：硬拒绝（NACK），可重试；不是静默排队。</li>
+  <li><strong>终端等待态感知 (terminalWaiting)。</strong>当终端执行长耗时工具（如跑大单测、长构建）而未向 Transcript 写盘时，单纯看「文件是否增长」会误判为终端已退出。系统结合终端状态判定与探针，准确维持锁定状态，防止意外接管。</li>
+  <li><strong>桌面端与 Web 归因隔离 (Tail Attribution)。</strong>桌面端和 Web 端可能轮流向会话写盘。系统对尾部未完成的 pending 消息进行归因检测，区分「是自己 Web 发出的在途请求」还是「终端/桌面端遗留的活体动作」，彻底消灭闲置桌面端被误标繁忙的假警报。</li>
+  <li><strong>相反判据的架构合理性。</strong>镜像锁判定（宁可误锁，因为并发写会导致不可逆的分叉）与会话列表状态展示（宁可少报忙碌，因为谎报运行中比稍后刷新代价更大）方向相反，两者各有其专门守护边界。</li>
 </ol>
-<p><code>externalDirty</code> 只约束「下次 Web 写入前必须吸收磁盘」；它不单独把 statusline 锁到 CLI——statusline 是否走 CLI 快照看 <code>mirrorReadonly</code>。</p>
 
-<div class="mermaid">
-flowchart LR
-  A["查看会话"] --> B{"尾部/锁判定"}
-  B -->|"CLI 在写"| C["mirrorReadonly"]
-  C --> D["catchUpTick 追平"]
-  D --> E["mirrorReleaseStep ~12.5s"]
-  E -->|"静默满"| F["解锁可输入"]
-  B -->|"外部已超前"| G["externalDirty"]
-  G --> H{"发送时 idle?"}
-  H -->|是| I["dispose + resume 冷读"]
-  H -->|否| J["NACK"]
+<h2>镜像机制关键内部组件</h2>
+<div class="kv">
+  <div class="row"><div class="key">catchUpTick</div><div class="val">增量轮询器：只读态约 1s 一拍，常态约 2.5s，抓取 jsonl 追加字节。</div></div>
+  <div class="row"><div class="key">mirrorReleaseStep</div><div class="val">自动解锁看门狗：终端持续静默约 12.5s 且无未完成 pending 时自动释放只读锁。</div></div>
+  <div class="row"><div class="key">forInstanceId 守卫</div><div class="val">多标签页防串锁：异步 tick 提交前校验当前视图未切换，防止切回其他项目时污染锁状态。</div></div>
+  <div class="row"><div class="key">clearMirrorOnViewChange</div><div class="val">切换会话强制清理全局镜像，防止跨工作区幽灵锁。</div></div>
 </div>
 
-<h2>切回运行中会话（busy reseed）</h2>
-<p>从其他标签切回仍在跑的会话时，前端按 server 权威 state 重种运行指示，避免「其实还在跑，UI 却像空闲」。权威来源是 instances 等载荷中的 state，而非本地 spinner 记忆。</p>
-
-<h2>已知边界</h2>
-<ul>
-  <li>mirror 全局单值（非 per-连接）；切视图会清理，设计上未做细粒度 per-socket 锁（AD-5 有意保留）。</li>
-  <li>catchUp 主要盯<strong>当前查看</strong>会话；后台 tab 被外部写过、切入后首个 tick 前极速发送，边界上可能不经 dirty 置换（已知）。</li>
-  <li>busy→idle 窗口内部分终端写入可能被吸收而不标脏（有意取舍，防重复气泡）。</li>
-  <li>环形事件缓冲 2000 与历史消息 2000 上限是不同轴（事件信封 vs transcript 条数）。</li>
-</ul>
+<h2>状态转移架构图</h2>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --> WebDriver: 用户在手机端开启新话题或恢复
+  WebDriver --> MirrorReadonly: 磁盘检测到外部终端追加轮次
+  MirrorReadonly --> CatchUp: 轮询磁盘增量并追加渲染
+  CatchUp --> MirrorReadonly: 终端持续输出
+  MirrorReadonly --> WebDriver: 终端静默超时 (>12.5s) 释放锁，Web 恢复可写
+  MirrorReadonly --> WebDriver: 用户点击强行接管并发送 (触发置换)
+</div>

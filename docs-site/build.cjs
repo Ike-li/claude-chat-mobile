@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /* ══════════════════════════════════════════════════════════════════
-   build.js — 把 fragments/<slug>.html 片段编译成完整的多页静态站点
-   用法：node build.js   （在输出目录下运行）
-   依赖：book.config.js（全书结构）、fragments/<slug>.html（内容片段）
-   产物：index.html + pages/*.html + assets/{style.css,app.js,search-index.js}
+   build.cjs — 把 fragments/<slug>.html 片段编译成完整的多页静态站点
+   用法：node build.cjs   （在输出目录下运行）
+   依赖：book.config.cjs（全书结构）、fragments/<slug>.html（内容片段）
+   产物：index.html + pages/*.html + assets/search-index.js
    ══════════════════════════════════════════════════════════════════ */
 const fs = require('fs');
 const path = require('path');
@@ -13,32 +13,114 @@ const CONTENT = path.join(ROOT, 'fragments');
 const PAGES = path.join(ROOT, 'pages');
 const ASSETS = path.join(ROOT, 'assets');
 const book = require('./book.config.cjs');
+const { convertHtmlToMarkdown, estimateTokens } = require('./html-to-markdown.cjs');
 
-// 首次运行时目录可能不存在，先建好（幂等）
-[CONTENT, PAGES, ASSETS].forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
-// 展平所有页面，附带 part 信息与全局序号
-const flat = [];
-book.parts.forEach((part) => {
-  part.pages.forEach((pg) => {
-    flat.push({ ...pg, part, partLabel: part.label, partIcon: part.icon });
+// ══════════════════════════════════════════════════════════════════
+//  纯函数区（verify.cjs 复用，勿在此处读写文件）
+// ══════════════════════════════════════════════════════════════════
+
+/** HTML 转义：所有来自 book.config 的字段进模板前都要过这一层 */
+function esc(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 去掉 HTML 注释：注释里的示例标记不该参与检查、索引或改写 */
+function stripComments(html) { return html.replace(/<!--[\s\S]*?-->/g, ''); }
+
+/** 把 <pre> 块内容抹成等量空行：行号不变，块内文本不再被当作正文误判 */
+function blankPre(html) {
+  return html.replace(/<pre\b[\s\S]*?<\/pre>/gi,
+    (m) => '\n'.repeat((m.match(/\n/g) || []).length));
+}
+
+/** 展平 parts → 单一顺序页面列表，附 part 信息、全局序号与产物 URL */
+function flatten(bk) {
+  const flat = [];
+  bk.parts.forEach((part) => {
+    part.pages.forEach((pg) => {
+      flat.push({ ...pg, part, partLabel: part.label, partIcon: part.icon });
+    });
   });
-});
-flat.forEach((p, i) => {
-  p.n = i;
-  p.url = p.home ? 'index.html' : 'pages/' + p.slug + '.html';
-});
+  flat.forEach((p, i) => {
+    p.n = i;
+    p.url = p.home ? 'index.html' : 'pages/' + p.slug + '.html';
+  });
+  return flat;
+}
 
-// 计算从 fromUrl 到 toUrl 的相对路径
+/** 计算从 fromUrl 到 toUrl 的相对路径 */
 function rel(fromUrl, toUrl) {
   const fromDir = path.posix.dirname(fromUrl);
-  let r = path.posix.relative(fromDir, toUrl);
+  const r = path.posix.relative(fromDir, toUrl);
   return r || path.posix.basename(toUrl);
 }
-// 资源前缀（home 在根，其余在 pages/）
+
+/** 资源前缀（home 在根，其余在 pages/）*/
 function base(p) { return p.home ? '' : '../'; }
 
-// 给正文 h2/h3 注入 id，并抽取 TOC
+/** 提取纯文本：保留 <pre>（命令与配置值要可搜索），解码实体，不截断 */
+function plain(html) {
+  return stripComments(html)
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (m, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g,
+      (m, n) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[n]))
+    .replace(/&[a-zA-Z]+\d*;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 阅读时长兜底：按正文字数估，config 写了 time 则以 config 为准 */
+function estimateTime(text) { return Math.max(1, Math.round(text.length / 400)); }
+
+/** 内部链接的合法写法：裸文件名 slug.html，可带 #锚点 */
+const BARE_HTML = /^([^/?#]+)\.html(#[^"]*)?$/;
+
+/**
+ * 把正文里的 href="slug.html" 改写成相对当前页的正确路径。
+ * 封面产物在根目录、其余页在 pages/，同一个裸文件名在两处含义不同，
+ * 所以作者只写 slug，由这里按页计算。异常通过 onError 上报，不静默。
+ */
+function resolveLinks(html, page, flat, onError) {
+  return html.replace(/(<a\b[^>]*?\bhref=")([^"]*)(")/gi, (m, pre, href, post) => {
+    if (!href || href.startsWith('#') || href.startsWith('//') ||
+        /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return m;      // 锚点 / 协议外链
+    
+    // 跨目录外链特例（如 ../../en/security.html）保留不改写
+    if (href.startsWith('../') || href.startsWith('./') || href.startsWith('/')) {
+      return m;
+    }
+
+    const hit = href.match(BARE_HTML);
+    if (!hit) {
+      if (/\.html($|[?#])/i.test(href))
+        onError(`${page.slug}.html → href="${href}"：内部链接请只写 slug.html，不要带目录`);
+      return m;
+    }
+    const slug = hit[1];
+    const hash = hit[2] || '';
+    const target = flat.find((f) => f.slug === slug) ||
+      (slug === 'index' ? flat.find((f) => f.home) : null);
+    if (!target) {
+      onError(`${page.slug}.html → href="${href}"：未知 slug「${slug}」`);
+      return m;
+    }
+    return pre + rel(page.url, target.url) + hash + post;
+  });
+}
+
+/** 给未包裹的 <table> 套上 .table-wrap，窄屏才能横向滚动 */
+function wrapTables(html) {
+  return html.replace(/(<div class="table-wrap">\s*)?<table\b[\s\S]*?<\/table>/gi,
+    (m, wrapped) => (wrapped ? m : '<div class="table-wrap">' + m + '</div>'));
+}
+
+/** 给正文 h2/h3 注入 id，并抽取 TOC */
 function processHeadings(html) {
   const toc = [];
   let n = 0;
@@ -55,99 +137,94 @@ function processHeadings(html) {
   return { html: out, toc };
 }
 
-// 提取纯文本用于搜索
-function plain(html) {
-  return html.replace(/<(script|style|pre)[\s\S]*?<\/\1>/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&[a-z]+;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 2400);
+// ══════════════════════════════════════════════════════════════════
+//  模板区
+// ══════════════════════════════════════════════════════════════════
+
+/** 品牌角标：config 未给 mark 时取书名首字 */
+function brandMark(bk) {
+  if (bk.mark) return bk.mark;
+  const t = Array.from(String(bk.title || '').trim());
+  return t.length ? t[0] : '·';
 }
 
-// ── 侧边栏 HTML ──────────────────────────────────────────────────
-function sidebar(curr) {
+function sidebar(curr, flat) {
   const b = base(curr);
+  const sub = [book.subtitle, book.tagline].filter(Boolean).map(esc).join(' · ');
   let html = `<div class="brand"><a href="${b}index.html">
-    <span class="logo"><span class="mark">LOGO</span>${book.title}</span>
-    <span class="sub">${book.subtitle} · ${book.tagline}</span>
+    <span class="logo"><span class="mark">${esc(brandMark(book))}</span>${esc(book.title)}</span>
+    <span class="sub">${sub}</span>
   </a></div><nav class="nav">`;
   book.parts.forEach((part) => {
-    html += `<div class="part"><div class="part-label"><span class="pn">${part.icon}</span>${part.label}</div>`;
+    const pn = part.icon ? `<span class="pn">${esc(part.icon)}</span>` : '';
+    html += `<div class="part"><div class="part-label">${pn}${esc(part.label)}</div>`;
     part.pages.forEach((pg) => {
       const target = flat.find((f) => f.slug === pg.slug);
       const href = rel(curr.url, target.url);
       const active = pg.slug === curr.slug ? ' class="active"' : '';
-      const idx = (target.n).toString().padStart(2, '0');
-      html += `<a href="${href}"${active}><span class="idx">${idx}</span><span>${pg.title}</span></a>`;
+      const idx = String(target.n).padStart(2, '0');
+      html += `<a href="${href}"${active}><span class="idx">${idx}</span><span>${esc(pg.title)}</span></a>`;
     });
     html += `</div>`;
   });
   html += `</nav>`;
   // 奥付：书末的出版信息栏，放版本与源仓库，安静收笔
-  const colophon = [book.version, book.repo].filter(Boolean).join(' · ');
+  const colophon = [book.version, book.repo].filter(Boolean).map(esc).join(' · ');
   if (colophon) html += `<div class="colophon">${colophon}</div>`;
   return html;
 }
 
-// ── TOC HTML ──────────────────────────────────────────────────────
 function tocHtml(toc) {
   if (toc.length < 2) return '';
-  let items = toc.map((t) =>
+  const items = toc.map((t) =>
     `<li class="h${t.level}"><a href="#${t.id}">${t.text}</a></li>`).join('');
   return `<aside class="toc"><div class="toc-title">本页目录</div><ul>${items}</ul></aside>`;
 }
 
-// ── 页眉 ──────────────────────────────────────────────────────────
-function pageHead(p) {
+function pageHead(p, total) {
   const srcLine = p.src && p.src.length
-    ? `<span class="src" title="原始文档来源">源自 ${p.src.join(' · ')}</span>` : '';
+    ? `<span class="src" title="原始文档来源">源自 ${esc(p.src.join(' · '))}</span>` : '';
   const tag = p.partIcon === '◆'
-    ? `<span class="part-tag">${p.partLabel}</span>`
-    : `<span class="part-tag"><span class="pn">${p.partIcon}</span> ${p.partLabel}</span>`;
+    ? `<span class="part-tag">${esc(p.partLabel)}</span>`
+    : `<span class="part-tag"><span class="pn">${esc(p.partIcon)}</span> ${esc(p.partLabel)}</span>`;
+  const lead = p.lead ? `<p class="lead">${esc(p.lead)}</p>` : '';
   return `<header class="page-head">
     ${tag}
-    <h1>${p.title}</h1>
-    <p class="lead">${p.lead}</p>
+    <h1>${esc(p.title)}</h1>
+    ${lead}
     <div class="meta">
-      <span><span class="lbl">阅读约</span> ${p.time} 分钟</span>
-      <span><span class="lbl">第</span> ${p.n + 1} / ${flat.length} 篇</span>
+      <span><span class="lbl">阅读约</span> ${p.readMin} 分钟</span>
+      <span><span class="lbl">第</span> ${p.n + 1} / ${total} 篇</span>
       ${srcLine}
     </div>
   </header>`;
 }
 
-// ── 上下页 ────────────────────────────────────────────────────────
-function pager(p) {
+function pager(p, flat) {
   const prev = p.n > 0 ? flat[p.n - 1] : null;
   const next = p.n < flat.length - 1 ? flat[p.n + 1] : null;
   const prevA = prev
-    ? `<a class="prev" href="${rel(p.url, prev.url)}"><span class="dir">← 上一篇</span><span class="ttl">${prev.title}</span></a>`
+    ? `<a class="prev" href="${rel(p.url, prev.url)}"><span class="dir">← 上一篇</span><span class="ttl">${esc(prev.title)}</span></a>`
     : `<a class="prev disabled"></a>`;
   const nextA = next
-    ? `<a class="next" href="${rel(p.url, next.url)}"><span class="dir">下一篇 →</span><span class="ttl">${next.title}</span></a>`
+    ? `<a class="next" href="${rel(p.url, next.url)}"><span class="dir">下一篇 →</span><span class="ttl">${esc(next.title)}</span></a>`
     : `<a class="next disabled"></a>`;
   return `<nav class="pager">${prevA}${nextA}</nav>`;
 }
 
-// ── 面包屑 ────────────────────────────────────────────────────────
 function crumbs(p) {
-  return `<b>${p.partLabel}</b> &nbsp;/&nbsp; ${p.title}`;
+  return `<b>${esc(p.partLabel)}</b> &nbsp;/&nbsp; ${esc(p.title)}`;
 }
 
-// ── 完整 HTML 外壳 ────────────────────────────────────────────────
-function shell(p, bodyHtml, toc) {
+function shell(p, bodyHtml, toc, flat) {
   const b = base(p);
-  const indexHref = p.home ? 'index.html' : '../index.html';
   const needMermaid = /class="mermaid"/.test(bodyHtml);
-  const mermaidTag = needMermaid
-    ? `<script src="${b}assets/mermaid.min.js"></script>`
-    : '';
+  const mermaidTag = needMermaid ? `<script src="${b}assets/mermaid.min.js"></script>` : '';
+
+  // SEO & 结构化数据
   const siteRoot = 'https://ike-li.github.io/claude-chat-mobile/';
   const siteBase = `${siteRoot}docs-site/`;
-  const canonicalUrl = p.home
-    ? siteBase
-    : `${siteBase}pages/${p.slug}.html`;
+  const canonicalUrl = p.home ? siteBase : `${siteBase}pages/${p.slug}.html`;
   const breadcrumbItems = [
     { '@type': 'ListItem', position: 1, name: 'Claude Chat Mobile', item: siteRoot },
     { '@type': 'ListItem', position: 2, name: '项目全景手册', item: siteBase },
@@ -173,40 +250,34 @@ function shell(p, bodyHtml, toc) {
   const hreflangTags = enAlt
     ? `\n<link rel="alternate" hreflang="zh-CN" href="${canonicalUrl}">\n<link rel="alternate" hreflang="en" href="${siteRoot}${enAlt}">\n<link rel="alternate" hreflang="x-default" href="${siteRoot}${enAlt}">`
     : '';
+
   return `<!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="${esc(book.lang || 'zh-CN')}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${p.title} · ${book.title}</title>
-<meta name="description" content="${(p.lead || '').replace(/"/g, '')}">
+<title>${esc(p.title)} · ${esc(book.title)}</title>
+<meta name="description" content="${esc(p.lead || '')}">
+<meta name="llm:tokens" content="${p.tokens}">
+<link rel="alternate" type="text/markdown" href="${p.home ? 'index.md' : p.slug + '.md'}">
 <link rel="canonical" href="${canonicalUrl}">${hreflangTags}
 <link rel="stylesheet" href="${b}assets/style.css">
+<script src="${b}assets/boot.js"></script>
 <script>window.__BASE__='${b}';</script>
 <script type="application/ld+json">${breadcrumbJson}</script>
 </head>
 <body>
 <div class="scrim"></div>
 <div class="layout">
-  <aside class="sidebar">${sidebar(p)}</aside>
-  <script>
-  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
-  (function(){try{
-    var sb=document.querySelector('.sidebar');if(!sb)return;
-    var saved=sessionStorage.getItem('docsbook-nav-scroll');
-    var act=sb.querySelector('.nav a.active');
-    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      return r.top>=s.top&&r.bottom<=s.bottom;}
-    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
-    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
-    else if(act&&!inView())center();
-  }catch(e){}})();
-  </script>
+  <aside class="sidebar">${sidebar(p, flat)}</aside>
+  <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
       <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
       <div class="crumbs">${crumbs(p)}</div>
+      <button class="icon-btn ai-copy-btn" id="copyAiBtn" aria-label="Copy for AI" title="复制当前页面纯净 Markdown 给 AI Agent">
+        <span class="btn-text">📋 Copy for AI</span>
+      </button>
       <button class="search-trigger" data-search-open>
         <span>搜索手册</span><span class="k">⌘K</span>
       </button>
@@ -216,7 +287,7 @@ function shell(p, bodyHtml, toc) {
     <div class="content-wrap">
       <article class="article fade">
         ${bodyHtml}
-        ${pager(p)}
+        ${pager(p, flat)}
       </article>
       ${toc}
     </div>
@@ -240,80 +311,79 @@ ${mermaidTag}
 // ══════════════════════════════════════════════════════════════════
 //  主构建流程
 // ══════════════════════════════════════════════════════════════════
-const searchIndex = [];
-let built = 0, missing = [];
+function build() {
+  [CONTENT, PAGES, ASSETS].forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
-flat.forEach((p) => {
-  const fragPath = path.join(CONTENT, p.slug + '.html');
-  let frag;
-  if (fs.existsSync(fragPath)) {
-    frag = fs.readFileSync(fragPath, 'utf8');
-    // fragments may carry noindex for direct-URL safety; never ship into public pages
-    frag = frag
-      .replace(/<!--\s*build fragment[\s\S]*?-->\s*/i, '')
-      .replace(/<meta\s+name=["']robots["'][^>]*>\s*/gi, '');
-  } else {
-    missing.push(p.slug);
-    frag = `<div class="callout warn"><div class="body">
-      <strong>本页内容正在撰写</strong>本页（<code>${p.slug}</code>）的内容片段尚未生成。</div></div>
-      <p>${p.lead}</p>`;
+  const flat = flatten(book);
+  const searchIndex = [];
+  const errors = [];
+  const missing = [];
+
+  flat.forEach((p) => {
+    const fragPath = path.join(CONTENT, p.slug + '.html');
+    let frag;
+    if (fs.existsSync(fragPath)) {
+      frag = fs.readFileSync(fragPath, 'utf8')
+        .replace(/<!--\s*build fragment[\s\S]*?-->\s*/i, '')
+        .replace(/<meta\s+name=["']robots["'][^>]*>\s*/gi, '');
+    } else {
+      missing.push(p.slug);
+      frag = `<div class="callout warn"><div class="body">
+      <strong>本页内容正在撰写</strong>本页（<code>${esc(p.slug)}</code>）的内容片段尚未生成。</div></div>
+      <p>${esc(p.lead || '')}</p>`;
+    }
+
+    const clean = stripComments(frag);
+    const text = plain(clean);
+    p.readMin = p.time || estimateTime(text);
+    // AEO: 生成纯净 Markdown 镜像产物并估算 Token
+    const mdContent = convertHtmlToMarkdown(frag, {
+      title: p.title,
+      lead: p.lead,
+      partLabel: p.partLabel,
+      readMin: p.readMin,
+      tokens: estimateTokens(frag)
+    });
+    p.tokens = estimateTokens(mdContent);
+
+    const outMdPath = p.home ? path.join(ROOT, 'index.md') : path.join(PAGES, p.slug + '.md');
+    fs.writeFileSync(outMdPath, mdContent, 'utf8');
+
+
+    const linked = resolveLinks(clean, p, flat, (msg) => errors.push(msg));
+    const { html: withIds, toc } = processHeadings(wrapTables(linked));
+    const head = p.home ? '' : pageHead(p, flat.length);   // 封面页用自带 hero，不套页眉
+    const outHtml = shell(p, (head ? head + '\n' : '') + withIds, tocHtml(toc), flat);
+
+    fs.writeFileSync(
+      p.home ? path.join(ROOT, 'index.html') : path.join(PAGES, p.slug + '.html'),
+      outHtml, 'utf8');
+
+    searchIndex.push({
+      url: p.url, title: p.title, part: p.partLabel,
+      lead: p.lead || '', text: text.slice(0, 8000),
+    });
+  });
+
+  if (errors.length) {
+    console.error(`\n✕ 链接无法解析，已停止构建（${errors.length} 处）：`);
+    errors.forEach((e) => console.error('  ' + e));
+    console.error('\n内部链接只写裸文件名，如 href="overview.html"、href="drift.html#anchor"。');
+    process.exit(1);
   }
 
-  // ── 内容格式自检：扫描疑似 Markdown 语法 ─────────────────────
-  // fragments/*.html 应为纯 HTML 片段（build.js 不做 Markdown→HTML 转换）。
-  // 以下模式若出现在最终页面中将显示为裸文本，在此提前告警。
-  const mdWarnings = [];
-  const fragLines = frag.split('\n');
-  fragLines.forEach((line, i) => {
-    const ln = i + 1;
-    if (/^## /.test(line)) mdWarnings.push(`  L${ln}: Markdown h2 "## …" → 应改为 <h2>…</h2>`);
-    if (/^### /.test(line)) mdWarnings.push(`  L${ln}: Markdown h3 "### …" → 应改为 <h3>…</h3>`);
-    if (/^\|.*\|.*\|/.test(line) && !/<(thead|tbody|tr|th|td)/i.test(line))
-      mdWarnings.push(`  L${ln}: Markdown 表格 "|…|" → 应改为 <table> 标签`);
-    if (/^- /.test(line) && !/<li>/i.test(line))
-      mdWarnings.push(`  L${ln}: Markdown 列表 "- …" → 应改为 <ul><li>…</li></ul>`);
-  });
-  if (mdWarnings.length) {
-    console.warn(`\n⚠ ${p.slug}.html 疑似含 Markdown 语法（将原样显示为裸文本）：`);
-    mdWarnings.forEach(w => console.warn(w));
-  }
+  fs.writeFileSync(path.join(ASSETS, 'search-index.js'),
+    'window.__SEARCH_INDEX__=' + JSON.stringify(searchIndex) + ';', 'utf8');
 
-  const { html: withIds, toc } = processHeadings(frag);
-  // 封面 fragments/index.html 自带 page-head（含 H1）；其余章节由 pageHead 注入
-  const head = p.home ? '' : pageHead(p);
-  const fullBody = (head ? head + '\n' : '') + withIds;
-  const outHtml = shell(p, fullBody, tocHtml(toc));
+  console.log(`✓ 构建完成：${flat.length} 页`);
+  if (missing.length)
+    console.log(`⚠ 缺内容片段（占位）：${missing.length} 页 → ${missing.join(', ')}`);
+}
 
-  const outPath = p.home ? path.join(ROOT, 'index.html') : path.join(PAGES, p.slug + '.html');
-  fs.writeFileSync(outPath, outHtml, 'utf8');
-  built++;
+module.exports = {
+  book, ROOT, CONTENT, PAGES, ASSETS,
+  esc, stripComments, blankPre, flatten, rel, base,
+  plain, estimateTime, resolveLinks, wrapTables, processHeadings, BARE_HTML,
+};
 
-  searchIndex.push({
-    url: p.url, title: p.title, part: p.partLabel,
-    lead: p.lead || '', text: plain(frag),
-  });
-});
-
-// 写搜索索引
-fs.writeFileSync(
-  path.join(ROOT, 'assets', 'search-index.js'),
-  'window.__SEARCH_INDEX__=' + JSON.stringify(searchIndex) + ';',
-  'utf8'
-);
-
-console.log(`✓ 构建完成：${built} 页`);
-if (missing.length) console.log(`⚠ 缺内容片段（占位）：${missing.length} 页 → ${missing.join(', ')}`);
-else console.log('✓ 全部页面内容齐全');
-
-// 离线依赖自检：有页面用了 mermaid，但本地库没拷进 assets/ → 图会静默不渲染
-const anyMermaid = flat.some((p) => {
-  const f = path.join(CONTENT, p.slug + '.html');
-  return fs.existsSync(f) && /class="mermaid"/.test(fs.readFileSync(f, 'utf8'));
-});
-if (anyMermaid && !fs.existsSync(path.join(ASSETS, 'mermaid.min.js')))
-  console.log('⚠ 检测到 mermaid 图，但 assets/mermaid.min.js 不存在。'
-    + '获取方式见 skill 的「关键约束 · 离线可用」；缺失时图将不渲染。');
-['style.css', 'app.js'].forEach((f) => {
-  if (!fs.existsSync(path.join(ASSETS, f)))
-    console.log(`⚠ assets/${f} 不存在 —— 页面会裸奔（无样式/无交互）。请从 skill 的 templates/ 拷入。`);
-});
+if (require.main === module) build();

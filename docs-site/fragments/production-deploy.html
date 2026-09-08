@@ -1,60 +1,61 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">生产形态是两个常驻进程加固定域名：Access 守公网，隧道落到本机 loopback，server 经登录 shell 启动以继承与终端一致的 PATH 与登录态。</p>
+<p class="lead-extra">生产形态是基于登录 Shell 托管的常驻守护进程与端到端安全网络通道：确保关掉终端终端后台不掉线，自动维持与电脑终端完全一致的 <code>PATH</code>、环境变量与登录凭据。</p>
 
-<h2>架构</h2>
-<pre><code>手机 → 域名 → Cloudflare Access（2FA）→ 命名隧道 → localhost:3000 → server</code></pre>
-
-<div class="kv">
-  <div class="row"><div class="key">公网入口</div><div class="val">固定域名；Access 验 OTP / IdP；公网路径不带 <code>#token=</code></div></div>
-  <div class="row"><div class="key">LAN / 本机</div><div class="val">仍可用 <code>http://&lt;lan-ip&gt;:3000/#token=…</code>，走 <code>AUTH_TOKEN</code></div></div>
-  <div class="row"><div class="key">两个常驻进程</div><div class="val">server（node）与 tunnel（cloudflared）；崩溃自拉起、关终端不掉</div></div>
+<h2>生产架构拓扑</h2>
+<div class="mermaid">
+flowchart LR
+  Phone["手机端 PWA"] --> PublicEdge["公网边界 (Cloudflare / 反向代理)"]
+  PublicEdge -->|"加密隧道 / 反代"| Local["localhost:3000"]
+  Local --> CCMServer["CCM 常驻服务 (LaunchAgent / systemd)"]
+  CCMServer --> NativeCLI["本机 claude CLI & 宿主环境"]
 </div>
 
-<h2>从零搭建（摘要）</h2>
+<div class="kv">
+  <div class="row"><div class="key">公网入口</div><div class="val">通过 Cloudflare Access（2FA）或独立反向代理直连</div></div>
+  <div class="row"><div class="key">局域网 / 本机</div><div class="val">内网可直接通过 <code>http://&lt;lan-ip&gt;:3000/#token=...</code> 连入</div></div>
+  <div class="row"><div class="key">常驻守护</div><div class="val">通过 macOS LaunchAgent 或 Linux systemd，支持崩溃自愈与开机自启</div></div>
+</div>
+
+<h2>macOS 生产常驻与菜单栏应用 (CCM.app)</h2>
+<p>在 macOS 上，推荐使用项目原生提供的两套生产管理入口：</p>
 <ol class="steps">
-  <li><strong>隧道。</strong><code>cloudflared tunnel login</code> → create → route dns → 写 <code>~/.cloudflared/config.yml</code> ingress 到 <code>http://localhost:3000</code>。凭据勿提交。</li>
-  <li><strong>Access。</strong>Zero Trust 添加 Self-hosted 应用；取 AUD tag；填入 <code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code> 三项。</li>
-  <li><strong>常驻。</strong>用 <code>deploy/*.plist.template</code> + <code>scripts/render-plist.js</code> 渲染后 <code>launchctl bootstrap</code>（Linux 换 systemd，思路相同）。</li>
-  <li><strong>控制面外置。</strong>设 <code>CCM_DATA_DIR</code> 绝对路径 0700；doctor 再 kickstart。</li>
-  <li><strong>可选通知。</strong>VAPID 与/或 ntfy + <code>PUBLIC_URL</code>。</li>
+  <li><strong>原生状态栏应用 CCM.app：</strong>
+<pre><code># 编译并安装原生 Swift 菜单栏应用至 /Applications/CCM.app
+npm run app:install</code></pre>
+  支持在系统顶部菜单栏一键查看 Server 状态、一键重启、一键扫码在手机打开当前会话，并支持工作区快速切换。
+  </li>
+  <li><strong>标准常驻服务 CLI 驱动：</strong>
+<pre><code>npm run service:install   # 渲染 plist 模板并注册入 launchd 系统服务
+npm run service:status    # 检查服务运行态、PID 与日志位置
+npm run service:restart   # 一键热重启常驻服务进程</code></pre>
+  </li>
 </ol>
 
-<h2>LaunchAgent 模板</h2>
-<ul>
-  <li><code>deploy/server.plist.template</code> — 经 <code>zsh -lc 'cd &lt;repo&gt; &amp;&amp; exec &lt;node&gt; server.js'</code> 启动，保 PATH/登录态；RunAtLoad + KeepAlive</li>
-  <li><code>deploy/tunnel.plist.template</code> — <code>cloudflared tunnel run &lt;name&gt;</code></li>
-  <li><code>deploy/log-rotate.plist.template</code> — 定时 <code>scripts/rotate-logs.sh</code>（copy-truncate）</li>
-</ul>
-<pre><code>node scripts/render-plist.js deploy/server.plist.template \
-  ~/Library/LaunchAgents/com.you.ccm-server.plist \
-  LABEL=com.you.ccm-server REPO="$PWD" NODE="$(command -v node)" \
-  LOG="$HOME/Library/Logs/ccm-server.log"
-
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.you.ccm-server.plist</code></pre>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>用 <code>render-plist.js</code> 做字面量替换与 XML 转义；路径含 <code>&amp;</code> / <code>#</code> / 空格时勿用裸 sed。
+<div class="callout warn"><div class="body">
+<strong>macOS 常驻启动命令约束</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令为 <code>exec &lt;node&gt; app/server.js</code>，必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码逐字严格一致，改动一侧必须同步另一侧。
 </div></div>
 
-<h2>控制面外置</h2>
-<pre><code>mkdir -p "$HOME/Library/Application Support/claude-chat-mobile/data"
-chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
-  "$HOME/Library/Application Support/claude-chat-mobile/data"
-# .env:
-# CCM_DATA_DIR=/Users/you/Library/Application Support/claude-chat-mobile/data</code></pre>
-<p>transcript 仍在 <code>~/.claude/projects/</code>；附件仍在各 <code>.ccm-uploads/</code>。迁移前停服并备份，迁后 doctor 再重启。</p>
+<h2>Linux 常驻部署 (systemd)</h2>
+<p>在 Linux 服务器或无头工作站上，建议注册为 systemd 用户服务（<code>~/.config/systemd/user/ccm.service</code>）：</p>
+<pre><code>[Unit]
+Description=Claude Chat Mobile Service
+After=network.target
 
-<h2>运维铁律</h2>
+[Service]
+Type=simple
+WorkingDirectory=%h/code/claude-chat-mobile
+ExecStart=%h/.nvm/versions/node/v20.x/bin/node app/server.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target</code></pre>
+
+<h2>运维铁律与管理边界</h2>
 <ul>
-  <li>生产端口已被常驻占用：<strong>勿再</strong> <code>npm start</code>（撞端口）。</li>
-  <li>改 <code>.env</code> 或代码后须 <code>launchctl kickstart -k gui/$(id -u)/&lt;label&gt;</code>（或 systemd restart）才生效。</li>
-  <li>例外：<code>WORK_DIRS_FILE</code> 热加载免重启 server。</li>
-  <li>LaunchAgent 在登录后启动；开机未登录也跑需改 LaunchDaemon（进阶）。</li>
+  <li><strong>端口防撞：</strong>常驻服务已经占用 3000 端口时，切勿在终端重复敲 <code>npm start</code>。需要临时排查请在菜单栏点重启或执行 <code>npm run service:restart</code>。</li>
+  <li><strong>配置生效时机：</strong>改动 <code>ccm.config.json</code> 中的 <code>PORT</code>、<code>AUTH_TOKEN</code> 或 <code>ACCESS_PROFILE</code> 必须重启服务；仅修改 <code>WORKDIRS</code> 工作区列表支持热加载生效。</li>
+  <li><strong>反代安全配置：</strong>公网反代必须显式设置 <code>ACCESS_PROFILE=reverse-proxy</code> 并声明 <code>TRUSTED_PROXY</code>，严防客户端伪造 <code>X-Forwarded-For</code> 绕过鉴权。</li>
 </ul>
-
-<div class="callout danger"><div class="body">
-<strong>危险</strong>反代到 loopback 会使设备审批按「本机」跳过。本配方公网靠 Access JWT 兜底；换成其它本机反代时务必强 <code>AUTH_TOKEN</code>，勿只靠设备层。详见<a href="security-model.html">安全模型</a>。
-</div></div>
-
-<p>更细的隧道 / Access / ntfy / 排错表见源码 <code>docs/deployment.md</code> 与<a href="ops-troubleshoot.html">运维与排错</a>。</p>

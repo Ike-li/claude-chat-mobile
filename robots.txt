@@ -1,6 +1,12 @@
 User-agent: *
 Allow: /
 
+# Agent & LLM quick indexes
+Allow: /claude-chat-mobile/llms.txt
+Allow: /claude-chat-mobile/llms-full.txt
+Allow: /claude-chat-mobile/skill.md
+Allow: /claude-chat-mobile/docs-site/pages/*.md
+
 # Build sources / authoring notes are not public handbook pages
 Disallow: /claude-chat-mobile/docs-site/fragments/
 Disallow: /claude-chat-mobile/docs-site/content/

@@ -1,67 +1,42 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">通知与状态栏都是「尽力增强」：失败不阻断主对话；Web 驾驶与 CLI 驾驶的状态来源不同。</p>
+<p class="lead-extra">离线通知与运行态展示属于「尽力而为的体验增强」：通知通道的偶然失败绝不阻塞核心交互；状态栏根据当前的驾驶员主体动态选择权威数据源。</p>
 
-<h2>Web Push</h2>
-<ul>
-  <li>需 <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code> 三项齐全，否则优雅缺席。</li>
-  <li>订阅保存在 <code>$CCM_DATA_DIR/push-subscription.json</code>。</li>
-  <li>HTTP：<code>GET /push/vapid-public-key</code>、<code>POST /push/subscribe</code>（均走 httpAuth）。</li>
-  <li>典型触发：审批、提问、结果类（经分类与节流）。</li>
-  <li>实现：<code>src/ops/notify-channels.js</code> + <code>notifications.js</code>。</li>
-</ul>
-
-<div class="callout warn"><div class="body">
-<strong>留意</strong>iOS 上 Web Push 要求「添加到主屏幕」且 https。局域网 http 不可用；此时应配 ntfy 或保持页面前台。
-</div></div>
-
-<h2>ntfy</h2>
-<ul>
-  <li><code>NTFY_URL</code> + <code>NTFY_TOPIC</code> 启用；可选 <code>NTFY_TOKEN</code> 访问私有实例。</li>
-  <li><code>PUBLIC_URL</code> 用于通知深链绝对 URL；空则回退 <code>https://$CF_ACCESS_HOSTNAME</code>。</li>
-  <li>server 一行 POST 到 ntfy；手机装 ntfy app 订阅 topic 可锁屏收通知。</li>
-  <li>正文可能含命令 / 审批摘要 → 务必自托管或私密 topic + token，勿用公共 <code>ntfy.sh</code> 裸 topic。</li>
-</ul>
-
-<p>节流窗口：<code>NOTIFY_THROTTLE_MS</code> 默认 <strong>60000</strong>（同会话同类通知）。投递失败会记入服务健康（deliveryFailure），面板可展示，不阻断对话。</p>
-
-<h2>Statusline 来源选择</h2>
+<h2>离线通知体系：双通道机制</h2>
+<p>系统内置两种独立的异步离线消息通道，完全由 <code>app/src/ops/notify-channels.js</code> 统一调度：</p>
+<div class="table-wrap">
 <table>
-<thead><tr><th>场景</th><th>来源</th></tr></thead>
+<thead><tr><th>通道类型</th><th>底层协议与配置要求</th><th>优势与典型场景</th></tr></thead>
 <tbody>
-<tr><td>Web 驾驶</td><td>SDK 状态（模型、上下文、成本等）</td></tr>
-<tr><td>CLI 驾驶 + bridge 已装</td><td>CLI 快照目录中的 statusline 观察态</td></tr>
-<tr><td><code>WEB_STATUSLINE=off</code></td><td>关闭 Web 状态栏 UI</td></tr>
-<tr><td><code>CLI_STATUSLINE_BRIDGE=off</code></td><td>server 侧回滚为 SDK-only（不自动卸载 CLI wrapper）</td></tr>
+<tr><td>Web Push (首选)</td><td>标准 W3C Push 规范，需配置 <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code></td><td><strong>体验最佳</strong>：配合 PWA 实现系统级原生通知，点击直接调起应用直达该会话</td></tr>
+<tr><td>ntfy (高可用后备)</td><td>基于 HTTP 的 ntfy 协议，配置 <code>NTFY_URL</code> 与 <code>NTFY_TOPIC</code>（支持自建与私有 Token）</td><td><strong>无 HTTPS/内网场景首选</strong>：局域网纯 HTTP 下仍可稳定推送，适合 iOS 免证书直达</td></tr>
 </tbody>
 </table>
-<pre><code>npm run statusline:status      # 只读查看，不改 ~/.claude
-npm run statusline:install     # 显式安装；不随 npm install / start 自动执行
-npm run statusline:uninstall</code></pre>
-<p>安装后须重开 Claude CLI 并重启常驻 server。CLI 与 server 的 <code>CLI_STATUSLINE_DIR</code> 须一致（默认约定在 <code>~/.claude/ccm/…</code> 下）。</p>
+</div>
 
+<h2>推送抑制策略：严禁假静音与噪音打扰</h2>
 <div class="callout tip"><div class="body">
-<strong>建议</strong>多数用户只需 Web 驾驶的 SDK 状态栏。仅在「Web 只读镜像正在 CLI 里跑的会话、且要看 CLI 同源 statusline」时再装 bridge。
+<strong>推送判定铁律</strong>审批（<code>permission_request</code>）、提问（<code>question</code>）与后台长任务完成属于紧急人机待办，<strong>无条件推送</strong>（用户可能正在锁屏或使用其他应用）；仅常规对话的 <code>result</code> 结果，在「approved 房间检测到前台可见连接」时才会被智能抑制。
 </div></div>
-
-<h2>动态状态行与回合收尾</h2>
 <ul>
-  <li>运行中可展示 CLI 式动态状态行（动词 / 秒表 / tokens 等，经 <code>status_line</code> 事件）。</li>
-  <li>成功轮可有回合收尾行（对齐 CLI：过去式动词 + 时长）；中断/错误路径有意不同文案。</li>
+  <li><strong>前台可见性依据：</strong>以客户端上报的 <code>client:presence</code>（基于 Page Visibility API）为准，<strong>而不是单纯根据 Socket 是否保持连通</strong>。</li>
+  <li><strong>通知节流窗：</strong>同一会话内的同类通知遵循 <code>NOTIFY_THROTTLE_MS</code>（默认 60 秒）节流防轰炸。</li>
 </ul>
 
-<h2>服务状态面板</h2>
-<p><code>instances</code> 广播可带判定化字段：</p>
-<pre><code>service: {
-  startedAt,
-  deliveryFailure,
-  rateLimitLockout,
-  clientError
-}</code></pre>
-<ul>
-  <li>面板渲染「基础 + 判定化告警」两段；告警带 24h 时效窗自动退场。</li>
-  <li>裸计数器不进入面板（对人无参照系）；原始计数留 <code>/metrics</code>。</li>
-  <li>与「需要你 (N)」角标聚合是不同轴，不混判。</li>
-</ul>
+<h2>Statusline 状态栏双源选择</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>当前运行场景</th><th>数据真相源</th><th>展示内容</th></tr></thead>
+<tbody>
+<tr><td>Web 端驾驶中</td><td>SDK 内部运行态</td><td>当前模型别名、上下文窗口占用比例（ctx%）、累计 Token 消耗</td></tr>
+<tr><td>CLI 终端驾驶中（只读镜像）</td><td>CLI Statusline 快照</td><td>通过 <code>npm run statusline:install</code> 安装的快照桥接器，精准镜像终端原生状态行</td></tr>
+</tbody>
+</table>
+</div>
 
-<p>相关：<a href="single-driver.html">单驾驶员</a>（谁驾驶决定 statusline 源）、<a href="ops-troubleshoot.html">运维排错</a>（/metrics）。</p>
+<h2>状态可见性：告警轴与待办轴绝不混淆</h2>
+<ul>
+  <li><strong>待办轴（「需要你」）：</strong>顶栏角标与数字 Chip 只用于展示「用户点击即可立刻处理」的人机交互项（如待审批的命令、待回答的问题、后台跑完的任务）。</li>
+  <li><strong>运维告警轴：</strong>系统级运行故障（如通知通道失联、鉴权限速封禁、客户端网络异常）只沉淀在侧边抽屉的「服务状态面板」中，两轴严格分离，绝不混判。</li>
+  <li><strong>动态动词与收尾行：</strong>运行时支持实时展示过去式动词、秒表与输出速率，对齐终端 CLI 的动态状态展示。</li>
+</ul>

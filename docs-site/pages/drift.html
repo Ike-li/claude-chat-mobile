@@ -1,12 +1,15 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>漂移清单 · Claude Chat Mobile</title>
 <meta name="description" content="文档与代码不一致处，以代码为准。">
+<meta name="llm:tokens" content="1041">
+<link rel="alternate" type="text/markdown" href="drift.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.html">
 <link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/boot.js"></script>
 <script>window.__BASE__='../';</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},{"@type":"ListItem","position":2,"name":"项目全景手册","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/"},{"@type":"ListItem","position":3,"name":"漂移清单","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.html"}]}</script>
 </head>
@@ -14,27 +17,17 @@
 <div class="scrim"></div>
 <div class="layout">
   <aside class="sidebar"><div class="brand"><a href="../index.html">
-    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html" class="active"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@2de707b · claude-chat-mobile</div></aside>
-  <script>
-  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
-  (function(){try{
-    var sb=document.querySelector('.sidebar');if(!sb)return;
-    var saved=sessionStorage.getItem('docsbook-nav-scroll');
-    var act=sb.querySelector('.nav a.active');
-    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      return r.top>=s.top&&r.bottom<=s.bottom;}
-    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
-    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
-    else if(act&&!inView())center();
-  }catch(e){}})();
-  </script>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html" class="active"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile</div></aside>
+  <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
       <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
       <div class="crumbs"><b>第七部分 · 参考与规范</b> &nbsp;/&nbsp; 漂移清单</div>
+      <button class="icon-btn ai-copy-btn" id="copyAiBtn" aria-label="Copy for AI" title="复制当前页面纯净 Markdown 给 AI Agent">
+        <span class="btn-text">📋 Copy for AI</span>
+      </button>
       <button class="search-trigger" data-search-open>
         <span>搜索手册</span><span class="k">⌘K</span>
       </button>
@@ -50,59 +43,40 @@
     <div class="meta">
       <span><span class="lbl">阅读约</span> 8 分钟</span>
       <span><span class="lbl">第</span> 28 / 28 篇</span>
-      
+      <span class="src" title="原始文档来源">源自 docs/hard-rules.md · CLAUDE.md</span>
     </div>
   </header>
-<p class="lead-extra">下列条目是文档/注释与当前代码之间已知不一致。阅读与改需求时以代码与本手册为基线。</p>
+<p class="lead-extra">下列条目是文档、注释与当前真实生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码实现与本手册的最新记录为基线。</p>
 
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>已知漂移与历史修正清单</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>条目</th><th>文档/注释侧</th><th>代码侧（为准）</th></tr></thead>
+<thead><tr><th>关注领域</th><th>陈旧文档/历史描述</th><th>代码最新事实（以此为准）</th><th>影响与说明</th></tr></thead>
 <tbody>
-<tr><td>设计长文</td><td>多处注释仍写 <code>docs/design.md</code>；旧链到该文件章节</td><td>文件已删（2026-07-19）。安全权威 = README「安全模型」；运维 = <code>docs/deployment.md</code></td></tr>
-<tr><td>repository-map 分类</td><td>生成表把大量 <code>src/**</code> 标成统一 domain module</td><td>边界脚本另有 sink/分层语义；map 是 inventory 用途，不区分组装根</td></tr>
-<tr><td>workdirs 配置名</td><td>CLAUDE/口语常说「workdirs.json 热加载」</td><td>契约环境变量名是 <code>WORK_DIRS_FILE</code>（值常为仓库根 workdirs.json）；未设则回退 WORK_DIRS 且无热加载</td></tr>
-<tr><td>SHARED_ALLOWLIST</td><td>allowlist 含 <code>logic.js</code>（注释：server 与浏览器共用）</td><td>后端实际主要 import <code>canonicalize.js</code>；logic 以浏览器与单测消费为主</td></tr>
-<tr><td>缓冲数字</td><td>历史文档可能写 500 等</td><td>环形缓冲 <strong>2000</strong>（BUFFER_CAP）；HISTORY_MAX_MESSAGES 亦 2000</td></tr>
-<tr><td>需求来源</td><td>旧 design / demo 场景族 / 宣传脚本</td><td>7/19 起已撤出主开发线；勿按已删 design 找需求；demo 脚本需从 git 历史找回</td></tr>
-<tr><td>AD-x / NFR-x 注释</td><td>代码中大量溯源标记</td><td>文件已删，标记有意保留；不是仍存在的文档路径</td></tr>
+<tr><td>源码目录重构</td><td>旧文档大量引用 <code>src/**</code> 与 <code>public/**</code></td><td>运行时代码已全部迁入 <code>app/</code>（<code>app/src/</code> 与 <code>app/public/</code>）</td><td>计算项目根路径需上溯三层，防止数据写到 <code>app/data</code></td></tr>
+<tr><td>思考强度调整机制</td><td>旧手册声称 effort 无法动态修改，切档必须重建实例</td><td>SDK 0.3.263 支持 <code>applyFlagSettings({effortLevel})</code> 实时生效</td><td>彻底废弃实例销毁重建的低效方案</td></tr>
+<tr><td>附件物理存放位置</td><td>旧文档描述附件存放在工作区 <code>.ccm-uploads/</code></td><td>附件已搬迁至 <code>data/uploads/&lt;bucket&gt;/</code> 受管数据根目录</td><td>旧目录仅作只读回退，避免污染用户代码仓库的 Git 树</td></tr>
+<tr><td>配置格式与单一源</td><td>旧文档以 <code>.env</code> 为主要配置说明</td><td>以根目录 <code>ccm.config.json</code> 结构化配置为首要真相源，优先于 <code>.env</code></td><td>由 <code>config-file.js</code> 统管读写，支持工作区热加载</td></tr>
+<tr><td>契约事件数量统计</td><td>旧手册记录入向 32 种、出向 25 种</td><td>基线已演进为：<strong>出向 27 种，入向 46 种</strong></td><td>新增了已读共享、设备管理、文件检索等大量双向事件</td></tr>
+<tr><td>测试运行安全防线</td><td>旧指南未限制宿主机测试范围</td><td>落地 <code>guard-host-tests</code> 门禁，宿主机只允许跑 4 类白名单命令</td><td>可能破坏数据的测试一律强制进 Docker 沙箱执行</td></tr>
+<tr><td>多租户与产品立场</td><td>偶有讨论多租户扩展的提案</td><td>确立硬性规则 <code>hard-rules.md</code> 与产品宪法 C1–C5，坚决不做多租户</td><td>杜绝一切向 SaaS 模式演化的复杂设计</td></tr>
 </tbody>
 </table>
+</div>
 
-<div class="callout drift"><div class="body">
-<strong>注释引用 design.md</strong>仍有多处实现文件在注释中写「承接 docs/design.md …」。那是溯源残留，不是文件仍存在。新改动勿再新增对该路径的依赖；安全与威胁模型以 README 与鉴权代码为准。
-</div></div>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>关于历史 design.md 标记的说明</h2>
+<p>在现有代码的注释中，可能依然能看到类似 <code>// 守护：SRV-003</code> 或引用 <code>docs/design.md</code> 的注释。这是早期架构演进留下的历史溯源锚点。历史设计文档本身早已废弃并删除，代码中的规则守护全部由 <code>tests/README.md</code> 中的不变量编号体系接管，切勿将其当作仍存在的文档路径。</p>
 
-<div class="callout drift"><div class="body">
-<strong>热加载措辞</strong>对用户说「改 workdirs.json」通常没错（推荐文件名），但自动化与 env 模板必须写 <code>WORK_DIRS_FILE</code>。只改文件却未设置该 env，server 不会 watch。
-</div></div>
-
-<div class="callout drift"><div class="body">
-<strong>数字校验纪律</strong>凡手册或 PR 描述中的计数、默认毫秒、缓冲上限，应用 <code>rg</code> 对照 <code>src/</code> 与 <code>scripts/agent-event-contract.js</code>；不要从记忆或旧 markdown 抄。本手册探针基线：dev @ 2de707b。
-</div></div>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>源码探针分支为 dev（HEAD <code>2de707b</code>）；产物维护在 gh-pages 的 docs-site。<strong>本站不随 dev 自动重生成</strong>。发现新漂移时优先记入本页，再改叙述，避免静默「修文档盖住代码」。
-</div></div>
-
-<div class="callout drift"><div class="body">
-<strong>已纠偏（相对初稿）</strong>权限档为六值（含 <code>auto</code>），不是「五种」；effort 不可 in-place 改活进程，须 dispose+resume；doctor 区分 CLI 11 项与 UI 体检；入向 socket 以契约 <strong>32</strong> 个、出向 agent:event 以契约 <strong>25</strong> 个为完整列表（见<a href="api-events.html">事件与端点参考</a>）。
-</div></div>
-
-<div class="callout note"><div class="body">
-<strong>2026-07-20 手册同步</strong>基线自 8084005 抬至 <code>2de707b</code>。增量主题：消息子系统 9 项修复（镜像误重锁 / pendingTurns 双扣 / 视图守卫 / pendingSendBusy / dedup TOCTOU / control_request 超时扩面 / catchUp 提交顺序）、多子代理防误杀、限流停止卡死、首页 worktree 最近活跃。契约事件数未变（入 32 / 出 25）。未 push 的 dev 段以本机 HEAD 为准。
-</div></div>
-
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>本手册自身边界</h2>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>手册维护约定</h2>
 <ul>
-  <li>不把 gh-pages landing 宣传文案当产品架构事实。</li>
-  <li>不把 promo 文案仓当源码。</li>
-  <li>inventory 数字（约 277 分类文件等）以生成 map 为准，会随 dev 变更。</li>
-  <li>关键数字/契约以代码与 <code>scripts/agent-event-contract.js</code> 为准；手册滞后时以代码胜。</li>
+  <li>本手册生成物部署于 <code>gh-pages</code> 分支，不随 <code>dev</code> 主分支自动无感更新。</li>
+  <li>在后续的迭代中，如果生产代码发生结构性变更，必须优先将真实代码行为登记于本漂移清单，再更新全书正文。</li>
+  <li>严禁通过修改文档来掩盖代码实际存在的行为缺陷。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="env-reference.html"><span class="dir">← 上一篇</span><span class="ttl">环境变量参考</span></a><a class="next disabled"></a></nav>
       </article>
-      
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">已知漂移与历史修正清单</a></li><li class="h2"><a href="#s2">关于历史 design.md 标记的说明</a></li><li class="h2"><a href="#s3">手册维护约定</a></li></ul></aside>
     </div>
   </div>
 </div>

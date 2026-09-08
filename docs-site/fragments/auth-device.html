@@ -1,65 +1,55 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">鉴权是纵深结构：token（或 Access JWT）证明「知道密钥」；设备 TOFU 证明「这台设备被主人批过」。合法 token  alone 不足以操作未信任设备上的业务。</p>
+<p class="lead-extra">系统鉴权采用严格的纵深防御：Token（或 Access 边缘 JWT）证明客户端知晓通信密钥，而设备指纹 TOFU 机制则证明「持有该 Token 的物理设备已经过机主显式授权」。单凭 Token 无法突破未受信任设备的隔离防线。</p>
 
-<h2>绑定与可达性</h2>
+<h2>绑定模式与网络暴露控制</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>条件</th><th>listen host</th><th>可达性</th></tr></thead>
+<thead><tr><th>配置状态</th><th>监听绑定地址</th><th>网络可达性与安全保证</th></tr></thead>
 <tbody>
-<tr><td><code>AUTH_TOKEN</code> 非空</td><td><code>0.0.0.0</code></td><td>LAN + 隧道可达</td></tr>
-<tr><td>未设 / 空串</td><td><code>127.0.0.1</code></td><td>仅本机；手机与隧道均不可达（有意）</td></tr>
+<tr><td><code>AUTH_TOKEN</code> 为有效串</td><td><code>0.0.0.0</code>（全接口）</td><td>局域网直连与公网反代/隧道均可正常路由</td></tr>
+<tr><td>未配置或留空</td><td><code>127.0.0.1</code>（仅环回地址）</td><td>手机与外部隧道物理不可达，杜绝无鉴权暴露</td></tr>
 </tbody>
 </table>
-<p>代码：<code>src/server/app.js</code> 中 <code>host = AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1'</code>。</p>
-
-<h2>HTTP 与 Socket 共用</h2>
-<ul>
-  <li>Token 匹配：HTTP 用头 <code>x-auth-token</code> 或查询 <code>?token=</code>；Socket 用握手 auth。</li>
-  <li>限速 Map 共享：<code>/health</code>、<code>/metrics</code>、<code>/push/*</code> 与 socket 握手共用，防无限试 token（默认连续失败阈值与锁定逻辑在 <code>rate-limiter.js</code>）。</li>
-  <li>公网 Host 且 Access 启用时：优先 JWT；LAN / 其它 Host 用 token。</li>
-  <li>无鉴权门（无 token 且非公网 Host）时限速不激活：本机调试路径 auth 恒过。</li>
-</ul>
-
-<div class="mermaid">
-flowchart TD
-  Conn["新连接"] --> Pub{"公网 Host\n且 Access 已配?"}
-  Pub -->|是| JWT["校验 CF Access JWT\nfail-closed"]
-  Pub -->|否| Tok{"AUTH_TOKEN\n匹配?"}
-  JWT --> RL["限速 onAuthResult"]
-  Tok -->|否| Deny["拒绝"]
-  Tok -->|是| RL
-  RL --> Dev{"本机或已信任\n或 Access?"}
-  Dev -->|否| Pending["TOFU pending"]
-  Dev -->|是| OK["进入业务房间 approved"]
 </div>
 
-<h2>Cloudflare Access</h2>
-<p><code>CF_ACCESS_HOSTNAME</code>、<code>CF_ACCESS_TEAM</code>、<code>CF_ACCESS_AUD</code> <strong>三项齐全</strong>才启用。校验经 jose + JWKS（缓存 <code>cf-access-certs.json</code>），失败则拒绝。任一缺失则整层关闭，回退 token 路径。改 env 后须重启常驻 server。</p>
+<h2>鉴权流程与多层校验机制</h2>
+<div class="mermaid">
+flowchart TD
+  Conn["收到新网络连接 (HTTP / WS)"] --> Topo{"检查 ACCESS_PROFILE"}
+  Topo -->|cloudflare| JWT["校验 Cloudflare Access JWT\n(jose + JWKS 签名核验)"]
+  Topo -->|reverse-proxy / lan| Tok{"校验 AUTH_TOKEN\n(Header / #token= / Auth)"}
+  JWT --> RL["限速状态机 onAuthResult\n(IPv6 /64 分桶聚合)"]
+  Tok -->|通过| RL
+  Tok -->|失败| Reject["抛出 401 并计入失败桶"]
+  RL --> Dev{"检查设备指纹信赖态"}
+  Dev -->|已批准设备或本地环回| Allow["放行进入 approved 业务房间"]
+  Dev -->|未授权新设备| TOFU["挂起进入 pending-devices\n(仅推送审批，不开放操作)"]
+</div>
 
-<div class="callout warn"><div class="body">
-<strong>留意</strong>OTP 已过但 app 仍连不上：多为 JWT 校验失败（TEAM/AUD 与 CF 应用不一致）。日志搜「Access JWT」。
+<h2>反向代理陷阱与 ACCESS_PROFILE 判据</h2>
+<div class="callout danger"><div class="body">
+<strong>防范反代 IP 坍塌陷阱</strong>任何将公网流量通过本地反代（如 Nginx、Caddy、FRP、SSH 端口转发）直连 <code>127.0.0.1:3000</code> 的拓扑，都会导致客户端对端 IP 坍塌为 <code>127.0.0.1</code>，从而导致设备审批门被静默跳过。
 </div></div>
-
-<h2>设备信赖（TOFU）</h2>
-<table>
-<thead><tr><th>文件</th><th>内容</th></tr></thead>
-<tbody>
-<tr><td><code>$CCM_DATA_DIR/trusted-devices.json</code></td><td>已信任设备（含 deviceToken）</td></tr>
-<tr><td><code>$CCM_DATA_DIR/pending-devices.json</code></td><td>等待批准的设备请求</td></tr>
-</tbody>
-</table>
+<p>为消除该隐患，系统采用三候选配置：</p>
 <ul>
-  <li>本机 loopback（<code>127.0.0.1</code> / <code>::1</code> / <code>localhost</code>）可跳过设备门。</li>
-  <li>非本机须批准后才能进入业务房间 <code>approved</code>。</li>
-  <li>CLI：<code>node scripts/device.js list|approve &lt;ID&gt;|deny &lt;ID&gt;</code>（与 server 读同一 <code>CCM_DATA_DIR</code>）。</li>
-  <li>待批通过 <code>pending_devices</code> 等事件推到已信任端；UI 亦可批准。</li>
+  <li><code>cloudflare</code>：适用于 Cloudflare Tunnel 场景，公网有 Access 2FA 严格兜底。</li>
+  <li><code>reverse-proxy</code>：<strong>一等支持路径</strong>。强制要求显式配置 <code>TRUSTED_PROXY</code>（如配置反代服务器 IP）后才采信 <code>X-Forwarded-For</code>，防止外部伪造客户端来源；同时要求使用强随机 Token。</li>
+  <li><code>lan</code>：纯私网直连，只采信直接 Socket 对端 IP。</li>
 </ul>
 
-<div class="callout danger"><div class="body">
-<strong>危险</strong>任意把公网流量反代到 127.0.0.1 的拓扑（nginx/Caddy 的 <code>proxy_pass localhost</code>、SSH 转发、frp 等），都会让 peer 显「本机」，从而跳过设备审批，防线只剩 token（+ 若开 Access 则 JWT）。Cloudflare 命名隧道落到 localhost 时同样显本机，但公网有 Access 兜底，本配方可接受。
-</div></div>
+<h2>设备信赖（TOFU 机制）与审批流</h2>
+<ul>
+  <li><code>$CCM_DATA_DIR/trusted-devices.json</code>：已受信任设备列表（持久化设备指纹与签名 Token）。</li>
+  <li><code>$CCM_DATA_DIR/pending-devices.json</code>：等待机主审批的新设备队列。</li>
+  <li><strong>本机免审批：</strong>仅本机真实环回（<code>127.0.0.1</code> / <code>::1</code>）可跳过设备门直接放行。</li>
+  <li><strong>命令行审批入口：</strong>在电脑终端可随时通过 <code>node scripts/device.js list | approve &lt;ID&gt; | deny &lt;ID&gt;</code> 审查并批准手机接入。</li>
+</ul>
 
-<h2>与审批台账的区别</h2>
-<p>设备 TOFU 管「谁可以连上来操作」；工具 <code>permission_request</code> 管「CLI 是否执行某条命令」。二者都是 fail-closed 纵深，不可互相替代。重启后设备信任仍在磁盘；在途工具审批回调死亡，磁盘 pending 会标过期。</p>
-
-<p>实现：<code>src/auth/*</code>、<code>src/server/http.js</code>、<code>src/server/app.js</code> 握手段。</p>
+<h2>防暴力尝试与限速保护</h2>
+<p>系统内置共享限速状态机（位于 <code>app/src/auth/rate-limiter.js</code>）：</p>
+<ul>
+  <li><strong>统一管控：</strong>HTTP 端点（含 <code>/health</code>、<code>/metrics</code>、<code>/push/*</code>）与 WebSocket 握手共用限速池。</li>
+  <li><strong>IPv6 聚合防护：</strong>将同一 <code>/64</code> 地址段聚类到单个限速桶，彻底瓦解利用海量动态 IPv6 绕过锁定的手段。</li>
+  <li><strong>渐进式退避与锁定：</strong>连续尝试失败后触发阶梯式指数退避，达到硬阈值后予以锁定。本机来源与外部来源告警严格区分，绝不在控制台制造假警报。</li>
+</ul>

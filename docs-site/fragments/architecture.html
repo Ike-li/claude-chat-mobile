@@ -1,79 +1,92 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">系统是一条默认上锁的转发链：手机 UI 经 Socket.IO 到本机 server，再经 Agent SDK 驱动 claude CLI 读写你的工作区。</p>
+<p class="lead-extra">系统是一条默认严格受控的双通道转发体系：手机 UI 通过 WebSocket 与本机 Server 通信，双向流驱动 Agent SDK 交互，同时与终端 CLI 磁盘 Transcript 保持只读镜像同步。</p>
 
-<h2>分层总览</h2>
+<h2>双通道分层架构</h2>
 <div class="mermaid">
-flowchart LR
-  subgraph Phone["手机"]
-    UI["public/ 单页\n气泡·工具卡·审批"]
+flowchart TB
+  subgraph Client["移动端客户端 (app/public)"]
+    UI["PWA 聊天交互界面\n流式气泡 · 审批卡片 · 工作区抽屉"]
   end
-  subgraph Edge["公网可选"]
-    CF["Cloudflare Tunnel\n+ Access"]
+
+  subgraph Network["网络拓扑 (ACCESS_PROFILE)"]
+    CF["Cloudflare Tunnel + Access\n(公网 2FA 隧道)"]
+    RP["纯反向代理 / 内网穿透\n(Nginx / Tailscale)"]
+    LAN["局域网直接连接\n(本地绑定)"]
   end
-  subgraph Host["本机"]
-    S["server.js + src/server\nExpress · Socket.IO · 鉴权"]
-    A["AgentSession\nSDK query · 权限闸 · 信封缓冲"]
-    SDK["claude-agent-sdk"]
-    CLI["本机 claude CLI"]
-    FS["WORK_DIR 项目文件"]
-    J["CCM_DATA_DIR\n元数据"]
+
+  subgraph Runtime["本机运行时 (Node.js 20+ ESM)"]
+    subgraph HostServer["组装根 (app/server.js & app/src/server)"]
+      HTTP["Express 5 HTTP\n静态托管 · 上传 · 鉴权拦截"]
+      WS["Socket.IO 4 服务\nagent:event 信封流 · 2000条环形缓冲"]
+      MirrorEng["Mirror Engine\n磁盘轮询 · 状态比对 · 锁管理"]
+    end
+
+    subgraph CoreEngine["Agent & 会话引擎"]
+      Agent["AgentSession (app/src/agent)\nSDK 双向流 · 权限闸 · 模型缓存"]
+      SessMgr["Session Registry (app/src/sessions)\n会话注册表 · 历史回放 · 工作区门禁"]
+    end
+
+    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.263)"]
+    CLI["本机已安装的 claude CLI 进程"]
   end
-  UI <-->|"agent:event / user:*"| CF
-  CF <--> S
-  UI <-.->|"LAN #token"| S
-  S <--> A
-  A <--> SDK
-  SDK <--> CLI
-  CLI <--> FS
-  S --- J
+
+  subgraph LocalStorage["本地持久化存储"]
+    DataDir["CCM_DATA_DIR (仓库根/data/)\n会话元数据 · 设备指纹 · 附件 · 审计日志"]
+    ClaudeHome["~/.claude/projects/\nCLI 会话 Transcript · 记忆 · 本地配置"]
+    WorkTree["用户开发工作区 (WORK_DIR / Git 仓库)"]
+  end
+
+  UI <-->|"双向 WebSocket (agent:event)"| Network
+  Network <--> HTTP & WS
+  WS <--> Agent
+  Agent <--> SDK
+  SDK <-->|"Stdio 双向流 (Web驾驶通道)"| CLI
+  CLI <-->|"执行变更"| WorkTree
+  CLI -.->|"落盘日志"| ClaudeHome
+  MirrorEng -.->|"只读轮询 (CLI镜像通道)"| ClaudeHome
+  HostServer <--> DataDir
 </div>
 
-<h2>后端域划分</h2>
+<h2>后端领域模块划分</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>目录</th><th>职责</th></tr></thead>
+<thead><tr><th>领域目录</th><th>职责定位</th><th>核心模块与管辖边界</th></tr></thead>
 <tbody>
-<tr><td><code>src/server/</code></td><td>组装根（sink）：HTTP 壳、Socket 契约、实例生命周期与业务接线</td></tr>
-<tr><td><code>src/agent/</code></td><td>SDK 桥、审批台账、消息去重、模型缓存、CLI mirror</td></tr>
-<tr><td><code>src/auth/</code></td><td>CF Access JWT、设备 TOFU、鉴权限速</td></tr>
-<tr><td><code>src/sessions/</code></td><td>会话元数据、transcript 历史、工作区白名单、worktree 发现</td></tr>
-<tr><td><code>src/files/</code></td><td>上传、只读浏览/预览、路径闸</td></tr>
-<tr><td><code>src/ops/</code></td><td>审计、指标、推送、statusline、doctor</td></tr>
-<tr><td><code>src/shared/</code></td><td>叶子：日志时间戳、脱敏、串行写盘</td></tr>
+<tr><td><code>app/src/server/</code></td><td>组装根 (Sink)</td><td>Express HTTP、Socket.IO 信封组装、实例生命周期（Instance Manager）、镜像引擎接线</td></tr>
+<tr><td><code>app/src/agent/</code></td><td>Agent 交互与驱动</td><td>SDK 会话长驻、审批生命周期与存储、单驾驶员镜像锁状态判定、运行时 flag 设置</td></tr>
+<tr><td><code>app/src/sessions/</code></td><td>会话与工作区</td><td><code>sessions.json</code> 注册表、Transcript 历史反序列化与 catchUp 补发、工作区白名单</td></tr>
+<tr><td><code>app/src/auth/</code></td><td>鉴权与安全门</td><td>单用户 Token 验证、CF Access JWT 校验、设备指纹 TOFU 审批流、IPv6 /64 限速桶</td></tr>
+<tr><td><code>app/src/files/</code></td><td>文件服务</td><td>工作区路径白名单闸、多层路径遍历防护（FILES-1）、附件上传与安全预览</td></tr>
+<tr><td><code>app/src/ops/</code></td><td>运维与外部集成</td><td><code>ccm.config.json</code> 结构化解析、服务自检（doctor）、智能推送抑制、Statusline 桥接</td></tr>
+<tr><td><code>app/src/shared/</code></td><td>底层叶子工具</td><td><code>protocol.js</code> 双向契约真相源、安全路径计算、串行写盘保证，<strong>严禁反向依赖其他后端域</strong></td></tr>
 </tbody>
 </table>
+</div>
 
-<p><code>src/server</code> 是唯一组装 sink：只有 <code>server.js</code> 与 <code>src/server/*</code> 可 import 它。域模块不得反向依赖 server。边界由 <code>scripts/check-import-boundaries.js</code> 在 <code>npm run check</code> 中硬闸。</p>
+<p>模块间的边界由 <code>tests/gates/check-import-boundaries.js</code> 实施硬闸保护。任何违反「前后端隔离」、「shared 是叶子」、「server 是唯一组装根」的代码均会被门禁直接拦截。</p>
 
-<h2>消息流程（五步）</h2>
+<h2>双通道通信与单驾驶员保证</h2>
+<p>为保证 Web 端与本机终端不同时向同一会话写入导致 Transcript 分叉，系统实施严格的「单驾驶员模型」：</p>
 <ol class="steps">
-  <li><strong>发送。</strong>手机 <code>user:message {text}</code> → server 校验 → 路由到 <code>agents.get(instanceId)</code>（懒开 FRESH 或 resume）。</li>
-  <li><strong>驱动。</strong>文本进入 AgentSession 的 streaming input → SDK → CLI 在 <code>WORK_DIR</code> 执行。</li>
-  <li><strong>映射。</strong>SDK 消息经 <code>map()</code>：流式文本 → <code>text_delta</code>；工具 → <code>tool_use</code> / <code>tool_result</code>；白名单外 → <code>permission_request</code>。</li>
-  <li><strong>信封。</strong>每个事件套 <code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code> → 入 2000 条环形缓冲 → <code>io.emit</code>（前端按 <code>viewingInstanceId</code> 分流；后台 tab 的高频 delta 不广播以省带宽）。</li>
-  <li><strong>补发。</strong>断线重连 <code>sync:since {lastSeq}</code> 从缓冲回放；<code>epoch</code> 变化表示服务端换了实例，客户端重置去重基线。</li>
+  <li><strong>Web 驾驶通道（双向流）。</strong>由 Web 发起的交互直接进入 SDK query，流式接收 Agent 事件，通过 <code>agent:event</code> 信封（包含 seq/epoch/cwd 等）进入 2000 条环形缓冲并下发前端。</li>
+  <li><strong>CLI 终端驾驶通道（只读镜像）。</strong>当检测到用户正在终端直接操作该会话时，Web 端退化为只读镜像模式（通过轮询磁盘 Transcript 增量追平状态），前端输入框切换为「终端会话运行中」并上锁。</li>
+  <li><strong>接管与锁释放。</strong>终端进程退出或超时后，Web 端可安全接管会话，由 <code>applyFlagSettings</code> 和 SDK 会话恢复状态。</li>
 </ol>
 
-<h2>启动路径</h2>
-<pre><code>server.js
-  loadRuntimeEnvironment()   # dotenv；ANTHROPIC_* 只认 shell
-  installLogTimestamps()
-  dynamic import src/server/app.js
-    initCfAccess / parseServerConfig
-    preflight（WORK_DIR、CLAUDE_BIN、workDirs）
-    Express + Socket.IO + 鉴权 + instance manager
-    expireOrphanedPending + 审批留存清扫
-    listen(port, AUTH_TOKEN ? 0.0.0.0 : 127.0.0.1)</code></pre>
-
+<h2>两处架构脆弱点</h2>
 <div class="callout warn"><div class="body">
-<strong>留意</strong>无 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>，手机与隧道均不可达。这是有意设计，不是故障。
+<strong>脆弱点一：项目根路径解析</strong><code>app/src/**</code> 模块计算仓库根路径必须上溯<strong>三层</strong>（<code>app/src/server/app.js</code> 与 <code>app/src/shared/data-dir.js</code>）。少算一层会导致配置文件和持久化数据目录被意外创建到 <code>app/</code> 内部，且无系统级报错。
 </div></div>
 
-<h2>前端结构</h2>
+<div class="callout warn"><div class="body">
+<strong>脆弱点二：macOS 服务模板与解析字符串对齐</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码<strong>逐字保持严格一致</strong>，否则菜单栏服务状态面板会将工作区解析为 null。
+</div></div>
+
+<h2>前端架构分层</h2>
 <ul>
-  <li><code>public/js/app.js</code>：大壳，socket 与 UI 编排。</li>
-  <li><code>public/js/logic.js</code>：纯决策（禁 DOM/socket），与 node:test 共用。</li>
-  <li><code>public/js/canonicalize.js</code>：前后端共享操作规范化（边界白名单）。</li>
-  <li><code>public/js/app/*</code>：会话、附件、审批、设置、通知等子控制器。</li>
-  <li><code>public/vendor/</code>：第三方库本地自托管，不依赖 CDN。</li>
+  <li><code>app/public/js/app.js</code>：顶层编排器，负责全局 Socket 挂载与状态同步。</li>
+  <li><code>app/public/js/app/*</code>：按业务域拆分的模块工厂（如 <code>event-dispatch.js</code>、<code>chat-ui.js</code>、<code>settings-panel.js</code>），采用 Context 注入。</li>
+  <li><code>app/public/js/logic/*</code>：零依赖纯函数集合（数据进、数据出），不触碰任何 DOM、Window 或全局 Socket，直接在 Node.js 单测与浏览器零构建复用。</li>
+  <li><code>app/public/js/canonicalize.js</code>：前后端共用的指纹规范化唯一共享模块。</li>
 </ul>

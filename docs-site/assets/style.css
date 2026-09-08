@@ -211,10 +211,6 @@ body {
   line-height: 1.4; margin: 60px 0 20px; color: var(--ink); scroll-margin-top: 80px;
   display: flex; align-items: baseline; gap: 14px;
 }
-.article h2 .secnum {
-  font-family: var(--mono); font-size: 14px; font-weight: 400; color: var(--accent);
-  flex: none; opacity: .85;
-}
 .article h3 {
   font-family: var(--serif); font-size: 19.5px; font-weight: 600; line-height: 1.5;
   margin: 40px 0 14px; color: var(--ink); scroll-margin-top: 80px;
@@ -273,7 +269,6 @@ body {
   border: 1px solid var(--line); border-left: 2px solid var(--ink-faint);
   background: var(--surface); line-height: 1.8; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.callout .ico { display: none; }   /* 兼容旧结构，隐藏图标位 */
 .callout .body { flex: 1; min-width: 0; }
 .callout .body > :last-child { margin-bottom: 0; }
 .callout .body > strong:first-child { display: block; margin-bottom: 5px; color: var(--ink);
@@ -413,12 +408,15 @@ a.card:hover { background: var(--bg-soft); }
   font-weight: 500; padding: 2px 9px; border-radius: 3px; font-family: var(--mono);
   letter-spacing: .03em; background: transparent; color: var(--ink-soft);
   border: 1px solid var(--line); }
-.chip.kafka  { color: var(--accent); border-color: var(--accent-soft); }
-.chip.cron   { color: var(--ok); }
-.chip.rest   { color: var(--clay); }
+/* 状态 */
 .chip.done   { color: var(--ok); }
 .chip.wip    { color: var(--clay); }
 .chip.plan   { color: var(--ink-faint); }
+/* 语义色：按项目自己的含义使用，不预设业务域名 */
+.chip.accent { color: var(--accent); border-color: var(--accent-soft); }
+.chip.ok     { color: var(--ok); }
+.chip.clay   { color: var(--clay); }
+.chip.muted  { color: var(--ink-faint); }
 
 /* ── 上一页 / 下一页 ──────────────────────────────────────────────── */
 .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 64px;
@@ -585,4 +583,30 @@ a.card:hover { background: var(--bg-soft); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ── AEO Copy for AI 交互按钮 ───────────────────────────────────── */
+.ai-copy-btn {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12.5px;
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.ai-copy-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+@media (max-width: 640px) {
+  .ai-copy-btn .btn-text { display: none; }
+  .ai-copy-btn { width: 36px; padding: 0; justify-content: center; }
 }

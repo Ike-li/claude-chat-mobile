@@ -5,51 +5,54 @@
   <h1>封面与导读</h1>
   <p class="lead">Claude Chat Mobile 项目全景手册：认识项目、阅读路线与事实基线。</p>
 </header>
-<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-07-23">站点 SEO/内容面更新 2026-07-23</time> · 源码基线 dev@2de707b · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
-<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的转发层：把你本机已登录的 <code>claude</code> CLI，接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
+<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-09-08">手册 v2.0 更新于 2026-09-08</time> · 源码基线 dev@687bca3 · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
+<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机已登录的 <code>claude</code> CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
 
 <div class="statband">
-  <div class="stat"><div class="num">1</div><div class="lbl">用户 / 实例</div></div>
+  <div class="stat"><div class="num">1</div><div class="lbl">用户 / 实例 (n=1)</div></div>
   <div class="stat"><div class="num">0</div><div class="lbl">多租户设计</div></div>
   <div class="stat"><div class="num">2000</div><div class="lbl">事件环形缓冲</div></div>
   <div class="stat"><div class="num">28</div><div class="lbl">本手册页数</div></div>
 </div>
 
 <div class="cards">
-  <div class="card"><span class="k">定位</span><h4>终端等价入口</h4><p>不是远程桌面，也不是 Claude 的重新实现。手机上打字，应与坐在终端前等价。</p></div>
-  <div class="card"><span class="k">形态</span><h4>自托管桥</h4><p>Node ≥20 · Express · Socket.IO · Agent SDK 驱动本机 CLI。每实例单用户。</p></div>
-  <div class="card"><span class="k">手册</span><h4>按认知顺序</h4><p>认识 → 演进 → 方法论 → 实现 → 数据 → 运维 → 规范。以 <code>dev</code> 代码为事实基线。</p></div>
+  <div class="card"><span class="k">定位</span><h4>终端等价入口</h4><p>不是远程桌面，也不是 Claude 的重新实现。坐在电脑前对终端打字，和在手机上打字效果等价。</p></div>
+  <div class="card"><span class="k">形态</span><h4>自托管桥 (n=1)</h4><p>Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。坚守单用户自托管立场。</p></div>
+  <div class="card"><span class="k">手册</span><h4>按认知顺序</h4><p>认识 → 演进 → 方法论 → 实现 → 数据 → 运维 → 规范。以 <code>dev</code> 代码与最新门禁体系为事实基线。</p></div>
 </div>
 
 <h2>这本手册从哪来</h2>
-<p>源码分支为 <strong>dev</strong>（探针时 HEAD <code>2de707b</code>）。<code>docs/</code> 在 2026-07-19 后只保留 <code>deployment.md</code> 与生成的 <code>repository-map.md</code>，设计长文已撤。本站按代码与 README / CLAUDE.md 重叙述，不照搬旧文档目录。</p>
+<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>687bca3</code>）。仓库采用产品宪法 C1–C5 与硬性规则治理（详见 <code>docs/hard-rules.md</code> 与 <code>docs/architecture.md</code>），本手册按真实运行代码与架构契约重叙述，不照搬历史陈旧文档。</p>
 
 <div class="callout warn"><div class="body">
-<strong>事实基线（非自动同步）</strong>手册关键数字与契约以探针时的 dev 代码为准（HEAD <code>2de707b</code>）。dev 继续演进后，本站<strong>不会</strong>自动重生成；若行为与手册冲突，以当前代码与 <code>scripts/agent-event-contract.js</code> 为准，并应回写本站或记入漂移清单。
+<strong>事实基线约定</strong>手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 <code>tests/gates/</code> 门禁为准，并应在<a href="drift.html">漂移清单</a>中透明登记。
 </div></div>
 
 <div class="callout note"><div class="body">
-<strong>范围</strong>本手册描述产品源码（dev），不是 gh-pages 宣传站本身。产物落在 gh-pages 的 <code>docs-site/</code>，便于与展示站同分支维护。
+<strong>范围</strong>本手册描述产品源码（dev 分支），产物部署于 gh-pages 分支的 <code>docs-site/</code> 目录，与展示站点统一维护。
 </div></div>
 
 <h2>三条阅读路线</h2>
 <div class="path">
-  <div class="node"><span class="pnum">主线</span><h4>完整通读 · 约 2–3 小时</h4><p>侧栏从上到下，或一路点「下一页」。适合真要接手或 fork 的人。</p></div>
-  <div class="node"><span class="pnum">速览</span><h4>30 分钟</h4><p>封面 → 总览 → 架构 → 职责边界 → 终端等价 → 安全模型 → 快速开始 → 漂移清单。见<a href="pages/reading-guide.html">阅读顺序指南</a>。</p></div>
-  <div class="node"><span class="pnum">角色</span><h4>按职责切入</h4><p>运维先看第六部分；改同步引擎看「单驾驶员」与「事件信封」；改鉴权看第四部分鉴权页。</p></div>
+  <div class="node"><span class="pnum">主线</span><h4>完整通读 · 约 2–3 小时</h4><p>从起点到规范，按认知层次逐章顺读。适合准备深入二次开发、维护或接手仓库的人。</p></div>
+  <div class="node"><span class="pnum">速览</span><h4>30 分钟速读</h4><p>封面 → 总览 → 架构 → 职责边界 → 终端等价 → 安全模型 → 快速开始 → 漂移清单。详见<a href="reading-guide.html">阅读顺序指南</a>。</p></div>
+  <div class="node"><span class="pnum">角色</span><h4>按关注面切入</h4><p>运维部署直奔第六部分；同步与通信查「单驾驶员」与「事件信封」；鉴权安全查第四部分鉴权页。</p></div>
 </div>
 
 <h2>技术栈一瞥</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>层</th><th>选型</th></tr></thead>
+<thead><tr><th>层级</th><th>技术选型</th><th>关键特性</th></tr></thead>
 <tbody>
-<tr><td>运行时</td><td>Node ≥20 · ESM · Express · Socket.IO 4</td></tr>
-<tr><td>Agent</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.201 → 本机 <code>claude</code> CLI</td></tr>
-<tr><td>鉴权</td><td><code>AUTH_TOKEN</code> · 设备 TOFU · 可选 Cloudflare Access（jose JWT）</td></tr>
-<tr><td>通知</td><td>web-push（VAPID）· 可选 ntfy</td></tr>
-<tr><td>测试</td><td><code>node --test</code> · Playwright 移动端 E2E（DOM 断言，非像素）</td></tr>
-<tr><td>许可</td><td>AGPL-3.0-only + NOTICE 补充条款</td></tr>
+<tr><td>运行时</td><td>Node ≥20 · ESM · Express 5 · Socket.IO 4</td><td>三层架构，前后端零构建纯 ESM</td></tr>
+<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.263</td><td>双向流控制，驱动本机已登录的 <code>claude</code> CLI</td></tr>
+<tr><td>配置与运维</td><td><code>ccm.config.json</code> · <code>env-schema.js</code></td><td>统一结构化配置、热重载工作区、统一读写源</td></tr>
+<tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>单用户强制 Token，非本地网络设备指纹审批</td></tr>
+<tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批/提问无条件推送，前台可见连接智能抑制</td></tr>
+<tr><td>测试与门禁</td><td><code>node --test</code> · Playwright · 宿主机白名单</td><td>S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作</td></tr>
+<tr><td>开源许可</td><td>AGPL-3.0-only · NOTICE 补充条款</td><td>严格保障自托管权益</td></tr>
 </tbody>
 </table>
+</div>
 
-<p>从<a href="pages/reading-guide.html">阅读顺序指南</a>或<a href="pages/overview.html">项目总览</a>继续。</p>
+<p>从<a href="reading-guide.html">阅读顺序指南</a>或<a href="overview.html">项目总览</a>继续。</p>

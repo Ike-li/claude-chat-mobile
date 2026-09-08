@@ -1,15 +1,18 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>安全模型 · Claude Chat Mobile</title>
 <meta name="description" content="单用户、token 不出本机、权限继承 CLI、设备 TOFU。">
+<meta name="llm:tokens" content="1265">
+<link rel="alternate" type="text/markdown" href="security-model.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
 <link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
 <link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
 <link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
 <link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/boot.js"></script>
 <script>window.__BASE__='../';</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},{"@type":"ListItem","position":2,"name":"项目全景手册","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/"},{"@type":"ListItem","position":3,"name":"安全模型","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html"}]}</script>
 </head>
@@ -17,27 +20,17 @@
 <div class="scrim"></div>
 <div class="layout">
   <aside class="sidebar"><div class="brand"><a href="../index.html">
-    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html" class="active"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@2de707b · claude-chat-mobile</div></aside>
-  <script>
-  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
-  (function(){try{
-    var sb=document.querySelector('.sidebar');if(!sb)return;
-    var saved=sessionStorage.getItem('docsbook-nav-scroll');
-    var act=sb.querySelector('.nav a.active');
-    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      return r.top>=s.top&&r.bottom<=s.bottom;}
-    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
-      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
-    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
-    else if(act&&!inView())center();
-  }catch(e){}})();
-  </script>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html" class="active"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile</div></aside>
+  <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
       <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
       <div class="crumbs"><b>第三部分 · 方法论</b> &nbsp;/&nbsp; 安全模型</div>
+      <button class="icon-btn ai-copy-btn" id="copyAiBtn" aria-label="Copy for AI" title="复制当前页面纯净 Markdown 给 AI Agent">
+        <span class="btn-text">📋 Copy for AI</span>
+      </button>
       <button class="search-trigger" data-search-open>
         <span>搜索手册</span><span class="k">⌘K</span>
       </button>
@@ -53,103 +46,70 @@
     <div class="meta">
       <span><span class="lbl">阅读约</span> 12 分钟</span>
       <span><span class="lbl">第</span> 8 / 28 篇</span>
-      <span class="src" title="原始文档来源">源自 README.md · src/auth/</span>
+      <span class="src" title="原始文档来源">源自 README.md · app/src/auth/ · docs/hard-rules.md</span>
     </div>
   </header>
-<p class="lead-extra">安全模型围绕一句话展开：这是<strong>每实例单用户</strong>的自托管桥，不是多租户 SaaS。任何通过鉴权的请求，都与机主本人坐在本机终端前拥有同等权限。权威叙述在 README「安全模型」节。</p>
+<p class="lead-extra">安全模型围绕一条铁律展开：这是<strong>每实例单用户 (n=1)</strong> 的自托管桥，绝非多租户 SaaS。任何通过鉴权的远程请求，都与机主物理坐在本机终端前拥有完全等价的系统操作权限。</p>
 
 <div class="callout note"><div class="body">
 <strong>English</strong> Security model for non-Chinese readers: <a href="../../en/security.html" hreflang="en">English Security Model</a>（与 README.en.md 对齐）。
 </div></div>
 
-
-
 <div class="callout danger"><div class="body">
-<strong>危险</strong>这是一条可远程触达、直通本机 shell 的代码执行通道。暴露到公网前必须完成 token、设备门、CLI 权限与（建议）Cloudflare Access 的审查。
+<strong>高危警示</strong>这是直通你本机开发环境与 Shell 执行权限的代码执行通道。向局域网或公网暴露前，必须严格完成 Token 强随机化、设备审批门禁确认、CLI 权限审计与网络拓扑防护。
 </div></div>
 
-<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-07-23">页面更新 2026-07-23</time> · 维护叙述对齐 README「安全模型」· 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
-
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>四条铁律</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>四大安全铁律</h2>
 <ol class="steps">
-  <li><strong>每实例单用户。</strong>无多用户、账号或登录系统。通过鉴权 = 与坐在终端前同等权限。不要当多租户服务。</li>
-  <li><strong>没有 token 就不出本机。</strong>未设置 AUTH_TOKEN 时服务只绑定 127.0.0.1。不存在「留空 = 对全世界开放」。</li>
-  <li><strong>权限只继承 CLI。</strong>项目不维护独立放行/禁用清单。放行 = 用户已有 settings 的 permissions.allow 并集。</li>
-  <li><strong>设备信赖（TOFU）。</strong>既非本机、也未经 Cloudflare Access 验证的连接，须在电脑上一次性授权该设备。合法 token 本身不够。</li>
+  <li><strong>每实例严格单用户。</strong>拒绝任何形式的多用户隔离、账户体系或登录注册机制。鉴权通过即代表机主本人。</li>
+  <li><strong>无 Token 绝不出本机。</strong>未显式配置 <code>AUTH_TOKEN</code> 时，服务恒定只绑定 <code>127.0.0.1</code> 环回地址。不存在留空等于对公网开放的危险回落。</li>
+  <li><strong>权限同源继承 CLI。</strong>CCM 自身不自建独立放行白名单，全部权限放行严格以本机 <code>~/.claude/settings.json</code> 及其项目 local 覆盖为准。</li>
+  <li><strong>设备信赖审批（TOFU 机制）。</strong>任何非本机且未受公网身份代理（如 Cloudflare Access）验证的新设备，即便持有合法 Token，首次接入仍必须在电脑端一次性审批。</li>
 </ol>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>绑定地址</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>网络拓扑与 ACCESS_PROFILE 三候选</h2>
+<p>为防止反代或隧道导致客户端 IP 坍缩为 <code>127.0.0.1</code> 从而打穿设备门禁，系统通过 <code>ACCESS_PROFILE</code> 显式声明网络拓扑：</p>
+<div class="table-wrap">
 <table>
-<thead><tr><th>条件</th><th>listen host</th><th>含义</th></tr></thead>
+<thead><tr><th>拓扑枚举</th><th>适用场景与安全行为</th><th>反向代理与设备门判据</th></tr></thead>
 <tbody>
-<tr><td>AUTH_TOKEN 非空</td><td>0.0.0.0</td><td>局域网与隧道可达</td></tr>
-<tr><td>未设或空串</td><td>127.0.0.1</td><td>仅本机；手机/隧道进不来</td></tr>
+<tr><td><code>cloudflare</code></td><td>公网经 Cloudflare Tunnel + Access 接入</td><td>必须配置 3 项 Access 环境变量；依赖边缘 JWT 提供 2FA 身份保证</td></tr>
+<tr><td><code>reverse-proxy</code></td><td>纯 Nginx / Caddy 反代或内网穿透（如 Tailscale）</td><td><strong>一等支持路径</strong>：强制要求强 Token，显式配置 <code>TRUSTED_PROXY</code> 方采信 X-Forwarded-For，防止伪造</td></tr>
+<tr><td><code>lan</code></td><td>纯局域网或本机直连</td><td>仅允许私网 IP 访问，真实外部设备严格触发 TOFU 弹窗审批</td></tr>
 </tbody>
 </table>
-<pre><code>// app.js（语义）
-const host = AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1';</code></pre>
-<p>默认端口 PORT = 3000。</p>
+</div>
 
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>权限继承 CLI</h2>
-<p>工具放行与拒绝继承本机 CLI 的 settings 与权限档，不另建「Web 专用超级白名单」。公网暴露前应审查：</p>
-<pre><code>~/.claude/settings.json
-# 以及各工作区 .claude/settings.json / settings.local.json</code></pre>
-<p>重点看 permissions.allow 是否含过宽规则（如无限制 Bash）。运行中 UI 体检（doctor-runtime）会对危险白名单做脱敏摘要；启动前 CLI doctor（D1–D11）不替代该项。</p>
-
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>鉴权分层</h2>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>鉴权流程与多层防护</h2>
 <div class="mermaid">
 flowchart TB
-  A["连接进入"] --> B{"Host 是否公网 Access"}
-  B -->|是| C["校验 CF Access JWT"]
-  B -->|否| D["校验 AUTH_TOKEN"]
-  C --> E["限速状态机 onAuthResult"]
+  A["入向连接请求 (HTTP / WS)"] --> B{"匹配 ACCESS_PROFILE"}
+  B -->|cloudflare| C["校验 Cloudflare Access JWT"]
+  B -->|reverse-proxy / lan| D["校验 AUTH_TOKEN (Header / URL #token)"]
+  C --> E["IP 限速分桶 (IPv6 /64 分组)"]
   D --> E
-  E -->|通过| F{"本机或已批设备?"}
-  F -->|否| G["TOFU pending"]
-  F -->|是| H["进入业务事件"]
+  E -->|通过| F{"判定来源设备信任态"}
+  F -->|本机 / 已批准设备| G["放行进入业务交互通道"]
+  F -->|未知非本机设备| H["挂起 TOFU: 设备待审批状态"]
 </div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>防暴力尝试与限速分桶</h2>
 <ul>
-  <li>HTTP（/health、/metrics、/push/*）与 Socket 握手共用 token 匹配与限速 Map。</li>
-  <li>Cloudflare Access：仅当 CF_ACCESS_HOSTNAME / TEAM / AUD <strong>三项齐全</strong> 才启用；缺一则整层关闭。</li>
-  <li>公网路径靠 Access JWT；局域网仍用 #token= / 头。</li>
-  <li>限速为进程内状态机（连续失败阈值、指数退避、锁定）；重启清零可作为误锁逃生口。限速只挡鉴权门口，不限制已鉴权操作面。</li>
+  <li><strong>IPv6 /64 分桶防护。</strong>针对 IPv6 客户端，自动将同一 <code>/64</code> 子网聚类为单桶，杜绝攻击者通过轮换公网 IPv6 地址绕过限速。</li>
+  <li><strong>分档锁定与措辞规范。</strong>本机 <code>127.0.0.1</code> 误试绝不说成「有人在暴力尝试」；仅针对真实外部未信任来源进行阶梯式退避与锁定告警。</li>
+  <li><strong>开箱即用鉴权拦截。</strong>即使是 <code>/health</code> 与 <code>/metrics</code> 端点，未携带合法凭据同样直接打回 401，严防网络探测与指纹泄露。</li>
 </ul>
 
-<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>设备 TOFU 与反代陷阱</h2>
-<p>设备指纹审批按 socket 直连 peer 的 IP 判定「是否本机」。Cloudflare 隧道在 localhost:3000 落地时连接显成 127.0.0.1，但公网已由 Access 兜底，可接受。</p>
-<div class="callout danger"><div class="body">
-<strong>危险</strong>若换成任意在本机落地的其他反代（nginx/Caddy 的 proxy_pass localhost、SSH 转发、frp 等），所有客户端都会显成本机，设备审批层被跳过，防线只剩 AUTH_TOKEN。此类拓扑必须使用强 token，并优先考虑 Access。UI 体检 DEVICE_GATE 会对「隧道/反代跳过设备门」类配置告警。
-</div></div>
-
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>明确不做的安全技术债</h2>
 <ul>
-  <li>本机 127.0.0.1 / ::1 / localhost：视为本机，可直接 approved。</li>
-  <li>真实 LAN IP：触发 TOFU pending，须机主批准（UI 或 <code>node scripts/device.js approve</code>）。</li>
+  <li>坚决不做多租户环境下的容器化用户沙箱或细粒度 ACL。</li>
+  <li>坚决不做第三方密钥集中托管服务。</li>
+  <li>坚决不开设任何无鉴权的 HTTP 数据透传端点。</li>
 </ul>
-
-<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>审批与日志</h2>
-<ul>
-  <li>工具审批台账写入 approval-requests.json；进程内回调才是执行真相。重启后孤儿 pending 全部标过期（fail-closed）。</li>
-  <li>敏感写盘走 owner-only（0600）与串行 writer。</li>
-  <li>日志脱敏（token 掩码）；前端错误可上报服务端。</li>
-</ul>
-
-<h2 id="s7"><a class="anchor" href="#s7" aria-hidden="true"></a>明确不做</h2>
-<ul>
-  <li>多租户 / 账号体系 / 按用户隔离 workspace。</li>
-  <li>把 CCM 当 hosted SaaS 中转他人密钥。</li>
-  <li>在无 token 时监听全接口地址。</li>
-</ul>
-
-<h2 id="s8"><a class="anchor" href="#s8" aria-hidden="true"></a>安全报告</h2>
-<p>请勿通过公开 issue 报告漏洞。走 GitHub Security Advisories（见 SECURITY.md）。</p>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>默认超时与安全正交但常被问到：idleTimeoutMs 默认 600000；instanceIdleReclaimMs 默认 1800000。数据目录默认 CCM_DATA_DIR 指向项目下 data/，与 CLI 的 ~/.claude 分离。
-</div></div>
 
         <nav class="pager"><a class="prev" href="terminal-parity.html"><span class="dir">← 上一篇</span><span class="ttl">终端等价性</span></a><a class="next" href="single-driver.html"><span class="dir">下一篇 →</span><span class="ttl">单驾驶员模型</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">四条铁律</a></li><li class="h2"><a href="#s2">绑定地址</a></li><li class="h2"><a href="#s3">权限继承 CLI</a></li><li class="h2"><a href="#s4">鉴权分层</a></li><li class="h2"><a href="#s5">设备 TOFU 与反代陷阱</a></li><li class="h2"><a href="#s6">审批与日志</a></li><li class="h2"><a href="#s7">明确不做</a></li><li class="h2"><a href="#s8">安全报告</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">四大安全铁律</a></li><li class="h2"><a href="#s2">网络拓扑与 ACCESS_PROFILE 三候选</a></li><li class="h2"><a href="#s3">鉴权流程与多层防护</a></li><li class="h2"><a href="#s4">防暴力尝试与限速分桶</a></li><li class="h2"><a href="#s5">明确不做的安全技术债</a></li></ul></aside>
     </div>
   </div>
 </div>

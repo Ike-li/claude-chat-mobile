@@ -1,44 +1,28 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">高频专有名词的准确定义。阅读实现章节前建议扫一遍。</p>
+<p class="lead-extra">高频专有名词与概念定义。在阅读系统核心实现前，建议先快速通读本表，以拉齐心智模型与语境。</p>
 
+<div class="table-wrap">
 <table>
-<thead><tr><th>术语</th><th>定义</th></tr></thead>
+<thead><tr><th>核心术语</th><th>标准定义与架构语义</th></tr></thead>
 <tbody>
-<tr><td><code>instanceId</code></td><td>进程内 AgentSession 实例 ID（如 <code>inst_N</code>）。换实例会变。</td></tr>
-<tr><td><code>sessionId</code></td><td>Claude CLI 会话 ID，与 transcript 文件名对应。</td></tr>
-<tr><td><code>epoch</code></td><td>实例世代号。新实例更大；客户端见变化应重置 seq 去重基线。</td></tr>
-<tr><td><code>seq</code></td><td>实例内事件序号，单调递增；用于 <code>sync:since</code> 补发。</td></tr>
-<tr><td>envelope</td><td><code>agent:event</code> 外层：<code>{seq,epoch,sessionId,instanceId,cwd,ts,type,payload}</code>。</td></tr>
-<tr><td>AgentSession</td><td><code>src/agent/agent.js</code> 中长驻 SDK query 的运行时对象。</td></tr>
-<tr><td><code>viewingInstanceId</code></td><td>当前「正在看」的实例；影响高频 delta 是否广播。</td></tr>
-<tr><td><code>mirrorReadonly</code></td><td>CLI 驾驶时的 Web 只读锁，锁定输入。</td></tr>
-<tr><td><code>externalDirty</code></td><td>捕获到终端对 transcript 的外部写入后的脏标记。</td></tr>
-<tr><td>FRESH</td><td>无 resumeId 的新开会话；不继承 cwd 末实例档位。</td></tr>
-<tr><td>resume</td><td>以已有 sessionId 冷读/续接 transcript。</td></tr>
-<tr><td>TOFU</td><td>Trust On First Use：设备首次须本机批准。</td></tr>
-<tr><td><code>CCM_DATA_DIR</code></td><td>控制面数据根（sessions/devices/audit/push 等）。</td></tr>
-<tr><td><code>WORK_DIR</code></td><td>默认工作目录（claude cwd）。</td></tr>
-<tr><td><code>settingSources</code></td><td>SDK 加载 settings 的来源：user / project / local。</td></tr>
-<tr><td><code>canUseTool</code></td><td>SDK 权限回调；未放行则弹 <code>permission_request</code>。</td></tr>
-<tr><td><code>permission_request</code></td><td>需用户批准的工具调用事件。</td></tr>
-<tr><td><code>sync:since</code></td><td>客户端按 lastSeq 请求缓冲回放。</td></tr>
-<tr><td>catchUp</td><td>轮询 jsonl 增量，镜像 CLI 写入。</td></tr>
-<tr><td>ring buffer</td><td>每实例事件环形缓冲，cap <strong>2000</strong>。</td></tr>
-<tr><td>worktree sessions</td><td>发现 git worktree 内会话，使 Web 触达「cd 进 worktree 即 resume」的等价物。</td></tr>
-<tr><td>statusline bridge</td><td>可选包装：CLI 驾驶时把 CLI statusline 快照同步给 Web。</td></tr>
-<tr><td><code>effort</code></td><td>思考强度；spawn 时注入 SDK options。Web 切档经 <code>user:setEffort</code> → dispose+resume，不可 in-place 改活进程。</td></tr>
-<tr><td><code>auto</code>（权限档）</td><td>六合法档之一：SDK 模型分类器自动批/拒；另五档 default / plan / acceptEdits / bypassPermissions / dontAsk。</td></tr>
-<tr><td>CLI doctor vs UI 体检</td><td>CLI：<code>scripts/doctor.js</code> 固定 D1–D11。UI：<code>doctor-runtime.js</code> 另含 Access/设备门/VAPID/白名单等，勿混为一谈。</td></tr>
-<tr><td><code>pendingTurns</code></td><td>在途轮计数；仅 send 与 result/中断/撤回结算。禁止双扣；封顶配合 cliQueued。</td></tr>
-<tr><td><code>cliQueued</code></td><td>已交 CLI 内部队列的一条消息登记；撤回可能走 cancelAsyncMessage。</td></tr>
-<tr><td><code>bgTasks</code></td><td>活后台任务表；多子代理并行时刷新活动、防 idle 误杀；stopTask 只停单个后台任务。</td></tr>
-<tr><td>视图守卫</td><td>写路径 ack / catchUp 提交前校验 viewing 快照未变；防切 tab 后旧响应污染新会话。</td></tr>
-<tr><td><code>pendingSendBusy</code></td><td>前端发送忙碌锁；须按会话隔离，禁止跨会话污染。</td></tr>
-<tr><td><code>_raceControlRequest</code></td><td>control_request 超时赛跑；覆盖 interrupt/setModel/setPermissionMode/stopTask/cancelAsyncMessage。</td></tr>
+<tr><td><code>instanceId</code></td><td>运行时代号（如 <code>inst_1</code>），代表内存中活跃的 AgentSession 实体。每次会话重启或切换思考强度时递增。</td></tr>
+<tr><td><code>sessionId</code></td><td>Claude CLI 原生会话标识符，对应磁盘 <code>~/.claude/projects/&lt;project&gt;/&lt;session_id&gt;.jsonl</code> 文件名。</td></tr>
+<tr><td><code>epoch</code></td><td>实例世代标识。当服务端置换实例后自增，客户端收到新 epoch 必须重置消息去重基准。</td></tr>
+<tr><td><code>seq</code></td><td>单实例生命周期内单调递增的事件序号，用于网络闪断后的 <code>sync:since</code> 增量补发与断点续传。</td></tr>
+<tr><td><code>agent:event</code> Envelope</td><td>统一出向事件信封，标准外壳：<code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code>。</td></tr>
+<tr><td><code>mirrorReadonly</code></td><td>单驾驶员模型中施加的只读互斥锁。当终端正在执行写入时，Web 端强制处于只读态。</td></tr>
+<tr><td><code>externalDirty</code></td><td>外部变脏标记。指磁盘 Transcript 已经超前于内存 SDK 会话，Web 端下次发送必须强制销毁置换。</td></tr>
+<tr><td><code>terminalWaiting</code></td><td>终端等待态。指终端 CLI 正在执行耗时工具（如跑测试）且尚未落盘，提示 Web 端保持镜像锁锁定。</td></tr>
+<tr><td>Tail Attribution</td><td>尾部归因。在识别会话繁忙状态时，准确将悬挂的在途消息归因为「Web 自身」还是「外部终端/桌面端」。</td></tr>
+<tr><td>TOFU (Trust On First Use)</td><td>首次接入信赖机制。新外部设备即使持有正确 Token，首次连接也必须在物理电脑上显式点击批准。</td></tr>
+<tr><td><code>ACCESS_PROFILE</code></td><td>网络接入拓扑声明（<code>cloudflare</code>, <code>reverse-proxy</code>, <code>lan</code>），决定反代采信与设备审批分支。</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>持久化数据根目录（仓库根下 <code>data/</code>），管理会话元数据、设备指纹、附件上传与审计日志。</td></tr>
+<tr><td><code>canUseTool</code></td><td>SDK 权限回调拦截点。当操作未命中预设白名单时，触发向手机端投递 <code>permission_request</code>。</td></tr>
+<tr><td>Ring Buffer (环形缓冲)</td><td>每实例分配的循环事件队列，固定上限 <strong>2000</strong> 条，支撑高速重连补发。</td></tr>
+<tr><td><code>settingSources</code></td><td>SDK 加载本地配置的层级，固定为 <code>['user', 'project', 'local']</code>，完整继承命令行配置。</td></tr>
+<tr><td><code>applyFlagSettings</code></td><td>运行时标志应用机制。无需销毁实例，直接中途热修改 SDK 的 <code>effortLevel</code> 思考强度。</td></tr>
+<tr><td><code>guard-host-tests</code></td><td>测试运行保护门禁。宿主机只允许运行只读或纯内存测试脚本，其余所有测试强制在容器沙箱中跑。</td></tr>
 </tbody>
 </table>
-
-<div class="callout note"><div class="body">
-<strong>附注</strong>事实基线探针 dev@2de707b。契约事件数：入向 32、出向 25——以 <code>scripts/agent-event-contract.js</code> 为准。
-</div></div>
+</div>

@@ -1,60 +1,62 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">项目给已经在终端使用 <code>claude</code> CLI 的人用：在手机上对同一 agent 打字，效果与坐在电脑前等价。</p>
+<p class="lead-extra">项目面向已经在终端使用 <code>claude</code> CLI 的开发者：在手机上与同一个 Agent 对话交互，体验与效果完全等同于坐在电脑前操作终端。</p>
 
 <h2>一句话定位</h2>
-<p>移动端聊天式 Web UI，通过 Claude Agent SDK 驱动<strong>本机已登录的</strong> <code>claude</code> CLI。不打包 Claude，不重实现 agent 循环；继承同一份 <code>CLAUDE.md</code>、MCP、skills、hooks 与会话 transcript。</p>
+<p>移动端聊天式 Web UI，通过官方 <code>@anthropic-ai/claude-agent-sdk</code> 驱动<strong>本机已登录的</strong> <code>claude</code> CLI。项目不打包独立的模型后端，不另搞平行的 Agent 逻辑；无缝继承同一套 <code>CLAUDE.md</code>、MCP 工具、自定义 Skills、Hooks 以及本地会话历史（Transcripts）。</p>
 
-<h2>适用场景</h2>
+<h2>核心适用场景</h2>
 <ul>
-  <li><strong>任务在跑，人离开电脑。</strong>审批与提问推到手机，点允许或拒绝。</li>
-  <li><strong>同一会话，换设备继续。</strong>手机与终端读同一份 CLI 会话记录；路上起头，回家 <code>/resume</code> 接上。</li>
-  <li><strong>多仓库并行。</strong>白名单内切换工作目录，标签页看多个会话进度。</li>
-  <li><strong>手机输入更顺。</strong>斜杠命令、相册附图、长按复制等按触控设计，而非缩小终端。</li>
+  <li><strong>长耗时任务在后台跑，人离开电脑。</strong>终端执行中的工具审批、人机提问和后台子代理完成事件实时推送到手机通知栏，轻点即可放行或驳回。</li>
+  <li><strong>同一会话，跨设备无缝续接。</strong>手机端与终端基于同一份本地 CLI Transcript 会话记录流转；在路上掏出手机起头，回到办公室敲 <code>claude --resume</code> 即刻连上。</li>
+  <li><strong>多项目工作区快速切换。</strong>基于严格的工作区路径白名单，支持在多个本地 Git 仓库或 Worktree 之间一键切换并并发监视进展。</li>
+  <li><strong>原生触控与移动端优化。</strong>专为触屏调优的输入框、斜杠命令面板（<code>/</code> 菜单）、相册图片直传、长按快捷操作与代码块折叠，而不是机械地缩放终端窗口。</li>
 </ul>
-<p>若只是偶尔远程看一眼屏幕，远程桌面通常够用。本项目面向「把手机当成终端随身入口」的高频使用。</p>
+<p>如果只是偶尔临时查看电脑屏幕，远程桌面已足够。Claude Chat Mobile 面向的是「将移动端打造成电脑 CLI 随身等价入口」的高频生产力需求。</p>
 
-<h2>技术栈</h2>
+<h2>技术栈与基础选型</h2>
 <div class="kv">
-  <div class="row"><div class="key">运行时</div><div class="val">Node ≥20 · ESM · Express · Socket.IO 4 · compression · dotenv</div></div>
-  <div class="row"><div class="key">Agent</div><div class="val"><code>@anthropic-ai/claude-agent-sdk</code> 0.3.201 · 本机 <code>claude</code></div></div>
-  <div class="row"><div class="key">鉴权 / 推送</div><div class="val">jose 6（Access JWT）· web-push（VAPID）· 可选 ntfy</div></div>
-  <div class="row"><div class="key">前端</div><div class="val">原生 ESM PWA；vendor 自托管（Tailwind / marked / highlight.js / DOMPurify）</div></div>
-  <div class="row"><div class="key">测试</div><div class="val"><code>node --test</code> 单测/集成 · Playwright 移动端 E2E · smoke 真 CLI（默认不跑）</div></div>
-  <div class="row"><div class="key">许可</div><div class="val">AGPL-3.0-only · NOTICE Section 7 补充条款</div></div>
+  <div class="row"><div class="key">运行时</div><div class="val">Node ≥20 · ESM 规范 · Express 5 · Socket.IO 4 · compression</div></div>
+  <div class="row"><div class="key">Agent 驱动</div><div class="val"><code>@anthropic-ai/claude-agent-sdk</code> 0.3.263 · 本机 <code>claude</code> CLI</div></div>
+  <div class="row"><div class="key">鉴权 / 推送</div><div class="val"><code>jose</code> 6（JWT 验证）· <code>web-push</code>（VAPID 协议）· 可选 ntfy</div></div>
+  <div class="row"><div class="key">前端架构</div><div class="val">原生 ESM PWA 架构；依赖完全本地自托管（Tailwind / marked / highlight.js / DOMPurify）</div></div>
+  <div class="row"><div class="key">测试体系</div><div class="val">内置 <code>node --test</code>（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 容器沙箱 HOME 隔离</div></div>
+  <div class="row"><div class="key">配置管理</div><div class="val"><code>ccm.config.json</code>（结构化配置，支持工作区热重载与统一 Schema）</div></div>
+  <div class="row"><div class="key">开源许可</div><div class="val">AGPL-3.0-only · NOTICE 补充条款（严守自托管权益）</div></div>
 </div>
 
-<h2>仓库形态</h2>
+<h2>仓库结构与代码地图</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>路径</th><th>角色</th></tr></thead>
+<thead><tr><th>目录路径</th><th>职责范围</th><th>关键约束</th></tr></thead>
 <tbody>
-<tr><td><code>server.js</code></td><td>兼容启动器（npm / LaunchAgent / systemd）</td></tr>
-<tr><td><code>src/</code></td><td>服务端实现，按域分包</td></tr>
-<tr><td><code>public/</code></td><td>Express 直接托管的 PWA</td></tr>
-<tr><td><code>scripts/</code></td><td>维护命令，非运行时</td></tr>
-<tr><td><code>tests/</code></td><td>唯一自动化测试根</td></tr>
-<tr><td><code>docs/</code></td><td>极简：deployment + repository-map</td></tr>
-<tr><td><code>deploy/</code></td><td>plist 模板</td></tr>
+<tr><td><code>app/server.js</code></td><td>运行时启动入口</td><td>薄封装：加载环境变量、注入安全时戳并引导 <code>app/src/server/app.js</code></td></tr>
+<tr><td><code>app/src/</code></td><td>服务端业务域</td><td>按域严密分层（agent, sessions, server, auth, files, ops, shared）</td></tr>
+<tr><td><code>app/public/</code></td><td>前端 PWA 界面</td><td>纯静态无打包构建，静态资源与 logic 纯函数与后端零构建同源复用</td></tr>
+<tr><td><code>scripts/</code></td><td>维护者与装机工具</td><td><code>setup.js</code>、<code>doctor.js</code>、<code>config.js</code>、<code>device.js</code>、<code>release.sh</code></td></tr>
+<tr><td><code>desktop/</code></td><td>macOS 状态栏应用</td><td>原生 Swift 状态栏菜单栏工具（CCM.app）与 LaunchAgent 模板</td></tr>
+<tr><td><code>tests/</code></td><td>测试体系唯一根目录</td><td><code>unit/</code>、<code>invariants/</code>、<code>integration/</code>、<code>e2e/</code>、<code>gates/</code>、<code>infra/</code></td></tr>
+<tr><td><code>docs/</code></td><td>架构真相源文档</td><td><code>architecture.md</code>、<code>hard-rules.md</code>、<code>testing.md</code>、<code>display-contracts.md</code></td></tr>
 </tbody>
 </table>
+</div>
 
-<p>inventory 分类文件约 <strong>277</strong> 个（见生成的 <code>docs/repository-map.md</code>）。后端源约 44 文件，前端源约 21，单测约 89，E2E 约 30。</p>
-
-<h2>分支纪律</h2>
-<ul>
-  <li><strong>dev</strong>：日常开发。</li>
-  <li><strong>master</strong>：稳定 / 默认克隆目标；有分支保护；经 <code>scripts/release.sh</code> 从 dev ff 合并并发版。</li>
-  <li><strong>gh-pages</strong>：宣传站孤儿分支（本手册产物所在）。</li>
-  <li><strong>promo</strong>：宣传文案创作区，非产品源码。</li>
-</ul>
-<div class="callout note"><div class="body">
-<strong>附注</strong>仓内 <code>.worktrees/</code> 是其他分支的常驻检出位，不是 dev 源码。在 dev 上搜索/审查应排除该目录。
+<div class="callout warn"><div class="body">
+<strong>架构脆弱点警示：项目根路径计算</strong><code>app/src/**</code> 下计算项目根目录必须向上穿透<strong>三层</strong>（如 <code>app/src/server/app.js</code> 或 <code>app/src/shared/data-dir.js</code>）。因为 <code>data/</code>、<code>scripts/</code> 与 <code>ccm.config.json</code> 位于仓库顶级根目录，若少算一层会导致数据和配置文件静默解析到 <code>app/</code> 目录下且<strong>毫无报错</strong>。
 </div></div>
 
-<h2>前置条件</h2>
+<h2>分支纪律与工作流</h2>
+<ul>
+  <li><strong>dev</strong>：日常开发与新特性主干，日常改动一律在 dev 上进行。</li>
+  <li><strong>master</strong>：生产稳定分支与 GitHub 默认分支，受分支保护。仅在发版时通过 <code>scripts/release.sh</code> 执行 fast-forward 合并与分发裁剪。</li>
+  <li><strong>gh-pages</strong>：独立展示与全景手册分支，纯静态产物托管。</li>
+  <li><strong>promo</strong>：宣发文案创作工作区，非源码逻辑。</li>
+</ul>
+
+<h2>装机与运行前置条件</h2>
 <ol class="steps">
-  <li><strong>Node ≥20。</strong><code>node --version</code> 检查。</li>
-  <li><strong>本机可用的 claude CLI。</strong><code>which claude</code> 且能登录对话；项目不自带 CLI。</li>
-  <li><strong>订阅或网关。</strong>官方订阅沿用 CLI 登录态；第三方网关在<strong>启动 server 的 shell</strong> 中 <code>export ANTHROPIC_*</code>（写入 <code>.env</code> 会被剥除）。</li>
-  <li><strong>macOS 或 Linux。</strong></li>
+  <li><strong>Node.js 运行环境。</strong>需 Node ≥20（推荐 LTS 版本），纯 ESM 模式运行。</li>
+  <li><strong>本机可用且已登录的 claude CLI。</strong>执行 <code>which claude</code> 确认命令可寻址，且能在本地终端正常交互。</li>
+  <li><strong>Anthropic 订阅或 API 凭据。</strong>使用官方订阅沿用 CLI 登录凭据；如使用第三方网关，<strong>必须在启动 server 的 shell 中 <code>export ANTHROPIC_*</code></strong>。写入配置文件（无论是 <code>ccm.config.json</code> 还是 <code>.env</code>）都会在启动期被<strong>无条件剥除并告警</strong>，以确保配置文件不压过 shell 中的 provider 凭据（遵循终端等价性）。</li>
+  <li><strong>操作系统支持。</strong>以 macOS（原生支持桌面菜单栏 CCM.app 与 launchd）和 Linux（systemd / Docker）为一等支持平台。</li>
 </ol>

@@ -1,88 +1,47 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">常驻实例的日常操作、排错表、探针端点与 doctor 摘要。改 env 不生效，十有八九是忘了 kickstart。</p>
+<p class="lead-extra">常驻服务的日常运维速查、高频故障排查树、监控探针与系统体检（Doctor）。修改配置后若未生效，绝大多数情况是未执行服务重启。</p>
 
-<h2>运维速查</h2>
-<pre><code># 日志（轮转归档 &lt;name&gt;.0.gz … .4.gz）
-tail -f ~/Library/Logs/&lt;your-server-log&gt;.log
+<h2>常用运维指令速查</h2>
+<pre><code># 1. 结构化配置查看与修改
+node scripts/config.js get PORT
+node scripts/config.js set ACCESS_PROFILE reverse-proxy
 
-# 重启 / 停 / 起（macOS LaunchAgent）
-launchctl kickstart -k gui/$(id -u)/&lt;your-server-label&gt;
-launchctl bootout    gui/$(id -u)/&lt;your-server-label&gt;
-launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/&lt;your-server-label&gt;.plist
+# 2. 全面健康自检
+node scripts/doctor.js
 
-# 是否在跑（有 PID = 在跑）
-launchctl list &lt;your-server-label&gt; | grep -E '"PID"|LastExitStatus'
+# 3. macOS 常驻服务热管理 (LaunchAgent)
+npm run service:status     # 查看当前进程 PID、运行时间与错误码
+npm run service:restart    # 优雅重启服务
+npm run service:logs       # 查看实时日志输出
 
-# 临时本地调试：先让出端口
-launchctl bootout gui/$(id -u)/&lt;your-server-label&gt;
-npm start</code></pre>
+# 4. 设备授权管理
+node scripts/device.js list
+node scripts/device.js approve &lt;DEVICE_ID&gt;</code></pre>
 
-<h2>排错表</h2>
+<h2>高频故障排错表</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>现象</th><th>处理方向</th></tr></thead>
+<thead><tr><th>故障现象</th><th>最可能根因</th><th>排查与修复动作</th></tr></thead>
 <tbody>
-<tr><td>公网 502 / 1033</td><td>server 未跑：看 server 日志并 kickstart；或隧道挂了：看 tunnel 日志是否有 Registered tunnel connection</td></tr>
-<tr><td>OTP 过了但 app 连不上</td><td>JWT 校验失败：日志搜「Access JWT」；核对 CF_ACCESS_TEAM / AUD 与 CF 应用一致</td></tr>
-<tr><td>手机进不了登录页</td><td>DNS / 隧道连通；ingress 指向 http://localhost:3000</td></tr>
-<tr><td>改 env 不生效</td><td>常驻进程未重启；kickstart / systemctl restart</td></tr>
-<tr><td>model_not_found</td><td>模型名可能需后缀；在启动 shell export ANTHROPIC_MODEL 后重启，或 web 端 /model 切换（.env 中 ANTHROPIC_* 被剥）</td></tr>
-<tr><td>部署机全局代理仍 1033</td><td>代理 TUN 劫持 cloudflared 到 edge；需给 edge 直连路由或绕过 TUN</td></tr>
-<tr><td>只有工具卡片无正文</td><td>部分网关不流式；agent map 有全文兜底；仍复现则 LOG_STDERR=1 看子进程</td></tr>
-<tr><td>手机连不上且无 AUTH_TOKEN</td><td>只绑 127.0.0.1——有意设计；设 token 并重启</td></tr>
-<tr><td>设备一直 pending</td><td>node scripts/device.js list / approve；或检查是否被反代当成「本机」而路径异常</td></tr>
+<tr><td>外网访问报 502 / 1033</td><td>CCM Server 未启动或隧道未正确映射端口</td><td>先检查 <code>npm run service:status</code> 确认 Server 在跑；再看 Cloudflare 隧道日志是否输出 <code>Registered tunnel connection</code></td></tr>
+<tr><td>OTP 验证通过但应用连不上</td><td>Cloudflare Access JWT 校验失败</td><td>在服务端日志搜索 <code>Access JWT</code>；核对 <code>CF_ACCESS_TEAM</code> 与 <code>AUD</code> 是否与控制台严格匹配</td></tr>
+<tr><td>修改配置后行为未发生改变</td><td>常驻进程尚未重载配置</td><td>执行 <code>npm run service:restart</code>（仅 <code>WORKDIRS</code> 修改支持热重载免重启）</td></tr>
+<tr><td>手机端无法打开且控制台无报错</td><td>未配置 <code>AUTH_TOKEN</code></td><td><strong>有意设计</strong>：未设 Token 时服务恒定仅绑 <code>127.0.0.1</code>；需配置有效 Token 并重启</td></tr>
+<tr><td>新手机接入始终处于 pending</td><td>触发设备信赖门禁 (TOFU)</td><td>在电脑终端敲 <code>node scripts/device.js approve &lt;ID&gt;</code> 放行该设备</td></tr>
+<tr><td>运行耗时任务被中断</td><td>误碰全局空闲超时</td><td>检查是否派生子代理；系统依赖 <code>bgTasks</code> 刷新心跳，如无子代理但任务耗时极长，调大 <code>IDLE_TIMEOUT_MS</code></td></tr>
 </tbody>
 </table>
+</div>
 
-<h2>探针与鉴权</h2>
-<table>
-<thead><tr><th>端点</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td>GET /health</td><td>健康 JSON；经 httpAuth</td></tr>
-<tr><td>GET /metrics</td><td>指标快照；同样鉴权，不落盘、非 Prometheus 文本</td></tr>
-<tr><td>GET /push/vapid-public-key · POST /push/subscribe</td><td>Web Push；鉴权</td></tr>
-</tbody>
-</table>
-<p>业务历史与会话数据走 Socket（如 session:history），不开放无鉴权的 HTTP 数据端点。限速与握手共用，防无限试 token。</p>
-
-<h2>日志轮转</h2>
-<p><code>scripts/rotate-logs.sh</code> 使用 <strong>copy-truncate</strong>：launchd 持有 O_APPEND fd，rename 式轮转会把新文件写成空。默认超约 20MB 才转，gzip 保留 5 份。由 log-rotate.plist.template 定时触发。</p>
-
-<div class="callout warn"><div class="body">
-<strong>诊断开关</strong>DEBUG_SDK_MESSAGES / LOG_INTERACTIONS / LOG_STDERR 会显著放大日志；生产确认问题后关掉并重启。面板「服务状态」可看到部分开关是否打开。
-</div></div>
-
-<h2>doctor：两套面，勿混为一谈</h2>
-
-<h3>CLI 自检（scripts/doctor.js · 固定 11 项）</h3>
-<p>命令行 <code>node scripts/doctor.js</code> 跑 D1–D11，启动前配置诊断用：</p>
-<table>
-<thead><tr><th>#</th><th>检查</th></tr></thead>
-<tbody>
-<tr><td>D1</td><td>AUTH_TOKEN 非空与长度</td></tr>
-<tr><td>D2</td><td>CLAUDE_BIN / which claude 可执行</td></tr>
-<tr><td>D3</td><td>WORK_DIR / WORK_DIRS(_FILE) 可写</td></tr>
-<tr><td>D4</td><td>PORT 未被占用</td></tr>
-<tr><td>D5</td><td>WEB_STATUSLINE 配置口径</td></tr>
-<tr><td>D6</td><td>CLI statusline bridge 安装态（只读）</td></tr>
-<tr><td>D7</td><td>网关环境：.env 中 ANTHROPIC_* 会被剥除的提示</td></tr>
-<tr><td>D8</td><td>.env / data JSON 权限（owner-only）</td></tr>
-<tr><td>D9</td><td>文档一致性（死链、旧文件名、scripts、SDK 版本）</td></tr>
-<tr><td>D10</td><td>前端 public/js/**/*.js 语法</td></tr>
-<tr><td>D11</td><td>单测行覆盖率门槛（≥65% 未过则 warn）</td></tr>
-</tbody>
-</table>
-<pre><code>node scripts/doctor.js
-node scripts/doctor.js --env=prod.env
-node scripts/doctor.js --fix</code></pre>
-
-<h3>UI 体检（运行中 · doctor-runtime / doctor-checks）</h3>
-<p>手机/Web 面板触发的 <code>doctor:run</code> 走 <code>src/ops/doctor-runtime.js</code>，与 CLI 11 项<strong>不是同一清单</strong>。UI 侧会给出脱敏安全视图，额外包含例如：</p>
-<ul>
-  <li>CF Access 是否启用、AUD 是否配置（仅布尔）</li>
-  <li>设备门 / 反代 loopback 是否跳过 TOFU（DEVICE_GATE）</li>
-  <li>Web Push VAPID 是否齐全</li>
-  <li>信任/待批设备计数</li>
-  <li>CLI settings 危险白名单摘要（WHITELIST）</li>
-</ul>
-<p>排障时：启动前问题优先 CLI doctor；线上「现在这台实例安全吗」看 UI 体检与服务状态面板。</p>
+<h2>系统体检：CLI Doctor 与 UI Doctor 的分界</h2>
+<div class="split">
+  <div>
+    <h4>CLI Doctor (scripts/doctor.js)</h4>
+    <p>冷启动前由运维执行：检测配置文件自洽性、本地 <code>claude</code> 二进制路径、工作区写权限、端口冲突以及文件安全权限等硬性条件。</p>
+  </div>
+  <div>
+    <h4>UI 运行态体检 (doctor-runtime.js)</h4>
+    <p>服务启动后由 Web/手机端调起：输出脱敏的安全视图，包含 Access 校验生效态、设备审批队列、IPv6 限速分桶状态以及全局 <code>settings.json</code> 敏感工具白名单摘要。</p>
+  </div>
+</div>

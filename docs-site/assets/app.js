@@ -6,16 +6,13 @@
   'use strict';
 
   // ── 主题 ───────────────────────────────────────────────────────
+  // 初始值由 head 里的 boot.js 在首次绘制前定好，这里只负责切换。
   var root = document.documentElement;
-  var saved = localStorage.getItem('docsbook-theme');
-  if (saved) root.setAttribute('data-theme', saved);
-  else if (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
-    root.setAttribute('data-theme', 'dark');
 
   function toggleTheme() {
     var now = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     root.setAttribute('data-theme', now);
-    localStorage.setItem('docsbook-theme', now);
+    try { localStorage.setItem('docsbook-theme', now); } catch (e) {}
     if (window.__renderMermaid) window.__renderMermaid();
   }
   var tbtn = document.getElementById('themeBtn');
@@ -210,7 +207,9 @@
       window.mermaid.run({ nodes: blocks });
     } catch (err) { /* noop */ }
   };
-  [].forEach.call(document.querySelectorAll('.mermaid'), function (b) { b.dataset.src = b.textContent; });
+  // 快照必须取 innerHTML：mermaid 读的也是 innerHTML，节点里的 <br/> 换行
+  // 在 textContent 里根本不存在，用它做快照等于在首次渲染前就把换行删了。
+  [].forEach.call(document.querySelectorAll('.mermaid'), function (b) { b.dataset.src = b.innerHTML; });
   if (window.mermaid) window.__renderMermaid();
 
   // ── Mermaid 点击放大灯箱 ──────────────────────────────────────
@@ -253,13 +252,6 @@
   }
   bindMermaidClicks();
 
-  // 主题切换后重新绑定（Mermaid 重渲染后 SVG 是新的）
-  var origRender = window.__renderMermaid;
-  window.__renderMermaid = function () {
-    origRender();
-    setTimeout(bindMermaidClicks, 150);
-  };
-
   lbClose.addEventListener('click', closeLightbox);
   lbBackdrop.addEventListener('click', closeLightbox);
   document.addEventListener('keydown', function (e) {
@@ -281,3 +273,37 @@
     pre.appendChild(btn);
   });
 })();
+
+  // ── AEO: Copy for AI 交互逻辑 ──────────────────────────────────
+  var copyAiBtn = document.getElementById('copyAiBtn');
+  if (copyAiBtn) {
+    copyAiBtn.addEventListener('click', function () {
+      var currentMdUrl = window.location.pathname.replace(/\.html$/, '.md');
+      // 如果当前是目录或根页面
+      if (currentMdUrl.endsWith('/')) currentMdUrl += 'index.md';
+      else if (!currentMdUrl.endsWith('.md')) currentMdUrl += '.md';
+
+      fetch(currentMdUrl)
+        .then(function (res) {
+          if (!res.ok) throw new Error('Failed to fetch markdown version');
+          return res.text();
+        })
+        .then(function (mdText) {
+          navigator.clipboard.writeText(mdText).then(function () {
+            var orig = copyAiBtn.innerHTML;
+            copyAiBtn.innerHTML = '<span>✓ Copied for AI!</span>';
+            setTimeout(function () { copyAiBtn.innerHTML = orig; }, 2000);
+          });
+        })
+        .catch(function () {
+          // 优雅降级：如果 fetch 失败，提取文章核心文本
+          var article = document.querySelector('.article');
+          if (article) {
+            navigator.clipboard.writeText(article.innerText);
+            var orig = copyAiBtn.innerHTML;
+            copyAiBtn.innerHTML = '<span>✓ Copied!</span>';
+            setTimeout(function () { copyAiBtn.innerHTML = orig; }, 2000);
+          }
+        });
+    });
+  }

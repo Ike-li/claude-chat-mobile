@@ -1,73 +1,52 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">启动路径刻意拆成薄入口与组装根：环境必须在状态模块求值前就绪；listen 前必须清孤儿审批。</p>
+<p class="lead-extra">启动路径刻意设计为薄入口（<code>app/server.js</code>）与组装根（<code>app/src/server/app.js</code>）两段式：环境变量与安全时戳必须在任何状态模块求值前就绪，服务监听前必须清理孤儿挂起状态。</p>
 
 <h2>server.js（薄入口）</h2>
-<pre><code>loadRuntimeEnvironment()   // dotenv；ANTHROPIC_* 只认 shell
-installLogTimestamps()     // 须在动态 import 之前
-await import('./src/server/app.js')
-export httpServer, io, port</code></pre>
-<p>约 9 行。LaunchAgent / systemd / npm start / 集成测试都走这里。</p>
+<pre><code>// 运行时入口：app/server.js
+import { loadRuntimeEnvironment } from './src/ops/config-file.js';
+import { installLogTimestamps } from './src/shared/log-timestamps.js';
 
-<h2>环境加载要点</h2>
+loadRuntimeEnvironment();   // 加载 ccm.config.json / .env
+installLogTimestamps();     // 劫持 console 注入安全 ISO 时戳
+
+const { httpServer, io, port } = await import('./src/server/app.js');
+export { httpServer, io, port };</code></pre>
+<p>薄入口仅数行。不管是命令行 <code>npm start</code>、macOS LaunchAgent 常驻、Linux systemd 还是端到端集成测试，一律通过此入口拉起。</p>
+
+<h2>配置求值与优先级</h2>
 <ul>
-  <li>dotenv 在动态 import app 之前执行，保证 CCM_DATA_DIR 等在模块求值期已正确（状态模块在 import 时解析路径）。</li>
-  <li>空串环境变量在加载前删除（除 ANTHROPIC_*），避免 LaunchAgent 的 AUTH_TOKEN= 挡住 .env。</li>
-  <li>ANTHROPIC_* 只认启动 shell 中已有的真实值；写入 .env 的会被剥除。</li>
-  <li>parseServerConfig：port / authToken / idleTimeoutMs / instanceIdleReclaimMs / approvalTtlMs / notifyThrottleMs / sessionDeleteQuietMs / devMode / workDir / dataDir。</li>
+  <li><strong>配置同源加载。</strong>启动时由 <code>app/src/ops/config-file.js</code> 统一加载根目录下的 <code>ccm.config.json</code>（结构化配置，优先）并回落 <code>.env</code>。</li>
+  <li><strong>环境变量最高优先。</strong>终端 Shell 中直接 <code>export</code> 的环境变量始终压过配置文件。</li>
+  <li><strong>两处目录解析陷阱。</strong><code>app/src/**</code> 模块计算仓库根目录必须上溯<strong>三层</strong>。另外，LaunchAgent 启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>service-units.js</code> 解析常驻进程后缀的代码逐字严格一致。</li>
 </ul>
 
-<h2>app.js 组装顺序</h2>
+<h2>app.js 组装时序（12 步）</h2>
 <ol class="steps">
-  <li>顶层 import 完成（agent / auth / sessions / files / ops / server 子模块）。</li>
-  <li>initCfAccess()；parseServerConfig 得到 port/token/timeouts/WORK_DIR/DATA_DIR。</li>
-  <li>通知通道 createNotifyChannels（Web Push + ntfy，尽力而为）。</li>
-  <li>preflight（致命则 process.exit(1)）：
-    <ul>
-      <li>WORK_DIR 存在且为目录 → realpathSync</li>
-      <li>构建 workDirs 白名单（WORK_DIRS_FILE 优先，否则 WORK_DIRS）</li>
-      <li>解析 CLAUDE_BIN 或 which claude，文件须存在</li>
-      <li>采集 versions（非致命）；无 ANTHROPIC_AUTH_TOKEN/API_KEY 仅 warn</li>
-    </ul>
-  </li>
-  <li>初始化 viewing 态：viewingInstanceId=null，viewingCwd=WORK_DIR（<strong>不自动 resume</strong>）。</li>
-  <li>Express：configureHttpShell（压缩、CSP、asset ?v= 哈希、静态 public/）。</li>
-  <li>HTTP 鉴权 createHttpAuth + 运维路由 /health /metrics /push/*。</li>
-  <li>createServer + Socket.IO；createDeviceGate；io.use 握手鉴权。</li>
-  <li>createInstanceManager + 连接 handler（业务 on + 文件 handler）。</li>
-  <li>可选 WORK_DIRS_FILE 时 fs.watch 热加载。</li>
-  <li>进程兜底 uncaughtException / unhandledRejection（只记不退）。</li>
-  <li>listen 前：expireOrphanedPending + startApprovalRetentionSweep。</li>
-  <li>listen(port, AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1')；EADDRINUSE → 可读错误 + exit(1)。</li>
-  <li>SIGINT/SIGTERM：flush sessions/approvals/audit → dispose 全部 agent → io.close → exit。</li>
+  <li><strong>依赖导入。</strong>完成后端各领域核心模块（agent, sessions, files, auth, ops, shared）的静态与动态装配。</li>
+  <li><strong>解析配置。</strong>执行 <code>parseServerConfig()</code>，提取端口、Token、超时阈值、<code>ACCESS_PROFILE</code> 及工作区配置。</li>
+  <li><strong>初始化通知通道。</strong>装配 Web Push（VAPID）与可选 ntfy 实例（尽力而为，通道故障不阻塞主业务）。</li>
+  <li><strong>Preflight 前置自检。</strong>检查默认工作区（<code>WORK_DIR</code>）目录真实存在、校验 <code>claude</code> 二进制路径可执行（<code>CLAUDE_BIN</code>）。</li>
+  <li><strong>构建工作区白名单。</strong>加载 <code>WORKDIRS</code> 白名单列表并建立文件监听，支持运行期免重启热加载。</li>
+  <li><strong>配置 Express HTTP 壳。</strong>挂载 gzip 压缩、静态资源 CSP 策略、带 <code>?v=</code> 指纹的防缓存头。</li>
+  <li><strong>HTTP 鉴权与运维路由。</strong>挂载统一鉴权中间件，并提供 <code>/health</code>、<code>/metrics</code>、<code>/push/*</code> 受控路由（杜绝免密端点）。</li>
+  <li><strong>挂载 Socket.IO 与设备门禁。</strong>装配握手鉴权中间件与设备指纹 TOFU 判定器（<code>createDeviceGate</code>）。</li>
+  <li><strong>实例化 InstanceManager 与通信管道。</strong>建立会话实例池与 Socket 进出向事件信封转发总线。</li>
+  <li><strong>进程级未捕获异常兜底。</strong>注册 <code>uncaughtException</code> 与 <code>unhandledRejection</code>，只记日志不退进程。</li>
+  <li><strong>孤儿审批清理（Fail-closed）。</strong>在服务监听前执行 <code>expireOrphanedPending()</code>，将因进程重启而失效的挂起审批彻底归档。</li>
+  <li><strong>绑定端口监听。</strong>依据 <code>AUTH_TOKEN</code> 与网络模式选择绑定地址（无 Token 强制绑 <code>127.0.0.1</code>，有 Token 绑 <code>0.0.0.0</code>）。</li>
 </ol>
 
-<div class="callout note"><div class="body">
-<strong>附注</strong>app.js 是有意保留的组装根本体：mirror / catchUp / openInstance 与契约路由共享顶层可变状态（viewing*、mirror*、catchUp*）。域逻辑已下沉，接线不拆成多文件穿针。边界守卫：server 是 sink。
-</div></div>
-
-<div class="callout warn"><div class="body">
-<strong>留意</strong>无 AUTH_TOKEN 时只绑定 127.0.0.1，手机与隧道均不可达。这是有意设计，不是故障。
-</div></div>
-
-<h2>默认超时（parseServerConfig）</h2>
+<h2>默认运行超时参数</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>项</th><th>默认</th></tr></thead>
+<thead><tr><th>配置项名</th><th>默认值</th><th>语义与作用</th></tr></thead>
 <tbody>
-<tr><td>PORT</td><td>3000</td></tr>
-<tr><td>IDLE_TIMEOUT_MS</td><td>600000（10 min）</td></tr>
-<tr><td>INSTANCE_IDLE_RECLAIM_MS</td><td>1800000（30 min；0=关）</td></tr>
-<tr><td>APPROVAL_TTL_MS</td><td>1800000</td></tr>
-<tr><td>NOTIFY_THROTTLE_MS</td><td>60000</td></tr>
-<tr><td>SESSION_DELETE_QUIET_MS</td><td>300000</td></tr>
+<tr><td><code>PORT</code></td><td>3000</td><td>HTTP / WebSocket 服务监听端口</td></tr>
+<tr><td><code>IDLE_TIMEOUT_MS</code></td><td>600000（10 分钟）</td><td>Agent 在途轮次在无后台任务且无审批时的静默超时看门狗</td></tr>
+<tr><td><code>INSTANCE_IDLE_RECLAIM_MS</code></td><td>1800000（30 分钟）</td><td>空闲 AgentSession 内存实例自动回收时间（0 为不回收）</td></tr>
+<tr><td><code>APPROVAL_TTL_MS</code></td><td>1800000（30 分钟）</td><td>工具审批卡片在手机端未作决定的自动过期超时（过期即拒绝）</td></tr>
+<tr><td><code>NOTIFY_THROTTLE_MS</code></td><td>60000（1 分钟）</td><td>同一会话连续完成事件的通知推送抑制窗口</td></tr>
 </tbody>
 </table>
-
-<h2>关键模块入口</h2>
-<div class="kv">
-  <div class="row"><div class="key">config.js</div><div class="val">dotenv + parseServerConfig</div></div>
-  <div class="row"><div class="key">http.js</div><div class="val">HTTP 壳、鉴权中间件、运维路由</div></div>
-  <div class="row"><div class="key">socket.js</div><div class="val">事件注册器、设备门、ack 兜底</div></div>
-  <div class="row"><div class="key">instance-manager.js</div><div class="val">agents Map 与 stateOf</div></div>
-  <div class="row"><div class="key">instance-routing.js</div><div class="val">路由、externalDirty NACK 等纯函数</div></div>
 </div>
