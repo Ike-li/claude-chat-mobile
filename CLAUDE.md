@@ -99,7 +99,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `test:invariants:env` 跑的是卸载器（`tests/invariants/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
 > ——回落成 `homedir()` / `/Applications/CCM.app` 就打在真实家目录上，与 8/2 删库同形态。两条都进容器。
 
-**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、
+**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑 unit + invariants 三档 + 集成，共 5 档）、
 `npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
 （拉 Playwright 镜像 + npm ci，约 7 分钟）。维护者要打开一张干净 Linux 用户的 Web UI 时用
 `npm run playground:up`（`127.0.0.1:13000`，fake-claude，不是产品入口；聊天/流式走 `playground:up:mock`）。
@@ -136,7 +136,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
 npm run check      # ESLint + 模块边界 + 双向事件契约 + 文档一致性 + n=1 登记簿 + i18n 孤儿 key
-                   # + 破坏性删除守卫 + Playwright 禁止模式 + desktop typecheck/单测 + 未分类文件
+                   # + 破坏性删除守卫 + 不变量编号 + Playwright 禁止模式 + desktop typecheck/单测
+                   # + 未分类文件
                    # 零 token、最快；每个门禁失败时会自己说清违反了什么，不必预先背清单。
                    # 链上成员由 tests/unit/gate-wiring.test.mjs 钉住：新门禁忘了接线会红
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项

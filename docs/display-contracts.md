@@ -198,7 +198,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 
 `getContextUsage` 在 CLI 侧是 `/context` 拆账（按类别 `count_tokens`），不是读内存。statusline 的 10s tick 只刷新 git；占用结果缓存在 `agent.ctxWindowCache`，只在无窗口 / 模型变 / `compact_boundary` 失效时重拉。流式 `onUsage` 用 lastUsage 单调上调占用，不重打 RPC。
 
-**锚点**：`app/src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/unit/statusline.test.mjs`（tick 不重打）
+**锚点**：`app/src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/invariants/statusline.test.mjs`（tick 不重打）
 
 ---
 
@@ -207,7 +207,7 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 1. 改 `tests/unit/display-contracts.test.mjs`（红）  
 2. 改对应纯函数 / server 映射（绿）  
 3. 同步改本节表格与「禁止」句  
-4. 若涉及 E2E 可见行为，补 `tests/e2e/p0/*`  
+4. 若涉及 E2E 可见行为，补 `tests/e2e/specs/*`  
 5. `npm run test:unit` + 相关文件 eslint  
 
 ---

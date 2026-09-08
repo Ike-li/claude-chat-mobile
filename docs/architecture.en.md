@@ -4,6 +4,12 @@
 
 [中文](architecture.md) · [Back to README](../README.en.md)
 
+> **Scope**: this English document covers the core architecture only. Several operational
+> sections exist in Chinese only — the four device-approval entrypoints, offline wake-up and
+> push suppression, and runtime observability (the two authenticated endpoints, the service
+> status panel, and why service alerts and the "needs you" counter are deliberately separate
+> axes). See [架构说明](architecture.md), which is the authoritative and complete version.
+
 ## Design goals
 
 Claude Chat Mobile is a local forwarding and synchronization service:

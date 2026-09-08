@@ -4,6 +4,11 @@
 
 [中文](getting-started.md) · [Back to README](../README.en.md)
 
+> **Scope**: this English guide covers the essential install path only. Some optional topics
+> are documented in Chinese only — most notably **Web Push setup** (VAPID keys, and the ntfy
+> alternative for networks where Google's push infrastructure is unreachable). For those, see
+> [首次使用指南](getting-started.md), which is the authoritative and complete version.
+
 ## What you will have
 
 - A Claude Chat Mobile server running only on your computer.

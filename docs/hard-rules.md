@@ -24,9 +24,9 @@
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
 | **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 维护者确认；2026-08-17 维护者确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
-| **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js:107`「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
+| **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js` 的 `USAGE_THIRD_PARTY_INTERVAL_MS` 头注「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
 | **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 维护者确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
-| **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/unit/bind-host.test.mjs` |
+| **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/invariants/bind-host.test.mjs` |
 | **公网入口：一条基线、一个受管加层** | 基线 = `AUTH_TOKEN` + 逐设备审批，对所有拓扑（局域网 / 加密隧道 / 反代 / 直连 / Cloudflare）相同；**Cloudflare Access 是基线之上的可选加层**，关掉它不是「退化」。产品**受管**的第三方进程只有 `cloudflared`（unit 模板、install/uninstall、菜单栏主服务位）；Tailscale / WireGuard / 反代等**一等支持但不受管**：文档配方、向导提示、doctor 检测，产品不装、不起、不保活。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；限速来源不随 `ACCESS_PROFILE` 变，采信边缘注入头只有两条路：Access 层启用时公网 Host 的 `CF-Connecting-IP`，以及 `TRUSTED_PROXY=loopback` 显式 opt-in 的反代 `X-Forwarded-For` 末跳；默认不采信任何转发头（`AUTH-04`，失败方向是合桶不是拆桶）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 维护者确认；2026-09-06 维护者确认基线口径（用户反馈不想用 Cloudflare）；`app/src/auth/auth-strategy.js`；`app/src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
 
 ---
@@ -138,7 +138,9 @@
 
 ### 4.2 测试跑在哪（白名单，非黑名单）
 
-**宿主机只允许**：`npm run lint` · `npm run check` · `npm run test:unit` · `npm run test:e2e`（及 visual/playwright 同源别名）。
+**宿主机只允许**这 10 条（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）：`lint` · `lint:fix` · `check` · `test:unit` · `test:invariants` · `test:e2e` · `test:visual` · `test:playwright` · `test:e2e:parallel` · `app:test`。末四条：`test:visual` / `test:playwright` 是 `test:e2e` 的同源别名，`test:e2e:parallel` 是它的分片编排（每个分片就是一条 `npm run test:e2e --`），`app:test` 是 `check` 自身的一环。
+
+> ⚠ **`test:invariants` 的两个兄弟不在名单上**，别照后缀类推：`test:invariants:server` 起真 `app/server.js` 子进程；`test:invariants:env` 跑卸载器，隔离依赖被测代码认注入的 `home`/`root`/`appPath`，回落即打在真实家目录上。两条都进容器（`test:docker` 已含）。
 
 **其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `Dockerfile.test`。
 
@@ -148,7 +150,7 @@
 
 ### 4.3 `npm run check` 包
 
-ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
 
 链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 
@@ -183,7 +185,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
 | 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
-| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/unit/config-file.test.mjs` 有断言锁住 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/invariants/config-file.test.mjs` 有断言锁住 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 | 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
 | CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |
@@ -272,9 +274,9 @@ Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不�
 产品：n=1 单用户 · 终端等价 · 非多租户 · 非共享 TTY（假设面登记簿见 §2，枚举用 grep -rn '// n1:' app/src/ app/public/js/）
 架构：单驾驶员 · agent:event 闭合（protocol.js）· viewing 全局单值
 状态：新逻辑不进 app.js 顶层 · import 边界硬闸
-安全：五层分立 · fail-closed · 推送 body 最小化
+安全：六层分立（§6）· fail-closed · 推送 body 最小化
 展示：不混拼 · 不猜 · 先改 display-contracts 测试
-工程：dev 分支 · 宿主机四白名单 · 其余 docker · check 全绿
+工程：dev 分支 · 宿主机白名单 10 条（§4.2，真相源 guard-host-tests.js）· 其余 docker · check 全绿
 债：AD-5 / SP-10 在 n=1 下不做；无新证据不重开
 上游：web slash 恒 fork（UP-1，判据＝宿主无 ReportFindings）；只改可见性，别当 bug 修
 ```
