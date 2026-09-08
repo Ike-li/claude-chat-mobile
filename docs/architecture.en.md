@@ -9,6 +9,9 @@
 > push suppression, and runtime observability (the two authenticated endpoints, the service
 > status panel, and why service alerts and the "needs you" counter are deliberately separate
 > axes). See [架构说明](architecture.md), which is the authoritative and complete version.
+>
+> The rule for what may be left out: **anything that can make a configuration fail silently, or
+> mislead a security decision, must be translated; the rest may point at the Chinese version.**
 
 ## Design goals
 

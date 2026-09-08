@@ -8,6 +8,10 @@
 > are documented in Chinese only — most notably **Web Push setup** (VAPID keys, and the ntfy
 > alternative for networks where Google's push infrastructure is unreachable). For those, see
 > [首次使用指南](getting-started.md), which is the authoritative and complete version.
+>
+> The rule for what may be left out: **anything that can make a configuration fail silently, or
+> mislead a security decision, must be translated; setup steps for purely optional features may
+> point at the Chinese version.**
 
 ## What you will have
 
@@ -39,7 +43,14 @@ The project does not bundle, install, or sign in to Claude for you.
 
 - Claude subscription: make sure the local account that will start the server is already signed in to `claude`; no extra API key is needed.
 - Third-party gateway: export the required `ANTHROPIC_*` values in the **shell that will start the server**, then start the project.
-- Do not put `ANTHROPIC_*` in the project config file. Startup strips those values so a project file cannot override the CLI/provider environment.
+- Do not put `ANTHROPIC_*` in the project config file. Startup strips those values so a project file
+  cannot override the CLI/provider environment. The stripping is not silent — the startup log prints
+  `[config] 已忽略配置文件里的 ANTHROPIC_…` for each one, and `doctor` flags it too.
+- **Gateway users must use the headless terminal entrypoint (`npm start`).** `ANTHROPIC_*` is
+  inherited only from the environment of the process that starts the server. The persistent service
+  launched by the macOS desktop console runs in a clean GUI-lineage environment that does not contain
+  what you exported in your terminal — **a gateway configuration simply does not take effect on that
+  entrypoint**.
 
 ## 2. Get the code and install dependencies
 
@@ -206,7 +217,7 @@ When neither env var is set, the config-file `WORKDIRS` is used (the production 
 node scripts/doctor.js
 ```
 
-The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, and documentation/front-end consistency.
+The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, documentation/front-end consistency, and more. **Read its output rather than any list here** — a list in prose would drift as checks are added.
 If it says port 3000 is held by the desktop app, do not run `npm start` next — restart from the desktop menu.
 
 For permission-only repairs:

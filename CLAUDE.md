@@ -135,10 +135,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
-npm run check      # ESLint + 模块边界 + 双向事件契约 + 文档一致性 + n=1 登记簿 + i18n 孤儿 key
-                   # + 破坏性删除守卫 + 不变量编号 + Playwright 禁止模式 + desktop typecheck/单测
-                   # + 未分类文件
-                   # 零 token、最快；每个门禁失败时会自己说清违反了什么，不必预先背清单。
+npm run check      # 零 token、最快。覆盖面导览（**逐项以 package.json 的 check 为准**，别把这行
+                   # 当成完备清单——它漂过两次）：ESLint · 模块边界 · 双向事件契约 · 文档一致性 ·
+                   # n=1 登记簿 · i18n 孤儿 key · 破坏性删除守卫 · 不变量编号 · Playwright 禁止模式 ·
+                   # desktop typecheck/单测 · 未分类文件。
+                   # 每个门禁失败时会自己说清违反了什么，不必预先背清单。
                    # 链上成员由 tests/unit/gate-wiring.test.mjs 钉住：新门禁忘了接线会红
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；
