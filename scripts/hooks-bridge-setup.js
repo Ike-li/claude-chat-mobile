@@ -26,6 +26,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readConfigFileValues } from '../app/src/ops/config-file.js';
+import { resolveStableNodePath } from './node-path.js';
 
 import {
   HOOK_EVENT_LIST,
@@ -121,7 +122,9 @@ function bridgeHookCommand() {
   if (currentPlatform() === 'win32') {
     throw new Error('CLI hooks 桥尚不支持 Windows（命令形态依赖 POSIX 路径与引号规则），暂不可安装。');
   }
-  return [process.execPath, RUNNER].map(shellQuote).join(' ');
+  // node 路径必须是稳定 symlink，不能是 process.execPath——写进 settings.json 的命令要跨
+  // `brew upgrade node` 存活，否则两个 hook 一起静默失效（见 ./node-path.js 头注）。
+  return [resolveStableNodePath(), RUNNER].map(shellQuote).join(' ');
 }
 
 function hookEntryFor(command) {

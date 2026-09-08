@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 
 import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
 import { renderTemplate, stripLeadingComment } from './render-plist.js';
+import { pickNodePath, resolveStableNodePath } from './node-path.js';
 
 import { classifyRestartPattern, validateServiceEvents } from '../app/src/ops/service-events.js';
 import { CONFIG_FILE_NAME, readConfigFileValues } from '../app/src/ops/config-file.js';
@@ -987,24 +988,9 @@ function realRealpath(p) {
   }
 }
 
-// 写进 plist 的 node 路径。process.execPath 是解析过 symlink 的真身
-// （/opt/homebrew/Cellar/node/25.9.0_3/bin/node），写进去后 `brew upgrade node` 版本号一变
-// 就指向不存在的二进制、服务再也起不来。登录 shell 的 `command -v node` 给的是稳定 symlink，
-// 且与 plist 自身的 `zsh -lc` 启动方式同源（终端等价性）。
-export function pickNodePath(loginShellOut, execPath, exists) {
-  const first = String(loginShellOut || '').trim().split('\n')[0].trim();
-  return first && exists(first) ? first : execPath;
-}
-
-// 只在写路径（install/adopt）调用 —— 起一个登录 shell 约 100ms，status 的高频轮询不该付这个成本
-// （status 的漂移比对已有 realpath 归一，用 execPath 也能正确判等）。
-function realLoginShellNode() {
-  let out = '';
-  try {
-    out = String(spawnSync('/bin/zsh', ['-lc', 'command -v node'], { encoding: 'utf8', timeout: 5000 })?.stdout || '');
-  } catch { /* 回落 execPath */ }
-  return pickNodePath(out, process.execPath, existsSync);
-}
+// 写进 plist 的 node 路径来自 ./node-path.js（那里是所有「写外部配置」的共用真相源，
+// 头注讲了为什么不能用 process.execPath）。这里 re-export 是为了不改既有 import 路径。
+export { pickNodePath };
 
 // 同步 sleep。Node 没有原生的，Atomics.wait 是标准做法（不烧 CPU，精度足够）。
 function realSleep(ms) {
@@ -1385,8 +1371,8 @@ export async function main(argv) {
       const verdict = resolveUninstallConfirm({ yes: flags.yes, isTty, answer });
       confirmed = verdict.confirmed;
     }
-    // 写路径才解析登录 shell 的 node（见 pickNodePath 头注）；status 不付这个成本。
-    const r = realManager()[action](unit, { node: realLoginShellNode(), ...opts, force: flags.force, confirmed });
+    // 写路径才解析登录 shell 的 node（见 ./node-path.js 头注）；status 不付这个成本。
+    const r = realManager()[action](unit, { node: resolveStableNodePath(), ...opts, force: flags.force, confirmed });
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
     } else if (r.ok) {

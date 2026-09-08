@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import { resolveStableNodePath } from './node-path.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
 
@@ -119,7 +120,9 @@ function bridgeCommand(originalCommand, originalRefreshInterval) {
     // 实际 CLI 每次渲染状态栏都会失败——不如在装之前明确拒绝，不留半成品状态。
     throw new Error('CLI statusline bridge 尚不支持 Windows（原始命令封装依赖 POSIX shell），暂不可安装。');
   }
-  const argv = [process.execPath, RUNNER];
+  // node 路径必须是稳定 symlink，不能是 process.execPath——写进 settings.json 的命令要跨
+  // `brew upgrade node` 存活，否则状态栏渲染静默失效（见 ./node-path.js 头注）。
+  const argv = [resolveStableNodePath(), RUNNER];
   if (typeof originalRefreshInterval === 'number'
       && Number.isFinite(originalRefreshInterval)
       && originalRefreshInterval > 0) {
