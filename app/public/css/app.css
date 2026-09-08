@@ -168,7 +168,14 @@ body.ccm-sheet-open #messages {
 
 /* 柔和入场动画 + 按钮微反馈（尊重 reduce-motion） */
 @media (prefers-reduced-motion: no-preference) {
-  #messages > * { animation: msg-in .2s ease both; }
+  /* fill-mode 刻意【不】写 both（2026-09-07 修）：CSS 动画层在层叠里压过内联样式与工具类，而 both 的
+     forwards 半边会把末帧 `opacity:1` 永久钉在动画层上。#messages 的每个气泡都是这里的直接子元素
+     （message-renderer.js:50 `context.dom.messages.appendChild`），于是三处本该生效的透明度全被压死：
+     app.js:3096 的 opacity-70（「正在发送」变淡）、:1982 的 0.55（随停止取消的消息变灰）、:2888 的 0.4
+     （流式收尾重渲淡出）——实测 style.opacity 确为 '0.55' 而 getComputedStyle 恒为 '1'，无任何报错。
+     去掉 both 对入场动画本身零影响：没有 animation-delay，backwards 半边本就是空操作；末帧的
+     opacity:1 / transform:none 又正是 CSS 默认值，forwards 除了制造这个陷阱不提供任何东西。 */
+  #messages > * { animation: msg-in .2s ease; }
   @keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   button { transition: background-color .12s ease, transform .08s ease; }
   button:active { transform: scale(.97); }
