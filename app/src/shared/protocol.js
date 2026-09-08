@@ -32,6 +32,7 @@ export const AGENT_EVENT_TYPES = Object.freeze([
   'request_resolved',
   'result',
   'session_log',
+  'slash_commands',
   'status_line',
   'system',
   'task_notification',

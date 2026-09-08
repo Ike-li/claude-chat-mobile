@@ -406,3 +406,51 @@ test.describe('map() — 子 agent 的 API 报错', () => {
     s.dispose();
   });
 });
+
+// commands_changed（SDK 0.3.229 起）：CLI 中途发现新命令/skill 时的**全量**推送。
+// 上游契约原话：「Clients should REPLACE their cached command list with this payload;
+// supportedCommands() tracks the latest push」——也就是说 supportedCommands() 只在 initialize
+// 时捕获一次、拿不到中途变化，这条消息是唯一的增量来源。
+//
+// 【为什么必须自成一型，不能并进 init】server 对 init 有两个副作用，这条一个都不该触发：
+//  ① app.js:1657 `lastInit = envelope.payload` —— 整体覆盖全局 lastInit，会把 model/cwd 冲掉；
+//  ② app.js:1709 init 映射到 latchEventType='new_activity' —— 清 error latch、动未读角标，
+//     而「CLI 发现了一个新 skill」既不是新会话也不是用户活动。
+// 现有那条「合成 init 只带 slashCommands」是服务端直接 socket.emit、**绕过 onEvent** 的，没这问题。
+test.describe('map() — commands_changed（slash 命令中途变化）', () => {
+  test('透出 slash_commands 事件，原样带上 commands', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'commands_changed', commands: ['/review', '/deploy'] });
+
+    const e = events.find(ev => ev.type === 'slash_commands');
+    assert.ok(e, 'commands_changed 必须透出，否则手机端命令列表停在 init 那一刻');
+    assert.deepEqual(e.payload.slashCommands, ['/review', '/deploy']);
+    s.dispose();
+  });
+
+  test('不得走 init 事件（那会覆盖 lastInit 并误清 error latch）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'commands_changed', commands: ['/x'] });
+
+    assert.equal(events.filter(e => e.type === 'init').length, 0, '并进 init 会连带触发它的两个副作用');
+    s.dispose();
+  });
+
+  test('SDK 的对象形态原样透传，归一交给下游同一处（normalizeSlashCommands）', () => {
+    const { s, events } = makeSession();
+    const cmds = [{ name: '/review', description: 'code review' }];
+    s.map({ type: 'system', subtype: 'commands_changed', commands: cmds });
+
+    assert.deepEqual(events.find(e => e.type === 'slash_commands').payload.slashCommands, cmds,
+      'agent 层不做归一：init 路径也是原样透传，两条路分别归一就会漂');
+    s.dispose();
+  });
+
+  test('commands 缺失 → 空数组，不炸也不吞', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'commands_changed' });
+
+    assert.deepEqual(events.find(e => e.type === 'slash_commands').payload.slashCommands, []);
+    s.dispose();
+  });
+});

@@ -186,6 +186,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 的全量推送。真 server 侧
+  // agent.js 把它转成 slash_commands 事件，前端 handle.slash_commands 替换补全列表。
+  // 断言走可见的 #cmdHints，不读 window.availableSkills——后者是实现细节，且读全局变量的断言
+  // 在补全渲染断链时照样绿。
+  test('P0-02n 中途推送的 slash 命令替换补全列表（REPLACE 而非合并）', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 1. 基线：首帧 init 给的是 help / model / effort，此时 /h 能提示出 /help。
+    await page.locator('#input').fill('/h');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+    await expect(page.locator('#cmdHints')).toContainText('/help');
+
+    // 2. 触发中途推送：新列表是 deploy / rollback / model，与基线不是超集关系。
+    await sendChatMessage(page, 'test:commands-changed');
+    await waitForIdle(page);
+
+    // 3. 新命令进入补全。
+    await page.locator('#input').fill('/d');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+    await expect(page.locator('#cmdHints')).toContainText('/deploy');
+
+    // 4. ★ 这一条才是 REPLACE 与「合并」的分水岭：旧命令必须消失。
+    //    若前端把新列表并进旧列表，上面第 3 步照样绿，只有这里会红。
+    await page.locator('#input').fill('/h');
+    await expect(page.locator('#cmdHints')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-02i 点击斜杠命令提示会填入命令并保持可发送', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

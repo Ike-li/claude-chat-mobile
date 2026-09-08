@@ -2023,6 +2023,36 @@ io.on('connection', socket => {
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
     })),
     {
+      // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
+      // app/src/agent/agent.js 的同名 subtype 分支转成 slash_commands 事件，这里直接产出那个事件。
+      //
+      // 列表故意与首帧 init 的（help / model / effort）**不同且不是超集**：契约语义是 REPLACE 整份
+      // 列表而非合并，只有让旧命令真的消失，E2E 才区分得出这两种实现。保留 model 一项是因为
+      // app.js 对 `/model` 有条 includes('model') 的特判分支，去掉它会顺带改变那条无关行为。
+      commands: ['test:commands-changed'],
+      run: async ({ activeInst }) => {
+        // epoch:'server' 与首帧 init/models 同源：这类会话元信息不属于任何一轮对话，
+        // 走 dispatcher 的 seq 去重会被当成重复丢弃（lastSeq 早被本轮用户消息推过 0）。
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'slash_commands', payload: {
+            slashCommands: [
+              { name: 'deploy', description: 'Deploy to production' },
+              { name: 'rollback', description: 'Roll back the last deploy' },
+              { name: 'model', description: 'Switch active model' },
+            ],
+          },
+        });
+        // 收尾这一轮：不发 result 的话发送钮停在 stop 态，后续断言得先等 20s 超时窗。
+        // 真 server 侧 slash_commands 与回合是两条独立的线，这里补 result 纯粹是让夹具可用。
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_cmds_changed', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       commands: ['test:question', 'test:question-multi', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);

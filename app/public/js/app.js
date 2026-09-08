@@ -2010,6 +2010,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
+  // slash 命令列表的落地点。两条来源共用：init（真 init / 服务端按 cwd 重放的合成 init）与
+  // slash_commands（CLI 中途发现新 skill 的全量推送）。两处各写一遍迟早漂，故收在这里。
+  // 空数组是有效值——REPLACE 语义下「命令被删光」也要让补全列表跟着空掉。
+  function applySlashCommands(list) {
+    if (!Array.isArray(list)) return;
+    window.availableSkills = list;
+    try { localStorage.setItem('slash_commands', JSON.stringify(list)); } catch { /* quota / 隐私模式 */ }
+  }
+
   let deviceApprovedHideTimer = null; // approved 的淡出隐藏是延迟执行；若 150ms 内又来一个 pending 须作废，否则会把重新弹出的弹窗悄悄关掉
   const handle = {
     device_status(p) {
@@ -2083,10 +2092,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 此处不再合成覆盖连接状态
       // slashCommands：真 init / 服务端按 cwd 重放都会带；空数组也接受（表示该 cwd 确实无命令）。
       // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
-      if (Array.isArray(p.slashCommands)) {
-        window.availableSkills = p.slashCommands;
-        try { localStorage.setItem('slash_commands', JSON.stringify(p.slashCommands)); } catch { /* quota / 隐私模式 */ }
-      }
+      applySlashCommands(p.slashCommands);
+    },
+    // CLI 中途发现新命令/skill 的全量推送（SDK 0.3.229 的 commands_changed）。
+    // 与 init 分开是因为 server 对 init 有副作用（覆盖 lastInit、算 new_activity），
+    // 而这条既不是新会话也不是用户活动——判据见 app/src/agent/agent.js 的同名分支。
+    slash_commands(p) {
+      applySlashCommands(p?.slashCommands);
     },
     // 权限档切换后即时同步（多设备一致）；server 合成事件，与 init.permissionMode 一致
     permission_mode(p) {

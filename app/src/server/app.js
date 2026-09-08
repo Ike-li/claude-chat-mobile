@@ -1661,6 +1661,14 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         saveInitCache();
       }
       else if (envelope.type === 'models') { modelsCache.set(cwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
+      // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
+      // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
+      // 只可能来自 skill 被删这种极罕见场景，而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，
+      // 两害相权取轻。前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
+      else if (envelope.type === 'slash_commands') {
+        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
+        if (cmds) { slashCommandsCache.set(cwd, { slashCommands: cmds }); saveInitCache(); }
+      }
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
       else if (envelope.type === 'permission_mode') { permModeByInstance.set(id, envelope.payload?.mode); }

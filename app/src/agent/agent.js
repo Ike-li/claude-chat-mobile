@@ -2457,6 +2457,20 @@ export class AgentSession {
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();
+        } else if (msg.subtype === 'commands_changed') {
+          // SDK 0.3.229 起：CLI 中途发现新命令/skill（如 agent 走进带 project skill 的子目录）时的
+          // **全量**推送。上游契约：`supportedCommands()` 只在 initialize 捕获一次、拿不到中途变化，
+          // 这条消息是唯一的增量来源；语义是 REPLACE 整份列表，不是增量合并。
+          //
+          // 【为什么自成一型而不并进 init】server 对 init 有两个副作用，这条一个都不该触发：
+          // 覆盖全局 lastInit（会把 model/cwd 冲掉）、映射成 latchEventType='new_activity'
+          // （清 error latch、动未读角标）。既有那条「只带 slashCommands 的合成 init」是服务端
+          // 直接 socket.emit、绕过 onEvent 的，不走这条路。判据与红侧证据见
+          // tests/unit/agent-system-subtypes.test.mjs 的同名 describe。
+          //
+          // 原样透传不在此归一：init 路径也是原样透传，归一集中在 server 的 normalizeSlashCommands
+          // 一处——两条路各归一一次，迟早漂。
+          this.emit('slash_commands', { slashCommands: msg.commands ?? [] });
         } else if (msg.subtype === 'status' && msg.status === 'compacting' && !msg.compact_error) {
           // !compact_error：万一同一条消息既报 compacting 又带失败原因，别把失败截胡成「正在压缩…」
           this.emit('system', { message: '正在压缩会话上下文…' });
