@@ -344,17 +344,26 @@ function clearCtxInFlight(agent, gen) {
 
 // 这一发该要 full 还是 summary（SDK 0.3.257+ 的 getContextUsage detail）。纯函数，供接线 + 单测。
 //
-// 'full' 按类别打 count_tokens（system/tools/MCP/skills/memory），就是本文件 :169 说的「冷路径数秒」
-// ——而超时闸是 1.5s，所以冷路径**必然超时**、回落陈旧值。'summary' 从上次响应的 usage + 本地估算
-// 作答，不打那几发。
+// 2026-09-08 真机实测（CLI 2.1.263 / SDK 0.3.263，同一会话连打三发）：
+//   full 冷    7592ms   maxTokens=1000000  totalTokens=14504  percentage=1  categories=8
+//   summary      20ms   maxTokens=1000000  totalTokens=17686  percentage=2  categories=8
+//   full 热     647ms   （CLI 侧已缓存，与冷 full 同值）
 //
-// 分档判据是「窗口知不知道」，不是「第几次拉」：maxTokens 只有 full 给，但它对同一模型是常量，
-// 拿到一次就够；之后每次要的只是 percentage/totalTokens，那正是 summary 便宜提供的。
-// 换模型时 readCachedCtxWindow 因 model 指纹不匹配返回 null，自动退回 full 重取窗口。
-// 安全性来自 adoptContextUsage 三个字段各自独立采纳：summary 不带 maxTokens 只是不刷新窗口，
-// 不会把已缓存的抹掉，ctx% 照显。
+// 分档方向由这两条实测定死，别再按直觉改回来：
+//  ① summary **照样带 maxTokens**。此前按「只有 full 给窗口」写过反向分档，是错的。
+//  ② full 的冷路径 7.6s 远超本文件的 1500ms 超时闸（:169 那句「冷路径数秒」是保守说法）——
+//     冷路径发 full 等于**必然超时、回落陈旧值**，用户打开页面看不到 ctx%。
+// 所以冷用 summary（先保「有值」），热才用 full（追「准确」）。
+// summary 的 totalTokens 是「上次响应 usage + 本地估算」，与 full 的按类别 count_tokens 差约 22%。
+//
+// 端到端实测（同日，用本仓这条真代码 + 生产的 1500ms 闸）：冷路径 **43ms** 拿到完整值；
+// 同一时刻拿 full 打对照 **1502ms 超时**——这就是反转前用户看不到 ctx% 的原因。
+// ⚠️ 但热路径的 full **不保证在闸内**：紧接着那一发实测 1501ms 仍超时（上面表里的 647ms 是
+// 第三发、CLI 侧更热）。这不是缺陷——超时只放弃等待，RPC 仍在跑，迟到成功由 fetchAndAdopt 的
+// rpc.then 写回缓存并 onAdopted 补刷（见该函数）。也就是说热路径的精度是「稍后必到」而非「立即」。
+// 换模型时 readCachedCtxWindow 因 model 指纹失配返回 null，等于又一次冷启动，自动退回 summary。
 export function contextUsageDetail(agent, model) {
-  return readCachedCtxWindow(agent, model) ? 'summary' : 'full';
+  return readCachedCtxWindow(agent, model) ? 'full' : 'summary';
 }
 
 // 真正发 RPC。超时只放弃等待，CLI 侧仍在跑；迟到成功由 then 写入缓存并 onAdopted 补刷。
