@@ -437,7 +437,81 @@ test.describe('user:setPermissionMode — 档位校验', () => {
   });
 });
 
+// ack 形状守卫（2026-09-07 试点）。守的是 ack 的【键集】，不是键值。
+//
+// 为什么守键集：逐字段断言的默认答案是「绿」——它要求每个改 ack 的人都记得回来补一条断言，而
+// 「记得」正是 2026-09-06 失败的那一步：terminalWaiting 在 annotateTerminalStates 里算出来了却没上
+// session:list 的 ack，npm run check 全链 11 道门禁无一变红，E2E 三条相关用例照样全绿（E2E 打的
+// tests/e2e/mock/server.js 是零 import app/src 的独立实现，它自己另算了一份），缺陷只在「等人的那个
+// 终端恰好在分页窗口外」时现形。键集断言把默认答案反转成「红」：动了 ack 就必须回到这张表，例外要
+// 显式写进 optional。与「跑测试用白名单而不是危险命令清单」是同一个反转（见 CLAUDE.md 那节）。
+//
+// 为什么在这一层：ack 在 app/src/server/app.js 这个组装根里拼出来，单测够不到（要起真 server）；
+// E2E 也够不到（mock 是平行实现）。本文件跑在 CI 的 test:integration（.github/workflows/test.yml:80）。
+//
+// 判据双向：required 缺一即红（有人删了字段），出现 required ∪ optional 之外的键也红（有人加了字段
+// 没登记）。声明是【按分支】的——同一个事件的成功支与失败支键集不同，各自登记。
+test.describe('ack 形状守卫 —— 守键集而非键值', () => {
+  // task:stop 的 ack 是 agent.stopTask 的返回值（disposed / 无 taskId / control_request 10s 超时都回
+  // false）。前端据 `res?.ok === true` 分流：真时打灰色「已请求停止后台任务…」，假时打橙色
+  // 「停止请求未生效：任务可能已结束」。E2E 里这条橙色分支从未被走到过——mock 的 task:stop handler
+  // 签名只有 payload、连 ack 参数都没有，从不回调（tests/e2e/mock/server.js）。
+  test('task:stop ack 形状 = { ok }', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    // 无实例：routeInstance(undefined)?.stopTask() → undefined → ack({ ok: false })。
+    // 这里只问键集，不问值——空 server 下 ok 必然是 false，问值等于什么都没问。
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout')), 3000);
+      s.emit('task:stop', {}, res => { clearTimeout(t); resolve(res); });
+    });
+    assertAckShape(ack, { required: ['ok'] }, 'task:stop');
+    assert.equal(typeof ack.ok, 'boolean', 'ok 必须是布尔——前端判的是 `res?.ok === true`，非布尔会静默落到「未生效」支');
+    s.disconnect();
+  });
+
+  // session:history 的失败支：sessionId 非字符串、或 jsonl 不存在/被删/改名/读坏时回
+  // { messages: [], error }。前端据 error 在消息区打灰行「历史消息加载失败」；漏发时 loading 卡已被
+  // hideLoadingCard() 抹掉，消息区【完全空白】，连失败提示都没有。mock 的 session:history handler
+  // 有 17 处 callback，无一带 error。
+  //
+  // 【已知未覆盖】成功支 { messages } 没在这里守：驱动它要往 ~/.claude/projects/<编码 workdir>/ 写
+  // 真实 jsonl（SDK 的会话 API 路径写死在那，无法重定向到 tmpDir）。session-delete.test.mjs 有这么做的
+  // 先例并附了三条风险控制，但本文件目前不碰用户家目录，不为一条断言破这个性质。要补时照那份先例走。
+  test('session:history 失败支 ack 形状 = { messages, error }', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout')), 3000);
+      s.emit('session:history', { sessionId: 'no-such-session-for-shape-guard', cwd: tmpDir },
+        res => { clearTimeout(t); resolve(res); });
+    });
+    assertAckShape(ack, { required: ['messages', 'error'] }, 'session:history（失败支）');
+    assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历');
+    s.disconnect();
+  });
+});
+
 // ---- helpers ----
+function assertAckShape(ack, { required = [], optional = [] }, label) {
+  assert.equal(typeof ack, 'object', `${label}: ack 不是对象`);
+  const allowed = new Set([...required, ...optional]);
+  const missing = required.filter(k => !(k in ack));
+  const unexpected = Object.keys(ack).filter(k => !allowed.has(k)).sort();
+  assert.deepEqual(missing, [],
+    `${label}: ack 少了已登记字段 —— 前端消费它的那条分支会静默退化（缺: ${missing.join(', ')}）`);
+  assert.deepEqual(unexpected, [],
+    `${label}: ack 出现未登记字段 —— 新增字段必须同时登记进这张表，否则 mock 与真 server 就此分叉（多: ${unexpected.join(', ')}）`);
+}
+
 function httpGet(url) {
   return new Promise((resolve, reject) => {
     request(url, res => {
