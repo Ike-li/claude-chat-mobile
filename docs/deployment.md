@@ -225,7 +225,7 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
-| 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（配置文件里的 `ANTHROPIC_*` 启动期被剥除，只能来自 shell） |
+| 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在工作区 `.claude/settings.local.json` 的 `env` 块写 `"ANTHROPIC_MODEL": "<带后缀名>"`（或在启动 shell `export` 后重启），或 web 端 `/model <带后缀名>` 切换（本项目配置文件里的 `ANTHROPIC_*` 启动期被剥除） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `app/src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
 

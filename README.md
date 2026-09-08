@@ -111,7 +111,7 @@ Claude Chat Mobile Server
 * 已登录 Claude 官方账号，或已经配置可正常工作的第三方网关；
 * 至少一个准备让 Claude Code 操作的项目目录。
 
-> ⚠️ 用第三方网关时有一条容易踩的规则：网关的 `ANTHROPIC_*` 变量**必须来自启动 server 的那个 shell**，写进 `ccm.config.json` 会在启动时被剥除——启动日志会逐个打印「已忽略」告警，`doctor` 也会提示。网关用户请走 headless 终端入口，细节见[首次使用指南 · 官方订阅与第三方网关](docs/getting-started.md#官方订阅与第三方网关)。
+> ⚠️ 用第三方网关时有一条容易踩的规则：网关的 `ANTHROPIC_*` 要放在 `claude` CLI 自己的通道里——工作区 `.claude/settings.local.json`（或 `~/.claude/settings.json`）的 `env` 块，或启动 server 的那个 shell；写进 `ccm.config.json` 会在启动时被剥除——启动日志会逐个打印「已忽略」告警，`doctor` 也会提示。走 settings 文件时桌面控制台入口同样生效，只有 shell export 才必须走 headless 终端入口，细节见[首次使用指南 · 官方订阅与第三方网关](docs/getting-started.md#官方订阅与第三方网关)。
 
 平台支持：
 

@@ -33,9 +33,25 @@ claude auth status
 ### 官方订阅与第三方网关
 
 - 官方订阅：确保启动 server 的本机账号已经登录 `claude`，无需再配 API key。
-- 第三方网关：先在**将要启动 server 的 shell** 中导出网关要求的 `ANTHROPIC_*`，再启动项目。
-- 不要把 `ANTHROPIC_*` 写进项目配置文件：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
-- **网关用户请用 headless 终端入口（`npm start`）**：`ANTHROPIC_*` 只从启动进程的环境继承。macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量——网关配置在那条入口下不生效。
+- 第三方网关：网关配置属于 `claude` CLI 自己，不属于本项目。本项目拉起的每个会话都按工作区目录加载 CLI 的 user / project / local 三层 settings，所以**终端里怎么配，手机上就怎么生效**。两条正规通道：
+  - **CLI settings 文件的 `env` 块（推荐）**：写在工作区的 `.claude/settings.local.json`（只对这一个工作区、不进 git），或 `~/.claude/settings.json`（所有目录的基底）。例如：
+
+    ```json
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://gw.example.com",
+        "ANTHROPIC_AUTH_TOKEN": "……",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "<网关认的模型名>",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "<网关认的模型名>"
+      }
+    }
+    ```
+
+    它由 CLI 按工作区目录从文件读取，不依赖启动 server 的进程环境，**macOS 桌面控制台拉起的常驻服务同样生效**。手建的 `settings.local.json` 要自己加进 `.gitignore`（CLI 只在自己首次写入时才会把它加进全局 git excludes）；`env` 块在目录被 CLI 信任后生效，终端里进过一次该目录即可。
+  - **启动 shell 的 `export`**：先在**将要启动 server 的 shell** 里导出 `ANTHROPIC_*`，再 `npm start`。只有这条路才要求 headless 终端入口——macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量。两条路同时存在时，网关键以 settings 文件为准（本项目 2026-07-30 实测）。
+- 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
+- worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
+- `doctor` 的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架。
 - 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#为什么需要它)。
 
 ## 2. 获取代码与安装依赖
@@ -496,7 +512,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
-| 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
+| 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |
 | 启动日志刷「已读作数字/布尔」的类型转换提示 | `ccm.config.json` 里把数字或开关写成了字符串；改成 `3000` / `true` 而不是 `"3000"` / `"true"` |

@@ -175,10 +175,10 @@ export function resolveConfigValues({ fileValues = {}, shellEnv = {}, source = '
 
   for (const [key, raw] of Object.entries(fileValues)) {
     if (key === VERSION_KEY) continue;
-    // 模型网关配置只认真实 shell export（env-schema.js:14-16 的硬边界）。写进文件是静默失效，
+    // 模型网关配置只认 CLI 自己的通道——启动 shell export 或 .claude/settings*.json 的 env 块（env-schema.js:14-16 的硬边界）。写进本项目文件是静默失效，
     // 剥除并明说比让用户以为配好了强。
     if (key.startsWith('ANTHROPIC_')) {
-      warnings.push(`已忽略配置文件里的 ${key}：ANTHROPIC_* 只能从启动 shell export`);
+      warnings.push(`已忽略配置文件里的 ${key}：ANTHROPIC_* 只认 CLI 自己的通道（启动 shell export，或 .claude/settings*.json 的 env 块）`);
       continue;
     }
     if (isPassthrough(key)) {
@@ -418,7 +418,7 @@ export function migrateEnvValues(envValues = {}, { workdirsEntries } = {}) {
   for (const [key, raw] of Object.entries(envValues)) {
     if (raw === '' || raw == null) continue; // 空串 ≡ 未设置，不迁成空值
     if (key.startsWith('ANTHROPIC_')) {
-      warnings.push(`${key} 未迁移：ANTHROPIC_* 只认真实 shell export，写进配置文件是静默失效`);
+      warnings.push(`${key} 未迁移：ANTHROPIC_* 只认 CLI 自己的通道（启动 shell export，或 .claude/settings*.json 的 env 块），写进配置文件是静默失效`);
       continue;
     }
     if (isPassthrough(key)) {

@@ -11,8 +11,8 @@
 // scripts/setup.js:85 的 MESSAGES 双语字典。**别好心把这些搬进 EN_DICT。**
 //
 // ## 三条硬边界（不是「暂未支持」，是不能做）
-//   1. ANTHROPIC_* —— src/ops/config.js:21,36-42 启动期无条件剥除，只认真实 shell export。
-//      写进 .env 是静默失效，做成表单等于骗人。只读诊断 + 引导改 shell profile。
+//   1. ANTHROPIC_* —— src/ops/config.js:21,36-42 启动期无条件剥除，只认 CLI 自己的通道（启动 shell export，
+//      或 .claude/settings*.json 的 env 块）。写进 .env 是静默失效，做成表单等于骗人。只读诊断 + 引导改那两处。
 //   2. AUTH_TOKEN —— 只读。改完到重启之间 .env 与运行中进程不一致；重启后所有已保存 token 的
 //      设备（含正在操作的这台手机）都要重新输入，极易把自己锁在门外。
 //   3. CCM_DATA_DIR —— 只读。改它等于把全部控制面状态（会话/设备信任/审批/审计）孤儿化，
@@ -319,8 +319,8 @@ export const READONLY_DIAGNOSTICS = [
   {
     key: 'ANTHROPIC_*',
     label: t('模型网关配置', 'Model gateway config'),
-    help: t('只能从启动 shell export —— .env 里的会在启动时被剥除。改法：写进 shell profile 后重启服务。',
-      'Must come from the launching shell; values in .env are stripped at startup.'),
+    help: t('不从本项目配置文件读——.env / ccm.config.json 里的会在启动时被剥除。改法：写进工作区 .claude/settings.local.json（或 ~/.claude/settings.json）的 env 块，或写进启动 shell 的 profile 后重启服务。',
+      "Not read from this project's config files; values in .env / ccm.config.json are stripped at startup. Put them in the env block of the workspace's .claude/settings.local.json (or ~/.claude/settings.json), or export them in the launching shell and restart."),
   },
   {
     key: 'CCM_DATA_DIR',
@@ -596,7 +596,7 @@ export function validateEnvChanges(changes, d) {
       results.push({
         key,
         level: 'error',
-        message: '模型网关配置只能从启动 shell export —— 写进 .env 会在启动期被剥除，等于静默失效',
+        message: '模型网关配置不从本项目配置文件读——写进 .env / ccm.config.json 会在启动期被剥除，等于静默失效；请写进 CLI settings 文件的 env 块或启动 shell',
       });
       continue;
     }

@@ -42,15 +42,25 @@ The project does not bundle, install, or sign in to Claude for you.
 ### Claude subscriptions and third-party gateways
 
 - Claude subscription: make sure the local account that will start the server is already signed in to `claude`; no extra API key is needed.
-- Third-party gateway: export the required `ANTHROPIC_*` values in the **shell that will start the server**, then start the project.
-- Do not put `ANTHROPIC_*` in the project config file. Startup strips those values so a project file
-  cannot override the CLI/provider environment. The stripping is not silent — the startup log prints
-  `[config] 已忽略配置文件里的 ANTHROPIC_…` for each one, and `doctor` flags it too.
-- **Gateway users must use the headless terminal entrypoint (`npm start`).** `ANTHROPIC_*` is
-  inherited only from the environment of the process that starts the server. The persistent service
-  launched by the macOS desktop console runs in a clean GUI-lineage environment that does not contain
-  what you exported in your terminal — **a gateway configuration simply does not take effect on that
-  entrypoint**.
+- Third-party gateway: gateway configuration belongs to the `claude` CLI, not to this project. Every session this project starts loads the CLI's user / project / local settings for the workspace directory, so **whatever works in your terminal works on your phone**. Two supported channels:
+  - **The `env` block of a CLI settings file (recommended)**: put it in the workspace's `.claude/settings.local.json` (this one workspace only, never committed) or in `~/.claude/settings.json` (the base for every directory). For example:
+
+    ```json
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://gw.example.com",
+        "ANTHROPIC_AUTH_TOKEN": "…",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model name your gateway accepts>",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model name your gateway accepts>"
+      }
+    }
+    ```
+
+    The CLI reads it from the file for the workspace directory, independent of the environment of the process that started the server, so **it also takes effect under the persistent service launched by the macOS desktop console**. If you create `settings.local.json` by hand, add it to `.gitignore` yourself (the CLI only adds it to your global git excludes the first time it writes the file itself); the `env` block applies once the CLI trusts the directory, which happens the first time you open it in a terminal.
+  - **`export` in the startup shell**: export `ANTHROPIC_*` in the **shell that will start the server**, then `npm start`. Only this path requires the headless terminal entrypoint — the persistent service launched by the macOS desktop console runs in a clean GUI-lineage environment that does not contain what you exported in your terminal. When both are present, gateway keys from the settings file win (verified in this project on 2026-07-30).
+- Do not put `ANTHROPIC_*` in this project's config files (`ccm.config.json` / `.env`). Startup strips those values so a project file cannot override the CLI/provider environment. The stripping is not silent — the startup log prints `[config] 已忽略配置文件里的 ANTHROPIC_…` for each one, and `doctor` flags it too.
+- Worktree sessions: inside a worktree the CLI reads the `settings.local.json` at the **main checkout's** root (the official docs say so); this project neutralizes the gateway keys that exist only in the main checkout so they cannot leak into the worktree. To use a gateway in a worktree, configure it in the worktree's own `.claude/settings.local.json`, or simply in `~/.claude/settings.json`.
+- The `doctor` MODEL_SETTINGS check reads these files per workspace and reports when `model` and the `ANTHROPIC_DEFAULT_*_MODEL` tier mapping conflict.
 
 ## 2. Get the code and install dependencies
 
@@ -502,7 +512,7 @@ site data and the installed PWA must be cleared manually.
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
-| A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
+| A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
 | Startup logs "read as number/boolean" conversion notes | `ccm.config.json` has numbers or toggles written as strings; use `3000` / `true`, not `"3000"` / `"true"` |

@@ -417,11 +417,11 @@ function checkAnthropicEnv() {
   if (offenders.length) {
     warn(NAME, bi(
       `${offenders.join(' / ')} 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n`
-      + '  模型/网关/凭据只能在启动 shell 里 export，不经配置文件设置（终端等价性）。\n'
-      + '  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。',
+      + '  模型/网关/凭据只认 CLI 自己的通道：工作区 .claude/settings.local.json（或 ~/.claude/settings.json）的 env 块，或启动 shell 的 export；不经本项目配置文件设置（终端等价性）。\n'
+      + '  若 web 端模型列表与终端不一致，检查那两处的 ANTHROPIC_* 是否一致。',
       `${offenders.join(' / ')} contains ANTHROPIC_* variables → they are stripped at startup.\n`
-      + '  Model / gateway / credentials must be exported in the launching shell, not set in a config file (terminal equivalence).\n'
-      + "  If the web model list differs from your terminal, check the launching shell's ANTHROPIC_* variables."));
+      + "  Model / gateway / credentials belong in the CLI's own channels: the env block of the workspace's .claude/settings.local.json (or ~/.claude/settings.json), or an export in the launching shell — never this project's config files (terminal equivalence).\n"
+      + '  If the web model list differs from your terminal, compare the ANTHROPIC_* values in those two places.'));
     return;
   }
   ok(NAME, bi(
