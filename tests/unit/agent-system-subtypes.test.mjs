@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { getSessionLogs } from '../../app/src/agent/interaction-log.js';
 
 const notices = events => events.filter(e => e.type === 'system' && e.payload?.kind === 'notice');
 
@@ -125,8 +126,13 @@ test.describe('map() — system 子类型的自由文本打通', () => {
     s.dispose();
   });
 
+  // 2026-09-08 更正：本条原先过滤 `events` 里 type==='session_log' 的条目，而 addSessionLog
+  // **只落交互日志、不 emit 事件**——那个过滤恒为空数组，断言恒真，是一条永不变红的假绿。
+  // 改读 getSessionLogs；logKey 在测试里固定为 inst:test、日志跨用例累积，故比较增量而非绝对条数。
   test('已打通的子类型不再落「未映射」交互日志', () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
+    const count = () => getSessionLogs(s.logKey()).filter(e => String(e.text || '').includes('未映射')).length;
+    const before = count();
     for (const msg of [
       { type: 'system', subtype: 'informational', content: 'a' },
       { type: 'system', subtype: 'mirror_error', error: 'b' },
@@ -134,9 +140,7 @@ test.describe('map() — system 子类型的自由文本打通', () => {
       { type: 'system', subtype: 'model_refusal_fallback', content: 'd' },
     ]) s.map(msg);
 
-    const logged = events.filter(e => e.type === 'session_log'
-      && String(e.payload?.text || '').includes('未映射'));
-    assert.equal(logged.length, 0, `不应再有未映射日志：${JSON.stringify(logged)}`);
+    assert.equal(count() - before, 0, '这四种都该被各自的分支接走，一条未映射日志都不该多');
     s.dispose();
   });
 
@@ -451,6 +455,69 @@ test.describe('map() — commands_changed（slash 命令中途变化）', () => 
     s.map({ type: 'system', subtype: 'commands_changed' });
 
     assert.deepEqual(events.find(e => e.type === 'slash_commands').payload.slashCommands, []);
+    s.dispose();
+  });
+});
+
+// status 心跳（SDKStatus = 'compacting' | 'requesting' | null）。
+// 真机实测：一个会话里 `未映射 system 子类型: status` 刷了 198 次——是所有未映射消息之和的 5 倍。
+// 探针录制确认它的实际形态就是 `{"type":"system","subtype":"status","status":"requesting"}`，
+// 除 status 外无任何字段，语义 = 正在向 API 发请求。本仓的忙碌判据是 pendingTurns（更权威），
+// 这条纯属进度心跳，符合上面 hook_*/thinking_tokens 那条「已知噪声、显式吞」的判据，只是漏登记了。
+//
+// 【危害不止是噪音】那行兜底日志存在的意义是「出现了没见过的子类型，去看看」。被 198 条 status
+// 淹掉之后它就失去了报警价值——同一份日志里 vcs_state_changed 只有 2 条，正是这么被埋掉的。
+test.describe('map() — status 心跳静默吞（止住兜底日志刷屏）', () => {
+  // ★ 断言必须读 getSessionLogs，不能过滤 events：addSessionLog 只落交互日志、**不 emit
+  // session_log 事件**（2026-09-08 实测：status 明明打印了「未映射」，events 却是空数组）。
+  // 按 events 写出来的断言恒为 0，是永不变红的假绿。logKey 在测试里固定为 inst:test、日志跨用例
+  // 累积，故用「调用前后的增量」而不是绝对条数。
+  const unmappedCount = s => getSessionLogs(s.logKey())
+    .filter(e => String(e.text || '').includes('未映射 system 子类型: status')).length;
+
+  test("status:'requesting' 不落「未映射」日志", () => {
+    const { s } = makeSession();
+    const before = unmappedCount(s);
+    s.map({ type: 'system', subtype: 'status', status: 'requesting' });
+    assert.equal(unmappedCount(s) - before, 0, '每次 API 请求都发一条，落日志就是刷屏');
+    s.dispose();
+  });
+
+  test('status 为 null / 缺失时同样吞（契约里 null 是合法值）', () => {
+    for (const st of [null, undefined]) {
+      const { s } = makeSession();
+      const before = unmappedCount(s);
+      s.map({ type: 'system', subtype: 'status', status: st });
+      assert.equal(unmappedCount(s) - before, 0, `status=${String(st)} 也该吞`);
+      s.dispose();
+    }
+  });
+
+  // ★ 这一条是整组的关键：吞得太宽就会把「上游加了新状态」这个报警一起吞掉。
+  // 判据必须按【具体取值】白名单，不能按 subtype==='status' 一刀切。
+  test('上游若新增 status 取值 → 仍落「未映射」，报警不被连坐吞掉', () => {
+    const { s } = makeSession();
+    const before = unmappedCount(s);
+    s.map({ type: 'system', subtype: 'status', status: 'some_future_state' });
+    assert.equal(unmappedCount(s) - before, 1, '按 subtype 一刀切会让新状态永远无人知晓');
+    s.dispose();
+  });
+
+  test('compacting 仍上屏「正在压缩」（不回归）', () => {
+    const { s, events } = makeSession();
+    const before = unmappedCount(s);
+    s.map({ type: 'system', subtype: 'status', status: 'compacting' });
+    assert.ok(events.some(e => e.type === 'system' && String(e.payload?.message || '').includes('正在压缩')));
+    assert.equal(unmappedCount(s) - before, 0);
+    s.dispose();
+  });
+
+  test('compact_error 仍走 notice（不回归）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'status', status: null, compact_error: '压缩失败：上下文过大' });
+    const [n] = notices(events);
+    assert.ok(n, '压缩失败必须上屏');
+    assert.match(n.payload.message, /压缩失败/);
     s.dispose();
   });
 });

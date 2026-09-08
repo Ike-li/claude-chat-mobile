@@ -2614,12 +2614,23 @@ export class AgentSession {
             // 正文已完整上屏，这条只负责把「失败」这个判定摆出来（横条配色/告警走 notice 通道）。
             if (out.isError) this.emitNotice('本地命令执行失败（详见上方输出）', 'warning');
           }
-        } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens')) {
+        } else if (
+          (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens'))
+          // status 的取值白名单（SDKStatus = 'compacting' | 'requesting' | null）。compacting 与
+          // compact_error 已被上面两条分支接走，落到这里的只剩纯心跳。**按取值列举、不按 subtype
+          // 一刀切**：写成 `subtype === 'status'` 的话，上游哪天给 SDKStatus 加个新值也会被一起吞掉，
+          // 而下面那条兜底日志的全部意义正是「出现没见过的东西时喊一声」。
+          || (msg.subtype === 'status' && (msg.status === 'requesting' || msg.status === null || msg.status === undefined))
+        ) {
           // 已知生命周期/进度噪声——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
           // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，
           // 这里是我们已认出并有意丢弃。需观察原始投递时用 DEBUG_SDK_MESSAGES=1 看 [sdk-msg] 裸流。
           //   · hook_*（hook_started/hook_progress/hook_response，后者高频）：SessionStart 等钩子生命周期
           //   · thinking_tokens：推理 token 计数心跳（每条 +1~3，单轮几十上百条，纯进度无展示价值）
+          //   · status:'requesting'（2026-09-08 真机补登）：每次向 API 发请求都来一条，实测单会话
+          //     **198 条**——是当时所有未映射消息之和的 5 倍。忙碌与否本仓自有 pendingTurns 这个更
+          //     权威的判据，这条纯进度无展示价值。它此前漏登记，把兜底日志淹成了噪音：同一份日志里
+          //     vcs_state_changed 只有 2 条，就是这么被埋掉、直到逐类统计才浮出来的。
           // api_retry 已上提到独立分支（有展示价值）。若日后某个子类型有展示价值，在此分支之上单独加 else if。
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
