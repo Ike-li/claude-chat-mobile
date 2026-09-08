@@ -26,7 +26,7 @@
 # 打死进程变回可控的等不到响应）。
 # CCM_FAKE_CLAUDE_MODE 置位时改走可驱动的 Node 实现（应答 initialize、吐 system/init，
 # turn 档还会吐 result 让回合收尾）。不置位时【一个字节都不变】走下面的默认分支——
-# 5 个 S2 文件与 21 个集成测试文件都建在「stub 永不产出、实例恒 busy」这个前提上，
+# 8 个 S2 文件与 21 个集成测试文件都建在「stub 永不产出、实例恒 busy」这个前提上，
 # 默认行为一改就会打穿它们（socket-lifecycle 的「在途轮仍占着槽」、health-busy 的
 # 「busy=true」都是直接断言这个前提的）。所以新能力只能是显式 opt-in。
 case "$1" in

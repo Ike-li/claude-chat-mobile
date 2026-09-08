@@ -53,7 +53,7 @@ cd claude-chat-mobile-*/
 npm install --omit=dev
 ```
 
-The tarball is about 1.4 MB, cut from the release tag: the test tree, the Docker test environment, and the maintainer gates are left out, while the server, the setup wizard, the preflight checks, device approval, the desktop app, and both CLI bridges are all kept.
+The tarball is about 1.5 MB, cut from the release tag: the test tree, the Docker test environment, and the maintainer gates are left out, while the server, the setup wizard, the preflight checks, device approval, the desktop app, and both CLI bridges are all kept.
 
 `package.json` is trimmed as well — it keeps only the commands that actually run inside the package, and `devDependencies` is dropped. So whatever `npm run` lists is what works; you never type a command only to find its file missing. Use option B when you need `npm test` / `npm run check` / `npm run lint`.
 

@@ -161,7 +161,7 @@ npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）
-node scripts/config.js         # headless 配置 CLI：get|set|unset|check|migrate|schema；secret 明文须显式 --reveal
+node scripts/config.js         # headless 配置 CLI：init|get|set|unset|check|migrate|schema；secret 明文须显式 --reveal
 node scripts/doctor.js         # 启动自检（鉴权/CLI 路径/工作区/端口/两个桥/配置/公网暴露面自洽性…）。
                                # 跑一次看输出，别背清单。--env=prod.env 指定 .env
 

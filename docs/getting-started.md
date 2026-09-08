@@ -50,7 +50,7 @@ cd claude-chat-mobile-*/
 npm install --omit=dev
 ```
 
-分发包约 1.4 MB，是从发布 tag 裁剪出来的：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
+分发包约 1.5 MB，是从发布 tag 裁剪出来的：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
 
 `package.json` 也一并裁过——只留下在包内真能跑的命令，`devDependencies` 一并删除。所以 `npm run` 列出什么就能跑什么，不会出现「敲下去才发现文件不在」。需要 `npm test` / `npm run check` / `npm run lint` 就用方式 B。
 

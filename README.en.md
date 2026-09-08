@@ -109,7 +109,7 @@ You need:
 * a signed-in Claude account, or a third-party gateway that already works;
 * at least one project directory you are willing to let Claude Code operate on.
 
-> ⚠️ One rule that is easy to miss with third-party gateways: the gateway's `ANTHROPIC_*` variables **must come from the shell that starts the server**. Values written into `ccm.config.json` are stripped at startup — the startup log prints an "ignored" warning for each one, and `doctor` flags it too. Gateway users should use the headless terminal entrypoint; see the [getting-started guide](docs/getting-started.md).
+> ⚠️ One rule that is easy to miss with third-party gateways: the gateway's `ANTHROPIC_*` variables **must come from the shell that starts the server**. Values written into `ccm.config.json` are stripped at startup — the startup log prints an "ignored" warning for each one, and `doctor` flags it too. Gateway users should use the headless terminal entrypoint; see the [getting-started guide](docs/getting-started.en.md#claude-subscriptions-and-third-party-gateways).
 
 Platform support:
 
@@ -126,7 +126,7 @@ Claude Chat Mobile **does not include Claude Code, and will not install or sign 
 
 If Claude Code already runs on your computer, get the code either way.
 
-**Just want to run it** — download the distribution tarball (~1.4 MB, runtime code only):
+**Just want to run it** — download the distribution tarball (~1.5 MB, runtime code only):
 
 ```bash
 curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz

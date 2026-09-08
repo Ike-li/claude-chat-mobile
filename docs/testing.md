@@ -142,7 +142,8 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 
 假 CLI 有两档（`tests/fixtures/fake-claude.sh`）：不设 `CCM_FAKE_CLAUDE_MODE` 时吞 stdin、不产出任何输出；
 设了才走可驱动的 Node 实现（应答 initialize、吐 `system/init`，`turn` 档还吐 `result` 让回合收尾）。
-**默认行为是显式 opt-in 保护的**——五个 S2 文件与 21 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上。
+**默认行为是显式 opt-in 保护的**——8 个 S2 文件与 21 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
+（S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
 
 ---
 

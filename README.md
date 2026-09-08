@@ -128,7 +128,7 @@ Claude Chat Mobile **不包含 Claude Code，也不会替你安装或登录 Clau
 
 如果 Claude Code 已经可以在你的电脑上正常运行，先任选一种方式取得代码。
 
-**只想跑起来** —— 下载分发包（约 1.4 MB，只含运行所需的代码）：
+**只想跑起来** —— 下载分发包（约 1.5 MB，只含运行所需的代码）：
 
 ```bash
 curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz

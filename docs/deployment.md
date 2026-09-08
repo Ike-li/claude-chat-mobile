@@ -243,7 +243,8 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 
 ### 收窄监听面：BIND_MODE / BIND_HOST
 
-默认情况下 server 在设了 `AUTH_TOKEN` 时绑 `0.0.0.0`（同 WiFi 的手机可直连），未设时只绑 `127.0.0.1`。
+默认情况下 server 绑 `0.0.0.0`（同 WiFi 的手机可直连）。**没有「未设 token 就降级绑 loopback」这条路**——
+`resolveBindPlan` 的 token 门排在模式校验之前，缺 token 直接拒绝启动（见下方「不变量」）。
 若你打算「本机只开 loopback，公网入口完全由自己转发」（SSH `-L`、Tailscale Serve、反代等），可以显式收窄：
 
 | 配置 | 实际监听 | 适用 |
