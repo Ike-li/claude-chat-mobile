@@ -482,6 +482,84 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 
 </details>
 
+## Updating
+
+**Update it the same way you got it** — whichever option you picked in step 2 is the one to follow here.
+
+### Option A: overwrite in place (installed from the archive)
+
+Go back to the directory you originally unpacked into (the parent of `claude-chat-mobile-master/`) and re-run the same command:
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
+```
+
+**Overwriting does not touch your config or your data.** `ccm.config.json` and `data/` are both in `.gitignore`,
+and the archive is exactly what GitHub's on-the-fly `git archive` produces — it only packs files git tracks, so
+those two are not in the archive at all and `tar` has nothing to overwrite. Read positions, device approvals, the
+audit log, and uploaded attachments all stay where they are.
+
+To pin a version instead of following `master`, swap the URL for `/archive/refs/tags/vX.Y.Z.tar.gz`; it unpacks
+into `claude-chat-mobile-X.Y.Z`, which is a different directory — see "moving to a new directory" below.
+
+### Option B: `git pull` (cloned)
+
+```bash
+git pull
+npm ci --omit=dev
+```
+
+`master` only moves on release, so what you pull is the latest release.
+
+### After either one
+
+Restart the server: from the desktop menu, the "Restart" on the server row; headless, restart that `npm start`
+process. It is worth re-running the checks afterwards:
+
+```bash
+node scripts/doctor.js
+```
+
+**On macOS there is one more step**: click "Update desktop app (rebuild)" in the menu. CCM.app is a compiled
+Swift artifact and does not follow the source — without that click the menu bar still runs the old bundle.
+
+### Two things to watch out for
+
+**1. `tar` merges, it does not replace.** Files deleted upstream stay behind in your directory. That does not
+affect anything at runtime (a `.js` nobody imports is just dead code), but if you want a clean tree, unpack into
+a new directory and move `ccm.config.json` and `data/` across.
+
+**2. A new directory means reinstalling both CLI bridges.** The statusline and hooks bridges write the absolute
+path **as of install time** into `~/.claude/settings.json`, pointing at the runner in the old directory.
+Overwriting in place is fine (the path did not change, so new code takes effect on its own); after a move, the
+old path either points at stale code or does not exist — and the failure is **silent**: the status line stops
+refreshing and hook-triggered pushes stop arriving, with nothing in any error pointing here. Reinstall with:
+
+```bash
+npm run statusline:install
+npm run hooks:install
+```
+
+### Checking whether there is a new version
+
+The product never checks upstream on its own. Look yourself:
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+That does not require a local git repository (it asks the remote directly), so it works for archive installs too.
+Your local version:
+
+```bash
+node -p "require('./package.json').version"
+```
+
+Once the server is up, `versions.server` in `/health` reports the same value, while `versions.cli` and
+`versions.sdk` give your local `claude` and Agent SDK versions — the easiest post-upgrade sanity check.
+
 ## Uninstall
 
 ```bash

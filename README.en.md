@@ -174,6 +174,28 @@ Full first-run instructions — configuration, non-interactive setup, PWA, and C
 
 **→ [Getting Started guide](docs/getting-started.en.md)**
 
+## Updating
+
+Update it the same way you got it. If you installed from the **archive**, go back to the directory you unpacked it in and re-run the same `curl` to overwrite in place; if you **cloned**, `git pull` is enough (`master` only moves on release). Either way, then:
+
+```bash
+npm ci --omit=dev
+```
+
+Then restart the server. On macOS also click "Update desktop app (rebuild)" in the menu once — CCM.app is a compiled artifact and does not follow the source.
+
+> **Overwriting does not touch your config or your data.** `ccm.config.json` and `data/` (read positions, device approvals, audit log, uploaded attachments) are in `.gitignore`, and the archive is exactly what GitHub's on-the-fly `git archive` produces — so they are not in it at all.
+
+The product never checks for new versions on its own. To see whether there is one:
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+Compare it with your local `node -p "require('./package.json').version"`, or with `versions.server` in `/health` once the server is up.
+
+Updating into a fresh directory, leftover files, and whether the two CLI bridges need reinstalling: **→ [Getting Started · Updating](docs/getting-started.en.md#updating)**
+
 ## Remote access
 
 Claude Chat Mobile supports everything from LAN access to a long-lived public entry point:

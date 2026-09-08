@@ -486,6 +486,79 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 </details>
 
+## 更新
+
+**代码怎么取的，就怎么更新**——第 2 步选的哪种方式，这里就走哪一条。
+
+### 方式 A：原地覆盖（归档装的）
+
+回到当初解压的**父目录**（也就是 `claude-chat-mobile-master/` 的上一级），重跑同一条命令：
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
+```
+
+**这样覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/` 都写在 `.gitignore` 里，而归档就是
+GitHub 现场 `git archive` 的产物——它只打包 git 追踪的文件，所以这两样根本不在归档中，`tar` 也就无从
+覆盖。未读位点、设备审批记录、审计日志、上传附件都留在原处。
+
+要钉住某个版本而不是跟着 `master` 走，把 URL 换成 `/archive/refs/tags/vX.Y.Z.tar.gz`，它解压出的目录名是
+`claude-chat-mobile-X.Y.Z`——那是另一个目录，属于下面的「换目录」情形。
+
+### 方式 B：`git pull`（克隆装的）
+
+```bash
+git pull
+npm ci --omit=dev
+```
+
+`master` 只在发版时前进，所以拉到的就是最新发布。
+
+### 两者之后
+
+重启 server：桌面端点菜单里 server 那行的「重启」，headless 就重启那个 `npm start` 进程。改完建议顺手复检一次：
+
+```bash
+node scripts/doctor.js
+```
+
+**macOS 桌面端还有一步**：菜单里点「更新桌面端（重新编译）」。CCM.app 是 Swift 编译产物，不会随源码
+一起更新——不点这一下，菜单栏跑的仍是旧 bundle。
+
+### 两个需要留意的地方
+
+**一、`tar` 是合并，不是替换。** 上游删掉的文件会残留在你的目录里。对运行没有影响（没有人 import 的
+`.js` 就只是死代码），但如果想要一棵干净的树，就解压到新目录，再把 `ccm.config.json` 和 `data/` 搬过去。
+
+**二、换了目录，两个 CLI 桥要重装。** statusline 与 hooks 桥把**安装时的绝对路径**写进了
+`~/.claude/settings.json`，指向旧目录里的 runner。原地覆盖不受影响（路径没变，新代码自动生效）；换目录
+之后旧路径要么指着老代码、要么直接不存在，而失效是**静默**的——状态栏不再刷新、手机端收不到 hooks
+触发的推送，不会有任何报错指向这里。重装：
+
+```bash
+npm run statusline:install
+npm run hooks:install
+```
+
+### 怎么知道有没有新版本
+
+产品不主动检查上游版本。自己看：
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。本地版本：
+
+```bash
+node -p "require('./package.json').version"
+```
+
+server 起来之后，`/health` 的 `versions.server` 报的是同一个值，`versions.cli` 与 `versions.sdk` 则是本机
+`claude` 与 Agent SDK 的版本——升级后拿它做一次回归核对最省事。
+
 ## 卸载
 
 ```bash

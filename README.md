@@ -176,6 +176,28 @@ node scripts/device.js approve <ID>
 
 **→ [首次使用指南](docs/getting-started.md)**
 
+## 更新
+
+代码怎么取的，就怎么更新。**归档**装的，回到解压时的父目录重跑同一条 `curl`，就地覆盖；**克隆**装的，`git pull` 即可（`master` 只在发版时前进）。两者之后都是：
+
+```bash
+npm ci --omit=dev
+```
+
+然后重启 server。macOS 桌面端还要点一次菜单里的「更新桌面端（重新编译）」——CCM.app 是编译产物，不随源码更新。
+
+> **覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/`（未读位点、设备审批、审计、上传附件）都在 `.gitignore` 里，而归档就是 GitHub 现场 `git archive` 的产物，因此它们根本不在归档中。
+
+产品不会主动检查新版本。想知道有没有：
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+对比本地的 `node -p "require('./package.json').version"`，或启动后看 `/health` 里的 `versions.server`。
+
+换目录更新、残留文件、两个 CLI 桥要不要重装：**→ [首次使用指南 · 更新](docs/getting-started.md#更新)**
+
 ## 远程访问
 
 Claude Chat Mobile 支持从局域网到长期公网访问的不同方式：

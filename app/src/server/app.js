@@ -319,7 +319,10 @@ function preflight() {
     versions.sdk = JSON.parse(readFileSync(join(dirname(require.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8')).version;
   } catch { /* 非致命 */ }
   try {
-    versions.server = require('../../package.json').version;
+    // 三层向上：本文件在 app/src/server/，而 package.json 在仓库根（不随代码进 app/）。
+    // 少一层会解析到并不存在的 app/package.json，被下面的 catch 静默吞掉 —— versions.server
+    // 恒为 unknown，而它恰恰是本段头注说的「升级后回归核对」要用的那一项。
+    versions.server = require('../../../package.json').version;
   } catch { /* 非致命 */ }
   if (!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
     console.warn('⚠️  未检测到 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，将依赖 claude CLI 自身的登录态');

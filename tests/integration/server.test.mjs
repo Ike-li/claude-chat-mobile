@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as ioc } from 'socket.io-client';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,8 @@ const PORT = 3199;
 // 显式测试专用 token：不能 AUTH_TOKEN:''——config.js SH-001 会删空串再 dotenv 回填本机 .env，
 // 致 /health 401、socket 握手失败（session-delete/aborted-state 同款注释）。
 const AUTH_TOKEN = 'srvtest-token';
+// 仓库根那份 package.json —— /health 的 versions.server 必须报出同一个值。
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 let serverProc;
 let tmpDir;
 
@@ -103,6 +106,11 @@ test.describe('HTTP 端点', () => {
     assert.equal(j.status, 'ok');
     assert.ok(typeof j.timestamp === 'number');
     assert.ok(typeof j.versions === 'object');
+    // 原先只到上一行为止 —— 三个字段全是 'unknown' 也照样绿，而 versions.server 恰好从来就是
+    // 'unknown'：采集处 require('../../package.json') 少一层（app/package.json 不存在），
+    // 抛出的 MODULE_NOT_FOUND 被那里的 catch 静默吞掉。这条断言把「采集真的成功了」钉死。
+    assert.equal(j.versions.server, PKG_VERSION,
+      `versions.server 应为仓库根 package.json 的 ${PKG_VERSION}，实际 ${j.versions.server}`);
   });
 
   test('GET / → 200 + HTML（index.html）', async () => {
