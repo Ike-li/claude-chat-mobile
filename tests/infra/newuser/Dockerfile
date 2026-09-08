@@ -2,7 +2,7 @@
 #
 # 与 Dockerfile.test 的区别：那边是维护者跑测试的镜像（预装仓库依赖、fake-claude）；
 # 这边什么都不预装，只有 Node 与真 claude CLI，让容器里的装机步骤与 docs/getting-started.md
-# 逐条一致：tar xz → npm install --omit=dev → setup → start。
+# 逐条一致：tar xz → npm ci --omit=dev → setup → start。
 FROM node:22-bookworm-slim
 
 ARG CLAUDE_CODE_VERSION=latest

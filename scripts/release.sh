@@ -15,6 +15,10 @@
 #   · 推 master 后用 `git ls-remote` 复核真到位了（git push 曾静默没推上去）
 #   · trap 保证任何中途退出都还原被 bump 的 package.json（不留脏工作树）
 #   · 预检：干净工作树 / 在 dev / dev 领先 master 且可 ff / 本地与远程一致 / tag 不重复
+#
+# 分发形态：用户装机走 GitHub 对 master 的源码归档（/archive/refs/heads/master.tar.gz）。它就是 `git archive`、
+# 遵守树里 .gitattributes 的 export-ignore，所以发版不打包、不上传任何资产；master 只由本脚本 ff 前进，
+# 于是「master 归档 = 最新发布」。裁什么见 .gitattributes，不变量由 tests/unit/dist-manifest.test.mjs 钉住。
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -35,7 +39,6 @@ NOTES=""
 TAG=""            # 中途失败时的清理需要判断 tag 是否已建、是否已确认推送（下方两个标记）
 TAG_PUSHED=""
 SUCCESS=""
-DIST_DIR=""       # 分发 tarball 的临时目录（见下方"生成分发包"）
 # 任何退出（成功/失败/取消/中断）都跑：还原未提交的 bump + 删临时文件。
 # 提交之后 package.json 已 == HEAD，checkout 是无操作，故对成功路径无害。
 # 非成功退出额外收拾两处此前会留脏状态的坑：
@@ -44,8 +47,6 @@ DIST_DIR=""       # 分发 tarball 的临时目录（见下方"生成分发包"�
 cleanup() {
   git checkout -q -- package.json package-lock.json 2>/dev/null || true
   [ -n "$NOTES" ] && rm -f "$NOTES" || true
-  # safe-rm: DIST_DIR 恒来自本脚本的 mktemp -d，非空才删
-  [ -n "$DIST_DIR" ] && rm -rf "$DIST_DIR" || true
   if [ -z "$SUCCESS" ]; then
     if [ -n "$TAG" ] && [ -z "$TAG_PUSHED" ] && git rev-parse "$TAG" >/dev/null 2>&1; then
       git tag -d "$TAG" >/dev/null 2>&1 || true
@@ -166,52 +167,9 @@ if gh release view "$TAG" >/dev/null 2>&1; then
 else
   gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --latest --verify-tag
 fi
-# ── 生成并上传分发包（裁剪掉测试与维护者门禁）──────────────
-# 为什么单独传一个 asset、而不依赖 GitHub 自动附的 source code 包：asset 名固定不带版本号，
-# 于是 `releases/latest/download/claude-chat-mobile.tar.gz` 这条 URL 恒指向最新版，
-# 装机文档里那条 curl 命令才不用每次发版改。内容裁剪由 .gitattributes 的 export-ignore 决定。
-# 打包源用 "$TAG" 而不是工作树：tag 已推送、内容确定，且 tag 里已含 .gitattributes（无需 --worktree-attributes）。
-#
-# 两步走（先解包再重打），因为 package.json 需要改写：export-ignore 是文件级的、裁不掉
-# 文件内部的字段，而 package.json 天生混合——不改的话包内近一半命令指向已裁掉的文件。
-# 代价：tarball 不再是 tag 的逐字节子集（内容仍全部来自 tag，只有这一个文件被裁剪过）。
-DIST_DIR="$(mktemp -d)"
-DIST="$DIST_DIR/claude-chat-mobile.tar.gz"
-STAGE="$DIST_DIR/claude-chat-mobile-$NEW_VER"
-mkdir -p "$STAGE"
-git archive --format=tar "$TAG" | tar x -C "$STAGE"
-node scripts/dist-manifest.js --rewrite-package "$STAGE" || die "package.json 改写失败"
-# 不直接 tar czf：macOS 的 bsdtar 默认把 xattr 写成 pax 扩展头，Linux 的 GNU tar 解包时会把它们物化成 ._* 文件、
-# 逐条刷警告，用户机上 doctor 直接见红（2026-09-06 实测）。打包与自检都在 --pack 里。
-node scripts/dist-manifest.js --pack "$DIST_DIR" "claude-chat-mobile-$NEW_VER" "$DIST" || die "分发包打包失败"
-
-# 发版护栏：包里混进测试树 = 裁剪规则失效；缺 lock = 用户无法 npm ci 复现依赖。
-# 两条都在这里拦，而不是等用户下载后才发现。
-# 写成 if 而不是 `grep -q ... && die`：后者在 set -e 下，grep 未命中（正常情况）会让整条
-# 语句返回 1，直接把脚本打断在"一切正常"的路径上。
-if tar tzf "$DIST" | grep -qE "/(tests|playground)/"; then
-  die "分发包混进了测试树，检查 .gitattributes"
-fi
-tar tzf "$DIST" | grep -q "/package-lock.json$" || die "分发包缺 package-lock.json，用户无法 npm ci"
-# pax 扩展头不在条目列表里，要看解压后的原始字节；grep -a 把二进制当文本。
-if gzip -dc "$DIST" | LC_ALL=C grep -aq 'LIBARCHIVE.xattr.'; then
-  die "分发包带着 xattr 扩展头（Linux 解包会长出 ._* 文件），检查 dist-manifest.js --pack 的打包参数"
-fi
-# 改写没生效 = 用户敲 npm test/check/lint 拿到 ENOENT，等于「配置也隔离了」这句话是假的。
-node -e '
-  const pkg = require(process.argv[1]);
-  const names = Object.keys(pkg.scripts ?? {});
-  if (pkg.devDependencies) { console.error("devDependencies 未清理"); process.exit(1); }
-  const leaked = names.filter(n => /^(test|check|lint|mutate|inventory|contract|watch)/.test(n));
-  if (leaked.length) { console.error("残留不可用命令: " + leaked.join(", ")); process.exit(1); }
-  if (!names.includes("start") || !names.includes("setup")) { console.error("生产命令被误删"); process.exit(1); }
-' "$STAGE/package.json" || die "分发包的 package.json 改写结果不合格"
-say "  ✓ 分发包 $(du -h "$DIST" | cut -f1)（$(tar tzf "$DIST" | wc -l | tr -d ' ') 项）"
-gh release upload "$TAG" "$DIST" --clobber
-
 SUCCESS=1      # 全流程完成：cleanup 跳过"删 tag / 切回 dev"的失败态收拾
 
 say ""
 say "✓ 已发布 $TAG → https://github.com/$REPO/releases/tag/$TAG"
-say "  分发包：https://github.com/$REPO/releases/latest/download/claude-chat-mobile.tar.gz"
+say "  装机归档：https://github.com/$REPO/archive/refs/heads/master.tar.gz"
 say "  盯 CI：gh run watch \$(gh run list --branch master -L1 --json databaseId -q '.[0].databaseId') --exit-status"

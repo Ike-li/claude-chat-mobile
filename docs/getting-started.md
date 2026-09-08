@@ -42,27 +42,27 @@ claude auth status
 
 有两种取得代码的方式，选一种即可。
 
-### 方式 A：分发包（只想把它跑起来）
+### 方式 A：源码归档（只想把它跑起来）
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
-cd claude-chat-mobile-*/
-npm install --omit=dev
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
 ```
 
-分发包约 1.5 MB，是从发布 tag 裁剪出来的：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
+归档由 GitHub 现打（`/archive/refs/heads/master.tar.gz`），约 1.5 MB。`master` 只在发版时前进，所以它就是最新发布；要钉住某个版本，换成 `/archive/refs/tags/vX.Y.Z.tar.gz`，解压目录名会是 `claude-chat-mobile-X.Y.Z`。裁剪按仓库里 `.gitattributes` 的 `export-ignore`：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
 
-`package.json` 也一并裁过——只留下在包内真能跑的命令，`devDependencies` 一并删除。所以 `npm run` 列出什么就能跑什么，不会出现「敲下去才发现文件不在」。需要 `npm test` / `npm run check` / `npm run lint` 就用方式 B。
+`package.json` 原样保留：`npm run` 仍会列出 `test` / `check` / `lint` / `mutate` 这类命令，但它们引用的测试树和门禁不在归档里，跑不了；`devDependencies` 也还在，`--omit=dev` 会跳过它们。需要 `npm test` / `npm run check` / `npm run lint` 就用方式 B。
 
 ### 方式 B：完整仓库（要改代码或跑测试）
 
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
-npm install --omit=dev
+npm ci --omit=dev
 ```
 
-两种方式都用 `--omit=dev`：只安装运行依赖，不下载 Playwright 浏览器。要在完整仓库里跑测试，再执行一次不带该参数的 `npm install`。
+两种方式都用 `npm ci --omit=dev`：严格按 `package-lock.json` 复现发布时的依赖树、不改写 lock，且只装运行依赖、不下载 Playwright 浏览器。要在完整仓库里跑测试，再执行一次不带该参数的 `npm ci`。
 
 ## 3. 生成本地配置
 
@@ -452,7 +452,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 按顺序做，每步确认结果再进入下一步：
 1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
-2. 运行 npm install --omit=dev。
+2. 运行 npm ci --omit=dev。
 3. 先跟我确认 WORK_DIR 的绝对路径，以及是否安装 CLI hooks bridge。
    不要把整个家目录当 WORK_DIR；hooks=on 会修改 ~/.claude/settings.json。
 4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR PORT CCM_DATA_DIR

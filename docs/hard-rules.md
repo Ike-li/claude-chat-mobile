@@ -120,18 +120,19 @@
 - 日常只在 **`dev`**；不在 `master` 直接改。  
 - 发版：`dev` ff → `master` + `scripts/release.sh`。  
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
+- **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交，只由 `release.sh` ff 前进。
 
-### 4.1.1 分发形态（一棵裁剪过的源码树，不是 npm 包）
+### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
-发版时 `release.sh` 用 `git archive` 从 tag 打出 `claude-chat-mobile.tar.gz` 上传为 Release asset，装机文档里那条 `curl .../releases/latest/download/...` 指向它。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`eslint.config.js` 与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ 文档 + `desktop/`。
+装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`eslint.config.js` 与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ 文档 + `desktop/`。
 
 - **为什么门禁住在 `tests/` 下**：此前它们散在 `scripts/`，「哪些是门禁」这份名单要在 `.gitattributes`（17 行）、`tests/unit/dist-manifest.test.mjs` 的正则、`repo-inventory.js` 的规则表**三处各存一份**——加一个门禁脚本要改三个地方，漏了任何一处都没有机制会发现。收进目录后三者全部退化成目录前缀，不需要维护。
 - **两个不能移的例外**：`scripts/doc-consistency.js` 与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 是被裁掉的——移进去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`。已由 `dist-manifest.test.mjs` 单列断言保护。
 - **验证必须基于工作区 tree，不是 `HEAD`**：`git archive HEAD` 打包的是上一次提交的文件树，配上这一次的裁剪规则就是两边不同源——移动了文件而测试恒绿。见 `tests/helpers/worktree-tree.mjs`。
 
 - **不用 `npm pack`**：实测 npm 无条件排除 `package-lock.json`（写进 `files` 字段也没用），而分发包的装机路径 `npm ci --omit=dev` 靠它复现依赖树；且本包 `private: true`、无 `main`/`bin`，本就不是给人 `npm install` 的。
-- **`package.json` 是唯一被改写的文件**：`export-ignore` 是文件级的、裁不掉文件内部字段，而 `package.json` 天生混合（`start`/`setup` 与 `test`/`check`/`mutate` 同在一个 `scripts` 对象）。不改的话包内近一半命令指向已裁掉的文件，用户敲下去只拿到 ENOENT——「配置也隔离了」就成了假话。打包时按**可达性**重写（引用的文件还在吗 · 用的二进制还装得上吗 · 转发的目标还活着吗，转发链迭代到不动点），并删掉 `devDependencies`。**判据不是第二份白名单**——那必然与 `.gitattributes` 分叉且无人发现。代价：tarball 不再是 tag 的逐字节子集（内容仍全部来自 tag，只此一个文件被裁剪）。实现在 `scripts/dist-manifest.js` 的 `rewritePackageJson`，规则由 `tests/unit/dist-package-rewrite.test.mjs` 钉住。
-- **实测记录（2026-09-03）**：改写后的 `package.json` + 原始 lock 跑**真实** `npm ci --omit=dev` 通过（非 dry-run）；解压树以隔离 HOME/CCM_DATA_DIR/高位端口真启 server，`/health` 返回 `status: ok`。删 `devDependencies` 不会让 `npm ci` 失败——lock 里多出的条目被忽略。
+- **`package.json` 原样进包，不改写**：`export-ignore` 是文件级的，改写只能靠发版时自己打包再上传（2026-09-03 至 09-08 曾这么做：按可达性删 scripts、删 `devDependencies`）。改为 GitHub 归档后放弃改写，代价是包内 `npm run` 仍列出几十条跑不了的 `test`/`check`/`lint`/`mutate` 类命令、`devDependencies` 也还在；运行、`npm ci --omit=dev`、`setup`、`doctor` 都不受影响，装机文档明写这一点。换来的是删掉整条自造流水线（解包重打、macOS bsdtar 写 pax xattr 头的绕法、发版自检、资产上传）与「Release 在、资产空」的半发布态（2026-09-08 实测 v1.6.2 的 `latest/download` 就是 302→404）。**别再提议把改写做回来**：要么重开上传流水线，要么让用户机跑一个被裁掉的维护者脚本，两条都比一句文档说明贵。
+- **实测记录（2026-09-08）**：与 GitHub dev 归档逐项一致的树上跑**真实** `npm ci --omit=dev` 通过（142 包，eslint/playwright 未装）。2026-09-03 那条「改写后的 `package.json` 起 server、`/health` ok」的记录随改写一起作废。
 - **名单方向是黑名单**，与 §4.2 的白名单相反：那里漏判 = 在宿主机跑破坏性命令（致命），这里漏判 = 多带几个文件（无害），而误排除 = 用户下载到跑不起来的包（致命）。所以宁可多带。
 - 不变量由 `tests/unit/dist-manifest.test.mjs` 用 `git check-attr` 钉住（生产闭包零裁剪 · 测试树全裁 · 分发树里 doctor 的 D9 全绿 · 零 devDependency 泄漏），闭包算法在 `scripts/dist-manifest.js`。
 - 唯一跨界依赖：`scripts/doctor.js` import 门禁模块 `doc-consistency.js` 与 `collect-source-files.js`，两者必须留在包里，已单列断言保护。

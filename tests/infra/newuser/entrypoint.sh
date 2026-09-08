@@ -1,5 +1,5 @@
 #!/bin/bash
-# 新用户装机路径（与 docs/getting-started.md 同序）：解包 → npm install --omit=dev → setup → 按方案配置 → start。
+# 新用户装机路径（与 docs/getting-started.md 同序）：解包 → npm ci --omit=dev → setup → 按方案配置 → start。
 # 用法：entrypoint.sh <lan|direct|reverse-proxy|cloudflare> <宿主机端口>
 # HOME 是 named volume：重启容器时跳过已完成的步骤，行为像用户第二次开机。
 set -euo pipefail
@@ -14,13 +14,13 @@ step() { printf '\n==> [%s] %s\n' "$PROFILE" "$*"; }
 if [ ! -d "$PROJ" ]; then
   step "解包分发 tarball（等价于 curl … | tar xz）"
   tar xzf /dist/claude-chat-mobile.tar.gz -C "$HOME"
-  mv "$HOME"/claude-chat-mobile-*/ "$PROJ"
+  mv "$HOME/claude-chat-mobile-master" "$PROJ"
 fi
 cd "$PROJ"
 
 if [ ! -d node_modules ]; then
-  step "npm install --omit=dev"
-  npm install --omit=dev --no-audit --no-fund
+  step "npm ci --omit=dev"
+  npm ci --omit=dev --no-audit --no-fund
 fi
 
 step "claude CLI 凭据（宿主机 .claude/settings.docker.json 的容器副本）"

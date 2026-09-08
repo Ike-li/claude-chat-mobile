@@ -464,8 +464,9 @@ function checkConfigPermissions() {
 // D9: 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本）。机械化背书单一事实源纪律：
 // PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
 function checkDocConsistency() {
-  // 分发包（tests/ 已被裁掉）里 README 仍写着 npm run check / npm test，而 package.json 按可达性删了它们——
-  // 这是维护者防漂移门禁，对裁剪后的安装树不适用，否则每台用户机上 D9 恒红（2026-09-06 容器演练）。
+  // 分发树（tests/ 已被裁掉）里 D9 是维护者防漂移门禁，对裁剪后的安装树不适用，否则每台用户机上 D9 恒红
+  // （2026-09-06 容器演练：当时 package.json 被改写、README 仍写着 npm run check / npm test；现在归档不改写
+  // package.json 了，判据不变——被 export-ignore 的 tests/ 前缀在不在）。
   if (isDistributionInstall(HERE)) {
     ok(bi('文档一致性', 'Docs consistency'), bi(
       '分发包安装（无 tests/ 目录）：维护者防漂移门禁，对裁剪后的安装树不适用',

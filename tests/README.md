@@ -119,6 +119,6 @@
 | `OPS-04` | `/health` 的 `busy` 反映「**有在途轮次**」（`anyTurnRunning()`），不是「有实例」。运维探针据此判断能否重启——报成空闲会让正在跑的回合被腰斩。<br>*（2026-09-05 反向补登：这条一直被 `invariants/server/health-busy.test.mjs` 守着，只是从未登记）* |
 | `OPS-05` | 写进**外部配置**（launchd plist、`~/.claude/settings.json`）的 node 路径必须是跨版本升级存活的稳定 symlink，不得是 `process.execPath`（解析过 symlink 的版本化真身）。失效是**静默**的——node 一升级两个 hook 与 statusline 一起停摆，用户只看到「手机端收不到推送」，无任何报错指向 node。<br>*（2026-09-07：注释和局部函数拦不住——同一个坑在 `service.js`、`app-build.js` 修过两次后，两个 bridge 安装器照样踩了第三次）* |
 | `PROTO-01` | `AGENT_EVENT_TYPES` 与 `INBOUND_SOCKET_EVENTS` 是唯一名单；后端 emit / 后端 listen / 前端 handle / 假后端四处与名单双向相等 |
-| `DIST-01` | 分发 tarball 无 devDependency 可装可启；`uninstall` 只删产品自己写下的白名单，**永删不到** `~/.claude/projects` |
+| `DIST-01` | 分发树（GitHub `master` 归档）`npm ci --omit=dev` 可装可启、生产代码零 devDependency 泄漏；`uninstall` 只删产品自己写下的白名单，**永删不到** `~/.claude/projects` |
 | `TEST-01` | 测试不得以真实 `HOME`、`~/.claude`、生产 `CCM_DATA_DIR` 为删除或写入目标 |
 | `RESOURCE-01` | 不测 QPS，测「开合 N 次后 FD / listener / timer / child / watcher 不随 N 线性涨」 |

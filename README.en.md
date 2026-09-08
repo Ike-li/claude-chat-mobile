@@ -126,11 +126,11 @@ Claude Chat Mobile **does not include Claude Code, and will not install or sign 
 
 If Claude Code already runs on your computer, get the code either way.
 
-**Just want to run it** — download the distribution tarball (~1.5 MB, runtime code only):
+**Just want to run it** — download the source archive of `master` (~1.5 MB, runtime code only; `master` only moves on release, so it is the latest release):
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
-cd claude-chat-mobile-*/
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
 ```
 
 **Want to change the code or run the tests** — clone the full repository:
@@ -147,7 +147,7 @@ node --version
 which claude
 claude auth status
 
-npm install --omit=dev
+npm ci --omit=dev
 npm run setup
 node scripts/doctor.js
 npm start
@@ -168,7 +168,7 @@ Then open the address from the startup log on your phone to enter a workspace an
 
 > If the macOS desktop app already started a server, do not run a second `npm start`. Follow what `doctor` tells you and restart the service from the desktop menu instead.
 
-> The `package.json` inside the tarball is trimmed too: it keeps only the runtime commands (`start`/`dev`/`setup`/`config`/`service:*`/`hooks:*`/`statusline:*`/`app:*`/`uninstall`), so whatever `npm run` lists is what actually works. Test and gate commands are not in the package — use `git clone` when you need `npm test` / `npm run check`.
+> The `package.json` inside the archive is kept as-is, so `npm run` still lists `test` / `check` / `lint` and friends, but the test tree and gates they refer to are not in the archive, so they cannot run. Use `git clone` when you need them.
 
 Full first-run instructions — configuration, non-interactive setup, PWA, and CLI hooks:
 

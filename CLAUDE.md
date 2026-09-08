@@ -82,7 +82,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 分支纪律
 
-**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。发版会顺带用 `git archive` 打一个裁剪过的分发 tarball 传上 Release（装机 `curl` 那条指向它）：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
+**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产，所以 **`master` 上不得有未发版提交**：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 

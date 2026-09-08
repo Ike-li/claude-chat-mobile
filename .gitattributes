@@ -1,7 +1,8 @@
 # .gitattributes —— 分发裁剪（export-ignore）+ 换行规范化。
 #
-# `git archive` 会跳过带 export-ignore 的路径，于是 `scripts/release.sh` 生成的 tarball
-# 直接是「装机即可运行」的树：不含测试、不含维护者门禁。完整仓库照旧 `git clone`。
+# `git archive` 会跳过带 export-ignore 的路径。GitHub 的源码归档端点（装机 curl 拉的
+# /archive/refs/heads/master.tar.gz）就是 git archive，于是用户下载到的直接是「装机即可运行」的树：
+# 不含测试、不含维护者门禁。发版不再自打 tarball。完整仓库照旧 `git clone`。
 #
 # 【为什么这份名单这么短】测试树、测试基建（Dockerfile/compose/playwright/playground）与
 # 全部门禁脚本都住在 tests/ 下，一条前缀就裁干净。此前门禁散在 scripts/ 里，这里要逐个列 17 行，
@@ -33,12 +34,12 @@
 /CLAUDE.md                  export-ignore
 /AGENTS.md                  export-ignore
 # docs/testing.md 同判据：写测试的规范，通篇引用 tests/ 下的路径与 mutate:docker / test:invariants:*
-# 这类命令——而分发包里 tests/ 已被裁、package.json 也把引用被裁文件的 script 改写掉了。
-# 留着它等于在包里放一份满是死链与不存在命令的文档（dist-manifest.test.mjs 的第三条会红）。
+# 这类命令——而分发树里 tests/ 已被裁（package.json 原样保留，那些命令列得出、跑不了）。
+# 留着它等于在包里放一份满是死链的文档（dist-manifest.test.mjs 的第三条会红）。
 /docs/testing.md            export-ignore
 
 # ── scripts/ 里的维护者工具（其余是用户运维命令，必须留）──
-# 判据是「用户装机/运维会不会执行它」：发版、图标生成、上游版本监控、分发打包都不会。
+# 判据是「用户装机/运维会不会执行它」：发版、图标生成、上游版本监控、分发闭包核对都不会。
 /scripts/release.sh         export-ignore
 /scripts/gen-icons.js       export-ignore
 /scripts/upstream-watch.js  export-ignore

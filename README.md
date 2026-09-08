@@ -128,11 +128,11 @@ Claude Chat Mobile **不包含 Claude Code，也不会替你安装或登录 Clau
 
 如果 Claude Code 已经可以在你的电脑上正常运行，先任选一种方式取得代码。
 
-**只想跑起来** —— 下载分发包（约 1.5 MB，只含运行所需的代码）：
+**只想跑起来** —— 下载 `master` 的源码归档（约 1.5 MB，只含运行所需的代码；`master` 只在发版时前进，就是最新发布）：
 
 ```bash
-curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
-cd claude-chat-mobile-*/
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
 ```
 
 **想改代码或跑测试** —— 克隆完整仓库：
@@ -149,7 +149,7 @@ node --version
 which claude
 claude auth status
 
-npm install --omit=dev
+npm ci --omit=dev
 npm run setup
 node scripts/doctor.js
 npm start
@@ -170,7 +170,7 @@ node scripts/device.js approve <ID>
 
 > macOS 桌面端如果已经启动了 server，不要再执行第二个 `npm start`。按照 `doctor` 的提示使用桌面端菜单重启服务即可。
 
-> 分发包里的 `package.json` 也一并裁过：只留下运行相关的命令（`start`/`dev`/`setup`/`config`/`service:*`/`hooks:*`/`statusline:*`/`app:*`/`uninstall`），`npm run` 列出的就是全部能跑的。测试与门禁命令不在包内，需要 `npm test` / `npm run check` 时改用 `git clone`。
+> 归档里的 `package.json` 原样保留，所以 `npm run` 仍会列出 `test` / `check` / `lint` 这类命令，但它们引用的测试树与门禁不在归档里、跑不了。需要它们时改用 `git clone`。
 
 完整的首次安装、配置、非交互 setup、PWA 和 CLI hooks 说明：
 

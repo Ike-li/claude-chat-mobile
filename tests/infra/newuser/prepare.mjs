@@ -3,17 +3,16 @@
 //   node tests/infra/newuser/prepare.mjs <运行目录> <宿主机 LAN IP> [git ref=HEAD]
 //
 // 产物全部落在 <运行目录>（放仓库外，含中转凭据副本）：
-//   claude-chat-mobile.tar.gz  与 scripts/release.sh 同一套裁剪（git archive + dist-manifest 改写 package.json），
-//                              只是打的是当前分支而不是 tag——要验的就是还没发版的改动
+//   claude-chat-mobile.tar.gz  与 GitHub 源码归档同一套裁剪（`git archive` 读树里的 export-ignore，package.json 原样），
+//                              只是打的是当前分支/工作树而不是 master——要验的就是还没发版的改动
 //   settings.json              .claude/settings.docker.json 的副本，ANTHROPIC_BASE_URL 的 127.0.0.1 改成 host.docker.internal
 //   cf/{jwks.json,cf.env,edge.conf}  假 Cloudflare 边缘：一次性 RS256 密钥、JWKS、7 天有效的 Access JWT
 //   compose.env                docker compose --env-file 用
 import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair } from 'jose';
-import { packDistTarball } from '../../../scripts/dist-manifest.js';
 
 const [runDirArg, hostIp, refArg = 'HEAD'] = process.argv.slice(2);
 if (!runDirArg || !hostIp) {
@@ -33,17 +32,12 @@ if (runDir.startsWith(REPO + '/')) {
 }
 mkdirSync(join(runDir, 'cf'), { recursive: true });
 
-// 1. 分发 tarball（步骤照抄 release.sh 的「生成分发包」段）
+// 1. 分发 tarball：与 GitHub 的 /archive/refs/heads/master.tar.gz 同一条路——`git archive` 直接出 tar.gz，
+//    前缀目录名照 GitHub 的分支归档命名。不解包再重打：git archive 只读 blob、不碰文件系统，天然没有
+//    macOS bsdtar 把 xattr 写成 pax 头、Linux 解包长出 ._* 文件的问题（2026-09-06 容器演练踩过的坑）。
 const version = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version;
-const stageRoot = mkdtempSync(join(runDir, 'stage-'));
-const stage = join(stageRoot, `claude-chat-mobile-${version}`);
-mkdirSync(stage);
-const archive = execFileSync('git', ['archive', '--format=tar', ref], { cwd: REPO, maxBuffer: 256 * 1024 * 1024 });
-execFileSync('tar', ['x', '-C', stage], { input: archive });
-execFileSync(process.execPath, [join(REPO, 'scripts/dist-manifest.js'), '--rewrite-package', stage], { cwd: REPO, stdio: 'inherit' });
 const tarball = join(runDir, 'claude-chat-mobile.tar.gz');
-// 与 release.sh 同一条打包路（AppleDouble / xattr 的处理都在那一个函数里）。
-packDistTarball({ stageRoot, dirName: `claude-chat-mobile-${version}`, out: tarball });
+execFileSync('git', ['archive', '--format=tar.gz', '--prefix=claude-chat-mobile-master/', '-o', tarball, ref], { cwd: REPO, stdio: 'inherit' });
 
 // 2. claude CLI 凭据副本：容器里 127.0.0.1 是它自己，中转在宿主机
 const settings = JSON.parse(readFileSync(join(REPO, '.claude/settings.docker.json'), 'utf8'));

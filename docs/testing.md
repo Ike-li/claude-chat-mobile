@@ -416,7 +416,7 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 5. `npm run test:smoke` 的四条故事：core、reconnect、upload、entrypoint。
    动了单驾驶员再加 handoff，动了审批再加 permission。
 6. 文件越界仍拒绝（S1/S2，不烧 token）。
-7. 分发包能安装并启动；卸载后 `~/.claude/projects` **还在**（两侧断言，`DIST-01`）。
+7. 分发树（GitHub `master` 归档）能 `npm ci --omit=dev` 安装并启动；卸载后 `~/.claude/projects` **还在**（两侧断言，`DIST-01`）。
 
 PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就不该出现在未授权的 PR 上。
 

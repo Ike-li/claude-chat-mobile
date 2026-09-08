@@ -34,13 +34,3 @@ export function worktreeTree(root) {
     rmSync(indexFile, { force: true }); // safe-path: 路径由本文件用 tmpdir + pid + 时间戳拼出，非递归删除
   }
 }
-
-/** 直接返回该 tree 下 git archive 会打包的文件清单（不含目录条目）。 */
-export function shippedFiles(root) {
-  const tree = worktreeTree(root);
-  const r = spawnSync('sh', ['-c', `git archive --worktree-attributes --format=tar ${tree} | tar t`], {
-    cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  });
-  if (r.status !== 0) throw new Error(`git archive 失败: ${r.stderr}`);
-  return new Set(r.stdout.trim().split('\n').filter((f) => f && !f.endsWith('/')));
-}
