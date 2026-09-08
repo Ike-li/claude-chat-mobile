@@ -249,6 +249,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // P0-11an（2026-09-07）：jsonl 被删/改名/读坏时，真 server 回 { messages: [], error }，前端据 error
+  // 打一行灰字「历史消息加载失败」。此前这条路径在整套 E2E 里不可达——mock 的 session:history handler
+  // 有 17 处 callback、无一带 error；前端也没有任何单测碰它。
+  // 漏发时的形态是最糟的一种：loading 卡已被 hideLoadingCard() 抹掉，于是消息区【完全空白】——
+  // 既没有内容，也没有「加载了 N 条」，更没有失败提示，用户无从判断是会话是空的还是读挂了。
+  test('P0-11an 历史读不出来时给灰行提示，而不是留一屏空白', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    // 一次性 arm：只影响紧接着的那一次 session:history，不污染后续用例
+    await page.request.post('/__arm-history-error');
+    await openSessionByTitle(page, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+
+    await expect(page.locator('#messages')).toContainText('历史消息加载失败', { timeout: 10_000 });
+    // 反向档：这条用例要证的是「失败被说出来了」，不是「什么都没渲染」——若成功支也走到这里，
+    // 会打「加载了 N 条历史消息」，两者互斥，同时断言才能区分「报错了」与「压根没加载」。
+    await expect(page.locator('#messages')).not.toContainText('加载了');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11-search 工作区会话搜索按标题过滤', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);

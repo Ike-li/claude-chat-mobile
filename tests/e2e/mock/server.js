@@ -53,6 +53,10 @@ const mockInstances = createDefaultInstances();
 // 「已 send 但还没送达 SDK」的窄窗（真 server：send() 返回 true 后消息可能仍在 this.queue）。
 // test:queue-drop 把消息收下但不回显、记在这里，等 user:interrupt 时走 queue_dropped 带 clientMessageIds。
 let queuedUndeliveredClientMessageIds = [];
+// 停过的后台任务 id：再停一次即回 ok:false（对齐真 server「任务已结束 → stopTask 返回 false」）。
+const mockStoppedTaskIds = new Set();
+// 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
+let historyErrorArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
@@ -292,6 +296,8 @@ function resetMockState() {
   pendingPermission = null;
   pendingQuestion = null;
   queuedUndeliveredClientMessageIds = [];
+  mockStoppedTaskIds.clear();
+  historyErrorArmed = false;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   mockUnreadOnEntry = 0;
@@ -476,6 +482,13 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
   if (!sessionId) return res.status(400).json({ ok: false });
   mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
+  res.json({ ok: true });
+});
+
+// 让紧接着的一次 session:history 回失败形态 { messages: [], error }——真 server 在 jsonl 被删/改名/
+// 读坏时就是这个形状。无参，一次性消费。
+app.post('/__arm-history-error', (_req, res) => {
+  historyErrorArmed = true;
   res.json({ ok: true });
 });
 
@@ -1274,6 +1287,15 @@ io.on('connection', socket => {
     // 可识别文案——只要它出现在页面上，就说明前端仍然清屏改走了磁盘，即修复失效。断言它「不出现」。
     if (noSessionIdMode) {
       callback({ messages: [{ role: 'assistant', content: 'NOSID_DISK_MUST_NOT_APPEAR', uuid: 'a-nosid-disk' }] });
+      return;
+    }
+    // 失败支：真 server 在 sessionId 非法 / jsonl 不存在、被删、改名、读坏时回 { messages: [], error }
+    // （app/src/server/app.js 的 session:history handler）。前端据 error 打灰行「历史消息加载失败」；
+    // 漏发时 loading 卡已被 hideLoadingCard() 抹掉，消息区【完全空白】，连失败提示都没有。
+    // mock 这个 handler 有 17 处 callback、此前无一带 error，整条失败路径在 E2E 里不可达。
+    if (historyErrorArmed) {
+      historyErrorArmed = false; // 一次性：只影响紧接着的那一次拉取，不污染后续用例
+      callback({ messages: [], error: '会话不存在' });
       return;
     }
     // P0-ORDER：在 ack【之前】推一条 history_append，精确复刻真实时序——web 拉历史的往返窗口里，
@@ -4212,6 +4234,19 @@ io.on('connection', socket => {
         diff: { added: 'line1\nline2\nline3' },
       });
     }
+    if (toolUseId === 't_fc_read') {
+      // Read 类工具的预览走 snippet（不是 diff）。真 server 只在 toolInput.name === 'Read' 时带这个字段
+      // （socket-files.js）。mock 此前没有这一支，t_fc_read 落到下面的兜底 ok:false ——于是 app.js:2283
+      // 那整段「图片→缩略图 / 文本→代码高亮」在 E2E 里不可达。漏发时用户点「📄 预览文件」只看到一行
+      // 路径归属，下面什么都没有，也没有错误提示（因为 ok:true 走不到错误支）。
+      return ack({
+        ok: true,
+        name: 'Read',
+        inWhitelist: true,
+        attribution: { workdirLabel: 'claude-chat-mobile', relPath: 'package.json' },
+        snippet: { snippet: '{\n  "name": "claude-chat-mobile",\n  "version": "1.6.2"\n}', truncated: false },
+      });
+    }
     ack({ ok: false, error: '预览不可用（mock 未缓存）' });
   });
 
@@ -4297,8 +4332,17 @@ io.on('connection', socket => {
   });
 
   // 后台任务停止（对齐 server task:stop → agent.stopTask）：mock 仅记日志，幂等
-  socket.on('task:stop', payload => {
-    console.log(`[mock] task:stop taskId=${payload?.taskId || ''} instanceId=${payload?.instanceId || viewingInstanceId}`);
+  // 真 server 的 ack 是 agent.stopTask 的返回值：disposed / 无 taskId / control_request 10s 超时都回
+  // false，前端据 `res?.ok === true` 分流成灰色「已请求停止后台任务…」与橙色「停止请求未生效：任务
+  // 可能已结束」。mock 此前 handler 签名连 ack 参数都没有、从不回调，于是前端只能吃 1.5s 兜底、恒走
+  // 灰色支——橙色那条在整套 E2E 里不可达，用户以为停掉了而任务还挂在面板上。
+  // 语义取「同一个 taskId 停第二次 = 它已经不在了」，与真 server 的 false 同因，且不必新造场景。
+  socket.on('task:stop', (payload, ack) => {
+    const taskId = payload?.taskId || '';
+    console.log(`[mock] task:stop taskId=${taskId} instanceId=${payload?.instanceId || viewingInstanceId}`);
+    const first = !mockStoppedTaskIds.has(taskId);
+    mockStoppedTaskIds.add(taskId);
+    if (typeof ack === 'function') ack({ ok: first });
   });
 
   // Handle user interrupt (stop button / question skip)

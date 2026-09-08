@@ -292,6 +292,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="bg-task-stop"]').first().click();
     await expect(page.locator('#messages')).toContainText('已请求停止后台任务', { timeout: 5_000 });
 
+    // 再停同一条 → 真 server 的 agent.stopTask 会返回 false（任务已结束 / control_request 10s 超时），
+    // 前端据 `res?.ok === true` 分流到橙色「停止请求未生效」。这一支此前在整套 E2E 里不可达：mock 的
+    // task:stop handler 签名连 ack 参数都没有、从不回调，前端只能吃 1.5s 兜底、恒走灰色支——用户以为
+    // 停掉了，而那一行任务仍挂在面板上。前端也没有任何单测碰这段（2026-09-07 补 mock 的 ack 后才可测）。
+    await page.locator('[data-testid="bg-task-stop"]').first().click();
+    const warnBar = page.locator('#messages .text-warning', { hasText: '停止请求未生效：任务可能已结束' });
+    await expect(warnBar).toBeVisible({ timeout: 5_000 });
+
     // 再点收起。
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');

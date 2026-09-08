@@ -197,4 +197,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-DIFF-R（2026-09-07）：Read 类走 snippet 而非 diff（真 server 只在 toolInput.name === 'Read' 时带
+  // 这个字段）。此前 mock 的 tool:preview 没有 t_fc_read 分支，它落到兜底的 ok:false —— 于是 app.js:2283
+  // 那整段「图片→缩略图 / 文本→代码高亮」在整套 E2E 里不可达，前端也没有任何单测碰它。
+  // 漏发时的形态特别隐蔽：ok:true 走不到错误支，用户点开只看到一行路径归属，下面空白且没有任何提示。
+  // 场景侧的 t_fc_read tool_use 早就在发了（scenarios/content.js），只有 mock 的应答缺这一支。
+  test('P0-DIFF-R Read 工具卡预览走 snippet：出代码块而不是 diff', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:file-changes');
+    await waitForIdle(page);
+
+    const readCard = page.locator('[data-tool-name="Read"]');
+    await readCard.locator('summary').click();
+    await readCard.locator('.tp-btn').click();
+    const readBody = readCard.locator('.tp-body');
+    await expect(readBody).toBeVisible();
+    // 路径归属那行本来就有（不带 snippet 时也有），所以它证明不了什么——真正的判据是代码块出没出来
+    await expect(readBody).toContainText('claude-chat-mobile / package.json');
+    await expect(readBody.locator('pre code')).toContainText('"name": "claude-chat-mobile"');
+    // Read 不是变更类：不得走 diff 渲染。判据用【结构】而非文本——上面的 Edit 用例里 renderToolDiff
+    // 把三行片段拆成 4 个 <pre>（同/删/增/同），snippet 路径恒为 1 个。
+    // 别写成 not.toContainText('- ')：Playwright 会对期望串做空白归一化，尾空格被吃掉后变成 '-'，
+    // 于是它命中路径里 claude-chat-mobile 的连字符，恒红。
+    await expect(readBody.locator('pre')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
 });
