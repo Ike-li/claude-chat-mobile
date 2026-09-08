@@ -257,6 +257,62 @@ test('listTerminalSessionStates：classifyTail 缺失/抛错 → alive，绝不�
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// ── 尾部归因（2026-09-08 真机 be2eb5e3）────────────────────────────────────────
+// 症状：web 从桌面端【续接】了一个会话，抽屉却一直挂着「桌面端运行中」。
+// 现场：同一 sessionId 上两个活条目并存——PID 57563 entrypoint='claude-desktop'（Claude.app 的
+// Code 标签，开着 4.5 小时、无 status）、PID 70631 entrypoint='sdk-ts'（web 续接开的）。
+// transcript 尾部 6 行全是 sdk-ts 写的，末条 tool_result 后没落 assistant ⇒ verdict='pending'。
+//
+// 根因是【归因丢失】而非状态判错：尾部形态只回答"这条链收没收尾"，不回答"是谁写的"。
+// 补判只取了 verdict，把 classifyTailEntries 已经算出来的 lastChainEntrypoint 扔了，于是
+// web 自己写的 pending 被记到那个其实闲着的桌面端条目头上。
+//
+// 判据取【正向归因】（尾部作者 === 本条目 entrypoint）而不是照抄 mirrorReleaseStep 的
+// isOwnSdkTail（黑名单排除 'sdk-ts'）：两处的取舍方向相反。锁那边误锁可由用户点「续接」化解、
+// 误放行造成的分叉不可逆，所以宁可回落成锁；列表这边反过来——谎报在跑更坏（见上面 fail-open
+// 那条的理由）。正向匹配还免了一份跨模块共享的白名单：entry.entrypoint 与 lastChainEntrypoint
+// 都在手边，session-registry 得以保住它刻意维持的叶子性（只依赖 shared/claude-home）。
+test('listTerminalSessionStates：pending 尾部若是别的写入方写的，不算本条目在跑', async () => {
+  const dir = tempDir();
+  const put = (pid, sessionId) => writeFileSync(
+    join(dir, `${pid}.json`),
+    JSON.stringify({ pid, sessionId, cwd: CWD, entrypoint: 'claude-desktop', kind: 'interactive' }),
+  );
+  try {
+    put(1, 'sid-web-took-over'); // 桌面端窗口还开着，但这一轮是 web 续接后在跑
+    put(2, 'sid-desk-running');  // 桌面端自己在跑
+    const classifyTail = async (sessionId) => ({
+      verdict: 'pending',
+      lastChainEntrypoint: sessionId === 'sid-web-took-over' ? 'sdk-ts' : 'claude-desktop',
+    });
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-web-took-over')), { state: 'alive', source: 'claude-desktop' },
+      '这条 pending 是 web(sdk-ts) 续接后自己写的，桌面端进程只是窗口开着。\n'
+      + '  判成 busy ⇒ 抽屉显示「桌面端运行中」⇒ 用户被告知电脑上还有东西在跑而不敢动手。');
+    // 反向：桌面端真在跑时一寸都不许松。少了这一档，把补判整个删掉也能让上面那条绿。
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-desk-running')), { state: 'busy', source: 'claude-desktop' },
+      '尾部就是这个桌面端条目自己写的 ⇒ 它确实在跑。这是补判存在的全部理由，不得被归因判据顺手抹掉。');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// 未知/缺失的尾部作者一律回落既有判定（最坏维持今天的行为），与 mirrorReleaseStep 白名单的
+// 取舍同构。缺失是真实存在的一档：classifyChainTail 对没有 entrypoint 字段的行填 null。
+// 反过来写（缺失即否决）会让这批会话集体失去运行标识——那是拿一个显示 bug 换另一个。
+test('listTerminalSessionStates：尾部作者未知时按既有判定走（不因归因不了就否决）', async () => {
+  const dir = tempDir();
+  try {
+    for (const [pid, sid] of [[1, 'sid-null'], [2, 'sid-absent']]) {
+      writeFileSync(join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: sid, cwd: CWD, entrypoint: 'claude-desktop' }));
+    }
+    const classifyTail = async (sessionId) => (sessionId === 'sid-null'
+      ? { verdict: 'pending', lastChainEntrypoint: null }  // 行里没有 entrypoint 字段
+      : { verdict: 'pending' });                            // 老实现根本不返回这个键
+    const map = await listTerminalSessionStates({ dir, isAlive: () => true, classifyTail });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-null')), { state: 'busy', source: 'claude-desktop' });
+    assert.deepEqual(map.get(terminalStateKey(CWD, 'sid-absent')), { state: 'busy', source: 'claude-desktop' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // sdk 系仍然排除：那是 ccm 自己（或别的 SDK 工具）驱动的会话，列表里已有 live 实例徽标，
 // 标了会双份。放宽 entrypoint 白名单时最容易顺手把它们一起放进来。
 test('listTerminalSessionStates：sdk-ts / sdk-cli 仍不进结果（即使给了 classifyTail）', async () => {

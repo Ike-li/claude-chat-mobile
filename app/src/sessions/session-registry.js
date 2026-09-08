@@ -287,7 +287,14 @@ export async function listTerminalSessionStates({
     let pending = false;
     try {
       const tail = await classifyTail(entry.sessionId, entry.cwd);
-      pending = tail?.verdict === 'pending';
+      // 归因（2026-09-08 真机 be2eb5e3）：尾部形态只回答"这条链收没收尾"，不回答"是谁写的"。
+      // web 从桌面端续接后，己方 SDK 写出的 pending 尾部会被记到那个还开着、其实闲着的
+      // claude-desktop 条目头上 → 抽屉恒显示「桌面端运行中」。作者明确是别人 → 不算本条目在跑。
+      // 取正向匹配而非黑名单排除 'sdk-ts'（mirrorReleaseStep#isOwnSdkTail 那套）：这里的取舍方向
+      // 与锁相反——谎报在跑比少报更坏，且正向匹配对未来新增的写入方天然成立，不会漏。
+      // 作者未知（老 transcript 行无 entrypoint 字段 → null）→ 回落既有判定，不因归因不了就否决。
+      const tailBy = tail?.lastChainEntrypoint;
+      pending = tail?.verdict === 'pending' && (!tailBy || tailBy === entry.entrypoint);
     } catch { /* fail-open */ }
     merge(key, pending ? 'busy' : 'alive', entry.entrypoint);
   }));
