@@ -451,53 +451,77 @@ test.describe('user:setPermissionMode — 档位校验', () => {
 //
 // 判据双向：required 缺一即红（有人删了字段），出现 required ∪ optional 之外的键也红（有人加了字段
 // 没登记）。声明是【按分支】的——同一个事件的成功支与失败支键集不同，各自登记。
-test.describe('ack 形状守卫 —— 守键集而非键值', () => {
-  // task:stop 的 ack 是 agent.stopTask 的返回值（disposed / 无 taskId / control_request 10s 超时都回
-  // false）。前端据 `res?.ok === true` 分流：真时打灰色「已请求停止后台任务…」，假时打橙色
-  // 「停止请求未生效：任务可能已结束」。E2E 里这条橙色分支从未被走到过——mock 的 task:stop handler
-  // 签名只有 payload、连 ack 参数都没有，从不回调（tests/e2e/mock/server.js）。
-  test('task:stop ack 形状 = { ok }', async () => {
-    const s = connectSocket();
-    await new Promise((resolve, reject) => {
-      s.on('connect', resolve);
-      s.on('connect_error', reject);
-      setTimeout(() => reject(new Error('timeout')), 3000);
-    });
-    // 无实例：routeInstance(undefined)?.stopTask() → undefined → ack({ ok: false })。
-    // 这里只问键集，不问值——空 server 下 ok 必然是 false，问值等于什么都没问。
-    const ack = await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('timeout')), 3000);
-      s.emit('task:stop', {}, res => { clearTimeout(t); resolve(res); });
-    });
-    assertAckShape(ack, { required: ['ok'] }, 'task:stop');
-    assert.equal(typeof ack.ok, 'boolean', 'ok 必须是布尔——前端判的是 `res?.ok === true`，非布尔会静默落到「未生效」支');
-    s.disconnect();
-  });
+// 声明表。每一行是【实测观察】而非静态推断——写法是先跑一次 dump 出 Object.keys(ack) 再登记，
+// 因为 ack 在 app/src/server/app.js 与 socket-files.js 里跨域聚合（15 处变量展开 + 2 处函数调用展开），
+// 静态提取解不出来。运行时拿到的已经是塌好的具体键集，对重构、条件分支、聚合全免疫。
+//
+// payload 固定 ⇒ 形状确定。绝大多数登记的是【拒绝支】——那正是前端必须处理、却最容易在 mock 里
+// 被漏掉的一半（E2E 的 mock 是零 import app/src 的平行实现，删掉真 server 的字段它照样全绿）。
+// 成功支要驱动往往得先造实例/会话文件/git 仓库，成本另计，逐条在 branch 里标明。
+const ACK_SHAPES = [
+  { event: 'task:stop', branch: '无实例', payload: () => ({}), required: ['ok'],
+    check: ack => assert.equal(typeof ack.ok, 'boolean', 'ok 必须是布尔——前端判的是 `res?.ok === true`，非布尔会静默落到「停止未生效」支') },
 
-  // session:history 的失败支：sessionId 非字符串、或 jsonl 不存在/被删/改名/读坏时回
-  // { messages: [], error }。前端据 error 在消息区打灰行「历史消息加载失败」；漏发时 loading 卡已被
-  // hideLoadingCard() 抹掉，消息区【完全空白】，连失败提示都没有。mock 的 session:history handler
-  // 有 17 处 callback，无一带 error。
-  //
-  // 【已知未覆盖】成功支 { messages } 没在这里守：驱动它要往 ~/.claude/projects/<编码 workdir>/ 写
-  // 真实 jsonl（SDK 的会话 API 路径写死在那，无法重定向到 tmpDir）。session-delete.test.mjs 有这么做的
-  // 先例并附了三条风险控制，但本文件目前不碰用户家目录，不为一条断言破这个性质。要补时照那份先例走。
-  test('session:history 失败支 ack 形状 = { messages, error }', async () => {
-    const s = connectSocket();
-    await new Promise((resolve, reject) => {
-      s.on('connect', resolve);
-      s.on('connect_error', reject);
-      setTimeout(() => reject(new Error('timeout')), 3000);
+  { event: 'session:history', branch: '失败支', payload: () => ({ sessionId: 'no-such-session-for-shape-guard', cwd: tmpDir }),
+    required: ['messages', 'error'],
+    check: ack => assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历') },
+
+  { event: 'sync:since', branch: '冷连接', payload: () => ({}),
+    required: ['found', 'gap', 'replayed', 'diskLen', 'pending', 'unreadOnEntry'],
+    // diskLen 是历史教训：mock 从不返回它，于是 shouldReloadOnEnter 的「磁盘 ahead → 全量 reload」
+    // 整条分支在 E2E 里够不着，2026-08-27 的「同一条消息两颗气泡」就漏在那里。
+    check: ack => assert.equal(typeof ack.found, 'boolean') },
+
+  { event: 'session:switch', branch: '拒绝支', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
+  { event: 'session:close', branch: '实例不存在', payload: () => ({ instanceId: 'nope' }), required: ['ok', 'error'] },
+  { event: 'session:fork', branch: '会话不存在', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
+
+  { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
+  { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
+  { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
+  { event: 'logs:get', payload: () => ({}), required: ['logs', 'diagLogs'] },
+  { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
+  { event: 'service:status', payload: () => ({}),
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'logging', 'versions'] },
+
+  { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
+  { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
+  { event: 'files:search', payload: () => ({ cwd: tmpDir, query: 'x' }), required: ['ok', 'paths'] },
+  { event: 'git:status', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir }), required: ['ok', 'error', 'code'] },
+  { event: 'git:diff', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir, path: 'x' }), required: ['ok', 'error', 'code'] },
+
+  { event: 'tool:full', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
+  { event: 'tool:preview', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
+  { event: 'task:output', branch: '实例不存在', payload: () => ({ instanceId: 'nope', taskId: 't' }), required: ['ok', 'error'] },
+  { event: 'attachment:read', branch: '预览不可用', payload: () => ({}), required: ['ok', 'error'] },
+  // action 非法时在 spawn 安装器【之前】就返回——这是本仓唯一会写 ~/.claude/settings.json 的路径，
+  // 只驱动这一支，绝不用合法 action 触发真安装。
+  { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
+];
+
+// 未纳入（各有理由，不是遗漏）：
+//   dev:restart —— 本文件另有专测（DEV_MODE=0 拒绝支）；合法路径会杀掉被测 server。
+//   files:write —— 会真写文件；push:test —— 会真发推送；doctor:run / config:refresh —— 会 spawn，慢且与形状无关。
+//   各事件的【成功支】—— 要先造实例 / 会话 jsonl / git 仓库，成本另计；本表只覆盖免夹具那一档。
+test.describe('ack 形状守卫 —— 守键集而非键值', () => {
+  for (const spec of ACK_SHAPES) {
+    const label = `${spec.event}${spec.branch ? `（${spec.branch}）` : ''}`;
+    test(`${label} ack 形状 = { ${spec.required.join(', ')} }`, async () => {
+      const s = connectSocket();
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(`${label}: ack 超时（3s）`)), 3000);
+        s.emit(spec.event, spec.payload(), res => { clearTimeout(t); resolve(res); });
+      });
+      assertAckShape(ack, { required: spec.required, optional: spec.optional || [] }, label);
+      spec.check?.(ack);
+      s.disconnect();
     });
-    const ack = await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('timeout')), 3000);
-      s.emit('session:history', { sessionId: 'no-such-session-for-shape-guard', cwd: tmpDir },
-        res => { clearTimeout(t); resolve(res); });
-    });
-    assertAckShape(ack, { required: ['messages', 'error'] }, 'session:history（失败支）');
-    assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历');
-    s.disconnect();
-  });
+  }
 });
 
 // ---- helpers ----
