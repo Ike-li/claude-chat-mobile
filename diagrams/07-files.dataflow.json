@@ -72,7 +72,7 @@
       "id": "agenttool",
       "type": "backend",
       "label": "Agent 工具调用",
-      "sublabel": "Read · Edit · Bash",
+      "sublabel": "SDK 工具，不经 files/",
       "stage": 0,
       "row": 1
     },
@@ -149,14 +149,14 @@
       "id": "f2",
       "from": "phone",
       "to": "scope",
-      "label": "files:* / git:*",
+      "label": "browse:* / files:* / git:*",
       "labelDy": 40
     },
     {
       "id": "f3",
       "from": "agenttool",
       "to": "scope",
-      "label": "工具自主访问",
+      "label": "canUseTool（不经 isInScope）",
       "variant": "security",
       "route": "straight",
       "labelAt": [
@@ -220,7 +220,7 @@
       "id": "f9",
       "from": "write",
       "to": "fs",
-      "label": "owner-only 写入",
+      "label": "范围 · 哈希 · 审计",
       "classification": "写入"
     }
   ],
@@ -241,7 +241,7 @@
       "items": [
         "symlink 判据是「父目录用户可写」，不是 realpath 命中",
         "用户点保存属于直接写入，走独立的大小、哈希与审计防线",
-        "浏览、搜索、git diff 各有条数、字节与深度上限"
+        "浏览/git 有条数与字节上限，搜索另有深度上限"
       ]
     },
     {

@@ -111,7 +111,7 @@
       "id": "force",
       "type": "external",
       "label": "强制立即续接",
-      "sublabel": "两条路径都过确认框",
+      "sublabel": "确认框不含排队续接",
       "lane": "escape",
       "col": 1,
       "tag": "有意保留"
@@ -170,7 +170,7 @@
       "id": "quiet",
       "from": "mirrorlock",
       "to": "released",
-      "label": "连续 5 tick 静默约 12.5s",
+      "label": "静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）",
       "fromSide": "right",
       "toSide": "left",
       "route": "straight",

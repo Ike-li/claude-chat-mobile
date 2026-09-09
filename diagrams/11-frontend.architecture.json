@@ -85,6 +85,10 @@
       "sources": [
         {
           "path": "app/public/js/app/event-dispatch.js"
+        },
+        {
+          "path": "app/src/shared/protocol.js",
+          "label": "事件 type 白名单"
         }
       ]
     },

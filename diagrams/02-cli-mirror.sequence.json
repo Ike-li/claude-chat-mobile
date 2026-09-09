@@ -20,7 +20,7 @@
           "mirror",
           "phone"
         ],
-        "note": "外部增长且尾部未完结时，Web 侧输入转只读。"
+        "note": "外部增长可造锁并标脏；切入时非 sdk-ts 的未完结尾部可预锁。"
       },
       {
         "id": "hooks",
@@ -41,7 +41,7 @@
           "socket",
           "phone"
         ],
-        "note": "连续 5 个 tick 无终端未完结尾部才释放锁。"
+        "note": "无终端未完结尾部持续约 12.5s 墙钟才释放锁。"
       }
     ]
   },
@@ -121,7 +121,7 @@
       "from": "transcript",
       "to": "mirror",
       "y": 216,
-      "label": "外部增长 + 尾部未完结",
+      "label": "外部增长标脏；非 sdk-ts pending 可预锁",
       "variant": "return"
     },
     {
@@ -129,7 +129,7 @@
       "from": "mirror",
       "to": "socket",
       "y": 244,
-      "label": "标记 externalDirty，建立镜像锁",
+      "label": "标 externalDirty；满足造锁判据则上锁",
       "variant": "security"
     },
     {
@@ -182,7 +182,7 @@
       "from": "mirror",
       "to": "transcript",
       "y": 440,
-      "label": "静默判定：连续 5 tick 约 12.5s",
+      "label": "静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）",
       "variant": "security"
     },
     {

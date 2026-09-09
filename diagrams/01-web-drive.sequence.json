@@ -39,7 +39,7 @@
           "cli",
           "phone"
         ],
-        "note": "出向事件写入环形缓冲并递增 seq，再按 instanceId 分流。"
+        "note": "AgentSession.emit 的事件进环并递增 seq，再按 instanceId 分流。瞬态事件不进环。"
       }
     ]
   },
@@ -120,7 +120,7 @@
       "from": "dedup",
       "to": "socket",
       "y": 216,
-      "label": "未处理 → claimInFlight；校验失败发 permanent 负 ack",
+      "label": "未处理 → claimInFlight；空/超 50000 字/附件发 permanent",
       "variant": "return"
     },
     {
@@ -151,7 +151,7 @@
       "from": "socket",
       "to": "phone",
       "y": 328,
-      "label": "ack {ok:true} 之后才 commitProcessed",
+      "label": "commitProcessed 之后才 ack {ok:true}",
       "variant": "return"
     },
     {
@@ -181,7 +181,7 @@
       "from": "sdk",
       "to": "agent",
       "y": 440,
-      "label": "映射成 27 种事件，写环形缓冲 seq++",
+      "label": "产品事件进环 seq++（契约 27 种）",
       "variant": "return"
     },
     {
@@ -245,9 +245,9 @@
       "dot": "amber",
       "title": "三种负 ack 各有含义",
       "items": [
-        "permanent：内容非法，重发必再失败",
-        "retryable：实例被弃用或窄竞态，保留 pending",
-        "stale：会话已关闭，刷新拿新 instanceId 再发"
+        "permanent：空 / 超 50000 字 / 附件非法，重发必再失败",
+        "retryable：in-flight、忙碌置换、send 失败，保留 pending",
+        "stale：会话已关闭；在途轮是 busy 且不可重试"
       ]
     },
     {

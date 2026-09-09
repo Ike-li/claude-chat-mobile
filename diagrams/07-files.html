@@ -5170,14 +5170,14 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <!-- Flow paths -->
         <path data-edge-from="phone" data-edge-to="uploadgate" data-edge-label="附件上传" data-edge-key="0" data-edge-id="f1" data-composition-points="156,157;259,157" d="M 156 157 L 259 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="phone" data-edge-to="scope" data-edge-label="files:* / git:*" data-edge-key="1" data-edge-id="f2" data-composition-points="156,157;207.5,157;207.5,271;259,271" d="M 156 157 L 207.5 157 L 207.5 271 L 259 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="agenttool" data-edge-to="scope" data-edge-label="工具自主访问" data-edge-key="2" data-edge-id="f3" data-composition-points="156,271;259,271" d="M 156 271 L 259 271" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="phone" data-edge-to="scope" data-edge-label="browse:* / files:* / git:*" data-edge-key="1" data-edge-id="f2" data-composition-points="156,157;207.5,157;207.5,271;259,271" d="M 156 157 L 207.5 157 L 207.5 271 L 259 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="agenttool" data-edge-to="scope" data-edge-label="canUseTool（不经 isInScope）" data-edge-key="2" data-edge-id="f3" data-composition-points="156,271;259,271" d="M 156 271 L 259 271" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="uploadgate" data-edge-to="attach" data-edge-label="10 个 / 10MB / 共 20MB" data-edge-key="3" data-edge-id="f4" data-composition-points="371,157;474,157" d="M 371 157 L 474 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="scope" data-edge-to="read" data-edge-label="在 WORKDIRS 内" data-edge-key="4" data-edge-id="f5" data-composition-points="371,271;474,271" d="M 371 271 L 474 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="scope" data-edge-to="write" data-edge-label="可写且非 symlink" data-edge-key="5" data-edge-id="f6" data-composition-points="371,271;422.5,271;422.5,385;474,385" d="M 371 271 L 422.5 271 L 422.5 385 L 474 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="attach" data-edge-to="uploads" data-edge-label="落数据目录" data-edge-key="6" data-edge-id="f7" data-composition-points="586,157;689,157" d="M 586 157 L 689 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="read" data-edge-to="fs" data-edge-label="只读访问" data-edge-key="7" data-edge-id="f8" data-composition-points="586,271;689,271" d="M 586 271 L 689 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="write" data-edge-to="fs" data-edge-label="owner-only 写入" data-edge-key="8" data-edge-id="f9" data-composition-points="586,385;637.5,385;637.5,271;689,271" d="M 586 385 L 637.5 385 L 637.5 271 L 689 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="write" data-edge-to="fs" data-edge-label="范围 · 哈希 · 审计" data-edge-key="8" data-edge-id="f9" data-composition-points="586,385;637.5,385;637.5,271;689,271" d="M 586 385 L 637.5 385 L 637.5 271 L 689 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
         <g id="node-phone" data-node-id="phone" data-node-label="手机文件面板" tabindex="0" role="button" aria-label="聚焦手机文件面板，浏览·预览·编辑, 01 / 入口" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="浏览·预览·编辑" data-node-context="01 / 入口">
@@ -5194,15 +5194,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">浏览·预览·编辑</text>
         </g>
 
-        <g id="node-agenttool" data-node-id="agenttool" data-node-label="Agent 工具调用" tabindex="0" role="button" aria-label="聚焦Agent 工具调用，Read · Edit · Bash, 01 / 入口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Read · Edit · Bash" data-node-context="01 / 入口">
-          <title>Agent 工具调用 · Read · Edit · Bash · 01 / 入口</title>
+        <g id="node-agenttool" data-node-id="agenttool" data-node-label="Agent 工具调用" tabindex="0" role="button" aria-label="聚焦Agent 工具调用，SDK 工具，不经 files/, 01 / 入口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="SDK 工具，不经 files/" data-node-context="01 / 入口">
+          <title>Agent 工具调用 · SDK 工具，不经 files/ · 01 / 入口</title>
           <rect x="44" y="242" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="44" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(50 248) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="100" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Agent 工具调用</text>
-          <text data-detail="context" x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">Read · Edit · Bash</text>
+          <text data-detail="context" x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">SDK 工具，不经 files/</text>
         </g>
 
         <g id="node-uploadgate" data-node-id="uploadgate" data-node-label="附件校验" tabindex="0" role="button" aria-label="聚焦附件校验，条数·单文件·总量, 02 / 范围与校验闸" aria-pressed="false" data-node-kind="security" data-node-sublabel="条数·单文件·总量" data-node-context="02 / 范围与校验闸">
@@ -5291,13 +5291,13 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="148.4" y="189" width="51.2" height="16" rx="4" class="c-mask"/>
           <text x="174" y="200" class="t-muted" font-size="8" text-anchor="middle">附件上传</text>
         </g>
-        <g data-detail="context" data-edge-from="phone" data-edge-to="scope" data-edge-label="files:* / git:*" data-edge-key="1" data-edge-id="f2">
+        <g data-detail="context" data-edge-from="phone" data-edge-to="scope" data-edge-label="browse:* / files:* / git:*" data-edge-key="1" data-edge-id="f2">
           <rect x="164.75" y="233" width="85.5" height="16" rx="4" class="c-mask"/>
-          <text x="207.5" y="244" class="t-muted" font-size="8" text-anchor="middle">files:* / git:*</text>
+          <text x="207.5" y="244" class="t-muted" font-size="8" text-anchor="middle">browse:* / files:* / git:*</text>
         </g>
-        <g data-detail="context" data-edge-from="agenttool" data-edge-to="scope" data-edge-label="工具自主访问" data-edge-key="2" data-edge-id="f3">
+        <g data-detail="context" data-edge-from="agenttool" data-edge-to="scope" data-edge-label="canUseTool（不经 isInScope）" data-edge-key="2" data-edge-id="f3">
           <rect x="171.6" y="303" width="70.8" height="16" rx="4" class="c-mask"/>
-          <text x="207" y="314" class="t-security" font-size="8" text-anchor="middle">工具自主访问</text>
+          <text x="207" y="314" class="t-security" font-size="8" text-anchor="middle">canUseTool（不经 isInScope）</text>
         </g>
         <g data-detail="context" data-edge-from="uploadgate" data-edge-to="attach" data-edge-label="10 个 / 10MB / 共 20MB" data-edge-key="3" data-edge-id="f4">
           <rect x="362.1" y="189" width="119.8" height="16" rx="4" class="c-mask"/>
@@ -5321,9 +5321,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text x="637" y="234" class="t-muted" font-size="8" text-anchor="middle">只读访问</text>
         <text data-detail="fine" x="637" y="245" class="t-dim" font-size="7" text-anchor="middle">只读</text>
         </g>
-        <g data-detail="context" data-edge-from="write" data-edge-to="fs" data-edge-label="owner-only 写入" data-edge-key="8" data-edge-id="f9">
+        <g data-detail="context" data-edge-from="write" data-edge-to="fs" data-edge-label="范围 · 哈希 · 审计" data-edge-key="8" data-edge-id="f9">
           <rect x="594.75" y="307" width="85.5" height="27" rx="4" class="c-mask"/>
-          <text x="637.5" y="318" class="t-muted" font-size="8" text-anchor="middle">owner-only 写入</text>
+          <text x="637.5" y="318" class="t-muted" font-size="8" text-anchor="middle">范围 · 哈希 · 审计</text>
         <text data-detail="fine" x="637.5" y="329" class="t-dim" font-size="7" text-anchor="middle">写入</text>
         </g>
 
@@ -5550,7 +5550,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>&bull; symlink 判据是「父目录用户可写」，不是 realpath 命中</li>
           <li>&bull; 用户点保存属于直接写入，走独立的大小、哈希与审计防线</li>
-          <li>&bull; 浏览、搜索、git diff 各有条数、字节与深度上限</li>
+          <li>&bull; 浏览/git 有条数与字节上限，搜索另有深度上限</li>
         </ul>
       </div>
 

@@ -5171,7 +5171,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="webdrive" data-edge-to="detect" data-edge-label="每 2.5s 追平检查" data-edge-key="1" data-edge-id="tick" data-composition-points="307,157;343,157" d="M 307 157 L 343 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="detect" data-edge-to="mirrorlock" data-edge-label="终端写的未完结尾部" data-edge-key="2" data-edge-id="lock" data-composition-points="461,157;497,157" d="M 461 157 L 497 157" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="detect" data-edge-to="webdrive" data-edge-label="己方 sdk-ts 尾部不上锁" data-edge-key="3" data-edge-id="no-lock" data-composition-points="343,157;343,98;307,98;307,157" d="M 343 157 L 343 108 Q 343 98 333 98 L 317 98 Q 307 98 307 108 L 307 157" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="mirrorlock" data-edge-to="released" data-edge-label="连续 5 tick 静默约 12.5s" data-edge-key="4" data-edge-id="quiet" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="mirrorlock" data-edge-to="released" data-edge-label="静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）" data-edge-key="4" data-edge-id="quiet" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="mirrorlock" data-edge-to="force" data-edge-label="用户点「仍要续接」" data-edge-key="5" data-edge-id="force-unlock" data-composition-points="556,188;556,278" d="M 556 188 L 556 278" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="force" data-edge-to="fork" data-edge-key="6" data-edge-id="diverge" data-composition-points="556,336;556,450" d="M 556 336 L 556 450" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="force" data-edge-to="released" data-edge-label="终端确已关闭" data-edge-key="7" data-edge-id="safe-resume" data-composition-points="619,307;635,307;635,157;651,157" d="M 619 307 L 627 307 Q 635 307 635 299 L 635 165 Q 635 157 643 157 L 651 157" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
@@ -5242,8 +5242,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="710" y="163" class="t-muted" font-size="7" text-anchor="middle">Web 可续接</text>
         </g>
 
-        <g id="node-force" data-node-id="force" data-node-label="强制立即续接" tabindex="0" role="button" aria-label="聚焦强制立即续接，两条路径都过确认框, 显式逃生口" aria-pressed="false" data-node-kind="external" data-node-sublabel="两条路径都过确认框" data-node-tag="有意保留" data-node-context="显式逃生口">
-          <title>强制立即续接 · 两条路径都过确认框 · 显式逃生口 · 有意保留</title>
+        <g id="node-force" data-node-id="force" data-node-label="强制立即续接" tabindex="0" role="button" aria-label="聚焦强制立即续接，确认框不含排队续接, 显式逃生口" aria-pressed="false" data-node-kind="external" data-node-sublabel="确认框不含排队续接" data-node-tag="有意保留" data-node-context="显式逃生口">
+          <title>强制立即续接 · 确认框不含排队续接 · 显式逃生口 · 有意保留</title>
           <rect x="493" y="278" width="126" height="58" rx="7" class="c-mask"/>
           <rect x="493" y="278" width="126" height="58" rx="7" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(602 284) scale(0.6875)">
@@ -5251,7 +5251,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="556" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">强制立即续接</text>
-          <text data-detail="context" x="556" y="315" class="t-muted" font-size="7" text-anchor="middle">两条路径都过确认框</text>
+          <text data-detail="context" x="556" y="315" class="t-muted" font-size="7" text-anchor="middle">确认框不含排队续接</text>
         <text data-detail="fine" x="556" y="325" class="t-muted" font-size="7" text-anchor="middle">有意保留</text>
         </g>
 
@@ -5285,9 +5285,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="265.1" y="77" width="119.80000000000001" height="16" rx="4" class="c-mask"/>
           <text x="325" y="88" class="t-messagebus" font-size="8" text-anchor="middle">己方 sdk-ts 尾部不上锁</text>
         </g>
-        <g data-detail="context" data-edge-from="mirrorlock" data-edge-to="released" data-edge-label="连续 5 tick 静默约 12.5s" data-edge-key="4" data-edge-id="quiet">
+        <g data-detail="context" data-edge-from="mirrorlock" data-edge-to="released" data-edge-label="静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）" data-edge-key="4" data-edge-id="quiet">
           <rect x="568.2" y="111" width="129.60000000000002" height="16" rx="4" class="c-mask"/>
-          <text x="633" y="122" class="t-muted" font-size="8" text-anchor="middle">连续 5 tick 静默约 12.5s</text>
+          <text x="633" y="122" class="t-muted" font-size="8" text-anchor="middle">静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）</text>
         </g>
         <g data-detail="context" data-edge-from="mirrorlock" data-edge-to="force" data-edge-label="用户点「仍要续接」" data-edge-key="5" data-edge-id="force-unlock">
           <rect x="505.9" y="227" width="100.2" height="16" rx="4" class="c-mask"/>

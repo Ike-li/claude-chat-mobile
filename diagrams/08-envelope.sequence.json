@@ -39,7 +39,7 @@
           "transcript",
           "phone"
         ],
-        "note": "缺口超出缓冲或 epoch 变化时，从 transcript 重建稳定消息。"
+        "note": "缺口超出缓冲或实例找不到时，从 transcript 重建稳定消息。epoch 变化会重置去重基线。"
       }
     ]
   },
@@ -155,7 +155,7 @@
       "from": "agent",
       "to": "socket",
       "y": 384,
-      "label": "缺口超出缓冲，或 epoch 已变",
+      "label": "缺口过大或实例找不到则回退 history",
       "variant": "security"
     },
     {

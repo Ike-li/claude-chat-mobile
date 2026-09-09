@@ -39,7 +39,7 @@
           "scope",
           "denied"
         ],
-        "note": "限速措辞按来源分档，范围外访问直接拒绝并留痕。"
+        "note": "限速措辞按来源分档。文件通道越界拒绝并留痕；会话 cwd 越界回退，不是硬拒绝。"
       }
     ],
     "viewBox": [
@@ -132,7 +132,7 @@
       "col": 5,
       "type": "backend",
       "label": "工具审批",
-      "sublabel": "canUseTool"
+      "sublabel": "权限档 · canUseTool"
     },
     {
       "id": "local",
@@ -185,7 +185,7 @@
       "id": "e3",
       "from": "idp",
       "to": "device",
-      "label": "否则设备审批顶上",
+      "label": "未启用则走设备审批",
       "role": "main"
     },
     {
@@ -268,7 +268,7 @@
       "title": "这些边界互不替代",
       "items": [
         "AUTH_TOKEN 证明持有实例密钥，不代表设备已获准",
-        "CF Access 可选，替代设备审批但不替代 token",
+        "CF Access 可选：开着替代设备门（JWT 失败不回落设备），不替代 token",
         "WORKDIRS 限定路径，不决定工具是否自动获批",
         "canUseTool 只管 Agent 自主行为"
       ]

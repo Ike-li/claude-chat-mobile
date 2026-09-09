@@ -19,14 +19,14 @@
       },
       {
         "id": "presence",
-        "label": "唯一被抑制的一类",
+        "label": "按前台抑制的一类",
         "focus": [
           "classify",
           "result",
           "presence",
           "suppress"
         ],
-        "note": "只有回合完成的 result 按前台可见性抑制。"
+        "note": "result 与网关静默告警按前台可见性抑制；审批/提问/后台完成无条件推。"
       },
       {
         "id": "shape",
@@ -137,7 +137,7 @@
       "col": 2,
       "type": "backend",
       "label": "回合完成 result",
-      "sublabel": "唯一可抑制的",
+      "sublabel": "按前台抑制（含 stall）",
       "width": 112
     },
     {
@@ -250,7 +250,7 @@
       "items": [
         "审批、提问、后台任务完成一律无条件推",
         "这三类都意味着有人在等一个动作，而用户可能锁屏或在别的 app",
-        "只有回合完成的 result 才按前台可见性抑制"
+        "result 与网关静默告警按前台抑制；审批/提问/后台完成无条件推"
       ]
     },
     {
@@ -268,7 +268,7 @@
       "items": [
         "审批通知只保留工具名，不含 input 命令与参数正文",
         "提问通知不含问题正文，用固定引导文案",
-        "用户按设备开启预览后才改发 previewBody",
+        "开启预览后 web-push 改发 previewBody（ntfy 始终最小化）",
         "新设备通知不含设备 ID 与 IP，并按 5 分钟节流"
       ]
     }

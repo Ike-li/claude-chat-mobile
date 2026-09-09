@@ -91,6 +91,10 @@
         {
           "path": "app/src/agent/agent.js",
           "label": "会话驱动"
+        },
+        {
+          "path": "app/src/shared/protocol.js",
+          "label": "事件 type 白名单"
         }
       ]
     },
@@ -231,7 +235,7 @@
         160,
         78
       ],
-      "tag": "cwd 限定于 WORKDIRS",
+      "tag": "Web 驾驶限 WORKDIRS",
       "sources": [
         {
           "path": "app/src/agent/cli-settings-defaults.js",
@@ -260,7 +264,7 @@
       "id": "phone-edge",
       "from": "phone",
       "to": "edge",
-      "label": "agent:event / user:*",
+      "label": "agent:event / user:*（可直连）",
       "variant": "emphasis",
       "fromSide": "top",
       "toSide": "bottom"
