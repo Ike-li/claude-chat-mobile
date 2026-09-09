@@ -21,6 +21,7 @@ export const DIST_ENTRIES = Object.freeze([
   'scripts/setup.js',                   // npm run setup
   'scripts/doctor.js',                  // node scripts/doctor.js
   'scripts/device.js',                  // node scripts/device.js
+  'scripts/qr.js',                      // node scripts/qr.js
   'scripts/config.js',                  // node scripts/config.js
   'scripts/service.js',                 // npm run service:*
   'scripts/uninstall.js',               // npm run uninstall

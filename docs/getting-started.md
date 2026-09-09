@@ -262,6 +262,18 @@ http://<lan-ip>:3000/#token=<AUTH_TOKEN>
 
 首次加载后 token 会存入浏览器 `localStorage`，并从地址栏清除。
 
+手输 64 位 token 很痛苦，可以打成二维码用手机扫：
+
+```bash
+node scripts/qr.js                    # 自动取本机可达地址
+node scripts/qr.js --url <地址>       # 指定隧道或 Tailscale 域名
+```
+
+需要约 90 列 × 45 行的终端窗口。窗口太窄时它直接拒绝输出，不会打印一个必然扫不出来的码。
+
+> 二维码里含完整 `AUTH_TOKEN`。投屏、录屏或旁边有人时不要打印——一串明文 token 人会本能地遮挡，
+> 一个「看起来无害」的二维码不会，而旁人拍一张就是完整凭据。
+
 ### 临时 HTTPS
 
 PWA 或 Web Push 需要 HTTPS。临时试用可在另一个终端运行：

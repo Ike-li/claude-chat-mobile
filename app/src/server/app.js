@@ -98,10 +98,10 @@ import {
   clientIp,
   configureHttpShell,
   createHttpAuth,
-  reachableIPv4s,
   registerOperationalRoutes,
   tokenMatches as secureTokenMatches,
 } from './http.js';
+import { reachableIPv4s } from '../shared/net-addr.js';
 import { createInstanceManager } from './instance-manager.js';
 import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
