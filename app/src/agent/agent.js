@@ -268,6 +268,9 @@ const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序�
 // B2：已完成后台任务的留存条数。面板只用来「回头看一眼刚跑完的那批」，不是历史归档——
 // 20 条足够覆盖一次会话里的并发批次，且上限恒定、不随会话长度涨。
 const FINISHED_TASK_MAX = 20;
+// task_id → is_backgrounded 的留存条数。只在 task_started 与它的 task_notification 之间存活，
+// 同时在跑的 task 远到不了这个数；上限是防「通知丢失导致条目滞留」的兜底，不是功能容量。
+const TASK_BACKGROUNDED_MAX = 64;
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
 // AskUserQuestion 选项归一：字符串 → {label}；对象保留 description/preview（对齐 CLI 自动 Other 之外的完整呈现）
@@ -510,6 +513,9 @@ export class AgentSession {
     // 与 isBusy()，把已完成的留在 bgTasks 会让会话永不 idle、永远显示忙碌。
     this.finishedTasks = new Map(); // taskId → { taskType, message, status, summary, outputFile, usage…, finishedAt }
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
+    this.taskBackgrounded = new Map(); // taskId → is_backgrounded（CLI 在 task_started/task_updated 上报）。
+                                       // 判「这条 task_notification 是真后台任务，还是跑得久的前台工具」；
+                                       // 缺席=未知，保守按后台处理（该字段只在 local_agent/local_bash 上设置）
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
     // stream_event（text/thinking delta）与 user（tool_result）都不带。缓存供后二者补标签——否则纯文本子 agent
     // （无 tool_use、只走 stream_event）的卡片永远没有 🤖 类型名。换会话/dispose 清空，不跨会话/实例串标签。
@@ -2485,23 +2491,35 @@ export class AgentSession {
           this.emit('system', { message: '上下文已压缩', kind: 'compact_boundary' });
         } else if (msg.subtype === 'task_notification') {
           // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
-          // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
-          this.pendingAutoTurn = true;
-          this.pendingAutoTurnAt = Date.now();
-          this.emit('task_notification', {
-            source: 'system',
-            taskId: msg.task_id ?? null,
-            status: msg.status ?? null,
-            summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
-            toolUseId: msg.tool_use_id ?? null,
-            outputFile: msg.output_file || null,
-            // B4：CLI 对 housekeeping 任务的明文要求 —— "Ambient/housekeeping task. Consumers should
-            // hide this from the inline transcript; it may still appear in a tasks panel."
-            // 透传给前端决定要不要写进消息流；面板照常显示（CLI 允许）。
-            skipTranscript: msg.skip_transcript === true
-          });
-          this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
-          this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
+          const doneTaskId = msg.task_id ?? msg.taskId ?? null;
+          // 【前台工具走的是同一条通道】跑得久的前台 Bash 完成时也发这条（判据来源见 task_started 分支）。
+          // 它的完成已经由 tool_result 表达、工具卡片如实显示，再播报一条「后台任务完成」是重复且
+          // 措辞错误的；而 NOTIFY-01 规定后台任务完成无条件推，于是它还会打到锁屏手机上。
+          // 未知 id 保守按后台处理：is_backgrounded 只在 local_agent/local_bash 上设置，其它
+          // task_type（local_workflow / mcp_task）本就没有这个字段，缺席必须维持既有行为。
+          const foreground = doneTaskId != null && this.taskBackgrounded.get(doneTaskId) === false;
+          if (doneTaskId != null) this.taskBackgrounded.delete(doneTaskId); // 终态：两条路径都不留滞留记录
+          if (!foreground) {
+            // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
+            // 前台工具不武装：它的续写本就由 tool_result 驱动，多武装一次等于把 maybeSynthesizeAutoTurn
+            // 那道「防 auto-compact 泄漏 message_start 导致 busy 永挂」的门打开一个 TTL 长的窗口。
+            this.pendingAutoTurn = true;
+            this.pendingAutoTurnAt = Date.now();
+            this.emit('task_notification', {
+              source: 'system',
+              taskId: msg.task_id ?? null,
+              status: msg.status ?? null,
+              summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
+              toolUseId: msg.tool_use_id ?? null,
+              outputFile: msg.output_file || null,
+              // B4：CLI 对 housekeeping 任务的明文要求 —— "Ambient/housekeeping task. Consumers should
+              // hide this from the inline transcript; it may still appear in a tasks panel."
+              // 透传给前端决定要不要写进消息流；面板照常显示（CLI 允许）。
+              skipTranscript: msg.skip_transcript === true
+            });
+            this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
+          }
+          this.bgTaskDone(doneTaskId); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
         } else if (msg.subtype === 'task_progress') {
           // 后台任务进行中进度。瞬时广播——emitTransient 不进 buffer、不占 seq；不武装 pendingAutoTurn。
           // 字段：description/last_tool_name（tool 活动）+ summary（agentProgressSummaries 时 ~30s AI 短句）。
@@ -2549,10 +2567,28 @@ export class AgentSession {
         } else if (msg.subtype === 'task_updated') {
           // 状态变更：快照只表达集合成员、不表达成员状态，吞掉它会把 paused 显示成「运行中」。
           // 判据与边界全写在 bgTaskPatch 上。
-          this.bgTaskPatch(msg.task_id ?? msg.taskId ?? null, msg.patch);
+          const updatedTaskId = msg.task_id ?? msg.taskId ?? null;
+          // 前台任务后来被转到后台（终端 Ctrl+B）经这条到达 —— SDK d.ts 明文：「A later move to the
+          // background arrives as task_updated patch.is_backgrounded」。转后台后它就是真后台任务，
+          // 完成时该照常播报，故必须跟着改记录（bgTaskPatch 只改 bgTasks，够不到这张表）。
+          if (updatedTaskId != null && typeof msg.patch?.is_backgrounded === 'boolean') {
+            setCapped(this.taskBackgrounded, updatedTaskId, msg.patch.is_backgrounded, TASK_BACKGROUNDED_MAX);
+          }
+          this.bgTaskPatch(updatedTaskId, msg.patch);
         } else if (msg.subtype === 'task_started') {
-          // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故显式识别静默吞——
-          // 不重复处理、也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
+          // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故【增删】不在此处理——
+          // 也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
+          //
+          // 【但不能整条吞】is_backgrounded 只在这条消息上，task_notification 自己不带。
+          // CLI 把跑得久的【前台】工具也建模成 task（实测 task_type:'local_bash'、is_backgrounded:false，
+          // 2026-09-09 SDK 探针），完成时走同一条 task_notification 通道，且全程不发
+          // background_tasks_changed —— 所以「不在 bgTasks 里」并不能当判据，只有这个字段能。
+          // 吞掉它的代价：每条跑过几秒的前台命令都被播报成「后台任务完成」，还经 NOTIFY-01 无条件推
+          // 打到锁屏手机上。见 task_notification 分支的消费点。
+          const startedTaskId = msg.task_id ?? msg.taskId ?? null;
+          if (startedTaskId != null && typeof msg.is_backgrounded === 'boolean') {
+            setCapped(this.taskBackgrounded, startedTaskId, msg.is_backgrounded, TASK_BACKGROUNDED_MAX);
+          }
           //
           // 【已评估：spawn_depth 不接（2026-09-07，升 SDK 0.3.263 时查证）】0.3.238 给本消息加了
           // spawn_depth，看着像是「子代理面板分不清父子层级」的解，实际两条都不成立：

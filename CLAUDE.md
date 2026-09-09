@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 几条最容易改错的，摆在这里：
 
-- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。
+- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。其中「后台任务完成」**只算真后台任务**——CLI 把跑得久的前台 Bash 也建模成 task 走同一条 `task_notification`，靠 `task_started` 的 `is_backgrounded` 过滤掉（**别把这道过滤当多余删掉**，删了每条跑几秒的命令都会推到锁屏手机上）。
 - **服务告警与「需要你(N)」是不同轴，绝不混判**：顶栏 chip / 角标只表达「点一下就能处理」的待办，服务告警只活在抽屉「服务」小节与服务状态面板。
 - **限速锁定的措辞按来源分档**：本机来源**绝不说成「有人在暴力尝试」**。
 - **不开无鉴权的 HTTP 数据端点**：`/health`、`/metrics`、历史回显都过鉴权。

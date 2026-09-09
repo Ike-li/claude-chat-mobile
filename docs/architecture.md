@@ -165,12 +165,33 @@ Agent 工具审批或用户直接文件编辑
 
 ### 离线唤醒与推送抑制
 
-离线唤醒走 web-push / ntfy。抑制策略按「用户是否可能看不到」分档，而不是按事件重要性：
+离线唤醒走 web-push / ntfy。**先分清两条路径**：服务端推送（锁屏、切到别的 app、PWA 被 OS 冻结都收得到）与前端 `Notification` API（只在页面还活着时有效）。本节说的是前者，两者的触发面不同，别拿一边的规则解释另一边。
+
+抑制策略按「用户是否可能看不到」分档，而不是按事件重要性：
 
 - **审批、提问、后台任务完成：无条件推。** 这三类都意味着有人在等一个动作，而用户此刻可能锁屏或在别的 app 里。
-- **回合完成的 `result`：仅当 approved 房间存在前台可见连接时抑制。** 前台判据是客户端主动上报的 `client:presence`，**不是 socket 是否连着**——手机切后台时 socket 常常还活着，拿连接状态当判据会让用户收不到本该收到的完成通知。
+- **回合完成的 `result`、模型静默告警 `gateway_stall`：仅当 approved 房间存在前台可见连接、且那个连接正看着这条会话时才抑制。** 前台判据是客户端主动上报的 `client:presence`，**不是 socket 是否连着**——手机切后台时 socket 常常还活着，拿连接状态当判据会让用户收不到本该收到的完成通知。
 
-推送 body 默认最小化、不含消息正文；用户可按设备开启「推送内容预览」，之后改发 `previewBody`。实现见 `app/src/ops/notifications.js` 与 `app/src/ops/notify-channels.js`。
+能产出推送的只有下面这些，其余一概不推：
+
+| 来源 | 标题 | 档 |
+|---|---|---|
+| `permission_request` | ⚠️ Claude 请求许可 | 无条件 |
+| `question` | ❓ Claude 有问题 | 无条件 |
+| `task_notification` | ✅ / ⚠️ 后台任务完成 / 失败 | 无条件 |
+| `result` | ✅ / ⚠️ / ⏹ 任务完成 / 出错 / 已中止 | 前台可见则抑制 |
+| `system` 且 `notice=gateway_stall` | ⏳ 模型长时间无响应 | 前台可见则抑制 |
+| 新设备握手 | 🔐 新设备请求接入 | 不走 `agent:event` |
+| CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
+| presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
+
+`agent:event` 的 27 种 type 里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+
+`task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
+
+节流分两层：①审批/提问置 `pending`，必须等 `request_resolved`（真的批了/答了）才解除，堆着没处理的不重复推；②同类最小间隔，默认 60s，`gateway_stall` 用 10min（告警源在坏天气下每 90–120s 一条，套 60s 等于每条都推），设备审批用 5min。`result` 与 `task_notification` 属一次性终态、没有「被处理」这个动作，只受②约束。
+
+推送 body 默认最小化、不含消息正文；用户可按设备开启「推送内容预览」，之后改发 `previewBody`。**设备审批那条连开关都不给**——`deviceId` / `ip` / `userAgent` 恰恰是审批时要核对的三项，而 ntfy 是明文经第三方，那个函数只解构 `count`，多余字段结构上就取不到。实现见 `app/src/ops/notifications.js` 与 `app/src/ops/notify-channels.js`。
 
 ## 状态与持久化
 
