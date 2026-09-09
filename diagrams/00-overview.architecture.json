@@ -8,7 +8,7 @@
     "repository": {
       "url": "https://github.com/Ike-li/claude-chat-mobile",
       "provider": "github",
-      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+      "revision": "dbc41c115574be1d348dec59fc0926882d38737f"
     },
     "views": [
       {
@@ -106,6 +106,12 @@
       "size": [
         160,
         78
+      ],
+      "sources": [
+        {
+          "path": "package.json",
+          "label": "依赖声明"
+        }
       ]
     },
     {
@@ -121,7 +127,13 @@
         160,
         78
       ],
-      "tag": "非必需"
+      "tag": "非必需",
+      "sources": [
+        {
+          "path": "app/src/auth/cf-access.js",
+          "label": "Access 校验"
+        }
+      ]
     },
     {
       "id": "datadir",
@@ -136,7 +148,13 @@
         160,
         78
       ],
-      "tag": "控制面，不存 transcript"
+      "tag": "控制面，不存 transcript",
+      "sources": [
+        {
+          "path": "app/src/shared/data-dir.js",
+          "label": "目录解析"
+        }
+      ]
     },
     {
       "id": "phone",
@@ -192,7 +210,13 @@
         160,
         78
       ],
-      "tag": "对话真相源"
+      "tag": "对话真相源",
+      "sources": [
+        {
+          "path": "app/src/sessions/history.js",
+          "label": "读取与历史重建"
+        }
+      ]
     },
     {
       "id": "cli",
@@ -207,7 +231,13 @@
         160,
         78
       ],
-      "tag": "cwd 限定于 WORKDIRS"
+      "tag": "cwd 限定于 WORKDIRS",
+      "sources": [
+        {
+          "path": "app/src/agent/cli-settings-defaults.js",
+          "label": "有效设置读取"
+        }
+      ]
     }
   ],
   "boundaries": [

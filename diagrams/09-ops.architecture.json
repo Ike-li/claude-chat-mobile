@@ -8,7 +8,7 @@
     "repository": {
       "url": "https://github.com/Ike-li/claude-chat-mobile",
       "provider": "github",
-      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+      "revision": "dbc41c115574be1d348dec59fc0926882d38737f"
     },
     "views": [
       {
@@ -139,7 +139,13 @@
         160,
         78
       ],
-      "tag": "env 始终压过文件"
+      "tag": "env 始终压过文件",
+      "sources": [
+        {
+          "path": "app/src/ops/config-file.js",
+          "label": "读写归一"
+        }
+      ]
     },
     {
       "id": "service",
@@ -172,6 +178,12 @@
       "size": [
         160,
         78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/logic/service-diag.js",
+          "label": "判定化渲染"
+        }
       ]
     },
     {
@@ -206,7 +218,17 @@
         160,
         78
       ],
-      "tag": "显式安装"
+      "tag": "显式安装",
+      "sources": [
+        {
+          "path": "app/src/ops/cli-hooks-bridge.js",
+          "label": "hooks 桥"
+        },
+        {
+          "path": "app/src/ops/cli-statusline-bridge.js",
+          "label": "statusline 桥"
+        }
+      ]
     },
     {
       "id": "statusline",

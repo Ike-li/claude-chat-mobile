@@ -8,7 +8,7 @@
     "repository": {
       "url": "https://github.com/Ike-li/claude-chat-mobile",
       "provider": "github",
-      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+      "revision": "dbc41c115574be1d348dec59fc0926882d38737f"
     },
     "views": [
       {
@@ -61,6 +61,12 @@
       "size": [
         160,
         78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/app/connection-sync.js",
+          "label": "连接与同步"
+        }
       ]
     },
     {
@@ -114,6 +120,12 @@
       "size": [
         160,
         78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/app/context.js",
+          "label": "context 注入"
+        }
       ]
     },
     {
@@ -148,7 +160,13 @@
         160,
         78
       ],
-      "tag": "数据进数据出"
+      "tag": "数据进数据出",
+      "sources": [
+        {
+          "path": "app/public/js/logic.js",
+          "label": "re-export barrel"
+        }
+      ]
     },
     {
       "id": "canon",
@@ -181,6 +199,12 @@
       "size": [
         160,
         78
+      ],
+      "sources": [
+        {
+          "path": "tests/unit/logic-client-error.test.mjs",
+          "label": "共用同一份文件"
+        }
       ]
     }
   ],
