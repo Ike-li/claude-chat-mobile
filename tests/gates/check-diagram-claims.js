@@ -1,0 +1,152 @@
+#!/usr/bin/env node
+// tests/gates/check-diagram-claims.js —— 架构图集的漂移闸
+//
+// 【它守什么】gh-pages 上那 13 张架构图（https://ike-li.github.io/claude-chat-mobile/diagrams/）
+// 里承重的事实：常量取值、被引用的源码路径、以及图声称的基线提交。代码改了而图没改，这里变红。
+//
+// 【为什么需要】图本身没有任何机械保证：archify 的 source 证据只验「该文件在 pin 的 commit 存在」，
+// 不验文件内容与节点标签相符；边、关系标签、卡片正文零校验。没有这道闸，一张写着「每 2.5s 轮询」
+// 的图会在常量改成 5000 之后继续挂在官网上，而 check 全绿——这正是「零症状的积累」。
+//
+// 【为什么断言表在 dev 而不是读 gh-pages 的规格源】两条理由：
+//   ① gh-pages 是孤儿分支，CI 的 actions/checkout 是浅克隆单分支，取不到那个 ref。
+//      让闸依赖一个 CI 里不存在的 ref，等于给它开一条「取不到就跳过」的旁路——那就是恒绿。
+//   ② 这道闸要守的是【代码→图】方向的漂移，而代码就在本仓库。规格源只是图的中间产物。
+//
+// 【为什么 expect 写「图上显示的值」而不是从代码算】写成 `expect: extract()` 就是同义反复，
+// 恒绿。expect 必须是图上那行字里的数，实测值从代码单向提取——于是唯一能让它变绿的方式是
+// 「改代码时同步改图」，而不是「把断言改成实测值」。
+// （2026-09-09 建闸时的实测教训：手写 expect 时把 SDK 版本写成了 package.json 的 `^0.3.263`
+//   而图上是 `0.3.263`，制造了一条假红。假红的代价是下次有人直接把断言改成实测值，闸就废了。
+//   所以 expect 只许照抄图上文字。）
+//
+// 【它不守什么】拓扑（哪条边连到哪里）、卡片散文、节点标签的措辞。这些无法机械验证；
+// 能做的是把承重事实都搬进下面这张表，让散文只承担解释。
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (p) => readFileSync(join(ROOT, p), 'utf8');
+
+/** 从源码里取一个 `NAME = <数字>` 常量（允许 1_000 这种下划线分组与 `5 * 60_000` 这种乘式）。 */
+function constNum(path, name) {
+  const m = new RegExp(`\\b${name}\\s*=\\s*([0-9_]+(?:\\s*\\*\\s*[0-9_]+)*)`).exec(read(path));
+  if (!m) return `未找到常量 ${name}`;
+  return m[1].split('*').reduce((a, b) => a * Number(b.trim().replace(/_/g, '')), 1);
+}
+
+// ── 图声称的基线提交。改图时同步更新。 ───────────────────────────────
+const PINNED_REVISION = 'dbc41c115574be1d348dec59fc0926882d38737f';
+
+// ── 图里 source 证据引用到的源码路径（27 条 source 去重后）。重命名/删除即红。 ──
+const REFERENCED_PATHS = [
+  'package.json',
+  'app/server.js',
+  'app/src/agent/agent.js',
+  'app/src/agent/cli-settings-defaults.js',
+  'app/src/auth/cf-access.js',
+  'app/src/ops/audit.js',
+  'app/src/ops/cli-hooks-bridge.js',
+  'app/src/ops/cli-statusline-bridge.js',
+  'app/src/ops/config-file.js',
+  'app/src/ops/doctor-checks.js',
+  'app/src/ops/env-schema.js',
+  'app/src/ops/metrics.js',
+  'app/src/ops/notify-channels.js',
+  'app/src/ops/service-units.js',
+  'app/src/ops/statusline.js',
+  'app/src/server/app.js',
+  'app/src/server/mirror-engine.js',
+  'app/src/sessions/history.js',
+  'app/src/shared/data-dir.js',
+  'app/public/js/app.js',
+  'app/public/js/app/connection-sync.js',
+  'app/public/js/app/context.js',
+  'app/public/js/app/event-dispatch.js',
+  'app/public/js/canonicalize.js',
+  'app/public/js/i18n.js',
+  'app/public/js/logic.js',
+  'app/public/js/logic/service-diag.js',
+  'tests/unit/logic-client-error.test.mjs',
+];
+
+// ── 数值与字面量断言。`shown` 是图上那行字，`expect` 照抄其中的值。 ──────
+const CLAIMS = [
+  { diagram: '02 / 03', shown: 'catchUpTick 每 2500ms 读尾部',
+    actual: () => constNum('app/src/server/mirror-engine.js', 'CATCH_UP_INTERVAL_MS'), expect: 2500 },
+  { diagram: '02', shown: '镜像中提速到 1000ms 轮询',
+    actual: () => constNum('app/src/server/mirror-engine.js', 'CATCH_UP_MIRROR_INTERVAL_MS'), expect: 1000 },
+  { diagram: '02 / 03', shown: '连续 5 tick',
+    actual: () => constNum('app/src/sessions/history.js', 'MIRROR_RELEASE_QUIET_TICKS'), expect: 5 },
+  { diagram: '02 / 03', shown: '约 12.5s 墙钟',
+    actual: () => constNum('app/src/server/mirror-engine.js', 'MIRROR_RELEASE_MS'), expect: 12500 },
+  { diagram: '01', shown: '>50000 字',
+    actual: () => (/text\.length > 50000/.test(read('app/src/server/app.js')) ? 50000 : '判据已改'), expect: 50000 },
+  { diagram: '07', shown: '10 个',
+    actual: () => constNum('app/src/files/uploads.js', 'MAX_FILES'), expect: 10 },
+  { diagram: '07', shown: '10MB',
+    actual: () => constNum('app/src/files/uploads.js', 'MAX_FILE_BYTES') / 1048576, expect: 10 },
+  { diagram: '07', shown: '共 20MB',
+    actual: () => constNum('app/src/files/uploads.js', 'MAX_TOTAL_BYTES') / 1048576, expect: 20 },
+  { diagram: '05', shown: '默认 90 天，可配',
+    actual: () => { const m = /APPROVAL_RETENTION_DAYS[\s\S]{0,120}?:\s*(\d+)/.exec(read('app/src/agent/approval-lifecycle.js')); return m ? Number(m[1]) : '默认值已改'; }, expect: 90 },
+  { diagram: '00 / 08 / 11', shown: '共 27 种 type',
+    actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length, expect: 27 },
+  { diagram: '12', shown: 'check 链上的 12 道门禁',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 12 },
+  { diagram: '07', shown: 'dataDir/uploads',
+    actual: () => (/join\(resolveDataDir\(env\), UPLOADS_SUBDIR\)/.test(read('app/src/files/uploads.js')) ? 'dataDir/uploads' : '落点已改'), expect: 'dataDir/uploads' },
+  { diagram: '02 / 03', shown: '白名单只认 sdk-ts',
+    actual: () => /SDK_TAIL_ENTRYPOINTS = new Set\(\['sdk-ts'\]\)/.test(read('app/src/sessions/history.js')) ? "只认 sdk-ts" : '白名单已改', expect: '只认 sdk-ts' },
+  { diagram: '06', shown: '前台判据是 client:presence（hidden !== true）',
+    actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
+  { diagram: '00', shown: 'claude-agent-sdk 0.3.263',
+    actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.263' },
+];
+
+function git(args) {
+  try { return { ok: true, out: execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim() }; }
+  catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() }; }
+}
+
+function main() {
+  const problems = [];
+
+  // A：被引用的路径在 HEAD 仍存在
+  for (const p of REFERENCED_PATHS) {
+    if (!existsSync(join(ROOT, p))) problems.push(`路径已不存在（图里还指着它）：${p}`);
+  }
+
+  // B：数值与字面量断言
+  for (const c of CLAIMS) {
+    let got;
+    try { got = c.actual(); } catch (e) { got = `提取失败：${e.message}`; }
+    if (got !== c.expect) {
+      problems.push(`图 ${c.diagram} 显示「${c.shown}」，代码实测 ${JSON.stringify(got)}（应为 ${JSON.stringify(c.expect)}）`);
+    }
+  }
+
+  // C：pin 是 HEAD 的祖先（历史被重写 / 指向别的分支即红）
+  const anc = git(['merge-base', '--is-ancestor', PINNED_REVISION, 'HEAD']);
+  let lag = null;
+  if (!anc.ok) {
+    problems.push(`基线提交 ${PINNED_REVISION.slice(0, 7)} 不是 HEAD 的祖先——图引用了一段不在当前历史里的提交`);
+  } else {
+    const r = git(['rev-list', '--count', `${PINNED_REVISION}..HEAD`]);
+    if (r.ok) lag = Number(r.out);
+  }
+
+  if (problems.length > 0) {
+    console.error('架构图集漂移检查失败：\n' + problems.map(p => `- ${p}`).join('\n'));
+    console.error('\n修法：改 gh-pages 的规格源重新出图，并同步更新本文件的 CLAIMS / REFERENCED_PATHS / PINNED_REVISION。');
+    process.exit(1);
+  }
+
+  // 落后提交数只报告不判红：图必然落后于 HEAD，用提交数做阈值只会制造噪音。
+  // 真正会红的是上面三项——值漂移、路径消失、历史被重写。
+  console.log(`架构图集断言 OK（路径 ${REFERENCED_PATHS.length} 条 · 断言 ${CLAIMS.length} 条 · 基线 ${PINNED_REVISION.slice(0, 7)}，落后 ${lag ?? '?'} 个提交）`);
+}
+
+main();

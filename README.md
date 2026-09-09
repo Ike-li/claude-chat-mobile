@@ -6,7 +6,7 @@ Claude Chat Mobile 是一个**本机自托管的 Claude Code 远程控制台**�
 
 代码、Claude CLI、项目文件以及 CCM / Claude 的本地会话状态仍然运行或保存在**你自己的电脑上**。项目没有数据库、没有多租户、没有 SaaS 后端；模型请求仍由本机 `claude` CLI 按你现有的 Anthropic 官方登录或第三方网关配置发送。
 
-**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
+**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/) · [📐 架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -256,6 +256,9 @@ node scripts/config.js schema
 
 **[架构说明](docs/architecture.md)**
 Web / CLI 双通道、Agent SDK、事件同步、断线恢复和会话接管。
+
+**[架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)**
+13 张可交互图，按功能域拆开：双通道同步、单驾驶员状态机、鉴权六道门、审批生命周期、推送抑制、文件与会话域数据流、前端模块地图、测试归类。支持明暗主题、搜索聚焦与关系追踪；托管在 `gh-pages` 分支，不随 `clone` 或装机归档分发。
 
 ### 我想修改或维护项目
 

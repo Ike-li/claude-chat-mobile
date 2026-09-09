@@ -6,7 +6,7 @@ Claude Chat Mobile is a **self-hosted remote console for Claude Code that runs o
 
 Your code, the Claude CLI, your project files, and the local CCM / Claude session state all keep running or living **on your own computer**. There is no database, no multi-tenancy, and no SaaS backend; model requests are still sent by the local `claude` CLI using your existing Anthropic sign-in or third-party gateway configuration.
 
-[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
+[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/) · [📐 Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -254,6 +254,9 @@ node scripts/config.js schema
 
 **[Architecture](docs/architecture.en.md)**
 Web / CLI dual path, the Agent SDK, event synchronization, reconnect recovery, and session takeover.
+
+**[Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)**
+Thirteen interactive diagrams, one per functional area: dual-channel sync, the single-driver state machine, the six authorization gates, approval lifecycle, push suppression, file and session data flows, the frontend module map, and test routing. Light/dark themes, search focus, and relationship tracing included. Hosted on the `gh-pages` branch, so they ship with neither `clone` nor the install archive.
 
 ### I want to modify or maintain it
 
