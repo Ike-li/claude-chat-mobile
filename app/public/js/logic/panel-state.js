@@ -66,37 +66,34 @@ export function formatStreamPreviewIntervalMs(ms) {
   return Number.isFinite(n) && n > 0 ? n : 80;
 }
 
-// UI-007：高频状态标 SVG（可信静态串，无用户输入）。currentColor 吃语义色。
-// 返回 { html, label }；html 供 innerHTML 到 .t-status / 角标；label 作 aria-label。
-const STATUS_ICON_PATHS = {
+// UI-007：高频状态标（工具卡 · 抽屉角标 · 会话点）。一个 kind 一个条目，图标 / 语义色 / 标签同源。
+//
+// tone 曾经不在这里，而是由【每个调用方】自己 classList.add——四个调用点里有两个忘了加，于是
+// 走历史回放渲染出来的成功工具卡顶着模板里残留的 text-warning，同一张卡实时看是绿 ✓、刷新后
+// 变成棕色的 ✓（2026-09-09）。并进同一张表后，「加了 kind 忘了配色」在结构上写不出来。
+//
+// path 是可信静态串（无用户输入），currentColor 吃 tone 给的语义色。
+// label 存中文原文、到 statusIconSpec 里才 t()：模块顶层常量在 import 阶段求值，那时 app.js
+// 还没跑到 setLang()，直接在表里 t() 会把标签永久钉死成中文。
+export const STATUS_ICONS = {
   // hourglass-ish circle for pending/busy
-  pending: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  busy: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  ok: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-  error: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  warn: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  denied: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  answered: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-  aborted: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>',
+  pending: { tone: 'text-warning', label: '进行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  busy: { tone: 'text-warning', label: '运行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  ok: { tone: 'text-success', label: '成功', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  error: { tone: 'text-danger', label: '出错', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  warn: { tone: 'text-warning', label: '待审批', path: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  denied: { tone: 'text-danger', label: '已拒绝', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  // answered / aborted 是中性终态：不是工具失败，也不该占用绿色去邀功——刻意让它们退出红/绿的注意力预算
+  answered: { tone: 'text-ink-soft', label: '已回答', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  aborted: { tone: 'text-ink-soft', label: '已中止', path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
 };
-// 下面几张查表存中文原文、到取用点才 t()：模块顶层常量在 import 阶段求值，那时 app.js 还没跑到
-// setLang()，直接在表里 t() 会把这些标签永久钉死成中文。
-const STATUS_ICON_LABELS = {
-  pending: '进行中',
-  busy: '运行中',
-  ok: '成功',
-  error: '出错',
-  warn: '待审批',
-  denied: '已拒绝',
-  answered: '已回答',
-  aborted: '已中止',
-};
+// 供调用点在换色前清掉上一个状态的色（不能只 add，否则两个色类叠着靠 CSS 顺序决胜负）
+export const STATUS_ICON_TONES = [...new Set(Object.values(STATUS_ICONS).map(s => s.tone))];
 export function statusIconSpec(kind) {
-  const k = STATUS_ICON_PATHS[kind] ? kind : 'pending';
-  const path = STATUS_ICON_PATHS[k];
-  const label = t(STATUS_ICON_LABELS[k] || STATUS_ICON_LABELS.pending);
+  const k = STATUS_ICONS[kind] ? kind : 'pending';
+  const { path, tone, label } = STATUS_ICONS[k];
   const html = `<svg class="status-svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">${path}</svg>`;
-  return { html, label, kind: k };
+  return { html, label: t(label), kind: k, tone };
 }
 
 // 设置面板的数据源必须按驾驶方整组切换：CLI 镜像态只展示 CLI 观察值，哪怕某字段未知；

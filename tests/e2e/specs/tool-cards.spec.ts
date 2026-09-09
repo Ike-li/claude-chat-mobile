@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-05 工具调用卡片生命周期', async ({ page }) => {
@@ -24,7 +25,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('details.toolcard pre').first()).toContainText('utils/date.js');
     const st = page.locator('details.toolcard .t-status');
     await expect(st).toHaveCount(3);
-    for (let i = 0; i < 3; i++) await expect(st.nth(i)).toHaveAttribute('aria-label', '成功');
+    // 图标维与颜色维分开断：实测过只断 aria-label 时，把 setStatusIcon 的染色整段删掉这里照样绿
+    for (let i = 0; i < 3; i++) {
+      await expect(st.nth(i)).toHaveAttribute('aria-label', '成功');
+      await expect(st.nth(i)).toHaveClass(/text-success/);
+    }
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('All tools executed cleanly');
 
     await page.locator('details.toolcard summary').last().click();
@@ -68,6 +73,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('mock tool crashed');
     await expect(failedCard.locator('.t-status')).toHaveAttribute('aria-label', '出错');
+    await expect(failedCard.locator('.t-status')).toHaveClass(/text-danger/);
     await failedCard.locator('summary').click();
     await expect(failedCard.locator('.t-out')).toContainText('mock tool crashed');
 
@@ -222,6 +228,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 别写成 not.toContainText('- ')：Playwright 会对期望串做空白归一化，尾空格被吃掉后变成 '-'，
     // 于是它命中路径里 claude-chat-mobile 的连字符，恒红。
     await expect(readBody.locator('pre')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-05h（2026-09-09）：历史回放路径的工具卡状态色。
+  // live 路径在 tool_result 里换图标【并且】加 text-success；历史回放路径（renderHistoryBubbles）
+  // 此前只调 setStatusIcon 换图标，模板里那个表示「进行中」的 text-warning 原样留着——
+  // 同一张成功卡，实时看是绿 ✓，刷新 / 切回后变成棕色的 ✓（--warning #9A5F22）。
+  // 上面所有既有断言都只查 aria-label，而 aria-label 两条路径都对，所以颜色这一维此前无人把守。
+  test('P0-05h 历史回放的成功工具卡染成功色，而不是残留的进行中色', async ({ page }) => {
+    await gotoMock(page);
+    // Timeline Session 走 session:history 批量回放（fixture 里有一对 tl-tool-1 tool_use/tool_result ok:true）
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const st = page.locator('[data-tool-name="Read"] .t-status');
+    await expect(st).toHaveCount(1);
+    // aria-label 是图标维，两条路径都对——它绿着也证明不了颜色维，必须分开断
+    await expect(st).toHaveAttribute('aria-label', '成功');
+    await expect(st).toHaveClass(/text-success/);
+    await expect(st).not.toHaveClass(/text-warning/);
 
     await expectNoBrowserErrors(page);
   });

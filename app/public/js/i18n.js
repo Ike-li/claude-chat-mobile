@@ -10,7 +10,7 @@
 //
 // 两个反复踩到的坑，加词条前先看一眼：
 //   1. 模块顶层常量表里不能直接 t()：那在 import 阶段就求值，早于 app.js 的 setLang()，语言会被钉死在
-//      zh。表里存中文原文、到取用点才 t()（见 logic.js STATUS_ICON_LABELS、git-changes.js SECTION_META）。
+//      zh。表里存中文原文、到取用点才 t()（见 logic.js STATUS_ICONS、git-changes.js SECTION_META）。
 //   2. 局部变量别叫 t：会静默遮蔽成 "t is not a function"，而 ESLint 看不出问题（t 确实有定义）。
 export const LANG_STORAGE_KEY = 'ccm_lang';
 

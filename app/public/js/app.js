@@ -19,6 +19,7 @@ import {
   pickBannerToShow,
   formatStreamPreviewIntervalMs,
   statusIconSpec,
+  STATUS_ICON_TONES,
   toolPreviewLabel,
   effortLevelsFor,
   modelLabelFor,
@@ -978,12 +979,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 拉历史在途时把镜像追平的 history_append 扣住，历史落地后再放行——顺序与打戳同时正确。
   const historyLoadGate = createHistoryLoadGate();
   // UI-007：工具卡/角标状态标 — 可信 SVG + aria-label（currentColor 吃语义色）
-  function setStatusIcon(el, kind) {
+  // 图标与语义色一起换，两者同源于 statusIconSpec 的一次查表——染色曾由各调用点自己 add，
+  // 历史回放与本轮报错收尾两处漏了，成功的 ✓ 顶着残留的 text-warning 画成棕色（2026-09-09）。
+  // 缺省染色、例外显式：tone:false 只给自带色调的调用方（#sessionsDot 的 bg_locked 刻意用
+  // warn 图标配 ink-faint 色，理由见 DRAWER_STATUS_META 那条注释）。
+  function setStatusIcon(el, kind, { tone = true } = {}) {
     if (!el) return;
-    const { html, label } = statusIconSpec(kind);
+    const spec = statusIconSpec(kind);
     el.classList.add('status-icon', 't-status');
-    el.setAttribute('aria-label', label);
-    el.innerHTML = html;
+    if (tone) {
+      el.classList.remove(...STATUS_ICON_TONES); // 先清：只 add 会让两个色类叠着靠 CSS 顺序决胜负
+      el.classList.add(spec.tone);
+    }
+    el.setAttribute('aria-label', spec.label);
+    el.innerHTML = spec.html;
   }
 
   // UX-019：档位变更反馈——空态不打系统条，改胶囊短暂高亮；有消息后仍可留痕。
@@ -2233,7 +2242,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const card = el(`
         <details class="msg-frame toolcard text-xs">
           <summary class="pl-2 pr-1 py-1 flex items-center gap-2 min-w-0">
-            <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name text-ink-soft truncate">${esc(cardTitle)}</span>
+            <span class="t-status status-icon shrink-0"></span><span class="t-name text-ink-soft truncate">${esc(cardTitle)}</span>
           </summary>
           <div class="pl-2 pr-1 pb-2 space-y-1">
             <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
@@ -2357,11 +2366,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const statusKind = p.denyKind === 'answered' ? 'answered'
         : (p.denyKind === 'denied' || p.denyKind === 'cancelled') ? 'denied'
         : (p.ok ? 'ok' : 'error');
-      const stEl = card.querySelector('.t-status');
-      setStatusIcon(stEl, statusKind);
-      if (statusKind === 'ok') stEl?.classList.add('text-success');
-      else if (statusKind === 'error' || statusKind === 'denied') stEl?.classList.add('text-danger');
-      else stEl?.classList.add('text-ink-soft');
+      setStatusIcon(card.querySelector('.t-status'), statusKind); // 语义色随 kind 一起落，见 setStatusIcon
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
@@ -5005,7 +5010,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (meta) {
       sessionsDot.classList.remove('hidden');
       sessionsDot.classList.add('status-icon', meta.tone);
-      setStatusIcon(sessionsDot, meta.icon);
+      // tone:false —— 这颗角标的色由 DRAWER_STATUS_META 单独决定，不跟随图标 kind
+      // （bg_locked 刻意是 warn 图标 + ink-faint 色：它是「此路不通」的说明，不该去抢待办的注意力）
+      setStatusIcon(sessionsDot, meta.icon, { tone: false });
       sessionsDot.setAttribute('aria-label', meta.label);
       sessionsDot.title = `${t('其他工作区')} · ${meta.label}`;
     } else {
@@ -7012,7 +7019,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const card = el(`
           <details class="msg-frame toolcard text-xs">
             <summary class="pl-2 pr-1 py-1 flex items-center gap-2 min-w-0">
-              <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name text-ink-soft truncate">${esc(histTitle)}</span>
+              <span class="t-status status-icon shrink-0"></span><span class="t-name text-ink-soft truncate">${esc(histTitle)}</span>
             </summary>
             <div class="pl-2 pr-1 pb-2 space-y-1">
               <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
