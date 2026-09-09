@@ -2532,10 +2532,11 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     if (level === effortOf(id)) return; // UI 档幂等（xhigh ↔ ultracode 不同，须置换）
-    if (a.isBusy()) {
-      sysTo(socket, '当前有任务在运行，请等结束后再切思考强度', true);
-      return effortTo(socket);
-    }
+    // 【2026-09-09】busy 守卫下移到重路径分支（原先在此处无差别拦所有档位）。
+    // 它是 7febabc（2026-07-28）加的，那时切档必然 dispose+resume，轮次进行中切会腰斩在途回合；
+    // 439bb02 把具体档互切改成 apply_flag_settings 控制请求后轻路径不再置换实例，守卫对它就没了理由，
+    // 但没跟着下移——于是「回合进行中切不动思考强度」一直留到今天。轻路径此刻放行是安全的：
+    // 控制请求不碰实例生命周期，档位生效于 CLI 的下一次 API 请求。
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
     // B3：FRESH 尚无 sessionId 时 dispose+resume(null) 会丢掉在途首条/半开实例——只记 pending，等懒开消费
     if (!sid) {
@@ -2568,7 +2569,14 @@ registerSocketConnection(io, socket => {
       sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '模型默认'}」`, true);
       return effortTo(socket);
     }
-    // needsSwap → 落到下面的置换实例路径（回模型默认档，或实例尚无控制通道）
+    // needsSwap → 落到下面的置换实例路径（回模型默认档，或实例尚无控制通道）。
+    // busy 守卫只守到这里：置换会 kill 在途 turn / bg / 审批，理由与 SRV-003 同源（那条锚在
+    // externalDirty 路径上，这里是同一危害的另一个触发点）。文案给出替代路径——具体档位走轻路径，
+    // 此刻就能切，不必等回合结束。
+    if (a.isBusy()) {
+      sysTo(socket, '回「模型默认」要重开会话实例，而当前有任务在运行。请等本轮结束，或改选一个具体档位（立即生效）', true);
+      return effortTo(socket);
+    }
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
     // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
     if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });

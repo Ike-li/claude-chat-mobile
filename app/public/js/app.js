@@ -4047,7 +4047,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const uiLevel = effortSelect.value || null;
     if (uiLevel === currentEffort) return;
     socket.emit('user:setEffort', { level: uiLevel });
-    addModeBar(t('正在切换思考强度并续接会话…'), 'text-ink-faint');
+    // 不做乐观提示：前端预知不了服务端走轻路径（控制请求、不续接会话）还是重路径（dispose+resume），
+    // 而这里唯一能写的文案必然在其中一半场景下说谎。两条路径服务端都有回执——轻路径广播
+    // effort_mode（由 setEffortMode 上屏），重路径先发 system/resuming，失败发红条。
   };
 
   // ---- 工作目录切换（台阶1：多目录单并发）----

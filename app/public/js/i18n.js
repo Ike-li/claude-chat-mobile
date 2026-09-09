@@ -470,7 +470,6 @@ export const EN_DICT = Object.freeze({
   '最深入更慢更贵': 'Deepest, slowest, priciest',
   'xhigh + 多 agent · 最彻底': 'xhigh + multi-agent · most thorough',
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
-  '正在切换思考强度并续接会话…': 'Switching thinking effort and resuming the session…',
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
 
