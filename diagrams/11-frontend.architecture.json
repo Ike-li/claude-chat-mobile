@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "前端模块地图：新状态该落在哪一层",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Ike-li/claude-chat-mobile",
+      "provider": "github",
+      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+    },
+    "views": [
+      {
+        "id": "inbound",
+        "label": "入向派发",
+        "focus": [
+          "socket",
+          "dispatch",
+          "appjs",
+          "modules"
+        ],
+        "note": "事件按 type 分派到存量顶层与交互模块。"
+      },
+      {
+        "id": "pure",
+        "label": "纯函数层",
+        "focus": [
+          "modules",
+          "logic",
+          "i18n",
+          "tests"
+        ],
+        "note": "浏览器与单测零构建共用同一份文件。"
+      },
+      {
+        "id": "shared",
+        "label": "唯一前后端共用",
+        "focus": [
+          "canon",
+          "socket"
+        ],
+        "note": "指纹规范化是模块边界规则的唯一豁免。"
+      }
+    ],
+    "viewBox": [
+      1280,
+      640
+    ]
+  },
+  "components": [
+    {
+      "id": "socket",
+      "type": "frontend",
+      "label": "Socket.io 客户端",
+      "sublabel": "长连接与重连",
+      "pos": [
+        60,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ]
+    },
+    {
+      "id": "dispatch",
+      "type": "frontend",
+      "label": "event-dispatch",
+      "sublabel": "handle + outOfBand 表",
+      "pos": [
+        380,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/app/event-dispatch.js"
+        }
+      ]
+    },
+    {
+      "id": "appjs",
+      "type": "frontend",
+      "label": "app.js 存量顶层",
+      "sublabel": "客户端状态与交互",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "不再新增状态",
+      "sources": [
+        {
+          "path": "app/public/js/app.js"
+        }
+      ]
+    },
+    {
+      "id": "modules",
+      "type": "frontend",
+      "label": "app/ 交互模块",
+      "sublabel": "工厂 + context 注入",
+      "pos": [
+        1020,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ]
+    },
+    {
+      "id": "i18n",
+      "type": "backend",
+      "label": "i18n.js",
+      "sublabel": "key 即中文原文",
+      "pos": [
+        700,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/i18n.js"
+        }
+      ]
+    },
+    {
+      "id": "logic",
+      "type": "backend",
+      "label": "logic/ 纯函数层",
+      "sublabel": "不碰 DOM / socket",
+      "pos": [
+        1020,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "数据进数据出"
+    },
+    {
+      "id": "canon",
+      "type": "security",
+      "label": "canonicalize.js",
+      "sublabel": "前后端唯一共用",
+      "pos": [
+        60,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/public/js/canonicalize.js"
+        }
+      ]
+    },
+    {
+      "id": "tests",
+      "type": "external",
+      "label": "logic-*.test.mjs",
+      "sublabel": "零构建共用同一份",
+      "pos": [
+        1020,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "纯函数层：零 DOM · 零 socket · 零可变态",
+      "wraps": [
+        "i18n",
+        "logic"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": "socket",
+      "to": "dispatch",
+      "label": "agent:event 入口"
+    },
+    {
+      "id": "c2",
+      "from": "dispatch",
+      "to": "appjs",
+      "label": "按 type 派发"
+    },
+    {
+      "id": "c3",
+      "from": "appjs",
+      "to": "modules",
+      "label": "注入 context"
+    },
+    {
+      "id": "c4",
+      "from": "modules",
+      "to": "logic",
+      "label": "调用纯函数",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 80
+    },
+    {
+      "id": "c5",
+      "from": "logic",
+      "to": "i18n",
+      "label": "唯一宿主外 import",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "c6",
+      "from": "tests",
+      "to": "logic",
+      "label": "同一份文件",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -70
+    },
+    {
+      "id": "c7",
+      "from": "canon",
+      "to": "socket",
+      "label": "设备指纹规范化",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -205
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "新状态往哪放",
+      "items": [
+        "前端新状态进 app/public/js/app/，工厂 + context 注入",
+        "样板见 event-dispatch.js；存量 app.js 顶层作用域不动",
+        "能写成纯函数就先落 logic/，logic.js 只是 re-export barrel"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "纯函数层的边界",
+      "items": [
+        "数据进数据出，不碰 DOM、window、socket 与应用可变态",
+        "唯一允许的宿主外 import 是 i18n.js",
+        "浏览器与 tests/unit/logic-*.test.mjs 零构建共用同一份文件"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "三处最容易踩",
+      "items": [
+        "canonicalize.js 是「前后端互不 import」的唯一豁免",
+        "i18n key 就是中文原文，改文案即改 key",
+        "handle 表 + outOfBand 表的键并集必须精确等于 27 种事件类型"
+      ]
+    }
+  ]
+}

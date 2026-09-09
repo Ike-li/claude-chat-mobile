@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "事件信封与断线回放：seq、epoch 与两级回退",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      560
+    ],
+    "views": [
+      {
+        "id": "normal",
+        "label": "正常流与去重",
+        "focus": [
+          "agent",
+          "socket",
+          "phone"
+        ],
+        "note": "每条出向事件都带 seq 与 epoch，前端据此去重。"
+      },
+      {
+        "id": "replay",
+        "label": "缓冲内回放",
+        "focus": [
+          "phone",
+          "socket",
+          "agent"
+        ],
+        "note": "重连时以 sync:since 请求仍在环形缓冲里的缺口。"
+      },
+      {
+        "id": "fallback",
+        "label": "回退鉴权历史",
+        "focus": [
+          "socket",
+          "transcript",
+          "phone"
+        ],
+        "note": "缺口超出缓冲或 epoch 变化时，从 transcript 重建稳定消息。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "AgentSession",
+      "sublabel": "环形缓冲"
+    },
+    {
+      "id": "socket",
+      "type": "backend",
+      "label": "Socket.io",
+      "sublabel": "分流广播"
+    },
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机 PWA",
+      "sublabel": "去重基线"
+    },
+    {
+      "id": "transcript",
+      "type": "database",
+      "label": "transcript",
+      "sublabel": "稳定历史"
+    }
+  ],
+  "segments": [
+    {
+      "from": 148,
+      "to": 258,
+      "label": "正常流与断线"
+    },
+    {
+      "from": 264,
+      "to": 370,
+      "label": "sync:since 回放"
+    },
+    {
+      "from": 376,
+      "to": 486,
+      "label": "回退鉴权历史"
+    }
+  ],
+  "messages": [
+    {
+      "id": "emit",
+      "from": "agent",
+      "to": "socket",
+      "y": 160,
+      "label": "agent:event {seq, epoch, sessionId, instanceId}",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fanout",
+      "from": "socket",
+      "to": "phone",
+      "y": 188,
+      "label": "按 instanceId 分流，前端按 seq 去重"
+    },
+    {
+      "id": "drop",
+      "from": "socket",
+      "to": "phone",
+      "y": 216,
+      "label": "连接断开",
+      "variant": "dashed"
+    },
+    {
+      "id": "keepbuf",
+      "from": "agent",
+      "to": "socket",
+      "y": 244,
+      "label": "seq 继续递增，写入环形缓冲",
+      "variant": "dashed"
+    },
+    {
+      "id": "reconnect",
+      "from": "phone",
+      "to": "socket",
+      "y": 272,
+      "label": "重连，携带最后 seq 与 epoch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "since",
+      "from": "socket",
+      "to": "agent",
+      "y": 300,
+      "label": "sync:since",
+      "variant": "security"
+    },
+    {
+      "id": "gapfill",
+      "from": "agent",
+      "to": "socket",
+      "y": 328,
+      "label": "缓冲内缺口逐条补发",
+      "variant": "return"
+    },
+    {
+      "id": "deliver",
+      "from": "socket",
+      "to": "phone",
+      "y": 356,
+      "label": "补发；epoch 未变则沿用去重基线",
+      "variant": "return"
+    },
+    {
+      "id": "toofar",
+      "from": "agent",
+      "to": "socket",
+      "y": 384,
+      "label": "缺口超出缓冲，或 epoch 已变",
+      "variant": "security"
+    },
+    {
+      "id": "askhist",
+      "from": "phone",
+      "to": "socket",
+      "y": 412,
+      "label": "session:history，过鉴权",
+      "variant": "security"
+    },
+    {
+      "id": "readdisk",
+      "from": "socket",
+      "to": "transcript",
+      "y": 440,
+      "label": "读 CLI transcript"
+    },
+    {
+      "id": "render",
+      "from": "socket",
+      "to": "phone",
+      "y": 468,
+      "label": "重建的稳定历史回显",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "agent",
+      "from": 155,
+      "to": 446,
+      "type": "backend"
+    },
+    {
+      "participant": "socket",
+      "from": 160,
+      "to": 474,
+      "type": "backend"
+    },
+    {
+      "participant": "phone",
+      "from": 183,
+      "to": 474,
+      "type": "frontend"
+    },
+    {
+      "participant": "transcript",
+      "from": 435,
+      "to": 446,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "信封里为什么有两个 id",
+      "items": [
+        "sessionId 是 CLI 会话身份，instanceId 是 Web 进程实例",
+        "分开才不会把同一会话与它的多个实例混淆",
+        "epoch 标识服务端世代，变化即重置去重基线"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "环形缓冲不是永久历史",
+      "items": [
+        "缓冲有界，缺口超出或重启就回退 session:history",
+        "历史从 transcript 重建稳定消息，不是重放缓冲",
+        "高频瞬态状态不会全部进入永久历史"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "事件契约是硬闸",
+      "items": [
+        "后端发送方与 mock server 双向校验 type 闭合集",
+        "前端 handle + outOfBand 键并集须精确等于 27 种",
+        "少一个＝静默丢弃，多一个＝死键"
+      ]
+    }
+  ]
+}

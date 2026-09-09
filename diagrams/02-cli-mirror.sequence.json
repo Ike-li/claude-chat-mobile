@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "CLI 驾驶：只读镜像的建立、追平与解锁",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      560
+    ],
+    "views": [
+      {
+        "id": "lock",
+        "label": "建立镜像锁",
+        "focus": [
+          "cli",
+          "transcript",
+          "mirror",
+          "phone"
+        ],
+        "note": "外部增长且尾部未完结时，Web 侧输入转只读。"
+      },
+      {
+        "id": "hooks",
+        "label": "即时信号加速",
+        "focus": [
+          "cli",
+          "hooks",
+          "mirror"
+        ],
+        "note": "可选 hooks 桥把发现时间从一个轮询周期缩短到文件事件。"
+      },
+      {
+        "id": "release",
+        "label": "静默判定与解锁",
+        "focus": [
+          "transcript",
+          "mirror",
+          "socket",
+          "phone"
+        ],
+        "note": "连续 5 个 tick 无终端未完结尾部才释放锁。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "cli",
+      "type": "external",
+      "label": "终端 claude CLI",
+      "sublabel": "独立进程"
+    },
+    {
+      "id": "transcript",
+      "type": "database",
+      "label": "transcript",
+      "sublabel": "对话真相源"
+    },
+    {
+      "id": "hooks",
+      "type": "messagebus",
+      "label": "hooks 投递箱",
+      "sublabel": "可选桥"
+    },
+    {
+      "id": "mirror",
+      "type": "backend",
+      "label": "mirror-engine",
+      "sublabel": "catchUpTick"
+    },
+    {
+      "id": "socket",
+      "type": "backend",
+      "label": "server 广播",
+      "sublabel": "agent:event"
+    },
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机 PWA",
+      "sublabel": "只读镜像"
+    }
+  ],
+  "segments": [
+    {
+      "from": 148,
+      "to": 286,
+      "label": "建立只读镜像"
+    },
+    {
+      "from": 292,
+      "to": 398,
+      "label": "追平与即时信号"
+    },
+    {
+      "from": 404,
+      "to": 486,
+      "label": "静默判定与解锁"
+    }
+  ],
+  "messages": [
+    {
+      "id": "cliwrite",
+      "from": "cli",
+      "to": "transcript",
+      "y": 160,
+      "label": "已完成消息落盘，自报 entrypoint: cli",
+      "variant": "emphasis"
+    },
+    {
+      "id": "poll",
+      "from": "mirror",
+      "to": "transcript",
+      "y": 188,
+      "label": "catchUpTick 每 2500ms 读尾部"
+    },
+    {
+      "id": "growth",
+      "from": "transcript",
+      "to": "mirror",
+      "y": 216,
+      "label": "外部增长 + 尾部未完结",
+      "variant": "return"
+    },
+    {
+      "id": "lock",
+      "from": "mirror",
+      "to": "socket",
+      "y": 244,
+      "label": "标记 externalDirty，建立镜像锁",
+      "variant": "security"
+    },
+    {
+      "id": "readonly",
+      "from": "socket",
+      "to": "phone",
+      "y": 272,
+      "label": "mirror_state：终端驾驶中，输入转只读",
+      "variant": "emphasis"
+    },
+    {
+      "id": "hookwrite",
+      "from": "cli",
+      "to": "hooks",
+      "y": 300,
+      "label": "Stop / Notification 写文件",
+      "variant": "dashed"
+    },
+    {
+      "id": "hookwatch",
+      "from": "hooks",
+      "to": "mirror",
+      "y": 328,
+      "label": "fs.watch 触发插队检查",
+      "variant": "dashed"
+    },
+    {
+      "id": "faster",
+      "from": "mirror",
+      "to": "transcript",
+      "y": 356,
+      "label": "镜像中提速到 1000ms 轮询"
+    },
+    {
+      "id": "append",
+      "from": "mirror",
+      "to": "socket",
+      "y": 384,
+      "label": "history_append，只读镜像追平"
+    },
+    {
+      "id": "turnend",
+      "from": "cli",
+      "to": "transcript",
+      "y": 412,
+      "label": "回合结束，尾部完结"
+    },
+    {
+      "id": "quiet",
+      "from": "mirror",
+      "to": "transcript",
+      "y": 440,
+      "label": "静默判定：连续 5 tick 约 12.5s",
+      "variant": "security"
+    },
+    {
+      "id": "unlock",
+      "from": "socket",
+      "to": "phone",
+      "y": 468,
+      "label": "释放镜像锁 → mirror_state：可续接",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "cli",
+      "from": 155,
+      "to": 446,
+      "type": "external"
+    },
+    {
+      "participant": "transcript",
+      "from": 160,
+      "to": 446,
+      "type": "database"
+    },
+    {
+      "participant": "hooks",
+      "from": 295,
+      "to": 334,
+      "type": "messagebus"
+    },
+    {
+      "participant": "mirror",
+      "from": 183,
+      "to": 474,
+      "type": "backend"
+    },
+    {
+      "participant": "socket",
+      "from": 239,
+      "to": 474,
+      "type": "backend"
+    },
+    {
+      "participant": "phone",
+      "from": 267,
+      "to": 474,
+      "type": "frontend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "锁为什么只认终端写的尾部",
+      "items": [
+        "transcript 逐条自报写入方：CLI 写 cli，本项目写 sdk-ts",
+        "己方 SDK 留下的未完结尾部撑不住锁",
+        "否则 Web 等一条审批就自锁，点不到批准"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "hooks 只是加速触发器",
+      "items": [
+        "把回合结束的发现时间缩短到文件事件",
+        "未安装则完整回落纯轮询，功能不缺失",
+        "磁盘 transcript 始终是真相源"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "只读镜像的硬限制",
+      "items": [
+        "只看得到已落盘内容，不是实时 stdout",
+        "不能向终端进程输入，也无法附着 stdin",
+        "纯终端等待的会话不进「需要你」聚合"
+      ]
+    }
+  ]
+}

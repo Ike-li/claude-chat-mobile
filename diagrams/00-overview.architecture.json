@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Claude Chat Mobile · 系统总览",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Ike-li/claude-chat-mobile",
+      "provider": "github",
+      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+    },
+    "views": [
+      {
+        "id": "web-drive",
+        "label": "Web 驾驶（可写）",
+        "focus": [
+          "phone",
+          "edge",
+          "server",
+          "agent",
+          "sdk",
+          "cli"
+        ],
+        "note": "手机发起的任务经 Agent SDK 驱动本机 CLI，这条路径可写。"
+      },
+      {
+        "id": "cli-drive",
+        "label": "CLI 驾驶（只读镜像）",
+        "focus": [
+          "cli",
+          "transcript",
+          "mirror",
+          "server",
+          "phone"
+        ],
+        "note": "终端进程不经过 SDK，只靠磁盘 transcript 追平成只读镜像。"
+      },
+      {
+        "id": "state",
+        "label": "控制面与真相源",
+        "focus": [
+          "server",
+          "datadir",
+          "transcript"
+        ],
+        "note": "CCM 控制面与 Claude 对话是两处独立持久化，清理前者不等于删会话。"
+      }
+    ],
+    "viewBox": [
+      1280,
+      640
+    ]
+  },
+  "components": [
+    {
+      "id": "server",
+      "type": "backend",
+      "label": "server 组装根",
+      "sublabel": "Express 5 · Socket.io 4",
+      "pos": [
+        380,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "鉴权 · 路由 · 多实例",
+      "sources": [
+        {
+          "path": "app/src/server/app.js",
+          "label": "装配入口"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "AgentSession",
+      "sublabel": "权限闸门 · 环形缓冲",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/agent/agent.js",
+          "label": "会话驱动"
+        }
+      ]
+    },
+    {
+      "id": "sdk",
+      "type": "external",
+      "label": "Claude Agent SDK",
+      "sublabel": "claude-agent-sdk 0.3.263",
+      "pos": [
+        1020,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ]
+    },
+    {
+      "id": "edge",
+      "type": "cloud",
+      "label": "Cloudflare Tunnel",
+      "sublabel": "可选公网入口 + Access",
+      "pos": [
+        60,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "非必需"
+    },
+    {
+      "id": "datadir",
+      "type": "database",
+      "label": "CCM_DATA_DIR",
+      "sublabel": "设备·审批·审计·已读位点",
+      "pos": [
+        700,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "控制面，不存 transcript"
+    },
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机 PWA",
+      "sublabel": "app/public/ 单页应用",
+      "pos": [
+        60,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "消息·工具卡片·审批",
+      "sources": [
+        {
+          "path": "app/public/js/app.js",
+          "label": "客户端状态与派发"
+        }
+      ]
+    },
+    {
+      "id": "mirror",
+      "type": "backend",
+      "label": "mirror-engine",
+      "sublabel": "catchUp 调度 + hooks 投递箱",
+      "pos": [
+        380,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/server/mirror-engine.js",
+          "label": "追平与镜像状态机"
+        }
+      ]
+    },
+    {
+      "id": "transcript",
+      "type": "database",
+      "label": "transcript",
+      "sublabel": "~/.claude/projects/",
+      "pos": [
+        700,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "对话真相源"
+    },
+    {
+      "id": "cli",
+      "type": "external",
+      "label": "本机 claude CLI",
+      "sublabel": "继承登录态·MCP·hooks",
+      "pos": [
+        1020,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "cwd 限定于 WORKDIRS"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "本机（headless npm start 或 macOS CCM.app）",
+      "wraps": [
+        "server",
+        "agent",
+        "sdk",
+        "cli",
+        "transcript",
+        "mirror",
+        "datadir"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "phone-edge",
+      "from": "phone",
+      "to": "edge",
+      "label": "agent:event / user:*",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "edge-server",
+      "from": "edge",
+      "to": "server",
+      "label": "Socket.io 长连接",
+      "variant": "emphasis"
+    },
+    {
+      "id": "server-agent",
+      "from": "server",
+      "to": "agent",
+      "label": "按 instanceId 路由"
+    },
+    {
+      "id": "agent-sdk",
+      "from": "agent",
+      "to": "sdk",
+      "label": "streaming input"
+    },
+    {
+      "id": "sdk-cli",
+      "from": "sdk",
+      "to": "cli",
+      "label": "spawn 子进程",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 175
+    },
+    {
+      "id": "cli-transcript",
+      "from": "cli",
+      "to": "transcript",
+      "label": "回合落盘",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "transcript-mirror",
+      "from": "transcript",
+      "to": "mirror",
+      "label": "每 2.5s 轮询磁盘",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "mirror-server",
+      "from": "mirror",
+      "to": "server",
+      "label": "只读镜像事件",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "server-datadir",
+      "from": "server",
+      "to": "datadir",
+      "label": "控制面持久化",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Web 驾驶：可写的那条路",
+      "items": [
+        "手机事件按 instanceId 路由到对应 AgentSession",
+        "SDK streaming input 驱动本机 CLI，在授权 cwd 工作",
+        "出向统一封装成 agent:event 信封，共 27 种 type"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "CLI 驾驶：只读镜像",
+      "items": [
+        "终端进程不经过 SDK，server 不接管它的 stdin",
+        "磁盘 transcript 是真相源，hooks 只是加速触发器",
+        "未落盘的 thinking 与工具输出暂时不可见"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "硬边界",
+      "items": [
+        "AUTH_TOKEN 是启动前提，没有它 server 起不来",
+        "Cloudflare 非必需，同 WiFi 可直连本机 server",
+        "同一时刻只允许一个驾驶员写入同一会话"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "文件域：从请求到落盘的四段闸门",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "read",
+        "label": "读路径",
+        "focus": [
+          "phone",
+          "scope",
+          "read",
+          "fs"
+        ],
+        "note": "浏览、预览、搜索与 git 变更都过同一道范围门。"
+      },
+      {
+        "id": "attach",
+        "label": "附件通道",
+        "focus": [
+          "phone",
+          "uploadgate",
+          "attach",
+          "uploads"
+        ],
+        "note": "附件落在数据目录，不写进用户项目。"
+      },
+      {
+        "id": "write",
+        "label": "写路径",
+        "focus": [
+          "agenttool",
+          "scope",
+          "write",
+          "fs"
+        ],
+        "note": "Agent 自主写入与用户直接编辑走不同的审批与审计防线。"
+      }
+    ],
+    "viewBox": [
+      1080,
+      560
+    ]
+  },
+  "stages": [
+    {
+      "label": "入口"
+    },
+    {
+      "label": "范围与校验闸"
+    },
+    {
+      "label": "文件操作"
+    },
+    {
+      "label": "落地"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机文件面板",
+      "sublabel": "浏览·预览·编辑",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "agenttool",
+      "type": "backend",
+      "label": "Agent 工具调用",
+      "sublabel": "Read · Edit · Bash",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "uploadgate",
+      "type": "security",
+      "label": "附件校验",
+      "sublabel": "条数·单文件·总量",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "scope",
+      "type": "security",
+      "label": "工作区范围门",
+      "sublabel": "isInScope + symlink",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "attach",
+      "type": "backend",
+      "label": "附件落盘与注入",
+      "sublabel": "绝对路径进 prompt",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "read",
+      "type": "backend",
+      "label": "浏览·预览·搜索",
+      "sublabel": "含 git status/diff",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "write",
+      "type": "backend",
+      "label": "范围内写入",
+      "sublabel": "大小·哈希·审计",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "uploads",
+      "type": "database",
+      "label": "附件存储",
+      "sublabel": "dataDir/uploads/",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "fs",
+      "type": "database",
+      "label": "授权工作区磁盘",
+      "sublabel": "WORKDIRS 之内",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "id": "f1",
+      "from": "phone",
+      "to": "uploadgate",
+      "label": "附件上传",
+      "route": "straight",
+      "labelAt": [
+        174,
+        200
+      ]
+    },
+    {
+      "id": "f2",
+      "from": "phone",
+      "to": "scope",
+      "label": "files:* / git:*",
+      "labelDy": 40
+    },
+    {
+      "id": "f3",
+      "from": "agenttool",
+      "to": "scope",
+      "label": "工具自主访问",
+      "variant": "security",
+      "route": "straight",
+      "labelAt": [
+        207,
+        314
+      ]
+    },
+    {
+      "id": "f4",
+      "from": "uploadgate",
+      "to": "attach",
+      "label": "10 个 / 10MB / 共 20MB",
+      "route": "straight",
+      "labelAt": [
+        422,
+        200
+      ]
+    },
+    {
+      "id": "f5",
+      "from": "scope",
+      "to": "read",
+      "label": "在 WORKDIRS 内",
+      "route": "straight",
+      "labelAt": [
+        422,
+        218
+      ]
+    },
+    {
+      "id": "f6",
+      "from": "scope",
+      "to": "write",
+      "label": "可写且非 symlink"
+    },
+    {
+      "id": "f7",
+      "from": "attach",
+      "to": "uploads",
+      "label": "落数据目录",
+      "classification": "写入",
+      "route": "straight",
+      "labelAt": [
+        637,
+        188
+      ]
+    },
+    {
+      "id": "f8",
+      "from": "read",
+      "to": "fs",
+      "label": "只读访问",
+      "classification": "只读",
+      "route": "straight",
+      "labelAt": [
+        637,
+        234
+      ]
+    },
+    {
+      "id": "f9",
+      "from": "write",
+      "to": "fs",
+      "label": "owner-only 写入",
+      "classification": "写入"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "附件已搬出用户项目",
+      "items": [
+        "新家是数据目录下的 uploads/<bucket>/",
+        "工作区里的 .ccm-uploads 只读回落，永不再写",
+        "ensureUploadsRoot 必须跑在 SDK spawn 之前",
+        "--add-dir 是启动时快照，目录那一刻不存在就被 CLI 丢弃"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "范围门之外还有两道",
+      "items": [
+        "symlink 判据是「父目录用户可写」，不是 realpath 命中",
+        "用户点保存属于直接写入，走独立的大小、哈希与审计防线",
+        "浏览、搜索、git diff 各有条数、字节与深度上限"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "git 变更是读路径的一支",
+      "items": [
+        "porcelain -z 解析，相对路径先过 assertSafeRelPath",
+        "条目数与 diff 字节都有上限，不整棵仓库读进内存",
+        "写入侧的审计记录见运维与可观测那张图"
+      ]
+    }
+  ]
+}

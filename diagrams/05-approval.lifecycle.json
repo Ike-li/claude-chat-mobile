@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "工具审批的生命周期与终态",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      660
+    ],
+    "views": [
+      {
+        "id": "happy",
+        "label": "批准路径",
+        "focus": [
+          "request",
+          "notify",
+          "store",
+          "pending",
+          "executed"
+        ],
+        "note": "从 canUseTool 触发到执行并广播 request_resolved。"
+      },
+      {
+        "id": "terminal",
+        "label": "三种终态",
+        "focus": [
+          "pending",
+          "executed",
+          "denied",
+          "expired"
+        ],
+        "note": "批准、拒绝、以及重启后 fail-closed 的过期。"
+      },
+      {
+        "id": "retention",
+        "label": "留存治理",
+        "focus": [
+          "expired",
+          "purged"
+        ],
+        "note": "终态记录默认 90 天后清理，只记条数不记内容。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "审批主链"
+    },
+    {
+      "id": "alt",
+      "label": "其他终态"
+    },
+    {
+      "id": "terminal",
+      "label": "留存治理"
+    }
+  ],
+  "states": [
+    {
+      "id": "request",
+      "type": "start",
+      "label": "canUseTool 触发",
+      "sublabel": "Agent 请求受限工具",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "notify",
+      "type": "active",
+      "label": "无条件推送",
+      "sublabel": "审批不受前台抑制",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "store",
+      "type": "active",
+      "label": "写审批台账",
+      "sublabel": "status = pending",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "pending",
+      "type": "waiting",
+      "label": "等待用户裁决",
+      "sublabel": "手机 / 桌面端",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "需要你"
+    },
+    {
+      "id": "executed",
+      "type": "success",
+      "label": "批准并执行",
+      "sublabel": "广播 request_resolved",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "denied",
+      "type": "failure",
+      "label": "denied",
+      "sublabel": "拒绝并记审计",
+      "lane": "alt",
+      "col": 1,
+      "tag": "终态"
+    },
+    {
+      "id": "expired",
+      "type": "failure",
+      "label": "expired",
+      "sublabel": "重启 fail-closed",
+      "lane": "alt",
+      "col": 2,
+      "tag": "终态"
+    },
+    {
+      "id": "purged",
+      "type": "neutral",
+      "label": "留存清理",
+      "sublabel": "默认 90 天，可配",
+      "lane": "terminal",
+      "col": 2
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t1",
+      "from": "request",
+      "to": "notify",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "t2",
+      "from": "notify",
+      "to": "store",
+      "label": "落盘台账",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "t3",
+      "from": "store",
+      "to": "pending",
+      "label": "进入需要你",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "t4",
+      "from": "pending",
+      "to": "executed",
+      "label": "用户批准",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": -25
+    },
+    {
+      "id": "t5",
+      "from": "pending",
+      "to": "denied",
+      "label": "用户拒绝",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelDy": 40
+    },
+    {
+      "id": "t6",
+      "from": "pending",
+      "to": "expired",
+      "label": "重启：回调已失效",
+      "variant": "security"
+    },
+    {
+      "id": "t7",
+      "from": "expired",
+      "to": "purged",
+      "label": "超保留期清理",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelDy": 40
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "重启必须 fail-closed",
+      "items": [
+        "回调绑在上一进程内存，重启即失效",
+        "遗留 pending 一律标 expired",
+        "必须跑在 httpServer.listen 之前"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "推送为什么不抑制",
+      "items": [
+        "审批、提问、后台完成都有人在等",
+        "用户此刻可能锁屏或在别的 app",
+        "只有 result 按前台可见性抑制"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "留存治理",
+      "items": [
+        "终态记录超保留期清理，默认 90 天",
+        "只记一条汇总审计：条数不含内容",
+        "启动一次 + 之后每 24h 一次"
+      ]
+    }
+  ]
+}

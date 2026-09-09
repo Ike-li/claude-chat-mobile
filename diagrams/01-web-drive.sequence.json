@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Web 驾驶：一条消息的完整时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      560
+    ],
+    "views": [
+      {
+        "id": "idempotent",
+        "label": "幂等与校验",
+        "focus": [
+          "phone",
+          "socket",
+          "dedup"
+        ],
+        "note": "clientMessageId 去重与三类永久性校验失败，决定客户端该不该重试。"
+      },
+      {
+        "id": "routing",
+        "label": "路由与实例置换",
+        "focus": [
+          "socket",
+          "agent"
+        ],
+        "note": "stale 实例 fail-closed；被终端写过的会话先冷读吸收再发送。"
+      },
+      {
+        "id": "stream",
+        "label": "SDK 驱动与回流",
+        "focus": [
+          "agent",
+          "sdk",
+          "cli",
+          "phone"
+        ],
+        "note": "出向事件写入环形缓冲并递增 seq，再按 instanceId 分流。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机 PWA",
+      "sublabel": "outbox · 乐观气泡"
+    },
+    {
+      "id": "socket",
+      "type": "backend",
+      "label": "socket handler",
+      "sublabel": "user:message"
+    },
+    {
+      "id": "dedup",
+      "type": "security",
+      "label": "幂等与校验闸",
+      "sublabel": "message-dedup"
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "AgentSession",
+      "sublabel": "pendingTurns 闸"
+    },
+    {
+      "id": "sdk",
+      "type": "external",
+      "label": "Agent SDK",
+      "sublabel": "streaming input"
+    },
+    {
+      "id": "cli",
+      "type": "external",
+      "label": "claude CLI",
+      "sublabel": "本机子进程"
+    }
+  ],
+  "segments": [
+    {
+      "from": 148,
+      "to": 230,
+      "label": "幂等与校验"
+    },
+    {
+      "from": 236,
+      "to": 342,
+      "label": "路由 · 入队 · ack"
+    },
+    {
+      "from": 348,
+      "to": 486,
+      "label": "SDK 驱动与回流"
+    }
+  ],
+  "messages": [
+    {
+      "id": "send",
+      "from": "phone",
+      "to": "socket",
+      "y": 160,
+      "label": "user:message {text, clientMessageId, instanceId}",
+      "variant": "emphasis"
+    },
+    {
+      "id": "dedupcheck",
+      "from": "socket",
+      "to": "dedup",
+      "y": 188,
+      "label": "isProcessed / isInFlight",
+      "variant": "security"
+    },
+    {
+      "id": "deduppass",
+      "from": "dedup",
+      "to": "socket",
+      "y": 216,
+      "label": "未处理 → claimInFlight；校验失败发 permanent 负 ack",
+      "variant": "return"
+    },
+    {
+      "id": "route",
+      "from": "socket",
+      "to": "agent",
+      "y": 244,
+      "label": "resolveTarget → 懒开或置换实例"
+    },
+    {
+      "id": "ready",
+      "from": "agent",
+      "to": "socket",
+      "y": 272,
+      "label": "externalDirty 时冷读吸收终端轮次",
+      "variant": "return"
+    },
+    {
+      "id": "enqueue",
+      "from": "socket",
+      "to": "agent",
+      "y": 300,
+      "label": "a.send()，pendingTurns>0 直接拒收",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ack",
+      "from": "socket",
+      "to": "phone",
+      "y": 328,
+      "label": "ack {ok:true} 之后才 commitProcessed",
+      "variant": "return"
+    },
+    {
+      "id": "stream",
+      "from": "agent",
+      "to": "sdk",
+      "y": 356,
+      "label": "streaming input"
+    },
+    {
+      "id": "spawn",
+      "from": "sdk",
+      "to": "cli",
+      "y": 384,
+      "label": "spawn / resume 子进程"
+    },
+    {
+      "id": "cliout",
+      "from": "cli",
+      "to": "sdk",
+      "y": 412,
+      "label": "工具调用 · 文本增量",
+      "variant": "return"
+    },
+    {
+      "id": "map",
+      "from": "sdk",
+      "to": "agent",
+      "y": 440,
+      "label": "映射成 27 种事件，写环形缓冲 seq++",
+      "variant": "return"
+    },
+    {
+      "id": "fanout",
+      "from": "socket",
+      "to": "phone",
+      "y": 468,
+      "label": "agent:event 按 instanceId 分流",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "phone",
+      "from": 155,
+      "to": 474,
+      "type": "frontend"
+    },
+    {
+      "participant": "socket",
+      "from": 160,
+      "to": 474,
+      "type": "backend"
+    },
+    {
+      "participant": "dedup",
+      "from": 183,
+      "to": 222,
+      "type": "security"
+    },
+    {
+      "participant": "agent",
+      "from": 239,
+      "to": 446,
+      "type": "backend"
+    },
+    {
+      "participant": "sdk",
+      "from": 379,
+      "to": 446,
+      "type": "external"
+    },
+    {
+      "participant": "cli",
+      "from": 407,
+      "to": 418,
+      "type": "external"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "为什么去重 ID 登记得这么晚",
+      "items": [
+        "校验失败就登记，重发会命中去重被当成功删除 pending",
+        "结果是消息永久丢失——「假成功丢消息」的根因",
+        "只有 send 已 resolve 才 commitProcessed"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "三种负 ack 各有含义",
+      "items": [
+        "permanent：内容非法，重发必再失败",
+        "retryable：实例被弃用或窄竞态，保留 pending",
+        "stale：会话已关闭，刷新拿新 instanceId 再发"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "陈旧上下文守卫",
+      "items": [
+        "SDK 子进程只在 resume 那一刻读过磁盘",
+        "终端此后写的轮次它内存里没有，直接发会分叉",
+        "忙碌中禁止置换：会 kill 在途 canUseTool"
+      ]
+    }
+  ]
+}

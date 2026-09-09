@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "运维与可观测：配置、自检、服务、留痕",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Ike-li/claude-chat-mobile",
+      "provider": "github",
+      "revision": "380ecaf63db4af1eed19f6962c2a71d0020d5253"
+    },
+    "views": [
+      {
+        "id": "config",
+        "label": "配置事实源",
+        "focus": [
+          "schema",
+          "configfile",
+          "doctor"
+        ],
+        "note": "schema 是单一事实源，读写必须同源，写错源等于假成功。"
+      },
+      {
+        "id": "observe",
+        "label": "判定化而非计数器",
+        "focus": [
+          "metrics",
+          "audit",
+          "panel",
+          "service"
+        ],
+        "note": "面板只渲染判定化告警，裸计数留给鉴权的 metrics 快照。"
+      },
+      {
+        "id": "bridge",
+        "label": "两个 CLI 桥",
+        "focus": [
+          "bridges",
+          "statusline",
+          "panel"
+        ],
+        "note": "显式安装才动 ~/.claude，一键卸载对称移除。"
+      }
+    ],
+    "viewBox": [
+      1280,
+      640
+    ]
+  },
+  "components": [
+    {
+      "id": "schema",
+      "type": "backend",
+      "label": "配置 schema",
+      "sublabel": "env-schema.js",
+      "pos": [
+        60,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "单一事实源",
+      "sources": [
+        {
+          "path": "app/src/ops/env-schema.js"
+        }
+      ]
+    },
+    {
+      "id": "doctor",
+      "type": "backend",
+      "label": "启动自检 doctor",
+      "sublabel": "鉴权·路径·端口·暴露面",
+      "pos": [
+        380,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/doctor-checks.js"
+        }
+      ]
+    },
+    {
+      "id": "metrics",
+      "type": "backend",
+      "label": "计数与上下文表",
+      "sublabel": "inc · gauge · label",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/metrics.js"
+        }
+      ]
+    },
+    {
+      "id": "notify",
+      "type": "messagebus",
+      "label": "通知通道",
+      "sublabel": "web-push / ntfy",
+      "pos": [
+        1020,
+        110
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/notify-channels.js"
+        }
+      ]
+    },
+    {
+      "id": "configfile",
+      "type": "database",
+      "label": "ccm.config.json",
+      "sublabel": "缺失才回落 .env",
+      "pos": [
+        60,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "env 始终压过文件"
+    },
+    {
+      "id": "service",
+      "type": "backend",
+      "label": "受管服务",
+      "sublabel": "launchd + manifest",
+      "pos": [
+        380,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/service-units.js"
+        }
+      ]
+    },
+    {
+      "id": "panel",
+      "type": "frontend",
+      "label": "服务状态面板",
+      "sublabel": "判定化，不展示裸计数",
+      "pos": [
+        700,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "审计记录",
+      "sublabel": "写入时环形上限",
+      "pos": [
+        1020,
+        300
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/audit.js"
+        }
+      ]
+    },
+    {
+      "id": "bridges",
+      "type": "external",
+      "label": "两个 CLI 桥",
+      "sublabel": "statusline · hooks",
+      "pos": [
+        380,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "tag": "显式安装"
+    },
+    {
+      "id": "statusline",
+      "type": "backend",
+      "label": "状态行与额度",
+      "sublabel": "Web / CLI 两个来源",
+      "pos": [
+        700,
+        490
+      ],
+      "size": [
+        160,
+        78
+      ],
+      "sources": [
+        {
+          "path": "app/src/ops/statusline.js"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "ops/ 运维域：读取面全部经鉴权",
+      "wraps": [
+        "schema",
+        "doctor",
+        "metrics",
+        "notify",
+        "configfile",
+        "service",
+        "panel",
+        "audit"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": "schema",
+      "to": "configfile",
+      "label": "读写必须同源",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 80
+    },
+    {
+      "id": "c2",
+      "from": "schema",
+      "to": "doctor",
+      "label": "读 schema 判定"
+    },
+    {
+      "id": "c3",
+      "from": "doctor",
+      "to": "service",
+      "label": "unit 归属与漂移",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 80
+    },
+    {
+      "id": "c4",
+      "from": "notify",
+      "to": "metrics",
+      "label": "失败 reason 经清洗",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "c5",
+      "from": "metrics",
+      "to": "panel",
+      "label": "label() 不进数值面",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 80
+    },
+    {
+      "id": "c6",
+      "from": "audit",
+      "to": "panel",
+      "label": "audit:get 唯一读取面",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "c7",
+      "from": "service",
+      "to": "panel",
+      "label": "运行态与重启记录"
+    },
+    {
+      "id": "c8",
+      "from": "bridges",
+      "to": "statusline",
+      "label": "CLI 侧快照"
+    },
+    {
+      "id": "c9",
+      "from": "statusline",
+      "to": "panel",
+      "label": "终端会话只读状态",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -36
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "配置的单一事实源",
+      "items": [
+        "schema 定义在 env-schema.js，读写归一在 config-file.js",
+        "读写必须同源，写错源就是假成功",
+        "ccm.config.json 存在时优先，缺失才回落 .env",
+        "环境变量始终压过文件；哪些项热加载由 schema 的 reload 标记决定"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "判定化，不是计数器",
+      "items": [
+        "面板渲染基础信息 + 判定化告警 + 安全日志 + 重启记录",
+        "一个孤零零的 pushFailure: 3 对人没有参照系，无法解读",
+        "告警都带 24h 时效窗自动退场，且要说得出「是谁、为什么」",
+        "裸计数留给鉴权的 metrics 快照做巡检"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "两个 CLI 桥是可选的",
+      "items": [
+        "显式安装才动 ~/.claude，一键卸载对称移除",
+        "hooks 桥把回合结束从轮询变成即时信号",
+        "statusline 桥给终端会话写模型、上下文、成本与额度快照",
+        "一键卸载只删产品自己装的，manifest 之外的一律不碰"
+      ]
+    }
+  ]
+}

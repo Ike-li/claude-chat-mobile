@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "单驾驶员模型：镜像锁的状态迁移",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      660
+    ],
+    "views": [
+      {
+        "id": "main",
+        "label": "默认路径",
+        "focus": [
+          "idle",
+          "webdrive",
+          "detect",
+          "mirrorlock",
+          "released"
+        ],
+        "note": "从空闲到 Web 驾驶，检测到终端写入即进只读镜像，静默后释放。"
+      },
+      {
+        "id": "selflock",
+        "label": "防自锁的判定",
+        "focus": [
+          "detect",
+          "webdrive",
+          "mirrorlock"
+        ],
+        "note": "只认终端写的未完结尾部；己方 sdk-ts 尾部撑不住锁。"
+      },
+      {
+        "id": "escape",
+        "label": "逃生口与风险",
+        "focus": [
+          "mirrorlock",
+          "force",
+          "fork",
+          "released"
+        ],
+        "note": "解锁只撤掉 Web 侧的锁，不会停止终端进程。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Web 侧驾驶权"
+    },
+    {
+      "id": "escape",
+      "label": "显式逃生口"
+    },
+    {
+      "id": "terminal",
+      "label": "已知风险"
+    }
+  ],
+  "states": [
+    {
+      "id": "idle",
+      "type": "start",
+      "label": "空闲",
+      "sublabel": "无人驾驶，两端都可发起",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "webdrive",
+      "type": "active",
+      "label": "Web 驾驶",
+      "sublabel": "AgentSession 是写入方",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "一轮一条"
+    },
+    {
+      "id": "detect",
+      "type": "decision",
+      "label": "外部写入判定",
+      "sublabel": "catchUpTick 比对尾部",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "mirrorlock",
+      "type": "waiting",
+      "label": "只读镜像",
+      "sublabel": "输入转只读，展示终端驾驶",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "锁"
+    },
+    {
+      "id": "released",
+      "type": "success",
+      "label": "锁释放",
+      "sublabel": "Web 可续接",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "force",
+      "type": "external",
+      "label": "强制立即续接",
+      "sublabel": "两条路径都过确认框",
+      "lane": "escape",
+      "col": 1,
+      "tag": "有意保留"
+    },
+    {
+      "id": "fork",
+      "type": "failure",
+      "label": "transcript 分叉",
+      "sublabel": "两条 parentUuid 链",
+      "lane": "terminal",
+      "col": 1,
+      "tag": "不可逆"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "start-drive",
+      "from": "idle",
+      "to": "webdrive",
+      "label": "手机发送消息",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "tick",
+      "from": "webdrive",
+      "to": "detect",
+      "label": "每 2.5s 追平检查",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "lock",
+      "from": "detect",
+      "to": "mirrorlock",
+      "label": "终端写的未完结尾部",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": 55
+    },
+    {
+      "id": "no-lock",
+      "from": "detect",
+      "to": "webdrive",
+      "label": "己方 sdk-ts 尾部不上锁",
+      "variant": "dashed",
+      "route": "top-channel"
+    },
+    {
+      "id": "quiet",
+      "from": "mirrorlock",
+      "to": "released",
+      "label": "连续 5 tick 静默约 12.5s",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelDy": -25
+    },
+    {
+      "id": "force-unlock",
+      "from": "mirrorlock",
+      "to": "force",
+      "label": "用户点「仍要续接」",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelDy": 60
+    },
+    {
+      "id": "diverge",
+      "from": "force",
+      "to": "fork",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "safe-resume",
+      "from": "force",
+      "to": "released",
+      "label": "终端确已关闭",
+      "variant": "dashed",
+      "route": "auto"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "五条默认规则",
+      "items": [
+        "Web 驾驶时 AgentSession 是写入方",
+        "检测到 CLI 写入即进只读镜像",
+        "接管前先 dispose 再 resume 吸收"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "这五条不是硬约束",
+      "items": [
+        "管得住自己的 SDK，管不住终端进程",
+        "解锁只撤 Web 侧的锁，不停终端",
+        "用户常比判定链更早知道终端已关"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "防自锁的那一条",
+      "items": [
+        "只认终端写的未完结尾部",
+        "白名单只认 sdk-ts，未知回落",
+        "否则 Web 等一条审批就自锁"
+      ]
+    }
+  ]
+}

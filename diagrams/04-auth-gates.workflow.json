@@ -1,0 +1,295 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "鉴权与范围边界：逐层收窄的六道门",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "chain",
+        "label": "准入主链",
+        "focus": [
+          "req",
+          "token",
+          "idp",
+          "device",
+          "scope",
+          "perm"
+        ],
+        "note": "六层从身份到具体工具动作逐层收窄，互不替代。"
+      },
+      {
+        "id": "bypass",
+        "label": "旁路与设备审批",
+        "focus": [
+          "idp",
+          "local",
+          "device",
+          "pending"
+        ],
+        "note": "本机直连豁免设备层但不豁免 token；四个入口任一批准即时生效。"
+      },
+      {
+        "id": "reject",
+        "label": "拒绝路径",
+        "focus": [
+          "token",
+          "ratelimit",
+          "scope",
+          "denied"
+        ],
+        "note": "限速措辞按来源分档，范围外访问直接拒绝并留痕。"
+      }
+    ],
+    "viewBox": [
+      968,
+      534
+    ]
+  },
+  "lanes": [
+    {
+      "id": "gate",
+      "label": "准入主链"
+    },
+    {
+      "id": "bypass",
+      "label": "旁路与状态"
+    },
+    {
+      "id": "reject",
+      "label": "拒绝路径",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "identity",
+      "label": "身份",
+      "fromCol": 0,
+      "toCol": 2
+    },
+    {
+      "id": "trust",
+      "label": "设备信任",
+      "fromCol": 3,
+      "toCol": 3,
+      "variant": "security"
+    },
+    {
+      "id": "scopegate",
+      "label": "范围与权限",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "nodes": [
+    {
+      "id": "req",
+      "lane": "gate",
+      "col": 0,
+      "type": "external",
+      "label": "请求到达",
+      "sublabel": "HTTP / Socket.io"
+    },
+    {
+      "id": "token",
+      "lane": "gate",
+      "col": 1,
+      "type": "security",
+      "label": "AUTH_TOKEN",
+      "sublabel": "无它 server 不启动",
+      "tag": "必备"
+    },
+    {
+      "id": "idp",
+      "lane": "gate",
+      "col": 2,
+      "type": "security",
+      "label": "公网 IdP 策略",
+      "sublabel": "仅 CF Access",
+      "tag": "可选"
+    },
+    {
+      "id": "device",
+      "lane": "gate",
+      "col": 3,
+      "type": "security",
+      "label": "设备信任门",
+      "sublabel": "trusted-devices"
+    },
+    {
+      "id": "scope",
+      "lane": "gate",
+      "col": 4,
+      "type": "backend",
+      "label": "工作区范围门",
+      "sublabel": "WORKDIRS 首项为主"
+    },
+    {
+      "id": "perm",
+      "lane": "gate",
+      "col": 5,
+      "type": "backend",
+      "label": "工具审批",
+      "sublabel": "canUseTool"
+    },
+    {
+      "id": "local",
+      "lane": "bypass",
+      "col": 4,
+      "type": "backend",
+      "label": "真·本机直连",
+      "sublabel": "豁免设备层"
+    },
+    {
+      "id": "pending",
+      "lane": "bypass",
+      "col": 3,
+      "type": "external",
+      "label": "待审批设备",
+      "sublabel": "四个入口任一批准"
+    },
+    {
+      "id": "ratelimit",
+      "lane": "reject",
+      "col": 1,
+      "type": "security",
+      "label": "限速与退避锁",
+      "sublabel": "IP 桶，IPv6 按 /64"
+    },
+    {
+      "id": "denied",
+      "lane": "reject",
+      "col": 5,
+      "type": "external",
+      "label": "拒绝并审计留痕",
+      "sublabel": "audit-records"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "req",
+      "to": "token",
+      "role": "main"
+    },
+    {
+      "id": "e2",
+      "from": "token",
+      "to": "idp",
+      "label": "令牌匹配",
+      "role": "main"
+    },
+    {
+      "id": "e3",
+      "from": "idp",
+      "to": "device",
+      "label": "否则设备审批顶上",
+      "role": "main"
+    },
+    {
+      "id": "e4",
+      "from": "device",
+      "to": "scope",
+      "label": "设备已受信任",
+      "role": "main"
+    },
+    {
+      "id": "e5",
+      "from": "scope",
+      "to": "perm",
+      "label": "路径在白名单内",
+      "role": "main"
+    },
+    {
+      "id": "e6",
+      "from": "token",
+      "to": "ratelimit",
+      "label": "令牌不匹配",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "e7",
+      "from": "ratelimit",
+      "to": "denied",
+      "label": "退避锁或阈值锁",
+      "role": "error"
+    },
+    {
+      "id": "e8",
+      "from": "device",
+      "to": "local",
+      "label": "真·本机直连",
+      "role": "branch"
+    },
+    {
+      "id": "e9",
+      "from": "local",
+      "to": "scope",
+      "label": "不豁免 token",
+      "role": "branch"
+    },
+    {
+      "id": "e10",
+      "from": "device",
+      "to": "pending",
+      "label": "新设备入列",
+      "role": "branch"
+    },
+    {
+      "id": "e11",
+      "from": "pending",
+      "to": "device",
+      "label": "批准后即时生效",
+      "role": "return"
+    },
+    {
+      "id": "e12",
+      "from": "scope",
+      "to": "denied",
+      "label": "路径不在白名单",
+      "role": "error",
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "req",
+    "token",
+    "idp",
+    "device",
+    "scope",
+    "perm"
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "这些边界互不替代",
+      "items": [
+        "AUTH_TOKEN 证明持有实例密钥，不代表设备已获准",
+        "CF Access 可选，替代设备审批但不替代 token",
+        "WORKDIRS 限定路径，不决定工具是否自动获批",
+        "canUseTool 只管 Agent 自主行为"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "限速措辞按来源分档",
+      "items": [
+        "describeRateLimitSource 分本机 / 局域网 / 公网三档改措辞与判色",
+        "本机来源绝不说成「有人在暴力尝试」——输错一次密码不是攻击",
+        "退避短锁与阈值长锁共用一个 verdict 就是在说反话"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "fail-closed 的两个例外",
+      "items": [
+        "trusted-devices.json 瞬时读失败保留 last-good，不是拒绝",
+        "鉴权通过后 handler 抛 500 不得计入限速",
+        "新设备通知正文不含设备 ID 与 IP，并按 5 分钟节流"
+      ]
+    }
+  ]
+}

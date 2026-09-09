@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "会话域：三条互不混判的聚合链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "list",
+        "label": "会话列表",
+        "focus": [
+          "disk",
+          "tail",
+          "sessionlist",
+          "drawer"
+        ],
+        "note": "标题、活动时间与运行态都从磁盘事实源重建。"
+      },
+      {
+        "id": "attention",
+        "label": "需要你(N)",
+        "focus": [
+          "agentstate",
+          "pending",
+          "attention",
+          "chip"
+        ],
+        "note": "只表达点一下就能处理的待办，服务告警不进这个数字。"
+      },
+      {
+        "id": "unread",
+        "label": "未读位点",
+        "focus": [
+          "datadir",
+          "readmerge",
+          "unread",
+          "badge"
+        ],
+        "note": "位点在服务端合并，跨设备共享。"
+      }
+    ],
+    "viewBox": [
+      1080,
+      560
+    ]
+  },
+  "stages": [
+    {
+      "label": "事实源"
+    },
+    {
+      "label": "判定纯函数"
+    },
+    {
+      "label": "聚合"
+    },
+    {
+      "label": "界面"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "disk",
+      "type": "database",
+      "label": "磁盘事实源",
+      "sublabel": "transcript · CLI 注册表",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "agentstate",
+      "type": "backend",
+      "label": "AgentSession 内存态",
+      "sublabel": "审批 · 提问 · 后台任务",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "datadir",
+      "type": "database",
+      "label": "CCM 控制面",
+      "sublabel": "已读位点持久化",
+      "stage": 0,
+      "row": 2
+    },
+    {
+      "id": "tail",
+      "type": "backend",
+      "label": "尾部与运行态判定",
+      "sublabel": "classifyTranscriptTail",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "pending",
+      "type": "backend",
+      "label": "待办清点",
+      "sublabel": "deriveAttention",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "readmerge",
+      "type": "backend",
+      "label": "已读位点合并",
+      "sublabel": "LWW，manual 胜 seen",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "sessionlist",
+      "type": "backend",
+      "label": "会话列表",
+      "sublabel": "标题·活动·镜像态",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "attention",
+      "type": "backend",
+      "label": "需要你聚合",
+      "sublabel": "只含可处理待办",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "unread",
+      "type": "backend",
+      "label": "未读计算",
+      "sublabel": "跨设备共享",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "drawer",
+      "type": "frontend",
+      "label": "工作区抽屉",
+      "sublabel": "按工作区分组",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "chip",
+      "type": "frontend",
+      "label": "顶栏 chip 与角标",
+      "sublabel": "点一下就能处理",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "badge",
+      "type": "frontend",
+      "label": "列表未读点",
+      "sublabel": "长按可手动标未读",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "f1",
+      "from": "disk",
+      "to": "tail",
+      "label": "读尾部与消息",
+      "classification": "只读"
+    },
+    {
+      "id": "f2",
+      "from": "agentstate",
+      "to": "pending",
+      "label": "pending 审批与提问"
+    },
+    {
+      "id": "f3",
+      "from": "datadir",
+      "to": "readmerge",
+      "label": "seen 与 manual"
+    },
+    {
+      "id": "f4",
+      "from": "tail",
+      "to": "sessionlist",
+      "label": "运行态与标题"
+    },
+    {
+      "id": "f5",
+      "from": "pending",
+      "to": "attention",
+      "label": "只覆盖在驱动的实例"
+    },
+    {
+      "id": "f6",
+      "from": "readmerge",
+      "to": "unread",
+      "label": "合并后的位点"
+    },
+    {
+      "id": "f7",
+      "from": "sessionlist",
+      "to": "drawer",
+      "label": "分组与搜索"
+    },
+    {
+      "id": "f8",
+      "from": "attention",
+      "to": "chip",
+      "label": "待办计数"
+    },
+    {
+      "id": "f9",
+      "from": "unread",
+      "to": "badge",
+      "label": "未读标记"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "服务告警绝不进「需要你」",
+      "items": [
+        "顶栏 chip 与角标只表达点一下就能处理的待办：审批、提问",
+        "服务告警只活在抽屉「服务」小节与服务状态面板",
+        "把投递失败混进那个数字，用户点进去发现无事可做，下次就不再信它"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "「需要你」的覆盖面有边界",
+      "items": [
+        "跨会话聚合只覆盖 Web 后端正在驱动的实例",
+        "纯终端里等待的会话不进这个聚合",
+        "那些只能靠可选 hooks 桥单独通知"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "未读位点为什么放服务端",
+      "items": [
+        "位点跨设备共享，手机与桌面看到同一份",
+        "手动未读若用「删条目」表达已读，会被别的设备在合并时复活",
+        "改成比时间戳：manual 胜过 seen"
+      ]
+    }
+  ]
+}

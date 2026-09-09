@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>架构图集 · Claude Chat Mobile</title>
+<meta name="description" content="Claude Chat Mobile 的 13 张可交互架构图：双通道同步、单驾驶员模型、鉴权六道门、审批生命周期、推送抑制、文件与会话域、测试归类。">
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#111827; --muted:#5b6472; --line:#e3e6eb;
+  --accent:#0f8a6a; --accent-soft:#e6f4ef; --chip:#eef1f5; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#0b0f14; --panel:#121821; --ink:#e6eaf0; --muted:#93a0b1; --line:#222b38;
+         --accent:#3ddba4; --accent-soft:#10281f; --chip:#1a222d; --shadow:none; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:26px 24px 72px}
+nav{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:26px;font-size:13.5px}
+nav a{color:var(--muted);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:1px}
+nav a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+header{margin-bottom:34px}
+h1{margin:0 0 10px;font-size:26px;letter-spacing:.2px;display:flex;align-items:center;gap:11px}
+h1::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--accent);flex:none}
+.lede{margin:0;color:var(--muted);max-width:70ch}
+.pin{margin-top:14px;display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;
+  font-family:var(--mono);font-size:12px;color:var(--muted);
+  background:var(--chip);border:1px solid var(--line);border-radius:7px;padding:6px 11px}
+.pin b{color:var(--ink);font-weight:600}
+h2{margin:36px 0 4px;font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
+  font-family:var(--mono);font-weight:600}
+h2 + .sub{margin:0 0 16px;color:var(--muted);font-size:13.5px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+a.card{display:flex;flex-direction:column;gap:9px;text-decoration:none;color:inherit;
+  background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px 16px 16px;
+  box-shadow:var(--shadow);transition:border-color .14s,transform .14s}
+a.card:hover{border-color:var(--accent);transform:translateY(-1px)}
+a.card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.top{display:flex;align-items:center;gap:9px}
+.num{font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--accent);
+  background:var(--accent-soft);border-radius:5px;padding:2px 7px;letter-spacing:.04em}
+.kind{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--chip);
+  border:1px solid var(--line);border-radius:5px;padding:2px 7px}
+.title{font-size:15.5px;font-weight:650;line-height:1.4}
+.desc{margin:0;color:var(--muted);font-size:13.5px}
+ul{margin:2px 0 0;padding-left:16px;color:var(--muted);font-size:12.8px;line-height:1.6}
+li::marker{color:var(--accent)}
+code{font-family:var(--mono);font-size:.92em;background:var(--chip);border-radius:4px;padding:1px 4px}
+footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+footer p{margin:0 0 8px}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+footer code{font-size:12.4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <a href="../">← 项目主页</a>
+  <a href="../docs-site/index.html">全景手册</a>
+  <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub 仓库</a>
+</nav>
+<header>
+  <h1>架构图集</h1>
+  <p class="lede">Claude Chat Mobile 按功能域拆开的 13 张可交互图。每张都是自包含 HTML：支持明暗主题、平移缩放、搜索聚焦、关系追踪与导出，无需联网或任何依赖。图中事实取自代码与 <code>docs/architecture.md</code>，不是示意。</p>
+  <div class="pin"><b>事实基线</b> 380ecaf · <b>规格源</b> 同目录 <code>*.json</code> · <b>校验</b> 13/13 showcase 9/9</div>
+</header>
+
+<h2>全局</h2>
+<p class="sub">先看这张，再按需要下钻。</p>
+<div class="grid">
+  <a class="card" href="00-overview.html">
+    <div class="top"><span class="num">00</span><span class="kind">architecture</span></div>
+    <div class="title">系统总览</div>
+    <p class="desc">Web 驾驶与 CLI 驾驶两条数据路径，以及它们共享的 transcript 与控制面。</p>
+    <ul><li>Web 走 Agent SDK 双向流；CLI 驾驶不经过 SDK</li><li>同一时刻只允许一个驾驶员写入</li></ul>
+  </a>
+</div>
+
+<h2>双通道与同步</h2>
+<p class="sub">改这几处前务必先读——凭直觉改基本会错。</p>
+<div class="grid">
+  <a class="card" href="01-web-drive.html">
+    <div class="top"><span class="num">01</span><span class="kind">sequence</span></div>
+    <div class="title">Web 驾驶：一条消息的完整时序</div>
+    <p class="desc">从 <code>user:message</code> 到 <code>agent:event</code> 回流，含幂等闸与实例置换。</p>
+    <ul><li>去重 ID 只在 send 已 resolve 后才登记</li><li>三种负 ack 各自对应不同的客户端行为</li></ul>
+  </a>
+  <a class="card" href="02-cli-mirror.html">
+    <div class="top"><span class="num">02</span><span class="kind">sequence</span></div>
+    <div class="title">CLI 驾驶：只读镜像的建立与解锁</div>
+    <p class="desc">磁盘轮询追平、hooks 即时信号，以及静默判定后的锁释放。</p>
+    <ul><li>常态 2.5s 轮询，进镜像后收紧到 1s</li><li>hooks 只是加速触发器，transcript 才是真相源</li></ul>
+  </a>
+  <a class="card" href="03-single-driver.html">
+    <div class="top"><span class="num">03</span><span class="kind">lifecycle</span></div>
+    <div class="title">单驾驶员模型：镜像锁状态迁移</div>
+    <p class="desc">五条默认规则、防自锁的那条判定，以及有意保留的逃生口。</p>
+    <ul><li>只认终端写的未完结尾部，己方 sdk-ts 撑不住锁</li><li>解锁只撤 Web 侧的锁，不会停止终端进程</li></ul>
+  </a>
+  <a class="card" href="08-envelope.html">
+    <div class="top"><span class="num">08</span><span class="kind">sequence</span></div>
+    <div class="title">事件信封与断线回放</div>
+    <p class="desc"><code>seq</code> 去重、<code>epoch</code> 世代，以及超出环形缓冲后的两级回退。</p>
+    <ul><li>缓冲有界，缺口过大就回退鉴权的 session:history</li><li>事件 type 是闭合集合，双向契约硬闸校验</li></ul>
+  </a>
+</div>
+
+<h2>安全与边界</h2>
+<p class="sub">失败方向是逐条选过的，不是「所有异常都拒绝」。</p>
+<div class="grid">
+  <a class="card" href="04-auth-gates.html">
+    <div class="top"><span class="num">04</span><span class="kind">workflow</span></div>
+    <div class="title">鉴权与范围边界：六道门</div>
+    <p class="desc">从 <code>AUTH_TOKEN</code> 到工具审批，逐层收窄且互不替代。</p>
+    <ul><li>限速措辞按来源分档，本机来源绝不说成暴力尝试</li><li>fail-closed 有两个刻意的例外</li></ul>
+  </a>
+  <a class="card" href="05-approval.html">
+    <div class="top"><span class="num">05</span><span class="kind">lifecycle</span></div>
+    <div class="title">工具审批的生命周期与终态</div>
+    <p class="desc">pending / approved / denied / expired，以及留存治理。</p>
+    <ul><li>重启后遗留 pending 一律标 expired</li><li>批一个已无执行上下文的操作是危险假象</li></ul>
+  </a>
+  <a class="card" href="06-push.html">
+    <div class="top"><span class="num">06</span><span class="kind">workflow</span></div>
+    <div class="title">离线唤醒：按可见性分档的推送抑制</div>
+    <p class="desc">哪些无条件推、哪一类才抑制，以及正文最小化。</p>
+    <ul><li>前台判据是 client:presence，不是 socket 连着</li><li>只有回合完成的 result 会被抑制</li></ul>
+  </a>
+</div>
+
+<h2>域地图</h2>
+<p class="sub">按后端分层与前端模块边界组织。</p>
+<div class="grid">
+  <a class="card" href="07-files.html">
+    <div class="top"><span class="num">07</span><span class="kind">dataflow</span></div>
+    <div class="title">文件域：四段闸门</div>
+    <p class="desc">浏览、预览、搜索、写入、git 变更与附件通道。</p>
+    <ul><li>附件落数据目录，不写进用户项目</li><li>symlink 判据是「父目录用户可写」</li></ul>
+  </a>
+  <a class="card" href="09-ops.html">
+    <div class="top"><span class="num">09</span><span class="kind">architecture</span></div>
+    <div class="title">运维与可观测</div>
+    <p class="desc">配置事实源、启动自检、受管服务、审计与告警。</p>
+    <ul><li>配置读写必须同源，写错源等于假成功</li><li>面板判定化，不展示裸计数器</li></ul>
+  </a>
+  <a class="card" href="10-sessions.html">
+    <div class="top"><span class="num">10</span><span class="kind">dataflow</span></div>
+    <div class="title">会话域：三条互不混判的聚合链</div>
+    <p class="desc">会话列表、「需要你」待办、跨设备未读位点。</p>
+    <ul><li>服务告警绝不进「需要你」那个数字</li><li>未读位点在服务端合并，manual 胜过 seen</li></ul>
+  </a>
+  <a class="card" href="11-frontend.html">
+    <div class="top"><span class="num">11</span><span class="kind">architecture</span></div>
+    <div class="title">前端模块地图</div>
+    <p class="desc">新状态该落在哪一层，纯函数层的边界在哪。</p>
+    <ul><li>新状态进 app/ 模块，存量顶层不动</li><li>logic/ 唯一允许的宿主外 import 是 i18n.js</li></ul>
+  </a>
+</div>
+
+<h2>工程</h2>
+<p class="sub">这条判据救过一次删库。</p>
+<div class="grid">
+  <a class="card" href="12-testing.html">
+    <div class="top"><span class="num">12</span><span class="kind">workflow</span></div>
+    <div class="title">测试跑在哪：白名单在宿主机，其余进容器</div>
+    <p class="desc">归类决策、check 链上的 11 道门禁，以及两处覆盖盲区。</p>
+    <ul><li>白名单而非危险命令清单：代价不对称</li><li>tests/infra/ 的编排脚本不在任何门禁覆盖范围</li></ul>
+  </a>
+</div>
+
+<footer>
+  <p>每张图旁边有同名 <code>.json</code> 规格源（点开图后可在同目录取），改完规格用 archify 重新出图即可。</p>
+  <p>本页托管在仓库的 <code>gh-pages</code> 分支，与 <code>master</code> / <code>dev</code> 零共同历史——<code>git clone</code> 默认拿不到这些图，装机归档里也没有。</p>
+  <p><a href="../">项目主页</a> · <a href="../docs-site/index.html">全景手册</a> · <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub 仓库</a></p>
+</footer>
+</div>
+</body>
+</html>
