@@ -8,7 +8,6 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t } from '../i18n.js';
-import { rttToneClass } from './format.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -362,11 +361,10 @@ export function sessionIdBlockView({
   };
 }
 
-// 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。
-// 状态行仍可由接线层带延迟数字，不依赖芯片可见。
+// 顶栏 RTT 芯片：全时段常驻显示——只要测得合法有效数值即显示，断线/未知/非法输入隐藏。
+// 色阶由 rttToneClass 决定（good/ok 为中性 ink-soft，warn 为 warning，bad 为 danger）。
 export function shouldShowRttChip(ms) {
-  const tone = rttToneClass(ms);
-  return tone === 'warn' || tone === 'bad';
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0;
 }
 
 // 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——

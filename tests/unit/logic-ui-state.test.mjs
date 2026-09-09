@@ -379,13 +379,16 @@ test.describe('formatRttMs / rttToneClass', () => {
     assert.equal(rttToneClass(-3), '');
   });
 
-  test('shouldShowRttChip: 仅 warn/bad 显示，好网隐藏', () => {
-    assert.equal(shouldShowRttChip(40), false);    // good
-    assert.equal(shouldShowRttChip(200), false);   // ok
-    assert.equal(shouldShowRttChip(500), true);    // warn
-    assert.equal(shouldShowRttChip(1500), true);   // bad
-    assert.equal(shouldShowRttChip(null), false);
-    assert.equal(shouldShowRttChip(NaN), false);
+  test('shouldShowRttChip: 合法延迟全时段常驻显示，非法/负数隐藏', () => {
+    assert.equal(shouldShowRttChip(40), true);     // good 常驻
+    assert.equal(shouldShowRttChip(200), true);    // ok 常驻
+    assert.equal(shouldShowRttChip(500), true);    // warn 显示
+    assert.equal(shouldShowRttChip(1500), true);   // bad 显示
+    assert.equal(shouldShowRttChip(0), true);      // 边界 0ms 显示
+    assert.equal(shouldShowRttChip(-1), false);    // 负数隐藏
+    assert.equal(shouldShowRttChip(null), false);  // 空值隐藏
+    assert.equal(shouldShowRttChip(NaN), false);   // NaN 隐藏
+    assert.equal(shouldShowRttChip(Infinity), false); // Infinity 隐藏
   });
 });
 

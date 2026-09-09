@@ -371,11 +371,12 @@ test('RTT monitor renders latency through app context and clears stale values', 
   assert.equal(wrap.title, '');
   assert.deepEqual(statuses, ['已连接 · 延迟 1.3s']);
 
-  // 好网：芯片隐藏（顶栏安静），状态行仍保留延迟数字供排障
+  // 好网：芯片常驻显示（中性 ink-soft 色），状态行同步带延迟
   assert.equal(monitor.render(80), '80ms');
-  assert.equal(rtt.textContent, '');
-  assert.match(rtt.className, /\bhidden\b/);
+  assert.equal(rtt.textContent, '延迟 80ms');
+  assert.doesNotMatch(rtt.className, /\bhidden\b/);
   assert.match(rtt.className, /conn-rtt-chip/);
+  assert.match(rtt.className, /text-ink-soft/);
   assert.equal(rtt.title, '手机到主机往返延迟 80ms');
   assert.equal(wrap.title, '');
   assert.equal(statuses.at(-1), '已连接 · 延迟 80ms');
