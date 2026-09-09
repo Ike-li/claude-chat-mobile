@@ -151,7 +151,7 @@
 
 ### 4.3 `npm run check` 包
 
-覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
 
 链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 

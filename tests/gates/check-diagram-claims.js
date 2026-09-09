@@ -78,10 +78,45 @@ const CLAIMS = [
     actual: () => constNum('app/src/server/mirror-engine.js', 'CATCH_UP_INTERVAL_MS'), expect: 2500 },
   { diagram: '02', shown: '镜像中提速到 1000ms 轮询',
     actual: () => constNum('app/src/server/mirror-engine.js', 'CATCH_UP_MIRROR_INTERVAL_MS'), expect: 1000 },
-  { diagram: '02 / 03', shown: '连续 5 tick',
+  { diagram: '02 / 03', shown: '静默墙钟约 12.5s（常态 5 tick / 镜像 13 tick）',
+    // 两个 tick 数不是常量：mirror-engine 按 ceil(墙钟 / 当前轮询间隔) 现算，history 的 5 只是常态档的默认值。
+    // 图上把两个档都写出来了，所以这里也要两个都算——只断言 5 会让「镜像态 1s×5=5s 过早解锁」这个
+    // 曾经真实存在的 bug 重新变得不可见。
+    actual: () => {
+      const wall = constNum('app/src/server/mirror-engine.js', 'MIRROR_RELEASE_MS');
+      const normal = constNum('app/src/server/mirror-engine.js', 'CATCH_UP_INTERVAL_MS');
+      const mirror = constNum('app/src/server/mirror-engine.js', 'CATCH_UP_MIRROR_INTERVAL_MS');
+      if ([wall, normal, mirror].some(v => typeof v !== 'number')) return '常量提取失败';
+      return `${wall / 1000}s / ${Math.ceil(wall / normal)} / ${Math.ceil(wall / mirror)}`;
+    }, expect: '12.5s / 5 / 13' },
+  { diagram: '02 / 03', shown: '常态档默认 5 tick',
     actual: () => constNum('app/src/sessions/history.js', 'MIRROR_RELEASE_QUIET_TICKS'), expect: 5 },
-  { diagram: '02 / 03', shown: '约 12.5s 墙钟',
-    actual: () => constNum('app/src/server/mirror-engine.js', 'MIRROR_RELEASE_MS'), expect: 12500 },
+  { diagram: '04', shown: '新设备通知正文不含设备 ID 与 IP，并按 5 分钟节流',
+    actual: () => constNum('app/src/ops/notifications.js', 'DEVICE_NOTIFY_INTERVAL_MS') / 60000, expect: 5 },
+  { diagram: '04', shown: 'IP 桶，IPv6 按 /64',
+    actual: () => /IPv6[\s\S]{0,400}?\/64/.test(read('app/src/auth/rate-limiter.js')) ? 'IPv6 按 /64' : '分桶口径已改',
+    expect: 'IPv6 按 /64' },
+  { diagram: '04 / 00', shown: 'AUTH_TOKEN 是启动前提，没有它 server 起不来',
+    actual: () => /deny\('token_required'/.test(read('app/src/shared/bind-host.js')) ? 'token_required' : '启动前提已失效',
+    expect: 'token_required' },
+  { diagram: '09', shown: '告警都带 24h 时效窗自动退场',
+    actual: () => constNum('app/src/ops/metrics.js', 'DEFAULT_STALE_AFTER_MS') / 3600000, expect: 24 },
+  { diagram: '05', shown: '启动一次 + 之后每 24h 一次',
+    // 与图 09 那个 24h 是两码事：这条是审批终态记录的清理周期，那条是服务告警的时效窗。
+    // 合成一条断言会让其中一个改了另一个不红。
+    actual: () => {
+      const m = /setIntervalImpl\(sweep,\s*([0-9\s*_]+)\)/.exec(read('app/src/agent/approval-lifecycle.js'));
+      if (!m) return '清理周期已改写';
+      return m[1].split('*').reduce((a, b) => a * Number(b.trim().replace(/_/g, '')), 1) / 3600000;
+    }, expect: 24 },
+  { diagram: '07', shown: 'porcelain -z 解析，相对路径先过 assertSafeRelPath',
+    actual: () => /'status',\s*'--porcelain=v1',\s*'-z'/.test(read('app/src/files/git-workspace.js')) ? 'porcelain=v1 -z' : '解析口径已改',
+    expect: 'porcelain=v1 -z' },
+  { diagram: '07', shown: 'browse:* / files:* / git:*',
+    actual: () => {
+      const src = read('app/src/server/socket-files.js');
+      return ['browse:list', 'browse:read'].every(e => src.includes(`'${e}'`)) ? 'browse:list + browse:read' : '入向事件名已改';
+    }, expect: 'browse:list + browse:read' },
   { diagram: '01', shown: '>50000 字',
     actual: () => (/text\.length > 50000/.test(read('app/src/server/app.js')) ? 50000 : '判据已改'), expect: 50000 },
   { diagram: '07', shown: '10 个',
@@ -106,6 +141,26 @@ const CLAIMS = [
     actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.263' },
 ];
 
+// ── 图还没说、但代码已经成立的事实。──────────────────────────────────
+// 为什么单列一组而不是塞进 CLAIMS：CLAIMS 的语义是「图说 X，代码也得是 X」，
+// `shown` 必须能在规格源里逐字找到。这里的几条图上还没有（多半是刚改的代码等着下次重出图），
+// 塞进 CLAIMS 会让 `shown` 描述一段不存在的文字，那条「只许照抄图上文字」的规矩就废了。
+// 分开之后：代码侧立刻被守住（删了会红），而「图欠这一条」这个状态也不会随会话结束丢掉。
+// 补进图并重出后，把条目挪进 CLAIMS 即可。
+const PENDING_CLAIMS = [
+  {
+    diagram: '06',
+    todo: '「后台任务完成无条件推」要补上：只算真后台任务，跑得久的前台 Bash 被 is_backgrounded 过滤掉',
+    actual: () => {
+      const src = read('app/src/agent/agent.js');
+      const hasMap = /this\.taskBackgrounded = new Map\(\)/.test(src);
+      const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
+      return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
+    },
+    expect: '按 is_backgrounded 过滤',
+  },
+];
+
 function git(args) {
   try { return { ok: true, out: execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim() }; }
   catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() }; }
@@ -119,12 +174,13 @@ function main() {
     if (!existsSync(join(ROOT, p))) problems.push(`路径已不存在（图里还指着它）：${p}`);
   }
 
-  // B：数值与字面量断言
-  for (const c of CLAIMS) {
+  // B：数值与字面量断言（图已在说的话 + 图欠着的话，两组都要真跑）
+  for (const c of [...CLAIMS, ...PENDING_CLAIMS]) {
     let got;
     try { got = c.actual(); } catch (e) { got = `提取失败：${e.message}`; }
     if (got !== c.expect) {
-      problems.push(`图 ${c.diagram} 显示「${c.shown}」，代码实测 ${JSON.stringify(got)}（应为 ${JSON.stringify(c.expect)}）`);
+      const what = c.shown ? `显示「${c.shown}」` : `欠一条：${c.todo}`;
+      problems.push(`图 ${c.diagram} ${what}，代码实测 ${JSON.stringify(got)}（应为 ${JSON.stringify(c.expect)}）`);
     }
   }
 
@@ -146,7 +202,11 @@ function main() {
 
   // 落后提交数只报告不判红：图必然落后于 HEAD，用提交数做阈值只会制造噪音。
   // 真正会红的是上面三项——值漂移、路径消失、历史被重写。
-  console.log(`架构图集断言 OK（路径 ${REFERENCED_PATHS.length} 条 · 断言 ${CLAIMS.length} 条 · 基线 ${PINNED_REVISION.slice(0, 7)}，落后 ${lag ?? '?'} 个提交）`);
+  console.log(`架构图集断言 OK（路径 ${REFERENCED_PATHS.length} 条 · 断言 ${CLAIMS.length} 条 · 待补进图 ${PENDING_CLAIMS.length} 条 · 基线 ${PINNED_REVISION.slice(0, 7)}，落后 ${lag ?? '?'} 个提交）`);
+  if (PENDING_CLAIMS.length > 0) {
+    console.log('  待补进图（代码已成立，等下次重出图）：');
+    for (const c of PENDING_CLAIMS) console.log(`    - 图 ${c.diagram}：${c.todo}`);
+  }
 }
 
 main();
