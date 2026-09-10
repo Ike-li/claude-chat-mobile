@@ -244,6 +244,44 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  // 第 2 批：聚合卡要在标题上显示「N tools · X tok」，而卡是按 parentToolUseId 组织的、
+  // 用量是按 task_id 组织的——两张表原先零交集字段。SDK 的 task_progress 自带 tool_use_id，
+  // 接上它就是把用量挂到卡上的唯一钥匙。usage.tool_uses 同理（前端自己数会漏掉折叠的 search/read）。
+  test('system/task_progress → 透传 tool_use_id 与 usage.tool_uses（聚合卡挂用量的 join 键）', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-prog-join' });
+    s.map({
+      type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_agent_1',
+      task_type: 'local_agent', subagent_type: 'general-purpose', description: '正在扫导入边界',
+      usage: { total_tokens: 65400, tool_uses: 15, duration_ms: 505000 },
+    });
+    const prog = events.filter(e => e.type === 'task_progress').at(-1);
+    const row = prog.payload.tasks.find(t => t.taskId === 't1');
+    assert.ok(row, '快照里应有这条任务');
+    assert.equal(row.toolUseId, 'toolu_agent_1', '没有它，前端无法把用量挂到对应的子代理卡上');
+    assert.equal(row.toolUses, 15, 'SDK 的权威累计值——前端自己数会漏掉被折叠的 search/read');
+    assert.equal(row.totalTokens, 65400);
+    assert.equal(row.durationMs, 505000);
+    s.dispose();
+  });
+
+  // B3 同源的坑：bgTasks 是整体 set 而非合并，任何不带这两个字段的 upsert 来源都会把它们抹成 null。
+  // background_tasks_changed 紧跟 task_progress 到达是常态（CLI 实证），不沿用 prev 就会让卡头
+  // 的用量在两种来源交替时闪烁归零。
+  test('background_tasks_changed 紧随其后 → toolUseId / toolUses 沿用 prev，不被快照抹掉', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-prog-reconcile' });
+    s.map({
+      type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_agent_1',
+      task_type: 'local_agent', usage: { total_tokens: 65400, tool_uses: 15, duration_ms: 505000 },
+    });
+    // 全量快照条目只有 task_id/task_type/description/ambient——不含 tool_use_id 与 usage
+    s.map({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 't1', task_type: 'local_agent' }] });
+    const prog = events.filter(e => e.type === 'task_progress').at(-1);
+    const row = prog.payload.tasks.find(t => t.taskId === 't1');
+    assert.equal(row.toolUseId, 'toolu_agent_1', '快照不带 tool_use_id，必须沿用——否则卡与用量当场脱钩');
+    assert.equal(row.toolUses, 15, '同 durationMs/totalTokens 的既有口径：不沿用就是每拍快照清零');
+    s.dispose();
+  });
+
   test('system/hook_* 生命周期事件 → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
     const { s } = makeSession({ resumeId: 'sess-hook' });
     const bufBefore = s.buffer.length;

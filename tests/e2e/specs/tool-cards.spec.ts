@@ -122,10 +122,37 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 定位到聚合卡【自己】的槽位：嵌套工具卡也有 .t-in/.t-out，裸 class 会撞 strict mode。
     await expect(card.locator('> .t-in')).toContainText('code-reviewer');
     await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
+    // 用量按 toolUseId 从 task_progress 挂上来（第 2 批）。这条同时钉住「标完成时不能把用量抹掉」——
+    // 标题的三条改写路径共用 renderSubagentTitle，漏带 usage 的那条会在这里红。
+    await expect(card.locator('.sa-title')).toContainText('15 tools');
+    await expect(card.locator('.sa-title')).toContainText('65.4k tok');
+    // 单行动作槽：跑完撤下（留着最后一条工具名会让已完成的卡看起来还在动）
+    await expect(card.locator('[data-testid="subagent-last-tool"]')).toBeHidden();
 
     await card.locator('summary').first().click();
     await expect(card).toHaveAttribute('open', '');
     await expect(card.locator('.sa-body')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05j 运行中的子代理卡：折叠态就能看见用量与最近工具，不必展开', async ({ page }) => {
+    await gotoMock(page);
+
+    // 这个场景【停在运行中】（不发 tool_result/result），所以下面断的都是稳定终态，无需等待技巧
+    await sendChatMessage(page, 'test:subagent-running');
+
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toHaveCount(1);
+    await expect(card).not.toHaveAttribute('open', ''); // 折叠态——以下全都要在不展开的前提下可见
+    await expect(card.locator('.sa-title')).toContainText('🤖 Explore 运行中');
+    await expect(card.locator('.sa-title')).toContainText('3 tools');
+    await expect(card.locator('.sa-title')).toContainText('1.2k tok');
+
+    const lastTool = card.locator('[data-testid="subagent-last-tool"]');
+    await expect(lastTool).toBeVisible();
+    // 类型前缀被剥掉：后端 message 是「Explore：扫描导入边界」，标题里已经有 Explore 了
+    await expect(lastTool).toHaveText('⎿ Grep: 扫描导入边界');
 
     await expectNoBrowserErrors(page);
   });

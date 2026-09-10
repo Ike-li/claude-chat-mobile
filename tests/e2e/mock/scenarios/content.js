@@ -438,6 +438,50 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 单行动作槽「运行中可见」这一档：它是个瞬态，在 test:subagent 里靠事件间隔去断言必然脆。
+      // 故单独一个【停在运行中】的场景——不发 tool_result、不发 result，卡定格在运行态，
+      // 断言无需任何等待技巧。跑完撤下那一档由 test:subagent 的终态覆盖。
+      command: 'test:subagent-running',
+      run: async ({ activeInst }) => {
+        let { io, socket, activeEpoch, viewingInstanceId, mockInstances, delay, setViewingInstanceId } = getContext();
+        if (!activeInst) {
+          activeInst = mockInstances.find(i => i.instanceId === 'inst_1') || mockInstances[0];
+          if (!activeInst) return;
+          viewingInstanceId = activeInst.instanceId;
+          setViewingInstanceId(viewingInstanceId);
+        }
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 'agent-run-1', name: 'Agent',
+            inputSummary: JSON.stringify({ description: 'Audit import boundaries', subagent_type: 'Explore' }),
+          }
+        });
+        await delay(150);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'task_progress', transient: true,
+          payload: {
+            taskId: 'task-run-1', taskType: 'local_agent', message: 'Explore：扫描导入边界',
+            lastToolName: 'Grep', subagentType: 'Explore',
+            tasks: [{
+              taskId: 'task-run-1', taskType: 'local_agent', message: 'Explore：扫描导入边界',
+              lastSeenAt: Date.now(), lastToolName: 'Grep', description: 'Explore：扫描导入边界',
+              subagentType: 'Explore', truncated: false, status: null, error: null,
+              durationMs: 8000, totalTokens: 1200,
+              toolUseId: 'agent-run-1', toolUses: 3,
+            }],
+            finished: [],
+          },
+        });
+      },
+    },
+    {
       // TC-24：子 agent 可折叠卡——主 Agent tool_use 预建卡 + parentToolUseId 嵌套 text/thinking/tool
       // 默认收起；展开后可见子 agent 正文与内部工具。对齐 agent.js forwardSubagentText 分流字段。
       command: 'test:subagent',
@@ -505,6 +549,26 @@ export function createContentScenarios(getContext) {
             messageId: 'msg_sa_1', text: 'Found 1 CSRF gap in login handler.',
             parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
           }
+        });
+        await delay(150);
+
+        // 后台任务快照：带 toolUseId 把用量挂到上面那张聚合卡（真 server 的 tool_use_id 来自
+        // SDK task_progress，形状对齐 emitBgTasksSnapshot 的 tasks 行）。
+        socket.emit('agent:event', {
+          seq: 5.5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'task_progress', transient: true,
+          payload: {
+            taskId: 'task-sa-1', taskType: 'local_agent', message: 'code-reviewer：Reading auth.js',
+            lastToolName: 'Bash', subagentType: 'code-reviewer',
+            tasks: [{
+              taskId: 'task-sa-1', taskType: 'local_agent', message: 'code-reviewer：Reading auth.js',
+              lastSeenAt: Date.now(), lastToolName: 'Bash', description: 'code-reviewer：Reading auth.js',
+              subagentType: 'code-reviewer', truncated: false, status: null, error: null,
+              durationMs: 505000, totalTokens: 65400,
+              toolUseId: 'agent-parent-1', toolUses: 15,
+            }],
+            finished: [],
+          },
         });
         await delay(150);
 

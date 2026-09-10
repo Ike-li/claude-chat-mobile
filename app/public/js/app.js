@@ -76,6 +76,7 @@ import {
   otherWorkspaceNotifyOpts,
   isSubagentPayload,
   isSpawnToolName,
+  formatSubagentLastToolLine,
   isFileMutationTool,
   accumulateTurnFileChange,
   summarizeTurnFileChanges,
@@ -1990,6 +1991,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       task_progress: (ev) => {
         const relevant = onTaskProgress(ev); // let 可后绑 reconcile 包装
         if (relevant && liveLine) liveLine.lastEventAt = Date.now();
+        if (relevant) applySubagentUsage(ev.payload); // 按 toolUseId 把用量挂到流内聚合卡
         return relevant;
       },
       // API 重试：CLI 把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"，
@@ -3054,8 +3056,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // toolCards.get(toolUseId) 找卡再 querySelector 这三个，同名即可零改动复用那条路径。
       const wrap = el(`
         <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card">
-          <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
-            <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium"></span>
+          <summary class="px-3 py-2 cursor-pointer select-none">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium truncate"></span>
+            </div>
+            <div class="sa-lasttool mt-0.5 pl-5 text-ink-faint truncate hidden" data-testid="subagent-last-tool"></div>
           </summary>
           <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
           <div class="t-full-host px-3 pb-1 space-y-1">
@@ -3066,23 +3071,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       wrap.dataset.parentId = parentId;
       const titleEl = wrap.querySelector('.sa-title');
       const type = subagentType != null && String(subagentType).trim() ? String(subagentType).trim() : null;
-      titleEl.textContent = formatSubagentCardTitle({ subagentType: type, running: true });
       c = {
         el: wrap,
         body: wrap.querySelector('.sa-body'),
         titleEl,
+        lastToolEl: wrap.querySelector('.sa-lasttool'),
         type,
         running: true,
+        usage: null, // 由 applySubagentUsage 按 toolUseId 挂上；历史回放取不到（bgTasks 是 live 内存态）
         streams: new Map(),
         thinkings: new Map(),
       };
+      renderSubagentTitle(c);
       subagentCards.set(parentId, c);
       appendMessage(wrap);
       scrollBottom();
     } else if (subagentType != null && String(subagentType).trim() && !c.type) {
       // 首批 delta 可能早于带 subagentType 的 assistant：后来补类型标签
       c.type = String(subagentType).trim();
-      c.titleEl.textContent = formatSubagentCardTitle({ subagentType: c.type, running: c.running });
+      renderSubagentTitle(c);
     }
     return c;
   }
@@ -3091,6 +3098,42 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 【关键是最后一行】把聚合卡注册进 toolCards —— tool_result 的状态图标、结果正文、
   // 截断「展开全文」三条路径全靠 toolCards.get(toolUseId) 取卡，接过来之后那三条一个字节都不用改。
   // 不接的话，合卡就是拿「丢掉子代理最终报告」换「少一张卡」。
+  // 标题的三条改写路径（建卡 / 类型晚到补标签 / 标完成）必须共用同一个渲染口——
+  // 少带 usage 的那条会把已显示的「· 15 tools · 65.4k tok」在下一次改标题时抹掉。
+  function renderSubagentTitle(c) {
+    c.titleEl.textContent = formatSubagentCardTitle({
+      subagentType: c.type,
+      running: c.running,
+      ...(c.usage || {}),
+    });
+  }
+
+  // 后台任务快照 → 按 toolUseId 把用量与最近工具挂到对应的子代理卡上。
+  // 【为什么 join 写在这里而不是 task-status.js】那边管底栏横幅、按 task_id 组织；
+  // 卡按 parentToolUseId 组织。两张表唯一的交集就是 payload 里新加的 toolUseId
+  // （SDK task_progress.tool_use_id，2026-09-10 接通）。没有它就只能在横幅显示用量。
+  function applySubagentUsage(payload) {
+    const list = Array.isArray(payload?.tasks) ? payload.tasks : null;
+    if (!list) return;
+    for (const row of list) {
+      const id = typeof row?.toolUseId === 'string' ? row.toolUseId : '';
+      if (!id) continue;
+      const c = subagentCards.get(id);
+      if (!c) continue; // 有用量但没有卡：本地 slash 命令那批（整轮零 SDK 流），它们只活在横幅里
+      c.usage = { toolUses: row.toolUses ?? null, totalTokens: row.totalTokens ?? null, durationMs: row.durationMs ?? null };
+      renderSubagentTitle(c);
+      setSubagentLastTool(c, c.running ? formatSubagentLastToolLine(row) : null);
+    }
+  }
+
+  // 单行动作槽：折叠态也可见，对齐 CLI 的 lastToolInfo。跑完就撤——留着最后一条工具名
+  // 会让已完成的卡看起来还在动。
+  function setSubagentLastTool(c, line) {
+    if (!c?.lastToolEl) return;
+    c.lastToolEl.textContent = line || '';
+    c.lastToolEl.classList.toggle('hidden', !line);
+  }
+
   function adoptSpawnCard(sa, p) {
     const wrap = sa.el;
     wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
@@ -3111,7 +3154,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const c = subagentCards.get(parentId);
     if (!c || !c.running) return;
     c.running = false;
-    c.titleEl.textContent = formatSubagentCardTitle({ subagentType: c.type, running: false });
+    renderSubagentTitle(c);
+    setSubagentLastTool(c, null); // 终态定格：单行动作槽隐去（同 CLI，跑完不再显示最近工具）
   }
 
   function markAllSubagentCardsDone() {
@@ -7106,8 +7150,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // .t-status / .t-out / dataset.toolName 落结果）——两边模板漂了就会出现「刷新后结论不见」。
       const wrap = el(`
         <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card" data-history="1">
-          <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
-            <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium"></span>
+          <summary class="px-3 py-2 cursor-pointer select-none">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium truncate"></span>
+            </div>
+            <div class="sa-lasttool mt-0.5 pl-5 text-ink-faint truncate hidden" data-testid="subagent-last-tool"></div>
           </summary>
           <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
           <div class="t-full-host px-3 pb-1 space-y-1">

@@ -93,7 +93,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 
 /* 折叠器：去原生三角，光标手型 */
-details.thinking > summary, details.toolcard > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
+details.thinking > summary, details.toolcard > summary, details.subagent-card > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 #cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
 

@@ -8,7 +8,7 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t } from '../i18n.js';
-import { isSyntheticTaskId } from './bg-tasks.js';
+import { bgTaskUsageText, isSyntheticTaskId } from './bg-tasks.js';
 
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
 // 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
@@ -356,10 +356,46 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
 // 子 agent 可折叠卡片标题（默认收起；维护者选定「可折叠卡片」形态）。
 // running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
-export function formatSubagentCardTitle({ subagentType, running = true } = {}) {
+export function formatSubagentCardTitle({
+  subagentType, running = true, toolUses = null, totalTokens = null, durationMs = null,
+} = {}) {
   const raw = subagentType != null ? String(subagentType).trim() : '';
   const type = raw || t('子 agent');
-  return running ? `🤖 ${type} ${t('运行中')}` : `🤖 ${type} ${t('已完成')}`;
+  const head = running ? `🤖 ${type} ${t('运行中')}` : `🤖 ${type} ${t('已完成')}`;
+  // 用量段的数据源是 SDK task_progress.usage（累计值，按 tool_use_id 挂到本卡）。
+  // 【缺席时一个字都不加】历史回放取不到它——bgTasks 是 live 内存态，刷新即空。加占位
+  // （"0 tools"/"— tok"）会让刷新前后看起来像把数据弄丢了，不显示才是诚实的降级。
+  // 也不按 running 分档显示不同字段：分档会造出一半永远跑不到的分支，且 CLI 自己恒显。
+  const parts = [];
+  const uses = Number(toolUses);
+  if (Number.isFinite(uses) && uses > 0) parts.push(`${uses} tools`);
+  const usage = bgTaskUsageText({ durationMs, totalTokens });
+  if (usage) parts.push(usage);
+  return parts.length ? `${head} · ${parts.join(' · ')}` : head;
+}
+
+// 聚合卡的单行动作槽，对齐 CLI 的 lastToolInfo：折叠态也可见，「跑到哪了」不必展开卡片。
+// 只在有工具名时成行——它是「最近工具」行，没有工具就没有这一行；光有描述不顶替
+// （那是任务级摘要，归横幅/详情面板，混进来会让两处说同一件事的不同版本）。
+const SUBAGENT_LAST_TOOL_MAX = 60;
+export function formatSubagentLastToolLine(input) {
+  // 解构默认值只挡 undefined，不挡 null——调用点传的是 tasks.get(id) 的结果，取不到就是 null。
+  const { lastToolName, description, subagentType } = input || {};
+  const tool = lastToolName != null ? String(lastToolName).trim() : '';
+  if (!tool) return null;
+  let desc = description != null ? String(description).trim() : '';
+  // 后端 bgTaskUpsert 把 subagentType 拼在 message 前面（`${subagentType}：${desc}`）。
+  // 类型名已经在标题里，行内再来一次是纯噪音。两种冒号都剥——中文全角是后端拼的，
+  // 半角来自上游 description 自带的形态。
+  const type = subagentType != null ? String(subagentType).trim() : '';
+  if (type) {
+    for (const sep of ['：', ':']) {
+      if (desc.startsWith(type + sep)) { desc = desc.slice(type.length + sep.length).trim(); break; }
+    }
+  }
+  if (!desc) return `⎿ ${tool}`;
+  const clipped = desc.length > SUBAGENT_LAST_TOOL_MAX ? `${desc.slice(0, SUBAGENT_LAST_TOOL_MAX)}…` : desc;
+  return `⎿ ${tool}: ${clipped}`;
 }
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。
