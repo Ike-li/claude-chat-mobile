@@ -19,7 +19,7 @@ export function createSheetController(context, {
 } = {}) {
   const confirmModal = byId('confirmModal'), confirmSheet = byId('confirmSheet');
   const confirmTitle = byId('confirmTitle'), confirmBody = byId('confirmBody');
-  const confirmOk = byId('confirmOk'), confirmCancel = byId('confirmCancel');
+  const confirmOk = byId('confirmOk'), confirmCancel = byId('confirmCancel'), confirmAlt = byId('confirmAlt');
 
   // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）
   let sheetFocusPrev = null;
@@ -99,7 +99,10 @@ export function createSheetController(context, {
     warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
     danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
   };
-  function appConfirm({ title, body, okText = t('确定'), tone = 'default' }) {
+  // altText 存在时多出一个次动作按钮，Promise 兑现成 'ok' | 'alt' | false（两个字符串都是 truthy，
+  // 老调用点的 `if (!ok) return` 语义不变）；不传 altText 时行为与扩展前【逐字相同】——
+  // 兑现 true/false，次按钮保持 hidden。这样两个动作能共用一次长按，不必为它新造一个 sheet。
+  function appConfirm({ title, body, okText = t('确定'), altText = null, tone = 'default' }) {
     if (!confirmModal || confirmResolve) return Promise.resolve(false);
     const toneStyle = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
     confirmSheet.style.borderTopColor = toneStyle.border;
@@ -109,6 +112,10 @@ export function createSheetController(context, {
     confirmBody.classList.toggle('hidden', !body);
     confirmOk.className = `flex-1 py-2.5 rounded-lg ${toneStyle.ok} text-white active:brightness-95 font-medium`;
     confirmOk.textContent = okText;
+    if (confirmAlt) {
+      confirmAlt.classList.toggle('hidden', !altText);
+      if (altText) confirmAlt.textContent = altText;
+    }
     return new Promise(resolve => {
       confirmResolve = resolve;
       openSheet(confirmModal);
@@ -120,7 +127,8 @@ export function createSheetController(context, {
     closeSheet(confirmModal);
     r(ok);
   }
-  if (confirmOk) confirmOk.onclick = () => settleConfirm(true);
+  if (confirmOk) confirmOk.onclick = () => settleConfirm(confirmAlt && !confirmAlt.classList.contains('hidden') ? 'ok' : true);
+  if (confirmAlt) confirmAlt.onclick = () => settleConfirm('alt');
   if (confirmCancel) confirmCancel.onclick = () => settleConfirm(false);
   // 点遮罩空白处 = 取消（对齐移动端 sheet 习惯；permModal 因审批语义不做，这里是普通确认、可以做）
   if (confirmModal) confirmModal.addEventListener('click', e => { if (e.target === confirmModal) settleConfirm(false); });

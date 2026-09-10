@@ -234,6 +234,11 @@ export function buildAgentQueryOptions(session, env = process.env) {
     pathToClaudeCodeExecutable: session.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
     model: session.activeModel || undefined,
     resume: session.sessionId || undefined,
+    // 文件轴 Rewind 的前提：CLI 在 Edit/Write 前把原文备份到 ~/.claude/file-history/<sid>/，
+    // Query.rewindFiles() 才找得到检查点。**SDK 模式默认关，交互模式默认开**——不传这一行，
+    // web 端就比坐在终端前少一个能力，而缺陷形态是「CLI 照常工作、只是没快照」，
+    // 要等有人真的点回退才暴露。写入方是 CLI 自己的数据目录，CCM 不碰。
+    enableFileCheckpointing: true,
     abortController: session.abort,
     includePartialMessages: true,                        // E4 流式
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
@@ -819,19 +824,25 @@ export class AgentSession {
     // #2：确认能发送（过了 disposed + 双重检查）后才记 firstMessage、emit user_message 气泡、记日志——
     // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
     if (this.firstMessage === null) this.firstMessage = displayText;
+    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列，并在 result 上原样回报为
+    // user_message_uuid。必须在开槽【之前】生成：槽要带着它才能被精确结算。
+    // 【生成点为什么在 emit 之前】文件轴 Rewind 的锚点就是这个 uuid，而 rewindFiles 只认它。
+    // 若气泡先上屏、uuid 后生成，live 气泡就没有 dataset.uuid，用户最想回退的「刚才那一轮」
+    // 反而长按无效，得刷新页面把它变成历史气泡——这个限制没法向用户解释。
+    // 2026-09-10 实测：transcript 落盘的 user 行 uuid 与此处推入值【逐字相同】，
+    // 所以 live 气泡与刷新后的历史气泡携带同一个锚点，回退行为一致。
+    const msgUuid = randomUUID();
     // FE-002：透传 clientMessageId，供前端离线乐观气泡精确对账（含纯附件无文本）。
     this.emit('user_message', {
       text: displayText,
       attachments: opts.attachments,
+      uuid: msgUuid, // Rewind 锚点：live 气泡靠它拿到 dataset.uuid（无静态门禁守，改动须补形状断言）
       ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
     }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
-    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列，并在 result 上原样回报为
-    // user_message_uuid。必须在开槽【之前】生成：槽要带着它才能被精确结算。
-    const msgUuid = randomUUID();
     this._openTurnSlot(msgUuid);
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表

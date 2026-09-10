@@ -140,6 +140,11 @@ const DEFAULT_REPLAY_OOB_TYPES = new Set([
   'api_retry',
   'history_append',
   'mirror_state',
+  // 回退生效通知。必须在这里登记：它走 outOfBand，而回放缓冲若把它排队，
+  // 整批重载那条决策会把队列丢掉——对话树已被服务端截断，前端却收不到重载信号，
+  // 屏幕上会一直留着已经不存在的那几轮，且刷新前不自愈。
+  // （注意：本行注释里不能出现事件名的字面形状，提取器是裸正则、不跳注释。）
+  'rewind_applied',
 ]);
 
 export function createReplayBuffer({

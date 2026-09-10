@@ -511,6 +511,15 @@ const ACK_SHAPES = [
   { event: 'tool:preview', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
   { event: 'task:output', branch: '实例不存在', payload: () => ({ instanceId: 'nope', taskId: 't' }), required: ['ok', 'error'] },
   { event: 'attachment:read', branch: '预览不可用', payload: () => ({}), required: ['ok', 'error'] },
+  // 回退预览：这里走「会话不存在」支（免夹具那一档）。成功支的字段
+  // { canRewind, filesChanged, insertions, deletions, keepUuid } 由 E2E mock 与真 server 各自实现，
+  // 改真 server 的成功支 ack 时【必须同时改 tests/e2e/mock/server.js】——两边是平行实现，
+  // 静态门禁只守事件名不守字段，删一个字段这里和 E2E 都不会红。
+  { event: 'session:rewind:preview', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },
+  // confirm 同样只覆盖免夹具的「会话不存在」支。成功支 { forkedSessionId, filesChanged,
+  // skippedLinks, unrestored, warning } + finishOpenFocus 的 { instanceId, sessionId }
+  // 会真回滚文件并分叉会话，不适合放进这张一次性形状表。
+  { event: 'session:rewind:confirm', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },
   // action 非法时在 spawn 安装器【之前】就返回——这是本仓唯一会写 ~/.claude/settings.json 的路径，
   // 只驱动这一支，绝不用合法 action 触发真安装。
   { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },

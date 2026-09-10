@@ -2039,6 +2039,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }),
     outOfBand: {
       task_notification: onTaskNotification,
+      // 回退已生效（可能来自本机，也可能来自另一台设备）。走 outOfBand 而非普通 handler：
+      // 它是【跨会话】通知，普通分支会因 event.sessionId ≠ currentSessionId 触发 onSessionId
+      // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
+      rewind_applied: (ev) => {
+        const p = ev?.payload || {};
+        // 只有正看着这个会话时才需要动 UI：对话树被截断、文件也变了，本地这两份都过期。
+        if (!ev?.sessionId || ev.sessionId !== displayedSessionId) return;
+        const n = Array.isArray(p.filesChanged) ? p.filesChanged.length : 0;
+        addBar(p.forkedSessionId
+          ? t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n)
+          : t('已回退 {n} 个文件，但新会话创建失败').replace('{n}', n),
+          p.forkedSessionId ? 'text-ink-faint' : 'text-danger');
+        // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
+        loadHistory(ev.sessionId, p.cwd || currentCwd);
+      },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
         // 【底栏权责归位】已经有流内聚合卡的任务，从底栏载荷里摘掉——它的状态、用量、最近工具
@@ -2641,6 +2656,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
           appendCopyAction(matchedBubble, () => p.text, 'right');
         }
+        // Rewind 锚点：占位转正时补上服务端权威 uuid，并补绑长按（占位创建时还没有 uuid）。
+        if (p.uuid && !matchedBubble.dataset.uuid) {
+          matchedBubble.dataset.uuid = p.uuid;
+          bindBubbleLongPress(matchedBubble, 'user');
+        }
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
       }
@@ -2649,6 +2669,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用：user_message 在线新建分支（离线占位分支在 send() 创建时已挂，这里走 matchedBubble 复用不重复创建）
       // 排队撤回/标记转正都按 clientMessageId 定位气泡（离线占位分支已挂，此处补齐在线新建分支）
       if (p.clientMessageId) bubble.dataset.clientMessageId = p.clientMessageId;
+      // Rewind 锚点：live 气泡从这一刻起就带 uuid，用户不必刷新页面就能回退「刚才那一轮」。
+      // 这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
+      if (p.uuid) bubble.dataset.uuid = p.uuid;
       if (p.text) {
         // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
         bubble.innerHTML = render(p.text);
@@ -2663,6 +2686,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
+      if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
     },
@@ -7154,9 +7178,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     else setTimeout(fn, 0);
   }
 
-  // 长按历史气泡「从这里分叉新会话」：550ms 触发，touchmove>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
-  // 只绑在带 dataset.uuid 的历史气泡上——live 流气泡不带 uuid，长按天然无效（V1 范围：只做历史气泡入口）。
-  function bindForkLongPress(bubble, role) {
+  // 长按气泡：550ms 触发，touchmove>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
+  // 按气泡归属分流——user → 文件轴 Rewind，assistant → 对话轴 fork，见 setTimeout 里的说明。
+  // 绑定前提是气泡带 dataset.uuid。2026-09-10 起 live 气泡也带（服务端随 user_message 下发 uuid），
+  // 所以「刚发完就想回退」不再需要先刷新页面。
+  function bindBubbleLongPress(bubble, role) {
     let timer = null, sx = 0, sy = 0, moved = false;
     const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
     bubble.addEventListener('touchstart', ev => {
@@ -7164,7 +7190,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!touch) return;
       sx = touch.clientX; sy = touch.clientY; moved = false;
       cancel();
-      timer = setTimeout(() => { timer = null; if (!moved) requestSessionFork(bubble, role); }, 550);
+      timer = setTimeout(() => {
+        timer = null;
+        if (moved) return;
+        // user 气泡上两个动作都成立，用一次确认框二选一（不新造 sheet，见 appConfirm 的 altText）：
+        //  · 主动作「回退到此轮前」= 文件轴 Rewind，锚点是气泡【自己】的 uuid
+        //  · 次动作「从这里分叉」  = 对话轴 fork，锚点是【前一条 assistant】的 uuid
+        // 两个锚点语义相反，共用一个解析函数必然写反其中一条——所以分成两条调用路径。
+        // assistant 气泡上只有 fork 成立（rewindFiles 只认 user prompt 的 uuid），直接走。
+        if (role === 'user') requestBubbleAction(bubble);
+        else requestSessionFork(bubble, role);
+      }, 550);
     }, { passive: true });
     bubble.addEventListener('touchmove', ev => {
       if (!timer) return;
@@ -7184,6 +7220,65 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       node = node.previousElementSibling;
     }
     return null;
+  }
+
+  // 长按用户气泡后的二选一。放在这里而不是塞进 requestSessionRewind：
+  // 「选哪个动作」与「回退要不要执行」是两个决定，混在一个函数里会让取消语义含混。
+  async function requestBubbleAction(bubble) {
+    const choice = await appConfirm({
+      title: t('对这条消息做什么？'),
+      body: t('「回退」会把文件恢复到你发出这条消息之前，并分叉出一个回到那一刻的新会话；「分叉」只复制对话、不动文件。两者都保留当前会话。'),
+      okText: t('回退到此轮前'),
+      altText: t('从这里分叉'),
+    });
+    if (choice === 'alt') { requestSessionFork(bubble, 'user'); return; }
+    if (choice) requestSessionRewind(bubble);
+  }
+
+  // 文件轴 Rewind：两步（preview 只读 → 用户确认 → confirm 真回滚）。
+  // 【为什么锚点是气泡自己的 uuid】rewindFiles 只认「被丢弃那一轮 prompt 自身」的 uuid——
+  // 与 fork 的锚点语义相反（那个取前一条 assistant）。**绝不能复用 resolveForkAnchorUuid**，
+  // 送 assistant uuid 会让 CLI 报「找不到检查点」。
+  async function requestSessionRewind(bubble) {
+    const promptUuid = bubble.dataset.uuid || null;
+    if (!promptUuid) return; // live 气泡还没有 uuid（历史气泡才绑长按）
+    if (!displayedSessionId) return;
+    // 快照：确认框等待期间任何 instances 广播都可能改写 currentCwd/displayedSessionId，
+    // 不快照会把 A 会话的锚点和已变成 B 的 cwd 拼到一起发出去（同 requestSessionFork）。
+    const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
+    haptic('tap');
+
+    const preview = await new Promise(resolve => {
+      socket.emit('session:rewind:preview',
+        { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
+    });
+    if (!preview?.ok) { addBar(preview?.error || t('无法回退这一轮'), 'text-danger'); return; }
+    if (!preview.canRewind) { addBar(t('这一轮没有可回退的文件改动'), 'text-ink-faint'); return; }
+
+    const files = Array.isArray(preview.filesChanged) ? preview.filesChanged : [];
+    const names = files.map(p => p.split('/').pop()).slice(0, 3).join('、');
+    const more = files.length > 3 ? t('等 {n} 个文件').replace('{n}', files.length) : '';
+    const ok = await appConfirm({
+      title: t('回退到这轮对话之前？'),
+      body: t('将恢复 {files}（+{ins} / −{del} 行），并分叉出一个回到那一刻的新会话。当前会话完整保留，随时可以切回来。')
+        .replace('{files}', names + more).replace('{ins}', preview.insertions ?? 0).replace('{del}', preview.deletions ?? 0),
+      okText: t('回退'),
+      tone: 'danger',
+    });
+    if (!ok) return;
+    if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+      addBar(t('会话已切换，回退已取消，请重新发起'), 'text-info');
+      return;
+    }
+
+    const res = await new Promise(resolve => {
+      socket.emit('session:rewind:confirm',
+        { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
+    });
+    if (!res?.ok) { addBar(res?.error || t('回退失败'), 'text-danger'); return; }
+    // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
+    // 这里只补一句 warning——它只对发起方有意义（撕裂态的处置建议）。
+    if (res.warning) addBar(res.warning, 'text-danger');
   }
 
   async function requestSessionFork(bubble, role) {
@@ -7488,7 +7583,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;
-        bindForkLongPress(bubble, isUser ? 'user' : 'assistant');
+        bindBubbleLongPress(bubble, isUser ? 'user' : 'assistant');
       }
       // 历史条目的 timestamp 是 transcript 原样透传的 ISO 串（src/sessions/history.js）。
       // 节点先进游离的 frag，故 prevTs 优先读 frag、空了再回落 #messages（增量追加场景）。

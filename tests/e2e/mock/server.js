@@ -1303,6 +1303,76 @@ io.on('connection', socket => {
   // 只认 mock-session-archived → mock-session-forked 这一条固定映射，够验前端长按→confirm→切视图链路。
   // uuid 白名单只收 assistant 侧（a-archived-*）：user 气泡长按理应解析出前一条 assistant 的 uuid、不是
   // 自己的（u-archived-*）——若前端解析回归成送自己的 uuid，这里会拒绝，P0-FORKc 能抓到。
+  // 文件轴 Rewind 预览。ack 形状与真 server 逐字对齐（app/src/server/app.js 的 session:rewind:preview）——
+  // 这里是平行实现，字段漂了 E2E 也不会红，改真 server 的 ack 时必须回来同步这一处。
+  //
+  // uuid 白名单【只收 user 侧】（u-archived-*），与上面 fork handler 恰好相反（它只收 a-archived-*）。
+  // 这不是笔误：rewindFiles 要的是【被丢弃那轮 prompt 自身】的 uuid，而 fork 的锚点语义是
+  // 「保留到这条为止」故取前一条 assistant。两个功能会并排出现在同一个长按菜单里，前端若图省事
+  // 复用 resolveForkAnchorUuid，送来的就是 a-archived-*，这里拒绝，E2E 能当场抓到。
+  socket.on('session:rewind:preview', (payload, callback) => {
+    const { sessionId, cwd, promptUuid } = payload || {};
+    console.log(`[mock] session:rewind:preview sessionId=${sessionId}, cwd=${cwd}, promptUuid=${promptUuid}`);
+    if (typeof callback !== 'function') return;
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
+      callback({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (typeof promptUuid === 'string' && promptUuid.startsWith('a-archived')) {
+      // 送来了 assistant uuid = 前端复用了 fork 的锚点解析。真 server 上 planRewind 会
+      // prompt-not-found（那个 uuid 不是人类 prompt 的），此处给出同款可断言的错误。
+      callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+      return;
+    }
+    if (promptUuid === 'u-archived-1') {
+      // 夹具里这是会话【首条】消息，其前面没有可保留的 chain entry。
+      // 真 server 的 planRewind 在这一档返回 first-turn —— mock 必须给同一个答案，
+      // 否则两边对同一条夹具的判断相反，E2E 守的就不是真 server 的行为。
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
+      return;
+    }
+    if (promptUuid === 'u-archived-2') {
+      callback({
+        ok: true, canRewind: true,
+        filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js', '/Users/you/code/claude-chat-mobile/README.md'],
+        insertions: 12, deletions: 5,
+        keepUuid: 'a-archived-1', // 目标轮之前最后一条 chain entry
+      });
+      return;
+    }
+    callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+  });
+
+  // 回退执行：回滚文件 + 分叉出「回到那一刻」的新会话（原会话保留）。ack 与真 server 对齐——
+  // 成功时真 server 走 finishOpenFocus 收尾，所以带 instanceId / sessionId。
+  // u-archived-2 → 成功；u-archived-3 → 文件回了但分叉失败（原会话未受影响那一档）。
+  socket.on('session:rewind:confirm', (payload, callback) => {
+    const { sessionId, cwd, promptUuid } = payload || {};
+    console.log(`[mock] session:rewind:confirm sessionId=${sessionId}, promptUuid=${promptUuid}`);
+    if (typeof callback !== 'function') return;
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
+      callback({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
+      callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+      return;
+    }
+    const forked = promptUuid === 'u-archived-2';
+    const filesChanged = ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'];
+    const forkedSessionId = forked ? 'mock-session-forked' : null;
+    callback({
+      ok: true, forkedSessionId, filesChanged, skippedLinks: 0, unrestored: [],
+      ...(forked ? { instanceId: 'inst_forked', sessionId: forkedSessionId } : {}),
+      warning: forked ? null : '文件已回退，但新会话创建失败（mock）。原会话未受影响，可重试。',
+    });
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId, ts: Date.now(),
+      type: 'rewind_applied',
+      payload: { cwd, droppedFromUuid: promptUuid, forkedSessionId, filesChanged, skippedLinks: 0 },
+    });
+  });
+
   socket.on('session:fork', (payload, callback) => {
     const { sessionId, cwd, uuid } = payload || {};
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
@@ -4200,6 +4270,9 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
       type: 'user_message', payload: {
         text: cmd, attachments,
+        // Rewind 锚点：真 server 随 user_message 下发 uuid，live 气泡靠它拿 dataset.uuid。
+        // mock 不带的话，E2E 里 live 气泡长按恒无效——那个缺陷在真机上不存在，是 mock 自己的分歧。
+        uuid: `u-live-${Date.now()}`,
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });

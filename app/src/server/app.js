@@ -63,6 +63,7 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -1956,6 +1957,19 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
 // 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
 // miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
 const resumeInFlight = new Map(); // key → Promise<AgentSession>
+// 回退并发锁（G3）。键是 sessionId 而非实例 id——confirm 中途会置换实例，
+// 挂在实例上的锁解锁时已不是同一个对象。状态与判据都在 sessions/rewind-plan.js。
+const rewindLocks = createRewindLocks();
+// rewindFiles 的超时上限。控制请求走 SDK 的 control_request 通道，限流重试期间它可能长时间挂起——
+// 没有上限的话 handler 会一直等，锁的 TTL 到期后别人能进来、这一条却仍挂着。
+// 对齐 Claude Desktop 的做法（它给 rewindFiles 包了超时，超时报 "Timed out"）。
+const REWIND_REQUEST_TIMEOUT_MS = 20_000;
+function withRewindTimeout(promise, ms = REWIND_REQUEST_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('rewindFiles 超时')), ms).unref?.()),
+  ]);
+}
 // 进程内：正在 deletePermanent 的会话 id。列表/搜索在删文件窗口内排除它们。
 // 不落盘——崩溃后孤儿文件重新可见，与 CLI 等价、可重试。必须在 registerSocketConnection
 // 之外：每条 socket 一份的话，另一台设备的 SWR 在删文件窗口内仍会把行吐回去。
@@ -2922,6 +2936,195 @@ registerSocketConnection(io, socket => {
     sessions.bumpGeneration(cwd);
     const inst = await dedupedResume(cwd, newId);
     finishOpenFocus(inst, cwd, newId, ack);
+  });
+
+  // 文件轴 Rewind 的预览：回答「这一轮能不能回退、回退会动哪些文件」，**只读，不动磁盘**。
+  //
+  // 守卫顺序不是随意的，两处必须按这个次序：
+  //  ① 跨驾驶员检查【在懒唤醒之前】——否则会为一个必然被拒的请求 spawn 一个 CLI 子进程；
+  //  ② 截断可行性（planRewind）【在 rewindFiles 之前】——CLI 对「丢弃区间混进了别的轮」是
+  //     确定性拒绝且不可重试，等到 confirm 才发现时磁盘已经回滚过了，那个撕裂态无法自动恢复。
+  //     判据 CCM 自己能复算（transcript 就在磁盘上），所以提前到这里，拒绝时一个字节都没动。
+  on(socket, 'session:rewind:preview', async (payload, ack) => {
+    const reply = (r) => { if (typeof ack === 'function') ack(r); };
+    const sessionId = payload?.sessionId;
+    const promptUuid = payload?.promptUuid;
+    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      reply({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (typeof promptUuid !== 'string' || !promptUuid) {
+      reply({ ok: false, error: '缺少回退锚点' });
+      return;
+    }
+
+    // G2 跨驾驶员：终端在跑命令或卡在审批框上，手机端回退会破坏对端环境。fail-closed。
+    let states = new Map();
+    try { states = await listTerminalSessionStates({ classifyTail: classifyTranscriptTail }); } catch { /* fail-open 到空表 */ }
+    if (hasBusyTerminalSessionForCwd(cwd, states) || hasWaitingTerminalSessionForCwd(cwd, states)) {
+      reply({ ok: false, error: '终端会话正在运行或等待审批，暂时无法回退' });
+      return;
+    }
+
+    // G4 冷会话：快照在磁盘上，实例被回收不影响可回退性——懒唤醒即可。
+    const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
+    // G1 本实例在跑：模型随时在写文件，此时回退必发写锁抢占。fail-closed。
+    if (inst?.isBusy?.()) {
+      reply({ ok: false, error: '当前会话正在执行中，无法回退文件' });
+      return;
+    }
+    // G8 没有 Query 句柄（CLI 镜像会话等）：结构性无法发起回滚，不是「暂时不行」。
+    if (!inst?.q?.rewindFiles) {
+      reply({ ok: false, error: '该会话不支持文件回退' });
+      return;
+    }
+
+    // G10 截断可行性预判（见上方 ②）
+    const entries = await readSessionEntries(cwd, sessionId);
+    const plan = planRewind(entries, promptUuid);
+    if (!plan.ok) {
+      reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
+      return;
+    }
+
+    let res;
+    try {
+      res = await inst.q.rewindFiles(promptUuid, { dryRun: true });
+    } catch (err) {
+      reply({ ok: false, error: '无法读取回退预览', reason: 'rewind-failed' });
+      console.error('[rewind] preview 失败', err?.message || err);
+      return;
+    }
+    // G11：canRewind 只表示「找得到检查点」，不表示「回退会改变什么」——空轮次照样 true。
+    // 判「值不值得弹确认框」看 filesChanged，否则用户会收到一个「将恢复 0 个文件」的确认框。
+    const filesChanged = Array.isArray(res?.filesChanged) ? res.filesChanged : [];
+    reply({
+      ok: true,
+      canRewind: !!res?.canRewind && filesChanged.length > 0,
+      filesChanged,
+      insertions: res?.insertions ?? 0,
+      deletions: res?.deletions ?? 0,
+      keepUuid: plan.keepUuid,
+    });
+  });
+
+  // 文件轴 Rewind 的执行：回滚文件 + 分叉出一个「回到那一刻」的新会话。
+  //
+  // 【为什么是 fork 而不是原地截断】判据是失败后果是否可逆，详见 sessions/rewind-plan.js 头注：
+  // 原地截断一旦判错就永久丢对话，而 fork 里原会话一个字节没动。Claude Desktop 在同一问题上
+  // 也选了 fork（且全程不传 resumeDropsTurn），本仓对齐。
+  //
+  // 【顺序：先回滚文件，后分叉】两步之间崩溃的话：
+  //   · 当前顺序 → 文件回退了、没建新会话。原会话还在，用户重来一次即可，磁盘可由 git 找回。
+  //   · 反过来  → 建了新会话但文件还在未来，用户会在一个"看起来已回退"的会话里对着新代码说话。
+  // 前者的中间态是自洽的，后者不是。
+  on(socket, 'session:rewind:confirm', async (payload, ack) => {
+    const reply = (r) => { if (typeof ack === 'function') ack(r); };
+    const sessionId = payload?.sessionId;
+    const promptUuid = payload?.promptUuid;
+    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      reply({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (typeof promptUuid !== 'string' || !promptUuid) {
+      reply({ ok: false, error: '缺少回退锚点' });
+      return;
+    }
+
+    // G3 并发锁。键是 sessionId：防连击与移动端网络重发把同一批文件回滚两次。
+    if (!rewindLocks.tryAcquire(sessionId)) {
+      reply({ ok: false, error: '该会话的回退正在进行中，请稍候' });
+      return;
+    }
+
+    try {
+      // G2 重查（preview 到 confirm 之间用户可能回到电脑前敲了命令）
+      let states = new Map();
+      try { states = await listTerminalSessionStates({ classifyTail: classifyTranscriptTail }); } catch { /* fail-open 到空表 */ }
+      if (hasBusyTerminalSessionForCwd(cwd, states) || hasWaitingTerminalSessionForCwd(cwd, states)) {
+        reply({ ok: false, error: '终端会话正在运行或等待审批，暂时无法回退' });
+        return;
+      }
+
+      const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
+      if (inst?.isBusy?.()) {
+        reply({ ok: false, error: '当前会话正在执行中，无法回退文件' });
+        return;
+      }
+      if (!inst?.q?.rewindFiles) {
+        reply({ ok: false, error: '该会话不支持文件回退' });
+        return;
+      }
+
+      const plan = planRewind(await readSessionEntries(cwd, sessionId), promptUuid);
+      if (!plan.ok) {
+        reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
+        return;
+      }
+
+      // ── 第 1 步：物理回滚 ──
+      let real;
+      try {
+        real = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: false }));
+      } catch (err) {
+        console.error('[rewind] 回滚失败', err?.message || err);
+        reply({ ok: false, error: '回退失败，文件未改动', reason: 'rewind-failed' });
+        return;
+      }
+      if (!real?.canRewind) {
+        reply({ ok: false, error: real?.error || '回退失败，文件未改动', reason: 'rewind-refused' });
+        return;
+      }
+
+      // ── 第 2 步：G6 复核 ── 不信 canRewind：per-file 失败既不计入 skippedLinks 也不抛错，
+      // 「回退了一半」这一档接口是成功返回的。再 dryRun 一次，真恢复到位就该「无事可做」。
+      let recheck = null;
+      try { recheck = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: true })); } catch { /* 保守判失败 */ }
+      const verdict = rewindOutcomeVerdict(recheck);
+
+      // ── 第 3 步：分叉出新会话（原会话完整保留）──
+      // upToMessageId 是 inclusive slice：新会话保留到 keepUuid 为止，即目标轮之前的全部内容。
+      let newId = null, forkError = null;
+      try {
+        ({ sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid }));
+        sessions.bumpGeneration(cwd);
+      } catch (err) {
+        forkError = err?.message || String(err);
+        console.error('[rewind] 分叉失败', forkError);
+      }
+
+      refreshStatusLine('rewind').catch(err => console.error('[statusline]', err));
+
+      // 广播给该会话的其他连接：文件变了，且出现了一个新会话。SEC-01：只发已批准设备。
+      io.to('approved').emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId, ts: Date.now(),
+        type: 'rewind_applied',
+        payload: {
+          cwd, droppedFromUuid: promptUuid, forkedSessionId: newId,
+          filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
+          skippedLinks: real.skippedLinks ?? 0,
+        },
+      });
+
+      const base = {
+        ok: true,
+        forkedSessionId: newId,
+        filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
+        skippedLinks: real.skippedLinks ?? 0,
+        unrestored: verdict.unrestored,
+        warning: forkError
+          ? `文件已回退，但新会话创建失败（${forkError}）。原会话未受影响，可重试。`
+          : (verdict.ok ? null : '部分文件可能未恢复，建议在 Git 面板核对'),
+      };
+      if (!newId) { reply(base); return; }
+      // 复用 session:fork 的「打开/聚焦」收尾：切到新会话，与既有分叉体验一致。
+      const fresh = await dedupedResume(cwd, newId);
+      finishOpenFocus(fresh, cwd, newId, (r) => reply({ ...base, ...r, ok: true }));
+    } finally {
+      rewindLocks.release(sessionId);
+    }
   });
 
   // 台阶3 新增：关闭 tab。dispose 该实例（杀进程、deny 挂起审批、释放配额）；会话留盘可经 session:switch 再开。

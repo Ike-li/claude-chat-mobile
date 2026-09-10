@@ -288,7 +288,19 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        都成立的分辨手段：iOS 拿不到机型，局域网 http:// 下 UA Client Hints 不可用（非安全
   //        上下文），而同一部手机的微信 webview 与 Chrome 本就是两条独立记录。寻址同吊销走
   //        shortId，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。入向 48→49）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 49);
+  //      + session:rewind:preview（2026-09-10，文件轴 Rewind 的只读预览：回答「这一轮能不能回退、
+  //        会动哪些文件」。刻意不并进 session:fork——两者虽然共用长按气泡入口，锚点语义却相反：
+  //        fork 取【前一条 assistant】（保留到这条为止），rewind 要【被丢弃那轮 prompt 自身】的 uuid
+  //        （SDK 的 rewindFiles 只认它，送 assistant uuid 会报「找不到检查点」）。共用一个 handler
+  //        必然写反其中一条。分成 preview / confirm 两步则是因为回退【会改磁盘】：预览只读，
+  //        且在动任何文件之前就把「CLI 会不会拒绝这次截断」算出来——那个拒绝确定性且不可重试，
+  //        等到执行时才发现，文件已经回滚而对话没截断，撕裂态无法自动恢复。入向 49→50）
+  //      + session:rewind:confirm（2026-09-10，回退的执行步。与 preview 分开是因为它【会改磁盘】：
+  //        preview 只读、可随便点；confirm 要回滚文件并截断对话，两者的权限档、并发锁、失败处置
+  //        全不同，合成一个 handler 靠 payload 里的 dryRun 开关分流迟早写反。入向 50→51）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 51);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:confirm'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:renameTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('subagent:flow'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:revokeTrustedDevice'));
@@ -322,7 +334,13 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
 test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 30 种一致', () => {
-  assert.equal(AGENT_EVENT_TYPES.length, 30);
+  //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
+  //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
+  //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
+  //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
+  //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
+  assert.equal(AGENT_EVENT_TYPES.length, 31);
+  assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。
   assert.ok(AGENT_EVENT_TYPES.includes('trusted_devices'));

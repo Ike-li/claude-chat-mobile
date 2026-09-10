@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 同步与通道
 
-双向实时同步走 Socket.io，出向统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 30 种；seq+epoch 去重回放，`npm run check` 校验双向事件契约）。并存的通道：Web 驾驶走 Agent SDK 双向流；CLI 终端驾驶**不经过 SDK**，靠磁盘 transcript 轮询同步只读镜像，「单驾驶员模型」防两端同时写分叉；设备审批走文件监听广播；离线唤醒走 web-push/ntfy。机制、判据与参数全在 [docs/architecture.md](docs/architecture.md)。
+双向实时同步走 Socket.io，出向统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 31 种；seq+epoch 去重回放，`npm run check` 校验双向事件契约）。并存的通道：Web 驾驶走 Agent SDK 双向流；CLI 终端驾驶**不经过 SDK**，靠磁盘 transcript 轮询同步只读镜像，「单驾驶员模型」防两端同时写分叉；设备审批走文件监听广播；离线唤醒走 web-push/ntfy。机制、判据与参数全在 [docs/architecture.md](docs/architecture.md)。
 
 几条最容易改错的，摆在这里：
 
