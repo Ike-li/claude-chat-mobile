@@ -10,11 +10,14 @@
 import { test, expect } from '@playwright/test';
 import { gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
 
+// 指纹与信任名单同住「接入与设备」这一页——面板是两级的，不切页的话它们在 hidden 子页里，
+// DOM 查得到但点不到。先确认 sheet 真的开了再读里面的文字：面板是常驻 DOM，没开就读会读到上一次的残留。
 async function openGeneralSettings(page) {
   await page.locator('#btnSessions').click();
   await page.locator('#btnGeneralSettings').click();
-  // 先确认 sheet 真的开了再读里面的文字：面板是常驻 DOM，没开就读会读到上一次的残留。
   await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+  await page.locator('[data-testid="general-nav-devices"]').click();
+  await expect(page.locator('#generalPage-devices')).toBeVisible();
 }
 
 test.describe('设备身份与吊销', () => {

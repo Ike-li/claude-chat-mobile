@@ -3,15 +3,14 @@
 // 裸计数器段已撤（原始计数留 /metrics 巡检端点）；数据走鉴权 service:status ack（mock 确定性 payload）。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-22 服务状态面板：设置入口打开 → 两段渲染 → 关闭', async ({ page }) => {
     await gotoMock(page);
 
     // 1. 设置面板 → 点「服务状态」入口：状态 sheet 弹出、设置 sheet 收起
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'host');
     await page.locator('#btnServiceStatus').click();
     await expect(page.locator('#serviceStatusModal')).toBeVisible();
     await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
@@ -59,8 +58,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
 
     // 2. 打开面板：告警段渲染失败行（文案与抽屉「服务」小节同源纯函数）
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'host');
     await page.locator('#btnServiceStatus').click();
     const body = page.locator('#serviceStatusBody');
     await expect(body).toContainText('推送最近失败于');
@@ -82,8 +80,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:service-flapping');
     await waitForIdle(page);
 
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'host');
     await page.locator('#btnServiceStatus').click();
     const body = page.locator('#serviceStatusBody');
 
@@ -109,8 +106,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
 
     // 2. 打开面板：⛔ 限速锁定（安全信号）+ 🐞 前端错误（指向日志面板）
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'host');
     await page.locator('#btnServiceStatus').click();
     const body = page.locator('#serviceStatusBody');
     await expect(body).toContainText('登录限速锁定于 42 分钟前（累计 2 次）');
@@ -133,8 +129,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-22e 安全日志段：审计记录译成人话，来源决定措辞与判色', async ({ page }) => {
     await gotoMock(page);
 
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'host');
     await page.locator('#btnServiceStatus').click();
     const body = page.locator('#serviceStatusBody');
 

@@ -68,7 +68,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28c 通用设置带作用域说明（会话设置已去说明条，靠面板标题本身）', async ({ page }) => {
+  // 作用域（本机 / 整机）从「把面板切成两大段」降级为「每组旁边一个 chip」：它回答的是
+  // 「我改的东西影响谁」，那是**决定改之后**才关心的问题，不该占用导航主轴。信息一个字没丢。
+  test('P0-28c 作用域以 chip 形式贴在组标题旁（会话设置仍无说明条）', async ({ page }) => {
     await gotoMock(page);
 
     // 会话设置：不再放「只影响当前会话…」说明条（省纵向、少废话）
@@ -79,8 +81,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnSessions').click();
     await page.locator('#btnGeneralSettings').click();
-    await expect(page.locator('[data-scope-note="device"]')).toBeVisible();
-    await expect(page.locator('[data-scope-note="host"]')).toBeVisible();
+
+    // 「通知」页：本机档 chip 就在「怎么提醒我」那组旁边
+    await page.locator('[data-testid="general-nav-notify"]').click();
+    await expect(page.locator('#generalPage-notify [data-scope-chip="device"]')).toBeVisible();
+
+    // 「行为与开关」页：语言是本机档，服务与配置是整机档——两档同页并存，正是 chip 化的意义
+    await page.locator('[data-testid="general-back"]').click();
+    await page.locator('[data-testid="general-nav-behavior"]').click();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="device"]')).toBeVisible();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="host"]')).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });
@@ -128,59 +138,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
-    // 深链：推送段应滚进视口（不卡在面板顶部「完成提示」）
+    // 深链在两级导航下是**两步**：先切到「通知」页，再滚到推送段。只滚不切页的话，目标还在
+    // hidden 的子页里，scrollIntoView 静默无效——表现为「点了没反应」，所以两步都要钉。
+    await expect(page.locator('#generalPage-notify')).toBeVisible();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeHidden();
     await expect(page.locator('#pushStatusRow')).toBeInViewport({ timeout: 3_000 });
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28g 侧栏入口文案为「偏好与通知」；顶部分段锚点可跳到主机/帮助', async ({ page }) => {
+  // 两级导航取代了平铺 + sticky 分段 chip。入口文案换到作用域轴（「设置与状态」），副标题点名
+  // 「会有人专门来找」的四件事——旧文案里「本机提醒」在面板中根本不存在，而设备信任/吊销这个
+  // 全站唯一能踢掉丢失手机的地方，四个词零指向。
+  test('P0-28g 侧栏入口文案与 L1 目录：六行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await page.locator('#btnSessions').click();
-    await expect(page.locator('#btnGeneralSettings')).toContainText('偏好与通知');
-    await page.locator('#btnGeneralSettings').click();
-    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('[data-testid="general-section-nav"]')).toBeVisible();
-    await page.locator('[data-scroll-to="generalSectionHelp"]').click();
-    // 注意这句验的是「滚动确实发生了」，不是「落点可读」——toBeInViewport 走 IntersectionObserver，
-    // 被 sticky 导航压在底下的元素它照样判为在视口内。想验遮挡得自己比矩形（nav.bottom vs 目标.top），
-    // 但该面板实测 maxScroll < clientHeight，目标段根本滚不到容器顶，遮挡场景构造不出来，故不加。
-    await expect(page.locator('#generalSectionHelp')).toBeInViewport({ timeout: 3_000 });
-    await expect(page.locator('#generalDiagDetails')).toBeVisible();
-    // 诊断默认折叠（无 open 属性）
-    await expect(page.locator('#generalDiagDetails')).toHaveJSProperty('open', false);
-
-    await expectNoBrowserErrors(page);
-  });
-
-  // sticky 分段导航必须贴住滚动容器的**最顶边**。#generalSheetBody 是 `overflow-y-auto py-3`，
-  // 而 `sticky top-0` 粘的是 content box 内边缘（= border box + padding-top），于是顶部那 12px
-  // padding 成了无人认领的缝：滚动内容从它下面穿过去，chip 行上方会浮出半行幽灵文字和勾选框。
-  // 判据取几何而非像素比对（本项目 E2E 约定），两条缺一不可——贴顶了但背景透明照样透内容。
-  test('P0-28h 分段导航贴住面板顶边且背景不透明，滚动内容不从上缘漏出', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await gotoMock(page);
-    await page.locator('#btnSessions').click();
+    await expect(page.locator('#btnGeneralSettings')).toContainText('设置与状态');
+    await expect(page.locator('#btnGeneralSettings')).toContainText('设备信任');
     await page.locator('#btnGeneralSettings').click();
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 
-    // 滚到 nav 已进入 sticky 状态（下方内容正从它底下穿过）
-    await page.locator('#generalSheetBody').evaluate((el) => { el.scrollTop = 300; });
+    // L1：六行目录，且默认就停在目录层（不记住上次翻到哪一页）
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
+    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(6);
+    await expect(page.locator('[data-testid="general-back"]')).toBeHidden();
 
-    const geo = await page.evaluate(() => {
-      const body = document.getElementById('generalSheetBody');
-      const nav = body?.querySelector('[data-testid="general-section-nav"]');
-      if (!body || !nav) return null;
-      return {
-        gap: nav.getBoundingClientRect().top - body.getBoundingClientRect().top,
-        bg: getComputedStyle(nav).backgroundColor
-      };
-    });
+    // 平铺时代的 sticky 分段导航已随两级化退役
+    await expect(page.locator('[data-testid="general-section-nav"]')).toHaveCount(0);
 
-    // gap > 0 即代表 nav 上方存在一条滚动内容可以穿过的可见带
-    expect(geo?.gap).toBeLessThanOrEqual(0.5);
-    expect(geo?.bg).not.toMatch(/transparent|rgba\([^)]*,\s*0(\.0+)?\)/);
+    // L1 → L2：标题跟着换，返回键出现，其余五页收起
+    await page.locator('[data-testid="general-nav-devices"]').click();
+    await expect(page.locator('#generalPage-devices')).toBeVisible();
+    await expect(page.locator('#generalPage-notify')).toBeHidden();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeHidden();
+    await expect(page.locator('#generalSheetTitle')).toContainText('接入与设备');
+    const back = page.locator('[data-testid="general-back"]');
+    await expect(back).toBeVisible();
+
+    // 指纹与信任名单必须同屏——指纹的唯一用途就是在名单里认出手上这台，
+    // 此前二者分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。
+    await expect(page.locator('#generalPage-devices #deviceFingerprintShort')).toBeVisible();
+    await expect(page.locator('#generalPage-devices #trustedDevicesSection')).toHaveCount(1);
+
+    // L2 → L1
+    await back.click();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
+    await expect(page.locator('#generalPage-devices')).toBeHidden();
+    await expect(page.locator('#generalSheetTitle')).toContainText('设置与状态');
 
     await expectNoBrowserErrors(page);
   });

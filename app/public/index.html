@@ -181,11 +181,14 @@
         <span class="text-ink-faint" aria-hidden="true">→</span>
       </button>
       <!-- 命名与底栏「会话设置」区分：本机偏好 / 通知 / 主机诊断，不是 model·perm·effort -->
-      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-soft hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开偏好与通知">
+      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-soft hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开设置与状态">
         <span aria-hidden="true">⚙️</span>
         <span class="flex-1 text-left min-w-0">
-          <span class="font-medium text-ink block">偏好与通知</span>
-          <span class="text-[11px] text-ink-faint block">本机提醒 · 推送 · 语言 · 诊断</span>
+          <span class="font-medium text-ink block">设置与状态</span>
+          <!-- 副标题点名的是「会有人专门来找」的四件事，且逐字对应面板里真实存在的入口。
+               旧文案「本机提醒 · 推送 · 语言 · 诊断」里，「本机提醒」在面板里根本不存在（那组叫
+               完成提示），而**设备信任/吊销**——全站唯一能踢掉丢失手机的地方——四个词零指向。 -->
+          <span class="text-[11px] text-ink-faint block">通知 · 设备信任 · 语言 · 诊断</span>
         </span>
         <span class="text-ink-faint" aria-hidden="true">→</span>
       </button>
@@ -754,184 +757,205 @@
   <div id="generalSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="generalSheetTitle">
     <div id="generalDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭设置">
       <div class="sheet-handle"></div>
-      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
-        <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 偏好与通知</div>
-        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭 · 非会话模型/权限</div>
+      <!-- 标题栏在拖拽区内，但 settings.js 的 onDragPointerDown 会跳过 button/a/input——
+           返回键放这里不会被下拉手势吃掉。 -->
+      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface flex items-center gap-2">
+        <button id="generalBack" type="button" class="hidden shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回" data-testid="general-back">←</button>
+        <div class="min-w-0 flex-1">
+          <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 设置与状态</div>
+          <div id="generalSheetSub" class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭 · 不含本会话的模型与权限</div>
+        </div>
       </div>
     </div>
 
-    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-4">
-      <!-- 分段锚点：长面板快速跳到本机 / 主机 / 帮助。
-           三个负值不是随手调的间距，是在补一条会漏内容的缝：父容器 py-3 的 12px padding-top 在
-           `sticky top-0` 下无人认领——粘附点算的是 padding box 顶边，滚动内容却从 border box 顶边
-           就开始穿过去，于是 chip 行上方浮出半行幽灵文字。-top-3 把粘附点下压 12px 到 border box
-           顶边（实测：负 margin 不移动粘附点，Chromium 约束的是 border box 相对 padding box 的 top
-           偏移），-mt-3 让未粘附态的正常流位置与之对齐免得滚到顶时跳一下，pt-4 把视觉留白还回来。
-           契约见 P0-28h。 -->
-      <div class="flex flex-wrap gap-1.5 sticky -top-3 z-[1] bg-surface -mt-3 pt-4 pb-1 -mx-0.5" data-testid="general-section-nav">
-        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionDevice">📱 本机</button>
-        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionHost">🖥 主机</button>
-        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionHelp">🔑 帮助</button>
-      </div>
+    <!-- 面板体：L1 目录 + 6 个 L2 页。**只有一层显示**，切换由 app/general-nav.js 驱动。
+         为什么是两级而不是继续平铺：平铺到九组后必须靠一排 sticky 分段 chip 才能导航，那是「一个
+         容器装不下了」的症状。两级之后 L1 只有 6 行、一眼扫完，每行的副标题是**活数据**
+         （logic/general-nav.js 算出），不再是会漂的功能枚举。
+         **所有既有 id 逐字保留**：控制器按 id 回填本机偏好（settings.js 的 syncPrefs），
+         侧栏铃铛按 id 深链（#pushStatusRow）——改 id 会让这两条静默失效。 -->
+    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3">
 
-      <!-- ═══ 📱 这台手机 ═══ 存 localStorage，只作用于当前设备/浏览器。
-           作用域标题 text-sm、分组标题 text-xs：两级差一档字号而非只差字重，否则「完成提示属于
-           这台手机」的从属关系读不出来。本段是首段故不加上分隔线（Host/Help 才加）。
-           scroll-mt-12(48px) 要压过 sticky nav 的实测高度 46.5px，否则锚点跳转落点被导航条压住；
-           当前内容量下面板 maxScroll < clientHeight，目标段滚不到容器顶，这条防的是内容变长以后。 -->
-      <div id="generalSectionDevice" class="text-sm font-bold text-ink flex items-center gap-1.5 pt-0.5 scroll-mt-12">📱 <span>这台手机</span></div>
-      <div data-scope-note="device" class="text-[11px] text-ink-faint leading-snug px-0.5 -mt-2">
-        只影响此设备 / 浏览器；换机需重设。
-      </div>
-
-      <!-- 3a. 本机设备指纹。已批准的设备在 Web 上此前完全看不到自己的 ID —— #deviceModal 只在
-           status==='pending' 时显示那串，批准后弹窗就隐藏了。而「该吊销哪一台」恰恰要求用户
-           能分辨面板/菜单里那堆条目哪个是手上这台：同一 iOS 版本的 Safari UA 逐字节相同，
-           只看类型和批准时间分不出来。短形式与菜单栏、信任列表里那串是同一份判据。 -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
-        <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">
-          <div id="deviceFingerprintShort" class="text-sm text-ink font-semibold tracking-wide" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-short">—</div>
-          <div class="text-ink-soft mt-1 leading-snug">在电脑上核对「已受信任的设备」时，认准这一串就是你手上这台。</div>
-          <details class="mt-1.5">
-            <summary class="text-ink-faint cursor-pointer">完整 ID</summary>
-            <div id="deviceFingerprintFull" class="text-[10px] text-ink-soft break-all mt-1" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-full"></div>
-          </details>
+      <!-- ═══ L1 目录 ═══ -->
+      <div id="generalNavHome" data-testid="general-nav-home" class="space-y-2">
+        <!-- 「现在」区：只在有可行动的事时出现，无事整段消失（不留空占位）。由 app.js 渲染。 -->
+        <div id="generalNowSection" class="hidden space-y-1.5 p-2.5 rounded-xl border border-accent/30 bg-accent-wash/40" data-testid="general-now">
+          <div class="text-[11px] font-bold text-accent-deep tracking-wide">现在</div>
+          <div id="generalNowItems" class="space-y-1.5"></div>
         </div>
+        <!-- 六行目录由 app/general-nav.js 按 logic/general-nav.js 的判定渲染 -->
+        <div id="generalNavRows" class="space-y-2"></div>
       </div>
 
-      <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🔔 <span>完成提示</span></div>
+      <!-- ═══ L2 · 🔔 通知 ═══
+           「什么事值得打扰我」与「怎么提醒我」分两问，而不是按「本地/远端」实现方式拆——
+           用户问的是一件事：手机会不会响。 -->
+      <div id="generalPage-notify" class="hidden space-y-4" data-general-page="notify">
+        <!-- #generalSectionPush 是侧栏 #btnPush 与铃铛的深链锚点，**不可改名** -->
+        <div id="generalSectionPush" class="scroll-mt-8">
+          <div id="pushStatusRow" class="mb-2"></div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">怎么提醒我
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
+          </div>
+          <div class="space-y-2">
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">提示音</span>
+                <span class="text-xs text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
+              </span>
+              <input id="prefAlertSound" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">震动</span>
+                <span class="text-xs text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
+              </span>
+              <input id="prefAlertVibrate" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">前台也弹系统通知</span>
+                <span class="text-xs text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
+              </span>
+              <input id="prefAlertFgComplete" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">锁屏带内容预览</span>
+                <span class="text-xs text-ink-soft">锁屏通知带上问题 / 工具 / 任务摘要，而不只是「有新消息」</span>
+              </span>
+              <input id="prefPushPreview" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0">
+            </label>
+            <!-- 没有订阅时预览开关是空转的（偏好跟着订阅存在服务端）。不禁用它——只说明，
+                 免得用户勾了半天以为生效了。 -->
+            <div id="pushPreviewInertNote" class="hidden text-[11px] text-ink-faint px-1">未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。</div>
+            <div class="text-[11px] text-ink-faint px-1">ntfy 通道恒为最小化，不受此开关影响。</div>
+          </div>
+        </div>
+
+        <!-- 两个「试一下」并排：用户想验的是「手机会不会响」这一件事，此前分居两组各一个按钮。
+             就地执行的动作用居中文字 + 凹陷底（像按钮），与跳转类的左对齐 + 浮起底区分开。 -->
         <div class="space-y-2">
-          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
-            <span class="min-w-0">
-              <span class="font-semibold block">提示音</span>
-              <span class="text-xs text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
-            </span>
-            <input id="prefAlertSound" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
-          </label>
-          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
-            <span class="min-w-0">
-              <span class="font-semibold block">震动</span>
-              <span class="text-xs text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
-            </span>
-            <input id="prefAlertVibrate" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
-          </label>
-          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
-            <span class="min-w-0">
-              <span class="font-semibold block">前台也弹系统通知</span>
-              <span class="text-xs text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
-            </span>
-            <input id="prefAlertFgComplete" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
-          </label>
-          <!-- 就地执行的动作 vs 打开新面板的跳转，此前长得一模一样、只靠文案里有没有「→」区分（太弱）。
-               现在动作类用居中文字 + 凹陷底（像按钮），跳转类保持左对齐 + 浮起底（像列表行）。
-               这条约定纯靠 class 表达，没动文案——文案是 i18n 词典的 key，改了要连带改词典。 -->
           <button id="btnAlertPreview" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium">▶ 试听提示音 / 试震一下</button>
-        </div>
-      </div>
-
-      <!-- 3c. 推送（#pushStatusRow 为铃铛/侧栏入口深链目标） -->
-      <div id="generalSectionPush" class="scroll-mt-8">
-        <div class="text-xs font-semibold text-ink-soft mb-2">📬 <span>推送内容</span></div>
-        <div id="pushStatusRow" class="mb-2"></div>
-        <div class="space-y-2">
-          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
-            <span class="min-w-0">
-              <span class="font-semibold block">推送带内容预览</span>
-              <span class="text-xs text-ink-soft">锁屏通知带上问题 / 工具 / 任务摘要，而不只是「有新消息」</span>
-            </span>
-            <input id="prefPushPreview" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0">
-          </label>
-          <!-- 没有订阅时这个开关是空转的（偏好跟着订阅存在服务端，没订阅就没地方存、也没通知可改）。
-               不禁用它——只说明，免得用户勾了半天以为生效了。 -->
-          <div id="pushPreviewInertNote" class="hidden text-[11px] text-ink-faint px-1">未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。</div>
-          <!-- ntfy 例外从开关标题下沉到细注：那句回答的是「我开了为什么还没预览」，属于事后排障，
-               不是「我要不要开」这个决策要读的。上面那行留纯粹的收益描述。 -->
-          <div class="text-[11px] text-ink-faint px-1">ntfy 通道恒为最小化，不受此开关影响。</div>
-          <!-- 与「▶ 试听提示音」同一心智：那个验本地提示音，这个验远端推送链路。
-               没有它就只能等真事件才知道通不通——本项目真实踩过这个坑。 -->
           <button id="btnPushTest" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium" data-testid="push-test">🔔 发一条测试推送</button>
         </div>
       </div>
 
-      <!-- 3d. 语言 / Language（切换不做响应式重渲，提示手动刷新生效——极简治理，避免半新半旧的中间态。
-           静态壳由 i18n.js applyI18nToDocument 整树扫描翻译，故此处无需逐句标注） -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🌐 <span>语言</span> / Language</div>
-        <div class="space-y-2">
-          <!-- appearance-none + 自绘 ▾：实测 select 与相邻按钮的字体/字号/padding/圆角/背景已经一致、
-               高度只差 1px，真正不受控的是**系统原生下拉箭头**——iOS 与 Android 各画各的，跟页面设计
-               语言无关。箭头 aria-hidden 且 pointer-events-none，点击照样落在 select 上（不拦触摸）。 -->
-          <div class="relative">
-            <select id="prefLang" class="w-full appearance-none p-2.5 pr-9 rounded-xl border border-line bg-surface text-xs text-ink">
-              <option value="zh">中文</option>
-              <option value="en">English</option>
-              <option value="auto">跟随浏览器 / Auto-detect</option>
-            </select>
-            <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-soft" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-            </svg>
+      <!-- ═══ L2 · 🔐 接入与设备 ═══
+           指纹与信任名单**必须同屏**：指纹的唯一用途就是在名单里认出手上这台，
+           此前它们分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。 -->
+      <div id="generalPage-devices" class="hidden space-y-4" data-general-page="devices">
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
+          <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">
+            <div id="deviceFingerprintShort" class="text-sm text-ink font-semibold tracking-wide" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-short">—</div>
+            <div class="text-ink-soft mt-1 leading-snug">在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。</div>
+            <details class="mt-1.5">
+              <summary class="text-ink-faint cursor-pointer">完整 ID</summary>
+              <div id="deviceFingerprintFull" class="text-[10px] text-ink-soft break-all mt-1" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-full"></div>
+            </details>
           </div>
-          <div class="text-[11px] text-ink-faint px-1">切换后请刷新页面生效。</div>
+        </div>
+
+        <!-- 整段由 app.js 按 trusted_devices 事件渲染；旧 server 不发这个 type，整段就不出现。 -->
+        <div id="trustedDevicesSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔐 <span>已受信任的设备</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div id="trustedDevicesList" class="space-y-2" data-testid="trusted-devices-list"></div>
+          <!-- 文案按管辖面分档，由 app.js 的 renderTrustedDevices 写入：CF Access 开着且
+               DEVICE_APPROVAL_SCOPE 未设 all 时，这张表管不到隧道进来的连接，必须直说。 -->
+          <div id="trustedDevicesNote" class="text-[10px] text-ink-faint px-1 mt-1.5"></div>
         </div>
       </div>
 
-      <!-- ═══ 🖥 这台电脑 ═══ 落在主机上（~/.claude/settings.json、在跑的 server），跨设备共享 -->
-      <div id="generalSectionHost" class="text-sm font-bold text-ink flex items-center gap-1.5 border-t border-line pt-4 scroll-mt-12">🖥 <span>这台电脑</span></div>
-      <div data-scope-note="host" class="text-[11px] text-ink-faint leading-snug px-0.5 -mt-2">
-        影响整机所有会话（含终端 claude），换手机看也是同一份。
-      </div>
+      <!-- ═══ L2 · 🖥 这台电脑 ═══
+           回答意图「那台电脑现在怎么样」：活着吗 / 多久了 / 版本 / 出过什么事，一屏答完。 -->
+      <div id="generalPage-host" class="hidden space-y-4" data-general-page="host">
+        <div data-scope-note="host" class="text-[11px] text-ink-faint leading-snug px-0.5">
+          影响整机所有会话（含终端 claude），换手机看也是同一份。
+        </div>
 
-      <!-- 已受信任的设备 + 吊销。放 🖥 这台电脑 而不是 📱 这台手机：信任表是整机的一份名单，
-           换台手机看到的是同一份；上面那个「本机设备指纹」才是设备级的。
-           整段由 app.js 按 trusted_devices 事件渲染；旧 server 不发这个 type，整段就不出现。 -->
-      <div id="trustedDevicesSection" class="hidden">
-        <div class="text-xs font-semibold text-ink-soft mb-2">🔐 <span>已受信任的设备</span></div>
-        <div id="trustedDevicesList" class="space-y-2" data-testid="trusted-devices-list"></div>
-        <!-- 文案按管辖面分档，由 app.js 的 renderTrustedDevices 写入：CF Access 开着且
-             DEVICE_APPROVAL_SCOPE 未设 all 时，这张表管不到隧道进来的连接，必须直说。 -->
-        <div id="trustedDevicesNote" class="text-[10px] text-ink-faint px-1 mt-1.5"></div>
-      </div>
+        <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是「电脑终端里跑的会话要不要通知我」。
+             整段由 app.js 按安装态渲染（未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
+        <div id="hooksBridgeSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span></div>
+          <div id="hooksBridgeBody" class="space-y-2"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
+        </div>
 
-      <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是"电脑终端里跑的会话要不要通知我"。整段由 app.js
-           按安装态渲染（未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
-      <div id="hooksBridgeSection" class="hidden">
-        <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span></div>
-        <div id="hooksBridgeBody" class="space-y-2"></div>
-        <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
-      </div>
-
-      <!-- 诊断默认折叠：非常用路径，省首屏高度 -->
-      <details id="generalDiagDetails" class="rounded-xl border border-line bg-surface">
-        <summary class="px-2.5 py-2 text-xs font-semibold text-ink-soft cursor-pointer select-none">🩺 <span>诊断</span> <span class="text-[10px] text-ink-faint font-normal">体检 · 服务状态</span></summary>
-        <div class="space-y-2 px-2.5 pb-2.5">
-          <button id="btnSecurityCheck" type="button" aria-expanded="false" aria-controls="doctorReport" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
-          <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>运行状态</span></div>
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
-          <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 服务与配置 · 端口 / 工作目录 / 推送 →</button>
         </div>
-      </details>
-
-      <!-- 开发者模式：一键重启 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
-      <div id="devModeGroup" class="hidden">
-        <div class="text-xs font-semibold text-ink-soft mb-2">🛠 开发者</div>
-        <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/配置后生效）</button>
       </div>
 
-      <!-- ═══ 🔑 访问与帮助 ═══ -->
-      <div id="generalSectionHelp" class="text-sm font-bold text-ink flex items-center gap-1.5 border-t border-line pt-4 scroll-mt-12">🔑 <span>访问与帮助</span></div>
-      <div class="space-y-2 -mt-2">
-        <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
-        <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
-        <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
-          class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
-          <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
-          </svg>
-          <span>GitHub 仓库 · 源码 / Issue / Star →</span>
-        </a>
+      <!-- ═══ L2 · 🛠 行为与开关 ═══ -->
+      <div id="generalPage-behavior" class="hidden space-y-4" data-general-page="behavior">
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🌐 <span>语言</span> / Language
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
+          </div>
+          <div class="space-y-2">
+            <!-- appearance-none + 自绘 ▾：系统原生下拉箭头 iOS 与 Android 各画各的，跟页面设计语言无关。
+                 箭头 aria-hidden 且 pointer-events-none，点击照样落在 select 上（不拦触摸）。 -->
+            <div class="relative">
+              <select id="prefLang" class="w-full appearance-none p-2.5 pr-9 rounded-xl border border-line bg-surface text-xs text-ink">
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+                <option value="auto">跟随浏览器 / Auto-detect</option>
+              </select>
+              <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-soft" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+              </svg>
+            </div>
+            <div class="text-[11px] text-ink-faint px-1">切换后请刷新页面生效。</div>
+          </div>
+        </div>
+
+        <!-- 可写配置与只读诊断分开：改端口/工作目录能让服务起不来，那不是「诊断」。
+             此前它藏在「🩺 诊断」的折叠态里，是分类错误 + 第三层深。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">⚙ <span>服务与配置</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div class="space-y-2">
+            <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 全部配置 · 端口 / 工作区 / 推送 →</button>
+            <!-- 开发者模式：一键重启 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
+            <div id="devModeGroup" class="hidden">
+              <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/配置后生效）</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🩺 排查 ═══ 只读体检，可写项已移去「行为与开关」 -->
+      <div id="generalPage-diag" class="hidden space-y-4" data-general-page="diag">
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔍 <span>先跑这个</span></div>
+          <div class="space-y-2">
+            <button id="btnSecurityCheck" type="button" aria-expanded="false" aria-controls="doctorReport" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
+            <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🔑 帮助 ═══ -->
+      <div id="generalPage-help" class="hidden space-y-4" data-general-page="help">
+        <div class="space-y-2">
+          <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
+          <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
+          <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
+            class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
+            <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+            </svg>
+            <span>GitHub 仓库 · 源码 / Issue / Star →</span>
+          </a>
+        </div>
       </div>
     </div>
   </div>

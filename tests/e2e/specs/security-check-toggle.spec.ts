@@ -6,13 +6,12 @@
 // 列表整个顶出屏幕（真机复现）。收起路径有两条（按钮本身 + 报告尾行），两条都要锁。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-32 安全体检：展开渲染报告 → 按钮收起 → 尾部收起行同源', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'diag');
 
     const btn = page.locator('#btnSecurityCheck');
     const report = page.locator('#doctorReport');

@@ -86,7 +86,7 @@ export async function openSettingsSection(page: Page, key: 'model' | 'effort' | 
 }
 
 /**
- * 打开通用设置（📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助）。
+ * 打开通用设置面板，停在 L1 目录层。
  * 入口在侧栏底部而非 composer——那几段跟会话无关，不该随 composer 一起隐藏（见 P0-28）。
  */
 export async function openGeneralSettings(page: Page) {
@@ -95,16 +95,21 @@ export async function openGeneralSettings(page: Page) {
   await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 }
 
+/** 通用设置的 L2 页 id（与 logic/general-nav.js 的 GENERAL_NAV_IDS 同名）。 */
+export type GeneralPageId = 'notify' | 'devices' | 'host' | 'behavior' | 'diag' | 'help';
+
 /**
- * 通用设置里的「🩺 诊断」段是 <details>，默认折叠（产品有意：非常用路径，省首屏高度）——
- * 折叠时 <details> 内容是 display:none，安全体检 / 服务状态按钮在 DOM 里但点不到。
- * 幂等：已展开则不点，否则 summary 的 toggle 语义会把它重新折上。
+ * 打开通用设置并切到某个 L2 页。
+ *
+ * 面板是两级结构（L1 目录 + 6 个 L2 页），未切页时目标控件在 hidden 的子页里——DOM 查得到、
+ * 点不到。**凡是要操作面板内某个按钮的用例都得先切页**，否则会红在「元素不可见」而不是被测行为上。
+ * 取代了旧的 openGeneralDiagSection：那时三个诊断按钮同住一个 <details> 折叠段，
+ * 现在按可写/只读拆开了（服务状态→host、安全体检→diag、全部配置→behavior）。
  */
-export async function openGeneralDiagSection(page: Page) {
-  const details = page.locator('#generalDiagDetails');
-  const alreadyOpen = await details.evaluate(el => (el as HTMLDetailsElement).open).catch(() => false);
-  if (!alreadyOpen) await details.locator('summary').click();
-  await expect(page.locator('#btnServiceStatus')).toBeVisible();
+export async function openGeneralPage(page: Page, pageId: GeneralPageId) {
+  await openGeneralSettings(page);
+  await page.locator(`[data-testid="general-nav-${pageId}"]`).click();
+  await expect(page.locator(`#generalPage-${pageId}`)).toBeVisible();
 }
 
 /** 关闭通用设置，同 closeSettings 的理由走 Escape。 */

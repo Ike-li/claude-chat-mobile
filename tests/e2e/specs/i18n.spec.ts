@@ -23,9 +23,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.keyboard.press('Escape');
 
     // 提示音等本机偏好在通用设置里（按作用域拆分后），两个 sheet 的静态壳都要覆盖到
+    // 作用域标题「这台手机 / 这台电脑」已从分区降级为组旁的 chip；面板内的静态串照样走整树扫描
     await openGeneralSettings(page);
     await expect(page.locator('#generalSheet')).toContainText('Sound');
-    await expect(page.locator('#generalSheet')).toContainText('This phone');
+    await expect(page.locator('#generalPage-notify [data-scope-chip="device"]')).toContainText('This device only');
 
     await expectNoBrowserErrors(page);
   });
@@ -47,11 +48,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#customPermGrid')).toContainText('Accept edits');
     await page.keyboard.press('Escape');
 
+    // L1 目录的六行由 JS 渲染（logic/general-nav.js 的 t()），不经 applyI18nToDocument 的整树扫描
     await openGeneralSettings(page);
-    await expect(page.locator('#generalSheet')).toContainText('Access & help');
-    // 混排句（文本节点被 <code>/<strong> 切碎）也要拼得成句，不能留半截中文
-    await expect(page.locator('#generalSheet')).not.toContainText('访问与帮助');
-    // 作用域说明行是本次新增的长句，同样走整树扫描，不能漏翻
+    await expect(page.locator('[data-testid="general-nav-help"]')).toContainText('Help');
+    await expect(page.locator('[data-testid="general-nav-devices"]')).toContainText('Access & devices');
+    await expect(page.locator('#generalNavRows')).not.toContainText('接入与设备');
+
+    // L2 页里的静态长句仍走整树扫描
+    await page.locator('[data-testid="general-nav-host"]').click();
     await expect(page.locator('[data-scope-note="host"]')).toContainText('this computer');
 
     await expectNoBrowserErrors(page);

@@ -3,15 +3,14 @@
 // 最重要的一条是「敏感项永远拿不到明文」——服务端只下发 { set, length }，页面上不该出现任何密钥值。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-31 服务与配置面板：入口打开 → 分组渲染 → 敏感项遮罩 → 只读项禁用', async ({ page }) => {
     await gotoMock(page);
 
     // 1. 设置 → 诊断段 → 服务与配置：面板弹出，设置 sheet 收起
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
     await expect(page.locator('#envConfigModal')).toBeVisible();
     await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
@@ -45,8 +44,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-31b 保存按钮：无改动时禁用，改一项后启用', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
 
     const save = page.locator('#envConfigSave');
@@ -66,8 +64,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-31c 敏感项「更换」：点了才换出输入框，且提交空值表示清除', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
 
     const body = page.locator('#envConfigBody');
@@ -86,8 +83,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-31d 关闭：✕ 与点遮罩都能收起', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
 
     await page.locator('#btnEnvConfig').click();
     await expect(page.locator('#envConfigModal')).toBeVisible();
@@ -104,8 +100,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
   // AUTH_TOKEN 会被写成「已设置（64 字符）」——所有设备连同正在操作的手机一起被关在门外。
   test('P0-31e 只提交改动过的那一项（不是整份表单）', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
 
     // 表单里有 PORT / CLAUDE_BIN / NTFY_TOPIC / DEV_MODE / 两个敏感项，只改一个
@@ -125,8 +120,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await sendChatMessage(page, 'test:no-restart');
     await waitForIdle(page);
 
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
     await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
     await page.locator('#envConfigSave').click();
@@ -141,8 +135,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
 
   test('P0-31f 保存成功后出现「立即重启」入口（mock 广播 canRestart:true）', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
 
     await expect(page.locator('#envConfigRestart')).toHaveCount(0, { timeout: 2000 });
@@ -157,8 +150,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
 
   test('P0-31g 改两项则提交两项', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
 
     await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
@@ -176,8 +168,7 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
   // 见 env-schema.js 顶注第 2 条）。看不出只读，就只剩「这面板坏了」这一个解释。
   test('P0-31h AUTH_TOKEN 行：长度 + 只读标记 + 没有「更换」入口（三者缺一都会误导）', async ({ page }) => {
     await gotoMock(page);
-    await openGeneralSettings(page);
-    await openGeneralDiagSection(page);
+    await openGeneralPage(page, 'behavior');
     await page.locator('#btnEnvConfig').click();
     await expect(page.locator('#envConfigModal')).toBeVisible();
 

@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
@@ -109,11 +109,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
-      // 通用设置是两个 sheet 里更长的那个（本机 + 主机 + 访问帮助三节），底部控件最容易被顶出视口
-      await openGeneralSettings(page);
+      // 通用设置两级化后 L1 目录只有六行、滚不动；内容最长、底部控件最容易被顶出视口的是
+      // 「通知」页（推送状态 + 四个开关 + 两个试一下按钮）。
+      await openGeneralPage(page, 'notify');
       await page.locator('#generalSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expectWithinViewport(page, page.locator('#generalSheetTitle'));
-      await expectWithinViewport(page, page.locator('#accessHelpOpen'));
+      await expectWithinViewport(page, page.locator('#btnPushTest'));
       await closeGeneralSettings(page);
       await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
 

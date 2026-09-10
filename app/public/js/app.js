@@ -178,6 +178,7 @@ import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
 import { attachLongPress } from './app/long-press.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
+import { createGeneralNav } from './app/general-nav.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
@@ -1030,9 +1031,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     return addBar(text, className);
   }
-  // 通用设置打开后可选滚到指定 id（推送铃铛）；须在 notifications 之前声明，bellAction 闭包写入
-  let generalScrollToId = null;
+  // 通用设置打开后的深链目标（推送铃铛 / 侧栏推送条）；须在 notifications 之前声明，bellAction 闭包写入。
+  // 两级导航后它不再只是一个锚点 id：得先切到目标 L2 页，再滚到页内锚点——只滚不切页的话，
+  // 目标元素还在 hidden 的子页里，scrollIntoView 静默无效（表现为「点了没反应」）。
+  let generalDeepLink = null; // { page: string, anchor?: string }
   let general = null; // 后段 createSettingsController 赋值；bellAction 点击时再 open
+  // 同上：后段赋值。renderDeviceRequests / renderPushStatusRow 在文件前段就要通知它重画目录，
+  // 而那两个函数的**调用**都发生在异步事件里（socket 回调），届时早已赋值。
+  // 用 let + null 而不是 const：const 在 TDZ 里被访问会抛 ReferenceError，`?.` 救不了。
+  let generalNav = null;
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
@@ -1043,8 +1050,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 铃铛住在侧栏底部固定条：先收侧栏再弹 sheet（两者同 z-40，同 btnGeneralSettings 的顺序约束）。
     bellAction: () => {
       closeLeftSidebar();
-      // open() 会把 body scrollTop 置 0；用 pending 标记在 onOpen 后 rAF 再滚到推送段
-      generalScrollToId = 'pushStatusRow';
+      // open() 会把 body scrollTop 置 0；用 pending 标记在 onOpen 后切页 + rAF 再滚到推送段
+      generalDeepLink = { page: 'notify', anchor: 'pushStatusRow' };
       general?.open();
     },
   });
@@ -1844,7 +1851,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 已信任设备渲染待审批设备请求（pending_devices 事件）。点准入/拒绝即发 user:approveDevice/denyDevice。
   // ID/IP/UA 一律用 textContent（UA 攻击者可控），不拼 innerHTML，防 XSS。
+  // 待审设备条数：L1 目录「接入与设备」那行的红点判据（唯一会亮红点的一行）。
+  let lastPendingDevices = [];
   function renderDeviceRequests(devices) {
+    lastPendingDevices = Array.isArray(devices) ? devices : [];
+    generalNav?.render();
     if (!deviceRequests) return;
     deviceRequests.textContent = '';
     if (!devices.length) { deviceRequests.classList.add('hidden'); return; }
@@ -1910,6 +1921,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function renderTrustedDevices(devices, accessBypassActive = false) {
     lastTrustedDevices = devices;
     lastTrustedBypass = accessBypassActive;
+    generalNav?.render(); // L1「接入与设备」那行报的是这张表的条数
     const section = $('trustedDevicesSection');
     const list = $('trustedDevicesList');
     const note = $('trustedDevicesNote');
@@ -5436,6 +5448,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     } catch { /* 不支持/未注册 SW：按未订阅渲染，由 hint 解释原因 */ }
     // 没订阅时「推送带内容预览」是空转的——把这件事说出来，别让人勾了以为生效
     pushPreviewInertNote?.classList.toggle('hidden', subscribed);
+    // L1 目录「通知」那行吃同一份判据：面板里说「未开启」、目录里说「已开」会是自相矛盾的两句话
+    generalPushSubscribed = subscribed;
+    generalNav?.render();
     const row = formatPushStatusRow({
       hint: pushEnvHint(notifications.environment()),
       permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
@@ -5651,18 +5666,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
-  function applyGeneralScrollTarget() {
-    const id = generalScrollToId;
-    generalScrollToId = null;
-    if (!id) return;
-    // 等 sheet 动画与 push 状态行渲染完再滚，否则 bounding box 还是 0
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        document.getElementById(id)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      });
-    });
+  // L1 目录要用的两份快照。推送订阅态由 renderPushStatusRow 写入（同一份判据，免得目录与
+  // 面板里的话自相矛盾）；服务快照来自 service:status ——那条 ack 不随 instances 广播常驻，
+  // 不主动拉就永远显示「状态读取中」。
+  let generalPushSubscribed = false;
+  let generalServiceSnapshot = null;
+  async function refreshGeneralServiceSnapshot() {
+    const status = await emitServiceAck('service:status', {});
+    if (!status || status.ok !== true) return; // 断线/未审批设备无 ack：保留旧值，不把目录刷成空
+    generalServiceSnapshot = status;
+    generalNav?.render();
   }
-  // 通用设置（侧栏底部入口，全局可达）：📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助。
+
+  // 两级导航：L1 目录 ↔ 6 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
+  generalNav = createGeneralNav({
+    haptic,
+    state: () => ({
+      push: { subscribed: generalPushSubscribed },
+      alerts: alerts.preferences(),
+      devices: { trusted: lastTrustedDevices.length, pending: lastPendingDevices.length },
+      service: generalServiceSnapshot,
+      lang: langPref.get(),
+    }),
+    // 「这台电脑」页进来时拉一次服务状态：L1 的运行时长/版本也吃这份快照，
+    // 但那条 ack 不常驻广播（只在服务状态面板打开时拉），不主动取就永远是「状态读取中」。
+    onEnterPage: page => { if (page === 'host') refreshGeneralServiceSnapshot(); },
+  });
+  generalNav.bind();
+
+  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助 六页。
   // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
   general = createSettingsController(appContext, {
     keys: {
@@ -5674,17 +5706,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
     onOpen: () => {
       renderPushStatusRow();
-      applyGeneralScrollTarget();
+      // 每次打开都从 L1 起步（目录心智）；带深链时再切到目标页。
+      const link = generalDeepLink;
+      generalDeepLink = null;
+      generalNav.showHome();
+      if (link?.page) generalNav.showPage(link.page, { anchor: link.anchor || null });
+      // L1 的运行时长/版本要有数：拉一次快照，回来后重画目录。
+      refreshGeneralServiceSnapshot();
     },
-  });
-  // 顶部分段锚点：本机 / 主机 / 帮助
-  generalSheetBody?.querySelectorAll?.('[data-scroll-to]')?.forEach(btn => {
-    btn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      const id = btn.getAttribute('data-scroll-to');
-      if (!id) return;
-      document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    });
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
   if (pillDefaults) pillDefaults.onclick = () => openSettingsSheet(); // 点摘要 chip → 会话设置（三块磁贴已展开）
