@@ -413,6 +413,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for d in pending { menu.addItem(pendingDeviceItem(d)) }
         }
 
+        // 已受信任的设备**收进二级菜单**，不平铺：根菜单已经装着服务摘要与各 unit 一行，
+        // 而信任设备数没有上界（trusted-devices.json 不设 cap）。这一段的用途也和待审那段相反——
+        // 待审是「有事等你处理」必须一眼看到，已信任是「偶尔来清理一次」，不该常驻占位置。
+        let trusted = latestDevices?.trustedProfileList ?? []
+        if !trusted.isEmpty {
+            let entry = NSMenuItem(title: "已受信任的设备 (\(trusted.count))", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            sub.autoenablesItems = false
+            let hint = NSMenuItem(title: "点一项吊销该设备的信任", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            sub.addItem(hint)
+            sub.addItem(.separator())
+            for d in trusted { sub.addItem(trustedDeviceItem(d)) }
+            entry.submenu = sub
+            menu.addItem(entry)
+        }
+
         menu.addItem(.separator())
         menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r",
             tip: "服务状态、各 unit 与全部动作的总览窗口；刘海挡住菜单栏图标时的备用入口"))
@@ -543,6 +560,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    /// 已信任设备一行：点它就是吊销（子菜单本身已声明「点一项吊销」，动作不含糊）。
+    /// 真正的防误触在 NSAlert 那道强确认上，不在这里再套一层菜单。
+    private func trustedDeviceItem(_ d: TrustedDevice) -> NSMenuItem {
+        let item = NSMenuItem(title: "✗ \(trustedDeviceTitle(d))", action: #selector(revokeTrustedDevice(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = d.id
+        item.toolTip = "完整 ID：\(d.id)\n吊销后这台设备立刻失去访问权。"
+        return item
+    }
+
     private func unitAction(_ title: String, unit: String, verb: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(runUnitAction(_:)), keyEquivalent: "")
         item.target = self
@@ -602,6 +629,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func denyPendingDevice(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, !id.isEmpty else { return }
         decidePendingDevice(id, verb: "deny", label: "拒绝设备")
+    }
+
+    /// 吊销【已信任】设备——与上面拒绝待审设备是两个风险档，所以走两个入口。
+    /// 拒绝待审是安全方向（那台设备本来就还进不来），吊销已信任是破坏性的：一台正在用的
+    /// 设备会当场失去访问权。故这条必须强确认，而拒绝待审刻意不加确认。
+    @objc private func revokeTrustedDevice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, !id.isEmpty else { return }
+        let d = latestDevices?.trustedProfileList.first { $0.id == id }
+        let alert = NSAlert()
+        alert.messageText = "吊销这台设备的信任？"
+        // 文案**不能**写死「将立即断开该设备的连接」：device-gate 的吊销断连只作用于
+        // trustBasis == "device-token" 的连接；从本机直连或经 Cloudflare Access 进来的
+        // 连接不走信任表，吊销对它们无效。把条件说出来，否则这句话在那两档下就是假的。
+        alert.informativeText = """
+        设备 ID：\(id)
+        类型：\(deviceKindLabel(d?.ua))
+        来源 IP：\(d?.ip?.isEmpty == false ? d!.ip! : "未知")
+        批准时间：\(approvedAtLabel(d?.approvedAt))
+
+        吊销后这台设备立刻失去访问权。若它此刻正用设备令牌连着，那条连接会被立即断开
+        （从本机直连、或经 Cloudflare Access 进来的连接不经信任表，不受影响）。
+
+        这不是拉黑——同一台设备之后仍可重新申请接入。
+        """
+        alert.addButton(withTitle: "吊销")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .critical
+        guard runModal(alert) == .alertFirstButtonReturn else { return }
+        decidePendingDevice(id, verb: "deny", label: "吊销设备")
     }
 
     private func decidePendingDevice(_ id: String, verb: String, label: String) {

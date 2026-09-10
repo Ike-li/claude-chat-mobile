@@ -156,12 +156,22 @@ Agent 工具审批或用户直接文件编辑
 
 设备信任层的事实源是 `trusted-devices.json`，server 用文件监听把变更广播给在线客户端，因此任一入口批准后其余入口即时生效：
 
-- 桌面端菜单栏（macOS CCM.app）
-- Web 端由**已受信任的设备**远程准入
+- 桌面端菜单栏（macOS CCM.app）—— 待审设备平铺在根菜单，已受信任的设备收在 `已受信任的设备 (N) ›` 子菜单里，点一项即吊销（强确认）
+- Web 端由**已受信任的设备**远程准入，并在「设置 › 🖥 这台电脑 › 已受信任的设备」里吊销
 - headless 终端里直接回车 / deny —— **要求 TTY**，launchd 起的 server 没有 TTY，这条入口在受管服务下不可用
 - `node scripts/device.js approve|deny <ID>`
 
 新设备入列时会推一条通知，**正文不含设备 ID 与 IP**（推送通道未必端到端加密），并按 5 分钟节流避免同一设备反复重试刷屏。
+
+#### 展示元数据是旁挂的，不参与判决
+
+审批那一刻的 `userAgent` / `ip` / 时间记在**另一个文件** `device-profiles.json`（`{ token: { ua, ip, approvedAt } }`），供各端把一串 32 位 hex 显示成「iPhone · a3f21b09…a4b5 · 5 天前批准」。三条硬约束：
+
+- **准入判决的事实源仍然只有 `trusted-devices.json` 一个**。profiles 丢了、坏了、读不出来，都只是面板退化成裸 ID，不影响任何一台设备能不能连上。写入方向也按这个立场选：profiles 写失败**不得**把 `approveDevice` 判为失败；信任表写失败时**不得**剔除 profile（否则留下一台查不出来路的匿名设备）。
+- **`trusted-devices.json` 的格式一字不能动**（仍是一维字符串数组）。`loadTrustedDevices` 对「不是数组」的反应是落空集且**不走 catch 的 last-good 分支**——常驻 server 还跑着旧代码、磁盘上的 CLI 已经是新代码时（改完未重启是常态），旧进程会把信任设备数读成 0，watcher 那一轮把所有 `trustBasis === 'device-token'` 的连接断光。桌面端那侧同样致命：`CCMCore.swift` 声明的是 `let trusted: [String]?`，遇对象数组是 typeMismatch，JSONDecoder **整份 abort**，设备段整块消失。
+- **只对新审批生效。** 元数据只在批准那一刻记得下来，事后无从补。本功能上线之前批准的设备如实显示「无批准记录」；要补上，**吊销后让该设备重新申请一次**——已受信任的设备重连不会重新进待审列表（`isDeviceTrusted` 命中就直接放行），所以断线重连、重启浏览器都不会刷新它。
+
+Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里没有任何全量 token**，只有 `shortId`（前 8…后 4）+ `kind`/`ua`/`ip`/`approvedAt`/`isCurrent`；吊销走 `user:revokeTrustedDevice` 并按 `shortId` 反查，0 命中或多命中一律拒绝、绝不任选一条。这条红线守的不是「防局域网窃听」（该广播只发给已批准连接），而是**让吊销真的能吊销**：一台拿到过全量信任表的设备，日后被吊销时手里仍握着其余设备的 token。同理，当前这台设备在 Web 上不给吊销按钮（服务端也拦），否则一键就能把自己踢下线，若那是唯一在线的可信端就只能回到电脑前才能重批。
 
 ### 离线唤醒与推送抑制
 
@@ -185,7 +195,7 @@ Agent 工具审批或用户直接文件编辑
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
 | presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
 
-`agent:event` 的 27 种 type 里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+`agent:event` 的 28 种 type 里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
 
 `task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
 

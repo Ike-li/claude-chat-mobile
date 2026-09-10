@@ -273,7 +273,13 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        browse:read，那条通道的 scope 是 workDirs，CLI 临时目录不在其中会 fail-closed；而把
   //        临时目录塞进通用文件通道的 scope 等于开一个更宽的洞。这条专用通道的入参只有 taskId，
   //        路径由服务端从自己记录的 CLI 上报值取，客户端连"选路径"都做不到。入向总数 45→46）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 46);
+  //      + user:revokeTrustedDevice（2026-09-09，Web 侧吊销【已受信任】设备。刻意不复用
+  //        user:denyDevice：那条处理待审设备（拒绝一台还进不来的设备是安全方向、免确认，
+  //        且载荷里的 deviceId 本就已广播给可信端），这条处理已在用的设备（破坏性、要强确认），
+  //        且载荷只有 shortId——DEVICE-03 不许把全量信任表下发到网络上。两个风险档共用一个
+  //        handler 迟早写反。入向总数 46→47）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 47);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:revokeTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('task:output'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('attachment:read'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:sync'));
@@ -303,8 +309,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 27 种一致', () => {
-  assert.equal(AGENT_EVENT_TYPES.length, 27);
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 28 种一致', () => {
+  assert.equal(AGENT_EVENT_TYPES.length, 28);
+  // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
+  // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。
+  assert.ok(AGENT_EVENT_TYPES.includes('trusted_devices'));
 });
 
 // ── 2026-08-02 补的两个反向闸 ───────────────────────────────────────────────

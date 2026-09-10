@@ -50,6 +50,9 @@ process.env.CCM_APPROVAL_STORE_FILE = join(dir, 'approval-requests.json');
 process.env.CCM_AUDIT_FILE = join(dir, 'audit-records.json');
 process.env.CCM_TRUSTED_DEVICES_FILE = join(dir, 'trusted-devices.json');
 process.env.CCM_PENDING_DEVICES_FILE = join(dir, 'pending-devices.json');
+// CCM_DEVICE_PROFILES_FILE：设备展示元数据（旁挂）。同上——devices.test.mjs 也 rename 它做备份，
+// 且 approveDevice/denyDevice 现在会写它，不重定向就会改真实 data/device-profiles.json。
+process.env.CCM_DEVICE_PROFILES_FILE = join(dir, 'device-profiles.json');
 // CCM_READ_STATE_FILE（2026-09-03 跨设备已读位点）：read-state.js 的默认实例在 import 时锁定路径，
 // 任何静态 import 到 server/app.js 的用例一旦触发写入就会改真实 data/read-state.json——那是使用者
 // 各设备共享的未读位点，被单测覆盖等于凭空清掉一屏未读。

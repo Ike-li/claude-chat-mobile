@@ -24,7 +24,9 @@ function runCli(dataDir, args) {
   // preload-env 把 devices.js 的两个数据文件重定向到共享临时目录（TC-001），而在 devices.js 里
   // 这两个文件级变量【优先于】CCM_DATA_DIR。子进程继承它们的话，CLI 会写去 preload 那份共享文件，
   // 而断言读的是本用例的 dataDir——空的。这里跑的是真实 CLI 进程，要的就是生产形态：显式剥掉。
-  const { CCM_TRUSTED_DEVICES_FILE: _t, CCM_PENDING_DEVICES_FILE: _p, ...env } = process.env;
+  const {
+    CCM_TRUSTED_DEVICES_FILE: _t, CCM_PENDING_DEVICES_FILE: _p, CCM_DEVICE_PROFILES_FILE: _f, ...env
+  } = process.env;
   return spawnSync(process.execPath, ['scripts/device.js', ...args], {
     cwd: REPO,
     env: { ...env, CCM_DATA_DIR: dataDir },

@@ -719,17 +719,42 @@ struct PendingDevice: Decodable {
     var id: String { deviceId ?? "" }
 }
 
+/// 已受信任的设备 + 审批那一刻记下的展示元数据（device-profiles.json 旁挂）。
+/// 三个可空字段对**本功能上线之前**批准的设备恒为 null——元数据只在批准那一刻记得下来，
+/// 事后无从补。那种条目如实显示成「无批准记录」，让用户知道吊销后重批就能补上。
+struct TrustedDevice: Decodable {
+    let deviceId: String?
+    let shortId: String?
+    let ua: String?
+    let ip: String?
+    let approvedAt: Double?
+
+    var id: String { deviceId ?? "" }
+}
+
 struct DeviceSnapshot: Decodable {
     let schemaVersion: Int?
     let pending: [PendingDevice]?
     let trusted: [String]?
+    let trustedProfiles: [TrustedDevice]?
 
     var pendingList: [PendingDevice] { pending ?? [] }
     var trustedList: [String] { trusted ?? [] }
+    /// 旧 server（还没有旁挂元数据那一版）只给 `trusted`。此时回落成只有 ID 的条目，
+    /// 而不是让整段列表消失——少一列信息 ≠ 这台设备不存在。
+    var trustedProfileList: [TrustedDevice] {
+        if let trustedProfiles { return trustedProfiles }
+        return trustedList.map { TrustedDevice(deviceId: $0, shortId: nil, ua: nil, ip: nil, approvedAt: nil) }
+    }
 }
 
 /// 32 位 hex 的设备指纹在菜单里既放不下也没法读。截成 前8…后4：手机上那串是全量显示的，
 /// 两端各留一截足够用户一眼对上，而 8 位十六进制的碰撞空间在单用户场景下绰绰有余。
+/// ★ 同一判据有三份实现（跨语言 + 前后端禁止互相 import，合不了一份）：本函数、
+///   app/src/auth/devices.js 的 shortDeviceId、app/public/js/logic/device-id.js。
+///   截断规则三份必须逐字一致（> 16 才截、prefix(8)/suffix(4)）；空串占位只有本函数有
+///   （另两份返回空串，由各自调用方决定怎么显示）。对不上，用户就没法拿手机上那串核对，
+///   而核对是这整个功能存在的唯一理由。
 func shortDeviceId(_ id: String) -> String {
     if id.isEmpty { return "（无 ID）" }
     guard id.count > 16 else { return id }
@@ -800,4 +825,23 @@ private func bundleLocationLabel(bundlePath: String, repo: String?) -> String {
 func pendingDeviceTitle(_ d: PendingDevice) -> String {
     let ip = (d.ip?.isEmpty == false) ? d.ip! : "未知来源"
     return "\(deviceKindLabel(d.userAgent)) · \(shortDeviceId(d.id)) · \(ip)"
+}
+
+/// 批准时间 → 菜单里那一小段。**相对天数而不是绝对时间戳**：这一行要回答的问题是
+/// 「这台是不是我早就不用了的那台」，绝对时间还得人自己做减法。
+/// `now` 可注入，否则这条断言会随运行日期漂——测试跑一次绿、下周再跑就红。
+func approvedAtLabel(_ ms: Double?, now: Date = Date()) -> String {
+    guard let ms, ms > 0 else { return "无批准记录" }
+    let days = Int(floor((now.timeIntervalSince1970 - ms / 1000) / 86400))
+    if days <= 0 { return "今天批准" }   // 含时钟回拨造出的负数
+    if days == 1 { return "昨天批准" }
+    if days < 30 { return "\(days) 天前批准" }
+    return "\(days / 30) 个月前批准"
+}
+
+/// 已信任设备在吊销子菜单里的一行：类型 · 短 ID · 多久以前批的。
+/// 与 pendingDeviceTitle 的第三段不同（那里是来源 IP）：待审要答「从哪来的」，
+/// 已信任要答「还在用吗」——同一个位置放不同的东西是因为问题本身不同。
+func trustedDeviceTitle(_ d: TrustedDevice, now: Date = Date()) -> String {
+    "\(deviceKindLabel(d.ua)) · \(shortDeviceId(d.id)) · \(approvedAtLabel(d.approvedAt, now: now))"
 }

@@ -16,6 +16,7 @@
 export * from './logic/attachments.js';
 export * from './logic/bg-tasks.js';
 export * from './logic/composer.js';
+export * from './logic/device-id.js';
 export * from './logic/connection.js';
 export * from './logic/format.js';
 export * from './logic/message-time.js';

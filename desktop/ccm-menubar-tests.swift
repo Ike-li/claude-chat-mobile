@@ -48,6 +48,7 @@ struct CCMCoreTests {
         testProbeInterval()
         testDeviceSnapshot()
         testDevicePresentation()
+        testTrustedPresentation()
         testAutostartRisk()
         testRunSyncResourceHygiene()
         testRunSyncTimeoutDoesNotLeakWorkers()
@@ -672,6 +673,39 @@ extension CCMCoreTests {
         let noIp = decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"abcd1234","userAgent":"Mozilla/5.0 (iPhone)"}]}"#)!.pendingList[0]
         check(!pendingDeviceTitle(noIp).hasSuffix("·"), "缺 IP 时不留悬空分隔符：\(pendingDeviceTitle(noIp))")
         check(pendingDeviceTitle(noIp).contains("未知来源"), "缺 IP 如实说未知，不静默省略")
+    }
+
+    // MARK: 已受信任的设备怎么显示给人看
+    //
+    // 这一列的用途和待审那列**不同**：待审答「在敲门的是谁」，已信任答「哪台我早就不用了、
+    // 可以吊销」。所以第三段放的是「多久以前批的」而不是来源 IP。
+    static func testTrustedPresentation() {
+        // 固定 now，否则这些断言会随运行日期漂：跑一次绿、下周再跑就红。
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = 86_400.0
+
+        eq(approvedAtLabel(nil, now: now), "无批准记录", "上线前批准的设备没有元数据，如实说，不编时间")
+        eq(approvedAtLabel(0, now: now), "无批准记录", "0 不是一个真实的批准时间")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - 3600) * 1000, now: now), "今天批准", "当天")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 1.2) * 1000, now: now), "昨天批准", "跨一天")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 5) * 1000, now: now), "5 天前批准", "一周内给天数")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 95) * 1000, now: now), "3 个月前批准", "超月折成月")
+        eq(approvedAtLabel((now.timeIntervalSince1970 + day) * 1000, now: now), "今天批准",
+           "时钟回拨造出的未来时间不能显示成负数天")
+
+        let full = #"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"0123456789abcdef0123456789abcdef","shortId":"01234567…cdef","ua":"Mozilla/5.0 (iPhone)","ip":"192.168.1.5","approvedAt":1799913600000}]}"#
+        let d = decodeDevices(full)!.trustedProfileList[0]
+        let title = trustedDeviceTitle(d, now: now)
+        check(title.contains("iPhone"), "带设备类型：\(title)")
+        check(title.contains("01234567"), "带短 ID 供和手机上那串核对：\(title)")
+        check(title.contains("批准"), "带批准时间——「还在不在用」是吊销决策的唯一线索：\(title)")
+
+        // ★ 旧 server 只给 trusted[]：必须回落成只有 ID 的条目，而不是整段列表消失。
+        let legacy = decodeDevices(#"{"schemaVersion":1,"trusted":["abc123"]}"#)!
+        eq(legacy.trustedProfileList.count, 1, "没有 trustedProfiles 时用 trusted 回落，不是空列表")
+        eq(legacy.trustedProfileList[0].id, "abc123", "回落条目至少要有 ID")
+        eq(trustedDeviceTitle(legacy.trustedProfileList[0], now: now).contains("无批准记录"), true,
+           "回落条目如实说没有批准记录")
     }
 }
 

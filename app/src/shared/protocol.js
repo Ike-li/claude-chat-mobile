@@ -41,6 +41,7 @@ export const AGENT_EVENT_TYPES = Object.freeze([
   'thinking_delta',
   'tool_result',
   'tool_use',
+  'trusted_devices',
   'user_message',
 ]);
 
@@ -89,6 +90,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'user:denyDevice',
   'user:interrupt',
   'user:message',
+  'user:revokeTrustedDevice',
   'user:setEffort',
   'user:setPermissionMode',
   'user:setViewing',

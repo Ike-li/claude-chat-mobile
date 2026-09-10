@@ -218,6 +218,7 @@ let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时�
 // sync:since handler 内联的 extra.unreadOnEntry，自包含不受测试执行顺序影响）。
 let replayUnreadSyncArmed = false;
 let pendingDevices = [];
+let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMockState 会重新填一份
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
@@ -309,6 +310,7 @@ function resetMockState() {
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
+  trustedDevices = createTrustedDevices();
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
@@ -466,6 +468,28 @@ function emitPendingDevices() {
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'pending_devices', payload: { devices: pendingDevices }
+  });
+}
+
+// 已受信任设备（真 server 的 device-gate.trustedDevicesPayload 的对位）。
+// **载荷里没有全量 token，只有 shortId** —— DEVICE-03，形状必须与真 server 一致，
+// 否则前端在 E2E 里读到的字段和生产不是一回事（本仓踩过：mock 是平行实现，
+// 删掉真 server 的字段 E2E 照样全绿）。
+// isCurrent 固定钉在第三条：E2E 要能覆盖「当前这台不给吊销按钮」那一支，
+// 而 mock 侧没有真实的 deviceToken 可比。
+function createTrustedDevices() {
+  return [
+    { shortId: 'a3f21b09…a4b5', kind: 'iPhone', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: Date.now() - 5 * 86400000, isCurrent: false },
+    // approvedAt=null：本功能上线【之前】批准的条目，前端要显示成「无批准记录」而不是编个时间
+    { shortId: '7e6d1122…3ede', kind: '未知设备', ua: null, ip: null, approvedAt: null, isCurrent: false },
+    { shortId: 'cd2760a5…ec82', kind: 'Mac', ua: 'Mozilla/5.0 (Macintosh)', ip: '127.0.0.1', approvedAt: Date.now() - 3600000, isCurrent: true },
+  ];
+}
+
+function emitTrustedDevices() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'trusted_devices', payload: { devices: trustedDevices }
   });
 }
 
@@ -681,6 +705,13 @@ io.on('connection', socket => {
 
   // Auto-approve socket for standard testing (simulates local trust)
   socket.deviceApproved = true;
+
+  // 真 server 在可信端连入时重放已受信任设备列表（app.js 的 unlockSocket 之后那两条 emit）。
+  // 不重放的话「设置 › 这台电脑 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
+  socket.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'trusted_devices', payload: { devices: trustedDevices }
+  });
 
   // Replay initial hydration events
   const emitHydration = () => {
@@ -4349,6 +4380,17 @@ io.on('connection', socket => {
     const { deviceId } = payload || {};
     pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
     emitPendingDevices();
+  });
+
+  // 吊销已信任设备。真 server 走 decideRevokeByShortId：命中自己 → 拒绝（self），
+  // 0/多命中 → 拒绝（not_found）。mock 复刻这两个出口，否则 E2E 里那两支不可达。
+  socket.on('user:revokeTrustedDevice', payload => {
+    const shortId = payload?.shortId;
+    const hit = trustedDevices.filter(d => d.shortId === shortId);
+    if (hit.length !== 1) { emitTrustedDevices(); return; }
+    if (hit[0].isCurrent) { emitTrustedDevices(); return; } // 自吊销守卫
+    trustedDevices = trustedDevices.filter(d => d.shortId !== shortId);
+    emitTrustedDevices();
   });
 
   // 后台任务停止（对齐 server task:stop → agent.stopTask）：mock 仅记日志，幂等

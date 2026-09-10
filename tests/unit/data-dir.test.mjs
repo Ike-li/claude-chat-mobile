@@ -23,6 +23,7 @@ test.describe('CCM_DATA_DIR 状态隔离', () => {
     delete process.env.CCM_SESSIONS_FILE; // 确保走 CCM_DATA_DIR 回退而非独立覆盖
     delete process.env.CCM_TRUSTED_DEVICES_FILE; // 同理：验证 CCM_DATA_DIR 隔离本身，设备文件须走 CCM_DATA_DIR 回退
     delete process.env.CCM_PENDING_DEVICES_FILE;
+    delete process.env.CCM_DEVICE_PROFILES_FILE; // 同理：approveDevice 现在会写 profiles，不删就落到 preload 那份共享临时文件、本文件守的隔离出现无声的洞
     D = await import('../../app/src/auth/devices.js');
     S = await import('../../app/src/sessions/sessions.js');
   });

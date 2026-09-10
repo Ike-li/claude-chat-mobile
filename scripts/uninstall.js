@@ -42,6 +42,7 @@ export const DATA_FILE_WHITELIST = Object.freeze([
   'cf-access-certs.json',
   'trusted-devices.json',
   'pending-devices.json',
+  'device-profiles.json',
   'push-subscription.json',
   'init-cache.json',
   'service-events.json',

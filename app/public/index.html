@@ -760,6 +760,22 @@
         只影响此设备 / 浏览器；换机需重设。
       </div>
 
+      <!-- 3a. 本机设备指纹。已批准的设备在 Web 上此前完全看不到自己的 ID —— #deviceModal 只在
+           status==='pending' 时显示那串，批准后弹窗就隐藏了。而「该吊销哪一台」恰恰要求用户
+           能分辨面板/菜单里那堆条目哪个是手上这台：同一 iOS 版本的 Safari UA 逐字节相同，
+           只看类型和批准时间分不出来。短形式与菜单栏、信任列表里那串是同一份判据。 -->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
+        <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">
+          <div id="deviceFingerprintShort" class="text-sm text-ink font-semibold tracking-wide" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-short">—</div>
+          <div class="text-ink-soft mt-1 leading-snug">在电脑上核对「已受信任的设备」时，认准这一串就是你手上这台。</div>
+          <details class="mt-1.5">
+            <summary class="text-ink-faint cursor-pointer">完整 ID</summary>
+            <div id="deviceFingerprintFull" class="text-[10px] text-ink-soft break-all mt-1" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-full"></div>
+          </details>
+        </div>
+      </div>
+
       <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
       <div>
         <div class="text-xs font-semibold text-ink-soft mb-2">🔔 <span>完成提示</span></div>
@@ -842,6 +858,15 @@
       <div id="generalSectionHost" class="text-sm font-bold text-ink flex items-center gap-1.5 border-t border-line pt-4 scroll-mt-12">🖥 <span>这台电脑</span></div>
       <div data-scope-note="host" class="text-[11px] text-ink-faint leading-snug px-0.5 -mt-2">
         影响整机所有会话（含终端 claude），换手机看也是同一份。
+      </div>
+
+      <!-- 已受信任的设备 + 吊销。放 🖥 这台电脑 而不是 📱 这台手机：信任表是整机的一份名单，
+           换台手机看到的是同一份；上面那个「本机设备指纹」才是设备级的。
+           整段由 app.js 按 trusted_devices 事件渲染；旧 server 不发这个 type，整段就不出现。 -->
+      <div id="trustedDevicesSection" class="hidden">
+        <div class="text-xs font-semibold text-ink-soft mb-2">🔐 <span>已受信任的设备</span></div>
+        <div id="trustedDevicesList" class="space-y-2" data-testid="trusted-devices-list"></div>
+        <div class="text-[10px] text-ink-faint px-1 mt-1.5">吊销后该设备立刻失去访问权，正用设备令牌连着的那条连接会被断开。这不是拉黑，之后仍可重新申请。</div>
       </div>
 
       <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是"电脑终端里跑的会话要不要通知我"。整段由 app.js

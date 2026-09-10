@@ -153,6 +153,8 @@ import {
   isLanOrLocalHostname,
   authFailurePath,
   summarizeRecentsLoad,
+  shortDeviceId,
+  formatRelativeApprovedAt,
 } from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
@@ -207,6 +209,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     deviceToken = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('device_token', deviceToken);
+  }
+
+  // 指纹上屏（设置 › 📱 这台手机）。写一次就够：deviceToken 在整个页面生命周期内不变，
+  // 不跟任何状态同步。module script 已 defer 到 DOM 解析完成，这两个节点此刻必然在。
+  {
+    const fpShort = document.getElementById('deviceFingerprintShort');
+    if (fpShort) fpShort.textContent = shortDeviceId(deviceToken);
+    const fpFull = document.getElementById('deviceFingerprintFull');
+    if (fpFull) fpFull.textContent = deviceToken;
   }
 
   // ⑨ i18n：module script 已 defer 到 DOM 解析完成后执行，整棵静态外壳此刻已就位，且尚未渲染任何
@@ -1881,6 +1892,77 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
+  // 已受信任设备列表（设置 › 🖥 这台电脑）。载荷里**没有全量 token**，只有 shortId——
+  // DEVICE-03：把信任表下发到网络上，等于一台被吊销的设备手里还攥着其余设备的凭据。
+  // ua/ip 一律 textContent（UA 攻击者可控），不拼 innerHTML。
+  // kind 由服务端算好下发（与 desktop/CCMCore.swift 的 deviceKindLabel 互为镜像）。
+  // 这两个是**唯一需要翻译**的取值——iPhone/iPad/Android/Mac/Windows 是专名，各语言相同。
+  // 写成显式表而不是 t(d.kind)：后者静态看不见，i18n 的孤儿 key 检查扫不到它们，
+  // 于是那两条词典条目会在没人察觉的情况下烂掉（门禁当场就抓到了这一点）。
+  const translateDeviceKind = (kind) => (
+    kind === '未知设备' ? t('未知设备')
+      : kind === '其他设备' ? t('其他设备')
+        : (kind || t('未知设备'))
+  );
+
+  function renderTrustedDevices(devices) {
+    const section = $('trustedDevicesSection');
+    const list = $('trustedDevicesList');
+    if (!section || !list) return;
+    list.textContent = '';
+    // 空列表也不显示整段：一台都没有意味着这台 server 只被本机/CF Access 访问过，
+    // 摆一个空框只会让人以为坏了。
+    if (!devices.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    for (const d of devices) {
+      const row = document.createElement('div');
+      row.className = 'p-2.5 rounded-xl border border-line bg-surface text-xs';
+      row.setAttribute('data-testid', 'trusted-device-row');
+      row.setAttribute('data-short-id', d.shortId || '');
+
+      const head = document.createElement('div');
+      head.className = 'flex items-center justify-between gap-2';
+      const name = document.createElement('div');
+      name.className = 'min-w-0 font-semibold text-ink';
+      name.textContent = translateDeviceKind(d.kind) + ' · ' + (d.shortId || '—');
+      head.appendChild(name);
+
+      if (d.isCurrent) {
+        // 当前这台不给吊销按钮：服务端也会拦（decideRevokeByShortId 的 self 分支），
+        // 但让一个点了必然失败的按钮摆在那里本身就是缺陷。
+        const badge = document.createElement('span');
+        badge.className = 'shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-sunk text-ink-soft';
+        badge.textContent = t('这台（当前）');
+        head.appendChild(badge);
+      } else {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'shrink-0 px-2.5 py-1 rounded-lg border border-danger text-danger active:bg-danger/10 text-[11px] font-medium';
+        btn.textContent = t('吊销');
+        btn.setAttribute('data-testid', 'trusted-device-revoke');
+        btn.addEventListener('click', async () => {
+          const ok = await appConfirm({
+            title: t('吊销这台设备的信任？'),
+            body: `${translateDeviceKind(d.kind)} · ${d.shortId}\n${d.ua || ''}`.trim(),
+            okText: t('吊销'),
+            tone: 'danger',
+          });
+          if (ok) socket.emit('user:revokeTrustedDevice', { shortId: d.shortId });
+        });
+        head.appendChild(btn);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'text-[10px] text-ink-faint leading-snug mt-1 break-all';
+      // 「多久以前批的」比绝对时间戳更能回答「这台我还在用吗」；没有元数据就如实说没有
+      // （本功能上线前批准的条目，UA/IP/时间事后无从补——吊销后重批一次即可补上）。
+      const when = d.approvedAt ? formatRelativeApprovedAt(d.approvedAt) : t('无批准记录');
+      meta.textContent = [when, d.ip, d.ua].filter(Boolean).join(' · ');
+      row.append(head, meta);
+      list.appendChild(row);
+    }
+  }
+
   // ---- agent:event：带外事件、实例分流、epoch/seq 去重与日志由独立 dispatcher 管理 ----
   const dispatchAgentEvent = createAgentEventDispatcher(appContext, {
     handlers: () => handle,
@@ -2074,6 +2156,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 已信任设备收到的待审批设备列表（全量幂等）；渲染成可一键准入/拒绝的卡片。
     pending_devices(p) {
       renderDeviceRequests(Array.isArray(p?.devices) ? p.devices : []);
+    },
+    trusted_devices(p) {
+      renderTrustedDevices(Array.isArray(p?.devices) ? p.devices : []);
     },
     init(p) {
       // 合成 init 可能只带 slashCommands（切区重放）或只校正 model/cwd——按字段是否存在分别处理，

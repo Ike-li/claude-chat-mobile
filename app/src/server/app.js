@@ -86,7 +86,9 @@ import {
   approveDevice,
   denyDevice,
   getPendingDevices,
-  getTrustedCount
+  getTrustedCount,
+  getTrustedDeviceIds,
+  decideRevokeByShortId
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
 import * as approvalStore from '../agent/approval-store.js';
@@ -548,7 +550,8 @@ const io = new Server(httpServer, {
 // 机制下沉 src/auth/device-gate.js；unlockSocket（重放 init/models/statusline 初始态）
 // 耦合组装根状态（lastInit/viewing*/replay*），留在本文件、经回调注入。
 const deviceGate = createDeviceGate({ io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket) });
-const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices } = deviceGate;
+const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices,
+  trustedDevicesPayload, broadcastTrustedDevices } = deviceGate;
 
 function unlockSocket(socket) {
   if (socket.deviceApproved) return; // 已经批准了
@@ -2178,6 +2181,11 @@ registerSocketConnection(io, socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'pending_devices', payload: pendingDevicesPayload()
     });
+    // 同上，已受信任设备列表（设置 › 访问与设备里的吊销面）。逐 socket 算 isCurrent。
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'trusted_devices', payload: trustedDevicesPayload(socket.handshake.auth?.deviceToken)
+    });
     scheduleStatusRefresh(); // 300ms 后新鲜数据跟上
   }
 
@@ -2445,6 +2453,7 @@ registerSocketConnection(io, socket => {
     if (approveDevice(deviceId)) {
       unlockDeviceSockets(deviceId);
       broadcastPendingDevices();
+      broadcastTrustedDevices();
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
     } else {
       // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
@@ -2460,12 +2469,50 @@ registerSocketConnection(io, socket => {
     const revoked = denyDevice(deviceId);
     disconnectDeviceSockets(deviceId); // 断连照做：即便落盘失败，也先切断该设备当前连接（纵深防御）
     broadcastPendingDevices();
+    broadcastTrustedDevices();
     if (revoked) {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
     } else {
       // BE-011：吊销落盘失败——磁盘仍含该设备，下次 isDeviceTrusted 重读会复活，不谎报成功，告警 + 提示重试。
       console.error(`[devices] 吊销 ${deviceId} 落盘失败，可能未生效`);
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'error', meta: { via: 'web', persistFailed: true } });
+      sysTo(socket, '设备吊销未能写入磁盘、可能未生效，请重试或检查服务端磁盘', true);
+    }
+  });
+
+  // 吊销【已受信任】设备。与上面 user:denyDevice 分开是刻意的：那条处理的是待审设备
+  // （拒绝一台还进不来的设备是安全方向，载荷里的 deviceId 本就已广播给可信端），
+  // 这条处理的是已在用的设备（破坏性），且载荷只有 shortId——DEVICE-03 不许把全量信任表
+  // 的 token 下发到网络上，否则一台被吊销的设备手里还攥着其余设备的凭据，吊销就没吊干净。
+  // 两个风险档共用一个 handler 迟早写反，所以宁可多一个入向事件。
+  on(socket, 'user:revokeTrustedDevice', payload => {
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    const d = decideRevokeByShortId({
+      shortId,
+      requesterToken: socket.handshake.auth?.deviceToken,
+      trustedIds: getTrustedDeviceIds(),
+    });
+    if (!d.ok) {
+      // 两种拒绝分开说：self 是「拦住了一次会把你自己锁在门外的操作」，
+      // not_found 多半是手里那份列表过期了（别处刚吊过），刷新即可。
+      if (d.reason === 'self') {
+        sysTo(socket, '不能吊销你正在使用的这台设备——吊销会立刻断开你自己的连接。请在电脑上操作，或先用另一台已信任的设备。', true);
+      } else {
+        sysTo(socket, '找不到这台设备（列表可能已过期），已为你刷新', true);
+      }
+      broadcastTrustedDevices();
+      return;
+    }
+    console.log(`[devices] 已信任设备 ${socket.id} 吊销 ${d.token}`);
+    const revoked = denyDevice(d.token);
+    disconnectDeviceSockets(d.token); // 同 denyDevice 路径：即便落盘失败也先切断（纵深防御）
+    broadcastTrustedDevices();
+    if (revoked) {
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'denied', meta: { via: 'web' } });
+    } else {
+      console.error(`[devices] 吊销 ${d.token} 落盘失败，可能未生效`);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'error', meta: { via: 'web', persistFailed: true } });
       sysTo(socket, '设备吊销未能写入磁盘、可能未生效，请重试或检查服务端磁盘', true);
     }
   });
