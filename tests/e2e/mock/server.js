@@ -749,7 +749,11 @@ io.on('connection', socket => {
         model: activeModel,
         cwd: mockInstances[0].cwd,
         claudeVersion: '0.1.0-mock',
-        mcpServers: [],
+        // 一正常一失败：让「这台电脑」页的 MCP 段两条渲染分支都走得到（失败态要带原始 status）
+        mcpServers: [
+          { name: 'filesystem', status: 'connected' },
+          { name: 'postgres', status: 'failed' }
+        ],
         skillsCount: 7,
         permissionMode: permissionMode,
         slashCommands: [

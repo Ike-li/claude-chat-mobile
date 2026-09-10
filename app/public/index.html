@@ -887,6 +887,13 @@
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
         </div>
 
+        <!-- MCP 服务器与 skills：数据早就随 init 事件到了浏览器（agent.js emit('init')），
+             只是从来没有渲染面。整段由 app.js 的 renderHostEnvSection 按有无数据显隐。 -->
+        <div id="hostEnvSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🧩 <span>这台电脑上的 claude</span></div>
+          <div id="hostEnvBody" class="space-y-2" data-testid="host-env-body"></div>
+        </div>
+
         <div>
           <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>运行状态</span></div>
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>

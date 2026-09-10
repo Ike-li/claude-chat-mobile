@@ -10,7 +10,7 @@
 // 不覆盖：DOM 渲染与页面切换（归 tests/e2e/specs/settings-scope-split.spec.ts）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeGeneralNav, GENERAL_NAV_IDS } from '../../app/public/js/logic.js';
+import { summarizeGeneralNav, GENERAL_NAV_IDS, formatMcpServers } from '../../app/public/js/logic.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
 test.beforeEach(() => setLang('zh'));
@@ -143,4 +143,63 @@ test('behavior 行随语言偏好变，其余静态行不受任何状态影响',
   const idle = summarizeGeneralNav();
   assert.equal(busy[4].summary, idle[4].summary);
   assert.equal(busy[5].summary, idle[5].summary);
+});
+
+// ---- MCP 服务器（「这台电脑」页）----
+//
+// 数据早就随 init 事件到了浏览器（agent.js 的 emit('init', {mcpServers})，SDK 契约是
+// `{name, status}[]`），只是从来没渲染过。这一层把它译成「几个、哪个坏了」。
+//
+// ★ 失败方向：status 的取值集合 SDK 未声明。不认识的值必须**当成有问题**，不能当成正常——
+//   把一个连不上的服务器显示成绿的，比显示成未知更糟：用户会去别处找原因。
+
+test('MCP：没有服务器时返回 null，整段不该出现（不给空计数占位）', () => {
+  assert.equal(formatMcpServers([]), null);
+  assert.equal(formatMcpServers(undefined), null);
+  assert.equal(formatMcpServers(null), null);
+});
+
+test('MCP：全部连上时报总数，每项标记为正常', () => {
+  const view = formatMcpServers([
+    { name: 'filesystem', status: 'connected' },
+    { name: 'github', status: 'connected' },
+  ]);
+  assert.equal(view.total, 2);
+  assert.equal(view.failed, 0);
+  assert.deepEqual(view.items.map(i => i.name), ['filesystem', 'github']);
+  assert.ok(view.items.every(i => i.ok));
+});
+
+test('MCP：有连接失败的，failed 计数与该项的 ok 都要反映出来', () => {
+  const view = formatMcpServers([
+    { name: 'filesystem', status: 'connected' },
+    { name: 'postgres', status: 'failed' },
+  ]);
+  assert.equal(view.total, 2);
+  assert.equal(view.failed, 1);
+  assert.equal(view.items.find(i => i.name === 'postgres').ok, false);
+  // 原始 status 要留给用户看——「failed」和「needs-auth」是两种完全不同的处置
+  assert.equal(view.items.find(i => i.name === 'postgres').status, 'failed');
+});
+
+// ★ 这条守的是失败方向：SDK 没有声明 status 的取值集合，未来新增一个值时，
+//   默认必须落到「有问题」一侧，而不是被当成正常。
+test('MCP：不认识的 status 一律不当作正常（未知值不得被渲染成绿的）', () => {
+  const view = formatMcpServers([
+    { name: 'a', status: 'needs-auth' },
+    { name: 'b', status: 'some-future-state' },
+    { name: 'c', status: '' },
+  ]);
+  assert.equal(view.failed, 3);
+  assert.ok(view.items.every(i => i.ok === false));
+});
+
+test('MCP：条目缺 name 时跳过而不是渲染成空行', () => {
+  const view = formatMcpServers([
+    { name: 'ok', status: 'connected' },
+    { status: 'connected' },
+    null,
+  ]);
+  assert.equal(view.total, 1);
+  assert.deepEqual(view.items.map(i => i.name), ['ok']);
 });

@@ -112,6 +112,33 @@ function helpRow() {
   };
 }
 
+// MCP 服务器里「一切正常」的唯一取值。SDK 的 d.ts 只声明 `status: string`，没给取值集合——
+// 所以这里用**白名单**而不是黑名单：不认识的值一律落到「有问题」一侧。
+// 把一个连不上的服务器显示成正常，比显示成未知更糟——用户会拿着一个绿灯去别处找原因。
+const MCP_OK_STATUS = 'connected';
+
+/**
+ * 把 init 事件里的 mcp_servers 译成「几个、哪个坏了」。
+ *
+ * 这份数据早就随 init 到了浏览器（agent/agent.js 的 emit('init', {mcpServers})），
+ * 只是从来没有渲染面——补它只差一个格式化。
+ *
+ * @param {Array<{name?: string, status?: string}>|null|undefined} servers
+ * @returns {{total: number, failed: number, items: Array<{name: string, status: string, ok: boolean}>}|null}
+ *   没有任何服务器时返回 null（调用方据此整段隐藏，不给空计数占位）
+ */
+export function formatMcpServers(servers) {
+  if (!Array.isArray(servers) || !servers.length) return null;
+  const items = servers
+    .filter(s => s && typeof s.name === 'string' && s.name)
+    .map(s => {
+      const status = typeof s.status === 'string' ? s.status : '';
+      return { name: s.name, status, ok: status === MCP_OK_STATUS };
+    });
+  if (!items.length) return null;
+  return { total: items.length, failed: items.filter(i => !i.ok).length, items };
+}
+
 /**
  * 算出 L1 六行的展示态。
  *

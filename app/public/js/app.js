@@ -59,6 +59,7 @@ import {
   presentTurnResult,
   formatServiceNotices,
   formatHooksBridgeRow,
+  formatMcpServers,
   formatPushStatusRow,
   pushEnvHint,
   serviceStatusBasicRows,
@@ -1853,6 +1854,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ID/IP/UA 一律用 textContent（UA 攻击者可控），不拼 innerHTML，防 XSS。
   // 待审设备条数：L1 目录「接入与设备」那行的红点判据（唯一会亮红点的一行）。
   let lastPendingDevices = [];
+  // 最后一次 init 带来的 MCP 服务器与 skills 数（「这台电脑」页渲染用）。
+  // 与 lastTrustedDevices 同类：都是「最后一次事件载荷」的快照，供面板打开时重画。
+  let lastMcpServers = null;
+  let lastSkillsCount = 0;
   function renderDeviceRequests(devices) {
     lastPendingDevices = Array.isArray(devices) ? devices : [];
     generalNav?.render();
@@ -2304,6 +2309,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // slashCommands：真 init / 服务端按 cwd 重放都会带；空数组也接受（表示该 cwd 确实无命令）。
       // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
       applySlashCommands(p.slashCommands);
+      // MCP 服务器与 skills 数：同 slashCommands 的「缺字段不覆盖」惯例——合成 init（切区重放、
+      // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「这台电脑」页刷成空。
+      if (p && Object.prototype.hasOwnProperty.call(p, 'mcpServers')) lastMcpServers = p.mcpServers;
+      if (typeof p?.skillsCount === 'number') lastSkillsCount = p.skillsCount;
+      renderHostEnvSection();
     },
     // CLI 中途发现新命令/skill 的全量推送（SDK 0.3.229 的 commands_changed）。
     // 与 init 分开是因为 server 对 init 有副作用（覆盖 lastInit、算 new_activity），
@@ -5666,6 +5676,49 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
+  // 「这台电脑上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
+  function renderHostEnvSection() {
+    const section = $('hostEnvSection'), body = $('hostEnvBody');
+    if (!section || !body) return;
+    const mcp = formatMcpServers(lastMcpServers);
+    // 两样都没有 = 这个 cwd 确实既没配 MCP 也没有 skill，整段隐藏，不给空计数占位
+    if (!mcp && !lastSkillsCount) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    body.replaceChildren();
+
+    if (mcp) {
+      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
+      const head = el('<div class="font-semibold text-ink"></div>');
+      head.textContent = `${t('MCP 服务器')} · ${mcp.total} ${t('个')}`;
+      card.appendChild(head);
+      const list = el('<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1"></div>');
+      for (const item of mcp.items) {
+        const row = el('<span class="inline-flex items-center gap-1"></span>');
+        const dot = el('<span aria-hidden="true"></span>');
+        dot.className = item.ok ? 'text-success' : 'text-danger';
+        dot.textContent = '●';
+        const name = el('<span class="text-ink-soft"></span>');
+        // 非正常态把原始 status 一并显示：'failed' 与 'needs-auth' 是两种完全不同的处置，
+        // 压成一个「异常」会让用户无从下手。
+        name.textContent = item.ok ? item.name : `${item.name}（${item.status || t('状态未知')}）`;
+        row.append(dot, name);
+        list.appendChild(row);
+      }
+      card.appendChild(list);
+      body.appendChild(card);
+    }
+
+    if (lastSkillsCount) {
+      const skills = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
+      const t1 = el('<div class="font-semibold text-ink"></div>');
+      t1.textContent = `Skills · ${lastSkillsCount} ${t('个可用')}`;
+      const t2 = el('<div class="text-ink-soft mt-0.5"></div>');
+      t2.textContent = t('当前工作区加载的技能');
+      skills.append(t1, t2);
+      body.appendChild(skills);
+    }
+  }
+
   // L1 目录要用的两份快照。推送订阅态由 renderPushStatusRow 写入（同一份判据，免得目录与
   // 面板里的话自相矛盾）；服务快照来自 service:status ——那条 ack 不随 instances 广播常驻，
   // 不主动拉就永远显示「状态读取中」。

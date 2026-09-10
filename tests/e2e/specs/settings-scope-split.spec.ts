@@ -4,7 +4,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
+import { ensureComposerReady, gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28 首页无会话时通用设置仍可达（会话设置 chip 随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
@@ -186,6 +186,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
     await expect(page.locator('#generalPage-devices')).toBeHidden();
     await expect(page.locator('#generalSheetTitle')).toContainText('设置与状态');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 缺口 3：MCP 服务器与 skills 数早就随 init 事件到了浏览器（agent.js emit('init')），
+  // 但前端从来没有渲染面——grep mcpServers / skillsCount 在 app/public 下零命中。
+  // 失败态必须带上原始 status：'failed' 与 'needs-auth' 是两种完全不同的处置。
+  test('P0-28j 「这台电脑」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+
+    const body = page.locator('[data-testid="host-env-body"]');
+    await expect(body).toBeVisible();
+    await expect(body).toContainText('MCP');
+    await expect(body).toContainText('filesystem');
+    // 连不上的那台：名字后面必须跟着原始 status，不能压成一个笼统的「异常」
+    await expect(body).toContainText('postgres（failed）');
+    await expect(body).toContainText('Skills');
+    await expect(body).toContainText('7');
 
     await expectNoBrowserErrors(page);
   });
