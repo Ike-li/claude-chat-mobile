@@ -35,6 +35,7 @@ export const EN_DICT = Object.freeze({
   '不知道令牌？查看帮助': "Don't know the token? Get help",
   '会话已过期': 'Session expired',
   '回顾': 'Recap',
+  '猜你接下来想发 · 点一下填进输入框': 'Guessing your next message — tap to drop it into the composer',
   '本会话的自动调用': 'Automatic calls this session',
   '费用已计入会话总成本，不是额外的一笔': 'Already included in the session cost above — not a separate charge',
   '下一步建议 {n} 次': 'Next-step suggestions ×{n}',

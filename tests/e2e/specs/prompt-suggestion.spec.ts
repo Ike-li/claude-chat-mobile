@@ -22,7 +22,10 @@ test.describe('下一步建议条', () => {
 
     await expect(box).toBeVisible({ timeout: 10_000 });
     const btn = box.locator('button');
-    await expect(btn).toHaveText('给 agent.js 补几个边界用例');
+    // 标签行：不写明这是什么、点了会怎样，用户会怕一点就发出去而根本不敢碰
+    await expect(box.locator('[data-testid="prompt-suggestion-label"]')).toContainText('点一下填进输入框');
+    // 正文单独断言：按钮里还有那行标签，断在 button 上会把标签文字算进来
+    await expect(box.locator('#promptSuggestionText')).toHaveText('给 agent.js 补几个边界用例');
 
     const input = page.locator('#input');
     await expect(input).toHaveValue(''); // 点之前输入框是空的

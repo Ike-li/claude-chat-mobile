@@ -4004,16 +4004,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     $('promptSuggestion')?.classList.add('hidden');
   }
   function showPromptSuggestion(text) {
-    const box = $('promptSuggestion'), btn = $('promptSuggestionBtn');
-    if (!box || !btn) return;
+    const box = $('promptSuggestion'), btn = $('promptSuggestionBtn'), body = $('promptSuggestionText');
+    if (!box || !btn || !body) return;
     // 镜像只读态下输入框根本不能打字，给了也用不了；有草稿时也不打扰（用户已经在写自己的了）。
     if (mirrorReadonlySid || inputEl?.value.trim()) return;
-    btn.textContent = text;
+    // 只写正文那个 span：按钮里还有一行静态标签，写 btn.textContent 会把标签一起冲掉。
+    body.textContent = text;
     btn.title = text; // 长句被 truncate 截掉时，长按/悬停仍能看全
     box.classList.remove('hidden');
   }
   $('promptSuggestionBtn')?.addEventListener('click', () => {
-    const text = $('promptSuggestionBtn')?.textContent || '';
+    // ★ 读正文 span，不是整个按钮：按钮里含一行静态标签（「猜你接下来想发 · 点一下填进输入框」），
+    // 读 btn.textContent 会把那句提示一起塞进输入框。
+    const text = $('promptSuggestionText')?.textContent || '';
     hidePromptSuggestion();
     if (!text || !inputEl) return;
     haptic('tap');
