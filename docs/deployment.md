@@ -55,6 +55,14 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 
 > ⚠️ `~/.cloudflared/<UUID>.json` 与 `cert.pem` 是凭据，**勿提交/泄露**。
 
+隧道地址要在手机上打开时，`--url` 可以省掉手输——Quick Tunnel 那种随机域名（`sample-mouse-diving-recognized.trycloudflare.com`）尤其值得：
+
+```bash
+node scripts/qr.js --url https://<your-domain>
+```
+
+token 走 URL fragment（`/#token=`），**不进 HTTP 请求行**，所以不会落进 Cloudflare 或任何中间层的访问日志。二维码本身含完整凭据，投屏或有旁人时不要打印。
+
 ### 2. Access（Cloudflare Zero Trust 控制台）
 
 1. Zero Trust → Access → Applications → Add → **Self-hosted**，域填 `<your-domain>`。

@@ -168,6 +168,8 @@ node scripts/device.js approve <ID>
 
 然后在手机中打开启动日志给出的地址，即可进入工作区并向 Claude Code 发送第一条消息。
 
+> 在手机上手输 64 位 token 很痛苦，可以用 `node scripts/qr.js` 把地址打成终端二维码扫一下（需要约 90 列宽的窗口）。二维码里含完整凭据，投屏、录屏或旁边有人时不要打印。
+
 > macOS 桌面端如果已经启动了 server，不要再执行第二个 `npm start`。按照 `doctor` 的提示使用桌面端菜单重启服务即可。
 
 > 归档里的 `package.json` 原样保留，所以 `npm run` 仍会列出 `test` / `check` / `lint` 这类命令，但它们引用的测试树与门禁不在归档里、跑不了。需要它们时改用 `git clone`。

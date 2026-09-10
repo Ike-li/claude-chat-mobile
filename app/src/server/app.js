@@ -3693,6 +3693,10 @@ httpServer.listen(port, host, () => {
       console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`
         + `（或删除 ${join(DATA_DIR, 'sessions.json')} 重启显示完整 URL）`);
     }
+    // 只提命令名、不在这里打二维码：横幅每次启动都会跑，无人主动要求也打印凭据不合适
+    // （口径同 scripts/config.js 的 --reveal）。而「知道有这么个命令」本身零暴露面——
+    // 用户此刻正对着一串要在手机上手输的 URL，这是他最需要它的时刻。
+    console.log('  扫码:   node scripts/qr.js  ← 免在手机上手输 token（二维码含凭据，投屏时勿用）');
   }
   console.log('========================================');
   // 启动不再自动 resume 上次会话为 viewing tab——产品决策：重启后永远停在空首页，
