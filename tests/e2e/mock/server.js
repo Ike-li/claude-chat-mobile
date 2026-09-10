@@ -675,6 +675,16 @@ function mainCwdSessions() {
     lastUsedAt: mockListClockBase - 1300000,
     entrypoint: 'sdk-ts'
   });
+  // 合卡的历史侧专用会话：主链一次 Agent spawn + 它的 sidechain 子流 + tool_result。
+  // 【为什么不挂进 Timeline Session】那份 fixture 顶上有一张精确到「第几条出 day/time 行」的
+  // 对照表（message-timestamps.spec.ts 逐条断言），多塞两条消息会把它整片打红。
+  sessions.push({
+    id: 'mock-session-subagent-history',
+    title: 'Subagent History Session',
+    model: 'claude-3-5-sonnet',
+    lastUsedAt: mockListClockBase - 1400000,
+    entrypoint: 'sdk-ts'
+  });
   return sessions;
 }
 
@@ -1213,6 +1223,10 @@ io.on('connection', socket => {
         instanceId: 'inst_timeline',
         title: 'Timeline Session'
       },
+      'mock-session-subagent-history': {
+        instanceId: 'inst_subagent_history',
+        title: 'Subagent History Session'
+      },
       'mock-session-older-migration': {
         instanceId: 'inst_older_migration',
         title: 'Older Migration Session'
@@ -1420,6 +1434,30 @@ io.on('connection', socket => {
         timelineMessages.push({ role: 'user', content: DUP_OPTIMISTIC_CMD, uuid: 'u-dup-echo', timestamp: iso(0, 8, 35) });
       }
       callback({ messages: timelineMessages });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-subagent-history') {
+      // 合卡的 history 侧：形态与 live 的 test:subagent 场景一一对应（同样的 subagent_type 与
+      // outputSummary），让 tool-cards.spec 能把两侧的 DOM 断言写成同一组——刷新前后不一致时必红。
+      const sahTs = n => new Date(Date.now() - n * 60_000).toISOString();
+      callback({
+        messages: [
+          { role: 'user', content: 'Subagent history prompt', uuid: 'u-sah-1', timestamp: sahTs(9) },
+          {
+            kind: 'tool_use', role: 'assistant', toolUseId: 'sah-agent-1', name: 'Agent',
+            inputSummary: '{"description":"Review auth module","subagent_type":"code-reviewer"}',
+            timestamp: sahTs(8)
+          },
+          // sidechain 子流（parentToolUseId）→ 收进聚合卡 body，不落主流
+          {
+            role: 'assistant', content: 'Found 1 CSRF gap in login handler.', uuid: 'a-sah-3',
+            parentToolUseId: 'sah-agent-1', timestamp: sahTs(7)
+          },
+          {
+            kind: 'tool_result', role: 'user', toolUseId: 'sah-agent-1', ok: true,
+            outputSummary: 'Subagent code-reviewer finished review.', timestamp: sahTs(6)
+          },
+          { role: 'assistant', content: 'Subagent history follow-up', uuid: 'a-sah-5', timestamp: sahTs(5) }
+        ]
+      });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [

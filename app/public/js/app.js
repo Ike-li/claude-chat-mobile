@@ -2404,11 +2404,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         };
         card.querySelector('.space-y-1')?.appendChild(wrap);
       }
-      // 子 agent 内部工具 → 嵌进对应可折叠卡 body；主会话工具仍走主流 appendMessage
+      // 子 agent 内部工具 → 嵌进对应可折叠卡 body；主会话工具仍走主流 appendMessage。
+      // 合卡：Agent/Task 的通用工具卡【不入流】——一次 spawn 曾经在屏幕上留两张兄弟卡
+      // （「Agent · 描述」+「🤖 类型 运行中」），现在只留聚合卡那一张，槽位见 adoptSpawnCard。
+      // Workflow 是有意的例外：它不预建聚合卡（预建会留「🤖 workflow 已完成」空壳），
+      // 等首条子流事件才懒建，此刻通用卡已 append 进流、再摘要动已插入的时间分隔行，故不合。
+      const isMergedSpawn = !isSubagentPayload(p) && isSpawnToolName(p.name) && p.name !== 'Workflow';
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         sa.body.appendChild(card);
-      } else {
+      } else if (!isMergedSpawn) {
         appendMessage(card);
       }
       scrollBottom();
@@ -2418,9 +2423,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
       if (!isSubagentPayload(p) && isSpawnToolName(p.name)) {
         agentToolIds.add(p.toolUseId);
-        if (p.name !== 'Workflow') {
+        if (isMergedSpawn) {
           const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
-          ensureSubagentCard(p.toolUseId, subType || null);
+          adoptSpawnCard(ensureSubagentCard(p.toolUseId, subType || null), p);
         }
         const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], '');
         if (desc) showActivityBanner(desc);
@@ -2926,7 +2931,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 工具卡「展开全文」：live 路径 agent 缓存截断前全文；成功后替换 .t-out 并去掉按钮。
   function attachToolFullExpand(card, toolUseId) {
     if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
-    const host = card.querySelector('.space-y-1') || card;
+    // 聚合卡里 .sa-body 也带 space-y-1 且排在结果槽之前，裸 querySelector 会把「展开全文」
+    // 塞进子代理流水中间。给结果槽标了 .t-full-host 的卡优先用它；通用工具卡没有这个 class，
+    // 回落到原来的 .space-y-1，行为一个字节不变。
+    const host = card.querySelector('.t-full-host') || card.querySelector('.space-y-1') || card;
     const btn = el(`<button type="button" class="text-info underline text-[11px]" data-testid="tool-expand-full">${t('展开全文')}</button>`);
     const inst = viewingInstanceId;
     btn.onclick = () => {
@@ -3026,11 +3034,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let c = subagentCards.get(parentId);
     if (!c) {
       // 默认不设 open —— 收起态；data-testid 供 visual E2E 断言
+      // 【槽位必须排在 sa-body 之前，别按"先过程后结论"调回去】tool_result 是
+      // card.querySelector('.t-out') 取槽的，而 querySelector 是文档序深度优先——
+      // 槽位排在 sa-body 之后时，它会先命中【嵌套子工具卡】的同名 .t-out，
+      // 于是子代理的最终报告被写进内层某张工具卡里，聚合卡自己的结果槽永远是空的。
+      // 顺序也确实更好读：问了什么（t-in）→ 结论（t-out）→ 想深究再展开过程（sa-body）。
+      // t-status / t-in / t-out 三个 class 与通用工具卡同名【是有意的】——合卡后 tool_result 靠
+      // toolCards.get(toolUseId) 找卡再 querySelector 这三个，同名即可零改动复用那条路径。
       const wrap = el(`
         <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card">
           <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
-            <span class="sa-title text-ink font-medium"></span>
+            <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium"></span>
           </summary>
+          <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
+          <div class="t-full-host px-3 pb-1 space-y-1">
+            <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
+          </div>
           <div class="sa-body px-3 pb-2 pl-4 border-l-2 border-accent/40 ml-3 space-y-1"></div>
         </details>`);
       wrap.dataset.parentId = parentId;
@@ -3055,6 +3074,26 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       c.titleEl.textContent = formatSubagentCardTitle({ subagentType: c.type, running: c.running });
     }
     return c;
+  }
+
+  // 合卡：把 spawn 工具（Agent/Task）那张通用工具卡的职责接进聚合卡。
+  // 【关键是最后一行】把聚合卡注册进 toolCards —— tool_result 的状态图标、结果正文、
+  // 截断「展开全文」三条路径全靠 toolCards.get(toolUseId) 取卡，接过来之后那三条一个字节都不用改。
+  // 不接的话，合卡就是拿「丢掉子代理最终报告」换「少一张卡」。
+  function adoptSpawnCard(sa, p) {
+    const wrap = sa.el;
+    wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
+    setStatusIcon(wrap.querySelector('.t-status'), 'pending');
+    const inPre = wrap.querySelector('.t-in');
+    const inCode = inPre?.querySelector('code');
+    // 空对象输入展开也只有「{}」噪音 → 整块藏掉（同通用卡，CLI 对空输入零渲染）
+    if (inCode && String(p.inputSummary || '').trim() && String(p.inputSummary || '').trim() !== '{}') {
+      inCode.textContent = formatToolSummary(p.inputSummary || '');
+      inPre.classList.remove('hidden');
+      try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
+    }
+    toolCards.set(p.toolUseId, wrap);
+    return sa;
   }
 
   function markSubagentCardDone(parentId) {
@@ -7052,11 +7091,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const ensureHistSub = (parentId, subagentType) => {
       let c = histSubCards.get(parentId);
       if (c) return c;
+      // 槽位与 live 的 ensureSubagentCard 逐项同构（合卡后 history 的 tool_result 分支同样靠
+      // .t-status / .t-out / dataset.toolName 落结果）——两边模板漂了就会出现「刷新后结论不见」。
       const wrap = el(`
         <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card" data-history="1">
           <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
-            <span class="sa-title text-ink font-medium"></span>
+            <span class="t-status status-icon shrink-0"></span><span class="sa-title text-ink font-medium"></span>
           </summary>
+          <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
+          <div class="t-full-host px-3 pb-1 space-y-1">
+            <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
+          </div>
           <div class="sa-body px-3 pb-2 pl-4 border-l-2 border-accent/40 ml-3 space-y-1"></div>
         </details>`);
       wrap.dataset.parentId = parentId;
@@ -7123,12 +7168,29 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           }
         }
         if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
-        // 主链 Agent/Task：预建折叠卡（与 live 一致）；type 同 live 路径从 inputSummary 提取
-        if (!msg.parentToolUseId && !msg.isSidechain && isSpawnToolName(msg.name) && msg.toolUseId) {
+        // 主链 Agent/Task：预建折叠卡 + 合卡（口径与 live 的 isMergedSpawn 逐项相同，
+        // 含 Workflow 那条例外）。两边不同口径的话，刷新前后卡的张数会对不上。
+        const histSpawn = !msg.parentToolUseId && !msg.isSidechain && isSpawnToolName(msg.name) && msg.toolUseId;
+        const histMergedSpawn = histSpawn && msg.name !== 'Workflow';
+        if (histSpawn) {
           const subType = extractInput(msg.inputSummary, ['subagent_type', 'subagentType'], '');
-          ensureHistSub(msg.toolUseId, subType || null);
+          const sa = ensureHistSub(msg.toolUseId, subType || null);
+          if (histMergedSpawn) {
+            // 同 live 的 adoptSpawnCard：接管状态/输入/结果三槽 + 改写 histToolCards 指向，
+            // 让本文件下方 tool_result 分支（setStatusIcon / .t-out / dataset.toolName）零改动生效。
+            sa.el.dataset.toolName = msg.name || '';
+            setStatusIcon(sa.el.querySelector('.t-status'), 'pending');
+            const histInPre = sa.el.querySelector('.t-in');
+            const histInCode = histInPre?.querySelector('code');
+            if (histInCode && String(msg.inputSummary || '').trim() && String(msg.inputSummary || '').trim() !== '{}') {
+              histInCode.textContent = formatToolSummary(msg.inputSummary || '');
+              histInPre.classList.remove('hidden');
+              codeBlocks.push(histInCode); // history 走空闲批量高亮，不当场 hljs（同本函数其它卡）
+            }
+            histToolCards.set(msg.toolUseId, sa.el);
+          }
         }
-        appendNode(card, msg);
+        if (!histMergedSpawn) appendNode(card, msg);
         return;
       }
       if (msg?.kind === 'tool_result') {
