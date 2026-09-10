@@ -424,6 +424,29 @@ and every action on one screen.
 Checking 「开机自启（菜单栏）」 (Start at login) only brings the menu-bar icon back at login (via a LaunchAgent).
 Headless keeps using `npm start` in a terminal. Do not let both occupy port 3000.
 
+### When the desktop app misbehaves, the terminal is the way out
+
+The desktop app is a GUI process, and it has a class of failures the command line structurally cannot
+hit — a window sinking behind another one so you cannot click it, the notch squeezing the menu bar icon
+out, a GUI process inheriting a different `PATH` than your terminal. What they share is that **the
+server keeps running fine; it is only that one screen that cannot reach it.**
+
+So when a menu item "does nothing", check the service itself from a terminal first. Neither of these
+goes through the app:
+
+```bash
+npm run service:status     # real run state of each unit (the menu bar reads this too)
+node scripts/doctor.js     # startup self-check
+```
+
+If the service is healthy, the problem is in the app layer: **「重启应用」 (Relaunch)** in the menu
+(relaunch without rebuilding) usually clears it; if the icon is gone entirely, see
+[the section below](#when-the-notch-hides-the-menu-bar-icon).
+
+**The desktop app holds no exclusive capability** — it drives the same CLIs under `scripts/`
+(`service.js` / `doctor.js` / `config.js`), so you can always bypass it and run them directly instead
+of waiting for the app to recover.
+
 ### Why there is no prebuilt app to download
 
 An app you compile yourself carries **no quarantine attribute** and opens on a double-click. An app
