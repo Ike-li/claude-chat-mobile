@@ -34,6 +34,11 @@ export const EN_DICT = Object.freeze({
   '或启动日志里。': 'on the server, or in the startup log.',
   '不知道令牌？查看帮助': "Don't know the token? Get help",
   '会话已过期': 'Session expired',
+  '回顾': 'Recap',
+  '本会话的自动调用': 'Automatic calls this session',
+  '费用已计入会话总成本，不是额外的一笔': 'Already included in the session cost above — not a separate charge',
+  '下一步建议 {n} 次': 'Next-step suggestions ×{n}',
+  '会话摘要 {n} 次': 'Session recaps ×{n}',
   '登录态已失效，请重新通过验证后继续。': 'Your login is no longer valid. Re-authenticate to continue.',
   '重新登录': 'Log in again',
 

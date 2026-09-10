@@ -79,3 +79,22 @@ export function resolveSlashCommandsForCwd(cache, cwd, lastInit = null) {
 export function isCwdDefaultModel({ resumeId, pinnedModel, reportedModel } = {}) {
   return resumeId == null && pinnedModel === undefined && !!reportedModel;
 }
+
+// 模型清单的稳定签名：判断某 cwd 的清单是否变了——那是「该区 CLI 配置已变」（换网关、改模型别名）
+// 唯一拿得到的可观测代理信号。scout 只走 supportedModels() 这条控制请求通道，拿不到 init
+// （见 app.js openScoutInstance 的 onSessionId 注释），所以配置变更没有别的地方能被察觉。
+// 只取模型标识、排序后拼接：按【集合】而非顺序比较——SDK 返回顺序不保证稳定，顺序抖动不该被
+// 当成配置变更（那会让 defaultModelByCwd 被反复无意义地作废）。
+// 兼容三种元素形态（mock 与不同 SDK 版本都出现过）：裸字符串、{value}、{displayName}。
+// 空/非法 payload → 空串。调用方据此【跳过】比较：拿不到清单是「不知道」，不等于「变了」。
+export function modelListSignature(payload) {
+  const arr = Array.isArray(payload) ? payload
+    : (Array.isArray(payload?.models) ? payload.models : null);
+  if (!arr) return '';
+  const names = [];
+  for (const m of arr) {
+    const name = typeof m === 'string' ? m : (m?.value ?? m?.displayName ?? '');
+    if (name) names.push(String(name));
+  }
+  return names.length ? names.sort().join('\n') : '';
+}

@@ -316,11 +316,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 28 种一致', () => {
-  assert.equal(AGENT_EVENT_TYPES.length, 28);
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 30 种一致', () => {
+  assert.equal(AGENT_EVENT_TYPES.length, 30);
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。
   assert.ok(AGENT_EVENT_TYPES.includes('trusted_devices'));
+  // 两个旁路提问（2026-09-10）：回来时的会话摘要 / 每轮收尾后的下一步建议。二者都不经 SDK 消息流，
+  // 由 agent 主动 emit（askSideQuestion 的响应），故契约表是它们进入前端视野的唯一入口。
+  assert.ok(AGENT_EVENT_TYPES.includes('session_recap'));
+  assert.ok(AGENT_EVENT_TYPES.includes('prompt_suggestion'));
 });
 
 // ── 2026-08-02 补的两个反向闸 ───────────────────────────────────────────────

@@ -44,7 +44,10 @@ function createDefaultInstances() {
     state: 'idle',
     permissionMode: 'default',
     effort: null,
-    model: 'claude-3-5-sonnet'
+    model: 'claude-3-5-sonnet',
+    // 与真 server 的 instancesPayload 同形。给非零值：全 0 时前端整段隐藏，
+    // 那样这个字段有没有传都看不出差别，E2E 也就守不住它。
+    sideQuestionCalls: { suggestion: 3, recap: 1 }
   }];
 }
 
@@ -1753,9 +1756,29 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
-  // client:presence（PWA 前台/后台上报，与真 server 对齐）：无 ack，mock 无推送判定逻辑可影响，
-  // no-op 接收即可（仅需满足入向事件契约扫描，见 tests/gates/agent-event-contract.js）。
-  socket.on('client:presence', () => {});
+  // client:presence（PWA 前台/后台上报，与真 server 对齐）。真 server 在「回来」这一拍算离开时长、
+  // 够久就用一次旁路提问生成会话摘要（见 src/server/app.js maybeRecapOnReturn）。mock 没有模型，
+  // 改为：只要观察到 hidden true→false 的跳变就发一条固定文案的 session_recap。
+  // **这里必须发**：出向契约要求 real ⊆ mock，真 server 发得出而 mock 从不产出的 type 会让
+  // E2E 永远覆盖不到它（agent-event-contract.js 的 real_type_not_mock）。
+  let mockWasHidden = false;
+  socket.on('client:presence', (p) => {
+    const hidden = !!p?.hidden;
+    if (hidden) { mockWasHidden = true; return; }
+    if (!mockWasHidden) return;
+    mockWasHidden = false;
+    const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    io.emit('agent:event', {
+      seq: 0,
+      epoch: 'server',
+      sessionId: inst?.sessionId || null,
+      instanceId: viewingInstanceId,
+      cwd: inst?.cwd,
+      ts: Date.now(),
+      type: 'session_recap',
+      payload: { text: '正在给 agent.js 补测试，上一轮已跑通，下一步是补边界用例。', awayMs: 6 * 60_000 },
+    });
+  });
 
   // 跨设备已读位点（与真 server 对齐）：read:sync 归并客户端本地表并回权威态，read:mark 收单条增量。
   // 客户端上报的 baselineTs 一律忽略——全局单一基线正是「换设备整屏复亮」的根因修复。
@@ -2172,6 +2195,23 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_cmds_changed', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // 下一步建议：真 server 在 result 结算【之后】用一次旁路提问生成（src/agent/agent.js maybeSuggest），
+      // 所以这里的顺序也是先 result 再 prompt_suggestion——建议条的显示时机依赖"这一轮已经收尾"。
+      // 出向契约要求 real ⊆ mock：真 server 发得出而 mock 从不产出的 type，E2E 永远覆盖不到。
+      commands: ['test:prompt-suggestion'],
+      run: async ({ activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '给 agent.js 补几个边界用例' },
         });
       },
     },

@@ -17,7 +17,9 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode, normalizeEffortUiLevel } from './cli-settings-defaults.js';
 import { scanSubagents } from '../sessions/history.js';
 import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.js';
+import * as metrics from '../ops/metrics.js';
 import { uploadsRoot, ensureUploadsRoot } from '../files/uploads.js';
+import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_PROMPT } from './side-question.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -507,6 +509,16 @@ export class AgentSession {
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
     this.totalApiDurationMs = 0;  // += result.duration_api_ms
+    // 旁路提问（下一步建议 / 回来时的摘要）的调用次数。**只记次数不记金额**：这两条走
+    // askSideQuestion，其花费由 CLI 无条件计入 costLedger、随下一条 result 的 total_cost_usd 一起过来
+    // ——已经在上面的 totalCostUsd 里了，再单独记一份金额只会出现两个对不上的数字。
+    // 而次数是 CCM 唯一能自己掌握、且**不依赖下一轮 result** 的信号：用户跑完一轮就离开、
+    // 此后再没有 result 的话，那笔花费在本产品侧永远不会显形，只有次数还在。
+    this.sideQuestionCalls = { suggestion: 0, recap: 0 };
+    // 已结算的轮数（result 到达即 +1）。pendingTurns 是【在途】数、会回落到 0，答不了
+    // 「这个会话到底聊过几轮」——而那正是两个旁路提问的准入判据（太早的会话没什么可猜/可摘要的）。
+    this.completedTurns = 0;
+    this._lastRecapAt = 0;        // 上次给出摘要的时刻，供最小间隔判据；0 = 本会话还没给过
     this.stderrTail = '';         // CLI stderr 尾部（有界，见 _recordStderr）：resume 失败时唯一的原因来源
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
     // B2：已完成任务（含 outputFile）。【必须与 bgTasks 分开】——hasBgTasks() 喂 checkIdle 豁免
@@ -590,6 +602,61 @@ export class AgentSession {
         this.emit('models', { models: Array.isArray(ms) ? ms : [] });
       })
       ?.catch?.(() => {});
+  }
+
+  // 旁路提问：带完整会话上下文问一句，**不写 transcript**（2026-09-10 实测：会话 jsonl 里查无痕迹）。
+  // kind 只用于计次，不参与请求内容。返回归一后的字符串或 null（空回复、方法缺失、抛错都归 null）。
+  // ⚠️ askSideQuestion 在 SDK 的 .d.ts 里【没有类型声明】——运行时存在、类型未公开。可选链是必须的：
+  // 升级 SDK 后它一旦消失，这里要静默降级成"没有建议"，绝不能让一个锦上添花的功能把会话搞崩。
+  async askSide(kind, prompt) {
+    const fn = this.q?.askSideQuestion;
+    if (typeof fn !== 'function') return null;
+    try {
+      const r = await fn.call(this.q, prompt, {});
+      if (this.disposed) return null; // 期间实例已销毁：答案没有归属，丢弃
+      // 计次放在拿到响应之后：抛错的那次没有真实往返，计进去会让"次数×单价"的估算偏高。
+      if (kind in this.sideQuestionCalls) {
+        this.sideQuestionCalls[kind] += 1;
+        // 也进 /metrics（已鉴权）：per-会话计数随实例消失，长期「这两个功能到底触发了多少次」
+        // 只有进程级计数器答得了。金额仍不单独记——见上面 sideQuestionCalls 的说明。
+        metrics.inc(`side_question_${kind}`);
+      }
+      return normalizeSideAnswer(r?.response);
+    } catch {
+      return null; // 限速/中止/未公开 API 变形——一律当作"这次没有建议"
+    }
+  }
+
+  // 「离开又回来」时的会话摘要。由 server 的 presence 上报驱动（那里才知道离开了多久）。
+  // 返回是否真的发了事件，供调用方决定要不要记日志——不抛，任何一步失败都当"这次没有摘要"。
+  // isBusy 用 pendingTurns 而非粗粒度 busy：挂着后台任务但没有在途轮时，用户回来看到的是静止画面，
+  // 摘要仍然有用；真正该让位的只有"屏幕上正在滚动"这一种。
+  async maybeRecap({ awayMs = 0, now = Date.now(), enabled = true } = {}) {
+    if (!shouldRecap({
+      awayMs, assistantTurns: this.completedTurns, lastRecapAt: this._lastRecapAt,
+      now, isBusy: this.pendingTurns > 0, enabled,
+    })) return false;
+    // 先占时刻再问：askSide 有网络往返，期间用户可能又切走切回触发第二次。
+    // 占位放在前面 ⇒ 最坏情况是"这次问失败了、还得再等 30 分钟"，比并发问出两条摘要好。
+    this._lastRecapAt = now;
+    const text = await this.askSide('recap', RECAP_PROMPT);
+    if (!text) return false;
+    this.emit('session_recap', { text, awayMs });
+    return true;
+  }
+
+  // 每轮收尾后预测「用户接下来可能想发的一句」。触发点在 result 结算之后，所以频率是每轮一次——
+  // 这两个旁路提问里花费较多的那个，对应 CCM_PROMPT_SUGGESTION 开关。
+  // 出错/被中断的那一轮不猜：那时用户要判断的是刚才发生了什么，给"下一步"是打扰。
+  async maybeSuggest({ isError = false, interrupted = false, enabled = true } = {}) {
+    if (!shouldSuggest({ assistantTurns: this.completedTurns, isError, interrupted, enabled })) return false;
+    const text = await this.askSide('suggestion', SUGGEST_PROMPT);
+    if (!text || this.disposed) return false;
+    // 期间用户已经开始新一轮 ⇒ 这条建议是对上一轮说的，已经过时。宁可不发：
+    // 迟到的建议比没有建议更糟，它会在用户已经打定主意之后再来干扰一次。
+    if (this.pendingTurns > 0) return false;
+    this.emit('prompt_suggestion', { text });
+    return true;
   }
 
   // CLI stderr 收集（有界，尾部保留）。只服务于 resume 失败的原因识别，不进事件流、不落日志——
@@ -2997,6 +3064,7 @@ export class AgentSession {
         // 在途前台工具随本轮收尾清账：工具不可能跨轮存活。中断/审批取消时 tool_result 可能永不回来，
         // 只靠上面的 delete 会留下残条目，让下一轮被无依据地豁免看护。
         this.pendingToolUses.clear();
+        this.completedTurns += 1;
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;
@@ -3022,6 +3090,14 @@ export class AgentSession {
           interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
+        // 下一步建议：**必须在 emit('result') 之后**且 fire-and-forget——它有一次网络往返，
+        // 挂在结算路径上会把每一轮的收尾都拖慢一整个 RTT（前端的 busy→idle 也跟着晚）。
+        // 开关字面量与 env-schema 的 TOGGLE_ZERO 同源（off='0'）；写成别的值＝用户点了关却照样计费。
+        void this.maybeSuggest({
+          isError: !!msg.is_error,
+          interrupted: wasInterrupted,
+          enabled: process.env.CCM_PROMPT_SUGGESTION !== '0',
+        }).catch(() => {});
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
         const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;

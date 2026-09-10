@@ -150,11 +150,11 @@ const PENDING_CLAIMS = [
     // 2026-09-09 新增 trusted_devices（已受信任设备列表的下发面）后，图上那句「共 27 种 type」
     // 就过期了。从 CLAIMS 挪到这里而不是把 expect 改成 28：CLAIMS 的语义是「图说 X 且代码是 X」，
     // 图现在说的还是 27，改 expect 会让那条断言变成在替图撒谎。
-    // 重出图之后把这条挪回 CLAIMS（shown 改成 '共 28 种 type'）。
+    // 重出图之后把这条挪回 CLAIMS（shown 改成 '共 30 种 type'）。
     diagram: '00 / 08 / 11',
-    todo: '「共 27 种 type」要改成 28（新增 trusted_devices）',
+    todo: '「共 27 种 type」要改成 30（新增 trusted_devices、session_recap、prompt_suggestion）',
     actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
-    expect: 28,
+    expect: 30,
   },
   {
     diagram: '06',

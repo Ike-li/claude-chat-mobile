@@ -2690,6 +2690,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
+    // 每轮收尾后模型预测的下一句。空文本不显示——模型判断"猜不准"时按提示词要求返回空。
+    prompt_suggestion(p) {
+      const text = typeof p?.text === 'string' ? p.text.trim() : '';
+      if (!text) return;
+      showPromptSuggestion(text);
+    },
+    // 「离开又回来」时模型写的一句摘要（server 侧 presence 触发，见 app.js maybeRecapOnReturn）。
+    // 走 addBar 而非新造气泡：它不是对话的一部分，是给屏幕前这个人的提示条，与 interrupted/
+    // queue_dropped 那些系统行同一视觉层级。空文本不渲染——模型判断"没什么可摘要的"时会返回空。
+    session_recap(p) {
+      const text = typeof p?.text === 'string' ? p.text.trim() : '';
+      if (!text) return;
+      addBar(`${t('回顾')} · ${text}`, 'text-ink-faint');
+    },
     system(p) {
       addBar(p.message, systemBarClass(p));
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
@@ -3784,6 +3798,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
+    if (val) hidePromptSuggestion(); // 用户已经在写自己的了，建议就该让位
     if (val.startsWith('/')) {
       hideAtMentionList(); // 与 @ 互斥
       const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
@@ -3908,6 +3923,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     hint.classList.toggle('hidden', !show);
   }
+
+  // 下一步建议条：每轮收尾后 server 推来一条（prompt_suggestion），点一下把整句填进输入框。
+  // **只填不发**——建议是猜的，用户几乎总要改一两个词；自动发送会把"猜错"变成"替我做错事"。
+  // 填完聚焦并派发 input 事件，让 autosize / 发送钮态 / slash 提示这些既有联动照常跑。
+  function hidePromptSuggestion() {
+    $('promptSuggestion')?.classList.add('hidden');
+  }
+  function showPromptSuggestion(text) {
+    const box = $('promptSuggestion'), btn = $('promptSuggestionBtn');
+    if (!box || !btn) return;
+    // 镜像只读态下输入框根本不能打字，给了也用不了；有草稿时也不打扰（用户已经在写自己的了）。
+    if (mirrorReadonlySid || inputEl?.value.trim()) return;
+    btn.textContent = text;
+    btn.title = text; // 长句被 truncate 截掉时，长按/悬停仍能看全
+    box.classList.remove('hidden');
+  }
+  $('promptSuggestionBtn')?.addEventListener('click', () => {
+    const text = $('promptSuggestionBtn')?.textContent || '';
+    hidePromptSuggestion();
+    if (!text || !inputEl) return;
+    haptic('tap');
+    inputEl.value = text;
+    inputEl.focus();
+    inputEl.dispatchEvent(new Event('input'));
+  });
 
   function autosize() {
     inputEl.style.height = 'auto';
@@ -4734,6 +4774,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
   function bindView(entry, id, opts = {}) {
+    hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
     // 无条件先丢弃上一个实例的回放缓冲——同 hideUnreadPill：含下方提前 return 的空首页/compose/
     // pendingFirstSend 分支也要清，否则遗留缓冲会静默吞掉那个旧实例后续的实时事件（缓冲一直挂着、
@@ -5481,10 +5522,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 原独立齿轮与三 chip 打开同一个 sheet、纯重复，已收敛为一条摘要。DEFAULT_KEYS.trigger 的
   // btnSettings 不再注入 dom，controller bind 对缺失 trigger 安全跳过。syncPrefs=false——
   // 本机偏好那批 DOM 已迁到通用设置，两个控制器都去绑会互相覆盖 onchange（后建的赢，静默难查）。
+  // 自动调用计数：两个旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。
+  // 数据搭 instances 广播的便车（见 server instancesPayload 的说明）。一次都没有就整段隐藏——
+  // 空计数占位既没信息量，又让人以为功能坏了。
+  // 占位符用 {n} 而非单个字母：英文译文里 'Next-step suggestions ×N' 的首字母 N 会被
+  // replace('N', …) 抢先命中，这类误伤在中文界面下完全看不出来。
+  function renderSideQuestionStats() {
+    const block = $('sideQuestionBlock'), line = $('sideQuestionCounts');
+    if (!block || !line) return;
+    const calls = instancesList.find(x => x.instanceId === viewingInstanceId)?.sideQuestionCalls;
+    const suggestion = Number(calls?.suggestion) || 0, recap = Number(calls?.recap) || 0;
+    if (!suggestion && !recap) { block.classList.add('hidden'); return; }
+    const parts = [];
+    if (suggestion) parts.push(t('下一步建议 {n} 次').replace('{n}', String(suggestion)));
+    if (recap) parts.push(t('会话摘要 {n} 次').replace('{n}', String(recap)));
+    line.textContent = parts.join(' · ');
+    block.classList.remove('hidden');
+  }
+
   // 面板内三块始终展开磁贴（方案 A），onOpen 只需回填摘要 title。
   const settings = createSettingsController(appContext, {
     alerts, haptic, syncPrefs: false,
-    onOpen: () => { syncDefaultsPillTitle(); },
+    onOpen: () => { syncDefaultsPillTitle(); renderSideQuestionStats(); },
   });
   // 侧栏与 sheet 同为 z-40：不先收侧栏，弹出的面板会和左侧抽屉叠在一起。
   // 必须抢在下面 createSettingsController 的 bind() 之前注册——listener 按注册顺序触发，

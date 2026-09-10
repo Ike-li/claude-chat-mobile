@@ -7,6 +7,7 @@ import {
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
+  modelListSignature,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
 } from '../../app/src/agent/models-cache.js';
@@ -93,7 +94,9 @@ test.describe('models-cache：按 cwd 归键、不跨工作区泄漏', () => {
 // 才等于「不带 --model 时 CLI 自选的默认」。resume-no-record 虽未 pin，但 init.model 是 CLI 从 jsonl 恢复的
 // 会话模型（可能被终端 /model 改过）≠ cwd 默认 → 必须拒，否则污染缓存。
 test.describe('isCwdDefaultModel：只采纳「fresh + 未 pin」启动的模型为 cwd 默认', () => {
-  test('scout（resumeId=null, pinned=undefined, model 有值）→ true', () => {
+  // 注：这条判据的现实入口只剩「fresh 新会话首 init」。历史上这里写的是 scout，但 scout 从不发消息、
+  // CLI 因此不输出 init，它的 onSessionId 根本不触发（2026-09-10 实测，见 app.js openScoutInstance）。
+  test('fresh 启动（resumeId=null, pinned=undefined, model 有值）→ true', () => {
     assert.equal(isCwdDefaultModel({ resumeId: null, pinnedModel: undefined, reportedModel: 'mimo-v2.5-pro[1m]' }), true);
   });
   test('fresh 新会话首 init（同上形状）→ true', () => {
@@ -152,5 +155,51 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
     assert.equal(resolveSlashCommandsForCwd(null, '/ws/a', null), null);
     assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), '', { cwd: '/ws/a', slashCommands: ['x'] }), null);
     assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), null, null), null);
+  });
+});
+
+// modelListSignature：清单是否变化 = 「该 cwd 的 CLI 配置是否变了」的代理信号。
+// 它是 defaultModelByCwd 唯一的失效判据（scout 拿不到 init，见 app.js openScoutInstance 注释），
+// 判错的后果不对称：漏判 → 新会话页一直预显一个当前开不出来的模型名；误判 → 只是少显示一行提示。
+test.describe('modelListSignature：按集合比较，供 defaultModelByCwd 失效判定', () => {
+  test('同一批模型、顺序不同 → 签名相同（顺序抖动不是配置变更）', () => {
+    const a = { models: [{ value: 'opus' }, { value: 'sonnet' }, { value: 'default' }] };
+    const b = { models: [{ value: 'default' }, { value: 'opus' }, { value: 'sonnet' }] };
+    assert.equal(modelListSignature(a), modelListSignature(b));
+    assert.notEqual(modelListSignature(a), ''); // 防「两边都空串」式的假相等
+  });
+
+  test('模型集合不同 → 签名不同（换网关后清单必变，这是失效的触发点）', () => {
+    const official = { models: [{ value: 'default' }, { value: 'opus[1m]' }, { value: 'sonnet' }] };
+    const gateway = { models: [{ value: 'default' }, { value: 'gemini-3.8-flash' }] };
+    assert.notEqual(modelListSignature(official), modelListSignature(gateway));
+  });
+
+  test('少一个模型也算变（子集不等于相同）', () => {
+    const full = { models: [{ value: 'a' }, { value: 'b' }, { value: 'c' }] };
+    const less = { models: [{ value: 'a' }, { value: 'b' }] };
+    assert.notEqual(modelListSignature(full), modelListSignature(less));
+  });
+
+  test('三种元素形态归一：裸字符串 / {value} / {displayName}', () => {
+    assert.equal(modelListSignature({ models: ['opus'] }), modelListSignature({ models: [{ value: 'opus' }] }));
+    // 无 value 时才回落 displayName；有 value 则以 value 为准（displayName 是给人看的，会随版本改文案）
+    assert.equal(modelListSignature({ models: [{ displayName: 'opus' }] }), modelListSignature({ models: ['opus'] }));
+    assert.equal(
+      modelListSignature({ models: [{ value: 'opus', displayName: 'Claude Opus 4.8' }] }),
+      modelListSignature({ models: ['opus'] }),
+    );
+  });
+
+  test('裸数组形态也接受（payload 可能就是数组本身）', () => {
+    assert.equal(modelListSignature([{ value: 'opus' }]), modelListSignature({ models: [{ value: 'opus' }] }));
+  });
+
+  test('空 / 非法 payload → 空串：调用方据此【跳过】比较——「不知道」不等于「变了」', () => {
+    for (const bad of [null, undefined, {}, { models: null }, { models: [] }, [], 'opus', 42]) {
+      assert.equal(modelListSignature(bad), '', `期望空串: ${JSON.stringify(bad)}`);
+    }
+    // 元素全是空壳时同样落空串，不能拼出一串分隔符冒充「有内容的签名」
+    assert.equal(modelListSignature({ models: [{}, { value: '' }, null] }), '');
   });
 });

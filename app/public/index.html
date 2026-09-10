@@ -494,6 +494,15 @@
       <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
       <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
 
+      <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
+           不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
+           放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
+           有内容才显示；打字 / 发送 / 切会话即隐藏（见 app.js hidePromptSuggestion 的三个调用点）。 -->
+      <div id="promptSuggestion" class="hidden px-1 pb-1.5" data-testid="prompt-suggestion">
+        <button type="button" id="promptSuggestionBtn"
+          class="w-full text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk truncate"></button>
+      </div>
+
       <!-- Unified Premium Input Pill Container
            busy 态：发送钮恒为停止钮（草稿保留在输入框，发送闸由 textarea placeholder 说明——
            同一句提示只出现一处，别再另起一行小字）；
@@ -717,6 +726,19 @@
         </div>
         <!-- 懒创建期就地说明，替代原先「只藏行、留标题」的孤儿形态（文案由 sessionIdBlockView 给） -->
         <div id="settingsSessionHint" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+      </div>
+
+      <!-- 5. 自动调用计数（会话级）：下一步建议 / 回来时的摘要都会真实计费，「要花钱」这件事必须
+           在面板上看得见——否则它只活在代码的一行判据里，面板、config CLI、doctor 三处都发现不了
+           （同 CCM_AGENT_PROGRESS_SUMMARIES 在 env-schema 里的那段说明）。
+           **只报次数不报金额**：那笔钱已计入会话总成本，再列一份金额会变成两个对不上的数字。
+           一次都没触发过时整段隐藏，不给空计数占位。 -->
+      <div id="sideQuestionBlock" class="hidden pt-0.5" data-testid="side-question-stats">
+        <div class="text-xs font-semibold text-ink-soft mb-1.5">🔁 <span>本会话的自动调用</span></div>
+        <div class="p-2 rounded-xl border border-line bg-surface text-xs text-ink">
+          <div id="sideQuestionCounts" class="text-ink-soft"></div>
+          <div class="text-[10px] text-ink-faint mt-1">费用已计入会话总成本，不是额外的一笔</div>
+        </div>
       </div>
     </div>
   </div>

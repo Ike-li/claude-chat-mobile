@@ -54,6 +54,7 @@ import {
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
+  modelListSignature,
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
@@ -501,6 +502,12 @@ const getMetricsPayload = () => {
       hookEventsConsumed: counters.hook_events_consumed ?? 0,
       hookEventsIgnored: counters.hook_events_ignored ?? 0,
       hookPushes: counters.hook_pushes ?? 0,
+      // 两个旁路提问的触发次数（会花钱，所以要能长期巡检）。会话设置面板那份是 per-实例的、
+      // 随实例消失；这里是进程级累计，「这两个功能到底触发了多少次」只有这里答得了。
+      // ⚠️ 本映射表是【逐项显式】的：metrics.inc() 记下的计数器不在这里列一行就永远不会出现在
+      // /metrics 输出里——记了等于没记，且没有任何报错。加计数器时必须同时加这一行。
+      sideQuestionSuggestions: counters.side_question_suggestion ?? 0,
+      sideQuestionRecaps: counters.side_question_recap ?? 0,
     },
     state: metrics.classifyProbeState({ failed, awaiting, notifyFailed, mobileClients }),
     states: { failed, awaiting, notifyFailed, mobileClients },
@@ -1071,6 +1078,11 @@ function instancesPayload() {
       // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
+      // 旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。**只有次数没有金额**：
+      // 那笔钱由 CLI 计入会话总成本、随 result 一起来，已经在成本行里了；单独再报一份金额
+      // 只会出现两个对不上的数字。搭 instances 的便车而不新开一条入向事件——两个整数，
+      // 而新事件要动入向白名单 + mock + 契约门禁三处，成本不成比例。
+      sideQuestionCalls: { ...a.sideQuestionCalls },
       unreadCount: unreadCounts.get(id) || 0, // 未读角标活计数（预留会话列表徽标用；聊天页内胶囊走 sync:since ack 的 unreadOnEntry 冻结快照）
     });
   }
@@ -1979,7 +1991,14 @@ function openScoutInstance(cwd) {
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
+        // 清单与旧值不同 ⇒ 本区 CLI 配置已变（换网关 / 改模型别名）。此时 defaultModelByCwd 里那条
+        // 是【旧配置下】记的，必须作废：它没有别的失效路径（scout 拿不到 init，见下面 onSessionId；
+        // 普通实例只有 fresh 新会话才写），留着会让新会话页预显一个当前根本开不出来的模型名。
+        // 方向是刻意的：宁可删成空（前端回落显示「默认」）也不显示错的——漏删给的是错误信息，
+        // 误删只是少一行提示。取不到旧签名（首次填缓存）则跳过，"不知道"不等于"变了"。
+        const prevSig = modelListSignature(modelsCache.get(cwd));
         modelsCache.set(cwd, envelope.payload);
+        if (prevSig && prevSig !== modelListSignature(envelope.payload)) defaultModelByCwd.delete(cwd);
         saveInitCache();
         pushModelsForCwd(cwd);
         cleanup();
@@ -1993,9 +2012,14 @@ function openScoutInstance(cwd) {
       // 仅记日志并暂存 sid——CLI 的 init 会在 ~/.claude/projects/<projectDir>/ 下创建 <sid>.jsonl，
       // dispose 后需删掉此残留文件以防幽灵会话出现在 listSessions 中。
       instance._scoutSid = sid;
-      // scout 恒 fresh（resumeId=null、未 pin model）→ 其 init.model 即 cwd CLI 默认，权威缓存之。
-      // 若当前正查看本 cwd（空首页），补一次广播让默认名即时到达前端（不必等下次视图切换）。
-      if (recordCwdDefaultModel(cwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model }) && cwd === viewingCwd) broadcastInstances();
+      // ★ 这里【不】调 recordCwdDefaultModel，也别再加回来。
+      // 曾经这样写过，注释还宣称「scout 恒 fresh → 其 init.model 即 cwd CLI 默认，权威缓存之」——
+      // 那段行为从未发生过。scout 从不发消息，而 CLI 在首条消息前不输出 init（见 agent.js#fetchModels
+      // 的注释），本回调因此实际不会被触发：2026-09-10 实测，起 query 只调 supportedModels()，
+      // 1.4s 拿到清单，此后 45s 内零消息、零 init。
+      // 于是 defaultModelByCwd 只剩「用户亲手开新会话」一条更新路径，而 modelsCache 走的是
+      // supportedModels() 的控制请求通道、不依赖消息流——这就是两个缓存能对同一次配置变更给出
+      // 矛盾答案的物理原因。配置变更后的作废改由上面 models 分支按清单签名处理。
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] scout 获取模型（不留会话入口）: instanceId=${id}, sessionId=${sid}, model=${model || '默认'}, cwd=${cwd}`);
     }
     // 不设 onExit：cleanup 显式调 dispose，consume 循环以 disposed=true 结束并跳过 onExit。
@@ -3537,10 +3561,20 @@ registerSocketConnection(io, socket => {
   // 撤旧推新。
   on(socket, 'client:presence', (p) => {
     const hidden = !!p?.hidden;
-    if (!hidden) { socket.data.hidden = false; return; }
+    if (!hidden) {
+      // 「回来了」——这半边此前只是把标志翻回去就 return。会话摘要挂在这里，因为**只有这一处**
+      // 知道离开了多久：CLI 那边靠终端焦点，本产品靠客户端主动上报的 presence，手机上「放下又拿起」
+      // 只有后者看得见（终端从头到尾没失焦过）。
+      const hiddenAt = socket.data.hiddenAt || 0;
+      socket.data.hidden = false;
+      socket.data.hiddenAt = 0;
+      if (hiddenAt) maybeRecapOnReturn(Date.now() - hiddenAt);
+      return;
+    }
     const sockets = approvedSocketObjects(); // 真实 Socket 对象，mutate 前后复用同一批引用即可反映跳变前后状态
     const hadForeground = hasForegroundApprovedClient(sockets);
     socket.data.hidden = true;
+    socket.data.hiddenAt = Date.now(); // 供回来时算离开时长；只在真正翻成 hidden 的那一拍写
     const hasForeground = hasForegroundApprovedClient(sockets);
     const hasBusyInstance = [...agents.keys()].some(id => instanceState(id) === 'busy');
     if (!shouldNotifyBackgroundRunning({ hadForeground, hasForeground, hasBusyInstance })) return;
@@ -3582,6 +3616,19 @@ registerSocketConnection(io, socket => {
     console.log(`[conn] ${socket.id} 已断开`); // 4c：不动 agent——任务独立于连接存活
   });
 });
+
+// 回到前台时的会话摘要。只针对【当前查看的那个实例】——摘要是给眼前这块屏幕的，给别的会话
+// 生成既没人看又要花钱。准入判据（离开时长 / 轮数 / 最小间隔 / 是否在跑）全在 agent.maybeRecap 里，
+// 这里只负责把"离开了多久"和开关递进去。fire-and-forget：presence 是高频上报，绝不能被一次
+// 网络往返卡住；失败静默——摘要是锦上添花，没有它会话照常。
+// 开关字面量必须与 env-schema 的 TOGGLE_ZERO 一致（off='0'）：写成别的值会让用户点了「关」却照样计费。
+function maybeRecapOnReturn(awayMs) {
+  if (process.env.CCM_SESSION_RECAP === '0') return;
+  const agent = agents.get(viewingInstanceId);
+  if (!agent || agent.disposed) return;
+  void agent.maybeRecap({ awayMs, now: Date.now(), enabled: true })
+    .catch(() => {}); // 已在 agent 内吞过一层，这里兜住判据本身抛出的意外
+}
 
 // 台阶3：单发指定实例当前权限档给该 socket（重放/无实例/拒切拨回；缺省 viewingInstanceId）
 function permModeTo(socket, id = viewingInstanceId) {

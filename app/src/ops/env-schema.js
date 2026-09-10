@@ -286,6 +286,23 @@ export const ENV_SCHEMA = {
       'Model writes a ~30s progress line for idle subagents (small billed cost). Off falls back to tool-name changes.'),
   },
 
+  // 另两个**直接产生模型计费**的开关（同上：默认开，但「要花钱」必须在面板上看得见）。
+  // 二者都走 query.askSideQuestion() 旁路提问，不写 transcript；单次规模是一次 fork + 一两句输出。
+  // **频率差一个数量级**，所以拆成两个开关而不是一个：建议是每轮一次，摘要是每次「回来」最多一次。
+  // 关掉哪个由频率决定，不由功能决定——help 里必须写清频率，否则用户无从判断。
+  CCM_PROMPT_SUGGESTION: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('下一步建议', 'Next-step suggestions'),
+    help: t('每轮结束后由模型预测你可能想发的下一句，点一下填进输入框。每轮一次，是这两项里花费较多的。',
+      'After each turn the model predicts your likely next message; tap to drop it into the composer. Once per turn — the pricier of the two.'),
+  },
+  CCM_SESSION_RECAP: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('回来时的会话摘要', 'Session recap on return'),
+    help: t('离开一段时间后回到会话，由模型写一句「进行到哪了」。每次回来最多一次，频率远低于上一项。',
+      'When you return after being away, the model writes one line on where things stand. At most once per return.'),
+  },
+
   // ── 日志 ────────────────────────────────────────────────────────────
   LOG_INTERACTIONS: {
     group: 'logs', kind: 'toggle', values: TOGGLE_ONE,
