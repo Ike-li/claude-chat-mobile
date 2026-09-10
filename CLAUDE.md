@@ -185,7 +185,10 @@ npm run uninstall -- [--purge] [--dry-run] --yes   # 一键卸载。**只删产�
 
 node scripts/device.js list [--json] | approve <ID> | deny <ID>   # 设备审批的 headless 入口
                                                                   # （另三个入口见 architecture.md）
-node scripts/qr.js [--url <地址>]  # 把连接地址+token 打成终端二维码，免在手机上手输 64 位 token。
+node scripts/qr.js [--public|--url <地址>]  # 把连接地址+token 打成终端二维码，免手输 64 位 token。
                                    # 含凭据、须显式敲（口径同 config.js 的 --reveal），不进启动横幅。
-                                   # 全块渲染需 90 列×45 行：半块只要 23 行但真机实测扫不出来（行距）
+                                   # 全块渲染需 90 列×45 行：半块只要 23 行但真机实测扫不出来（行距）。
+                                   # --public 自动解析 CF Access 域名 / Tailscale；**受 Access 保护的
+                                   # 域名不带 token**（那条路只认 JWT、不回退 token），判据在
+                                   # app/src/shared/public-target.js，--url 也走同一道
 ```

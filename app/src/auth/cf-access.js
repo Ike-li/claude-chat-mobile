@@ -84,12 +84,24 @@ async function fetchRemoteJwks() {
   }
 }
 
+// 「三项 env 齐全」这条启用判据本身。导出给不方便调 initCfAccess 的场合——
+// scripts/qr.js 只想知道「公网二维码该不该带令牌」，不该为这一个布尔值去拉 JWKS、发网络请求。
+// initCfAccess 内部也用它：判据只此一份，否则两处迟早各判出一套结论，
+// 而那种漂移的表现是「二维码扫开进不去」，没有任何报错指向真因。
+export function accessConfigured(env = process.env) {
+  return !!(
+    (env.CF_ACCESS_HOSTNAME || '').trim()
+    && (env.CF_ACCESS_TEAM || '').trim()
+    && (env.CF_ACCESS_AUD || '').trim()
+  );
+}
+
 // 在 server.js dotenv 规整后调用。返回是否启用（三项 env 齐全）。
 export function initCfAccess() {
   hostname = (process.env.CF_ACCESS_HOSTNAME || '').trim().toLowerCase();
-  const team = (process.env.CF_ACCESS_TEAM || '').trim();
   aud = (process.env.CF_ACCESS_AUD || '').trim();
-  enabled = !!(hostname && team && aud);
+  const team = (process.env.CF_ACCESS_TEAM || '').trim();
+  enabled = accessConfigured();
   
   if (!enabled) {
     localJwks = null;

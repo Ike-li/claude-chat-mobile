@@ -55,13 +55,20 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 
 > ⚠️ `~/.cloudflared/<UUID>.json` 与 `cert.pem` 是凭据，**勿提交/泄露**。
 
-隧道地址要在手机上打开时，`--url` 可以省掉手输——Quick Tunnel 那种随机域名（`sample-mouse-diving-recognized.trycloudflare.com`）尤其值得：
+隧道地址要在手机上打开时，二维码可以省掉手输：
 
 ```bash
-node scripts/qr.js --url https://<your-domain>
+node scripts/qr.js --public              # 自动解析：CF Access 域名 / 已登录的 Tailscale
+node scripts/qr.js --url https://<地址>  # Quick Tunnel 的随机域名、自建反代等手动指定
 ```
 
-token 走 URL fragment（`/#token=`），**不进 HTTP 请求行**，所以不会落进 Cloudflare 或任何中间层的访问日志。二维码本身含完整凭据，投屏或有旁人时不要打印。
+`--public` 只认得两种地址：配置里的 `CF_ACCESS_HOSTNAME`，以及 `tailscale status` 报告的 MagicDNS 名。Quick Tunnel 的随机域名只存在于 cloudflared 自己的输出里，产品不管那个进程，只能用 `--url`。
+
+**开了 Cloudflare Access 时，二维码里不含令牌**——那条路只认 Access 的 JWT，`AUTH_TOKEN` 不参与鉴权（见 `app/src/auth/cf-access.js` 的 `isPublicHost`），带上它只是多印一份凭据。扫码后按提示完成 2FA 即可。`--url` 指向同一域名时走的是同一道判据。
+
+反过来，只填了 `CF_ACCESS_HOSTNAME` 而没填 `CF_ACCESS_TEAM` / `CF_ACCESS_AUD` 时，Access 整层是关闭的、公网仍由 `AUTH_TOKEN` 独自把守——这时二维码**会**带令牌，并额外打一行告警。
+
+token 走 URL fragment（`/#token=`），**不进 HTTP 请求行**，所以不会落进 Cloudflare 或任何中间层的访问日志。但公网二维码泄露的后果与局域网码差一个量级：局域网码还要求对方在你的 WiFi 里，公网码是全世界任何人都能接入。投屏或有旁人时不要打印。
 
 ### 2. Access（Cloudflare Zero Trust 控制台）
 

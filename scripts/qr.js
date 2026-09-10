@@ -22,6 +22,8 @@ import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 import { reachableIPv4s } from '../app/src/shared/net-addr.js';
 import { encodeQr } from '../app/src/shared/qrcode.js';
 import { encodePng } from '../app/src/shared/png.js';
+import { accessConfigured } from '../app/src/auth/cf-access.js';
+import { resolvePublicTarget, protectedByAccess } from '../app/src/shared/public-target.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -43,7 +45,8 @@ CCM 连接二维码
 
 用法:
   node scripts/qr.js                 - 用本机可达地址生成（自动枚举）
-  node scripts/qr.js --url <地址>    - 指定地址，如 Cloudflare 隧道或 Tailscale 域名
+  node scripts/qr.js --public        - 自动解析公网地址（CF Access 域名 / Tailscale MagicDNS）
+  node scripts/qr.js --url <地址>    - 指定地址，如 Cloudflare Quick Tunnel 的随机域名
   node scripts/qr.js --help          - 显示此帮助
   node scripts/qr.js --png-stdout    - 输出 PNG 字节到 stdout（桌面端菜单栏用，不落盘）
 
@@ -78,6 +81,13 @@ if (!token) {
 const urlFlag = args.indexOf('--url');
 let base;
 let alternatives = [];
+// 默认带令牌：局域网与自建入口都由 AUTH_TOKEN 独自把守。只有确认「这个 Host 归 CF Access 管」
+// 时才去掉——那条路只认 JWT、不回退令牌（cf-access.js:113），带上纯属多印一份公网可用的凭据。
+let includeToken = true;
+const notes = [];
+const warnings = [];
+const accessOpts = { cfHostname: process.env.CF_ACCESS_HOSTNAME, accessEnabled: accessConfigured() };
+
 if (urlFlag !== -1) {
   base = args[urlFlag + 1];
   if (!base || base.startsWith('-')) {
@@ -85,6 +95,40 @@ if (urlFlag !== -1) {
     process.exit(1);
   }
   base = base.replace(/\/+$/, '');
+  // docs/deployment.md 教给 CF Access 用户的就是这条命令，所以它同样要过这道判据
+  if (protectedByAccess(base, accessOpts)) {
+    includeToken = false;
+    notes.push('该域名受 Cloudflare Access 保护：公网只认 Access 的 JWT，二维码因此不含令牌。'
+      + '扫码后按提示完成 2FA 登录即可。');
+  }
+} else if (args.includes('--public')) {
+  // 只在这条分支探测 Tailscale：它要 spawn 一个进程（3s 超时），默认路径不该为此变慢。
+  const { probeTailscale } = await import('../app/src/ops/doctor-runtime.js');
+  const { execFileSync } = await import('node:child_process');
+  // 注入一个丢弃 stderr 的 execFile：Tailscale 没装或没登录时 CLI 会往 stderr 吐
+  // 「failed to connect to local Tailscale service」，而那对这条路径是纯噪音——
+  // 探测不到就是探测不到，resolvePublicTarget 自会回落到别的地址或返回 null。
+  const ts = probeTailscale({
+    execFile: (bin, argv, opts) => execFileSync(bin, argv, { ...opts, stdio: ['ignore', 'pipe', 'ignore'] }),
+  });
+  const target = resolvePublicTarget({
+    ...accessOpts,
+    // 「在线」的判据与 doctor-checks.js 的 tailscaleDiagnostic 同源：Running 且拿得到 DNSName
+    tailscaleDns: ts.found && ts.backendState === 'Running' ? ts.dnsName : '',
+    port: process.env.PORT || DEFAULT_PORT,
+  });
+  if (!target) {
+    console.error('没有可自动解析的公网地址。');
+    console.error('能自动认出的只有两种：配置里的 CF_ACCESS_HOSTNAME，以及已登录的 Tailscale MagicDNS。');
+    console.error('Cloudflare Quick Tunnel 的随机域名与自建反向代理请用 --url 指定——');
+    console.error('那些地址只存在于隧道进程自己的输出里，产品不管那个进程，无从得知。');
+    process.exit(1);
+  }
+  base = target.url;
+  includeToken = target.includeToken;
+  alternatives = target.alternatives;
+  notes.push(target.note);
+  if (target.warning) warnings.push(target.warning);
 } else {
   const port = process.env.PORT || DEFAULT_PORT;
   const [first, ...rest] = reachableIPv4s();
@@ -97,7 +141,7 @@ if (urlFlag !== -1) {
   alternatives = rest.map(ip => `http://${ip}:${port}`);
 }
 
-const url = `${base}/#token=${encodeURIComponent(token)}`;
+const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
 
 let qr;
 try {
@@ -107,6 +151,11 @@ try {
   console.error(`当前地址长度 ${url.length} 字节。换一个更短的域名，或直接在手机上打开该地址。`);
   process.exit(1);
 }
+
+// 说明与告警一律走 stderr：--png-stdout 那条路的 stdout 必须只有图像字节，
+// 而字符渲染那条路 stderr 同样打在终端上，用户照样看得见。
+for (const n of notes) console.error(`  ℹ️  ${n}`);
+for (const w of warnings) console.error(`  ⚠️  ${w}`);
 
 // --png-stdout：把 PNG 字节写到 stdout 给调用方（桌面端菜单栏）显示，不落盘、不进剪贴板。
 // **这条路径下 stdout 必须只有图像字节**——混一个换行进去，NSImage 就解不出来了，
@@ -133,7 +182,10 @@ if (args.includes('--png-stdout')) {
   console.log(render(qr.matrix, qr.size));
   console.log('');
   console.log(`  ${base}`);
-  console.log(`  token 已含在二维码里（fragment 形态，不会进任何中间层的访问日志）`);
+  // 不带令牌时这句是假话——受 Access 保护的码里根本没有 token，照打会让用户以为扫了就能进
+  if (includeToken) {
+    console.log(`  token 已含在二维码里（fragment 形态，不会进任何中间层的访问日志）`);
+  }
   if (alternatives.length) {
     console.log(`  其他可达地址：${alternatives.join('  ')}`);
     console.log('  上面的扫不通时用 --url 指定其中一个');

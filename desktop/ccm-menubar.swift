@@ -197,19 +197,26 @@ final class QrClient: Sendable {
     private let env: RuntimeEnv
     init(env: RuntimeEnv) { self.env = env }
 
-    func pngData() -> Probe<Data> {
+    /// - Parameter publicTarget: 走 --public（自动解析 CF Access 域名 / Tailscale），否则用局域网地址。
+    /// - Returns: PNG 字节 + qr.js 打在 stderr 上的说明。**说明原样透传、这里不做任何解读**——
+    ///   「该不该带令牌、为什么」全是 Node 侧的判断（见 shared/public-target.js），
+    ///   本文件的纪律是零业务逻辑，在这儿复述一遍判据早晚会和那边分叉。
+    func pngData(publicTarget: Bool) -> Probe<(png: Data, notes: String)> {
         guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
         let script = (repo as NSString).appendingPathComponent("scripts/qr.js")
-        guard let r = runSync(node, [script, "--png-stdout"], cwd: repo, timeout: 10) else {
+        var argv = [script, "--png-stdout"]
+        if publicTarget { argv.append("--public") }
+        // --public 会探测 Tailscale（CLI 自身 3s 超时），给足余量
+        guard let r = runSync(node, argv, cwd: repo, timeout: publicTarget ? 20 : 10) else {
             return .failed("qr.js 无响应")
         }
         guard r.status == 0 else {
-            let msg = firstLine(r.stderr)
+            let msg = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return .failed(msg.isEmpty ? "qr.js 退出码 \(r.status)" : msg)
         }
         // 必须读 stdoutData：PNG 不是合法 UTF-8，RunResult.stdout 对它恒为空串
         guard !r.stdoutData.isEmpty else { return .failed("qr.js 没有输出图像") }
-        return .ok(r.stdoutData)
+        return .ok((r.stdoutData, r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 }
 
@@ -474,6 +481,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tip: "手机相机扫一下直接进 Web UI，免手输 64 位令牌；含完整凭据，投屏时别开")
         qrItem.isEnabled = canCopyToken(status: latest)
         menu.addItem(qrItem)
+        // 常显而不是「算不出公网地址就隐藏」：判断公网地址是否可解析要真跑一次 qr.js，
+        // 为渲染一次菜单付那个代价不值；而 qr.js 解析失败时给的文案本身就是说明书
+        // （能自动认出哪两种、其余怎么用 --url），比一个凭空消失的菜单项有用得多。
+        let qrPublicItem = action("显示公网二维码…", #selector(showPublicQrCode),
+            tip: "自动解析 CF Access 域名 / Tailscale 地址；公网码等于一把全世界可用的钥匙，更要当心")
+        qrPublicItem.isEnabled = canCopyToken(status: latest)
+        menu.addItem(qrPublicItem)
 
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
@@ -790,22 +804,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 连接二维码窗口。渲染在 qr.js 那一侧完成，这里只负责把 PNG 摆上屏——
     /// 见 QrClient 与 ccm-qr-window.swift 里那条「token 明文不进本进程」。
-    @objc private func showQrCode() {
+    @objc private func showQrCode() { presentQr(publicTarget: false) }
+    @objc private func showPublicQrCode() { presentQr(publicTarget: true) }
+
+    private func presentQr(publicTarget: Bool) {
         let qrClient = self.qrClient
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let r = qrClient.pngData()
+            let r = qrClient.pngData(publicTarget: publicTarget)
             Task { @MainActor in
                 switch r {
-                case .ok(let png):
-                    // 同 openConfig / openConsole 的防御：窗口关闭后 NSWindow 已释放、
-                    // controller 还在但 .window 成了 nil，复用它会让点击静默失效。
-                    if self.qrWindow == nil || self.qrWindow?.window == nil {
-                        self.qrWindow = QrWindowController(png: png)
-                    }
+                case .ok(let payload):
+                    // 每次都重建而不是复用：局域网码与公网码是两张不同的图，复用会把上一张
+                    // 留在屏幕上（同一个窗口、看不出换没换）。顺带覆盖掉「窗口关过之后
+                    // controller 还在但 .window 已成 nil」那条——那是 openConfig 一带的既有防御。
+                    self.qrWindow?.close()
+                    self.qrWindow = QrWindowController(png: payload.png, notes: payload.notes, isPublic: publicTarget)
                     self.qrWindow?.present()
                 case .failed(let e):
-                    self.alert("生成二维码失败", e)
+                    self.alert(publicTarget ? "生成公网二维码失败" : "生成二维码失败", e)
                 }
             }
         }

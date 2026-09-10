@@ -17,13 +17,23 @@ import AppKit
 @MainActor
 final class QrWindowController: NSWindowController, NSWindowDelegate {
     private let imageView = NSImageView()
+    private let notes: String
+    private let isPublic: Bool
 
-    init(png: Data) {
+    /// - Parameters:
+    ///   - notes: qr.js 打在 stderr 上的说明，**原样显示不做解读**。受 CF Access 保护的公网码
+    ///     里根本不含令牌，那句「扫码后完成 2FA」只有 Node 侧算得出来（见 shared/public-target.js）；
+    ///     在这里照着判一遍，两处迟早分叉，而分叉的表现是屏幕上的说明与码里的内容对不上。
+    ///   - isPublic: 只影响标题与警告的措辞。公网码泄露的后果与局域网码差一个量级——
+    ///     后者还要求对方在同一个 WiFi 里，前者是全世界。
+    init(png: Data, notes: String, isPublic: Bool) {
+        self.notes = notes
+        self.isPublic = isPublic
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 470, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 470, height: 610),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
-        window.title = "连接二维码"
+        window.title = isPublic ? "公网连接二维码" : "连接二维码"
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -50,15 +60,25 @@ final class QrWindowController: NSWindowController, NSWindowDelegate {
         imageView.heightAnchor.constraint(equalToConstant: 400).isActive = true
         root.addArrangedSubview(imageView)
 
-        let hint = NSTextField(labelWithString: "用手机相机扫一下，直接进 Web UI（无需再输令牌）")
+        let hint = NSTextField(labelWithString: "用手机相机扫一下，直接进 Web UI")
         hint.font = .systemFont(ofSize: NSFont.systemFontSize)
         root.addArrangedSubview(hint)
 
-        let warn = NSTextField(labelWithString: "⚠️ 二维码里含完整访问令牌。投屏、录屏或旁边有人时请关掉本窗口——\n明文令牌人会本能地遮，一个「看起来无害」的二维码不会，拍一张就是完整凭据。")
+        if !notes.isEmpty {
+            let noteLabel = NSTextField(wrappingLabelWithString: notes)
+            noteLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            noteLabel.alignment = .center
+            noteLabel.preferredMaxLayoutWidth = 410
+            root.addArrangedSubview(noteLabel)
+        }
+
+        let warn = NSTextField(wrappingLabelWithString: isPublic
+            ? "⚠️ 这是一把公网可用的钥匙。局域网码泄露还要求对方在你的 WiFi 里，公网码泄露则是全世界任何人都能接入这台机器——投屏、录屏或旁边有人时请立刻关掉本窗口。"
+            : "⚠️ 二维码里含完整访问令牌。投屏、录屏或旁边有人时请关掉本窗口——明文令牌人会本能地遮，一个「看起来无害」的二维码不会，拍一张就是完整凭据。")
         warn.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        warn.textColor = .secondaryLabelColor
+        warn.textColor = isPublic ? .systemRed : .secondaryLabelColor
         warn.alignment = .center
-        warn.maximumNumberOfLines = 3
+        warn.preferredMaxLayoutWidth = 410
         root.addArrangedSubview(warn)
 
         window.contentView = root
