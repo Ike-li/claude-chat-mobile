@@ -151,6 +151,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(card.locator('.sa-title')).toContainText('🤖 Explore 运行中');
     await expect(card.locator('.sa-title')).toContainText('3 tools');
     await expect(card.locator('.sa-title')).toContainText('1.2k tok');
+    // 错误显性化：子工具真错误累进标题。本条咬住的是「失败被记在【标题】上」——
+    // 注入「改写单行动作槽」会红。至于"为什么不记在单行槽"（心跳每隔几秒覆盖它一次），
+    // 那是设计理由、由本场景的事件顺序体现（心跳排在失败之后），不是这条断言证明的。
+    await expect(card.locator('.sa-title')).toContainText('❌ 1');
+    // 失败的那张嵌套卡本身也是红的（statusIconSpec 按 kind 给语义色）
+    await expect(card.locator('.sa-body [data-tool-name="Read"] .t-status')).toHaveClass(/text-danger/);
 
     // 底栏权责归位：这条任务已经有流内聚合卡，底栏不再重复显示它（真机同屏复读过）。
     // 注意判据是「有没有流内卡」——P0-05f 那条 Workflow 场景的 task_progress 不带 toolUseId，

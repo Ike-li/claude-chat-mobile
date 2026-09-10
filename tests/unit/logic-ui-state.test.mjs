@@ -914,6 +914,26 @@ test.describe('isSubagentPayload / formatSubagentCardTitle（子 agent 嵌套卡
     );
   });
 
+  // 机制 4 的错误显性化。【为什么是标题上的计数，不是单行槽上的一行】单行槽由 task_progress
+  // 心跳驱动、每隔几秒被当前工具覆盖一次——把失败写在那里，它会闪一下就没了，而"闪过"等于没显示。
+  // 计数只增不减，扫一眼标题就知道里面出没出过错。
+  test('标题：子工具失败计数 → 追加「· ❌ N」，排在用量段之前', () => {
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Explore', running: true, toolUses: 9, failures: 2 }),
+      '🤖 Explore 运行中 · ❌ 2 · 9 tools'
+    );
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Explore', running: false, failures: 1 }),
+      '🤖 Explore 已完成 · ❌ 1'
+    );
+  });
+
+  test('标题：failures 为 0 / 缺席 / 非数 → 不追加（没出错就别摆一个 ❌ 0 吓人）', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true, failures: 0 }), '🤖 Explore 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true }), '🤖 Explore 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true, failures: 'x' }), '🤖 Explore 运行中');
+  });
+
   test('标题：用量为 0 / 缺席 / 非数 → 一个字都不追加（老调用点行为逐字不变）', () => {
     assert.equal(formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: 0, totalTokens: 0 }), '🤖 Plan 运行中');
     assert.equal(formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: null }), '🤖 Plan 运行中');

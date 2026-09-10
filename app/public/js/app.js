@@ -2520,6 +2520,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!isSubagentPayload(p) && subagentCards.has(p.toolUseId)) {
         markSubagentCardDone(p.toolUseId);
       }
+      // 机制 4 错误显性化：子工具真错误累进聚合卡标题的 ❌ 计数。折叠态下嵌套卡的红图标看不见，
+      // 而移动端多数时候就是折叠着的——不往上报一层，子代理内部报错在手机上等于隐瞒。
+      // 【只数真错误】denyKind 的三档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不是异常。
+      // 【不染聚合卡的状态图标】那个图标表达的是 Agent 工具【自身】的结果（下方 tool_result 在管）：
+      // 一次失败的 Read 不该让整张卡看起来失败了——子代理完全可能照常得出结论。
+      if (isSubagentPayload(p) && p.ok === false && !p.denyKind) {
+        const sa = subagentCards.get(p.parentToolUseId);
+        if (sa) { sa.failures = (sa.failures || 0) + 1; renderSubagentTitle(sa); }
+      }
       const card = toolCards.get(p.toolUseId);
       if (!card) {
         // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
@@ -3153,6 +3162,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         lastToolEl: wrap.querySelector('.sa-lasttool'),
         type,
         running: true,
+        failures: 0, // 子工具真错误的累计数（只增不减，见 formatSubagentCardTitle 的判据）
         usage: null, // 由 applySubagentUsage 按 toolUseId 挂上；历史回放取不到（bgTasks 是 live 内存态）
         streams: new Map(),
         thinkings: new Map(),
@@ -3179,6 +3189,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     c.titleEl.textContent = formatSubagentCardTitle({
       subagentType: c.type,
       running: c.running,
+      failures: c.failures || 0,
       ...(c.usage || {}),
     });
   }

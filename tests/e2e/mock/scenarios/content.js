@@ -463,6 +463,25 @@ export function createContentScenarios(getContext) {
           }
         });
         await delay(150);
+        // 子代理内部一次【真错误】（ok:false 且无 denyKind）→ 聚合卡标题累 ❌ 计数。
+        // 放在 task_progress 之前发：心跳会覆盖单行动作槽，计数必须扛得住覆盖才算数。
+        socket.emit('agent:event', {
+          seq: 1.5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_run_fail', name: 'Read',
+            inputSummary: JSON.stringify({ file_path: 'css/style.css' }),
+            parentToolUseId: 'agent-run-1', subagentType: 'Explore',
+          }
+        });
+        await delay(80);
+        socket.emit('agent:event', {
+          seq: 1.6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 't_run_fail', ok: false, outputSummary: 'ENOENT: no such file or directory',
+            parentToolUseId: 'agent-run-1', subagentType: 'Explore',
+          }
+        });
+        await delay(80);
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'task_progress', transient: true,

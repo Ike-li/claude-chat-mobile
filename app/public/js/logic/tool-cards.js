@@ -357,7 +357,7 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
 // running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
 export function formatSubagentCardTitle({
-  subagentType, running = true, toolUses = null, totalTokens = null, durationMs = null,
+  subagentType, running = true, toolUses = null, totalTokens = null, durationMs = null, failures = null,
 } = {}) {
   const raw = subagentType != null ? String(subagentType).trim() : '';
   const type = raw || t('子 agent');
@@ -367,6 +367,12 @@ export function formatSubagentCardTitle({
   // （"0 tools"/"— tok"）会让刷新前后看起来像把数据弄丢了，不显示才是诚实的降级。
   // 也不按 running 分档显示不同字段：分档会造出一半永远跑不到的分支，且 CLI 自己恒显。
   const parts = [];
+  // 失败计数排在用量之前：出没出错比跑了多少 token 更该先看见。
+  // 【为什么放标题不放单行动作槽】那个槽由 task_progress 心跳驱动、每隔几秒被当前工具覆盖一次——
+  // 失败写在那里会闪一下就没，而"闪过"等于没显示。计数只增不减，折叠着扫一眼就知道里面出没出过错。
+  // 【只数真错误】denyKind 那几档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不算异常。
+  const failed = Number(failures);
+  if (Number.isFinite(failed) && failed > 0) parts.push(`❌ ${failed}`);
   const uses = Number(toolUses);
   if (Number.isFinite(uses) && uses > 0) parts.push(`${uses} tools`);
   const usage = bgTaskUsageText({ durationMs, totalTokens });
