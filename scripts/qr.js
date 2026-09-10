@@ -21,6 +21,7 @@ import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 import { reachableIPv4s } from '../app/src/shared/net-addr.js';
 import { encodeQr } from '../app/src/shared/qrcode.js';
+import { encodePng } from '../app/src/shared/png.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -33,6 +34,8 @@ loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
 // 全在用户那边，而他没有任何线索能判断是边距不够。
 const QUIET = 4;
 const CELL = 2;    // 每个模块占 2 列：1 列会把码压成 1:2 的竖条，扫不出来
+// --png-stdout 的每模块像素数。原生窗口不受列宽约束，取够手机在屏幕上一次对焦扫到的尺寸。
+const PNG_SCALE = 10;
 
 function printHelp() {
   console.log(`
@@ -42,6 +45,7 @@ CCM 连接二维码
   node scripts/qr.js                 - 用本机可达地址生成（自动枚举）
   node scripts/qr.js --url <地址>    - 指定地址，如 Cloudflare 隧道或 Tailscale 域名
   node scripts/qr.js --help          - 显示此帮助
+  node scripts/qr.js --png-stdout    - 输出 PNG 字节到 stdout（桌面端菜单栏用，不落盘）
 
 二维码里含 AUTH_TOKEN。投屏、录屏或有旁人时不要打印——拍一张就是完整凭据。
 `);
@@ -104,23 +108,35 @@ try {
   process.exit(1);
 }
 
-// 宽度不够就明确拒绝，不打印一个必然扫不出来的码——给一张扫不动的图比不给更浪费时间，
-// 用户会反复对焦、换角度、换扫码 App，而问题从一开始就不在他那边。
-const needed = (qr.size + QUIET * 2) * CELL;
-const cols = process.stdout.columns || 0;
-if (cols && cols < needed) {
-  console.error(`终端宽度不足：需要 ${needed} 列，当前 ${cols} 列。`);
-  console.error('把窗口拉宽后重试，或用 --url 换一个更短的地址（地址越短，码越小）。');
-  process.exit(1);
-}
+// --png-stdout：把 PNG 字节写到 stdout 给调用方（桌面端菜单栏）显示，不落盘、不进剪贴板。
+// **这条路径下 stdout 必须只有图像字节**——混一个换行进去，NSImage 就解不出来了，
+// 所以提示与错误一律走 stderr（上面那几处 console.error 已经是）。
+// 原生窗口没有终端的列宽/行距约束，于是也不需要下面那道尺寸自检。
+if (args.includes('--png-stdout')) {
+  // 刻意不调 process.exit()：stdout 接管道时是异步的，显式 exit 可能在缓冲 flush 之前就
+  // 退出、把图截断成半张。当前这张 5.6KB 恰好一次写完所以看不出来，但 PNG_SCALE 调大或
+  // 地址变长就会踩上——那种 bug 的表现是「桌面端偶尔显示不出二维码」，极难归因。
+  // 让进程自然结束，Node 在事件循环排空时会把缓冲写完。
+  process.stdout.write(encodePng(qr.matrix, { scale: PNG_SCALE, quiet: QUIET }));
+} else {
+  // 宽度不够就明确拒绝，不打印一个必然扫不出来的码——给一张扫不动的图比不给更浪费时间，
+  // 用户会反复对焦、换角度、换扫码 App，而问题从一开始就不在他那边。
+  const needed = (qr.size + QUIET * 2) * CELL;
+  const cols = process.stdout.columns || 0;
+  if (cols && cols < needed) {
+    console.error(`终端宽度不足：需要 ${needed} 列，当前 ${cols} 列。`);
+    console.error('把窗口拉宽后重试，或用 --url 换一个更短的地址（地址越短，码越小）。');
+    process.exit(1);
+  }
 
-console.log('');
-console.log(render(qr.matrix, qr.size));
-console.log('');
-console.log(`  ${base}`);
-console.log(`  token 已含在二维码里（fragment 形态，不会进任何中间层的访问日志）`);
-if (alternatives.length) {
-  console.log(`  其他可达地址：${alternatives.join('  ')}`);
-  console.log('  上面的扫不通时用 --url 指定其中一个');
+  console.log('');
+  console.log(render(qr.matrix, qr.size));
+  console.log('');
+  console.log(`  ${base}`);
+  console.log(`  token 已含在二维码里（fragment 形态，不会进任何中间层的访问日志）`);
+  if (alternatives.length) {
+    console.log(`  其他可达地址：${alternatives.join('  ')}`);
+    console.log('  上面的扫不通时用 --url 指定其中一个');
+  }
+  console.log('');
 }
-console.log('');

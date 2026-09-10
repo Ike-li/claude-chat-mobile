@@ -190,6 +190,29 @@ final class DeviceClient: Sendable {
     }
 }
 
+/// 调 `scripts/qr.js --png-stdout` 取连接二维码的 PNG 字节。
+/// **token 明文不进本进程**：qr.js 在它自己的进程里读配置、编码、渲染，这里拿到的已经是像素。
+/// 与 `ServiceClient.copyToken` 的「明文直送 pbcopy」同一条纪律。
+final class QrClient: Sendable {
+    private let env: RuntimeEnv
+    init(env: RuntimeEnv) { self.env = env }
+
+    func pngData() -> Probe<Data> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        let script = (repo as NSString).appendingPathComponent("scripts/qr.js")
+        guard let r = runSync(node, [script, "--png-stdout"], cwd: repo, timeout: 10) else {
+            return .failed("qr.js 无响应")
+        }
+        guard r.status == 0 else {
+            let msg = firstLine(r.stderr)
+            return .failed(msg.isEmpty ? "qr.js 退出码 \(r.status)" : msg)
+        }
+        // 必须读 stdoutData：PNG 不是合法 UTF-8，RunResult.stdout 对它恒为空串
+        guard !r.stdoutData.isEmpty else { return .failed("qr.js 没有输出图像") }
+        return .ok(r.stdoutData)
+    }
+}
+
 // MARK: - 菜单栏应用
 
 @MainActor
@@ -198,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let env = RuntimeEnv()
     private let client: ServiceClient
     private let deviceClient: DeviceClient
+    private let qrClient: QrClient
     // 探测与动作分队列（control 最长 40s，不能堵刷新）。动作保持并发：
     // 复制令牌 / 打开 Web UI 不该等无关 unit 的 kickstart。同 unit 启停靠 busyUnits。
     private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
@@ -220,10 +244,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var logWindow: LogWindowController?
     private var taskWindow: TaskWindowController?
     private var consoleWindow: ConsoleWindowController?
+    private var qrWindow: QrWindowController?
 
     override init() {
         client = ServiceClient(env: env)
         deviceClient = DeviceClient(env: env)
+        qrClient = QrClient(env: env)
         super.init()
     }
 
@@ -443,6 +469,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）")
         tokenItem.isEnabled = canCopyToken(status: latest)
         menu.addItem(tokenItem)
+        // 与复制令牌同一条判据：两者都要能拿到 AUTH_TOKEN，拿不到时二维码只会是一张废图。
+        let qrItem = action("显示连接二维码…", #selector(showQrCode),
+            tip: "手机相机扫一下直接进 Web UI，免手输 64 位令牌；含完整凭据，投屏时别开")
+        qrItem.isEnabled = canCopyToken(status: latest)
+        menu.addItem(qrItem)
 
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
@@ -752,6 +783,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 switch r {
                 case .ok: self.alert("已复制", "访问令牌已在剪贴板里，粘贴到网页的令牌框即可。")
                 case .failed(let e): self.alert("复制失败", e)
+                }
+            }
+        }
+    }
+
+    /// 连接二维码窗口。渲染在 qr.js 那一侧完成，这里只负责把 PNG 摆上屏——
+    /// 见 QrClient 与 ccm-qr-window.swift 里那条「token 明文不进本进程」。
+    @objc private func showQrCode() {
+        let qrClient = self.qrClient
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            let r = qrClient.pngData()
+            Task { @MainActor in
+                switch r {
+                case .ok(let png):
+                    // 同 openConfig / openConsole 的防御：窗口关闭后 NSWindow 已释放、
+                    // controller 还在但 .window 成了 nil，复用它会让点击静默失效。
+                    if self.qrWindow == nil || self.qrWindow?.window == nil {
+                        self.qrWindow = QrWindowController(png: png)
+                    }
+                    self.qrWindow?.present()
+                case .failed(let e):
+                    self.alert("生成二维码失败", e)
                 }
             }
         }

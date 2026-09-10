@@ -45,6 +45,7 @@ export const EXTRA_RUNTIME_FILES = Object.freeze([
   'desktop/ccm-menubar.swift',
   'desktop/ccm-config-window.swift',
   'desktop/ccm-console-window.swift',
+  'desktop/ccm-qr-window.swift',
   'app/public/js/canonicalize.js',                     // 前后端共用（边界豁免），也被 app/src/ import
   'package.json',
   'package-lock.json',
