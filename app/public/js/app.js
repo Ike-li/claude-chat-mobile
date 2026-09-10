@@ -156,6 +156,7 @@ import {
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
+  rewindOutcomeNotes,
 } from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
@@ -7288,7 +7289,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 这里只做两件【只对发起方有意义】的事：
     //  ① warning（部分文件没恢复 / 新会话没建成的处置建议）
     //  ② prefill：把那一轮的原话回填输入框——回退的下一步多半是改一改重说。
-    if (res.warning) addBar(res.warning, 'text-danger');
+    // 回退之后还得说清三件事：整体性失败（warning）、哪些文件没恢复（unrestored）、
+    // 几个链接被跳过（skippedLinks）。三者可叠加、有轻重，组装逻辑在 logic/rewind.js（可单测）。
+    for (const note of rewindOutcomeNotes(res)) {
+      addBar(note.text, note.tone === 'danger' ? 'text-danger' : note.tone);
+    }
     // 守卫同发送失败时的草稿恢复：**只在输入框空且无附件时**回填，绝不覆盖用户已经打的字。
     if (res.prefill && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
       inputEl.value = res.prefill;

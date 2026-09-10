@@ -1370,7 +1370,12 @@ io.on('connection', socket => {
     const filesChanged = ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'];
     const forkedSessionId = forked ? 'mock-session-forked' : null;
     callback({
-      ok: true, forkedSessionId, filesChanged, skippedLinks: 0, unrestored: [],
+      ok: true, forkedSessionId, filesChanged,
+      // u-archived-3 那档顺带摆出「一个链接被跳过 + 一个文件没恢复」，
+      // 让 E2E 能验到 logic/rewind.js 组装的两条提示真的上屏（真 server 的这两个字段
+      // 分别来自 rewindFiles 的 skippedLinks 与回滚后复核的 unrestored）。
+      skippedLinks: forked ? 0 : 1,
+      unrestored: forked ? [] : ['/Users/you/code/claude-chat-mobile/README.md'],
       // prefill：真 server 从 transcript 取那一轮的原话回填输入框。
       // 这里给夹具里那条 user 气泡的原文，E2E 才能断言真的填回去了。
       prefill: 'Any follow-up questions?',

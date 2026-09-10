@@ -171,6 +171,10 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // 用户需要知道①文件已经动了②原会话没事、可以重试。少任何一条他都不知道现在处境如何。
     await expect(page.locator('#messages')).toContainText('文件已回退', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('原会话未受影响');
+    // G6/G7 的告知：这两条都是「服务端算得出、不说用户就不知道」——不说的后果不是报错，
+    // 是用户以为全好了。三条提示各占一行，warning 在最前（整体性失败比个别文件更要紧）。
+    await expect(page.locator('#messages')).toContainText('README.md');   // unrestored 点名到文件
+    await expect(page.locator('#messages')).toContainText('符号链接');     // skippedLinks 说清原因
     await expectNoBrowserErrors(page);
   });
 

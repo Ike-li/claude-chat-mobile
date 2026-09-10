@@ -3138,9 +3138,12 @@ registerSocketConnection(io, socket => {
         filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
         skippedLinks: real.skippedLinks ?? 0,
         unrestored: verdict.unrestored,
+        // warning 只留【整体性】问题的整句。「哪几个文件没恢复」「几个软链接被跳过」是
+        // 结构化数据（unrestored / skippedLinks），交给前端按 i18n 组装——服务端这边是裸中文，
+        // 拼进去英文用户就只能看中文。见 public/js/logic/rewind.js。
         warning: forkError
           ? `文件已回退，但新会话创建失败（${forkError}）。原会话未受影响，可重试。`
-          : (verdict.ok ? null : '部分文件可能未恢复，建议在 Git 面板核对'),
+          : null,
       };
       if (!newId) { reply(base); return; }
       // 复用 session:fork 的「打开/聚焦」收尾：切到新会话，与既有分叉体验一致。

@@ -710,6 +710,8 @@ export const EN_DICT = Object.freeze({
   '等 {n} 个文件': ' and {n} files in total',
   '⚠️ 其中 {names} 有未提交的改动，回退会覆盖掉且无法找回。': '⚠️ {names} has uncommitted changes — reverting overwrites them for good.',
   '等 {n} 处': ' and {n} more',
+  '⚠️ 这些文件未能恢复：{names}{suffix}。建议在 Git 面板核对。': '⚠️ These files could not be restored: {names}{suffix}. Check them in the Git panel.',
+  '{n} 个文件是符号链接或硬链接，已跳过、未回退。': '{n} file(s) are symlinks or hard links — skipped, not reverted.',
   '会话已切换，回退已取消，请重新发起': 'The session changed, so the revert was cancelled — start it again',
   '回退失败': 'Revert failed',
   '对这条消息做什么？': 'What do you want to do with this message?',
