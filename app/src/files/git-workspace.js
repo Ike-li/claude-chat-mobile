@@ -2,7 +2,7 @@
 // 与 statusline 的三分「计数」分工：本模块产出路径列表 + unified patch。
 // 安全：仅相对 path；spawn 用 execFile 固定 argv（禁止 shell）；无 stage/commit 写操作。
 import { execFile as execFileCb } from 'node:child_process';
-import { resolve, relative, isAbsolute, sep } from 'node:path';
+import { resolve, relative, isAbsolute, sep, join } from 'node:path';
 import { promisify } from 'node:util';
 
 export const MAX_GIT_ENTRIES = 500;
@@ -307,4 +307,57 @@ export async function readGitDiff(cwd, relPath, side, opts = {}) {
     truncated,
     empty,
   };
+}
+
+// ── Rewind 的 G5：回退会覆盖工作区，哪些未提交改动【找不回来】 ──
+//
+// 【判据为什么不是「工作区 dirty 就警告」】开发中 dirty 是常态。每次回退都弹一句
+// 「工作区有未提交修改」，用户三次之后就学会了无视它——警告一旦变成背景噪音就等于没有。
+// 只报真正有风险的那部分，它才值得被读。
+//
+// 【什么叫有风险】内容【只存在于工作区、git 对象库里没有】：
+//   · unstaged  —— 改了没 add。回退覆盖后 git 里只有旧版本，改动没了
+//   · untracked —— 从没进过 git。回退若删掉它（回到该文件尚未创建的那一刻）就是永久丢失
+//   · conflicted —— 工作区内容是手工合并的中间结果，覆盖了很难重建
+// 纯 staged【不算】：内容已经进了 index，覆盖后仍能从 git 取回（git checkout-index / stash）。
+// MM 这种「add 过又改了」的要算——unstaged 那半没进 index。
+export function riskyUncommittedPaths(changes) {
+  if (!changes || changes.ok !== true) return []; // 非 git 仓库 / 读失败：静默放行，不拿失败当风险
+  const out = [];
+  const seen = new Set();
+  for (const list of [changes.unstaged, changes.untracked, changes.conflicted]) {
+    for (const e of list || []) {
+      const p = e?.path;
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+// 取「回退会碰的文件」与「改动没进 git 的文件」的交集——只有这批才会真丢东西。
+//
+// 【路径基准】filesChanged 来自 CLI，是绝对路径；porcelain 的 path 恒相对【仓库根】
+// （实测：在任何子目录下跑 `git status --porcelain=v1` 输出的都是相对根的路径，不随 cwd 变）。
+// 所以以 repoRoot 为基准拼成绝对路径再比。
+// 【为什么不用后缀匹配】`abs.endsWith('/' + rel)` 会把 /repo/x/b/c.txt 误判成 dirty 的 b/c.txt。
+// 返回相对路径：给用户看的是 `src/a.js`，不是一长串绝对路径。
+export function overlapRiskyFiles(filesChanged, riskyRelPaths, repoRoot) {
+  if (!Array.isArray(filesChanged) || !Array.isArray(riskyRelPaths) || !repoRoot) return [];
+  const changed = new Set(filesChanged);
+  return riskyRelPaths.filter(rel => changed.has(join(repoRoot, rel)));
+}
+
+// 仓库根（porcelain 路径的基准）。非 git 仓库返回 null——调用方据此跳过整个 G5。
+export async function gitRepoRoot(cwd, opts = {}) {
+  if (!cwd || typeof cwd !== 'string') return null;
+  try {
+    const r = await gitExec(cwd, ['rev-parse', '--show-toplevel'], {
+      timeoutMs: opts.timeoutMs, maxBuffer: opts.maxBuffer, execFile: opts.execFile,
+    });
+    return String(r.stdout || '').trim() || null;
+  } catch {
+    return null;
+  }
 }

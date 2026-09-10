@@ -708,6 +708,8 @@ export const EN_DICT = Object.freeze({
   '将恢复 {files}（+{ins} / −{del} 行），并分叉出一个回到那一刻的新会话。当前会话完整保留，随时可以切回来。': 'This restores {files} (+{ins} / −{del} lines) and forks a new session from that point. The current session is kept intact — you can switch back any time.',
   '回退': 'Revert',
   '等 {n} 个文件': ' and {n} files in total',
+  '⚠️ 其中 {names} 有未提交的改动，回退会覆盖掉且无法找回。': '⚠️ {names} has uncommitted changes — reverting overwrites them for good.',
+  '等 {n} 处': ' and {n} more',
   '会话已切换，回退已取消，请重新发起': 'The session changed, so the revert was cancelled — start it again',
   '回退失败': 'Revert failed',
   '对这条消息做什么？': 'What do you want to do with this message?',

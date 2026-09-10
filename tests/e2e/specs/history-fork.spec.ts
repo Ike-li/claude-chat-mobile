@@ -120,6 +120,9 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // preview 的影响面必须先摆出来再让人点确认——回退会真改磁盘，"确认"不能是盲签。
     await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
     await expect(page.locator('#confirmBody')).toContainText('完整保留');
+    // G5 的负向对照：工作区没有会被覆盖的未提交改动时【不该】出现警告。
+    // 少了这一条，一个恒警告的实现也能让下面 P0-REWINDd 那条全绿——而恒警告等于没警告。
+    await expect(page.locator('#confirmBody')).not.toContainText('未提交的改动');
     await expect(page.locator('#confirmBody')).toContainText('12'); // insertions
     await page.locator('#confirmOk').click();
 
@@ -159,6 +162,9 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
     await page.locator('#confirmOk').click();
     await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
+    // G5：这一档的工作区有会被回退覆盖的未提交改动——警告必须摆在【点确认之前】，
+    // 事后再说就晚了，那些改动已经没了。
+    await expect(page.locator('#confirmBody')).toContainText('未提交的改动');
     await page.locator('#confirmOk').click();
 
     // 这一支是「做了一半」：文件已经回退，但新会话没建成。不能只弹一句笼统的失败——

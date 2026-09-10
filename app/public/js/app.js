@@ -7258,10 +7258,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const files = Array.isArray(preview.filesChanged) ? preview.filesChanged : [];
     const names = files.map(p => p.split('/').pop()).slice(0, 3).join('、');
     const more = files.length > 3 ? t('等 {n} 个文件').replace('{n}', files.length) : '';
+    // G5：只在【回退会碰 且 改动没进 git】时才警告。服务端已经取过交集，这里不再二次判断——
+    // 它非空就意味着这次回退真会冲掉找不回来的东西，必须摆在确认框里，不能只记在日志。
+    const dirty = Array.isArray(preview.dirtyOverlap) ? preview.dirtyOverlap : [];
+    const dirtyWarn = dirty.length
+      ? '\n\n' + t('⚠️ 其中 {names} 有未提交的改动，回退会覆盖掉且无法找回。')
+        .replace('{names}', dirty.slice(0, 3).join('、') + (dirty.length > 3 ? t('等 {n} 处').replace('{n}', dirty.length) : ''))
+      : '';
     const ok = await appConfirm({
       title: t('回退到这轮对话之前？'),
       body: t('将恢复 {files}（+{ins} / −{del} 行），并分叉出一个回到那一刻的新会话。当前会话完整保留，随时可以切回来。')
-        .replace('{files}', names + more).replace('{ins}', preview.insertions ?? 0).replace('{del}', preview.deletions ?? 0),
+        .replace('{files}', names + more).replace('{ins}', preview.insertions ?? 0).replace('{del}', preview.deletions ?? 0)
+        + dirtyWarn,
       okText: t('回退'),
       tone: 'danger',
     });

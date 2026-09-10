@@ -9,6 +9,8 @@ import {
   readGitDiff,
   MAX_GIT_ENTRIES,
   MAX_GIT_DIFF_BYTES,
+  riskyUncommittedPaths,
+  overlapRiskyFiles,
 } from '../../app/src/files/git-workspace.js';
 
 describe('parsePorcelainZ：解析 git status --porcelain=v1 -z', () => {
@@ -258,5 +260,78 @@ describe('常量硬顶', () => {
   test('MAX_GIT_ENTRIES / MAX_GIT_DIFF_BYTES 合理', () => {
     assert.equal(MAX_GIT_ENTRIES, 500);
     assert.equal(MAX_GIT_DIFF_BYTES, 256 * 1024);
+  });
+});
+
+// —— Rewind 的 G5：哪些未提交改动会被回退覆盖且【找不回来】 ——
+// 判据不是「工作区 dirty 就警告」：开发中 dirty 是常态，天天弹等于训练用户忽略它。
+// 只有「内容仅存在于工作区、git 对象库里没有」的那部分才真有风险。
+test.describe('riskyUncommittedPaths（G5）', () => {
+  const changes = (o) => ({ ok: true, staged: [], unstaged: [], untracked: [], conflicted: [], ...o });
+
+  test('unstaged 改动算风险——回退覆盖后 git 里只有旧版本', () => {
+    const r = riskyUncommittedPaths(changes({ unstaged: [{ path: 'src/a.js', xy: ' M' }] }));
+    assert.deepEqual(r, ['src/a.js']);
+  });
+
+  test('untracked 文件算风险——git 里完全没有，覆盖/删除即永久丢失', () => {
+    const r = riskyUncommittedPaths(changes({ untracked: [{ path: 'notes.md', xy: '??' }] }));
+    assert.deepEqual(r, ['notes.md']);
+  });
+
+  test('冲突中的文件算风险——工作区内容是手工合并的中间结果', () => {
+    const r = riskyUncommittedPaths(changes({ conflicted: [{ path: 'm.js', xy: 'UU' }] }));
+    assert.deepEqual(r, ['m.js']);
+  });
+
+  test('【纯 staged 不算风险】——内容已进 index，覆盖后能从 git 取回', () => {
+    const r = riskyUncommittedPaths(changes({ staged: [{ path: 'src/b.js', xy: 'M ' }] }));
+    assert.deepEqual(r, [],
+      '把 staged 也算进去 = 每次 git add 之后回退都弹警告，而那部分其实取得回来——'
+      + '警告一旦变成常态就没人看了');
+  });
+
+  test('MM（staged 后又改）算风险：unstaged 那半没进 index', () => {
+    // classifyGitEntries 会把 MM 同时放进 staged 与 unstaged，这里必须命中
+    const r = riskyUncommittedPaths(changes({
+      staged: [{ path: 'src/c.js', xy: 'MM' }],
+      unstaged: [{ path: 'src/c.js', xy: 'MM' }],
+    }));
+    assert.deepEqual(r, ['src/c.js'], '同一路径只报一次，且不能因为它也在 staged 里就被漏掉');
+  });
+
+  test('非 git 仓库 / 读失败 → 空数组（静默放行，不拿失败当风险）', () => {
+    assert.deepEqual(riskyUncommittedPaths({ ok: false, code: 'not_git' }), []);
+    assert.deepEqual(riskyUncommittedPaths(null), []);
+  });
+});
+
+test.describe('overlapRiskyFiles（G5 的交集判定）', () => {
+  test('只报「回退会碰 且 改动没进 git」的那些', () => {
+    const hit = overlapRiskyFiles(
+      ['/repo/src/a.js', '/repo/src/untouched.js'],
+      ['src/a.js', 'src/elsewhere.js'],
+      '/repo',
+    );
+    assert.deepEqual(hit, ['src/a.js'],
+      'elsewhere.js 脏但回退不碰它、untouched.js 会被回退但没脏——两者都不该报');
+  });
+
+  test('仓库根是 cwd 的祖先时也对得上（porcelain 路径恒相对仓库根）', () => {
+    // 实测：git status --porcelain 在任何子目录下跑，输出的都是相对【仓库根】的路径
+    const hit = overlapRiskyFiles(['/repo/sub/deep/f.txt'], ['sub/deep/f.txt'], '/repo');
+    assert.deepEqual(hit, ['sub/deep/f.txt']);
+  });
+
+  test('同名不同层不误报', () => {
+    const hit = overlapRiskyFiles(['/repo/x/b/c.txt'], ['b/c.txt'], '/repo');
+    assert.deepEqual(hit, [],
+      '按后缀匹配会把 /repo/x/b/c.txt 误判成 b/c.txt——必须以仓库根为基准拼绝对路径再比');
+  });
+
+  test('缺参数 → 空数组', () => {
+    assert.deepEqual(overlapRiskyFiles(null, ['a'], '/repo'), []);
+    assert.deepEqual(overlapRiskyFiles(['/repo/a'], [], '/repo'), []);
+    assert.deepEqual(overlapRiskyFiles(['/repo/a'], ['a'], null), []);
   });
 });

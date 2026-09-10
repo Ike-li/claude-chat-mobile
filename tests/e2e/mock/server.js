@@ -1341,6 +1341,10 @@ io.on('connection', socket => {
         filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js', '/Users/you/code/claude-chat-mobile/README.md'],
         insertions: 12, deletions: 5,
         keepUuid: promptUuid === 'u-archived-2' ? 'a-archived-1' : 'a-archived-2', // 目标轮之前最后一条 chain entry
+        // G5：只有 u-archived-3 那档摆出「工作区有未提交改动且会被回退覆盖」，
+        // 让 E2E 能同时测到「有警告」与「没警告」两侧——只测有警告的话，
+        // 一个恒返回警告的实现也全绿。
+        dirtyOverlap: promptUuid === 'u-archived-3' ? ['app/public/js/app.js'] : [],
       });
       return;
     }

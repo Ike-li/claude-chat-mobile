@@ -65,7 +65,7 @@ import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
-import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
+import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
@@ -2990,7 +2990,7 @@ registerSocketConnection(io, socket => {
 
     let res;
     try {
-      res = await inst.q.rewindFiles(promptUuid, { dryRun: true });
+      res = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: true }));
     } catch (err) {
       reply({ ok: false, error: '无法读取回退预览', reason: 'rewind-failed' });
       console.error('[rewind] preview 失败', err?.message || err);
@@ -2999,6 +2999,24 @@ registerSocketConnection(io, socket => {
     // G11：canRewind 只表示「找得到检查点」，不表示「回退会改变什么」——空轮次照样 true。
     // 判「值不值得弹确认框」看 filesChanged，否则用户会收到一个「将恢复 0 个文件」的确认框。
     const filesChanged = Array.isArray(res?.filesChanged) ? res.filesChanged : [];
+
+    // G5：回退是覆盖式写文件，工作区里没提交的活会被无声冲掉。
+    // 【只报真有风险的那部分】不是「工作区 dirty 就警告」——开发中 dirty 是常态，每次都弹
+    // 用户三次之后就学会无视了。只报「回退会碰 且 改动没进 git 对象库」的交集，判据见
+    // files/git-workspace.js 的 riskyUncommittedPaths。
+    // 失败方向是【放行】：非 git 仓库、git 读失败、超时 —— 一律不拦也不警告。
+    // 这条是知情提示不是安全闸，为它挡住一次合法回退才是更坏的结果。
+    let dirtyOverlap = [];
+    try {
+      const repoRoot = await gitRepoRoot(cwd);
+      if (repoRoot) {
+        const changes = await listGitChanges(cwd);
+        dirtyOverlap = overlapRiskyFiles(filesChanged, riskyUncommittedPaths(changes), repoRoot);
+      }
+    } catch (err) {
+      console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
+    }
+
     reply({
       ok: true,
       canRewind: !!res?.canRewind && filesChanged.length > 0,
@@ -3006,6 +3024,7 @@ registerSocketConnection(io, socket => {
       insertions: res?.insertions ?? 0,
       deletions: res?.deletions ?? 0,
       keepUuid: plan.keepUuid,
+      dirtyOverlap,
     });
   });
 

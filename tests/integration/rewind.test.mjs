@@ -145,6 +145,12 @@ test.describe('文件轴 Rewind 端到端', (process.env.CI || !process.env.RUN_
     assert.ok(Array.isArray(preview.filesChanged) && preview.filesChanged.some(p => p.endsWith('target.txt')),
       `filesChanged 应含 target.txt，实际：${JSON.stringify(preview.filesChanged)}`);
     assert.equal(typeof preview.keepUuid, 'string', 'keepUuid 是 fork 的锚点，缺了无法分叉');
+    // G5 的字段必须真的从【真 server】产出——单测测的是纯函数、E2E 打的是平行 mock，
+    // 两者都不能证明这条线接上了。工作区是 mkdtemp 出来的、不是 git 仓库，
+    // 所以这里恒为空数组；有风险那一档由 git-workspace 单测与 E2E 各自两侧覆盖。
+    assert.ok(Array.isArray(preview.dirtyOverlap),
+      'dirtyOverlap 缺席 → 前端拿不到脏改动警告，用户的未提交改动会被无声覆盖');
+    assert.deepEqual(preview.dirtyOverlap, [], '非 git 工作区应静默放行，不制造假警告');
     assert.equal(readFileSync(targetPath, 'utf8'), afterTurn, 'preview 是只读的，绝不能动磁盘');
 
     // ── confirm：真回滚 + 分叉 ──
