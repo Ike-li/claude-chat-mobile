@@ -22,7 +22,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
@@ -3702,6 +3702,25 @@ registerSocketConnection(io, socket => {
   // 只读、无副作用、走 on() 的 deviceApproved 闸（与其余 socket 事件同一道门）。不开 HTTP 端点：
   // 守「不开无鉴权数据端点」，且审计里有设备指纹与来源 IP，比会话列表更该留在鉴权面内。
   // limit 上限 200：手机上没人翻更多，而 records 环形上限是 5000，全量回传是几百 KB 的白发。
+  // 审批规则的只读面。agent.js:269 明写放行白名单完全交给 settingSources 的 permissions.allow——
+  // 这份名单决定手机上哪些工具直接放行，而 web 端此前既读不到也写不了，「为什么这个老弹」无从回答。
+  //
+  // **刻意不塞进 instances 广播**：那条路每个轮次边界都触发，而这份名单只在设置面板打开时看一眼，
+  // 放进去等于给每台连着的设备每轮白发一份（同 restarts 不进广播的理由）。
+  // 数据来自 ensureCliDefaults 已经解析好的 effective settings，不额外 spawn CLI。
+  on(socket, 'permissions:rules', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    try {
+      const resolved = await sdkResolveSettings({ cwd, settingSources: ['user', 'project', 'local'] });
+      ack({ ok: true, cwd, rules: permissionRulesFromEffectiveSettings(resolved?.effective) });
+    } catch (err) {
+      // 读不出来就说读不出来：rules:null 让前端整段缺席，而不是显示一份空名单
+      console.warn(`[cli-settings] 审批规则读取失败 (${cwd}):`, err?.message || err);
+      ack({ ok: false, cwd, rules: null, error: '读取失败' });
+    }
+  });
+
   on(socket, 'audit:get', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const raw = Number(payload?.limit);

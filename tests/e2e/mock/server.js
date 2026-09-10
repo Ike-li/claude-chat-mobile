@@ -170,6 +170,13 @@ let noModelsMode = false;
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
 let mockStatuslineState = 'not-installed';
+// 审批规则样本：三档都有内容，且 deny 里放一条明显危险的——前端把 deny 显示成 allow 时 E2E 要能咬住
+let mockPermissionRules = {
+  allow: ['Bash(git status:*)', 'Read', 'Glob'],
+  deny: ['Bash(rm -rf:*)'],
+  ask: ['WebFetch'],
+  total: 5,
+};
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
 // 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
 const mockServicePayload = () => ({
@@ -351,6 +358,12 @@ function resetMockState() {
   noModelsMode = false;
   mockHooksState = 'not-installed';
   mockStatuslineState = 'not-installed';
+  mockPermissionRules = {
+    allow: ['Bash(git status:*)', 'Read', 'Glob'],
+    deny: ['Bash(rm -rf:*)'],
+    ask: ['WebFetch'],
+    total: 5,
+  };
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
@@ -1914,6 +1927,17 @@ io.on('connection', socket => {
   // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
   // statusline 桥的装/卸（与 hooks:setup 同构）。真 server 走 execFile 调 scripts 下的安装器，
   // 这里只切内存态——mock 的职责是让前端两条渲染分支都走得到，不是复刻安装器。
+  // 审批规则只读面。真 server 走 sdkResolveSettings 读合并后的 settings；mock 给一份确定性的
+  // 三档样本，让前端的分档渲染与计数都走得到。
+  socket.on('permissions:rules', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      cwd: payload?.cwd || mockInstances[0].cwd,
+      rules: mockPermissionRules,
+    });
+  });
+
   socket.on('statusline:setup', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;

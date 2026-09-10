@@ -86,11 +86,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="general-nav-notify"]').click();
     await expect(page.locator('#generalPage-notify [data-scope-chip="device"]')).toBeVisible();
 
-    // 「行为与开关」页：语言是本机档，服务与配置是整机档——两档同页并存，正是 chip 化的意义
+    // 「行为与开关」页：语言是本机档，审批规则与服务配置是整机档——两档同页并存，正是 chip 化的意义。
+    // host 档在这一页有多个组（审批规则、服务与配置），故取 first 而不是要求全页唯一。
     await page.locator('[data-testid="general-back"]').click();
     await page.locator('[data-testid="general-nav-behavior"]').click();
-    await expect(page.locator('#generalPage-behavior [data-scope-chip="device"]')).toBeVisible();
-    await expect(page.locator('#generalPage-behavior [data-scope-chip="host"]')).toBeVisible();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="device"]').first()).toBeVisible();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="host"]').first()).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });
@@ -210,6 +211,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('postgres（failed）');
     await expect(body).toContainText('Skills');
     await expect(body).toContainText('7');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 缺口 1a：审批白名单此前在 web 上既读不到也写不了——agent.js:269 明写放行白名单完全交给
+  // settingSources 的 permissions.allow，而用户在手机上批到烦时无从知道那份名单里有什么。
+  // ★ deny 与 allow 必须分档且可分辨：把 deny 显示成 allow 会让人以为危险操作已被放行。
+  test('P0-28k 「行为与开关」页显示审批规则三档，deny 与 allow 分开且各自计数', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-behavior"]').click();
+
+    const body = page.locator('[data-testid="permission-rules-body"]');
+    await expect(body).toBeVisible();
+
+    // 三档各自成组，计数跟着各自的条数走（mock 给的是 allow 3 / deny 1 / ask 1）
+    const allow = body.locator('[data-rule-group="allow"]');
+    const deny = body.locator('[data-rule-group="deny"]');
+    await expect(allow).toContainText('3');
+    await expect(allow).toContainText('Read');
+    await expect(deny).toContainText('1');
+    await expect(deny).toContainText('rm -rf');
+    await expect(body.locator('[data-rule-group="ask"]')).toContainText('WebFetch');
+
+    // ★ 那条危险规则必须落在 deny 组里，不能出现在 allow 组里
+    await expect(allow).not.toContainText('rm -rf');
 
     await expectNoBrowserErrors(page);
   });

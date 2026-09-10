@@ -498,6 +498,8 @@ const ACK_SHAPES = [
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
   { event: 'logs:get', payload: () => ({}), required: ['logs', 'diagLogs'] },
   { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
+  // rules 为 null（该 cwd 没配过审批规则）也算合法形状——键必须在，值可以是 null。
+  { event: 'permissions:rules', payload: () => ({ cwd: tmpDir }), required: ['ok', 'cwd', 'rules'] },
   // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   { event: 'service:status', payload: () => ({}),

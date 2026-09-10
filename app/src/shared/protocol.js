@@ -66,6 +66,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'git:diff',
   'git:status',
   'hooks:setup',
+  'permissions:rules',
   'push:test',
   'logs:clientError',
   'logs:get',

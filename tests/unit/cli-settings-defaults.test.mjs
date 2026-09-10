@@ -7,6 +7,7 @@ import {
   normalizePermissionMode,
   normalizeEffortLevel,
   defaultsFromEffectiveSettings,
+  permissionRulesFromEffectiveSettings,
   resolveFreshPrefs,
   resolveResumeEffort,
   buildWorktreeGatewayEnv,
@@ -450,4 +451,73 @@ test.describe('decideWorktreeSettingsAction（write / prune / skip 三态）', (
   test('空对象按无需隔离处理（buildWorktreeGatewayEnv 不会返回它，但空 env 写进文件毫无意义）', () => {
     assert.equal(decideWorktreeSettingsAction({ gatewayEnvSettled: true, gatewayEnv: {} }), 'prune');
   });
+});
+
+// ── 审批规则（2026-09-10 新增）──────────────────────────────────────────────
+//
+// agent/agent.js:269 明写「不注入 options.allowedTools：放行白名单完全交给 settingSources 的
+// permissions.allow」——这份名单决定手机上哪些工具直接放行、哪些弹审批，而 web 端此前**既读不到
+// 也写不了**。用户在手机上批到烦，「为什么这个老弹 / 那个为什么不弹」无从回答。
+//
+// 数据源是现成的：ensureCliDefaults 已经在每个 cwd 上调 sdkResolveSettings，
+// defaultsFromEffectiveSettings 也已经读了 effective.permissions.defaultMode——
+// 整个 permissions 对象一直在内存里，只是没人抽 allow/deny/ask。
+//
+// ★ 失败方向：读不出来时返回 null（整段缺席），**不返回空名单**——「没有规则」与「我没读到」
+//   在安全上是两件事，显示成空名单会让用户以为自己没配过。
+
+test('审批规则：没有 permissions 时返回 null（整段缺席，不是空名单）', () => {
+  assert.equal(permissionRulesFromEffectiveSettings(undefined), null);
+  assert.equal(permissionRulesFromEffectiveSettings({}), null);
+  assert.equal(permissionRulesFromEffectiveSettings({ permissions: {} }), null);
+});
+
+test('审批规则：三档分别抽出，各自计数', () => {
+  const view = permissionRulesFromEffectiveSettings({
+    permissions: {
+      allow: ['Bash(git status)', 'Read'],
+      deny: ['Bash(rm *)'],
+      ask: ['WebFetch'],
+    },
+  });
+  assert.deepEqual(view.allow, ['Bash(git status)', 'Read']);
+  assert.deepEqual(view.deny, ['Bash(rm *)']);
+  assert.deepEqual(view.ask, ['WebFetch']);
+  assert.equal(view.total, 4);
+});
+
+// ★ 方向不能反：把 deny 显示成 allow 会让用户以为某个危险操作已被放行。
+test('审批规则：allow 与 deny 不得混淆（方向反了比不显示更糟）', () => {
+  const view = permissionRulesFromEffectiveSettings({
+    permissions: { allow: ['SAFE'], deny: ['DANGEROUS'] },
+  });
+  assert.ok(view.allow.includes('SAFE'));
+  assert.ok(!view.allow.includes('DANGEROUS'));
+  assert.ok(view.deny.includes('DANGEROUS'));
+  assert.ok(!view.deny.includes('SAFE'));
+});
+
+test('审批规则：只配了一档时其余为空数组，不是 undefined（渲染层不必各自兜底）', () => {
+  const view = permissionRulesFromEffectiveSettings({ permissions: { allow: ['X'] } });
+  assert.deepEqual(view.deny, []);
+  assert.deepEqual(view.ask, []);
+  assert.equal(view.total, 1);
+});
+
+test('审批规则：非数组的脏值按缺席处理，不得让整段崩掉', () => {
+  const view = permissionRulesFromEffectiveSettings({
+    permissions: { allow: 'not-an-array', deny: ['D'] },
+  });
+  assert.deepEqual(view.allow, []);
+  assert.deepEqual(view.deny, ['D']);
+});
+
+// 三档都配成空数组 = 用户确实清空过，与「没有 permissions 键」不同——前者是一句确定的
+// 「我没有任何规则」，后者是「这台机器上没配过」。都渲染成整段缺席即可，但不能崩。
+test('审批规则：三档都是空数组 → total 为 0 且不为 null（确实清空过，与从未配置不同）', () => {
+  const view = permissionRulesFromEffectiveSettings({
+    permissions: { allow: [], deny: [], ask: [] },
+  });
+  assert.notEqual(view, null);
+  assert.equal(view.total, 0);
 });

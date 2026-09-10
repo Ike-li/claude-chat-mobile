@@ -305,7 +305,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        statusLine.command），漂移判据也不同（statusline 还要比 refreshInterval），
   //        共用一个 handler 靠 payload 分流迟早写反。**只收 install/uninstall 不收 verify**——
   //        statusline 安装器没有 verify 子命令，收了只会在 spawn 那层报错。入向 51→52）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 52);
+  //      + permissions:rules（2026-09-10，审批白名单的只读面。agent.js:269 明写「不注入
+  //        options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow」——
+  //        这份名单决定手机上哪些工具直接放行、哪些弹审批，而 web 端此前既读不到也写不了，
+  //        用户批到烦时「为什么这个老弹 / 那个为什么不弹」无从回答。
+  //        **刻意不塞进 instances 广播**：那条路每个轮次边界都触发，而名单只在设置面板打开时
+  //        看一眼，放进去等于给每台连着的设备每轮白发一份（同 restarts 不进广播的理由）。
+  //        入向 52→53）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 53);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('permissions:rules'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:confirm'));

@@ -5568,6 +5568,50 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     hooksBridgeBody.appendChild(card);
   }
 
+  // 审批规则（只读）。按需拉——不进 instances 广播，理由见 server 侧 handler 头注。
+  let permissionRulesCache = null;
+  async function loadPermissionRules() {
+    const res = await new Promise(resolve => {
+      socket.timeout(5000).emit('permissions:rules', { cwd: currentCwd || null }, (err, r) => resolve(err ? null : r));
+    });
+    // 断线/读失败：保留上一次拿到的名单，不把已经显示对的东西刷成空
+    if (res?.ok === true) permissionRulesCache = res.rules;
+    renderPermissionRules();
+  }
+  function renderPermissionRules() {
+    const section = $('permissionRulesSection'), body = $('permissionRulesBody');
+    if (!section || !body) return;
+    const rules = permissionRulesCache;
+    // null = 这台机器没配过审批规则（或读不出来）→ 整段缺席。**不显示空名单**：
+    // 「我没有规则」与「我没读到」在安全上是两件事，后者显示成空会让人以为自己没配过。
+    if (!rules || !rules.total) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    body.replaceChildren();
+    // 三档各一张卡。deny 用 danger 色——把它显示成和 allow 一样会让人以为危险操作已被放行。
+    const groups = [
+      { key: 'allow', list: rules.allow, label: t('直接放行 · 不弹审批'), tone: 'text-success' },
+      { key: 'deny', list: rules.deny, label: t('直接拒绝'), tone: 'text-danger' },
+      { key: 'ask', list: rules.ask, label: t('每次都问'), tone: 'text-ink-soft' },
+    ];
+    for (const g of groups) {
+      if (!Array.isArray(g.list) || !g.list.length) continue;
+      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
+      card.setAttribute('data-rule-group', g.key);
+      const head = el('<div class="font-semibold"></div>');
+      head.className = `font-semibold ${g.tone}`;
+      head.textContent = `${g.label} · ${g.list.length}`;
+      card.appendChild(head);
+      const ul = el('<div class="mt-1 space-y-0.5"></div>');
+      for (const rule of g.list) {
+        const row = el('<div class="text-ink-soft break-all" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace"></div>');
+        row.textContent = rule; // 规则是用户写的文本，textContent 插值（CSP 安全）
+        ul.appendChild(row);
+      }
+      card.appendChild(ul);
+      body.appendChild(card);
+    }
+  }
+
   // statusline 桥段。与 renderHooksBridgeSection 同构——两个桥在面板上并列，渲染惯例也保持一致。
   function renderStatuslineBridgeSection() {
     const section = $('statuslineBridgeSection'), body = $('statuslineBridgeBody');
@@ -5808,7 +5852,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }),
     // 「这台电脑」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
     // 它跟着 instances 广播实时更新。
-    onEnterPage: page => { if (page === 'host') ensureGeneralVersions(); },
+    onEnterPage: page => {
+      if (page === 'host') ensureGeneralVersions();
+      // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
+      if (page === 'behavior') loadPermissionRules();
+    },
   });
   generalNav.bind();
 

@@ -910,6 +910,17 @@
 
       <!-- ═══ L2 · 🛠 行为与开关 ═══ -->
       <div id="generalPage-behavior" class="hidden space-y-4" data-general-page="behavior">
+        <!-- 审批规则（只读）。这份名单决定手机上哪些工具直接放行、哪些弹审批——它来自
+             ~/.claude/settings.json 与工作区 .claude/settings.local.json，**与你在电脑终端用的是同一份**。
+             整段由 app.js 的 renderPermissionRules 按 permissions:rules 的 ack 显隐。 -->
+        <div id="permissionRulesSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🛡 <span>审批规则</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div id="permissionRulesBody" class="space-y-2" data-testid="permission-rules-body"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">来自 ~/.claude/settings.json 与本工作区的 .claude/settings.local.json，与你在电脑终端里用的是同一份。这里只读——要改请在电脑上编辑那两个文件。</div>
+        </div>
+
         <div>
           <div class="text-xs font-semibold text-ink-soft mb-2">🌐 <span>语言</span> / Language
             <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
