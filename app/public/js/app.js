@@ -5568,6 +5568,81 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     hooksBridgeBody.appendChild(card);
   }
 
+  // 接入二维码。三步态：入口 → 二次确认 → 显示（带倒计时自动隐藏）。
+  // 自动隐藏的秒数刻意短：够扫、不够让人忘了它还挂在屏幕上。
+  const QR_AUTO_HIDE_MS = 30_000;
+  let qrHideTimer = null;
+  let qrTickTimer = null;
+  function qrShowStep(step) {
+    for (const [n, id] of [[1, 'qrStep1'], [2, 'qrStep2'], [3, 'qrStep3']]) {
+      $(id)?.classList.toggle('hidden', n !== step);
+    }
+  }
+  function hideQr() {
+    clearTimeout(qrHideTimer); qrHideTimer = null;
+    clearInterval(qrTickTimer); qrTickTimer = null;
+    // 真的把矩阵从 DOM 里删掉，不只是 hidden——留在 DOM 里的话，任何能看到页面的人
+    // （开发者工具、截图、后续的 innerHTML 读取）仍然拿得到那把钥匙。
+    const wrap = $('qrCanvasWrap');
+    if (wrap) wrap.replaceChildren();
+    qrShowStep(1);
+  }
+  function paintQrMatrix(matrix, size) {
+    const wrap = $('qrCanvasWrap');
+    if (!wrap) return;
+    wrap.replaceChildren();
+    // quiet zone 取 4：实测 2 检不出、3/4 可解（见 shared/qrcode.js 的实测记录）
+    const quiet = 4;
+    const total = size + quiet * 2;
+    const cell = Math.max(4, Math.floor(260 / total));
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = total * cell;
+    cv.style.width = cv.style.height = `${total * cell}px`;
+    cv.setAttribute('data-testid', 'qr-canvas');
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#000';
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (matrix[r][c]) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
+    }
+    wrap.appendChild(cv);
+  }
+  async function revealQr() {
+    const res = await new Promise(resolve => {
+      socket.timeout(8000).emit('connect:qr', { target: 'lan' }, (err, r) => resolve(err ? null : r));
+    });
+    if (!res?.ok) {
+      addBar(res?.error || t('二维码生成失败'), 'text-danger');
+      qrShowStep(1);
+      return;
+    }
+    paintQrMatrix(res.matrix, res.size);
+    const note = $('qrNote');
+    if (note) {
+      note.textContent = res.includeToken
+        ? t('码里含访问令牌，扫一下即可接入')
+        : (res.note || t('该域名受 Cloudflare Access 保护，码里不含令牌'));
+    }
+    qrShowStep(3);
+    let left = Math.floor(QR_AUTO_HIDE_MS / 1000);
+    const tick = () => {
+      const el2 = $('qrCountdown');
+      if (el2) el2.textContent = `${left} ${t('秒后自动隐藏')}`;
+    };
+    tick();
+    clearInterval(qrTickTimer);
+    qrTickTimer = setInterval(() => { left -= 1; tick(); }, 1000);
+    clearTimeout(qrHideTimer);
+    qrHideTimer = setTimeout(hideQr, QR_AUTO_HIDE_MS);
+  }
+  $('btnQrReveal')?.addEventListener('click', () => qrShowStep(2));
+  $('btnQrCancel')?.addEventListener('click', () => qrShowStep(1));
+  $('btnQrConfirm')?.addEventListener('click', () => revealQr());
+  $('btnQrHide')?.addEventListener('click', () => hideQr());
+
   // 审批规则（只读）。按需拉——不进 instances 广播，理由见 server 侧 handler 头注。
   let permissionRulesCache = null;
   async function loadPermissionRules() {
@@ -5853,6 +5928,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 「这台电脑」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
     // 它跟着 instances 广播实时更新。
     onEnterPage: page => {
+      // 离开「接入与设备」页就收码：钥匙不该挂在一个用户以为已经翻过去的界面上
+      if (page !== 'devices') hideQr();
       if (page === 'host') ensureGeneralVersions();
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
@@ -5875,6 +5952,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 每次打开都从 L1 起步（目录心智）；带深链时再切到目标页。
       const link = generalDeepLink;
       generalDeepLink = null;
+      hideQr(); // 每次打开面板都从「未展开」起步，不继承上一次的展开态
       generalNav.showHome();
       if (link?.page) generalNav.showPage(link.page, { anchor: link.anchor || null });
       // 版本号首次打开时补一次；运行时长已由 instances 广播喂给 latestServiceHealth，无需请求。

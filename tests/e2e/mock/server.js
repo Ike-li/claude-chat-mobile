@@ -170,6 +170,8 @@ let noModelsMode = false;
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
 let mockStatuslineState = 'not-installed';
+// test:qr-access 拨到「受 Access 保护」档：那一档的码不含 token（判据在 public-target.js）
+let mockAccessProtected = false;
 // 审批规则样本：三档都有内容，且 deny 里放一条明显危险的——前端把 deny 显示成 allow 时 E2E 要能咬住
 let mockPermissionRules = {
   allow: ['Bash(git status:*)', 'Read', 'Glob'],
@@ -358,6 +360,7 @@ function resetMockState() {
   noModelsMode = false;
   mockHooksState = 'not-installed';
   mockStatuslineState = 'not-installed';
+  mockAccessProtected = false;
   mockPermissionRules = {
     allow: ['Bash(git status:*)', 'Read', 'Glob'],
     deny: ['Bash(rm -rf:*)'],
@@ -1927,6 +1930,21 @@ io.on('connection', socket => {
   // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
   // statusline 桥的装/卸（与 hooks:setup 同构）。真 server 走 execFile 调 scripts 下的安装器，
   // 这里只切内存态——mock 的职责是让前端两条渲染分支都走得到，不是复刻安装器。
+  // 接入二维码。真 server 用 shared/qrcode.js 现编矩阵；mock 给一个确定性的小矩阵——
+  // 前端要验的是「两步展开 + 定时隐藏 + 含不含 token」，不是编码器本身（那有自己的单测）。
+  socket.on('connect:qr', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const includeToken = payload?.target !== 'public' || !mockAccessProtected;
+    const size = 21;
+    const matrix = Array.from({ length: size }, (_, r) => Array.from({ length: size }, (_, c) => (r + c) % 2));
+    ack({
+      ok: true,
+      url: includeToken ? 'http://192.168.1.9:3000/#token=mock-token-value' : 'https://ccm.example.com',
+      matrix, size, includeToken,
+      note: includeToken ? '' : '该域名受 Cloudflare Access 保护，二维码里不含令牌。',
+    });
+  });
+
   // 审批规则只读面。真 server 走 sdkResolveSettings 读合并后的 settings；mock 给一份确定性的
   // 三档样本，让前端的分档渲染与计数都走得到。
   socket.on('permissions:rules', (payload, ack) => {
@@ -4089,7 +4107,13 @@ io.on('connection', socket => {
             dirs: ['/Users/you/code/claude-chat-mobile'],
             instances: [],
             defaultPermissionMode: 'default',
-            defaultEffort: null
+            defaultEffort: null,
+            // ★ service 不可省：真 server 的 instances 广播**恒带**这个字段
+            // （computeServiceHealth 无条件返回），而 mock server 是所有并行 spec 共用的一个进程——
+            // 这里 io.emit 会广播到**其它测试正在用的页面**上，把它们的 latestServiceHealth
+            // 冲成 undefined，于是依赖它的段落（两个桥）整段消失。
+            // 2026-09-10：P0-25c 在四分片并行下间歇 8s 超时，根因就是这一处漏网。
+            service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {

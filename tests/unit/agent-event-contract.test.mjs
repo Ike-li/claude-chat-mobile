@@ -312,7 +312,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        **刻意不塞进 instances 广播**：那条路每个轮次边界都触发，而名单只在设置面板打开时
   //        看一眼，放进去等于给每台连着的设备每轮白发一份（同 restarts 不进广播的理由）。
   //        入向 52→53）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 53);
+  //      + connect:qr（2026-09-10，接入二维码。此前只有终端有这个能力（node scripts/qr.js），
+  //        而「人不在电脑前」正是本产品的前提——想把第二台手机接进来得先回电脑。
+  //        token 走 URL fragment（不进任何中间层访问日志），受 Access 保护的域名则**不带 token**
+  //        （那条路只认 JWT、不回退 AUTH_TOKEN，带上去纯属泄漏）——判据复用
+  //        shared/public-target.js 的 includeToken，不在 handler 里另算一套。
+  //        前端那侧另有两步展开 + 定时自动隐藏，理由同 scripts/qr.js 必须手敲：
+  //        二维码没有「安全的默认档」，而人不会去遮一个「看起来无害」的方块图案。入向 53→54）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 54);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('permissions:rules'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));

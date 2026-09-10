@@ -500,6 +500,11 @@ const ACK_SHAPES = [
   { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
   // rules 为 null（该 cwd 没配过审批规则）也算合法形状——键必须在，值可以是 null。
   { event: 'permissions:rules', payload: () => ({ cwd: tmpDir }), required: ['ok', 'cwd', 'rules'] },
+  // 只驱动非法 target 这一支。两个合法档的成败都取决于跑测试的机器（有没有局域网地址、
+  // 有没有配 CF_ACCESS_*），而合法档一旦成功就会真生成一张含 token 的码——都不是
+  // 一次性形状表该依赖的东西。成功支的字段 { url, matrix, size, includeToken, note }
+  // 由 E2E mock 与真 server 各自实现，改真 server 时**必须同时改 tests/e2e/mock/server.js**。
+  { event: 'connect:qr', branch: '非法 target', payload: () => ({ target: '__bogus__' }), required: ['ok', 'error'] },
   // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   { event: 'service:status', payload: () => ({}),

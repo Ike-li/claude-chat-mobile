@@ -870,6 +870,32 @@
                DEVICE_APPROVAL_SCOPE 未设 all 时，这张表管不到隧道进来的连接，必须直说。 -->
           <div id="trustedDevicesNote" class="text-[10px] text-ink-faint px-1 mt-1.5"></div>
         </div>
+
+        <!-- 接入新设备：二维码没有「安全的默认档」——不含 token 的码没用，含 token 的码就是一把钥匙。
+             故做成**两步展开 + 到时自动隐藏**：投屏时人会本能地遮一串明文 token，却不会去遮一个
+             「看起来无害」的方块图案。同 scripts/qr.js 必须手敲的理由。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📷 <span>接入新设备</span></div>
+          <div id="qrStep1" class="space-y-2">
+            <button id="btnQrReveal" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium" data-testid="qr-reveal">📷 显示接入二维码</button>
+            <div class="text-[10px] text-ink-faint px-1">码里含访问令牌，扫到即可进入。展开前请确认周围没有别人能看到屏幕。</div>
+          </div>
+          <div id="qrStep2" class="hidden space-y-2" data-testid="qr-confirm">
+            <div class="p-2.5 rounded-xl border border-warning/40 bg-warning/5 text-xs text-warning">
+              ⚠️ 二维码等同于一把钥匙：任何人扫到都能以你的身份进来。确定现在显示吗？
+            </div>
+            <div class="flex gap-2">
+              <button id="btnQrCancel" type="button" class="flex-1 text-center p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">取消</button>
+              <button id="btnQrConfirm" type="button" class="flex-1 text-center p-2.5 rounded-xl border border-cta bg-cta text-white text-xs font-semibold" data-testid="qr-confirm-show">显示</button>
+            </div>
+          </div>
+          <div id="qrStep3" class="hidden space-y-2" data-testid="qr-panel">
+            <div id="qrCanvasWrap" class="p-3 rounded-xl border border-line bg-white flex justify-center"></div>
+            <div id="qrNote" class="text-[10px] text-ink-faint px-1 text-center"></div>
+            <div id="qrCountdown" class="text-[10px] text-danger px-1 text-center font-semibold" data-testid="qr-countdown"></div>
+            <button id="btnQrHide" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">立即隐藏</button>
+          </div>
+        </div>
       </div>
 
       <!-- ═══ L2 · 🖥 这台电脑 ═══

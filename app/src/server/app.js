@@ -47,6 +47,8 @@ import { dataFile } from '../shared/data-dir.js';
 import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
 import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
+import { encodeQr } from '../shared/qrcode.js';
+import { resolvePublicTarget } from '../shared/public-target.js';
 import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
@@ -108,6 +110,8 @@ import {
   tokenMatches as secureTokenMatches,
 } from './http.js';
 import { reachableIPv4s } from '../shared/net-addr.js';
+// 只要那个布尔值：判据与 initCfAccess 同源，两处各判一套的表现是「二维码扫开进不去」且无报错指向真因
+import { accessConfigured } from '../auth/cf-access.js';
 import { createInstanceManager } from './instance-manager.js';
 import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
@@ -3702,6 +3706,66 @@ registerSocketConnection(io, socket => {
   // 只读、无副作用、走 on() 的 deviceApproved 闸（与其余 socket 事件同一道门）。不开 HTTP 端点：
   // 守「不开无鉴权数据端点」，且审计里有设备指纹与来源 IP，比会话列表更该留在鉴权面内。
   // limit 上限 200：手机上没人翻更多，而 records 环形上限是 5000，全量回传是几百 KB 的白发。
+  // 局域网基址。与启动横幅同源（reachableIPv4s），且同样受 bindPlan.publiclyReachable 约束——
+  // 显式绑了 loopback 时那些地址上根本没人在听，做出来的码扫开必然失败，不如直说取不到。
+  const lanBaseUrlForQr = () => {
+    if (!bindPlan.publiclyReachable) return null;
+    const ip = reachableIPv4s()[0];
+    return ip ? `http://${ip}:${port}` : null;
+  };
+
+  // 接入二维码：把连接地址（含 token）编成 QR 矩阵，让第二台设备扫一下就进来。
+  // 此前这个能力只有终端有（node scripts/qr.js），而「人不在电脑前」正是这个产品的前提。
+  //
+  // 【token 为什么可以进码】它走 URL fragment（/#token=），fragment 不进任何中间层的访问日志——
+  // 与 server 启动横幅、scripts/qr.js 同一条既有判据。
+  // 【受 Access 保护的域名不带 token】那条路只认 Access 的 JWT、不回退 AUTH_TOKEN，
+  // 带上去纯属泄漏。判据复用 resolvePublicTarget 的 includeToken，**不在这里另算一套**。
+  // 【为什么必须显式请求】二维码没有「安全的默认档」：不含 token 的码没用，含 token 的码就是
+  //   一把钥匙。投屏时人会本能遮挡一串明文 token，却不会去遮一个「看起来无害」的方块图案。
+  //   同 scripts/qr.js 必须手敲的理由，前端那侧还要再加一道两步展开 + 定时自动隐藏。
+  on(socket, 'connect:qr', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    // target 是客户端可控输入，显式白名单：两档的暴露面不同（局域网 vs 公网），
+    // 静默把未知值当成某一档，等于让调用方以为自己选中了另一档。
+    const target = payload?.target;
+    if (target !== 'lan' && target !== 'public') {
+      return ack({ ok: false, error: '未知的目标类型（只接受 lan / public）' });
+    }
+    const wantPublic = target === 'public';
+    try {
+      const token = process.env.AUTH_TOKEN || '';
+      let base = null;
+      let includeToken = true;
+      let note = '';
+      if (wantPublic) {
+        const target = resolvePublicTarget({
+          cfHostname: process.env.CF_ACCESS_HOSTNAME,
+          accessEnabled: accessConfigured(),
+          tailscaleDns: null, // Tailscale DNS 要 spawn 探测，不在这条同步路径上做；CLI 侧仍支持
+          port,
+        });
+        if (!target) return ack({ ok: false, error: '没有可用的公网地址：先配 Cloudflare Access 域名，或在电脑上用 node scripts/qr.js --url <地址>' });
+        base = target.url;
+        includeToken = target.includeToken;
+        note = target.note || '';
+      } else {
+        // 局域网：用本机在白名单网卡上的地址。取不到就让调用方改用公网档，不编一个。
+        const lan = lanBaseUrlForQr();
+        if (!lan) return ack({ ok: false, error: '取不到局域网地址：改用公网档，或在电脑上跑 node scripts/qr.js' });
+        base = lan;
+      }
+      if (includeToken && !token) return ack({ ok: false, error: '未设置 AUTH_TOKEN' });
+      const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
+      const { matrix, size } = encodeQr(url);
+      // url 一并回传：前端要显示「扫不出来时改用文字」的回退，且用户可能想复制
+      ack({ ok: true, url, matrix, size, includeToken, note });
+    } catch (err) {
+      console.warn('[qr] 生成失败:', err?.message || err);
+      ack({ ok: false, error: '二维码生成失败' });
+    }
+  });
+
   // 审批规则的只读面。agent.js:269 明写放行白名单完全交给 settingSources 的 permissions.allow——
   // 这份名单决定手机上哪些工具直接放行，而 web 端此前既读不到也写不了，「为什么这个老弹」无从回答。
   //

@@ -245,6 +245,42 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 缺口 4：接入二维码。此前只有终端有（node scripts/qr.js），而「人不在电脑前」正是本产品的前提。
+  // ★ 二维码没有「安全的默认档」——码里含 token，等同一把钥匙。故必须两步展开，且离开页面就收起：
+  //   钥匙不该挂在一个用户以为已经翻过去的界面上。
+  test('P0-28l 接入二维码：两步展开、有倒计时、离开页面即收起', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-devices"]').click();
+
+    // 第一步：只有入口按钮，码本身不在 DOM 里
+    await expect(page.locator('[data-testid="qr-reveal"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-panel"]')).toBeHidden();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    // 第二步：点入口只到确认，**还不显示码**——这一条正是「两步」的意义
+    await page.locator('[data-testid="qr-reveal"]').click();
+    await expect(page.locator('[data-testid="qr-confirm"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    // 第三步：确认后才画出来，且带自动隐藏倒计时
+    await page.locator('[data-testid="qr-confirm-show"]').click();
+    await expect(page.locator('[data-testid="qr-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="qr-countdown"]')).toContainText('自动隐藏');
+
+    // ★ 离开这一页，码必须从 DOM 里真的消失（不是只加 hidden）
+    await page.locator('[data-testid="general-back"]').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 可达性的另一半：会话页里侧栏入口同样在，不必先回首页。会话设置 chip 与侧栏入口是两条并行通道，
   // 不是「首页走这条、会话页走那条」的互斥分支。
   test('P0-28d 会话页里侧栏设置入口同样可达，且与会话设置面板互不干扰', async ({ page }) => {
