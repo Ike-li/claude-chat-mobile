@@ -16,6 +16,10 @@ export function createDeviceGate({
   listPendingDevices = getPendingDevices,
   listTrustedDevices = getTrustedDeviceProfiles,
   isTrusted = isDeviceTrusted,
+  // CF Access 已启用且 DEVICE_APPROVAL_SCOPE !== 'all' —— 此时经隧道进来的连接【完全不查】
+  // 这张信任表，吊销对它们既不掉线也不拦截。界面必须说出这件事：一个点得到、却对用户
+  // 实际访问路径无效的控件，比没有这个控件更坏（2026-09-10 实测踩到）。
+  accessBypassActive = false,
 }) {
   const trustedDevicesFile = join(dataDir, 'trusted-devices.json');
   const pendingDevicesFile = join(dataDir, 'pending-devices.json');
@@ -59,6 +63,7 @@ export function createDeviceGate({
   // 既够反查又不是凭据。isCurrent 由服务端比对得出，前端不需要知道自己的 token 长什么样。
   function trustedDevicesPayload(currentDeviceToken) {
     return {
+      accessBypassActive,
       devices: listTrustedDevices().map(d => ({
         shortId: d.shortId,
         kind: d.kind,

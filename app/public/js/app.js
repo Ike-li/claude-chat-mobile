@@ -1905,11 +1905,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         : (kind || t('未知设备'))
   );
 
-  function renderTrustedDevices(devices) {
+  function renderTrustedDevices(devices, accessBypassActive = false) {
     const section = $('trustedDevicesSection');
     const list = $('trustedDevicesList');
+    const note = $('trustedDevicesNote');
     if (!section || !list) return;
     list.textContent = '';
+    // 脚注按管辖面分档。默认档（CF Access 开着、DEVICE_APPROVAL_SCOPE 未设 all）下这张表
+    // 【管不到】经隧道进来的连接，此时还写「吊销后立刻失去访问权」就是在说假话——
+    // 用户会照着操作，然后发现设备照常能用（2026-09-10 实录）。
+    if (note) {
+      note.textContent = accessBypassActive
+        ? t('⚠️ 经 Cloudflare Access 进来的连接不查这张表，吊销对它们无效——本表目前只管局域网 / 本机直连。要让它对所有路径生效，把 DEVICE_APPROVAL_SCOPE 设为 all 后重启。')
+        : t('吊销后该设备立刻失去访问权，正用设备令牌连着的那条连接会被断开。这不是拉黑，之后仍可重新申请。');
+      note.classList.toggle('text-warning', accessBypassActive);
+      note.classList.toggle('text-ink-faint', !accessBypassActive);
+    }
     // 空列表也不显示整段：一台都没有意味着这台 server 只被本机/CF Access 访问过，
     // 摆一个空框只会让人以为坏了。
     if (!devices.length) { section.classList.add('hidden'); return; }
@@ -2158,7 +2169,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       renderDeviceRequests(Array.isArray(p?.devices) ? p.devices : []);
     },
     trusted_devices(p) {
-      renderTrustedDevices(Array.isArray(p?.devices) ? p.devices : []);
+      renderTrustedDevices(Array.isArray(p?.devices) ? p.devices : [], p?.accessBypassActive === true);
     },
     init(p) {
       // 合成 init 可能只带 slashCommands（切区重放）或只校正 model/cwd——按字段是否存在分别处理，

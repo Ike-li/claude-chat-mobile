@@ -169,6 +169,23 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
 
     const payload = gate.trustedDevicesPayload(FULL_A);
     const wire = JSON.stringify(payload);
+    // 顶层也钉住：accessBypassActive 决定面板显示哪一档脚注，漏发会让「吊销对它们无效」
+    // 那句永远不出现，用户就又回到「按文案操作、结果相反」的老坑里。
+    assert.deepEqual(Object.keys(payload).sort(), ['accessBypassActive', 'devices']);
+    assert.equal(payload.accessBypassActive, false, '未注入时缺省必须是 false（＝不谎称管得到）');
+
+    // ★ true 那一档必须单独造出来。只验缺省 false 的话，把这个字段写死成 false 也一样全绿——
+    //   而写死成 false 正是缺陷本身（面板永远不警告，用户回到「按文案吊销、设备照常能用」的老坑）。
+    //   2026-09-10 注入实测：只有下面这条能咬住。
+    const bypassGate = createDeviceGate({
+      io: fakeIo(),
+      dataDir: dir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => ([{ deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', ua: null, ip: null, approvedAt: null }]),
+      accessBypassActive: true,
+    });
+    assert.equal(bypassGate.trustedDevicesPayload(FULL_A).accessBypassActive, true,
+      '注入 true 必须原样下发——面板据此显示「这张表管不到隧道进来的连接」');
     // 整条 JSON 里都不许出现全量 token —— 逐字段断言会漏掉「有人往里加了个新字段」这种情况
     assert.equal(wire.includes(FULL_A), false, '下发面出现了全量 deviceToken，吊销将无法真正吊干净');
     assert.equal(wire.includes(FULL_B), false);

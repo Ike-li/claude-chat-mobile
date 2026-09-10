@@ -164,6 +164,7 @@ const {
   bindMode: BIND_MODE,
   bindHost: BIND_HOST,
   trustedProxy: TRUSTED_PROXY,       // 采信 XFF 的开关，已归一（只可能是 '' 或 'loopback'）
+  deviceApprovalScope: DEVICE_APPROVAL_SCOPE, // 设备审批管辖面，已归一（只可能是 '' 或 'all'）
   accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
@@ -531,6 +532,7 @@ registerOperationalRoutes({
   // 走这两条路进来的设备因为从不进待审列表而永远无法被批准，/push/subscribe 恒 403。
   bypassDeviceApproval: req => shouldBypassDeviceApproval({
     accessEnabled: req.ccmAccessEnabled === true,
+    deviceApprovalScope: DEVICE_APPROVAL_SCOPE,
     peerAddress: req.socket?.remoteAddress || '',
     hostHeader: req.headers?.host || '',
   }, clientIp),
@@ -549,7 +551,10 @@ const io = new Server(httpServer, {
 // ---- 设备审批网关：socket 分组解锁/断连、待批广播、trusted-devices.json CLI 审批监听 ----
 // 机制下沉 src/auth/device-gate.js；unlockSocket（重放 init/models/statusline 初始态）
 // 耦合组装根状态（lastInit/viewing*/replay*），留在本文件、经回调注入。
-const deviceGate = createDeviceGate({ io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket) });
+const deviceGate = createDeviceGate({
+  io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket),
+  accessBypassActive: authStrategy.isEnabled() && DEVICE_APPROVAL_SCOPE !== 'all',
+});
 const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices,
   trustedDevicesPayload, broadcastTrustedDevices } = deviceGate;
 
@@ -799,6 +804,7 @@ io.use(async (socket, next) => {
     // 反代 loopback：peer=127.0.0.1 但 Host 公网 → 仍须 deviceToken（见 shouldBypassDeviceApproval）
     const bypassDevice = shouldBypassDeviceApproval({
       accessEnabled,
+      deviceApprovalScope: DEVICE_APPROVAL_SCOPE,
       peerAddress: socket.handshake.address,
       hostHeader: socket.handshake.headers.host,
     }, clientIp);

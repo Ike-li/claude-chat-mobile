@@ -118,6 +118,20 @@ export const ENV_SCHEMA = {
     help: t('只在反代**自己追加** X-Forwarded-For 时才能开（nginx 的 $proxy_add_x_forwarded_for；Caddy / Traefik 默认如此），且反代必须 proxy_pass 到 127.0.0.1。ssh -R、frp tcp、没配转发头的 nginx 会把客户端伪造的头原样送进来，开了等于关闭登录限速。改这项要重启。',
       'Enable only when the reverse proxy itself appends X-Forwarded-For (nginx $proxy_add_x_forwarded_for; Caddy / Traefik do by default) and proxies to 127.0.0.1. ssh -R, frp tcp, or nginx without a forwarding header pass a client-forged header straight through — enabling it there disables login rate limiting. Requires a restart.'),
   },
+  // 设备审批的管辖面。默认下 CF Access 已验的连接**完全跳过**设备审批，于是「已受信任的
+  // 设备」那张表只管局域网/本机直连——吊销一台经隧道进来的手机不会掉线，也不会被拦。
+  // 想让那张表对所有路径生效就选 all。刻意不随 CF_ACCESS_* 配齐自动开：那会让既有安装
+  // 升级后一重启就把所有在用设备打回待审，而此时信任表里没有任何一台能用来批准。
+  DEVICE_APPROVAL_SCOPE: {
+    group: 'auth', kind: 'enum',
+    options: [
+      { value: '', label: t('默认：Cloudflare Access 已验的连接跳过设备审批（Access 的 2FA 已是更强边界）', 'Default: connections verified by Cloudflare Access skip device approval (Access 2FA is the stronger boundary)') },
+      { value: 'all', label: t('所有路径都要过设备审批，含 Cloudflare Access', 'Require device approval on every path, including Cloudflare Access') },
+    ],
+    label: t('设备审批管辖面', 'Device approval scope'),
+    help: t('选 all 之后，经 Cloudflare Access 进来的新设备也要批准一次，「已受信任的设备」里的吊销才对它们生效。**本机直连不受影响**（peer 与 Host 都是 localhost），那是信任表被清空后把设备批回来的自救通道。开启后第一台设备会落进待审：在电脑上用菜单栏、终端回车或 node scripts/device.js approve 批准。改这项要重启。',
+      'With all, a new device coming through Cloudflare Access must be approved once, and revoking it from the trusted list actually takes effect. Direct localhost access is unaffected — that is the recovery path when the trusted list is empty. After enabling, the first device lands in the pending list: approve it from the menu bar, the terminal, or node scripts/device.js approve. Requires a restart.'),
+  },
   CF_ACCESS_HOSTNAME: {
     group: 'auth', kind: 'text',
     label: t('Cloudflare Access 域名', 'Cloudflare Access hostname'),

@@ -866,7 +866,9 @@
       <div id="trustedDevicesSection" class="hidden">
         <div class="text-xs font-semibold text-ink-soft mb-2">🔐 <span>已受信任的设备</span></div>
         <div id="trustedDevicesList" class="space-y-2" data-testid="trusted-devices-list"></div>
-        <div class="text-[10px] text-ink-faint px-1 mt-1.5">吊销后该设备立刻失去访问权，正用设备令牌连着的那条连接会被断开。这不是拉黑，之后仍可重新申请。</div>
+        <!-- 文案按管辖面分档，由 app.js 的 renderTrustedDevices 写入：CF Access 开着且
+             DEVICE_APPROVAL_SCOPE 未设 all 时，这张表管不到隧道进来的连接，必须直说。 -->
+        <div id="trustedDevicesNote" class="text-[10px] text-ink-faint px-1 mt-1.5"></div>
       </div>
 
       <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是"电脑终端里跑的会话要不要通知我"。整段由 app.js

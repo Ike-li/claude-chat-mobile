@@ -114,6 +114,8 @@ export function parseServerConfig(env, {
     // 采信 X-Forwarded-For 的开关：只认字面量 'loopback'，其余一律归空 = 不采信（AUTH-04，fail-closed）。
     // 这里归一一次，app.js 两个限速调用点与 doctor 共用同一个值——不留「truthy 就算开」的口子。
     trustedProxy: env.TRUSTED_PROXY === 'loopback' ? 'loopback' : '',
+    // 同 trustedProxy：只认一个字面量，写错一律落回默认（＝维持现有部署的行为）。
+    deviceApprovalScope: env.DEVICE_APPROVAL_SCOPE === 'all' ? 'all' : '',
     // 声明的公网方案：未知值归空，与 doctor「未知按未声明」同口径。此前 app.js 两处裸读 process.env。
     accessProfile: ACCESS_PROFILES.includes(String(env.ACCESS_PROFILE || '').trim()) ? String(env.ACCESS_PROFILE).trim() : '',
     // 【这里曾经是 `workDir: env.WORK_DIR || home`】2026-09-08 删除。WORK_DIR 已并入 WORKDIRS

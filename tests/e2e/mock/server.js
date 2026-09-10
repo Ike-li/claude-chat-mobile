@@ -219,6 +219,10 @@ let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时�
 let replayUnreadSyncArmed = false;
 let pendingDevices = [];
 let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMockState 会重新填一份
+// 真 server 的 accessBypassActive：CF Access 已启用且 DEVICE_APPROVAL_SCOPE !== 'all' 时为 true，
+// 此时信任表管不到隧道进来的连接。默认 false（＝无 CF Access 的部署），由 /__access-bypass 翻转，
+// 让 E2E 能覆盖脚注文案的两档——那句文案说错过一次，正是这段代码存在的理由。
+let accessBypassActive = false;
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
@@ -311,6 +315,7 @@ function resetMockState() {
   pendingPermission = null;
   pendingQuestion = null;
   trustedDevices = createTrustedDevices();
+  accessBypassActive = false;
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
@@ -489,13 +494,20 @@ function createTrustedDevices() {
 function emitTrustedDevices() {
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-    type: 'trusted_devices', payload: { devices: trustedDevices }
+    type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
   });
 }
 
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
+});
+
+// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
+app.post('/__access-bypass', (req, res) => {
+  accessBypassActive = req.query?.active === '1';
+  emitTrustedDevices();
+  res.json({ ok: true, accessBypassActive });
 });
 
 // 真 server 在该 cwd 无 models 缓存时刻意不推 models（pushModelsForCwd 的 `if (!p) return`——推空会
@@ -720,7 +732,7 @@ io.on('connection', socket => {
   // 不重放的话「设置 › 这台电脑 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-    type: 'trusted_devices', payload: { devices: trustedDevices }
+    type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
   });
 
   // Replay initial hydration events

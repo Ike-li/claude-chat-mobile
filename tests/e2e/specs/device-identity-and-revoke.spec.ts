@@ -76,6 +76,35 @@ test.describe('设备身份与吊销', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // ★ 2026-09-10 实录：机主把三台设备全吊销后，各设备照常可用——因为 CF Access 已验的连接
+  // 走 bypass 分支，压根不查信任表。而当时脚注写的是「吊销后该设备立刻失去访问权」，
+  // 用户照着操作，得到与文案相反的结果。这两条钉住脚注按管辖面分档。
+  test('CF Access bypass 生效时，脚注必须直说这张表管不到隧道进来的连接', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__access-bypass?active=1');
+    await openGeneralSettings(page);
+
+    const note = page.locator('#trustedDevicesNote');
+    await expect(note).toContainText('吊销对它们无效');
+    await expect(note).toContainText('DEVICE_APPROVAL_SCOPE');
+    // 说反话的那句必须消失，不能两句并列
+    await expect(note).not.toContainText('立刻失去访问权');
+    await expect(note).toHaveClass(/text-warning/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('bypass 未生效时用常规文案（吊销确实立刻生效）', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const note = page.locator('#trustedDevicesNote');
+    await expect(note).toContainText('立刻失去访问权');
+    await expect(note).not.toContainText('吊销对它们无效');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('取消确认则什么都不发生', async ({ page }) => {
     await gotoMock(page);
     await openGeneralSettings(page);
