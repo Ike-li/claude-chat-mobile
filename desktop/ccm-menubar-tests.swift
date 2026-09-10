@@ -700,6 +700,22 @@ extension CCMCoreTests {
         check(title.contains("01234567"), "带短 ID 供和手机上那串核对：\(title)")
         check(title.contains("批准"), "带批准时间——「还在不在用」是吊销决策的唯一线索：\(title)")
 
+        // 别名压过一切自动生成的信息——它是用户自己下的判断。
+        let named = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"0123456789abcdef0123456789abcdef","alias":"客厅平板","ua":"Mozilla/5.0 (iPhone)","browser":"Safari 18"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(named), "客厅平板", "有别名就只显示别名，不再拼类型/浏览器")
+
+        // 没别名时按能拿到的信息拼，缺哪段跳哪段，不留悬空分隔符
+        let auto = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc","ua":"Mozilla/5.0 (Linux; Android 10; K)","browser":"Chrome 152"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(auto), "Android · Chrome 152", "机型拿不到（Chrome 冻结成 K）就只拼类型与浏览器")
+        check(!trustedDeviceName(auto).hasSuffix("·"), "缺段不留悬空分隔符：\(trustedDeviceName(auto))")
+
+        let withModel = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc","ua":"Mozilla/5.0 (Linux; Android 16; ABCD1234XY)","browser":"微信 8.0.77","model":"ABCD1234XY"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(withModel), "Android · ABCD1234XY · 微信 8.0.77", "拿得到机型就补进去")
+
+        // UA 与 browser 全缺：不能回落成空串，否则整行只剩一个短 ID
+        let bare = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(bare), "未知设备", "全缺时如实说未知，不返回空串")
+
         // ★ 旧 server 只给 trusted[]：必须回落成只有 ID 的条目，而不是整段列表消失。
         let legacy = decodeDevices(#"{"schemaVersion":1,"trusted":["abc123"]}"#)!
         eq(legacy.trustedProfileList.count, 1, "没有 trustedProfiles 时用 trusted 回落，不是空列表")

@@ -728,6 +728,15 @@ struct TrustedDevice: Decodable {
     let ua: String?
     let ip: String?
     let approvedAt: Double?
+    /// 用户自己起的名字。**唯一对所有平台都成立的分辨手段**——iOS 拿不到机型，
+    /// 局域网 http:// 下 UA Client Hints 也不可用。设了就压过自动生成的标题。
+    let alias: String?
+    /// 「浏览器 + 主版本」，由服务端从 UA 解析后下发（这一项只有一份实现，不做 Swift 镜像：
+    /// 待审设备那条路用的是 deviceKindLabel，与本字段无关）。
+    let browser: String?
+    /// Android 机型代号。**多数情况是 nil 且这是正常的**：Chrome 做过 UA reduction，
+    /// 机型位被冻结成字面量 K；iOS 从来不在 UA 里给机型。拿不到就不显示，不编占位。
+    let model: String?
 
     var id: String { deviceId ?? "" }
 }
@@ -744,7 +753,7 @@ struct DeviceSnapshot: Decodable {
     /// 而不是让整段列表消失——少一列信息 ≠ 这台设备不存在。
     var trustedProfileList: [TrustedDevice] {
         if let trustedProfiles { return trustedProfiles }
-        return trustedList.map { TrustedDevice(deviceId: $0, shortId: nil, ua: nil, ip: nil, approvedAt: nil) }
+        return trustedList.map { TrustedDevice(deviceId: $0, shortId: nil, ua: nil, ip: nil, approvedAt: nil, alias: nil, browser: nil, model: nil) }
     }
 }
 
@@ -843,5 +852,16 @@ func approvedAtLabel(_ ms: Double?, now: Date = Date()) -> String {
 /// 与 pendingDeviceTitle 的第三段不同（那里是来源 IP）：待审要答「从哪来的」，
 /// 已信任要答「还在用吗」——同一个位置放不同的东西是因为问题本身不同。
 func trustedDeviceTitle(_ d: TrustedDevice, now: Date = Date()) -> String {
-    "\(deviceKindLabel(d.ua)) · \(shortDeviceId(d.id)) · \(approvedAtLabel(d.approvedAt, now: now))"
+    "\(trustedDeviceName(d)) · \(shortDeviceId(d.id)) · \(approvedAtLabel(d.approvedAt, now: now))"
+}
+
+/// 一行里「这是哪台」那一段。别名优先——它是用户自己下的判断，永远比我们猜的准。
+/// 没有别名就用能拿到的自动信息拼：类型 · 机型 · 浏览器，缺哪段跳哪段（不留悬空分隔符）。
+/// 三段都缺（UA 为空）时回落到「未知设备」，不返回空串——空串会让整行只剩一个短 ID。
+func trustedDeviceName(_ d: TrustedDevice) -> String {
+    if let alias = d.alias, !alias.isEmpty { return alias }
+    var parts = [deviceKindLabel(d.ua)]
+    if let model = d.model, !model.isEmpty { parts.append(model) }
+    if let browser = d.browser, !browser.isEmpty { parts.append(browser) }
+    return parts.joined(separator: " · ")
 }

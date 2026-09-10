@@ -26,6 +26,11 @@ import {
   getTrustedDeviceProfiles,
   shortDeviceId,
   resolveShortDeviceId,
+  browserLabel,
+  deviceModelFromUa,
+  normalizeDeviceAlias,
+  setDeviceAlias,
+  MAX_DEVICE_ALIAS,
   decideRevokeByShortId,
   MAX_PENDING_DEVICES
 } from '../../app/src/auth/devices.js';
@@ -292,6 +297,26 @@ test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', 
       denyDevice('device-p4');
     });
 
+    test('别名：设了就跟着条目走，清空回落 null（不是空串）', () => {
+      addPendingDevice('device-a1', { ip: '10.0.0.5', userAgent: 'iPhone' });
+      approveDevice('device-a1');
+      assert.equal(getTrustedDeviceProfiles().find(d => d.deviceId === 'device-a1').alias, null,
+        '没设过别名时是 null，不是空串——前端按 null 回落到「平台 · 浏览器」');
+
+      assert.equal(setDeviceAlias('device-a1', '  我的  主力机  '), true);
+      assert.equal(getTrustedDeviceProfiles().find(d => d.deviceId === 'device-a1').alias, '我的 主力机',
+        '折叠空白并 trim');
+
+      assert.equal(setDeviceAlias('device-a1', '   '), true);
+      assert.equal(getTrustedDeviceProfiles().find(d => d.deviceId === 'device-a1').alias, null,
+        '空白等于清除');
+
+      // 别名不得动到信任判定，也不得碰同条目的其他字段
+      assert.equal(isDeviceTrusted('device-a1'), true);
+      assert.equal(getTrustedDeviceProfiles().find(d => d.deviceId === 'device-a1').ua, 'iPhone');
+      denyDevice('device-a1');
+    });
+
     test('展示以信任表为准做左连接：profiles 里的孤儿条目被忽略', () => {
       approveDevice('device-p5');
       // 手工塞一条不在信任表里的（模拟手改信任表 / 从备份恢复后的残留）
@@ -333,6 +358,94 @@ test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', 
     test('非法输入不炸', () => {
       assert.equal(resolveShortDeviceId(null, [FULL]), null);
       assert.equal(resolveShortDeviceId('x', null), null);
+    });
+  });
+
+  // ── UA 解析：把「三台都叫 Android」变成能分辨的东西 ──────────────────────────
+  //
+  // 【为什么单靠 kind 不够】实录：同一部手机在列表里占了两条，一条微信内置浏览器、
+  // 一条 Chrome，标题都是「Android」，只有短 ID 不同——用户看不出该吊销哪个。
+  //
+  // 【为什么机型只能拿到一部分】Chrome 做过 UA reduction：机型位被冻结成字面量 `K`、
+  // 系统版本钉死在 `10`，不论真实设备是什么。同一部 Android 16 手机，微信 webview
+  // 不冻结、如实报出机型代号，Chrome 就只给 `Android 10; K`。这不是解析没写好，
+  // 是那串信息压根不在 UA 里——**别为了「补全」去猜**，拿不到就返回 null。
+  test.describe('browserLabel / deviceModelFromUa', () => {
+    // Chrome 冻结后的 Android UA。`Android 10; K` 是所有设备共用的固定占位串，逐字照抄。
+    const CHROME_ANDROID = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36';
+    // 微信内置浏览器：不冻结 UA，真实系统版本与机型代号都在。机型代号用合成值。
+    const WECHAT = 'Mozilla/5.0 (Linux; Android 16; ABCD1234XY Build/BP2A.250605.031.A3; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.7871.189 Mobile Safari/537.36 XWEB/1500117 MMWEBSDK/20260604 MicroMessenger/8.0.77.3160(0x28004D36) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64';
+    const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1';
+
+    test('微信内置浏览器必须先于 Chrome 判定（它的 UA 里也含 Chrome/）', () => {
+      assert.equal(browserLabel(WECHAT), '微信 8.0.77');
+      assert.equal(browserLabel(CHROME_ANDROID), 'Chrome 152');
+    });
+
+    test('Safari 只在没有 Chrome 标识时才算（每个 Chromium UA 都带 Safari/537.36）', () => {
+      assert.equal(browserLabel(IPHONE), 'Safari 18');
+      assert.equal(browserLabel('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'), 'Chrome 152');
+    });
+
+    test('Edge / Firefox / 三星浏览器各自认出来', () => {
+      assert.equal(browserLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0'), 'Edge 152');
+      assert.equal(browserLabel('Mozilla/5.0 (Android 14; Mobile; rv:143.0) Gecko/143.0 Firefox/143.0'), 'Firefox 143');
+      assert.equal(browserLabel('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/27.0 Chrome/141.0.0.0 Mobile Safari/537.36'), '三星浏览器 27');
+    });
+
+    test('认不出来就返回 null，不编一个「其他浏览器」占位', () => {
+      assert.equal(browserLabel('curl/8.7.1'), null);
+      assert.equal(browserLabel(''), null);
+      assert.equal(browserLabel(null), null);
+    });
+
+    test('★ Chrome 冻结的机型位 K 必须返回 null，不能显示成「机型 K」', () => {
+      assert.equal(deviceModelFromUa(CHROME_ANDROID), null);
+    });
+
+    test('未冻结的 webview 能拿到真实机型代号', () => {
+      assert.equal(deviceModelFromUa(WECHAT), 'ABCD1234XY');
+      assert.equal(deviceModelFromUa('Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36'), 'Pixel 7');
+    });
+
+    test('iOS 永远拿不到机型（Apple 不在 UA 里给，也不支持 UA-CH）', () => {
+      assert.equal(deviceModelFromUa(IPHONE), null);
+    });
+
+    test('非 Android / 空输入返回 null', () => {
+      assert.equal(deviceModelFromUa('Mozilla/5.0 (Windows NT 10.0; Win64; x64)'), null);
+      assert.equal(deviceModelFromUa(''), null);
+      assert.equal(deviceModelFromUa(null), null);
+    });
+  });
+
+  // ── 别名归一（纯函数）──────────────────────────────────────────────────────
+  // 别名是**唯一对所有平台都成立**的分辨手段：iOS 拿不到机型、局域网 http 下 UA-CH 不可用，
+  // 而用户自己起的名字在哪都好使。它进 device-profiles.json，是展示层、不参与任何判定。
+  test.describe('normalizeDeviceAlias', () => {
+    test('trim + 折叠空白；空白视为清除（返回 null 而不是空串）', () => {
+      assert.equal(normalizeDeviceAlias('  客厅  平板 '), '客厅 平板');
+      assert.equal(normalizeDeviceAlias(''), null);
+      assert.equal(normalizeDeviceAlias('   '), null);
+      assert.equal(normalizeDeviceAlias(null), null);
+      assert.equal(normalizeDeviceAlias(123), null);
+    });
+
+    test('剥掉控制字符（换行会把一行卡片撑成多行，制表符能伪造对齐）', () => {
+      assert.equal(normalizeDeviceAlias('主力机\n\t第二行'), '主力机 第二行');
+      // 控制字符替换成【空格】而不是删除：删除会把用户分开写的两段静默拼成一个词
+      assert.equal(normalizeDeviceAlias('a\u0000b'), 'a b');
+    });
+
+    test('限长，且按【码点】截——按 UTF-16 长度截会把 emoji 砍成半个乱码', () => {
+      const long = '手'.repeat(MAX_DEVICE_ALIAS + 10);
+      assert.equal([...normalizeDeviceAlias(long)].length, MAX_DEVICE_ALIAS);
+
+      const emoji = '📱'.repeat(MAX_DEVICE_ALIAS + 5);
+      const cut = normalizeDeviceAlias(emoji);
+      assert.equal([...cut].length, MAX_DEVICE_ALIAS);
+      assert.ok(!cut.includes('\ufffd'), '不得留下半个代理对');
+      assert.equal(cut, '📱'.repeat(MAX_DEVICE_ALIAS));
     });
   });
 

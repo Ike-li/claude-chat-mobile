@@ -284,7 +284,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        随历史整批推等于把一轮历史放大一个数量级，而绝大多数卡用户根本不会展开。
   //        安全模型同 tool:preview / task:output：客户端只传 toolUseId，路径由服务端从
   //        sessionId+cwd 自己算，入口再过一道 isSafeSessionId（SS-003）。入向总数 47→48）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 48);
+  //      + user:renameTrustedDevice（2026-09-10，给已受信任设备起别名。别名是唯一对所有平台
+  //        都成立的分辨手段：iOS 拿不到机型，局域网 http:// 下 UA Client Hints 不可用（非安全
+  //        上下文），而同一部手机的微信 webview 与 Chrome 本就是两条独立记录。寻址同吊销走
+  //        shortId，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。入向 48→49）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 49);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:renameTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('subagent:flow'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:revokeTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('task:output'));

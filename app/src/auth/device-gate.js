@@ -67,6 +67,9 @@ export function createDeviceGate({
       devices: listTrustedDevices().map(d => ({
         shortId: d.shortId,
         kind: d.kind,
+        browser: d.browser,
+        model: d.model,
+        alias: d.alias,
         ua: d.ua,
         ip: d.ip,
         approvedAt: d.approvedAt,

@@ -1906,7 +1906,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         : (kind || t('未知设备'))
   );
 
+  // 最后一次 trusted_devices 载荷。改名的输入框提交/取消后要重渲染整段，
+  // 而那时手里只有闭包里的单条 d——存一份整表比给每个输入框各留一条回滚路径简单。
+  let lastTrustedDevices = [];
+  let lastTrustedBypass = false;
+
   function renderTrustedDevices(devices, accessBypassActive = false) {
+    lastTrustedDevices = devices;
+    lastTrustedBypass = accessBypassActive;
     const section = $('trustedDevicesSection');
     const list = $('trustedDevicesList');
     const note = $('trustedDevicesNote');
@@ -1934,10 +1941,60 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       const head = document.createElement('div');
       head.className = 'flex items-center justify-between gap-2';
+      // 名字这一段：别名优先——用户自己下的判断永远比我们从 UA 猜的准。
+      // 没别名就拼能拿到的：类型 · 机型 · 浏览器。机型多半拿不到（Chrome 冻结了 UA 的机型位，
+      // iOS 从来不给），缺哪段跳哪段，不留悬空分隔符。
+      const autoName = [translateDeviceKind(d.kind), d.model, d.browser].filter(Boolean).join(' · ');
+      // 名字与短 ID 拆成两段，**不拼成一个字符串**：改名时只换掉名字那一段，短 ID 全程留在行里。
+      // 拼成一段的话，一进编辑态整行就不含短 ID 了——而用户正是要靠它认出这是哪台设备。
       const name = document.createElement('div');
-      name.className = 'min-w-0 font-semibold text-ink';
-      name.textContent = translateDeviceKind(d.kind) + ' · ' + (d.shortId || '—');
+      name.className = 'min-w-0 font-semibold text-ink truncate';
+      name.setAttribute('data-testid', 'trusted-device-name');
+      const nameText = document.createElement('span');
+      nameText.textContent = d.alias || autoName;
+      const idText = document.createElement('span');
+      idText.className = 'text-ink-faint font-normal';
+      idText.textContent = ' · ' + (d.shortId || '—');
+      name.append(nameText, idText);
       head.appendChild(name);
+
+      // 改名：点 ✎ 就地换成输入框。不弹 sheet——移动端多一层模态只是多一次点击，
+      // 而这个操作的全部内容就是敲几个字。Enter / 失焦提交，Esc 放弃。
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'shrink-0 px-2 py-1 rounded-lg border border-line text-ink-soft active:bg-sunk text-[11px]';
+      rename.textContent = '✎';
+      rename.title = t('起个名字');
+      rename.setAttribute('aria-label', t('起个名字'));
+      rename.setAttribute('data-testid', 'trusted-device-rename');
+      rename.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'min-w-0 w-32 px-2 py-1 rounded-lg border border-accent bg-surface text-ink text-xs font-normal';
+        input.value = d.alias || '';
+        input.placeholder = autoName;
+        input.maxLength = 24; // 与后端 MAX_DEVICE_ALIAS 一致；后端仍会再归一一次（这里只是省一次往返）
+        input.setAttribute('data-testid', 'trusted-device-alias-input');
+        let done = false;
+        const commit = (save) => {
+          if (done) return;
+          done = true;
+          if (save) socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value });
+          // 不手动还原 DOM：提交后服务端会重播 trusted_devices，整段重渲染；
+          // 取消时也重渲染一次，省掉一条只在这里用的回滚路径。
+          renderTrustedDevices(lastTrustedDevices, lastTrustedBypass);
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+          else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+        });
+        input.addEventListener('blur', () => commit(true));
+        name.replaceChild(input, nameText); // 只换名字那一段；短 ID 留在原处
+        rename.disabled = true;
+        input.focus();
+        input.select();
+      });
+      head.appendChild(rename);
 
       if (d.isCurrent) {
         // 当前这台不给吊销按钮：服务端也会拦（decideRevokeByShortId 的 self 分支），

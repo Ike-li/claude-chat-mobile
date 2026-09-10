@@ -162,8 +162,8 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
       dataDir: dir,
       onUnlockSocket: () => {},
       listTrustedDevices: () => ([
-        { deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: 1799913600000 },
-        { deviceId: FULL_B, shortId: 'ffffffff…55ee', kind: 'Mac', ua: null, ip: null, approvedAt: null },
+        { deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: 'Safari 18', model: null, alias: '客厅平板', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: 1799913600000 },
+        { deviceId: FULL_B, shortId: 'ffffffff…55ee', kind: 'Mac', browser: null, model: null, alias: null, ua: null, ip: null, approvedAt: null },
       ]),
     });
 
@@ -181,7 +181,7 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
       io: fakeIo(),
       dataDir: dir,
       onUnlockSocket: () => {},
-      listTrustedDevices: () => ([{ deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', ua: null, ip: null, approvedAt: null }]),
+      listTrustedDevices: () => ([{ deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: null, model: null, alias: null, ua: null, ip: null, approvedAt: null }]),
       accessBypassActive: true,
     });
     assert.equal(bypassGate.trustedDevicesPayload(FULL_A).accessBypassActive, true,
@@ -190,8 +190,9 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     assert.equal(wire.includes(FULL_A), false, '下发面出现了全量 deviceToken，吊销将无法真正吊干净');
     assert.equal(wire.includes(FULL_B), false);
     assert.deepEqual(Object.keys(payload.devices[0]).sort(),
-      ['approvedAt', 'ip', 'isCurrent', 'kind', 'shortId', 'ua'],
-      '字段集变了就在这里更新，顺便重新想一遍新字段是不是凭据');
+      ['alias', 'approvedAt', 'browser', 'ip', 'isCurrent', 'kind', 'model', 'shortId', 'ua'],
+      '字段集变了就在这里更新，顺便重新想一遍新字段是不是凭据'
+      + '（alias 是用户自己起的名，browser/model 由 UA 派生，都不是凭据；deviceId 永远不许进来）');
 
     // isCurrent 按接收方算：换一个接收者，标记必须跟着换
     assert.equal(payload.devices[0].isCurrent, true);

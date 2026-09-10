@@ -213,6 +213,7 @@ export const EN_DICT = Object.freeze({
     'Revoking cuts off access immediately; a connection using that device token is dropped. This is not a ban \u2014 the device can request access again.',
   '⚠️ 经 Cloudflare Access 进来的连接不查这张表，吊销对它们无效——本表目前只管局域网 / 本机直连。要让它对所有路径生效，把 DEVICE_APPROVAL_SCOPE 设为 all 后重启。':
     '\u26a0\ufe0f Connections arriving through Cloudflare Access do not consult this list, so revoking has no effect on them \u2014 today it governs LAN / localhost only. Set DEVICE_APPROVAL_SCOPE to all and restart to make it apply everywhere.',
+  '起个名字': 'Give it a name',
   '这台（当前）': 'This one (current)',
   '吊销': 'Revoke',
   '无批准记录': 'No approval record',

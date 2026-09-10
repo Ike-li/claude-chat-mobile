@@ -78,7 +78,7 @@ function listDevices() {
     console.log('  （暂无已受信任的设备）');
   } else {
     snap.trustedProfiles.forEach((d, idx) => {
-      console.log(`  [${idx + 1}] ${d.kind} · ${d.shortId}`);
+      console.log(`  [${idx + 1}] ${d.alias || [d.kind, d.model, d.browser].filter(Boolean).join(' · ')} · ${d.shortId}`);
       console.log(`      ID: ${d.deviceId}`);
       if (d.approvedAt) {
         console.log(`      来源 IP: ${d.ip || '未知'} | 批准时间: ${new Date(d.approvedAt).toLocaleString()}`);

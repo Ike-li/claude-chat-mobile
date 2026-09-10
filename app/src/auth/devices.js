@@ -200,6 +200,82 @@ export function deviceKindLabel(ua) {
   return '其他设备';
 }
 
+// 设备别名。**唯一对所有平台都成立的分辨手段**：iOS 拿不到机型，局域网 http:// 下
+// UA Client Hints 也不可用（非安全上下文），而用户自己起的名字在哪都好使。
+// 它住在 device-profiles.json，属展示层——不参与任何准入判定。
+export const MAX_DEVICE_ALIAS = 24;
+
+// 归一：剥控制字符 → 折叠空白 → trim → 按码点限长。空白等于「清除别名」，返回 null 而不是
+// 空串，好让展示层用一次 `??` 就回落到「平台 · 浏览器」，不必再判空串。
+// ★ 按【码点】截而不是 UTF-16 长度：`'x'.slice(0, n)` 会把代理对砍成半个，屏幕上是乱码。
+// 控制字符用 \p{Cc} 整类剥掉：换行会把一行卡片撑成多行，制表符能伪造对齐。
+export function normalizeDeviceAlias(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return null;
+  const points = [...cleaned];
+  return points.length > MAX_DEVICE_ALIAS ? points.slice(0, MAX_DEVICE_ALIAS).join('') : cleaned;
+}
+
+// 写别名。只动 alias 一个字段（展开原条目再覆盖）——其余字段是审批那一刻的事实，不该被改名波及。
+// 返回值的立场同 recordDeviceProfile：写不进去只是面板少一行，绝不影响信任。
+export function setDeviceAlias(deviceToken, rawAlias) {
+  if (!deviceToken || typeof deviceToken !== 'string') return false;
+  const current = readDeviceProfiles();
+  if (current === null) return false;
+  const alias = normalizeDeviceAlias(rawAlias);
+  return writeDeviceProfiles({
+    ...current,
+    [deviceToken]: { ...(current[deviceToken] || {}), alias },
+  });
+}
+
+// UA → 「浏览器 + 主版本」。单靠 deviceKindLabel 不够用：同一部手机的微信 webview 与 Chrome
+// 是两条独立记录（deviceToken 存在各自的 localStorage），标题都写「Android」就没法分辨该吊销哪个。
+//
+// ★ 顺序有讲究，理由与 deviceKindLabel 同源：几乎每个 Chromium 派生浏览器的 UA 里都带
+//   `Chrome/`，而每个 Chromium UA 又都带 `Safari/537.36`。先判 Chrome 会把微信/Edge/三星
+//   全认成 Chrome，先判 Safari 会把所有安卓浏览器认成 Safari。派生的排前面，基底排后面。
+// 认不出来返回 null，由调用方决定怎么显示——不造一个「其他浏览器」占位（那和不显示一样没用）。
+const BROWSER_RULES = [
+  [/MicroMessenger\/(\d+\.\d+\.\d+)/, (m) => `微信 ${m[1]}`],
+  [/(?:MQQBrowser|QQ)\/(\d+)/, (m) => `QQ ${m[1]}`],
+  [/Edg(?:A|iOS)?\/(\d+)/, (m) => `Edge ${m[1]}`],
+  [/SamsungBrowser\/(\d+)/, (m) => `三星浏览器 ${m[1]}`],
+  [/(?:Firefox|FxiOS)\/(\d+)/, (m) => `Firefox ${m[1]}`],
+  [/(?:CriOS|Chrome)\/(\d+)/, (m) => `Chrome ${m[1]}`],
+  [/Version\/(\d+)[.\d]* Mobile\/\S+ Safari/, (m) => `Safari ${m[1]}`],
+  [/Version\/(\d+)[.\d]* Safari/, (m) => `Safari ${m[1]}`],
+];
+
+export function browserLabel(ua) {
+  if (typeof ua !== 'string' || !ua) return null;
+  for (const [re, fmt] of BROWSER_RULES) {
+    const m = re.exec(ua);
+    if (m) return fmt(m);
+  }
+  return null;
+}
+
+// UA → Android 机型代号，拿不到返回 null。
+//
+// ★★ 拿不到是常态，不是解析失败。Chrome 做过 UA reduction：机型位被冻结成字面量 `K`、
+//    系统版本钉死在 `10`，不论真机是什么。实录：同一部 Android 16 手机，微信 webview
+//    如实报出机型代号，Chrome 只给 `Android 10; K`。iOS 则从来不在 UA 里给机型。
+//    真要拿 Chromium 系的机型只有 UA Client Hints（`Sec-CH-UA-Model`）一条路，而它要求
+//    **安全上下文**——局域网 http:// 入口下不可用，恰好是最需要分辨的那一档。
+//    所以这里遇到占位就返回 null，**绝不把 `K` 当成机型显示出去**。
+const FROZEN_ANDROID_MODEL = 'K'; // Chrome UA reduction 的固定占位
+
+export function deviceModelFromUa(ua) {
+  if (typeof ua !== 'string' || !ua) return null;
+  const m = /Android\s+[\d.]+;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/.exec(ua);
+  if (!m) return null;
+  const model = m[1].trim();
+  if (!model || model === FROZEN_ANDROID_MODEL || model === 'wv') return null;
+  return model;
+}
+
 // 短 ID → 全量 deviceToken 的反查（Web 吊销的唯一寻址方式，见 device-gate 的下发面）。
 // **0 命中或多命中一律返回 null、绝不任选一条**：下游是吊销，猜错等于吊错设备。
 // 12 位 hex ≈ 48 bit，n=1 下碰撞不可能——但「不可能」不是分支的替代品。
@@ -237,6 +313,9 @@ export function getTrustedDeviceProfiles() {
       deviceId: id,
       shortId: shortDeviceId(id),
       kind: deviceKindLabel(typeof p?.ua === 'string' ? p.ua : null),
+      browser: browserLabel(typeof p?.ua === 'string' ? p.ua : null),
+      model: deviceModelFromUa(typeof p?.ua === 'string' ? p.ua : null),
+      alias: typeof p?.alias === 'string' && p.alias ? p.alias : null,
       ua: typeof p?.ua === 'string' ? p.ua : null,
       ip: typeof p?.ip === 'string' ? p.ip : null,
       approvedAt: typeof p?.approvedAt === 'number' ? p.approvedAt : null,

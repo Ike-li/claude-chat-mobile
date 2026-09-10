@@ -173,6 +173,23 @@ Agent 工具审批或用户直接文件编辑
 - **`trusted-devices.json` 的格式一字不能动**（仍是一维字符串数组）。`loadTrustedDevices` 对「不是数组」的反应是落空集且**不走 catch 的 last-good 分支**——常驻 server 还跑着旧代码、磁盘上的 CLI 已经是新代码时（改完未重启是常态），旧进程会把信任设备数读成 0，watcher 那一轮把所有 `trustBasis === 'device-token'` 的连接断光。桌面端那侧同样致命：`CCMCore.swift` 声明的是 `let trusted: [String]?`，遇对象数组是 typeMismatch，JSONDecoder **整份 abort**，设备段整块消失。
 - **只对新审批生效。** 元数据只在批准那一刻记得下来，事后无从补。本功能上线之前批准的设备如实显示「无批准记录」；要补上，**吊销后让该设备重新申请一次**——已受信任的设备重连不会重新进待审列表（`isDeviceTrusted` 命中就直接放行），所以断线重连、重启浏览器都不会刷新它。
 
+#### 列表里怎么分辨设备
+
+一台设备＝**一个浏览器实例**（`deviceToken` 生成后存在该浏览器的 `localStorage`）。所以同一部手机用系统浏览器和用微信内置浏览器打开，是**两条独立记录**；清缓存、无痕窗口同理。二维码只是投递地址+令牌，不改变这一点。
+
+自动信息能拿到多少，取决于浏览器给不给：
+
+| 想显示的 | 来源与限制 |
+|---|---|
+| 平台（iPhone / Android / Mac…） | UA，恒可得。`deviceKindLabel`，与 `CCMCore.swift` 的同名函数互为镜像 |
+| 浏览器 + 主版本 | UA，恒可得。判定顺序必须**派生在前、基底在后**——几乎每个 Chromium 派生浏览器的 UA 都带 `Chrome/`，而每个 Chromium UA 又都带 `Safari/537.36` |
+| Android 机型代号 | **多数拿不到，且这是正常的**。Chrome 做过 UA reduction，机型位被冻结成字面量 `K`、系统版本钉死在 `10`；只有微信/QQ 等不冻结 UA 的 webview 才露出真实机型。拿不到就不显示，**绝不把 `K` 当机型** |
+| iOS 机型 | **永远拿不到**。Apple 既不在 UA 里给，也不支持 UA Client Hints |
+
+`Sec-CH-UA-Model`（UA Client Hints）是 Chromium 系拿真实机型的唯一途径，但它要求**安全上下文**——局域网 `http://` 入口下不可用，恰好是最需要分辨的那一档。故本产品不走这条路。
+
+**别名是唯一对所有平台都成立的分辨手段**：用户在列表里点 ✎ 就地起名，存进 `device-profiles.json` 的 `alias`，设了就压过所有自动信息。归一在 `normalizeDeviceAlias`（剥控制字符 → 折叠空白 → 按**码点**限长 24；空白等于清除）。改名走 `user:renameTrustedDevice`，寻址同吊销用 `shortId`，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。
+
 Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里没有任何全量 token**，只有 `shortId`（前 8…后 4）+ `kind`/`ua`/`ip`/`approvedAt`/`isCurrent`；吊销走 `user:revokeTrustedDevice` 并按 `shortId` 反查，0 命中或多命中一律拒绝、绝不任选一条。这条红线守的不是「防局域网窃听」（该广播只发给已批准连接），而是**让吊销真的能吊销**：一台拿到过全量信任表的设备，日后被吊销时手里仍握着其余设备的 token。同理，当前这台设备在 Web 上不给吊销按钮（服务端也拦），否则一键就能把自己踢下线，若那是唯一在线的可信端就只能回到电脑前才能重批。
 
 ### 离线唤醒与推送抑制

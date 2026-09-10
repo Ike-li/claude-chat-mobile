@@ -105,6 +105,52 @@ test.describe('设备身份与吊销', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // ★ 实录：三条记录标题全是「Android」，只有短 ID 不同，用户看不出该吊销哪台。
+  // 根因有二：同一部手机的微信 webview 与 Chrome 是两条独立记录（deviceToken 存在各自的
+  // localStorage），而 Chrome 冻结了 UA 的机型位（`Android 10; K`），机型压根拿不到。
+  // 所以标题要拼上浏览器，并允许用户自己起名——别名是唯一对所有平台都成立的分辨手段。
+  test('标题拼上浏览器；有别名时别名压过自动信息', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const names = page.getByTestId('trusted-device-name');
+    await expect(names.nth(0)).toHaveText(/^客厅平板 · a3f21b09…a4b5$/, '有别名就只显示别名，不再拼类型/浏览器');
+    await expect(names.nth(2)).toHaveText(/^Mac · Chrome 152 · cd2760a5…ec82$/, '没别名时拼类型与浏览器');
+    // 机型拿不到是常态（Chrome 冻结 UA 机型位），不得留悬空分隔符
+    await expect(names.nth(2)).not.toHaveText(/· ·|· $/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('点 ✎ 就地改名：Enter 提交后标题变别名', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await expect(input).toBeVisible();
+    await input.fill('我的 Mac');
+    await input.press('Enter');
+
+    await expect(page.getByTestId('trusted-device-name').nth(2)).toHaveText(/^我的 Mac · cd2760a5…ec82$/);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('Esc 放弃改名，标题回到原样', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await input.fill('不该被保存');
+    await input.press('Escape');
+
+    await expect(page.getByTestId('trusted-device-name').nth(2)).toHaveText(/^Mac · Chrome 152 · cd2760a5…ec82$/);
+    await expectNoBrowserErrors(page);
+  });
+
   test('取消确认则什么都不发生', async ({ page }) => {
     await gotoMock(page);
     await openGeneralSettings(page);

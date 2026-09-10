@@ -89,7 +89,9 @@ import {
   getPendingDevices,
   getTrustedCount,
   getTrustedDeviceIds,
-  decideRevokeByShortId
+  decideRevokeByShortId,
+  resolveShortDeviceId,
+  setDeviceAlias
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
 import * as approvalStore from '../agent/approval-store.js';
@@ -2508,6 +2510,24 @@ registerSocketConnection(io, socket => {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'error', meta: { via: 'web', persistFailed: true } });
       sysTo(socket, '设备吊销未能写入磁盘、可能未生效，请重试或检查服务端磁盘', true);
     }
+  });
+
+  // 给已受信任设备起别名。别名是**唯一对所有平台都成立的分辨手段**：iOS 拿不到机型，
+  // 局域网 http:// 下 UA Client Hints 也不可用（非安全上下文），而同一部手机的微信 webview
+  // 与 Chrome 本来就是两条独立记录（deviceToken 存在各自的 localStorage）。
+  // 与吊销同一条寻址方式（shortId，DEVICE-03 不许下发全量 token），但**没有自改守卫**——
+  // 给自己这台起名是正常操作，不像吊销那样会把自己踢下线。
+  on(socket, 'user:renameTrustedDevice', payload => {
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    const token = resolveShortDeviceId(shortId, getTrustedDeviceIds());
+    if (!token) {
+      sysTo(socket, '找不到这台设备（列表可能已过期），已为你刷新', true);
+      broadcastTrustedDevices();
+      return;
+    }
+    setDeviceAlias(token, payload?.alias); // 归一与限长在 devices.js 里；写失败只是面板少个名字
+    broadcastTrustedDevices();
   });
 
   // 吊销【已受信任】设备。与上面 user:denyDevice 分开是刻意的：那条处理的是待审设备

@@ -487,10 +487,12 @@ function emitPendingDevices() {
 // 而 mock 侧没有真实的 deviceToken 可比。
 function createTrustedDevices() {
   return [
-    { shortId: 'a3f21b09…a4b5', kind: 'iPhone', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: Date.now() - 5 * 86400000, isCurrent: false },
-    // approvedAt=null：本功能上线【之前】批准的条目，前端要显示成「无批准记录」而不是编个时间
-    { shortId: '7e6d1122…3ede', kind: '未知设备', ua: null, ip: null, approvedAt: null, isCurrent: false },
-    { shortId: 'cd2760a5…ec82', kind: 'Mac', ua: 'Mozilla/5.0 (Macintosh)', ip: '127.0.0.1', approvedAt: Date.now() - 3600000, isCurrent: true },
+    // ① 有别名：别名压过一切自动信息
+    { shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: 'Safari 18', model: null, alias: '客厅平板', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: Date.now() - 5 * 86400000, isCurrent: false },
+    // ② approvedAt=null：本功能上线【之前】批准的条目，前端显示「无批准记录」而不是编个时间
+    { shortId: '7e6d1122…3ede', kind: '未知设备', browser: null, model: null, alias: null, ua: null, ip: null, approvedAt: null, isCurrent: false },
+    // ③ 当前这台。机型 null 是常态（Chrome 冻结了 UA 的机型位），标题只拼类型与浏览器
+    { shortId: 'cd2760a5…ec82', kind: 'Mac', browser: 'Chrome 152', model: null, alias: null, ua: 'Mozilla/5.0 (Macintosh)', ip: '127.0.0.1', approvedAt: Date.now() - 3600000, isCurrent: true },
   ];
 }
 
@@ -4495,6 +4497,16 @@ io.on('connection', socket => {
 
   // 吊销已信任设备。真 server 走 decideRevokeByShortId：命中自己 → 拒绝（self），
   // 0/多命中 → 拒绝（not_found）。mock 复刻这两个出口，否则 E2E 里那两支不可达。
+  // 改名（对位真 server 的 user:renameTrustedDevice）。归一逻辑不复刻——那是 devices.js 的
+  // 单测面；这里只保证「发出去能存下、重播回来」，让 E2E 覆盖得到那条交互。
+  socket.on('user:renameTrustedDevice', payload => {
+    const hit = trustedDevices.find(d => d.shortId === payload?.shortId);
+    if (!hit) { emitTrustedDevices(); return; }
+    const alias = String(payload?.alias ?? '').trim();
+    hit.alias = alias || null;
+    emitTrustedDevices();
+  });
+
   socket.on('user:revokeTrustedDevice', payload => {
     const shortId = payload?.shortId;
     const hit = trustedDevices.filter(d => d.shortId === shortId);
