@@ -254,6 +254,9 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 node scripts/config.js schema
 ```
 
+命令同理：每条 CLI 不带子命令就会打印自己的用法，参数以那份输出为准。按用途分组的命令索引见
+[首次使用指南 · 命令速查](docs/getting-started.md#命令速查)。
+
 ### 我想了解它是怎么实现的
 
 **[架构说明](docs/architecture.md)**

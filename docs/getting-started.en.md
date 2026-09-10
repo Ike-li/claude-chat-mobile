@@ -504,6 +504,81 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 
 </details>
 
+## Command reference
+
+Everything you will reach for after installation. **Every CLI prints its own usage when run without a
+subcommand**, and those printouts are the authority on flags — this reference lists names and purposes
+only, never a second copy of the flags (a second copy drifts from the code):
+
+```bash
+node scripts/config.js       # prints usage when given no subcommand; same for the next three
+node scripts/device.js
+node scripts/service.js
+node scripts/qr.js --help
+npm run setup -- --help
+```
+
+> What `npm run` lists is **not** the full set: `service.js` has `start` / `stop` / `copy-token`
+> subcommands with no npm alias — reach them with `node scripts/service.js <subcommand>`.
+
+### Starting and configuring
+
+| Command | Purpose |
+|---|---|
+| `npm start` | Start the server (port 3000 by default) |
+| `npm run dev` | Same, restarting on source changes |
+| `npm run setup` | Interactive setup wizard |
+| `node scripts/config.js schema` | **List every setting and what it does**, generated from the schema so it never drifts |
+| `node scripts/config.js get\|set\|unset` | Read and write individual settings; secrets need an explicit `--reveal` to print |
+| `npm run config:check` | Validate the current configuration |
+| `npm run config:migrate` | Legacy `.env` → `ccm.config.json` |
+| `node scripts/doctor.js` | Preflight self-check. `--fix` tightens config file permissions to 0600; `--env=<file>` diagnoses that specific file |
+
+### Devices and connecting
+
+| Command | Purpose |
+|---|---|
+| `node scripts/device.js list` | List pending and trusted devices (`--json` for machine output) |
+| `node scripts/device.js approve\|deny <ID>` | Approve or reject a device |
+| `node scripts/qr.js` | Render the address + token as a terminal QR code, so you do not type 64 hex characters |
+| `node scripts/service.js copy-token` | Copy the token to the clipboard **without printing it** |
+
+> Both of the last two move the token out of the config file — run them when you need them, and keep
+> them out of scripts and logs. `qr.js --public` resolves your public address; a hostname behind
+> Cloudflare Access **carries no token** (that path only accepts a JWT).
+
+### The two CLI bridges (optional, they write to `~/.claude`)
+
+| Command | Purpose |
+|---|---|
+| `npm run statusline:install\|status\|uninstall` | Terminal session status bridge |
+| `npm run hooks:install\|status\|verify\|uninstall` | Terminal session notification bridge |
+
+They serve different purposes — see [their two sections above](#optional-cli-statusline-bridge).
+
+### macOS desktop app and managed services
+
+| Command | Purpose |
+|---|---|
+| `npm run app:install` / `npm run app:build` | Build and install into `/Applications` / build only into `desktop/build/` |
+| `npm run service:status` | Run state and ownership of each unit (`--json` is what the menu bar reads) |
+| `npm run service:health` | The only command that hits `/health` |
+| `npm run service:install\|restart\|logs\|uninstall` | Managed service operations |
+| `npm run service:adopt` | Adopt a hand-installed unit — writes the manifest only, never touches the plist |
+| `node scripts/service.js start\|stop <unit>` | Start or stop a single unit (no npm alias) |
+
+You rarely need to type these — the desktop menu covers them. They are the same CLI the menu drives,
+which is what makes them usable when the app itself is stuck.
+
+### Updating and uninstalling
+
+See the [Updating](#updating) and [Uninstall](#uninstall) sections below.
+
+> **These only work in a full repository**: `npm test`, `npm run check`, `npm run lint`, and every
+> `test:*` / `playground:*` / `mutate*`. They reference the test tree and the gates, which the source
+> archive strips out (why: [Option A](#option-a-source-archive-you-just-want-to-run-it); to run them,
+> use [Option B](#option-b-full-repository-you-want-to-change-code-or-run-tests)).
+
 ## Updating
 
 **Update it the same way you got it** — whichever option you picked in step 2 is the one to follow here.

@@ -518,6 +518,77 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 </details>
 
+## 命令速查
+
+装机之后日常会用到的都在这里。**每条 CLI 不带子命令就会打印自己的用法**，参数一律以那份输出
+为准——这份速查只列命令名和用途，不重复参数（重复一份就会和代码分叉）：
+
+```bash
+node scripts/config.js       # 不带子命令即列出用法，下面几条同理
+node scripts/device.js
+node scripts/service.js
+node scripts/qr.js --help
+npm run setup -- --help
+```
+
+> `npm run` 列出的**不是**命令全集：`service.js` 的 `start` / `stop` / `copy-token` 三个子命令
+> 没有对应的 npm 别名，只能敲 `node scripts/service.js <子命令>`。
+
+### 启动与配置
+
+| 命令 | 用途 |
+|---|---|
+| `npm start` | 启动 server（默认 3000） |
+| `npm run dev` | 同上，改代码自动重启 |
+| `npm run setup` | 交互装机向导 |
+| `node scripts/config.js schema` | **列出全部配置项及其含义**，从 schema 生成，永不与代码分叉 |
+| `node scripts/config.js get\|set\|unset` | 读写单项；secret 要明文须显式 `--reveal` |
+| `npm run config:check` | 校验现有配置 |
+| `npm run config:migrate` | 旧版 `.env` → `ccm.config.json` |
+| `node scripts/doctor.js` | 启动自检。`--fix` 把配置文件权限收紧到 0600，`--env=<文件>` 诊断指定的那一份 |
+
+### 设备与连接
+
+| 命令 | 用途 |
+|---|---|
+| `node scripts/device.js list` | 列出待审批与已受信任的设备（`--json` 机读） |
+| `node scripts/device.js approve\|deny <ID>` | 批准 / 拒绝某台设备 |
+| `node scripts/qr.js` | 把连接地址 + token 打成终端二维码，免手输 64 位令牌 |
+| `node scripts/service.js copy-token` | 把 token 复制到剪贴板，**不打印到终端** |
+
+> 后两条都会让令牌离开配置文件，按需敲、别写进脚本或日志。`qr.js --public` 解析公网地址；
+> 受 Cloudflare Access 保护的域名**不会带 token**（那条路只认 JWT）。
+
+### 两个 CLI 桥（可选，会写 `~/.claude`）
+
+| 命令 | 用途 |
+|---|---|
+| `npm run statusline:install\|status\|uninstall` | 终端会话状态桥 |
+| `npm run hooks:install\|status\|verify\|uninstall` | 终端会话通知桥 |
+
+两者用途不同，见上面[两节](#可选cli-statusline-bridge)各自的说明。
+
+### macOS 桌面端与受管服务
+
+| 命令 | 用途 |
+|---|---|
+| `npm run app:install` / `npm run app:build` | 编译并装进 `/Applications` / 只编译到 `desktop/build/` |
+| `npm run service:status` | 各 unit 的运行态与归属（`--json` 供菜单栏消费） |
+| `npm run service:health` | 唯一会打 `/health` 的命令 |
+| `npm run service:install\|restart\|logs\|uninstall` | 受管服务操作 |
+| `npm run service:adopt` | 接管手工安装的 unit，只写 manifest、不动 plist |
+| `node scripts/service.js start\|stop <unit>` | 单个 unit 启停（无 npm 别名） |
+
+日常这些都不用手敲——桌面端菜单里都有。它们是菜单背后的同一条 CLI，app 出问题时可以直接用。
+
+### 更新与卸载
+
+见下面的[更新](#更新)与[卸载](#卸载)两节。
+
+> **以下命令只在完整仓库里可用**：`npm test`、`npm run check`、`npm run lint`，以及全部
+> `test:*` / `playground:*` / `mutate*`。它们引用测试树与门禁，源码归档里被裁掉了（原因见
+> [方式 A](#方式-a源码归档只想把它跑起来)，要跑就用[方式 B](#方式-b完整仓库要改代码或跑测试)）。
+
 ## 更新
 
 **代码怎么取的，就怎么更新**——第 2 步选的哪种方式，这里就走哪一条。

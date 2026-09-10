@@ -250,6 +250,10 @@ Settings are not maintained as a separate static list — read the current defin
 node scripts/config.js schema
 ```
 
+Commands work the same way: every CLI prints its own usage when run without a subcommand, and that
+printout is the authority on flags. For an index grouped by purpose, see
+[First-run guide · Command reference](docs/getting-started.en.md#command-reference).
+
 ### I want to understand how it works
 
 **[Architecture](docs/architecture.en.md)**
