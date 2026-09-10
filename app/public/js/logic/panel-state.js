@@ -50,15 +50,6 @@ export function systemBarClass(payload = {}) {
 // mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
 // （多子代理/后台任务进度是用户在只读时仍需要看到的）。
 // 序：task > subagent > activity > mirror(占位) > null。
-export function bannerPriority({ mirror = false, task = false, subagent = false, activity = false } = {}) {
-  if (task) return 'task';
-  if (subagent) return 'subagent';
-  if (activity) return 'activity';
-  if (mirror) return 'mirror';
-  return null;
-}
-export const pickBannerToShow = bannerPriority;
-
 // UX-004：流式 markdown 预览节流间隔（ms）。
 export function formatStreamPreviewIntervalMs(ms) {
   const n = Number(ms);

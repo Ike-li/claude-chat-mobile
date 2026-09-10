@@ -120,7 +120,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 合卡不得吞掉 spawn 工具自己的输入与结果：子代理的最终报告原本挂在那张通用卡的 .t-out 上，
     // 合卡后必须落到聚合卡里，否则「少一张卡」是靠丢结论换来的。
     // 定位到聚合卡【自己】的槽位：嵌套工具卡也有 .t-in/.t-out，裸 class 会撞 strict mode。
-    await expect(card.locator('> .t-in')).toContainText('code-reviewer');
+    // 只显 description：真机 2026-09-10 这里原样铺了整个 input JSON（含用户刚打的整段 prompt），
+    // 展开卡片先撞一坨。正反两条都要——只断"有 description"抓不到"顺带把 JSON 也铺了"。
+    await expect(card.locator('> .t-in')).toHaveText('Review auth module');
+    await expect(card.locator('> .t-in')).not.toContainText('subagent_type');
     await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
     // 用量按 toolUseId 从 task_progress 挂上来（第 2 批）。这条同时钉住「标完成时不能把用量抹掉」——
     // 标题的三条改写路径共用 renderSubagentTitle，漏带 usage 的那条会在这里红。
@@ -149,10 +152,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(card.locator('.sa-title')).toContainText('3 tools');
     await expect(card.locator('.sa-title')).toContainText('1.2k tok');
 
+    // 底栏权责归位：这条任务已经有流内聚合卡，底栏不再重复显示它（真机同屏复读过）。
+    // 注意判据是「有没有流内卡」——P0-05f 那条 Workflow 场景的 task_progress 不带 toolUseId，
+    // 底栏照常显示，两条合起来才证明这不是"把横幅一刀关掉"。
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
     const lastTool = card.locator('[data-testid="subagent-last-tool"]');
     await expect(lastTool).toBeVisible();
     // 类型前缀被剥掉：后端 message 是「Explore：扫描导入边界」，标题里已经有 Explore 了
-    await expect(lastTool).toHaveText('⎿ Grep: 扫描导入边界');
+    await expect(lastTool).toHaveText('↳ Grep: 扫描导入边界');
 
     await expectNoBrowserErrors(page);
   });
@@ -292,7 +300,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(card.locator('.sa-title')).toContainText('已完成');
     // 合卡：历史侧同样不再为 Agent 工具单独留一张通用工具卡
     await expect(page.locator('#messages > details.toolcard')).toHaveCount(0);
-    await expect(card.locator('> .t-in')).toContainText('code-reviewer');
+    // 与 live 同一口径：只显 description，不铺原始 JSON
+    await expect(card.locator('> .t-in')).toHaveText('Review auth module');
+    await expect(card.locator('> .t-in')).not.toContainText('subagent_type');
     await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
     // 空壳修复（3a）：主 transcript 里没有子代理执行内容，卡在折叠态下 body 是空的；
     // 展开才按需拉 subagent:flow。这两档必须分开断——只断展开后，等于没测「原先是空壳」。

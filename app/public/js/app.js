@@ -16,7 +16,6 @@ import {
   formatCachePercent,
   effortLevelSubtitle,
   shouldShowBusyWithMirror,
-  pickBannerToShow,
   formatStreamPreviewIntervalMs,
   statusIconSpec,
   STATUS_ICON_TONES,
@@ -77,6 +76,7 @@ import {
   isSubagentPayload,
   isSpawnToolName,
   formatSubagentLastToolLine,
+  formatSpawnDescription,
   isFileMutationTool,
   accumulateTurnFileChange,
   summarizeTurnFileChanges,
@@ -233,7 +233,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const connBannerEl = $('connBanner'), connBannerTextEl = $('connBannerText'), connBannerDetailEl = $('connBannerDetail');
   const connBannerSpinnerEl = $('connBannerSpinner'), connBannerRetryEl = $('connBannerRetry');
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
-  const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
@@ -783,8 +782,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       prefPushPreview: $('prefPushPreview'),
       prefLang: $('prefLang'),
       btnPush,
-      activityBanner,
-      activityBannerText,
       taskProgressBanner,
       taskProgressText,
       taskBannerLabel,
@@ -1078,8 +1075,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     haptic,
     notify,
   });
-  let showActivityBanner = taskStatus.showActivity;
-  let hideActivityBanner = taskStatus.hideActivity;
   let onTaskProgress = taskStatus.onProgress;
   let hideTaskProgress = taskStatus.hideProgress;
   const onTaskNotification = taskStatus.onComplete;
@@ -2046,14 +2041,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       task_notification: onTaskNotification,
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
-        const relevant = onTaskProgress(ev); // let 可后绑 reconcile 包装
+        // 【底栏权责归位】已经有流内聚合卡的任务，从底栏载荷里摘掉——它的状态、用量、最近工具
+        // 全都在卡上，底栏再显示一遍就是同屏复读（2026-09-10 真机实证：卡头写着
+        // 「general-purpose 运行中 · 4 tools · 52s · 51.8k tok」，底栏面板同时写着同一份）。
+        //
+        // 【判据是「有没有流内卡」，不是「是不是后台」】这两个判据看着近似，差别是致命的：
+        // 本地 slash 命令（/code-review 等）的子代理整轮零 SDK 流——连 tool_use 都没有，
+        // 建不出卡，只能靠底栏被看见。按「非后台就摘」会让它们既不在流里也不在底栏，
+        // 复现 2026-08-05 真机那次「只有计时器在转、别的什么都没有」（用户等了 13 分钟按停止）。
+        // 那批任务的 taskId 带 localcmd: 前缀、没有 toolUseId，天然不会命中下面这个集合。
+        const p = ev.payload || {};
+        const anchored = new Set();
+        for (const row of Array.isArray(p.tasks) ? p.tasks : []) {
+          if (typeof row?.toolUseId === 'string' && subagentCards.has(row.toolUseId)) anchored.add(row.taskId);
+        }
+        const forBanner = anchored.size
+          ? { ...ev, payload: { ...p, tasks: p.tasks.filter(row => !anchored.has(row.taskId)) } }
+          : ev;
+        const relevant = onTaskProgress(forBanner); // let 可后绑 reconcile 包装
         if (relevant && liveLine) liveLine.lastEventAt = Date.now();
-        if (relevant) applySubagentUsage(ev.payload); // 按 toolUseId 把用量挂到流内聚合卡
+        if (relevant) applySubagentUsage(p); // 用量仍按【全量】挂：被摘的那些正是要挂到卡上的
         return relevant;
       },
       // API 重试：CLI 把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"，
       // web 对齐同一语义——写进 liveLine.retry 由 renderLiveLineText 整行顶替。不再走底部横幅：
-      // 旧横幅与后台任务/子 agent 争抢同一 DOM，且被 reconcileBanners 的 task 优先级必现压掉。
+      // 旧横幅与后台任务/子 agent 争抢同一 DOM（那条横幅已于 2026-09-10 整体退役）。
       // deadline 存绝对时刻而非 delayMs——已有的 1s ticker 据此重算，倒计时才走得动。
       api_retry: (ev) => {
         if (ev.instanceId && viewingInstanceId && ev.instanceId !== viewingInstanceId) return;
@@ -2138,7 +2150,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     toolCards.clear();
     agentToolIds.clear();
-    hideActivityBanner();
   }
 
   // 停止时丢弃「尚未送达 SDK」的消息（send 完成到输入泵取走之间的窄窗）：气泡落灰色终态而非删除，
@@ -2497,8 +2508,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
           adoptSpawnCard(ensureSubagentCard(p.toolUseId, subType || null), p);
         }
-        const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], '');
-        if (desc) showActivityBanner(desc);
       }
       // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
       if (liveLine?.thinking?.state === 'active') {
@@ -2516,7 +2525,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
         if (agentToolIds.has(p.toolUseId)) {
           agentToolIds.delete(p.toolUseId);
-          if (agentToolIds.size === 0) hideActivityBanner();
         }
         return;
       }
@@ -2547,7 +2555,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
       if (agentToolIds.has(p.toolUseId)) {
         agentToolIds.delete(p.toolUseId);
-        if (agentToolIds.size === 0) hideActivityBanner();
       }
     },
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
@@ -2705,7 +2712,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
       _turnRunning = false;
       updateSendButtonState();
-      hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
       // 对齐 CLI：用户主动中止时 SDK 常带 is_error + ede_diagnostic；interrupted 优先，不当红色错误展示。
@@ -2737,7 +2743,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       addBar(`⚠️ ${p.message}`, 'text-danger');
       _pendingSendBusySessionId = null;
       setBusy(false);
-      hideActivityBanner();
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
@@ -2776,7 +2781,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         setBusy(false);
         _turnRunning = false; // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
-        hideActivityBanner();
         // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
         // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
         // 已有 sessionId 的正常中断（displayedSessionId 非空）不置位，且顺带清掉任何过期残留。
@@ -3133,7 +3137,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             </div>
             <div class="sa-lasttool mt-0.5 pl-5 text-ink-faint truncate hidden" data-testid="subagent-last-tool"></div>
           </summary>
-          <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
+          <div class="t-in mx-3 mb-1 text-ink-soft break-words hidden"></div>
           <div class="t-full-host px-3 pb-1 space-y-1">
             <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
@@ -3209,13 +3213,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const wrap = sa.el;
     wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
     setStatusIcon(wrap.querySelector('.t-status'), 'pending');
-    const inPre = wrap.querySelector('.t-in');
-    const inCode = inPre?.querySelector('code');
-    // 空对象输入展开也只有「{}」噪音 → 整块藏掉（同通用卡，CLI 对空输入零渲染）
-    if (inCode && String(p.inputSummary || '').trim() && String(p.inputSummary || '').trim() !== '{}') {
-      inCode.textContent = formatToolSummary(p.inputSummary || '');
-      inPre.classList.remove('hidden');
-      try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
+    // 【只显 description，不铺原始输入】通用工具卡在这个槽里放的是整个 input 的 pretty JSON，
+    // 合卡后它就挡在展开区门口——含用户刚打的整段 prompt（2026-09-10 真机撞到）。CLI 在同一
+    // 位置也只显 description。原文没丢：transcript 里一直都在，需要时从那边看。
+    const inEl = wrap.querySelector('.t-in');
+    const desc = formatSpawnDescription(p.inputSummary);
+    if (inEl && desc) {
+      inEl.textContent = desc;
+      inEl.classList.remove('hidden');
     }
     toolCards.set(p.toolUseId, wrap);
     return sa;
@@ -6509,7 +6514,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
       for (const node of keptPending) messagesEl.appendChild(node);
     }
-    hideActivityBanner(); // WS-005：清 activity 横幅，否则 A 的子 agent 活动态残留到空闲的 B（task-progress 已由 setInstances 按实例处理；API 重试态随 liveLine 一起销毁）
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
@@ -7276,7 +7280,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             </div>
             <div class="sa-lasttool mt-0.5 pl-5 text-ink-faint truncate hidden" data-testid="subagent-last-tool"></div>
           </summary>
-          <pre class="t-in mx-3 mb-1 overflow-x-auto whitespace-pre-wrap break-words text-ink-soft hidden"><code></code></pre>
+          <div class="t-in mx-3 mb-1 text-ink-soft break-words hidden"></div>
           <div class="t-full-host px-3 pb-1 space-y-1">
             <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
@@ -7391,12 +7395,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             // 让本文件下方 tool_result 分支（setStatusIcon / .t-out / dataset.toolName）零改动生效。
             sa.el.dataset.toolName = msg.name || '';
             setStatusIcon(sa.el.querySelector('.t-status'), 'pending');
-            const histInPre = sa.el.querySelector('.t-in');
-            const histInCode = histInPre?.querySelector('code');
-            if (histInCode && String(msg.inputSummary || '').trim() && String(msg.inputSummary || '').trim() !== '{}') {
-              histInCode.textContent = formatToolSummary(msg.inputSummary || '');
-              histInPre.classList.remove('hidden');
-              codeBlocks.push(histInCode); // history 走空闲批量高亮，不当场 hljs（同本函数其它卡）
+            // 同 live 的 adoptSpawnCard：只显 description，不铺原始输入 JSON
+            const histInEl = sa.el.querySelector('.t-in');
+            const histDesc = formatSpawnDescription(msg.inputSummary);
+            if (histInEl && histDesc) {
+              histInEl.textContent = histDesc;
+              histInEl.classList.remove('hidden');
             }
             histToolCards.set(msg.toolUseId, sa.el);
           }
@@ -7607,36 +7611,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
   }
 
-  // UX-010：横幅优先级 task > subagent > activity（mirror 已迁 placeholder，不压 task）。
-  // #mirrorBanner 恒隐；只读时仍展示 task_progress，让用户看见后台子代理/Workflow 进度。
-  function reconcileBanners() {
-    const taskOn = Boolean(taskProgressBanner && !taskProgressBanner.classList.contains('hidden'));
-    const activityOn = Boolean(activityBanner && !activityBanner.classList.contains('hidden'));
-    const pick = pickBannerToShow({
-      mirror: Boolean(mirrorReadonlySid),
-      task: taskOn,
-      subagent: false,
-      activity: activityOn,
-    });
-    if (mirrorBanner) mirrorBanner.classList.add('hidden');
-    // 不再因 mirror 强制 hide taskProgressBanner
-    if (activityBanner) {
-      if (pick !== 'activity') activityBanner.classList.add('hidden');
-    }
-  }
-
-  // UX-010：活动/后台任务横幅显示后走仲裁
-  {
-    const _sa = showActivityBanner;
-    const _ha = hideActivityBanner;
-    const _op = onTaskProgress;
-    const _hp = hideTaskProgress;
-    showActivityBanner = (...a) => { _sa(...a); reconcileBanners(); };
-    hideActivityBanner = (...a) => { _ha(...a); reconcileBanners(); };
-    onTaskProgress = (ev) => { const r = _op(ev); reconcileBanners(); return r; };
-    hideTaskProgress = (...a) => { _hp(...a); reconcileBanners(); };
-  }
-
+  // 【曾经这里有 reconcileBanners 与 #activityBanner】那条横幅在 spawn 时点亮、显示子代理的
+  // description，唯一的生产者是主链 spawn 工具。合卡之后聚合卡在同一时刻就建好了，且带着类型、
+  // 用量与最近工具——横幅成了纯复读，2026-09-10 真机同屏看见两处说同一件事。
+  // 横幅一撤，仲裁函数的剩余职责只有「隐藏 #mirrorBanner」，而那个节点本就 class="hidden"
+  // 且另有一处显式隐它，于是整个仲裁退化成空操作，一并删掉。优先级表（bannerPriority）
+  // 随之失去唯一消费者，也从 logic 里退役。
   // 驾驶中点输入区：解释能/不能/硬要怎么做（disabled 吞原生 focus，需主动反馈）。
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
@@ -7693,7 +7673,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
     // UX-010：镜像时强制隐藏忙碌条
     if (effective) setBusy(false);
-    reconcileBanners();
     if (inputEl) inputEl.disabled = effective;
     refreshMirrorComposerCopy();
     // 附件入口随只读锁：禁点 + 防「选了图却发不出」

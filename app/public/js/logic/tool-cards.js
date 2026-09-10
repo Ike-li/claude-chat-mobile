@@ -375,6 +375,8 @@ export function formatSubagentCardTitle({
 }
 
 // 聚合卡的单行动作槽，对齐 CLI 的 lastToolInfo：折叠态也可见，「跑到哪了」不必展开卡片。
+// 前缀用 ↳ 不用 CLI 那个 ⎿：后者是制表符区的字，终端等宽字体里好看，移动端 UI 字体下
+// 真机渲染成又细又歪的一道（2026-09-10 实测），↳ 在两边都稳。
 // 只在有工具名时成行——它是「最近工具」行，没有工具就没有这一行；光有描述不顶替
 // （那是任务级摘要，归横幅/详情面板，混进来会让两处说同一件事的不同版本）。
 const SUBAGENT_LAST_TOOL_MAX = 60;
@@ -393,9 +395,31 @@ export function formatSubagentLastToolLine(input) {
       if (desc.startsWith(type + sep)) { desc = desc.slice(type.length + sep.length).trim(); break; }
     }
   }
-  if (!desc) return `⎿ ${tool}`;
+  if (!desc) return `↳ ${tool}`;
   const clipped = desc.length > SUBAGENT_LAST_TOOL_MAX ? `${desc.slice(0, SUBAGENT_LAST_TOOL_MAX)}…` : desc;
-  return `⎿ ${tool}: ${clipped}`;
+  return `↳ ${tool}: ${clipped}`;
+}
+
+// 合卡后聚合卡上那一行「派它去干什么」。CLI 在同一位置只显 description，不显 prompt——
+// 照抄这条判据。2026-09-10 真机：展开聚合卡先撞一坨含完整 prompt 的 JSON，因为合卡时
+// 把通用工具卡的原始输入槽原样接了过来。合卡前那坨 JSON 在一张独立的、默认折叠的卡里，
+// 没人会去点它；合卡后它挡在门口——用户展开卡是想看子代理干了什么，先撞上自己刚打的 prompt。
+// 回落顺序里保留 prompt：Task/Workflow 或模型没给 description 时，有一行总比空着强。
+export function formatSpawnDescription(inputSummary, maxLen = 120) {
+  const clip = (v) => {
+    const one = String(v).trim().replace(/\s+/g, ' ');
+    return one.length > maxLen ? `${one.slice(0, maxLen)}…` : one;
+  };
+  const input = parseJsonObject(inputSummary);
+  if (!input) {
+    const raw = typeof inputSummary === 'string' ? inputSummary.trim() : '';
+    return raw && raw !== '{}' ? clip(raw) : null;
+  }
+  for (const k of ['description', 'prompt', 'args', 'name']) {
+    const v = input[k];
+    if (typeof v === 'string' && v.trim()) return clip(v);
+  }
+  return null;
 }
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。

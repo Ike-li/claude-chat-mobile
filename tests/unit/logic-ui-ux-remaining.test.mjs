@@ -7,8 +7,6 @@ import {
   formatCachePercent,
   effortLevelSubtitle,
   shouldShowBusyWithMirror,
-  bannerPriority,
-  pickBannerToShow,
   formatStreamPreviewIntervalMs,
   statusIconSpec,
 } from '../../app/public/js/logic.js';
@@ -106,10 +104,6 @@ test('effortLevelSubtitle: 各档增量文案', () => {
 test('shouldShowBusyWithMirror: 镜像优先隐藏忙碌', () => {
   assert.equal(shouldShowBusyWithMirror({ busy: true, mirrorReadonly: true }), false);
   assert.equal(shouldShowBusyWithMirror({ busy: true, mirrorReadonly: false }), true);
-});
-
-test('bannerPriority: task 不被 mirror 压掉（镜像态已迁 placeholder，后台进度须可见）', () => {
-  assert.ok(typeof bannerPriority === 'function' || typeof pickBannerToShow === 'function');
 });
 
 test('formatStreamPreviewIntervalMs: 默认 80ms 节流', () => {

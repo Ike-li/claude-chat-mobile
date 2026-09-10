@@ -460,13 +460,6 @@
       <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
 
       <!-- 子代理/Workflow 活动横幅 -->
-      <div id="activityBanner" class="hidden px-3 py-2 bg-accent-wash border border-accent/30 rounded-xl text-xs text-accent mb-1 shrink-0">
-        <div class="flex items-center gap-2">
-          <span class="animate-spin text-sm">⚙</span>
-          <span id="activityBannerText" class="font-medium truncate"></span>
-        </div>
-      </div>
-
       <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）
            头行 #taskBannerLabel 按构成改写（子代理 / 后台命令 / 工作流 / 混合时「运行中」），不再写死「后台任务」。
            「停止」= task:stop → SDK stopTask(taskId)，对齐 CLI 停单个后台任务。

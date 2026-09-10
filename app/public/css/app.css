@@ -847,9 +847,6 @@ body.ccm-sheet-open #messages {
     #leftSidebar, #settingsSheet {
       transition: none !important;
     }
-    #activityBanner .animate-spin {
-      animation: none !important;
-    }
     #connBanner .animate-spin {
       animation: none !important;
     }
@@ -885,13 +882,12 @@ body.ccm-sheet-open #messages {
     --activity: var(--accent);
   }
 }
-#activityBanner,
 #streamLiveStatus {
   color: var(--activity);
   border-color: color-mix(in srgb, var(--activity) 40%, transparent);
 }
 /* A2：工具卡不再跟随活动强调色——见上方 .toolcard 的降级说明。
-   #activityBanner / #streamLiveStatus 仍用 --activity，它们是「此刻在发生什么」的单条状态，
+   #streamLiveStatus 仍用 --activity，它是「此刻在发生什么」的单条状态，
    数量恒为 1，用强调色不会堆叠成墙。 */
 
 /* UX-016：思考进行中 shimmer */
