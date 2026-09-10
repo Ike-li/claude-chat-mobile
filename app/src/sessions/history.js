@@ -1586,3 +1586,86 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
   out.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
   return out;
 }
+
+// ---- 子代理执行流水的按需读取（历史回放用）----
+//
+// 【为什么必须单独读】主 transcript 里没有子代理的任何执行内容。2026-09-10 全库实证
+// （本机 137 个 project、327 个 jsonl）：`isSidechain:true` 只出现在 subagents/agent-*.jsonl
+// 内部，主 transcript 一条都没有；主链上只有那次 Agent tool_use 与它最终的 tool_result。
+// 后果是刷新页面后，前端从主链 spawn 工具预建的那张子代理卡是【空壳】——卡在、body 全空。
+//
+// 【为什么按需读，不随 session:history 一起推】实测本机 179 个 agent 文件：中位 360KB、
+// 最大 1.2MB、总 69MB。随历史整批推等于把一轮历史的体量放大一个数量级，且绝大多数卡
+// 用户根本不会展开。故走「展开卡片时拉这一个 agent」，与 tool:preview / tool:full 同范式：
+// 客户端只传 toolUseId，从不传路径——路径由本函数从 sessionId + cwd 自己算。
+//
+// 【为什么保尾部】与 getSessionHistory 的 pushCapped 同口径。子代理的结论在末尾，
+// 砍尾等于砍掉答案；开头那几十条读文件反而是最不需要的。
+export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CLAUDE_DIR, limit = 400 } = {}) {
+  if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'bad_session' }; // SS-003 同口径：拼路径前先挡
+  const wanted = typeof toolUseId === 'string' ? toolUseId.trim() : '';
+  if (!wanted) return { ok: false, reason: 'bad_tool_use_id' };
+  const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
+  let names;
+  try { names = await readdir(dir); } catch { return { ok: false, reason: 'no_subagents' }; }
+
+  // 先按 meta 找出是哪一个 agent。meta 极小（几十字节），全扫代价可忽略；
+  // 找不到就返回 false，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
+  let hit = null;
+  for (const name of names) {
+    const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
+    if (!m) continue;
+    try {
+      const meta = JSON.parse(await readFile(join(dir, name), 'utf-8'));
+      if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
+        hit = { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
+          description: typeof meta.description === 'string' ? meta.description : null };
+        break;
+      }
+    } catch { /* meta 损坏/写入中：跳过，不整条失败 */ }
+  }
+  // 无 toolUseId 的 agent 存在（实证 179 个里 7 个：spawnDepth:2 的嵌套子代理，以及本地 slash
+  // 命令的顶层编排 agent），它们锚不到主链的任何一次 tool_use，本函数天然找不到——这是已知边界，
+  // 不是缺陷：没有锚点就没有可以挂载的卡片。
+  if (!hit) return { ok: false, reason: 'not_found' };
+
+  const items = [];
+  let total = 0;
+  const pushCapped = (item) => {
+    items.push(item);
+    if (items.length > limit * 2) items.splice(0, items.length - limit);
+  };
+  try {
+    // 流式逐行读：单文件可达 1.2MB，一次性 buffer 会在 always-on 进程里堆出峰值
+    const rl = createInterface({
+      input: createReadStream(join(dir, `agent-${hit.agentId}.jsonl`), { encoding: 'utf-8' }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; } // 末行可能是写入中途的半行
+      if (entry.isMeta) continue;
+      if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+      // 与主历史同构：复用同一个展开器，前端才能拿同一套渲染跑两条路径。
+      // parentToolUseId 一律填这张卡的 id——本函数返回的每一条按定义都属于它。
+      const expanded = expandHistoryEntry(entry.message?.content, entry.message?.role || entry.type, entry.timestamp, {
+        isSidechain: true,
+        parentToolUseId: wanted,
+        uuid: null, // 分叉锚点只在主链有效（同 getSessionHistory 对 sidechain 的处理）
+      });
+      for (const item of expanded) { total++; pushCapped(item); }
+    }
+  } catch {
+    return { ok: false, reason: 'read_failed' };
+  }
+  const kept = items.slice(-limit);
+  return {
+    ok: true,
+    agentType: hit.agentType,
+    description: hit.description,
+    items: kept,
+    total,
+    truncated: total > kept.length,
+  };
+}

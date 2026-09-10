@@ -294,11 +294,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages > details.toolcard')).toHaveCount(0);
     await expect(card.locator('> .t-in')).toContainText('code-reviewer');
     await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
-    // sidechain 子流进卡内、不落主流。「不落主流」只能用结构判据表达——卡本身就在 #messages 里，
-    // 对 #messages 断 not.toContainText 在结构上永远不成立（第一版就是这么写错的）。
+    // 空壳修复（3a）：主 transcript 里没有子代理执行内容，卡在折叠态下 body 是空的；
+    // 展开才按需拉 subagent:flow。这两档必须分开断——只断展开后，等于没测「原先是空壳」。
+    await expect(card.locator('.sa-body details.toolcard')).toHaveCount(0);
+
+    await card.locator('summary').first().click();
+    await expect(card).toHaveAttribute('open', '');
+    // 拉回来的条目用的是 live/history 共用的那套渲染，所以形态与 live 一致：正文 + 嵌套工具卡
     await expect(card.locator('.sa-body')).toContainText('CSRF');
+    await expect(card.locator('.sa-body details.toolcard')).toHaveCount(1);
+    await expect(card.locator('[data-testid="subagent-flow-empty"]')).toHaveCount(0);
+    // 「不落主流」只能用结构判据表达——卡本身就在 #messages 里，对 #messages 断
+    // not.toContainText 在结构上永远不成立（第一版就是这么写错的）。
     await expect(page.locator('#messages > [data-testid="assistant-message"]'))
-      .not.toContainText('Found 1 CSRF gap in login handler.');
+      .not.toContainText('Scanning auth handlers');
 
     await expectNoBrowserErrors(page);
   });

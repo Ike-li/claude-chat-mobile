@@ -278,7 +278,14 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        且载荷里的 deviceId 本就已广播给可信端），这条处理已在用的设备（破坏性、要强确认），
   //        且载荷只有 shortId——DEVICE-03 不许把全量信任表下发到网络上。两个风险档共用一个
   //        handler 迟早写反。入向总数 46→47）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 47);
+  //      + subagent:flow（2026-09-10，历史回放时按需读一个子代理的执行流水。刻意不并进
+  //        session:history：主 transcript 里【没有】子代理的执行内容（全库实证 isSidechain 只出现在
+  //        <sessionId>/subagents/agent-*.jsonl 内），那批文件实测中位 360KB、最大 1.2MB、总 69MB，
+  //        随历史整批推等于把一轮历史放大一个数量级，而绝大多数卡用户根本不会展开。
+  //        安全模型同 tool:preview / task:output：客户端只传 toolUseId，路径由服务端从
+  //        sessionId+cwd 自己算，入口再过一道 isSafeSessionId（SS-003）。入向总数 47→48）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 48);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('subagent:flow'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:revokeTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('task:output'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('attachment:read'));

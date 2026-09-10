@@ -7132,7 +7132,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false } = {}) {
+  // cardsOnly：这批条目【全部】属于某张子代理卡（懒加载 subagent:flow 的回包），不进主流。
+  // 用它抑制三个页面级副作用——尤其 scrollBottom：展开一张历史卡片时把页面滚到底是灾难性的。
+  // 之所以仍走本函数而不另写一个渲染器：renderOne 是 live/history 共用的那一份，
+  // 另写一个就等于再造一套平行实现，而"刷新前后同构"正是这条链要保证的东西。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
@@ -7168,8 +7172,41 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 否则历史回放/刷新页面后卡片标题从「🤖 Explore」这类具体类型退化成泛泛的「🤖 子 agent」。
       const type = subagentType != null && String(subagentType).trim() ? String(subagentType).trim() : null;
       titleEl.textContent = formatSubagentCardTitle({ subagentType: type, running: false });
-      c = { el: wrap, body: wrap.querySelector('.sa-body'), titleEl, type };
+      c = { el: wrap, body: wrap.querySelector('.sa-body'), titleEl, type, loaded: false };
       histSubCards.set(parentId, c);
+      // 展开时才拉这一个 agent 的流水。主 transcript 里没有子代理的执行内容（全在
+      // <sessionId>/subagents/agent-*.jsonl），不拉的话这张卡刷新后就是个空壳。
+      // 【为什么不在渲染历史时一起拉】那批文件实测中位 360KB、最大 1.2MB，且绝大多数卡不会被展开。
+      // cwd/sessionId 在【建卡时】快照，不在点击时读：卡会留在 DOM 里跨越会话切换（同 tool:preview
+      // 快照 viewingInstanceId 的理由），点击时读会把 A 会话的卡按 B 的坐标去拉。
+      const flowCwd = currentCwd, flowSid = displayedSessionId;
+      wrap.addEventListener('toggle', () => {
+        if (!wrap.open || c.loaded) return;
+        c.loaded = true;
+        if (c.body.childElementCount > 0) return; // 已有内容（老会话 sidechain 落在主 transcript 里）
+        if (!flowSid) return;
+        const hint = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-hint"></div>');
+        hint.textContent = t('正在读取子代理执行记录…');
+        c.body.appendChild(hint);
+        socket.emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, res => {
+          hint.remove();
+          // 只收属于这张卡的条目：服务端已按 toolUseId 归属，这里再挡一道——漏进主流的条目
+          // 会变成凭空多出来的气泡，而那是刷新后才出现、极难归因的一类症状。
+          const items = Array.isArray(res?.items) ? res.items.filter(m => m?.parentToolUseId === parentId) : [];
+          if (!res?.ok || !items.length) {
+            const empty = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-empty"></div>');
+            empty.textContent = t('没有可显示的子代理执行记录');
+            c.body.appendChild(empty);
+            return;
+          }
+          renderHistoryBubbles(items, null, { cardsOnly: true });
+          if (res.truncated) {
+            const more = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-truncated"></div>');
+            more.textContent = t('（只显示最近的部分记录）');
+            c.body.appendChild(more);
+          }
+        });
+      });
       frag.appendChild(wrap);
       return c;
     };
@@ -7345,12 +7382,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
         return;
       }
-      leaveStartScreen();
+      if (!cardsOnly) leaveStartScreen();
       messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+      // cardsOnly 下 frag 恒空：调用方已过滤成「只有 parentToolUseId 的条目」，appendNode 全部路由进卡
       // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
       // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
       if (fullReload) settleCarriedPendingBubbles(msgs);
-      scrollBottom(true);
+      if (!cardsOnly) scrollBottom(true);
       if (codeBlocks.length) {
         const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
         scheduleIdle(doHighlight, { timeout: 2000 });

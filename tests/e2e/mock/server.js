@@ -1458,11 +1458,11 @@ io.on('connection', socket => {
             inputSummary: '{"description":"Review auth module","subagent_type":"code-reviewer"}',
             timestamp: sahTs(8)
           },
-          // sidechain 子流（parentToolUseId）→ 收进聚合卡 body，不落主流
-          {
-            role: 'assistant', content: 'Found 1 CSRF gap in login handler.', uuid: 'a-sah-3',
-            parentToolUseId: 'sah-agent-1', timestamp: sahTs(7)
-          },
+          // 【这里【没有】子代理的执行内容，是照着真形态来的】2026-09-10 全库实证：主 transcript
+          // 里 isSidechain 一条都没有，子代理执行全在 <sessionId>/subagents/agent-*.jsonl。
+          // 于是历史回放拿到的卡是空壳，内容要靠展开时的 subagent:flow 拉——上面那个处理器给的就是它。
+          // 早先这里塞过一条 parentToolUseId 的 assistant，那是照着「以为的形态」写的假夹具：
+          // 它让空壳缺陷在 E2E 里【物理不可见】。
           {
             kind: 'tool_result', role: 'user', toolUseId: 'sah-agent-1', ok: true,
             outputSummary: 'Subagent code-reviewer finished review.', timestamp: sahTs(6)
@@ -4300,6 +4300,27 @@ io.on('connection', socket => {
   });
 
   // 工具全文展开（对齐 server tool:full）：mock 对已知 toolUseId 返回全文
+  // 子代理执行流水的按需拉取（历史侧展开卡片时触发）。真 server 走 readSubagentFlow 读
+  // <sessionId>/subagents/agent-*.jsonl；这里给等价形状的 fixture。
+  // items 的形状与 session:history 的消息同构（text 条目不带 kind，工具类才带）——真 server 那边
+  // 是复用 expandHistoryEntry 得到的，mock 若漂了，前端"复用同一套渲染"的前提就假了。
+  socket.on('subagent:flow', ({ toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    if (toolUseId !== 'sah-agent-1') return ack({ ok: false, reason: 'not_found' });
+    return ack({
+      ok: true,
+      agentType: 'code-reviewer',
+      description: 'Review auth module',
+      total: 3,
+      truncated: false,
+      items: [
+        { role: 'assistant', content: 'Scanning auth handlers for CSRF gaps…', timestamp: new Date(Date.now() - 8 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+        { kind: 'tool_use', role: 'assistant', toolUseId: 'sah-read-1', name: 'Read', inputSummary: '{"file_path":"app/src/auth.js"}', timestamp: new Date(Date.now() - 7 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+        { kind: 'tool_result', role: 'user', toolUseId: 'sah-read-1', ok: true, outputSummary: 'export function login() { /* ... */ }', timestamp: new Date(Date.now() - 7 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+      ],
+    });
+  });
+
   socket.on('tool:full', ({ toolUseId } = {}, ack) => {
     if (typeof ack !== 'function') return;
     if (toolUseId === 't_bash') {

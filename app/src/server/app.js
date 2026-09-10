@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, listSessionsPage, listSessionsByIds, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -3130,6 +3130,31 @@ registerSocketConnection(io, socket => {
       ack({ messages: await getSessionHistory(sessionId, cwd) }); // M6：async 避免阻塞事件循环
     } catch (err) {
       ack({ messages: [], error: err.message });
+    }
+  });
+
+  // 子代理执行流水：历史回放时按需拉【一个】 agent 的内容。
+  //
+  // 【为什么必须有这条】主 transcript 里没有子代理的执行内容（2026-09-10 全库实证：
+  // isSidechain 只出现在 subagents/agent-*.jsonl 内），所以刷新后前端预建的子代理卡是空壳。
+  //
+  // 【为什么按需而不是随 session:history 一起推】那批文件实测中位 360KB、最大 1.2MB
+  // （本机 179 个、总 69MB）。整批推等于把一轮历史的体量放大一个数量级，而绝大多数卡
+  // 用户根本不会展开。
+  //
+  // 【安全】同 tool:preview / tool:full 的范式：客户端只传 toolUseId，从不传路径——路径由
+  // 服务端从 sessionId + cwd 自己算，且 readSubagentFlow 入口先过 isSafeSessionId（SS-003）。
+  // 会话归属校验与 session:history 同款（按文件存在性裁决，接纳终端创建的会话）。
+  on(socket, 'subagent:flow', async ({ cwd: reqCwd, sessionId, toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const cwd = routeCwd(reqCwd);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, error: '会话不存在' });
+    }
+    try {
+      ack(await readSubagentFlow(sessionId, cwd, toolUseId));
+    } catch (err) {
+      ack({ ok: false, error: err.message });
     }
   });
 
