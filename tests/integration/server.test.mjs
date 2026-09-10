@@ -516,7 +516,7 @@ const ACK_SHAPES = [
   // 改真 server 的成功支 ack 时【必须同时改 tests/e2e/mock/server.js】——两边是平行实现，
   // 静态门禁只守事件名不守字段，删一个字段这里和 E2E 都不会红。
   { event: 'session:rewind:preview', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },
-  // confirm 同样只覆盖免夹具的「会话不存在」支。成功支 { forkedSessionId, filesChanged,
+  // confirm 同样只覆盖免夹具的「会话不存在」支。成功支 { forkedSessionId, prefill, filesChanged,
   // skippedLinks, unrestored, warning } + finishOpenFocus 的 { instanceId, sessionId }
   // 会真回滚文件并分叉会话，不适合放进这张一次性形状表。
   { event: 'session:rewind:confirm', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },

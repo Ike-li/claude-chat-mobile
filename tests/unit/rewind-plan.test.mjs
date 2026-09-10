@@ -12,7 +12,7 @@
 // 夹具偏离真实契约会让两边自洽地一起错（testing.md §3「fixture 编错外部契约时恒绿」）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRewind, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks } from '../../app/src/sessions/rewind-plan.js';
+import { planRewind, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../../app/src/sessions/rewind-plan.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -232,5 +232,57 @@ test.describe('createRewindLocks：锁跨越实例置换仍然有效', () => {
     assert.equal(locks.tryAcquire('s1'), true);
     clock = 40_000;
     assert.equal(locks.tryAcquire('s1'), true);
+  });
+});
+
+test.describe('extractPromptText：把那一轮的原话取回来（prefill）', () => {
+  // 回退的语义是「回到我说这句话之前」，那么下一步多半就是把这句话改一改重说——
+  // Claude Desktop 的 rewindSession 也返回 prefill，SDK 的 d.ts 同样点名了这个用途
+  // （"the rewind target and composer prefill for edit-and-retry"）。
+  //
+  // 夹具形态取自 30 个真实会话实测：list[text] ×139、str ×114、list[image+text] ×7、
+  // list[tool_result] ×4306。四种都要有明确行为，尤其最后一种——它也是 type:'user'，
+  // 但不是人打的字，回填进输入框会很荒谬。
+  test('字符串形态原样取回', () => {
+    assert.equal(extractPromptText({ message: { content: ' server启动不了了' } }), ' server启动不了了');
+  });
+
+  test('text 块形态拼接取回（最常见）', () => {
+    assert.equal(extractPromptText({ message: { content: [{ type: 'text', text: '为什么抽屉还显示运行中' }] } }),
+      '为什么抽屉还显示运行中');
+  });
+
+  test('图文混排只取文字，跳过 image 块', () => {
+    const entry = { message: { content: [
+      { type: 'image', source: { type: 'base64', data: 'xxx' } },
+      { type: 'text', text: '这张图里的报错是什么意思' },
+    ] } };
+    assert.equal(extractPromptText(entry), '这张图里的报错是什么意思',
+      'image 块的 base64 若被拼进去，输入框会被灌进几十 KB 的乱码');
+  });
+
+  test('tool_result 承载行 → 空串（它是 type:user 但不是人打的字）', () => {
+    const entry = { message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '命令输出' }] } };
+    assert.equal(extractPromptText(entry), '',
+      '把工具输出回填进输入框会让用户莫名其妙地"重发"一段命令结果');
+  });
+
+  test('剥掉 CCM 自己追加的附件块，只留用户原话', () => {
+    // 附件块的真实格式（取自真实 transcript，不是编的）：头行有固定措辞，
+    // 随后是绝对路径。第一版夹具我按印象写成「[附件]\n- 文件名」，与 ATTACH_BLOCK_HEADER_RE
+    // 对不上 → 用例红。夹具偏离真实契约时两边会自洽地一起错，所以照真实样本抄。
+    const entry = { message: { content:
+      '这里面有两个重启，一个重启服务是 server 的\n\n'
+      + '[附件] 已上传到工作目录，可用 FileRead / Read 读取：\n'
+      + '/Users/you/code/proj/.ccm-uploads/1787035067864-f8fba05a-image.png' } };
+    assert.equal(extractPromptText(entry), '这里面有两个重启，一个重启服务是 server 的',
+      '附件清单是发送时拼进去的、不是用户打的；回填它等于让用户手动删一遍');
+  });
+
+  test('缺字段 / 非法输入 → 空串而不是抛错', () => {
+    assert.equal(extractPromptText(null), '');
+    assert.equal(extractPromptText({}), '');
+    assert.equal(extractPromptText({ message: {} }), '');
+    assert.equal(extractPromptText({ message: { content: 42 } }), '');
   });
 });

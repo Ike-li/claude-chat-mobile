@@ -63,7 +63,7 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
-import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks } from '../sessions/rewind-plan.js';
+import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -3058,11 +3058,15 @@ registerSocketConnection(io, socket => {
         return;
       }
 
-      const plan = planRewind(await readSessionEntries(cwd, sessionId), promptUuid);
+      const entries = await readSessionEntries(cwd, sessionId);
+      const plan = planRewind(entries, promptUuid);
       if (!plan.ok) {
         reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
         return;
       }
+      // 回退的下一步多半是把这句话改一改重说，所以把原话带回去回填输入框（edit-and-retry）。
+      // 【必须在 fork 之前取】fork 后的新会话不含目标轮，那时再找就找不到了。
+      const prefill = extractPromptText(entries.find(e => e?.uuid === promptUuid));
 
       // ── 第 1 步：物理回滚 ──
       let real;
@@ -3111,6 +3115,7 @@ registerSocketConnection(io, socket => {
       const base = {
         ok: true,
         forkedSessionId: newId,
+        prefill,
         filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
         skippedLinks: real.skippedLinks ?? 0,
         unrestored: verdict.unrestored,

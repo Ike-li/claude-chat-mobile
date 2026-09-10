@@ -1363,6 +1363,9 @@ io.on('connection', socket => {
     const forkedSessionId = forked ? 'mock-session-forked' : null;
     callback({
       ok: true, forkedSessionId, filesChanged, skippedLinks: 0, unrestored: [],
+      // prefill：真 server 从 transcript 取那一轮的原话回填输入框。
+      // 这里给夹具里那条 user 气泡的原文，E2E 才能断言真的填回去了。
+      prefill: 'Any follow-up questions?',
       ...(forked ? { instanceId: 'inst_forked', sessionId: forkedSessionId } : {}),
       warning: forked ? null : '文件已回退，但新会话创建失败（mock）。原会话未受影响，可重试。',
     });

@@ -127,6 +127,27 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // fork 语义：文案必须说清【原会话保留】——这是本方案相对原地截断的核心差异，
     // 用户据此知道回退不是不可逆的。
     await expect(page.locator('#messages')).toContainText('原会话保留', { timeout: 10_000 });
+
+    // prefill：回退的下一步多半是把这句话改一改重说，所以原话要回填输入框
+    // （Desktop 的 rewindSession 同样返回 prefill，SDK 的 d.ts 也点名了这个用途）。
+    await expect(page.locator('#input')).toHaveValue('Any follow-up questions?', { timeout: 5_000 });
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-REWINDc 输入框里已有内容时不回填，不覆盖用户正在打的字', async ({ page }) => {
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
+
+    await page.locator('#input').fill('我正在打的另一段话');
+    await longPressUser(page, 'Any follow-up questions?');
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+
+    await expect(page.locator('#messages')).toContainText('原会话保留', { timeout: 10_000 });
+    // 回退成功了，但输入框里的草稿必须原样还在——静默吞掉用户打了一半的话是不可接受的。
+    await expect(page.locator('#input')).toHaveValue('我正在打的另一段话');
     await expectNoBrowserErrors(page);
   });
 

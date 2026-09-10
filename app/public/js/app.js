@@ -7277,8 +7277,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     if (!res?.ok) { addBar(res?.error || t('回退失败'), 'text-danger'); return; }
     // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
-    // 这里只补一句 warning——它只对发起方有意义（撕裂态的处置建议）。
+    // 这里只做两件【只对发起方有意义】的事：
+    //  ① warning（部分文件没恢复 / 新会话没建成的处置建议）
+    //  ② prefill：把那一轮的原话回填输入框——回退的下一步多半是改一改重说。
     if (res.warning) addBar(res.warning, 'text-danger');
+    // 守卫同发送失败时的草稿恢复：**只在输入框空且无附件时**回填，绝不覆盖用户已经打的字。
+    if (res.prefill && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
+      inputEl.value = res.prefill;
+      inputEl.dispatchEvent(new Event('input'));
+      autosize();
+      updateSendButtonState();
+    }
   }
 
   async function requestSessionFork(bubble, role) {

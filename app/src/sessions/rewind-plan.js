@@ -25,11 +25,39 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
-import { getProjectDir, isSafeSessionId } from './history.js';
+import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
 
 /** 一条 entry 是否可作为 resumeSessionAt 的锚点：接受任意 chain UUID（SDK 契约原文如此）。 */
 function isChainEntry(e) {
   return !!(e && typeof e.uuid === 'string' && e.uuid);
+}
+
+/**
+ * 取回那一轮用户说的原话，供回退后回填输入框（edit-and-retry）。
+ *
+ * 【为什么要做】回退的语义是「回到我说这句话之前」，下一步多半就是把这句改一改重说。
+ * Claude Desktop 的 rewindSession 同样返回 prefill，SDK 的 d.ts 也点名了这个用途。
+ *
+ * 四种真实形态（30 个会话实测）各自的处置：
+ *   · content 是字符串        → 原样
+ *   · [{type:'text'}]         → 拼接（最常见）
+ *   · [{type:'image'},{text}] → 只取文字；image 块的 base64 拼进去会灌爆输入框
+ *   · [{type:'tool_result'}]  → 空串。它也是 type:'user'，但不是人打的字
+ *
+ * 末尾再剥一次 CCM 自己追加的「[附件]」清单——那是发送时拼上去的，不是用户输入的内容。
+ */
+export function extractPromptText(entry) {
+  const content = entry?.message?.content;
+  let raw = '';
+  if (typeof content === 'string') raw = content;
+  else if (Array.isArray(content)) {
+    raw = content
+      .filter(b => b && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string')
+      .map(b => b.text)
+      .join('');
+  }
+  if (!raw) return '';
+  return splitAttachmentBlock(raw).text.trimEnd();
 }
 
 /**
