@@ -6,6 +6,9 @@
 // 把用户连同手机一起关在门外 15 分钟。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createServiceManager, launchctlTimeoutMs } from '../../scripts/service.js';
 
@@ -24,9 +27,10 @@ const SERVER_OBJ = {
 
 const tsvWith = (pid) => ['PID\tStatus\tLabel', `${pid ?? '-'}\t0\tcom.ccm.server`].join('\n');
 
-function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [], execLaunchctl, portListenerPid = () => null } = {}) {
+function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [], execLaunchctl, portListenerPid = () => null, events = [], writeEvents } = {}) {
   const calls = [];
   const httpCalls = [];
+  const written = [];
   const present = new Set([SERVER_PLIST, ...extraPlists]);
   let tick = 0;
 
@@ -59,10 +63,12 @@ function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () 
     lanIp: () => null,
     realpath: (p) => p,
     sleep: () => {},
+    readEvents: () => events,
+    writeEvents: writeEvents ?? ((arr) => { written.push(arr); }),
     httpGet: httpGet ?? ((url) => { httpCalls.push(url); return { status: 200, body: '{"status":"ok"}' }; }),
   });
 
-  return { mgr, calls, httpCalls };
+  return { mgr, calls, httpCalls, written };
 }
 
 test.describe('start / stop', () => {
@@ -371,4 +377,89 @@ test.describe('stop → start 往返（真实 domain 语义）', () => {
     assert.equal(r.ok, true, `restart 应先把它载回 domain，实际错误：${r.error}`);
     assert.equal(isLoaded(), true);
   });
+});
+
+// 「频繁重启」误报的根因（2026-09-10 实测）：flapping 判据靠一条 restart-requested 声明把
+// 用户主动的重启从频率统计里摘掉，而写这条声明的 recordRestartIntent 只活在 server 进程里
+// （app/src/server/app.js 的 dev:restart handler）。菜单栏「重启」与 CLI 走的是本文件的
+// restart()——独立进程，够不到那个 API，于是每一次都被记成异常重启：实测 1 小时内 3 次
+// 全部 lastExit=0（干净退出、零崩溃），菜单栏照样显示「运行中（频繁重启）」。
+test.describe('restart 记录用户意图（否则被判成崩溃重启循环）', () => {
+  test('restart 先落一条 restart-requested，label 与 ts 都对', () => {
+    const { mgr, written } = setup();
+    const r = mgr.restart('server');
+    assert.equal(r.ok, true);
+    const all = written.flat();
+    const intents = all.filter((e) => e.kind === 'restart-requested');
+    assert.equal(intents.length, 1, '应恰好写一条意图声明');
+    assert.equal(intents[0].label, 'com.ccm.server');
+    assert.equal(intents[0].ts, 1786000000000, 'ts 要用注入的 now，不能现算');
+  });
+
+  test('意图声明写在 kickstart 之前——晚于重启就认领不到那次 restarted', () => {
+    let kickAt = -1;
+    let writeAt = -1;
+    let step = 0;
+    const { mgr } = setup({
+      writeEvents: () => { if (writeAt < 0) writeAt = step++; },
+      execLaunchctl: (args) => {
+        if (args[0] === 'kickstart' && kickAt < 0) kickAt = step++;
+        if (args[0] === 'list') return { status: 0, stdout: ['PID\tStatus\tLabel', '26867\t0\tcom.ccm.server'].join('\n'), stderr: '' };
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    mgr.restart('server');
+    assert.ok(writeAt >= 0 && kickAt >= 0, '两件事都该发生');
+    assert.ok(writeAt < kickAt, `意图必须先落盘（write@${writeAt} kickstart@${kickAt}）`);
+  });
+
+  test('保留既有事件，不是整份覆盖', () => {
+    const old = { ts: 1785999999000, label: 'com.ccm.server', kind: 'restarted', from: 1, to: 2, lastExit: 0 };
+    const { mgr, written } = setup({ events: [old] });
+    mgr.restart('server');
+    const last = written.at(-1);
+    assert.equal(last.length, 2, '旧事件要留着');
+    assert.deepEqual(last[0], old);
+  });
+
+  test('写失败不影响重启本身——可观测性不是重启的前提', () => {
+    // 失败方向：这条与 recordSelfStart 的取舍同源。记不了历史顶多让这次重启在图上缺一笔，
+    // 而让 restart 因此失败会把「菜单栏点重启没反应」变成真问题。
+    const { mgr, calls } = setup({ writeEvents: () => { throw new Error('磁盘满'); } });
+    const r = mgr.restart('server');
+    assert.equal(r.ok, true, '写事件失败不得让 restart 报错');
+    assert.ok(calls.some((a) => a[0] === 'kickstart'), '仍要真的重启');
+  });
+
+  test('只有 restart 写意图，start / stop 不写', () => {
+    // start 产出的是 started 事件、stop 产出 stopped，都不进 flapping 的频率统计。
+    // 给它们也写意图，会让「stop 之后紧跟一次真崩溃」被那条孤儿声明认领掉。
+    const a = setup();
+    a.mgr.start('server');
+    assert.deepEqual(a.written.flat().filter((e) => e.kind === 'restart-requested'), []);
+    const b = setup();
+    b.mgr.stop('server');
+    assert.deepEqual(b.written.flat().filter((e) => e.kind === 'restart-requested'), []);
+  });
+});
+
+// 防这个 bug 换个形态复发：抵消机制早就有，只是新入口没接上。靠「记得调 recordRestartIntent」
+// 是行不通的——那正是会失败的那一步。改成把两件事绑进 killAndRestart，再用本条钉住
+// 「强杀标志只此一处」，于是新开一条强杀路径必然先撞红这里。
+test('强杀重启只有一个入口——kickstart 的 -k 不得出现在 killAndRestart 之外', () => {
+  // 剥掉整行注释再扫：注释里提一句 -k 不该让这条红。single-source-of-truth.test.mjs 的
+  // 初版就因为没剥，把 setTimeout(..., 3000) 抓成了端口字面量。
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'service.js'), 'utf8')
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+  const hits = [...src.matchAll(/'-k'/g)].map((m) => m.index);
+  assert.equal(hits.length, 1, `强杀标志应恰好出现 1 次，实际 ${hits.length} 次——新开的那条路径也要走 killAndRestart`);
+
+  const start = src.indexOf('function killAndRestart');
+  assert.ok(start > 0, 'killAndRestart 改名了就同步改这条断言');
+  const end = src.indexOf('\n  function ', start + 1);
+  assert.ok(hits[0] > start && hits[0] < end, '唯一那处 -k 必须在 killAndRestart 函数体内');
+
+  const body = src.slice(start, end);
+  assert.ok(body.includes('recordRestartIntent'), 'killAndRestart 里必须记意图，否则这次重启会被判成崩溃');
 });
