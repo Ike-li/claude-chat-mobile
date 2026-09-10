@@ -73,6 +73,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'read:mark',
   'read:sync',
   'service:status',
+  'statusline:setup',
   'session:close',
   'session:deletePermanent',
   'session:fork',

@@ -498,8 +498,10 @@ const ACK_SHAPES = [
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
   { event: 'logs:get', payload: () => ({}), required: ['logs', 'diagLogs'] },
   { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
+  // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
+  // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'logging', 'versions'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
@@ -523,6 +525,8 @@ const ACK_SHAPES = [
   // action 非法时在 spawn 安装器【之前】就返回——这是本仓唯一会写 ~/.claude/settings.json 的路径，
   // 只驱动这一支，绝不用合法 action 触发真安装。
   { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
+  // 同上：statusline 安装器也只驱动非法 action 这一支，绝不用合法 action 触发真安装。
+  { event: 'statusline:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
 ];
 
 // 未纳入（各有理由，不是遗漏）：

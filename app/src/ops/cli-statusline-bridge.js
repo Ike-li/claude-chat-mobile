@@ -18,7 +18,11 @@ import {
 } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ccmUnderClaudeHome } from '../shared/claude-home.js';
+import { ccmUnderClaudeHome, claudeSettingsPath } from '../shared/claude-home.js';
+// 两个桥读的是**同一个** ~/.claude/settings.json，故共用一份读函数——各写一份是本仓出过事的形态。
+// 注意它与 scripts/statusline-bridge-setup.js 里那个私有 readSettings 有一处有意的差异：
+// 文件不存在时这里回 {}（新装 claude 的合法起点 = 确定没装），那边抛 ENOENT（安装前必须已有配置）。
+import { readClaudeSettings } from './cli-hooks-bridge.js';
 
 const CLI_STATUSLINE_SCHEMA_VERSION = 1;
 const MAX_CLI_STATUSLINE_SNAPSHOT_BYTES = 64 * 1024;
@@ -359,4 +363,74 @@ export function selectStatusReplay(cache, current = {}) {
 function basenameForTemp(path) {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return slash === -1 ? path : path.slice(slash + 1);
+}
+
+// ── 安装态读取（server 侧只读路径）────────────────────────────────────────
+//
+// 判据此前只活在 scripts/statusline-bridge-setup.js 的私有 status() 里，运行时读不到，于是
+// 服务状态面板只有 hooks 桥那一段、statusline 桥整段隐身。上移到这里后 server 与 CLI 共用一份。
+// **写入路径（install/uninstall）仍留在 scripts**：那边要的是「安装前必须已配置好 statusLine」
+// 的严格语义，与只读路径的宽容语义不同，合并会让某一侧变错。
+
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function statuslineManifestPath(home) {
+  return ccmUnderClaudeHome(home, 'statusline-v1', 'install-manifest.json');
+}
+
+function readStatuslineManifest(path) {
+  const stat = lstatOrNull(path);
+  if (!stat) return null;
+  if (stat.isSymbolicLink()) throw new Error(`statusline bridge refused symbolic link path: ${path}`);
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || typeof parsed.originalCommand !== 'string'
+      || typeof parsed.installedCommand !== 'string') {
+    throw new Error('statusline bridge manifest is invalid');
+  }
+  return parsed;
+}
+
+// refreshInterval 也是安装的一部分（wrapper 把它带进命令行），只比 command 会漏掉一整类漂移。
+// 用 Object.is 而不是 ===：两侧都可能是 null，且要区分 null 与 undefined。
+export function statuslineInstalledStateMatches(settings, manifest) {
+  const current = Object.hasOwn(settings?.statusLine || {}, 'refreshInterval')
+    ? settings.statusLine.refreshInterval
+    : null;
+  return settings?.statusLine?.command === manifest.installedCommand
+    && Object.is(current, manifest.originalRefreshInterval ?? null);
+}
+
+/**
+ * 三态安装状态 + 当前命令，供 service:status 下发给面板。
+ *
+ * 失败方向：读不出来一律 'unknown'，**绝不报 'not-installed'**——后者是一句确定的断言
+ * （"我看过了，没装"），会让用户以为不必再查。唯一的例外是 settings.json 根本不存在：
+ * 那是新装 claude 的合法起点，确定是没装。
+ *
+ * @param {{home?: string}} [opts]
+ * @returns {{state: 'installed'|'drifted'|'not-installed'|'unknown', currentCommand: string|null}}
+ */
+export function readStatuslineInstallState({ home = homedir() } = {}) {
+  try {
+    const settings = readClaudeSettings(claudeSettingsPath(home));
+    const currentCommand = typeof settings?.statusLine?.command === 'string'
+      ? settings.statusLine.command
+      : null;
+    const manifest = readStatuslineManifest(statuslineManifestPath(home));
+    if (!manifest) return { state: 'not-installed', currentCommand };
+    return {
+      state: statuslineInstalledStateMatches(settings, manifest) ? 'installed' : 'drifted',
+      currentCommand,
+    };
+  } catch {
+    return { state: 'unknown', currentCommand: null };
+  }
 }

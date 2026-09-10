@@ -168,6 +168,8 @@ let noSessionIdMode = false;
 let noModelsMode = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
+// statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
+let mockStatuslineState = 'not-installed';
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
 // 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
 const mockServicePayload = () => ({
@@ -176,6 +178,7 @@ const mockServicePayload = () => ({
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
   hooksBridge: { state: mockHooksState, off: false },
+  statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 let foregroundSyncReplayMode = false;
@@ -347,6 +350,7 @@ function resetMockState() {
   noSessionIdMode = false;
   noModelsMode = false;
   mockHooksState = 'not-installed';
+  mockStatuslineState = 'not-installed';
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
@@ -1908,6 +1912,16 @@ io.on('connection', socket => {
   // 服务状态面板（与真 server service:status 契约对齐，判定化：不带裸计数器）：确定性 payload 供 E2E 断言；
   // deliveryFailure 由 test:service-delivery-failure 注入，rateLimitLockout/clientError 由 test:service-incidents 注入
   // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
+  // statusline 桥的装/卸（与 hooks:setup 同构）。真 server 走 execFile 调 scripts 下的安装器，
+  // 这里只切内存态——mock 的职责是让前端两条渲染分支都走得到，不是复刻安装器。
+  socket.on('statusline:setup', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const action = payload?.action;
+    if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    mockStatuslineState = action === 'install' ? 'installed' : 'not-installed';
+    ack({ ok: true, state: mockStatuslineState, report: action === 'install' ? '✅ 已接管 statusLine 命令。' : '已恢复原命令。' });
+  });
+
   socket.on('hooks:setup', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;
@@ -1970,6 +1984,7 @@ io.on('connection', socket => {
       restarts: mockRestarts,
       // 「终端会话推送」段夹具：默认未安装（新用户初见的形态，也是最需要被引导的那一态）
       hooksBridge: { state: mockHooksState, off: false },
+      statuslineBridge: { state: mockStatuslineState, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });

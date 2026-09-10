@@ -47,7 +47,7 @@ import { dataFile } from '../shared/data-dir.js';
 import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
 import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
-import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
+import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
 import {
@@ -1040,6 +1040,12 @@ function computeServiceHealth() {
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
+    // statusline 桥同理。此前只有 hooks 桥有这个字段，于是面板上一个桥有安装态与一键安装、
+    // 它的孪生兄弟整段隐身——两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
+    statuslineBridge: {
+      state: statuslineInstallState,
+      off: process.env.CLI_STATUSLINE_BRIDGE === 'off',
+    },
   };
 }
 
@@ -1051,6 +1057,11 @@ let hooksInstallState = 'unknown';
 function refreshHooksInstallState() {
   hooksInstallState = readHooksInstallState();
   return hooksInstallState;
+}
+let statuslineInstallState = 'unknown';
+function refreshStatuslineInstallState() {
+  statuslineInstallState = readStatuslineInstallState().state;
+  return statuslineInstallState;
 }
 // approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，
 // 而不只是"连着"。两处复用：onEvent 的 result 完成通知 hasClients 计算 + client:presence 的"跳变检测"
@@ -1355,6 +1366,9 @@ if (process.env.CLI_HOOKS_BRIDGE === 'off') {
 } else {
   console.log('[hooks] CLI hooks 桥未安装：终端直跑的会话仅靠轮询、无推送（npm run hooks:install 或在设置面板一键启用）');
 }
+// statusline 桥同理：读一次落进缓存，供 service:status 下发给面板。
+// 只在装/卸时变，而 instances 广播很频繁——不能每次广播都去读盘。
+refreshStatuslineInstallState();
 
 // effort UI 归一：normalizeEffortUiLevel（cli-settings-defaults.js）——ultracode → xhigh + Settings.ultracode。
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -3463,6 +3477,30 @@ registerSocketConnection(io, socket => {
     });
   });
 
+  // statusline 桥的装/卸。与 hooks:setup 同构：走 execFile 调 scripts 下的安装器，而不是 import 它
+  // （运行时禁止 import scripts/）。**读态不走这里**——那条在 ops/cli-statusline-bridge.js 里同步读，
+  // service:status 每 5s 要用，spawn 一个 node 进程太贵。
+  on(socket, 'statusline:setup', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const action = payload?.action;
+    if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    execFile(process.execPath, [join(HERE, 'scripts', 'statusline-bridge-setup.js'), action], {
+      cwd: HERE, timeout: 20000, maxBuffer: 256 * 1024,
+    }, (err, stdout, stderr) => {
+      const state = refreshStatuslineInstallState();
+      // 同 hooks:setup：这是 server 会改用户全局 ~/.claude/settings.json 的动作，服务日志要留痕
+      console.log(`[statusline] 经 UI ${action} ${err ? '失败' : '完成'}，当前安装态=${state}`
+        + (err ? `：${String(err.message || err).split('\n')[0]}` : ''));
+      broadcastInstances();
+      const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
+      ack({
+        ok: !err,
+        state,
+        report: report || String(stderr || '').trim().split('\n').slice(-3).join('\n') || (err ? '执行失败' : ''),
+      });
+    });
+  });
+
   // 测试推送：自己验"推送到底通不通"，不必等真事件。今晚的教训——曾一直以为推送在工作，
   // 实际上从未订阅成功过，而界面上没有任何办法自证。与「▶ 试听提示音」同一心智（那个验本地
   // 提示音，这个验远端推送链路）。没有订阅时如实回报"没有收件人"，这本身就是最有用的诊断。
@@ -3642,6 +3680,7 @@ registerSocketConnection(io, socket => {
       rateLimitLockout: health.rateLimitLockout,
       clientError: health.clientError,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
+      statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。
       // 只在这条路径上算——它要读盘，而 instances 广播每轮都发、那边没有任何消费者。
       restarts: serviceSampler.summarize(),

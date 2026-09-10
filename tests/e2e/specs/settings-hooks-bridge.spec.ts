@@ -92,4 +92,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 缺口 2：statusline 桥此前在 web 上整段隐身——service:status 连字段都没有，只能回电脑敲
+  // npm run statusline:status。两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
+  test('P0-25d 终端状态栏（statusline 桥）：未装显示开启按钮 → 二次确认 → 翻为已启用', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'host');
+
+    const section = page.locator('#statuslineBridgeSection');
+    await expect(section).toBeVisible();
+    // 与 hooks 桥并列同屏——它们是同一件事的两半，分居两处会让人以为只有一个
+    await expect(page.locator('#hooksBridgeSection')).toBeVisible();
+
+    const action = page.locator('[data-testid="statusline-bridge-action"]');
+    await expect(action).toBeVisible();
+    await action.click();
+
+    // 改的是用户全局 ~/.claude/settings.json，必须二次确认
+    await expect(page.locator('#confirmSheet')).toBeVisible();
+    await page.locator('#confirmOk').click();
+
+    await expect(section).toContainText('已启用');
+    // 已装态下按钮翻成「关闭」，不再是「开启」
+    await expect(action).toHaveText('关闭');
+
+    await expectNoBrowserErrors(page);
+  });
+
 });

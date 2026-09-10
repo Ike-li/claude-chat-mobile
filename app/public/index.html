@@ -887,6 +887,14 @@
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
         </div>
 
+        <!-- statusline 桥：与上面那个桥并列。此前它在 web 上整段隐身——service:status 连字段都没有，
+             只能回电脑敲 npm run statusline:status，而「人不在电脑前」正是这个产品的前提。 -->
+        <div id="statuslineBridgeSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>终端状态栏</span></div>
+          <div id="statuslineBridgeBody" class="space-y-2" data-testid="statusline-bridge-body"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">开启后，你在电脑终端里跑的会话，模型 / 额度 / 上下文用量也会同步到手机。它接管 ~/.claude/settings.json 的 statusLine 命令并原样透传你原来的输出。</div>
+        </div>
+
         <!-- MCP 服务器与 skills：数据早就随 init 事件到了浏览器（agent.js emit('init')），
              只是从来没有渲染面。整段由 app.js 的 renderHostEnvSection 按有无数据显隐。 -->
         <div id="hostEnvSection" class="hidden">

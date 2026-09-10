@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -19,7 +20,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -28,6 +29,7 @@ import {
   sweepStatusSnapshots,
   normalizeCliStatusInput,
   readCliStatusSnapshot,
+  readStatuslineInstallState,
   selectStatusReplay,
   selectStatusOwner,
   selectStatusSource,
@@ -480,4 +482,86 @@ test.describe('sweepStatusSnapshots（R9：过期快照清扫）', () => {
       assert.equal(left.includes(basename(stalePath)), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+});
+
+// ── 安装态读取（2026-09-10 新增）────────────────────────────────────────────
+//
+// 此前这份判据只活在 scripts/statusline-bridge-setup.js 的私有 status() 里，server 读不到——
+// 于是「终端会话推送（hooks 桥）」在面板上有安装态、有一键安装，而它的孪生兄弟 statusline 桥
+// 整段隐身，只能回电脑敲 npm run statusline:status。判据上移到 ops 后两边共用一份。
+//
+// ★ 失败方向：读不出来时报 'unknown'，**不报 'not-installed'**——后者是一句确定的断言
+//   （"我看过了，没装"），会让用户以为不必再查；前者才诚实。
+//   唯一的例外是 settings.json 根本不存在：那是新装 claude 的合法起点，确定是没装。
+
+function statuslineHome() {
+  const home = mkdtempSync(join(tmpdir(), 'ccm-statusline-state-'));
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  return home;
+}
+const settingsPathOf = home => join(home, '.claude', 'settings.json');
+const manifestPathOf = home => join(home, '.claude', 'ccm', 'statusline-v1', 'install-manifest.json');
+function writeManifest(home, manifest) {
+  mkdirSync(dirname(manifestPathOf(home)), { recursive: true });
+  writeFileSync(manifestPathOf(home), JSON.stringify(manifest));
+}
+
+test('安装态：没有 manifest → not-installed', () => {
+  const home = statuslineHome();
+  writeFileSync(settingsPathOf(home), JSON.stringify({ statusLine: { command: 'my-own.sh' } }));
+  assert.equal(readStatuslineInstallState({ home }).state, 'not-installed');
+});
+
+// ★ settings.json 不存在是新装 claude 的合法起点，不是「读失败」。
+//   scripts 侧的私有 readSettings 在这里会抛 ENOENT，被 catch 吞成 unknown——那是错的。
+test('安装态：settings.json 根本不存在 → not-installed（不是 unknown）', () => {
+  const home = statuslineHome();
+  assert.equal(readStatuslineInstallState({ home }).state, 'not-installed');
+});
+
+test('安装态：manifest 与 settings 逐字吻合 → installed', () => {
+  const home = statuslineHome();
+  writeFileSync(settingsPathOf(home), JSON.stringify({
+    statusLine: { command: 'node bridge.js -- /bin/sh -lc mine', refreshInterval: 30 },
+  }));
+  writeManifest(home, {
+    originalCommand: 'mine',
+    installedCommand: 'node bridge.js -- /bin/sh -lc mine',
+    originalRefreshInterval: 30,
+  });
+  assert.equal(readStatuslineInstallState({ home }).state, 'installed');
+});
+
+test('安装态：manifest 在但用户改过 command → drifted（不猜、不强行覆盖）', () => {
+  const home = statuslineHome();
+  writeFileSync(settingsPathOf(home), JSON.stringify({
+    statusLine: { command: '用户后来自己改的', refreshInterval: 30 },
+  }));
+  writeManifest(home, {
+    originalCommand: 'mine',
+    installedCommand: 'node bridge.js -- /bin/sh -lc mine',
+    originalRefreshInterval: 30,
+  });
+  assert.equal(readStatuslineInstallState({ home }).state, 'drifted');
+});
+
+// refreshInterval 也是安装的一部分（wrapper 会把它带进命令行），改了同样算漂移——
+// 只比 command 会漏掉这一类。
+test('安装态：command 没变但 refreshInterval 被改过 → 同样是 drifted', () => {
+  const home = statuslineHome();
+  writeFileSync(settingsPathOf(home), JSON.stringify({
+    statusLine: { command: 'node bridge.js -- /bin/sh -lc mine', refreshInterval: 5 },
+  }));
+  writeManifest(home, {
+    originalCommand: 'mine',
+    installedCommand: 'node bridge.js -- /bin/sh -lc mine',
+    originalRefreshInterval: 30,
+  });
+  assert.equal(readStatuslineInstallState({ home }).state, 'drifted');
+});
+
+test('安装态：settings.json 是坏 JSON → unknown（读不出来就说读不出来，不谎报没装）', () => {
+  const home = statuslineHome();
+  writeFileSync(settingsPathOf(home), '{ 这不是 JSON');
+  assert.equal(readStatuslineInstallState({ home }).state, 'unknown');
 });

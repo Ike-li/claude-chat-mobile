@@ -298,7 +298,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + session:rewind:confirm（2026-09-10，回退的执行步。与 preview 分开是因为它【会改磁盘】：
   //        preview 只读、可随便点；confirm 要回滚文件并截断对话，两者的权限档、并发锁、失败处置
   //        全不同，合成一个 handler 靠 payload 里的 dryRun 开关分流迟早写反。入向 50→51）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 51);
+  //      + statusline:setup（2026-09-10，statusline 桥的装/卸。此前两个 CLI 桥在 web 上待遇差一个
+  //        量级：hooks 桥有安装态、有一键开关，statusline 桥在 service:status 里连字段都没有，
+  //        只能回电脑敲 npm run statusline:status——而「人不在电脑前」正是这个产品的前提。
+  //        刻意不并进 hooks:setup：两个桥改的是 settings.json 里完全不同的键（hooks[] vs
+  //        statusLine.command），漂移判据也不同（statusline 还要比 refreshInterval），
+  //        共用一个 handler 靠 payload 分流迟早写反。**只收 install/uninstall 不收 verify**——
+  //        statusline 安装器没有 verify 子命令，收了只会在 spawn 那层报错。入向 51→52）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 52);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:confirm'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:renameTrustedDevice'));

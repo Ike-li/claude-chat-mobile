@@ -61,6 +61,7 @@ import {
   formatHooksBridgeRow,
   formatMcpServers,
   formatPushStatusRow,
+  formatStatuslineBridgeRow,
   pushEnvHint,
   serviceStatusBasicRows,
   shouldSendOnEnter,
@@ -1733,6 +1734,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 一键安装/卸载 hooks 桥。安装要写用户全局 ~/.claude/settings.json，所以先明确确认——
   // 这是 server 唯一会动那个文件的路径，必须让用户知道自己在批准什么。
   // 报告直接回显安装器输出（含四种结局文案），不在前端另写一套话术。
+  // 同 runHooksSetup：装/卸都要二次确认——它改的是用户全局 ~/.claude/settings.json。
+  async function runStatuslineSetup(action, btn) {
+    const installing = action === 'install';
+    const okConfirm = await appConfirm({
+      title: installing ? t('开启终端状态栏同步？') : t('关闭终端状态栏同步？'),
+      body: installing
+        ? t('会接管 ~/.claude/settings.json 里的 statusLine 命令，并原样透传你原来的输出（原命令会先备份）。已在跑的终端会话需重开才生效。')
+        : t('会把 statusLine 命令恢复成你原来的那条，备份记录随之删除。'),
+      okText: installing ? t('开启') : t('关闭'),
+      tone: installing ? 'default' : 'warn',
+    });
+    if (!okConfirm) return;
+    btn.disabled = true;
+    btn.textContent = t('处理中…');
+    socket.timeout(25000).emit('statusline:setup', { action }, (err, res) => {
+      btn.disabled = false;
+      // 同 hooks 侧：用 ack 自带的 state 立刻回填再重渲，不把按钮的解锁押在广播上
+      if (res?.state && latestServiceHealth?.statuslineBridge) latestServiceHealth.statuslineBridge.state = res.state;
+      renderStatuslineBridgeSection();
+      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
+      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
+      loadServiceStatus();
+    });
+  }
+
   async function runHooksSetup(action, btn) {
     const installing = action === 'install';
     const okConfirm = await appConfirm({
@@ -5439,6 +5465,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 只存快照 + 刷抽屉文案。顶栏角标由 setInstances 末尾的 updateAttentionSignal 重算。
     refreshServiceSection();
     renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
+    renderStatuslineBridgeSection(); // 同上：两个桥的安装态都随 instances 广播刷新
+    generalNav?.render(); // L1「这台电脑」那行的运行时长吃的就是这份广播
   }
 
   // 配置面板「推送内容」段顶部的订阅状态行。推送不通时此前 UI 上零痕迹——铃铛按钮在权限被拒或
@@ -5538,6 +5566,32 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       card.appendChild(btn);
     }
     hooksBridgeBody.appendChild(card);
+  }
+
+  // statusline 桥段。与 renderHooksBridgeSection 同构——两个桥在面板上并列，渲染惯例也保持一致。
+  function renderStatuslineBridgeSection() {
+    const section = $('statuslineBridgeSection'), body = $('statuslineBridgeBody');
+    if (!section || !body) return;
+    const row = formatStatuslineBridgeRow(latestServiceHealth?.statuslineBridge);
+    if (!row) { section.classList.add('hidden'); return; } // 旧 server 无此字段 → 整段缺席
+    section.classList.remove('hidden');
+    body.replaceChildren();
+    const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
+    const label = el(`<span class="font-semibold block"></span>`);
+    label.textContent = row.value;
+    const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-soft' }[row.tone];
+    if (toneCls) label.classList.add(toneCls);
+    card.firstChild.appendChild(label);
+    const desc = el(`<span class="text-xs text-ink-soft"></span>`);
+    desc.textContent = row.hint || t('终端会话的模型 / 额度 / 上下文用量同步到手机');
+    card.firstChild.appendChild(desc);
+    if (row.action) {
+      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="statusline-bridge-action"></button>`);
+      btn.textContent = row.actionText;
+      btn.onclick = () => runStatuslineSetup(row.action, btn);
+      card.appendChild(btn);
+    }
+    body.appendChild(card);
   }
 
   function setBusy(b) {
@@ -5723,12 +5777,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 面板里的话自相矛盾）；服务快照来自 service:status ——那条 ack 不随 instances 广播常驻，
   // 不主动拉就永远显示「状态读取中」。
   let generalPushSubscribed = false;
-  let generalServiceSnapshot = null;
-  async function refreshGeneralServiceSnapshot() {
-    const status = await emitServiceAck('service:status', {});
-    if (!status || status.ok !== true) return; // 断线/未审批设备无 ack：保留旧值，不把目录刷成空
-    generalServiceSnapshot = status;
-    generalNav?.render();
+  // 版本号只拉一次：它在 server 进程的生命周期内不变，而运行时长走 instances 广播里的 startedAt
+  // （computeServiceHealth 恒带该字段）。此前这里每次打开面板都发一条 service:status——那条请求
+  // 在四分片并行的 E2E 下把一条依赖广播时序的既有用例挤成了 8s 超时，而它拿到的东西广播里本就有。
+  let generalVersions = null;
+  let generalVersionsInflight = false;
+  async function ensureGeneralVersions() {
+    if (generalVersions || generalVersionsInflight) return;
+    generalVersionsInflight = true;
+    try {
+      const status = await emitServiceAck('service:status', {});
+      if (status?.ok === true && status.versions) {
+        generalVersions = status.versions;
+        generalNav?.render();
+      }
+    } finally {
+      generalVersionsInflight = false;
+    }
   }
 
   // 两级导航：L1 目录 ↔ 6 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
@@ -5738,12 +5803,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       push: { subscribed: generalPushSubscribed },
       alerts: alerts.preferences(),
       devices: { trusted: lastTrustedDevices.length, pending: lastPendingDevices.length },
-      service: generalServiceSnapshot,
+      service: { startedAt: latestServiceHealth?.startedAt, versions: generalVersions },
       lang: langPref.get(),
     }),
-    // 「这台电脑」页进来时拉一次服务状态：L1 的运行时长/版本也吃这份快照，
-    // 但那条 ack 不常驻广播（只在服务状态面板打开时拉），不主动取就永远是「状态读取中」。
-    onEnterPage: page => { if (page === 'host') refreshGeneralServiceSnapshot(); },
+    // 「这台电脑」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
+    // 它跟着 instances 广播实时更新。
+    onEnterPage: page => { if (page === 'host') ensureGeneralVersions(); },
   });
   generalNav.bind();
 
@@ -5764,8 +5829,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       generalDeepLink = null;
       generalNav.showHome();
       if (link?.page) generalNav.showPage(link.page, { anchor: link.anchor || null });
-      // L1 的运行时长/版本要有数：拉一次快照，回来后重画目录。
-      refreshGeneralServiceSnapshot();
+      // 版本号首次打开时补一次；运行时长已由 instances 广播喂给 latestServiceHealth，无需请求。
+      ensureGeneralVersions();
     },
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
