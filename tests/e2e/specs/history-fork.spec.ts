@@ -151,6 +151,23 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-REWINDd 文件回了但新会话没建成：如实告知，并说明原会话未受影响', async ({ page }) => {
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('One more thing please', { timeout: 10_000 });
+
+    await longPressUser(page, 'One more thing please');
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+
+    // 这一支是「做了一半」：文件已经回退，但新会话没建成。不能只弹一句笼统的失败——
+    // 用户需要知道①文件已经动了②原会话没事、可以重试。少任何一条他都不知道现在处境如何。
+    await expect(page.locator('#messages')).toContainText('文件已回退', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('原会话未受影响');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-REWINDb 会话首条消息无可保留锚点时，preview 阶段就拒绝且不弹二次确认', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });

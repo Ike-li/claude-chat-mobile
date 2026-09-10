@@ -1319,8 +1319,10 @@ io.on('connection', socket => {
       return;
     }
     if (typeof promptUuid === 'string' && promptUuid.startsWith('a-archived')) {
-      // 送来了 assistant uuid = 前端复用了 fork 的锚点解析。真 server 上 planRewind 会
-      // prompt-not-found（那个 uuid 不是人类 prompt 的），此处给出同款可断言的错误。
+      // 送来了 assistant uuid = 前端复用了 fork 的锚点解析。
+      // 【与真 server 的路径差异，有意为之】真 server 上 planRewind 认得出 assistant 行也有 uuid，
+      // 会一路走到 rewindFiles，由 CLI 报「找不到检查点」——结果同样是拒绝，只是慢一个往返。
+      // mock 提前在这里拒，是为了让 E2E 能拿到一个稳定可断言的错误，不必依赖 CLI 的措辞。
       callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
       return;
     }
@@ -1331,12 +1333,14 @@ io.on('connection', socket => {
       callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
       return;
     }
-    if (promptUuid === 'u-archived-2') {
+    // u-archived-2 → 正常成功路径；u-archived-3 → preview 同样成功，但 confirm 时分叉会失败
+    // （P0-REWINDd 打的是「文件回了、新会话没建成」那一支）。
+    if (promptUuid === 'u-archived-2' || promptUuid === 'u-archived-3') {
       callback({
         ok: true, canRewind: true,
         filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js', '/Users/you/code/claude-chat-mobile/README.md'],
         insertions: 12, deletions: 5,
-        keepUuid: 'a-archived-1', // 目标轮之前最后一条 chain entry
+        keepUuid: promptUuid === 'u-archived-2' ? 'a-archived-1' : 'a-archived-2', // 目标轮之前最后一条 chain entry
       });
       return;
     }
@@ -1557,7 +1561,11 @@ io.on('connection', socket => {
           { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
           { role: 'assistant', content: 'Archived plan replay from session history.', uuid: 'a-archived-1' },
           { role: 'user', content: 'Any follow-up questions?', uuid: 'u-archived-2' },
-          { role: 'assistant', content: 'No further questions needed.', uuid: 'a-archived-2' }
+          { role: 'assistant', content: 'No further questions needed.', uuid: 'a-archived-2' },
+          // 第三轮专供 Rewind 的「文件回了、分叉没建成」那一支（P0-REWINDd）：
+          // 真 server 上这一支来自 sdkForkSession 抛错，E2E 无从制造，只能在 mock 里留一个入口。
+          { role: 'user', content: 'One more thing please', uuid: 'u-archived-3' },
+          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
