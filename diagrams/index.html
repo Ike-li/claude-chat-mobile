@@ -67,7 +67,7 @@ footer code{font-size:12.4px}
 <header>
   <h1>架构图集</h1>
   <p class="lede">Claude Chat Mobile 按功能域拆开的 13 张可交互图。每张都是自包含 HTML：支持明暗主题、平移缩放、搜索聚焦、关系追踪与导出，无需联网或任何依赖。图中事实取自代码与 <code>docs/architecture.md</code>，不是示意。</p>
-  <div class="pin"><b>事实基线</b> dbc41c1 · <b>规格源</b> 同目录 <code>*.json</code> · <b>校验</b> 13/13 showcase 9/9 · <b>漂移闸</b> check 链上</div>
+  <div class="pin"><b>事实基线</b> 7d4aa87 · <b>规格源</b> 同目录 <code>*.json</code> · <b>校验</b> 13/13 showcase 9/9 · <b>漂移闸</b> check 链上</div>
 </header>
 
 <h2>全局</h2>
@@ -77,7 +77,7 @@ footer code{font-size:12.4px}
     <div class="top"><span class="num">00</span><span class="kind">architecture</span></div>
     <div class="title">系统总览</div>
     <p class="desc">Web 驾驶与 CLI 驾驶两条数据路径，以及它们共享的 transcript 与控制面。</p>
-    <ul><li>Web 走 Agent SDK 双向流；CLI 驾驶不经过 SDK</li><li>同一时刻只允许一个驾驶员写入</li></ul>
+    <ul><li>Web 走 Agent SDK 双向流；CLI 驾驶不经过 SDK</li><li>同一时刻只允许一个驾驶员写入</li><li>Cloudflare 非必需，同 WiFi 直连是主路径</li></ul>
   </a>
 </div>
 
@@ -115,9 +115,9 @@ footer code{font-size:12.4px}
 <div class="grid">
   <a class="card" href="04-auth-gates.html">
     <div class="top"><span class="num">04</span><span class="kind">workflow</span></div>
-    <div class="title">鉴权与范围边界：六道门</div>
-    <p class="desc">从 <code>AUTH_TOKEN</code> 到工具审批，逐层收窄且互不替代。</p>
-    <ul><li>限速措辞按来源分档，本机来源绝不说成暴力尝试</li><li>fail-closed 有两个刻意的例外</li></ul>
+    <div class="title">鉴权与范围边界：两种拓扑</div>
+    <p class="desc">局域网走 <code>AUTH_TOKEN</code>、公网 Access 走 JWT，两条路在范围门汇合。</p>
+    <ul><li>六层收窄是文档的分类学，不是请求路径</li><li>局域网没有 IdP 层；Access 已验则跳过设备门</li></ul>
   </a>
   <a class="card" href="05-approval.html">
     <div class="top"><span class="num">05</span><span class="kind">lifecycle</span></div>
@@ -129,7 +129,7 @@ footer code{font-size:12.4px}
     <div class="top"><span class="num">06</span><span class="kind">workflow</span></div>
     <div class="title">离线唤醒：按可见性分档的推送抑制</div>
     <p class="desc">哪些无条件推、哪一类才抑制，以及正文最小化。</p>
-    <ul><li>前台判据是 client:presence，不是 socket 连着</li><li>result（及网关静默告警）按前台抑制</li></ul>
+    <ul><li>前台判据是 client:presence，不是 socket 连着</li><li>「后台完成」只算真后台，前台 Bash 被 is_backgrounded 滤掉</li></ul>
   </a>
 </div>
 
@@ -168,7 +168,7 @@ footer code{font-size:12.4px}
   <a class="card" href="12-testing.html">
     <div class="top"><span class="num">12</span><span class="kind">workflow</span></div>
     <div class="title">测试跑在哪：白名单在宿主机，其余进容器</div>
-    <p class="desc">归类决策、check 链上的 12 道门禁，以及两处覆盖盲区。</p>
+    <p class="desc">归类决策、check 链上的 13 道门禁，以及两处覆盖盲区。</p>
     <ul><li>白名单而非危险命令清单：代价不对称</li><li>tests/infra/ 的编排脚本不在任何门禁覆盖范围</li></ul>
   </a>
 </div>
