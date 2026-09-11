@@ -38,7 +38,7 @@ function constNum(path, name) {
 }
 
 // ── 图声称的基线提交。改图时同步更新。 ───────────────────────────────
-const PINNED_REVISION = 'dbc41c115574be1d348dec59fc0926882d38737f';
+const PINNED_REVISION = '7d4aa874944374770b5207598cd2a1c4253011fd';
 
 // ── 图里 source 证据引用到的源码路径（27 条 source 去重后）。重命名/删除即红。 ──
 const REFERENCED_PATHS = [
@@ -135,6 +135,21 @@ const CLAIMS = [
     actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
   { diagram: '00', shown: 'claude-agent-sdk 0.3.263',
     actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.263' },
+  { diagram: '12', shown: 'check 链上的 13 道门禁',
+    // 2026-09-11 接进 check-disposable-env-guard 后图上还写着 12，在 PENDING_CLAIMS 里挂了一轮，
+    // gh-pages 4565341 重出图后归位。挪回来而不是当初就改 expect：CLAIMS 的语义是「图说 X 且代码是 X」。
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 13 },
+  { diagram: '00 / 01 / 08 / 11', shown: '共 31 种 type',
+    // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）。
+    actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
+    expect: 31 },
+  { diagram: '06', shown: '但「后台完成」只算真后台：跑得久的前台 Bash 靠 is_backgrounded 滤掉',
+    actual: () => {
+      const src = read('app/src/agent/agent.js');
+      const hasMap = /this\.taskBackgrounded = new Map\(\)/.test(src);
+      const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
+      return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
+    }, expect: '按 is_backgrounded 过滤' },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -144,37 +159,8 @@ const CLAIMS = [
 // 分开之后：代码侧立刻被守住（删了会红），而「图欠这一条」这个状态也不会随会话结束丢掉。
 // 补进图并重出后，把条目挪进 CLAIMS 即可。
 const PENDING_CLAIMS = [
-  {
-    // 2026-09-11 把 check-disposable-env-guard.js（执行位守卫的接线闸）接进 check 链后，
-    // 图上那句「12 道门禁」就过期了。从 CLAIMS 挪到这里而不是把 expect 改成 13：
-    // CLAIMS 的语义是「图说 X 且代码是 X」，图现在说的还是 12，改 expect 会让那条断言替图撒谎。
-    // 重出图之后把这条挪回 CLAIMS（shown 改成 'check 链上的 13 道门禁'）。
-    diagram: '12',
-    todo: '「check 链上的 12 道门禁」要改成 13（新增 check-disposable-env-guard）',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length,
-    expect: 13,
-  },
-  {
-    // 2026-09-09 新增 trusted_devices（已受信任设备列表的下发面）后，图上那句「共 27 种 type」
-    // 就过期了。从 CLAIMS 挪到这里而不是把 expect 改成 28：CLAIMS 的语义是「图说 X 且代码是 X」，
-    // 图现在说的还是 27，改 expect 会让那条断言变成在替图撒谎。
-    // 重出图之后把这条挪回 CLAIMS（shown 改成 '共 31 种 type'）。
-    diagram: '00 / 08 / 11',
-    todo: '「共 27 种 type」要改成 31（新增 trusted_devices、session_recap、prompt_suggestion、rewind_applied）',
-    actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
-    expect: 31,
-  },
-  {
-    diagram: '06',
-    todo: '「后台任务完成无条件推」要补上：只算真后台任务，跑得久的前台 Bash 被 is_backgrounded 过滤掉',
-    actual: () => {
-      const src = read('app/src/agent/agent.js');
-      const hasMap = /this\.taskBackgrounded = new Map\(\)/.test(src);
-      const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
-      return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
-    },
-    expect: '按 is_backgrounded 过滤',
-  },
+  // 当前为空：2026-09-11 那三条已随 gh-pages 4565341 重出图并挪回 CLAIMS。
+  // 新的漂移先落这里——代码侧立刻被守住，而「图欠这一条」不会随会话结束丢掉。
 ];
 
 function git(args) {
