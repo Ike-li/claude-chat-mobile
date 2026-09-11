@@ -2487,12 +2487,15 @@ registerSocketConnection(io, socket => {
     // op：客户端回传它渲染审批卡片时所见的 {tool,args,cwd}（端到端审批协议步骤5/6，
     // 审批完整性绑定）——allow 决策时 agent.js#resolvePermission 用它重算指纹比对 askPermission 时
     // 锚定的 fp，不一致 fail-closed 拒绝。deny 决策不校验（拒绝任何操作都安全，op 缺省或不传均可）。
-    const { requestId, decision, alwaysThisSession, instanceId, op, exitMode } = payload || {};
+    const { requestId, decision, alwaysThisSession, persistRules, instanceId, op, exitMode } = payload || {};
     if (typeof requestId !== 'string' || !['allow', 'deny'].includes(decision)) return;
     const a = routeInstance(instanceId);
     if (a) {
-      interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
-      const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op, exitMode ? { exitMode } : undefined);
+      interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}${persistRules ? ', persistRules=true' : ''}${exitMode ? `, exitMode=${exitMode}` : ''}`);
+      // persistRules：「永久不再问」。与 alwaysThisSession 不是互斥开关而是包含关系（永久蕴含本会话），
+      // 故两个都原样透传，由 resolvePermission 里的那一处判据统一裁决——不在这里预先合并。
+      const resolveOpts = { ...(exitMode ? { exitMode } : {}), ...(persistRules ? { persistRules: true } : {}) };
+      const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op, Object.keys(resolveOpts).length ? resolveOpts : undefined);
       // 最小审计记录：只在完整性校验失败时写——常规 allow/deny 已完整落在
       // approval_request 台账里（含 op 全量），这里重复记一条只会用日常噪音挤占 audit_record 的环形
       // 上限；actor 归属信息只有这层（socket）有，agent.js 保持设备无关，故写点放在这里而非 agent.js。

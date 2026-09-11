@@ -2523,7 +2523,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-remote-resolved', 'test:permission-result-error'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -2588,7 +2588,10 @@ io.on('connection', socket => {
             name: pendingPermission.name,
             input: pendingPermission.input,
             cwd: pendingPermission.cwd,
-            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd),
+            // test:permission-persistable 才带——真 server 只在 CLI 给了会落盘的 suggestions 时下发这个字段，
+            // 而实测它很稀疏（7MB 日志里两条）。默认不带，正是为了让「没有永久选项」那条主路径也被测到。
+            ...(cmd === 'test:permission-persistable' ? { persistDestinations: ['localSettings'] } : {}),
           }
         });
 

@@ -201,4 +201,76 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expectNoBrowserErrors(page);
   });
+
+  // 1b：「永久不再问」。CLI 在 canUseTool 的 suggestions 里给出会落盘的规则时（实测样本
+  // destination=localSettings），才允许用户把这次批准变成持久规则——SDK 自己写文件，我们不碰。
+  //
+  // ★ 两条失败方向都在这里钉：
+  //   ① 没有可落盘规则时**不得**出现「永久」选项——点了什么也不会发生，比没有更糟；
+  //   ② 默认必须停在「仅本会话」——不勾任何东西就悄悄多出一份持久授权，是最坏的形态。
+  test('P0-06h 没有可落盘规则时不出现「永久」选项', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    await page.locator('#permAlways').check();
+    // 勾了「总是允许」也不该冒出范围选择：这次审批根本没有规则可写
+    await expect(page.locator('[data-testid="perm-persist-wrap"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-06i 有可落盘规则时给「永久」选项，默认仍停在「仅本会话」', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission-persistable');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    // 未勾「总是允许」时范围选择不出现——它是那个勾选的细化，不是独立开关
+    await expect(page.locator('[data-testid="perm-persist-wrap"]')).toBeHidden();
+
+    await page.locator('#permAlways').check();
+    const wrap = page.locator('[data-testid="perm-persist-wrap"]');
+    await expect(wrap).toBeVisible();
+    // ★ 默认停在「仅本会话」= 改版前的唯一行为，勾选本身不该带来持久授权
+    await expect(page.locator('[data-testid="perm-scope-session"]')).toBeChecked();
+    await expect(page.locator('[data-testid="perm-scope-persist"]')).not.toBeChecked();
+    // 影响面必须写明白：localSettings → 本工作区
+    await expect(wrap).toContainText('本工作区');
+
+    // 取消勾选后收起并复位，避免「看不见却仍选着永久」
+    await page.locator('#permAlways').uncheck();
+    await expect(wrap).toBeHidden();
+    await expect(page.locator('[data-testid="perm-scope-session"]')).toBeChecked();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // ★ 持久授权不该有粘性。上一条可能是个无害的 Read，这一条可能是 rm——
+  //   第一张卡片选过「永久」，第二张卡片必须回到「仅本会话」。
+  //   （HTML 里 value="session" 自带 checked，所以只验首张卡片的默认值是恒绿的假绿；
+  //    真正的风险在跨卡片，这条专门走两张。）
+  test('P0-06j 「永久」选择不跨审批卡粘住：上一张选过，下一张回到仅本会话', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission-persistable');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    await page.locator('#permAlways').check();
+    await page.locator('[data-testid="perm-scope-persist"]').check();
+    await expect(page.locator('[data-testid="perm-scope-persist"]')).toBeChecked();
+
+    // 用「拒绝」收场：allow + 总是允许会让 mock 记住放行，第二次就不弹审批了
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+
+    await sendChatMessage(page, 'test:permission-persistable');
+    await expect(page.locator('#permModal')).toBeVisible();
+    // 勾选本身也要复位
+    await expect(page.locator('#permAlways')).not.toBeChecked();
+    await page.locator('#permAlways').check();
+    await expect(page.locator('[data-testid="perm-scope-session"]')).toBeChecked();
+    await expect(page.locator('[data-testid="perm-scope-persist"]')).not.toBeChecked();
+
+    await expectNoBrowserErrors(page);
+  });
+
 });

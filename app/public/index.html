@@ -246,8 +246,21 @@
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
       <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
-        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">本会话内总是允许此类操作
+        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">总是允许此类操作
       </label>
+      <!-- 「永久」档：仅当 CLI 给出了会落盘的规则（permission_request.persistDestinations）时才出现。
+           默认停在「仅本会话」——这是改版前的唯一行为，不勾任何东西就不该悄悄多出持久授权。
+           影响面文案由 logic/permissions.js 的 describePersistScope 算，**取最宽的那一档**：
+           说小了会让用户批准一个他本不会批准的授权。 -->
+      <div id="permPersistWrap" class="hidden ml-6 mt-1 text-xs" data-testid="perm-persist-wrap">
+        <label class="flex items-center gap-1.5 text-ink-soft cursor-pointer">
+          <input type="radio" name="permScope" value="session" checked style="accent-color:var(--accent)" data-testid="perm-scope-session">仅本会话
+        </label>
+        <label class="flex items-center gap-1.5 text-ink-soft cursor-pointer mt-0.5">
+          <input type="radio" name="permScope" value="persist" style="accent-color:var(--accent)" data-testid="perm-scope-persist">永久 · <span id="permPersistLabel"></span>
+        </label>
+        <div id="permPersistHint" class="text-[10px] text-ink-faint mt-0.5 leading-snug"></div>
+      </div>
       <!-- ExitPlanMode：对齐 CLI plan-exit，批准时可选手 default / acceptEdits / bypass -->
       <div id="permExitModeWrap" class="hidden mb-3">
         <div class="text-xs text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>

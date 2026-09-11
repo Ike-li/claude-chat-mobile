@@ -100,6 +100,15 @@ export const EN_DICT = Object.freeze({
   '状态读取中': 'Reading status…',
   '跟随浏览器': 'Auto',
   '审批规则': 'Approval rules',
+  // 「永久不再问」（审批弹窗）
+  '总是允许此类操作': 'Always allow this kind of operation',
+  '仅本会话': 'This session only',
+  '所有项目': 'all projects',
+  '本项目': 'this project',
+  '本工作区': 'this workspace',
+  '写入 ~/.claude/settings.json，对这台电脑上的每个项目生效': 'Writes to ~/.claude/settings.json — applies to every project on this computer',
+  '写入项目里的 .claude/settings.json —— 这个文件会进 git，团队其他人也会拿到': 'Writes to the project .claude/settings.json — this file is committed to git, so your teammates get it too',
+  '写入 .claude/settings.local.json，只影响这台电脑上的这个工作区': 'Writes to .claude/settings.local.json — affects only this workspace on this computer',
   // 接入二维码
   '接入新设备': 'Add a device',
   '📷 显示接入二维码': '📷 Show connection QR code',
@@ -138,7 +147,6 @@ export const EN_DICT = Object.freeze({
   '⚠️ 权限请求': '⚠️ Permission request',
   '权限请求': 'Permission request',
   '⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作': "⚠️ Integrity precheck failed: what's shown doesn't match the fingerprint anchored on the server. Confirm with care.",
-  '本会话内总是允许此类操作': 'Always allow this kind of action in this session',
   '退出计划后权限档（对齐 CLI）': 'Permission mode after exiting plan (matches CLI)',
   '拒绝': 'Deny',
   '允许': 'Allow',

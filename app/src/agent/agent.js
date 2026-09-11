@@ -1393,7 +1393,18 @@ export class AgentSession {
     // 同步：调用方（含既有测试）习惯不 await 就紧接着同步调 resolvePermission，插入一次 await 会在
     // pendingPermissions.set() 真正执行前的窗口让 resolvePermission 扑空、返回的 Promise 永远不 resolve。
     const fp = fingerprintSync({ tool: name, args: input, cwd: this.cwd });
-    this.emit('permission_request', { requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt });
+    // 「永久不再问」可不可选，取决于 CLI 这次给没给会落盘的规则（session/cliArg 档不算）。
+    // 只下发 destination 列表与条数，**不下发规则正文**：前端不需要它，而 ruleContent 里
+    // 常带完整命令行与路径，没必要多一份副本在网络上跑。
+    const persistDestinations = [...new Set(
+      (suggestions || [])
+        .filter(u => u?.type !== 'setMode' && u?.destination && u.destination !== 'session' && u.destination !== 'cliArg')
+        .map(u => u.destination),
+    )];
+    this.emit('permission_request', {
+      requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
+      ...(persistDestinations.length ? { persistDestinations } : {}),
+    });
     // 持久化台账：只是台账记录，写入失败
     // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
     approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
@@ -1491,11 +1502,19 @@ export class AgentSession {
         const exitMode = EXIT_MODES.has(opts?.exitMode) ? opts.exitMode : 'default';
         modeUpdate = { type: 'setMode', mode: exitMode, destination: 'session' };
       }
-      // 「始终允许本会话」额外应用 session 范围的规则更新（原行为；排除已单列的 setMode 防重复）。
-      const sessionRules = alwaysThisSession
-        ? suggestions.filter(u => u.destination === 'session' && u.type !== 'setMode')
-        : [];
-      const updates = [...(modeUpdate ? [modeUpdate] : []), ...sessionRules];
+      // 规则更新分两档（都排除已单列的 setMode 防重复）：
+      //   · opts.persistRules —— 「永久不再问」。SDK 文档对这一档说得很直接：
+      //     「if presenting the user an option 'always allow' or similar, then **this full set of
+      //       suggestions** should be returned as the updatedPermissions」。所以原样回传 CLI 建议的
+      //     全部规则，**由 SDK 按各自的 destination 落盘**（实测样本是 localSettings，即工作区的
+      //     .claude/settings.local.json）——我们不自己写那个文件，也不自己决定写哪一层、怎么泛化规则。
+      //   · alwaysThisSession —— 「本会话内总是允许」。这是本项目对 SDK 建议的**收窄**：
+      //     只取 session 档，规则不落盘、随会话消失。
+      // 两档不是互斥开关而是包含关系（永久蕴含本会话），故 persist 优先、不做 && 组合。
+      const ruleUpdates = suggestions.filter(u => u.type !== 'setMode' && (
+        opts?.persistRules ? true : (alwaysThisSession && u.destination === 'session')
+      ));
+      const updates = [...(modeUpdate ? [modeUpdate] : []), ...ruleUpdates];
       pending.resolve({
         behavior: 'allow',
         updatedInput: pending.input,

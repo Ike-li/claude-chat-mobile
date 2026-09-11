@@ -1,5 +1,6 @@
 import { isAnsweredQuestionId } from '../logic/composer.js';
 import { formatPermInputDisplay } from '../logic/tool-cards.js';
+import { describePersistScope } from '../logic/permissions.js';
 import { verifyIntegrity } from '../canonicalize.js';
 import { t } from '../i18n.js';
 
@@ -58,6 +59,7 @@ export function createApprovalController(context, {
 } = {}) {
   const permTool = byId('permTool'), permCwd = byId('permCwd'), permInput = byId('permInput');
   const permAlways = byId('permAlways'), permIntegrityWarn = byId('permIntegrityWarn');
+  const permPersistWrap = byId('permPersistWrap'), permPersistLabel = byId('permPersistLabel'), permPersistHint = byId('permPersistHint');
   const permExitModeWrap = byId('permExitModeWrap'), permInterrupt = byId('permInterrupt');
   const questionText = byId('questionText'), questionOptions = byId('questionOptions');
   const questionHeader = byId('questionHeader'), questionMultiHint = byId('questionMultiHint');
@@ -68,6 +70,7 @@ export function createApprovalController(context, {
   const { permissionQueue: permQueue, questionQueue, markQuestionAnswered, isQuestionAnswered } = queues;
 
   let activePerm = null;
+  let permPersistAvailable = false;
   let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
   let activeQuestion = null;
   let selectedExitMode = 'default';     // ExitPlanMode 退出后权限档（对齐 CLI plan-exit）；默认 default
@@ -140,6 +143,19 @@ export function createApprovalController(context, {
       applyPermInput(full);
     }
     permAlways.checked = false;
+    // 「永久」档只在 CLI 给了会落盘的规则时才存在。没有规则可写却摆一个「永久」选项，
+    // 点了什么也不会发生——那比没有更糟。
+    const persistScope = describePersistScope(activePerm.persistDestinations);
+    permPersistAvailable = !!persistScope;
+    if (permPersistWrap) {
+      permPersistWrap.classList.add('hidden'); // 勾了「总是允许」才展开，见下方 permAlways 的 change
+      if (permPersistLabel) permPersistLabel.textContent = persistScope?.label || '';
+      if (permPersistHint) permPersistHint.textContent = persistScope?.hint || '';
+      // ★ 每张新卡片都回到「仅本会话」：**不继承上一条的选择**——上一条可能是个无害的 Read，
+      // 这一条可能是 rm。持久授权不该有粘性。
+      const sessionRadio = permPersistWrap.querySelector?.('input[value="session"]');
+      if (sessionRadio) sessionRadio.checked = true;
+    }
     // ExitPlanMode：展示退出后权限档选择（对齐 CLI plan-exit）；其它工具隐藏
     selectedExitMode = 'default';
     if (permExitModeWrap) {
@@ -172,6 +188,16 @@ export function createApprovalController(context, {
       permArmTimer = null;
     }, ms);
   }
+  // 勾了「总是允许」才展开范围选择；取消勾选时连同选择一起收起并复位。
+  permAlways?.addEventListener?.('change', () => {
+    if (!permPersistWrap) return;
+    permPersistWrap.classList.toggle('hidden', !(permAlways.checked && permPersistAvailable));
+    if (!permAlways.checked) {
+      const sessionRadio = permPersistWrap.querySelector?.('input[value="session"]');
+      if (sessionRadio) sessionRadio.checked = true;
+    }
+  });
+
   function answerPerm(decision) {
     if (!activePerm) return;
     if (!socket.connected) { // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决
@@ -183,6 +209,10 @@ export function createApprovalController(context, {
       requestId: activePerm.requestId,
       decision,
       alwaysThisSession: permAlways.checked,
+      // 永久蕴含本会话，故两个字段一起送、由服务端那一处判据统一裁决。
+      // 没勾「总是允许」时 persistRules 恒 false——单选钮的状态不参与。
+      persistRules: permAlways.checked && permPersistAvailable
+        && permPersistWrap?.querySelector?.('input[value="persist"]')?.checked === true,
       instanceId: getViewingInstanceId(), // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
       // op：回传本卡片渲染时所见的确切操作（审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
