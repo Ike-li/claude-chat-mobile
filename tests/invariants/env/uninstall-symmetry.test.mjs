@@ -8,6 +8,8 @@
 //   而回落 `homedir()` / `REPO_ROOT` / `/Applications/CCM.app`，进程内的 rmSync 就打在真实家目录上。
 //   这正是 2026-08-02 删树事故的形状：被改坏的恰恰是算删除路径的那段代码。
 //   容器里 HOME 是一次性目录，这道防线不依赖任何代码正确性。
+//   2026-09-11 起这条不再只是约定：下面的 require-disposable-env 守卫会在非一次性环境里
+//   直接让本文件以非 0 退出——宿主机上跑它【真红】，不是静默跳过。
 //
 // 为什么用整树差集而不是逐项列「谁该活下来」：
 //   列举式只能抓住我想到的那几项。一个「多删了 ~/Documents」的实现能让逐项断言全绿。
@@ -30,6 +32,10 @@
 //    Linux 上删 ~/Library/Logs（该目录不存在）、`.DS_Store` 清理。
 //  · 要新夹具才够得着，damage 不匹配成本：桥 status「退出非 0 却吐了合法 JSON」的 fail-safe 分支
 //    （需 stub 桥脚本，而本文件刻意跑真桥）；WORK_DIRS_FILE 这一档（旧路径）；`isTty` 需要 PTY。
+// ★ 执行位守卫：必须排在所有被测模块的 import 之前——它一旦放行晚了，下面那些模块的
+//   顶层代码已经跑过了。不在一次性环境里时本进程直接以非 0 退出（见该文件的说明）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
