@@ -2437,6 +2437,48 @@ io.on('connection', socket => {
       },
     },
     {
+      // 建议条的生命周期：显示之后【不经输入框】开一轮新的，再在轮内补一条迟到的建议。
+      // 中段对应真实里几条都不碰输入框的驾驶路径（审批/选项回答、另一台设备、CLI 侧），
+      // 末段对应 server 的 askSide 先返回、用户那条消息随后才到的窗口——maybeSuggest 的
+      // pendingTurns 闸在那一刻还是 0，放行的建议会落到一块已经在跑的屏幕上。
+      commands: ['test:prompt-suggestion-stale'],
+      run: async ({ activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion_stale_0', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '给 agent.js 补几个边界用例' },
+        });
+        await delay(300);
+        activeInst.state = 'busy';
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_suggestion_stale', text: '新一轮已经开跑。' },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '这条建议迟到了' },
+        });
+        await delay(300);
+        // 栅栏：这句上屏 ⇒ 上面那条迟到建议一定已被前端处理过。没有它，「仍然没显示」只是
+        // 在赛跑里跑赢了一次，换台慢机器就变成假绿。
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_suggestion_stale', text: '迟到建议已送达。' },
+        });
+        await delay(100);
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion_stale', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       commands: ['test:question', 'test:question-multi', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);

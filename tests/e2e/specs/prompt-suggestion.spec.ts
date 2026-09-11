@@ -21,7 +21,7 @@ test.describe('下一步建议条', () => {
     await sendChatMessage(page, 'test:prompt-suggestion');
 
     await expect(box).toBeVisible({ timeout: 10_000 });
-    const btn = box.locator('button');
+    const btn = box.locator('#promptSuggestionBtn'); // 条里还有个 ✕，裸 locator('button') 会撞 strict mode
     // 标签行：不写明这是什么、点了会怎样，用户会怕一点就发出去而根本不敢碰
     await expect(box.locator('[data-testid="prompt-suggestion-label"]')).toContainText('点一下填进输入框');
     // 正文单独断言：按钮里还有那行标签，断在 button 上会把标签文字算进来
@@ -54,6 +54,56 @@ test.describe('下一步建议条', () => {
     // 金额不在这里报——那笔钱已计入会话总成本，列两份会变成两个对不上的数字
     await expect(block).toContainText('已计入会话总成本');
     await expect(block).not.toContainText('$');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('SUGGEST-4 建议还挂着时新一轮开跑 → 自动收起，不必等用户打字', async ({ page }) => {
+    await gotoMock(page);
+    const box = page.locator('[data-testid="prompt-suggestion"]');
+
+    await sendChatMessage(page, 'test:prompt-suggestion-stale');
+    await expect(box).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#promptSuggestionText')).toHaveText('给 agent.js 补几个边界用例');
+
+    // 场景随后【不碰输入框】开了新一轮（对应审批/选项回答、另一台设备、CLI 侧驱动这几条路）。
+    // 原实现只在 input 事件里 hide，这几条路一条也拦不住——建议会一直挂在 composer 上方，
+    // 直到用户打字或切会话。
+    await expect(box).toBeHidden({ timeout: 10_000 });
+    await expect(page.locator('#input')).toHaveValue(''); // 全程没碰过输入框
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('SUGGEST-5 轮次已经在跑时才到的建议直接丢掉——输入框恰好是空的也不能冒出来', async ({ page }) => {
+    await gotoMock(page);
+    const box = page.locator('[data-testid="prompt-suggestion"]');
+
+    await sendChatMessage(page, 'test:prompt-suggestion-stale');
+    await expect(box).toBeVisible({ timeout: 10_000 });
+    await expect(box).toBeHidden({ timeout: 10_000 }); // 新一轮开跑，第一条建议收起
+
+    // 场景在新一轮里又推了一条建议（server 侧 askSide 先返回、用户消息随后到达就是这个形状）。
+    // 它是对【上一轮】说的：迟到的建议比没有建议更糟，会在用户已经打定主意之后再干扰一次。
+    // 栅栏先行——这句上屏才说明那条建议已经到过前端，否则「仍然没显示」只是跑赢了一次赛跑。
+    await expect(page.locator('#messages')).toContainText('迟到建议已送达', { timeout: 10_000 });
+    await expect(box).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('SUGGEST-6 建议条有显式关闭按钮：点 ✕ 只收起，不往输入框塞东西', async ({ page }) => {
+    await gotoMock(page);
+    const box = page.locator('[data-testid="prompt-suggestion"]');
+
+    await sendChatMessage(page, 'test:prompt-suggestion');
+    await expect(box).toBeVisible({ timeout: 10_000 });
+
+    await box.locator('[data-testid="prompt-suggestion-close"]').click();
+    await expect(box).toBeHidden();
+    // 关掉 ≠ 采纳：不填输入框（那是主按钮的语义），更不发出去
+    await expect(page.locator('#input')).toHaveValue('');
+    await expect(page.locator('#messages').getByText('给 agent.js 补几个边界用例', { exact: true })).toHaveCount(0);
 
     await expectNoBrowserErrors(page);
   });

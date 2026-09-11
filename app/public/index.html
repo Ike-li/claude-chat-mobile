@@ -512,18 +512,27 @@
       <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
            不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
            放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
-           有内容才显示；打字 / 发送 / 切会话即隐藏（见 app.js hidePromptSuggestion 的三个调用点）。 -->
+           有内容才显示；打字 / 采纳 / 关掉 / 新一轮开跑 / 切会话即隐藏（app.js hidePromptSuggestion 的调用点）。 -->
       <div id="promptSuggestion" class="hidden px-1 pb-1.5" data-testid="prompt-suggestion">
-        <button type="button" id="promptSuggestionBtn"
-          class="w-full text-left px-3 py-2 rounded-xl border border-line bg-surface active:bg-sunk">
-          <!-- 标签行必须同时回答两件事：这句话【是什么】（模型猜的、不是系统消息），以及点了【会怎样】。
-               后者尤其要紧——不写明"填进输入框"，用户会担心一点就发出去而根本不敢碰。
-               文案是静态的，写在 HTML 里由 applyI18nToDocument 整树扫描翻译，不进 JS 模板。 -->
-          <span class="flex items-center gap-1 text-[10px] text-ink-faint mb-0.5" data-testid="prompt-suggestion-label">
-            <span aria-hidden="true">💡</span><span>猜你接下来想发 · 点一下填进输入框</span>
-          </span>
-          <span id="promptSuggestionText" class="block text-xs text-ink-soft truncate"></span>
-        </button>
+        <!-- 主按钮与 ✕ 并排：HTML 不许按钮套按钮，边框圆角因此上提到这层容器，两个子按钮各管各的按压反馈。 -->
+        <div class="flex items-stretch rounded-xl border border-line bg-surface overflow-hidden">
+          <button type="button" id="promptSuggestionBtn"
+            class="flex-1 min-w-0 text-left px-3 py-2 active:bg-sunk">
+            <!-- 标签行必须同时回答两件事：这句话【是什么】（模型猜的、不是系统消息），以及点了【会怎样】。
+                 后者尤其要紧——不写明"填进输入框"，用户会担心一点就发出去而根本不敢碰。
+                 文案是静态的，写在 HTML 里由 applyI18nToDocument 整树扫描翻译，不进 JS 模板。 -->
+            <span class="flex items-center gap-1 text-[10px] text-ink-faint mb-0.5" data-testid="prompt-suggestion-label">
+              <span aria-hidden="true">💡</span><span>猜你接下来想发 · 点一下填进输入框</span>
+            </span>
+            <!-- min-w-0 撑住 truncate：flex 子项默认 min-width:auto，长句会把整条撑宽而不是截断 -->
+            <span id="promptSuggestionText" class="block text-xs text-ink-soft truncate"></span>
+          </button>
+          <!-- 手机上没有 hover 也没有 Esc：不给显式出口，这条建议就只能靠打字或切会话赶走。
+               hit-44 用伪元素补足触达区，不撑大视觉宽度。 -->
+          <button type="button" id="promptSuggestionClose" data-testid="prompt-suggestion-close"
+            class="hit-44 shrink-0 w-9 flex items-center justify-center border-l border-line text-ink-faint text-base active:bg-sunk"
+            aria-label="关闭建议">✕</button>
+        </div>
       </div>
 
       <!-- Unified Premium Input Pill Container

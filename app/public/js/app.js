@@ -4119,7 +4119,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const box = $('promptSuggestion'), btn = $('promptSuggestionBtn'), body = $('promptSuggestionText');
     if (!box || !btn || !body) return;
     // 镜像只读态下输入框根本不能打字，给了也用不了；有草稿时也不打扰（用户已经在写自己的了）。
-    if (mirrorReadonlySid || inputEl?.value.trim()) return;
+    // 屏幕正在滚时同样不给：这条是对【上一轮】说的。server 侧 maybeSuggest 有 pendingTurns 闸，但它
+    // 挡不住「askSide 先返回、用户那条消息随后才到」的窗口——放行的建议会落到一块已经在跑的屏幕上，
+    // 且此刻输入框恰好刚被 send() 清空，下面那道草稿闸也拦不住。判据与 setBusy 那处 hide 同源。
+    if (mirrorReadonlySid || _busyState || inputEl?.value.trim()) return;
     // 只写正文那个 span：按钮里还有一行静态标签，写 btn.textContent 会把标签一起冲掉。
     body.textContent = text;
     btn.title = text; // 长句被 truncate 截掉时，长按/悬停仍能看全
@@ -4135,6 +4138,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     inputEl.value = text;
     inputEl.focus();
     inputEl.dispatchEvent(new Event('input'));
+  });
+  // 关掉 ≠ 采纳：只收起，不碰输入框。没有这个出口时，用户想赶走一条不想要的建议只剩打字或切会话。
+  $('promptSuggestionClose')?.addEventListener('click', () => {
+    haptic('tap');
+    hidePromptSuggestion();
   });
 
   function autosize() {
@@ -5811,6 +5819,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (show === _busyState) return;
     _busyState = show;
     if (show) {
+      // 新一轮开跑 ⇒ 上一轮那条建议已经过时。挂在这里而不是发送路径上：发起新一轮的入口不止输入框
+      // （审批/选项回答、另一台设备、CLI 侧驾驶都不经过它），而"轮次开始"是这些路径唯一的公共出口。
+      hidePromptSuggestion();
       if (!interruptPendingByInstance.has(viewingInstanceId) && btnStop) btnStop.disabled = false;
       // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
       const now = Date.now();
