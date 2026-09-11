@@ -81,11 +81,12 @@ function harness({ ackQueue = [], canRestart = () => true, confirmAnswer = true 
   const dom = {
     envConfigModal: node(), envConfigBody: node(), envConfigFooter: node(),
     envConfigHint: node(), envConfigSave: node('button'),
-    btnEnvConfig: node('button'), envConfigClose: node('button'),
+    btnEnvConfig: node('button'), envConfigBack: node('button'),
   };
   const emitted = [];
   const confirms = [];
   const saved = [];
+  const backs = [];
   const socket = {
     emit(event, payload, ack) {
       emitted.push({ event, payload });
@@ -111,10 +112,11 @@ function harness({ ackQueue = [], canRestart = () => true, confirmAnswer = true 
     onSaved: (r) => saved.push(r),
     canRestart,
     beforeOpen: () => {},
+    afterClose: () => backs.push(Date.now()),
   });
   panel.bind();   // save 挂在按钮的 onclick 上，不是导出的方法
   return {
-    panel, dom, emitted, confirms, saved,
+    panel, dom, emitted, confirms, saved, backs,
     save: () => dom.envConfigSave.onclick?.(),
   };
 }
@@ -336,5 +338,32 @@ test.describe('env-config 渲染 —— enum 项（ACCESS_PROFILE）渲染成 se
     await settle();
     const set = h.emitted.find((e) => e.event === 'env:set');
     assert.equal(set.payload.changes.ACCESS_PROFILE, null);
+  });
+});
+
+// 退出语义：本面板是通用设置切出去的第二层，「关掉」必须退回来源页而不是关到首页。
+// 放单测而不是 E2E：afterClose 是纯接线（谁调、调几次），E2E 每条 6~10 秒买不到额外信息。
+test.describe('退出＝退回上一级', () => {
+  test('点 ← 通知调用方退回来源页（关面板与退回是两件事，都要发生）', async () => {
+    const h = harness({ ackQueue: [VIEW_ACK] });
+    h.panel.open();
+    await settle();
+    assert.equal(h.backs.length, 0, '还没退出时不该通知');
+
+    h.dom.envConfigBack.onclick();
+    assert.equal(h.backs.length, 1, '点 ← 必须通知调用方退回上一级——不通知就停在首页了');
+  });
+
+  test('点遮罩与点 ← 同义：两种关法不得落到两个地方', async () => {
+    const h = harness({ ackQueue: [VIEW_ACK] });
+    h.panel.open();
+    await settle();
+
+    // 遮罩点击靠 e.target === modal 区分「点在遮罩上」还是「点在面板内容里」
+    h.dom.envConfigModal.onclick({ target: h.dom.envConfigModal });
+    assert.equal(h.backs.length, 1, '点遮罩也该退回上一级，否则同一张面板两种关法落到两个地方');
+
+    h.dom.envConfigModal.onclick({ target: h.dom.envConfigBody });
+    assert.equal(h.backs.length, 1, '点在面板内容里不算关闭，不得触发退回');
   });
 });

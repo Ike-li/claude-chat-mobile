@@ -199,7 +199,6 @@ export const EN_DICT = Object.freeze({
   '刷新': 'Refresh',
   '📊 服务状态': '📊 Service status',
   '服务状态': 'Service status',
-  '关闭服务状态': 'Close service status',
   '附件预览': 'Attachment preview',
   '关闭预览': 'Close preview',
 
@@ -389,7 +388,6 @@ export const EN_DICT = Object.freeze({
   // 带占位字母的 key（N/V）按本文件既有约定在取用点 .replace()，见 logic/bg-tasks.js:179。
   '服务与配置': 'Service & config',
   '⚙ 服务与配置': '⚙ Service & config',
-  '关闭服务与配置': 'Close service & config',
   '读取中…': 'Loading…',
   '读取配置失败：': 'Could not read the config: ',
   '服务端没有给出原因': 'the server gave no reason',
@@ -767,6 +765,7 @@ export const EN_DICT = Object.freeze({
   '重试打开': 'Try again',
   '选择其他会话': 'Pick another session',
   '返回': 'Back',
+  '返回设置': 'Back to settings',
   '会话': 'Session',
   '这是最早一条消息，前面没有可分叉的起点': 'This is the earliest message — there\'s nothing before it to fork from',
   '从这里分叉新会话？': 'Fork a new session from here?',

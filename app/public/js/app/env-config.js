@@ -19,6 +19,10 @@ const CHANGED_MARK = 'data-ccm-dirty';
 
 export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
+  // 退出本面板后回哪：本面板是通用设置切出去的第二层，默认退回来源页而不是关到首页
+  // （理由见 index.html #envConfigBack 的注释）。注入而不是在这里 import general——
+  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」。
+  afterClose = () => {},
   // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或有进程管理器
   // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路，
   // 而 headless 的 npm start 正是这种形态。
@@ -445,13 +449,15 @@ export function createEnvConfigPanel({
 
   function close() {
     if (modal) closeSheet(modal);
+    afterClose();
   }
 
   function bind() {
     const trigger = $('btnEnvConfig');
     if (trigger) trigger.onclick = open;
-    const closeBtn = $('envConfigClose');
-    if (closeBtn) closeBtn.onclick = close;
+    // 点 ← 与点遮罩同义（都是「退回上一级」）：同一张面板两种关法落到两个地方会再坑一次。
+    const backBtn = $('envConfigBack');
+    if (backBtn) backBtn.onclick = close;
     if (modal) modal.onclick = (e) => { if (e.target === modal) close(); };
     if (saveBtn) saveBtn.onclick = save;
   }

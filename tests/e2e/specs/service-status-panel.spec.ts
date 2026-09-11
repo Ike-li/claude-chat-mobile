@@ -43,9 +43,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('✓ 无异常');
     await expect(body).toContainText('告警超 24 小时自动退场');
 
-    // 5. ✕ 关闭（300ms 收合动画后 hidden）
-    await page.locator('#serviceStatusClose').click();
+    // 5. ← 退回上一级（300ms 收合动画后 hidden），而不是关到首页：本面板与 generalSheet 同为
+    //    z-40，进来时先收了设置 sheet，所以「退回」必须把它按来源页重新开回来。
+    await page.locator('#serviceStatusBack').click();
     await expect(page.locator('#serviceStatusModal')).toBeHidden();
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalPage-host')).toBeVisible();
+    await expect(page.locator('#generalSheetTitle')).toContainText('这台电脑');
 
     await expectNoBrowserErrors(page);
   });

@@ -81,14 +81,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-31d 关闭：✕ 与点遮罩都能收起', async ({ page }) => {
+  // 用例名此前声称「✕ 与点遮罩都能收起」，实际只点了 ✕——遮罩那半从来没跑过。改 ← 语义时
+  // 一并补上：两种关法必须落到同一个地方，是这次改动的核心契约。
+  test('P0-31d 退出：← 与点遮罩都退回来源页，不是关到首页', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');
 
     await page.locator('#btnEnvConfig').click();
     await expect(page.locator('#envConfigModal')).toBeVisible();
-    await page.locator('#envConfigClose').click();
+    // 进来时设置 sheet 被收掉了（两者同 z-40，叠着会互相拦点击）——正因如此退出才必须显式退回
+    await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
+
+    await page.locator('#envConfigBack').click();
     await expect(page.locator('#envConfigModal')).toBeHidden();
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalPage-behavior')).toBeVisible();
+
+    // 点遮罩：同一张面板的第二种关法，必须落到同一个地方
+    await page.locator('#btnEnvConfig').click();
+    await expect(page.locator('#envConfigModal')).toBeVisible();
+    await page.locator('#envConfigModal').click({ position: { x: 5, y: 5 } });
+    await expect(page.locator('#envConfigModal')).toBeHidden();
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalPage-behavior')).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });

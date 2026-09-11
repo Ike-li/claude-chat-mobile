@@ -1042,6 +1042,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 而那两个函数的**调用**都发生在异步事件里（socket 回调），届时早已赋值。
   // 用 let + null 而不是 const：const 在 TDZ 里被访问会抛 ReferenceError，`?.` 救不了。
   let generalNav = null;
+  // 从通用设置切出去的第二层面板（服务状态 / 服务与配置）退回上一级用。
+  // 那两张面板与 generalSheet 同为 z-40，叠着会互相拦点击，所以它们打开时先把设置 sheet 收了——
+  // 代价是「关掉面板」在用户眼里等于「一路退到首页」，来时那一页得重新找。这里按来源页把设置
+  // 面板重新开回来，退出语义就和面板内部 L1↔L2 的返回一致了。
+  function reopenGeneralAt(page) {
+    generalDeepLink = { page };
+    general?.open();
+  }
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
@@ -1802,9 +1810,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // null（拿不到）与 []（拿到了、确实没有记录）是两件事，渲染时说法不同
     renderServiceStatus(status, auditRes?.ok === true ? (auditRes.records || []) : null);
   }
+  // 点 ← 与点遮罩都走这里：同一张面板两种关法落到两个不同的地方，正是用户会再踩一次的坑。
   function closeServiceStatus() {
     if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
     if (serviceStatusModal) closeSheet(serviceStatusModal);
+    reopenGeneralAt('host');
   }
   if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => {
     if (!serviceStatusModal) return;
@@ -1817,7 +1827,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       loadServiceStatus();
     }, 5000);
   };
-  if ($('serviceStatusClose')) $('serviceStatusClose').onclick = closeServiceStatus;
+  if ($('serviceStatusBack')) $('serviceStatusBack').onclick = closeServiceStatus;
 
   // 服务与配置面板。表单结构全部由服务端 env:get 下发（src/ops/env-schema.js 是单一事实源）——
   // 前端一个配置项名都不硬编码，加一项只改那一个文件。pickText 按当前语言从 {zh,en} 里挑：
@@ -1826,6 +1836,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     $, socket, openSheet, closeSheet, appConfirm,
     pickText: (pair) => (getLang() === 'en' ? (pair.en || pair.zh) : pair.zh),
     beforeOpen: () => general.close(), // 先收通用设置，否则它会拦掉本面板上的点击
+    afterClose: () => reopenGeneralAt('behavior'), // 退出＝退回来源页，不是关到首页（同服务状态面板）
     canRestart: () => _canRestart,
     onSaved: () => {},
   });
