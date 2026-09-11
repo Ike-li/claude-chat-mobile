@@ -33,6 +33,9 @@ import { readFileSync } from 'node:fs';
 const HOST_ALLOWED_SCRIPTS = new Set([
   'lint', 'lint:fix', 'check',
   'test:unit', 'test:invariants', 'test:e2e', 'test:visual', 'test:playwright',
+  // test:coverage 与 test:unit 逐字同档：同一份 preload-env、同一批 tests/unit/*.test.mjs，
+  // 只多一个 --experimental-test-coverage。拦它纯属误伤（脚本名不在名单上而已）。
+  'test:coverage',
   // test:e2e:parallel = tests/infra/e2e-parallel.js，它并行 spawn 的每个分片【就是 `npm run test:e2e --`】
   // 本身（2026-09-07 起不再自己拼 playwright 命令），只多了 --shard 与端口/产物目录错开。
   // 安全面与 test:e2e 逐字同源：打 mock server、零外部依赖、不起真 server、不 spawn claude、不碰 ~/.claude。
@@ -111,6 +114,9 @@ function testTargets(text) {
 // 会在真实 ~/.claude/projects 上跑那个删除用例（preload-env 明确不隔离 transcript 目录）。
 const SCRIPT_TEST_SCOPE = {
   'test:unit': 'tests/unit/',
+  // scope 必须跟着白名单一起加，否则 `npm run test:coverage -- tests/integration/session-delete.test.mjs`
+  // 会借道白名单在开发机上跑那个删除用例。
+  'test:coverage': 'tests/unit/',
   // 不变量树与 unit 同档：纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude。
   // scope 必须写，否则 `npm run test:invariants -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
   'test:invariants': 'tests/invariants/',
@@ -167,6 +173,40 @@ function decide(command) {
   return null;
 }
 
+
+// ── 决策分档：deny 还是 ask ──────────────────────────────────────────────
+//
+// 【为什么绝大多数该 deny 而不是 ask】ask 会把整个会话停在那里等人点确认。对"跑一段长任务、
+// 人不在跟前"的用法，那等于任务直接卡死——而这些命令【本来就有等价的容器跑法】，agent 收到
+// 拒绝理由后自己换一条命令继续即可，根本不需要人介入。ask 在这里不是安全，是把人拴在屏幕前。
+//
+// 【什么才值得 ask】没有容器替代、且代价由人承担的那两档：真 agent turn 与 smoke 都要真凭据
+// （容器里没有），且会消耗额度。要不要花那笔钱只有人能决定，agent 换命令也换不出来。
+const NEEDS_HUMAN = [
+  /\bRUN_CLAUDE_INTEGRATION\b/,
+  /\bnpm\s+run\s+[\w:.-]*smoke/,
+];
+
+// 命令 → 等价的容器跑法。顺序即优先级，第一条命中为准；最后一条是兜底。
+const CONTAINER_ALTERNATIVE = [
+  [/\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, 'npm run mutate:docker -- <文件> [--lines=A-B]'],
+  [/\bnpm\s+run\s+test:integration\b/, 'npm run test:docker:integration'],
+  [/\bnpm\s+run\s+test:invariants:(server|env)\b/, 'npm run test:docker:invariants'],
+  [/\bnpm\s+run\s+[\w:.-]*e2e|playwright/, 'npm run test:docker:e2e'],
+  [/.*/, 'npm run test:docker   （unit + invariants 三档 + 集成，共 5 档）'],
+];
+
+/**
+ * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null}}
+ */
+export function decideRoute(command) {
+  const why = decide(command);
+  if (!why) return null;
+  if (NEEDS_HUMAN.some(re => re.test(command))) return { decision: 'ask', why, alternative: null };
+  const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(command))[1];
+  return { decision: 'deny', why, alternative: alt };
+}
+
 function main() {
   let payload;
   try {
@@ -176,18 +216,22 @@ function main() {
   }
   if (payload?.tool_name !== 'Bash') process.exit(0);
 
-  const why = decide(payload?.tool_input?.command);
-  if (!why) process.exit(0);
+  const route = decideRoute(payload?.tool_input?.command);
+  if (!route) process.exit(0);
+
+  const reason = route.decision === 'deny'
+    ? `⛔ 这条命令必须在一次性环境里跑，本钩子直接拒绝——【不需要找人】，换成下面那条重试即可。\n\n`
+      + `原因：${route.why}\n\n`
+      + `改跑：${route.alternative}\n（首次用先 npm run docker:build，约 7 分钟）\n\n`
+      + `确实非要在开发机上跑的话，那需要人来决定：请让用户自己敲。\n`
+    : `⚠️ 这条命令需要人来决定，容器替代不了它。\n\n原因：${route.why}\n\n`
+      + `它要真凭据、且会消耗额度——容器里跑不了，agent 换命令也换不出来。\n`;
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      permissionDecision: 'ask',
-      permissionDecisionReason:
-        `⚠️ 这条命令按 CLAUDE.md 属于「必须进容器」那一类。\n\n原因：${why}\n\n` +
-        '容器化改跑：npm run test:docker / npm run test:docker:e2e / npm run mutate:docker -- <文件>\n' +
-        '（首次先 npm run docker:build）\n\n' +
-        '确实要在宿主机上跑就批准——但注意宿主机的 ~/.claude 对它是可写的。',
+      permissionDecision: route.decision,
+      permissionDecisionReason: reason,
     },
   }));
   process.exit(0);

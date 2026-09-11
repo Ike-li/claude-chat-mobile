@@ -81,6 +81,8 @@
     "docker:build": "docker compose -f tests/infra/docker-compose.test.yml build",
     "test:docker": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:unit && npm run test:invariants && npm run test:invariants:server && npm run test:invariants:env && npm run test:integration\"",
     "test:docker:unit": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:unit",
+    "test:docker:integration": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:integration",
+    "test:docker:invariants": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:invariants:server && npm run test:invariants:env\"",
     "test:docker:e2e": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:e2e",
     "test:docker:sh": "docker compose -f tests/infra/docker-compose.test.yml run --rm test bash",
     "test:docker:playground": "sh tests/infra/playground-test.sh",

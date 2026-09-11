@@ -111,7 +111,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > 它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」。不依赖任何判断的隔离仍然只有容器本身。
 
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑 unit + invariants 三档 + 集成，共 5 档）、
-`npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
+`npm run test:docker:e2e`、`npm run test:docker:integration`、`npm run test:docker:invariants`（server+env 两档）、
+`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
 （拉 Playwright 镜像 + npm ci，约 7 分钟）。维护者要打开一张干净 Linux 用户的 Web UI 时用
 `npm run playground:up`（`127.0.0.1:13000`，fake-claude，不是产品入口；聊天/流式走 `playground:up:mock`）。
 
@@ -126,6 +127,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > 黑名单要求"每遇到一个新命令都正确归类"，而那正是失败的那一步。白名单反过来：
 > **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
+>
+> 钩子对**有容器替代**的命令直接 `deny` 并指出改跑哪条（不是 `ask`）——agent 自己换命令继续，
+> 长任务不会卡在一条本可自助解决的命令上。只有真 agent turn 与 smoke 走 `ask`：那两档要真凭据、
+> 容器里跑不了，花不花那笔额度只有人能决定。
 
 容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
 和仓库里那几层代码级防护（执行位守卫、单测的目录级 `CCM_DATA_DIR` 隔离、`mutate` 的沙箱 HOME、

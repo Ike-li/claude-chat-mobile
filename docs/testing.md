@@ -21,9 +21,12 @@
 `npm run mutate` 没被归类成破坏性操作，它把用户 `~/.claude/projects` 整棵树删光了（70 个项目 / 291 memory / 2990 transcript）。
 白名单反过来：不在名单上的默认进容器，判断错了顶多多跑一次容器，代价不对称地小。
 
-> ⚠ **`guard-host-tests.js` 返回的是 `permissionDecision: "ask"`，不是 `"deny"`。**
-> 它给提示并请求确认，不是硬闸；在自动批准的权限模式下直接放行。而且它是 PreToolUse 钩子，
-> **只在 agent 走 Bash 工具时触发——人在终端手敲命令它一次都不会响**。别把它当安全网。
+> ⚠ **`guard-host-tests.js` 不是安全网。** 它是 PreToolUse 钩子，**只在 agent 走 Bash 工具时
+> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`$(...)`、别名一概看不见）。
+>
+> 它的决策分两档（`decideRoute`）：**有等价容器跑法的一律 `deny` 并指出改跑哪条**，agent 自己换命令
+> 继续，不打断人；只有真 agent turn 与 smoke 是 `ask`——那两档要真凭据、容器里跑不了，
+> 要不要花那笔额度只有人能决定。**别把 deny 当保护**：它防的是手滑，不是对抗。
 >
 > 2026-09-11 起，`invariants/env`、`invariants/server`、`integration` 三个目录的测试文件与
 > `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
