@@ -7,7 +7,7 @@
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { statSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, constants as fsConstants } from 'node:fs';
+import { statSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken } from '../shared/sanitizer.js';
@@ -3790,6 +3790,50 @@ registerSocketConnection(io, socket => {
     const raw = Number(payload?.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 200) : 50;
     ack({ ok: true, records: audit.listRecent({ limit }), capacity: audit.capacity() });
+  });
+
+  // server 进程自己的 stdout/stderr。**与 logs:get 是两条不同的日志**：
+  // 那条合并的是前端 clientLogger + 会话交互日志（都在内存里），server 进程的输出一个字都不进去
+  // （2026-09-02 实证）。于是「服务为什么起不来」「端口被占了吗」的答案在手机上根本读不到。
+  //
+  // 脱敏档位是**只截断限流、不改内容**（机主 2026-09-10 定）：这是自己的机器、自己的日志，
+  // 且已过设备审批闸；改内容会让排障失去价值——看不到真实路径和错误原文就没法排。
+  // 面板上直说「含路径与错误原文」。
+  //
+  // 三道限制：尾部 N 行（默认 200、上限 500）、字节上限（读文件尾部 256KB，不整份加载）、
+  // 路径**不接受客户端传入**（只读配置里那个），从设计上排除路径穿越。
+  on(socket, 'logs:server', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const raw = Number(payload?.limit);
+    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.trunc(raw), 500) : 200;
+    // 与 log-terminal.js / doctor.js 同一份默认路径约定（macOS 部署约定），不另算一套
+    const logFile = process.env.LOG_FILE || join(homedir(), 'Library', 'Logs', 'ccm-server.log');
+    try {
+      const st = statSync(logFile);
+      if (!st.isFile()) return ack({ ok: false, path: logFile, lines: [], error: '日志路径不是普通文件' });
+      const MAX_BYTES = 256 * 1024;
+      const start = Math.max(0, st.size - MAX_BYTES);
+      const fd = openSync(logFile, 'r');
+      let text;
+      try {
+        const len = st.size - start;
+        const buf = Buffer.allocUnsafe(len);
+        readSync(fd, buf, 0, len, start);
+        text = buf.toString('utf8');
+      } finally {
+        closeSync(fd);
+      }
+      // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
+      const all = text.split('\n');
+      if (start > 0 && all.length) all.shift();
+      const lines = all.filter(l => l !== '').slice(-limit);
+      ack({ ok: true, path: logFile, lines, truncated: start > 0, size: st.size });
+    } catch (err) {
+      // ENOENT 是最常见的一支：没配 LOG_FILE 且不是 macOS 默认部署。说清楚而不是给个空列表——
+      // 空列表看起来像「服务很干净」，而实际是「我们压根没在看那个文件」。
+      const code = err?.code === 'ENOENT' ? '日志文件不存在（未配置 LOG_FILE，或进程输出没有重定向到文件）' : '读取失败';
+      ack({ ok: false, path: logFile, lines: [], error: code });
+    }
   });
 
   // 「刷新消息」（前端按钮文案）：mirror 横幅的确定性追平入口——强制触发一次 catchUpTick（正常 2.5s 自动跑，

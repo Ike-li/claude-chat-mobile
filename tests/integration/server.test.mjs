@@ -497,6 +497,9 @@ const ACK_SHAPES = [
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
   { event: 'logs:get', payload: () => ({}), required: ['logs', 'diagLogs'] },
+  // 测试 env 里 LOG_FILE 指不到真文件 → 走 ok:false 的 ENOENT 支；成功支会读真日志，不适合形状表。
+  // path 两支都必须在：前端要显示「我们在看哪个文件」，缺了它「不存在」这句话就没有指向。
+  { event: 'logs:server', branch: '日志文件不存在', payload: () => ({}), required: ['ok', 'path', 'lines', 'error'] },
   { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
   // rules 为 null（该 cwd 没配过审批规则）也算合法形状——键必须在，值可以是 null。
   { event: 'permissions:rules', payload: () => ({ cwd: tmpDir }), required: ['ok', 'cwd', 'rules'] },

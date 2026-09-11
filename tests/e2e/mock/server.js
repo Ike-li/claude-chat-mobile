@@ -172,6 +172,8 @@ let mockHooksState = 'not-installed';
 let mockStatuslineState = 'not-installed';
 // test:qr-access 拨到「受 Access 保护」档：那一档的码不含 token（判据在 public-target.js）
 let mockAccessProtected = false;
+// test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
+let mockServerLogMissing = false;
 // 审批规则样本：三档都有内容，且 deny 里放一条明显危险的——前端把 deny 显示成 allow 时 E2E 要能咬住
 let mockPermissionRules = {
   allow: ['Bash(git status:*)', 'Read', 'Glob'],
@@ -361,6 +363,7 @@ function resetMockState() {
   mockHooksState = 'not-installed';
   mockStatuslineState = 'not-installed';
   mockAccessProtected = false;
+  mockServerLogMissing = false;
   mockPermissionRules = {
     allow: ['Bash(git status:*)', 'Read', 'Glob'],
     deny: ['Bash(rm -rf:*)'],
@@ -1930,6 +1933,23 @@ io.on('connection', socket => {
   // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
   // statusline 桥的装/卸（与 hooks:setup 同构）。真 server 走 execFile 调 scripts 下的安装器，
   // 这里只切内存态——mock 的职责是让前端两条渲染分支都走得到，不是复刻安装器。
+  // server 进程日志。真 server 读 LOG_FILE 的尾部；mock 给几行确定性样本 + 一条错误支
+  // （test:server-log-missing 拨过去），让前端两条渲染分支都走得到。
+  socket.on('logs:server', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (mockServerLogMissing) {
+      return ack({ ok: false, path: '/Users/you/Library/Logs/ccm-server.log', lines: [], error: '日志文件不存在（未配置 LOG_FILE，或进程输出没有重定向到文件）' });
+    }
+    const limit = Number(payload?.limit) > 0 ? Math.min(Number(payload.limit), 500) : 200;
+    const lines = [
+      '2026-09-10T12:00:00.000+00:00 [boot] ccm server 启动，端口 3000',
+      '2026-09-10T12:00:01.100+00:00 [conn] abc123 已连接（来自 127.0.0.1）',
+      '2026-09-10T12:00:02.200+00:00 [hooks] CLI hooks 桥未安装',
+      '2026-09-10T12:00:03.300+00:00 [push] 测试推送：成功 0 条、失败 1 条',
+    ].slice(-limit);
+    ack({ ok: true, path: '/Users/you/Library/Logs/ccm-server.log', lines, truncated: false, size: 4096 });
+  });
+
   // 接入二维码。真 server 用 shared/qrcode.js 现编矩阵；mock 给一个确定性的小矩阵——
   // 前端要验的是「两步展开 + 定时隐藏 + 含不含 token」，不是编码器本身（那有自己的单测）。
   socket.on('connect:qr', (payload, ack) => {
@@ -2665,6 +2685,14 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
+      },
+    },
+    {
+      // 日志文件不存在档：验前端点名原因，而不是显示成一份看起来很干净的空日志
+      command: 'test:server-log-missing',
+      run: async () => {
+        console.log('[mock] test:server-log-missing — logs:server 走 ENOENT 支');
+        mockServerLogMissing = true;
       },
     },
     {

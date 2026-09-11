@@ -319,7 +319,14 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        shared/public-target.js 的 includeToken，不在 handler 里另算一套。
   //        前端那侧另有两步展开 + 定时自动隐藏，理由同 scripts/qr.js 必须手敲：
   //        二维码没有「安全的默认档」，而人不会去遮一个「看起来无害」的方块图案。入向 53→54）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 54);
+  //      + logs:server（2026-09-10，server 进程自己的 stdout/stderr。与 logs:get 是**两条不同的
+  //        日志**：那条合并的是前端 clientLogger + 会话交互日志（都在内存里），server 进程的输出
+  //        一个字都不进去（2026-09-02 实证）——于是「服务为什么起不来」「端口被占了吗」的答案
+  //        在手机上根本读不到。脱敏档位是只截断限流、不改内容（机主定）：自己的机器、自己的日志、
+  //        已过设备审批闸，改内容会让排障失去价值。路径**不接受客户端传入**，只读配置里那个，
+  //        从设计上排除穿越。入向 54→55）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 55);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('permissions:rules'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));

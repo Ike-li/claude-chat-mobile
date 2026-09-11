@@ -993,6 +993,20 @@
             <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
           </div>
         </div>
+
+        <!-- 四条日志，各看各的。先说清有几条、各管什么——此前用户根本不知道存在第四条
+             （server 进程自己的 stdout/stderr 在手机上完全读不到）。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📄 <span>日志</span></div>
+          <div class="space-y-2">
+            <button id="btnServerLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="server-log-open">
+              <span class="font-semibold block">服务日志</span>
+              <span class="text-ink-soft">server 进程自己的 stdout / stderr —— 「为什么起不来」的答案在这里</span>
+            </button>
+            <div id="serverLogBody" class="hidden" data-testid="server-log-body"></div>
+            <div class="text-[10px] text-ink-faint px-1">另外三条：会话日志与前端日志在顶栏的运行日志里，安全日志在「服务状态」面板。</div>
+          </div>
+        </div>
       </div>
 
       <!-- ═══ L2 · 🔑 帮助 ═══ -->

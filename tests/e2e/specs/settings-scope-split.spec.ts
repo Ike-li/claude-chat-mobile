@@ -4,7 +4,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
+import { ensureComposerReady, gotoMock, expectNoBrowserErrors, sendChatMessage } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28 首页无会话时通用设置仍可达（会话设置 chip 随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
@@ -277,6 +277,52 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="general-back"]').click();
     await page.locator('[data-testid="general-nav-host"]').click();
     await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 缺口 5：server 进程日志。与顶栏「运行日志」是两条不同的日志——那条合并的是前端 clientLogger
+  // + 会话交互日志（都在内存里），server 进程的输出一个字都不进去（2026-09-02 实证）。
+  // ★ 读不到时必须说清楚，**不给空列表**：空列表看起来像「服务很干净」，
+  //   而实际是「我们压根没在看那个文件」。
+  test('P0-28m 「排查」页能读 server 进程日志，读不到时说清楚而不是给空列表', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+
+    // 默认收起：日志是按需读的，不在进页时就发请求
+    const body = page.locator('[data-testid="server-log-body"]');
+    await expect(body).toBeHidden();
+
+    await page.locator('[data-testid="server-log-open"]').click();
+    await expect(body).toBeVisible();
+    await expect(body).toContainText('ccm-server.log');
+    await expect(body).toContainText('[boot]');
+    // 未脱敏的提示必须在——这条日志含真实路径与错误原文
+    await expect(body).toContainText('未脱敏');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 读不到那一支：文件不存在时的措辞。
+  test('P0-28n 日志文件不存在时点名原因，不显示成一份干净的空日志', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:server-log-missing');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+    await page.locator('[data-testid="server-log-open"]').click();
+
+    const body = page.locator('[data-testid="server-log-body"]');
+    await expect(body).toContainText('日志文件不存在');
+    // 路径仍要显示——「不存在」这句话没有指向的话，用户不知道该去配哪个文件
+    await expect(body).toContainText('ccm-server.log');
 
     await expectNoBrowserErrors(page);
   });

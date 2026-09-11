@@ -5568,6 +5568,59 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     hooksBridgeBody.appendChild(card);
   }
 
+  // 服务日志（server 进程的 stdout/stderr）。与顶栏「运行日志」是两条不同的日志：
+  // 那条是前端 clientLogger + 会话交互日志（都在内存里），server 进程的输出一个字都不进去。
+  async function loadServerLog() {
+    const body = $('serverLogBody');
+    if (!body) return;
+    body.classList.remove('hidden');
+    body.replaceChildren(el('<div class="p-2.5 text-xs text-ink-faint"></div>'));
+    body.firstChild.textContent = t('读取中…');
+    const res = await new Promise(resolve => {
+      socket.timeout(8000).emit('logs:server', { limit: 200 }, (err, r) => resolve(err ? null : r));
+    });
+    body.replaceChildren();
+    const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs space-y-1"></div>');
+    const pathRow = el('<div class="text-[10px] text-ink-faint break-all"></div>');
+    pathRow.textContent = res?.path || t('未知路径');
+    card.appendChild(pathRow);
+    if (!res || res.ok !== true) {
+      // 读不到就说读不到。**不给空列表**——空列表看起来像「服务很干净」，
+      // 而实际是「我们压根没在看那个文件」。
+      const errRow = el('<div class="text-warning"></div>');
+      errRow.textContent = res?.error || t('读取失败');
+      card.appendChild(errRow);
+      body.appendChild(card);
+      return;
+    }
+    if (!res.lines.length) {
+      const empty = el('<div class="text-ink-soft"></div>');
+      empty.textContent = t('文件是空的（服务刚起来，或日志被轮转过）');
+      card.appendChild(empty);
+      body.appendChild(card);
+      return;
+    }
+    if (res.truncated) {
+      const note = el('<div class="text-[10px] text-ink-faint"></div>');
+      note.textContent = t('只显示文件末尾部分');
+      card.appendChild(note);
+    }
+    const pre = el('<div class="mt-1 space-y-0.5 max-h-64 overflow-y-auto"></div>');
+    for (const line of res.lines) {
+      const row = el('<div class="break-all text-ink-soft" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px"></div>');
+      row.textContent = line; // 日志原文，textContent 插值（CSP 安全）
+      pre.appendChild(row);
+    }
+    card.appendChild(pre);
+    const warn = el('<div class="text-[10px] text-ink-faint mt-1"></div>');
+    warn.textContent = t('含真实路径与错误原文（未脱敏）——投屏时注意');
+    card.appendChild(warn);
+    body.appendChild(card);
+    // 长日志默认滚到底：最新的一行才是排障要看的
+    pre.scrollTop = pre.scrollHeight;
+  }
+  $('btnServerLog')?.addEventListener('click', () => loadServerLog());
+
   // 接入二维码。三步态：入口 → 二次确认 → 显示（带倒计时自动隐藏）。
   // 自动隐藏的秒数刻意短：够扫、不够让人忘了它还挂在屏幕上。
   const QR_AUTO_HIDE_MS = 30_000;
