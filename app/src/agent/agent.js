@@ -569,7 +569,16 @@ export class AgentSession {
           message: { role: 'user', content: [{ type: 'text', text: item.text }] },
           parent_tool_use_id: null,
           session_id: this.sessionId || '',
-          uuid: item.uuid // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
+          uuid: item.uuid, // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
+          // 归属标记。SDK 契约原文：包装键盘输入的宿主**必须**显式打 {kind:'human'}，缺失被当成
+          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主，且这个断言是准确的
+          // 而非伪造来源——queue 的唯一写入点是 send()，send() 的唯一调用者是 user:message handler，
+          // 队列里只可能是经鉴权用户敲进来的字。
+          // 缺了它的后果**静默**：正文关键词的单回合触发（ultracode → 多 agent 编排 + 自动加载
+          // workflow-authoring）与 @提及 peer 会话两条路一起走不通，用户只看到「这个词没反应」、零报错。
+          // 2026-09-11 单变量实测：同一句话、同一 entrypoint，带 origin 产出 workflow_keyword_request
+          // 与两条 turnCompanion 注入，不带则两项皆无。这道闸只守这两处，不影响审批/权限面。
+          origin: { kind: 'human' }
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
