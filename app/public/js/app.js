@@ -916,6 +916,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!streamLiveStatusEl || !messagesEl || !streamLiveStatusEl.isConnected) return;
     if (messagesEl.lastChild !== streamLiveStatusEl) messagesEl.appendChild(streamLiveStatusEl);
   }
+  // 【为什么还要这个 observer，而不是在漏掉的插入点各补一次 pin】
+  // pinStreamLiveStatus 要求「每个往 #messages 塞节点的地方都记得调它」。appendMessage / addBar
+  // 之外还有 8 个直接 messagesEl.appendChild 的点，2026-09-11 实测其中 4 个漏了：clearView 懒开后
+  // 放回未确认气泡、renderHistoryBubbles 的 fragment 一次性落地、reconcile 里把乐观气泡移到末尾的两处。
+  // 症状是 live 行停在消息流【顶部】，且只有下一条 assistant 内容到达时才被 appendMessage 顺手拉回——
+  // 也就是说它精确地只在「消息发出去、回复还没来」那段时间坏着，而那正是用户盯着这一屏的时候。
+  // 「每个调用点都要记得」正是会失败的那一步，所以反转成缺省：容器子节点一变动就把 live 行顶回末尾，
+  // 新增插入点不必知道它的存在。不会自激——pin 在已是末尾时什么都不做，第二轮回调即收敛。
+  // 上面那些同步 pin 调用保留不删：observer 回调是微任务，同步路径原样立刻正确，代价为零。
+  // 守护：tests/e2e/specs/live-status-tail.spec.ts（P0-33 / P0-33b）
+  if (messagesEl) new MutationObserver(pinStreamLiveStatus).observe(messagesEl, { childList: true });
   function hideStreamLiveStatus() {
     if (streamLiveStatusEl?.parentNode) streamLiveStatusEl.parentNode.removeChild(streamLiveStatusEl);
     streamLiveStatusEl = null;
