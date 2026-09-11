@@ -185,4 +185,52 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 缺口 6：工作区列表此前在手机上只读（schema 注释写着「结构化编辑器留给 CLI 与 desktop」），
+  // 而它是全表**唯一**标了 reload:'hot' 的项——改完即生效、免重启。最适合在手机上改的那一项，
+  // 恰恰是唯一改不了的。
+  // ★ 提交的必须是**数组**：塞一个字符串进去，下游 Array.isArray 判否 → 静默回落旧白名单，
+  //   用户看到「保存成功」而配置一个字没变。这正是它当初被标只读的原因。
+  test('P0-31i 工作区列表可编辑：改路径提交数组，条目原有的 sessionLimit 不丢', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+    await expect(page.locator('#envConfigModal')).toBeVisible();
+
+    const inputs = page.locator('input[data-list-path="1"]');
+    await expect(inputs).toHaveCount(2);
+    await expect(inputs.nth(0)).toHaveValue('/Users/you/code/claude-chat-mobile');
+
+    // 改第一项的路径
+    await inputs.nth(0).fill('/Users/you/code/renamed');
+
+    await page.locator('#envConfigSave').click();
+
+    // ★ mock 的 env:set 与真 server 的 checkList 同判据：WORKDIRS 非数组当场拒。
+    //   所以「保存成功」本身就证明前端送的是**数组**而不是拼成的字符串——
+    //   后者正是这一档当初被标只读的失败形态（静默回落旧白名单，用户还看到「保存成功」）。
+    //   正向断言「已写入 1 项」，不只断言没报错：后者在元素根本不存在时也会绿。
+    await expect(page.locator('#envConfigHint')).toContainText('已写入 1 项');
+    await expect(page.locator('#envConfigBody')).not.toContainText('必须是数组');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 删除与新增：read() 恒返回数组，空列表表示「清空白名单」而不是「删除配置项」
+  test('P0-31j 工作区列表可增删，提交后回显跟着变', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+
+    await page.locator('button[data-list-add="1"]').click();
+    const inputs = page.locator('input[data-list-path="1"]');
+    await expect(inputs).toHaveCount(3);
+    await inputs.nth(2).fill('/Users/you/code/third');
+    await page.locator('#envConfigSave').click();
+    await expect(page.locator('#envConfigHint')).toContainText('已写入 1 项');
+    await expect(page.locator('#envConfigBody')).not.toContainText('必须是数组');
+
+    await expectNoBrowserErrors(page);
+  });
+
 });

@@ -336,6 +336,12 @@ struct EnumOption: Decodable {
     let label: LocalizedText?
 }
 
+// WORKDIRS 的一条。服务端已把裸字符串形态归一成 { path }，故这里不必解异构数组。
+struct WorkdirEntry: Decodable {
+    let path: String?
+    let sessionLimit: Int?
+}
+
 struct ConfigItem: Decodable {
     let key: String?
     let kind: String?
@@ -354,6 +360,11 @@ struct ConfigItem: Decodable {
     let unit: String?
     let min: Int?
     let max: Int?
+    // list 档（当前只有 WORKDIRS）的当前值。**不复用 value**：projectToEnv 对 list 明确放弃
+    // 投影（投成 "/a,/b" 会让下游把字符串当数组用），所以 value 对这一档恒为空串，
+    // 当前列表只能另开一条原样下发的通道。条目在服务端已归一成 {path, sessionLimit?}，
+    // 免得这里还要解 string | object 的异构数组。
+    let list: [WorkdirEntry]?
 
     var name: String { key ?? "" }
     var kindName: String { kind ?? "text" }

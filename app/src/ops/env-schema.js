@@ -690,7 +690,7 @@ export function validateEnvChanges(changes, d) {
 //
 // **只标键，绝不回显 env 的值**：被压住的可能正是 AUTH_TOKEN / VAPID 私钥，
 // 与 doctor D18 同一条纪律（src/ops/doctor-checks.js:560 上方注释）。
-export function buildEnvView(values = {}, { shellEnv = null } = {}) {
+export function buildEnvView(values = {}, { shellEnv = null, structured = null } = {}) {
   // 没给快照 = 这一维**没查过**，此时整个字段缺席，而不是下发 false。
   // false 的意思是「查过了，没被覆盖」——把「没查」说成「没问题」正是 BE-013 那个假绿的形状。
   // 具体受益方是 scripts/config.js 的 cmdSchema()：它拿 buildEnvView({}) 当**配置项文档**下发给
@@ -709,10 +709,11 @@ export function buildEnvView(values = {}, { shellEnv = null } = {}) {
           kind: def.kind,
           label: def.label,
           help: def.help,
-          // list 也标只读：前端 env-config.js 只分派 number / toggle，其余渲染成 text input，
-          // 而往数组项里塞一个字符串会让 app.js 的 Array.isArray 判否 → 静默回落旧路径。
-          // 结构化编辑器留给 CLI 与 desktop（P1c）。
-          readonly: def.kind === 'readonly' || def.kind === 'list',
+          // 2026-09-11：list 不再一律只读——手机端有了结构化编辑器（当前值走下方 item.list）。
+          // 当初标只读的理由（往数组项里塞字符串 → 下游 Array.isArray 判否 → 静默回落旧白名单）
+          // 由两道守住：写入侧 checkList 当场拒绝非数组（SCOPE-01 写入侧用例），
+          // 前端编辑器的 read() 恒返回数组。
+          readonly: def.kind === 'readonly',
           secret: !!def.secret || def.kind === 'secret',
         };
         // 查过了才下发（true/false 都下发）；没查则整个字段缺席，见上方注释。
@@ -726,6 +727,21 @@ export function buildEnvView(values = {}, { shellEnv = null } = {}) {
         if (def.max !== undefined) item.max = def.max;
         if (item.secret) item.masked = maskSecret(raw);
         else item.value = raw;
+        // list 的当前值走**旁路**：projectToEnv 对 list 明确放弃投影（返回 null），
+        // 所以 values[key] 里根本没有它——那是有意的，投成 "/a,/b" 会让下游把字符串当数组用。
+        // 编辑器要显示当前列表，只能另开一条原样下发的通道。**投影规则一个字没动**。
+        // 条目在这里归一成 {path, sessionLimit?}：裸字符串与对象两种形态混在数组里，
+        // 会让每个消费者（web 编辑器、Swift 菜单栏）各写一份解构逻辑。
+        if (def.kind === 'list') {
+          const cur = structured && Object.hasOwn(structured, key) ? structured[key] : null;
+          item.list = (Array.isArray(cur) ? cur : []).flatMap((e) => {
+            if (typeof e === 'string') return e.trim() ? [{ path: e }] : [];
+            if (e && typeof e === 'object' && typeof e.path === 'string' && e.path.trim()) {
+              return [Number.isInteger(e.sessionLimit) ? { path: e.path, sessionLimit: e.sessionLimit } : { path: e.path }];
+            }
+            return [];
+          });
+        }
         return item;
       }),
   }));

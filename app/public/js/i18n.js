@@ -182,6 +182,9 @@ export const EN_DICT = Object.freeze({
   '（空目录）': '(empty directory)',
   '加载中…': 'Loading…',
   '工作区': 'Workspace',
+  '删除这一项': 'Remove this entry',
+  '+ 添加工作区': '+ Add workspace',
+  '第一项就是手机端默认打开的目录。每项必须是绝对路径；改完即生效，无需重启。': 'The first entry is what your phone opens by default. Each must be an absolute path; changes take effect immediately, no restart needed.',
   // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
   '📁 文件': '📁 Files',
   '📝 改动': '📝 Changes',

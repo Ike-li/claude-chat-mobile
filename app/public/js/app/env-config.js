@@ -172,6 +172,89 @@ export function createEnvConfigPanel({
     return input;
   }
 
+  // list 档（当前只有 WORKDIRS）的结构化编辑器。
+  //
+  // 【为什么不是一个 text input】往数组项里塞字符串，下游 normalizeWorkdirEntries 的
+  // Array.isArray 会判否 → 静默回落旧白名单：用户看到「保存成功」，配置一个字没变。
+  // 这正是 list 档曾被标成 readonly 的原因，所以本编辑器的 read() **恒返回数组**。
+  //
+  // 【只编路径，但不丢 sessionLimit】手机上编的是路径；条目原有的 sessionLimit 原样带回去——
+  // 它是低频高级项，看不见也不该被一次手机编辑抹掉。
+  function buildListEditor(item, field) {
+    const wrap = el('div', 'space-y-1.5');
+    // 原始条目按行保存，删除/新增都在这上面做；path 由各行的 input 现读
+    const rows = [];
+
+    const syncDirty = () => {
+      const now = JSON.stringify(readValue());
+      wrap.setAttribute(CHANGED_MARK, now !== JSON.stringify(field.original) ? '1' : '0');
+      markDirty();
+    };
+
+    function readValue() {
+      return rows
+        .filter((r) => !r.removed)
+        .map((r) => {
+          const path = r.input.value.trim();
+          // sessionLimit 原样带回：它不在手机的编辑面里，但也不能因此丢掉
+          return r.sessionLimit === undefined ? path : { path, sessionLimit: r.sessionLimit };
+        })
+        .filter((e) => (typeof e === 'string' ? e : e.path));
+    }
+
+    function addRow(entry) {
+      const row = el('div', 'flex items-center gap-1.5');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = entry?.path ?? '';
+      input.placeholder = '/absolute/path';
+      input.className = 'flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-line bg-sunk text-xs text-ink';
+      input.dataset.listPath = '1';
+      input.addEventListener('input', syncDirty);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'shrink-0 px-2 py-1.5 rounded-lg border border-line text-xs text-ink-soft active:bg-sunk';
+      del.textContent = '✕';
+      del.setAttribute('aria-label', t('删除这一项'));
+      const rec = { input, sessionLimit: entry?.sessionLimit, removed: false };
+      del.addEventListener('click', () => {
+        rec.removed = true;
+        row.remove();
+        syncDirty();
+      });
+      row.append(input, del);
+      rows.push(rec);
+      return row;
+    }
+
+    const list = el('div', 'space-y-1.5');
+    for (const entry of (Array.isArray(item.list) ? item.list : [])) list.append(addRow(entry));
+    wrap.append(list);
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'w-full px-2 py-1.5 rounded-lg border border-dashed border-line text-xs text-ink-soft active:bg-sunk';
+    add.textContent = t('+ 添加工作区');
+    add.dataset.listAdd = '1';
+    add.addEventListener('click', () => {
+      list.append(addRow(null));
+      syncDirty();
+    });
+    wrap.append(add);
+
+    const hint = el('div', 'text-[10px] text-ink-faint px-1',
+      t('第一项就是手机端默认打开的目录。每项必须是绝对路径；改完即生效，无需重启。'));
+    wrap.append(hint);
+
+    wrap.setAttribute(CHANGED_MARK, '0');
+    field.el = wrap;
+    field.original = Array.isArray(item.list) ? item.list.map(e => (e.sessionLimit === undefined ? e.path : { path: e.path, sessionLimit: e.sessionLimit })) : [];
+    // ★ 恒返回数组。空数组表示「清空白名单」，与 null（删除配置项）不同，
+    //   故这里不做 `[] → null` 的折叠。
+    field.read = () => readValue();
+    return wrap;
+  }
+
   function renderItem(item) {
     const row = el('div', 'space-y-1');
     const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret };
@@ -185,6 +268,7 @@ export function createEnvConfigPanel({
       row.append(head);
       if (item.secret) buildSecret(item, field, row);
       else if (item.kind === 'enum' && Array.isArray(item.options)) row.append(buildSelect(item, field));
+      else if (item.kind === 'list') row.append(buildListEditor(item, field));
       else row.append(buildInput(item, field));
     }
 

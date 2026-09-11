@@ -3571,6 +3571,16 @@ registerSocketConnection(io, socket => {
   // 已迁移到 ccm.config.json 时读它并投影成字符串态 —— buildEnvView / validateEnvChanges
   // 都是按 .env 时代的字符串写的，在边界上投影一次比为 JSON 再写一套校验安全（两套判据分叉
   // 正是本仓出过事的形态）。前端因此完全无感。
+  // 原始结构化值。只供 list 档回显——其余项一律走投影后的字符串态，免得两套读法分叉。
+  // .env 时代没有数组形态，回 null（编辑器据此显示空列表）。
+  const readStructuredValues = () => {
+    if (!usingConfigJson()) return null;
+    try {
+      return JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
   const readEnvValues = () => {
     if (usingConfigJson()) {
       try {
@@ -3592,7 +3602,8 @@ registerSocketConnection(io, socket => {
       ok: true,
       // 第二个参数不是可选的装饰：少了它，被 shell env 压过的行会跟正常行长得一模一样，
       // 用户改完保存成功、运行时仍用旧值（VC-D4-02）。快照取自投影之前，见 config.js。
-      ...buildEnvView(readEnvValues(), { shellEnv: getShellEnvSnapshot() }),
+      // structured 是给 list 编辑器回显用的旁路（投影规则未动，见 buildEnvView 里的说明）
+      ...buildEnvView(readEnvValues(), { shellEnv: getShellEnvSnapshot(), structured: readStructuredValues() }),
       envFileExists: usingConfigJson() || existsSync(ENV_FILE_PATH),
       configFile: usingConfigJson() ? CONFIG_FILE_NAME : '.env',
     });

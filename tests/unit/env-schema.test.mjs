@@ -727,12 +727,34 @@ test('validateEnvChanges: WORKDIRS 条目形状不对时拒收，不静默丢条
   assert.equal(validateEnvChanges({ WORKDIRS: [123] }, d).ok, false);
 });
 
-test('buildEnvView: list 项标成只读 —— 前端没有数组编辑器，给个 text input 只会写坏它', () => {
-  const view = buildEnvView({});
-  const runtime = view.groups.find(g => g.id === 'runtime');
-  const workdirs = runtime.items.find(i => i.key === 'WORKDIRS');
+// 2026-09-11：手机端有了结构化编辑器，list 不再一律只读。当初标只读的理由
+// （往数组项里塞字符串 → 下游 Array.isArray 判否 → 静默回落旧白名单）改由两道守：
+// 写入侧 checkList 当场拒非数组（invariants/workdir-scope-guard 的 SCOPE-01 写入侧用例），
+// 前端编辑器的 read() 恒返回数组。
+const workdirsItem = (view) => view.groups.find(g => g.id === 'runtime').items.find(i => i.key === 'WORKDIRS');
+
+test('buildEnvView: list 项可编辑，当前值走 item.list 旁路而不是 value', () => {
+  const view = buildEnvView({}, { structured: { WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] } });
+  const workdirs = workdirsItem(view);
   assert.equal(workdirs.kind, 'list');
-  assert.equal(workdirs.readonly, true);
+  assert.equal(workdirs.readonly, false);
+  // ★ 条目归一成统一形状：裸字符串与对象混在一个数组里，会让每个消费者
+  //   （web 编辑器、Swift 菜单栏）各写一份解构逻辑。
+  assert.deepEqual(workdirs.list, [{ path: '/a' }, { path: '/b', sessionLimit: 3 }]);
+  // value 对 list 档恒为空串：projectToEnv 明确放弃投影，这条不能因为加了旁路就变
+  assert.equal(workdirs.value, '');
+});
+
+test('buildEnvView: 没有结构化来源（.env 时代）时 list 为空数组，不是 undefined', () => {
+  const workdirs = workdirsItem(buildEnvView({}));
+  assert.deepEqual(workdirs.list, []);
+});
+
+// ★ 脏条目不得渲染成空行：空串/空对象/null 混进来时跳过，而不是产出 {path: undefined}——
+//   那会在编辑器里变成一行看不出是什么的空输入框，用户一保存就把它写回去。
+test('buildEnvView: list 里的脏条目被跳过，不产出空壳', () => {
+  const view = buildEnvView({}, { structured: { WORKDIRS: ['/ok', '', null, {}, { path: '  ' }, 42] } });
+  assert.deepEqual(workdirsItem(view).list, [{ path: '/ok' }]);
 });
 
 // ── CCM_AGENT_PROGRESS_SUMMARIES：唯一一个「会计费」的开关 ──────────────────

@@ -174,6 +174,13 @@ let mockStatuslineState = 'not-installed';
 let mockAccessProtected = false;
 // test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
 let mockServerLogMissing = false;
+// WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
+// 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
+// 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
+let mockWorkdirsList = [
+  { path: '/Users/you/code/claude-chat-mobile' },
+  { path: '/Users/you/code/other', sessionLimit: 3 },
+];
 // 审批规则样本：三档都有内容，且 deny 里放一条明显危险的——前端把 deny 显示成 allow 时 E2E 要能咬住
 let mockPermissionRules = {
   allow: ['Bash(git status:*)', 'Read', 'Glob'],
@@ -271,6 +278,13 @@ function buildMockEnvView() {
         items: [
           { key: 'PORT', kind: 'number', label: mockLabel('监听端口', 'Port'), readonly: false, secret: false, value: '3000', min: 1, max: 65535 },
           { key: 'CLAUDE_BIN', kind: 'path', label: mockLabel('claude 可执行文件', 'claude binary'), readonly: false, secret: false, value: '/Users/you/bin/claude' },
+          // list 档：value 恒为空串（真 server 的 projectToEnv 对 list 明确放弃投影），
+          // 当前值走 item.list 旁路。第二条带 sessionLimit——前端只编路径，但必须原样带回去。
+          {
+            key: 'WORKDIRS', kind: 'list', label: mockLabel('工作区列表', 'Workspaces'),
+            readonly: false, secret: false, value: '',
+            list: mockWorkdirsList,
+          },
         ],
       },
       {
@@ -364,6 +378,10 @@ function resetMockState() {
   mockStatuslineState = 'not-installed';
   mockAccessProtected = false;
   mockServerLogMissing = false;
+  mockWorkdirsList = [
+    { path: '/Users/you/code/claude-chat-mobile' },
+    { path: '/Users/you/code/other', sessionLimit: 3 },
+  ];
   mockPermissionRules = {
     allow: ['Bash(git status:*)', 'Read', 'Glob'],
     deny: ['Bash(rm -rf:*)'],
@@ -2026,7 +2044,20 @@ io.on('connection', socket => {
   // AUTH_TOKEN 会变成「已设置（64 字符）」，所有设备连同正在操作的手机一起被关在门外。
   socket.on('env:set', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const keys = Object.keys(payload?.changes || {});
+    const changes = payload?.changes || {};
+    const keys = Object.keys(changes);
+    // list 档与真 server 的 checkList 同判据：非数组当场拒。
+    // mock 绝不能让「送了个字符串」看起来成功了——那正是这一档当初被标只读的失败形态
+    // （下游 Array.isArray 判否 → 静默回落旧白名单 → 用户看到「保存成功」而配置没变）。
+    if (Object.hasOwn(changes, 'WORKDIRS')) {
+      if (!Array.isArray(changes.WORKDIRS)) {
+        return ack({
+          ok: false,
+          results: [{ key: 'WORKDIRS', level: 'error', message: '工作区列表 必须是数组（每项为路径字符串或 {path, sessionLimit}）' }],
+        });
+      }
+      mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
+    }
     ack({ ok: true, results: [], written: keys, restartRequired: true });
   });
 
