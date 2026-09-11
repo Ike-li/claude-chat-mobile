@@ -1,4 +1,7 @@
 // _spawn-server 的失败路径必须在把启动错误交回调用方前回收已 spawn 的 child。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

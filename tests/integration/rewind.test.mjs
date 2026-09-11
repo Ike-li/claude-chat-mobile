@@ -13,6 +13,9 @@
 // 落进真实 ~/.claude/projects/<编码后的临时工作目录>/，测试结束时按 sessionId 精确清理。
 //
 // 运行：RUN_CLAUDE_INTEGRATION=1 npm run test:integration -- tests/integration/rewind.test.mjs
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, rmdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';

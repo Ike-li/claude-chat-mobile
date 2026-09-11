@@ -8,6 +8,9 @@
 //     已在 tests/invariants/file-browse.test.mjs 与 workdir-scope-guard.test.mjs（S1）。
 //     本文件只证明「socket 这条路径确实走了那道门」，不重测门本身。
 //  ② FILE_EDIT=off 整段关闭 —— 需要另起一台 server，单独用例。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';

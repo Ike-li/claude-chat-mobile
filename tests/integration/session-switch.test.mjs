@@ -7,6 +7,9 @@
 // 首条消息触发懒建 AgentSession 后才产生——等待顺序与当前 lazy-start 协议相反，先于消息等 init 会
 // 死等到超时。改为连接后只等 instances（这个在连接时就无条件重放），发消息后如需要 init 里的字段
 // （如 sessionId）再从 client.events 里找。本文件没有"重启服务器"式的用例，故不需要 _spawn-server.mjs。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

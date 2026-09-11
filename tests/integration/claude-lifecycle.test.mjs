@@ -13,6 +13,9 @@
 //   模块顶层读取的 IDLE_TIMEOUT_MS 也不会重新求值，测的其实还是 CL-1 那个旧超时值。改为 spawnServer()
 //   真起子进程（tests/integration/_spawn-server.mjs，同 tests/integration/server.test.mjs 已验证过的
 //   nonce + 就绪探测模式），kill 旧进程、spawn 新进程即为真重启。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

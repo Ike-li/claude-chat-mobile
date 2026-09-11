@@ -25,6 +25,9 @@
 // 未覆盖（如实登记）：app/src/server/app.js on(socket,'client:presence',…) handler 内部那段"遍历 agents、
 // 对 busy 实例调用 pushNotify/ntfyNotify"的具体 wiring，没有被一次真实的"跳变+有 busy 实例"场景穿过——
 // 这需要一个真实在跑的 AgentSession 实例，本测试手法无法在不消耗真实 CLI turn 的前提下构造。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

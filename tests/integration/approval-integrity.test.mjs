@@ -16,6 +16,9 @@
 //   ③user:message 的 payload.cwd 只在「当前无可路由实例」时才生效（routeInstance(undefined) 优先回落到
 //   viewingInstanceId，实测第一版直接在第二条消息带 cwd:dirB 仍复用了第一条消息留下的 dirA 实例）——
 //   须先 emit('session:new', {cwd}) 显式清空 viewingInstanceId，下一条 user:message 才会为新 cwd 懒开新实例。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, realpathSync } from 'node:fs';

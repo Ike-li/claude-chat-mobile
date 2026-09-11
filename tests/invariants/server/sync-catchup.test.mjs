@@ -21,6 +21,9 @@
 //     buffer 的唯一消费者就是 eventsSince，而已广播出去的 envelope 早被 socket.io 序列化，
 //     事后改动影响不到它。注释是防御性的（将来多一个消费者就成立），不为它编一条假断言。
 //  ④ pending 快照的内容 —— 需要真实挂起的审批，归 approval-restart.test.mjs 那一域。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

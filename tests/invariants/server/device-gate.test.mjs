@@ -10,6 +10,9 @@
 //     （SEC-03 修过的坑），需要等待窗口，属另开的用例；本文件只钉「进不进得来」。
 //  ③ 推送正文不含设备 ID（DEVICE-03）—— 那是 notifications 的 body 构造，属 S1。
 //     注意 device_status 事件【本身】带 deviceId 是正确的：那是服务端告诉这台设备它自己的状态。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

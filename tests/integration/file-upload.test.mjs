@@ -12,6 +12,9 @@
 // 真杀子进程（同另外两个文件的修复），每次 startServer() 都是全新进程，彻底不受 ESM 缓存影响；
 // CF Access 隔离也不再需要"清 env → import → 再清 env → 重新 initCfAccess()"的进程内二次处理，
 // 直接在 spawn 的子进程 env 里显式传空字符串即可（dotenv 默认不覆盖已存在的 env key，即便是空串）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';

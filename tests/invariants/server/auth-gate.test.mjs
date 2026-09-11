@@ -8,6 +8,9 @@
 //  ② CF Access JWT 验签 —— 策略层纯函数已在 tests/invariants/auth-strategy.test.mjs；
 //     真 CF 环境需要外部服务，不进 PR。
 //  ③ 设备审批门 —— 另一道闸，见 tests/invariants/server/device-gate.test.mjs。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

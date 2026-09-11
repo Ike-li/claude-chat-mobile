@@ -9,6 +9,9 @@
 // 并覆盖 BE-002 的两条校验失败路径），且在 CI 与 test:docker 里每次都真跑。
 // 本文件保留的价值只剩一档：**带真 claude 的端到端**——它是唯一会让真实模型跑起来再验幂等的路径。
 // 若哪天要精简，判据是「这一档还值不值那份 token」，不是「是不是重复了」。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

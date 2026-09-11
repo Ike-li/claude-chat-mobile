@@ -16,6 +16,9 @@
 //   tests/integration/server.test.mjs 已验证过的 nonce + 就绪探测模式）。WS-6 额外需要重启后端口不变
 //   （客户端的 socket.io 连接 URL 在创建时已固定，端口变了不可能重连到新进程），startServer() 支持传
 //   port 固定它。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

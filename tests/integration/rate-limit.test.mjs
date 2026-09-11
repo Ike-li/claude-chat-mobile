@@ -8,6 +8,9 @@
 // 一条一分钟的集成用例不值得，且它验的是状态机而非接线。那条契约由单测用注入时钟覆盖：
 // rate-limiter.test.mjs 的 authRejection/gateCheck 组，与 server-http.test.mjs 的
 // 「连续失败锁定 → 429」（rateLimit.now 可注入，直接快进到阈值）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

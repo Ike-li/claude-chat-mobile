@@ -11,6 +11,9 @@
 // 不测什么 + 为什么：
 //  ① 审批的批准/拒绝流程本身 —— 属 approval-store 的 S1 测点，已在 tests/invariants/approval-store.test.mjs。
 //  ② canUseTool 回调真的不再被兑现 —— 需要真 Claude 挂起一个工具调用，属 S5。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';

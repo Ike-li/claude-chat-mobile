@@ -24,6 +24,9 @@
 //     这里只钉「一个都不剩」这一档，因为只有它会塌到家目录。
 //  ② WORK_DIR env 的折叠告警 —— 纯函数契约，归 tests/unit/workdirs.test.mjs 的 foldPrimaryWorkdir。
 
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

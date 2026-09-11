@@ -14,6 +14,9 @@
 // 【隔离】workDir 走 mkdtemp；会话文件必须落在真实 ~/.claude/projects/<编码 cwd>/——
 // getProjectDir 认的是真实 HOME，无法注入。目录名由一次性 workDir 编码而来，天然不会撞到
 // 用户自己的项目；after 钩子按文件精确删，再用 rmdir 收尾（只删空目录，非空即留）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, rmdirSync, writeFileSync, existsSync } from 'node:fs';

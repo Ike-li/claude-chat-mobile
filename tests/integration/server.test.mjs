@@ -1,5 +1,8 @@
 // tests/integration/server.test.mjs —— app/server.js 集成测试（零 token、零 agent 创建）
 // 启动 server 子进程 → socket.io-client 连接 → 验证事件流与 HTTP 端点。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

@@ -127,8 +127,6 @@ const CLAIMS = [
     actual: () => constNum('app/src/files/uploads.js', 'MAX_TOTAL_BYTES') / 1048576, expect: 20 },
   { diagram: '05', shown: '默认 90 天，可配',
     actual: () => { const m = /APPROVAL_RETENTION_DAYS[\s\S]{0,120}?:\s*(\d+)/.exec(read('app/src/agent/approval-lifecycle.js')); return m ? Number(m[1]) : '默认值已改'; }, expect: 90 },
-  { diagram: '12', shown: 'check 链上的 12 道门禁',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 12 },
   { diagram: '07', shown: 'dataDir/uploads',
     actual: () => (/join\(resolveDataDir\(env\), UPLOADS_SUBDIR\)/.test(read('app/src/files/uploads.js')) ? 'dataDir/uploads' : '落点已改'), expect: 'dataDir/uploads' },
   { diagram: '02 / 03', shown: '白名单只认 sdk-ts',
@@ -146,6 +144,16 @@ const CLAIMS = [
 // 分开之后：代码侧立刻被守住（删了会红），而「图欠这一条」这个状态也不会随会话结束丢掉。
 // 补进图并重出后，把条目挪进 CLAIMS 即可。
 const PENDING_CLAIMS = [
+  {
+    // 2026-09-11 把 check-disposable-env-guard.js（执行位守卫的接线闸）接进 check 链后，
+    // 图上那句「12 道门禁」就过期了。从 CLAIMS 挪到这里而不是把 expect 改成 13：
+    // CLAIMS 的语义是「图说 X 且代码是 X」，图现在说的还是 12，改 expect 会让那条断言替图撒谎。
+    // 重出图之后把这条挪回 CLAIMS（shown 改成 'check 链上的 13 道门禁'）。
+    diagram: '12',
+    todo: '「check 链上的 12 道门禁」要改成 13（新增 check-disposable-env-guard）',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length,
+    expect: 13,
+  },
   {
     // 2026-09-09 新增 trusted_devices（已受信任设备列表的下发面）后，图上那句「共 27 种 type」
     // 就过期了。从 CLAIMS 挪到这里而不是把 expect 改成 28：CLAIMS 的语义是「图说 X 且代码是 X」，

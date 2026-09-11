@@ -20,6 +20,9 @@
 //  ② 前端胶囊怎么渲染 —— 属 S3。
 //  ③ 跨设备已读位点合并（READ-01 本体）—— 归 tests/invariants/read-state.test.mjs。
 
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';

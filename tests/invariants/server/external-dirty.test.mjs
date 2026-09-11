@@ -27,6 +27,9 @@
 //     所以这一侧在 S2 造不出干净的前置态。
 //  ② 置换后模型是否真看到了那些轮次 —— 需要真模型，归 S5。
 
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, realpathSync } from 'node:fs';

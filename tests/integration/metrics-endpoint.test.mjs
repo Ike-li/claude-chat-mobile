@@ -1,6 +1,9 @@
 // tests/integration/metrics-endpoint.test.mjs —— /metrics 端点集成测试（承接 NFR-15）
 // 验证：①鉴权保护（"不开无鉴权数据端点"）；②返回结构（指标最小集 + 状态分类）；③StateProbe 分类
 // 随连接状态变化。零 token 成本（不起真 claude turn），走"可靠集成"档。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
