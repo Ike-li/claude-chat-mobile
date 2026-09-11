@@ -140,8 +140,10 @@ npm run config:migrate      # = node scripts/config.js migrate
 **保留原有的 `AUTH_TOKEN`**。原 `.env` 不会被删除，但从此不再被读取（新文件优先）。
 
 > ⚠️ **不要用 `npm run setup --force` 来「升级」。** `--force` 是覆盖重装，会生成一个新的
-> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。已有配置时
-> setup 会拒绝并指向 `migrate`，请照它说的做。
+> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。
+> **注意这道拒绝只在非交互模式（`--yes`）下存在**：`resolveSetupPlan` 的 `env_exists` 检查排在
+> `if (!args.yes)` 早退之后，交互式 `npm run setup` 根本走不到它（`--force` 在交互模式下同样不起作用）。
+> 升级请直接用 `node scripts/config.js migrate`。
 
 桌面控制台在旧格式下会在配置窗口顶部显示一条横幅和「迁移配置」按钮，不必回到终端。
 
@@ -201,7 +203,10 @@ node scripts/setup.js \
 
 `WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
 `node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
-git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
+仓库外的 git worktree（`../repo-<分支>` 这类）必须作为独立绝对路径显式加入。**唯一例外是「托管 worktree」**：
+落在 `<已放行工作区>/.claude/worktrees/<单段目录名>` 下的那些（`EnterWorktree`、`--worktree`、agent isolation
+的默认落点）由 `resolveManagedWorktree` 派生放行，无需写进 `WORKDIRS`，其会话也会并进父仓的会话列表；
+深度固定 1、realpath 后比前缀、目录不存在即拒。跳出这个形态的仍然一律要显式加入。
 
 旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
 优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。
@@ -362,7 +367,7 @@ Web Push 链路上有三处要连 Google，**分别发生在不同设备上**，
 2. **手机持续接收**——订阅完成后走 FCM 长连接。实测确认：订阅成功后关掉手机代理，推送仍能持续收到，**不需要一直挂着代理**。若你的网络下出现推送中断，改用下面的 ntfy。
 3. **宿主机每次推送**——server 每次都要主动把通知 POST 给推送服务。**这台电脑需要能访问 Google，而且是长期的**。
 
-第 3 点最容易被忽略：它发生在电脑上，手机端看不出任何异常——订阅是成功的、铃铛已经收起，但一条推送也收不到。唯一的可见面是设置 →「服务状态」里的这行：
+第 3 点最容易被忽略：它发生在电脑上，手机端看不出任何异常——订阅是成功的、铃铛已经收起，但一条推送也收不到。可见面有两处，文案同源（`logic/service-diag.js` 的 `formatServiceNotices`）：会话抽屉顶部的「服务」小节，以及设置 →「服务状态」里的「异常告警」段：
 
 ```text
 🔔 推送最近失败于 3 分钟前（push，累计 6 次）：连不上推送服务（ENOTFOUND）
@@ -403,7 +408,8 @@ npm run hooks:uninstall
 - server 不在线时 hook 只落盘并静默退出，不阻断 CLI。
 - 配置里设 `CLI_HOOKS_BRIDGE: false` 可让 server 暂停消费，不必卸载全局配置。
 
-手机端也可在“设置 → 服务状态 → 终端会话推送”中显式安装或卸载。
+手机端也可在“设置 → 🖥 这台电脑 → 终端会话推送”中显式安装或卸载（与该页里的「📊 服务状态」按钮平级——
+桥的装卸控件**不在**服务状态面板内部）。
 
 ## 可选：macOS 桌面控制台
 
@@ -686,7 +692,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
-| 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |
+| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 401） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**这一档回的是 401 `unauthorized`、不带 `Retry-After`**（措辞刻意不说「尝试过多」——你只错了一次）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` / HTTP 429 |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |

@@ -136,9 +136,10 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 ```bash
 npm run service:install -- server      # node app/server.js，RunAtLoad + KeepAlive
-npm run service:install -- tunnel      # cloudflared tunnel run（读 §1 的 config.yml）
+# tunnel 与 menubar 必须带参数，光敲下面这两条会被 precheck 拒绝：
+npm run service:install -- tunnel --tunnel=<隧道名> --cloudflared=<绝对路径>
 npm run service:install -- logrotate   # 每天 03:47 轮转日志
-npm run service:install -- menubar     # 桌面控制台随登录自启
+npm run service:install -- menubar --app=<CCM.app 绝对路径>   # 桌面控制台随登录自启
 npm run service:status
 ```
 
@@ -197,7 +198,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ```
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名与会话标题**（`formatNotifyIdentity` 的「事件 · 项目 · 会话」三段，会话标题取自抽屉里的 SDK summary / AI 生成标题，上限 40 字），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
@@ -235,7 +236,7 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | 现象 | 处理 |
 |---|---|
 | 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
-| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
+| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
@@ -364,7 +365,8 @@ CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限�
 后两行需要展开：
 
 **设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）第一行是
-`if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
+`if (accessEnabled && deviceApprovalScope !== 'all') return true`——**缺省**下 Access 与设备审批是替代关系而非叠加
+（声明 `DEVICE_APPROVAL_SCOPE=all` 可让两者叠加）。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
 **限速桶默认会合并，拆桶要显式声明。** `shouldTrustCfConnectingIp` 要求 `publicHost` 为真，而该条件在
@@ -407,7 +409,7 @@ IPv4 不受影响，仍按整地址分桶。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`app/src/ops/notify-channels.js` 的 `publicUrl`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
-- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/server/http.js` 的 `reachableIPv4s`）
+- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/shared/net-addr.js` 的 `reachableIPv4s`）
   按**地址段**判定、不看接口名，所以 macOS 上 WireGuard / Tailscale 的 `utun*` 地址会和局域网地址
   一起列出。TUN 代理占用的 RFC 2544 假段（198.18/15）与 link-local 仍被排除。
   隧道地址没出现，说明隧道本身没起来，不是日志不显示它。

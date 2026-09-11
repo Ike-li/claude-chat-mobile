@@ -65,7 +65,7 @@
 - **既有编号**（`SEC-0N` / `FILES-N` / `REL-0N` / `SRV-00N` / `OPS-N`）：**生产代码注释里先有的**，指同一批红线里更具体的一条。
   不变量编号「吸收」它们而非取代——`app/src/**` 里那些注释仍按旧号写，改掉就对不上了。位数不齐（`FILES-1` vs `AUTH-01`）是这个来源差异的产物，不是笔误。
 
-另有 `BE-0NN`（bug-hunting review 的发现编号，16 处活在 `app/src/**` 注释里）与 `P0-NN`（E2E 用例编号，全部 e2e 都是 P0 级，所以 `e2e/` 下不再分优先级子目录）——多数是历史留痕。
+另有 `BE-0NN`（bug-hunting review 的发现编号，54 处活在 `app/src/**` 的 15 个文件里，去重后 12 个编号）与 `P0-NN`（E2E 用例编号，全部 e2e 都是 P0 级，所以 `e2e/` 下不再分优先级子目录）——多数是历史留痕。
 其中一条已升格成被测试守护的红线，因此单独登记：
 
 | ID | 红线 |
@@ -80,7 +80,7 @@
 | `AUTH-02` | `ownsHost(host)` 为真时，验签失败**不得**回退 `AUTH_TOKEN` |
 | `AUTH-03` | 限速只打鉴权口；成功认证后的业务 500 不计入失败。本机来源的锁定**不得**文案成「有人在暴力尝试」 |
 | `AUTH-04` | 只在声明的可信拓扑下采信边缘注入头：公网 Host + loopback peer → `CF-Connecting-IP`；`TRUSTED_PROXY=loopback` + loopback peer → `X-Forwarded-For` **末跳**。LAN/直连、未声明、开关值写错，一律不采信（失败方向 = 合桶，不是拆桶）。限速桶与待审设备卡片上的来源 IP 取同一份判据（`clientSourceAddress`），不允许各算一份 |
-| `DEVICE-01` | bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机 |
+| `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面还有一道早退**：CF Access 已启用且 `DEVICE_APPROVAL_SCOPE !== 'all'` 时直接 bypass，根本不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
 | `SEC-01` | 未审批 socket 不加入 approved 房间，收不到任何会话内容广播 |

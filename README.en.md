@@ -35,7 +35,7 @@ Claude Chat Mobile is built for the people the official path **rejects, or whose
 
 1. **Official Remote Control refuses your configuration.** It requires a claude.ai subscription login talking directly to `api.anthropic.com`: API keys, third-party gateways / `ANTHROPIC_BASE_URL`, Bedrock / Vertex / Foundry, the enterprise Claude apps gateway, telemetry opt-outs such as `DISABLE_TELEMETRY`, and ZDR compliance policies all disable the feature entirely. CCM makes **zero assumptions about, and zero contact with, your model path**: however your `claude` CLI is configured, that is what runs.
 2. **You need the control plane to stay in your own hands.** While official Remote Control is connected, the session transcript (messages, replies, tool activity) is stored on Anthropic's servers for cross-device sync. CCM's control plane — the service, transcripts, device trust, push, audit — lives entirely on your own machine; you pick the ingress, and on a LAN it runs fully closed-loop.
-3. **You want the whole machine at a glance.** The official path enables remote access per session; CCM turns **every** Claude session that ever happened on this machine — started in a terminal, last week's, the one you forgot to flag — into a visible, resumable console, plus the machine-operations surface: file browsing, git changes, service health.
+3. **You want it all at a glance.** The official path enables remote access per session; CCM turns **every** Claude session that ever happened in the workspaces you listed in `WORKDIRS` — started in a terminal, last week's, the one you forgot to flag — into a visible, resumable console, plus the machine-operations surface: file browsing, git changes, service health. (Workspaces are explicitly allowlisted — see "Security boundaries" item 3 below.)
 
 The goal is not to rebuild an AI chat product, but:
 
@@ -50,7 +50,7 @@ If you already use Claude Code and any of these apply, Claude Chat Mobile is pro
 * your `claude` CLI runs through a third-party gateway / an API key, or with telemetry disabled — configurations official Remote Control refuses outright;
 * you cannot accept remote-session transcripts being stored on Anthropic's servers and need a fully self-hosted control plane;
 * you do not want to sit at the desk while Claude runs a long task — answer `AskUserQuestion`, approve tool calls, and get "needs you" notifications from your phone;
-* you want a whole-machine session overview: sessions started in a terminal, sessions sitting in history — all visible, all resumable;
+* you want an overview of every session across your allowlisted workspaces: sessions started in a terminal, sessions sitting in history — all visible, all resumable;
 * you want to keep using the projects, Claude CLI configuration, and development environment on your original machine;
 * you want to own the service and the data rather than move a whole development environment into someone else's SaaS.
 

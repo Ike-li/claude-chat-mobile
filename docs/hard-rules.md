@@ -124,7 +124,7 @@
 
 ### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
-装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`eslint.config.js` 与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ 文档 + `desktop/`。
+装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`AGENTS.md`、`.gitattributes`、`.dockerignore`、`eslint.config.js`、**`docs/testing.md`**（它通篇引用已被裁掉的 `tests/` 路径与 `mutate:docker`、`test:invariants:*`，留在分发树里全是死引用）与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ `docs/` 下**除 `testing.md` 外**的文档 + `desktop/`。
 
 - **为什么门禁住在 `tests/` 下**：此前它们散在 `scripts/`，「哪些是门禁」这份名单要在 `.gitattributes`（17 行）、`tests/unit/dist-manifest.test.mjs` 的正则、`repo-inventory.js` 的规则表**三处各存一份**——加一个门禁脚本要改三个地方，漏了任何一处都没有机制会发现。收进目录后三者全部退化成目录前缀，不需要维护。
 - **两个不能移的例外**：`scripts/doc-consistency.js` 与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 是被裁掉的——移进去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`。已由 `dist-manifest.test.mjs` 单列断言保护。
@@ -139,7 +139,7 @@
 
 ### 4.2 测试跑在哪（白名单，非黑名单）
 
-**宿主机只允许**这 10 条（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）：`lint` · `lint:fix` · `check` · `test:unit` · `test:invariants` · `test:e2e` · `test:visual` · `test:playwright` · `test:e2e:parallel` · `app:test`。末四条：`test:visual` / `test:playwright` 是 `test:e2e` 的同源别名，`test:e2e:parallel` 是它的分片编排（每个分片就是一条 `npm run test:e2e --`），`app:test` 是 `check` 自身的一环。
+**宿主机只允许**这 11 条（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）：`lint` · `lint:fix` · `check` · `test:unit` · `test:invariants` · `test:coverage` · `test:e2e` · `test:visual` · `test:playwright` · `test:e2e:parallel` · `app:test`。末五条：`test:coverage` 与 `test:unit` 逐字同档（同一份 preload-env、同一批 `tests/unit/*.test.mjs`，只多一个 `--experimental-test-coverage`），`test:visual` / `test:playwright` 是 `test:e2e` 的同源别名，`test:e2e:parallel` 是它的分片编排（每个分片就是一条 `npm run test:e2e --`），`app:test` 是 `check` 自身的一环。
 
 > ⚠ **`test:invariants` 的两个兄弟不在名单上**，别照后缀类推：`test:invariants:server` 起真 `app/server.js` 子进程；`test:invariants:env` 跑卸载器，隔离依赖被测代码认注入的 `home`/`root`/`appPath`，回落即打在真实家目录上。两条都进容器（`test:docker` 已含）。
 
@@ -186,7 +186,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
 | 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
-| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/invariants/config-file.test.mjs` 有断言锁住 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**没有任何测试或门禁锁住这一条**——`config-file.test.mjs` 守的是 CONFIG-01/02（源选择与可表达性），全仓无 `git check-ignore` 类断言。删掉那三行 `.gitignore` 不会让任何东西变红 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 | 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
 | CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |

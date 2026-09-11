@@ -214,7 +214,12 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 `WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
 decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
-A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
+A git worktree outside the repository (`../repo-<branch>` and friends) must be listed as its own absolute path.
+**The one exception is a "managed worktree"**: anything under `<allowlisted workspace>/.claude/worktrees/<single-segment name>`
+(the default landing spot for `EnterWorktree`, `--worktree`, and agent isolation) is authorized by derivation via
+`resolveManagedWorktree` without being listed in `WORKDIRS`, and its sessions are folded into the parent repo's session
+list. Depth is fixed at 1, the prefix is compared after `realpath`, and a non-existent directory is rejected.
+Anything outside that shape still has to be listed explicitly.
 
 The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
@@ -375,7 +380,8 @@ npm run hooks:uninstall
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
 
-The phone UI can also install or remove the bridge explicitly under Settings → Service status → Terminal session notifications.
+The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
+notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
 
 ## Optional: macOS desktop console
 
@@ -685,7 +691,7 @@ site data and the installed PWA must be cleared manually.
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
-| After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |
+| After one wrong token, the correct one is rejected too (HTTP 401) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **This tier answers 401 `unauthorized` with no `Retry-After`** — the wording deliberately avoids "too many attempts" when you only got it wrong once. **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` / HTTP 429 |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |

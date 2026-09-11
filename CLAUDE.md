@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 几条最容易改错的，摆在这里：
 
-- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。其中「后台任务完成」**只算真后台任务**——CLI 把跑得久的前台 Bash 也建模成 task 走同一条 `task_notification`，靠 `task_started` 的 `is_backgrounded` 过滤掉（**别把这道过滤当多余删掉**，删了每条跑几秒的命令都会推到锁屏手机上）。
+- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 与网关静默告警（`system` 信封里的 `gateway_stall` notice）在「approved 房间有前台可见连接」时才抑制——两者共用 `notifyHasClientsAtSend` 那条判据；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。其中「后台任务完成」**只算真后台任务**——CLI 把跑得久的前台 Bash 也建模成 task 走同一条 `task_notification`，靠 `task_started` 的 `is_backgrounded` 过滤掉（**别把这道过滤当多余删掉**，删了每条跑几秒的命令都会推到锁屏手机上）。
 - **服务告警与「需要你(N)」是不同轴，绝不混判**：顶栏 chip / 角标只表达「点一下就能处理」的待办，服务告警只活在抽屉「服务」小节与服务状态面板。
 - **限速锁定的措辞按来源分档**：本机来源**绝不说成「有人在暴力尝试」**。
 - **不开无鉴权的 HTTP 数据端点**：`/health`、`/metrics`、历史回显都过鉴权。
@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `ops/` | 配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务 |
 | `shared/` | 叶子工具层；`protocol.js` 是事件契约真相源 |
 
-**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**两个门禁不能移进 `tests/`**：`scripts/doc-consistency.js`（check 链第 4 环）与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 整棵被 `export-ignore` 裁掉——移过去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`（判据见 hard-rules §4.1.1，由 `dist-manifest.test.mjs` 单列断言保护）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
 
 `unit/` 与 `invariants/` **执行槽相同**（纯函数 + 一次性目录真磁盘，CI 同 job），分的是组织轴：前者按被测模块，后者按不变量（文件头声明守护哪条 `XXX-NN`、不测什么）。目录职责、执行槽 S0–S7、以及那两套并存的编号（新的 `AUTH-01` 类 与生产代码注释里先有的 `FILES-1`/`SEC-01`/`SRV-003` 类）都在 [tests/README.md](tests/README.md)——**看到 `// 守护：SRV-003` 不知道是什么就去查那份**，别照着编号猜。
 
@@ -90,7 +90,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
 （钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`app:test`，
-外加与 `test:unit` 同档的 `test:invariants`、与 `test:e2e` 同源的 `test:e2e:parallel`，
+外加与 `test:unit` 同档的 `test:invariants` 与 `test:coverage`、与 `test:e2e` 同源的 `test:e2e:parallel`，
 见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
@@ -169,13 +169,17 @@ npm run test:integration # 仅集成测试（起真 server，需本机 claude CL
                          # tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
 RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）：
                                    # claude-lifecycle / session-switch / websocket-events / aborted-state /
-                                   # message-idempotency / approval-integrity 整份 + file-upload 一个 describe
+                                   # message-idempotency / approval-integrity / rewind 整份 + file-upload 一个 describe
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
 npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自适应，CCM_E2E_SHARDS=N 可覆盖）。
                    # 每个分片就是一条 `npm run test:e2e --`，安全面同源。
-                   # 实测 10 核：串行 8.2 分钟 → 4 分片 2.8 分钟；加到 8 片一秒都不快
-                   # （Playwright 按文件分片、不拆单个 spec，最大的那个文件就要 2.8 分钟）
+                   # 分片按【实测时长】LPT 分配，不是 Playwright 原生 --shard 的按条数均分
+                   # （原生 4 片 167s / 8 片 170s「一秒不差」是改造前的旧结论，已被 7e3b78e 推翻）。
+                   # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
+                   # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
+                   # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
+                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）

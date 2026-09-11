@@ -158,7 +158,7 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 
 假 CLI 有两档（`tests/fixtures/fake-claude.sh`）：不设 `CCM_FAKE_CLAUDE_MODE` 时吞 stdin、不产出任何输出；
 设了才走可驱动的 Node 实现（应答 initialize、吐 `system/init`，`turn` 档还吐 `result` 让回合收尾）。
-**默认行为是显式 opt-in 保护的**——8 个 S2 文件与 21 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
+**默认行为是显式 opt-in 保护的**——9 个 S2 文件与 24 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
 （S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
 
 ---
@@ -430,7 +430,7 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 3. 未持令牌进不了 `/metrics` 与 socket 业务事件。
 4. 新设备待审、批准后可操作、吊销后已连连接失权——S2 即可。
 5. `npm run test:smoke` 的四条故事：core、reconnect、upload、entrypoint。
-   动了单驾驶员再加 handoff，动了审批再加 permission。
+   动了审批再加 `permission-modes`。（场景键名以 `tests/smoke/runner.js` 的 `SCENARIOS` 为准。）
 6. 文件越界仍拒绝（S1/S2，不烧 token）。
 7. 分发树（GitHub `master` 归档）能 `npm ci --omit=dev` 安装并启动；卸载后 `~/.claude/projects` **还在**（两侧断言，`DIST-01`）。
 
