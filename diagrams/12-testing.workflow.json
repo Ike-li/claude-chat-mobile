@@ -103,7 +103,7 @@
       "col": 2,
       "type": "backend",
       "label": "npm run check",
-      "sublabel": "12 道零 token 门禁",
+      "sublabel": "13 道零 token 门禁",
       "width": 112
     },
     {
@@ -216,11 +216,11 @@
     },
     {
       "dot": "cyan",
-      "title": "check 链上的 12 道门禁",
+      "title": "check 链上的 13 道门禁",
       "items": [
-        "ESLint · 模块边界 · 双向事件契约 · 文档一致性",
-        "架构图漂移 · n=1 登记簿 · i18n 孤儿 key · 破坏性删除",
-        "不变量编号 · Playwright 禁止模式 · desktop typecheck · 未分类文件"
+        "ESLint · 模块边界 · 双向事件契约 · 文档一致性 · 架构图漂移",
+        "n=1 登记簿 · i18n 孤儿 key · 破坏性删除 · 不变量编号",
+        "一次性环境守卫 · Playwright 禁止模式 · desktop typecheck · 未分类文件"
       ]
     },
     {

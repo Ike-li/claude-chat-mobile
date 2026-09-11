@@ -8,7 +8,7 @@
     "repository": {
       "url": "https://github.com/Ike-li/claude-chat-mobile",
       "provider": "github",
-      "revision": "dbc41c115574be1d348dec59fc0926882d38737f"
+      "revision": "7d4aa874944374770b5207598cd2a1c4253011fd"
     },
     "views": [
       {
@@ -304,7 +304,7 @@
       "items": [
         "canonicalize.js 是「前后端互不 import」的唯一豁免",
         "i18n key 就是中文原文，改文案即改 key",
-        "handle 表 + outOfBand 表的键并集必须精确等于 27 种事件类型"
+        "handle 表 + outOfBand 表的键并集必须精确等于 31 种事件类型"
       ]
     }
   ]

@@ -232,7 +232,7 @@
       "title": "事件契约是硬闸",
       "items": [
         "后端发送方与 mock server 双向校验 type 闭合集",
-        "前端 handle + outOfBand 键并集须精确等于 27 种",
+        "前端 handle + outOfBand 键并集须精确等于 31 种",
         "少一个＝静默丢弃，多一个＝死键"
       ]
     }

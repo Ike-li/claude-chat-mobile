@@ -8,7 +8,7 @@
     "repository": {
       "url": "https://github.com/Ike-li/claude-chat-mobile",
       "provider": "github",
-      "revision": "dbc41c115574be1d348dec59fc0926882d38737f"
+      "revision": "7d4aa874944374770b5207598cd2a1c4253011fd"
     },
     "views": [
       {
@@ -125,7 +125,7 @@
       "sublabel": "可选公网入口 + Access",
       "pos": [
         60,
-        300
+        110
       ],
       "size": [
         160,
@@ -264,8 +264,8 @@
       "id": "phone-edge",
       "from": "phone",
       "to": "edge",
-      "label": "agent:event / user:*（可直连）",
-      "variant": "emphasis",
+      "label": "公网时经隧道",
+      "variant": "dashed",
       "fromSide": "top",
       "toSide": "bottom"
     },
@@ -274,7 +274,7 @@
       "from": "edge",
       "to": "server",
       "label": "Socket.io 长连接",
-      "variant": "emphasis"
+      "variant": "dashed"
     },
     {
       "id": "server-agent",
@@ -329,6 +329,13 @@
       "variant": "dashed",
       "fromSide": "right",
       "toSide": "left"
+    },
+    {
+      "id": "phone-server",
+      "from": "phone",
+      "to": "server",
+      "label": "同 WiFi 直连",
+      "variant": "emphasis"
     }
   ],
   "cards": [
@@ -338,7 +345,7 @@
       "items": [
         "手机事件按 instanceId 路由到对应 AgentSession",
         "SDK streaming input 驱动本机 CLI，在授权 cwd 工作",
-        "出向统一封装成 agent:event 信封，共 27 种 type"
+        "出向统一封装成 agent:event 信封，共 31 种 type"
       ]
     },
     {

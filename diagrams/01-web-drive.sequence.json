@@ -181,7 +181,7 @@
       "from": "sdk",
       "to": "agent",
       "y": 440,
-      "label": "产品事件进环 seq++（契约 27 种）",
+      "label": "产品事件进环 seq++（契约 31 种）",
       "variant": "return"
     },
     {

@@ -150,7 +150,11 @@
       "from": "phone",
       "to": "scope",
       "label": "browse:* / files:* / git:*",
-      "labelDy": 40
+      "labelDy": 40,
+      "labelAt": [
+        207,
+        222
+      ]
     },
     {
       "id": "f3",

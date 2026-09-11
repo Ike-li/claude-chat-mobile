@@ -5217,15 +5217,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="214" y="132" class="t-muted" font-size="8" text-anchor="middle">不按重要性</text>
         </g>
 
-        <g id="node-always" data-node-id="always" data-node-label="无条件推" tabindex="0" role="button" aria-label="聚焦无条件推，审批·提问·后台完成, 推送判定链 › 分档" aria-pressed="false" data-node-kind="backend" data-node-sublabel="审批·提问·后台完成" data-node-tag="有人在等" data-node-context="推送判定链 › 分档">
-          <title>无条件推 · 审批·提问·后台完成 · 推送判定链 › 分档 · 有人在等</title>
+        <g id="node-always" data-node-id="always" data-node-label="无条件推" tabindex="0" role="button" aria-label="聚焦无条件推，审批·提问·真后台完成, 推送判定链 › 分档" aria-pressed="false" data-node-kind="backend" data-node-sublabel="审批·提问·真后台完成" data-node-tag="有人在等" data-node-context="推送判定链 › 分档">
+          <title>无条件推 · 审批·提问·真后台完成 · 推送判定链 › 分档 · 有人在等</title>
           <rect x="316.4" y="86" width="92" height="68" rx="6" class="c-mask"/>
           <rect x="316.4" y="86" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(322.4 92) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="362.4" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">无条件推</text>
-          <text data-detail="context" x="362.4" y="124" class="t-muted" font-size="7.7" text-anchor="middle">审批·提问·后台完成</text>
+          <text data-detail="context" x="362.4" y="124" class="t-muted" font-size="7" text-anchor="middle">审批·提问·真后台完成</text>
         <text data-detail="fine" x="362.4" y="142" class="t-backend" font-size="7" text-anchor="middle">有人在等</text>
         </g>
 
@@ -5274,7 +5274,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="362.4" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">回合完成 result</text>
-          <text data-detail="context" x="362.4" y="258" class="t-muted" font-size="8" text-anchor="middle">按前台抑制（含 stall）</text>
+          <text data-detail="context" x="362.4" y="258" class="t-muted" font-size="7.8" text-anchor="middle">按前台抑制（含 stall）</text>
         </g>
 
         <g id="node-presence" data-node-id="presence" data-node-label="client:presence" tabindex="0" role="button" aria-label="聚焦client:presence，客户端主动上报, 前台可见性判定 › 正文与节流" aria-pressed="false" data-node-kind="security" data-node-sublabel="客户端主动上报" data-node-context="前台可见性判定 › 正文与节流">
@@ -5555,9 +5555,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>判据是可见性，不是重要性</h3>
         </div>
         <ul>
-          <li>&bull; 审批、提问、后台任务完成一律无条件推</li>
-          <li>&bull; 这三类都意味着有人在等一个动作，而用户可能锁屏或在别的 app</li>
-          <li>&bull; result 与网关静默告警按前台抑制；审批/提问/后台完成无条件推</li>
+          <li>&bull; 审批、提问、后台任务完成无条件推——都意味着有人在等一个动作</li>
+          <li>&bull; 但「后台完成」只算真后台：跑得久的前台 Bash 靠 is_backgrounded 滤掉</li>
+          <li>&bull; 只有回合完成的 result 与网关静默告警按前台可见性抑制</li>
         </ul>
       </div>
 
@@ -5579,10 +5579,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>正文默认最小化</h3>
         </div>
         <ul>
-          <li>&bull; 审批通知只保留工具名，不含 input 命令与参数正文</li>
-          <li>&bull; 提问通知不含问题正文，用固定引导文案</li>
-          <li>&bull; 开启预览后 web-push 改发 previewBody（ntfy 始终最小化）</li>
-          <li>&bull; 新设备通知不含设备 ID 与 IP，并按 5 分钟节流</li>
+          <li>&bull; 审批只保留工具名，不含 input 命令与参数正文</li>
+          <li>&bull; 提问不含问题正文，用固定引导文案</li>
+          <li>&bull; 开预览后仅 web-push 改发 previewBody；ntfy 恒最小化</li>
+          <li>&bull; 新设备通知不含 ID 与 IP，按 5 分钟节流</li>
         </ul>
       </div>
     </div>
