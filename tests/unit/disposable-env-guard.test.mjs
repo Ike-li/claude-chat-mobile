@@ -12,7 +12,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveExecutionSlot, BYPASS_VAR } from '../setup/disposable-env.mjs';
+import { existsSync } from 'node:fs';
+import { resolveExecutionSlot, formatRefusal, formatBypassWarning, BYPASS_VAR } from '../setup/disposable-env.mjs';
 
 const GUARD = fileURLToPath(new URL('../setup/require-disposable-env.mjs', import.meta.url));
 
@@ -76,24 +77,51 @@ test.describe('判据表：哪些执行位算一次性环境', () => {
   });
 });
 
-test.describe('入口的真实行为：import 它就会拦', () => {
-  test('开发机上 import 守卫 → 进程以 1 退出，且说清改跑什么', () => {
+test.describe('入口的真实行为：import 它就会按判据行事', () => {
+  // 【为什么这两条要自适应，而不是写死「必须 exit 1」】/.dockerenv 是文件系统状态，runGuard
+  // 注入不掉。写死「开发机」假设的话，同一条用例在 npm run test:docker 里必红——而容器里
+  // 跑单测是常规路径（test:docker 第一档就是 test:unit）。所以断言的是【入口的行为与判据一致】：
+  // 开发机上验拒绝路径，容器/CI 上验放行路径，两边都在验真实的 spawn 行为，没有一边是 skip。
+  // 判据表本身的全部组合由上面那个 describe 覆盖，与执行位无关。
+  const hereHasDockerEnv = existsSync('/.dockerenv');
+
+  test('退出码与判据一致；拒绝时必须说清改跑什么，放行时必须安静', () => {
+    const expected = resolveExecutionSlot({ env: {}, hasDockerEnv: hereHasDockerEnv });
     const r = runGuard({});
-    assert.equal(r.status, 1, `必须非 0 退出，否则 npm/CI 认不出失败：${r.stderr}`);
-    assert.match(r.stderr, /只能在一次性环境里跑/);
-    assert.match(r.stderr, /test:docker/, '拒绝信息必须给出可直接照抄的替代命令');
+    assert.equal(r.status, expected.ok ? 0 : 1,
+      `执行位判为 ${expected.slot}，入口却以 ${r.status} 退出：${r.stderr}`);
+    if (expected.ok) {
+      assert.equal(r.stderr, '', '合法执行位不该有噪音输出');
+    } else {
+      assert.match(r.stderr, /只能在一次性环境里跑/);
+      assert.match(r.stderr, /test:docker/, '拒绝信息必须给出可直接照抄的替代命令');
+    }
   });
 
-  test('GitHub Actions 环境下 import 守卫 → 放行且静默（CI 不会被这道守卫打红）', () => {
+  test('GitHub Actions 环境下放行且静默（CI 不会被这道守卫打红）', () => {
     const r = runGuard({ GITHUB_ACTIONS: 'true' });
     assert.equal(r.status, 0, `CI 是合法执行位，必须放行：${r.stderr}`);
-    assert.equal(r.stderr, '', 'CI 上不该有噪音输出');
+    assert.equal(r.stderr, '');
   });
 
-  test('走后门 → 放行，但 stderr 必须留下警告（后门不能安静）', () => {
-    const r = runGuard({ [BYPASS_VAR]: '1' });
-    assert.equal(r.status, 0);
-    assert.match(r.stderr, new RegExp(BYPASS_VAR), '放行也要指名是哪个后门开的');
-    assert.match(r.stderr, /开发机/);
+  test('走后门 → 放行', () => {
+    assert.equal(runGuard({ [BYPASS_VAR]: '1' }).status, 0);
+  });
+});
+
+// 文案是拒绝路径上唯一给人看的东西，但它在容器里 spawn 不出来（那边恒放行）。
+// 拆成纯函数断言，任何执行位都验得到 —— 否则 test:docker 那一轮等于没测文案。
+test.describe('文案', () => {
+  test('拒绝信息点名了替代命令与后门变量', () => {
+    const t = formatRefusal('x.test.mjs');
+    assert.match(t, /x\.test\.mjs/, '必须点名是谁被拦了');
+    assert.match(t, /test:docker/);
+    assert.match(t, new RegExp(BYPASS_VAR));
+  });
+
+  test('后门警告点名是哪个变量开的，且说明真实家目录可写', () => {
+    const t = formatBypassWarning('x.test.mjs');
+    assert.match(t, new RegExp(BYPASS_VAR));
+    assert.match(t, /开发机/);
   });
 });

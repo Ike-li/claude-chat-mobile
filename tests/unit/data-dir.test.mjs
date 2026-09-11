@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const HERE = import.meta.dirname;
@@ -15,6 +15,26 @@ const REAL_DATA = join(HERE, '..', '..', 'data');     // 生产真实 data/，�
 const TEST_TOKEN = 'ccm-datadir-test-token-ZZZ-勿入生产';  // 生产 data/ 里绝不会有的哨兵 token
 
 let TMP, D, S;
+
+// ★ preload-env 在【进程启动时】设的数据根。必须在模块顶层捕获——下面 describe 的 before
+// 会把 process.env.CCM_DATA_DIR 改成它自己的临时目录。
+const PRELOAD_DATA_DIR = process.env.CCM_DATA_DIR;
+const REPO_ROOT = join(HERE, '..', '..');
+
+// 为什么单列一条，而不是并进下面那个 describe：
+// 下面守的是【被测代码的行为】——设了 CCM_DATA_DIR，状态文件就落在那儿。
+// 这一条守的是【测试基建的行为】——有没有替所有单测把它设上。
+// 两者的失效方式不同且互不遮蔽：代码完全正确、而 preload-env 少了那一行时，
+// 下面整个 describe 照常全绿，与此同时每个单测都在写真实 data/。
+test('preload-env 把数据根收进一次性目录（缺了它，所有单测默认写真实 data/）', () => {
+  assert.ok(PRELOAD_DATA_DIR,
+    'preload-env 必须设 CCM_DATA_DIR：不设则 resolveDataDir() 回落到仓库根的真实 data/，'
+    + '而文件级 CCM_*_FILE 白名单只点名了 6 个文件，其余（sessions/init-cache/push-subscription/'
+    + 'cf-access-certs/service-*/uploads/worktree-settings）全裸');
+  assert.ok(!resolve(PRELOAD_DATA_DIR).startsWith(resolve(REPO_ROOT)),
+    `数据根落在仓库内，等于没隔离：${PRELOAD_DATA_DIR}`);
+});
+
 
 test.describe('CCM_DATA_DIR 状态隔离', () => {
   test.before(async () => {
