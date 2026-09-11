@@ -784,7 +784,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       prefAlertForeground: $('prefAlertFgComplete'),
       btnAlertPreview: $('btnAlertPreview'),
       prefPushPreview: $('prefPushPreview'),
-      prefLang: $('prefLang'),
+      prefLangGroup: $('prefLangGroup'),
       btnPush,
       taskProgressBanner,
       taskProgressText,

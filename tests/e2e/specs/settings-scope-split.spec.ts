@@ -28,7 +28,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 
     // 三节内容齐全：本机 / 主机 / 访问帮助
-    await expect(page.locator('#generalSheetBody #prefLang')).toHaveCount(1);
+    await expect(page.locator('#generalSheetBody #prefLangGroup')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #prefAlertSound')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #hooksBridgeSection')).toHaveCount(1);
@@ -59,7 +59,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#settingsSheetBody #settingsSessionRow')).toHaveCount(1);
 
     // 本机级 / 主机级已不在会话面板内
-    await expect(page.locator('#settingsSheetBody #prefLang')).toHaveCount(0);
+    await expect(page.locator('#settingsSheetBody #prefLangGroup')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #prefAlertSound')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #hooksBridgeSection')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #btnServiceStatus')).toHaveCount(0);

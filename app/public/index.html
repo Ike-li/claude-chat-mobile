@@ -965,17 +965,25 @@
             <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
           </div>
           <div class="space-y-2">
-            <!-- appearance-none + 自绘 ▾：系统原生下拉箭头 iOS 与 Android 各画各的，跟页面设计语言无关。
-                 箭头 aria-hidden 且 pointer-events-none，点击照样落在 select 上（不拦触摸）。 -->
-            <div class="relative">
-              <select id="prefLang" class="w-full appearance-none p-2.5 pr-9 rounded-xl border border-line bg-surface text-xs text-ink">
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-                <option value="auto">跟随浏览器 / Auto-detect</option>
-              </select>
-              <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-soft" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-              </svg>
+            <!-- 三个自绘按钮，不是原生 <select>：这张 sheet 是 position:fixed + transform 的容器
+                 （2026-09-11 Playwright 实测 #generalSheet 的 computed transform 恒为
+                 matrix(1,0,0,1,0,0)——Tailwind 的 transform 类即便位移为 0 也不产出 none），
+                 而手机 Safari 在这种祖先里算原生下拉弹层的坐标会算错：真机上菜单飘到了页面
+                 左上角、离控件几百 px（2026-09-11 用户截图）。全 app 其余下拉（模型 / 权限 /
+                 思考强度）早就是自绘按钮组，这里是最后一个裸露的原生 select。
+                 文案写死在 HTML 而非 JS 生成：applyI18nToDocument 只在启动时扫一遍静态 DOM，
+                 动态插入的节点拿不到翻译。三项都用自称语（auto 那项中英并排），因为这是
+                 「看不懂当前界面语言时唯一还得能用」的控件。 -->
+            <div id="prefLangGroup" role="radiogroup" aria-label="语言 / Language" class="space-y-1.5">
+              <button type="button" role="radio" aria-checked="false" data-lang="zh" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>中文</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-lang="en" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>English</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-lang="auto" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>跟随浏览器 / Auto-detect</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
             </div>
             <div class="text-[11px] text-ink-faint px-1">切换后请刷新页面生效。</div>
           </div>
