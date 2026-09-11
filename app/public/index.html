@@ -647,19 +647,19 @@
       <div class="space-y-4 text-sm leading-relaxed">
         <div>
           <div class="font-semibold text-ink mb-1">📱 在手机上连接</div>
-          <div class="text-ink-soft">打开 <code class="bg-sunk px-1 rounded text-xs break-all">https://你的域名/#token=令牌</code>。令牌进入后存在本机浏览器，之后免带；装到主屏当 App 用更顺手。</div>
+          <div class="text-ink-soft">已经有一台手机能用了？在那台上打开设置 →「接入与设备」→「📷 显示接入二维码」，新手机扫一下就进来了，不用手输令牌。否则打开 <code class="bg-sunk px-1 rounded text-xs break-all">https://你的域名/#token=令牌</code>。令牌进入后存在本机浏览器，之后免带；装到主屏当 App 用更顺手。</div>
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🔑 访问令牌在哪</div>
-          <div class="text-ink-soft">在服务器 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code>，或服务启动日志里的入口 URL。<strong class="text-ink">清除浏览器数据会一并清掉它</strong>，届时重输一次即可。</div>
+          <div class="text-ink-soft">在电脑上的 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 里找 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code> 这一项（旧版装的是 <code class="bg-sunk px-1 rounded text-xs">.env</code>），或者跑 <code class="bg-sunk px-1 rounded text-xs break-all">node scripts/qr.js</code> 打一张二维码直接扫。启动日志只有第一次打印完整 URL，之后为防泄露只显示掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。</div>
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🆕 新设备怎么获批</div>
-          <div class="text-ink-soft">走公网域名（隧道）通常<strong class="text-ink">无需审批</strong>，贴上令牌即用。仅当你<strong class="text-ink">直连局域网 IP</strong>时才需审批：你已登录的设备会弹「新设备请求接入」，点「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。兜底命令：<code class="bg-sunk px-1 rounded text-xs break-all">node scripts/device.js approve "&lt;ID&gt;"</code>。</div>
+          <div class="text-ink-soft">除了本机直连、以及已开 Cloudflare Access 的域名，其余路径（局域网 IP、Tailscale、没配 Access 的隧道域名）新设备都要批一次。你已登录的设备上会弹「新设备请求接入」，点「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。兜底命令：<code class="bg-sunk px-1 rounded text-xs break-all">node scripts/device.js approve "&lt;ID&gt;"</code>。</div>
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🔄 连不上怎么办</div>
-          <div class="text-ink-soft">多半是令牌被清——重输即可。切后台/息屏断开会在回到前台时自动重连，无需手动刷新。</div>
+          <div class="text-ink-soft">多半是令牌被清——重输即可。若提示设备未获批，按上一条批一次。切后台/息屏断开会在回到前台时自动重连，无需手动刷新。</div>
         </div>
       </div>
     </div>
