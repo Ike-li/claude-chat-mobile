@@ -7,7 +7,7 @@
 // 【不测什么】main() 的目录扫描与退出码由 check 链每次跑真实文件覆盖；这里只测判据函数。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSource, GUARDED_DIRS } from '../gates/check-disposable-env-guard.js';
+import { checkSource, checkEntrypointSource, GUARDED_DIRS, GUARDED_ENTRYPOINTS } from '../gates/check-disposable-env-guard.js';
 
 const GUARD_1 = "import '../setup/require-disposable-env.mjs';";
 const GUARD_2 = "import '../../setup/require-disposable-env.mjs';";
@@ -79,4 +79,38 @@ test('管辖目录表非空，且每条都写了为什么必须进容器', () =>
   for (const [dir, why] of GUARDED_DIRS) {
     assert.ok(why && why.length > 10, `${dir} 的理由太短，看的人无法据此判断新目录该不该进表`);
   }
+});
+
+// ── CLI 入口（mutate 那一档）：判据与测试文件不同，见门禁里 GUARDED_ENTRYPOINTS 的注释 ──
+test.describe('CLI 入口的判据：main() 里必须真的调用', () => {
+  const OK = "import { enforceDisposableEnv } from '../setup/disposable-env.mjs';\n"
+    + 'function main() { enforceDisposableEnv("npm run x"); }\n';
+
+  test('有 import 且有调用 → 合规', () => {
+    assert.equal(checkEntrypointSource(OK), null);
+  });
+
+  test('完全没调用 → 报缺少', () => {
+    assert.match(checkEntrypointSource('function main() { doStuff(); }\n'), /缺少执行位守卫/);
+  });
+
+  // ★ 这条防的是最隐蔽的恒绿形态：调用被删了，但注释里还留着那个名字。
+  test('只在注释里提到 enforceDisposableEnv → 仍报缺少', () => {
+    assert.match(checkEntrypointSource('// 这里本该 enforceDisposableEnv(...)\nfunction main(){}\n'),
+      /缺少执行位守卫/);
+    assert.match(checkEntrypointSource('/*\n enforceDisposableEnv("x");\n*/\nfunction main(){}\n'),
+      /缺少执行位守卫/);
+  });
+
+  test('调用了却没 import → 报出来（那是个必然 ReferenceError 的形态）', () => {
+    assert.match(checkEntrypointSource('function main() { enforceDisposableEnv("x"); }\n'),
+      /没从 tests\/setup\/disposable-env\.mjs import/);
+  });
+
+  test('登记表非空，且每条都写了为什么', () => {
+    assert.ok(GUARDED_ENTRYPOINTS.size >= 1, `入口登记表塌了：${GUARDED_ENTRYPOINTS.size} 条`);
+    for (const [f, why] of GUARDED_ENTRYPOINTS) {
+      assert.ok(why && why.length > 10, `${f} 的理由太短`);
+    }
+  });
 });

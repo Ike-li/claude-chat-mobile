@@ -99,6 +99,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `test:invariants:env` 跑的是卸载器（`tests/invariants/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
 > ——回落成 `homedir()` / `/Applications/CCM.app` 就打在真实家目录上，与 8/2 删库同形态。两条都进容器。
 
+> **这几条现在是【强制】的，不再只是约定**：`tests/invariants/env/`、`tests/invariants/server/`、
+> `tests/integration/` 下的每个测试文件顶部都 import 了 `tests/setup/require-disposable-env.mjs`，
+> `npm run mutate` 在 `main()` 开头调用同一份判据。不在一次性环境（容器 / GitHub Actions runner）里跑
+> 就**直接 exit 1 并打印改跑什么**，不是静默跳过。漏加那行 import 由 check 链的
+> `check-disposable-env-guard.js` 钉住（判据：目录前缀 + 那行必须是第一条 import——排在被测模块
+> 后面等于没接上，而那和加对了看起来一模一样）。真要在开发机上跑：`CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1`，
+> 放行但在 stderr 留一行警告。
+>
+> 守卫**不是**物理隔离：它和被守的测试住同一个仓库，改得动测试的人就删得掉那行 import。
+> 它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」。不依赖任何判断的隔离仍然只有容器本身。
+
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑 unit + invariants 三档 + 集成，共 5 档）、
 `npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
 （拉 Playwright 镜像 + npm ci，约 7 分钟）。维护者要打开一张干净 Linux 用户的 Web UI 时用
@@ -117,7 +128,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
 
 容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
-和仓库里那三层代码级防护（`mutate` 的沙箱 HOME、删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
+和仓库里那几层代码级防护（执行位守卫、单测的目录级 `CCM_DATA_DIR` 隔离、`mutate` 的沙箱 HOME、
+删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
 
 写删除相关代码时会撞上 `check-destructive-deletes` 门禁：测试里的 recursive 删除必须可追溯到 `mkdtemp`，
 否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`。

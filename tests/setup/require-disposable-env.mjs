@@ -19,24 +19,12 @@
 // 它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」，不是物理隔离——
 // 不依赖任何判断的隔离仍然只有容器本身（Dockerfile.test 的一次性 HOME）。
 // 「漏加 import」这一类由 check 链的接线完整性检查兜（铺开时接，见本次试点报告）。
-import { existsSync } from 'node:fs';
-import { resolveExecutionSlot, formatRefusal, formatBypassWarning } from './disposable-env.mjs';
+import { enforceDisposableEnv } from './disposable-env.mjs';
 
 // 相对仓库根的调用方路径，只为把拒绝信息说具体（"谁被拦了"）。
 // process.argv[1] 在 node --test 的子进程里就是被跑的那个测试文件。
 const caller = (process.argv[1] || '这个测试文件').replace(`${process.cwd()}/`, '');
 
-// catch → false：见 disposable-env.mjs 的失败方向说明，检测不了就当作不在一次性环境。
-let hasDockerEnv;
-try { hasDockerEnv = existsSync('/.dockerenv'); } catch { hasDockerEnv = false; }
-
-const slot = resolveExecutionSlot({ env: process.env, hasDockerEnv });
-
-if (!slot.ok) {
-  process.stderr.write(formatRefusal(caller));
-  // exit(1) 而不是 throw：node --test 会把顶层抛错渲染成一条普通的失败用例，混在几百行输出里；
-  // 非 0 退出码让整个文件红，且 stderr 那段说明留在最显眼的位置。
-  process.exit(1);
-}
-
-if (slot.slot === 'bypass') process.stderr.write(formatBypassWarning(caller));
+// 判据、文案、退出码全在 disposable-env.mjs 的 enforceDisposableEnv 里——CLI 工具
+// （tests/gates/mutate.js）走的是同一个函数，两种用法不会各有一份会漂移的实现。
+enforceDisposableEnv(caller);

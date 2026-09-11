@@ -22,16 +22,29 @@
 白名单反过来：不在名单上的默认进容器，判断错了顶多多跑一次容器，代价不对称地小。
 
 > ⚠ **`guard-host-tests.js` 返回的是 `permissionDecision: "ask"`，不是 `"deny"`。**
-> 它给提示并请求确认，不是硬闸；在自动批准的权限模式下直接放行。**别把它当安全网。**
-> 真正的隔离来自容器边界。（2026-09-05 实测：`test:invariants:server` 在宿主机上照跑不误，
-> 没有污染是因为那些用例自己注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了。）
+> 它给提示并请求确认，不是硬闸；在自动批准的权限模式下直接放行。而且它是 PreToolUse 钩子，
+> **只在 agent 走 Bash 工具时触发——人在终端手敲命令它一次都不会响**。别把它当安全网。
+>
+> 2026-09-11 起，`invariants/env`、`invariants/server`、`integration` 三个目录的测试文件与
+> `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
+> 跑就直接 exit 1，对所有调用路径生效（npm 脚本、裸 node、IDE run、CI、别的 agent）。
+> 它同样不是物理隔离——同一个仓库里的一行 import，删得掉；真正的隔离仍然来自容器边界。
+>
+> （那句「2026-09-05 实测 `test:invariants:server` 在宿主机上照跑不误」**已作废**：现在它跑不起来。
+> 当时没有污染，是因为那些用例各自注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了——
+> 而「靠每个用例自己记得」正是后来把这道隔离下沉成机制的理由。）
 
 **② 变异（`mutate`）无例外进容器。** 它故意把源码改坏再跑测试，而被改坏的**可能恰恰是算删除路径的代码**——
 上面那次事故里 `getProjectDir` 被改成恒返回 `''`，`join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了。
 容器里 `HOME` 是一次性目录，这道防线不依赖任何代码正确性。
+它的 `main()` 开头也调用了执行位守卫（放在 main 里而不是模块顶层：`tests/unit/mutate.test.mjs`
+静态 import 了它 8 个纯函数，顶层拦截会让宿主机上的 `test:unit` 整个红掉）。
 
 **③ 删除与写入目标必须落在一次性目录**（`mkdtemp`）。隔离要素共五件：
 `HOME`、`CCM_DATA_DIR`、端口、工作目录、`~/.claude`。
+其中 `CCM_DATA_DIR` 自 2026-09-11 起由 `tests/setup/preload-env.mjs` **目录级**兜底（此前只逐个文件
+点名 6 个，`sessions.json`/`init-cache.json`/`uploads/` 等 9 项全裸，靠每个测试自己记得设变量）。
+兜底不解除本条：`HOME` 与 `~/.claude` 仍然要各测试自己注入。
 **漏掉 `HOME` 会让 hooks 类测试删掉生产投递箱**（2026-09-01 撞过）。
 测不到真实 `HOME` 不是缺陷，是这套方案成立的前提（`TEST-01`）。
 

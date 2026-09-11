@@ -26,6 +26,33 @@ export const GUARDED_DIRS = new Map([
   ['tests/integration', '起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects'],
 ]);
 
+// 不是测试文件、但同样必须守住执行位的 CLI 工具。
+//
+// 【判据为什么和上面那批不同】这些文件被单测静态 import 了纯函数（tests/unit/mutate.test.mjs
+// 从 mutate.js 取了 8 个），顶层拦截会让宿主机上的 npm run test:unit 整个红掉。所以它们在
+// main() 里调用 enforceDisposableEnv——查的是「那个调用在不在」，而不是「import 在不在第一条」。
+export const GUARDED_ENTRYPOINTS = new Map([
+  ['tests/gates/mutate.js',
+    '故意把源码改坏再跑测试，被改坏的可能正是算删除路径的代码——2026-08-02 删库事故的直接触发者'],
+]);
+
+/** 剥掉注释，防止「注释里提了一句 enforceDisposableEnv」被当成真调用（那是恒绿）。 */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+/** @returns {string|null} 违规原因；null = 合规 */
+export function checkEntrypointSource(source) {
+  const code = stripComments(source);
+  if (!/\benforceDisposableEnv\s*\(/.test(code)) {
+    return '缺少执行位守卫：main() 开头应调用 enforceDisposableEnv(...)（注释里提到不算）';
+  }
+  if (!/from\s+['"][^'"]*setup\/disposable-env\.mjs['"]/.test(code)) {
+    return '调用了 enforceDisposableEnv 却没从 tests/setup/disposable-env.mjs import 它';
+  }
+  return null;
+}
+
 const GUARD_SPECIFIER = /^import\s+['"](?:\.\.\/)+setup\/require-disposable-env\.mjs['"];?\s*$/;
 
 /** 源码里的静态 import 行，按源码顺序。块注释与行注释里的 import 字样不算。 */
@@ -89,6 +116,19 @@ function main() {
       const why2 = checkSource(readFileSync(join(ROOT, rel), 'utf8'));
       if (why2) violations.push({ file: rel, why: why2, dirReason: why });
     }
+  }
+
+  for (const [rel, why] of GUARDED_ENTRYPOINTS) {
+    scanned += 1;
+    let src;
+    try {
+      src = readFileSync(join(ROOT, rel), 'utf8');
+    } catch {
+      violations.push({ file: rel, why: `登记的入口文件读不到：${rel}（改名或删除时扫描面会静默变空）` });
+      continue;
+    }
+    const why2 = checkEntrypointSource(src);
+    if (why2) violations.push({ file: rel, why: why2, dirReason: why });
   }
 
   if (violations.length) {

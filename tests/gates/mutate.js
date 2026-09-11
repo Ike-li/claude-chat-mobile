@@ -20,6 +20,7 @@
 // 【存活 ≠ bug】等价变异体（改了但语义不变）、纯日志、防御性兜底都会存活。存活是一个问句：
 // 「这里改了你会在意吗？」——在意就补断言，不在意就放过。工具不替你判断。
 import { spawnSync } from 'node:child_process';
+import { enforceDisposableEnv } from '../setup/disposable-env.mjs';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
@@ -341,6 +342,24 @@ export function isKilled(result) {
 }
 
 function main() {
+  // ★ 执行位守卫。放在 main() 里而不是模块顶层：本文件被 tests/unit/mutate.test.mjs 静态 import
+  //   了 8 个纯函数，顶层拦截会让宿主机上的 npm run test:unit 整个红掉。
+  //
+  //   为什么 mutate 需要它：守卫的常规形态（测试文件顶部 import）对这里无效——mutate 跑的是
+  //   listTestFiles 选出的 tests/unit 与 tests/invariants【直下】那批，全都不带守卫。而 mutate
+  //   恰恰是 2026-08-02 删库事故的直接触发者：它故意把源码改坏再跑测试，被改坏的可能正是算
+  //   删除路径的代码。此前它在宿主机上只有下面那个 sandboxHome 一层防护，而那一层是【代码级】的
+  //   ——失效方式与被它改坏的代码同源。
+  enforceDisposableEnv('npm run mutate', {
+    detail: [
+      '   变异检查会【故意把源码改坏再跑测试】——被改坏的可能正是算删除路径的那段代码。',
+      '   2026-08-02 就是这么把 ~/.claude/projects 整棵树删光的（getProjectDir 被改成恒返回',
+      "   空串，join(真实根, '') 塌成真实根本身，测试的 rmSync 就打上去了）。",
+      '',
+      '   改跑：npm run mutate:docker -- <文件> [--lines=A-B]',
+    ].join('\n'),
+  });
+
   const args = process.argv.slice(2);
   const target = args.find(a => !a.startsWith('--'));
   if (!target) {
