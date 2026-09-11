@@ -801,6 +801,10 @@ export const EN_DICT = Object.freeze({
   // —— 空表面：新会话页 / 首页 / 会话中断页 ——
   '新会话已就绪': 'New session ready',
   '将在此工作区开新 CLI 会话': 'Starts a new CLI session in this workspace',
+  '在新 worktree 里开': 'Open in a new worktree',
+  '将在 %s 的新 worktree 里开，不动当前工作树': 'Opens in a new worktree off %s, leaving your working tree untouched',
+  '读取分支超时': 'Timed out reading branches',
+  '读取分支失败': 'Failed to read branches',
   '点击打开会话列表（按工作区浏览）': 'Open the session list (browse by workspace)',
   '重新读取 CLI 配置': 'Re-read CLI config',
   '总结当前仓库结构并指出入口文件': 'Summarize this repo\'s structure and point out the entry files',

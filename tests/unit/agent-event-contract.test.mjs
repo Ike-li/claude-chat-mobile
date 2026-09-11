@@ -325,9 +325,14 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        在手机上根本读不到。脱敏档位是只截断限流、不改内容（机主定）：自己的机器、自己的日志、
   //        已过设备审批闸，改内容会让排障失去价值。路径**不接受客户端传入**，只读配置里那个，
   //        从设计上排除穿越。入向 54→55）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 55);
+  //      + git:branches（2026-09-11，新会话的「源分支」选择器。勾了「在新 worktree 里开」之后，
+  //        从哪个分支切出来是用户必须能选的——只读当前分支等于把这个决定藏起来，而选错分支要到
+  //        合并时才发现。只读，与 git:status 同一道 cwd 范围门；分支名本身就是信息（功能代号、
+  //        客户名），不当无害元数据放行。入向 55→56）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 56);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('git:branches'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('permissions:rules'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));

@@ -521,6 +521,9 @@ const ACK_SHAPES = [
   { event: 'files:search', payload: () => ({ cwd: tmpDir, query: 'x' }), required: ['ok', 'paths'] },
   { event: 'git:status', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir }), required: ['ok', 'error', 'code'] },
   { event: 'git:diff', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir, path: 'x' }), required: ['ok', 'error', 'code'] },
+  // 新会话的源分支选择器（2026-09-11）。非 git 仓库这一支与上面两条同形；成功支
+  // { ok, branches, current } 要真 git 夹具，归 tests/unit/git-worktree.test.mjs（那里跑真 git）。
+  { event: 'git:branches', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir }), required: ['ok', 'error', 'code'] },
 
   { event: 'tool:full', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
   { event: 'tool:preview', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },

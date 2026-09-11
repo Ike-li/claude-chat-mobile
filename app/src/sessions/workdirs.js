@@ -3,10 +3,11 @@
 // 避免 string|object 解析逻辑三处分叉。
 // 条目形态：`string`（路径）或 `{ path: string, sessionLimit?: 正整数 }`（向后兼容纯字符串数组）。
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { isAbsolute as isAbsolutePosix } from 'node:path/posix';
 import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
 import { encodeProjectDir } from '../shared/project-dir.js';
+import { CLAUDE_DIR_NAME } from '../shared/claude-home.js';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
 export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
@@ -183,14 +184,65 @@ export function loadWorkdirsFile(filePath) {
 // 但因仍有 live 实例挂着而未被 reloadWorkdirs 归位的目录——这种目录不在 dirs 里，不能直接信任继续新开会话。
 // 归位到 dirs 首位（同 session:new 的既有归位语义），只挡"新开"，不影响该目录上已有会话的继续查看/读取。
 export function ensureWhitelisted(cwd, dirs) {
-  return dirs.includes(cwd) ? cwd : dirs[0];
+  if (dirs.includes(cwd)) return cwd;
+  // 托管 worktree 与白名单目录同权：它不是"被热移除的目录"，归位到 dirs[0] 就把 routeCwd 刚
+  // 放行的 cwd 当场作废。两道闸在 8 个 handler 里成对出现（`ensureWhitelisted(routeCwd(x), dirs)`），
+  // 只改一道等于没改，且症状与完全没改一模一样——不会有任何报错。
+  const managed = resolveManagedWorktree(cwd, dirs);
+  if (managed) return managed.path;
+  return dirs[0];
 }
 
 // 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号。
 // 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
-// git linked worktree 若要用，须把其绝对路径显式写入 workdirs.json，与其它工作区同级——无自动探测、无隐式放行。
+// 仓库外的 git linked worktree（`../repo-<分支>` 这类）若要用，须把其绝对路径显式写入 workdirs.json，
+// 与其它工作区同级——无自动探测、无隐式放行。**例外只有一种**，见下方 resolveWorktreeParent。
 export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
+}
+
+// CLI 托管 worktree 的容器目录（相对 workdir 根）：`EnterWorktree`、`--worktree`、agent isolation
+// 三者的默认落点都是这里。枚举侧（history.js）与放行侧（下方）共用这一份，不各写一遍——
+// SS-004 那次「注释写着同规则、实际各存一份」就是这么漂的。
+export const managedWorktreeRoot = dir => join(dir, CLAUDE_DIR_NAME, 'worktrees');
+
+// 托管 worktree 的派生放行（2026-09-11）。
+//
+// 【为什么这不是给 SCOPE-01 开例外】放行集恒为 `<白名单目录>/.claude/worktrees/<单段>`，
+// 始终落在白名单目录**子树内**——「候选路径 realpath 后须落在授权工作区内」这条原样成立。
+// 真正新增的自由度只有一个：深度固定为 1 的那一层目录名。跳出子树的形态（仓库外的平级兄弟
+// worktree）不在此列，仍须显式写进 WORKDIRS。
+//
+// 【为什么必须 realpath】dirs 恒为已 realpath 的白名单（normalizeWorkdirEntries 出参契约），
+// 候选也要解析后再比：`.claude/worktrees/x -> /somewhere/else` 这种 symlink 若拿未解析路径比前缀，
+// 在 macOS 上就是静默永远放行。
+//
+// 【为什么不递归】允许再深一层，等于从一个已放行的 worktree 里能无限派生出新的授权路径。
+//
+// 【为什么返回解析后的 path 而不只是父仓】调用方拿这个 cwd 去算 transcript 的 project 目录
+// （getProjectDir(cwd)），而 CLI 落盘时用的是它自己解析过的路径——macOS 上 /var 与 /private/var
+// 算出来是两个不同的目录名，传未解析的那个会静默查空。让判据把解析结果一并交出去，
+// 调用方就没有"记得再 realpath 一次"这一步可漏；两次各自 realpath 也会多出一个 TOCTOU 窗口。
+//
+// @returns {{ parent: string, path: string }|null}
+//   parent = 归属的父 workdir（已 realpath，供归组展示）；path = 候选自身 realpath 后的绝对路径
+export function resolveManagedWorktree(cwd, dirs) {
+  if (typeof cwd !== 'string' || cwd === '') return null;
+  if (!Array.isArray(dirs) || dirs.length === 0) return null;
+  let real;
+  try {
+    real = realpathSync(cwd);
+  } catch {
+    return null; // fail-closed：真实落点无法确认（不存在/不可达）一律不放行
+  }
+  for (const d of dirs) {
+    const prefix = managedWorktreeRoot(d) + sep;
+    if (!real.startsWith(prefix)) continue;
+    const rest = real.slice(prefix.length);
+    if (rest === '' || rest.includes(sep)) continue;
+    return { parent: d, path: real };
+  }
+  return null;
 }
 
 // SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——

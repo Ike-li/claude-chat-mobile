@@ -13,6 +13,7 @@ export function registerFileSocketHandlers({
   locateStoredAttachment,
   listGitChanges,
   readGitDiff,
+  listGitBranches,
   searchFiles,
   writeFileInScope,
   audit,
@@ -161,6 +162,31 @@ export function registerFileSocketHandlers({
       conflicted: result.conflicted || [],
       truncated: result.truncated || false,
     });
+  });
+
+  // 本地分支列表（新会话的「源分支」选择器）。只读，与 git:status 同一道范围门。
+  // 为什么也要过 cwdInWorkDirs：分支名本身就是信息（功能代号、客户名），不是无害元数据。
+  on(socket, 'git:branches', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof listGitBranches !== 'function') {
+      return ack({ ok: false, code: 'unavailable', error: '分支列表不可用' });
+    }
+    const cwd = routeCwd(payload?.cwd);
+    const workDirs = getWorkDirs();
+    if (!cwdInWorkDirs(cwd, workDirs)) {
+      logger.warn(`[scope] git branches 越界拒绝：cwd=${cwd}`);
+      audit.recordAudit({
+        actor: actorFromSocket(socket),
+        action: 'scope_violation',
+        target: cwd,
+        outcome: 'denied',
+        meta: { via: 'git:branches' },
+      });
+      return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
+    }
+    const r = await listGitBranches(cwd);
+    if (!r?.ok) return ack({ ok: false, code: r?.code || 'git_error', error: r?.error || '读取分支失败' });
+    return ack({ ok: true, branches: r.branches, current: r.current });
   });
 
   // 单文件 unified patch（staged=diff --cached；unstaged=diff；untracked 走 browse:read）

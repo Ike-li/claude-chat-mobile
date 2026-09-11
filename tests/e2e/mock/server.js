@@ -1019,10 +1019,12 @@ io.on('connection', socket => {
 
   // 新会话：清查看 tab（viewingInstanceId=null）→ 前端进空首页。模拟服务端 session:new（不 dispose 后台实例）。
   // 配合 test:freshbusy 复现「新会话首发乐观 busy 被懒开广播冲掉」的回归场景。
-  socket.on('session:new', payload => {
-    const requestedCwd = payload && typeof payload === 'object' && typeof payload.cwd === 'string'
-      ? payload.cwd
-      : null;
+  socket.on('session:new', (payload, maybeAck) => {
+    // 真 server 这条是带 ack 的（前端靠它拿回刚建好的 worktree 路径）。mock 此前只收 payload、
+    // 从不调 ack——前端传进来的回调于是永不执行，而"没建成"和"没人回话"在 UI 上长得一模一样。
+    const ack = typeof payload === 'function' ? payload : maybeAck;
+    const obj = payload && typeof payload === 'object' ? payload : {};
+    const requestedCwd = typeof obj.cwd === 'string' ? obj.cwd : null;
     const viewingCwd = requestedCwd
       || mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
       || mockInstances[0]?.cwd
@@ -1046,6 +1048,7 @@ io.on('connection', socket => {
         defaultEffort: pendingFreshEffortOrDefault()
       }
     });
+    if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
   });
 
   // 回空首页枢纽：清 viewing、保留 live 实例与 pending 档（与 session:new 分工，对齐真 server session:home）。
@@ -1756,6 +1759,12 @@ io.on('connection', socket => {
       untracked: [{ path: 'new-file.js' }],
       truncated: false,
     });
+  });
+  // 新会话的「源分支」选择器。真 server 走 git for-each-ref；这里给一组固定分支，
+  // 让 E2E 能验"点开能选、选中回填"而不依赖宿主机有没有 git 仓库。
+  socket.on('git:branches', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' });
   });
   socket.on('git:diff', (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -4358,6 +4367,36 @@ io.on('connection', socket => {
         thumb: a?.thumb
       }))
       : undefined;
+    // 「在新 worktree 里开」：真 server 在懒开实例之前 `git worktree add`，再拿那棵树当 cwd。
+    // mock 不碰磁盘，只把收到的意图回显成一条 system——这条 E2E 要验的是**前端把参数发出去了**
+    // （勾选框亮着但请求里没这两个字段，在别处全是绿的）。真正"建对没有"由跑真 git 的
+    // tests/unit/git-worktree.test.mjs 与集成层守，不在这一层重复。
+    //
+    // 必须先把实例开出来再发：空首页上 viewingInstanceId 还是 null，而前端对 agent:event 有
+    // 实例过滤（logic 的 shouldDropAgentEvent），带 instanceId:null 的事件会被静默丢掉——
+    // 第一版就是这么写的，断言红在"文本没出现"，看着像参数没发出去。
+    if (messagePayload.useWorktree === true) {
+      if (viewingInstanceId === null) {
+        const fresh = openFreshMockInstance(requestedModel);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances',
+          payload: {
+            canRestart: mockCanRestart, viewingInstanceId, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            viewingCwd: fresh?.cwd || mockInstances[0].cwd, instances: mockInstances, service: mockServicePayload(),
+          },
+        });
+      }
+      const cur = mockInstances.find(i => i.instanceId === viewingInstanceId);
+      const src = typeof messagePayload.sourceBranch === 'string' && messagePayload.sourceBranch
+        ? messagePayload.sourceBranch : '(current)';
+      io.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-worktree', sessionId: cur?.sessionId ?? null,
+        instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'system',
+        payload: { message: `[MOCK_INFO] worktree requested from ${src}` },
+      });
+    }
     if (typeof text !== 'string') return;
     const cmd = text.trim();
 

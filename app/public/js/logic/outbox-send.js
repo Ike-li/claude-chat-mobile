@@ -148,6 +148,12 @@ function serializeOutboxItem(item) {
     clientMessageId,
     instanceId: item.instanceId == null ? null : item.instanceId,
     cwd: item.cwd == null ? null : item.cwd,
+    // 「在新 worktree 里开」的意图必须活过入队与 localStorage 往返：服务端在懒开实例时据它
+    // `git worktree add`，丢了就是一条没有意图的消息——实例开在父仓，而用户以为改动隔离了。
+    // 本函数是白名单，新字段不显式登记就被静默丢掉（这一条就是那么漏过一次的）。
+    // 只在真勾选时落字段：没勾的消息不该平白多两个键，服务端判的是 `=== true`。
+    ...(item.useWorktree === true ? { useWorktree: true } : {}),
+    ...(typeof item.sourceBranch === 'string' && item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
   };
 }
 

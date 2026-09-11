@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -68,6 +68,7 @@ import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTermin
 import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
+import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
@@ -82,7 +83,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath, resolveWorkdirSource } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveWorkdirsFilePath, resolveWorkdirSource } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -385,9 +386,18 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
   clearMirrorOnViewChange();
 };
 // 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
-// 合法路径 = workdirs 白名单本身（含用户把 git worktree 路径显式写入 workdirs.json 的条目）。
+// 合法路径 = workdirs 白名单本身（含用户把 git worktree 路径显式写入 workdirs.json 的条目），
+// 外加一种派生形态：白名单目录下 `.claude/worktrees/<name>` 的托管 worktree（见下）。
 const routeCwd = cwd => {
   if (isWhitelisted(cwd, workDirs)) return cwd;
+  // 托管 worktree 的派生放行（2026-09-11）：CLI 的 EnterWorktree / --worktree / agent isolation
+  // 把 worktree 建在 `<workdir>/.claude/worktrees/<name>`——**那条路径在白名单目录子树内**，
+  // 所以这不是给范围门开口子，SCOPE-01 原样成立（判据与边界见 workdirs.js 的 resolveManagedWorktree）。
+  // 不放行的话，这类会话即便列得出来也点不开：cwd 在这里被换成父仓，再拿父仓 cwd 去 resume 一个
+  // transcript 根本不在那个 project 目录下的会话，症状是「点开一片空白」而不是任何报错。
+  // 返回解析后的 path 而非原始入参：下游要拿它算 getProjectDir，未解析的路径在 macOS 上会静默查空。
+  const managed = resolveManagedWorktree(cwd, workDirs);
+  if (managed) return managed.path;
   // 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
   // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
   if (typeof cwd === 'string' && cwd) {
@@ -1992,6 +2002,31 @@ function withRewindTimeout(promise, ms = REWIND_REQUEST_TIMEOUT_MS) {
 // 不落盘——崩溃后孤儿文件重新可见，与 CLI 等价、可重试。必须在 registerSocketConnection
 // 之外：每条 socket 一份的话，另一台设备的 SWR 在删文件窗口内仍会把行吐回去。
 const pendingDeleteIds = new Set();
+// 「在新 worktree 里开」的懒创建（2026-09-11）。**只有真发出第一条消息才建**——勾了不发就什么
+// 都没发生，磁盘上不留没人用过的空树。与 Claude Code Desktop 同构：它的 lazyWorktrees.prepare 同样
+// 挂在 start_session 上（日志原文 `Lazy worktree: starting session … its worktree is being prepared
+// for EnterWorktree`），不挂在勾选上。
+//
+// single-flight 按「父仓 + 源分支」：空首页上两条**不同**的消息并发懒开时，各算各的 cwd，
+// 下游 dedupedResume 的 `fresh:${cwd}` 就合不掉它们——会各建一棵树、各开一个实例。
+// 窗口很窄（第一条 ack 回来 UI 就进会话视图了），但合并的代价只有一个 Map。
+const worktreeCreateInFlight = new Map(); // `${cwd}\u0000${sourceBranch}` → Promise<result>
+function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
+  // key 不含消息文本：并发首消息要共用同一棵树，否则各建一棵、下游 dedupedResume 也合不掉。
+  // 名字取第一个到达的那条消息——后到的那条本来就该进同一个会话。
+  const key = `${cwd}\u0000${sourceBranch ?? ''}`;
+  let p = worktreeCreateInFlight.get(key);
+  if (!p) {
+    p = createSessionWorktree(cwd, { name: worktreeNameFromMessage(firstMessage), sourceBranch })
+      .finally(() => worktreeCreateInFlight.delete(key));
+    worktreeCreateInFlight.set(key, p);
+  }
+  return p;
+}
+// 工作区轴：托管 worktree 里的实例归其父仓。viewingCwd 是「新开会话落哪、侧栏列哪一页」的锚，
+// 设成 worktree 路径等于让它事实上变成一个工作区条目——而 worktree 是临时模式，不占抽屉。
+const workspaceCwdOf = c => resolveManagedWorktree(c, workDirs)?.parent || c;
+
 function dedupedResume(cwd, resumeId, extra = {}) {
   const key = resumeId || `fresh:${cwd}`;
   let p = resumeInFlight.get(key);
@@ -2338,7 +2373,32 @@ registerSocketConnection(io, socket => {
         }
         // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
         // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-        const cwd = ensureWhitelisted(routeCwd(rawCwd), workDirs);
+        const workspaceCwd = ensureWhitelisted(routeCwd(rawCwd), workDirs);
+        // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
+        // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
+        // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（resolveManagedWorktree 非空即是）。
+        const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
+        let cwd = workspaceCwd;
+        if (wantsWorktree && !resolveManagedWorktree(workspaceCwd, workDirs)) {
+          const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
+          if (!made.ok) {
+            console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
+            audit.recordAudit({
+              actor: actorFromSocket(socket), action: 'worktree_create', target: workspaceCwd,
+              outcome: 'failed', meta: { code: made.code, sourceBranch: payload.sourceBranch ?? null },
+            });
+            sysTo(socket, `无法创建 worktree：${made.error || made.code}`, true);
+            ack({ ok: false, error: made.error || '创建 worktree 失败' });
+            return;
+          }
+          cwd = made.path;
+          // 说一声建了什么：名字来自这条消息，但用户没见过生成结果，而它会成为分支名进 git。
+          sysTo(socket, `已在新 worktree「${made.branch}」中打开（源分支 ${payload.sourceBranch || '当前分支'}）`);
+          audit.recordAudit({
+            actor: actorFromSocket(socket), action: 'worktree_create', target: made.path,
+            outcome: 'ok', meta: { branch: made.branch, sourceBranch: payload.sourceBranch ?? null },
+          });
+        }
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
         const saved = await currentSessionForCwd(cwd);
@@ -2352,7 +2412,8 @@ registerSocketConnection(io, socket => {
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
-          viewingCwd = a.cwd;
+          // 托管 worktree 的实例归父仓（workspaceCwdOf）：驾驶在 worktree 里，工作区轴不跟着走。
+          viewingCwd = workspaceCwdOf(a.cwd);
           broadcastInstances();
         }
         // 用户已切走：实例仍留在 agents Map，不写 viewing、不 broadcast 抢焦点
@@ -2851,7 +2912,9 @@ registerSocketConnection(io, socket => {
     // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。
     // ensureWhitelisted 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
-    const cwd = ensureWhitelisted((payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf(), workDirs);
+    const obj = (payload && typeof payload === 'object') ? payload : null;
+    const cwd = ensureWhitelisted(obj ? routeCwd(obj.cwd) : viewingCwdOf(), workDirs);
+
     viewingCwd = cwd;
     sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
@@ -2884,8 +2947,14 @@ registerSocketConnection(io, socket => {
   // 合并需重排调用顺序——为观感冒行为风险，有意不动。
   function finishOpenFocus(inst, cwd, sessionId, ack) {
     viewingInstanceId = inst.instanceId;
-    viewingCwd = cwd;
-    sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
+    // 【工作区轴 vs 驾驶轴】托管 worktree 的会话打开后，**工作区轴仍归父仓**：viewingCwd 是
+    // 「新开会话落哪、侧栏列哪一页、顶栏显示哪个工作区」的锚，把它设成 worktree 路径等于让
+    // worktree 事实上变成一个工作区条目——而产品判据恰恰是「worktree 是临时模式，不占抽屉条目，
+    // 干完合并回父仓」。驾驶轴不受影响：inst.cwd 仍是 worktree，SDK 就在那儿跑。
+    // 两轴合一的症状很隐蔽：打开一个 worktree 会话后侧栏突然只剩那一条，看着像会话丢了。
+    const workspaceCwd = workspaceCwdOf(cwd);
+    viewingCwd = workspaceCwd;
+    sessions.setCurrent(workspaceCwd, sessionId); // 记为该工作区最后查看会话（session:list 的 currentSessionId 等）
     // 用户打开/切回本会话 → 续期空闲看护（含刚 resume 的新实例，避免随后立刻被旧时钟误判）
     inst.touchActivity?.();
     // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
@@ -3218,7 +3287,8 @@ registerSocketConnection(io, socket => {
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(cwd);
-    const currentSessionId = (id && await sessionFileExists(cwd, id)) ? id : null;
+    // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
+    const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id)) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
@@ -3342,7 +3412,23 @@ registerSocketConnection(io, socket => {
     // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
-    ack({ ok: true });
+    // 会话在托管 worktree 里时一并报告那棵树的状态：transcript 删掉了，**worktree 还在磁盘上**，
+    // 不说一声用户就不知道它在哪、里面还剩什么。
+    // 这里只报告、**不删**——那棵树里可能是这份改动唯一的存在，而「查不到状态」与「真的干净」
+    // 在返回值上必须区分得开（inspectWorktreeCleanliness 已对前者 fail-closed 报不干净）。
+    // 自动回收是 Claude Desktop 那套 reaper 的事，它有 PR 合并状态可依据，本仓没有。
+    let worktreeLeft = null;
+    const managed = resolveManagedWorktree(cwd, workDirs);
+    if (managed) {
+      const c = await inspectWorktreeCleanliness(managed.path);
+      worktreeLeft = {
+        path: managed.path,
+        clean: c.clean === true,
+        dirtyCount: c.entries.length,
+        unmergedCommits: c.unmergedCommits,
+      };
+    }
+    ack({ ok: true, worktreeLeft });
   });
 
   // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable
@@ -3358,6 +3444,7 @@ registerSocketConnection(io, socket => {
     locateStoredAttachment,
     listGitChanges,
     readGitDiff,
+    listGitBranches: listBranches,
     searchFiles,
     writeFileInScope: fileEditOff ? undefined : writeFileInScope,
     audit,

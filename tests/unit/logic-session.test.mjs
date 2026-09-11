@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -135,6 +135,51 @@ test('formatSessionRowSubtitle: 桌面端已打开与终端已打开分开说', 
     formatSessionRowSubtitle({ whenText: '9/6', terminalState: 'alive', shortId: 'abcdef12' }),
     '终端已打开 · 9/6 · abcdef12',
   );
+});
+
+// 文件/改动面板跟的是「当前会话在哪个工作树」，不是「当前工作区」。这两者在托管 worktree
+// 打开时会分叉：工作区轴仍是父仓（不新增抽屉条目），而 claude 实际在 worktree 里改文件。
+// 判错的症状是改动面板空着——而「看起来没改动」和「真的没改动」在 UI 上无法区分。
+test('resolvePanelCwd: 跟当前实例的 cwd，无实例时回落工作区 cwd', () => {
+  const instances = [
+    { instanceId: 'i1', cwd: '/repo' },
+    { instanceId: 'i2', cwd: '/repo/.claude/worktrees/feature-x' },
+  ];
+  assert.equal(
+    resolvePanelCwd({ instances, viewingInstanceId: 'i2', workspaceCwd: '/repo' }),
+    '/repo/.claude/worktrees/feature-x',
+    '回落工作区 cwd 会让 worktree 会话的改动面板显示父仓的 diff',
+  );
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo');
+  // 空首页/实例已关闭：回落工作区 cwd，与从前同形
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: null, workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: 'gone', workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({ instances: null, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({}), null);
+});
+
+// 托管 worktree 的会话并进父仓列表后（2026-09-11），同一页里混着两个工作树的会话。
+// 不标出来的话，「这条改的是父仓还是某个 worktree」在合并前完全无从判断——而那正是
+// 用户点开它要做的第一个决定。放最前：truncate 先吃尾部，归属比时间戳更不能丢。
+test('formatSessionRowSubtitle: worktree 名排在最前，父仓行不受影响', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ worktree: 'feature-x', whenText: '9/11', shortId: 'abcdef12' }),
+    'worktree feature-x · 9/11 · abcdef12',
+  );
+  // 与终端来源并存时仍在最前（两者都是"这条会话属于谁"，worktree 是更外层的归属）
+  assert.equal(
+    formatSessionRowSubtitle({ worktree: 'wt-a', whenText: '9/11', terminalState: 'alive', terminalSource: 'cli' }),
+    'worktree wt-a · 终端已打开 · 9/11',
+  );
+  // 正对照：父仓行（无 worktree 字段）逐字不变
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/11', shortId: 'abcdef12' }),
+    '9/11 · abcdef12',
+  );
+  // 空串/非字符串不得渲染成空段（会多出一个悬空的 ' · '）
+  for (const bad of ['', '   ', null, undefined, 42]) {
+    assert.equal(formatSessionRowSubtitle({ worktree: bad, whenText: '9/11' }), '9/11', `worktree=${JSON.stringify(bad)}`);
+  }
 });
 
 test('formatSessionRowSubtitle: CLI 空闲来源提到时间前面；busy 不再把「终端」塞进副行', () => {

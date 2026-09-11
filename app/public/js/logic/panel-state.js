@@ -163,13 +163,31 @@ export function formatSessionRowSubtitle({
   terminalState = null,
   terminalSource = null,
   shortId = null,
+  worktree = null,
 } = {}) {
   const parts = [];
+  // 托管 worktree 的归属排最前：同一页里混着父仓与各 worktree 的会话，而副文本是 truncate 的——
+  // 尾部先被吃掉，归属比时间戳更不能丢。非字符串/空白一律不渲染，否则多出一个悬空的分隔符。
+  if (typeof worktree === 'string' && worktree.trim()) parts.push(`worktree ${worktree.trim()}`);
   if (terminalState === 'alive') parts.push(terminalSource === 'claude-desktop' ? t('桌面端已打开') : t('终端已打开'));
   if (whenText) parts.push(whenText);
   if (liveOpen) parts.push(t('已打开'));
   if (shortId) parts.push(String(shortId));
   return parts.join(' · ');
+}
+
+// 文件 / 改动面板的目标目录（2026-09-11）。
+//
+// 【为什么不能直接用工作区 cwd】托管 worktree 的会话打开后，工作区轴仍归父仓（产品判据：
+// worktree 是临时模式，不占抽屉条目），但 claude 实际在 `.claude/worktrees/<name>` 里改文件。
+// 拿父仓 cwd 去拉 git 变更，列出来的是父仓那棵树的 diff——它看起来是空的，
+// 而「看起来没改动」和「真的没改动」在 UI 上无法区分，用户会据此判断该不该合并。
+//
+// 无当前实例（空首页、实例刚关）→ 回落工作区 cwd，与引入本函数之前逐字同形。
+export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
+  const list = Array.isArray(instances) ? instances : [];
+  const inst = list.find(i => i && i.instanceId === viewingInstanceId);
+  return inst?.cwd || workspaceCwd || null;
 }
 
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
@@ -399,8 +417,11 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         id: s.id,
         title: s.title || t('无标题会话'),
         lastUsedAt: s.lastUsedAt ?? null,
-        cwd,
+        // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
+        // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
+        cwd: s.cwd || cwd,
         workspaceName,
+        worktree: s.worktree ?? null,
         entrypoint: s.entrypoint ?? null,
         terminal: s.terminal ?? null, // 'busy'|'alive'|null：CLI 进程注册表自报的终端直跑态
       });

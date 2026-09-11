@@ -39,7 +39,9 @@ function runExecFile(execFile, cmd, args, options) {
   });
 }
 
-function gitExec(cwd, gitArgs, { timeoutMs, maxBuffer, execFile } = {}) {
+// 导出供同域的 git-worktree.js 复用：两个模块都要 spawn git，各写一份 execFile 封装迟早漂
+// （本仓吃过「注释写着同规则、实际各存一份」的亏，见 SS-004）。
+export function gitExec(cwd, gitArgs, { timeoutMs, maxBuffer, execFile } = {}) {
   return runExecFile(
     execFile,
     'git',

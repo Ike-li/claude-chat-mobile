@@ -179,7 +179,11 @@ export function applyTerminalStatesToSessions(cwd, sessions, states = new Map())
     delete copy.terminalSource;
     delete copy.bgLocked;
     if (copy.id) {
-      const info = stateMap.get(terminalStateKey(cwd, copy.id));
+      // 行自带 cwd = 托管 worktree 的会话（2026-09-11 起并进父仓列表）。注册表按 cwd 归键，
+      // 一律拿父仓 cwd 查会让这些行永远查空——而「没有终端在驾驶」与「查错了目录」在 UI 上
+      // 长得一模一样，不会有任何报错。不命中也**不回退**到父仓 cwd：那会把父仓终端的状态
+      // 错报到 worktree 行上，比没有徽标更坏。
+      const info = stateMap.get(terminalStateKey(copy.cwd || cwd, copy.id));
       if (info && TERMINAL_ROW_STATES.has(info.state)) {
         copy.terminal = info.state;
         // 来源缺失/未登记时只留状态：前端回落"终端"文案（与本改动之前完全同形），不塌成无状态。

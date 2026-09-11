@@ -3,6 +3,8 @@
 // 测什么：① isInScope 在 realpath 之后判定候选路径是否落在授权工作区内，拦截越界、../ 穿越、symlink 逃逸与前缀碰撞
 //         ② 白名单**写入侧**（validateEnvChanges 的 WORKDIRS 档）拒绝相对路径与非数组——
 //            范围门再严，也挡不住一条把父目录整棵树写进白名单的配置
+//         ③ resolveManagedWorktree 的派生放行面：只认「白名单目录下 .claude/worktrees/ 的直接子目录」，
+//            深度固定为 1、不递归、symlink 真实落点必须仍在该目录子树内
 // 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +13,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
+import { resolveManagedWorktree, ensureWhitelisted } from '../../app/src/sessions/workdirs.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
@@ -157,5 +160,134 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
       const r = validateEnvChanges({ WORKDIRS: [{ path: '/tmp/a', sessionLimit: n }] }, envDeps());
       assert.equal(r.ok, false, `sessionLimit=${JSON.stringify(n)} 应被拒绝`);
     }
+  });
+});
+
+// ── 派生放行面（2026-09-11 worktree 会话可见性）────────────────────────────
+//
+// 在此之前，routeCwd 只认 `dirs.includes(cwd)` 精确匹配，CLI 托管的 worktree
+// （`EnterWorktree` / `--worktree` / agent isolation 的默认落点 `<repo>/.claude/worktrees/<name>`）
+// 的会话即便列得出来也打不开——cwd 会被换成父仓，再拿父仓 cwd 去 resume 一个
+// transcript 不在那个 project 目录下的会话。
+//
+// 派生放行把这一种形态放进来，**边界必须是 SCOPE-01 原本就成立的那条**：
+// 放行集恒为白名单目录的子树，所以「候选路径 realpath 后落在授权工作区内」没有被放松。
+// 真正新增的自由度只有一个——深度固定为 1 的那一层目录名。下面每条都在钉这个自由度不外溢。
+test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
+  // ★ base 必须先 realpath 再往下构造。macOS 的 /var -> /private/var 会让「候选未解析、dirs 已解析」
+  //   成为默认形态，而在那个形态下**所有**候选都因前缀不匹配返回 null——symlink 逃逸那条期望的
+  //   恰好也是 null，于是它永远绿。第一版就是这么写的：注入「删掉 realpath」后红的是正对照，
+  //   symlink 那条纹丝不动。未解析形态另有一条用例专门覆盖（见末尾）。
+  const rawBase = mkdtempSync(join(tmpdir(), 'ccm-inv-wt-'));
+  const base = realpathSync(rawBase);
+  test.after(() => rmSync(base, { recursive: true, force: true }));
+
+  // base/repo-a/.claude/worktrees/feature-x      ← 托管 worktree（唯一该放行的形态）
+  // base/repo-a/.claude/worktrees/nested/deep    ← 再深一层
+  // base/repo-a/sub                              ← 普通子目录
+  // base/repo-a-sibling                          ← 仓库外平级兄弟 worktree（产品判据：不放行）
+  // base/repo-b                                  ← 第二个白名单目录
+  // base/outside                                 ← 范围外
+  // base/repo-a/.claude/worktrees/escape -> base/outside   ← symlink 逃逸
+  const repoA = join(base, 'repo-a');
+  const repoB = join(base, 'repo-b');
+  const outside = join(base, 'outside');
+  const sibling = join(base, 'repo-a-sibling');
+  const wtRoot = join(repoA, '.claude', 'worktrees');
+
+  mkdirSync(join(wtRoot, 'feature-x'), { recursive: true });
+  mkdirSync(join(wtRoot, 'nested', 'deep'), { recursive: true });
+  mkdirSync(join(repoA, 'sub'), { recursive: true });
+  mkdirSync(join(repoB, '.claude', 'worktrees', 'other'), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  mkdirSync(sibling, { recursive: true });
+  if (process.platform !== 'win32') symlinkSync(outside, join(wtRoot, 'escape'));
+
+  // dirs 恒为已 realpath 的白名单（workdirs.js normalizeWorkdirEntries 的出参契约）
+  const realA = realpathSync(repoA);
+  const realB = realpathSync(repoB);
+  const dirs = [realA, realB];
+
+  test('托管 worktree 放行并归属到父仓——正对照：这道判据不是恒拒', () => {
+    assert.equal(
+      resolveManagedWorktree(join(wtRoot, 'feature-x'), dirs)?.parent ?? null, realA,
+      '.claude/worktrees/ 的直接子目录必须放行，否则 worktree 会话仍然打不开',
+    );
+    assert.equal(
+      resolveManagedWorktree(join(repoB, '.claude', 'worktrees', 'other'), dirs)?.parent ?? null, realB,
+      '多工作区下必须归属到自己的父仓，不能恒取首项',
+    );
+  });
+
+  test('再深一层不放行——否则 worktree 里再套一层就能无限派生出授权路径', () => {
+    assert.equal(resolveManagedWorktree(join(wtRoot, 'nested', 'deep'), dirs), null);
+  });
+
+  test('worktrees 容器自身不是 worktree，不放行', () => {
+    assert.equal(resolveManagedWorktree(wtRoot, dirs), null);
+    assert.equal(resolveManagedWorktree(join(repoA, '.claude'), dirs), null);
+  });
+
+  test('白名单目录自身走精确匹配那条路，派生判据不认领', () => {
+    assert.equal(
+      resolveManagedWorktree(repoA, dirs), null,
+      '父仓自身返回非 null 会让调用方把普通工作区误当 worktree 归属',
+    );
+  });
+
+  test('普通子目录不放行——派生只认 .claude/worktrees 这一条固定路径', () => {
+    assert.equal(resolveManagedWorktree(join(repoA, 'sub'), dirs), null);
+  });
+
+  test('仓库外的平级兄弟 worktree 不放行——那类须显式写进 WORKDIRS', () => {
+    assert.equal(
+      resolveManagedWorktree(sibling, dirs), null,
+      '放行它等于让放行集跳出白名单子树，SCOPE-01 的前提当场不成立',
+    );
+  });
+
+  test('symlink 指向范围外拒绝（字面在 worktrees 下、真实落点在外）', { skip: process.platform === 'win32' }, () => {
+    assert.equal(
+      resolveManagedWorktree(join(wtRoot, 'escape'), dirs), null,
+      '拿未解析路径比前缀 = macOS 上静默永远放行，这条是那个坑的负片',
+    );
+  });
+
+  test('不存在的路径 fail-closed——无法确认真实落点', () => {
+    assert.equal(resolveManagedWorktree(join(wtRoot, 'never-created'), dirs), null);
+  });
+
+  test('非法入参拒绝', () => {
+    assert.equal(resolveManagedWorktree('', dirs), null);
+    assert.equal(resolveManagedWorktree(null, dirs), null);
+    assert.equal(resolveManagedWorktree(123, dirs), null);
+    assert.equal(resolveManagedWorktree(join(wtRoot, 'feature-x'), []), null);
+    assert.equal(resolveManagedWorktree(join(wtRoot, 'feature-x'), null), null);
+  });
+
+  // routeCwd 与 ensureWhitelisted 在 8 个 handler 里是成对出现的（`ensureWhitelisted(routeCwd(x), dirs)`）。
+  // 只让 routeCwd 认派生形态，放行会被紧随其后的 ensureWhitelisted 原样撤销——归位到 dirs[0]，
+  // 症状与完全没改一模一样。两道闸必须认同一套合法集，这两条各钉一侧。
+  test('ensureWhitelisted 不把托管 worktree 当热移除目录归位', () => {
+    assert.equal(
+      ensureWhitelisted(join(wtRoot, 'feature-x'), dirs), realpathSync(join(wtRoot, 'feature-x')),
+      '归位到 dirs[0] 会让 routeCwd 刚放行的 worktree cwd 当场作废',
+    );
+  });
+
+  test('ensureWhitelisted 对真正的越界路径仍归位到首项（正对照：没把闸拆了）', () => {
+    assert.equal(ensureWhitelisted(join(base, 'outside'), dirs), realA);
+    assert.equal(ensureWhitelisted(join(wtRoot, 'nested', 'deep'), dirs), realA);
+    assert.equal(ensureWhitelisted('/definitely/not/here', dirs), realA);
+  });
+
+  // realpath 在这条判据里是双向的：上面那条挡 symlink 逃逸，这条证明它同时是功能——
+  // 候选来自前端/注册表时未必解析过（macOS 上 /var 与 /private/var 是同一个目录的两种写法），
+  // 不解析就比前缀会把合法的 worktree 判成越界，症状是「会话列得出来、点开被弹回父仓」。
+  test('候选未解析也能放行——realpath 不只是防逃逸，也是功能', { skip: rawBase === base }, () => {
+    assert.equal(
+      resolveManagedWorktree(join(rawBase, 'repo-a', '.claude', 'worktrees', 'feature-x'), dirs)?.parent ?? null,
+      realA,
+    );
   });
 });

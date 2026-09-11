@@ -386,6 +386,28 @@ test.describe('presentOnlineSendAck: 乐观气泡去留（dropBubble）', () => 
   });
 });
 
+// 「在新 worktree 里开」的意图跟着第一条消息走（服务端据此懒建）。离线时那条消息进 outbox，
+// 而 serializeOutboxItem 是**白名单**——不显式登记就被静默丢掉，重发出去的是一条没有意图的消息，
+// 实例于是开在父仓。症状不是报错：用户以为改动隔离在 worktree 里，实际全落在主工作树上，
+// 要到 git status 一堆意外改动时才发现。这正是这个功能唯一不能出的错。
+test('outbox: worktree 意图必须活过入队与持久化往返', () => {
+  const item = {
+    clientMessageId: 'wt-1', text: '改点东西', cwd: '/repo',
+    useWorktree: true, sourceBranch: 'dev',
+  };
+  const { queue } = planOutboxEnqueue([], item, { maxItems: 5 });
+  assert.equal(queue[0].useWorktree, true, '入队就丢 = 离线发的第一条消息永远开在父仓');
+  assert.equal(queue[0].sourceBranch, 'dev');
+
+  const round = parseDurableOutbox(dumpDurableOutbox(queue));
+  assert.equal(round[0].useWorktree, true, 'localStorage 往返丢 = 关掉页面再回来意图就没了');
+  assert.equal(round[0].sourceBranch, 'dev');
+
+  // 正对照：没勾的消息不该平白多出这两个字段（服务端据 useWorktree===true 判，undefined 即不建）
+  const plain = planOutboxEnqueue([], { clientMessageId: 'p-1', text: 'x' }, { maxItems: 5 }).queue[0];
+  assert.notEqual(plain.useWorktree, true);
+});
+
 test('outbox: enqueue 去重同 clientMessageId + 超 cap 丢最旧', () => {
   let q = [];
   ({ queue: q } = planOutboxEnqueue(q, { clientMessageId: 'a', text: '1' }, { maxItems: 2 }));

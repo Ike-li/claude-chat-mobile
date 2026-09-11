@@ -24,6 +24,7 @@ import {
   modelLabelFor,
   effortUiState,
   resolvePanelState,
+  resolvePanelCwd,
   aggregateStates,
   resolveDrawerStatus,
   resolveDrawerStatusChip,
@@ -179,6 +180,7 @@ import { createUnreadTracker } from './app/unread-tracker.js';
 import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
 import { attachLongPress } from './app/long-press.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
+import { createNewSessionWorktree } from './app/new-session-worktree.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
 import { createEnvConfigPanel } from './app/env-config.js';
@@ -641,6 +643,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
                                         // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
+  // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd：托管 worktree 的会话
+  // 工作区轴归父仓，但文件实际改在 .claude/worktrees/<name> 下（判据见 logic/panel-state.js）。
+  const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
@@ -1143,6 +1148,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         instanceId: item.instanceId,
         cwd: item.cwd,
         clientMessageId: item.clientMessageId,
+        ...(item.useWorktree === true ? { useWorktree: true } : {}),
+        ...(item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
         // 告诉服务端「这是入队时刻的快照，不是眼下的意图」：缺 instanceId 时不得回退到服务端
         // 当前 viewing（断线期间可能已换工作区），见 instance-routing.js 的 allowViewingFallback。
         fromOutbox: true,
@@ -3393,7 +3400,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       gitBtn.onclick = () => {
         haptic('tap');
         // 上下文直达：本轮刚改完文件，直接落到「改动」tab（而非默认的「文件」tab）
-        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(currentCwd, 'changes');
+        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(panelCwd(), 'changes');
       };
     }
     const statsEl = card.querySelector('.tfc-stats');
@@ -3598,6 +3605,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 在线/离线两条路径共享同一个 ID（在离线分支判断前生成）。
     const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    // 「在新 worktree 里开」的意图随第一条消息一起发出（服务端据此懒建）。有实例时不带——
+    // 那时按 instanceId 路由，带上去只会让服务端对一个已经在跑的会话重复判断。
+    // 【必须在离线分支之前定义】与 clientMessageId 同一个理由：在线与离线两条路径共用同一份意图。
+    // 放到在线分支里会让离线入队撞 TDZ——而 ESLint 的 no-undef 查不出这个，症状是离线路径整条炸掉
+    // （2026-09-11 实测：三条离线队列 E2E 一起红，而 lint 全绿）。
+    const worktreeArgs = viewingInstanceId ? {} : newSessionWorktree.newSessionArgs();
+
     // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
     // 反复无法送达。提前拦下，超长消息根本不入队（在线分支原来的重复校验已随之移到这里）。
     if (typeof text === 'string' && text.length > 50000) {
@@ -3623,7 +3637,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // REL-01：保存入队时刻的目标，重发时须用这个而非"当下"的 viewingInstanceId/currentCwd——
         // 否则用户离线期间切换了查看的会话，消息会被错发到现在正看着的会话，而非当初想发的那个。
         instanceId: viewingInstanceId,
-        cwd: currentCwd
+        cwd: currentCwd,
+        // worktree 意图与 text 同属"入队时刻的快照"：离线期间用户可能取消勾选，
+        // 但这条消息当初就是要发往新 worktree 的。序列化白名单见 logic/outbox-send.js。
+        ...worktreeArgs,
       });
 
       inputEl.value = '';
@@ -3688,7 +3705,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 窗口用 SEND_ACK_TRANSPORT_MS 而非上面那个 UI 兜底：见其声明处的注释（服务端慢路径 ≫ 5s）。
     socket.timeout(SEND_ACK_TRANSPORT_MS).emit(
       'user:message',
-      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId },
+      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs },
       (err, ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendTransport(err, ack);
@@ -5850,6 +5867,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     createElement: el,
     haptic,
   });
+  // 新会话的 worktree 意图（勾选态 / 源分支 / 建好的路径）。onChange 只重绘空首页那一块——
+  // 整页重绘会把用户已经敲进输入框的字冲掉。
+  const newSessionWorktree = createNewSessionWorktree(appContext, {
+    onChange: () => { try { renderWorktreeChips(); } catch { /* 空首页未渲染时无事可做 */ } },
+  });
   // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
   const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,
@@ -6031,7 +6053,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       e.preventDefault();
       e.stopPropagation();
       haptic('tap');
-      openWorkspacePanel(currentCwd, 'files');
+      openWorkspacePanel(panelCwd(), 'files');
     };
   }
 
@@ -6096,6 +6118,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     freshInterruptedInstanceId = null;
     enterComposeReady();
     ensureEmptySurface();
+    newSessionWorktree.reset(); // 新一轮新会话：勾选/源分支/已建路径全部作废
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   };
   function toggleSessions() {
@@ -6181,6 +6204,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       freshInterruptedInstanceId = null;
       enterComposeReady();
       ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
+      newSessionWorktree.reset(); // 换工作区：分支列表与勾选都属于上一个工作区
       socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
     };
     dirRow.appendChild(newSessionBtn);
@@ -6208,7 +6232,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
     // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
-    const sessionRow = (s, liveInst, rowCwd) => {
+    const sessionRow = (s, liveInst, workspaceCwd) => {
+      // 托管 worktree 的会话行自带真实 cwd（`.claude/worktrees/<name>`，父仓只是展示归属）。
+      // 打开/删除都要用它：拿工作区 cwd 去 resume，会落到一个根本没有这条 transcript 的
+      // project 目录，ack 回「会话不存在」。父仓的行不带 cwd，照旧回落工作区 cwd。
+      const rowCwd = s.cwd || workspaceCwd;
       const active = liveInst && liveInst.instanceId === viewingInstanceId;
 
       // 使用相对定位的包装容器来实现侧滑关闭
@@ -6282,6 +6310,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         terminalState: s.terminal || null,
         terminalSource: s.terminalSource || null,
         shortId: s.id ? s.id.slice(0, 8) : null,
+        worktree: s.worktree || null, // 托管 worktree 的会话行：标出在哪个工作树干活
       });
       btn.appendChild(sub);
 
@@ -7078,6 +7107,81 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     else if (surface === 'home') showDashboard();
   }
 
+
+  // 新会话页的 worktree 两件套：源分支 chip（可点换分支）+「在新 worktree 里开」勾选。
+  //
+  // 【懒创建】勾选只改本地状态，**一个请求都不发**：意图跟着第一条消息传给服务端，那时才
+  // `git worktree add`。勾了又取消、改分支重勾，磁盘上都不会留下任何东西。
+  // 与 Claude Code Desktop 同构——它的 lazyWorktrees.prepare 同样挂在 start_session 上，不挂在勾选上。
+  // 【非 git 工作区整块不显示】那里没有 worktree 这个概念，摆一个恒灰的勾选框只会让人去点。
+  let branchListOpen = false;
+  function renderWorktreeChips() {
+    const host = messagesEl?.querySelector('[data-worktree-chips]');
+    if (!host) return;
+    const st = newSessionWorktree.snapshot();
+    const sub = messagesEl.querySelector('[data-compose-sub]');
+    host.innerHTML = '';
+
+    if (!newSessionWorktree.isAvailable()) {
+      if (sub) sub.textContent = t('将在此工作区开新 CLI 会话');
+      return;
+    }
+
+    if (sub) {
+      sub.textContent = st.enabled
+        ? t('将在 %s 的新 worktree 里开，不动当前工作树').replace('%s', st.sourceBranch || '')
+        : t('将在此工作区开新 CLI 会话');
+    }
+
+    const row = el('<div class="flex items-center justify-center gap-1.5 flex-wrap"></div>');
+
+    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all" data-testid="compose-source-branch">
+      <span class="text-ink-faint">⑂</span><span class="max-w-[9rem] truncate">${esc(st.sourceBranch || '')}</span><span class="text-ink-faint">⌄</span>
+    </button>`);
+    branchBtn.onclick = (e) => { e.stopPropagation(); haptic('tap'); branchListOpen = !branchListOpen; renderWorktreeChips(); };
+    row.appendChild(branchBtn);
+
+    const on = st.enabled;
+    const wtBtn = el(`<button type="button" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold active:scale-[0.98] transition-all ${on ? 'border-accent-bright bg-accent-wash text-accent-deep' : 'border-line-soft bg-surface text-ink-soft'}" data-testid="compose-worktree-toggle" aria-pressed="${on}">
+      <span class="inline-block w-3.5 h-3.5 rounded-[4px] border ${on ? 'bg-accent border-accent text-white' : 'border-line'} leading-[13px] text-[9px] text-center">${on ? '✓' : ''}</span>
+      <span>${t('在新 worktree 里开')}</span>
+    </button>`);
+    wtBtn.onclick = (e) => {
+      e.stopPropagation();
+      haptic('tap');
+      branchListOpen = false;
+      newSessionWorktree.setEnabled(!on);
+    };
+    row.appendChild(wtBtn);
+    host.appendChild(row);
+
+    if (st.loadError) {
+      const errEl = el(`<div class="text-[10px] text-danger"></div>`);
+      errEl.textContent = st.loadError;
+      host.appendChild(errEl);
+    }
+
+    if (branchListOpen && st.branches.length) {
+      // 自绘按钮组，不用原生 select：移动端上原生下拉会把弹层渲染到页面另一头（2026-09-11 实测）
+      const list = el('<div class="flex flex-wrap items-center justify-center gap-1 max-h-32 overflow-y-auto px-1" data-testid="compose-branch-list"></div>');
+      for (const b of st.branches) {
+        const active = b === st.sourceBranch;
+        const item = el(`<button type="button" class="px-2 py-0.5 rounded-full border text-[11px] ${active ? 'border-accent-bright bg-accent-wash text-accent-deep font-semibold' : 'border-line-soft bg-surface text-ink-soft'}"></button>`);
+        item.textContent = b;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          haptic('tap');
+          branchListOpen = false;
+          newSessionWorktree.setSourceBranch(b);
+          // 已勾选时换分支 = 换了源，必须重建：旧那棵是从别的分支切的，继续用就是在错的基线上干活
+          // 换分支不需要做任何事：意图跟着第一条消息传给服务端，此刻磁盘上还什么都没建
+        };
+        list.appendChild(item);
+      }
+      host.appendChild(list);
+    }
+  }
+
   // 干净新会话页（＋ / session:new）：当前工作区 + 将开 CLI 的默认档 + 示例 prompt；无最近列表。
   function showComposeSurface() {
     messagesEl.innerHTML = '';
@@ -7092,7 +7196,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       <div class="compose-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="compose-surface">
         <div class="text-center mb-5 w-full">
           <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">${t('新会话已就绪')}</h1>
-          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">${t('将在此工作区开新 CLI 会话')}</div>
+          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1" data-compose-sub>${t('将在此工作区开新 CLI 会话')}</div>
           <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('点击打开会话列表（按工作区浏览）')}">
             <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
@@ -7100,6 +7204,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
             <span class="text-xs text-ink-faint">⌄</span>
           </button>
+          <div class="mt-2 flex flex-col items-center gap-1.5" data-worktree-chips></div>
           <div class="mt-2 flex items-center justify-center gap-1">
             <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>
             <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="${t('重新读取 CLI 配置')}">
@@ -7129,9 +7234,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
       };
     });
+
     wireConfigRefreshButton(container.querySelector('.compose-defaults-refresh'));
 
     messagesEl.appendChild(container);
+    // 分支列表按 cwd 缓存，拉到后 onChange 会回来重画这一块；拉之前先画一次（此时 isAvailable
+    // 为假、整块不显示），避免非 git 工作区闪一下空 chip 行。
+    renderWorktreeChips();
+    void newSessionWorktree.ensureBranches(currentCwd);
     // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
     queueMicrotask(() => refreshComposeDefaultsSummary());
   }
@@ -7404,9 +7514,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           item.querySelector('.dash-recent-title').prepend(dashUnreadMark());
         }
         item.querySelector('.dash-ws-icon').textContent = '📁';
-        item.querySelector('.dash-ws').textContent = s.workspaceName;
+        // 托管 worktree 的会话挂在父仓工作区名下，但要标出工作树——否则首页两行看起来是同一个
+        // 地方的会话，而它们改的是不同的树。cwd 已由 mergeRecentSessionsAcrossWorkspaces 带回真实值。
+        const wsLabel = s.worktree ? `${s.workspaceName} / ${s.worktree}` : s.workspaceName;
+        item.querySelector('.dash-ws').textContent = wsLabel;
         item.querySelector('.dash-when').textContent = when;
-        item.title = `${s.workspaceName} · ${s.title || t('无标题会话')}`;
+        item.title = `${wsLabel} · ${s.title || t('无标题会话')}`;
         item.onclick = (e) => {
           e.stopPropagation();
           haptic('tap');

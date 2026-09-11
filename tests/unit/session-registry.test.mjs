@@ -378,6 +378,34 @@ test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧
   assert.deepEqual(sessions, before, '输入行不得被原地写入，避免污染 listSessionsPage 缓存');
 });
 
+// 托管 worktree 的会话并进父仓列表后（2026-09-11），列表里同时存在两种行：父仓的（不带 cwd）
+// 与 worktree 的（带自己的 cwd）。注册表按 cwd 归键，一律拿父仓 cwd 去查，worktree 那几行
+// 永远查不到状态——徽标消失，而「没有终端在驾驶」和「查错了目录」在 UI 上一模一样。
+test('applyTerminalStatesToSessions：行自带 cwd 时按行的 cwd 查（worktree 行不会被拿父仓 cwd 查空）', () => {
+  const wt = `${CWD}/.claude/worktrees/feature-x`;
+  const states = new Map([
+    [terminalStateKey(CWD, 'main-1'), { state: 'busy', source: 'cli' }],
+    [terminalStateKey(wt, 'wt-1'), { state: 'waiting', source: 'cli' }],
+  ]);
+  const rows = applyTerminalStatesToSessions(CWD, [
+    { id: 'main-1', title: '父仓' },
+    { id: 'wt-1', title: 'worktree', cwd: wt, worktree: 'feature-x' },
+  ], states);
+
+  assert.equal(rows[0].terminal, 'busy', '父仓行照旧走传入的 cwd');
+  assert.equal(rows[1].terminal, 'waiting', '拿父仓 cwd 查 worktree 行只会查空，徽标静默消失');
+  assert.equal(rows[1].cwd, wt, 'cwd 字段本身要原样留在行上，前端点开时要用');
+});
+
+// 反向：worktree 行的 cwd 不该让它命中**父仓**的同名状态。两个工作树下同一个 sessionId
+// 理论上不会撞，但判据一旦退化成「行有 cwd 就两边都试」，这条就是负片。
+test('applyTerminalStatesToSessions：行的 cwd 不命中时不回退到父仓 cwd', () => {
+  const wt = `${CWD}/.claude/worktrees/feature-x`;
+  const states = new Map([[terminalStateKey(CWD, 'same-id'), { state: 'busy', source: 'cli' }]]);
+  const rows = applyTerminalStatesToSessions(CWD, [{ id: 'same-id', cwd: wt }], states);
+  assert.equal(rows[0].terminal, undefined, '回退会把父仓终端的忙碌状态错报到 worktree 行上');
+});
+
 test('applyTerminalStatesToSessions：空状态/空输入安全，旧 terminal 仍会被清除', () => {
   assert.deepEqual(
     applyTerminalStatesToSessions(CWD, [{ id: SID, terminal: 'busy', terminalSource: 'cli' }], new Map()),
