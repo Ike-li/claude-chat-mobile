@@ -29,6 +29,45 @@ export function computeMockAssetVersion(publicDir = DEFAULT_PUBLIC_DIR) {
   return hash.digest('hex').slice(0, 8);
 }
 
+// 出向事件的形状闸。真 server 的 instances 载荷只有 instancesPayload() 一个产地（app/src/server/app.js），
+// service / canRestart 恒在；mock 却是 100 多处手写字面量，漏一处就是一条真 server 发不出来的事件。
+// 前端对这两个字段都是**无条件覆盖**（`p?.service ?? null`、`p?.canRestart === true`），所以漏带不是
+// "少一点信息"，是"把已有状态擦掉"：漏 service ⇒ latestServiceHealth 变 null ⇒ 配置面板「终端会话推送」
+// 整段 classList.add('hidden') 且此后无人再喂；漏 canRestart ⇒ 「立即重启」入口消失。
+//
+// 2026-09-11 的 P0-25c 间歇失败就是 service 这一路：某个用例的异步尾巴在它自己的 test 结束后才 io.emit，
+// 广播落到**下一个**用例的页面上（mock 的模块级状态与 io 都跨 test 存活，/__reset 复位不了已经在途的
+// async 尾巴）。canRestart 是同形的第二路，env-config-panel 的 P0-31f/31g 分别钉住它的两侧取值。
+//
+// 【为什么是抛异常不是补默认值】补默认值等于让 mock 自己造一份，那是把分歧藏起来——下次真 server 改了
+// 形状，mock 照样自洽地绿。抛异常则让"写了一条真 server 发不出的事件"当场可见：栈顶直接指向那行 emit。
+// 夹具里响亮地炸掉，比悄悄发一条假事件便宜得多。
+//
+// 【只守这两个字段】needsYou / devMode / defaultModel 是全 mock 一致地不带（server.js 的 78 处也没有），
+// 那是夹具的既有简化、不是两半之间的漂移，扩进来会改动多条 spec 的行为。
+const REQUIRED_INSTANCES_FIELDS = ['service', 'canRestart'];
+
+function assertOutboundShape(event) {
+  if (event?.type !== 'instances') return;
+  const payload = event?.payload;
+  const missing = REQUIRED_INSTANCES_FIELDS.filter(field => !payload || !(field in payload));
+  if (!missing.length) return;
+  throw new Error(
+    `mock transport: instances 事件缺少 ${missing.join(' / ')} 字段。真 server 的 instancesPayload() 恒带它们，`
+    + '漏带会把前端已有状态擦掉（service→latestServiceHealth 变 null，配置面板「终端会话推送」整段消失；'
+    + 'canRestart→「立即重启」入口消失）。请在该 payload 里补 service: mockServicePayload() / '
+    + 'canRestart: getMockCanRestart()。'
+  );
+}
+
+function guardAgentEvents(emitter) {
+  const original = emitter.emit.bind(emitter);
+  emitter.emit = (eventName, ...args) => {
+    if (eventName === 'agent:event') assertOutboundShape(args[0]);
+    return original(eventName, ...args);
+  };
+}
+
 export function createMockTransport({
   publicDir = DEFAULT_PUBLIC_DIR,
   buildNonce = process.env.CCM_BUILD_NONCE || null,
@@ -41,11 +80,13 @@ export function createMockTransport({
   const jsDir = join(publicDir, 'js');
   const assetVersion = computeMockAssetVersion(publicDir);
 
+  guardAgentEvents(io);
   io.use((socket, next) => {
     if (rejectedTokens.has(socket.handshake.auth?.token)) {
       next(new Error('unauthorized'));
       return;
     }
+    guardAgentEvents(socket); // 单播也要过闸：hydration 的 instances 走的就是 socket.emit
     next();
   });
 

@@ -188,6 +188,13 @@ let mockPermissionRules = {
   ask: ['WebFetch'],
   total: 5,
 };
+// instances 广播里跨全场景共用的两个字段（canRestart / service）——真 server 在 emit 的那一刻由
+// instancesPayload() 现算，所以这里也以**函数**形式交给场景模块，而不是传值。
+// 传值会把取值冻在场景 run() 开头解构 context 的那一刻：一条活过自己 test 的异步尾巴（本 mock 里
+// 确有此形态，2026-09-11 录到过迟到广播落在下一个用例页面上）就会带着旧值广播出去——譬如
+// test:no-restart 刚把 canRestart 拨成 false，迟到的那条仍报 true，而 P0-31g 断言的正是
+// 「立即重启」入口不存在。取函数＝取真 server 的时序，不必去赌这个窗口有多窄。
+const getMockCanRestart = () => mockCanRestart;
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
 // 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
 const mockServicePayload = () => ({
@@ -2359,6 +2366,7 @@ io.on('connection', socket => {
       },
       setMockRestarts: value => { mockRestarts = value; },
       setMockCanRestart: value => { mockCanRestart = value; },
+      getMockCanRestart,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       // test:server-restart：把 service.startedAt 拨到另一个值（模拟重连到重启后的新 server 进程）
       // + 广播时带上同形 service payload（真 server 的 instances 广播恒带 service 字段）。
@@ -2366,7 +2374,7 @@ io.on('connection', socket => {
       mockServicePayload,
     })),
     ...createContentScenarios(() => ({
-      io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
+      io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },

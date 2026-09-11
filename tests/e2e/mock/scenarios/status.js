@@ -193,7 +193,7 @@ export function createStatusScenarios(getContext) {
       // 真实模型名，而不是停在裸别名 'opus'——原表现「选了 opus 才显具体名」。models 列表无 default 项，
       // 故 cliDefaultLabel 为空、pill 回落 cwd 默认名并经 resolveGatewayModelName 桥接。
       command: 'test:gateway-default-fresh',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay }) => {
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay, mockServicePayload, getMockCanRestart }) => {
         socket.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'init', payload: {
@@ -218,6 +218,8 @@ export function createStatusScenarios(getContext) {
         socket.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
@@ -337,7 +339,7 @@ export function createStatusScenarios(getContext) {
     },
     {
       command: 'test:needsyou',
-      run: run(async ({ io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay }) => {
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart }) => {
         let background = mockInstances.find(instance => instance.instanceId === 'inst_needsyou');
         if (!background) {
           background = {
@@ -358,6 +360,8 @@ export function createStatusScenarios(getContext) {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
             viewingInstanceId,
             viewingCwd: mockInstances.find(instance => instance.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
             dirs: [...new Set(mockInstances.map(instance => instance.cwd))],
@@ -461,7 +465,7 @@ export function createStatusScenarios(getContext) {
       // + resolveEmptySurface（app/public/js/logic.js）验证：不静默 showDashboard()，而是渲染
       // "会话已中断"提示。先 emit 一条「已中断」系统消息，对齐真实 settleForce() 的第一步。
       command: 'test:instance-destroyed',
-      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId }) => {
+      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart }) => {
         const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
         if (idx === -1) return;
         const destroyed = mockInstances[idx];
@@ -475,6 +479,8 @@ export function createStatusScenarios(getContext) {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
             viewingInstanceId: null,
             viewingCwd: removedCwd,
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), removedCwd])),
@@ -491,7 +497,7 @@ export function createStatusScenarios(getContext) {
       // 供前端 detectServerRestart（app/public/js/logic.js）验证：显示「服务已重启」提示 +「继续此会话」
       // 一键重开（走既有 session:switch 打开路径），而非误导性的「停止操作未能正常结束」。
       command: 'test:server-restart',
-      run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload }) => {
+      run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload, getMockCanRestart }) => {
         const removedCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
           ?? '/Users/you/code/claude-chat-mobile';
         const dirs = Array.from(new Set(mockInstances.map(i => i.cwd)));
@@ -501,6 +507,7 @@ export function createStatusScenarios(getContext) {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
             viewingInstanceId: null,
             viewingCwd: removedCwd,
             dirs,
