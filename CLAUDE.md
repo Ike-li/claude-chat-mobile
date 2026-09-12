@@ -82,9 +82,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 分支纪律
 
-两条分支各有单一职责：**`dev` = 开发主线**（GitHub 默认分支，dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布。
+两条分支各有单一职责：**`dev` = 开发主线**（dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布，**同时是 GitHub 默认分支**——仓库首页展示的 README 必须与装机 `curl` 拿到的那份一致。
 
-- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。
+- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。**默认分支是 `master`，所以开 PR 必须显式 `--base dev`**——忘了会被 `quality` 那道闸拦住（显式报错，不会静默合错）。
 - **`master` 只接受 `scripts/release.sh` 开的那条 `dev` → `master` 发版 PR**。它开了 `enforce_admins`，谁都不能直推（包括仓库 owner），`quality` 里还有一道 step 拦住任何 head 不是 `dev` 的 PR。
 - 两条分支的 required checks 都是 `quality` / `unit-test (20)` / `unit-test (24)` / `e2e`；**approvals = 0**——单人仓库里 GitHub 不允许自己 approve 自己的 PR，设成 1 会让所有 PR 永远合不进去。PR 在这里的作用是「强制 CI + 可读的变更面」，不是等人点同意。
 - 发版走 `scripts/release.sh`：bump → 推 `dev` → **等真 CI 绿** → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。中途失败就直接重跑，它会从中断处接上（不会二次 bump）。
