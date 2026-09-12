@@ -54,8 +54,14 @@ const BASE_PORT = 33341;
 
 // ★ 文件清单【扫描得来】，不是写死的列表。这一条是硬要求：任何形式的 checked-in 清单都会在
 // 新增 spec 时静默漏跑，而漏跑表现为「全绿」——与 74fc46e 那次漏传 -c 同型的失效。
+// ★ recursive 也不能省，理由同上、换了个形态：playwright.config.ts 的 testMatch 是
+// 'specs/**/*.spec.ts'（递归），只扫一层就会漏掉 specs/<子目录>/*.spec.ts，而【其余顶层 spec
+// 照常作为显式 CLI 参数传进去 ⇒ 四片全绿】。这个分叉在本脚本只供本机手动跑时还只是隐患，
+// 自它成为 CI 入口那一刻起就是「required check 静默放过整个子目录」。
 function listSpecs() {
-  return readdirSync(SPEC_DIR).filter(f => f.endsWith('.spec.ts')).sort()
+  return readdirSync(SPEC_DIR, { recursive: true })
+    .map(entry => String(entry).replaceAll('\\', '/'))  // recursive 的返回值分隔符随平台
+    .filter(f => f.endsWith('.spec.ts')).sort()
     .map(f => `tests/e2e/specs/${f}`);
 }
 
@@ -151,7 +157,10 @@ for (const { index, code } of results) {
 }
 
 if (results.some(r => r.code !== 0)) {
-  console.error('\n[test-e2e-parallel] 至少一个分片失败——完整报告见对应 playwright-report-shardN/ 目录。');
+  // 指 test-results 而不是 playwright-report：上面 spawn 时带了 --reporter=list，命令行的 reporter
+  // 会【覆盖】config 里的 reporter 数组，html 那一项根本不执行 ⇒ playwright-report-shardN/ 从来不生成。
+  // 原文指向那个目录，照着去找只会扑空（.github/workflows/test.yml 的 artifact 路径同源）。
+  console.error('\n[test-e2e-parallel] 至少一个分片失败——失败截图见对应 test-results-shardN/ 目录。');
   process.exit(1);
 }
 console.log('\n[test-e2e-parallel] 全部分片通过。');
