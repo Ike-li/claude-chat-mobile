@@ -235,25 +235,23 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 只发第一态（终端在驾驶）。后两态——疑似中断、解锁——由用例经 POST /__mirror-state 显式推进。
+      //
+      // 【为什么不再用定时器串三态】原实现是 delay(1500) → stale → delay(5000) → 解锁，于是这条用例
+      // 变成一场赛跑：它得在那 5 秒窗口内点完模型 tile、等到「设置已冻结」、再断言两次。谁快谁慢取决于
+      // 机器——窗口早先是 1500ms，因为同样的原因被调宽到 5000ms（见 git 历史），而 2026-09-12 e2e 接进
+      // 4 分片并行后 CPU 争抢又让 5000ms 不够：dev 与当时在审的 PR 双双稳定红在 toBeEnabled，retry 也红。
+      // 继续加宽只是把同一个赌注押得更大；改成显式推进就没有窗口可赌，用例还快了 6.5 秒。
+      // 这不削弱覆盖面：产品侧「自动解锁」是服务端释放镜像锁的行为，这里测的始终是前端【收到
+      // mirror_state 之后】怎么反应，而那一点与事件何时到达无关。
       command: 'test:mirror',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
-        const mirrorEvent = (readonly, stale) => ({
-          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          // cliSeen:true —— 这些场景模拟的就是「终端在驾驶」，如实带上 server 的负证据槽，
-          // 否则前端会保守当成「没见过终端」而不敢把 stale 说成「终端疑似中断」。
-          type: 'mirror_state', payload: { readonly, stale, cliSeen: true },
-        });
-        socket.emit('agent:event', mirrorEvent(true, false));
-        await delay(1500);
-        socket.emit('agent:event', mirrorEvent(true, true));
-        // stale（疑似中断）阶段要足够长：P0-17i 在检查这一态之前还要点模型 tile、等「设置已冻结」，
-        // 原先 1500ms 的窗口常在那些步骤跑完前就过去了，断言便永远等不到——是窗口太窄，不是产品坏了。
-        await delay(5000);
-        socket.emit('agent:event', mirrorEvent(false, false));
-        await delay(200);
+      run: run(({ socket, viewingInstanceId }) => {
+        // cliSeen:true —— 这个场景模拟的就是「终端在驾驶」，如实带上 server 的负证据槽，
+        // 否则前端会保守当成「没见过终端」而不敢把 stale 说成「终端疑似中断」。
+        // 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的（见 server.js 同款注释）。
         socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_mirror_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+          ts: Date.now(), type: 'mirror_state', payload: { readonly: true, stale: false, cliSeen: true },
         });
       }),
     },

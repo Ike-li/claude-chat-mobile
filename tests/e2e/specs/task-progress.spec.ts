@@ -239,7 +239,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#modelInput')).toHaveValue(modelBefore);
     await expect(page.locator('#messages')).toContainText('设置已冻结');
 
+    // 后两态由用例显式推进，不再等 mock 的定时窗口。原实现是 delay(1500)→stale→delay(5000)→解锁，
+    // 于是这条用例得在那 5 秒内点完 tile、等到「设置已冻结」、再断言两次——谁快谁慢取决于机器。
+    // 窗口早先是 1500ms、因同样的原因被调宽到 5000ms；2026-09-12 e2e 接进 4 分片并行后 CPU 争抢又让
+    // 5000ms 不够用，dev 与当时在审的 PR 双双【稳定】红在下面这条 toBeEnabled（retry 也红）。
+    // 显式推进之后没有窗口可赌，用例还快了约 6.5 秒。测的东西没变：产品侧「自动解锁」是服务端释放
+    // 镜像锁的行为，这里验的始终是前端【收到 mirror_state 之后】怎么反应，与事件何时到达无关。
+    await page.request.post('/__mirror-state?readonly=1&stale=1');
     await expect(page.locator('#input')).toHaveAttribute('placeholder', /疑似中断/, { timeout: 5_000 });
+
+    await page.request.post('/__mirror-state?readonly=0&stale=0&withResult=1');
     await expect(page.locator('#input')).toBeEnabled({ timeout: 5_000 });
     await waitForIdle(page);
 

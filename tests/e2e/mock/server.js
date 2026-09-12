@@ -603,6 +603,32 @@ app.post('/__arm-no-session-id', (_req, res) => {
   res.json({ ok: true });
 });
 
+// P0-17i 的镜像三态改由用例【显式推进】，不再靠 mock 侧的定时器串起来（理由见 scenarios/status.js
+// 的 test:mirror）。body: { readonly, stale, withResult }——withResult 时补一条 result 让 waitForIdle 收口。
+// 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的，把 type 收进辅助函数的形参
+// 会让它报 dynamic_type。
+app.post('/__mirror-state', (req, res) => {
+  // 走 query 不走 body：本 mock 没装 express.json()，既有 __ 端点（__access-bypass /
+  // __arm-read-elsewhere）也都读 req.query。用 body 会静默拿到 undefined 再落到默认值上——
+  // 端点照样回 200，事件却发的是上一态，症状是断言等一个永远不来的状态（本次就踩了一遍）。
+  const readonly = req.query?.readonly !== '0';
+  const stale = req.query?.stale === '1';
+  const withResult = req.query?.withResult === '1';
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+    ts: Date.now(), type: 'mirror_state',
+    payload: { readonly, stale, cliSeen: true },
+  });
+  if (withResult) {
+    io.emit('agent:event', {
+      seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+      ts: Date.now(), type: 'result',
+      payload: { messageId: 'msg_mirror_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
+  }
+  res.json({ ok: true });
+});
+
 // P0-NOSID 后半段：CLI 终于吐了 init——实例还是同一个（viewingInstanceId 不变，前端不会重新 bindView），
 // 只是 instances 广播里多了 sessionId。验证前端此时把 composer 同步出来（真机 c1ccd055：内容回来了但
 // 输入条再也不出现，因为 setInstances 里只有 pill 两处是无条件同步的，composer 漏了）。
