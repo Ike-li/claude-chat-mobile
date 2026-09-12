@@ -135,10 +135,6 @@ const CLAIMS = [
     actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
   { diagram: '00', shown: 'claude-agent-sdk 0.3.263',
     actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.263' },
-  { diagram: '12', shown: 'check 链上的 13 道门禁',
-    // 2026-09-11 接进 check-disposable-env-guard 后图上还写着 12，在 PENDING_CLAIMS 里挂了一轮，
-    // gh-pages 4565341 重出图后归位。挪回来而不是当初就改 expect：CLAIMS 的语义是「图说 X 且代码是 X」。
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 13 },
   { diagram: '00 / 01 / 08 / 11', shown: '共 31 种 type',
     // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）。
     actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
@@ -159,8 +155,12 @@ const CLAIMS = [
 // 分开之后：代码侧立刻被守住（删了会红），而「图欠这一条」这个状态也不会随会话结束丢掉。
 // 补进图并重出后，把条目挪进 CLAIMS 即可。
 const PENDING_CLAIMS = [
-  // 当前为空：2026-09-11 那三条已随 gh-pages 4565341 重出图并挪回 CLAIMS。
-  // 新的漂移先落这里——代码侧立刻被守住，而「图欠这一条」不会随会话结束丢掉。
+  // 2026-09-12：check 链接进第 14 道门禁 check-shell-pitfalls，图 12 上还写着 13。
+  // 【为什么挪到这里而不是把 expect 改成 14】CLAIMS 的语义是「图说 X 且代码也是 X」；直接改 expect
+  // 就成了「把断言改成实测值」，这道闸当场失去意义。同一条 2026-09-11 从 12 → 13 时也是先在这里
+  // 挂一轮、重出图后再挪回 CLAIMS 的。补进图并重出后，把它挪回 CLAIMS 并把 shown 改成新数字。
+  { diagram: '12', todo: 'check 链已是 14 道门禁（新增 check-shell-pitfalls），图上仍写 13',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 14 },
 ];
 
 function git(args) {
