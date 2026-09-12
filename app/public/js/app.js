@@ -979,8 +979,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 重试已过、流恢复 → 撤掉重试行，回落普通 spinner。由 text_delta/thinking_delta/tool_use 三处驱动
   // （任一到达都说明这一轮的 API 请求真的通了）；setBusy(false) 会整清 liveLine，无需在此重复。
-  function clearLiveRetry(ev) {
-    if (ev?.replay) return; // 回放事件对 liveLine 的所有字段都保持中性，不只是 busy 布尔
+  //
+  // ★ retry 这一维【不跟】thinking/sawContentDelta/lastEventAt 走「回放一律中性」那条规矩，
+  // 回放事件照样清它。因为 api_retry 是 emitTransient（不进环形缓冲），`liveLine.retry` 只可能是
+  // **本次连接**期间收到的；而典型时序恰恰是「收到 api_retry → 断线 → 重连 → 回放那条成功的
+  // text_delta」——回放的输出本身就是重试已经通了的证据。若在此早退，renderLiveLineText 又优先
+  // 渲染 retry，spinner 会一直显示旧的 API 错误、倒计时卡在 0，直到下一条非回放流事件或轮次结束
+  // （PR #38 review 第五轮 P2）。
+  // 代价是 mixed 批次里旧轮的 delta 可能提前撤掉当前轮的重试行——但 api_retry 是逐次重试都发的，
+  // 真还在重试下一拍就会重新点亮；反过来「永久显示一个不存在的错误」没有自愈路径。取轻。
+  function clearLiveRetry() {
     if (!liveLine?.retry) return;
     liveLine.retry = null;
     renderLiveLine();
@@ -2551,7 +2559,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (_composeReady) refreshComposeDefaultsSummary();
     },
     text_delta(p, ev) {
-      clearLiveRetry(ev); // 重试已过，流恢复——状态行从重试态回落普通 spinner
+      clearLiveRetry(); // 重试已过，流恢复——状态行从重试态回落普通 spinner
       // 子 agent 正文：嵌进可折叠卡（不污染主流气泡）；parentToolUseId = 主 Agent/Task 的 toolUseId
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
@@ -2581,7 +2589,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     },
     thinking_delta(p, ev) {
-      clearLiveRetry(ev);
+      clearLiveRetry();
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
@@ -2599,7 +2607,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     },
     tool_use(p, ev) {
-      clearLiveRetry(ev);
+      clearLiveRetry();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
       // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开；Task 清单工具特化

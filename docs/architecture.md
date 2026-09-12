@@ -116,9 +116,13 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 - `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `app/src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
   出向另有一道**前端接收面覆盖**检查：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
 - `replay: true` 标记这批是 `sync:since` 补发而非实时到达。**它只补渲染内容，对运行态完全中性**——既不点亮也不清除。运行态的真相源是 `instances` 广播，而那里**两个字段各管一件事，不可混用**：
-  - `state`（`idle`/`busy`/`permission`/…）驱动**运行条**与抽屉角标。它是粗粒度的——服务端 `stateOf()` 把 `hasBgTasks()` 也折进 `busy`。
+  - `state`（`idle`/`busy`/`permission`/…）驱动**运行条**与抽屉角标。它是粗粒度的——服务端 `stateOf()` 把 `hasBgTasks()` 也折进 `busy`，**所以不能只看它**。带上 `bgActive` 与 `turnRunning` 才是完整判据，三者的组合只有两条规则：
+    - `turnRunning === true` → **一定显示运行条**，哪怕同时挂着后台任务（`bgActive` 与 `turnRunning` 可以并存）。
+    - 否则退回 `shouldBindBusyFromBroadcast`，它对 `bgActive === true` 恒返回 false——**纯后台任务期不由运行条表达**，那一段归 `task_progress` 横幅（该期没有 `result` 可释放，点亮了就没人清）。
+    - 这两条缺任一条都错过：少了第一条，「后台任务 + 前台轮并存」时前台轮被误判成不存在；少了第二条，纯后台任务活着的整段时间里运行条和红色停止钮都撤不掉。
   - `turnRunning`（只认在途轮）驱动**停止钮与发送闸**。纯后台任务期 `state` 是 `busy` 而 `turnRunning` 为 false，此时**不得**锁发送、也不得把主按钮变成停止钮——移动端回车不发送、只能点那个钮，锁了就是彻底发不出消息（判据见 `logic/composer.js` 的 `resolveComposerPrimaryMode`）。
   - 回放里的 delta 与轮次终止事件（`result` / `error` / `system:interrupted`）**必须成对地都不写运行态**。只挡一半会翻车：批次里若既有已结束的旧轮、又有当前正在跑的新轮，旧轮那条 `result` 会清掉 `bindView` 刚按权威 `state` 播下的 busy，而属于新轮的 delta 已不会再点亮它——运行条与停止钮双双消失，用户看到「空闲」，发出去的消息却被服务端以在途轮为由拒掉。
+  - **`liveLine.retry` 是这条中性规则的唯一例外，回放照样清它。** `api_retry` 走 `emitTransient`（不进环形缓冲），所以本地那份 retry 只可能是本次连接期间收到的；而典型时序正是「收到 `api_retry` → 断线 → 重连 → 回放那条成功的 `text_delta`」，回放的输出本身就是重试已通的证据。不清的话 `renderLiveLineText` 优先渲染 retry，spinner 会一直显示旧的 API 错误、倒计时卡在 0，且没有自愈路径。
 - 清 busy 的两条通道都是**被动**的：轮次终止事件可能在用户切走时被实例过滤按视图丢弃，而 `shouldForceClearBusyFromBroadcast` 那条看门狗只在**收到广播时**才跑，系统空闲时广播根本不来。故 `app.js` 的 `startLiveTicker` 每秒按权威 `state` 自检一次兜底，不依赖广播到达（2026-09-12 真机：会话早已结束，切回去仍挂着运行条和红色停止钮，此后 100 秒内无任何 instances 广播）。
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
