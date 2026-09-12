@@ -11,7 +11,9 @@ import { t } from '../i18n.js';
 
 const BRANCH_ACK_TIMEOUT_MS = 4000;
 
-export function createNewSessionWorktree(context, { onChange = () => {} } = {}) {
+// ackTimeoutMs 可注入：用例要验「切走之后迟到的响应不得写入」，得自己掌控 ack 的到达顺序，
+// 而留一个 4s 的真 timer 会让整个测试文件空等 4 秒（本仓踩过「两文件在空等」那次提速教训）。
+export function createNewSessionWorktree(context, { onChange = () => {}, ackTimeoutMs = BRANCH_ACK_TIMEOUT_MS } = {}) {
   let enabled = false;
   let sourceBranch = null;      // null = 跟随仓库当前分支
   let branches = [];
@@ -57,16 +59,26 @@ export function createNewSessionWorktree(context, { onChange = () => {} } = {}) 
     if (!socket) return snapshot();
     loadedFor = cwd;
     loadError = null;
+    // 换了工作区就先清掉上一处的分支与当前分支。留着的话 B 还在加载时屏幕上显示的是 A 的分支，
+    // 此刻发出第一条消息就会拿 A 的分支名去 B 建 worktree —— 要么源分支选错（同名分支在两个仓里
+    // 指向完全不同的东西），要么因为那个分支只存在于 A 而整条失败。
+    branches = [];
+    currentBranch = null;
+    onChange(snapshot());
     const res = await new Promise(resolve => {
       let settled = false;
       const done = value => { if (!settled) { settled = true; resolve(value); } };
-      setTimeout(() => done(null), BRANCH_ACK_TIMEOUT_MS);
+      setTimeout(() => done(null), ackTimeoutMs);
       try {
         socket.emit('git:branches', { cwd }, done);
       } catch {
         done(null);
       }
     });
+    // 【await 之后必须重新核对目标】用户可能已经切走：这次响应对应的是 cwd，而 loadedFor 现在
+    // 指着别处。无条件写入等于「谁后到听谁的」——A 的迟到响应会盖掉 B 已经加载好的分支列表，
+    // 而 B 的列表看起来完全正常，没有任何迹象说明它其实是 A 的。
+    if (loadedFor !== cwd) return snapshot();
     if (!res) {
       loadError = t('读取分支超时');
     } else if (!res.ok) {

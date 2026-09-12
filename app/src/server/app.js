@@ -3838,6 +3838,13 @@ registerSocketConnection(io, socket => {
   // 前端已有 _serviceRestartNoticeActive（instances 广播维护），面板直读，避免二次写 localStorage 基线。
   on(socket, 'service:status', (_payload, ack) => {
     if (typeof ack !== 'function') return;
+    // 两个桥的安装态是**启动时读一次**的缓存（instances 广播很频繁，不能每次广播都去读盘）。
+    // 但用户完全可能在 server 运行期间用文档里的 `npm run statusline:install|uninstall` /
+    // `hooks:install|uninstall` 改掉它——此后这里会一直回答旧状态：给一个已经装好的桥继续显示
+    // 「安装」，或者卸载完了还报着已安装，而且永远不会自愈。
+    // service:status 是低频的面板请求（不是广播），在这一处读盘既廉价又准确。
+    refreshStatuslineInstallState();
+    refreshHooksInstallState();
     const health = computeServiceHealth();
     ack({
       ok: true,

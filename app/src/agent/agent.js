@@ -523,6 +523,14 @@ export class AgentSession {
     // 已结算的轮数（result 到达即 +1）。pendingTurns 是【在途】数、会回落到 0，答不了
     // 「这个会话到底聊过几轮」——而那正是两个旁路提问的准入判据（太早的会话没什么可猜/可摘要的）。
     this.completedTurns = 0;
+    // 这个会话在本进程之外已经聊过 —— resume 才谈得上（有 transcript 才 resume 得起来）。
+    // completedTurns 只数**本进程看见的** result，重启或空闲回收后 resume 回来时它是 0，于是两道
+    // 「首轮不猜/没什么可摘要」的门槛会把一个聊了半天的老会话当成刚开的：回来时的摘要要再攒两轮
+    // 才跑，第一轮的下一步建议直接被抑制——而 askSideQuestion 拿得到完整上下文，本来就答得出来。
+    // 【为什么不去数 transcript 的真实轮数】resume 是热路径（注释里反复强调不能拖慢），而这两处
+    // 要的只是「够不够 2 轮」这个布尔判断，为它做一次全量扫描不划算。所以这里记的是「已有历史」，
+    // 不叫 completedTurns 就是为了不谎称它是精确计数。
+    this.hasPriorHistory = Boolean(resumeId);
     this._lastRecapAt = 0;        // 上次给出摘要的时刻，供最小间隔判据；0 = 本会话还没给过
     this.stderrTail = '';         // CLI stderr 尾部（有界，见 _recordStderr）：resume 失败时唯一的原因来源
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
@@ -648,7 +656,7 @@ export class AgentSession {
   async maybeRecap({ awayMs = 0, now = Date.now(), enabled = true } = {}) {
     if (!shouldRecap({
       awayMs, assistantTurns: this.completedTurns, lastRecapAt: this._lastRecapAt,
-      now, isBusy: this.pendingTurns > 0, enabled,
+      now, isBusy: this.pendingTurns > 0, enabled, hasPriorHistory: this.hasPriorHistory,
     })) return false;
     // 先占时刻再问：askSide 有网络往返，期间用户可能又切走切回触发第二次。
     // 占位放在前面 ⇒ 最坏情况是"这次问失败了、还得再等 30 分钟"，比并发问出两条摘要好。
@@ -663,9 +671,16 @@ export class AgentSession {
   // 这两个旁路提问里花费较多的那个，对应 CCM_PROMPT_SUGGESTION 开关。
   // 出错/被中断的那一轮不猜：那时用户要判断的是刚才发生了什么，给"下一步"是打扰。
   async maybeSuggest({ isError = false, interrupted = false, enabled = true } = {}) {
-    if (!shouldSuggest({ assistantTurns: this.completedTurns, isError, interrupted, enabled })) return false;
+    if (!shouldSuggest({ assistantTurns: this.completedTurns, isError, interrupted, enabled, hasPriorHistory: this.hasPriorHistory })) return false;
+    // 发问前记下轮次序号：下面那道 pendingTurns 闸只看得见**还在跑**的新一轮，
+    // 而 askSide 慢、用户又在这期间起了一轮**短**的并跑完时，pendingTurns 已经回到 0，
+    // 闸就恰好失效——这条对上一轮说的建议会落进新对话。completedTurns 每收一条 result 就 +1，
+    // 拿它当序号即可覆盖那个窗口（重叠的多次 askSide 乱序返回也一并挡住）。
+    const turnAtRequest = this.completedTurns;
     const text = await this.askSide('suggestion', SUGGEST_PROMPT);
     if (!text || this.disposed) return false;
+    // 期间又结算过轮次 ⇒ 这条建议是对更早那一轮说的，已经过时。
+    if (this.completedTurns !== turnAtRequest) return false;
     // 期间用户已经开始新一轮 ⇒ 这条建议是对上一轮说的，已经过时。宁可不发：
     // 迟到的建议比没有建议更糟，它会在用户已经打定主意之后再来干扰一次。
     if (this.pendingTurns > 0) return false;

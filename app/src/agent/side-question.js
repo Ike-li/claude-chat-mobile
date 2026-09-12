@@ -50,12 +50,13 @@ export function shouldRecap({
   now = 0,
   isBusy = false,
   enabled = true,
+  hasPriorHistory = false,
 } = {}) {
   if (!enabled) return false;
   // 正在跑时不给：用户回来看到的是实时进度，摘要只会和进度条打架。
   if (isBusy) return false;
   if (!(awayMs >= RECAP_MIN_AWAY_MS)) return false;
-  if (assistantTurns < RECAP_MIN_ASSISTANT_TURNS) return false;
+  if (assistantTurns < RECAP_MIN_ASSISTANT_TURNS && !hasPriorHistory) return false;
   // lastRecapAt=0 表示本会话还没给过——首次不受间隔约束。
   if (lastRecapAt && now - lastRecapAt < RECAP_MIN_INTERVAL_MS) return false;
   return true;
@@ -69,11 +70,12 @@ export function shouldSuggest({
   isError = false,
   interrupted = false,
   enabled = true,
+  hasPriorHistory = false,
 } = {}) {
   if (!enabled) return false;
   if (isError || interrupted) return false;
   // 首轮不猜：只有一次往返时，「下一步」几乎总是猜不准的（CLI 内建那条同样要求 ≥2）。
-  return assistantTurns >= 2;
+  return assistantTurns >= 2 || hasPriorHistory;
 }
 
 // 模型回复归一：空/纯空白 → null（调用方据此不发事件，不渲染空行）。

@@ -1917,10 +1917,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ID/IP/UA 一律用 textContent（UA 攻击者可控），不拼 innerHTML，防 XSS。
   // 待审设备条数：L1 目录「接入与设备」那行的红点判据（唯一会亮红点的一行）。
   let lastPendingDevices = [];
-  // 最后一次 init 带来的 MCP 服务器与 skills 数（「这台电脑」页渲染用）。
-  // 与 lastTrustedDevices 同类：都是「最后一次事件载荷」的快照，供面板打开时重画。
-  let lastMcpServers = null;
-  let lastSkillsCount = 0;
+  // init 带来的 MCP 服务器与 skills 数（「这台电脑」页渲染用），**按 cwd 归键**。
+  //
+  // 与 modelsCache / slashCommandsCache 同一条理由：二者都随工作区的 settings/skills 而变，不是
+  // 账号级全局量。这里此前是一份全局「最后一次 init」快照，而切到一个**已经 live** 的会话不会
+  // 重放 init——于是换工作区之后这一页继续显示上一处的 MCP 服务器与 skills 数。那恰恰是排查
+  // 「某个 MCP 没起来」时最要紧的一屏，显示成别处的只会把人带偏。
+  // 没有本 cwd 的快照时要渲染成「没有」，而不是留着上一处的——所以读取一律按当前 cwd 现取。
+  const mcpServersByCwd = new Map();
+  const skillsCountByCwd = new Map();
   function renderDeviceRequests(devices) {
     lastPendingDevices = Array.isArray(devices) ? devices : [];
     generalNav?.render();
@@ -2374,8 +2379,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       applySlashCommands(p.slashCommands);
       // MCP 服务器与 skills 数：同 slashCommands 的「缺字段不覆盖」惯例——合成 init（切区重放、
       // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「这台电脑」页刷成空。
-      if (p && Object.prototype.hasOwnProperty.call(p, 'mcpServers')) lastMcpServers = p.mcpServers;
-      if (typeof p?.skillsCount === 'number') lastSkillsCount = p.skillsCount;
+      // 归键用事件自带的 cwd：切工作区时 init 与 currentCwd 的更新顺序不保证，拿 currentCwd 当键
+      // 会把 A 的快照记到 B 名下。缺 cwd（老式合成 init）才回落当前值。
+      const initCwd = p?.cwd || currentCwd;
+      if (p && Object.prototype.hasOwnProperty.call(p, 'mcpServers')) mcpServersByCwd.set(initCwd, p.mcpServers);
+      if (typeof p?.skillsCount === 'number') skillsCountByCwd.set(initCwd, p.skillsCount);
       renderHostEnvSection();
     },
     // CLI 中途发现新命令/skill 的全量推送（SDK 0.3.229 的 commands_changed）。
@@ -5969,6 +5977,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function renderHostEnvSection() {
     const section = $('hostEnvSection'), body = $('hostEnvBody');
     if (!section || !body) return;
+    // 现取当前 cwd 的那份：没有就是没有（整段隐藏），绝不回落到上一个工作区的快照。
+    const lastMcpServers = mcpServersByCwd.get(currentCwd) ?? null;
+    const lastSkillsCount = skillsCountByCwd.get(currentCwd) ?? 0;
     const mcp = formatMcpServers(lastMcpServers);
     // 两样都没有 = 这个 cwd 确实既没配 MCP 也没有 skill，整段隐藏，不给空计数占位
     if (!mcp && !lastSkillsCount) { section.classList.add('hidden'); return; }
@@ -6046,7 +6057,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     onEnterPage: page => {
       // 离开「接入与设备」页就收码：钥匙不该挂在一个用户以为已经翻过去的界面上
       if (page !== 'devices') hideQr();
-      if (page === 'host') ensureGeneralVersions();
+      // MCP / skills 那一段按 cwd 归键，而切到一个**已经 live** 的会话不会重放 init——
+      // 只靠 init 回调重画的话，换过工作区之后这一页还挂着上一处的数据。每次进页现取一次。
+      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
     },
@@ -7928,6 +7941,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         c.body.appendChild(hint);
         socket.emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, res => {
           hint.remove();
+          // 【渲染前再核一次「还在同一个会话吗」】上面那对快照保证的是**拉对了数据**，不保证
+          // 响应回来时用户还没切走。切会话会清掉 histSubCards，于是下面的 renderHistoryBubbles
+          // (..., {cardsOnly:true}) 会把这张旧卡在**新会话的消息流里**重建一遍——上一个会话的
+          // 执行记录凭空出现在另一个对话里，且刷新后又消失，正是「凭空多出来的气泡」那类症状，
+          // 只不过来源是会话切换而不是 toolUseId 归属。两道闸各挡一个方向，缺一不可。
+          if (displayedSessionId !== flowSid || currentCwd !== flowCwd) return;
           // 只收属于这张卡的条目：服务端已按 toolUseId 归属，这里再挡一道——漏进主流的条目
           // 会变成凭空多出来的气泡，而那是刷新后才出现、极难归因的一类症状。
           const items = Array.isArray(res?.items) ? res.items.filter(m => m?.parentToolUseId === parentId) : [];

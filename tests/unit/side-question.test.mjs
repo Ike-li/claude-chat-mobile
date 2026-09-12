@@ -138,3 +138,35 @@ test.describe('提示词：两条硬要求写进了文本本身', () => {
     }
   });
 });
+
+// completedTurns 只数**本进程看见的** result。重启或空闲回收之后 resume 回来时它是 0，于是这两道
+// 「首轮不猜 / 没什么可摘要」的门槛会把一个聊了半天的老会话当成刚开的：回来时的摘要要再攒两轮才跑，
+// 第一轮的下一步建议直接被抑制——而 askSideQuestion 拿得到完整上下文，本来就答得出来。
+// hasPriorHistory 表达的正是「本进程之外已经聊过」，不是精确轮数。
+test.describe('hasPriorHistory：resume 回来的老会话不该被当成刚开的', () => {
+  test('shouldSuggest：0 轮但有历史 → 给建议', () => {
+    assert.equal(shouldSuggest({ assistantTurns: 0, hasPriorHistory: true }), true);
+  });
+
+  test('shouldSuggest：0 轮且没有历史 → 仍然不给（首轮不猜的门槛不能被顺手拆掉）', () => {
+    assert.equal(shouldSuggest({ assistantTurns: 0, hasPriorHistory: false }), false);
+    assert.equal(shouldSuggest({ assistantTurns: 1 }), false);
+  });
+
+  test('shouldSuggest：有历史也压不过出错/被中断', () => {
+    assert.equal(shouldSuggest({ assistantTurns: 0, hasPriorHistory: true, isError: true }), false);
+    assert.equal(shouldSuggest({ assistantTurns: 0, hasPriorHistory: true, interrupted: true }), false);
+    assert.equal(shouldSuggest({ assistantTurns: 0, hasPriorHistory: true, enabled: false }), false);
+  });
+
+  test('shouldRecap：0 轮但有历史 → 给摘要（其余门槛照旧）', () => {
+    const base = { awayMs: 10 * 60_000, assistantTurns: 0, now: 1_000_000 };
+    assert.equal(shouldRecap({ ...base, hasPriorHistory: true }), true);
+    assert.equal(shouldRecap({ ...base, hasPriorHistory: false }), false);
+  });
+
+  test('shouldRecap：有历史也压不过「离开不够久」与「正在跑」', () => {
+    assert.equal(shouldRecap({ awayMs: 60_000, assistantTurns: 0, hasPriorHistory: true, now: 1 }), false);
+    assert.equal(shouldRecap({ awayMs: 10 * 60_000, assistantTurns: 0, hasPriorHistory: true, isBusy: true, now: 1 }), false);
+  });
+});
