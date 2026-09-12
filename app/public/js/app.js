@@ -144,6 +144,7 @@ import {
   formatStatuslineCopyText,
   formatStatuslineCtxLeft,
   formatWorkspaceChangeBadge,
+  shouldRenderStatusline,
   readPushPreviewPref,
   writePushPreviewPref,
   shouldRerenderSessionList,
@@ -2937,8 +2938,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         liveLine.outTokens = Number(p.turn.outTokens) || null;
         renderLiveLine();
       }
-      // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
-      if (messagesEl.classList.contains('empty-start')) return;
+      // 空首页采用极简底部：模型/权限/思考 chips 即可。compose 页例外——工作区已定，git 段照渲
+      // （判据与两侧理由见 logic/statusline.js shouldRenderStatusline）。
+      if (!shouldRenderStatusline({
+        emptyStart: messagesEl.classList.contains('empty-start'),
+        composeReady: _composeReady,
+      })) return;
       // 与 statuslineFmtTok 同边界：round 到 k 后 ≥1000 抬 m，避免 1000k
       const fmtTok = n => {
         if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
@@ -6971,14 +6976,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
 
     // Clear stale status line and hide details row to prevent latency layout flashes
+    hideStatuslineWrap();
+    pillDefaults?.classList.remove('hidden'); // 恢复底栏会话档摘要 chip（statusLine 隐藏时）
+    if (tip) addBar(tip, 'text-ink-faint');
+  }
+
+  // 收起状态栏并清掉陈旧内容。两个调用者都是「视图换了人，旧数据立刻失真」：clearView（切会话）与
+  // showComposeSurface（点 ＋ 开新会话）。两边都随后由新的 status_line 填回。
+  //
+  // home / destroyed 两张空表面刻意【不】调：那两处 syncComposerVisibility 会把整个 #composerFooter
+  // 隐藏，状态栏在它里面，跟着一起不可见——在那里再调一次是纯冗余（注入验证过：删掉不会让任何用例变红）。
+  function hideStatuslineWrap() {
     if (cliStatusEl) cliStatusEl.innerHTML = '';
     if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
     if (cliStatusWrapEl) {
-      cliStatusWrapEl.removeAttribute('open'); // Fold <details> element
-      cliStatusWrapEl.classList.add('hidden'); // Hide the wrapper
+      cliStatusWrapEl.removeAttribute('open'); // 折叠 <details>
+      cliStatusWrapEl.classList.add('hidden');
     }
-    pillDefaults?.classList.remove('hidden'); // 恢复底栏会话档摘要 chip（statusLine 隐藏时）
-    if (tip) addBar(tip, 'text-ink-faint');
   }
 
   // 空首页最近列表代次：连续 showDashboard（切 cwd / 重连）时丢弃过期 ack，防旧列表盖新。
@@ -7002,15 +7016,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!composerFooterEl) return;
     composerFooterEl.classList.toggle('hidden', !show);
   }
-  // 顶部文件夹 pill：仅真实会话显示（首页/compose 页内已有工作区入口，再放会重复）。
-  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null) {
+  // 顶部文件夹 pill：真实会话 + compose 页（工作区已定，文件/改动与 session 无关）显示；空首页隐藏。
+  // composeReady 显式传参而不是直接读 _composeReady：三个空表面里 destroyed 那张调用时 _composeReady
+  // 可能仍是 true（resolveEmptySurface 的 instanceDestroyed 分支排在 composeReady 之前），读全局会让
+  // 「会话已中断」表面凭空多出一个入口。cwd 取 panelCwd()——与 pill 的 onclick 同源，判据和落点不许分叉。
+  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null, { composeReady = _composeReady } = {}) {
     if (!topContextPill) return;
     const sid = sessionId
       ?? instancesList.find(x => x.instanceId === viewingId)?.sessionId
       ?? currentSessionId
       ?? displayedSessionId
       ?? null;
-    const show = shouldShowTopContextPill({ viewingInstanceId: viewingId, sessionId: sid });
+    const show = shouldShowTopContextPill({
+      viewingInstanceId: viewingId, sessionId: sid, composeReady, cwd: panelCwd(),
+    });
     topContextPill.classList.toggle('hidden', !show);
     // 隐藏时不可聚焦，避免读屏仍读到工作区入口
     topContextPill.tabIndex = show ? 0 : -1;
@@ -7239,7 +7258,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // compose 页：隐藏顶栏文件夹（页内已有工作区 pill）
+    // compose 页：显示顶栏文件夹（工作区已定；页内那个 pill 通向会话列表，不通向文件）
+    syncTopContextPillVisibility(null, null, { composeReady: true });
+    // 状态栏先清空再等新数据：btnNew 这条路**不经过 clearView**（见 btnNew.onclick → ensureEmptySurface），
+    // 上一个会话的 model/ctx 会原样挂在新会话页上。
+    //
+    // 【E2E 验不到，别照着"没测试所以是冗余"删】：compose 页随后必定收到自己那条 status_line
+    // （真 server session:new 末尾 scheduleStatusRefresh；mock 已对齐），而 status_line 渲染是整体替换
+    // （cliStatusEl.textContent='' 后重 append），于是残留窗口只有那 300ms，断言必然扑空。这行保的是
+    // statusOff / WEB_STATUSLINE=off 的场景——那条事件永不到达，不清就是永久显示别的会话的用量。
+    hideStatuslineWrap();
 
     const defaultsText = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
     const container = el(`
@@ -7372,7 +7400,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // 无实例可看：顶栏文件夹入口隐藏（同 home/compose）
+    // 「会话已中断」：顶栏文件夹入口隐藏（同 home）。显式 composeReady:false——见函数注释，此处全局值不可信
+    syncTopContextPillVisibility(null, null, { composeReady: false });
 
     const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
     const body = byRestart
@@ -7428,7 +7457,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // 首页：顶栏文件夹隐藏
+    syncTopContextPillVisibility(null, null, { composeReady: false }); // 首页：工作区未选定，顶栏文件夹隐藏
 
     const hour = new Date().getHours();
     let greeting;

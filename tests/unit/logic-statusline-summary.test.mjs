@@ -9,7 +9,26 @@ import {
   formatStatuslineCopyText,
   formatWorkspaceChangeBadge,
   statuslineFmtTok,
+  shouldRenderStatusline,
 } from '../../app/public/js/logic.js';
+
+// 状态栏（git 分支/改动数 · ctx · 模型 · 额度）在哪些表面上渲染。
+// compose 页与空首页都带 empty-start，但只有前者的工作区是定了的——git 段只依赖 cwd，
+// 关掉它等于让「会话还没建」顺带关掉了一项与会话无关的信息。
+test('shouldRenderStatusline: 会话内与 compose 页渲染；空首页不渲染', () => {
+  // 真实会话（消息流已有内容）
+  assert.equal(shouldRenderStatusline({ emptyStart: false }), true);
+  // 空首页：未选定工作区，极简枢纽
+  assert.equal(shouldRenderStatusline({ emptyStart: true }), false);
+  assert.equal(shouldRenderStatusline({ emptyStart: true, composeReady: false }), false);
+  // compose 页：session 未建但工作区已定 → 渲染（git 段只依赖 cwd）
+  assert.equal(shouldRenderStatusline({ emptyStart: true, composeReady: true }), true);
+  // 离开 compose 进真实会话，两个标志的过渡期任一组合都不得关掉状态栏
+  assert.equal(shouldRenderStatusline({ emptyStart: false, composeReady: true }), true);
+  // 缺省参数：与「非空态」同解，不因调用方漏传而静默隐藏
+  assert.equal(shouldRenderStatusline(), true);
+  assert.equal(shouldRenderStatusline({}), true);
+});
 
 test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
   assert.equal(

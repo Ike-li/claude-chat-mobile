@@ -66,4 +66,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 新会话页（点 ＋ 后的 session 懒创建窗口）：session 还没有，工作区已经有了。
+  // 这两个 tab 背后的 git:status / files:browse 都只要 cwd（socket-files.js 两个 handler 不碰 sessionId），
+  // 所以它们在这里必须照常可用——此前整个 pill 跟着「没有 session」一起被隐藏，等于开工前最该看的
+  // git status 恰恰看不到，而同一张页面早就在读同一个仓库的 git（worktree 源分支选择器走 git:branches）。
+  test('P0-GIT-3 compose 新会话页：pill 可点，文件与改动两个 tab 都能用', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    // 前提确认：确实停在「还没有 session」的那一格——否则下面测的就是普通会话页，白测
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    await page.locator('#topContextPill').click();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
+    await expect(page.locator('#fileBrowsePath')).not.toHaveText('');
+
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#gitChangesBody')).toBeVisible();
+    await expect(page.locator('#gitChangesBranch')).toContainText('dev');
+    await expect(page.locator('#gitChangesBody')).toContainText('work.js');
+
+    await expectNoBrowserErrors(page);
+  });
 });
