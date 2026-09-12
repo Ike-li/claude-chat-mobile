@@ -155,8 +155,12 @@ RESUMING=""
 # 自己的 bug——2026-09-12 就真发生了），HEAD 就不再是发版提交，脚本会当成全新一轮再 bump 一次，
 # 把已经推出去的 1.8.0 变成 1.8.1。判据要认的是「这一版发完没有」，而不是「上一条提交是什么」。
 CUR_TAG="v$OLD_VER"
-if ! git rev-parse "$CUR_TAG" >/dev/null 2>&1 \
-   && git log --pretty=%s -50 | grep -qxF "chore: 发版 $CUR_TAG"; then
+# 【又是 grep -q】这里绝不能用 `… | grep -q`：本脚本开着 pipefail，grep -q 命中即退出会让上游
+# git log 收到 SIGPIPE，整个管道判失败、条件恒假——RESUMING 于是永远不触发，脚本把一个已经
+# 推出去的版本再 bump 一次（2026-09-12 实测：1.8.0 被续跑成 1.8.1 再成 1.9.0）。
+# 同一个模式在本文件里踩过两次，现已由 tests/gates/check-shell-pitfalls.js 机械挡住。
+RESUME_COMMITS="$(git log --pretty=%s -50 | grep -cxF "chore: 发版 $CUR_TAG" || true)"
+if ! git rev-parse "$CUR_TAG" >/dev/null 2>&1 && [ "${RESUME_COMMITS:-0}" -gt 0 ]; then
   NEW_VER="${OLD_VER}"
   TAG="$CUR_TAG"
   RESUMING=1
