@@ -1257,10 +1257,17 @@ io.on('connection', socket => {
             },
             {
               // BUSY-ORPHAN：切回已结束会话但回放缺 result 的场景专用（同上条的登记理由）。
+              // ⚠ lastUsedAt 必须比本文件里所有其它条目都旧。首页最近列表是【跨工作区归并后取前 8】
+              // （panel-state.js 的 mergeRecentSessionsAcrossWorkspaces，limit=8），往这份清单里插一条
+              // 「新」会话会把原本排第 8 的那条挤出列表——P0-11am 断言的 mock-session-another-done 正好
+              // 是 -1500、卡在第 8 位，插一条 -80 就让它掉到第 9，那条用例随即红。
+              // 2026-09-12 撞过，且【单跑 P0-11am 是绿的、只有全量才红】：单跑时那条用例自己不读这份
+              // 清单，得先有别的 spec 把首页最近列表画出来才暴露。往这里加条目前先数一遍前 8。
+              // 本场景只从侧栏进入（openWorkspaceSession），不依赖出现在首页最近列表里。
               id: 'mock-session-orphan',
               title: 'Orphan Replay Session',
               model: 'claude-3-5-sonnet',
-              lastUsedAt: mockListClockBase - 80,
+              lastUsedAt: mockListClockBase - 3000000,
               entrypoint: 'sdk-ts'
             },
             {
