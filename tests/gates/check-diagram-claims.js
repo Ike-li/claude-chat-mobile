@@ -38,7 +38,13 @@ function constNum(path, name) {
 }
 
 // ── 图声称的基线提交。改图时同步更新。 ───────────────────────────────
-const PINNED_REVISION = 'ed9a2e3f8d5a6304f2ecff67208dd060081fde7a';
+// 【判据是图里的 meta.repository.revision，不是「这轮有没有动过图」】那个字段只存在于三张
+// architecture 图（00-overview / 09-ops / 11-frontend），archify 用它把 source 证据的源码链接
+// 指过去；workflow / sequence / lifecycle 类型的图（含图 12）压根不带。所以「改了图 12 的文字」
+// 不构成推进它的理由——只有重出图、让那三张的 revision 真的变了，才跟着改。
+// 2026-09-12 一度推到 ed9a2e3（那轮只手工替换了图 12 的四处文字），会把 C 项检查的对象换成一个
+// 图里根本不存在的 commit：7d4aa87 若被 rebase 掉，图上的源码链接全部 404 而这里不再报红。
+const PINNED_REVISION = '7d4aa874944374770b5207598cd2a1c4253011fd';
 
 // ── 图里 source 证据引用到的源码路径（27 条 source 去重后）。重命名/删除即红。 ──
 const REFERENCED_PATHS = [
