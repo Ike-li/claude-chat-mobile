@@ -130,9 +130,17 @@ test.describe('presentOnlineSendTransport：ack 根本没回来（超时 / 断�
 test.describe('presentOfflineResendAck：离线队列排空时的五条分支', () => {
   const flagsOf = (err, ack) => flags(presentOfflineResendAck(err, ack));
 
-  test('成功 → 出队，不动忙碌态', () => {
+  // instanceId 只出现在成功分支：它是随 ack 透传的载荷，不是决策位——离线重放用它把「同一批里
+  // worktree 意图只兑现一次」的锚点接上（logic/outbox-send.js 的 nextOutboxWorktreeAnchor，
+  // 那边先判 outcome !== 'ok' 才读它，所以失败分支不需要这个键）。
+  // 之所以登记在这里而不是从 flags() 里剔掉：message 被剔是因为它过 i18n、绑死文案会误伤契约，
+  // 而这一条不过 i18n。整对象比较本来就是为了让「新增字段」必须被显式确认 —— 2026-09-12 加
+  // 透传时它当场变红，正是这道闸该有的样子。
+  test('成功 → 出队，不动忙碌态（并透传 instanceId 供离线重放接锚点）', () => {
     assert.deepEqual(flagsOf(null, { ok: true }),
-      { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false });
+      { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, instanceId: null });
+    assert.deepEqual(flagsOf(null, { ok: true, instanceId: 'inst_7' }),
+      { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, instanceId: 'inst_7' });
   });
 
   test('busy → 留在队里等下次，不算失败也不清忙碌态', () => {
