@@ -660,3 +660,57 @@ test('applyTerminalStatesToSessions：bgLocked 注入到行上，且不随缓存
   assert.equal(after[0].bgLocked, undefined, '占用者已退出，预警必须跟着消失（残留＝永远打不开的假象）');
   assert.equal(rows[0].bgLocked, true, '禁止原地写入调用方传进来的行对象');
 });
+
+// onUnreadable —— 给「把这张表当否定证据用」的破坏性路径（rewind confirm）的完整性回执。
+//
+// 本文件头注释写着「全程 fail-open」，那对状态显示是对的：读不动就少标一个「运行中」，无害。
+// 但 rewind 用的是反方向的推理——「表里没有终端驾驶员 ⇒ 可以安全覆盖工作区文件」。表只要读不全，
+// 那个结论就不成立，而 rewind 没有下游兜底（会话列表还有「点开后仍被拒」那道，文件盖下去没有）。
+// 所以读取完整性必须能被问出来，且【不改变】本函数对其他调用方的 fail-open 语义。
+test.describe('listTerminalSessionStates：onUnreadable（破坏性路径的完整性回执）', () => {
+  test('条目读不出来 → 回调触发，且仍 fail-open 返回读到的部分', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-reg-unreadable-'));
+    try {
+      writeFileSync(join(dir, 'good.json'), JSON.stringify({
+        pid: process.pid, sessionId: 's-ok', cwd: '/w', entrypoint: 'cli',
+      }));
+      writeFileSync(join(dir, 'broken.json'), '{ not json');   // 条目级 catch
+
+      const seen = [];
+      const map = await listTerminalSessionStates({
+        dir, isAlive: () => true, onUnreadable: err => seen.push(err),
+      });
+
+      assert.equal(seen.length, 1, '坏条目没有报告出来 —— rewind 会把一张残表当成「没人在驾驶」');
+      // fail-open 不变：能读的那条照常进结果，别的消费者行为一字不改
+      assert.equal(map.size, 1, '报告完整性不该牵连既有的 fail-open 语义');
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp
+    }
+  });
+
+  test('目录压根不存在 → 不算读取故障（否则没装 CLI 的用户永远 rewind 不了）', async () => {
+    const seen = [];
+    const map = await listTerminalSessionStates({
+      dir: join(tmpdir(), 'ccm-reg-definitely-absent-xyz'),
+      isAlive: () => true,
+      onUnreadable: err => seen.push(err),
+    });
+    assert.deepEqual(seen, [], 'ENOENT 被当成故障 → 从没跑过终端会话的用户会被无条件拒绝回退');
+    assert.equal(map.size, 0);
+  });
+
+  test('一切正常 → 不触发回调（否则 rewind 会恒拒）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-reg-clean-'));
+    try {
+      writeFileSync(join(dir, 'a.json'), JSON.stringify({
+        pid: process.pid, sessionId: 's-a', cwd: '/w', entrypoint: 'cli',
+      }));
+      const seen = [];
+      await listTerminalSessionStates({ dir, isAlive: () => true, onUnreadable: err => seen.push(err) });
+      assert.deepEqual(seen, [], '干净目录也报故障 → 回退功能直接不可用');
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp
+    }
+  });
+});

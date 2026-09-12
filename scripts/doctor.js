@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../app/src/files/file-security.js';
 import { uploadsRoot, bucketFor, LEGACY_UPLOAD_DIR } from '../app/src/files/uploads.js';
-import { resolveWorkdirSource as loadWorkdirSource } from '../app/src/sessions/workdirs.js';
+import { resolveWorkdirSource as loadWorkdirSource, resolveEnvPrimaryWorkdir } from '../app/src/sessions/workdirs.js';
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { resolveBindPlan } from '../app/src/shared/bind-host.js';
@@ -569,7 +569,13 @@ function resolveWorkdirSource() {
     inline: envArg ? null : readConfigFileRaw(HERE)?.WORKDIRS,
     here: HERE,
     // 退役中的 WORK_DIR：折进列表首位并告警，与 server 同一份判据（按来源分档，env 压过文件）。
-    envPrimary: process.env.WORK_DIR || '',
+    // 【必须走 SHELL_ENV_SNAPSHOT】上面的 loadRuntimeEnvironment 已经把配置文件的值投影进
+    // process.env，此刻裸读 WORK_DIR 分不出是 shell 还是文件给的 —— 同 D18 那条注释的理由。
+    // 判据（含为什么不能只认快照）见 workdirs.js 的 resolveEnvPrimaryWorkdir。
+    envPrimary: resolveEnvPrimaryWorkdir({
+      shellEnv: SHELL_ENV_SNAPSHOT,
+      projectedPrimary: process.env.WORK_DIR || '',
+    }),
     inlinePrimary: envArg ? '' : (readConfigFileRaw(HERE)?.WORK_DIR || ''),
   });
 }

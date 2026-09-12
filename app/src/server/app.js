@@ -83,7 +83,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveWorkdirsFilePath, resolveWorkdirSource } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -255,7 +255,13 @@ function readWorkdirSource() {
     envFile: process.env.WORK_DIRS_FILE,
     inline: inline.list,
     here: HERE,
-    envPrimary: process.env.WORK_DIR || '',
+    // 【不能裸读 process.env.WORK_DIR】loadRuntimeEnvironment 把配置文件的值也投影了进去，
+    // 那时它可能是文件给的，而 pickPrimaryWorkdir 对 envPrimary 无条件放行 —— 结果是配置文件里
+    // 留着退役的 WORK_DIR 时 `export WORK_DIRS=...` 收窄不掉授权面。判据见 resolveEnvPrimaryWorkdir。
+    envPrimary: resolveEnvPrimaryWorkdir({
+      shellEnv: getShellEnvSnapshot(),
+      projectedPrimary: process.env.WORK_DIR || '',
+    }),
     inlinePrimary: inline.primary,
   });
   return { result, warnings };
@@ -1992,10 +1998,16 @@ const rewindLocks = createRewindLocks();
 // 没有上限的话 handler 会一直等，锁的 TTL 到期后别人能进来、这一条却仍挂着。
 // 对齐 Claude Desktop 的做法（它给 rewindFiles 包了超时，超时报 "Timed out"）。
 const REWIND_REQUEST_TIMEOUT_MS = 20_000;
+// 超时要和「真失败」分开：Promise.race 只是不再等，**底层 control_request 并没有被取消**，
+// 它可能在几秒后才真正把文件改完。把这一档混进普通失败会让 handler 回一句「文件未改动」——
+// 一个我们并不知道真假、用户却会当真的硬断言（然后他去重试，撞上第二次并发回滚）。
+class RewindTimeoutError extends Error {
+  constructor() { super('rewindFiles 超时'); this.name = 'RewindTimeoutError'; }
+}
 function withRewindTimeout(promise, ms = REWIND_REQUEST_TIMEOUT_MS) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('rewindFiles 超时')), ms).unref?.()),
+    new Promise((_, reject) => setTimeout(() => reject(new RewindTimeoutError()), ms).unref?.()),
   ]);
 }
 // 进程内：正在 deletePermanent 的会话 id。列表/搜索在删文件窗口内排除它们。
@@ -3148,10 +3160,28 @@ registerSocketConnection(io, socket => {
       return;
     }
 
+    // 非 null = 底层回滚还在飞（超时分支设的）：锁跟着它放，不跟着本 handler 放。
+    let holdLockUntil = null;
     try {
       // G2 重查（preview 到 confirm 之间用户可能回到电脑前敲了命令）
+      //
+      // 【这条路径 fail-CLOSED，与同一张表的其他消费者相反】别处（会话列表、rewind preview）
+      // 拿它当加分信号：读不动就少标一个「运行中」，无害。这里它是**否定证据**——「表里没有
+      // 终端驾驶员」被当成「可以安全覆盖工作区文件」。表读不全时那个结论不成立，而 rewind
+      // 没有下游兜底（列表还有「点开后仍被拒」那一道，这里盖下去就是盖下去了），
+      // 正是单驾驶员模型要防的两端同时写。宁可让用户重试。
       let states = new Map();
-      try { states = await listTerminalSessionStates({ classifyTail: classifyTranscriptTail }); } catch { /* fail-open 到空表 */ }
+      let registryUnreadable = false;
+      try {
+        states = await listTerminalSessionStates({
+          classifyTail: classifyTranscriptTail,
+          onUnreadable: () => { registryUnreadable = true; },
+        });
+      } catch { registryUnreadable = true; }
+      if (registryUnreadable) {
+        reply({ ok: false, error: '读不到终端会话注册表，无法确认电脑上是否正在驾驶该工作区，已中止回退', reason: 'terminal-state-unknown' });
+        return;
+      }
       if (hasBusyTerminalSessionForCwd(cwd, states) || hasWaitingTerminalSessionForCwd(cwd, states)) {
         reply({ ok: false, error: '终端会话正在运行或等待审批，暂时无法回退' });
         return;
@@ -3179,9 +3209,24 @@ registerSocketConnection(io, socket => {
 
       // ── 第 1 步：物理回滚 ──
       let real;
+      // 留住原始 promise：超时只是本 handler 不再等，那个 control_request 还在飞。
+      const rollback = inst.q.rewindFiles(promptUuid, { dryRun: false });
       try {
-        real = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: false }));
+        real = await withRewindTimeout(rollback);
       } catch (err) {
+        if (err instanceof RewindTimeoutError) {
+          // 文件到底改没改，此刻**不知道**——不能说「未改动」。
+          // 锁也不能在 finally 里就放：一放用户就能重试，而第一次回滚可能正改到一半，
+          // 那正是 G3 这把锁存在的理由。改成跟着底层操作走（TTL 仍是最后兜底）。
+          holdLockUntil = rollback;
+          console.error('[rewind] 回滚超时，控制请求仍在进行中', { sessionId });
+          reply({
+            ok: false,
+            error: '回退请求超时，文件是否已改动尚不确定。请刷新文件列表确认后再决定是否重试',
+            reason: 'rewind-timeout',
+          });
+          return;
+        }
         console.error('[rewind] 回滚失败', err?.message || err);
         reply({ ok: false, error: '回退失败，文件未改动', reason: 'rewind-failed' });
         return;
@@ -3240,7 +3285,12 @@ registerSocketConnection(io, socket => {
       const fresh = await dedupedResume(cwd, newId);
       finishOpenFocus(fresh, cwd, newId, (r) => reply({ ...base, ...r, ok: true }));
     } finally {
-      rewindLocks.release(sessionId);
+      if (holdLockUntil) {
+        // 回滚结果已经没人在等了，但不接住就是一条 unhandled rejection。
+        holdLockUntil.catch(() => {}).finally(() => rewindLocks.release(sessionId));
+      } else {
+        rewindLocks.release(sessionId);
+      }
     }
   });
 

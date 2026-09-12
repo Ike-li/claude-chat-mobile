@@ -51,11 +51,18 @@ function nonEmptyString(value) {
 
 // 扫描注册表目录，返回结构合法的条目数组（不判存活、不判归属）。任何 IO/解析失败按"该条目不存在"
 // 跳过，整体 fail-open 返回已读到的部分——注册表是加分信号，绝不能因它读不动而影响主流程。
-async function readAllEntries(dir) {
+// onUnreadable：读不动某一处时回调一次（不改变本函数的 fail-open 行为）。加它是因为同一张表
+// 有两类消费者，失败方向相反：状态显示拿它当**加分信号**（读不到就少标一个运行中，无害），
+// 而 rewind 拿它当**否定证据**（表里没有终端驾驶员 ⇒ 可以安全覆盖文件）。后者在表读不全时
+// 结论根本不成立，必须自己 fail-closed —— 但那是调用方的选择，不能让它变成所有人的默认。
+async function readAllEntries(dir, { onUnreadable = null } = {}) {
   let names;
   try {
     names = await readdir(dir);
-  } catch {
+  } catch (err) {
+    // ENOENT 是正常状态（没装 CLI / 从没跑过终端会话），不是读取故障 —— 当成故障会让
+    // 这类用户永远 rewind 不了。只有 EACCES 这类「目录在但读不动」才算。
+    if (err?.code !== 'ENOENT') onUnreadable?.(err);
     return [];
   }
   const out = [];
@@ -67,7 +74,8 @@ async function readAllEntries(dir) {
       const stat = await lstat(path);
       if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_REGISTRY_FILE_BYTES) continue;
       entry = JSON.parse(await readFile(path, 'utf8'));
-    } catch {
+    } catch (err) {
+      onUnreadable?.(err);
       continue;
     }
     if (!entry || typeof entry !== 'object') continue;
@@ -245,6 +253,9 @@ export async function listTerminalSessionStates({
   dir = DEFAULT_SESSION_REGISTRY_DIR,
   isAlive = defaultIsAlive,
   classifyTail = null,
+  // 只有把这张表当「否定证据」用的破坏性路径（rewind confirm）才传：读不全时它需要拒绝，
+  // 而不是把一张残表当成「没有终端驾驶员」。不传 = 保持既有的整体 fail-open。
+  onUnreadable = null,
 } = {}) {
   const map = new Map();
   // 同会话多 PID：按信息量取高者（busy > waiting > alive），与扫盘顺序无关。
@@ -265,7 +276,7 @@ export async function listTerminalSessionStates({
   // 【仍按 cwd 归键】：与 findBlockingLiveAgent 的唯一差异。同一会话的进程 cwd 天然等于会话 cwd，
   // 理论上的跨 cwd 占用只会漏标（fail-open 到"不预警"，点开后仍有拒绝兜底），绝不会虚报。
   const blockedKeys = new Set();
-  for (const entry of await readAllEntries(dir)) {
+  for (const entry of await readAllEntries(dir, { onUnreadable })) {
     // isAlive 提到 entrypoint 过滤之前：blocked 判定要看全部条目，不能只在白名单里验活。
     if (!isAlive(entry.pid)) continue;
     const kind = nonEmptyString(entry.kind);
@@ -299,7 +310,12 @@ export async function listTerminalSessionStates({
       // 作者未知（老 transcript 行无 entrypoint 字段 → null）→ 回落既有判定，不因归因不了就否决。
       const tailBy = tail?.lastChainEntrypoint;
       pending = tail?.verdict === 'pending' && (!tailBy || tailBy === entry.entrypoint);
-    } catch { /* fail-open */ }
+    } catch (err) {
+      // 状态轴照旧 fail-open 到 'alive'（谎报在跑比少报更坏，见上）。但要告诉 onUnreadable：
+      // 'alive' 既不是 busy 也不是 waiting，单驾驶员那两道判据会放行 —— 对 rewind 来说
+      // 「尾部读不出来」和「表里没有这条」一样是不确定，不能当成可以覆盖文件的证据。
+      onUnreadable?.(err);
+    }
     merge(key, pending ? 'busy' : 'alive', entry.entrypoint);
   }));
   // blocked 必须在所有 merge 之后合入：merge 整体替换 value，先写的 blocked 会被它悄悄抹掉。

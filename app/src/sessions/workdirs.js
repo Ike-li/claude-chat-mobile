@@ -128,6 +128,33 @@ export function pickPrimaryWorkdir({ kind, envPrimary = '', inlinePrimary = '' }
   return kind === 'inline' ? String(inlinePrimary ?? '').trim() : '';
 }
 
+// 算出该喂给 pickPrimaryWorkdir 的 `envPrimary`——**上面那段分档规则只有在这个参数真的只装
+// 「shell 里的 WORK_DIR」时才成立，而裸读 process.env 拿不到这个保证**。
+//
+// 【缺陷形态】loadRuntimeEnvironment 会把配置文件的值投影进 process.env（config.js 的
+// 「只填 env 里还没有的 key」那段）。投影之后 `process.env.WORK_DIR` 可能是文件给的，调用方却把它
+// 当 shell 值传进来，于是 pickPrimaryWorkdir 第一行就无条件让它赢。后果是**授权面收不窄**：
+// 配置文件里留着退役的 WORK_DIR 时，`export WORK_DIRS=...` 永远挤不掉它，那个 legacy 目录
+// 仍然对外可达。2026-09-12 实测复现（doctor 输出「已把 legacy 提到工作区列表首位」）。
+// 同一处缺陷在 server 的 readWorkdirSource 与 doctor 的 resolveWorkdirSource 各有一份。
+//
+// 【为什么要 projectedPrimary，而不是只认 shellEnv.WORK_DIR】老式 `.env` 安装把 WORK_DIR 与
+// WORK_DIRS **都**写在文件里，两者一起被投影。只认快照的话它们会双双落空，那种安装的主目录
+// 会突然失效（授权面塌陷，可能一个工作区都不剩）。所以判据是「**文件给的主目录不得压过
+// shell 给的列表**」，而不是「文件给的主目录一律不算」——只有来源真的分叉时才让位。
+//
+// 【彻底解法】让 `.env` 的 WORK_DIRS/WORK_DIR 整体走 inline 档，来源就不再需要这样反推。
+// 那要改 readInlineWorkdirConfig 的读取面，牵动三个消费者，不在这次修复范围内。
+export function resolveEnvPrimaryWorkdir({ shellEnv = {}, projectedPrimary = '' } = {}) {
+  const fromShell = String(shellEnv.WORK_DIR ?? '').trim();
+  if (fromShell) return fromShell; // shell 显式给了主目录：与 env 列表同级，照常折叠
+  const listFromShell = Boolean(
+    String(shellEnv.WORK_DIRS ?? '').trim() || String(shellEnv.WORK_DIRS_FILE ?? '').trim(),
+  );
+  // shell 拿出了列表而主目录只存在于文件里 —— 来源分叉，文件那个让位。
+  return listFromShell ? '' : String(projectedPrimary ?? '').trim();
+}
+
 // 把 pickWorkdirSource 的选择兑现成 { result, from, filePath?, warnings }。
 // doctor D3 必须走这里，不能自己 `if (Array.isArray(inline)) return`——那会把 WORK_DIRS env 吃掉。
 //
