@@ -52,7 +52,7 @@ claude auth status
 - 不要把 `ANTHROPIC_*` 写进本项目的配置文件（`ccm.config.json` / `.env`）：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
 - worktree 会话注意：CLI 在 worktree 里读的是**主 checkout** 根目录那份 `settings.local.json`（官方文档明写），本项目会把主 checkout 独有的网关键中和掉、不让它误伤 worktree。worktree 要走网关，在 worktree 自己的 `.claude/settings.local.json` 里配，或干脆配在 `~/.claude/settings.json`。
 - `doctor` 的 MODEL_SETTINGS 一项会逐工作区读这些文件，核对 `model` 与 `ANTHROPIC_DEFAULT_*_MODEL` 档位映射是否打架。
-- 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#为什么需要它)。
+- 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#和官方-remote-control-差在哪)。
 
 ## 2. 获取代码与安装依赖
 
