@@ -21,6 +21,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // 往 docs/ 新增文档必须先在此声明，否则被拒。这正是挡住一次性产物回堆的那道判据。
 const ROOT_FILES = new Map([
   ['AGENTS.md', 'Instructions'],
+  // 由 scripts/release.sh 在每次发版时追加，与 GitHub Release notes 同源。刻意**不**进
+  // export-ignore：装机用户拿到的是源码归档，手上没有别的东西能回答「我这份比上一版多了什么」。
+  ['CHANGELOG.md', 'Documentation'],
   ['CLAUDE.md', 'Instructions'],
   ['LICENSE', 'Legal'],
   ['NOTICE', 'Legal'],

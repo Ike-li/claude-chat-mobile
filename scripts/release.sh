@@ -38,7 +38,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-BUMP="patch"; DRY=""; YES=""
+BUMP=""; DRY=""; YES=""
 for a in "$@"; do
   case "$a" in
     --dry-run|-n) DRY=1 ;;
@@ -54,10 +54,31 @@ die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 NOTES=""
 COMMITTED=""     # bump 已提交：此后不再 checkout 还原 package.json
 cleanup() {
-  # 只还原**没提交**的 bump。一旦提交并推到 dev，历史已经公开，回滚它比留着更糟——
+  # 只还原**没提交**的 bump 与 CHANGELOG。一旦提交并推到 dev，历史已经公开，回滚它比留着更糟——
   # 重跑时下面的「已是目标版本就跳过 bump」会把它接上。
-  [ -z "$COMMITTED" ] && { git checkout -q -- package.json package-lock.json 2>/dev/null || true; }
+  # CHANGELOG.md 是 tracked 文件（初始版本随本次改造一起提交），所以 checkout 一定还原得掉。
+  [ -z "$COMMITTED" ] && { git checkout -q -- package.json package-lock.json CHANGELOG.md 2>/dev/null || true; }
   [ -n "$NOTES" ] && rm -f "$NOTES" || true
+}
+
+# 把这一版的说明写进 CHANGELOG.md 顶部（与 GitHub Release notes 同源，不另写一份）。
+#
+# 【为什么要落进仓库】Release notes 只活在 GitHub 上，而装机用户拿到的是**源码归档**——他们手上
+# 没有任何东西能回答「我这份是什么时候的、比上一版多了什么」。CHANGELOG.md 不在 .gitattributes
+# 的 export-ignore 里，会随归档一起到用户手上。
+write_changelog() {
+  TAG="$1" DATE="$(date +%Y-%m-%d)" NOTES_FILE="$2" node -e '
+    const fs = require("fs");
+    const head = "# 变更记录\n";
+    const body = fs.readFileSync(process.env.NOTES_FILE, "utf8").trim();
+    const entry = `\n## ${process.env.TAG} — ${process.env.DATE}\n\n${body}\n`;
+    let rest = "";
+    if (fs.existsSync("CHANGELOG.md")) {
+      const cur = fs.readFileSync("CHANGELOG.md", "utf8");
+      rest = cur.startsWith(head) ? cur.slice(head.length) : `\n${cur}`;
+    }
+    fs.writeFileSync("CHANGELOG.md", head + entry + rest);
+  '
 }
 trap cleanup EXIT
 
@@ -96,6 +117,26 @@ LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 # 仓库名从本地 remote 解析，不打 GitHub API（GraphQL 在代理下会 EOF）
 REPO="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 OLD_VER="$(node -p "require('./package.json').version")"
+
+# 没显式给递增方式时，按 conventional commits 从提交历史推导。
+#
+# 【为什么要它】旧默认是写死的 patch。而 v1.7.0→HEAD 这一批里有 23 个 feat，照默认发出去就是
+# 1.7.1——版本号对使用者谎称「只是修了几个 bug」。递增方式本该是提交历史的函数，不是一个每次
+# 都要人记得覆盖的参数（记不记得，取决于发版的人当时有没有想起来看一眼 git log）。
+# 显式传参仍然优先：推导错了要能当场压过它，不必改脚本。
+BUMP_SOURCE="显式指定"
+if [ -z "$BUMP" ]; then
+  BUMP_SOURCE="按提交历史推导"
+  BUMP_RANGE="${LAST_TAG:+$LAST_TAG..}HEAD"
+  # 破坏性变更两种写法都认：footer 的 `BREAKING CHANGE:` 与 header 的 `type!:`（含 scope 形态 `feat(x)!:`）
+  if git log --no-merges --pretty='%s%n%b' "$BUMP_RANGE" | grep -qE '^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:'; then
+    BUMP=major
+  elif git log --no-merges --pretty='%s' "$BUMP_RANGE" | grep -qE '^feat(\([^)]*\))?:'; then
+    BUMP=minor
+  else
+    BUMP=patch
+  fi
+fi
 
 # 幂等：上一次跑到一半（bump 已提交并推了 dev，但 PR 没合/tag 没打）时重跑，不能再 bump 一次。
 # 判据是「HEAD 的提交就是发版提交，且它的 tag 还不存在」——那说明我们正停在那一步，接着往下走即可。
@@ -145,7 +186,7 @@ NOTES="$(mktemp)"
 
 # ── 展示计划 ─────────────────────────────────────────
 say "─────────────────────────────────────────"
-say " 发版 $OLD_VER → $NEW_VER   (tag $TAG)"
+say " 发版 $OLD_VER → $NEW_VER   (tag $TAG)   [$BUMP · $BUMP_SOURCE]"
 say " dev 相对 master 领先 $AHEAD 个 commit"
 say " 路径：推 dev → 等 CI → PR(dev→master) → 等 CI → 合并 → tag → Release"
 say " 上个 tag：${LAST_TAG:-（无）}"
@@ -181,7 +222,8 @@ wait_ci_for_sha() {
 
 # ── 执行：提交 + 推 dev ───────────────────────────────
 if [ -z "$RESUMING" ]; then
-  git add package.json package-lock.json
+  write_changelog "$TAG" "$NOTES"
+  git add package.json package-lock.json CHANGELOG.md
   git commit -q -m "chore: 发版 $TAG"
   COMMITTED=1
   git push -q origin dev || die "推送 dev 失败"
