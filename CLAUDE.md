@@ -82,7 +82,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 分支纪律
 
-**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产，所以 **`master` 上不得有未发版提交**：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
+两条分支各有单一职责：**`dev` = 开发主线**（GitHub 默认分支，dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布。
+
+- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。
+- **`master` 只接受 `scripts/release.sh` 开的那条 `dev` → `master` 发版 PR**。它开了 `enforce_admins`，谁都不能直推（包括仓库 owner），`quality` 里还有一道 step 拦住任何 head 不是 `dev` 的 PR。
+- 两条分支的 required checks 都是 `quality` / `unit-test (20)` / `unit-test (24)` / `e2e`；**approvals = 0**——单人仓库里 GitHub 不允许自己 approve 自己的 PR，设成 1 会让所有 PR 永远合不进去。PR 在这里的作用是「强制 CI + 可读的变更面」，不是等人点同意。
+- 发版走 `scripts/release.sh`：bump → 推 `dev` → **等真 CI 绿** → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。中途失败就直接重跑，它会从中断处接上（不会二次 bump）。
+- PR 合并产生 merge commit，所以 `master` 不再等于 `dev` 的 tip，**这是正常的**——merge commit 的父之一就是 `dev`，下次 PR 的 merge base 仍然正确，不需要把 `master` 合回 `dev`。
+
+装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产——这正是 `master` 必须恒等于最新发布的原因。裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 

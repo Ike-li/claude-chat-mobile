@@ -1,0 +1,30 @@
+# .github/dependabot.yml —— 让 dependabot 的 PR 落到 dev，而不是默认分支。
+#
+# 【为什么需要这份文件】没有它时 dependabot 把 PR 开到仓库的**默认分支**。master 同时是
+# 「对外发布的稳定版本」——装机 `curl` 拉的就是它的源码归档，所以 master 的 HEAD 必须恒等于
+# 最新发布。一个自动化流程持续往 master 开 PR，和这条要求直接矛盾：2026-09-12 实测，PR #23
+# （hono 4.13.0 → 4.13.7）合进 master 之后，master 上就挂了 2 个未发版提交，那一刻拉归档的人
+# 拿到的代码与版本号对不上，而没有任何地方会报错。
+#
+# target-branch 写死 dev 而不是只依赖「默认分支已改成 dev」：默认分支是仓库设置，改回去不会
+# 有任何提示，而这份文件在代码评审里看得见。两道一起用。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # 安全更新走同一条路：它们同样不该直接落到发布分支上。
+    labels:
+      - dependencies
+
+  # workflow 自身的 action 版本（actions/checkout 等）。同样落 dev。
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
