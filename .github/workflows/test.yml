@@ -30,6 +30,24 @@ jobs:
       # 而默认的浅克隆（depth=1）下那个对象根本不在工作区，git 报 `fatal: Not a valid commit name`。
       # 2026-09-09 建闸起这个 job 在 CI 上一直红、本地一直绿，就是这个原因。仓库 54MiB，全量克隆可忽略。
       # 只给 quality 加：unit-test / e2e 不碰 git 历史，浅克隆更快。
+      # master 是「对外发布的稳定版本」——装机 curl 拉的就是它的源码归档，所以它的 HEAD 必须恒等于
+      # 最新发布。唯一允许进入它的路径是 scripts/release.sh 开的那条 dev → master 发版 PR。
+      #
+      # 【为什么是 quality 里的一个 step，不是独立 job】独立 job 加 `if:` 之后，在非 master 的 PR 上
+      # 会被 skip；而被 skip 的 job 若列进分支保护的 required checks，PR 会永久停在 pending。
+      # 塞进一个本来就恒跑的 required job 里就没有这个坑。
+      #
+      # 【这道闸挡的是什么】2026-09-12 之前 dependabot 的 PR 默认开到 master（#23 就是），合进去
+      # master 立刻带上未发版提交，那一刻拉归档的人拿到的代码与版本号对不上、且没有任何地方报错。
+      # 根因已由 .github/dependabot.yml 的 target-branch 修掉，这里是第二道——它管所有来源，
+      # 包括人手开的 PR。
+      - name: 只有 dev → master 的发版 PR 能进 master
+        if: github.event_name == 'pull_request' && github.base_ref == 'master'
+        run: |
+          if [ "${{ github.head_ref }}" != "dev" ]; then
+            echo "::error::master 只接受 scripts/release.sh 开的 dev → master 发版 PR（当前 head=${{ github.head_ref }}）。请把这个改动开到 dev。"
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
