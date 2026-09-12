@@ -89,7 +89,7 @@ gh auth status >/dev/null 2>&1 || die "gh 未登录：先 gh auth login"
 
 git fetch -q origin || die "git fetch 失败（网络？）"
 BR="$(git rev-parse --abbrev-ref HEAD)"
-[ "$BR" = "dev" ] || die "请在 dev 分支发版（当前在 $BR）"
+[ "$BR" = "dev" ] || die "请在 dev 分支发版（当前在 ${BR}）"
 # 【不再要求 master 是 dev 的祖先】走 PR 之后 master 上会有 merge commit，那是正常状态。
 # 真正要问的是「有没有东西可发」——用 GitHub 算的比较结果，它和 PR 看到的是同一份。
 AHEAD="$(gh api "repos/{owner}/{repo}/compare/master...dev" -q '.ahead_by' 2>/dev/null || echo 0)"
@@ -148,13 +148,20 @@ fi
 # 幂等：上一次跑到一半（bump 已提交并推了 dev，但 PR 没合/tag 没打）时重跑，不能再 bump 一次。
 # 判据是「HEAD 的提交就是发版提交，且它的 tag 还不存在」——那说明我们正停在那一步，接着往下走即可。
 RESUMING=""
-HEAD_SUBJECT="$(git log -1 --pretty=%s)"
-if [[ "$HEAD_SUBJECT" == chore:\ 发版\ v* ]] && ! git rev-parse "${HEAD_SUBJECT##* }" >/dev/null 2>&1; then
+# 判据是「package.json 已经是 vX、它的发版提交在历史里、而 vX 的 tag 还不存在」——
+# 那就说明上一次跑到一半停了，接着往下走即可。
+#
+# 【为什么不看 HEAD 的 subject】那个判据太脆：中断之后但凡往 dev 上再合一个修复（比如修本脚本
+# 自己的 bug——2026-09-12 就真发生了），HEAD 就不再是发版提交，脚本会当成全新一轮再 bump 一次，
+# 把已经推出去的 1.8.0 变成 1.8.1。判据要认的是「这一版发完没有」，而不是「上一条提交是什么」。
+CUR_TAG="v$OLD_VER"
+if ! git rev-parse "$CUR_TAG" >/dev/null 2>&1 \
+   && git log --pretty=%s -50 | grep -qxF "chore: 发版 $CUR_TAG"; then
   NEW_VER="${OLD_VER}"
-  TAG="${HEAD_SUBJECT##* }"
+  TAG="$CUR_TAG"
   RESUMING=1
   COMMITTED=1
-  say "▶ 检测到上次发版中断在「已提交 $TAG、尚未打 tag」——接着往下走，不再 bump"
+  say "▶ 检测到上次发版中断在「已提交 ${TAG}、尚未打 tag」——接着往下走，不再 bump"
 else
   npm version "$BUMP" --no-git-tag-version >/dev/null   # 改 package.json/lock（trap 会在非成功路径还原）
   NEW_VER="$(node -p "require('./package.json').version")"
@@ -223,7 +230,7 @@ wait_ci_for_sha() {
   [ -n "$run_id" ] || die "等不到 $label 的 CI run（sha ${sha:0:8}）——GitHub 侧没有为这次推送建 run？"
   say "  run $run_id"
   gh run watch "$run_id" --exit-status >/dev/null \
-    || die "$label 的 CI 未通过（run $run_id）。修好再重跑本脚本，它会从中断处接上。"
+    || die "${label} 的 CI 未通过（run ${run_id}）。修好再重跑本脚本，它会从中断处接上。"
   say "  ✓ $label CI 通过"
 }
 
@@ -246,7 +253,7 @@ if [ -z "$PR" ] || [ "$PR" = "null" ]; then
     || die "开 PR 失败"
   PR="$(gh pr list --base master --head dev --state open --limit 1 --json number -q '.[0].number')"
 else
-  say "▶ 复用已开的 PR #$PR（更新标题与说明）"
+  say "▶ 复用已开的 PR #${PR}（更新标题与说明）"
   gh pr edit "$PR" --title "release $TAG" --body-file "$NOTES" >/dev/null || true
 fi
 say "  PR #$PR"
