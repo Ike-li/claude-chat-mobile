@@ -2237,12 +2237,14 @@ io.on('connection', socket => {
       // 形参会让它报 dynamic_type（本文件其余场景同样是逐条字面量，别为省行数改回去）。
       // ① 已经结束的旧轮：user_message → text_delta → result（完整 FIFO，result 必在里面）
       socket.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'user_message', payload: { text: 'Mixed: the turn that already finished' } });
-      socket.emit('agent:event', { ...base, seq: 2, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_old', text: 'Mixed old-turn reply. ' } });
-      socket.emit('agent:event', { ...base, seq: 3, ts: Date.now(), type: 'result', payload: { messageId: 'msg_mixed_old', durationMs: 100, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] } });
+      // 旧轮的 thinking：它绝不能渗进【当前那一轮】的 spinner 元数据（PR #38 review 第三轮 P2）
+      socket.emit('agent:event', { ...base, seq: 2, ts: Date.now(), type: 'thinking_delta', payload: { messageId: 'msg_mixed_old', text: 'old-turn thinking…' } });
+      socket.emit('agent:event', { ...base, seq: 3, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_old', text: 'Mixed old-turn reply. ' } });
+      socket.emit('agent:event', { ...base, seq: 4, ts: Date.now(), type: 'result', payload: { messageId: 'msg_mixed_old', durationMs: 100, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] } });
       // ② 当前仍在跑的新轮：只有 user_message + delta，没有 result（它还没结束）
-      socket.emit('agent:event', { ...base, seq: 4, ts: Date.now(), type: 'user_message', payload: { text: 'Mixed: the turn that is still running' } });
-      socket.emit('agent:event', { ...base, seq: 5, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_new', text: 'Mixed new-turn chunk. ' } });
-      ack(5);
+      socket.emit('agent:event', { ...base, seq: 5, ts: Date.now(), type: 'user_message', payload: { text: 'Mixed: the turn that is still running' } });
+      socket.emit('agent:event', { ...base, seq: 6, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_new', text: 'Mixed new-turn chunk. ' } });
+      ack(6);
       return;
     }
     // 现场复现（2026-09-12）：切回一个【已经跑完】的会话，但回放流里只有 text_delta、缺配对 result。

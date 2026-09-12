@@ -978,7 +978,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 重试已过、流恢复 → 撤掉重试行，回落普通 spinner。由 text_delta/thinking_delta/tool_use 三处驱动
   // （任一到达都说明这一轮的 API 请求真的通了）；setBusy(false) 会整清 liveLine，无需在此重复。
-  function clearLiveRetry() {
+  function clearLiveRetry(ev) {
+    if (ev?.replay) return; // 回放事件对 liveLine 的所有字段都保持中性，不只是 busy 布尔
     if (!liveLine?.retry) return;
     liveLine.retry = null;
     renderLiveLine();
@@ -1018,7 +1019,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // busy 而 turnRunning 为 false，运行条该留、发送闸不该锁）。
       const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
       if (live) {
-        if (!shouldSeedBusyFromInstanceState(live.state)) setBusy(false);
+        // 用广播那条判据而不是裸 state：它明确排除 bgActive===true（纯后台任务期没有 result 可
+        // 释放，运行条归 task_progress 横幅管）。口径必须与 shouldBindBusyFromBroadcast 一致，
+        // 否则同一份快照在「点亮」与「收掉」两侧得出相反结论——后台任务活着的整段时间里运行条
+        // 和红色停止钮都撤不掉，而 resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把
+        // 主按钮锁成停止钮（PR #38 review 第三轮 P2）。
+        if (!shouldBindBusyFromBroadcast({ state: live.state, bgActive: live.bgActive })) setBusy(false);
         if (live.turnRunning !== true) _turnRunning = false;
       }
       return;
@@ -2253,6 +2259,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // handled 分支统一刷新：已过实例过滤 + epoch/seq 去重，任何本会话事件都说明「还活着」
     onHandledEvent(ev) {
       if (!liveLine) return;
+      // 回放事件不得改写 live 行的任何字段：mixed 批次里旧轮的 delta 会把 lastEventAt 推到「刚刚」、
+      // 把 sawContentDelta 置真，于是当前这一轮明明已经安静很久，spinner 却不显示等待提示
+      // （PR #38 review 第三轮 P2）。
+      if (ev?.replay) return;
       liveLine.lastEventAt = Date.now();
       if (ev.type === 'text_delta' || ev.type === 'thinking_delta') liveLine.sawContentDelta = true;
     },
@@ -2527,7 +2537,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (_composeReady) refreshComposeDefaultsSummary();
     },
     text_delta(p, ev) {
-      clearLiveRetry(); // 重试已过，流恢复——状态行从重试态回落普通 spinner
+      clearLiveRetry(ev); // 重试已过，流恢复——状态行从重试态回落普通 spinner
       // 子 agent 正文：嵌进可折叠卡（不污染主流气泡）；parentToolUseId = 主 Agent/Task 的 toolUseId
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
@@ -2550,13 +2560,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       setBusyFromStreamEvent(ev);
       // 正文开流 = 本轮 thinking 阶段结束（事件驱动切换，比 idle 超时判定准）
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：回放里旧轮的 delta 不得去动当前这一轮的 thinking 态（见 onHandledEvent 的注释）
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
     },
     thinking_delta(p, ev) {
-      clearLiveRetry();
+      clearLiveRetry(ev);
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
@@ -2568,13 +2579,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
       setBusyFromStreamEvent(ev);
-      if (liveLine) {
+      if (!ev?.replay && liveLine) {
         liveLine.thinking = { state: 'active', ...advanceThinkingClock(liveLine.thinking || undefined, Date.now()) };
         renderLiveLine();
       }
     },
     tool_use(p, ev) {
-      clearLiveRetry();
+      clearLiveRetry(ev);
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
       // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开；Task 清单工具特化
@@ -2684,7 +2695,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
       }
       // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：同 text_delta，回放里旧轮的工具不得终结当前这一轮的 thinking burst
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }

@@ -89,9 +89,16 @@ test.describe('回放批次不得改写运行态', () => {
     await expect(page.locator('#messages')).toContainText('Mixed old-turn reply', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('Mixed new-turn chunk');
 
-    // 核心断言：轮次还在跑，运行条与停止钮必须都还在。修复前这里两条都红。
+    // 核心断言 ①：轮次还在跑，运行条与停止钮必须都还在。修复前这里两条都红。
     await expect(page.locator('#streamLiveStatus')).toBeVisible();
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+
+    // 核心断言 ②：回放对 live 行的【所有字段】中性，不只是 busy 布尔。这批回放里旧轮带了一条
+    // thinking_delta，它绝不能渗进当前这一轮的 spinner——否则用户看到的是一个属于上一轮的思考计时
+    // （formatCliSpinnerLine 的 thinking 段：进行中出 'thinking…'，已收尾出 'thought for Ns'）。
+    // PR #38 review 第三轮 P2。
+    await expect(page.locator('#streamLiveStatusText')).not.toContainText('thinking');
+    await expect(page.locator('#streamLiveStatusText')).not.toContainText('thought for');
 
     await expectNoBrowserErrors(page);
   });
