@@ -113,7 +113,15 @@ fi
 SDK_VER="$(node -p "require('./package.json').dependencies['@anthropic-ai/claude-agent-sdk']")"
 
 # ── 算版本号 ─────────────────────────────────────────
-LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+# 【为什么锚到 origin/master 而不是 HEAD】tag 只打在 master 上（发版 PR 合并后的那个 HEAD）。
+# 而不带参数的 `git describe` 找的是**从当前 HEAD 可达**的最近 tag —— 发版走 PR 之后 master
+# 的 HEAD 是个 merge commit，它不在 dev 的祖先链里，describe 于是越过它一路退到再上一个版本。
+# 2026-09-12 实测：dev 上算出 v1.7.0 而不是 v1.8.0。后果不是少算一点，是**多算一整个已发布
+# 版本**：版本推导把 v1.8.0 那批的 23 个 feat 又数了一遍，本该 patch 的一次发版被推成 minor
+# （踩出过 41767b7「发版 v1.9.0」那次回滚）；CHANGELOG 与 release notes 同吃这个范围，会把
+# 上一个版本的条目原样再列一遍，而那是发出去就收不回的对外产物。
+# 第 90 行已 `git fetch -q origin`，所以这里的 origin/master 是新鲜的。
+LAST_TAG="$(git describe --tags --abbrev=0 origin/master 2>/dev/null || true)"
 # 仓库名从本地 remote 解析，不打 GitHub API（GraphQL 在代理下会 EOF）
 REPO="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 OLD_VER="$(node -p "require('./package.json').version")"
