@@ -983,16 +983,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     liveLine.retry = null;
     renderLiveLine();
   }
-  // 运行态只由【实时】事件表达：sync:since 回放的是环形缓冲里的旧信封，它只负责把离开期间的内容
-  // 补渲染出来，不代表"此刻在跑"——那件事的真相源是 instances.state。
-  // 【为什么必须区分】轮次结束时用户若已切到别的会话，那条 result 会被 shouldDropAgentEvent 按视图
-  // 丢弃；之后唯一能补上它的就是切回时的回放，而那批回放不含 result 是常态（缓冲 trim / epoch 换代 /
-  // 回放缓冲判 reload 整批丢弃）。于是 delta 点亮了 busy、却没有任何东西来清它
-  // （2026-09-12 真机：会话 22:56 就结束了，23:03 切回去仍挂着运行条和红色停止钮）。
+  // 运行态只由【实时】事件表达。sync:since 回放的是环形缓冲里的旧信封，它的职责是把离开期间的内容
+  // 补渲染出来；「此刻在不在跑」是另一件事，真相源是 instances 广播（运行条看 state，发送闸与停止钮
+  // 看 turnRunning，两者故意不同——见 logic/composer.js resolveComposerPrimaryMode 的红线注释）。
+  //
+  // 【这两个函数必须成对存在】只让 delta 不点亮、却让 result 照常清，会在「回放批次里既有已结束的
+  // 旧轮、又有当前正在跑的新轮」时翻车：bindView 刚按权威 state 播下的 busy 被旧轮 result 清掉，
+  // 而属于新轮的那些 delta 已经不会再点亮它 —— 运行条与停止钮双双消失，用户看到的是「空闲」，
+  // 发出去的消息却被服务端以在途轮为由拒掉。2026-09-12 PR #38 review 抓出（P1）。
+  //
+  // 于是整批回放对运行态【完全中性】：既不点亮也不清除，运行态一律由 instances 决定
+  // （bindView 入场播种 + 广播单向对齐 + 下方 ticker 的每秒自检）。
   // 守护：tests/e2e/specs/busy-orphan-replay.spec.ts
   function setBusyFromStreamEvent(ev) {
     if (ev?.replay) return;
     setBusy(true);
+  }
+  // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
+  // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
+  function clearBusyFromTurnEndEvent(ev) {
+    if (ev?.replay) return;
+    _pendingSendBusySessionId = null;
+    setBusy(false);
+    // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
+    // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
+    _turnRunning = false;
   }
   function startLiveTicker() {
     if (liveTicker) return;
@@ -2847,7 +2862,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         updateSendButtonState();
       }
     },
-    result(p) {
+    result(p, ev) {
       // 服务端随 result 下发完整回复文本——断网恢复后 s.raw 可能因遗漏 deltas 而截断，
       // 此处用权威全文覆盖确保 Markdown 渲染完整（E18）
       if (p.text && p.messageId) {
@@ -2858,11 +2873,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       const fileChangesCard = flushTurnFileChangesCard();
-      _pendingSendBusySessionId = null;
-      setBusy(false);
-      // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
-      // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
-      _turnRunning = false;
+      clearBusyFromTurnEndEvent(ev);
       updateSendButtonState();
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
@@ -2886,15 +2897,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       approvals.clearAll();
       updateSendButtonState();
     },
-    error(p) {
+    error(p, ev) {
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
-      _pendingSendBusySessionId = null;
-      setBusy(false);
+      clearBusyFromTurnEndEvent(ev);
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
@@ -2918,7 +2928,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!text) return;
       addBar(`${t('回顾')} · ${text}`, 'text-ink-faint');
     },
-    system(p) {
+    system(p, ev) {
       addBar(p.message, systemBarClass(p));
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
@@ -2929,9 +2939,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
         markAllSubagentCardsDone();
-        _pendingSendBusySessionId = null;
-        setBusy(false);
-        _turnRunning = false; // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
+        clearBusyFromTurnEndEvent(ev); // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
         // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
         // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
