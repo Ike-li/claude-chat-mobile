@@ -1019,12 +1019,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // busy 而 turnRunning 为 false，运行条该留、发送闸不该锁）。
       const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
       if (live) {
-        // 用广播那条判据而不是裸 state：它明确排除 bgActive===true（纯后台任务期没有 result 可
-        // 释放，运行条归 task_progress 横幅管）。口径必须与 shouldBindBusyFromBroadcast 一致，
-        // 否则同一份快照在「点亮」与「收掉」两侧得出相反结论——后台任务活着的整段时间里运行条
-        // 和红色停止钮都撤不掉，而 resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把
-        // 主按钮锁成停止钮（PR #38 review 第三轮 P2）。
-        if (!shouldBindBusyFromBroadcast({ state: live.state, bgActive: live.bgActive })) setBusy(false);
+        // 判据分两段，缺一段都会错（两段各自被一轮 review 抓出来过）：
+        //   · turnRunning===true → 一定保住。前台轮真的在跑，运行条就该在，哪怕同时挂着后台任务
+        //     （bgActive 与 turnRunning 可以同时为真）。少了这段，「后台任务 + 前台轮并存」时会
+        //     被下一段误判成没有前台活动，运行条被清掉，而回放的 delta 又被刻意挡住恢复不回来
+        //     ——安静的前台命令看起来没有任何运行指示，停止闸却还锁着（第四轮 P2）。
+        //   · 否则退回广播那条判据。它排除 bgActive===true（纯后台任务期没有 result 可释放，
+        //     运行条归 task_progress 横幅管）。少了这段，后台任务活着的整段时间里运行条和红色
+        //     停止钮都撤不掉，resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把主按钮
+        //     锁成停止钮（第三轮 P2）。
+        const keepBusy = live.turnRunning === true
+          || shouldBindBusyFromBroadcast({ state: live.state, bgActive: live.bgActive });
+        if (!keepBusy) setBusy(false);
         if (live.turnRunning !== true) _turnRunning = false;
       }
       return;
@@ -1052,6 +1058,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 连乐观 marker 一起清：权威说这个实例已空闲，那条「等终止事件」的登记就是过期的。
         // 只清 busy 不清 marker 的话，下一次 bindView 会拿它把假运行条再点亮一次，每切回一次重演一次。
         _pendingSendBusySessionId = null;
+        // 发送闸同样按权威快照收掉，口径与 clearBusyFromTurnEndEvent 逐字一致。
+        // 【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，clearView 之后
+        // busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；自检只清 busy 不清闸，
+        // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
+        // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是本自检存在的理由（第四轮 P1）。
+        // setBusy(false) 内含 updateSendButtonState()，故放在它之前赋值即可刷新主按钮。
+        if (live.turnRunning !== true) _turnRunning = false;
         setBusy(false);
         return;
       }

@@ -22,7 +22,7 @@ import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed
 //   state 说 idle 且超过宽限就清掉。那一半由 logic 层的 shouldForceClearBusyFromBroadcast 判据覆盖。
 //
 // · BUSY-ORPHAN-MIXED（第二条）用的才是**生产可达**的形状：完整 FIFO 里既有已结束的旧轮、又有当前
-//   仍在跑的新轮。它守的是 P1 回归——只挡 delta 不挡 result 会把 bindView 刚播下的 busy 清掉。
+//   仍在跑的新轮，且实例同时挂着真后台任务。它一条守三件事（逐条列在用例上方，各自的红侧都验过）。
 test.describe('回放批次不得改写运行态', () => {
   test('BUSY-ORPHAN 回放只有 text_delta 没有 result → 运行条与停止钮不得留在屏幕上', async ({ page }) => {
     await gotoMock(page);
@@ -57,6 +57,12 @@ test.describe('回放批次不得改写运行态', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 这条用例守【三件事】，缺任一条都会在真实形态下翻车，各自的红侧都验过：
+  //   ① 旧轮的 result 不得清掉当前仍在跑的那一轮（第一轮 review P1）；
+  //   ② 回放对 live 行【全字段】中性——旧轮的 thinking 不得渗进当前轮的 spinner（第三轮 review P2）；
+  //   ③ 实例同时挂着真后台任务与前台轮时（bgActive 与 turnRunning 并存，夹具刻意选了这个组合），
+  //      对账不得把前台轮误判成不存在（第四轮 review P2）。
+  //
   // P1 回归（PR #38 review）：生产 sync:since 回放的是完整 FIFO，批次里完全可能【既有已结束的旧轮、
   // 又有当前仍在跑的新轮】。若只挡住 delta 不点亮、却让旧轮那条 result 照常 setBusy(false) +
   // _turnRunning=false，就会把 bindView 刚按权威 state='busy' 播下的运行态清掉，而属于新轮的 delta

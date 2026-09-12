@@ -3974,8 +3974,11 @@ io.on('connection', socket => {
             cwd: '/Users/you/code/another-react-project',
             sessionId: 'mock-session-orphan-mixed',
             title: 'Orphan Mixed Session',
+            // 前台轮与真后台任务【并存】：bgActive 与 turnRunning 同时为真。这个组合是刻意选的——
+            // 只有「turnRunning===true 一定保住」那段判据能救它，退回 shouldBindBusyFromBroadcast
+            // 会因 bgActive===true 恒返回 false 而把前台轮误判成不存在（第四轮 P2）。
             state: 'busy',
-            bgActive: false,
+            bgActive: true,
             turnRunning: true,
             permissionMode: 'default',
             effort: null,
