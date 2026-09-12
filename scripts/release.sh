@@ -128,10 +128,17 @@ BUMP_SOURCE="显式指定"
 if [ -z "$BUMP" ]; then
   BUMP_SOURCE="按提交历史推导"
   BUMP_RANGE="${LAST_TAG:+$LAST_TAG..}HEAD"
-  # 破坏性变更两种写法都认：footer 的 `BREAKING CHANGE:` 与 header 的 `type!:`（含 scope 形态 `feat(x)!:`）
-  if git log --no-merges --pretty='%s%n%b' "$BUMP_RANGE" | grep -qE '^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:'; then
+  # 【必须用 grep -c 而不是 grep -q】本脚本开了 `set -o pipefail`，而 `grep -q` 命中第一条就退出，
+  # 上游的 `git log` 随即收到 SIGPIPE 而非 0 退出 —— 整个管道被判失败，if 取假。症状是**命中
+  # 反而当没命中**：23 个 feat 的这一批会被推导成 patch。
+  # 2026-09-12 实测踩到：当时在交互 shell 里手动验证（那里没有 pipefail）看到的是正确结果，
+  # 而脚本跑出来是错的。验证环境和真实环境不一致，比没验证更能骗人。
+  # grep -c 会读完整个输入，不产生 SIGPIPE；无匹配时它返回 1，用 `|| true` 接住。
+  BREAKING_N="$(git log --no-merges --pretty='%s%n%b' "$BUMP_RANGE" | grep -cE '^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:' || true)"
+  FEAT_N="$(git log --no-merges --pretty='%s' "$BUMP_RANGE" | grep -cE '^feat(\([^)]*\))?:' || true)"
+  if [ "${BREAKING_N:-0}" -gt 0 ]; then
     BUMP=major
-  elif git log --no-merges --pretty='%s' "$BUMP_RANGE" | grep -qE '^feat(\([^)]*\))?:'; then
+  elif [ "${FEAT_N:-0}" -gt 0 ]; then
     BUMP=minor
   else
     BUMP=patch
