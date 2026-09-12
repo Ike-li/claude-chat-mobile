@@ -365,6 +365,10 @@ struct ConfigItem: Decodable {
     // 当前列表只能另开一条原样下发的通道。条目在服务端已归一成 {path, sessionLimit?}，
     // 免得这里还要解 string | object 的异构数组。
     let list: [WorkdirEntry]?
+    // 非 nil（当前只有 "legacy-env"）= 这台机器还在用 .env，结构化列表在那条路上读不出也写不进
+    // （.env 消费的是逗号分隔的 WORK_DIRS）。桌面端窗口据此别给编辑入口 —— 给了就是让人改完
+    // 看到「保存成功」，而授权的工作区一个都没变。
+    let locked: String?
 
     var name: String { key ?? "" }
     var kindName: String { kind ?? "text" }
@@ -376,7 +380,10 @@ struct ConfigItem: Decodable {
     /// list 项被标成 readonly 只因为前端没有数组编辑器，而桌面端完全可以做一个。
     /// 照搬那个字段会让 WORKDIRS 在桌面上也变成只读 —— 与 scripts/config.js 的 schema
     /// 输出把 list 标为「仅 CLI / 桌面端可改」是同一处判断。
-    var isEditable: Bool { kindName != "readonly" }
+    /// locked 是另一回事，必须一起看：它不是「前端没做编辑器」，而是【这条写入路径本身不通】——
+    /// 老式 .env 安装下结构化列表读不出也写不进（.env 那条路消费的是逗号分隔的 WORK_DIRS）。
+    /// 桌面端做了数组编辑器也改变不了这一点，放行只会让人改完看到「保存成功」而授权面纹丝不动。
+    var isEditable: Bool { kindName != "readonly" && locked == nil }
 
     /// 输入框里应该预填什么。secret 永远不预填明文 —— 服务端根本没下发它（只给 {set,length}）。
     var displayValue: String {

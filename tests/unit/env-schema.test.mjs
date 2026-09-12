@@ -799,3 +799,32 @@ test.describe('CCM_AGENT_PROGRESS_SUMMARIES：配置侧与消费侧必须同判'
     assert.notEqual(off, '', 'off 必须是个写得进去的非空字面量');
   });
 });
+
+// 结构化列表（当前只有 WORKDIRS）只存在于 ccm.config.json。老式 .env 安装上这一项是**双向失效**的：
+// 读不出当前工作区（渲染成空列表，看着像没配过），写回去也不生效——.env 那条路消费的是逗号分隔的
+// WORK_DIRS，不是这个结构化 key。两头一叠加，面板会报「保存成功」而授权的工作区一个都没变，
+// 正是本仓反复强调的「写错源＝假成功」。所以视图必须把它标出来，好让前端别给假的编辑入口。
+test.describe('buildEnvView：老式 .env 安装下的结构化列表', () => {
+  const findWorkdirs = (view) => view.groups.flatMap(g => g.items).find(i => i.key === 'WORKDIRS');
+
+  test('structured 缺席（.env 安装）→ 标 locked，前端据此锁掉编辑器', () => {
+    const item = findWorkdirs(buildEnvView({ PORT: '3000' }, { structured: null }));
+    assert.ok(item, 'WORKDIRS 项不该整个消失 —— 用户会以为面板漏了');
+    assert.equal(item.locked, 'legacy-env',
+      '没标 locked：面板会给出可编辑的空列表，改完报成功而授权面纹丝不动');
+  });
+
+  test('structured 在（ccm.config.json 安装）→ 不锁，正常可编辑', () => {
+    const item = findWorkdirs(buildEnvView({ PORT: '3000' }, {
+      structured: { WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] },
+    }));
+    assert.equal(item.locked, undefined, '把正常安装也锁了 = 唯一免重启的配置项重新变得不可改');
+    assert.deepEqual(item.list, [{ path: '/a' }, { path: '/b', sessionLimit: 3 }]);
+  });
+
+  test('structured 在但没有 WORKDIRS 这个键 → 仍可编辑（空列表是合法状态，不是「读不到」）', () => {
+    const item = findWorkdirs(buildEnvView({ PORT: '3000' }, { structured: { PORT: 3000 } }));
+    assert.equal(item.locked, undefined);
+    assert.deepEqual(item.list, []);
+  });
+});

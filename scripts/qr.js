@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 import { reachableIPv4s } from '../app/src/shared/net-addr.js';
+import { resolveBindPlan } from '../app/src/shared/bind-host.js';
 import { encodeQr } from '../app/src/shared/qrcode.js';
 import { encodePng } from '../app/src/shared/png.js';
 import { accessConfigured } from '../app/src/auth/cf-access.js';
@@ -131,14 +132,39 @@ if (urlFlag !== -1) {
   if (target.warning) warnings.push(target.warning);
 } else {
   const port = process.env.PORT || DEFAULT_PORT;
-  const [first, ...rest] = reachableIPv4s();
-  if (!first) {
-    console.error('没有找到对外可达的 IPv4 地址（只有回环）。');
-    console.error('手机与电脑连同一个 WiFi 后重试，或用 --url 指定隧道地址。');
+  // 【地址必须按 server 真正的监听计划来选】这条默认路径此前直接取第一个非回环网卡，完全不看
+  // BIND_MODE / BIND_HOST。BIND_MODE=loopback 时 server 只在 127.0.0.1 上听，印出去的却是一个
+  // 根本没人监听的局域网地址——扫了必然连不上，而失败现象（转圈、超时）与「手机不在同一个 WiFi」
+  // 一模一样，几乎无从归因。桌面端菜单栏的「连接二维码」走的也是本脚本，同样受影响。
+  const plan = resolveBindPlan({
+    authToken: token,
+    bindMode: process.env.BIND_MODE,
+    bindHost: process.env.BIND_HOST,
+  });
+  if (plan.refuse) {
+    console.error(`绑定配置不可用：${plan.refuse.detail}`);
     process.exit(1);
   }
-  base = `http://${first}:${port}`;
-  alternatives = rest.map(ip => `http://${ip}:${port}`);
+  if (!plan.publiclyReachable) {
+    console.error('server 只监听回环地址（BIND_MODE=loopback），局域网里没有任何地址在听它。');
+    console.error('这时二维码印出来也连不上。改用隧道并 `--url <地址>` 指定，或把 BIND_MODE 换成 lan（留空同义）后重启 server。');
+    process.exit(1);
+  }
+  if (plan.host === '0.0.0.0' || plan.host === '::') {
+    // 通配绑定：每块网卡都在听，才轮得到「挑一个局域网地址」。
+    const [first, ...rest] = reachableIPv4s();
+    if (!first) {
+      console.error('没有找到对外可达的 IPv4 地址（只有回环）。');
+      console.error('手机与电脑连同一个 WiFi 后重试，或用 --url 指定隧道地址。');
+      process.exit(1);
+    }
+    base = `http://${first}:${port}`;
+    alternatives = rest.map(ip => `http://${ip}:${port}`);
+  } else {
+    // 绑到某一个具体地址（BIND_MODE=custom）：只有它在听，不能拿网卡枚举里的别的地址充数。
+    base = `http://${plan.host.includes(':') ? `[${plan.host}]` : plan.host}:${port}`;
+    alternatives = [];
+  }
 }
 
 const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;

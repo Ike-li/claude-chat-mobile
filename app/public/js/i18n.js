@@ -404,6 +404,9 @@ export const EN_DICT = Object.freeze({
   '仍然保存？': 'Save anyway?',
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
+  '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
+    'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
   '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
   '立即重启': 'Restart now',
   '立即重启服务': 'Restart the service now',

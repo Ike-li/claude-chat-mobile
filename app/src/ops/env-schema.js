@@ -733,6 +733,11 @@ export function buildEnvView(values = {}, { shellEnv = null, structured = null }
         // 条目在这里归一成 {path, sessionLimit?}：裸字符串与对象两种形态混在数组里，
         // 会让每个消费者（web 编辑器、Swift 菜单栏）各写一份解构逻辑。
         if (def.kind === 'list') {
+          // 结构化列表只存在于 ccm.config.json。老式 .env 安装下 structured 为 null，这一项
+          // 会**双向失效**：读不出当前工作区（渲染成空列表，看着像没配），写回去也不生效——
+          // .env 那条路消费的是逗号分隔的 WORK_DIRS，不是这个结构化 key。于是面板报保存成功、
+          // 授权面纹丝不动，正是「写错源＝假成功」。标出来让前端锁掉，别给一个假的编辑入口。
+          if (!structured) item.locked = 'legacy-env';
           const cur = structured && Object.hasOwn(structured, key) ? structured[key] : null;
           item.list = (Array.isArray(cur) ? cur : []).flatMap((e) => {
             if (typeof e === 'string') return e.trim() ? [{ path: e }] : [];

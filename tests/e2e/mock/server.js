@@ -2074,7 +2074,11 @@ io.on('connection', socket => {
       }
       mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
     }
-    ack({ ok: true, results: [], written: keys, restartRequired: true });
+    // restartRequired 按 key 分档，不能恒 true：WORKDIRS 在 schema 里标着 reload:'hot'（全表唯一），
+    // 改它即时生效，提示重启会诱导用户白白中断所有会话与后台任务。mock 不能 import app/src
+    // （前后端边界），所以这里显式对齐真 server 的 reloadKindOf —— 那边缺省是 restart，同样保守。
+    const HOT_RELOAD_KEYS = new Set(['WORKDIRS']);
+    ack({ ok: true, results: [], written: keys, restartRequired: keys.some(k => !HOT_RELOAD_KEYS.has(k)) });
   });
 
   socket.on('service:status', (_payload, ack) => {

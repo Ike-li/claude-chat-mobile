@@ -272,6 +272,14 @@ export function createEnvConfigPanel({
       row.append(head);
       if (item.secret) buildSecret(item, field, row);
       else if (item.kind === 'enum' && Array.isArray(item.options)) row.append(buildSelect(item, field));
+      else if (item.kind === 'list' && item.locked === 'legacy-env') {
+        // 这台机器还在用 .env：结构化列表在那条路上读不出也写不进（.env 消费的是逗号分隔的
+        // WORK_DIRS）。**提前 return，不登记进 fields** —— 留一个能点的编辑器只会让人改完看到
+        // 「保存成功」，而授权的工作区一个都没变。
+        row.append(el('div', 'text-[10px] text-warning leading-relaxed',
+          t('当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
+        return row;
+      }
       else if (item.kind === 'list') row.append(buildListEditor(item, field));
       else row.append(buildInput(item, field));
     }
@@ -395,6 +403,17 @@ export function createEnvConfigPanel({
     const n = res.written?.length ?? 0;
     saveBtn.disabled = true;
     onSaved?.(res);
+
+    // 热加载项（当前只有 WORKDIRS，schema 里标 reload:'hot'）改完即生效，这里既不该说「重启后
+    // 生效」，更不该递一个「立即重启」按钮 —— 那会让用户为一次根本不需要的停机中断掉所有在跑的
+    // 会话与后台任务。同一份面板里 WORKDIRS 的说明写着「改完即生效，无需重启」，保存后却弹重启，
+    // 两句话自相矛盾。
+    // 严格判 `=== false`：字段缺失（旧 server）时回落到提示重启，方向保守 —— 多点一次重启无害，
+    // 漏提示则是「改了没生效还以为生效了」。
+    if (res.restartRequired === false) {
+      hint.textContent = t('已写入 N 项，已生效').replace('N', String(n));
+      return;
+    }
 
     // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
     if (!canRestart()) {

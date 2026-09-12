@@ -163,6 +163,28 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 热加载项（schema 里 reload:'hot'，当前只有 WORKDIRS）改完即时生效。此前保存路径无条件
+  // 渲染「重启后生效」并递上「立即重启」——同一张面板里 WORKDIRS 的说明却写着「改完即生效，
+  // 无需重启」，两句话自相矛盾，而照着按钮点下去会中断所有在跑的会话与后台任务。
+  // 这条用例刻意【不】关掉 canRestart：默认 true 时按钮本来就会出现，所以它真正区分的是
+  // 「服务端按 key 分了档、前端读了这个档」，而不是「碰巧没有重启入口」。
+  test('P0-31k 只改热加载项（WORKDIRS）→ 说「已生效」，不给重启入口', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+
+    const row = page.locator('#envConfigBody input[data-list-path]').first();
+    await expect(row).toBeVisible();
+    await row.fill('/tmp/ccm-e2e-hot-workdir');
+    await page.locator('#envConfigSave').click();
+
+    const hint = page.locator('#envConfigHint');
+    await expect(hint).toContainText('已生效');
+    await expect(hint).not.toContainText('重启后生效');
+    await expect(page.locator('#envConfigRestart')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-31g 改两项则提交两项', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');

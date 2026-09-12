@@ -16,6 +16,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { encodeQr } from '../../app/src/shared/qrcode.js';
 
 const REF_URL = `http://192.168.1.1:3000/#token=${'a'.repeat(64)}`;
@@ -148,4 +149,47 @@ test('encodeQr：三个定位角与时序图案就位', () => {
     assert.equal(matrix[6][i], i % 2 === 0 ? 1 : 0, `横向时序在第 ${i} 列错位`);
     assert.equal(matrix[i][6], i % 2 === 0 ? 1 : 0, `纵向时序在第 ${i} 行错位`);
   }
+});
+
+// ── scripts/qr.js 的地址选择（CLI 层，spawn 真脚本）──────────────────────────
+//
+// 【为什么值得一条 spawn 测试】默认路径此前直接取第一个非回环网卡，完全不看 BIND_MODE：
+// BIND_MODE=loopback 时 server 只在 127.0.0.1 上听，二维码却印出一个没人监听的局域网地址。
+// 失败现象（手机上转圈、超时）与「不在同一个 WiFi」一模一样，几乎无从归因——而桌面端菜单栏
+// 的「连接二维码」走的也是这个脚本。
+//
+// 【为什么必须断言 stdout 为空】这条路径在成功时会把含 AUTH_TOKEN 的二维码打到 stdout。
+// 「拒绝」必须发生在生成之前，否则等于在一个连不上的配置下照样把凭据画了出来。
+// 【token 从哪来】显式传 AUTH_TOKEN，env 压过配置文件——绝不让用例读到仓库里的真令牌。
+test.describe('scripts/qr.js：地址必须来自 server 真正的监听计划', () => {
+  const QR_CLI = new URL('../../scripts/qr.js', import.meta.url).pathname;
+  const runQr = (env) => spawnSync(process.execPath, [QR_CLI], {
+    env: { ...process.env, AUTH_TOKEN: 'a'.repeat(64), ...env },
+    encoding: 'utf8',
+  });
+
+  test('BIND_MODE=loopback → 拒绝，且在画出二维码之前', () => {
+    const r = runQr({ BIND_MODE: 'loopback' });
+    assert.notEqual(r.status, 0, 'loopback 下印出的局域网地址没人在听，扫了必然连不上');
+    assert.match(r.stderr, /回环|loopback/);
+    assert.equal(r.stdout.trim(), '', '二维码已经画出来了 —— 含 token 的图在一个连不上的配置下照样泄了');
+  });
+
+  test('BIND_MODE=custom 缺 BIND_HOST → 报配置不可用（复用 server 的判据，不自己编一套）', () => {
+    const r = runQr({ BIND_MODE: 'custom', BIND_HOST: '' });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /BIND_HOST/);
+    assert.equal(r.stdout.trim(), '');
+  });
+
+  test('BIND_MODE=lan → 照常出图（否则这道闸就把正常路径也挡了）', () => {
+    const r = runQr({ BIND_MODE: 'lan' });
+    // 没有对外可达 IPv4 的机器（纯回环的 CI 容器）也会非 0 退出，那是既有行为、不是本次改动引入的，
+    // 所以只在真拿得到局域网地址时才断言成功。
+    if (r.status !== 0) {
+      assert.match(r.stderr, /没有找到对外可达的 IPv4/, `lan 被意外挡下：${r.stderr}`);
+      return;
+    }
+    assert.ok(r.stdout.length > 0, 'lan 下应当真的画出二维码');
+  });
 });

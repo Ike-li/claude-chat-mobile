@@ -39,6 +39,7 @@ import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
   createConfigReloader,
+  reloadKindOf,
   structuredToStringValues,
 } from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
@@ -3817,7 +3818,12 @@ registerSocketConnection(io, socket => {
         acceptedWarnings: verdict.results.filter(r => r.level === 'warn').map(r => r.key),
       },
     });
-    ack({ ok: true, results: verdict.results, written: keys, restartRequired: true });
+    // 【不能无条件 true】schema 里 WORKDIRS 标着 reload:'hot'（全表唯一），那条注释写得很清楚：
+    // 「这个标记不是文档，是**行为**」。只改了热加载项还提示重启，会诱导用户去中断所有在跑的
+    // 会话与后台任务，换来一次完全不必要的停机。判据复用 config-file.js 的 reloadKindOf，
+    // 不在这里自己写一份（它缺省 restart，方向已经是保守的那边）。
+    const restartRequired = keys.some(k => reloadKindOf(k) === 'restart');
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired });
   });
 
   // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
@@ -3969,8 +3975,12 @@ registerSocketConnection(io, socket => {
       try {
         const len = st.size - start;
         const buf = Buffer.allocUnsafe(len);
-        readSync(fd, buf, 0, len, start);
-        text = buf.toString('utf8');
+        // 【必须按 bytesRead 截断】日志在 statSync 与 readSync 之间被轮转/截断时读到的会少于 len，
+        // 而 allocUnsafe 不清零——尾部就是复用的堆内存，会被当成日志正文发给客户端（可能夹带
+        // 本进程其他请求的残留字符串）。这条路径本身是鉴权后的运维面板，但没有理由把未初始化
+        // 内存送出去。
+        const bytesRead = readSync(fd, buf, 0, len, start);
+        text = buf.toString('utf8', 0, bytesRead);
       } finally {
         closeSync(fd);
       }
