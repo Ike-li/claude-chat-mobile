@@ -1052,6 +1052,18 @@ io.on('connection', socket => {
         defaultEffort: pendingFreshEffortOrDefault()
       }
     });
+    // 真 server 这条 handler 末尾有 `lastStatusLine = null; scheduleStatusRefresh()`（src/server/app.js
+    // session:new），300ms 后按新 cwd 发一条 status_line——compose 页的状态栏与顶栏改动角标全靠它。
+    // mock 此前只发 instances，于是「新会话页该不该显示 git」这件事在 E2E 层根本无从断言（永远没数据）。
+    // 无实例，故不带 model/ctx：对齐 buildWebStatusLine 在 agent 为空时只产出 cwd/project/git 的形状。
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'status_line', payload: {
+        project: viewingCwd.split('/').filter(Boolean).pop() || viewingCwd,
+        cwd: viewingCwd,
+        git: { branch: 'main', staged: 0, modified: 3, untracked: 1, changed: 4, ahead: 0, behind: 0 },
+      }
+    });
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
   });
 

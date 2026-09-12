@@ -2,7 +2,7 @@
 // 顶部 pill → 工作区面板「改动」tab（git:status / git:diff mock）
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -63,6 +63,52 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel button[title*="浏览项目文件"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 新会话页（点 ＋ 后的 session 懒创建窗口）：session 还没有，工作区已经有了。
+  // 这两个 tab 背后的 git:status / files:browse 都只要 cwd（socket-files.js 两个 handler 不碰 sessionId），
+  // 所以它们在这里必须照常可用——此前整个 pill 跟着「没有 session」一起被隐藏，等于开工前最该看的
+  // git status 恰恰看不到，而同一张页面早就在读同一个仓库的 git（worktree 源分支选择器走 git:branches）。
+  test('P0-GIT-3 compose 新会话页：pill 可点，文件与改动两个 tab 都能用', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    // 前提确认：确实停在「还没有 session」的那一格——否则下面测的就是普通会话页，白测
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    await page.locator('#topContextPill').click();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
+    await expect(page.locator('#fileBrowsePath')).not.toHaveText('');
+
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#gitChangesBody')).toBeVisible();
+    await expect(page.locator('#gitChangesBranch')).toContainText('dev');
+    await expect(page.locator('#gitChangesBody')).toContainText('work.js');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 「会话已中断」表面：实例已经没了，状态栏里那份 ctx/模型/额度全归属于它，留在屏上就是在报废数字。
+  //
+  // 这条钉的是【最终状态】，不是某一行实现：从本用例走的这条路（真实会话 → 摧毁）进来时
+  // _composeReady 已是 false，#composerFooter 整体隐藏就已经把状态栏顺带藏掉了，
+  // showInstanceDestroyedSurface 里那句 hideStatuslineWrap() 是第二道保险——单独注掉它本用例不会红。
+  // 那道保险防的是另一条进法（compose 首发 → 拿到 sessionId 前实例退出）：_composeReady 停在陈旧的
+  // true，composer 于是显示，状态栏就露出来了。那条路需要 mock 支持「懒开 FRESH 后立刻摧毁」才构造
+  // 得出来，当前没有；真要动手改的人，别把这两道保险当重复。
+  test('P0-GIT-5 会话已中断表面：状态栏与 pill 都不得留在屏上', async ({ page }) => {
+    await gotoMock(page);
+    await expect(page.locator('#cliStatusWrap')).toBeVisible(); // 前提：会话里状态栏确实渲染着
+
+    await sendChatMessage(page, 'test:instance-destroyed');
+
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#cliStatusWrap')).toBeHidden();
+    await expect(page.locator('#topContextPill')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });

@@ -338,10 +338,21 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
   return parts.length ? parts.join(' · ') : t('使用工作区默认配置');
 }
 
-// 顶部工作区 pill（点开文件浏览）可见性：空首页/compose 枢纽已自有工作区入口，
-// 顶栏再放文件夹会重复且暗示「当前在会话里」。仅在有可渲染会话流时显示。
-export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) {
-  return !shouldShowStartScreen({ viewingInstanceId, sessionId });
+// 顶部工作区 pill（点开文件浏览 / git 改动）可见性。
+//
+// 判据是**工作区定了没有**，不是会话建了没有：pill 背后的 git:status 与 files:browse 只要一个 cwd
+// （socket-files.js 两个 handler 都不碰 sessionId，只过 cwdInWorkDirs 范围门）。
+//   · 真实会话：原样显示。
+//   · compose 页（点 ＋ 后的会话懒创建窗口）：session 要等首条消息发出、SDK 吐首个 init 才有，但工作区
+//     此刻已经定了（页头就写着「将在此工作区开新 CLI 会话」），文件和改动完全可看。此前这里跟着
+//     shouldShowStartScreen 一起隐藏，等于让「会话还没建」顺带关掉了一项与会话无关的能力——而同一张
+//     compose 页早已在读同一个仓库的 git（worktree 源分支选择器走 git:branches），两者自相矛盾。
+//     页内那个 compose-project-pill 也补不上：它的 onclick 是打开会话列表抽屉，不通向文件。
+//   · 空首页：工作区尚未选定（页面就是让你选的），pill 无处可指，仍隐藏。
+// cwd 为空时一律隐藏——宁可没入口，也不给一个指向 null 的入口。
+export function shouldShowTopContextPill({ viewingInstanceId, sessionId, composeReady = false, cwd = null } = {}) {
+  if (!shouldShowStartScreen({ viewingInstanceId, sessionId })) return true;
+  return Boolean(composeReady && cwd);
 }
 
 // 会话设置底部「🆔 会话标识」块：session id 是懒创建的（新会话懒开时 entry.sessionId=null，
