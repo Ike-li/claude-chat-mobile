@@ -125,36 +125,48 @@ jobs:
       # playwright.config.ts 的 workers:1 不能动（mock server 用模块级全局变量当状态存储，多 worker
       # 共打同一进程会互相踩踏直至崩溃），并发只能靠进程级隔离拿。
       #
-      # 【为什么写死而不用脚本的自适应】自适应是 max(2, min(4, 核数/2))，runner 实测 4 核 ⇒ 恰好
-      # 也给 2。写死是为了让「2 是选出来的、不是碰巧」留在代码里：runner 规格哪天变了，自适应会
-      # 悄悄改行为，而下面这条稳定性判据不会跟着变。
+      # 【为什么写死 4 而不用脚本的自适应】自适应是 max(2, min(4, 核数/2))，runner 实测 4 核 ⇒
+      # 只会给出 2，而 2 是实测最差的档（见下）。写死也让「4 是选出来的」留在代码里：runner
+      # 规格哪天变了，自适应会悄悄改行为，而下面这些判据不会跟着变。
       #
-      # 【为什么不是 4——实测过，会假红】run 34709034273（2026-09-12）拿 4 分片真跑：e2e 步骤 269s
-      # （对比串行 632s），但 task-progress.spec.ts 的 P0-17i「终端只读镜像三态」红了
-      # （toBeEnabled 超时）。那条用例时序脆弱早有记录，4 核上开 4 片 ⇒ 每片只剩约 1 核，
-      # 断言窗口被 CPU 争抢挤没。**假红比慢更糟**——它会让人停止相信这套测试。
-      # 修完 P0-17i 才谈得上把这里开到 4。
+      # 【三个档位都真跑过，2 分片是两头不讨好】
+      #   串行  632s  绿（同期 10 次里 9 次绿）
+      #   4 分片 269s  红 task-progress P0-17i        run 34709034273
+      #   2 分片 373s  红 long-stream-interrupt P0-04  run 34709543333
+      # 降分片数解决不了稳定性——2 分片比 4 分片慢 104s 却照样红，而且红的是【另一条】用例。
+      # 既然并行本身就会照出这批脆弱用例，就取最快的档，用 playwright.config.ts 的
+      # retries:1 兜偶发（那里写了为什么 retries 不等于掩盖真 bug）。
       #
-      # 【别再用「串行单文件时长 ÷ 分片数」估耗时】同一次实测把这个算法证伪了：按串行时长模拟
-      # 4 分片是 171s，实测 269s，偏乐观 57%。模型隐含假设「每片速度不变」，而 CPU 供给不足时
-      # 每片本身就会变慢（降速因子约 1.54）。本机测到的并行度（10 核下 2.74）是【充足供给下的
-      # 实际使用量】，不是需求上限，拿它推「N 核够用」会错。要数就跑一次。
+      # 【红的病因不止 CPU 争抢】P0-04 报的是 element(s) not found 而非超时，不是时序形态。
+      # 分片真正改变的还有「哪些 spec 共用一个 mock server 进程、按什么顺序跑」，而 mock server
+      # 用模块级全局变量存状态 ⇒ spec 间的隐藏耦合会被重排暴露。分片方式每变一次就可能红一条新的，
+      # 这不是调分片数能了结的（未验证的假说，判据见 config 里那段注释）。
+      #
+      # 【别再用「串行单文件时长 ÷ 分片数」估耗时】实测证伪：按串行时长模拟 4 分片是 171s，
+      # 实测 269s，偏乐观 57%。模型隐含假设「每片速度不变」，而 CPU 供给不足时每片本身就会变慢
+      # （降速因子约 1.54）。本机测到的并行度（10 核下 2.74）是【充足供给下的实际使用量】，
+      # 不是需求上限，拿它推「N 核够用」会错。要数就跑一次。
       #
       # 【地板 85s】同一个 spec 文件不跨分片，workspace-sessions-sidebar 单文件就要 85s，任何分片数
       # 都突破不了。再要快只能拆那个文件——那是重组测试内容，不是调这里的参数。
-      - name: Run Playwright E2E (2 shards)
+      - name: Run Playwright E2E (4 shards)
         run: npm run test:e2e:parallel
         env:
-          CCM_E2E_SHARDS: '2'
+          CCM_E2E_SHARDS: '4'
 
       # ★ 产物是 test-results*/ 而不是 playwright-report*/：分片子进程走
       # `npm run test:e2e -- <files> --reporter=list`，命令行的 --reporter 会【覆盖】config 里的
       # reporter 数组，html 那一项根本不执行 ⇒ playwright-report-shardN/ 从来不会生成。
       # 照搬串行时代的 playwright-report/ 会让上传永远捞空，而 upload-artifact 捞空只 warn 不红，
-      # 表现为「改好了」但失败时一张截图都没有。失败截图（screenshot: only-on-failure）落在
-      # test-results-shardN/。trace 不在这里：config 是 on-first-retry 而 retries 没配 = 0。
+      # 表现为「改好了」但失败时一张截图都没有。失败截图（screenshot: only-on-failure）与
+      # trace（on-first-retry，随 retries:1 一起真正开始产出）都落在 test-results-shardN/。
+      #
+      # ★ always() 而不是 failure()：开了 retries:1 之后最值得看的恰恰是【重试转绿】那一类
+      # ——job 结论是 success，failure() 根本抓不到，trace 当场丢掉，flaky 就又变回查不动的了，
+      # 那等于只拿了 retries 的「不阻塞」，丢掉了它的「可诊断」。全绿时目录里只有几百字节的
+      # .last-run.json，代价可忽略。
       - name: Upload Playwright artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-e2e-artifacts
