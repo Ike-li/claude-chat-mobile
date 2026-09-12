@@ -115,6 +115,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 - `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `app/src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
   出向另有一道**前端接收面覆盖**检查：`app/public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
+- `replay: true` 标记这批是 `sync:since` 补发而非实时到达。**它只补渲染内容，不表达运行态**——运行条与停止钮的真相源是 `instances` 广播里的 `state`。轮次结束时用户若已切到别的会话，那条 `result` 会被前端的实例过滤按视图丢弃，而之后补上它的回放批次**不含 `result` 是常态**（缓冲 trim / epoch 换代 / 回放缓冲判 `reload` 整批丢弃）；若让回放的 delta 去点亮 busy，就会点亮了没人清（2026-09-12 真机：会话早已结束，切回去仍挂着运行条和红色停止钮）。前端另有一道每秒自检（`app.js` 的 `startLiveTicker`）按权威 `state` 兜底，不依赖广播到达——`shouldForceClearBusyFromBroadcast` 那条看门狗只在收到广播时才跑，而系统空闲时广播根本不来。
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
 - `sessionId` 与 `instanceId` 分开，避免同一 CLI 会话的逻辑身份和当前 Web 进程实例混淆。

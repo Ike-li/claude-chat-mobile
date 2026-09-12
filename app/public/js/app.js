@@ -983,9 +983,34 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     liveLine.retry = null;
     renderLiveLine();
   }
+  // 运行态只由【实时】事件表达：sync:since 回放的是环形缓冲里的旧信封，它只负责把离开期间的内容
+  // 补渲染出来，不代表"此刻在跑"——那件事的真相源是 instances.state。
+  // 【为什么必须区分】轮次结束时用户若已切到别的会话，那条 result 会被 shouldDropAgentEvent 按视图
+  // 丢弃；之后唯一能补上它的就是切回时的回放，而那批回放不含 result 是常态（缓冲 trim / epoch 换代 /
+  // 回放缓冲判 reload 整批丢弃）。于是 delta 点亮了 busy、却没有任何东西来清它
+  // （2026-09-12 真机：会话 22:56 就结束了，23:03 切回去仍挂着运行条和红色停止钮）。
+  // 守护：tests/e2e/specs/busy-orphan-replay.spec.ts
+  function setBusyFromStreamEvent(ev) {
+    if (ev?.replay) return;
+    setBusy(true);
+  }
   function startLiveTicker() {
     if (liveTicker) return;
-    liveTicker = setInterval(() => { if (liveLine) renderLiveLine(); }, 1000);
+    liveTicker = setInterval(() => {
+      if (!liveLine) return;
+      // 兜底自检：清 busy 的两条既有通道都是被动的——轮次终止事件可能被视图路由丢弃（见上），
+      // 而 instances 广播上的看门狗只在【收到广播】时才跑，系统一安静就永远不来（真机现场那 100 秒
+      // 里一次广播都没有）。这里每秒用同一份判据主动看一眼权威 state，把"等广播"换成"自己查"。
+      // 查不到实例时【不清】：新会话首发的乐观 busy 期实例尚未出现在广播里，那不是"已经结束"。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (live && shouldForceClearBusyFromBroadcast({
+        state: live.state,
+        localBusy: _busyState,
+        turnStartTs: liveLine.turnStartTs,
+        now: Date.now(),
+      })) { setBusy(false); return; }
+      renderLiveLine();
+    }, 1000);
   }
   function stopLiveTicker() {
     if (liveTicker) { clearInterval(liveTicker); liveTicker = null; }
@@ -2470,7 +2495,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         s.raw += p.text;
         s.textNode.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         return;
       }
       const s = getStream(p.messageId, ev?.ts);
@@ -2483,32 +2508,32 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           scrollBottom();
         }, formatStreamPreviewIntervalMs());
       }
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 正文开流 = 本轮 thinking 阶段结束（事件驱动切换，比 idle 超时判定准）
       if (liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
     },
-    thinking_delta(p) {
+    thinking_delta(p, ev) {
       clearLiveRetry();
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       if (liveLine) {
         liveLine.thinking = { state: 'active', ...advanceThinkingClock(liveLine.thinking || undefined, Date.now()) };
         renderLiveLine();
       }
     },
-    tool_use(p) {
+    tool_use(p, ev) {
       clearLiveRetry();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
@@ -2607,7 +2632,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendMessage(card);
       }
       scrollBottom();
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。

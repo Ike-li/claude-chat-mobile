@@ -206,6 +206,7 @@ const mockServicePayload = () => ({
   statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
+let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
@@ -396,6 +397,7 @@ function resetMockState() {
     total: 5,
   };
   busySilentSwitchMode = false;
+  orphanReplayArmed = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
   foregroundFoundMissingHistoryMode = false;
@@ -1254,6 +1256,14 @@ io.on('connection', socket => {
               entrypoint: 'sdk-ts'
             },
             {
+              // BUSY-ORPHAN：切回已结束会话但回放缺 result 的场景专用（同上条的登记理由）。
+              id: 'mock-session-orphan',
+              title: 'Orphan Replay Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: mockListClockBase - 80,
+              entrypoint: 'sdk-ts'
+            },
+            {
               // P0-REPLAY-UNREAD-DISMISS：回放缓冲程序性落底 × 未读胶囊自动确认已读协同场景专用。
               id: 'mock-session-replay-unread',
               title: 'Replay Unread Session',
@@ -1717,6 +1727,14 @@ io.on('connection', socket => {
           ]
         });
       }
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-orphan') {
+      // BUSY-ORPHAN：恒定返回基线（同 mock-session-replay-small 套路）。第一次冷切入靠它建 DOM 缓存，
+      // 这样第二次切回才会走 'keep' → flush，让缺 result 的那批回放事件真的逐条派发出来。
+      const messages = [];
+      for (let i = 0; i < 4; i++) {
+        messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Orphan baseline message #${i}` });
+      }
+      callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-small') {
       // P0-REPLAY-BUFFER（少量积压→flush）：flush 路径不清屏、不重拉 session:history，这里恒定返回
       // 基线内容——若因回归错误地被第二次调用，仍只会重渲染这份基线（不含"Small live reply #N"），
@@ -2176,6 +2194,31 @@ io.on('connection', socket => {
         type: 'text_delta', payload: { messageId: 'msg_nosid_1', text: 'NOSID_LIVE_FROM_BUFFER' }
       });
       ack(2);
+      return;
+    }
+    // 现场复现（2026-09-12）：切回一个【已经跑完】的会话，但回放流里只有 text_delta、缺配对 result。
+    // 三个 delta 各自 setBusy(true)，而清 busy 的两条通道同时不可达：轮次终止事件不在这批里，
+    // instances.state 是 idle → 入场不 seed、看门狗 shouldForceClearBusyFromBroadcast 也只挂在广播上。
+    // replayed=4 远低于 REPLAY_BUFFER_RELOAD_THRESHOLD(100) → 走 flush，事件真的逐条派发。
+    if (instanceId === 'inst_orphan') {
+      if (!orphanReplayArmed) {
+        orphanReplayArmed = true;
+        ack(0);
+        return;
+      }
+      const epoch = 'mock-epoch-orphan';
+      const sid = 'mock-session-orphan';
+      socket.emit('agent:event', {
+        seq: 1, epoch, sessionId: sid, instanceId: 'inst_orphan', ts: Date.now(),
+        type: 'user_message', payload: { text: 'Orphan replay: the turn that finished while I was away' }, replay: true
+      });
+      for (let i = 0; i < 3; i++) {
+        socket.emit('agent:event', {
+          seq: i + 2, epoch, sessionId: sid, instanceId: 'inst_orphan', ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_orphan_1', text: `Orphan live chunk #${i}. ` }, replay: true
+        });
+      }
+      ack(4); // 故意不发 result：这正是被测的形态
       return;
     }
     if (instanceId === 'inst_2') {
@@ -3864,6 +3907,43 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_tab_model_effort_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 现场复现（2026-09-12）：注册 inst_orphan，state='idle'（轮次早已结束）。
+      // 它的 sync:since 回放 user_message + 3 条 text_delta 但【不发 result】——模拟轮次终止事件遗失。
+      command: 'test:busy-orphan-replay',
+      run: async () => {
+        console.log('[mock] test:busy-orphan-replay — inst_orphan 回放缺 result，验证运行条会不会永久卡住');
+        orphanReplayArmed = false;
+        if (!mockInstances.some(i => i.instanceId === 'inst_orphan')) {
+          mockInstances.push({
+            instanceId: 'inst_orphan',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-orphan',
+            title: 'Orphan Replay Session',
+            state: 'idle',
+            bgActive: false,
+            turnRunning: false,
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload()
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_orphan_setup', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },
