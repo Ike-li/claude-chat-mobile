@@ -702,23 +702,6 @@ site data and the installed PWA must be cleared manually.
 | Startup logs "read as number/boolean" conversion notes | `ccm.config.json` has numbers or toggles written as strings; use `3000` / `true`, not `"3000"` / `"true"` |
 | The desktop menu bar icon is gone | The notch pushed it out; see [the section above](#when-the-notch-hides-the-menu-bar-icon) for the one-line `defaults write` recovery |
 
-## Maintainers: Docker playground
-
-This is not a product entry. User install still uses `npm run setup` / `npm start` / the desktop app. The playground moves the test environment into a container: empty `HOME`, fake-claude, no host `~/.claude`.
-
-```bash
-npm run docker:build                 # first time, and once more after the image tag lands
-npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
-npm run playground:device -- list
-npm run playground:device -- approve <ID>
-npm run playground:up:mock           # send/stream UI (mock server)
-npm run playground:up:proxy          # nginx public-Host fixture
-npm run test:docker:playground       # install path + topology probes + thin Playwright TOFU
-npm run playground:reset             # down -v, clear the device trust table
-```
-
-Sending a message will not complete an agent turn (fake-claude). An accidental send stays busy; use `playground:restart` (not while proxy is up — use `playground:up:proxy` instead). Do not open the URL without `#token=` (that trips the auth rate-limit short lock).
-
 ## Next steps
 
 - Long-term public access: [Deployment and operations](deployment.md) (Chinese)

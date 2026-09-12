@@ -279,7 +279,7 @@ Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不�
 状态：新逻辑不进 app.js 顶层 · import 边界硬闸
 安全：六层分立（§6）· fail-closed · 推送 body 最小化
 展示：不混拼 · 不猜 · 先改 display-contracts 测试
-工程：dev 分支 · 宿主机白名单 10 条（§4.2，真相源 guard-host-tests.js）· 其余 docker · check 全绿
+工程：dev 分支 · 宿主机白名单 11 条（§4.2，真相源 guard-host-tests.js）· 其余 docker · check 全绿
 债：AD-5 / SP-10 在 n=1 下不做；无新证据不重开
 上游：web slash 恒 fork（UP-1，判据＝宿主无 ReportFindings）；只改可见性，别当 bug 修
 ```
