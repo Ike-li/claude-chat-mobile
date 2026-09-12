@@ -151,7 +151,10 @@ for (const { index, code } of results) {
 }
 
 if (results.some(r => r.code !== 0)) {
-  console.error('\n[test-e2e-parallel] 至少一个分片失败——完整报告见对应 playwright-report-shardN/ 目录。');
+  // 指 test-results 而不是 playwright-report：上面 spawn 时带了 --reporter=list，命令行的 reporter
+  // 会【覆盖】config 里的 reporter 数组，html 那一项根本不执行 ⇒ playwright-report-shardN/ 从来不生成。
+  // 原文指向那个目录，照着去找只会扑空（.github/workflows/test.yml 的 artifact 路径同源）。
+  console.error('\n[test-e2e-parallel] 至少一个分片失败——失败截图见对应 test-results-shardN/ 目录。');
   process.exit(1);
 }
 console.log('\n[test-e2e-parallel] 全部分片通过。');
