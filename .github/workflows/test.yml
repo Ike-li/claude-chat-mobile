@@ -163,8 +163,12 @@ jobs:
       #
       # ★ always() 而不是 failure()：开了 retries:1 之后最值得看的恰恰是【重试转绿】那一类
       # ——job 结论是 success，failure() 根本抓不到，trace 当场丢掉，flaky 就又变回查不动的了，
-      # 那等于只拿了 retries 的「不阻塞」，丢掉了它的「可诊断」。全绿时目录里只有几百字节的
-      # .last-run.json，代价可忽略。
+      # 那等于只拿了 retries 的「不阻塞」，丢掉了它的「可诊断」。
+      #
+      # 全绿那一轮这一步会打一条 `No files were found ... test-results*/` 的 warning
+      # （实测 run 34713413770）：Playwright 没有失败产物时压根不建 outputDir。这是预期噪音，
+      # 不是配错了。仍保留默认的 if-no-files-found: warn 而不改成 ignore——**路径写错导致的
+      # 捞空必须留得下痕迹**，那正是这次改 path 之前的形态，静音掉就再也发现不了。
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v7
