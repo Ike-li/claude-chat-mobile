@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -857,4 +857,48 @@ test('resolveDrawerStatusChip: 占用者闲着 → 后台占用；占用者在�
   assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'claude-desktop' }),
     { status: 'busy', label: '桌面端运行中' });
   assert.equal(resolveDrawerStatusChip({ terminalState: 'alive' }), null);
+});
+
+// 托管 worktree 的实例 cwd 是 `<父仓>/.claude/worktrees/<name>`，不在白名单 dirs 里。它必须归到
+// 父仓，否则在任何按工作区分组的视图里都会凭空消失——角标与 sessionsDot（K2）是一处，会话行的
+// 「已打开」判定是另一处：liveMap 对 worktree 行恒空时，开着的会话被画成未打开（丢运行态、丢关闭
+// 入口），点一下还白走一趟 reopen。抽成共享判据就是为了这两处不再各写一份前缀匹配。
+test.describe('owningWorkspace：worktree 实例归到父仓', () => {
+  const dirs = ['/repo/a', '/repo/b'];
+
+  test('白名单目录本身 → 原样', () => {
+    assert.equal(owningWorkspace('/repo/a', dirs), '/repo/a');
+  });
+
+  test('托管 worktree → 归父仓（不归的话那一行会被当成没打开）', () => {
+    assert.equal(owningWorkspace('/repo/a/.claude/worktrees/ccm-20260912-0130-ab12', dirs), '/repo/a');
+  });
+
+  test('嵌套工作区取最长前缀，不能归错到外层', () => {
+    assert.equal(owningWorkspace('/repo/a/sub/.claude/worktrees/w1', ['/repo/a', '/repo/a/sub']), '/repo/a/sub');
+  });
+
+  test('前缀必须落在目录边界上：/repo/ab 不属于 /repo/a', () => {
+    assert.equal(owningWorkspace('/repo/ab', dirs), null);
+  });
+
+  test('完全无关的路径 → null（调用方自己决定回落）', () => {
+    assert.equal(owningWorkspace('/elsewhere/x', dirs), null);
+  });
+
+  test('空输入不抛', () => {
+    assert.equal(owningWorkspace('', dirs), null);
+    assert.equal(owningWorkspace(null, dirs), null);
+    assert.equal(owningWorkspace('/repo/a', null), null);
+  });
+});
+
+// aggregateStates 改用 owningWorkspace 之后，K2 那条行为必须原样成立。
+test('aggregateStates：worktree 实例的状态点亮父仓（K2 回归锚点）', () => {
+  const out = aggregateStates(
+    [{ cwd: '/repo/a/.claude/worktrees/w1', state: 'busy' }],
+    ['/repo/a', '/repo/b'],
+  );
+  assert.equal(out['/repo/a'], 'busy', 'worktree 在跑，父仓却显示空闲 —— 用户看不到它');
+  assert.equal(out['/repo/b'], 'idle');
 });

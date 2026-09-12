@@ -26,6 +26,7 @@ import {
   resolvePanelState,
   resolvePanelCwd,
   aggregateStates,
+  owningWorkspace,
   resolveDrawerStatus,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
@@ -111,6 +112,8 @@ import {
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
   planOutboxDrainNotice,
+  planOutboxWorktreeReuse,
+  nextOutboxWorktreeAnchor,
   planOutboxEnqueue,
   parseDurableOutbox,
   dumpDurableOutbox,
@@ -1208,6 +1211,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
+    // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
+    let worktreeAnchorId = null;
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
@@ -1225,7 +1230,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
-        const decision = await deliverOutboxItem(item);
+        // 例外是「在新 worktree 里开」：这一批里它只该兑现一次（判据见 planOutboxWorktreeReuse），
+        // 否则每条各建一棵树、各开一个会话，同一个任务被拆进互不相干的分支与上下文。
+        const decision = await deliverOutboxItem(planOutboxWorktreeReuse(item, worktreeAnchorId));
+        worktreeAnchorId = nextOutboxWorktreeAnchor(item, decision, worktreeAnchorId);
         const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -6245,9 +6253,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const liveMap = new Map();
       const freshTabs = [];
       for (const inst of instancesList) {
-        if (!inst.instanceId || inst.cwd !== d) continue;
+        if (!inst.instanceId) continue;
+        // 托管 worktree 的会话行挂在父仓名下，但它的实例 cwd 是 `.claude/worktrees/<name>`——
+        // 只比 `inst.cwd !== d` 会把这些实例全滤掉，liveMap 对那些行恒空：开着的 worktree 会话
+        // 被画成未打开（没有运行态、没有关闭入口），点一下还要白走一趟 reopen。
+        // 归属判据与角标/sessionsDot 共用 owningWorkspace，别在这里另写一份前缀匹配。
+        const owner = owningWorkspace(inst.cwd, availableDirs) || inst.cwd;
+        if (owner !== d) continue;
+        // freshTabs 是「还没有 sessionId 的新会话 tab」，只可能开在工作区本身。
         if (inst.sessionId) liveMap.set(inst.sessionId, inst);
-        else freshTabs.push(inst);
+        else if (inst.cwd === d) freshTabs.push(inst);
       }
       return { liveMap, freshTabs };
     };

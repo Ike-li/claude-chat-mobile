@@ -1121,7 +1121,13 @@ function instancesPayload() {
       unreadCount: unreadCounts.get(id) || 0, // 未读角标活计数（预留会话列表徽标用；聊天页内胶囊走 sync:since ack 的 unreadOnEntry 冻结快照）
     });
   }
-  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, canRestart: canRestartNow(), needsYou: computeNeedsYou(), service: computeServiceHealth() };
+  // 【viewingCwd 是工作区轴，不是驾驶轴】viewingCwdOf() 优先取活实例的 cwd——托管 worktree 时
+  // 那就是 `.claude/worktrees/<name>`。而前端拿这个字段决定：侧栏列哪一页、新会话开在哪、
+  // 顶栏显示哪个工作区。session:switch 里刚把 viewingCwd 设成 workspaceCwdOf(cwd) 并留了一整段
+  // 注释解释「worktree 是临时模式、不占抽屉条目」，广播时若又被实例 cwd 盖回去，那段逻辑等于白做
+  // （症状：打开一个 worktree 会话后侧栏突然只剩那一条，看着像会话丢了）。
+  // 驾驶轴仍由 instances[].cwd 逐条如实下发，前端的文件/改动面板走那一条（resolvePanelCwd）。
+  const payload = { viewingInstanceId, viewingCwd: workspaceCwdOf(viewingCwdOf()), dirs: workDirs, instances: list, devMode: DEV_MODE, canRestart: canRestartNow(), needsYou: computeNeedsYou(), service: computeServiceHealth() };
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed

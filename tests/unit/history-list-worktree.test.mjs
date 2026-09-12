@@ -198,3 +198,34 @@ test('标题搜索同样覆盖 worktree 会话——搜不到等于那条会话�
   assert.deepEqual(sessions.map(s => s.id), ['wt-1']);
   assert.equal(sessions[0].cwd, wt);
 });
+
+// 会话进入托管 worktree 时 sessionId 不变，于是父仓与 worktree 两个 project 目录下会各有一份
+// 同名 transcript。owners 里父仓恒排第一，取首个命中等于永远选那份陈旧副本：行带着父仓 cwd 返回，
+// 点开看到的是进 worktree 之前的旧内容。而正常列表路径（listSessionsPage）对重复副本是按活跃度
+// 留最新的那份——同一个会话从两个入口打开看到两份不同历史，是最难归因的一类症状。
+test('listSessionsByIds: 同 id 在父仓与 worktree 各有一份 → 取最新那份，不是排在前面的父仓', async () => {
+  const { baseDir, repo } = fixture();
+  const wt = makeWorktree(repo, 'w-dup');
+  writeSession(baseDir, repo, 'dup-1', { text: '父仓旧内容', at: '2026-09-01T00:00:00Z' });
+  writeSession(baseDir, wt, 'dup-1', { text: 'worktree 新内容', at: '2026-09-11T00:00:00Z' });
+
+  const rows = await listSessionsByIds(repo, ['dup-1'], { baseDir });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cwd, wt,
+    '返回了父仓那份陈旧副本 —— 点开会看到进 worktree 之前的历史，而列表页对同一个会话给的是新的');
+  assert.equal(rows[0].lastUsedAt, Date.parse('2026-09-11T00:00:00Z'));
+});
+
+// 反向：父仓那份更新时必须选父仓，否则上面那条用「恒选 worktree」也能过。
+test('listSessionsByIds: 父仓那份更新 → 选父仓（证明不是恒选 worktree）', async () => {
+  const { baseDir, repo } = fixture();
+  const wt = makeWorktree(repo, 'w-dup2');
+  writeSession(baseDir, repo, 'dup-2', { text: '父仓新内容', at: '2026-09-11T00:00:00Z' });
+  writeSession(baseDir, wt, 'dup-2', { text: 'worktree 旧内容', at: '2026-09-01T00:00:00Z' });
+
+  const rows = await listSessionsByIds(repo, ['dup-2'], { baseDir });
+  assert.equal(rows.length, 1);
+  // 行与 listSessionsPage 同形：父仓行**不带** cwd（前端回落工作区 cwd），只有 worktree 行才带。
+  assert.equal(rows[0].cwd, undefined, '选中的是 worktree 那份陈旧副本');
+  assert.equal(rows[0].lastUsedAt, Date.parse('2026-09-11T00:00:00Z'));
+});

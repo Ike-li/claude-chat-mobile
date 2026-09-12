@@ -1029,22 +1029,37 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
   // 而长按确认框对用户的承诺恰恰是「这一行会一直显示未读，直到你再次打开它」。
   const owners = [{ cwd, worktree: null }, ...(await listManagedWorktreeDirs(cwd)).map(w => ({ cwd: w.cwd, worktree: w.name }))];
   const settled = await Promise.allSettled(wanted.map(async id => {
-    // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）
+    // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）。
+    //
+    // 【必须扫完所有候选，不能取首个命中】会话进入托管 worktree 时 sessionId 不变，于是父仓与
+    // worktree 两个 project 目录下会各有一份同名 transcript。owners 里父仓恒排第一，取首个
+    // 等于永远选那份陈旧副本：这一行会带着父仓的 cwd 返回，点开看到的是进 worktree 之前的旧内容。
+    // 正常列表路径（listSessionsPage）对同 id 的重复副本就是按活跃度留最新的那份，这条
+    // 「被 limit 挤出时间窗、靠手动未读标记补回来」的路径必须同口径，否则同一个会话在两个入口
+    // 打开会看到两份不同的历史。
+    // 用 mtime 而不是 readLastMessageActivityMs 来选：后者要再读一次文件尾部，而候选数就是
+    // 「父仓 + 它的 worktree 数」，逐个读盘不划算；transcript 只追加写，mtime 与最后一条消息的
+    // 时间高度一致，选出来之后下面照样会用 readLastMessageActivityMs 算出准确的 lastUsedAt。
     let owner = null;
     let file = null;
     let st = null;
+    let activityAt = null;
+    let best = -Infinity;
     for (const o of owners) {
       const candidate = join(baseDir, getProjectDir(o.cwd), `${id}.jsonl`);
       try {
-        st = await stat(candidate);
-        owner = o;
-        file = candidate;
-        break;
+        const s = await stat(candidate);
+        // 判据与 listSessionsPage 同口径：按最后一条消息的时间，读不出来才回落 mtime。
+        // 不能只比 mtime——transcript 被复制/touch 过时 mtime 会说谎，而两个入口对同一个会话
+        // 给出不同历史是最难归因的一类症状。候选数就是「父仓 + 它的 worktree 数」，逐个读尾部
+        // 可接受；选中的那份顺带把 activityAt 留下，下面不必再读一次。
+        const act = await readLastMessageActivityMs(candidate, s.size).catch(() => null);
+        const score = act ?? s.mtimeMs;
+        if (score > best) { best = score; st = s; owner = o; file = candidate; activityAt = act; }
       } catch { /* 下一个候选 */ }
     }
     if (!owner) throw new Error('session file not found');
-    const [activityAt, meta, peeked] = await Promise.all([
-      readLastMessageActivityMs(file, st.size).catch(() => null),
+    const [meta, peeked] = await Promise.all([
       readHeadMeta(file, st.size),
       // 带超时：session:list 是抽屉的关键路径，SDK 挂住时宁可用读盘标题也不能让整个列表等着。
       peekSessionListTitleTimed(owner.cwd, id, { baseDir }),

@@ -35,6 +35,8 @@ import {
   shouldClearInterruptPendingOnSystem,
   systemBarClass,
   INTERRUPT_PENDING_TIMEOUT_MS,
+  planOutboxWorktreeReuse,
+  nextOutboxWorktreeAnchor,
 } from '../../app/public/js/logic.js';
 // F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
 import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
@@ -866,5 +868,55 @@ test.describe('presentOfflineResendAck: busy 拒收', () => {
       assert.equal(on.restoreDraft, true, '文字应回填输入框由用户决定何时重发');
       assert.equal(on.clearBusy, false, '不能把在跑那轮的状态行/停止钮一起清掉');
     }
+  });
+});
+
+// 离线时在空首页勾上「在新 worktree 里开」连打几条，每条都以 {useWorktree:true, instanceId:null}
+// 入队（离线入队路径不 reset 勾选，viewingInstanceId 也还是 null）。重连后逐条重放，而服务端的
+// worktreeCreateInFlight 只合并**并发**、合并不了**先后**——第一条 ack 回来时它已经清了，第二条
+// 于是又 `git worktree add` 一棵。结果是同一个任务被劈进互不相干的分支、会话与上下文，
+// 而 UI 上没有任何提示。批次归属只有客户端知道，判据就落在这里。
+test.describe('离线重放：worktree 意图每批只兑现一次', () => {
+  const first = { clientMessageId: 'm1', text: '第一条', useWorktree: true, sourceBranch: 'main', instanceId: null, cwd: '/repo' };
+  const second = { clientMessageId: 'm2', text: '第二条', useWorktree: true, sourceBranch: 'main', instanceId: null, cwd: '/repo' };
+  const plain = { clientMessageId: 'm3', text: '普通', instanceId: 'inst_9', cwd: '/repo' };
+
+  test('还没有锚 → 第一条原样发出（由它去建树）', () => {
+    assert.deepEqual(planOutboxWorktreeReuse(first, null), first);
+  });
+
+  test('已有锚 → 后续条改投那个实例，并摘掉 worktree 意图', () => {
+    const out = planOutboxWorktreeReuse(second, 'inst_7');
+    assert.equal(out.instanceId, 'inst_7', '不改投就会再建一棵树');
+    assert.equal(out.useWorktree, false, '带着意图只会让服务端对一个已在跑的会话重复判断');
+    assert.equal(out.sourceBranch, null);
+    assert.equal(out.text, '第二条', '其余字段必须原样带过去');
+    assert.equal(second.instanceId, null, '不得就地改写队列项');
+  });
+
+  test('没勾 worktree 的条目不受影响（哪怕本批已有锚）', () => {
+    assert.deepEqual(planOutboxWorktreeReuse(plain, 'inst_7'), plain);
+  });
+
+  test('锚点：第一条 worktree 成功后记下它的 instanceId', () => {
+    assert.equal(nextOutboxWorktreeAnchor(first, { outcome: 'ok', instanceId: 'inst_7' }, null), 'inst_7');
+  });
+
+  test('锚点：失败的那条不设锚（否则后续全被改投到一个不存在的实例）', () => {
+    assert.equal(nextOutboxWorktreeAnchor(first, { outcome: 'requeue', instanceId: null }, null), null);
+    assert.equal(nextOutboxWorktreeAnchor(first, { outcome: 'blocked' }, null), null);
+  });
+
+  test('锚点：已有锚就不再变（后续条目已被改投，不该覆盖）', () => {
+    assert.equal(nextOutboxWorktreeAnchor(second, { outcome: 'ok', instanceId: 'inst_8' }, 'inst_7'), 'inst_7');
+  });
+
+  test('锚点：普通条目成功不得把无关实例写成锚', () => {
+    assert.equal(nextOutboxWorktreeAnchor(plain, { outcome: 'ok', instanceId: 'inst_9' }, null), null);
+  });
+
+  test('ack 透传 instanceId —— 不传锚点就永远设不上', () => {
+    assert.equal(presentOfflineResendAck(null, { ok: true, instanceId: 'inst_7' }).instanceId, 'inst_7');
+    assert.equal(presentOfflineResendAck(null, { ok: true }).instanceId, null);
   });
 });

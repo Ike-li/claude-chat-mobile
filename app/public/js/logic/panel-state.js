@@ -190,6 +190,25 @@ export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } =
   return inst?.cwd || workspaceCwd || null;
 }
 
+// 一个实例 cwd 归哪个工作区。托管 worktree 的 cwd 是 `<父仓>/.claude/worktrees/<name>`，
+// **不在白名单 dirs 里**，必须归到最长前缀的父仓——否则它在任何按工作区分组的视图里都会凭空消失
+// （角标与 sessionsDot 是 K2，会话行的「已打开」判定是 2026-09-12 补的：只按 inst.cwd === d 过滤时
+// liveMap 对 worktree 行恒空，开着的会话被渲染成未打开，丢运行态、丢关闭入口，点一下还要多走一次
+// reopen）。取最长前缀而不是任一前缀：工作区嵌套时（/repo 与 /repo/sub 都在册）才不会归错。
+export function owningWorkspace(cwd, dirs) {
+  if (!cwd) return null;
+  const list = Array.isArray(dirs) ? dirs : [];
+  if (list.includes(cwd)) return cwd;
+  let best = null;
+  for (const d of list) {
+    if (typeof d !== 'string' || !d) continue;
+    if (cwd.startsWith(d.endsWith('/') ? d : d + '/')) {
+      if (!best || d.length > best.length) best = d;
+    }
+  }
+  return best;
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。
@@ -197,20 +216,8 @@ export function aggregateStates(instances, dirs) {
   const rank = { idle: 0, done: 1, aborted: 2, busy: 3, error: 4, permission: 5 };
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
-  // worktree 实例 cwd 不在白名单 dirs 时，归入最长前缀父仓，使父工作区角标/sessionsDot 可见（K2）
-  function parentDir(cwd) {
-    if (!cwd) return null;
-    if (cwd in out) return cwd;
-    let best = null;
-    for (const d of Object.keys(out)) {
-      if (cwd === d || cwd.startsWith(d.endsWith('/') ? d : d + '/')) {
-        if (!best || d.length > best.length) best = d;
-      }
-    }
-    return best;
-  }
   for (const x of instances || []) {
-    const key = parentDir(x.cwd) || x.cwd;
+    const key = owningWorkspace(x.cwd, Object.keys(out)) || x.cwd;
     if (!(key in out)) out[key] = 'idle';
     if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
