@@ -38,7 +38,7 @@ function constNum(path, name) {
 }
 
 // ── 图声称的基线提交。改图时同步更新。 ───────────────────────────────
-const PINNED_REVISION = '7d4aa874944374770b5207598cd2a1c4253011fd';
+const PINNED_REVISION = 'ed9a2e3f8d5a6304f2ecff67208dd060081fde7a';
 
 // ── 图里 source 证据引用到的源码路径（27 条 source 去重后）。重命名/删除即红。 ──
 const REFERENCED_PATHS = [
@@ -146,6 +146,8 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
+  { diagram: '12', shown: 'check 链上的 14 道门禁',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 14 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -154,14 +156,10 @@ const CLAIMS = [
 // 塞进 CLAIMS 会让 `shown` 描述一段不存在的文字，那条「只许照抄图上文字」的规矩就废了。
 // 分开之后：代码侧立刻被守住（删了会红），而「图欠这一条」这个状态也不会随会话结束丢掉。
 // 补进图并重出后，把条目挪进 CLAIMS 即可。
-const PENDING_CLAIMS = [
-  // 2026-09-12：check 链接进第 14 道门禁 check-shell-pitfalls，图 12 上还写着 13。
-  // 【为什么挪到这里而不是把 expect 改成 14】CLAIMS 的语义是「图说 X 且代码也是 X」；直接改 expect
-  // 就成了「把断言改成实测值」，这道闸当场失去意义。同一条 2026-09-11 从 12 → 13 时也是先在这里
-  // 挂一轮、重出图后再挪回 CLAIMS 的。补进图并重出后，把它挪回 CLAIMS 并把 shown 改成新数字。
-  { diagram: '12', todo: 'check 链已是 14 道门禁（新增 check-shell-pitfalls），图上仍写 13',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 14 },
-];
+// 2026-09-12：上一条（check 链 13 → 14 道，新增 check-shell-pitfalls）已随图重出补进 CLAIMS。
+// 图 12 的节点 sublabel、卡片标题、卡片清单与 diagrams/index.html 的摘要四处同步改了，
+// 清单顺序与 package.json 的 check 链逐项对应（shell 陷阱落在破坏性删除与不变量编号之间）。
+const PENDING_CLAIMS = [];
 
 function git(args) {
   // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid
