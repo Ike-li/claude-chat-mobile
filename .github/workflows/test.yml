@@ -26,7 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # fetch-depth: 0 —— check 链里的 check-diagram-claims 要验「架构图声称的基线提交仍在当前历史里」，
+      # 而默认的浅克隆（depth=1）下那个对象根本不在工作区，git 报 `fatal: Not a valid commit name`。
+      # 2026-09-09 建闸起这个 job 在 CI 上一直红、本地一直绿，就是这个原因。仓库 54MiB，全量克隆可忽略。
+      # 只给 quality 加：unit-test / e2e 不碰 git 历史，浅克隆更快。
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: '24'

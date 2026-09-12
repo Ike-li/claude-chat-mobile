@@ -164,7 +164,10 @@ const PENDING_CLAIMS = [
 ];
 
 function git(args) {
-  try { return { ok: true, out: execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim() }; }
+  // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid
+  // object name` 会和下面自己的诊断并排出现，读起来像是 git 在确认祖先关系有问题——2026-09-11
+  // 的误诊正是这么来的。要看原文时它还在 out 里。
+  try { return { ok: true, out: execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }; }
   catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() }; }
 }
 
@@ -187,9 +190,22 @@ function main() {
   }
 
   // C：pin 是 HEAD 的祖先（历史被重写 / 指向别的分支即红）
-  const anc = git(['merge-base', '--is-ancestor', PINNED_REVISION, 'HEAD']);
+  //
+  // 两种失败必须分开报：`--is-ancestor` 对「不是祖先」和「对象根本不在工作区」都只是非零退出，
+  // 而后者在浅克隆里是常态——CI 的 actions/checkout 默认 fetch-depth: 1，整个历史只有一个提交，
+  // git 报的是 `fatal: Not a valid commit name`。合成一句「不是祖先」会把一个环境问题说成图漂移，
+  // 然后有人真去重出图（2026-09-11 就这么误诊过一轮）。
+  // 【注意】两条都仍然变红。这里改的只是措辞，不是给浅克隆开「取不到就跳过」的旁路——那就是恒绿。
+  const present = git(['cat-file', '-e', `${PINNED_REVISION}^{commit}`]);
   let lag = null;
-  if (!anc.ok) {
+  // 取不到对象且其余断言全过时，唯一的问题是克隆深度——尾部那句「重新出图」是错误指引，别打。
+  const shallowOnly = !present.ok && problems.length === 0;
+  if (!present.ok) {
+    problems.push(
+      `基线提交 ${PINNED_REVISION.slice(0, 7)} 不在当前工作区里——这通常不是图漂移，`
+      + '而是克隆太浅取不到那个对象（CI 上给 actions/checkout 加 fetch-depth: 0）。图本身无需改动。',
+    );
+  } else if (!git(['merge-base', '--is-ancestor', PINNED_REVISION, 'HEAD']).ok) {
     problems.push(`基线提交 ${PINNED_REVISION.slice(0, 7)} 不是 HEAD 的祖先——图引用了一段不在当前历史里的提交`);
   } else {
     const r = git(['rev-list', '--count', `${PINNED_REVISION}..HEAD`]);
@@ -198,7 +214,9 @@ function main() {
 
   if (problems.length > 0) {
     console.error('架构图集漂移检查失败：\n' + problems.map(p => `- ${p}`).join('\n'));
-    console.error('\n修法：改 gh-pages 的规格源重新出图，并同步更新本文件的 CLAIMS / REFERENCED_PATHS / PINNED_REVISION。');
+    if (!shallowOnly) {
+      console.error('\n修法：改 gh-pages 的规格源重新出图，并同步更新本文件的 CLAIMS / REFERENCED_PATHS / PINNED_REVISION。');
+    }
     process.exit(1);
   }
 
