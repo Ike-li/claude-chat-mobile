@@ -95,4 +95,15 @@ test.describe('回放批次不得改写运行态', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // ⚠ 这里【缺一条】覆盖：真机那条最可能的路径——用户发消息后还没等到终止事件就切走，那条实时
+  // result 被 shouldDropAgentEvent 按视图丢弃，_pendingSendBusySessionId 悬留，此后每次切回该会话
+  // bindView 都拿这个过期 marker 假亮一次运行条（PR #38 review 第二轮指出，代码修复已在
+  // clearBusyFromTurnEndEvent 与 startLiveTicker 两处落地）。
+  //
+  // 【为什么没有用例】写过一版，是假绿，已撤。注入旧行为后用反向断言实测：假亮**确实发生**，但它会在
+  // 3～8 秒之间被某个东西自行清掉（不是看门狗也不是 ticker——那两条都要 30 秒宽限，而此处 turnStartTs
+  // 就是切回时刻），而 toHaveCount(0) 的 8 秒轮询窗口正好把这段掩盖过去，于是注入前后一样绿。
+  // 在查清那个清除者是谁之前，任何缩短 timeout 的写法都只是把断言压进一个来历不明的时间缝里。
+  // 要补这条，先回答：切回后 3～8 秒之间是什么调用了 setBusy(false)。
 });

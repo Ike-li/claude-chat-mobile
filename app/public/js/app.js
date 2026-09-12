@@ -1002,8 +1002,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
   // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
   function clearBusyFromTurnEndEvent(ev) {
-    if (ev?.replay) return;
+    // ★ 乐观 marker 与运行态分开处置，回放时【只清 marker、不写运行态】。
+    // marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」，而回放里这条终止事件
+    // 【就是】那条消息的终止事件——必须照清。不清就会悬留：它只在终止事件与负 ack 两处清除，
+    // 而用户发完就切走时那条实时终止事件会被 shouldDropAgentEvent 按视图丢弃，于是 marker 永久
+    // 留着，此后每次切回该会话，bindView 的 shouldRestoreOptimisticBusy 都拿它点亮一次假运行条
+    // ——权威实例明明是 idle（2026-09-12 PR #38 review P2 指出；这也是真机那次现场最可能的成因：
+    // 22:54:44 发消息、5 秒后切走、22:56:16 的 result 被丢弃，23:01:58 切回即假亮，秒表从切回起算）。
     _pendingSendBusySessionId = null;
+    if (ev?.replay) {
+      // 回放本身不表达运行态，但到这里正好可以对一次账：bindView 是【先】按乐观 marker 点亮 busy、
+      // 【后】才发 sync:since 的，所以上面那次清 marker 赶不及阻止这一次假亮。拿权威快照就地判一次
+      // ——权威说已空闲就立刻收掉，不必干等 ticker 的 30 秒宽限；权威说还在跑（mixed：新轮真的活着）
+      // 则一动不动。两个字段各判各的：state 管运行条，turnRunning 管发送闸（纯后台任务期 state 是
+      // busy 而 turnRunning 为 false，运行条该留、发送闸不该锁）。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (live) {
+        if (!shouldSeedBusyFromInstanceState(live.state)) setBusy(false);
+        if (live.turnRunning !== true) _turnRunning = false;
+      }
+      return;
+    }
     setBusy(false);
     // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
     // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
@@ -1023,7 +1042,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         localBusy: _busyState,
         turnStartTs: liveLine.turnStartTs,
         now: Date.now(),
-      })) { setBusy(false); return; }
+      })) {
+        // 连乐观 marker 一起清：权威说这个实例已空闲，那条「等终止事件」的登记就是过期的。
+        // 只清 busy 不清 marker 的话，下一次 bindView 会拿它把假运行条再点亮一次，每切回一次重演一次。
+        _pendingSendBusySessionId = null;
+        setBusy(false);
+        return;
+      }
       renderLiveLine();
     }, 1000);
   }
