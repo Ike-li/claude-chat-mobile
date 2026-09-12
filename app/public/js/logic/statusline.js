@@ -61,9 +61,15 @@ export function formatWorkspaceChangeBadge(git) {
  * 关掉了一项与会话无关的信息，而 git status 恰恰是开工前最该看的那条。
  *
  * 空首页仍不渲染：那页是让用户选工作区的枢纽，此刻 cwd 只是「上次看的那个」，显示它的 git 会误导。
+ *
+ * 第二个参数问的是「此刻渲染着的是不是 compose 表面」，**不是**「_composeReady 这个标志真不真」。
+ * 两者会分家：全新会话首轮实例在拿到 sessionId 前退出时，bindView 的 destroyed 分支先于
+ * leaveComposeReady() 提前 return（src/…/app.js resolveEmptySurface 里 instanceDestroyed 优先级最高），
+ * 于是「会话已中断」表面上 _composeReady 仍是 true。拿那个标志当判据，下一条周期性 status_line
+ * 就会把上一个实例的 ctx/模型渲染到中断表面上。调用方据此传 DOM 里在不在 compose 表面。
  */
-export function shouldRenderStatusline({ emptyStart = false, composeReady = false } = {}) {
-  return !emptyStart || composeReady;
+export function shouldRenderStatusline({ emptyStart = false, composeSurface = false } = {}) {
+  return !emptyStart || composeSurface;
 }
 
 /** ctx 短文案：优先百分比，否则绝对 token */

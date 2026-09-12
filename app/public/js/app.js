@@ -2940,9 +2940,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       // 空首页采用极简底部：模型/权限/思考 chips 即可。compose 页例外——工作区已定，git 段照渲
       // （判据与两侧理由见 logic/statusline.js shouldRenderStatusline）。
+      //
+      // 第二个参数问 DOM 而不是读 _composeReady：那个标志在「会话已中断」表面上会是陈旧的 true
+      // （bindView 的 destroyed 分支先于 leaveComposeReady 提前 return），拿它当判据会把上一个实例的
+      // ctx/模型渲染到中断表面上。当前渲染着什么表面，只有 DOM 说了算。
       if (!shouldRenderStatusline({
         emptyStart: messagesEl.classList.contains('empty-start'),
-        composeReady: _composeReady,
+        composeSurface: Boolean(messagesEl.querySelector('[data-testid="compose-surface"]')),
       })) return;
       // 与 statuslineFmtTok 同边界：round 到 k 后 ≥1000 抬 m，避免 1000k
       const fmtTok = n => {
@@ -6984,8 +6988,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 收起状态栏并清掉陈旧内容。两个调用者都是「视图换了人，旧数据立刻失真」：clearView（切会话）与
   // showComposeSurface（点 ＋ 开新会话）。两边都随后由新的 status_line 填回。
   //
-  // home / destroyed 两张空表面刻意【不】调：那两处 syncComposerVisibility 会把整个 #composerFooter
-  // 隐藏，状态栏在它里面，跟着一起不可见——在那里再调一次是纯冗余（注入验证过：删掉不会让任何用例变红）。
+  // home 表面刻意【不】调：那里 syncComposerVisibility 会把整个 #composerFooter 隐藏，状态栏在它
+  // 里面，跟着一起不可见——再调一次是纯冗余（注入验证过：删掉不会让任何用例变红）。
+  // destroyed 表面【要调】，别照着 home 类推：从 compose 首发跳过去时 _composeReady 仍是 true，
+  // shouldShowComposer 于是判显示，footer 没隐藏，状态栏会原地留在中断表面上。
   function hideStatuslineWrap() {
     if (cliStatusEl) cliStatusEl.innerHTML = '';
     if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
@@ -7256,7 +7262,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = t('新聊天');
-    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
+    // 走 syncTopContextLabel 而不是只手写 topProjectText：pill 现在在这张页面上是【可见】的，
+    // 光换名字不够——改动角标与 title 还归属上一个工作区，得靠它那道 dataset.cwd 判据清掉。
+    // 抽屉里按目录行点 ＋ 时这条路是同步的（currentCwd 当场改、compose 表面当场渲染），不清就会
+    // 出现「新工作区名 + 旧工作区改动数」，一直挂到服务端 instances 广播回来才自愈。
+    syncTopContextLabel();
     syncComposerVisibility();
     // compose 页：显示顶栏文件夹（工作区已定；页内那个 pill 通向会话列表，不通向文件）
     syncTopContextPillVisibility(null, null, { composeReady: true });
@@ -7402,6 +7412,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     syncComposerVisibility();
     // 「会话已中断」：顶栏文件夹入口隐藏（同 home）。显式 composeReady:false——见函数注释，此处全局值不可信
     syncTopContextPillVisibility(null, null, { composeReady: false });
+    // 状态栏也要收：实例已经没了，里面那份 ctx / 模型 / 额度全归属于它，留在屏上就是在报废数字。
+    // 这张表面不像 home 那样能靠 #composerFooter 整体隐藏顺带藏掉它——composer 在这里仍可能是显示的
+    // （从 compose 首发跳过来时 _composeReady 停在陈旧的 true，shouldShowComposer 据此判显示）。
+    // 上面那道判据改读 DOM 只防住「后续事件把它重新渲染出来」，防不住已经渲染好的那份残留。
+    hideStatuslineWrap();
 
     const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
     const body = byRestart
