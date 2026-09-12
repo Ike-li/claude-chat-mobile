@@ -1,9 +1,13 @@
 // tests/integration/server.test.mjs —— app/server.js 集成测试（零 token、零 agent 创建）
 // 启动 server 子进程 → socket.io-client 连接 → 验证事件流与 HTTP 端点。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as ioc } from 'socket.io-client';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +18,8 @@ const PORT = 3199;
 // 显式测试专用 token：不能 AUTH_TOKEN:''——config.js SH-001 会删空串再 dotenv 回填本机 .env，
 // 致 /health 401、socket 握手失败（session-delete/aborted-state 同款注释）。
 const AUTH_TOKEN = 'srvtest-token';
+// 仓库根那份 package.json —— /health 的 versions.server 必须报出同一个值。
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 let serverProc;
 let tmpDir;
 
@@ -44,7 +50,7 @@ test.before(async () => {
   // 立即失败，不空等满 10s、也绝不对错误进程发有状态事件。
   const buildNonce = `srvtest-${randomUUID()}`;
   serverProc = spawn('node', ['app/server.js'], {
-    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIR: tmpDir,
+    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIRS: tmpDir,
       // CCM_DATA_DIR 隔离（同其余 tests/integration/*.test.mjs 惯例）：此前本文件唯独漏设，子进程
       // sessions.js/devices.js/approval-store.js/audit.js 全部落到真实 data/ 目录——sessions.js 的
       // 写入此前一直静默污染，只是没人注意；Phase 4 新增的 approval-store.js/audit.js 让污染第一次
@@ -103,6 +109,11 @@ test.describe('HTTP 端点', () => {
     assert.equal(j.status, 'ok');
     assert.ok(typeof j.timestamp === 'number');
     assert.ok(typeof j.versions === 'object');
+    // 原先只到上一行为止 —— 三个字段全是 'unknown' 也照样绿，而 versions.server 恰好从来就是
+    // 'unknown'：采集处 require('../../package.json') 少一层（app/package.json 不存在），
+    // 抛出的 MODULE_NOT_FOUND 被那里的 catch 静默吞掉。这条断言把「采集真的成功了」钉死。
+    assert.equal(j.versions.server, PKG_VERSION,
+      `versions.server 应为仓库根 package.json 的 ${PKG_VERSION}，实际 ${j.versions.server}`);
   });
 
   test('GET / → 200 + HTML（index.html）', async () => {
@@ -476,27 +487,62 @@ const ACK_SHAPES = [
   { event: 'session:close', branch: '实例不存在', payload: () => ({ instanceId: 'nope' }), required: ['ok', 'error'] },
   { event: 'session:fork', branch: '会话不存在', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
 
+  // 抽屉的主数据源。成功支免夹具（空工作区照样返回完整键集），所以这里能覆盖到——本表里少数
+  // 不是拒绝支的一条。pinned（手动标「稍后再看」但被 limit 挤出本页的会话）尤其需要它：E2E 的 mock
+  // 是平行实现，真 server 把这个字段删掉，抽屉那一组只是静默变空，E2E 与前端单测都不会红。
+  { event: 'session:list', branch: '空工作区', payload: () => ({ cwd: tmpDir }),
+    required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState'],
+    check: ack => {
+      assert.ok(Array.isArray(ack.pinned), 'pinned 必须是数组——前端无条件对它做 .length/展开');
+      assert.ok(Array.isArray(ack.sessions), 'sessions 必须是数组');
+    } },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
   { event: 'logs:get', payload: () => ({}), required: ['logs', 'diagLogs'] },
+  // 测试 env 里 LOG_FILE 指不到真文件 → 走 ok:false 的 ENOENT 支；成功支会读真日志，不适合形状表。
+  // path 两支都必须在：前端要显示「我们在看哪个文件」，缺了它「不存在」这句话就没有指向。
+  { event: 'logs:server', branch: '日志文件不存在', payload: () => ({}), required: ['ok', 'path', 'lines', 'error'] },
   { event: 'audit:get', payload: () => ({}), required: ['ok', 'records', 'capacity'] },
+  // rules 为 null（该 cwd 没配过审批规则）也算合法形状——键必须在，值可以是 null。
+  { event: 'permissions:rules', payload: () => ({ cwd: tmpDir }), required: ['ok', 'cwd', 'rules'] },
+  // 只驱动非法 target 这一支。两个合法档的成败都取决于跑测试的机器（有没有局域网地址、
+  // 有没有配 CF_ACCESS_*），而合法档一旦成功就会真生成一张含 token 的码——都不是
+  // 一次性形状表该依赖的东西。成功支的字段 { url, matrix, size, includeToken, note }
+  // 由 E2E mock 与真 server 各自实现，改真 server 时**必须同时改 tests/e2e/mock/server.js**。
+  { event: 'connect:qr', branch: '非法 target', payload: () => ({ target: '__bogus__' }), required: ['ok', 'error'] },
+  // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
+  // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'logging', 'versions'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
   { event: 'files:search', payload: () => ({ cwd: tmpDir, query: 'x' }), required: ['ok', 'paths'] },
   { event: 'git:status', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir }), required: ['ok', 'error', 'code'] },
   { event: 'git:diff', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir, path: 'x' }), required: ['ok', 'error', 'code'] },
+  // 新会话的源分支选择器（2026-09-11）。非 git 仓库这一支与上面两条同形；成功支
+  // { ok, branches, current } 要真 git 夹具，归 tests/unit/git-worktree.test.mjs（那里跑真 git）。
+  { event: 'git:branches', branch: '非 git 仓库', payload: () => ({ cwd: tmpDir }), required: ['ok', 'error', 'code'] },
 
   { event: 'tool:full', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
   { event: 'tool:preview', branch: '实例不存在', payload: () => ({ instanceId: 'nope', toolUseId: 't' }), required: ['ok', 'error'] },
   { event: 'task:output', branch: '实例不存在', payload: () => ({ instanceId: 'nope', taskId: 't' }), required: ['ok', 'error'] },
   { event: 'attachment:read', branch: '预览不可用', payload: () => ({}), required: ['ok', 'error'] },
+  // 回退预览：这里走「会话不存在」支（免夹具那一档）。成功支的字段
+  // { canRewind, filesChanged, insertions, deletions, keepUuid } 由 E2E mock 与真 server 各自实现，
+  // 改真 server 的成功支 ack 时【必须同时改 tests/e2e/mock/server.js】——两边是平行实现，
+  // 静态门禁只守事件名不守字段，删一个字段这里和 E2E 都不会红。
+  { event: 'session:rewind:preview', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },
+  // confirm 同样只覆盖免夹具的「会话不存在」支。成功支 { forkedSessionId, prefill, filesChanged,
+  // skippedLinks, unrestored, warning } + finishOpenFocus 的 { instanceId, sessionId }
+  // 会真回滚文件并分叉会话，不适合放进这张一次性形状表。
+  { event: 'session:rewind:confirm', branch: '会话不存在', payload: () => ({ cwd: tmpDir, sessionId: 'no-such-session', promptUuid: 'u1' }), required: ['ok', 'error'] },
   // action 非法时在 spawn 安装器【之前】就返回——这是本仓唯一会写 ~/.claude/settings.json 的路径，
   // 只驱动这一支，绝不用合法 action 触发真安装。
   { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
+  // 同上：statusline 安装器也只驱动非法 action 这一支，绝不用合法 action 触发真安装。
+  { event: 'statusline:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
 ];
 
 // 未纳入（各有理由，不是遗漏）：

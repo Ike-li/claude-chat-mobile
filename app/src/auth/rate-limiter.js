@@ -233,8 +233,19 @@ export function shouldBypassDeviceApproval({
   accessEnabled = false,
   peerAddress = '',
   hostHeader = '',
+  deviceApprovalScope = '',
 } = {}, normalizeIp = (x) => x) {
-  if (accessEnabled) return true;
+  // DEVICE_APPROVAL_SCOPE='all'：把设备审批加严到 CF Access 那条路上。
+  //
+  // 默认 bypass 的理由是 CF Access 已在边缘做过 2FA，设备令牌相对它是冗余的第二因子。
+  // 代价是「已受信任的设备」那张表【管不到】隧道进来的连接——吊销它们既不掉线也不被拦
+  // （2026-09-10 实测：信任表清空为 0 条，各设备照常可用，日志里零条「新设备请求接入」）。
+  // 想让那张表真正生效就显式声明 'all'。
+  //
+  // **缺省必须保持现状**：本仓装机走 GitHub master 归档，翻默认值会让既有安装升级后一重启，
+  // 所有已在用的手机一起落进待审，而信任表里没有任何一台可以用来批准——那是远程锁死。
+  // 合法值只有一个字面量，写错（'ALL' / '1' / 'yes'）一律按未声明处理，同 TRUSTED_PROXY。
+  if (accessEnabled && deviceApprovalScope !== 'all') return true;
   if (!isLoopbackPeer(peerAddress, normalizeIp)) return false;
   const host = String(hostHeader || '').split(':')[0].toLowerCase();
   // R8（2026-08-06）：空 Host【不】视为本机。旧判据把它与 localhost 并列，理由是「本机工具/健康探针」，

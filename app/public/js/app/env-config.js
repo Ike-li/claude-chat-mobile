@@ -19,6 +19,10 @@ const CHANGED_MARK = 'data-ccm-dirty';
 
 export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
+  // 退出本面板后回哪：本面板是通用设置切出去的第二层，默认退回来源页而不是关到首页
+  // （理由见 index.html #envConfigBack 的注释）。注入而不是在这里 import general——
+  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」。
+  afterClose = () => {},
   // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或有进程管理器
   // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路，
   // 而 headless 的 npm start 正是这种形态。
@@ -172,6 +176,89 @@ export function createEnvConfigPanel({
     return input;
   }
 
+  // list 档（当前只有 WORKDIRS）的结构化编辑器。
+  //
+  // 【为什么不是一个 text input】往数组项里塞字符串，下游 normalizeWorkdirEntries 的
+  // Array.isArray 会判否 → 静默回落旧白名单：用户看到「保存成功」，配置一个字没变。
+  // 这正是 list 档曾被标成 readonly 的原因，所以本编辑器的 read() **恒返回数组**。
+  //
+  // 【只编路径，但不丢 sessionLimit】手机上编的是路径；条目原有的 sessionLimit 原样带回去——
+  // 它是低频高级项，看不见也不该被一次手机编辑抹掉。
+  function buildListEditor(item, field) {
+    const wrap = el('div', 'space-y-1.5');
+    // 原始条目按行保存，删除/新增都在这上面做；path 由各行的 input 现读
+    const rows = [];
+
+    const syncDirty = () => {
+      const now = JSON.stringify(readValue());
+      wrap.setAttribute(CHANGED_MARK, now !== JSON.stringify(field.original) ? '1' : '0');
+      markDirty();
+    };
+
+    function readValue() {
+      return rows
+        .filter((r) => !r.removed)
+        .map((r) => {
+          const path = r.input.value.trim();
+          // sessionLimit 原样带回：它不在手机的编辑面里，但也不能因此丢掉
+          return r.sessionLimit === undefined ? path : { path, sessionLimit: r.sessionLimit };
+        })
+        .filter((e) => (typeof e === 'string' ? e : e.path));
+    }
+
+    function addRow(entry) {
+      const row = el('div', 'flex items-center gap-1.5');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = entry?.path ?? '';
+      input.placeholder = '/absolute/path';
+      input.className = 'flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-line bg-sunk text-xs text-ink';
+      input.dataset.listPath = '1';
+      input.addEventListener('input', syncDirty);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'shrink-0 px-2 py-1.5 rounded-lg border border-line text-xs text-ink-soft active:bg-sunk';
+      del.textContent = '✕';
+      del.setAttribute('aria-label', t('删除这一项'));
+      const rec = { input, sessionLimit: entry?.sessionLimit, removed: false };
+      del.addEventListener('click', () => {
+        rec.removed = true;
+        row.remove();
+        syncDirty();
+      });
+      row.append(input, del);
+      rows.push(rec);
+      return row;
+    }
+
+    const list = el('div', 'space-y-1.5');
+    for (const entry of (Array.isArray(item.list) ? item.list : [])) list.append(addRow(entry));
+    wrap.append(list);
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'w-full px-2 py-1.5 rounded-lg border border-dashed border-line text-xs text-ink-soft active:bg-sunk';
+    add.textContent = t('+ 添加工作区');
+    add.dataset.listAdd = '1';
+    add.addEventListener('click', () => {
+      list.append(addRow(null));
+      syncDirty();
+    });
+    wrap.append(add);
+
+    const hint = el('div', 'text-[10px] text-ink-faint px-1',
+      t('第一项就是手机端默认打开的目录。每项必须是绝对路径；改完即生效，无需重启。'));
+    wrap.append(hint);
+
+    wrap.setAttribute(CHANGED_MARK, '0');
+    field.el = wrap;
+    field.original = Array.isArray(item.list) ? item.list.map(e => (e.sessionLimit === undefined ? e.path : { path: e.path, sessionLimit: e.sessionLimit })) : [];
+    // ★ 恒返回数组。空数组表示「清空白名单」，与 null（删除配置项）不同，
+    //   故这里不做 `[] → null` 的折叠。
+    field.read = () => readValue();
+    return wrap;
+  }
+
   function renderItem(item) {
     const row = el('div', 'space-y-1');
     const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret };
@@ -185,6 +272,15 @@ export function createEnvConfigPanel({
       row.append(head);
       if (item.secret) buildSecret(item, field, row);
       else if (item.kind === 'enum' && Array.isArray(item.options)) row.append(buildSelect(item, field));
+      else if (item.kind === 'list' && item.locked === 'legacy-env') {
+        // 这台机器还在用 .env：结构化列表在那条路上读不出也写不进（.env 消费的是逗号分隔的
+        // WORK_DIRS）。**提前 return，不登记进 fields** —— 留一个能点的编辑器只会让人改完看到
+        // 「保存成功」，而授权的工作区一个都没变。
+        row.append(el('div', 'text-[10px] text-warning leading-relaxed',
+          t('当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。')));
+        return row;
+      }
+      else if (item.kind === 'list') row.append(buildListEditor(item, field));
       else row.append(buildInput(item, field));
     }
 
@@ -308,6 +404,17 @@ export function createEnvConfigPanel({
     saveBtn.disabled = true;
     onSaved?.(res);
 
+    // 热加载项（当前只有 WORKDIRS，schema 里标 reload:'hot'）改完即生效，这里既不该说「重启后
+    // 生效」，更不该递一个「立即重启」按钮 —— 那会让用户为一次根本不需要的停机中断掉所有在跑的
+    // 会话与后台任务。同一份面板里 WORKDIRS 的说明写着「改完即生效，无需重启」，保存后却弹重启，
+    // 两句话自相矛盾。
+    // 严格判 `=== false`：字段缺失（旧 server）时回落到提示重启，方向保守 —— 多点一次重启无害，
+    // 漏提示则是「改了没生效还以为生效了」。
+    if (res.restartRequired === false) {
+      hint.textContent = t('已写入 N 项，已生效').replace('N', String(n));
+      return;
+    }
+
     // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
     if (!canRestart()) {
       hint.textContent = t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
@@ -361,13 +468,15 @@ export function createEnvConfigPanel({
 
   function close() {
     if (modal) closeSheet(modal);
+    afterClose();
   }
 
   function bind() {
     const trigger = $('btnEnvConfig');
     if (trigger) trigger.onclick = open;
-    const closeBtn = $('envConfigClose');
-    if (closeBtn) closeBtn.onclick = close;
+    // 点 ← 与点遮罩同义（都是「退回上一级」）：同一张面板两种关法落到两个地方会再坑一次。
+    const backBtn = $('envConfigBack');
+    if (backBtn) backBtn.onclick = close;
     if (modal) modal.onclick = (e) => { if (e.target === modal) close(); };
     if (saveBtn) saveBtn.onclick = save;
   }

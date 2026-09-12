@@ -21,17 +21,33 @@
 `npm run mutate` 没被归类成破坏性操作，它把用户 `~/.claude/projects` 整棵树删光了（70 个项目 / 291 memory / 2990 transcript）。
 白名单反过来：不在名单上的默认进容器，判断错了顶多多跑一次容器，代价不对称地小。
 
-> ⚠ **`guard-host-tests.js` 返回的是 `permissionDecision: "ask"`，不是 `"deny"`。**
-> 它给提示并请求确认，不是硬闸；在自动批准的权限模式下直接放行。**别把它当安全网。**
-> 真正的隔离来自容器边界。（2026-09-05 实测：`test:invariants:server` 在宿主机上照跑不误，
-> 没有污染是因为那些用例自己注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了。）
+> ⚠ **`guard-host-tests.js` 不是安全网。** 它是 PreToolUse 钩子，**只在 agent 走 Bash 工具时
+> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`$(...)`、别名一概看不见）。
+>
+> 它的决策分两档（`decideRoute`）：**有等价容器跑法的一律 `deny` 并指出改跑哪条**，agent 自己换命令
+> 继续，不打断人；只有真 agent turn 与 smoke 是 `ask`——那两档要真凭据、容器里跑不了，
+> 要不要花那笔额度只有人能决定。**别把 deny 当保护**：它防的是手滑，不是对抗。
+>
+> 2026-09-11 起，`invariants/env`、`invariants/server`、`integration` 三个目录的测试文件与
+> `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
+> 跑就直接 exit 1，对所有调用路径生效（npm 脚本、裸 node、IDE run、CI、别的 agent）。
+> 它同样不是物理隔离——同一个仓库里的一行 import，删得掉；真正的隔离仍然来自容器边界。
+>
+> （那句「2026-09-05 实测 `test:invariants:server` 在宿主机上照跑不误」**已作废**：现在它跑不起来。
+> 当时没有污染，是因为那些用例各自注入了一次性 `CCM_DATA_DIR`，不是因为钩子拦住了——
+> 而「靠每个用例自己记得」正是后来把这道隔离下沉成机制的理由。）
 
 **② 变异（`mutate`）无例外进容器。** 它故意把源码改坏再跑测试，而被改坏的**可能恰恰是算删除路径的代码**——
 上面那次事故里 `getProjectDir` 被改成恒返回 `''`，`join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了。
 容器里 `HOME` 是一次性目录，这道防线不依赖任何代码正确性。
+它的 `main()` 开头也调用了执行位守卫（放在 main 里而不是模块顶层：`tests/unit/mutate.test.mjs`
+静态 import 了它 8 个纯函数，顶层拦截会让宿主机上的 `test:unit` 整个红掉）。
 
 **③ 删除与写入目标必须落在一次性目录**（`mkdtemp`）。隔离要素共五件：
 `HOME`、`CCM_DATA_DIR`、端口、工作目录、`~/.claude`。
+其中 `CCM_DATA_DIR` 自 2026-09-11 起由 `tests/setup/preload-env.mjs` **目录级**兜底（此前只逐个文件
+点名 6 个，`sessions.json`/`init-cache.json`/`uploads/` 等 9 项全裸，靠每个测试自己记得设变量）。
+兜底不解除本条：`HOME` 与 `~/.claude` 仍然要各测试自己注入。
 **漏掉 `HOME` 会让 hooks 类测试删掉生产投递箱**（2026-09-01 撞过）。
 测不到真实 `HOME` 不是缺陷，是这套方案成立的前提（`TEST-01`）。
 
@@ -142,7 +158,7 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 
 假 CLI 有两档（`tests/fixtures/fake-claude.sh`）：不设 `CCM_FAKE_CLAUDE_MODE` 时吞 stdin、不产出任何输出；
 设了才走可驱动的 Node 实现（应答 initialize、吐 `system/init`，`turn` 档还吐 `result` 让回合收尾）。
-**默认行为是显式 opt-in 保护的**——8 个 S2 文件与 21 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
+**默认行为是显式 opt-in 保护的**——9 个 S2 文件与 24 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
 （S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
 
 ---
@@ -414,7 +430,7 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 3. 未持令牌进不了 `/metrics` 与 socket 业务事件。
 4. 新设备待审、批准后可操作、吊销后已连连接失权——S2 即可。
 5. `npm run test:smoke` 的四条故事：core、reconnect、upload、entrypoint。
-   动了单驾驶员再加 handoff，动了审批再加 permission。
+   动了审批再加 `permission-modes`。（场景键名以 `tests/smoke/runner.js` 的 `SCENARIOS` 为准。）
 6. 文件越界仍拒绝（S1/S2，不烧 token）。
 7. 分发树（GitHub `master` 归档）能 `npm ci --omit=dev` 安装并启动；卸载后 `~/.claude/projects` **还在**（两侧断言，`DIST-01`）。
 

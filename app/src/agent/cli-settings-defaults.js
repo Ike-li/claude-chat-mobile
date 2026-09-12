@@ -118,6 +118,30 @@ export function defaultsFromEffectiveSettings(effective) {
   };
 }
 
+// 审批规则（allow / deny / ask）。数据源与 defaultsFromEffectiveSettings 同一份 effective——
+// agent.js:269 明写「不注入 options.allowedTools：放行白名单完全交给 settingSources 的
+// permissions.allow」，所以这份名单就是「手机上哪些工具不弹审批」的真相源，而 web 端此前读不到。
+//
+// ★ 失败方向：读不出来返回 null（整段缺席），**不返回空名单**——「我没有规则」与「我没读到」
+//   在安全上是两件事，把后者显示成空名单会让用户以为自己没配过、进而去改一个其实生效着的东西。
+//   注意「三档都是空数组」不属于此列：那是用户确实清空过，返回 total:0 的实体而非 null。
+const ruleList = (value) => (Array.isArray(value) ? value.filter(r => typeof r === 'string') : []);
+
+/**
+ * @param {{permissions?: {allow?: string[], deny?: string[], ask?: string[]}}} [effective]
+ * @returns {{allow: string[], deny: string[], ask: string[], total: number}|null}
+ */
+export function permissionRulesFromEffectiveSettings(effective) {
+  const p = effective?.permissions;
+  if (!p || typeof p !== 'object') return null;
+  // 三档一个都没出现过 = 这台机器没配过审批规则 → 整段缺席
+  if (!('allow' in p) && !('deny' in p) && !('ask' in p)) return null;
+  const allow = ruleList(p.allow);
+  const deny = ruleList(p.deny);
+  const ask = ruleList(p.ask);
+  return { allow, deny, ask, total: allow.length + deny.length + ask.length };
+}
+
 /**
  * 从 linked worktree 的 `.git` 文件内容定位 canonical repo root（= CLI 会误读 settings.local.json 的目录）。
  * git 规范：linked worktree 的 .git 是文本文件，内容形如 `gitdir: <主仓库>/.git/worktrees/<名>`；

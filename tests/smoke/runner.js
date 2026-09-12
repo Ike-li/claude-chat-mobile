@@ -147,7 +147,7 @@ async function runScenario(name, model) {
     ...stripInheritedEnv(process.env),    // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 SMOKE_ENV_BLOCKLIST）
     AUTH_TOKEN: 'ccm-smoke-test-token',   // §1.9：没有 token server 拒绝启动
     PORT: String(port),
-    WORK_DIR: workDir,
+    // WORK_DIR 已退役（并入 WORKDIRS 首项）；WORK_DIRS env 压过配置文件，是隔离实例的注入点。
     WORK_DIRS: workDir,
     CCM_DATA_DIR: dataDir,
     CCM_SMOKE_URL: `http://127.0.0.1:${port}`,

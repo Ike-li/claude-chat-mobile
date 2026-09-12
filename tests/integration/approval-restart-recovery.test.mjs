@@ -8,6 +8,9 @@
 // 手法：先手写一份 approval-requests.json（模拟"上一个进程留下的 pending 审批"），再动态 import
 // app/server.js 触发它的启动流程，验证该记录被标记为 expired + decidedBy='system:restart'，且写了一条
 // 汇总 audit_record。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

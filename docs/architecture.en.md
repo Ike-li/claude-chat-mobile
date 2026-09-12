@@ -135,7 +135,7 @@ public IdP strategy (optional; Cloudflare Access is the only implementation toda
             ↓
 device trust (a true local connection is exempt from this layer, not from the token)
             ↓
-WORK_DIR / WORKDIRS scope gate
+WORKDIRS scope gate
             ↓
 CLI permissions.allow + current Web permission mode
             ↓
@@ -152,8 +152,8 @@ swapping the IdP should not touch the core.
 These boundaries do not replace each other:
 
 - `AUTH_TOKEN` proves possession of the instance secret; it does not prove that a device was approved.
-- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it replaces device approval (the second factor), never the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
-- `WORK_DIR` / `WORKDIRS` constrain paths; they do not decide which Claude tools run automatically (a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
+- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it replaces device approval (the second factor) **by default**, never the token — set `DEVICE_APPROVAL_SCOPE=all` and connections arriving through Access must pass device approval too (local direct connections stay exempt; they are the self-recovery path when the trust list is empty). When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
+- `WORKDIRS` constrains paths; it does not decide which Claude tools run automatically (**the first entry is the primary work directory** your phone opens by default; a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
 - Agent `canUseTool` approvals govern autonomous Agent actions. Clicking Save in the file editor is a direct user write with separate scope, size, content-hash, and audit controls.
 
 See the [README security model](../README.en.md#security-model) for the concise boundary list and [deployment and operations](deployment.md) for network topology.
@@ -165,7 +165,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 | Claude conversations | `~/.claude/projects/` transcript | CLI/Web resume and stable history |
 | Web instance runtime | In-memory `AgentSession` | Streaming turns, approvals, event buffer |
 | CCM control plane | `CCM_DATA_DIR` | Session pointers, devices, approvals, audit, push, read markers, and caches |
-| Workspace allowlist | `WORK_DIR` / `WORKDIRS` | Limits visible and operable directories |
+| Workspace allowlist | `WORKDIRS` | Limits visible and operable directories (first entry = primary) |
 | Web-driver status line | SDK events | Current model, context, cost, and effort |
 | CLI-driver status line | Optional statusline snapshots | Read-only terminal-session status |
 | Immediate CLI signals | Optional hooks inbox | Faster Stop / Notification handling |

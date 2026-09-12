@@ -93,7 +93,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 
 /* 折叠器：去原生三角，光标手型 */
-details.thinking > summary, details.toolcard > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
+details.thinking > summary, details.toolcard > summary, details.subagent-card > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 #cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
 
@@ -847,9 +847,6 @@ body.ccm-sheet-open #messages {
     #leftSidebar, #settingsSheet {
       transition: none !important;
     }
-    #activityBanner .animate-spin {
-      animation: none !important;
-    }
     #connBanner .animate-spin {
       animation: none !important;
     }
@@ -885,13 +882,12 @@ body.ccm-sheet-open #messages {
     --activity: var(--accent);
   }
 }
-#activityBanner,
 #streamLiveStatus {
   color: var(--activity);
   border-color: color-mix(in srgb, var(--activity) 40%, transparent);
 }
 /* A2：工具卡不再跟随活动强调色——见上方 .toolcard 的降级说明。
-   #activityBanner / #streamLiveStatus 仍用 --activity，它们是「此刻在发生什么」的单条状态，
+   #streamLiveStatus 仍用 --activity，它是「此刻在发生什么」的单条状态，
    数量恒为 1，用强调色不会堆叠成墙。 */
 
 /* UX-016：思考进行中 shimmer */
@@ -992,6 +988,23 @@ details.thinking.thinking-live > summary::before {
 .unread-anchor-flash {
   animation: unread-anchor-flash 2s ease;
   border-radius: 0.75rem;
+}
+
+/* 抽屉里「跳到下一条未读」后的落点高亮。不复用 .unread-anchor-flash：那条动画在 0%/100% 把
+   background-color 打成 transparent，会盖掉会话行自己的 bg-surface / bg-accent-wash（当前会话
+   那一行是浅色底），跳完反而留下一行"背景没了"的怪行。改用 outline——它不参与布局、不挤动相邻
+   行，也不和任何背景色打架。 */
+@keyframes drawer-row-flash {
+  0%, 100% { outline-color: transparent; }
+  35% { outline-color: var(--accent); }
+}
+.drawer-row-flash {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  animation: drawer-row-flash 2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-row-flash { animation: none; outline-color: var(--accent); }
 }
 
 /* 两侧横线夹文字（仿微信），与消息气泡视觉区分开——它们不是对话内容：

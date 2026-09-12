@@ -13,6 +13,9 @@
 // 「能用」的判据选 session:history：它是"读会话内容"，正是待审设备不该能做、批准后应该能做
 // 的事，且对不存在的 sessionId 只回 {messages:[], error:'会话不存在'}——无副作用、零 token、
 // 不 spawn claude，因此这条测试能进 CI 常跑，而不是躺在 RUN_CLAUDE_INTEGRATION 后面默认跳过。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

@@ -69,6 +69,13 @@ const PAIRS = {
     ['改个bug'], ['  多  空白\n换行  '], ['新会话'], ['(无标题)'], ['New session'],
     ['x'.repeat(50)], ['x'.repeat(40)], [''], ['   '], [null], [undefined], [123],
   ],
+  // 设备指纹短形式。这一对的用途决定了「等价」是硬要求而不是雅致：手机上显示的这串要和
+  // 桌面菜单 / Web 信任列表里那串对上，用户才敢吊销。差一位就等于这个功能不存在。
+  // 边界全在截断阈值附近——16/17 位那两行是判据本身（Swift 写的是 count > 16）。
+  shortDeviceId: [
+    ['0123456789abcdef0123456789abcdef'], ['0123456789abcdef'], ['0123456789abcdef0'],
+    ['abcd'], [''], [null], [undefined], [123], ['a'.repeat(17)], ['a'.repeat(64)],
+  ],
   // ★ 这一组的每一行都对应上面注释里实测到的一处分叉，删任何一行都会让那个 bug 变得可回归。
   formatNotifyIdentity: [
     ['✅ 完成', { cwd: '/Users/x/code/proj', sessionTitle: '改bug' }],

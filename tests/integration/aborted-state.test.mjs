@@ -3,6 +3,9 @@
 // 用户中止一个真正在跑的轮次后，instances 事件里对应实例的 state 确实变为 'aborted'
 // （而非此前回落的 idle，让"我自己叫停"和"什么都没发生"在 UI 上不可区分）。
 // 需真实 claude agent turn，默认跳过，本机设 RUN_CLAUDE_INTEGRATION=1 运行。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

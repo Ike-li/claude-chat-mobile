@@ -10,6 +10,9 @@
 //     （SEC-03 修过的坑），需要等待窗口，属另开的用例；本文件只钉「进不进得来」。
 //  ③ 推送正文不含设备 ID（DEVICE-03）—— 那是 notifications 的 body 构造，属 S1。
 //     注意 device_status 事件【本身】带 deviceId 是正确的：那是服务端告诉这台设备它自己的状态。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -26,7 +29,7 @@ let dir, server;
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);
@@ -112,7 +115,7 @@ test.describe('待审设备卡片的来源 IP 与限速桶同一份判据（AUTH
 
   test.before(async () => {
     pdir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-xff-'));
-    pserver = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: pdir, CCM_DATA_DIR: pdir, TRUSTED_PROXY: 'loopback' });
+    pserver = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: pdir, CCM_DATA_DIR: pdir, TRUSTED_PROXY: 'loopback' });
   });
   test.after(async () => {
     if (pserver) await killServer(pserver.proc);

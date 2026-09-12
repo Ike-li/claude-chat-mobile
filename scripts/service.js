@@ -34,7 +34,7 @@ import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
 import { renderTemplate, stripLeadingComment } from './render-plist.js';
 import { pickNodePath, resolveStableNodePath } from './node-path.js';
 
-import { classifyRestartPattern, validateServiceEvents } from '../app/src/ops/service-events.js';
+import { classifyRestartPattern, validateServiceEvents, appendEvents, RESTART_INTENT_KIND } from '../app/src/ops/service-events.js';
 import { CONFIG_FILE_NAME, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
 import {
@@ -102,6 +102,7 @@ export function createServiceManager(deps = {}) {
     fileExists = () => false,
     writeManifest = () => {},
     readEvents = () => [],
+    writeEvents = () => {},
     renderPlist = realRenderPlist,
     sleep = realSleep,
     httpGet = realHttpGet,
@@ -781,6 +782,39 @@ export function createServiceManager(deps = {}) {
   // 那是 tests/integration/_spawn-server.mjs:83-97 里 buildNonce 想解决的同一个问题
   // （「端口上是我刚起的进程还是旧进程」）的零成本等价物 —— launchd 直接告诉你 PID 换没换，
   // 而打 /health 要带 token，带错就往限速计数器上撞。
+  // 声明「接下来那次 PID 变化是用户按的」，供 classifyRestartPattern 把它从频率统计里摘掉。
+  //
+  // 【为什么这里也要记一条】同名的 serviceSampler.recordRestartIntent 只活在 server 进程里，
+  // 覆盖的是 Web 配置面板那条 dev:restart。菜单栏的「重启」与 `npm run service:restart` 走的都是
+  // 本函数 —— 独立进程，够不到那个 API。不记的话每次主动重启都被算成异常重启：2026-09-10 实测
+  // 1 小时内 3 次干净重启（全部 lastExit=0、零崩溃、退出码正常）就让菜单栏显示「运行中（频繁重启）」。
+  // 而恒亮的假告警比没有告警更糟，见 service-units.js classifyState 头注。
+  //
+  // 【为什么不加锁】与 sampler 的 60s 周期采样存在读-改-写竞态，但那边只在 PID 变化时才写，
+  // 窗口是毫秒级；真撞上也只是丢一条声明 ⇒ 误报一次 ⇒ 一小时后自愈。为此引入文件锁不划算。
+  // 【唯一的强杀重启入口】记意图 + kickstart -k 绑死在一起，物理上不给「只做后半截」留位置。
+  //
+  // 这正是本 bug 的形态：抵消机制 2026-09 就有了，但只接在 server 进程的 dev:restart 上；
+  // 菜单栏与 CLI 后来走了另一条路，没人记得也要记一条声明，于是每次主动重启都被算成崩溃。
+  // 靠「新增入口时记得调 recordRestartIntent」是行不通的 —— 那正是会失败的那一步。
+  // tests/unit/service-control.test.mjs 钉住了「强杀标志只能出现在本函数里」，新开一条强杀路径会红。
+  function killAndRestart(label) {
+    // 顺序不可换：声明只认领紧随其后的那次 restarted，晚于重启就认领不到。
+    recordRestartIntent(label);
+    return execLaunchctl(['kickstart', '-k', `gui/${uid}/${label}`]);
+  }
+
+  function recordRestartIntent(label) {
+    try {
+      writeEvents(appendEvents(validateServiceEvents(readEvents()), [
+        { ts: now(), label, kind: RESTART_INTENT_KIND, from: null, to: null, lastExit: null },
+      ]));
+    } catch {
+      // 记不了历史不该让重启失败 —— 取舍同 service-sampler.js 的 recordSelfStart：
+      // 这是可观测性功能，不是重启的前提。代价是这次重启在历史图上缺一笔。
+    }
+  }
+
   function restart(unit, { wait = false, timeoutMs = 15000, intervalMs = 300 } = {}) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
@@ -794,7 +828,7 @@ export function createServiceManager(deps = {}) {
     // 同 start()：被 bootout 过的 unit 不在 domain 里，kickstart -k 一样找不到它。
     const loadErr = ensureLoaded(label, live);
     if (loadErr) return { ok: false, unit, label, oldPid, error: loadErr };
-    const r = execLaunchctl(['kickstart', '-k', `gui/${uid}/${label}`]);
+    const r = killAndRestart(label);
     if (!r || r.status !== 0) return { ok: false, unit, label, oldPid, error: launchctlErr(r) };
     if (!wait) return { ok: true, unit, label, action: 'restarted', oldPid };
 
@@ -1080,6 +1114,15 @@ function realReadEvents() {
   }
 }
 
+// 与 server 侧 writeServiceStateFile 同口径：**必须走 writeOwnerOnlyFile**（0600）。
+// 这个文件由两个进程交替写，用普通 writeFileSync 会在某一次写入时把权限静默放宽到 0644，
+// 而两边都不会报错、也没有任何测试看得见权限位。
+function realWriteEvents(arr) {
+  const path = resolveEventsPath(process.env, realReadEnv(), ROOT);
+  mkdirSync(dirname(path), { recursive: true });
+  writeOwnerOnlyFile(path, JSON.stringify(arr, null, 2));
+}
+
 function realReadManifest() {
   try {
     return JSON.parse(readFileSync(realManifestPath(), 'utf8'));
@@ -1151,6 +1194,7 @@ export function realManager() {
     writeManifest: realWriteManifest,
     renderPlist: realRenderPlist,
     readEvents: realReadEvents,
+    writeEvents: realWriteEvents,
   });
 }
 

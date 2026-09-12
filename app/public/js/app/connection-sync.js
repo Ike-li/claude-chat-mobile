@@ -3,7 +3,7 @@ import { shouldShowRttChip } from '../logic/panel-state.js';
 import { t } from '../i18n.js';
 
 // good/ok 都用中性 ink-soft：健康延迟不上 success 色；仅 warn/bad 上色告警。
-// 芯片本身仅 warn/bad 显示（shouldShowRttChip）；好网数字仍写进状态行。
+// 测得合法延迟全时段常驻显示（shouldShowRttChip）；好网中性灰，异常上色。
 const TONE_CLASSES = {
   good: 'text-ink-soft',
   ok: 'text-ink-soft',
@@ -47,7 +47,7 @@ export function createRttMonitor(context, {
       return '';
     }
     lastMs = milliseconds;
-    // 状态行始终带延迟（排障用）；芯片只在差网出现，好网顶栏保持安静。角标 title 归注意力信号，不在这里写。
+    // 状态行始终带延迟（排障用）；芯片全时段常驻显示（好网中性灰，差网告警色）。角标 title 归注意力信号，不在这里写。
     setStatus(`${t('已连接')} · ${t('延迟')} ${label}`);
     if (!shouldShowRttChip(milliseconds)) {
       rtt.textContent = '';

@@ -244,6 +244,44 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  // 第 2 批：聚合卡要在标题上显示「N tools · X tok」，而卡是按 parentToolUseId 组织的、
+  // 用量是按 task_id 组织的——两张表原先零交集字段。SDK 的 task_progress 自带 tool_use_id，
+  // 接上它就是把用量挂到卡上的唯一钥匙。usage.tool_uses 同理（前端自己数会漏掉折叠的 search/read）。
+  test('system/task_progress → 透传 tool_use_id 与 usage.tool_uses（聚合卡挂用量的 join 键）', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-prog-join' });
+    s.map({
+      type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_agent_1',
+      task_type: 'local_agent', subagent_type: 'general-purpose', description: '正在扫导入边界',
+      usage: { total_tokens: 65400, tool_uses: 15, duration_ms: 505000 },
+    });
+    const prog = events.filter(e => e.type === 'task_progress').at(-1);
+    const row = prog.payload.tasks.find(t => t.taskId === 't1');
+    assert.ok(row, '快照里应有这条任务');
+    assert.equal(row.toolUseId, 'toolu_agent_1', '没有它，前端无法把用量挂到对应的子代理卡上');
+    assert.equal(row.toolUses, 15, 'SDK 的权威累计值——前端自己数会漏掉被折叠的 search/read');
+    assert.equal(row.totalTokens, 65400);
+    assert.equal(row.durationMs, 505000);
+    s.dispose();
+  });
+
+  // B3 同源的坑：bgTasks 是整体 set 而非合并，任何不带这两个字段的 upsert 来源都会把它们抹成 null。
+  // background_tasks_changed 紧跟 task_progress 到达是常态（CLI 实证），不沿用 prev 就会让卡头
+  // 的用量在两种来源交替时闪烁归零。
+  test('background_tasks_changed 紧随其后 → toolUseId / toolUses 沿用 prev，不被快照抹掉', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-prog-reconcile' });
+    s.map({
+      type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_agent_1',
+      task_type: 'local_agent', usage: { total_tokens: 65400, tool_uses: 15, duration_ms: 505000 },
+    });
+    // 全量快照条目只有 task_id/task_type/description/ambient——不含 tool_use_id 与 usage
+    s.map({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 't1', task_type: 'local_agent' }] });
+    const prog = events.filter(e => e.type === 'task_progress').at(-1);
+    const row = prog.payload.tasks.find(t => t.taskId === 't1');
+    assert.equal(row.toolUseId, 'toolu_agent_1', '快照不带 tool_use_id，必须沿用——否则卡与用量当场脱钩');
+    assert.equal(row.toolUses, 15, '同 durationMs/totalTokens 的既有口径：不沿用就是每拍快照清零');
+    s.dispose();
+  });
+
   test('system/hook_* 生命周期事件 → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
     const { s } = makeSession({ resumeId: 'sess-hook' });
     const bufBefore = s.buffer.length;
@@ -355,6 +393,66 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     assert.equal(s.pendingAutoTurn, true);
     s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
     assert.equal(s.pendingTurns, 1, '新鲜 flag 正常合成');
+    s.dispose();
+  });
+});
+
+// CLI 把【跑得久的前台工具】也建模成 task，完成时走同一条 task_notification 通道。
+// 2026-09-09 SDK 探针实证（前台 Bash，无 run_in_background）：
+//   tool_use +9.3s → task_started +12.4s{is_backgrounded:false, task_type:'local_bash'}
+//   → task_notification +54.5s{status:'completed'} → tool_result +54.6s
+//   全程 background_tasks_changed 0 条 —— 所以它从不进 bgTasks，后台任务横幅也从不为它亮。
+// 播报它的代价是双重的：消息流多一条措辞错误的「后台任务完成」（工具卡片已如实显示结果），
+// 且 NOTIFY-01 规定后台任务完成【无条件推】，于是每条跑过几秒的命令都会打到锁屏手机上。
+test.describe('map() — 前台任务的 task_notification 不得播报成「后台任务完成」', () => {
+  const started = (taskId, extra) => ({
+    type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: 'toolu_fg',
+    description: '跑全量 E2E 分片并行', is_backgrounded: false, task_type: 'local_bash', ...extra,
+  });
+  const done = (taskId, summary = '跑全量 E2E 分片并行') => ({
+    type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: 'toolu_fg',
+    status: 'completed', summary, output_file: '',
+  });
+
+  test('is_backgrounded:false → 不 emit、不武装 pendingAutoTurn、不占 finishedTasks', () => {
+    const { s, events } = makeSession();
+    s.map(started('b1yznbrnz'));
+    s.map(done('b1yznbrnz'));
+    assert.equal(events.filter(e => e.type === 'task_notification').length, 0,
+      '前台命令被播报成「后台任务完成」：消息流多一条措辞错误的条目，且经 NOTIFY-01 无条件推打到锁屏手机');
+    assert.equal(s.pendingAutoTurn, false,
+      '前台工具的续写由 tool_result 驱动；误武装会让「防 auto-compact 泄漏 message_start」那道门失守 2min');
+    assert.equal(s.finishedTasks.size, 0,
+      '前台任务的 output_file 恒为空、无输出可读，占 finishedTasks 只会挤掉真后台任务的记录（cap 20）');
+    s.dispose();
+  });
+
+  test('is_backgrounded:true 的真后台任务照常播报（防改过头）', () => {
+    const { s, events } = makeSession();
+    s.map(started('w60tplm3a', { is_backgrounded: true, task_type: 'local_agent' }));
+    s.map(done('w60tplm3a', '深度调研完成'));
+    const ev = events.find(e => e.type === 'task_notification');
+    assert.ok(ev, '真后台任务的完成通知是用户唯一的完成信号，不得被这次收窄误伤');
+    assert.equal(ev.payload.summary, '深度调研完成');
+    assert.equal(s.pendingAutoTurn, true, '真后台任务完成后模型确实要被重调来汇报，flag 仍须武装');
+    s.dispose();
+  });
+
+  test('未见过 task_started 的 id → 保守按后台处理，照常播报', () => {
+    const { s, events } = makeSession();
+    s.map(done('never-started'));
+    assert.ok(events.find(e => e.type === 'task_notification'),
+      'is_backgrounded 只在 local_agent/local_bash 上设置（SDK d.ts 明文），其它 task_type 无此字段——缺席必须维持既有行为');
+    s.dispose();
+  });
+
+  test('task_updated 把前台任务转后台（Ctrl+B）后，完成照常播报', () => {
+    const { s, events } = makeSession();
+    s.map(started('b1yznbrnz'));
+    s.map({ type: 'system', subtype: 'task_updated', task_id: 'b1yznbrnz', patch: { is_backgrounded: true } });
+    s.map(done('b1yznbrnz'));
+    assert.ok(events.find(e => e.type === 'task_notification'),
+      'SDK d.ts：转后台以 task_updated patch.is_backgrounded 到达。转后台后它就是真后台任务，完成通知是用户唯一的完成信号');
     s.dispose();
   });
 });

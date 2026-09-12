@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-05 工具调用卡片生命周期', async ({ page }) => {
@@ -24,7 +25,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('details.toolcard pre').first()).toContainText('utils/date.js');
     const st = page.locator('details.toolcard .t-status');
     await expect(st).toHaveCount(3);
-    for (let i = 0; i < 3; i++) await expect(st.nth(i)).toHaveAttribute('aria-label', '成功');
+    // 图标维与颜色维分开断：实测过只断 aria-label 时，把 setStatusIcon 的染色整段删掉这里照样绿
+    for (let i = 0; i < 3; i++) {
+      await expect(st.nth(i)).toHaveAttribute('aria-label', '成功');
+      await expect(st.nth(i)).toHaveClass(/text-success/);
+    }
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('All tools executed cleanly');
 
     await page.locator('details.toolcard summary').last().click();
@@ -68,6 +73,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('mock tool crashed');
     await expect(failedCard.locator('.t-status')).toHaveAttribute('aria-label', '出错');
+    await expect(failedCard.locator('.t-status')).toHaveClass(/text-danger/);
     await failedCard.locator('summary').click();
     await expect(failedCard.locator('.t-out')).toContainText('mock tool crashed');
 
@@ -108,9 +114,59 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(card.locator('[data-testid="subagent-text"]')).toContainText('CSRF');
     await expect(page.locator('#messages > details.thinking.msg-frame')).toHaveCount(0);
 
+    // 合卡：一次 Agent spawn 只留【一张】卡。旧行为是主流里通用工具卡（Agent · 描述）与
+    // 子代理卡并排两张——数 subagent-card 恒等于 1，抓不到它，必须数主流里的通用工具卡。
+    await expect(page.locator('#messages > details.toolcard')).toHaveCount(0);
+    // 合卡不得吞掉 spawn 工具自己的输入与结果：子代理的最终报告原本挂在那张通用卡的 .t-out 上，
+    // 合卡后必须落到聚合卡里，否则「少一张卡」是靠丢结论换来的。
+    // 定位到聚合卡【自己】的槽位：嵌套工具卡也有 .t-in/.t-out，裸 class 会撞 strict mode。
+    // 只显 description：真机 2026-09-10 这里原样铺了整个 input JSON（含用户刚打的整段 prompt），
+    // 展开卡片先撞一坨。正反两条都要——只断"有 description"抓不到"顺带把 JSON 也铺了"。
+    await expect(card.locator('> .t-in')).toHaveText('Review auth module');
+    await expect(card.locator('> .t-in')).not.toContainText('subagent_type');
+    await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
+    // 用量按 toolUseId 从 task_progress 挂上来（第 2 批）。这条同时钉住「标完成时不能把用量抹掉」——
+    // 标题的三条改写路径共用 renderSubagentTitle，漏带 usage 的那条会在这里红。
+    await expect(card.locator('.sa-title')).toContainText('15 tools');
+    await expect(card.locator('.sa-title')).toContainText('65.4k tok');
+    // 单行动作槽：跑完撤下（留着最后一条工具名会让已完成的卡看起来还在动）
+    await expect(card.locator('[data-testid="subagent-last-tool"]')).toBeHidden();
+
     await card.locator('summary').first().click();
     await expect(card).toHaveAttribute('open', '');
     await expect(card.locator('.sa-body')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05j 运行中的子代理卡：折叠态就能看见用量与最近工具，不必展开', async ({ page }) => {
+    await gotoMock(page);
+
+    // 这个场景【停在运行中】（不发 tool_result/result），所以下面断的都是稳定终态，无需等待技巧
+    await sendChatMessage(page, 'test:subagent-running');
+
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toHaveCount(1);
+    await expect(card).not.toHaveAttribute('open', ''); // 折叠态——以下全都要在不展开的前提下可见
+    await expect(card.locator('.sa-title')).toContainText('🤖 Explore 运行中');
+    await expect(card.locator('.sa-title')).toContainText('3 tools');
+    await expect(card.locator('.sa-title')).toContainText('1.2k tok');
+    // 错误显性化：子工具真错误累进标题。本条咬住的是「失败被记在【标题】上」——
+    // 注入「改写单行动作槽」会红。至于"为什么不记在单行槽"（心跳每隔几秒覆盖它一次），
+    // 那是设计理由、由本场景的事件顺序体现（心跳排在失败之后），不是这条断言证明的。
+    await expect(card.locator('.sa-title')).toContainText('❌ 1');
+    // 失败的那张嵌套卡本身也是红的（statusIconSpec 按 kind 给语义色）
+    await expect(card.locator('.sa-body [data-tool-name="Read"] .t-status')).toHaveClass(/text-danger/);
+
+    // 底栏权责归位：这条任务已经有流内聚合卡，底栏不再重复显示它（真机同屏复读过）。
+    // 注意判据是「有没有流内卡」——P0-05f 那条 Workflow 场景的 task_progress 不带 toolUseId，
+    // 底栏照常显示，两条合起来才证明这不是"把横幅一刀关掉"。
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    const lastTool = card.locator('[data-testid="subagent-last-tool"]');
+    await expect(lastTool).toBeVisible();
+    // 类型前缀被剥掉：后端 message 是「Explore：扫描导入边界」，标题里已经有 Explore 了
+    await expect(lastTool).toHaveText('↳ Grep: 扫描导入边界');
 
     await expectNoBrowserErrors(page);
   });
@@ -139,6 +195,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // Workflow 不预建空卡；有 parentToolUseId 子流时才出现折叠卡
     const card = page.locator('[data-testid="subagent-card"]');
     await expect(card).toHaveCount(1);
+    // 【有意的例外，不是漏改】合卡只发生在「spawn 当场就建了聚合卡」的 Agent/Task 上。
+    // Workflow 的聚合卡是等首条子流事件才懒建的（预建会留下「🤖 workflow 已完成」空壳），
+    // 此时通用工具卡早已 append 进主流，再摘掉它要动已插入的时间分隔行。故 Workflow 维持两张卡。
+    // 这条断言是为了让「Workflow 还没合」变成显式契约——哪天合了它会红，提醒同步改这里。
+    await expect(page.locator('#messages > details.toolcard')).toHaveCount(1);
     await expect(card.locator('.sa-title')).toContainText('workflow');
     await expect(card.locator('[data-testid="subagent-text"]')).toContainText('Five search agents');
     await expect(card.locator('details.toolcard')).toHaveCount(1);
@@ -222,6 +283,65 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 别写成 not.toContainText('- ')：Playwright 会对期望串做空白归一化，尾空格被吃掉后变成 '-'，
     // 于是它命中路径里 claude-chat-mobile 的连字符，恒红。
     await expect(readBody.locator('pre')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-05h（2026-09-09）：历史回放路径的工具卡状态色。
+  // live 路径在 tool_result 里换图标【并且】加 text-success；历史回放路径（renderHistoryBubbles）
+  // 此前只调 setStatusIcon 换图标，模板里那个表示「进行中」的 text-warning 原样留着——
+  // 同一张成功卡，实时看是绿 ✓，刷新 / 切回后变成棕色的 ✓（--warning #9A5F22）。
+  // 上面所有既有断言都只查 aria-label，而 aria-label 两条路径都对，所以颜色这一维此前无人把守。
+  test('P0-05i 历史回放的子代理卡与 live 同构：同样只有一张卡，且带上输入与结论', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Subagent History Session');
+    await expect(page.locator('#messages')).toContainText('Subagent history follow-up', { timeout: 10_000 });
+
+    // 与 P0-05e 逐条同构：两边断言写成同一组，刷新前后形态不一致就必有一边红。
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toHaveCount(1);
+    await expect(card.locator('.sa-title')).toContainText('code-reviewer');
+    await expect(card.locator('.sa-title')).toContainText('已完成');
+    // 合卡：历史侧同样不再为 Agent 工具单独留一张通用工具卡
+    await expect(page.locator('#messages > details.toolcard')).toHaveCount(0);
+    // 与 live 同一口径：只显 description，不铺原始 JSON
+    await expect(card.locator('> .t-in')).toHaveText('Review auth module');
+    await expect(card.locator('> .t-in')).not.toContainText('subagent_type');
+    await expect(card.locator('.t-full-host > .t-out')).toContainText('Subagent code-reviewer finished review.');
+    // 空壳修复（3a）：主 transcript 里没有子代理执行内容，卡在折叠态下 body 是空的；
+    // 展开才按需拉 subagent:flow。这两档必须分开断——只断展开后，等于没测「原先是空壳」。
+    await expect(card.locator('.sa-body details.toolcard')).toHaveCount(0);
+
+    await card.locator('summary').first().click();
+    await expect(card).toHaveAttribute('open', '');
+    // 拉回来的条目用的是 live/history 共用的那套渲染，所以形态与 live 一致：正文 + 嵌套工具卡
+    await expect(card.locator('.sa-body')).toContainText('CSRF');
+    await expect(card.locator('.sa-body details.toolcard')).toHaveCount(1);
+    await expect(card.locator('[data-testid="subagent-flow-empty"]')).toHaveCount(0);
+    // 「不落主流」只能用结构判据表达——卡本身就在 #messages 里，对 #messages 断
+    // not.toContainText 在结构上永远不成立（第一版就是这么写错的）。
+    await expect(page.locator('#messages > [data-testid="assistant-message"]'))
+      .not.toContainText('Scanning auth handlers');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05h 历史回放的成功工具卡染成功色，而不是残留的进行中色', async ({ page }) => {
+    await gotoMock(page);
+    // Timeline Session 走 session:history 批量回放（fixture 里有一对 tl-tool-1 tool_use/tool_result ok:true）
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const st = page.locator('[data-tool-name="Read"] .t-status');
+    await expect(st).toHaveCount(1);
+    // aria-label 是图标维，两条路径都对——它绿着也证明不了颜色维，必须分开断
+    await expect(st).toHaveAttribute('aria-label', '成功');
+    await expect(st).toHaveClass(/text-success/);
+    await expect(st).not.toHaveClass(/text-warning/);
 
     await expectNoBrowserErrors(page);
   });

@@ -65,7 +65,7 @@
 - **既有编号**（`SEC-0N` / `FILES-N` / `REL-0N` / `SRV-00N` / `OPS-N`）：**生产代码注释里先有的**，指同一批红线里更具体的一条。
   不变量编号「吸收」它们而非取代——`app/src/**` 里那些注释仍按旧号写，改掉就对不上了。位数不齐（`FILES-1` vs `AUTH-01`）是这个来源差异的产物，不是笔误。
 
-另有 `BE-0NN`（bug-hunting review 的发现编号，16 处活在 `app/src/**` 注释里）与 `P0-NN`（E2E 用例编号，全部 e2e 都是 P0 级，所以 `e2e/` 下不再分优先级子目录）——多数是历史留痕。
+另有 `BE-0NN`（bug-hunting review 的发现编号，54 处活在 `app/src/**` 的 15 个文件里，去重后 12 个编号）与 `P0-NN`（E2E 用例编号，全部 e2e 都是 P0 级，所以 `e2e/` 下不再分优先级子目录）——多数是历史留痕。
 其中一条已升格成被测试守护的红线，因此单独登记：
 
 | ID | 红线 |
@@ -80,7 +80,7 @@
 | `AUTH-02` | `ownsHost(host)` 为真时，验签失败**不得**回退 `AUTH_TOKEN` |
 | `AUTH-03` | 限速只打鉴权口；成功认证后的业务 500 不计入失败。本机来源的锁定**不得**文案成「有人在暴力尝试」 |
 | `AUTH-04` | 只在声明的可信拓扑下采信边缘注入头：公网 Host + loopback peer → `CF-Connecting-IP`；`TRUSTED_PROXY=loopback` + loopback peer → `X-Forwarded-For` **末跳**。LAN/直连、未声明、开关值写错，一律不采信（失败方向 = 合桶，不是拆桶）。限速桶与待审设备卡片上的来源 IP 取同一份判据（`clientSourceAddress`），不允许各算一份 |
-| `DEVICE-01` | bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机 |
+| `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面还有一道早退**：CF Access 已启用且 `DEVICE_APPROVAL_SCOPE !== 'all'` 时直接 bypass，根本不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
 | `SEC-01` | 未审批 socket 不加入 approved 房间，收不到任何会话内容广播 |
@@ -91,6 +91,7 @@
 |---|---|
 | `SCOPE-01` | 任何用户可控路径经 `realpath` 后仍须落在授权工作区内。**三层窗口各有编号，缺一层就是一个可逃逸的时间窗**：`FILES-1` readdir 之后复校（目录级）· `FILES-2` mkdir 之后用 realpath 后的目录做前缀校验（中间路径级）· `FILES-3` `O_NOFOLLOW` 打开（叶节点级） |
 | `SCOPE-02` | 上传：只留 basename、去控制字符与前导点；不把服务端绝对路径交给不可信面；个数/单文件/总量上限前后端必须同一数字（`FILES-4` 缩略图上限两侧对齐） |
+| `SCOPE-03` | 授权工作区列表必须来自**显式配置**；一个都解析不出时拒绝启动，**绝不回落家目录**。`SCOPE-01` 管的是「路径必须落在白名单内」，白名单本身 = `[家目录]` 时它全绿而整个家目录已经暴露 —— 这是它的上游，不是同一条 |
 | `FILE-01` | 编辑器直写不走审批链，但走独立的闸：已存在文件、大小硬顶、`baseHash`、写前后范围门、审计、`FILE_EDIT=off` 整段关闭 |
 | `FILE-02` | `open` 之前拒绝 FIFO / 字符设备 / unix socket。实现是**白名单**（只放行常规文件与 symlink），测试要按白名单写，否则新增一种特殊文件类型时不会红 |
 | `FILE-03` | 控制面状态文件（设备、审批、配置、审计、上传附件）owner-only `0600` |
@@ -103,7 +104,7 @@
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
 | `SOCKET-01` | Socket 断开不得杀死 Agent；Agent 死必须清 busy、通知客户端、允许恢复 |
 | `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history` |
-| `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活 |
+| `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |
 | `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行 |
 | `APPROVAL-02` | 启动时磁盘上残留的 pending 标为 expired（`decidedBy=system:restart`），不可再批准执行 |
 

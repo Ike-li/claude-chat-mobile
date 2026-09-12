@@ -3,7 +3,7 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
 import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
@@ -410,4 +410,51 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     assert.equal(typeof formatAuditEntry().text, 'string');
     assert.equal(typeof formatAuditEntry({}).text, 'string');
   });
+});
+
+// ── statusline 桥的面板行（2026-09-10 新增）─────────────────────────────────
+//
+// 两个桥在 CLAUDE.md 里是并列的，web 上待遇却差一个量级：hooks 桥有安装态、有一键安装，
+// statusline 桥在 service:status 里根本没有字段，只能回电脑敲 npm run statusline:status。
+// 这一层与 formatHooksBridgeRow 同构，但**分档判据必须各自成立**——照抄一份再改文案是
+// 本仓出过事的形态，故这里逐档钉。
+
+test('statusline 行：没有字段（旧 server）→ null，整段缺席而不是显示「未知」', () => {
+  assert.equal(formatStatuslineBridgeRow(undefined), null);
+  assert.equal(formatStatuslineBridgeRow(null), null);
+  assert.equal(formatStatuslineBridgeRow({}), null);
+});
+
+// ★ off 必须先于 unknown 判：它由 env 直接决定、不经读盘，比「安装态读不出」更确定。
+//   反过来会把人引去修一个修好了也没用的东西（整体停用时装没装都不影响它不工作）。
+test('statusline 行：env 停用时先报停用，即使安装态同时读不出来', () => {
+  const row = formatStatuslineBridgeRow({ state: 'unknown', off: true });
+  assert.match(row.value, /已停用/);
+  assert.equal(row.action, null);
+});
+
+test('statusline 行：已安装 → 可一键关闭', () => {
+  const row = formatStatuslineBridgeRow({ state: 'installed', off: false });
+  assert.equal(row.tone, 'ok');
+  assert.equal(row.action, 'uninstall');
+});
+
+test('statusline 行：未安装 → 可一键开启，且说清开了有什么用', () => {
+  const row = formatStatuslineBridgeRow({ state: 'not-installed', off: false });
+  assert.equal(row.action, 'install');
+  assert.ok(row.hint && row.hint.length > 0);
+});
+
+// ★ 失败方向：读不出来不得给出「开启」按钮。此时既不知道装没装，点下去要么套娃要么无效——
+//   应当把人引到电脑上查，而不是给一个看起来能解决问题的按钮。
+test('statusline 行：状态读取失败时不给任何动作按钮（不知道装没装，点了可能套娃）', () => {
+  const row = formatStatuslineBridgeRow({ state: 'unknown', off: false });
+  assert.equal(row.tone, 'warn');
+  assert.equal(row.action, null);
+});
+
+test('statusline 行：配置被改动（drifted）同样不给动作，交给用户决断', () => {
+  const row = formatStatuslineBridgeRow({ state: 'drifted', off: false });
+  assert.equal(row.tone, 'warn');
+  assert.equal(row.action, null);
 });

@@ -8,7 +8,7 @@
 // 用黑名单去防归类失败，判据和它自己宣称的原则是反的（CLAUDE.md 讲的一直是白名单）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decide } from '../../tests/gates/guard-host-tests.js';
+import { decide, decideRoute } from '../../tests/gates/guard-host-tests.js';
 
 const blocked = cmd => assert.ok(decide(cmd), `应拦下: ${cmd}`);
 const allowed = cmd => assert.equal(decide(cmd), null, `不该拦: ${cmd}`);
@@ -61,7 +61,10 @@ test('拦: 借 docker 字样蒙混过关（判定按段做，不看整条命令�
 // 域内没见过的形态一律要确认——这正是白名单相对黑名单的全部价值：
 // 不需要预先想到它，也不会漏放。
 test('拦: 测试域内、但不在白名单上的形态', () => {
-  blocked('npm run test:coverage');
+  // 用一个【不存在的脚本名】而不是某条具体脚本：白名单的语义就是「名单外一律拦」，
+  // 拿具体脚本当例子的话，那条脚本哪天进了名单，这个用例就跟着失效
+  // （2026-09-11 就是这么红的：test:coverage 被认定与 test:unit 同档、进了白名单）。
+  blocked('npm run test:whatever');
   blocked('npm run test:integration -- --only foo');
 });
 
@@ -170,4 +173,66 @@ test('理由必须具体到可判断，不是一句「有风险」', () => {
   assert.match(decide('npm test'), /session-delete|~\/\.claude/);
   assert.match(decide('node --test tests/unit/x.test.mjs'), /preload-env/);
   assert.match(decide('npm run mutate -- app/src/x.js'), /改坏/);
+});
+
+// ── deny / ask 分档 ────────────────────────────────────────────────────────
+//
+// 【这组测试守的是什么】ask 会把会话停在那里等人点确认。对「跑一段长任务、人不在跟前」的用法，
+// 那等于任务卡死。而这些命令本来就有等价的容器跑法——agent 收到拒绝理由后自己换一条继续即可。
+// 所以分档判据是「有没有容器替代」，不是「危不危险」：危险的照样 deny，只要换个地方能跑。
+import { readFileSync as _rf } from 'node:fs';
+const PKG = JSON.parse(_rf(new URL('../../package.json', import.meta.url), 'utf8'));
+
+test.describe('决策分档', () => {
+  const DENY = [
+    ['npm test', 'test:docker'],
+    ['npm run test:integration', 'test:docker:integration'],
+    ['npm run test:invariants:server', 'test:docker:invariants'],
+    ['npm run test:invariants:env', 'test:docker:invariants'],
+    ['npm run mutate -- app/src/x.js', 'mutate:docker'],
+    ['node --test tests/integration/server.test.mjs', 'test:docker'],
+  ];
+
+  for (const [cmd, expectScript] of DENY) {
+    test(`deny + 指路: ${cmd}`, () => {
+      const r = decideRoute(cmd);
+      assert.equal(r?.decision, 'deny', `应 deny（agent 自己换命令，不找人）：${cmd}`);
+      assert.ok(r.alternative?.includes(expectScript),
+        `替代命令应指向 ${expectScript}，实际：${r.alternative}`);
+    });
+  }
+
+  // ★ 最容易悄悄失效的一条：改了脚本名或删了脚本，钩子照样给出那条命令，
+  //   agent 照着敲 → "Missing script" → 它不知道该怎么办，只能回头找人。
+  test('每条替代命令指向的 npm 脚本都真实存在', () => {
+    for (const [cmd] of DENY) {
+      const alt = decideRoute(cmd).alternative;
+      const script = /npm run ([\w:.-]+)/.exec(alt)?.[1];
+      assert.ok(script, `替代命令里没有可识别的 npm 脚本：${alt}`);
+      assert.ok(PKG.scripts[script], `package.json 里没有 ${script}（钩子在指一条不存在的路）`);
+    }
+  });
+
+  test('需真凭据的两档仍然 ask——容器替代不了，只有人能决定要不要花那笔额度', () => {
+    for (const cmd of ['npm run test:smoke', 'RUN_CLAUDE_INTEGRATION=1 npm test']) {
+      assert.equal(decideRoute(cmd)?.decision, 'ask', cmd);
+    }
+  });
+
+  test('放行的命令 decideRoute 返回 null', () => {
+    for (const cmd of ['npm run test:unit', 'npm run check', 'npm run test:docker', 'git status']) {
+      assert.equal(decideRoute(cmd), null, cmd);
+    }
+  });
+});
+
+test.describe('test:coverage 与 test:unit 同档', () => {
+  test('放行', () => {
+    assert.equal(decide('npm run test:coverage'), null);
+  });
+
+  // scope 与白名单必须成对：只加白名单不加 scope，就能借道跑集成用例。
+  test('但 -- 点名 tests/unit 之外的文件仍被拦', () => {
+    assert.ok(decide('npm run test:coverage -- tests/integration/session-delete.test.mjs'));
+  });
 });

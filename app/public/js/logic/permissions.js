@@ -7,6 +7,8 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
+import { t } from '../i18n.js';
+
 // ---- 权限档：与 @anthropic-ai/claude-agent-sdk PermissionMode 枚举对齐 ----
 // SDK 仅类型层有枚举、无运行时 list；本数组 = 前端显示/校验的权威源，由
 // tests/unit/permission-modes-sdk-sync.test.mjs 与 sdk.d.ts + 后端 CCM_PERMISSION_MODES 锁集合。
@@ -102,4 +104,40 @@ export function permissionModeTileSpecs(modes = SDK_PERMISSION_MODES) {
       danger: Boolean(meta?.danger),
     };
   });
+}
+
+// ---- 「永久不再问」的影响面（1b，2026-09-11）----
+//
+// CLI 在 canUseTool 的 suggestions 里自带 destination；用户点「永久」之前必须知道这条规则
+// 会落到哪一层——「只这个工作区」和「所有项目」是完全不同的授权。
+//
+// ★ 失败方向：**绝不能把影响面说小了**。一批规则里只要有一条是 userSettings，整句话就按
+//   userSettings 说。说小了会让用户批准一个他本不会批准的授权；说大了只是啰嗦。
+//   因此不认识的 destination 也归到最宽一档，而不是静默当成"不落盘"。
+//
+// 宽度序：userSettings（所有项目）> projectSettings（本项目，进 git）> localSettings（本工作区）。
+// session / cliArg 不落盘，不参与——它们归「本会话内总是允许」那一档。
+const PERSIST_SCOPES = ['localSettings', 'projectSettings', 'userSettings'];
+
+/**
+ * @param {string[]} [destinations] suggestions 里出现过的 destination
+ * @returns {{label: string, hint: string}|null} null = 没有任何会落盘的规则，调用方据此不给「永久」选项
+ */
+export function describePersistScope(destinations) {
+  const list = Array.isArray(destinations) ? destinations : [];
+  const persistable = list.filter(d => d !== 'session' && d !== 'cliArg');
+  if (!persistable.length) return null;
+  // 取最宽的一档。不认识的值按最宽处理（宽度未知时不能猜它窄）。
+  const widest = persistable.reduce((acc, d) => {
+    const rank = PERSIST_SCOPES.indexOf(d);
+    const known = rank >= 0 ? rank : PERSIST_SCOPES.length; // 未知 → 比已知的都宽
+    return known > acc ? known : acc;
+  }, -1);
+  if (widest >= PERSIST_SCOPES.length || widest === PERSIST_SCOPES.indexOf('userSettings')) {
+    return { label: t('所有项目'), hint: t('写入 ~/.claude/settings.json，对这台电脑上的每个项目生效') };
+  }
+  if (widest === PERSIST_SCOPES.indexOf('projectSettings')) {
+    return { label: t('本项目'), hint: t('写入项目里的 .claude/settings.json —— 这个文件会进 git，团队其他人也会拿到') };
+  }
+  return { label: t('本工作区'), hint: t('写入 .claude/settings.local.json，只影响这台电脑上的这个工作区') };
 }

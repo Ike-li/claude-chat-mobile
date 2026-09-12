@@ -158,6 +158,46 @@ function formatAgo(ms) {
 // 的 catch），功能确定存在——早先把它一并判成 null，等于让一个已知故障表现得像"这里从来没东西"，
 // 而这一段是手机上唯一能看到/操作 hooks 桥的入口，消失即彻底失联。改为就地说明：既不误报未装
 // （原判据要守的正是这条），也不留白。
+// statusline 桥的面板行。与 formatHooksBridgeRow 同构，但**每一档的判据各自成立**：
+// 照抄一份再改文案会让两边在下一次需求分叉时悄悄走样（本仓出过这个形态）。
+//
+// 分档顺序与 hooks 侧一致，理由也一致：off 由 env 直接决定、不经读盘，比「读不出安装态」更确定，
+// 先报读取失败会把人引去修一个修好了也没用的东西。
+//
+// ★ unknown 与 drifted 都**不给动作按钮**：此时既不知道当前装没装，点下去要么套娃要么无效。
+//   给一个看起来能解决问题的按钮，比不给更糟。
+export function formatStatuslineBridgeRow(statuslineBridge) {
+  const state = statuslineBridge?.state;
+  if (!state) return null; // 旧 server 无此字段 → 整段缺席，不显示「未知」
+  const label = t('终端状态栏');
+  if (statuslineBridge.off) {
+    return { label, value: t('已停用（CLI_STATUSLINE_BRIDGE=off）'), tone: 'muted', action: null };
+  }
+  if (state === 'unknown') {
+    return {
+      label,
+      value: t('状态读取失败'),
+      tone: 'warn',
+      action: null,
+      hint: t('读不出 ~/.claude/settings.json 的安装记录；在电脑上跑 npm run statusline:status 查看'),
+    };
+  }
+  if (state === 'installed') {
+    return { label, value: t('已启用'), tone: 'ok', action: 'uninstall', actionText: t('关闭') };
+  }
+  if (state === 'drifted') {
+    return { label, value: t('配置已被改动'), tone: 'warn', action: null };
+  }
+  return {
+    label,
+    value: t('未启用'),
+    tone: 'muted',
+    action: 'install',
+    actionText: t('开启'),
+    hint: t('开启后，你在电脑终端里跑的会话，模型 / 额度 / 上下文用量也会同步到手机'),
+  };
+}
+
 export function formatHooksBridgeRow(hooksBridge) {
   const state = hooksBridge?.state;
   if (!state) return null;

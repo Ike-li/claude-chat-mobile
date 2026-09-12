@@ -48,6 +48,7 @@ struct CCMCoreTests {
         testProbeInterval()
         testDeviceSnapshot()
         testDevicePresentation()
+        testTrustedPresentation()
         testAutostartRisk()
         testRunSyncResourceHygiene()
         testRunSyncTimeoutDoesNotLeakWorkers()
@@ -672,6 +673,55 @@ extension CCMCoreTests {
         let noIp = decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"abcd1234","userAgent":"Mozilla/5.0 (iPhone)"}]}"#)!.pendingList[0]
         check(!pendingDeviceTitle(noIp).hasSuffix("·"), "缺 IP 时不留悬空分隔符：\(pendingDeviceTitle(noIp))")
         check(pendingDeviceTitle(noIp).contains("未知来源"), "缺 IP 如实说未知，不静默省略")
+    }
+
+    // MARK: 已受信任的设备怎么显示给人看
+    //
+    // 这一列的用途和待审那列**不同**：待审答「在敲门的是谁」，已信任答「哪台我早就不用了、
+    // 可以吊销」。所以第三段放的是「多久以前批的」而不是来源 IP。
+    static func testTrustedPresentation() {
+        // 固定 now，否则这些断言会随运行日期漂：跑一次绿、下周再跑就红。
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = 86_400.0
+
+        eq(approvedAtLabel(nil, now: now), "无批准记录", "上线前批准的设备没有元数据，如实说，不编时间")
+        eq(approvedAtLabel(0, now: now), "无批准记录", "0 不是一个真实的批准时间")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - 3600) * 1000, now: now), "今天批准", "当天")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 1.2) * 1000, now: now), "昨天批准", "跨一天")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 5) * 1000, now: now), "5 天前批准", "一周内给天数")
+        eq(approvedAtLabel((now.timeIntervalSince1970 - day * 95) * 1000, now: now), "3 个月前批准", "超月折成月")
+        eq(approvedAtLabel((now.timeIntervalSince1970 + day) * 1000, now: now), "今天批准",
+           "时钟回拨造出的未来时间不能显示成负数天")
+
+        let full = #"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"0123456789abcdef0123456789abcdef","shortId":"01234567…cdef","ua":"Mozilla/5.0 (iPhone)","ip":"192.168.1.5","approvedAt":1799913600000}]}"#
+        let d = decodeDevices(full)!.trustedProfileList[0]
+        let title = trustedDeviceTitle(d, now: now)
+        check(title.contains("iPhone"), "带设备类型：\(title)")
+        check(title.contains("01234567"), "带短 ID 供和手机上那串核对：\(title)")
+        check(title.contains("批准"), "带批准时间——「还在不在用」是吊销决策的唯一线索：\(title)")
+
+        // 别名压过一切自动生成的信息——它是用户自己下的判断。
+        let named = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"0123456789abcdef0123456789abcdef","alias":"客厅平板","ua":"Mozilla/5.0 (iPhone)","browser":"Safari 18"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(named), "客厅平板", "有别名就只显示别名，不再拼类型/浏览器")
+
+        // 没别名时按能拿到的信息拼，缺哪段跳哪段，不留悬空分隔符
+        let auto = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc","ua":"Mozilla/5.0 (Linux; Android 10; K)","browser":"Chrome 152"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(auto), "Android · Chrome 152", "机型拿不到（Chrome 冻结成 K）就只拼类型与浏览器")
+        check(!trustedDeviceName(auto).hasSuffix("·"), "缺段不留悬空分隔符：\(trustedDeviceName(auto))")
+
+        let withModel = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc","ua":"Mozilla/5.0 (Linux; Android 16; ABCD1234XY)","browser":"微信 8.0.77","model":"ABCD1234XY"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(withModel), "Android · ABCD1234XY · 微信 8.0.77", "拿得到机型就补进去")
+
+        // UA 与 browser 全缺：不能回落成空串，否则整行只剩一个短 ID
+        let bare = decodeDevices(#"{"schemaVersion":1,"trustedProfiles":[{"deviceId":"abc"}]}"#)!.trustedProfileList[0]
+        eq(trustedDeviceName(bare), "未知设备", "全缺时如实说未知，不返回空串")
+
+        // ★ 旧 server 只给 trusted[]：必须回落成只有 ID 的条目，而不是整段列表消失。
+        let legacy = decodeDevices(#"{"schemaVersion":1,"trusted":["abc123"]}"#)!
+        eq(legacy.trustedProfileList.count, 1, "没有 trustedProfiles 时用 trusted 回落，不是空列表")
+        eq(legacy.trustedProfileList[0].id, "abc123", "回落条目至少要有 ID")
+        eq(trustedDeviceTitle(legacy.trustedProfileList[0], now: now).contains("无批准记录"), true,
+           "回落条目如实说没有批准记录")
     }
 }
 

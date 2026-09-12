@@ -273,7 +273,73 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        browse:read，那条通道的 scope 是 workDirs，CLI 临时目录不在其中会 fail-closed；而把
   //        临时目录塞进通用文件通道的 scope 等于开一个更宽的洞。这条专用通道的入参只有 taskId，
   //        路径由服务端从自己记录的 CLI 上报值取，客户端连"选路径"都做不到。入向总数 45→46）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 46);
+  //      + user:revokeTrustedDevice（2026-09-09，Web 侧吊销【已受信任】设备。刻意不复用
+  //        user:denyDevice：那条处理待审设备（拒绝一台还进不来的设备是安全方向、免确认，
+  //        且载荷里的 deviceId 本就已广播给可信端），这条处理已在用的设备（破坏性、要强确认），
+  //        且载荷只有 shortId——DEVICE-03 不许把全量信任表下发到网络上。两个风险档共用一个
+  //        handler 迟早写反。入向总数 46→47）
+  //      + subagent:flow（2026-09-10，历史回放时按需读一个子代理的执行流水。刻意不并进
+  //        session:history：主 transcript 里【没有】子代理的执行内容（全库实证 isSidechain 只出现在
+  //        <sessionId>/subagents/agent-*.jsonl 内），那批文件实测中位 360KB、最大 1.2MB、总 69MB，
+  //        随历史整批推等于把一轮历史放大一个数量级，而绝大多数卡用户根本不会展开。
+  //        安全模型同 tool:preview / task:output：客户端只传 toolUseId，路径由服务端从
+  //        sessionId+cwd 自己算，入口再过一道 isSafeSessionId（SS-003）。入向总数 47→48）
+  //      + user:renameTrustedDevice（2026-09-10，给已受信任设备起别名。别名是唯一对所有平台
+  //        都成立的分辨手段：iOS 拿不到机型，局域网 http:// 下 UA Client Hints 不可用（非安全
+  //        上下文），而同一部手机的微信 webview 与 Chrome 本就是两条独立记录。寻址同吊销走
+  //        shortId，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。入向 48→49）
+  //      + session:rewind:preview（2026-09-10，文件轴 Rewind 的只读预览：回答「这一轮能不能回退、
+  //        会动哪些文件」。刻意不并进 session:fork——两者虽然共用长按气泡入口，锚点语义却相反：
+  //        fork 取【前一条 assistant】（保留到这条为止），rewind 要【被丢弃那轮 prompt 自身】的 uuid
+  //        （SDK 的 rewindFiles 只认它，送 assistant uuid 会报「找不到检查点」）。共用一个 handler
+  //        必然写反其中一条。分成 preview / confirm 两步则是因为回退【会改磁盘】：预览只读，
+  //        且在动任何文件之前就把「CLI 会不会拒绝这次截断」算出来——那个拒绝确定性且不可重试，
+  //        等到执行时才发现，文件已经回滚而对话没截断，撕裂态无法自动恢复。入向 49→50）
+  //      + session:rewind:confirm（2026-09-10，回退的执行步。与 preview 分开是因为它【会改磁盘】：
+  //        preview 只读、可随便点；confirm 要回滚文件并截断对话，两者的权限档、并发锁、失败处置
+  //        全不同，合成一个 handler 靠 payload 里的 dryRun 开关分流迟早写反。入向 50→51）
+  //      + statusline:setup（2026-09-10，statusline 桥的装/卸。此前两个 CLI 桥在 web 上待遇差一个
+  //        量级：hooks 桥有安装态、有一键开关，statusline 桥在 service:status 里连字段都没有，
+  //        只能回电脑敲 npm run statusline:status——而「人不在电脑前」正是这个产品的前提。
+  //        刻意不并进 hooks:setup：两个桥改的是 settings.json 里完全不同的键（hooks[] vs
+  //        statusLine.command），漂移判据也不同（statusline 还要比 refreshInterval），
+  //        共用一个 handler 靠 payload 分流迟早写反。**只收 install/uninstall 不收 verify**——
+  //        statusline 安装器没有 verify 子命令，收了只会在 spawn 那层报错。入向 51→52）
+  //      + permissions:rules（2026-09-10，审批白名单的只读面。agent.js:269 明写「不注入
+  //        options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow」——
+  //        这份名单决定手机上哪些工具直接放行、哪些弹审批，而 web 端此前既读不到也写不了，
+  //        用户批到烦时「为什么这个老弹 / 那个为什么不弹」无从回答。
+  //        **刻意不塞进 instances 广播**：那条路每个轮次边界都触发，而名单只在设置面板打开时
+  //        看一眼，放进去等于给每台连着的设备每轮白发一份（同 restarts 不进广播的理由）。
+  //        入向 52→53）
+  //      + connect:qr（2026-09-10，接入二维码。此前只有终端有这个能力（node scripts/qr.js），
+  //        而「人不在电脑前」正是本产品的前提——想把第二台手机接进来得先回电脑。
+  //        token 走 URL fragment（不进任何中间层访问日志），受 Access 保护的域名则**不带 token**
+  //        （那条路只认 JWT、不回退 AUTH_TOKEN，带上去纯属泄漏）——判据复用
+  //        shared/public-target.js 的 includeToken，不在 handler 里另算一套。
+  //        前端那侧另有两步展开 + 定时自动隐藏，理由同 scripts/qr.js 必须手敲：
+  //        二维码没有「安全的默认档」，而人不会去遮一个「看起来无害」的方块图案。入向 53→54）
+  //      + logs:server（2026-09-10，server 进程自己的 stdout/stderr。与 logs:get 是**两条不同的
+  //        日志**：那条合并的是前端 clientLogger + 会话交互日志（都在内存里），server 进程的输出
+  //        一个字都不进去（2026-09-02 实证）——于是「服务为什么起不来」「端口被占了吗」的答案
+  //        在手机上根本读不到。脱敏档位是只截断限流、不改内容（机主定）：自己的机器、自己的日志、
+  //        已过设备审批闸，改内容会让排障失去价值。路径**不接受客户端传入**，只读配置里那个，
+  //        从设计上排除穿越。入向 54→55）
+  //      + git:branches（2026-09-11，新会话的「源分支」选择器。勾了「在新 worktree 里开」之后，
+  //        从哪个分支切出来是用户必须能选的——只读当前分支等于把这个决定藏起来，而选错分支要到
+  //        合并时才发现。只读，与 git:status 同一道 cwd 范围门；分支名本身就是信息（功能代号、
+  //        客户名），不当无害元数据放行。入向 55→56）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 56);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('git:branches'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('permissions:rules'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('statusline:setup'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:preview'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:rewind:confirm'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:renameTrustedDevice'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('subagent:flow'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:revokeTrustedDevice'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('task:output'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('attachment:read'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('read:sync'));
@@ -303,8 +369,21 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 27 种一致', () => {
-  assert.equal(AGENT_EVENT_TYPES.length, 27);
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 30 种一致', () => {
+  //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
+  //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
+  //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
+  //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
+  //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
+  assert.equal(AGENT_EVENT_TYPES.length, 31);
+  assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
+  // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
+  // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。
+  assert.ok(AGENT_EVENT_TYPES.includes('trusted_devices'));
+  // 两个旁路提问（2026-09-10）：回来时的会话摘要 / 每轮收尾后的下一步建议。二者都不经 SDK 消息流，
+  // 由 agent 主动 emit（askSideQuestion 的响应），故契约表是它们进入前端视野的唯一入口。
+  assert.ok(AGENT_EVENT_TYPES.includes('session_recap'));
+  assert.ok(AGENT_EVENT_TYPES.includes('prompt_suggestion'));
 });
 
 // ── 2026-08-02 补的两个反向闸 ───────────────────────────────────────────────

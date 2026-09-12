@@ -18,6 +18,9 @@
 //     实测裸连收不到 user_message 回放、session:open 无 ack，入口尚未查清；查清前写它必定是假绿。
 //  ② IDLE_TIMEOUT 到点回收实例 —— 那是【该】被回收的路径，与本文件方向相反，另开用例。
 //  ③ 设备被吊销时的强制断连（disconnectDeviceSockets）—— 归 device-gate.test.mjs。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -33,7 +36,7 @@ let dir, server;
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-socket-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);

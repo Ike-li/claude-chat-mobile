@@ -4,6 +4,9 @@
 // 接线：①正常 list/read 走通；②越界 relPath 被拒（fail-closed，不进程崩溃/不误放行）；③鉴权门未过时不可达。
 // 鉴权模式同 tests/integration/rate-limit.test.mjs：测试专用 token + 清 CF_ACCESS_* + 重新 initCfAccess()
 // （本机 .env 已配真实鉴权，dotenv 会在 delete 后重新注入——不可用"delete AUTH_TOKEN"假装无鉴权）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';

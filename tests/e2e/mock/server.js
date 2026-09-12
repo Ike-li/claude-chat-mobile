@@ -44,7 +44,10 @@ function createDefaultInstances() {
     state: 'idle',
     permissionMode: 'default',
     effort: null,
-    model: 'claude-3-5-sonnet'
+    model: 'claude-3-5-sonnet',
+    // 与真 server 的 instancesPayload 同形。给非零值：全 0 时前端整段隐藏，
+    // 那样这个字段有没有传都看不出差别，E2E 也就守不住它。
+    sideQuestionCalls: { suggestion: 3, recap: 1 }
   }];
 }
 
@@ -106,6 +109,20 @@ function readStateForRows(rows) {
   }
   return { baselineTs: mockReadState.baselineTs, seen, manual };
 }
+// pinned（2026-09-08）：手动标「稍后再看」但被分页挤出本页的会话，服务端 session:list 单独补回。
+// mock 必须一起实现——否则真 server 把这个字段删掉，E2E 照样全绿（这正是 ack 形状守卫存在的理由）。
+// 判据与 read-state.js#manualUnreadIds 同义：manual[id] > seen[id]，缺 seen 算未读、相等算已读。
+//
+// 池 = 该 cwd 的全部 mock 会话。只有主 cwd 会截断（historyOverflowMode 下只回前 3 条），其余 cwd
+// 全量返回，于是它们的 manual 标记必然在页内、pinned 恒空——与真 server 同构，不是偷懒。
+function pinnedRowsFor(cwd, rows) {
+  const inPage = new Set((rows || []).map(s => s && s.id));
+  const pool = cwd === '/Users/you/code/claude-chat-mobile'
+    ? mainCwdSessions().filter(s => !deletedSessionIds.has(s.id))
+    : [];
+  return pool.filter(s => s && s.id && !inPage.has(s.id)
+    && (mockReadState.manual[s.id] ?? -Infinity) > (mockReadState.seen[s.id] ?? -Infinity));
+}
 // 逐 key 取较晚时间戳，与真 server 的 read-state.js#mergeLatest 同语义。
 function mergeIntoReadState(field, incoming) {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
@@ -151,6 +168,33 @@ let noSessionIdMode = false;
 let noModelsMode = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
+// statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
+let mockStatuslineState = 'not-installed';
+// test:qr-access 拨到「受 Access 保护」档：那一档的码不含 token（判据在 public-target.js）
+let mockAccessProtected = false;
+// test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
+let mockServerLogMissing = false;
+// WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
+// 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
+// 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
+let mockWorkdirsList = [
+  { path: '/Users/you/code/claude-chat-mobile' },
+  { path: '/Users/you/code/other', sessionLimit: 3 },
+];
+// 审批规则样本：三档都有内容，且 deny 里放一条明显危险的——前端把 deny 显示成 allow 时 E2E 要能咬住
+let mockPermissionRules = {
+  allow: ['Bash(git status:*)', 'Read', 'Glob'],
+  deny: ['Bash(rm -rf:*)'],
+  ask: ['WebFetch'],
+  total: 5,
+};
+// instances 广播里跨全场景共用的两个字段（canRestart / service）——真 server 在 emit 的那一刻由
+// instancesPayload() 现算，所以这里也以**函数**形式交给场景模块，而不是传值。
+// 传值会把取值冻在场景 run() 开头解构 context 的那一刻：一条活过自己 test 的异步尾巴（本 mock 里
+// 确有此形态，2026-09-11 录到过迟到广播落在下一个用例页面上）就会带着旧值广播出去——譬如
+// test:no-restart 刚把 canRestart 拨成 false，迟到的那条仍报 true，而 P0-31g 断言的正是
+// 「立即重启」入口不存在。取函数＝取真 server 的时序，不必去赌这个窗口有多窄。
+const getMockCanRestart = () => mockCanRestart;
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
 // 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
 const mockServicePayload = () => ({
@@ -159,6 +203,7 @@ const mockServicePayload = () => ({
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
   hooksBridge: { state: mockHooksState, off: false },
+  statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 let foregroundSyncReplayMode = false;
@@ -204,6 +249,11 @@ let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时�
 // sync:since handler 内联的 extra.unreadOnEntry，自包含不受测试执行顺序影响）。
 let replayUnreadSyncArmed = false;
 let pendingDevices = [];
+let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMockState 会重新填一份
+// 真 server 的 accessBypassActive：CF Access 已启用且 DEVICE_APPROVAL_SCOPE !== 'all' 时为 true，
+// 此时信任表管不到隧道进来的连接。默认 false（＝无 CF Access 的部署），由 /__access-bypass 翻转，
+// 让 E2E 能覆盖脚注文案的两档——那句文案说错过一次，正是这段代码存在的理由。
+let accessBypassActive = false;
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
@@ -234,7 +284,14 @@ function buildMockEnvView() {
         label: mockLabel('运行时', 'Runtime'),
         items: [
           { key: 'PORT', kind: 'number', label: mockLabel('监听端口', 'Port'), readonly: false, secret: false, value: '3000', min: 1, max: 65535 },
-          { key: 'WORK_DIR', kind: 'path', label: mockLabel('主工作目录', 'Primary work directory'), readonly: false, secret: false, value: '/Users/you/code' },
+          { key: 'CLAUDE_BIN', kind: 'path', label: mockLabel('claude 可执行文件', 'claude binary'), readonly: false, secret: false, value: '/Users/you/bin/claude' },
+          // list 档：value 恒为空串（真 server 的 projectToEnv 对 list 明确放弃投影），
+          // 当前值走 item.list 旁路。第二条带 sessionLimit——前端只编路径，但必须原样带回去。
+          {
+            key: 'WORKDIRS', kind: 'list', label: mockLabel('工作区列表', 'Workspaces'),
+            readonly: false, secret: false, value: '',
+            list: mockWorkdirsList,
+          },
         ],
       },
       {
@@ -295,6 +352,8 @@ function resetMockState() {
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
+  trustedDevices = createTrustedDevices();
+  accessBypassActive = false;
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
@@ -323,6 +382,19 @@ function resetMockState() {
   noSessionIdMode = false;
   noModelsMode = false;
   mockHooksState = 'not-installed';
+  mockStatuslineState = 'not-installed';
+  mockAccessProtected = false;
+  mockServerLogMissing = false;
+  mockWorkdirsList = [
+    { path: '/Users/you/code/claude-chat-mobile' },
+    { path: '/Users/you/code/other', sessionLimit: 3 },
+  ];
+  mockPermissionRules = {
+    allow: ['Bash(git status:*)', 'Read', 'Glob'],
+    deny: ['Bash(rm -rf:*)'],
+    ask: ['WebFetch'],
+    total: 5,
+  };
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
@@ -455,9 +527,40 @@ function emitPendingDevices() {
   });
 }
 
+// 已受信任设备（真 server 的 device-gate.trustedDevicesPayload 的对位）。
+// **载荷里没有全量 token，只有 shortId** —— DEVICE-03，形状必须与真 server 一致，
+// 否则前端在 E2E 里读到的字段和生产不是一回事（本仓踩过：mock 是平行实现，
+// 删掉真 server 的字段 E2E 照样全绿）。
+// isCurrent 固定钉在第三条：E2E 要能覆盖「当前这台不给吊销按钮」那一支，
+// 而 mock 侧没有真实的 deviceToken 可比。
+function createTrustedDevices() {
+  return [
+    // ① 有别名：别名压过一切自动信息
+    { shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: 'Safari 18', model: null, alias: '客厅平板', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: Date.now() - 5 * 86400000, isCurrent: false },
+    // ② approvedAt=null：本功能上线【之前】批准的条目，前端显示「无批准记录」而不是编个时间
+    { shortId: '7e6d1122…3ede', kind: '未知设备', browser: null, model: null, alias: null, ua: null, ip: null, approvedAt: null, isCurrent: false },
+    // ③ 当前这台。机型 null 是常态（Chrome 冻结了 UA 的机型位），标题只拼类型与浏览器
+    { shortId: 'cd2760a5…ec82', kind: 'Mac', browser: 'Chrome 152', model: null, alias: null, ua: 'Mozilla/5.0 (Macintosh)', ip: '127.0.0.1', approvedAt: Date.now() - 3600000, isCurrent: true },
+  ];
+}
+
+function emitTrustedDevices() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
+  });
+}
+
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
+});
+
+// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
+app.post('/__access-bypass', (req, res) => {
+  accessBypassActive = req.query?.active === '1';
+  emitTrustedDevices();
+  res.json({ ok: true, accessBypassActive });
 });
 
 // 真 server 在该 cwd 无 models 缓存时刻意不推 models（pushModelsForCwd 的 `if (!p) return`——推空会
@@ -637,6 +740,16 @@ function mainCwdSessions() {
     lastUsedAt: mockListClockBase - 1300000,
     entrypoint: 'sdk-ts'
   });
+  // 合卡的历史侧专用会话：主链一次 Agent spawn + 它的 sidechain 子流 + tool_result。
+  // 【为什么不挂进 Timeline Session】那份 fixture 顶上有一张精确到「第几条出 day/time 行」的
+  // 对照表（message-timestamps.spec.ts 逐条断言），多塞两条消息会把它整片打红。
+  sessions.push({
+    id: 'mock-session-subagent-history',
+    title: 'Subagent History Session',
+    model: 'claude-3-5-sonnet',
+    lastUsedAt: mockListClockBase - 1400000,
+    entrypoint: 'sdk-ts'
+  });
   return sessions;
 }
 
@@ -668,6 +781,13 @@ io.on('connection', socket => {
   // Auto-approve socket for standard testing (simulates local trust)
   socket.deviceApproved = true;
 
+  // 真 server 在可信端连入时重放已受信任设备列表（app.js 的 unlockSocket 之后那两条 emit）。
+  // 不重放的话「设置 › 这台电脑 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
+  socket.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
+  });
+
   // Replay initial hydration events
   const emitHydration = () => {
     // 1. init
@@ -677,7 +797,11 @@ io.on('connection', socket => {
         model: activeModel,
         cwd: mockInstances[0].cwd,
         claudeVersion: '0.1.0-mock',
-        mcpServers: [],
+        // 一正常一失败：让「这台电脑」页的 MCP 段两条渲染分支都走得到（失败态要带原始 status）
+        mcpServers: [
+          { name: 'filesystem', status: 'connected' },
+          { name: 'postgres', status: 'failed' }
+        ],
         skillsCount: 7,
         permissionMode: permissionMode,
         slashCommands: [
@@ -895,10 +1019,12 @@ io.on('connection', socket => {
 
   // 新会话：清查看 tab（viewingInstanceId=null）→ 前端进空首页。模拟服务端 session:new（不 dispose 后台实例）。
   // 配合 test:freshbusy 复现「新会话首发乐观 busy 被懒开广播冲掉」的回归场景。
-  socket.on('session:new', payload => {
-    const requestedCwd = payload && typeof payload === 'object' && typeof payload.cwd === 'string'
-      ? payload.cwd
-      : null;
+  socket.on('session:new', (payload, maybeAck) => {
+    // 真 server 这条是带 ack 的（前端靠它拿回刚建好的 worktree 路径）。mock 此前只收 payload、
+    // 从不调 ack——前端传进来的回调于是永不执行，而"没建成"和"没人回话"在 UI 上长得一模一样。
+    const ack = typeof payload === 'function' ? payload : maybeAck;
+    const obj = payload && typeof payload === 'object' ? payload : {};
+    const requestedCwd = typeof obj.cwd === 'string' ? obj.cwd : null;
     const viewingCwd = requestedCwd
       || mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
       || mockInstances[0]?.cwd
@@ -922,6 +1048,7 @@ io.on('connection', socket => {
         defaultEffort: pendingFreshEffortOrDefault()
       }
     });
+    if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
   });
 
   // 回空首页枢纽：清 viewing、保留 live 实例与 pending 档（与 session:new 分工，对齐真 server session:home）。
@@ -961,11 +1088,17 @@ io.on('connection', socket => {
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
     // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
-    const callback = typeof rawCallback === 'function'
-      ? (res) => rawCallback({ ...res, readState: readStateForRows(res?.sessions) })
-      : rawCallback;
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
+    // pinned 与 readState 一样在包装层统一注入：这个 handler 有五个以上返回分支，漏一个就会让那条
+    // 路径下的「稍后再看」组凭空消失。搜索态不补（同真 server）：往结果里塞未匹配的行是污染搜索语义。
+    const callback = typeof rawCallback === 'function'
+      ? (res) => {
+        const rows = res?.sessions || [];
+        const pinned = query ? [] : pinnedRowsFor(cwd, rows);
+        rawCallback({ ...res, pinned, readState: readStateForRows([...rows, ...pinned]) });
+      }
+      : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
@@ -1162,6 +1295,10 @@ io.on('connection', socket => {
         instanceId: 'inst_timeline',
         title: 'Timeline Session'
       },
+      'mock-session-subagent-history': {
+        instanceId: 'inst_subagent_history',
+        title: 'Subagent History Session'
+      },
       'mock-session-older-migration': {
         instanceId: 'inst_older_migration',
         title: 'Older Migration Session'
@@ -1221,6 +1358,92 @@ io.on('connection', socket => {
   // 只认 mock-session-archived → mock-session-forked 这一条固定映射，够验前端长按→confirm→切视图链路。
   // uuid 白名单只收 assistant 侧（a-archived-*）：user 气泡长按理应解析出前一条 assistant 的 uuid、不是
   // 自己的（u-archived-*）——若前端解析回归成送自己的 uuid，这里会拒绝，P0-FORKc 能抓到。
+  // 文件轴 Rewind 预览。ack 形状与真 server 逐字对齐（app/src/server/app.js 的 session:rewind:preview）——
+  // 这里是平行实现，字段漂了 E2E 也不会红，改真 server 的 ack 时必须回来同步这一处。
+  //
+  // uuid 白名单【只收 user 侧】（u-archived-*），与上面 fork handler 恰好相反（它只收 a-archived-*）。
+  // 这不是笔误：rewindFiles 要的是【被丢弃那轮 prompt 自身】的 uuid，而 fork 的锚点语义是
+  // 「保留到这条为止」故取前一条 assistant。两个功能会并排出现在同一个长按菜单里，前端若图省事
+  // 复用 resolveForkAnchorUuid，送来的就是 a-archived-*，这里拒绝，E2E 能当场抓到。
+  socket.on('session:rewind:preview', (payload, callback) => {
+    const { sessionId, cwd, promptUuid } = payload || {};
+    console.log(`[mock] session:rewind:preview sessionId=${sessionId}, cwd=${cwd}, promptUuid=${promptUuid}`);
+    if (typeof callback !== 'function') return;
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
+      callback({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (typeof promptUuid === 'string' && promptUuid.startsWith('a-archived')) {
+      // 送来了 assistant uuid = 前端复用了 fork 的锚点解析。
+      // 【与真 server 的路径差异，有意为之】真 server 上 planRewind 认得出 assistant 行也有 uuid，
+      // 会一路走到 rewindFiles，由 CLI 报「找不到检查点」——结果同样是拒绝，只是慢一个往返。
+      // mock 提前在这里拒，是为了让 E2E 能拿到一个稳定可断言的错误，不必依赖 CLI 的措辞。
+      callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+      return;
+    }
+    if (promptUuid === 'u-archived-1') {
+      // 夹具里这是会话【首条】消息，其前面没有可保留的 chain entry。
+      // 真 server 的 planRewind 在这一档返回 first-turn —— mock 必须给同一个答案，
+      // 否则两边对同一条夹具的判断相反，E2E 守的就不是真 server 的行为。
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
+      return;
+    }
+    // u-archived-2 → 正常成功路径；u-archived-3 → preview 同样成功，但 confirm 时分叉会失败
+    // （P0-REWINDd 打的是「文件回了、新会话没建成」那一支）。
+    if (promptUuid === 'u-archived-2' || promptUuid === 'u-archived-3') {
+      callback({
+        ok: true, canRewind: true,
+        filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js', '/Users/you/code/claude-chat-mobile/README.md'],
+        insertions: 12, deletions: 5,
+        keepUuid: promptUuid === 'u-archived-2' ? 'a-archived-1' : 'a-archived-2', // 目标轮之前最后一条 chain entry
+        // G5：只有 u-archived-3 那档摆出「工作区有未提交改动且会被回退覆盖」，
+        // 让 E2E 能同时测到「有警告」与「没警告」两侧——只测有警告的话，
+        // 一个恒返回警告的实现也全绿。
+        dirtyOverlap: promptUuid === 'u-archived-3' ? ['app/public/js/app.js'] : [],
+      });
+      return;
+    }
+    callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+  });
+
+  // 回退执行：回滚文件 + 分叉出「回到那一刻」的新会话（原会话保留）。ack 与真 server 对齐——
+  // 成功时真 server 走 finishOpenFocus 收尾，所以带 instanceId / sessionId。
+  // u-archived-2 → 成功；u-archived-3 → 文件回了但分叉失败（原会话未受影响那一档）。
+  socket.on('session:rewind:confirm', (payload, callback) => {
+    const { sessionId, cwd, promptUuid } = payload || {};
+    console.log(`[mock] session:rewind:confirm sessionId=${sessionId}, promptUuid=${promptUuid}`);
+    if (typeof callback !== 'function') return;
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
+      callback({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
+      callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
+      return;
+    }
+    const forked = promptUuid === 'u-archived-2';
+    const filesChanged = ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'];
+    const forkedSessionId = forked ? 'mock-session-forked' : null;
+    callback({
+      ok: true, forkedSessionId, filesChanged,
+      // u-archived-3 那档顺带摆出「一个链接被跳过 + 一个文件没恢复」，
+      // 让 E2E 能验到 logic/rewind.js 组装的两条提示真的上屏（真 server 的这两个字段
+      // 分别来自 rewindFiles 的 skippedLinks 与回滚后复核的 unrestored）。
+      skippedLinks: forked ? 0 : 1,
+      unrestored: forked ? [] : ['/Users/you/code/claude-chat-mobile/README.md'],
+      // prefill：真 server 从 transcript 取那一轮的原话回填输入框。
+      // 这里给夹具里那条 user 气泡的原文，E2E 才能断言真的填回去了。
+      prefill: 'Any follow-up questions?',
+      ...(forked ? { instanceId: 'inst_forked', sessionId: forkedSessionId } : {}),
+      warning: forked ? null : '文件已回退，但新会话创建失败（mock）。原会话未受影响，可重试。',
+    });
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId, ts: Date.now(),
+      type: 'rewind_applied',
+      payload: { cwd, droppedFromUuid: promptUuid, forkedSessionId, filesChanged, skippedLinks: 0 },
+    });
+  });
+
   socket.on('session:fork', (payload, callback) => {
     const { sessionId, cwd, uuid } = payload || {};
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
@@ -1369,6 +1592,30 @@ io.on('connection', socket => {
         timelineMessages.push({ role: 'user', content: DUP_OPTIMISTIC_CMD, uuid: 'u-dup-echo', timestamp: iso(0, 8, 35) });
       }
       callback({ messages: timelineMessages });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-subagent-history') {
+      // 合卡的 history 侧：形态与 live 的 test:subagent 场景一一对应（同样的 subagent_type 与
+      // outputSummary），让 tool-cards.spec 能把两侧的 DOM 断言写成同一组——刷新前后不一致时必红。
+      const sahTs = n => new Date(Date.now() - n * 60_000).toISOString();
+      callback({
+        messages: [
+          { role: 'user', content: 'Subagent history prompt', uuid: 'u-sah-1', timestamp: sahTs(9) },
+          {
+            kind: 'tool_use', role: 'assistant', toolUseId: 'sah-agent-1', name: 'Agent',
+            inputSummary: '{"description":"Review auth module","subagent_type":"code-reviewer"}',
+            timestamp: sahTs(8)
+          },
+          // 【这里【没有】子代理的执行内容，是照着真形态来的】2026-09-10 全库实证：主 transcript
+          // 里 isSidechain 一条都没有，子代理执行全在 <sessionId>/subagents/agent-*.jsonl。
+          // 于是历史回放拿到的卡是空壳，内容要靠展开时的 subagent:flow 拉——上面那个处理器给的就是它。
+          // 早先这里塞过一条 parentToolUseId 的 assistant，那是照着「以为的形态」写的假夹具：
+          // 它让空壳缺陷在 E2E 里【物理不可见】。
+          {
+            kind: 'tool_result', role: 'user', toolUseId: 'sah-agent-1', ok: true,
+            outputSummary: 'Subagent code-reviewer finished review.', timestamp: sahTs(6)
+          },
+          { role: 'assistant', content: 'Subagent history follow-up', uuid: 'a-sah-5', timestamp: sahTs(5) }
+        ]
+      });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
@@ -1378,7 +1625,11 @@ io.on('connection', socket => {
           { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
           { role: 'assistant', content: 'Archived plan replay from session history.', uuid: 'a-archived-1' },
           { role: 'user', content: 'Any follow-up questions?', uuid: 'u-archived-2' },
-          { role: 'assistant', content: 'No further questions needed.', uuid: 'a-archived-2' }
+          { role: 'assistant', content: 'No further questions needed.', uuid: 'a-archived-2' },
+          // 第三轮专供 Rewind 的「文件回了、分叉没建成」那一支（P0-REWINDd）：
+          // 真 server 上这一支来自 sdkForkSession 抛错，E2E 无从制造，只能在 mock 里留一个入口。
+          { role: 'user', content: 'One more thing please', uuid: 'u-archived-3' },
+          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
@@ -1508,6 +1759,12 @@ io.on('connection', socket => {
       untracked: [{ path: 'new-file.js' }],
       truncated: false,
     });
+  });
+  // 新会话的「源分支」选择器。真 server 走 git for-each-ref；这里给一组固定分支，
+  // 让 E2E 能验"点开能选、选中回填"而不依赖宿主机有没有 git 仓库。
+  socket.on('git:branches', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, branches: ['dev', 'main', 'feature/login'], current: 'dev' });
   });
   socket.on('git:diff', (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -1652,9 +1909,29 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
-  // client:presence（PWA 前台/后台上报，与真 server 对齐）：无 ack，mock 无推送判定逻辑可影响，
-  // no-op 接收即可（仅需满足入向事件契约扫描，见 tests/gates/agent-event-contract.js）。
-  socket.on('client:presence', () => {});
+  // client:presence（PWA 前台/后台上报，与真 server 对齐）。真 server 在「回来」这一拍算离开时长、
+  // 够久就用一次旁路提问生成会话摘要（见 src/server/app.js maybeRecapOnReturn）。mock 没有模型，
+  // 改为：只要观察到 hidden true→false 的跳变就发一条固定文案的 session_recap。
+  // **这里必须发**：出向契约要求 real ⊆ mock，真 server 发得出而 mock 从不产出的 type 会让
+  // E2E 永远覆盖不到它（agent-event-contract.js 的 real_type_not_mock）。
+  let mockWasHidden = false;
+  socket.on('client:presence', (p) => {
+    const hidden = !!p?.hidden;
+    if (hidden) { mockWasHidden = true; return; }
+    if (!mockWasHidden) return;
+    mockWasHidden = false;
+    const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    io.emit('agent:event', {
+      seq: 0,
+      epoch: 'server',
+      sessionId: inst?.sessionId || null,
+      instanceId: viewingInstanceId,
+      cwd: inst?.cwd,
+      ts: Date.now(),
+      type: 'session_recap',
+      payload: { text: '正在给 agent.js 补测试，上一轮已跑通，下一步是补边界用例。', awayMs: 6 * 60_000 },
+    });
+  });
 
   // 跨设备已读位点（与真 server 对齐）：read:sync 归并客户端本地表并回权威态，read:mark 收单条增量。
   // 客户端上报的 baselineTs 一律忽略——全局单一基线正是「换设备整屏复亮」的根因修复。
@@ -1688,6 +1965,59 @@ io.on('connection', socket => {
   // 服务状态面板（与真 server service:status 契约对齐，判定化：不带裸计数器）：确定性 payload 供 E2E 断言；
   // deliveryFailure 由 test:service-delivery-failure 注入，rateLimitLockout/clientError 由 test:service-incidents 注入
   // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
+  // statusline 桥的装/卸（与 hooks:setup 同构）。真 server 走 execFile 调 scripts 下的安装器，
+  // 这里只切内存态——mock 的职责是让前端两条渲染分支都走得到，不是复刻安装器。
+  // server 进程日志。真 server 读 LOG_FILE 的尾部；mock 给几行确定性样本 + 一条错误支
+  // （test:server-log-missing 拨过去），让前端两条渲染分支都走得到。
+  socket.on('logs:server', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (mockServerLogMissing) {
+      return ack({ ok: false, path: '/Users/you/Library/Logs/ccm-server.log', lines: [], error: '日志文件不存在（未配置 LOG_FILE，或进程输出没有重定向到文件）' });
+    }
+    const limit = Number(payload?.limit) > 0 ? Math.min(Number(payload.limit), 500) : 200;
+    const lines = [
+      '2026-09-10T12:00:00.000+00:00 [boot] ccm server 启动，端口 3000',
+      '2026-09-10T12:00:01.100+00:00 [conn] abc123 已连接（来自 127.0.0.1）',
+      '2026-09-10T12:00:02.200+00:00 [hooks] CLI hooks 桥未安装',
+      '2026-09-10T12:00:03.300+00:00 [push] 测试推送：成功 0 条、失败 1 条',
+    ].slice(-limit);
+    ack({ ok: true, path: '/Users/you/Library/Logs/ccm-server.log', lines, truncated: false, size: 4096 });
+  });
+
+  // 接入二维码。真 server 用 shared/qrcode.js 现编矩阵；mock 给一个确定性的小矩阵——
+  // 前端要验的是「两步展开 + 定时隐藏 + 含不含 token」，不是编码器本身（那有自己的单测）。
+  socket.on('connect:qr', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const includeToken = payload?.target !== 'public' || !mockAccessProtected;
+    const size = 21;
+    const matrix = Array.from({ length: size }, (_, r) => Array.from({ length: size }, (_, c) => (r + c) % 2));
+    ack({
+      ok: true,
+      url: includeToken ? 'http://192.168.1.9:3000/#token=mock-token-value' : 'https://ccm.example.com',
+      matrix, size, includeToken,
+      note: includeToken ? '' : '该域名受 Cloudflare Access 保护，二维码里不含令牌。',
+    });
+  });
+
+  // 审批规则只读面。真 server 走 sdkResolveSettings 读合并后的 settings；mock 给一份确定性的
+  // 三档样本，让前端的分档渲染与计数都走得到。
+  socket.on('permissions:rules', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      cwd: payload?.cwd || mockInstances[0].cwd,
+      rules: mockPermissionRules,
+    });
+  });
+
+  socket.on('statusline:setup', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const action = payload?.action;
+    if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    mockStatuslineState = action === 'install' ? 'installed' : 'not-installed';
+    ack({ ok: true, state: mockStatuslineState, report: action === 'install' ? '✅ 已接管 statusLine 命令。' : '已恢复原命令。' });
+  });
+
   socket.on('hooks:setup', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;
@@ -1730,8 +2060,25 @@ io.on('connection', socket => {
   // AUTH_TOKEN 会变成「已设置（64 字符）」，所有设备连同正在操作的手机一起被关在门外。
   socket.on('env:set', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const keys = Object.keys(payload?.changes || {});
-    ack({ ok: true, results: [], written: keys, restartRequired: true });
+    const changes = payload?.changes || {};
+    const keys = Object.keys(changes);
+    // list 档与真 server 的 checkList 同判据：非数组当场拒。
+    // mock 绝不能让「送了个字符串」看起来成功了——那正是这一档当初被标只读的失败形态
+    // （下游 Array.isArray 判否 → 静默回落旧白名单 → 用户看到「保存成功」而配置没变）。
+    if (Object.hasOwn(changes, 'WORKDIRS')) {
+      if (!Array.isArray(changes.WORKDIRS)) {
+        return ack({
+          ok: false,
+          results: [{ key: 'WORKDIRS', level: 'error', message: '工作区列表 必须是数组（每项为路径字符串或 {path, sessionLimit}）' }],
+        });
+      }
+      mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
+    }
+    // restartRequired 按 key 分档，不能恒 true：WORKDIRS 在 schema 里标着 reload:'hot'（全表唯一），
+    // 改它即时生效，提示重启会诱导用户白白中断所有会话与后台任务。mock 不能 import app/src
+    // （前后端边界），所以这里显式对齐真 server 的 reloadKindOf —— 那边缺省是 restart，同样保守。
+    const HOT_RELOAD_KEYS = new Set(['WORKDIRS']);
+    ack({ ok: true, results: [], written: keys, restartRequired: keys.some(k => !HOT_RELOAD_KEYS.has(k)) });
   });
 
   socket.on('service:status', (_payload, ack) => {
@@ -1750,6 +2097,7 @@ io.on('connection', socket => {
       restarts: mockRestarts,
       // 「终端会话推送」段夹具：默认未安装（新用户初见的形态，也是最需要被引导的那一态）
       hooksBridge: { state: mockHooksState, off: false },
+      statuslineBridge: { state: mockStatuslineState, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });
@@ -2031,6 +2379,7 @@ io.on('connection', socket => {
       },
       setMockRestarts: value => { mockRestarts = value; },
       setMockCanRestart: value => { mockCanRestart = value; },
+      getMockCanRestart,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       // test:server-restart：把 service.startedAt 拨到另一个值（模拟重连到重启后的新 server 进程）
       // + 广播时带上同形 service payload（真 server 的 instances 广播恒带 service 字段）。
@@ -2038,7 +2387,7 @@ io.on('connection', socket => {
       mockServicePayload,
     })),
     ...createContentScenarios(() => ({
-      io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
+      io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
@@ -2071,6 +2420,65 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_cmds_changed', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // 下一步建议：真 server 在 result 结算【之后】用一次旁路提问生成（src/agent/agent.js maybeSuggest），
+      // 所以这里的顺序也是先 result 再 prompt_suggestion——建议条的显示时机依赖"这一轮已经收尾"。
+      // 出向契约要求 real ⊆ mock：真 server 发得出而 mock 从不产出的 type，E2E 永远覆盖不到。
+      commands: ['test:prompt-suggestion'],
+      run: async ({ activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '给 agent.js 补几个边界用例' },
+        });
+      },
+    },
+    {
+      // 建议条的生命周期：显示之后【不经输入框】开一轮新的，再在轮内补一条迟到的建议。
+      // 中段对应真实里几条都不碰输入框的驾驶路径（审批/选项回答、另一台设备、CLI 侧），
+      // 末段对应 server 的 askSide 先返回、用户那条消息随后才到的窗口——maybeSuggest 的
+      // pendingTurns 闸在那一刻还是 0，放行的建议会落到一块已经在跑的屏幕上。
+      commands: ['test:prompt-suggestion-stale'],
+      run: async ({ activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion_stale_0', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '给 agent.js 补几个边界用例' },
+        });
+        await delay(300);
+        activeInst.state = 'busy';
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_suggestion_stale', text: '新一轮已经开跑。' },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'prompt_suggestion', payload: { text: '这条建议迟到了' },
+        });
+        await delay(300);
+        // 栅栏：这句上屏 ⇒ 上面那条迟到建议一定已被前端处理过。没有它，「仍然没显示」只是
+        // 在赛跑里跑赢了一次，换台慢机器就变成假绿。
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_suggestion_stale', text: '迟到建议已送达。' },
+        });
+        await delay(100);
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_suggestion_stale', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
         });
       },
     },
@@ -2178,7 +2586,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-remote-resolved', 'test:permission-result-error'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -2243,7 +2651,10 @@ io.on('connection', socket => {
             name: pendingPermission.name,
             input: pendingPermission.input,
             cwd: pendingPermission.cwd,
-            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd)
+            ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd),
+            // test:permission-persistable 才带——真 server 只在 CLI 给了会落盘的 suggestions 时下发这个字段，
+            // 而实测它很稀疏（7MB 日志里两条）。默认不带，正是为了让「没有永久选项」那条主路径也被测到。
+            ...(cmd === 'test:permission-persistable' ? { persistDestinations: ['localSettings'] } : {}),
           }
         });
 
@@ -2371,6 +2782,14 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
+      },
+    },
+    {
+      // 日志文件不存在档：验前端点名原因，而不是显示成一份看起来很干净的空日志
+      command: 'test:server-log-missing',
+      run: async () => {
+        console.log('[mock] test:server-log-missing — logs:server 走 ENOENT 支');
+        mockServerLogMissing = true;
       },
     },
     {
@@ -3813,7 +4232,13 @@ io.on('connection', socket => {
             dirs: ['/Users/you/code/claude-chat-mobile'],
             instances: [],
             defaultPermissionMode: 'default',
-            defaultEffort: null
+            defaultEffort: null,
+            // ★ service 不可省：真 server 的 instances 广播**恒带**这个字段
+            // （computeServiceHealth 无条件返回），而 mock server 是所有并行 spec 共用的一个进程——
+            // 这里 io.emit 会广播到**其它测试正在用的页面**上，把它们的 latestServiceHealth
+            // 冲成 undefined，于是依赖它的段落（两个桥）整段消失。
+            // 2026-09-10：P0-25c 在四分片并行下间歇 8s 超时，根因就是这一处漏网。
+            service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -3988,6 +4413,36 @@ io.on('connection', socket => {
         thumb: a?.thumb
       }))
       : undefined;
+    // 「在新 worktree 里开」：真 server 在懒开实例之前 `git worktree add`，再拿那棵树当 cwd。
+    // mock 不碰磁盘，只把收到的意图回显成一条 system——这条 E2E 要验的是**前端把参数发出去了**
+    // （勾选框亮着但请求里没这两个字段，在别处全是绿的）。真正"建对没有"由跑真 git 的
+    // tests/unit/git-worktree.test.mjs 与集成层守，不在这一层重复。
+    //
+    // 必须先把实例开出来再发：空首页上 viewingInstanceId 还是 null，而前端对 agent:event 有
+    // 实例过滤（logic 的 shouldDropAgentEvent），带 instanceId:null 的事件会被静默丢掉——
+    // 第一版就是这么写的，断言红在"文本没出现"，看着像参数没发出去。
+    if (messagePayload.useWorktree === true) {
+      if (viewingInstanceId === null) {
+        const fresh = openFreshMockInstance(requestedModel);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances',
+          payload: {
+            canRestart: mockCanRestart, viewingInstanceId, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            viewingCwd: fresh?.cwd || mockInstances[0].cwd, instances: mockInstances, service: mockServicePayload(),
+          },
+        });
+      }
+      const cur = mockInstances.find(i => i.instanceId === viewingInstanceId);
+      const src = typeof messagePayload.sourceBranch === 'string' && messagePayload.sourceBranch
+        ? messagePayload.sourceBranch : '(current)';
+      io.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-worktree', sessionId: cur?.sessionId ?? null,
+        instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'system',
+        payload: { message: `[MOCK_INFO] worktree requested from ${src}` },
+      });
+    }
     if (typeof text !== 'string') return;
     const cmd = text.trim();
 
@@ -4057,6 +4512,9 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
       type: 'user_message', payload: {
         text: cmd, attachments,
+        // Rewind 锚点：真 server 随 user_message 下发 uuid，live 气泡靠它拿 dataset.uuid。
+        // mock 不带的话，E2E 里 live 气泡长按恒无效——那个缺陷在真机上不存在，是 mock 自己的分歧。
+        uuid: `u-live-${Date.now()}`,
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
@@ -4199,6 +4657,27 @@ io.on('connection', socket => {
   });
 
   // 工具全文展开（对齐 server tool:full）：mock 对已知 toolUseId 返回全文
+  // 子代理执行流水的按需拉取（历史侧展开卡片时触发）。真 server 走 readSubagentFlow 读
+  // <sessionId>/subagents/agent-*.jsonl；这里给等价形状的 fixture。
+  // items 的形状与 session:history 的消息同构（text 条目不带 kind，工具类才带）——真 server 那边
+  // 是复用 expandHistoryEntry 得到的，mock 若漂了，前端"复用同一套渲染"的前提就假了。
+  socket.on('subagent:flow', ({ toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    if (toolUseId !== 'sah-agent-1') return ack({ ok: false, reason: 'not_found' });
+    return ack({
+      ok: true,
+      agentType: 'code-reviewer',
+      description: 'Review auth module',
+      total: 3,
+      truncated: false,
+      items: [
+        { role: 'assistant', content: 'Scanning auth handlers for CSRF gaps…', timestamp: new Date(Date.now() - 8 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+        { kind: 'tool_use', role: 'assistant', toolUseId: 'sah-read-1', name: 'Read', inputSummary: '{"file_path":"app/src/auth.js"}', timestamp: new Date(Date.now() - 7 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+        { kind: 'tool_result', role: 'user', toolUseId: 'sah-read-1', ok: true, outputSummary: 'export function login() { /* ... */ }', timestamp: new Date(Date.now() - 7 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
+      ],
+    });
+  });
+
   socket.on('tool:full', ({ toolUseId } = {}, ack) => {
     if (typeof ack !== 'function') return;
     if (toolUseId === 't_bash') {
@@ -4329,6 +4808,27 @@ io.on('connection', socket => {
     const { deviceId } = payload || {};
     pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
     emitPendingDevices();
+  });
+
+  // 吊销已信任设备。真 server 走 decideRevokeByShortId：命中自己 → 拒绝（self），
+  // 0/多命中 → 拒绝（not_found）。mock 复刻这两个出口，否则 E2E 里那两支不可达。
+  // 改名（对位真 server 的 user:renameTrustedDevice）。归一逻辑不复刻——那是 devices.js 的
+  // 单测面；这里只保证「发出去能存下、重播回来」，让 E2E 覆盖得到那条交互。
+  socket.on('user:renameTrustedDevice', payload => {
+    const hit = trustedDevices.find(d => d.shortId === payload?.shortId);
+    if (!hit) { emitTrustedDevices(); return; }
+    const alias = String(payload?.alias ?? '').trim();
+    hit.alias = alias || null;
+    emitTrustedDevices();
+  });
+
+  socket.on('user:revokeTrustedDevice', payload => {
+    const shortId = payload?.shortId;
+    const hit = trustedDevices.filter(d => d.shortId === shortId);
+    if (hit.length !== 1) { emitTrustedDevices(); return; }
+    if (hit[0].isCurrent) { emitTrustedDevices(); return; } // 自吊销守卫
+    trustedDevices = trustedDevices.filter(d => d.shortId !== shortId);
+    emitTrustedDevices();
   });
 
   // 后台任务停止（对齐 server task:stop → agent.stopTask）：mock 仅记日志，幂等

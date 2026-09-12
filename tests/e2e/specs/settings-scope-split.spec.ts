@@ -4,7 +4,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
+import { ensureComposerReady, gotoMock, expectNoBrowserErrors, sendChatMessage } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28 首页无会话时通用设置仍可达（会话设置 chip 随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
@@ -28,7 +28,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 
     // 三节内容齐全：本机 / 主机 / 访问帮助
-    await expect(page.locator('#generalSheetBody #prefLang')).toHaveCount(1);
+    await expect(page.locator('#generalSheetBody #prefLangGroup')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #prefAlertSound')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
     await expect(page.locator('#generalSheetBody #hooksBridgeSection')).toHaveCount(1);
@@ -59,7 +59,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#settingsSheetBody #settingsSessionRow')).toHaveCount(1);
 
     // 本机级 / 主机级已不在会话面板内
-    await expect(page.locator('#settingsSheetBody #prefLang')).toHaveCount(0);
+    await expect(page.locator('#settingsSheetBody #prefLangGroup')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #prefAlertSound')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #hooksBridgeSection')).toHaveCount(0);
     await expect(page.locator('#settingsSheetBody #btnServiceStatus')).toHaveCount(0);
@@ -68,7 +68,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28c 通用设置带作用域说明（会话设置已去说明条，靠面板标题本身）', async ({ page }) => {
+  // 作用域（本机 / 整机）从「把面板切成两大段」降级为「每组旁边一个 chip」：它回答的是
+  // 「我改的东西影响谁」，那是**决定改之后**才关心的问题，不该占用导航主轴。信息一个字没丢。
+  test('P0-28c 作用域以 chip 形式贴在组标题旁（会话设置仍无说明条）', async ({ page }) => {
     await gotoMock(page);
 
     // 会话设置：不再放「只影响当前会话…」说明条（省纵向、少废话）
@@ -79,8 +81,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnSessions').click();
     await page.locator('#btnGeneralSettings').click();
-    await expect(page.locator('[data-scope-note="device"]')).toBeVisible();
-    await expect(page.locator('[data-scope-note="host"]')).toBeVisible();
+
+    // 「通知」页：本机档 chip 就在「怎么提醒我」那组旁边
+    await page.locator('[data-testid="general-nav-notify"]').click();
+    await expect(page.locator('#generalPage-notify [data-scope-chip="device"]')).toBeVisible();
+
+    // 「行为与开关」页：语言是本机档，审批规则与服务配置是整机档——两档同页并存，正是 chip 化的意义。
+    // host 档在这一页有多个组（审批规则、服务与配置），故取 first 而不是要求全页唯一。
+    await page.locator('[data-testid="general-back"]').click();
+    await page.locator('[data-testid="general-nav-behavior"]').click();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="device"]').first()).toBeVisible();
+    await expect(page.locator('#generalPage-behavior [data-scope-chip="host"]').first()).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });
@@ -128,59 +139,190 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
-    // 深链：推送段应滚进视口（不卡在面板顶部「完成提示」）
+    // 深链在两级导航下是**两步**：先切到「通知」页，再滚到推送段。只滚不切页的话，目标还在
+    // hidden 的子页里，scrollIntoView 静默无效——表现为「点了没反应」，所以两步都要钉。
+    await expect(page.locator('#generalPage-notify')).toBeVisible();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeHidden();
     await expect(page.locator('#pushStatusRow')).toBeInViewport({ timeout: 3_000 });
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28g 侧栏入口文案为「偏好与通知」；顶部分段锚点可跳到主机/帮助', async ({ page }) => {
+  // 两级导航取代了平铺 + sticky 分段 chip。入口文案换到作用域轴（「设置与状态」），副标题点名
+  // 「会有人专门来找」的四件事——旧文案里「本机提醒」在面板中根本不存在，而设备信任/吊销这个
+  // 全站唯一能踢掉丢失手机的地方，四个词零指向。
+  test('P0-28g 侧栏入口文案与 L1 目录：六行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await page.locator('#btnSessions').click();
-    await expect(page.locator('#btnGeneralSettings')).toContainText('偏好与通知');
+    await expect(page.locator('#btnGeneralSettings')).toContainText('设置与状态');
+    await expect(page.locator('#btnGeneralSettings')).toContainText('设备信任');
     await page.locator('#btnGeneralSettings').click();
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('[data-testid="general-section-nav"]')).toBeVisible();
-    await page.locator('[data-scroll-to="generalSectionHelp"]').click();
-    // 注意这句验的是「滚动确实发生了」，不是「落点可读」——toBeInViewport 走 IntersectionObserver，
-    // 被 sticky 导航压在底下的元素它照样判为在视口内。想验遮挡得自己比矩形（nav.bottom vs 目标.top），
-    // 但该面板实测 maxScroll < clientHeight，目标段根本滚不到容器顶，遮挡场景构造不出来，故不加。
-    await expect(page.locator('#generalSectionHelp')).toBeInViewport({ timeout: 3_000 });
-    await expect(page.locator('#generalDiagDetails')).toBeVisible();
-    // 诊断默认折叠（无 open 属性）
-    await expect(page.locator('#generalDiagDetails')).toHaveJSProperty('open', false);
+
+    // L1：六行目录，且默认就停在目录层（不记住上次翻到哪一页）
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
+    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(6);
+    await expect(page.locator('[data-testid="general-back"]')).toBeHidden();
+
+    // 平铺时代的 sticky 分段导航已随两级化退役
+    await expect(page.locator('[data-testid="general-section-nav"]')).toHaveCount(0);
+
+    // L1 → L2：标题跟着换，返回键出现，其余五页收起
+    await page.locator('[data-testid="general-nav-devices"]').click();
+    await expect(page.locator('#generalPage-devices')).toBeVisible();
+    await expect(page.locator('#generalPage-notify')).toBeHidden();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeHidden();
+    await expect(page.locator('#generalSheetTitle')).toContainText('接入与设备');
+    const back = page.locator('[data-testid="general-back"]');
+    await expect(back).toBeVisible();
+
+    // 指纹与信任名单必须同屏——指纹的唯一用途就是在名单里认出手上这台，
+    // 此前二者分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。
+    await expect(page.locator('#generalPage-devices #deviceFingerprintShort')).toBeVisible();
+    await expect(page.locator('#generalPage-devices #trustedDevicesSection')).toHaveCount(1);
+
+    // L2 → L1
+    await back.click();
+    await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
+    await expect(page.locator('#generalPage-devices')).toBeHidden();
+    await expect(page.locator('#generalSheetTitle')).toContainText('设置与状态');
 
     await expectNoBrowserErrors(page);
   });
 
-  // sticky 分段导航必须贴住滚动容器的**最顶边**。#generalSheetBody 是 `overflow-y-auto py-3`，
-  // 而 `sticky top-0` 粘的是 content box 内边缘（= border box + padding-top），于是顶部那 12px
-  // padding 成了无人认领的缝：滚动内容从它下面穿过去，chip 行上方会浮出半行幽灵文字和勾选框。
-  // 判据取几何而非像素比对（本项目 E2E 约定），两条缺一不可——贴顶了但背景透明照样透内容。
-  test('P0-28h 分段导航贴住面板顶边且背景不透明，滚动内容不从上缘漏出', async ({ page }) => {
+  // 缺口 3：MCP 服务器与 skills 数早就随 init 事件到了浏览器（agent.js emit('init')），
+  // 但前端从来没有渲染面——grep mcpServers / skillsCount 在 app/public 下零命中。
+  // 失败态必须带上原始 status：'failed' 与 'needs-auth' 是两种完全不同的处置。
+  test('P0-28j 「这台电脑」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
+    await ensureComposerReady(page);
+
     await page.locator('#btnSessions').click();
     await page.locator('#btnGeneralSettings').click();
-    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await page.locator('[data-testid="general-nav-host"]').click();
 
-    // 滚到 nav 已进入 sticky 状态（下方内容正从它底下穿过）
-    await page.locator('#generalSheetBody').evaluate((el) => { el.scrollTop = 300; });
+    const body = page.locator('[data-testid="host-env-body"]');
+    await expect(body).toBeVisible();
+    await expect(body).toContainText('MCP');
+    await expect(body).toContainText('filesystem');
+    // 连不上的那台：名字后面必须跟着原始 status，不能压成一个笼统的「异常」
+    await expect(body).toContainText('postgres（failed）');
+    await expect(body).toContainText('Skills');
+    await expect(body).toContainText('7');
 
-    const geo = await page.evaluate(() => {
-      const body = document.getElementById('generalSheetBody');
-      const nav = body?.querySelector('[data-testid="general-section-nav"]');
-      if (!body || !nav) return null;
-      return {
-        gap: nav.getBoundingClientRect().top - body.getBoundingClientRect().top,
-        bg: getComputedStyle(nav).backgroundColor
-      };
-    });
+    await expectNoBrowserErrors(page);
+  });
 
-    // gap > 0 即代表 nav 上方存在一条滚动内容可以穿过的可见带
-    expect(geo?.gap).toBeLessThanOrEqual(0.5);
-    expect(geo?.bg).not.toMatch(/transparent|rgba\([^)]*,\s*0(\.0+)?\)/);
+  // 缺口 1a：审批白名单此前在 web 上既读不到也写不了——agent.js:269 明写放行白名单完全交给
+  // settingSources 的 permissions.allow，而用户在手机上批到烦时无从知道那份名单里有什么。
+  // ★ deny 与 allow 必须分档且可分辨：把 deny 显示成 allow 会让人以为危险操作已被放行。
+  test('P0-28k 「行为与开关」页显示审批规则三档，deny 与 allow 分开且各自计数', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-behavior"]').click();
+
+    const body = page.locator('[data-testid="permission-rules-body"]');
+    await expect(body).toBeVisible();
+
+    // 三档各自成组，计数跟着各自的条数走（mock 给的是 allow 3 / deny 1 / ask 1）
+    const allow = body.locator('[data-rule-group="allow"]');
+    const deny = body.locator('[data-rule-group="deny"]');
+    await expect(allow).toContainText('3');
+    await expect(allow).toContainText('Read');
+    await expect(deny).toContainText('1');
+    await expect(deny).toContainText('rm -rf');
+    await expect(body.locator('[data-rule-group="ask"]')).toContainText('WebFetch');
+
+    // ★ 那条危险规则必须落在 deny 组里，不能出现在 allow 组里
+    await expect(allow).not.toContainText('rm -rf');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 缺口 4：接入二维码。此前只有终端有（node scripts/qr.js），而「人不在电脑前」正是本产品的前提。
+  // ★ 二维码没有「安全的默认档」——码里含 token，等同一把钥匙。故必须两步展开，且离开页面就收起：
+  //   钥匙不该挂在一个用户以为已经翻过去的界面上。
+  test('P0-28l 接入二维码：两步展开、有倒计时、离开页面即收起', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-devices"]').click();
+
+    // 第一步：只有入口按钮，码本身不在 DOM 里
+    await expect(page.locator('[data-testid="qr-reveal"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-panel"]')).toBeHidden();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    // 第二步：点入口只到确认，**还不显示码**——这一条正是「两步」的意义
+    await page.locator('[data-testid="qr-reveal"]').click();
+    await expect(page.locator('[data-testid="qr-confirm"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    // 第三步：确认后才画出来，且带自动隐藏倒计时
+    await page.locator('[data-testid="qr-confirm-show"]').click();
+    await expect(page.locator('[data-testid="qr-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="qr-countdown"]')).toContainText('自动隐藏');
+
+    // ★ 离开这一页，码必须从 DOM 里真的消失（不是只加 hidden）
+    await page.locator('[data-testid="general-back"]').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+    await expect(page.locator('[data-testid="qr-canvas"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 缺口 5：server 进程日志。与顶栏「运行日志」是两条不同的日志——那条合并的是前端 clientLogger
+  // + 会话交互日志（都在内存里），server 进程的输出一个字都不进去（2026-09-02 实证）。
+  // ★ 读不到时必须说清楚，**不给空列表**：空列表看起来像「服务很干净」，
+  //   而实际是「我们压根没在看那个文件」。
+  test('P0-28m 「排查」页能读 server 进程日志，读不到时说清楚而不是给空列表', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+
+    // 默认收起：日志是按需读的，不在进页时就发请求
+    const body = page.locator('[data-testid="server-log-body"]');
+    await expect(body).toBeHidden();
+
+    await page.locator('[data-testid="server-log-open"]').click();
+    await expect(body).toBeVisible();
+    await expect(body).toContainText('ccm-server.log');
+    await expect(body).toContainText('[boot]');
+    // 未脱敏的提示必须在——这条日志含真实路径与错误原文
+    await expect(body).toContainText('未脱敏');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 读不到那一支：文件不存在时的措辞。
+  test('P0-28n 日志文件不存在时点名原因，不显示成一份干净的空日志', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:server-log-missing');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+    await page.locator('[data-testid="server-log-open"]').click();
+
+    const body = page.locator('[data-testid="server-log-body"]');
+    await expect(body).toContainText('日志文件不存在');
+    // 路径仍要显示——「不存在」这句话没有指向的话，用户不知道该去配哪个文件
+    await expect(body).toContainText('ccm-server.log');
 
     await expectNoBrowserErrors(page);
   });

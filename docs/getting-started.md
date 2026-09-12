@@ -93,7 +93,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，第一个作为默认打开的 `WORK_DIR`。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
+2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
 3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 反向代理与托管隧道 / 公网直连）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
 4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
 5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
@@ -110,7 +110,7 @@ npm run setup
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "……",
-  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": ["/Users/you/code/project-a"],
   "PORT": 3000,
   "WEB_STATUSLINE": false
 }
@@ -140,8 +140,10 @@ npm run config:migrate      # = node scripts/config.js migrate
 **保留原有的 `AUTH_TOKEN`**。原 `.env` 不会被删除，但从此不再被读取（新文件优先）。
 
 > ⚠️ **不要用 `npm run setup --force` 来「升级」。** `--force` 是覆盖重装，会生成一个新的
-> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。已有配置时
-> setup 会拒绝并指向 `migrate`，请照它说的做。
+> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。
+> **注意这道拒绝只在非交互模式（`--yes`）下存在**：`resolveSetupPlan` 的 `env_exists` 检查排在
+> `if (!args.yes)` 早退之后，交互式 `npm run setup` 根本走不到它（`--force` 在交互模式下同样不起作用）。
+> 升级请直接用 `node scripts/config.js migrate`。
 
 桌面控制台在旧格式下会在配置窗口顶部显示一条横幅和「迁移配置」按钮，不必回到终端。
 
@@ -183,11 +185,12 @@ node scripts/setup.js \
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 
-多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`：
+多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`。
+**第一项就是手机端默认打开的那个**（2026-09-08 前另有一个独立的 `WORK_DIR` 键写同一个路径，已合并；
+旧配置里那一行仍被识别、折进列表首位并提示可以删掉）：
 
 ```json
 {
-  "WORK_DIR": "/Users/you/code/project-a",
   "WORKDIRS": [
     "/Users/you/code/project-a",
     {
@@ -200,7 +203,10 @@ node scripts/setup.js \
 
 `WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
 `node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
-git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
+仓库外的 git worktree（`../repo-<分支>` 这类）必须作为独立绝对路径显式加入。**唯一例外是「托管 worktree」**：
+落在 `<已放行工作区>/.claude/worktrees/<单段目录名>` 下的那些（`EnterWorktree`、`--worktree`、agent isolation
+的默认落点）由 `resolveManagedWorktree` 派生放行，无需写进 `WORKDIRS`，其会话也会并进父仓的会话列表；
+深度固定 1、realpath 后比前缀、目录不存在即拒。跳出这个形态的仍然一律要显式加入。
 
 旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
 优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。
@@ -260,6 +266,18 @@ http://<lan-ip>:3000/#token=<AUTH_TOKEN>
 ```
 
 首次加载后 token 会存入浏览器 `localStorage`，并从地址栏清除。
+
+手输 64 位 token 很痛苦，可以打成二维码用手机扫：
+
+```bash
+node scripts/qr.js                    # 自动取本机可达地址
+node scripts/qr.js --url <地址>       # 指定隧道或 Tailscale 域名
+```
+
+需要约 90 列 × 45 行的终端窗口。窗口太窄时它直接拒绝输出，不会打印一个必然扫不出来的码。
+
+> 二维码里含完整 `AUTH_TOKEN`。投屏、录屏或旁边有人时不要打印——一串明文 token 人会本能地遮挡，
+> 一个「看起来无害」的二维码不会，而旁人拍一张就是完整凭据。
 
 ### 临时 HTTPS
 
@@ -321,11 +339,13 @@ node scripts/device.js deny <ID>
 
 ## 8. 完成首次验收
 
+两道门分开：**CCM 的访问令牌 / 设备审批**只决定手机能不能进主壳；**Claude CLI 是否已登录**决定能不能真正对话。服务起来 ≠ 能聊天。
+
 在手机上依次确认：
 
 1. 首页显示预期工作区。
-2. 新建会话并发送一个无副作用的问题，例如“只回复 OK”。
-3. 能看到流式回答和回合结束状态。
+2. **硬门（CLI 未登录也可验）**：新建会话并发送一条消息。若主路径出现「Not logged in · Please run /login」（或 CLI 透传的等价文案），**算本步通过**——说明模型通路正确报出未登录，而不是假流式成功。到主机终端打开 `claude`，执行 `/login`（或先跑通 `claude auth status`）后再重试。
+3. **绿路径（已登录）**：发送一个无副作用的问题，例如“只回复 OK”，能看到流式回答和回合结束状态。
 4. 打开设置，确认模型、权限档、思考强度和服务状态可见。
 5. 如已启用 Web Push，使用“发一条测试推送”验证通道，不要等真实审批出现才发现配置有误。
 
@@ -349,7 +369,7 @@ Web Push 链路上有三处要连 Google，**分别发生在不同设备上**，
 2. **手机持续接收**——订阅完成后走 FCM 长连接。实测确认：订阅成功后关掉手机代理，推送仍能持续收到，**不需要一直挂着代理**。若你的网络下出现推送中断，改用下面的 ntfy。
 3. **宿主机每次推送**——server 每次都要主动把通知 POST 给推送服务。**这台电脑需要能访问 Google，而且是长期的**。
 
-第 3 点最容易被忽略：它发生在电脑上，手机端看不出任何异常——订阅是成功的、铃铛已经收起，但一条推送也收不到。唯一的可见面是设置 →「服务状态」里的这行：
+第 3 点最容易被忽略：它发生在电脑上，手机端看不出任何异常——订阅是成功的、铃铛已经收起，但一条推送也收不到。可见面有两处，文案同源（`logic/service-diag.js` 的 `formatServiceNotices`）：会话抽屉顶部的「服务」小节，以及设置 →「服务状态」里的「异常告警」段：
 
 ```text
 🔔 推送最近失败于 3 分钟前（push，累计 6 次）：连不上推送服务（ENOTFOUND）
@@ -390,7 +410,8 @@ npm run hooks:uninstall
 - server 不在线时 hook 只落盘并静默退出，不阻断 CLI。
 - 配置里设 `CLI_HOOKS_BRIDGE: false` 可让 server 暂停消费，不必卸载全局配置。
 
-手机端也可在“设置 → 服务状态 → 终端会话推送”中显式安装或卸载。
+手机端也可在“设置 → 🖥 这台电脑 → 终端会话推送”中显式安装或卸载（与该页里的「📊 服务状态」按钮平级——
+桥的装卸控件**不在**服务状态面板内部）。
 
 ## 可选：macOS 桌面控制台
 
@@ -433,6 +454,25 @@ xcode-select --install
 勾「开机自启（菜单栏）」只让菜单栏图标随登录出现，实现上是一个 LaunchAgent。
 headless 继续用终端里的 `npm start`，两套不要同时占 3000。
 
+### 桌面端不对劲时的退路
+
+桌面端是 GUI 进程，有一类命令行结构上碰不到的失效方式——窗口沉到别的窗口后面点不到、菜单栏
+图标被刘海挤掉、GUI 进程继承到的 `PATH` 和你终端里的不是同一份。这类问题的共同点是
+**server 照常在跑，只是那一屏够不着它**。
+
+所以菜单里「点了没反应」时，先用终端确认服务本身的状态。这两条不经过 app：
+
+```bash
+npm run service:status     # 各 unit 的真实运行态（菜单栏自己也是读它）
+node scripts/doctor.js     # 启动自检
+```
+
+服务本身没问题的话，问题就在 app 层：菜单里的**重启应用**（只重启、不编译）多半能解；图标
+彻底找不到时见[下面这节](#菜单栏图标被刘海挡住了怎么办)。
+
+**桌面端没有任何独占能力**——它调的是 `scripts/` 下那几条同样的 CLI（`service.js` /
+`doctor.js` / `config.js`），所以任何时候都可以绕过它直接敲命令，不必等 app 恢复。
+
 ### 为什么不直接发一个编译好的 app
 
 自己编译出来的产物**没有 quarantine 属性**，双击就能开。而从网页下载的 app 会被系统打上
@@ -469,9 +509,9 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
 2. 运行 npm ci --omit=dev。
-3. 先跟我确认 WORK_DIR 的绝对路径，以及是否安装 CLI hooks bridge。
-   不要把整个家目录当 WORK_DIR；hooks=on 会修改 ~/.claude/settings.json。
-4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR PORT CCM_DATA_DIR
+3. 先跟我确认工作区的绝对路径，以及是否安装 CLI hooks bridge。
+   不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
+4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT CCM_DATA_DIR
    WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
@@ -485,6 +525,150 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 ```
 
 </details>
+
+## 命令速查
+
+装机之后日常会用到的都在这里。**每条 CLI 不带子命令就会打印自己的用法**，参数一律以那份输出
+为准——这份速查只列命令名和用途，不重复参数（重复一份就会和代码分叉）：
+
+```bash
+node scripts/config.js       # 不带子命令即列出用法，下面几条同理
+node scripts/device.js
+node scripts/service.js
+node scripts/qr.js --help
+npm run setup -- --help
+```
+
+> `npm run` 列出的**不是**命令全集：`service.js` 的 `start` / `stop` / `copy-token` 三个子命令
+> 没有对应的 npm 别名，只能敲 `node scripts/service.js <子命令>`。
+
+### 启动与配置
+
+| 命令 | 用途 |
+|---|---|
+| `npm start` | 启动 server（默认 3000） |
+| `npm run dev` | 同上，改代码自动重启 |
+| `npm run setup` | 交互装机向导 |
+| `node scripts/config.js schema` | **列出全部配置项及其含义**，从 schema 生成，永不与代码分叉 |
+| `node scripts/config.js get\|set\|unset` | 读写单项；secret 要明文须显式 `--reveal` |
+| `npm run config:check` | 校验现有配置 |
+| `npm run config:migrate` | 旧版 `.env` → `ccm.config.json` |
+| `node scripts/doctor.js` | 启动自检。`--fix` 把配置文件权限收紧到 0600，`--env=<文件>` 诊断指定的那一份 |
+
+### 设备与连接
+
+| 命令 | 用途 |
+|---|---|
+| `node scripts/device.js list` | 列出待审批与已受信任的设备（`--json` 机读） |
+| `node scripts/device.js approve\|deny <ID>` | 批准 / 拒绝某台设备 |
+| `node scripts/qr.js` | 把连接地址 + token 打成终端二维码，免手输 64 位令牌 |
+| `node scripts/service.js copy-token` | 把 token 复制到剪贴板，**不打印到终端** |
+
+> 后两条都会让令牌离开配置文件，按需敲、别写进脚本或日志。`qr.js --public` 解析公网地址；
+> 受 Cloudflare Access 保护的域名**不会带 token**（那条路只认 JWT）。
+
+### 两个 CLI 桥（可选，会写 `~/.claude`）
+
+| 命令 | 用途 |
+|---|---|
+| `npm run statusline:install\|status\|uninstall` | 终端会话状态桥 |
+| `npm run hooks:install\|status\|verify\|uninstall` | 终端会话通知桥 |
+
+两者用途不同，见上面[两节](#可选cli-statusline-bridge)各自的说明。
+
+### macOS 桌面端与受管服务
+
+| 命令 | 用途 |
+|---|---|
+| `npm run app:install` / `npm run app:build` | 编译并装进 `/Applications` / 只编译到 `desktop/build/` |
+| `npm run service:status` | 各 unit 的运行态与归属（`--json` 供菜单栏消费） |
+| `npm run service:health` | 唯一会打 `/health` 的命令 |
+| `npm run service:install\|restart\|logs\|uninstall` | 受管服务操作 |
+| `npm run service:adopt` | 接管手工安装的 unit，只写 manifest、不动 plist |
+| `node scripts/service.js start\|stop <unit>` | 单个 unit 启停（无 npm 别名） |
+
+日常这些都不用手敲——桌面端菜单里都有。它们是菜单背后的同一条 CLI，app 出问题时可以直接用。
+
+### 更新与卸载
+
+见下面的[更新](#更新)与[卸载](#卸载)两节。
+
+> **以下命令只在完整仓库里可用**：`npm test`、`npm run check`、`npm run lint`，以及全部
+> `test:*` / `playground:*` / `mutate*`。它们引用测试树与门禁，源码归档里被裁掉了（原因见
+> [方式 A](#方式-a源码归档只想把它跑起来)，要跑就用[方式 B](#方式-b完整仓库要改代码或跑测试)）。
+
+## 更新
+
+**代码怎么取的，就怎么更新**——第 2 步选的哪种方式，这里就走哪一条。
+
+### 方式 A：原地覆盖（归档装的）
+
+回到当初解压的**父目录**（也就是 `claude-chat-mobile-master/` 的上一级），重跑同一条命令：
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
+```
+
+**这样覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/` 都写在 `.gitignore` 里，而归档就是
+GitHub 现场 `git archive` 的产物——它只打包 git 追踪的文件，所以这两样根本不在归档中，`tar` 也就无从
+覆盖。未读位点、设备审批记录、审计日志、上传附件都留在原处。
+
+要钉住某个版本而不是跟着 `master` 走，把 URL 换成 `/archive/refs/tags/vX.Y.Z.tar.gz`，它解压出的目录名是
+`claude-chat-mobile-X.Y.Z`——那是另一个目录，属于下面的「换目录」情形。
+
+### 方式 B：`git pull`（克隆装的）
+
+```bash
+git pull
+npm ci --omit=dev
+```
+
+`master` 只在发版时前进，所以拉到的就是最新发布。
+
+### 两者之后
+
+重启 server：桌面端点菜单里 server 那行的「重启」，headless 就重启那个 `npm start` 进程。改完建议顺手复检一次：
+
+```bash
+node scripts/doctor.js
+```
+
+**macOS 桌面端还有一步**：菜单里点「更新桌面端（重新编译）」。CCM.app 是 Swift 编译产物，不会随源码
+一起更新——不点这一下，菜单栏跑的仍是旧 bundle。
+
+### 两个需要留意的地方
+
+**一、`tar` 是合并，不是替换。** 上游删掉的文件会残留在你的目录里。对运行没有影响（没有人 import 的
+`.js` 就只是死代码），但如果想要一棵干净的树，就解压到新目录，再把 `ccm.config.json` 和 `data/` 搬过去。
+
+**二、换了目录，两个 CLI 桥要重装。** statusline 与 hooks 桥把**安装时的绝对路径**写进了
+`~/.claude/settings.json`，指向旧目录里的 runner。原地覆盖不受影响（路径没变，新代码自动生效）；换目录
+之后旧路径要么指着老代码、要么直接不存在，而失效是**静默**的——状态栏不再刷新、手机端收不到 hooks
+触发的推送，不会有任何报错指向这里。重装：
+
+```bash
+npm run statusline:install
+npm run hooks:install
+```
+
+### 怎么知道有没有新版本
+
+产品不主动检查上游版本。自己看：
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。本地版本：
+
+```bash
+node -p "require('./package.json').version"
+```
+
+server 起来之后，`/health` 的 `versions.server` 报的是同一个值，`versions.cli` 与 `versions.sdk` 则是本机
+`claude` 与 Agent SDK 的版本——升级后拿它做一次回归核对最省事。
 
 ## 卸载
 
@@ -507,10 +691,11 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | server 起不来，日志说没有 `AUTH_TOKEN` | 令牌是启动前提，不再降级绑本机。跑 `npm run setup` 生成一个后重启 |
 | 启动日志只列了本机地址，没有手机地址 | `BIND_MODE=loopback` 只绑 `127.0.0.1`，那些局域网地址上没人在听。要手机直连改回默认或 `lan` |
 | agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
-| doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
+| doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
-| 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |
+| 手机已进主壳，发消息却出现「Not logged in · Please run /login」 | 这是 **Claude CLI 未登录**，不是 CCM 令牌/设备门坏了。到主机终端跑 `claude auth status`；未登录则在 `claude` 里 `/login`，完成后再从手机重试。前置条件见上文 §1 |
+| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 401） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**这一档回的是 401 `unauthorized`、不带 `Retry-After`**（措辞刻意不说「尝试过多」——你只错了一次）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` / HTTP 429 |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |

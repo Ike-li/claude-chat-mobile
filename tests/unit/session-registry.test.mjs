@@ -378,6 +378,34 @@ test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧
   assert.deepEqual(sessions, before, '输入行不得被原地写入，避免污染 listSessionsPage 缓存');
 });
 
+// 托管 worktree 的会话并进父仓列表后（2026-09-11），列表里同时存在两种行：父仓的（不带 cwd）
+// 与 worktree 的（带自己的 cwd）。注册表按 cwd 归键，一律拿父仓 cwd 去查，worktree 那几行
+// 永远查不到状态——徽标消失，而「没有终端在驾驶」和「查错了目录」在 UI 上一模一样。
+test('applyTerminalStatesToSessions：行自带 cwd 时按行的 cwd 查（worktree 行不会被拿父仓 cwd 查空）', () => {
+  const wt = `${CWD}/.claude/worktrees/feature-x`;
+  const states = new Map([
+    [terminalStateKey(CWD, 'main-1'), { state: 'busy', source: 'cli' }],
+    [terminalStateKey(wt, 'wt-1'), { state: 'waiting', source: 'cli' }],
+  ]);
+  const rows = applyTerminalStatesToSessions(CWD, [
+    { id: 'main-1', title: '父仓' },
+    { id: 'wt-1', title: 'worktree', cwd: wt, worktree: 'feature-x' },
+  ], states);
+
+  assert.equal(rows[0].terminal, 'busy', '父仓行照旧走传入的 cwd');
+  assert.equal(rows[1].terminal, 'waiting', '拿父仓 cwd 查 worktree 行只会查空，徽标静默消失');
+  assert.equal(rows[1].cwd, wt, 'cwd 字段本身要原样留在行上，前端点开时要用');
+});
+
+// 反向：worktree 行的 cwd 不该让它命中**父仓**的同名状态。两个工作树下同一个 sessionId
+// 理论上不会撞，但判据一旦退化成「行有 cwd 就两边都试」，这条就是负片。
+test('applyTerminalStatesToSessions：行的 cwd 不命中时不回退到父仓 cwd', () => {
+  const wt = `${CWD}/.claude/worktrees/feature-x`;
+  const states = new Map([[terminalStateKey(CWD, 'same-id'), { state: 'busy', source: 'cli' }]]);
+  const rows = applyTerminalStatesToSessions(CWD, [{ id: 'same-id', cwd: wt }], states);
+  assert.equal(rows[0].terminal, undefined, '回退会把父仓终端的忙碌状态错报到 worktree 行上');
+});
+
 test('applyTerminalStatesToSessions：空状态/空输入安全，旧 terminal 仍会被清除', () => {
   assert.deepEqual(
     applyTerminalStatesToSessions(CWD, [{ id: SID, terminal: 'busy', terminalSource: 'cli' }], new Map()),
@@ -631,4 +659,58 @@ test('applyTerminalStatesToSessions：bgLocked 注入到行上，且不随缓存
   const after = applyTerminalStatesToSessions(CWD, rows, new Map());
   assert.equal(after[0].bgLocked, undefined, '占用者已退出，预警必须跟着消失（残留＝永远打不开的假象）');
   assert.equal(rows[0].bgLocked, true, '禁止原地写入调用方传进来的行对象');
+});
+
+// onUnreadable —— 给「把这张表当否定证据用」的破坏性路径（rewind confirm）的完整性回执。
+//
+// 本文件头注释写着「全程 fail-open」，那对状态显示是对的：读不动就少标一个「运行中」，无害。
+// 但 rewind 用的是反方向的推理——「表里没有终端驾驶员 ⇒ 可以安全覆盖工作区文件」。表只要读不全，
+// 那个结论就不成立，而 rewind 没有下游兜底（会话列表还有「点开后仍被拒」那道，文件盖下去没有）。
+// 所以读取完整性必须能被问出来，且【不改变】本函数对其他调用方的 fail-open 语义。
+test.describe('listTerminalSessionStates：onUnreadable（破坏性路径的完整性回执）', () => {
+  test('条目读不出来 → 回调触发，且仍 fail-open 返回读到的部分', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-reg-unreadable-'));
+    try {
+      writeFileSync(join(dir, 'good.json'), JSON.stringify({
+        pid: process.pid, sessionId: 's-ok', cwd: '/w', entrypoint: 'cli',
+      }));
+      writeFileSync(join(dir, 'broken.json'), '{ not json');   // 条目级 catch
+
+      const seen = [];
+      const map = await listTerminalSessionStates({
+        dir, isAlive: () => true, onUnreadable: err => seen.push(err),
+      });
+
+      assert.equal(seen.length, 1, '坏条目没有报告出来 —— rewind 会把一张残表当成「没人在驾驶」');
+      // fail-open 不变：能读的那条照常进结果，别的消费者行为一字不改
+      assert.equal(map.size, 1, '报告完整性不该牵连既有的 fail-open 语义');
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp
+    }
+  });
+
+  test('目录压根不存在 → 不算读取故障（否则没装 CLI 的用户永远 rewind 不了）', async () => {
+    const seen = [];
+    const map = await listTerminalSessionStates({
+      dir: join(tmpdir(), 'ccm-reg-definitely-absent-xyz'),
+      isAlive: () => true,
+      onUnreadable: err => seen.push(err),
+    });
+    assert.deepEqual(seen, [], 'ENOENT 被当成故障 → 从没跑过终端会话的用户会被无条件拒绝回退');
+    assert.equal(map.size, 0);
+  });
+
+  test('一切正常 → 不触发回调（否则 rewind 会恒拒）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-reg-clean-'));
+    try {
+      writeFileSync(join(dir, 'a.json'), JSON.stringify({
+        pid: process.pid, sessionId: 's-a', cwd: '/w', entrypoint: 'cli',
+      }));
+      const seen = [];
+      await listTerminalSessionStates({ dir, isAlive: () => true, onUnreadable: err => seen.push(err) });
+      assert.deepEqual(seen, [], '干净目录也报故障 → 回退功能直接不可用');
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp
+    }
+  });
 });

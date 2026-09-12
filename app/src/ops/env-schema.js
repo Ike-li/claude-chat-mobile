@@ -118,6 +118,20 @@ export const ENV_SCHEMA = {
     help: t('只在反代**自己追加** X-Forwarded-For 时才能开（nginx 的 $proxy_add_x_forwarded_for；Caddy / Traefik 默认如此），且反代必须 proxy_pass 到 127.0.0.1。ssh -R、frp tcp、没配转发头的 nginx 会把客户端伪造的头原样送进来，开了等于关闭登录限速。改这项要重启。',
       'Enable only when the reverse proxy itself appends X-Forwarded-For (nginx $proxy_add_x_forwarded_for; Caddy / Traefik do by default) and proxies to 127.0.0.1. ssh -R, frp tcp, or nginx without a forwarding header pass a client-forged header straight through — enabling it there disables login rate limiting. Requires a restart.'),
   },
+  // 设备审批的管辖面。默认下 CF Access 已验的连接**完全跳过**设备审批，于是「已受信任的
+  // 设备」那张表只管局域网/本机直连——吊销一台经隧道进来的手机不会掉线，也不会被拦。
+  // 想让那张表对所有路径生效就选 all。刻意不随 CF_ACCESS_* 配齐自动开：那会让既有安装
+  // 升级后一重启就把所有在用设备打回待审，而此时信任表里没有任何一台能用来批准。
+  DEVICE_APPROVAL_SCOPE: {
+    group: 'auth', kind: 'enum',
+    options: [
+      { value: '', label: t('默认：Cloudflare Access 已验的连接跳过设备审批（Access 的 2FA 已是更强边界）', 'Default: connections verified by Cloudflare Access skip device approval (Access 2FA is the stronger boundary)') },
+      { value: 'all', label: t('所有路径都要过设备审批，含 Cloudflare Access', 'Require device approval on every path, including Cloudflare Access') },
+    ],
+    label: t('设备审批管辖面', 'Device approval scope'),
+    help: t('选 all 之后，经 Cloudflare Access 进来的新设备也要批准一次，「已受信任的设备」里的吊销才对它们生效。**本机直连不受影响**（peer 与 Host 都是 localhost），那是信任表被清空后把设备批回来的自救通道。开启后第一台设备会落进待审：在电脑上用菜单栏、终端回车或 node scripts/device.js approve 批准。改这项要重启。',
+      'With all, a new device coming through Cloudflare Access must be approved once, and revoking it from the trusted list actually takes effect. Direct localhost access is unaffected — that is the recovery path when the trusted list is empty. After enabling, the first device lands in the pending list: approve it from the menu bar, the terminal, or node scripts/device.js approve. Requires a restart.'),
+  },
   CF_ACCESS_HOSTNAME: {
     group: 'auth', kind: 'text',
     label: t('Cloudflare Access 域名', 'Cloudflare Access hostname'),
@@ -140,15 +154,15 @@ export const ENV_SCHEMA = {
     group: 'runtime', kind: 'number', min: 1, max: 65535, default: String(DEFAULT_PORT),
     label: t('监听端口', 'Port'),
   },
-  WORK_DIR: {
-    group: 'runtime', kind: 'path', mustExist: true, writable: true,
-    label: t('主工作目录', 'Primary work directory'),
-    help: t('claude 的默认工作目录。', 'Default working directory for claude.'),
-  },
   // ── 工作区列表：统一配置文件里的内联形态（P1b）────────────────────────
   //
   // 优先级：shell WORK_DIRS > shell WORK_DIRS_FILE > 本项。两个 env 都没设时才用这里（生产路径）。
   // 判定在 pickWorkdirSource。那两个 env 键保留是为了不打断现有部署（migrate 会把它们内联进这里）。
+  //
+  // **首项即主工作目录**（手机端默认打开的那个）。2026-09-08 前另有一个独立的 WORK_DIR 项，
+  // 而装机向导写出去的必然是 `{WORK_DIR: dirs[0], WORKDIRS: dirs}` —— 同一个路径在配置文件里
+  // 出现两遍，用户打开只会问「这俩什么关系」。已合并；旧键由 workdirs.js 的 foldPrimaryWorkdir
+  // 折进首位并告警，不静默改行为。
   //
   // `reload: 'hot'` 是全表唯一一个：改完即生效、无需重启。其余项缺省 'restart'。
   // 这个标记不是文档，是**行为**：ccm.config.json 变更时，server 只热应用标了 hot 的 key，
@@ -156,10 +170,11 @@ export const ENV_SCHEMA = {
   WORKDIRS: {
     group: 'runtime', kind: 'list', reload: 'hot',
     label: t('工作区列表', 'Workspaces'),
-    help: t('每项是绝对路径，或 {path, sessionLimit}。改完即生效，无需重启。当前列表见工作区抽屉；'
-      + '编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
-      'Each entry is an absolute path, or {path, sessionLimit}. Hot-reloads without a restart. '
-      + 'See the workspace drawer for the current list; edit via CLI or desktop (read-only here).'),
+    help: t('每项是绝对路径，或 {path, sessionLimit}。**第一项就是手机端默认打开的目录**。'
+      + '改完即生效，无需重启。当前列表见工作区抽屉；编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
+      'Each entry is an absolute path, or {path, sessionLimit}. **The first entry is the one your '
+      + 'phone opens by default.** Hot-reloads without a restart. See the workspace drawer for the '
+      + 'current list; edit via CLI or desktop (read-only here).'),
   },
   WORK_DIRS_FILE: {
     group: 'runtime', kind: 'path', mustExist: true,
@@ -269,6 +284,23 @@ export const ENV_SCHEMA = {
     label: t('子 agent 进度摘要', 'Subagent progress summaries'),
     help: t('后台任务静默期由模型每 ~30s 写一句进度，会产生少量计费。关掉后只靠工具名变化推断进度。',
       'Model writes a ~30s progress line for idle subagents (small billed cost). Off falls back to tool-name changes.'),
+  },
+
+  // 另两个**直接产生模型计费**的开关（同上：默认开，但「要花钱」必须在面板上看得见）。
+  // 二者都走 query.askSideQuestion() 旁路提问，不写 transcript；单次规模是一次 fork + 一两句输出。
+  // **频率差一个数量级**，所以拆成两个开关而不是一个：建议是每轮一次，摘要是每次「回来」最多一次。
+  // 关掉哪个由频率决定，不由功能决定——help 里必须写清频率，否则用户无从判断。
+  CCM_PROMPT_SUGGESTION: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('下一步建议', 'Next-step suggestions'),
+    help: t('每轮结束后由模型预测你可能想发的下一句，点一下填进输入框。每轮一次，是这两项里花费较多的。',
+      'After each turn the model predicts your likely next message; tap to drop it into the composer. Once per turn — the pricier of the two.'),
+  },
+  CCM_SESSION_RECAP: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('回来时的会话摘要', 'Session recap on return'),
+    help: t('离开一段时间后回到会话，由模型写一句「进行到哪了」。每次回来最多一次，频率远低于上一项。',
+      'When you return after being away, the model writes one line on where things stand. At most once per return.'),
   },
 
   // ── 日志 ────────────────────────────────────────────────────────────
@@ -425,7 +457,6 @@ function checkOne(key, value, def, d) {
   if (def.kind === 'path') {
     if (!value.startsWith('/')) return `${def.label.zh} 必须是绝对路径（启动后 cwd 未必是仓库根）`;
     if (def.mustExist && !d.fileExists(value)) return `路径不存在：${value}`;
-    if (def.writable && !d.isWritable(value)) return `路径不可写：${value}`;
     if (def.executable && !d.isExecutable(value)) return `文件不可执行：${value}`;
     return null;
   }
@@ -659,7 +690,7 @@ export function validateEnvChanges(changes, d) {
 //
 // **只标键，绝不回显 env 的值**：被压住的可能正是 AUTH_TOKEN / VAPID 私钥，
 // 与 doctor D18 同一条纪律（src/ops/doctor-checks.js:560 上方注释）。
-export function buildEnvView(values = {}, { shellEnv = null } = {}) {
+export function buildEnvView(values = {}, { shellEnv = null, structured = null } = {}) {
   // 没给快照 = 这一维**没查过**，此时整个字段缺席，而不是下发 false。
   // false 的意思是「查过了，没被覆盖」——把「没查」说成「没问题」正是 BE-013 那个假绿的形状。
   // 具体受益方是 scripts/config.js 的 cmdSchema()：它拿 buildEnvView({}) 当**配置项文档**下发给
@@ -678,10 +709,11 @@ export function buildEnvView(values = {}, { shellEnv = null } = {}) {
           kind: def.kind,
           label: def.label,
           help: def.help,
-          // list 也标只读：前端 env-config.js 只分派 number / toggle，其余渲染成 text input，
-          // 而往数组项里塞一个字符串会让 app.js 的 Array.isArray 判否 → 静默回落旧路径。
-          // 结构化编辑器留给 CLI 与 desktop（P1c）。
-          readonly: def.kind === 'readonly' || def.kind === 'list',
+          // 2026-09-11：list 不再一律只读——手机端有了结构化编辑器（当前值走下方 item.list）。
+          // 当初标只读的理由（往数组项里塞字符串 → 下游 Array.isArray 判否 → 静默回落旧白名单）
+          // 由两道守住：写入侧 checkList 当场拒绝非数组（SCOPE-01 写入侧用例），
+          // 前端编辑器的 read() 恒返回数组。
+          readonly: def.kind === 'readonly',
           secret: !!def.secret || def.kind === 'secret',
         };
         // 查过了才下发（true/false 都下发）；没查则整个字段缺席，见上方注释。
@@ -695,6 +727,26 @@ export function buildEnvView(values = {}, { shellEnv = null } = {}) {
         if (def.max !== undefined) item.max = def.max;
         if (item.secret) item.masked = maskSecret(raw);
         else item.value = raw;
+        // list 的当前值走**旁路**：projectToEnv 对 list 明确放弃投影（返回 null），
+        // 所以 values[key] 里根本没有它——那是有意的，投成 "/a,/b" 会让下游把字符串当数组用。
+        // 编辑器要显示当前列表，只能另开一条原样下发的通道。**投影规则一个字没动**。
+        // 条目在这里归一成 {path, sessionLimit?}：裸字符串与对象两种形态混在数组里，
+        // 会让每个消费者（web 编辑器、Swift 菜单栏）各写一份解构逻辑。
+        if (def.kind === 'list') {
+          // 结构化列表只存在于 ccm.config.json。老式 .env 安装下 structured 为 null，这一项
+          // 会**双向失效**：读不出当前工作区（渲染成空列表，看着像没配），写回去也不生效——
+          // .env 那条路消费的是逗号分隔的 WORK_DIRS，不是这个结构化 key。于是面板报保存成功、
+          // 授权面纹丝不动，正是「写错源＝假成功」。标出来让前端锁掉，别给一个假的编辑入口。
+          if (!structured) item.locked = 'legacy-env';
+          const cur = structured && Object.hasOwn(structured, key) ? structured[key] : null;
+          item.list = (Array.isArray(cur) ? cur : []).flatMap((e) => {
+            if (typeof e === 'string') return e.trim() ? [{ path: e }] : [];
+            if (e && typeof e === 'object' && typeof e.path === 'string' && e.path.trim()) {
+              return [Number.isInteger(e.sessionLimit) ? { path: e.path, sessionLimit: e.sessionLimit } : { path: e.path }];
+            }
+            return [];
+          });
+        }
         return item;
       }),
   }));

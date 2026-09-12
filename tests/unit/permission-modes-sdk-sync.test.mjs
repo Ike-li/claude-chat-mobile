@@ -10,6 +10,7 @@ import {
   SDK_PERMISSION_MODES,
   permissionModeTileSpecs,
   isSdkPermissionMode,
+  describePersistScope,
 } from '../../app/public/js/logic.js';
 
 function readSdkPermissionModes() {
@@ -69,4 +70,53 @@ test('isSdkPermissionMode：manual 不是协议值；default/auto 合法', () =>
   assert.equal(isSdkPermissionMode('auto'), true);
   assert.equal(isSdkPermissionMode('manual'), false); // 别名由 normalizePermissionMode 处理
   assert.equal(isSdkPermissionMode('nope'), false);
+});
+
+// ── 「永久不再问」的影响面文案（1b，2026-09-11）──────────────────────────
+//
+// CLI 的 suggestions 自带 destination（实测样本是 localSettings）。用户点「永久」之前，
+// 必须知道这条规则会落到哪一层——「只这个工作区」和「所有项目」是完全不同的授权。
+//
+// ★ 失败方向：**绝不能把影响面说小了**。一批规则里只要有一条是 userSettings，
+//   整句话就得按 userSettings 说；说成「本工作区」会让用户以为影响范围比实际小得多，
+//   从而批准一个他本不会批准的授权。反过来说大了只是啰嗦，不会造成越权。
+
+test('影响面文案：单一 localSettings → 本工作区', () => {
+  const v = describePersistScope(['localSettings']);
+  assert.match(v.label, /本工作区/);
+});
+
+test('影响面文案：userSettings → 所有项目', () => {
+  const v = describePersistScope(['userSettings']);
+  assert.match(v.label, /所有项目/);
+});
+
+test('影响面文案：projectSettings 点明会进 git（团队共享，与只影响自己不同）', () => {
+  const v = describePersistScope(['projectSettings']);
+  assert.match(v.label, /本项目/);
+  assert.match(v.hint, /git/i);
+});
+
+// ★ 核心：混合档按**最宽**的说。
+test('影响面文案：混合档取最宽的那个（不得把 userSettings 说成本工作区）', () => {
+  const v = describePersistScope(['localSettings', 'userSettings']);
+  assert.match(v.label, /所有项目/);
+  assert.doesNotMatch(v.label, /本工作区/);
+
+  const v2 = describePersistScope(['localSettings', 'projectSettings']);
+  assert.match(v2.label, /本项目/);
+});
+
+test('影响面文案：没有可落盘的档（只有 session 或空）→ null，调用方据此不给「永久」选项', () => {
+  assert.equal(describePersistScope([]), null);
+  assert.equal(describePersistScope(['session']), null);
+  assert.equal(describePersistScope(undefined), null);
+});
+
+// 不认识的 destination 不能当成「不落盘」——SDK 未来加一档，默认必须落在「说不准，按最宽说」
+// 一侧，而不是悄悄把它当成 session 从而连选项都不给（那会让用户以为没有永久这回事）。
+test('影响面文案：不认识的 destination 按最宽处理，不得静默当成 session', () => {
+  const v = describePersistScope(['someFutureScope']);
+  assert.notEqual(v, null);
+  assert.match(v.label, /所有项目/);
 });

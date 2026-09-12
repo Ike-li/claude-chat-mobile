@@ -46,10 +46,36 @@ process.on('exit', () => {
     rmSync(dir, { recursive: true, force: true }); // safe-rm: 本文件上一行 mkdtemp 建的一次性目录
   } catch { /* 退出路径不抛：清理失败顶多留个空目录，不该把测试进程的退出码搞脏 */ }
 });
+// ★ 数据根收进一次性目录。
+//
+// 下面那几条 CCM_*_FILE 是【逐个文件点名】的白名单，只覆盖 6 个；而 data/ 下还有 sessions.json、
+// init-cache.json、push-subscription.json、cf-access-certs.json、service-{events,install,snapshot}.json、
+// uploads/、worktree-settings/ —— 它们此前全裸：2026-09-11 实测，单测环境里 resolveDataDir()
+// 解析到的就是仓库根那个【真实 data/】。
+//
+// 没出事，是因为碰它们的测试各自记得自己设变量（sessions.test.mjs 设 CCM_SESSIONS_FILE、
+// cf-access.test.mjs 设 CCM_DATA_DIR）。那是「每个调用点都要记得注入」，而那正是会失败的一步——
+// 白名单漏一个文件、或新来一个模块开始写 data/，都不会有任何东西变红。收在这里之后，
+// 新测试无论 import 什么、记不记得设变量，都够不到真实 data/。
+//
+// 【原先不设它的理由已过期】此前这里写「不碰 CCM_DATA_DIR——集成测试各自显式设置的 CCM_DATA_DIR
+// 隔离方式不受影响（故用文件级覆盖而非目录级）」。两点都不再成立：
+//   ① 测试文件自己设的值本就覆盖这里的缺省（env 后写覆盖先写），从来不冲突；
+//   ② 集成测试现在由 tests/setup/require-disposable-env.mjs 强制进容器，容器里 data/ 本就是容器内的。
+// 实测：加这一行后 4002 个单测 0 红。
+//
+// 文件级覆盖保留不删：它优先级更高，是第二层；而且 tests/unit/data-dir.test.mjs 要 delete 掉
+// 那几条来验证「走 CCM_DATA_DIR 回退」这条路径，删了它就没有靶子了。
+process.env.CCM_DATA_DIR = join(dir, 'data');
+mkdirSync(process.env.CCM_DATA_DIR, { recursive: true });
+
 process.env.CCM_APPROVAL_STORE_FILE = join(dir, 'approval-requests.json');
 process.env.CCM_AUDIT_FILE = join(dir, 'audit-records.json');
 process.env.CCM_TRUSTED_DEVICES_FILE = join(dir, 'trusted-devices.json');
 process.env.CCM_PENDING_DEVICES_FILE = join(dir, 'pending-devices.json');
+// CCM_DEVICE_PROFILES_FILE：设备展示元数据（旁挂）。同上——devices.test.mjs 也 rename 它做备份，
+// 且 approveDevice/denyDevice 现在会写它，不重定向就会改真实 data/device-profiles.json。
+process.env.CCM_DEVICE_PROFILES_FILE = join(dir, 'device-profiles.json');
 // CCM_READ_STATE_FILE（2026-09-03 跨设备已读位点）：read-state.js 的默认实例在 import 时锁定路径，
 // 任何静态 import 到 server/app.js 的用例一旦触发写入就会改真实 data/read-state.json——那是使用者
 // 各设备共享的未读位点，被单测覆盖等于凭空清掉一屏未读。

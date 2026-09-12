@@ -131,3 +131,35 @@ test('shouldRerenderSessionList: terminal 状态出现、切换或消失都需�
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: alive, nextSessions: plain }), true);
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: busy, nextSessions: busy }), false);
 });
+
+
+// pinned = 手动标「稍后再看」、被 limit 挤出本页而由服务端单独补回的那组。它的成员来自 read-state
+// 而不是这一页，所以主列表签名可以一个字不变而它照样增删（另一台设备标了一条、或本机把某条标回已读）。
+// 漏掉这条判据的后果不是"多渲染一次"，是那一组永远停在首次渲染的内容上——而它恰恰是待办清单。
+test('shouldRerenderSessionList: pinned 增删要重渲，即便主列表签名一字未变', () => {
+  const same = [{ id: 'a', title: 'A', lastUsedAt: 1 }];
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true, prevSessions: same, nextSessions: same,
+    prevPinned: [], nextPinned: [{ id: 'p', title: 'P', lastUsedAt: 2 }],
+  }), true, '新增一条待办必须画出来');
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true, prevSessions: same, nextSessions: same,
+    prevPinned: [{ id: 'p', title: 'P', lastUsedAt: 2 }], nextPinned: [],
+  }), true, '在另一台设备上读掉了，这一行要撤下去');
+});
+
+test('shouldRerenderSessionList: pinned 内容不变则不重渲（不打掉省渲优化）', () => {
+  const same = [{ id: 'a', title: 'A', lastUsedAt: 1 }];
+  const pinned = [{ id: 'p', title: 'P', lastUsedAt: 2 }];
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true, prevSessions: same, nextSessions: same,
+    prevPinned: pinned, nextPinned: [{ id: 'p', title: 'P', lastUsedAt: 2 }],
+  }), false);
+});
+
+test('shouldRerenderSessionList: 旧服务端不发 pinned（两侧 undefined）时不因此重渲', () => {
+  const same = [{ id: 'a', title: 'A', lastUsedAt: 1 }];
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true, prevSessions: same, nextSessions: same,
+  }), false);
+});

@@ -336,6 +336,12 @@ struct EnumOption: Decodable {
     let label: LocalizedText?
 }
 
+// WORKDIRS 的一条。服务端已把裸字符串形态归一成 { path }，故这里不必解异构数组。
+struct WorkdirEntry: Decodable {
+    let path: String?
+    let sessionLimit: Int?
+}
+
 struct ConfigItem: Decodable {
     let key: String?
     let kind: String?
@@ -354,6 +360,15 @@ struct ConfigItem: Decodable {
     let unit: String?
     let min: Int?
     let max: Int?
+    // list 档（当前只有 WORKDIRS）的当前值。**不复用 value**：projectToEnv 对 list 明确放弃
+    // 投影（投成 "/a,/b" 会让下游把字符串当数组用），所以 value 对这一档恒为空串，
+    // 当前列表只能另开一条原样下发的通道。条目在服务端已归一成 {path, sessionLimit?}，
+    // 免得这里还要解 string | object 的异构数组。
+    let list: [WorkdirEntry]?
+    // 非 nil（当前只有 "legacy-env"）= 这台机器还在用 .env，结构化列表在那条路上读不出也写不进
+    // （.env 消费的是逗号分隔的 WORK_DIRS）。桌面端窗口据此别给编辑入口 —— 给了就是让人改完
+    // 看到「保存成功」，而授权的工作区一个都没变。
+    let locked: String?
 
     var name: String { key ?? "" }
     var kindName: String { kind ?? "text" }
@@ -365,7 +380,10 @@ struct ConfigItem: Decodable {
     /// list 项被标成 readonly 只因为前端没有数组编辑器，而桌面端完全可以做一个。
     /// 照搬那个字段会让 WORKDIRS 在桌面上也变成只读 —— 与 scripts/config.js 的 schema
     /// 输出把 list 标为「仅 CLI / 桌面端可改」是同一处判断。
-    var isEditable: Bool { kindName != "readonly" }
+    /// locked 是另一回事，必须一起看：它不是「前端没做编辑器」，而是【这条写入路径本身不通】——
+    /// 老式 .env 安装下结构化列表读不出也写不进（.env 那条路消费的是逗号分隔的 WORK_DIRS）。
+    /// 桌面端做了数组编辑器也改变不了这一点，放行只会让人改完看到「保存成功」而授权面纹丝不动。
+    var isEditable: Bool { kindName != "readonly" && locked == nil }
 
     /// 输入框里应该预填什么。secret 永远不预填明文 —— 服务端根本没下发它（只给 {set,length}）。
     var displayValue: String {
@@ -719,17 +737,51 @@ struct PendingDevice: Decodable {
     var id: String { deviceId ?? "" }
 }
 
+/// 已受信任的设备 + 审批那一刻记下的展示元数据（device-profiles.json 旁挂）。
+/// 三个可空字段对**本功能上线之前**批准的设备恒为 null——元数据只在批准那一刻记得下来，
+/// 事后无从补。那种条目如实显示成「无批准记录」，让用户知道吊销后重批就能补上。
+struct TrustedDevice: Decodable {
+    let deviceId: String?
+    let shortId: String?
+    let ua: String?
+    let ip: String?
+    let approvedAt: Double?
+    /// 用户自己起的名字。**唯一对所有平台都成立的分辨手段**——iOS 拿不到机型，
+    /// 局域网 http:// 下 UA Client Hints 也不可用。设了就压过自动生成的标题。
+    let alias: String?
+    /// 「浏览器 + 主版本」，由服务端从 UA 解析后下发（这一项只有一份实现，不做 Swift 镜像：
+    /// 待审设备那条路用的是 deviceKindLabel，与本字段无关）。
+    let browser: String?
+    /// Android 机型代号。**多数情况是 nil 且这是正常的**：Chrome 做过 UA reduction，
+    /// 机型位被冻结成字面量 K；iOS 从来不在 UA 里给机型。拿不到就不显示，不编占位。
+    let model: String?
+
+    var id: String { deviceId ?? "" }
+}
+
 struct DeviceSnapshot: Decodable {
     let schemaVersion: Int?
     let pending: [PendingDevice]?
     let trusted: [String]?
+    let trustedProfiles: [TrustedDevice]?
 
     var pendingList: [PendingDevice] { pending ?? [] }
     var trustedList: [String] { trusted ?? [] }
+    /// 旧 server（还没有旁挂元数据那一版）只给 `trusted`。此时回落成只有 ID 的条目，
+    /// 而不是让整段列表消失——少一列信息 ≠ 这台设备不存在。
+    var trustedProfileList: [TrustedDevice] {
+        if let trustedProfiles { return trustedProfiles }
+        return trustedList.map { TrustedDevice(deviceId: $0, shortId: nil, ua: nil, ip: nil, approvedAt: nil, alias: nil, browser: nil, model: nil) }
+    }
 }
 
 /// 32 位 hex 的设备指纹在菜单里既放不下也没法读。截成 前8…后4：手机上那串是全量显示的，
 /// 两端各留一截足够用户一眼对上，而 8 位十六进制的碰撞空间在单用户场景下绰绰有余。
+/// ★ 同一判据有三份实现（跨语言 + 前后端禁止互相 import，合不了一份）：本函数、
+///   app/src/auth/devices.js 的 shortDeviceId、app/public/js/logic/device-id.js。
+///   截断规则三份必须逐字一致（> 16 才截、prefix(8)/suffix(4)）；空串占位只有本函数有
+///   （另两份返回空串，由各自调用方决定怎么显示）。对不上，用户就没法拿手机上那串核对，
+///   而核对是这整个功能存在的唯一理由。
 func shortDeviceId(_ id: String) -> String {
     if id.isEmpty { return "（无 ID）" }
     guard id.count > 16 else { return id }
@@ -800,4 +852,34 @@ private func bundleLocationLabel(bundlePath: String, repo: String?) -> String {
 func pendingDeviceTitle(_ d: PendingDevice) -> String {
     let ip = (d.ip?.isEmpty == false) ? d.ip! : "未知来源"
     return "\(deviceKindLabel(d.userAgent)) · \(shortDeviceId(d.id)) · \(ip)"
+}
+
+/// 批准时间 → 菜单里那一小段。**相对天数而不是绝对时间戳**：这一行要回答的问题是
+/// 「这台是不是我早就不用了的那台」，绝对时间还得人自己做减法。
+/// `now` 可注入，否则这条断言会随运行日期漂——测试跑一次绿、下周再跑就红。
+func approvedAtLabel(_ ms: Double?, now: Date = Date()) -> String {
+    guard let ms, ms > 0 else { return "无批准记录" }
+    let days = Int(floor((now.timeIntervalSince1970 - ms / 1000) / 86400))
+    if days <= 0 { return "今天批准" }   // 含时钟回拨造出的负数
+    if days == 1 { return "昨天批准" }
+    if days < 30 { return "\(days) 天前批准" }
+    return "\(days / 30) 个月前批准"
+}
+
+/// 已信任设备在吊销子菜单里的一行：类型 · 短 ID · 多久以前批的。
+/// 与 pendingDeviceTitle 的第三段不同（那里是来源 IP）：待审要答「从哪来的」，
+/// 已信任要答「还在用吗」——同一个位置放不同的东西是因为问题本身不同。
+func trustedDeviceTitle(_ d: TrustedDevice, now: Date = Date()) -> String {
+    "\(trustedDeviceName(d)) · \(shortDeviceId(d.id)) · \(approvedAtLabel(d.approvedAt, now: now))"
+}
+
+/// 一行里「这是哪台」那一段。别名优先——它是用户自己下的判断，永远比我们猜的准。
+/// 没有别名就用能拿到的自动信息拼：类型 · 机型 · 浏览器，缺哪段跳哪段（不留悬空分隔符）。
+/// 三段都缺（UA 为空）时回落到「未知设备」，不返回空串——空串会让整行只剩一个短 ID。
+func trustedDeviceName(_ d: TrustedDevice) -> String {
+    if let alias = d.alias, !alias.isEmpty { return alias }
+    var parts = [deviceKindLabel(d.ua)]
+    if let model = d.model, !model.isEmpty { parts.append(model) }
+    if let browser = d.browser, !browser.isEmpty { parts.append(browser) }
+    return parts.joined(separator: " · ")
 }

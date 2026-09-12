@@ -64,6 +64,9 @@ struct RunResult {
     let status: Int32
     let stdout: String
     let stderr: String
+    /// stdout 的原始字节。二进制输出（如 `qr.js --png-stdout` 的 PNG）不是合法 UTF-8，
+    /// 上面那个 `stdout` 对它恒为空串——两个字段不是冗余，用错了会静默拿到空数据。
+    let stdoutData: Data
 }
 
 /// 把 fd 读到 EOF 或 deadline 为止，**绝不永久阻塞**（缺陷 ③ 的 (b) 半 —— 另一半是调用点的
@@ -224,7 +227,8 @@ func runSync(_ launchPath: String, _ args: [String], cwd: String? = nil,
     return RunResult(
         status: exitCode(fromWaitStatus: reaped),
         stdout: String(data: outData, encoding: .utf8) ?? "",
-        stderr: String(data: errData, encoding: .utf8) ?? "")
+        stderr: String(data: errData, encoding: .utf8) ?? "",
+        stdoutData: outData)
 }
 
 func firstLine(_ s: String) -> String {

@@ -291,6 +291,45 @@ test.describe('DEVICE-01: shouldBypassDeviceApproval 设备审批跳过判定', 
     }, norm), true);
   });
 
+  // ── DEVICE_APPROVAL_SCOPE='all'：把设备审批加严到 CF Access 那条路上 ──────────
+  //
+  // 【为什么这是个开关而不是直接改默认】默认 bypass 的理由是 CF Access 已在边缘做过 2FA，
+  // 设备令牌相对它是冗余的第二因子。但那也意味着「已受信任的设备」这张表【管不到】隧道
+  // 进来的连接：吊销它们不会掉线，也不会被拦——2026-09-10 实测确认（信任表清空为 0 条，
+  // 各设备照常可用，日志里零条「新设备请求接入」）。
+  //
+  // 翻默认值是不能做的：本仓装机走 GitHub master 归档，既有安装升级后一重启，所有已在用的
+  // 手机会一起落进待审，而信任表里没有任何一台可以用来批准 —— 那是给陌生人投递一次远程锁死。
+  // 故按 TRUSTED_PROXY 的先例做成显式断言，缺省保持现状。
+  test('DEVICE_APPROVAL_SCOPE=all：CF Access 已验也不再跳过设备审批', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: true,
+      peerAddress: '127.0.0.1',
+      hostHeader: 'ccm.example.com',
+      deviceApprovalScope: 'all',
+    }, norm), false);
+  });
+
+  test('DEVICE_APPROVAL_SCOPE=all 不动本机直连那条路（它是唯一的自救通道）', () => {
+    // 真本机（peer loopback 且 Host localhost）必须继续 bypass：信任表被清空后，
+    // 电脑上这个浏览器是把设备重新批回来的地方之一。把它一起关掉只会让人无路可走。
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false,
+      peerAddress: '127.0.0.1',
+      hostHeader: 'localhost:3000',
+      deviceApprovalScope: 'all',
+    }, norm), true);
+  });
+
+  test('未声明 scope 时维持现状（CF Access 仍 bypass）——升级不得改变既有部署的行为', () => {
+    for (const scope of ['', undefined, 'ALL', 'yes', '1']) {
+      assert.equal(shouldBypassDeviceApproval({
+        accessEnabled: true, peerAddress: '127.0.0.1', hostHeader: 'ccm.example.com',
+        ...(scope === undefined ? {} : { deviceApprovalScope: scope }),
+      }, norm), true, `scope=${JSON.stringify(scope)} 不是合法断言，必须按未声明处理`);
+    }
+  });
+
   test('隧道终止在本机（peer 为 loopback 但 Host 为公网域名）不得跳过审批', () => {
     assert.equal(shouldBypassDeviceApproval({
       accessEnabled: false,

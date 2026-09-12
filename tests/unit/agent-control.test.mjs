@@ -1062,6 +1062,22 @@ test.describe('精确出槽的三条生死线', () => {
     s.dispose();
   });
 
+  // 变异实测（2026-09-11）：删掉 inputStream() 里的 origin，全量单测零红——与上面 uuid 那条同形。
+  // SDK 契约要求包装键盘输入的宿主显式打 {kind:'human'}，缺失被当 unattributed 并在 isHuman()
+  // 门上 fail-closed：正文关键词触发（ultracode）与 @提及 peer 两条路一起静默死掉，零报错。
+  test('送进 SDK 的用户消息必须带 human 归属标记', async () => {
+    const { s } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('hello'), true);
+
+    const it = s.inputStream();
+    const { value } = await it.next();
+    assert.deepEqual(value.origin, { kind: 'human' },
+      '缺失=unattributed：CLI 的关键词触发与 peer 提及在 isHuman 门上 fail-closed，且失败静默');
+    await it.return(); // 显式收尾，别让生成器挂在 notifyInput 上
+    s.dispose();
+  });
+
   // 变异实测：删掉 uuid 命中分支里的 `if (hit.forceSettled) return {applied:false}`，全量单测零红。
   // 那是本次改动新加的一条防线：force 槽等的迟到 result 到了，只该出槽，不该替【新轮】减账。
   test('uuid 命中 force 槽 → 只出槽不减账，不得让新轮假 idle', async () => {

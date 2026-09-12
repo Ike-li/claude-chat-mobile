@@ -8,6 +8,9 @@
 // 关键点：deviceApproved=false 只在「非公网 Host + 非本机(isLocal=false) + AUTH_TOKEN 正确 + 设备指纹未过
 // TOFU」时才会真正出现（isLocal 会话直接跳过 TOFU）。故本测试连真实 LAN 网卡 IP（同手机连同一 WiFi 的路径），
 // 而非 mock deviceApproved——这是真实触发该分支的唯一方式，无可用 LAN 网卡时跳过。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

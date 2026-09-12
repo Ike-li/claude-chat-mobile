@@ -305,10 +305,17 @@ test.describe('device.js list --json ⇔ Swift Decodable', () => {
       [{ deviceToken: 'tok-1', ip: '192.168.1.5', userAgent: 'iPhone', ts: 1700000000000 }],
     ));
     await writeFile(join(dataDir, 'trusted-devices.json'), JSON.stringify(['tok-trusted']));
+    // 必须连 profile 一起造：只有 trusted-devices.json 时 ua/ip/approvedAt 全是 null，
+    // 键还在（JSON.stringify 保留 null），字段名断言照过——但下面那条"值非空"的自检会空过。
+    await writeFile(join(dataDir, 'device-profiles.json'), JSON.stringify({
+      'tok-trusted': { ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: 1799913600000 },
+    }));
 
     // 剥掉 preload-env 的文件级重定向：在 devices.js 里它们优先于 CCM_DATA_DIR，
     // 不剥的话 CLI 会去读那份共享文件而不是本用例的夹具（同 device-cli.test.mjs 的做法）。
-    const { CCM_TRUSTED_DEVICES_FILE: _t, CCM_PENDING_DEVICES_FILE: _p, ...env } = process.env;
+    const {
+      CCM_TRUSTED_DEVICES_FILE: _t, CCM_PENDING_DEVICES_FILE: _p, CCM_DEVICE_PROFILES_FILE: _f, ...env
+    } = process.env;
     const r = spawnSync(process.execPath, ['scripts/device.js', 'list', '--json'], {
       cwd: ROOT, env: { ...env, CCM_DATA_DIR: dataDir }, encoding: 'utf8',
     });
@@ -316,10 +323,15 @@ test.describe('device.js list --json ⇔ Swift Decodable', () => {
     const out = JSON.parse(r.stdout);
     assert.ok(out.pending?.length, '夹具没造出 pending 设备，PendingDevice 断言会空过');
 
+    assert.ok(out.trustedProfiles?.length, '夹具没造出已信任设备，TrustedDevice 断言会空过');
+    assert.ok(out.trustedProfiles[0].ua && out.trustedProfiles[0].approvedAt,
+      '夹具没造出 profile（ua/approvedAt 为 null），「有元数据」那条路径就没被走到');
+
     const src = readSwift('CCMCore.swift');
     for (const [structName, emitted, hint] of [
       ['DeviceSnapshot', new Set(Object.keys(out)), '待审设备整段从菜单里消失'],
       ['PendingDevice', new Set(out.pending.flatMap(d => Object.keys(d))), '菜单里那行只剩「未知设备」，核对不了 ID'],
+      ['TrustedDevice', new Set(out.trustedProfiles.flatMap(d => Object.keys(d))), '吊销子菜单里那行认不出是哪台设备'],
     ]) {
       const declared = [...storedProperties(src, structName).keys()];
       const missing = declared.filter(k => !emitted.has(k));
@@ -327,6 +339,49 @@ test.describe('device.js list --json ⇔ Swift Decodable', () => {
         `Swift 的 ${structName} 声明了这些字段但 device.js 没下发：${missing.join(', ')} —— ${hint}`);
     }
   });
+});
+
+// ★★ 反方向的一条：JS 下发了、Swift 没声明 —— 上面那批断言【看不见】这种情况。
+//
+// 上面所有 assertCovered 比的都是 `Swift declared - JS emitted`，也就是"Swift 声明的字段
+// JS 必须给"。反过来 JS 多下发字段一直被当成安全的（Swift 忽略未知 key，确实不会崩）。
+// 但对**新增功能**它不安全：给 device.js 加一个字段却忘了在 Swift 里声明，桌面端那一列
+// 静默什么都不显示，而这一整套契约断言全绿——正是它开头声称要防的那类"只在真机上才看得见
+// 的失败"，只是方向相反。
+//
+// 只对**这一组已知该被消费的字段**做反向检查，不做全量反向（JS 侧确实有些键是给别的消费者的，
+// 全量反向会变成噪音，然后被人加豁免清单，最后退化成不报事）。
+test('device.js 下发的设备字段，Swift 必须都消费到（反向：JS 加字段忘了 Swift 会静默空白）', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { spawnSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'ccm-desktop-reverse-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  await writeFile(join(dataDir, 'trusted-devices.json'), JSON.stringify(['tok-trusted']));
+  await writeFile(join(dataDir, 'device-profiles.json'), JSON.stringify({
+    'tok-trusted': { ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: 1799913600000 },
+  }));
+
+  const {
+    CCM_TRUSTED_DEVICES_FILE: _t, CCM_PENDING_DEVICES_FILE: _p, CCM_DEVICE_PROFILES_FILE: _f, ...env
+  } = process.env;
+  const r = spawnSync(process.execPath, ['scripts/device.js', 'list', '--json'], {
+    cwd: ROOT, env: { ...env, CCM_DATA_DIR: dataDir }, encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  const src = readSwift('CCMCore.swift');
+
+  // `kind` 有意不在此列：它是后端算好给 Web 用的（浏览器侧只把中文串过 t()），
+  // Swift 自己有 deviceKindLabel，两边同一判据互为镜像，不该要求 Swift 再声明一遍。
+  const declared = storedProperties(src, 'TrustedDevice');
+  const emitted = Object.keys(out.trustedProfiles[0]).filter(k => k !== 'kind');
+  const unconsumed = emitted.filter(k => !declared.has(k));
+  assert.deepEqual(unconsumed, [],
+    `device.js 下发了这些字段但 Swift 的 TrustedDevice 没声明：${unconsumed.join(', ')} —— `
+    + '桌面端会静默忽略它们，那一列什么都不显示且无任何报错。'
+    + '要么在 CCMCore.swift 里声明，要么在上面那份 filter 里写清为什么不该被 Swift 消费。');
 });
 
 // ── 心跳通道的三个字面量 ───────────────────────────────────────────────────

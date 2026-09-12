@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { reachableIPv4s } from '../../app/src/server/http.js';
+import { reachableIPv4s } from '../../app/src/shared/net-addr.js';
 
 // 夹具：networkInterfaces() 同形数据
 const IF = (family, address, internal = false) => ({ family, address, internal });

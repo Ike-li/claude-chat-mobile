@@ -148,6 +148,12 @@ function serializeOutboxItem(item) {
     clientMessageId,
     instanceId: item.instanceId == null ? null : item.instanceId,
     cwd: item.cwd == null ? null : item.cwd,
+    // 「在新 worktree 里开」的意图必须活过入队与 localStorage 往返：服务端在懒开实例时据它
+    // `git worktree add`，丢了就是一条没有意图的消息——实例开在父仓，而用户以为改动隔离了。
+    // 本函数是白名单，新字段不显式登记就被静默丢掉（这一条就是那么漏过一次的）。
+    // 只在真勾选时落字段：没勾的消息不该平白多两个键，服务端判的是 `=== true`。
+    ...(item.useWorktree === true ? { useWorktree: true } : {}),
+    ...(typeof item.sourceBranch === 'string' && item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
   };
 }
 
@@ -191,7 +197,12 @@ export function dumpDurableOutbox(queue) {
 // 客户端排队，故落终态由用户手动重发。与 permanent 的区别：blocked 稍后重发能成功，不是死信。
 export function presentOfflineResendAck(err, ack) {
   if (!err && ack && ack.ok === true) {
-    return { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, message: '' };
+    // instanceId 要透传：同一批离线消息里「在新 worktree 里开」的意图只该兑现一次，
+    // 后续各条得改投第一条开出来的那个实例（见 planOutboxWorktreeReuse）。
+    return {
+      outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, message: '',
+      instanceId: (ack && typeof ack.instanceId === 'string' && ack.instanceId) ? ack.instanceId : null,
+    };
   }
   if (!err && ack && ack.ok === false && ack.busy === true) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('当前任务运行中，完成后可发送');
@@ -379,4 +390,34 @@ export function presentTurnResult(payload = {}, opts = {}) {
     failToolsMessage: null,
     haptic: 'success',
   };
+}
+
+// 同一批离线消息里，「在新 worktree 里开」的意图只该兑现一次。
+//
+// 【缺陷形态】离线时在空首页勾上 worktree 连打几条，每条都以 {useWorktree:true, instanceId:null}
+// 入队（离线入队路径不 reset 勾选，viewingInstanceId 也还是 null）。重连后逐条重放，而服务端的
+// worktreeCreateInFlight 只合并**并发**、合并不了**先后**——第一条 ack 回来时它已经清了，第二条
+// 于是又 `git worktree add` 一棵。结果：同一个任务被劈进互不相干的分支、会话与上下文，
+// 而用户只是在离线时多打了几行字。这个分叉在 UI 上没有任何提示。
+//
+// 【为什么修在这里而不是服务端】服务端看到的两条请求长得一模一样（同 cwd、同意图、都没有
+// instanceId），要区分只能靠「最近建过就复用」的时间窗，而那会把**用户连续手动开两棵树**也粘在
+// 一起——一个真实用例被当成 bug 修掉。批次归属只有客户端知道，判据就该落在客户端。
+//
+// 返回要真正投递出去的那一份：第一条照原样发（它负责建树），后续各条改投第一条开出来的实例，
+// 并摘掉 worktree 意图（带着它只会让服务端对一个已经在跑的会话重复判断）。
+export function planOutboxWorktreeReuse(item, openedInstanceId) {
+  if (!item || item.useWorktree !== true) return item;
+  if (!openedInstanceId) return item; // 本批第一条：由它去建树
+  return { ...item, useWorktree: false, sourceBranch: null, instanceId: openedInstanceId };
+}
+
+// 这一条重放成功后，本批的「worktree 已开」锚点该变成什么。
+// 只认【原始意图是 useWorktree 且此前还没锚】的那一条 —— 后续条目已被改投，不该覆盖锚点；
+// 普通条目（没勾 worktree）更不该把无关会话的实例写进来。
+export function nextOutboxWorktreeAnchor(item, decision, current) {
+  if (current) return current;
+  if (!item || item.useWorktree !== true) return current ?? null;
+  if (!decision || decision.outcome !== 'ok') return current ?? null;
+  return decision.instanceId || null;
 }

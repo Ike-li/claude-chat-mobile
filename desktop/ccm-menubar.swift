@@ -190,6 +190,36 @@ final class DeviceClient: Sendable {
     }
 }
 
+/// 调 `scripts/qr.js --png-stdout` 取连接二维码的 PNG 字节。
+/// **token 明文不进本进程**：qr.js 在它自己的进程里读配置、编码、渲染，这里拿到的已经是像素。
+/// 与 `ServiceClient.copyToken` 的「明文直送 pbcopy」同一条纪律。
+final class QrClient: Sendable {
+    private let env: RuntimeEnv
+    init(env: RuntimeEnv) { self.env = env }
+
+    /// - Parameter publicTarget: 走 --public（自动解析 CF Access 域名 / Tailscale），否则用局域网地址。
+    /// - Returns: PNG 字节 + qr.js 打在 stderr 上的说明。**说明原样透传、这里不做任何解读**——
+    ///   「该不该带令牌、为什么」全是 Node 侧的判断（见 shared/public-target.js），
+    ///   本文件的纪律是零业务逻辑，在这儿复述一遍判据早晚会和那边分叉。
+    func pngData(publicTarget: Bool) -> Probe<(png: Data, notes: String)> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        let script = (repo as NSString).appendingPathComponent("scripts/qr.js")
+        var argv = [script, "--png-stdout"]
+        if publicTarget { argv.append("--public") }
+        // --public 会探测 Tailscale（CLI 自身 3s 超时），给足余量
+        guard let r = runSync(node, argv, cwd: repo, timeout: publicTarget ? 20 : 10) else {
+            return .failed("qr.js 无响应")
+        }
+        guard r.status == 0 else {
+            let msg = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failed(msg.isEmpty ? "qr.js 退出码 \(r.status)" : msg)
+        }
+        // 必须读 stdoutData：PNG 不是合法 UTF-8，RunResult.stdout 对它恒为空串
+        guard !r.stdoutData.isEmpty else { return .failed("qr.js 没有输出图像") }
+        return .ok((r.stdoutData, r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
+    }
+}
+
 // MARK: - 菜单栏应用
 
 @MainActor
@@ -198,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let env = RuntimeEnv()
     private let client: ServiceClient
     private let deviceClient: DeviceClient
+    private let qrClient: QrClient
     // 探测与动作分队列（control 最长 40s，不能堵刷新）。动作保持并发：
     // 复制令牌 / 打开 Web UI 不该等无关 unit 的 kickstart。同 unit 启停靠 busyUnits。
     private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
@@ -220,10 +251,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var logWindow: LogWindowController?
     private var taskWindow: TaskWindowController?
     private var consoleWindow: ConsoleWindowController?
+    private var qrWindow: QrWindowController?
 
     override init() {
         client = ServiceClient(env: env)
         deviceClient = DeviceClient(env: env)
+        qrClient = QrClient(env: env)
         super.init()
     }
 
@@ -413,6 +446,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for d in pending { menu.addItem(pendingDeviceItem(d)) }
         }
 
+        // 已受信任的设备**收进二级菜单**，不平铺：根菜单已经装着服务摘要与各 unit 一行，
+        // 而信任设备数没有上界（trusted-devices.json 不设 cap）。这一段的用途也和待审那段相反——
+        // 待审是「有事等你处理」必须一眼看到，已信任是「偶尔来清理一次」，不该常驻占位置。
+        let trusted = latestDevices?.trustedProfileList ?? []
+        if !trusted.isEmpty {
+            let entry = NSMenuItem(title: "已受信任的设备 (\(trusted.count))", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            sub.autoenablesItems = false
+            let hint = NSMenuItem(title: "点一项吊销该设备的信任", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            sub.addItem(hint)
+            sub.addItem(.separator())
+            for d in trusted { sub.addItem(trustedDeviceItem(d)) }
+            entry.submenu = sub
+            menu.addItem(entry)
+        }
+
         menu.addItem(.separator())
         menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r",
             tip: "服务状态、各 unit 与全部动作的总览窗口；刘海挡住菜单栏图标时的备用入口"))
@@ -426,6 +476,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）")
         tokenItem.isEnabled = canCopyToken(status: latest)
         menu.addItem(tokenItem)
+        // 与复制令牌同一条判据：两者都要能拿到 AUTH_TOKEN，拿不到时二维码只会是一张废图。
+        let qrItem = action("显示连接二维码…", #selector(showQrCode),
+            tip: "手机相机扫一下直接进 Web UI，免手输 64 位令牌；含完整凭据，投屏时别开")
+        qrItem.isEnabled = canCopyToken(status: latest)
+        menu.addItem(qrItem)
+        // 常显而不是「算不出公网地址就隐藏」：判断公网地址是否可解析要真跑一次 qr.js，
+        // 为渲染一次菜单付那个代价不值；而 qr.js 解析失败时给的文案本身就是说明书
+        // （能自动认出哪两种、其余怎么用 --url），比一个凭空消失的菜单项有用得多。
+        let qrPublicItem = action("显示公网二维码…", #selector(showPublicQrCode),
+            tip: "自动解析 CF Access 域名 / Tailscale 地址；公网码等于一把全世界可用的钥匙，更要当心")
+        qrPublicItem.isEnabled = canCopyToken(status: latest)
+        menu.addItem(qrPublicItem)
 
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
@@ -543,6 +605,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    /// 已信任设备一行：点它就是吊销（子菜单本身已声明「点一项吊销」，动作不含糊）。
+    /// 真正的防误触在 NSAlert 那道强确认上，不在这里再套一层菜单。
+    private func trustedDeviceItem(_ d: TrustedDevice) -> NSMenuItem {
+        let item = NSMenuItem(title: "✗ \(trustedDeviceTitle(d))", action: #selector(revokeTrustedDevice(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = d.id
+        item.toolTip = "完整 ID：\(d.id)\n吊销后这台设备立刻失去访问权。"
+        return item
+    }
+
     private func unitAction(_ title: String, unit: String, verb: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(runUnitAction(_:)), keyEquivalent: "")
         item.target = self
@@ -602,6 +674,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func denyPendingDevice(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, !id.isEmpty else { return }
         decidePendingDevice(id, verb: "deny", label: "拒绝设备")
+    }
+
+    /// 吊销【已信任】设备——与上面拒绝待审设备是两个风险档，所以走两个入口。
+    /// 拒绝待审是安全方向（那台设备本来就还进不来），吊销已信任是破坏性的：一台正在用的
+    /// 设备会当场失去访问权。故这条必须强确认，而拒绝待审刻意不加确认。
+    @objc private func revokeTrustedDevice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, !id.isEmpty else { return }
+        let d = latestDevices?.trustedProfileList.first { $0.id == id }
+        let alert = NSAlert()
+        alert.messageText = "吊销这台设备的信任？"
+        // 文案**不能**写死「将立即断开该设备的连接」：device-gate 的吊销断连只作用于
+        // trustBasis == "device-token" 的连接；从本机直连或经 Cloudflare Access 进来的
+        // 连接不走信任表，吊销对它们无效。把条件说出来，否则这句话在那两档下就是假的。
+        alert.informativeText = """
+        设备 ID：\(id)
+        类型：\(deviceKindLabel(d?.ua))
+        来源 IP：\(d?.ip?.isEmpty == false ? d!.ip! : "未知")
+        批准时间：\(approvedAtLabel(d?.approvedAt))
+
+        吊销后这台设备立刻失去访问权。若它此刻正用设备令牌连着，那条连接会被立即断开
+        （从本机直连、或经 Cloudflare Access 进来的连接不经信任表，不受影响）。
+
+        这不是拉黑——同一台设备之后仍可重新申请接入。
+        """
+        alert.addButton(withTitle: "吊销")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .critical
+        guard runModal(alert) == .alertFirstButtonReturn else { return }
+        decidePendingDevice(id, verb: "deny", label: "吊销设备")
     }
 
     private func decidePendingDevice(_ id: String, verb: String, label: String) {
@@ -696,6 +797,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 switch r {
                 case .ok: self.alert("已复制", "访问令牌已在剪贴板里，粘贴到网页的令牌框即可。")
                 case .failed(let e): self.alert("复制失败", e)
+                }
+            }
+        }
+    }
+
+    /// 连接二维码窗口。渲染在 qr.js 那一侧完成，这里只负责把 PNG 摆上屏——
+    /// 见 QrClient 与 ccm-qr-window.swift 里那条「token 明文不进本进程」。
+    @objc private func showQrCode() { presentQr(publicTarget: false) }
+    @objc private func showPublicQrCode() { presentQr(publicTarget: true) }
+
+    private func presentQr(publicTarget: Bool) {
+        let qrClient = self.qrClient
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            let r = qrClient.pngData(publicTarget: publicTarget)
+            Task { @MainActor in
+                switch r {
+                case .ok(let payload):
+                    // 每次都重建而不是复用：局域网码与公网码是两张不同的图，复用会把上一张
+                    // 留在屏幕上（同一个窗口、看不出换没换）。顺带覆盖掉「窗口关过之后
+                    // controller 还在但 .window 已成 nil」那条——那是 openConfig 一带的既有防御。
+                    self.qrWindow?.close()
+                    self.qrWindow = QrWindowController(png: payload.png, notes: payload.notes, isPublic: publicTarget)
+                    self.qrWindow?.present()
+                case .failed(let e):
+                    self.alert(publicTarget ? "生成公网二维码失败" : "生成二维码失败", e)
                 }
             }
         }

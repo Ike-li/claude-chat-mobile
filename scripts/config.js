@@ -203,10 +203,13 @@ function guardWriteTarget(dir, flags = {}) {
 // 只有 probePort 被有意桩掉：它需要真连一次，而 CLI 常在 server 正跑着时运行，无条件探测
 // 会把「自家 server 占着」误报成冲突（doctor D4 修过同一个 bug）。
 //
-// isWritable / isExecutable **不适用那条理由**——它们是纯 fs 判断，没有「自己干扰自己」的问题。
-// 早前把这两个也一并桩成 `() => true`，于是 `config set CLAUDE_BIN=/etc/hosts` 被判「已写入」
+// isExecutable **不适用那条理由**——它是纯 fs 判断，没有「自己干扰自己」的问题。
+// 早前把它一并桩成 `() => true`，于是 `config set CLAUDE_BIN=/etc/hosts` 被判「已写入」
 // 且 `config check` 报「配置检查通过」，而手机面板对同一个值会以「文件不可执行」拒绝、
 // server preflight 随后起不来。CLI 不是配置文件的特权通道，判据必须与面板同源。
+//
+// （曾经还有一个 isWritable，随 2026-09-08 WORK_DIR 退役一并删除：它是全表唯一一个
+// `writable: true` 项的校验依赖，那个项没了之后既没有消费者、也无法再被测到。）
 const canAccessPath = (p, mode) => {
   try {
     accessSync(p, mode);
@@ -219,7 +222,6 @@ const canAccessPath = (p, mode) => {
 const validationDeps = (current) => ({
   current,
   fileExists: existsSync,
-  isWritable: p => canAccessPath(p, fsConstants.W_OK),
   isExecutable: p => canAccessPath(p, fsConstants.X_OK),
   probePort: () => false,
 });
@@ -236,7 +238,7 @@ function cmdInit(dir, flags, io) {
     ok: true,
     messages: [
       `已生成 ${CONFIG_FILE_NAME}（权限 0600）`,
-      '下一步：set WORK_DIR=<项目绝对路径>，然后跑 node scripts/doctor.js',
+      '下一步：把项目绝对路径写进 WORKDIRS 数组（首项即手机端默认打开的目录），然后跑 node scripts/doctor.js',
     ],
   };
 }

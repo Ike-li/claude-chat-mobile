@@ -9,6 +9,9 @@
 // 零 token 成本（手写假 .jsonl，不起真 claude 子进程）、走"可靠集成"档（默认 npm test 就跑）。
 //
 // 2026-08-26：L1 软隐藏（session:delete）已移除，本文件只覆盖 deletePermanent。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, realpathSync, readdirSync } from 'node:fs';

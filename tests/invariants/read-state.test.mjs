@@ -2,6 +2,7 @@
 // 守护：READ-01（LWW 单调递增；手动标未读不用「删条目」表达已读，否则会被别的设备复活）
 // 覆盖：多设备增量归并（LWW 单调递增）+ baselineTs 免疫污染 + 手动标已读记 seen 阻断旧 manual 复活 + 乱序上报不整屏复亮
 //       + 已读盖过手动标记后清干净（消除本地删/服务端留的不对称）+ 两条写入路径的 seen 都单调不回退
+//       + manualUnreadIds 与前端 isManualUnreadNow 逐条同义（标记必须能被 session:list 补回列表）
 // 槽位：S1（纯函数 + 一次性目录状态机）
 // 不测什么 + 为什么：不测浏览器 localStorage 与真实 DOM 渲染（属于 S3 UI/E2E 槽）
 
@@ -269,5 +270,53 @@ test.describe('落盘位点在重启后读得回来', () => {
 
   test('文件内容不是合法 JSON → 退化成未建档，不抛错阻塞启动', () => {
     assert.equal(loadWith('corrupt-json', '{ not json').baselineTs, T_NOW);
+  });
+});
+
+
+// READ-01 的另一半：标记活下来了，但用户还得看得见它。
+// session:list 按 limit 截断（默认 6 条），标记的会话滑出窗口就从抽屉里消失——标记还在
+// read-state.json 里，UI 上再也找不回来，而长按确认框刚承诺过「会一直显示未读，直到你再次打开」。
+// manualUnreadIds 是服务端把这些会话补回列表的入口，它的判据必须与前端逐条同义：
+// 服务端多报一条 → 列表里凭空多一行不该在的；少报一条 → 那条标记就是被静默吞掉了。
+test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，判据与前端同义', () => {
+
+  test('manual > seen 算未读；缺 seen 算未读；相等算已读', () => {
+    const s = createStore({ now: () => T0 });
+    // 三种状态直接注入（公开写入路径会互相清理，构造不出 manual === seen 的并存态）
+    s.applyClientState({
+      seen: { 'read-after-mark': T0 + MIN, 'equal': T0, 'marked-later': T0 },
+      manual: { 'read-after-mark': T0, 'equal': T0, 'marked-later': T0 + MIN, 'never-seen': T0 },
+    });
+    assert.deepEqual(s.manualUnreadIds().sort(), ['marked-later', 'never-seen'],
+      'read-after-mark 已被更晚的 seen 盖过、equal 相等算已读，两者都不该补回列表');
+  });
+
+  test('与前端 isManualUnreadNow 对同一份状态给出相同集合（前后端各一份实现，不得漂移）', () => {
+    const s = createStore({ now: () => T0 });
+    // 覆盖全部相对位置：manual 早于/等于/晚于 seen、无 seen、无 manual
+    const seen = { a: T0 + MIN, b: T0, c: T0, e: T0 };
+    const manual = { a: T0, b: T0, c: T0 + MIN, d: T0 };
+    s.applyClientState({ seen, manual });
+    const state = s.getState();
+    const fromFrontend = ['a', 'b', 'c', 'd', 'e']
+      .filter(id => isManualUnreadNow(state.manual, state.seen, id));
+    assert.deepEqual(s.manualUnreadIds().sort(), fromFrontend.sort());
+    assert.deepEqual(fromFrontend.sort(), ['c', 'd'], '两侧一起算错的话上一句会互相掩护，这里钉死期望值');
+  });
+
+  test('标为已读后立刻从补回名单里消失（不再占着列表顶部那一行）', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('later', true, T0);
+    assert.deepEqual(s.manualUnreadIds(), ['later']);
+    s.setManual('later', false, T0 + MIN);
+    assert.deepEqual(s.manualUnreadIds(), []);
+  });
+
+  test('打开会话（markRead）同样解除补回，与「再次打开即清除」的承诺一致', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('later', true, T0);
+    s.markRead('later', T0 + MIN);
+    assert.deepEqual(s.manualUnreadIds(), []);
   });
 });

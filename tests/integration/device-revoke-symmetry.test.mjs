@@ -8,6 +8,9 @@
 // 复用 devices.js 的 approveDevice/denyDevice（scripts/device.js CLI 命令的底层实现）模拟真实 CLI
 // 操作（非 mock，同一份生产代码路径）。走真实 LAN 网卡 IP 触发 TOFU（isLocal=false 时 deviceApproved
 // 才真正受信任表控制、走 trustBasis='device-token' 分支——同 SEC-01 测试的手法，无 LAN 网卡时跳过）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

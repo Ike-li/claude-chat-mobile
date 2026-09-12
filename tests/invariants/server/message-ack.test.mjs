@@ -23,6 +23,9 @@
 //  ② 断线重连后的历史回放 —— 属回放机制（SYNC-01），不是幂等。实测裸连收不到气泡、
 //     session:open 无 ack，入口尚未查清；在查清之前写它必定是假绿。
 //  ③ 附件路径的幂等 —— 需要真实上传落盘，另开用例。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -36,7 +39,7 @@ const TOKEN = 'inv-message-ack-token';
 // 一台隔离 server + 一条已连上的 socket，跑完必定收尸。
 async function withClient(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-inv-msg-'));
-  const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
   const events = [];
   const sock = ioClient(`http://127.0.0.1:${server.port}`, {
     auth: { token: TOKEN, deviceToken: 'inv-msg-device' },

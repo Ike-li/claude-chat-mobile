@@ -570,3 +570,113 @@ test.describe('跨实例隔离（跨 tab 回答不串台）', () => {
     X.s.dispose(); Y.s.dispose();
   });
 });
+
+// ── 「永久不再问」（1b，2026-09-11）────────────────────────────────────────
+//
+// SDK 在 canUseTool 的 opts 里给 suggestions（CLI 自己算好的规则 + destination），文档明说：
+// 「if presenting the user an option 'always allow' or similar, then this full set of
+//   suggestions should be returned as the updatedPermissions」。
+// 本项目此前只应用 destination==='session' 的那部分（= 本会话内总是允许），于是 CLI 建议的
+// localSettings 规则被 filter 掉，用户在手机上**没有任何办法**让一条规则活过本次会话。
+//
+// 实证样本（server 日志 2026-09-08 / 09-09，两条都是 localSettings）：
+//   {"type":"addRules","rules":[{"toolName":"Read","ruleContent":"//path/**"}],
+//    "behavior":"allow","destination":"localSettings"}
+//
+// ★ 失败方向：persistRules 只在 **allow** 时有意义。拒绝一个操作却顺手把它写进放行名单，
+//   是把用户的「不」记成「以后都行」——这一档必须钉死。
+
+const opFor = (tool, args, cwd) => ({ tool, args, cwd });
+
+test('persistRules：把 CLI 建议的全部规则回传给 SDK（含 localSettings 档）', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const suggestions = [
+    { type: 'addRules', rules: [{ toolName: 'Read', ruleContent: '//repo/**' }], behavior: 'allow', destination: 'localSettings' },
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow', destination: 'session' },
+  ];
+  const p = s.askPermission('Read', { file_path: '/a.txt' }, { signal: ac.signal, toolUseID: 't1', suggestions });
+  s.resolvePermission('t1', 'allow', false, opFor('Read', { file_path: '/a.txt' }, s.cwd), { persistRules: true });
+  const res = await p;
+  assert.equal(res.behavior, 'allow');
+  // 「full set」：两条都要在，落盘那条尤其不能被 session filter 吃掉
+  assert.equal(res.updatedPermissions.length, 2);
+  assert.ok(res.updatedPermissions.some(u => u.destination === 'localSettings'));
+  assert.ok(res.updatedPermissions.some(u => u.destination === 'session'));
+  s.dispose();
+});
+
+// 回归保护：不勾「永久」时行为一个字不变——只应用 session 档。
+test('persistRules 缺省时维持原行为：alwaysThisSession 只应用 session 档规则', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const suggestions = [
+    { type: 'addRules', rules: [{ toolName: 'Read', ruleContent: '//repo/**' }], behavior: 'allow', destination: 'localSettings' },
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow', destination: 'session' },
+  ];
+  const p = s.askPermission('Read', { file_path: '/a.txt' }, { signal: ac.signal, toolUseID: 't1', suggestions });
+  s.resolvePermission('t1', 'allow', true, opFor('Read', { file_path: '/a.txt' }, s.cwd));
+  const res = await p;
+  assert.equal(res.updatedPermissions.length, 1);
+  assert.equal(res.updatedPermissions[0].destination, 'session');
+  s.dispose();
+});
+
+// ★ 这一条是本组的核心失败方向：拒绝 + 勾了永久 ⇒ 绝不能写规则。
+//   把用户的「不」记成「以后都行」，是这个功能最坏的失败形态。
+test('persistRules 在 deny 时不得生效——拒绝不是一种「以后都行」', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const suggestions = [
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'rm -rf /' }], behavior: 'allow', destination: 'localSettings' },
+  ];
+  const p = s.askPermission('Bash', { command: 'rm -rf /' }, { signal: ac.signal, toolUseID: 't1', suggestions });
+  s.resolvePermission('t1', 'deny', false, undefined, { persistRules: true });
+  const res = await p;
+  assert.equal(res.behavior, 'deny');
+  assert.equal(res.updatedPermissions, undefined);
+  s.dispose();
+});
+
+// 完整性校验失败时同样不得写规则：那条路是 fail-closed 拒绝，与用户主动 deny 同档。
+test('persistRules 在完整性校验失败时不得生效', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const suggestions = [
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow', destination: 'localSettings' },
+  ];
+  const p = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1', suggestions });
+  // clientOp 与锚定 fp 不符 → fail-closed
+  s.resolvePermission('t1', 'allow', false, opFor('Bash', { command: 'rm -rf /' }, s.cwd), { persistRules: true });
+  const res = await p;
+  assert.equal(res.behavior, 'deny');
+  assert.equal(res.updatedPermissions, undefined);
+  s.dispose();
+});
+
+// setMode 是工具批准的内在部分（如 ExitPlanMode 退出 plan），与「记不记住」正交。
+// persist 档不得把它重复塞两次——SDK 收到两条同类 update 的行为未定义。
+test('persistRules：setMode 只出现一次，不因走 persist 分支而重复', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const suggestions = [
+    { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+    { type: 'addRules', rules: [{ toolName: 'Read', ruleContent: '//repo/**' }], behavior: 'allow', destination: 'localSettings' },
+  ];
+  const p = s.askPermission('Read', { file_path: '/a.txt' }, { signal: ac.signal, toolUseID: 't1', suggestions });
+  s.resolvePermission('t1', 'allow', false, opFor('Read', { file_path: '/a.txt' }, s.cwd), { persistRules: true });
+  const res = await p;
+  assert.equal(res.updatedPermissions.filter(u => u.type === 'setMode').length, 1);
+  assert.equal(res.updatedPermissions.length, 2);
+  s.dispose();
+});
+
+test('没有 suggestions 时 persistRules 不产出空数组，仍是 undefined', async () => {
+  const { s } = makeSession();
+  const ac = new AbortController();
+  const p = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1', suggestions: [] });
+  s.resolvePermission('t1', 'allow', false, opFor('Bash', { command: 'ls' }, s.cwd), { persistRules: true });
+  const res = await p;
+  assert.equal(res.updatedPermissions, undefined);
+  s.dispose();
+});

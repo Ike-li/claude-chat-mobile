@@ -30,20 +30,6 @@ export function createTaskStatusController(context, {
   const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
   let activeDetailId = null;
 
-  // 活动横幅只服务子 agent/Workflow 启动。API 重试**不**走这里——它已迁到流内状态行
-  // （app.js liveLine.retry，对齐 CLI 的整行顶替）；旧实现与这里共用 DOM，既会互相摧毁文案，
-  // 又被 reconcileBanners 的 task 优先级必现压掉。
-  function showActivity(description) {
-    if (!dom.activityBanner || !dom.activityBannerText) return;
-    const text = String(description || '');
-    dom.activityBannerText.textContent = text.length > 80 ? `${text.slice(0, 77)}...` : text;
-    dom.activityBanner.classList.remove('hidden');
-  }
-
-  function hideActivity() {
-    dom.activityBanner?.classList.add('hidden');
-  }
-
   // 唯一的滚动容器：详情已内联进任务卡片，若列表不封顶，6 个任务 × 20 条历史会把 composer footer
   // 撑到吃满整屏（#messages 是 flex-1 overflow-y-auto，最小尺寸算 0，挡不住）。上限放这一层、
   // 卡片内不再套第二层滚动，避免移动端嵌套滚动抢手势。
@@ -483,10 +469,8 @@ export function createTaskStatusController(context, {
 
   if (autoBind) bind();
   return {
-    hideActivity,
     hideProgress,
     onComplete,
     onProgress,
-    showActivity,
   };
 }

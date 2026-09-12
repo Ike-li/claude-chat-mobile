@@ -231,3 +231,86 @@ test.describe('emit / buffer / eventsSince', () => {
     s.dispose();
   });
 });
+
+// maybeSuggest 的时序闸。
+//
+// 【为什么 pendingTurns 那道不够】它只看得见**还在跑**的新一轮。askSide 慢、用户又在这期间起了
+// 一轮**短**的并跑完时，pendingTurns 已经回到 0，闸恰好失效——这条对上一轮说的建议就落进了新
+// 对话。前端 7380ba3 修的是展示侧（新一轮开跑即收起 + _busyState 闸），而那道闸在「新一轮已经
+// 跑完」时同样是 idle，两侧都不挡。completedTurns 每收一条 result 就 +1，拿它当序号才覆盖得住。
+test.describe('maybeSuggest：迟到的建议不得落进新对话', () => {
+  test('askSide 期间又结算了一轮 → 丢弃', async () => {
+    const { s, events, dispose } = makeSession();
+    try {
+      s.completedTurns = 2;                     // shouldSuggest 要求 >= 2
+      let release;
+      s.askSide = () => new Promise(r => { release = r; });
+      const p = s.maybeSuggest({});
+      // 用户起了一轮短的并跑完：pendingTurns 回到 0（那道闸失效），但 completedTurns 前进了
+      s.completedTurns = 3;
+      s.pendingTurns = 0;
+      release('下一步试试 X');
+      assert.equal(await p, false, '对上一轮说的建议被发进了新对话');
+      assert.equal(events.filter(e => e.type === 'prompt_suggestion').length, 0);
+    } finally { dispose(); }
+  });
+
+  test('期间什么都没发生 → 照常发出（证明这道闸不是恒不发）', async () => {
+    const { s, events, dispose } = makeSession();
+    try {
+      s.completedTurns = 2;
+      s.pendingTurns = 0;
+      s.askSide = async () => '下一步试试 X';
+      assert.equal(await s.maybeSuggest({}), true);
+      const sent = events.filter(e => e.type === 'prompt_suggestion');
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].payload.text, '下一步试试 X');
+    } finally { dispose(); }
+  });
+
+  test('新一轮仍在跑（pendingTurns>0）→ 照旧丢弃，既有闸不得被改坏', async () => {
+    const { s, events, dispose } = makeSession();
+    try {
+      s.completedTurns = 2;
+      s.askSide = async () => '下一步试试 X';
+      s.pendingTurns = 1;
+      assert.equal(await s.maybeSuggest({}), false);
+      assert.equal(events.filter(e => e.type === 'prompt_suggestion').length, 0);
+    } finally { dispose(); }
+  });
+});
+
+// 接线：hasPriorHistory 必须真的从 resumeId 推出来并送进两道判据，否则 side-question.js 那组
+// 用例全绿而产品行为一点没变（判据改对了、没人传）。
+test.describe('hasPriorHistory 接线', () => {
+  test('resume 进来的会话 → true；全新会话 → false', () => {
+    const fresh = makeSession();
+    const resumed = makeSession({ resumeId: 'sess-abc' });
+    try {
+      assert.equal(fresh.s.hasPriorHistory, false);
+      assert.equal(resumed.s.hasPriorHistory, true);
+    } finally { fresh.dispose(); resumed.dispose(); }
+  });
+
+  test('resume 的会话第一轮就给建议（本进程 completedTurns 还是 0）', async () => {
+    const { s, events, dispose } = makeSession({ resumeId: 'sess-abc' });
+    try {
+      s.completedTurns = 0;
+      s.pendingTurns = 0;
+      s.askSide = async () => '继续修那个测试';
+      assert.equal(await s.maybeSuggest({}), true, 'resume 回来的老会话被当成刚开的，第一轮建议被抑制');
+      assert.equal(events.filter(e => e.type === 'prompt_suggestion').length, 1);
+    } finally { dispose(); }
+  });
+
+  test('全新会话第一轮仍不给（门槛没被顺手拆掉）', async () => {
+    const { s, events, dispose } = makeSession();
+    try {
+      s.completedTurns = 0;
+      s.pendingTurns = 0;
+      s.askSide = async () => '不该出现';
+      assert.equal(await s.maybeSuggest({}), false);
+      assert.equal(events.filter(e => e.type === 'prompt_suggestion').length, 0);
+    } finally { dispose(); }
+  });
+});

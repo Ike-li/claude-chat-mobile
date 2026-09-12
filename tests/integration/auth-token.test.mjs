@@ -15,6 +15,9 @@
 //
 // ★ 每个用例只允许产生【一次】失败鉴权。第二次会落进上一次的 500ms 退避窗口拿 429。要断言两条
 //   失败路径就拆成两个用例（各自一台 server），别在同一个用例里连发。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -33,7 +36,7 @@ async function startServer() {
   const spawned = await spawnServer({
     AUTH_TOKEN,
     CCM_DATA_DIR: dataDir,
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 本文件测的是 LAN token 路，CF Access 必须关闭。空串 + _spawn-server 已设的
     // CCM_TEST_PRESERVE_EMPTY_ENV=1 组合：空值保留到 dotenv 结束（挡住本机 .env 回填真实

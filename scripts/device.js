@@ -11,7 +11,7 @@ loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
 // devices.js 在模块初始化时锚定数据路径，必须先加载 .env 再动态导入。
 // 信任表一律经 getTrustedDeviceIds 读，不在这里自己 join 路径：devices.js 除 CCM_DATA_DIR 外
 // 还支持 CCM_*_DEVICES_FILE 文件级重定向，本文件自己算的话，list 与 approve 会认不同的源。
-const { getPendingDevices, getTrustedDeviceIds, approveDevice, denyDevice } = await import('../app/src/auth/devices.js');
+const { getPendingDevices, getTrustedDeviceProfiles, approveDevice, denyDevice } = await import('../app/src/auth/devices.js');
 const { resolveDataDir } = await import('../app/src/shared/data-dir.js');
 
 // 「我动的是哪个数据目录」。一台机器上可能装着不止一份（本仓 + fork + 演练用的 fresh clone），
@@ -38,12 +38,17 @@ CCM 设备审批工具
 // 两种输出的唯一数据源。deviceToken → deviceId 的改名与 socket 侧 pendingDevicesPayload
 // （app/src/auth/device-gate.js）保持一致：同一份东西在两条通道上不该有两个名字。
 function snapshot() {
+  const trustedProfiles = getTrustedDeviceProfiles();
   return {
     schemaVersion: 1,
     pending: getPendingDevices().map(d => ({
       deviceId: d.deviceToken, ip: d.ip, userAgent: d.userAgent, ts: d.ts,
     })),
-    trusted: getTrustedDeviceIds(),
+    // `trusted` 保留原形（一维字符串数组）：装在 /Applications 的 CCM.app 是独立编译产物、
+    // 可能落后于仓库好几个版本，删掉这个键会让旧 bundle 的信任列表恒为空。
+    // 与 trustedProfiles 同源派生，两者不会分叉。
+    trusted: trustedProfiles.map(p => p.deviceId),
+    trustedProfiles,
   };
 }
 
@@ -69,10 +74,20 @@ function listDevices() {
   }
 
   console.log('\n=== 已受信任的设备 (Trusted) ===');
-  if (snap.trusted.length === 0) {
+  if (snap.trustedProfiles.length === 0) {
     console.log('  （暂无已受信任的设备）');
   } else {
-    snap.trusted.forEach((id, idx) => console.log(`  [${idx + 1}] ID: ${id}`));
+    snap.trustedProfiles.forEach((d, idx) => {
+      console.log(`  [${idx + 1}] ${d.alias || [d.kind, d.model, d.browser].filter(Boolean).join(' · ')} · ${d.shortId}`);
+      console.log(`      ID: ${d.deviceId}`);
+      if (d.approvedAt) {
+        console.log(`      来源 IP: ${d.ip || '未知'} | 批准时间: ${new Date(d.approvedAt).toLocaleString()}`);
+        console.log(`      User-Agent: ${d.ua || 'Unknown'}`);
+      } else {
+        // 元数据只在【批准那一刻】记得下来，事后无从补。这条是在该功能上线之前批准的。
+        console.log('      （无元数据：在本功能上线前批准。吊销后让该设备重新申请一次即可补上）');
+      }
+    });
   }
   console.log('');
 }

@@ -101,7 +101,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, with the first as the default `WORK_DIR`. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
+2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
 3. Asks how your phone will reach this machine (LAN only / Cloudflare / encrypted tunnel VPN / reverse proxy and hosted tunnels / direct public exposure). Press Enter to skip; if you pick one it is stored as `ACCESS_PROFILE`, `doctor` and the phone security check tailor their checks to it, and the wizard ends with the matching docs pointer.
 4. Asks whether to enable the phone file editor's direct writes (the only write path that bypasses the Agent tool-approval chain). Enter keeps the default on; answering `n` writes `FILE_EDIT=off`.
 5. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
@@ -118,7 +118,7 @@ All configuration lives in `ccm.config.json` at the project root — one JSON fi
 {
   "$schemaVersion": 1,
   "AUTH_TOKEN": "…",
-  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": ["/Users/you/code/project-a"],
   "PORT": 3000,
   "WEB_STATUSLINE": false
 }
@@ -197,11 +197,10 @@ node scripts/setup.js \
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
 - Use `--config <path>` to place the config file elsewhere. That path is independent of any existing project-root config — a repo that already has `ccm.config.json` will not block it.
 
-For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`:
+For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`. **The first entry is the one your phone opens by default** (before 2026-09-08 a separate `WORK_DIR` key held the same path; it has been merged — an old config's `WORK_DIR` line is still recognised, folded into the first slot, and reported as safe to delete):
 
 ```json
 {
-  "WORK_DIR": "/Users/you/code/project-a",
   "WORKDIRS": [
     "/Users/you/code/project-a",
     {
@@ -215,7 +214,12 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 `WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
 decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
-A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
+A git worktree outside the repository (`../repo-<branch>` and friends) must be listed as its own absolute path.
+**The one exception is a "managed worktree"**: anything under `<allowlisted workspace>/.claude/worktrees/<single-segment name>`
+(the default landing spot for `EnterWorktree`, `--worktree`, and agent isolation) is authorized by derivation via
+`resolveManagedWorktree` without being listed in `WORKDIRS`, and its sessions are folded into the parent repo's session
+list. Depth is fixed at 1, the prefix is compared after `realpath`, and a non-existent directory is rejected.
+Anything outside that shape still has to be listed explicitly.
 
 The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
@@ -335,11 +339,13 @@ Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `
 
 ## 8. Complete the first-run check
 
+Two gates stay separate: **CCM access token / device approval** only decide whether the phone can enter the shell; **Claude CLI login** decides whether chat can actually run. A running server is not the same as a working conversation.
+
 On the phone, verify:
 
 1. The expected workspace appears on the home screen.
-2. A new session can send a harmless prompt such as “Reply with OK only.”
-3. The response streams and reaches a finished-turn state.
+2. **Hard gate (OK even when CLI is logged out):** start a new session and send a message. If the main path shows `Not logged in · Please run /login` (or an equivalent CLI-passed error), **this step passes** — the model path correctly surfaces the logout state instead of a fake streaming success. On the host, open `claude`, run `/login` (or first get a clean `claude auth status`), then retry from the phone.
+3. **Green path (CLI logged in):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
 4. Settings show model, permission mode, effort, and service status.
 5. If Web Push is enabled, use “Send a test push” now instead of discovering a broken path during a real approval.
 
@@ -376,7 +382,8 @@ npm run hooks:uninstall
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
 
-The phone UI can also install or remove the bridge explicitly under Settings → Service status → Terminal session notifications.
+The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
+notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
 
 ## Optional: macOS desktop console
 
@@ -425,6 +432,29 @@ and every action on one screen.
 Checking 「开机自启（菜单栏）」 (Start at login) only brings the menu-bar icon back at login (via a LaunchAgent).
 Headless keeps using `npm start` in a terminal. Do not let both occupy port 3000.
 
+### When the desktop app misbehaves, the terminal is the way out
+
+The desktop app is a GUI process, and it has a class of failures the command line structurally cannot
+hit — a window sinking behind another one so you cannot click it, the notch squeezing the menu bar icon
+out, a GUI process inheriting a different `PATH` than your terminal. What they share is that **the
+server keeps running fine; it is only that one screen that cannot reach it.**
+
+So when a menu item "does nothing", check the service itself from a terminal first. Neither of these
+goes through the app:
+
+```bash
+npm run service:status     # real run state of each unit (the menu bar reads this too)
+node scripts/doctor.js     # startup self-check
+```
+
+If the service is healthy, the problem is in the app layer: **「重启应用」 (Relaunch)** in the menu
+(relaunch without rebuilding) usually clears it; if the icon is gone entirely, see
+[the section below](#when-the-notch-hides-the-menu-bar-icon).
+
+**The desktop app holds no exclusive capability** — it drives the same CLIs under `scripts/`
+(`service.js` / `doctor.js` / `config.js`), so you can always bypass it and run them directly instead
+of waiting for the app to recover.
+
 ### Why there is no prebuilt app to download
 
 An app you compile yourself carries **no quarantine attribute** and opens on a double-click. An app
@@ -464,9 +494,9 @@ Follow these steps in order and verify each result before continuing:
 1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
    Stop and tell me if any check fails; do not install or sign in to claude yourself.
 2. Run npm ci --omit=dev.
-3. Ask me for the absolute WORK_DIR and whether to install the CLI hooks bridge.
+3. Ask me for the absolute workspace path and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
-4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR PORT
+4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT
    CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
@@ -481,6 +511,159 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 ```
 
 </details>
+
+## Command reference
+
+Everything you will reach for after installation. **Every CLI prints its own usage when run without a
+subcommand**, and those printouts are the authority on flags — this reference lists names and purposes
+only, never a second copy of the flags (a second copy drifts from the code):
+
+```bash
+node scripts/config.js       # prints usage when given no subcommand; same for the next three
+node scripts/device.js
+node scripts/service.js
+node scripts/qr.js --help
+npm run setup -- --help
+```
+
+> What `npm run` lists is **not** the full set: `service.js` has `start` / `stop` / `copy-token`
+> subcommands with no npm alias — reach them with `node scripts/service.js <subcommand>`.
+
+### Starting and configuring
+
+| Command | Purpose |
+|---|---|
+| `npm start` | Start the server (port 3000 by default) |
+| `npm run dev` | Same, restarting on source changes |
+| `npm run setup` | Interactive setup wizard |
+| `node scripts/config.js schema` | **List every setting and what it does**, generated from the schema so it never drifts |
+| `node scripts/config.js get\|set\|unset` | Read and write individual settings; secrets need an explicit `--reveal` to print |
+| `npm run config:check` | Validate the current configuration |
+| `npm run config:migrate` | Legacy `.env` → `ccm.config.json` |
+| `node scripts/doctor.js` | Preflight self-check. `--fix` tightens config file permissions to 0600; `--env=<file>` diagnoses that specific file |
+
+### Devices and connecting
+
+| Command | Purpose |
+|---|---|
+| `node scripts/device.js list` | List pending and trusted devices (`--json` for machine output) |
+| `node scripts/device.js approve\|deny <ID>` | Approve or reject a device |
+| `node scripts/qr.js` | Render the address + token as a terminal QR code, so you do not type 64 hex characters |
+| `node scripts/service.js copy-token` | Copy the token to the clipboard **without printing it** |
+
+> Both of the last two move the token out of the config file — run them when you need them, and keep
+> them out of scripts and logs. `qr.js --public` resolves your public address; a hostname behind
+> Cloudflare Access **carries no token** (that path only accepts a JWT).
+
+### The two CLI bridges (optional, they write to `~/.claude`)
+
+| Command | Purpose |
+|---|---|
+| `npm run statusline:install\|status\|uninstall` | Terminal session status bridge |
+| `npm run hooks:install\|status\|verify\|uninstall` | Terminal session notification bridge |
+
+They serve different purposes — see [their two sections above](#optional-cli-statusline-bridge).
+
+### macOS desktop app and managed services
+
+| Command | Purpose |
+|---|---|
+| `npm run app:install` / `npm run app:build` | Build and install into `/Applications` / build only into `desktop/build/` |
+| `npm run service:status` | Run state and ownership of each unit (`--json` is what the menu bar reads) |
+| `npm run service:health` | The only command that hits `/health` |
+| `npm run service:install\|restart\|logs\|uninstall` | Managed service operations |
+| `npm run service:adopt` | Adopt a hand-installed unit — writes the manifest only, never touches the plist |
+| `node scripts/service.js start\|stop <unit>` | Start or stop a single unit (no npm alias) |
+
+You rarely need to type these — the desktop menu covers them. They are the same CLI the menu drives,
+which is what makes them usable when the app itself is stuck.
+
+### Updating and uninstalling
+
+See the [Updating](#updating) and [Uninstall](#uninstall) sections below.
+
+> **These only work in a full repository**: `npm test`, `npm run check`, `npm run lint`, and every
+> `test:*` / `playground:*` / `mutate*`. They reference the test tree and the gates, which the source
+> archive strips out (why: [Option A](#option-a-source-archive-you-just-want-to-run-it); to run them,
+> use [Option B](#option-b-full-repository-you-want-to-change-code-or-run-tests)).
+
+## Updating
+
+**Update it the same way you got it** — whichever option you picked in step 2 is the one to follow here.
+
+### Option A: overwrite in place (installed from the archive)
+
+Go back to the directory you originally unpacked into (the parent of `claude-chat-mobile-master/`) and re-run the same command:
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
+```
+
+**Overwriting does not touch your config or your data.** `ccm.config.json` and `data/` are both in `.gitignore`,
+and the archive is exactly what GitHub's on-the-fly `git archive` produces — it only packs files git tracks, so
+those two are not in the archive at all and `tar` has nothing to overwrite. Read positions, device approvals, the
+audit log, and uploaded attachments all stay where they are.
+
+To pin a version instead of following `master`, swap the URL for `/archive/refs/tags/vX.Y.Z.tar.gz`; it unpacks
+into `claude-chat-mobile-X.Y.Z`, which is a different directory — see "moving to a new directory" below.
+
+### Option B: `git pull` (cloned)
+
+```bash
+git pull
+npm ci --omit=dev
+```
+
+`master` only moves on release, so what you pull is the latest release.
+
+### After either one
+
+Restart the server: from the desktop menu, the "Restart" on the server row; headless, restart that `npm start`
+process. It is worth re-running the checks afterwards:
+
+```bash
+node scripts/doctor.js
+```
+
+**On macOS there is one more step**: click "Update desktop app (rebuild)" in the menu. CCM.app is a compiled
+Swift artifact and does not follow the source — without that click the menu bar still runs the old bundle.
+
+### Two things to watch out for
+
+**1. `tar` merges, it does not replace.** Files deleted upstream stay behind in your directory. That does not
+affect anything at runtime (a `.js` nobody imports is just dead code), but if you want a clean tree, unpack into
+a new directory and move `ccm.config.json` and `data/` across.
+
+**2. A new directory means reinstalling both CLI bridges.** The statusline and hooks bridges write the absolute
+path **as of install time** into `~/.claude/settings.json`, pointing at the runner in the old directory.
+Overwriting in place is fine (the path did not change, so new code takes effect on its own); after a move, the
+old path either points at stale code or does not exist — and the failure is **silent**: the status line stops
+refreshing and hook-triggered pushes stop arriving, with nothing in any error pointing here. Reinstall with:
+
+```bash
+npm run statusline:install
+npm run hooks:install
+```
+
+### Checking whether there is a new version
+
+The product never checks upstream on its own. Look yourself:
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+That does not require a local git repository (it asks the remote directly), so it works for archive installs too.
+Your local version:
+
+```bash
+node -p "require('./package.json').version"
+```
+
+Once the server is up, `versions.server` in `/health` reports the same value, while `versions.cli` and
+`versions.sdk` give your local `claude` and Agent SDK versions — the easiest post-upgrade sanity check.
 
 ## Uninstall
 
@@ -507,10 +690,11 @@ site data and the installed PWA must be cleared manually.
 | The server refuses to start, saying `AUTH_TOKEN` is missing | The token is a startup prerequisite; it no longer degrades to a loopback bind. Run `npm run setup` to generate one, then restart |
 | Startup logs list only the local URL, no phone URL | `BIND_MODE=loopback` binds `127.0.0.1` only, so nothing is listening on those LAN addresses. Switch back to the default or `lan` for direct phone access |
 | An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
-| doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
+| doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
-| After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |
+| Phone is in the main shell, but sending shows `Not logged in · Please run /login` | This is **Claude CLI not logged in**, not a broken CCM token/device gate. On the host run `claude auth status`; if logged out, `/login` inside `claude`, then retry from the phone. See §1 prerequisites |
+| After one wrong token, the correct one is rejected too (HTTP 401) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **This tier answers 401 `unauthorized` with no `Retry-After`** — the wording deliberately avoids "too many attempts" when you only got it wrong once. **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` / HTTP 429 |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |

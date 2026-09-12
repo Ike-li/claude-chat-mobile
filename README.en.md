@@ -6,7 +6,7 @@ Claude Chat Mobile is a **self-hosted remote console for Claude Code that runs o
 
 Your code, the Claude CLI, your project files, and the local CCM / Claude session state all keep running or living **on your own computer**. There is no database, no multi-tenancy, and no SaaS backend; model requests are still sent by the local `claude` CLI using your existing Anthropic sign-in or third-party gateway configuration.
 
-[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
+[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/) · [📐 Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -35,7 +35,7 @@ Claude Chat Mobile is built for the people the official path **rejects, or whose
 
 1. **Official Remote Control refuses your configuration.** It requires a claude.ai subscription login talking directly to `api.anthropic.com`: API keys, third-party gateways / `ANTHROPIC_BASE_URL`, Bedrock / Vertex / Foundry, the enterprise Claude apps gateway, telemetry opt-outs such as `DISABLE_TELEMETRY`, and ZDR compliance policies all disable the feature entirely. CCM makes **zero assumptions about, and zero contact with, your model path**: however your `claude` CLI is configured, that is what runs.
 2. **You need the control plane to stay in your own hands.** While official Remote Control is connected, the session transcript (messages, replies, tool activity) is stored on Anthropic's servers for cross-device sync. CCM's control plane — the service, transcripts, device trust, push, audit — lives entirely on your own machine; you pick the ingress, and on a LAN it runs fully closed-loop.
-3. **You want the whole machine at a glance.** The official path enables remote access per session; CCM turns **every** Claude session that ever happened on this machine — started in a terminal, last week's, the one you forgot to flag — into a visible, resumable console, plus the machine-operations surface: file browsing, git changes, service health.
+3. **You want it all at a glance.** The official path enables remote access per session; CCM turns **every** Claude session that ever happened in the workspaces you listed in `WORKDIRS` — started in a terminal, last week's, the one you forgot to flag — into a visible, resumable console, plus the machine-operations surface: file browsing, git changes, service health. (Workspaces are explicitly allowlisted — see "Security boundaries" item 3 below.)
 
 The goal is not to rebuild an AI chat product, but:
 
@@ -50,7 +50,7 @@ If you already use Claude Code and any of these apply, Claude Chat Mobile is pro
 * your `claude` CLI runs through a third-party gateway / an API key, or with telemetry disabled — configurations official Remote Control refuses outright;
 * you cannot accept remote-session transcripts being stored on Anthropic's servers and need a fully self-hosted control plane;
 * you do not want to sit at the desk while Claude runs a long task — answer `AskUserQuestion`, approve tool calls, and get "needs you" notifications from your phone;
-* you want a whole-machine session overview: sessions started in a terminal, sessions sitting in history — all visible, all resumable;
+* you want an overview of every session across your allowlisted workspaces: sessions started in a terminal, sessions sitting in history — all visible, all resumable;
 * you want to keep using the projects, Claude CLI configuration, and development environment on your original machine;
 * you want to own the service and the data rather than move a whole development environment into someone else's SaaS.
 
@@ -174,6 +174,28 @@ Full first-run instructions — configuration, non-interactive setup, PWA, and C
 
 **→ [Getting Started guide](docs/getting-started.en.md)**
 
+## Updating
+
+Update it the same way you got it. If you installed from the **archive**, go back to the directory you unpacked it in and re-run the same `curl` to overwrite in place; if you **cloned**, `git pull` is enough (`master` only moves on release). Either way, then:
+
+```bash
+npm ci --omit=dev
+```
+
+Then restart the server. On macOS also click "Update desktop app (rebuild)" in the menu once — CCM.app is a compiled artifact and does not follow the source.
+
+> **Overwriting does not touch your config or your data.** `ccm.config.json` and `data/` (read positions, device approvals, audit log, uploaded attachments) are in `.gitignore`, and the archive is exactly what GitHub's on-the-fly `git archive` produces — so they are not in it at all.
+
+The product never checks for new versions on its own. To see whether there is one:
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+Compare it with your local `node -p "require('./package.json').version"`, or with `versions.server` in `/health` once the server is up.
+
+Updating into a fresh directory, leftover files, and whether the two CLI bridges need reinstalling: **→ [Getting Started · Updating](docs/getting-started.en.md#updating)**
+
 ## Remote access
 
 Claude Chat Mobile supports everything from LAN access to a long-lived public entry point:
@@ -203,7 +225,7 @@ Boundaries to understand before you use it:
 
 1. **Single user.** There is no multi-user or tenant isolation; the permissions of an authenticated operation ultimately come from the local account running `claude`.
 2. **No token, no server.** `AUTH_TOKEN` is a startup prerequisite under every bind mode — even a browser on this machine needs it. There is no "local means no auth" path.
-3. **Workspaces are explicitly allowlisted.** Files, sessions, and related operations can only reach the configured `WORK_DIR` / `WORKDIRS`. Do not add your whole home directory for convenience.
+3. **Workspaces are explicitly allowlisted.** Files, sessions, and related operations can only reach the configured `WORKDIRS`. Do not add your whole home directory for convenience.
 4. **New devices need trust.** Except for local connections and connections already validated by the optional public identity layer (currently Cloudflare Access), a device holding the correct token still needs one device approval. Token plus device approval is the public baseline; it applies equally to Tailscale, reverse proxies, and direct exposure.
 5. **Claude Code permissions are inherited.** Existing Claude Code rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.
 6. **The file editor is a direct user write.** It **does not pass through the Agent tool-approval chain**. It can only modify existing files inside an approved workspace, with scope checks, a size limit, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` if you do not need it. Turning it off is recommended for long-term public exposure — `doctor` flags it when a public entry point (Cloudflare Access / `PUBLIC_URL` / a public `ACCESS_PROFILE`) is declared, and the setup wizard asks about it.
@@ -228,10 +250,17 @@ Settings are not maintained as a separate static list — read the current defin
 node scripts/config.js schema
 ```
 
+Commands work the same way: every CLI prints its own usage when run without a subcommand, and that
+printout is the authority on flags. For an index grouped by purpose, see
+[First-run guide · Command reference](docs/getting-started.en.md#command-reference).
+
 ### I want to understand how it works
 
 **[Architecture](docs/architecture.en.md)**
 Web / CLI dual path, the Agent SDK, event synchronization, reconnect recovery, and session takeover.
+
+**[Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)**
+Thirteen interactive diagrams, one per functional area: dual-channel sync, the single-driver state machine, the six authorization gates, approval lifecycle, push suppression, file and session data flows, the frontend module map, and test routing. Light/dark themes, search focus, and relationship tracing included. Hosted on the `gh-pages` branch, so they ship with neither `clone` nor the install archive.
 
 ### I want to modify or maintain it
 

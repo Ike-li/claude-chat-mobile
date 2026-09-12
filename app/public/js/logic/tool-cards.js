@@ -8,7 +8,7 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t } from '../i18n.js';
-import { isSyntheticTaskId } from './bg-tasks.js';
+import { bgTaskUsageText, isSyntheticTaskId } from './bg-tasks.js';
 
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
 // 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
@@ -356,10 +356,76 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
 // 子 agent 可折叠卡片标题（默认收起；维护者选定「可折叠卡片」形态）。
 // running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
-export function formatSubagentCardTitle({ subagentType, running = true } = {}) {
+export function formatSubagentCardTitle({
+  subagentType, running = true, toolUses = null, totalTokens = null, durationMs = null, failures = null,
+} = {}) {
   const raw = subagentType != null ? String(subagentType).trim() : '';
   const type = raw || t('子 agent');
-  return running ? `🤖 ${type} ${t('运行中')}` : `🤖 ${type} ${t('已完成')}`;
+  const head = running ? `🤖 ${type} ${t('运行中')}` : `🤖 ${type} ${t('已完成')}`;
+  // 用量段的数据源是 SDK task_progress.usage（累计值，按 tool_use_id 挂到本卡）。
+  // 【缺席时一个字都不加】历史回放取不到它——bgTasks 是 live 内存态，刷新即空。加占位
+  // （"0 tools"/"— tok"）会让刷新前后看起来像把数据弄丢了，不显示才是诚实的降级。
+  // 也不按 running 分档显示不同字段：分档会造出一半永远跑不到的分支，且 CLI 自己恒显。
+  const parts = [];
+  // 失败计数排在用量之前：出没出错比跑了多少 token 更该先看见。
+  // 【为什么放标题不放单行动作槽】那个槽由 task_progress 心跳驱动、每隔几秒被当前工具覆盖一次——
+  // 失败写在那里会闪一下就没，而"闪过"等于没显示。计数只增不减，折叠着扫一眼就知道里面出没出过错。
+  // 【只数真错误】denyKind 那几档（已回答/已拒绝/已取消）是用户自己的动作，他知道，不算异常。
+  const failed = Number(failures);
+  if (Number.isFinite(failed) && failed > 0) parts.push(`❌ ${failed}`);
+  const uses = Number(toolUses);
+  if (Number.isFinite(uses) && uses > 0) parts.push(`${uses} tools`);
+  const usage = bgTaskUsageText({ durationMs, totalTokens });
+  if (usage) parts.push(usage);
+  return parts.length ? `${head} · ${parts.join(' · ')}` : head;
+}
+
+// 聚合卡的单行动作槽，对齐 CLI 的 lastToolInfo：折叠态也可见，「跑到哪了」不必展开卡片。
+// 前缀用 ↳ 不用 CLI 那个 ⎿：后者是制表符区的字，终端等宽字体里好看，移动端 UI 字体下
+// 真机渲染成又细又歪的一道（2026-09-10 实测），↳ 在两边都稳。
+// 只在有工具名时成行——它是「最近工具」行，没有工具就没有这一行；光有描述不顶替
+// （那是任务级摘要，归横幅/详情面板，混进来会让两处说同一件事的不同版本）。
+const SUBAGENT_LAST_TOOL_MAX = 60;
+export function formatSubagentLastToolLine(input) {
+  // 解构默认值只挡 undefined，不挡 null——调用点传的是 tasks.get(id) 的结果，取不到就是 null。
+  const { lastToolName, description, subagentType } = input || {};
+  const tool = lastToolName != null ? String(lastToolName).trim() : '';
+  if (!tool) return null;
+  let desc = description != null ? String(description).trim() : '';
+  // 后端 bgTaskUpsert 把 subagentType 拼在 message 前面（`${subagentType}：${desc}`）。
+  // 类型名已经在标题里，行内再来一次是纯噪音。两种冒号都剥——中文全角是后端拼的，
+  // 半角来自上游 description 自带的形态。
+  const type = subagentType != null ? String(subagentType).trim() : '';
+  if (type) {
+    for (const sep of ['：', ':']) {
+      if (desc.startsWith(type + sep)) { desc = desc.slice(type.length + sep.length).trim(); break; }
+    }
+  }
+  if (!desc) return `↳ ${tool}`;
+  const clipped = desc.length > SUBAGENT_LAST_TOOL_MAX ? `${desc.slice(0, SUBAGENT_LAST_TOOL_MAX)}…` : desc;
+  return `↳ ${tool}: ${clipped}`;
+}
+
+// 合卡后聚合卡上那一行「派它去干什么」。CLI 在同一位置只显 description，不显 prompt——
+// 照抄这条判据。2026-09-10 真机：展开聚合卡先撞一坨含完整 prompt 的 JSON，因为合卡时
+// 把通用工具卡的原始输入槽原样接了过来。合卡前那坨 JSON 在一张独立的、默认折叠的卡里，
+// 没人会去点它；合卡后它挡在门口——用户展开卡是想看子代理干了什么，先撞上自己刚打的 prompt。
+// 回落顺序里保留 prompt：Task/Workflow 或模型没给 description 时，有一行总比空着强。
+export function formatSpawnDescription(inputSummary, maxLen = 120) {
+  const clip = (v) => {
+    const one = String(v).trim().replace(/\s+/g, ' ');
+    return one.length > maxLen ? `${one.slice(0, maxLen)}…` : one;
+  };
+  const input = parseJsonObject(inputSummary);
+  if (!input) {
+    const raw = typeof inputSummary === 'string' ? inputSummary.trim() : '';
+    return raw && raw !== '{}' ? clip(raw) : null;
+  }
+  for (const k of ['description', 'prompt', 'args', 'name']) {
+    const v = input[k];
+    if (typeof v === 'string' && v.trim()) return clip(v);
+  }
+  return null;
 }
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。

@@ -22,7 +22,7 @@
   - server：`node app/server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `app/src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。
+  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。后者意味着 Access 开着时「已受信任的设备」这张表管不到隧道进来的连接（吊销无效）——要让它也生效，设 `DEVICE_APPROVAL_SCOPE=all` 并重启。
 
 > **Cloudflare 是默认路径，不是硬依赖。** `CF_ACCESS_*` 三项留空即整层关闭，server 侧零改动，
 > 换加密隧道、自建反代或只用局域网都能跑。各拓扑的明文可见方、CCM 侧的连带变化与通用配置要点，
@@ -54,6 +54,21 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 ```
 
 > ⚠️ `~/.cloudflared/<UUID>.json` 与 `cert.pem` 是凭据，**勿提交/泄露**。
+
+隧道地址要在手机上打开时，二维码可以省掉手输：
+
+```bash
+node scripts/qr.js --public              # 自动解析：CF Access 域名 / 已登录的 Tailscale
+node scripts/qr.js --url https://<地址>  # Quick Tunnel 的随机域名、自建反代等手动指定
+```
+
+`--public` 只认得两种地址：配置里的 `CF_ACCESS_HOSTNAME`，以及 `tailscale status` 报告的 MagicDNS 名。Quick Tunnel 的随机域名只存在于 cloudflared 自己的输出里，产品不管那个进程，只能用 `--url`。
+
+**开了 Cloudflare Access 时，二维码里不含令牌**——那条路只认 Access 的 JWT，`AUTH_TOKEN` 不参与鉴权（见 `app/src/auth/cf-access.js` 的 `isPublicHost`），带上它只是多印一份凭据。扫码后按提示完成 2FA 即可。`--url` 指向同一域名时走的是同一道判据。
+
+反过来，只填了 `CF_ACCESS_HOSTNAME` 而没填 `CF_ACCESS_TEAM` / `CF_ACCESS_AUD` 时，Access 整层是关闭的、公网仍由 `AUTH_TOKEN` 独自把守——这时二维码**会**带令牌，并额外打一行告警。
+
+token 走 URL fragment（`/#token=`），**不进 HTTP 请求行**，所以不会落进 Cloudflare 或任何中间层的访问日志。但公网二维码泄露的后果与局域网码差一个量级：局域网码还要求对方在你的 WiFi 里，公网码是全世界任何人都能接入。投屏或有旁人时不要打印。
 
 ### 2. Access（Cloudflare Zero Trust 控制台）
 
@@ -121,9 +136,10 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 ```bash
 npm run service:install -- server      # node app/server.js，RunAtLoad + KeepAlive
-npm run service:install -- tunnel      # cloudflared tunnel run（读 §1 的 config.yml）
+# tunnel 与 menubar 必须带参数，光敲下面这两条会被 precheck 拒绝：
+npm run service:install -- tunnel --tunnel=<隧道名> --cloudflared=<绝对路径>
 npm run service:install -- logrotate   # 每天 03:47 轮转日志
-npm run service:install -- menubar     # 桌面控制台随登录自启
+npm run service:install -- menubar --app=<CCM.app 绝对路径>   # 桌面控制台随登录自启
 npm run service:status
 ```
 
@@ -182,7 +198,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ```
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名与会话标题**（`formatNotifyIdentity` 的「事件 · 项目 · 会话」三段，会话标题取自抽屉里的 SDK summary / AI 生成标题，上限 40 字），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
@@ -220,7 +236,7 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | 现象 | 处理 |
 |---|---|
 | 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
-| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
+| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
@@ -349,7 +365,8 @@ CCM 看到的连接 IP 是 127.0.0.1，整个 tailnet 的设备共用一个限�
 后两行需要展开：
 
 **设备审批会自己回来。** `shouldBypassDeviceApproval`（`app/src/auth/rate-limiter.js`）第一行是
-`if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
+`if (accessEnabled && deviceApprovalScope !== 'all') return true`——**缺省**下 Access 与设备审批是替代关系而非叠加
+（声明 `DEVICE_APPROVAL_SCOPE=all` 可让两者叠加）。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
 **限速桶默认会合并，拆桶要显式声明。** `shouldTrustCfConnectingIp` 要求 `publicHost` 为真，而该条件在
@@ -392,7 +409,7 @@ IPv4 不受影响，仍按整地址分桶。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`app/src/ops/notify-channels.js` 的 `publicUrl`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
-- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/server/http.js` 的 `reachableIPv4s`）
+- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`app/src/shared/net-addr.js` 的 `reachableIPv4s`）
   按**地址段**判定、不看接口名，所以 macOS 上 WireGuard / Tailscale 的 `utun*` 地址会和局域网地址
   一起列出。TUN 代理占用的 RFC 2544 假段（198.18/15）与 link-local 仍被排除。
   隧道地址没出现，说明隧道本身没起来，不是日志不显示它。

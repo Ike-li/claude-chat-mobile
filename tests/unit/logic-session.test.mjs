@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -135,6 +135,51 @@ test('formatSessionRowSubtitle: 桌面端已打开与终端已打开分开说', 
     formatSessionRowSubtitle({ whenText: '9/6', terminalState: 'alive', shortId: 'abcdef12' }),
     '终端已打开 · 9/6 · abcdef12',
   );
+});
+
+// 文件/改动面板跟的是「当前会话在哪个工作树」，不是「当前工作区」。这两者在托管 worktree
+// 打开时会分叉：工作区轴仍是父仓（不新增抽屉条目），而 claude 实际在 worktree 里改文件。
+// 判错的症状是改动面板空着——而「看起来没改动」和「真的没改动」在 UI 上无法区分。
+test('resolvePanelCwd: 跟当前实例的 cwd，无实例时回落工作区 cwd', () => {
+  const instances = [
+    { instanceId: 'i1', cwd: '/repo' },
+    { instanceId: 'i2', cwd: '/repo/.claude/worktrees/feature-x' },
+  ];
+  assert.equal(
+    resolvePanelCwd({ instances, viewingInstanceId: 'i2', workspaceCwd: '/repo' }),
+    '/repo/.claude/worktrees/feature-x',
+    '回落工作区 cwd 会让 worktree 会话的改动面板显示父仓的 diff',
+  );
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo');
+  // 空首页/实例已关闭：回落工作区 cwd，与从前同形
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: null, workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({ instances, viewingInstanceId: 'gone', workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({ instances: null, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolvePanelCwd({}), null);
+});
+
+// 托管 worktree 的会话并进父仓列表后（2026-09-11），同一页里混着两个工作树的会话。
+// 不标出来的话，「这条改的是父仓还是某个 worktree」在合并前完全无从判断——而那正是
+// 用户点开它要做的第一个决定。放最前：truncate 先吃尾部，归属比时间戳更不能丢。
+test('formatSessionRowSubtitle: worktree 名排在最前，父仓行不受影响', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ worktree: 'feature-x', whenText: '9/11', shortId: 'abcdef12' }),
+    'worktree feature-x · 9/11 · abcdef12',
+  );
+  // 与终端来源并存时仍在最前（两者都是"这条会话属于谁"，worktree 是更外层的归属）
+  assert.equal(
+    formatSessionRowSubtitle({ worktree: 'wt-a', whenText: '9/11', terminalState: 'alive', terminalSource: 'cli' }),
+    'worktree wt-a · 终端已打开 · 9/11',
+  );
+  // 正对照：父仓行（无 worktree 字段）逐字不变
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/11', shortId: 'abcdef12' }),
+    '9/11 · abcdef12',
+  );
+  // 空串/非字符串不得渲染成空段（会多出一个悬空的 ' · '）
+  for (const bad of ['', '   ', null, undefined, 42]) {
+    assert.equal(formatSessionRowSubtitle({ worktree: bad, whenText: '9/11' }), '9/11', `worktree=${JSON.stringify(bad)}`);
+  }
 });
 
 test('formatSessionRowSubtitle: CLI 空闲来源提到时间前面；busy 不再把「终端」塞进副行', () => {
@@ -812,4 +857,48 @@ test('resolveDrawerStatusChip: 占用者闲着 → 后台占用；占用者在�
   assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy', terminalSource: 'claude-desktop' }),
     { status: 'busy', label: '桌面端运行中' });
   assert.equal(resolveDrawerStatusChip({ terminalState: 'alive' }), null);
+});
+
+// 托管 worktree 的实例 cwd 是 `<父仓>/.claude/worktrees/<name>`，不在白名单 dirs 里。它必须归到
+// 父仓，否则在任何按工作区分组的视图里都会凭空消失——角标与 sessionsDot（K2）是一处，会话行的
+// 「已打开」判定是另一处：liveMap 对 worktree 行恒空时，开着的会话被画成未打开（丢运行态、丢关闭
+// 入口），点一下还白走一趟 reopen。抽成共享判据就是为了这两处不再各写一份前缀匹配。
+test.describe('owningWorkspace：worktree 实例归到父仓', () => {
+  const dirs = ['/repo/a', '/repo/b'];
+
+  test('白名单目录本身 → 原样', () => {
+    assert.equal(owningWorkspace('/repo/a', dirs), '/repo/a');
+  });
+
+  test('托管 worktree → 归父仓（不归的话那一行会被当成没打开）', () => {
+    assert.equal(owningWorkspace('/repo/a/.claude/worktrees/ccm-20260912-0130-ab12', dirs), '/repo/a');
+  });
+
+  test('嵌套工作区取最长前缀，不能归错到外层', () => {
+    assert.equal(owningWorkspace('/repo/a/sub/.claude/worktrees/w1', ['/repo/a', '/repo/a/sub']), '/repo/a/sub');
+  });
+
+  test('前缀必须落在目录边界上：/repo/ab 不属于 /repo/a', () => {
+    assert.equal(owningWorkspace('/repo/ab', dirs), null);
+  });
+
+  test('完全无关的路径 → null（调用方自己决定回落）', () => {
+    assert.equal(owningWorkspace('/elsewhere/x', dirs), null);
+  });
+
+  test('空输入不抛', () => {
+    assert.equal(owningWorkspace('', dirs), null);
+    assert.equal(owningWorkspace(null, dirs), null);
+    assert.equal(owningWorkspace('/repo/a', null), null);
+  });
+});
+
+// aggregateStates 改用 owningWorkspace 之后，K2 那条行为必须原样成立。
+test('aggregateStates：worktree 实例的状态点亮父仓（K2 回归锚点）', () => {
+  const out = aggregateStates(
+    [{ cwd: '/repo/a/.claude/worktrees/w1', state: 'busy' }],
+    ['/repo/a', '/repo/b'],
+  );
+  assert.equal(out['/repo/a'], 'busy', 'worktree 在跑，父仓却显示空闲 —— 用户看不到它');
+  assert.equal(out['/repo/b'], 'idle');
 });

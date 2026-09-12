@@ -90,8 +90,8 @@
 | 项 | 规则 |
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
-| type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 27 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 46 个） |
+| type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 56 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -117,14 +117,16 @@
 
 ### 4.1 分支
 
-- 日常只在 **`dev`**；不在 `master` 直接改。  
-- 发版：`dev` ff → `master` + `scripts/release.sh`。  
+- **`dev` = 开发主线**（GitHub 默认分支）。日常改动走 feature 分支 → PR → `dev`，一个小改动一个 PR；不在 `dev` 上直接提交。
+- **`master` = 对外发布的稳定版本**，只接受 `scripts/release.sh` 开的 `dev` → `master` 发版 PR。开了 `enforce_admins`，**谁都不能直推**；`quality` 里另有一道 step 拦住 head 不是 `dev` 的 PR。
+- 两条分支的 required checks 相同（`quality` / `unit-test (20)` / `unit-test (24)` / `e2e`），**approvals = 0**：单人仓库不能自我 approve，设成 1 会让所有 PR 永远合不进去。PR 的作用是强制 CI + 提供可读的变更面。
+- 发版顺序：bump → 推 `dev` → 等真 CI 绿 → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。**tag 必须在合并之后打**：PR 合并没有 ff-only，合出来是 merge commit，tag 打早了就指不到 `master` 的 HEAD。
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
-- **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交，只由 `release.sh` ff 前进。
+- **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交。这条此前靠人守，2026-09-12 破过一次——dependabot 的 PR 默认开到默认分支（当时是 `master`），合进去就带上了未发版提交。现在由三处共同保证：`.github/dependabot.yml` 的 `target-branch: dev`、默认分支改为 `dev`、以及 `quality` 里那道「只有 `dev` 能进 `master`」。
 
 ### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
-装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`eslint.config.js` 与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ 文档 + `desktop/`。
+装机 `curl` 直接拉 `https://github.com/<repo>/archive/refs/heads/master.tar.gz`：GitHub 现场 `git archive`、遵守被归档那棵树里 `.gitattributes` 的 `export-ignore`（2026-09-08 实测：dev 归档与本地 `git archive origin/dev` 逐项一致；`git archive --remote` 走 GitHub 被 422 拒绝，那条路不通）。发版不打包、不上传任何 Release 资产；`master` 只由 `release.sh` ff 前进，所以 `master` 归档就是最新发布（§4.1）。规则必须已经在被归档的那棵树里——树里没有规则的老 tag 归档不裁剪。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`AGENTS.md`、`.gitattributes`、`.dockerignore`、`eslint.config.js`、**`docs/` 下的 `testing.md`**（它通篇引用已被裁掉的 `tests/` 路径与 `mutate:docker`、`test:invariants:*`，留在分发树里全是死引用；这里刻意不把它写成连写路径——`doc-consistency` 的裸提及检测不区分「链接」与「字面提及」，写全了这句解释自己就会在分发树里变成一条指向被裁文件的死链，用户跑 `doctor` 的 D9 见红）与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ `docs/` 下**除 `testing.md` 外**的文档 + `desktop/`。
 
 - **为什么门禁住在 `tests/` 下**：此前它们散在 `scripts/`，「哪些是门禁」这份名单要在 `.gitattributes`（17 行）、`tests/unit/dist-manifest.test.mjs` 的正则、`repo-inventory.js` 的规则表**三处各存一份**——加一个门禁脚本要改三个地方，漏了任何一处都没有机制会发现。收进目录后三者全部退化成目录前缀，不需要维护。
 - **两个不能移的例外**：`scripts/doc-consistency.js` 与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 是被裁掉的——移进去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`。已由 `dist-manifest.test.mjs` 单列断言保护。
@@ -139,7 +141,7 @@
 
 ### 4.2 测试跑在哪（白名单，非黑名单）
 
-**宿主机只允许**这 10 条（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）：`lint` · `lint:fix` · `check` · `test:unit` · `test:invariants` · `test:e2e` · `test:visual` · `test:playwright` · `test:e2e:parallel` · `app:test`。末四条：`test:visual` / `test:playwright` 是 `test:e2e` 的同源别名，`test:e2e:parallel` 是它的分片编排（每个分片就是一条 `npm run test:e2e --`），`app:test` 是 `check` 自身的一环。
+**宿主机只允许**这 11 条（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）：`lint` · `lint:fix` · `check` · `test:unit` · `test:invariants` · `test:coverage` · `test:e2e` · `test:visual` · `test:playwright` · `test:e2e:parallel` · `app:test`。末五条：`test:coverage` 与 `test:unit` 逐字同档（同一份 preload-env、同一批 `tests/unit/*.test.mjs`，只多一个 `--experimental-test-coverage`），`test:visual` / `test:playwright` 是 `test:e2e` 的同源别名，`test:e2e:parallel` 是它的分片编排（每个分片就是一条 `npm run test:e2e --`），`app:test` 是 `check` 自身的一环。
 
 > ⚠ **`test:invariants` 的两个兄弟不在名单上**，别照后缀类推：`test:invariants:server` 起真 `app/server.js` 子进程；`test:invariants:env` 跑卸载器，隔离依赖被测代码认注入的 `home`/`root`/`appPath`，回落即打在真实家目录上。两条都进容器（`test:docker` 已含）。
 
@@ -151,7 +153,7 @@
 
 ### 4.3 `npm run check` 包
 
-覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
+覆盖面导览，**逐项以 `package.json` 的 `check` 为准**（这行漂过两次：加门禁时没人会回头数散文里的项数）：ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· 架构图漂移（gh-pages 图集的常量/路径/基线）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · 不变量编号（`invariants/` 的 `// 守护：` 行与编号表双向对齐）· Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· 未分类文件（inventory）。
 
 链上成员由 `tests/unit/gate-wiring.test.mjs` 钉住：`tests/gates/` 下的门禁要么挂在 check 上，要么在那份 `NOT_IN_CHECK` 白名单里写明理由。新写一个门禁忘了接线会红——**一个不被执行的门禁比没有门禁更危险，它占着「这块有人守」的位置**。
 
@@ -186,7 +188,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
 | 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
-| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/invariants/config-file.test.mjs` 有断言锁住 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**没有任何测试或门禁锁住这一条**——`config-file.test.mjs` 守的是 CONFIG-01/02（源选择与可表达性），全仓无 `git check-ignore` 类断言。删掉那三行 `.gitignore` 不会让任何东西变红 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 | 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
 | CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |

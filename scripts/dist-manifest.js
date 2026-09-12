@@ -21,6 +21,7 @@ export const DIST_ENTRIES = Object.freeze([
   'scripts/setup.js',                   // npm run setup
   'scripts/doctor.js',                  // node scripts/doctor.js
   'scripts/device.js',                  // node scripts/device.js
+  'scripts/qr.js',                      // node scripts/qr.js
   'scripts/config.js',                  // node scripts/config.js
   'scripts/service.js',                 // npm run service:*
   'scripts/uninstall.js',               // npm run uninstall
@@ -44,6 +45,7 @@ export const EXTRA_RUNTIME_FILES = Object.freeze([
   'desktop/ccm-menubar.swift',
   'desktop/ccm-config-window.swift',
   'desktop/ccm-console-window.swift',
+  'desktop/ccm-qr-window.swift',
   'app/public/js/canonicalize.js',                     // 前后端共用（边界豁免），也被 app/src/ import
   'package.json',
   'package-lock.json',

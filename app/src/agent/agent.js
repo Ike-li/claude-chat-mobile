@@ -17,7 +17,9 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode, normalizeEffortUiLevel } from './cli-settings-defaults.js';
 import { scanSubagents } from '../sessions/history.js';
 import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.js';
+import * as metrics from '../ops/metrics.js';
 import { uploadsRoot, ensureUploadsRoot } from '../files/uploads.js';
+import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_PROMPT } from './side-question.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -232,6 +234,11 @@ export function buildAgentQueryOptions(session, env = process.env) {
     pathToClaudeCodeExecutable: session.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
     model: session.activeModel || undefined,
     resume: session.sessionId || undefined,
+    // 文件轴 Rewind 的前提：CLI 在 Edit/Write 前把原文备份到 ~/.claude/file-history/<sid>/，
+    // Query.rewindFiles() 才找得到检查点。**SDK 模式默认关，交互模式默认开**——不传这一行，
+    // web 端就比坐在终端前少一个能力，而缺陷形态是「CLI 照常工作、只是没快照」，
+    // 要等有人真的点回退才暴露。写入方是 CLI 自己的数据目录，CCM 不碰。
+    enableFileCheckpointing: true,
     abortController: session.abort,
     includePartialMessages: true,                        // E4 流式
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
@@ -268,6 +275,9 @@ const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序�
 // B2：已完成后台任务的留存条数。面板只用来「回头看一眼刚跑完的那批」，不是历史归档——
 // 20 条足够覆盖一次会话里的并发批次，且上限恒定、不随会话长度涨。
 const FINISHED_TASK_MAX = 20;
+// task_id → is_backgrounded 的留存条数。只在 task_started 与它的 task_notification 之间存活，
+// 同时在跑的 task 远到不了这个数；上限是防「通知丢失导致条目滞留」的兜底，不是功能容量。
+const TASK_BACKGROUNDED_MAX = 64;
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
 // AskUserQuestion 选项归一：字符串 → {label}；对象保留 description/preview（对齐 CLI 自动 Other 之外的完整呈现）
@@ -504,12 +514,33 @@ export class AgentSession {
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
     this.totalApiDurationMs = 0;  // += result.duration_api_ms
+    // 旁路提问（下一步建议 / 回来时的摘要）的调用次数。**只记次数不记金额**：这两条走
+    // askSideQuestion，其花费由 CLI 无条件计入 costLedger、随下一条 result 的 total_cost_usd 一起过来
+    // ——已经在上面的 totalCostUsd 里了，再单独记一份金额只会出现两个对不上的数字。
+    // 而次数是 CCM 唯一能自己掌握、且**不依赖下一轮 result** 的信号：用户跑完一轮就离开、
+    // 此后再没有 result 的话，那笔花费在本产品侧永远不会显形，只有次数还在。
+    this.sideQuestionCalls = { suggestion: 0, recap: 0 };
+    // 已结算的轮数（result 到达即 +1）。pendingTurns 是【在途】数、会回落到 0，答不了
+    // 「这个会话到底聊过几轮」——而那正是两个旁路提问的准入判据（太早的会话没什么可猜/可摘要的）。
+    this.completedTurns = 0;
+    // 这个会话在本进程之外已经聊过 —— resume 才谈得上（有 transcript 才 resume 得起来）。
+    // completedTurns 只数**本进程看见的** result，重启或空闲回收后 resume 回来时它是 0，于是两道
+    // 「首轮不猜/没什么可摘要」的门槛会把一个聊了半天的老会话当成刚开的：回来时的摘要要再攒两轮
+    // 才跑，第一轮的下一步建议直接被抑制——而 askSideQuestion 拿得到完整上下文，本来就答得出来。
+    // 【为什么不去数 transcript 的真实轮数】resume 是热路径（注释里反复强调不能拖慢），而这两处
+    // 要的只是「够不够 2 轮」这个布尔判断，为它做一次全量扫描不划算。所以这里记的是「已有历史」，
+    // 不叫 completedTurns 就是为了不谎称它是精确计数。
+    this.hasPriorHistory = Boolean(resumeId);
+    this._lastRecapAt = 0;        // 上次给出摘要的时刻，供最小间隔判据；0 = 本会话还没给过
     this.stderrTail = '';         // CLI stderr 尾部（有界，见 _recordStderr）：resume 失败时唯一的原因来源
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
     // B2：已完成任务（含 outputFile）。【必须与 bgTasks 分开】——hasBgTasks() 喂 checkIdle 豁免
     // 与 isBusy()，把已完成的留在 bgTasks 会让会话永不 idle、永远显示忙碌。
     this.finishedTasks = new Map(); // taskId → { taskType, message, status, summary, outputFile, usage…, finishedAt }
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
+    this.taskBackgrounded = new Map(); // taskId → is_backgrounded（CLI 在 task_started/task_updated 上报）。
+                                       // 判「这条 task_notification 是真后台任务，还是跑得久的前台工具」；
+                                       // 缺席=未知，保守按后台处理（该字段只在 local_agent/local_bash 上设置）
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
     // stream_event（text/thinking delta）与 user（tool_result）都不带。缓存供后二者补标签——否则纯文本子 agent
     // （无 tool_use、只走 stream_event）的卡片永远没有 🤖 类型名。换会话/dispose 清空，不跨会话/实例串标签。
@@ -546,7 +577,16 @@ export class AgentSession {
           message: { role: 'user', content: [{ type: 'text', text: item.text }] },
           parent_tool_use_id: null,
           session_id: this.sessionId || '',
-          uuid: item.uuid // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
+          uuid: item.uuid, // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
+          // 归属标记。SDK 契约原文：包装键盘输入的宿主**必须**显式打 {kind:'human'}，缺失被当成
+          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主，且这个断言是准确的
+          // 而非伪造来源——queue 的唯一写入点是 send()，send() 的唯一调用者是 user:message handler，
+          // 队列里只可能是经鉴权用户敲进来的字。
+          // 缺了它的后果**静默**：正文关键词的单回合触发（ultracode → 多 agent 编排 + 自动加载
+          // workflow-authoring）与 @提及 peer 会话两条路一起走不通，用户只看到「这个词没反应」、零报错。
+          // 2026-09-11 单变量实测：同一句话、同一 entrypoint，带 origin 产出 workflow_keyword_request
+          // 与两条 turnCompanion 注入，不带则两项皆无。这道闸只守这两处，不影响审批/权限面。
+          origin: { kind: 'human' }
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
@@ -584,6 +624,68 @@ export class AgentSession {
         this.emit('models', { models: Array.isArray(ms) ? ms : [] });
       })
       ?.catch?.(() => {});
+  }
+
+  // 旁路提问：带完整会话上下文问一句，**不写 transcript**（2026-09-10 实测：会话 jsonl 里查无痕迹）。
+  // kind 只用于计次，不参与请求内容。返回归一后的字符串或 null（空回复、方法缺失、抛错都归 null）。
+  // ⚠️ askSideQuestion 在 SDK 的 .d.ts 里【没有类型声明】——运行时存在、类型未公开。可选链是必须的：
+  // 升级 SDK 后它一旦消失，这里要静默降级成"没有建议"，绝不能让一个锦上添花的功能把会话搞崩。
+  async askSide(kind, prompt) {
+    const fn = this.q?.askSideQuestion;
+    if (typeof fn !== 'function') return null;
+    try {
+      const r = await fn.call(this.q, prompt, {});
+      if (this.disposed) return null; // 期间实例已销毁：答案没有归属，丢弃
+      // 计次放在拿到响应之后：抛错的那次没有真实往返，计进去会让"次数×单价"的估算偏高。
+      if (kind in this.sideQuestionCalls) {
+        this.sideQuestionCalls[kind] += 1;
+        // 也进 /metrics（已鉴权）：per-会话计数随实例消失，长期「这两个功能到底触发了多少次」
+        // 只有进程级计数器答得了。金额仍不单独记——见上面 sideQuestionCalls 的说明。
+        metrics.inc(`side_question_${kind}`);
+      }
+      return normalizeSideAnswer(r?.response);
+    } catch {
+      return null; // 限速/中止/未公开 API 变形——一律当作"这次没有建议"
+    }
+  }
+
+  // 「离开又回来」时的会话摘要。由 server 的 presence 上报驱动（那里才知道离开了多久）。
+  // 返回是否真的发了事件，供调用方决定要不要记日志——不抛，任何一步失败都当"这次没有摘要"。
+  // isBusy 用 pendingTurns 而非粗粒度 busy：挂着后台任务但没有在途轮时，用户回来看到的是静止画面，
+  // 摘要仍然有用；真正该让位的只有"屏幕上正在滚动"这一种。
+  async maybeRecap({ awayMs = 0, now = Date.now(), enabled = true } = {}) {
+    if (!shouldRecap({
+      awayMs, assistantTurns: this.completedTurns, lastRecapAt: this._lastRecapAt,
+      now, isBusy: this.pendingTurns > 0, enabled, hasPriorHistory: this.hasPriorHistory,
+    })) return false;
+    // 先占时刻再问：askSide 有网络往返，期间用户可能又切走切回触发第二次。
+    // 占位放在前面 ⇒ 最坏情况是"这次问失败了、还得再等 30 分钟"，比并发问出两条摘要好。
+    this._lastRecapAt = now;
+    const text = await this.askSide('recap', RECAP_PROMPT);
+    if (!text) return false;
+    this.emit('session_recap', { text, awayMs });
+    return true;
+  }
+
+  // 每轮收尾后预测「用户接下来可能想发的一句」。触发点在 result 结算之后，所以频率是每轮一次——
+  // 这两个旁路提问里花费较多的那个，对应 CCM_PROMPT_SUGGESTION 开关。
+  // 出错/被中断的那一轮不猜：那时用户要判断的是刚才发生了什么，给"下一步"是打扰。
+  async maybeSuggest({ isError = false, interrupted = false, enabled = true } = {}) {
+    if (!shouldSuggest({ assistantTurns: this.completedTurns, isError, interrupted, enabled, hasPriorHistory: this.hasPriorHistory })) return false;
+    // 发问前记下轮次序号：下面那道 pendingTurns 闸只看得见**还在跑**的新一轮，
+    // 而 askSide 慢、用户又在这期间起了一轮**短**的并跑完时，pendingTurns 已经回到 0，
+    // 闸就恰好失效——这条对上一轮说的建议会落进新对话。completedTurns 每收一条 result 就 +1，
+    // 拿它当序号即可覆盖那个窗口（重叠的多次 askSide 乱序返回也一并挡住）。
+    const turnAtRequest = this.completedTurns;
+    const text = await this.askSide('suggestion', SUGGEST_PROMPT);
+    if (!text || this.disposed) return false;
+    // 期间又结算过轮次 ⇒ 这条建议是对更早那一轮说的，已经过时。
+    if (this.completedTurns !== turnAtRequest) return false;
+    // 期间用户已经开始新一轮 ⇒ 这条建议是对上一轮说的，已经过时。宁可不发：
+    // 迟到的建议比没有建议更糟，它会在用户已经打定主意之后再来干扰一次。
+    if (this.pendingTurns > 0) return false;
+    this.emit('prompt_suggestion', { text });
+    return true;
   }
 
   // CLI stderr 收集（有界，尾部保留）。只服务于 resume 失败的原因识别，不进事件流、不落日志——
@@ -746,19 +848,25 @@ export class AgentSession {
     // #2：确认能发送（过了 disposed + 双重检查）后才记 firstMessage、emit user_message 气泡、记日志——
     // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
     if (this.firstMessage === null) this.firstMessage = displayText;
+    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列，并在 result 上原样回报为
+    // user_message_uuid。必须在开槽【之前】生成：槽要带着它才能被精确结算。
+    // 【生成点为什么在 emit 之前】文件轴 Rewind 的锚点就是这个 uuid，而 rewindFiles 只认它。
+    // 若气泡先上屏、uuid 后生成，live 气泡就没有 dataset.uuid，用户最想回退的「刚才那一轮」
+    // 反而长按无效，得刷新页面把它变成历史气泡——这个限制没法向用户解释。
+    // 2026-09-10 实测：transcript 落盘的 user 行 uuid 与此处推入值【逐字相同】，
+    // 所以 live 气泡与刷新后的历史气泡携带同一个锚点，回退行为一致。
+    const msgUuid = randomUUID();
     // FE-002：透传 clientMessageId，供前端离线乐观气泡精确对账（含纯附件无文本）。
     this.emit('user_message', {
       text: displayText,
       attachments: opts.attachments,
+      uuid: msgUuid, // Rewind 锚点：live 气泡靠它拿到 dataset.uuid（无静态门禁守，改动须补形状断言）
       ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
     }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
-    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列，并在 result 上原样回报为
-    // user_message_uuid。必须在开槽【之前】生成：槽要带着它才能被精确结算。
-    const msgUuid = randomUUID();
     this._openTurnSlot(msgUuid);
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
@@ -1309,7 +1417,18 @@ export class AgentSession {
     // 同步：调用方（含既有测试）习惯不 await 就紧接着同步调 resolvePermission，插入一次 await 会在
     // pendingPermissions.set() 真正执行前的窗口让 resolvePermission 扑空、返回的 Promise 永远不 resolve。
     const fp = fingerprintSync({ tool: name, args: input, cwd: this.cwd });
-    this.emit('permission_request', { requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt });
+    // 「永久不再问」可不可选，取决于 CLI 这次给没给会落盘的规则（session/cliArg 档不算）。
+    // 只下发 destination 列表与条数，**不下发规则正文**：前端不需要它，而 ruleContent 里
+    // 常带完整命令行与路径，没必要多一份副本在网络上跑。
+    const persistDestinations = [...new Set(
+      (suggestions || [])
+        .filter(u => u?.type !== 'setMode' && u?.destination && u.destination !== 'session' && u.destination !== 'cliArg')
+        .map(u => u.destination),
+    )];
+    this.emit('permission_request', {
+      requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
+      ...(persistDestinations.length ? { persistDestinations } : {}),
+    });
     // 持久化台账：只是台账记录，写入失败
     // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
     approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
@@ -1407,11 +1526,19 @@ export class AgentSession {
         const exitMode = EXIT_MODES.has(opts?.exitMode) ? opts.exitMode : 'default';
         modeUpdate = { type: 'setMode', mode: exitMode, destination: 'session' };
       }
-      // 「始终允许本会话」额外应用 session 范围的规则更新（原行为；排除已单列的 setMode 防重复）。
-      const sessionRules = alwaysThisSession
-        ? suggestions.filter(u => u.destination === 'session' && u.type !== 'setMode')
-        : [];
-      const updates = [...(modeUpdate ? [modeUpdate] : []), ...sessionRules];
+      // 规则更新分两档（都排除已单列的 setMode 防重复）：
+      //   · opts.persistRules —— 「永久不再问」。SDK 文档对这一档说得很直接：
+      //     「if presenting the user an option 'always allow' or similar, then **this full set of
+      //       suggestions** should be returned as the updatedPermissions」。所以原样回传 CLI 建议的
+      //     全部规则，**由 SDK 按各自的 destination 落盘**（实测样本是 localSettings，即工作区的
+      //     .claude/settings.local.json）——我们不自己写那个文件，也不自己决定写哪一层、怎么泛化规则。
+      //   · alwaysThisSession —— 「本会话内总是允许」。这是本项目对 SDK 建议的**收窄**：
+      //     只取 session 档，规则不落盘、随会话消失。
+      // 两档不是互斥开关而是包含关系（永久蕴含本会话），故 persist 优先、不做 && 组合。
+      const ruleUpdates = suggestions.filter(u => u.type !== 'setMode' && (
+        opts?.persistRules ? true : (alwaysThisSession && u.destination === 'session')
+      ));
+      const updates = [...(modeUpdate ? [modeUpdate] : []), ...ruleUpdates];
       pending.resolve({
         behavior: 'allow',
         updatedInput: pending.input,
@@ -1744,6 +1871,10 @@ export class AgentSession {
       // 否则任务行的耗时会在两种来源交替时闪烁归零。
       durationMs: meta.durationMs ?? prev?.durationMs ?? null,
       totalTokens: meta.totalTokens ?? prev?.totalTokens ?? null,
+      // 同 B3 口径：只有 task_progress 带这两个，其余 upsert 来源（localcmd 扫盘、
+      // background_tasks_changed）不带 → 必须沿用，否则卡头用量在两种来源交替时闪烁归零。
+      toolUseId: meta.toolUseId ?? prev?.toolUseId ?? null,
+      toolUses: meta.toolUses ?? prev?.toolUses ?? null,
     });
     // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
     // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
@@ -1888,6 +2019,8 @@ export class AgentSession {
         error: prev?.error ?? null,
         durationMs: prev?.durationMs ?? null,
         totalTokens: prev?.totalTokens ?? null,
+        toolUseId: prev?.toolUseId ?? null,
+        toolUses: prev?.toolUses ?? null,
       });
     }
     // localcmd:* 不参与 reconcile：它们不是 SDK 报来的任务，本就不会出现在这份快照里，
@@ -2066,6 +2199,8 @@ export class AgentSession {
         error: t.error ?? null,
         durationMs: t.durationMs ?? null,
         totalTokens: t.totalTokens ?? null,
+        toolUseId: t.toolUseId ?? null,
+        toolUses: t.toolUses ?? null,
       }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
@@ -2485,23 +2620,35 @@ export class AgentSession {
           this.emit('system', { message: '上下文已压缩', kind: 'compact_boundary' });
         } else if (msg.subtype === 'task_notification') {
           // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
-          // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
-          this.pendingAutoTurn = true;
-          this.pendingAutoTurnAt = Date.now();
-          this.emit('task_notification', {
-            source: 'system',
-            taskId: msg.task_id ?? null,
-            status: msg.status ?? null,
-            summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
-            toolUseId: msg.tool_use_id ?? null,
-            outputFile: msg.output_file || null,
-            // B4：CLI 对 housekeeping 任务的明文要求 —— "Ambient/housekeeping task. Consumers should
-            // hide this from the inline transcript; it may still appear in a tasks panel."
-            // 透传给前端决定要不要写进消息流；面板照常显示（CLI 允许）。
-            skipTranscript: msg.skip_transcript === true
-          });
-          this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
-          this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
+          const doneTaskId = msg.task_id ?? msg.taskId ?? null;
+          // 【前台工具走的是同一条通道】跑得久的前台 Bash 完成时也发这条（判据来源见 task_started 分支）。
+          // 它的完成已经由 tool_result 表达、工具卡片如实显示，再播报一条「后台任务完成」是重复且
+          // 措辞错误的；而 NOTIFY-01 规定后台任务完成无条件推，于是它还会打到锁屏手机上。
+          // 未知 id 保守按后台处理：is_backgrounded 只在 local_agent/local_bash 上设置，其它
+          // task_type（local_workflow / mcp_task）本就没有这个字段，缺席必须维持既有行为。
+          const foreground = doneTaskId != null && this.taskBackgrounded.get(doneTaskId) === false;
+          if (doneTaskId != null) this.taskBackgrounded.delete(doneTaskId); // 终态：两条路径都不留滞留记录
+          if (!foreground) {
+            // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
+            // 前台工具不武装：它的续写本就由 tool_result 驱动，多武装一次等于把 maybeSynthesizeAutoTurn
+            // 那道「防 auto-compact 泄漏 message_start 导致 busy 永挂」的门打开一个 TTL 长的窗口。
+            this.pendingAutoTurn = true;
+            this.pendingAutoTurnAt = Date.now();
+            this.emit('task_notification', {
+              source: 'system',
+              taskId: msg.task_id ?? null,
+              status: msg.status ?? null,
+              summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
+              toolUseId: msg.tool_use_id ?? null,
+              outputFile: msg.output_file || null,
+              // B4：CLI 对 housekeeping 任务的明文要求 —— "Ambient/housekeeping task. Consumers should
+              // hide this from the inline transcript; it may still appear in a tasks panel."
+              // 透传给前端决定要不要写进消息流；面板照常显示（CLI 允许）。
+              skipTranscript: msg.skip_transcript === true
+            });
+            this.recordFinishedTask(msg); // B2：必须在 bgTaskDone 之前——它会删掉 bgTasks 条目
+          }
+          this.bgTaskDone(doneTaskId); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
         } else if (msg.subtype === 'task_progress') {
           // 后台任务进行中进度。瞬时广播——emitTransient 不进 buffer、不占 seq；不武装 pendingAutoTurn。
           // 字段：description/last_tool_name（tool 活动）+ summary（agentProgressSummaries 时 ~30s AI 短句）。
@@ -2522,13 +2669,20 @@ export class AgentSession {
           // B3：usage 是【累计值】（SDK: {total_tokens, tool_uses, duration_ms}），直接覆盖不累加。
           // 只有 task_progress 带它——localcmd 扫盘等其它 upsert 来源没有，故下游一律 ?? prev 沿用。
           const bgUsage = msg.usage && typeof msg.usage === 'object' ? msg.usage : null;
+          // tool_use_id：把这条任务和派它的那次 tool_use 绑起来。前端的子代理聚合卡按
+          // parentToolUseId 组织、用量按 task_id 组织，这个字段是两张表【唯一】的交集——
+          // 不透传就只能在底栏横幅里显示用量，卡头上永远显示不出「N tools · X tok」。
+          // usage.tool_uses：SDK 的权威累计值。前端自己数 tool_use 事件会少——被 CLI 折叠的
+          // 连续 search/read 不逐条发，数出来的与 CLI 显示的对不上，比不显示更糟。
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage, {
             lastToolName: bgLastTool,
             description: bgDesc ? truncate(String(bgDesc), TOOL_SUMMARY_CAP) : null,
             subagentType: bgSubagent,
             truncated: bgDescTruncated,
+            toolUseId: typeof msg.tool_use_id === 'string' && msg.tool_use_id ? msg.tool_use_id : null,
             durationMs: Number.isFinite(bgUsage?.duration_ms) ? bgUsage.duration_ms : null,
             totalTokens: Number.isFinite(bgUsage?.total_tokens) ? bgUsage.total_tokens : null,
+            toolUses: Number.isFinite(bgUsage?.tool_uses) ? bgUsage.tool_uses : null,
           });
           // 附带全量 tasks 快照：前端据此画「跑了哪些任务 + 每条详情」，而非只显示最新一句
           this.emitBgTasksSnapshot({
@@ -2549,10 +2703,28 @@ export class AgentSession {
         } else if (msg.subtype === 'task_updated') {
           // 状态变更：快照只表达集合成员、不表达成员状态，吞掉它会把 paused 显示成「运行中」。
           // 判据与边界全写在 bgTaskPatch 上。
-          this.bgTaskPatch(msg.task_id ?? msg.taskId ?? null, msg.patch);
+          const updatedTaskId = msg.task_id ?? msg.taskId ?? null;
+          // 前台任务后来被转到后台（终端 Ctrl+B）经这条到达 —— SDK d.ts 明文：「A later move to the
+          // background arrives as task_updated patch.is_backgrounded」。转后台后它就是真后台任务，
+          // 完成时该照常播报，故必须跟着改记录（bgTaskPatch 只改 bgTasks，够不到这张表）。
+          if (updatedTaskId != null && typeof msg.patch?.is_backgrounded === 'boolean') {
+            setCapped(this.taskBackgrounded, updatedTaskId, msg.patch.is_backgrounded, TASK_BACKGROUNDED_MAX);
+          }
+          this.bgTaskPatch(updatedTaskId, msg.patch);
         } else if (msg.subtype === 'task_started') {
-          // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故显式识别静默吞——
-          // 不重复处理、也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
+          // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故【增删】不在此处理——
+          // 也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
+          //
+          // 【但不能整条吞】is_backgrounded 只在这条消息上，task_notification 自己不带。
+          // CLI 把跑得久的【前台】工具也建模成 task（实测 task_type:'local_bash'、is_backgrounded:false，
+          // 2026-09-09 SDK 探针），完成时走同一条 task_notification 通道，且全程不发
+          // background_tasks_changed —— 所以「不在 bgTasks 里」并不能当判据，只有这个字段能。
+          // 吞掉它的代价：每条跑过几秒的前台命令都被播报成「后台任务完成」，还经 NOTIFY-01 无条件推
+          // 打到锁屏手机上。见 task_notification 分支的消费点。
+          const startedTaskId = msg.task_id ?? msg.taskId ?? null;
+          if (startedTaskId != null && typeof msg.is_backgrounded === 'boolean') {
+            setCapped(this.taskBackgrounded, startedTaskId, msg.is_backgrounded, TASK_BACKGROUNDED_MAX);
+          }
           //
           // 【已评估：spawn_depth 不接（2026-09-07，升 SDK 0.3.263 时查证）】0.3.238 给本消息加了
           // spawn_depth，看着像是「子代理面板分不清父子层级」的解，实际两条都不成立：
@@ -2946,6 +3118,7 @@ export class AgentSession {
         // 在途前台工具随本轮收尾清账：工具不可能跨轮存活。中断/审批取消时 tool_result 可能永不回来，
         // 只靠上面的 delete 会留下残条目，让下一轮被无依据地豁免看护。
         this.pendingToolUses.clear();
+        this.completedTurns += 1;
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;
@@ -2971,6 +3144,14 @@ export class AgentSession {
           interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
+        // 下一步建议：**必须在 emit('result') 之后**且 fire-and-forget——它有一次网络往返，
+        // 挂在结算路径上会把每一轮的收尾都拖慢一整个 RTT（前端的 busy→idle 也跟着晚）。
+        // 开关字面量与 env-schema 的 TOGGLE_ZERO 同源（off='0'）；写成别的值＝用户点了关却照样计费。
+        void this.maybeSuggest({
+          isError: !!msg.is_error,
+          interrupted: wasInterrupted,
+          enabled: process.env.CCM_PROMPT_SUGGESTION !== '0',
+        }).catch(() => {});
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
         const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;

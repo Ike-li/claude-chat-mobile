@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORK_DIR），零依赖。
+// scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORKDIRS），零依赖。
 // 用法: node scripts/setup.js [--config <path>]                                     # 交互向导（人用）
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN，
@@ -10,7 +10,7 @@
 // 为什么有非交互模式：README 一直建议「把安装丢给编程 agent 代跑」，但 agent 的 shell 没有 TTY，
 // stdin 立刻 EOF → 旧实现会打出覆盖提示后 exit 0、一个字没写。无 TTY 现在直接拒绝，
 // 必须用 --yes --work-dir --hooks 把意图写全。两个危险默认一律不许静默生效：
-//   · WORK_DIR 不回落 $HOME（那等于把整个家目录交给远程入口）——必须显式且不能是家目录
+//   · 工作区不回落 $HOME（那等于把整个家目录交给远程入口）——必须显式且不能是家目录
 //   · hooks 不默认装（那会写用户全局 ~/.claude/settings.json）——必须显式 --hooks=on
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -41,13 +41,19 @@ export function generateToken(bytes = 32) {
 // 见 app/src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
 // .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
 export function buildConfigContent({ authToken, workDir, workDirs, fileEdit, accessProfile } = {}) {
+  // 向导登记的全部工作区，**首项即主工作目录**（手机端默认打开的那个）。
+  // 即使只有一个也写出来：让 WORKDIRS 这个键出现在文件里，用户日后想加项目时打开配置一眼就能
+  // 看到往哪加（热加载，保存即生效），不用先去读文档考古出这个键名——2026-08-19 新用户实测的
+  // 困惑正是「不知道有没有/怎么设多个」。
+  //
+  // 【曾经还写一个 WORK_DIR: dirs[0]】于是同一个路径在配置文件里出现两遍，2026-09-08 新用户
+  // 实测的第二个困惑正是「这俩什么关系」。已合并进列表首项。
+  const dirs = Array.isArray(workDirs) && workDirs.length
+    ? workDirs
+    : (workDir ? [workDir] : []);
   const config = applyConfigChanges({}, {
     ...(authToken ? { AUTH_TOKEN: authToken } : {}),
-    ...(workDir ? { WORK_DIR: workDir } : {}),
-    // 向导登记的全部工作区。即使只有一个也写出来：让 WORKDIRS 这个键出现在文件里，
-    // 用户日后想加项目时打开配置一眼就能看到往哪加（热加载，保存即生效），
-    // 不用先去读文档考古出这个键名——2026-08-19 新用户实测的困惑正是「不知道有没有/怎么设多个」。
-    ...(Array.isArray(workDirs) && workDirs.length ? { WORKDIRS: workDirs } : {}),
+    ...(dirs.length ? { WORKDIRS: dirs } : {}),
     // 只有明确说「关」才写键；默认开由 schema 负责（TOGGLE_OFF 的 on 值是空串，写出来反而多余）。
     ...(fileEdit === 'off' ? { FILE_EDIT: 'off' } : {}),
     // 同一纪律：只有显式选了方案才写键；回车跳过 = 未声明（一切消费点回落现状推断）。
@@ -63,7 +69,7 @@ export function detectLang(env = process.env) {
 }
 
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
-// 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
+// 若被忽略，工作区就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
   const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, accessProfile: undefined, force: false, help: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -100,7 +106,7 @@ export function normalizeSetupWorkDir(raw, { home = homedir() } = {}) {
   return { ok: true, workDir: candidate };
 }
 
-// 交互向导问 WORK_DIR：问到合法为止，而不是一拒就退出。用户到这一步可能已经答过
+// 交互向导问首个工作区：问到合法为止，而不是一拒就退出。用户到这一步可能已经答过
 // 「覆盖现有配置? y」，一个 typo 让他重跑整个向导是白付的代价。
 //
 // maxAttempts 不是保守起见——它是正确性要求：ask 若因 stdin 关闭而恒返回空串，
@@ -115,7 +121,7 @@ export async function promptWorkDir(ask, { home = homedir(), maxAttempts = 3, on
   return last;
 }
 
-// 交互向导问工作区列表：第一个必填（即 WORK_DIR，手机端默认打开的目录），其后可选追加，
+// 交互向导问工作区列表：第一个必填（= 列表首项，手机端默认打开的目录），其后可选追加，
 // 空回车结束。追加项无效只报原因继续问、不炸整个向导；重复项去重。循环有硬上限：
 // ask 若因 stdin 关闭恒返回非空垃圾，没有上限就是死循环（同 promptWorkDir 的 EOF 教训）。
 export async function promptWorkDirs(ask, askMore, { home = homedir(), maxAttempts = 3, onInvalid } = {}) {
@@ -200,7 +206,7 @@ export const MESSAGES = {
     workDirHint: '(claude 会话将在这个目录里读写代码。填绝对路径或 ~/ 路径；不能是家目录本身。稍后还能追加更多)',
     moreDirPrompt: '再加一个项目目录？(可选，直接回车结束)',
     workdirsSummary: n => `已登记 ${n} 个工作区，第一个是默认打开的`,
-    workdirsHint: '以后增删工作区：改 ccm.config.json 里的 WORKDIRS 数组即可，保存即生效（热加载，免重启）；也可在手机端「设置」里改。',
+    workdirsHint: '以后增删工作区：改 ccm.config.json 里的 WORKDIRS 数组即可，保存即生效（热加载，免重启）。第一项就是手机端默认打开的目录；也可在手机端「设置」里改。',
     wroteLabel: '已写入',
     permNote: '(权限 0600)',
     nextSteps: '下一步:',
@@ -253,8 +259,8 @@ export const MESSAGES = {
       desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
       work_dir_required: () => '必须显式给出工作目录的绝对路径（--work-dir= 或向导里键入）。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给远程入口。',
-      work_dir_is_home: () => 'WORK_DIR 不能是家目录。请换成一个具体项目目录。',
-      work_dir_not_absolute: () => 'WORK_DIR 必须是绝对路径（或以 ~/ 写成家目录下的子目录）。',
+      work_dir_is_home: () => '工作区不能是家目录。请换成一个具体项目目录。',
+      work_dir_not_absolute: () => '工作区必须是绝对路径（或以 ~/ 写成家目录下的子目录）。',
       tty_required: () => '当前没有交互终端。不要跑 npm run setup；改用：'
         + ' node scripts/setup.js --yes --work-dir=<绝对路径> --hooks=on|off',
       env_exists: d => `${d} 已存在，非交互模式不会覆盖它（里面可能有正在用的 AUTH_TOKEN）。`
@@ -278,7 +284,7 @@ export const MESSAGES = {
     workDirHint: '(claude sessions will read and write code there. Absolute or ~/ path; not your home directory itself. You can add more next)',
     moreDirPrompt: 'Add another project folder? (optional; press Enter to finish)',
     workdirsSummary: n => `Registered ${n} workspace(s); the first one opens by default`,
-    workdirsHint: 'To add or remove workspaces later, edit the WORKDIRS array in ccm.config.json — it hot-reloads on save (no restart). The phone Settings page can edit it too.',
+    workdirsHint: 'To add or remove workspaces later, edit the WORKDIRS array in ccm.config.json — it hot-reloads on save (no restart). The first entry is the one your phone opens by default. The phone Settings page can edit it too.',
     wroteLabel: 'Wrote',
     permNote: '(mode 0600)',
     nextSteps: 'Next steps:',
@@ -331,8 +337,8 @@ export const MESSAGES = {
       desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
       work_dir_required: () => 'An explicit absolute --work-dir= is required (or type one in the wizard). '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to a remote entrypoint.',
-      work_dir_is_home: () => 'WORK_DIR cannot be your home directory. Use a specific project folder.',
-      work_dir_not_absolute: () => 'WORK_DIR must be an absolute path (or a ~/… path under your home directory).',
+      work_dir_is_home: () => 'A workspace cannot be your home directory. Use a specific project folder.',
+      work_dir_not_absolute: () => 'A workspace must be an absolute path (or a ~/… path under your home directory).',
       tty_required: () => 'This shell has no TTY. Do not run npm run setup. Use: '
         + 'node scripts/setup.js --yes --work-dir=<absolute-path> --hooks=on|off',
       env_exists: d => `${d} already exists; non-interactive mode will not overwrite it `

@@ -6,10 +6,10 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files（路径编码）、-messages、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
+import { getProjectDir, listSessions, listSessionsPage, listSessionsByIds, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -395,4 +395,81 @@ test('listSessions: 尾窗内混入字面 null 行不吞掉其后的 ai-title', 
   ]);
   const result = await listSessions(cwd, { baseDir: BASE });
   assert.equal(result[0].title, 'null行之后的AI标题');
+});
+
+
+// ── listSessionsByIds ──────────────────────────────────────────────────────
+// 手动标「稍后再看」的会话被 limit 挤出本页后，服务端靠它把那几条单独补回来（session:list 的
+// pinned 字段）。这里守的是「补回来的行长得和列表主体一样」——字段少一个，前端 sessionRow 就在
+// 那几行上缺东西，而它们恰恰是用户特意标出来要看的。
+
+test('listSessionsByIds: 取到 limit 窗口之外的会话，字段与列表主体同形', async () => {
+  const cwd = '/test/by-ids/basic';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 5; i += 1) {
+    writeJSONL(dir, `s${i}`, [
+      { type: 'user', message: { role: 'user', content: `问题 ${i}` }, timestamp: new Date(2026, 0, 1 + i).toISOString() },
+      { type: 'assistant', message: { role: 'assistant', content: 'ok', model: 'claude-3-5-sonnet' }, timestamp: new Date(2026, 0, 1 + i).toISOString() },
+    ]);
+  }
+  // 时间序最旧的那条：limit=2 的页里绝对没有它
+  const page = await listSessionsPage(cwd, { limit: 2, baseDir: BASE });
+  assert.equal(page.sessions.some(s => s.id === 's0'), false, '前置条件：s0 必须在页外，否则这条用例什么都没证明');
+
+  const rows = await listSessionsByIds(cwd, ['s0'], { baseDir: BASE });
+  assert.equal(rows.length, 1);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['entrypoint', 'id', 'lastUsedAt', 'model', 'title'],
+    '字段集必须与 scanViaReaddir 的行一致——少一个前端就在这几行上缺显示');
+  assert.equal(rows[0].id, 's0');
+  assert.equal(rows[0].title, '问题 0');
+  assert.equal(typeof rows[0].lastUsedAt, 'number');
+});
+
+test('listSessionsByIds: 不存在 / 空 id 静默跳过，不抛', async () => {
+  const cwd = '/test/by-ids/skip';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'real-one', [
+    { type: 'user', message: { role: 'user', content: '在的' } },
+  ]);
+  const rows = await listSessionsByIds(cwd, ['real-one', 'no-such-session', '', null], { baseDir: BASE });
+  assert.deepEqual(rows.map(r => r.id), ['real-one']);
+});
+
+// 穿越目标必须【真实存在】：第一版用 '../escape'（指向不存在的文件），把 isSafeSessionId 整个删掉
+// 测试也照样绿——它守的其实是「文件不存在会被跳过」，与路径校验毫无关系。
+// read-state.json 里的 id 是磁盘上的数据，这条路径把它直接拼进 join()，校验是唯一的闸。
+test('listSessionsByIds: 路径穿越 id 够不到别的工作区的真实会话文件', async () => {
+  const cwd = '/test/by-ids/traverse-from';
+  const victim = '/test/by-ids/traverse-victim';
+  mkdirSync(join(BASE, getProjectDir(cwd)), { recursive: true });
+  writeJSONL(join(BASE, getProjectDir(victim)), 'secret', [
+    { type: 'user', message: { role: 'user', content: '别的工作区的内容' } },
+  ]);
+  const traversal = `../${getProjectDir(victim)}/secret`;
+  // 前置条件：这个 id 若不被挡，join() 后确实指向 victim 那个真实文件（否则本用例又退化成假绿）
+  assert.equal(existsSync(join(BASE, getProjectDir(cwd), `${traversal}.jsonl`)), true);
+  assert.deepEqual(await listSessionsByIds(cwd, [traversal], { baseDir: BASE }), []);
+});
+
+test('listSessionsByIds: 会话属于别的工作区时返回空（manual 表只有 id，归属靠这里判）', async () => {
+  const owner = '/test/by-ids/owner';
+  const other = '/test/by-ids/other';
+  writeJSONL(join(BASE, getProjectDir(owner)), 'owned', [{ type: 'user', message: { role: 'user', content: 'x' } }]);
+  mkdirSync(join(BASE, getProjectDir(other)), { recursive: true });
+  assert.deepEqual(await listSessionsByIds(other, ['owned'], { baseDir: BASE }), []);
+  assert.equal((await listSessionsByIds(owner, ['owned'], { baseDir: BASE })).length, 1);
+});
+
+test('listSessionsByIds: 按 lastUsedAt 降序（与列表主体同序，两次调用不抖动）', async () => {
+  const cwd = '/test/by-ids/order';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'old', [{ type: 'user', message: { role: 'user', content: 'a' }, timestamp: '2026-01-01T00:00:00.000Z' }]);
+  writeJSONL(dir, 'new', [{ type: 'user', message: { role: 'user', content: 'b' }, timestamp: '2026-03-01T00:00:00.000Z' }]);
+  writeJSONL(dir, 'mid', [{ type: 'user', message: { role: 'user', content: 'c' }, timestamp: '2026-02-01T00:00:00.000Z' }]);
+  const rows = await listSessionsByIds(cwd, ['old', 'new', 'mid'], { baseDir: BASE });
+  assert.deepEqual(rows.map(r => r.id), ['new', 'mid', 'old']);
+});
+
+test('listSessionsByIds: 空/无效入参不读盘，直接返回 []', async () => {
+  assert.deepEqual(await listSessionsByIds('/no/such/cwd', [], { baseDir: BASE }), []);
+  assert.deepEqual(await listSessionsByIds('/no/such/cwd', null, { baseDir: BASE }), []);
 });

@@ -16,7 +16,9 @@
    清了 `src/` 与 `public/js/`（约 110 处），2026-09-03 补清上轮完全未覆盖的 `tests/` 整树与
    `index.html`（32 处）。**没有门禁钉这件事**——上轮漏的那 32 处躺了 18 天，期间 check 一直全绿，
    是人工全仓 grep 才翻出来的。以后删文档，别指望门禁替你找残留引用。
-   现存编号锚点只认 docs/hard-rules.md 在册的（AD-5 / SP-10 / OQ-09 / UP-1 等）与历次审查修复标记。
+   现存编号锚点有两套登记面：docs/hard-rules.md 在册的（AD-5 / SP-10 / OQ-09 / UP-1 等）与历次审查修复标记，
+   以及 tests/README.md 那份由 `check-invariant-ids.js` 硬闸执行的不变量编号表——**本文对应的
+   `DISPLAY-01` 就在后者**（`logic-statusline` / `logic-bg-tasks` / `statusline` 三份 invariants 写着「守护：DISPLAY-01」）。
    注释可以帮你理解「当初为什么这么做」，但「现在到底怎么做」只由被测试覆盖的实现回答。
 
 ---
@@ -103,7 +105,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 非法 | `null` | 拒切 / 回落 |
 
 | **禁止** | 把字面量 `ultracode` 塞进 `Options.effort`；靠改写用户正文注入 `ultracode` 关键词（关键词仅用户自写时保留） |
-| **切档路径** | 见 §2.2.1——**具体档走控制请求，只有 `null` 走 dispose+resume** |
+| **切档路径** | 见 §2.2.1——**具体档走控制请求，`null` 走 dispose+resume**；具体档也有一个例外：实例半开 / 已弃用（`!this.q`，无控制通道）时同样返回 `needsSwap` |
 | **日志/chip** | UI 显 `ultracode` 时 `logMeta().effort === 'ultracode'`；SDK 实际仍是 xhigh |
 | **锚点** | `normalizeEffortUiLevel` · `AgentSession` ultracode 构造 · display-contracts · E2E P0-02e |
 
@@ -114,10 +116,11 @@ CLI 无 `set_effort` 控制请求，但 `apply_flag_settings` 认 `effortLevel`/
 
 | 目标档 | 路径 | 理由 |
 |--------|------|------|
-| `low`…`max` / `ultracode` | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例 |
+| `low`…`max` / `ultracode` | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例。**例外**：`!this.q`（半开 / 已弃用实例，没有控制通道）时也返回 `needsSwap`，落到置换路径 |
 | **`null`（模型默认）** | 返回 `needsSwap` → server `dispose + resume` | CLI 的 `applied.effort` **恒是具体档**（不传 `--effort` 启动时也是模型自身默认档），没有"未 pin"态可回，`effortLevel:null` 清不回去 |
 
-CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛错，全部由 `setEffort()` 挡住：
+CLI 侧这条路有四个**静默失败**边界——都返回成功、都不抛错。①②③ 由 `setEffort()` 挡住，
+④ 在 `setEffort()` 之外：它由 `send()` 里 setModel 成功后调的 `_reassertEffort()` 补下发：
 
 | # | CLI 行为 | 防护 |
 |---|---------|------|

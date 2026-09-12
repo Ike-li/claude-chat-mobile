@@ -9,6 +9,9 @@
 //   隔离必须做在进程级。
 // ★ 每个用例只允许产生【一次】失败鉴权；要断言两条失败路径就拆成两个用例（下面 query / header
 //   两个"禁 token 后门"用例就是为此拆开的，此前它们挤在一个用例里，第二条必吃 429）。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -28,7 +31,7 @@ async function startServer() {
   const spawned = await spawnServer({
     AUTH_TOKEN,
     CCM_DATA_DIR: dataDir,
-    WORK_DIR: dataDir,
+    WORK_DIRS: dataDir,
     IDLE_TIMEOUT_MS: '10000',
     // 启用 CF Access（三项齐全 → enabled=true；与 auth-token.test.mjs 相反，它刻意传空串关掉）。
     // 「三项真的生效了」由下面「公网 Host + 正确 token → 仍 401」那两个用例行为性地证明：若 CF 配置

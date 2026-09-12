@@ -35,7 +35,7 @@ const CORE = join(DESKTOP, 'CCMCore.swift');
 const PROC = join(DESKTOP, 'CCMProcess.swift');
 // 导出：tests/unit/app-build.test.mjs 据此断言「desktop 下每个产品 .swift 都在这里」——
 // 漏一个的症状是「代码写了菜单里没有」，且它同时逃过下面那道 typecheck 闸。
-export const APP_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift')];
+export const APP_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift'), join(DESKTOP, 'ccm-qr-window.swift')];
 const TEST_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar-tests.swift')];
 const TEST_BIN = join(BUILD, 'ccm-core-tests');
 

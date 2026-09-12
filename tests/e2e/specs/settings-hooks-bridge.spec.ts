@@ -6,14 +6,14 @@
 // 没找到——位置错了，遂移到通知这一组（与提示音/震动同一心智）。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralPage, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-25 终端会话推送：未装显示开启按钮 → 二次确认 → 翻为已启用', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'host');
     const section = page.locator('#hooksBridgeSection');
     await expect(section).toBeVisible();
     await expect(section).toContainText('未启用');
@@ -36,7 +36,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 注：test: 夹具命令不产生正常回合终态，不能用 waitForIdle 收口（会一直等 #streamLiveStatus 消失）
     await sendChatMessage(page, 'test:hooks-installed');
 
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'host');
     const section = page.locator('#hooksBridgeSection');
     await expect(section).toContainText('已启用');
 
@@ -50,7 +50,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:hooks-unknown');
 
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'host');
     const section = page.locator('#hooksBridgeSection');
     // 核心：段落还在。修复前这里是 hidden——用户在手机上再也看不到这个功能存在过
     await expect(section).toBeVisible();
@@ -71,7 +71,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'notify');
     await page.locator('#btnPushTest').click();
     await expect(page.locator('#messages')).toContainText('还没订阅推送');
 
@@ -85,11 +85,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'notify');
     const row = page.locator('#pushStatusRow');
     await expect(row).not.toBeEmpty();
     await expect(row).toContainText(/未开启|已开启|不可用|已被拒绝|未完成订阅/);
 
     await expectNoBrowserErrors(page);
   });
+
+  // 缺口 2：statusline 桥此前在 web 上整段隐身——service:status 连字段都没有，只能回电脑敲
+  // npm run statusline:status。两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
+  test('P0-25d 终端状态栏（statusline 桥）：未装显示开启按钮 → 二次确认 → 翻为已启用', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralPage(page, 'host');
+
+    const section = page.locator('#statuslineBridgeSection');
+    await expect(section).toBeVisible();
+    // 与 hooks 桥并列同屏——它们是同一件事的两半，分居两处会让人以为只有一个
+    await expect(page.locator('#hooksBridgeSection')).toBeVisible();
+
+    const action = page.locator('[data-testid="statusline-bridge-action"]');
+    await expect(action).toBeVisible();
+    await action.click();
+
+    // 改的是用户全局 ~/.claude/settings.json，必须二次确认
+    await expect(page.locator('#confirmSheet')).toBeVisible();
+    await page.locator('#confirmOk').click();
+
+    await expect(section).toContainText('已启用');
+    // 已装态下按钮翻成「关闭」，不再是「开启」
+    await expect(action).toHaveText('关闭');
+
+    await expectNoBrowserErrors(page);
+  });
+
 });

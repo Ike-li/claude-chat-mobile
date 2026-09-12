@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -578,7 +578,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     // 推送预览是本机偏好，按作用域拆分后住在通用设置（侧栏入口）里，不再随齿轮开合
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'notify');
     const toggle = page.locator('#prefPushPreview');
     await expect(toggle).toBeVisible();
     await expect(toggle).not.toBeChecked();
@@ -590,7 +590,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await closeGeneralSettings(page);
 
     // 重开面板：syncPreferences 从 storage 读回，应仍是勾选态（不是每次都复位成默认关）。
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'notify');
     await expect(page.locator('#prefPushPreview')).toBeChecked();
 
     await expectNoBrowserErrors(page);

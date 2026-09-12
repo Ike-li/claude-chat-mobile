@@ -10,6 +10,7 @@ import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
+  foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
 } from '../../app/src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -298,5 +299,145 @@ test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
     assert.doesNotMatch(zh, /优先级低于 `WORKDIRS`/);
     assert.doesNotMatch(en, /rank below `WORKDIRS`/);
     assert.doesNotMatch(schema, /优先级高于 WORK_DIRS_FILE 与 WORK_DIRS/);
+  });
+});
+
+// ── WORK_DIR 的退役折叠（2026-09-08）───────────────────────────────────────
+//
+// WORK_DIR 曾是独立配置项，与 WORKDIRS 在装机向导里必然重复第一项。取消后主工作目录 = 列表首项，
+// 但既有配置里的那一行不能直接不认——谁的 WORK_DIR 不是列表第一项，升级后手机端默认打开的目录
+// 就换了一个，且零日志。所以折叠 + 告警。
+test.describe('foldPrimaryWorkdir：WORK_DIR 折进列表首位', () => {
+  const E = (...paths) => paths.map(p => ({ path: p, sessionLimit: DEFAULT_SESSION_LIMIT }));
+
+  test('没有 primary → 原样返回，不产生告警', () => {
+    const r = foldPrimaryWorkdir(E('/a', '/b'), '');
+    assert.deepEqual(r.entries.map(e => e.path), ['/a', '/b']);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  test('primary 已是首项 → 顺序不变，但仍告警「这一行可以删了」', () => {
+    const r = foldPrimaryWorkdir(E('/a', '/b'), '/a');
+    assert.deepEqual(r.entries.map(e => e.path), ['/a', '/b']);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /可以从配置里删掉/);
+  });
+
+  // 这一档是「行为不变」的关键：旧语义里 WORK_DIR 恒占首位，不提前就等于悄悄换了默认打开的目录。
+  test('primary 在列表中间 → 提到首位（旧语义里它恒首位）', () => {
+    const r = foldPrimaryWorkdir(E('/a', '/b', '/c'), '/b');
+    assert.deepEqual(r.entries.map(e => e.path), ['/b', '/a', '/c']);
+    assert.match(r.warnings[0], /提到工作区列表首位/);
+  });
+
+  test('primary 提位时保留它自己配过的 sessionLimit', () => {
+    const entries = [
+      { path: '/a', sessionLimit: 3 },
+      { path: '/b', sessionLimit: 9 },
+    ];
+    const r = foldPrimaryWorkdir(entries, '/b');
+    assert.deepEqual(r.entries, [{ path: '/b', sessionLimit: 9 }, { path: '/a', sessionLimit: 3 }]);
+  });
+
+  test('primary 不在列表里 → 插到首位（旧语义里它无条件在白名单内）', () => {
+    const r = foldPrimaryWorkdir(E('/a'), '/solo');
+    assert.deepEqual(r.entries.map(e => e.path), ['/solo', '/a']);
+    assert.equal(r.entries[0].sessionLimit, DEFAULT_SESSION_LIMIT);
+  });
+
+  test('空白 primary 视为没设（不是设成空路径）', () => {
+    assert.deepEqual(foldPrimaryWorkdir(E('/a'), '   ').warnings, []);
+    assert.deepEqual(foldPrimaryWorkdir(E('/a'), null).entries.map(e => e.path), ['/a']);
+  });
+});
+
+// pickPrimaryWorkdir 是 2026-09-01「显式 WORK_DIRS 必须能收窄白名单」那条教训的漏网分支：
+// 当时改了列表来源的优先级，但 app.js 里 `nextDirs = [WORK_DIR]` 那句无条件插入没跟着改，
+// 于是配置文件里的 WORK_DIR 照样被塞进首位。2026-09-08 容器内实测确认仍在（设了
+// WORK_DIRS=<临时目录> 之后 preflight 还在校验配置文件的 WORK_DIR）。
+test.describe('pickPrimaryWorkdir：按来源分档，env 压过文件', () => {
+  test('列表来自 env 时，配置文件里的 WORK_DIR 一并让位', () => {
+    assert.equal(pickPrimaryWorkdir({ kind: 'env-list', inlinePrimary: '/from/config' }), '');
+    assert.equal(pickPrimaryWorkdir({ kind: 'env-file', inlinePrimary: '/from/config' }), '');
+  });
+
+  test('列表来自配置文件时，才用配置文件里的 WORK_DIR', () => {
+    assert.equal(pickPrimaryWorkdir({ kind: 'inline', inlinePrimary: '/from/config' }), '/from/config');
+  });
+
+  test('shell 里的 WORK_DIR 与 env 列表同级，任何来源下都生效且压过文件', () => {
+    for (const kind of ['env-list', 'env-file', 'inline', 'none']) {
+      assert.equal(
+        pickPrimaryWorkdir({ kind, envPrimary: '/from/shell', inlinePrimary: '/from/config' }),
+        '/from/shell',
+        `kind=${kind} 时 shell 的 WORK_DIR 必须赢`,
+      );
+    }
+  });
+});
+
+test.describe('resolveWorkdirSource：折叠接在优先级判定之后', () => {
+  test('内联来源 → 配置文件的 WORK_DIR 被提到首位', () => {
+    const r = resolveWorkdirSource({ inline: ['/a', '/b'], inlinePrimary: '/b' });
+    assert.deepEqual(r.result.entries.map(e => e.path), ['/b', '/a']);
+    assert.equal(r.warnings.length, 1);
+  });
+
+  test('env 列表来源 → 配置文件的 WORK_DIR 不得混进来', () => {
+    const r = resolveWorkdirSource({ envList: ['/from/env'], inline: ['/a'], inlinePrimary: '/a' });
+    assert.deepEqual(r.result.entries.map(e => e.path), ['/from/env']);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  test('外部文件读失败（result=null）→ 不折叠，原样透传给调用方判「保留旧白名单」', () => {
+    const r = resolveWorkdirSource({ envFile: '/no/such/workdirs.json', envPrimary: '/from/shell', here: '/x' });
+    assert.equal(r.result, null);
+    assert.deepEqual(r.warnings, []);
+  });
+});
+
+// pickPrimaryWorkdir 的分档规则（「shell 里的 WORK_DIR 任何来源下都折叠，配置文件里的只在
+// 列表也来自配置文件时才折叠」）只有在 envPrimary 真的只装 shell 值时才成立。而
+// loadRuntimeEnvironment 会把文件值投影进 process.env，裸读它拿不到这个保证 —— 这组用例
+// 钉的就是「投影之后还分得清来源」。
+//
+// 【为什么第 2 条是核心】它是真实缺陷的形态：升级安装的配置文件里留着退役的 WORK_DIR，
+// 操作者用 `export WORK_DIRS=...` 想收窄授权面，却永远挤不掉那个 legacy 目录。
+// 【为什么第 3 条必须一起写】只修「文件值不算 shell 值」会把老式 .env 安装打塌 ——
+// 那种安装的 WORK_DIR 与 WORK_DIRS 都在文件里、一起被投影，双双落空就一个工作区都不剩。
+test.describe('resolveEnvPrimaryWorkdir：投影之后仍分得清 WORK_DIR 是谁给的', () => {
+  test('① shell 显式给了 WORK_DIR → 照常赢（与 env 列表同级）', () => {
+    assert.equal(resolveEnvPrimaryWorkdir({
+      shellEnv: { WORK_DIR: '/from/shell', WORK_DIRS: '/a,/b' },
+      projectedPrimary: '/from/shell',
+    }), '/from/shell');
+  });
+
+  test('② shell 给列表、WORK_DIR 只存在于文件 → 让位（否则 WORK_DIRS 收窄不了授权面）', () => {
+    assert.equal(resolveEnvPrimaryWorkdir({
+      shellEnv: { WORK_DIRS: '/only/this' },   // 快照里没有 WORK_DIR
+      projectedPrimary: '/legacy/repo',        // 投影进 process.env 的文件值
+    }), '', 'legacy 目录会被折进白名单首位，export WORK_DIRS 永远收窄不掉');
+  });
+
+  test('③ 全文件安装（WORK_DIR 与 WORK_DIRS 都在文件里）→ 仍然折叠，不得回归', () => {
+    assert.equal(resolveEnvPrimaryWorkdir({
+      shellEnv: {},                            // shell 什么都没设
+      projectedPrimary: '/legacy/repo',
+    }), '/legacy/repo', '老式 .env 安装的主目录失效 → 授权面塌陷');
+  });
+
+  test('④ WORK_DIRS_FILE 同样算「列表来自 shell」', () => {
+    assert.equal(resolveEnvPrimaryWorkdir({
+      shellEnv: { WORK_DIRS_FILE: '/etc/workdirs.json' },
+      projectedPrimary: '/legacy/repo',
+    }), '');
+  });
+
+  test('⑤ 空白不算数：shell 里的空串/空白不得当成「显式给了」', () => {
+    assert.equal(resolveEnvPrimaryWorkdir({
+      shellEnv: { WORK_DIR: '   ', WORK_DIRS: '/only/this' },
+      projectedPrimary: '/legacy/repo',
+    }), '');
   });
 });

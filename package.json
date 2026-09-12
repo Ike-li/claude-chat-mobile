@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
   "type": "module",
   "private": true,
@@ -30,7 +30,7 @@
     "node": ">=20"
   },
   "verifiedWith": {
-    "claudeCli": "2.1.263"
+    "claudeCli": "2.1.268"
   },
   "scripts": {
     "start": "node app/server.js",
@@ -57,7 +57,7 @@
     "app:install": "node scripts/app-build.js --install",
     "app:test": "node scripts/app-build.js --test-only",
     "dev": "node --watch app/server.js",
-    "check": "eslint . && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
+    "check": "eslint . && node tests/gates/check-import-boundaries.js && node tests/gates/contract-check.js && node scripts/doc-consistency.js && node tests/gates/check-diagram-claims.js && node tests/gates/check-n1-assumptions.js && node tests/gates/i18n-check.js && node tests/gates/check-destructive-deletes.js && node tests/gates/check-shell-pitfalls.js && node tests/gates/check-invariant-ids.js && node tests/gates/check-disposable-env-guard.js && node tests/gates/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "inventory:check": "node tests/gates/repo-inventory.js",
@@ -81,6 +81,8 @@
     "docker:build": "docker compose -f tests/infra/docker-compose.test.yml build",
     "test:docker": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:unit && npm run test:invariants && npm run test:invariants:server && npm run test:invariants:env && npm run test:integration\"",
     "test:docker:unit": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:unit",
+    "test:docker:integration": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:integration",
+    "test:docker:invariants": "docker compose -f tests/infra/docker-compose.test.yml run --rm test sh -lc \"npm run test:invariants:server && npm run test:invariants:env\"",
     "test:docker:e2e": "docker compose -f tests/infra/docker-compose.test.yml run --rm test npm run test:e2e",
     "test:docker:sh": "docker compose -f tests/infra/docker-compose.test.yml run --rm test bash",
     "test:docker:playground": "sh tests/infra/playground-test.sh",

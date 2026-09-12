@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -656,5 +656,98 @@ test.describe('scanSubagents', () => {
     const r = await scanSubagents('sa-filter', cwd, { baseDir: BASE });
     assert.equal(r.length, 1);
     assert.equal(r[0].agentId, 'areal');
+  });
+});
+
+// ---- readSubagentFlow：历史回放时把子代理干过什么读回来（第 3 批 3a）----
+// 【为什么必须单独读】主 transcript 里【没有】子代理的执行内容——2026-09-10 全库实证：
+// isSidechain:true 只出现在 subagents/agent-*.jsonl 内，主链只有那次 tool_use 与最终 tool_result。
+// 于是刷新后，前端从主链 spawn 工具预建的那张子代理卡是【空壳】：卡在、body 空。
+// 【为什么按需读而不随历史一起推】实测本机 179 个 agent 文件：中位 360KB、最大 1.2MB、总 69MB。
+// 随 session:history 一起推等于把整轮历史放大一个数量级。故按 toolUseId 单个拉、行数封顶。
+test.describe('readSubagentFlow', () => {
+  function writeFlowAgent(cwd, sid, agentId, { meta, entries }) {
+    const dir = join(BASE, getProjectDir(cwd), sid, 'subagents');
+    mkdirSync(dir, { recursive: true });
+    if (meta !== undefined) writeFileSync(join(dir, `agent-${agentId}.meta.json`), JSON.stringify(meta));
+    writeFileSync(join(dir, `agent-${agentId}.jsonl`), entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  }
+
+  test('按 meta.toolUseId 定位 agent，展开成与主历史同构的条目', async () => {
+    const cwd = '/test/saflow-basic';
+    writeFlowAgent(cwd, 'saf-basic', 'aflow1', {
+      meta: { agentType: 'code-reviewer', description: 'Review auth module', toolUseId: 'toolu_parent_1', spawnDepth: 1 },
+      entries: [
+        { type: 'assistant', isSidechain: true, timestamp: '2026-09-10T01:00:00.000Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: '开始审查' }] } },
+        { type: 'assistant', isSidechain: true, timestamp: '2026-09-10T01:00:05.000Z',
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'a.js' } }] } },
+        { type: 'user', isSidechain: true, timestamp: '2026-09-10T01:00:06.000Z',
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'export function login() {}' }] } },
+      ],
+    });
+    const r = await readSubagentFlow('saf-basic', cwd, 'toolu_parent_1', { baseDir: BASE });
+    assert.equal(r.ok, true);
+    assert.equal(r.agentType, 'code-reviewer');
+    assert.equal(r.description, 'Review auth module');
+    // 形状与主历史 expandHistoryEntry 逐项同构，前端才能复用同一套渲染（否则又是两套平行实现）。
+    // 注意 text 条目按该契约【不带 kind】（只有 thinking/tool_use/tool_result 带），
+    // 断成 kind==='text' 会红——这一条就是照着猜的形状写、被实现打回来的。
+    assert.equal(r.items[0].kind, undefined, 'text 走 {role,content,timestamp} 形态，无 kind');
+    assert.equal(r.items[0].content, '开始审查');
+    assert.equal(r.items[1].kind, 'tool_use');
+    assert.equal(r.items[1].name, 'Read');
+    assert.equal(r.items[1].toolUseId, 't1');
+    assert.equal(r.items[2].kind, 'tool_result');
+    // 每条都归属这张卡：前端据此把它们塞进对应的 .sa-body，不会漏到主流去
+    assert.equal(r.items.every(i => i.parentToolUseId === 'toolu_parent_1'), true);
+  });
+
+  test('toolUseId 对不上任何 agent → ok:false，不抛也不返回别人的流水', async () => {
+    const cwd = '/test/saflow-miss';
+    writeFlowAgent(cwd, 'saf-miss', 'aflow2', {
+      meta: { agentType: 'general-purpose', toolUseId: 'toolu_other' },
+      entries: [{ type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: '别人的' }] } }],
+    });
+    const r = await readSubagentFlow('saf-miss', cwd, 'toolu_parent_1', { baseDir: BASE });
+    assert.equal(r.ok, false);
+    assert.equal(r.items, undefined, '不得回落成「随便给一个 agent」——那会把别的子代理内容显示在这张卡上');
+  });
+
+  test('超上限 → 保留【尾部】并标 truncated（同 getSessionHistory 的 pushCapped 口径）', async () => {
+    const cwd = '/test/saflow-cap';
+    const entries = [];
+    for (let i = 0; i < 30; i++) {
+      entries.push({ type: 'assistant', isSidechain: true, timestamp: '2026-09-10T01:00:00.000Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: `第 ${i} 条` }] } });
+    }
+    writeFlowAgent(cwd, 'saf-cap', 'aflow3', { meta: { agentType: 'x', toolUseId: 'toolu_cap' }, entries });
+    const r = await readSubagentFlow('saf-cap', cwd, 'toolu_cap', { baseDir: BASE, limit: 5 });
+    assert.equal(r.ok, true);
+    assert.equal(r.items.length, 5);
+    assert.equal(r.truncated, true);
+    assert.equal(r.total, 30, '省了多少要说得出来，否则用户不知道自己在看一个截断视图');
+    assert.equal(r.items.at(-1).content, '第 29 条', '保尾部：子代理的结论在末尾，砍尾等于砍掉答案');
+  });
+
+  test('无 subagents 目录 → ok:false，不抛（绝大多数普通轮次都没有）', async () => {
+    const r = await readSubagentFlow('saf-none', '/test/saflow-none', 'toolu_x', { baseDir: BASE });
+    assert.equal(r.ok, false);
+  });
+
+  // 穿越靶子必须真实存在且可被合法读到，否则「不存在 → ok:false」会让断言恒真、守卫删掉也全绿。
+  test('非法 sessionId 不落盘读（路径穿越同 SS-003 口径）', async () => {
+    const from = '/test/saflow-escape-from';
+    const to = '/test/saflow-escape-to';
+    const projTo = getProjectDir(to);
+    const dir = join(BASE, projTo, 'safvictim', 'subagents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'agent-aleak2.meta.json'), JSON.stringify({ agentType: 'general-purpose', toolUseId: 'toolu_leak' }));
+    writeFileSync(join(dir, 'agent-aleak2.jsonl'),
+      JSON.stringify({ type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: '机密' }] } }) + '\n');
+    const legit = await readSubagentFlow('safvictim', to, 'toolu_leak', { baseDir: BASE });
+    assert.equal(legit.ok, true, '前提：靶目录本身可被合法读到，穿越断言才有意义');
+    const escaped = await readSubagentFlow(`../${projTo}/safvictim`, from, 'toolu_leak', { baseDir: BASE });
+    assert.equal(escaped.ok, false, '非法 sessionId 必须在拼路径之前就被挡下');
   });
 });

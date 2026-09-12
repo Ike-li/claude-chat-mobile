@@ -18,6 +18,9 @@
 //     那一侧由 tests/unit/instance-manager.test.mjs 的 anyTurnRunning 纯函数用例覆盖。
 //  ② /health 的鉴权 —— 归 tests/invariants/server/auth-gate.test.mjs。
 
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -32,7 +35,7 @@ let dir, server;
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-health-'));
-  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIR: dir, CCM_DATA_DIR: dir });
+  server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);

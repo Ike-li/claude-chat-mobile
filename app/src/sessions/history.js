@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT } from './workdirs.js';
+import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
 import { toolSummary } from '../shared/tool-summary.js';
@@ -638,20 +638,79 @@ function isCliSystemLine(content) {
 // 缓存键含 limit；有 query 时另加 `q:` 段——否则搜索结果会污染浏览缓存，或反过来。
 // excludeIds：进程内临时排除（删文件窗口 pendingDeleteIds）；传空 Set/不传 = 不过滤。
 export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query } = {}) {
-  const dir = join(baseDir, getProjectDir(cwd));
   const normalizedQuery = typeof query === 'string' ? query.trim() : '';
+  const own = await scanOneCwd(cwd, baseDir, limit, normalizedQuery);
+
+  // 托管 worktree 的会话并进本列表（2026-09-11）。绝大多数工作区没有 .claude/worktrees/，
+  // 那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
+  const worktrees = await listManagedWorktreeDirs(cwd);
+  if (worktrees.length === 0) return applyExcludeIds(own, excludeIds);
+
+  const extra = await Promise.all(worktrees.map(async wt => {
+    const r = await scanOneCwd(wt.cwd, baseDir, limit, normalizedQuery);
+    // cwd 必须带上：父仓只是展示归属，前端点开时拿它去定位 transcript——用父仓 cwd 会查到空目录。
+    return { ...r, sessions: r.sessions.map(s => ({ ...s, cwd: wt.cwd, worktree: wt.name })) };
+  }));
+
+  // ★ 截断必须发生在合并之后。各处各取 limit 条是对的（每处内部已按活动时间取了最近 N，
+  //   全局最近 N 必然是这些候选的子集），但**最终那一刀**要对合并后的序列切——
+  //   先切父仓再拼 worktree，会让「最近一条恰好在 worktree 里」的常见情形排到第二页去。
+  const parts = [own, ...extra];
+  // ★ 按 id 去重，且必须在排序之后。会话中途 EnterWorktree 时 CLI **不换 session id**，只把 cwd
+  //   指向 worktree，于是同一个 id 在两个 project 目录各留一个 .jsonl（切换前的在父仓，之后的在
+  //   worktree）。不去重就会出现两行同名会话，点哪行拿到的历史还不一样。排序后取首个 = 留活动
+  //   时间更新的那条 = worktree 那条，也正是这个会话现在所在、后续内容继续落盘的位置。
+  const seen = new Set();
+  const merged = parts
+    .flatMap(r => r.sessions)
+    .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || String(a.id).localeCompare(String(b.id)))
+    .filter(s => (seen.has(s.id) ? false : (seen.add(s.id), true)));
+  return applyExcludeIds({
+    sessions: merged.slice(0, limit),
+    // total 是各处之和：少算 worktree 那边会让「还有更早会话」在 UI 上凭空消失。
+    // 跨目录同 id 在这里会被计两次（拿不到窗外的完整 id 集合去重），方向是高估——
+    // 只会让「还有更早会话」多显示一次，比漏报安全。
+    total: parts.reduce((n, r) => n + (r.total ?? 0), 0),
+    hasMore: merged.length > limit || parts.some(r => r.hasMore),
+  }, excludeIds);
+}
+
+// 单个 cwd 的扫描 + TTL 缓存（原 listSessionsPage 的主体，抽出来供父仓与各 worktree 复用）。
+async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
+  const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = normalizedQuery
     ? `${dir}:q:${normalizedQuery.toLowerCase()}:${limit}`
     : `${dir}:${limit}`;
-
   // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——
   // excludeIds 不进缓存键：缓存的是扫盘结果，排除在缓存之后应用。
+  // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉。
   const cached = _listCache.get(cacheKey);
-  const fromScan = cached && Date.now() - cached.ts < LIST_CACHE_TTL
+  return cached && Date.now() - cached.ts < LIST_CACHE_TTL
     ? cached.result
-    : await scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
-  if (!excludeIds || excludeIds.size === 0) return fromScan;
-  return { ...fromScan, sessions: fromScan.sessions.filter(s => !excludeIds.has(s.id)) };
+    : scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
+}
+
+const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size === 0
+  ? result
+  : { ...result, sessions: result.sessions.filter(s => !excludeIds.has(s.id)) });
+
+// 枚举该工作区下的托管 worktree（CLI 的 EnterWorktree / --worktree / agent isolation 的落点）。
+//
+// 【为什么 readdir 而不是 `git worktree list`】判据只是"目录在不在"，readdir 零子进程；而 git 那份
+// 会把仓库外的平级兄弟 worktree（`../repo-<分支>`）一并列出来——那类跳出白名单子树，不在派生放行集里
+// （见 workdirs.js 的 resolveManagedWorktree），列出来也点不开，等于造一批必然失败的行。
+//
+// 残留目录（worktree 已 `git worktree remove`、目录还在）不特意排除：它的 transcript 确实存在过，
+// 列出来是诚实的；真打开时 routeCwd 那道判据仍会独立复核一次。
+async function listManagedWorktreeDirs(cwd) {
+  const root = managedWorktreeRoot(cwd);
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return []; // 没有 .claude/worktrees/ —— 绝大多数工作区的常态，不是异常
+  }
+  return entries.filter(e => e.isDirectory()).map(e => ({ name: e.name, cwd: join(root, e.name) }));
 }
 
 // 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
@@ -948,6 +1007,78 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
 // 向后兼容包装：仅返回会话数组（多处 script/测试直接用数组）。新代码若需 hasMore 用 listSessionsPage。
 export async function listSessions(cwd, opts = {}) {
   return (await listSessionsPage(cwd, opts)).sessions;
+}
+
+// 按 id 精确取列表行，绕过 limit 截断（2026-09-08）：手动标「稍后再看」的会话不该因为分页窗口
+// 往前滑就从抽屉里消失——那是用户显式输入的待办，确认框还承诺了「会一直显示未读」。
+//
+// 行形状与 scanViaReaddir 逐字段对齐（id/title/model/entrypoint/lastUsedAt），否则前端 sessionRow
+// 会在这些行上缺字段。标题走 peekSessionListTitleTimed（SDK summary 优先、回落 readHeadMeta）而不是
+// 直接用 readHeadMeta：被补进来的会话【可能仍在 SDK 候选窗内】——本页只有 6 条，而候选窗 ≈51，
+// 排第 10 位的会话就会既在候选窗内、又不在本页。只读盘的话，同一条会话从主列表滑进这一组的瞬间
+// 标题会从 CLI 的 ai-title 变成首条 user 消息（实测差距很大：「对」↔ 一条文件路径），看起来像换了个会话。
+// 代价是多一次 stat + 头窗读，换的是不在这里造第二份标题解析——那种分叉迟早会静默漂移。
+//
+// 不存在 / 不属于本 cwd / id 非法一律静默跳过（allSettled）：调用方拿到的就是「确实还在这个工作区里」
+// 的那些。会话被删掉后 manual 标记会残留在 read-state 里（那张表不知道文件没了），这里正是它的收口。
+export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {}) {
+  const wanted = [...new Set(ids || [])].filter(id => isSafeSessionId(id));
+  if (!wanted.length) return [];
+  // 候选目录 = 工作区自身 + 它的托管 worktree。只查父仓的话，worktree 里被手动标未读的会话
+  // 在被 limit 挤出时间窗后就永远拉不回来了——标记还在 read-state 里，行却再也不出现，
+  // 而长按确认框对用户的承诺恰恰是「这一行会一直显示未读，直到你再次打开它」。
+  const owners = [{ cwd, worktree: null }, ...(await listManagedWorktreeDirs(cwd)).map(w => ({ cwd: w.cwd, worktree: w.name }))];
+  const settled = await Promise.allSettled(wanted.map(async id => {
+    // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）。
+    //
+    // 【必须扫完所有候选，不能取首个命中】会话进入托管 worktree 时 sessionId 不变，于是父仓与
+    // worktree 两个 project 目录下会各有一份同名 transcript。owners 里父仓恒排第一，取首个
+    // 等于永远选那份陈旧副本：这一行会带着父仓的 cwd 返回，点开看到的是进 worktree 之前的旧内容。
+    // 正常列表路径（listSessionsPage）对同 id 的重复副本就是按活跃度留最新的那份，这条
+    // 「被 limit 挤出时间窗、靠手动未读标记补回来」的路径必须同口径，否则同一个会话在两个入口
+    // 打开会看到两份不同的历史。
+    // 用 mtime 而不是 readLastMessageActivityMs 来选：后者要再读一次文件尾部，而候选数就是
+    // 「父仓 + 它的 worktree 数」，逐个读盘不划算；transcript 只追加写，mtime 与最后一条消息的
+    // 时间高度一致，选出来之后下面照样会用 readLastMessageActivityMs 算出准确的 lastUsedAt。
+    let owner = null;
+    let file = null;
+    let st = null;
+    let activityAt = null;
+    let best = -Infinity;
+    for (const o of owners) {
+      const candidate = join(baseDir, getProjectDir(o.cwd), `${id}.jsonl`);
+      try {
+        const s = await stat(candidate);
+        // 判据与 listSessionsPage 同口径：按最后一条消息的时间，读不出来才回落 mtime。
+        // 不能只比 mtime——transcript 被复制/touch 过时 mtime 会说谎，而两个入口对同一个会话
+        // 给出不同历史是最难归因的一类症状。候选数就是「父仓 + 它的 worktree 数」，逐个读尾部
+        // 可接受；选中的那份顺带把 activityAt 留下，下面不必再读一次。
+        const act = await readLastMessageActivityMs(candidate, s.size).catch(() => null);
+        const score = act ?? s.mtimeMs;
+        if (score > best) { best = score; st = s; owner = o; file = candidate; activityAt = act; }
+      } catch { /* 下一个候选 */ }
+    }
+    if (!owner) throw new Error('session file not found');
+    const [meta, peeked] = await Promise.all([
+      readHeadMeta(file, st.size),
+      // 带超时：session:list 是抽屉的关键路径，SDK 挂住时宁可用读盘标题也不能让整个列表等着。
+      peekSessionListTitleTimed(owner.cwd, id, { baseDir }),
+    ]);
+    return {
+      id,
+      title: peeked || (meta && meta.title) || '(无标题)',
+      model: (meta && meta.model) || null,
+      entrypoint: (meta && meta.entrypoint) || null,
+      lastUsedAt: Math.round(activityAt ?? st.mtimeMs),
+      // 与 listSessionsPage 的行同形：父仓行不带 cwd，worktree 行带——前端点开时要用真实 cwd
+      ...(owner.worktree ? { cwd: owner.cwd, worktree: owner.worktree } : {}),
+    };
+  }));
+  return settled
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value)
+    // 与列表主体同一套排序（活动时间降序，同值按 id 稳定），避免两次 list 之间这一组顺序抖动。
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
 }
 
 // B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不等待 TTL 过期）。
@@ -1437,6 +1568,19 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   }
 }
 
+// 会话是否属于这个**工作区**（含它的托管 worktree）。与 sessionFileExists 分开是刻意的：
+// 那个是 session:switch 的归属校验兼路径穿越防线，拿到的 cwd 已被 routeCwd 解析成真实 cwd，
+// 放宽它等于削弱纵深防御。本函数只服务「工作区级」的判断——最典型的是 session:list 的
+// currentSessionId：那个指针存在父仓名下（工作区轴归父仓），值却可能是 worktree 里的会话，
+// 按父仓单点查会恒判不存在，侧栏于是永远不高亮当前会话。
+export async function sessionExistsInWorkspace(cwd, id, { baseDir = CLAUDE_DIR } = {}) {
+  if (await sessionFileExists(cwd, id, { baseDir })) return true;
+  for (const w of await listManagedWorktreeDirs(cwd)) {
+    if (await sessionFileExists(w.cwd, id, { baseDir })) return true;
+  }
+  return false;
+}
+
 // transcript 当前字节大小（只读镜像锁的 keep-alive 判活用：文件在长=终端在写盘）。
 // 单看 history 条数会漏「半行/写盘中」与极短增量，故 keepAlive 用字节 size 而不是 history len。
 // id 同 sessionFileExists 做字符集校验防路径穿越；文件不存在/非法 id → -1（catchUpTick 据此本 tick 不判增长）。
@@ -1545,4 +1689,87 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
   // 最近活动优先：前端明细行按此序展示，正在动的排前面
   out.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
   return out;
+}
+
+// ---- 子代理执行流水的按需读取（历史回放用）----
+//
+// 【为什么必须单独读】主 transcript 里没有子代理的任何执行内容。2026-09-10 全库实证
+// （本机 137 个 project、327 个 jsonl）：`isSidechain:true` 只出现在 subagents/agent-*.jsonl
+// 内部，主 transcript 一条都没有；主链上只有那次 Agent tool_use 与它最终的 tool_result。
+// 后果是刷新页面后，前端从主链 spawn 工具预建的那张子代理卡是【空壳】——卡在、body 全空。
+//
+// 【为什么按需读，不随 session:history 一起推】实测本机 179 个 agent 文件：中位 360KB、
+// 最大 1.2MB、总 69MB。随历史整批推等于把一轮历史的体量放大一个数量级，且绝大多数卡
+// 用户根本不会展开。故走「展开卡片时拉这一个 agent」，与 tool:preview / tool:full 同范式：
+// 客户端只传 toolUseId，从不传路径——路径由本函数从 sessionId + cwd 自己算。
+//
+// 【为什么保尾部】与 getSessionHistory 的 pushCapped 同口径。子代理的结论在末尾，
+// 砍尾等于砍掉答案；开头那几十条读文件反而是最不需要的。
+export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CLAUDE_DIR, limit = 400 } = {}) {
+  if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'bad_session' }; // SS-003 同口径：拼路径前先挡
+  const wanted = typeof toolUseId === 'string' ? toolUseId.trim() : '';
+  if (!wanted) return { ok: false, reason: 'bad_tool_use_id' };
+  const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
+  let names;
+  try { names = await readdir(dir); } catch { return { ok: false, reason: 'no_subagents' }; }
+
+  // 先按 meta 找出是哪一个 agent。meta 极小（几十字节），全扫代价可忽略；
+  // 找不到就返回 false，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
+  let hit = null;
+  for (const name of names) {
+    const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
+    if (!m) continue;
+    try {
+      const meta = JSON.parse(await readFile(join(dir, name), 'utf-8'));
+      if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
+        hit = { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
+          description: typeof meta.description === 'string' ? meta.description : null };
+        break;
+      }
+    } catch { /* meta 损坏/写入中：跳过，不整条失败 */ }
+  }
+  // 无 toolUseId 的 agent 存在（实证 179 个里 7 个：spawnDepth:2 的嵌套子代理，以及本地 slash
+  // 命令的顶层编排 agent），它们锚不到主链的任何一次 tool_use，本函数天然找不到——这是已知边界，
+  // 不是缺陷：没有锚点就没有可以挂载的卡片。
+  if (!hit) return { ok: false, reason: 'not_found' };
+
+  const items = [];
+  let total = 0;
+  const pushCapped = (item) => {
+    items.push(item);
+    if (items.length > limit * 2) items.splice(0, items.length - limit);
+  };
+  try {
+    // 流式逐行读：单文件可达 1.2MB，一次性 buffer 会在 always-on 进程里堆出峰值
+    const rl = createInterface({
+      input: createReadStream(join(dir, `agent-${hit.agentId}.jsonl`), { encoding: 'utf-8' }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; } // 末行可能是写入中途的半行
+      if (entry.isMeta) continue;
+      if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+      // 与主历史同构：复用同一个展开器，前端才能拿同一套渲染跑两条路径。
+      // parentToolUseId 一律填这张卡的 id——本函数返回的每一条按定义都属于它。
+      const expanded = expandHistoryEntry(entry.message?.content, entry.message?.role || entry.type, entry.timestamp, {
+        isSidechain: true,
+        parentToolUseId: wanted,
+        uuid: null, // 分叉锚点只在主链有效（同 getSessionHistory 对 sidechain 的处理）
+      });
+      for (const item of expanded) { total++; pushCapped(item); }
+    }
+  } catch {
+    return { ok: false, reason: 'read_failed' };
+  }
+  const kept = items.slice(-limit);
+  return {
+    ok: true,
+    agentType: hit.agentType,
+    description: hit.description,
+    items: kept,
+    total,
+    truncated: total > kept.length,
+  };
 }

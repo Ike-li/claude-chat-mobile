@@ -3,10 +3,11 @@
 // 避免 string|object 解析逻辑三处分叉。
 // 条目形态：`string`（路径）或 `{ path: string, sessionLimit?: 正整数 }`（向后兼容纯字符串数组）。
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { isAbsolute as isAbsolutePosix } from 'node:path/posix';
 import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
 import { encodeProjectDir } from '../shared/project-dir.js';
+import { CLAUDE_DIR_NAME } from '../shared/claude-home.js';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
 export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
@@ -84,19 +85,107 @@ export function pickWorkdirSource({ envList = [], envFile = '', inline = null } 
   return { kind: 'none', value: [] };
 }
 
-// 把 pickWorkdirSource 的选择兑现成 { result, from, filePath? }。
+// 把已退役的「主工作目录」（WORK_DIR）折进工作区列表首位。
+//
+// 【为什么是折叠而不是直接不认】WORK_DIR 曾是独立配置项：恒占白名单首位、决定手机端默认打开哪个
+// 目录。它与 WORKDIRS 在装机向导里必然重复第一项（setup 写的就是 `{workDir: dirs[0], workDirs: dirs}`），
+// 用户打开配置文件只看到「同一个路径写了两遍」。现已取消，主工作目录 = 列表首项。
+//
+// 但直接不认会**静默改行为**：谁的 WORK_DIR 不是 WORKDIRS 的第一项（甚至根本不在列表里），
+// 升级后手机端默认打开的目录就换了一个，而且一行日志都没有。所以这里折叠 + 由调用方告警，
+// 与 WORK_DIRS / WORK_DIRS_FILE 两条旧路径的退役方式同一形状（见 config-file.js 的 foldWorkdirs）。
+//
+// 提到首位而不是追加末尾：旧语义里 WORK_DIR 恒首位，提首位才是「行为不变」。
+// 已在列表里时保留它原有的 sessionLimit —— 用户显式配过的数字不该因为换了个位置就丢。
+export function foldPrimaryWorkdir(entries = [], primary = '') {
+  const path = String(primary ?? '').trim();
+  if (!path) return { entries: [...entries], warnings: [] };
+
+  const idx = entries.findIndex(e => e.path === path);
+  const warnings = [
+    idx === 0
+      ? 'WORK_DIR 已退役：它就是工作区列表的第一项，可以从配置里删掉这一行'
+      : `WORK_DIR 已退役：已把「${path}」提到工作区列表首位（主工作目录 = 列表首项）；请把它写进 WORKDIRS 后删掉 WORK_DIR`,
+  ];
+  if (idx === -1) return { entries: [{ path, sessionLimit: DEFAULT_SESSION_LIMIT }, ...entries], warnings };
+  return { entries: [entries[idx], ...entries.filter((_, i) => i !== idx)], warnings };
+}
+
+// 选出该折叠哪一个「主工作目录」——**按来源分档，不是无条件取配置文件里那个**。
+//
+// 【这是 2026-09-01 那条教训的漏网分支】当时把「内联 WORKDIRS 压过 env」改成 env 优先，理由是
+// 显式 `export WORK_DIRS=...` 必须能收窄白名单（smoke 起的隔离实例曾继承到 7 个真实工作区）。
+// 但 app.js 的 applyWorkdirs 里还有一句无条件的 `nextDirs = [WORK_DIR]`，配置文件里的 WORK_DIR
+// 照样被塞进首位 —— 于是「显式 WORK_DIRS 收窄不了白名单」这件事在**首位**上一直还成立。
+// 2026-09-08 容器里实测确认：设了 WORK_DIRS=<临时目录> 之后，preflight 仍在校验配置文件的 WORK_DIR。
+//
+// 分档规则与「环境变量始终压过文件」同一条：
+//   · shell 里的 WORK_DIR 与 env 列表同级，任何来源下都折叠；
+//   · 配置文件里的 WORK_DIR 只在**列表也来自配置文件**（inline）时才折叠，env 来源生效时一并让位。
+export function pickPrimaryWorkdir({ kind, envPrimary = '', inlinePrimary = '' } = {}) {
+  const fromEnv = String(envPrimary ?? '').trim();
+  if (fromEnv) return fromEnv;
+  return kind === 'inline' ? String(inlinePrimary ?? '').trim() : '';
+}
+
+// 算出该喂给 pickPrimaryWorkdir 的 `envPrimary`——**上面那段分档规则只有在这个参数真的只装
+// 「shell 里的 WORK_DIR」时才成立，而裸读 process.env 拿不到这个保证**。
+//
+// 【缺陷形态】loadRuntimeEnvironment 会把配置文件的值投影进 process.env（config.js 的
+// 「只填 env 里还没有的 key」那段）。投影之后 `process.env.WORK_DIR` 可能是文件给的，调用方却把它
+// 当 shell 值传进来，于是 pickPrimaryWorkdir 第一行就无条件让它赢。后果是**授权面收不窄**：
+// 配置文件里留着退役的 WORK_DIR 时，`export WORK_DIRS=...` 永远挤不掉它，那个 legacy 目录
+// 仍然对外可达。2026-09-12 实测复现（doctor 输出「已把 legacy 提到工作区列表首位」）。
+// 同一处缺陷在 server 的 readWorkdirSource 与 doctor 的 resolveWorkdirSource 各有一份。
+//
+// 【为什么要 projectedPrimary，而不是只认 shellEnv.WORK_DIR】老式 `.env` 安装把 WORK_DIR 与
+// WORK_DIRS **都**写在文件里，两者一起被投影。只认快照的话它们会双双落空，那种安装的主目录
+// 会突然失效（授权面塌陷，可能一个工作区都不剩）。所以判据是「**文件给的主目录不得压过
+// shell 给的列表**」，而不是「文件给的主目录一律不算」——只有来源真的分叉时才让位。
+//
+// 【彻底解法】让 `.env` 的 WORK_DIRS/WORK_DIR 整体走 inline 档，来源就不再需要这样反推。
+// 那要改 readInlineWorkdirConfig 的读取面，牵动三个消费者，不在这次修复范围内。
+export function resolveEnvPrimaryWorkdir({ shellEnv = {}, projectedPrimary = '' } = {}) {
+  const fromShell = String(shellEnv.WORK_DIR ?? '').trim();
+  if (fromShell) return fromShell; // shell 显式给了主目录：与 env 列表同级，照常折叠
+  const listFromShell = Boolean(
+    String(shellEnv.WORK_DIRS ?? '').trim() || String(shellEnv.WORK_DIRS_FILE ?? '').trim(),
+  );
+  // shell 拿出了列表而主目录只存在于文件里 —— 来源分叉，文件那个让位。
+  return listFromShell ? '' : String(projectedPrimary ?? '').trim();
+}
+
+// 把 pickWorkdirSource 的选择兑现成 { result, from, filePath?, warnings }。
 // doctor D3 必须走这里，不能自己 `if (Array.isArray(inline)) return`——那会把 WORK_DIRS env 吃掉。
-export function resolveWorkdirSource({ envList = [], envFile = '', inline = null, here = '' } = {}) {
+//
+// 退役中的 WORK_DIR 在这一层折进列表首位（见 foldPrimaryWorkdir），于是三个消费者
+//（server preflight、server 热加载、CLI doctor）自动同步，不会各留一份「主目录从哪来」的判据。
+export function resolveWorkdirSource({
+  envList = [], envFile = '', inline = null, here = '', envPrimary = '', inlinePrimary = '',
+} = {}) {
   const picked = pickWorkdirSource({ envList, envFile, inline });
+  const primary = pickPrimaryWorkdir({ kind: picked.kind, envPrimary, inlinePrimary });
+
+  // result === null 表示外部文件读不出来（整体非法回退语义）：原样透传，不在这里替调用方决定，
+  // 也不折叠 —— 往一份「读失败」的结果里塞进一个目录会让调用方的「保留旧白名单」判据失真。
+  const fold = (result) => {
+    if (result === null) return { result, warnings: [] };
+    const folded = foldPrimaryWorkdir(result.entries, primary);
+    return {
+      result: { entries: folded.entries, warnings: result.warnings },
+      warnings: folded.warnings,
+    };
+  };
+
   if (picked.kind === 'env-file') {
     const filePath = resolveWorkdirsFilePath(picked.value, here);
-    return { result: loadWorkdirsFile(filePath), from: 'WORK_DIRS_FILE', filePath };
+    return { ...fold(loadWorkdirsFile(filePath)), from: 'WORK_DIRS_FILE', filePath };
   }
   if (picked.kind === 'inline') {
-    return { result: normalizeWorkdirEntries(picked.value), from: 'WORKDIRS' };
+    return { ...fold(normalizeWorkdirEntries(picked.value)), from: 'WORKDIRS' };
   }
   return {
-    result: normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : []),
+    ...fold(normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : [])),
     from: 'WORK_DIRS',
   };
 }
@@ -122,14 +211,65 @@ export function loadWorkdirsFile(filePath) {
 // 但因仍有 live 实例挂着而未被 reloadWorkdirs 归位的目录——这种目录不在 dirs 里，不能直接信任继续新开会话。
 // 归位到 dirs 首位（同 session:new 的既有归位语义），只挡"新开"，不影响该目录上已有会话的继续查看/读取。
 export function ensureWhitelisted(cwd, dirs) {
-  return dirs.includes(cwd) ? cwd : dirs[0];
+  if (dirs.includes(cwd)) return cwd;
+  // 托管 worktree 与白名单目录同权：它不是"被热移除的目录"，归位到 dirs[0] 就把 routeCwd 刚
+  // 放行的 cwd 当场作废。两道闸在 8 个 handler 里成对出现（`ensureWhitelisted(routeCwd(x), dirs)`），
+  // 只改一道等于没改，且症状与完全没改一模一样——不会有任何报错。
+  const managed = resolveManagedWorktree(cwd, dirs);
+  if (managed) return managed.path;
+  return dirs[0];
 }
 
 // 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号。
 // 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
-// git linked worktree 若要用，须把其绝对路径显式写入 workdirs.json，与其它工作区同级——无自动探测、无隐式放行。
+// 仓库外的 git linked worktree（`../repo-<分支>` 这类）若要用，须把其绝对路径显式写入 workdirs.json，
+// 与其它工作区同级——无自动探测、无隐式放行。**例外只有一种**，见下方 resolveWorktreeParent。
 export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
+}
+
+// CLI 托管 worktree 的容器目录（相对 workdir 根）：`EnterWorktree`、`--worktree`、agent isolation
+// 三者的默认落点都是这里。枚举侧（history.js）与放行侧（下方）共用这一份，不各写一遍——
+// SS-004 那次「注释写着同规则、实际各存一份」就是这么漂的。
+export const managedWorktreeRoot = dir => join(dir, CLAUDE_DIR_NAME, 'worktrees');
+
+// 托管 worktree 的派生放行（2026-09-11）。
+//
+// 【为什么这不是给 SCOPE-01 开例外】放行集恒为 `<白名单目录>/.claude/worktrees/<单段>`，
+// 始终落在白名单目录**子树内**——「候选路径 realpath 后须落在授权工作区内」这条原样成立。
+// 真正新增的自由度只有一个：深度固定为 1 的那一层目录名。跳出子树的形态（仓库外的平级兄弟
+// worktree）不在此列，仍须显式写进 WORKDIRS。
+//
+// 【为什么必须 realpath】dirs 恒为已 realpath 的白名单（normalizeWorkdirEntries 出参契约），
+// 候选也要解析后再比：`.claude/worktrees/x -> /somewhere/else` 这种 symlink 若拿未解析路径比前缀，
+// 在 macOS 上就是静默永远放行。
+//
+// 【为什么不递归】允许再深一层，等于从一个已放行的 worktree 里能无限派生出新的授权路径。
+//
+// 【为什么返回解析后的 path 而不只是父仓】调用方拿这个 cwd 去算 transcript 的 project 目录
+// （getProjectDir(cwd)），而 CLI 落盘时用的是它自己解析过的路径——macOS 上 /var 与 /private/var
+// 算出来是两个不同的目录名，传未解析的那个会静默查空。让判据把解析结果一并交出去，
+// 调用方就没有"记得再 realpath 一次"这一步可漏；两次各自 realpath 也会多出一个 TOCTOU 窗口。
+//
+// @returns {{ parent: string, path: string }|null}
+//   parent = 归属的父 workdir（已 realpath，供归组展示）；path = 候选自身 realpath 后的绝对路径
+export function resolveManagedWorktree(cwd, dirs) {
+  if (typeof cwd !== 'string' || cwd === '') return null;
+  if (!Array.isArray(dirs) || dirs.length === 0) return null;
+  let real;
+  try {
+    real = realpathSync(cwd);
+  } catch {
+    return null; // fail-closed：真实落点无法确认（不存在/不可达）一律不放行
+  }
+  for (const d of dirs) {
+    const prefix = managedWorktreeRoot(d) + sep;
+    if (!real.startsWith(prefix)) continue;
+    const rest = real.slice(prefix.length);
+    if (rest === '' || rest.includes(sep)) continue;
+    return { parent: d, path: real };
+  }
+  return null;
 }
 
 // SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——

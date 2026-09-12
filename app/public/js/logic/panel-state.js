@@ -8,7 +8,6 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t } from '../i18n.js';
-import { rttToneClass } from './format.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -51,52 +50,40 @@ export function systemBarClass(payload = {}) {
 // mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
 // （多子代理/后台任务进度是用户在只读时仍需要看到的）。
 // 序：task > subagent > activity > mirror(占位) > null。
-export function bannerPriority({ mirror = false, task = false, subagent = false, activity = false } = {}) {
-  if (task) return 'task';
-  if (subagent) return 'subagent';
-  if (activity) return 'activity';
-  if (mirror) return 'mirror';
-  return null;
-}
-export const pickBannerToShow = bannerPriority;
-
 // UX-004：流式 markdown 预览节流间隔（ms）。
 export function formatStreamPreviewIntervalMs(ms) {
   const n = Number(ms);
   return Number.isFinite(n) && n > 0 ? n : 80;
 }
 
-// UI-007：高频状态标 SVG（可信静态串，无用户输入）。currentColor 吃语义色。
-// 返回 { html, label }；html 供 innerHTML 到 .t-status / 角标；label 作 aria-label。
-const STATUS_ICON_PATHS = {
+// UI-007：高频状态标（工具卡 · 抽屉角标 · 会话点）。一个 kind 一个条目，图标 / 语义色 / 标签同源。
+//
+// tone 曾经不在这里，而是由【每个调用方】自己 classList.add——四个调用点里有两个忘了加，于是
+// 走历史回放渲染出来的成功工具卡顶着模板里残留的 text-warning，同一张卡实时看是绿 ✓、刷新后
+// 变成棕色的 ✓（2026-09-09）。并进同一张表后，「加了 kind 忘了配色」在结构上写不出来。
+//
+// path 是可信静态串（无用户输入），currentColor 吃 tone 给的语义色。
+// label 存中文原文、到 statusIconSpec 里才 t()：模块顶层常量在 import 阶段求值，那时 app.js
+// 还没跑到 setLang()，直接在表里 t() 会把标签永久钉死成中文。
+export const STATUS_ICONS = {
   // hourglass-ish circle for pending/busy
-  pending: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  busy: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  ok: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-  error: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  warn: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  denied: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  answered: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-  aborted: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>',
+  pending: { tone: 'text-warning', label: '进行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  busy: { tone: 'text-warning', label: '运行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  ok: { tone: 'text-success', label: '成功', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  error: { tone: 'text-danger', label: '出错', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  warn: { tone: 'text-warning', label: '待审批', path: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  denied: { tone: 'text-danger', label: '已拒绝', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  // answered / aborted 是中性终态：不是工具失败，也不该占用绿色去邀功——刻意让它们退出红/绿的注意力预算
+  answered: { tone: 'text-ink-soft', label: '已回答', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  aborted: { tone: 'text-ink-soft', label: '已中止', path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
 };
-// 下面几张查表存中文原文、到取用点才 t()：模块顶层常量在 import 阶段求值，那时 app.js 还没跑到
-// setLang()，直接在表里 t() 会把这些标签永久钉死成中文。
-const STATUS_ICON_LABELS = {
-  pending: '进行中',
-  busy: '运行中',
-  ok: '成功',
-  error: '出错',
-  warn: '待审批',
-  denied: '已拒绝',
-  answered: '已回答',
-  aborted: '已中止',
-};
+// 供调用点在换色前清掉上一个状态的色（不能只 add，否则两个色类叠着靠 CSS 顺序决胜负）
+export const STATUS_ICON_TONES = [...new Set(Object.values(STATUS_ICONS).map(s => s.tone))];
 export function statusIconSpec(kind) {
-  const k = STATUS_ICON_PATHS[kind] ? kind : 'pending';
-  const path = STATUS_ICON_PATHS[k];
-  const label = t(STATUS_ICON_LABELS[k] || STATUS_ICON_LABELS.pending);
+  const k = STATUS_ICONS[kind] ? kind : 'pending';
+  const { path, tone, label } = STATUS_ICONS[k];
   const html = `<svg class="status-svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">${path}</svg>`;
-  return { html, label, kind: k };
+  return { html, label: t(label), kind: k, tone };
 }
 
 // 设置面板的数据源必须按驾驶方整组切换：CLI 镜像态只展示 CLI 观察值，哪怕某字段未知；
@@ -176,13 +163,50 @@ export function formatSessionRowSubtitle({
   terminalState = null,
   terminalSource = null,
   shortId = null,
+  worktree = null,
 } = {}) {
   const parts = [];
+  // 托管 worktree 的归属排最前：同一页里混着父仓与各 worktree 的会话，而副文本是 truncate 的——
+  // 尾部先被吃掉，归属比时间戳更不能丢。非字符串/空白一律不渲染，否则多出一个悬空的分隔符。
+  if (typeof worktree === 'string' && worktree.trim()) parts.push(`worktree ${worktree.trim()}`);
   if (terminalState === 'alive') parts.push(terminalSource === 'claude-desktop' ? t('桌面端已打开') : t('终端已打开'));
   if (whenText) parts.push(whenText);
   if (liveOpen) parts.push(t('已打开'));
   if (shortId) parts.push(String(shortId));
   return parts.join(' · ');
+}
+
+// 文件 / 改动面板的目标目录（2026-09-11）。
+//
+// 【为什么不能直接用工作区 cwd】托管 worktree 的会话打开后，工作区轴仍归父仓（产品判据：
+// worktree 是临时模式，不占抽屉条目），但 claude 实际在 `.claude/worktrees/<name>` 里改文件。
+// 拿父仓 cwd 去拉 git 变更，列出来的是父仓那棵树的 diff——它看起来是空的，
+// 而「看起来没改动」和「真的没改动」在 UI 上无法区分，用户会据此判断该不该合并。
+//
+// 无当前实例（空首页、实例刚关）→ 回落工作区 cwd，与引入本函数之前逐字同形。
+export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
+  const list = Array.isArray(instances) ? instances : [];
+  const inst = list.find(i => i && i.instanceId === viewingInstanceId);
+  return inst?.cwd || workspaceCwd || null;
+}
+
+// 一个实例 cwd 归哪个工作区。托管 worktree 的 cwd 是 `<父仓>/.claude/worktrees/<name>`，
+// **不在白名单 dirs 里**，必须归到最长前缀的父仓——否则它在任何按工作区分组的视图里都会凭空消失
+// （角标与 sessionsDot 是 K2，会话行的「已打开」判定是 2026-09-12 补的：只按 inst.cwd === d 过滤时
+// liveMap 对 worktree 行恒空，开着的会话被渲染成未打开，丢运行态、丢关闭入口，点一下还要多走一次
+// reopen）。取最长前缀而不是任一前缀：工作区嵌套时（/repo 与 /repo/sub 都在册）才不会归错。
+export function owningWorkspace(cwd, dirs) {
+  if (!cwd) return null;
+  const list = Array.isArray(dirs) ? dirs : [];
+  if (list.includes(cwd)) return cwd;
+  let best = null;
+  for (const d of list) {
+    if (typeof d !== 'string' || !d) continue;
+    if (cwd.startsWith(d.endsWith('/') ? d : d + '/')) {
+      if (!best || d.length > best.length) best = d;
+    }
+  }
+  return best;
 }
 
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
@@ -192,20 +216,8 @@ export function aggregateStates(instances, dirs) {
   const rank = { idle: 0, done: 1, aborted: 2, busy: 3, error: 4, permission: 5 };
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
-  // worktree 实例 cwd 不在白名单 dirs 时，归入最长前缀父仓，使父工作区角标/sessionsDot 可见（K2）
-  function parentDir(cwd) {
-    if (!cwd) return null;
-    if (cwd in out) return cwd;
-    let best = null;
-    for (const d of Object.keys(out)) {
-      if (cwd === d || cwd.startsWith(d.endsWith('/') ? d : d + '/')) {
-        if (!best || d.length > best.length) best = d;
-      }
-    }
-    return best;
-  }
   for (const x of instances || []) {
-    const key = parentDir(x.cwd) || x.cwd;
+    const key = owningWorkspace(x.cwd, Object.keys(out)) || x.cwd;
     if (!(key in out)) out[key] = 'idle';
     if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
@@ -365,11 +377,10 @@ export function sessionIdBlockView({
   };
 }
 
-// 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。
-// 状态行仍可由接线层带延迟数字，不依赖芯片可见。
+// 顶栏 RTT 芯片：全时段常驻显示——只要测得合法有效数值即显示，断线/未知/非法输入隐藏。
+// 色阶由 rttToneClass 决定（good/ok 为中性 ink-soft，warn 为 warning，bad 为 danger）。
 export function shouldShowRttChip(ms) {
-  const tone = rttToneClass(ms);
-  return tone === 'warn' || tone === 'bad';
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0;
 }
 
 // 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——
@@ -413,8 +424,11 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         id: s.id,
         title: s.title || t('无标题会话'),
         lastUsedAt: s.lastUsedAt ?? null,
-        cwd,
+        // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
+        // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
+        cwd: s.cwd || cwd,
         workspaceName,
+        worktree: s.worktree ?? null,
         entrypoint: s.entrypoint ?? null,
         terminal: s.terminal ?? null, // 'busy'|'alive'|null：CLI 进程注册表自报的终端直跑态
       });
@@ -594,9 +608,11 @@ export function shouldRerenderSessionList({
   prevSessions,
   prevHasMore = false,
   prevTotal = null,
+  prevPinned,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
+  nextPinned,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
@@ -606,6 +622,10 @@ export function shouldRerenderSessionList({
   const signature = list => (Array.isArray(list) ? list : [])
     .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
     .join('|');
+  // pinned（手动标「稍后再看」、被 limit 挤出本页而单独补回的那组）必须单独进判据：它的成员来自
+  // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
+  // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
+  if (signature(prevPinned) !== signature(nextPinned)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 

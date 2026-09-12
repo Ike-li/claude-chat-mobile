@@ -19,11 +19,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 同步与通道
 
-双向实时同步走 Socket.io，出向统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 27 种；seq+epoch 去重回放，`npm run check` 校验双向事件契约）。并存的通道：Web 驾驶走 Agent SDK 双向流；CLI 终端驾驶**不经过 SDK**，靠磁盘 transcript 轮询同步只读镜像，「单驾驶员模型」防两端同时写分叉；设备审批走文件监听广播；离线唤醒走 web-push/ntfy。机制、判据与参数全在 [docs/architecture.md](docs/architecture.md)。
+双向实时同步走 Socket.io，出向统一收敛成 `agent:event` 信封（type 白名单见 `app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 31 种；seq+epoch 去重回放，`npm run check` 校验双向事件契约）。并存的通道：Web 驾驶走 Agent SDK 双向流；CLI 终端驾驶**不经过 SDK**，靠磁盘 transcript 轮询同步只读镜像，「单驾驶员模型」防两端同时写分叉；设备审批走文件监听广播；离线唤醒走 web-push/ntfy。机制、判据与参数全在 [docs/architecture.md](docs/architecture.md)。
 
 几条最容易改错的，摆在这里：
 
-- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。
+- **推送抑制**：审批/提问/后台任务完成**无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 与网关静默告警（`system` 信封里的 `gateway_stall` notice）在「approved 房间有前台可见连接」时才抑制——两者共用 `notifyHasClientsAtSend` 那条判据；前台判据是客户端上报的 `client:presence`，**不是 socket 连着**。其中「后台任务完成」**只算真后台任务**——CLI 把跑得久的前台 Bash 也建模成 task 走同一条 `task_notification`，靠 `task_started` 的 `is_backgrounded` 过滤掉（**别把这道过滤当多余删掉**，删了每条跑几秒的命令都会推到锁屏手机上）。
 - **服务告警与「需要你(N)」是不同轴，绝不混判**：顶栏 chip / 角标只表达「点一下就能处理」的待办，服务告警只活在抽屉「服务」小节与服务状态面板。
 - **限速锁定的措辞按来源分档**：本机来源**绝不说成「有人在暴力尝试」**。
 - **不开无鉴权的 HTTP 数据端点**：`/health`、`/metrics`、历史回显都过鉴权。
@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `ops/` | 配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务 |
 | `shared/` | 叶子工具层；`protocol.js` 是事件契约真相源 |
 
-**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**两个门禁不能移进 `tests/`**：`scripts/doc-consistency.js`（check 链第 4 环）与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 整棵被 `export-ignore` 裁掉——移过去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`（判据见 hard-rules §4.1.1，由 `dist-manifest.test.mjs` 单列断言保护）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
 
 `unit/` 与 `invariants/` **执行槽相同**（纯函数 + 一次性目录真磁盘，CI 同 job），分的是组织轴：前者按被测模块，后者按不变量（文件头声明守护哪条 `XXX-NN`、不测什么）。目录职责、执行槽 S0–S7、以及那两套并存的编号（新的 `AUTH-01` 类 与生产代码注释里先有的 `FILES-1`/`SEC-01`/`SRV-003` 类）都在 [tests/README.md](tests/README.md)——**看到 `// 守护：SRV-003` 不知道是什么就去查那份**，别照着编号猜。
 
@@ -82,7 +82,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 分支纪律
 
-**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产，所以 **`master` 上不得有未发版提交**：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
+两条分支各有单一职责：**`dev` = 开发主线**（GitHub 默认分支，dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布。
+
+- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。
+- **`master` 只接受 `scripts/release.sh` 开的那条 `dev` → `master` 发版 PR**。它开了 `enforce_admins`，谁都不能直推（包括仓库 owner），`quality` 里还有一道 step 拦住任何 head 不是 `dev` 的 PR。
+- 两条分支的 required checks 都是 `quality` / `unit-test (20)` / `unit-test (24)` / `e2e`；**approvals = 0**——单人仓库里 GitHub 不允许自己 approve 自己的 PR，设成 1 会让所有 PR 永远合不进去。PR 在这里的作用是「强制 CI + 可读的变更面」，不是等人点同意。
+- 发版走 `scripts/release.sh`：bump → 推 `dev` → **等真 CI 绿** → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。中途失败就直接重跑，它会从中断处接上（不会二次 bump）。
+- PR 合并产生 merge commit，所以 `master` 不再等于 `dev` 的 tip，**这是正常的**——merge commit 的父之一就是 `dev`，下次 PR 的 merge base 仍然正确，不需要把 `master` 合回 `dev`。
+
+装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产——这正是 `master` 必须恒等于最新发布的原因。裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
@@ -90,7 +98,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
 （钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`app:test`，
-外加与 `test:unit` 同档的 `test:invariants`、与 `test:e2e` 同源的 `test:e2e:parallel`，
+外加与 `test:unit` 同档的 `test:invariants` 与 `test:coverage`、与 `test:e2e` 同源的 `test:e2e:parallel`，
 见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
@@ -99,8 +107,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `test:invariants:env` 跑的是卸载器（`tests/invariants/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
 > ——回落成 `homedir()` / `/Applications/CCM.app` 就打在真实家目录上，与 8/2 删库同形态。两条都进容器。
 
+> **这几条现在是【强制】的，不再只是约定**：`tests/invariants/env/`、`tests/invariants/server/`、
+> `tests/integration/` 下的每个测试文件顶部都 import 了 `tests/setup/require-disposable-env.mjs`，
+> `npm run mutate` 在 `main()` 开头调用同一份判据。不在一次性环境（容器 / GitHub Actions runner）里跑
+> 就**直接 exit 1 并打印改跑什么**，不是静默跳过。漏加那行 import 由 check 链的
+> `check-disposable-env-guard.js` 钉住（判据：目录前缀 + 那行必须是第一条 import——排在被测模块
+> 后面等于没接上，而那和加对了看起来一模一样）。真要在开发机上跑：`CCM_ALLOW_HOST_DESTRUCTIVE_TESTS=1`，
+> 放行但在 stderr 留一行警告。
+>
+> 守卫**不是**物理隔离：它和被守的测试住同一个仓库，改得动测试的人就删得掉那行 import。
+> 它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」。不依赖任何判断的隔离仍然只有容器本身。
+
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑 unit + invariants 三档 + 集成，共 5 档）、
-`npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
+`npm run test:docker:e2e`、`npm run test:docker:integration`、`npm run test:docker:invariants`（server+env 两档）、
+`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
 （拉 Playwright 镜像 + npm ci，约 7 分钟）。维护者要打开一张干净 Linux 用户的 Web UI 时用
 `npm run playground:up`（`127.0.0.1:13000`，fake-claude，不是产品入口；聊天/流式走 `playground:up:mock`）。
 
@@ -115,9 +135,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > 黑名单要求"每遇到一个新命令都正确归类"，而那正是失败的那一步。白名单反过来：
 > **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
+>
+> 钩子对**有容器替代**的命令直接 `deny` 并指出改跑哪条（不是 `ask`）——agent 自己换命令继续，
+> 长任务不会卡在一条本可自助解决的命令上。只有真 agent turn 与 smoke 走 `ask`：那两档要真凭据、
+> 容器里跑不了，花不花那笔额度只有人能决定。
 
 容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
-和仓库里那三层代码级防护（`mutate` 的沙箱 HOME、删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
+和仓库里那几层代码级防护（执行位守卫、单测的目录级 `CCM_DATA_DIR` 隔离、`mutate` 的沙箱 HOME、
+删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
 
 写删除相关代码时会撞上 `check-destructive-deletes` 门禁：测试里的 recursive 删除必须可追溯到 `mkdtemp`，
 否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`。
@@ -137,8 +162,8 @@ npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
 npm run check      # 零 token、最快。覆盖面导览（**逐项以 package.json 的 check 为准**，别把这行
                    # 当成完备清单——它漂过两次）：ESLint · 模块边界 · 双向事件契约 · 文档一致性 ·
-                   # n=1 登记簿 · i18n 孤儿 key · 破坏性删除守卫 · 不变量编号 · Playwright 禁止模式 ·
-                   # desktop typecheck/单测 · 未分类文件。
+                   # 架构图漂移 · n=1 登记簿 · i18n 孤儿 key · 破坏性删除守卫 · 不变量编号 ·
+                   # Playwright 禁止模式 · desktop typecheck/单测 · 未分类文件。
                    # 每个门禁失败时会自己说清违反了什么，不必预先背清单。
                    # 链上成员由 tests/unit/gate-wiring.test.mjs 钉住：新门禁忘了接线会红
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
@@ -152,13 +177,17 @@ npm run test:integration # 仅集成测试（起真 server，需本机 claude CL
                          # tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
 RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）：
                                    # claude-lifecycle / session-switch / websocket-events / aborted-state /
-                                   # message-idempotency / approval-integrity 整份 + file-upload 一个 describe
+                                   # message-idempotency / approval-integrity / rewind 整份 + file-upload 一个 describe
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
 npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自适应，CCM_E2E_SHARDS=N 可覆盖）。
                    # 每个分片就是一条 `npm run test:e2e --`，安全面同源。
-                   # 实测 10 核：串行 8.2 分钟 → 4 分片 2.8 分钟；加到 8 片一秒都不快
-                   # （Playwright 按文件分片、不拆单个 spec，最大的那个文件就要 2.8 分钟）
+                   # 分片按【实测时长】LPT 分配，不是 Playwright 原生 --shard 的按条数均分
+                   # （原生 4 片 167s / 8 片 170s「一秒不差」是改造前的旧结论，已被 7e3b78e 推翻）。
+                   # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
+                   # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
+                   # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
+                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）
@@ -185,4 +214,10 @@ npm run uninstall -- [--purge] [--dry-run] --yes   # 一键卸载。**只删产�
 
 node scripts/device.js list [--json] | approve <ID> | deny <ID>   # 设备审批的 headless 入口
                                                                   # （另三个入口见 architecture.md）
+node scripts/qr.js [--public|--url <地址>]  # 把连接地址+token 打成终端二维码，免手输 64 位 token。
+                                   # 含凭据、须显式敲（口径同 config.js 的 --reveal），不进启动横幅。
+                                   # 全块渲染需 90 列×45 行：半块只要 23 行但真机实测扫不出来（行距）。
+                                   # --public 自动解析 CF Access 域名 / Tailscale；**受 Access 保护的
+                                   # 域名不带 token**（那条路只认 JWT、不回退 token），判据在
+                                   # app/src/shared/public-target.js，--url 也走同一道
 ```

@@ -6,7 +6,7 @@
 import { statSync, existsSync, mkdirSync, watch } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { isDeviceTrusted, getPendingDevices } from './devices.js';
+import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles } from './devices.js';
 import * as audit from '../ops/audit.js';
 
 export function createDeviceGate({
@@ -14,7 +14,12 @@ export function createDeviceGate({
   dataDir,
   onUnlockSocket,
   listPendingDevices = getPendingDevices,
+  listTrustedDevices = getTrustedDeviceProfiles,
   isTrusted = isDeviceTrusted,
+  // CF Access 已启用且 DEVICE_APPROVAL_SCOPE !== 'all' —— 此时经隧道进来的连接【完全不查】
+  // 这张信任表，吊销对它们既不掉线也不拦截。界面必须说出这件事：一个点得到、却对用户
+  // 实际访问路径无效的控件，比没有这个控件更坏（2026-09-10 实测踩到）。
+  accessBypassActive = false,
 }) {
   const trustedDevicesFile = join(dataDir, 'trusted-devices.json');
   const pendingDevicesFile = join(dataDir, 'pending-devices.json');
@@ -45,6 +50,45 @@ export function createDeviceGate({
   // 当前全量待审批设备列表（deviceToken→deviceId，幂等载体）。
   function pendingDevicesPayload() {
     return { devices: listPendingDevices().map(d => ({ deviceId: d.deviceToken, ip: d.ip, userAgent: d.userAgent, ts: d.ts })) };
+  }
+
+  // 已受信任设备列表的下发面（DEVICE-03）。**逐字段挑出来，不是把内部结构整个丢出去**：
+  // getTrustedDeviceProfiles 返回的 deviceId 是全量 32 位 token，而 token 就是准入凭据。
+  //
+  // 红线的理由不是「防局域网窃听」——这条广播只发给 deviceApproved===true 的连接，
+  // 未审批端本来就收不到。真正的理由是**让吊销真的能吊销**：一台拿到过全量信任表的设备，
+  // 日后被吊销时手里仍握着其余设备的 token，可以继续冒充进来。
+  //
+  // 寻址改用 shortId（前8…后4）：它同时是用户在手机上、菜单栏里看到的那一串，
+  // 既够反查又不是凭据。isCurrent 由服务端比对得出，前端不需要知道自己的 token 长什么样。
+  function trustedDevicesPayload(currentDeviceToken) {
+    return {
+      accessBypassActive,
+      devices: listTrustedDevices().map(d => ({
+        shortId: d.shortId,
+        kind: d.kind,
+        browser: d.browser,
+        model: d.model,
+        alias: d.alias,
+        ua: d.ua,
+        ip: d.ip,
+        approvedAt: d.approvedAt,
+        isCurrent: Boolean(currentDeviceToken) && d.deviceId === currentDeviceToken,
+      })),
+    };
+  }
+
+  // 逐 socket 发（不能像 pending 那样共用一份 payload）：isCurrent 是「这台就是你」，
+  // 按接收方算，共用一份会让所有人都看到别人的那个标记。
+  function broadcastTrustedDevices() {
+    for (const socket of io.sockets.sockets.values()) {
+      if (socket.deviceApproved === true) {
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'trusted_devices', payload: trustedDevicesPayload(socket.handshake.auth?.deviceToken),
+        });
+      }
+    }
   }
 
   // 把待审批列表推给所有"已信任"Socket（deviceApproved===true），供其在 Web UI 远程审批。
@@ -111,6 +155,7 @@ export function createDeviceGate({
             audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
           }
           broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
+          broadcastTrustedDevices(); // 信任表刚变过——Web 上那份列表不刷就会停在旧快照上，用户对着它做吊销决策
         }, 100);
       });
       watcher.unref?.(); // 常驻 server 不受影响；避免在单测等短生命周期进程里吊住事件循环
@@ -129,5 +174,7 @@ export function createDeviceGate({
     disconnectDeviceSockets,
     pendingDevicesPayload,
     broadcastPendingDevices,
+    trustedDevicesPayload,
+    broadcastTrustedDevices,
   };
 }

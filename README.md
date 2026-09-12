@@ -6,7 +6,7 @@ Claude Chat Mobile 是一个**本机自托管的 Claude Code 远程控制台**�
 
 代码、Claude CLI、项目文件以及 CCM / Claude 的本地会话状态仍然运行或保存在**你自己的电脑上**。项目没有数据库、没有多租户、没有 SaaS 后端；模型请求仍由本机 `claude` CLI 按你现有的 Anthropic 官方登录或第三方网关配置发送。
 
-**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
+**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/) · [📐 架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -37,7 +37,7 @@ Claude Chat Mobile 是为官方路径**进不去、或不接受其控制面**的
 
 1. **官方 Remote Control 拒收你的配置。** 它要求 claude.ai 订阅登录并直连 `api.anthropic.com`：API key、第三方网关 / `ANTHROPIC_BASE_URL`、Bedrock / Vertex / Foundry、企业 apps gateway、设置了 `DISABLE_TELEMETRY` 等遥测开关、ZDR 合规组织——这些配置下整条功能不可用。CCM 对模型通路**零假设、零接触**：你的 `claude` CLI 怎么配的，它就怎么用。
 2. **你要求控制面数据留在自己手里。** 官方 Remote Control 连接期间会把会话 transcript（消息、回复、工具活动）存到 Anthropic 服务器用于跨设备同步；CCM 的控制面——服务、transcript、设备信任、推送、审计——全部落在你自己的机器上，公网入口由你选择，局域网内可完全闭环。
-3. **你要「一眼看全机」。** 官方按会话逐个开启远程；CCM 把这台机器上发生过和正在发生的**所有** Claude 会话——终端开的、上周的、忘了开开关的——都做成可见、可续接的控制台，外加文件浏览、git 变更、服务健康这些机器运维面。
+3. **你要「一眼看全」。** 官方按会话逐个开启远程；CCM 把你放进 `WORKDIRS` 的那些工作区里发生过和正在发生的**所有** Claude 会话——终端开的、上周的、忘了开开关的——都做成可见、可续接的控制台，外加文件浏览、git 变更、服务健康这些机器运维面。（工作区是显式放行的，见下方「安全边界」第 3 条。）
 
 它的目标不是重新做一个 AI 聊天产品，而是：
 
@@ -52,7 +52,7 @@ Claude Chat Mobile 是为官方路径**进不去、或不接受其控制面**的
 * 你的 `claude` CLI 走第三方网关 / API key，或关闭了遥测——官方 Remote Control 对这些配置整条不可用；
 * 你不接受远程会话 transcript 存放在 Anthropic 服务器上，控制面要完全自持；
 * Claude 跑长任务时不想一直守在电脑前，希望从手机回答 `AskUserQuestion`、审批工具调用、收到「需要你」的通知；
-* 想要整台机器的会话总览：终端里开的、历史里躺着的，都能看、能续；
+* 想要已放行工作区的会话总览：终端里开的、历史里躺着的，都能看、能续；
 * 希望继续使用原电脑上的项目、Claude CLI 配置和开发环境；
 * 希望自己掌控服务和数据，而不是把完整开发环境迁移到第三方 SaaS。
 
@@ -168,6 +168,8 @@ node scripts/device.js approve <ID>
 
 然后在手机中打开启动日志给出的地址，即可进入工作区并向 Claude Code 发送第一条消息。
 
+> 在手机上手输 64 位 token 很痛苦，可以用 `node scripts/qr.js` 把地址打成终端二维码扫一下（需要约 90 列宽的窗口）。二维码里含完整凭据，投屏、录屏或旁边有人时不要打印。
+
 > macOS 桌面端如果已经启动了 server，不要再执行第二个 `npm start`。按照 `doctor` 的提示使用桌面端菜单重启服务即可。
 
 > 归档里的 `package.json` 原样保留，所以 `npm run` 仍会列出 `test` / `check` / `lint` 这类命令，但它们引用的测试树与门禁不在归档里、跑不了。需要它们时改用 `git clone`。
@@ -175,6 +177,28 @@ node scripts/device.js approve <ID>
 完整的首次安装、配置、非交互 setup、PWA 和 CLI hooks 说明：
 
 **→ [首次使用指南](docs/getting-started.md)**
+
+## 更新
+
+代码怎么取的，就怎么更新。**归档**装的，回到解压时的父目录重跑同一条 `curl`，就地覆盖；**克隆**装的，`git pull` 即可（`master` 只在发版时前进）。两者之后都是：
+
+```bash
+npm ci --omit=dev
+```
+
+然后重启 server。macOS 桌面端还要点一次菜单里的「更新桌面端（重新编译）」——CCM.app 是编译产物，不随源码更新。
+
+> **覆盖不会动你的配置和数据。** `ccm.config.json` 与 `data/`（未读位点、设备审批、审计、上传附件）都在 `.gitignore` 里，而归档就是 GitHub 现场 `git archive` 的产物，因此它们根本不在归档中。
+
+产品不会主动检查新版本。想知道有没有：
+
+```bash
+git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+```
+
+对比本地的 `node -p "require('./package.json').version"`，或启动后看 `/health` 里的 `versions.server`。
+
+换目录更新、残留文件、两个 CLI 桥要不要重装：**→ [首次使用指南 · 更新](docs/getting-started.md#更新)**
 
 ## 远程访问
 
@@ -205,8 +229,8 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 
 1. **单用户。** 项目没有多用户或租户隔离，通过鉴权后的操作权限最终取决于运行 `claude` 的本机账号。
 2. **没有 Token 就不启动。** `AUTH_TOKEN` 是启动前提，任何绑定模式都一样——本机浏览器打开也要令牌，不存在「本地免鉴权」这条路。
-3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORK_DIR` / `WORKDIRS`，不要为了方便把整个 Home 目录加入工作区。
-4. **新设备需要信任。** 除本机直连或已经通过公网身份层（当前实现为 Cloudflare Access，可选）的连接外，持有正确 Token 的新设备仍需要一次设备审批。Token + 设备审批就是公网基线，对 Tailscale、反向代理、直连等拓扑一视同仁。
+3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORKDIRS`，不要为了方便把整个 Home 目录加入工作区。
+4. **新设备需要信任。** 除本机直连或已经通过公网身份层（当前实现为 Cloudflare Access，可选）的连接外，持有正确 Token 的新设备仍需要一次设备审批。Token + 设备审批就是公网基线，对 Tailscale、反向代理、直连等拓扑一视同仁。开着 Access 时它**替代**设备审批，那张信任表因此管不到经它进来的连接；想让审批对所有路径都生效，设 `DEVICE_APPROVAL_SCOPE=all`（本机直连不受影响，它是信任表清空后的自救通道）。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有 Claude Code 权限规则会继续生效，公网使用前应检查 Bash、Write 等自动放行规则。
 6. **文件编辑属于直接写入。** 内置文件编辑器**不经过 Agent 的工具审批链**，只能修改授权工作区内已存在的文件，并做范围校验、大小限制、哈希冲突检测和审计记录；不需要时可以通过 `FILE_EDIT=off` 关闭。长期公网暴露建议关闭——声明了公网入口（Cloudflare Access / `PUBLIC_URL` / 公网类 `ACCESS_PROFILE`）时 `doctor` 会提示，装机向导也会问这一项。
 
@@ -230,10 +254,16 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 node scripts/config.js schema
 ```
 
+命令同理：每条 CLI 不带子命令就会打印自己的用法，参数以那份输出为准。按用途分组的命令索引见
+[首次使用指南 · 命令速查](docs/getting-started.md#命令速查)。
+
 ### 我想了解它是怎么实现的
 
 **[架构说明](docs/architecture.md)**
 Web / CLI 双通道、Agent SDK、事件同步、断线恢复和会话接管。
+
+**[架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)**
+13 张可交互图，按功能域拆开：双通道同步、单驾驶员状态机、鉴权六道门、审批生命周期、推送抑制、文件与会话域数据流、前端模块地图、测试归类。支持明暗主题、搜索聚焦与关系追踪；托管在 `gh-pages` 分支，不随 `clone` 或装机归档分发。
 
 ### 我想修改或维护项目
 

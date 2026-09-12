@@ -6,7 +6,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -379,13 +379,16 @@ test.describe('formatRttMs / rttToneClass', () => {
     assert.equal(rttToneClass(-3), '');
   });
 
-  test('shouldShowRttChip: 仅 warn/bad 显示，好网隐藏', () => {
-    assert.equal(shouldShowRttChip(40), false);    // good
-    assert.equal(shouldShowRttChip(200), false);   // ok
-    assert.equal(shouldShowRttChip(500), true);    // warn
-    assert.equal(shouldShowRttChip(1500), true);   // bad
-    assert.equal(shouldShowRttChip(null), false);
-    assert.equal(shouldShowRttChip(NaN), false);
+  test('shouldShowRttChip: 合法延迟全时段常驻显示，非法/负数隐藏', () => {
+    assert.equal(shouldShowRttChip(40), true);     // good 常驻
+    assert.equal(shouldShowRttChip(200), true);    // ok 常驻
+    assert.equal(shouldShowRttChip(500), true);    // warn 显示
+    assert.equal(shouldShowRttChip(1500), true);   // bad 显示
+    assert.equal(shouldShowRttChip(0), true);      // 边界 0ms 显示
+    assert.equal(shouldShowRttChip(-1), false);    // 负数隐藏
+    assert.equal(shouldShowRttChip(null), false);  // 空值隐藏
+    assert.equal(shouldShowRttChip(NaN), false);   // NaN 隐藏
+    assert.equal(shouldShowRttChip(Infinity), false); // Infinity 隐藏
   });
 });
 
@@ -892,6 +895,118 @@ test.describe('isSubagentPayload / formatSubagentCardTitle（子 agent 嵌套卡
 
   test('标题：running 默认 true（懒创建时未传也显示运行中）', () => {
     assert.equal(formatSubagentCardTitle({ subagentType: 'Plan' }), '🤖 Plan 运行中');
+  });
+
+  // 用量段（第 2 批）：数据来自 SDK task_progress.usage，按 toolUseId 挂到卡上。
+  // 不按 running 分档显示不同字段——分档会造出一半永远跑不到的分支，且 CLI 自己也是恒显。
+  test('标题：带用量 → 追加「· N tools · 时长 · tok」，缺的段自动省略', () => {
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'general-purpose', running: true, toolUses: 15, totalTokens: 65400 }),
+      '🤖 general-purpose 运行中 · 15 tools · 65.4k tok'
+    );
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Explore', running: false, toolUses: 15, durationMs: 505000, totalTokens: 65400 }),
+      '🤖 Explore 已完成 · 15 tools · 8m 25s · 65.4k tok'
+    );
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: 3 }),
+      '🤖 Plan 运行中 · 3 tools'
+    );
+  });
+
+  // 机制 4 的错误显性化。【为什么是标题上的计数，不是单行槽上的一行】单行槽由 task_progress
+  // 心跳驱动、每隔几秒被当前工具覆盖一次——把失败写在那里，它会闪一下就没了，而"闪过"等于没显示。
+  // 计数只增不减，扫一眼标题就知道里面出没出过错。
+  test('标题：子工具失败计数 → 追加「· ❌ N」，排在用量段之前', () => {
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Explore', running: true, toolUses: 9, failures: 2 }),
+      '🤖 Explore 运行中 · ❌ 2 · 9 tools'
+    );
+    assert.equal(
+      formatSubagentCardTitle({ subagentType: 'Explore', running: false, failures: 1 }),
+      '🤖 Explore 已完成 · ❌ 1'
+    );
+  });
+
+  test('标题：failures 为 0 / 缺席 / 非数 → 不追加（没出错就别摆一个 ❌ 0 吓人）', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true, failures: 0 }), '🤖 Explore 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true }), '🤖 Explore 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: true, failures: 'x' }), '🤖 Explore 运行中');
+  });
+
+  test('标题：用量为 0 / 缺席 / 非数 → 一个字都不追加（老调用点行为逐字不变）', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: 0, totalTokens: 0 }), '🤖 Plan 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: null }), '🤖 Plan 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Plan', running: true, toolUses: 'x' }), '🤖 Plan 运行中');
+  });
+});
+
+// 单行动作槽（对齐 CLI 的 lastToolInfo）：折叠态也可见，让「跑到哪了」不必展开卡片。
+// 合卡后聚合卡门口那一行。真机 2026-09-10：这里原样铺了 Agent 工具的整个输入 JSON
+// （含用户刚打的整段 prompt），展开卡片先撞一坨——这组用例钉住"只显 description"。
+test.describe('formatSpawnDescription（聚合卡的「派它去干什么」行）', () => {
+  test('有 description → 只显它，prompt 与其它字段一个字都不带出来', () => {
+    const input = JSON.stringify({
+      run_in_background: false, subagent_type: 'general-purpose',
+      description: 'List all project features',
+      prompt: '请全面梳理并列举出本项目提供的所有功能，要求尽可能详细'.repeat(20),
+    });
+    assert.equal(formatSpawnDescription(input), 'List all project features');
+  });
+
+  test('没有 description → 回落 prompt 并截断（有一行总比空着强）', () => {
+    const line = formatSpawnDescription(JSON.stringify({ prompt: 'x'.repeat(400) }), 40);
+    assert.equal(line.length, 41);
+    assert.equal(line.endsWith('…'), true);
+  });
+
+  test('多行 prompt 压成单行（卡上是一行，不能把布局撑开）', () => {
+    assert.equal(formatSpawnDescription(JSON.stringify({ description: 'a\n\n  b\tc' })), 'a b c');
+  });
+
+  test('空对象 / 非 JSON / 缺席 → null（宁可不显示这一行，也不显示「{}」）', () => {
+    assert.equal(formatSpawnDescription('{}'), null);
+    assert.equal(formatSpawnDescription(''), null);
+    assert.equal(formatSpawnDescription(null), null);
+    assert.equal(formatSpawnDescription(JSON.stringify({ subagent_type: 'Explore' })), null);
+  });
+
+  test('非 JSON 字符串 → 原样压成单行（历史/mock 里存在这种形态）', () => {
+    assert.equal(formatSpawnDescription('just a plain string'), 'just a plain string');
+  });
+});
+
+test.describe('formatSubagentLastToolLine（聚合卡单行动作槽）', () => {
+  test('有工具名 + 描述 → 「⎿ 工具: 描述」', () => {
+    assert.equal(
+      formatSubagentLastToolLine({ lastToolName: 'Bash', description: 'Reading frontend-app-modules.test.mjs' }),
+      '↳ Bash: Reading frontend-app-modules.test.mjs'
+    );
+  });
+
+  test('只有工具名 → 「⎿ 工具」，不留空冒号', () => {
+    assert.equal(formatSubagentLastToolLine({ lastToolName: 'Read' }), '↳ Read');
+    assert.equal(formatSubagentLastToolLine({ lastToolName: 'Read', description: '   ' }), '↳ Read');
+  });
+
+  test('没有工具名 → null（这是「最近工具」行，没工具就没有行；有描述也不顶替）', () => {
+    assert.equal(formatSubagentLastToolLine({}), null);
+    assert.equal(formatSubagentLastToolLine({ description: 'Reading something' }), null);
+    assert.equal(formatSubagentLastToolLine(null), null);
+  });
+
+  test('描述过长 → 截断到 60 字（手机窄屏单行，不折行不横滚）', () => {
+    const line = formatSubagentLastToolLine({ lastToolName: 'Bash', description: 'x'.repeat(200) });
+    assert.equal(line.startsWith('↳ Bash: '), true);
+    assert.equal(line.length <= '↳ Bash: '.length + 61, true, `实际长度 ${line.length}`);
+    assert.equal(line.endsWith('…'), true, '截断要有可见标记，否则用户以为命令就这么短');
+  });
+
+  test('subagentType 前缀被剥掉：后端 message 形如「Explore：正在扫」，行里不该再出现一次类型名', () => {
+    assert.equal(
+      formatSubagentLastToolLine({ lastToolName: 'Grep', description: 'Explore：扫描导入边界', subagentType: 'Explore' }),
+      '↳ Grep: 扫描导入边界'
+    );
   });
 });
 

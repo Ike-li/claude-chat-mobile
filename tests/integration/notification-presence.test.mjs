@@ -19,6 +19,9 @@
 //     做判定，其输入/输出与 app.js onEvent 里的真实决策链完全一致。
 // 未覆盖：app.js onEvent 内部那行 `hasClients: hasForegroundApprovedClient(approvedSockets)` 的具体
 // wiring 本身没有被一次真实 result 事件穿过——这一点在任务收尾的风险清单里如实说明。
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../setup/require-disposable-env.mjs';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

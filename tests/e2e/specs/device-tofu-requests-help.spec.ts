@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-15 设备信赖 TOFU、pending device request 与访问帮助', async ({ page }) => {
@@ -25,7 +25,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="device-card"]').first()).toContainText('192.168.1.100');
 
     // 3. 待批卡片还在时，访问帮助仍从常驻入口可达——卡片栈悬浮在 header **之下**，不吃顶栏点击。
-    await openGeneralSettings(page);
+    await openGeneralPage(page, 'help');
     await page.locator('#accessHelpOpen').click();
     await expect(page.locator('#accessHelp')).toBeVisible();
     await expect(page.locator('#accessHelp')).toContainText('令牌');

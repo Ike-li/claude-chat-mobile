@@ -8,6 +8,32 @@ import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../..
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
+// 托管 worktree 的会话并进 session:list 后（2026-09-11），dirLists 里混着两种会话：
+// 父仓的（无 cwd 字段）与 worktree 的（自带真实 cwd）。这里原本无条件写 `cwd`（工作区那个），
+// 把后者的真实 cwd 覆盖掉——点开时按父仓去找 transcript，落到「会话不存在」页。
+// workspaceName 仍取工作区的：归属展示本来就要显示父仓，那一维没有变。
+test('mergeRecentSessionsAcrossWorkspaces: 会话自带 cwd 时不被工作区 cwd 覆盖', () => {
+  const wt = '/repo/.claude/worktrees/feature-x';
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    {
+      cwd: '/repo',
+      workspaceName: '我的项目',
+      sessions: [
+        { id: 'main-1', title: '父仓', lastUsedAt: 1000 },
+        { id: 'wt-1', title: 'worktree 里的', lastUsedAt: 2000, cwd: wt, worktree: 'feature-x' },
+      ],
+    },
+  ], { limit: 10 });
+
+  const byId = Object.fromEntries(merged.map(r => [r.id, r]));
+  assert.equal(byId['wt-1'].cwd, wt, '覆盖成父仓 cwd 会让这一行点开就报「会话不存在」');
+  assert.equal(byId['wt-1'].worktree, 'feature-x', '最近列表也要看得出这条在哪个工作树');
+  assert.equal(byId['wt-1'].workspaceName, '我的项目', '归属展示仍是父仓工作区');
+  // 正对照：父仓行照旧回落工作区 cwd
+  assert.equal(byId['main-1'].cwd, '/repo');
+  assert.equal(byId['main-1'].worktree, null);
+});
+
 test('mergeRecentSessionsAcrossWorkspaces: 跨 cwd 合并、按 lastUsedAt 降序截断、补 workspaceName', () => {
   const merged = mergeRecentSessionsAcrossWorkspaces([
     {

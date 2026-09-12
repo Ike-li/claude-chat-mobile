@@ -19,13 +19,18 @@ test.describe('buildConfigContent —— 结构化生成，不再依赖模板匹
   test('产出合法 JSON，带 schema 版本与两个必填项', () => {
     const parsed = JSON.parse(buildConfigContent({ authToken: 'abc123', workDir: '/Users/you/code' }));
     assert.equal(parsed.AUTH_TOKEN, 'abc123');
-    assert.equal(parsed.WORK_DIR, '/Users/you/code');
+    assert.deepEqual(parsed.WORKDIRS, ['/Users/you/code'], '单个工作区也要写成列表首项');
     assert.equal(typeof parsed.$schemaVersion, 'number');
   });
 
-  test('省略 workDir 时不写这个 key —— 缺省回落到 $HOME 由 config.js:66 负责', () => {
+  // 【这条曾经叫「省略 workDir 时不写这个 key —— 缺省回落到 $HOME 由 config.js:66 负责」】
+  // 它把一个洞写成了预期行为：那个 `|| home` 回落 2026-09-08 实测可达，删掉配置里的工作区行
+  // 就能让整个家目录成为工作区，零报错。现在的正确行为是**根本没有回落**——一个工作区都没有时
+  // server 拒绝启动（守护：SCOPE-03，tests/invariants/server/workdir-source.test.mjs）。
+  test('一个工作区都没给 → 不写 WORKDIRS 键（而不是编一个出来）', () => {
     const parsed = JSON.parse(buildConfigContent({ authToken: 'abc123' }));
-    assert.equal(Object.hasOwn(parsed, 'WORK_DIR'), false);
+    assert.equal(Object.hasOwn(parsed, 'WORKDIRS'), false);
+    assert.equal(Object.hasOwn(parsed, 'WORK_DIR'), false, 'WORK_DIR 已退役，不得再写出去');
   });
 
   // 曾经的 .env 时代有一整套字符白名单（含单引号 / 反斜杠结尾一律拒绝），因为值要同时
@@ -33,7 +38,7 @@ test.describe('buildConfigContent —— 结构化生成，不再依赖模板匹
   test('路径含空格、引号、反斜杠都能原样往返', () => {
     const nasty = "/Users/you/it's a \\ dir";
     const parsed = JSON.parse(buildConfigContent({ authToken: 'x', workDir: nasty }));
-    assert.equal(parsed.WORK_DIR, nasty);
+    assert.deepEqual(parsed.WORKDIRS, [nasty]);
   });
 
   test('末尾带换行（POSIX 文本文件惯例）', () => {
@@ -488,14 +493,16 @@ test.describe('promptWorkDirs —— 向导支持一次登记多个工作区', (
   });
 });
 
-test('buildConfigContent：给了 workDirs 就写 WORKDIRS 数组（自文档化，供日后手动增删），WORK_DIR 仍是默认那个', () => {
+// 2026-09-08 前这里还断言 `parsed.WORK_DIR === dirs[0]` —— 同一个路径在配置文件里写两遍，
+// 而用户打开只会问「这俩什么关系」。合并后主工作目录 = 列表首项，配置文件里只剩一个键。
+test('buildConfigContent：workDirs 写成 WORKDIRS 数组，首项即主工作目录，不再另写一个 WORK_DIR', () => {
   const parsed = JSON.parse(buildConfigContent({
     authToken: 'x',
     workDir: '/Users/you/code/app',
     workDirs: ['/Users/you/code/app', '/Users/you/code/tools'],
   }));
-  assert.equal(parsed.WORK_DIR, '/Users/you/code/app');
   assert.deepEqual(parsed.WORKDIRS, ['/Users/you/code/app', '/Users/you/code/tools']);
+  assert.equal(Object.hasOwn(parsed, 'WORK_DIR'), false);
 });
 
 // ── R45(2026-08-30 拍板)：文件编辑器直写进配置向导 ─────────────────────────
