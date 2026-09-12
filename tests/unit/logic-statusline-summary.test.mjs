@@ -9,7 +9,30 @@ import {
   formatStatuslineCopyText,
   formatWorkspaceChangeBadge,
   statuslineFmtTok,
+  shouldRenderStatusline,
 } from '../../app/public/js/logic.js';
+
+// 状态栏（git 分支/改动数 · ctx · 模型 · 额度）在哪些表面上渲染。
+// compose 页与空首页都带 empty-start，但只有前者的工作区是定了的——git 段只依赖 cwd，
+// 关掉它等于让「会话还没建」顺带关掉了一项与会话无关的信息。
+test('shouldRenderStatusline: 会话内与 compose 表面渲染；空首页与中断表面不渲染', () => {
+  // 真实会话（消息流已有内容）
+  assert.equal(shouldRenderStatusline({ emptyStart: false }), true);
+  // 空首页：未选定工作区，极简枢纽
+  assert.equal(shouldRenderStatusline({ emptyStart: true }), false);
+  assert.equal(shouldRenderStatusline({ emptyStart: true, composeSurface: false }), false);
+  // compose 表面：session 未建但工作区已定 → 渲染（git 段只依赖 cwd）
+  assert.equal(shouldRenderStatusline({ emptyStart: true, composeSurface: true }), true);
+  // 「会话已中断」表面同样是 empty-start，但它不是 compose 表面 → 不渲染。
+  // 这一格靠的是调用方传「DOM 里在不在 compose 表面」而非 _composeReady——首轮实例在拿到 sessionId
+  // 前退出时那个标志仍是 true（bindView 的 destroyed 分支先于 leaveComposeReady 提前 return）。
+  assert.equal(shouldRenderStatusline({ emptyStart: true, composeSurface: false }), false);
+  // 离开 compose 进真实会话，两个标志的过渡期任一组合都不得关掉状态栏
+  assert.equal(shouldRenderStatusline({ emptyStart: false, composeSurface: true }), true);
+  // 缺省参数：与「非空态」同解，不因调用方漏传而静默隐藏
+  assert.equal(shouldRenderStatusline(), true);
+  assert.equal(shouldRenderStatusline({}), true);
+});
 
 test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
   assert.equal(

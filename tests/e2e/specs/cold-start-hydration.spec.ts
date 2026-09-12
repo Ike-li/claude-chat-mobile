@@ -41,7 +41,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).not.toContainText('当前工作区');
     await expect(page.locator('#messages')).not.toContainText('ACTIVE WORKSPACE');
 
-    // 3. 点 ＋ 进入 compose 干净新会话页：输入条出现；顶栏文件夹仍隐藏（页内工作区 pill 已够）。
+    // 3. 点 ＋ 进入 compose 干净新会话页：输入条出现；顶栏文件夹 pill 与状态栏都要在——会话是懒创建的，
+    //    但工作区此刻已经定了，而文件浏览 / git 改动 / statusline 的 git 段只依赖 cwd。
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
@@ -50,10 +51,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeHidden(); // 空输入不露灰发送
     await expect(page.locator('#btnAttach')).toBeVisible();
-    await expect(page.locator('#topContextPill')).toBeHidden();
     await expect(page.locator('#pillPermText')).toContainText('Manual');
     // 页内默认档摘要至少带上权限文案（与底栏 pill 同源）
     await expect(page.locator('[data-compose-defaults]')).toContainText('Manual');
+
+    // 3a. 顶栏工作区 pill：显示、指向当前工作区、带未提交改动角标（mock session:new 那条 status_line 的 git 段）
+    await expect(page.locator('#topContextPill')).toBeVisible();
+    await expect(page.locator('#topProjectText')).not.toHaveText('');
+    await expect(page.locator('[data-testid="top-context-changes"]')).toHaveText('4');
+
+    // 3b. 状态栏：compose 页也渲染，且 git 摘要真到位（不只是容器可见）
+    await expect(page.locator('#cliStatusWrap')).toBeVisible();
+    await expect(page.locator('#cliSummary')).toContainText('main');
+
+    // 4. 从 compose 回空首页：pill 收起（状态栏随 #composerFooter 整体隐藏，见步骤 2 那条断言）
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+    await expect(page.locator('#topContextPill')).toBeHidden();
+    await expect(page.locator('#composerFooter')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });

@@ -327,11 +327,23 @@ test('shouldShowStartScreen: freshInterrupted 例外——sessionId 未到但已
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null }), true);
 });
 
-// 顶部文件夹 pill：首页/compose 隐藏（页面内已有工作区入口）；进入真实会话后显示（点开文件浏览）。
-test('shouldShowTopContextPill: 与 start screen 互斥', () => {
-  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null }), false);
-  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null }), false);
+// 顶部文件夹 pill（文件浏览 + git 改动 + 未提交改动角标）：判据是「工作区定了没有」，不是「会话建了没有」
+// ——它背后的 git:status / files:browse 只要 cwd。空首页尚未选区故隐藏；compose 页（点 ＋ 的会话懒创建
+// 窗口）工作区已定，必须显示。
+test('shouldShowTopContextPill: 真实会话恒显；compose 有 cwd 即显；空首页隐藏', () => {
+  // 真实会话：原样
   assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), true);
+  // 空首页（未点 ＋）：工作区未选定，pill 无处可指
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null }), false);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, cwd: '/repo' }), false);
+  // compose 页：session 还没建，但工作区已定 → 显示
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: '/repo' }), true);
+  // compose 但 cwd 未知（冷启动 instances 未到）：仍隐藏，不给一个指向 null 的入口
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: null }), false);
+  // 首发在途：懒开了实例但 sessionId 未到，compose 表面仍在（bindView 提前 return）→ 不得闪断
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true, cwd: '/repo' }), true);
+  // 非 compose 且无 session（实例被摧毁的空表面）：隐藏
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, cwd: '/repo' }), false);
 });
 
 // 空首页枢纽不展示底部输入条：须先选会话或点 ＋ 进入 compose 就绪态。
