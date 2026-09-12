@@ -339,11 +339,13 @@ node scripts/device.js deny <ID>
 
 ## 8. 完成首次验收
 
+两道门分开：**CCM 的访问令牌 / 设备审批**只决定手机能不能进主壳；**Claude CLI 是否已登录**决定能不能真正对话。服务起来 ≠ 能聊天。
+
 在手机上依次确认：
 
 1. 首页显示预期工作区。
-2. 新建会话并发送一个无副作用的问题，例如“只回复 OK”。
-3. 能看到流式回答和回合结束状态。
+2. **硬门（CLI 未登录也可验）**：新建会话并发送一条消息。若主路径出现「Not logged in · Please run /login」（或 CLI 透传的等价文案），**算本步通过**——说明模型通路正确报出未登录，而不是假流式成功。到主机终端打开 `claude`，执行 `/login`（或先跑通 `claude auth status`）后再重试。
+3. **绿路径（已登录）**：发送一个无副作用的问题，例如“只回复 OK”，能看到流式回答和回合结束状态。
 4. 打开设置，确认模型、权限档、思考强度和服务状态可见。
 5. 如已启用 Web Push，使用“发一条测试推送”验证通道，不要等真实审批出现才发现配置有误。
 
@@ -692,6 +694,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
+| 手机已进主壳，发消息却出现「Not logged in · Please run /login」 | 这是 **Claude CLI 未登录**，不是 CCM 令牌/设备门坏了。到主机终端跑 `claude auth status`；未登录则在 `claude` 里 `/login`，完成后再从手机重试。前置条件见上文 §1 |
 | 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 401） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**这一档回的是 401 `unauthorized`、不带 `Retry-After`**（措辞刻意不说「尝试过多」——你只错了一次）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` / HTTP 429 |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
