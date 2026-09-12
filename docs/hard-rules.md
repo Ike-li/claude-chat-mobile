@@ -117,12 +117,13 @@
 
 ### 4.1 分支
 
-- **`dev` = 开发主线**（GitHub 默认分支）。日常改动走 feature 分支 → PR → `dev`，一个小改动一个 PR；不在 `dev` 上直接提交。
+- **`dev` = 开发主线**。日常改动走 feature 分支 → PR → `dev`，一个小改动一个 PR；不在 `dev` 上直接提交。**GitHub 默认分支是 `master` 而不是 `dev`**（理由见下条），所以开 PR 必须显式 `--base dev`。
 - **`master` = 对外发布的稳定版本**，只接受 `scripts/release.sh` 开的 `dev` → `master` 发版 PR。开了 `enforce_admins`，**谁都不能直推**；`quality` 里另有一道 step 拦住 head 不是 `dev` 的 PR。
 - 两条分支的 required checks 相同（`quality` / `unit-test (20)` / `unit-test (24)` / `e2e`），**approvals = 0**：单人仓库不能自我 approve，设成 1 会让所有 PR 永远合不进去。PR 的作用是强制 CI + 提供可读的变更面。
 - 发版顺序：bump → 推 `dev` → 等真 CI 绿 → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。**tag 必须在合并之后打**：PR 合并没有 ff-only，合出来是 merge commit，tag 打早了就指不到 `master` 的 HEAD。
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
-- **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交。这条此前靠人守，2026-09-12 破过一次——dependabot 的 PR 默认开到默认分支（当时是 `master`），合进去就带上了未发版提交。现在由三处共同保证：`.github/dependabot.yml` 的 `target-branch: dev`、默认分支改为 `dev`、以及 `quality` 里那道「只有 `dev` 能进 `master`」。
+- **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交。这条此前靠人守，2026-09-12 破过一次——dependabot 的 PR 默认开到默认分支（当时是 `master`），合进去就带上了未发版提交。当时的止血是三道齐上：`.github/dependabot.yml` 的 `target-branch: dev`、默认分支改为 `dev`、以及 `quality` 里那道「只有 `dev` 能进 `master`」。
+- **同日稍后默认分支又切回了 `master`**，现在靠两道：`target-branch: dev` 与 `quality` 那道闸。切回的理由是另一条同样硬的约束——装机拉的是 `master`，而**默认分支决定了访客在仓库首页看到哪份 README**；停在 `dev` 会让首页展示的内容领先于任何人能装到的版本（README 重写合进 `dev` 的那一刻就分叉了）。撤掉的那道是冗余而非唯一：原事故的直接成因是 dependabot 把 PR 开到默认分支，而那条路已被 `target-branch: dev` 写死堵上（它不读默认分支设置），`quality` 那道闸也仍然显式报错拦住任何 head 不是 `dev` 的 PR。**代价是开 PR 时默认 base 变成 `master`，要显式 `--base dev`**；且默认分支是仓库设置，被改回去不会有任何提示——这正是 `dependabot.yml` 里那条注释说「两道一起用」的原因，那份文件在代码评审里看得见，而仓库设置看不见。
 
 ### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
