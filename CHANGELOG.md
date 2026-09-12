@@ -1,5 +1,21 @@
 # 变更记录
 
+## v1.8.1 — 2026-09-12
+
+Changes since v1.8.0.
+
+### Verified environment
+- claude CLI: 2.1.268
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Fixes
+- fix(release): LAST_TAG 锚到 origin/master，否则每次发版都多算一整个已发布版本
+
+### Other
+- docs(readme): 按「终端等价性」重写，300→140 行，配图换成真会话实拍
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.8.0...v1.8.1
+
 ## v1.8.0 — 2026-09-12
 
 Changes since v1.7.0.
