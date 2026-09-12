@@ -703,23 +703,6 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | 启动日志刷「已读作数字/布尔」的类型转换提示 | `ccm.config.json` 里把数字或开关写成了字符串；改成 `3000` / `true` 而不是 `"3000"` / `"true"` |
 | 桌面端菜单栏图标找不到了 | 刘海挤掉了；见[上面这节](#菜单栏图标被刘海挡住了怎么办)用 `defaults write` 救一次 |
 
-## 维护者：Docker playground
-
-这不是产品入口，用户装机仍走上面的 `npm run setup` / `npm start` / 桌面端。playground 把测试环境放进容器：空 `HOME`、fake-claude、不碰宿主机 `~/.claude`。
-
-```bash
-npm run docker:build                 # 首次，以及 image 标签落地后再打一次 claude-chat-mobile-test:local
-npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
-npm run playground:device -- list
-npm run playground:device -- approve <ID>
-npm run playground:up:mock           # 聊天/流式 UI（mock server）
-npm run playground:up:proxy          # nginx 公网 Host 夹具
-npm run test:docker:playground       # 装机路径 + 拓扑探针 + 薄 Playwright TOFU
-npm run playground:reset             # down -v，清设备信任表
-```
-
-发消息不会完成 agent turn（fake-claude）；误点发送后会话会 busy，用 `playground:restart`（不要在开着 proxy 时用 restart，改 `playground:up:proxy`）。不要打开不带 `#token=` 的 URL（会触发鉴权限速短锁）。
-
 ## 下一步
 
 - 长期公网使用：[部署与运维](deployment.md)
