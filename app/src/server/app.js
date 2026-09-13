@@ -84,7 +84,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -1901,6 +1901,23 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，
     // 否则前端要等下一次无关广播才知道该实例已不忙，spinner 一直挂着。
     onStateSettled: () => broadcastInstances(),
+    // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
+    //
+    // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
+    // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而白名单的真相源在这里。
+    // 合法集与 routeCwd 同源（白名单目录本身 + 其下的托管 worktree），差别只在失败方向：
+    // 那边回退 viewingCwd 是「纠正传错」，这里没有安全回退可言，拒绝即保持原样。
+    //
+    // 采信之后 agent 会 onStateSettled → broadcastInstances，前端的 entry.cwd / panelCwd 随之跟上。
+    onCwdChanged: (nextCwd, prevCwd) => {
+      const resolved = resolveDrivingCwd(nextCwd, workDirs);
+      if (!resolved) {
+        console.warn(`[scope] 会话中途换 cwd 被拒：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
+        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed' } });
+        return null;
+      }
+      return resolved;
+    },
     onSessionId: (sid, firstMessage, model) => {
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);

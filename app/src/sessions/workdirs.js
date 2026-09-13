@@ -272,6 +272,31 @@ export function resolveManagedWorktree(cwd, dirs) {
   return null;
 }
 
+// 会话中途换 cwd 的采信判据（2026-09-13）。CLI 的 EnterWorktree / ExitWorktree 会在**会话运行途中**
+// 把工作目录换掉，transcript 随之落到新 cwd 的 project 目录——实例的驾驶轴 cwd 不跟着走的话，
+// 历史回显、子代理扫描、resume 和附件存储会全部按一个已经空掉的目录去解析（症状：切回会话
+// 「历史消息加载失败」，而磁盘上那份 transcript 完好无损）。
+//
+// 【合法集同 resolveManagedWorktree，失败方向相反】routeCwd 面对的是「前端传错了 cwd」，
+// 回退 viewingCwd 是纠正；这里面对的是「CLI 报来一个新 cwd」，没有安全回退可言——回退到别的
+// 目录等于把驾驶轴指到一个 SDK 并不在那儿跑的地方。拒绝即保持原样（返回 null，调用方不改）。
+//
+// 【为什么要校验】new_cwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，与前端传来的
+// 路径同属用户可控面，SCOPE-01 原样适用。
+export function resolveDrivingCwd(cwd, dirs) {
+  if (typeof cwd !== 'string' || cwd === '') return null;
+  if (!Array.isArray(dirs) || dirs.length === 0) return null;
+  let real;
+  try {
+    real = realpathSync(cwd);
+  } catch {
+    return null; // 真实落点无法确认，同 resolveManagedWorktree
+  }
+  // dirs 恒为已 realpath 的白名单，故解析后再比（未解析的候选在 macOS 上会静默判成越界）
+  if (dirs.includes(real)) return real;
+  return resolveManagedWorktree(real, dirs)?.path ?? null;
+}
+
 // SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——
 // 此处曾是一份逐字复制品，注释写着「同规则」却和 history 那份一起漏了 200 截断与 NFC 归一。
 // 从 shared 取而不是从 history 取，仍是为了避免 workdirs↔history 循环耦合。

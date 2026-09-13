@@ -269,6 +269,13 @@ export function buildAgentQueryOptions(session, env = process.env) {
       session._recordStderr(data);
       if (env.LOG_STDERR) console.error('[claude]', sanitize(data));
     },
+    // 会话中途换 cwd 的唯一通知通道。EnterWorktree / ExitWorktree 会在**运行途中**把工作目录换掉，
+    // transcript 随之迁到新 cwd 的 project 目录——实例 cwd 不跟着走，历史回显/子代理扫描/resume/附件
+    // 就全按一个已经空掉的目录解析（症状见 handleCwdChanged）。SDK 流里没有等价的消息类型，
+    // 只有这个 hook 报得出 old_cwd/new_cwd，删掉它等于这条链整条断开且无任何报错。
+    hooks: {
+      CwdChanged: [{ hooks: [async (input) => { session.handleCwdChanged(input); return {}; }] }],
+    },
   };
 }
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
@@ -371,7 +378,7 @@ function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -389,6 +396,10 @@ export class AgentSession {
     this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
     this.onBgTaskChange = onBgTaskChange; // () => void，活的后台任务集合"空↔非空/成员增删"时触发——驱动 server 节流重算会话列表 ⏳ 角标
     this.onStateSettled = onStateSettled || (() => {}); // () => void，账面被兜底路径就地改写（无伴随事件流）时触发——驱动 server 立刻重播 instances，否则前端只能等下一次无关广播
+    // (newCwd, oldCwd) => 归一后的路径 | null，会话中途换 cwd（EnterWorktree/ExitWorktree）时由 server 裁决。
+    // 采信权在 server：新 cwd 源自 EnterWorktree 的 path 参数、属用户可控面，要过白名单判据（SCOPE-01），
+    // 而白名单的真相源在 server。返回 null = 不采信，实例保持原 cwd（见 handleCwdChanged）。
+    this.onCwdChanged = onCwdChanged;
     // worktree 的 settings.local.json env 块（SDK resolveSettings 按 cwd 正确读出，CLI 自己读不到）。
     // 注意边界（2026-07-30 实证更正）：注入子进程环境**管不住网关**——CLI 的 settings.env 优先级高于
     // 继承环境，它从 canonical repo root 误读到的 ANTHROPIC_BASE_URL 等会盖掉这里注入的同名值。
@@ -624,6 +635,29 @@ export class AgentSession {
         this.emit('models', { models: Array.isArray(ms) ? ms : [] });
       })
       ?.catch?.(() => {});
+  }
+
+  // 会话中途换 cwd（EnterWorktree / ExitWorktree 触发的 CwdChanged hook）。
+  //
+  // 【为什么实例 cwd 必须跟着走】2026-09-13 真机形态：会话在父仓开，中途 EnterWorktree 进
+  // `.claude/worktrees/<name>`，CLI 把整份 transcript 迁到新 cwd 的 project 目录，父仓那边一个
+  // 字节不留。this.cwd 停在父仓的话，getSessionHistory / scanSubagents / resume / saveAttachments
+  // 全按一个已经空掉的目录去解析——用户侧的症状是切回会话「历史消息加载失败」，而磁盘上那份完好。
+  //
+  // 【采信权在 server】new_cwd 源自 EnterWorktree 的 path 参数，属用户可控面，必须过白名单判据
+  // （SCOPE-01），而白名单的真相源在 server。裁决方缺席 = 不采信，不是无条件信任。
+  // 存的是 server 归一（realpath）后的值而不是 CLI 报来的原串：macOS 上 /var 与 /private/var 是
+  // 同一目录的两种写法，存未解析的那个会让 getProjectDir 静默查空（同 resolveManagedWorktree 的理由）。
+  handleCwdChanged(input) {
+    const next = typeof input?.new_cwd === 'string' ? input.new_cwd : '';
+    if (!next) return;
+    const accepted = this.onCwdChanged?.(next, this.cwd);
+    if (!accepted) return;
+    this.cwd = accepted;
+    // 驾驶轴变了但不重播 instances，前端的 entry.cwd / panelCwd 会一直停在旧值——
+    // 病灶从这里挪到广播链上，而症状与完全没修一模一样。onStateSettled 正是为这类
+    // 「账面就地改写、无伴随事件流」的变化准备的通道。
+    this.onStateSettled();
   }
 
   // 旁路提问：带完整会话上下文问一句，**不写 transcript**（2026-09-10 实测：会话 jsonl 里查无痕迹）。
