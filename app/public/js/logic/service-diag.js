@@ -453,6 +453,13 @@ const AUDIT_NEUTRAL_TEXT = {
   retention_cleanup: '审批记录留存清理',
   approval_restart_expired: '重启使待审批请求失效',
 };
+// 删除被拒时服务端写进 meta.reason 的三道保护（app.js 的 rejectDelete）。查不到的 reason
+// 退回原文案而不是渲染 undefined——将来新增一道保护而这里忘了补时，坏的是信息量不是排版。
+const AUDIT_DELETE_REJECT_REASON = {
+  live: '会话正被本产品驱动',
+  opening: '会话正在打开中',
+  quiet_period: '可能正被终端使用',
+};
 export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   const d = meta && typeof meta === 'object' ? meta : {};
   const tgt = target == null ? '' : String(target);
@@ -488,7 +495,8 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
     text = `${t('重启服务')}${d.via ? ` · ${d.via}` : ''}${d.reason ? ` · ${d.reason}` : ''}`;
     if (outcome === 'denied') severity = 'warning';
   } else if (action === 'session_delete_l2') {
-    text = `${t('永久删除会话')} ${tgt}`;
+    const why = AUDIT_DELETE_REJECT_REASON[d.reason];
+    text = `${t('永久删除会话')} ${tgt}${why ? ` · ${t(why)}` : ''}`;
   } else if (action === 'file_write') {
     // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
     text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;

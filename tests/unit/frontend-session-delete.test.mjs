@@ -100,6 +100,14 @@ test.describe('下发与回执', () => {
     assert.deepEqual(h.deleted, [{ sessionId: 's-1', cwd: '/w/a' }]);
   });
 
+  // 删 A 失败（抽屉里挂着 A 的错因）→ 删 B 成功。B 那一行当场消失，而 A 的错因还挂在抽屉顶上，
+  // 读起来就成了「B 删失败了」。成功侧必须把上一条回执作废。
+  test('ok:true → 顺手清掉上一次失败留下的抽屉提示', async () => {
+    const h = harness({ res: { ok: true } });
+    await h.ctl.openDeleteSession('s-1', '/w/a', '重构分支');
+    assert.deepEqual(h.notices, [''], '成功后旧错因仍挂着＝在对一个已经不存在的行说话');
+  });
+
   // 失败路径的三条必须一起钉：
   // ① 只钉「提示了错误」的话，把 onDeleted 挪出 else 分支不会红——那正是「后端拒绝了，
   //    前端却把这一条从列表里抹掉」的形态。

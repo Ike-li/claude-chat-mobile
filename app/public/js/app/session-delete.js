@@ -9,9 +9,11 @@ import { t } from '../i18n.js';
 //
 // 成功与失败走【两条不同的反馈通道】，这是有意的，不是不一致：
 //   成功 → addBar（聊天消息流）。抽屉里那一行当场消失已经是回答，消息流那条是留给关掉抽屉之后的账。
-//   失败 → showDrawerNotice（抽屉内）。🗑 只在抽屉里存在，而抽屉打开时 #sidebarScrim
-//          （fixed inset-0 z-30）盖住整个视口——写进消息流的失败提示用户一眼都看不到。
-//          2026-09-12 真机撞上的就是这个：后端 5 分钟静默期保护正常拒绝了，用户只看到"点了没反应"。
+//   失败 → showDrawerNotice。🗑 只在抽屉里存在，而抽屉打开时 #sidebarScrim（fixed inset-0 z-30）
+//          盖住整个视口——写进消息流的失败提示用户一眼都看不到。2026-09-12 真机撞上的就是这个：
+//          后端 5 分钟静默期保护正常拒绝了，用户只看到"点了没反应"。
+//          具体落哪一层由 drawer 控制器按「用户此刻在看哪」决定（抽屉关着时它自己回落消息流），
+//          本模块不认识抽屉的可见性判据。
 export function createSessionDeleteController(context, {
   socket,
   addBar = () => {},
@@ -29,6 +31,7 @@ export function createSessionDeleteController(context, {
     }))) return;
     socket.emit('session:deletePermanent', { sessionId, cwd }, res => {
       if (res?.ok) {
+        showDrawerNotice(''); // 这一行当场消失，上一次失败留下的错因就该一起作废
         addBar(`${t('已彻底删除：')}${label}`, 'text-ink-faint');
         onDeleted({ sessionId, cwd });
       } else {
