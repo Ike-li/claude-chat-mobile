@@ -187,7 +187,16 @@ npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自
                    # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
                    # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
                    # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
-                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久
+                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久。
+                   # **以上全是「N 片挤同一台机器」的数字**。CI 上是另一种形态：
+                   # CCM_E2E_SHARD_INDEX=i 让本进程只跑第 i 片，6 台 runner 各跑一片、
+                   # 互不争抢 CPU，所以「8 片会偶发假红」那条不能照搬过去（病因之一正是
+                   # 4 核跑 8 个 Chromium）。横向分片新增一条**漏跑表现为全绿**的路径——
+                   # 各 runner 各自读时长缓存算分组，一台 cache 没命中就算出另一套分组，
+                   # 于是有 spec 谁都没跑。汇总 job 用 `--merge-durations` 做并集校验堵它
+                   # （TEST-02，少一个就红）。时长缓存在 CI 上靠 actions/cache 跨 run 复用：
+                   # 没有它 LPT 整个退化成按文件数轮转，而轮转在分片数变大时更差
+                   # （6 片轮转 194s vs LPT 106s，比 4 片还慢——两个大文件会撞进同一片）
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）

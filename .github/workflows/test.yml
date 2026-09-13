@@ -105,9 +105,31 @@ jobs:
         env:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
 
-  e2e:
+  # ★ 这个 job 的名字是 `e2e-shard`，不是 `e2e` —— 分支保护的 required context 仍然叫 `e2e`，
+  #   由下面那个汇总 job 提供。matrix job 的名字必然带参数（`e2e (1)`…），直接把 e2e 改成 matrix
+  #   会让 `e2e` 这个 context 再也不出现，PR 永久停在 pending —— 与本文件上面记的
+  #   「被 skip 的 job 若列进 required checks 会永久 pending」是同一个坑的另一种形态。
+  e2e-shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    strategy:
+      # ★ fail-fast: false 在这里【不只是为了看全结果】，它是汇总 job 判据成立的前提：
+      #   true 的话一片红会取消其余分片，那些片交不回时长片段，于是并集校验报「漏跑」——
+      #   而真因是「被取消」。两种原因指向完全不同的排查方向，不能混。
+      fail-fast: false
+      matrix:
+        # 【为什么是 6】横向分片后每片独占一台 runner，上面那些「N 片挤 4 核」的数字全部作废：
+        # 串行 632s ÷ 6 ≈ 105s，而地板（最大单文件 workspace-sessions-sidebar）约 86s，6 片刚好
+        # 贴着地板之上，再加片只能省十几秒却多摊几份固定开销。
+        #
+        # 【首次 run 会慢一些，这是预期】时长缓存为空时 LPT 退化成按文件数轮转，实测推算 6 片
+        # 轮转最慢片 ~194s（两个大文件会撞进同一片）。仍然快于改造前的 255s——横向消除的 CPU
+        # 争抢盖过了分配不均的损失。缓存一旦建立（dev 上任一次 push 即可），稳态回到 ~105s。
+        #
+        # 【要改这个数之前先确认】分片数变化会重排「哪些 spec 共用一个 mock server 进程、按什么
+        # 顺序跑」，而 mock server 用模块级全局变量存状态 ⇒ 可能照出新的隐藏耦合。由 retries:1 兜，
+        # 但改完要看一眼有没有新的 flaky。
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
 
@@ -118,41 +140,77 @@ jobs:
 
       - run: npm ci
 
+      # 时长缓存决定 LPT 分配。它不进版本库（本机测量值，进了就是会漂移的第二真相），
+      # 所以 CI 上只能靠 cache 跨 run 复用 —— 在建这道 cache 之前，CI 日志里【每一次】
+      # 都打的是「首次运行（无时长数据，等权重分配）」，LPT 从上线起在 CI 上一次都没生效过。
+      # restore-keys 前缀匹配取最近一份：PR 继承 base 分支（dev）的缓存，dev 每次 push 刷新。
+      - name: Restore E2E duration cache
+        uses: actions/cache/restore@v6
+        with:
+          path: tests/infra/.e2e-durations.json
+          key: e2e-durations-${{ github.run_id }}
+          # ★ 值必须留在下一行（actions/cache 官方支持的多行列表形式）。把前缀写回与键名同一行
+          # 会被 gitleaks 的 generic-api-key 规则命中：键名含 keys、值的熵 3.52 刚过阈值，
+          # 于是一个 cache 前缀被当成泄漏的密钥，pre-commit 当场拦下 commit。
+          restore-keys: |
+            e2e-durations-
+
+      # 浏览器二进制单独缓存（~170MB）。key 跟 package-lock 走：Playwright 一升版就自然换 key，
+      # 不会拿旧浏览器配新 driver。`install-deps` 装的是系统 apt 依赖、不属于这个缓存，仍要跑，
+      # 但它比下载浏览器快得多。
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install-deps chromium
+          npx playwright install chromium
 
       # 分片并行（tests/infra/e2e-parallel.js）：N 个独立进程各起自己的 mock server 跑一组 spec。
       # playwright.config.ts 的 workers:1 不能动（mock server 用模块级全局变量当状态存储，多 worker
       # 共打同一进程会互相踩踏直至崩溃），并发只能靠进程级隔离拿。
       #
-      # 【为什么写死 4 而不用脚本的自适应】自适应是 max(2, min(4, 核数/2))，runner 实测 4 核 ⇒
-      # 只会给出 2，而 2 是实测最差的档（见下）。写死也让「4 是选出来的」留在代码里：runner
-      # 规格哪天变了，自适应会悄悄改行为，而下面这些判据不会跟着变。
+      # 2026-09-13 起每个分片独占一台 runner（CCM_E2E_SHARD_INDEX），此前是【4 片挤同一台 4 核机】。
+      # 下面这段实测记录留着，因为它解释了为什么要横向拆，也因为其中两条结论仍然有效。
       #
-      # 【三个档位都真跑过，2 分片是两头不讨好】
+      # 【同机时代的实测】
       #   串行  632s  绿（同期 10 次里 9 次绿）
       #   4 分片 269s  红 task-progress P0-17i        run 34709034273
       #   2 分片 373s  红 long-stream-interrupt P0-04  run 34709543333
-      # 降分片数解决不了稳定性——2 分片比 4 分片慢 104s 却照样红，而且红的是【另一条】用例。
-      # 既然并行本身就会照出这批脆弱用例，就取最快的档，用 playwright.config.ts 的
-      # retries:1 兜偶发（那里写了为什么 retries 不等于掩盖真 bug）。
+      #   4 分片 255s  全绿（各片 204/234/240/252）    run 34741998773
+      # 加速比只有 632/255 = 2.5 而不是 4，差的那截全是 CPU 争抢——这正是横向拆的理由。
       #
-      # 【红的病因不止 CPU 争抢】P0-04 报的是 element(s) not found 而非超时，不是时序形态。
+      # 【仍然有效】红的病因不止 CPU 争抢：P0-04 报的是 element(s) not found 而非超时，不是时序形态。
       # 分片真正改变的还有「哪些 spec 共用一个 mock server 进程、按什么顺序跑」，而 mock server
-      # 用模块级全局变量存状态 ⇒ spec 间的隐藏耦合会被重排暴露。分片方式每变一次就可能红一条新的，
-      # 这不是调分片数能了结的（未验证的假说，判据见 config 里那段注释）。
+      # 用模块级全局变量存状态 ⇒ spec 间的隐藏耦合会被重排暴露。**改任何分配方式都要承担一次**，
+      # 由 retries:1 兜（playwright.config.ts 里写了为什么 retries 不等于掩盖真 bug）。
       #
-      # 【别再用「串行单文件时长 ÷ 分片数」估耗时】实测证伪：按串行时长模拟 4 分片是 171s，
-      # 实测 269s，偏乐观 57%。模型隐含假设「每片速度不变」，而 CPU 供给不足时每片本身就会变慢
-      # （降速因子约 1.54）。本机测到的并行度（10 核下 2.74）是【充足供给下的实际使用量】，
-      # 不是需求上限，拿它推「N 核够用」会错。要数就跑一次。
+      # 【已失效，别再照搬】「8 分片会偶发假红」的病因之一是 4 核跑 8 个 Chromium；横向分片下
+      # 每台 runner 只有 1 个，CPU 供给比同机 4 片时还宽松，那条不成立。
+      # 同理「别用串行时长 ÷ 分片数估耗时」（实测偏乐观 57%）——那个偏差的成因是 CPU 供给不足，
+      # 独占 runner 后成因消失。但**它仍然只是推算，以真 run 为准**。
       #
       # 【地板 85s】同一个 spec 文件不跨分片，workspace-sessions-sidebar 单文件就要 85s，任何分片数
       # 都突破不了。再要快只能拆那个文件——那是重组测试内容，不是调这里的参数。
-      - name: Run Playwright E2E (4 shards)
+      - name: Run Playwright E2E (shard ${{ matrix.shard }}/6)
         run: npm run test:e2e:parallel
         env:
-          CCM_E2E_SHARDS: '4'
+          CCM_E2E_SHARDS: '6'
+          CCM_E2E_SHARD_INDEX: ${{ matrix.shard }}
+
+      # 本片实测到的每个 spec 的时长。汇总 job 拿它做两件事：并集校验（TEST-02，少一个就红）
+      # 与合并回写缓存。★ if: always() —— 分片红了也要交回片段，否则汇总 job 只能看见
+      # 「缺了片段」，分不清是漏跑还是失败。
+      - name: Upload shard durations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-durations-shard-${{ matrix.shard }}
+          path: tests/infra/.e2e-durations-shard${{ matrix.shard }}.json
+          retention-days: 1
 
       # ★ 产物是 test-results*/ 而不是 playwright-report*/：分片子进程走
       # `npm run test:e2e -- <files> --reporter=list`，命令行的 --reporter 会【覆盖】config 里的
@@ -169,10 +227,56 @@ jobs:
       # （实测 run 34713413770）：Playwright 没有失败产物时压根不建 outputDir。这是预期噪音，
       # 不是配错了。仍保留默认的 if-no-files-found: warn 而不改成 ignore——**路径写错导致的
       # 捞空必须留得下痕迹**，那正是这次改 path 之前的形态，静音掉就再也发现不了。
+      #
+      # ★ 名字带 shard 号：upload-artifact v4 起同名 artifact 直接报错（不再像 v3 那样合并），
+      # matrix 下六个 job 同时上传同一个名字会让整个 job 红，且红在与测试无关的地方。
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-e2e-artifacts
+          name: playwright-e2e-artifacts-shard-${{ matrix.shard }}
           path: test-results*/
           retention-days: 7
+
+  # ★ 这个 job 必须叫 `e2e`：它是分支保护里那个 required context（dev 与 master 都要求
+  #   `quality` / `unit-test (20)` / `unit-test (24)` / `e2e`）。改名等于让所有 PR 永久 pending。
+  #
+  # 它做两件事，顺序不能换：
+  #   ① 先看分片结论——有片失败/被取消就直接红。放在前面是为了不让下一步的「缺片段」
+  #      把一次普通的测试失败误报成「漏跑」，那会把人推向完全错误的排查方向。
+  #   ② 分片全绿时才做并集校验（TEST-02）：横向分片后每台 runner 各自读时长缓存算分组，
+  #      任何一台 cache 未命中就会算出另一套分组，于是某些 spec 谁都没跑，而六个分片全绿。
+  #      这类漏跑在 CI 上【表现为全绿】，没有这道闸就只能等某天线上出事才发现。
+  e2e:
+    needs: e2e-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 分片结论
+        if: needs.e2e-shard.result != 'success'
+        run: |
+          echo "::error::有 e2e 分片未通过（result=${{ needs.e2e-shard.result }}）。失败截图见对应 playwright-e2e-artifacts-shard-N。"
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: e2e-durations-shard-*
+          path: e2e-durations
+          merge-multiple: true
+
+      - name: 并集校验 + 合并时长
+        run: node tests/infra/e2e-parallel.js --merge-durations e2e-durations
+
+      # 只在 push 到 dev/master 时回写缓存：PR run 写的缓存受分支隔离，别的 PR 读不到，
+      # 只会占配额（仓库上限 10GiB，2026-09-13 已用 2.87GiB）。PR 统一继承 base 分支那份。
+      - name: Save E2E duration cache
+        if: github.event_name == 'push'
+        run: cp e2e-durations/merged.json tests/infra/.e2e-durations.json
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v6
+        with:
+          path: tests/infra/.e2e-durations.json
+          key: e2e-durations-${{ github.run_id }}

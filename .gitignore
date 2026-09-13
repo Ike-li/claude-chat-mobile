@@ -83,7 +83,9 @@ desktop/build/
 
 # E2E 分片的本机时长测量值（tests/infra/e2e-parallel.js 自动生成/更新）。
 # 是本机测量结果，不进版本库——进了就成为一份会漂移的第二真相。
-/tests/infra/.e2e-durations.json
+# 通配也盖住 .e2e-durations-shardN.json：CI 横向分片时每台 runner 只写自己那一片，
+# 由汇总 job 做并集校验后合并；本机偶尔设了 CCM_E2E_SHARD_INDEX 也会落一个。
+/tests/infra/.e2e-durations*.json
 
 # 宣传产物（截图素材 + 对外的界面功能一览）：按控件粒度描述 UI，每次界面改动都会失效，
 # 而没有任何门禁能守住它们；宣传层本就不进主分支。不入库：否则会被 inventory 扫成未分类文件。
