@@ -396,6 +396,20 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     );
   });
 
+  // 删除被拒时服务端写 meta.reason 分辨是哪道保护拦的（live / opening / quiet_period）。
+  // 不在这里渲染出来，三种拒绝在面板上长得一模一样——而「分得出是哪一道」正是那个字段
+  // 唯一的存在理由，写了不显示等于没写。
+  test('删除被拒 → 说明是哪道保护拦的，而不是三种拒绝长一个样', () => {
+    const reasonOf = (reason) =>
+      formatAuditEntry({ action: 'session_delete_l2', target: 'sess_1', outcome: 'rejected', meta: { reason } }).text;
+    assert.equal(reasonOf('quiet_period'), '永久删除会话 sess_1 · 可能正被终端使用（rejected）');
+    assert.equal(reasonOf('live'), '永久删除会话 sess_1 · 会话正被本产品驱动（rejected）');
+    assert.equal(reasonOf('opening'), '永久删除会话 sess_1 · 会话正在打开中（rejected）');
+    // 未知 reason（将来新增一道保护而这里忘了补）不得把 'undefined' 渲染出去，退回原文案即可。
+    assert.equal(reasonOf('brand_new_guard'), '永久删除会话 sess_1（rejected）');
+    assert.equal(reasonOf(undefined), '永久删除会话 sess_1（rejected）');
+  });
+
   test('未知 action → 兜底不吞掉（延续 formatDiagLogEntry 的原则）', () => {
     const r = formatAuditEntry({ ts: 7, action: 'brand_new_thing', target: 'x', outcome: 'allowed' });
     assert.match(r.text, /brand_new_thing/);

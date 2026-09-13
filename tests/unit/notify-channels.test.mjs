@@ -65,6 +65,26 @@ test.describe('createNotifyChannels · 订阅存储', () => {
     n.savePushSubscription(null);
     assert.equal(n.subscriptionCount(), 0);
   });
+
+  test('removePushSubscription 只摘点名那条，别的设备照留并落盘', t => {
+    const dir = tempDataDir(t);
+    const n = createNotifyChannels({ dataDir: dir, env: ENV_OFF });
+    n.savePushSubscription({ endpoint: 'https://e/phone', keys: {} });
+    n.savePushSubscription({ endpoint: 'https://e/ipad', keys: {} });
+    assert.equal(n.removePushSubscription('https://e/phone'), true);
+    assert.equal(n.subscriptionCount(), 1, '手机退订不该顺手掐掉 iPad 的订阅');
+    const onDisk = JSON.parse(readFileSync(join(dir, 'push-subscription.json'), 'utf8'));
+    assert.deepEqual(onDisk.map(s => s.endpoint), ['https://e/ipad'], '删除必须落盘，重启后不能复活');
+  });
+
+  test('退订是幂等的：重复退 / 退一条不存在的，都只是 false，不误伤别人', t => {
+    const dir = tempDataDir(t);
+    const n = createNotifyChannels({ dataDir: dir, env: ENV_OFF });
+    n.savePushSubscription({ endpoint: 'https://e/ipad', keys: {} });
+    assert.equal(n.removePushSubscription('https://e/phone'), false);
+    assert.equal(n.removePushSubscription(''), false);
+    assert.equal(n.subscriptionCount(), 1);
+  });
 });
 
 test.describe('createNotifyChannels · 通道开关与失败上报', () => {

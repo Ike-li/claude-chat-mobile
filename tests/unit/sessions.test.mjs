@@ -84,6 +84,28 @@ test.describe('sessions.js 单元测试', () => {
     assert.equal(after.lastUsedAt, before);
   });
 
+  // 会话中途 EnterWorktree 后，两条轴在这个函数里分叉：
+  //   · 条目的 cwd 字段 = 驾驶轴（transcript 真正落在哪，决定 getSessionHistory 能不能找到）
+  //   · currentByCwd / generation 的键 = 工作区轴（「哪个工作区的当前会话」，同 finishOpenFocus
+  //     传的 workspaceCwd——产品判据是 worktree 不占抽屉条目）
+  // 传一个 cwd 满足不了两者：跟着驾驶轴走会让 worktree 变成一个工作区条目，跟着工作区轴走
+  // 会让条目 cwd 指向一个没有该 transcript 的目录。routeCwd 缺省 = cwd，其余调用点行为不变。
+  test('upsertSession: routeCwd 把「条目 cwd」与「路由键」分开', () => {
+    S.upsertSession({
+      id: 'wt-split', title: 'worktree 会话', cwd: '/proj/e/.claude/worktrees/wt',
+      routeCwd: '/proj/e', model: null,
+    });
+    assert.equal(S.getSession('wt-split').cwd, '/proj/e/.claude/worktrees/wt', '条目 cwd 必须是驾驶轴，否则历史按父仓查空');
+    assert.equal(S.getCurrent('/proj/e'), 'wt-split', 'currentByCwd 必须落工作区轴');
+    assert.equal(S.getCurrent('/proj/e/.claude/worktrees/wt'), null, 'worktree 不得成为独立的工作区条目');
+  });
+
+  test('upsertSession: 不传 routeCwd 时两轴合一（既有调用点行为不变）', () => {
+    S.upsertSession({ id: 'no-route', title: '普通会话', cwd: '/proj/f', model: null });
+    assert.equal(S.getSession('no-route').cwd, '/proj/f');
+    assert.equal(S.getCurrent('/proj/f'), 'no-route');
+  });
+
   test('touchSessionActivity: 刷新 lastUsedAt（默认 now；可注入消息时间）', () => {
     S.upsertSession({ id: 'touch-me', title: 't', cwd: '/proj/d', model: null });
     // 单调不回退：注入时间须 ≥ 新建时的 lastUsedAt（Date.now）

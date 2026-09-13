@@ -161,6 +161,31 @@ gitignored 草稿，草稿没了，编号就成了只有当时在场的人能解
 **默认行为是显式 opt-in 保护的**——9 个 S2 文件与 24 个集成文件建在「stub 永不产出、实例恒 busy」这个前提上
 （S2 侧复算：`grep -L CCM_FAKE_CLAUDE_MODE tests/invariants/server/*.test.mjs | wc -l`）。
 
+### 维护者 playground：容器里那张干净的 Web UI
+
+想亲眼看一个全新 Linux 用户打开的界面长什么样时用它。**它不是产品入口**（hard-rules §1：
+用户装机仍走 `npm run setup` / `npm start` / 桌面端），是把测试环境整个搬进容器：
+空 `HOME`、fake-claude、不碰宿主机 `~/.claude`。
+
+```bash
+npm run docker:build                 # 首次，以及 image 标签落地后再打一次 claude-chat-mobile-test:local
+npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
+npm run playground:device -- list
+npm run playground:device -- approve <ID>
+npm run playground:up:mock           # 聊天/流式 UI（mock server）
+npm run playground:up:proxy          # nginx 公网 Host 夹具
+npm run test:docker:playground       # 装机路径 + 拓扑探针 + 薄 Playwright TOFU
+npm run playground:reset             # down -v，清设备信任表
+```
+
+发消息不会完成 agent turn（fake-claude）；误点发送后会话会 busy，用 `playground:restart`
+（不要在开着 proxy 时用 restart，改 `playground:up:proxy`）。不要打开不带 `#token=` 的 URL
+（会触发鉴权限速短锁）。
+
+> **别把这节搬回 `getting-started.md`**（2026-09-12 从那里搬来）。那份文档留在分发树里，
+> 而这些命令全都指向 `tests/infra/` 下的 compose 文件，随 `/tests/**` 一起被 `export-ignore` 裁掉——
+> 装机用户读到的会是八条跑不了的命令。本文件自己被裁，所以这些引用在这里才成立。
+
 ---
 
 ## 3. 怎么知道自己没写出假绿

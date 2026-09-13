@@ -22,6 +22,17 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 45_000,
+  // CI 上重试一次。分片并行会把两类问题照出来：紧到极限的断言窗口，以及 spec 之间经由 mock
+  // server 模块级全局态的隐藏耦合（分片改变了"哪些 spec 共用一个 server 进程、按什么顺序跑"）。
+  // 实测两次、两条不同用例：run 34709034273 四分片红 task-progress P0-17i（toBeEnabled 超时）、
+  // run 34709543333 两分片红 long-stream-interrupt P0-04（element(s) not found）；同期串行 10 次
+  // 里 9 次全绿。降分片数解决不了——2 分片比 4 分片还慢（373s vs 269s）却照样红。
+  //
+  // retries 不掩盖稳定的真 bug：那种第二次照样红。它只把【偶发红】转成【标记为 flaky 的绿】，
+  // 信息不丢反而更透明——串行时代偶尔红一次，重跑就过了，没人知道是哪条、为什么。
+  // 顺带让 trace:'on-first-retry' 真正生效：retries=0 时那行配置从来不产出任何 trace。
+  // 本机保持 0：开发时自动重试会掩盖刚写出来的问题，也拖慢反馈。
+  retries: process.env.CI ? 1 : 0,
   expect: {
     timeout: 8_000
   },

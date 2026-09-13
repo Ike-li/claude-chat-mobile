@@ -65,6 +65,7 @@ import {
   formatPushStatusRow,
   formatStatuslineBridgeRow,
   pushEnvHint,
+  readPushOptOut,
   serviceStatusBasicRows,
   shouldSendOnEnter,
   whatNeedsAttention,
@@ -122,8 +123,8 @@ import {
   safeJsonPreview,
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
-  shouldBindBusyFromBroadcast,
-  shouldForceClearBusyFromBroadcast,
+  resolveRunStateFromSnapshot,
+  shouldClearBusyBySnapshot,
   buildClientErrorReport,
   clientErrorGateStep,
   formatLogsForCopy,
@@ -144,6 +145,7 @@ import {
   formatStatuslineCopyText,
   formatStatuslineCtxLeft,
   formatWorkspaceChangeBadge,
+  shouldRenderStatusline,
   readPushPreviewPref,
   writePushPreviewPref,
   shouldRerenderSessionList,
@@ -646,9 +648,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
                                         // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
-  // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd：托管 worktree 的会话
-  // 工作区轴归父仓，但文件实际改在 .claude/worktrees/<name> 下（判据见 logic/panel-state.js）。
-  const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
+  // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
+  // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
+  const drivingCwdOf = (instanceId) => resolvePanelCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
+  // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
+  const panelCwd = () => drivingCwdOf(viewingInstanceId);
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
@@ -978,14 +983,125 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 重试已过、流恢复 → 撤掉重试行，回落普通 spinner。由 text_delta/thinking_delta/tool_use 三处驱动
   // （任一到达都说明这一轮的 API 请求真的通了）；setBusy(false) 会整清 liveLine，无需在此重复。
+  //
+  // ★ retry 这一维【不跟】thinking/sawContentDelta/lastEventAt 走「回放一律中性」那条规矩，
+  // 回放事件照样清它。因为 api_retry 是 emitTransient（不进环形缓冲），`liveLine.retry` 只可能是
+  // **本次连接**期间收到的；而典型时序恰恰是「收到 api_retry → 断线 → 重连 → 回放那条成功的
+  // text_delta」——回放的输出本身就是重试已经通了的证据。若在此早退，renderLiveLineText 又优先
+  // 渲染 retry，spinner 会一直显示旧的 API 错误、倒计时卡在 0，直到下一条非回放流事件或轮次结束
+  // （PR #38 review 第五轮 P2）。
+  // 代价是 mixed 批次里旧轮的 delta 可能提前撤掉当前轮的重试行——但 api_retry 是逐次重试都发的，
+  // 真还在重试下一拍就会重新点亮；反过来「永久显示一个不存在的错误」没有自愈路径。取轻。
   function clearLiveRetry() {
     if (!liveLine?.retry) return;
     liveLine.retry = null;
     renderLiveLine();
   }
+  // 运行态只由【实时】事件表达。sync:since 回放的是环形缓冲里的旧信封，它的职责是把离开期间的内容
+  // 补渲染出来；「此刻在不在跑」是另一件事，真相源是 instances 广播（运行条看 state，发送闸与停止钮
+  // 看 turnRunning，两者故意不同——见 logic/composer.js resolveComposerPrimaryMode 的红线注释）。
+  //
+  // 【这两个函数必须成对存在】只让 delta 不点亮、却让 result 照常清，会在「回放批次里既有已结束的
+  // 旧轮、又有当前正在跑的新轮」时翻车：bindView 刚按权威 state 播下的 busy 被旧轮 result 清掉，
+  // 而属于新轮的那些 delta 已经不会再点亮它 —— 运行条与停止钮双双消失，用户看到的是「空闲」，
+  // 发出去的消息却被服务端以在途轮为由拒掉。2026-09-12 PR #38 review 抓出（P1）。
+  //
+  // 于是整批回放对运行态【完全中性】：既不点亮也不清除，运行态一律由 instances 决定
+  // （bindView 入场播种 + 广播单向对齐 + 下方 ticker 的每秒自检）。
+  // 守护：tests/e2e/specs/busy-orphan-replay.spec.ts
+  function setBusyFromStreamEvent(ev) {
+    if (ev?.replay) return;
+    setBusy(true);
+  }
+  // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
+  // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
+  //
+  // unlockSendGate=false 专供 error 路径：**不是所有 error 都是轮次终点**。AgentSession.map() 对
+  // assistant API 错误发 recoverable:true 并【故意保持 pendingTurns 非零】直到随后的 result，
+  // 模型/权限切档失败同样如此（agent.js 的 recoverable:true 几处）。跟着解锁发送闸的话，若后续
+  // instances 校正延迟或丢失，用户一打字就看到「发送」，发出去的消息会被仍在跑的服务端轮次拒掉。
+  // dev 上 error handler 本就只清 busy、从不动 _turnRunning——本 PR 把三处收敛到这个函数时
+  // 顺手给它加上了，属于我引入的行为变更，这里改回去（PR #38 review 第六轮 P2）。
+  // 终止性 error（recoverable:false）之后 _turnRunning 交由 instances 广播的权威字段收，与 dev 同。
+  function clearBusyFromTurnEndEvent(ev, { unlockSendGate = true } = {}) {
+    // ★ 乐观 marker 与运行态分开处置，回放时【只清 marker、不写运行态】。
+    // marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」，而回放里这条终止事件
+    // 【就是】那条消息的终止事件——必须照清。不清就会悬留：它只在终止事件与负 ack 两处清除，
+    // 而用户发完就切走时那条实时终止事件会被 shouldDropAgentEvent 按视图丢弃，于是 marker 永久
+    // 留着，此后每次切回该会话，bindView 的 shouldRestoreOptimisticBusy 都拿它点亮一次假运行条
+    // ——权威实例明明是 idle（2026-09-12 PR #38 review P2 指出；这也是真机那次现场最可能的成因：
+    // 22:54:44 发消息、5 秒后切走、22:56:16 的 result 被丢弃，23:01:58 切回即假亮，秒表从切回起算）。
+    _pendingSendBusySessionId = null;
+    if (ev?.replay) {
+      // 回放本身不表达运行态，但到这里正好可以对一次账：bindView 是【先】按乐观 marker 点亮 busy、
+      // 【后】才发 sync:since 的，所以上面那次清 marker 赶不及阻止这一次假亮。拿权威快照就地判一次
+      // ——权威说已空闲就立刻收掉，不必干等 ticker 的 30 秒宽限；权威说还在跑（mixed：新轮真的活着）
+      // 则一动不动。两个字段各判各的：state 管运行条，turnRunning 管发送闸（纯后台任务期 state 是
+      // busy 而 turnRunning 为 false，运行条该留、发送闸不该锁）。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (live) {
+        // 判据分两段，缺一段都会错（两段各自被一轮 review 抓出来过）：
+        //   · turnRunning===true → 一定保住。前台轮真的在跑，运行条就该在，哪怕同时挂着后台任务
+        //     （bgActive 与 turnRunning 可以同时为真）。少了这段，「后台任务 + 前台轮并存」时会
+        //     被下一段误判成没有前台活动，运行条被清掉，而回放的 delta 又被刻意挡住恢复不回来
+        //     ——安静的前台命令看起来没有任何运行指示，停止闸却还锁着（第四轮 P2）。
+        //   · 否则退回广播那条判据。它排除 bgActive===true（纯后台任务期没有 result 可释放，
+        //     运行条归 task_progress 横幅管）。少了这段，后台任务活着的整段时间里运行条和红色
+        //     停止钮都撤不掉，resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把主按钮
+        //     锁成停止钮（第三轮 P2）。
+        const authoritative = resolveRunStateFromSnapshot(live);
+        if (!authoritative.busy) setBusy(false);
+        if (!authoritative.turnRunning) _turnRunning = false;
+      }
+      return;
+    }
+    setBusy(false);
+    // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
+    // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
+    if (unlockSendGate) _turnRunning = false;
+  }
+  // ★ 兜底清除的【后果】只写一处，两条兜底通道（instances 广播看门狗、startLiveTicker 每秒自检）共用。
+  // 这是把判据收敛到 shouldClearBusyBySnapshot 的另一半：判据共用而后果各写各的，等于把「改一处
+  // 漏另一处」换个地方重开——事实上就重开过一次，ticker 清了乐观 marker、广播看门狗没清，于是权威
+  // 说空闲、运行条也收掉了，marker 却还留着，下一次切回该会话 bindView 的 shouldRestoreOptimisticBusy
+  // 又拿它把假运行条连同停止钮点亮一整个宽限窗，每切回一次重演一次（PR #38 review 第八轮 P2）。
+  // 触发它不需要丢包：移动端页面转后台时 setInterval 被节流甚至冻结，而 socket 消息醒来后照常派发，
+  // 于是「广播先于被节流的 ticker 到达」是常态而非边角。
+  // 注意 setBusy(false) 会 stopLiveTicker()，所以广播看门狗清完之后 ticker 不会再跑来补这一刀。
+  function forceClearBusyByAuthority(live) {
+    // 乐观 marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」。权威此刻说这个实例
+    // 空闲且已过宽限，那条登记就是过期的——留着只会在下次 bindView 把假运行态复活。
+    _pendingSendBusySessionId = null;
+    // 发送闸按权威快照收。【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，
+    // clearView 之后 busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；只清 busy 不清闸，
+    // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
+    // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是自检存在的理由（第四轮 P1）。
+    // 广播路径上 _turnRunning 在本函数之前已按 viewedInst.turnRunning 对齐过一次，这里是幂等的；
+    // ticker 路径则只有这一次机会。setBusy(false) 内含 updateSendButtonState()，故赋值必须排在它之前。
+    if (!resolveRunStateFromSnapshot(live)?.turnRunning) _turnRunning = false;
+    setBusy(false);
+  }
   function startLiveTicker() {
     if (liveTicker) return;
-    liveTicker = setInterval(() => { if (liveLine) renderLiveLine(); }, 1000);
+    liveTicker = setInterval(() => {
+      if (!liveLine) return;
+      // 兜底自检：清 busy 的两条既有通道都是被动的——轮次终止事件可能被视图路由丢弃（见上），
+      // 而 instances 广播上的看门狗只在【收到广播】时才跑，系统一安静就永远不来（真机现场那 100 秒
+      // 里一次广播都没有）。这里每秒主动看一眼权威快照，把「等广播」换成「自己查」。
+      // 判据与广播看门狗共用 shouldClearBusyBySnapshot（含「查不到实例就不清」与宽限窗）：
+      // 两处问的是同一个问题，此前各写一份，ticker 那份漏了 bgActive 折算（review 第六轮 P2）。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (shouldClearBusyBySnapshot({
+        live,
+        localBusy: _busyState,
+        turnStartTs: liveLine.turnStartTs,
+        now: Date.now(),
+      })) {
+        forceClearBusyByAuthority(live);
+        return;
+      }
+      renderLiveLine();
+    }, 1000);
   }
   function stopLiveTicker() {
     if (liveTicker) { clearInterval(liveTicker); liveTicker = null; }
@@ -1297,7 +1413,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
     if (instancesList.find(x => x?.instanceId === displayedInstanceId)?.turnRunning === true) _turnRunning = true;
     showLoadingCard();
-    loadHistory(displayedSessionId, undefined, onDone); // cwd 默认 currentCwd
+    loadHistory(displayedSessionId, undefined, onDone); // cwd 默认驾驶轴（见 loadHistory 头注）
   }
   // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
   // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
@@ -2138,7 +2254,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           : t('已回退 {n} 个文件，但新会话创建失败').replace('{n}', n),
           p.forkedSessionId ? 'text-ink-faint' : 'text-danger');
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
-        loadHistory(ev.sessionId, p.cwd || currentCwd);
+        loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
@@ -2188,6 +2304,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // handled 分支统一刷新：已过实例过滤 + epoch/seq 去重，任何本会话事件都说明「还活着」
     onHandledEvent(ev) {
       if (!liveLine) return;
+      // 回放事件不得改写 live 行的任何字段：mixed 批次里旧轮的 delta 会把 lastEventAt 推到「刚刚」、
+      // 把 sawContentDelta 置真，于是当前这一轮明明已经安静很久，spinner 却不显示等待提示
+      // （PR #38 review 第三轮 P2）。
+      if (ev?.replay) return;
       liveLine.lastEventAt = Date.now();
       if (ev.type === 'text_delta' || ev.type === 'thinking_delta') liveLine.sawContentDelta = true;
     },
@@ -2470,7 +2590,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         s.raw += p.text;
         s.textNode.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         return;
       }
       const s = getStream(p.messageId, ev?.ts);
@@ -2483,32 +2603,33 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           scrollBottom();
         }, formatStreamPreviewIntervalMs());
       }
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 正文开流 = 本轮 thinking 阶段结束（事件驱动切换，比 idle 超时判定准）
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：回放里旧轮的 delta 不得去动当前这一轮的 thinking 态（见 onHandledEvent 的注释）
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
     },
-    thinking_delta(p) {
+    thinking_delta(p, ev) {
       clearLiveRetry();
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
-      setBusy(true);
-      if (liveLine) {
+      setBusyFromStreamEvent(ev);
+      if (!ev?.replay && liveLine) {
         liveLine.thinking = { state: 'active', ...advanceThinkingClock(liveLine.thinking || undefined, Date.now()) };
         renderLiveLine();
       }
     },
-    tool_use(p) {
+    tool_use(p, ev) {
       clearLiveRetry();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
@@ -2607,7 +2728,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendMessage(card);
       }
       scrollBottom();
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
@@ -2619,7 +2740,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
       }
       // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：同 text_delta，回放里旧轮的工具不得终结当前这一轮的 thinking burst
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
@@ -2822,7 +2944,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         updateSendButtonState();
       }
     },
-    result(p) {
+    result(p, ev) {
       // 服务端随 result 下发完整回复文本——断网恢复后 s.raw 可能因遗漏 deltas 而截断，
       // 此处用权威全文覆盖确保 Markdown 渲染完整（E18）
       if (p.text && p.messageId) {
@@ -2833,11 +2955,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       const fileChangesCard = flushTurnFileChangesCard();
-      _pendingSendBusySessionId = null;
-      setBusy(false);
-      // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
-      // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
-      _turnRunning = false;
+      clearBusyFromTurnEndEvent(ev);
       updateSendButtonState();
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
@@ -2861,15 +2979,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       approvals.clearAll();
       updateSendButtonState();
     },
-    error(p) {
+    error(p, ev) {
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
-      _pendingSendBusySessionId = null;
-      setBusy(false);
+      clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
@@ -2893,7 +3010,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!text) return;
       addBar(`${t('回顾')} · ${text}`, 'text-ink-faint');
     },
-    system(p) {
+    system(p, ev) {
       addBar(p.message, systemBarClass(p));
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
@@ -2904,9 +3021,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
         markAllSubagentCardsDone();
-        _pendingSendBusySessionId = null;
-        setBusy(false);
-        _turnRunning = false; // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
+        clearBusyFromTurnEndEvent(ev); // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
         // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
         // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
@@ -2937,8 +3052,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         liveLine.outTokens = Number(p.turn.outTokens) || null;
         renderLiveLine();
       }
-      // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
-      if (messagesEl.classList.contains('empty-start')) return;
+      // 空首页采用极简底部：模型/权限/思考 chips 即可。compose 页例外——工作区已定，git 段照渲
+      // （判据与两侧理由见 logic/statusline.js shouldRenderStatusline）。
+      //
+      // 第二个参数问 DOM 而不是读 _composeReady：那个标志在「会话已中断」表面上会是陈旧的 true
+      // （bindView 的 destroyed 分支先于 leaveComposeReady 提前 return），拿它当判据会把上一个实例的
+      // ctx/模型渲染到中断表面上。当前渲染着什么表面，只有 DOM 说了算。
+      if (!shouldRenderStatusline({
+        emptyStart: messagesEl.classList.contains('empty-start'),
+        composeSurface: Boolean(messagesEl.querySelector('[data-testid="compose-surface"]')),
+      })) return;
       // 与 statuslineFmtTok 同边界：round 到 k 后 ≥1000 抬 m，避免 1000k
       const fmtTok = n => {
         if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
@@ -4833,17 +4956,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
     if (newViewing && newViewing === displayedInstanceId) {
-      if (shouldBindBusyFromBroadcast({ state: viewedInst?.state, bgActive: viewedInst?.bgActive })) {
+      // 权威快照的解释统一走 resolveRunStateFromSnapshot（logic/outbox-send.js）——它同时是
+      // bindView 播种、回放对账、ticker 自检用的那一份，四处不再各写一遍。
+      if (resolveRunStateFromSnapshot(viewedInst)?.busy) {
         setBusy(true);
-      } else if (shouldForceClearBusyFromBroadcast({
-        state: viewedInst?.state,
+      } else if (shouldClearBusyBySnapshot({
+        live: viewedInst,
         localBusy: _busyState,
         turnStartTs: liveLine?.turnStartTs ?? null,
         now: Date.now(),
       })) {
-        // 看门狗：终止事件丢了才会走到这（见 shouldForceClearBusyFromBroadcast 注释）——正常轮次
-        // state 全程 'busy'，这个分支不会触发。
-        setBusy(false);
+        // 看门狗：终止事件丢了才会走到这——正常轮次权威快照全程说「在跑」，这个分支不触发。
+        // 善后与 ticker 自检共用 forceClearBusyByAuthority：此前这里只 setBusy(false)，把乐观
+        // marker 留在了原地（见该函数注释，第八轮 P2）。
+        forceClearBusyByAuthority(viewedInst);
       }
     }
     updateSessionsDot();
@@ -5063,7 +5189,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       pendingSendBusySessionId: _pendingSendBusySessionId,
       viewingInstanceId: id,
       sessionId: sid,
-    }) || shouldSeedBusyFromInstanceState(entry?.state);
+    }) || Boolean(resolveRunStateFromSnapshot(entry)?.busy);
     if (restoreBusy) setBusy(true);
     // 发送闸同样要重种：clearView 刚把 _turnRunning 清零，而 setInstances 对它的赋值发生在 bindView 之前，
     // 会被那次清零冲掉——切回一个正在跑的会话时闸就失准了（停止钮不出现、发送反被服务端拒）。
@@ -5556,6 +5682,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       hint: pushEnvHint(notifications.environment()),
       permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
       subscribed,
+      // 自己关掉的与订阅失败在 permission/subscribed 上同形，只有这个意图分得开
+      optedOut: readPushOptOut(k => localStorage.getItem(k)),
     });
     pushStatusRowEl.replaceChildren();
     const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
@@ -5569,14 +5697,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       h.textContent = row.hint;
       card.firstChild.appendChild(h);
     }
-    if (row.action === 'subscribe') {
-      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="push-subscribe"></button>`);
+    // 两个方向共用一个按钮位：开与关是同一个开关的两侧，不该只有进、没有出。
+    if (row.action === 'subscribe' || row.action === 'unsubscribe') {
+      const off = row.action === 'unsubscribe';
+      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70"></button>`);
+      btn.dataset.testid = off ? 'push-unsubscribe' : 'push-subscribe';
       btn.textContent = row.actionText;
       btn.onclick = async () => {
         btn.disabled = true;
-        await notifications.requestSubscription();
+        // 开启那条走 requestSubscription，它自己用 explain()（系统 alert）说话——弹窗压在面板之上，看得见。
+        if (!off) {
+          await notifications.requestSubscription();
+          btn.disabled = false;
+          renderPushStatusRow();
+          return;
+        }
+        const ok = await notifications.unsubscribe();
         btn.disabled = false;
-        renderPushStatusRow();
+        await renderPushStatusRow();
+        // 成功：状态行当场翻成「已关闭」，那就是回答；addBar 那条是留给关掉面板之后的账
+        //（与 app/session-delete.js 的成功路径同构）。
+        // 失败：状态行原样不动 = 用户眼里的"点了没反应"，错因必须落在他此刻正看着的这一层。
+        // #generalSheet 是 z-40 的大底栏，盖着消息流——只写 addBar 等于没写（2026-09-12 抽屉里
+        // 撞过同一个坑）。这行插在重绘之后，下次重绘自然被 replaceChildren 清掉。
+        if (ok) addBar(t('🔕 已关闭推送通知'), 'text-ink-soft');
+        else {
+          const notice = el(`<div class="mt-1.5 text-[11px] text-warning px-1"></div>`);
+          notice.textContent = t('⚠️ 关闭推送失败，请重试');
+          pushStatusRowEl.appendChild(notice);
+        }
       };
       card.appendChild(btn);
     }
@@ -5875,13 +6024,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // scheduleSessionPanelRevalidate 的 timer 守卫保证这里不会重复装，不是双倍请求。
     onOpened: () => { openSessionPanel(); startSessionPanelRevalidator({ immediate: true, skipExpanded: true }); },
     onClosed: () => stopSessionPanelRevalidator(),
+    // 抽屉不可见时失败回执的去处：此刻用户看的是聊天区，消息流才是"看得见的那一层"。
+    fallbackNotice: (text) => addBar(text, 'text-danger'),
   });
   const { openLeftSidebar, closeLeftSidebar } = drawer;
   // 顶栏文字 chip 与会话按钮同一去处：点它打开抽屉（需要你区 / 服务异常区 / 工作区树就在里面）。
   attentionChipEl?.addEventListener('click', () => openLeftSidebar());
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
-    socket, addBar, appConfirm,
+    socket, addBar, appConfirm, showDrawerNotice: drawer.showNotice,
     onDeleted: ({ cwd } = {}) => {
       // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
       if (cwd) sessionsCache.delete(cwd);
@@ -6739,6 +6890,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+    // ★ 这里【不】清抽屉的失败回执。列表重建与那条回执没有因果关系，而每次打开抽屉都会走到
+    // 这里：慢 ACK 的回执写进刚关上的抽屉后，用户重新打开的第一件事就是把它清掉——正好复现
+    // 原来那个"点了没反应"。清除归 drawer（关抽屉时）与删除成功时，两处都是真的翻篇了。
     drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
     // UX-007：当前工作区默认展开 + 记忆用户展开态
     try {
@@ -6971,14 +7125,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
 
     // Clear stale status line and hide details row to prevent latency layout flashes
+    hideStatuslineWrap();
+    pillDefaults?.classList.remove('hidden'); // 恢复底栏会话档摘要 chip（statusLine 隐藏时）
+    if (tip) addBar(tip, 'text-ink-faint');
+  }
+
+  // 收起状态栏并清掉陈旧内容。两个调用者都是「视图换了人，旧数据立刻失真」：clearView（切会话）与
+  // showComposeSurface（点 ＋ 开新会话）。两边都随后由新的 status_line 填回。
+  //
+  // home 表面刻意【不】调：那里 syncComposerVisibility 会把整个 #composerFooter 隐藏，状态栏在它
+  // 里面，跟着一起不可见——再调一次是纯冗余（注入验证过：删掉不会让任何用例变红）。
+  // destroyed 表面【要调】，别照着 home 类推：从 compose 首发跳过去时 _composeReady 仍是 true，
+  // shouldShowComposer 于是判显示，footer 没隐藏，状态栏会原地留在中断表面上。
+  function hideStatuslineWrap() {
     if (cliStatusEl) cliStatusEl.innerHTML = '';
     if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
     if (cliStatusWrapEl) {
-      cliStatusWrapEl.removeAttribute('open'); // Fold <details> element
-      cliStatusWrapEl.classList.add('hidden'); // Hide the wrapper
+      cliStatusWrapEl.removeAttribute('open'); // 折叠 <details>
+      cliStatusWrapEl.classList.add('hidden');
     }
-    pillDefaults?.classList.remove('hidden'); // 恢复底栏会话档摘要 chip（statusLine 隐藏时）
-    if (tip) addBar(tip, 'text-ink-faint');
   }
 
   // 空首页最近列表代次：连续 showDashboard（切 cwd / 重连）时丢弃过期 ack，防旧列表盖新。
@@ -7002,15 +7167,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!composerFooterEl) return;
     composerFooterEl.classList.toggle('hidden', !show);
   }
-  // 顶部文件夹 pill：仅真实会话显示（首页/compose 页内已有工作区入口，再放会重复）。
-  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null) {
+  // 顶部文件夹 pill：真实会话 + compose 页（工作区已定，文件/改动与 session 无关）显示；空首页隐藏。
+  // composeReady 显式传参而不是直接读 _composeReady：三个空表面里 destroyed 那张调用时 _composeReady
+  // 可能仍是 true（resolveEmptySurface 的 instanceDestroyed 分支排在 composeReady 之前），读全局会让
+  // 「会话已中断」表面凭空多出一个入口。cwd 取 panelCwd()——与 pill 的 onclick 同源，判据和落点不许分叉。
+  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null, { composeReady = _composeReady } = {}) {
     if (!topContextPill) return;
     const sid = sessionId
       ?? instancesList.find(x => x.instanceId === viewingId)?.sessionId
       ?? currentSessionId
       ?? displayedSessionId
       ?? null;
-    const show = shouldShowTopContextPill({ viewingInstanceId: viewingId, sessionId: sid });
+    const show = shouldShowTopContextPill({
+      viewingInstanceId: viewingId, sessionId: sid, composeReady, cwd: panelCwd(),
+    });
     topContextPill.classList.toggle('hidden', !show);
     // 隐藏时不可聚焦，避免读屏仍读到工作区入口
     topContextPill.tabIndex = show ? 0 : -1;
@@ -7237,9 +7407,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = t('新聊天');
-    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
+    // 走 syncTopContextLabel 而不是只手写 topProjectText：pill 现在在这张页面上是【可见】的，
+    // 光换名字不够——改动角标与 title 还归属上一个工作区，得靠它那道 dataset.cwd 判据清掉。
+    // 抽屉里按目录行点 ＋ 时这条路是同步的（currentCwd 当场改、compose 表面当场渲染），不清就会
+    // 出现「新工作区名 + 旧工作区改动数」，一直挂到服务端 instances 广播回来才自愈。
+    syncTopContextLabel();
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // compose 页：隐藏顶栏文件夹（页内已有工作区 pill）
+    // compose 页：显示顶栏文件夹（工作区已定；页内那个 pill 通向会话列表，不通向文件）
+    syncTopContextPillVisibility(null, null, { composeReady: true });
+    // 状态栏先清空再等新数据：btnNew 这条路**不经过 clearView**（见 btnNew.onclick → ensureEmptySurface），
+    // 上一个会话的 model/ctx 会原样挂在新会话页上。
+    //
+    // 【E2E 验不到，别照着"没测试所以是冗余"删】：compose 页随后必定收到自己那条 status_line
+    // （真 server session:new 末尾 scheduleStatusRefresh；mock 已对齐），而 status_line 渲染是整体替换
+    // （cliStatusEl.textContent='' 后重 append），于是残留窗口只有那 300ms，断言必然扑空。这行保的是
+    // statusOff / WEB_STATUSLINE=off 的场景——那条事件永不到达，不清就是永久显示别的会话的用量。
+    hideStatuslineWrap();
 
     const defaultsText = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
     const container = el(`
@@ -7372,7 +7555,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // 无实例可看：顶栏文件夹入口隐藏（同 home/compose）
+    // 「会话已中断」：顶栏文件夹入口隐藏（同 home）。显式 composeReady:false——见函数注释，此处全局值不可信
+    syncTopContextPillVisibility(null, null, { composeReady: false });
+    // 状态栏也要收：实例已经没了，里面那份 ctx / 模型 / 额度全归属于它，留在屏上就是在报废数字。
+    // 这张表面不像 home 那样能靠 #composerFooter 整体隐藏顺带藏掉它——composer 在这里仍可能是显示的
+    // （从 compose 首发跳过来时 _composeReady 停在陈旧的 true，shouldShowComposer 据此判显示）。
+    // 上面那道判据改读 DOM 只防住「后续事件把它重新渲染出来」，防不住已经渲染好的那份残留。
+    hideStatuslineWrap();
 
     const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
     const body = byRestart
@@ -7428,7 +7617,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
-    syncTopContextPillVisibility(null, null); // 首页：顶栏文件夹隐藏
+    syncTopContextPillVisibility(null, null, { composeReady: false }); // 首页：工作区未选定，顶栏文件夹隐藏
 
     const hour = new Date().getHours();
     let greeting;
@@ -7633,7 +7822,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊
   // 判断"此刻 DOM 已稳定、可以查 topLevelBubbles() 定位锚点"——只有 bindView 的 sync:since 回调会传，
   // onHistoryAppend（只读镜像追平）不传，维持原样不受影响。
-  function loadHistory(sessionId, cwd = currentCwd, onDone) {
+  // cwd 缺省取【驾驶轴】而不是 currentCwd：transcript 落在会话实际所在的那棵树里，而 currentCwd 是
+  // 工作区轴，托管 worktree 的会话恒为父仓。拿父仓去查，server 的 sessionFileExists 必然 false →
+  // ack 回 { messages: [], error: '会话不存在' } → 灰行「历史消息加载失败」。
+  // 2026-09-13 真机：首次点开（bindView 传 entry.cwd，驾驶轴）好好的，锁屏回来走
+  // reloadCurrentFromHistory（用缺省值）就必failed——所以症状是「会出现，但不是百分百」。
+  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     // SS-ORDER：从这里到历史真正落地是一段可观的窗口（socket 往返 + renderHistoryBubbles 的分块

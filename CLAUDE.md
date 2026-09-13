@@ -82,9 +82,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 分支纪律
 
-两条分支各有单一职责：**`dev` = 开发主线**（GitHub 默认分支，dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布。
+两条分支各有单一职责：**`dev` = 开发主线**（dependabot 与所有日常 PR 都落在这里）；**`master` = 对外发布的稳定版本**，HEAD 恒等于最新发布，**同时是 GitHub 默认分支**——仓库首页展示的 README 必须与装机 `curl` 拿到的那份一致。
 
-- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。
+- **日常改动走 feature 分支 → PR → `dev`**，每个小改动一个 PR。不在 `dev` 上直接提交：`dev` 要求 PR 且 CI 必须绿。**默认分支是 `master`，所以开 PR 必须显式 `--base dev`**——忘了会被 `quality` 那道闸拦住（显式报错，不会静默合错）。
 - **`master` 只接受 `scripts/release.sh` 开的那条 `dev` → `master` 发版 PR**。它开了 `enforce_admins`，谁都不能直推（包括仓库 owner），`quality` 里还有一道 step 拦住任何 head 不是 `dev` 的 PR。
 - 两条分支的 required checks 都是 `quality` / `unit-test (20)` / `unit-test (24)` / `e2e`；**approvals = 0**——单人仓库里 GitHub 不允许自己 approve 自己的 PR，设成 1 会让所有 PR 永远合不进去。PR 在这里的作用是「强制 CI + 可读的变更面」，不是等人点同意。
 - 发版走 `scripts/release.sh`：bump → 推 `dev` → **等真 CI 绿** → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。中途失败就直接重跑，它会从中断处接上（不会二次 bump）。
@@ -187,7 +187,18 @@ npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自
                    # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
                    # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
                    # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
-                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久
+                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久。
+                   # **以上全是「N 片挤同一台机器」的数字**。CI 上是另一种形态：
+                   # CCM_E2E_SHARD_INDEX=i 让本进程只跑第 i 片，8 台 runner 各跑一片、
+                   # 互不争抢 CPU，所以「8 片会偶发假红」那条不能照搬过去（病因之一正是
+                   # 4 核跑 8 个 Chromium）——横向 8 片实测 323 条全绿、零 flaky，
+                   # 整个 workflow 墙钟 296s → 140s。横向分片新增一条**漏跑表现为全绿**的路径——
+                   # 各 runner 各自读时长缓存算分组，一台 cache 没命中就算出另一套分组，
+                   # 于是有 spec 谁都没跑。汇总 job 用 `--merge-durations` 做并集校验堵它
+                   # （TEST-02，少一个就红）。时长缓存在 CI 上靠 actions/cache 跨 run 复用：
+                   # 没有它 LPT 整个退化成按文件数轮转，而轮转在分片数变大时更差——两个大文件
+                   # 会撞进同一片，6 片轮转的最慢片实测 209-213s，而 LPT 理想值只要 ~117s
+                   # （CI 串行基线实测 ~700s，固定开销 33-41s/片）
 
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）

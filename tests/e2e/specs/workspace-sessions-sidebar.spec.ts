@@ -329,6 +329,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-09-12 真机报障：「关闭会话→立刻点 🗑」必然撞上服务端 5 分钟静默期保护，而拒绝理由当时
+  // 走 addBar 写进聊天消息流 #messages——抽屉打开时 #sidebarScrim（fixed inset-0 z-30）盖住整个
+  // 视口，用户得到的是"点了没反应、会话还在"。
+  test('P0-11-delete-reject 删除被拒绝时，理由显示在抽屉里且那一行不消失', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Deleted Remote Session')).toBeVisible();
+
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-deleted"]');
+    await row.getByTestId('session-delete').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.getByRole('button', { name: '彻底删除' }).click();
+    await expect(page.locator('#confirmModal')).toBeHidden({ timeout: 5_000 });
+
+    // 判据是【位置】不是「可见」：Playwright 的 toBeVisible() 不做遮挡检测，消息流里那条被 scrim
+    // 盖死的提示同样能过。所以这里锚在抽屉子树内，并反向钉住消息流不得再收到这条错误。
+    const notice = page.locator('#leftSidebar [data-testid="drawer-notice"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('会话不存在');
+    await expect(page.locator('#messages .msg-frame.text-danger')).toHaveCount(0);
+    await expect(sessionButtonByTitle(page, 'Deleted Remote Session')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11n sidebar 刷新已缓存的会话列表后显示较早历史入口', async ({ page }) => {
     await gotoMock(page);
 

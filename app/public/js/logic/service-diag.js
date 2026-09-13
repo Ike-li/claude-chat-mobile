@@ -73,7 +73,7 @@ export function describeSubscribeError(message, { isIOS = false } = {}) {
 // 为什么需要它：推送不通时此前界面上**没有任何痕迹**——铃铛按钮本身在"权限被拒"时会被隐藏、
 // 在"已授权但订阅失败"时压根不出现，用户只会得出"这功能没用"的结论（真机实测中
 // push-subscription.json 从未存在过，而 UI 一个字都没说）。状态必须看得见，且看得出下一步做什么。
-export function formatPushStatusRow({ hint = 'ready', permission = 'default', subscribed = false } = {}) {
+export function formatPushStatusRow({ hint = 'ready', permission = 'default', subscribed = false, optedOut = false } = {}) {
   const label = t('推送通知');
   if (hint === 'need-https') {
     return { label, value: t('不可用'), tone: 'warn', action: null,
@@ -91,8 +91,17 @@ export function formatPushStatusRow({ hint = 'ready', permission = 'default', su
     return { label, value: t('已被拒绝'), tone: 'warn', action: null,
       hint: t('此前拒绝过通知权限。需在浏览器/系统的站点设置里改回「允许」，再回来开启。') };
   }
+  // 订上之后也要给得出退路：此前这里恒 action:null，UI 上再没有任何地方能关掉推送，
+  // 唯一办法是去浏览器站点设置把权限改成「阻止」——那会掉进上面那条 denied 分支，
+  // 把用户的一次主动关闭，说成是他拒绝过我们。
   if (subscribed) {
-    return { label, value: t('已开启'), tone: 'ok', action: null };
+    return { label, value: t('已开启'), tone: 'ok', action: 'unsubscribe', actionText: t('关闭推送') };
+  }
+  // 自己关掉的，别报成故障：这一态与「已授权却没订上」在 permission/subscribed 上完全同形，
+  // 只有用户意图分得开。tone 留空＝中性色，既不邀功也不告警。
+  if (optedOut) {
+    return { label, value: t('已关闭'), tone: null, action: 'subscribe', actionText: t('开启'),
+      hint: t('这台设备不会再收到推送。随时可以重新开启。') };
   }
   // 已授权却没订阅上 = 订阅请求失败过（此前这条路彻底静默，用户永远不知道）
   const value = permission === 'granted' ? t('未完成订阅') : t('未开启');
@@ -136,6 +145,16 @@ export function writePushPreviewPref(setItem, enabled) {
   if (typeof setItem !== 'function') return false;
   setItem(PUSH_PREVIEW_PREF_KEY, enabled ? '1' : '0');
   return true;
+}
+
+// 「用户主动关掉过推送」——必须落盘记住，不能只是一次瞬时动作。
+// 通知权限在退订后仍然是 granted，而 setup() 恰恰是按 granted 无条件重订的；不记住这个意图，
+// 关掉之后随便刷一下页面就自动订回来，那个关闭按钮等于不存在。
+// 默认「没关过」（缺省即空），只有显式存 '1' 才算关过；用户再点开启时抹掉。
+export const PUSH_OPT_OUT_KEY = 'ccm_push_opt_out';
+export function readPushOptOut(getItem) {
+  const g = typeof getItem === 'function' ? getItem : () => null;
+  return g(PUSH_OPT_OUT_KEY) === '1';
 }
 
 function formatAgo(ms) {
@@ -453,6 +472,13 @@ const AUDIT_NEUTRAL_TEXT = {
   retention_cleanup: '审批记录留存清理',
   approval_restart_expired: '重启使待审批请求失效',
 };
+// 删除被拒时服务端写进 meta.reason 的三道保护（app.js 的 rejectDelete）。查不到的 reason
+// 退回原文案而不是渲染 undefined——将来新增一道保护而这里忘了补时，坏的是信息量不是排版。
+const AUDIT_DELETE_REJECT_REASON = {
+  live: '会话正被本产品驱动',
+  opening: '会话正在打开中',
+  quiet_period: '可能正被终端使用',
+};
 export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   const d = meta && typeof meta === 'object' ? meta : {};
   const tgt = target == null ? '' : String(target);
@@ -488,7 +514,8 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
     text = `${t('重启服务')}${d.via ? ` · ${d.via}` : ''}${d.reason ? ` · ${d.reason}` : ''}`;
     if (outcome === 'denied') severity = 'warning';
   } else if (action === 'session_delete_l2') {
-    text = `${t('永久删除会话')} ${tgt}`;
+    const why = AUDIT_DELETE_REJECT_REASON[d.reason];
+    text = `${t('永久删除会话')} ${tgt}${why ? ` · ${t(why)}` : ''}`;
   } else if (action === 'file_write') {
     // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
     text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;

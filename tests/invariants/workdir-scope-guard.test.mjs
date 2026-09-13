@@ -5,6 +5,9 @@
 //            范围门再严，也挡不住一条把父目录整棵树写进白名单的配置
 //         ③ resolveManagedWorktree 的派生放行面：只认「白名单目录下 .claude/worktrees/ 的直接子目录」，
 //            深度固定为 1、不递归、symlink 真实落点必须仍在该目录子树内
+//         ④ resolveDrivingCwd：会话中途换 cwd（EnterWorktree）的采信判据——合法集同 ③，
+//            但失败方向是 fail-closed 返回 null，不像 routeCwd 那样回退
+//         ⑤ instanceAuthorizedDirs：工作区被热移除后，其上已开实例保留自己那一个授权根（仅拒新开）
 // 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +16,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
-import { resolveManagedWorktree, ensureWhitelisted } from '../../app/src/sessions/workdirs.js';
+import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd, instanceAuthorizedDirs } from '../../app/src/sessions/workdirs.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
@@ -289,5 +292,69 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
       resolveManagedWorktree(join(rawBase, 'repo-a', '.claude', 'worktrees', 'feature-x'), dirs)?.parent ?? null,
       realA,
     );
+  });
+
+  // ④ 会话中途换 cwd（EnterWorktree / ExitWorktree）的采信判据。
+  //
+  // 【为什么不能复用 routeCwd】合法集同源，但**失败方向相反**：routeCwd 面对的是「前端传错了 cwd」，
+  // 回退 viewingCwd 是纠正；这里面对的是「CLI 报了一个新 cwd」，没有任何安全回退可言——
+  // 回退到别的目录等于把实例的驾驶轴指到一个 SDK 并不在那儿跑的地方。拒绝 = 保持原样。
+  //
+  // 【为什么必须校验】new_cwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
+  // 与前端传来的路径同属用户可控面，SCOPE-01 原样适用。
+  test('resolveDrivingCwd 采信白名单目录本身与其下的托管 worktree', () => {
+    assert.equal(resolveDrivingCwd(realA, dirs), realA);
+    assert.equal(resolveDrivingCwd(join(wtRoot, 'feature-x'), dirs), realpathSync(join(wtRoot, 'feature-x')));
+    assert.equal(
+      resolveDrivingCwd(join(repoB, '.claude', 'worktrees', 'other'), dirs),
+      realpathSync(join(repoB, '.claude', 'worktrees', 'other')),
+    );
+  });
+
+  test('resolveDrivingCwd 对越界路径 fail-closed 返回 null——不回退、不归位', () => {
+    assert.equal(resolveDrivingCwd(outside, dirs), null, '越界目录被采信 = 实例驾驶轴被引到授权范围外');
+    assert.equal(resolveDrivingCwd(sibling, dirs), null, '仓库外平级兄弟 worktree 须显式写进 WORKDIRS');
+    assert.equal(resolveDrivingCwd(join(wtRoot, 'nested', 'deep'), dirs), null);
+    assert.equal(resolveDrivingCwd('/definitely/not/here', dirs), null);
+    assert.notEqual(resolveDrivingCwd(outside, dirs), realA, 'fail-closed 不是"归位到 dirs[0]"——那会静默换掉驾驶目标');
+  });
+
+  test('resolveDrivingCwd 挡 symlink 逃逸', { skip: process.platform === 'win32' }, () => {
+    assert.equal(resolveDrivingCwd(join(wtRoot, 'escape'), dirs), null);
+  });
+
+  // ⑤ 热移除保护。产品判据是「工作区被移出 WORKDIRS 后，该目录上的已开会话继续运行、仅拒新开」
+  // （CLAUDE.md 工作区热加载那段）。只拿新 workDirs 校验的话，这类实例中途 EnterWorktree 会被拒，
+  // instance.cwd 停在旧值 —— 复发「历史消息加载失败」，而且是静默的。
+  //
+  // 【为什么这不是给范围门开口子】放行集只多出「该实例创建时所属的那个工作区」，而它的 CLI
+  // 本来就在那个目录里跑着、早已能读写那里 —— 不新增任何能力。别的目录一律照旧拒。
+  test('instanceAuthorizedDirs：白名单里有原授权根时原样返回', () => {
+    assert.deepEqual(instanceAuthorizedDirs(dirs, realA), dirs);
+    assert.deepEqual(instanceAuthorizedDirs(dirs, null), dirs);
+  });
+
+  test('instanceAuthorizedDirs：原授权根被热移除后仍保留给该实例', () => {
+    const afterRemoval = [realB]; // realA 被移出 WORKDIRS，但它上面还有 live 实例
+    assert.deepEqual(instanceAuthorizedDirs(afterRemoval, realA), [realB, realA]);
+    assert.equal(
+      resolveDrivingCwd(join(wtRoot, 'feature-x'), instanceAuthorizedDirs(afterRemoval, realA)),
+      realpathSync(join(wtRoot, 'feature-x')),
+      '热移除后该实例的 worktree 切换被拒 = instance.cwd 停在旧值，静默复发历史加载失败',
+    );
+  });
+
+  test('instanceAuthorizedDirs：保留的只有它自己那一个根，别的仍越界', () => {
+    const relaxed = instanceAuthorizedDirs([realB], realA);
+    assert.equal(resolveDrivingCwd(outside, relaxed), null);
+    assert.equal(resolveDrivingCwd(sibling, relaxed), null);
+    assert.equal(resolveDrivingCwd(join(wtRoot, 'nested', 'deep'), relaxed), null);
+  });
+
+  test('resolveDrivingCwd 非法入参拒绝', () => {
+    assert.equal(resolveDrivingCwd('', dirs), null);
+    assert.equal(resolveDrivingCwd(null, dirs), null);
+    assert.equal(resolveDrivingCwd(realA, []), null);
+    assert.equal(resolveDrivingCwd(realA, null), null);
   });
 });

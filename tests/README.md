@@ -122,4 +122,5 @@
 | `PROTO-01` | `AGENT_EVENT_TYPES` 与 `INBOUND_SOCKET_EVENTS` 是唯一名单；后端 emit / 后端 listen / 前端 handle / 假后端四处与名单双向相等 |
 | `DIST-01` | 分发树（GitHub `master` 归档）`npm ci --omit=dev` 可装可启、生产代码零 devDependency 泄漏；`uninstall` 只删产品自己写下的白名单，**永删不到** `~/.claude/projects` |
 | `TEST-01` | 测试不得以真实 `HOME`、`~/.claude`、生产 `CCM_DATA_DIR` 为删除或写入目标 |
+| `TEST-02` | E2E 分片跑过的 spec 并集必须等于磁盘上的全量清单。<br>*（2026-09-13 e2e 改跨 runner 横向分片时建：每台 runner 各自读时长缓存算分组，任何一台 cache 未命中就会算出另一套分组，于是有 spec 谁都没跑——而 CI 全绿。required check 静默放过整个文件，与 `74fc46e` 漏传 `-c` 同型）* |
 | `RESOURCE-01` | 不测 QPS，测「开合 N 次后 FD / listener / timer / child / watcher 不随 N 线性涨」 |

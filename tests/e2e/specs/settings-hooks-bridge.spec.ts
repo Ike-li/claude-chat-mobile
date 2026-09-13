@@ -88,7 +88,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openGeneralPage(page, 'notify');
     const row = page.locator('#pushStatusRow');
     await expect(row).not.toBeEmpty();
-    await expect(row).toContainText(/未开启|已开启|不可用|已被拒绝|未完成订阅/);
+    await expect(row).toContainText(/未开启|已开启|已关闭|不可用|已被拒绝|未完成订阅/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 「自己关掉的」与「订阅失败了」在 permission/subscribed 两个维度上完全同形，只有 opt-out 这个
+  // 意图分得开。不读它，用户刚主动关掉推送，面板就用警告色报一句「未完成订阅」——把成功说成故障。
+  // headless 里造不出真 push subscription（getSubscription() 恒 null），但 opt-out 这一态不需要：
+  // 它正是「没有订阅 + 用户关过」，恰好是真机上关掉推送后刷新看到的那一屏。
+  test('P0-27b 主动关掉推送后：状态行说「已关闭」而不是警告色的「未完成订阅」', async ({ page }) => {
+    // headless Chromium 的 Notification.permission 恒 'denied'，那会落进 denied 分支（它排在
+    // optedOut 之前，且**必须**排在前面：权限被拒时说「随时可以重新开启」是假话，点开启必然失败）。
+    // 这里要测的是「权限还在、只是自己关掉了」，所以得把权限造成 granted。
+    // 不用 context.grantPermissions(['notifications'])：实测它改不动 Notification.permission
+    // （授权前后都是 denied），只影响 Permissions API 的 query。覆写这个只读属性是唯一的办法。
+    await page.addInitScript(() => {
+      localStorage.setItem('ccm_push_opt_out', '1');
+      Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'granted' });
+    });
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await openGeneralPage(page, 'notify');
+    const row = page.locator('#pushStatusRow');
+    await expect(row).toContainText('已关闭');
+    await expect(row).not.toContainText('未完成订阅');
+    // 关掉之后仍然给得出「再开」这条路，不是死路
+    await expect(row.locator('[data-testid="push-subscribe"]')).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });

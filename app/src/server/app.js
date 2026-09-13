@@ -84,7 +84,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -207,7 +207,7 @@ const notify = createNotifyChannels({
   env: process.env,
   onDeliveryFailure: () => scheduleBgBroadcast(),
 });
-const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
+const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription, removePushSubscription } = notify;
 
 // 通知会话段对齐抽屉浏览标题（SDK summary / ai-title），不是 sessions.json 里截断的首条用户消息。
 // 读盘/SDK 失败回落 firstMessage，不挡这条通知。节流仍在调用方同步完成，避免 peek 期间重复放行。
@@ -557,6 +557,7 @@ registerOperationalRoutes({
     publicKey: notify.vapidPublicKey,
     isValidSubscription: isValidPushSubscription,
     saveSubscription: savePushSubscription,
+    removeSubscription: removePushSubscription,
   },
   isDeviceTrusted,
   // 与 socket 握手侧 io.use 完全同源的 bypass 判据（CF Access 已验 / 真本机直连）。缺了它，
@@ -1722,6 +1723,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
   // CLI 会自动采纳（优先级在 --model 之下、settings.model 之上），与 startModel=undefined 不冲突。
   const startModel = saved?.model || undefined;
+  // 本实例创建时所属的工作区（worktree 会话归父仓）。只用于 onCwdChanged 的热移除保护——
+  // 该目录之后被移出 WORKDIRS 时，已发出去的授权不在会话半途收回（见 instanceAuthorizedDirs）。
+  const authorizedRoot = workspaceCwdOf(cwd);
   const instance = new AgentSession({
     instanceId: id,
     resumeId: saved?.id,
@@ -1741,21 +1745,22 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd), effNorm.ultracode),
     onEvent: envelope => {
       metrics.inc('events'); // 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
+      const drivingCwd = instance.cwd; // 见 onSessionId 里的说明：闭包 cwd 会在 EnterWorktree 后过期
       if (envelope.type === 'init') {
         lastInit = envelope.payload;
         // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
         const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) slashCommandsCache.set(cwd, { slashCommands: cmds });
+        if (cmds) slashCommandsCache.set(drivingCwd, { slashCommands: cmds });
         saveInitCache();
       }
-      else if (envelope.type === 'models') { modelsCache.set(cwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
+      else if (envelope.type === 'models') { modelsCache.set(drivingCwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
       // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
       // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
       // 只可能来自 skill 被删这种极罕见场景，而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，
       // 两害相权取轻。前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
       else if (envelope.type === 'slash_commands') {
         const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) { slashCommandsCache.set(cwd, { slashCommands: cmds }); saveInitCache(); }
+        if (cmds) { slashCommandsCache.set(drivingCwd, { slashCommands: cmds }); saveInitCache(); }
       }
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
@@ -1900,14 +1905,46 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，
     // 否则前端要等下一次无关广播才知道该实例已不忙，spinner 一直挂着。
     onStateSettled: () => broadcastInstances(),
+    // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
+    //
+    // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
+    // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而白名单的真相源在这里。
+    // 合法集与 routeCwd 同源（白名单目录本身 + 其下的托管 worktree），差别只在失败方向：
+    // 那边回退 viewingCwd 是「纠正传错」，这里没有安全回退可言，拒绝即保持原样。
+    //
+    // 采信之后 agent 会 onStateSettled → broadcastInstances，前端的 entry.cwd / panelCwd 随之跟上。
+    //
+    // 热移除保护：工作区被移出 WORKDIRS 后，其上的已开会话按产品判据「继续运行、仅拒新开」，
+    // 所以校验要带上本实例创建时的授权根（instanceAuthorizedDirs）。只认当前 workDirs 的话，
+    // 这类实例的 worktree 切换会被拒、instance.cwd 停在旧值，静默复发历史加载失败。
+    onCwdChanged: (nextCwd, prevCwd) => {
+      const resolved = resolveDrivingCwd(nextCwd, instanceAuthorizedDirs(workDirs, authorizedRoot));
+      if (!resolved) {
+        console.warn(`[scope] 会话中途换 cwd 被拒：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
+        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed' } });
+        return null;
+      }
+      return resolved;
+    },
     onSessionId: (sid, firstMessage, model) => {
+      // 【闭包 cwd 与驾驶轴在这里会分叉】cwd 是开实例那一刻的值；会话中途 EnterWorktree 之后，
+      // CLI 已经换到 worktree 并把 transcript 迁了过去，instance.cwd 随 CwdChanged 跟上，而 cwd 没有。
+      // 凡是「transcript/CLI 解析落在哪个目录」语义的，必须读 instance.cwd；
+      // 只有路由指针（currentByCwd / generation）留在工作区轴——worktree 不占抽屉条目。
+      //
+      // 最险的是下面这行 writeSessionEntrypoint：/clear 拿到新 sid 时 `!getSession(sid)` 会放行，
+      // 用旧 cwd 就会在**父仓**的 project 目录里凭空造出一个只含 entrypoint-marker 的 <新sid>.jsonl。
+      // 那之后 sessionFileExists(父仓) 变成 true——「查不到会话」退化成「查到一个空会话」，
+      // 更隐蔽，且那个幽灵文件会让同一会话在父仓与 worktree 两个列表里各出现一次。
+      const drivingCwd = instance.cwd;
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
-      if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);
+      if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
-      recordCwdDefaultModel(cwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
+      // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
+      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
       // 显式广播：此前靠「init 边界的 broadcastInstances 自然带新 sid/title」搭便车，而 sessionId 现在
       // 可能远早于 init 到达（本地 slash 命令下实测早 122s，见 agent.js#_claimSessionIdEarly）。不显式推
@@ -3430,24 +3467,29 @@ registerSocketConnection(io, socket => {
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
+    // 两道保护共用这一个出口。**拒绝也要留痕**：这两条路既不写日志也不写审计时，用户报
+    // 「点了 🗑 没反应、会话还在」事后无法验尸——2026-09-12 那次只能靠"审计里没有 success 记录"
+    // 反推是被拒了，分不出是哪道。收敛成一个出口而不是逐处 recordAudit：两处拒绝是同一件事的
+    // 两个原因，分开写就会有一处被后来的人漏掉，而漏掉的那处和写对了看起来一模一样。
+    const rejectDelete = (reason, error) => {
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'rejected', meta: { cwd, reason } });
+      return ack({ ok: false, error });
+    };
     // 保护① + SRV-NEW-004：无 live driver，且无 in-flight resume（switch/open 窗口）
     const delGuardL2 = canDeleteSessionGuard({
       liveInstance: !!instanceForSession(sessionId),
       resumeInFlight: resumeInFlight.has(sessionId),
     });
     if (!delGuardL2.ok) {
-      return ack({
-        ok: false,
-        error: delGuardL2.reason === 'opening'
-          ? '会话正在打开中，请稍后再删除'
-          : '会话正在被本产品驱动，请先结束或关闭该会话再删除',
-      });
+      return rejectDelete(delGuardL2.reason, delGuardL2.reason === 'opening'
+        ? '会话正在打开中，请稍后再删除'
+        : '会话正在被本产品驱动，请先结束或关闭该会话再删除');
     }
     // 保护②：transcript mtime 静默阈值——纯终端进程正驱动无法确证，mtime 新鲜即拒绝（启发式非完备）。
     const mtimeMs = await sessionFileMtime(sessionId, cwd);
     if (mtimeMs < 0) return ack({ ok: false, error: '会话不存在' });
     if (Date.now() - mtimeMs < sessionDeleteQuietMs) {
-      return ack({ ok: false, error: '会话可能正被终端使用，请稍后再试' });
+      return rejectDelete('quiet_period', '会话可能正被终端使用，请稍后再试');
     }
     // 原子性：先清当前指针 + 记入 pendingDeleteIds（列表临时排除），再删文件。
     // 崩溃窗口：pending 不落盘 → 孤儿文件重新可见，可重试；绝不会留下「指针指向已删文件」。

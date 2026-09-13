@@ -33,9 +33,17 @@
 # 两个必须一起排除：只排 CLAUDE.md 会在包里留下一个断链的 AGENTS.md 符号链接。
 /CLAUDE.md                  export-ignore
 /AGENTS.md                  export-ignore
-# docs/testing.md 同判据：写测试的规范，通篇引用 tests/ 下的路径与 mutate:docker / test:invariants:*
-# 这类命令——而分发树里 tests/ 已被裁（package.json 原样保留，那些命令列得出、跑不了）。
-# 留着它等于在包里放一份满是死链的文档（dist-manifest.test.mjs 的第三条会红）。
+# docs/testing.md。【判据不是「有没有引用 tests/」】——留在包里的 hard-rules.md（19 行）、
+# getting-started.md、display-contracts.md、architecture.md 同样引用 tests/ 下的路径，那些是给
+# 维护者的指路，而维护者会 git clone，裁掉它们反而是错的。真正的判据是
+# 【整份文档的主体会不会随 tests/ 一起失效】：testing.md 通篇在讲怎么跑测试、怎么验红，
+# tests/ 被裁掉它就整份没有意义（package.json 原样保留，那些命令列得出、跑不了），
+# 留着等于在包里放一份满是死链的文档（dist-manifest.test.mjs 的第三条会红）。
+#
+# 判据同样适用于【章节级】：维护者 playground 那节 2026-09-12 从 getting-started.md 搬进了
+# testing.md——那八条命令全指向 tests/infra/ 下的 compose 文件，而 getting-started.md 是留在包里的。
+# 搬走时不留指针：在留包的文档里写出被裁文件的路径，doc-consistency 的裸提及检测会把它判成死链
+# （它不区分「链接」与「字面提及」），用户跑 doctor 的 D9 直接见红。
 /docs/testing.md            export-ignore
 
 # ── scripts/ 里的维护者工具（其余是用户运维命令，必须留）──

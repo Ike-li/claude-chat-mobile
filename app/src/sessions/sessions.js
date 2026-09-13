@@ -113,7 +113,14 @@ export function setCurrent(cwd, sessionId) {
 // 新会话首次拿到 session_id 时登记；已存在则刷新 model/effort/permissionMode。
 // lastUsedAt：仅新建时写；已有条目【不】在 upsert 时刷新——对齐「最后消息时间」
 // （resume/init 重登记不得把会话顶新）。消息活动走 touchSessionActivity。
-export function upsertSession({ id, title, cwd, model, effort, permissionMode, generation }) {
+// routeCwd：currentByCwd / generation 的归键，缺省 = cwd。
+// 会话中途 EnterWorktree 后两条轴会分叉——条目的 cwd 字段是**驾驶轴**（transcript 真正落在哪，
+// 决定 getSessionHistory 找不找得到），而路由指针是**工作区轴**（同 finishOpenFocus 传的
+// workspaceCwd，产品判据是「worktree 是临时模式、不占抽屉条目」）。传一个值满足不了两者：
+// 跟驾驶轴走会让 worktree 变成一个工作区条目，跟工作区轴走会让条目 cwd 指向一个没有该
+// transcript 的目录（/clear 之后新会话就会记错，历史按父仓查空）。
+export function upsertSession({ id, title, cwd, routeCwd, model, effort, permissionMode, generation }) {
+  const routeKey = routeCwd ?? cwd;
   const existing = state.sessions.find(s => s.id === id);
   if (existing) {
     if (model) existing.model = model;
@@ -141,8 +148,8 @@ export function upsertSession({ id, title, cwd, model, effort, permissionMode, g
   // 台阶2：该 cwd 的当前会话指向新 id——但陈旧代次（调用方创建时捕获的代次 ≠ 该 cwd 当前代次）
   // 不得覆盖：说明触发这次 upsert 的实例是 session:new/home/switch 之前就存在的背景实例，其后台
   // 活动不应该悄悄复活一个已被用户明确放弃的路由指针。generation 缺省（未传）保留旧行为。
-  if (generation === undefined || generation === getGeneration(cwd)) {
-    state.currentByCwd[cwd] = id;
+  if (generation === undefined || generation === getGeneration(routeKey)) {
+    state.currentByCwd[routeKey] = id;
   }
   save();
 }

@@ -5,9 +5,12 @@
 // 覆盖：isBusy 各组合 · 构造函数 · emit/buffer/eventsSince · sdkChildEnv 的 origin 标记不可被调用方覆盖
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession } from '../../app/src/agent/agent.js';
+import { AgentSession, buildAgentQueryOptions } from '../../app/src/agent/agent.js';
 import { sdkChildEnv } from '../../app/src/shared/child-env.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // 两个 origin 标记都必须由本函数强制注入、调用方不可覆盖：statusline wrapper 据前者不捕获快照，
 // hooks runner 据后者直接退出——SDK 会话 settingSources 含 'user' 会加载用户全局 hooks，不抑制则
@@ -311,6 +314,130 @@ test.describe('hasPriorHistory 接线', () => {
       s.askSide = async () => '不该出现';
       assert.equal(await s.maybeSuggest({}), false);
       assert.equal(events.filter(e => e.type === 'prompt_suggestion').length, 0);
+    } finally { dispose(); }
+  });
+});
+
+// 会话中途换 cwd（EnterWorktree / ExitWorktree）。
+//
+// 【为什么实例的 cwd 必须跟着走】2026-09-13 真机形态：会话在父仓开，中途 EnterWorktree 进
+// `.claude/worktrees/<name>`，CLI 把整份 transcript 迁到新 cwd 的 project 目录、父仓那边一个字节不留。
+// 实例 cwd 停在父仓的话，getSessionHistory / scanSubagents / resume / saveAttachments 全部按一个
+// 已经空掉的目录解析——用户侧的症状是切回会话「历史消息加载失败」，而磁盘上那份 transcript 完好。
+//
+// 【为什么采信权在 server 而不在这里】new_cwd 源自 EnterWorktree 的 path 参数，属用户可控面，
+// 必须过白名单判据（SCOPE-01），而白名单的真相源在 server。这里只负责上报 + 按裁决写回。
+test.describe('AgentSession — 会话中途换 cwd', () => {
+  const cwdHook = (opts) => {
+    const { s, dispose } = makeSession(opts);
+    s.abort = new AbortController();
+    const hook = buildAgentQueryOptions(s, { ...process.env })?.hooks?.CwdChanged?.[0]?.hooks?.[0];
+    return { s, dispose, hook };
+  };
+
+  test('装了 CwdChanged hook——没有它，CLI 换了 cwd 服务端永远不会知道', () => {
+    const { dispose, hook } = cwdHook();
+    try {
+      assert.equal(typeof hook, 'function', 'hook 缺席 = 这条修复整条不存在，且症状与没修一模一样');
+    } finally { dispose(); }
+  });
+
+  test('server 采信时写回新 cwd', async () => {
+    const seen = [];
+    const { s, dispose, hook } = cwdHook({
+      cwd: '/tmp/repo',
+      onCwdChanged: (next, prev) => { seen.push([prev, next]); return '/tmp/repo/.claude/worktrees/wt'; },
+    });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/tmp/repo/.claude/worktrees/wt' });
+      assert.equal(s.cwd, '/tmp/repo/.claude/worktrees/wt');
+      assert.deepEqual(seen, [['/tmp/repo', '/tmp/repo/.claude/worktrees/wt']]);
+    } finally { dispose(); }
+  });
+
+  test('server 拒绝时 cwd 保持原样——越界的新 cwd 不得改写驾驶轴', async () => {
+    const { s, dispose, hook } = cwdHook({ cwd: '/tmp/repo', onCwdChanged: () => null });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/etc' });
+      assert.equal(s.cwd, '/tmp/repo', '拒绝必须是"保持原样"，不是回退到别的目录');
+    } finally { dispose(); }
+  });
+
+  // 采信的是 server 归一后的那个值（realpath 解析过），不是 CLI 报来的原串——macOS 上
+  // /var 与 /private/var 是同一个目录的两种写法，存未解析的那个会让 getProjectDir 静默查空。
+  test('写回的是 server 归一后的路径，不是 CLI 报来的原串', async () => {
+    const { s, dispose, hook } = cwdHook({ cwd: '/tmp/repo', onCwdChanged: () => '/private/tmp/repo/.claude/worktrees/wt' });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/tmp/repo/.claude/worktrees/wt' });
+      assert.equal(s.cwd, '/private/tmp/repo/.claude/worktrees/wt');
+    } finally { dispose(); }
+  });
+
+  // 改了 cwd 却不重播 instances，前端的 entry.cwd / panelCwd 会一直停在旧值——
+  // 那正是这条修复要治的症状，只是病灶从 agent 挪到了广播链上，看起来与没修一模一样。
+  test('采信后触发 onStateSettled 重播 instances', async () => {
+    let settled = 0;
+    const { s, dispose, hook } = cwdHook({
+      cwd: '/tmp/repo',
+      onCwdChanged: () => '/tmp/repo/.claude/worktrees/wt',
+      onStateSettled: () => { settled += 1; },
+    });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/tmp/repo/.claude/worktrees/wt' });
+      assert.equal(settled, 1, '不广播 = 前端 entry.cwd 停在旧值，症状与完全没修一样');
+      assert.equal(s.cwd, '/tmp/repo/.claude/worktrees/wt');
+    } finally { dispose(); }
+  });
+
+  test('拒绝时不重播——没有状态变化就不该惊动前端', async () => {
+    let settled = 0;
+    const { dispose, hook } = cwdHook({
+      cwd: '/tmp/repo', onCwdChanged: () => null, onStateSettled: () => { settled += 1; },
+    });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/etc' });
+      assert.equal(settled, 0);
+    } finally { dispose(); }
+  });
+
+  // 【为什么这条是源码断言而不是行为断言】上面每一条在「server 压根没传 onCwdChanged」时都照样全绿——
+  // agent 侧的裁决协议是对的，只是没人接。而没人接时的用户症状与完全没修一模一样（切回会话
+  // 历史消息加载失败）。行为层要复现这条需要真 CLI 真的执行一次 EnterWorktree，属 S5。
+  // 这就是 docs/testing.md §5 说的「架构守卫」形态：没有行为等价物，留在源码层。
+  test('server 真的把裁决接上了——agent 侧协议再对，没人接也等于没修', () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js'), 'utf8',
+    );
+    assert.match(src, /onCwdChanged:\s*\(/, 'app.js 没给驾驶实例传 onCwdChanged，换 cwd 后实例仍停在旧目录');
+    assert.match(src, /resolveDrivingCwd\(/, '裁决必须走 resolveDrivingCwd（SCOPE-01 同源判据），不得自行放行');
+  });
+
+  // 【为什么光改 instance.cwd 不够】openInstance 的回调闭包捕获的是**开实例那一刻**的 cwd。
+  // 会话中途 EnterWorktree 之后，凡是「本实例 cwd」语义的消费点若还读那个闭包值就会分叉，
+  // 其中 writeSessionEntrypoint 最险：/clear 拿到新 sid 时它的 `!getSession(sid)` 守卫会放行，
+  // 于是在**父仓**的 project 目录里凭空造出一个只含 entrypoint-marker 的 <新sid>.jsonl。
+  // 那之后 sessionFileExists(父仓) 变成 true——本修复治的「报错 + 空白」退化成「不报错 + 空白」，
+  // 更隐蔽；那个幽灵文件还会让会话在父仓与 worktree 两个列表里各出现一次。
+  test('换 cwd 后「本实例 cwd」的消费点走驾驶轴，不是开实例时的闭包值', () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js'), 'utf8',
+    );
+    assert.match(src, /writeSessionEntrypoint\(sid,\s*drivingCwd\)/,
+      'entrypoint 写进旧 cwd 的 project 目录 = 在父仓造幽灵 jsonl，把「查不到」变成「查到一个空的」');
+    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*cwd/,
+      '条目 cwd 必须是驾驶轴、路由键必须是工作区轴——两轴合一时必有一条是错的');
+    assert.match(src, /recordCwdDefaultModel\(drivingCwd,/,
+      'defaultModelByCwd 的消费方是 viewingCwdOf()（驾驶轴），归键必须同轴');
+    assert.match(src, /slashCommandsCache\.set\(drivingCwd,/,
+      'slash/models 缓存的消费方 pushSlashCommandsForCwd(a.cwd) 是驾驶轴，归键必须同轴');
+    assert.match(src, /modelsCache\.set\(drivingCwd,/);
+  });
+
+  test('没接 onCwdChanged 时不改 cwd、也不抛——裁决方缺席即视为不采信', async () => {
+    const { s, dispose, hook } = cwdHook({ cwd: '/tmp/repo' });
+    try {
+      await hook({ hook_event_name: 'CwdChanged', old_cwd: '/tmp/repo', new_cwd: '/tmp/elsewhere' });
+      assert.equal(s.cwd, '/tmp/repo');
     } finally { dispose(); }
   });
 });

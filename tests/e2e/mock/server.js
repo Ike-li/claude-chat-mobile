@@ -35,6 +35,19 @@ let pendingFreshPermissionMode;
 let pendingFreshEffortLevel;
 let pendingFreshCwd;
 
+// 真 server 下发的 `viewingCwd` 是【工作区轴】：托管 worktree 的实例归父仓
+// （app/src/server/app.js 的 workspaceCwdOf + broadcastInstances，产品判据是「worktree 是临时模式、
+// 不占抽屉条目」）。而 `instances[].cwd` 是【驾驶轴】，逐条如实下发。
+//
+// mock 此前两处都直接用实例 cwd，于是「工作区轴 ≠ 驾驶轴」这个形态在 E2E 里**根本不可达**：
+// 前端拿 currentCwd（=viewingCwd）去拉 worktree 会话的历史本该失败，mock 却让它恒成功。
+// 2026-09-13 真机撞到的正是这一格——reloadCurrentFromHistory 用 currentCwd，锁屏回来必然
+// 「历史消息加载失败」，而全部 324 条 E2E 全绿。补上这条归组，那一格才照得出来。
+const workspaceCwdOf = (cwd) => {
+  const m = /^(.*)\/\.claude\/worktrees\/[^/]+$/.exec(cwd || '');
+  return m ? m[1] : cwd;
+};
+
 function createDefaultInstances() {
   return [{
     instanceId: 'inst_1',
@@ -206,6 +219,8 @@ const mockServicePayload = () => ({
   statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
+let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
+let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
@@ -396,6 +411,8 @@ function resetMockState() {
     total: 5,
   };
   busySilentSwitchMode = false;
+  orphanReplayArmed = false;
+  orphanMixedArmed = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
   foregroundFoundMissingHistoryMode = false;
@@ -603,6 +620,32 @@ app.post('/__arm-no-session-id', (_req, res) => {
   res.json({ ok: true });
 });
 
+// P0-17i 的镜像三态改由用例【显式推进】，不再靠 mock 侧的定时器串起来（理由见 scenarios/status.js
+// 的 test:mirror）。body: { readonly, stale, withResult }——withResult 时补一条 result 让 waitForIdle 收口。
+// 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的，把 type 收进辅助函数的形参
+// 会让它报 dynamic_type。
+app.post('/__mirror-state', (req, res) => {
+  // 走 query 不走 body：本 mock 没装 express.json()，既有 __ 端点（__access-bypass /
+  // __arm-read-elsewhere）也都读 req.query。用 body 会静默拿到 undefined 再落到默认值上——
+  // 端点照样回 200，事件却发的是上一态，症状是断言等一个永远不来的状态（本次就踩了一遍）。
+  const readonly = req.query?.readonly !== '0';
+  const stale = req.query?.stale === '1';
+  const withResult = req.query?.withResult === '1';
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+    ts: Date.now(), type: 'mirror_state',
+    payload: { readonly, stale, cliSeen: true },
+  });
+  if (withResult) {
+    io.emit('agent:event', {
+      seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+      ts: Date.now(), type: 'result',
+      payload: { messageId: 'msg_mirror_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
+  }
+  res.json({ ok: true });
+});
+
 // P0-NOSID 后半段：CLI 终于吐了 init——实例还是同一个（viewingInstanceId 不变，前端不会重新 bindView），
 // 只是 instances 广播里多了 sessionId。验证前端此时把 composer 同步出来（真机 c1ccd055：内容回来了但
 // 输入条再也不出现，因为 setInstances 里只有 pill 两处是无条件同步的，composer 漏了）。
@@ -614,7 +657,7 @@ app.post('/__resolve-session-id', (_req, res) => {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'instances', payload: { canRestart: mockCanRestart,
       viewingInstanceId,
-      viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
       dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
       instances: mockInstances, service: mockServicePayload()
     }
@@ -696,6 +739,18 @@ function mainCwdSessions() {
       ...(terminalWaitingArmed ? { terminal: 'waiting', terminalSource: 'cli' }
         : desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
           : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {}),
+    },
+    {
+      // 工作区轴 ≠ 驾驶轴：会话在父仓开、中途 EnterWorktree 进 .claude/worktrees/<name>，
+      // transcript 随之迁到新 cwd 的 project 目录。列表项的 cwd 是驾驶轴（真 server 的
+      // listSessions 扫盘给的就是 worktree 路径），而 viewingCwd 仍归父仓。
+      id: 'mock-session-worktree',
+      title: 'Worktree Driving Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: mockListClockBase - 760000,
+      cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x',
+      worktree: 'wt-x',
+      entrypoint: 'sdk-ts'
     },
     {
       id: 'mock-session-gap',
@@ -843,7 +898,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -899,7 +954,7 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
           viewingInstanceId,
-          viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+          viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -927,7 +982,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -953,7 +1008,7 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
           viewingInstanceId,
-          viewingCwd: inst?.cwd || mockInstances[0].cwd,
+          viewingCwd: workspaceCwdOf(inst?.cwd || mockInstances[0].cwd),
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
           instances: mockInstances, service: mockServicePayload()
         }
@@ -966,6 +1021,16 @@ io.on('connection', socket => {
     const { sessionId } = payload || {};
     console.log(`[mock] deletePermanent: ${sessionId}`);
     if (typeof sessionId !== 'string' || !sessionId) {
+      if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
+      return;
+    }
+    // 「服务端拒绝」这一路的 UI 回执（P0-11-delete-reject）。真 server 有三种拒法——会话不存在、
+    // 正被本产品驱动、transcript mtime 落在静默期内——对前端是同一条路：ok:false + error 文案。
+    // 钉死在一个固定 id 上而【不】做成 test: 命令开关：mock server 是所有并行 spec 共用的一个
+    // 进程，一次性开关会被另一个分片的删除消费掉（P0-25c 那次的形态）。选这个 id 是因为它的夹具
+    // 语义本来就是"主机上那份已经没了、列表还没 revalidate"——不必为此新增一行夹具会话，
+    // 那会牵动未读计数与目录角标那批断言。
+    if (sessionId === 'mock-session-deleted') {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
     }
@@ -999,7 +1064,7 @@ io.on('connection', socket => {
           pendingFreshCwd = closedCwd;
         }
       }
-      const viewingCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || closedCwd;
+      const viewingCwd = workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || closedCwd);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
@@ -1046,6 +1111,18 @@ io.on('connection', socket => {
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()
+      }
+    });
+    // 真 server 这条 handler 末尾有 `lastStatusLine = null; scheduleStatusRefresh()`（src/server/app.js
+    // session:new），300ms 后按新 cwd 发一条 status_line——compose 页的状态栏与顶栏改动角标全靠它。
+    // mock 此前只发 instances，于是「新会话页该不该显示 git」这件事在 E2E 层根本无从断言（永远没数据）。
+    // 无实例，故不带 model/ctx：对齐 buildWebStatusLine 在 agent 为空时只产出 cwd/project/git 的形状。
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'status_line', payload: {
+        project: viewingCwd.split('/').filter(Boolean).pop() || viewingCwd,
+        cwd: viewingCwd,
+        git: { branch: 'main', staged: 0, modified: 3, untracked: 1, changed: 4, ahead: 0, behind: 0 },
       }
     });
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
@@ -1254,6 +1331,30 @@ io.on('connection', socket => {
               entrypoint: 'sdk-ts'
             },
             {
+              // BUSY-ORPHAN：切回已结束会话但回放缺 result 的场景专用（同上条的登记理由）。
+              // ⚠ lastUsedAt 必须比本文件里所有其它条目都旧。首页最近列表是【跨工作区归并后取前 8】
+              // （panel-state.js 的 mergeRecentSessionsAcrossWorkspaces，limit=8），往这份清单里插一条
+              // 「新」会话会把原本排第 8 的那条挤出列表——P0-11am 断言的 mock-session-another-done 正好
+              // 是 -1500、卡在第 8 位，插一条 -80 就让它掉到第 9，那条用例随即红。
+              // 2026-09-12 撞过，且【单跑 P0-11am 是绿的、只有全量才红】：单跑时那条用例自己不读这份
+              // 清单，得先有别的 spec 把首页最近列表画出来才暴露。往这里加条目前先数一遍前 8。
+              // 本场景只从侧栏进入（openWorkspaceSession），不依赖出现在首页最近列表里。
+              id: 'mock-session-orphan',
+              title: 'Orphan Replay Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: mockListClockBase - 3000000,
+              entrypoint: 'sdk-ts'
+            },
+            {
+              // BUSY-ORPHAN-MIXED：回放【旧轮完整 FIFO + 当前轮 delta】的场景专用。
+              // lastUsedAt 同样必须最旧，理由见上一条。
+              id: 'mock-session-orphan-mixed',
+              title: 'Orphan Mixed Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: mockListClockBase - 3100000,
+              entrypoint: 'sdk-ts'
+            },
+            {
               // P0-REPLAY-UNREAD-DISMISS：回放缓冲程序性落底 × 未读胶囊自动确认已读协同场景专用。
               id: 'mock-session-replay-unread',
               title: 'Replay Unread Session',
@@ -1291,6 +1392,11 @@ io.on('connection', socket => {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
       },
+      'mock-session-worktree': {
+        instanceId: 'inst_worktree',
+        title: 'Worktree Driving Session',
+        cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x'
+      },
       'mock-session-timeline': {
         instanceId: 'inst_timeline',
         title: 'Timeline Session'
@@ -1319,7 +1425,10 @@ io.on('connection', socket => {
       return;
     }
     const meta = knownArchived[sessionId];
-    if (!meta || cwd !== '/Users/you/code/claude-chat-mobile') {
+    // 归组后再比：托管 worktree 会话的列表项 cwd 是 `<父仓>/.claude/worktrees/<name>`，
+    // 真 server 的 routeCwd 放行这一形态（resolveManagedWorktree）。只比字面量会把它判成
+    // 「session not found」，那条路径在 E2E 里就永远走不到。
+    if (!meta || workspaceCwdOf(cwd) !== '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
       return;
     }
@@ -1328,7 +1437,7 @@ io.on('connection', socket => {
     if (!archivedInst) {
       archivedInst = {
         instanceId: meta.instanceId,
-        cwd: '/Users/you/code/claude-chat-mobile',
+        cwd: meta.cwd || '/Users/you/code/claude-chat-mobile',
         sessionId,
         title: meta.title,
         state: 'idle',
@@ -1346,7 +1455,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: archivedInst.cwd,
+        viewingCwd: workspaceCwdOf(archivedInst.cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -1648,6 +1757,20 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Authoritative history after foreground reload.' }
         ]
       });
+    } else if (sessionId === 'mock-session-worktree') {
+      // 逐字复刻真 server 的归属校验：transcript 只存在于【驾驶轴】那个 project 目录，
+      // 拿工作区轴（父仓）来查必然 sessionFileExists=false → { messages: [], error: '会话不存在' }。
+      // 前端若用 currentCwd（=viewingCwd=父仓）拉历史就会踩到这一支，正是 2026-09-13 真机那格。
+      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') {
+        callback({ messages: [], error: '会话不存在' });
+        return;
+      }
+      callback({
+        messages: [
+          { role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' },
+          { role: 'assistant', content: 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
+        ]
+      });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
       callback({
         messages: [
@@ -1717,6 +1840,20 @@ io.on('connection', socket => {
           ]
         });
       }
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-orphan-mixed') {
+      const messages = [];
+      for (let i = 0; i < 4; i++) {
+        messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Mixed baseline message #${i}` });
+      }
+      callback({ messages });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-orphan') {
+      // BUSY-ORPHAN：恒定返回基线（同 mock-session-replay-small 套路）。第一次冷切入靠它建 DOM 缓存，
+      // 这样第二次切回才会走 'keep' → flush，让缺 result 的那批回放事件真的逐条派发出来。
+      const messages = [];
+      for (let i = 0; i < 4; i++) {
+        messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Orphan baseline message #${i}` });
+      }
+      callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-small') {
       // P0-REPLAY-BUFFER（少量积压→flush）：flush 路径不清屏、不重拉 session:history，这里恒定返回
       // 基线内容——若因回归错误地被第二次调用，仍只会重渲染这份基线（不含"Small live reply #N"），
@@ -2030,7 +2167,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload(),
       },
@@ -2178,6 +2315,58 @@ io.on('connection', socket => {
       ack(2);
       return;
     }
+    // P1 回归（2026-09-12 PR #38 review）：回放批次里【既有已结束的旧轮、又有当前正在跑的新轮】。
+    // 这是生产 sync:since 的真实形状——eventsSince 返回按 seq 的完整 FIFO，旧轮的 result 一定在里面。
+    // 若只挡住 delta 不点亮、却让旧轮那条 result 照常 setBusy(false)，就会把 bindView 刚按权威
+    // state='busy' 播下的 busy 清掉，而属于新轮的 delta 已不会再点亮它 → 运行条与停止钮双双消失。
+    if (instanceId === 'inst_orphan_mixed') {
+      if (!orphanMixedArmed) {
+        orphanMixedArmed = true;
+        ack(0);
+        return;
+      }
+      const epoch = 'mock-epoch-orphan-mixed';
+      const sid = 'mock-session-orphan-mixed';
+      const base = { epoch, sessionId: sid, instanceId: 'inst_orphan_mixed', replay: true };
+      // 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的，把 type 收进辅助函数的
+      // 形参会让它报 dynamic_type（本文件其余场景同样是逐条字面量，别为省行数改回去）。
+      // ① 已经结束的旧轮：user_message → text_delta → result（完整 FIFO，result 必在里面）
+      socket.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'user_message', payload: { text: 'Mixed: the turn that already finished' } });
+      // 旧轮的 thinking：它绝不能渗进【当前那一轮】的 spinner 元数据（PR #38 review 第三轮 P2）
+      socket.emit('agent:event', { ...base, seq: 2, ts: Date.now(), type: 'thinking_delta', payload: { messageId: 'msg_mixed_old', text: 'old-turn thinking…' } });
+      socket.emit('agent:event', { ...base, seq: 3, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_old', text: 'Mixed old-turn reply. ' } });
+      socket.emit('agent:event', { ...base, seq: 4, ts: Date.now(), type: 'result', payload: { messageId: 'msg_mixed_old', durationMs: 100, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] } });
+      // ② 当前仍在跑的新轮：只有 user_message + delta，没有 result（它还没结束）
+      socket.emit('agent:event', { ...base, seq: 5, ts: Date.now(), type: 'user_message', payload: { text: 'Mixed: the turn that is still running' } });
+      socket.emit('agent:event', { ...base, seq: 6, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_mixed_new', text: 'Mixed new-turn chunk. ' } });
+      ack(6);
+      return;
+    }
+    // 现场复现（2026-09-12）：切回一个【已经跑完】的会话，但回放流里只有 text_delta、缺配对 result。
+    // 三个 delta 各自 setBusy(true)，而清 busy 的两条通道同时不可达：轮次终止事件不在这批里，
+    // instances.state 是 idle → 入场不 seed、看门狗 shouldForceClearBusyFromBroadcast 也只挂在广播上。
+    // replayed=4 远低于 REPLAY_BUFFER_RELOAD_THRESHOLD(100) → 走 flush，事件真的逐条派发。
+    if (instanceId === 'inst_orphan') {
+      if (!orphanReplayArmed) {
+        orphanReplayArmed = true;
+        ack(0);
+        return;
+      }
+      const epoch = 'mock-epoch-orphan';
+      const sid = 'mock-session-orphan';
+      socket.emit('agent:event', {
+        seq: 1, epoch, sessionId: sid, instanceId: 'inst_orphan', ts: Date.now(),
+        type: 'user_message', payload: { text: 'Orphan replay: the turn that finished while I was away' }, replay: true
+      });
+      for (let i = 0; i < 3; i++) {
+        socket.emit('agent:event', {
+          seq: i + 2, epoch, sessionId: sid, instanceId: 'inst_orphan', ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_orphan_1', text: `Orphan live chunk #${i}. ` }, replay: true
+        });
+      }
+      ack(4); // 故意不发 result：这正是被测的形态
+      return;
+    }
     if (instanceId === 'inst_2') {
       if (busySilentSwitchMode) {
         // 静默窗口：只回放 user_message（replayed=1 → !hasCache 触发 reload 分支），
@@ -2323,6 +2512,11 @@ io.on('connection', socket => {
         }
         ack(21, { unreadOnEntry: 3 });
       }
+    } else if (instanceId === 'inst_worktree') {
+      // 重连后的 sync:since 回 gap，逼前端走 reloadCurrentFromHistory（**不是** bindView 的 reload
+      // 分支——那条用 entry.cwd，早就是对的）。这条路径的注释原话：「锁屏/切后台冻结页面断开 socket，
+      // viewingInstanceId 全程不变，故不会走 bindView，只会走到这里」，正是真机复现的那一格。
+      ack(0, { gap: true });
     } else if (instanceId === 'inst_gap') {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
@@ -2805,7 +2999,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload(),
           },
@@ -2824,7 +3018,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload(),
           },
@@ -2861,7 +3055,7 @@ io.on('connection', socket => {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
             type: 'instances', payload: { canRestart: mockCanRestart,
               viewingInstanceId,
-              viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+              viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
               dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
               instances: mockInstances, service: mockServicePayload(),
             },
@@ -2979,7 +3173,7 @@ io.on('connection', socket => {
         switchBackReplayArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3005,7 +3199,7 @@ io.on('connection', socket => {
         replayFloodHistoryArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3030,7 +3224,7 @@ io.on('connection', socket => {
         replaySmallSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3056,7 +3250,7 @@ io.on('connection', socket => {
         replayUnreadSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3726,7 +3920,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3768,7 +3962,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3809,7 +4003,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3850,7 +4044,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3864,6 +4058,83 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_tab_model_effort_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // P1 回归（2026-09-12 PR #38 review）：注册 inst_orphan_mixed，state='busy' 且 turnRunning=true
+      // ——轮次【确实还在跑】。它的回放含旧轮完整 FIFO + 新轮 delta，见 sync:since 分支。
+      command: 'test:busy-orphan-mixed',
+      run: async () => {
+        console.log('[mock] test:busy-orphan-mixed — 回放含旧轮 result + 新轮 delta，验证运行条不被旧 result 清掉');
+        orphanMixedArmed = false;
+        if (!mockInstances.some(i => i.instanceId === 'inst_orphan_mixed')) {
+          mockInstances.push({
+            instanceId: 'inst_orphan_mixed',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-orphan-mixed',
+            title: 'Orphan Mixed Session',
+            // 前台轮与真后台任务【并存】：bgActive 与 turnRunning 同时为真。这个组合是刻意选的——
+            // 只有「turnRunning===true 一定保住」那段判据能救它，退回 shouldBindBusyFromBroadcast
+            // 会因 bgActive===true 恒返回 false 而把前台轮误判成不存在（第四轮 P2）。
+            state: 'busy',
+            bgActive: true,
+            turnRunning: true,
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload()
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mixed_setup', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 现场复现（2026-09-12）：注册 inst_orphan，state='idle'（轮次早已结束）。
+      // 它的 sync:since 回放 user_message + 3 条 text_delta 但【不发 result】——模拟轮次终止事件遗失。
+      command: 'test:busy-orphan-replay',
+      run: async () => {
+        console.log('[mock] test:busy-orphan-replay — inst_orphan 回放缺 result，验证运行条会不会永久卡住');
+        orphanReplayArmed = false;
+        if (!mockInstances.some(i => i.instanceId === 'inst_orphan')) {
+          mockInstances.push({
+            instanceId: 'inst_orphan',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-orphan',
+            title: 'Orphan Replay Session',
+            state: 'idle',
+            bgActive: false,
+            turnRunning: false,
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload()
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_orphan_setup', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },
@@ -3892,7 +4163,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4461,7 +4732,7 @@ io.on('connection', socket => {
       openFreshMockInstance(requestedModel);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
 
@@ -4478,7 +4749,7 @@ io.on('connection', socket => {
       console.log('[mock] P0-DUP-OPT — 同会话换实例并广播 instances，触发前端 bindView');
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
       await delay(DUP_OPTIMISTIC_DELAY_MS);
     }

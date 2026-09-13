@@ -187,11 +187,15 @@ test.describe('resolveUnreadAnchorIndex', () => {
 // 真机实测中 push-subscription.json 压根不存在（从未订阅），而 UI 里没有任何地方显示这件事，
 // 铃铛按钮在"权限被拒"时还会永久隐藏。状态必须能被看见，且看得出下一步该做什么。
 test.describe('formatPushStatusRow：推送订阅状态可见化', () => {
-  test('已订阅 → ok 态、无动作按钮', () => {
+  // 只能进不能出：此前 subscribed 恒 action:null，订上之后 UI 上再没有任何退订入口，
+  // 想关只能去浏览器站点设置里把权限改成「阻止」——而那会让本行翻成「已被拒绝」，
+  // 把一次主动关闭说成了拒绝。开关得是双向的。
+  test('已订阅 → ok 态，并给「关闭」这条出路', () => {
     const r = formatPushStatusRow({ hint: 'ready', permission: 'granted', subscribed: true });
     assert.equal(r.tone, 'ok');
     assert.match(r.value, /已开启/);
-    assert.equal(r.action, null);
+    assert.equal(r.action, 'unsubscribe');
+    assert.match(r.actionText, /关闭/);
   });
 
   test('未授权（default）→ 给「开启」按钮', () => {
@@ -212,6 +216,16 @@ test.describe('formatPushStatusRow：推送订阅状态可见化', () => {
     assert.equal(r.tone, 'warn');
     assert.equal(r.action, 'subscribe');
     assert.match(r.value, /未完成|未订阅/);
+  });
+
+  // 「关掉了」和「没订上」在 permission/subscribed 两个维度上完全同形（granted + 未订阅），
+  // 只有用户意图能分开它们。不分就会把一次成功的主动关闭，报成刺眼的警告色「未完成订阅」——
+  // 与此前那条「已被拒绝」是同一种说反话。
+  test('用户主动关掉的 → 中性地说「已关闭」，不冒充失败态', () => {
+    const r = formatPushStatusRow({ hint: 'ready', permission: 'granted', subscribed: false, optedOut: true });
+    assert.notEqual(r.tone, 'warn', '主动关闭不是警告');
+    assert.match(r.value, /已关闭/);
+    assert.equal(r.action, 'subscribe', '仍然给得出「再开」这条路');
   });
 
   test('环境不满足：iOS 未加主屏 / 非 HTTPS / 不支持 → 说明具体门槛，不给无效按钮', () => {

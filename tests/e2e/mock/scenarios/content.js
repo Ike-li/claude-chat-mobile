@@ -330,6 +330,25 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 可恢复错误：轮次【没有】结束。AgentSession.map() 对 assistant API 错误发 recoverable:true 并
+      // 故意保持 pendingTurns 非零直到随后的 result（模型/权限切档失败同理）。所以这里实例保持
+      // state:'busy' + turnRunning:true，只推一条 error——前端不得据此解锁发送闸。
+      command: 'test:recoverable-error',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        activeInst.state = 'busy';
+        activeInst.turnRunning = true;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'error', payload: { message: 'API Error 529 · overloaded_error（可恢复，轮次继续）', recoverable: true }
+        });
+      },
+    },
+    {
       // turn-end 文件变更汇总：Write + Edit → result 后出现「已编辑 2 个文件」卡（Read 不计入）
       command: 'test:file-changes',
       run: async ({ activeInst }) => {
