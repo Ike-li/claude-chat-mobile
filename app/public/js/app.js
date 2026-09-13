@@ -1011,7 +1011,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
   // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
-  function clearBusyFromTurnEndEvent(ev) {
+  //
+  // unlockSendGate=false 专供 error 路径：**不是所有 error 都是轮次终点**。AgentSession.map() 对
+  // assistant API 错误发 recoverable:true 并【故意保持 pendingTurns 非零】直到随后的 result，
+  // 模型/权限切档失败同样如此（agent.js 的 recoverable:true 几处）。跟着解锁发送闸的话，若后续
+  // instances 校正延迟或丢失，用户一打字就看到「发送」，发出去的消息会被仍在跑的服务端轮次拒掉。
+  // dev 上 error handler 本就只清 busy、从不动 _turnRunning——本 PR 把三处收敛到这个函数时
+  // 顺手给它加上了，属于我引入的行为变更，这里改回去（PR #38 review 第六轮 P2）。
+  // 终止性 error（recoverable:false）之后 _turnRunning 交由 instances 广播的权威字段收，与 dev 同。
+  function clearBusyFromTurnEndEvent(ev, { unlockSendGate = true } = {}) {
     // ★ 乐观 marker 与运行态分开处置，回放时【只清 marker、不写运行态】。
     // marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」，而回放里这条终止事件
     // 【就是】那条消息的终止事件——必须照清。不清就会悬留：它只在终止事件与负 ack 两处清除，
@@ -1047,7 +1055,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     setBusy(false);
     // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
     // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
-    _turnRunning = false;
+    if (unlockSendGate) _turnRunning = false;
   }
   function startLiveTicker() {
     if (liveTicker) return;
@@ -1058,8 +1066,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 里一次广播都没有）。这里每秒用同一份判据主动看一眼权威 state，把"等广播"换成"自己查"。
       // 查不到实例时【不清】：新会话首发的乐观 busy 期实例尚未出现在广播里，那不是"已经结束"。
       const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      // 折算出「对运行条而言」的有效状态，口径与 clearBusyFromTurnEndEvent 的回放对账同源：
+      // 纯后台任务期（bgActive 且无在途轮）等同于空闲——那一段归 task_progress 横幅，不由运行条表达。
+      // 【为什么必须折算】直接把粗粒度 state 喂进去，shouldForceClearBusyFromBroadcast 会把任何
+      // 'busy' 都当成活跃：前台轮结束却留着后台任务时，快照恒为 state:'busy' + turnRunning:false，
+      // 而后台任务的心跳是 transient、不带 instances 校正——于是 gap/reload 丢弃终止事件后
+      // bindView 按粗 state 播下的那条假 spinner 与停止钮，会一直挂到后台任务结束，本自检永远清不掉
+      // （PR #38 review 第六轮 P2）。turnRunning 为真时不折算，前台轮仍按 busy 保住。
+      const effectiveState = (live && live.turnRunning !== true && live.bgActive === true) ? 'idle' : live?.state;
       if (live && shouldForceClearBusyFromBroadcast({
-        state: live.state,
+        state: effectiveState,
         localBusy: _busyState,
         turnStartTs: liveLine.turnStartTs,
         now: Date.now(),
@@ -2963,7 +2979,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
-      clearBusyFromTurnEndEvent(ev);
+      clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
