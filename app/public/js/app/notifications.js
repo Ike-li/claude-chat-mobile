@@ -1,5 +1,5 @@
 import { urlBase64ToUint8Array } from '../logic/format.js';
-import { pushEnvHint, describeSubscribeError, readPushPreviewPref } from '../logic/service-diag.js';
+import { pushEnvHint, describeSubscribeError, readPushPreviewPref, readPushOptOut, PUSH_OPT_OUT_KEY } from '../logic/service-diag.js';
 import { t } from '../i18n.js';
 
 export function createNotificationController(context, {
@@ -23,6 +23,10 @@ export function createNotificationController(context, {
   // ⑧ 推送内容预览偏好：与 app/alerts.js 同款 storage 注入模式（可测、抗 PWA 被杀落盘+重开恢复）。
   const storage = deps.storage || globalThis.localStorage;
   const storageGetItem = key => storage?.getItem?.(key) ?? null;
+  // 「关过推送」的意图要跨刷新存活（判据见 logic/service-diag.js 的 PUSH_OPT_OUT_KEY）
+  const setOptedOut = on => {
+    try { on ? storage?.setItem?.(PUSH_OPT_OUT_KEY, '1') : storage?.removeItem?.(PUSH_OPT_OUT_KEY); } catch {}
+  };
   let vapidKey = null;
   // subscribe() 的失败原因。手机上看不到 console，只说"请稍后重试"等于什么都没说——
   // FCM 连不上、VAPID 无效、POST 被鉴权拦，对用户是完全不同的三件事，得说出是哪一件。
@@ -102,11 +106,47 @@ export function createNotificationController(context, {
         logger?.warn?.('[push] 订阅未保存(HTTP', `${response.status})`);
         return false;
       }
+      setOptedOut(false); // 订上了就不再是「关过」——下次启动照常自动续订
       context.dom.btnPush?.classList.add('hidden');
       return true;
     } catch (error) {
       lastSubscribeError = error?.message || String(error);
       logger?.warn?.('[push] 订阅失败:', lastSubscribeError);
+      return false;
+    }
+  }
+
+  // 主动关掉这台设备的推送。
+  // 【顺序】先本地 unsubscribe() 再告诉服务端，反过来不行：
+  //   · 先本地：POST 失败 → 服务端残一条，下次推送必 410、notify-channels 自己清掉（可自愈）。
+  //   · 先服务端：本地 unsubscribe() 失败 → 名单里没了、浏览器还订着，状态行读 getSubscription()
+  //     照样显示「已开启」，人却再也收不到推送，两侧都不会来纠正（不可自愈）。
+  // 退订是幂等的：本来就没订阅时直接算成功，不往服务端发一条空的。
+  async function unsubscribe() {
+    try {
+      const registration = await navigatorRef.serviceWorker?.register('/sw.js');
+      const subscription = await registration?.pushManager?.getSubscription();
+      // 意图先落盘：哪怕下面哪一步炸了，也不该在下次启动时被 setup() 悄悄订回来。
+      setOptedOut(true);
+      if (!subscription) return true;
+      const { endpoint } = subscription;
+      await subscription.unsubscribe();
+      const token = getToken();
+      const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+      const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
+      const response = await fetchFn(`/push/unsubscribe${authQuery}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
+        },
+        body: JSON.stringify({ endpoint, ...(deviceToken ? { deviceToken } : {}) }),
+      });
+      // 服务端没删掉不影响本地已经关成：那条残留会在下一次推送时 410 自清。只留日志，不谎报失败。
+      if (!response.ok) logger?.warn?.('[push] 退订未同步到服务端(HTTP', `${response.status})，残留订阅将在下次推送时自动清除`);
+      return true;
+    } catch (error) {
+      logger?.warn?.('[push] 退订失败:', error?.message || String(error));
       return false;
     }
   }
@@ -125,6 +165,12 @@ export function createNotificationController(context, {
     }
     const hint = pushEnvHint(environment());
     if (hint !== 'ready') {
+      context.dom.btnPush?.classList.remove('hidden');
+      return;
+    }
+    // 关过就别自动订回来：退订后 permission 仍是 granted，下面这条分支不看意图的话会把用户
+    // 刚关掉的推送在下次启动时悄悄重开。铃铛留着——人随时可以再点开。
+    if (readPushOptOut(storageGetItem)) {
       context.dom.btnPush?.classList.remove('hidden');
       return;
     }
@@ -188,5 +234,5 @@ export function createNotificationController(context, {
   }
 
   if (autoBind && context.dom.btnPush) context.dom.btnPush.onclick = bellAction || requestSubscription;
-  return { environment, notify, requestSubscription, setup, subscribe };
+  return { environment, notify, requestSubscription, setup, subscribe, unsubscribe };
 }

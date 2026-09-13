@@ -138,6 +138,106 @@ test('notification controller subscribe() defaults prefs.preview to false when s
   assert.deepEqual(sentBody.prefs, { preview: false });
 });
 
+// 退订此前根本不存在：订上之后前端没有任何地方能关掉推送，用户唯一的办法是去浏览器站点设置里
+// 把权限改成「阻止」，而那会让状态行翻成「已被拒绝」——把主动关闭说成了拒绝。
+//
+// 【顺序有判据，不是随手写的】必须先本地 unsubscribe() 再 POST 服务端：
+//   · 先本地后服务端：POST 失败 → 本地已退订、服务端残留一条 —— 下次推送必然 410，服务端自己清掉（可自愈）。
+//   · 先服务端后本地：本地 unsubscribe() 失败 → 服务端名单里没了、浏览器还订着 —— UI 读 getSubscription()
+//     显示「已开启」，人却再也收不到任何推送，且没有任何一侧会去纠正它（不可自愈）。
+test('notification controller unsubscribe() 先退本地再通知服务端，POST 带上 endpoint', async () => {
+  const order = [];
+  const fakeSubscription = {
+    endpoint: 'https://push.example/abc',
+    toJSON() { return { endpoint: this.endpoint, keys: {} }; },
+    unsubscribe: async () => { order.push('local'); return true; },
+  };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const fetchCalls = [];
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => {
+        order.push('server');
+        fetchCalls.push({ url, init });
+        return { ok: true, json: async () => ({ ok: true }) };
+      },
+      storage: { getItem: () => null, setItem() {} },
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  assert.equal(await notifications.unsubscribe(), true);
+  assert.deepEqual(order, ['local', 'server'], '顺序反了会造成不可自愈的「显示已开启但收不到」');
+  assert.equal(fetchCalls.length, 1);
+  assert.match(fetchCalls[0].url, /\/push\/unsubscribe/);
+  assert.equal(JSON.parse(fetchCalls[0].init.body).endpoint, 'https://push.example/abc');
+});
+
+test('notification controller unsubscribe() 在本来就没订阅时是幂等的，不发空 POST', async () => {
+  const fetchCalls = [];
+  const registration = { pushManager: { getSubscription: async () => null } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => { fetchCalls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
+      storage: { getItem: () => null, setItem() {} },
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  assert.equal(await notifications.unsubscribe(), true);
+  assert.equal(fetchCalls.length, 0, '没有 endpoint 可退时，服务端不该收到一条空退订');
+});
+
+// 只有「关」的按钮还不够：setup() 在 permission === 'granted' 时**无条件**调 subscribe()，
+// 而通知权限在用户关掉推送后仍然是 granted —— 于是关掉之后随便刷一下页面就自动订回来了，
+// 那个按钮等于没有。关闭必须是一个被记住的意图，而不是一次会被下次启动抹掉的瞬时动作。
+// 【对照组是仪器校验】同一份夹具只改 opt-out 标志：不带标志那次必须真的发生自动订阅，
+// 否则「没发生订阅」可能只是夹具根本走不到那条路径，测试恒绿。
+test('notification controller setup() 不把用户主动关掉的推送自动订回来', async () => {
+  const makeCtl = optedOut => {
+    const posts = [];
+    class NotificationMock {
+      static permission = 'granted';
+    }
+    const store = new Map(optedOut ? [['ccm_push_opt_out', '1']] : []);
+    const fakeSubscription = { endpoint: 'https://push.example/abc', toJSON() { return { endpoint: this.endpoint, keys: {} }; } };
+    const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+    const context = createAppContext({
+      dom: { btnPush: { classList: { add() {}, remove() {} } } },
+      dependencies: {
+        navigator: {
+          serviceWorker: { register: async () => registration, ready: Promise.resolve() },
+          userAgent: 'Mozilla/5.0 (Linux; Android 14)',
+        },
+        window: { isSecureContext: true, PushManager: function () {}, matchMedia: () => ({ matches: false }) },
+        Notification: NotificationMock,
+        fetch: async (url, init) => {
+          if (String(url).includes('/push/subscribe')) { posts.push(init); return { ok: true, json: async () => ({ ok: true }) }; }
+          return { ok: true, json: async () => ({ key: 'test-vapid-key' }) };
+        },
+        storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
+      },
+    });
+    return { ctl: createNotificationController(context, { autoBind: false, getToken: () => '' }), posts };
+  };
+
+  const fresh = makeCtl(false);
+  await fresh.ctl.setup();
+  await new Promise(r => setTimeout(r, 0)); // setup() 里是 void subscribe()，不等它
+  assert.equal(fresh.posts.length, 1, '对照组：没关过推送时 setup() 本来就会自动订阅——这条保证下面那句不是恒绿');
+
+  const optedOut = makeCtl(true);
+  await optedOut.ctl.setup();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(optedOut.posts.length, 0, '用户主动关过推送 → 刷新页面不得偷偷订回来');
+});
+
 // 推送铃铛与配置面板「推送内容」段职责重叠，且铃铛这套显隐分支自相矛盾：setup() 在 permission
 // 为 denied 时**显示**铃铛（"denied 直接隐藏＝死路一条，用户永远查不出自己为什么收不到推送"），
 // 而 requestSubscription() 在用户点完被拒时又把它**隐藏**——点一下就消失、刷新才回来。

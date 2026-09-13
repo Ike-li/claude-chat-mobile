@@ -385,6 +385,69 @@ test.describe('/push/subscribe 的第二因子：bypass 级信任必须与信任
   });
 });
 
+// 退订是「从收件人名单里移除自己」。此前压根没有这条路由：订上之后服务端那条 endpoint 只能等
+// 下一次推送收 410 才被动清掉，而浏览器侧一旦 unsubscribe()，那次推送根本不会再发生 —— 残留可以
+// 永久留在 push-subscription.json 里。
+// 第二因子与 /push/subscribe 【同门】：同一份名单的增与删走同一道判据。只删 body 里点名的那条
+// endpoint，绝不清空全表 —— 手机退订不该顺手把 iPad 的订阅也掐了。
+test.describe('/push/unsubscribe：退订必须真的能退', () => {
+  function mount({ isDeviceTrusted = () => true, bypassDeviceApproval = () => false, enabled = true } = {}) {
+    const routes = new Map();
+    const app = {
+      get: (p, ...h) => routes.set(`GET ${p}`, h),
+      post: (p, ...h) => routes.set(`POST ${p}`, h),
+    };
+    const removed = [];
+    registerOperationalRoutes({
+      app,
+      httpAuth: (_req, _res, next) => next(),
+      getHealth: () => ({}),
+      getMetrics: () => ({}),
+      push: {
+        enabled,
+        publicKey: 'k',
+        isValidSubscription: () => true,
+        saveSubscription: () => {},
+        removeSubscription: endpoint => { removed.push(endpoint); return true; },
+      },
+      isDeviceTrusted,
+      bypassDeviceApproval,
+    });
+    const handlers = routes.get('POST /push/unsubscribe');
+    const run = (body = { endpoint: 'https://push.example/a' }) => {
+      const req = { body, get: () => '', headers: {} };
+      const out = { status: 200, payload: null };
+      const res = {
+        status(c) { out.status = c; return this; },
+        json(p) { out.payload = p; return this; },
+      };
+      handlers[handlers.length - 1](req, res);
+      return out;
+    };
+    return { run, removed, mounted: !!handlers };
+  }
+
+  test('受信设备带 endpoint → 200，且服务端真的把那条删了', () => {
+    const { run, removed, mounted } = mount();
+    assert.ok(mounted, '路由必须挂上，否则前端退订永远 404');
+    const out = run();
+    assert.equal(out.status, 200, `实际 ${out.status} ${JSON.stringify(out.payload)}`);
+    assert.deepEqual(removed, ['https://push.example/a']);
+  });
+
+  test('既不在信任表、也不是 bypass → 403（增删同门，不因为是「降权操作」就松一道）', () => {
+    const { run, removed } = mount({ isDeviceTrusted: () => false, bypassDeviceApproval: () => false });
+    assert.equal(run().status, 403);
+    assert.deepEqual(removed, []);
+  });
+
+  test('没给 endpoint → 400，不得当成「清空全部」', () => {
+    const { run, removed } = mount();
+    assert.equal(run({}).status, 400);
+    assert.deepEqual(removed, []);
+  });
+});
+
 // /js/** 子模块路由：源码在启动时读完并做完 ?v= 改写，请求期只查表。
 // 每请求 readFileSync 是同步阻塞事件循环的磁盘访问，而这条路由在鉴权之前（静态资源必须登录前可取），
 // 与同文件里 indexHtml/appJs 的启动预读也不一致。「改了 js 要重启」不是新约束——assetVersion 本就是

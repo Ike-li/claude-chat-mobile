@@ -56,6 +56,17 @@ export function createNotifyChannels({
     persistPushSubscriptions();
   }
 
+  // 用户在设备上主动关掉推送。按 endpoint 精确摘一条，其余设备的订阅原样保留。
+  // 返回「名单里本来有没有这条」——退订是幂等的，重复退订不算失败。
+  function removePushSubscription(endpoint) {
+    if (!endpoint) return false;
+    const before = pushSubscriptions.length;
+    pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== endpoint);
+    if (pushSubscriptions.length === before) return false;
+    persistPushSubscriptions();
+    return true;
+  }
+
   // ⑧ 推送内容预览：previewBody 存在且非空时，按每条订阅自己的 prefs.preview（POST /push/subscribe
   // 时随订阅一并存的客户端偏好，见 http.js）独立选 body 还是 previewBody——同一次 notify，不同设备可
   // 收到不同详略的 payload。空 previewBody（该事件本次无可预览内容）一律回落 body，不发空预览。
@@ -113,6 +124,7 @@ export function createNotifyChannels({
     vapidPublicKey,
     publicUrl,
     savePushSubscription,
+    removePushSubscription,
     pushNotify,
     ntfyNotify,
     subscriptionCount: () => pushSubscriptions.length,

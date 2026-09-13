@@ -358,28 +358,41 @@ export function registerOperationalRoutes({
     console.log('[push] 浏览器获取公钥 from', req.ip);
     return res.json({ key: push.publicKey });
   });
+  // 第二因子：仅已批准设备可动推送收件人名单（A1）。deviceToken 来自身体或头，与 socket auth 同源。
+  // bypass 级信任必须同样放行 —— 否则这道 fail-closed 用错了地方：socket 侧 io.use 对
+  // 「CF Access 已验」与「真本机直连」走 bypass 分支，那条分支【不调 addPendingDevice】，于是这类设备
+  // 永远进不了待审列表；而 approveDevice 的三个入口都要求先在待审列表里，用户在 UI/CLI 上根本看不到它、
+  // 无从批准。结果：只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
+  // 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。纯 localhost 部署同理。
+  // 订阅与退订**共用这一份判据**：同一份名单的增与删若各写一遍，早晚分叉成两道不同的门。
+  function deviceAllowed(req) {
+    const bypassTrusted = typeof bypassDeviceApproval === 'function' && bypassDeviceApproval(req) === true;
+    if (typeof isDeviceTrusted !== 'function' || bypassTrusted) return true;
+    const deviceToken = (req.body && req.body.deviceToken) || req.get('x-device-token') || '';
+    return isDeviceTrusted(deviceToken) === true;
+  }
+
   app.post('/push/subscribe', httpAuth, express.json({ limit: '4kb' }), (req, res) => {
     if (!push.enabled) return res.status(503).json({ error: 'push not configured' });
     if (!push.isValidSubscription(req.body)) return res.status(400).json({ error: 'invalid subscription' });
-    // 第二因子：仅已批准设备可登记推送（A1）。deviceToken 来自身体或头，与 socket auth 同源。
-    // bypass 级信任必须同样放行 —— 否则这道 fail-closed 用错了地方：socket 侧 io.use 对
-    // 「CF Access 已验」与「真本机直连」走 bypass 分支，那条分支【不调 addPendingDevice】，于是这类设备
-    // 永远进不了待审列表；而 approveDevice 的三个入口都要求先在待审列表里，用户在 UI/CLI 上根本看不到它、
-    // 无从批准。结果：只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
-    // 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。纯 localhost 部署同理。
-    const bypassTrusted = typeof bypassDeviceApproval === 'function' && bypassDeviceApproval(req) === true;
-    if (typeof isDeviceTrusted === 'function' && !bypassTrusted) {
-      const deviceToken = (req.body && req.body.deviceToken)
-        || req.get('x-device-token')
-        || '';
-      if (!isDeviceTrusted(deviceToken)) {
-        return res.status(403).json({ error: 'device not trusted' });
-      }
-    }
+    if (!deviceAllowed(req)) return res.status(403).json({ error: 'device not trusted' });
     // 不把 deviceToken 写入订阅文件（非 web-push 字段）
     const { deviceToken: _dt, ...sub } = req.body && typeof req.body === 'object' ? req.body : {};
     push.saveSubscription(sub.endpoint ? sub : req.body);
     console.log('[push] 订阅已保存:', (req.body.endpoint || '').slice(0, 60) + '…');
     return res.json({ ok: true });
+  });
+
+  // 退订：把这台设备自己那条 endpoint 从名单里摘掉。没有这条路由时，浏览器侧 unsubscribe() 之后
+  // 服务端的残留只能等下一次推送收 410 才被动清掉 —— 而那次推送已经不会再发生了，残留是永久的。
+  // 只删 body 点名的那一条，绝不清空全表：手机退订不该顺手掐掉 iPad 的订阅。
+  app.post('/push/unsubscribe', httpAuth, express.json({ limit: '4kb' }), (req, res) => {
+    if (!push.enabled) return res.status(503).json({ error: 'push not configured' });
+    const endpoint = req.body && typeof req.body.endpoint === 'string' ? req.body.endpoint : '';
+    if (!endpoint) return res.status(400).json({ error: 'missing endpoint' });
+    if (!deviceAllowed(req)) return res.status(403).json({ error: 'device not trusted' });
+    const removed = push.removeSubscription(endpoint);
+    console.log('[push] 退订:', endpoint.slice(0, 60) + '…', removed ? '已移除' : '名单里没有这条');
+    return res.json({ ok: true, removed });
   });
 }

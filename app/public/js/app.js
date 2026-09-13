@@ -65,6 +65,7 @@ import {
   formatPushStatusRow,
   formatStatuslineBridgeRow,
   pushEnvHint,
+  readPushOptOut,
   serviceStatusBasicRows,
   shouldSendOnEnter,
   whatNeedsAttention,
@@ -5678,6 +5679,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       hint: pushEnvHint(notifications.environment()),
       permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
       subscribed,
+      // 自己关掉的与订阅失败在 permission/subscribed 上同形，只有这个意图分得开
+      optedOut: readPushOptOut(k => localStorage.getItem(k)),
     });
     pushStatusRowEl.replaceChildren();
     const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
@@ -5691,14 +5694,35 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       h.textContent = row.hint;
       card.firstChild.appendChild(h);
     }
-    if (row.action === 'subscribe') {
-      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="push-subscribe"></button>`);
+    // 两个方向共用一个按钮位：开与关是同一个开关的两侧，不该只有进、没有出。
+    if (row.action === 'subscribe' || row.action === 'unsubscribe') {
+      const off = row.action === 'unsubscribe';
+      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70"></button>`);
+      btn.dataset.testid = off ? 'push-unsubscribe' : 'push-subscribe';
       btn.textContent = row.actionText;
       btn.onclick = async () => {
         btn.disabled = true;
-        await notifications.requestSubscription();
+        // 开启那条走 requestSubscription，它自己用 explain()（系统 alert）说话——弹窗压在面板之上，看得见。
+        if (!off) {
+          await notifications.requestSubscription();
+          btn.disabled = false;
+          renderPushStatusRow();
+          return;
+        }
+        const ok = await notifications.unsubscribe();
         btn.disabled = false;
-        renderPushStatusRow();
+        await renderPushStatusRow();
+        // 成功：状态行当场翻成「已关闭」，那就是回答；addBar 那条是留给关掉面板之后的账
+        //（与 app/session-delete.js 的成功路径同构）。
+        // 失败：状态行原样不动 = 用户眼里的"点了没反应"，错因必须落在他此刻正看着的这一层。
+        // #generalSheet 是 z-40 的大底栏，盖着消息流——只写 addBar 等于没写（2026-09-12 抽屉里
+        // 撞过同一个坑）。这行插在重绘之后，下次重绘自然被 replaceChildren 清掉。
+        if (ok) addBar(t('🔕 已关闭推送通知'), 'text-ink-soft');
+        else {
+          const notice = el(`<div class="mt-1.5 text-[11px] text-warning px-1"></div>`);
+          notice.textContent = t('⚠️ 关闭推送失败，请重试');
+          pushStatusRowEl.appendChild(notice);
+        }
       };
       card.appendChild(btn);
     }
