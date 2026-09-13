@@ -165,6 +165,20 @@ test.describe(
       socket.disconnect();
     });
 
+    // 拒绝侧的留痕。2026-09-12：用户报「点了 🗑 没反应、会话还在」，当时这条路径既不写日志也不写
+    // 审计，只能靠"审计里没有 success 记录"反推是被某道保护拒了——分不出是哪一道。
+    // 保护①（live driver / resume in-flight）与本条共用同一个 rejectDelete 出口，
+    // 但它要真起一个 live 实例或卡住一次 resume 才能构造，属 S5 档，这里不测。
+    test('保护②拒绝时也写 audit（outcome=rejected，带得出是哪道保护）', async () => {
+      const AU = await import('../../app/src/ops/audit.js');
+      const rows = AU.listRecent({ limit: 100, action: 'session_delete_l2' });
+      const rec = rows.find(r => r.target === '33333333-3333-4333-8333-333333333333');
+      assert.ok(rec, '被保护拒绝的删除必须留痕，否则「点了没反应」事后只能靠推断');
+      assert.equal(rec.outcome, 'rejected');
+      assert.equal(rec.meta.reason, 'quiet_period', 'reason 要分辨得出是哪道保护拦的');
+      assert.deepEqual(Object.keys(rec.meta).sort(), ['cwd', 'reason'], '同 success 侧：审计不得带被删会话的内容');
+    });
+
     test('删除后写 audit_record（不含被删内容）', async () => {
       const AU = await import('../../app/src/ops/audit.js');
       const l2Rows = AU.listRecent({ limit: 100, action: 'session_delete_l2' });

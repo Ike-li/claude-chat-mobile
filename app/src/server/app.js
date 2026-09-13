@@ -3430,24 +3430,29 @@ registerSocketConnection(io, socket => {
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
+    // 两道保护共用这一个出口。**拒绝也要留痕**：这两条路既不写日志也不写审计时，用户报
+    // 「点了 🗑 没反应、会话还在」事后无法验尸——2026-09-12 那次只能靠"审计里没有 success 记录"
+    // 反推是被拒了，分不出是哪道。收敛成一个出口而不是逐处 recordAudit：两处拒绝是同一件事的
+    // 两个原因，分开写就会有一处被后来的人漏掉，而漏掉的那处和写对了看起来一模一样。
+    const rejectDelete = (reason, error) => {
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'rejected', meta: { cwd, reason } });
+      return ack({ ok: false, error });
+    };
     // 保护① + SRV-NEW-004：无 live driver，且无 in-flight resume（switch/open 窗口）
     const delGuardL2 = canDeleteSessionGuard({
       liveInstance: !!instanceForSession(sessionId),
       resumeInFlight: resumeInFlight.has(sessionId),
     });
     if (!delGuardL2.ok) {
-      return ack({
-        ok: false,
-        error: delGuardL2.reason === 'opening'
-          ? '会话正在打开中，请稍后再删除'
-          : '会话正在被本产品驱动，请先结束或关闭该会话再删除',
-      });
+      return rejectDelete(delGuardL2.reason, delGuardL2.reason === 'opening'
+        ? '会话正在打开中，请稍后再删除'
+        : '会话正在被本产品驱动，请先结束或关闭该会话再删除');
     }
     // 保护②：transcript mtime 静默阈值——纯终端进程正驱动无法确证，mtime 新鲜即拒绝（启发式非完备）。
     const mtimeMs = await sessionFileMtime(sessionId, cwd);
     if (mtimeMs < 0) return ack({ ok: false, error: '会话不存在' });
     if (Date.now() - mtimeMs < sessionDeleteQuietMs) {
-      return ack({ ok: false, error: '会话可能正被终端使用，请稍后再试' });
+      return rejectDelete('quiet_period', '会话可能正被终端使用，请稍后再试');
     }
     // 原子性：先清当前指针 + 记入 pendingDeleteIds（列表临时排除），再删文件。
     // 崩溃窗口：pending 不落盘 → 孤儿文件重新可见，可重试；绝不会留下「指针指向已删文件」。

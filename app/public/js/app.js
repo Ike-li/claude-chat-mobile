@@ -5997,13 +5997,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // scheduleSessionPanelRevalidate 的 timer 守卫保证这里不会重复装，不是双倍请求。
     onOpened: () => { openSessionPanel(); startSessionPanelRevalidator({ immediate: true, skipExpanded: true }); },
     onClosed: () => stopSessionPanelRevalidator(),
+    // 抽屉不可见时失败回执的去处：此刻用户看的是聊天区，消息流才是"看得见的那一层"。
+    fallbackNotice: (text) => addBar(text, 'text-danger'),
   });
   const { openLeftSidebar, closeLeftSidebar } = drawer;
   // 顶栏文字 chip 与会话按钮同一去处：点它打开抽屉（需要你区 / 服务异常区 / 工作区树就在里面）。
   attentionChipEl?.addEventListener('click', () => openLeftSidebar());
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
-    socket, addBar, appConfirm,
+    socket, addBar, appConfirm, showDrawerNotice: drawer.showNotice,
     onDeleted: ({ cwd } = {}) => {
       // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
       if (cwd) sessionsCache.delete(cwd);
@@ -6861,6 +6863,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+    // ★ 这里【不】清抽屉的失败回执。列表重建与那条回执没有因果关系，而每次打开抽屉都会走到
+    // 这里：慢 ACK 的回执写进刚关上的抽屉后，用户重新打开的第一件事就是把它清掉——正好复现
+    // 原来那个"点了没反应"。清除归 drawer（关抽屉时）与删除成功时，两处都是真的翻篇了。
     drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
     // UX-007：当前工作区默认展开 + 记忆用户展开态
     try {

@@ -166,6 +166,16 @@
       <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
       <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
     </div>
+    <!-- 抽屉内操作的失败回执（当前唯一来源：🗑 彻底删除被服务端拒绝）。
+         【为什么不复用 addBar】addBar 写的是聊天消息流 #messages，而抽屉打开时 #sidebarScrim
+         （fixed inset-0 z-30）盖住整个视口——写在那里的失败理由用户一眼都看不到。2026-09-12 真机
+         撞上的就是这个：「关闭会话→立刻删」必然触发服务端 5 分钟静默期保护，拒绝理由发出来了，
+         而用户看到的是"点了没反应、会话还在"。
+         【为什么是 #sessionPanel 的兄弟而不是子节点】openSessionPanel() 开头就
+         sessionPanel.innerHTML=''（同 #btnGeneralSettings 那条约束）。放进去的话，任何一次列表
+         重建都会把它静默抹掉，而"被抹掉"和"用户读到了"在结果上完全一样——清除时机必须由代码
+         显式决定（见 openSessionPanel 里那次 showDrawerNotice('')）。 -->
+    <div id="drawerNotice" class="hidden shrink-0 px-4 py-2 text-[11px] text-danger bg-sunk border-b border-line" data-testid="drawer-notice" role="status" aria-live="polite"></div>
     <!-- 会话列表容器 (复用 sessionPanel 以完美兼容现有 JS) -->
     <div id="sessionPanel" class="flex-1 overflow-y-auto"></div>
     <!-- 通用设置常驻入口。必须是 #sessionPanel 的**兄弟**节点：openSessionPanel() 开头就

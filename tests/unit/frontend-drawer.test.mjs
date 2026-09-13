@@ -27,6 +27,7 @@ function fakeEl() {
   const classes = new Set();
   return {
     onclick: null,
+    textContent: '',
     classList: {
       add: (...c) => c.forEach(x => classes.add(x)),
       remove: (...c) => c.forEach(x => classes.delete(x)),
@@ -37,16 +38,17 @@ function fakeEl() {
 
 // drawerOpen=false 时按真实初始态种上两个 class（抽屉收起 + 遮罩隐藏）。
 function harness({ innerWidth = 400, drawerOpen = false } = {}) {
-  const els = { leftSidebar: fakeEl(), sidebarScrim: fakeEl(), sidebarClose: fakeEl() };
+  const els = { leftSidebar: fakeEl(), sidebarScrim: fakeEl(), sidebarClose: fakeEl(), drawerNotice: fakeEl() };
   if (!drawerOpen) {
     els.leftSidebar.classList.add('-translate-x-full');
     els.sidebarScrim.classList.add('hidden');
   }
+  els.drawerNotice.classList.add('hidden'); // 真实初始态：提示条默认不占位
 
   const handlers = new Map();
   const doc = { addEventListener: (type, fn) => handlers.set(type, fn) };
   const win = { innerWidth };
-  const calls = { haptic: [], opened: 0, closed: 0 };
+  const calls = { haptic: [], opened: 0, closed: 0, fallback: [] };
   const context = createAppContext();
 
   const ctl = createDrawerController(context, {
@@ -54,6 +56,7 @@ function harness({ innerWidth = 400, drawerOpen = false } = {}) {
     haptic: (kind) => calls.haptic.push(kind),
     onOpened: () => { calls.opened += 1; },
     onClosed: () => { calls.closed += 1; },
+    fallbackNotice: (text) => calls.fallback.push(text),
     doc,
     win,
   });
@@ -62,8 +65,11 @@ function harness({ innerWidth = 400, drawerOpen = false } = {}) {
   // 一次完整手势：从 (x0,y0) 起，移到 (x1,y1)。
   const swipe = (x0, y0, x1, y1) => { touch('touchstart', x0, y0); touch('touchmove', x1, y1); };
   const isOpen = () => !els.leftSidebar.classList.contains('-translate-x-full');
+  // 判「提示是否显示」查 classList 而不是 textContent：文本留在 DOM 里但元素 hidden 时，
+  // textContent 照样有值——那正是这套断言要区分开的两种状态。
+  const noticeText = () => els.drawerNotice.classList.contains('hidden') ? null : els.drawerNotice.textContent;
 
-  return { ctl, els, calls, context, touch, swipe, isOpen };
+  return { ctl, els, calls, context, touch, swipe, isOpen, noticeText };
 }
 
 // ── 桌面档：开合都是 no-op ───────────────────────────────────────────────────
@@ -203,9 +209,52 @@ test.describe('移动端边缘滑动', () => {
   });
 });
 
+// ── 抽屉内操作的失败回执 ────────────────────────────────────────────────────
+// 判据是「回执去用户此刻正在看的那一层」，不是「回执固定去抽屉」。后者看起来更简单，
+// 但它恰恰会在慢 ACK 这条路径上复现原 bug：确认删除 → ACK 未到 → 用户关抽屉 →
+// ACK 到达，提示写进已隐藏的抽屉 → 用户再打开时看到的是空的。
+test.describe('失败回执落在用户此刻看得见的那一层', () => {
+  test('抽屉开着：显示在抽屉内的提示条，不走回落通道', () => {
+    const h = harness({ drawerOpen: true });
+    h.ctl.showNotice('会话可能正被终端使用，请稍后再试');
+    assert.equal(h.noticeText(), '会话可能正被终端使用，请稍后再试');
+    assert.deepEqual(h.calls.fallback, [], '抽屉就在眼前时不该再往消息流塞一份');
+  });
+
+  test('★ 抽屉关着：回落到消息流——写进隐藏的抽屉等于没写', () => {
+    const h = harness();
+    h.ctl.showNotice('会话不存在');
+    assert.deepEqual(h.calls.fallback, ['会话不存在'], '抽屉不可见时必须换通道，否则这条提示没有任何人会读到');
+    assert.equal(h.noticeText(), null, '既然走了回落，就不该同时把抽屉的提示条点亮');
+  });
+
+  test('桌面档抽屉常驻：没有 -translate-x-full 也算可见，仍走抽屉', () => {
+    const h = harness({ innerWidth: 1280 });
+    h.ctl.showNotice('删除失败');
+    assert.equal(h.noticeText(), '删除失败', '桌面档侧栏常驻，判据不能只看移动端那个 class');
+    assert.deepEqual(h.calls.fallback, []);
+  });
+
+  test('空文案＝收起', () => {
+    const h = harness({ drawerOpen: true });
+    h.ctl.showNotice('删除失败');
+    h.ctl.showNotice('');
+    assert.equal(h.noticeText(), null);
+    assert.deepEqual(h.calls.fallback, [], '收起不是一条新提示，不该外溢到消息流');
+  });
+
+  test('关抽屉会清掉提示：下次打开是干净的，不留上一轮的残影', () => {
+    const h = harness({ drawerOpen: true });
+    h.ctl.showNotice('删除失败');
+    h.ctl.closeLeftSidebar();
+    assert.equal(h.noticeText(), null);
+  });
+});
+
 test('控制器挂进 context.state.drawer（调用方通过 context 取用，不走全局）', () => {
   const h = harness();
   assert.equal(h.context.state.drawer, h.ctl);
   assert.equal(typeof h.context.state.drawer.openLeftSidebar, 'function');
   assert.equal(typeof h.context.state.drawer.closeLeftSidebar, 'function');
+  assert.equal(typeof h.context.state.drawer.showNotice, 'function');
 });

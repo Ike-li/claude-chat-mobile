@@ -999,6 +999,16 @@ io.on('connection', socket => {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
     }
+    // 「服务端拒绝」这一路的 UI 回执（P0-11-delete-reject）。真 server 有三种拒法——会话不存在、
+    // 正被本产品驱动、transcript mtime 落在静默期内——对前端是同一条路：ok:false + error 文案。
+    // 钉死在一个固定 id 上而【不】做成 test: 命令开关：mock server 是所有并行 spec 共用的一个
+    // 进程，一次性开关会被另一个分片的删除消费掉（P0-25c 那次的形态）。选这个 id 是因为它的夹具
+    // 语义本来就是"主机上那份已经没了、列表还没 revalidate"——不必为此新增一行夹具会话，
+    // 那会牵动未读计数与目录角标那批断言。
+    if (sessionId === 'mock-session-deleted') {
+      if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
+      return;
+    }
     deletedSessionIds.add(sessionId);
     if (typeof ack === 'function') ack({ ok: true });
   });
