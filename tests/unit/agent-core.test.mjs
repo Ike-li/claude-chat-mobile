@@ -412,6 +412,27 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
     assert.match(src, /resolveDrivingCwd\(/, '裁决必须走 resolveDrivingCwd（SCOPE-01 同源判据），不得自行放行');
   });
 
+  // 【为什么光改 instance.cwd 不够】openInstance 的回调闭包捕获的是**开实例那一刻**的 cwd。
+  // 会话中途 EnterWorktree 之后，凡是「本实例 cwd」语义的消费点若还读那个闭包值就会分叉，
+  // 其中 writeSessionEntrypoint 最险：/clear 拿到新 sid 时它的 `!getSession(sid)` 守卫会放行，
+  // 于是在**父仓**的 project 目录里凭空造出一个只含 entrypoint-marker 的 <新sid>.jsonl。
+  // 那之后 sessionFileExists(父仓) 变成 true——本修复治的「报错 + 空白」退化成「不报错 + 空白」，
+  // 更隐蔽；那个幽灵文件还会让会话在父仓与 worktree 两个列表里各出现一次。
+  test('换 cwd 后「本实例 cwd」的消费点走驾驶轴，不是开实例时的闭包值', () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js'), 'utf8',
+    );
+    assert.match(src, /writeSessionEntrypoint\(sid,\s*drivingCwd\)/,
+      'entrypoint 写进旧 cwd 的 project 目录 = 在父仓造幽灵 jsonl，把「查不到」变成「查到一个空的」');
+    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*cwd/,
+      '条目 cwd 必须是驾驶轴、路由键必须是工作区轴——两轴合一时必有一条是错的');
+    assert.match(src, /recordCwdDefaultModel\(drivingCwd,/,
+      'defaultModelByCwd 的消费方是 viewingCwdOf()（驾驶轴），归键必须同轴');
+    assert.match(src, /slashCommandsCache\.set\(drivingCwd,/,
+      'slash/models 缓存的消费方 pushSlashCommandsForCwd(a.cwd) 是驾驶轴，归键必须同轴');
+    assert.match(src, /modelsCache\.set\(drivingCwd,/);
+  });
+
   test('没接 onCwdChanged 时不改 cwd、也不抛——裁决方缺席即视为不采信', async () => {
     const { s, dispose, hook } = cwdHook({ cwd: '/tmp/repo' });
     try {

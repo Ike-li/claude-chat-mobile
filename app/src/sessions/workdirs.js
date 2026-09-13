@@ -297,6 +297,21 @@ export function resolveDrivingCwd(cwd, dirs) {
   return resolveManagedWorktree(real, dirs)?.path ?? null;
 }
 
+// 已开实例的授权集：当前白名单 + 它创建时所属的那个工作区（仅当后者已被热移除）。
+//
+// 【为什么需要】工作区热加载的产品判据是「被移除目录上的已开会话继续运行，仅拒新开」。
+// 只拿新 workDirs 校验 resolveDrivingCwd 的话，这类实例中途 EnterWorktree 会被拒，
+// instance.cwd 停在旧值而 CLI 已经搬走——静默复发「历史消息加载失败」。
+//
+// 【为什么这不是给范围门开口子】多出来的恒是「该实例创建时就被授权的那一个根」，
+// 而它的 CLI 本来就在那个目录里跑着、早已能读写那里——不新增任何能力，只是不把
+// 已经发出去的授权在半途收回。别的目录一律照旧由 resolveDrivingCwd 拒掉。
+export function instanceAuthorizedDirs(dirs, authorizedRoot) {
+  if (!Array.isArray(dirs)) return [];
+  if (!authorizedRoot || dirs.includes(authorizedRoot)) return dirs;
+  return [...dirs, authorizedRoot];
+}
+
 // SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——
 // 此处曾是一份逐字复制品，注释写着「同规则」却和 history 那份一起漏了 200 截断与 NFC 归一。
 // 从 shared 取而不是从 history 取，仍是为了避免 workdirs↔history 循环耦合。

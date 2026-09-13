@@ -7,6 +7,7 @@
 //            深度固定为 1、不递归、symlink 真实落点必须仍在该目录子树内
 //         ④ resolveDrivingCwd：会话中途换 cwd（EnterWorktree）的采信判据——合法集同 ③，
 //            但失败方向是 fail-closed 返回 null，不像 routeCwd 那样回退
+//         ⑤ instanceAuthorizedDirs：工作区被热移除后，其上已开实例保留自己那一个授权根（仅拒新开）
 // 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
-import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd } from '../../app/src/sessions/workdirs.js';
+import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd, instanceAuthorizedDirs } from '../../app/src/sessions/workdirs.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
@@ -320,6 +321,34 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
 
   test('resolveDrivingCwd 挡 symlink 逃逸', { skip: process.platform === 'win32' }, () => {
     assert.equal(resolveDrivingCwd(join(wtRoot, 'escape'), dirs), null);
+  });
+
+  // ⑤ 热移除保护。产品判据是「工作区被移出 WORKDIRS 后，该目录上的已开会话继续运行、仅拒新开」
+  // （CLAUDE.md 工作区热加载那段）。只拿新 workDirs 校验的话，这类实例中途 EnterWorktree 会被拒，
+  // instance.cwd 停在旧值 —— 复发「历史消息加载失败」，而且是静默的。
+  //
+  // 【为什么这不是给范围门开口子】放行集只多出「该实例创建时所属的那个工作区」，而它的 CLI
+  // 本来就在那个目录里跑着、早已能读写那里 —— 不新增任何能力。别的目录一律照旧拒。
+  test('instanceAuthorizedDirs：白名单里有原授权根时原样返回', () => {
+    assert.deepEqual(instanceAuthorizedDirs(dirs, realA), dirs);
+    assert.deepEqual(instanceAuthorizedDirs(dirs, null), dirs);
+  });
+
+  test('instanceAuthorizedDirs：原授权根被热移除后仍保留给该实例', () => {
+    const afterRemoval = [realB]; // realA 被移出 WORKDIRS，但它上面还有 live 实例
+    assert.deepEqual(instanceAuthorizedDirs(afterRemoval, realA), [realB, realA]);
+    assert.equal(
+      resolveDrivingCwd(join(wtRoot, 'feature-x'), instanceAuthorizedDirs(afterRemoval, realA)),
+      realpathSync(join(wtRoot, 'feature-x')),
+      '热移除后该实例的 worktree 切换被拒 = instance.cwd 停在旧值，静默复发历史加载失败',
+    );
+  });
+
+  test('instanceAuthorizedDirs：保留的只有它自己那一个根，别的仍越界', () => {
+    const relaxed = instanceAuthorizedDirs([realB], realA);
+    assert.equal(resolveDrivingCwd(outside, relaxed), null);
+    assert.equal(resolveDrivingCwd(sibling, relaxed), null);
+    assert.equal(resolveDrivingCwd(join(wtRoot, 'nested', 'deep'), relaxed), null);
   });
 
   test('resolveDrivingCwd 非法入参拒绝', () => {
