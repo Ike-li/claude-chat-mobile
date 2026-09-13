@@ -83,3 +83,16 @@ test('一个片段都没有 → 红，不得当成通过', () => {
   assert.equal(out.status, 1,
     'artifact 全部下载失败时目录是空的——把「什么都没量到」当成通过，等于整轮 e2e 静默失守');
 });
+
+// download-artifact 一个 artifact 都没捞到时【压根不建目录】，所以「目录不存在」是真实路径，
+// 不是防御性分支——2026-09-13 首次上线就走了这条（run 34743727175，片段全被当隐藏文件漏掉）。
+// 当时裸 readdirSync 抛的 ENOENT 栈指向 fs.readdir，不指向真正的原因，排查从错误的一端开始。
+test('目录根本不存在 → 红，且说人话而不是抛 ENOENT 栈', () => {
+  const out = runMerge(join(tmpdir(), 'ccm-shard-merge-does-not-exist-9d3f'));
+
+  assert.equal(out.status, 1, '目录不存在与目录为空是同一件事：一个片段都没收到');
+  assert.doesNotMatch(out.stderr, /ENOENT|readdirSync|at Module/,
+    '不能把 fs 的栈甩给读日志的人——错误要指向「片段没上传」，那才是要去看的地方');
+  assert.match(out.stderr, /片段/,
+    '失败消息必须说清缺的是什么，否则红了也不知道从哪查');
+});

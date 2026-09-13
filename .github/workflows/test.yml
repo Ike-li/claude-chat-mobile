@@ -204,12 +204,18 @@ jobs:
       # 本片实测到的每个 spec 的时长。汇总 job 拿它做两件事：并集校验（TEST-02，少一个就红）
       # 与合并回写缓存。★ if: always() —— 分片红了也要交回片段，否则汇总 job 只能看见
       # 「缺了片段」，分不清是漏跑还是失败。
+      #
+      # ★ if-no-files-found: error（不是默认的 warn）。这里捞空【永远不正常】：分片只要跑到
+      # 最后就一定写出片段。默认的 warn 会让上传出一个空 artifact 而 job 照样绿，错误一路
+      # 推迟到汇总 job 炸在 readdir 上——报错指向 fs，不指向真正的原因。
+      # 注意这跟下面 test-results 那个不同：那边捞空是正常的（全绿时没有失败产物），所以留 warn。
       - name: Upload shard durations
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-durations-shard-${{ matrix.shard }}
-          path: tests/infra/.e2e-durations-shard${{ matrix.shard }}.json
+          path: tests/infra/e2e-durations-shard${{ matrix.shard }}.json
+          if-no-files-found: error
           retention-days: 1
 
       # ★ 产物是 test-results*/ 而不是 playwright-report*/：分片子进程走
@@ -270,13 +276,13 @@ jobs:
       - name: 并集校验 + 合并时长
         run: node tests/infra/e2e-parallel.js --merge-durations e2e-durations
 
-      # 只在 push 到 dev/master 时回写缓存：PR run 写的缓存受分支隔离，别的 PR 读不到，
-      # 只会占配额（仓库上限 10GiB，2026-09-13 已用 2.87GiB）。PR 统一继承 base 分支那份。
+      # ★ PR run 也保存，不加 event_name 限制。这份表只有几 KB（配额上限 10GiB，与它无关），
+      # 而只在 push 时存的话，一个新 workflow 的【第一个 PR】永远拿不到缓存——base 分支上
+      # 还没有任何一次 run 写过它，于是该 PR 的每一轮都退化成等权重分配。
+      # PR 写的缓存受分支隔离，别的 PR 读不到，但同一个 PR 的后续 push 读得到，这正是要的。
       - name: Save E2E duration cache
-        if: github.event_name == 'push'
         run: cp e2e-durations/merged.json tests/infra/.e2e-durations.json
-      - if: github.event_name == 'push'
-        uses: actions/cache/save@v6
+      - uses: actions/cache/save@v6
         with:
           path: tests/infra/.e2e-durations.json
           key: e2e-durations-${{ github.run_id }}

@@ -100,6 +100,14 @@ function mergeDurations(dir) {
   }
   const merged = {};
   let fragments = 0;
+  // 目录不存在与目录为空是同一件事：一个片段都没收到。download-artifact 捞不到任何
+  // artifact 时压根不建目录，裸 readdirSync 会抛 ENOENT 栈——那个栈指向 fs.readdir，
+  // 不指向真正的原因（片段没上传），排查会从错误的一端开始。
+  if (!existsSync(dir)) {
+    console.error(`[test-e2e-parallel] ${dir} 不存在——各分片的时长片段一个都没下载到，`
+      + '本轮 e2e 的覆盖面无从证明。先看分片 job 的 Upload shard durations 步骤。');
+    return 1;
+  }
   for (const name of readdirSync(dir)) {
     if (!name.endsWith('.json') || name === MERGED_NAME) continue;
     try {
@@ -238,9 +246,13 @@ if (Object.keys(collected).length) {
   // ② 并集校验要的正是「这一片真跑了哪些」——掺进恢复来的旧值，缺失就被旧值填上了，
   //    闸子当场失明（而它看起来照样是绿的）。
   // 全量模式保持原行为：与旧值合并，某一片崩了不让它那几个文件的历史时长凭空消失。
+  // ★ 片段文件名【不带点前缀】，与主缓存的 .e2e-durations.json 不同族——它要被
+  // actions/upload-artifact 捞走，而那个 action 的 include-hidden-files 默认 false，
+  // 点开头的文件会被静默排除，配上默认的 if-no-files-found: warn ⇒ 上传空 artifact 且不红，
+  // 一路到汇总 job 才炸在 readdir 上。2026-09-13 首次上线就踩了这个（run 34743727175）。
   const [target, payload] = SHARD_INDEX === null
     ? [DURATIONS_FILE, { ...durations, ...collected }]
-    : [join(ROOT, 'tests', 'infra', `.e2e-durations-shard${SHARD_INDEX}.json`), collected];
+    : [join(ROOT, 'tests', 'infra', `e2e-durations-shard${SHARD_INDEX}.json`), collected];
   try {
     writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`);
   } catch (err) {
