@@ -122,8 +122,8 @@ import {
   safeJsonPreview,
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
-  shouldBindBusyFromBroadcast,
-  shouldForceClearBusyFromBroadcast,
+  resolveRunStateFromSnapshot,
+  shouldClearBusyBySnapshot,
   buildClientErrorReport,
   clientErrorGateStep,
   formatLogsForCopy,
@@ -979,14 +979,125 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 重试已过、流恢复 → 撤掉重试行，回落普通 spinner。由 text_delta/thinking_delta/tool_use 三处驱动
   // （任一到达都说明这一轮的 API 请求真的通了）；setBusy(false) 会整清 liveLine，无需在此重复。
+  //
+  // ★ retry 这一维【不跟】thinking/sawContentDelta/lastEventAt 走「回放一律中性」那条规矩，
+  // 回放事件照样清它。因为 api_retry 是 emitTransient（不进环形缓冲），`liveLine.retry` 只可能是
+  // **本次连接**期间收到的；而典型时序恰恰是「收到 api_retry → 断线 → 重连 → 回放那条成功的
+  // text_delta」——回放的输出本身就是重试已经通了的证据。若在此早退，renderLiveLineText 又优先
+  // 渲染 retry，spinner 会一直显示旧的 API 错误、倒计时卡在 0，直到下一条非回放流事件或轮次结束
+  // （PR #38 review 第五轮 P2）。
+  // 代价是 mixed 批次里旧轮的 delta 可能提前撤掉当前轮的重试行——但 api_retry 是逐次重试都发的，
+  // 真还在重试下一拍就会重新点亮；反过来「永久显示一个不存在的错误」没有自愈路径。取轻。
   function clearLiveRetry() {
     if (!liveLine?.retry) return;
     liveLine.retry = null;
     renderLiveLine();
   }
+  // 运行态只由【实时】事件表达。sync:since 回放的是环形缓冲里的旧信封，它的职责是把离开期间的内容
+  // 补渲染出来；「此刻在不在跑」是另一件事，真相源是 instances 广播（运行条看 state，发送闸与停止钮
+  // 看 turnRunning，两者故意不同——见 logic/composer.js resolveComposerPrimaryMode 的红线注释）。
+  //
+  // 【这两个函数必须成对存在】只让 delta 不点亮、却让 result 照常清，会在「回放批次里既有已结束的
+  // 旧轮、又有当前正在跑的新轮」时翻车：bindView 刚按权威 state 播下的 busy 被旧轮 result 清掉，
+  // 而属于新轮的那些 delta 已经不会再点亮它 —— 运行条与停止钮双双消失，用户看到的是「空闲」，
+  // 发出去的消息却被服务端以在途轮为由拒掉。2026-09-12 PR #38 review 抓出（P1）。
+  //
+  // 于是整批回放对运行态【完全中性】：既不点亮也不清除，运行态一律由 instances 决定
+  // （bindView 入场播种 + 广播单向对齐 + 下方 ticker 的每秒自检）。
+  // 守护：tests/e2e/specs/busy-orphan-replay.spec.ts
+  function setBusyFromStreamEvent(ev) {
+    if (ev?.replay) return;
+    setBusy(true);
+  }
+  // 与上面对称：回放的轮次终止事件同样不写运行态。三处调用（result / error / system:interrupted）
+  // 覆盖全部轮次终点；其余收尾动作（收口气泡与工具卡、状态条、滚动）照常执行——那是「补渲染内容」。
+  //
+  // unlockSendGate=false 专供 error 路径：**不是所有 error 都是轮次终点**。AgentSession.map() 对
+  // assistant API 错误发 recoverable:true 并【故意保持 pendingTurns 非零】直到随后的 result，
+  // 模型/权限切档失败同样如此（agent.js 的 recoverable:true 几处）。跟着解锁发送闸的话，若后续
+  // instances 校正延迟或丢失，用户一打字就看到「发送」，发出去的消息会被仍在跑的服务端轮次拒掉。
+  // dev 上 error handler 本就只清 busy、从不动 _turnRunning——本 PR 把三处收敛到这个函数时
+  // 顺手给它加上了，属于我引入的行为变更，这里改回去（PR #38 review 第六轮 P2）。
+  // 终止性 error（recoverable:false）之后 _turnRunning 交由 instances 广播的权威字段收，与 dev 同。
+  function clearBusyFromTurnEndEvent(ev, { unlockSendGate = true } = {}) {
+    // ★ 乐观 marker 与运行态分开处置，回放时【只清 marker、不写运行态】。
+    // marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」，而回放里这条终止事件
+    // 【就是】那条消息的终止事件——必须照清。不清就会悬留：它只在终止事件与负 ack 两处清除，
+    // 而用户发完就切走时那条实时终止事件会被 shouldDropAgentEvent 按视图丢弃，于是 marker 永久
+    // 留着，此后每次切回该会话，bindView 的 shouldRestoreOptimisticBusy 都拿它点亮一次假运行条
+    // ——权威实例明明是 idle（2026-09-12 PR #38 review P2 指出；这也是真机那次现场最可能的成因：
+    // 22:54:44 发消息、5 秒后切走、22:56:16 的 result 被丢弃，23:01:58 切回即假亮，秒表从切回起算）。
+    _pendingSendBusySessionId = null;
+    if (ev?.replay) {
+      // 回放本身不表达运行态，但到这里正好可以对一次账：bindView 是【先】按乐观 marker 点亮 busy、
+      // 【后】才发 sync:since 的，所以上面那次清 marker 赶不及阻止这一次假亮。拿权威快照就地判一次
+      // ——权威说已空闲就立刻收掉，不必干等 ticker 的 30 秒宽限；权威说还在跑（mixed：新轮真的活着）
+      // 则一动不动。两个字段各判各的：state 管运行条，turnRunning 管发送闸（纯后台任务期 state 是
+      // busy 而 turnRunning 为 false，运行条该留、发送闸不该锁）。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (live) {
+        // 判据分两段，缺一段都会错（两段各自被一轮 review 抓出来过）：
+        //   · turnRunning===true → 一定保住。前台轮真的在跑，运行条就该在，哪怕同时挂着后台任务
+        //     （bgActive 与 turnRunning 可以同时为真）。少了这段，「后台任务 + 前台轮并存」时会
+        //     被下一段误判成没有前台活动，运行条被清掉，而回放的 delta 又被刻意挡住恢复不回来
+        //     ——安静的前台命令看起来没有任何运行指示，停止闸却还锁着（第四轮 P2）。
+        //   · 否则退回广播那条判据。它排除 bgActive===true（纯后台任务期没有 result 可释放，
+        //     运行条归 task_progress 横幅管）。少了这段，后台任务活着的整段时间里运行条和红色
+        //     停止钮都撤不掉，resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把主按钮
+        //     锁成停止钮（第三轮 P2）。
+        const authoritative = resolveRunStateFromSnapshot(live);
+        if (!authoritative.busy) setBusy(false);
+        if (!authoritative.turnRunning) _turnRunning = false;
+      }
+      return;
+    }
+    setBusy(false);
+    // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
+    // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
+    if (unlockSendGate) _turnRunning = false;
+  }
+  // ★ 兜底清除的【后果】只写一处，两条兜底通道（instances 广播看门狗、startLiveTicker 每秒自检）共用。
+  // 这是把判据收敛到 shouldClearBusyBySnapshot 的另一半：判据共用而后果各写各的，等于把「改一处
+  // 漏另一处」换个地方重开——事实上就重开过一次，ticker 清了乐观 marker、广播看门狗没清，于是权威
+  // 说空闲、运行条也收掉了，marker 却还留着，下一次切回该会话 bindView 的 shouldRestoreOptimisticBusy
+  // 又拿它把假运行条连同停止钮点亮一整个宽限窗，每切回一次重演一次（PR #38 review 第八轮 P2）。
+  // 触发它不需要丢包：移动端页面转后台时 setInterval 被节流甚至冻结，而 socket 消息醒来后照常派发，
+  // 于是「广播先于被节流的 ticker 到达」是常态而非边角。
+  // 注意 setBusy(false) 会 stopLiveTicker()，所以广播看门狗清完之后 ticker 不会再跑来补这一刀。
+  function forceClearBusyByAuthority(live) {
+    // 乐观 marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」。权威此刻说这个实例
+    // 空闲且已过宽限，那条登记就是过期的——留着只会在下次 bindView 把假运行态复活。
+    _pendingSendBusySessionId = null;
+    // 发送闸按权威快照收。【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，
+    // clearView 之后 busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；只清 busy 不清闸，
+    // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
+    // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是自检存在的理由（第四轮 P1）。
+    // 广播路径上 _turnRunning 在本函数之前已按 viewedInst.turnRunning 对齐过一次，这里是幂等的；
+    // ticker 路径则只有这一次机会。setBusy(false) 内含 updateSendButtonState()，故赋值必须排在它之前。
+    if (!resolveRunStateFromSnapshot(live)?.turnRunning) _turnRunning = false;
+    setBusy(false);
+  }
   function startLiveTicker() {
     if (liveTicker) return;
-    liveTicker = setInterval(() => { if (liveLine) renderLiveLine(); }, 1000);
+    liveTicker = setInterval(() => {
+      if (!liveLine) return;
+      // 兜底自检：清 busy 的两条既有通道都是被动的——轮次终止事件可能被视图路由丢弃（见上），
+      // 而 instances 广播上的看门狗只在【收到广播】时才跑，系统一安静就永远不来（真机现场那 100 秒
+      // 里一次广播都没有）。这里每秒主动看一眼权威快照，把「等广播」换成「自己查」。
+      // 判据与广播看门狗共用 shouldClearBusyBySnapshot（含「查不到实例就不清」与宽限窗）：
+      // 两处问的是同一个问题，此前各写一份，ticker 那份漏了 bgActive 折算（review 第六轮 P2）。
+      const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
+      if (shouldClearBusyBySnapshot({
+        live,
+        localBusy: _busyState,
+        turnStartTs: liveLine.turnStartTs,
+        now: Date.now(),
+      })) {
+        forceClearBusyByAuthority(live);
+        return;
+      }
+      renderLiveLine();
+    }, 1000);
   }
   function stopLiveTicker() {
     if (liveTicker) { clearInterval(liveTicker); liveTicker = null; }
@@ -2189,6 +2300,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // handled 分支统一刷新：已过实例过滤 + epoch/seq 去重，任何本会话事件都说明「还活着」
     onHandledEvent(ev) {
       if (!liveLine) return;
+      // 回放事件不得改写 live 行的任何字段：mixed 批次里旧轮的 delta 会把 lastEventAt 推到「刚刚」、
+      // 把 sawContentDelta 置真，于是当前这一轮明明已经安静很久，spinner 却不显示等待提示
+      // （PR #38 review 第三轮 P2）。
+      if (ev?.replay) return;
       liveLine.lastEventAt = Date.now();
       if (ev.type === 'text_delta' || ev.type === 'thinking_delta') liveLine.sawContentDelta = true;
     },
@@ -2471,7 +2586,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         s.raw += p.text;
         s.textNode.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         return;
       }
       const s = getStream(p.messageId, ev?.ts);
@@ -2484,32 +2599,33 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           scrollBottom();
         }, formatStreamPreviewIntervalMs());
       }
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 正文开流 = 本轮 thinking 阶段结束（事件驱动切换，比 idle 超时判定准）
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：回放里旧轮的 delta 不得去动当前这一轮的 thinking 态（见 onHandledEvent 的注释）
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
     },
-    thinking_delta(p) {
+    thinking_delta(p, ev) {
       clearLiveRetry();
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
-        setBusy(true);
+        setBusyFromStreamEvent(ev);
         // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
-      setBusy(true);
-      if (liveLine) {
+      setBusyFromStreamEvent(ev);
+      if (!ev?.replay && liveLine) {
         liveLine.thinking = { state: 'active', ...advanceThinkingClock(liveLine.thinking || undefined, Date.now()) };
         renderLiveLine();
       }
     },
-    tool_use(p) {
+    tool_use(p, ev) {
       clearLiveRetry();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
@@ -2608,7 +2724,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendMessage(card);
       }
       scrollBottom();
-      setBusy(true);
+      setBusyFromStreamEvent(ev);
       // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
       // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
       // 预建会留下「🤖 workflow 已完成」空壳（实测观感怪），故等首条 parentToolUseId 事件再建卡。
@@ -2620,7 +2736,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
       }
       // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
-      if (liveLine?.thinking?.state === 'active') {
+      // !ev?.replay：同 text_delta，回放里旧轮的工具不得终结当前这一轮的 thinking burst
+      if (!ev?.replay && liveLine?.thinking?.state === 'active') {
         liveLine.thinking.state = 'done';
         renderLiveLine();
       }
@@ -2823,7 +2940,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         updateSendButtonState();
       }
     },
-    result(p) {
+    result(p, ev) {
       // 服务端随 result 下发完整回复文本——断网恢复后 s.raw 可能因遗漏 deltas 而截断，
       // 此处用权威全文覆盖确保 Markdown 渲染完整（E18）
       if (p.text && p.messageId) {
@@ -2834,11 +2951,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       const fileChangesCard = flushTurnFileChangesCard();
-      _pendingSendBusySessionId = null;
-      setBusy(false);
-      // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
-      // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
-      _turnRunning = false;
+      clearBusyFromTurnEndEvent(ev);
       updateSendButtonState();
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
@@ -2862,15 +2975,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       approvals.clearAll();
       updateSendButtonState();
     },
-    error(p) {
+    error(p, ev) {
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
-      _pendingSendBusySessionId = null;
-      setBusy(false);
+      clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
@@ -2894,7 +3006,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!text) return;
       addBar(`${t('回顾')} · ${text}`, 'text-ink-faint');
     },
-    system(p) {
+    system(p, ev) {
       addBar(p.message, systemBarClass(p));
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
@@ -2905,9 +3017,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
         markAllSubagentCardsDone();
-        _pendingSendBusySessionId = null;
-        setBusy(false);
-        _turnRunning = false; // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
+        clearBusyFromTurnEndEvent(ev); // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
         updateSendButtonState();
         // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
         // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
@@ -4842,17 +4952,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
     if (newViewing && newViewing === displayedInstanceId) {
-      if (shouldBindBusyFromBroadcast({ state: viewedInst?.state, bgActive: viewedInst?.bgActive })) {
+      // 权威快照的解释统一走 resolveRunStateFromSnapshot（logic/outbox-send.js）——它同时是
+      // bindView 播种、回放对账、ticker 自检用的那一份，四处不再各写一遍。
+      if (resolveRunStateFromSnapshot(viewedInst)?.busy) {
         setBusy(true);
-      } else if (shouldForceClearBusyFromBroadcast({
-        state: viewedInst?.state,
+      } else if (shouldClearBusyBySnapshot({
+        live: viewedInst,
         localBusy: _busyState,
         turnStartTs: liveLine?.turnStartTs ?? null,
         now: Date.now(),
       })) {
-        // 看门狗：终止事件丢了才会走到这（见 shouldForceClearBusyFromBroadcast 注释）——正常轮次
-        // state 全程 'busy'，这个分支不会触发。
-        setBusy(false);
+        // 看门狗：终止事件丢了才会走到这——正常轮次权威快照全程说「在跑」，这个分支不触发。
+        // 善后与 ticker 自检共用 forceClearBusyByAuthority：此前这里只 setBusy(false)，把乐观
+        // marker 留在了原地（见该函数注释，第八轮 P2）。
+        forceClearBusyByAuthority(viewedInst);
       }
     }
     updateSessionsDot();
@@ -5072,7 +5185,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       pendingSendBusySessionId: _pendingSendBusySessionId,
       viewingInstanceId: id,
       sessionId: sid,
-    }) || shouldSeedBusyFromInstanceState(entry?.state);
+    }) || Boolean(resolveRunStateFromSnapshot(entry)?.busy);
     if (restoreBusy) setBusy(true);
     // 发送闸同样要重种：clearView 刚把 _turnRunning 清零，而 setInstances 对它的赋值发生在 bindView 之前，
     // 会被那次清零冲掉——切回一个正在跑的会话时闸就失准了（停止钮不出现、发送反被服务端拒）。

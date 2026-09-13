@@ -320,7 +320,10 @@ export function shouldSeedBusyFromInstanceState(state) {
 // 恰结束时入场 entry.state 是过期快照，直接用会 stale-busy）；广播查不到才回退入场快照。
 export function shouldReseedBusyAfterReload({ instances = [], instanceId, entryState } = {}) {
   const live = instances.find(x => x?.instanceId === instanceId);
-  return shouldSeedBusyFromInstanceState(live ? live.state : entryState);
+  // 权威快照在册就整份交给 resolveRunStateFromSnapshot（与播种/对账/自检同一份判据）；
+  // 查不到才回退到入场快照那个只有 state 的老形状。
+  if (live) return resolveRunStateFromSnapshot(live).busy;
+  return shouldSeedBusyFromInstanceState(entryState);
 }
 
 // instances 广播（视图未变）→ 运行条单向对齐：只置 true、绝不置 false。
@@ -347,6 +350,50 @@ export function shouldForceClearBusyFromBroadcast({ state, localBusy = false, tu
   if (!localBusy || shouldSeedBusyFromInstanceState(state)) return false;
   if (!turnStartTs) return true;
   return (now - turnStartTs) >= graceMs;
+}
+
+// ★ instances 快照 → 运行条与发送闸「应该是什么」。三个字段（state / bgActive / turnRunning）的
+// 组合只在这里解释一次，四个消费点全部调它：bindView 入场播种、instances 广播对齐、回放终止事件
+// 对账、startLiveTicker 每秒自检。
+//
+// 【为什么必须收敛成一处】这四处原本各写一遍判据，于是「改了一处忘了另一处」成了默认结局：
+// 2026-09-12 PR #38 的六轮 review 一共抓出 9 条问题，其中 5 条正是这个形态——补了回放对账忘了
+// ticker、修了 bgActive 又漏了 turnRunning 并存、统一终止事件时顺手改掉了 error 的发送闸语义。
+// 判据写一遍之后，这类漏改从「需要每处都记得改」变成「改不动」。
+//
+// 两条规则，缺任一条都被 review 抓过：
+//   · turnRunning === true → 运行条一定亮。前台轮真的在跑，哪怕同时挂着后台任务
+//     （bgActive 与 turnRunning 可以并存）。少了它，「后台任务 + 前台轮」会被下一条误判成没有前台活动。
+//   · 否则退回 shouldBindBusyFromBroadcast——它排除 bgActive===true：纯后台任务期不由运行条表达，
+//     那一段归 task_progress 横幅（该期没有 result 可释放，点亮了就没人清）。
+//
+// 发送闸只认在途轮，与运行条**故意不同**：纯后台任务期 state 是 busy 而 turnRunning 为 false，
+// 此时锁发送会让移动端彻底发不出消息（见 logic/composer.js 的 resolveComposerPrimaryMode）。
+//
+// live 为空（instances 里查不到该实例）→ 返回 null 表示【没有权威意见】，由调用方各自决定保守做法：
+// 播种侧不播、清除侧不清。新会话首发的乐观 busy 期实例尚未进广播，那不是「已经结束」。
+export function resolveRunStateFromSnapshot(live) {
+  if (!live || typeof live !== 'object') return null;
+  return {
+    busy: live.turnRunning === true
+      || shouldBindBusyFromBroadcast({ state: live.state, bgActive: live.bgActive }),
+    turnRunning: live.turnRunning === true,
+  };
+}
+
+// 上面那份权威意见 + 本地 busy + 宽限窗 → 该不该把本地运行条收掉。
+// 广播看门狗与 ticker 每秒自检共用：两者问的是同一个问题（权威说不忙了，本地还亮着，该收了吗），
+// 此前各写一份，ticker 那份漏了 bgActive 折算（review 第六轮 P2）。
+// 宽限窗的理由见 BUSY_BROADCAST_CLEAR_GRACE_MS：那段窗口里服务端还没把在途轮记上账。
+export function shouldClearBusyBySnapshot({ live, localBusy = false, turnStartTs = null, now = 0, graceMs = BUSY_BROADCAST_CLEAR_GRACE_MS } = {}) {
+  const authoritative = resolveRunStateFromSnapshot(live);
+  if (!authoritative) return false; // 查不到实例 = 没有权威意见 → 不清
+  // 宽限窗那半截逻辑仍交给 shouldForceClearBusyFromBroadcast，不在这里重写一遍：
+  // 把权威意见折算成它认识的粗粒度 state 即可（busy ? 'busy' : 'idle'）。
+  return shouldForceClearBusyFromBroadcast({
+    state: authoritative.busy ? 'busy' : 'idle',
+    localBusy, turnStartTs, now, graceMs,
+  });
 }
 
 // 轮次 result → 聊天流条/通知/触感/挂起工具收尾。

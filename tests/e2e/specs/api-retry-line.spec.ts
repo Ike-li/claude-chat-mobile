@@ -9,6 +9,27 @@ import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 API 重试与 SDK 提示的可见性', () => {
+  // 可恢复错误【不是】轮次终点：AgentSession.map() 对 assistant API 错误发 recoverable:true，并
+  // 故意保持 pendingTurns 非零直到随后的 result（模型/权限切档失败同理）。前端若据此解锁发送闸，
+  // 后续 instances 校正一旦延迟或丢失，用户打字就看到「发送」，发出去的消息会被仍在跑的服务端
+  // 轮次拒掉。dev 上 error handler 本就只清 busy、从不动 _turnRunning；PR #38 把三处终止事件收敛
+  // 到一个函数时顺手给 error 也加上了解锁，这条守的就是那次行为变更不得再发生（review 第六轮 P2）。
+  test('P0-30d 可恢复错误不得解锁发送闸（轮次仍在跑）', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await sendChatMessage(page, 'test:recoverable-error');
+
+    // 错误条上屏 = 那条 error 确实到达并被处理过（否则下面的断言是空过的）。
+    await expect(page.locator('#messages')).toContainText('overloaded_error', { timeout: 10_000 });
+
+    // 核心断言：实例仍报 turnRunning:true，主按钮必须还是停止钮。
+    // 修复前：error 顺带把 _turnRunning 清了，空输入框下按钮会离开 stop 态。
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-30 重试期间状态行顶替为 API 错误行，重试成功后回落 spinner', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
