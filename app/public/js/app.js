@@ -122,8 +122,8 @@ import {
   safeJsonPreview,
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
-  shouldBindBusyFromBroadcast,
-  shouldForceClearBusyFromBroadcast,
+  resolveRunStateFromSnapshot,
+  shouldClearBusyBySnapshot,
   buildClientErrorReport,
   clientErrorGateStep,
   formatLogsForCopy,
@@ -1045,10 +1045,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         //     运行条归 task_progress 横幅管）。少了这段，后台任务活着的整段时间里运行条和红色
         //     停止钮都撤不掉，resolveComposerPrimaryMode 的 busy && !hasContent 兜底支会把主按钮
         //     锁成停止钮（第三轮 P2）。
-        const keepBusy = live.turnRunning === true
-          || shouldBindBusyFromBroadcast({ state: live.state, bgActive: live.bgActive });
-        if (!keepBusy) setBusy(false);
-        if (live.turnRunning !== true) _turnRunning = false;
+        const authoritative = resolveRunStateFromSnapshot(live);
+        if (!authoritative.busy) setBusy(false);
+        if (!authoritative.turnRunning) _turnRunning = false;
       }
       return;
     }
@@ -1063,19 +1062,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!liveLine) return;
       // 兜底自检：清 busy 的两条既有通道都是被动的——轮次终止事件可能被视图路由丢弃（见上），
       // 而 instances 广播上的看门狗只在【收到广播】时才跑，系统一安静就永远不来（真机现场那 100 秒
-      // 里一次广播都没有）。这里每秒用同一份判据主动看一眼权威 state，把"等广播"换成"自己查"。
-      // 查不到实例时【不清】：新会话首发的乐观 busy 期实例尚未出现在广播里，那不是"已经结束"。
+      // 里一次广播都没有）。这里每秒主动看一眼权威快照，把「等广播」换成「自己查」。
+      // 判据与广播看门狗共用 shouldClearBusyBySnapshot（含「查不到实例就不清」与宽限窗）：
+      // 两处问的是同一个问题，此前各写一份，ticker 那份漏了 bgActive 折算（review 第六轮 P2）。
       const live = instancesList.find(x => x?.instanceId === displayedInstanceId);
-      // 折算出「对运行条而言」的有效状态，口径与 clearBusyFromTurnEndEvent 的回放对账同源：
-      // 纯后台任务期（bgActive 且无在途轮）等同于空闲——那一段归 task_progress 横幅，不由运行条表达。
-      // 【为什么必须折算】直接把粗粒度 state 喂进去，shouldForceClearBusyFromBroadcast 会把任何
-      // 'busy' 都当成活跃：前台轮结束却留着后台任务时，快照恒为 state:'busy' + turnRunning:false，
-      // 而后台任务的心跳是 transient、不带 instances 校正——于是 gap/reload 丢弃终止事件后
-      // bindView 按粗 state 播下的那条假 spinner 与停止钮，会一直挂到后台任务结束，本自检永远清不掉
-      // （PR #38 review 第六轮 P2）。turnRunning 为真时不折算，前台轮仍按 busy 保住。
-      const effectiveState = (live && live.turnRunning !== true && live.bgActive === true) ? 'idle' : live?.state;
-      if (live && shouldForceClearBusyFromBroadcast({
-        state: effectiveState,
+      if (shouldClearBusyBySnapshot({
+        live,
         localBusy: _busyState,
         turnStartTs: liveLine.turnStartTs,
         now: Date.now(),
@@ -1083,13 +1075,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 连乐观 marker 一起清：权威说这个实例已空闲，那条「等终止事件」的登记就是过期的。
         // 只清 busy 不清 marker 的话，下一次 bindView 会拿它把假运行条再点亮一次，每切回一次重演一次。
         _pendingSendBusySessionId = null;
-        // 发送闸同样按权威快照收掉，口径与 clearBusyFromTurnEndEvent 逐字一致。
+        // 发送闸同样按权威快照收掉，口径与 clearBusyFromTurnEndEvent 的回放对账同源。
         // 【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，clearView 之后
         // busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；自检只清 busy 不清闸，
         // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
         // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是本自检存在的理由（第四轮 P1）。
         // setBusy(false) 内含 updateSendButtonState()，故放在它之前赋值即可刷新主按钮。
-        if (live.turnRunning !== true) _turnRunning = false;
+        if (!resolveRunStateFromSnapshot(live).turnRunning) _turnRunning = false;
         setBusy(false);
         return;
       }
@@ -4949,16 +4941,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
     if (newViewing && newViewing === displayedInstanceId) {
-      if (shouldBindBusyFromBroadcast({ state: viewedInst?.state, bgActive: viewedInst?.bgActive })) {
+      // 权威快照的解释统一走 resolveRunStateFromSnapshot（logic/outbox-send.js）——它同时是
+      // bindView 播种、回放对账、ticker 自检用的那一份，四处不再各写一遍。
+      if (resolveRunStateFromSnapshot(viewedInst)?.busy) {
         setBusy(true);
-      } else if (shouldForceClearBusyFromBroadcast({
-        state: viewedInst?.state,
+      } else if (shouldClearBusyBySnapshot({
+        live: viewedInst,
         localBusy: _busyState,
         turnStartTs: liveLine?.turnStartTs ?? null,
         now: Date.now(),
       })) {
-        // 看门狗：终止事件丢了才会走到这（见 shouldForceClearBusyFromBroadcast 注释）——正常轮次
-        // state 全程 'busy'，这个分支不会触发。
+        // 看门狗：终止事件丢了才会走到这——正常轮次权威快照全程说「在跑」，这个分支不触发。
         setBusy(false);
       }
     }
@@ -5179,7 +5172,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       pendingSendBusySessionId: _pendingSendBusySessionId,
       viewingInstanceId: id,
       sessionId: sid,
-    }) || shouldSeedBusyFromInstanceState(entry?.state);
+    }) || Boolean(resolveRunStateFromSnapshot(entry)?.busy);
     if (restoreBusy) setBusy(true);
     // 发送闸同样要重种：clearView 刚把 _turnRunning 清零，而 setInstances 对它的赋值发生在 bindView 之前，
     // 会被那次清零冲掉——切回一个正在跑的会话时闸就失准了（停止钮不出现、发送反被服务端拒）。

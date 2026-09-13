@@ -31,6 +31,8 @@ import {
   shouldReseedBusyAfterReload,
   shouldBindBusyFromBroadcast,
   shouldForceClearBusyFromBroadcast,
+  resolveRunStateFromSnapshot,
+  shouldClearBusyBySnapshot,
   BUSY_BROADCAST_CLEAR_GRACE_MS,
   shouldClearInterruptPendingOnSystem,
   systemBarClass,
@@ -918,5 +920,63 @@ test.describe('离线重放：worktree 意图每批只兑现一次', () => {
   test('ack 透传 instanceId —— 不传锚点就永远设不上', () => {
     assert.equal(presentOfflineResendAck(null, { ok: true, instanceId: 'inst_7' }).instanceId, 'inst_7');
     assert.equal(presentOfflineResendAck(null, { ok: true }).instanceId, null);
+  });
+});
+
+test.describe('resolveRunStateFromSnapshot —— instances 快照的唯一解释处', () => {
+  // 这五格覆盖 state/bgActive/turnRunning 的全部有意义组合。四个消费点（bindView 播种 /
+  // 广播对齐 / 回放对账 / ticker 自检）都经这里，所以改这张表等于同时改四处。
+  const cases = [
+    ['前台轮在跑（无后台任务）',     { state: 'busy', bgActive: false, turnRunning: true },  { busy: true,  turnRunning: true }],
+    ['前台轮 + 真后台任务并存',      { state: 'busy', bgActive: true,  turnRunning: true },  { busy: true,  turnRunning: true }],
+    ['纯后台任务（前台已结束）',     { state: 'busy', bgActive: true,  turnRunning: false }, { busy: false, turnRunning: false }],
+    ['待审批',                       { state: 'permission', bgActive: false, turnRunning: false }, { busy: true, turnRunning: false }],
+    ['真空闲',                       { state: 'idle', bgActive: false, turnRunning: false }, { busy: false, turnRunning: false }],
+  ];
+  for (const [label, live, expected] of cases) {
+    test(label, () => {
+      assert.deepEqual(resolveRunStateFromSnapshot(live), expected);
+    });
+  }
+
+  test('turnRunning 为真时 bgActive 不得把前台轮抹掉（review 第四轮 P2 的形态）', () => {
+    assert.equal(resolveRunStateFromSnapshot({ state: 'busy', bgActive: true, turnRunning: true }).busy, true);
+  });
+
+  test('纯后台任务期不由运行条表达——那一段归 task_progress 横幅（review 第三轮 P2 的形态）', () => {
+    assert.equal(resolveRunStateFromSnapshot({ state: 'busy', bgActive: true, turnRunning: false }).busy, false);
+  });
+
+  test('查不到实例 → null（没有权威意见），不是「已经结束」', () => {
+    assert.equal(resolveRunStateFromSnapshot(null), null);
+    assert.equal(resolveRunStateFromSnapshot(undefined), null);
+  });
+});
+
+test.describe('shouldClearBusyBySnapshot —— 广播看门狗与 ticker 自检共用', () => {
+  const now = 1_000_000;
+  const busyLive = { state: 'busy', bgActive: false, turnRunning: true };
+  const idleLive = { state: 'idle', bgActive: false, turnRunning: false };
+  const bgOnly = { state: 'busy', bgActive: true, turnRunning: false };
+
+  test('本地不忙 → 不清（没什么可清的）', () => {
+    assert.equal(shouldClearBusyBySnapshot({ live: idleLive, localBusy: false, turnStartTs: now - 99_000, now }), false);
+  });
+
+  test('权威说还在跑 → 不清', () => {
+    assert.equal(shouldClearBusyBySnapshot({ live: busyLive, localBusy: true, turnStartTs: now - 99_000, now }), false);
+  });
+
+  test('查不到实例 → 不清（乐观 busy 期实例还没进广播）', () => {
+    assert.equal(shouldClearBusyBySnapshot({ live: null, localBusy: true, turnStartTs: now - 99_000, now }), false);
+  });
+
+  test('宽限窗内不清，窗外才清——服务端那段窗口里还没把在途轮记上账', () => {
+    assert.equal(shouldClearBusyBySnapshot({ live: idleLive, localBusy: true, turnStartTs: now - 1_000, now }), false);
+    assert.equal(shouldClearBusyBySnapshot({ live: idleLive, localBusy: true, turnStartTs: now - (BUSY_BROADCAST_CLEAR_GRACE_MS + 1), now }), true);
+  });
+
+  test('纯后台任务期【要】清——ticker 此前漏了这一折算（review 第六轮 P2）', () => {
+    assert.equal(shouldClearBusyBySnapshot({ live: bgOnly, localBusy: true, turnStartTs: now - 99_000, now }), true);
   });
 });
