@@ -210,8 +210,18 @@ test.describe('checkIdle()', () => {
   });
 
   // 用户正在看会话时不得空闲回收：否则 onExit reselect 会清屏，历史分块渲染的 frag 永远不落地 → 空屏。
+  //
+  // 阈值取 60_000 而不是隔壁反向用例那个 1：本条要证明的是「touchActivity 把回收时钟续到了现在」，
+  // 阈值多大都成立，而取 1 会把断言压在定时器精度上——checkIdle 的判据是
+  // `Date.now() - max(lastActivity, lastViewedAt) > instanceIdleReclaimMs`，
+  // touchActivity() 与 checkIdle() 只隔一条语句，CI 上一次 GC 或调度抢占让这中间过掉 2ms，
+  // 就会反过来判成「该回收」。2026-09-12 dev 的 unit-test (24) 上真发作过一次（0f5df4f8，
+  // `true !== false`），本机插 2ms 停顿可确定性复现。
+  // 换成 60_000 不是放宽余量而是【消掉时序依赖】：刚 touch 过的时钟读数是 0～1ms，离 6 万 ms 的
+  // 阈值有六万倍余量，任何现实抖动都够不着。捕捉力不受影响——真回归（checkIdle 不再认
+  // lastViewedAt，或 touchActivity 空转）会让 viewIdleFor 变成 Date.now() 本身，照样越阈变红。
   test('touchActivity 续期 lastActivity → 不触发空闲回收', () => {
-    const { s, events } = makeSession({ instanceIdleReclaimMs: 1 });
+    const { s, events } = makeSession({ instanceIdleReclaimMs: 60_000 });
     s.pendingTurns = 0;
     s.lastActivity = 0;
     let aborted = false;
