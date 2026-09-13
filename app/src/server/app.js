@@ -207,7 +207,7 @@ const notify = createNotifyChannels({
   env: process.env,
   onDeliveryFailure: () => scheduleBgBroadcast(),
 });
-const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
+const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription, removePushSubscription } = notify;
 
 // 通知会话段对齐抽屉浏览标题（SDK summary / ai-title），不是 sessions.json 里截断的首条用户消息。
 // 读盘/SDK 失败回落 firstMessage，不挡这条通知。节流仍在调用方同步完成，避免 peek 期间重复放行。
@@ -557,6 +557,7 @@ registerOperationalRoutes({
     publicKey: notify.vapidPublicKey,
     isValidSubscription: isValidPushSubscription,
     saveSubscription: savePushSubscription,
+    removeSubscription: removePushSubscription,
   },
   isDeviceTrusted,
   // 与 socket 握手侧 io.use 完全同源的 bypass 判据（CF Access 已验 / 真本机直连）。缺了它，
