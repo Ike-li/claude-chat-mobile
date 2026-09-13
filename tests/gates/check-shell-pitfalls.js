@@ -5,13 +5,22 @@
 // 反向信号**的那种。2026-09-12 一次发版里两条都踩了，第一条还是在刚修完它、并写下详细注释
 // 解释它之后，紧接着的下一个函数里又踩了一次。靠注释和"注意点"挡不住，只能扫。
 //
-// ── 陷阱 1：pipefail 下的 `… | grep -q` ──────────────────────────────────
-// grep -q 命中第一条就退出，上游命令随即收到 SIGPIPE 而非 0 退出。脚本若开了 `set -o pipefail`，
-// 整个管道被判失败 —— **命中反而当没命中**，判据恒假。
+// ── 陷阱 1：pipefail 下「读够就退出」的下游命令 ──────────────────────────
+// 下游读够了就退出，上游命令随即收到 SIGPIPE 而非 0 退出。脚本若开了 `set -o pipefail`，
+// 整个管道被判失败。
 // 实测后果：release.sh 的版本号推导把 23 个 feat 判成 patch；RESUMING 判据永不触发，
 // 把一个已经推出去的版本反复 bump（1.8.0 → 1.8.1 → 1.9.0）。
 // 两次都因为「在交互 shell 里手动验证」而看到了正确结果 —— 交互 shell 没有 pipefail。
-// 改法：`X="$(… | grep -c … || true)"` 然后比较数量（grep -c 读完整个输入，不产生 SIGPIPE）。
+//
+// 这一类有两个入口，**症状相同但改法相反**，所以分开扫：
+//   ① `grep -q` —— 只用退出码、不产出。症状是**命中反而当没命中**，判据恒假。
+//      改法：`X="$(… | grep -c … || true)"` 再比数量。
+//      ★ 这一类**不豁免** `|| true`：补上它只会让判据恒真，从"永远不命中"变成"永远命中"。
+//   ② `head` / `grep -m` —— 取的是输出。
+//      改法：补 `|| true` 就够了（命令替换照样拿得到 stdout），或换成读完整个输入的
+//      写法（`awk 'NR==1'`）。所以这一类**豁免**已经写了 `|| true` 的行。
+// tail 不在此列：它必须读到 EOF 才知道最后一行是什么，不会提前退出（已实测）。
+// 2026-09-13 扩到 ② —— 此前只认 grep -q，而 `| head -1` 的后果与它一模一样。
 //
 // ── 陷阱 2：`$VAR` 后紧跟非 ASCII 字符 ───────────────────────────────────
 // `"PR #$PR（更新）"` 里 bash 会把全角 `（` 的首字节并进变量名，查的是 `PR\xEF…`。
@@ -30,6 +39,10 @@ const files = execFileSync('git', ['ls-files', '*.sh'], { cwd: ROOT, encoding: '
 
 // `| grep -q` / `| grep -qxF` 等：短横线后的任意标志组合里含 q
 const PIPED_GREP_Q = /\|\s*grep\b[^|;&\n]*?\s-[a-zA-Z]*q/;
+// 同一个 SIGPIPE 陷阱的另一批入口（取输出型）：`| head`、`| grep -m1`、`| grep --max-count=1`
+const PIPED_EARLY_EXIT = /\|\s*head\b|\|\s*grep\b[^|;&\n]*?(\s-[a-zA-Z]*m|\s--max-count)/;
+// 取输出型已经接住了管道退出码就不算问题 —— 见文件头 ② 的说明
+const HAS_PIPE_FALLBACK = /\|\|\s*(true|:|echo)\b/;
 // `$NAME` 紧跟一个非 ASCII 字符（中文标点/汉字都算）。`${NAME}` 形态不匹配，因为 } 是 ASCII。
 // 用 \P{ASCII} 而不是 [^\x00-\x7F]：后者被 eslint 的 no-control-regex 拒（它含 \x00）。
 const VAR_THEN_NONASCII = /\$[A-Za-z_][A-Za-z0-9_]*\P{ASCII}/u;
@@ -45,6 +58,11 @@ for (const rel of files) {
     if (hasPipefail && PIPED_GREP_Q.test(line)) {
       problems.push(`${at} pipefail 下的 \`| grep -q\` —— 命中即 SIGPIPE，判据会恒假。`
         + `改用 \`X="$(… | grep -c … || true)"\` 再比数量。\n    ${line.trim()}`);
+    }
+    if (hasPipefail && PIPED_EARLY_EXIT.test(line) && !HAS_PIPE_FALLBACK.test(line)) {
+      problems.push(`${at} pipefail 下的 \`| head\` / \`| grep -m\` —— 读够就退出，上游收 SIGPIPE，`
+        + `整条管道判失败。这一类取的是输出，补 \`|| true\` 就够了（命令替换照样拿得到 stdout），`
+        + `或换成读完整个输入的写法（\`awk 'NR==1'\`）。\n    ${line.trim()}`);
     }
     if (VAR_THEN_NONASCII.test(line)) {
       problems.push(`${at} \`$VAR\` 后紧跟非 ASCII —— bash 会把它并进变量名（set -u 下直接中止）。`
