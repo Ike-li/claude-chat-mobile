@@ -23,6 +23,7 @@ export function makeSession(opts = {}) {
     onUsage: opts.onUsage || (() => {}),
     onBgTaskChange: opts.onBgTaskChange || (() => {}),
     onStateSettled: opts.onStateSettled || (() => {}),
+    onCwdChanged: opts.onCwdChanged, // 缺省不传：裁决方缺席时实例不得自行改 cwd
   });
   return { s: session, events, dispose: () => session.dispose() };
 }
