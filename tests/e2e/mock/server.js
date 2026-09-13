@@ -35,6 +35,19 @@ let pendingFreshPermissionMode;
 let pendingFreshEffortLevel;
 let pendingFreshCwd;
 
+// 真 server 下发的 `viewingCwd` 是【工作区轴】：托管 worktree 的实例归父仓
+// （app/src/server/app.js 的 workspaceCwdOf + broadcastInstances，产品判据是「worktree 是临时模式、
+// 不占抽屉条目」）。而 `instances[].cwd` 是【驾驶轴】，逐条如实下发。
+//
+// mock 此前两处都直接用实例 cwd，于是「工作区轴 ≠ 驾驶轴」这个形态在 E2E 里**根本不可达**：
+// 前端拿 currentCwd（=viewingCwd）去拉 worktree 会话的历史本该失败，mock 却让它恒成功。
+// 2026-09-13 真机撞到的正是这一格——reloadCurrentFromHistory 用 currentCwd，锁屏回来必然
+// 「历史消息加载失败」，而全部 324 条 E2E 全绿。补上这条归组，那一格才照得出来。
+const workspaceCwdOf = (cwd) => {
+  const m = /^(.*)\/\.claude\/worktrees\/[^/]+$/.exec(cwd || '');
+  return m ? m[1] : cwd;
+};
+
 function createDefaultInstances() {
   return [{
     instanceId: 'inst_1',
@@ -644,7 +657,7 @@ app.post('/__resolve-session-id', (_req, res) => {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'instances', payload: { canRestart: mockCanRestart,
       viewingInstanceId,
-      viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
       dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
       instances: mockInstances, service: mockServicePayload()
     }
@@ -726,6 +739,18 @@ function mainCwdSessions() {
       ...(terminalWaitingArmed ? { terminal: 'waiting', terminalSource: 'cli' }
         : desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
           : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {}),
+    },
+    {
+      // 工作区轴 ≠ 驾驶轴：会话在父仓开、中途 EnterWorktree 进 .claude/worktrees/<name>，
+      // transcript 随之迁到新 cwd 的 project 目录。列表项的 cwd 是驾驶轴（真 server 的
+      // listSessions 扫盘给的就是 worktree 路径），而 viewingCwd 仍归父仓。
+      id: 'mock-session-worktree',
+      title: 'Worktree Driving Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: mockListClockBase - 760000,
+      cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x',
+      worktree: 'wt-x',
+      entrypoint: 'sdk-ts'
     },
     {
       id: 'mock-session-gap',
@@ -873,7 +898,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -929,7 +954,7 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
           viewingInstanceId,
-          viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+          viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -957,7 +982,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
@@ -983,7 +1008,7 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
           viewingInstanceId,
-          viewingCwd: inst?.cwd || mockInstances[0].cwd,
+          viewingCwd: workspaceCwdOf(inst?.cwd || mockInstances[0].cwd),
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
           instances: mockInstances, service: mockServicePayload()
         }
@@ -1039,7 +1064,7 @@ io.on('connection', socket => {
           pendingFreshCwd = closedCwd;
         }
       }
-      const viewingCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || closedCwd;
+      const viewingCwd = workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || closedCwd);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart,
@@ -1367,6 +1392,11 @@ io.on('connection', socket => {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
       },
+      'mock-session-worktree': {
+        instanceId: 'inst_worktree',
+        title: 'Worktree Driving Session',
+        cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x'
+      },
       'mock-session-timeline': {
         instanceId: 'inst_timeline',
         title: 'Timeline Session'
@@ -1395,7 +1425,10 @@ io.on('connection', socket => {
       return;
     }
     const meta = knownArchived[sessionId];
-    if (!meta || cwd !== '/Users/you/code/claude-chat-mobile') {
+    // 归组后再比：托管 worktree 会话的列表项 cwd 是 `<父仓>/.claude/worktrees/<name>`，
+    // 真 server 的 routeCwd 放行这一形态（resolveManagedWorktree）。只比字面量会把它判成
+    // 「session not found」，那条路径在 E2E 里就永远走不到。
+    if (!meta || workspaceCwdOf(cwd) !== '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
       return;
     }
@@ -1404,7 +1437,7 @@ io.on('connection', socket => {
     if (!archivedInst) {
       archivedInst = {
         instanceId: meta.instanceId,
-        cwd: '/Users/you/code/claude-chat-mobile',
+        cwd: meta.cwd || '/Users/you/code/claude-chat-mobile',
         sessionId,
         title: meta.title,
         state: 'idle',
@@ -1422,7 +1455,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: archivedInst.cwd,
+        viewingCwd: workspaceCwdOf(archivedInst.cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -1722,6 +1755,20 @@ io.on('connection', socket => {
         messages: [
           { role: 'user', content: 'Recovered foreground prompt' },
           { role: 'assistant', content: 'Authoritative history after foreground reload.' }
+        ]
+      });
+    } else if (sessionId === 'mock-session-worktree') {
+      // 逐字复刻真 server 的归属校验：transcript 只存在于【驾驶轴】那个 project 目录，
+      // 拿工作区轴（父仓）来查必然 sessionFileExists=false → { messages: [], error: '会话不存在' }。
+      // 前端若用 currentCwd（=viewingCwd=父仓）拉历史就会踩到这一支，正是 2026-09-13 真机那格。
+      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') {
+        callback({ messages: [], error: '会话不存在' });
+        return;
+      }
+      callback({
+        messages: [
+          { role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' },
+          { role: 'assistant', content: 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
@@ -2120,7 +2167,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances, service: mockServicePayload(),
       },
@@ -2465,6 +2512,11 @@ io.on('connection', socket => {
         }
         ack(21, { unreadOnEntry: 3 });
       }
+    } else if (instanceId === 'inst_worktree') {
+      // 重连后的 sync:since 回 gap，逼前端走 reloadCurrentFromHistory（**不是** bindView 的 reload
+      // 分支——那条用 entry.cwd，早就是对的）。这条路径的注释原话：「锁屏/切后台冻结页面断开 socket，
+      // viewingInstanceId 全程不变，故不会走 bindView，只会走到这里」，正是真机复现的那一格。
+      ack(0, { gap: true });
     } else if (instanceId === 'inst_gap') {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
@@ -2947,7 +2999,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload(),
           },
@@ -2966,7 +3018,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload(),
           },
@@ -3003,7 +3055,7 @@ io.on('connection', socket => {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
             type: 'instances', payload: { canRestart: mockCanRestart,
               viewingInstanceId,
-              viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+              viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
               dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
               instances: mockInstances, service: mockServicePayload(),
             },
@@ -3121,7 +3173,7 @@ io.on('connection', socket => {
         switchBackReplayArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3147,7 +3199,7 @@ io.on('connection', socket => {
         replayFloodHistoryArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3172,7 +3224,7 @@ io.on('connection', socket => {
         replaySmallSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3198,7 +3250,7 @@ io.on('connection', socket => {
         replayUnreadSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -3868,7 +3920,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3910,7 +3962,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3951,7 +4003,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -3992,7 +4044,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4037,7 +4089,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4074,7 +4126,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4111,7 +4163,7 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4680,7 +4732,7 @@ io.on('connection', socket => {
       openFreshMockInstance(requestedModel);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
 
@@ -4697,7 +4749,7 @@ io.on('connection', socket => {
       console.log('[mock] P0-DUP-OPT — 同会话换实例并广播 instances，触发前端 bindView');
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
       await delay(DUP_OPTIMISTIC_DELAY_MS);
     }

@@ -648,9 +648,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
                                         // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
-  // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd：托管 worktree 的会话
-  // 工作区轴归父仓，但文件实际改在 .claude/worktrees/<name> 下（判据见 logic/panel-state.js）。
-  const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
+  // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
+  // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
+  const drivingCwdOf = (instanceId) => resolvePanelCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
+  // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
+  const panelCwd = () => drivingCwdOf(viewingInstanceId);
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
@@ -1410,7 +1413,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
     if (instancesList.find(x => x?.instanceId === displayedInstanceId)?.turnRunning === true) _turnRunning = true;
     showLoadingCard();
-    loadHistory(displayedSessionId, undefined, onDone); // cwd 默认 currentCwd
+    loadHistory(displayedSessionId, undefined, onDone); // cwd 默认驾驶轴（见 loadHistory 头注）
   }
   // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
   // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
@@ -2251,7 +2254,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           : t('已回退 {n} 个文件，但新会话创建失败').replace('{n}', n),
           p.forkedSessionId ? 'text-ink-faint' : 'text-danger');
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
-        loadHistory(ev.sessionId, p.cwd || currentCwd);
+        loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
@@ -7819,7 +7822,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊
   // 判断"此刻 DOM 已稳定、可以查 topLevelBubbles() 定位锚点"——只有 bindView 的 sync:since 回调会传，
   // onHistoryAppend（只读镜像追平）不传，维持原样不受影响。
-  function loadHistory(sessionId, cwd = currentCwd, onDone) {
+  // cwd 缺省取【驾驶轴】而不是 currentCwd：transcript 落在会话实际所在的那棵树里，而 currentCwd 是
+  // 工作区轴，托管 worktree 的会话恒为父仓。拿父仓去查，server 的 sessionFileExists 必然 false →
+  // ack 回 { messages: [], error: '会话不存在' } → 灰行「历史消息加载失败」。
+  // 2026-09-13 真机：首次点开（bindView 传 entry.cwd，驾驶轴）好好的，锁屏回来走
+  // reloadCurrentFromHistory（用缺省值）就必failed——所以症状是「会出现，但不是百分百」。
+  function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     // SS-ORDER：从这里到历史真正落地是一段可观的窗口（socket 往返 + renderHistoryBubbles 的分块
