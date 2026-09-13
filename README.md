@@ -76,7 +76,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 手机打开终端打印的地址即可。首次从新设备进来要批准一次：`node scripts/device.js list` 再 `approve <ID>`。手输 64 位 token 很痛苦，`node scripts/qr.js` 能把地址打成二维码扫一下。
 
-> **起服 ≠ 能聊天。** CCM 的令牌 / 设备审批只决定手机能不能进主壳，`claude` CLI 有没有登录才决定能不能真对话。发消息时出现 `Not logged in · Please run /login` 反而说明模型通路是通的——到**主机**终端的 `claude` 里 `/login` 后重试。验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
+> **起服 ≠ 能聊天。** CCM 的令牌 / 设备审批只决定手机能不能进主壳；**主机终端里的 `claude` 能不能正常跑完一轮会话**，才决定手机上能不能真对话。官方订阅要本机已 `/login`；第三方网关不走 Anthropic 登录、**不会**出现 `Not logged in`，它要的是 `ANTHROPIC_*` 真的生效。手机上收到 CLI 透传的具体报错反而是好消息——说明这条链路本身是通的。两种情况收敛到同一个动作：**先在主机终端把 `claude` 聊通一轮，再从手机重试**。验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
 
 要改代码或跑测试请 `git clone` 完整仓库。配置、非交互 setup、PWA、CLI hooks、**更新方式**：**→ [首次使用指南](docs/getting-started.md)**
 
