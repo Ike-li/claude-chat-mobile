@@ -6002,8 +6002,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 顶栏文字 chip 与会话按钮同一去处：点它打开抽屉（需要你区 / 服务异常区 / 工作区树就在里面）。
   attentionChipEl?.addEventListener('click', () => openLeftSidebar());
 
+  // 抽屉内操作的失败回执：文案留在抽屉里（见 index.html #drawerNotice）。空文案＝收起。
+  const drawerNoticeEl = $('drawerNotice');
+  const showDrawerNotice = (text) => {
+    if (!drawerNoticeEl) return;
+    drawerNoticeEl.textContent = text || '';
+    drawerNoticeEl.classList.toggle('hidden', !text);
+  };
+
   const { openDeleteSession } = createSessionDeleteController(appContext, {
-    socket, addBar, appConfirm,
+    socket, addBar, appConfirm, showDrawerNotice,
     onDeleted: ({ cwd } = {}) => {
       // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
       if (cwd) sessionsCache.delete(cwd);
@@ -6861,6 +6869,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+    // 上一次操作的失败回执在这里作废：列表整段重建（含删成功后的 onDeleted、每次打开抽屉）
+    // 说明那条提示所指的那一行状态已经翻篇，继续挂着只会指向一个不存在的上下文。
+    showDrawerNotice('');
     drawerUnreadJump.resetCursor(); // 面板整段重建：旧游标指向的行已不存在，从头数起
     // UX-007：当前工作区默认展开 + 记忆用户展开态
     try {
