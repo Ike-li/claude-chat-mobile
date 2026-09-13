@@ -76,7 +76,7 @@ npm ci --omit=dev && npm run setup && npm start
 
 Open the address printed in the terminal on your phone. The first time a new device connects it needs one approval: `node scripts/device.js list`, then `approve <ID>`. Typing a 64-character token on a phone is painful — `node scripts/qr.js` renders the address as a terminal QR code.
 
-> **A running server ≠ a working chat.** CCM's token and device approval only decide whether the phone gets into the shell; whether the `claude` CLI is signed in decides whether you can actually talk. Seeing `Not logged in · Please run /login` when you send a message actually means the model path works — run `/login` inside `claude` on the **host**, then retry. Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
+> **A running server ≠ a working chat.** CCM's token and device approval only decide whether the phone gets into the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether you can actually talk. A Claude subscription needs that host signed in; a third-party gateway does not use Anthropic login and will **never** show `Not logged in` — it needs `ANTHROPIC_*` to actually take effect. A specific CLI error reaching your phone is good news: the link itself works. Both cases converge on one action: **get `claude` through a turn in your host terminal, then retry from the phone.** Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
 
 To change code or run tests, `git clone` the full repository instead. Configuration, non-interactive setup, PWA, CLI hooks and **how to update**: **→ [Getting Started](docs/getting-started.en.md)**
 

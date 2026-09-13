@@ -339,13 +339,18 @@ Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `
 
 ## 8. Complete the first-run check
 
-Two gates stay separate: **CCM access token / device approval** only decide whether the phone can enter the shell; **Claude CLI login** decides whether chat can actually run. A running server is not the same as a working conversation.
+Two gates stay separate: **CCM access token / device approval** only decide whether the phone can enter the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether chat can actually run. A running server is not the same as a working conversation.
+
+**One criterion covers both model paths** (see [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways) above): a Claude subscription requires the host to be signed in; a third-party gateway does not use Anthropic login at all and will **never** show `Not logged in` — what it needs is for `ANTHROPIC_*` in settings to actually take effect. So don't use "is it signed in" as the criterion — use "can `claude` hold a conversation in that same workspace directory."
 
 On the phone, verify:
 
 1. The expected workspace appears on the home screen.
-2. **Hard gate (OK even when CLI is logged out):** start a new session and send a message. If the main path shows `Not logged in · Please run /login` (or an equivalent CLI-passed error), **this step passes** — the model path correctly surfaces the logout state instead of a fake streaming success. On the host, open `claude`, run `/login` (or first get a clean `claude auth status`), then retry from the phone.
-3. **Green path (CLI logged in):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
+2. **Hard gate (works even before the model path is configured):** start a new session and send a message. **As long as what reaches the phone is the CLI's real result — a normal answer, or a specific error — this step passes**: it proves the CCM→CLI link works instead of faking a streaming success.
+   - Claude subscription, signed out → `Not logged in · Please run /login`: on the host, open `claude` and run `/login` (or first get a clean `claude auth status`).
+   - A third-party gateway **never** shows that line (it does not use Anthropic login). When its config is not in effect you get the gateway's own error instead — 401, connection refused, unknown model name → check which layer holds `ANTHROPIC_*` per [Claude subscriptions and third-party gateways](#claude-subscriptions-and-third-party-gateways), then look at `doctor`'s MODEL_SETTINGS entry.
+   - Both cases converge on the same action: **get `claude` through one normal turn in your host terminal, in that same workspace directory**, then retry from the phone.
+3. **Green path (the terminal can already hold a conversation):** send a harmless prompt such as “Reply with OK only.” The response streams and reaches a finished-turn state.
 4. Settings show model, permission mode, effort, and service status.
 5. If Web Push is enabled, use “Send a test push” now instead of discovering a broken path during a real approval.
 
@@ -693,7 +698,7 @@ site data and the installed PWA must be cleared manually.
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
-| Phone is in the main shell, but sending shows `Not logged in · Please run /login` | This is **Claude CLI not logged in**, not a broken CCM token/device gate. On the host run `claude auth status`; if logged out, `/login` inside `claude`, then retry from the phone. See §1 prerequisites |
+| Phone is in the main shell, but sending shows `Not logged in · Please run /login` | This is **Claude CLI not logged in**, not a broken CCM token/device gate. On the host run `claude auth status`; if logged out, `/login` inside `claude`, then retry from the phone. **A third-party gateway never shows this line** — it does not use Anthropic login, and an ineffective config surfaces the gateway's own error instead; see "A third-party gateway is ignored" below. See §1 prerequisites |
 | After one wrong token, the correct one is rejected too (HTTP 401) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **This tier answers 401 `unauthorized` with no `Retry-After`** — the wording deliberately avoids "too many attempts" when you only got it wrong once. **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` / HTTP 429 |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |

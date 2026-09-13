@@ -1,5 +1,18 @@
 # 变更记录
 
+## v1.9.1 — 2026-09-13
+
+Changes since v1.9.0.
+
+### Verified environment
+- claude CLI: 2.1.269
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Other
+- docs: 首次验收的判据从「CLI 是否登录」改成「终端能否正常会话」
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.9.0...v1.9.1
+
 ## v1.9.0 — 2026-09-13
 
 Changes since v1.8.1.
