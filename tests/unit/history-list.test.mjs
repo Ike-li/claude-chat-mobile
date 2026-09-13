@@ -106,11 +106,19 @@ test('peekSessionListTitle: 非法 id / 无文件 → 空串，不抛', async ()
 
 test('peekSessionListTitleTimed: peek 永不 settle 时超时返回空串，不挂起', async () => {
   const peek = () => new Promise(() => {});
+  const TIMEOUT_MS = 40;
+  // 下界留 5ms 余量。setTimeout **不保证不早于**设定值触发（libuv 的定时精度），再叠上
+  // Date.now() 的毫秒截断，两头各差不到 1ms 就能让 elapsed 落到 39。2026-09-12 实测：
+  // CI 的 unit-test (24) 上就是 39ms，卡死在 `>= TIMEOUT_MS` 直接把一次发版挡了下来，
+  // 同一个 sha 重跑即绿——零代码改动两种结果，是断言太紧而不是实现有问题。
+  //
+  // 放宽不削弱捕捉力：这条要区分的是「等到超时才返回」与「压根没等就返回」，后者 elapsed≈0，
+  // 离 35 差着一个数量级。真正守住上界的是下面那条 < 400。
   const t0 = Date.now();
-  const title = await peekSessionListTitleTimed('/a', 'sid', { peek, timeoutMs: 40 });
+  const title = await peekSessionListTitleTimed('/a', 'sid', { peek, timeoutMs: TIMEOUT_MS });
   assert.equal(title, '');
   const elapsed = Date.now() - t0;
-  assert.ok(elapsed >= 40, `应等到超时，实际 ${elapsed}ms`);
+  assert.ok(elapsed >= TIMEOUT_MS - 5, `应等到超时（容 5ms 定时器抖动），实际 ${elapsed}ms`);
   assert.ok(elapsed < 400, `超时后应立刻返回，实际 ${elapsed}ms`);
 });
 
