@@ -1056,6 +1056,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
     if (unlockSendGate) _turnRunning = false;
   }
+  // ★ 兜底清除的【后果】只写一处，两条兜底通道（instances 广播看门狗、startLiveTicker 每秒自检）共用。
+  // 这是把判据收敛到 shouldClearBusyBySnapshot 的另一半：判据共用而后果各写各的，等于把「改一处
+  // 漏另一处」换个地方重开——事实上就重开过一次，ticker 清了乐观 marker、广播看门狗没清，于是权威
+  // 说空闲、运行条也收掉了，marker 却还留着，下一次切回该会话 bindView 的 shouldRestoreOptimisticBusy
+  // 又拿它把假运行条连同停止钮点亮一整个宽限窗，每切回一次重演一次（PR #38 review 第八轮 P2）。
+  // 触发它不需要丢包：移动端页面转后台时 setInterval 被节流甚至冻结，而 socket 消息醒来后照常派发，
+  // 于是「广播先于被节流的 ticker 到达」是常态而非边角。
+  // 注意 setBusy(false) 会 stopLiveTicker()，所以广播看门狗清完之后 ticker 不会再跑来补这一刀。
+  function forceClearBusyByAuthority(live) {
+    // 乐观 marker 记的是「我从这个客户端发出的那条消息还没等到它的终止事件」。权威此刻说这个实例
+    // 空闲且已过宽限，那条登记就是过期的——留着只会在下次 bindView 把假运行态复活。
+    _pendingSendBusySessionId = null;
+    // 发送闸按权威快照收。【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，
+    // clearView 之后 busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；只清 busy 不清闸，
+    // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
+    // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是自检存在的理由（第四轮 P1）。
+    // 广播路径上 _turnRunning 在本函数之前已按 viewedInst.turnRunning 对齐过一次，这里是幂等的；
+    // ticker 路径则只有这一次机会。setBusy(false) 内含 updateSendButtonState()，故赋值必须排在它之前。
+    if (!resolveRunStateFromSnapshot(live)?.turnRunning) _turnRunning = false;
+    setBusy(false);
+  }
   function startLiveTicker() {
     if (liveTicker) return;
     liveTicker = setInterval(() => {
@@ -1072,17 +1093,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         turnStartTs: liveLine.turnStartTs,
         now: Date.now(),
       })) {
-        // 连乐观 marker 一起清：权威说这个实例已空闲，那条「等终止事件」的登记就是过期的。
-        // 只清 busy 不清 marker 的话，下一次 bindView 会拿它把假运行条再点亮一次，每切回一次重演一次。
-        _pendingSendBusySessionId = null;
-        // 发送闸同样按权威快照收掉，口径与 clearBusyFromTurnEndEvent 的回放对账同源。
-        // 【为什么必须一起清】gap / 大缓冲 reload 那条路径上回放会被整批丢弃，clearView 之后
-        // busy 与 _turnRunning 都是从这个悬留的乐观 marker 恢复的；自检只清 busy 不清闸，
-        // resolveComposerPrimaryMode 优先看 _turnRunning，主按钮会永久停在停止钮、一条也发不出去，
-        // 直到下一次 instances 广播——而「系统安静时广播根本不来」正是本自检存在的理由（第四轮 P1）。
-        // setBusy(false) 内含 updateSendButtonState()，故放在它之前赋值即可刷新主按钮。
-        if (!resolveRunStateFromSnapshot(live).turnRunning) _turnRunning = false;
-        setBusy(false);
+        forceClearBusyByAuthority(live);
         return;
       }
       renderLiveLine();
@@ -4952,7 +4963,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         now: Date.now(),
       })) {
         // 看门狗：终止事件丢了才会走到这——正常轮次权威快照全程说「在跑」，这个分支不触发。
-        setBusy(false);
+        // 善后与 ticker 自检共用 forceClearBusyByAuthority：此前这里只 setBusy(false)，把乐观
+        // marker 留在了原地（见该函数注释，第八轮 P2）。
+        forceClearBusyByAuthority(viewedInst);
       }
     }
     updateSessionsDot();
