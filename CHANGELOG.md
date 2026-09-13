@@ -1,5 +1,58 @@
 # 变更记录
 
+## v1.9.0 — 2026-09-13
+
+Changes since v1.8.1.
+
+### Verified environment
+- claude CLI: 2.1.269
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Features
+- feat(push): 推送订阅补上「关闭」这条出路
+
+### Fixes
+- fix(release): 补齐发版中断后三个救不回来的断点
+- fix(web): 重载历史走驾驶轴 cwd，修锁屏回来「历史消息加载失败」
+- fix(server): 换 cwd 后「本实例 cwd」的消费点一并走驾驶轴
+- fix(agent): 会话中途 EnterWorktree 后实例 cwd 跟着走
+- fix(push): 改预览开关不得把已关掉的推送偷偷订回来
+- fix(ci): 分片时长片段改成非隐藏文件名，并让上传捞空直接红
+- fix(web): 回执去用户此刻在看的那一层，并让审计面板说出是哪道保护拦的
+- fix(web): 抽屉里删除失败的理由要留在抽屉里，两道保护的拒绝也记审计
+- fix(web): 兜底清 busy 的善后也收敛成一处，广播看门狗补清乐观 marker
+- fix(web): 可恢复错误不解锁发送闸；ticker 自检对齐 bgActive 口径
+- fix(e2e): P0-17i 镜像三态改由用例显式推进，拆掉与 mock 定时器的赛跑
+- fix(web): retry 行不跟「回放中性」走；文档补上纯后台任务的例外
+- fix(ci): 分片编排的 spec 发现改递归——嵌套目录会被静默漏跑
+- fix(web): 对账保住「后台任务+前台轮并存」，自检一并收发送闸
+- fix(web): 回放对 live 行全字段中性，并让对账口径与广播一致（排除 bgActive）
+- fix(web): 清掉悬留的乐观 busy marker，并在回放后对账运行态
+- fix(web): 回放的轮次终止事件也不得写运行态（对称补齐），并修正文档口径
+- fix(e2e): mock 新增会话须排在最近列表前 8 之外，否则挤掉 P0-11am 的断言对象
+- fix(ui): 状态栏判据改读表面 DOM，中断表面补收起；compose 换区走 syncTopContextLabel
+- fix(web): 回放事件不再点亮运行条，并给 busy 加每秒自检兜底
+- fix(ui): 新会话页显示工作区文件入口与状态栏
+- fix(gate): 基线 pin 改回 7d4aa87——判据是图里的 revision，不是这轮动没动过图
+- fix(gate): 图 12 已重出，第 14 道门禁那条从「欠着」挪回断言表
+
+### Other
+- test(logic): 给 format.js 补单元测试
+- docs(ci): 记下 8 片的实测墙钟 140s 与零 flaky
+- perf(ci): 分片数 6 → 8，贴着地板取满收益
+- docs(ci): 把分片注释里的推算数字换成两轮实测值
+- perf(ci): e2e 分片摊到 6 台 runner，并让 LPT 分配在 CI 上真正生效
+- test(agent-lifecycle): 空闲回收用例改用 60s 阈值，消掉对定时器精度的依赖
+- refactor(web): instances 快照的运行态判据收敛到一处，四个消费点共用
+- perf(ci): e2e 定在 4 分片并配 retries:1——三个档位都实测过
+- perf(ci): e2e 分片数 4 → 2，实测 4 分片会让 P0-17i 假红
+- perf(ci): e2e 接进分片并行编排，整轮 CI 11.1 分钟降到约 3.4 分钟
+- docs: 逐份核对文档与实现，修四处门禁抓不到的不一致
+- docs(branch): GitHub 默认分支切回 master，文档跟上并说清为什么撤掉那道防线
+- test(history-list): 超时下界留 5ms 抖动余量，这条断言会偶发假红
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.8.1...v1.9.0
+
 ## v1.8.1 — 2026-09-12
 
 Changes since v1.8.0.
