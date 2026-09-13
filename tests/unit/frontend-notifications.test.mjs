@@ -194,6 +194,69 @@ test('notification controller unsubscribe() 在本来就没订阅时是幂等的
   assert.equal(fetchCalls.length, 0, '没有 endpoint 可退时，服务端不该收到一条空退订');
 });
 
+// setup() 不是 subscribe() 的唯一调用者：改「锁屏带内容预览」也会调它（app.js 的 pushPreview.set
+// 要把新 prefs.preview 带给服务端）。而退订不改通知权限、那个 checkbox 也没有禁用（"不禁用它——只说明"），
+// 于是关掉推送之后勾一下预览就会重新订阅、推送整个恢复 —— 偏偏旁边那句 pushPreviewInertNote
+// 承诺的是「不产生任何效果（偏好只存在本机）」。把判据放进 subscribe() 而不是某一个调用点：
+// 挡在调用点上只挡得住今天数得出来的那几个。
+test('notification controller subscribe() 在用户关过推送后不订阅——改预览开关不得把推送偷偷打开', async () => {
+  const posts = [];
+  const store = new Map([['ccm_push_opt_out', '1']]);
+  const fakeSubscription = { endpoint: 'https://push.example/abc', toJSON() { return { endpoint: this.endpoint, keys: {} }; } };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => { posts.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
+      storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  assert.equal(await notifications.subscribe(), false, '关过推送时 subscribe() 必须拒绝');
+  assert.equal(posts.length, 0, '一条都不该发给服务端');
+  assert.equal(store.get('ccm_push_opt_out'), '1', 'opt-out 意图不得被悄悄抹掉');
+});
+
+// 上面那道闸不能把正门也锁上：用户显式点「开启」时必须能重新订上，否则关一次就再也开不回来。
+test('notification controller requestSubscription() 是显式启用：清掉 opt-out 并重新订上', async () => {
+  const posts = [];
+  const store = new Map([['ccm_push_opt_out', '1']]);
+  class NotificationMock {
+    static permission = 'granted';
+    static async requestPermission() { return 'granted'; }
+  }
+  const fakeSubscription = { endpoint: 'https://push.example/abc', toJSON() { return { endpoint: this.endpoint, keys: {} }; } };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: {
+        serviceWorker: { register: async () => registration, ready: Promise.resolve() },
+        userAgent: 'Mozilla/5.0 (Linux; Android 14)',
+      },
+      window: { isSecureContext: true, PushManager: function () {}, matchMedia: () => ({ matches: false }) },
+      Notification: NotificationMock,
+      fetch: async (url, init) => {
+        if (String(url).includes('/push/subscribe')) { posts.push(init); return { ok: true, json: async () => ({ ok: true }) }; }
+        return { ok: true, json: async () => ({ key: 'test-vapid-key' }) };
+      },
+      storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
+      alert: () => {},
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  await notifications.setup(); // 取 vapidKey；opt-out 下它自己不会去订阅
+  assert.equal(posts.length, 0, '前置条件：setup() 没有自动订回来');
+
+  await notifications.requestSubscription();
+  assert.equal(posts.length, 1, '显式点开启必须真的订上——否则关一次就再也开不回来');
+  assert.equal(store.has('ccm_push_opt_out'), false, '显式启用后 opt-out 意图应当作废');
+});
+
 // 只有「关」的按钮还不够：setup() 在 permission === 'granted' 时**无条件**调 subscribe()，
 // 而通知权限在用户关掉推送后仍然是 granted —— 于是关掉之后随便刷一下页面就自动订回来了，
 // 那个按钮等于没有。关闭必须是一个被记住的意图，而不是一次会被下次启动抹掉的瞬时动作。

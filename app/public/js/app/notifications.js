@@ -67,6 +67,11 @@ export function createNotificationController(context, {
 
   async function subscribe() {
     lastSubscribeError = '';
+    // 关过推送的人，只有显式点「开启」才算改主意（requestSubscription 会先抹掉这个意图再进来）。
+    // 闸放在这里而不是各个调用点：subscribe() 的调用者不止 setup()，改「锁屏带内容预览」也会调它
+    // （app.js 的 pushPreview.set 要把新 prefs 带给服务端），而通知权限在退订后仍是 granted、
+    // 那个 checkbox 也没禁用 —— 勾一下就把刚关掉的推送整个订回来，偏偏旁边写着「不产生任何效果」。
+    if (readPushOptOut(storageGetItem)) return false;
     try {
       // 脚本必须在站点根：SW 的默认 scope 就是脚本所在目录，只有根目录的脚本才能控制页面所在的 /。
       // 放 /js/ 下时 registration 只覆盖 /js/，下面这行 ready（等"控制当前页面"的 registration
@@ -106,7 +111,6 @@ export function createNotificationController(context, {
         logger?.warn?.('[push] 订阅未保存(HTTP', `${response.status})`);
         return false;
       }
-      setOptedOut(false); // 订上了就不再是「关过」——下次启动照常自动续订
       context.dom.btnPush?.classList.add('hidden');
       return true;
     } catch (error) {
@@ -214,6 +218,9 @@ export function createNotificationController(context, {
       if (!NotificationApi) throw new Error(t('当前浏览器/环境不支持 Notification API'));
       const permission = await NotificationApi.requestPermission();
       if (permission === 'granted') {
+        // 点「开启」是唯一的显式启用动作，也是唯一能作废 opt-out 的地方。必须在 subscribe() 之前
+        // 抹掉，否则会被它自己那道闸拦下——关一次就再也开不回来。
+        setOptedOut(false);
         const ok = await subscribe();
         if (ok) explain(t('🔔 成功订阅推送通知！'), 'text-success');
         // 带上真实原因：手机上没有 console，笼统的"稍后重试"让人（和排查的人）无从下手。
