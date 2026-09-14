@@ -25,6 +25,8 @@ import {
   effortUiState,
   resolvePanelState,
   resolvePanelCwd,
+  resolveSessionCwd,
+  resolveWorktreeGoneNotice,
   aggregateStates,
   owningWorkspace,
   resolveDrawerStatus,
@@ -367,7 +369,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const consoleFilterButtons = [$('consoleFilterAll'), $('consoleFilterInteraction'), $('consoleFilterDiag')].filter(Boolean);
   // 工作区面板外壳（文件 / 改动两 tab 同壳）
   const workspaceModal = $('workspaceModal'), workspaceClose = $('workspaceClose'),
-        workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges');
+        workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges'),
+        workspaceWorktreeGone = $('workspaceWorktreeGone');
   // 项目文件只读浏览——文件 tab
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'),
@@ -651,9 +654,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
   // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
   // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
-  const drivingCwdOf = (instanceId) => resolvePanelCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
+  // ⚠️ 与下面的 panelCwd() 在「worktree 目录已被删掉」那一档会分叉，**不能合用一个**：
+  // 这条喂 loadHistory（算 project 目录，必须是驾驶轴），那条喂文件/改动面板（必须是能 realpath
+  // 的真实目录）。判据与两种错法见 logic/panel-state.js 的 resolveSessionCwd。
+  const drivingCwdOf = (instanceId) => resolveSessionCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
   // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
-  const panelCwd = () => drivingCwdOf(viewingInstanceId);
+  const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
+  const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
@@ -770,6 +778,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       workspaceClose,
       workspaceTabFiles,
       workspaceTabChanges,
+      workspaceWorktreeGone,
       fileBrowseTools,
       fileBrowseBack,
       fileBrowsePath,
@@ -3550,7 +3559,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       gitBtn.onclick = () => {
         haptic('tap');
         // 上下文直达：本轮刚改完文件，直接落到「改动」tab（而非默认的「文件」tab）
-        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(panelCwd(), 'changes');
+        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(panelCwd(), 'changes', worktreeGoneNotice());
       };
     }
     const statsEl = card.querySelector('.tfc-stats');
@@ -6247,7 +6256,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       e.preventDefault();
       e.stopPropagation();
       haptic('tap');
-      openWorkspacePanel(panelCwd(), 'files');
+      openWorkspacePanel(panelCwd(), 'files', worktreeGoneNotice());
     };
   }
 
@@ -6512,6 +6521,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         terminalSource: s.terminalSource || null,
         shortId: s.id ? s.id.slice(0, 8) : null,
         worktree: s.worktree || null, // 托管 worktree 的会话行：标出在哪个工作树干活
+        worktreeGone: Boolean(s.worktreeGone), // 那棵树已被删：这一行点不开，得当场看得出来
       });
       btn.appendChild(sub);
 

@@ -2,7 +2,7 @@
 // 单一事实源：src/server/app.js 的 preflight + fs.watch 热加载、scripts/doctor.js D3 都用这里的函数，
 // 避免 string|object 解析逻辑三处分叉。
 // 条目形态：`string`（路径）或 `{ path: string, sessionLimit?: 正整数 }`（向后兼容纯字符串数组）。
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { isAbsolute as isAbsolutePosix } from 'node:path/posix';
 import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
@@ -268,6 +268,41 @@ export function resolveManagedWorktree(cwd, dirs) {
     const rest = real.slice(prefix.length);
     if (rest === '' || rest.includes(sep)) continue;
     return { parent: d, path: real };
+  }
+  return null;
+}
+
+// worktree 目录被删之后的父仓推导（2026-09-13，真机会话 5a8793ca）。
+//
+// 【这个状态怎么来的】CLI 的 ExitWorktree 只认「本会话 EnterWorktree 建的」worktree，对 CCM 自己
+// `git worktree add` 建的那批一律 no-op（原文：there is no active EnterWorktree session to exit）。
+// 模型于是改用 Bash `git worktree remove` 把树删掉——目录没了，而 Bash 里的 cd 改不了会话 cwd
+//（CLI 每条命令后都打一行 `Shell cwd was reset to <会话 cwd>`），CwdChanged 一次都不会触发。
+// 结果是实例的驾驶轴停在一条指向已删目录的路径上，且没有任何报错。
+//
+// 【为什么 resolveManagedWorktree 答不了】它先 realpath 再判，悬空路径必然 fail-closed 返回 null。
+// 那个 null 在四个消费点各自回落成互不相干的坏结果：文件面板报「路径不在授权范围内」、
+// git 报 fatal、statusline 的 git 段整个缺席、workspaceCwdOf 回落成悬空路径自身（该实例连父仓的
+// 归属都没了，抽屉里那个工作区下再也看不到它）。同一个根因，四条症状。
+//
+// 【为什么不 realpath，以及为什么这不违反 SCOPE-01】目标已经不存在，realpath 必然抛错——这条判据
+// 存在的前提就是它解析不了。安全性不靠 realpath 兜：**返回值恒取自 dirs**（已 realpath 的白名单
+// 本身），候选路径一个字节都不进返回值，没有 symlink 逃逸面。代价是前缀比较要求候选与 dirs 同规范；
+// 生产路径上这条成立（instance.cwd 恒来自 createSessionWorktree 或 resolveDrivingCwd，两者给的
+// 都是 realpath 后的串），万一不成立也只是判不出、退回没有本函数时的行为——失败方向是「不自愈」
+// 而不是「错放行」。
+//
+// 路径还在时返回 null 让位给 resolveManagedWorktree：对活着的 worktree 也回落父仓，等于让文件/
+// 改动面板永远看不到 worktree 里的改动。
+export function resolveGoneWorktreeParent(cwd, dirs) {
+  if (typeof cwd !== 'string' || cwd === '') return null;
+  if (!Array.isArray(dirs) || dirs.length === 0) return null;
+  for (const d of dirs) {
+    const prefix = managedWorktreeRoot(d) + sep;
+    if (!cwd.startsWith(prefix)) continue;
+    const rest = cwd.slice(prefix.length);
+    if (rest === '' || rest.includes(sep)) continue; // 合法形态集同 resolveManagedWorktree：深度恒为 1
+    return existsSync(cwd) ? null : d;
   }
   return null;
 }

@@ -159,6 +159,10 @@ let desktopBadgeArmed = false;
 // 2026-09-07：会话被 `claude agents` 的后台 job 独占。与上面几个 terminal 开关分开，因为它验的是
 // 另一条轴——不是「谁在驾驶」，是「点了打不开」：session:list 行带 bgLocked，session:switch 直接拒。
 let bgLockedArmed = false;
+// 2026-09-13：会话所在的 worktree 目录被删掉了（模型自己 `git worktree remove` 之后的常见落点）。
+// 真 server 侧靠 resolveGoneWorktreeParent 的 existsSync 判定，mock 没有文件系统，用开关模拟：
+// 列表行带 worktreeGone、instances 里驾驶轴 cwd 仍悬空而 panelCwd 回落父仓、switch 直接拒。
+let worktreeGoneArmed = false;
 // P0-11z：抽屉保持打开时，第二次 session:list 才出现 terminal=busy；期间不发 instances，
 // 验证前端低频 revalidate 能独立刷新 CLI 状态。
 let terminalRefreshArmed = false;
@@ -387,6 +391,7 @@ function resetMockState() {
   terminalWaitingArmed = false;
   desktopBadgeArmed = false;
   bgLockedArmed = false;
+  worktreeGoneArmed = false;
   terminalRefreshArmed = false;
   terminalRefreshListCount = 0;
   terminalSummaryOtherArmed = false;
@@ -750,6 +755,9 @@ function mainCwdSessions() {
       lastUsedAt: mockListClockBase - 760000,
       cwd: '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x',
       worktree: 'wt-x',
+      // 那棵树被删掉之后行为整个不同：行上要标已删、点开要拒。真 server 靠 existsSync 判，
+      // mock 用开关模拟（判据见 app/src/sessions/history.js 的 listManagedWorktreeDirs）。
+      ...(worktreeGoneArmed ? { worktreeGone: true } : {}),
       entrypoint: 'sdk-ts'
     },
     {
@@ -1421,6 +1429,17 @@ io.on('connection', socket => {
         ok: false,
         error: '会话正被 CLI 后台任务「ECS 部署审查」占用（pid 11557）。从 web 打开会中断它，'
           + '所以没有打开——请在本机 `claude agents` 接管，或等它跑完再开',
+      });
+      return;
+    }
+    // 树已删 + 没有 live 实例 → 拒，并说清是哪一棵（逐字对齐 app/src/server/app.js 的
+    // session:switch 分支）。已 live 的**不拒**：那时点它只是切视图，不需要 spawn 任何东西。
+    if (worktreeGoneArmed && sessionId === 'mock-session-worktree'
+        && !mockInstances.some(i => i.sessionId === sessionId)) {
+      if (typeof callback === 'function') callback({
+        ok: false,
+        error: '这个会话的 worktree「wt-x」已被删除，所以打不开了。'
+          + '对话记录还在磁盘上，把那棵 worktree 重新建回原路径即可恢复。',
       });
       return;
     }
@@ -3037,6 +3056,30 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:bg-locked — gap 会话被后台 agent 独占：列表带 bgLocked，switch 一律拒');
         bgLockedArmed = true;
+      },
+    },
+    {
+      // 2026-09-13：会话开着的时候那棵 worktree 被删掉（真机顺序就是这样——模型自己
+      // `git worktree remove` 完，同一个会话还在跑）。真 server 侧 instance.cwd **保持悬空**
+      // （transcript 仍按它解析），另发一个 panelCwd 承担展示轴；这里逐字模拟那份广播。
+      command: 'test:worktree-gone',
+      run: async () => {
+        console.log('[mock] test:worktree-gone — wt-x 被删：列表行标已删、面板回落父仓、switch 拒');
+        worktreeGoneArmed = true;
+        const inst = mockInstances.find(i => i.instanceId === 'inst_worktree');
+        if (inst) {
+          inst.panelCwd = '/Users/you/code/claude-chat-mobile'; // 驾驶轴 cwd 刻意不动
+          inst.worktreeGone = true;
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload(),
+          },
+        });
       },
     },
     {

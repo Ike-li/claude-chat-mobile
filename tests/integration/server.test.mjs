@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as ioc } from 'socket.io-client';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -315,6 +315,50 @@ test.describe('session:switch — 非法 sessionId 被拒', () => {
     });
     assert.equal(ack.ok, false);
     s.disconnect();
+  });
+
+  // worktree 被删掉的会话现在仍列在抽屉里（transcript 还在盘上），所以点它必须说清楚为什么打不开。
+  // 不专门拦的话走的是 routeCwd：那条悬空路径被判越界、记一条 scope_violation、回退父仓，
+  // 用户拿到的是「会话不存在」——而会话明明还在，审计里还多一条并非越界的安全事件。
+  test('worktree 目录已删 → 说明是 worktree 没了，不是「会话不存在」', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    const gone = join(tmpDir, '.claude', 'worktrees', 'removed-tree');
+    const ack = await new Promise((resolve) => {
+      s.emit('session:switch', { sessionId: 'some-session-id', cwd: gone }, resolve);
+    });
+    assert.equal(ack.ok, false);
+    assert.match(
+      ack.error, /worktree/,
+      '错误里不提 worktree = 用户只看到「会话不存在」，而他刚在列表里看见过这一行',
+    );
+    assert.match(ack.error, /removed-tree/, '得说出是哪一棵，否则多 worktree 的会话无从对应');
+    s.disconnect();
+  });
+
+  // 正对照：同样的 cwd 形态、目录真在时必须走回原来那条路（否则上面那条用「凡是 worktree 路径
+  // 都报已删」也能过，而那会让所有活着的 worktree 会话集体打不开）。
+  test('worktree 目录还在 → 照旧走归属校验，不误报已删', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    const alive = join(tmpDir, '.claude', 'worktrees', 'alive-tree');
+    mkdirSync(alive, { recursive: true });
+    const ack = await new Promise((resolve) => {
+      s.emit('session:switch', { sessionId: 'some-session-id', cwd: alive }, resolve);
+    });
+    assert.equal(ack.ok, false, 'sessionId 是假的，仍该被归属校验拒掉');
+    assert.doesNotMatch(
+      ack.error, /已被删除/,
+      '活着的 worktree 被报成已删 = 这类会话全部打不开，而它们本来好好的',
+    );
   });
 });
 

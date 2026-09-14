@@ -385,6 +385,11 @@
         <button id="workspaceClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
       </div>
 
+      <!-- worktree 已删除的提示条（2026-09-13）。会话的驾驶轴 cwd 指向一棵已被删掉的 worktree 时，
+           下面两个 tab 都改看父仓（见 logic/panel-state.js 的 resolvePanelCwd）——不说这一句的话，
+           用户是在主仓的 diff 上判断该不该合并，而他以为看的是 worktree。两个 tab 共用一条。 -->
+      <div id="workspaceWorktreeGone" class="hidden px-4 py-1.5 text-[11px] text-ink-soft bg-sunk/60 border-b border-line shrink-0" data-testid="workspace-worktree-gone"></div>
+
       <!-- 文件 tab 工具行 -->
       <div id="fileBrowseTools" class="px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
         <button id="fileBrowseBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级">←</button>
