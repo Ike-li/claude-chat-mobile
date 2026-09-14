@@ -525,3 +525,19 @@ test.describe('formatToolCardTitle：截断方向按内容形态（A1）', () =>
     assert.ok(out.startsWith('Bash · grep -rn'), `命令须留开头，实际: ${out}`);
   });
 });
+
+// 2026-09-13 变异补齐：去掉 `if (!it || ...)` 里的 !it 空值防护后，整棵 tests/ 树零变红——
+// 而那不是返回错值，是直接抛 TypeError 把整条粘贴路径打断。剪贴板 items 在真实浏览器里
+// 混进空洞并不罕见（跨应用拖拽、被扩展改写过的 DataTransfer）。
+test('pickPasteImageFiles: items 里混进 null/空对象时跳过而不是抛错', () => {
+  const img = { name: 'valid.png' };
+  assert.deepEqual(pickPasteImageFiles({
+    items: [
+      null,
+      undefined,
+      {},
+      { kind: 'file', type: null },
+      { kind: 'file', type: 'image/png', getAsFile: () => img },
+    ],
+  }), [img]);
+});
