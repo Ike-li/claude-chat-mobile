@@ -253,5 +253,37 @@ export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {
   return { text: before + inserted + after, cursorPos: (before + inserted).length };
 }
 
+// ---- 斜杠命令补全候选（与 @ 提及同款浮层，互斥显示；DOM 在 app.js）----
+// 元素归一：SDK 的 init.slash_commands 是 string[]，E2E mock 与部分 SDK 版本发 {name,description}。
+function slashCommandName(cmd) {
+  if (typeof cmd === 'string') return cmd;
+  if (cmd && typeof cmd.name === 'string') return cmd.name;
+  return '';
+}
+
+// 合成补全候选：SDK 下发的命令 − terminal 绑定的那批 + 前端本地实现的命令，再按 prefix 过滤。
+//
+// 【为什么要减】SDK 的 init.terminal_slash_commands 是 slash_commands 的子集，字段原文：
+// "Subset of slash_commands whose UX is bound to the local terminal (e.g. exit, statusline).
+//  Phone/remote UIs should hide these from command menus; desktop surfaces may keep them."
+// 上游判据是 CLI 命令定义上的 terminalOriented 标志（2.1.270 实测命中 /color /statusline /exit
+// /reload-plugins /doctor）。本产品整个就是那个 phone UI，没有「desktop surfaces」分支。
+//
+// 【只隐藏菜单，不拦执行】手输 /color 照常透传给 CLI——与 SDK 措辞一致（hide from command menus，
+// 不是禁止调用）。执行闸在 app.js 的 send()，不看这份列表。
+//
+// 【缺字段 ≠ 全隐藏】旧 CLI 不下发该字段（SDK 原文 "absent on CLIs that predate the field"），
+// 此时必须等价于「没有要隐藏的」。反过来写会让整个补全菜单在旧 CLI 上凭空消失。
+export function buildSlashCommandHints({ commands = [], terminalCommands = [], localCommands = [], prefix = '' } = {}) {
+  const names = Array.isArray(commands) ? commands.map(slashCommandName).filter(Boolean) : [];
+  const hidden = new Set(Array.isArray(terminalCommands) ? terminalCommands.map(slashCommandName).filter(Boolean) : []);
+  const base = names.filter(n => !hidden.has(n));
+  // 本地命令对 hidden 免疫：它是前端自己实现的拦截项，与 SDK 的命令定义无关。
+  const locals = Array.isArray(localCommands) ? localCommands.filter(c => c && !base.includes(c)) : [];
+  const cands = base.concat(locals);
+  const p = String(prefix || '').toLowerCase();
+  return p ? cands.filter(c => c.toLowerCase().startsWith(p)) : cands;
+}
+
 // ---- statusline 折叠摘要 / 剪贴板（纯数据，DOM 在 app.js）----
 // 折叠态只放 git + ctx：模型/effort/权限已在底栏 pill，勿重复；展开仍有 CLI 级全量。

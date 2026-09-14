@@ -870,8 +870,12 @@ io.on('connection', socket => {
         slashCommands: [
           { name: 'help', description: 'Show help guide' },
           { name: 'model', description: 'Switch active model' },
-          { name: 'effort', description: 'Adjust Claude thinking effort' }
-        ]
+          { name: 'effort', description: 'Adjust Claude thinking effort' },
+          // terminal 绑定命令：故意留在 slashCommands 里（真 SDK 也是这样——terminal_slash_commands
+          // 是 slash_commands 的【子集】，不是从中剔除后的补集）。前端负责在补全菜单里滤掉它。
+          { name: 'color', description: 'Set the prompt bar color for this session' }
+        ],
+        terminalSlashCommands: ['color']
       }
     });
 
@@ -2624,6 +2628,11 @@ io.on('connection', socket => {
               { name: 'deploy', description: 'Deploy to production' },
               { name: 'rollback', description: 'Roll back the last deploy' },
               { name: 'model', description: 'Switch active model' },
+              // ★ color 必须留在这份新列表里，否则「推送后 /color 仍不出现在补全」那条断言恒真
+              // ——新列表本来就没有它，测的就不是「名单是否被沿用」了（正对照：仪器得先看得见）。
+              // 真 server 侧这条路【带不到】terminal 名单（SDK 的 SlashCommand[] 无该标记），
+              // 所以这里也不发 terminalSlashCommands，让前端走「缺省即保留」那条分支。
+              { name: 'color', description: 'Set the prompt bar color for this session' },
             ],
           },
         });

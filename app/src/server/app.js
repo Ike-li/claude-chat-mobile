@@ -610,7 +610,9 @@ function unlockSocket(socket) {
     const va = agents.get(viewingInstanceId);
     // #5：全局 lastInit 的 slashCommands 可能来自别 cwd（含 project skill）→ 先剥离，再按 viewing cwd 注入 per-cwd 缓存
     // （有缓存才注入；无则省略字段，前端保留 localStorage，真 init 到达即校正）
-    const { slashCommands: _omitCmds, ...initBase } = lastInit;
+    // terminalSlashCommands 一并剥离：它必须与 slashCommands 同源（见 resolveSlashCommandsForCwd
+    // 头注），留着 lastInit 那份会与按 cwd 解析出的命令列表拼成错配的一对。
+    const { slashCommands: _omitCmds, terminalSlashCommands: _omitTerm, ...initBase } = lastInit;
     const replayCwd = va?.cwd ?? viewingCwd;
     const replayCmds = resolveSlashCommandsForCwd(slashCommandsCache, replayCwd, lastInit);
     socket.emit('agent:event', {
@@ -622,7 +624,7 @@ function unlockSocket(socket) {
         // va 为空（空首页）model 不下发=null（新会话模型=env 默认、服务端不可知，前端显「不指定」，A1）、cwd 用 viewingCwd
         ...(va ? { model: va.activeModel ?? null, cwd: va.cwd }
               : { model: null, cwd: viewingCwd }),
-        ...(replayCmds ? { slashCommands: replayCmds } : {}),
+        ...(replayCmds ? { slashCommands: replayCmds.slashCommands, terminalSlashCommands: replayCmds.terminalSlashCommands } : {}),
       }
     });
   }
@@ -1475,7 +1477,11 @@ function pushSlashCommandsForCwd(cwd) {
   if (!cmds) return;
   io.to('approved').emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-    type: 'init', payload: { cwd: cwd || null, slashCommands: cmds },
+    type: 'init', payload: {
+      cwd: cwd || null,
+      slashCommands: cmds.slashCommands,
+      terminalSlashCommands: cmds.terminalSlashCommands, // 与命令列表同批下发，前端才不会拿旧名单过滤新列表
+    },
   });
 }
 
@@ -1760,7 +1766,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         lastInit = envelope.payload;
         // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
         const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) slashCommandsCache.set(drivingCwd, { slashCommands: cmds });
+        // terminal 名单【只有 init 这条路带得到】（commands_changed 的 SlashCommand[] 无此标记），
+        // 所以随命令一起落缓存，供下面 slash_commands 分支沿用。无名单显式落成 []（= 没有要隐藏的）。
+        if (cmds) slashCommandsCache.set(drivingCwd, {
+          slashCommands: cmds,
+          terminalSlashCommands: normalizeSlashCommands(envelope.payload?.terminalSlashCommands) ?? [],
+        });
         saveInitCache();
       }
       else if (envelope.type === 'models') { modelsCache.set(drivingCwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
@@ -1770,7 +1781,16 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // 两害相权取轻。前端那侧收到空数组仍会清当前补全列表，下次 init 修正。
       else if (envelope.type === 'slash_commands') {
         const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
-        if (cmds) { slashCommandsCache.set(drivingCwd, { slashCommands: cmds }); saveInitCache(); }
+        if (cmds) {
+          // 【terminal 名单沿用上一条 init，不跟着一起重置】SDK 的 commands_changed 只带
+          // SlashCommand[]（name/description/argumentHint/aliases），**不带** terminalOriented 标记——
+          // 这条路根本拿不到名单。整条覆盖会把 init 存下的名单抹成空，于是 /color /statusline
+          // 会在任何一次 skill 变动后重新冒回补全菜单（而那正是本功能要挡的）。
+          // 名单是 CLI 版本级的量、不随 skill 增删而变，沿用是正确语义而非将就。
+          const keptTerminal = normalizeSlashCommands(slashCommandsCache.get(drivingCwd)?.terminalSlashCommands) ?? [];
+          slashCommandsCache.set(drivingCwd, { slashCommands: cmds, terminalSlashCommands: keptTerminal });
+          saveInitCache();
+        }
       }
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
@@ -2305,7 +2325,8 @@ registerSocketConnection(io, socket => {
       // model/cwd 一并校正，避免新设备连入时短暂显示后台实例的模型/目录（下一轮真 init 到达即自愈）。
       const va = agents.get(viewingInstanceId);
       // #5：全局 lastInit 的 slashCommands 可能来自别 cwd → 先剥离，再按 viewing cwd 注入 per-cwd 缓存
-      const { slashCommands: _omitCmds, ...initBase } = lastInit;
+      // （terminalSlashCommands 同理一并剥离，两者必须同源，见 resolveSlashCommandsForCwd 头注）
+      const { slashCommands: _omitCmds, terminalSlashCommands: _omitTerm, ...initBase } = lastInit;
       const replayCwd = va?.cwd ?? viewingCwd;
       const replayCmds = resolveSlashCommandsForCwd(slashCommandsCache, replayCwd, lastInit);
       socket.emit('agent:event', {
@@ -2317,7 +2338,7 @@ registerSocketConnection(io, socket => {
           // va 为空（空首页）model 不下发=null（新会话模型=env 默认、服务端不可知，前端显「不指定」，A1）、cwd 用 viewingCwd
           ...(va ? { model: va.activeModel ?? null, cwd: va.cwd }
                 : { model: null, cwd: viewingCwd }),
-          ...(replayCmds ? { slashCommands: replayCmds } : {}),
+          ...(replayCmds ? { slashCommands: replayCmds.slashCommands, terminalSlashCommands: replayCmds.terminalSlashCommands } : {}),
         }
       });
     }
