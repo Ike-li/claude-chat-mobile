@@ -197,6 +197,9 @@ export const EN_DICT = Object.freeze({
   // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
   '📁 文件': '📁 Files',
   '📝 改动': '📝 Changes',
+  // worktree 目录被删后面板改看父仓的提示条。前后各拼一个「名字」，故译文两端留空格。
+  '已删除，下面显示的是主仓': 'was deleted — showing the main checkout',
+  '（已删除）': ' (deleted)',
   '刷新': 'Refresh',
   '📊 服务状态': '📊 Service status',
   '服务状态': 'Service status',

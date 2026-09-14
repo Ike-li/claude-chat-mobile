@@ -84,7 +84,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -1096,8 +1096,13 @@ function instancesPayload() {
   const list = [];
   for (const [id, a] of agents) {
     const state = instanceState(id);
+    // 驾驶轴与展示轴在「worktree 目录已删」这一档分叉（见 panelCwdOf）。两个都下发，前端的
+    // 文件/改动面板走 panelCwd，而算 transcript 目录的那条路仍走 cwd —— 合成一个字段必然
+    // 有一侧要错，且两种错法都静默（历史空白 / 面板报路径越界）。
+    const panelCwd = panelCwdOf(a.cwd);
     list.push({
       instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
+      panelCwd, worktreeGone: panelCwd !== a.cwd,
       title: sessions.getSession(a.sessionId)?.title ?? null, state,
       // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）。
       // 前台轮（pendingTurns>0）优先真实 lastToolName；纯后台任务用 task_type 映射 → 前端 TOOL_BADGE 出 🤖/🖥，未知→null→⏳。
@@ -1519,11 +1524,16 @@ async function refreshStatusLine(reason = 'event') {
     // cwd 取当前查看实例（per-instance）——va 为空（无 live 实例的工作区/新会话懒创建期）时不回退全局
     // lastInit（那是「最后一次任意实例 init」，会跨工作区泄漏上个会话的模型/目录）。
     const cwd = va?.cwd ?? currentCwd;
+    // statusline 里 cwd 的全部用途是 p.cwd / p.project / gitStatus（两个 build 函数里都只有这三处），
+    // 全在展示轴上，所以走 panelCwdOf：worktree 目录被删之后驾驶轴悬空，gitStatus 的每条 git 命令
+    // 都会失败 → 整个 git 段静默消失，而 project 名还挂着那棵已不存在的树。
+    // readCliSnapshotForSession **不在此列**——它按 cwd 算 CLI 快照的落点，必须跟驾驶轴。
+    const statusCwd = panelCwdOf(cwd);
     const owner = statusOwnerFor(va, currentInstanceId);
     let payload;
     if (owner === 'sdk') {
       const sdkPayload = await buildWebStatusLine({
-        agent: va, cwd, versions, reason,
+        agent: va, cwd: statusCwd, versions, reason,
         onContextUsageAdopted: () => scheduleStatusRefresh('event'),
       });
       payload = { ...sdkPayload, source: { kind: 'sdk' } };
@@ -1531,7 +1541,7 @@ async function refreshStatusLine(reason = 'event') {
       const cliRead = readCliSnapshotForSession(va.sessionId, cwd);
       const selected = selectStatusSource({ owner, cliRead });
       if (selected.kind === 'cli') {
-        const cliPayload = await buildCliStatusLine({ snapshot: selected.value, cwd });
+        const cliPayload = await buildCliStatusLine({ snapshot: selected.value, cwd: statusCwd });
         payload = {
           ...cliPayload,
           source: { kind: 'cli', capturedAt: selected.value.capturedAt, ageMs: selected.ageMs },
@@ -1546,8 +1556,8 @@ async function refreshStatusLine(reason = 'event') {
         const fallbackRate = getFallbackUsageRate(at);
         const fallbackAgeMs = fallbackRate ? getFallbackUsageAgeMs(at) : null; // 新鲜度与另两条路径同源（见 statusline.js applyRateFreshness）
         payload = {
-          ts: at, cwd,
-          ...(cwd ? { project: projectNameFromCwd(cwd) } : {}),
+          ts: at, cwd: statusCwd,
+          ...(statusCwd ? { project: projectNameFromCwd(statusCwd) } : {}),
           ...(va.sessionId ? { session: { id: va.sessionId } } : {}),
           source: { kind: 'cli-unavailable', reason: selected.reason, ...(Number.isFinite(selected.ageMs) ? { ageMs: selected.ageMs } : {}) },
           ...(fallbackRate ? { rate: fallbackRate, rateFromSnapshot: true, ...(Number.isFinite(fallbackAgeMs) ? { rateAgeMs: fallbackAgeMs } : {}) } : {}),
@@ -2081,7 +2091,16 @@ function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
 }
 // 工作区轴：托管 worktree 里的实例归其父仓。viewingCwd 是「新开会话落哪、侧栏列哪一页」的锚，
 // 设成 worktree 路径等于让它事实上变成一个工作区条目——而 worktree 是临时模式，不占抽屉。
-const workspaceCwdOf = c => resolveManagedWorktree(c, workDirs)?.parent || c;
+//
+// 第二条回落管「worktree 目录已经被删掉」那一档（2026-09-13）：resolveManagedWorktree 先 realpath，
+// 对悬空路径必然返回 null，于是 `|| c` 把实例归到一个不存在的「工作区」上——症状是抽屉里父仓
+// 那一节再也看不到这个会话（用户报的「工作区抽屉没有会话」正是这条）。
+const workspaceCwdOf = c => resolveManagedWorktree(c, workDirs)?.parent
+  || resolveGoneWorktreeParent(c, workDirs) || c;
+// 展示轴：文件面板 / 改动面板 / statusline 的 git 段该读哪个目录。与驾驶轴（instance.cwd）的**唯一**
+// 分叉点是「worktree 目录已删」——那时驾驶轴必须原样保留（transcript 落在按它算出的 project 目录里，
+// 改掉就是历史加载失败），而展示轴回落父仓，否则三个消费点各报一条互不相干的技术错误。
+const panelCwdOf = c => resolveGoneWorktreeParent(c, workDirs) || c;
 
 function dedupedResume(cwd, resumeId, extra = {}) {
   const key = resumeId || `fresh:${cwd}`;
@@ -3029,18 +3048,44 @@ registerSocketConnection(io, socket => {
 
   on(socket, 'session:switch', async (payload, ack) => {
     const sessionId = payload?.sessionId;
+    // 会话所在的 worktree 已被删掉（2026-09-13）。这类会话现在仍列在抽屉里（transcript 还在，
+    // 见 history.js 的 listManagedWorktreeDirs），所以必须在这里给出真实原因——不拦的话
+    // routeCwd 会把这条悬空路径记成一次 scope_violation 再回退父仓，用户拿到的是「会话不存在」
+    //（会话明明还在），审计里还多一条并非越界的安全事件。
+    //
+    // 【为什么是拒绝而不是放行到父仓】cwd 已经不存在，SDK spawn 必然 ENOENT（实测：
+    // spawn 到不存在的 cwd 直接抛 error 事件，进程起不来）。放行只是把同一个失败从一句话
+    // 推迟成一个起不来的进程 + 一段读不懂的 stderr。历史仍在盘上，要救得先把那棵树建回来。
+    //
+    // ★ live 实例必须放行。worktree 被删的那一刻会话往往**正跑着**（真机就是这样：模型自己
+    // `git worktree remove` 完，同一个会话继续在跑），此时点它只是切视图、不需要 spawn 任何东西。
+    // 不放行等于把用户锁在自己正在跑的会话外面——比原来的「会话不存在」还糟。
+    // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
+    // 提前到这里取，是因为下面两处判据都要用它区分「切视图」和「要 spawn」。
+    const live = typeof sessionId === 'string' ? instanceForSession(sessionId) : null;
+    const goneWorktree = resolveGoneWorktreeParent(payload?.cwd, workDirs);
+    if (goneWorktree && !live) {
+      ack?.({
+        ok: false,
+        error: `这个会话的 worktree「${projectNameFromCwd(payload.cwd)}」已被删除，所以打不开了。`
+          + `对话记录还在磁盘上，把那棵 worktree 重新建回原路径即可恢复。`,
+      });
+      return;
+    }
     // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureWhitelisted 同 session:new(#8)：
     // routeCwd 的缺省回退(viewingCwdOf)可能仍是热移除目录（该目录有 live 实例挂着未被归位），不夯一次
     // 白名单会绕过「仅拒新开」——落到非白名单目录后 sessionFileExists 大概率会因该目录下无此 sessionId 而
     // 拒绝（ack 回 '会话不存在'），是安全的失败模式，不会误开其他目录下的会话。
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    //
+    // 树已删 + live：cwd 必须取实例自己的驾驶轴。走 routeCwd 的话那条悬空路径会被判越界、回退成父仓，
+    // 紧接着的 sessionFileExists 按父仓的 project 目录去查必然查空 —— 用户被锁在一个自己正跑着的
+    // 会话外面，拿到的还是「会话不存在」。这一支不新增授权面：live 实例的 CLI 本来就在那儿跑着。
+    const cwd = goneWorktree ? live.cwd : ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
     }
-    // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
-    const live = instanceForSession(sessionId);
     // 被 CLI 后台任务占用的会话：明说打不开，不 spawn、更不杀占用者（2026-07-30，见 openResumeInstance 注释）。
     // 只在需要新 spawn 时查——已 live 说明 ccm 早就开着这个会话，此刻只是切视图，与占用无关。
     // 判据与 CLI 的 resume 前置检查同源，所以这里拒绝的正是 CLI 那边同样会拒绝的集合：不新增拦截面，

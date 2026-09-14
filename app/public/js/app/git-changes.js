@@ -250,10 +250,21 @@ export function createWorkspacePanel(context, {
     else gitChanges?.open?.(cwd);
   }
 
-  function open(nextCwd, tab = 'files') {
+  // worktree 已删除时的提示条。两个 tab 共用一条，所以挂在外壳而不是任一子控制器上。
+  // notice 为 { worktree, parent }（见 logic/panel-state.js 的 resolveWorktreeGoneNotice）或 null。
+  function paintWorktreeGone(notice) {
+    const el = dom.workspaceWorktreeGone;
+    if (!el) return;
+    if (!notice) { el.classList.add('hidden'); el.textContent = ''; return; }
+    el.textContent = `worktree「${notice.worktree}」${t('已删除，下面显示的是主仓')}「${notice.parent}」`;
+    el.classList.remove('hidden');
+  }
+
+  function open(nextCwd, tab = 'files', worktreeGoneNotice = null) {
     cwd = nextCwd;
     activeTab = null;               // 强制重载：同一 tab 再次点开也要拉最新数据
     openSheet(dom.workspaceModal);
+    paintWorktreeGone(worktreeGoneNotice);
     paintTab(tab);
     if (tab === 'files') fileBrowser?.open?.(cwd);
     else gitChanges?.open?.(cwd);

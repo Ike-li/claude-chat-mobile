@@ -28,14 +28,19 @@ function fixture() {
   return { baseDir, repo };
 }
 
-// 往 <baseDir>/<encode(cwd)>/<id>.jsonl 写一条有真实消息时间的会话
-function writeSession(baseDir, cwd, id, { text = 'hi', at }) {
+// 往 <baseDir>/<encode(cwd)>/<id>.jsonl 写一条有真实消息时间的会话。
+// 每条记录都带 cwd —— 这是 CLI 的真实形态（2026-09-13 抽查本机 128 个 project 目录，128 个都有），
+// 而孤儿 worktree 的归属回验就靠它。夹具不写 cwd 的话，那道回验在测试里恒为「查无证据」，
+// 整组用例会一起偏离真实契约并自洽（docs/testing.md §3 的「fixture 编错外部契约时恒绿」）。
+// noCwd 单给「老 transcript 没有这个字段」那一格用。
+function writeSession(baseDir, cwd, id, { text = 'hi', at, noCwd = false }) {
   const dir = join(baseDir, getProjectDir(cwd));
   mkdirSync(dir, { recursive: true });
   const ts = new Date(at).toISOString();
+  const own = noCwd ? {} : { cwd };
   const lines = [
-    { type: 'user', timestamp: ts, message: { role: 'user', content: text } },
-    { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: 'ok' } },
+    { type: 'user', timestamp: ts, ...own, message: { role: 'user', content: text } },
+    { type: 'assistant', timestamp: ts, ...own, message: { role: 'assistant', content: 'ok' } },
   ];
   writeFileSync(join(dir, `${id}.jsonl`), lines.map(e => JSON.stringify(e)).join('\n') + '\n');
 }
@@ -214,6 +219,131 @@ test('listSessionsByIds: 同 id 在父仓与 worktree 各有一份 → 取最新
   assert.equal(rows[0].cwd, wt,
     '返回了父仓那份陈旧副本 —— 点开会看到进 worktree 之前的历史，而列表页对同一个会话给的是新的');
   assert.equal(rows[0].lastUsedAt, Date.parse('2026-09-11T00:00:00Z'));
+});
+
+// ★ worktree 目录被删掉、transcript 还在（2026-09-13 真机形态，会话 5a8793ca）。
+//
+// 枚举侧原本只 readdir `.claude/worktrees/`，判据是「目录在不在」——目录一没，那棵树下的会话
+// 在抽屉里**整批消失**，而 jsonl 一个字节没少。用户看到的就是「工作区抽屉没有这个会话」。
+//
+// 这个状态不是异常路径：CLI 的 ExitWorktree 只认本会话 EnterWorktree 建的树，对 CCM 自己
+// `git worktree add` 建的那批一律 no-op，于是「干完活退出 worktree」唯一走得通的路就是让模型
+// 自己敲 `git worktree remove`——删完目录就落到这里。
+//
+// 判据换成「目录在，**或者** transcript 还在」：后者靠 project 目录名的前缀匹配认出来
+// （`<encode(父仓)>--claude-worktrees-<name>`），因为 getProjectDir 是纯字符串编码、不碰磁盘。
+test('worktree 目录已删、transcript 还在 → 会话仍列出来，并标明那棵树没了', async () => {
+  const { baseDir, repo } = fixture();
+  const gone = join(repo, '.claude', 'worktrees', 'chatgpt-gbwh'); // 刻意不 makeWorktree
+  writeSession(baseDir, repo, 'main-1', { text: '父仓会话', at: T0 });
+  writeSession(baseDir, gone, 'orphan-1', { text: '删树前的会话', at: T0 + 1000 });
+
+  const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(
+    sessions.map(s => s.id), ['orphan-1', 'main-1'],
+    '目录没了就整批消失 = 会话在盘上活着、抽屉里查无此人，用户只能认为数据丢了',
+  );
+  const row = sessions.find(s => s.id === 'orphan-1');
+  assert.equal(row.cwd, gone, 'cwd 仍须是那条已删路径——transcript 按它算 project 目录，换成父仓就查空');
+  assert.equal(row.worktree, 'chatgpt-gbwh');
+  assert.equal(row.worktreeGone, true, '不标出来的话这一行和活着的 worktree 长得一模一样');
+  assert.equal(total, 2);
+});
+
+test('活着的 worktree 不许被标成已删（正对照：判据不是恒 true）', async () => {
+  const { baseDir, repo } = fixture();
+  const alive = makeWorktree(repo, 'still-here');
+  writeSession(baseDir, alive, 'alive-1', { at: T0 });
+
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  const row = sessions.find(s => s.id === 'alive-1');
+  assert.equal(row.worktree, 'still-here');
+  assert.equal(row.worktreeGone, undefined, '活着的树被标成已删 = 提示条常驻，用户以为自己的工作没了');
+});
+
+// 两条枚举路径（readdir 实际目录 / 前缀匹配 project 目录）对同一棵活树都会命中，
+// 不去重就是同一个会话在抽屉里出现两行，其中一行还标着「已删除」。
+test('同一棵活树被两条枚举路径都认出 → 只出一行，且不标已删', async () => {
+  const { baseDir, repo } = fixture();
+  const wt = makeWorktree(repo, 'dedup-me');
+  writeSession(baseDir, wt, 'dd-1', { at: T0 });
+
+  const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.equal(sessions.length, 1, '同一个会话出现两行，其中一行还标着已删除');
+  assert.equal(sessions[0].worktreeGone, undefined);
+  assert.equal(total, 1, 'total 重复计数会让「还有更早会话」凭空多一页');
+});
+
+// 前缀必须够特异，否则邻居工作区的 project 目录也会被当成本仓的 worktree。
+//
+// 【为什么断言落在 total 而不是 sessions】候选 cwd 恒由 `join(本仓 worktrees 根, name)` 构造，
+// 所以前缀判错时算出的 project 目录在盘上根本不存在，结果只是白扫一遍——**列表内容看不出任何差别**。
+// 真正能显形的形态是「两个父仓各有一棵同名 worktree」：那时错认出来的 name 与本仓那棵重名，
+// 拼回去的 cwd 与本仓那棵逐字相同，于是同一个目录被扫两次，条数直接翻倍。
+// 先写成断言 sessions 列表的版本试过，startsWith→includes 与按 indexOf 切 name 两种注入都不红。
+test('前缀匹配不把邻居工作区的同名 worktree 算进来', async () => {
+  const { baseDir, repo } = fixture();
+  const sibling = `${repo}-sibling`;
+  const mine = join(repo, '.claude', 'worktrees', 'shared-name');
+  const theirs = join(sibling, '.claude', 'worktrees', 'shared-name');
+  writeSession(baseDir, mine, 'mine-wt-1', { at: T0 });
+  writeSession(baseDir, theirs, 'their-wt-1', { at: T0 + 1000 });
+
+  const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(sessions.map(s => s.id), ['mine-wt-1'], '邻居的会话不该出现在本仓列表里');
+  assert.equal(
+    total, 1,
+    'total 翻倍 = 同一棵 worktree 被扫了两次（邻居那条前缀也命中了），「还有更早会话」会凭空多一页',
+  );
+});
+
+// ★ 前缀匹配只能当候选筛选，不能当所有权证据（PR #57 Codex bot 的 P2，实证成立）。
+// encodeProjectDir 把每个非字母数字字符都换成 '-'，所以 `<repo>--claude-worktrees-ghost`
+// 与 `<repo>/.claude/worktrees/ghost` **编码完全相同**——磁盘上它们就是同一个 project 目录。
+// 只看前缀的话，前者（一个与本仓毫无关系的独立项目）的会话会被列进本仓抽屉，还标成
+// 「worktree ghost 已删除」。而 baseDir 装的是本机所有 Claude 项目的 transcript，
+// 这个误判面不是理论上的。
+//
+// 回验靠 transcript 里的 cwd：CLI 每条记录都写真实路径（2026-09-13 抽查本机 128 个 project
+// 目录，128 个都有），那是非有损的结构性证据。
+test('前缀命中但 transcript 的 cwd 指向别处 → 不认领', async () => {
+  const { baseDir, repo } = fixture();
+  const collider = `${repo}--claude-worktrees-ghost`; // 与 <repo>/.claude/worktrees/ghost 编码同名
+  assert.equal(
+    getProjectDir(collider), getProjectDir(join(repo, '.claude', 'worktrees', 'ghost')),
+    '这条用例的前提就是两者编码相同——前提不成立的话它测的不是 bot 指出的那个缺陷',
+  );
+  writeSession(baseDir, collider, 'other-project-1', { at: T0 });
+
+  const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(
+    sessions.map(s => s.id), [],
+    '别的项目的会话被列进了本仓抽屉——baseDir 装着本机所有项目的 transcript，这个面很大',
+  );
+  assert.equal(total, 0);
+});
+
+// 失败方向：查不到证据就不认领。老 transcript 若真没有 cwd 字段，退回的是「这条会话看不见」
+// （= 改动前的行为），而不是「可能列错项目的会话」。少列一条比列错一条安全。
+test('transcript 没有 cwd 字段 → 不认领（查不到证据不认领）', async () => {
+  const { baseDir, repo } = fixture();
+  const gone = join(repo, '.claude', 'worktrees', 'no-meta');
+  writeSession(baseDir, gone, 'no-cwd-1', { at: T0, noCwd: true });
+
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(sessions.map(s => s.id), []);
+});
+
+test('listSessionsByIds 同样认得已删 worktree 的会话', async () => {
+  const { baseDir, repo } = fixture();
+  const gone = join(repo, '.claude', 'worktrees', 'removed-wt');
+  writeSession(baseDir, gone, 'pinned-orphan', { at: T0 });
+
+  const rows = await listSessionsByIds(repo, ['pinned-orphan'], { baseDir });
+  assert.equal(rows.length, 1, '标了未读的行在删树之后再也拉不回来，只剩标题搜索一条路');
+  assert.equal(rows[0].cwd, gone);
+  assert.equal(rows[0].worktree, 'removed-wt');
+  assert.equal(rows[0].worktreeGone, true);
 });
 
 // 反向：父仓那份更新时必须选父仓，否则上面那条用「恒选 worktree」也能过。

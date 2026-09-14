@@ -8,15 +8,17 @@
 //         ④ resolveDrivingCwd：会话中途换 cwd（EnterWorktree）的采信判据——合法集同 ③，
 //            但失败方向是 fail-closed 返回 null，不像 routeCwd 那样回退
 //         ⑤ instanceAuthorizedDirs：工作区被热移除后，其上已开实例保留自己那一个授权根（仅拒新开）
+//         ⑥ resolveGoneWorktreeParent：worktree 目录被删、实例 cwd 悬空时推出父仓——合法形态集同 ③，
+//            但**不 realpath**（目标已不存在），安全性改由「返回值恒取自 dirs」保证
 // 不测什么 + 为什么：不测文件权限或内容敏感度——用户即 root，防线在范围门不在内容审查
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
-import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd, instanceAuthorizedDirs } from '../../app/src/sessions/workdirs.js';
+import { resolveManagedWorktree, ensureWhitelisted, resolveDrivingCwd, instanceAuthorizedDirs, resolveGoneWorktreeParent } from '../../app/src/sessions/workdirs.js';
 
 test.describe('SCOPE-01: workdir-scope-guard', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-inv-scope-'));
@@ -356,5 +358,75 @@ test.describe('SCOPE-01: 托管 worktree 的派生放行', () => {
     assert.equal(resolveDrivingCwd(null, dirs), null);
     assert.equal(resolveDrivingCwd(realA, []), null);
     assert.equal(resolveDrivingCwd(realA, null), null);
+  });
+
+  // ⑥ worktree 目录被删掉之后的归属推导（2026-09-13 真机形态，会话 5a8793ca）。
+  //
+  // 【为什么①~⑤全都答不了这个问题】它们一律先 realpath 再判，面对一条指向已删目录的 cwd
+  // 只能 fail-closed 返回 null。那个 null 在四个消费点各自回落成不同的坏结果：文件面板报
+  // 「路径不在授权范围内」、git 报 fatal、statusline 的 git 段整个消失、workspaceCwdOf 回落成
+  // 悬空路径自身（于是该实例连父仓的归属都没了，抽屉里那个工作区下再也看不到它）。
+  //
+  // 【这个状态怎么来的】ExitWorktree 只认本会话 EnterWorktree 建的树，对 CCM 自己
+  // `git worktree add` 建的那批直接 no-op（CLI 原文：there is no active EnterWorktree session
+  // to exit）。模型于是改用 Bash `git worktree remove` —— 目录没了，而 Bash 的 cd 改不了会话 cwd
+  // （CLI 每条命令后都打 `Shell cwd was reset to <会话 cwd>`），CwdChanged 一次都不会触发。
+  //
+  // 【为什么不 realpath，以及为什么这不违反 SCOPE-01】目标已经不存在，realpath 必然抛错——
+  // 这条判据存在的前提就是它解析不了。安全性不靠 realpath 兜：**返回值恒取自 dirs**（已 realpath
+  // 的白名单本身），候选路径一个字节都不进返回值，没有 symlink 逃逸面。代价是前缀比较要求 cwd
+  // 与 dirs 同规范；生产路径上这一条成立（instance.cwd 恒来自 createSessionWorktree 或
+  // resolveDrivingCwd，两者给的都是 realpath 后的串），万一不成立也只是判不出、退回今天的行为，
+  // 失败方向是「不自愈」而不是「错放行」。
+  test('resolveGoneWorktreeParent：worktree 目录已删时推出父仓', () => {
+    assert.equal(
+      resolveGoneWorktreeParent(join(wtRoot, 'was-removed'), dirs), realA,
+      '推不出父仓 = 四个消费点各自回落，用户看到三条互不相干的技术错误而不是一句「worktree 已删除」',
+    );
+    assert.equal(
+      resolveGoneWorktreeParent(join(realB, '.claude', 'worktrees', 'gone'), dirs), realB,
+      '多工作区下必须归属到自己的父仓，不能恒取首项',
+    );
+  });
+
+  test('resolveGoneWorktreeParent：路径还在时让位——不抢 resolveManagedWorktree 的活', () => {
+    assert.equal(
+      resolveGoneWorktreeParent(join(wtRoot, 'feature-x'), dirs), null,
+      '对活着的 worktree 也回落父仓 = 文件面板永远看不到 worktree 里的改动，等于把这个功能废掉',
+    );
+    assert.equal(resolveGoneWorktreeParent(realA, dirs), null, '白名单目录自身不是 worktree');
+  });
+
+  test('resolveGoneWorktreeParent：合法形态集与③同一套，不因为“反正不存在”放宽', () => {
+    assert.equal(
+      resolveGoneWorktreeParent(join(base, 'nope', '.claude', 'worktrees', 'x'), dirs), null,
+      '父段不在白名单里仍须拒——否则任何人构造一条不存在的路径都能问出一个白名单目录',
+    );
+    assert.equal(
+      resolveGoneWorktreeParent(join(wtRoot, 'nested', 'deep-gone'), dirs), null,
+      '深度固定为 1，和③同一条理由：允许再深一层就能无限派生',
+    );
+    assert.equal(resolveGoneWorktreeParent(wtRoot, dirs), null, 'worktrees 容器自身不是一棵 worktree');
+    assert.equal(
+      resolveGoneWorktreeParent(`${wtRoot}${sep}`, dirs), null,
+      '带尾分隔符时 rest 为空——放行等于把整个 worktrees 容器当成一棵树',
+    );
+    assert.equal(resolveGoneWorktreeParent(join(base, 'repo-a-sibling-gone'), dirs), null, '仓库外平级兄弟不认');
+    assert.equal(resolveGoneWorktreeParent('/definitely/not/here', dirs), null);
+  });
+
+  test('resolveGoneWorktreeParent：返回值恒是白名单成员（这条判据的全部安全性所在）', () => {
+    for (const candidate of [join(wtRoot, 'a'), join(realB, '.claude', 'worktrees', 'b')]) {
+      const got = resolveGoneWorktreeParent(candidate, dirs);
+      assert.ok(dirs.includes(got), `返回了白名单外的路径 ${got} —— 候选串渗进返回值就等于开了越界口子`);
+    }
+  });
+
+  test('resolveGoneWorktreeParent 非法入参拒绝', () => {
+    assert.equal(resolveGoneWorktreeParent('', dirs), null);
+    assert.equal(resolveGoneWorktreeParent(null, dirs), null);
+    assert.equal(resolveGoneWorktreeParent(123, dirs), null);
+    assert.equal(resolveGoneWorktreeParent(join(wtRoot, 'gone'), []), null);
+    assert.equal(resolveGoneWorktreeParent(join(wtRoot, 'gone'), null), null);
   });
 });

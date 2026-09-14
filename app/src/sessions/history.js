@@ -643,13 +643,19 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
 
   // 托管 worktree 的会话并进本列表（2026-09-11）。绝大多数工作区没有 .claude/worktrees/，
   // 那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
-  const worktrees = await listManagedWorktreeDirs(cwd);
+  const worktrees = await listManagedWorktreeDirs(cwd, baseDir);
   if (worktrees.length === 0) return applyExcludeIds(own, excludeIds);
 
   const extra = await Promise.all(worktrees.map(async wt => {
     const r = await scanOneCwd(wt.cwd, baseDir, limit, normalizedQuery);
     // cwd 必须带上：父仓只是展示归属，前端点开时拿它去定位 transcript——用父仓 cwd 会查到空目录。
-    return { ...r, sessions: r.sessions.map(s => ({ ...s, cwd: wt.cwd, worktree: wt.name })) };
+    // worktreeGone 只在真没了时才加：活树上平白多一个恒 false 的字段，前端还得记得判它。
+    return {
+      ...r,
+      sessions: r.sessions.map(s => ({
+        ...s, cwd: wt.cwd, worktree: wt.name, ...(wt.gone ? { worktreeGone: true } : {}),
+      })),
+    };
   }));
 
   // ★ 截断必须发生在合并之后。各处各取 limit 条是对的（每处内部已按活动时间取了最近 N，
@@ -694,6 +700,10 @@ const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size 
   ? result
   : { ...result, sessions: result.sessions.filter(s => !excludeIds.has(s.id)) });
 
+// project 目录名里 `/.claude/worktrees/` 这一段编码后的样子。encodeProjectDir 是逐字符的
+// 「非字母数字 → '-'」，所以整条路径的编码 = 各段编码的拼接，这个中缀可以直接当前缀用。
+const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
+
 // 枚举该工作区下的托管 worktree（CLI 的 EnterWorktree / --worktree / agent isolation 的落点）。
 //
 // 【为什么 readdir 而不是 `git worktree list`】判据只是"目录在不在"，readdir 零子进程；而 git 那份
@@ -702,15 +712,72 @@ const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size 
 //
 // 残留目录（worktree 已 `git worktree remove`、目录还在）不特意排除：它的 transcript 确实存在过，
 // 列出来是诚实的；真打开时 routeCwd 那道判据仍会独立复核一次。
-async function listManagedWorktreeDirs(cwd) {
+//
+// ★ 判据是「目录在，**或者** transcript 还在」（2026-09-13）。只认前者的话，worktree 目录一被删，
+// 那棵树下的会话在抽屉里整批消失，而 jsonl 一个字节没少——用户看到的是「工作区抽屉没有这个会话」。
+// 这不是异常路径：CLI 的 ExitWorktree 只认本会话 EnterWorktree 建的树，对 CCM 自己 `git worktree add`
+// 建的那批一律 no-op，于是「干完活退出 worktree」唯一走得通的路就是让模型自己敲 `git worktree remove`。
+// 后半条判据靠 project 目录名的前缀匹配，因为 getProjectDir 是纯字符串编码、不碰磁盘：
+// 一条已经不存在的路径照样算得出它当初落在哪个 project 目录。
+//
+// 【两处已知的不精确，都无害】① 名字含 `.` 的 worktree，反推出的 name 会把点显示成连字符——
+// 但用它拼回去的路径再编码一次仍是同一个 project 目录（编码幂等），历史读的还是对的那份；
+// ② 父仓路径编码后逼近 200 字符时 encodeProjectDir 会截断 + 接 hash，前缀匹配失效，那种工作区的
+// 孤儿 worktree 扫不到——退回没有这条判据时的行为，不会错列成别人的会话。
+async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
   const root = managedWorktreeRoot(cwd);
-  let entries;
+  // 去重键用 project 目录名而不是 name：两条枚举路径给出的 name 规范不同（readdir 是原始目录名，
+  // 前缀匹配是编码后的串），拿 name 去重会让含 `.` 的活树同时出现「活着」与「已删」两行。
+  const byProject = new Map();
   try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return []; // 没有 .claude/worktrees/ —— 绝大多数工作区的常态，不是异常
-  }
-  return entries.filter(e => e.isDirectory()).map(e => ({ name: e.name, cwd: join(root, e.name) }));
+    for (const e of await readdir(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const wtCwd = join(root, e.name);
+      byProject.set(getProjectDir(wtCwd), { name: e.name, cwd: wtCwd, gone: false });
+    }
+  } catch { /* 没有 .claude/worktrees/ —— 绝大多数工作区的常态，不是异常 */ }
+
+  const prefix = getProjectDir(cwd) + WORKTREE_PROJECT_INFIX;
+  try {
+    const candidates = [];
+    for (const e of await readdir(baseDir, { withFileTypes: true })) {
+      // 前缀只是**候选筛选**，挡掉的是绝大多数无关目录（`/repo-x` 与 `/repo/sub` 编码后分别是
+      // `-repo-x-…` 与 `-repo-sub-…`，都接不上 `-repo--claude-worktrees-`）。它答不了所有权——
+      // 见下面那道回验。
+      if (!e.isDirectory() || !e.name.startsWith(prefix) || byProject.has(e.name)) continue;
+      const name = e.name.slice(prefix.length);
+      if (name) candidates.push({ project: e.name, name, wtCwd: join(root, name) });
+    }
+    const verified = await Promise.all(candidates.map(async c => (
+      await transcriptCwdOf(join(baseDir, c.project)) === c.wtCwd ? c : null
+    )));
+    for (const c of verified) {
+      if (c) byProject.set(c.project, { name: c.name, cwd: c.wtCwd, gone: true });
+    }
+  } catch { /* ~/.claude/projects 不可读：退回只认实际目录 */ }
+  return [...byProject.values()];
+}
+
+// 一个 project 目录当初是从哪个 cwd 落下来的 —— 取该目录里任一 transcript 头部记录的 cwd 字段。
+//
+// 【为什么需要非有损的证据】encodeProjectDir 把每个非字母数字字符都换成 '-'，于是
+// `<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**，磁盘上就是
+// 同一个目录名。只按前缀认领的话，前者（一个与本仓毫无关系的独立项目）的会话会被列进本仓抽屉、
+// 还标成「worktree foo 已删除」；而 baseDir 装的是本机所有 Claude 项目的 transcript，这个面不小。
+// CLI 逐条记录写的 cwd 是真实路径，正好是那份编码丢掉的信息。
+//
+// 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）一律返回 null，
+// 于是那棵树扫不到——退回的是「这条会话看不见」（= 本判据存在之前的行为），而不是「可能列错项目的
+// 会话」。少列一条比列错一条安全。实测本机 128 个 project 目录全部带这个字段（2026-09-13）。
+async function transcriptCwdOf(projectDir) {
+  try {
+    for (const f of await readdir(projectDir)) {
+      if (!f.endsWith('.jsonl')) continue;
+      const meta = await readHeadMeta(join(projectDir, f), null);
+      if (meta?.cwd) return meta.cwd;
+    }
+  } catch { /* 目录不可读 */ }
+  return null;
 }
 
 // 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
@@ -1027,7 +1094,10 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
   // 候选目录 = 工作区自身 + 它的托管 worktree。只查父仓的话，worktree 里被手动标未读的会话
   // 在被 limit 挤出时间窗后就永远拉不回来了——标记还在 read-state 里，行却再也不出现，
   // 而长按确认框对用户的承诺恰恰是「这一行会一直显示未读，直到你再次打开它」。
-  const owners = [{ cwd, worktree: null }, ...(await listManagedWorktreeDirs(cwd)).map(w => ({ cwd: w.cwd, worktree: w.name }))];
+  const owners = [
+    { cwd, worktree: null, gone: false },
+    ...(await listManagedWorktreeDirs(cwd, baseDir)).map(w => ({ cwd: w.cwd, worktree: w.name, gone: w.gone })),
+  ];
   const settled = await Promise.allSettled(wanted.map(async id => {
     // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）。
     //
@@ -1072,6 +1142,7 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
       lastUsedAt: Math.round(activityAt ?? st.mtimeMs),
       // 与 listSessionsPage 的行同形：父仓行不带 cwd，worktree 行带——前端点开时要用真实 cwd
       ...(owner.worktree ? { cwd: owner.cwd, worktree: owner.worktree } : {}),
+      ...(owner.gone ? { worktreeGone: true } : {}),
     };
   }));
   return settled
@@ -1095,7 +1166,9 @@ export function invalidateListCache(cwd) {
 // 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
 // size 由 listSessionsPage 的 stat 透传复用（省一次 syscall）；未传时回退 fstat，保持可独立调用。
 async function readHeadMeta(file, size) {
-  const meta = { title: '', model: null, entrypoint: null };
+  // cwd 是 CLI 逐条记录写进 transcript 的**真实路径**（非有损，不同于 project 目录名那份编码）。
+  // 孤儿 worktree 的归属回验只认它，见 listManagedWorktreeDirs。
+  const meta = { title: '', model: null, entrypoint: null, cwd: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
   let aiTitle = '', firstUser = '', firstCmd = '';
@@ -1116,6 +1189,7 @@ async function readHeadMeta(file, size) {
         // 见 app.js writeSessionEntrypoint），恒在头部、早于真实消息行——排除掉，否则所有 web 会话的
         // entrypoint 全部被它抢先误判成 cli。
         if (!meta.entrypoint && entry.entrypoint && entry.type !== 'entrypoint-marker') meta.entrypoint = entry.entrypoint;
+        if (!meta.cwd && typeof entry.cwd === 'string' && entry.cwd) meta.cwd = entry.cwd;
         if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
         if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
           aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
