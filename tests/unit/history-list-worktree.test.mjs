@@ -28,14 +28,19 @@ function fixture() {
   return { baseDir, repo };
 }
 
-// 往 <baseDir>/<encode(cwd)>/<id>.jsonl 写一条有真实消息时间的会话
-function writeSession(baseDir, cwd, id, { text = 'hi', at }) {
+// 往 <baseDir>/<encode(cwd)>/<id>.jsonl 写一条有真实消息时间的会话。
+// 每条记录都带 cwd —— 这是 CLI 的真实形态（2026-09-13 抽查本机 128 个 project 目录，128 个都有），
+// 而孤儿 worktree 的归属回验就靠它。夹具不写 cwd 的话，那道回验在测试里恒为「查无证据」，
+// 整组用例会一起偏离真实契约并自洽（docs/testing.md §3 的「fixture 编错外部契约时恒绿」）。
+// noCwd 单给「老 transcript 没有这个字段」那一格用。
+function writeSession(baseDir, cwd, id, { text = 'hi', at, noCwd = false }) {
   const dir = join(baseDir, getProjectDir(cwd));
   mkdirSync(dir, { recursive: true });
   const ts = new Date(at).toISOString();
+  const own = noCwd ? {} : { cwd };
   const lines = [
-    { type: 'user', timestamp: ts, message: { role: 'user', content: text } },
-    { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: 'ok' } },
+    { type: 'user', timestamp: ts, ...own, message: { role: 'user', content: text } },
+    { type: 'assistant', timestamp: ts, ...own, message: { role: 'assistant', content: 'ok' } },
   ];
   writeFileSync(join(dir, `${id}.jsonl`), lines.map(e => JSON.stringify(e)).join('\n') + '\n');
 }
@@ -290,6 +295,43 @@ test('前缀匹配不把邻居工作区的同名 worktree 算进来', async () =
     total, 1,
     'total 翻倍 = 同一棵 worktree 被扫了两次（邻居那条前缀也命中了），「还有更早会话」会凭空多一页',
   );
+});
+
+// ★ 前缀匹配只能当候选筛选，不能当所有权证据（PR #57 Codex bot 的 P2，实证成立）。
+// encodeProjectDir 把每个非字母数字字符都换成 '-'，所以 `<repo>--claude-worktrees-ghost`
+// 与 `<repo>/.claude/worktrees/ghost` **编码完全相同**——磁盘上它们就是同一个 project 目录。
+// 只看前缀的话，前者（一个与本仓毫无关系的独立项目）的会话会被列进本仓抽屉，还标成
+// 「worktree ghost 已删除」。而 baseDir 装的是本机所有 Claude 项目的 transcript，
+// 这个误判面不是理论上的。
+//
+// 回验靠 transcript 里的 cwd：CLI 每条记录都写真实路径（2026-09-13 抽查本机 128 个 project
+// 目录，128 个都有），那是非有损的结构性证据。
+test('前缀命中但 transcript 的 cwd 指向别处 → 不认领', async () => {
+  const { baseDir, repo } = fixture();
+  const collider = `${repo}--claude-worktrees-ghost`; // 与 <repo>/.claude/worktrees/ghost 编码同名
+  assert.equal(
+    getProjectDir(collider), getProjectDir(join(repo, '.claude', 'worktrees', 'ghost')),
+    '这条用例的前提就是两者编码相同——前提不成立的话它测的不是 bot 指出的那个缺陷',
+  );
+  writeSession(baseDir, collider, 'other-project-1', { at: T0 });
+
+  const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(
+    sessions.map(s => s.id), [],
+    '别的项目的会话被列进了本仓抽屉——baseDir 装着本机所有项目的 transcript，这个面很大',
+  );
+  assert.equal(total, 0);
+});
+
+// 失败方向：查不到证据就不认领。老 transcript 若真没有 cwd 字段，退回的是「这条会话看不见」
+// （= 改动前的行为），而不是「可能列错项目的会话」。少列一条比列错一条安全。
+test('transcript 没有 cwd 字段 → 不认领（查不到证据不认领）', async () => {
+  const { baseDir, repo } = fixture();
+  const gone = join(repo, '.claude', 'worktrees', 'no-meta');
+  writeSession(baseDir, gone, 'no-cwd-1', { at: T0, noCwd: true });
+
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(sessions.map(s => s.id), []);
 });
 
 test('listSessionsByIds 同样认得已删 worktree 的会话', async () => {
