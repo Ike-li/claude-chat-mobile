@@ -134,7 +134,7 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
     c.set('/ws/a', { slashCommands: ['a-skill', 'clear'] });
     const lastInit = { cwd: '/ws/a', slashCommands: ['a-skill', 'clear', 'model'] };
 
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit), ['a-skill', 'clear']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, ['a-skill', 'clear']);
     // B 区无缓存、lastInit.cwd≠B → null（旧 #5 整字段剥离的动机：不把 A 区 skill 灌进 B）
     assert.equal(resolveSlashCommandsForCwd(c, '/ws/b', lastInit), null);
   });
@@ -142,19 +142,46 @@ test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
   test('resolve：本 cwd 无缓存但 lastInit.cwd 命中 → 回落 lastInit（冷启动种种子）', () => {
     const c = createCwdKeyedCache();
     const lastInit = { cwd: '/ws/a', slashCommands: ['clear', 'model', 'effort'] };
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit), ['clear', 'model', 'effort']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit)?.slashCommands, ['clear', 'model', 'effort']);
   });
 
   test('resolve：缓存可直接存 string[]（兼容 load 形态）', () => {
     const c = createCwdKeyedCache();
     c.set('/ws/a', ['clear', 'compact']);
-    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null), ['clear', 'compact']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null)?.slashCommands, ['clear', 'compact']);
   });
 
   test('resolve：缺 cache / 缺 cwd 安全 → null，不抛', () => {
     assert.equal(resolveSlashCommandsForCwd(null, '/ws/a', null), null);
     assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), '', { cwd: '/ws/a', slashCommands: ['x'] }), null);
     assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), null, null), null);
+  });
+
+  // terminalSlashCommands 必须与 slashCommands 同源取出。分成两个函数各自回落，会出现
+  // 「命令来自 A 区缓存、隐藏名单来自 B 区 lastInit」的错配——那正是把两者收进一个返回值的理由。
+  test('resolve：terminal 名单随命令同源返回，绝不跨源拼接', () => {
+    const c = createCwdKeyedCache();
+    c.set('/ws/a', { slashCommands: ['clear', 'color'], terminalSlashCommands: ['color'] });
+    const lastInit = { cwd: '/ws/b', slashCommands: ['x'], terminalSlashCommands: ['statusline'] };
+
+    const a = resolveSlashCommandsForCwd(c, '/ws/a', lastInit);
+    assert.deepEqual(a.slashCommands, ['clear', 'color']);
+    assert.deepEqual(a.terminalSlashCommands, ['color'], 'A 区命中缓存时，名单必须来自同一条缓存而非 lastInit');
+
+    // 回落 lastInit 时两者也必须一起来自 lastInit
+    const b = resolveSlashCommandsForCwd(createCwdKeyedCache(), '/ws/b', lastInit);
+    assert.deepEqual(b.slashCommands, ['x']);
+    assert.deepEqual(b.terminalSlashCommands, ['statusline']);
+  });
+
+  test('resolve：无 terminal 名单（旧 CLI / 旧缓存）→ 空数组，不是 null', () => {
+    // 下游 buildSlashCommandHints 把「空名单」当作「没有要隐藏的」。这里回 null 会让
+    // server 的 `...(cmds ? {} : {})` 省略字段，前端保留上一份陈旧名单——刷新后隐藏错命令。
+    const c = createCwdKeyedCache();
+    c.set('/ws/a', { slashCommands: ['clear'] });
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null).terminalSlashCommands, []);
+    c.set('/ws/b', ['clear', 'compact']); // 兼容 load 的裸 string[] 形态
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/b', null).terminalSlashCommands, []);
   });
 });
 

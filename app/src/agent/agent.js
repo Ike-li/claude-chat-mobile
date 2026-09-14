@@ -2622,7 +2622,13 @@ export class AgentSession {
             mcpServers: msg.mcp_servers,
             skillsCount: msg.skills?.length ?? 0,
             permissionMode: this.permissionMode,  // 已与 SDK init 对账的实际生效档（bypass 例外，仍为用户档）
-            slashCommands: msg.slash_commands ?? []
+            slashCommands: msg.slash_commands ?? [],
+            // slash_commands 的子集，SDK 标注「UX 绑在本地终端、手机/远程 UI 应从命令菜单隐藏」
+            // （上游判据是 CLI 命令定义上的 terminalOriented 标志）。只影响补全菜单，不拦执行。
+            // 【只有这条路拿得到它】commands_changed 的 SlashCommand[] 不带这个标记，故 server 侧
+            // 那条路必须沿用本次缓存的名单而不是清空——判据见 server/app.js 的同名分支。
+            // 旧 CLI 不下发该字段 → 空数组 = 没有要隐藏的（绝不能反向理解成全部隐藏）。
+            terminalSlashCommands: msg.terminal_slash_commands ?? []
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();

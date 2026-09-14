@@ -213,6 +213,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('/h');
     await expect(page.locator('#cmdHints')).toBeHidden();
 
+    // 5. ★ terminal 名单必须跨过这次全量推送继续生效。
+    //    commands_changed 那条路【带不到】terminal 名单（SDK 的 SlashCommand[] 无 terminalOriented
+    //    标记），而它推来的新列表里确实含 color。若前端/后端任一端把名单跟着一起重置成空，
+    //    /color 就会在这里重新冒出来——这是本条断言唯一要抓的退化。
+    await page.locator('#input').fill('/c');
+    await expect(page.locator('#cmdHints')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // terminal_slash_commands（SDK）：绑在本地终端的命令不进手机补全菜单。
+  // 判据由 SDK 每轮 init 下发，不是前端硬编码黑名单。
+  test('P0-02p terminal 绑定命令不出现在补全菜单，同帧的普通命令照常出现', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 正对照先行：同一帧 init 里的普通命令必须显示得出来，否则下面的「不显示」无法区分
+    // 是「过滤生效」还是「补全整个断链了」。
+    await page.locator('#input').fill('/e');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+    await expect(page.locator('#cmdHints')).toContainText('/effort');
+
+    // 首帧 init 的 slashCommands 含 color，terminalSlashCommands 标了它 → 补全里不得出现。
+    await page.locator('#input').fill('/c');
+    await expect(page.locator('#cmdHints')).toBeHidden();
+
     await expectNoBrowserErrors(page);
   });
 

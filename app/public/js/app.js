@@ -141,6 +141,7 @@ import {
   resolveForkAnchorUuid,
   detectAtMentionQuery,
   applyAtMentionPick,
+  buildSlashCommandHints,
   unifiedDiffLines,
   MAX_DIFF_LINES_FOR_LCS,
   formatStatuslineCollapsedSummary,
@@ -462,11 +463,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const cachedCmds = JSON.parse(localStorage.getItem('slash_commands'));
     if (Array.isArray(cachedCmds)) window.availableSkills = cachedCmds;
   } catch { /* 缓存损坏等价于无缓存 */ }
-  function slashCommandName(cmd) {
-    if (typeof cmd === 'string') return cmd;
-    if (cmd && typeof cmd.name === 'string') return cmd.name;
-    return '';
-  }
+  // terminal 绑定命令名单（init.terminal_slash_commands）：与上面那份同批缓存，否则刷新后到下一轮
+  // init 之间会拿空名单过滤，/color /statusline 这类会短暂冒回补全菜单。
+  try {
+    const cachedTerm = JSON.parse(localStorage.getItem('slash_commands_terminal'));
+    if (Array.isArray(cachedTerm)) window.terminalSlashCommands = cachedTerm;
+  } catch { /* 缓存损坏等价于无缓存 */ }
   let lastSeq = 0;
   let curEpoch = null;
   // 回放缓冲（P0-REPLAY-BUFFER）flush 收尾时置位：期间 scrollBottom() 直接返回，抑制缓冲事件逐条
@@ -2423,10 +2425,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // slash 命令列表的落地点。两条来源共用：init（真 init / 服务端按 cwd 重放的合成 init）与
   // slash_commands（CLI 中途发现新 skill 的全量推送）。两处各写一遍迟早漂，故收在这里。
   // 空数组是有效值——REPLACE 语义下「命令被删光」也要让补全列表跟着空掉。
-  function applySlashCommands(list) {
+  // terminalList 缺省时【保留】现有名单而不是清空：commands_changed 那条路带不到它
+  // （SDK 的 SlashCommand[] 不含 terminalOriented 标记），清空会让隐藏在每次 skill 变动后失效。
+  // 这与 server 侧 slash_commands 分支「沿用上一条 init 的名单」是同一条判据的两端，改一端必须改另一端。
+  function applySlashCommands(list, terminalList) {
     if (!Array.isArray(list)) return;
     window.availableSkills = list;
     try { localStorage.setItem('slash_commands', JSON.stringify(list)); } catch { /* quota / 隐私模式 */ }
+    if (!Array.isArray(terminalList)) return;
+    window.terminalSlashCommands = terminalList;
+    try { localStorage.setItem('slash_commands_terminal', JSON.stringify(terminalList)); } catch { /* quota / 隐私模式 */ }
   }
 
   let deviceApprovedHideTimer = null; // approved 的淡出隐藏是延迟执行；若 150ms 内又来一个 pending 须作废，否则会把重新弹出的弹窗悄悄关掉
@@ -2505,7 +2513,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 此处不再合成覆盖连接状态
       // slashCommands：真 init / 服务端按 cwd 重放都会带；空数组也接受（表示该 cwd 确实无命令）。
       // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
-      applySlashCommands(p.slashCommands);
+      applySlashCommands(p.slashCommands, p.terminalSlashCommands);
       // MCP 服务器与 skills 数：同 slashCommands 的「缺字段不覆盖」惯例——合成 init（切区重放、
       // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「这台电脑」页刷成空。
       // 归键用事件自带的 cwd：切工作区时 init 与 currentCwd 的更新顺序不保证，拿 currentCwd 当键
@@ -4134,12 +4142,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (val) hidePromptSuggestion(); // 用户已经在写自己的了，建议就该让位
     if (val.startsWith('/')) {
       hideAtMentionList(); // 与 @ 互斥
-      const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
-      const cands = base.concat(LOCAL_COMMANDS.filter(c => !base.includes(c)));
-      const prefix = val.slice(1).toLowerCase();
-      const matches = prefix ?
-        cands.filter(cmd => cmd.toLowerCase().startsWith(prefix)) :
-        cands;
+      // terminal 绑定命令（/color /statusline 这类）不进手机补全菜单——判据由 SDK 下发，
+      // 不是本地黑名单。只隐藏菜单项，手输仍照常透传给 CLI（见 buildSlashCommandHints 头注）。
+      const matches = buildSlashCommandHints({
+        commands: window.availableSkills || [],
+        terminalCommands: window.terminalSlashCommands || [],
+        localCommands: LOCAL_COMMANDS,
+        prefix: val.slice(1),
+      });
       if (matches.length > 0) {
         hints.innerHTML = matches.map(cmd => {
           const safe = esc(cmd);
