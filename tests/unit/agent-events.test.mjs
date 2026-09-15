@@ -31,6 +31,26 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     assert.equal(init.payload.claudeVersion, '1.0.0');
     assert.equal(init.payload.permissionMode, 'default');
     assert.deepEqual(init.payload.slashCommands, ['/help']);
+    // 缺 terminal_slash_commands（旧 CLI 不下发）→ 空数组而非 undefined：下游语义是
+    // 「空名单 = 没有要隐藏的」，undefined 会让 server 的 ?? [] 与前端的 Array.isArray 判据分叉。
+    assert.deepEqual(init.payload.terminalSlashCommands, []);
+    s.dispose();
+  });
+
+  // SDK 字段名 → 契约字段名的映射，只有这一层守得住：E2E 打的 mock 是零 import app/src 的平行实现，
+  // 它和前端各写一遍 terminalSlashCommands 就能自洽全绿，哪怕 agent.js 这里把名字拼错。
+  test('system/init：terminal_slash_commands 透传为 terminalSlashCommands', () => {
+    const { s, events } = makeSession({ onSessionId() {} });
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid', model: 'opus', cwd: '/work',
+      claude_code_version: '1.0.0', mcp_servers: [], skills: [],
+      slash_commands: ['clear', 'color', 'statusline'], terminal_slash_commands: ['color', 'statusline'] });
+
+    const init = events.find(e => e.type === 'init');
+    assert.deepEqual(init.payload.terminalSlashCommands, ['color', 'statusline']);
+    // terminal 名单是 slash_commands 的【子集】，不从中剔除——过滤是前端补全菜单的事，
+    // 手输 /color 仍要能透传给 CLI（SDK 措辞：hide from command menus，不是禁止执行）。
+    assert.deepEqual(init.payload.slashCommands, ['clear', 'color', 'statusline'],
+      'terminal 名单不得从 slashCommands 里被剔除：那会连执行路径一起砍掉');
     s.dispose();
   });
 

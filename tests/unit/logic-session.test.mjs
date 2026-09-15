@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -137,6 +137,27 @@ test('formatSessionRowSubtitle: 桌面端已打开与终端已打开分开说', 
   );
 });
 
+// worktree 目录已被删掉的会话现在仍列在抽屉里（transcript 还在盘上），但它**点不开**——
+// cwd 没了，SDK 起不来。不在行上说这一句，用户只能靠点一次、读一段报错才知道，而这一行
+// 跟活着的 worktree 行长得一模一样。
+test('formatSessionRowSubtitle: worktree 已删的行要当场看得出来', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/13', worktree: 'chatgpt-gbwh', worktreeGone: true, shortId: '5a8793ca' }),
+    'worktree chatgpt-gbwh（已删除） · 9/13 · 5a8793ca',
+    '不标出来 = 用户点一次才知道打不开，而这行和活着的 worktree 行没有任何区别',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/13', worktree: 'alive-one', shortId: '5a8793ca' }),
+    'worktree alive-one · 9/13 · 5a8793ca',
+    '活着的 worktree 不许带这个后缀',
+  );
+  // 非 worktree 行不受影响：即便服务端漏带 worktree 名也不该凭空冒出一个「（已删除）」
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '9/13', worktreeGone: true, shortId: '5a8793ca' }),
+    '9/13 · 5a8793ca',
+  );
+});
+
 // 文件/改动面板跟的是「当前会话在哪个工作树」，不是「当前工作区」。这两者在托管 worktree
 // 打开时会分叉：工作区轴仍是父仓（不新增抽屉条目），而 claude 实际在 worktree 里改文件。
 // 判错的症状是改动面板空着——而「看起来没改动」和「真的没改动」在 UI 上无法区分。
@@ -156,6 +177,77 @@ test('resolvePanelCwd: 跟当前实例的 cwd，无实例时回落工作区 cwd'
   assert.equal(resolvePanelCwd({ instances, viewingInstanceId: 'gone', workspaceCwd: '/repo' }), '/repo');
   assert.equal(resolvePanelCwd({ instances: null, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo');
   assert.equal(resolvePanelCwd({}), null);
+});
+
+// worktree 目录被删掉之后（2026-09-13 真机形态）：实例 cwd 仍指向那条已不存在的路径——它必须
+// 保持原样，transcript 就落在按它算出的 project 目录里，改掉就是「历史消息加载失败」。
+// 所以服务端另发一个 panelCwd 字段承担展示/文件/git 轴，本函数优先认它。
+// 不认的话，文件面板拿悬空路径去 realpath，用户看到的是「路径不在授权范围内」，
+// 改动面板则是一条 git fatal —— 两条都在说技术细节，没有一条说得出「worktree 已经被删了」。
+test('resolvePanelCwd: worktree 目录已删时用服务端给的 panelCwd，不是驾驶轴 cwd', () => {
+  const instances = [
+    { instanceId: 'i1', cwd: '/repo/.claude/worktrees/gone', panelCwd: '/repo', worktreeGone: true },
+    { instanceId: 'i2', cwd: '/repo/.claude/worktrees/alive', panelCwd: '/repo/.claude/worktrees/alive' },
+  ];
+  assert.equal(
+    resolvePanelCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }), '/repo',
+    '仍用悬空的驾驶轴 cwd = 文件面板报「不在授权范围内」、改动面板报 git fatal',
+  );
+  assert.equal(
+    resolvePanelCwd({ instances, viewingInstanceId: 'i2', workspaceCwd: '/repo' }),
+    '/repo/.claude/worktrees/alive',
+    '活着的 worktree 仍看自己那棵树——panelCwd 只在悬空时才与 cwd 分叉',
+  );
+  // 旧 server（未下发 panelCwd）连上新前端：回落 cwd，与引入本字段之前逐字同形
+  assert.equal(
+    resolvePanelCwd({ instances: [{ instanceId: 'i3', cwd: '/repo' }], viewingInstanceId: 'i3', workspaceCwd: '/x' }),
+    '/repo',
+  );
+});
+
+// ★ 两条轴必须分开，合并任何一侧都会静默出错，而且两种错法长得完全不一样：
+//   · transcript 轴（loadHistory 拿它去算 project 目录）用了父仓 → 「历史消息加载失败」，
+//     而磁盘上那份 jsonl 完好无损（agent.js handleCwdChanged 整段注释就是在讲这个症状）；
+//   · 展示轴（文件/改动面板）用了悬空 cwd → 「路径不在授权范围内」+ git fatal。
+// 同一个 instances 数组同时喂这两个消费者，所以这里用同一份夹具各断一次。
+test('resolveSessionCwd: transcript 轴恒跟驾驶轴，worktree 删了也不许改', () => {
+  const instances = [
+    { instanceId: 'i1', cwd: '/repo/.claude/worktrees/chatgpt-gbwh', panelCwd: '/repo', worktreeGone: true },
+  ];
+  assert.equal(
+    resolveSessionCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }),
+    '/repo/.claude/worktrees/chatgpt-gbwh',
+    'transcript 就落在按这条路径算出的 project 目录里——换成父仓 = 历史消息加载失败，而文件还好端端在盘上',
+  );
+  assert.notEqual(
+    resolveSessionCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }),
+    resolvePanelCwd({ instances, viewingInstanceId: 'i1', workspaceCwd: '/repo' }),
+    '两条轴在 worktree 已删这一档必须分叉——合成一个函数就必然有一侧是错的',
+  );
+  assert.equal(resolveSessionCwd({ instances, viewingInstanceId: null, workspaceCwd: '/repo' }), '/repo');
+  assert.equal(resolveSessionCwd({}), null);
+});
+
+// 光把面板悄悄换成父仓还不够：用户点开「改动」看到的是主仓的 diff，而他以为在看 worktree 的。
+// 「看起来没改动」和「真的没改动」在 UI 上无法区分——这正是 resolvePanelCwd 当初存在的理由，
+// 回落父仓时同一个风险原样成立，所以必须显式说一句那棵树已经没了。
+test('resolveWorktreeGoneNotice: 只在 worktree 已删时出提示，带出两边的名字', () => {
+  const instances = [
+    { instanceId: 'i1', cwd: '/repo/.claude/worktrees/chatgpt-gbwh', panelCwd: '/repo', worktreeGone: true },
+    { instanceId: 'i2', cwd: '/repo/.claude/worktrees/alive', panelCwd: '/repo/.claude/worktrees/alive', worktreeGone: false },
+    { instanceId: 'i3', cwd: '/repo', panelCwd: '/repo', worktreeGone: false },
+  ];
+  assert.deepEqual(
+    resolveWorktreeGoneNotice({ instances, viewingInstanceId: 'i1' }),
+    { worktree: 'chatgpt-gbwh', parent: 'repo' },
+    '不出提示 = 用户在主仓的 diff 上做合并判断，却以为看的是 worktree',
+  );
+  assert.equal(resolveWorktreeGoneNotice({ instances, viewingInstanceId: 'i2' }), null, '活着的 worktree 不该报删除');
+  assert.equal(resolveWorktreeGoneNotice({ instances, viewingInstanceId: 'i3' }), null, '普通会话不该报删除');
+  // 旧 server / 空首页 / 实例已关：一律不出提示
+  assert.equal(resolveWorktreeGoneNotice({ instances, viewingInstanceId: null }), null);
+  assert.equal(resolveWorktreeGoneNotice({ instances: null, viewingInstanceId: 'i1' }), null);
+  assert.equal(resolveWorktreeGoneNotice({}), null);
 });
 
 // 托管 worktree 的会话并进父仓列表后（2026-09-11），同一页里混着两个工作树的会话。

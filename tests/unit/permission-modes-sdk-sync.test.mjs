@@ -120,3 +120,14 @@ test('影响面文案：不认识的 destination 按最宽处理，不得静默�
   assert.notEqual(v, null);
   assert.match(v.label, /所有项目/);
 });
+
+// 2026-09-13 变异补齐：把 danger 改成硬编码 true 后整棵 tests/ 树零变红。
+// 这一位决定磁贴要不要画成危险档；全标成 danger 等于危险提示彻底失效——
+// 六档全红时用户只会把它当背景色，反而更容易点中 bypassPermissions。
+test('permissionModeTileSpecs: 只有 bypassPermissions 是危险档，其余一律 false', () => {
+  const specs = permissionModeTileSpecs();
+  const danger = specs.filter(s => s.danger).map(s => s.id);
+  assert.deepEqual(danger, ['bypassPermissions'],
+    '危险标记只该落在 bypassPermissions 上——全标或全不标，这个提示就等于没有');
+  assert.equal(specs.length, SDK_PERMISSION_MODES.length);
+});

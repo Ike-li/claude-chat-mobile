@@ -51,4 +51,67 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // worktree 目录被删掉之后（真机会话 5a8793ca）：ExitWorktree 对 CCM 自己建的树是 no-op，
+  // 模型转而用 Bash `git worktree remove`，而 Bash 的 cd 改不了会话 cwd —— 驾驶轴就此悬空。
+  // 那之后四个消费点各报一条互不相干的技术错误：文件面板「路径不在授权范围内」、改动面板
+  // git fatal、statusline 的 git 段整个消失、抽屉里那条会话彻底不见。
+  //
+  // 这一条守的是纯函数层照不到的那半截：**服务端下发的 panelCwd / worktreeGone 有没有真的被
+  // 接到 DOM 上**。判据全落在用户看得见的东西上（面板路径、提示条文本、列表行副文本）。
+  test('P0-WT-GONE 会话开着时那棵树被删：面板改看主仓并说明原因', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+    await expect(page.locator('#messages')).toContainText('WORKTREE_HISTORY_LOADED', { timeout: 15_000 });
+
+    // 正对照：树还在的时候，面板跟的是 worktree 自己那棵，也没有任何「已删除」字样。
+    // 缺了这一格，下面的断言用「面板恒显父仓 + 提示条常驻」也能过，而那会把功能废掉。
+    await page.locator('#topContextPill').click();
+    await expect(page.locator('#fileBrowsePath')).toContainText('wt-x', { timeout: 10_000 });
+    await expect(page.locator('[data-testid="workspace-worktree-gone"]')).toBeHidden();
+    await page.locator('#workspaceClose').click();
+
+    // 开着的时候那棵树被删掉——真机顺序就是这样。
+    await sendChatMessage(page, 'test:worktree-gone');
+
+    await page.locator('#topContextPill').click();
+    const notice = page.locator('[data-testid="workspace-worktree-gone"]');
+    await expect(notice).toBeVisible({ timeout: 10_000 });
+    await expect(notice).toContainText('wt-x');
+    await expect(notice).toContainText('已删除');
+    // 面板本身必须真的改看主仓：只出提示条而路径还指着那棵已删的树，等于什么都没修。
+    await expect(page.locator('#fileBrowsePath')).not.toContainText('wt-x');
+    await page.locator('#workspaceClose').click();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 另一半：会话**没开着**的时候那棵树已经没了——重启 server、换台设备、隔天回来都是这一格。
+  // 这条会话仍列在抽屉里（transcript 还在盘上），所以行上必须点开之前就看得出打不开，
+  // 点下去也得说清是哪棵树没了，而不是一句「会话不存在」——用户刚在列表里看见过它。
+  test('P0-WT-GONE-ROW worktree 被删的会话：行上先预警，点开说清是哪棵树', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:worktree-gone');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+
+    const row = page.locator('[data-testid="session-row"]', { hasText: 'Worktree Driving Session' }).first();
+    await expect(row).toContainText('wt-x');
+    await expect(row).toContainText('已删除');
+
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+
+    // 落地页复用 bgLocked 那条既有失败路径（session:switch ack 回 ok:false 即落到这里）。
+    const surface = page.locator('[data-testid="session-blocked-surface"]');
+    await expect(surface).toBeVisible();
+    const reason = page.locator('[data-testid="session-blocked-reason"]');
+    await expect(reason).toContainText('wt-x');
+    await expect(reason).not.toContainText('会话不存在');
+
+    await expectNoBrowserErrors(page);
+  });
 });

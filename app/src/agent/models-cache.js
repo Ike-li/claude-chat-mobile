@@ -59,14 +59,26 @@ export function normalizeSlashCommands(raw) {
   return names.length ? names : null;
 }
 
-// 解析某 cwd 应下发的 slashCommands：优先 per-cwd 缓存；仅当 lastInit.cwd 命中当前 cwd 才回落 lastInit
+// 解析某 cwd 应下发的斜杠命令：优先 per-cwd 缓存；仅当 lastInit.cwd 命中当前 cwd 才回落 lastInit
 // （防全局 lastInit 把 A 区命令塞进 B 区视图——这正是旧 #5 整字段剥离的动机）。
+//
+// 返回 `{ slashCommands, terminalSlashCommands }` 或 null（无可用清单）。
+// 【为什么两者一起返回而不是两个函数】terminalSlashCommands 是 slashCommands 的子集，两者必须
+// 取自同一来源。拆成两个各自回落的函数，就能拼出「命令来自 A 区缓存、隐藏名单来自 B 区 lastInit」
+// 的错配——名单里的名字在命令列表里根本不存在，于是该隐藏的没隐藏。同源是这个返回形状的全部理由。
+//
+// terminalSlashCommands 没有时返回 `[]` 而非 null：下游语义是「空名单 = 没有要隐藏的」，
+// 而 null 会让 server 省略该字段、前端继续沿用上一份陈旧名单。
 export function resolveSlashCommandsForCwd(cache, cwd, lastInit = null) {
   const hit = cache?.get?.(cwd);
   const fromCache = normalizeSlashCommands(hit?.slashCommands ?? hit);
-  if (fromCache) return fromCache;
+  if (fromCache) {
+    return { slashCommands: fromCache, terminalSlashCommands: normalizeSlashCommands(hit?.terminalSlashCommands) ?? [] };
+  }
   if (cwd && lastInit?.cwd === cwd) {
-    return normalizeSlashCommands(lastInit.slashCommands);
+    const cmds = normalizeSlashCommands(lastInit.slashCommands);
+    if (!cmds) return null;
+    return { slashCommands: cmds, terminalSlashCommands: normalizeSlashCommands(lastInit.terminalSlashCommands) ?? [] };
   }
   return null;
 }

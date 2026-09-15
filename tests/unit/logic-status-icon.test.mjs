@@ -4,7 +4,7 @@
 // 实时看是绿 ✓、刷新后变成棕色的 ✓。同域拆分惯例：新行为域另起文件，不塞进 logic-session-panel。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { STATUS_ICONS, statusIconSpec } from '../../app/public/js/logic.js';
+import { STATUS_ICONS, STATUS_ICON_TONES, statusIconSpec } from '../../app/public/js/logic.js';
 
 test('statusIconSpec: 每个 kind 都同时给出图标与语义色', () => {
   const kinds = Object.keys(STATUS_ICONS);
@@ -32,4 +32,18 @@ test('statusIconSpec: 未知 kind 整份回落 pending，不只回落图标', ()
   assert.equal(fallback.kind, 'pending');
   assert.equal(fallback.html, pending.html);
   assert.equal(fallback.tone, pending.tone, '只回落图标不回落色 = 未知状态穿着上一个状态的颜色');
+});
+
+// 2026-09-13 补：STATUS_ICON_TONES 此前【全仓没有任何测试 import 过】，是这张表上唯一的真空白。
+// 它的用途是让调用点在换色前把上一个状态的色类清掉（不能只 add，否则两个 text-* 叠着靠 CSS
+// 顺序决胜负）。所以它的不变量是【覆盖性】：statusIconSpec 能吐出的每个 tone 都得在清单里，
+// 漏一个就等于那种状态的色永远清不掉——正好复现本文件头记的「绿 ✓ 刷新后变棕色 ✓」。
+test('STATUS_ICON_TONES: 覆盖 statusIconSpec 能返回的全部语义色，且已去重', () => {
+  const produced = new Set(Object.keys(STATUS_ICONS).map(k => statusIconSpec(k).tone));
+  for (const tone of produced) {
+    assert.ok(STATUS_ICON_TONES.includes(tone),
+      `${tone} 不在清理清单里——用到它的状态换色时清不掉，会和下一个色类叠着`);
+  }
+  assert.equal(STATUS_ICON_TONES.length, new Set(STATUS_ICON_TONES).size, '清单里有重复项');
+  assert.ok(STATUS_ICON_TONES.length > 0);
 });

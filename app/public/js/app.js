@@ -25,6 +25,8 @@ import {
   effortUiState,
   resolvePanelState,
   resolvePanelCwd,
+  resolveSessionCwd,
+  resolveWorktreeGoneNotice,
   aggregateStates,
   owningWorkspace,
   resolveDrawerStatus,
@@ -139,6 +141,7 @@ import {
   resolveForkAnchorUuid,
   detectAtMentionQuery,
   applyAtMentionPick,
+  buildSlashCommandHints,
   unifiedDiffLines,
   MAX_DIFF_LINES_FOR_LCS,
   formatStatuslineCollapsedSummary,
@@ -367,7 +370,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const consoleFilterButtons = [$('consoleFilterAll'), $('consoleFilterInteraction'), $('consoleFilterDiag')].filter(Boolean);
   // 工作区面板外壳（文件 / 改动两 tab 同壳）
   const workspaceModal = $('workspaceModal'), workspaceClose = $('workspaceClose'),
-        workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges');
+        workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges'),
+        workspaceWorktreeGone = $('workspaceWorktreeGone');
   // 项目文件只读浏览——文件 tab
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'),
@@ -459,11 +463,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const cachedCmds = JSON.parse(localStorage.getItem('slash_commands'));
     if (Array.isArray(cachedCmds)) window.availableSkills = cachedCmds;
   } catch { /* 缓存损坏等价于无缓存 */ }
-  function slashCommandName(cmd) {
-    if (typeof cmd === 'string') return cmd;
-    if (cmd && typeof cmd.name === 'string') return cmd.name;
-    return '';
-  }
+  // terminal 绑定命令名单（init.terminal_slash_commands）：与上面那份同批缓存，否则刷新后到下一轮
+  // init 之间会拿空名单过滤，/color /statusline 这类会短暂冒回补全菜单。
+  try {
+    const cachedTerm = JSON.parse(localStorage.getItem('slash_commands_terminal'));
+    if (Array.isArray(cachedTerm)) window.terminalSlashCommands = cachedTerm;
+  } catch { /* 缓存损坏等价于无缓存 */ }
   let lastSeq = 0;
   let curEpoch = null;
   // 回放缓冲（P0-REPLAY-BUFFER）flush 收尾时置位：期间 scrollBottom() 直接返回，抑制缓冲事件逐条
@@ -651,9 +656,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
   // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
   // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
-  const drivingCwdOf = (instanceId) => resolvePanelCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
+  // ⚠️ 与下面的 panelCwd() 在「worktree 目录已被删掉」那一档会分叉，**不能合用一个**：
+  // 这条喂 loadHistory（算 project 目录，必须是驾驶轴），那条喂文件/改动面板（必须是能 realpath
+  // 的真实目录）。判据与两种错法见 logic/panel-state.js 的 resolveSessionCwd。
+  const drivingCwdOf = (instanceId) => resolveSessionCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
   // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
-  const panelCwd = () => drivingCwdOf(viewingInstanceId);
+  const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
+  const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
@@ -770,6 +780,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       workspaceClose,
       workspaceTabFiles,
       workspaceTabChanges,
+      workspaceWorktreeGone,
       fileBrowseTools,
       fileBrowseBack,
       fileBrowsePath,
@@ -2414,10 +2425,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // slash 命令列表的落地点。两条来源共用：init（真 init / 服务端按 cwd 重放的合成 init）与
   // slash_commands（CLI 中途发现新 skill 的全量推送）。两处各写一遍迟早漂，故收在这里。
   // 空数组是有效值——REPLACE 语义下「命令被删光」也要让补全列表跟着空掉。
-  function applySlashCommands(list) {
+  // terminalList 缺省时【保留】现有名单而不是清空：commands_changed 那条路带不到它
+  // （SDK 的 SlashCommand[] 不含 terminalOriented 标记），清空会让隐藏在每次 skill 变动后失效。
+  // 这与 server 侧 slash_commands 分支「沿用上一条 init 的名单」是同一条判据的两端，改一端必须改另一端。
+  function applySlashCommands(list, terminalList) {
     if (!Array.isArray(list)) return;
     window.availableSkills = list;
     try { localStorage.setItem('slash_commands', JSON.stringify(list)); } catch { /* quota / 隐私模式 */ }
+    if (!Array.isArray(terminalList)) return;
+    window.terminalSlashCommands = terminalList;
+    try { localStorage.setItem('slash_commands_terminal', JSON.stringify(terminalList)); } catch { /* quota / 隐私模式 */ }
   }
 
   let deviceApprovedHideTimer = null; // approved 的淡出隐藏是延迟执行；若 150ms 内又来一个 pending 须作废，否则会把重新弹出的弹窗悄悄关掉
@@ -2496,7 +2513,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 此处不再合成覆盖连接状态
       // slashCommands：真 init / 服务端按 cwd 重放都会带；空数组也接受（表示该 cwd 确实无命令）。
       // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
-      applySlashCommands(p.slashCommands);
+      applySlashCommands(p.slashCommands, p.terminalSlashCommands);
       // MCP 服务器与 skills 数：同 slashCommands 的「缺字段不覆盖」惯例——合成 init（切区重放、
       // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「这台电脑」页刷成空。
       // 归键用事件自带的 cwd：切工作区时 init 与 currentCwd 的更新顺序不保证，拿 currentCwd 当键
@@ -3550,7 +3567,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       gitBtn.onclick = () => {
         haptic('tap');
         // 上下文直达：本轮刚改完文件，直接落到「改动」tab（而非默认的「文件」tab）
-        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(panelCwd(), 'changes');
+        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(panelCwd(), 'changes', worktreeGoneNotice());
       };
     }
     const statsEl = card.querySelector('.tfc-stats');
@@ -4125,12 +4142,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (val) hidePromptSuggestion(); // 用户已经在写自己的了，建议就该让位
     if (val.startsWith('/')) {
       hideAtMentionList(); // 与 @ 互斥
-      const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
-      const cands = base.concat(LOCAL_COMMANDS.filter(c => !base.includes(c)));
-      const prefix = val.slice(1).toLowerCase();
-      const matches = prefix ?
-        cands.filter(cmd => cmd.toLowerCase().startsWith(prefix)) :
-        cands;
+      // terminal 绑定命令（/color /statusline 这类）不进手机补全菜单——判据由 SDK 下发，
+      // 不是本地黑名单。只隐藏菜单项，手输仍照常透传给 CLI（见 buildSlashCommandHints 头注）。
+      const matches = buildSlashCommandHints({
+        commands: window.availableSkills || [],
+        terminalCommands: window.terminalSlashCommands || [],
+        localCommands: LOCAL_COMMANDS,
+        prefix: val.slice(1),
+      });
       if (matches.length > 0) {
         hints.innerHTML = matches.map(cmd => {
           const safe = esc(cmd);
@@ -6247,7 +6266,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       e.preventDefault();
       e.stopPropagation();
       haptic('tap');
-      openWorkspacePanel(panelCwd(), 'files');
+      openWorkspacePanel(panelCwd(), 'files', worktreeGoneNotice());
     };
   }
 
@@ -6512,6 +6531,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         terminalSource: s.terminalSource || null,
         shortId: s.id ? s.id.slice(0, 8) : null,
         worktree: s.worktree || null, // 托管 worktree 的会话行：标出在哪个工作树干活
+        worktreeGone: Boolean(s.worktreeGone), // 那棵树已被删：这一行点不开，得当场看得出来
       });
       btn.appendChild(sub);
 
