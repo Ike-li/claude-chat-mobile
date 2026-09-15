@@ -1,5 +1,25 @@
 # 变更记录
 
+## v1.10.0 — 2026-09-15
+
+Changes since v1.9.1.
+
+### Verified environment
+- claude CLI: 2.1.270
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Features
+- feat(composer): 终端绑定的 slash 命令不再进手机补全菜单
+
+### Fixes
+- fix(worktree): 孤儿 worktree 的归属改用 transcript 的 cwd 回验，不再信有损的 project 目录名
+- fix(worktree): 树被删后会话不再从抽屉消失，面板改看主仓并说明原因
+
+### Other
+- test(logic): 补三处变异实证的覆盖缺口
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.9.1...v1.10.0
+
 ## v1.9.1 — 2026-09-13
 
 Changes since v1.9.0.
