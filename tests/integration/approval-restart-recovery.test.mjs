@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { reserveFreePort } from './_spawn-server.mjs';
 
 let dataDir, httpServer, io;
 
@@ -31,7 +32,7 @@ async function startServerWithSeededPendingApproval() {
   const approvalStoreFile = join(dataDir, 'approval-requests.json');
   process.env.CCM_APPROVAL_STORE_FILE = approvalStoreFile;
   process.env.CCM_AUDIT_FILE = join(dataDir, 'audit-records.json');
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = 'ccm-integration-test-token';   // §1.9：没有 token server 拒绝启动
