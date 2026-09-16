@@ -112,7 +112,7 @@
     "@playwright/test": "^1.61.1",
     "eslint": "^10.10.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "globals": "^17.7.0",
+    "globals": "^17.12.0",
     "socket.io-client": "^4.8.3"
   }
 }
