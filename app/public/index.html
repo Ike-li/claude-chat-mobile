@@ -418,7 +418,7 @@
   <div id="serviceStatusModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
-      <!-- 返回箭头而不是 ✕：这张面板是通用设置「🖥 这台电脑」页切出去的第二层，退出语义是
+      <!-- 返回箭头而不是 ✕：这张面板是通用设置「🖥 宿主机」页切出去的第二层，退出语义是
            **退回上一级**。它与 generalSheet 同为 z-40、叠着会互相拦点击，所以打开时先收了设置
            sheet——于是一个 ✕ 在用户眼里就成了「一路退到首页」，来时那一页还得重新找回去。
            位置与图标都对齐 #generalBack，面板内部 L1↔L2 的返回是同一个心智。 -->
@@ -890,6 +890,19 @@
            指纹与信任名单**必须同屏**：指纹的唯一用途就是在名单里认出手上这台，
            此前它们分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。 -->
       <div id="generalPage-devices" class="hidden space-y-4" data-general-page="devices">
+        <!-- 待批设备：给入口，不在这里另渲染一份审批 UI。卡片本体是 #deviceRequests 那个 z-30
+             fixed 浮层，而 #generalScrim 同为 z-30 却在 DOM 里排得更后——同层后来居上，于是
+             设置面板开着时卡片既看不见也点不动。L1 上那个红点是全站唯一表示「点一下就能处理」
+             的记号，不给通路就是在说假话。收起面板把卡片让出来即可，照搬一份审批按钮会变成
+             同一份数据两套渲染面（同「排查」页那两条日志入口的理由）。
+             整段显隐由 app.js 的 renderDeviceRequests 与卡片栈同源驱动，不另存一份判据。 -->
+        <div id="pendingDevicesEntry" class="hidden">
+          <button id="btnPendingDevices" type="button" class="w-full text-left p-2.5 rounded-xl border border-cta bg-sunk active:bg-line text-xs text-ink" data-testid="pending-devices-entry">
+            <span class="font-semibold block">🔔 <span id="pendingDevicesCount">有设备在等你批</span> →</span>
+            <span class="text-ink-soft">收起这张面板，在顶部卡片上「准入 / 拒绝」</span>
+          </button>
+        </div>
+
         <div>
           <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
           <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">
@@ -940,7 +953,7 @@
         </div>
       </div>
 
-      <!-- ═══ L2 · 🖥 这台电脑 ═══
+      <!-- ═══ L2 · 🖥 宿主机 ═══
            回答意图「那台电脑现在怎么样」：活着吗 / 多久了 / 版本 / 出过什么事，一屏答完。 -->
       <div id="generalPage-host" class="hidden space-y-4" data-general-page="host">
         <div data-scope-note="host" class="text-[11px] text-ink-faint leading-snug px-0.5">
@@ -966,7 +979,7 @@
         <!-- MCP 服务器与 skills：数据早就随 init 事件到了浏览器（agent.js emit('init')），
              只是从来没有渲染面。整段由 app.js 的 renderHostEnvSection 按有无数据显隐。 -->
         <div id="hostEnvSection" class="hidden">
-          <div class="text-xs font-semibold text-ink-soft mb-2">🧩 <span>这台电脑上的 claude</span></div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🧩 <span>宿主机上的 claude</span></div>
           <div id="hostEnvBody" class="space-y-2" data-testid="host-env-body"></div>
         </div>
 
@@ -1045,7 +1058,11 @@
         </div>
 
         <!-- 四条日志，各看各的。先说清有几条、各管什么——此前用户根本不知道存在第四条
-             （server 进程自己的 stdout/stderr 在手机上完全读不到）。 -->
+             （server 进程自己的 stdout/stderr 在手机上完全读不到）。
+             后两条的**内容**住在另外两张面板里（顶栏的运行日志抽屉 / 服务状态面板），这里给的是
+             直达入口而不是搬运：那两处各自的来路（排障时点顶栏、看完告警下钻查是谁）都还在，
+             照搬一份会变成两套要各自维护的渲染。此前它们只以一行小字的形式被提了一嘴，
+             而「排查」正是用户找日志时会点开的那一页——L1 副标题列着四条、点进去只有一条。 -->
         <div>
           <div class="text-xs font-semibold text-ink-soft mb-2">📄 <span>日志</span></div>
           <div class="space-y-2">
@@ -1054,7 +1071,15 @@
               <span class="text-ink-soft">server 进程自己的 stdout / stderr —— 「为什么起不来」的答案在这里</span>
             </button>
             <div id="serverLogBody" class="hidden" data-testid="server-log-body"></div>
-            <div class="text-[10px] text-ink-faint px-1">另外三条：会话日志与前端日志在顶栏的运行日志里，安全日志在「服务状态」面板。</div>
+            <button id="btnDiagSessionLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="diag-session-log">
+              <span class="font-semibold block">会话日志 →</span>
+              <span class="text-ink-soft">本会话的交互与状态机时间线 —— 「消息到底发出去没有」。前端日志也在这张抽屉的「诊断」过滤里</span>
+            </button>
+            <button id="btnDiagSecurityLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="diag-security-log">
+              <span class="font-semibold block">安全日志 →</span>
+              <span class="text-ink-soft">谁在什么时候被限速锁定过、推送投递失败过 —— 在「服务状态」面板里</span>
+            </button>
+            <div class="text-[10px] text-ink-faint px-1">后两条会切去另一张面板，从那里返回仍回到这一页。</div>
           </div>
         </div>
       </div>
