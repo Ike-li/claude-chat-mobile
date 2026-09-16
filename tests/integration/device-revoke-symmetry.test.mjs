@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { waitForServerReady } from './_spawn-server.mjs';
+import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 let port, dataDir, httpServer, io, devicesModule;
@@ -39,7 +39,7 @@ async function startServer(authToken = 'secret-token') {
     'CCM_TRUSTED_DEVICES_FILE', 'CCM_PENDING_DEVICES_FILE', 'WEB_STATUSLINE',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken; // host 绑 0.0.0.0，LAN IP 可达

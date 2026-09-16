@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { reserveFreePort, spawnServer, killServer } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 // 同 metrics-endpoint.test.mjs：显式设一个非空测试 token 而非删空——dotenv 默认不覆盖已存在的非空
@@ -29,6 +30,13 @@ function writeLocalSettings(cwd, obj) {
   writeFileSync(join(dir, 'settings.local.json'), JSON.stringify(obj), 'utf8');
 }
 
+// models 事件里是否出现了某个模型名。payload 形状 = agent emit 的 { models: [...] }
+// （app.js pushModelsForCwd 原样透传 modelsCache 里的那份）。
+function hasModel(event, name) {
+  const list = event?.payload?.models;
+  return Array.isArray(list) && list.some(m => (m?.displayName ?? m?.value ?? m) === name);
+}
+
 async function startServer() {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-config-refresh-test-'));
   writeLocalSettings(dataDir, { permissions: { defaultMode: 'plan' } });
@@ -36,7 +44,7 @@ async function startServer() {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = TOKEN;
@@ -55,8 +63,10 @@ async function startServer() {
   await sleep(500); // 等启动时 ensureCliDefaults(WORK_DIR) 首次读盘落缓存（非 force，见 app.js:2767）
 }
 
-function createClient() {
-  const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
+// targetPort 缺省用同进程 server 的端口；下面「有活跃实例」那组用 spawnServer 起的独立子进程，
+// 需要显式指定（它有自己的 CLAUDE_BIN / settings，同进程 server 的 env 已在 import 时定死）。
+function createClient(targetPort = port) {
+  const socket = ioClient(`http://127.0.0.1:${targetPort}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
   const events = [];
   socket.on('agent:event', e => events.push(e));
 
@@ -155,6 +165,99 @@ test.describe('config:refresh（CLI 配置刷新按钮）', () => {
       // 超时 10s 给 CLI 启动足够时间
       const modelsEvent = await client.waitForEvent('models', null, 10000);
       assert.ok(modelsEvent.payload, 'models 事件应携带 payload');
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+// ——— 有活跃实例时的模型清单刷新 ———
+//
+// 2026-09-15 真机形态：工作区 .claude/settings.local.json 里配了第三方网关（ANTHROPIC_BASE_URL +
+// ANTHROPIC_DEFAULT_*_MODEL），用户改回官方后在 web 端点「刷新配置」，模型列表仍显示网关的模型名。
+//
+// 根因是两件事叠加，**都与「缓存过期」无关，靠加刷新次数解决不了**：
+//   ① 子进程 env 是 spawn 那一刻注入的一次性快照（agent.js 的 `env: {...sdkChildEnv, ...resolvedEnv}`），
+//      POSIX 下父进程改不了已运行子进程的 env；
+//   ② SDK 的 supportedModels() 读的是 **spawn 时 initialize 响应里缓存的 models 字段**
+//      （sdk.mjs: `supportedModels(){return(await this.initialization).models}`），压根不发第二次 IPC。
+// 于是 config:refresh 只要走 `a.fetchModels()` 这条路，拿回来的必然是旧配置下的清单。而「该工作区有
+// 活跃会话」恰恰是用户最常点刷新的时候——这个按钮在最需要它的场景下结构上刷不出任何新东西。
+//
+// 原先那道 5s 兜底（`if (!modelsCache.get(cwd))` 才起 scout）也堵不住：fetchModels 读的是一个已经
+// resolve 的 Promise，必然「成功」，于是缓存非空、只是陈旧，判据永远不成立。
+//
+// 唯一能反映新配置的通道是 scout：它在 ensureCliDefaults(force) 之后用**重读后的** cliDefaultsByCwd.env
+// 新 spawn 一个 CLI（app.js openScoutInstance 的 resolvedEnv）。
+//
+// 本用例钉的是外部可观察契约：**刷新后推送的清单必须来自重读后的 settings**，不是任何实例 spawn 时的快照。
+// 它靠 fake-claude 把 ANTHROPIC_DEFAULT_OPUS_MODEL 回显进 initialize 响应的 models 来区分两者——
+// 换言之，清单里出现的是哪个名字，直接说明这份清单是哪一次 spawn 的产物。
+test.describe('config:refresh 在有活跃实例时（2026-09-15 真机 bug）', () => {
+  let proc, refreshPort, workdir, refreshDataDir;
+
+  const settingsWithGateway = model => ({
+    permissions: { defaultMode: 'default' },
+    env: { ANTHROPIC_DEFAULT_OPUS_MODEL: model },
+  });
+
+  test.before(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'ccm-refresh-models-wd-'));
+    refreshDataDir = mkdtempSync(join(tmpdir(), 'ccm-refresh-models-data-'));
+    writeLocalSettings(workdir, settingsWithGateway('gw-old-model'));
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIR: workdir,
+      CCM_DATA_DIR: refreshDataDir,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'init', // 应答 initialize（模型清单就藏在这条响应里）+ 吐 system/init
+      IDLE_TIMEOUT_MS: '120000',    // 别让实例在用例跑完前被空闲回收——没有活跃实例这条用例就失去意义
+    });
+    proc = started.proc;
+    refreshPort = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [workdir, refreshDataDir]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('刷新后的清单来自重读后的 settings，而不是活跃实例 spawn 时的快照', async () => {
+    const client = createClient(refreshPort);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+
+      // ① 造出一个**活跃实例**：这是整条用例的前提。没有它，config:refresh 会走 `!usedAgent`
+      //    那条本来就正确的 scout 分支，用例便会在修复前也绿——一个永远不红的测试。
+      //    fake-claude 的 init 档不吐 result，实例会停在 busy，正好是持续存在的观察对象。
+      client.socket.emit('user:message', { text: 'hello', clientMessageId: 'refresh-models-1' });
+      const withInstance = await client.waitForEvent(
+        'instances', e => (e.payload?.instances?.length ?? 0) > 0, 20000);
+      assert.ok(withInstance.payload.instances.length > 0, '前置条件：必须已有活跃实例');
+
+      // ② 基线：这个实例 spawn 时读到的是 gw-old-model，清单里回显的就该是它。
+      //    基线不成立说明 env 根本没注入到 stub，后面的断言也就证明不了任何事。
+      const before = await client.waitForEvent(
+        'models', e => hasModel(e, 'gw-old-model'), 20000);
+      assert.ok(hasModel(before, 'gw-old-model'), '基线：活跃实例的清单应回显 spawn 时的 gw-old-model');
+
+      // ③ 模拟用户在终端侧把网关改掉（真机里是整块删掉；这里换个名字，能更精确地区分
+      //    「读到了新配置」与「读了个空、什么都没拿到」两种结果）。
+      writeLocalSettings(workdir, settingsWithGateway('gw-new-model'));
+
+      client.clearEvents();
+      const ack = await client.emitAck('config:refresh', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+
+      // ④ 修复前：活跃实例的 fetchModels 只会把 gw-old-model 再推一遍，这里必然超时。
+      //    修复后：scout 用重读后的 env 新 spawn，清单里是 gw-new-model。
+      const after = await client.waitForEvent(
+        'models', e => hasModel(e, 'gw-new-model'), 25000);
+      assert.ok(hasModel(after, 'gw-new-model'),
+        '刷新后的清单必须反映重读后的 settings（不是任何实例 spawn 时的旧快照）');
     } finally {
       client.disconnect();
     }

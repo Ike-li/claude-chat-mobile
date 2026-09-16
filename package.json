@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
   "type": "module",
   "private": true,
@@ -100,19 +100,19 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.263",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "dotenv": "^17.0.0",
     "express": "^5.0.0",
-    "jose": "^6.2.3",
+    "jose": "^6.2.12",
     "socket.io": "^4.8.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.61.1",
-    "eslint": "^10.7.0",
+    "@playwright/test": "^1.63.0",
+    "eslint": "^10.10.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "globals": "^17.7.0",
+    "globals": "^17.12.0",
     "socket.io-client": "^4.8.3"
   }
 }

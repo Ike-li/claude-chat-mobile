@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { waitForServerReady } from './_spawn-server.mjs';
+import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, httpServer, io;
 
@@ -25,7 +25,7 @@ async function startServer(authToken = 'aborted-state-test-token') {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = authToken;

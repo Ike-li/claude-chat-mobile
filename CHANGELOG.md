@@ -1,5 +1,26 @@
 # 变更记录
 
+## v1.10.1 — 2026-09-16
+
+Changes since v1.10.0.
+
+### Verified environment
+- claude CLI: 2.1.270
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Fixes
+- fix(config): 刷新配置改用 scout 重取模型清单，不再问活跃实例
+- fix(test): 集成测试端口改向 OS 要，不再抽签
+
+### Other
+- build(deps-dev): bump @playwright/test from 1.61.1 to 1.63.0
+- build(deps): bump compression from 1.8.1 to 1.8.2
+- build(deps): bump jose from 6.2.3 to 6.2.12
+- build(deps-dev): bump eslint from 10.7.0 to 10.10.0
+- build(deps-dev): bump globals from 17.7.0 to 17.12.0
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.10.0...v1.10.1
+
 ## v1.10.0 — 2026-09-15
 
 Changes since v1.9.1.

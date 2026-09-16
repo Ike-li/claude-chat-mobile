@@ -25,7 +25,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, realpathSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { waitForServerReady } from './_spawn-server.mjs';
+import { reserveFreePort, waitForServerReady } from './_spawn-server.mjs';
 
 let port, dataDir, dirA, dirB, httpServer, io;
 
@@ -38,7 +38,7 @@ async function startServer(authToken = 'nfr17-test-token') {
   for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'WORK_DIRS', 'CCM_DATA_DIR',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '60000'; // 真实 SDK 轮次较慢，宽松空闲超时防误杀
   process.env.WORK_DIR = dirA; // 两个全新空目录：均无 .claude/settings.json，Write 不会被项目层白名单自动放行
   process.env.WORK_DIRS = dirB;

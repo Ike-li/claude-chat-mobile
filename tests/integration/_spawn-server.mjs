@@ -21,7 +21,14 @@ import { stripInheritedEnv } from '../helpers/spawn-env.mjs';
 // 概率 ≈ 1 - exp(-25×24/20000) ≈ 3%，而实测就是 29 轮里飘红 1 次（≈3.4%）——量级对得上。
 // listen(0) 之后仍有 TOCTOU 窗口（拿到端口到子进程 bind 之间），但窗口是微秒级，且 OS 在临时端口
 // 段内是递增分配、不会把同一个端口同时发给两个并发请求者——比抽签低几个数量级。
-function reserveFreePort() {
+//
+// 【2026-09-15 导出】上面那次修复只接进了本文件的 spawn 路径，而 16 个走 in-process
+// `await import('app/server.js')` 的集成测试各自抄着同一行抽签代码没人动——device-revoke-symmetry
+// 于是在 CI 上撞到 33118，把 v1.10.0 的发版卡了一轮。抽签区间（30000-40000）还与 Linux 默认
+// ephemeral 段（32768-60999）大面积重叠，所以撞的不只是别的 server，也可能是任何一条 outbound
+// 连接占用的临时端口。现在两条路径共用这一个实现，由 tests/unit/integration-port-allocation.test.mjs
+// 机械挡住回归。
+export function reserveFreePort() {
   return new Promise((resolve, reject) => {
     const probe = createServer();
     probe.unref();
