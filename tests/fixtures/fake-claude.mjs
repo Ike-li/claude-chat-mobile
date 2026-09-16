@@ -32,6 +32,13 @@ const MODE = process.env.CCM_FAKE_CLAUDE_MODE || 'init';
 // 允许调用方钉死 session_id：镜像 / registry 类用例需要拿这个值去算 transcript 路径。
 const SESSION_ID = process.env.CCM_FAKE_CLAUDE_SESSION_ID || randomUUID();
 const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
+// 模型清单。SDK 的 supportedModels() 读的是 **initialize 控制请求响应里的 models 字段**
+// （sdk.mjs: `supportedModels(){return(await this.initialization).models}`），不是独立的控制请求——
+// 这正是「实例的模型清单在 spawn 那一刻就固化、此后不再向 CLI 问第二次」的物理原因。
+// 用 ANTHROPIC_DEFAULT_OPUS_MODEL 造清单而不是新起一个 CCM_FAKE_* 名：agent.js 的
+// filterSafeResolvedEnv 只放行 ANTHROPIC_/CLAUDE_CODE_ 前缀，别的名字根本进不到子进程。
+// 不置位时 response 仍是 {}，既有 S2 与集成用例建在其上的前提逐字不变（同本文件「显式 opt-in」原则）。
+const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
@@ -46,9 +53,12 @@ rl.on('line', (line) => {
   // 任何 control_request 一律回 success。不认的子类型也要应答——SDK 在
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
   if (msg.type === 'control_request') {
+    const payload = (msg.request?.subtype === 'initialize' && GATEWAY_MODEL)
+      ? { models: [{ value: 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
+      : {};
     out({
       type: 'control_response',
-      response: { subtype: 'success', request_id: msg.request_id, response: {} },
+      response: { subtype: 'success', request_id: msg.request_id, response: payload },
     });
     return;
   }

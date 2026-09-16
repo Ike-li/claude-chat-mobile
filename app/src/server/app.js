@@ -4137,15 +4137,24 @@ registerSocketConnection(io, socket => {
       modelsCache.delete(cwd);
       defaultModelByCwd.delete(cwd);
       saveInitCache();
-      // 有活跃 agent → 调其 fetchModels 刷新；无 → 先清除旧 scout（其 CLI 用旧 settings spawn），再起新 scout
-      // fetchModels 是 fire-and-forget（agent.js:307 静默吞错），失败时缓存永久空——5s 后兜底检查，
-      // 若缓存仍空则启动 scout 补救（scout 20s 超时，不依赖活跃 agent 的 SDK 调用）。
-      let usedAgent = false;
-      for (const a of agents.values()) {
-        if (a.cwd === cwd && !a.disposed) { a.fetchModels(); usedAgent = true; break; }
-      }
-      if (!usedAgent) { disposeScoutFor(cwd); openScoutInstance(cwd); }
-      else setTimeout(() => { if (!modelsCache.get(cwd)) { disposeScoutFor(cwd); openScoutInstance(cwd); } }, 5000);
+      // 模型清单一律靠 scout 重新 spawn 去取，**绝不问活跃 agent**——哪怕这个 cwd 正开着会话。
+      // 两个原因叠加，都不属于「缓存过期」那一类，加刷新次数、延长等待都解决不了：
+      //   ① 子进程 env 是 spawn 那一刻注入的一次性快照（agent.js 的 `env: {...sdkChildEnv, ...resolvedEnv}`），
+      //      POSIX 下父进程改不了已运行子进程的 env；
+      //   ② SDK 的 supportedModels() 读的是 **spawn 时 initialize 响应里缓存的 models 字段**
+      //      （sdk.mjs: `supportedModels(){return(await this.initialization).models}`），压根不发第二次 IPC。
+      // 所以 a.fetchModels() 拿回来的必然是【旧配置】下的清单。而「该工作区有活跃会话」恰恰是用户最常
+      // 点这个按钮的时候——2026-09-15 真机：用户把 settings.local.json 里的第三方网关整块删掉、点刷新，
+      // 模型列表依旧显示网关的模型名，怎么点都不变。
+      // 旧代码那道 5s 兜底（`if (!modelsCache.get(cwd))` 才补 scout）同样堵不住：fetchModels 读的是一个
+      // 已经 resolve 的 Promise，必然「成功」，于是缓存非空、只是陈旧，判据永远不成立。
+      // scout 则是在上面 ensureCliDefaults(force) 之后、用**重读后的** cliDefaultsByCwd.env 新 spawn 的
+      // （见 openScoutInstance 的 resolvedEnv），是唯一能反映新配置的通道。
+      // 【刻意不动活跃会话】它仍在用自己 spawn 时的那套网关。这与终端里改了 settings 不影响已在跑的
+      // claude 进程是同一回事（终端等价性），换配置得开新会话。这里只负责让**清单**说真话，
+      // 不去打断用户正跑着的回合。
+      disposeScoutFor(cwd); // 旧 scout 的 CLI 也是用旧 settings spawn 的，一并作废
+      openScoutInstance(cwd);
       broadcastInstances();
       if (typeof ack === 'function') ack({ ok: true }); // ack 表示「刷新已启动」，模型可能数秒后才到达（scout/agent 异步）
     } catch (err) {
