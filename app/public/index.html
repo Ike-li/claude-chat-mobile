@@ -890,6 +890,19 @@
            指纹与信任名单**必须同屏**：指纹的唯一用途就是在名单里认出手上这台，
            此前它们分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。 -->
       <div id="generalPage-devices" class="hidden space-y-4" data-general-page="devices">
+        <!-- 待批设备：给入口，不在这里另渲染一份审批 UI。卡片本体是 #deviceRequests 那个 z-30
+             fixed 浮层，而 #generalScrim 同为 z-30 却在 DOM 里排得更后——同层后来居上，于是
+             设置面板开着时卡片既看不见也点不动。L1 上那个红点是全站唯一表示「点一下就能处理」
+             的记号，不给通路就是在说假话。收起面板把卡片让出来即可，照搬一份审批按钮会变成
+             同一份数据两套渲染面（同「排查」页那两条日志入口的理由）。
+             整段显隐由 app.js 的 renderDeviceRequests 与卡片栈同源驱动，不另存一份判据。 -->
+        <div id="pendingDevicesEntry" class="hidden">
+          <button id="btnPendingDevices" type="button" class="w-full text-left p-2.5 rounded-xl border border-cta bg-sunk active:bg-line text-xs text-ink" data-testid="pending-devices-entry">
+            <span class="font-semibold block">🔔 <span id="pendingDevicesCount">有设备在等你批</span> →</span>
+            <span class="text-ink-soft">收起这张面板，在顶部卡片上「准入 / 拒绝」</span>
+          </button>
+        </div>
+
         <div>
           <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
           <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">

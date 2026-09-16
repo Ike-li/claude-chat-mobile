@@ -136,6 +136,19 @@ test('设备行：有待批时摘要点出台数且亮红点（L1 上唯一的�
   assert.equal(row.dot, true);
 });
 
+// 上面那条通用校验只问「这个 id 在 index.html 里存在吗」，答不了「点进去真有审批控件吗」。
+// 待批项一度绑在 #trustedDevicesList 上：那个 id 确实存在（于是通用校验照样绿），但那张表由
+// renderTrustedDevices 填、只装**已受信任**的设备，待批卡片在另一个被设置面板盖住的浮层里。
+// 红点说「点一下就能处理」，点进去却没有任何能处理它的东西。故单列一条，把绑定对象钉死。
+// 「点进去够得着」那一半由 E2E P0-15h 的 elementFromPoint 命中测试守，这里守不了。
+test('★ 待批项绑的是待批入口，不是只装已信任设备的那张表', () => {
+  const row = summarizeGeneralNav({ devices: { trusted: 3, pending: 2 } })[1];
+  const pendingItem = row.items.find(i => /待批/.test(i.text));
+  assert.ok(pendingItem, '待批项缺失');
+  assert.equal(pendingItem.el, 'btnPendingDevices');
+  assert.notEqual(pendingItem.el, 'trustedDevicesList');
+});
+
 test('设备行：零待批时不得亮红点，也不得写出「0 台待批」', () => {
   const row = summarizeGeneralNav({ devices: { trusted: 3, pending: 0 } })[1];
   assert.equal(row.dot, false);

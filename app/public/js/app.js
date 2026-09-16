@@ -1968,13 +1968,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 来源页是变量而不是写死的 'host'：这张面板现在有两个入口（🖥 宿主机的「服务状态」、
   // 🩺 排查的「安全日志」），写死会把从排查进来的人退回另一页——同二层面板退出语义那条老坑。
   let serviceStatusFrom = 'host';
+  // 每次打开递增。loadServiceStatus 的迟到守卫只问「面板现在开着吗」，答不了「是哪一次打开」——
+  // 慢 ack 下：从「排查」深链进来（带 anchor）→ 返回 → 从「宿主机」重开，第一次的 await 这时
+  // 才恢复，守卫看到面板确实开着就放行，于是把审计段的落点应用到了后开的那一次上，
+  // 用户会看到 host 入口进来的面板莫名其妙自己滚到安全日志。
+  let serviceStatusOpenSeq = 0;
   function closeServiceStatus() {
     if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
+    serviceStatusOpenSeq++; // 关了就作废：在途的那次 await 恢复后不得再滚
     if (serviceStatusModal) closeSheet(serviceStatusModal);
     reopenGeneralAt(serviceStatusFrom);
   }
   async function openServiceStatus({ from = 'host', anchor = null } = {}) {
     if (!serviceStatusModal) return;
+    const seq = ++serviceStatusOpenSeq;
     serviceStatusFrom = from;
     general.close(); // 从通用设置切入：先收设置 sheet 再弹状态 sheet（两者同 z-40，叠着互相拦点击）
     openSheet(serviceStatusModal);
@@ -1984,6 +1991,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       loadServiceStatus();
     }, 5000);
     await loadServiceStatus();
+    if (seq !== serviceStatusOpenSeq) return; // 期间被关过或重开过：这个 anchor 属于上一次打开
     // 深链滚动必须等首帧渲染完：段落全是 renderServiceStatus 现建的，await 之前 bounding box 是 0。
     // 只滚这一次——5s 重拉会整段 replaceChildren，每次都滚会把用户按住不动的手指一起拽走。
     if (anchor) requestAnimationFrame(() => $(anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
@@ -2070,6 +2078,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function renderDeviceRequests(devices) {
     lastPendingDevices = Array.isArray(devices) ? devices : [];
     generalNav?.render();
+    // 「接入与设备」页那条入口与卡片栈同源显隐：判据只有一个（有没有待批），不另存一份。
+    // 入口本身不复制审批按钮——它只负责把盖在卡片上的设置面板收走，见 index.html 那段注释。
+    renderPendingDevicesEntry();
     if (!deviceRequests) return;
     deviceRequests.textContent = '';
     if (!devices.length) { deviceRequests.classList.add('hidden'); return; }
@@ -2112,6 +2123,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       card.append(title, meta, btns);
       deviceRequests.appendChild(card);
     }
+  }
+
+  // 「接入与设备」页的待批入口。**不渲染审批按钮**：点它只做一件事——把设置面板收走，
+  // 让 #deviceRequests 那个 z-30 卡片栈重新可见可点。z-30 与 #generalScrim 同层而 DOM 在前，
+  // 所以设置开着时它必被盖住，L1 那个红点（全站唯一「点一下就能处理」的记号）就成了空头承诺。
+  function renderPendingDevicesEntry() {
+    const wrap = $('pendingDevicesEntry');
+    if (!wrap) return;
+    const n = lastPendingDevices.length;
+    if (!n) { wrap.classList.add('hidden'); return; }
+    const label = $('pendingDevicesCount');
+    // 条数进文案：一台和三台在「要不要现在处理」上是两回事。textContent，不拼 innerHTML。
+    if (label) label.textContent = n > 1 ? `${n} ${t('台设备在等你批')}` : t('有设备在等你批');
+    wrap.classList.remove('hidden');
+  }
+  if ($('btnPendingDevices')) {
+    // 只收面板、不导航：卡片栈是页面级覆盖层，没有「返回来源页」这回事——批完人就走了。
+    // 这也是它与「排查」页那两条日志入口的区别：那两条切去另一张面板，这条是让开一张。
+    $('btnPendingDevices').onclick = () => general.close();
   }
 
   // 已受信任设备列表（设置 › 🖥 宿主机）。载荷里**没有全量 token**，只有 shortId——

@@ -66,7 +66,10 @@ function devicesRow({ devices = {} } = {}) {
   const trusted = Number.isFinite(devices.trusted) ? devices.trusted : 0;
   const pending = Number.isFinite(devices.pending) ? devices.pending : 0;
   const items = [{ text: `${trusted} ${t('台已信任')}`, el: 'trustedDevicesSection' }];
-  if (pending > 0) items.push({ text: `${pending} ${t('台待批')}`, el: 'trustedDevicesList' });
+  // ★ el 绑的是待批入口，**不是** trustedDevicesList——那张表由 renderTrustedDevices 填，
+  //   只装已受信任的设备，待批卡片在另一个被设置面板盖住的浮层里。绑错的话单测照样绿
+  //   （那个 id 确实存在），而红点仍旧指向一个点进去没有审批控件的地方。
+  if (pending > 0) items.push({ text: `${pending} ${t('台待批')}`, el: 'btnPendingDevices' });
   // 扫码是全站唯一「把一台新手机接进来」的动作，此前入口只报台数、一个字没提它。
   items.push({ text: t('扫码接新设备'), el: 'btnQrReveal' });
   items.push({ text: t('本机指纹'), el: 'deviceFingerprintShort' });
