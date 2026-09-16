@@ -1849,6 +1849,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 段3 安全日志：上面那段告警的下钻。告警说「发生了什么」（限速锁定过、推送失败过），
     // 这一段回答「是谁、几次、从哪来」——审计记录自始就在写，此前 web 端没有任何读取面。
     const auditSection = section(t('安全日志'), t('（最近 20 条）'));
+    auditSection.id = 'serviceAuditSection'; // 「排查」页那条入口的深链落点（openServiceStatus 的 anchor）
     if (!Array.isArray(auditRecords)) {
       const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
       row.textContent = t('暂时读取不到（服务端未响应）');
@@ -1964,23 +1965,36 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     renderServiceStatus(status, auditRes?.ok === true ? (auditRes.records || []) : null);
   }
   // 点 ← 与点遮罩都走这里：同一张面板两种关法落到两个不同的地方，正是用户会再踩一次的坑。
+  // 来源页是变量而不是写死的 'host'：这张面板现在有两个入口（🖥 宿主机的「服务状态」、
+  // 🩺 排查的「安全日志」），写死会把从排查进来的人退回另一页——同二层面板退出语义那条老坑。
+  let serviceStatusFrom = 'host';
   function closeServiceStatus() {
     if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
     if (serviceStatusModal) closeSheet(serviceStatusModal);
-    reopenGeneralAt('host');
+    reopenGeneralAt(serviceStatusFrom);
   }
-  if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => {
+  async function openServiceStatus({ from = 'host', anchor = null } = {}) {
     if (!serviceStatusModal) return;
-    general.close(); // 从通用设置切入：先收设置 sheet 再弹状态 sheet（服务状态属 🖥 主机那节）
+    serviceStatusFrom = from;
+    general.close(); // 从通用设置切入：先收设置 sheet 再弹状态 sheet（两者同 z-40，叠着互相拦点击）
     openSheet(serviceStatusModal);
-    loadServiceStatus();
     if (serviceStatusTimer) clearInterval(serviceStatusTimer);
     serviceStatusTimer = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       loadServiceStatus();
     }, 5000);
-  };
+    await loadServiceStatus();
+    // 深链滚动必须等首帧渲染完：段落全是 renderServiceStatus 现建的，await 之前 bounding box 是 0。
+    // 只滚这一次——5s 重拉会整段 replaceChildren，每次都滚会把用户按住不动的手指一起拽走。
+    if (anchor) requestAnimationFrame(() => $(anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  }
+  if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => void openServiceStatus({ from: 'host' });
   if ($('serviceStatusBack')) $('serviceStatusBack').onclick = closeServiceStatus;
+  // 「排查」页的安全日志入口：同一张面板，落点直接滚到审计那一段。此前这一段只有"先开服务状态、
+  // 再往下翻三屏"这一条路，而 L1 副标题一直列着「安全日志」。
+  if ($('btnDiagSecurityLog')) {
+    $('btnDiagSecurityLog').onclick = () => void openServiceStatus({ from: 'diag', anchor: 'serviceAuditSection' });
+  }
 
   // 服务与配置面板。表单结构全部由服务端 env:get 下发（src/ops/env-schema.js 是单一事实源）——
   // 前端一个配置项名都不硬编码，加一项只改那一个文件。pickText 按当前语言从 {zh,en} 里挑：
@@ -2044,7 +2058,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ID/IP/UA 一律用 textContent（UA 攻击者可控），不拼 innerHTML，防 XSS。
   // 待审设备条数：L1 目录「接入与设备」那行的红点判据（唯一会亮红点的一行）。
   let lastPendingDevices = [];
-  // init 带来的 MCP 服务器与 skills 数（「这台电脑」页渲染用），**按 cwd 归键**。
+  // init 带来的 MCP 服务器与 skills 数（「宿主机」页渲染用），**按 cwd 归键**。
   //
   // 与 modelsCache / slashCommandsCache 同一条理由：二者都随工作区的 settings/skills 而变，不是
   // 账号级全局量。这里此前是一份全局「最后一次 init」快照，而切到一个**已经 live** 的会话不会
@@ -2100,7 +2114,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
-  // 已受信任设备列表（设置 › 🖥 这台电脑）。载荷里**没有全量 token**，只有 shortId——
+  // 已受信任设备列表（设置 › 🖥 宿主机）。载荷里**没有全量 token**，只有 shortId——
   // DEVICE-03：把信任表下发到网络上，等于一台被吊销的设备手里还攥着其余设备的凭据。
   // ua/ip 一律 textContent（UA 攻击者可控），不拼 innerHTML。
   // kind 由服务端算好下发（与 desktop/CCMCore.swift 的 deviceKindLabel 互为镜像）。
@@ -2515,7 +2529,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
       applySlashCommands(p.slashCommands, p.terminalSlashCommands);
       // MCP 服务器与 skills 数：同 slashCommands 的「缺字段不覆盖」惯例——合成 init（切区重放、
-      // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「这台电脑」页刷成空。
+      // 仅校正 model/cwd）不带这两个字段，硬覆盖会把「宿主机」页刷成空。
       // 归键用事件自带的 cwd：切工作区时 init 与 currentCwd 的更新顺序不保证，拿 currentCwd 当键
       // 会把 A 的快照记到 B 名下。缺 cwd（老式合成 init）才回落当前值。
       const initCwd = p?.cwd || currentCwd;
@@ -5674,7 +5688,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     refreshServiceSection();
     renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
     renderStatuslineBridgeSection(); // 同上：两个桥的安装态都随 instances 广播刷新
-    generalNav?.render(); // L1「这台电脑」那行的运行时长吃的就是这份广播
+    generalNav?.render(); // L1「宿主机」那行的运行时长吃的就是这份广播
   }
 
   // 配置面板「推送内容」段顶部的订阅状态行。推送不通时此前 UI 上零痕迹——铃铛按钮在权限被拒或
@@ -6143,7 +6157,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
-  // 「这台电脑上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
+  // 「宿主机上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
   function renderHostEnvSection() {
     const section = $('hostEnvSection'), body = $('hostEnvBody');
     if (!section || !body) return;
@@ -6216,13 +6230,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   generalNav = createGeneralNav({
     haptic,
     state: () => ({
-      push: { subscribed: generalPushSubscribed },
+      push: { subscribed: generalPushSubscribed, preview: pushPreview.get() },
       alerts: alerts.preferences(),
       devices: { trusted: lastTrustedDevices.length, pending: lastPendingDevices.length },
-      service: { startedAt: latestServiceHealth?.startedAt, versions: generalVersions },
+      // 两个桥的安装态原样透传：摘要里那两档与页面里 formatHooksBridgeRow / formatStatuslineBridgeRow
+      // 读的是同一个对象，不可能一处说开一处说关。旧 server 没有这两个字段 → 两处一起缺席。
+      service: {
+        startedAt: latestServiceHealth?.startedAt,
+        versions: generalVersions,
+        hooksBridge: latestServiceHealth?.hooksBridge,
+        statuslineBridge: latestServiceHealth?.statuslineBridge,
+      },
       lang: langPref.get(),
     }),
-    // 「这台电脑」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
+    // 「宿主机」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
     // 它跟着 instances 广播实时更新。
     onEnterPage: page => {
       // 离开「接入与设备」页就收码：钥匙不该挂在一个用户以为已经翻过去的界面上
@@ -8914,30 +8935,41 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // esc / ansiToHtml 已抽到 logic.js（顶部 import）。
 
-  if (btnConsole) {
-    btnConsole.onclick = () => {
-      if (consoleModal) {
-        if (!consoleModal.classList.contains('sheet-open')) {
-          openSheet(consoleModal);
-          loadConsoleLogs();
-        } else {
-          closeSheet(consoleModal);
-        }
-      }
-    };
+  // 这张抽屉有两个来源：顶栏 🖥（直接开在聊天页上，关掉就该回聊天页）与「排查」页的「会话日志」
+  // （开之前收了设置 sheet，关掉要把人送回那一页）。null = 不是从设置切进来的。
+  // 三条关法（✕ / 点遮罩 / 再点顶栏按钮）必须走同一个函数：同一张面板两种关法落到两个地方，
+  // 正是这个仓库踩过不止一次的坑。
+  let consoleFrom = null;
+  function openConsole({ from = null } = {}) {
+    if (!consoleModal) return;
+    consoleFrom = from;
+    if (from) general.close(); // 设置 sheet 与本抽屉同 z-40，叠着会互相拦点击
+    openSheet(consoleModal);
+    loadConsoleLogs();
+  }
+  function closeConsole() {
+    if (consoleModal) closeSheet(consoleModal);
+    if (!consoleFrom) return;
+    const back = consoleFrom;
+    consoleFrom = null;
+    reopenGeneralAt(back);
   }
 
-  if (consoleClose) {
-    consoleClose.onclick = () => {
-      if (consoleModal) closeSheet(consoleModal);
+  if (btnConsole) {
+    btnConsole.onclick = () => {
+      if (!consoleModal) return;
+      if (consoleModal.classList.contains('sheet-open')) closeConsole();
+      else openConsole();
     };
   }
+  // 「排查」页的会话日志入口：内容与顶栏那张是同一张抽屉，不另建一套渲染。
+  if ($('btnDiagSessionLog')) $('btnDiagSessionLog').onclick = () => openConsole({ from: 'diag' });
+
+  if (consoleClose) consoleClose.onclick = closeConsole;
 
   if (consoleModal) {
     consoleModal.onclick = (e) => {
-      if (e.target === consoleModal) {
-        closeSheet(consoleModal);
-      }
+      if (e.target === consoleModal) closeConsole();
     };
   }
 

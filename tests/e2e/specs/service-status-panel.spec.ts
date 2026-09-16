@@ -49,7 +49,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#serviceStatusModal')).toBeHidden();
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#generalPage-host')).toBeVisible();
-    await expect(page.locator('#generalSheetTitle')).toContainText('这台电脑');
+    await expect(page.locator('#generalSheetTitle')).toContainText('宿主机');
 
     await expectNoBrowserErrors(page);
   });
