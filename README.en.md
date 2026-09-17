@@ -57,9 +57,10 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 
 |  | Official Remote Control | Claude Chat Mobile |
 | --- | --- | --- |
-| **Model path** | Requires a claude.ai sign-in and a direct connection to `api.anthropic.com` | Whatever your `claude` CLI is configured with — third-party gateway / API key / Bedrock / Vertex / telemetry disabled all work |
+| **Model path** | Requires a claude.ai sign-in and a direct connection to `api.anthropic.com`. API keys, Bedrock / Google Agent Platform / Microsoft Foundry, an `ANTHROPIC_BASE_URL` pointing elsewhere, telemetry switches like `DISABLE_TELEMETRY`, ZDR organizations — any one of these rules it out entirely | Whatever your `claude` CLI is configured with — third-party gateway / API key / Bedrock / Vertex / telemetry disabled all work |
 | **Control-plane data** | Session transcripts are stored on Anthropic's servers for cross-device sync | Service, transcripts, device trust and audit logs all stay on your machine; fully self-contained on a LAN |
-| **What you can see** | Remote access is enabled per session | **Every** session in your allowlisted workspaces — started in a terminal, left over from last week, all visible and resumable |
+| **What you can see** | Only sessions you explicitly enabled Remote Control on (or new ones once auto-connect is on); `/resume` is terminal-only, so you cannot browse session history from a phone | **Every** session in your allowlisted workspaces — started in a terminal, left over from last week, all visible and resumable |
+| **Driving one session from both ends** | Yes — send from terminal, web or phone interchangeably | **No** — single-driver model; the web side must explicitly take over, and that can fork the session |
 | **Deployment cost** | None | You run a server yourself |
 
 > A note on wording: this is not "data never leaves your machine" — model requests are still sent by the local `claude` CLI using your existing configuration. What CCM promises is that it adds **no additional** data egress beyond that.
