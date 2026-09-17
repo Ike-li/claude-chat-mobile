@@ -348,6 +348,15 @@ function preflight() {
     fail(`CLAUDE_BIN 指向的文件不存在：${claudeBin}`);
   }
   // 版本采集（/health 暴露，用于升级后回归核对）
+  //
+  // 【为什么这里是 execSync 而不是同文件下面那个 execFileSync】这行的 shell 拼接看着像注入面，
+  // 但 claudeBin 不是请求输入：配置面板写 CLAUDE_BIN 要过 env-schema 的 mustExist + executable
+  // 校验（注入串不是一个存在的可执行文件，写不进去），而直接写 env 的人就是本机所有者本人。
+  // 换成 execFileSync 反而会真的坏掉一个平台——Windows 上 npm 装的 CLI 是 claude.cmd
+  // （resolveExecutableViaPath 的 where 分支返回的就是它），而 execFile 不经 shell，Node 对
+  // .cmd/.bat 要求 shell:true（见 child_process 文档 Windows 小节；未在 Windows 上实测）。
+  // 失败被下面的 catch 吞掉不会崩，但 versions.cli 会恒为 unknown——而那一项的存在理由
+  // 正是本段头注说的「升级后回归核对」。2026-09-17 安全审查评估后保留现状。
   try {
     versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
   } catch { /* 非致命 */ }
