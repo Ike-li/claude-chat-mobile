@@ -194,6 +194,145 @@ test('notification controller unsubscribe() 在本来就没订阅时是幂等的
   assert.equal(fetchCalls.length, 0, '没有 endpoint 可退时，服务端不该收到一条空退订');
 });
 
+// H2（2026-09-17 安全审查）：push 的三条 HTTP 此前把 AUTH_TOKEN 拼在 `?token=` 上。它是**控制面
+// 密钥**，而 query 会原样落进 nginx / Caddy / cloudflared / CDN 的访问日志——首页用 `/#token=`
+// 走 fragment 正是为了躲开中间层日志，push 这条又把同一个秘密放回了 query。
+// `Referrer-Policy: no-referrer` 管的是浏览器侧外泄，管不到服务端 access log。
+// 服务端 createHttpAuth 早就认 `x-auth-token` 头（app/src/server/http.js），前端从没用过。
+//
+// 【这条路为什么一直零覆盖】上面所有 subscribe/unsubscribe 用例都写 `getToken: () => ''`——
+// 空令牌时 authQuery 恰好是空串，URL 看起来干干净净。不喂非空令牌就永远碰不到这个分支。
+// 三条一起断言：它们是同一个判据的三个落点，分开写会给「改了两处漏一处」留缝。
+test('push 的三条 HTTP 用 x-auth-token 头带令牌，URL 里不得出现 token=', async () => {
+  const calls = [];
+  const fakeSubscription = {
+    endpoint: 'https://push.example/abc',
+    toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; },
+    unsubscribe: async () => true,
+  };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const makeCtl = () => createNotificationController(createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        return { ok: true, json: async () => ({ key: 'vapid-pub' }) };
+      },
+      storage: { getItem: () => null, setItem() {}, removeItem() {} },
+    },
+  }), { autoBind: false, getToken: () => 'SECRET_TOKEN' });
+
+  await makeCtl().subscribe();
+  await makeCtl().unsubscribe();
+  // setup() 先取 VAPID 公钥再看环境；这里的 deps 不含 PushManager，hint 是 unsupported，
+  // 取完密钥就返回——正好只留下待测的那一条请求。
+  await makeCtl().setup();
+
+  assert.equal(calls.length, 3, '应恰好命中 subscribe / unsubscribe / vapid-public-key 三条');
+  const paths = calls.map(c => c.url);
+  assert.ok(paths.some(u => u.includes('/push/subscribe')), 'subscribe 未发出');
+  assert.ok(paths.some(u => u.includes('/push/unsubscribe')), 'unsubscribe 未发出');
+  assert.ok(paths.some(u => u.includes('/push/vapid-public-key')), 'vapid-public-key 未发出');
+
+  for (const { url, init } of calls) {
+    assert.ok(!url.includes('token='), `令牌不得出现在 URL 里（会进访问日志）：${url}`);
+    assert.ok(!url.includes('SECRET_TOKEN'), `令牌明文不得出现在 URL 里：${url}`);
+    assert.equal(init?.headers?.['x-auth-token'], 'SECRET_TOKEN', `${url} 缺 x-auth-token 头`);
+  }
+});
+
+// 令牌为空时不该凭空造一个空头出来：服务端 tokenMatches 对空串走的是拒绝路径，发一个
+// `x-auth-token: ''` 只会把「没带令牌」的失败原因（no_token）记成「带了但不对」（bad_token），
+// 而 http.js 里那两个类别是分开报的，用来区分「配置漂移」和「扫描器」。
+test('push 请求在无令牌时不带 x-auth-token 头', async () => {
+  const calls = [];
+  const fakeSubscription = {
+    endpoint: 'https://push.example/abc',
+    toJSON() { return { endpoint: this.endpoint, keys: {} }; },
+  };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => { calls.push({ url: String(url), init }); return { ok: true, json: async () => ({ ok: true }) }; },
+      storage: { getItem: () => null, setItem() {} },
+    },
+  });
+
+  await createNotificationController(context, { autoBind: false, getToken: () => '' }).subscribe();
+  assert.equal(calls.length, 1);
+  assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'), '空令牌时不该带这个头');
+});
+
+// 【把令牌从 query 搬进头，对一类令牌是回归】Headers 对首尾空白**静默 trim**、对非 Latin-1 直接
+// 抛 TypeError，而服务端 tokenMatches 是逐字节精确比较、不 trim。两者一撞就是「app 照常能用、
+// 只有推送静默失效」——socket 那条路把令牌放在 handshake.auth 的 JSON 里，完全不受影响，
+// 所以用户看不出是令牌的问题。
+//
+// 这类令牌确实存在：AUTH_TOKEN 没有字符集校验（env-file.js 的 isSerializableEnvValue 只拦控制
+// 字符、单引号、尾随反斜杠），手改过 ccm.config.json 的人可能就持有一个。而**他们在改动前是
+// 能用的**（query 走 encodeURIComponent，服务端 Express 解回来精确匹配）。
+//
+// 故这一档回落 query：对他们不是回归（与改动前等价），对其余所有人令牌不再进访问日志。
+// 判据不自己写字符集正则——正则会与浏览器实现漂移，直接问平台那句 Headers 往返不会。
+test.describe('push：令牌无法走请求头时回落 query（不制造静默失效）', () => {
+  const makeCalls = async (token) => {
+    const calls = [];
+    const warns = [];
+    const fakeSubscription = {
+      endpoint: 'https://push.example/abc',
+      toJSON() { return { endpoint: this.endpoint, keys: {} }; },
+    };
+    const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+    const context = createAppContext({
+      dom: { btnPush: { classList: { add() {}, remove() {} } } },
+      dependencies: {
+        navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+        window: {},
+        console: { warn: (...a) => warns.push(a.join(' ')), log() {}, error() {} },
+        fetch: async (url, init) => { calls.push({ url: String(url), init }); return { ok: true, json: async () => ({ ok: true }) }; },
+        storage: { getItem: () => null, setItem() {} },
+      },
+    });
+    await createNotificationController(context, { autoBind: false, getToken: () => token }).subscribe();
+    return { calls, warns };
+  };
+
+  // 尾随空格：Headers 会 trim 成 'tok...'，而服务端比的是带空格的原值 → 精确比较必失配
+  test('令牌带尾随空白 → 回落 query，不发一个会被 trim 掉的头', async () => {
+    const token = `${'b'.repeat(40)} `;
+    const { calls, warns } = await makeCalls(token);
+    assert.equal(calls.length, 1);
+    assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'),
+      '这个头会被 Headers 静默 trim，发出去等于发了个错令牌');
+    assert.ok(calls[0].url.includes(`token=${encodeURIComponent(token)}`),
+      '必须回落 query，否则推送对这类令牌静默失效');
+    assert.ok(warns.some(w => w.includes('AUTH_TOKEN')), '回落要告诉用户为什么，并给出下一步');
+  });
+
+  // 非 Latin-1：new Headers() 直接抛，不判就会被 subscribe 的 catch 吞成「订阅失败」
+  test('令牌含非 Latin-1 字符 → 回落 query，不让 Headers 抛进 catch', async () => {
+    const token = `令牌${'c'.repeat(30)}`;
+    const { calls } = await makeCalls(token);
+    assert.equal(calls.length, 1, 'Headers 抛错会让请求根本发不出去');
+    assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'));
+    assert.ok(calls[0].url.includes('token='));
+  });
+
+  // 反向：正常 hex 令牌绝不能因为这道判据被误判成「不安全」而漏回 query 去
+  test('正常 hex 令牌不受影响，仍然只走头', async () => {
+    const token = 'd'.repeat(64);
+    const { calls, warns } = await makeCalls(token);
+    assert.equal(calls[0].init.headers['x-auth-token'], token);
+    assert.ok(!calls[0].url.includes('token='), '正常令牌一旦回落 query 就等于这个修复没做');
+    assert.equal(warns.length, 0, '正常令牌不该产生告警噪音');
+  });
+});
+
 // setup() 不是 subscribe() 的唯一调用者：改「锁屏带内容预览」也会调它（app.js 的 pushPreview.set
 // 要把新 prefs.preview 带给服务端）。而退订不改通知权限、那个 checkbox 也没有禁用（"不禁用它——只说明"），
 // 于是关掉推送之后勾一下预览就会重新订阅、推送整个恢复 —— 偏偏旁边那句 pushPreviewInertNote
