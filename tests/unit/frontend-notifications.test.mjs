@@ -268,6 +268,71 @@ test('push 请求在无令牌时不带 x-auth-token 头', async () => {
   assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'), '空令牌时不该带这个头');
 });
 
+// 【把令牌从 query 搬进头，对一类令牌是回归】Headers 对首尾空白**静默 trim**、对非 Latin-1 直接
+// 抛 TypeError，而服务端 tokenMatches 是逐字节精确比较、不 trim。两者一撞就是「app 照常能用、
+// 只有推送静默失效」——socket 那条路把令牌放在 handshake.auth 的 JSON 里，完全不受影响，
+// 所以用户看不出是令牌的问题。
+//
+// 这类令牌确实存在：AUTH_TOKEN 没有字符集校验（env-file.js 的 isSerializableEnvValue 只拦控制
+// 字符、单引号、尾随反斜杠），手改过 ccm.config.json 的人可能就持有一个。而**他们在改动前是
+// 能用的**（query 走 encodeURIComponent，服务端 Express 解回来精确匹配）。
+//
+// 故这一档回落 query：对他们不是回归（与改动前等价），对其余所有人令牌不再进访问日志。
+// 判据不自己写字符集正则——正则会与浏览器实现漂移，直接问平台那句 Headers 往返不会。
+test.describe('push：令牌无法走请求头时回落 query（不制造静默失效）', () => {
+  const makeCalls = async (token) => {
+    const calls = [];
+    const warns = [];
+    const fakeSubscription = {
+      endpoint: 'https://push.example/abc',
+      toJSON() { return { endpoint: this.endpoint, keys: {} }; },
+    };
+    const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+    const context = createAppContext({
+      dom: { btnPush: { classList: { add() {}, remove() {} } } },
+      dependencies: {
+        navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+        window: {},
+        console: { warn: (...a) => warns.push(a.join(' ')), log() {}, error() {} },
+        fetch: async (url, init) => { calls.push({ url: String(url), init }); return { ok: true, json: async () => ({ ok: true }) }; },
+        storage: { getItem: () => null, setItem() {} },
+      },
+    });
+    await createNotificationController(context, { autoBind: false, getToken: () => token }).subscribe();
+    return { calls, warns };
+  };
+
+  // 尾随空格：Headers 会 trim 成 'tok...'，而服务端比的是带空格的原值 → 精确比较必失配
+  test('令牌带尾随空白 → 回落 query，不发一个会被 trim 掉的头', async () => {
+    const token = `${'b'.repeat(40)} `;
+    const { calls, warns } = await makeCalls(token);
+    assert.equal(calls.length, 1);
+    assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'),
+      '这个头会被 Headers 静默 trim，发出去等于发了个错令牌');
+    assert.ok(calls[0].url.includes(`token=${encodeURIComponent(token)}`),
+      '必须回落 query，否则推送对这类令牌静默失效');
+    assert.ok(warns.some(w => w.includes('AUTH_TOKEN')), '回落要告诉用户为什么，并给出下一步');
+  });
+
+  // 非 Latin-1：new Headers() 直接抛，不判就会被 subscribe 的 catch 吞成「订阅失败」
+  test('令牌含非 Latin-1 字符 → 回落 query，不让 Headers 抛进 catch', async () => {
+    const token = `令牌${'c'.repeat(30)}`;
+    const { calls } = await makeCalls(token);
+    assert.equal(calls.length, 1, 'Headers 抛错会让请求根本发不出去');
+    assert.ok(!Object.hasOwn(calls[0].init.headers ?? {}, 'x-auth-token'));
+    assert.ok(calls[0].url.includes('token='));
+  });
+
+  // 反向：正常 hex 令牌绝不能因为这道判据被误判成「不安全」而漏回 query 去
+  test('正常 hex 令牌不受影响，仍然只走头', async () => {
+    const token = 'd'.repeat(64);
+    const { calls, warns } = await makeCalls(token);
+    assert.equal(calls[0].init.headers['x-auth-token'], token);
+    assert.ok(!calls[0].url.includes('token='), '正常令牌一旦回落 query 就等于这个修复没做');
+    assert.equal(warns.length, 0, '正常令牌不该产生告警噪音');
+  });
+});
+
 // setup() 不是 subscribe() 的唯一调用者：改「锁屏带内容预览」也会调它（app.js 的 pushPreview.set
 // 要把新 prefs.preview 带给服务端）。而退订不改通知权限、那个 checkbox 也没有禁用（"不禁用它——只说明"），
 // 于是关掉推送之后勾一下预览就会重新订阅、推送整个恢复 —— 偏偏旁边那句 pushPreviewInertNote

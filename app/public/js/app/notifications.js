@@ -34,9 +34,32 @@ export function createNotificationController(context, {
   //
   // 空令牌时**不发**这个头：http.js 把「带了但不对」(bad_token) 和「压根没带」(no_token) 分开记，
   // 前者指向配置漂移、后者指向扫描器。发一个空串会把前者的排查方向污染掉。
-  const authHeaders = () => {
+  //
+  // 【为什么先问一句「这个令牌能不能走头」】Headers 对首尾空白**静默 trim**、对非 Latin-1 直接抛
+  // TypeError，而服务端 tokenMatches 是逐字节精确比较、不 trim。两者一撞就是「app 照常能用、
+  // 只有推送静默失效」——socket 那条路把令牌放在 handshake.auth 的 JSON 里，完全不受影响，
+  // 用户根本看不出是令牌的问题。
+  // 这类令牌确实存在：AUTH_TOKEN 没有字符集校验（env-file.js 的 isSerializableEnvValue 只拦控制
+  // 字符、单引号、尾随反斜杠），手改过 ccm.config.json 的人可能就持有一个，而**他们在改动前是
+  // 能用的**（query 走 encodeURIComponent，服务端解回来精确匹配）。
+  // 故这一档回落 query：对他们不是回归，对其余所有人令牌不再进访问日志。
+  // 判据不自己写字符集正则——正则会与浏览器实现漂移，这句 Headers 往返不会。
+  const headerSafe = (token) => {
+    try { return new Headers({ 'x-auth-token': token }).get('x-auth-token') === token; }
+    catch { return false; }
+  };
+  let warnedUnsafeToken = false;
+  const authParts = () => {
     const token = getToken();
-    return token ? { 'x-auth-token': token } : {};
+    if (!token) return { headers: {}, query: '' };
+    if (headerSafe(token)) return { headers: { 'x-auth-token': token }, query: '' };
+    // 只说一次：三条请求会各走一遍，每次都喊等于把控制台刷满。
+    if (!warnedUnsafeToken) {
+      warnedUnsafeToken = true;
+      logger?.warn?.('[push] AUTH_TOKEN 含首尾空白或非 Latin-1 字符，无法走请求头，'
+        + '本次回落 URL query（会进反代/CDN 访问日志）。建议在电脑上跑 npm run setup 换一个令牌。');
+    }
+    return { headers: {}, query: `?token=${encodeURIComponent(token)}` };
   };
   let vapidKey = null;
   // subscribe() 的失败原因。手机上看不到 console，只说"请稍后重试"等于什么都没说——
@@ -107,11 +130,12 @@ export function createNotificationController(context, {
         prefs: { preview: readPushPreviewPref(storageGetItem) },
         ...(deviceToken ? { deviceToken } : {}),
       });
-      const response = await fetchFn('/push/subscribe', {
+      const auth = authParts();
+      const response = await fetchFn(`/push/subscribe${auth.query}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeaders(),
+          ...auth.headers,
           ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
         },
         body,
@@ -146,11 +170,12 @@ export function createNotificationController(context, {
       const { endpoint } = subscription;
       await subscription.unsubscribe();
       const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
-      const response = await fetchFn('/push/unsubscribe', {
+      const auth = authParts();
+      const response = await fetchFn(`/push/unsubscribe${auth.query}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeaders(),
+          ...auth.headers,
           ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
         },
         body: JSON.stringify({ endpoint, ...(deviceToken ? { deviceToken } : {}) }),
@@ -167,7 +192,8 @@ export function createNotificationController(context, {
   async function setup() {
     if (!vapidKey) {
       try {
-        const response = await fetchFn('/push/vapid-public-key', { headers: authHeaders() });
+        const auth = authParts();
+        const response = await fetchFn(`/push/vapid-public-key${auth.query}`, { headers: auth.headers });
         if (!response.ok) return;
         vapidKey = (await response.json()).key;
       } catch {
