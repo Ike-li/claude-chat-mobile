@@ -205,6 +205,20 @@ test('resolveSetupPlan: 非 TTY 且未给 --yes → 拒绝，不走进交互提�
   assert.equal(plan.refuse?.code, 'tty_required');
 });
 
+// M2（2026-09-17 安全审查）：向导此前**放行** `/` 与 /Users、/home —— 它只比对家目录本身，
+// 而那几个比家目录还宽。判据现与配置写入侧共用一份（env-schema.js 的 overlyBroadWorkdir），
+// 顺带把这个缺口一起补上。两道闸不同源就等于没有闸：装机被硬拒的东西，运行时从面板改一行
+// 就能写进去，而 WORKDIRS 是热加载的、保存即生效。
+test('normalizeSetupWorkDir: 根与家目录之父被拒（此前放行，比家目录还宽）', () => {
+  const home = '/Users/you';
+  for (const bad of ['/', '/Users', '/home', '/root']) {
+    assert.equal(normalizeSetupWorkDir(bad, { home }).code, 'work_dir_too_broad', `${bad} 应被拒`);
+  }
+  // 反向：这道闸只拦过宽根。拦过头的症状（向导怎么填都不让过）比漏拦更容易被绕过去。
+  assert.equal(normalizeSetupWorkDir('/Users/you2', { home }).ok, true, '按路径段比，不按字符串前缀');
+  assert.equal(normalizeSetupWorkDir('/opt/work', { home }).ok, true);
+});
+
 test('normalizeSetupWorkDir: 空串 / 家目录 / 相对路径拒绝，绝对项目路径通过', () => {
   const home = '/Users/you';
   assert.equal(normalizeSetupWorkDir('', { home }).code, 'work_dir_required');
