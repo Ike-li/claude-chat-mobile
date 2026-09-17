@@ -84,6 +84,7 @@
 | `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面还有一道早退**：CF Access 已启用且 `DEVICE_APPROVAL_SCOPE !== 'all'` 时直接 bypass，根本不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
+| `AUTH-05` | `AUTH_TOKEN` 不得出现在服务端**自身**的输出里：启动横幅只打掩码（两条 `BIND_MODE` 分支都算），`logs:server` 回传前逐行 `sanitize`。泄露路径是两跳——横幅进 `LOG_FILE` / 日志窗口 / 投屏，而经 CF Access 进来的会话默认不需要 `AUTH_TOKEN`（设备审批也 bypass），读一次日志就能把它拿走 |
 | `SEC-01` | 未审批 socket 不加入 approved 房间，收不到任何会话内容广播 |
 
 ### 范围与文件
