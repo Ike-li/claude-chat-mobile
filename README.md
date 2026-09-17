@@ -10,7 +10,7 @@
   <a href="https://ike-li.github.io/claude-chat-mobile/">网站</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">架构图集</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="AGPL v3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
@@ -138,6 +138,6 @@ Bug 与功能请求走 [GitHub Issues](https://github.com/Ike-li/claude-chat-mob
 
 ## License
 
-[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li，附带 Section 7 补充条款，详见 [NOTICE](NOTICE)。你可以使用、研究、修改和自托管；若将修改版作为网络服务提供给他人，需遵守 AGPL 的源码提供义务，并保留原作者署名。
+[Apache-2.0](LICENSE) © 2026 Ike-li，另见 [NOTICE](NOTICE)。你可以自由使用、研究、修改、自托管和再分发，包括商业用途与闭源产品；再分发时需满足 Apache-2.0 第 4 节的条件（保留版权声明与 NOTICE 归属、随附许可证副本、在改动过的文件上标注变更等），完整条款以 [LICENSE](LICENSE) 为准。v1.10.2 及之前的版本按 AGPL-3.0-only 发布，换协议不追溯。
 
 友链：[LINUX DO](https://linux.do/)

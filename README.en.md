@@ -10,7 +10,7 @@
   <a href="https://ike-li.github.io/claude-chat-mobile/">Website</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">Architecture diagrams</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="AGPL v3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
@@ -138,4 +138,4 @@ Bugs and feature requests go to [GitHub Issues](https://github.com/Ike-li/claude
 
 ## License
 
-[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with Section 7 additional terms — see [NOTICE](NOTICE). You may use, study, modify and self-host it. If you offer a modified version to others as a network service, you must meet AGPL's corresponding-source obligations and keep the original attribution.
+[Apache-2.0](LICENSE) © 2026 Ike-li. See also [NOTICE](NOTICE). You may use, study, modify, self-host and redistribute it, including commercially and in closed-source products. Redistribution is subject to the conditions in Section 4 of the License, which include keeping the copyright notice and NOTICE attribution, including a copy of the License, and marking the files you changed; see [LICENSE](LICENSE) for the authoritative text. Versions up to and including v1.10.2 were released under AGPL-3.0-only; the change is not retroactive.
