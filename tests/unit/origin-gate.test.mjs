@@ -27,10 +27,26 @@ test.describe('originAllowedOnPublicHost', () => {
   test('同源握手放行——这是真实用户走的那条路', () => {
     for (const origin of [
       `https://${HOST}`,
-      `https://${HOST}:443`,
+      `https://${HOST}:443`,          // 显式默认端口，URL 解析后 port 为空串
       `HTTPS://${HOST.toUpperCase()}`, // 大小写不敏感：Host 与 Origin 的大小写由客户端决定
     ]) {
       assert.equal(originAllowedOnPublicHost(origin, HOST), true, `${origin} 应放行`);
+    }
+  });
+
+  // ★ 只比 hostname 会把 scheme 与端口一起丢掉（2026-09-17 由 PR #81 的 review 抓到）。
+  // Cookie **不按端口隔离**：同一域名另一个端口上的页面（自托管的人在同域跑第二个服务很常见）
+  // 拿得到同一份 CF_Authorization，于是它能带着受害者的 Access 会话开 wss。
+  // http:// 那条同理——页面本身不安全，但它开 wss:// 时浏览器照样附上 Secure Cookie。
+  // Access 的边缘恒在 443/https，所以合法来源只有一种形态，收紧零代价。
+  test('同域但 scheme 或端口不同 → 拒（Cookie 不按端口隔离）', () => {
+    for (const origin of [
+      `https://${HOST}:8443`,
+      `http://${HOST}`,
+      `http://${HOST}:80`,
+      `ws://${HOST}`,
+    ]) {
+      assert.equal(originAllowedOnPublicHost(origin, HOST), false, `${origin} 应被拒`);
     }
   });
 

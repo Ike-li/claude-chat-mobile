@@ -42,13 +42,21 @@ export function originAllowedOnPublicHost(originHeader, publicHostname) {
   // 注意与下面 `'null'` 的区别：那是**有**这个头、值为不透明源。
   if (originHeader === undefined || originHeader === null || originHeader === '') return true;
 
-  let host;
+  let url;
   try {
     // 'null'（sandboxed iframe / data: / file:）在 URL 构造器里直接抛，落进 catch 被拒——
     // 那些仍是浏览器上下文，SameSite=None 的 Cookie 照样可能被带上，不能与「没有头」合并。
-    host = new URL(String(originHeader)).hostname;
+    url = new URL(String(originHeader));
   } catch {
     return false; // 畸形 Origin：fail-closed，不猜意图
   }
-  return host.toLowerCase() === expected;
+  // **比完整的源，不是只比主机名。** 只比 hostname 会把 scheme 与端口一起丢掉，而
+  // Cookie **不按端口隔离**：同一域名另一个端口上的页面（自托管的人在同域跑第二个服务很常见）
+  // 拿得到同一份 CF_Authorization，能带着受害者的 Access 会话开 wss。http:// 那条同理——
+  // 页面本身不安全，但它开 wss:// 时浏览器照样附上 Secure Cookie。
+  // Access 的边缘恒在 443/https，合法来源只有一种形态，收紧是零代价的。
+  // port 为空串即默认端口：`https://h` 与 `https://h:443` 经 URL 解析后都是空串。
+  return url.protocol === 'https:'
+    && url.hostname.toLowerCase() === expected
+    && url.port === '';
 }
