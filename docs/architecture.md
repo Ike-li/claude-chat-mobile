@@ -168,7 +168,7 @@ Agent 工具审批或用户直接文件编辑
 设备信任层的事实源是 `trusted-devices.json`，server 用文件监听把变更广播给在线客户端，因此任一入口批准后其余入口即时生效：
 
 - 桌面端菜单栏（macOS CCM.app）—— 待审设备平铺在根菜单，已受信任的设备收在 `已受信任的设备 (N) ›` 子菜单里，点一项即吊销（强确认）
-- Web 端由**已受信任的设备**远程准入，并在「设置 › 🔐 接入与设备 › 已受信任的设备」里吊销（`generalPage-devices`，不是「🖥 这台电脑」那一页）
+- Web 端由**已受信任的设备**远程准入，并在「设置 › 🔐 接入与设备 › 已受信任的设备」里吊销（`generalPage-devices`，不是「🖥 宿主机」那一页）
 - headless 终端里直接回车 / deny —— **要求 TTY**，launchd 起的 server 没有 TTY，这条入口在受管服务下不可用
 - `node scripts/device.js approve|deny <ID>`
 

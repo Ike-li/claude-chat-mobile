@@ -53,16 +53,19 @@
 
 ## 和官方 Remote Control 差在哪
 
-**能用官方 [Remote Control](https://code.claude.com/docs/en/remote-control)、也接受它的账号与数据路径时，用官方**——零部署，是默认推荐。这个项目是给官方路径进不去、或不接受其控制面的人做的：
+**能用官方 [Remote Control](https://code.claude.com/docs/en/remote-control)、也接受它的账号与数据路径时，用官方**——零部署，是默认推荐。这个项目是给官方路径进不去、或不接受其控制面的人做的：前者典型是在 `claude` CLI 里接了中转、第三方模型、国产模型，官方那扇门直接关着；后者典型是要把会话记录和审计留在自己机器上。
 
 |  | 官方 Remote Control | Claude Chat Mobile |
 | --- | --- | --- |
-| **模型通路** | 需 claude.ai 订阅 + 直连 `api.anthropic.com` | 你的 `claude` CLI 怎么配就怎么用——第三方网关 / API key / Bedrock / Vertex / 关了遥测，都行 |
+| **模型通路** | 需 claude.ai 订阅登录 + 直连 `api.anthropic.com`。API key、Bedrock / Google Agent Platform / Microsoft Foundry、指向别处的 `ANTHROPIC_BASE_URL`、`DISABLE_TELEMETRY` 一类遥测开关、ZDR 合规组织——命中任一条即整条不可用 | 你的 `claude` CLI 怎么配就怎么用——第三方网关 / API key / Bedrock / Vertex / 关了遥测，都行 |
 | **控制面数据** | 会话 transcript 存到 Anthropic 服务器做跨设备同步 | 服务、transcript、设备信任、审计全在你机器上，局域网内可完全闭环 |
-| **能看见什么** | 按会话逐个开启远程 | 放行工作区里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
+| **能看见什么** | 只有显式开过 Remote Control 的会话（或开了 auto-connect 之后新起的）；`/resume` 是终端专属命令，手机上翻不到历史会话 | 放行工作区里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
+| **两端同时驾驶同一会话** | 可以，终端 / 网页 / 手机随便发 | **做不到**——单驾驶员模型，Web 接管要显式续接且可能分叉 |
 | **部署成本** | 零 | 自己跑一个 server |
 
 > 措辞边界：这不等于「数据绝不离开本机」——模型请求本来就由本机 `claude` CLI 按你现有配置发出。CCM 承诺的是**除此之外**不再多一条数据出口。
+
+CCM 对部署位置没有假设：`claude` CLI 在哪台机器上能跑通，控制面就跟到哪。主场景是自己的开发机；跑在一台远程服务器上同样成立，手机连的就是那台服务器。
 
 ## 三步跑起来
 

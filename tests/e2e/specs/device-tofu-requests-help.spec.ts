@@ -192,4 +192,60 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // L1「接入与设备」那行是全站唯一会亮红点的一行，红点的语义是「点一下就能处理」。而待批卡片
+  // 住在 #deviceRequests（z-30 fixed 浮层），#generalScrim 同为 z-30 却在 DOM 里排得更后——
+  // 同层后来居上。于是设置面板开着时点进这一页，审批控件既看不见也点不动，红点是空头承诺。
+  // 这两条守的是那条通路本身，单测那层只验得了「摘要里的 el 在 index.html 里存在」。
+  test('P0-15h 待批设备在设置面板下确实够不着，入口点一下就能把卡片让出来', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:devicerequests');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
+
+    await openGeneralPage(page, 'devices');
+    const entry = page.locator('[data-testid="pending-devices-entry"]');
+    await expect(entry).toBeVisible();
+    await expect(entry).toContainText('2'); // 条数进文案：一台和两台在「要不要现在处理」上不同
+
+    // ★ 先证明问题真的存在，再证明入口解决了它。命中测试直接问「卡片那个点上最顶的是谁」——
+    //   断言 scrim「可见」证不了遮挡，只有 elementFromPoint 能。
+    const blockedBy = await page.evaluate(() => {
+      const card = document.querySelector('[data-testid="device-card"]') as HTMLElement;
+      const r = card.getBoundingClientRect();
+      return (document.elementFromPoint(r.left + r.width / 2, r.top + 10) as HTMLElement)?.id || '';
+    });
+    expect(blockedBy).toBe('generalScrim');
+
+    await entry.click();
+    await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalScrim')).toBeHidden();
+
+    // ★ 让开之后卡片自己在最顶层，且真能点——click 超时即为遮挡回归
+    const nowTop = await page.evaluate(() => {
+      const card = document.querySelector('[data-testid="device-card"]') as HTMLElement;
+      const r = card.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + 10) as HTMLElement;
+      return card.contains(el);
+    });
+    expect(nowTop).toBe(true);
+    await page.locator('[data-testid="device-card"]').first().getByText('✓ 准入').click();
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-15i 没有待批设备时这条入口整段缺席，不留一个点了没反应的按钮', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await openGeneralPage(page, 'devices');
+    await expect(page.locator('[data-testid="pending-devices-entry"]')).toBeHidden();
+    // 摘要那一侧同源：没有待批就不写「台待批」，也不亮红点（单测钉的是同一条判据）
+    await expect(page.locator('[data-testid="general-nav-devices"]')).not.toContainText('待批');
+
+    await expectNoBrowserErrors(page);
+  });
 });

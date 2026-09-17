@@ -845,7 +845,7 @@ io.on('connection', socket => {
   socket.deviceApproved = true;
 
   // 真 server 在可信端连入时重放已受信任设备列表（app.js 的 unlockSocket 之后那两条 emit）。
-  // 不重放的话「设置 › 这台电脑 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
+  // 不重放的话「设置 › 🔐 接入与设备 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
@@ -860,7 +860,7 @@ io.on('connection', socket => {
         model: activeModel,
         cwd: mockInstances[0].cwd,
         claudeVersion: '0.1.0-mock',
-        // 一正常一失败：让「这台电脑」页的 MCP 段两条渲染分支都走得到（失败态要带原始 status）
+        // 一正常一失败：让「宿主机」页的 MCP 段两条渲染分支都走得到（失败态要带原始 status）
         mcpServers: [
           { name: 'filesystem', status: 'connected' },
           { name: 'postgres', status: 'failed' }

@@ -1,5 +1,23 @@
 # 变更记录
 
+## v1.10.2 — 2026-09-17
+
+Changes since v1.10.1.
+
+### Verified environment
+- claude CLI: 2.1.274
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Fixes
+- fix(settings): 待批设备给出真通路，服务状态面板加 open 代次守卫
+- fix(settings): L1 摘要每一项绑定 L2 真实元素，堵住文案漂移
+
+### Other
+- docs(readme): 点明目标人群，补一句部署位置无假设
+- docs(readme): 按官方文档校准 Remote Control 对照表
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.10.1...v1.10.2
+
 ## v1.10.1 — 2026-09-16
 
 Changes since v1.10.0.

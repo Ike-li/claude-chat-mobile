@@ -194,7 +194,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 缺口 3：MCP 服务器与 skills 数早就随 init 事件到了浏览器（agent.js emit('init')），
   // 但前端从来没有渲染面——grep mcpServers / skillsCount 在 app/public 下零命中。
   // 失败态必须带上原始 status：'failed' 与 'needs-auth' 是两种完全不同的处置。
-  test('P0-28j 「这台电脑」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
+  test('P0-28j 「宿主机」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await ensureComposerReady(page);
@@ -323,6 +323,75 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('日志文件不存在');
     // 路径仍要显示——「不存在」这句话没有指向的话，用户不知道该去配哪个文件
     await expect(body).toContainText('ccm-server.log');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // L1 的「排查」副标题一直列着四条日志，而这一页只有体检与服务日志两项——另两条的内容住在
+  // 顶栏的运行日志抽屉与服务状态面板里，此前只以一行小字被提了一嘴。补的是**入口**不是搬运：
+  // 那两处原有的来路（排障时点顶栏、看完告警下钻查是谁）都还在，照搬一份会变成两套要各自维护
+  // 的渲染。这两条守的正是接线——单测那层验的是摘要文案，碰不到"点了去哪、关了回哪"。
+  test('P0-28p 「排查」页的会话日志入口开的是同一张抽屉，关掉退回排查页而不是首页', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+
+    await page.locator('[data-testid="diag-session-log"]').click();
+    // 同一张抽屉（#consoleModal），不是另建一套渲染
+    await expect(page.locator('#consoleModal')).toHaveClass(/sheet-open/);
+    // 设置 sheet 先收：两者同 z-40，叠着会互相拦点击
+    await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
+
+    await page.locator('#consoleClose').click();
+    // ★ 退回来源页。关掉就回首页的话，来时那一页得从头找起——两级导航的返回语义在这里必须一致
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalPage-diag')).toBeVisible();
+
+    // ★ 反向：顶栏那条来路不受影响。它开在聊天页上，关掉就该留在聊天页，
+    //   不该被"退回来源页"的逻辑顺手掀开一张设置面板。
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toHaveClass(/sheet-open/);
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#consoleModal')).not.toHaveClass(/sheet-open/);
+    await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-28q 「排查」页的安全日志入口落在审计段，返回回排查页而不是「宿主机」', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-diag"]').click();
+
+    await page.locator('[data-testid="diag-security-log"]').click();
+    await expect(page.locator('#serviceStatusModal')).toHaveClass(/sheet-open/);
+    // 深链落点：这一段此前只能靠"先开服务状态、再往下翻三屏"才够得着
+    await expect(page.locator('#serviceAuditSection')).toBeVisible();
+    await expect(page.locator('#serviceAuditSection')).toContainText('安全日志');
+
+    await page.locator('[data-testid="service-status-back"]').click();
+    await expect(page.locator('#generalPage-diag')).toBeVisible();
+    // ★ 不是退回「宿主机」。同一张面板现在有两个入口，来源页写死会把人送错地方
+    await expect(page.locator('#generalPage-host')).toBeHidden();
+
+    // ★ 反向：从「宿主机」的服务状态进去，返回仍回 host 页（原有来路不得被改坏）
+    await page.locator('[data-testid="general-back"]').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+    await page.locator('#btnServiceStatus').click();
+    await expect(page.locator('#serviceStatusModal')).toHaveClass(/sheet-open/);
+    await page.locator('[data-testid="service-status-back"]').click();
+    await expect(page.locator('#generalPage-host')).toBeVisible();
+    await expect(page.locator('#generalPage-diag')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });
