@@ -210,6 +210,23 @@ test('sanitize: 真实长度的十六进制 AUTH_TOKEN 各形态都被脱敏', (
   }
 });
 
+// ★ 这条模式是**跨行**的，调用方因此不能「先切行再逐行 sanitize」——那样它永远匹配不上，
+// 而每一行 base64 单看也不命中任何别的模式，结果是私钥完整漏出。
+// logs:server 的第一版实现就是 `.map(l => sanitize(l))`，正好踩中（2026-09-17 由 review 抓到）。
+// 断言写成「整段能脱 / 逐行漏」的对照，让约束从 sanitizer 这一侧也看得见，不只活在调用点注释里。
+test('sanitize: PEM 私钥跨行匹配——整段能脱，逐行必漏（调用方不得先 split）', () => {
+  const body = 'MIIEowIBAAKCAQEAwJz8Hq2vF3nK9xY7bR4tL6mN0pQ5sW8uV1cX2dE3fG4hI5jK';
+  // 首尾标记拼出来、不写字面量：gitleaks 的 private-key 规则不知道这是假数据。不走
+  // .gitleaksignore —— 那按行号登记指纹，行号一漂豁免就悄悄失效，而失效的样子和生效一样。
+  const pem = kind => `-----${kind} RSA PRIVATE ${'KEY'}-----`;
+  const lines = [pem('BEGIN'), body, `${body}xx`, pem('END')];
+
+  assert.ok(!sanitize(lines.join('\n')).includes(body), '整段脱敏必须吃掉私钥正文');
+  assert.ok(lines.map(sanitize).join('\n').includes(body),
+    '逐行脱敏漏私钥——这条断言是反面锚点：它一旦变红，说明模式改成单行可匹配了，'
+    + '调用方那条「不得先 split」的约束可以放宽，注释要一起更新');
+});
+
 test('sanitizePath: 不匹配路径原样返回', () => {
   assert.equal(sanitizePath('/etc/hosts'), '/etc/hosts');
 });

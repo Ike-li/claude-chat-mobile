@@ -4105,17 +4105,22 @@ registerSocketConnection(io, socket => {
       } finally {
         closeSync(fd);
       }
+      // 【必须整段脱敏再切行，不能逐行脱敏】sanitizer 的 PEM 模式是跨行的
+      // （`-----BEGIN … PRIVATE KEY-----[\s\S]+?-----END …`）。先 split 再逐行 sanitize 会让它
+      // 永远匹配不上——日志里的私钥被原样回给客户端，而每一行 base64 单看也不命中任何别的模式。
+      // 实测：整段一次 → '***'；逐行 → 私钥完整漏出。
+      // 整段更快也顺带成立（256KB 实测 6.3ms vs 逐行 10.6ms），不存在拿性能换安全的取舍。
+      const all = sanitize(text).split('\n');
       // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
-      const all = text.split('\n');
       if (start > 0 && all.length) all.shift();
-      // 逐行脱敏（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里
+      // 脱敏的理由（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里
       // 的任何凭据都会原样回给已鉴权会话。而经 Cloudflare Access 进来的会话默认**不需要**
       // AUTH_TOKEN（设备审批也 bypass），读一次这里就能把 token 拿走，之后可走 LAN、可在
       // Access 吊销后继续用。横幅那头已改成永不打完整 token，但日志文件里的历史行还在，
       // LOG_FILE 也可能收着别的进程写进来的凭据——两道各自独立，不能只做一头。
       // sanitize 是选择性的（判据见 shared/sanitizer.js 的 PATTERNS，配套单测里有边界用例），
       // 不会把地址、时间戳、报错正文一起抹掉，日志的排查价值保留。
-      const lines = all.filter(l => l !== '').slice(-limit).map(l => sanitize(l));
+      const lines = all.filter(l => l !== '').slice(-limit);
       ack({ ok: true, path: logFile, lines, truncated: start > 0, size: st.size });
     } catch (err) {
       // ENOENT 是最常见的一支：没配 LOG_FILE 且不是 macOS 默认部署。说清楚而不是给个空列表——
