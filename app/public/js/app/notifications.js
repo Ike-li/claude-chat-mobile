@@ -27,6 +27,17 @@ export function createNotificationController(context, {
   const setOptedOut = on => {
     try { on ? storage?.setItem?.(PUSH_OPT_OUT_KEY, '1') : storage?.removeItem?.(PUSH_OPT_OUT_KEY); } catch {}
   };
+  // 令牌走请求头、不走 query（H2，2026-09-17 安全审查）：`?token=` 会原样落进 nginx / Caddy /
+  // cloudflared / CDN 的访问日志，而 AUTH_TOKEN 是控制面密钥。首页用 `/#token=` 走 fragment 正是
+  // 为了躲开中间层日志，push 这三条却把同一个秘密放回了 query。服务端 createHttpAuth 认这个头
+  // （app/src/server/http.js），两条路等价。
+  //
+  // 空令牌时**不发**这个头：http.js 把「带了但不对」(bad_token) 和「压根没带」(no_token) 分开记，
+  // 前者指向配置漂移、后者指向扫描器。发一个空串会把前者的排查方向污染掉。
+  const authHeaders = () => {
+    const token = getToken();
+    return token ? { 'x-auth-token': token } : {};
+  };
   let vapidKey = null;
   // subscribe() 的失败原因。手机上看不到 console，只说"请稍后重试"等于什么都没说——
   // FCM 连不上、VAPID 无效、POST 被鉴权拦，对用户是完全不同的三件事，得说出是哪一件。
@@ -88,8 +99,6 @@ export function createNotificationController(context, {
           applicationServerKey: urlBase64ToUint8Array(vapidKey),
         });
       }
-      const token = getToken();
-      const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
       // ⑧ prefs 随订阅一并存（server 端 savePushSubscription 原样落盘，见 notify-channels.js 头注）；
       // per-device 偏好——同一账号手机开预览、iPad 不开，两条订阅互不影响。
       const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
@@ -98,10 +107,11 @@ export function createNotificationController(context, {
         prefs: { preview: readPushPreviewPref(storageGetItem) },
         ...(deviceToken ? { deviceToken } : {}),
       });
-      const response = await fetchFn(`/push/subscribe${authQuery}`, {
+      const response = await fetchFn('/push/subscribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders(),
           ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
         },
         body,
@@ -135,13 +145,12 @@ export function createNotificationController(context, {
       if (!subscription) return true;
       const { endpoint } = subscription;
       await subscription.unsubscribe();
-      const token = getToken();
-      const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
       const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
-      const response = await fetchFn(`/push/unsubscribe${authQuery}`, {
+      const response = await fetchFn('/push/unsubscribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders(),
           ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
         },
         body: JSON.stringify({ endpoint, ...(deviceToken ? { deviceToken } : {}) }),
@@ -158,9 +167,7 @@ export function createNotificationController(context, {
   async function setup() {
     if (!vapidKey) {
       try {
-        const token = getToken();
-        const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-        const response = await fetchFn(`/push/vapid-public-key${authQuery}`);
+        const response = await fetchFn('/push/vapid-public-key', { headers: authHeaders() });
         if (!response.ok) return;
         vapidKey = (await response.json()).key;
       } catch {
