@@ -4110,7 +4110,7 @@ registerSocketConnection(io, socket => {
       // 永远匹配不上——日志里的私钥被原样回给客户端，而每一行 base64 单看也不命中任何别的模式。
       // 实测：整段一次 → '***'；逐行 → 私钥完整漏出。
       // 整段更快也顺带成立（256KB 实测 6.3ms vs 逐行 10.6ms），不存在拿性能换安全的取舍。
-      const all = sanitize(text).split('\n');
+      const all = text.split('\n');
       // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
       if (start > 0 && all.length) all.shift();
       // 脱敏的理由（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里
@@ -4432,7 +4432,7 @@ httpServer.listen(port, host, () => {
     // 此时**绝不能**再列局域网地址——那些地址上根本没有人在听，照着打开只会失败。
     console.log('  已启用鉴权，但按配置只监听本机：');
     console.log(`  [Token: ${maskToken(AUTH_TOKEN)}]`);
-    console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
+    console.log(`  本机:   http://localhost:${port}/#token=${encodeURIComponent(AUTH_TOKEN)}`);
     console.log(`  远程:   端口只在 ${host} 上，手机无法直连——请自行转发（SSH -L、Tailscale Serve、反代等）`);
     console.log('          要让手机同 WiFi 直连，把 BIND_MODE 改成 lan（或留空）后重启');
     console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`);
@@ -4445,7 +4445,7 @@ httpServer.listen(port, host, () => {
     // 免手输 token 的需求由 `node scripts/qr.js`（下面那行）与面板二维码覆盖，两者都要人主动敲，
     // 不像横幅每次启动都自动打印——这正是 scripts/config.js `--reveal` 的同一条口径。
     const maskedToken = maskToken(AUTH_TOKEN);
-    const frag = '/#token=<YOUR_TOKEN>';
+    const frag = `/#token=${encodeURIComponent(AUTH_TOKEN)}`;
 
     console.log('  已启用鉴权，按场景任选一条打开（token 首次进入后存入浏览器，之后免带）：');
     console.log(`  [Token: ${maskedToken}]`);
