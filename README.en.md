@@ -53,7 +53,7 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 
 ## How it differs from official Remote Control
 
-**If you can use official [Remote Control](https://code.claude.com/docs/en/remote-control) and accept its account and data path, use it** — zero deployment, and it is the default recommendation. This project is for people the official path refuses, or whose control plane they cannot accept:
+**If you can use official [Remote Control](https://code.claude.com/docs/en/remote-control) and accept its account and data path, use it** — zero deployment, and it is the default recommendation. This project is for people the official path refuses, or whose control plane they cannot accept. The first group typically points the `claude` CLI at a relay, a third-party model or a non-Anthropic one, which shuts the official door outright; the second needs session records and audit logs to stay on their own machine.
 
 |  | Official Remote Control | Claude Chat Mobile |
 | --- | --- | --- |
@@ -64,6 +64,8 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 | **Deployment cost** | None | You run a server yourself |
 
 > A note on wording: this is not "data never leaves your machine" — model requests are still sent by the local `claude` CLI using your existing configuration. What CCM promises is that it adds **no additional** data egress beyond that.
+
+CCM makes no assumption about where it runs: wherever your `claude` CLI works, the control plane follows. Your own dev machine is the main case; a remote server works just the same, with your phone connecting to that server.
 
 ## Three steps to run it
 
