@@ -116,7 +116,7 @@
 |---|---|
 | `CONFIG-01` | 面板/CLI 写入的必须是启动时读的那一份。schema 单一事实源 `env-schema.js`，读写归一在 `config-file.js`；shell env 压过文件 |
 | `CONFIG-02` | `.env` 的 dotenv 与 `source` 两个消费者必须**同时**安全，不轮流迁就一侧 |
-| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）* |
+| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）* |
 | `NOTIFY-01` | 审批/提问/后台任务完成无条件推；`result` 仅当 approved 房间有**前台可见**连接时抑制，判据是 `client:presence` 而非 socket 连着（`SEC-04` 正文不进第三方明文通道 · `OPS-3` `notify_failed` 须覆盖 push 与 ntfy 双通道） |
 | `ALERT-01` | 服务告警与「需要你(N)」是两根轴，绝不混判（`OPS-1` doctor readiness 假绿） |
 | `DISPLAY-01` | 模型列表、effort、statusline 只做 [display-contracts.md](../docs/display-contracts.md) 允许的变换（`OPS-2` `utilization` 必须夹在 `[0,100]`） |
