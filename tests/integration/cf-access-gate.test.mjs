@@ -116,6 +116,54 @@ test.describe('公网 CF Access 鉴权判决', () => {
         socket.once('connect', () => { clearTimeout(t); reject(new Error('公网无 JWT 不应握手成功')); });
       });
       assert.ok(err.message, '应收到握手拒绝');
+      // ★ 拒绝的**理由**要对。node 的 socket.io-client 不发 Origin（实测 handshake.headers.origin
+      // 为 undefined），所以本用例走不到 M3 的跨站门；哪天它开始发了、或那道门被放宽到这条路上，
+      // 这条断言会红——否则本用例会因为「被另一道闸拦下」而继续全绿，却不再证明「禁 token 后门」。
+      assert.notEqual(err.message, 'forbidden origin',
+        '被跨站门拦下的话，本用例就不再证明禁 token 后门了');
+    } finally {
+      socket.disconnect();
+    }
+  });
+
+  // M3（2026-09-17 安全审查）：公网 IdP 路径上的跨站握手门。判据与「为什么只管这一条路」
+  // 见 app/src/auth/origin-gate.js 头注；纯函数判据本身在 tests/unit/origin-gate.test.mjs。
+  // 这里钉的是**接线**：那个判据真的挂在了握手上，且挂在验签之前。
+  test('Socket 公网 Host + 别的域名的 Origin → 以 forbidden origin 拒绝（跨站门）', async () => {
+    const socket = ioClient(`http://127.0.0.1:${port}`, {
+      auth: { token: AUTH_TOKEN },
+      extraHeaders: { host: PUBLIC_HOST, origin: 'https://evil.example' },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    try {
+      const err = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('既未连上也未报错')), 5000);
+        socket.once('connect_error', e => { clearTimeout(t); resolve(e); });
+        socket.once('connect', () => { clearTimeout(t); reject(new Error('跨站 Origin 不应握手成功')); });
+      });
+      assert.equal(err.message, 'forbidden origin', '必须是跨站门拦的，不是顺带被 JWT 拦的');
+    } finally {
+      socket.disconnect();
+    }
+  });
+
+  // 正对照：同源 Origin 必须**走不到**跨站门这条拒绝理由上。缺了它，一个「恒拒」的实现
+  // 也能让上面那条全绿——而恒拒会让所有公网用户连不上。
+  test('Socket 公网 Host + 同源 Origin → 不被跨站门拦（仍因无 JWT 被拒，理由不同）', async () => {
+    const socket = ioClient(`http://127.0.0.1:${port}`, {
+      auth: { token: AUTH_TOKEN },
+      extraHeaders: { host: PUBLIC_HOST, origin: `https://${PUBLIC_HOST}` },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    try {
+      const err = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('既未连上也未报错')), 5000);
+        socket.once('connect_error', e => { clearTimeout(t); resolve(e); });
+        socket.once('connect', () => { clearTimeout(t); reject(new Error('无 JWT 不应握手成功')); });
+      });
+      assert.notEqual(err.message, 'forbidden origin', '同源被当成跨站 = 所有公网用户都连不上');
     } finally {
       socket.disconnect();
     }
