@@ -16,12 +16,9 @@
 
 ![Bring the claude in your terminal to your phone](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-en.png" width="23%" alt="Streaming Claude output on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-en.png" width="23%" alt="Tool calls and file changes, readable on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.png" width="23%" alt="Approving a tool call from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-sessions-en.png" width="23%" alt="Every session in the workspace, including ones started in a terminal">
-</p>
+![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+> The screenshots on this page show the Chinese UI. The app ships with an English locale too — switch it in Settings.
 
 ## What you do in the terminal, and how it works on the phone
 
@@ -49,6 +46,13 @@ The rest is about getting work done:
 | Watching background tasks | A task banner; stop any single one |
 | **That session you left open in the terminal** | Visible, and you can take the wheel — one driver at a time, and it warns you on takeover |
 
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Reviewing a plan, fixing tests and getting to all-green from the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="The expanded statusline with quota usage, and background tasks running at the same time">
+</p>
+
+![Typing @ to search workspace files, and / to list slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
 Also: image upload and screenshot paste, event catch-up after a reconnect, PWA install to the home screen, a `doctor` startup self-check, and an optional macOS desktop console.
 
 ## How it differs from official Remote Control
@@ -62,6 +66,8 @@ Also: image upload and screenshot paste, event catch-up after a reconnect, PWA i
 | **What you can see** | Only sessions you explicitly enabled Remote Control on (or new ones once auto-connect is on); `/resume` is terminal-only, so you cannot browse session history from a phone | **Every** session in your allowlisted workspaces — started in a terminal, left over from last week, all visible and resumable |
 | **Driving one session from both ends** | Yes — send from terminal, web or phone interchangeably | **No** — single-driver model; the web side must explicitly take over, and that can fork the session |
 | **Deployment cost** | None | You run a server yourself |
+
+![Switching to a third-party gateway model directly in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
 
 > A note on wording: this is not "data never leaves your machine" — model requests are still sent by the local `claude` CLI using your existing configuration. What CCM promises is that it adds **no additional** data egress beyond that.
 
@@ -78,6 +84,8 @@ npm ci --omit=dev && npm run setup && npm start
 ```
 
 Open the address printed in the terminal on your phone. The first time a new device connects it needs one approval: `node scripts/device.js list`, then `approve <ID>`. Typing a 64-character token on a phone is painful — `node scripts/qr.js` renders the address as a terminal QR code.
+
+![Sign-in and new-device approval: the new device waits, you tap "Admit" on an already-signed-in one](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
 
 > **A running server ≠ a working chat.** CCM's token and device approval only decide whether the phone gets into the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether you can actually talk. A Claude subscription needs that host signed in; a third-party gateway does not use Anthropic login and will **never** show `Not logged in` — it needs `ANTHROPIC_*` to actually take effect. A specific CLI error reaching your phone is good news: the link itself works. Both cases converge on one action: **get `claude` through a turn in your host terminal, then retry from the phone.** Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
 
@@ -106,6 +114,8 @@ Dual path, event sync, session takeover: **→ [Architecture guide](docs/archite
 
 The setup wizard asks how your phone will reach this machine; the answer is stored as `ACCESS_PROFILE`, and `doctor` plus the on-phone security check tailor themselves to it. The product never installs third-party tunnel tools — it only points to the docs. PWA install and Web Push require HTTPS (on iOS also 16.4+ and installing to the Home Screen first).
 
+![Settings and status, connected-device management, notification switches and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
 **→ [Deployment and operations](docs/deployment.md)** (Chinese)
 
 ## Security Model
@@ -118,6 +128,8 @@ The setup wizard asks how your phone will reach this machine; the answer is stor
 4. **New devices need trust.** Except for local connections and those already validated by the optional public identity layer (currently Cloudflare Access), a device holding the correct token still needs one approval. Note: **when Access is on it replaces device approval**, so the trust list does not govern connections arriving through it; set `DEVICE_APPROVAL_SCOPE=all` to make approval apply to every path.
 5. **Claude Code permissions are inherited.** Existing rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.
 6. **The file editor is a direct write.** It **does not pass through the Agent tool-approval chain** (it does enforce scope checks, a size limit, content-hash conflict detection and audit logging). Set `FILE_EDIT=off` to disable it; turning it off is recommended for long-term public exposure.
+
+![Service status, the security-event timeline and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
 
 Read [deployment and operations](docs/deployment.md) (Chinese) before exposing it publicly for the long term. Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
 

@@ -16,12 +16,7 @@
 
 ![把终端里的 claude 接到手机上](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-zh.png" width="23%" alt="手机上流式查看 Claude 的输出">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-zh.png" width="23%" alt="工具调用与文件变更在手机上可读">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-zh.png" width="23%" alt="在手机上审批工具调用">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-sessions-zh.png" width="23%" alt="工作区里的全部会话，含终端开的">
-</p>
+![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
 
 ## 终端里的哪些事，手机上也能做
 
@@ -49,6 +44,13 @@
 | 盯后台任务 | 任务横幅，可单独停掉某一个 |
 | **终端里开着的那个会话** | 能看，也能接着驾驶——同一时刻只有一个驾驶端，接管时会提示 |
 
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上拍板、改测试、跑到全绿">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="statusline 展开后的额度用量，以及同时在跑的后台任务">
+</p>
+
+![输入 @ 搜工作区文件，输入 / 列出斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
 另外：上传图片与粘贴截图、断线重连补齐事件、PWA 装到主屏幕、`doctor` 启动自检，macOS 还有桌面控制台。
 
 ## 和官方 Remote Control 差在哪
@@ -62,6 +64,8 @@
 | **能看见什么** | 只有显式开过 Remote Control 的会话（或开了 auto-connect 之后新起的）；`/resume` 是终端专属命令，手机上翻不到历史会话 | 放行工作区里的**全部**会话——终端开的、上周的、忘了开开关的，都可见可续 |
 | **两端同时驾驶同一会话** | 可以，终端 / 网页 / 手机随便发 | **做不到**——单驾驶员模型，Web 接管要显式续接且可能分叉 |
 | **部署成本** | 零 | 自己跑一个 server |
+
+![会话设置里直接切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
 
 > 措辞边界：这不等于「数据绝不离开本机」——模型请求本来就由本机 `claude` CLI 按你现有配置发出。CCM 承诺的是**除此之外**不再多一条数据出口。
 
@@ -78,6 +82,8 @@ npm ci --omit=dev && npm run setup && npm start
 ```
 
 手机打开终端打印的地址即可。首次从新设备进来要批准一次：`node scripts/device.js list` 再 `approve <ID>`。手输 64 位 token 很痛苦，`node scripts/qr.js` 能把地址打成二维码扫一下。
+
+![登录与新设备准入：新设备等待授权，在已登录的设备上点「准入」即可](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
 
 > **起服 ≠ 能聊天。** CCM 的令牌 / 设备审批只决定手机能不能进主壳；**主机终端里的 `claude` 能不能正常跑完一轮会话**，才决定手机上能不能真对话。官方订阅要本机已 `/login`；第三方网关不走 Anthropic 登录、**不会**出现 `Not logged in`，它要的是 `ANTHROPIC_*` 真的生效。手机上收到 CLI 透传的具体报错反而是好消息——说明这条链路本身是通的。两种情况收敛到同一个动作：**先在主机终端把 `claude` 聊通一轮，再从手机重试**。验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
 
@@ -106,6 +112,8 @@ npm ci --omit=dev && npm run setup && npm start
 
 装机向导会问你打算怎么从手机访问，答案写进 `ACCESS_PROFILE`，`doctor` 与手机端安全体检据此做针对性检查。产品不安装任何第三方隧道工具，只指路。PWA 和 Web Push 需要 HTTPS（iOS 还要 16.4+ 并先加到主屏幕）。
 
+![设置与状态、接入设备管理、通知开关与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
 **→ [部署与运维](docs/deployment.md)**
 
 ## 安全边界
@@ -118,6 +126,8 @@ npm ci --omit=dev && npm run setup && npm start
 4. **新设备需要信任。** 除本机直连或已通过公网身份层（当前为 Cloudflare Access）外，持正确 Token 的新设备仍需一次审批。注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有规则继续生效，公网使用前应检查 Bash、Write 的自动放行规则。
 6. **文件编辑属于直接写入。** 内置编辑器**不经过 Agent 的工具审批链**（有范围校验、大小限制、哈希冲突检测和审计），`FILE_EDIT=off` 可关闭，长期公网暴露建议关闭。
+
+![服务状态、安全事件时间线与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
 
 长期暴露到公网前请先读 [部署与运维](docs/deployment.md)。漏洞请走 [GitHub Security Advisories](SECURITY.md) 私下报告，不要公开提 Issue。
 
