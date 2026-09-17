@@ -138,6 +138,6 @@ Bug 与功能请求走 [GitHub Issues](https://github.com/Ike-li/claude-chat-mob
 
 ## License
 
-[Apache-2.0](LICENSE) © 2026 Ike-li，另见 [NOTICE](NOTICE)。你可以自由使用、研究、修改、自托管和再分发，包括商业用途与闭源产品，只需保留版权声明与 NOTICE 归属。v1.10.2 及之前的版本按 AGPL-3.0-only 发布，换协议不追溯。
+[Apache-2.0](LICENSE) © 2026 Ike-li，另见 [NOTICE](NOTICE)。你可以自由使用、研究、修改、自托管和再分发，包括商业用途与闭源产品；再分发时需满足 Apache-2.0 第 4 节的条件（保留版权声明与 NOTICE 归属、随附许可证副本、在改动过的文件上标注变更等），完整条款以 [LICENSE](LICENSE) 为准。v1.10.2 及之前的版本按 AGPL-3.0-only 发布，换协议不追溯。
 
 友链：[LINUX DO](https://linux.do/)

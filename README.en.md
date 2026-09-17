@@ -138,4 +138,4 @@ Bugs and feature requests go to [GitHub Issues](https://github.com/Ike-li/claude
 
 ## License
 
-[Apache-2.0](LICENSE) © 2026 Ike-li. See also [NOTICE](NOTICE). You may use, study, modify, self-host and redistribute it, including commercially and in closed-source products, as long as you keep the copyright notice and the NOTICE attribution. Versions up to and including v1.10.2 were released under AGPL-3.0-only; the change is not retroactive.
+[Apache-2.0](LICENSE) © 2026 Ike-li. See also [NOTICE](NOTICE). You may use, study, modify, self-host and redistribute it, including commercially and in closed-source products. Redistribution is subject to the conditions in Section 4 of the License, which include keeping the copyright notice and NOTICE attribution, including a copy of the License, and marking the files you changed; see [LICENSE](LICENSE) for the authoritative text. Versions up to and including v1.10.2 were released under AGPL-3.0-only; the change is not retroactive.
