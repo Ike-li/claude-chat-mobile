@@ -14,15 +14,6 @@
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
-![把终端里的 claude 接到手机上](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-zh.png" width="23%" alt="手机上流式查看 Claude 的输出">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-zh.png" width="23%" alt="工具调用与文件变更在手机上可读">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-zh.png" width="23%" alt="在手机上审批工具调用">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-sessions-zh.png" width="23%" alt="工作区里的全部会话，含终端开的">
-</p>
-
 ## 终端里的哪些事，手机上也能做
 
 离开电脑时最怕的不是看不到输出，是**它停在某个需要你的地方，白等一晚上**。所以先说这三件：
@@ -82,6 +73,30 @@ npm ci --omit=dev && npm run setup && npm start
 > **起服 ≠ 能聊天。** CCM 的令牌 / 设备审批只决定手机能不能进主壳；**主机终端里的 `claude` 能不能正常跑完一轮会话**，才决定手机上能不能真对话。官方订阅要本机已 `/login`；第三方网关不走 Anthropic 登录、**不会**出现 `Not logged in`，它要的是 `ANTHROPIC_*` 真的生效。手机上收到 CLI 透传的具体报错反而是好消息——说明这条链路本身是通的。两种情况收敛到同一个动作：**先在主机终端把 `claude` 聊通一轮，再从手机重试**。验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
 
 要改代码或跑测试请 `git clone` 完整仓库。配置、非交互 setup、PWA、CLI hooks、**更新方式**：**→ [首次使用指南](docs/getting-started.md)**
+
+## 界面长什么样
+
+<details>
+<summary>展开 8 张截图</summary>
+
+![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
+</p>
+
+![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+
+</details>
 
 ## 它是怎么工作的
 

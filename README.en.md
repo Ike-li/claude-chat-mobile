@@ -14,15 +14,6 @@
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
-![Bring the claude in your terminal to your phone](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-en.png" width="23%" alt="Streaming Claude output on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-en.png" width="23%" alt="Tool calls and file changes, readable on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.png" width="23%" alt="Approving a tool call from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-sessions-en.png" width="23%" alt="Every session in the workspace, including ones started in a terminal">
-</p>
-
 ## What you do in the terminal, and how it works on the phone
 
 Walking away from the desk, the fear isn't losing sight of the output — it's that **it stalls on something that needs you and waits all night**. So these three first:
@@ -82,6 +73,32 @@ Open the address printed in the terminal on your phone. The first time a new dev
 > **A running server ≠ a working chat.** CCM's token and device approval only decide whether the phone gets into the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether you can actually talk. A Claude subscription needs that host signed in; a third-party gateway does not use Anthropic login and will **never** show `Not logged in` — it needs `ANTHROPIC_*` to actually take effect. A specific CLI error reaching your phone is good news: the link itself works. Both cases converge on one action: **get `claude` through a turn in your host terminal, then retry from the phone.** Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
 
 To change code or run tests, `git clone` the full repository instead. Configuration, non-interactive setup, PWA, CLI hooks and **how to update**: **→ [Getting Started](docs/getting-started.en.md)**
+
+## What it looks like
+
+<details>
+<summary>Show 8 screenshots</summary>
+
+> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
+
+![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
+</p>
+
+![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+
+</details>
 
 ## How it works
 
