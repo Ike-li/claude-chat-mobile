@@ -22,7 +22,9 @@
   - server：`node app/server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `app/src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。后者意味着 Access 开着时「已受信任的设备」这张表管不到隧道进来的连接（吊销无效）——要让它也生效，设 `DEVICE_APPROVAL_SCOPE=all` 并重启。
+  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。按 Host 路由的入口（cloudflared、配了 `server_name` 的 nginx）上，公网请求带的就是公网 Host，仍需设备 token；只有本机样 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。后者意味着 Access 开着时「已受信任的设备」这张表管不到隧道进来的连接（吊销无效）。
+  >
+  > ⚠️ **Host 是客户端自己填的头，不是物理位置。** 纯 TCP 转发（`ssh -R`、frp tcp、socat）不按 Host 路由，远程客户端发一个 `Host: localhost` 就能凑齐「peer 本机 + Host 本机」——peer 本来就是 loopback（转发落点在本机）。这类拓扑下持 `AUTH_TOKEN` 的远程来客会跳过设备审批。TCP 层面区分不了真本机浏览器和隧道转发进来的连接，所以**用这类打洞方式暴露时请设 `DEVICE_APPROVAL_SCOPE=all` 并重启**：它是覆盖全部路径的总开关（含 Access 那条与本机样 Host 那条）。此后本机浏览器首次也要批一次，用 `node scripts/device.js approve`、菜单栏，或跑 `npm start` 那个终端里按回车——这三条都不读任何网络判据。
 
 > **Cloudflare 是默认路径，不是硬依赖。** `CF_ACCESS_*` 三项留空即整层关闭，server 侧零改动，
 > 换加密隧道、自建反代或只用局域网都能跑。各拓扑的明文可见方、CCM 侧的连带变化与通用配置要点，

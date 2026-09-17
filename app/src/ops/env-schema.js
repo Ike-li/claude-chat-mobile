@@ -129,11 +129,11 @@ export const ENV_SCHEMA = {
     group: 'auth', kind: 'enum',
     options: [
       { value: '', label: t('默认：Cloudflare Access 已验的连接跳过设备审批（Access 的 2FA 已是更强边界）', 'Default: connections verified by Cloudflare Access skip device approval (Access 2FA is the stronger boundary)') },
-      { value: 'all', label: t('所有路径都要过设备审批，含 Cloudflare Access', 'Require device approval on every path, including Cloudflare Access') },
+      { value: 'all', label: t('所有路径都要过设备审批，含 Cloudflare Access 与本机样 Host', 'Require device approval on every path, including Cloudflare Access and loopback-looking Hosts') },
     ],
     label: t('设备审批管辖面', 'Device approval scope'),
-    help: t('选 all 之后，经 Cloudflare Access 进来的新设备也要批准一次，「已受信任的设备」里的吊销才对它们生效。**本机直连不受影响**（peer 与 Host 都是 localhost），那是信任表被清空后把设备批回来的自救通道。开启后第一台设备会落进待审：在电脑上用菜单栏、终端回车或 node scripts/device.js approve 批准。改这项要重启。',
-      'With all, a new device coming through Cloudflare Access must be approved once, and revoking it from the trusted list actually takes effect. Direct localhost access is unaffected — that is the recovery path when the trusted list is empty. After enabling, the first device lands in the pending list: approve it from the menu bar, the terminal, or node scripts/device.js approve. Requires a restart.'),
+    help: t('选 all 之后，经 Cloudflare Access 进来的新设备也要批准一次，「已受信任的设备」里的吊销才对它们生效；本机样 Host 那条路也一并关掉。后半条在纯 TCP 转发（ssh -R、frp tcp）下是必需的——那类隧道不按 Host 路由，而 Host 是客户端自己填的头，远程来客发 Host: localhost 就能冒充本机。开启后第一台设备会落进待审：在电脑上用菜单栏、终端回车或 node scripts/device.js approve 批准（这三条都不读网络判据）。改这项要重启。',
+      'With all, a new device coming through Cloudflare Access must be approved once, revoking it from the trusted list actually takes effect, and the loopback-looking-Host path is closed too. That last part matters under pure TCP forwarding (ssh -R, frp tcp): those tunnels do not route on Host, and Host is a header the client writes, so a remote client sending Host: localhost can pose as local. After enabling, the first device lands in the pending list: approve it from the menu bar, the terminal, or node scripts/device.js approve (none of which read network signals). Requires a restart.'),
   },
   CF_ACCESS_HOSTNAME: {
     group: 'auth', kind: 'text',
