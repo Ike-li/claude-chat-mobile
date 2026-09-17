@@ -80,6 +80,7 @@
 | `AUTH-02` | `ownsHost(host)` 为真时，验签失败**不得**回退 `AUTH_TOKEN` |
 | `AUTH-03` | 限速只打鉴权口；成功认证后的业务 500 不计入失败。本机来源的锁定**不得**文案成「有人在暴力尝试」 |
 | `AUTH-04` | 只在声明的可信拓扑下采信边缘注入头：公网 Host + loopback peer → `CF-Connecting-IP`；`TRUSTED_PROXY=loopback` + loopback peer → `X-Forwarded-For` **末跳**。LAN/直连、未声明、开关值写错，一律不采信（失败方向 = 合桶，不是拆桶）。限速桶与待审设备卡片上的来源 IP 取同一份判据（`clientSourceAddress`），不允许各算一份 |
+| `AUTH-06` | CCM 自己的控制面密钥（`AUTH_TOKEN` · `VAPID_*` · `NTFY_*` · `CF_ACCESS_*`）不得随子进程环境流给 claude。**这不是「裁剪终端等价性」而是恢复它**：普通终端里的 claude 本来就没有这几个键，它们只存在于 `ccm.config.json`，是 server 的投影把它们带进 `process.env` 的。反向同样要钉——`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量属于 claude，剥了会静默砍掉第三方网关那条支持路径 |
 | `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面还有一道早退**：CF Access 已启用且 `DEVICE_APPROVAL_SCOPE !== 'all'` 时直接 bypass，根本不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
