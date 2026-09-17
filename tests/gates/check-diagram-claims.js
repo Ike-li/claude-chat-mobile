@@ -152,8 +152,6 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
-  { diagram: '12', shown: 'check 链上的 14 道门禁',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 14 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -165,7 +163,13 @@ const CLAIMS = [
 // 2026-09-12：上一条（check 链 13 → 14 道，新增 check-shell-pitfalls）已随图重出补进 CLAIMS。
 // 图 12 的节点 sublabel、卡片标题、卡片清单与 diagrams/index.html 的摘要四处同步改了，
 // 清单顺序与 package.json 的 check 链逐项对应（shell 陷阱落在破坏性删除与不变量编号之间）。
-const PENDING_CLAIMS = [];
+// 2026-09-17：check 链 14 → 15 道（新增 check-config-gitignored，守 CONFIG-03）。
+// 按本文件上面那条约定从 CLAIMS 挪下来：图 12 的四处文字仍写着 14，代码侧先被守住。
+// 重出图之后把这条挪回 CLAIMS，`shown` 改成图上的新文字。
+const PENDING_CLAIMS = [
+  { diagram: '12', todo: 'check 链 14 → 15 道（新增 check-config-gitignored）',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 15 },
+];
 
 function git(args) {
   // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid

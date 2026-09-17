@@ -189,7 +189,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
 | 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
-| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**没有任何测试或门禁锁住这一条**——`config-file.test.mjs` 守的是 CONFIG-01/02（源选择与可表达性），全仓无 `git check-ignore` 类断言。删掉那三行 `.gitignore` 不会让任何东西变红 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；规则在 `.gitignore`（`ccm.config.json` / `ccm.config.*.json` / `ccm.config.json.*` 三条）。**由 `CONFIG-03` 钉住**（`tests/gates/check-config-gitignored.js`，在 check 链上，逐条跑 `git check-ignore` + 三条反向锚点；**必须是门禁不能是 `tests/invariants/` 下的用例**——它依赖 git 元数据，而 linked worktree 检出的 `.git` 在容器里解析不到，同 `inventory:check` 那条）——2026-09-17 之前这里确实没有任何测试或门禁，删掉那三行不会让任何东西变红。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，`CONFIG-03` 管的是「路径会不会被收进来」 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 | 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
 | CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |
