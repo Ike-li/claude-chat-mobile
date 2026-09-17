@@ -21,6 +21,7 @@
 import { isSerializableEnvValue, maskSecret, shellOverriddenKeys } from './env-file.js';
 // 与 server 启动、两个 doctor 共用同一份 loopback 判据：这里若自己再写一遍「什么算本机地址」，
 // 面板放行的配置就可能与 server 实际拒绝的配置对不上。
+import { homedir } from 'node:os';
 import { isLoopbackBindHost } from '../shared/bind-host.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
@@ -170,11 +171,15 @@ export const ENV_SCHEMA = {
   WORKDIRS: {
     group: 'runtime', kind: 'list', reload: 'hot',
     label: t('工作区列表', 'Workspaces'),
+    // 文案曾写「手机面板没有数组编辑器，故此处只读」——2026-09-11 起前端有了 buildListEditor、
+    // readonly 也已是 false，那句话从此在说一件代码里不成立的事（2026-09-17 安全审查 M2 顺带查出）。
     help: t('每项是绝对路径，或 {path, sessionLimit}。**第一项就是手机端默认打开的目录**。'
-      + '改完即生效，无需重启。当前列表见工作区抽屉；编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
+      + '改完即生效，无需重启。不能填家目录本身或 /、/Users、/home 这类过宽的根——'
+      + '范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。',
       'Each entry is an absolute path, or {path, sessionLimit}. **The first entry is the one your '
-      + 'phone opens by default.** Hot-reloads without a restart. See the workspace drawer for the '
-      + 'current list; edit via CLI or desktop (read-only here).'),
+      + 'phone opens by default.** Hot-reloads without a restart. It cannot be your home directory '
+      + 'itself, nor an overly broad root such as /, /Users or /home — everything in scope is readable '
+      + 'by the remote entrypoint, and writable too while FILE_EDIT is on (the default).'),
   },
   WORK_DIRS_FILE: {
     group: 'runtime', kind: 'path', mustExist: true,
@@ -391,13 +396,44 @@ function checkUrl(key, value, def) {
   return ok ? null : `${def.label.zh} 只支持 http/https${allowMailto ? '/mailto' : ''}`;
 }
 
+// 授权工作区的「过宽根」判据。**装机向导与配置写入侧共用这一份**（M2，2026-09-17 安全审查）。
+//
+// 此前只有向导拒绝家目录（scripts/setup.js 的 normalizeSetupWorkDir → work_dir_is_home，
+// README 也明写「不要把整个 Home 目录加入工作区」），而写入侧只查「是不是绝对路径」。
+// 于是装机时被硬拒的东西，运行时从一台已批准设备改一行就能写进去——而 WORKDIRS 是全表唯一的
+// `reload: 'hot'`，**保存即生效、不需要重启**。两道闸不同源就等于没有闸。
+//
+// 后果不止「多授权一个目录」：FILE_EDIT 缺省是开的（TOGGLE_OFF：空=开），范围内的已存在文件
+// 可经文件编辑器直写、不过 Agent 审批链。把 $HOME 写进去等于把 ~/.ssh、~/.aws、浏览器 profile
+// 一并挂到远程入口上。
+//
+// 与 SCOPE-03 的分工：那条管「启动时一个都解析不出 → 拒绝启动、绝不回落家目录」，管的是**回落**；
+// 这里管**显式写入**。两条路不同，家目录暴露的后果相同。
+//
+// 按**路径段**比较而不是字符串前缀：`/home/tester2` 与家目录 `/home/tester` 只差一个字符，
+// 用 startsWith 判会把前者一并误伤，而误伤的症状（面板一保存就报错）比漏拦更容易让人去把
+// 这道闸整个删掉。
+const OVERLY_BROAD_ROOTS = ['/', '/Users', '/home', '/root'];
+
+export function overlyBroadWorkdir(rawPath, home) {
+  const path = String(rawPath ?? '').trim();
+  if (!path) return null;
+  // 去掉尾随斜杠再比：`/home/tester/` 与 `/home/tester` 是同一个目录，
+  // 不归一的话加个斜杠就绕过整道闸。根目录 '/' 本身不能被去成空串。
+  const norm = s => (s.length > 1 ? s.replace(/\/+$/, '') : s);
+  const p = norm(path);
+  if (OVERLY_BROAD_ROOTS.includes(p)) return 'work_dir_too_broad';
+  if (home && p === norm(String(home))) return 'work_dir_is_home';
+  return null;
+}
+
 // list（当前只有 WORKDIRS）的结构校验。
 //
 // 条目形状必须与 src/sessions/workdirs.js 的 normalizeWorkdirEntries 接受的一致：
 // `string` 或 `{path, sessionLimit?}`。那边对非法条目是 **warn-skip 不挡启动**，很合理 ——
 // 一个坏条目不该让整台 server 起不来。但正因为它宽容，**写入这一侧必须严**：
 // 放进去一个形状不对的条目，用户看到的是「保存成功」，得到的是一个静默少了一项的白名单。
-function checkList(value, def) {
+function checkList(value, def, home) {
   if (!Array.isArray(value)) return `${def.label.zh} 必须是数组（每项为路径字符串或 {path, sessionLimit}）`;
   for (const entry of value) {
     const path = typeof entry === 'string' ? entry
@@ -410,6 +446,17 @@ function checkList(value, def) {
     // 整棵树放进白名单。白名单是 claude 的文件作用域边界，不是展示用的列表。
     if (!path.startsWith('/')) {
       return `${def.label.zh} 的每项必须是绝对路径（启动后 cwd 未必是仓库根），收到：${JSON.stringify(path)}`;
+    }
+    // 过宽根：与装机向导同一份判据（见 overlyBroadWorkdir 头注）。装机时被硬拒的东西，
+    // 不能从运行时面板绕进来——WORKDIRS 是热加载的，写进去立刻生效。
+    const risk = overlyBroadWorkdir(path, home);
+    if (risk === 'work_dir_is_home') {
+      return `${def.label.zh} 不能是整个家目录（${path}）——范围内的文件对远程入口全部可读，`
+        + `FILE_EDIT 缺省开着时还可直写。请改成家目录下的具体项目目录。`;
+    }
+    if (risk === 'work_dir_too_broad') {
+      return `${def.label.zh} 的 ${JSON.stringify(path)} 过宽（根目录或所有家目录之父）——`
+        + `那等于把整台机器挂给远程入口。请改成具体的项目目录。`;
     }
     // sessionLimit 非法时 normalizeWorkdirEntries 只 warn-skip 并静默回退默认值 ——
     // 用户看到「保存成功」，拿到的是一个和自己写的不一样的配置。写入侧要严。
@@ -649,7 +696,9 @@ export function validateEnvChanges(changes, d) {
     // list 是唯一的非字符串 kind，必须在「必须是字符串」与 .env 序列化检查之前分流：
     // 那两道都是为 .env 行格式写的，对数组会先 String(value) 折成 "/a,/b" 再放行。
     if (def.kind === 'list') {
-      const err = checkList(value, def);
+      // home 从 deps 注入、缺省读真实家目录：过宽根判据要拿它比对，而单测必须能喂一个
+      // 假家目录——真跑 homedir() 的话用例在不同开发机上判据都不一样。
+      const err = checkList(value, def, d?.home ?? homedir());
       if (err) results.push({ key, level: 'error', message: err });
       continue;
     }

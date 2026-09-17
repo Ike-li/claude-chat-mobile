@@ -166,6 +166,61 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
       assert.equal(r.ok, false, `sessionLimit=${JSON.stringify(n)} 应被拒绝`);
     }
   });
+
+  // ── 过宽根（M2，2026-09-17 安全审查）────────────────────────────────────
+  //
+  // 【两道闸不同源就等于没有闸】装机向导硬拒家目录（setup.js 的 normalizeSetupWorkDir →
+  // work_dir_is_home，README 也明写「不要把整个 Home 目录加入工作区」），而写入侧此前**只查
+  // 是不是绝对路径**。于是装机时被硬拒的东西，运行时从一台已批准设备改一行就能写进去——
+  // 而 WORKDIRS 是全表唯一的 reload:'hot'，**保存即生效、不需要重启**。
+  //
+  // 后果不是「多授权了一个目录」：FILE_EDIT 缺省是开的（TOGGLE_OFF：空=开），范围内的已存在
+  // 文件可经文件编辑器直写、不过 Agent 审批链。把 $HOME 写进去，等于把 ~/.ssh、~/.aws、
+  // 浏览器 profile 一并挂到远程入口上。
+  //
+  // 【与 SCOPE-03 的分工】那条管「启动时一个都解析不出 → 拒绝启动、绝不回落家目录」，
+  // 管的是**回落**；这里管**显式写入**。两条路不同，家目录暴露的后果相同，都要堵。
+  const homeDeps = (home = '/home/tester') => ({ ...envDeps(), home });
+
+  test('家目录本身被拒——装机向导拒的东西，运行时不能从面板绕进来', () => {
+    for (const home of ['/home/tester', '/Users/tester']) {
+      const r = validateEnvChanges({ WORKDIRS: [home] }, homeDeps(home));
+      assert.equal(r.ok, false, `${home} 是家目录，应被拒绝`);
+      assert.match(r.results.find(x => x.key === 'WORKDIRS').message, /家目录/);
+    }
+  });
+
+  test('家目录以 {path} 形态写入同样被拒——换个包装不该换判据', () => {
+    const r = validateEnvChanges({ WORKDIRS: [{ path: '/home/tester', sessionLimit: 2 }] }, homeDeps());
+    assert.equal(r.ok, false);
+  });
+
+  test('尾随斜杠不绕过——/home/tester/ 与 /home/tester 是同一个目录', () => {
+    const r = validateEnvChanges({ WORKDIRS: ['/home/tester/'] }, homeDeps());
+    assert.equal(r.ok, false, '规范化必须在比较之前做，否则加个斜杠就能绕过整道闸');
+  });
+
+  test('根与家目录之父被拒——它们比家目录还宽', () => {
+    for (const bad of ['/', '/Users', '/home']) {
+      const r = validateEnvChanges({ WORKDIRS: [bad] }, homeDeps());
+      assert.equal(r.ok, false, `${bad} 过宽，应被拒绝`);
+    }
+  });
+
+  // 反向：这道闸必须**只**拦过宽根。拦过头会让正常安装存不了配置，而那个症状
+  // （「面板一保存就报错」）比漏拦更容易被当成 bug 绕过去——用户会去把这道闸删掉。
+  test('家目录下的子目录照常放行（这道闸不是恒拒）', () => {
+    for (const ok of ['/home/tester/code', '/home/tester/code/proj', '/tmp/x', '/opt/work']) {
+      const r = validateEnvChanges({ WORKDIRS: [ok] }, homeDeps());
+      assert.equal(r.ok, true, `${ok} 是正常工作区，不该被拦`);
+    }
+  });
+
+  // 前缀碰撞：/home/tester2 与家目录 /home/tester 只差一个字符，按字符串前缀判会误伤。
+  test('前缀相近但不同的目录不被误伤（/home/tester2 vs 家目录 /home/tester）', () => {
+    const r = validateEnvChanges({ WORKDIRS: ['/home/tester2'] }, homeDeps());
+    assert.equal(r.ok, true, '按路径段比较，不是按字符串前缀');
+  });
 });
 
 // ── 派生放行面（2026-09-11 worktree 会话可见性）────────────────────────────
