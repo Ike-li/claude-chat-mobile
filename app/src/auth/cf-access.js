@@ -155,6 +155,16 @@ export async function verifyAccessJwt(token) {
   }
 
   // 100% 本地运算进行 JWT 签名验证，零网络开销
+  //
+  // 【为什么不写 algorithms】看着像少了一道 alg confusion 防护（拿 RSA 公钥的 modulus 当 HMAC
+  // secret 去签 HS256，kid 仍指向同一把 key），实测不是这么回事：createLocalJWKSet 解析出的是
+  // 非对称 KeyObject，jose 在选 key 那一步就拒了。2026-09-17 安全审查实验——伪造 token 头
+  // { alg: 'HS256', kid: 'k1' } 得到 `ERR_JOSE_NOT_SUPPORTED: Unsupported "alg" value for a
+  // JSON Web Key Set`；同一装置下合法 RS256 正常返回 payload（对照组，证明实验有区分度）。
+  //
+  // 补上去是零安全增量，却有两处代价：① 写不出一条会变红的测试——两侧都绿正是 docs/testing.md
+  // 点名的假绿形态；② CF 若在某些配置下改签 ES256，写死 ['RS256'] 会让用户突然登不进去，
+  // 失败方向从"挡住伪造"变成可用性事故。**下次审查看到这里别再提，先重跑上面那个实验。**
   const { payload } = await jwtVerify(token, localResolver, { issuer, audience: aud });
   return payload;
 }
