@@ -22,6 +22,8 @@ import { isSerializableEnvValue, maskSecret, shellOverriddenKeys } from './env-f
 // 与 server 启动、两个 doctor 共用同一份 loopback 判据：这里若自己再写一遍「什么算本机地址」，
 // 面板放行的配置就可能与 server 实际拒绝的配置对不上。
 import { homedir } from 'node:os';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { isLoopbackBindHost } from '../shared/bind-host.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
@@ -415,15 +417,45 @@ function checkUrl(key, value, def) {
 // 这道闸整个删掉。
 const OVERLY_BROAD_ROOTS = ['/', '/Users', '/home', '/root'];
 
-export function overlyBroadWorkdir(rawPath, home) {
+// 【必须先归一再比，只去尾随斜杠远远不够】下游 sessions/workdirs.js 的 resolveWorkdirs 会对
+// 每一项做 realpathSync。于是任何**等价但非规范**的写法——`/home/you/.`、`/tmp/../home/you`、
+// `/home//you`、以及指向家目录的 symlink——都能通过一个只比字符串的校验，然后被还原成家目录
+// 本身放进白名单。闸形同虚设（2026-09-17 PR #80 review 抓到，实测四种形态全部绕过）。
+//
+// 两层归一各管一档，缺一不可：
+//   · resolve()：词法层，吃掉 . / .. / 重复斜杠 / 尾随斜杠。纯字符串运算，对不存在的路径也成立。
+//   · realpathSync()：落点层，吃掉 symlink。词法归一看不见 symlink，而 resolveWorkdirs 用的
+//     正是它——两侧判据不同源就还能绕。
+//
+// realpath 对**尚不存在**的路径会抛：那时退回词法结果继续判，而不是放行或一律拒。用户完全
+// 可能先把工作区配好再去建目录；而「归一之后就是 /home」这种，realpath 抛了也照样得拦住。
+//
+// 【残留的 TOCTOU】写入通过之后、resolveWorkdirs 读到之前，那个路径仍可能被换成指向家目录的
+// symlink。写入侧的校验关不掉这个窗口——真要关得在 resolveWorkdirs 那侧也判一次。没有在本次
+// 一并做：那会改变**启动/热加载**的行为，已经把 $HOME 配在 WORKDIRS 里的存量安装会突然失去
+// 工作区，属于另一个量级的变更，应单独决策。
+// 返回 { lexical, real } 两种形态。**两种都要留着比**，只比一种都会漏：
+//   · 只比落点：macOS 上 realpath('/home') 是 `/System/Volumes/Data/home`，字面写 `/home` 就绕过了
+//     （实测，这正是本判据第一版漏掉的那格）。各平台的规范形态不可能逐个枚举。
+//   · 只比词法：symlink 看不见，指向家目录的链接照样通过。
+// 任一形态命中即拒，失败方向是拒绝。
+function workdirForms(rawPath) {
   const path = String(rawPath ?? '').trim();
   if (!path) return null;
-  // 去掉尾随斜杠再比：`/home/tester/` 与 `/home/tester` 是同一个目录，
-  // 不归一的话加个斜杠就绕过整道闸。根目录 '/' 本身不能被去成空串。
-  const norm = s => (s.length > 1 ? s.replace(/\/+$/, '') : s);
-  const p = norm(path);
-  if (OVERLY_BROAD_ROOTS.includes(p)) return 'work_dir_too_broad';
-  if (home && p === norm(String(home))) return 'work_dir_is_home';
+  const lexical = resolve(path);
+  let real = lexical;
+  try { real = realpathSync(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
+  return { lexical, real };
+}
+
+export function overlyBroadWorkdir(rawPath, home) {
+  const p = workdirForms(rawPath);
+  if (!p) return null;
+  if (OVERLY_BROAD_ROOTS.includes(p.lexical) || OVERLY_BROAD_ROOTS.includes(p.real)) {
+    return 'work_dir_too_broad';
+  }
+  const h = home ? workdirForms(home) : null;
+  if (h && (p.lexical === h.lexical || p.real === h.real)) return 'work_dir_is_home';
   return null;
 }
 

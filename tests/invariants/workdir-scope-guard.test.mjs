@@ -221,6 +221,74 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
     const r = validateEnvChanges({ WORKDIRS: ['/home/tester2'] }, homeDeps());
     assert.equal(r.ok, true, '按路径段比较，不是按字符串前缀');
   });
+
+  // ★ 只去尾随斜杠是不够的（2026-09-17 由 PR #80 的 review 抓到，实测确认可绕过）。
+  // 下游 resolveWorkdirs 会 realpathSync 每一项，于是 `/home/tester/.` 这种**等价但非规范**的
+  // 写法通过写入侧校验之后，会被还原成家目录本身放进白名单——闸形同虚设。
+  // 判据必须先归一再比：词法归一（resolve）吃掉 . / .. / 重复斜杠，realpath 吃掉 symlink。
+  test('等价的非规范路径不得绕过——下游会 realpath 还原成家目录', () => {
+    for (const bad of [
+      '/home/tester/.',            // 尾随 .
+      '/home/tester/./',           // 尾随 ./
+      '/tmp/../home/tester',       // 经 .. 绕回来
+      '/home/tester/../tester',    // 出去再回来
+      '/home//tester',             // 重复斜杠
+    ]) {
+      const r = validateEnvChanges({ WORKDIRS: [bad] }, homeDeps());
+      assert.equal(r.ok, false, `${bad} 归一之后就是家目录，应被拒`);
+    }
+    // 根的等价写法同样要拦
+    for (const bad of ['/.', '/./', '//', '/tmp/..']) {
+      const r = validateEnvChanges({ WORKDIRS: [bad] }, homeDeps());
+      assert.equal(r.ok, false, `${bad} 归一之后就是根，应被拒`);
+    }
+  });
+
+  test('归一之后落在家目录下的子目录仍照常放行（归一不等于一律拒）', () => {
+    for (const ok of ['/home/tester/./code', '/home/tester/code/../code', '/home/tester//code']) {
+      const r = validateEnvChanges({ WORKDIRS: [ok] }, homeDeps());
+      assert.equal(r.ok, true, `${ok} 归一之后是 /home/tester/code，应放行`);
+    }
+  });
+
+  // symlink 是词法归一吃不掉的那一档：resolve() 只看字符串，realpath 才看得到落点。
+  // 而 resolveWorkdirs 用的正是 realpathSync —— 两侧判据不同源就还是能绕。
+  test('指向家目录的 symlink 被拒（词法归一吃不掉，必须 realpath）', { skip: process.platform === 'win32' }, () => {
+    const tmpBase = mkdtempSync(join(tmpdir(), 'ccm-inv-homelink-'));
+    try {
+      const fakeHome = realpathSync(mkdtempSync(join(tmpBase, 'home-')));
+      const link = join(tmpBase, 'looks-like-a-project');
+      symlinkSync(fakeHome, link);
+      const r = validateEnvChanges({ WORKDIRS: [link] }, { ...envDeps(), home: fakeHome });
+      assert.equal(r.ok, false, 'symlink 的真实落点是家目录，下游 realpath 之后就是家目录本身');
+    } finally {
+      rmSync(tmpBase, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp 出来的一次性目录
+    }
+  });
+
+  // 反向：指向普通目录的 symlink 不该被误伤。realpath 一旦引入，很容易把「解析失败」
+  // 或「解析到别处」一律判成危险。
+  test('指向普通目录的 symlink 照常放行（realpath 不是用来一律拒的）', { skip: process.platform === 'win32' }, () => {
+    const tmpBase = mkdtempSync(join(tmpdir(), 'ccm-inv-projlink-'));
+    try {
+      const fakeHome = realpathSync(mkdtempSync(join(tmpBase, 'home-')));
+      const project = realpathSync(mkdtempSync(join(tmpBase, 'proj-')));
+      const link = join(tmpBase, 'project-link');
+      symlinkSync(project, link);
+      const r = validateEnvChanges({ WORKDIRS: [link] }, { ...envDeps(), home: fakeHome });
+      assert.equal(r.ok, true, '落点是普通目录，应放行');
+    } finally {
+      rmSync(tmpBase, { recursive: true, force: true }); // safe-rm: 本用例 mkdtemp 出来的一次性目录
+    }
+  });
+
+  // 还不存在的目录：realpath 会抛。那时退回词法归一的结果继续判，而不是放行或一律拒——
+  // 用户完全可能先把工作区配好再去建目录。
+  test('尚不存在的路径按词法归一判，不因 realpath 抛错而放行', () => {
+    assert.equal(validateEnvChanges({ WORKDIRS: ['/home/tester/no-such-dir-yet'] }, homeDeps()).ok, true);
+    assert.equal(validateEnvChanges({ WORKDIRS: ['/home/tester/no-such/../..'] }, homeDeps()).ok, false,
+      '归一之后是 /home，realpath 抛了也得拦住');
+  });
 });
 
 // ── 派生放行面（2026-09-11 worktree 会话可见性）────────────────────────────
