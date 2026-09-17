@@ -182,6 +182,34 @@ test('sanitizePath: /var 路径被替换', () => {
   assert.equal(sanitizePath('/var/log/app.log'), '<var>/log/app.log');
 });
 
+// M1（2026-09-17 安全审查）：logs:server 把服务端自己的日志原样回给已鉴权会话，而启动横幅
+// 曾往日志里写完整的 `/#token=…`。链条是：经 Cloudflare Access 进来的会话默认**不需要**
+// AUTH_TOKEN（设备审批也 bypass），它读一次 logs:server 就能把 token 抠出来，之后可走 LAN、
+// 可在 Access 吊销后继续用。横幅那头已经改成永不打完整 token，但日志文件里的历史行还在，
+// 且 LOG_FILE 里可能有别的进程写进来的凭据——所以回传这一侧也要脱敏，两道各自独立。
+//
+// 这条断言是 logs:server 那个 .map(sanitize) 的**承重点**：若 sanitize 压根不认这个形态，
+// 那行改动就只是摆设。所以先把判据钉在这里，而不是钉在「调用了 sanitize」上。
+test('sanitize: 启动横幅形态的 /#token=<64hex> 被脱敏', () => {
+  const token = 'a'.repeat(64);
+  const line = `  可访问: http://192.168.1.9:3000/#token=${token}  ← 同 WiFi 时可用`;
+  const out = sanitize(line);
+  assert.ok(!out.includes(token), `token 明文不得留在脱敏结果里：${out}`);
+  assert.ok(out.includes('192.168.1.9:3000'), '只脱敏凭据，地址要留着——否则日志失去排查价值');
+});
+
+test('sanitize: 真实长度的十六进制 AUTH_TOKEN 各形态都被脱敏', () => {
+  const token = '3f'.repeat(32); // 32 字节 hex = 64 字符，与 config.js generateToken 同长
+  for (const line of [
+    `AUTH_TOKEN=${token}`,
+    `?token=${token}`,
+    `"authToken":"${token}"`,
+    `auth_token: ${token}`,
+  ]) {
+    assert.ok(!sanitize(line).includes(token), `未脱敏：${line}`);
+  }
+});
+
 test('sanitizePath: 不匹配路径原样返回', () => {
   assert.equal(sanitizePath('/etc/hosts'), '/etc/hosts');
 });
