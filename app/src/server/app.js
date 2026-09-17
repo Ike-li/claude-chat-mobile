@@ -62,6 +62,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
+import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
@@ -794,6 +795,18 @@ io.use(async (socket, next) => {
     let accessEnabled = false;
 
     if (publicHost) {
+      // 跨站握手门（M3，2026-09-17 安全审查）。**只在这条路上判**：这里的凭据是边缘按 Cookie
+      // 注入的 JWT，浏览器会自动带上；而 AUTH_TOKEN 那条路的令牌在 handshake.auth 的 JSON 里、
+      // 由页面 JS 从 localStorage 读出来，浏览器不会自动附加，本来就不可 CSRF。判据与理由见
+      // auth/origin-gate.js 头注。
+      //
+      // 放在验签**之前**：验签成功才是「边缘认可了这个 Cookie」，那正是要挡的那一格，
+      // 挡在后面等于先把 CSRF 走通了再补一刀。不计入限速——它不是一次鉴权失败，
+      // 而是一个来源不对的请求，计进去会让受害者被自己浏览器发出的跨站连接越锁越久。
+      if (!originAllowedOnPublicHost(socket.handshake.headers.origin, authStrategy.publicHostname())) {
+        console.warn(`[conn] ${ip} 公网 Host 上的握手 Origin 不符（${socket.handshake.headers.origin ?? '(无)'}），拒绝`);
+        return next(new Error('forbidden origin'));
+      }
       try {
         await authStrategy.verifyRequest(socket.handshake.headers);
         authPassed = true;
