@@ -254,7 +254,7 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来，所以下游各层永远建立在「对方已持令牌」之上。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。它是**可选的**：第一层 + 第三层就是公网基线（§1「公网入口」），加层开着时替代第三层，关着时第三层自动顶上——两种状态都是完整防线，doctor 不把「未开加层」算成缺陷。
 
-第三层（设备信任）对**真·本机直连**放行——peer 是 loopback 且 Host 也是 loopback 名。那是第二因子的豁免，不是 token 的豁免。
+第三层（设备信任）对**本机样连接**放行——peer 是 loopback 且 Host 也是 loopback 名。那是第二因子的豁免，不是 token 的豁免。**Host 是客户端填的头**：纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 即可满足两个条件（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，故不再往判据里加条件，而是把 `DEVICE_APPROVAL_SCOPE=all` 定成**覆盖全部路径的总开关**（含 Access 那条与本机样那条；2026-09-17 安全审查 H1，`DEVICE-01`）。默认值不变——翻默认等于给既有安装投递一次远程锁死。
 
 Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不符、审批/提问 TTL 到期、重启后 pending 审批。
 

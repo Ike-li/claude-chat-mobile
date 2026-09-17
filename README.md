@@ -130,7 +130,7 @@ npm ci --omit=dev && npm run setup && npm start
 1. **单用户。** 没有多用户或租户隔离，鉴权通过后的权限就是运行 `claude` 的本机账号的权限。
 2. **没有 Token 就不启动。** `AUTH_TOKEN` 是启动前提，任何绑定模式都一样——本机浏览器打开也要令牌，不存在「本地免鉴权」。
 3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORKDIRS`。别为了方便把整个 Home 目录加进去。
-4. **新设备需要信任。** 除本机直连或已通过公网身份层（当前为 Cloudflare Access）外，持正确 Token 的新设备仍需一次审批。注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
+4. **新设备需要信任。** 除本机样 Host 的直连或已通过公网身份层（当前为 Cloudflare Access）外，持正确 Token 的新设备仍需一次审批。两点注意：**开着 Access 时它替代设备审批**，那张信任表管不到经它进来的连接；**本机判据读的是 Host 头，而 Host 由客户端填**，纯 TCP 转发（`ssh -R`、frp tcp）下远程来客发 `Host: localhost` 即可冒充本机。想让审批对所有路径生效，设 `DEVICE_APPROVAL_SCOPE=all`。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有规则继续生效，公网使用前应检查 Bash、Write 的自动放行规则。
 6. **文件编辑属于直接写入。** 内置编辑器**不经过 Agent 的工具审批链**（有范围校验、大小限制、哈希冲突检测和审计），`FILE_EDIT=off` 可关闭，长期公网暴露建议关闭。
 
