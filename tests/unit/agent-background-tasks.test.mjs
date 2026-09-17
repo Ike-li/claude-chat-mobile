@@ -56,8 +56,13 @@ test.describe('buildAgentQueryOptions — resolvedEnv 白名单（防 worktree s
     s.resolvedEnv = { PORT: '9999', AUTH_TOKEN: 'stolen', CCM_DATA_DIR: '/evil' };
     const opts = buildAgentQueryOptions(s, { PORT: '3000', AUTH_TOKEN: 'real-secret', CCM_DATA_DIR: '/real' });
     assert.equal(opts.env.PORT, '3000', 'worktree resolvedEnv 不得覆盖服务端 PORT');
-    assert.equal(opts.env.AUTH_TOKEN, 'real-secret', 'worktree resolvedEnv 不得覆盖服务端 AUTH_TOKEN');
     assert.equal(opts.env.CCM_DATA_DIR, '/real', 'worktree resolvedEnv 不得覆盖服务端 CCM_DATA_DIR');
+    // AUTH_TOKEN 从「服务端原值存活」改成「整个键不存在」（H1，2026-09-17）：child-env.js 现在把
+    // CCM 自己的控制面密钥剥出子进程。本用例守的不变量没变——「worktree 的值不得生效」——
+    // 而且守得更紧了：键都不在，'stolen' 更不可能赢。把原断言写成 `=== 'real-secret'` 是拿
+    // 实现细节（原值存活）表达意图（篡改无效），换实现就会红在一条其实没坏的事情上。
+    assert.ok(!Object.hasOwn(opts.env, 'AUTH_TOKEN'), 'AUTH_TOKEN 不得出现在子进程 env 里');
+    assert.ok(!Object.values(opts.env).includes('stolen'), 'worktree 注入的 AUTH_TOKEN 不得以任何键名生效');
     s.dispose();
   });
 

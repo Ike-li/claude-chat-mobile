@@ -25,6 +25,87 @@ test('sdkChildEnv：SDK 子进程带项目自有 origin 标记且调用方不能
   });
 });
 
+// H1（2026-09-17 安全审查）：这里此前把整份 process.env 原样传给 claude，而 server 会把
+// ccm.config.json 的值投影进 process.env（app/src/ops/config.js 的投影循环）。于是 AUTH_TOKEN /
+// VAPID 私钥 / ntfy 令牌都进了子进程——**比用户终端里的 claude 更宽**：在普通终端里跑 claude，
+// 进程环境里根本没有这几个键，它们只存在于 CCM 自己的配置文件里。
+//
+// 后果不是"又一次本地 shell"：工作区里的提示注入 + 一次已放行的 Bash，模型就能 `echo $AUTH_TOKEN`。
+// 拿到的是 Web 控制面钥匙，公网绑着时等于远程入口凭据。
+//
+// 剥掉它们**不违反**"终端等价性"，恰恰是恢复它：终端里的 claude 本来就没有这些。
+test('sdkChildEnv：剥掉 CCM 自己的控制面密钥（AUTH_TOKEN / VAPID_* / NTFY_* / CF_ACCESS_*）', () => {
+  const out = sdkChildEnv({
+    AUTH_TOKEN: 'ccm-control-plane-key',
+    VAPID_PRIVATE_KEY: 'vapid-priv',
+    VAPID_PUBLIC_KEY: 'vapid-pub',
+    VAPID_SUBJECT: 'mailto:someone@example.com',
+    NTFY_TOKEN: 'ntfy-tk',
+    NTFY_TOPIC: 'my-secret-topic',
+    NTFY_URL: 'https://ntfy.sh',
+    CF_ACCESS_AUD: 'aud-value',
+    CF_ACCESS_HOSTNAME: 'ccm.example.com',
+    CF_ACCESS_TEAM: 'myteam',
+  });
+  for (const key of Object.keys(out)) {
+    assert.ok(!key.startsWith('VAPID_'), `VAPID_* 不得进子进程：${key}`);
+    assert.ok(!key.startsWith('NTFY_'), `NTFY_* 不得进子进程：${key}`);
+    assert.ok(!key.startsWith('CF_ACCESS_'), `CF_ACCESS_* 不得进子进程：${key}`);
+  }
+  assert.ok(!Object.hasOwn(out, 'AUTH_TOKEN'), 'AUTH_TOKEN 是控制面钥匙，绝不进子进程');
+  // 值层面也查一遍：换个键名把同一个秘密带出去，上面的键名断言看不见。
+  const values = Object.values(out);
+  assert.ok(!values.includes('ccm-control-plane-key'));
+  assert.ok(!values.includes('vapid-priv'));
+  assert.ok(!values.includes('my-secret-topic'));
+});
+
+// 反向：剥得过头会静默砍掉第三方网关那条支持路径（走网关的用户靠 shell 里 export 的 ANTHROPIC_*
+// 生效），而症状是"claude 在 web 里连不上网关、在终端里好好的"，很难归因到这一行。
+// 两侧都断言，缺一侧就只证明了"改动有效"或"改动无害"中的一个。
+test('sdkChildEnv：claude 自己那份环境原样透传（终端等价性不能被剥没）', () => {
+  const out = sdkChildEnv({
+    ANTHROPIC_BASE_URL: 'https://gateway.example',
+    ANTHROPIC_AUTH_TOKEN: 'gateway-key',
+    ANTHROPIC_API_KEY: 'sk-x',
+    CLAUDE_CODE_EFFORT_LEVEL: 'high',
+    HTTPS_PROXY: 'http://127.0.0.1:7890',
+    HTTP_PROXY: 'http://127.0.0.1:7890',
+    NO_PROXY: 'localhost',
+    PATH: '/usr/bin',
+    HOME: '/home/u',
+  });
+  assert.equal(out.ANTHROPIC_BASE_URL, 'https://gateway.example');
+  assert.equal(out.ANTHROPIC_AUTH_TOKEN, 'gateway-key', '网关凭据是 claude 的，不是 CCM 的——不能剥');
+  assert.equal(out.ANTHROPIC_API_KEY, 'sk-x');
+  assert.equal(out.CLAUDE_CODE_EFFORT_LEVEL, 'high');
+  assert.equal(out.HTTPS_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(out.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(out.NO_PROXY, 'localhost');
+  assert.equal(out.PATH, '/usr/bin');
+  assert.equal(out.HOME, '/home/u');
+});
+
+// 漂移闸：child-env.js 在 src/shared（叶子层），**不能** import src/ops 的 env-schema —— 模块边界
+// 守卫会拦（check 一环）。所以那份剥离清单只能是硬编码的，而硬编码清单会随 schema 新增密钥而过期，
+// 且过期的表现是"新密钥照样进子进程"，没有任何东西会报错。
+// 这条测试就是那个报错：schema 里每一个标了密钥的键，都必须被 sdkChildEnv 剥掉。
+test('sdkChildEnv：env-schema 里每一个密钥键都必须被剥掉（防清单随 schema 漂移）', async () => {
+  const { ENV_SCHEMA } = await import('../../app/src/ops/env-schema.js');
+  // 与 env-schema.js 内部 buildEnvView 同一条判据（`!!def.secret || def.kind === 'secret'`）
+  const secretKeys = Object.entries(ENV_SCHEMA)
+    .filter(([, def]) => !!def.secret || def.kind === 'secret')
+    .map(([key]) => key);
+
+  assert.ok(secretKeys.length >= 4, `schema 里应有若干密钥键，实际 ${secretKeys.length} 个——判据可能改了`);
+  const probe = Object.fromEntries(secretKeys.map(k => [k, `SECRET_VALUE_OF_${k}`]));
+  const out = sdkChildEnv(probe);
+  for (const key of secretKeys) {
+    assert.ok(!Object.hasOwn(out, key),
+      `env-schema 把 ${key} 标成了密钥，但 child-env.js 的剥离清单漏了它——把它加进去`);
+  }
+});
+
 // BE-008：isBusy 综合忙判定——effort 切档需 dispose+resume 置换实例，只有完全 idle 才能安全置换。
 // 后台任务(bgTasks)/挂起审批/挂起问题都【不】计入 pendingTurns，只查 pendingTurns 会在它们进行时误杀。
 test.describe('isBusy（BE-008：effort 切档前的综合忙判定）', () => {
