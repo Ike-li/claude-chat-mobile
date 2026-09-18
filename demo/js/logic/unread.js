@@ -1,0 +1,156 @@
+// logic/unread.js —— R65（2026-08-30 需求合稿）未读点判定（纯函数：数据进数据出，不碰 DOM/window/storage）
+//
+// 语义红线：点=「有没看过的新内容」，看过即清；
+// 与「需要你」chip/抽屉聚合（阻塞等你，答过才清）分层不合并——两者清除条件不同，
+// 合并会让「扫一眼」解除本应钉到「答过」的警报。
+//
+// 判据字段是 session:list 行的 lastUsedAt：上游（src/sessions/history.js scanViaReaddir 头注）
+// 已保证它取「最后主链消息时间、无则回落 mtime」，元数据写盘不会推它——假未读风险在上游消化。
+//
+// 手动未读（2026-09-02，长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据与「正在看」；
+// 唯一的自动清除点是「再次打开该会话」（tracker 的 markEntered），离场记 seen 不动它——
+// 否则「正看着时标一下、离开就被离场记录清掉」，标记形同虚设。
+//
+// 跨设备共享（2026-09-03）：已读位点搬到服务端（data/read-state.json），localStorage 降级为离线缓存。
+// 此前全存本地，换设备后 seen 表为空、全部回落到「本设备首次打开时刻」这个很老的基线，
+// 在另一台读过的会话会整屏复亮。两条合并语义写在这一层，两端各自实现（前后端不得互相 import）：
+//   · baselineTs 服务端权威、建档时钉一次——取 min 会把最老设备的基线传染给全体（正是那个 bug 的
+//     放大器），取 max 会吞掉「app 关着时来的新活动」，都不行；
+//   · seen/manual 逐会话取较晚时间戳（LWW）。前提是手动未读判据从「manual 里有条目」改成
+//     `manual[id] > seen[id]`（见 isManualUnreadNow）：旧语义下「标为已读」是【删除条目】，
+//     而删除在 LWW 里会被别的设备的旧条目复活。改后合并退化成纯 max()，幂等、与顺序无关。
+
+import { t } from '../i18n.js';
+
+// 未读判定。never-seen 会话对比基线（首装不追溯历史）；看过的对比 seenAt；正在看的不走时间判据；
+// manual=true 时不看时间（标记不依赖 lastUsedAt 字段）。
+//
+// 两条短路的顺序不能反（2026-09-07 修）——它们管辖的是不同的信息源：
+//   · isViewing 否定的是【时间判据的可信度】：你正看着的内容不算「没看过」，而 lastUsedAt 还会一直
+//     往前推，不挡就是消不掉的噪音。它的管辖面到此为止。
+//   · manual 是【用户显式输入的待办标记】，isViewing 对它没有管辖权。用户最常标「稍后再看」的时刻，
+//     恰恰是正读着这个会话、意识到「等下要回来处理」的那一刻。旧顺序下那一刻点不亮，而确认框刚
+//     承诺「这一行会一直显示未读」——屏幕上什么都没发生，切到别的会话才浮出来（真机报告 2026-09-07）。
+//     同一时刻 read:mark 已上报服务端，别的设备上其实已经亮了，标记的这台反而是唯一看不见的。
+export function isSessionUnread({ lastUsedAt, seenAt, baselineTs = 0, isViewing = false, manual = false } = {}) {
+  if (manual) return true;
+  if (isViewing) return false;
+  if (typeof lastUsedAt !== 'number' || !Number.isFinite(lastUsedAt)) return false;
+  const seenBar = typeof seenAt === 'number' && Number.isFinite(seenAt) ? seenAt : baselineTs;
+  return lastUsedAt > seenBar;
+}
+
+// 目录头「N 未读」角标的三态。调用方传该目录的未读计数：数字=已数清，null=还不知道
+// （SWR 缓存未到位——该目录从未展开过，或刷新后内存缓存已清空、background revalidate 还没回来）。
+//
+// 2026-09-02 实测缺陷：旧渲染只有「显示 N」与「隐藏」两态，null 和 0 一起走隐藏分支，于是
+// 「我还不知道」和「这个目录确实没有未读」在屏幕上完全同形。刷新后打开抽屉，用户看到的不是
+// 一个正在加载的界面，而是一个明确宣称「都没有未读」的界面——几秒后角标凭空冒出来才发现被骗。
+// 未知必须占位（state='pending'），这是它与 0 的唯一区别；占位不写数字，因为数字还不知道。
+//
+// 脏输入（undefined/NaN/负数/非数字）一律按 pending 而非 0：失败方向必须是「说不知道」，
+// 不能是「说没有」——前者只让用户多等一眼，后者是错误信息。
+export function resolveDirUnreadBadge(count) {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) {
+    return { state: 'pending', visible: true, text: '' };
+  }
+  if (count === 0) return { state: 'none', visible: false, text: '' };
+  return { state: 'unread', visible: true, text: t('{n} 未读').replace('{n}', String(count)) };
+}
+
+// 手动未读的当前判据：标记时刻是否晚于已看时刻。相等算已读（与 `lastUsedAt > seenBar` 的
+// 「恰好相等不亮」同向）。脏值/缺失一律 false——失败方向是「不亮」，不制造无法消除的假未读。
+export function isManualUnreadNow(manual, seen, sessionId) {
+  if (!sessionId) return false;
+  const markedAt = numOrNull(manual?.[sessionId]);
+  if (markedAt === null) return false;
+  const seenAt = numOrNull(seen?.[sessionId]);
+  return seenAt === null || markedAt > seenAt;
+}
+
+// 服务端权威态并入本地态。remote 无效（离线、ack 超时、老服务端不认这个事件）时原样返回 local：
+// 功能降级回「每设备独立」，绝不清空——本地已读表丢一次，用户面前就是一整屏假未读。
+export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 } = {}) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)
+    || typeof remote.baselineTs !== 'number' || !Number.isFinite(remote.baselineTs)) {
+    return local;
+  }
+  return {
+    baselineTs: remote.baselineTs,
+    seen: capNewest(mergeLatest(local?.seen, remote.seen), seenCap),
+    manual: capNewest(mergeLatest(local?.manual, remote.manual), manualCap),
+  };
+}
+
+// 逐 key 取较晚的时间戳；两侧的非数字值都丢弃。
+function mergeLatest(a, b) {
+  const out = numericMap(a);
+  for (const [k, v] of Object.entries(numericMap(b))) {
+    if (!(k in out) || v > out[k]) out[k] = v;
+  }
+  return out;
+}
+
+// 超出上限时按 ts 淘汰最旧（与 markSeenEntry 同一套 LRU by ts）。
+function capNewest(map, cap) {
+  const keys = Object.keys(map);
+  if (keys.length <= cap) return map;
+  keys.sort((x, y) => map[x] - map[y]);
+  for (const k of keys.slice(0, keys.length - cap)) delete map[k];
+  return map;
+}
+
+function numOrNull(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// 记「本设备已看过该会话到 now」。不可变更新；超过 cap 时按 ts 淘汰最旧（新记录后写，必留）。
+export function markSeenEntry(seen, sessionId, now, cap = 500) {
+  if (!sessionId) return seen;
+  const next = { ...seen, [sessionId]: now };
+  const keys = Object.keys(next);
+  if (keys.length > cap) {
+    keys.sort((a, b) => next[a] - next[b]);
+    for (const k of keys.slice(0, keys.length - cap)) delete next[k];
+  }
+  return next;
+}
+
+// 手动未读表的不可变增删：on=true 记入标记时刻（复用 seen 表同一套「记 ts + 超限淘汰最旧」），
+// on=false 移除；不存在时原样返回同一对象，调用方可据此免写盘。
+export function setManualUnreadEntry(manual, sessionId, on, now, cap = 100) {
+  if (!sessionId) return manual;
+  if (on) return markSeenEntry(manual, sessionId, now, cap);
+  if (!(sessionId in manual)) return manual;
+  const next = { ...manual };
+  delete next[sessionId];
+  return next;
+}
+
+// localStorage 原文 → 状态。任何解析失败/形状不对都回落全新状态（基线=now）：
+// 隐私模式、首装、坏数据同一条降级路径，绝不抛。已有合法基线必须保留——被 now 覆盖
+// 等于每次启动重置基线，点永远不亮。manual 字段是后加的：旧落盘缺它时回空表，不重置基线/seen。
+export function parseUnreadState(raw, now) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      && typeof parsed.baselineTs === 'number' && Number.isFinite(parsed.baselineTs)) {
+      return { baselineTs: parsed.baselineTs, seen: numericMap(parsed.seen), manual: numericMap(parsed.manual) };
+    }
+  } catch { /* 坏 JSON → 全新状态 */ }
+  return { baselineTs: now, seen: {}, manual: {} };
+}
+
+// 只保留「值是有限数」的条目——防手改/旧版本残留把非数字混进比较。
+function numericMap(src) {
+  const out = {};
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return out;
+  for (const [k, v] of Object.entries(src)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+export function serializeUnreadState(state) {
+  return JSON.stringify({ baselineTs: state.baselineTs, seen: state.seen, manual: state.manual || {} });
+}

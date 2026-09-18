@@ -1,0 +1,1060 @@
+/* ── Claude 设计 token（暖米白浅色单主题；改色只动此处，tw-config.js 把它们桥接成语义类）── */
+:root {
+  --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+  --line:#E3E0D6; --line-soft:#ECEAE1;
+  --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+  /* UI-001：accent 提至 AA 正文对比（白字 5.17 / 字面 4.95）；cta 专供实底白字按钮（深浅一致） */
+  --accent:#AE5238; --accent-deep:#8F422C; --accent-bright:#D97757; --accent-wash:#F0E4DD;
+  --cta:#AE5238;
+  --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334;
+  /* warning 加深：字面/surface 4.98（旧 #C77D33 = 3.14） */
+  --warning:#9A5F22;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --radius-lg:0.875rem; --radius-md:0.625rem; --radius-sm:0.375rem;
+  --shadow-card:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.06);
+  --shadow-pop:0 8px 32px rgba(40,32,24,.16);
+  --shadow-lift:0 4px 12px rgba(60,50,40,.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas:#121211;
+    --surface:#1C1B1A;
+    --surface-sunk:#161514;
+    --line:#2E2C2A;
+    --line-soft:#242221;
+    --ink:#EEEEEC;
+    --ink-soft:#A3A19D;
+    --ink-faint:#7A7874;
+    --accent:#D97757;
+    --accent-deep:#F0E4DD;
+    --accent-bright:#E2886A;
+    --accent-wash:#2D231E;
+    --cta:#AE5238; /* 深色实底白字仍用深砖橙，勿用提亮的 accent */
+    --user-bubble:#282623;
+    /* UI-001：深色 danger/info 提亮一档；warning 保持可读（继承浅色过深会掉到 3.3） */
+    --danger:#E55D4C;
+    --info:#3D8FD4;
+    --warning:#D4A04A;
+  }
+}
+/* self-host 开源 serif（SIL OFL）——Claude 回复正文的“书卷阅读感”；中文无字形时由 --font-read 栈回退系统宋体 */
+@font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-400.woff2) format("woff2"); font-weight:400; font-style:normal; font-display:swap; }
+@font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-600.woff2) format("woff2"); font-weight:600; font-style:normal; font-display:swap; }
+@font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-italic.woff2) format("woff2"); font-weight:400; font-style:italic; font-display:swap; }
+
+body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* ── Claude 回复正文：serif 阅读态（区别于其他 AI 聊天 UI 的标志性一笔）── */
+.msg-body { font-family: var(--font-read); font-size: 15.5px; line-height: 1.72; color: var(--ink); overflow-wrap: break-word; word-break: break-word; }
+.msg-body pre { font-family: var(--font-mono); border: 1px solid var(--line); border-radius: .5rem; padding: .75rem .85rem; overflow-x: auto; font-size: .82rem; line-height: 1.5; background: var(--surface-sunk); margin: .6rem 0; }
+.msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
+.msg-body pre code { padding: 0; }
+.msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
+/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px */
+.code-block-wrap { position: relative; }
+.code-block-wrap > pre {
+  padding-top: 2rem; /* 给右上角 copy 钮留行，避免压住首行代码 */
+}
+.code-block-wrap .code-copy-btn {
+  position: absolute; top: 0.35rem; right: 0.35rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.15rem;
+  min-width: 32px; min-height: 32px;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.3rem; font-size: 11px;
+  color: var(--ink-faint); background: var(--surface);
+  border: 1px solid var(--line);
+  cursor: pointer; opacity: 0.7;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+/* 热区扩充：按钮本体 32px，::after 再扩一点 */
+.code-block-wrap .code-copy-btn::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+.code-block-wrap:hover .code-copy-btn { opacity: 1; }
+.code-block-wrap .code-copy-btn:hover {
+  color: var(--accent-deep); border-color: var(--accent-deep);
+}
+.msg-body p { margin: .5rem 0; } .msg-body p:first-child { margin-top: 0; } .msg-body p:last-child { margin-bottom: 0; }
+.msg-body ul, .msg-body ol { margin: .5rem 0 .5rem 1.3rem; } .msg-body ul { list-style: disc; } .msg-body ol { list-style: decimal; }
+.msg-body li { margin: .2rem 0; }
+.msg-body h1, .msg-body h2, .msg-body h3 { font-weight: 600; margin: .9rem 0 .4rem; line-height: 1.3; }
+.msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
+.msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+.msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
+.msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; }
+.msg-body td, .msg-body th { border: 1px solid var(--line); padding: .3rem .55rem; }
+.msg-body th { background: var(--surface-sunk); font-weight: 600; }
+.msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
+
+/* 折叠器：去原生三角，光标手型 */
+details.thinking > summary, details.toolcard > summary, details.subagent-card > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+#cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
+
+/* 会话设置分块头（模型 / 思考强度 / 权限）：始终展开磁贴，这里只做分区标签。 */
+.settings-block-head {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-height: 24px;
+  margin-bottom: .25rem;
+  padding: .05rem .1rem;
+}
+/* 方案 A：会话设置纵向预算——磁贴略紧，副文案最多两行，避免权限被顶出首屏 */
+#settingsSheetBody .model-tile .text-xs,
+#settingsSheetBody .perm-tile .text-xs {
+  line-height: 1.25;
+}
+#settingsSheetBody .effort-tile {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
+/* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
+/* A2：工具卡是【过程痕迹】，正文才是主角。3px 强调色竖条在真实会话（一屏 10–30 张卡）里
+   会连成一堵彩色的墙，把读者的视线从回答本身拽走。降成 1px 中性线，只保留「这段是工具」的锚点。
+   注意 --line 在明暗两套 token 下都是可见的分隔线色（#E3E0D6 / #2E2C2A），不会消失。 */
+.toolcard { border-left: 1px solid var(--line) !important; }
+/* 思考块：内心独白——serif 斜体淡色 */
+/* A2 收尾：思考块与工具卡同属【过程痕迹】，视觉重量必须一致。
+   只降工具卡会留下更刺眼的断层——一屏里工具是轻行、思考却还是带边框的白卡片。 */
+.thinking { border-left: 1px solid var(--line); }
+.thinking .t-body { font-family: var(--font-read); font-style: italic; }
+
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.safe-top { padding-top: env(safe-area-inset-top); }
+/* 弹窗顶部 drag handle */
+.sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto .75rem; }
+/* 配置面板下拉关闭热区：扩大把手可点范围，禁浏览器默认手势抢 pointer */
+.settings-drag-zone {
+  touch-action: none;
+  cursor: grab;
+  padding-top: 0.35rem;
+}
+.settings-drag-zone:active,
+#settingsSheet.is-dragging .settings-drag-zone {
+  cursor: grabbing;
+}
+#settingsSheet.is-dragging {
+  /* 拖动中禁用 CSS transition，跟手；结束时由 JS 清 inline 后恢复 */
+  transition: none !important;
+  will-change: transform;
+}
+#settingsSheet.is-dragging .sheet-handle {
+  background: var(--accent);
+  width: 44px;
+}
+/* 配置面板打开：锁住背后主页面滚动（#messages 仍是 overflow-y-auto，不锁会把聊天顶穿面板）
+   不用 touch-action:none on body——会误伤 fixed 面板内的滑动（部分 Android Chrome）。 */
+html.ccm-sheet-open,
+body.ccm-sheet-open {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+body.ccm-sheet-open #messages {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+/* 面板自身内容区允许滚动；overscroll-contain 阻止链式滚动到背后 */
+#settingsSheetBody {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* 柔和入场动画 + 按钮微反馈（尊重 reduce-motion） */
+@media (prefers-reduced-motion: no-preference) {
+  /* fill-mode 刻意【不】写 both（2026-09-07 修）：CSS 动画层在层叠里压过内联样式与工具类，而 both 的
+     forwards 半边会把末帧 `opacity:1` 永久钉在动画层上。#messages 的每个气泡都是这里的直接子元素
+     （message-renderer.js:50 `context.dom.messages.appendChild`），于是三处本该生效的透明度全被压死：
+     app.js:3096 的 opacity-70（「正在发送」变淡）、:1982 的 0.55（随停止取消的消息变灰）、:2888 的 0.4
+     （流式收尾重渲淡出）——实测 style.opacity 确为 '0.55' 而 getComputedStyle 恒为 '1'，无任何报错。
+     去掉 both 对入场动画本身零影响：没有 animation-delay，backwards 半边本就是空操作；末帧的
+     opacity:1 / transform:none 又正是 CSS 默认值，forwards 除了制造这个陷阱不提供任何东西。 */
+  #messages > * { animation: msg-in .2s ease; }
+  @keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  button { transition: background-color .12s ease, transform .08s ease; }
+  button:active { transform: scale(.97); }
+}
+/* 暖色细滚动条 */
+#messages::-webkit-scrollbar, #sessionPanel::-webkit-scrollbar { width: 8px; }
+#messages::-webkit-scrollbar-thumb, #sessionPanel::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+/* 用户消息气泡：sans 覆盖（历史气泡含 .msg-body 也不走 serif；用户消息=sans，仅 Claude 回复=serif） */
+.um { font-family: var(--font-ui); font-size: 14px; line-height: 1.55; }
+
+/* 落地页仪表盘高级微动效与精致样式 */
+.dashboard-container {
+  animation: dash-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes dash-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
+.premium-card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  padding: 1.15rem 1.25rem;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (hover: hover) {
+  .premium-card:hover {
+    border-color: var(--accent-bright);
+    background: var(--surface);
+    transform: translateY(-2.5px);
+    box-shadow: var(--shadow-lift);
+  }
+}
+.premium-card:active {
+  transform: scale(0.975);
+  background: var(--surface-sunk);
+}
+.dash-recent-item {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 2px rgba(60,50,40,.02);
+}
+@media (hover: hover) {
+  .dash-recent-item:hover {
+    border-color: var(--accent-bright);
+    background: var(--accent-wash);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-lift);
+  }
+}
+.dash-recent-item:active {
+  transform: scale(0.985);
+  background: var(--surface-sunk);
+}
+
+/* ── 新版 UI 高级动效与交互样式微调 (Premium UI Enhancements) ── */
+.chat-input-pill {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  padding: 0.5rem !important;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+.chat-input-pill:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-wash), 0 4px 12px rgba(201,100,66,0.06);
+  background-color: var(--surface);
+}
+.status-pill-chip {
+  background-color: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  padding: 0.35rem 0.75rem;
+  border-radius: 9999px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  white-space: nowrap;
+}
+/* 并入输入框底栏后的紧凑 chip（模型/权限/思考）；高度与动作钮热区更协调 */
+.status-pill-chip.toolbar-pill {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 0.5rem;
+  font-size: 10.5px;
+  flex-shrink: 0;
+  box-shadow: none;
+  max-width: 100%;
+}
+/* 会话档摘要 chip：模型优先完整；权限/思考短标少截断；完整串在 #pillDefaults title */
+#pillDefaults {
+  max-width: min(100%, 72vw);
+  gap: 0.25rem;
+  min-height: 36px;
+  height: 36px;
+}
+.pill-defaults-part {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  min-width: 0;
+}
+/* A3：模型段吃宽；权限/思考短标尽量不截 */
+#pillModelText {
+  max-width: min(11rem, 46vw);
+  flex: 1 1 auto;
+}
+#pillPermText {
+  max-width: min(6rem, 26vw);
+  flex: 0 1 auto;
+}
+#pillEffortText {
+  max-width: min(4.5rem, 18vw);
+  flex: 0 1 auto;
+}
+/* A1：仅权限段着色（Bypass danger / Plan 次强调） */
+#pillPermText.pill-perm-plan {
+  color: var(--info, #3b82f6);
+}
+.composer-discover-hint {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--ink-faint);
+  opacity: 0.75;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pill-defaults-sep {
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  user-select: none;
+}
+.pill-effort-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.pill-effort-inline.hidden {
+  display: none;
+}
+
+/* 底栏工具条：chip 区可滚，动作区不缩 */
+.composer-toolbar {
+  min-width: 0;
+}
+.composer-chips {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 12px), transparent 100%);
+}
+.composer-actions {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+}
+/* UX-019：空态档位变更时胶囊短暂高亮（替代消息区系统条） */
+@keyframes status-pill-flash {
+  0%, 100% { box-shadow: 0 1px 2px rgba(0,0,0,0.02); background-color: var(--surface-sunk); border-color: var(--line-soft); }
+  35% { box-shadow: 0 0 0 2px var(--accent); background-color: var(--accent-wash); border-color: var(--accent); }
+}
+.status-pill-chip.status-pill-flash {
+  animation: status-pill-flash 0.7s ease;
+}
+.status-pill-chip:active {
+  transform: scale(0.95);
+  background-color: var(--line-soft);
+}
+.top-context-pill {
+  min-height: 32px;
+  padding: 0.2rem 0.75rem;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  /* 中间身份区尽量吃宽：两侧按钮让路，减少 claude-chat-m… 这种无信息截断 */
+  max-width: min(100%, 58vw);
+  overflow: hidden;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+#topProjectText {
+  min-width: 0;
+  max-width: 100%;
+}
+/* 工作区面板 tab（文件 / 改动）：选中态走 accent 语汇，与权限磁贴等既有选中态同源。
+   用 aria-selected 而非额外的 .active 类驱动，样式与无障碍状态天然同步、不会各说各话。 */
+.workspace-tab[aria-selected="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+/* 顶栏左侧延迟胶囊：比中间 project pill 更小一号，同 sunk/软边/圆角语汇；
+   不做成按钮（无 hover scale），避免与工作区入口抢主操作。色阶由 JS 叠 text-*。 */
+.conn-rtt-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 0.45rem;
+  border-radius: 9999px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  max-width: 7.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conn-rtt-chip.hidden {
+  display: none;
+}
+/* 顶栏注意力文字 chip（#attentionChip）：复用 rtt chip 的壳，字重加粗、可点；色调由 text-danger/warning/accent 工具类给 */
+.attention-chip {
+  font-weight: 600;
+  cursor: pointer;
+}
+.attention-chip:active {
+  transform: scale(0.97);
+}
+
+/* 连接状态横幅（header 与消息区之间的一行，非阻断）。
+   刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
+   免得自建样式表与 Play CDN 运行时注入的 <style> 谁先谁后决定显隐，那是不确定的。
+   淡底一律走 color-mix：语义 token 在 tw-config 里是裸 var(--x)，`色/NN` 透明度类对它们是死代码。 */
+.conn-banner {
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-sunk);
+  color: var(--ink-soft);
+}
+.conn-banner--info {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent-deep);
+}
+.conn-banner--warn {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  color: var(--warning);
+}
+.conn-banner--success {
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--success) 40%, transparent);
+  color: var(--success);
+}
+.conn-banner__detail {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.conn-banner__detail.hidden {
+  display: none;
+}
+/* 重试按钮：继承横幅当前 tone 色（currentColor），不自带配色，三态下都不打架 */
+.conn-banner__retry {
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  min-height: 26px;
+}
+.conn-banner__retry:active {
+  transform: scale(0.96);
+}
+.conn-banner__retry.hidden {
+  display: none;
+}
+@media (hover: hover) {
+  .top-context-pill:hover {
+    background: var(--line-soft);
+    transform: scale(0.98);
+  }
+}
+.top-context-pill:active {
+  transform: scale(0.95);
+}
+.msg-frame {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.empty-start {
+  min-height: 0;
+}
+.empty-start-card {
+  min-height: 42vh;
+}
+.empty-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--ink-soft);
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+.msg-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+.msg-action-bar:hover, .msg-action-bar:focus-within {
+  opacity: 1;
+}
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 11px;
+  color: var(--ink-faint);
+  border: 1px solid transparent;
+  transition: all 0.12s;
+  cursor: pointer;
+  background: transparent;
+}
+.msg-action-btn:hover {
+  color: var(--accent-deep);
+  background-color: var(--surface-sunk);
+  border-color: var(--line-soft);
+}
+.msg-action-btn:active {
+  transform: scale(0.95);
+}
+/* 隐藏横向滚动条 */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+@media (max-width: 767px) {
+  header {
+    padding: max(1.25rem, env(safe-area-inset-top)) 1rem 0.5rem !important;
+    background: var(--canvas) !important;
+    border-bottom: 1px solid var(--line-soft) !important;
+    gap: 0.5rem;
+  }
+  #btnSessions {
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 0.75rem !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--line-soft) !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+  }
+  #connDot {
+    /* Connection dot positioning is self-contained in its button wrapper */
+  }
+  #headerActions {
+    display: flex !important;
+    min-width: 0 !important;
+    gap: 0.35rem !important;
+  }
+  .top-context-pill {
+    max-width: min(100%, 46vw);
+  }
+
+  #messages {
+    padding: 1rem 1rem 1.5rem !important;
+    max-width: 640px; /* Comfortable expansive column width */
+    width: 100%;
+    margin: 0 auto;
+  }
+  #messages.empty-start {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .empty-start-card {
+    min-height: 50vh;
+    padding-bottom: 4vh;
+  }
+  footer {
+    padding: 0 1rem max(1rem, env(safe-area-inset-bottom)) !important;
+    background: transparent !important;
+  }
+  footer > .max-w-2xl {
+    max-width: 640px !important;
+  }
+  #statusPillsRow {
+    display: none !important; /* 已并入输入框底栏，保留选择器防旧缓存命中 */
+  }
+  .status-pill-chip {
+    min-height: 28px;
+    padding: 0 0.5rem;
+    font-size: 10.5px;
+    background: var(--surface-sunk);
+    border: 1px solid var(--line-soft);
+    box-shadow: none;
+    transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+  }
+  .status-pill-chip:active {
+    background: var(--line);
+    transform: scale(0.95);
+  }
+  .status-pill-chip svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    opacity: 0.7;
+  }
+  #pillDefaults {
+    max-width: min(100%, 68vw);
+    min-height: 36px;
+    height: 36px;
+  }
+  #pillModelText {
+    max-width: min(9.5rem, 42vw); /* 窄屏：模型优先；动作区（附件/发送）钉死不挤 */
+  }
+  #pillPermText {
+    max-width: min(5.5rem, 22vw);
+  }
+  #pillEffortText {
+    max-width: min(3.75rem, 14vw);
+  }
+  .chat-input-pill {
+    min-height: auto !important;
+    border-radius: 1.25rem !important;
+    box-shadow: var(--shadow-card);
+    margin-left: 0 !important; /* Perfect symmetry */
+    position: relative;
+    width: 100%;
+    padding: 0.5rem !important;
+  }
+  /* 回形针放大：40×40 视觉 + 既有 .chat-input-pill button::after 扩热区；位置仍在发送左侧 */
+  #btnAttach {
+    position: relative !important;
+    transform: none !important;
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 0.75rem !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: var(--ink-soft) !important;
+  }
+  #btnAttach svg {
+    width: 1.5rem !important;
+    height: 1.5rem !important;
+  }
+  #btnAttach:active {
+    transform: scale(0.92) !important;
+  }
+  #input {
+    min-height: 32px !important;
+    padding: 0.25rem 0.5rem !important;
+    font-size: 16px !important;
+  }
+  #btnSend,
+  #btnStop {
+    width: 40px !important;
+    height: 40px !important;
+  }
+  #btnSend svg {
+    width: 1.25rem !important;
+    height: 1.25rem !important;
+  }
+}
+
+/* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
+@media (min-width: 1024px) {
+  body {
+    display: grid !important;
+    grid-template-columns: 300px 1fr !important;
+    /* 四行：header / 连接横幅 / 消息区 / composer。横幅隐藏时是 display:none，不算 grid item，
+       该行 auto 尺寸塌成 0，连接正常时与三行布局逐像素等价。
+       ★ 未显式定位的非 fixed body 子元素会被自动排版塞进隐式行（对横幅就是 300px 宽卡在侧栏底下，
+       且新隐式行会从 1fr 消息行偷高度、被 overflow:hidden 裁掉 composer）——新增此类元素必须在这里定位。 */
+    grid-template-rows: auto auto 1fr auto !important;
+    height: 100vh !important;
+    overflow: hidden !important;
+  }
+
+  /* 1. 侧边栏常驻左侧 (Dock Sidebar to the Left) */
+  #leftSidebar {
+    grid-column: 1 !important;
+    grid-row: 1 / -1 !important;
+    position: relative !important;
+    transform: none !important;
+    width: 300px !important;
+    max-width: 300px !important;
+    height: 100vh !important;
+    border-right: 1px solid var(--line) !important;
+    box-shadow: none !important;
+    background-color: var(--surface) !important;
+    z-index: 10 !important;
+    transition: none !important;
+  }
+
+  /* 2. 主聊天内容分布在右侧 (Main Column) */
+  header {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    border-bottom: 1px solid var(--line) !important;
+    z-index: 5 !important;
+  }
+
+  #connBanner {
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+  }
+
+  #messages {
+    grid-column: 2 !important;
+    grid-row: 3 !important;
+    height: 100% !important;
+    overflow-y: auto !important;
+  }
+
+  footer {
+    grid-column: 2 !important;
+    grid-row: 4 !important;
+    z-index: 5 !important;
+  }
+
+  /* 3. 隐藏不必要的移动端交互组件 (Hide mobile-only elements) */
+  #sidebarScrim {
+    display: none !important;
+  }
+  #sidebarClose {
+    display: none !important;
+  }
+
+  /* 4. 侧边栏折叠支持 (Sidebar Collapsing Support) */
+  body.sidebar-collapsed {
+    grid-template-columns: 0px 1fr !important;
+  }
+  body.sidebar-collapsed #leftSidebar {
+    display: none !important;
+  }
+}
+
+/* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
+#permModal, #questionModal, #consoleModal, #confirmModal {
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .25s ease, visibility .25s ease;
+  }
+  #permModal > div, #questionModal > div, #consoleModal > div, #confirmModal > div {
+    transform: translateY(100%);
+    transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open, #confirmModal.sheet-open {
+    visibility: visible;
+    pointer-events: auto;
+    opacity: 1;
+  }
+  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div, #confirmModal.sheet-open > div {
+    transform: translateY(0);
+  }
+  /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */
+  #permModal.sheet-arming button {
+    pointer-events: none;
+  }
+
+  /* ── 流内 live 活动行（busy 时挂在 #messages 末尾，不进 history/cache）── */
+  #streamLiveStatus {
+    color: var(--activity);
+  }
+  #btnSend[data-mode="stop"] {
+    background: var(--activity);
+    color: var(--surface);
+    opacity: 1;
+    cursor: pointer;
+  }
+  #btnSend[data-mode="stop"]:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  #btnSend[data-mode="stop"] .btn-send-stop-icon {
+    display: block;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 0.12rem;
+    background: currentColor;
+  }
+
+  /* ── 44px 物理触控热区扩充 ── */
+  .chat-input-pill button {
+    position: relative;
+  }
+  .chat-input-pill button::after {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    right: -6px;
+    bottom: -6px;
+  }
+
+  /* ── 规则动画选中过渡 ── */
+  .perm-tile {
+    transition: all 0.15s ease;
+  }
+
+  /* ── 侧边栏工作区与会话高级动效 ── */
+  .subtree-container {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
+  }
+  .subtree-container.expanded {
+    max-height: 1200px; /* 容纳多会话 */
+    opacity: 1;
+  }
+  .dir-arrow {
+    display: inline-block;
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .dir-arrow.rotated {
+    transform: rotate(90deg);
+  }
+  /* 侧滑动画及手势优化 */
+  .row-content {
+    touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
+    -webkit-touch-callout: none; /* 长按是本 app 的手势（标为未读/已读），不要 iOS 原生弹出 */
+  }
+  .row-content.swiping {
+    transition: none !important; /* 拖拽中禁用过渡，紧贴指尖 */
+  }
+  /* 骨架屏脉冲动画 */
+  .skeleton-shimmer {
+    background: linear-gradient(90deg, var(--surface-sunk) 25%, var(--line-soft) 50%, var(--surface-sunk) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer-pulse 1.5s infinite ease-in-out;
+  }
+  @keyframes skeleton-shimmer-pulse {
+    0% { background-position: 150% 0; }
+    100% { background-position: -150% 0; }
+  }
+
+  /* ── 尊重用户减弱动效偏好 ── */
+  @media (prefers-reduced-motion: reduce) {
+    #permModal, #questionModal, #consoleModal,
+    #permModal > div, #questionModal > div, #consoleModal > div,
+    #leftSidebar, #settingsSheet {
+      transition: none !important;
+    }
+    #connBanner .animate-spin {
+      animation: none !important;
+    }
+    .skeleton-shimmer {
+      animation: none !important;
+    }
+  }
+
+/* UI-004：通用 44px 热区扩充 */
+.hit-44 { position: relative; }
+.hit-44::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+.msg-action-btn {
+  min-height: 32px;
+  min-width: 32px;
+  position: relative;
+}
+.msg-action-btn::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
+/* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡） */
+:root {
+  --activity: var(--accent);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --activity: var(--accent);
+  }
+}
+#streamLiveStatus {
+  color: var(--activity);
+  border-color: color-mix(in srgb, var(--activity) 40%, transparent);
+}
+/* A2：工具卡不再跟随活动强调色——见上方 .toolcard 的降级说明。
+   #streamLiveStatus 仍用 --activity，它是「此刻在发生什么」的单条状态，
+   数量恒为 1，用强调色不会堆叠成墙。 */
+
+/* UX-016：思考进行中 shimmer */
+@keyframes thinking-shimmer {
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
+}
+details.thinking.thinking-live > summary {
+  animation: thinking-shimmer 1.4s ease-in-out infinite;
+}
+details.thinking.thinking-live > summary::before {
+  content: '思考中 · ';
+}
+
+/* 驾驶态：底栏模型/权限/思考 chip 保持可见（只读冻结由 JS 拦截）；
+   驾驶提示仅靠上方 #mirrorBanner，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
+
+/* 工作区抽屉状态：文字是主语义，颜色仅辅助；会话行与目录行共用同一紧凑 chip。 */
+.drawer-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  padding: 0 0.38rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 9999px;
+  background: var(--surface-sunk);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 目录头未读角标的「还不知道」占位（resolveDirUnreadBadge state='pending'）：缓存未到位时既不能
+   写数字，也不能什么都不画——不画就与「确定没有未读」同形，等于在空窗期报一个错误事实。
+   做成一枚无文字的窄脉冲丸子：视觉重量明显低于真角标（不抢注意力），但位置上占住，
+   用户一眼能看出「这里的信息还在路上」。 */
+.dir-unread-pending {
+  width: 14px;
+  min-height: 14px;
+  padding: 0;
+  opacity: 0.55;
+  animation: dir-unread-pending-pulse 1.4s ease-in-out infinite;
+}
+@keyframes dir-unread-pending-pulse {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.62; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dir-unread-pending { animation: none; }
+}
+
+/* UI-007：状态 SVG 图标 */
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  vertical-align: middle;
+}
+.status-icon .status-svg,
+.t-status .status-svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+#sessionsDot.status-icon {
+  font-size: 0; /* 隐藏残留文本，只留 SVG */
+  min-width: 16px;
+  min-height: 16px;
+}
+#sessionsDot.status-icon .status-svg {
+  width: 12px;
+  height: 12px;
+}
+.dir-badge.status-icon .status-svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* 未读角标胶囊：#messages 的兄弟节点，viewport-fixed 悬浮于 composer 上方（避免依赖父级 position:relative，
+   composer 高度会随输入内容变化，固定偏移量取常见 1~2 行高度 + 安全距离，不追求逐像素贴合）。 */
+#unreadPill {
+  position: fixed;
+  right: 0.75rem;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 15;
+  border: none;
+}
+
+/* 跳到未读锚点后的短暂高亮，与 status-pill-flash（UX-019）同一手法：背景色脉冲一下再淡出 */
+@keyframes unread-anchor-flash {
+  0%, 100% { background-color: transparent; }
+  35% { background-color: var(--accent-wash); }
+}
+.unread-anchor-flash {
+  animation: unread-anchor-flash 2s ease;
+  border-radius: 0.75rem;
+}
+
+/* 抽屉里「跳到下一条未读」后的落点高亮。不复用 .unread-anchor-flash：那条动画在 0%/100% 把
+   background-color 打成 transparent，会盖掉会话行自己的 bg-surface / bg-accent-wash（当前会话
+   那一行是浅色底），跳完反而留下一行"背景没了"的怪行。改用 outline——它不参与布局、不挤动相邻
+   行，也不和任何背景色打架。 */
+@keyframes drawer-row-flash {
+  0%, 100% { outline-color: transparent; }
+  35% { outline-color: var(--accent); }
+}
+.drawer-row-flash {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  animation: drawer-row-flash 2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-row-flash { animation: none; outline-color: var(--accent); }
+}
+
+/* 两侧横线夹文字（仿微信），与消息气泡视觉区分开——它们不是对话内容：
+   .unread-divider = "以下为新消息"；.msg-day-divider = 消息流的跨天日期行。
+   时间行（同一天内的 HH:mm）不用横线，只是居中细字，见 message-timeline.js。 */
+.unread-divider,
+.msg-day-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.unread-divider::before,
+.unread-divider::after,
+.msg-day-divider::before,
+.msg-day-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* 文件浏览器代码查看/编辑（CM5）：贴现有 design token，暗色随 :root 变量自动切换，不单开 media query。
+   viewportMargin:Infinity（见 file-browser.js）令 CM 不做内部虚拟滚动，外层 #fileBrowseBody 统一滚动。 */
+.cm-ccm-viewer,
+.cm-ccm-viewer .CodeMirror {
+  height: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: transparent;
+  color: var(--ink);
+}
+.cm-ccm-viewer .CodeMirror-gutters { background: transparent; border-right: 1px solid var(--line-soft); }
+.cm-ccm-viewer .CodeMirror-linenumber { color: var(--ink-faint); }
+.cm-ccm-viewer .CodeMirror-cursor { border-left-color: var(--ink); }
+.cm-ccm-viewer .CodeMirror-selected { background: var(--accent-wash); }
+.cm-ccm-viewer .cm-comment { color: var(--ink-faint); }
+.cm-ccm-viewer .cm-string, .cm-ccm-viewer .cm-string-2 { color: var(--success); }
+.cm-ccm-viewer .cm-number, .cm-ccm-viewer .cm-atom { color: var(--accent-deep); }
+.cm-ccm-viewer .cm-keyword { color: var(--info); font-weight: 600; }
+.cm-ccm-viewer .cm-variable-2, .cm-ccm-viewer .cm-property { color: var(--ink-soft); }
+.cm-ccm-viewer .cm-tag, .cm-ccm-viewer .cm-attribute { color: var(--warning); }
+
+/* ── 导航逃生层（2026-07-30）──────────────────────────────────────────────
+   审批 / 提问 sheet 是「等你答复」而不是「阻断一切」：它们的 z-40 全屏遮罩原本连顶栏也盖住，
+   于是 A 会话一弹审批就再也切不到 B 会话——而多会话并发正是这个产品的核心场景。
+   挂起期间（body.nav-escape，由 openSheet/closeSheet 同步）把顶栏与侧栏抬到 sheet 之上，
+   答复完自动落回。刻意不改静态层级：deviceRequests 等页面级提示的 header < cards < modal
+   契约（P0-15g 钉住）保持原样；登录门 / 确认弹窗（z-50）仍在最上，导航压不过它们。
+   注：≥1024px 桌面布局另有一套 !important 层级，未随此调整。 */
+body.nav-escape header { z-index: 45; }
+body.nav-escape #sidebarScrim { z-index: 46; }
+body.nav-escape #leftSidebar { z-index: 47; }

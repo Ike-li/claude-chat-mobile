@@ -9,3 +9,6 @@ node_modules/
 
 # Local SEO audit artifacts (not part of the landing site)
 ike-li.github.io-claude-chat-mobile-audit/
+
+# demo 验收截图（本地产物，不入库）
+demo/_build/verify-*.png

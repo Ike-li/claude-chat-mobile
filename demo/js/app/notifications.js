@@ -1,0 +1,278 @@
+import { urlBase64ToUint8Array } from '../logic/format.js';
+import { pushEnvHint, describeSubscribeError, readPushPreviewPref, readPushOptOut, PUSH_OPT_OUT_KEY } from '../logic/service-diag.js';
+import { t } from '../i18n.js';
+
+export function createNotificationController(context, {
+  addBar = () => {},
+  autoBind = true,
+  getToken = () => '',
+  getDeviceToken = () => '', // A1：订阅须绑已信任设备
+  // 点铃铛做什么。默认就地订阅（保底行为，也是单测里的默认路径）；app.js 注入的是「打开通用设置
+  // 并滚到推送段」——那里的 #pushStatusRow 才是完整的权威版本（状态 + 原因 + 订阅按钮），
+  // 铃铛只负责把人带过去，不再自己维护第二套解释分支。
+  bellAction = null,
+} = {}) {
+  const deps = context.dependencies;
+  const documentRef = deps.document || globalThis.document;
+  const windowRef = deps.window || globalThis.window || {};
+  const navigatorRef = deps.navigator || globalThis.navigator || {};
+  const NotificationApi = deps.Notification || windowRef.Notification;
+  const fetchFn = deps.fetch || globalThis.fetch;
+  const showAlert = deps.alert || windowRef.alert || (() => {});
+  const logger = deps.console || globalThis.console;
+  // ⑧ 推送内容预览偏好：与 app/alerts.js 同款 storage 注入模式（可测、抗 PWA 被杀落盘+重开恢复）。
+  const storage = deps.storage || globalThis.localStorage;
+  const storageGetItem = key => storage?.getItem?.(key) ?? null;
+  // 「关过推送」的意图要跨刷新存活（判据见 logic/service-diag.js 的 PUSH_OPT_OUT_KEY）
+  const setOptedOut = on => {
+    try { on ? storage?.setItem?.(PUSH_OPT_OUT_KEY, '1') : storage?.removeItem?.(PUSH_OPT_OUT_KEY); } catch {}
+  };
+  // 令牌走请求头、不走 query（H2，2026-09-17 安全审查）：`?token=` 会原样落进 nginx / Caddy /
+  // cloudflared / CDN 的访问日志，而 AUTH_TOKEN 是控制面密钥。首页用 `/#token=` 走 fragment 正是
+  // 为了躲开中间层日志，push 这三条却把同一个秘密放回了 query。服务端 createHttpAuth 认这个头
+  // （app/src/server/http.js），两条路等价。
+  //
+  // 空令牌时**不发**这个头：http.js 把「带了但不对」(bad_token) 和「压根没带」(no_token) 分开记，
+  // 前者指向配置漂移、后者指向扫描器。发一个空串会把前者的排查方向污染掉。
+  //
+  // 【为什么先问一句「这个令牌能不能走头」】Headers 对首尾空白**静默 trim**、对非 Latin-1 直接抛
+  // TypeError，而服务端 tokenMatches 是逐字节精确比较、不 trim。两者一撞就是「app 照常能用、
+  // 只有推送静默失效」——socket 那条路把令牌放在 handshake.auth 的 JSON 里，完全不受影响，
+  // 用户根本看不出是令牌的问题。
+  // 这类令牌确实存在：AUTH_TOKEN 没有字符集校验（env-file.js 的 isSerializableEnvValue 只拦控制
+  // 字符、单引号、尾随反斜杠），手改过 ccm.config.json 的人可能就持有一个，而**他们在改动前是
+  // 能用的**（query 走 encodeURIComponent，服务端解回来精确匹配）。
+  // 故这一档回落 query：对他们不是回归，对其余所有人令牌不再进访问日志。
+  // 判据不自己写字符集正则——正则会与浏览器实现漂移，这句 Headers 往返不会。
+  const headerSafe = (token) => {
+    try { return new Headers({ 'x-auth-token': token }).get('x-auth-token') === token; }
+    catch { return false; }
+  };
+  let warnedUnsafeToken = false;
+  const authParts = () => {
+    const token = getToken();
+    if (!token) return { headers: {}, query: '' };
+    if (headerSafe(token)) return { headers: { 'x-auth-token': token }, query: '' };
+    // 只说一次：三条请求会各走一遍，每次都喊等于把控制台刷满。
+    if (!warnedUnsafeToken) {
+      warnedUnsafeToken = true;
+      logger?.warn?.('[push] AUTH_TOKEN 含首尾空白或非 Latin-1 字符，无法走请求头，'
+        + '本次回落 URL query（会进反代/CDN 访问日志）。建议在电脑上跑 npm run setup 换一个令牌。');
+    }
+    return { headers: {}, query: `?token=${encodeURIComponent(token)}` };
+  };
+  let vapidKey = null;
+  // subscribe() 的失败原因。手机上看不到 console，只说"请稍后重试"等于什么都没说——
+  // FCM 连不上、VAPID 无效、POST 被鉴权拦，对用户是完全不同的三件事，得说出是哪一件。
+  let lastSubscribeError = '';
+
+  // sensitive=true：正文含工具入参/问题原文（Bash 的 command、Write 的 file_path/content 头部）。
+  // 这条页面内 new Notification 的旁路此前完全不看「推送内容预览」开关——而 Web Push 侧
+  // （notify-channels 按 sub.prefs.preview 挑 body）与 ntfy 侧（恒最小化）都做对了。结果是：用户在设置里
+  // 把预览关着、UI 也显示关，PWA 切后台（socket 未断）时命令正文照样弹上锁屏。内容没离开设备，但开关的
+  // 用户可见语义失效。开关关闭时剥掉正文；若调用方给了 identity（项目·会话），用它填 body，
+  // 避免 Android heads-up 只剩 PWA 短名「CCM」。标题本身也应带同一串身份（见 app.js notify 包装）。
+  function notify(title, body, { force = false, sensitive = false, tag = '', identity = '' } = {}) {
+    if ((!force && !documentRef?.hidden) || !NotificationApi || NotificationApi.permission !== 'granted') return false;
+    let safeBody = sensitive && !readPushPreviewPref(storageGetItem) ? '' : body;
+    // 预览关闭把命令/问题正文剥掉后，横幅不能只剩 PWA 短名「CCM」——至少留下项目·会话身份。
+    if (!safeBody && identity) safeBody = identity;
+    try {
+      new NotificationApi(title, { body: safeBody, icon: '/icons/icon-192.png', tag: tag || 'ccm-push' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function environment() {
+    const userAgent = navigatorRef.userAgent || '';
+    const isIOS = /iP(hone|ad|od)/.test(userAgent)
+      || (/Macintosh/.test(userAgent) && navigatorRef.maxTouchPoints > 1);
+    const isStandalone = navigatorRef.standalone === true
+      || windowRef.matchMedia?.('(display-mode: standalone)').matches === true;
+    return {
+      isSecureContext: windowRef.isSecureContext,
+      isIOS,
+      isStandalone,
+      hasPushManager: 'serviceWorker' in navigatorRef && 'PushManager' in windowRef,
+    };
+  }
+
+  async function subscribe() {
+    lastSubscribeError = '';
+    // 关过推送的人，只有显式点「开启」才算改主意（requestSubscription 会先抹掉这个意图再进来）。
+    // 闸放在这里而不是各个调用点：subscribe() 的调用者不止 setup()，改「锁屏带内容预览」也会调它
+    // （app.js 的 pushPreview.set 要把新 prefs 带给服务端），而通知权限在退订后仍是 granted、
+    // 那个 checkbox 也没禁用 —— 勾一下就把刚关掉的推送整个订回来，偏偏旁边写着「不产生任何效果」。
+    if (readPushOptOut(storageGetItem)) return false;
+    try {
+      // 脚本必须在站点根：SW 的默认 scope 就是脚本所在目录，只有根目录的脚本才能控制页面所在的 /。
+      // 放 /js/ 下时 registration 只覆盖 /js/，下面这行 ready（等"控制当前页面"的 registration
+      // 激活）就永不 resolve 也永不 reject——整个订阅流程静默挂死，按钮 disabled 后不恢复、
+      // 一个提示都不弹。真机上推送因此从未订阅成功过。
+      // 试过用服务端 Service-Worker-Allowed 头提权，但那个头在 CDN 后面到不了浏览器（实测 Cloudflare
+      // 下报 max scope '/js/'）。放根目录不依赖任何响应头，少一个中间层就少一个故障点。
+      const registration = await navigatorRef.serviceWorker.register('/sw.js');
+      await navigatorRef.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        });
+      }
+      // ⑧ prefs 随订阅一并存（server 端 savePushSubscription 原样落盘，见 notify-channels.js 头注）；
+      // per-device 偏好——同一账号手机开预览、iPad 不开，两条订阅互不影响。
+      const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
+      const body = JSON.stringify({
+        ...subscription.toJSON?.() ?? subscription,
+        prefs: { preview: readPushPreviewPref(storageGetItem) },
+        ...(deviceToken ? { deviceToken } : {}),
+      });
+      const auth = authParts();
+      const response = await fetchFn(`/push/subscribe${auth.query}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...auth.headers,
+          ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
+        },
+        body,
+      });
+      if (!response.ok) {
+        lastSubscribeError = `HTTP ${response.status}`;
+        logger?.warn?.('[push] 订阅未保存(HTTP', `${response.status})`);
+        return false;
+      }
+      context.dom.btnPush?.classList.add('hidden');
+      return true;
+    } catch (error) {
+      lastSubscribeError = error?.message || String(error);
+      logger?.warn?.('[push] 订阅失败:', lastSubscribeError);
+      return false;
+    }
+  }
+
+  // 主动关掉这台设备的推送。
+  // 【顺序】先本地 unsubscribe() 再告诉服务端，反过来不行：
+  //   · 先本地：POST 失败 → 服务端残一条，下次推送必 410、notify-channels 自己清掉（可自愈）。
+  //   · 先服务端：本地 unsubscribe() 失败 → 名单里没了、浏览器还订着，状态行读 getSubscription()
+  //     照样显示「已开启」，人却再也收不到推送，两侧都不会来纠正（不可自愈）。
+  // 退订是幂等的：本来就没订阅时直接算成功，不往服务端发一条空的。
+  async function unsubscribe() {
+    try {
+      const registration = await navigatorRef.serviceWorker?.register('/sw.js');
+      const subscription = await registration?.pushManager?.getSubscription();
+      // 意图先落盘：哪怕下面哪一步炸了，也不该在下次启动时被 setup() 悄悄订回来。
+      setOptedOut(true);
+      if (!subscription) return true;
+      const { endpoint } = subscription;
+      await subscription.unsubscribe();
+      const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
+      const auth = authParts();
+      const response = await fetchFn(`/push/unsubscribe${auth.query}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...auth.headers,
+          ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
+        },
+        body: JSON.stringify({ endpoint, ...(deviceToken ? { deviceToken } : {}) }),
+      });
+      // 服务端没删掉不影响本地已经关成：那条残留会在下一次推送时 410 自清。只留日志，不谎报失败。
+      if (!response.ok) logger?.warn?.('[push] 退订未同步到服务端(HTTP', `${response.status})，残留订阅将在下次推送时自动清除`);
+      return true;
+    } catch (error) {
+      logger?.warn?.('[push] 退订失败:', error?.message || String(error));
+      return false;
+    }
+  }
+
+  async function setup() {
+    if (!vapidKey) {
+      try {
+        const auth = authParts();
+        const response = await fetchFn(`/push/vapid-public-key${auth.query}`, { headers: auth.headers });
+        if (!response.ok) return;
+        vapidKey = (await response.json()).key;
+      } catch {
+        return;
+      }
+    }
+    const hint = pushEnvHint(environment());
+    if (hint !== 'ready') {
+      context.dom.btnPush?.classList.remove('hidden');
+      return;
+    }
+    // 关过就别自动订回来：退订后 permission 仍是 granted，下面这条分支不看意图的话会把用户
+    // 刚关掉的推送在下次启动时悄悄重开。铃铛留着——人随时可以再点开。
+    if (readPushOptOut(storageGetItem)) {
+      context.dom.btnPush?.classList.remove('hidden');
+      return;
+    }
+    if (NotificationApi?.permission === 'granted') {
+      // 订阅失败时也要把入口露出来：此前 subscribe() 返回 false 就没下文了，用户既收不到推送、
+      // 界面上也没有任何痕迹（真机实测中从未有过 push-subscription.json 却毫不知情）。
+      void subscribe().then(ok => {
+        if (!ok) context.dom.btnPush?.classList.remove('hidden');
+      });
+    } else {
+      // denied 也显示：点它会解释"去浏览器站点设置里改回允许"。此前 denied 直接隐藏＝死路一条，
+      // 用户永远查不出自己为什么收不到推送。
+      context.dom.btnPush?.classList.remove('hidden');
+    }
+  }
+
+  function explain(message, className) {
+    showAlert(message);
+    addBar(message, className);
+  }
+
+  async function requestSubscription() {
+    const hint = pushEnvHint(environment());
+    if (hint === 'need-https') {
+      explain(t('⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。'), 'text-warning');
+      return;
+    }
+    if (hint === 'ios-add-home') {
+      explain(t('📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。'), 'text-info');
+      return;
+    }
+    if (hint === 'unsupported') {
+      explain(t('🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。'), 'text-warning');
+      return;
+    }
+    if (!vapidKey) {
+      explain(t('⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。'), 'text-danger');
+      return;
+    }
+    try {
+      if (!NotificationApi) throw new Error(t('当前浏览器/环境不支持 Notification API'));
+      const permission = await NotificationApi.requestPermission();
+      if (permission === 'granted') {
+        // 点「开启」是唯一的显式启用动作，也是唯一能作废 opt-out 的地方。必须在 subscribe() 之前
+        // 抹掉，否则会被它自己那道闸拦下——关一次就再也开不回来。
+        setOptedOut(false);
+        const ok = await subscribe();
+        if (ok) explain(t('🔔 成功订阅推送通知！'), 'text-success');
+        // 带上真实原因：手机上没有 console，笼统的"稍后重试"让人（和排查的人）无从下手。
+        // 能判出"连不上 FCM"就别吐 'Registration failed - push service error' 原文——后者对用户
+        // 是天书，而这一类恰恰有明确的下一步（开代理重试一次），且要当场回答"是不是得一直开着"。
+        else if (describeSubscribeError(lastSubscribeError, { isIOS: environment().isIOS }) === 'push-service-unreachable') {
+          explain(t('⚠️ 订阅失败：连不上推送服务（Google FCM）。开启代理后重试一次即可完成订阅——订阅成功后关掉代理仍能正常收推送。若长期无代理，可改用 ntfy 通道（见部署文档）。'), 'text-warning');
+        } else explain(`${t('⚠️ 订阅未成功：')}${lastSubscribeError || t('原因未知')}`, 'text-warning');
+      } else {
+        // 被拒后**不隐藏**铃铛：那正是用户最需要这个入口的时刻（点它能看到状态与下一步）。
+        // 此前这里 add('hidden') 与 setup() 里 denied 时 remove('hidden') 直接打架——
+        // 点一下铃铛就消失、刷新才回来，等于把唯一的排查入口藏了起来。
+        explain(t('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许'), 'text-warning');
+      }
+    } catch (error) {
+      explain(`${t('❌ 订阅出错:')} ${error.message}`, 'text-danger');
+    }
+  }
+
+  if (autoBind && context.dom.btnPush) context.dom.btnPush.onclick = bellAction || requestSubscription;
+  return { environment, notify, requestSubscription, setup, subscribe, unsubscribe };
+}

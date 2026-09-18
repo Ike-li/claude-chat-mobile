@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; font-src 'self'; form-action 'none'; base-uri 'none'">
+  <meta charset="UTF-8">
+  <!-- 自愈脚本：注销残留的 v1 缓存型 service worker（旧 PWA 会喂陈旧外壳致「未连接」），
+       但放过当前合法的 /sw.js（E15 Web Push，无缓存/offline，见 sw-cleanup.js 头注释）。
+       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
+  <script src="./js/sw-cleanup.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
+  <title>Claude Chat Mobile</title>
+  <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /sw.js（零缓存逻辑，非 offline 方案——
+       §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/sw.js。
+       放站点根而非 /js/ 下：SW 默认 scope 即脚本所在目录，只有根目录才能控制整站） -->
+  <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="CCM">
+  <!-- 前端库自托管（vendored，见 public/vendor/）：原走 CDN（jsdelivr/tailwind），但手机网络常连不上 CDN，
+       阻塞式 <script> 会卡住后续 app.js 执行 → socket 永不初始化、页面死在「未连接」。改本地后任何网络（含纯局域网）皆可用。 -->
+  <script src="./vendor/tailwind.js"></script>
+  <!-- Tailwind 语义调色板（Claude token → 工具类）；必在 tailwind.js 之后、外置以合规 CSP script-src 'self' -->
+  <script src="./js/tw-config.js"></script>
+  <script src="./vendor/marked.min.js"></script>
+  <script src="./vendor/purify.min.js"></script>
+  <link rel="stylesheet" href="./vendor/github-light.min.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="./vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
+  <script src="./vendor/highlight.min.js"></script>
+  <!-- 文件浏览器代码查看/编辑（CM5，见 public/js/app/file-browser.js）；核心须先于各语言 mode 加载 -->
+  <link rel="stylesheet" href="./vendor/codemirror/codemirror.min.css">
+  <script src="./vendor/codemirror/codemirror.min.js"></script>
+  <script src="./vendor/codemirror/mode-javascript.min.js"></script>
+  <script src="./vendor/codemirror/mode-xml.min.js"></script>
+  <script src="./vendor/codemirror/mode-css.min.js"></script>
+  <script src="./vendor/codemirror/mode-htmlmixed.min.js"></script>
+  <script src="./vendor/codemirror/mode-jsx.min.js"></script>
+  <script src="./vendor/codemirror/mode-markdown.min.js"></script>
+  <script src="./vendor/codemirror/mode-python.min.js"></script>
+  <script src="./vendor/codemirror/mode-shell.min.js"></script>
+  <script src="./vendor/codemirror/mode-yaml.min.js"></script>
+  <!-- 演示站：真 socket.io 客户端换成浏览器内的假后端，见 _src/demo-socket.js -->
+  <script src="./demo-data.js"></script>
+  <script src="./demo-socket.js"></script>
+  <script src="./demo-overlay.js"></script>
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-cf-access="0" class="h-full bg-canvas text-ink flex flex-col overscroll-none">
+
+  <!-- 访问令牌输入页：鉴权失败（connect_error=unauthorized）时显示；输入后存 localStorage 以新 token 重连。
+       不改握手契约，替代手动改 #token= URL（后者仍兼容）。app.js 控制显隐。 -->
+  <div id="authGate" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
+      <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">Claude</div>
+      <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">若你刚清过浏览器数据，原先保存的令牌已被清除，重输一次即可。</span></div>
+      <label class="block text-xs text-ink-faint mb-1.5" for="authToken">访问令牌</label>
+      <input id="authToken" type="password" autocomplete="current-password" enterkeyhint="go" placeholder="粘贴 AUTH_TOKEN"
+        class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
+      <div id="authError" class="hidden text-xs text-danger mb-2"></div>
+      <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
+      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
+    </div>
+  </div>
+
+  <!-- Access 会话过期重登：公网 Cloudflare Access 会话失效时显示，按钮触发整页跳转重过 Access（非 auto-reload）。 -->
+  <div id="accessRelogin" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
+      <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">会话已过期</div>
+      <div class="text-sm text-ink-soft mb-5">登录态已失效，请重新通过验证后继续。</div>
+      <button id="accessReloginBtn" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">重新登录</button>
+    </div>
+  </div>
+
+  <!-- 顶部状态条 -->
+  <header class="flex items-center justify-between px-4 py-2.5 bg-surface border-b border-line shrink-0 sticky top-0 z-20">
+    <!-- Left Section: Sidebar/Workspaces Toggler -->
+    <div class="relative flex items-center gap-1.5 shrink-0">
+      <button id="btnSessions" class="relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5 text-ink-soft">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
+        </svg>
+        <!-- 台阶2 Step B：其他工作区有动静时显示状态 emoji（app.js updateSessionsDot 控制；⏳/⚠️/❗/✅ 与面板图例同款）。定位/底色常驻此处，JS 只切 hidden + 换 emoji。 -->
+        <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-xs leading-none"></span>
+        
+        <!-- 会话按钮右下角标：有事才出现。首连中不点亮（避免开页闪红）；连通性人话在 #connBanner。 -->
+        <div id="connDotWrap" class="hidden absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" data-conn="connecting" data-reason="ok" data-testid="header-conn-badge">
+          <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
+        </div>
+      </button>
+      <!-- 手机 ↔ 主机 socket 往返延迟：迷你胶囊「延迟 Nms」，与中间 top-context-pill 同语汇；连上后由 app.js 周期测，断线隐藏 -->
+      <span id="connRtt" class="hidden conn-rtt-chip tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
+      <!-- 顶栏文字 chip：把上面两颗角标（纯色点 / 状态图标）的含义写成人话——手机没有 hover，title 等于不存在。
+           按优先级只显一条（未连接 > 需要你 N > 其他工作区 · 需要你/出错），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。
+           只说「点开就能处理」的事：推送失败与其他工作区 busy 均不占此位（后者由上面 #sessionsDot 图标表达）。 -->
+      <button id="attentionChip" type="button" class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
+    </div>
+
+    <!-- Center Section: Elegant top context pill with workspace and status -->
+    <div class="flex items-center justify-center flex-1 min-w-0">
+      <!-- 默认 hidden：空首页/compose 不显示；进入真实会话后由 app.js syncTopContextPillVisibility 打开 -->
+      <button id="topContextPill" class="top-context-pill select-none cursor-pointer hidden" title="工作区：浏览或查看改动" aria-hidden="true" tabindex="-1">
+        <!-- Minimalist folder icon in Accent color -->
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-3.5 h-3.5 text-accent shrink-0">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+        </svg>
+        <span id="topTitleText" class="hidden text-xs font-semibold text-ink-soft shrink-0">新聊天</span>
+        <span class="hidden text-ink-faint text-xs select-none shrink-0">•</span>
+        <span id="topProjectText" class="text-xs font-bold text-ink truncate">...</span>
+        <!-- 未提交改动数角标：数据取 status_line 事件现成的 git 段（零新增调用），非 git 仓库 /
+             工作区干净 / WEB_STATUSLINE=off 一律隐藏。让工作区入口在有改动时自己招手，
+             用户不必先点进去才知道背后有「改动」这一功能。文案由 formatWorkspaceChangeBadge 产出。 -->
+        <span id="topContextChanges" class="hidden inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-cta text-white text-[10px] font-bold leading-none tabular-nums shrink-0" data-testid="top-context-changes" aria-hidden="true"></span>
+        <!-- 可点信号：pill 显示的是工作区名，天然读起来像面包屑；补个 › 表明这里能点开 -->
+        <span class="text-ink-faint text-xs leading-none shrink-0 select-none -ml-0.5" aria-hidden="true">›</span>
+      </button>
+    </div>
+
+    <!-- Right Section: Home / Log / New Session（三钮同材质，＋ 不单独上色） -->
+    <div id="headerActions" class="flex items-center justify-end gap-1 min-w-0 shrink-0">
+      <!-- 回空首页（最近工作区与会话枢纽；不清会话指针，与 ＋ 新建分工） -->
+      <button id="btnHome" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 2.25 21.75 12M4.5 10.5v9.75a.75.75 0 00.75.75h4.5v-6h4.5v6h4.5a.75.75 0 00.75-.75V10.5" />
+        </svg>
+      </button>
+
+      <!-- 会话运行日志：排障高频保留在顶栏 -->
+      <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看当前会话运行日志" aria-label="查看会话日志">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 5.25A1.5 1.5 0 016 3.75h12A1.5 1.5 0 0119.5 5.25v13.5A1.5 1.5 0 0118 20.25H6A1.5 1.5 0 014.5 18.75V5.25z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 9.75 10.5 12l-2.25 2.25M12.75 14.25h3" />
+        </svg>
+      </button>
+
+      <!-- 新会话 ＋：与 home/日志同材质 -->
+      <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- Hidden connection status text label to maintain JS compatibility -->
+    <span id="statusLine" class="hidden">未连接</span>
+  </header>
+
+  <!-- 连接状态横幅：连通性的人话通道。
+       非阻断——进 body 的 flex 列占一行，不遮消息区，断线期间仍可滚动看历史、仍可离线排队发消息。
+       三态与延迟阈值全在 logic.js resolveConnectionBanner，显隐由 app/connection-banner.js 驱动。
+       role="status" 已隐含 aria-live="polite"，不要再叠一层；秒数每 500ms 变，必须 aria-hidden 否则刷屏。 -->
+  <div id="connBanner" class="hidden conn-banner shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs" role="status" data-testid="conn-banner">
+    <span id="connBannerSpinner" class="animate-spin" aria-hidden="true">⚙</span>
+    <span id="connBannerText" class="font-semibold"></span>
+    <span id="connBannerDetail" class="hidden conn-banner__detail tabular-nums" aria-hidden="true"></span>
+    <button type="button" id="connBannerRetry" class="hidden conn-banner__retry" data-testid="conn-banner-retry">立即重试</button>
+  </div>
+
+  <!-- 左侧侧边栏遮罩 scrim -->
+  <div id="sidebarScrim" class="hidden fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] transition-opacity duration-300"></div>
+
+  <!-- 左侧抽屉式侧边栏 (Left Sidebar Drawer) -->
+  <aside id="leftSidebar" class="fixed inset-y-0 left-0 z-40 w-5/6 max-w-sm h-full bg-surface border-r border-line shadow-pop transform -translate-x-full transition-transform duration-300 flex flex-col">
+    <!-- 侧边栏顶部标题区 -->
+    <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
+      <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
+      <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+    </div>
+    <!-- 抽屉内操作的失败回执（当前唯一来源：🗑 彻底删除被服务端拒绝）。
+         【为什么不复用 addBar】addBar 写的是聊天消息流 #messages，而抽屉打开时 #sidebarScrim
+         （fixed inset-0 z-30）盖住整个视口——写在那里的失败理由用户一眼都看不到。2026-09-12 真机
+         撞上的就是这个：「关闭会话→立刻删」必然触发服务端 5 分钟静默期保护，拒绝理由发出来了，
+         而用户看到的是"点了没反应、会话还在"。
+         【为什么是 #sessionPanel 的兄弟而不是子节点】openSessionPanel() 开头就
+         sessionPanel.innerHTML=''（同 #btnGeneralSettings 那条约束）。放进去的话，任何一次列表
+         重建都会把它静默抹掉，而"被抹掉"和"用户读到了"在结果上完全一样——清除时机必须由代码
+         显式决定（见 openSessionPanel 里那次 showDrawerNotice('')）。 -->
+    <div id="drawerNotice" class="hidden shrink-0 px-4 py-2 text-[11px] text-danger bg-sunk border-b border-line" data-testid="drawer-notice" role="status" aria-live="polite"></div>
+    <!-- 会话列表容器 (复用 sessionPanel 以完美兼容现有 JS) -->
+    <div id="sessionPanel" class="flex-1 overflow-y-auto"></div>
+    <!-- 通用设置常驻入口。必须是 #sessionPanel 的**兄弟**节点：openSessionPanel() 开头就
+         sessionPanel.innerHTML=''，放进去每次重建都会被清掉（同 #unreadPill 相对 #messages 的约束）。
+         放侧栏而不是 composer：本机偏好/主机与服务那几段跟会话无关，不该随 composer 一起隐藏——
+         首页、compose 页、会话已中断页都得能改语言、查推送为什么不通。 -->
+    <div class="shrink-0 border-t border-line bg-surface safe-bottom">
+      <!-- E15：推送告警入口。默认隐藏；未接通时 accent-wash 更醒目。点→收侧栏+通用设置并滚到 #pushStatusRow -->
+      <button id="btnPush" type="button" class="hidden w-full flex items-center gap-2 px-4 py-3 text-sm text-accent bg-accent-wash/40 hover:bg-accent-wash active:scale-[0.99] transition-all border-b border-accent/20" data-testid="push-alert-entry" aria-label="推送未接通，查看推送状态">
+        <span aria-hidden="true">🔔</span>
+        <span class="flex-1 text-left font-medium">推送未接通</span>
+        <span class="text-[10px] text-accent/80 shrink-0">去开启</span>
+        <span class="text-ink-faint" aria-hidden="true">→</span>
+      </button>
+      <!-- 命名与底栏「会话设置」区分：本机偏好 / 通知 / 主机诊断，不是 model·perm·effort -->
+      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-soft hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开设置与状态">
+        <span aria-hidden="true">⚙️</span>
+        <span class="flex-1 text-left min-w-0">
+          <span class="font-medium text-ink block">设置与状态</span>
+          <!-- 副标题点名的是「会有人专门来找」的四件事，且逐字对应面板里真实存在的入口。
+               旧文案「本机提醒 · 推送 · 语言 · 诊断」里，「本机提醒」在面板里根本不存在（那组叫
+               完成提示），而**设备信任/吊销**——全站唯一能踢掉丢失手机的地方——四个词零指向。 -->
+          <span class="text-[11px] text-ink-faint block">通知 · 设备信任 · 语言 · 诊断</span>
+        </span>
+        <span class="text-ink-faint" aria-hidden="true">→</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- 消息区 -->
+  <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
+
+  <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
+       （app.js jumpToUnreadAnchor）。#messages 的兄弟节点而非子节点——bindView/loadHistory 的整体清空/
+       替换逻辑（clearView、sessionDomCache 贴回等）会连带清掉子节点，故不能挂在 #messages 内部。 -->
+  <button id="unreadPill" type="button" class="hidden flex items-center gap-1 rounded-full bg-cta text-white text-xs font-semibold px-3.5 py-2 active:scale-95" style="box-shadow:var(--shadow-pop)" aria-label="定位到未读消息">
+    <span id="unreadPillCount">0</span> 条未读 ↑
+  </button>
+
+  <!-- 会话打不开时的落地页（2026-09-07）。**不是弹窗，是一张属于目标会话的页面**：
+       此前 session:switch 被拒时只在【当前正看着的那个会话】的消息流里插一条红字，而视图根本没动过，
+       于是「blog_static 的会话打不开」这句话出现在 third-party 的工具卡中间，读起来像是当前会话出了事。
+       盖满视口（z-20 压住 header 与 composer，仍在侧栏/审批弹窗之下——从这里要能直接翻会话列表），
+       自带标题行声明身份，关掉即回到原会话。
+       **刻意不清空 #messages**：与 instance-destroyed 那张空表面的区别就在这里——那时实例已经没了，
+       而这里当前会话很可能正在跑，清掉它的 DOM 会让后续流式事件追加到一片废墟上。 -->
+  <div id="sessionBlockedSurface" class="hidden fixed inset-0 z-20 bg-canvas flex flex-col" role="dialog" aria-modal="true" aria-label="会话打不开" data-testid="session-blocked-surface">
+    <!-- 标题栏刻意用 div 而不是 <header>：页面已有一个顶栏 <header>，再来一个会让 `locator('header')`
+         / `querySelector('header')` 变成歧义选择器（P0-02i 当场撞红）。它在 dialog 内部，语义靠
+         aria-label 表达即可。 -->
+    <div class="flex items-center gap-2 px-3 py-2.5 bg-surface border-b border-line shrink-0">
+      <button id="sessionBlockedBack" type="button" class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft active:bg-sunk" aria-label="返回" data-testid="session-blocked-back">←</button>
+      <div class="min-w-0 flex-1">
+        <div id="sessionBlockedTitle" class="truncate font-medium text-ink text-sm" data-testid="session-blocked-title"></div>
+        <div id="sessionBlockedProject" class="truncate text-[11px] text-ink-faint" data-testid="session-blocked-project"></div>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto flex flex-col items-center px-3 py-8">
+      <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">⛔ 这个会话现在打不开</div>
+      <p id="sessionBlockedReason" class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2" data-testid="session-blocked-reason"></p>
+      <div class="flex flex-col gap-2 w-full max-w-xs">
+        <button id="sessionBlockedRetry" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-retry">重试打开</button>
+        <button id="sessionBlockedSessions" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 权限审批弹窗（底部 sheet） -->
+  <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="sheet-handle"></div>
+      <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
+      <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
+      <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
+      <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
+           不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
+      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
+      <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
+      <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
+      <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
+        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">总是允许此类操作
+      </label>
+      <!-- 「永久」档：仅当 CLI 给出了会落盘的规则（permission_request.persistDestinations）时才出现。
+           默认停在「仅本会话」——这是改版前的唯一行为，不勾任何东西就不该悄悄多出持久授权。
+           影响面文案由 logic/permissions.js 的 describePersistScope 算，**取最宽的那一档**：
+           说小了会让用户批准一个他本不会批准的授权。 -->
+      <div id="permPersistWrap" class="hidden ml-6 mt-1 text-xs" data-testid="perm-persist-wrap">
+        <label class="flex items-center gap-1.5 text-ink-soft cursor-pointer">
+          <input type="radio" name="permScope" value="session" checked style="accent-color:var(--accent)" data-testid="perm-scope-session">仅本会话
+        </label>
+        <label class="flex items-center gap-1.5 text-ink-soft cursor-pointer mt-0.5">
+          <input type="radio" name="permScope" value="persist" style="accent-color:var(--accent)" data-testid="perm-scope-persist">永久 · <span id="permPersistLabel"></span>
+        </label>
+        <div id="permPersistHint" class="text-[10px] text-ink-faint mt-0.5 leading-snug"></div>
+      </div>
+      <!-- ExitPlanMode：对齐 CLI plan-exit，批准时可选手 default / acceptEdits / bypass -->
+      <div id="permExitModeWrap" class="hidden mb-3">
+        <div class="text-xs text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>
+        <!-- 档名固定 CLI 英文，不走 i18n -->
+        <div id="permExitMode" class="grid grid-cols-3 gap-1.5 text-xs">
+          <button type="button" data-exit-mode="default" class="perm-exit-mode py-2 rounded-lg border border-accent bg-accent-wash text-ink font-medium">Manual</button>
+          <button type="button" data-exit-mode="acceptEdits" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">Accept edits</button>
+          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">Bypass</button>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
+        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
+      </div>
+      <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
+      <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
+    </div>
+  </div>
+
+  <!-- AskUserQuestion 弹窗（E7） -->
+  <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
+       跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
+  <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
+      <div class="sheet-handle"></div>
+      <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
+      <div id="questionHeader" class="hidden text-xs text-ink-faint mb-1"></div>
+      <div id="questionText" class="text-sm mb-2 text-ink"></div>
+      <div id="questionMultiHint" class="hidden text-xs text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
+      <div id="questionOptions" class="space-y-2 mb-3"></div>
+      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">确认选择</button>
+      <div id="questionOtherWrap" class="mb-3 space-y-2">
+        <button type="button" id="questionOtherToggle" class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3">其他…</button>
+        <div id="questionOtherPanel" class="hidden space-y-2">
+          <input id="questionOtherInput" type="text" class="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink" placeholder="输入你的答案" autocomplete="off">
+          <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">提交其他答案</button>
+        </div>
+      </div>
+      <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过并中止本轮</button>
+      <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
+    </div>
+  </div>
+
+  <!-- 通用确认弹窗：替代原生 confirm()，样式对齐 permModal；appConfirm() 接线在 app.js。
+       会话彻底删除等不可逆操作也走这里（不再另开两级删除 sheet）。 -->
+  <div id="confirmModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
+    <div id="confirmSheet" class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="sheet-handle"></div>
+      <div id="confirmTitle" class="text-accent-deep font-semibold mb-2"></div>
+      <div id="confirmBody" class="text-sm text-ink-soft whitespace-pre-wrap break-words mb-4"></div>
+      <div class="flex gap-2">
+        <button id="confirmCancel" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
+        <button id="confirmAlt" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium hidden"></button>
+        <button id="confirmOk" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
+  <div id="consoleModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+    <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle bg-gray-700 mt-3 shrink-0"></div>
+      
+      <!-- Drawer Header -->
+      <div class="px-4 pb-2 flex items-center justify-between border-b border-gray-800 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-success animate-pulse"></span>
+          <span class="font-mono text-xs text-gray-300 font-bold tracking-wider">交互日志</span>
+        </div>
+        <button id="consoleClose" class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-xs font-mono text-gray-400">关闭</button>
+      </div>
+
+      <!-- 全部/交互/诊断 三态过滤：诊断=镜像/排队/停止状态机的结构化时间线（事后自诊断用），
+           交互=四跳文本日志（原有）。本地内存过滤，切换不重新请求服务端。 -->
+      <div class="px-4 py-1.5 flex items-center gap-1.5 border-b border-gray-800 shrink-0 font-mono text-[10px]">
+        <button id="consoleFilterAll" data-filter="all" class="console-filter-btn px-2 py-0.5 rounded bg-gray-700 text-gray-200">全部</button>
+        <button id="consoleFilterInteraction" data-filter="interaction" class="console-filter-btn px-2 py-0.5 rounded text-gray-500 hover:text-gray-300">交互</button>
+        <button id="consoleFilterDiag" data-filter="diag" class="console-filter-btn px-2 py-0.5 rounded text-gray-500 hover:text-gray-300">诊断</button>
+      </div>
+
+      <!-- Drawer Log Stream Area -->
+      <div id="consoleLogArea" class="flex-1 overflow-y-auto px-4 py-3 font-mono text-xs leading-relaxed text-gray-300 space-y-2.5 selection:bg-accent/30 selection:text-white">
+        <!-- Log rows will go here -->
+      </div>
+      
+      <!-- Drawer Footer -->
+      <div class="px-4 py-2 border-t border-gray-800 bg-gray-950/50 flex items-center justify-between shrink-0 text-xs text-gray-500 font-mono">
+        <span>最多存 500 条，落盘本机、重开恢复</span>
+        <div class="flex items-center gap-1.5">
+          <button id="consoleCopy" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">复制</button>
+          <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 工作区面板：文件浏览（FR-07，FileBrowseHandler）+ git 改动，两个 tab 同壳。
+       原先是「顶栏 pill → chooser 二选一 sheet → 目标面板」三层，chooser 那层零信息量：用户点开
+       之前无从知晓背后有什么，点开后还要再点一次；从「文件」切到「改动」得关面板重走一遍。
+       合并成 tab 后点一次 pill 就同时看见两个能力，互切零成本。
+       两个 tab 各自的工具行与 body 保留原 id——file-browser.js / git-changes.js 两个控制器只操作
+       自己的那几个节点，换壳对它们透明；开合与 tab 切换权归 createWorkspacePanel 统一持有。 -->
+  <div id="workspaceModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
+    <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <!-- tab 行：两个能力平铺可见，不再需要"先发现再选择" -->
+      <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div class="flex items-center gap-1 flex-1 min-w-0" role="tablist" aria-label="工作区">
+          <button id="workspaceTabFiles" type="button" role="tab" aria-controls="fileBrowseBody" data-testid="workspace-tab-files" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📁 文件</button>
+          <button id="workspaceTabChanges" type="button" role="tab" aria-controls="gitChangesBody" data-testid="workspace-tab-changes" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📝 改动</button>
+        </div>
+        <button id="workspaceClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
+      </div>
+
+      <!-- worktree 已删除的提示条（2026-09-13）。会话的驾驶轴 cwd 指向一棵已被删掉的 worktree 时，
+           下面两个 tab 都改看父仓（见 logic/panel-state.js 的 resolvePanelCwd）——不说这一句的话，
+           用户是在主仓的 diff 上判断该不该合并，而他以为看的是 worktree。两个 tab 共用一条。 -->
+      <div id="workspaceWorktreeGone" class="hidden px-4 py-1.5 text-[11px] text-ink-soft bg-sunk/60 border-b border-line shrink-0" data-testid="workspace-worktree-gone"></div>
+
+      <!-- 文件 tab 工具行 -->
+      <div id="fileBrowseTools" class="px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
+        <button id="fileBrowseBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级">←</button>
+        <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
+        <!-- CodeMirror 编辑+写回（files:write，见 file-browse.js writeFileInScope）：只在整份小文件在手
+             （browse:read 带 contentHash）时出现；三态互斥，同一时刻只显其一。 -->
+        <button id="fileBrowseEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-edit-btn">编辑</button>
+        <button id="fileBrowseSave" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium bg-cta text-white active:brightness-95 disabled:opacity-50" data-testid="file-save-btn">保存</button>
+        <button id="fileBrowseCancelEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-ink-soft hover:bg-sunk active:scale-95" data-testid="file-cancel-edit-btn">取消</button>
+      </div>
+      <div id="fileBrowseSaveError" class="hidden px-4 py-1.5 text-[11px] text-danger bg-danger/5 border-b border-line shrink-0" data-testid="file-save-error"></div>
+
+      <!-- 改动 tab 工具行 -->
+      <div id="gitChangesTools" class="hidden px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div id="gitChangesBranch" class="flex-1 min-w-0 text-[11px] font-mono text-ink-faint truncate"></div>
+        <button id="gitChangesRefresh" type="button" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="刷新" aria-label="刷新">↻</button>
+      </div>
+
+      <div id="fileBrowseBody" role="tabpanel" aria-labelledby="workspaceTabFiles" class="flex-1 overflow-y-auto"></div>
+      <div id="gitChangesBody" role="tabpanel" aria-labelledby="workspaceTabChanges" class="hidden flex-1 overflow-y-auto" data-testid="git-changes-body"></div>
+    </div>
+  </div>
+
+  <!-- 服务状态面板（NFR-15 可见性）：设置「访问与设备」组入口 → 两段式（基础/异常告警，判定化：裸计数留 /metrics）。
+       数据走鉴权 service:status ack，面板开着时 5s 定时重拉；结构同 workspaceModal，开合走 openSheet/closeSheet。 -->
+  <div id="serviceStatusModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
+    <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <!-- 返回箭头而不是 ✕：这张面板是通用设置「🖥 宿主机」页切出去的第二层，退出语义是
+           **退回上一级**。它与 generalSheet 同为 z-40、叠着会互相拦点击，所以打开时先收了设置
+           sheet——于是一个 ✕ 在用户眼里就成了「一路退到首页」，来时那一页还得重新找回去。
+           位置与图标都对齐 #generalBack，面板内部 L1↔L2 的返回是同一个心智。 -->
+      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <button id="serviceStatusBack" type="button" class="hit-44 shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回设置" data-testid="service-status-back">←</button>
+        <div class="flex-1 min-w-0 text-sm font-semibold text-ink">📊 服务状态</div>
+      </div>
+      <div id="serviceStatusBody" class="flex-1 overflow-y-auto px-4 py-3.5 space-y-4"></div>
+    </div>
+  </div>
+
+  <div id="envConfigModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务与配置">
+    <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <!-- 同 #serviceStatusBack：第二层面板，退出＝退回「🛠 行为与开关」页，不是关到首页 -->
+      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <button id="envConfigBack" type="button" class="hit-44 shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回设置" data-testid="env-config-back">←</button>
+        <div class="flex-1 min-w-0 text-sm font-semibold text-ink">⚙ 服务与配置</div>
+      </div>
+      <div id="envConfigBody" class="flex-1 overflow-y-auto px-4 py-3.5 space-y-4"></div>
+      <div id="envConfigFooter" class="hidden px-4 py-3 border-t border-line shrink-0 flex items-center gap-2">
+        <div id="envConfigHint" class="flex-1 min-w-0 text-[11px] text-ink-soft"></div>
+        <button id="envConfigSave" type="button" class="hit-44 px-3 py-2 rounded-xl bg-accent text-white text-xs font-semibold active:scale-95 disabled:opacity-50">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 发送前附件图片预览灯箱：点托盘 chip 打开原图（data URI），点遮罩/✕/Esc 关闭 -->
+  <div id="attachPreviewModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="附件预览">
+    <button type="button" id="attachPreviewClose" class="absolute top-3 right-3 w-10 h-10 rounded-full bg-black/50 text-white text-xl leading-none flex items-center justify-center active:scale-95" aria-label="关闭预览">✕</button>
+    <div class="max-w-full max-h-full flex flex-col items-center gap-2">
+      <img id="attachPreviewImg" class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-pop bg-black/20" alt="附件预览">
+      <div id="attachPreviewName" class="text-xs text-white/80 font-mono truncate max-w-[90vw]"></div>
+    </div>
+  </div>
+
+  <!-- 输入区：空首页枢纽默认隐藏（#composerFooter + app.js syncComposerVisibility）；点 ＋ / 进入会话后显示 -->
+  <footer id="composerFooter" class="hidden shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
+    <div class="max-w-2xl mx-auto flex flex-col">
+      <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
+      <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">
+        <summary class="px-3 py-2 text-xs text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between gap-2 border-b border-line-soft">
+          <span class="flex items-center gap-1.5 min-w-0 flex-1">
+            <svg class="w-3.5 h-3.5 text-ink-faint shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <!-- 折叠摘要：git · ctx（app.js formatStatuslineCollapsedSummary）；点 summary 展开明细 -->
+            <span id="cliSummary" class="font-medium truncate min-w-0" data-testid="cli-summary">statusline</span>
+          </span>
+          <!-- 点按复制：独立按钮，stopPropagation 避免误触展开/折叠 -->
+          <button type="button" id="cliStatusCopy" class="shrink-0 px-1.5 py-0.5 rounded text-[10px] text-ink-faint hover:text-ink hover:bg-sunk active:scale-95" data-testid="cli-status-copy" title="复制状态摘要" aria-label="复制状态摘要">复制</button>
+          <span class="cli-arrow text-xs text-ink-faint opacity-60 transition-transform duration-200 shrink-0">▼</span>
+        </summary>
+        <div id="cliStatus" class="px-3 py-2 text-xs leading-relaxed bg-surface text-ink-soft space-y-1"></div>
+      </details>
+
+      <!-- 隐藏的原始选择框，保持底层兼容（100% 保持终端等价性与事件契约） -->
+      <div class="hidden">
+        <!-- pillWorkspace 保留 DOM 供 JS 写工作区名，不进底栏（用户确认布局不含此项） -->
+        <div id="pillWorkspace" class="hidden">
+          <span id="pillWorkspaceText">模型默认</span>
+        </div>
+        <select id="modelInput">
+          <option value="">不指定（沿用当前）</option>
+        </select>
+        <!-- 选项由 app.js rebuildPermissionModeUi 按 SDK PermissionMode 清单填充 -->
+        <select id="permModeSelect"></select>
+        <div id="effortRow">
+          <select id="effortSelect">
+            <option value="">（模型默认）</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- E17：待发送附件托盘 -->
+      <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
+
+      <!-- 子代理/Workflow 活动横幅 -->
+      <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）
+           头行 #taskBannerLabel 按构成改写（子代理 / 后台命令 / 工作流 / 混合时「运行中」），不再写死「后台任务」。
+           「停止」= task:stop → SDK stopTask(taskId)，对齐 CLI 停单个后台任务。
+           折叠热区是 #taskBannerToggle 整条头行（无三角按钮）；它与「停止」按钮是兄弟而非父子，
+           这样 role="button" 不会吞掉按钮的无障碍语义，键盘 Enter 也不会一次触发两个动作。
+           任务列表 #taskProgressList 与每个任务的详情块都由 task-status.js 建在横幅**内部**——
+           详情内联在各自的任务卡片里，折叠横幅时随之隐藏（旧实现把详情面板放在横幅外，收起后收不回）。-->
+      <div id="taskProgressBanner" class="hidden px-3 py-2 bg-surface border border-warning/40 rounded-xl text-xs text-warning mb-1 shrink-0">
+        <div class="flex items-center gap-2">
+          <div id="taskBannerToggle" class="flex items-center gap-2 flex-1 min-w-0 cursor-pointer select-none py-1 -my-1" role="button" tabindex="0" aria-expanded="false" data-testid="bg-task-toggle" title="展开/收起任务列表">
+            <span class="animate-spin text-sm">⚙</span>
+            <span id="taskBannerLabel" class="shrink-0 font-semibold">后台任务</span>
+            <span id="taskProgressText" class="font-medium truncate flex-1 min-w-0"></span>
+          </div>
+          <button type="button" id="btnTaskStop" class="hidden shrink-0 px-2 py-1 rounded-lg border border-warning text-warning font-semibold hover:bg-warning hover:text-surface active:scale-95 transition-all" data-testid="task-stop-btn" title="停止该后台任务">停止</button>
+        </div>
+      </div>
+
+      <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
+           #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
+      <div id="mirrorBanner" class="hidden" aria-hidden="true">
+        <span id="mirrorBannerIcon"></span>
+        <span id="mirrorBannerText"></span>
+      </div>
+      <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
+      <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
+
+      <!-- 下一步建议：每轮收尾后由模型预测的下一句（CCM_PROMPT_SUGGESTION 开关）。点一下【填进输入框、
+           不自动发送】——手机上照着灰字手打这句话的成本比它省下的思考更高，只读提示在这里等于没有。
+           放在 pill 之上而非 chips 区：建议是整句话，塞进那条横向滚动的 chip 行会被截得读不出来。
+           有内容才显示；打字 / 采纳 / 关掉 / 新一轮开跑 / 切会话即隐藏（app.js hidePromptSuggestion 的调用点）。 -->
+      <div id="promptSuggestion" class="hidden px-1 pb-1.5" data-testid="prompt-suggestion">
+        <!-- 主按钮与 ✕ 并排：HTML 不许按钮套按钮，边框圆角因此上提到这层容器，两个子按钮各管各的按压反馈。 -->
+        <div class="flex items-stretch rounded-xl border border-line bg-surface overflow-hidden">
+          <button type="button" id="promptSuggestionBtn"
+            class="flex-1 min-w-0 text-left px-3 py-2 active:bg-sunk">
+            <!-- 标签行必须同时回答两件事：这句话【是什么】（模型猜的、不是系统消息），以及点了【会怎样】。
+                 后者尤其要紧——不写明"填进输入框"，用户会担心一点就发出去而根本不敢碰。
+                 文案是静态的，写在 HTML 里由 applyI18nToDocument 整树扫描翻译，不进 JS 模板。 -->
+            <span class="flex items-center gap-1 text-[10px] text-ink-faint mb-0.5" data-testid="prompt-suggestion-label">
+              <span aria-hidden="true">💡</span><span>猜你接下来想发 · 点一下填进输入框</span>
+            </span>
+            <!-- min-w-0 撑住 truncate：flex 子项默认 min-width:auto，长句会把整条撑宽而不是截断 -->
+            <span id="promptSuggestionText" class="block text-xs text-ink-soft truncate"></span>
+          </button>
+          <!-- 手机上没有 hover 也没有 Esc：不给显式出口，这条建议就只能靠打字或切会话赶走。
+               hit-44 用伪元素补足触达区，不撑大视觉宽度。 -->
+          <button type="button" id="promptSuggestionClose" data-testid="prompt-suggestion-close"
+            class="hit-44 shrink-0 w-9 flex items-center justify-center border-l border-line text-ink-faint text-base active:bg-sunk"
+            aria-label="关闭建议">✕</button>
+        </div>
+      </div>
+
+      <!-- Unified Premium Input Pill Container
+           busy 态：发送钮恒为停止钮（草稿保留在输入框，发送闸由 textarea placeholder 说明——
+           同一句提示只出现一处，别再另起一行小字）；
+           live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
+           CLI 镜像：placeholder 显示「终端运行中 · 只读追平」等，发送位变「续接 CLI 会话」。-->
+      <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
+        <!-- Top Row: Full-width Textarea
+             @ 文件引用候选不再横滑 chips：与 / 斜杠提示同款纵向浮层（#atMentionHints，JS 挂到 input 父级 absolute bottom-full） -->
+        <div class="w-full flex items-start relative">
+          <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"
+            class="flex-1 resize-none bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
+        </div>
+
+        <input type="file" id="fileInput" multiple class="hidden">
+
+        <!-- Bottom Row: Toolbar
+             会话档摘要 chip（模型 · 权限 · 思考）一条连着显示；点开即会话设置。
+             附件/发送钉在右侧 shrink-0，长摘要也挤不掉动作区。CLI 镜像态靠 placeholder + 发送位续接。
+             原三个独立 chip + 独立齿轮已收敛为此入口（#pillSession 是设置里复制 session id 的胶囊，别撞名）。 -->
+        <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
+          <!-- 可滚动 chip 区：摘要可能很长，横向滚；动作区不进滚动 -->
+          <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
+            <div id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" data-testid="pill-defaults">
+              <span id="pillModelText" class="pill-defaults-part pill-model">默认</span>
+              <span class="pill-defaults-sep" aria-hidden="true">·</span>
+              <span id="pillPermText" class="pill-defaults-part pill-perm">Manual</span>
+              <!-- 模型不支持 effort 时整段（分隔点+文案）隐藏，避免留下孤零零的「·」 -->
+              <span id="pillEffort" class="pill-effort-inline hidden">
+                <span class="pill-defaults-sep" aria-hidden="true">·</span>
+                <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
+              </span>
+            </div>
+            <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
+            <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
+          </div>
+
+          <!-- 钉死动作区：附件 / 发送——永不进横向滚动、不被长模型名挤没 -->
+          <div id="composerActions" class="composer-actions flex items-center gap-0.5 shrink-0">
+            <!-- E17：附件按钮——位置仍在发送左侧；视觉加大便于单手点（系统 file picker 不变） -->
+            <button id="btnAttach" class="flex items-center justify-center w-10 h-10 rounded-xl hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件" aria-label="添加附件">
+              <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+              </svg>
+            </button>
+
+            <!-- 兼容性保留：隐藏的原 btnStop -->
+            <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
+
+            <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 有内容发送 / 续接 均显示；无语音 -->
+            <button id="btnSend" class="hidden flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 设备待授权遮罩层 (TOFU Device Waiting Overlay) -->
+  <div id="deviceModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-surface rounded-2xl p-6 text-center border border-line" style="box-shadow: var(--shadow-pop)">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent/10 text-accent mb-4 animate-pulse">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+        </svg>
+      </div>
+      <h2 class="text-xl font-semibold text-ink mb-2">🔒 等待授权</h2>
+      <p class="text-sm text-ink-soft mb-4 leading-relaxed">
+        这是一台新设备。在你<strong class="text-accent">另一台已登录的设备</strong>上会弹出「新设备请求接入」，点一下「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。
+      </p>
+      <div class="bg-sunk rounded-xl p-3 text-left border border-line-soft mb-4">
+        <div class="text-xs text-ink-faint uppercase font-bold tracking-wider mb-1">本设备 ID</div>
+        <code id="deviceModalId" class="font-mono text-xs break-all text-ink selection:bg-accent/20">generating...</code>
+      </div>
+      <details class="text-xs text-ink-faint leading-relaxed text-left">
+        <summary class="cursor-pointer select-none">没有其它已登录的设备？用命令授权 ▾</summary>
+        <div class="mt-1.5">在跑着 server 的那个终端窗口里按 <strong class="text-accent">回车键</strong> 一键同意最新设备，或在该项目目录下执行：
+        <code class="block font-mono bg-sunk px-2 py-1 rounded text-ink mt-1.5 select-all border border-line-soft">node scripts/device.js approve "<span id="deviceModalCmdId">...</span>"</code></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- 已信任设备远程审批——待审批设备请求卡片栈（收 pending_devices 事件，app.js 动态填充）。
+       仅“已登录的可信设备”会收到，点准入/拒绝即发 user:approveDevice/denyDevice，免去上电脑终端。
+       top 由 app.js 按 header 实测高度写 inline style（见 renderDeviceRequests）：卡片必须让开顶栏，
+       否则有待批设备时侧栏/首页/日志/＋ 全被盖住点不到。这里的 top-0 只是 JS 跑到前的初值。
+       不加 safe-top：header 自己已吃掉 safe-area（app.css 移动端 header padding），卡片在它下方，
+       再补一次会让 p-3 的间距失效。
+       z-30 而非 z-50：这是页面级提示，不该压过模态层（permModal/questionModal/consoleModal 等
+       z-40 是当前焦点，被卡片盖住关闭钮就出不来了）。层序：header 20 < 本卡片/scrim 30
+       < 弹窗 40 < 全屏遮罩 50（deviceModal/deviceDenied 必须盖住它——本设备都没获批，
+       没有“替别人审批”这回事）。 -->
+  <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-30 p-3 space-y-2 pointer-events-none"></div>
+
+  <!-- 本设备被主机所有者拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
+  <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6 text-center" style="box-shadow:var(--shadow-pop)">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sunk text-danger mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+        </svg>
+      </div>
+      <div class="text-xl font-semibold text-ink mb-2">设备未获授权</div>
+      <p class="text-sm text-ink-soft mb-5 leading-relaxed">主机所有者已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。</p>
+      <button id="deviceDeniedRetry" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium mb-3">重新请求接入</button>
+      <button id="deviceDeniedHelp" class="text-xs text-ink-faint underline">查看访问帮助</button>
+    </div>
+  </div>
+
+  <!-- 访问帮助：怎么连接 / 令牌在哪 / 新设备怎么批。常驻入口在配置面板，也从令牌页/被拒页打开。 -->
+  <div id="accessHelp" class="hidden fixed inset-0 z-50 bg-canvas overflow-y-auto p-6 safe-top safe-bottom">
+    <div class="w-full max-w-md mx-auto">
+      <div class="flex items-center justify-between mb-5">
+        <div class="text-lg font-semibold text-ink" style="font-family:var(--font-read)">如何连接与使用</div>
+        <button id="accessHelpClose" class="px-2.5 py-1 rounded bg-sunk active:bg-line-soft text-xs text-ink-soft">关闭</button>
+      </div>
+      <div class="space-y-4 text-sm leading-relaxed">
+        <div>
+          <div class="font-semibold text-ink mb-1">📱 在手机上连接</div>
+          <div class="text-ink-soft">已经有一台手机能用了？在那台上打开设置 →「接入与设备」→「📷 显示接入二维码」，新手机扫一下就进来了，不用手输令牌。否则打开 <code class="bg-sunk px-1 rounded text-xs break-all">https://你的域名/#token=令牌</code>。令牌进入后存在本机浏览器，之后免带；装到主屏当 App 用更顺手。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🔑 访问令牌在哪</div>
+          <div class="text-ink-soft">在电脑上的 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 里找 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code> 这一项（旧版装的是 <code class="bg-sunk px-1 rounded text-xs">.env</code>），或者跑 <code class="bg-sunk px-1 rounded text-xs break-all">node scripts/qr.js</code> 打一张二维码直接扫。启动日志只有第一次打印完整 URL，之后为防泄露只显示掩码，别照着它输。清除浏览器数据会一并清掉令牌，届时重输一次即可。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🆕 新设备怎么获批</div>
+          <div class="text-ink-soft">除了本机直连、以及已开 Cloudflare Access 的域名，其余路径（局域网 IP、Tailscale、没配 Access 的隧道域名）新设备都要批一次。你已登录的设备上会弹「新设备请求接入」，点「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。兜底命令：<code class="bg-sunk px-1 rounded text-xs break-all">node scripts/device.js approve "&lt;ID&gt;"</code>。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🔄 连不上怎么办</div>
+          <div class="text-ink-soft">多半是令牌被清——重输即可。若提示设备未获批，按上一条批一次。切后台/息屏断开会在回到前台时自动重连，无需手动刷新。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 会话设置遮罩 scrim -->
+  <div id="settingsScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
+
+  <!-- 会话设置大底栏 (Bottom Settings Sheet Drawer)
+       标题固定 + 内容区内部滚动；关法=点遮罩 / Escape / 把手区下拉（无「完成」）。
+       打开时 body.ccm-sheet-open 锁住背后主页面滚动，避免上滑把聊天内容顶穿面板。
+
+       ⚠️ 只放**会话级**配置。本机偏好（提示音/语言/推送）与主机级（终端会话推送/服务状态/重启）
+       在 #generalSheet 里——它们跟会话无关，不能跟着 composer 一起隐藏（本面板入口是底栏摘要
+       chip #pillDefaults，在 #composerFooter 内，首页 syncComposerVisibility 会把整个
+       footer 设 hidden）。 -->
+  <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle">
+    <!-- 标题行：左侧拖关热区 + 右侧 CLI 重读（图标，不占内容区纵向） -->
+    <div class="shrink-0 border-b border-line-soft bg-surface flex items-start">
+      <div id="settingsDragZone" class="settings-drag-zone flex-1 min-w-0 select-none" aria-label="下拉关闭配置面板">
+        <div class="sheet-handle"></div>
+        <div class="px-4 pt-0.5 pb-2">
+          <div id="settingsSheetTitle" class="text-sm font-bold text-ink" style="font-family:var(--font-read)">⚙️ 会话设置</div>
+        </div>
+      </div>
+      <!-- 终端改了 settings 后手动重读；与 compose 页 ↻ 同源 config:refresh -->
+      <button id="btnConfigRefresh" type="button" class="shrink-0 mt-2.5 mr-3 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置" aria-label="重新读取 CLI 配置">
+        <span class="text-base leading-none" data-spin>↻</span>
+      </button>
+    </div>
+
+    <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
+      <!-- 1/2/3. 模型 · 思考强度 · 权限：始终展开；模型区不设内滚，整表自然排开 -->
+      <section id="modelSection" class="settings-block">
+        <div class="settings-block-head">
+          <span class="shrink-0">✨</span>
+          <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
+          <span class="text-[10px] text-ink-faint ml-1">下一条消息起效</span>
+        </div>
+        <!-- 候选还没到（scout 在途）或取不到时的就地说明，替代空网格 + 孤儿标题 -->
+        <div id="modelGridEmpty" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+        <div id="customModelGrid" class="grid grid-cols-2 gap-1.5">
+          <!-- 动态生成的模型卡片 -->
+        </div>
+      </section>
+
+      <section id="customEffortGroup" class="pl-3 border-l-2 border-line-soft">
+        <div id="effortSection" class="settings-block">
+          <div class="settings-block-head">
+            <span class="shrink-0">🧠</span>
+            <span class="shrink-0 text-xs font-semibold text-ink-soft">思考强度</span>
+            <!-- 归属模型名：位置已表达父子，标题旁再点名一次，免得磁贴看着无主。
+                 解析不出具体模型时整块收起，不留一个孤零零的「·」在那。 -->
+            <div id="effortOwnerWrap" class="hidden items-center gap-1 min-w-0 ml-auto">
+              <span class="text-[10px] text-ink-faint">属于</span>
+              <span id="effortOwnerModel" class="text-[10px] text-accent font-semibold truncate max-w-[14rem]"></span>
+            </div>
+          </div>
+          <div id="customEffortGrid" class="flex flex-wrap gap-1.5">
+            <!-- 动态生成的思考强度按钮 -->
+          </div>
+          <!-- 不支持时就地说明，替代原先的「整块消失」 -->
+          <div id="effortUnsupported" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+        </div>
+      </section>
+
+      <section id="permSection" class="settings-block">
+        <div class="settings-block-head">
+          <span class="shrink-0">🛡️</span>
+          <span class="shrink-0 text-xs font-semibold text-ink-soft">权限</span>
+        </div>
+        <!-- 磁贴由 app.js rebuildPermissionModeUi 按 SDK PermissionMode 清单动态填充（与后端 CCM_PERMISSION_MODES 同源） -->
+        <div id="customPermGrid" class="grid grid-cols-2 gap-1.5" data-testid="perm-grid"></div>
+      </section>
+
+      <!-- 4. 当前会话 ID（会话级；放最底，非首屏关键路径） -->
+      <div class="pt-0.5">
+        <div class="text-xs font-semibold text-ink-soft mb-1.5">🆔 <span>会话标识</span></div>
+        <div id="settingsSessionRow" class="hidden p-2 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
+          <span class="text-ink-soft font-medium">当前会话</span>
+          <button id="pillSession" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-ink-soft transition-all font-mono" title="点按复制完整 session id">
+            <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+            </svg>
+            <span id="pillSessionText" class="font-mono"></span>
+          </button>
+        </div>
+        <!-- 懒创建期就地说明，替代原先「只藏行、留标题」的孤儿形态（文案由 sessionIdBlockView 给） -->
+        <div id="settingsSessionHint" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+      </div>
+
+      <!-- 5. 自动调用计数（会话级）：下一步建议 / 回来时的摘要都会真实计费，「要花钱」这件事必须
+           在面板上看得见——否则它只活在代码的一行判据里，面板、config CLI、doctor 三处都发现不了
+           （同 CCM_AGENT_PROGRESS_SUMMARIES 在 env-schema 里的那段说明）。
+           **只报次数不报金额**：那笔钱已计入会话总成本，再列一份金额会变成两个对不上的数字。
+           一次都没触发过时整段隐藏，不给空计数占位。 -->
+      <div id="sideQuestionBlock" class="hidden pt-0.5" data-testid="side-question-stats">
+        <div class="text-xs font-semibold text-ink-soft mb-1.5">🔁 <span>本会话的自动调用</span></div>
+        <div class="p-2 rounded-xl border border-line bg-surface text-xs text-ink">
+          <div id="sideQuestionCounts" class="text-ink-soft"></div>
+          <div class="text-[10px] text-ink-faint mt-1">费用已计入会话总成本，不是额外的一笔</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用设置遮罩 scrim（与会话设置各用一个，两个 sheet 零隐式耦合） -->
+  <div id="generalScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
+
+  <!-- 通用设置大底栏：入口在侧栏底部（#btnGeneralSettings），全局可达。
+       与 #settingsSheet 同构，由同一个 createSettingsController 驱动（只换一组 DOM key）。
+       分节按作用域：📱 本机（存 localStorage，换设备要重设）/ 🖥 主机（影响整台电脑上的所有会话）。 -->
+  <div id="generalSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="generalSheetTitle">
+    <div id="generalDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭设置">
+      <div class="sheet-handle"></div>
+      <!-- 标题栏在拖拽区内，但 settings.js 的 onDragPointerDown 会跳过 button/a/input——
+           返回键放这里不会被下拉手势吃掉。 -->
+      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface flex items-center gap-2">
+        <button id="generalBack" type="button" class="hidden shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回" data-testid="general-back">←</button>
+        <div class="min-w-0 flex-1">
+          <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 设置与状态</div>
+          <div id="generalSheetSub" class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭 · 不含本会话的模型与权限</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 面板体：L1 目录 + 6 个 L2 页。**只有一层显示**，切换由 app/general-nav.js 驱动。
+         为什么是两级而不是继续平铺：平铺到九组后必须靠一排 sticky 分段 chip 才能导航，那是「一个
+         容器装不下了」的症状。两级之后 L1 只有 6 行、一眼扫完，每行的副标题是**活数据**
+         （logic/general-nav.js 算出），不再是会漂的功能枚举。
+         **所有既有 id 逐字保留**：控制器按 id 回填本机偏好（settings.js 的 syncPrefs），
+         侧栏铃铛按 id 深链（#pushStatusRow）——改 id 会让这两条静默失效。 -->
+    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3">
+
+      <!-- ═══ L1 目录 ═══ -->
+      <div id="generalNavHome" data-testid="general-nav-home" class="space-y-2">
+        <!-- 「现在」区：只在有可行动的事时出现，无事整段消失（不留空占位）。由 app.js 渲染。 -->
+        <div id="generalNowSection" class="hidden space-y-1.5 p-2.5 rounded-xl border border-accent/30 bg-accent-wash/40" data-testid="general-now">
+          <div class="text-[11px] font-bold text-accent-deep tracking-wide">现在</div>
+          <div id="generalNowItems" class="space-y-1.5"></div>
+        </div>
+        <!-- 六行目录由 app/general-nav.js 按 logic/general-nav.js 的判定渲染 -->
+        <div id="generalNavRows" class="space-y-2"></div>
+      </div>
+
+      <!-- ═══ L2 · 🔔 通知 ═══
+           「什么事值得打扰我」与「怎么提醒我」分两问，而不是按「本地/远端」实现方式拆——
+           用户问的是一件事：手机会不会响。 -->
+      <div id="generalPage-notify" class="hidden space-y-4" data-general-page="notify">
+        <!-- #generalSectionPush 是侧栏 #btnPush 与铃铛的深链锚点，**不可改名** -->
+        <div id="generalSectionPush" class="scroll-mt-8">
+          <div id="pushStatusRow" class="mb-2"></div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">怎么提醒我
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
+          </div>
+          <div class="space-y-2">
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">提示音</span>
+                <span class="text-xs text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
+              </span>
+              <input id="prefAlertSound" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">震动</span>
+                <span class="text-xs text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
+              </span>
+              <input id="prefAlertVibrate" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">前台也弹系统通知</span>
+                <span class="text-xs text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
+              </span>
+              <input id="prefAlertFgComplete" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+            </label>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+              <span class="min-w-0">
+                <span class="font-semibold block">锁屏带内容预览</span>
+                <span class="text-xs text-ink-soft">锁屏通知带上问题 / 工具 / 任务摘要，而不只是「有新消息」</span>
+              </span>
+              <input id="prefPushPreview" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0">
+            </label>
+            <!-- 没有订阅时预览开关是空转的（偏好跟着订阅存在服务端）。不禁用它——只说明，
+                 免得用户勾了半天以为生效了。 -->
+            <div id="pushPreviewInertNote" class="hidden text-[11px] text-ink-faint px-1">未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。</div>
+            <div class="text-[11px] text-ink-faint px-1">ntfy 通道恒为最小化，不受此开关影响。</div>
+          </div>
+        </div>
+
+        <!-- 两个「试一下」并排：用户想验的是「手机会不会响」这一件事，此前分居两组各一个按钮。
+             就地执行的动作用居中文字 + 凹陷底（像按钮），与跳转类的左对齐 + 浮起底区分开。 -->
+        <div class="space-y-2">
+          <button id="btnAlertPreview" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium">▶ 试听提示音 / 试震一下</button>
+          <button id="btnPushTest" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium" data-testid="push-test">🔔 发一条测试推送</button>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🔐 接入与设备 ═══
+           指纹与信任名单**必须同屏**：指纹的唯一用途就是在名单里认出手上这台，
+           此前它们分居「📱 本机」与「🖥 主机」两段、隔着整整一屏。 -->
+      <div id="generalPage-devices" class="hidden space-y-4" data-general-page="devices">
+        <!-- 待批设备：给入口，不在这里另渲染一份审批 UI。卡片本体是 #deviceRequests 那个 z-30
+             fixed 浮层，而 #generalScrim 同为 z-30 却在 DOM 里排得更后——同层后来居上，于是
+             设置面板开着时卡片既看不见也点不动。L1 上那个红点是全站唯一表示「点一下就能处理」
+             的记号，不给通路就是在说假话。收起面板把卡片让出来即可，照搬一份审批按钮会变成
+             同一份数据两套渲染面（同「排查」页那两条日志入口的理由）。
+             整段显隐由 app.js 的 renderDeviceRequests 与卡片栈同源驱动，不另存一份判据。 -->
+        <div id="pendingDevicesEntry" class="hidden">
+          <button id="btnPendingDevices" type="button" class="w-full text-left p-2.5 rounded-xl border border-cta bg-sunk active:bg-line text-xs text-ink" data-testid="pending-devices-entry">
+            <span class="font-semibold block">🔔 <span id="pendingDevicesCount">有设备在等你批</span> →</span>
+            <span class="text-ink-soft">收起这张面板，在顶部卡片上「准入 / 拒绝」</span>
+          </button>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>本机设备指纹</span></div>
+          <div class="p-2.5 rounded-xl border border-line bg-surface text-xs">
+            <div id="deviceFingerprintShort" class="text-sm text-ink font-semibold tracking-wide" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-short">—</div>
+            <div class="text-ink-soft mt-1 leading-snug">在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。</div>
+            <details class="mt-1.5">
+              <summary class="text-ink-faint cursor-pointer">完整 ID</summary>
+              <div id="deviceFingerprintFull" class="text-[10px] text-ink-soft break-all mt-1" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" data-testid="device-fingerprint-full"></div>
+            </details>
+          </div>
+        </div>
+
+        <!-- 整段由 app.js 按 trusted_devices 事件渲染；旧 server 不发这个 type，整段就不出现。 -->
+        <div id="trustedDevicesSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔐 <span>已受信任的设备</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div id="trustedDevicesList" class="space-y-2" data-testid="trusted-devices-list"></div>
+          <!-- 文案按管辖面分档，由 app.js 的 renderTrustedDevices 写入：CF Access 开着且
+               DEVICE_APPROVAL_SCOPE 未设 all 时，这张表管不到隧道进来的连接，必须直说。 -->
+          <div id="trustedDevicesNote" class="text-[10px] text-ink-faint px-1 mt-1.5"></div>
+        </div>
+
+        <!-- 接入新设备：二维码没有「安全的默认档」——不含 token 的码没用，含 token 的码就是一把钥匙。
+             故做成**两步展开 + 到时自动隐藏**：投屏时人会本能地遮一串明文 token，却不会去遮一个
+             「看起来无害」的方块图案。同 scripts/qr.js 必须手敲的理由。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📷 <span>接入新设备</span></div>
+          <div id="qrStep1" class="space-y-2">
+            <button id="btnQrReveal" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-sunk active:bg-line text-xs text-ink font-medium" data-testid="qr-reveal">📷 显示接入二维码</button>
+            <div class="text-[10px] text-ink-faint px-1">码里含访问令牌，扫到即可进入。展开前请确认周围没有别人能看到屏幕。</div>
+          </div>
+          <div id="qrStep2" class="hidden space-y-2" data-testid="qr-confirm">
+            <div class="p-2.5 rounded-xl border border-warning/40 bg-warning/5 text-xs text-warning">
+              ⚠️ 二维码等同于一把钥匙：任何人扫到都能以你的身份进来。确定现在显示吗？
+            </div>
+            <div class="flex gap-2">
+              <button id="btnQrCancel" type="button" class="flex-1 text-center p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">取消</button>
+              <button id="btnQrConfirm" type="button" class="flex-1 text-center p-2.5 rounded-xl border border-cta bg-cta text-white text-xs font-semibold" data-testid="qr-confirm-show">显示</button>
+            </div>
+          </div>
+          <div id="qrStep3" class="hidden space-y-2" data-testid="qr-panel">
+            <div id="qrCanvasWrap" class="p-3 rounded-xl border border-line bg-white flex justify-center"></div>
+            <div id="qrNote" class="text-[10px] text-ink-faint px-1 text-center"></div>
+            <div id="qrCountdown" class="text-[10px] text-danger px-1 text-center font-semibold" data-testid="qr-countdown"></div>
+            <button id="btnQrHide" type="button" class="w-full text-center p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">立即隐藏</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🖥 宿主机 ═══
+           回答意图「那台电脑现在怎么样」：活着吗 / 多久了 / 版本 / 出过什么事，一屏答完。 -->
+      <div id="generalPage-host" class="hidden space-y-4" data-general-page="host">
+        <div data-scope-note="host" class="text-[11px] text-ink-faint leading-snug px-0.5">
+          影响整机所有会话（含终端 claude），换手机看也是同一份。
+        </div>
+
+        <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是「电脑终端里跑的会话要不要通知我」。
+             整段由 app.js 按安装态渲染（未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
+        <div id="hooksBridgeSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span></div>
+          <div id="hooksBridgeBody" class="space-y-2"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
+        </div>
+
+        <!-- statusline 桥：与上面那个桥并列。此前它在 web 上整段隐身——service:status 连字段都没有，
+             只能回电脑敲 npm run statusline:status，而「人不在电脑前」正是这个产品的前提。 -->
+        <div id="statuslineBridgeSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>终端状态栏</span></div>
+          <div id="statuslineBridgeBody" class="space-y-2" data-testid="statusline-bridge-body"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">开启后，你在电脑终端里跑的会话，模型 / 额度 / 上下文用量也会同步到手机。它接管 ~/.claude/settings.json 的 statusLine 命令并原样透传你原来的输出。</div>
+        </div>
+
+        <!-- MCP 服务器与 skills：数据早就随 init 事件到了浏览器（agent.js emit('init')），
+             只是从来没有渲染面。整段由 app.js 的 renderHostEnvSection 按有无数据显隐。 -->
+        <div id="hostEnvSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🧩 <span>宿主机上的 claude</span></div>
+          <div id="hostEnvBody" class="space-y-2" data-testid="host-env-body"></div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>运行状态</span></div>
+          <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🛠 行为与开关 ═══ -->
+      <div id="generalPage-behavior" class="hidden space-y-4" data-general-page="behavior">
+        <!-- 审批规则（只读）。这份名单决定手机上哪些工具直接放行、哪些弹审批——它来自
+             ~/.claude/settings.json 与工作区 .claude/settings.local.json，**与你在电脑终端用的是同一份**。
+             整段由 app.js 的 renderPermissionRules 按 permissions:rules 的 ack 显隐。 -->
+        <div id="permissionRulesSection" class="hidden">
+          <div class="text-xs font-semibold text-ink-soft mb-2">🛡 <span>审批规则</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div id="permissionRulesBody" class="space-y-2" data-testid="permission-rules-body"></div>
+          <div class="text-[10px] text-ink-faint px-1 mt-1.5">来自 ~/.claude/settings.json 与本工作区的 .claude/settings.local.json，与你在电脑终端里用的是同一份。这里只读——要改请在电脑上编辑那两个文件。</div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🌐 <span>语言</span> / Language
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
+          </div>
+          <div class="space-y-2">
+            <!-- 三个自绘按钮，不是原生 <select>：这张 sheet 是 position:fixed + transform 的容器
+                 （2026-09-11 Playwright 实测 #generalSheet 的 computed transform 恒为
+                 matrix(1,0,0,1,0,0)——Tailwind 的 transform 类即便位移为 0 也不产出 none），
+                 而手机 Safari 在这种祖先里算原生下拉弹层的坐标会算错：真机上菜单飘到了页面
+                 左上角、离控件几百 px（2026-09-11 用户截图）。全 app 其余下拉（模型 / 权限 /
+                 思考强度）早就是自绘按钮组，这里是最后一个裸露的原生 select。
+                 文案写死在 HTML 而非 JS 生成：applyI18nToDocument 只在启动时扫一遍静态 DOM，
+                 动态插入的节点拿不到翻译。三项都用自称语（auto 那项中英并排），因为这是
+                 「看不懂当前界面语言时唯一还得能用」的控件。 -->
+            <div id="prefLangGroup" role="radiogroup" aria-label="语言 / Language" class="space-y-1.5">
+              <button type="button" role="radio" aria-checked="false" data-lang="zh" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>中文</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-lang="en" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>English</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-lang="auto" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>跟随浏览器 / Auto-detect</span><span data-lang-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+            </div>
+            <div class="text-[11px] text-ink-faint px-1">切换后请刷新页面生效。</div>
+          </div>
+        </div>
+
+        <!-- 可写配置与只读诊断分开：改端口/工作目录能让服务起不来，那不是「诊断」。
+             此前它藏在「🩺 诊断」的折叠态里，是分类错误 + 第三层深。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">⚙ <span>服务与配置</span>
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="host">🖥 整机</span>
+          </div>
+          <div class="space-y-2">
+            <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 全部配置 · 端口 / 工作区 / 推送 →</button>
+            <!-- 开发者模式：一键重启 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
+            <div id="devModeGroup" class="hidden">
+              <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/配置后生效）</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🩺 排查 ═══ 只读体检，可写项已移去「行为与开关」 -->
+      <div id="generalPage-diag" class="hidden space-y-4" data-general-page="diag">
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🔍 <span>先跑这个</span></div>
+          <div class="space-y-2">
+            <button id="btnSecurityCheck" type="button" aria-expanded="false" aria-controls="doctorReport" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
+            <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
+          </div>
+        </div>
+
+        <!-- 四条日志，各看各的。先说清有几条、各管什么——此前用户根本不知道存在第四条
+             （server 进程自己的 stdout/stderr 在手机上完全读不到）。
+             后两条的**内容**住在另外两张面板里（顶栏的运行日志抽屉 / 服务状态面板），这里给的是
+             直达入口而不是搬运：那两处各自的来路（排障时点顶栏、看完告警下钻查是谁）都还在，
+             照搬一份会变成两套要各自维护的渲染。此前它们只以一行小字的形式被提了一嘴，
+             而「排查」正是用户找日志时会点开的那一页——L1 副标题列着四条、点进去只有一条。 -->
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">📄 <span>日志</span></div>
+          <div class="space-y-2">
+            <button id="btnServerLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="server-log-open">
+              <span class="font-semibold block">服务日志</span>
+              <span class="text-ink-soft">server 进程自己的 stdout / stderr —— 「为什么起不来」的答案在这里</span>
+            </button>
+            <div id="serverLogBody" class="hidden" data-testid="server-log-body"></div>
+            <button id="btnDiagSessionLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="diag-session-log">
+              <span class="font-semibold block">会话日志 →</span>
+              <span class="text-ink-soft">本会话的交互与状态机时间线 —— 「消息到底发出去没有」。前端日志也在这张抽屉的「诊断」过滤里</span>
+            </button>
+            <button id="btnDiagSecurityLog" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="diag-security-log">
+              <span class="font-semibold block">安全日志 →</span>
+              <span class="text-ink-soft">谁在什么时候被限速锁定过、推送投递失败过 —— 在「服务状态」面板里</span>
+            </button>
+            <div class="text-[10px] text-ink-faint px-1">后两条会切去另一张面板，从那里返回仍回到这一页。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ L2 · 🔑 帮助 ═══ -->
+      <div id="generalPage-help" class="hidden space-y-4" data-general-page="help">
+        <div class="space-y-2">
+          <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
+          <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
+          <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
+            class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
+            <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+            </svg>
+            <span>GitHub 仓库 · 源码 / Issue / Star →</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
