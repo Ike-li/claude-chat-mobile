@@ -180,18 +180,34 @@ RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑
                                    # message-idempotency / approval-integrity / rewind 整份 + file-upload 一个 describe
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
+                   # 【本条是 workers:1 串行】跑全量约 14 分钟（52 个 spec 实测时长加总 834s）。
+                   # 要全量走下面的 test:e2e:parallel（4 片 ~225s）；开发循环则只跑相关的那几条：
+                   # `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`，3-30s 出结果。两个坑：
+                   # ① **--grep 的模式带空格必须加引号**。不加会被 shell 拆成「--grep 第一个词
+                   #    ＋若干位置参数」，而它照样打印「Running 1 test … passed」——2026-09-18
+                   #    据此得出「单跑绿、整份跑红」的假对照，差点去查根本不存在的 spec 间耦合。
+                   # ② **--only-changed 在本仓不可用**。spec 不 import app/public（它们经浏览器
+                   #    访问页面），Playwright 的依赖图看不见产品代码：改 app.js 时它选出
+                   #    **0 个测试然后报绿**，正是「漏跑表现为全绿」。只有改 spec 自身时才有意义。
 npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自适应，CCM_E2E_SHARDS=N 可覆盖）。
                    # 每个分片就是一条 `npm run test:e2e --`，安全面同源。
                    # 分片按【实测时长】LPT 分配，不是 Playwright 原生 --shard 的按条数均分
                    # （原生 4 片 167s / 8 片 170s「一秒不差」是改造前的旧结论，已被 7e3b78e 推翻）。
-                   # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
-                   # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
-                   # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
-                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久。
+                   # 2026-09-18 实测（10 核 · 52 个 spec 文件 · 串行总和 834s，其中 55% 是空等，
+                   # 所以并行才有这么大收益）：4 片 ~225s = 缺省档 · 5 片 ~180s · 6 片 ~150s ·
+                   # 8 片 ~110s。地板≈最大那个 spec 文件自己的耗时——同一文件不跨分片，
+                   # workspace-sessions-sidebar 单跑实测 108s，所以 8 片已经触底、再加没有收益。
+                   # （别拿 .e2e-durations.json 里的值当地板：那是【上一轮】的观测，含当轮负载，
+                   # 实测偏大——本次缓存记 117.9s 而单跑只要 108s，照抄会算出「8 片比地板还快」。）
+                   # **缺省停在 4 是 flaky 选的，不是性能选的**：并行度越高，一批「等固定时间窗」
+                   # 的用例越容易超时。当前已知 P0-SYNC-ACK-TIMEOUT 一条，4 片下也会偶发红，
+                   # 根因未定位（单跑 3/3 绿、CPU 占满绿、6 进程并行绿，只有真跑分片全量才中）。
+                   # 想提分片数就得先把它清掉，否则只是让既有 flaky 更频繁。
                    # **以上全是「N 片挤同一台机器」的数字**。CI 上是另一种形态：
                    # CCM_E2E_SHARD_INDEX=i 让本进程只跑第 i 片，8 台 runner 各跑一片、
-                   # 互不争抢 CPU，所以「8 片会偶发假红」那条不能照搬过去（病因之一正是
-                   # 4 核跑 8 个 Chromium）——横向 8 片实测 323 条全绿、零 flaky，
+                   # 互不争抢 CPU，所以上面那条「分片数越高越容易假红」不能照搬过去（病因是
+                   # N 片挤同一台机抢 CPU；CI 那边每片独占一台 4 核 runner，等于每个浏览器
+                   # 拿到的资源是本机 8 片时的 3 倍多）——横向 8 片实测 323 条全绿、零 flaky，
                    # 整个 workflow 墙钟 296s → 140s。横向分片新增一条**漏跑表现为全绿**的路径——
                    # 各 runner 各自读时长缓存算分组，一台 cache 没命中就算出另一套分组，
                    # 于是有 spec 谁都没跑。汇总 job 用 `--merge-durations` 做并集校验堵它
