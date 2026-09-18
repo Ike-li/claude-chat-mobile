@@ -5174,6 +5174,36 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
+  // 未发送草稿（文字+附件）按 sessionId 存/取。bindView（收到广播后的真实切换）与 btnNew
+  // （同步本地重置）共用这一份：两处分头实现必然漂，而 btnNew 漏做这一步正是
+  // 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
+  // draft 由调用方传快照而不是这里现读 inputEl：bindView 是在 clearView 之前取的值。
+  function applySessionDraftSwap(prevSessionId, newSessionId, draft) {
+    const plan = planSessionDraftSwap({
+      prevSessionId,
+      newSessionId,
+      currentDraft: draft?.text ?? '',
+      currentAttachments: draft?.attachments ?? [],
+      drafts: sessionDraftCache,
+    });
+    if (plan.action !== 'swap') return;
+    if (plan.save) {
+      sessionDraftCache.set(plan.save.sessionId, {
+        text: plan.save.text,
+        attachments: plan.save.attachments,
+      });
+      if (sessionDraftCache.size > 40) {
+        const oldestKey = sessionDraftCache.keys().next().value;
+        sessionDraftCache.delete(oldestKey);
+      }
+    }
+    if (inputEl) {
+      inputEl.value = plan.restoreText;
+      inputEl.dispatchEvent(new Event('input'));
+    }
+    attachments.setItems(plan.restoreAttachments);
+  }
+
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
@@ -5220,30 +5250,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     clearView(sid, null);
     // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
-    const draftPlan = planSessionDraftSwap({
-      prevSessionId,
-      newSessionId: sid,
-      currentDraft: draftSnapshot.text,
-      currentAttachments: draftSnapshot.attachments,
-      drafts: sessionDraftCache,
-    });
-    if (draftPlan.action === 'swap') {
-      if (draftPlan.save) {
-        sessionDraftCache.set(draftPlan.save.sessionId, {
-          text: draftPlan.save.text,
-          attachments: draftPlan.save.attachments,
-        });
-        if (sessionDraftCache.size > 40) {
-          const oldestKey = sessionDraftCache.keys().next().value;
-          sessionDraftCache.delete(oldestKey);
-        }
-      }
-      if (inputEl) {
-        inputEl.value = draftPlan.restoreText;
-        inputEl.dispatchEvent(new Event('input'));
-      }
-      attachments.setItems(draftPlan.restoreAttachments);
-    }
+    applySessionDraftSwap(prevSessionId, sid, draftSnapshot);
 
     // clearView 刚 setBusy(false)：发送窗口内（首发懒开 / 同会话静默换实例）立即补回，避免 live 行闪没。
     // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
@@ -6378,6 +6385,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 【displayedSessionId 也要同步置空】上面那条 Bug A 的保证只做了一半：漏了这个变量，
+    // 一次迟到的 instances 广播会拿「prev=旧会话 / new=null」进 bindView 判成 swap，
+    // 把用户【刚在新会话页打的字】存进旧会话的草稿缓存，再用空串覆盖输入框
+    // （E2E 的 P0-33 / P0-12 稳定红就是撞这个：fill 之后几十毫秒被清空，发送键随之隐藏）。
+    // 草稿交换在这里同步做完——语义与 bindView 那次一致（存旧、清空、进空白的新会话页），
+    // 做完之后两侧都是 null，后续广播一律 keep，不再碰输入框。
+    applySessionDraftSwap(displayedSessionId, null, {
+      text: inputEl ? inputEl.value : '',
+      attachments: attachments.items(),
+    });
+    displayedSessionId = null;
     // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
     freshInterruptedInstanceId = null;
     enterComposeReady();
@@ -6464,6 +6482,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
       viewingInstanceId = null;
       currentCwd = d;
+      // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
+      // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
+      // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
+      // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
+      applySessionDraftSwap(displayedSessionId, null, {
+        text: inputEl ? inputEl.value : '',
+        attachments: attachments.items(),
+      });
+      displayedSessionId = null;
       // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
       freshInterruptedInstanceId = null;
       enterComposeReady();

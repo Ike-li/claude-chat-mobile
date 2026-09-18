@@ -576,6 +576,36 @@ test('shouldClearInputOnBindView: 同一会话静默换实例保留草稿，真�
 
 // bindView 切会话时未发送草稿（文字 + 附件）按 sessionId 存/取。
 // 与 shouldClearInputOnBindView 同判定边界：同会话静默换实例 = keep；真实导航 = swap（存旧取新）。
+// 新会话在发出第一条消息前没有 sessionId。bindView 被 setInstances 无条件调用，
+// 而 broadcastInstances() 在服务端有 28 个触发点且都是 io.emit 全员广播——于是
+// 「新会话已就绪、还没发第一条」这整段时间里，任何一个实例的状态变化（别的会话跑完
+// 一轮、审批、实例退出……）都会走一次 bindView。
+//
+// 判据若要求 newSessionId 非空才 keep，这些广播就全部落进 swap 分支，拿 restoreText=''
+// 覆盖输入框——用户正在斟酌的一段长 prompt 会无声消失。E2E 的 P0-33 / P0-12c / P0-13
+// 稳定红就是撞的这个（fill 之后几十毫秒内被清空，发送按钮因 hasContent=false 隐藏，
+// 点击超时 45s）。
+test('planSessionDraftSwap: 新会话期间反复收到广播不碰输入框（两侧都无 sessionId）', () => {
+  const drafts = new Map();
+  const call = () => planSessionDraftSwap({
+    prevSessionId: null, newSessionId: null,
+    currentDraft: '我正在斟酌的一段长 prompt', currentAttachments: [], drafts,
+  });
+  // 连续三次广播都必须 keep：action 一旦是 swap，调用方就会把 restoreText 写回输入框。
+  for (let i = 0; i < 3; i++) assert.deepEqual(call(), { action: 'keep' });
+});
+
+// 反向对照：真正离开一个会话时仍然要存旧草稿并清空，否则这条修复会顺手废掉
+// 「切走再切回草稿还在」那个功能（本函数当初就是为它加的）。
+test('planSessionDraftSwap: 从会话导航到空首页仍然 swap（存旧草稿、清输入框）', () => {
+  const plan = planSessionDraftSwap({
+    prevSessionId: 'sess_1', newSessionId: null, currentDraft: '未发出的话', currentAttachments: [],
+  });
+  assert.equal(plan.action, 'swap');
+  assert.deepEqual(plan.save, { sessionId: 'sess_1', text: '未发出的话', attachments: [] });
+  assert.equal(plan.restoreText, '');
+});
+
 test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目标会话草稿', () => {
   const attB = [{ _id: 'b1', name: 'b.png', mimeType: 'image/png', size: 10, data: 'x' }];
   const drafts = new Map([['sess_2', { text: '已缓存的 B 草稿', attachments: attB }]]);
@@ -635,12 +665,16 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
     }),
     { action: 'swap', save: null, restoreText: '已缓存的 B 草稿', restoreAttachments: attB },
   );
-  // 两端都空 / 未定义：swap 到空，不存
+  // 【2026-09-18 行为变更】两端都空 / 未定义 → keep，不再 swap 到空。
+  // 原断言钉的是「两侧都没有会话时也当作切换」，而那个行为会丢用户正在打的字：
+  // 新会话在发出第一条消息前没有 sessionId，bindView 又被 setInstances 无条件调用，
+  // 于是那段时间里任何一次 instances 广播（服务端 28 个触发点，全员广播）都会
+  // 走 swap → restoreText='' → 覆盖输入框。判据改成「会话身份没变就不碰草稿」。
   assert.deepEqual(
     planSessionDraftSwap({ prevSessionId: null, newSessionId: null, currentDraft: 'x' }),
-    { action: 'swap', save: null, restoreText: '', restoreAttachments: [] },
+    { action: 'keep' },
   );
-  assert.deepEqual(planSessionDraftSwap(), { action: 'swap', save: null, restoreText: '', restoreAttachments: [] });
+  assert.deepEqual(planSessionDraftSwap(), { action: 'keep' });
   // currentDraft 非字符串 / currentAttachments 非数组：安全归一
   const bad = planSessionDraftSwap({ prevSessionId: 's', newSessionId: 't', currentDraft: null, currentAttachments: null });
   assert.equal(bad.save.text, '');

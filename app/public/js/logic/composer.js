@@ -167,7 +167,13 @@ export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {})
 export function planSessionDraftSwap({
   prevSessionId, newSessionId, currentDraft = '', currentAttachments = [], drafts,
 } = {}) {
-  if (newSessionId && newSessionId === prevSessionId) return { action: 'keep' };
+  // 判据是「会话身份变没变」，不是「有没有会话」——含两侧都没有会话的情形。
+  // 【为什么不能要求 newSessionId 非空】新会话在发出第一条消息前拿不到 sessionId，而 bindView
+  // 被 setInstances 无条件调用、broadcastInstances() 在服务端有 28 个全员广播触发点：要求非空
+  // 会让那段时间里的每一次广播都落进 swap，拿 restoreText='' 覆盖用户正在打的字。
+  // ?? null 是把 undefined 与 null 归一（调用方传的是 `entry?.sessionId || null`，但纯函数
+  // 不拿调用方的归一当保证）。
+  if ((newSessionId ?? null) === (prevSessionId ?? null)) return { action: 'keep' };
   const atts = Array.isArray(currentAttachments) ? currentAttachments.slice() : [];
   const save = prevSessionId
     ? {
