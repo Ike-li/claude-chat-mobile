@@ -21,6 +21,14 @@ services:
       # ★ 匿名卷把镜像里那份 node_modules 盖在挂载之上。不这么做的话，宿主机（macOS/arm64）
       # 的 node_modules 会盖住容器里的——原生模块与 Playwright 浏览器二进制平台不对，直接跑不起来。
       - /app/node_modules
+      # ★ 隔离第六件：配置文件。上面那条 rw 挂载把仓库整个搬进来，包括维护者自己的
+      # ccm.config.json——那是【生产配置】。2026-09-18 实测它让集成测试 77/150 红：
+      # 机主设了 DEVICE_APPROVAL_SCOPE='all'（为了让信任表对隧道生效），于是
+      # shouldBypassDeviceApproval 第一行就 return false，容器内 127.0.0.1 自连也不再 bypass，
+      # 每个 socket 都 deviceApproved=false、业务事件被 socket.js 那道门丢弃。
+      # 症状极具迷惑性：「正常路径」用例全红而 fail-closed 用例全绿（它们碰巧也被拒），
+      # 看着像产品坏了。挂一份空配置覆盖掉——【必须 :ro】，rw 会写穿到宿主机的真配置上。
+      - ./isolated-config.json:/app/ccm.config.json:ro
     working_dir: /app
     # init：容器里会 spawn 真 server 与 claude stub 子进程，没有 init 进程收尸就会攒僵尸。
     init: true
@@ -44,6 +52,9 @@ services:
     image: claude-chat-mobile-test:local
     volumes:
       - ../..:/repo:ro
+      # 同上：变异会 tar 整个 /repo 到 /work，维护者的 ccm.config.json 也跟着进去。
+      # 这里覆盖源侧，复制出来的那份自然也是空配置。
+      - ./isolated-config.json:/repo/ccm.config.json:ro
     working_dir: /work
     init: true
     environment:
