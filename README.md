@@ -8,6 +8,7 @@
 <p align="center">
   <a href="README.en.md">English</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/">网站</a> ·
+  <a href="https://ike-li.github.io/claude-chat-mobile/demo/">在线演示</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">架构图集</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
@@ -75,6 +76,8 @@ npm ci --omit=dev && npm run setup && npm start
 要改代码或跑测试请 `git clone` 完整仓库。配置、非交互 setup、PWA、CLI hooks、**更新方式**：**→ [首次使用指南](docs/getting-started.md)**
 
 ## 界面长什么样
+
+**不想先装也能摸一遍：[在线演示](https://ike-li.github.io/claude-chat-mobile/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
 
 <details>
 <summary>展开 8 张截图</summary>
