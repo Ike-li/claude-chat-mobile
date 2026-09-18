@@ -8,6 +8,7 @@
 <p align="center">
   <a href="README.md">中文</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/">Website</a> ·
+  <a href="https://ike-li.github.io/claude-chat-mobile/demo/">Live demo</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">Architecture diagrams</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
@@ -75,6 +76,8 @@ Open the address printed in the terminal on your phone. The first time a new dev
 To change code or run tests, `git clone` the full repository instead. Configuration, non-interactive setup, PWA, CLI hooks and **how to update**: **→ [Getting Started](docs/getting-started.en.md)**
 
 ## What it looks like
+
+**Try it before installing anything: [live demo](https://ike-li.github.io/claude-chat-mobile/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
 
 <details>
 <summary>Show 8 screenshots</summary>
