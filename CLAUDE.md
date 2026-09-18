@@ -155,7 +155,11 @@ npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn c
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向
                          # tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
 RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）。
-                                   # 受此门控的是哪几个：grep -rl RUN_CLAUDE_INTEGRATION tests/integration/
+                                   # 受门控的是哪几个（写稿时 8 个）：
+                                   #   grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/
+                                   # **必须带 process.env 前缀**：有几个文件的注释里写着「不挂
+                                   # RUN_CLAUDE_INTEGRATION」，裸词 grep 会把它们一并捞出来，
+                                   # 把零 token 的用例误判成要真凭据的
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
                    # 【本条是 workers:1 串行】跑全量约 14 分钟（52 个 spec 实测时长加总 834s）。
