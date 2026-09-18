@@ -8019,7 +8019,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
     });
     if (!preview?.ok) { addBar(preview?.error || t('无法回退这一轮'), 'text-danger'); return; }
-    if (!preview.canRewind) { addBar(t('这一轮没有可回退的文件改动'), 'text-ink-faint'); return; }
+    if (!preview.canRewind) {
+      // 【为什么不是一句 addBar 就完】原来只说「这一轮没有可回退的文件改动」——讲清了为什么不行，
+      // 没讲还能干什么。真机实测用户连点 6 次，每次拿到同一句话，界面上没有任何下一步。
+      // 出路是对话轴的分叉：它不要求有文件改动，正是「清掉这条之后的对话」那个诉求的落点。
+      // 两种成因出路相同但文案不能混——no-file-changes 是本轮特性（这一轮没往盘上写过东西），
+      // no-checkpoint 是能力边界（找不到这条消息的快照）。
+      const noCheckpoint = preview.reason === 'no-checkpoint';
+      const title = noCheckpoint ? t('找不到这一轮的文件快照') : t('这一轮没有可回退的文件改动');
+      // 分叉锚点取前一条 assistant；取不到就没有出路可指（理论上 planRewind 已把首轮判成
+      // first-turn 走不到这里，但那是服务端的判据、这里是 DOM 事实，不拿前者替后者担保）。
+      if (!findPrecedingAssistantUuid(bubble)) { addBar(title, 'text-ink-faint'); return; }
+      const ok = await appConfirm({
+        title,
+        body: (noCheckpoint
+          ? t('找不到这条消息对应的文件快照，没有可恢复的文件。')
+          : t('这一轮没有经 Claude 编辑过的文件——Bash 命令改动的文件不在快照范围内，所以没有可恢复的内容。'))
+          + t('如果你要的是清掉这条消息之后的对话，可以改用「分叉」：复制一个到此为止的新会话，不动任何文件。'),
+        okText: t('改用分叉'),
+      });
+      if (ok) requestSessionFork(bubble, 'user');
+      return;
+    }
 
     const files = Array.isArray(preview.filesChanged) ? preview.filesChanged : [];
     const names = files.map(p => p.split('/').pop()).slice(0, 3).join('、');
