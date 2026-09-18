@@ -137,6 +137,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
+    // 这里关的是【后台】会话，当前视图（another-react-project）自始至终没变，所以不必像 P0-11o
+    // 那样等切换完成；但触发点同样显式放在关闭动作之后，与它共用一个端点——迟到事件何时发出
+    // 由用例决定，不再由 mock 的定时器去赌前端的处理速度（理由见 mock 侧该端点的注释）。
+    const lateEvents = await page.request.post('/__emit-late-closed-events');
+    expect(lateEvents.ok()).toBeTruthy();
     await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).not.toContainText('STALE CLOSED SESSION TEXT MUST NOT RENDER');
