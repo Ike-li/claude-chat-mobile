@@ -1542,6 +1542,23 @@ io.on('connection', socket => {
       callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
       return;
     }
+    // 「确认框还开着，会话被切走了」：ack 之后立刻推一条 instances，把 viewingInstanceId
+    // 换成另一个实例。前端的 appConfirm 正在 await，这条广播会在它等待期间落地、
+    // 把 displayedSessionId 改掉。真 server 上等价的触发是别处来的任意一次 broadcastInstances。
+    if (promptUuid === 'u-archived-6') {
+      callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
+      const other = mockInstances.find(i => i.instanceId !== viewingInstanceId) || mockInstances[0];
+      viewingInstanceId = other.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart,
+          viewingInstanceId, viewingCwd: other.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances, service: mockServicePayload() },
+      });
+      console.log('[mock] u-archived-6 —— preview 之后切走会话，模拟确认框等待期间的会话切换');
+      return;
+    }
     // 另一种 canRewind:false：SDK 侧根本没有这条消息的检查点（res.canRewind 为 false），
     // 不是「这一轮没改文件」。出路一样，成因不同，文案必须不同。
     if (promptUuid === 'u-archived-5') {
@@ -1786,7 +1803,12 @@ io.on('connection', socket => {
           // 第五轮专供另一种 canRewind:false——SDK 说这条消息没有可用检查点（快照过期/被清理）。
           // 与第四轮出路相同、成因不同，两条用例互为对照：文案判据写反会同时红。
           { role: 'user', content: 'An old turn with no snapshot', uuid: 'u-archived-5' },
-          { role: 'assistant', content: 'That one is too old to restore.', uuid: 'a-archived-5' }
+          { role: 'assistant', content: 'That one is too old to restore.', uuid: 'a-archived-5' },
+          // 第六轮专供「确认框还开着时会话被切走」那一档（P0-REWINDm）：preview 回完之后
+          // mock 立刻推一条改了 viewingInstanceId 的 instances 广播，前端 bindView 会把
+          // displayedSessionId 换掉——正是 requestSessionRewind 头部那段快照注释警告的形态。
+          { role: 'user', content: 'Switch away while I decide', uuid: 'u-archived-6' },
+          { role: 'assistant', content: 'Sure, take your time.', uuid: 'a-archived-6' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {

@@ -8038,7 +8038,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           + t('如果你要的是清掉这条消息之后的对话，可以改用「分叉」：复制一个到此为止的新会话，不动任何文件。'),
         okText: t('改用分叉'),
       });
-      if (ok) requestSessionFork(bubble, 'user');
+      if (!ok) return;
+      // 【与成功路径同一道校验】确认框 await 期间任何 instances 广播都可能改写
+      // currentCwd / displayedSessionId（见本函数开头那段快照注释）。requestSessionFork
+      // 内部取的是【当前】值，放行就会把这条气泡（A 会话）的锚点和已经变成 B 的会话
+      // 拼到一起发出去：做不出预期的分叉，用户还停在 B 里只看到一句失败。
+      // 这条是 fallback 出路，但「次要」不构成少一道校验的理由。
+      if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+        addBar(t('会话已切换，回退已取消，请重新发起'), 'text-info');
+        return;
+      }
+      requestSessionFork(bubble, 'user');
       return;
     }
 

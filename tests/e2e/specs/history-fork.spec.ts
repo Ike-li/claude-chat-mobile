@@ -222,6 +222,29 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-REWINDm 确认框等待期间会话被切走：不拿旧锚点去分叉新会话', async ({ page }) => {
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('Switch away while I decide', { timeout: 10_000 });
+
+    // preview 回完之后 mock 立刻推一条改了 viewingInstanceId 的 instances 广播，
+    // 前端 bindView 会把 displayedSessionId 换掉——而此时「改用分叉」的确认框还开着。
+    // 【为什么必须拦】requestSessionFork 内部取的是【当前】的 currentCwd / displayedSessionId，
+    // 放行就会把 A 会话气泡的锚点和已经变成 B 的会话拼到一起发出去：那个请求做不出预期的分叉，
+    // 用户还会停在 B 里只看到一句失败。成功路径早有同款校验（「会话已切换，回退已取消」），
+    // 这条 fallback 分支必须对齐，不能因为它是「次要出路」就少一道。
+    await longPressUser(page, 'Switch away while I decide');
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
+    await page.locator('#confirmOk').click(); // 主动作 = 回退
+
+    await expect(page.locator('#confirmBody')).toContainText('Bash', { timeout: 3_000 });
+    await page.locator('#confirmOk').click(); // 改用分叉
+
+    await expect(page.locator('#messages')).toContainText('会话已切换', { timeout: 5_000 });
+    // 反向断言：绝不能真的切到分叉出来的新会话去。
+    await expect(page.locator('#messages')).not.toContainText('Forked session ready.');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-REWINDb 会话首条消息无可保留锚点时，preview 阶段就拒绝且不弹二次确认', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
