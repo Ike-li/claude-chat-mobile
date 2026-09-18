@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, openSessionsSidebar, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-12 新会话首发 busy 连续性与不闪回首页', async ({ page }) => {
@@ -67,6 +68,70 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const minAfterFirst = await page.evaluate(
       () => (window as unknown as { __minAfterFirst: number }).__minAfterFirst);
     expect(minAfterFirst).toBeGreaterThanOrEqual(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-12f（2026-09-18）：显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包
+  // 不得把刚放弃的会话 id 填回来——否则紧随其后的权威包会让 bindView 拿「prev=旧会话 / new=null」
+  // 走草稿交换，把用户【在新会话页正打的字】存进旧会话的草稿缓存，再用空串覆盖输入框。
+  //
+  // 守的是 app.js 里 FE-001 分支上 `!sessionIdClearedByNav` 那道守卫。此前它在整套 E2E 里【不可达】：
+  // mock 的 session:new 只发一条 viewingInstanceId=null 的权威包，从不产出那种在途旧包，于是撤掉守卫
+  // 测试照样全绿（2026-09-18 实测过三版用例，重填一次都没触发，全部删掉）。
+  // test:stale-instances-on-new 把这条时序撑开：武装后 mock 延迟 900ms 才依次发
+  // 【在途旧包 → 权威包 → 送达锚点】。
+  test('P0-12f 新建后到达的在途旧 instances 包，不得把正在打的字清掉', async ({ page }) => {
+    await gotoMock(page);
+    // 前提：此刻确实在一个【有 sessionId】的会话里（inst_1 / mock-session-visual-test）。
+    // 旧包里没有可重填的 sessionId 的话，FE-001 的 `if (target?.sessionId)` 早退，这条用例就测了个空。
+    await sendChatMessage(page, 'test:stale-instances-on-new');
+    await waitForIdle(page);
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    // 在新会话页打字——必须发生在那两条包到达【之前】，那才是缺陷窗口的形状。
+    const draft = '在新会话页正打到一半的字';
+    await page.locator('#input').fill(draft);
+    await expect(page.locator('#input')).toHaveValue(draft);
+
+    // 【这条是防假绿的】若 mock 那批包抢在 fill 之前就到了，缺陷窗口根本没被撑开，用例会以
+    // 「输入框有字」假绿收场。此处要求送达锚点【尚未】上屏：真抢跑了它就红在这一行，而不是蒙混过关。
+    await expect(page.locator('#cliStatus')).not.toContainText('stale-probe-settled');
+
+    // 等送达锚点：socket.io 同一连接保序，它上屏即证明在途旧包与权威包都已被前端处理完。
+    await expect(page.locator('#cliStatus')).toContainText('stale-probe-settled', { timeout: 10_000 });
+
+    // 核心：字还在，发送键仍可用。修复前这里是空串——被 bindView 的草稿交换覆盖掉了。
+    await expect(page.locator('#input')).toHaveValue(draft);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-12g：同一条守卫的【第二个设置点】——目录行的 ＋（app.js 约 6507），它不经过 #btnNew。
+  // 两处代码逐字相同，而历史上正是只修了 btnNew 那一处、目录行 ＋ 照旧红（P0-11h 逼出来的）。
+  // 只测 btnNew 的话，「有人删掉目录行 ＋ 那处的 sessionIdClearedByNav = true」不会被任何用例发现。
+  test('P0-12g 目录行 ＋ 新建后到达的在途旧包，同样不得把正在打的字清掉', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stale-instances-on-new');
+    await waitForIdle(page);
+
+    // 点【当前工作区】那一行的 ＋：cwd 不变，于是与上一条用例的差别只剩「走哪个入口」这一个变量。
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    const draft = '从目录行 ＋ 进来打的字';
+    await page.locator('#input').fill(draft);
+    await expect(page.locator('#input')).toHaveValue(draft);
+
+    await expect(page.locator('#cliStatus')).not.toContainText('stale-probe-settled');
+    await expect(page.locator('#cliStatus')).toContainText('stale-probe-settled', { timeout: 10_000 });
+
+    await expect(page.locator('#input')).toHaveValue(draft);
+    await expect(page.locator('#btnSend')).toBeEnabled();
 
     await expectNoBrowserErrors(page);
   });

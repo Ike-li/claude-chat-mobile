@@ -252,6 +252,20 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
+// 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
+// viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
+// 【不可达】：撤掉它测试照样全绿（2026-09-18 实测过三版用例，重填一次都没触发）。
+//
+// 武装后 session:new 的回应变成三段：
+//   ① 延迟 STALE_INSTANCES_DELAY_MS 再发在途旧包（viewingInstanceId=旧实例、该实例仍带旧 sessionId）
+//      —— 延迟是为了把「用户在新会话页打字」这一步留在旧包到达【之前】，那正是缺陷窗口的形状；
+//   ② 紧接着发权威包（viewingInstanceId=null），它会让 bindView 拿 prev/new 去做草稿交换；
+//   ③ 最后发一条 branch 为 STALE_PROBE_BRANCH 的 status_line 当【送达锚点】——socket.io 同一连接
+//      保序，锚点上屏即证明 ①② 都已被前端处理完，用例不必 waitForTimeout（那也是禁止模式）。
+let staleInstancesOnNextNew = false;
+const STALE_INSTANCES_DELAY_MS = 900;
+const STALE_PROBE_BRANCH = 'stale-probe-settled';
 // P0-DUP-OPT：复现「在线乐观气泡 + 历史全量重载 = 同一条消息两颗气泡」。
 // 武装后同时改三处，凑齐真实 server 上那条链所需的全部条件：
 //   ① user:message 收到后立刻换实例并广播 instances（模拟实例被回收后的懒开）→ 前端 bindView；
@@ -427,6 +441,7 @@ function resetMockState() {
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  staleInstancesOnNextNew = false;
   replaySmallSyncArmed = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
@@ -1107,6 +1122,58 @@ io.on('connection', socket => {
       || mockInstances[0]?.cwd
       || '/Users/you/code/claude-chat-mobile';
     console.log(`[mock] session:new → 进空首页（viewingInstanceId=null, cwd=${viewingCwd})`);
+    // P0-12f：武装时把这一整条回应推后，并在权威包【之前】补一条在途旧包。旧实例取 session:new
+    // 到达时前端还在看的那个（此刻 viewingInstanceId 尚未被下面清掉）。一次性消费。
+    if (staleInstancesOnNextNew) {
+      staleInstancesOnNextNew = false;
+      const staleViewing = viewingInstanceId;
+      const staleInst = mockInstances.find(i => i.instanceId === staleViewing);
+      // 服务端侧状态重置与非武装路径【逐行一致】，只推迟 emit——否则这条用例还顺带改了
+      // permission/effort 的起点，红绿就不再只由那道守卫决定。
+      viewingInstanceId = null;
+      permissionMode = 'default';
+      effortLevel = null;
+      pendingFreshPermissionMode = undefined;
+      pendingFreshEffortLevel = undefined;
+      pendingFreshCwd = viewingCwd;
+      console.log(`[mock] P0-12f 武装生效：${STALE_INSTANCES_DELAY_MS}ms 后先发在途旧包（viewing=${staleViewing}, sessionId=${staleInst?.sessionId}）再发权威包`);
+      if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
+      setTimeout(() => {
+        // ① 在途旧包：viewingInstanceId 仍是旧实例，且该实例带着旧 sessionId。
+        //    前端此刻 displayedInstanceId 仍指着它、displayedSessionId 已被 btnNew 清空——
+        //    正好凑齐 FE-001 的前三个条件，只差 sessionIdClearedByNav 这道守卫。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId: staleViewing,
+            viewingCwd: staleInst?.cwd || viewingCwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload() }
+        });
+        // ② 权威包：viewingInstanceId=null。前端 displayedInstanceId 仍是旧实例，故走 bindView，
+        //    拿 prevSessionId / sid=null 去做草稿交换——缺陷就在这一步把输入框清掉。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId: null,
+            viewingCwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
+            instances: mockInstances, service: mockServicePayload(),
+            defaultPermissionMode: pendingFreshPermissionOrDefault(),
+            defaultEffort: pendingFreshEffortOrDefault() }
+        });
+        // ③ 送达锚点（见 staleInstancesOnNextNew 处的注释）。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'status_line', payload: {
+            project: viewingCwd.split('/').filter(Boolean).pop() || viewingCwd,
+            cwd: viewingCwd,
+            git: { branch: STALE_PROBE_BRANCH, staged: 0, modified: 3, untracked: 1, changed: 4, ahead: 0, behind: 0 },
+          }
+        });
+      }, STALE_INSTANCES_DELAY_MS);
+      return;
+    }
     viewingInstanceId = null;
     permissionMode = 'default';
     effortLevel = null;
@@ -2702,6 +2769,21 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_cmds_changed', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // P0-12f 的武装命令：只置标志、不改任何视图状态，把「在途旧包」留到下一次 session:new 再发。
+      // 必须在一个【已有 sessionId 的会话】里发，否则旧包里没有可重填的 sessionId，FE-001 的
+      // `if (target?.sessionId)` 早退，用例就测了个空。
+      commands: ['test:stale-instances-on-new'],
+      run: async ({ activeInst }) => {
+        staleInstancesOnNextNew = true;
+        console.log('[mock] test:stale-instances-on-new — 下一次 session:new 前插一条在途旧 instances 包');
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_stale_arm', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
         });
       },
     },
