@@ -20,8 +20,12 @@ const REPO = execFileSync('git', ['worktree', 'list'], { cwd: HERE, encoding: 'u
   .split('\n')[0].split(/\s+/)[0];
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
+// 同 verify.mjs：项目站的根是 /<repo>/，挂在 / 上会让漏网的绝对路径假绿。
+const BASE = '/claude-chat-mobile';
 const srv = createServer(async (req, res) => {
-  let rel = decodeURIComponent(req.url.split('?')[0]);
+  const url = decodeURIComponent(req.url.split('?')[0]);
+  if (url !== BASE && !url.startsWith(BASE + '/')) { res.writeHead(404); res.end(); return; }
+  let rel = url.slice(BASE.length) || '/';
   if (rel.endsWith('/')) rel += 'index.html';
   const f = path.join(SITE_ROOT, rel);
   if (!f.startsWith(SITE_ROOT) || !existsSync(f)) { res.writeHead(404); res.end(); return; }
@@ -35,7 +39,7 @@ const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();
 
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+const ORIGIN = `http://127.0.0.1:${PORT}${BASE}`;
 const reqs = [];
 page.on('request', r => reqs.push({ method: r.method(), url: r.url(), type: r.resourceType(), post: r.postData() }));
 

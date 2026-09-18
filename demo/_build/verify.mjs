@@ -33,10 +33,20 @@ const MIME = {
   '.png': 'image/png', '.woff2': 'font/woff2', '.ico': 'image/x-icon',
 };
 
+// GitHub Pages 项目站的根是 /<repo>/，**不是**域名根。本地 server 必须照着来：
+// 直接把 SITE_ROOT 挂在 / 上会让 /vendor/x 这类漏网的绝对路径命中 gh-pages 根下
+// 的同名文件而返回 200，线上却打在组织站根上 404——2026-09-18 的衬线字体就是
+// 这么漏过去的（本地全绿、线上两条 404）。加了前缀，本地才和线上等价。
+const BASE = '/claude-chat-mobile';
+
 function serve() {
   return new Promise(resolve => {
     const srv = createServer(async (req, res) => {
-      let rel = decodeURIComponent(req.url.split('?')[0]);
+      let url = decodeURIComponent(req.url.split('?')[0]);
+      if (url !== BASE && !url.startsWith(BASE + '/')) {
+        res.writeHead(404); res.end('outside project site'); return;
+      }
+      let rel = url.slice(BASE.length) || '/';
       if (rel.endsWith('/')) rel += 'index.html';
       const file = path.join(SITE_ROOT, rel);
       if (!file.startsWith(SITE_ROOT) || !existsSync(file)) {
@@ -73,7 +83,7 @@ const check = async (name, fn) => {
 
 // 先走 landing → demo 这条真实入口，顺带验证相对路径重写（绝对路径在项目站下会 404）。
 await check('landing 有 demo 入口且点得进去', async () => {
-  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`http://127.0.0.1:${PORT}${BASE}/`, { waitUntil: 'domcontentloaded' });
   const link = page.locator('a[href="./demo/"]');
   if (!(await link.count())) throw new Error('landing 上没有 ./demo/ 链接');
   await link.first().click();
@@ -256,7 +266,7 @@ await check('英文偏好下说明卡是英文', async () => {
     localStorage.setItem('ccm_lang', 'en');
     sessionStorage.removeItem('ccm_demo_intro_seen');
   });
-  await p2.goto(`http://127.0.0.1:${PORT}/demo/`, { waitUntil: 'domcontentloaded' });
+  await p2.goto(`http://127.0.0.1:${PORT}${BASE}/demo/`, { waitUntil: 'domcontentloaded' });
   await p2.waitForTimeout(1200);
   const txt = await p2.locator('#demoIntroCard').innerText();
   if (!txt.includes('no model is ever called')) throw new Error('英文文案没生效：' + txt.slice(0, 60));
@@ -267,13 +277,25 @@ await check('深色模式下说明卡跟随主题', async () => {
   const p3 = await ctx.newPage();
   await p3.emulateMedia({ colorScheme: 'dark' });
   await p3.addInitScript(() => sessionStorage.removeItem('ccm_demo_intro_seen'));
-  await p3.goto(`http://127.0.0.1:${PORT}/demo/`, { waitUntil: 'domcontentloaded' });
+  await p3.goto(`http://127.0.0.1:${PORT}${BASE}/demo/`, { waitUntil: 'domcontentloaded' });
   await p3.waitForTimeout(1200);
   const bg = await p3.locator('#demoIntroCard').evaluate(el => getComputedStyle(el).backgroundColor);
   const m = bg.match(/\d+/g);
   if (!m || Number(m[0]) > 120) throw new Error('深色模式下卡片仍是亮底：' + bg);
   await p3.screenshot({ path: path.join(HERE, 'verify-dark.png') });
   await p3.close();
+});
+
+// 【为什么要有这一条】漏网的绝对路径不会让任何功能断言变红——字体加载失败只是回落到
+// 系统字体，其余 16 条照样全绿。2026-09-18 css 里的 url(/vendor/…) 就是这么活到线上的：
+// 本地 server 当时挂在域名根上，而 gh-pages 根恰好有同名字体，连 404 都不报。
+// 现在 server 带了 /claude-chat-mobile 前缀（与线上等价），再把「零 404」钉成断言，
+// 这类问题才会在本地就红。必须排在所有操作之后——missing 是全程累积的。
+await check('全程零 404（漏网的绝对路径在这里现形）', async () => {
+  if (missing.length) {
+    const uniq = [...new Set(missing)];
+    throw new Error(`${uniq.length} 个资源 404：${uniq.slice(0, 3).join('  ')}`);
+  }
 });
 
 console.log('\n=== 验收结果 ===');

@@ -77,6 +77,21 @@ const CSP = [
 ].join('; ');
 
 /**
+ * CSS 里的 url(/…) 也得重写，而且和 HTML 不同：CSS 的相对路径是相对**该 CSS 文件自己**
+ * 的位置，不是相对页面。css/app.css 引 /vendor/x 要写成 ../vendor/x。
+ *
+ * 【这条是线上才暴露的】本地验收的 server 根是 gh-pages 根，而那里**恰好也有**一份
+ * 同名的 vendor/source-serif-*.woff2（landing 自己的字体），于是 /vendor/… 命中了它、
+ * 返回 200。线上 ike-li.github.io/vendor/… 是组织站根、不属于本仓库 → 404。
+ * 修法之外，verify.mjs 的 server 也改成只在 /claude-chat-mobile/ 前缀下服务，
+ * 让本地与线上的路径语义等价——否则同形态的问题还会再发生一次。
+ */
+function rewriteCssUrls(css, depthFromDemoRoot) {
+  const up = '../'.repeat(depthFromDemoRoot);
+  return css.replace(/url\((['"]?)\/(?!\/)/g, `url($1${up}`);
+}
+
+/**
  * index.html 的三处重写。
  * 绝对路径正则只吃 ="/ 紧邻的形式，所以 https://… 的外链不会被误伤。
  */
@@ -114,6 +129,30 @@ function main() {
   const indexPath = path.join(DEMO_DIR, 'index.html');
   const rewritten = rewriteIndex(fs.readFileSync(indexPath, 'utf8'));
   fs.writeFileSync(indexPath, rewritten);
+
+  // 所有 .css 里的 url(/…)：按该文件相对 demo/ 的深度算 ../ 前缀
+  let cssCount = 0;
+  const walkCss = (dir, depth) => {
+    for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, name.name);
+      if (name.isDirectory()) { walkCss(p, depth + 1); continue; }
+      if (!name.name.endsWith('.css')) continue;
+      const before = fs.readFileSync(p, 'utf8');
+      const after = rewriteCssUrls(before, depth);
+      if (after !== before) { fs.writeFileSync(p, after); cssCount += 1; }
+    }
+  };
+  for (const name of fs.readdirSync(DEMO_DIR)) {
+    if (KEEP.has(name)) continue;
+    const p = path.join(DEMO_DIR, name);
+    if (fs.statSync(p).isDirectory()) walkCss(p, 1);
+    else if (name.endsWith('.css')) {
+      const before = fs.readFileSync(p, 'utf8');
+      const after = rewriteCssUrls(before, 0);
+      if (after !== before) { fs.writeFileSync(p, after); cssCount += 1; }
+    }
+  }
+  log(`重写了 ${cssCount} 个 css 里的绝对 url()`);
 
   for (const name of fs.readdirSync(SRC_DIR)) {
     fs.cpSync(path.join(SRC_DIR, name), path.join(DEMO_DIR, name));
