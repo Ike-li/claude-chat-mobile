@@ -54,7 +54,7 @@ headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 | 第三方免费域名 → 托管进 CF | 0 | 十几分钟 ~ 数周 | 不变，但服务方能收回 | ✓ | 不想花钱，先跑通链路 |
 | 不要域名，用 Quick Tunnel | 0 | 0 | **每次启动都可能变** | ✗ | 临时测试，见文末「随机隧道」 |
 
-下面走第二条。只想临时用一下的直接去文末那节，不用读 §0–§2。
+下面走第二条。只想临时用一下的跳到文末[最简替代](#最简替代仅测试用)——那条路不用域名也不用 CF 账号，但**仍然要装 cloudflared**（[§0.5](#05-装-cloudflared)），除此之外 §0–§2 都不用读。
 
 #### 0.2 挑一个能改 NS 的免费域名服务
 
@@ -70,10 +70,13 @@ headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 **判据二（硬）：后缀必须在 Public Suffix List 里。** 不在的话 Cloudflare 多半不认它是一个独立可注册域，加 zone 会被拒——CF 的「把子域单独作为 zone」是 Enterprise 功能，免费版走不通。自己查：
 
 ```bash
-curl -s https://publicsuffix.org/list/public_suffix_list.dat | grep -x '<你要用的后缀>'
+SUFFIX='.us.kg'   # 从上表直接复制即可，带不带前导点都行
+curl -s https://publicsuffix.org/list/public_suffix_list.dat | grep -x "${SUFFIX#.}"
 ```
 
-有输出才行。2026-09-17 实测：`eu.org`、`us.kg`、`dpdns.org`、`qzz.io`、`xx.kg` 都在；**`qd.je` 不在**——DigitalPlat 也提供这个后缀，别选它。
+有输出才行。**PSL 里是无点形式**（`us.kg` 而非 `.us.kg`），上面的 `${SUFFIX#.}` 就是替你剥掉那个点——直接把带点的后缀喂给 `grep -x` 会零输出，看起来跟「这个后缀不可用」一模一样。
+
+2026-09-17 实测：`eu.org`、`us.kg`、`dpdns.org`、`qzz.io`、`xx.kg` 都在；**`qd.je` 不在**——DigitalPlat 也提供这个后缀，别选它。
 
 > ⚠️ **0.4 的 zone 变 Active 是整条路的第一个成败点。** 我没有把每个后缀都实际走通加 zone 这一步：Cloudflare 社区有过「eu.org 加不进去」的工单，而多数教程说能加，两边我都没能核实到底。所以把 0.4 当成闸门——它过不去就换个后缀重试，或直接改走买域名那条，**别带着没 Active 的 zone 继续往下配**，后面每一步都会以看不出原因的方式失败。
 
@@ -619,6 +622,8 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 ## 最简替代（仅测试用）
 
 不想搭固定域名时，用随机隧道临时对外（每次地址变、官方仅测试用）：
+
+> 这条路不需要域名、不需要 CF 账号、不用读 §0–§2，但**仍然需要 cloudflared**。没装过先看 [§0.5 装 cloudflared](#05-装-cloudflared)，否则下面这条命令就是 `command not found`。
 
 ```bash
 cloudflared tunnel --url http://localhost:3000
