@@ -6,36 +6,46 @@
 #   docker compose -f docker-compose.test.yml run --rm test npm run mutate -- app/src/x.js
 services:
   test:
-    build:
-      context: ../..
-      dockerfile: tests/infra/Dockerfile.test
-    # 镜像名必须带仓库区分度，不能用 `ccm-test:local` 这种通用名：docker 的镜像名是【全机共享】的，
-    # 同名镜像会被本机上任何一个项目的构建覆盖掉。而 `docker compose run` 见镜像已存在就直接用、
-    # 不重建——于是本仓的测试会静默跑在别的项目的镜像里：node_modules 是那边的，
-    # 本仓特有依赖（jose / @anthropic-ai/claude-agent-sdk）不存在，一大批测试连模块都加载不了。
-    # 症状具有迷惑性：宿主机全绿、容器里一片红，看起来像"测试有平台兼容问题"。
     image: claude-chat-mobile-test:local
+    # 【为什么不 bind-mount 仓库根】把 ../.. 挂到 /app 会带来两个问题，缺一不可回避：
+    #  ① 隔离：维护者自己的 ccm.config.json（生产配置）会一起进容器。2026-09-18 实测那让
+    #     集成测试 77/150 红——本机设了 DEVICE_APPROVAL_SCOPE='all'，shouldBypassDeviceApproval
+    #     第一行就 return false，容器内 127.0.0.1 自连也不再 bypass，每个 socket 都
+    #     deviceApproved=false、业务事件被 socket.js 那道门丢弃。症状极具迷惑性：「正常路径」
+    #     用例全红而 fail-closed 用例全绿（它们碰巧也被拒），看着像产品坏了一大片。
+    #  ② 在 ../..:/app 之上再叠一条 /app/ccm.config.json 覆盖挂载【不能用】：Docker Desktop
+    #     virtiofs 无法在父挂载上覆盖同名文件，容器直接起不来（OCI mount error）。playground
+    #     compose 早就为此改过写法，playground-compose.test.mjs 有对应断言。
+    #
+    # 改成与 mutate 同款：只读挂源、tar 进容器层再跑。/work 是容器层，配置可以放心写，
+    # 且天然碰不到宿主机那份。实测代价 0.8s（1402 文件，含 .git——dist-manifest 要 git 命令）。
     volumes:
-      # 源码挂进来：改一行代码不用重建镜像。
-      - ../..:/app
-      # ★ 匿名卷把镜像里那份 node_modules 盖在挂载之上。不这么做的话，宿主机（macOS/arm64）
-      # 的 node_modules 会盖住容器里的——原生模块与 Playwright 浏览器二进制平台不对，直接跑不起来。
-      - /app/node_modules
-      # ★ 隔离第六件：配置文件。上面那条 rw 挂载把仓库整个搬进来，包括维护者自己的
-      # ccm.config.json——那是【生产配置】。2026-09-18 实测它让集成测试 77/150 红：
-      # 机主设了 DEVICE_APPROVAL_SCOPE='all'（为了让信任表对隧道生效），于是
-      # shouldBypassDeviceApproval 第一行就 return false，容器内 127.0.0.1 自连也不再 bypass，
-      # 每个 socket 都 deviceApproved=false、业务事件被 socket.js 那道门丢弃。
-      # 症状极具迷惑性：「正常路径」用例全红而 fail-closed 用例全绿（它们碰巧也被拒），
-      # 看着像产品坏了。挂一份空配置覆盖掉——【必须 :ro】，rw 会写穿到宿主机的真配置上。
-      - ./isolated-config.json:/app/ccm.config.json:ro
-    working_dir: /app
+      - ../..:/repo:ro
+      # 产物要能带回宿主机看。挂在 /work 之下不构成「父 bind mount 上叠同名」——
+      # /work 是容器层目录，不是挂载点。
+      - ../../test-results:/work/test-results
+      - ../../playwright-report:/work/playwright-report
+    working_dir: /work
     # init：容器里会 spawn 真 server 与 claude stub 子进程，没有 init 进程收尸就会攒僵尸。
     init: true
     environment:
       # 与 CI 同款：让 7 个需要真 turn 的文件按既有门控跳过（它们判的是 CI || !RUN_CLAUDE_INTEGRATION）。
       CI: "true"
-      CLAUDE_BIN: /app/tests/fixtures/fake-claude.sh
+      CLAUDE_BIN: /work/tests/fixtures/fake-claude.sh
+    # 排除 node_modules（用镜像里平台匹配的那份，软链过去）。**不排除 .git**：
+    # dist-manifest.test.mjs 用 git check-attr / ls-files / archive 复算分发裁剪，缺了它会
+    # 报 fatal: not a git repository。printf 那行把配置清空——写的是容器层，不是宿主机。
+    # 末尾 `--` 让 `exec "$@"` 能接住追加参数。
+    entrypoint:
+      - sh
+      - -lc
+      - >-
+        mkdir -p /work &&
+        tar -C /repo -cf - --exclude=./node_modules . | tar -C /work -xf - &&
+        printf '{}' > /work/ccm.config.json &&
+        ln -sfn /app/node_modules /work/node_modules &&
+        exec "$@"
+      - --
     # 集成测试起的 server 只在容器内自连自测，不需要往宿主机暴露端口。
     network_mode: bridge
 
@@ -52,9 +62,6 @@ services:
     image: claude-chat-mobile-test:local
     volumes:
       - ../..:/repo:ro
-      # 同上：变异会 tar 整个 /repo 到 /work，维护者的 ccm.config.json 也跟着进去。
-      # 这里覆盖源侧，复制出来的那份自然也是空配置。
-      - ./isolated-config.json:/repo/ccm.config.json:ro
     working_dir: /work
     init: true
     environment:
@@ -62,12 +69,17 @@ services:
       CLAUDE_BIN: /work/tests/fixtures/fake-claude.sh
     # 排除 node_modules（用镜像里平台匹配的那份）与 .git（worktree 的 .git 是指向宿主机的
     # 指针文件，容器里解析不到；变异也不需要它）。末尾 `--` 让 `exec "$@"` 能接住追加参数。
+    #
+    # tar 之后把 ccm.config.json 清空：/repo 是只读挂载，复制出来的那份带着维护者的生产配置
+    # （同 test service 那段的理由①）。写的是 /work——容器层，不是挂载，碰不到宿主机那份。
+    # 反过来在 /repo 上叠一个覆盖挂载是不行的：virtiofs 下父挂载上覆盖同名文件会让容器起不来。
     entrypoint:
       - sh
       - -lc
       - >-
         mkdir -p /work &&
         tar -C /repo -cf - --exclude=./node_modules --exclude=./.git . | tar -C /work -xf - &&
+        printf '{}' > /work/ccm.config.json &&
         ln -sfn /app/node_modules /work/node_modules &&
         exec "$@"
       - --
