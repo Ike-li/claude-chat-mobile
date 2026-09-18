@@ -1104,7 +1104,15 @@ io.on('connection', socket => {
         }
       });
       if (shouldEmitLateClosedSessionEvents) {
-        setTimeout(() => emitLateClosedSessionEvents(instanceId), 80);
+        // 【这个延迟是承重的，别调小】emitLateClosedSessionEvents 是同步函数，一口气把迟到事件
+        // 全发完，其中最后一条 finished 发给【新的 viewing 实例】。前端必须在这段时间里处理完上面
+        // 那条 instances 广播、bindView 切到新实例；否则 finished 到达时前端的 viewingInstanceId
+        // 还是旧的，事件被 shouldDropAgentEvent 丢掉——而且【不会重发】，用例只能干等到超时。
+        //
+        // 原值 80ms 就是在跟 bindView 赛跑：本机实测 4 片偶发红、5 片 25% 红、6 片 3/3 红（P0-11o）。
+        // 【别试图用放宽用例的断言 timeout 来治】那条路是死的：10s → 30s 照样红，因为事件不是晚到，
+        // 是早就被丢了。判据也在这里——报的是「30s 内 #messages 一次都没变过」，不是「慢了一点」。
+        setTimeout(() => emitLateClosedSessionEvents(instanceId), 1500);
       }
     }
   });
