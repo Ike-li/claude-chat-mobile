@@ -166,9 +166,11 @@ const CLAIMS = [
 // 2026-09-17：check 链 14 → 15 道（新增 check-config-gitignored，守 CONFIG-03）。
 // 按本文件上面那条约定从 CLAIMS 挪下来：图 12 的四处文字仍写着 14，代码侧先被守住。
 // 重出图之后把这条挪回 CLAIMS，`shown` 改成图上的新文字。
+// 2026-09-18：15 → 16 道（新增 check-container-config-isolation，守容器配置隔离）。
+// 与上一条合并成一条待补——图 12 仍写着 14，重出图时一次把 16 这个数补上去即可。
 const PENDING_CLAIMS = [
-  { diagram: '12', todo: 'check 链 14 → 15 道（新增 check-config-gitignored）',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 15 },
+  { diagram: '12', todo: 'check 链 14 → 16 道（新增 check-config-gitignored、check-container-config-isolation）',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 16 },
 ];
 
 function git(args) {
