@@ -180,8 +180,9 @@ RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑
                                    # message-idempotency / approval-integrity / rewind 整份 + file-upload 一个 describe
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
-                   # 开发循环别跑全量（要 ~4 分钟）：`-- tests/e2e/specs/xxx.spec.ts` 或
-                   # `-- --grep "P0-08 …"`，3-30s 出结果；全量留到 push 前。两个坑：
+                   # 【本条是 workers:1 串行】跑全量约 14 分钟（52 个 spec 实测时长加总 834s）。
+                   # 要全量走下面的 test:e2e:parallel（4 片 ~225s）；开发循环则只跑相关的那几条：
+                   # `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`，3-30s 出结果。两个坑：
                    # ① **--grep 的模式带空格必须加引号**。不加会被 shell 拆成「--grep 第一个词
                    #    ＋若干位置参数」，而它照样打印「Running 1 test … passed」——2026-09-18
                    #    据此得出「单跑绿、整份跑红」的假对照，差点去查根本不存在的 spec 间耦合。
@@ -194,8 +195,10 @@ npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自
                    # （原生 4 片 167s / 8 片 170s「一秒不差」是改造前的旧结论，已被 7e3b78e 推翻）。
                    # 2026-09-18 实测（10 核 · 52 个 spec 文件 · 串行总和 834s，其中 55% 是空等，
                    # 所以并行才有这么大收益）：4 片 ~225s = 缺省档 · 5 片 ~180s · 6 片 ~150s ·
-                   # 8 片 ~110s。地板 118s——同一 spec 文件不跨分片，最大那个
-                   # （workspace-sessions-sidebar）自己就要这么久，8 片以上再加没有收益。
+                   # 8 片 ~110s。地板≈最大那个 spec 文件自己的耗时——同一文件不跨分片，
+                   # workspace-sessions-sidebar 单跑实测 108s，所以 8 片已经触底、再加没有收益。
+                   # （别拿 .e2e-durations.json 里的值当地板：那是【上一轮】的观测，含当轮负载，
+                   # 实测偏大——本次缓存记 117.9s 而单跑只要 108s，照抄会算出「8 片比地板还快」。）
                    # **缺省停在 4 是 flaky 选的，不是性能选的**：并行度越高，一批「等固定时间窗」
                    # 的用例越容易超时。当前已知 P0-SYNC-ACK-TIMEOUT 一条，4 片下也会偶发红，
                    # 根因未定位（单跑 3/3 绿、CPU 占满绿、6 进程并行绿，只有真跑分片全量才中）。
