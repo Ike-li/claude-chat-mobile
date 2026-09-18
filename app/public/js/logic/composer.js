@@ -164,8 +164,13 @@ export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {})
 // - swap：真实导航 → 把 prev 当前文字+附件写入缓存（若 prevSessionId 非空），恢复 new 的缓存（无则空）
 // drafts 形如 Map<sessionId, {text, attachments}|string>；string 为旧缓存兼容形态（仅文字）。
 // 未传/非 Map 时 restoreText=''、restoreAttachments=[]。attachments 存出/恢复均浅拷贝数组，避免调用方就地改污染缓存。
+// forceSwap：调用方声明这是【用户显式发起的导航】（btnNew / 目录行＋），必须给干净的开始。
+// 【为什么需要它】下面那条 keep 判据挡的是 instances 广播——非用户意图的、会冲掉正在打的字的
+// 那种。但用户已经在一个未发送的新会话页时两侧都是 null，btnNew 里那次交换会一并被 keep 挡掉：
+// 再按一次新建、或点另一个工作区的＋，上一页的文字与附件就被原样带进「新会话已就绪」那一页
+// （PR #89 review P1）。挡广播和挡用户自己点的导航是两件事，不能共用一个判据。
 export function planSessionDraftSwap({
-  prevSessionId, newSessionId, currentDraft = '', currentAttachments = [], drafts,
+  prevSessionId, newSessionId, currentDraft = '', currentAttachments = [], drafts, forceSwap = false,
 } = {}) {
   // 判据是「会话身份变没变」，不是「有没有会话」——含两侧都没有会话的情形。
   // 【为什么不能要求 newSessionId 非空】新会话在发出第一条消息前拿不到 sessionId，而 bindView
@@ -173,7 +178,7 @@ export function planSessionDraftSwap({
   // 会让那段时间里的每一次广播都落进 swap，拿 restoreText='' 覆盖用户正在打的字。
   // ?? null 是把 undefined 与 null 归一（调用方传的是 `entry?.sessionId || null`，但纯函数
   // 不拿调用方的归一当保证）。
-  if ((newSessionId ?? null) === (prevSessionId ?? null)) return { action: 'keep' };
+  if (!forceSwap && (newSessionId ?? null) === (prevSessionId ?? null)) return { action: 'keep' };
   const atts = Array.isArray(currentAttachments) ? currentAttachments.slice() : [];
   const save = prevSessionId
     ? {

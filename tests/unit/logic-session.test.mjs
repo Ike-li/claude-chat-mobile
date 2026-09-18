@@ -1040,3 +1040,44 @@ test('aggregateStates：worktree 实例的状态点亮父仓（K2 回归锚点�
   assert.equal(out['/repo/a'], 'busy', 'worktree 在跑，父仓却显示空闲 —— 用户看不到它');
   assert.equal(out['/repo/b'], 'idle');
 });
+
+// 【PR #89 review P1-a】显式「新建会话」必须给干净的开始。
+// 判据改成「会话身份没变就 keep」之后，用户已经在一个未发送的新会话页时两侧都是 null，
+// btnNew / 目录行＋ 里那次 applySessionDraftSwap 就成了 no-op——再按一次新建、或点另一个
+// 工作区的＋，输入框里的字和附件会被原样带进「新会话已就绪」那一页。
+// keep 是为了挡住 instances 广播（非用户意图），不该连用户自己点的导航一起挡掉。
+test('planSessionDraftSwap: forceSwap 让显式新建绕过 keep，两侧都空也要清干净', () => {
+  const drafts = new Map();
+  const args = {
+    prevSessionId: null, newSessionId: null,
+    currentDraft: '上一页没发出去的字', currentAttachments: [{ name: 'a.png' }], drafts,
+  };
+  // 不传 forceSwap：广播驱动那条路，维持 keep（不碰输入框）
+  assert.deepEqual(planSessionDraftSwap(args), { action: 'keep' });
+  // 传 forceSwap：用户显式新建，必须 swap 到空
+  const forced = planSessionDraftSwap({ ...args, forceSwap: true });
+  assert.equal(forced.action, 'swap');
+  assert.equal(forced.restoreText, '');
+  assert.deepEqual(forced.restoreAttachments, []);
+  // prevSessionId 为空 → 无处可存，save 必须是 null（不能凭空造一个 key）
+  assert.equal(forced.save, null);
+});
+
+test('planSessionDraftSwap: forceSwap 在有旧会话时仍然先存旧草稿', () => {
+  const plan = planSessionDraftSwap({
+    prevSessionId: 'sess_1', newSessionId: null,
+    currentDraft: '属于 sess_1 的草稿', currentAttachments: [], forceSwap: true,
+  });
+  assert.equal(plan.action, 'swap');
+  assert.deepEqual(plan.save, { sessionId: 'sess_1', text: '属于 sess_1 的草稿', attachments: [] });
+  assert.equal(plan.restoreText, '');
+});
+
+test('planSessionDraftSwap: forceSwap 不影响同会话静默换实例（那仍然必须 keep）', () => {
+  // effort/model 切档会 dispose+resume 同一个会话，此时 bindView 不传 forceSwap，
+  // 草稿必须原样留着——这条防止「为修新建而把静默换实例也一起清了」。
+  assert.deepEqual(
+    planSessionDraftSwap({ prevSessionId: 'sess_1', newSessionId: 'sess_1', currentDraft: 'x' }),
+    { action: 'keep' },
+  );
+});

@@ -674,6 +674,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 「viewingInstanceId 确为 null（新会话懒开空窗口，须丢弃后台实例事件防污染）」——见 logic.js shouldDropAgentEvent。
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
+  // 用户刚显式新建（btnNew / 目录行＋）而权威广播还没落地的那段窗口。
+  // 【为什么需要】那两处只重置得了 displayedSessionId，displayedInstanceId 仍指着旧实例；
+  // 一条在 session:new 之前就在途、之后才到的 instances 包会命中下面 FE-001 那个分支
+  // （同实例 + 无 sessionId → 从条目重填 displayedSessionId），把用户刚放弃的会话 id 填回来。
+  // 于是下一条权威包让 bindView 读到 prev=旧会话 / new=null，又走回 swap，把正在打的字清掉。
+  // 【为什么不改成把 displayedInstanceId 也置 null】那会让 newViewing !== displayedInstanceId 成立，
+  // 在途旧包转而走进 bindView、把视图绑【回】旧会话——比重填更糟。
+  let sessionIdClearedByNav = false;
   let displayedSessionId = null;
   // R65（2026-08-30 需求合稿）未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
   // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
@@ -4994,7 +5002,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
       }
-    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId) {
+    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId && !sessionIdClearedByNav) {
       // FE-001：同一实例后续 instances 广播补上了 sessionId（懒开后 init），须补丁 displayedSessionId，
       // 否则 newViewing === displayedInstanceId 永远不进 bindView，requestSync 持续早退。
       const target = instancesList.find(x => x.instanceId === newViewing);
@@ -5178,13 +5186,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // （同步本地重置）共用这一份：两处分头实现必然漂，而 btnNew 漏做这一步正是
   // 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
   // draft 由调用方传快照而不是这里现读 inputEl：bindView 是在 clearView 之前取的值。
-  function applySessionDraftSwap(prevSessionId, newSessionId, draft) {
+  // forceSwap：用户显式发起的新建（btnNew / 目录行＋）。keep 判据挡的是 instances 广播，
+  // 不该把用户自己点的导航也挡掉——否则「已经在新会话页时再按新建」会带着上一页的草稿。
+  function applySessionDraftSwap(prevSessionId, newSessionId, draft, { forceSwap = false } = {}) {
     const plan = planSessionDraftSwap({
       prevSessionId,
       newSessionId,
       currentDraft: draft?.text ?? '',
       currentAttachments: draft?.attachments ?? [],
       drafts: sessionDraftCache,
+      forceSwap,
     });
     if (plan.action !== 'swap') return;
     if (plan.save) {
@@ -5213,6 +5224,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
+    sessionIdClearedByNav = false;             // 权威广播已落到 bindView，那段「等广播」的窗口到此为止
     // R65：离开旧会话的瞬间把它记为「已看到此刻」——正在看时到达的消息不该在离开后亮点。
     // 入场侧（下方真实会话分支）另有一记，覆盖「看完直接关页面」的路径；重复标记无害。
     if (prevSessionId) unread.markSeen(prevSessionId);
@@ -6394,8 +6406,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     applySessionDraftSwap(displayedSessionId, null, {
       text: inputEl ? inputEl.value : '',
       attachments: attachments.items(),
-    });
+    }, { forceSwap: true });
     displayedSessionId = null;
+    sessionIdClearedByNav = true;
     // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
     freshInterruptedInstanceId = null;
     enterComposeReady();
@@ -6489,8 +6502,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       applySessionDraftSwap(displayedSessionId, null, {
         text: inputEl ? inputEl.value : '',
         attachments: attachments.items(),
-      });
+      }, { forceSwap: true });
       displayedSessionId = null;
+      sessionIdClearedByNav = true;
       // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
       freshInterruptedInstanceId = null;
       enterComposeReady();
