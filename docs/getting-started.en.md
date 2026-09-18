@@ -293,7 +293,7 @@ Then open:
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain and the Access layer, see the [deployment guide](deployment.md); to keep traffic off Cloudflare, see the next section.
+A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain and the Access layer, see the [deployment guide](deployment.md) (Chinese) — if you do not yet have a Cloudflare account or a domain, start from [prerequisites](deployment.md#0-前置条件-cf-账号与域名), which also covers getting a free domain; to keep traffic off Cloudflare, see the next section.
 
 ### Tailscale (the recommended path off Cloudflare)
 

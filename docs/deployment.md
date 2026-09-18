@@ -40,7 +40,90 @@ headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 
 ## 从零搭建
 
+### 0. 前置条件 CF 账号与域名
+
+§1 的第一条命令是 `cloudflared tunnel login`，它会弹浏览器让你**选一个 zone**——也就是说它假定你已经有 Cloudflare 账号、有一个域名、且该域名的 NS 已经指向 Cloudflare。已经齐了就直接跳 §1；从零开始看本节。
+
+#### 0.1 三条路线，先选一条
+
+**Cloudflare 自己不发免费域名**，Registrar 按成本价卖（不加价，但也不免费）。所以「域名从哪来」有三条路：
+
+| 路线 | 成本 | 拿到手 | 域名会变吗 | 能用 Access | 适合 |
+|---|---|---|---|---|---|
+| CF Registrar 买一个 | 约 $10/年起 | 几分钟 | 不变 | ✓ | 长期主力入口，最省心 |
+| 第三方免费域名 → 托管进 CF | 0 | 十几分钟 ~ 数周 | 不变，但服务方能收回 | ✓ | 不想花钱，先跑通链路 |
+| 不要域名，用 Quick Tunnel | 0 | 0 | **每次启动都可能变** | ✗ | 临时测试，见文末「随机隧道」 |
+
+下面走第二条。只想临时用一下的跳到文末[最简替代](#最简替代仅测试用)——那条路不用域名也不用 CF 账号，但**仍然要装 cloudflared**（[§0.5](#05-装-cloudflared)），除此之外 §0–§2 都不用读。
+
+#### 0.2 挑一个能改 NS 的免费域名服务
+
+**判据一（硬）：服务方必须允许你填自己的 NS。** 只给你一个 A/CNAME 记录面板的不行——§1 的 `cloudflared tunnel route dns` 是通过 Cloudflare API 往**你自己的 zone** 里写 CNAME，zone 不在 CF 就无从写起。
+
+2026-09-17 核实仍在运营的两家：
+
+| 服务 | 后缀 | 审核 | 备注 |
+|---|---|---|---|
+| [DigitalPlat FreeDomain](https://dash.domain.digitalplat.org/) | `.us.kg` `.dpdns.org` `.qzz.io` `.xx.kg` | 自动，分钟级 | GitHub 账号登录；面板里直接填 NS |
+| [EU.org](https://nic.eu.org/) | `.eu.org` | **人工，几天到几周** | 1996 年起的志愿者项目；不提供默认 NS，申请表里就要你填两个 |
+
+**判据二（硬）：后缀必须在 Public Suffix List 里。** 不在的话 Cloudflare 多半不认它是一个独立可注册域，加 zone 会被拒——CF 的「把子域单独作为 zone」是 Enterprise 功能，免费版走不通。自己查：
+
+```bash
+SUFFIX='.us.kg'   # 从上表直接复制即可，带不带前导点都行
+curl -s https://publicsuffix.org/list/public_suffix_list.dat | grep -x "${SUFFIX#.}"
+```
+
+有输出才行。**PSL 里是无点形式**（`us.kg` 而非 `.us.kg`），上面的 `${SUFFIX#.}` 就是替你剥掉那个点——直接把带点的后缀喂给 `grep -x` 会零输出，看起来跟「这个后缀不可用」一模一样。
+
+2026-09-17 实测：`eu.org`、`us.kg`、`dpdns.org`、`qzz.io`、`xx.kg` 都在；**`qd.je` 不在**——DigitalPlat 也提供这个后缀，别选它。
+
+> ⚠️ **0.4 的 zone 变 Active 是整条路的第一个成败点。** 我没有把每个后缀都实际走通加 zone 这一步：Cloudflare 社区有过「eu.org 加不进去」的工单，而多数教程说能加，两边我都没能核实到底。所以把 0.4 当成闸门——它过不去就换个后缀重试，或直接改走买域名那条，**别带着没 Active 的 zone 继续往下配**，后面每一步都会以看不出原因的方式失败。
+
+> ⚠️ **免费域名的控制权不在你手上。** 服务方随时可以收回域名或改掉委派。对 CCM 来说这个域名**就是**你的公网入口：域名没了，手机打不开，通知深链（`PUBLIC_URL`）也一起失效。反过来更要紧——拿到域名控制权的人可以把它指向自己的服务器，冒一个一模一样的登录页。Access 的 2FA 挡得住数据泄露（对方拿不到你的 JWT、连不上你的隧道），但挡不住钓鱼。**当长期主力入口用就买域名；免费域名适合先把整条链路跑通。**
+
+#### 0.3 注册 Cloudflare 账号，把域名加进来
+
+1. 去 [dash.cloudflare.com](https://dash.cloudflare.com/) 注册。免费 plan 就够：Tunnel 免费，Zero Trust / Access **50 用户以内免费**（n=1 自托管用 1 个）。
+2. 控制台 **Add a domain**，填你的域名，plan 选 **Free**。
+3. CF 扫一遍现有 DNS 记录（新申请的免费域名通常是空的，正常），然后给你**两个 NS 地址**，形如 `xxx.ns.cloudflare.com`。记下这两个。
+
+#### 0.4 把 NS 指回 CF，等 zone 变 Active
+
+回域名服务方的后台，把上一步那两个 NS 填进去。
+
+> **EU.org 有个顺序陷阱**：它的申请表就要求填至少两个 NS，而 CF 要你先建 zone 才给 NS。**先在 CF 把 zone 建出来（NS 还没指过去也没关系），拿到那两个地址，再去提交 EU.org 申请。**顺序反了就要再等一轮人工审核。
+
+验证——别只看控制台绿灯：
+
+```bash
+dig +short NS <your-domain>     # 应当只返回 CF 给你的那两个地址
+```
+
+传播要几分钟到几十分钟。CF 侧 Overview 显示 **Active** 才算成。DigitalPlat 官方说法是 5–30 分钟；EU.org 因为叠加人工审核，整体可能要几天。
+
+#### 0.5 装 cloudflared
+
+```bash
+brew install cloudflared      # macOS
+cloudflared --version         # 装好了应当打印版本号
+```
+
+其他平台按 [Cloudflare 官方安装文档](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)走（apt/yum 源、二进制下载都有）。
+
+#### 0.6 确认前置条件真的齐了
+
+```bash
+cloudflared tunnel login
+```
+
+浏览器里**能看到并选中 `<your-domain>`**，才算 §0 完成——这条命令就是 §1 的第一步，选中后会往 `~/.cloudflared/` 写 `cert.pem`。
+
+看不到你的域名，说明 zone 还没 Active，或者你登的不是加了这个域名的那个 CF 账号。回 0.4，别往下走。
+
 ### 1. 隧道（Cloudflare Tunnel）
+
+> 下面第一条命令要求你已有 CF 账号、有域名、且 zone 已 Active。没有的话先看 [§0 前置条件](#0-前置条件-cf-账号与域名)。
 
 ```bash
 cloudflared tunnel login                          # 浏览器选你的域名 zone
@@ -237,6 +320,10 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 
 | 现象 | 处理 |
 |---|---|
+| Cloudflare 拒绝添加域名 / 提示不是可注册域 | 后缀不在 Public Suffix List 里，免费版加不了（CF 的子域独立成 zone 是 Enterprise）。按 §0.2 的 `grep` 查一下，换一个在表里的后缀 |
+| zone 一直停在 Pending Nameserver Update | NS 没生效：`dig +short NS <your-domain>` 看返回的是不是 CF 那两个。仍是旧值就回域名服务方后台核对填没填对，再等传播（几分钟到几十分钟） |
+| `cloudflared tunnel login` 浏览器里看不到你的域名 | zone 没 Active（见上一行），或登错了 CF 账号——换账号重登。**别跳过这步往下配**，后面每步都会失败且看不出原因 |
+| `cloudflared tunnel route dns` 报权限 / zone 不存在 | 该域名的 zone 不在当前账号下。`cert.pem` 是 `tunnel login` 时写的，换过账号要删掉 `~/.cloudflared/cert.pem` 重新 login |
 | 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
 | OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
@@ -535,6 +622,8 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 ## 最简替代（仅测试用）
 
 不想搭固定域名时，用随机隧道临时对外（每次地址变、官方仅测试用）：
+
+> 这条路不需要域名、不需要 CF 账号、不用读 §0–§2，但**仍然需要 cloudflared**。没装过先看 [§0.5 装 cloudflared](#05-装-cloudflared)，否则下面这条命令就是 `command not found`。
 
 ```bash
 cloudflared tunnel --url http://localhost:3000
