@@ -12,7 +12,7 @@
 // 夹具偏离真实契约会让两边自洽地一起错（testing.md §3「fixture 编错外部契约时恒绿」）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRewind, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../../app/src/sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../../app/src/sessions/rewind-plan.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -284,5 +284,69 @@ test.describe('extractPromptText：把那一轮的原话取回来（prefill）',
     assert.equal(extractPromptText({}), '');
     assert.equal(extractPromptText({ message: {} }), '');
     assert.equal(extractPromptText({ message: { content: 42 } }), '');
+  });
+});
+
+// ── planFork：分叉锚点 ──
+//
+// 与 planRewind 同源但多回答一个问题。planRewind 只问「丢弃这一轮，要保留到哪条」；
+// 长按 assistant 气泡的「从这里分叉」问的是反过来的「保留这一轮，要保留到哪条」。
+//
+// 【为什么不能用「最后一条 assistant 文本」当锚】SDK 的通用规则是
+// "fork at the KEPT turn's last chain entry, whatever it is"（sdk.d.ts resumeDropsTurn 头注），
+// 而 forkSession 的切片实现是纯 inclusive slice、零修正（Desktop 1.52386.6 内嵌的那份：
+// `i = i.slice(0, idx + 1)`，既不补偿也不校验）。锚点给早了它照切，保留轮尾部的 tool_result
+// 就被丢进弃置区间——本机 809 个 transcript / 5905 个可分叉 prompt 实测，其中 110 个（1%）
+// 会因此留下 dangling tool_use（tool_use 在、配对的 tool_result 没了）。
+test.describe('planFork —— 分叉锚点', () => {
+  // 一轮的真实形态：human prompt → assistant(text+tool_use) → tool_result(type:'user') → …
+  // tool_result 也是 type:'user'，靠 content 里没有 text block 与人打的字区分（同 extractPromptText）。
+  const entries = [
+    { uuid: 'u1', type: 'user', message: { content: 'do it' } },
+    { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: '好' }, { type: 'tool_use', id: 't1' }] } },
+    { uuid: 'r1', type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } },
+    { uuid: 'u2', type: 'user', message: { content: 'next' } },
+    { uuid: 'a2', type: 'assistant', message: { content: [{ type: 'text', text: '完成' }] } },
+  ];
+
+  test('保留 anchor 所在轮：锚到该轮最后一条 chain entry，不是最后一条 assistant 文本', () => {
+    // 长按 a1「从这里分叉」。a1 之后的 r1 是【这一轮自己的】tool_result，必须一起保留，
+    // 否则 a1 里的 tool_use 就悬空了。锚在 a1 上正是 sdk.d.ts 点名会出事的那种做法。
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+
+  test('保留轮不越界到下一轮：下一条人类 prompt 之前就停', () => {
+    // a2 是会话最后一条，其所在轮没有尾巴，锚点就是它自己。
+    assert.deepEqual(planFork(entries, 'a2', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a2' });
+  });
+
+  test('丢弃 anchor 所在轮：与 planRewind 给出同一个锚点', () => {
+    // 长按 u2「丢弃这条及之后」——这正是 rewind 走的那条路，两者必须同源，
+    // 否则同一个仓库里两条路径对同一个问题给出不同答案。
+    const viaFork = planFork(entries, 'u2', { keepAnchorTurn: false });
+    const viaRewind = planRewind(entries, 'u2');
+    assert.deepEqual(viaFork, viaRewind);
+    assert.deepEqual(viaFork, { ok: true, keepUuid: 'r1' });
+  });
+
+  test('丢弃会话首轮 → first-turn 拒绝（前面没有可保留的锚点）', () => {
+    assert.deepEqual(planFork(entries, 'u1', { keepAnchorTurn: false }), { ok: false, reason: 'first-turn' });
+  });
+
+  test('锚点不在 transcript 里 / 入参非法 → 拒绝，不猜', () => {
+    assert.equal(planFork(entries, 'nope', { keepAnchorTurn: true }).ok, false);
+    assert.equal(planFork(null, 'a1', { keepAnchorTurn: true }).ok, false);
+    assert.equal(planFork(entries, '', { keepAnchorTurn: true }).ok, false);
+  });
+
+  test('跳过没有 uuid 的行（queue-operation 等不可作锚点）', () => {
+    const withNoise = [
+      { uuid: 'u1', type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { type: 'queue-operation' },                       // 无 uuid：不是 chain entry
+      { uuid: 'u2', type: 'user', message: { content: 'next' } },
+    ];
+    assert.deepEqual(planFork(withNoise, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a1' });
+    assert.deepEqual(planFork(withNoise, 'u2', { keepAnchorTurn: false }), { ok: true, keepUuid: 'a1' });
   });
 });

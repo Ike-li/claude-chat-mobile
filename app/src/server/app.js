@@ -67,7 +67,7 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
-import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
@@ -3166,7 +3166,19 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ ok: false, error: '缺少分叉锚点' });
       return;
     }
-    const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: uuid });
+    // 【锚点由服务端算，不盲信前端送来的 uuid】前端能拿到的只有气泡的 uuid，而工具卡在 DOM 里
+    // 没有 uuid（history.js 只给文本类挂），于是「保留轮的最后一条 entry 是 tool_result」这种
+    // 形态在前端【结构上】就看不见。SDK 的规则是 fork at the KEPT turn's last chain entry，
+    // 而 forkSession 的切片是纯 inclusive slice、零修正——锚早了它照切，tool_use 就悬空。
+    // keepAnchorTurn：true=长按 assistant「从这里分叉」保留这一轮；false=长按 user「丢弃这条及之后」。
+    // 缺省 true 是为兼容老前端（它送的就是 assistant uuid、语义正是保留到那条所在轮）。
+    const keepAnchorTurn = payload?.keepAnchorTurn !== false;
+    const plan = planFork(await readSessionEntries(cwd, sessionId), uuid, { keepAnchorTurn });
+    if (!plan.ok) {
+      if (typeof ack === 'function') ack({ ok: false, error: describeRewindBlocker(plan) || '无法确定分叉位置', reason: plan.reason });
+      return;
+    }
+    const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid });
     sessions.bumpGeneration(cwd);
     const inst = await dedupedResume(cwd, newId);
     finishOpenFocus(inst, cwd, newId, ack);

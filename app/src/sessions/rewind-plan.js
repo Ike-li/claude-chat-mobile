@@ -91,6 +91,48 @@ export function planRewind(entries, promptUuid) {
   return { ok: true, keepUuid };
 }
 
+/** 这条 entry 是不是「人打的字」：tool_result 也是 type:'user'，靠有没有 text block 区分（同 extractPromptText）。 */
+function isHumanPrompt(e) {
+  if (!e || e.type !== 'user') return false;
+  const c = e?.message?.content;
+  if (typeof c === 'string') return true;
+  if (Array.isArray(c)) return c.some(b => b && typeof b === 'object' && b.type === 'text');
+  return false;
+}
+
+/**
+ * 算出分叉的 upToMessageId。planRewind 的一般化：多回答一个「保留 anchor 所在轮」的方向。
+ *
+ * @param {Array<object>} entries      transcript 全量条目（原始 jsonl 行，按落盘顺序）
+ * @param {string} anchorUuid          用户点的那条气泡自己的 uuid
+ * @param {{keepAnchorTurn: boolean}} opts
+ *        keepAnchorTurn=true  长按 assistant 气泡「从这里分叉」→ 保留 anchor 所在轮
+ *        keepAnchorTurn=false 长按 user 气泡「丢弃这条及之后」→ 丢弃 anchor 所在轮（= planRewind）
+ * @returns {{ok: true, keepUuid: string} | {ok: false, reason: string}}
+ *
+ * 【为什么不能让前端拿「最后一条 assistant 气泡」当锚】SDK 的通用规则是
+ * "fork at the KEPT turn's last chain entry, whatever it is"，而 forkSession 的切片是
+ * 纯 inclusive slice、零修正——锚点给早了它照切，保留轮尾部的 tool_result 被丢进弃置区间，
+ * 对应的 tool_use 就悬空了。工具卡在前端 DOM 里没有 uuid（history.js 只给文本类挂），
+ * 所以那个锚点【结构上】就看不见轮次的尾巴，只能由服务端对着 transcript 算。
+ */
+export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
+  if (!Array.isArray(entries) || !anchorUuid) return { ok: false, reason: 'bad-input' };
+  const at = entries.findIndex(e => e && e.uuid === anchorUuid);
+  if (at < 0) return { ok: false, reason: 'anchor-not-found' };
+
+  // 丢弃方向与 planRewind 是同一个问题，直接委派——两条路径对同一个问题必须同一个答案。
+  if (!keepAnchorTurn) return planRewind(entries, anchorUuid);
+
+  // 保留方向：从 anchor 往后走到下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  let keepUuid = null;
+  for (let i = at; i < entries.length; i++) {
+    if (i > at && isHumanPrompt(entries[i])) break;
+    if (isChainEntry(entries[i])) keepUuid = entries[i].uuid;
+  }
+  return keepUuid ? { ok: true, keepUuid } : { ok: false, reason: 'anchor-not-found' };
+}
+
 /**
  * 把 planRewind 的失败原因翻成给用户看的话。
  * 分档说明「是什么挡住的」而不是笼统报错——用户据此知道能不能改用分叉。

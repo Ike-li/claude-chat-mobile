@@ -6,8 +6,12 @@ import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSideb
 
 // 长按历史气泡的两个动作：assistant → 对话轴 fork（forkSession upToMessageId）；
 // user → 先弹二选一，可选文件轴 Rewind（session:rewind:preview/confirm）或 fork。
-// 两者的锚点语义【相反】——fork 取前一条 assistant 的 uuid，rewind 取气泡自己的——
-// 所以 mock 的两个 handler 各自只收一侧 uuid，前端若把解析路径搞混，这里当场红。
+//
+// 【2026-09-18 起锚点由服务端算】前端只送「这条气泡自己的 uuid + 方向」，upToMessageId 由
+// sessions/rewind-plan.js 的 planFork 对着 transcript 解析。原因：工具卡在前端 DOM 里没有
+// uuid，「保留轮的最后一条 entry 是 tool_result」这种形态在前端结构上就看不见，而 SDK 的
+// forkSession 是纯 inclusive slice、零修正，锚早了它照切、tool_use 就悬空。
+// mock 的护栏随之从「只收 assistant 侧 uuid」翻成「uuid 侧别必须与 keepAnchorTurn 一致」。
 // 长按靠真实 550ms setTimeout 触发（见 app.js bindBubbleLongPress），不用 waitForTimeout
 // （禁用模式）——派发 touchstart 后直接轮询等确认弹层出现，天然把这段延迟吃掉。
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -36,7 +40,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-FORKc 长按后续用户消息会解析出前一条 assistant 的 uuid（而非自己的）', async ({ page }) => {
+  test('P0-FORKc 长按用户消息分叉：送自己的 uuid + keepAnchorTurn=false（语义而非位置）', async ({ page }) => {
     await gotoMock(page);
 
     await openSessionsSidebar(page);
@@ -45,17 +49,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
 
-    // mock session:fork 只收 assistant 侧 uuid（a-archived-1/2）；若前端误发这条 user 气泡自己的 uuid
-    // （u-archived-2）会被 mock 拒绝、下面的「切到新会话」断言就会失败——是真正有区分力的回归护栏。
+    // 2026-09-18 起锚点由服务端算（planFork），前端只送「自己的 uuid + 语义标志」。
+    // mock 的护栏随之翻转成【uuid 侧别必须与 keepAnchorTurn 一致】：这条 user 气泡要送
+    // u-archived-2 + keepAnchorTurn=false，把语义送反（配成 true）会被 mock 拒绝、
+    // 下面的「切到新会话」断言就失败——护栏守的东西换了，区分力仍在。
     const secondUserBubble = page.locator('[data-testid="user-message"]', { hasText: 'Any follow-up questions?' });
     const box = await secondUserBubble.boundingBox();
     if (!box) throw new Error('user bubble bounding box not found');
     const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
     await secondUserBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
 
-    // 2026-09-10 起 user 气泡长按先弹二选一（回退 / 分叉）——两个动作的锚点语义相反，
-    // 走的是两条不同的解析路径。这里选「从这里分叉」，后续断言不变：仍要求送出的是
-    // 前一条 assistant 的 uuid（mock 只收 a-archived-*，送自己的会被拒 → 切不过去）。
+    // 2026-09-10 起 user 气泡长按先弹二选一（回退 / 分叉）。这里选「从这里分叉」，
+    // 它与回退的方向相反：回退丢弃这条所在轮、分叉同样丢弃这条及之后，两者都由服务端
+    // 按同一个 planFork/planRewind 判据解析，前端只负责把方向说清楚。
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
     await page.locator('#confirmAlt').click();
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });

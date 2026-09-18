@@ -8100,12 +8100,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
 
   async function requestSessionFork(bubble, role) {
-    const anchor = resolveForkAnchorUuid({
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+    // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
+    // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
+    const ownUuid = bubble.dataset.uuid || null;
+    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
+    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
+    const reachable = resolveForkAnchorUuid({
       role,
-      ownUuid: bubble.dataset.uuid || null,
+      ownUuid,
       precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
     });
-    if (!anchor) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
+    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
@@ -8122,7 +8128,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     haptic('tap');
-    socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
+    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    socket.emit('session:fork', {
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+    }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
   }
