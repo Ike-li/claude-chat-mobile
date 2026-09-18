@@ -3251,9 +3251,15 @@ registerSocketConnection(io, socket => {
       console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
     }
 
+    // 【为什么要分两种 reason】两者的出路相同（都能改用分叉），但成因不同、文案不能混：
+    // no-file-changes 是本轮特性——找得到检查点，这一轮就是没往盘上写过东西（只跑 Bash 的轮次
+    // 正是这一档，checkpoint 只在 Edit/Write 前快照）；no-checkpoint 是能力边界——SDK 说这条
+    // 消息没有可用检查点。前端据此给不同说明，否则「没有文件改动」会扣到后者头上、是假话。
+    const canRewind = !!res?.canRewind && filesChanged.length > 0;
     reply({
       ok: true,
-      canRewind: !!res?.canRewind && filesChanged.length > 0,
+      canRewind,
+      ...(canRewind ? {} : { reason: res?.canRewind ? 'no-file-changes' : 'no-checkpoint' }),
       filesChanged,
       insertions: res?.insertions ?? 0,
       deletions: res?.deletions ?? 0,

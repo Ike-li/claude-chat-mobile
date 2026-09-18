@@ -1535,6 +1535,36 @@ io.on('connection', socket => {
       });
       return;
     }
+    // 锚点有效、但这一轮没有任何经 Edit/Write 落盘的文件 → 真 server 在 app.js 那句
+    // `canRewind: !!res?.canRewind && filesChanged.length > 0` 上判 false，并带 reason 说明是哪一种。
+    // 用户实测撞上的就是这一档（那一轮 50 个工具调用全是 Bash，checkpoint 只快照 edits）。
+    if (promptUuid === 'u-archived-4') {
+      callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
+      return;
+    }
+    // 「确认框还开着，会话被切走了」：ack 之后立刻推一条 instances，把 viewingInstanceId
+    // 换成另一个实例。前端的 appConfirm 正在 await，这条广播会在它等待期间落地、
+    // 把 displayedSessionId 改掉。真 server 上等价的触发是别处来的任意一次 broadcastInstances。
+    if (promptUuid === 'u-archived-6') {
+      callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
+      const other = mockInstances.find(i => i.instanceId !== viewingInstanceId) || mockInstances[0];
+      viewingInstanceId = other.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart,
+          viewingInstanceId, viewingCwd: other.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances, service: mockServicePayload() },
+      });
+      console.log('[mock] u-archived-6 —— preview 之后切走会话，模拟确认框等待期间的会话切换');
+      return;
+    }
+    // 另一种 canRewind:false：SDK 侧根本没有这条消息的检查点（res.canRewind 为 false），
+    // 不是「这一轮没改文件」。出路一样，成因不同，文案必须不同。
+    if (promptUuid === 'u-archived-5') {
+      callback({ ok: true, canRewind: false, reason: 'no-checkpoint', filesChanged: [], insertions: 0, deletions: 0 });
+      return;
+    }
     callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
   });
 
@@ -1580,7 +1610,10 @@ io.on('connection', socket => {
     const { sessionId, cwd, uuid } = payload || {};
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
     if (typeof callback !== 'function') return;
-    const validUuids = new Set(['a-archived-1', 'a-archived-2']);
+    // 护栏的本质是【只收 assistant 侧 uuid】（前端误送 u-archived-* 当场被拒，P0-FORKc 靠它抓）。
+    // a-archived-3 是第四轮 user 气泡的前一条 assistant，供 P0-REWINDj 的「没有文件改动 → 改用分叉」
+    // 走完整条链路；它同样是 assistant 侧，不削弱那道护栏。
+    const validUuids = new Set(['a-archived-1', 'a-archived-2', 'a-archived-3', 'a-archived-4']);
     if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !validUuids.has(uuid)) {
       callback({ ok: false, error: 'mock fork source not found' });
       return;
@@ -1761,7 +1794,21 @@ io.on('connection', socket => {
           // 第三轮专供 Rewind 的「文件回了、分叉没建成」那一支（P0-REWINDd）：
           // 真 server 上这一支来自 sdkForkSession 抛错，E2E 无从制造，只能在 mock 里留一个入口。
           { role: 'user', content: 'One more thing please', uuid: 'u-archived-3' },
-          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' }
+          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' },
+          // 第四轮专供「锚点有效、但这一轮没有文件改动」那一档（P0-REWINDj）：
+          // 真 server 上这是 filesChanged 为空（那一轮只跑了 Bash，没经 Edit/Write 落盘），
+          // canRewind 被判 false。用户最容易撞上的恰恰是这一档——它此前只有一句无出路的提示。
+          { role: 'user', content: 'Just run some shell commands', uuid: 'u-archived-4' },
+          { role: 'assistant', content: 'Ran them, nothing written to disk.', uuid: 'a-archived-4' },
+          // 第五轮专供另一种 canRewind:false——SDK 说这条消息没有可用检查点（快照过期/被清理）。
+          // 与第四轮出路相同、成因不同，两条用例互为对照：文案判据写反会同时红。
+          { role: 'user', content: 'An old turn with no snapshot', uuid: 'u-archived-5' },
+          { role: 'assistant', content: 'That one is too old to restore.', uuid: 'a-archived-5' },
+          // 第六轮专供「确认框还开着时会话被切走」那一档（P0-REWINDm）：preview 回完之后
+          // mock 立刻推一条改了 viewingInstanceId 的 instances 广播，前端 bindView 会把
+          // displayedSessionId 换掉——正是 requestSessionRewind 头部那段快照注释警告的形态。
+          { role: 'user', content: 'Switch away while I decide', uuid: 'u-archived-6' },
+          { role: 'assistant', content: 'Sure, take your time.', uuid: 'a-archived-6' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
@@ -4841,6 +4888,22 @@ io.on('connection', socket => {
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
+
+    // test:external-echo：上面那条回显被本地占位气泡认领之后，再推一条【本地没有占位气泡】的
+    // user_message。这是「另一台设备发的消息」与回放的形态——前端 matchedBubble 只在 .opacity-70
+    // 里找，找不到就走「在线新建 user 气泡」那条分支，与占位转正是两个调用点。
+    // 【不带 clientMessageId】正是要点：带了就会被认领，又走回转正分支去了。
+    if (cmd === 'test:external-echo') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'user_message', payload: {
+          text: 'EXTERNAL_USER_MESSAGE',
+          uuid: 'u-external-1', // Rewind 锚点，同上面回显那条
+        }
+      });
+      console.log('[mock] test:external-echo — 已推一条无占位气泡的 user_message');
+      return;
+    }
 
     if (cmd.startsWith('ultracode ')) {
       activeEpoch = 'mock-epoch-ultracode-' + Date.now();
