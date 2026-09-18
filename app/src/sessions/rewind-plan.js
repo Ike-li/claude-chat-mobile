@@ -27,9 +27,20 @@ import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
 
-/** 一条 entry 是否可作为 resumeSessionAt 的锚点：接受任意 chain UUID（SDK 契约原文如此）。 */
+// forkSession / resumeSessionAt 真正认得的 entry 类型。逆向 SDK 的 transcript 读取器
+// （Desktop 1.52386.6 内嵌的那份）得到的白名单原文：
+//   (t==="user"||t==="assistant"||t==="progress"||t==="system"||t==="attachment")
+//   && typeof e.uuid==="string"
+// 【为什么不能只判「有 uuid」】每次 fork 都会在 transcript 末尾追加一条
+//   {type:"custom-title", uuid: randomUUID(), customTitle:"… (fork)"}
+// ——带 uuid，却不在上面这张表里。只判 uuid 就会把它当成合法锚点，而 forkSession 的
+// findIndex 在过滤后的数组里找不到它，抛 `Message … not found`。症状是
+// 「在一个已分叉的会话里再分叉」确定性失败（PR #88 review P1）。
+const FORKABLE_ENTRY_TYPES = new Set(['user', 'assistant', 'progress', 'system', 'attachment']);
+
+/** 一条 entry 是否可作为 forkSession/resumeSessionAt 的锚点：类型在白名单内且带 uuid。 */
 function isChainEntry(e) {
-  return !!(e && typeof e.uuid === 'string' && e.uuid);
+  return !!(e && typeof e.uuid === 'string' && e.uuid && FORKABLE_ENTRY_TYPES.has(e.type));
 }
 
 /**
@@ -89,6 +100,56 @@ export function planRewind(entries, promptUuid) {
   if (!keepUuid) return { ok: false, reason: 'first-turn' };
 
   return { ok: true, keepUuid };
+}
+
+/**
+ * 这条 entry 是不是「人开的新一轮」。tool_result 也是 type:'user'，得排掉它。
+ *
+ * 【判据是「不是 tool_result」而不是「有 text 块」】SDKUserMessage 契约允许 image / document
+ * 内容，纯图片的那一轮里一个 text 块都没有。按「有 text 块」判会把它当成同轮延续跨过去，
+ * 于是保留方向多吞一整轮——用户选的是 A，分出来的却含 A 之后那一轮（PR #88 review P2）。
+ * 与 extractPromptText 的取舍不同是有意的：那个函数要的是「拿得出文字来回填输入框」，
+ * 这里要的是「这一轮从哪结束」，两个问题的答案本来就不一样。
+ */
+function isHumanPrompt(e) {
+  if (!e || e.type !== 'user') return false;
+  const c = e?.message?.content;
+  if (typeof c === 'string') return true;
+  if (!Array.isArray(c)) return false;
+  return c.some(b => b && typeof b === 'object' && b.type !== 'tool_result');
+}
+
+/**
+ * 算出分叉的 upToMessageId。planRewind 的一般化：多回答一个「保留 anchor 所在轮」的方向。
+ *
+ * @param {Array<object>} entries      transcript 全量条目（原始 jsonl 行，按落盘顺序）
+ * @param {string} anchorUuid          用户点的那条气泡自己的 uuid
+ * @param {{keepAnchorTurn: boolean}} opts
+ *        keepAnchorTurn=true  长按 assistant 气泡「从这里分叉」→ 保留 anchor 所在轮
+ *        keepAnchorTurn=false 长按 user 气泡「丢弃这条及之后」→ 丢弃 anchor 所在轮（= planRewind）
+ * @returns {{ok: true, keepUuid: string} | {ok: false, reason: string}}
+ *
+ * 【为什么不能让前端拿「最后一条 assistant 气泡」当锚】SDK 的通用规则是
+ * "fork at the KEPT turn's last chain entry, whatever it is"，而 forkSession 的切片是
+ * 纯 inclusive slice、零修正——锚点给早了它照切，保留轮尾部的 tool_result 被丢进弃置区间，
+ * 对应的 tool_use 就悬空了。工具卡在前端 DOM 里没有 uuid（history.js 只给文本类挂），
+ * 所以那个锚点【结构上】就看不见轮次的尾巴，只能由服务端对着 transcript 算。
+ */
+export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
+  if (!Array.isArray(entries) || !anchorUuid) return { ok: false, reason: 'bad-input' };
+  const at = entries.findIndex(e => e && e.uuid === anchorUuid);
+  if (at < 0) return { ok: false, reason: 'anchor-not-found' };
+
+  // 丢弃方向与 planRewind 是同一个问题，直接委派——两条路径对同一个问题必须同一个答案。
+  if (!keepAnchorTurn) return planRewind(entries, anchorUuid);
+
+  // 保留方向：从 anchor 往后走到下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  let keepUuid = null;
+  for (let i = at; i < entries.length; i++) {
+    if (i > at && isHumanPrompt(entries[i])) break;
+    if (isChainEntry(entries[i])) keepUuid = entries[i].uuid;
+  }
+  return keepUuid ? { ok: true, keepUuid } : { ok: false, reason: 'anchor-not-found' };
 }
 
 /**

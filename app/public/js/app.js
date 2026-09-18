@@ -8100,12 +8100,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
 
   async function requestSessionFork(bubble, role) {
-    const anchor = resolveForkAnchorUuid({
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+    // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
+    // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
+    const ownUuid = bubble.dataset.uuid || null;
+    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
+    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
+    const reachable = resolveForkAnchorUuid({
       role,
-      ownUuid: bubble.dataset.uuid || null,
+      ownUuid,
       precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
     });
-    if (!anchor) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
+    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
@@ -8122,7 +8128,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     haptic('tap');
-    socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
+    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    socket.emit('session:fork', {
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+    }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
   }
@@ -8403,7 +8413,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
-      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
+      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;
@@ -8797,7 +8807,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
 
   // E18: Redesigned premium utility row under each message block with copy, speak (TTS), and edit capabilities
-  function appendCopyAction(container, getText, align) {
+  // anchorUuid：这条气泡自己的权威 uuid。缺了就不挂需要锚点的入口（见下方 align==='left' 分支）。
+  function appendCopyAction(container, getText, align, anchorUuid) {
     if (!getText()) return;   // Empty messages have no action bar
     
     // For User messages (aligned to the right), render a single clean copy icon button aligned to the right
@@ -8931,6 +8942,29 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       window.speechSynthesis.speak(utterance);
     };
     bar.appendChild(speakBtn);
+
+    // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
+    // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
+    // 且 bindBubbleLongPress 只绑 touch 事件，桌面鼠标按不出来。
+    //
+    // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
+    // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——
+    // 那两档摆出按钮就是摆一个点了必然失败的东西。「复制」不需要锚点，所以它照常在。
+    if (anchorUuid) {
+      const forkBtn = el(`
+        <button class="msg-action-btn" data-testid="fork-action" title="${t('从这里分叉')}">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 3v12m0 0a3 3 0 103 3 3 3 0 00-3-3zm0-12a3 3 0 110 6 3 3 0 010-6zm12 0a3 3 0 100 6 3 3 0 000-6zm0 6c0 6-6 3-6 9" />
+          </svg>
+          <span>${t('分叉')}</span>
+        </button>
+      `);
+      // 确认框在 requestSessionFork 里，haptic 同理——按钮可见不等于一键执行。
+      // uuid 在点击时由该函数从 container.dataset 读，不用这里的 anchorUuid：
+      // 气泡的 dataset 才是权威值，且历史回显路径是先挂操作栏、后补 uuid。
+      forkBtn.onclick = () => requestSessionFork(container, 'assistant');
+      bar.appendChild(forkBtn);
+    }
 
     // UX-012：编辑已迁到用户气泡「改写重发」
 

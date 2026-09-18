@@ -1607,15 +1607,28 @@ io.on('connection', socket => {
   });
 
   socket.on('session:fork', (payload, callback) => {
-    const { sessionId, cwd, uuid } = payload || {};
-    console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
+    const { sessionId, cwd, uuid, keepAnchorTurn } = payload || {};
+    console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}, keepAnchorTurn=${keepAnchorTurn}`);
     if (typeof callback !== 'function') return;
-    // 护栏的本质是【只收 assistant 侧 uuid】（前端误送 u-archived-* 当场被拒，P0-FORKc 靠它抓）。
-    // a-archived-3 是第四轮 user 气泡的前一条 assistant，供 P0-REWINDj 的「没有文件改动 → 改用分叉」
-    // 走完整条链路；它同样是 assistant 侧，不削弱那道护栏。
-    const validUuids = new Set(['a-archived-1', 'a-archived-2', 'a-archived-3', 'a-archived-4']);
-    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !validUuids.has(uuid)) {
+    // 【护栏随协议翻转】2026-09-18 起锚点由服务端对着 transcript 算（planFork），前端只送
+    // 「这条气泡自己的 uuid + 语义标志」。于是这道护栏守的东西换了——不再是「只收 assistant 侧」，
+    // 而是【uuid 侧别必须与 keepAnchorTurn 一致】：
+    //   keepAnchorTurn=true （长按 assistant「从这里分叉」= 保留这一轮）→ 必须是 a-archived-*
+    //   keepAnchorTurn=false（长按 user「丢弃这条及之后」）             → 必须是 u-archived-*
+    // 送反了说明前端把两个方向的语义接错了，当场拒绝。旧护栏「只收 assistant」在新协议下
+    // 会把合法的 user 侧请求也拒掉，留着就是假红。
+    const wantAssistantSide = keepAnchorTurn !== false;
+    const sideOk = wantAssistantSide
+      ? /^a-archived-\d+$/.test(uuid || '')
+      : /^u-archived-\d+$/.test(uuid || '');
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !sideOk) {
       callback({ ok: false, error: 'mock fork source not found' });
+      return;
+    }
+    // 会话首轮往前没有可保留的锚点——真 server 的 planFork 在这一档返回 first-turn，
+    // mock 必须给同一个答案，否则两边对同一条夹具的判断相反、E2E 守的就不是真 server 的行为。
+    if (!wantAssistantSide && uuid === 'u-archived-1') {
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
       return;
     }
     const forkedId = 'inst_forked';
