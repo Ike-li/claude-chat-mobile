@@ -81,6 +81,8 @@ let syncPendingSnapshotInstanceId = null;
 let mockUnreadOnEntry = 0; // 未读角标：模拟真 server sync:since 的 ack.unreadOnEntry（切入时展示未读胶囊）
 let mockUnreadOnEntryInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
+// 已被关闭、等着用例经 POST /__emit-late-closed-events 放出迟到事件的实例（见 session:close 处注释）。
+let pendingLateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
@@ -395,6 +397,7 @@ function resetMockState() {
   mockUnreadOnEntry = 0;
   mockUnreadOnEntryInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
+  pendingLateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
@@ -630,6 +633,18 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
+});
+
+// P0-11o / P0-13e：发出「关闭的那个实例的迟到事件」。由用例在【确认视图切换已完成之后】显式调用，
+// 理由见 session:close 里 pendingLateClosedSessionEventsInstanceId 处的注释（时间驱动会让事件被
+// shouldDropAgentEvent 或 replayBuffer 的 'reload' 丢掉，且不重发）。
+// 一次性消费；没有待发实例时回 ok:false，让用例在「武装没生效」时当场红，而不是静默空跑。
+app.post('/__emit-late-closed-events', (_req, res) => {
+  const instanceId = pendingLateClosedSessionEventsInstanceId;
+  if (!instanceId) { res.status(409).json({ ok: false, error: 'no pending late-closed events' }); return; }
+  pendingLateClosedSessionEventsInstanceId = null;
+  emitLateClosedSessionEvents(instanceId);
+  res.json({ ok: true, instanceId });
 });
 
 // P0-NOSID：把当前查看实例拨成「活着但还没有 sessionId」（CLI 未吐 init）。见 noSessionIdMode 注释。
@@ -1103,17 +1118,18 @@ io.on('connection', socket => {
           defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
       });
-      if (shouldEmitLateClosedSessionEvents) {
-        // 【这个延迟是承重的，别调小】emitLateClosedSessionEvents 是同步函数，一口气把迟到事件
-        // 全发完，其中最后一条 finished 发给【新的 viewing 实例】。前端必须在这段时间里处理完上面
-        // 那条 instances 广播、bindView 切到新实例；否则 finished 到达时前端的 viewingInstanceId
-        // 还是旧的，事件被 shouldDropAgentEvent 丢掉——而且【不会重发】，用例只能干等到超时。
-        //
-        // 原值 80ms 就是在跟 bindView 赛跑：本机实测 4 片偶发红、5 片 25% 红、6 片 3/3 红（P0-11o）。
-        // 【别试图用放宽用例的断言 timeout 来治】那条路是死的：10s → 30s 照样红，因为事件不是晚到，
-        // 是早就被丢了。判据也在这里——报的是「30s 内 #messages 一次都没变过」，不是「慢了一点」。
-        setTimeout(() => emitLateClosedSessionEvents(instanceId), 1500);
-      }
+      // 【迟到事件不在这里发，改由用例经 POST /__emit-late-closed-events 显式触发】
+      // 原实现是 setTimeout(..., 80)，等于赌前端能在 80ms 内处理完上面这条 instances 广播、
+      // bindView 切到新实例。赌输了的后果不是「慢一点」而是【事件永久丢失】，有两层：
+      //   ① 前端 viewingInstanceId 还是旧的 → shouldDropAgentEvent 直接丢；
+      //   ② 即使切过去了，bindView 的 replayBuffer.begin() 早于 sync:since 发出，事件会先进缓冲，
+      //      而 ack 回调走 resolve(handle,'reload') 时【缓冲整个被丢弃】改拉磁盘历史——那条 finished
+      //      是实时 system 事件，磁盘历史里根本没有它。
+      // 两层都不重发，用例只能干等到超时。所以放宽用例的断言 timeout 是死路（实测 10s→30s 照样红，
+      // 报的是「30s 内 #messages 一次都没变过」）；单纯把 80ms 调大也只是缩窄窗口而非消除竞态——
+      // sync:since 往返一慢就又回去了。
+      // 判据交回用例：它能断言「切换确实完成了」（新会话的历史已上屏），那一刻再触发才是确定的。
+      if (shouldEmitLateClosedSessionEvents) pendingLateClosedSessionEventsInstanceId = instanceId;
     }
   });
 

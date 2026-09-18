@@ -591,6 +591,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    // 【先等新视图的历史真正上屏，再放迟到事件】这是「切换已完成、bindView 的 replayBuffer 已
+    // resolve」的可观测证据。抢在它之前放，那批事件会被 shouldDropAgentEvent 丢掉，或者进了缓冲
+    // 之后被 resolve(...,'reload') 连同缓冲一起丢弃——两条路都【不重发】，用例只能干等到超时。
+    // 原实现让 mock 在 session:close 后固定 80ms 发，等于赌前端切得够快：本机 6 片 3/3 红。
+    await expect(page.locator('#messages')).toContainText('Another App Concurrency');
+    const lateEvents = await page.request.post('/__emit-late-closed-events');
+    expect(lateEvents.ok()).toBeTruthy(); // 武装没生效时当场红，而不是静默空跑到超时
     await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
     await expect(page.locator('#messages')).not.toContainText('Close current stale source session');
     await expect(page.locator('#messages')).not.toContainText('STALE CLOSED SESSION TEXT MUST NOT RENDER');
