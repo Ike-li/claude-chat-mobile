@@ -71,6 +71,47 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-FORKd assistant 气泡有常驻「分叉」入口，点击直达确认', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    // 对齐 Claude Desktop 1.52386.6：它把「Fork from here」放在 assistant 消息的操作栏里，
+    // 与复制/朗读同排。本仓此前只有长按一条路——没有视觉提示、且只绑 touch 事件，
+    // 桌面鼠标按不出来，真机实测用户在 assistant 气泡上找了半天没找到。
+    const bubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
+    const forkBtn = bubble.locator('[data-testid="fork-action"]');
+    await expect(forkBtn).toBeVisible();
+    await forkBtn.click();
+
+    await expect(page.locator('#confirmTitle')).toContainText('分叉', { timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+    // mock 的护栏要求 assistant 侧必须配 keepAnchorTurn=true，切过去了才说明方向送对了。
+    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-FORKe 缺 uuid 的 assistant 消息没有分叉入口', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('[data-testid="assistant-message"]').first()).toBeVisible({ timeout: 15_000 });
+
+    // 真实 transcript 里有缺 uuid 的旧条目（history.js 同 uuid 去重那段注释点名了这一档），
+    // 流式气泡也一样（getStream 建的 wrap 不带 dataset.uuid）。没有锚点就分叉不了：
+    // 入口必须跟着锚点走，否则就是摆一个点了必然失败的按钮。
+    // 「复制」不需要锚点、仍在——用它确认操作栏本身渲染了，否则整排没出来这条也会绿。
+    const first = page.locator('[data-testid="assistant-message"]').first();
+    await expect(first.locator('.msg-action-btn')).not.toHaveCount(0);
+    await expect(first.locator('[data-testid="fork-action"]')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-FORKb 长按会话首条用户消息（前面无 assistant 回复）时禁用分叉', async ({ page }) => {
     await gotoMock(page);
 
