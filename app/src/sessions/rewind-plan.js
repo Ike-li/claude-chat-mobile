@@ -27,9 +27,20 @@ import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
 
-/** 一条 entry 是否可作为 resumeSessionAt 的锚点：接受任意 chain UUID（SDK 契约原文如此）。 */
+// forkSession / resumeSessionAt 真正认得的 entry 类型。逆向 SDK 的 transcript 读取器
+// （Desktop 1.52386.6 内嵌的那份）得到的白名单原文：
+//   (t==="user"||t==="assistant"||t==="progress"||t==="system"||t==="attachment")
+//   && typeof e.uuid==="string"
+// 【为什么不能只判「有 uuid」】每次 fork 都会在 transcript 末尾追加一条
+//   {type:"custom-title", uuid: randomUUID(), customTitle:"… (fork)"}
+// ——带 uuid，却不在上面这张表里。只判 uuid 就会把它当成合法锚点，而 forkSession 的
+// findIndex 在过滤后的数组里找不到它，抛 `Message … not found`。症状是
+// 「在一个已分叉的会话里再分叉」确定性失败（PR #88 review P1）。
+const FORKABLE_ENTRY_TYPES = new Set(['user', 'assistant', 'progress', 'system', 'attachment']);
+
+/** 一条 entry 是否可作为 forkSession/resumeSessionAt 的锚点：类型在白名单内且带 uuid。 */
 function isChainEntry(e) {
-  return !!(e && typeof e.uuid === 'string' && e.uuid);
+  return !!(e && typeof e.uuid === 'string' && e.uuid && FORKABLE_ENTRY_TYPES.has(e.type));
 }
 
 /**
@@ -91,13 +102,21 @@ export function planRewind(entries, promptUuid) {
   return { ok: true, keepUuid };
 }
 
-/** 这条 entry 是不是「人打的字」：tool_result 也是 type:'user'，靠有没有 text block 区分（同 extractPromptText）。 */
+/**
+ * 这条 entry 是不是「人开的新一轮」。tool_result 也是 type:'user'，得排掉它。
+ *
+ * 【判据是「不是 tool_result」而不是「有 text 块」】SDKUserMessage 契约允许 image / document
+ * 内容，纯图片的那一轮里一个 text 块都没有。按「有 text 块」判会把它当成同轮延续跨过去，
+ * 于是保留方向多吞一整轮——用户选的是 A，分出来的却含 A 之后那一轮（PR #88 review P2）。
+ * 与 extractPromptText 的取舍不同是有意的：那个函数要的是「拿得出文字来回填输入框」，
+ * 这里要的是「这一轮从哪结束」，两个问题的答案本来就不一样。
+ */
 function isHumanPrompt(e) {
   if (!e || e.type !== 'user') return false;
   const c = e?.message?.content;
   if (typeof c === 'string') return true;
-  if (Array.isArray(c)) return c.some(b => b && typeof b === 'object' && b.type === 'text');
-  return false;
+  if (!Array.isArray(c)) return false;
+  return c.some(b => b && typeof b === 'object' && b.type !== 'tool_result');
 }
 
 /**

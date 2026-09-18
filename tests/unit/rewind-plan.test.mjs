@@ -350,3 +350,65 @@ test.describe('planFork —— 分叉锚点', () => {
     assert.deepEqual(planFork(withNoise, 'u2', { keepAnchorTurn: false }), { ok: true, keepUuid: 'a1' });
   });
 });
+
+// ── planFork / planRewind 的锚点资格：两条来自 PR #88 review ──
+//
+// 【P1】SDK 的 transcript 读取器只收五种 type（逆向 Desktop 1.52386.6 内嵌的那份：
+// `(t==="user"||t==="assistant"||t==="progress"||t==="system"||t==="attachment") && typeof e.uuid=="string"`）。
+// 而每次 fork 都会在末尾追加一条 `{type:"custom-title", uuid: randomUUID(), …}`——**带 uuid
+// 但不在白名单里**。只判「有 uuid」就会锚到它上面，forkSession 的 findIndex 返回 -1，
+// 抛 `Message … not found`。症状是「在一个已分叉的会话里再分叉」确定性失败。
+//
+// 【P2】isHumanPrompt 原来只认 string 与 text 块，而 SDKUserMessage 契约允许 image/document
+// 内容。纯图片的那一轮会被判成「不是人类输入」而被跨过去，保留方向于是多吞了一整轮——
+// 用户选的是 A，分出来的却含 A 之后那一轮。判据要反过来：主链 user 条目只要不是
+// tool_result 承载行，就该终止被保留的这一轮。
+test.describe('planFork / planRewind：锚点资格', () => {
+  const customTitle = (uuid) => ({ type: 'custom-title', uuid, customTitle: 'X (fork)' });
+  const imageOnlyPrompt = (uuid) => ({
+    type: 'user', uuid, message: { content: [{ type: 'image', source: { type: 'base64' } }] },
+  });
+
+  test('P1：custom-title 带 uuid 也不能当锚点（forkSession 的 transcript 里根本没有它）', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      customTitle('ct-1'),   // fork 产物尾巴：带 uuid，但 forkSession 读不到它
+    ];
+    // 保留 a1 所在轮：尾巴不是合法锚点，锚点应停在 a1
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a1' });
+  });
+
+  test('P1：丢弃方向同样不得锚到 custom-title（planRewind 与 planFork 同源）', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      customTitle('ct-1'),
+      { uuid: 'u2', type: 'user', message: { content: 'next' } },
+    ];
+    assert.deepEqual(planRewind(entries, 'u2'), { ok: true, keepUuid: 'a1' });
+    assert.deepEqual(planFork(entries, 'u2', { keepAnchorTurn: false }), { ok: true, keepUuid: 'a1' });
+  });
+
+  test('P2：纯图片的 user prompt 同样终止保留轮，不被跨过', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', message: { content: 'first' } },
+      { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+      imageOnlyPrompt('u2'),  // 没有 text 块，但确实是人打的那一轮
+      { uuid: 'a2', type: 'assistant', message: { content: [{ type: 'text', text: 'later' }] } },
+    ];
+    // 保留 a1 那一轮：必须停在 a1，不能吞掉 u2/a2 这一整轮
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a1' });
+  });
+
+  test('P2 的反面：tool_result 承载行不算人类输入，仍属于同一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 't1' }] } },
+      { uuid: 'r1', type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } },
+      { uuid: 'u2', type: 'user', message: { content: 'next' } },
+    ];
+    // r1 是保留轮自己的尾巴，锚点要走到它；u2 才是下一轮的开始
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+});
