@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, splitAttachmentBlock } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -737,4 +737,108 @@ test('getSessionHistory: stdout+stderr 并存的输出要完整回显，不整�
   assert.match(msgs[0].content, /正常输出/);
   assert.match(msgs[0].content, /警告信息/);
   assert.ok(!/<local-command-/.test(msgs[0].content), '包装标签不该留在正文里');
+});
+
+// ── 跟随 CLI 当前链（2026-09-18）──────────────────────────────────────────────
+// CLI 的 /rewind「Restore conversation」不删 transcript 任何一行：它把当前叶子挪回锚点，
+// 之后的写入以新 parentUuid 挂上去形成新分支，被撤销的那一段仍留在文件里。按行顺序读会把
+// 它一并回显——实测会话 cdb36ede：按行 727 条而 CLI/SDK 口径 515 条，多出的 212 条正是被
+// rewind 掉的那段（锚点前 370 全留、废弃段 212 全剪、rewind 后新对话 145 全留）。
+// 哪些 uuid 属于当前链由 SDK 的 getSessionMessages 给：它同时处理了 compact 脱链（压缩摘要
+// 挂新 root，旧链整条脱钩）与并行工具调用的合法分叉（一个 turn 里多个 tool_use 各自成支），
+// 这两样自己回溯 parentUuid 都会算错——前者会把压缩前的历史全砍，后者会漏掉并行的那一支。
+test('getSessionHistory: 剪掉 rewind 废弃的分支，只回显 CLI 当前链', async () => {
+  const cwd = '/test/rewind-chain';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'rewound', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '第一问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '第一答' }, timestamp: '2024-01-01T00:00:01Z' },
+    // ↓ 这两条后来被 rewind 撤销
+    { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '撤销的答' }, timestamp: '2024-01-01T00:00:03Z' },
+    // ↓ rewind 后从 a-1 重新分叉
+    { type: 'user', uuid: 'u-3', parentUuid: 'a-1', message: { role: 'user', content: '重来的问' }, timestamp: '2024-01-01T00:00:04Z' },
+    { type: 'assistant', uuid: 'a-3', parentUuid: 'u-3', message: { role: 'assistant', content: '重来的答' }, timestamp: '2024-01-01T00:00:05Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }, { uuid: 'u-3' }, { uuid: 'a-3' }]);
+  try {
+    const msgs = await getSessionHistory('rewound', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['第一问', '第一答', '重来的问', '重来的答']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// fail-open：链真相源拿不到时【不过滤】。少显示历史是静默的——用户不会立刻发现手机上少了
+// 几百条；多显示几条废弃分支是看得见的。两害相权取后者。
+test('getSessionHistory: 链真相源抛错时保留全量，不静默砍历史', async () => {
+  const cwd = '/test/rewind-chain-failopen';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'failopen', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '答' }, timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => { throw new Error('SDK 炸了'); });
+  try {
+    const msgs = await getSessionHistory('failopen', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['问', '答']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 空集合同样走 fail-open：SDK 返回 [] 也可能是它自己没读到文件，照它剪会把整个会话清空。
+test('getSessionHistory: 链真相源返回空集合时保留全量', async () => {
+  const cwd = '/test/rewind-chain-empty';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'emptychain', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '问' }, timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => []);
+  try {
+    const msgs = await getSessionHistory('emptychain', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['问']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// fail-open 的结果不能长期占着缓存：_histCache 的键只有 mtime+size，而 rewind 之后文件可能很久
+// 不再变化。一次偶发的 SDK 故障若把「全量」写进缓存，之后即使链真相源恢复也永远拿不到过滤结果。
+test('getSessionHistory: 链真相源一次失败不得被缓存成永久全量', async () => {
+  const cwd = '/test/chain-failopen-cache';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'failcache', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '答' }, timestamp: '2024-01-01T00:00:01Z' },
+    { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => { throw new Error('临时故障'); });
+  try {
+    const first = await getSessionHistory('failcache', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(first.map(m => m.content), ['问', '答', '撤销的问'], 'fail-open 当次应回全量');
+    // 文件一个字节没动，链真相源恢复 —— 不得吃上一次那份未过滤的缓存
+    __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }]);
+    const second = await getSessionHistory('failcache', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(second.map(m => m.content), ['问', '答']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 子 agent 的 uuid 不挂在主链上，按 live 集合过滤会把整棵 sidechain 误删。
+test('getSessionHistory: sidechain 子 agent 消息不受链过滤影响', async () => {
+  const cwd = '/test/rewind-chain-side';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sidechain', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '主链问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 's-1', isSidechain: true, message: { role: 'assistant', content: '子 agent 说话' }, timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }]);
+  try {
+    const msgs = await getSessionHistory('sidechain', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['主链问', '子 agent 说话']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
 });

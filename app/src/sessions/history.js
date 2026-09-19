@@ -4,7 +4,7 @@ import { open, stat, readdir, readFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo } from '@anthropic-ai/claude-agent-sdk';
+import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
@@ -21,6 +21,8 @@ let __sdkListSessionsForTest;
 export function __setSdkListSessionsForTest(fn) { __sdkListSessionsForTest = fn; }
 let __sdkGetSessionInfoForTest;
 export function __setSdkGetSessionInfoForTest(fn) { __sdkGetSessionInfoForTest = fn; }
+let __sdkGetSessionMessagesForTest;
+export function __setSdkGetSessionMessagesForTest(fn) { __sdkGetSessionMessagesForTest = fn; }
 
 // CLI transcript 根目录，与 CLI /resume 同源。硬编码 ~/.claude/projects：这是 CLI 的固定约定，且
 // L2 删除走 SDK 官方 deleteSession（它同样只认此真实根、无自定义根的口子），故这里不设环境变量覆盖——
@@ -72,6 +74,43 @@ export function isSafeSessionId(id) {
   return typeof id === 'string' && /^[0-9a-zA-Z_-]+$/.test(id);
 }
 
+// 「当前链」的 uuid 集合——即 CLI 自己还认的那些消息。返回 null = 拿不到，调用方据此【不过滤】。
+//
+// 【为什么这一件事要借 SDK，而下面那段仍然说不迁 getSessionMessages】两者不冲突：解析、噪音过滤、
+// sidechain 挂靠、local_command 回显仍是本模块自己做，这里只借它回答一个问题——哪些 uuid 还在当前
+// 链上。这个判断【不能自己写】：读 sdk.mjs 0.3.263 的实现（uHe + pHe），官方算法是五步，
+//   ① 按 type:'system'/subtype:'compact_boundary' 条目的 compactMetadata
+//      （preservedMessages / preservedSegment）把压缩边界两侧重新缝合起来；
+//   ② 取所有叶子（无人以之为 parent），各自上溯到最近的 user/assistant，得到每条分支的末端；
+//   ③ 在这些末端里挑【文件物理行序最靠后】的（排除 isSidechain/teamName/isMeta）当作当前叶子；
+//   ④ 从它单链回溯出主链；
+//   ⑤ 再按 message.id 把并行工具调用的兄弟条目、以及挂在它们下面的 tool_result 补回来。
+// 2026-09-18 我自己先猜过一版单链回溯，①⑤ 两步都漏掉：compact 过的会话被砍到只剩 3 条（实测
+// 1284 → 3），并行工具那一支整条不见（79 个会话的对照里 34 个有缺口）。
+// 它确实跟随 rewind：实测会话 cdb36ede 按时间窗切分——锚点前 370 条全留、被 rewind 撤销的 212 条
+// 全剪、rewind 后新对话 145 条全留，合计 515 = 它的返回数。
+//
+// 【有意不传 includeSystemMessages】传了会多拿到 system 条目，但实测 subtype:'local_command'
+// 即使开着它也不全在返回里（两个会话 1→0、3→2）。那类条目是 web 端跑 slash 命令的输出、用户从没
+// 在终端见过，本模块下面专门收了它们；跟着 SDK 一起筛会把 /code-review 的结果整个删掉。
+// 故过滤只作用于 user/assistant —— 代价是废弃分支里若含 local_command 输出会残留，可接受。
+async function readLiveChainUuids(sessionId, cwd, baseDir) {
+  // baseDir 非真实根 = CCM_DATA_DIR 隔离实例，SDK 写死 ~/.claude 够不着那个根，只能不过滤。
+  const fn = __sdkGetSessionMessagesForTest || (baseDir === CLAUDE_DIR ? sdkGetSessionMessages : null);
+  if (!fn) return null;
+  try {
+    // 只吃原始 cwd：传编码后的 projectDir 会得空数组（同 scanSessionsViaSdk 的实测坑）。
+    const msgs = await fn(sessionId, { dir: cwd });
+    if (!Array.isArray(msgs)) return null;
+    const live = new Set();
+    for (const m of msgs) if (m?.uuid) live.add(m.uuid);
+    // 空集合与抛错同等对待：SDK 读不到文件时也返回空，照它剪会把整个会话清空。
+    return live.size > 0 ? live : null;
+  } catch {
+    return null; // fail-open：少显示历史是静默的，多显示几条废弃分支是看得见的
+  }
+}
+
 // 实测返回大量原始消息（含 thinking/子agent/系统行），零噪音过滤；本函数过滤后仅剩真实对话 + 主链工具。
 // isMeta/isSidechain/parent_tool_use_id/CLI 系统行/task-notification/uuid 去重等过滤须保留，故不迁官方 API。
 //
@@ -100,13 +139,22 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   //
   // 残留缺口（已知、不修）：等长覆写仍会命中缓存。CLI 的 transcript 是 append-only，等长原地改写
   // 不存在；真要防得改成读内容 hash，为一个不发生的场景付每次全文读的代价，不划算。
+  // 链真相源在本次调用里够不够得着（能力判断，与它这次成没成无关）。CCM_DATA_DIR 隔离实例恒 false：
+  // SDK 写死 ~/.claude、够不着那个根，那里的「不过滤」是稳态而非故障，照常吃缓存。
+  const chainSourceAvailable = Boolean(__sdkGetSessionMessagesForTest) || baseDir === CLAUDE_DIR;
+
   const cached = _histCache.get(historyFile);
-  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+  // unfiltered 的缓存不得命中：那是「该过滤却没过滤成」的一次 fail-open 残留。rewind 本身不改文件，
+  // mtime+size 可能很久不变，吃下这份缓存就再也回不到正确结果。
+  if (cached && cached.mtimeMs === mtimeMs && cached.size === size && !cached.unfiltered) {
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
     return cached.messages.slice(-limit);
   }
+
+  // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
+  const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
 
   const messages = [];
   // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
@@ -138,6 +186,13 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 
       // 跳过 meta 条目（local-command 输出等）
       if (entry.isMeta) continue;
+
+      // 不在当前链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们（见 readLiveChainUuids）。
+      // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
+      // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
+      if (liveUuids && entry.uuid && !entry.isSidechain
+          && (entry.type === 'user' || entry.type === 'assistant')
+          && !liveUuids.has(entry.uuid)) continue;
 
       // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
       // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
@@ -218,7 +273,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, size, messages }, HIST_CACHE_MAX);
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
   return messages.slice(-limit);
 }
@@ -273,6 +328,19 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
     return {
       emit: messages.slice(state.baseline),
       reload: false,
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+    };
+  }
+  // 有效历史【变短】= 外部把这个会话重写了（CLI /rewind 撤销掉一段），不是增量，无从 slice。
+  // 与滑窗共用 reload 通道：mirror-engine 收到 reload 就全量 history_append(replace:true) + 标脏。
+  // len===0 必须排除：那是 getSessionHistory 读盘失败的回落值，按收缩处理会 replace 成空屏，
+  // 一次瞬时读失败就擦掉整屏历史。
+  // （原先这里写着「>2000 条被削头时 len 可能 < baseline，保守不推」——削头后 len 恒等于 cap 而
+  //   baseline 取自上一次的 len、同样 ≤ cap，那个场景推不出 len < baseline，据此放行收缩。）
+  if (len > 0 && len < state.baseline) {
+    return {
+      emit: [],
+      reload: true,
       state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
     };
   }
@@ -344,6 +412,10 @@ export function rebaselineAbsorbedExternal({
   if (wasOwnTurn === true) return false; // 己方 turn 上一 tick 还在写盘 → 这次增长是自己写的，baseline 只是尚未吸收
   if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
   if (curLen > baseline) return true;
+  // 变短 = CLI /rewind 撤销了一段（不是削头：削头后 curLen 恒等于 cap）。这时更要标脏——SDK 子进程
+  // 的内存上下文还停在 rewind 前的叶子上，不置换实例就发消息等于从一条已被撤销的链上继续写。
+  // curLen > 0 是护栏：0 与 -1 都是读长度失败的回落值，误判成收缩会在读盘抖动时平白冷启动实例。
+  if (curLen > 0 && curLen < baseline) return true;
   const atCap = Number.isFinite(historyCap) && historyCap > 0
     && curLen >= historyCap && baseline >= historyCap;
   if (atCap && prevTailKey != null && curTailKey != null && prevTailKey !== curTailKey) return true;
