@@ -304,31 +304,47 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //    能按 uuid 幂等去重——但实测前端 onHistoryAppend（app.js）无 uuid 去重、live 流气泡也不记 uuid，故"立即触发"
 //    简单版无效（仍受契约护栏约束只能吸收），完整版需前端去重 + live 流记 uuid 的联动大改。上述边界触发面窄，
 //    n=1 单用户下该大改不值，保留现状。索引见 docs/hard-rules.md §5；别再因"SP-10 设计验证通过"重启这个接入。
+// 单条消息的指纹。timestamp + 角色 + 主文本/tool id——足够区分换掉的那一条；勿用整对象 JSON
+// （thinking 截断会抖）。抽出来是因为除了尾条，catchUpStep 还要盯 baseline 边界那一条（见下）。
+function messageKey(m) {
+  if (!m || typeof m !== 'object') return null;
+  const body = m.content != null ? String(m.content).slice(0, 80)
+    : (m.toolUseId || m.name || m.kind || '');
+  return `${m.timestamp || ''}|${m.role || ''}|${body}`;
+}
+
 export function historyTailKey(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const last = messages[messages.length - 1];
-  if (!last || typeof last !== 'object') return null;
-  // timestamp + 角色 + 主文本/tool id——足够区分滑窗后的新尾巴；勿用整对象 JSON（thinking 截断会抖）
-  const body = last.content != null ? String(last.content).slice(0, 80)
-    : (last.toolUseId || last.name || last.kind || '');
-  return `${last.timestamp || ''}|${last.role || ''}|${body}`;
+  return messageKey(messages[messages.length - 1]);
 }
 
 export function catchUpStep(state, { messages, localBusy = false, historyCap = HISTORY_MAX_MESSAGES } = {}) {
   const len = messages.length;
   const tailKey = historyTailKey(messages);
+  // 第 n 条（1-based）的指纹。anchorKey 用它盯 baseline 边界那一条。
+  const keyAt = n => (n > 0 && n <= len ? messageKey(messages[n - 1]) : null);
   if (localBusy) {
-    return { emit: [], reload: false, state: { baseline: state.baseline, wasBusy: true, lastTailKey: state.lastTailKey ?? null } };
+    return { emit: [], reload: false, state: { baseline: state.baseline, wasBusy: true, lastTailKey: state.lastTailKey ?? null, anchorKey: state.anchorKey ?? null } };
   }
   if (state.wasBusy) {
     // 吸收己方 turn 的写盘：重置 baseline + 同步 tail 指纹（己方写入也在窗口内）
-    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey } };
+    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
+  }
+  // 【前缀重写】已经推给前端的那一段被换掉了 → 增量无从下手，只能全量重推。
+  // 判据只用 baseline 边界那一条：rewind 的变更模式是「截断到点 P 再续写」，撤销点落在 baseline
+  // 之前 ⇒ 这一条必被换掉；落在之后 ⇒ 前端已显示的那段本来就没变、不该打扰它。O(1)，不必比整段。
+  // 少了这条，两种真实用法会让手机永远停在废弃气泡上（PR #98 review 指出等长那种，顺着查出变长
+  // 那种也中）：撤销 3 条又补 3 条 ⇒ len === baseline 落进末尾兜底分支；撤销 3 条补 5 条 ⇒ 走增长
+  // 分支只 emit slice(baseline)，被替换的那 3 条再没有机会更新。
+  const prevAnchor = state.anchorKey ?? null;
+  if (prevAnchor != null && state.baseline > 0 && len >= state.baseline && keyAt(state.baseline) !== prevAnchor) {
+    return { emit: [], reload: true, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
   }
   if (len > state.baseline) {
     return {
       emit: messages.slice(state.baseline),
       reload: false,
-      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) },
     };
   }
   // 有效历史【变短】= 外部把这个会话重写了（CLI /rewind 撤销掉一段），不是增量，无从 slice。
@@ -341,7 +357,7 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
     return {
       emit: [],
       reload: true,
-      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) },
     };
   }
   // SS-001：满窗 + 长度未增 + 指纹已变 → 滑动窗口吞了新尾；不能 slice，请求全量重载
@@ -351,7 +367,7 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
     return {
       emit: [],
       reload: true,
-      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) },
     };
   }
   return {
@@ -362,6 +378,8 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
       wasBusy: false,
       // 首次观察或之前未记指纹时补上，避免下一 tick 误判「从 null→有」为滑动
       lastTailKey: prevTail == null ? tailKey : prevTail,
+      // 同理：首次观察时把边界指纹补上，否则前缀重写要等到下一 tick 才看得见
+      anchorKey: prevAnchor == null ? keyAt(state.baseline) : prevAnchor,
     },
   };
 }
@@ -403,7 +421,8 @@ export function rebaselineAbsorbedExternal({
   baseline,
   localBusy = false,
   wasOwnTurn = false,
-  historyCap = HISTORY_MAX_MESSAGES,
+  // historyCap 随「满窗才看指纹」那道 atCap 门控一起去掉了（2026-09-19）：现在等长 + 指纹变化
+  // 一律标脏，不再需要知道窗口上限。全仓无调用方传过它。
   prevTailKey = null,
   curTailKey = null,
 } = {}) {
@@ -416,9 +435,13 @@ export function rebaselineAbsorbedExternal({
   // 的内存上下文还停在 rewind 前的叶子上，不置换实例就发消息等于从一条已被撤销的链上继续写。
   // curLen > 0 是护栏：0 与 -1 都是读长度失败的回落值，误判成收缩会在读盘抖动时平白冷启动实例。
   if (curLen > 0 && curLen < baseline) return true;
-  const atCap = Number.isFinite(historyCap) && historyCap > 0
-    && curLen >= historyCap && baseline >= historyCap;
-  if (atCap && prevTailKey != null && curTailKey != null && prevTailKey !== curTailKey) return true;
+  // 长度没变但尾部指纹变了 = 外部把这一段重写了，同样要标脏。两种来源共用这条：
+  //   · SS-NEW-002 满窗滑动：len 恒等于 cap，头被 splice、尾是新内容；
+  //   · /rewind 等长替换：撤销 N 条又补上 N 条，长度回到原值而链已经换了一条。
+  // 原判据把它门控在 atCap（满窗）里，于是普通会话的等长重写一律不标脏 —— SDK 子进程继续停在
+  // 废弃叶子上，下一条手机消息从那里分叉，正是本函数要防的 BE-009。指纹相同则不动：稳态下每次
+  // 重连都标脏会平白触发 dispose+resume 冷启动。
+  if (prevTailKey != null && curTailKey != null && prevTailKey !== curTailKey) return true;
   return false;
 }
 

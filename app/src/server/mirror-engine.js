@@ -236,7 +236,9 @@ export function createMirrorEngine({
       // wasOwnTurn 与 wasBusy 分开记：前者只认己方 turn 在写盘（st==='busy'），供重连 rebaseline 判「这段
       // 增长是不是自己写的」；后者是 localBusy 口径（含 permission），供 catchUpStep 吸收己方写盘。见
       // rebaselineAbsorbedExternal 注释：审批窗里的增长可能真是终端写的，不能按 wasBusy 一并豁免。
-      const seededState = { baseline: seedLen, wasBusy: localBusy, wasOwnTurn: st === 'busy', lastTailKey: historyTailKey(seedMsgs) };
+      // anchorKey = baseline 边界那一条的指纹，供 catchUpStep 检测「已推给前端的那段被 rewind 换掉了」。
+      // seed 时 baseline 就是全部，边界条即尾条，故与 lastTailKey 同值。
+      const seededState = { baseline: seedLen, wasBusy: localBusy, wasOwnTurn: st === 'busy', lastTailKey: historyTailKey(seedMsgs), anchorKey: historyTailKey(seedMsgs) };
       // 切入预判（2026-07-12 单驾驶员）：按尾部形态立即预锁——PENDING=有人正驱动（终端轮次未完结），
       // 堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。旧「切入不预锁」是因为当时唯一
       // 判据 mtime 不可信（web resume 自身刷 mtime）；尾部形态是语义判据、可信。localBusy 豁免见 mirrorEntryLock。
@@ -316,7 +318,7 @@ export function createMirrorEngine({
       }
       // wasOwnTurn 只在 st==='busy' 时置：permission（等审批）期间 web 侧未必不写盘（并行工具调用里免审批
       // 的那几个照跑照落盘），但更要紧的是那段增长也可能真来自终端——豁免它会让重连 rebaseline 漏标致分叉。
-      catchUpState = { baseline: catchUpState.baseline, wasBusy: true, wasOwnTurn: st === 'busy', lastTailKey: catchUpState.lastTailKey ?? null };
+      catchUpState = { baseline: catchUpState.baseline, wasBusy: true, wasOwnTurn: st === 'busy', lastTailKey: catchUpState.lastTailKey ?? null, anchorKey: catchUpState.anchorKey ?? null };
       // busy（己方 turn 在写盘）作废 size 基线；permission（己方不写盘）维持基线，供下一 tick 判终端增长
       mirrorLastSize = st === 'permission' && busySize >= 0 ? busySize : -1;
       mirrorRelease = rel.state;
