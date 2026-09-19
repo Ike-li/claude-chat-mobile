@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, openSessionsSidebar, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-12 新会话首发 busy 连续性与不闪回首页', async ({ page }) => {
@@ -132,6 +132,49 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#input')).toHaveValue(draft);
     await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-12h（2026-09-19 用户报告）：「新会话已就绪」页上打到一半的字，切去别的会话再回来就没了。
+  // 根因不在 keep/swap 判据，而在草稿缓存的 key 只认 sessionId——新会话在首发之前没有 sessionId，
+  // 于是 save 恒为 null：那段字从来没有被存过，回来时也没有任何 key 能取回。修法见 draftKeyFor
+  // （退回 `new:<cwd>`）。
+  //
+  // 【为什么纯函数单测不够】这条路径要三处接线同时对上才成立：bindView 传的 prevCwd 必须来自
+  // displayedCwd（currentCwd 在 setInstances 里早于 bindView 就被改成【新】cwd 了，用它等于自比自）、
+  // 目录行 ＋ 传的 newCwd、以及 applySessionDraftSwap 真的把 plan.save 写进那个 Map。
+  // 任意一处漏传，planSessionDraftSwap 的用例照样全绿。
+  test('P0-12h 新会话页的草稿切走再回来仍在，原地再按一次 ＋ 才清空', async ({ page }) => {
+    await gotoMock(page);
+
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    const draft = '还没发出去的新会话指令';
+    await page.locator('#input').fill(draft);
+    await expect(page.locator('#input')).toHaveValue(draft);
+
+    // 切到本工作区里的另一个会话：草稿必须被收走，不许串到那条会话里去（同 P0-11q）。
+    // 这一行同时是防假绿的——切换若根本没发生，输入框不会被清空，后面「字还在」就成了空转。
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
+    await expect(page.locator('#input')).toHaveValue('');
+
+    // 回到原工作区的新会话页：字要原样回来。修复前这里是空串。
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#input')).toHaveValue(draft);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    // 反向对照（PR #89 review P1-a 仍然成立）：已经站在这一页上还按「新建」＝要求重来，必须给空白。
+    // 少了这一段，把「forceSwap 一律恢复目标槽」写成实现也能让上面几行全绿。
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#input')).toHaveValue('');
 
     await expectNoBrowserErrors(page);
   });
