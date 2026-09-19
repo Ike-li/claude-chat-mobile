@@ -63,9 +63,10 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 1. 用户在电脑终端直接运行 `claude`。这个进程不经过 Claude Chat Mobile 的 Agent SDK 子进程。
 2. CLI 把已经完成的消息写入 `~/.claude/projects/` 下的 transcript。
-3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。
-4. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
-5. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
+3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。历史**变短**同样算一次变化：`/rewind` 不删 transcript 里的任何一行，它把当前叶子挪回锚点、让废弃的那一段脱链，所以追平必须认收缩（走全量重推 + 标脏），只认增长会让手机端停在 rewind 前的样子。
+4. 回显跟随 CLI 的**当前链**而不是文件的物理行序：哪些 uuid 还在链上由 SDK 的 `getSessionMessages` 给（它同时算对了 `/compact` 脱链与并行工具调用的合法分叉，自己回溯 `parentUuid` 两样都会错）。取不到时 fail-open 回落全量——少显示历史是静默的，多显示几条废弃分支是看得见的。代价是 compact 过的会话在 Web 上同样只剩压缩点之后的内容，与终端一致。
+5. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
+6. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
 
 因此只读镜像有明确限制：
 

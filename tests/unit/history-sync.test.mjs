@@ -206,6 +206,65 @@ test('catchUpStep: 无增长 → 不推、baseline 不变', () => {
   assert.equal(r.reload, false);
 });
 
+// ── rewind 的前缀重写（PR #98 review，2026-09-19）────────────────────────────
+// 上面那条收缩判据只罩住「撤销后没补回来」。真实用法里用户 rewind 完往往立刻接着聊，
+// 于是长度可能回到原值、甚至超过原值，而【已经推给前端的那一段】早被换掉了：
+//   · 等长：撤销 3 条又补 3 条 → len === baseline，落进兜底分支，手机停在废弃气泡上；
+//   · 变长：撤销 3 条又补 5 条 → 走增长分支 emit slice(baseline)，只推新增的 2 条，
+//     前面被替换的 3 条再也没有机会更新。
+// 判据不能只看长度。rewind 的变更模式是「截断到点 P 再续写」，所以盯 messages[baseline-1]
+// 这一条就够：撤销点在 baseline 之前 → 它必然被换掉；在之后 → 前端已显示的那段本就没变。
+const withTail = (n, tailContent) => { const m = M(n); m[n - 1] = { role: 'assistant', content: tailContent }; return m; };
+
+test('catchUpStep: rewind 等长替换（撤销 N 条又补 N 条）→ reload，不能停在废弃气泡上', () => {
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: M(6), localBusy: false });
+  assert.equal(seed.state.baseline, 6);
+  // 长度回到 6，但末条内容已换成新分支的
+  const r = catchUpStep(seed.state, { messages: withTail(6, '新分支的回答'), localBusy: false });
+  assert.equal(r.reload, true, '等长但内容已被重写，必须全量重推');
+  assert.deepEqual(r.emit, []);
+  assert.equal(r.state.baseline, 6);
+});
+
+test('catchUpStep: rewind 后补得更多（撤销 N 条补 N+2 条）→ reload，不能只 slice 尾巴', () => {
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: M(6), localBusy: false });
+  // 长度涨到 8，但第 6 条（baseline-1 那条）已被新分支替换
+  const grown = M(8); grown[5] = { role: 'assistant', content: '新分支替换掉的那条' };
+  const r = catchUpStep(seed.state, { messages: grown, localBusy: false });
+  assert.equal(r.reload, true, '前缀被重写时只 slice 尾巴会让被替换的那几条永远留在手机上');
+  assert.deepEqual(r.emit, [], 'reload 与 emit 二选一');
+  assert.equal(r.state.baseline, 8);
+});
+
+test('catchUpStep: 纯追加（前缀原样不动）→ 照常增量推，不得误触发 reload', () => {
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: M(6), localBusy: false });
+  const r = catchUpStep(seed.state, { messages: M(9), localBusy: false });
+  assert.equal(r.reload, false, '正常追加必须走增量，否则每次终端写盘都全量重推');
+  assert.deepEqual(r.emit.map(m => m.content), ['m6', 'm7', 'm8']);
+  assert.equal(r.state.baseline, 9);
+});
+
+// CLI /rewind 之后有效历史会【变短】。旧实现只认「变长」，收缩落进最后那条兜底分支：不推、
+// baseline 原地不动 —— 正开着这个会话的手机端于是永远停在 rewind 前的样子，切走再切回也一样
+// （重进走的是另一条路，但只要停着不动就再没有任何信号）。收缩必须当成一次外部重写：全量重推
+// + 标脏，走的是与滑窗同一条 reload 通道（mirror-engine 收到 reload 就 history_append replace）。
+test('catchUpStep: 有效历史收缩（CLI rewind）→ reload 全量重推、baseline 跟着缩', () => {
+  const r = catchUpStep({ baseline: 9, wasBusy: false }, { messages: M(4), localBusy: false });
+  assert.equal(r.reload, true, '收缩必须触发全量重推，否则手机端停在 rewind 前');
+  assert.deepEqual(r.emit, [], 'reload 路径不 slice：emit 与 reload 二选一');
+  assert.equal(r.state.baseline, 4);
+  assert.equal(r.state.wasBusy, false);
+});
+
+// 护栏：getSessionHistory 读盘失败返回 []，那不是收缩。按收缩处理会 reload 一个空数组，
+// 前端 replace:true 收到后直接清屏 —— 一次瞬时读失败就把整屏历史擦了。
+test('catchUpStep: 历史读成空数组不算收缩（读盘失败不得清屏）', () => {
+  const r = catchUpStep({ baseline: 9, wasBusy: false }, { messages: [], localBusy: false });
+  assert.equal(r.reload, false);
+  assert.deepEqual(r.emit, []);
+  assert.equal(r.state.baseline, 9, '基线必须原地不动，等下一 tick 重读');
+});
+
 test('catchUpStep: 本地在跑 turn（localBusy）→ 抑制、记 wasBusy、不动 baseline', () => {
   const r = catchUpStep({ baseline: 2, wasBusy: false }, { messages: M(9), localBusy: true });
   assert.deepEqual(r.emit, []);
@@ -220,12 +279,11 @@ test('catchUpStep: busy→idle → 吸收己方 turn 写盘（重置 baseline、
   assert.equal(r.state.wasBusy, false);
 });
 
-test('catchUpStep: 削头边界（len < baseline）→ 保守不推', () => {
-  const r = catchUpStep({ baseline: 5, wasBusy: false }, { messages: M(3), localBusy: false });
-  assert.deepEqual(r.emit, []);
-  assert.equal(r.state.baseline, 5);
-  assert.equal(r.state.wasBusy, false);
-});
+// 【2026-09-18 替换】这里原有一条「削头边界（len < baseline）→ 保守不推」。它描述的场景不成立：
+// getSessionHistory 返回 slice(-2000)、内部也封顶 2000，而 baseline 取自上一次的 len，同样 ≤ 2000
+// ——削头推不出 len < baseline（滑窗的真实形态是 len 恒等于 cap，由 SS-001 那条靠 tailKey 覆盖）。
+// 它实际固化的是兜底分支「收缩就不推」，而那正是 CLI rewind 后手机端停在旧样子的原因。
+// 该分支的两个真实方向改由上面两条覆盖：len>0 收缩 → reload；len===0 读盘失败 → 不动。
 
 test('catchUpStep: 完整时序——外部增长推、己方 turn 不重复推、之后外部再推', () => {
   let st = { baseline: 2, wasBusy: false };            // seed：已有 2 条历史
@@ -280,8 +338,30 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
   test('同会话重连 + 磁盘 == baseline（无未观察增长）→ false', () => {
     assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 2, baseline: 2 }), false);
   });
-  test('同会话重连 + 磁盘 < baseline（削头等）→ false（保守不标）', () => {
-    assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 1, baseline: 2 }), false);
+  // 【2026-09-18 反转】原为「磁盘 < baseline（削头等）→ false（保守不标）」。收缩不是削头（削头后
+  // len 恒等于 cap），而是 CLI /rewind 撤销了一段。这时【更要】标脏：SDK 子进程的内存上下文还停在
+  // rewind 前的叶子上，不置换实例就发消息 = 从一条已被撤销的链上继续写，正是 BE-009 要防的分叉。
+  test('同会话重连 + 磁盘短于 baseline（CLI rewind 撤销了一段）→ true（必须标脏，否则从废弃叶子分叉）', () => {
+    assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 1, baseline: 2 }), true);
+  });
+  // rewind 撤销 N 条又补上 N 条时长度回到原值，而链已经换了一条。原判据把「指纹变了」这条
+  // 门控在 atCap（满窗滑动）里，于是普通会话等长重写一律不标脏 —— SDK 子进程继续停在废弃叶子上，
+  // 下一条手机消息就从那里分叉，正是 BE-009 要防的东西。（PR #98 review 指出）
+  test('同会话重连 + 等长但尾部指纹已变（rewind 等长替换）→ true（非满窗也要标脏）', () => {
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: 5, baseline: 5, prevTailKey: 'old-tail', curTailKey: 'new-tail',
+    }), true);
+  });
+  // 反向护栏：稳态下每次重连都标脏会平白触发 dispose+resume 冷启动。
+  test('同会话重连 + 等长且指纹未变 → false（稳态不得误标）', () => {
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: 5, baseline: 5, prevTailKey: 'same-tail', curTailKey: 'same-tail',
+    }), false);
+  });
+  // 护栏：0 与 -1 都不是收缩，是读长度失败的回落值。误判成收缩会在每次读盘抖动时平白置换实例
+  // （dispose+resume 冷启动），比漏标更吵。
+  test('同会话重连 + curLen 为 0 → false（读盘失败不得当成 rewind 收缩）', () => {
+    assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 0, baseline: 2 }), false);
   });
   test('真会话切换（非同会话）→ false（另一段会话的历史，无分叉语义）', () => {
     assert.equal(rebaselineAbsorbedExternal({ sameSession: false, curLen: 9, baseline: 2 }), false);
