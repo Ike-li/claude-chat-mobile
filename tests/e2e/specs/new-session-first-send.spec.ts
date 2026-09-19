@@ -1,8 +1,8 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, openSessionsSidebar, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-12 新会话首发 busy 连续性与不闪回首页', async ({ page }) => {
@@ -132,6 +132,88 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#input')).toHaveValue(draft);
     await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-12h（2026-09-19 用户报告）：「新会话已就绪」页上打到一半的字，切去别的会话再回来就没了。
+  // 根因不在 keep/swap 判据，而在草稿缓存的 key 只认 sessionId——新会话在首发之前没有 sessionId，
+  // 于是 save 恒为 null：那段字从来没有被存过，回来时也没有任何 key 能取回。修法见 draftKeyFor
+  // （退回 `new:<cwd>`）。
+  //
+  // 【为什么纯函数单测不够】这条路径要三处接线同时对上才成立：bindView 传的 prevCwd 必须来自
+  // displayedCwd（currentCwd 在 setInstances 里早于 bindView 就被改成【新】cwd 了，用它等于自比自）、
+  // 目录行 ＋ 传的 newCwd、以及 applySessionDraftSwap 真的把 plan.save 写进那个 Map。
+  // 任意一处漏传，planSessionDraftSwap 的用例照样全绿。
+  test('P0-12h 新会话页的草稿切走再回来仍在，原地再按一次 ＋ 才清空', async ({ page }) => {
+    await gotoMock(page);
+
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    const draft = '还没发出去的新会话指令';
+    await page.locator('#input').fill(draft);
+    await expect(page.locator('#input')).toHaveValue(draft);
+
+    // 切到本工作区里的另一个会话：草稿必须被收走，不许串到那条会话里去（同 P0-11q）。
+    // 这一行同时是防假绿的——切换若根本没发生，输入框不会被清空，后面「字还在」就成了空转。
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
+    await expect(page.locator('#input')).toHaveValue('');
+
+    // 回到原工作区的新会话页：字要原样回来。修复前这里是空串。
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#input')).toHaveValue(draft);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    // 反向对照（PR #89 review P1-a 仍然成立）：已经站在这一页上还按「新建」＝要求重来，必须给空白。
+    // 少了这一段，把「forceSwap 一律恢复目标槽」写成实现也能让上面几行全绿。
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-12i（2026-09-19，PR #100 review P2）：草稿槽的 key 在【存】和【删】两侧必须同源。
+  // 按 ＋ 之后 currentSessionId 要等 instances 广播落地、bindView→clearView 才更新，而离线时
+  // 那条广播永远不来——这段窗口里发送，拿 currentSessionId 算 key 删掉的是【上一个会话刚存下
+  // 的草稿】，同时新会话页这条已发出去的话留在 `new:<cwd>` 槽里，下次回来会被当草稿恢复。
+  // currentSessionId 另有两个写入者（clearView 与 app/event-dispatch.js），语义是「事件流里
+  // 最近见过的 sessionId」，本就不是「当前表面」。删草稿只认 displayed*。
+  test('P0-12i 离线时按 ＋ 再发送，不许连上一个会话的草稿一起删掉', async ({ page }) => {
+    await gotoMock(page);
+
+    // 在当前会话（有 sessionId）里留一份草稿
+    const kept = '留在上一个会话里的草稿';
+    await page.locator('#input').fill(kept);
+    await expect(page.locator('#input')).toHaveValue(kept);
+
+    // 断线：session:new 的权威广播永远不会回来，缺陷窗口被撑到无限长
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+
+    // 按 ＋：本地同步重置（kept 被存进上一个会话的槽），而 currentSessionId 仍指着那个会话
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#input')).toHaveValue('');
+
+    // 在新会话页发一条：离线走 outbox 入队，那条路径同样要清当前表面的草稿槽
+    await page.locator('#input').fill('离线发出的新会话首条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    // 切回原会话：草稿必须原样还在。修复前它被当成「当前表面」的槽删掉了。
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expect(page.locator('#input')).toHaveValue(kept);
 
     await expectNoBrowserErrors(page);
   });

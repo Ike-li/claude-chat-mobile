@@ -44,6 +44,7 @@ import {
   formatComposeDefaultsSummary,
   shouldRestoreOptimisticBusy,
   planSessionDraftSwap,
+  draftKeyFor,
   foregroundReconnectAction,
   shouldAttemptReconnect,
   describeHandshakeError,
@@ -384,7 +385,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
-  // per-session 未发送草稿 {text, attachments}（切会话存/切回恢复；同会话静默换实例不读写，见 planSessionDraftSwap）。
+  // 按表面分槽的未发送草稿 {text, attachments}（切走存/切回恢复；同一表面静默换实例不读写，见 planSessionDraftSwap）。
+  // 槽的 key 见 draftKeyFor：有 sessionId 用它，新会话页（首发前无 id）用 `new:<cwd>`。
   // 仅内存、不落盘——刷新页面后丢失可接受（与 sessionDomCache 同寿）。
   // per-session「上次为该会话渲染到的磁盘 history 条数」（history 口径，非活缓冲 seq）。切入时与 server 报的
   // diskLen 比对，判「离开期间被终端外部写过」→ 清屏重载（见 shouldReloadOnEnter）。独立于 sessionDomCache：
@@ -683,6 +685,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 在途旧包转而走进 bindView、把视图绑【回】旧会话——比重填更糟。
   let sessionIdClearedByNav = false;
   let displayedSessionId = null;
+  // 与 displayedSessionId 配套的「当前表面 cwd」住在 sessionWorkspaceState.displayedCwd
+  // （新前端状态不再落 app.js 顶层作用域）。它只服务草稿槽的 key，见 draftKeyFor。
   // R65（2026-08-30 需求合稿）未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
   // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
   // 刻意不带 ack：丢一条不致命，下次 connect 的 read:sync 全量归并会补回来。
@@ -3863,8 +3867,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       });
 
       inputEl.value = '';
-      // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
-      if (currentSessionId) sessionDraftCache.delete(currentSessionId);
+      // 已发出：清掉该表面缓存的草稿，避免切走切回把已发送内容当草稿恢复。
+      // 新会话首发时还没有 sessionId，槽是 `new:<cwd>`——不按同一份判据删就会残留一条
+      // 「已经发出去的话」，下次从别处回到这个工作区的新会话页时被当草稿恢复。
+      dropDraftForCurrentSurface();
       attachments.clear();
       hints.classList.add('hidden');
       autosize();
@@ -3983,8 +3989,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
     // 气泡已在上方本地 append（buildPendingUserBubble），服务端回推的 user_message 只负责认领转正。
     inputEl.value = '';
-    // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
-    if (currentSessionId) sessionDraftCache.delete(currentSessionId);
+    // 已发出：清掉该表面缓存的草稿（口径同上面离线入队那处）
+    dropDraftForCurrentSurface();
     attachments.clear();
     hints.classList.add('hidden');
     autosize();
@@ -5182,24 +5188,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
-  // 未发送草稿（文字+附件）按 sessionId 存/取。bindView（收到广播后的真实切换）与 btnNew
-  // （同步本地重置）共用这一份：两处分头实现必然漂，而 btnNew 漏做这一步正是
-  // 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
+  // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取（有 sessionId 用它，新会话页用 `new:<cwd>`）。
+  // bindView（收到广播后的真实切换）与 btnNew（同步本地重置）共用这一份：两处分头实现必然漂，
+  // 而 btnNew 漏做这一步正是 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
   // draft 由调用方传快照而不是这里现读 inputEl：bindView 是在 clearView 之前取的值。
   // forceSwap：用户显式发起的新建（btnNew / 目录行＋）。keep 判据挡的是 instances 广播，
   // 不该把用户自己点的导航也挡掉——否则「已经在新会话页时再按新建」会带着上一页的草稿。
-  function applySessionDraftSwap(prevSessionId, newSessionId, draft, { forceSwap = false } = {}) {
+  function applySessionDraftSwap(prevSessionId, newSessionId, draft, { forceSwap = false, prevCwd = null, newCwd = null } = {}) {
     const plan = planSessionDraftSwap({
       prevSessionId,
       newSessionId,
+      prevCwd,
+      newCwd,
       currentDraft: draft?.text ?? '',
       currentAttachments: draft?.attachments ?? [],
       drafts: sessionDraftCache,
       forceSwap,
     });
     if (plan.action !== 'swap') return;
+    if (plan.discard) sessionDraftCache.delete(plan.discard);
     if (plan.save) {
-      sessionDraftCache.set(plan.save.sessionId, {
+      sessionDraftCache.set(plan.save.key, {
         text: plan.save.text,
         attachments: plan.save.attachments,
       });
@@ -5215,6 +5224,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     attachments.setItems(plan.restoreAttachments);
   }
 
+  // 发出一条消息后丢弃当前表面的草稿槽。身份必须取 displayed*（与存草稿时逐字同源），
+  // 【不能用 currentSessionId】：它有三个写入者、语义是「事件流里最近见过的 sessionId」，
+  // 而且按 ＋ 之后它要等 instances 广播落地、bindView→clearView 才更新。那段窗口里（离线时
+  // 无限长）拿它算 key，删掉的是【上一个会话刚存下的草稿】，而新会话页这条已发出去的话
+  // 留在 `new:<cwd>` 槽里，下次回到这个工作区会被当草稿恢复出来。
+  function dropDraftForCurrentSurface() {
+    const key = draftKeyFor({
+      sessionId: displayedSessionId,
+      cwd: sessionWorkspaceState.displayedCwd || currentCwd,
+    });
+    if (key) sessionDraftCache.delete(key);
+  }
+
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
@@ -5224,6 +5246,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
+    const prevCwd = sessionWorkspaceState.displayedCwd; // 同上，新会话页没有 sessionId 时草稿按它分槽
     sessionIdClearedByNav = false;             // 权威广播已落到 bindView，那段「等广播」的窗口到此为止
     // R65：离开旧会话的瞬间把它记为「已看到此刻」——正在看时到达的消息不该在离开后亮点。
     // 入场侧（下方真实会话分支）另有一记，覆盖「看完直接关页面」的路径；重复标记无害。
@@ -5231,6 +5254,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
+    const cwd = entry?.cwd || currentCwd || null;
+    sessionWorkspaceState.displayedCwd = cwd;
     // 清除①②：切到别的实例/空表面（id 变了），或该实例这一刻已经拿到 sessionId（sid 非空）——
     // 两种情况都意味着"sessionId 未到即被中断"这个待续档态不再适用，须清掉，否则会悬留到下一个
     // 无关场景把它误判成该显示中断态。
@@ -5260,9 +5285,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       attachments: attachments.items(),
     };
     clearView(sid, null);
-    // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
+    // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取：同一表面静默换实例(keep)不动；真实切换(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
-    applySessionDraftSwap(prevSessionId, sid, draftSnapshot);
+    applySessionDraftSwap(prevSessionId, sid, draftSnapshot, { prevCwd, newCwd: cwd });
 
     // clearView 刚 setBusy(false)：发送窗口内（首发懒开 / 同会话静默换实例）立即补回，避免 live 行闪没。
     // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
@@ -6406,8 +6431,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     applySessionDraftSwap(displayedSessionId, null, {
       text: inputEl ? inputEl.value : '',
       attachments: attachments.items(),
-    }, { forceSwap: true });
+    }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: currentCwd });
     displayedSessionId = null;
+    sessionWorkspaceState.displayedCwd = currentCwd;
     sessionIdClearedByNav = true;
     // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
     freshInterruptedInstanceId = null;
@@ -6502,8 +6528,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       applySessionDraftSwap(displayedSessionId, null, {
         text: inputEl ? inputEl.value : '',
         attachments: attachments.items(),
-      }, { forceSwap: true });
+      }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: d });
       displayedSessionId = null;
+      sessionWorkspaceState.displayedCwd = d;
       sessionIdClearedByNav = true;
       // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
       freshInterruptedInstanceId = null;

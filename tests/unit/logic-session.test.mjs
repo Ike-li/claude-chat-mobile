@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -602,7 +602,7 @@ test('planSessionDraftSwap: 从会话导航到空首页仍然 swap（存旧草�
     prevSessionId: 'sess_1', newSessionId: null, currentDraft: '未发出的话', currentAttachments: [],
   });
   assert.equal(plan.action, 'swap');
-  assert.deepEqual(plan.save, { sessionId: 'sess_1', text: '未发出的话', attachments: [] });
+  assert.deepEqual(plan.save, { key: 'sess_1', text: '未发出的话', attachments: [] });
   assert.equal(plan.restoreText, '');
 });
 
@@ -626,7 +626,8 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
     }),
     {
       action: 'swap',
-      save: { sessionId: 'sess_1', text: 'A 的草稿', attachments: attA },
+      save: { key: 'sess_1', text: 'A 的草稿', attachments: attA },
+      discard: null,
       restoreText: '已缓存的 B 草稿',
       restoreAttachments: attB,
     },
@@ -639,7 +640,8 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
     }),
     {
       action: 'swap',
-      save: { sessionId: 'sess_1', text: 'A 的草稿', attachments: attA },
+      save: { key: 'sess_1', text: 'A 的草稿', attachments: attA },
+      discard: null,
       restoreText: '',
       restoreAttachments: [],
     },
@@ -652,7 +654,8 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
     }),
     {
       action: 'swap',
-      save: { sessionId: 'sess_1', text: 'A 的草稿', attachments: attA },
+      save: { key: 'sess_1', text: 'A 的草稿', attachments: attA },
+      discard: null,
       restoreText: '',
       restoreAttachments: [],
     },
@@ -663,7 +666,7 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
       prevSessionId: null, newSessionId: 'sess_2',
       currentDraft: '首页乱打', currentAttachments: attA, drafts,
     }),
-    { action: 'swap', save: null, restoreText: '已缓存的 B 草稿', restoreAttachments: attB },
+    { action: 'swap', save: null, discard: null, restoreText: '已缓存的 B 草稿', restoreAttachments: attB },
   );
   // 【2026-09-18 行为变更】两端都空 / 未定义 → keep，不再 swap 到空。
   // 原断言钉的是「两侧都没有会话时也当作切换」，而那个行为会丢用户正在打的字：
@@ -692,7 +695,7 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
       prevSessionId: 'a', newSessionId: 'legacy', currentDraft: '',
       drafts: new Map([['legacy', '旧纯文字']]),
     }),
-    { action: 'swap', save: { sessionId: 'a', text: '', attachments: [] }, restoreText: '旧纯文字', restoreAttachments: [] },
+    { action: 'swap', save: { key: 'a', text: '', attachments: [] }, discard: null, restoreText: '旧纯文字', restoreAttachments: [] },
   );
 });
 
@@ -1069,7 +1072,7 @@ test('planSessionDraftSwap: forceSwap 在有旧会话时仍然先存旧草稿', 
     currentDraft: '属于 sess_1 的草稿', currentAttachments: [], forceSwap: true,
   });
   assert.equal(plan.action, 'swap');
-  assert.deepEqual(plan.save, { sessionId: 'sess_1', text: '属于 sess_1 的草稿', attachments: [] });
+  assert.deepEqual(plan.save, { key: 'sess_1', text: '属于 sess_1 的草稿', attachments: [] });
   assert.equal(plan.restoreText, '');
 });
 
@@ -1080,4 +1083,77 @@ test('planSessionDraftSwap: forceSwap 不影响同会话静默换实例（那仍
     planSessionDraftSwap({ prevSessionId: 'sess_1', newSessionId: 'sess_1', currentDraft: 'x' }),
     { action: 'keep' },
   );
+});
+
+// 【2026-09-19 用户报告】「新会话已就绪」页打的字，切到别的会话再回来就没了。
+// 根因不在 keep/swap 判据，而在缓存的 key 只认 sessionId：新会话在首发之前没有 sessionId，
+// 于是 save 恒为 null（那段字从来没被存过），回来时也没有任何 key 能把它取回。
+// 修法：key 退回 `new:<cwd>`——一个工作区同一时刻最多一个未发送的新会话页，cwd 就是它的稳定身份。
+test('planSessionDraftSwap: 新会话页的草稿按 cwd 存/取（切走再回来还在）', () => {
+  const drafts = new Map();
+  const att = [{ _id: 'n1', name: 'n.png', mimeType: 'image/png', size: 4, data: 'x' }];
+  // 在工作区 X 的新会话页打字 → 点开会话 A（instances 广播驱动的 bindView，不带 forceSwap）
+  const away = planSessionDraftSwap({
+    prevSessionId: null, prevCwd: '/w/x', newSessionId: 'sess_a', newCwd: '/w/x',
+    currentDraft: '还没发出去的新会话指令', currentAttachments: att, drafts,
+  });
+  assert.equal(away.action, 'swap');
+  assert.deepEqual(away.save, { key: 'new:/w/x', text: '还没发出去的新会话指令', attachments: att });
+  drafts.set(away.save.key, { text: away.save.text, attachments: away.save.attachments });
+  // 从会话 A 点工作区 X 的 ＋ 回来：forceSwap（用户显式导航），但目标不是当前这一页 → 恢复
+  const back = planSessionDraftSwap({
+    prevSessionId: 'sess_a', prevCwd: '/w/x', newSessionId: null, newCwd: '/w/x',
+    currentDraft: '', currentAttachments: [], drafts, forceSwap: true,
+  });
+  assert.equal(back.action, 'swap');
+  assert.equal(back.restoreText, '还没发出去的新会话指令');
+  assert.deepEqual(back.restoreAttachments, att);
+});
+
+// PR #89 review P1-a 仍然成立：已经站在这一页上还按「新建」＝要求重来，必须给空白。
+// 判据是「prev/new 指向同一个表面」，不是 forceSwap 本身——否则上一条那个「从别处回来」
+// 也走 forceSwap，会被一起清掉。缓存里那份同时要丢，不然它会在下次从别处回到这个工作区时诈尸。
+test('planSessionDraftSwap: 已在该新会话页时再按新建 → 清空且丢弃该槽缓存', () => {
+  const drafts = new Map([['new:/w/x', { text: '更早存下的', attachments: [] }]]);
+  const plan = planSessionDraftSwap({
+    prevSessionId: null, prevCwd: '/w/x', newSessionId: null, newCwd: '/w/x',
+    currentDraft: '刚打的字', currentAttachments: [{ _id: 'a' }], drafts, forceSwap: true,
+  });
+  assert.equal(plan.action, 'swap');
+  assert.equal(plan.save, null, '要求重来的那一下不该把刚放弃的字存下来');
+  assert.equal(plan.discard, 'new:/w/x');
+  assert.equal(plan.restoreText, '');
+  assert.deepEqual(plan.restoreAttachments, []);
+});
+
+// PR #89 review P1-b：从 X 的新会话页点 Y 的 ＋，X 的字不许跟着进 Y。
+// cwd 做 key 之后这条是自然结论（两个槽），但仍要钉住——它是当初加 forceSwap 的半个理由。
+test('planSessionDraftSwap: 从 X 的新会话页点 Y 的 ＋，字留在 X 的槽里', () => {
+  const drafts = new Map();
+  const plan = planSessionDraftSwap({
+    prevSessionId: null, prevCwd: '/w/x', newSessionId: null, newCwd: '/w/y',
+    currentDraft: '属于 X 的字', currentAttachments: [], drafts, forceSwap: true,
+  });
+  assert.deepEqual(plan.save, { key: 'new:/w/x', text: '属于 X 的字', attachments: [] });
+  assert.equal(plan.restoreText, '');
+  assert.equal(plan.discard, null);
+});
+
+// 反向对照：cwd 也相同的那一串 instances 广播（新会话页整段时间里每次全员广播都会走 bindView）
+// 仍然必须 keep。这条一旦变成 swap，用户正在斟酌的长 prompt 会被 restoreText 覆盖掉。
+test('planSessionDraftSwap: 新会话页收广播（两侧 cwd 也相同）仍不碰输入框', () => {
+  assert.deepEqual(
+    planSessionDraftSwap({
+      prevSessionId: null, prevCwd: '/w/x', newSessionId: null, newCwd: '/w/x',
+      currentDraft: '正在斟酌的一段长 prompt',
+    }),
+    { action: 'keep' },
+  );
+});
+
+test('draftKeyFor: 有 sessionId 用它，没有才退回 new:<cwd>，两者都没有则无处可存', () => {
+  assert.equal(draftKeyFor({ sessionId: 'sess_1', cwd: '/w/x' }), 'sess_1');
+  assert.equal(draftKeyFor({ sessionId: null, cwd: '/w/x' }), 'new:/w/x');
+  assert.equal(draftKeyFor({ sessionId: null, cwd: null }), null);
+  assert.equal(draftKeyFor(), null);
 });

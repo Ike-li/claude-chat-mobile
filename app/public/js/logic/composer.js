@@ -158,39 +158,61 @@ export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {})
   return !(newSessionId && newSessionId === prevSessionId);
 }
 
+// 未发送草稿缓存的 key：有真 sessionId 就用它，否则退回 `new:<cwd>`。
+// 【为什么需要后一半】「新会话已就绪」页在首发之前根本没有 sessionId。只认 sessionId 时
+// prevSessionId 为 null ⇒ save 恒为 null，用户在那一页打的字从来没被存过，回来时也没有
+// 任何 key 能把它取回（2026-09-19 用户报告：切到别的会话再回来，输入框空了）。
+// 一个工作区同一时刻最多一个未发送的新会话页，cwd 就是它的稳定身份。
+// 注：home 枢纽与 compose 页共用同一个槽（都没有 sessionId），这是有意的——🏠 隐藏输入条，
+// 那期间草稿留在槽里不可见也无害，不值得为它再引入一个「表面类型」维度。
+export function draftKeyFor({ sessionId, cwd } = {}) {
+  if (sessionId) return String(sessionId);
+  if (cwd) return `new:${cwd}`;
+  return null;
+}
+
 // bindView 切会话时未发送草稿的存/取计划（纯函数，app.js 持 Map 执行）。
 // 修：输入框有字/附件 → 切到另一会话 → 再切回被清空（旧逻辑只 clear 不存）。
-// - keep：同会话静默换实例（effort/model dispose+resume）→ 不碰输入框/附件托盘
-// - swap：真实导航 → 把 prev 当前文字+附件写入缓存（若 prevSessionId 非空），恢复 new 的缓存（无则空）
-// drafts 形如 Map<sessionId, {text, attachments}|string>；string 为旧缓存兼容形态（仅文字）。
+// - keep：同一表面静默换实例（effort/model dispose+resume）→ 不碰输入框/附件托盘
+// - swap：真实导航 → 把 prev 当前文字+附件写入缓存（若 prevKey 非空），恢复 new 的缓存（无则空）
+// drafts 形如 Map<key, {text, attachments}|string>；string 为旧缓存兼容形态（仅文字）。
 // 未传/非 Map 时 restoreText=''、restoreAttachments=[]。attachments 存出/恢复均浅拷贝数组，避免调用方就地改污染缓存。
+// discard：调用方要从缓存里删掉的 key（只有下面那条「原地重来」会给），其余情形恒 null。
 // forceSwap：调用方声明这是【用户显式发起的导航】（btnNew / 目录行＋），必须给干净的开始。
 // 【为什么需要它】下面那条 keep 判据挡的是 instances 广播——非用户意图的、会冲掉正在打的字的
-// 那种。但用户已经在一个未发送的新会话页时两侧都是 null，btnNew 里那次交换会一并被 keep 挡掉：
-// 再按一次新建、或点另一个工作区的＋，上一页的文字与附件就被原样带进「新会话已就绪」那一页
-// （PR #89 review P1）。挡广播和挡用户自己点的导航是两件事，不能共用一个判据。
+// 那种。但用户已经在一个未发送的新会话页时两侧 key 相同，btnNew 里那次交换会一并被 keep 挡掉：
+// 再按一次新建，上一页的文字与附件就被原样带进「新会话已就绪」那一页（PR #89 review P1）。
+// 挡广播和挡用户自己点的导航是两件事，不能共用一个判据。
 export function planSessionDraftSwap({
-  prevSessionId, newSessionId, currentDraft = '', currentAttachments = [], drafts, forceSwap = false,
+  prevSessionId, newSessionId, prevCwd = null, newCwd = null,
+  currentDraft = '', currentAttachments = [], drafts, forceSwap = false,
 } = {}) {
-  // 判据是「会话身份变没变」，不是「有没有会话」——含两侧都没有会话的情形。
+  // 判据是「表面身份变没变」，不是「有没有会话」——含两侧都没有 sessionId 的情形。
   // 【为什么不能要求 newSessionId 非空】新会话在发出第一条消息前拿不到 sessionId，而 bindView
   // 被 setInstances 无条件调用、broadcastInstances() 在服务端有 28 个全员广播触发点：要求非空
   // 会让那段时间里的每一次广播都落进 swap，拿 restoreText='' 覆盖用户正在打的字。
-  // ?? null 是把 undefined 与 null 归一（调用方传的是 `entry?.sessionId || null`，但纯函数
-  // 不拿调用方的归一当保证）。
-  if (!forceSwap && (newSessionId ?? null) === (prevSessionId ?? null)) return { action: 'keep' };
+  // draftKeyFor 自己把 undefined / null / '' 一并当「没有 sessionId」，调用方不必先归一。
+  const prevKey = draftKeyFor({ sessionId: prevSessionId, cwd: prevCwd });
+  const newKey = draftKeyFor({ sessionId: newSessionId, cwd: newCwd });
+  const sameSurface = prevKey === newKey;
+  if (sameSurface && !forceSwap) return { action: 'keep' };
+  // 已经站在目标这一页上还按了「新建」＝要求重来：不存（那份字是用户自己放弃的）、不取，
+  // 并把槽里更早的缓存一并丢掉——留着它会在下次从别处回到这个工作区时诈尸成「刚打的字」。
+  if (sameSurface) {
+    return { action: 'swap', save: null, discard: newKey, restoreText: '', restoreAttachments: [] };
+  }
   const atts = Array.isArray(currentAttachments) ? currentAttachments.slice() : [];
-  const save = prevSessionId
+  const save = prevKey
     ? {
-        sessionId: prevSessionId,
+        key: prevKey,
         text: currentDraft == null ? '' : String(currentDraft),
         attachments: atts,
       }
     : null;
   let restoreText = '';
   let restoreAttachments = [];
-  if (newSessionId && drafts && typeof drafts.get === 'function') {
-    const cached = drafts.get(newSessionId);
+  if (newKey && drafts && typeof drafts.get === 'function') {
+    const cached = drafts.get(newKey);
     if (typeof cached === 'string') {
       restoreText = cached;
     } else if (cached && typeof cached === 'object') {
@@ -198,7 +220,7 @@ export function planSessionDraftSwap({
       restoreAttachments = Array.isArray(cached.attachments) ? cached.attachments.slice() : [];
     }
   }
-  return { action: 'swap', save, restoreText, restoreAttachments };
+  return { action: 'swap', save, discard: null, restoreText, restoreAttachments };
 }
 
 // 客户端是否应忽略某条 question 事件（已本地作答 / 已收 request_resolved）。
