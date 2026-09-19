@@ -1,5 +1,65 @@
 # 变更记录
 
+## v1.11.0 — 2026-09-19
+
+Changes since v1.10.2.
+
+### Verified environment
+- claude CLI: 2.1.277
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Features
+- feat(fork): assistant 气泡加常驻「分叉」入口，对齐 Desktop
+- feat(rewind): 没有文件改动时给出路，而不是一句死话
+
+### Fixes
+- fix(sync): rewind 后前缀被重写时也要全量重推，不只认「变短」
+- fix(history): 回显跟随 CLI 当前链，rewind 撤销的那段不再留在手机上
+- fix(e2e-mock): 迟到事件改由用例显式触发，不再赌前端的处理速度（PR #95 review）
+- fix(e2e-mock): 迟到事件比 bindView 早 80ms 发出，finished 被丢且永不重发
+- fix(composer): 显式新建要强制清草稿，并挡住在途旧包的会话 id 重填（PR #89 review）
+- fix(composer): 新会话页打的字被迟到的广播清空并串进旧会话草稿
+- fix(fork): 锚点资格收紧到 SDK 认的 entry 类型，并让图片轮也终止保留轮
+- fix(fork): 分叉锚点改由服务端算，不再让前端拿 assistant 气泡当锚
+- fix(rewind): 「改用分叉」也要过会话切换校验（PR #87 review P2）
+- fix(test-infra): 改用「只读挂源 + tar 进容器层」，修掉嵌套覆盖挂载
+- fix(test-infra): 容器测试读到宿主机生产配置，导致集成 77/150 红
+- fix(security): 设备审批的 all 档覆盖全部路径——Host 是客户端填的头，判不出本机
+- fix(test): CONFIG-03 改由门禁守——依赖 git 的检查不能待在容器全量档里
+- fix(security): 跨站握手门比完整的源，不只比主机名
+- fix(security): 工作区过宽根判据先归一再比——等价路径与 symlink 都能绕过
+- fix(security): CSP connect-src 从裸 ws:/wss: 收紧到同源
+- fix(security): 公网 IdP 路径上加跨站握手门（Origin 校验）
+- fix(security): 工作区白名单拒绝家目录与过宽根，向导与写入侧共用一份判据
+- fix(security): logs:server 整段脱敏再切行——逐行会让 PEM 私钥完整漏出
+- fix(push): 令牌无法走请求头时回落 query，不制造静默失效
+- fix(security): AUTH_TOKEN 不再出现在服务端自己的输出里
+- fix(security): claude 子进程不再继承 CCM 自己的控制面密钥
+- fix(push): 令牌改走 x-auth-token 头，不再拼进 URL query
+
+### Other
+- test(invariants): 修 SRV-003 夹具的断链形态，它的 parentUuid 从来没接上过
+- docs: 用精确判据取代裸词 grep——我换上去的那条从一开始就是错的（PR #97 review）
+- docs: 按官方 CLAUDE.md 规范精简，砍掉六处「自己都说会漂」的清单（250 → 227 行）
+- docs: 修正两处写错的 E2E 耗时（PR #96 review）
+- docs: E2E 开发循环的两个坑 + 修正过期的分片性能数字
+- test(e2e): 补上 P1-b 的回归覆盖——那道守卫此前在整套 E2E 里不可达
+- chore(gates): 图 12 补上 check 链 16 道，PENDING_CLAIMS 清空
+- test(e2e): P0-08 的 live 行断言排在弹窗关闭之后——跟回合收尾赛跑且只输 10ms
+- docs: README 双语加上在线演示站链接
+- test(gates): 加容器配置隔离闸，钉住「挂仓库根就必须覆盖 ccm.config.json」
+- docs(deployment): 修 PR review 两处——PSL 查询命令判反、Quick Tunnel 绕过 cloudflared 安装
+- docs(deployment): 补 Cloudflare 前置条件——账号、域名、NS 托管与 cloudflared 安装
+- docs(security): 把 2026-09-17 审查否决的两处改动写成注释留痕
+- docs(csp): 补记 L2 的验证边界——E2E 验不到这条改动
+- test(security): 凭据文件的 gitignore 覆盖面钉成 CONFIG-03
+- docs+test: 把控制面密钥剥离登记成 AUTH-06，并补齐 hard-rules
+- docs(readme): 截图收进折叠图集，删掉 hero 与并排缩略图
+- docs(readme): 再分发条件不写成穷举，指向 LICENSE
+- chore(license): AGPL-3.0-only → Apache-2.0
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.10.2...v1.11.0
+
 ## v1.10.2 — 2026-09-17
 
 Changes since v1.10.1.
