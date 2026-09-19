@@ -47,11 +47,16 @@ const TICK_MS = 2500;   // mirror-engine 的 CATCH_UP_INTERVAL_MS
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // transcript 一行：CLI 落盘的形状（history.js 按 type/message/uuid/parentUuid 解析，isMeta 过滤）。
-// 实测这个形状能被 getSessionHistory 正确解析成 2 条消息，不是照着注释猜的。
-function transcriptLine(type, text, cwd, parentUuid = null) {
+//
+// 【uuid 必须由调用方串起来】2026-09-19：原实现在函数内部自己 randomUUID() 生成 uuid，而调用方
+// 传进来的 parentUuid 是另外随机生成的一个值——**parentUuid 指向的条目根本不存在，链从来没接上**。
+// 回显改成跟随 CLI 当前链之后这条就露馅了：链真相源只认得出物理最后那一条（其余全是够不到的孤点），
+// 于是 baseline 恒等于 1、外部增长永远观察不到，用例的自我保护断言直接红。真实 CLI 写的 transcript
+// 是一条完整的 parentUuid 链，这种断链形态在真实世界不存在，所以是夹具编错了外部契约、不是实现缺陷。
+function transcriptLine(type, text, cwd, parentUuid = null, uuid = randomUUID()) {
   return `${JSON.stringify({
     type,
-    uuid: randomUUID(),
+    uuid,
     parentUuid,
     timestamp: new Date().toISOString(),
     sessionId: SESSION_ID,
@@ -74,10 +79,13 @@ test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的
   const transcript = join(projectDir, `${SESSION_ID}.jsonl`);
 
   // 种子：终端先聊过两句。没有它镜像建不起基线。
+  // 种子两条串成真链：user(null → u1) ← assistant(u1 → u2)。u2 留给后面 append 的那轮接上去。
   const seedUser = randomUUID();
+  const seedAssistant = randomUUID();
   writeFileSync(
     transcript,
-    transcriptLine('user', '终端里先说的', cwd) + transcriptLine('assistant', '终端里的回答', cwd, seedUser),
+    transcriptLine('user', '终端里先说的', cwd, null, seedUser)
+      + transcriptLine('assistant', '终端里的回答', cwd, seedUser, seedAssistant),
   );
 
   const server = await spawnServer({
@@ -115,10 +123,13 @@ test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的
     await sleep(TICK_MS * 2 + 500);
 
     // ③ 模拟终端在同一会话上又跑了一轮。
+    // 接在种子那条链的末端（seedAssistant）后面，模拟终端在同一条链上继续写。
     const extUser = randomUUID();
+    const extAssistant = randomUUID();
     appendFileSync(
       transcript,
-      transcriptLine('user', '终端后来又说的', cwd) + transcriptLine('assistant', '终端的新回答', cwd, extUser),
+      transcriptLine('user', '终端后来又说的', cwd, seedAssistant, extUser)
+        + transcriptLine('assistant', '终端的新回答', cwd, extUser, extAssistant),
     );
 
     // ④ 轮询到「镜像观察到了外部增长」。坏掉时才耗满上限。
