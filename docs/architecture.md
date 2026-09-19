@@ -63,9 +63,10 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 1. 用户在电脑终端直接运行 `claude`。这个进程不经过 Claude Chat Mobile 的 Agent SDK 子进程。
 2. CLI 把已经完成的消息写入 `~/.claude/projects/` 下的 transcript。
-3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。
-4. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
-5. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
+3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。历史**变短**同样算一次变化：`/rewind` 不删 transcript 里的任何一行，它把当前叶子挪回锚点、让废弃的那一段脱链，所以追平必须认收缩（走全量重推 + 标脏），只认增长会让手机端停在 rewind 前的样子。
+4. 回显跟随 CLI 的**当前链**而不是文件的物理行序：哪些 uuid 还在链上由 SDK 的 `getSessionMessages` 给（它同时算对了 `/compact` 脱链与并行工具调用的合法分叉，自己回溯 `parentUuid` 两样都会错）。取不到时 fail-open 回落全量——少显示历史是静默的，多显示几条废弃分支是看得见的。代价是 compact 过的会话在 Web 上同样只剩压缩点之后的内容，与终端一致。
+5. 可选 hooks bridge（`npm run hooks:install`）把 Stop / Notification 写入 `~/.claude/ccm/hooks-v1/` 文件投递箱，server 用 `fs.watch` 消费，把「回合结束/需要你」从轮询变成即时信号；未安装则回落轮询。`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
+6. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
 
 因此只读镜像有明确限制：
 
@@ -157,7 +158,7 @@ Agent 工具审批或用户直接文件编辑
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
 - Cloudflare Access 是**可选的**公网身份层，不扩大工作区；默认开着时**替代**设备审批（第二因子），不替代 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
   - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
-  - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启：此后经 Access 进来的新设备也要批准一次。**本机直连不受此开关影响**（peer 与 Host 都是 localhost），它是信任表被清空后把设备批回来的自救通道。缺省保持「Access 替代审批」，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
+  - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 

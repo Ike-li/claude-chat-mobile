@@ -1,12 +1,10 @@
 # 项目概述
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 > `AGENTS.md` 是指向本文件的符号链接。修改本文件即同时更新两者，不要新建独立的 `AGENTS.md`。
 
 移动端聊天式 Web UI，把**本机 claude CLI** 接到手机上。目标是终端等价性："坐在电脑前对 claude 打字"和"在手机上打字"效果一样。
 
-技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.3.263 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + Playwright（移动端 UI E2E，断言基于 DOM 状态非像素比对）。
+技术栈：Node ≥20 · ESM · Express 5 · Socket.io · Agent SDK · `jose`（JWT）· `web-push`（离线推送）；**版本号一律以 `package.json` 为准**。测试用内置 `node --test` + Playwright（移动端 UI E2E，断言基于 DOM 状态非像素比对）。
 
 **产品立场 n=1 自托管**（单用户、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
@@ -37,17 +35,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. `app/src/**` 里算「项目根」是**三层**向上（`app/src/server/app.js` 的 `HERE`、`app/src/shared/data-dir.js` 的 `PROJECT_ROOT`）——`data/`、`scripts/`、`ccm.config.json` 都在仓库根、不随代码进 `app/`，少一层会让它们全部解析到 `app/` 下且**无任何报错**。
 2. `desktop/launchd/server.plist.template` 的启动命令 `exec <node> app/server.js` 与 `app/src/ops/service-units.js` 解析它的后缀**必须逐字一致**，漏改一边会让服务面板的 repo/node 恒为 null。
 
-后端 `app/src/` 按域分层：
-
-| 域 | 职责 |
-|---|---|
-| `agent/` | SDK 会话驱动、审批生命周期与存储、CLI 镜像态判定 |
-| `sessions/` | 会话注册表、transcript 历史与 catchUp、工作区、「需要你」聚合 |
-| `server/` | 组装根：接线、多实例管理、mirror-engine、hooks 投递箱 |
-| `auth/` | 限速、CF Access、设备指纹与信任门 |
-| `files/` | 浏览/预览/搜索/上传、git 变更、工作区范围门 |
-| `ops/` | 配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务 |
-| `shared/` | 叶子工具层；`protocol.js` 是事件契约真相源 |
+后端 `app/src/` 按域分层：`agent/`（SDK 会话驱动、审批生命周期与存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp、工作区、「需要你」聚合）· `server/`（组装根：接线、多实例管理、mirror-engine、hooks 投递箱）· `auth/`（限速、CF Access、设备指纹与信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务）· `shared/`（叶子工具层；`protocol.js` 是事件契约真相源）。
 
 **测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**两个门禁不能移进 `tests/`**：`scripts/doc-consistency.js`（check 链第 4 环）与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 整棵被 `export-ignore` 裁掉——移过去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`（判据见 hard-rules §4.1.1，由 `dist-manifest.test.mjs` 单列断言保护）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
 
@@ -61,13 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **看着漂亮却永不变红的测试比没有更坏**，它占着「这里测过了」的位置。
 
-模块边界由 `tests/gates/check-import-boundaries.js` **硬闸执行**（check 一环）。违反时它会自己说清违反了哪条，不必背，骨架是：
-
-- 前后端互不 import（唯一豁免 `app/public/js/canonicalize.js`，指纹规范化两侧共用）
-- `app/src/shared` 是叶子，不得反向 import 其他后端域
-- `app/src/server` 是组装根，只有 `app/server.js` 与它自身能 import 它
-- 运行时代码禁止 import `scripts/`（维护者工具）与 `tests/`
-- 零循环依赖
+模块边界由 `tests/gates/check-import-boundaries.js` **硬闸执行**（check 一环）：前后端互不 import（唯一豁免 `app/public/js/canonicalize.js`，指纹规范化两侧共用）· `shared` 是叶子、不得反向 import 其他后端域 · `server` 是组装根、只有 `app/server.js` 与它自身能 import · 运行时禁止 import `scripts/` 与 `tests/` · 零循环依赖。违反时它会自己说清是哪条，不必背。
 
 文档索引：
 
@@ -78,7 +60,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - [docs/getting-started.md](docs/getting-started.md) — 装机教程
 - README.md — 产品入口，含安全边界
 
-新增文件必须落进 `tests/gates/repo-inventory.js` 的某条目录前缀；往 `docs/` 加文档还要在那份 `ROOT_FILES` 里逐篇登记，否则 check 里的 inventory 拒绝（这道闸挡的是一次性产物——审计报告、进度笔记、提案——悄悄回堆）。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
+新增文件必须落进 `tests/gates/repo-inventory.js` 的某条目录前缀；往 `docs/` 加文档还要在那份 `ROOT_FILES` 里逐篇登记，否则 check 里的 inventory 拒绝（这道闸挡的是一次性产物——审计报告、进度笔记、提案——悄悄回堆）。
 
 ## 分支纪律
 
@@ -160,11 +142,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm start          # node app/server.js（默认端口 3000）
 npm run dev        # node --watch app/server.js
-npm run check      # 零 token、最快。覆盖面导览（**逐项以 package.json 的 check 为准**，别把这行
-                   # 当成完备清单——它漂过两次）：ESLint · 模块边界 · 双向事件契约 · 文档一致性 ·
-                   # 架构图漂移 · n=1 登记簿 · i18n 孤儿 key · 破坏性删除守卫 · 不变量编号 ·
-                   # Playwright 禁止模式 · desktop typecheck/单测 · 未分类文件。
-                   # 每个门禁失败时会自己说清违反了什么，不必预先背清单。
+npm run check      # 零 token、最快。**具体有哪几道逐项以 package.json 的 check 为准**——这里原本
+                   # 抄着一份清单，漂过两次，已删。每道门禁失败时会自己说清违反了什么，不必预先背。
                    # 链上成员由 tests/unit/gate-wiring.test.mjs 钉住：新门禁忘了接线会红
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；
@@ -175,23 +154,42 @@ npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn c
                    # 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向
                          # tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
-RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）：
-                                   # claude-lifecycle / session-switch / websocket-events / aborted-state /
-                                   # message-idempotency / approval-integrity / rewind 整份 + file-upload 一个 describe
+RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的一起跑（慢/耗 token/不稳）。
+                                   # 受门控的是哪几个（写稿时 8 个）：
+                                   #   grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/
+                                   # **必须带 process.env 前缀**：有几个文件的注释里写着「不挂
+                                   # RUN_CLAUDE_INTEGRATION」，裸词 grep 会把它们一并捞出来，
+                                   # 把零 token 的用例误判成要真凭据的
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）；test:visual 是兼容别名
                    # 本机跑必带 NO_PROXY=127.0.0.1,localhost，否则就绪探针走代理恒 30s 假红
+                   # 【本条是 workers:1 串行】跑全量约 14 分钟（52 个 spec 实测时长加总 834s）。
+                   # 要全量走下面的 test:e2e:parallel（4 片 ~225s）；开发循环则只跑相关的那几条：
+                   # `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`，3-30s 出结果。两个坑：
+                   # ① **--grep 的模式带空格必须加引号**。不加会被 shell 拆成「--grep 第一个词
+                   #    ＋若干位置参数」，而它照样打印「Running 1 test … passed」——2026-09-18
+                   #    据此得出「单跑绿、整份跑红」的假对照，差点去查根本不存在的 spec 间耦合。
+                   # ② **--only-changed 在本仓不可用**。spec 不 import app/public（它们经浏览器
+                   #    访问页面），Playwright 的依赖图看不见产品代码：改 app.js 时它选出
+                   #    **0 个测试然后报绿**，正是「漏跑表现为全绿」。只有改 spec 自身时才有意义。
 npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自适应，CCM_E2E_SHARDS=N 可覆盖）。
                    # 每个分片就是一条 `npm run test:e2e --`，安全面同源。
                    # 分片按【实测时长】LPT 分配，不是 Playwright 原生 --shard 的按条数均分
                    # （原生 4 片 167s / 8 片 170s「一秒不差」是改造前的旧结论，已被 7e3b78e 推翻）。
-                   # 现在实测 270 条：4 分片 140.8s = 缺省档、全绿；8 分片能到 88s，
-                   # 但偶发假红（task-progress 的时序敏感用例），故缺省停在 4，
-                   # 要用得显式 CCM_E2E_SHARDS=8。地板 69.6s：同一 spec 文件不跨分片，
-                   # 最大那个文件（workspace-sessions-sidebar）自己就要这么久。
+                   # 2026-09-18 实测（10 核 · 52 个 spec 文件 · 串行总和 834s，其中 55% 是空等，
+                   # 所以并行才有这么大收益）：4 片 ~225s = 缺省档 · 5 片 ~180s · 6 片 ~150s ·
+                   # 8 片 ~110s。地板≈最大那个 spec 文件自己的耗时——同一文件不跨分片，
+                   # workspace-sessions-sidebar 单跑实测 108s，所以 8 片已经触底、再加没有收益。
+                   # （别拿 .e2e-durations.json 里的值当地板：那是【上一轮】的观测，含当轮负载，
+                   # 实测偏大——本次缓存记 117.9s 而单跑只要 108s，照抄会算出「8 片比地板还快」。）
+                   # **缺省停在 4 是 flaky 选的，不是性能选的**：并行度越高，一批「等固定时间窗」
+                   # 的用例越容易超时。当前已知 P0-SYNC-ACK-TIMEOUT 一条，4 片下也会偶发红，
+                   # 根因未定位（单跑 3/3 绿、CPU 占满绿、6 进程并行绿，只有真跑分片全量才中）。
+                   # 想提分片数就得先把它清掉，否则只是让既有 flaky 更频繁。
                    # **以上全是「N 片挤同一台机器」的数字**。CI 上是另一种形态：
                    # CCM_E2E_SHARD_INDEX=i 让本进程只跑第 i 片，8 台 runner 各跑一片、
-                   # 互不争抢 CPU，所以「8 片会偶发假红」那条不能照搬过去（病因之一正是
-                   # 4 核跑 8 个 Chromium）——横向 8 片实测 323 条全绿、零 flaky，
+                   # 互不争抢 CPU，所以上面那条「分片数越高越容易假红」不能照搬过去（病因是
+                   # N 片挤同一台机抢 CPU；CI 那边每片独占一台 4 核 runner，等于每个浏览器
+                   # 拿到的资源是本机 8 片时的 3 倍多）——横向 8 片实测 323 条全绿、零 flaky，
                    # 整个 workflow 墙钟 296s → 140s。横向分片新增一条**漏跑表现为全绿**的路径——
                    # 各 runner 各自读时长缓存算分组，一台 cache 没命中就算出另一套分组，
                    # 于是有 spec 谁都没跑。汇总 job 用 `--merge-durations` 做并集校验堵它
@@ -203,8 +201,7 @@ npm run test:e2e:parallel  # 同一批用例分片并行（分片数按核数自
 # 装机与配置
 npm run setup                  # 交互装机向导。非交互下「会动全局」的项缺省 off、危险回落直接拒绝（hard-rules §1）
 node scripts/config.js         # headless 配置 CLI：init|get|set|unset|check|migrate|schema；secret 明文须显式 --reveal
-node scripts/doctor.js         # 启动自检（鉴权/CLI 路径/工作区/端口/两个桥/配置/公网暴露面自洽性…）。
-                               # 跑一次看输出，别背清单。--env=prod.env 指定 .env
+node scripts/doctor.js         # 启动自检。跑一次看输出，别背清单。--env=prod.env 指定 .env
 
 # 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除。机制见 architecture.md）
 npm run statusline:install|status|uninstall

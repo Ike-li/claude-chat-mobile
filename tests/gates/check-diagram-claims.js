@@ -152,8 +152,8 @@ const CLAIMS = [
       const filters = /taskBackgrounded\.get\(doneTaskId\) === false/.test(src);
       return hasMap && filters ? '按 is_backgrounded 过滤' : '过滤已失效';
     }, expect: '按 is_backgrounded 过滤' },
-  { diagram: '12', shown: 'check 链上的 14 道门禁',
-    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 14 },
+  { diagram: '12', shown: '16 道零 token 门禁',
+    actual: () => JSON.parse(read('package.json')).scripts.check.split('&&').length, expect: 16 },
 ];
 
 // ── 图还没说、但代码已经成立的事实。──────────────────────────────────
@@ -165,7 +165,13 @@ const CLAIMS = [
 // 2026-09-12：上一条（check 链 13 → 14 道，新增 check-shell-pitfalls）已随图重出补进 CLAIMS。
 // 图 12 的节点 sublabel、卡片标题、卡片清单与 diagrams/index.html 的摘要四处同步改了，
 // 清单顺序与 package.json 的 check 链逐项对应（shell 陷阱落在破坏性删除与不变量编号之间）。
-const PENDING_CLAIMS = [];
+// 2026-09-18：14 → 16 道（check-config-gitignored 守 CONFIG-03，check-container-config-isolation
+// 守容器配置隔离）已同样补进图并挪回 CLAIMS，这一组重新空着。图 12 的卡片清单为此从三行拆成
+// 四行（凭据 gitignore / 一次性环境守卫 / 容器配置隔离 自成一行），仍与 check 链逐项对应。
+// PINNED_REVISION 未动：那个字段只跟三张 architecture 图的重出走，手工改图 12 的文字不构成推进理由
+// （判据见上面 PINNED_REVISION 处的注释）。
+const PENDING_CLAIMS = [
+];
 
 function git(args) {
   // stderr 收进返回值而不是转发到终端：`cat-file -e` 对缺失对象打的那行 `fatal: Not a valid

@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { statSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
-import { maskToken } from '../shared/sanitizer.js';
+import { maskToken, sanitize } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
@@ -62,11 +62,12 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
+import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
-import { planRewind, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
@@ -347,6 +348,15 @@ function preflight() {
     fail(`CLAUDE_BIN 指向的文件不存在：${claudeBin}`);
   }
   // 版本采集（/health 暴露，用于升级后回归核对）
+  //
+  // 【为什么这里是 execSync 而不是同文件下面那个 execFileSync】这行的 shell 拼接看着像注入面，
+  // 但 claudeBin 不是请求输入：配置面板写 CLAUDE_BIN 要过 env-schema 的 mustExist + executable
+  // 校验（注入串不是一个存在的可执行文件，写不进去），而直接写 env 的人就是本机所有者本人。
+  // 换成 execFileSync 反而会真的坏掉一个平台——Windows 上 npm 装的 CLI 是 claude.cmd
+  // （resolveExecutableViaPath 的 where 分支返回的就是它），而 execFile 不经 shell，Node 对
+  // .cmd/.bat 要求 shell:true（见 child_process 文档 Windows 小节；未在 Windows 上实测）。
+  // 失败被下面的 catch 吞掉不会崩，但 versions.cli 会恒为 unknown——而那一项的存在理由
+  // 正是本段头注说的「升级后回归核对」。2026-09-17 安全审查评估后保留现状。
   try {
     versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
   } catch { /* 非致命 */ }
@@ -794,6 +804,18 @@ io.use(async (socket, next) => {
     let accessEnabled = false;
 
     if (publicHost) {
+      // 跨站握手门（M3，2026-09-17 安全审查）。**只在这条路上判**：这里的凭据是边缘按 Cookie
+      // 注入的 JWT，浏览器会自动带上；而 AUTH_TOKEN 那条路的令牌在 handshake.auth 的 JSON 里、
+      // 由页面 JS 从 localStorage 读出来，浏览器不会自动附加，本来就不可 CSRF。判据与理由见
+      // auth/origin-gate.js 头注。
+      //
+      // 放在验签**之前**：验签成功才是「边缘认可了这个 Cookie」，那正是要挡的那一格，
+      // 挡在后面等于先把 CSRF 走通了再补一刀。不计入限速——它不是一次鉴权失败，
+      // 而是一个来源不对的请求，计进去会让受害者被自己浏览器发出的跨站连接越锁越久。
+      if (!originAllowedOnPublicHost(socket.handshake.headers.origin, authStrategy.publicHostname())) {
+        console.warn(`[conn] ${ip} 公网 Host 上的握手 Origin 不符（${socket.handshake.headers.origin ?? '(无)'}），拒绝`);
+        return next(new Error('forbidden origin'));
+      }
       try {
         await authStrategy.verifyRequest(socket.handshake.headers);
         authPassed = true;
@@ -3144,7 +3166,19 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ ok: false, error: '缺少分叉锚点' });
       return;
     }
-    const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: uuid });
+    // 【锚点由服务端算，不盲信前端送来的 uuid】前端能拿到的只有气泡的 uuid，而工具卡在 DOM 里
+    // 没有 uuid（history.js 只给文本类挂），于是「保留轮的最后一条 entry 是 tool_result」这种
+    // 形态在前端【结构上】就看不见。SDK 的规则是 fork at the KEPT turn's last chain entry，
+    // 而 forkSession 的切片是纯 inclusive slice、零修正——锚早了它照切，tool_use 就悬空。
+    // keepAnchorTurn：true=长按 assistant「从这里分叉」保留这一轮；false=长按 user「丢弃这条及之后」。
+    // 缺省 true 是为兼容老前端（它送的就是 assistant uuid、语义正是保留到那条所在轮）。
+    const keepAnchorTurn = payload?.keepAnchorTurn !== false;
+    const plan = planFork(await readSessionEntries(cwd, sessionId), uuid, { keepAnchorTurn });
+    if (!plan.ok) {
+      if (typeof ack === 'function') ack({ ok: false, error: describeRewindBlocker(plan) || '无法确定分叉位置', reason: plan.reason });
+      return;
+    }
+    const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid });
     sessions.bumpGeneration(cwd);
     const inst = await dedupedResume(cwd, newId);
     finishOpenFocus(inst, cwd, newId, ack);
@@ -3229,9 +3263,15 @@ registerSocketConnection(io, socket => {
       console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
     }
 
+    // 【为什么要分两种 reason】两者的出路相同（都能改用分叉），但成因不同、文案不能混：
+    // no-file-changes 是本轮特性——找得到检查点，这一轮就是没往盘上写过东西（只跑 Bash 的轮次
+    // 正是这一档，checkpoint 只在 Edit/Write 前快照）；no-checkpoint 是能力边界——SDK 说这条
+    // 消息没有可用检查点。前端据此给不同说明，否则「没有文件改动」会扣到后者头上、是假话。
+    const canRewind = !!res?.canRewind && filesChanged.length > 0;
     reply({
       ok: true,
-      canRewind: !!res?.canRewind && filesChanged.length > 0,
+      canRewind,
+      ...(canRewind ? {} : { reason: res?.canRewind ? 'no-file-changes' : 'no-checkpoint' }),
       filesChanged,
       insertions: res?.insertions ?? 0,
       deletions: res?.deletions ?? 0,
@@ -4105,9 +4145,21 @@ registerSocketConnection(io, socket => {
       } finally {
         closeSync(fd);
       }
+      // 【必须整段脱敏再切行，不能逐行脱敏】sanitizer 的 PEM 模式是跨行的
+      // （`-----BEGIN … PRIVATE KEY-----[\s\S]+?-----END …`）。先 split 再逐行 sanitize 会让它
+      // 永远匹配不上——日志里的私钥被原样回给客户端，而每一行 base64 单看也不命中任何别的模式。
+      // 实测：整段一次 → '***'；逐行 → 私钥完整漏出。
+      // 整段更快也顺带成立（256KB 实测 6.3ms vs 逐行 10.6ms），不存在拿性能换安全的取舍。
+      const all = sanitize(text).split('\n');
       // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
-      const all = text.split('\n');
       if (start > 0 && all.length) all.shift();
+      // 脱敏的理由（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里
+      // 的任何凭据都会原样回给已鉴权会话。而经 Cloudflare Access 进来的会话默认**不需要**
+      // AUTH_TOKEN（设备审批也 bypass），读一次这里就能把 token 拿走，之后可走 LAN、可在
+      // Access 吊销后继续用。横幅那头已改成永不打完整 token，但日志文件里的历史行还在，
+      // LOG_FILE 也可能收着别的进程写进来的凭据——两道各自独立，不能只做一头。
+      // sanitize 是选择性的（判据见 shared/sanitizer.js 的 PATTERNS，配套单测里有边界用例），
+      // 不会把地址、时间戳、报错正文一起抹掉，日志的排查价值保留。
       const lines = all.filter(l => l !== '').slice(-limit);
       ack({ ok: true, path: logFile, lines, truncated: start > 0, size: st.size });
     } catch (err) {
@@ -4418,17 +4470,22 @@ httpServer.listen(port, host, () => {
   if (!bindPlan.publiclyReachable) {
     // 有 token 但显式绑了 loopback（BIND_MODE=loopback / custom+本机地址）。
     // 此时**绝不能**再列局域网地址——那些地址上根本没有人在听，照着打开只会失败。
-    const frag = `/#token=${encodeURIComponent(AUTH_TOKEN)}`;
     console.log('  已启用鉴权，但按配置只监听本机：');
     console.log(`  [Token: ${maskToken(AUTH_TOKEN)}]`);
-    console.log(`  本机:   http://localhost:${port}${frag}`);
+    console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
     console.log(`  远程:   端口只在 ${host} 上，手机无法直连——请自行转发（SSH -L、Tailscale Serve、反代等）`);
     console.log('          要让手机同 WiFi 直连，把 BIND_MODE 改成 lan（或留空）后重启');
+    console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`);
   } else {
-    // 安全打印：首次启动（无 sessions.json）打印完整 URL 便于扫码，后续用掩码（防录屏/日志泄露）
-    const isFirstRun = !existsSync(join(DATA_DIR, 'sessions.json'));
+    // 安全打印：**任何情况下都不打完整 token**（M1，2026-09-17 安全审查）。
+    // 此前首次启动（无 sessions.json）会打印完整 `/#token=…` 便于扫码。它进 LOG_FILE、进
+    // LOG_TERMINAL 窗口、进投屏；而经 Cloudflare Access 进来的会话默认不需要 AUTH_TOKEN
+    // （设备审批也 bypass），读一次 logs:server 就能把它从那几行里抠出来，之后可走 LAN、
+    // 可在 Access 吊销后继续用。
+    // 免手输 token 的需求由 `node scripts/qr.js`（下面那行）与面板二维码覆盖，两者都要人主动敲，
+    // 不像横幅每次启动都自动打印——这正是 scripts/config.js `--reveal` 的同一条口径。
     const maskedToken = maskToken(AUTH_TOKEN);
-    const frag = `/#token=${encodeURIComponent(AUTH_TOKEN)}`;
+    const frag = '/#token=<YOUR_TOKEN>';
 
     console.log('  已启用鉴权，按场景任选一条打开（token 首次进入后存入浏览器，之后免带）：');
     console.log(`  [Token: ${maskedToken}]`);
@@ -4453,25 +4510,15 @@ httpServer.listen(port, host, () => {
         `          不想经 Cloudflare：装 Tailscale 后 tailscale serve --bg ${port}，地址见 node scripts/doctor.js`,
       ]);
 
-    if (isFirstRun) {
-      // 首次启动：完整 URL（便于扫码/点击）
-      console.log(`  本机:   http://localhost:${port}${frag}`);
-      for (const ip of reachable) {
-        console.log(`  可访问: http://${ip}:${port}${frag}  ← 同 WiFi 或已连隧道时可用`);
-      }
-      for (const line of publicHint(frag)) console.log(line);
-    } else {
-      // 后续启动：占位符（防泄露），token 已存浏览器可免带
-      console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
-      for (const ip of reachable) {
-        console.log(`  可访问: http://${ip}:${port}/#token=<YOUR_TOKEN>  ← 同 WiFi 或已连隧道时可用`);
-      }
-      for (const line of publicHint('/#token=<YOUR_TOKEN>')) console.log(line);
-      // 文件名与路径都按**实际生效的那份**给：写死 `.env` / `data/sessions.json` 会让用新格式
-      // 或搬过数据目录（CCM_DATA_DIR）的用户去翻一个不存在的文件（2026-08-19 新装实测）。
-      console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`
-        + `（或删除 ${join(DATA_DIR, 'sessions.json')} 重启显示完整 URL）`);
+    console.log(`  本机:   http://localhost:${port}${frag}`);
+    for (const ip of reachable) {
+      console.log(`  可访问: http://${ip}:${port}${frag}  ← 同 WiFi 或已连隧道时可用`);
     }
+    for (const line of publicHint(frag)) console.log(line);
+    // 文件名按**实际生效的那份**给：写死 `.env` 会让用新格式的用户去翻一个不存在的文件
+    // （2026-08-19 新装实测）。此前这里还写着「或删除 data/sessions.json 重启显示完整 URL」——
+    // 那条路已经不存在了，而且「删掉状态文件来让服务端把凭据打进日志」本来也不该教给用户。
+    console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`);
     // 只提命令名、不在这里打二维码：横幅每次启动都会跑，无人主动要求也打印凭据不合适
     // （口径同 scripts/config.js 的 --reveal）。而「知道有这么个命令」本身零暴露面——
     // 用户此刻正对着一串要在手机上手输的 URL，这是他最需要它的时刻。

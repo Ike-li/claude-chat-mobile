@@ -19,10 +19,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 2. 点击第二个选项 dev。
     await page.locator('#questionOptions button').nth(1).click();
-    await expect(page.locator('#questionModal')).toBeHidden();
-    // 答完最后一题：工具后缀段清空，回纯 spinner 行（✻ 动词… (Ns…)，不再残留 AskUserQuestion）
+    // 答完最后一题：live 行回纯 spinner（✻ 动词… (Ns…)），且不含 AskUserQuestion。
+    // 后半条守的是 formatCliSpinnerLine「对齐 CLI、不挂工具后缀段」那条决策（bg-tasks.js 的
+    // 同名函数上方注释），不是守一个会自然发生的回归——实测把后缀段加回去它才红。
+    //
+    // 【这两条必须排在 toBeHidden 之前，顺序是承重的】live 行是 ephemeral 的，本轮 result 一到
+    // 就被 hideStreamLiveStatus 整个摘掉——mock 里那是答完后 800ms（user:answer handler 的
+    // delay(800)）。而 closeSheet 要等 300ms 滑出动画才给弹窗加 .hidden，叠上 Playwright
+    // expect 自身退避的轮询间隔（100/250/500/1000ms），toBeHidden 实测要 810ms 才兑现。
+    // 排在它后面，这两条就是在跟回合收尾赛跑，而且只输 10ms：本机稳定红（element(s) not found，
+    // 不是文本不符），CI 上恰好绿——2026-09-18 逐帧量过，点击后 0–350ms 内文本就已经是
+    // 「✻ Mustering… (1s · thought for 1s)」，断言本身从第一次轮询就该命中。
     await expect(page.locator('#streamLiveStatusText')).toContainText(/^✻ .+… \(\d+s/);
     await expect(page.locator('#streamLiveStatusText')).not.toContainText('AskUserQuestion');
+    await expect(page.locator('#questionModal')).toBeHidden();
     await waitForIdle(page);
     await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已回答');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('dev (Bleeding-Edge Integration)');

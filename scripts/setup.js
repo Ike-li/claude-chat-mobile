@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { writeOwnerOnlyFile } from '../app/src/files/file-security.js';
 import { applyConfigChanges, CONFIG_FILE_NAME } from '../app/src/ops/config-file.js';
-import { ACCESS_PROFILES } from '../app/src/ops/env-schema.js';
+import { ACCESS_PROFILES, overlyBroadWorkdir } from '../app/src/ops/env-schema.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -102,7 +102,12 @@ export function normalizeSetupWorkDir(raw, { home = homedir() } = {}) {
   else if (trimmed.startsWith('~/')) candidate = resolve(homeAbs, trimmed.slice(2));
   else if (!isAbsolute(trimmed)) return { ok: false, code: 'work_dir_not_absolute' };
   else candidate = resolve(trimmed);
-  if (candidate === homeAbs) return { ok: false, code: 'work_dir_is_home' };
+  // 与配置写入侧共用同一份判据（app/src/ops/env-schema.js 的 overlyBroadWorkdir）。
+  // 此前这里只拒家目录、写入侧只查绝对路径，两道闸各写各的——装机被硬拒的东西，运行时从面板
+  // 改一行就能写进去（M2，2026-09-17 安全审查）。合并之后顺带多拒了 `/` 与 /Users、/home
+  // 这类比家目录还宽的根：向导此前是放行它们的。
+  const risk = overlyBroadWorkdir(candidate, homeAbs);
+  if (risk) return { ok: false, code: risk };
   return { ok: true, workDir: candidate };
 }
 
@@ -260,6 +265,8 @@ export const MESSAGES = {
       work_dir_required: () => '必须显式给出工作目录的绝对路径（--work-dir= 或向导里键入）。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给远程入口。',
       work_dir_is_home: () => '工作区不能是家目录。请换成一个具体项目目录。',
+      work_dir_too_broad: () => '工作区不能是根目录或所有家目录之父（/、/Users、/home、/root）——'
+        + '那等于把整台机器挂给远程入口。请换成一个具体项目目录。',
       work_dir_not_absolute: () => '工作区必须是绝对路径（或以 ~/ 写成家目录下的子目录）。',
       tty_required: () => '当前没有交互终端。不要跑 npm run setup；改用：'
         + ' node scripts/setup.js --yes --work-dir=<绝对路径> --hooks=on|off',
@@ -338,6 +345,9 @@ export const MESSAGES = {
       work_dir_required: () => 'An explicit absolute --work-dir= is required (or type one in the wizard). '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to a remote entrypoint.',
       work_dir_is_home: () => 'A workspace cannot be your home directory. Use a specific project folder.',
+      work_dir_too_broad: () => 'A workspace cannot be the filesystem root or the parent of all home '
+        + 'directories (/, /Users, /home, /root) — that hands the whole machine to a remote entrypoint. '
+        + 'Use a specific project folder.',
       work_dir_not_absolute: () => 'A workspace must be an absolute path (or a ~/… path under your home directory).',
       tty_required: () => 'This shell has no TTY. Do not run npm run setup. Use: '
         + 'node scripts/setup.js --yes --work-dir=<absolute-path> --hooks=on|off',

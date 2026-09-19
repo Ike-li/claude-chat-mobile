@@ -293,7 +293,7 @@ cloudflared tunnel --url http://localhost:3000
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 加层见[部署指南](deployment.md)；不想经过 Cloudflare 看下一节。
+随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 加层见[部署指南](deployment.md)——**还没有 CF 账号或域名**（含免费域名怎么弄）从[前置条件](deployment.md#0-前置条件-cf-账号与域名)开始看；不想经过 Cloudflare 看下一节。
 
 ### Tailscale（不经 Cloudflare 的推荐路径）
 

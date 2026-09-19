@@ -8,19 +8,11 @@
 <p align="center">
   <a href="README.md">中文</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/">Website</a> ·
+  <a href="https://ike-li.github.io/claude-chat-mobile/demo/">Live demo</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">Architecture diagrams</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="AGPL v3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
-</p>
-
-![Bring the claude in your terminal to your phone](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-en.png" width="23%" alt="Streaming Claude output on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-en.png" width="23%" alt="Tool calls and file changes, readable on the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.png" width="23%" alt="Approving a tool call from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-sessions-en.png" width="23%" alt="Every session in the workspace, including ones started in a terminal">
 </p>
 
 ## What you do in the terminal, and how it works on the phone
@@ -83,6 +75,34 @@ Open the address printed in the terminal on your phone. The first time a new dev
 
 To change code or run tests, `git clone` the full repository instead. Configuration, non-interactive setup, PWA, CLI hooks and **how to update**: **→ [Getting Started](docs/getting-started.en.md)**
 
+## What it looks like
+
+**Try it before installing anything: [live demo](https://ike-li.github.io/claude-chat-mobile/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
+
+<details>
+<summary>Show 8 screenshots</summary>
+
+> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
+
+![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
+</p>
+
+![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+
+</details>
+
 ## How it works
 
 ```text
@@ -138,4 +158,4 @@ Bugs and feature requests go to [GitHub Issues](https://github.com/Ike-li/claude
 
 ## License
 
-[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with Section 7 additional terms — see [NOTICE](NOTICE). You may use, study, modify and self-host it. If you offer a modified version to others as a network service, you must meet AGPL's corresponding-source obligations and keep the original attribution.
+[Apache-2.0](LICENSE) © 2026 Ike-li. See also [NOTICE](NOTICE). You may use, study, modify, self-host and redistribute it, including commercially and in closed-source products. Redistribution is subject to the conditions in Section 4 of the License, which include keeping the copyright notice and NOTICE attribution, including a copy of the License, and marking the files you changed; see [LICENSE](LICENSE) for the authoritative text. Versions up to and including v1.10.2 were released under AGPL-3.0-only; the change is not retroactive.

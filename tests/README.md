@@ -80,9 +80,11 @@
 | `AUTH-02` | `ownsHost(host)` 为真时，验签失败**不得**回退 `AUTH_TOKEN` |
 | `AUTH-03` | 限速只打鉴权口；成功认证后的业务 500 不计入失败。本机来源的锁定**不得**文案成「有人在暴力尝试」 |
 | `AUTH-04` | 只在声明的可信拓扑下采信边缘注入头：公网 Host + loopback peer → `CF-Connecting-IP`；`TRUSTED_PROXY=loopback` + loopback peer → `X-Forwarded-For` **末跳**。LAN/直连、未声明、开关值写错，一律不采信（失败方向 = 合桶，不是拆桶）。限速桶与待审设备卡片上的来源 IP 取同一份判据（`clientSourceAddress`），不允许各算一份 |
-| `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面还有一道早退**：CF Access 已启用且 `DEVICE_APPROVAL_SCOPE !== 'all'` 时直接 bypass，根本不看 peer/Host |
+| `AUTH-06` | CCM 自己的控制面密钥（`AUTH_TOKEN` · `VAPID_*` · `NTFY_*` · `CF_ACCESS_*`）不得随子进程环境流给 claude。**这不是「裁剪终端等价性」而是恢复它**：普通终端里的 claude 本来就没有这几个键，它们只存在于 `ccm.config.json`，是 server 的投影把它们带进 `process.env` 的。反向同样要钉——`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量属于 claude，剥了会静默砍掉第三方网关那条支持路径 |
+| `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面有两道早退，顺序不能换**：`DEVICE_APPROVAL_SCOPE === 'all'` 一律不 bypass（覆盖全部路径的总开关，含本机样 Host 那条——Host 是客户端填的头，纯 TCP 转发下可伪造，见 H1），其次 CF Access 已启用时直接 bypass、不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
+| `AUTH-05` | `AUTH_TOKEN` 不得出现在服务端**自身**的输出里：启动横幅只打掩码（两条 `BIND_MODE` 分支都算），`logs:server` 回传前逐行 `sanitize`。泄露路径是两跳——横幅进 `LOG_FILE` / 日志窗口 / 投屏，而经 CF Access 进来的会话默认不需要 `AUTH_TOKEN`（设备审批也 bypass），读一次日志就能把它拿走 |
 | `SEC-01` | 未审批 socket 不加入 approved 房间，收不到任何会话内容广播 |
 
 ### 范围与文件
@@ -114,6 +116,7 @@
 |---|---|
 | `CONFIG-01` | 面板/CLI 写入的必须是启动时读的那一份。schema 单一事实源 `env-schema.js`，读写归一在 `config-file.js`；shell env 压过文件 |
 | `CONFIG-02` | `.env` 的 dotenv 与 `source` 两个消费者必须**同时**安全，不轮流迁就一侧 |
+| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）* |
 | `NOTIFY-01` | 审批/提问/后台任务完成无条件推；`result` 仅当 approved 房间有**前台可见**连接时抑制，判据是 `client:presence` 而非 socket 连着（`SEC-04` 正文不进第三方明文通道 · `OPS-3` `notify_failed` 须覆盖 push 与 ntfy 双通道） |
 | `ALERT-01` | 服务告警与「需要你(N)」是两根轴，绝不混判（`OPS-1` doctor readiness 假绿） |
 | `DISPLAY-01` | 模型列表、effort、statusline 只做 [display-contracts.md](../docs/display-contracts.md) 允许的变换（`OPS-2` `utilization` 必须夹在 `[0,100]`） |

@@ -81,6 +81,8 @@ let syncPendingSnapshotInstanceId = null;
 let mockUnreadOnEntry = 0; // 未读角标：模拟真 server sync:since 的 ack.unreadOnEntry（切入时展示未读胶囊）
 let mockUnreadOnEntryInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
+// 已被关闭、等着用例经 POST /__emit-late-closed-events 放出迟到事件的实例（见 session:close 处注释）。
+let pendingLateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
@@ -252,6 +254,20 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
+// 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
+// viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
+// 【不可达】：撤掉它测试照样全绿（2026-09-18 实测过三版用例，重填一次都没触发）。
+//
+// 武装后 session:new 的回应变成三段：
+//   ① 延迟 STALE_INSTANCES_DELAY_MS 再发在途旧包（viewingInstanceId=旧实例、该实例仍带旧 sessionId）
+//      —— 延迟是为了把「用户在新会话页打字」这一步留在旧包到达【之前】，那正是缺陷窗口的形状；
+//   ② 紧接着发权威包（viewingInstanceId=null），它会让 bindView 拿 prev/new 去做草稿交换；
+//   ③ 最后发一条 branch 为 STALE_PROBE_BRANCH 的 status_line 当【送达锚点】——socket.io 同一连接
+//      保序，锚点上屏即证明 ①② 都已被前端处理完，用例不必 waitForTimeout（那也是禁止模式）。
+let staleInstancesOnNextNew = false;
+const STALE_INSTANCES_DELAY_MS = 900;
+const STALE_PROBE_BRANCH = 'stale-probe-settled';
 // P0-DUP-OPT：复现「在线乐观气泡 + 历史全量重载 = 同一条消息两颗气泡」。
 // 武装后同时改三处，凑齐真实 server 上那条链所需的全部条件：
 //   ① user:message 收到后立刻换实例并广播 instances（模拟实例被回收后的懒开）→ 前端 bindView；
@@ -381,6 +397,7 @@ function resetMockState() {
   mockUnreadOnEntry = 0;
   mockUnreadOnEntryInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
+  pendingLateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
@@ -427,6 +444,7 @@ function resetMockState() {
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  staleInstancesOnNextNew = false;
   replaySmallSyncArmed = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
@@ -615,6 +633,18 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
+});
+
+// P0-11o / P0-13e：发出「关闭的那个实例的迟到事件」。由用例在【确认视图切换已完成之后】显式调用，
+// 理由见 session:close 里 pendingLateClosedSessionEventsInstanceId 处的注释（时间驱动会让事件被
+// shouldDropAgentEvent 或 replayBuffer 的 'reload' 丢掉，且不重发）。
+// 一次性消费；没有待发实例时回 ok:false，让用例在「武装没生效」时当场红，而不是静默空跑。
+app.post('/__emit-late-closed-events', (_req, res) => {
+  const instanceId = pendingLateClosedSessionEventsInstanceId;
+  if (!instanceId) { res.status(409).json({ ok: false, error: 'no pending late-closed events' }); return; }
+  pendingLateClosedSessionEventsInstanceId = null;
+  emitLateClosedSessionEvents(instanceId);
+  res.json({ ok: true, instanceId });
 });
 
 // P0-NOSID：把当前查看实例拨成「活着但还没有 sessionId」（CLI 未吐 init）。见 noSessionIdMode 注释。
@@ -1088,9 +1118,18 @@ io.on('connection', socket => {
           defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
       });
-      if (shouldEmitLateClosedSessionEvents) {
-        setTimeout(() => emitLateClosedSessionEvents(instanceId), 80);
-      }
+      // 【迟到事件不在这里发，改由用例经 POST /__emit-late-closed-events 显式触发】
+      // 原实现是 setTimeout(..., 80)，等于赌前端能在 80ms 内处理完上面这条 instances 广播、
+      // bindView 切到新实例。赌输了的后果不是「慢一点」而是【事件永久丢失】，有两层：
+      //   ① 前端 viewingInstanceId 还是旧的 → shouldDropAgentEvent 直接丢；
+      //   ② 即使切过去了，bindView 的 replayBuffer.begin() 早于 sync:since 发出，事件会先进缓冲，
+      //      而 ack 回调走 resolve(handle,'reload') 时【缓冲整个被丢弃】改拉磁盘历史——那条 finished
+      //      是实时 system 事件，磁盘历史里根本没有它。
+      // 两层都不重发，用例只能干等到超时。所以放宽用例的断言 timeout 是死路（实测 10s→30s 照样红，
+      // 报的是「30s 内 #messages 一次都没变过」）；单纯把 80ms 调大也只是缩窄窗口而非消除竞态——
+      // sync:since 往返一慢就又回去了。
+      // 判据交回用例：它能断言「切换确实完成了」（新会话的历史已上屏），那一刻再触发才是确定的。
+      if (shouldEmitLateClosedSessionEvents) pendingLateClosedSessionEventsInstanceId = instanceId;
     }
   });
 
@@ -1107,6 +1146,58 @@ io.on('connection', socket => {
       || mockInstances[0]?.cwd
       || '/Users/you/code/claude-chat-mobile';
     console.log(`[mock] session:new → 进空首页（viewingInstanceId=null, cwd=${viewingCwd})`);
+    // P0-12f：武装时把这一整条回应推后，并在权威包【之前】补一条在途旧包。旧实例取 session:new
+    // 到达时前端还在看的那个（此刻 viewingInstanceId 尚未被下面清掉）。一次性消费。
+    if (staleInstancesOnNextNew) {
+      staleInstancesOnNextNew = false;
+      const staleViewing = viewingInstanceId;
+      const staleInst = mockInstances.find(i => i.instanceId === staleViewing);
+      // 服务端侧状态重置与非武装路径【逐行一致】，只推迟 emit——否则这条用例还顺带改了
+      // permission/effort 的起点，红绿就不再只由那道守卫决定。
+      viewingInstanceId = null;
+      permissionMode = 'default';
+      effortLevel = null;
+      pendingFreshPermissionMode = undefined;
+      pendingFreshEffortLevel = undefined;
+      pendingFreshCwd = viewingCwd;
+      console.log(`[mock] P0-12f 武装生效：${STALE_INSTANCES_DELAY_MS}ms 后先发在途旧包（viewing=${staleViewing}, sessionId=${staleInst?.sessionId}）再发权威包`);
+      if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
+      setTimeout(() => {
+        // ① 在途旧包：viewingInstanceId 仍是旧实例，且该实例带着旧 sessionId。
+        //    前端此刻 displayedInstanceId 仍指着它、displayedSessionId 已被 btnNew 清空——
+        //    正好凑齐 FE-001 的前三个条件，只差 sessionIdClearedByNav 这道守卫。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId: staleViewing,
+            viewingCwd: staleInst?.cwd || viewingCwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload() }
+        });
+        // ② 权威包：viewingInstanceId=null。前端 displayedInstanceId 仍是旧实例，故走 bindView，
+        //    拿 prevSessionId / sid=null 去做草稿交换——缺陷就在这一步把输入框清掉。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId: null,
+            viewingCwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
+            instances: mockInstances, service: mockServicePayload(),
+            defaultPermissionMode: pendingFreshPermissionOrDefault(),
+            defaultEffort: pendingFreshEffortOrDefault() }
+        });
+        // ③ 送达锚点（见 staleInstancesOnNextNew 处的注释）。
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'status_line', payload: {
+            project: viewingCwd.split('/').filter(Boolean).pop() || viewingCwd,
+            cwd: viewingCwd,
+            git: { branch: STALE_PROBE_BRANCH, staged: 0, modified: 3, untracked: 1, changed: 4, ahead: 0, behind: 0 },
+          }
+        });
+      }, STALE_INSTANCES_DELAY_MS);
+      return;
+    }
     viewingInstanceId = null;
     permissionMode = 'default';
     effortLevel = null;
@@ -1535,6 +1626,36 @@ io.on('connection', socket => {
       });
       return;
     }
+    // 锚点有效、但这一轮没有任何经 Edit/Write 落盘的文件 → 真 server 在 app.js 那句
+    // `canRewind: !!res?.canRewind && filesChanged.length > 0` 上判 false，并带 reason 说明是哪一种。
+    // 用户实测撞上的就是这一档（那一轮 50 个工具调用全是 Bash，checkpoint 只快照 edits）。
+    if (promptUuid === 'u-archived-4') {
+      callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
+      return;
+    }
+    // 「确认框还开着，会话被切走了」：ack 之后立刻推一条 instances，把 viewingInstanceId
+    // 换成另一个实例。前端的 appConfirm 正在 await，这条广播会在它等待期间落地、
+    // 把 displayedSessionId 改掉。真 server 上等价的触发是别处来的任意一次 broadcastInstances。
+    if (promptUuid === 'u-archived-6') {
+      callback({ ok: true, canRewind: false, reason: 'no-file-changes', filesChanged: [], insertions: 0, deletions: 0 });
+      const other = mockInstances.find(i => i.instanceId !== viewingInstanceId) || mockInstances[0];
+      viewingInstanceId = other.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart,
+          viewingInstanceId, viewingCwd: other.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances, service: mockServicePayload() },
+      });
+      console.log('[mock] u-archived-6 —— preview 之后切走会话，模拟确认框等待期间的会话切换');
+      return;
+    }
+    // 另一种 canRewind:false：SDK 侧根本没有这条消息的检查点（res.canRewind 为 false），
+    // 不是「这一轮没改文件」。出路一样，成因不同，文案必须不同。
+    if (promptUuid === 'u-archived-5') {
+      callback({ ok: true, canRewind: false, reason: 'no-checkpoint', filesChanged: [], insertions: 0, deletions: 0 });
+      return;
+    }
     callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
   });
 
@@ -1577,12 +1698,28 @@ io.on('connection', socket => {
   });
 
   socket.on('session:fork', (payload, callback) => {
-    const { sessionId, cwd, uuid } = payload || {};
-    console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
+    const { sessionId, cwd, uuid, keepAnchorTurn } = payload || {};
+    console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}, keepAnchorTurn=${keepAnchorTurn}`);
     if (typeof callback !== 'function') return;
-    const validUuids = new Set(['a-archived-1', 'a-archived-2']);
-    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !validUuids.has(uuid)) {
+    // 【护栏随协议翻转】2026-09-18 起锚点由服务端对着 transcript 算（planFork），前端只送
+    // 「这条气泡自己的 uuid + 语义标志」。于是这道护栏守的东西换了——不再是「只收 assistant 侧」，
+    // 而是【uuid 侧别必须与 keepAnchorTurn 一致】：
+    //   keepAnchorTurn=true （长按 assistant「从这里分叉」= 保留这一轮）→ 必须是 a-archived-*
+    //   keepAnchorTurn=false（长按 user「丢弃这条及之后」）             → 必须是 u-archived-*
+    // 送反了说明前端把两个方向的语义接错了，当场拒绝。旧护栏「只收 assistant」在新协议下
+    // 会把合法的 user 侧请求也拒掉，留着就是假红。
+    const wantAssistantSide = keepAnchorTurn !== false;
+    const sideOk = wantAssistantSide
+      ? /^a-archived-\d+$/.test(uuid || '')
+      : /^u-archived-\d+$/.test(uuid || '');
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !sideOk) {
       callback({ ok: false, error: 'mock fork source not found' });
+      return;
+    }
+    // 会话首轮往前没有可保留的锚点——真 server 的 planFork 在这一档返回 first-turn，
+    // mock 必须给同一个答案，否则两边对同一条夹具的判断相反、E2E 守的就不是真 server 的行为。
+    if (!wantAssistantSide && uuid === 'u-archived-1') {
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
       return;
     }
     const forkedId = 'inst_forked';
@@ -1761,7 +1898,21 @@ io.on('connection', socket => {
           // 第三轮专供 Rewind 的「文件回了、分叉没建成」那一支（P0-REWINDd）：
           // 真 server 上这一支来自 sdkForkSession 抛错，E2E 无从制造，只能在 mock 里留一个入口。
           { role: 'user', content: 'One more thing please', uuid: 'u-archived-3' },
-          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' }
+          { role: 'assistant', content: 'Sure, anything else?', uuid: 'a-archived-3' },
+          // 第四轮专供「锚点有效、但这一轮没有文件改动」那一档（P0-REWINDj）：
+          // 真 server 上这是 filesChanged 为空（那一轮只跑了 Bash，没经 Edit/Write 落盘），
+          // canRewind 被判 false。用户最容易撞上的恰恰是这一档——它此前只有一句无出路的提示。
+          { role: 'user', content: 'Just run some shell commands', uuid: 'u-archived-4' },
+          { role: 'assistant', content: 'Ran them, nothing written to disk.', uuid: 'a-archived-4' },
+          // 第五轮专供另一种 canRewind:false——SDK 说这条消息没有可用检查点（快照过期/被清理）。
+          // 与第四轮出路相同、成因不同，两条用例互为对照：文案判据写反会同时红。
+          { role: 'user', content: 'An old turn with no snapshot', uuid: 'u-archived-5' },
+          { role: 'assistant', content: 'That one is too old to restore.', uuid: 'a-archived-5' },
+          // 第六轮专供「确认框还开着时会话被切走」那一档（P0-REWINDm）：preview 回完之后
+          // mock 立刻推一条改了 viewingInstanceId 的 instances 广播，前端 bindView 会把
+          // displayedSessionId 换掉——正是 requestSessionRewind 头部那段快照注释警告的形态。
+          { role: 'user', content: 'Switch away while I decide', uuid: 'u-archived-6' },
+          { role: 'assistant', content: 'Sure, take your time.', uuid: 'a-archived-6' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
@@ -2642,6 +2793,21 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_cmds_changed', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // P0-12f 的武装命令：只置标志、不改任何视图状态，把「在途旧包」留到下一次 session:new 再发。
+      // 必须在一个【已有 sessionId 的会话】里发，否则旧包里没有可重填的 sessionId，FE-001 的
+      // `if (target?.sessionId)` 早退，用例就测了个空。
+      commands: ['test:stale-instances-on-new'],
+      run: async ({ activeInst }) => {
+        staleInstancesOnNextNew = true;
+        console.log('[mock] test:stale-instances-on-new — 下一次 session:new 前插一条在途旧 instances 包');
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_stale_arm', durationMs: 20, costUsd: 0, isError: false, models: [activeModel] },
         });
       },
     },
@@ -4841,6 +5007,22 @@ io.on('connection', socket => {
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
+
+    // test:external-echo：上面那条回显被本地占位气泡认领之后，再推一条【本地没有占位气泡】的
+    // user_message。这是「另一台设备发的消息」与回放的形态——前端 matchedBubble 只在 .opacity-70
+    // 里找，找不到就走「在线新建 user 气泡」那条分支，与占位转正是两个调用点。
+    // 【不带 clientMessageId】正是要点：带了就会被认领，又走回转正分支去了。
+    if (cmd === 'test:external-echo') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'user_message', payload: {
+          text: 'EXTERNAL_USER_MESSAGE',
+          uuid: 'u-external-1', // Rewind 锚点，同上面回显那条
+        }
+      });
+      console.log('[mock] test:external-echo — 已推一条无占位气泡的 user_message');
+      return;
+    }
 
     if (cmd.startsWith('ultracode ')) {
       activeEpoch = 'mock-epoch-ultracode-' + Date.now();

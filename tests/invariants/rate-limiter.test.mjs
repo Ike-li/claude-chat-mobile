@@ -1,5 +1,5 @@
 // tests/invariants/rate-limiter.test.mjs —— 鉴权端口防暴破限速与来源分桶单测
-// 守护：AUTH-03（限速仅打鉴权口，退避冷却与长锁定分档提示，防自我 DoS）、AUTH-04（只在声明的可信拓扑下采信边缘注入头，其余一律不采信）、DEVICE-01（双本机 bypass 判定，空 Host 不得绕过）
+// 守护：AUTH-03（限速仅打鉴权口，退避冷却与长锁定分档提示，防自我 DoS）、AUTH-04（只在声明的可信拓扑下采信边缘注入头，其余一律不采信）、DEVICE-01（双本机 bypass 判定，空 Host 不得绕过；DEVICE_APPROVAL_SCOPE=all 是覆盖全部路径的总开关，本机样 Host 也不豁免）
 // 测什么：onAuthResult 纯函数状态机转移与指数退避；gateCheck 单一事实源；authRejection 统一拒绝语义；rlSourceKey 来源分桶与 IPv6 /64 归一化；IPv4-mapped 防过度归并；shouldTrustCfConnectingIp / shouldTrustForwardedFor 两个采信判定（后者是 TRUSTED_PROXY=loopback 的显式 opt-in，取 XFF 末跳）；shouldBypassDeviceApproval 双本机与空 Host 守卫
 // 不测什么 + 为什么：不测真实 Express 中间件或 Socket.io 握手流程——纯函数与边界计算在此层全覆盖
 import test from 'node:test';
@@ -310,15 +310,30 @@ test.describe('DEVICE-01: shouldBypassDeviceApproval 设备审批跳过判定', 
     }, norm), false);
   });
 
-  test('DEVICE_APPROVAL_SCOPE=all 不动本机直连那条路（它是唯一的自救通道）', () => {
-    // 真本机（peer loopback 且 Host localhost）必须继续 bypass：信任表被清空后，
-    // 电脑上这个浏览器是把设备重新批回来的地方之一。把它一起关掉只会让人无路可走。
-    assert.equal(shouldBypassDeviceApproval({
-      accessEnabled: false,
-      peerAddress: '127.0.0.1',
-      hostHeader: 'localhost:3000',
-      deviceApprovalScope: 'all',
-    }, norm), true);
+  // 【为什么 all 必须连本机样 Host 一起关掉】（2026-09-17 安全审查 H1）
+  // 这道判据读的是 Host——一个**客户端自己填的 HTTP 头**，不是物理位置。纯 TCP 转发的拓扑
+  // （`ssh -R`、frp tcp、socat；deployment.md 把它们列为反代类的打洞手段）下 Host 不参与路由，
+  // 远程客户端直接发 `Host: localhost` 就凑齐了「peer 本机 + Host 本机」——而 peer 本来就是
+  // loopback（转发落点在本机）。于是持 AUTH_TOKEN 的远程来客跳过设备审批这层第二因子，
+  // 而设备审批存在的意义正是兜住令牌泄露。
+  //
+  // TCP 层面区分不了「真本机浏览器」与「隧道转发进来的连接」，继续往判据里加条件也挡不住：
+  // 转发头（XFF / X-Real-IP）纯 TCP 转发根本不加，socket.localAddress 两者相同。所以这里不再
+  // 试图判准，而是让知道自己拓扑的人有一个能关掉它的开关——那正是 DEVICE_APPROVAL_SCOPE
+  // 该有的语义。**默认（scope='' ）行为逐字节不变**，既有安装升级后不会有任何设备掉线。
+  //
+  // 旧用例断言的是「all 不动本机直连那条路（它是唯一的自救通道）」，两处都不成立：Host 本机样
+  // 不等于本机直连；自救通道也不止这一条——`node scripts/device.js approve`、菜单栏、跑
+  // `npm start` 那个终端里按回车，三条都在，且都不读任何网络判据。
+  test('DEVICE_APPROVAL_SCOPE=all：本机样 Host 同样不再跳过（Host 由客户端填，可伪造）', () => {
+    for (const hostHeader of ['localhost', 'localhost:3000', '127.0.0.1', '127.0.0.1:3000']) {
+      assert.equal(shouldBypassDeviceApproval({
+        accessEnabled: false,
+        peerAddress: '127.0.0.1',
+        hostHeader,
+        deviceApprovalScope: 'all',
+      }, norm), false, `scope=all 下 Host=${hostHeader} 仍 bypass：远程客户端自填这个头即可冒充本机`);
+    }
   });
 
   test('未声明 scope 时维持现状（CF Access 仍 bypass）——升级不得改变既有部署的行为', () => {

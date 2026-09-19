@@ -674,6 +674,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 「viewingInstanceId 确为 null（新会话懒开空窗口，须丢弃后台实例事件防污染）」——见 logic.js shouldDropAgentEvent。
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
+  // 用户刚显式新建（btnNew / 目录行＋）而权威广播还没落地的那段窗口。
+  // 【为什么需要】那两处只重置得了 displayedSessionId，displayedInstanceId 仍指着旧实例；
+  // 一条在 session:new 之前就在途、之后才到的 instances 包会命中下面 FE-001 那个分支
+  // （同实例 + 无 sessionId → 从条目重填 displayedSessionId），把用户刚放弃的会话 id 填回来。
+  // 于是下一条权威包让 bindView 读到 prev=旧会话 / new=null，又走回 swap，把正在打的字清掉。
+  // 【为什么不改成把 displayedInstanceId 也置 null】那会让 newViewing !== displayedInstanceId 成立，
+  // 在途旧包转而走进 bindView、把视图绑【回】旧会话——比重填更糟。
+  let sessionIdClearedByNav = false;
   let displayedSessionId = null;
   // R65（2026-08-30 需求合稿）未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
   // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
@@ -4994,7 +5002,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
       }
-    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId) {
+    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId && !sessionIdClearedByNav) {
       // FE-001：同一实例后续 instances 广播补上了 sessionId（懒开后 init），须补丁 displayedSessionId，
       // 否则 newViewing === displayedInstanceId 永远不进 bindView，requestSync 持续早退。
       const target = instancesList.find(x => x.instanceId === newViewing);
@@ -5174,6 +5182,39 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
+  // 未发送草稿（文字+附件）按 sessionId 存/取。bindView（收到广播后的真实切换）与 btnNew
+  // （同步本地重置）共用这一份：两处分头实现必然漂，而 btnNew 漏做这一步正是
+  // 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
+  // draft 由调用方传快照而不是这里现读 inputEl：bindView 是在 clearView 之前取的值。
+  // forceSwap：用户显式发起的新建（btnNew / 目录行＋）。keep 判据挡的是 instances 广播，
+  // 不该把用户自己点的导航也挡掉——否则「已经在新会话页时再按新建」会带着上一页的草稿。
+  function applySessionDraftSwap(prevSessionId, newSessionId, draft, { forceSwap = false } = {}) {
+    const plan = planSessionDraftSwap({
+      prevSessionId,
+      newSessionId,
+      currentDraft: draft?.text ?? '',
+      currentAttachments: draft?.attachments ?? [],
+      drafts: sessionDraftCache,
+      forceSwap,
+    });
+    if (plan.action !== 'swap') return;
+    if (plan.save) {
+      sessionDraftCache.set(plan.save.sessionId, {
+        text: plan.save.text,
+        attachments: plan.save.attachments,
+      });
+      if (sessionDraftCache.size > 40) {
+        const oldestKey = sessionDraftCache.keys().next().value;
+        sessionDraftCache.delete(oldestKey);
+      }
+    }
+    if (inputEl) {
+      inputEl.value = plan.restoreText;
+      inputEl.dispatchEvent(new Event('input'));
+    }
+    attachments.setItems(plan.restoreAttachments);
+  }
+
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
@@ -5183,6 +5224,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
+    sessionIdClearedByNav = false;             // 权威广播已落到 bindView，那段「等广播」的窗口到此为止
     // R65：离开旧会话的瞬间把它记为「已看到此刻」——正在看时到达的消息不该在离开后亮点。
     // 入场侧（下方真实会话分支）另有一记，覆盖「看完直接关页面」的路径；重复标记无害。
     if (prevSessionId) unread.markSeen(prevSessionId);
@@ -5220,30 +5262,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     clearView(sid, null);
     // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
-    const draftPlan = planSessionDraftSwap({
-      prevSessionId,
-      newSessionId: sid,
-      currentDraft: draftSnapshot.text,
-      currentAttachments: draftSnapshot.attachments,
-      drafts: sessionDraftCache,
-    });
-    if (draftPlan.action === 'swap') {
-      if (draftPlan.save) {
-        sessionDraftCache.set(draftPlan.save.sessionId, {
-          text: draftPlan.save.text,
-          attachments: draftPlan.save.attachments,
-        });
-        if (sessionDraftCache.size > 40) {
-          const oldestKey = sessionDraftCache.keys().next().value;
-          sessionDraftCache.delete(oldestKey);
-        }
-      }
-      if (inputEl) {
-        inputEl.value = draftPlan.restoreText;
-        inputEl.dispatchEvent(new Event('input'));
-      }
-      attachments.setItems(draftPlan.restoreAttachments);
-    }
+    applySessionDraftSwap(prevSessionId, sid, draftSnapshot);
 
     // clearView 刚 setBusy(false)：发送窗口内（首发懒开 / 同会话静默换实例）立即补回，避免 live 行闪没。
     // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
@@ -6378,6 +6397,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 【displayedSessionId 也要同步置空】上面那条 Bug A 的保证只做了一半：漏了这个变量，
+    // 一次迟到的 instances 广播会拿「prev=旧会话 / new=null」进 bindView 判成 swap，
+    // 把用户【刚在新会话页打的字】存进旧会话的草稿缓存，再用空串覆盖输入框
+    // （E2E 的 P0-33 / P0-12 稳定红就是撞这个：fill 之后几十毫秒被清空，发送键随之隐藏）。
+    // 草稿交换在这里同步做完——语义与 bindView 那次一致（存旧、清空、进空白的新会话页），
+    // 做完之后两侧都是 null，后续广播一律 keep，不再碰输入框。
+    applySessionDraftSwap(displayedSessionId, null, {
+      text: inputEl ? inputEl.value : '',
+      attachments: attachments.items(),
+    }, { forceSwap: true });
+    displayedSessionId = null;
+    sessionIdClearedByNav = true;
     // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
     freshInterruptedInstanceId = null;
     enterComposeReady();
@@ -6464,6 +6495,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
       viewingInstanceId = null;
       currentCwd = d;
+      // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
+      // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
+      // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
+      // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
+      applySessionDraftSwap(displayedSessionId, null, {
+        text: inputEl ? inputEl.value : '',
+        attachments: attachments.items(),
+      }, { forceSwap: true });
+      displayedSessionId = null;
+      sessionIdClearedByNav = true;
       // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
       freshInterruptedInstanceId = null;
       enterComposeReady();
@@ -8019,7 +8060,38 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
     });
     if (!preview?.ok) { addBar(preview?.error || t('无法回退这一轮'), 'text-danger'); return; }
-    if (!preview.canRewind) { addBar(t('这一轮没有可回退的文件改动'), 'text-ink-faint'); return; }
+    if (!preview.canRewind) {
+      // 【为什么不是一句 addBar 就完】原来只说「这一轮没有可回退的文件改动」——讲清了为什么不行，
+      // 没讲还能干什么。真机实测用户连点 6 次，每次拿到同一句话，界面上没有任何下一步。
+      // 出路是对话轴的分叉：它不要求有文件改动，正是「清掉这条之后的对话」那个诉求的落点。
+      // 两种成因出路相同但文案不能混——no-file-changes 是本轮特性（这一轮没往盘上写过东西），
+      // no-checkpoint 是能力边界（找不到这条消息的快照）。
+      const noCheckpoint = preview.reason === 'no-checkpoint';
+      const title = noCheckpoint ? t('找不到这一轮的文件快照') : t('这一轮没有可回退的文件改动');
+      // 分叉锚点取前一条 assistant；取不到就没有出路可指（理论上 planRewind 已把首轮判成
+      // first-turn 走不到这里，但那是服务端的判据、这里是 DOM 事实，不拿前者替后者担保）。
+      if (!findPrecedingAssistantUuid(bubble)) { addBar(title, 'text-ink-faint'); return; }
+      const ok = await appConfirm({
+        title,
+        body: (noCheckpoint
+          ? t('找不到这条消息对应的文件快照，没有可恢复的文件。')
+          : t('这一轮没有经 Claude 编辑过的文件——Bash 命令改动的文件不在快照范围内，所以没有可恢复的内容。'))
+          + t('如果你要的是清掉这条消息之后的对话，可以改用「分叉」：复制一个到此为止的新会话，不动任何文件。'),
+        okText: t('改用分叉'),
+      });
+      if (!ok) return;
+      // 【与成功路径同一道校验】确认框 await 期间任何 instances 广播都可能改写
+      // currentCwd / displayedSessionId（见本函数开头那段快照注释）。requestSessionFork
+      // 内部取的是【当前】值，放行就会把这条气泡（A 会话）的锚点和已经变成 B 的会话
+      // 拼到一起发出去：做不出预期的分叉，用户还停在 B 里只看到一句失败。
+      // 这条是 fallback 出路，但「次要」不构成少一道校验的理由。
+      if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+        addBar(t('会话已切换，回退已取消，请重新发起'), 'text-info');
+        return;
+      }
+      requestSessionFork(bubble, 'user');
+      return;
+    }
 
     const files = Array.isArray(preview.filesChanged) ? preview.filesChanged : [];
     const names = files.map(p => p.split('/').pop()).slice(0, 3).join('、');
@@ -8069,12 +8141,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
 
   async function requestSessionFork(bubble, role) {
-    const anchor = resolveForkAnchorUuid({
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+    // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
+    // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
+    const ownUuid = bubble.dataset.uuid || null;
+    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
+    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
+    const reachable = resolveForkAnchorUuid({
       role,
-      ownUuid: bubble.dataset.uuid || null,
+      ownUuid,
       precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
     });
-    if (!anchor) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
+    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
@@ -8091,7 +8169,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     haptic('tap');
-    socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
+    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    socket.emit('session:fork', {
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+    }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
   }
@@ -8372,7 +8454,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
-      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
+      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;
@@ -8766,7 +8848,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
 
   // E18: Redesigned premium utility row under each message block with copy, speak (TTS), and edit capabilities
-  function appendCopyAction(container, getText, align) {
+  // anchorUuid：这条气泡自己的权威 uuid。缺了就不挂需要锚点的入口（见下方 align==='left' 分支）。
+  function appendCopyAction(container, getText, align, anchorUuid) {
     if (!getText()) return;   // Empty messages have no action bar
     
     // For User messages (aligned to the right), render a single clean copy icon button aligned to the right
@@ -8900,6 +8983,29 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       window.speechSynthesis.speak(utterance);
     };
     bar.appendChild(speakBtn);
+
+    // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
+    // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
+    // 且 bindBubbleLongPress 只绑 touch 事件，桌面鼠标按不出来。
+    //
+    // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
+    // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——
+    // 那两档摆出按钮就是摆一个点了必然失败的东西。「复制」不需要锚点，所以它照常在。
+    if (anchorUuid) {
+      const forkBtn = el(`
+        <button class="msg-action-btn" data-testid="fork-action" title="${t('从这里分叉')}">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 3v12m0 0a3 3 0 103 3 3 3 0 00-3-3zm0-12a3 3 0 110 6 3 3 0 010-6zm12 0a3 3 0 100 6 3 3 0 000-6zm0 6c0 6-6 3-6 9" />
+          </svg>
+          <span>${t('分叉')}</span>
+        </button>
+      `);
+      // 确认框在 requestSessionFork 里，haptic 同理——按钮可见不等于一键执行。
+      // uuid 在点击时由该函数从 container.dataset 读，不用这里的 anchorUuid：
+      // 气泡的 dataset 才是权威值，且历史回显路径是先挂操作栏、后补 uuid。
+      forkBtn.onclick = () => requestSessionFork(container, 'assistant');
+      bar.appendChild(forkBtn);
+    }
 
     // UX-012：编辑已迁到用户气泡「改写重发」
 
