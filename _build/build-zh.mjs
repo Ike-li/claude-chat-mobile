@@ -94,7 +94,24 @@ function postProcess(html) {
   html = html.replace(/<meta name="twitter:image" content="[^"]*">/, `<meta name="twitter:image" content="${SITE}/og-image.jpg">`);
   html = html.replace('<meta charset="UTF-8">', '<meta charset="UTF-8">\n<meta property="og:locale" content="zh_CN">');
 
-  // 5. JSON-LD：url / description / inLanguage 指向中文版
+  // 5. VideoObject 与视频的 aria-label。
+  //    这两处都是硬编码在 DOM/JSON-LD 里的英文，不走 i18n 字典 —— 首页切中文时
+  //    它们不会变，dump 出来自然也是英文。结构化数据里挂着英文标题，等于告诉
+  //    搜索引擎这个中文页上的视频是英文内容。
+  html = html.replace(
+    '"name": "Driving your terminal claude CLI from a phone"',
+    '"name": "在手机上驾驶你终端里的 claude CLI"',
+  );
+  html = html.replace(
+    /"description": "A reply streams in[^"]*"/,
+    '"description": "回复流式吐出、工具卡就地展开，然后在手机上放行一次 git push —— 驱动的是你自己机器上那个 claude CLI。"',
+  );
+  html = html.replace(
+    'aria-label="Stream a reply, watch tool cards, then approve a git push from your phone"',
+    'aria-label="流式回复、工具卡、在手机上放行一次 git push"',
+  );
+
+  // 6. JSON-LD：url / description / inLanguage 指向中文版
   html = html.replace(`"url": "${SITE}/",`, `"url": "${SITE}/zh/",`);
   html = html.replace(
     /"description": "Self-hosted mobile web UI for Claude Code[^"]*",/,

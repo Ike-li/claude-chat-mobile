@@ -69,6 +69,26 @@
 }
 </script>
 
+<!-- Search Console 报告页面上「检测到视频」，但没有这块结构化数据时它只知道
+     「这里有个视频」，拿不到标题、时长和缩略图。duration 按 ffprobe 实测的
+     24.67s 取整；uploadDate 是该文件进仓库的日期，不是随手填的今天。
+     不写 embedUrl：视频是直接嵌在本页的 <video>，没有独立的播放器页面。 -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "VideoObject",
+  "name": "在手机上驾驶你终端里的 claude CLI",
+  "description": "回复流式吐出、工具卡就地展开，然后在手机上放行一次 git push —— 驱动的是你自己机器上那个 claude CLI。",
+  "thumbnailUrl": "https://ike-li.github.io/claude-chat-mobile/demo-poster.jpg",
+  "contentUrl": "https://ike-li.github.io/claude-chat-mobile/demo.mp4",
+  "uploadDate": "2026-07-22",
+  "duration": "PT25S",
+  "width": 540,
+  "height": 1170,
+  "isFamilyFriendly": true
+}
+</script>
+
 <style>
   /* ── Claude design tokens, copied verbatim from the product (public/index.html) ── */
   :root {
@@ -421,7 +441,7 @@
         </div>
       </div>
       <div class="gif-frame">
-        <video width="540" height="1170" autoplay="" muted="" loop="" playsinline="" preload="metadata" poster="../demo-poster.jpg" aria-label="Stream a reply, watch tool cards, then approve a git push from your phone">
+        <video width="540" height="1170" autoplay="" muted="" loop="" playsinline="" preload="metadata" poster="../demo-poster.jpg" aria-label="流式回复、工具卡、在手机上放行一次 git push">
           <source src="../demo.webm" type="video/webm">
           <source src="../demo.mp4" type="video/mp4">
         </video>
