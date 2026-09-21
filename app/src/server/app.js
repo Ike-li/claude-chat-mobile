@@ -67,7 +67,7 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
-import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor } from '../sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
@@ -3254,13 +3254,18 @@ registerSocketConnection(io, socket => {
       return;
     }
 
-    // G10 截断可行性预判（见上方 ②）
+    // G10 截断可行性预判（见上方 ②）。
+    // 【只挡对话轴，别连文件轴一起挡】planRewind 回答的是「分叉时该保留到哪条」，首轮之前没有
+    // 可保留的锚点所以它返回 first-turn。但「只恢复代码」根本不 fork，那一轮的文件快照照样能
+    // 还原——在这里整体拒绝等于让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。
+    // 其余 reason（prompt-not-found 等）仍然是整体性失败，照旧拒绝。
     const entries = await readSessionEntries(cwd, sessionId);
     const plan = planRewind(entries, promptUuid);
-    if (!plan.ok) {
+    if (!plan.ok && plan.reason !== 'first-turn') {
       reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
       return;
     }
+    const canForkConversation = plan.ok;
 
     let res;
     try {
@@ -3303,7 +3308,9 @@ registerSocketConnection(io, socket => {
       filesChanged,
       insertions: res?.insertions ?? 0,
       deletions: res?.deletions ?? 0,
-      keepUuid: plan.keepUuid,
+      keepUuid: plan.keepUuid ?? null,
+      // 对话轴单独回一个字段：首轮能恢复代码但不能分叉，前端据此只禁掉需要 fork 的那两个模式。
+      canForkConversation,
       dirtyOverlap,
     });
   });
@@ -3377,17 +3384,21 @@ registerSocketConnection(io, socket => {
 
       const entries = await readSessionEntries(cwd, sessionId);
       const plan = planRewind(entries, promptUuid);
-      if (!plan.ok) {
-        reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
+
+      // 终端 /rewind 第二步的三个模式：两样都做 / 只对话 / 只文件。未知值退化成「两样都做」，
+      // 判据与理由见 sessions/rewind-plan.js 的 rewindStepsFor。
+      // 【必须在 planRewind 的拒绝之前读】那是【对话轴】判据（first-turn＝之前没有可保留的锚点），
+      // 而「只恢复代码」根本不 fork。preview 已经为此放行了首轮，confirm 这边若仍无条件拒绝，
+      // 新暴露的那个按钮就是点了必然失败的假选项（PR #104 review）。
+      const { restoreCode, forkConversation } = rewindStepsFor(payload?.mode);
+      const blocked = rewindConfirmBlocked(plan, payload?.mode);
+      if (blocked) {
+        reply({ ok: false, error: describeRewindBlocker(plan), reason: blocked });
         return;
       }
       // 回退的下一步多半是把这句话改一改重说，所以把原话带回去回填输入框（edit-and-retry）。
       // 【必须在 fork 之前取】fork 后的新会话不含目标轮，那时再找就找不到了。
       const prefill = extractPromptText(entries.find(e => e?.uuid === promptUuid));
-
-      // 终端 /rewind 第二步的三个模式：两样都做 / 只对话 / 只文件。未知值退化成「两样都做」，
-      // 判据与理由见 sessions/rewind-plan.js 的 rewindStepsFor。
-      const { restoreCode, forkConversation } = rewindStepsFor(payload?.mode);
 
       // ── 第 1 步：物理回滚 ──
       // restoreCode=false（只回退对话）时整段跳过：一个字节都不该碰磁盘，连 dryRun 都不发——

@@ -80,11 +80,18 @@ export function createRewindCommandController(context, {
     // 倒序：最近的在最上面。终端里光标默认停在末尾的 (current)，手机上没有光标概念，
     // 改成「最近的排最前」——要回退的多半是刚说过的那几句。
     listEl.innerHTML = items.slice().reverse().map(item => {
-      const disabled = !item.canRewind;
-      const changed = item.changedFiles > 0
-        ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
-        : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
-      const reason = disabled ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，之前没有可保留的内容')}</div>` : '';
+      // 只有两个轴都不行才整条置灰。首轮不能分叉对话（之前没有可保留的锚点），但文件快照照样
+      // 能还原，所以它仍然可选——进去之后由第二步把「分叉」相关的模式禁掉。
+      const disabled = !item.canForkConversation && !item.canRestoreCode;
+      // changedFiles=null 是「未知」而不是 0：最后一轮的改动还没有下一个 snapshot 来反映，
+      // 报「无代码改动」会把「改了一堆」说成没改。准确值由第二步的 preview 给。
+      const changed = item.changedFiles == null
+        ? `<span class="text-ink-soft">${t('代码改动待确认')}</span>`
+        : item.changedFiles > 0
+          ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
+          : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
+      const reason = !item.canForkConversation
+        ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，只能恢复代码')}</div>` : '';
       return `<div class="py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
         ${disabled ? '' : `data-uuid="${escapeAttr(item.promptUuid)}"`}>
         <div class="text-sm text-ink break-words line-clamp-2">${escapeHtml(item.text) || `<em class="text-ink-soft">${t('（空消息）')}</em>`}</div>
@@ -145,15 +152,22 @@ export function createRewindCommandController(context, {
     // 真机实测用户连点 6 次，每次同一句话、界面上没有任何下一步。出路一直都在：对话轴不要求有
     // 文件改动。所以这里不再整体拒绝，只把两个要动文件的模式置灰，「只恢复对话」照常可选。
     const canCode = res.canRewind !== false;
+    const canFork = res.canForkConversation !== false && picked.canForkConversation !== false;
     const files = Array.isArray(res.filesChanged) ? res.filesChanged : [];
-    // 第一行永远说清 fork 语义（终端同一位置写的是 "The conversation will be forked."）：
-    // 这是本方案区别于原地截断的核心——原会话一个字节不动，用户据此知道回退不是不可逆的。
-    const forkLine = `<div>${t('对话将分叉出新会话，原会话完整保留。')}</div>`;
+    // 【文案要按两个轴一起算】终端在这个位置写的是 "The conversation will be forked."，那是
+    // 本方案区别于原地截断的核心（原会话一个字节不动）——但只在真会 fork 时才能这么说。
+    // 首轮唯一可点的是「只恢复代码」、根本不 fork，照说「将分叉出新会话」就是在描述另一个操作。
+    const forkLine = canFork
+      ? `<div>${t('对话将分叉出新会话，原会话完整保留。')}</div>`
+      : `<div>${t('这是会话首轮，无法分叉对话，只能恢复代码。')}</div>`;
     let codeLine;
     if (!canCode) {
-      codeLine = res.reason === 'no-checkpoint'
-        ? t('找不到这一轮的文件快照，只能恢复对话。')
-        : t('这一轮没有代码改动，只能恢复对话。');
+      // 两个轴都不行 = 没有任何模式可点，得说清是死路而不是让人对着全灰的按钮猜。
+      codeLine = !canFork
+        ? t('这一轮既没有可恢复的文件，也无法分叉对话。')
+        : res.reason === 'no-checkpoint'
+          ? t('找不到这一轮的文件快照，只能恢复对话。')
+          : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
       const shown = files.slice(0, 3).map(escapeHtml).join('、');
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;
@@ -168,18 +182,21 @@ export function createRewindCommandController(context, {
       codeLine = t('这一轮没有代码改动。');
     }
     effectEl.innerHTML = `${forkLine}<div class="mt-1">${codeLine}</div>`;
-    setModeButtons(true, canCode);
+    // 对话轴以 preview 的回答为准（清单那份是同源算的，但 preview 更晚、更权威）。
+    setModeButtons(true, canCode, canFork);
   }
 
-  // enabled=整体可用（preview 回来了、confirm 不在飞）；codeEnabled=这一轮能不能动文件。
-  function setModeButtons(enabled, codeEnabled = true) {
+  // enabled=整体可用（preview 回来了、confirm 不在飞）
+  // codeEnabled=这一轮有没有可还原的文件；forkEnabled=这一轮能不能分叉对话（首轮不能）。
+  // 两个轴分开禁：首轮仍可「只恢复代码」，而没有文件改动的轮次仍可「只恢复对话」。
+  function setModeButtons(enabled, codeEnabled = true, forkEnabled = true) {
     const set = (b, on) => {
       if (!b) return;
       b.disabled = !on;
       b.classList.toggle('opacity-40', !on);
     };
-    set(modeConversation, enabled);
-    set(modeBoth, enabled && codeEnabled);
+    set(modeConversation, enabled && forkEnabled);
+    set(modeBoth, enabled && codeEnabled && forkEnabled);
     set(modeCode, enabled && codeEnabled);
   }
 
@@ -187,8 +204,11 @@ export function createRewindCommandController(context, {
     if (!picked || !session || busy) return;
     // 面板开着的这段时间里会话被切走了 → 拒绝。冻结的锚点属于上一个会话，对当前这个执行
     // 破坏性操作是意外；成功路径早有同款校验，这里不能因为入口换了就少一道。
+    // 【包括 null 也要比】原先写的是 `now?.sessionId && ...`，于是用户切回首页/新会话面
+    // （displayedSessionId 变成 null）时条件短路、守卫整个失效，仍会对冻结的旧会话执行破坏性
+    // 回退。判据是「当前看的还是不是那个会话」，null 同样是「不是」（PR #102 review）。
     const now = getCurrentSession();
-    if (now?.sessionId && now.sessionId !== session.sessionId) {
+    if ((now?.sessionId ?? null) !== session.sessionId) {
       effectEl.innerHTML = `<span class="text-danger">${escapeHtml(t('会话已切换，回退已取消，请重新发起'))}</span>`;
       setModeButtons(false);
       return;

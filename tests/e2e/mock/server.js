@@ -1605,15 +1605,19 @@ io.on('connection', socket => {
     // 文案与下方 session:history 的 user 气泡【逐字一致】：E2E 要在清单里按这段文字点中某一轮，
     // 对不上就只能按下标点，那种用例换个顺序就悄悄测了另一条。
     // canRewind:false 只给首轮（真 server 的 planRewind 判 first-turn）——它之前没有可保留的锚点。
+    // canForkConversation / canRestoreCode 是【两个轴】，不是一个 canRewind：首轮不能分叉对话
+    // （之前没有可保留的锚点），但文件快照照样能还原，所以它仍然可选、只是模式受限。
+    // 末轮 changedFiles=null＝未知（最后一轮的改动还没有下一个 snapshot 来反映）。
     callback({
       ok: true,
       items: [
-        { promptUuid: 'u-archived-1', text: 'Summarize archived plan', timestamp: '2024-01-01T00:00:00Z', changedFiles: 0, canRewind: false },
-        { promptUuid: 'u-archived-2', text: 'Any follow-up questions?', timestamp: '2024-01-01T00:05:00Z', changedFiles: 3, canRewind: true },
-        { promptUuid: 'u-archived-3', text: 'One more thing please', timestamp: '2024-01-01T00:09:00Z', changedFiles: 2, canRewind: true },
-        { promptUuid: 'u-archived-4', text: 'Just run some shell commands', timestamp: '2024-01-01T00:12:00Z', changedFiles: 0, canRewind: true },
-        { promptUuid: 'u-archived-5', text: 'An old turn with no snapshot', timestamp: '2024-01-01T00:15:00Z', changedFiles: 0, canRewind: true },
-        { promptUuid: 'u-archived-6', text: 'Switch away while I decide', timestamp: '2024-01-01T00:18:00Z', changedFiles: 1, canRewind: true },
+        { promptUuid: 'u-archived-1', text: 'Summarize archived plan', timestamp: '2024-01-01T00:00:00Z', changedFiles: 0, canForkConversation: false, canRestoreCode: true },
+        { promptUuid: 'u-archived-2', text: 'Any follow-up questions?', timestamp: '2024-01-01T00:05:00Z', changedFiles: 3, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-3', text: 'One more thing please', timestamp: '2024-01-01T00:09:00Z', changedFiles: 2, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-4', text: 'Just run some shell commands', timestamp: '2024-01-01T00:12:00Z', changedFiles: 0, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-5', text: 'An old turn with no snapshot', timestamp: '2024-01-01T00:15:00Z', changedFiles: 0, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-6', text: 'Switch away while I decide', timestamp: '2024-01-01T00:18:00Z', changedFiles: 1, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-7', text: 'Go home while I decide', timestamp: '2024-01-01T00:21:00Z', changedFiles: null, canForkConversation: true, canRestoreCode: true },
       ],
     });
   });
@@ -1635,10 +1639,15 @@ io.on('connection', socket => {
       return;
     }
     if (promptUuid === 'u-archived-1') {
-      // 夹具里这是会话【首条】消息，其前面没有可保留的 chain entry。
-      // 真 server 的 planRewind 在这一档返回 first-turn —— mock 必须给同一个答案，
-      // 否则两边对同一条夹具的判断相反，E2E 守的就不是真 server 的行为。
-      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
+      // 夹具里这是会话【首条】消息，其前面没有可保留的 chain entry，planRewind 判 first-turn。
+      // 【2026-09-21 起不再整体拒绝】那是【对话轴】的限制，而「只恢复代码」不 fork——真 server
+      // 现在放行并回 canForkConversation:false，mock 必须给同一个答案，否则两边对同一条夹具的
+      // 判断相反，E2E 守的就不是真 server 的行为。
+      callback({
+        ok: true, canRewind: true, canForkConversation: false,
+        filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'],
+        insertions: 4, deletions: 1, keepUuid: null, dirtyOverlap: [],
+      });
       return;
     }
     // u-archived-2 → 正常成功路径；u-archived-3 → preview 同样成功，但 confirm 时分叉会失败
@@ -1680,6 +1689,21 @@ io.on('connection', socket => {
       console.log('[mock] u-archived-6 —— preview 之后切走会话，模拟确认框等待期间的会话切换');
       return;
     }
+    // 与上一档同源、只差一个取值：viewingInstanceId 清成 null ⇒ 前端 displayedSessionId 变 null。
+    // 守卫写成 `now?.sessionId && ...` 会在这里短路失效（PR #102 review 的 P1）。
+    if (promptUuid === 'u-archived-7') {
+      callback({ ok: true, canRewind: true, filesChanged: ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'], insertions: 3, deletions: 1, keepUuid: 'a-archived-6', dirtyOverlap: [] });
+      viewingInstanceId = null;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart,
+          viewingInstanceId: null, viewingCwd: null,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances, service: mockServicePayload() },
+      });
+      console.log('[mock] u-archived-7 —— preview 之后回到首页，viewing 清空');
+      return;
+    }
     // 另一种 canRewind:false：SDK 侧根本没有这条消息的检查点（res.canRewind 为 false），
     // 不是「这一轮没改文件」。出路一样，成因不同，文案必须不同。
     if (promptUuid === 'u-archived-5') {
@@ -1706,7 +1730,13 @@ io.on('connection', socket => {
     const forkConversation = mode !== 'code';
     // 只回退对话时不碰文件，所以「这一轮有没有可回退的文件改动」根本不成为门槛——
     // u-archived-4/5（canRewind:false 那两档）走 conversation 必须放行，那正是它们的出路。
-    if (restoreCode && promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
+    // first-turn（u-archived-1）只在【需要 fork】时才拒 —— 对齐真 server：planRewind 是对话轴
+    // 判据，而「只恢复代码」不 fork，照拒就是让那个按钮点了必然失败（PR #104 review）。
+    if (forkConversation && promptUuid === 'u-archived-1') {
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
+      return;
+    }
+    if (restoreCode && !['u-archived-1', 'u-archived-2', 'u-archived-3'].includes(promptUuid)) {
       callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
       return;
     }
@@ -1953,7 +1983,13 @@ io.on('connection', socket => {
           // mock 立刻推一条改了 viewingInstanceId 的 instances 广播，前端 bindView 会把
           // displayedSessionId 换掉——正是 requestSessionRewind 头部那段快照注释警告的形态。
           { role: 'user', content: 'Switch away while I decide', uuid: 'u-archived-6' },
-          { role: 'assistant', content: 'Sure, take your time.', uuid: 'a-archived-6' }
+          { role: 'assistant', content: 'Sure, take your time.', uuid: 'a-archived-6' },
+          // 第七轮专供「面板开着时回到首页」那一档（P0-REWINDn）：与第六轮的区别是
+          // viewingInstanceId 被清成 null ⇒ 前端 displayedSessionId 变 null。守卫若写成
+          // `now?.sessionId && now.sessionId !== frozen` 会在这里短路失效，仍对冻结的旧会话
+          // 执行破坏性回退（PR #102 review 的 P1）。
+          { role: 'user', content: 'Go home while I decide', uuid: 'u-archived-7' },
+          { role: 'assistant', content: 'Okay, heading home.', uuid: 'a-archived-7' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
