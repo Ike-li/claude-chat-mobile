@@ -2,7 +2,7 @@
   "schema_version": 1,
   "site": "https://ike-li.github.io/claude-chat-mobile",
   "label": "post-zh-page-and-license-fix",
-  "captured_at": "2026-09-21T13:36:34Z",
+  "captured_at": "2026-09-21T14:29:15Z",
   "tool": "seo-baseline/capture.py (curl; Clash-safe)",
   "note": "Official claude-seo drift_baseline.py blocked by Clash fake-IP (198.18.x). This snapshot is the project SoT for drift compare.",
   "pages": [
@@ -11,9 +11,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 64745,
-      "sha256": "14282d2e8f7a0d06dd716db33a85d155bfdc298dfd9857606a237617338bc482",
-      "fetched_at": "2026-09-21T13:36:04Z",
+      "size_bytes": 65752,
+      "sha256": "bea4533760b4e0a6544e69de52dcf9726e8fc0d91925025b6751e5132e13d2a0",
+      "fetched_at": "2026-09-21T14:28:33Z",
       "title": "Claude Chat Mobile — your local Claude Code CLI, on your phone",
       "title_len": 62,
       "meta_description": "Self-hosted phone UI for Claude Code: drives your own terminal claude CLI via the Agent SDK. Same session, same host settings — not a screen mirror.",
@@ -38,7 +38,8 @@
       "jsonld_types": [
         "SoftwareApplication",
         "WebSite",
-        "Person"
+        "Person",
+        "VideoObject"
       ],
       "hreflang": [
         {
@@ -71,9 +72,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/zh/",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 40709,
-      "sha256": "69777de6e5399ff109672bec2ca66b9a0c8907cee3b7045c44414fb9ab4991f7",
-      "fetched_at": "2026-09-21T13:36:06Z",
+      "size_bytes": 41699,
+      "sha256": "ca45aed4fe575c33e332fb545a9e88e08db1ce039b485638e777122a3538ef85",
+      "fetched_at": "2026-09-21T14:28:35Z",
       "title": "Claude Chat Mobile — 电脑上的 Claude Code，手机上接着用",
       "title_len": 44,
       "meta_description": "自托管的手机端 Claude Code 界面：通过 Agent SDK 驱动你自己终端里的 claude CLI，同一个会话、同一套本机配置。为触控重排，不是投屏。",
@@ -98,7 +99,8 @@
       "jsonld_types": [
         "SoftwareApplication",
         "WebSite",
-        "Person"
+        "Person",
+        "VideoObject"
       ],
       "hreflang": [
         {
@@ -133,7 +135,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 99081,
       "sha256": "d8f14833375aaea6e2ad1a3cc9d011a92308dcba870c648ce5f4027e7791ccc6",
-      "fetched_at": "2026-09-21T13:36:09Z",
+      "fetched_at": "2026-09-21T14:28:37Z",
       "title": "在线演示 · Claude Chat Mobile — 浏览器里直接试手机端 Claude Code 界面",
       "title_len": 53,
       "meta_description": "在浏览器里直接操作 Claude Chat Mobile 的真实前端：审批卡、工具卡、会话列表与流式输出。假后端跑在本地，不连任何服务器，也不用安装。",
@@ -168,7 +170,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 11400,
       "sha256": "f7fbb9858f64a54e2dd646f41f9f7a02af12203ced890a2cb89a16f5d1ad366d",
-      "fetched_at": "2026-09-21T13:36:11Z",
+      "fetched_at": "2026-09-21T14:28:39Z",
       "title": "架构图集 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "Claude Chat Mobile 的 13 张可交互架构图：双通道同步、单驾驶员模型、鉴权六道门、审批生命周期、推送抑制、文件与会话域、测试归类。",
@@ -209,7 +211,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 16257,
       "sha256": "a53f3422d26f582d2c9b4bc1444e4fcfe1df05d897683ddc25bc79ea50eec32a",
-      "fetched_at": "2026-09-21T13:36:12Z",
+      "fetched_at": "2026-09-21T14:28:41Z",
       "title": "Quickstart — Claude Chat Mobile",
       "title_len": 31,
       "meta_description": "Install and run Claude Chat Mobile: Node ≥20, local claude CLI, setup, doctor, LAN or temporary tunnel. Self-hosted, single-user per instance.",
@@ -268,7 +270,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 14234,
       "sha256": "6a3b1960722242febbf82766e0bd780dd0fc1b76db7c1eb441d29ef59ebed55f",
-      "fetched_at": "2026-09-21T13:36:14Z",
+      "fetched_at": "2026-09-21T14:28:44Z",
       "title": "Security Model — Claude Chat Mobile",
       "title_len": 35,
       "meta_description": "Security model for Claude Chat Mobile: single-user per instance, AUTH_TOKEN binds loopback when empty, CLI allow-list inheritance, device TOFU. Read before public exposure.",
@@ -324,9 +326,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 11835,
-      "sha256": "bb94eba65b63a36268daf51b04d4cc4b2451e6d0b92b4652f61eb0ef107ecc90",
-      "fetched_at": "2026-09-21T13:36:15Z",
+      "size_bytes": 12338,
+      "sha256": "bfb301101672032b8858d539b9e3b8ebac6e210eced200121c9a0221b7f16e0f",
+      "fetched_at": "2026-09-21T14:28:45Z",
       "title": "封面与导读 · Claude Chat Mobile",
       "title_len": 26,
       "meta_description": "一句话认识项目，看清这本手册怎么读。本页讲：这本手册从哪来、三条阅读路线、技术栈一瞥。",
@@ -365,9 +367,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/index.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 11835,
-      "sha256": "bb94eba65b63a36268daf51b04d4cc4b2451e6d0b92b4652f61eb0ef107ecc90",
-      "fetched_at": "2026-09-21T13:36:17Z",
+      "size_bytes": 12338,
+      "sha256": "bfb301101672032b8858d539b9e3b8ebac6e210eced200121c9a0221b7f16e0f",
+      "fetched_at": "2026-09-21T14:28:47Z",
       "title": "封面与导读 · Claude Chat Mobile",
       "title_len": 26,
       "meta_description": "一句话认识项目，看清这本手册怎么读。本页讲：这本手册从哪来、三条阅读路线、技术栈一瞥。",
@@ -406,9 +408,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 11539,
-      "sha256": "36dbcf8c101fa78c957ae890a998feddf06e38f9ff6474670952d65fa57401ad",
-      "fetched_at": "2026-09-21T13:36:18Z",
+      "size_bytes": 12051,
+      "sha256": "a39ced4460d160937a3e2b5f37be355d28c3cb73b41b013ed0cebf4bd718bb5e",
+      "fetched_at": "2026-09-21T14:28:50Z",
       "title": "快速开始 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "安装、setup、doctor、局域网与临时隧道。本页讲：环境前置准备、装机与运行四步走、从移动端连接的场景方案、常用日常维护指令。",
@@ -461,9 +463,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 12532,
-      "sha256": "702a7b98745cafc0c403867dc8ff833357824b8569a3eda10588dabe3aacfe63",
-      "fetched_at": "2026-09-21T13:36:20Z",
+      "size_bytes": 13044,
+      "sha256": "fc7a57b4f844ad20396e55015eade4056f4c48066120b79e00b4bcf85f0c4173",
+      "fetched_at": "2026-09-21T14:28:52Z",
       "title": "安全模型 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "单用户、token 不出本机、权限继承 CLI、设备 TOFU。本页讲：四大安全铁律、网络拓扑与 ACCESS_PROFILE 三候选、鉴权流程与多层防护、防暴力尝试与限速分桶。",
@@ -517,9 +519,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 14529,
-      "sha256": "42f67f28018d5f1aa9278f1eac53812edc31d84ca464e7e5ed7f0a378c8a5394",
-      "fetched_at": "2026-09-21T13:36:21Z",
+      "size_bytes": 15041,
+      "sha256": "16ab4e0f7d18308e7074ff0381226919bdd65bab4d1403a551299a72564347bf",
+      "fetched_at": "2026-09-21T14:28:57Z",
       "title": "项目总览 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "定位、适用场景、技术栈与仓库形态。本页讲：一句话定位、核心适用场景、技术栈与基础选型、仓库结构与代码地图、分支纪律与工作流、装机与运行前置条件。",
@@ -561,9 +563,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/production-deploy.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 11396,
-      "sha256": "bfd3c5f34b52e2b7883887d41aabace48289060f1fdfa4a0499cc8eab21edf08",
-      "fetched_at": "2026-09-21T13:36:24Z",
+      "size_bytes": 11908,
+      "sha256": "b3870d0579c2f441f488798ff34a5198cb3631519ecd554231ac5e5f981111b2",
+      "fetched_at": "2026-09-21T14:28:59Z",
       "title": "生产部署 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "LaunchAgent、命名隧道、Access 2FA、CCM_DATA_DIR。本页讲：生产架构拓扑、macOS 生产常驻与菜单栏应用 (CCM.app)、Linux 常驻部署 (systemd)。",
@@ -603,20 +605,20 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/content/overview.html",
       "status_code": 404,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 9379,
-      "sha256": "b620507312c5e97566a3c6cfaf99144fefc18a0da7d941401dfa0f5f58fb0368",
-      "fetched_at": "2026-09-21T13:36:25Z"
+      "size_bytes": 3403,
+      "sha256": "72c2668be9b9932881066c7c449fc2fc62eea7def566587a2f01b89522024515",
+      "fetched_at": "2026-09-21T14:29:01Z"
     },
     {
       "url": "https://ike-li.github.io/claude-chat-mobile/robots.txt",
       "final_url": "https://ike-li.github.io/claude-chat-mobile/robots.txt",
       "status_code": 200,
       "content_type": "text/plain; charset=utf-8",
-      "size_bytes": 510,
-      "sha256": "e3553ce48c790f244c89387f04e7dae72586d1e8a17c5e6edba10cc3450d0cc8",
-      "fetched_at": "2026-09-21T13:36:27Z",
-      "text_preview": "User-agent: *\nAllow: /\n\n# Agent & LLM quick indexes\nAllow: /claude-chat-mobile/llms.txt\nAllow: /claude-chat-mobile/llms-full.txt\nAllow: /claude-chat-mobile/skill.md\nAllow: /claude-chat-mobile/docs-site/pages/*.md\n\n# Build sources / authoring notes are not public handbook pages\nDisallow: /claude-chat-mobile/docs-site/fragments/\nDisallow: /claude-chat-mobile/docs-site/content/\nDisallow: /claude-chat-mobile/docs-site/AUTHORING-components.html\n\nSitemap: https://ike-li.github.io/claude-chat-mobile/si",
-      "text_lines": 15,
+      "size_bytes": 1641,
+      "sha256": "76f3aa792ab87d856d6751f0c6cba07e9a5e5cb79f37269bd01dec7dbcdc75e3",
+      "fetched_at": "2026-09-21T14:29:04Z",
+      "text_preview": "# ⚠️ 这个文件对爬虫【不生效】，留着只为记录意图。\n#\n# RFC 9309：robots.txt 只在主机根被读取，即 https://ike-li.github.io/robots.txt。\n# 这份在 /claude-chat-mobile/ 子路径下，没有任何爬虫会去读它。\n# 域根那个位置属于 Ike-li/ike-li.github.io 仓库，而该仓库不存在（实测 404），\n# 所以这是 GitHub Pages 项目站的固有限制，不是配置漏了。\n#\n# 后果与对策：\n#   · 404 的域根 robots.txt = 不限制任何抓取，所以不影响收录 —— 这是好事\n#   · 下面的 Disallow 一条都不生效 → 真正要挡的页面各自带了\n#     <meta name=\"robots\" content=\"noindex\">（fragments/ 与 AUTHORING-components.html）\n#   · 下面的 Sitemap 声明也读不到 → sitemap 已在 Google Search Console 手动提交，\n#     其余搜索引",
+      "text_lines": 32,
       "sitemap_ref": [
         "https://ike-li.github.io/claude-chat-mobile/sitemap.xml"
       ]
@@ -626,9 +628,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/sitemap.xml",
       "status_code": 200,
       "content_type": "application/xml",
-      "size_bytes": 9703,
-      "sha256": "beeddbe4d7140ecc9824a488f39156b78fa19405f36ade7a20ff24da91bcff9b",
-      "fetched_at": "2026-09-21T13:36:28Z",
+      "size_bytes": 13642,
+      "sha256": "4e1a9d179d883cebe0138912e8c85f254c72a01f43224c1094f19cf1742ec328",
+      "fetched_at": "2026-09-21T14:29:05Z",
       "loc_count": 47,
       "locs_sample": [
         "https://ike-li.github.io/claude-chat-mobile/",
@@ -648,7 +650,7 @@
       "content_type": "text/plain; charset=utf-8",
       "size_bytes": 7601,
       "sha256": "a56f9a886808f435c8e0cc86c17530bd410654c0b2c6ec83e5233cd103a8eb74",
-      "fetched_at": "2026-09-21T13:36:29Z",
+      "fetched_at": "2026-09-21T14:29:07Z",
       "text_preview": "# Claude Chat Mobile\n> Self-hosted mobile web UI for Claude Code: a phone UI that drives your own terminal `claude` CLI via the Agent SDK. Same session, same host settings; touch layout, not a screen mirror. Works with any gateway or API key the CLI is already configured for. Single-driver; single-user (n=1) self-hosted architecture.\n\n## Try It / See It\n- [Live Demo](https://ike-li.github.io/claude-chat-mobile/demo/): The real product frontend, driven by an in-browser fake backend. No install, n",
       "text_lines": 66
     },
@@ -659,7 +661,7 @@
       "content_type": "video/webm",
       "size_bytes": 251574,
       "sha256": "ba28e097acb7a16bd46d579fc7839cce97690795d18f881ee83d0fb8740aca49",
-      "fetched_at": "2026-09-21T13:36:31Z"
+      "fetched_at": "2026-09-21T14:29:11Z"
     },
     {
       "url": "https://ike-li.github.io/claude-chat-mobile/og-image.jpg",
@@ -668,7 +670,7 @@
       "content_type": "image/jpeg",
       "size_bytes": 230223,
       "sha256": "d8348ed656a107d9faed55198eca7f8db22e4d738c81772afd7e57878b7015be",
-      "fetched_at": "2026-09-21T13:36:34Z"
+      "fetched_at": "2026-09-21T14:29:15Z"
     }
   ]
 }
