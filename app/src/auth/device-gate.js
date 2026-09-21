@@ -113,26 +113,72 @@ export function createDeviceGate({
     console.error('[devices] 初始化设备认证文件失败:', err.message);
   }
 
-  // 文件变化监听器（用于在 CLI 执行批准/拒绝操作时自动、即时同步对应的客户端连接）。
+  // 文件变化监听器（用于在 CLI 执行批准/拒绝操作时自动、即时同步对应的客户端连接 + 记审计）。
   // SEC-03 修复中实证发现：原先直接 watch(trustedDevicesFile, ...) 判 eventType==='change' 在 macOS 上不可靠——
   // writeOwnerOnlyFile 是原子写（tmp 文件 + rename 换 inode），第一次 rename 触发的 eventType 是 'rename' 不是
   // 'change'（被现有判断完全漏掉），且 watch 绑定的是旧 inode，一旦被 rename 替换，之后对该路径的写入完全收不到
   // 任何事件。与 workdirs.json 早年踩过的同一个坑，改用同款解法：watch 父目录 + 按 basename 过滤 + mtime 前置守卫。
-  function watchTrustedDevicesFile() {
+  //
+  // 审计与「在线连接」解耦（原实现只在遍历到匹配的【已连接】socket 时才记审计——离线批准/秋后
+  // 吊销一台当下没有活连接的设备，不留任何审计痕迹）：现在对 trusted/pending 两份文件的【全量
+  // 成员集合】做前后差集，审计只问"这份文件的集合变了没有"，与谁在线无关；socket 遍历继续保留，
+  // 但只服务于"现在就把在线连接解锁/断开"这一件事，两件事分开算，互不遮蔽。
+  //
+  // 顺带把 pending-devices.json 一并纳入同一个 watcher（原来只 watch trusted 那一份）：deny 一台
+  // 【从未进入过 trusted 集合】的待审批设备，trusted 那份文件内容不变（delete 一个不存在的成员
+  // 是 no-op），单看 trusted 差集永远看不出这次操作发生过——只有 pending 集合的差集能捕捉
+  // 「移除但没有变成 trusted」这一种变化，这正是原始缺口（deny 从未产生过审计记录）。
+  function watchDeviceFiles() {
     if (!existsSync(trustedDevicesFile)) return;
     const tdBase = basename(trustedDevicesFile);
-    let tdTimer = null;
-    let lastTrustedDevicesMtime = 0;
-    try { lastTrustedDevicesMtime = statSync(trustedDevicesFile).mtimeMs; } catch { /* 首次变更时再取 */ }
+    const pdBase = basename(pendingDevicesFile);
+    let timer = null;
+    let lastTrustedMtime = 0;
+    let lastPendingMtime = 0;
+    try { lastTrustedMtime = statSync(trustedDevicesFile).mtimeMs; } catch { /* 首次变更时再取 */ }
+    try { lastPendingMtime = statSync(pendingDevicesFile).mtimeMs; } catch { /* 首次变更时再取 */ }
+    // 全量成员快照，供下面按 tick 做前后差集；两个 list* 各自内部已有 last-good 兜底，文件暂不
+    // 存在/读失败时安全回落空集，不需要在这里额外防御。
+    let lastTrustedSet = new Set(listTrustedDevices().map(d => d.deviceId));
+    let lastPendingSet = new Set(listPendingDevices().map(d => d.deviceToken));
     try {
       const watcher = watch(dirname(trustedDevicesFile), (_evt, filename) => {
-        if (filename && filename !== tdBase) return; // 有 filename 时按 basename 过滤，忽略同目录其他文件变动
-        let m;
-        try { m = statSync(trustedDevicesFile).mtimeMs; } catch { return; } // 文件暂不可读 → 跳过
-        if (m === lastTrustedDevicesMtime) return;    // mtime 未变 = 非本文件变动，忽略
-        lastTrustedDevicesMtime = m;
-        clearTimeout(tdTimer);
-        tdTimer = setTimeout(() => {
+        if (filename && filename !== tdBase && filename !== pdBase) return; // 忽略同目录其他文件变动
+        let tm = lastTrustedMtime, pm = lastPendingMtime;
+        try { tm = statSync(trustedDevicesFile).mtimeMs; } catch { /* 保持旧值，下面判等即不触发 */ }
+        try { pm = statSync(pendingDevicesFile).mtimeMs; } catch { /* 同上 */ }
+        if (tm === lastTrustedMtime && pm === lastPendingMtime) return; // 两份 mtime 都没变＝与本 watcher 无关
+        lastTrustedMtime = tm;
+        lastPendingMtime = pm;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          // ── 审计：纯集合差集，与是否在线无关 ──
+          const nowTrustedSet = new Set(listTrustedDevices().map(d => d.deviceId));
+          const nowPendingSet = new Set(listPendingDevices().map(d => d.deviceToken));
+          for (const token of nowTrustedSet) {
+            if (!lastTrustedSet.has(token)) {
+              console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 新增信任（CLI）`);
+              audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_approved', target: token, outcome: 'allowed', meta: { via: 'cli' } });
+            }
+          }
+          for (const token of lastTrustedSet) {
+            if (!nowTrustedSet.has(token)) {
+              console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 信任已被吊销（CLI）`);
+              audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
+            }
+          }
+          for (const token of lastPendingSet) {
+            // 从待审批移除、且没有变成受信任 → 是被 deny 的；变成受信任的那种情况已经在上面
+            // 的 trusted 差集里记过 device_approved 了，这里不重复记。
+            if (!nowPendingSet.has(token) && !nowTrustedSet.has(token)) {
+              console.log(`[devices] 检测到 ${pendingDevicesFile} 变更，设备 ${token} 被拒绝（CLI）`);
+              audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_denied', target: token, outcome: 'denied', meta: { via: 'cli' } });
+            }
+          }
+          lastTrustedSet = nowTrustedSet;
+          lastPendingSet = nowPendingSet;
+
+          // ── 在线连接的即时解锁/断连：按当前连接的 socket 逐个核对，纯 UX，与上面的审计判定各自独立 ──
           const revokedTokens = new Set(); // SEC-03：CLI 从信任表移除的 deviceToken，本轮结束后统一断连（去重）
           for (const socket of io.sockets.sockets.values()) {
             if (socket.deviceApproved === false) {
@@ -140,7 +186,6 @@ export function createDeviceGate({
               if (isTrusted(token)) {
                 console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，自动解锁设备 ${token}`);
                 onUnlockSocket(socket);
-                audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_approved', target: token, outcome: 'allowed', meta: { via: 'cli' } });
               }
             } else if (socket.deviceApproved === true && socket.trustBasis === 'device-token') {
               // SEC-03：CLI 吊销对称断连——只检查 trustBasis==='device-token' 的连接：isLocal/CF Access
@@ -152,7 +197,6 @@ export function createDeviceGate({
           for (const token of revokedTokens) {
             console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 信任已被吊销（CLI），断开连接`);
             disconnectDeviceSockets(token); // 复用 Web 侧同款：发 device_status:denied + disconnect(true)
-            audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
           }
           broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
           broadcastTrustedDevices(); // 信任表刚变过——Web 上那份列表不刷就会停在旧快照上，用户对着它做吊销决策
@@ -160,11 +204,11 @@ export function createDeviceGate({
       });
       watcher.unref?.(); // 常驻 server 不受影响；避免在单测等短生命周期进程里吊住事件循环
     } catch (err) {
-      console.error('[devices] 无法监视 trusted-devices.json 所在目录:', err.message);
+      console.error('[devices] 无法监视设备信任/待审文件所在目录:', err.message);
     }
   }
 
-  watchTrustedDevicesFile();
+  watchDeviceFiles();
 
   return {
     trustedDevicesFile,

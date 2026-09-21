@@ -4,7 +4,7 @@
 // 不测什么 + 为什么：不测物理硬件指纹采集与操作系统真实推送通道——分别属于前端采集与 ops/push
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   getTrustedCount,
   getTrustedDeviceIds,
 } from '../../app/src/auth/devices.js';
+import * as audit from '../../app/src/ops/audit.js';
 
 function fakeIo(...sockets) {
   return { sockets: { sockets: new Map(sockets.map((s, i) => [`sid-${i}`, s])) } };
@@ -210,5 +211,152 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
   test('DEVICE-03: getTrustedDeviceIds 专供本地 CLI 与菜单栏，返回 Array', () => {
     const ids = getTrustedDeviceIds();
     assert.ok(Array.isArray(ids));
+  });
+});
+
+// DEVICE-02 审计缺口：CLI 批准/拒绝/吊销此前只在遍历到【当下已连接】的匹配 socket 时才记审计——
+// 离线批准、秋后吊销、拒绝一台从未连接过的待审批设备，都不留痕迹。这里用真实文件 + 真实
+// fs.watch/setTimeout 驱动（不 mock 计时器），因为要验证的正是「文件监听器自己能不能在零在线
+// 连接的情况下正确记审计」这个时序行为本身。全程用注入的 listTrustedDevices/listPendingDevices
+// 直接读本测试自己写的原始 JSON（不经 devices.js 的模块级路径解析），保持与文件系统真实交互、
+// 又不touchCCM_DATA_DIR/生产 data/。
+// ★★ fs.watch 在 macOS 上底层是 FSEvents，注册是异步生效的：createDeviceGate 内部调用
+// fs.watch(...) 那一刻函数虽已同步返回，但 OS 端把这次订阅真正接进 FSEvents 流还需要一点
+// 时间。生产环境里 watcher 建立到第一次真实变更（人手敲 CLI 命令）之间天然有几秒到几小时的
+// 间隔，这个窗口从不成为问题；但这组测试在 createDeviceGate 返回后【几乎同一个事件循环 tick】
+// 就去写文件，2026-09-21 实测：四条测试并发跑时，其中一条会随机撞上这个窗口——不是超时
+// 不够长（8s 顶格测过仍然不够），是那次写入的事件从一开始就没被 FSEvents 订阅捕获到，
+// 于是 100ms 防抖定时器永远不会被排上。留一点点 settle 时间给 watch 真正接管，问题消失。
+async function settleWatcher() { await new Promise(r => setTimeout(r, 150)); }
+
+// ★ 本组每条测试自己的 tempDir/trustedFile/pendingFile 全部落在测试函数体的局部变量里，
+// **不经** test.beforeEach 写一份 describe 级共享 let——本文件其它 describe 块那种写法
+// (`let tempDir; test.beforeEach(() => tempDir = mkdtempSync(...))`) 建立在"同一 describe
+// 下的用例逐个顺序跑完"这个假设上，纯同步用例确实如此；但这组测试内部 await waitUntil(...)
+// 会真的把控制权交还事件循环，2026-09-21 实测过：只要这么写，下一条用例的 beforeEach 就可能
+// 在上一条还挂着的 await 期间抢先执行、把共享的 trustedFile/pendingFile 重新指向了另一个
+// tempDir——本测试的 listTrustedDevices/listPendingDevices 闭包读到的就变成了别的用例的文件，
+// diff 永远算不出预期变化，稳定超时（8s 超时线也救不回来，因为条件本来就不会成立）。
+// 局部变量没有这个问题：每条测试的闭包只捕获它自己创建的那一份，互不可见。
+test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 离线操作）', () => {
+  function makeFixture(t) {
+    const tempDir = mkdtempSync(join(tmpdir(), 'ccm-device-gate-audit-'));
+    t.after(() => { try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* safe-rm: mkdtempSync 建的一次性目录 */ } });
+    const trustedFile = join(tempDir, 'trusted-devices.json');
+    const pendingFile = join(tempDir, 'pending-devices.json');
+    return {
+      tempDir,
+      writeTrusted: ids => writeFileSync(trustedFile, JSON.stringify(ids)),
+      writePending: records => writeFileSync(pendingFile, JSON.stringify(records)),
+      readTrusted: () => JSON.parse(readFileSync(trustedFile, 'utf8')),
+      readPending: () => JSON.parse(readFileSync(pendingFile, 'utf8')),
+    };
+  }
+
+  async function waitUntil(predicate, { timeoutMs = 4000, intervalMs = 20 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return predicate();
+  }
+
+  function recordsFor(action, target) {
+    return audit.getAll().filter(r => r.action === action && r.target === target);
+  }
+
+  test('批准一台零在线连接的设备（CLI 离线批准）→ 仍记 device_approved', async (t) => {
+    const f = makeFixture(t);
+    const TOK = `gate-diff-approve-${Date.now()}`;
+    f.writeTrusted([]);
+    f.writePending([{ deviceToken: TOK, ip: '10.0.0.1', userAgent: 'ua', ts: Date.now() }]);
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } }, // 零连接：证明审计不依赖 io.sockets.sockets 遍历
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+    });
+    await settleWatcher();
+
+    // 模拟 approveDevice 的落盘效果：加入 trusted 且移出 pending（两份文件都变）
+    f.writeTrusted([TOK]);
+    f.writePending([]);
+
+    const ok = await waitUntil(() => recordsFor('device_approved', TOK).length > 0);
+    assert.ok(ok, '零在线连接时也应该记到 device_approved');
+    assert.equal(recordsFor('device_approved', TOK)[0].outcome, 'allowed');
+    assert.equal(recordsFor('device_approved', TOK)[0].meta?.via, 'cli');
+    // 批准不能被 pending 差集误判成拒绝——同一个 token 不该同时出现在两张审计表里
+    assert.equal(recordsFor('device_denied', TOK).length, 0, '批准不应该被误记成拒绝');
+  });
+
+  test('吊销一台零在线连接的受信任设备（CLI 秋后吊销）→ 仍记 device_revoked', async (t) => {
+    const f = makeFixture(t);
+    const TOK = `gate-diff-revoke-${Date.now()}`;
+    f.writeTrusted([TOK]);
+    f.writePending([]);
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } },
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+    });
+    await settleWatcher();
+
+    f.writeTrusted([]); // CLI denyDevice(TOK)：从信任表移除，此刻该设备没有任何活连接
+
+    const ok = await waitUntil(() => recordsFor('device_revoked', TOK).length > 0);
+    assert.ok(ok, '零在线连接时也应该记到 device_revoked');
+    assert.equal(recordsFor('device_revoked', TOK)[0].outcome, 'denied');
+  });
+
+  test('拒绝一台从未进入过 trusted 集合的待审批设备（CLI deny）→ 记 device_denied（原始缺口）', async (t) => {
+    const f = makeFixture(t);
+    const TOK = `gate-diff-deny-${Date.now()}`;
+    f.writeTrusted([]);
+    f.writePending([{ deviceToken: TOK, ip: '10.0.0.2', userAgent: 'ua', ts: Date.now() }]);
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } },
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+    });
+    await settleWatcher();
+
+    // denyDevice(TOK) 对一个从未受信任的 token 来说：trusted-devices.json 内容不变（delete
+    // 不存在的成员是 no-op，但仍会原子重写一次、mtime 照样跳），pending-devices.json 真的少了一条。
+    f.writeTrusted([]);
+    f.writePending([]);
+
+    const ok = await waitUntil(() => recordsFor('device_denied', TOK).length > 0);
+    assert.ok(ok, '此前这种情况在 trusted 差集里看不出任何变化，pending 差集必须单独捕捉到');
+    assert.equal(recordsFor('device_denied', TOK)[0].outcome, 'denied');
+    assert.equal(recordsFor('device_approved', TOK).length, 0);
+    assert.equal(recordsFor('device_revoked', TOK).length, 0);
+  });
+
+  test('新增一条待审批请求（addPendingDevice 效果）不产生任何审计噪音', async (t) => {
+    const f = makeFixture(t);
+    const TOK = `gate-diff-newpending-${Date.now()}`;
+    f.writeTrusted([]);
+    f.writePending([]);
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } },
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+    });
+
+    f.writePending([{ deviceToken: TOK, ip: '10.0.0.3', userAgent: 'ua', ts: Date.now() }]);
+    // 纯新增不该触发任何审计——给足够时间让 watcher 有机会误报，然后断言仍是零
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(recordsFor('device_approved', TOK).length, 0);
+    assert.equal(recordsFor('device_denied', TOK).length, 0);
+    assert.equal(recordsFor('device_revoked', TOK).length, 0);
   });
 });
