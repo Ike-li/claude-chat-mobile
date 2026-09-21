@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = "https://ike-li.github.io/claude-chat-mobile"
 URLS = [
     f"{BASE}/",
+    f"{BASE}/zh/",  # 静态中文首页：整站中文可索引量全靠它，坏了不会有任何功能报错
+    f"{BASE}/demo/",
+    f"{BASE}/diagrams/",
     f"{BASE}/en/quickstart.html",
     f"{BASE}/en/security.html",
     f"{BASE}/docs-site/",
@@ -181,7 +184,7 @@ def main() -> None:
     snap = {
         "schema_version": 1,
         "site": BASE,
-        "label": "post-seo-A-B-ship",
+        "label": "post-zh-page-and-license-fix",
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": "seo-baseline/capture.py (curl; Clash-safe)",
         "note": (
