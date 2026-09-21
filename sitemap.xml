@@ -1,16 +1,86 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+        xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.png</image:loc>
+      <image:title>Dangerous actions approved from the phone</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-en.png</image:loc>
+      <image:title>Streaming output with Markdown rendering</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-en.png</image:loc>
+      <image:title>Tool-call cards</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/04-workspace-en.png</image:loc>
+      <image:title>Multi-repository workspace session switcher</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/05-settings-en.png</image:loc>
+      <image:title>Fine-grained settings control</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/06-console-en.png</image:loc>
+      <image:title>Direct log viewing</image:title>
+    </image:image>
+    <video:video>
+      <video:thumbnail_loc>https://ike-li.github.io/claude-chat-mobile/demo-poster.jpg</video:thumbnail_loc>
+      <video:title>Driving your terminal claude CLI from a phone</video:title>
+      <video:description>A reply streams in, tool cards appear inline, then a git push is approved from the phone.</video:description>
+      <video:content_loc>https://ike-li.github.io/claude-chat-mobile/demo.mp4</video:content_loc>
+      <video:duration>25</video:duration>
+      <video:family_friendly>yes</video:family_friendly>
+    </video:video>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/zh/</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg</image:loc>
+      <image:title>Claude Chat Mobile — 终端里的 claude，手机上也能用</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-zh.png</image:loc>
+      <image:title>Dangerous actions approved from the phone</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-zh.png</image:loc>
+      <image:title>Streaming output with Markdown rendering</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-zh.png</image:loc>
+      <image:title>Tool-call cards</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/04-workspace-en.png</image:loc>
+      <image:title>Multi-repository workspace session switcher</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/05-settings-en.png</image:loc>
+      <image:title>Fine-grained settings control</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/06-console-en.png</image:loc>
+      <image:title>Direct log viewing</image:title>
+    </image:image>
+    <video:video>
+      <video:thumbnail_loc>https://ike-li.github.io/claude-chat-mobile/demo-poster.jpg</video:thumbnail_loc>
+      <video:title>在手机上驾驶你终端里的 claude CLI</video:title>
+      <video:description>回复流式吐出、工具卡就地展开，然后在手机上放行一次 git push。</video:description>
+      <video:content_loc>https://ike-li.github.io/claude-chat-mobile/demo.mp4</video:content_loc>
+      <video:duration>25</video:duration>
+      <video:family_friendly>yes</video:family_friendly>
+    </video:video>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/demo/</loc>
