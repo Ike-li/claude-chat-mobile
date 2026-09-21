@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://ike-li.github.io/claude-chat-mobile/">网站</a> ·
+  <a href="https://ike-li.github.io/claude-chat-mobile/zh/">网站</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/demo/">在线演示</a> ·
   <a href="https://ike-li.github.io/claude-chat-mobile/diagrams/">架构图集</a><br>
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
