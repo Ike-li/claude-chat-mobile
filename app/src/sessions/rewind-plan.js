@@ -135,6 +135,82 @@ function isHumanPrompt(e) {
  * 对应的 tool_use 就悬空了。工具卡在前端 DOM 里没有 uuid（history.js 只给文本类挂），
  * 所以那个锚点【结构上】就看不见轮次的尾巴，只能由服务端对着 transcript 算。
  */
+// 终端 `/rewind` 第二步那三个模式各自要做哪几步。
+// 1. Restore code and conversation · 2. Restore conversation · 3. Restore code
+//
+// 【未知值退化成「两样都做」而不是「都不做」】旧前端不带 mode 字段，若按未知值当空操作处理，
+// confirm 会成功返回却什么也没干——用户以为回退了，实际没有。宁可多做（文件回滚可由 git 找回、
+// 分叉不动原会话），不可静默少做。
+export function rewindStepsFor(mode) {
+  if (mode === 'conversation') return { restoreCode: false, forkConversation: true };
+  if (mode === 'code') return { restoreCode: true, forkConversation: false };
+  return { restoreCode: true, forkConversation: true };
+}
+
+// confirm 该不该拿 planRewind 的拒绝挡住这次回退。返回 null＝放行，否则是拦截 reason。
+//
+// planRewind 是【对话轴】判据：first-turn＝这一轮之前没有可保留的锚点，分叉会退化成复制一个
+// 空会话。但「只恢复代码」根本不 fork，那一轮的文件快照照样能还原——preview 已经为此放行了
+// 首轮，confirm 若仍无条件拒绝，新暴露的那个按钮就是点了必然报错的假选项（PR #104 review）。
+// 放宽【只对 first-turn】成立：prompt-not-found 是「这条根本不在这个会话里」，任何模式都不该动手。
+export function rewindConfirmBlocked(plan, mode) {
+  if (plan?.ok) return null;
+  const { forkConversation } = rewindStepsFor(mode);
+  if (!forkConversation && plan?.reason === 'first-turn') return null;
+  return plan?.reason ?? 'bad-input';
+}
+
+// `/rewind` 第一步那张清单：每一轮人类 prompt + 这一轮动过几个文件 + 能不能回退。
+//
+// 【文件数为什么要跟上一轮比】file-history-snapshot.trackedFileBackups 是【累积】快照
+// （真实会话 cdb36ede 实测 7→8→9 递增），直接读它的 size 会把整段历史的累计数报成「这一轮」。
+// 同一文件被改第二次时 key 不变、version 提升，所以比较要连 version 一起看。
+// 【为什么不逐条问 rewindFiles】那是 N 次 SDK 控制请求，列个清单不该付这个代价；
+// snapshot 就在 transcript 里，且 messageId 实测 45/45 全指向人类 prompt，够用。
+export function listRewindCandidates(entries) {
+  if (!Array.isArray(entries)) return [];
+  const snapshots = new Map();
+  for (const e of entries) {
+    if (e?.type === 'file-history-snapshot' && typeof e.messageId === 'string') {
+      snapshots.set(e.messageId, e.snapshot?.trackedFileBackups ?? {});
+    }
+  }
+  const prompts = entries.filter(e => isHumanPrompt(e) && typeof e.uuid === 'string');
+  return prompts.map((e, i) => {
+    // 【这一轮动了几个文件 = 下一轮的 snapshot 减本轮的】snapshot 在 prompt 落盘那一刻拍摄，
+    // 记的是「本轮【开始前】」的还原点，所以两个相邻 snapshot 的差反映的是【前一轮】干了什么。
+    // 实证（真实会话 cdb36ede）：纯提问的那轮 snapshot 里多出两个文件，backupTime 与该轮 prompt
+    // 同一毫秒级时刻，而那两个文件是上一轮「新开一个文件」创建的。按「本轮 − 上一轮」归因会整体
+    // 错位一行：真动了文件的那轮报 0，紧随其后的纯提问轮报 N。
+    const cur = snapshots.get(e.uuid);
+    const next = i + 1 < prompts.length ? snapshots.get(prompts[i + 1].uuid) : undefined;
+    let changedFiles;
+    if (i + 1 >= prompts.length) {
+      // 最后一轮的改动还没有「下一个 snapshot」来反映，从 transcript 上无从得知。报 0 是撒谎
+      // （它可能改了一堆）；标未知，准确值由第二步的 preview（rewindFiles dryRun）给。
+      changedFiles = null;
+    } else if (!next) {
+      changedFiles = 0;
+    } else {
+      const before = cur ?? {};
+      changedFiles = Object.entries(next)
+        .filter(([path, info]) => before[path]?.version !== info?.version)
+        .length;
+    }
+    return {
+      promptUuid: e.uuid,
+      text: extractPromptText(e),
+      timestamp: e.timestamp ?? null,
+      changedFiles,
+      // 【两个轴分开，不要压成一个 canRewind】planRewind 是【对话轴】判据：首轮之前没有可保留
+      // 的锚点，fork 会退化成复制一个空会话。但「只恢复代码」根本不 fork，首轮的文件快照照样能
+      // 还原——压成一个字段等于让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。
+      canForkConversation: planRewind(entries, e.uuid).ok,
+      canRestoreCode: true,
+    };
+  });
+}
+
 export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
   if (!Array.isArray(entries) || !anchorUuid) return { ok: false, reason: 'bad-input' };
   const at = entries.findIndex(e => e && e.uuid === anchorUuid);

@@ -1,5 +1,30 @@
 # 变更记录
 
+## v1.12.0 — 2026-09-21
+
+Changes since v1.11.0.
+
+### Verified environment
+- claude CLI: 2.1.278
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Features
+- feat(rewind): 回退改走 /rewind 斜杠命令的两步面板，撤掉长按气泡入口
+
+### Fixes
+- fix(rewind): confirm 也要放行首轮的「只恢复代码」，并让文案别描述另一个操作
+- fix(rewind): 修 PR #102 review 的三条——守卫短路、两轴混判、文件数错位一行
+- fix(sync): 己方秒回的轮次被判成终端写入，重复气泡 + 误锁「终端会话运行中」
+- fix(composer): 删草稿只认 displayed 表面身份；displayedCwd 移出 app.js 顶层
+- fix(composer): 新会话页的草稿按 cwd 分槽，切走再回来不再蒸发
+
+### Other
+- test(integration): 退役「首轮 first-turn 拒绝」那条，它的覆盖目标随改动失效了
+- test(integration): 首轮 preview 不再整体拒绝，反转那条固化了旧行为的断言
+- docs(architecture): 记 CLI rewind 的不可见窗口，并更正「文件变长=历史变长」
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.11.0...v1.12.0
+
 ## v1.11.0 — 2026-09-19
 
 Changes since v1.10.2.

@@ -206,6 +206,47 @@ test('catchUpStep: 无增长 → 不推、baseline 不变', () => {
   assert.equal(r.reload, false);
 });
 
+// ── 己方写盘不得被判成终端写入（2026-09-21 真机）──────────────────────────────
+// 现象：手机上秒回的短轮次结束后，同一问一答被渲染两遍，底部弹出「只读镜像：终端会话运行中」。
+// transcript 里那条消息【只有一条】，终端全程没参与（主链全是 sdk-ts）。
+//
+// 成因是判据错了轴：己方写盘本来有两道防线——localBusy 时抑制追平、wasBusy 时整段吸收，
+// 两道都依赖「tick 至少撞见一次 busy」。而 catchUpTick 常态 2.5s 一跳，实测那轮从发出到收尾
+// 只有 2s（截图上写着 Worked for 1s），整轮落在两次 tick 之间，busy 一次都没被观察到。
+// 于是下一 tick 只看到「磁盘比 baseline 长了」，判为外部写入：既把己方刚写的推回前端（重复气泡），
+// 又喂给 mirrorReleaseStep 的 externalWrite —— 那里第一行就是无条件上锁。
+//
+// 「磁盘变长」回答不了「是谁写的」。transcript 每条自带 entrypoint（sdk-ts=己方 / cli=终端），
+// 那是磁盘自报的事实、不依赖任何时序，判据改用它。白名单只认 sdk-ts，与 isOwnSdkTail 同一口径：
+// 取值不认识就保守当外部写入 —— 误锁用户点「续接」能化解，漏锁造成的两端并发写分叉不可逆。
+const OWN = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}`, entrypoint: 'sdk-ts' }));
+
+test('catchUpStep: 增量全是己方 SDK 写的 → 吸收，不推气泡也不算外部写入', () => {
+  const r = catchUpStep({ baseline: 2, wasBusy: false }, { messages: OWN(5), localBusy: false });
+  assert.deepEqual(r.emit, [], '推回去就是重复气泡：live 流已经渲染过这几条了');
+  assert.equal(r.reload, false);
+  assert.equal(r.state.baseline, 5, 'baseline 必须推进，否则下一 tick 还会重判一次');
+});
+
+test('catchUpStep: 增量里有终端写的 → 照常推，锁照常上', () => {
+  const messages = [...OWN(2), { role: 'user', content: '终端里说的', entrypoint: 'cli' }];
+  const r = catchUpStep({ baseline: 2, wasBusy: false }, { messages, localBusy: false });
+  assert.deepEqual(r.emit.map(m => m.content), ['终端里说的']);
+});
+
+test('catchUpStep: 增量缺 entrypoint（老 transcript）→ 保守当外部写入，不得静默吞掉', () => {
+  // 白名单口径：不认识的来源一律回落既有行为。漏推历史是静默的，多推一条是看得见的。
+  const r = catchUpStep({ baseline: 2, wasBusy: false }, { messages: M(4), localBusy: false });
+  assert.deepEqual(r.emit.map(m => m.content), ['m2', 'm3']);
+});
+
+test('catchUpStep: 己方增量里混进一条终端写的 → 整段按外部处理', () => {
+  // 两端交错写同一会话时必须上锁，这正是单驾驶员模型要防的；按「多数是己方」放行会漏掉它。
+  const messages = [...OWN(2), { role: 'user', content: '终端插了一条', entrypoint: 'cli' }, { role: 'assistant', content: '己方续写', entrypoint: 'sdk-ts' }];
+  const r = catchUpStep({ baseline: 2, wasBusy: false }, { messages, localBusy: false });
+  assert.equal(r.emit.length, 2, '混合增量不拆分：只要有一条是终端写的，整段都按外部走');
+});
+
 // ── rewind 的前缀重写（PR #98 review，2026-09-19）────────────────────────────
 // 上面那条收缩判据只罩住「撤销后没补回来」。真实用法里用户 rewind 完往往立刻接着聊，
 // 于是长度可能回到原值、甚至超过原值，而【已经推给前端的那一段】早被换掉了：

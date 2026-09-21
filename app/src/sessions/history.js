@@ -219,6 +219,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           apiError: entry.error ?? null,
         });
         for (const item of expanded) {
+          // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
+          // 「磁盘变长」回答不了这个问题，而 localBusy/wasBusy 那两道时序防线漏得掉秒级轮次
+          // （见 catchUpStep 里那段注释）。磁盘自报，缺字段就不带、由下游按未知保守处理。
+          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
           // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
           if (!isSide && item.kind === 'tool_use'
               && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
@@ -341,8 +345,24 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
     return { emit: [], reload: true, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
   }
   if (len > state.baseline) {
+    const delta = messages.slice(state.baseline);
+    // 【「磁盘变长」回答不了「是谁写的」】己方写盘本有两道防线——localBusy 抑制追平、wasBusy 整段
+    // 吸收——但两道都依赖「tick 至少撞见一次 busy」。catchUpTick 常态 2.5s 一跳，而手机上秒回的
+    // 轮次可能 2s 就收尾（2026-09-21 真机），整轮落在两次 tick 之间时 busy 一次都观察不到，于是
+    // 己方刚写的那几条被判成终端写入：既推回前端成重复气泡，又让 mirrorReleaseStep 的 externalWrite
+    // 无条件上锁、谎称「终端会话运行中」。
+    // entrypoint 是磁盘自报的事实，不依赖任何时序。白名单只认 sdk-ts，与 isOwnSdkTail 同口径：
+    // 取值不认识就保守当外部写入——误锁用户点「续接」能化解，漏锁造成的两端并发写分叉不可逆。
+    // 混合增量（两端交错写）整段按外部走，那正是单驾驶员模型要拦的。
+    if (delta.every(m => isOwnSdkTail(m?.entrypoint))) {
+      return {
+        emit: [],
+        reload: false,
+        state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) },
+      };
+    }
     return {
-      emit: messages.slice(state.baseline),
+      emit: delta,
       reload: false,
       state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) },
     };

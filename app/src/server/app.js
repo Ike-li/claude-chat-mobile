@@ -67,7 +67,7 @@ import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, 
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
-import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
@@ -3191,6 +3191,34 @@ registerSocketConnection(io, socket => {
   //  ② 截断可行性（planRewind）【在 rewindFiles 之前】——CLI 对「丢弃区间混进了别的轮」是
   //     确定性拒绝且不可重试，等到 confirm 才发现时磁盘已经回滚过了，那个撕裂态无法自动恢复。
   //     判据 CCM 自己能复算（transcript 就在磁盘上），所以提前到这里，拒绝时一个字节都没动。
+  // `/rewind` 第一步的清单：列出每一轮人类 prompt，供用户挑「回到哪一轮之前」。**只读**。
+  //
+  // 【为什么不复用 session:history】那份是展平后的气泡（一轮会展成多条 text/tool_use），
+  // 且工具卡不带 uuid；回退锚点只认人类 prompt 自身的 uuid，得从原始 jsonl 条目上取。
+  // 【text 在这里截断】清单只需要一行预览，而大会话有几百轮，整段正文传过去是白付流量。
+  on(socket, 'session:rewind:candidates', async (payload, ack) => {
+    const reply = (r) => { if (typeof ack === 'function') ack(r); };
+    const sessionId = payload?.sessionId;
+    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      reply({ ok: false, error: '会话不存在' });
+      return;
+    }
+    let entries;
+    try {
+      entries = await readSessionEntries(cwd, sessionId);
+    } catch (err) {
+      console.error('[rewind] 读取候选失败', err?.message || err);
+      reply({ ok: false, error: '无法读取会话历史' });
+      return;
+    }
+    const items = listRewindCandidates(entries).map(c => ({
+      ...c,
+      text: c.text.length > 200 ? `${c.text.slice(0, 200)}…` : c.text,
+    }));
+    reply({ ok: true, items });
+  });
+
   on(socket, 'session:rewind:preview', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
@@ -3226,13 +3254,18 @@ registerSocketConnection(io, socket => {
       return;
     }
 
-    // G10 截断可行性预判（见上方 ②）
+    // G10 截断可行性预判（见上方 ②）。
+    // 【只挡对话轴，别连文件轴一起挡】planRewind 回答的是「分叉时该保留到哪条」，首轮之前没有
+    // 可保留的锚点所以它返回 first-turn。但「只恢复代码」根本不 fork，那一轮的文件快照照样能
+    // 还原——在这里整体拒绝等于让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。
+    // 其余 reason（prompt-not-found 等）仍然是整体性失败，照旧拒绝。
     const entries = await readSessionEntries(cwd, sessionId);
     const plan = planRewind(entries, promptUuid);
-    if (!plan.ok) {
+    if (!plan.ok && plan.reason !== 'first-turn') {
       reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
       return;
     }
+    const canForkConversation = plan.ok;
 
     let res;
     try {
@@ -3275,7 +3308,9 @@ registerSocketConnection(io, socket => {
       filesChanged,
       insertions: res?.insertions ?? 0,
       deletions: res?.deletions ?? 0,
-      keepUuid: plan.keepUuid,
+      keepUuid: plan.keepUuid ?? null,
+      // 对话轴单独回一个字段：首轮能恢复代码但不能分叉，前端据此只禁掉需要 fork 的那两个模式。
+      canForkConversation,
       dirtyOverlap,
     });
   });
@@ -3349,8 +3384,16 @@ registerSocketConnection(io, socket => {
 
       const entries = await readSessionEntries(cwd, sessionId);
       const plan = planRewind(entries, promptUuid);
-      if (!plan.ok) {
-        reply({ ok: false, error: describeRewindBlocker(plan), reason: plan.reason });
+
+      // 终端 /rewind 第二步的三个模式：两样都做 / 只对话 / 只文件。未知值退化成「两样都做」，
+      // 判据与理由见 sessions/rewind-plan.js 的 rewindStepsFor。
+      // 【必须在 planRewind 的拒绝之前读】那是【对话轴】判据（first-turn＝之前没有可保留的锚点），
+      // 而「只恢复代码」根本不 fork。preview 已经为此放行了首轮，confirm 这边若仍无条件拒绝，
+      // 新暴露的那个按钮就是点了必然失败的假选项（PR #104 review）。
+      const { restoreCode, forkConversation } = rewindStepsFor(payload?.mode);
+      const blocked = rewindConfirmBlocked(plan, payload?.mode);
+      if (blocked) {
+        reply({ ok: false, error: describeRewindBlocker(plan), reason: blocked });
         return;
       }
       // 回退的下一步多半是把这句话改一改重说，所以把原话带回去回填输入框（edit-and-retry）。
@@ -3358,7 +3401,10 @@ registerSocketConnection(io, socket => {
       const prefill = extractPromptText(entries.find(e => e?.uuid === promptUuid));
 
       // ── 第 1 步：物理回滚 ──
-      let real;
+      // restoreCode=false（只回退对话）时整段跳过：一个字节都不该碰磁盘，连 dryRun 都不发——
+      // 那是 control_request，会白白占住 CLI 一个往返。
+      let real = null;
+      if (restoreCode) {
       // 留住原始 promise：超时只是本 handler 不再等，那个 control_request 还在飞。
       const rollback = inst.q.rewindFiles(promptUuid, { dryRun: false });
       try {
@@ -3385,22 +3431,30 @@ registerSocketConnection(io, socket => {
         reply({ ok: false, error: real?.error || '回退失败，文件未改动', reason: 'rewind-refused' });
         return;
       }
+      }
 
       // ── 第 2 步：G6 复核 ── 不信 canRewind：per-file 失败既不计入 skippedLinks 也不抛错，
       // 「回退了一半」这一档接口是成功返回的。再 dryRun 一次，真恢复到位就该「无事可做」。
-      let recheck = null;
-      try { recheck = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: true })); } catch { /* 保守判失败 */ }
-      const verdict = rewindOutcomeVerdict(recheck);
+      // 没回滚过就没有可复核的，verdict 留空（下面 base 里按 restoreCode 决定要不要带它）。
+      let verdict = null;
+      if (restoreCode) {
+        let recheck = null;
+        try { recheck = await withRewindTimeout(inst.q.rewindFiles(promptUuid, { dryRun: true })); } catch { /* 保守判失败 */ }
+        verdict = rewindOutcomeVerdict(recheck);
+      }
 
       // ── 第 3 步：分叉出新会话（原会话完整保留）──
       // upToMessageId 是 inclusive slice：新会话保留到 keepUuid 为止，即目标轮之前的全部内容。
+      // forkConversation=false（只回退文件）时不产生新会话：用户留在原会话里，对话一条没少。
       let newId = null, forkError = null;
-      try {
-        ({ sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid }));
-        sessions.bumpGeneration(cwd);
-      } catch (err) {
-        forkError = err?.message || String(err);
-        console.error('[rewind] 分叉失败', forkError);
+      if (forkConversation) {
+        try {
+          ({ sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid }));
+          sessions.bumpGeneration(cwd);
+        } catch (err) {
+          forkError = err?.message || String(err);
+          console.error('[rewind] 分叉失败', forkError);
+        }
       }
 
       refreshStatusLine('rewind').catch(err => console.error('[statusline]', err));
@@ -3411,8 +3465,11 @@ registerSocketConnection(io, socket => {
         type: 'rewind_applied',
         payload: {
           cwd, droppedFromUuid: promptUuid, forkedSessionId: newId,
-          filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
-          skippedLinks: real.skippedLinks ?? 0,
+          filesChanged: Array.isArray(real?.filesChanged) ? real.filesChanged : [],
+          skippedLinks: real?.skippedLinks ?? 0,
+          // 前端据此挑文案。少了它，「只恢复代码」这档（本来就不该有新会话）会被
+          // 按 forkedSessionId 为空误报成「新会话创建失败」。
+          mode: forkConversation ? (restoreCode ? 'code_and_conversation' : 'conversation') : 'code',
         },
       });
 
@@ -3420,15 +3477,18 @@ registerSocketConnection(io, socket => {
         ok: true,
         forkedSessionId: newId,
         prefill,
-        filesChanged: Array.isArray(real.filesChanged) ? real.filesChanged : [],
-        skippedLinks: real.skippedLinks ?? 0,
-        unrestored: verdict.unrestored,
+        filesChanged: Array.isArray(real?.filesChanged) ? real.filesChanged : [],
+        skippedLinks: real?.skippedLinks ?? 0,
+        unrestored: verdict?.unrestored ?? 0,
         // warning 只留【整体性】问题的整句。「哪几个文件没恢复」「几个软链接被跳过」是
         // 结构化数据（unrestored / skippedLinks），交给前端按 i18n 组装——服务端这边是裸中文，
         // 拼进去英文用户就只能看中文。见 public/js/logic/rewind.js。
+        // 只回退对话时文件根本没动过，措辞不能照说「文件已回退」。
         warning: forkError
-          ? `文件已回退，但新会话创建失败（${forkError}）。原会话未受影响，可重试。`
+          ? `${restoreCode ? '文件已回退，但' : ''}新会话创建失败（${forkError}）。原会话未受影响，可重试。`
           : null,
+        // 前端据此区分「没有新会话」是本来就不该有（只回退文件）还是 fork 失败了。
+        mode: forkConversation ? (restoreCode ? 'code_and_conversation' : 'conversation') : 'code',
       };
       if (!newId) { reply(base); return; }
       // 复用 session:fork 的「打开/聚焦」收尾：切到新会话，与既有分叉体验一致。

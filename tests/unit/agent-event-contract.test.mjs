@@ -329,7 +329,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        从哪个分支切出来是用户必须能选的——只读当前分支等于把这个决定藏起来，而选错分支要到
   //        合并时才发现。只读，与 git:status 同一道 cwd 范围门；分支名本身就是信息（功能代号、
   //        客户名），不当无害元数据放行。入向 55→56）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 56);
+  //      + session:rewind:candidates（2026-09-20，/rewind 第一步那张「回到哪一轮之前」的清单。
+  //        对齐终端 /rewind 的两步交互：先选回退点，再选三个模式之一。只读，不能复用
+  //        session:history——那份是展平后的气泡（一轮展成多条 text/tool_use）且工具卡不带 uuid，
+  //        而回退锚点只认人类 prompt 自身的 uuid，得从原始 jsonl 条目取。入向 56→57）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 57);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:branches'));

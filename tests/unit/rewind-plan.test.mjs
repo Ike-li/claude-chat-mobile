@@ -12,7 +12,7 @@
 // 夹具偏离真实契约会让两边自洽地一起错（testing.md §3「fixture 编错外部契约时恒绿」）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../../app/src/sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../../app/src/sessions/rewind-plan.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -410,5 +410,164 @@ test.describe('planFork / planRewind：锚点资格', () => {
     ];
     // r1 是保留轮自己的尾巴，锚点要走到它；u2 才是下一轮的开始
     assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+});
+
+// ── rewindStepsFor：终端 /rewind 第二步那三个模式各自要做哪几步 ──────────────────
+// 1. Restore code and conversation · 2. Restore conversation · 3. Restore code
+// 缺省必须落在「两样都做」上：旧前端不带 mode 字段，按未知值退化成只做一半会静默改变行为。
+test.describe('rewindStepsFor', () => {
+  test('缺省（旧前端不传 mode）→ 文件与对话都回退', () => {
+    assert.deepEqual(rewindStepsFor(undefined), { restoreCode: true, forkConversation: true });
+  });
+  test('code_and_conversation → 两样都做', () => {
+    assert.deepEqual(rewindStepsFor('code_and_conversation'), { restoreCode: true, forkConversation: true });
+  });
+  test('conversation → 只分叉对话，不碰磁盘文件', () => {
+    assert.deepEqual(rewindStepsFor('conversation'), { restoreCode: false, forkConversation: true });
+  });
+  test('code → 只回滚文件，不产生新会话', () => {
+    assert.deepEqual(rewindStepsFor('code'), { restoreCode: true, forkConversation: false });
+  });
+  test('无法识别的 mode → 退化成缺省而不是两样都不做（空操作会让用户以为回退成功了）', () => {
+    assert.deepEqual(rewindStepsFor('nonsense'), { restoreCode: true, forkConversation: true });
+  });
+});
+
+// ── rewindConfirmBlocked：confirm 该不该拿 planRewind 的拒绝挡住这次回退 ──────────
+// planRewind 是【对话轴】判据（first-turn＝之前没有可保留的锚点，分叉会退化成复制空会话），
+// 而「只恢复代码」根本不 fork。preview 为此放行了首轮，confirm 若仍无条件拒绝，那个按钮就是
+// 点了必然报错的假选项（PR #104 review 抓到的）。
+//
+// 【为什么提成纯函数】E2E 打的是 mock server，把 mock 改对了真 server 的这个缺陷照样全绿
+// （实测：注入「confirm 恢复无条件拒绝」后 P0-REWINDb 仍然绿）；而集成档的 fake-claude 不实现
+// rewindFiles 控制请求，走不到这一步。判据留在 handler 里就没有任何一层能钉住它。
+test.describe('rewindConfirmBlocked', () => {
+  const firstTurn = { ok: false, reason: 'first-turn' };
+  const notFound = { ok: false, reason: 'prompt-not-found' };
+
+  test('计划可行 → 不挡（任何模式）', () => {
+    for (const mode of [undefined, 'code_and_conversation', 'conversation', 'code']) {
+      assert.equal(rewindConfirmBlocked({ ok: true, keepUuid: 'a1' }, mode), null);
+    }
+  });
+
+  test('首轮 + 只恢复代码 → 放行（不 fork 就不需要对话锚点）', () => {
+    assert.equal(rewindConfirmBlocked(firstTurn, 'code'), null);
+  });
+
+  test('首轮 + 任何要分叉的模式 → 仍然挡住', () => {
+    assert.equal(rewindConfirmBlocked(firstTurn, 'code_and_conversation'), 'first-turn');
+    assert.equal(rewindConfirmBlocked(firstTurn, 'conversation'), 'first-turn');
+    // 缺省（旧前端不带 mode）退化成「两样都做」，同样要挡
+    assert.equal(rewindConfirmBlocked(firstTurn, undefined), 'first-turn');
+  });
+
+  test('其余 reason 与模式无关，一律挡住', () => {
+    // 放宽只对 first-turn 成立：prompt-not-found 是「这条根本不在这个会话里」，
+    // 任何模式下都不该动手。
+    for (const mode of [undefined, 'code', 'conversation']) {
+      assert.equal(rewindConfirmBlocked(notFound, mode), 'prompt-not-found');
+    }
+  });
+});
+
+// ── listRewindCandidates：/rewind 第一步那张「回到哪一轮之前」的清单 ──────────────
+// 终端 /rewind 先列出每一轮人类 prompt，并在每条下面标出这一轮动过几个文件（没动就是
+// "No code changes"）。数据来自 transcript 自带的 file-history-snapshot，不必逐条去问
+// rewindFiles ——那是 N 次 SDK 控制请求，列个清单不该付这个代价。
+//
+// 夹具形态取自真实会话 cdb36ede 的实测（45 条 snapshot）：
+//   · snapshot.messageId 【全部】指向人类 prompt 的 uuid（45/45，不是 assistant）
+//   · snapshot.trackedFileBackups 是【累积】快照（实测 7→8→9 递增），不是本轮增量
+// 所以「这一轮动了几个文件」只能靠与上一轮的快照相比，直接读 size 会把历史累计数报上去。
+test.describe('listRewindCandidates', () => {
+  const snap = (messageId, backups) => ({
+    type: 'file-history-snapshot', messageId,
+    snapshot: { messageId, trackedFileBackups: backups, timestamp: '2024-01-01T00:00:00Z' },
+  });
+
+  test('只列人类 prompt，tool_result 那种 user 条目不算一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      { uuid: 'a1', type: 'assistant', message: { content: '答' } },
+      { uuid: 'r1', type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.deepEqual(got.map(c => c.promptUuid), ['u1', 'u2']);
+    assert.deepEqual(got.map(c => c.text), ['第一问', '第二问']);
+  });
+
+  // 【2026-09-21 修正错位（PR #102 review）】snapshot 在 prompt 落盘那一刻拍摄，记的是
+  // 「本轮开始前」的还原点，所以 snapshot(N) − snapshot(N-1) 反映的是 **turn N-1** 的改动。
+  // 实证（真实会话 cdb36ede）：「我们为什么用到了 gunicorn」是纯提问，它的 snapshot 里却多出
+  // 两个文件，backupTime 与该轮 prompt 同一毫秒级时刻，而那两个文件正是【上一轮】「写成一篇新
+  // 文章、新开一个文件」创建的。原实现按「本轮 − 上一轮」归因，整体错位一行：改文件的那轮报 0、
+  // 紧随其后的纯提问轮报 N。
+  test('changedFiles 归给真正动过文件的那一轮，不是下一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '写个文件' } },
+      snap('u1', {}),                                   // 第一轮【开始前】：什么都没追踪
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '纯提问' } },
+      snap('u2', { 'a.py': { version: 1 } }),           // 第二轮开始前：a.py 已被第一轮碰过
+      { uuid: 'u3', type: 'user', timestamp: '2024-01-01T00:02:00Z', message: { content: '再问' } },
+      snap('u3', { 'a.py': { version: 1 } }),           // 第三轮开始前：与上一次相同 ⇒ 第二轮没动文件
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got[0].changedFiles, 1, '写文件的是第一轮，它才该记 1');
+    assert.equal(got[1].changedFiles, 0, '第二轮只提问；报 1 就是把上一轮的账算到它头上');
+  });
+
+  test('同一文件被改第二次：版本号提升算改动，归给动手的那一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '改第二次' } },
+      snap('u1', { 'a.py': { version: 1 } }),
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '下一轮' } },
+      snap('u2', { 'a.py': { version: 2 } }),
+    ];
+    assert.equal(listRewindCandidates(entries)[0].changedFiles, 1);
+  });
+
+  // 最后一轮的改动还没有「下一个 snapshot」来反映，从 transcript 上无从得知。
+  // 报 0 是撒谎（它可能改了一堆），所以标 null＝未知，前端不显示文件数；
+  // 准确值由第二步的 preview（rewindFiles dryRun）给。
+  test('最后一轮的文件数未知（null），不得报成 0', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '一' } },
+      snap('u1', {}),
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '二' } },
+      snap('u2', { 'a.py': { version: 1 } }),
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got[0].changedFiles, 1);
+    assert.equal(got[1].changedFiles, null, '报 0 会让「最后一轮改了文件」看起来像没改');
+  });
+
+  test('没有 snapshot 的轮次报 0（对应终端的 No code changes），不得漏掉这一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '只聊天' } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '也只聊天' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got.length, 2);
+    assert.deepEqual(got.map(c => c.changedFiles), [0, null]);
+  });
+
+  // 【2026-09-21 拆分（PR #102 review）】canRewind 原先只来自 planRewind，那是【对话轴】的判据
+  // （首轮之前没有可保留的锚点，fork 会退化成复制一个空会话）。但「只恢复代码」不 fork，
+  // 首轮的文件快照照样能还原——把两个轴压成一个字段，等于让单轮会话完全用不了 Restore code，
+  // 而终端能。
+  test('首轮：不能分叉对话，但可以只恢复代码', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      { uuid: 'a1', type: 'assistant', message: { content: '答' } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got[0].canForkConversation, false, '首轮之前没有可保留的锚点');
+    assert.equal(got[0].canRestoreCode, true, '文件轴不受对话轴限制，否则单轮会话永远回退不了代码');
+    assert.equal(got[1].canForkConversation, true);
+    assert.equal(got[1].canRestoreCode, true);
   });
 });
