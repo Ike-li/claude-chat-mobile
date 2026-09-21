@@ -26,6 +26,20 @@ let pendingDevices = []; // Array of { deviceToken, ip, userAgent, ts }
 // 正常单用户设备数远小于此；超出按插入序丢最旧（攻击 flood 是新到的，真实少量旧设备优先保留）。
 export const MAX_PENDING_DEVICES = 50;
 
+// deviceToken 来自 socket.io 握手 JSON 体，不经 HTTP header 过滤。app.js 在非交互模式下会把它
+// 原样拼进一条打印给操作员复制运行的 shell 命令（node scripts/device.js approve "<token>"），
+// 带 "/`/$/\ 的值就是一条可复制粘贴执行任意命令的注入；控制字符（含换行）能伪造额外的控制台输出。
+// 长度上限防单条把 pending-devices.json 不成比例撑大（maxHttpBufferSize 是 32MB）。
+// 不要求逐字节匹配客户端实际生成的 32 位十六进制格式——那会拒掉本文件其它测试与本仓一贯使用的
+// 可读占位符 token（如 'device-1'），这里只挡真正危险的字符类，不是格式。
+const MAX_DEVICE_TOKEN_LENGTH = 128;
+// eslint-disable-next-line no-control-regex -- 故意匹配控制字符（含换行），不是笔误
+const DANGEROUS_DEVICE_TOKEN_CHARS = /[\x00-\x1f\x7f"`$\\]/;
+export function isValidDeviceToken(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_DEVICE_TOKEN_LENGTH
+    && !DANGEROUS_DEVICE_TOKEN_CHARS.test(value);
+}
+
 export function loadTrustedDevices() {
   try {
     if (!existsSync(TRUSTED_DEVICES_FILE)) {
@@ -331,7 +345,7 @@ export function isDeviceTrusted(deviceToken) {
 }
 
 export function addPendingDevice(deviceToken, info) {
-  if (!deviceToken || typeof deviceToken !== 'string') return;
+  if (!isValidDeviceToken(deviceToken)) return;
   loadPendingDevices();
   // 过滤掉同设备已存在的旧记录
   pendingDevices = pendingDevices.filter(d => d.deviceToken !== deviceToken);

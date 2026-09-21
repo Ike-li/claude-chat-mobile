@@ -88,6 +88,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
+  isValidDeviceToken,
   addPendingDevice,
   getLatestPendingDevice,
   approveDevice,
@@ -879,6 +880,9 @@ io.use(async (socket, next) => {
         // 否则是 peer。此前直接取 peer，反代后每张卡都是 127.0.0.1，「核对再批」无从核对（2026-09-06 容器演练）。
         const ip = clientSourceAddress(socket.handshake, clientIp, rlTrust).address;
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
+        // 控制台打印的审批命令下面会把 deviceToken 原样拼进双引号——只有格式校验通过的值才安全
+        // 显示/拼接（isValidDeviceToken 同一判据也是 addPendingDevice 内部的准入闸）。
+        const safeDeviceToken = isValidDeviceToken(deviceToken) ? deviceToken : null;
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
         // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，用户锁屏或在别的 app 时整道
@@ -898,7 +902,7 @@ io.use(async (socket, next) => {
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);
-        console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
+        console.log(`   设备 ID: ${safeDeviceToken || (deviceToken ? '（格式非法，未记录）' : '（未提供）')}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
         // 「电脑控制台」曾让用户满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
@@ -907,9 +911,11 @@ io.use(async (socket, next) => {
         if (process.stdin.isTTY) {
           console.log(`   -> 就在这个窗口（跑着 npm start 的这个终端）里按【回车键 (Enter)】一键同意此设备`);
           console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
-        } else {
+        } else if (safeDeviceToken) {
           console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备（必须在本项目目录下跑）：`);
-          console.log(`      cd ${HERE} && node scripts/device.js approve "${deviceToken}"`);
+          console.log(`      cd ${HERE} && node scripts/device.js approve "${safeDeviceToken}"`);
+        } else {
+          console.log(`   -> 该连接的设备 ID 格式非法，未加入待审列表，无法生成审批命令。`);
         }
         console.log('==================================================\n');
       }
