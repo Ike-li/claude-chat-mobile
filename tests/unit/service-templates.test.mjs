@@ -23,7 +23,10 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SERVICE_UNIT_NAMES, renderVarsFor, templateFor } from '../../app/src/ops/service-units.js';
+import {
+  SERVICE_UNIT_NAMES, renderVarsFor, templateFor,
+  extractUnitFacts, expectedFactsFor, diffUnitSemantics,
+} from '../../app/src/ops/service-units.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -82,6 +85,65 @@ test.describe('desktop/launchd/*.plist.template ⇔ UNITS 表', () => {
       }
     });
   }
+});
+
+// desktop/launchd/server.plist.template 的启动命令（`exec "__SHQ_NODE__" app/server.js`）与
+// app/src/ops/service-units.js 解析它取 repo/node 的正则，CLAUDE.md 点名【必须逐字一致】——
+// 漏改一边会让服务面板的 repo/node 字段静默变成 null，且此前没有任何门禁或测试盯着这条不变量：
+// 三份相关测试要么只测占位符替换（上面这组）、要么用内联字符串夹具、要么用硬编码的 plist 夹具，
+// 没有一条真的把渲染产物喂给解析器。这里补上真模板渲染 → 平台无关解析 → 与
+// expectedFactsFor 逐字段比对，diffUnitSemantics 必须为空数组。
+//
+// 【为什么不用 plutil】上面那组「合法 plist」检查已经跳过了非 macOS——这条要在 CI（Linux 容器）
+// 上也生效，所以直接在渲染出的 XML 文本里用正则取 <key>/<string>/<array> 三种节点、解 XML 实体，
+// 不依赖任何系统工具。只覆盖本仓模板实际用到的这几种节点形状，不是通用 plist 解析器。
+function decodeXmlEntities(s) {
+  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+}
+function parsePlistXmlDict(xml) {
+  const obj = {};
+  const re = /<key>([^<]+)<\/key>\s*(?:<string>([\s\S]*?)<\/string>|(<true\/>)|(<false\/>)|<array>([\s\S]*?)<\/array>)/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const [, key, str, isTrue, isFalse, arr] = m;
+    if (str !== undefined) obj[key] = decodeXmlEntities(str);
+    else if (isTrue) obj[key] = true;
+    else if (isFalse) obj[key] = false;
+    else if (arr !== undefined) {
+      obj[key] = [...arr.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((s) => decodeXmlEntities(s[1]));
+    }
+  }
+  return obj;
+}
+
+test.describe('模板渲染产物与 service-units.js 的解析语义逐字段一致（不依赖 plutil，全平台生效）', () => {
+  for (const unit of SERVICE_UNIT_NAMES) {
+    test(`${unit}: diffUnitSemantics 为空`, () => {
+      const parsed = parsePlistXmlDict(renderReal(unit));
+      const actual = extractUnitFacts(unit, parsed);
+      const expected = expectedFactsFor(unit, CTX);
+      assert.deepEqual(
+        diffUnitSemantics(unit, expected, actual), [],
+        `真模板渲染后解析出的语义与期望值不一致：actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)}`,
+      );
+    });
+  }
+
+  // 证伪：模拟「入口又挪了一次、只改了模板这一边」——service-units.js 的解析正则原样不动。
+  // 不碰真实模板文件，只在内存里改一份副本喂进同一条渲染→解析→比对流水线。
+  test('server: 入口从 app/server.js 挪到别处而两边只改一边 → 必须被抓出漂移', () => {
+    const raw = readFileSync(join(ROOT, templateFor('server')), 'utf8')
+      .replace('app/server.js', 'app/main.js');
+    const rendered = renderTemplate(stripLeadingComment(raw), renderVarsFor('server', CTX));
+    const actual = extractUnitFacts('server', parsePlistXmlDict(rendered));
+    assert.equal(actual.repo, null, '解析器认的后缀已经不再匹配，repo 应解不出来（服务面板会静默显示 null）');
+    assert.equal(actual.node, null);
+    assert.deepEqual(
+      diffUnitSemantics('server', expectedFactsFor('server', CTX), actual), ['shape'],
+      '两个关键字段都解不出来时按 shape 漂移报告，不是逐字段比对出一堆 null≠值 的噪音',
+    );
+  });
 });
 
 // plutil 是 macOS 自带；Linux CI（test:docker）上没有，跳过而不是假装通过。
