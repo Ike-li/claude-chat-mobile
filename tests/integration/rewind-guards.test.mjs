@@ -86,11 +86,16 @@ test.describe('Rewind 拒绝档（真 server，零 token）', () => {
     }
   });
 
-  test('会话第一轮 → first-turn 拒绝（真 server 上的 planRewind）', async () => {
+  // 【2026-09-21 反转（PR #102 review）】原断言是「第一轮 → ok:false + reason:first-turn」。
+  // planRewind 判的是【对话轴】：首轮之前没有可保留的锚点，分叉会退化成复制一个空会话。
+  // 但「只恢复代码」根本不 fork，那一轮的文件快照照样能还原——在 preview 里整体拒绝，等于让
+  // 单轮会话完全用不了 Restore code，而终端能。现在放行并单独回 canForkConversation:false，
+  // 由前端只禁掉需要 fork 的那两个模式。其余 reason（见下一条 prompt-not-found）仍照旧拒绝。
+  test('会话第一轮 → 放行但标明不能分叉对话（对话轴受限，文件轴不受影响）', async () => {
     const res = await emit('session:rewind:preview', { cwd: workDir, sessionId: SESSION_ID, promptUuid: 'u-1' });
-    assert.equal(res.ok, false, '第一轮之前没有可保留的锚点，分叉会退化成复制一个空会话');
-    assert.equal(res.reason, 'first-turn');
-    assert.match(res.error, /第一轮/, '错误文案要点名是什么挡住的，否则用户不知道该换个位置还是根本不行');
+    assert.equal(res.ok, true, '整体拒绝会让单轮会话用不了「只恢复代码」，而终端能');
+    assert.equal(res.canForkConversation, false, '首轮之前没有可保留的锚点，分叉仍然不可用');
+    assert.equal(res.keepUuid, null, '没有锚点就不该编一个出来');
   });
 
   test('不存在的 uuid → prompt-not-found 拒绝', async () => {
