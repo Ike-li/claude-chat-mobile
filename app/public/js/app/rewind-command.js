@@ -152,15 +152,22 @@ export function createRewindCommandController(context, {
     // 真机实测用户连点 6 次，每次同一句话、界面上没有任何下一步。出路一直都在：对话轴不要求有
     // 文件改动。所以这里不再整体拒绝，只把两个要动文件的模式置灰，「只恢复对话」照常可选。
     const canCode = res.canRewind !== false;
+    const canFork = res.canForkConversation !== false && picked.canForkConversation !== false;
     const files = Array.isArray(res.filesChanged) ? res.filesChanged : [];
-    // 第一行永远说清 fork 语义（终端同一位置写的是 "The conversation will be forked."）：
-    // 这是本方案区别于原地截断的核心——原会话一个字节不动，用户据此知道回退不是不可逆的。
-    const forkLine = `<div>${t('对话将分叉出新会话，原会话完整保留。')}</div>`;
+    // 【文案要按两个轴一起算】终端在这个位置写的是 "The conversation will be forked."，那是
+    // 本方案区别于原地截断的核心（原会话一个字节不动）——但只在真会 fork 时才能这么说。
+    // 首轮唯一可点的是「只恢复代码」、根本不 fork，照说「将分叉出新会话」就是在描述另一个操作。
+    const forkLine = canFork
+      ? `<div>${t('对话将分叉出新会话，原会话完整保留。')}</div>`
+      : `<div>${t('这是会话首轮，无法分叉对话，只能恢复代码。')}</div>`;
     let codeLine;
     if (!canCode) {
-      codeLine = res.reason === 'no-checkpoint'
-        ? t('找不到这一轮的文件快照，只能恢复对话。')
-        : t('这一轮没有代码改动，只能恢复对话。');
+      // 两个轴都不行 = 没有任何模式可点，得说清是死路而不是让人对着全灰的按钮猜。
+      codeLine = !canFork
+        ? t('这一轮既没有可恢复的文件，也无法分叉对话。')
+        : res.reason === 'no-checkpoint'
+          ? t('找不到这一轮的文件快照，只能恢复对话。')
+          : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
       const shown = files.slice(0, 3).map(escapeHtml).join('、');
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;
@@ -176,7 +183,7 @@ export function createRewindCommandController(context, {
     }
     effectEl.innerHTML = `${forkLine}<div class="mt-1">${codeLine}</div>`;
     // 对话轴以 preview 的回答为准（清单那份是同源算的，但 preview 更晚、更权威）。
-    setModeButtons(true, canCode, res.canForkConversation !== false && picked.canForkConversation !== false);
+    setModeButtons(true, canCode, canFork);
   }
 
   // enabled=整体可用（preview 回来了、confirm 不在飞）

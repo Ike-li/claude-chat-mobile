@@ -147,6 +147,19 @@ export function rewindStepsFor(mode) {
   return { restoreCode: true, forkConversation: true };
 }
 
+// confirm 该不该拿 planRewind 的拒绝挡住这次回退。返回 null＝放行，否则是拦截 reason。
+//
+// planRewind 是【对话轴】判据：first-turn＝这一轮之前没有可保留的锚点，分叉会退化成复制一个
+// 空会话。但「只恢复代码」根本不 fork，那一轮的文件快照照样能还原——preview 已经为此放行了
+// 首轮，confirm 若仍无条件拒绝，新暴露的那个按钮就是点了必然报错的假选项（PR #104 review）。
+// 放宽【只对 first-turn】成立：prompt-not-found 是「这条根本不在这个会话里」，任何模式都不该动手。
+export function rewindConfirmBlocked(plan, mode) {
+  if (plan?.ok) return null;
+  const { forkConversation } = rewindStepsFor(mode);
+  if (!forkConversation && plan?.reason === 'first-turn') return null;
+  return plan?.reason ?? 'bad-input';
+}
+
 // `/rewind` 第一步那张清单：每一轮人类 prompt + 这一轮动过几个文件 + 能不能回退。
 //
 // 【文件数为什么要跟上一轮比】file-history-snapshot.trackedFileBackups 是【累积】快照

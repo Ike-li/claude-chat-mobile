@@ -1730,7 +1730,13 @@ io.on('connection', socket => {
     const forkConversation = mode !== 'code';
     // 只回退对话时不碰文件，所以「这一轮有没有可回退的文件改动」根本不成为门槛——
     // u-archived-4/5（canRewind:false 那两档）走 conversation 必须放行，那正是它们的出路。
-    if (restoreCode && promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
+    // first-turn（u-archived-1）只在【需要 fork】时才拒 —— 对齐真 server：planRewind 是对话轴
+    // 判据，而「只恢复代码」不 fork，照拒就是让那个按钮点了必然失败（PR #104 review）。
+    if (forkConversation && promptUuid === 'u-archived-1') {
+      callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
+      return;
+    }
+    if (restoreCode && !['u-archived-1', 'u-archived-2', 'u-archived-3'].includes(promptUuid)) {
       callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
       return;
     }

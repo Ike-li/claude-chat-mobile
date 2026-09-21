@@ -314,8 +314,20 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expect(page.locator('#rewindModeBoth')).toBeDisabled();
     await expect(page.locator('#rewindModeCode')).toBeEnabled();
 
+    // 文案不能描述另一个操作：这一档唯一可点的动作不 fork，照说「将分叉出新会话」是假话。
+    await expect(page.locator('#rewindEffect')).not.toContainText('分叉出新会话');
+    await expect(page.locator('#rewindEffect')).toContainText('无法分叉对话');
+
+    // 【这个按钮必须真能用】只改 preview 放行、confirm 那边照旧拒 first-turn 的话，
+    // 它就是点了必然报错的假选项（PR #104 review）。点下去要真成功。
+    await page.locator('#rewindModeCode').click();
+    await expect(page.locator('#messages')).toContainText('对话未改动', { timeout: 10_000 });
+    await expect(page.locator('#rewindModal')).toBeHidden();
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    await runRewindCommand(page);
+
     // 正常轮次三个模式都开着——否则一个「永远只留 Restore code」的实现也能让上面全绿。
-    await page.locator('#rewindBack').click();
     await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
     await expect(page.locator('#rewindModeConversation')).toBeEnabled({ timeout: 3_000 });
     await expect(page.locator('#rewindModeBoth')).toBeEnabled();

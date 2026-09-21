@@ -12,7 +12,7 @@
 // 夹具偏离真实契约会让两边自洽地一起错（testing.md §3「fixture 编错外部契约时恒绿」）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor } from '../../app/src/sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../../app/src/sessions/rewind-plan.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -431,6 +431,44 @@ test.describe('rewindStepsFor', () => {
   });
   test('无法识别的 mode → 退化成缺省而不是两样都不做（空操作会让用户以为回退成功了）', () => {
     assert.deepEqual(rewindStepsFor('nonsense'), { restoreCode: true, forkConversation: true });
+  });
+});
+
+// ── rewindConfirmBlocked：confirm 该不该拿 planRewind 的拒绝挡住这次回退 ──────────
+// planRewind 是【对话轴】判据（first-turn＝之前没有可保留的锚点，分叉会退化成复制空会话），
+// 而「只恢复代码」根本不 fork。preview 为此放行了首轮，confirm 若仍无条件拒绝，那个按钮就是
+// 点了必然报错的假选项（PR #104 review 抓到的）。
+//
+// 【为什么提成纯函数】E2E 打的是 mock server，把 mock 改对了真 server 的这个缺陷照样全绿
+// （实测：注入「confirm 恢复无条件拒绝」后 P0-REWINDb 仍然绿）；而集成档的 fake-claude 不实现
+// rewindFiles 控制请求，走不到这一步。判据留在 handler 里就没有任何一层能钉住它。
+test.describe('rewindConfirmBlocked', () => {
+  const firstTurn = { ok: false, reason: 'first-turn' };
+  const notFound = { ok: false, reason: 'prompt-not-found' };
+
+  test('计划可行 → 不挡（任何模式）', () => {
+    for (const mode of [undefined, 'code_and_conversation', 'conversation', 'code']) {
+      assert.equal(rewindConfirmBlocked({ ok: true, keepUuid: 'a1' }, mode), null);
+    }
+  });
+
+  test('首轮 + 只恢复代码 → 放行（不 fork 就不需要对话锚点）', () => {
+    assert.equal(rewindConfirmBlocked(firstTurn, 'code'), null);
+  });
+
+  test('首轮 + 任何要分叉的模式 → 仍然挡住', () => {
+    assert.equal(rewindConfirmBlocked(firstTurn, 'code_and_conversation'), 'first-turn');
+    assert.equal(rewindConfirmBlocked(firstTurn, 'conversation'), 'first-turn');
+    // 缺省（旧前端不带 mode）退化成「两样都做」，同样要挡
+    assert.equal(rewindConfirmBlocked(firstTurn, undefined), 'first-turn');
+  });
+
+  test('其余 reason 与模式无关，一律挡住', () => {
+    // 放宽只对 first-turn 成立：prompt-not-found 是「这条根本不在这个会话里」，
+    // 任何模式下都不该动手。
+    for (const mode of [undefined, 'code', 'conversation']) {
+      assert.equal(rewindConfirmBlocked(notFound, mode), 'prompt-not-found');
+    }
   });
 });
 
