@@ -82,7 +82,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 | 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 单用户强制 Token，非本地网络设备指纹审批 |
 | 离线推送 | web-push (VAPID) · 可选 ntfy | 审批/提问无条件推送，前台可见连接智能抑制 |
 | 测试与门禁 | node --test · Playwright · 宿主机白名单 | S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作 |
-| 开源许可 | AGPL-3.0-only · NOTICE 补充条款 | 严格保障自托管权益 |
+| 开源许可 | Apache-2.0 · NOTICE 归属声明 | 可自由自托管、商用与闭源再分发 |
 
 从[阅读顺序指南](reading-guide.md)或[项目总览](overview.md)继续。
 
@@ -175,7 +175,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
     前端架构  原生 ESM PWA 架构；依赖完全本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
     测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 容器沙箱 HOME 隔离  
     配置管理  `ccm.config.json`（结构化配置，支持工作区热重载与统一 Schema）  
-    开源许可  AGPL-3.0-only · NOTICE 补充条款（严守自托管权益）  
+    开源许可  Apache-2.0 · NOTICE 归属声明（可自托管、商用与闭源再分发）  
  
 
 ## 仓库结构与代码地图
@@ -717,7 +717,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | npm run lint | ESLint 规则：语法正确性、无未定义引用、禁止死代码 | 代码风格散乱，隐式全局变量泄露 |
 | check-import-boundaries.js | 架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖） | 分层被穿透，模块相互缠绕演变为巨型单体 |
-| contract-check.js | 出向 agent:event （27 种）与入向 socket 事件在代码、前端与 Mock 中的双向一致性 | 协议静默失效，前端收不到特定类型事件 |
+| contract-check.js | 出向 agent:event （31 种）与入向 socket 事件在代码、前端与 Mock 中的双向一致性 | 协议静默失效，前端收不到特定类型事件 |
 | check-invariant-ids.js | 测试命名规范： tests/invariants/ 内的用例必须以 // 守护：  声明守护条目 | 不变量与测试脱节，出现无法追踪的假测试 |
 | check-destructive-deletes.js | 破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免 | 防止测试代码意外删除真实开发数据 |
 | check-playwright-forbidden-patterns.js | E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码 | E2E 测试出现偶发假红，耗费排查精力 |
@@ -971,7 +971,7 @@ sequenceDiagram
   instanceId,  // 内存 Agent 实体代号 (如 inst_1)
   cwd,         // 运行工作目录
   ts,          // 服务端生成的精确 ISO 时戳
-  type,        // 契约白名单内的事件类型 (当前共 27 种)
+  type,        // 契约白名单内的事件类型 (当前共 31 种)
   payload      // 业务具体数据载荷
 }
 ```
@@ -993,17 +993,17 @@ sequenceDiagram
 3. 自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。
 4. 若客户端请求的 lastSeq 早于环形缓冲中最旧的一条，回传携带 gap: true ，客户端触发完整历史拉取。
 
-## 出向 27 种契约事件分组
+## 出向 31 种契约事件分组
 
 | 业务功能分组 | 出向事件类型 (type) |
 | --- | --- |
 | 流式输出 | text_delta 、 thinking_delta 、 result |
 | 工具调用 | tool_use 、 tool_result |
-| 人机交互与审批 | permission_request 、 question 、 request_resolved |
-| 系统与控制 | init 、 system 、 error 、 user_message |
-| 会话状态与配置 | status_line 、 permission_mode 、 effort_mode 、 models 、 mirror_state 、 instances 、 worktree_status |
-| 后台任务与子代理 | task_notification 、 task_progress 、 api_retry 、 background_tasks_changed |
-| 设备与元数据 | device_status 、 pending_devices 、 session_log 、 history_append |
+| 人机交互与审批 | permission_request 、 question 、 request_resolved 、 prompt_suggestion |
+| 系统与控制 | init 、 system 、 error 、 user_message 、 diag_log |
+| 会话状态与配置 | status_line 、 permission_mode 、 effort_mode 、 models 、 mirror_state 、 instances 、 slash_commands 、 session_recap 、 rewind_applied |
+| 后台任务与子代理 | task_notification 、 task_progress 、 api_retry |
+| 设备与元数据 | device_status 、 pending_devices 、 trusted_devices 、 session_log 、 history_append |
 
 事件定义真相源唯一维护于 `app/src/shared/protocol.js`。门禁 `tests/gates/agent-event-contract.js` 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。
 
@@ -1649,9 +1649,9 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 
 ---
 
-入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（当前基线：出向类型 **27** 种、入向事件 **46** 种）。
+入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（当前基线：出向类型 **31** 种、入向事件 **57** 种）。
 
-## 出向 agent:event 契约类型 (27 种)
+## 出向 agent:event 契约类型 (31 种)
 
 所有服务端向客户端推送的事件统一封装为 `agent:event` 信封：
 
@@ -1659,28 +1659,28 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 | --- | --- | --- |
 | 流式输出与结果 | text_delta 、 thinking_delta 、 result | 文本与思考过程流式分块，轮次收尾结果 |
 | 工具调用 | tool_use 、 tool_result | 工具调用参数下发与执行结果回填 |
-| 人机交互与审批 | permission_request 、 question 、 request_resolved | 工具审批卡片、人机多选提问与决议完成 |
-| 核心状态同步 | init 、 instances 、 mirror_state 、 status_line | 会话初使化、活跃实例全景、只读镜像锁与动态状态行 |
+| 人机交互与审批 | permission_request 、 question 、 request_resolved 、 prompt_suggestion | 工具审批卡片、人机多选提问、输入建议与决议完成 |
+| 核心状态同步 | init 、 instances 、 mirror_state 、 status_line 、 rewind_applied | 会话初始化、活跃实例全景、只读镜像锁、动态状态行与回退生效通知 |
 | 模型与配置 | models 、 effort_mode 、 permission_mode 、 slash_commands | 可用模型池、思考强度档位、权限档位与斜杠指令清单 |
 | 后台任务与子代理 | task_notification 、 task_progress 、 api_retry | 后台子代理通知、进度瞬态广播与 API 限流重试提示 |
-| 元数据与审计 | session_log 、 diag_log 、 history_append 、 user_message | 会话日志追加、诊断日志、镜像增量消息与本地回显 |
-| 设备门禁 | device_status 、 pending_devices | 当前设备认证态与待审批新设备清单 |
+| 元数据与审计 | session_log 、 diag_log 、 history_append 、 user_message 、 session_recap | 会话日志追加、诊断日志、镜像增量消息、本地回显与会话摘要 |
+| 设备门禁 | device_status 、 pending_devices 、 trusted_devices | 当前设备认证态、待审批新设备清单与已信任设备表 |
 | 错误处理 | error 、 system | 业务异常与系统级别通知提示 |
 
-## 入向 Socket 契约事件 (46 种)
+## 入向 Socket 契约事件 (57 种)
 
 由客户端主动发往服务端的事件总线，受 `tests/gates/contract-check.js` 门禁进行双向严格比对校验：
 
 | 业务领域 | 包含的入向事件 |
 | --- | --- |
-| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent |
-| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing |
-| 设备与状态同步 | user:approveDevice user:denyDevice sync:since mirror:syncNow conn:ping client:presence |
+| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm |
+| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing permissions:rules |
+| 设备与状态同步 | user:approveDevice user:denyDevice user:renameTrustedDevice user:revokeTrustedDevice connect:qr sync:since mirror:syncNow conn:ping client:presence |
 | 已读位点共享 | read:mark read:sync user:ackUnread |
 | 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read |
-| 代码与 Git 集成 | git:status git:diff hooks:setup |
-| 后台任务管理 | task:stop task:output tool:preview tool:full |
-| 系统运维与诊断 | service:status doctor:run dev:restart logs:get logs:clientError audit:get push:test config:refresh env:get env:set |
+| 代码与 Git 集成 | git:status git:diff git:branches hooks:setup |
+| 后台任务管理 | task:stop task:output tool:preview tool:full subagent:flow |
+| 系统运维与诊断 | service:status doctor:run dev:restart logs:get logs:server logs:clientError audit:get push:test config:refresh env:get env:set statusline:setup |
 
 ## 受控 HTTP 运维端点
 
@@ -1763,7 +1763,7 @@ node scripts/config.js check               # 校验当前配置是否符合 Sche
 | 思考强度调整机制 | 旧手册声称 effort 无法动态修改，切档必须重建实例 | SDK 0.3.263 支持 applyFlagSettings({effortLevel}) 实时生效 | 彻底废弃实例销毁重建的低效方案 |
 | 附件物理存放位置 | 旧文档描述附件存放在工作区 .ccm-uploads/ | 附件已搬迁至 data/uploads/ / 受管数据根目录 | 旧目录仅作只读回退，避免污染用户代码仓库的 Git 树 |
 | 配置格式与单一源 | 旧文档以 .env 为主要配置说明 | 以根目录 ccm.config.json 结构化配置为首要真相源，优先于 .env | 由 config-file.js 统管读写，支持工作区热加载 |
-| 契约事件数量统计 | 旧手册记录入向 32 种、出向 25 种 | 基线已演进为： 出向 27 种，入向 46 种 | 新增了已读共享、设备管理、文件检索等大量双向事件 |
+| 契约事件数量统计 | 旧手册记录入向 32 种、出向 25 种 | 基线已演进为： 出向 31 种，入向 57 种 | 新增了已读共享、设备管理、文件检索等大量双向事件 |
 | 测试运行安全防线 | 旧指南未限制宿主机测试范围 | 落地 guard-host-tests 门禁，宿主机只允许跑 4 类白名单命令 | 可能破坏数据的测试一律强制进 Docker 沙箱执行 |
 | 多租户与产品立场 | 偶有讨论多租户扩展的提案 | 确立硬性规则 hard-rules.md 与产品宪法 C1–C5，坚决不做多租户 | 杜绝一切向 SaaS 模式演化的复杂设计 |
 

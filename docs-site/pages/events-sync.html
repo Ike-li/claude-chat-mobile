@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>事件信封与同步 · Claude Chat Mobile</title>
-<meta name="description" content="agent:event 信封、seq/epoch、sync:since、catch-up。">
+<meta name="description" content="agent:event 信封、seq/epoch、sync:since、catch-up。本页讲：标准事件信封 (agent:event)、分流与广播控制策略、断线快速重连：sync:since 协议。">
 <meta name="llm:tokens" content="1193">
 <link rel="alternate" type="text/markdown" href="events-sync.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.html">
@@ -56,7 +56,7 @@
   instanceId,  // 内存 Agent 实体代号 (如 inst_1)
   cwd,         // 运行工作目录
   ts,          // 服务端生成的精确 ISO 时戳
-  type,        // 契约白名单内的事件类型 (当前共 27 种)
+  type,        // 契约白名单内的事件类型 (当前共 31 种)
   payload      // 业务具体数据载荷
 }</code></pre>
 <ul>
@@ -80,18 +80,18 @@
   <li>若客户端请求的 <code>lastSeq</code> 早于环形缓冲中最旧的一条，回传携带 <code>gap: true</code>，客户端触发完整历史拉取。</li>
 </ol>
 
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>出向 27 种契约事件分组</h2>
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>出向 31 种契约事件分组</h2>
 <div class="table-wrap">
 <table>
 <thead><tr><th>业务功能分组</th><th>出向事件类型 (type)</th></tr></thead>
 <tbody>
 <tr><td>流式输出</td><td><code>text_delta</code>、<code>thinking_delta</code>、<code>result</code></td></tr>
 <tr><td>工具调用</td><td><code>tool_use</code>、<code>tool_result</code></td></tr>
-<tr><td>人机交互与审批</td><td><code>permission_request</code>、<code>question</code>、<code>request_resolved</code></td></tr>
-<tr><td>系统与控制</td><td><code>init</code>、<code>system</code>、<code>error</code>、<code>user_message</code></td></tr>
-<tr><td>会话状态与配置</td><td><code>status_line</code>、<code>permission_mode</code>、<code>effort_mode</code>、<code>models</code>、<code>mirror_state</code>、<code>instances</code>、<code>worktree_status</code></td></tr>
-<tr><td>后台任务与子代理</td><td><code>task_notification</code>、<code>task_progress</code>、<code>api_retry</code>、<code>background_tasks_changed</code></td></tr>
-<tr><td>设备与元数据</td><td><code>device_status</code>、<code>pending_devices</code>、<code>session_log</code>、<code>history_append</code></td></tr>
+<tr><td>人机交互与审批</td><td><code>permission_request</code>、<code>question</code>、<code>request_resolved</code>、<code>prompt_suggestion</code></td></tr>
+<tr><td>系统与控制</td><td><code>init</code>、<code>system</code>、<code>error</code>、<code>user_message</code>、<code>diag_log</code></td></tr>
+<tr><td>会话状态与配置</td><td><code>status_line</code>、<code>permission_mode</code>、<code>effort_mode</code>、<code>models</code>、<code>mirror_state</code>、<code>instances</code>、<code>slash_commands</code>、<code>session_recap</code>、<code>rewind_applied</code></td></tr>
+<tr><td>后台任务与子代理</td><td><code>task_notification</code>、<code>task_progress</code>、<code>api_retry</code></td></tr>
+<tr><td>设备与元数据</td><td><code>device_status</code>、<code>pending_devices</code>、<code>trusted_devices</code>、<code>session_log</code>、<code>history_append</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -99,7 +99,7 @@
 
         <nav class="pager"><a class="prev" href="agent-session.html"><span class="dir">← 上一篇</span><span class="ttl">AgentSession</span></a><a class="next" href="sessions-history.html"><span class="dir">下一篇 →</span><span class="ttl">会话与历史</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">标准事件信封 (agent:event)</a></li><li class="h2"><a href="#s2">分流与广播控制策略</a></li><li class="h2"><a href="#s3">断线快速重连：sync:since 协议</a></li><li class="h2"><a href="#s4">出向 27 种契约事件分组</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">标准事件信封 (agent:event)</a></li><li class="h2"><a href="#s2">分流与广播控制策略</a></li><li class="h2"><a href="#s3">断线快速重连：sync:since 协议</a></li><li class="h2"><a href="#s4">出向 31 种契约事件分组</a></li></ul></aside>
     </div>
   </div>
 </div>

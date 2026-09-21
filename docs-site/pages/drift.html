@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>漂移清单 · Claude Chat Mobile</title>
-<meta name="description" content="文档与代码不一致处，以代码为准。">
+<meta name="description" content="文档与代码不一致处，以代码为准。本页讲：已知漂移与历史修正清单、关于历史 design.md 标记的说明、手册维护约定。">
 <meta name="llm:tokens" content="1041">
 <link rel="alternate" type="text/markdown" href="drift.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.html">
@@ -57,7 +57,7 @@
 <tr><td>思考强度调整机制</td><td>旧手册声称 effort 无法动态修改，切档必须重建实例</td><td>SDK 0.3.263 支持 <code>applyFlagSettings({effortLevel})</code> 实时生效</td><td>彻底废弃实例销毁重建的低效方案</td></tr>
 <tr><td>附件物理存放位置</td><td>旧文档描述附件存放在工作区 <code>.ccm-uploads/</code></td><td>附件已搬迁至 <code>data/uploads/&lt;bucket&gt;/</code> 受管数据根目录</td><td>旧目录仅作只读回退，避免污染用户代码仓库的 Git 树</td></tr>
 <tr><td>配置格式与单一源</td><td>旧文档以 <code>.env</code> 为主要配置说明</td><td>以根目录 <code>ccm.config.json</code> 结构化配置为首要真相源，优先于 <code>.env</code></td><td>由 <code>config-file.js</code> 统管读写，支持工作区热加载</td></tr>
-<tr><td>契约事件数量统计</td><td>旧手册记录入向 32 种、出向 25 种</td><td>基线已演进为：<strong>出向 27 种，入向 46 种</strong></td><td>新增了已读共享、设备管理、文件检索等大量双向事件</td></tr>
+<tr><td>契约事件数量统计</td><td>旧手册记录入向 32 种、出向 25 种</td><td>基线已演进为：<strong>出向 31 种，入向 57 种</strong></td><td>新增了已读共享、设备管理、文件检索等大量双向事件</td></tr>
 <tr><td>测试运行安全防线</td><td>旧指南未限制宿主机测试范围</td><td>落地 <code>guard-host-tests</code> 门禁，宿主机只允许跑 4 类白名单命令</td><td>可能破坏数据的测试一律强制进 Docker 沙箱执行</td></tr>
 <tr><td>多租户与产品立场</td><td>偶有讨论多租户扩展的提案</td><td>确立硬性规则 <code>hard-rules.md</code> 与产品宪法 C1–C5，坚决不做多租户</td><td>杜绝一切向 SaaS 模式演化的复杂设计</td></tr>
 </tbody>

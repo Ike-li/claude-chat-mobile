@@ -2,7 +2,7 @@
 name: claude-chat-mobile
 description: Self-hosted mobile web interface bridging terminal Claude Code CLI to phone browsers via Anthropic Agent SDK.
 version: 2.0 (dev@687bca3)
-license: AGPL-3.0-only
+license: Apache-2.0
 repository: https://github.com/Ike-li/claude-chat-mobile
 docs: https://ike-li.github.io/claude-chat-mobile/docs-site/
 llms-txt: https://ike-li.github.io/claude-chat-mobile/llms.txt

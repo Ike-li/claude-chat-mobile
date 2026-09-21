@@ -1,5 +1,9 @@
 # Claude Chat Mobile
-> Phone UI that drives your terminal claude via the Agent SDK. Same session, same host settings; touch layout, not a screen mirror. Single-driver; single-user (n=1) self-hosted architecture.
+> Self-hosted mobile web UI for Claude Code: a phone UI that drives your own terminal `claude` CLI via the Agent SDK. Same session, same host settings; touch layout, not a screen mirror. Works with any gateway or API key the CLI is already configured for. Single-driver; single-user (n=1) self-hosted architecture.
+
+## Try It / See It
+- [Live Demo](https://ike-li.github.io/claude-chat-mobile/demo/): The real product frontend, driven by an in-browser fake backend. No install, no server, no network calls (CSP `connect-src 'none'`).
+- [Architecture Diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/): 13 interactive diagrams — dual-channel sync, single-driver lock, auth gates, approval lifecycle, push suppression, test placement.
 
 ## Primary Documents & Specs
 - [Project Overview](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.md): Core positioning, architecture, tech stack & fragile points
@@ -8,7 +12,7 @@
 - [Configuration Reference](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): Single source of truth schema for ccm.config.json & runtime options
 - [Architecture Evolution](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): Key decisions (sandbox isolation, access topology, tail attribution)
 - [Project Rules & Testing](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): Host command whitelist, S0-S7 execution slots & commit trailers
-- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 27 outbound agent:event types & 46 inbound socket events
+- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 31 outbound agent:event types & 57 inbound socket events
 - [Drift Notice](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): Documented reality vs code facts
 
 ## Full Handbook Pages (Markdown)

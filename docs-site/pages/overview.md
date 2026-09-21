@@ -30,7 +30,7 @@
     前端架构  原生 ESM PWA 架构；依赖完全本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
     测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 容器沙箱 HOME 隔离  
     配置管理  `ccm.config.json`（结构化配置，支持工作区热重载与统一 Schema）  
-    开源许可  AGPL-3.0-only · NOTICE 补充条款（严守自托管权益）  
+    开源许可  Apache-2.0 · NOTICE 归属声明（可自托管、商用与闭源再分发）  
  
 
 ## 仓库结构与代码地图

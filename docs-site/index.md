@@ -74,6 +74,6 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 | 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 单用户强制 Token，非本地网络设备指纹审批 |
 | 离线推送 | web-push (VAPID) · 可选 ntfy | 审批/提问无条件推送，前台可见连接智能抑制 |
 | 测试与门禁 | node --test · Playwright · 宿主机白名单 | S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作 |
-| 开源许可 | AGPL-3.0-only · NOTICE 补充条款 | 严格保障自托管权益 |
+| 开源许可 | Apache-2.0 · NOTICE 归属声明 | 可自由自托管、商用与闭源再分发 |
 
 从[阅读顺序指南](reading-guide.md)或[项目总览](overview.md)继续。

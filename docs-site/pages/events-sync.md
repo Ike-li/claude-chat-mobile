@@ -19,7 +19,7 @@
   instanceId,  // 内存 Agent 实体代号 (如 inst_1)
   cwd,         // 运行工作目录
   ts,          // 服务端生成的精确 ISO 时戳
-  type,        // 契约白名单内的事件类型 (当前共 27 种)
+  type,        // 契约白名单内的事件类型 (当前共 31 种)
   payload      // 业务具体数据载荷
 }
 ```
@@ -41,16 +41,16 @@
 3. 自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。
 4. 若客户端请求的 lastSeq 早于环形缓冲中最旧的一条，回传携带 gap: true ，客户端触发完整历史拉取。
 
-## 出向 27 种契约事件分组
+## 出向 31 种契约事件分组
 
 | 业务功能分组 | 出向事件类型 (type) |
 | --- | --- |
 | 流式输出 | text_delta 、 thinking_delta 、 result |
 | 工具调用 | tool_use 、 tool_result |
-| 人机交互与审批 | permission_request 、 question 、 request_resolved |
-| 系统与控制 | init 、 system 、 error 、 user_message |
-| 会话状态与配置 | status_line 、 permission_mode 、 effort_mode 、 models 、 mirror_state 、 instances 、 worktree_status |
-| 后台任务与子代理 | task_notification 、 task_progress 、 api_retry 、 background_tasks_changed |
-| 设备与元数据 | device_status 、 pending_devices 、 session_log 、 history_append |
+| 人机交互与审批 | permission_request 、 question 、 request_resolved 、 prompt_suggestion |
+| 系统与控制 | init 、 system 、 error 、 user_message 、 diag_log |
+| 会话状态与配置 | status_line 、 permission_mode 、 effort_mode 、 models 、 mirror_state 、 instances 、 slash_commands 、 session_recap 、 rewind_applied |
+| 后台任务与子代理 | task_notification 、 task_progress 、 api_retry |
+| 设备与元数据 | device_status 、 pending_devices 、 trusted_devices 、 session_log 、 history_append |
 
 事件定义真相源唯一维护于 `app/src/shared/protocol.js`。门禁 `tests/gates/agent-event-contract.js` 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。

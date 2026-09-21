@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * demo 站构建：把主仓 dev 分支的 app/public/ 原样搬过来，只动两处。
+ * demo 站构建：把主仓 dev 分支的 app/public/ 原样搬过来，只动三处。
  *
  *   1. index.html 里的绝对路径 → 相对路径
  *      产品跑在自己的 origin 根上，所以前端写的是 /js/app.js、/css/app.css。
@@ -10,6 +10,12 @@
  *
  *   2. <script src="/socket.io/socket.io.js"> → demo-data.js + demo-socket.js
  *      这个文件平时由 Socket.io server 自动提供，静态站没有它，正好当注入点。
+ *
+ *   3. <title> 与 SEO 头（description / canonical / OG）
+ *      产品自己的 index.html 只需要一个通用 <title>，它跑在你的私网里、不被抓取。
+ *      演示站相反：它是整站唯一能被搜索引擎收录的「可交互产品页」，缺 description
+ *      时搜索结果摘要会退化成页面里第一段可见文字（这里是 UI 里的按钮文案）。
+ *      canonical 同样必要——/demo 与 /demo/ 两个 URL 都可达，不指认就会被判重复。
  *
  * 除此之外前端一个字节都不改——演示站展示的必须是真前端，不是它的仿制品。
  *
@@ -92,6 +98,31 @@ function rewriteCssUrls(css, depthFromDemoRoot) {
 }
 
 /**
+ * 演示站的 SEO 头。只在演示站注入，不回流产品——产品页不需要被任何人抓取。
+ * og:image 必须是绝对 URL（相对路径在抓取端解析不出来），其余用相对路径即可。
+ */
+const SITE = 'https://ike-li.github.io/claude-chat-mobile';
+const DEMO_TITLE = '在线演示 · Claude Chat Mobile — 浏览器里直接试手机端 Claude Code 界面';
+const DEMO_DESC = '在浏览器里直接操作 Claude Chat Mobile 的真实前端：审批卡、工具卡、'
+  + '会话列表与流式输出。假后端跑在本地，不连任何服务器，也不用安装。';
+
+function seoHead() {
+  return [
+    `  <meta name="description" content="${DEMO_DESC}">`,
+    `  <link rel="canonical" href="${SITE}/demo/">`,
+    `  <meta property="og:type" content="website">`,
+    `  <meta property="og:title" content="${DEMO_TITLE}">`,
+    `  <meta property="og:description" content="${DEMO_DESC}">`,
+    `  <meta property="og:url" content="${SITE}/demo/">`,
+    `  <meta property="og:image" content="${SITE}/og-image.jpg">`,
+    `  <meta name="twitter:card" content="summary_large_image">`,
+    `  <meta name="twitter:title" content="${DEMO_TITLE}">`,
+    `  <meta name="twitter:description" content="${DEMO_DESC}">`,
+    `  <meta name="twitter:image" content="${SITE}/og-image.jpg">`,
+  ].join('\n');
+}
+
+/**
  * index.html 的三处重写。
  * 绝对路径正则只吃 ="/ 紧邻的形式，所以 https://… 的外链不会被误伤。
  */
@@ -112,6 +143,12 @@ function rewriteIndex(html) {
     + '  <script src="./demo-data.js"></script>\n'
     + '  <script src="./demo-socket.js"></script>\n'
     + '  <script src="./demo-overlay.js"></script>');
+
+  const titleTag = /<title>[\s\S]*?<\/title>/;
+  if (!titleTag.test(out)) {
+    throw new Error('没找到 <title>——SEO 头的注入点失效，构建中止');
+  }
+  out = out.replace(titleTag, `<title>${DEMO_TITLE}</title>\n${seoHead()}`);
 
   return out;
 }

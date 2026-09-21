@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | npm run lint | ESLint 规则：语法正确性、无未定义引用、禁止死代码 | 代码风格散乱，隐式全局变量泄露 |
 | check-import-boundaries.js | 架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖） | 分层被穿透，模块相互缠绕演变为巨型单体 |
-| contract-check.js | 出向 agent:event （27 种）与入向 socket 事件在代码、前端与 Mock 中的双向一致性 | 协议静默失效，前端收不到特定类型事件 |
+| contract-check.js | 出向 agent:event （31 种）与入向 socket 事件在代码、前端与 Mock 中的双向一致性 | 协议静默失效，前端收不到特定类型事件 |
 | check-invariant-ids.js | 测试命名规范： tests/invariants/ 内的用例必须以 // 守护：  声明守护条目 | 不变量与测试脱节，出现无法追踪的假测试 |
 | check-destructive-deletes.js | 破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免 | 防止测试代码意外删除真实开发数据 |
 | check-playwright-forbidden-patterns.js | E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码 | E2E 测试出现偶发假红，耗费排查精力 |

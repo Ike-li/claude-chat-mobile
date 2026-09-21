@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>契约与工程门禁 · Claude Chat Mobile</title>
-<meta name="description" content="事件契约、import 边界、inventory、check 流水线。">
+<meta name="description" content="事件契约、import 边界、inventory、check 流水线。本页讲：npm run check 门禁矩阵、测试体系与防假绿铁律、宿主机只跑白名单，其余进容器。">
 <meta name="llm:tokens" content="1409">
 <link rel="alternate" type="text/markdown" href="contracts-gates.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.html">
@@ -56,7 +56,7 @@
 <tbody>
 <tr><td><code>npm run lint</code></td><td>ESLint 规则：语法正确性、无未定义引用、禁止死代码</td><td>代码风格散乱，隐式全局变量泄露</td></tr>
 <tr><td><code>check-import-boundaries.js</code></td><td>架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖）</td><td>分层被穿透，模块相互缠绕演变为巨型单体</td></tr>
-<tr><td><code>contract-check.js</code></td><td>出向 <code>agent:event</code>（27 种）与入向 <code>socket</code> 事件在代码、前端与 Mock 中的双向一致性</td><td>协议静默失效，前端收不到特定类型事件</td></tr>
+<tr><td><code>contract-check.js</code></td><td>出向 <code>agent:event</code>（31 种）与入向 <code>socket</code> 事件在代码、前端与 Mock 中的双向一致性</td><td>协议静默失效，前端收不到特定类型事件</td></tr>
 <tr><td><code>check-invariant-ids.js</code></td><td>测试命名规范：<code>tests/invariants/</code> 内的用例必须以 <code>// 守护：&lt;编号&gt;</code> 声明守护条目</td><td>不变量与测试脱节，出现无法追踪的假测试</td></tr>
 <tr><td><code>check-destructive-deletes.js</code></td><td>破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免</td><td>防止测试代码意外删除真实开发数据</td></tr>
 <tr><td><code>check-playwright-forbidden-patterns.js</code></td><td>E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码</td><td>E2E 测试出现偶发假红，耗费排查精力</td></tr>

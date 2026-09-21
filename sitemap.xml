@@ -2,200 +2,284 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/zh/</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/demo/</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/en/quickstart.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/en/security.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/index.html</loc>
-    <lastmod>2026-07-23</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.9</priority>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/data-store.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/glossary.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/integrations.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/notify-status.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/ops-troubleshoot.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/production-deploy.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/reading-guide.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/single-driver.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.html</loc>
-    <lastmod>2026-07-23</lastmod>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/demo/</loc>
-    <lastmod>2026-09-17</lastmod>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/00-overview.html</loc>
+    <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.9</priority>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/01-web-drive.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/02-cli-mirror.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/03-single-driver.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/04-auth-gates.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/05-approval.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/06-push.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/07-files.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/08-envelope.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/09-ops.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/10-sessions.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/11-frontend.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/12-testing.html</loc>
+    <lastmod>2026-09-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
 </urlset>
