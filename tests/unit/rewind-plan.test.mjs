@@ -12,7 +12,7 @@
 // 夹具偏离真实契约会让两边自洽地一起错（testing.md §3「fixture 编错外部契约时恒绿」）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText } from '../../app/src/sessions/rewind-plan.js';
+import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindLockDecision, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor } from '../../app/src/sessions/rewind-plan.js';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -410,5 +410,98 @@ test.describe('planFork / planRewind：锚点资格', () => {
     ];
     // r1 是保留轮自己的尾巴，锚点要走到它；u2 才是下一轮的开始
     assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+});
+
+// ── rewindStepsFor：终端 /rewind 第二步那三个模式各自要做哪几步 ──────────────────
+// 1. Restore code and conversation · 2. Restore conversation · 3. Restore code
+// 缺省必须落在「两样都做」上：旧前端不带 mode 字段，按未知值退化成只做一半会静默改变行为。
+test.describe('rewindStepsFor', () => {
+  test('缺省（旧前端不传 mode）→ 文件与对话都回退', () => {
+    assert.deepEqual(rewindStepsFor(undefined), { restoreCode: true, forkConversation: true });
+  });
+  test('code_and_conversation → 两样都做', () => {
+    assert.deepEqual(rewindStepsFor('code_and_conversation'), { restoreCode: true, forkConversation: true });
+  });
+  test('conversation → 只分叉对话，不碰磁盘文件', () => {
+    assert.deepEqual(rewindStepsFor('conversation'), { restoreCode: false, forkConversation: true });
+  });
+  test('code → 只回滚文件，不产生新会话', () => {
+    assert.deepEqual(rewindStepsFor('code'), { restoreCode: true, forkConversation: false });
+  });
+  test('无法识别的 mode → 退化成缺省而不是两样都不做（空操作会让用户以为回退成功了）', () => {
+    assert.deepEqual(rewindStepsFor('nonsense'), { restoreCode: true, forkConversation: true });
+  });
+});
+
+// ── listRewindCandidates：/rewind 第一步那张「回到哪一轮之前」的清单 ──────────────
+// 终端 /rewind 先列出每一轮人类 prompt，并在每条下面标出这一轮动过几个文件（没动就是
+// "No code changes"）。数据来自 transcript 自带的 file-history-snapshot，不必逐条去问
+// rewindFiles ——那是 N 次 SDK 控制请求，列个清单不该付这个代价。
+//
+// 夹具形态取自真实会话 cdb36ede 的实测（45 条 snapshot）：
+//   · snapshot.messageId 【全部】指向人类 prompt 的 uuid（45/45，不是 assistant）
+//   · snapshot.trackedFileBackups 是【累积】快照（实测 7→8→9 递增），不是本轮增量
+// 所以「这一轮动了几个文件」只能靠与上一轮的快照相比，直接读 size 会把历史累计数报上去。
+test.describe('listRewindCandidates', () => {
+  const snap = (messageId, backups) => ({
+    type: 'file-history-snapshot', messageId,
+    snapshot: { messageId, trackedFileBackups: backups, timestamp: '2024-01-01T00:00:00Z' },
+  });
+
+  test('只列人类 prompt，tool_result 那种 user 条目不算一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      { uuid: 'a1', type: 'assistant', message: { content: '答' } },
+      { uuid: 'r1', type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.deepEqual(got.map(c => c.promptUuid), ['u1', 'u2']);
+    assert.deepEqual(got.map(c => c.text), ['第一问', '第二问']);
+  });
+
+  test('changedFiles 是相对上一轮的增量，不是累积快照的大小', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      snap('u1', { 'a.py': { version: 1 } }),
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+      // 累积到 3 个文件，但这一轮只新动了 b.py / c.py 两个
+      snap('u2', { 'a.py': { version: 1 }, 'b.py': { version: 1 }, 'c.py': { version: 1 } }),
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got[0].changedFiles, 1, '第一轮：从无到有，1 个');
+    assert.equal(got[1].changedFiles, 2, '第二轮：累积 3 个但增量是 2 个，报 3 就是把历史算进来了');
+  });
+
+  test('同一文件版本号提升也算这一轮动过（改第二次不能报成没动）', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '一' } },
+      snap('u1', { 'a.py': { version: 1 } }),
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '二' } },
+      snap('u2', { 'a.py': { version: 2 } }),
+    ];
+    assert.equal(listRewindCandidates(entries)[1].changedFiles, 1);
+  });
+
+  test('没有 snapshot 的轮次报 0（对应终端的 No code changes），不得当成未知而漏掉这一轮', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '只聊天' } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '也只聊天' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got.length, 2);
+    assert.deepEqual(got.map(c => c.changedFiles), [0, 0]);
+  });
+
+  test('第一轮不可回退（planRewind 的 first-turn）→ 标出来，让前端置灰而不是报错', () => {
+    const entries = [
+      { uuid: 'u1', type: 'user', timestamp: '2024-01-01T00:00:00Z', message: { content: '第一问' } },
+      { uuid: 'a1', type: 'assistant', message: { content: '答' } },
+      { uuid: 'u2', type: 'user', timestamp: '2024-01-01T00:01:00Z', message: { content: '第二问' } },
+    ];
+    const got = listRewindCandidates(entries);
+    assert.equal(got[0].canRewind, false, '第一轮之前没有可保留的锚点');
+    assert.equal(got[1].canRewind, true);
   });
 });

@@ -59,11 +59,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
     await secondUserBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
 
-    // 2026-09-10 起 user 气泡长按先弹二选一（回退 / 分叉）。这里选「从这里分叉」，
-    // 它与回退的方向相反：回退丢弃这条所在轮、分叉同样丢弃这条及之后，两者都由服务端
-    // 按同一个 planFork/planRewind 判据解析，前端只负责把方向说清楚。
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmAlt').click();
+    // 2026-09-20：user 气泡长按【直达分叉】。原先这里先弹「回退 / 分叉」二选一，回退改走
+    // /rewind 斜杠命令之后，长按只剩分叉这一个动作，中间那次选择没有了。
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
     await page.locator('#confirmOk').click();
     await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
@@ -127,9 +124,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
     await firstUserBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
 
-    // 先弹二选一；选「从这里分叉」后才走到"前面没有 assistant 可作锚点"这一档。
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmAlt').click();
+    // 长按直达分叉（2026-09-20 起不再弹二选一），随即撞上"前面没有 assistant 可作锚点"这一档：
+    // 不该弹确认框，直接说清楚为什么分不了。
     await expect(page.locator('#messages')).toContainText('这是最早一条消息', { timeout: 3_000 });
     await expect(page.locator('#confirmModal')).toBeHidden();
 
@@ -139,12 +135,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
 // ── 文件轴 Rewind ──
 test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
-  const longPressUser = async (page: import('@playwright/test').Page, text: string) => {
-    const bubble = page.locator('[data-testid="user-message"]', { hasText: text });
-    const box = await bubble.boundingBox();
-    if (!box) throw new Error(`user bubble not found: ${text}`);
-    const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
-    await bubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
+  // 2026-09-20：入口从「长按 user 气泡弹二选一」换成 /rewind 斜杠命令的两步面板（对齐终端）。
+  // 第一步在清单里按【文案】点中某一轮——按下标点的话，mock candidates 换个顺序就悄悄测了另一条。
+  // Composer C：空闲无内容时 #btnSend 是 hidden 的，要等 input 事件把它露出来再点
+  // （同 helpers/playwright.ts 的 sendChatMessage；press('Enter') 在这个 composer 上不发送）。
+  const runRewindCommand = async (page: import('@playwright/test').Page) => {
+    await page.locator('#input').fill('/rewind');
+    const btnSend = page.locator('#btnSend');
+    await expect(btnSend).toBeVisible({ timeout: 5_000 });
+    await btnSend.click();
+    await expect(page.locator('#rewindModal')).toBeVisible({ timeout: 3_000 });
+  };
+  const pickRewindTurn = async (page: import('@playwright/test').Page, text: string) => {
+    await runRewindCommand(page);
+    await page.locator('#rewindList').getByText(text, { exact: false }).click();
+    await expect(page.locator('#rewindStep2')).toBeVisible({ timeout: 3_000 });
   };
   const openArchived = async (page: import('@playwright/test').Page) => {
     await gotoMock(page);
@@ -154,24 +159,20 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expectSidebarClosed(page);
   };
 
-  test('P0-REWIND 长按用户气泡可回退该轮文件，确认框先列出影响面', async ({ page }) => {
+  test('P0-REWIND /rewind 面板可回退该轮文件，选模式前先列出影响面', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
 
-    // 用【第二条】user 气泡：第一条是会话首条消息，其前面没有可保留的 chain entry，
+    // 用【第二轮】：第一轮是会话首条消息，其前面没有可保留的 chain entry，
     // 真 server 的 planRewind 在那一档返回 first-turn（见下一条用例）。
-    await longPressUser(page, 'Any follow-up questions?');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 主动作 = 回退
+    await pickRewindTurn(page, 'Any follow-up questions?');
 
-    // preview 的影响面必须先摆出来再让人点确认——回退会真改磁盘，"确认"不能是盲签。
-    await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
-    await expect(page.locator('#confirmBody')).toContainText('完整保留');
+    // preview 的影响面必须先摆出来再让人选模式——回退会真改磁盘，选择不能是盲签。
+    await expect(page.locator('#rewindEffect')).toContainText('app.js', { timeout: 3_000 });
     // G5 的负向对照：工作区没有会被覆盖的未提交改动时【不该】出现警告。
     // 少了这一条，一个恒警告的实现也能让下面 P0-REWINDd 那条全绿——而恒警告等于没警告。
-    await expect(page.locator('#confirmBody')).not.toContainText('未提交的改动');
-    await expect(page.locator('#confirmBody')).toContainText('12'); // insertions
-    await page.locator('#confirmOk').click();
+    await expect(page.locator('#rewindEffect')).not.toContainText('未提交的改动');
+    await page.locator('#rewindModeBoth').click();
 
     // 成功路径的 UI 由 rewind_applied 广播驱动（本机与其他设备同一条路径）。
     // fork 语义：文案必须说清【原会话保留】——这是本方案相对原地截断的核心差异，
@@ -184,35 +185,22 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-REWINDc 输入框里已有内容时不回填，不覆盖用户正在打的字', async ({ page }) => {
-    await openArchived(page);
-    await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
-
-    await page.locator('#input').fill('我正在打的另一段话');
-    await longPressUser(page, 'Any follow-up questions?');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
-    await page.locator('#confirmOk').click();
-
-    await expect(page.locator('#messages')).toContainText('原会话保留', { timeout: 10_000 });
-    // 回退成功了，但输入框里的草稿必须原样还在——静默吞掉用户打了一半的话是不可接受的。
-    await expect(page.locator('#input')).toHaveValue('我正在打的另一段话');
-    await expectNoBrowserErrors(page);
-  });
+  // 【2026-09-20 退役】原 P0-REWINDc「输入框里已有内容时不回填，不覆盖用户正在打的字」。
+  // 入口从长按气泡换成 /rewind 斜杠命令之后，这个行为不存在了：要发起回退就得在输入框里
+  // 打 /rewind，草稿必然已经被顶掉，于是 prefill 永远落在空输入框上。
+  // 不是「测试删了」，是被测的东西随入口一起没了（同 rewind-plan.test.mjs 里那三条的处理）。
+  // prefill 本身仍然有效，由 P0-REWIND 那条的末尾断言守着。
 
   test('P0-REWINDd 文件回了但新会话没建成：如实告知，并说明原会话未受影响', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('One more thing please', { timeout: 10_000 });
 
-    await longPressUser(page, 'One more thing please');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#confirmBody')).toContainText('app.js', { timeout: 3_000 });
-    // G5：这一档的工作区有会被回退覆盖的未提交改动——警告必须摆在【点确认之前】，
+    await pickRewindTurn(page, 'One more thing please');
+    await expect(page.locator('#rewindEffect')).toContainText('app.js', { timeout: 3_000 });
+    // G5：这一档的工作区有会被回退覆盖的未提交改动——警告必须摆在【选模式之前】，
     // 事后再说就晚了，那些改动已经没了。
-    await expect(page.locator('#confirmBody')).toContainText('未提交的改动');
-    await page.locator('#confirmOk').click();
+    await expect(page.locator('#rewindEffect')).toContainText('未提交的改动');
+    await page.locator('#rewindModeBoth').click();
 
     // 这一支是「做了一半」：文件已经回退，但新会话没建成。不能只弹一句笼统的失败——
     // 用户需要知道①文件已经动了②原会话没事、可以重试。少任何一条他都不知道现在处境如何。
@@ -232,20 +220,20 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // 用户实测撞上的就是这一档：那一轮只跑了 Bash，checkpoint 只在 Edit/Write 前快照，
     // 于是 filesChanged 为空、canRewind 判 false。此前前端只 addBar 一句「这一轮没有可回退的
     // 文件改动」——讲清了为什么不行，但没讲还能干什么，用户连着试了 6 次拿到 6 条一样的话。
-    await longPressUser(page, 'Just run some shell commands');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 主动作 = 回退
+    await pickRewindTurn(page, 'Just run some shell commands');
 
-    // 出路必须是可点的，不能只是一句文案。
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await expect(page.locator('#confirmBody')).toContainText('Bash');       // 说清为什么没有可回退的
-    await expect(page.locator('#confirmBody')).toContainText('不动任何文件'); // 说清分叉不是回退
-    await page.locator('#confirmOk').click();
+    // 出路必须是可点的，不能只是一句文案。新面板里出路就是「只恢复对话」那个模式：
+    // 两个要动文件的模式置灰，它保持可点——比原先「再弹一个确认框问要不要改用分叉」少一跳。
+    await expect(page.locator('#rewindEffect')).toContainText('没有代码改动', { timeout: 3_000 });
+    await expect(page.locator('#rewindModeBoth')).toBeDisabled();
+    await expect(page.locator('#rewindModeCode')).toBeDisabled();
+    await expect(page.locator('#rewindModeConversation')).toBeEnabled();
+    await page.locator('#rewindModeConversation').click();
 
-    // 点下去应当直接进入分叉确认，而不是把用户扔回原地重来一遍。
-    await expect(page.locator('#confirmTitle')).toContainText('分叉', { timeout: 3_000 });
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
+    // 成功文案必须说清【文件没动】——这一档用户选它正是因为文件回不了，
+    // 照搬「已回退 0 个文件」那句会让人以为回退过一遍只是没东西可回。
+    await expect(page.locator('#messages')).toContainText('文件未改动', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('原会话保留');
     await expectNoBrowserErrors(page);
   });
 
@@ -256,16 +244,13 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // 与 P0-REWINDj 互为对照：两档都走「canRewind:false → 指向分叉」，但成因不同。
     // 把「没有文件改动」扣到这一档头上是假话——这一轮可能改了一堆文件，只是快照没了。
     // 判据写反时两条会同时红（这条断不该出现的词，那条断该出现的词）。
-    await longPressUser(page, 'An old turn with no snapshot');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 主动作 = 回退
+    await pickRewindTurn(page, 'An old turn with no snapshot');
 
-    await expect(page.locator('#confirmBody')).toContainText('快照', { timeout: 3_000 });
-    await expect(page.locator('#confirmBody')).not.toContainText('Bash');
-    // 出路仍然要给——成因不影响「改用分叉」这条路可走。
-    await expect(page.locator('#confirmBody')).toContainText('不动任何文件');
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#confirmTitle')).toContainText('分叉', { timeout: 3_000 });
+    await expect(page.locator('#rewindEffect')).toContainText('快照', { timeout: 3_000 });
+    await expect(page.locator('#rewindEffect')).not.toContainText('没有代码改动');
+    // 出路仍然要给——成因不影响「只恢复对话」这条路可走。
+    await expect(page.locator('#rewindModeConversation')).toBeEnabled();
+    await expect(page.locator('#rewindModeCode')).toBeDisabled();
     await expectNoBrowserErrors(page);
   });
 
@@ -279,31 +264,37 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     // 放行就会把 A 会话气泡的锚点和已经变成 B 的会话拼到一起发出去：那个请求做不出预期的分叉，
     // 用户还会停在 B 里只看到一句失败。成功路径早有同款校验（「会话已切换，回退已取消」），
     // 这条 fallback 分支必须对齐，不能因为它是「次要出路」就少一道。
-    await longPressUser(page, 'Switch away while I decide');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 主动作 = 回退
+    await pickRewindTurn(page, 'Switch away while I decide');
+    // preview 已经回来了，面板停在第二步等用户选模式；此时 mock 那条 instances 广播已把
+    // displayedSessionId 换掉。点下去必须被拦住。
+    await expect(page.locator('#rewindEffect')).toBeVisible({ timeout: 3_000 });
+    // 这一档 preview 判这一轮没有可回退的文件，两个要动文件的模式是置灰的——
+    // 点「只恢复对话」，拦截与选哪个模式无关。
+    await page.locator('#rewindModeConversation').click();
 
-    await expect(page.locator('#confirmBody')).toContainText('Bash', { timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 改用分叉
-
-    await expect(page.locator('#messages')).toContainText('会话已切换', { timeout: 5_000 });
-    // 反向断言：绝不能真的切到分叉出来的新会话去。
+    // 拦截发生在面板内部，提示也留在面板里（写进消息流的话会被 sheet 盖住，用户看不到）。
+    await expect(page.locator('#rewindEffect')).toContainText('会话已切换', { timeout: 5_000 });
+    // 反向断言：绝不能真的对旧锚点执行回退、切到分叉出来的新会话去。
     await expect(page.locator('#messages')).not.toContainText('Forked session ready.');
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-REWINDb 会话首条消息无可保留锚点时，preview 阶段就拒绝且不弹二次确认', async ({ page }) => {
+  test('P0-REWINDb 会话首条消息无可保留锚点：清单里就置灰，点不进第二步', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
 
-    await longPressUser(page, 'Summarize archived plan');
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click(); // 主动作 = 回退
+    await runRewindCommand(page);
 
-    // 拒绝发生在动任何文件【之前】，所以不该出现"将恢复 N 个文件"那道确认框。
-    // 文案要点名是什么挡住的（这里是"第一轮"），否则用户无从判断该换个位置试还是根本不行。
-    await expect(page.locator('#messages')).toContainText('第一轮', { timeout: 5_000 });
-    await expect(page.locator('#confirmModal')).toBeHidden();
+    // 首轮之前没有可保留的锚点（planRewind 判 first-turn）。拒绝提前到【清单】这一层：
+    // 连 preview 都不必发，更不该给一个点下去必然失败的选项。
+    // 文案要点名是什么挡住的，否则用户无从判断该换个位置试还是根本不行。
+    await expect(page.locator('#rewindList')).toContainText('会话首轮', { timeout: 3_000 });
+    await page.locator('#rewindList').getByText('Summarize archived plan', { exact: false }).click();
+    await expect(page.locator('#rewindStep2')).toBeHidden();
+
+    // 可回退的那几轮仍然点得动——否则一个「全部置灰」的实现也能让上面两条断言全绿。
+    await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
+    await expect(page.locator('#rewindStep2')).toBeVisible({ timeout: 3_000 });
     await expectNoBrowserErrors(page);
   });
 });

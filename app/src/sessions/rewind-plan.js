@@ -135,6 +135,59 @@ function isHumanPrompt(e) {
  * 对应的 tool_use 就悬空了。工具卡在前端 DOM 里没有 uuid（history.js 只给文本类挂），
  * 所以那个锚点【结构上】就看不见轮次的尾巴，只能由服务端对着 transcript 算。
  */
+// 终端 `/rewind` 第二步那三个模式各自要做哪几步。
+// 1. Restore code and conversation · 2. Restore conversation · 3. Restore code
+//
+// 【未知值退化成「两样都做」而不是「都不做」】旧前端不带 mode 字段，若按未知值当空操作处理，
+// confirm 会成功返回却什么也没干——用户以为回退了，实际没有。宁可多做（文件回滚可由 git 找回、
+// 分叉不动原会话），不可静默少做。
+export function rewindStepsFor(mode) {
+  if (mode === 'conversation') return { restoreCode: false, forkConversation: true };
+  if (mode === 'code') return { restoreCode: true, forkConversation: false };
+  return { restoreCode: true, forkConversation: true };
+}
+
+// `/rewind` 第一步那张清单：每一轮人类 prompt + 这一轮动过几个文件 + 能不能回退。
+//
+// 【文件数为什么要跟上一轮比】file-history-snapshot.trackedFileBackups 是【累积】快照
+// （真实会话 cdb36ede 实测 7→8→9 递增），直接读它的 size 会把整段历史的累计数报成「这一轮」。
+// 同一文件被改第二次时 key 不变、version 提升，所以比较要连 version 一起看。
+// 【为什么不逐条问 rewindFiles】那是 N 次 SDK 控制请求，列个清单不该付这个代价；
+// snapshot 就在 transcript 里，且 messageId 实测 45/45 全指向人类 prompt，够用。
+export function listRewindCandidates(entries) {
+  if (!Array.isArray(entries)) return [];
+  const snapshots = new Map();
+  for (const e of entries) {
+    if (e?.type === 'file-history-snapshot' && typeof e.messageId === 'string') {
+      snapshots.set(e.messageId, e.snapshot?.trackedFileBackups ?? {});
+    }
+  }
+  const out = [];
+  let prevBackups = {};
+  for (const e of entries) {
+    if (!isHumanPrompt(e) || typeof e.uuid !== 'string') continue;
+    const backups = snapshots.get(e.uuid);
+    let changedFiles = 0;
+    if (backups) {
+      for (const [path, info] of Object.entries(backups)) {
+        const before = prevBackups[path];
+        if (!before || before.version !== info?.version) changedFiles += 1;
+      }
+      prevBackups = backups;
+    }
+    out.push({
+      promptUuid: e.uuid,
+      text: extractPromptText(e),
+      timestamp: e.timestamp ?? null,
+      changedFiles,
+      // 第一轮之前没有可保留的锚点，分叉会退化成「复制一个空会话」——前端据此置灰，
+      // 而不是等用户选中了再弹一句失败。判据与 planRewind 同源，避免两处漂移。
+      canRewind: planRewind(entries, e.uuid).ok,
+    });
+  }
+  return out;
+}
+
 export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
   if (!Array.isArray(entries) || !anchorUuid) return { ok: false, reason: 'bad-input' };
   const at = entries.findIndex(e => e && e.uuid === anchorUuid);

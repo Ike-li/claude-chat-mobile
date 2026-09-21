@@ -1588,6 +1588,36 @@ io.on('connection', socket => {
   // 这不是笔误：rewindFiles 要的是【被丢弃那轮 prompt 自身】的 uuid，而 fork 的锚点语义是
   // 「保留到这条为止」故取前一条 assistant。两个功能会并排出现在同一个长按菜单里，前端若图省事
   // 复用 resolveForkAnchorUuid，送来的就是 a-archived-*，这里拒绝，E2E 能当场抓到。
+  // `/rewind` 第一步的候选清单。ack 形状与真 server 的 session:rewind:candidates 逐字对齐——
+  // 同样是平行实现，改真 server 的 ack 必须回来同步这一处。
+  //
+  // 第一条给 canRewind:false（对应 planRewind 的 first-turn：它之前没有可保留的锚点），
+  // 前端必须把它渲染成不可选。给的若全是可选项，「置灰」那条断言就永远走不到。
+  // changedFiles 一条 0 一条非 0，分别对应终端的 "No code changes" 与文件数标注。
+  socket.on('session:rewind:candidates', (payload, callback) => {
+    const { sessionId, cwd } = payload || {};
+    console.log(`[mock] session:rewind:candidates sessionId=${sessionId}, cwd=${cwd}`);
+    if (typeof callback !== 'function') return;
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
+      callback({ ok: false, error: '会话不存在' });
+      return;
+    }
+    // 文案与下方 session:history 的 user 气泡【逐字一致】：E2E 要在清单里按这段文字点中某一轮，
+    // 对不上就只能按下标点，那种用例换个顺序就悄悄测了另一条。
+    // canRewind:false 只给首轮（真 server 的 planRewind 判 first-turn）——它之前没有可保留的锚点。
+    callback({
+      ok: true,
+      items: [
+        { promptUuid: 'u-archived-1', text: 'Summarize archived plan', timestamp: '2024-01-01T00:00:00Z', changedFiles: 0, canRewind: false },
+        { promptUuid: 'u-archived-2', text: 'Any follow-up questions?', timestamp: '2024-01-01T00:05:00Z', changedFiles: 3, canRewind: true },
+        { promptUuid: 'u-archived-3', text: 'One more thing please', timestamp: '2024-01-01T00:09:00Z', changedFiles: 2, canRewind: true },
+        { promptUuid: 'u-archived-4', text: 'Just run some shell commands', timestamp: '2024-01-01T00:12:00Z', changedFiles: 0, canRewind: true },
+        { promptUuid: 'u-archived-5', text: 'An old turn with no snapshot', timestamp: '2024-01-01T00:15:00Z', changedFiles: 0, canRewind: true },
+        { promptUuid: 'u-archived-6', text: 'Switch away while I decide', timestamp: '2024-01-01T00:18:00Z', changedFiles: 1, canRewind: true },
+      ],
+    });
+  });
+
   socket.on('session:rewind:preview', (payload, callback) => {
     const { sessionId, cwd, promptUuid } = payload || {};
     console.log(`[mock] session:rewind:preview sessionId=${sessionId}, cwd=${cwd}, promptUuid=${promptUuid}`);
@@ -1663,37 +1693,48 @@ io.on('connection', socket => {
   // 成功时真 server 走 finishOpenFocus 收尾，所以带 instanceId / sessionId。
   // u-archived-2 → 成功；u-archived-3 → 文件回了但分叉失败（原会话未受影响那一档）。
   socket.on('session:rewind:confirm', (payload, callback) => {
-    const { sessionId, cwd, promptUuid } = payload || {};
-    console.log(`[mock] session:rewind:confirm sessionId=${sessionId}, promptUuid=${promptUuid}`);
+    const { sessionId, cwd, promptUuid, mode } = payload || {};
+    console.log(`[mock] session:rewind:confirm sessionId=${sessionId}, promptUuid=${promptUuid}, mode=${mode}`);
     if (typeof callback !== 'function') return;
     if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
       callback({ ok: false, error: '会话不存在' });
       return;
     }
-    if (promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
+    // mode 语义与真 server 的 rewindStepsFor 逐字对齐（缺省=两样都做）：
+    // conversation 跳过文件回滚，code 跳过分叉。这一档是平行实现，真 server 改了要回来同步。
+    const restoreCode = mode !== 'conversation';
+    const forkConversation = mode !== 'code';
+    // 只回退对话时不碰文件，所以「这一轮有没有可回退的文件改动」根本不成为门槛——
+    // u-archived-4/5（canRewind:false 那两档）走 conversation 必须放行，那正是它们的出路。
+    if (restoreCode && promptUuid !== 'u-archived-2' && promptUuid !== 'u-archived-3') {
       callback({ ok: false, error: '这一轮无法回退：无法确定回退位置。', reason: 'prompt-not-found' });
       return;
     }
-    const forked = promptUuid === 'u-archived-2';
-    const filesChanged = ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'];
+    const forked = forkConversation && promptUuid !== 'u-archived-3';
+    const filesChanged = restoreCode ? ['/Users/you/code/claude-chat-mobile/app/public/js/app.js'] : [];
     const forkedSessionId = forked ? 'mock-session-forked' : null;
     callback({
       ok: true, forkedSessionId, filesChanged,
       // u-archived-3 那档顺带摆出「一个链接被跳过 + 一个文件没恢复」，
       // 让 E2E 能验到 logic/rewind.js 组装的两条提示真的上屏（真 server 的这两个字段
       // 分别来自 rewindFiles 的 skippedLinks 与回滚后复核的 unrestored）。
-      skippedLinks: forked ? 0 : 1,
-      unrestored: forked ? [] : ['/Users/you/code/claude-chat-mobile/README.md'],
+      skippedLinks: restoreCode && !forked ? 1 : 0,
+      unrestored: restoreCode && !forked ? ['/Users/you/code/claude-chat-mobile/README.md'] : [],
       // prefill：真 server 从 transcript 取那一轮的原话回填输入框。
       // 这里给夹具里那条 user 气泡的原文，E2E 才能断言真的填回去了。
       prefill: 'Any follow-up questions?',
       ...(forked ? { instanceId: 'inst_forked', sessionId: forkedSessionId } : {}),
-      warning: forked ? null : '文件已回退，但新会话创建失败（mock）。原会话未受影响，可重试。',
+      warning: forkConversation && !forked ? '文件已回退，但新会话创建失败（mock）。原会话未受影响，可重试。' : null,
     });
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId, ts: Date.now(),
       type: 'rewind_applied',
-      payload: { cwd, droppedFromUuid: promptUuid, forkedSessionId, filesChanged, skippedLinks: 0 },
+      payload: {
+        cwd, droppedFromUuid: promptUuid, forkedSessionId, filesChanged, skippedLinks: 0,
+        // 与真 server 的 rewind_applied payload 逐字对齐：前端靠它挑文案（只恢复代码那档
+        // 本来就没有新会话，照 forkedSessionId 判会误报成创建失败）。
+        mode: forkConversation ? (restoreCode ? 'code_and_conversation' : 'conversation') : 'code',
+      },
     });
   });
 
