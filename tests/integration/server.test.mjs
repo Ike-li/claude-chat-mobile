@@ -56,6 +56,12 @@ test.before(async () => {
       // 写入此前一直静默污染，只是没人注意；Phase 4 新增的 approval-store.js/audit.js 让污染第一次
       // 以"多出两个陌生文件"的形式变得肉眼可见，才揪出这个既有缺口。
       CCM_DATA_DIR: tmpDir,
+      // env:set 真实写入时的目标（CONFIG_FILE_PATH/ENV_FILE_PATH）此前硬锚在仓库根、无任何
+      // 覆盖口子——不隔离的话，任何一条发送非空 changes 的用例都会实打实地改到仓库根那份
+      // 真实 ccm.config.json。所有 tests/integration/*.test.mjs 都遵守"必须加 CCM_DATA_DIR"，
+      // 但这两个路径不受它管辖，是同一条纪律的漏网点。
+      CCM_CONFIG_FILE_PATH: join(tmpDir, 'ccm.config.json'),
+      CCM_ENV_FILE_PATH: join(tmpDir, '.env'),
       CCM_BUILD_NONCE: buildNonce, // TC-008：本轮启动身份，/health 回显以确认连的是本轮 server
       // 显式关 DEV_MODE：本机 .env 里 DEV_MODE=1(dogfooding)会被子进程 dotenv 读到,
       // 致 dev:restart 测试真的触发重启、裸进程直接死→后续测试级联崩。钉 '0' 隔离之。
@@ -612,6 +618,39 @@ test.describe('ack 形状守卫 —— 守键集而非键值', () => {
       s.disconnect();
     });
   }
+});
+
+// CLAUDE.md「读写必须同源」的核心代码（CONFIG_FILE_PATH/ENV_FILE_PATH 与 usingConfigJson 的分流）
+// 此前在任何地方都没被真实执行过：docs/testing.md 点名的三条铁律之一就是「怎么证明这条测试不是
+// 永远绿的」——tests/unit/server-config.test.mjs 只测纯函数 parseServerConfig，不过真实 env:set
+// 这条 socket 事件；tests/e2e 打的是 mock server（零 import app/src）。这里补 S2 一侧：起真 server、
+// 真发 env:set、直接读磁盘上写入目标的文件内容断言。
+test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是启动时读的那一份', () => {
+  test('.env 部署：写入后目标文件里真的出现新值', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('connect timeout')), 3000);
+    });
+    try {
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        // SESSION_DELETE_QUIET_MS：无 together 成对约束、无端口探测副作用，纯粹验证写入路径。
+        s.emit('env:set', { changes: { SESSION_DELETE_QUIET_MS: '123456' } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `env:set 应成功：${JSON.stringify(ack)}`);
+      assert.ok(ack.written?.includes('SESSION_DELETE_QUIET_MS'), `written 应含该键：${JSON.stringify(ack.written)}`);
+
+      // 直接读磁盘上的写入目标（ENV_FILE_PATH 的隔离覆盖，指向 tmpDir/.env），
+      // 而不是通过另一次 socket 事件——这样断言的是【文件内容】，不是「server 内存里还记得」。
+      const onDisk = readFileSync(join(tmpDir, '.env'), 'utf8');
+      assert.match(onDisk, /SESSION_DELETE_QUIET_MS=123456/,
+        `写入目标文件里必须真的出现新值，实际内容：${onDisk}`);
+    } finally {
+      s.disconnect();
+    }
+  });
 });
 
 // ---- helpers ----

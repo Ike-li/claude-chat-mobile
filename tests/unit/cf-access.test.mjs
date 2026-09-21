@@ -316,6 +316,25 @@ test.describe('verifyAccessJwt', () => {
     assert.equal(payload.aud, AUD);
   });
 
+  // ★ 模块头注（jwtVerify(token, localResolver, { issuer, audience: aud })）自己声称这是唯一
+  // 挡住"同一 Cloudflare 团队下、签给另一个应用的 JWT 被重放到这里"的防线。此前删掉这两个选项
+  // 全部 22 条既有测试仍然绿——负向测试缺口，不是签名/密钥校验的缺口。
+  test('签名合法但 audience 不匹配（同团队签给别的应用的 JWT）→ 抛错，不得放行', async () => {
+    await setupWithJwks({ keys: [testKey.publicJwk] });
+    const token = await signAccessJwt(testKey.privateKey, 'test-kid-001', {
+      issuer: ISSUER, audience: 'someone-elses-aud-tag', payload: { sub: 'user-42' }
+    });
+    await assert.rejects(() => cfAccess.verifyAccessJwt(token));
+  });
+
+  test('签名合法但 issuer 不匹配（别的 Cloudflare 团队签发）→ 抛错，不得放行', async () => {
+    await setupWithJwks({ keys: [testKey.publicJwk] });
+    const token = await signAccessJwt(testKey.privateKey, 'test-kid-001', {
+      issuer: 'https://someone-elses-team.cloudflareaccess.com', audience: AUD, payload: { sub: 'user-42' }
+    });
+    await assert.rejects(() => cfAccess.verifyAccessJwt(token));
+  });
+
   test('无效 JWT header（乱码/非 JWT）→ 抛错', async () => {
     await setupWithJwks({ keys: [testKey.publicJwk] });
 

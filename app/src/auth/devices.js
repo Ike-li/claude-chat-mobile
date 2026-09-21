@@ -211,7 +211,9 @@ export const MAX_DEVICE_ALIAS = 24;
 // 控制字符用 \p{Cc} 整类剥掉：换行会把一行卡片撑成多行，制表符能伪造对齐。
 export function normalizeDeviceAlias(raw) {
   if (typeof raw !== 'string') return null;
-  const cleaned = raw.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim();
+  // Cc=控制字符，Cf=格式字符（含 U+202E 等双向文本覆写符、零宽字符）——两者都能让这行别名
+  // 在受信任设备列表里视觉失真，而用户正是读这行字来决定吊销哪一台。
+  const cleaned = raw.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!cleaned) return null;
   const points = [...cleaned];
   return points.length > MAX_DEVICE_ALIAS ? points.slice(0, MAX_DEVICE_ALIAS).join('') : cleaned;

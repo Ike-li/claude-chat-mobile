@@ -50,6 +50,11 @@ export function registerFileSocketHandlers({
     const cwd = routeCwd(requestedCwd);
     // encoding:'base64' → 附件/二进制按片 base64 回传（E18 附件预览）；其余值走默认文本模式
     const result = browseReadFile(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxBytes, encoding });
+    if (result?.blockedSymlink) {
+      // 范围内的合法 symlink，不是越界——文不对题的错误信息与 scope_violation 审计噪音都会
+      // 让这条真实存在的记录淹没那些真正的越界尝试。
+      return ack({ ok: false, error: '目标是符号链接，暂不支持直接读取' });
+    }
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -93,7 +98,7 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, error: '附件不存在或已被删除' });
     }
     const result = browseReadFile(loc.baseDir, loc.storedName, loc.scopeDirs, { offset, maxBytes, encoding: 'base64' });
-    if (result === null) return ack({ ok: false, error: '附件不存在或已被删除' });
+    if (result?.blockedSymlink || result === null) return ack({ ok: false, error: '附件不存在或已被删除' });
     return ack({ ok: true, ...result });
   });
 

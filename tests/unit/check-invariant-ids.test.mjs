@@ -31,6 +31,41 @@ function fakeRepo({ registryRows = [], files = {}, extraCorpus = {} } = {}) {
 
 const codes = result => result.problems.map(p => p.code).sort();
 
+// ID_RE/REGISTRY_ROW_RE 此前是 /\b([A-Z]+-\d+)\b/，对 SRV-NEW-004 这类【多段】复合编号
+// （连字符分隔的多个大写词 + 数字）只匹配得到最后一段 "NEW-004"——[A-Z]+ 不含连字符，
+// \b 在 "SRV" 与 "-NEW" 之间不构成新的匹配起点，只有从 "NEW" 开始才第一次同时满足
+// \b 与 [A-Z]+-\d+。报出来的 id 是错的，排查时对着登记表怎么查都查不到。
+test('复合编号（多段连字符，如 SRV-NEW-004）双向闭合时报的 id 必须是完整那串，不是被截断的尾段', () => {
+  const root = fakeRepo({
+    registryRows: [['SRV-NEW-004', '附件落盘失败须结构化 permanent ack']],
+    files: { 'srv.test.mjs': '// x\n// 守护：SRV-NEW-004（附件落盘失败）\n' },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    // ok:true 单独看有可能是「两边都错误地截断成 NEW-004、意外还能配上」这种假阳性——
+    // 真正的证明在下面那条反向用例：截断形态必须被识别成【不匹配】完整编号。
+    assert.equal(r.ok, true, `应为绿，实际 ${JSON.stringify(r.problems)}`);
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// 反向：复合编号在登记表里存在，但守护行写的是被截断的错误形态（模拟"截断 bug 存在时，
+// 一个手误只打了后半段"这种更直接能看见坏处的场景）——必须报悬空引用，不能因为两边
+// 恰好都截断成同一个错误字符串而被判成"匹配上了"。
+test('复合编号：守护行若只写了截断的后半段（NEW-004），必须算未登记引用', () => {
+  const root = fakeRepo({
+    registryRows: [['SRV-NEW-004', '附件落盘失败须结构化 permanent ack']],
+    files: { 'srv.test.mjs': '// x\n// 守护：NEW-004（这是错误的写法）\n' },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    // 实测报的是 dead_registry_entry（"SRV-NEW-004" 在语料里确实一次没出现——"NEW-004" 不是
+    // 它的子串），而不是 unregistered_id；两者都证明同一件事：截断后的 "NEW-004" 不会被
+    // 误判成命中了完整编号 "SRV-NEW-004"，核心诉求就是这个，具体报哪个 code 不是本测试要钉的。
+    assert.equal(r.ok, false, `截断形态不该被判成闭合，实际 ${JSON.stringify(r.problems)}`);
+    assert.ok(codes(r).length > 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('绿侧：登记表与守护行双向闭合 → ok', () => {
   const root = fakeRepo({
     registryRows: [['AUTH-01', '未持令牌不得进数据面']],

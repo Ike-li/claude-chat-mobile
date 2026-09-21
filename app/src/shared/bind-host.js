@@ -78,21 +78,6 @@ export function resolveBindPlan({ authToken, bindMode, bindHost } = {}) {
     `不认识的 BIND_MODE：${bindMode}（合法值：${BIND_MODES.join(' / ')}，留空 = 默认对外监听 0.0.0.0）。`);
 }
 
-/** server 是否会绑 0.0.0.0（对外可达）。与下方 resolveBindHost 是同一个判断的两种问法。 */
-export function bindsPublicly(authToken) {
-  return Boolean(authToken);
-}
-
-/**
- * 实际监听地址（只按 token 推导的旧签名）。别再写内联三元。
- *
- * 保留它是因为两个 doctor 的 classifyAuthToken 与 single-source-of-truth 的门禁都盯着它；
- * 需要把 BIND_MODE 一并算进来的调用点用 resolveBindPlan。
- */
-export function resolveBindHost(authToken) {
-  return bindsPublicly(authToken) ? '0.0.0.0' : '127.0.0.1';
-}
-
 /**
  * token 里全是空白 —— 最危险的那一格：既绑了公网，认证又几乎不设防
  * （攻击者不必猜中「三个空格」，而是**用户自己以为没设 token**，于是不会去想公网暴露的事）。

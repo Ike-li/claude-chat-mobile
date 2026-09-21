@@ -180,6 +180,27 @@ test.describe('devices.js 单元测试', () => {
     assert.equal(denyDevice(null), false);
   });
 
+  // docs/testing.md 点名的反直觉方向之一：trusted-devices.json 瞬时读失败必须保留内存 last-good，
+  // 不能因为一次读失败就把所有设备当成未信任（会话中的 watcher 一轮就把全部 device-token
+  // 连接断光，与「所有异常都该拒绝」的直觉正好相反）。此前该分支没有任何测试锁着。
+  test('trusted-devices.json 读失败（JSON 损坏）→ 保留内存 last-good，不清空信任表', () => {
+    addPendingDevice('device-lastgood', { ip: '1.1.1.1' });
+    assert.equal(approveDevice('device-lastgood'), true);
+    assert.equal(isDeviceTrusted('device-lastgood'), true);
+
+    const saved = readFileSync(TRUSTED_DEVICES_FILE, 'utf8');
+    writeFileSync(TRUSTED_DEVICES_FILE, 'not valid json{{{');
+    try {
+      loadTrustedDevices();
+      assert.equal(isDeviceTrusted('device-lastgood'), true,
+        '读失败不得把已信任设备判成未信任——那是本机唯一在线设备时的自锁形态');
+    } finally {
+      writeFileSync(TRUSTED_DEVICES_FILE, saved);
+      loadTrustedDevices();
+    }
+    denyDevice('device-lastgood');
+  });
+
   // F1（code-review #5）：pendingDevices 有容量上限，防 LAN-authenticated flood 撑爆文件/刷屏。
   test('pendingDevices 有容量上限，超出丢最旧（防 flood）', () => {
     loadPendingDevices();
@@ -446,6 +467,14 @@ test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', 
       assert.equal([...cut].length, MAX_DEVICE_ALIAS);
       assert.ok(!cut.includes('\ufffd'), '不得留下半个代理对');
       assert.equal(cut, '📱'.repeat(MAX_DEVICE_ALIAS));
+    });
+
+    // \p{Cc}（控制字符）被剥了，但 \p{Cf}（格式字符，含双向文本覆写符）此前没有——一个 U+202E
+    // RIGHT-TO-LEFT OVERRIDE 能让这行别名在受信任设备列表里视觉反向显示，而那正是用户读来
+    // 决定吊销哪一台的界面。
+    test('剥掉双向文本覆写等格式字符（U+202E 等），防设备列表视觉欺骗', () => {
+      assert.equal(normalizeDeviceAlias('safe‮exe.txt'), 'safe exe.txt');
+      assert.equal(normalizeDeviceAlias('a​b'), 'a b', '零宽空格（Cf）同理');
     });
   });
 

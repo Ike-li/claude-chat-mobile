@@ -4,7 +4,11 @@ import dotenv from 'dotenv';
 
 import { loadConfigSources, projectToEnv, resolveConfigValues } from './config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
-import { ACCESS_PROFILES, DEFAULT_PORT } from './env-schema.js';
+import {
+  ACCESS_PROFILES, DEFAULT_PORT,
+  DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_INSTANCE_IDLE_RECLAIM_MS, DEFAULT_APPROVAL_TTL_MS,
+  DEFAULT_NOTIFY_THROTTLE_MS, DEFAULT_SESSION_DELETE_QUIET_MS,
+} from './env-schema.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);
@@ -100,12 +104,12 @@ export function parseServerConfig(env, {
   return {
     port: positiveNumber(env.PORT, DEFAULT_PORT),
     authToken: env.AUTH_TOKEN || '',
-    idleTimeoutMs: positiveNumber(env.IDLE_TIMEOUT_MS, 600_000),
+    idleTimeoutMs: positiveNumber(env.IDLE_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS),
     // Zero explicitly disables fully-idle instance reclamation.
-    instanceIdleReclaimMs: nonNegativeNumber(env.INSTANCE_IDLE_RECLAIM_MS, 1_800_000),
-    approvalTtlMs: positiveNumber(env.APPROVAL_TTL_MS, 1_800_000),
-    notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, 60_000),
-    sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, 300_000),
+    instanceIdleReclaimMs: nonNegativeNumber(env.INSTANCE_IDLE_RECLAIM_MS, DEFAULT_INSTANCE_IDLE_RECLAIM_MS),
+    approvalTtlMs: positiveNumber(env.APPROVAL_TTL_MS, DEFAULT_APPROVAL_TTL_MS),
+    notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, DEFAULT_NOTIFY_THROTTLE_MS),
+    sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, DEFAULT_SESSION_DELETE_QUIET_MS),
     devMode: env.DEV_MODE === '1',
     // 监听地址的两个输入原样透传，判定留给 src/shared/bind-host.js 的 resolveBindPlan
     //（server 与两个 doctor 共用那一份，此处再判一次就又有分叉余地了）。

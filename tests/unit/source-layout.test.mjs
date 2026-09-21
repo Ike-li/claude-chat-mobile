@@ -62,6 +62,20 @@ test('backend domain modules live under src and not in the repository root', () 
   }
 });
 
+// app.js 与 data-dir.js 各自独立算一遍「项目根」，深度都是三层向上（app/src/server/ 与
+// app/src/shared/ 到仓库根同一深度）。shared-data-dir.test.mjs 已经钉住了 data-dir.js 那份
+// （resolveDataDir 是可注入纯函数，能直接单测断言解出仓库根）；app.js 的 HERE 是模块内部
+// const、起真 server 才能求值，这里只能做源码级断言——钉住深度写对了（三层 '..'，不多不少），
+// 对齐 CLAUDE.md 点名的「少一层会让 data/、scripts/、ccm.config.json 全部静默解析到 app/ 下」
+// 这个脆弱点，两处独立实现的深度必须一直保持一致。
+test("app.js 的 HERE 与 data-dir.js 的 PROJECT_ROOT 用同一个三层向上算法（脆弱点：两处独立实现，深度写错互相看不见）", () => {
+  const appSrc = readFileSync('app/src/server/app.js', 'utf8');
+  const dataDirSrc = readFileSync('app/src/shared/data-dir.js', 'utf8');
+  const rootExpr = /join\(import\.meta\.dirname,\s*'\.\.',\s*'\.\.',\s*'\.\.'\)/;
+  assert.match(appSrc, rootExpr, 'app.js 的 HERE 必须是三层向上（app/src/server/ → 仓库根）');
+  assert.match(dataDirSrc, rootExpr, 'data-dir.js 的 PROJECT_ROOT 必须是三层向上（app/src/shared/ → 仓库根），与 app.js 同深度');
+});
+
 test('root app/server.js is only a compatibility launcher for app/src/server/app.js', () => {
   const source = readFileSync('app/server.js', 'utf8');
   const lines = source.split('\n').filter(line => line.trim() !== '');

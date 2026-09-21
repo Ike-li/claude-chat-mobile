@@ -119,7 +119,14 @@ export function createDeviceGate({
   // 'change'（被现有判断完全漏掉），且 watch 绑定的是旧 inode，一旦被 rename 替换，之后对该路径的写入完全收不到
   // 任何事件。与 workdirs.json 早年踩过的同一个坑，改用同款解法：watch 父目录 + 按 basename 过滤 + mtime 前置守卫。
   function watchTrustedDevicesFile() {
-    if (!existsSync(trustedDevicesFile)) return;
+    // 正常路径下上面的初始化块已经把这个文件建出来了（哪怕内容是空数组）；这里还是不存在，
+    // 说明那次初始化已经失败过（同一块已经打过一条「初始化设备认证文件失败」）——这条日志
+    // 补的是它的直接后果：本次进程生命周期内，CLI 在别的终端 approve/deny 都不会被感知到，
+    // SEC-03 的对称断连不会触发，磁盘只读/写满这类场景会从「报过一次错」退化成「彻底沉默」。
+    if (!existsSync(trustedDevicesFile)) {
+      console.error(`[devices] ${trustedDevicesFile} 仍不存在，跳过文件监听——CLI 批准/拒绝在本次进程内不会被自动感知`);
+      return;
+    }
     const tdBase = basename(trustedDevicesFile);
     let tdTimer = null;
     let lastTrustedDevicesMtime = 0;
@@ -135,7 +142,9 @@ export function createDeviceGate({
         tdTimer = setTimeout(() => {
           const revokedTokens = new Set(); // SEC-03：CLI 从信任表移除的 deviceToken，本轮结束后统一断连（去重）
           for (const socket of io.sockets.sockets.values()) {
-            if (socket.deviceApproved === false) {
+            // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的
+            // fail-closed 方向——今天 io.use 的每条非错误路径都会显式赋值，此处是防御性一致。
+            if (socket.deviceApproved !== true) {
               const token = socket.handshake.auth?.deviceToken;
               if (isTrusted(token)) {
                 console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，自动解锁设备 ${token}`);

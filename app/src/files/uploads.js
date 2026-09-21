@@ -81,7 +81,7 @@ export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 单文件 10MB（解码后字节）
 export const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 总量 20MB（注：base64 上线 ~1.33x，见 server maxHttpBufferSize）
 const mb = (bytes) => `${bytes / 1048576}MB`;        // 文案里的 MB 数由常量算，不再手写字面量
-const MAX_THUMB_CHARS = 100_000;             // FILES-4：thumb 服务端上限（与前端 self-limit 对齐）
+export const MAX_THUMB_CHARS = 100_000;      // FILES-4：thumb 服务端上限（与前端 self-limit 对齐，两侧一致性见 single-source-of-truth.test.mjs）
 
 // 文件名收敛：只取 basename，去路径分隔/控制/危险字符，去前导点（防 . / .. / 隐藏覆盖），空则回退 file。
 // basename 在 posix 不剥 Windows 反斜杠，故显式替换分隔字符——纵深防御，配合 saveAttachments 的落点校验。
