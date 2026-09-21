@@ -1,8 +1,14 @@
+<meta name="robots" content="noindex, nofollow">
 <!-- ══════════════════════════════════════════════════════════════════
      内容片段模板 = 全站组件字典。每个文件对应 book.config.js 里的一个 slug。
-     片段只写正文，不含 <html>/<head>
-<meta name="robots" content="noindex, nofollow">/<h1>（外壳与页眉由 build.js 生成）。
+     片段只写正文，不含 <html>/<head>/<h1>（外壳与页眉由 build.js 生成）。
      写作规范见 references/voice-style.md；本文件演示所有可用组件。
+
+     上面那行 noindex 必须留在文件第一行、注释之外。它原本被写进了这段
+     注释内部（在「不含 <html>/<head>」和「/<h1>」之间），于是从 2026-07
+     起一直不生效 —— 而注释里的标签和真标签看起来一模一样。
+     robots.txt 兜不住这个：Google 只读域根的 robots.txt，本站的那份在
+     /claude-chat-mobile/ 子路径下，对它完全不可见。
      ══════════════════════════════════════════════════════════════════ -->
 
 <p class="lead-extra">正文开头用一两句话点出本页要讲清的核心问题，让读者知道为什么这一页值得读。</p>

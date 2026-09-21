@@ -1,3 +1,20 @@
+# ⚠️ 这个文件对爬虫【不生效】，留着只为记录意图。
+#
+# RFC 9309：robots.txt 只在主机根被读取，即 https://ike-li.github.io/robots.txt。
+# 这份在 /claude-chat-mobile/ 子路径下，没有任何爬虫会去读它。
+# 域根那个位置属于 Ike-li/ike-li.github.io 仓库，而该仓库不存在（实测 404），
+# 所以这是 GitHub Pages 项目站的固有限制，不是配置漏了。
+#
+# 后果与对策：
+#   · 404 的域根 robots.txt = 不限制任何抓取，所以不影响收录 —— 这是好事
+#   · 下面的 Disallow 一条都不生效 → 真正要挡的页面各自带了
+#     <meta name="robots" content="noindex">（fragments/ 与 AUTHORING-components.html）
+#   · 下面的 Sitemap 声明也读不到 → sitemap 已在 Google Search Console 手动提交，
+#     其余搜索引擎走 IndexNow 推送（见 _build/submit-indexnow.mjs）
+#
+# 想让它真的生效，唯一的办法是建一个 ike-li.github.io 仓库、把 robots.txt 放进去，
+# 但那份 robots.txt 会管辖该账号下【所有】项目站，不只是本站。
+
 User-agent: *
 Allow: /
 
@@ -8,8 +25,8 @@ Allow: /claude-chat-mobile/skill.md
 Allow: /claude-chat-mobile/docs-site/pages/*.md
 
 # Build sources / authoring notes are not public handbook pages
+# （实际拦截靠各页自己的 meta robots，见文件头说明）
 Disallow: /claude-chat-mobile/docs-site/fragments/
-Disallow: /claude-chat-mobile/docs-site/content/
 Disallow: /claude-chat-mobile/docs-site/AUTHORING-components.html
 
 Sitemap: https://ike-li.github.io/claude-chat-mobile/sitemap.xml
