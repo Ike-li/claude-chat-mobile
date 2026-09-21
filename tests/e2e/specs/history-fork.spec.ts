@@ -279,22 +279,46 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-REWINDb 会话首条消息无可保留锚点：清单里就置灰，点不进第二步', async ({ page }) => {
+  // 与 P0-REWINDm 同源、只差一个取值：那条切到【另一个会话】，这条回到【首页】。
+  // 守卫若写成 `now?.sessionId && now.sessionId !== frozen`，sessionId 变 null 时条件短路、
+  // 整个守卫失效，仍会对冻结的旧会话执行破坏性回退（PR #102 review 的 P1）。
+  // 两条必须都在：只留 m 那条的话，把判据写成 `now?.sessionId &&` 照样全绿。
+  test('P0-REWINDn 面板开着时回到首页：同样拒绝，不对已离开的会话动手', async ({ page }) => {
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('Go home while I decide', { timeout: 10_000 });
+
+    await pickRewindTurn(page, 'Go home while I decide');
+    // preview 已经回来了（这一档 canRewind:true，三个模式都亮着），而 mock 那条广播已把
+    // viewing 清空。点下去必须被拦住。
+    await expect(page.locator('#rewindEffect')).toContainText('app.js', { timeout: 3_000 });
+    await page.locator('#rewindModeBoth').click();
+
+    await expect(page.locator('#rewindEffect')).toContainText('会话已切换', { timeout: 5_000 });
+    await expect(page.locator('#messages')).not.toContainText('Forked session ready.');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-REWINDb 会话首条消息：不能分叉对话，但仍可只恢复代码', async ({ page }) => {
     await openArchived(page);
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
 
     await runRewindCommand(page);
 
-    // 首轮之前没有可保留的锚点（planRewind 判 first-turn）。拒绝提前到【清单】这一层：
-    // 连 preview 都不必发，更不该给一个点下去必然失败的选项。
-    // 文案要点名是什么挡住的，否则用户无从判断该换个位置试还是根本不行。
-    await expect(page.locator('#rewindList')).toContainText('会话首轮', { timeout: 3_000 });
+    // 首轮之前没有可保留的锚点（planRewind 判 first-turn），分叉会退化成复制一个空会话。
+    // 但那是【对话轴】的限制——文件快照照样能还原，所以这一轮仍然可选，只是模式受限。
+    // 压成一个 canRewind 会让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。
+    await expect(page.locator('#rewindList')).toContainText('只能恢复代码', { timeout: 3_000 });
     await page.locator('#rewindList').getByText('Summarize archived plan', { exact: false }).click();
-    await expect(page.locator('#rewindStep2')).toBeHidden();
-
-    // 可回退的那几轮仍然点得动——否则一个「全部置灰」的实现也能让上面两条断言全绿。
-    await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
     await expect(page.locator('#rewindStep2')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('#rewindModeConversation')).toBeDisabled();
+    await expect(page.locator('#rewindModeBoth')).toBeDisabled();
+    await expect(page.locator('#rewindModeCode')).toBeEnabled();
+
+    // 正常轮次三个模式都开着——否则一个「永远只留 Restore code」的实现也能让上面全绿。
+    await page.locator('#rewindBack').click();
+    await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
+    await expect(page.locator('#rewindModeConversation')).toBeEnabled({ timeout: 3_000 });
+    await expect(page.locator('#rewindModeBoth')).toBeEnabled();
     await expectNoBrowserErrors(page);
   });
 });
