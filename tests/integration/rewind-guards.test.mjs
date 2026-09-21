@@ -86,17 +86,21 @@ test.describe('Rewind 拒绝档（真 server，零 token）', () => {
     }
   });
 
-  // 【2026-09-21 反转（PR #102 review）】原断言是「第一轮 → ok:false + reason:first-turn」。
-  // planRewind 判的是【对话轴】：首轮之前没有可保留的锚点，分叉会退化成复制一个空会话。
-  // 但「只恢复代码」根本不 fork，那一轮的文件快照照样能还原——在 preview 里整体拒绝，等于让
-  // 单轮会话完全用不了 Restore code，而终端能。现在放行并单独回 canForkConversation:false，
-  // 由前端只禁掉需要 fork 的那两个模式。其余 reason（见下一条 prompt-not-found）仍照旧拒绝。
-  test('会话第一轮 → 放行但标明不能分叉对话（对话轴受限，文件轴不受影响）', async () => {
-    const res = await emit('session:rewind:preview', { cwd: workDir, sessionId: SESSION_ID, promptUuid: 'u-1' });
-    assert.equal(res.ok, true, '整体拒绝会让单轮会话用不了「只恢复代码」，而终端能');
-    assert.equal(res.canForkConversation, false, '首轮之前没有可保留的锚点，分叉仍然不可用');
-    assert.equal(res.keepUuid, null, '没有锚点就不该编一个出来');
-  });
+  // 【2026-09-21 退役】原有一条「会话第一轮 → first-turn 拒绝」。它断言的行为已被判定为缺陷
+  // （PR #102 review）：planRewind 判的是【对话轴】，而「只恢复代码」根本不 fork，首轮的文件
+  // 快照照样能还原——在 preview 里整体拒绝，等于让单轮会话完全用不了 Restore code，而终端能。
+  //
+  // 反转后的断言在这一层【测不了】：首轮一旦放行，preview 必然继续走到 rewindFiles 控制请求去
+  // 取文件快照，而本档跑的是 tests/fixtures/fake-claude.sh —— 它不实现 control_request 通道，
+  // 于是 ack 恒等到 REWIND_REQUEST_TIMEOUT_MS(20s) 超时。不是断言写错，是这条覆盖目标随改动
+  // 失效了：原来它验的是「对话轴判据挡在 rewindFiles 之前」，那是个纯服务端判据、不需要 CLI；
+  // 现在首轮不再被挡，验证它就必须有个会答话的 CLI。
+  //
+  // 没有为此给 fake-claude 实现 SDK 控制协议（代价大、易错，且它的职责只是过 preflight），
+  // 也没有为此把生产超时做成可注入（不为测试附赠可配置性）。
+  // 覆盖去处：canForkConversation 的判据在 tests/unit/rewind-plan.test.mjs「首轮：不能分叉
+  // 对话，但可以只恢复代码」；前端据此禁用模式在 E2E 的 P0-REWINDb。
+  // 【剩余缺口，如实记】「真 server 的 preview 对首轮放行」这一点现在没有任何一层直接验证。
 
   test('不存在的 uuid → prompt-not-found 拒绝', async () => {
     const res = await emit('session:rewind:preview', { cwd: workDir, sessionId: SESSION_ID, promptUuid: 'no-such-uuid' });
