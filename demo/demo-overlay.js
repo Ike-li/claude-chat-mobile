@@ -39,7 +39,8 @@
       ],
       note: '真跑起来时，这里是你本机那个 claude CLI 的完整输出。',
       go: '开始体验',
-      install: '装到自己机器 →'
+      install: '装到自己机器 →',
+      site: '回到项目主页'
     },
     en: {
       tag: 'Live demo',
@@ -53,7 +54,8 @@
       ],
       note: 'On your own machine this is the full output of your local claude CLI.',
       go: 'Start exploring',
-      install: 'Run it yourself →'
+      install: 'Run it yourself →',
+      site: 'Back to project site'
     }
   };
 
@@ -119,6 +121,9 @@
       + '<div class="acts">'
       + '<button id="demoIntroGo" type="button">' + esc(T.go) + '</button>'
       + '<a href="' + GH + '#quick-start" target="_blank" rel="noopener">' + esc(T.install) + '</a>'
+      // 演示站此前唯一的出口是 GitHub 外链：进来的人想回项目主页只能按浏览器后退。
+      // 按当前语言分别指向 /zh/ 与 /，不是统一丢到英文首页。
+      + '<a href="' + (lang() === 'zh' ? '../zh/' : '../') + '">' + esc(T.site) + '</a>'
       + '</div></div>';
 
     document.body.appendChild(wrap);
