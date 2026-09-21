@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>页面不存在 · Claude Chat Mobile</title>
+<!-- 404 页必须 noindex：它本身没有内容价值，被收录只会占掉抓取预算。
+     GitHub Pages 发不了 410/404 以外的状态码，这一行是唯一的表达方式。 -->
+<meta name="robots" content="noindex, follow">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --line:#E3E0D6;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A; --accent:#C96442;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --canvas:#121211; --surface:#1B1B19; --line:#2E2D2A; --ink:#EDEBE4; --ink-soft:#B3AFA6; --ink-faint:#8A867E; }
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:var(--canvas); color:var(--ink); font-family:var(--font-ui);
+    padding:32px; line-height:1.65;
+  }
+  .box { max-width:560px; width:100%; }
+  .code { font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+  h1 { font-family:var(--font-read); font-size:clamp(28px,5vw,38px); font-weight:600; letter-spacing:-.02em; margin:12px 0 14px; }
+  p { color:var(--ink-soft); margin:0 0 26px; }
+  .links { display:flex; flex-wrap:wrap; gap:10px; }
+  .links a {
+    display:inline-block; padding:9px 15px; border:1px solid var(--line); border-radius:999px;
+    background:var(--surface); color:var(--ink); text-decoration:none; font-size:14.5px;
+  }
+  .links a:hover { border-color:var(--accent); color:var(--accent); }
+  .links a.primary { background:var(--accent); border-color:var(--accent); color:#F4F3EE; }
+  .foot { margin-top:30px; font-size:13px; color:var(--ink-faint); }
+  .foot a { color:inherit; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="code">404</div>
+    <h1>这个页面不在了</h1>
+    <p>链接可能过期，或者地址打错了一个字。下面几个入口都是现成的：</p>
+    <!-- 这里必须用绝对路径（站点其余页面一律相对路径）：404 会在任意深度的
+         URL 上被触发，/a/b/c/x 下的 ./demo/ 会解析成 /a/b/c/demo/ 而不是站点根。 -->
+    <div class="links">
+      <a class="primary" href="/claude-chat-mobile/zh/">中文首页</a>
+      <a href="/claude-chat-mobile/">English</a>
+      <a href="/claude-chat-mobile/demo/">在线演示</a>
+      <a href="/claude-chat-mobile/docs-site/">项目手册</a>
+      <a href="/claude-chat-mobile/diagrams/">架构图集</a>
+      <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub</a>
+    </div>
+    <p class="foot">
+      Claude Chat Mobile — 自托管的手机端 Claude Code 界面。
+      找不到想要的？<a href="https://github.com/Ike-li/claude-chat-mobile/issues">提个 issue</a>。
+    </p>
+  </div>
+</body>
+</html>
