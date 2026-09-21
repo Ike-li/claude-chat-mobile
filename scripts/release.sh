@@ -78,6 +78,10 @@ done
 say() { printf '%s\n' "$*"; }
 die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
+# 两个等待函数的轮询间隔（秒）。tests/unit/release.test.mjs 设成 0——那些用例量的是判定分支，
+# 让它们陪着真 sleep 只会把「在算」变成「在等」。
+POLL_SECS="${CCM_RELEASE_POLL_SECS:-10}"
+
 NOTES=""
 cleanup() {
   # 还原**尚未提交**的 bump 与 CHANGELOG。
@@ -116,6 +120,89 @@ write_changelog() {
     fs.writeFileSync("CHANGELOG.md", head + entry + rest);
   '
 }
+
+# ── 等某个 sha 的 CI 跑完 ──────────────────────────────
+# push 触发的 run 不是立刻就有的，先轮询等它出现，再 watch。
+# 【为什么不用 `gh run watch` 的裸调用】它要一个 run id；不按 headSha 挑就可能盯上**上一次**
+# 推送的 run，那个早就绿了，于是「等 CI」变成一句空话。
+wait_ci_for_sha() {
+  local sha="$1" label="$2" run_id="" tries=0 concl=""
+  say "▶ 等 ${label} 的 CI（sha ${sha:0:8}）…"
+  while [ "$tries" -lt 40 ]; do
+    run_id="$(gh run list --branch dev --event push --limit 15 --json databaseId,headSha \
+      -q "[.[] | select(.headSha == \"$sha\")] | .[0].databaseId" 2>/dev/null || true)"
+    [ -n "$run_id" ] && [ "$run_id" != "null" ] && break
+    run_id=""; tries=$((tries + 1)); sleep 5
+  done
+  [ -n "$run_id" ] || die "等不到 ${label} 的 CI run（sha ${sha:0:8}）——GitHub 侧没有为这次推送建 run？"
+  say "  run ${run_id}"
+
+  # 【为什么 watch 退出码不足以判红】`gh run watch --exit-status` 的非零退出码有两个来源：
+  # run 真的红了，以及**轮询期间的一次网络抖动**（实测 `failed to get run: … EOF`）。
+  # 两者退出码一模一样，只看它就会把抖动播报成「CI 未通过」，而那句文案会把人推去查
+  # 根本没红的代码——2026-09-21 发 v1.12.0 时真撞上，当时 11 个 job 一个没红，最终全绿。
+  #
+  # 所以失败后再直查一次 conclusion：**拿到结论才判，拿不到就当这次没查过**，接着 watch。
+  # 反过来写（查不到就判红）等于把判据留在网络上，那正是这次的失败形态。
+  tries=0
+  while :; do
+    gh run watch "$run_id" --exit-status >/dev/null 2>&1 && break
+    concl="$(gh run view "$run_id" --json conclusion -q .conclusion 2>/dev/null || true)"
+    case "$concl" in
+      success) break ;;
+      failure|cancelled|timed_out|startup_failure|action_required)
+        die "${label} 的 CI 未通过（run ${run_id}，结论 ${concl}）。修好再重跑本脚本，它会从中断处接上。" ;;
+    esac
+    # 空结论 = run 还没跑完，或这次查询也没通。两种都不是「红」。
+    tries=$((tries + 1))
+    if [ "$tries" -ge 20 ]; then
+      die "${label} 的 CI 连查 20 次都没拿到结论（run ${run_id}）。GitHub 或本机网络异常，稍后重跑本脚本。"
+    fi
+    sleep "$POLL_SECS"
+  done
+  say "  ✓ ${label} CI 通过"
+}
+
+# ── 等 PR 到「GitHub 自己认为可以合并」──────────────────
+#
+# 【为什么判据是 mergeStateStatus，而不是 `gh pr checks --watch --required`】
+# 同一个 head commit 上会挂**两批** check-runs：push 到 dev 触发一批，开 PR 又触发一批。
+# 开完 PR 立刻查，第二批往往还没被创建，`gh pr checks` 看到的是第一批（早已全绿），
+# 于是当场判「检查通过」，脚本随即去合并 —— 被分支保护拒绝：
+#   `Pull request … is not mergeable: the base branch policy prohibits the merge.`
+# 2026-09-21 发 v1.12.0 时就卡在这里。那句文案读起来像分支保护配错了
+# （我照着去查了 required_approving_review_count，它是 0，没问题），实际只是抢跑。
+#
+# `mergeStateStatus` 是 GitHub 自己算的：哪一批 check-runs 算数由它说了算，脚本不必猜。
+# 【为什么 UNSTABLE 也放行】它表示「非必需检查有红的，但保护规则已满足」，与旧代码
+# `--required` 的意图一致：非必需 job 变红不该挡住发版。
+wait_pr_mergeable() {
+  local pr="$1" tries=0 state="" fails=""
+  say "▶ 等 PR #${pr} 可合并…"
+  while [ "$tries" -lt 120 ]; do
+    state="$(gh pr view "$pr" --json mergeStateStatus -q .mergeStateStatus 2>/dev/null || true)"
+    case "$state" in
+      CLEAN|UNSTABLE) say "  ✓ PR #${pr} 可合并（${state}）"; return 0 ;;
+      DIRTY) die "PR #${pr} 与 master 有冲突，先解决冲突再重跑本脚本。" ;;
+      BLOCKED)
+        # BLOCKED 同时覆盖「必需检查还在跑」与「必需检查真红了」，只有后者该停。
+        fails="$(gh pr checks "$pr" --required --json name,bucket \
+          -q '[.[] | select(.bucket == "fail") | .name] | join("、")' 2>/dev/null || true)"
+        if [ -n "$fails" ]; then
+          die "PR #${pr} 的必需检查未通过：${fails}。修好再重跑本脚本。"
+        fi
+        ;;
+    esac
+    tries=$((tries + 1)); sleep "$POLL_SECS"
+  done
+  die "等 PR #${pr} 可合并超时（最后状态 ${state:-查询失败}）。去 PR 页面看卡在哪一项。"
+}
+
+# 【为什么早退点在 trap 之前】tests/unit/release.test.mjs 要 source 本文件来单测上面这些
+# 等待函数。而 cleanup 会 `git checkout -- package.json package-lock.json CHANGELOG.md`——
+# 装上 trap 再让测试进程退出，等于每跑一次单测就吞掉开发者在这三个文件里未提交的改动。
+if [ -n "${CCM_RELEASE_LIB_ONLY:-}" ]; then return 0; fi
+
 trap cleanup EXIT
 
 # ── 预检 ─────────────────────────────────────────────
@@ -366,26 +453,6 @@ if [ -z "$YES" ]; then
   [ "$ans" = y ] || [ "$ans" = Y ] || die "已取消"
 fi
 
-# ── 等某个 sha 的 CI 跑完 ──────────────────────────────
-# push 触发的 run 不是立刻就有的，先轮询等它出现，再 watch。
-# 【为什么不用 `gh run watch` 的裸调用】它要一个 run id；不按 headSha 挑就可能盯上**上一次**
-# 推送的 run，那个早就绿了，于是「等 CI」变成一句空话。
-wait_ci_for_sha() {
-  local sha="$1" label="$2" run_id="" tries=0
-  say "▶ 等 $label 的 CI（sha ${sha:0:8}）…"
-  while [ "$tries" -lt 40 ]; do
-    run_id="$(gh run list --branch dev --event push --limit 15 --json databaseId,headSha \
-      -q "[.[] | select(.headSha == \"$sha\")] | .[0].databaseId" 2>/dev/null || true)"
-    [ -n "$run_id" ] && [ "$run_id" != "null" ] && break
-    run_id=""; tries=$((tries + 1)); sleep 5
-  done
-  [ -n "$run_id" ] || die "等不到 $label 的 CI run（sha ${sha:0:8}）——GitHub 侧没有为这次推送建 run？"
-  say "  run $run_id"
-  gh run watch "$run_id" --exit-status >/dev/null \
-    || die "${label} 的 CI 未通过（run ${run_id}）。修好再重跑本脚本，它会从中断处接上。"
-  say "  ✓ $label CI 通过"
-}
-
 # ── 执行：提交 + 推 dev + PR ──────────────────────────
 # 收尾模式整段跳过：master 上已经有这一版的代码与 CHANGELOG，PR 也早就合了，要补的只是
 # 下面的 tag 与 Release。
@@ -424,17 +491,12 @@ if [ -z "$FINALIZING" ]; then
   fi
   say "  PR #$PR"
 
-  # ── 等 PR 的 required checks，然后合并 ────────────────
-  # PR 跑的是 merge ref（master 与 dev 的虚拟合并），与上面 dev 分支上那次不是同一个提交，
-  # 必须各等各的——分支保护认的也正是 PR 这一侧。
-  #
-  # 【--required】只等分支保护真正要求的那四个 context。不加它 gh 会盯上**所有** check，
-  # 于是将来任何一个非必需 job 变红都会挡住发版 —— 那种状态下 PR 在 GitHub 上明明是可合的，
-  # 却发不出版，而错误文案只会说「检查未通过」，看不出是哪一类。
-  say "▶ 等 PR #$PR 的检查…"
-  gh pr checks "$PR" --watch --fail-fast --required >/dev/null \
-    || die "PR #$PR 的必需检查未通过。修好再重跑本脚本。"
-  say "  ✓ PR 检查通过"
+  # ── 等 PR 可合并，然后合并 ────────────────────────────
+  # 【为什么 dev 那轮绿了还要再等一次】开 PR 会**另外**触发一轮（pull_request 事件），
+  # 分支保护认的是最新那批。两批 check-runs 挂在**同一个 head commit** 上——实测
+  # `commits/<sha>/check-runs` 里同名 job 各出现两次，一批 completed 一批 in_progress，
+  # 所以「按名字看必需检查是否全绿」会看到早已完成的第一批。判据交给 GitHub 自己算。
+  wait_pr_mergeable "$PR"
   gh pr merge "$PR" --merge --body "release $TAG" >/dev/null || die "合并 PR #$PR 失败"
   say "  ✓ 已合并 PR #$PR"
 fi
