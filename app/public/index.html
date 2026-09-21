@@ -2,11 +2,13 @@
 <html lang="zh-CN" class="h-full">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <!-- 自愈脚本：注销残留的 v1 缓存型 service worker（旧 PWA 会喂陈旧外壳致「未连接」），
        但放过当前合法的 /sw.js（E15 Web Push，无缓存/offline，见 sw-cleanup.js 头注释）。
-       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
-  <script src="/js/sw-cleanup.js"></script>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。
+       defer + 排在 viewport meta 之后：脚本不碰 DOM，没理由在渲染阻塞窗口里抢跑，
+       解析器应该先拿到 viewport 才开始布局。 -->
+  <script src="/js/sw-cleanup.js" defer></script>
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
   <title>Claude Chat Mobile</title>

@@ -1,4 +1,5 @@
 import { t } from '../i18n.js';
+import { esc } from '../logic/format.js';
 
 // `/rewind` 面板 —— 对齐终端 /rewind 的两步交互。
 //
@@ -15,7 +16,7 @@ import { t } from '../i18n.js';
 // 【第一步不逐条调 preview】清单里每条的「动过几个文件」来自 transcript 自带的
 // file-history-snapshot（服务端 listRewindCandidates 算好），不是 N 次 rewindFiles dryRun——
 // 那是 N 个 SDK 控制请求，列个清单不该付这个代价。preview 只在选中某一轮后发一次。
-export function createRewindCommandController(context, {
+export function createRewindCommandController({
   $: byId,
   socket,
   openSheet = () => {},
@@ -93,21 +94,13 @@ export function createRewindCommandController(context, {
       const reason = !item.canForkConversation
         ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，只能恢复代码')}</div>` : '';
       return `<div class="py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
-        ${disabled ? '' : `data-uuid="${escapeAttr(item.promptUuid)}"`}>
-        <div class="text-sm text-ink break-words line-clamp-2">${escapeHtml(item.text) || `<em class="text-ink-soft">${t('（空消息）')}</em>`}</div>
+        ${disabled ? '' : `data-uuid="${esc(item.promptUuid)}"`}>
+        <div class="text-sm text-ink break-words line-clamp-2">${esc(item.text) || `<em class="text-ink-soft">${t('（空消息）')}</em>`}</div>
         <div class="text-xs mt-1">${changed}</div>
         ${reason}
       </div>`;
     }).join('');
   }
-
-  // 面板里的候选正文来自 transcript，是用户自己写的文本——按 HTML 注入处理，不信任。
-  function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
-  function escapeAttr(s) { return escapeHtml(s); }
 
   async function openPanel(sessionId, cwd) {
     if (!modal) return;
@@ -119,7 +112,7 @@ export function createRewindCommandController(context, {
     // await 期间用户可能已经关掉面板或切了会话——旧结果不得覆盖新状态。
     if (!session || session.sessionId !== sessionId) return;
     if (!res?.ok) {
-      listEl.innerHTML = `<div class="text-sm text-danger py-6 text-center">${escapeHtml(res?.error || t('读取失败'))}</div>`;
+      listEl.innerHTML = `<div class="text-sm text-danger py-6 text-center">${esc(res?.error || t('读取失败'))}</div>`;
       return;
     }
     renderList(res.items || []);
@@ -143,7 +136,7 @@ export function createRewindCommandController(context, {
     });
     if (!picked || picked.promptUuid !== uuid) return; // 已经返回上一步或换了一条
     if (!res?.ok) {
-      effectEl.innerHTML = `<span class="text-danger">${escapeHtml(res?.error || t('无法读取回退预览'))}</span>`;
+      effectEl.innerHTML = `<span class="text-danger">${esc(res?.error || t('无法读取回退预览'))}</span>`;
       setModeButtons(false);
       return;
     }
@@ -169,14 +162,14 @@ export function createRewindCommandController(context, {
           ? t('找不到这一轮的文件快照，只能恢复对话。')
           : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
-      const shown = files.slice(0, 3).map(escapeHtml).join('、');
+      const shown = files.slice(0, 3).map(esc).join('、');
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;
       // G5：工作区里有会被这次回退覆盖的未提交改动。警告必须摆在【选模式之前】——
       // 事后再说就晚了，那些改动已经没了。
       const dirty = Array.isArray(res.dirtyOverlap) ? res.dirtyOverlap : [];
       if (dirty.length) {
         codeLine += `<div class="text-danger mt-1">${t('其中')} ${dirty.length} ${t('个文件有未提交的改动，回退会覆盖它们：')}`
-          + `${dirty.slice(0, 3).map(escapeHtml).join('、')}${dirty.length > 3 ? '…' : ''}</div>`;
+          + `${dirty.slice(0, 3).map(esc).join('、')}${dirty.length > 3 ? '…' : ''}</div>`;
       }
     } else {
       codeLine = t('这一轮没有代码改动。');
@@ -209,7 +202,7 @@ export function createRewindCommandController(context, {
     // 回退。判据是「当前看的还是不是那个会话」，null 同样是「不是」（PR #102 review）。
     const now = getCurrentSession();
     if ((now?.sessionId ?? null) !== session.sessionId) {
-      effectEl.innerHTML = `<span class="text-danger">${escapeHtml(t('会话已切换，回退已取消，请重新发起'))}</span>`;
+      effectEl.innerHTML = `<span class="text-danger">${esc(t('会话已切换，回退已取消，请重新发起'))}</span>`;
       setModeButtons(false);
       return;
     }
@@ -222,7 +215,7 @@ export function createRewindCommandController(context, {
     if (!res?.ok) {
       // 失败留在面板里说，不写进被 sheet 盖住的消息流（2026-09-12 的教训：
       // 操作在哪一层发起，回执就得在哪一层）。
-      effectEl.innerHTML = `<span class="text-danger">${escapeHtml(res?.error || t('回退失败'))}</span>`;
+      effectEl.innerHTML = `<span class="text-danger">${esc(res?.error || t('回退失败'))}</span>`;
       setModeButtons(true);
       return;
     }

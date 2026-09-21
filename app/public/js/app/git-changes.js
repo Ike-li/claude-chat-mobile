@@ -3,6 +3,7 @@
 // 两个导出分工：createGitChangesPanel = 「改动」tab 的数据与渲染；createWorkspacePanel = 外壳
 // （#workspaceModal 的开合 + 文件/改动 tab 切换），后者同时驱动 file-browser.js 那半边。
 import { t } from '../i18n.js';
+import { showPanelMessage } from './panel-message.js';
 
 // title 存中文原文、到渲染时才 t()：模块顶层常量在 import 阶段就求值，那时 app.js 还没跑到 setLang()，
 // 在这里直接 t() 会把界面语言永久钉死成 zh。
@@ -42,12 +43,7 @@ export function createGitChangesPanel(context, {
   let loadToken = 0;
 
   function showMessage(text, className) {
-    if (!dom.gitChangesBody) return;
-    dom.gitChangesBody.innerHTML = '';
-    const message = documentRef.createElement('div');
-    message.className = `p-4 text-xs ${className || 'text-ink-faint'}`;
-    message.textContent = text;
-    dom.gitChangesBody.appendChild(message);
+    showPanelMessage(dom.gitChangesBody, text, className, documentRef);
   }
 
   function setBranch(text) {

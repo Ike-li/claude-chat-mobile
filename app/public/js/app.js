@@ -6169,7 +6169,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
   // 这里只做两件【只对发起方有意义】的事：说清处置建议、把那一轮的原话回填输入框。
-  const rewindCommand = createRewindCommandController(appContext, {
+  const rewindCommand = createRewindCommandController({
     $, socket, openSheet, closeSheet,
     getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: currentCwd }),
     onRewound: (res) => {
