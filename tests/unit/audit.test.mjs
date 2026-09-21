@@ -58,13 +58,19 @@ test.describe('audit.js 单元测试', () => {
     assert.ok(rows.some(r => r.target === 't1'));
   });
 
-  test('listRecent: 按 since 过滤', () => {
-    const before = AU.recordAudit({ action: 'since-old' });
-    const after = AU.recordAudit({ action: 'since-new' });
-    // 时钟精度可能相同 ts；只断言 old 不在结果里（new 的 ts 若与 since 相同也应保留，>= 语义）
-    const rows = AU.listRecent({ limit: 1000, since: after.ts });
-    assert.ok(rows.some(r => r.id === after.id));
-    assert.ok(!rows.some(r => r.id === before.id) || before.ts >= after.ts);
+  // ★ 原断言 `!rows.some(...) || before.ts >= after.ts` 的后半句在两次同步调用背靠背时几乎恒真
+  // （不可能跨毫秒），于是即便 listRecent 完全忽略 since、返回全量，这条测试也会绿。改用显式
+  // 传入的 ts 精确构造三个时间点，直接验证 since 的 >= 边界语义（恰好等于某条记录 ts 时应保留）。
+  test('listRecent: 按 since 过滤（含 >= 边界：since 恰好等于某条记录 ts 时应保留）', () => {
+    const before = AU.recordAudit({ action: 'since-old', ts: 1000 });
+    const after = AU.recordAudit({ action: 'since-new', ts: 2000 });
+    const rows = AU.listRecent({ limit: 1000, since: 1500 });
+    assert.ok(rows.some(r => r.id === after.id), 'since 之后的记录必须保留');
+    assert.ok(!rows.some(r => r.id === before.id), 'since 之前的记录必须被过滤掉');
+
+    const boundary = AU.listRecent({ limit: 1000, since: after.ts });
+    assert.ok(boundary.some(r => r.id === after.id), 'since 恰好等于该记录 ts 时应保留（>= 语义）');
+    assert.ok(!boundary.some(r => r.id === before.id));
   });
 
   test('环形上限：写入超过 capacity() 后自动轮转最旧', async () => {

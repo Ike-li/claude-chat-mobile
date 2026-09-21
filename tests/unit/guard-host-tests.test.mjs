@@ -137,6 +137,26 @@ test('边界: test:invariants 放行，但 test:invariants:env / test:invariants
   blocked('npm run test:invariants:env');      // 跑卸载器：隔离依赖被测代码认注入的 home/root/appPath
 });
 
+// ★ 第七个洞：SCRIPT_TEST_SCOPE['test:invariants'] 的允许前缀是 'tests/invariants/'，
+// 而 env/、server/ 子目录同样以这个前缀开头——`test:invariants:env`/`:server` 脚本名会被拦，
+// 但借道裸 `test:invariants` 脚本 + `-- tests/invariants/env/...` 参数就能绕过，
+// 落进和上面那条一模一样的洞：卸载器 / 真 server 子进程在宿主机上被跑起来。
+test('拦: 借 test:invariants 脚本名 + -- 参数点名 env/server 子目录', () => {
+  blocked('npm run test:invariants -- tests/invariants/env/uninstall-symmetry.test.mjs');
+  blocked('npm run test:invariants -- tests/invariants/server/auth-gate.test.mjs');
+  allowed('npm run test:invariants -- tests/invariants/mirror-engine.test.mjs'); // 顶层用例仍放行
+});
+
+// ★ 第八个洞：切段正则拿字面换行符当分隔符，而 shell 的反斜杠续行（`\` 紧跟换行）会被真实
+// shell 整体拼接成同一逻辑行。不折叠就先切段，会把 `-- ` 之后的测试目标切进独立的下一段——
+// 第一段找不到测试路径、附加参数为空直接放行；第二段命令头是裸路径，不是解释器，也放行。
+test('拦: 反斜杠续行拼出的命令不能靠字面换行绕开 scope 检查', () => {
+  blocked('npm run test:unit -- \\\ntests/integration/session-delete.test.mjs');
+  blocked('npm run test:invariants -- \\\ntests/invariants/server/auth-gate.test.mjs');
+  // 真正的两条独立命令（行尾没有反斜杠）必须继续被切开、各自判定，不能因为折叠而被误合并放行。
+  blocked('npm run test:unit\nnpm run mutate -- app/src/x.js');
+});
+
 // TDD 单文件循环必须留出来，否则「写一个失败测试→最小实现」这一步会被钩子逐次打断，
 // 而它带着 preload-env、只碰 tests/unit，隔离与 npm run test:unit 完全同款。
 test('放行: 带 preload-env 的单测单文件跑法（TDD 循环）', () => {

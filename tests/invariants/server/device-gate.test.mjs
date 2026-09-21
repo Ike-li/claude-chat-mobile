@@ -85,8 +85,20 @@ test('待审设备不加入 approved 房间：收不到任何会话内容广播'
   }
 });
 
+// collectEvents 在 connect_error 时直接 resolve 空数组、从不 reject——所以「连接彻底失败」与
+// 「bypass 正常生效、只是没什么好推的」在 pending.length===0 这一条断言上完全无法区分：握手
+// 全挂的一条死连接也会让下面三条测试绿。先断言确实握手成功、真的走了 approved 分支——
+// pending_devices/trusted_devices/mirror_state/permission_mode/effort_mode/instances 六个事件
+// 只在 io.on('connection') 的已批准分支无条件发送（app.js 约 2397-2474 行），不依赖 lastInit/
+// modelsCache 这类可能为空的全局态（用 init/models 做锚点会让新测试本身在无预置状态时不稳）。
+const APPROVED_ONLY_EVENT = 'pending_devices';
+const assertReachedApprovedBranch = types => assert.ok(types.includes(APPROVED_ONLY_EVENT),
+  `本机 bypass 应该收到 approved 分支才会发的 ${APPROVED_ONLY_EVENT}，实际收到：${JSON.stringify(types)}`);
+
 test('本机 Host + 本机 peer：bypass 生效，不落待审', async () => {
   const events = await collectEvents('localhost');
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0,
     '真·本机直连是设备审批的合法 bypass，否则本机自己用还要先批一次自己');
@@ -94,12 +106,16 @@ test('本机 Host + 本机 peer：bypass 生效，不落待审', async () => {
 
 test('127.0.0.1 与 localhost 等价（同一条本机判据的两种写法）', async () => {
   const events = await collectEvents('127.0.0.1');
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0);
 });
 
 test('带端口的本机 Host 仍算本机（判据取冒号前那段）', async () => {
   const events = await collectEvents(`localhost:${server.port}`);
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0, 'Host 头带端口是常态，不能因此把本机判成远程');
 });

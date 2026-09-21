@@ -119,19 +119,30 @@ const SCRIPT_TEST_SCOPE = {
   'test:coverage': 'tests/unit/',
   // 不变量树与 unit 同档：纯函数 + 一次性目录的真磁盘，不起 server、不 spawn claude。
   // scope 必须写，否则 `npm run test:invariants -- tests/integration/xxx` 会借道白名单在宿主机跑集成用例。
-  'test:invariants': 'tests/invariants/',
+  // env/、server/ 两个子目录虽然同样以 'tests/invariants/' 开头，却分别跑卸载器和真 server 子进程——
+  // 这正是 test:invariants:env / test:invariants:server 两个脚本名单独被排除在白名单外的原因，
+  // 借道裸 test:invariants 脚本名 + -- 参数点名这两个子目录不能绕过同一条判断。
+  'test:invariants': { allow: 'tests/invariants/', deny: ['tests/invariants/env/', 'tests/invariants/server/'] },
   'test:e2e': 'tests/e2e/', 'test:visual': 'tests/e2e/',
   'test:playwright': 'tests/e2e/', 'test:e2e:parallel': 'tests/e2e/',
 };
+
+// 统一成 {allow, deny} 形状：字符串写法（多数脚本）等价于 deny 为空数组。
+function scopeOf(script) {
+  const raw = SCRIPT_TEST_SCOPE[script];
+  if (!raw) return null;
+  return typeof raw === 'string' ? { allow: raw, deny: [] } : raw;
+}
 
 function whitelistedRun(segment, script) {
   if (!script || !HOST_ALLOWED_SCRIPTS.has(script)) return false;
   const extra = segment.split(/\s--\s/).slice(1).join(' ');
   if (!extra) return true;                             // 无附加参数 → 就是白名单那条命令本身
-  const scope = SCRIPT_TEST_SCOPE[script];
+  const scope = scopeOf(script);
   const targets = testTargets(extra);
   if (!targets.length) return true;                    // 附加参数没点名测试文件（--grep 之类）
-  return Boolean(scope) && targets.every(t => t.startsWith(scope));
+  if (!scope) return false;
+  return targets.every(t => t.startsWith(scope.allow) && !scope.deny.some(d => t.startsWith(d)));
 }
 
 // 这一段是不是在容器里跑。容器里 HOME 是一次性目录，够不到宿主机家目录。
@@ -163,10 +174,16 @@ function segmentReason(segment) {
 
 function decide(command) {
   if (typeof command !== 'string' || !command.trim()) return null;
+  // Shell 续行（反斜杠紧跟换行）在真实 shell 里会被整体删除、拼成同一逻辑行；必须在切段前
+  // 先折叠掉，否则下面按字面换行切段会把 `-- ` 之后的测试目标切进独立的一段，第一段附加
+  // 参数变空直接放行、第二段命令头是裸路径不是解释器也放行，整条命令绕过 scope 检查。
+  // 只吃掉字面的 反斜杠+换行 两个字符：两条独立命令各占一行、行尾没有反斜杠的正常形态
+  // 不受影响，仍然会被下面的换行分隔符切开、各自判定——这是切碎更安全那条方向的一部分。
+  const collapsed = command.replace(/\\\r?\n/g, '');
   // 切段：管道、逻辑连接符，以及【单个 &】（后台符）。少切一种 8/2 那条命令就能整条蒙混——
   // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
   // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
-  for (const segment of command.split(/\|\||&&|[|;&\n]/)) {
+  for (const segment of collapsed.split(/\|\||&&|[|;&\n]/)) {
     const why = segmentReason(segment);
     if (why) return why;
   }
