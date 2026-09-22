@@ -124,6 +124,27 @@ test.describe('initCfAccess', () => {
     assert.equal(cfAccess.isAccessEnabled(), true);
   });
 
+  // 真实事故形态：用户把 Cloudflare 控制台给的完整 URL（带 https:// 前缀）粘进配置面板的
+  // 「公网域名」字段。isPublicHost 用 host.split(':')[0] 比较，带 scheme 的值永远比不出相等，
+  // Access 层静默永远不触发——但改这条之前，三项非空的旧判据仍会让 enabled=true，
+  // 横幅照样打出「已启用 2FA」，而实际公网请求全部落回纯 AUTH_TOKEN。
+  test('HOSTNAME 带 https:// 前缀 → 视为未配置，enabled=false（不能被判成已启用）', () => {
+    setEnv({
+      CF_ACCESS_HOSTNAME: 'https://chat.example.com',
+      CF_ACCESS_TEAM: 'myteam',
+      CF_ACCESS_AUD: 'abc123',
+    });
+    assert.equal(cfAccess.initCfAccess(), false);
+    assert.equal(cfAccess.isAccessEnabled(), false);
+  });
+
+  test('HOSTNAME 带端口或路径 → 同样视为未配置', () => {
+    setEnv({ CF_ACCESS_HOSTNAME: 'chat.example.com:8443', CF_ACCESS_TEAM: 'myteam', CF_ACCESS_AUD: 'abc123' });
+    assert.equal(cfAccess.initCfAccess(), false);
+    setEnv({ CF_ACCESS_HOSTNAME: 'chat.example.com/path', CF_ACCESS_TEAM: 'myteam', CF_ACCESS_AUD: 'abc123' });
+    assert.equal(cfAccess.initCfAccess(), false);
+  });
+
   test('缺 HOSTNAME → 返回 false，enabled=false', () => {
     setEnv({
       CF_ACCESS_TEAM: 'myteam',
@@ -206,7 +227,9 @@ test.describe('isAccessEnabled', () => {
   });
 
   test('initCfAccess 返回 true 后 → true', () => {
-    setEnv({ CF_ACCESS_HOSTNAME: 'x', CF_ACCESS_TEAM: 't', CF_ACCESS_AUD: 'a' });
+    // 域名必须是裸域名（isBareHostname）；'x' 这种无点号占位符现在会被判成格式非法而 enabled=false，
+    // 与本测试要验证的「三项齐全时 isAccessEnabled 反映 init 结果」是两件事，换成真实形态的域名。
+    setEnv({ CF_ACCESS_HOSTNAME: 'x.example.com', CF_ACCESS_TEAM: 't', CF_ACCESS_AUD: 'a' });
     cfAccess.initCfAccess();
     assert.equal(cfAccess.isAccessEnabled(), true);
   });

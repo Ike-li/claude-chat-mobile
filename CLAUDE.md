@@ -72,7 +72,7 @@
 - 发版走 `scripts/release.sh`：bump → 推 `dev` → **等真 CI 绿** → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。中途失败就直接重跑，它会从中断处接上（不会二次 bump）。
 - PR 合并产生 merge commit，所以 `master` 不再等于 `dev` 的 tip，**这是正常的**——merge commit 的父之一就是 `dev`，下次 PR 的 merge base 仍然正确，不需要把 `master` 合回 `dev`。
 
-装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产——这正是 `master` 必须恒等于最新发布的原因。裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
+装机 `curl` 直接拉 GitHub 对 `master` 的源码归档（`/archive/refs/heads/master.tar.gz`，GitHub 现场 `git archive`、遵守 `export-ignore`），发版不打包、不上传资产——这正是 `master` 必须恒等于最新发布的原因。裁什么由 `.gitattributes` 的 `export-ignore` 定；新增的测试/门禁文件只要落在 `tests/` 下就被目录前缀自动覆盖、无需手动同步（见前文"代码地图与模块边界"），不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 

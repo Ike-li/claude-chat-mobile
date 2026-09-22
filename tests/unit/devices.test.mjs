@@ -201,6 +201,25 @@ test.describe('devices.js 单元测试', () => {
     denyDevice('device-lastgood');
   });
 
+  // deviceToken 来自 socket.io 握手 JSON 体，不经 HTTP header 过滤，控制字符/引号/换行都能带进来。
+  // 非交互模式下 app.js 会把它原样拼进一条打印给操作员复制运行的 shell 命令
+  // （`node scripts/device.js approve "${deviceToken}"`），带 "/`/$ 的值就是一条可执行任意命令的
+  // 注入；同时它会被落进 pending-devices.json，过大的值会让该文件被不成比例地撑大。
+  // 在 addPendingDevice 这个单点上拒绝，任何调用方（现在与未来）都受保护，不用在每个调用点各判一次。
+  test('deviceToken 含危险字符 / 超长 → 拒绝加入待审列表（防打印时命令注入、防文件被撑大）', () => {
+    addPendingDevice('has-a-"quote', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-`backtick', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-$dollar', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\\backslash', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\nnewline', { ip: '1.1.1.1' });
+    addPendingDevice('x'.repeat(200), { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 0, '危险字符/超长的 token 一个都不该进列表');
+
+    addPendingDevice('safe-token-abc123', { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 1, '不含危险字符的正常 token 仍应正常加入');
+    removePendingDevice('safe-token-abc123');
+  });
+
   // F1（code-review #5）：pendingDevices 有容量上限，防 LAN-authenticated flood 撑爆文件/刷屏。
   test('pendingDevices 有容量上限，超出丢最旧（防 flood）', () => {
     loadPendingDevices();

@@ -46,7 +46,9 @@ export function collectFiles(dir, out = []) {
   for (const e of entries) {
     const p = join(dir, e.name);
     if (e.isDirectory()) { collectFiles(p, out); continue; }
-    if (/\.(m?js)$/.test(e.name)) out.push(p);
+    // .ts/.mts 补进来：整棵 Playwright spec 树（tests/e2e/specs/*.spec.ts、tests/infra/*.config.ts）
+    // 此前只被 .js/.mjs 过滤掉，从未被这道闸扫描过。stripNonCode 的字符串/注释掩码对 TS 语法同样适用。
+    if (/\.(m?[jt]s)$/.test(e.name)) out.push(p);
   }
   return out;
 }
@@ -178,16 +180,35 @@ function* balancedCalls(scanSource, headRe) {
 // 行号：按调用头之前的换行数算（三处规则同一算法）。
 const lineAt = (source, index) => source.slice(0, index).split('\n').length;
 
+// 判断第二实参「有没有可能是 recursive:true」。只有能证明是【不含 recursive:true 的纯字面量
+// 对象】才放心判「不递归」；标识符会展开来源递归判断，spread/函数调用/三元/成员访问等
+// 无法在文本层面证明安全的形态一律按可能递归处理——fail-closed：漏报比多问一句危险得多。
+// 与目标路径侧（isSafeExpr/resolveSafeIdentifiers）同一个方向：追不到来源就不放行。
+export function mayBeRecursiveOptions(expr, origins, depth = 0) {
+  const e = String(expr ?? '').trim();
+  if (depth > 6) return true;
+  if (/recursive\s*:\s*true/.test(e)) return true;
+  const isPlainObjectLiteral = /^\{[\s\S]*\}$/.test(e) && !/\.\.\./.test(e);
+  if (isPlainObjectLiteral) return false;
+  const id = /^[A-Za-z_$][\w$]*$/.exec(e)?.[0];
+  if (id) {
+    const srcs = origins.get(id);
+    if (!srcs || srcs.length === 0) return true;   // 追不到来源（如函数参数）→ 保守按可能递归处理
+    return srcs.some(s => mayBeRecursiveOptions(s, origins, depth + 1));
+  }
+  return true;                                       // spread/函数调用/三元……一律保守
+}
+
 // 找出递归删除调用。
 // rmdirSync/rmdir 带 recursive:true 与 rmSync 删除力等价（deprecated 但可用）——不列进来
 // 谁用它就整条绕过门禁（2026-08-03 review 抓出的扫描面缺口）。非递归 rmdir 只能删空目录，
 // 破坏力有界，仍由下方 recursive:true 判据自然排除。
-export function findDestructiveCalls(source) {
+export function findDestructiveCalls(source, origins = new Map()) {
   const lines = source.split('\n');
   const calls = [];
   for (const { index, fn, open, close } of balancedCalls(source, /\b(rmSync|rm|rmdirSync|rmdir)\s*\(/g)) {
     const args = splitArgs(source.slice(open + 1, close));
-    if (args.length < 2 || !/recursive\s*:\s*true/.test(args[1])) continue;
+    if (args.length < 2 || !mayBeRecursiveOptions(args[1], origins)) continue;
     const line = lineAt(source, index);
     calls.push({ line, fn, arg: args[0], text: lines[line - 1]?.trim() ?? '' });
   }
@@ -249,9 +270,10 @@ export function checkFile(rawSource, relPath) {
   const source = stripNonCode(rawSource);
   const lines = rawSource.split('\n');
   const factories = collectSafeFactories(source);
-  const safe = resolveSafeIdentifiers(collectOrigins(source), factories);
+  const origins = collectOrigins(source);
+  const safe = resolveSafeIdentifiers(origins, factories);
   const violations = [];
-  for (const call of findDestructiveCalls(source)) {
+  for (const call of findDestructiveCalls(source, origins)) {
     if (isSafeExpr(call.arg, safe, factories)) continue;
     // 豁免标记必须在【原文】里找——stripNonCode 会把注释抹成空格，在屏蔽后的文本里
     // 永远找不到 safe-rm，那样豁免机制等于不存在（本闸自己踩过这个坑）。

@@ -80,14 +80,23 @@ test('root app/server.js is only a compatibility launcher for app/src/server/app
   const source = readFileSync('app/server.js', 'utf8');
   const lines = source.split('\n').filter(line => line.trim() !== '');
 
-  assert.ok(lines.length <= 12, `app/server.js must stay thin; found ${lines.length} non-empty lines`);
+  assert.ok(lines.length <= 14, `app/server.js must stay thin; found ${lines.length} non-empty lines`);
   assert.match(source, /\.\/src\/server\/app\.js/);
-  assert.match(source, /loadRuntimeEnvironment\(\)/);
+  // 必须显式传 dir（锚在 app/server.js 自己的 import.meta.dirname 上），不能回落
+  // loadRuntimeEnvironment 缺省的 process.cwd()——否则启动 cwd 与仓库根不一致时（如 systemd
+  // 未写 WorkingDirectory=）会读到与配置面板不同源的配置文件，静默假成功。
+  assert.match(source, /loadRuntimeEnvironment\([^)]*\{\s*dir:/s);
   assert.match(source, /await import\(['"]\.\/src\/server\/app\.js['"]\)/);
   assert.ok(
-    source.indexOf('loadRuntimeEnvironment()') < source.indexOf("await import('./src/server/app.js')"),
+    source.indexOf('loadRuntimeEnvironment(') < source.indexOf("await import('./src/server/app.js')"),
     '.env must load before the runtime import fixes state-file paths',
   );
+  // app/server.js 在仓库根下一层（app/），只需一层 '..' 就是仓库根；app/src/server/app.js 的
+  // HERE 在三层深，需要三层 '..'。这两个深度不同，是本仓「PROJECT_ROOT 三层向上」脆弱点
+  // 的姊妹坑——把这里误写成三层 '..' 会把 dir 解析到仓库根的【上一级】，静默读不到任何配置
+  // 文件（响亮失败：拒绝启动，不会像 process.cwd() 那样偶尔悄悄读到别的目录）。
+  assert.match(source, /join\(import\.meta\.dirname,\s*'\.\.'\)/,
+    'app/server.js 到仓库根只差一层，用错深度会解析到错误目录');
   assert.doesNotMatch(source, /export\s*\{[^}]+\}\s*from\s*['"]\.\/src\/server\/app\.js/);
 });
 
