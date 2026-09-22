@@ -23,17 +23,22 @@ function focusableNode() {
   return n;
 }
 
+function mkClassList() {
+  return {
+    _s: new Set(),
+    add(...c) { c.forEach(x => this._s.add(x)); },
+    remove(...c) { c.forEach(x => this._s.delete(x)); },
+    contains(c) { return this._s.has(c); },
+    toggle(c, on) { if (on) this._s.add(c); else this._s.delete(c); },
+  };
+}
+
 // 极简 sheet 元素：classList + querySelectorAll（忽略选择器字符串，直接返回注入的可聚焦子项）。
 function sheetNode(focusables = []) {
   return {
     _attrs: {},
     _focusables: focusables,
-    classList: {
-      _s: new Set(),
-      add(...c) { c.forEach(x => this._s.add(x)); },
-      remove(...c) { c.forEach(x => this._s.delete(x)); },
-      contains(c) { return this._s.has(c); },
-    },
+    classList: mkClassList(),
     offsetHeight: 0,
     getAttribute(k) { return this._attrs[k] ?? null; },
     setAttribute(k, v) { this._attrs[k] = String(v); },
@@ -61,7 +66,8 @@ function harness() {
   return { doc, controller };
 }
 
-test('openSheet/closeSheet：Tab 陷阱在打开期间生效、关闭后摘除并还焦', () => {
+test('openSheet/closeSheet：Tab 陷阱在打开期间生效、关闭后摘除并还焦', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const { doc, controller } = harness();
   const trigger = focusableNode(); trigger._doc = doc;
   doc.activeElement = trigger;
@@ -83,6 +89,11 @@ test('openSheet/closeSheet：Tab 陷阱在打开期间生效、关闭后摘除�
 
   controller.closeSheet(sheet);
   assert.equal(doc._count('keydown'), 0, '关闭后监听器必须摘除，否则残留监听器累积泄漏');
+  // 还焦在滑出动画结束后才发生（closeSheet 里的 300ms）。标题写了「并还焦」就必须真断言它，
+  // 否则去掉 closeSheet 那行 focusPrev.focus() 这条用例照样绿。
+  assert.notEqual(doc.activeElement, trigger, '300ms 未到时不该已经还焦');
+  t.mock.timers.tick(300);
+  assert.equal(doc.activeElement, trigger, '关闭动画结束后焦点必须还给打开前聚焦的那个元素');
 });
 
 test('嵌套 sheet：appConfirm 在已开着的业务 sheet 之上打开——内层关闭不得摘掉外层的 Tab 陷阱', () => {
@@ -116,14 +127,68 @@ test('嵌套 sheet：appConfirm 在已开着的业务 sheet 之上打开——�
   assert.equal(doc._count('keydown'), 0);
 });
 
-test('appConfirm：确认/取消都会兑现 Promise 并在关闭动画后还原之前的焦点', async () => {
-  const { doc, controller } = harness();
+// appConfirm 的接线要真跑到，就必须把 confirmModal / confirmOk / confirmCancel 这几个节点造出来：
+// 少了 confirmModal，函数第一行 `if (!confirmModal || confirmResolve) return Promise.resolve(false)`
+// 就返回了，按钮 onclick → settleConfirm → 兑现 Promise → closeSheet 延时还焦这整条链一步都走不到。
+function confirmHarness() {
+  const doc = fakeDoc();
+  const okBtn = focusableNode(); okBtn._doc = doc;
+  const cancelBtn = focusableNode(); cancelBtn._doc = doc;
+  const altBtn = focusableNode(); altBtn._doc = doc; altBtn.classList = mkClassList();
+  // confirmModal 本身要能被 openSheet/closeSheet 当 sheet 用，另需 style 与遮罩点击的 addEventListener。
+  const modal = sheetNode([okBtn, cancelBtn]);
+  modal.style = {};
+  modal.addEventListener = (ev, fn) => { (modal._on ||= {})[ev] = fn; };
+  const nodes = {
+    confirmModal: modal,
+    confirmSheet: { style: {} },
+    confirmTitle: { className: '', textContent: '' },
+    confirmBody: { textContent: '', classList: mkClassList() },
+    confirmOk: okBtn, confirmCancel: cancelBtn, confirmAlt: altBtn,
+  };
+  const controller = createSheetController({ state: {} }, { $: (id) => nodes[id] ?? null, doc });
+  return { doc, controller, nodes };
+}
+
+test('appConfirm：点确定兑现 true，并在关闭动画结束后把焦点还给调用前的元素', { timeout: 2000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { doc, controller, nodes } = confirmHarness();
   const trigger = focusableNode(); trigger._doc = doc;
   doc.activeElement = trigger;
 
-  // appConfirm 内部 DOM（confirmModal 等）在本测试里全部缺失（$ 恒返回 null）——
-  // 断言里已确认的是 openSheet/closeSheet 的通用契约，appConfirm 的按钮接线由
-  // frontend-env-config.test.mjs 一类的调用方测试覆盖；这里只确认缺 DOM 时不抛异常。
-  const result = await controller.appConfirm({ title: 'x' });
-  assert.equal(result, false, '缺 confirmModal 时直接 resolve(false)，不应该挂起或抛异常');
+  const p = controller.appConfirm({ title: '删除？', body: '不可恢复' });
+  assert.ok(nodes.confirmModal.classList.contains('sheet-open'), 'appConfirm 应真的把 confirmModal 打开');
+  assert.equal(nodes.confirmTitle.textContent, '删除？');
+  assert.notEqual(doc.activeElement, trigger, '打开后焦点应已移进 sheet（openSheet 的移焦）');
+
+  nodes.confirmOk.onclick();
+  assert.equal(await p, true, '点确定必须兑现 true');
+  assert.equal(nodes.confirmModal.classList.contains('sheet-open'), false);
+
+  // 还焦刻意延后到滑出动画结束（closeSheet 里的 300ms）——不推进定时器就还没发生，
+  // 这两条断言合起来钉的是「延时还焦」而不只是「最终焦点对了」。
+  assert.notEqual(doc.activeElement, trigger, '300ms 未到时不该已经还焦');
+  t.mock.timers.tick(300);
+  assert.equal(doc.activeElement, trigger, '关闭动画结束后焦点必须还给调用前的元素');
+});
+
+test('appConfirm：点取消兑现 false', { timeout: 2000 }, async () => {
+  const { controller, nodes } = confirmHarness();
+  const p = controller.appConfirm({ title: 'x' });
+  nodes.confirmCancel.onclick();
+  assert.equal(await p, false);
+});
+
+test('appConfirm：已开着时重入直接兑现 false，不排队不叠加', { timeout: 2000 }, async () => {
+  const { controller, nodes } = confirmHarness();
+  const first = controller.appConfirm({ title: 'first' });
+  assert.equal(await controller.appConfirm({ title: 'second' }), false, '重入应立即兑现 false');
+  assert.equal(nodes.confirmTitle.textContent, 'first', '重入不得覆盖已开着那一层的内容');
+  nodes.confirmCancel.onclick();
+  await first;
+});
+
+test('appConfirm：缺 confirmModal 时直接兑现 false（不挂起、不抛异常）', async () => {
+  const { controller } = harness(); // $ 恒返回 null
+  assert.equal(await controller.appConfirm({ title: 'x' }), false);
 });
