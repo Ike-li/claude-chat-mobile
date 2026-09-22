@@ -107,6 +107,44 @@ test('反向放宽：编号由门禁而非用例守护时不误报（PROTO-01 / 
   } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
 });
 
+// 【2026-09 收紧】反向检查此前是纯子串匹配（登记表 ID 在 tests/ 树任意文件任意位置出现即算数），
+// 不要求「守护：」声明行格式——一个编号只要在某处的散文里被写死过，哪怕守护它的用例早被删光，
+// 反向检查也会一直放行。这正是本闸最想堵住的那类恒绿：门禁绿着，管辖面却是空的。
+test('红侧⑤：编号只在散文里被提及、没有规范「守护：」行 → 仍判 dead_registry_entry（收紧前会误判为已提及）', () => {
+  const root = fakeRepo({
+    registryRows: [['AUTH-01', '令牌门'], ['SRV-777', '写了但只在散文里提过']],
+    files: { 'a.test.mjs': '// x\n// 守护：AUTH-01\n' },
+    // 散文提及：字符串里确实出现了 SRV-777，但这一行不以「守护：」开头，不构成声明。
+    extraCorpus: { 'unit/some-note.test.mjs': '// 这里顺带提一句 SRV-777，但没人真的守它\ntest("x", () => {});\n' },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    assert.deepEqual(codes(r), ['dead_registry_entry']);
+    assert.equal(r.problems[0].id, 'SRV-777');
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// 本闸自身文件（及其单测夹具）不该被算进反向扫描面——它们的源码/测试样本字符串里
+// 天然会出现 ID 字面量（本文件上面几条用例就写了 AUTH-01/GHOST-01/SRV-999 等），
+// 若不排除，任何登记表条目只要恰好在这份门禁自己的代码或测试文件里被提过一次
+// （哪怕是当作"编造的编号"这种反例），就会被误判成"仍有人守护"——自满足回路，
+// 且不需要真实仓库改动就能触发，纯粹是这道闸自己的源码在给自己作弊。
+test('排除自引用：编号只出现在本闸自身文件（或其单测夹具）里的规范守护行 → 仍判 dead_registry_entry', () => {
+  const root = fakeRepo({
+    registryRows: [['AUTH-01', '令牌门'], ['SRV-888', '只在门禁自身文件里被"声明"过']],
+    files: { 'a.test.mjs': '// x\n// 守护：AUTH-01\n' },
+    extraCorpus: {
+      'gates/check-invariant-ids.js': '// 守护：SRV-888（自引用，不该算数）\n',
+      'unit/check-invariant-ids.test.mjs': '// 守护：SRV-888（单测夹具里的样本文本，同样不该算数）\n',
+    },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    assert.deepEqual(codes(r), ['dead_registry_entry']);
+    assert.equal(r.problems[0].id, 'SRV-888');
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
 // 扫描面塌掉必须报错，不能静默当成「全部合规」——这是 repo-inventory 的同款判据。
 test('扫描面塌了不得当成全绿：登记表读不到 / invariants 目录为空', () => {
   const noReadme = mkdtempSync(join(tmpdir(), 'ccm-invid-bare-'));
