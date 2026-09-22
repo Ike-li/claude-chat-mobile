@@ -58,6 +58,13 @@ test('apple-touch-icon 指向 180×180（Apple 推荐尺寸）', () => {
   assert.match(html, /apple-touch-icon[^>]*180/i);
 });
 
+// CF Access 场景下浏览器抓 manifest.webmanifest 这个请求默认不带凭据——没有这个属性，
+// 装 PWA 时 Access 会把这次匿名请求拦成登录页，manifest 解析失败，"添加到主屏幕" 直接不可用。
+// 这条约束此前零测试覆盖，纯靠人肉盯着 index.html 不被改丢。
+test('manifest link 带 crossorigin="use-credentials"（CF Access 保护下抓取需要带凭据，否则装不上 PWA）', () => {
+  assert.match(html, /rel="manifest"[^>]*crossorigin="use-credentials"/);
+});
+
 // 主屏短名有两个独立来源（Android 读 manifest.short_name，iOS 读 apple-mobile-web-app-title），
 // 改一处漏另一处会让两端主屏显示不同的名字——这里锁死「同一个值」而非各测各的。
 test('主屏短名 = CCM，且 iOS/Android 两处不分叉', () => {
