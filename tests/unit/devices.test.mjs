@@ -23,6 +23,7 @@ import {
   approveDevice,
   denyDevice,
   persistTrustedChange,
+  takeSelfMutations,
   getTrustedDeviceProfiles,
   shortDeviceId,
   resolveShortDeviceId,
@@ -236,6 +237,51 @@ test.describe('devices.js 单元测试', () => {
 
     for (const d of getPendingDevices()) removePendingDevice(d.deviceToken); // 清理
     assert.equal(getPendingDevices().length, 0);
+  });
+
+  // 容量淘汰不是「有人拒绝了它」。device-gate.js 的文件监听器按 pending 集合差集记
+  // device_denied，看不出这条移除是谁造成的——不登记成「本进程自己移的」的话，第 51 台设备
+  // 之后每来一台就伪造一条 device_denied，而审计表是环形有上限的，伪造记录会把真实安全事件挤出去。
+  test('takeSelfMutations：容量淘汰掉的最旧条目登记为本进程自身移除（监听器据此不记成拒绝）', () => {
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+    takeSelfMutations(); // 清掉上面清理动作累积的条目，只观察下面这一段
+
+    const N = MAX_PENDING_DEVICES + 1;
+    for (let i = 0; i < N; i++) addPendingDevice(`evict-${i}`, { ip: '10.0.0.1', userAgent: 'x' });
+
+    const self = takeSelfMutations();
+    assert.ok(self.pendingRemoved.has('evict-0'),
+      `第 ${N} 台进来时最旧的 evict-0 被容量淘汰，必须登记为自身移除，实际：${JSON.stringify([...self.pendingRemoved])}`);
+    // 取走即消费：不清空的话，下一次真实的 CLI 拒绝会被这批陈旧条目误当成自身写入而漏审计——
+    // 方向恰好与本修复相反，且同样无声。
+    assert.equal(takeSelfMutations().pendingRemoved.size, 0, 'take 之后必须清空');
+
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+  });
+
+  // ★ 登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point。
+  // app.js 的 TTY 处理器（终端里按回车批准 / 输入 deny）走的就是这里的同进程
+  // approveDevice/denyDevice，而它【不记审计】——文件监听器是它唯一的审计来源。
+  // 把「本进程里所有写入」一律登记成「已记过」，终端审批就彻底无痕了。
+  test('approveDevice / denyDevice 的同进程调用不得自动登记（TTY 审批靠监听器补审计）', () => {
+    loadTrustedDevices();
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+    takeSelfMutations();
+
+    addPendingDevice('tty-tok', { ip: '10.0.0.1', userAgent: 'x' });
+    takeSelfMutations(); // 清掉入列动作可能带来的登记，只观察下面两步
+
+    approveDevice('tty-tok');
+    let self = takeSelfMutations();
+    assert.equal(self.trustedAdded.size, 0,
+      '同进程 approveDevice 不得被当成「已记过审计」——那会让 TTY 回车批准一条审计都不留');
+
+    denyDevice('tty-tok');
+    self = takeSelfMutations();
+    assert.equal(self.trustedRemoved.size, 0, '同理，denyDevice 也不得自动登记');
+    assert.equal(self.pendingRemoved.size, 0);
   });
 });
 

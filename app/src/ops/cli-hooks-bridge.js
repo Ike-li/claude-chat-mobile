@@ -360,15 +360,17 @@ export function decideHookEventActions(events, {
     const cwd = resolve(event.cwd);
     if (!allowed.has(cwd)) { ignored += 1; continue; }
     invalidate.add(event.cwd);
-    if (viewingSessionId && event.sessionId === viewingSessionId
-        && viewingCwd && resolve(viewingCwd) === cwd) {
-      catchUp = true;
-    }
+    // 「正看着这个会话」= 视图落在这个 session/cwd 上，不是随便哪个 approved 客户端在前台就算——
+    // 下面 Stop 的抑制判据与 catchUp 复用同一个收窄条件，此前 Stop 只喂了 hasForegroundClient，
+    // 等于「只要我在看手机，不管在看哪个会话，别的会话的完成通知一律吞掉」（零收窄）。
+    const isViewingThisSession = Boolean(viewingSessionId && event.sessionId === viewingSessionId
+      && viewingCwd && resolve(viewingCwd) === cwd);
+    if (isViewingThisSession) catchUp = true;
     const category = HOOK_NOTIFY_CATEGORY[event.hookEventName];
     if (!category) { ignored += 1; continue; }
-    // Stop = 回合结束：前台有人在看就不必打扰（对齐 result 的既有规则）。
+    // Stop = 回合结束：正看着这个会话、且客户端确实在前台（没锁屏/没切别的 app）才不必打扰。
     // Notification = CLI 在等你：可能锁屏或在别的会话，无条件推。
-    if (event.hookEventName === 'Stop' && hasForegroundClient) continue;
+    if (event.hookEventName === 'Stop' && isViewingThisSession && hasForegroundClient) continue;
     if (now - event.capturedAt > pushMaxAgeMs) continue; // 旧事件仍刷新，但不补推通知
     if (typeof throttle === 'function') {
       const { throttled, next } = throttle(event.sessionId, category, now, state, throttleMs);
