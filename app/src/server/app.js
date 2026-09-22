@@ -1404,7 +1404,9 @@ function readCliSnapshotForSession(sessionId, cwd) {
 const mirrorEngine = createMirrorEngine({
   io,
   agents,
-  instanceState,
+  // 不是 instanceState：那份把后台任务折进 'busy'（抽屉口径），镜像会把纯后台任务期当成己方在写盘，
+  // 终端写入既不追平也不标脏（2026-09-22 review P0）。见 instance-manager.js driverStateOf。
+  instanceState: instanceManager.driverStateOf,
   getViewingInstanceId: () => viewingInstanceId,
   viewingCwdOf,
   serviceStartedAt: SERVICE_STARTED_AT,

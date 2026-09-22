@@ -47,6 +47,17 @@ export function createInstanceManager() {
     return 'idle';
   }
 
+  // 单驾驶员判定（镜像引擎）用的口径：'busy' = 己方在写主链 transcript，只认在途轮。
+  // 不得复用 stateOf——它把 hasBgTasks 折进 'busy'，纯后台任务期（dev server 挂几小时、
+  // pendingTurns=0）会被镜像引擎当成己方在写盘：终端在同一会话写的内容既不追平也不标
+  // externalDirty，而发送闸只拦在途轮，手机消息送进陈旧实例、分叉（2026-09-22 review P0）。
+  // 后台任务期 SDK 注入的 <task-notification> 与随后的自动汇报自报 sdk-ts，由 catchUpStep 的
+  // entrypoint 判据吸收，不需要靠这里把整段时间豁免掉。
+  function driverStateOf(id) {
+    const state = stateOf(id);
+    return state === 'busy' && !(agents.get(id)?.pendingTurns > 0) ? 'idle' : state;
+  }
+
   // /health.busy 与 instances.turnRunning 同口径：只认在途轮。不得复用 stateOf === 'busy'——
   // 那把 hasBgTasks 也折进去，后台任务期抽屉会显示运行中，但发送仍放行（见 app.js turnRunning 注释）。
   // health 若跟 stateOf 对齐，巡检会把「有后台任务」说成「有在途轮」。
@@ -106,6 +117,7 @@ export function createInstanceManager() {
     forSession,
     inheritedEffort,
     stateOf,
+    driverStateOf,
     anyTurnRunning,
     captureUnreadSnapshot,
     clearTables,

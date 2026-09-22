@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 
 import { extractCliObservedState, readCliObservedState } from '../../app/src/agent/cli-mirror-state.js';
 import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
+import { createInstanceManager } from '../../app/src/server/instance-manager.js';
 import {
   mirrorEntryLock,
   mirrorReleaseStep,
@@ -249,4 +250,40 @@ test.describe('extractCliObservedState：三道跳过条件互相独立', () => 
     const r = extractCliObservedState([assistant('claude-opus-4'), assistant('<synthetic>')]);
     assert.equal(r.model, 'claude-opus-4');
   });
+});
+
+// ── 单驾驶员判定用的实例状态：「己方在写盘」只认在途轮（2026-09-22 review P0）──────────────
+// stateOf 把 hasBgTasks() 折进 'busy'，那是给抽屉/运行条的粗粒度口径。镜像引擎若沿用它，
+// 纯后台任务期（dev server 挂几小时、pendingTurns=0）会一直走 localBusy 分支：终端在同一会话
+// 写的内容既不追平也不标 externalDirty，而发送闸只拦在途轮——手机消息送进 SDK 内存停在旧位置
+// 的实例，从旧 parentUuid 分叉出第二条链。纯后台任务期 SDK 不写主链 transcript；它注入的
+// <task-notification> 与随后的自动汇报自报 sdk-ts，由 catchUpStep 的 entrypoint 判据吸收。
+// 接线侧（app.js 把它注入镜像引擎）由 invariants/server/external-dirty.test.mjs 的 S2 用例行为性钉住。
+test('driverStateOf：纯后台任务期不算「己方在写盘」，在途轮与等审批照旧', () => {
+  const manager = createInstanceManager();
+  const id = manager.nextId();
+  const agent = {
+    instanceId: id,
+    sessionId: 's-bg',
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => true,
+    dispose() {},
+  };
+  manager.agents.set(id, agent);
+
+  assert.equal(manager.stateOf(id), 'busy', '前置：抽屉口径把后台任务算运行中（这一侧不该变）');
+  assert.equal(manager.driverStateOf(id), 'idle',
+    '纯后台任务期被当成己方在写盘 = 终端写入既不追平也不标脏，手机消息送进陈旧实例、分叉');
+
+  agent.pendingTurns = 1;
+  assert.equal(manager.driverStateOf(id), 'busy', '在途轮仍是己方在写盘（与后台任务并存也一样）');
+  agent.pendingTurns = 0;
+  agent.pendingPermissions.set('req-1', {});
+  assert.equal(manager.driverStateOf(id), 'permission', '等审批的判定不受影响（externalGrowthWhilePaused 靠它标脏）');
+  agent.pendingPermissions.clear();
+  agent.hasBgTasks = () => false;
+  assert.equal(manager.driverStateOf(id), 'idle');
+  assert.equal(manager.driverStateOf('inst_nope'), 'idle', '查不到实例按空闲处理，与 stateOf 同口径');
 });
