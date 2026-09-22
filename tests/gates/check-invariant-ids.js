@@ -53,7 +53,7 @@ const REGISTRY_ROW_RE = /^\|\s*`([A-Z]+-\d+)`/gm;
 // "// 守护：AUTH-01" 这样的样本文本）。两个都排除，消除自满足回路：一个不再被任何真实
 // 用例/门禁守护的编号，不该只因为这道闸自己的源码或测试夹具里出现过同名字符串就被判定
 // "仍有人提及"。
-const SELF_FILES = new Set(['tests/gates/check-invariant-ids.js', 'tests/unit/check-invariant-ids.test.mjs']);
+export const SELF_FILES = new Set(['tests/gates/check-invariant-ids.js', 'tests/unit/check-invariant-ids.test.mjs']);
 
 /** 文件头部行数组里的「守护：」声明 ID 列表；没有守护行返回 null（区别于"有守护行但零 ID"）。 */
 function extractGuardIds(headLines) {

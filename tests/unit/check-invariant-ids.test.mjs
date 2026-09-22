@@ -8,10 +8,10 @@
 // 编号悬空会在完全无症状的情况下重新长回来——那正是 2026-09-05 之前的状态。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { checkInvariantIds } from '../../tests/gates/check-invariant-ids.js';
+import { checkInvariantIds, SELF_FILES } from '../../tests/gates/check-invariant-ids.js';
 
 // 造一棵最小假仓库：tests/README.md（登记表）+ tests/invariants/（用例）
 function fakeRepo({ registryRows = [], files = {}, extraCorpus = {} } = {}) {
@@ -143,6 +143,19 @@ test('排除自引用：编号只出现在本闸自身文件（或其单测夹�
     assert.deepEqual(codes(r), ['dead_registry_entry']);
     assert.equal(r.problems[0].id, 'SRV-888');
   } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// SELF_FILES 是写死的两条路径。文件一旦改名/搬走，排除就【静默失效】——而失效方向恰好是
+// 这个 PR 要堵的那种：自满足回路复活，门禁又开始给自己作弊，且没有任何信号。
+// 这类「守卫本身悄悄失去管辖面」的缺口，就是本闸存在的理由，它自己不能犯。
+test('SELF_FILES 里的路径必须真实存在——写死的排除名单不得因改名而静默失效', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  for (const rel of SELF_FILES) {
+    assert.ok(existsSync(join(root, rel)),
+      `SELF_FILES 里的 ${rel} 不存在了（改名/搬走？）。排除名单对不上文件就等于没排除，`
+      + `自引用回路会悄悄复活——请同步更新这份名单。`);
+  }
+  assert.equal(SELF_FILES.size, 2, '名单增减时请一并确认上面那条排除自引用的用例仍然覆盖得到');
 });
 
 // 扫描面塌掉必须报错，不能静默当成「全部合规」——这是 repo-inventory 的同款判据。
