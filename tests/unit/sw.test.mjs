@@ -190,6 +190,98 @@ test.describe('sw.js — push 事件', () => {
 });
 
 // =========================================================================
+// sw.js — install / activate 生命周期
+// =========================================================================
+// 此前没有这两个处理器：install 默认要等所有旧版本页面标签全部关闭才会激活——
+// PWA 用户几乎不会主动关标签，新版本可能长期停在 waiting 态；activate 默认不接管
+// 已打开的页面，新旧 SW 代码短暂共存、行为不一致。
+test.describe('sw.js — install / activate', () => {
+  test('install：调用 self.skipWaiting()，不等旧页面全部关闭', async () => {
+    let skipWaitingCalled = false;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'install') this._installHandler = handler; },
+      skipWaiting() { skipWaitingCalled = true; return Promise.resolve(); },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    assert.ok(mockSelf._installHandler, 'install handler 已注册');
+    await mockSelf._installHandler({ waitUntil: p => p });
+    assert.ok(skipWaitingCalled);
+  });
+
+  test('activate：调用 self.clients.claim()，立刻接管已打开的页面', async () => {
+    let claimCalled = false;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'activate') this._activateHandler = handler; },
+      clients: { claim() { claimCalled = true; return Promise.resolve(); } },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    assert.ok(mockSelf._activateHandler, 'activate handler 已注册');
+    await mockSelf._activateHandler({ waitUntil: p => p });
+    assert.ok(claimCalled);
+  });
+});
+
+// =========================================================================
+// sw.js — pushsubscriptionchange（订阅被浏览器/推送服务主动轮换）
+// =========================================================================
+// 起因：不处理这个事件时，旧端点持续留在服务端记录里但已经失效——用户从此收不到任何
+// 推送，且没有任何提示，只能等用户自己发现、手动去设置面板重新开一次推送。
+// SW 上下文拿不到 localStorage 里的 AUTH_TOKEN（不同执行线程，规范不提供该 API），
+// 不能在这里直接调用需要鉴权的 /push/subscribe；这里只做浏览器端重新订阅——下次用户
+// 打开应用时 notifications.js 的 setup()→subscribe() 会读到这个新订阅并无条件重新
+// POST /push/subscribe 上报（那条路径本就不省略"已有订阅"时的上报），从而自愈。
+test.describe('sw.js — pushsubscriptionchange', () => {
+  test('oldSubscription 带 applicationServerKey → 用同一把 key 重新订阅', async () => {
+    let subscribeArgs = null;
+    const fakeKey = new Uint8Array([1, 2, 3]);
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'pushsubscriptionchange') this._changeHandler = handler; },
+      registration: {
+        pushManager: {
+          subscribe(opts) { subscribeArgs = opts; return Promise.resolve({}); },
+        },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    assert.ok(mockSelf._changeHandler, 'pushsubscriptionchange handler 已注册');
+    const mockEvent = {
+      oldSubscription: { options: { applicationServerKey: fakeKey } },
+      waitUntil: p => p,
+    };
+    await mockSelf._changeHandler(mockEvent);
+    assert.equal(subscribeArgs.userVisibleOnly, true);
+    assert.equal(subscribeArgs.applicationServerKey, fakeKey);
+  });
+
+  test('oldSubscription 缺失（浏览器不提供）→ 不调用 subscribe，不抛错', async () => {
+    let subscribeCalled = false;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'pushsubscriptionchange') this._changeHandler = handler; },
+      registration: { pushManager: { subscribe() { subscribeCalled = true; return Promise.resolve({}); } } },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    await mockSelf._changeHandler({ oldSubscription: null, waitUntil: p => p });
+    assert.equal(subscribeCalled, false);
+  });
+
+  test('续订失败（reject）→ 不让 waitUntil 失败，不拖累 SW 生命周期', async () => {
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'pushsubscriptionchange') this._changeHandler = handler; },
+      registration: {
+        pushManager: { subscribe() { return Promise.reject(new Error('registration limit')); } },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    let waitUntilResult;
+    await mockSelf._changeHandler({
+      oldSubscription: { options: { applicationServerKey: new Uint8Array([1]) } },
+      waitUntil: p => { waitUntilResult = p; return p; },
+    });
+    await assert.doesNotReject(waitUntilResult);
+  });
+});
+
+// =========================================================================
 // sw.js — notificationclick 事件行为
 // =========================================================================
 test.describe('sw.js — notificationclick 事件', () => {

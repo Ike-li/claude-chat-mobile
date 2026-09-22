@@ -1,4 +1,35 @@
 // Service Worker — Web Push only (E15). No caching, no offline.
+
+// 不调用 skipWaiting 时，新版本默认要等所有旧版本控制的页面标签全部关闭才会激活——
+// PWA 用户几乎不会主动关标签，新版本可能长期停在 waiting 态，推送逻辑的修复永远用不上。
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+
+// 不调用 clients.claim 时，新 SW 激活后也不会立刻接管已打开的页面（那些页面仍由旧 SW
+// 控制，直到下一次导航/刷新）——新旧代码短暂共存，行为不一致。
+self.addEventListener('activate', e => {
+  e.waitUntil(self.clients.claim());
+});
+
+// 订阅被浏览器/推送服务主动轮换（不是用户操作，如端点过期）时触发。不处理的话，旧端点
+// 持续留在服务端记录里但已经失效——用户从此收不到任何推送，且没有任何提示。
+//
+// 这里只做浏览器端重新订阅：SW 上下文拿不到 localStorage 里的 AUTH_TOKEN（不同执行
+// 线程，规范不提供该访问），不能在这里直接调用需要鉴权的 /push/subscribe。下次用户
+// 打开应用时，notifications.js 的 setup()→subscribe() 会读到这个新订阅并无条件重新
+// POST /push/subscribe 上报（那条路径本就不省略"已有订阅"时的上报），从而自愈。
+// applicationServerKey 从旧订阅的 options 上原样复用（PushSubscriptionOptions 标准
+// 字段）——不需要额外获取 VAPID key。拿不到旧 key（部分浏览器不提供 oldSubscription）
+// 就放弃自动续订，等用户下次手动打开应用时走全新订阅流程，不比现状差。
+self.addEventListener('pushsubscriptionchange', e => {
+  const applicationServerKey = e.oldSubscription?.options?.applicationServerKey;
+  if (!applicationServerKey) return;
+  e.waitUntil(
+    self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }).catch(() => {})
+  );
+});
+
 self.addEventListener('push', e => {
   const data = e.data?.json() ?? {};
   const title = data.title || 'Claude';
