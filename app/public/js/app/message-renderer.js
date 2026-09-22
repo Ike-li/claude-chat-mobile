@@ -19,6 +19,19 @@ export function createMessageRenderer(context, { scrollBottom = () => {} } = {})
   // 黑名单而非白名单：markdown 的产出集合会随 marked/GFM 演进，白名单漏一个就是静默丢渲染；这里禁的
   // 是「markdown 本就不产出、却能改变页面交互」的那几个原语，零副作用。input 有意保留 —— GFM 任务列表
   // 「- [ ] todo」渲染成 <input type=checkbox disabled>，且孤立 input 既无 label 可激活、也无 form 可提交。
+  // class 同理且更隐蔽（2026-09-22 review）：页面跑的是 Tailwind **运行时**，它用 MutationObserver 盯
+  // class 当场现编 CSS，于是 class="fixed z-[2147483647] pointer-events-none …" 能做到 style 能做的一切——
+  // 在真「允许」上方画一个「拒绝」、点击穿透过去（真 Chromium 实测触发 allow）。这里反过来用白名单：
+  // markdown 自己产出的 class 只有 <code class="language-xxx">（hljs 靠它选语言），其余一律剥掉。
+  // 语言名字符集照 marked 原样输出的 info string 放宽（c++ / c# / objective-c），但不放 [ ]，
+  // 挡住伪装成前缀的任意值写法。
+  const MARKDOWN_CLASS_TOKEN = /^language-[A-Za-z0-9_+#.-]+$/;
+  purifier?.addHook('uponSanitizeAttribute', (_node, data) => {
+    if (data.attrName !== 'class') return;
+    const kept = String(data.attrValue || '').split(/\s+/).filter(token => MARKDOWN_CLASS_TOKEN.test(token));
+    if (kept.length) data.attrValue = kept.join(' ');
+    else data.keepAttr = false;
+  });
   const SANITIZE_CONFIG = {
     FORBID_TAGS: ['label', 'form', 'button', 'select', 'textarea', 'option', 'fieldset', 'legend'],
     FORBID_ATTR: ['style', 'for', 'tabindex', 'accesskey', 'autofocus', 'contenteditable', 'draggable'],
