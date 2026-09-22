@@ -1,5 +1,62 @@
 # 变更记录
 
+## v1.12.1 — 2026-09-22
+
+Changes since v1.12.0.
+
+### Verified environment
+- claude CLI: 2.1.278
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.263
+
+### Fixes
+- fix(tests): setup.test.mjs 的 SETUP 也要转成文件系统路径
+- fix(tests): 模块 URL 转路径改用 fileURLToPath，不再用 .pathname
+- fix(session): 迟到的成功 ack 要撤掉 4s 兜底弹出的落地页（补齐其余 3 处 + 收紧重试那处）
+- fix(history): compact 之前的历史不再被当成废弃分支剪掉
+- fix(devices): 登记点改到「已记过审计的调用方」，修上一版让 TTY 审批无痕的回归
+- fix(auth): 反代判据从 TRUSTED_PROXY 改成「拓扑上有没有中间节点」
+- fix(outbox/flow): 失败提示的落点判据 + 子代理流水超时后真的能重试 + 迟到 ack 撤掉落地页
+- fix(scout): 关闭路径同步删 transcript 残留，否则那行清理根本来不及跑
+- fix(devices): 文件监听器的审计差集要减掉本进程自己造成的变化
+- fix(config): 启动侧也要认 CCM_CONFIG_FILE_PATH / CCM_ENV_FILE_PATH 覆盖
+- fix(test): decodeXmlEntities 改单遍替换，消除二次解码（CodeQL js/double-escaping 高危）
+- fix(auth): 非法 deviceToken 不得触发「新设备申请」的广播/推送/审批提示
+- fix(gates): glob 截断出的前缀不能绕过 test:invariants 的 deny 子目录
+- fix(sw): 补齐 install/activate/pushsubscriptionchange 三个生命周期处理器
+- fix(auth): 反代/隧道场景下限速锁定的来源判断不再误报"是自己的旧 token"
+- fix(config): NOTIFY_THROTTLE_MS/SESSION_DELETE_QUIET_MS 允许显式设为 0
+- fix: 前端 app.js 正确性——离线消息静默丢失、4 处 ack 无超时、深链缺兜底、3 处缺译
+- fix: agent.js 审批台账 decidedBy 溯源 + 下游异常隔离 + 单向终态强制
+- fix: 镜像/会话状态机五处修复——mirror_state 重放、scout 清理、viewingCwd 归一化、pendingDeleteIds 漏挡、effort 误置换
+- fix: Stop 推送抑制判据零收窄 + CLI 设备审计脱离在线连接依赖
+- fix(auth): 配置读写不同源 + CF Access 域名格式 + deviceToken 危险字符三处安全修复
+- fix(gates): 修掉宿主机测试门禁的两处绕过 + 两条断言恒真的测试
+- fix(sync): local_command 分支同样要透出 entrypoint，否则秒回斜杠命令重现今天刚修的 bug
+- fix(release): 等 CI 的两处判定各自把「查不到」当成了「红」
+
+### Other
+- chore(meta): package.json 的 description 与 GitHub 仓库侧统一
+- docs(architecture): 撤销「compact 过的会话只回显压缩点之后」那条取舍
+- test(gates): SELF_FILES 改名时必须响亮失败，不能静默失去排除效果
+- test(gates): workflow 扫描的三处缺口——pipefail 前提、.yaml 扩展名、跨行管道
+- test(gates): 手写睡眠改整文件扫描，判据锚到 resolve 形参上
+- test(scope): server-file-handlers 整份搬进 invariants 并声明守护 SCOPE-01
+- test(approval): 单向终态用例搬进 invariants 并声明守护 APPROVAL-01
+- test(sheets): appConfirm 与还焦两条用例改成真的会红
+- test: 收紧 3 处 fake-green 测试（仅测 typeof/扫描面无非空护栏）
+- test(gates): shell 陷阱检查扩展扫描面到 GitHub Actions workflow 的 run: 块
+- test(gates): Playwright 门禁新增 new Promise(...setTimeout...) 检测
+- test(gates): check-invariant-ids.js 反向检查收紧为守护行匹配，排除自引用
+- test(gates): 三处门禁扫描面/判据加固 —— 空扫描面必红、路径归一化、标记大小写不敏感
+- test(e2e): 补 result.text 权威全文覆盖截断内容的 E2E 回归覆盖
+- test(security): 加固安全相关测试覆盖 —— vendor 缓存哈希、E2E 真实 CSP、manifest/文件安全闸断言
+- chore: 前端低优先级清理——嵌套 sheet 焦点陷阱丢失、多处重复代码、死 CSS
+- chore(cleanup): 后端低优先级加固批次——auth/files/ops/server/shared 五域
+- docs(consistency): 修正若干处过期数字与自相矛盾表述 + 给 plist/service-units 契约补测试
+- seo: package.json 描述补「Claude Code」，中文 README 的网站链接指向 /zh/
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.12.0...v1.12.1
+
 ## v1.12.0 — 2026-09-21
 
 Changes since v1.11.0.
