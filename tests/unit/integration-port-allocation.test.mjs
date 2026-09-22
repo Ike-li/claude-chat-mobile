@@ -28,8 +28,11 @@ const INTEGRATION_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'int
 const PORT_FROM_RANDOM = /process\.env\.PORT\s*=[^;\n]*Math\.random/;
 
 test('tests/integration 下没有任何文件用抽签决定 server 端口', () => {
-  const offenders = readdirSync(INTEGRATION_DIR)
-    .filter(f => f.endsWith('.mjs'))
+  const mjsFiles = readdirSync(INTEGRATION_DIR).filter(f => f.endsWith('.mjs'));
+  // 扫描面塌了不是"没有违规"：目录改名/搬空时 offenders 天然是空数组，
+  // 下面的 assert.deepEqual(offenders, []) 会误判成"全部合规"。
+  assert.ok(mjsFiles.length > 0, `${INTEGRATION_DIR} 下扫不到任何 .mjs 文件，扫描面塌了`);
+  const offenders = mjsFiles
     .filter(f => PORT_FROM_RANDOM.test(readFileSync(join(INTEGRATION_DIR, f), 'utf8')));
 
   assert.deepEqual(

@@ -22,7 +22,11 @@ test('real Claude smoke runner requires an explicit list, scenario, or all actio
 
 test('real Claude smoke scenarios do not hard-code the historical shared work directory', () => {
   const dir = join(import.meta.dirname, '..', 'smoke', 'scenarios');
-  for (const name of readdirSync(dir)) {
+  const names = readdirSync(dir);
+  // 扫描面塌了不是"没有违规"：目录被改名/搬空/清空时上面的 for 循环一次都不执行，
+  // 断言从未被调用过，测试照样绿——同 gate-wiring.test.mjs:40 的既有护栏写法。
+  assert.ok(names.length > 0, `${dir} 下扫不到任何 scenario 文件，扫描面塌了`);
+  for (const name of names) {
     const source = readFileSync(join(dir, name), 'utf8');
     assert.doesNotMatch(source, /\/tmp\/ccm-test/, `${name} must use runner-provided WORK_DIR`);
   }

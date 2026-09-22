@@ -14,6 +14,7 @@ import {
   MAX_PENDING_DEVICES,
   getTrustedCount,
   getTrustedDeviceIds,
+  loadTrustedDevices,
 } from '../../app/src/auth/devices.js';
 import * as audit from '../../app/src/ops/audit.js';
 
@@ -142,10 +143,30 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     assert.equal(MAX_PENDING_DEVICES, 50);
   });
 
-  test('DEVICE-03: getTrustedCount 只读受信任总数，不泄露受信任 deviceToken 明细', () => {
-    const count = getTrustedCount();
-    assert.equal(typeof count, 'number');
-    assert.ok(count >= 0);
+  // 此前只测 typeof count === 'number' / count >= 0——一个恒返回 0 的实现同样能通过。
+  // 两个函数都读同一份由 tests/setup/preload-env.mjs 重定向到本进程隔离目录的文件
+  // （CCM_TRUSTED_DEVICES_FILE，每个 .test.mjs 文件各自 fork 一个子进程、各自一份，
+  // 不存在跨文件竞态）。直接写入已知内容再验证返回值确实反映了写入的数据，且数量
+  // 变化时会跟着变，而不是停在某次调用的旧值上。
+  test('DEVICE-03: getTrustedCount / getTrustedDeviceIds 确实反映受信任设备的真实数量与 ID（不是恒定值）', (t) => {
+    const file = process.env.CCM_TRUSTED_DEVICES_FILE;
+    assert.ok(file, '本测试依赖 preload-env.mjs 的 CCM_TRUSTED_DEVICES_FILE 重定向，缺了它这条测试测不出东西');
+    const original = existsSync(file) ? readFileSync(file, 'utf8') : null;
+    t.after(() => {
+      if (original === null) { try { rmSync(file); } catch { /* 本来就没有，删不掉也无妨 */ } }
+      else writeFileSync(file, original);
+      loadTrustedDevices(); // 恢复内存态，避免污染同文件里排在后面的其它测试
+    });
+
+    writeFileSync(file, JSON.stringify(['dev-a', 'dev-b', 'dev-c']));
+    loadTrustedDevices();
+    assert.equal(getTrustedCount(), 3, 'getTrustedCount 必须反映刚写入的真实数量，不能是恒定值');
+    assert.deepEqual(getTrustedDeviceIds().sort(), ['dev-a', 'dev-b', 'dev-c']);
+
+    writeFileSync(file, JSON.stringify(['only-one']));
+    loadTrustedDevices();
+    assert.equal(getTrustedCount(), 1, '数量变化时必须跟着变，不能停留在上一次调用的值');
+    assert.deepEqual(getTrustedDeviceIds(), ['only-one']);
   });
 
   // ★ 这条守的是「吊销真的能吊销」，不是防窃听：trusted_devices 只广播给 deviceApproved===true
@@ -206,11 +227,6 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     // 此时一条都不该被标成「这台就是你」，否则用户会以为自己不能吊销那台。
     const asBypass = gate.trustedDevicesPayload(undefined);
     assert.deepEqual(asBypass.devices.map(d => d.isCurrent), [false, false]);
-  });
-
-  test('DEVICE-03: getTrustedDeviceIds 专供本地 CLI 与菜单栏，返回 Array', () => {
-    const ids = getTrustedDeviceIds();
-    assert.ok(Array.isArray(ids));
   });
 });
 
