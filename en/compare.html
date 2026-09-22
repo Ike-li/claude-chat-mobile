@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Chat Mobile vs. Claude Code Remote Control — which one should you use?</title>
+<meta name="description" content="An honest comparison: most people should use the official Claude Code Remote Control. Claude Chat Mobile only makes sense for API keys, third-party gateways, Bedrock/Vertex/Foundry, or when the transcript must stay on your machine.">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Claude Chat Mobile vs. Claude Code Remote Control">
+<meta property="og:description" content="Most people should use the official Remote Control. Here are the specific cases where it cannot work, and where a self-hosted bridge is the answer.">
+<meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Claude Chat Mobile vs. Claude Code Remote Control">
+<meta name="twitter:description" content="An honest selection guide, including when NOT to use this project.">
+<meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},
+    {"@type":"ListItem","position":2,"name":"Compare","item":"https://ike-li.github.io/claude-chat-mobile/en/compare.html"}
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type":"Question","name":"Should I use Claude Chat Mobile or the official Claude Code Remote Control?","acceptedAnswer":{"@type":"Answer","text":"For most people, the official Remote Control. It is included with a Pro, Max, Team or Enterprise plan, needs one command, and there is no server to run or secure. Claude Chat Mobile is for the cases where Remote Control is not available: API-key authentication, a third-party gateway or proxy via ANTHROPIC_BASE_URL, Bedrock / Google Cloud Agent Platform / Microsoft Foundry, or a setup where the session transcript must not leave your machine."}},
+    {"@type":"Question","name":"Does Claude Code Remote Control work with an API key or a third-party gateway?","acceptedAnswer":{"@type":"Answer","text":"No. The official documentation states that API keys are not supported, and that Remote Control is unavailable when ANTHROPIC_BASE_URL points at a host other than api.anthropic.com, such as an LLM gateway or proxy. Claude Chat Mobile drives your local CLI directly, so it works with whatever provider that CLI is already configured for."}},
+    {"@type":"Question","name":"Where is my session transcript stored?","acceptedAnswer":{"@type":"Answer","text":"With the official Remote Control, the transcript is stored on Anthropic servers while the session is connected, so it can sync across devices. With Claude Chat Mobile the transcript stays on your own machine, in the same files your local CLI already writes."}},
+    {"@type":"Question","name":"Does my computer need to stay on?","acceptedAnswer":{"@type":"Answer","text":"Yes, for both. Both approaches drive a claude process running on your own machine; if that machine sleeps or the process exits, the session goes offline. Self-hosting does not change this."}}
+  ]
+}
+</script>
+<style>
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+    --line:#E3E0D6; --line-soft:#ECEAE1;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+    --accent:#C96442; --accent-deep:#AE5238; --accent-wash:#F0E4DD;
+    --warn-bg:#F7EFE4; --warn-ink:#7A4E1E;
+    --ok-bg:#E8F0EA; --ok-ink:#2F5C3A;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --font-read: Georgia, Charter, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius:0.625rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#121211; --surface:#1C1B1A; --surface-sunk:#161514;
+      --line:#2E2C2A; --line-soft:#242221;
+      --ink:#EEEEEC; --ink-soft:#A3A19D; --ink-faint:#7A7874;
+      --accent:#D97757; --accent-deep:#E2886A; --accent-wash:#2D231E;
+      --warn-bg:#2A2218; --warn-ink:#E0B57A;
+      --ok-bg:#1A2620; --ok-ink:#8FBE9A;
+    }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:var(--font-ui); background:var(--canvas); color:var(--ink);
+    line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code, pre { font-family:var(--font-mono); }
+  code {
+    background:var(--surface-sunk); border:1px solid var(--line-soft);
+    padding:.08em .35em; border-radius:.28em; font-size:.9em; color:var(--accent-deep);
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:0 22px; }
+  nav {
+    position:sticky; top:0; z-index:20;
+    background:color-mix(in srgb, var(--canvas) 86%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
+  }
+  .nav-in { display:flex; align-items:center; gap:12px; height:56px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:600; color:var(--ink); }
+  .brand:hover { text-decoration:none; }
+  .mark {
+    width:26px; height:26px; border-radius:7px; background:var(--accent); color:#F4F3EE;
+    display:grid; place-items:center; font-family:var(--font-read); font-size:16px;
+  }
+  .nav-spacer { flex:1; }
+  .nav-in a.meta { font-size:14px; color:var(--ink-soft); }
+  header.page { padding:40px 0 18px; }
+  .kicker { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--accent); letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+  h1 { font-family:var(--font-read); font-size:clamp(28px,4vw,38px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin-bottom:12px; }
+  .lead { font-size:17.5px; color:var(--ink-soft); margin-bottom:14px; }
+  .alts { font-size:14px; color:var(--ink-faint); margin-bottom:8px; }
+  main { padding-bottom:64px; }
+  h2 { font-family:var(--font-read); font-size:22px; margin:32px 0 12px; font-weight:600; }
+  h3 { font-size:16.5px; margin:18px 0 8px; font-weight:600; }
+  p, li { font-size:15.5px; color:var(--ink); }
+  ul, ol { padding-left:1.25em; margin:8px 0 14px; }
+  li { margin:6px 0; }
+  pre {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; overflow:auto; font-size:13.5px; line-height:1.55; margin:12px 0 16px;
+    box-shadow:0 1px 2px rgba(60,50,40,.04);
+  }
+  pre code { background:none; border:0; padding:0; color:var(--ink); font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 18px; font-size:14.5px; }
+  th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--surface-sunk); font-weight:600; }
+  .callout {
+    border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:14px 0;
+    background:var(--surface);
+  }
+  .callout.warn { background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn-ink) 25%, var(--line)); color:var(--warn-ink); }
+  .callout.ok { background:var(--ok-bg); border-color:color-mix(in srgb, var(--ok-ink) 25%, var(--line)); color:var(--ok-ink); }
+  .callout strong { display:block; margin-bottom:4px; }
+  .steps { counter-reset:step; list-style:none; padding-left:0; }
+  .steps > li {
+    position:relative; padding:14px 14px 14px 52px; margin:0 0 12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  }
+  .steps > li::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%;
+    background:var(--accent-wash); color:var(--accent-deep); font-weight:700; font-size:13px;
+    display:grid; place-items:center;
+  }
+  footer {
+    border-top:1px solid var(--line-soft); padding:22px 0 36px; color:var(--ink-faint); font-size:13.5px;
+  }
+  footer .foot { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
+</style>
+<style>
+  /* 本页特有：表格里有 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 这类超长标识符，
+     420px 视口下会撑破表格、让整页横向滚动（实测 546px vs 420px）。共用样式块与
+     其他英文页保持逐字一致，断词规则只加在这一页。 */
+  td, th { overflow-wrap:anywhere; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="../">
+      <span class="mark">C</span>
+      <span>Claude Chat Mobile</span>
+    </a>
+    <div class="nav-spacer"></div>
+    <a class="meta" href="quickstart.html">Quickstart</a>
+    <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<header class="page">
+  <div class="wrap">
+    <div class="kicker">Honest comparison</div>
+    <h1>Should you use this, or the official Remote Control?</h1>
+    <p class="lead">Short answer: <strong>most people should use the official Claude Code Remote Control</strong>. It ships with your Claude subscription, takes one command, and there is no server to run or secure. This page exists to tell you the specific cases where it <em>cannot</em> work &mdash; those are the only reasons to self-host something like this project.</p>
+    <p class="alts">Facts about Remote Control below are from the <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">official Claude Code documentation</a> &middot; <time datetime="2026-09-22">Checked 2026-09-22</time></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="callout ok">
+    <strong>Use the official Remote Control if none of the rows below apply to you</strong>
+    Run <code>/remote-control</code> in any Claude Code session, scan the QR code with the Claude app, done. Nothing to install, no ports opened, no server of yours to keep patched. If it works for your setup, it is the better choice and this project has nothing to add.
+  </div>
+
+  <h2 id="when-rc-cannot-work">When the official Remote Control cannot work</h2>
+  <p>These are hard requirements from Anthropic&rsquo;s own documentation, not opinions. If any row matches your setup, Remote Control is unavailable and a self-hosted bridge is one of the few remaining options.</p>
+  <table>
+    <thead><tr><th>Your setup</th><th>What the official docs say</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>You authenticate with an <strong>API key</strong></td>
+        <td>&ldquo;API keys are not supported.&rdquo; Remote Control requires a claude.ai sign-in on a Pro, Max, Team or Enterprise plan.</td>
+      </tr>
+      <tr>
+        <td>You point <code>ANTHROPIC_BASE_URL</code> at a <strong>third-party gateway, relay or proxy</strong></td>
+        <td>Not available when the variable points &ldquo;at a host other than <code>api.anthropic.com</code>, such as an LLM gateway or proxy.&rdquo; (Allowed before CLI v2.1.196; tightened since.)</td>
+      </tr>
+      <tr>
+        <td>You run on <strong>Amazon Bedrock, Google Cloud&rsquo;s Agent Platform or Microsoft Foundry</strong></td>
+        <td>Explicitly listed as unavailable API-endpoint configurations.</td>
+      </tr>
+      <tr>
+        <td>You set <code>DISABLE_TELEMETRY</code>, <code>DO_NOT_TRACK</code>, <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> or <code>DISABLE_GROWTHBOOK</code></td>
+        <td>Each one disables the feature-flag evaluation Remote Control depends on. You must unset it to use Remote Control.</td>
+      </tr>
+      <tr>
+        <td>Your organization requires <strong>Zero Data Retention</strong></td>
+        <td>&ldquo;Organizations with compliance requirements such as Zero Data Retention can&rsquo;t enable Remote Control.&rdquo;</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="transcript">Where the transcript lives</h2>
+  <p>This is the other real difference, and it cuts both ways.</p>
+  <ul>
+    <li><strong>Official Remote Control:</strong> while connected, the session transcript &mdash; your messages, Claude&rsquo;s responses and tool activity &mdash; is stored on Anthropic servers. That is what keeps the conversation in sync across your devices and lets a session survive a network drop. Execution and filesystem access stay on your machine.</li>
+    <li><strong>This project:</strong> the transcript stays in the same local files your CLI already writes. Nothing is stored off-machine. The trade-off is that cross-device sync and reconnect are your server&rsquo;s job, not Anthropic&rsquo;s.</li>
+  </ul>
+
+  <h2 id="what-is-not-different">What is <em>not</em> a difference</h2>
+  <div class="callout">
+    <strong>Your computer has to stay on either way</strong>
+    Both approaches drive a <code>claude</code> process on your own machine. If the machine sleeps or the process exits, the session goes offline. Self-hosting does not buy you a session that runs without your computer &mdash; if that is what you want, neither of these is the answer.
+  </div>
+
+  <h2 id="what-you-take-on">What you take on by self-hosting</h2>
+  <p>Stated plainly, because it is the part comparison pages usually leave out:</p>
+  <ul>
+    <li>You run and update a Node server, and you decide how it is reachable &mdash; LAN, a tunnel, or Cloudflare Access. The project is locked by default and refuses to start without a token, but the exposure decision is yours.</li>
+    <li>One instance serves <strong>one user</strong>. There is no multi-tenancy and none is planned.</li>
+    <li>Push notifications need your own web-push keys or an ntfy topic; there is no managed service behind it.</li>
+    <li>No official mobile app &mdash; it is a PWA you add to the home screen.</li>
+  </ul>
+
+  <h2 id="decide">Decide in one line</h2>
+  <table>
+    <thead><tr><th>If&hellip;</th><th>Then</th></tr></thead>
+    <tbody>
+      <tr><td>You are on Pro/Max with a normal claude.ai login</td><td><strong>Official Remote Control.</strong> Stop reading.</td></tr>
+      <tr><td>You drive the CLI through a gateway, relay or API key</td><td>Remote Control is unavailable &mdash; this project is built for exactly that case.</td></tr>
+      <tr><td>The transcript must not leave your machine</td><td>Self-host. This project, or an equivalent.</td></tr>
+      <tr><td>You want terminal-equivalent control, not a screen mirror</td><td>Either works; this project aims for CLI parity (approvals, <code>AskUserQuestion</code>, subagents, background tasks).</td></tr>
+      <tr><td>You want a session that runs while your laptop is off</td><td>Neither. Look at cloud-hosted agents instead.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="other-options">Other self-hosted projects</h2>
+  <p>This project is not the only one in this space, and it is not the largest. If it does not fit, these are worth a look &mdash; check each project&rsquo;s own README for current capabilities rather than trusting a comparison table that will drift:</p>
+  <ul>
+    <li><a href="https://github.com/siteboon/claudecodeui" target="_blank" rel="noopener">siteboon/claudecodeui</a> &mdash; web and mobile UI with a file explorer, git integration and a built-in shell.</li>
+    <li><a href="https://github.com/slopus/happy" target="_blank" rel="noopener">slopus/happy</a> &mdash; mobile client with its own companion CLI.</li>
+    <li><a href="https://github.com/sugyan/claude-code-webui" target="_blank" rel="noopener">sugyan/claude-code-webui</a> &mdash; a lighter web interface with streaming responses.</li>
+  </ul>
+
+  <h2 id="faq">FAQ</h2>
+  <h3>Should I use Claude Chat Mobile or the official Claude Code Remote Control?</h3>
+  <p>For most people, the official Remote Control. It is included with a Pro, Max, Team or Enterprise plan, needs one command, and there is no server to run or secure. Claude Chat Mobile is for the cases where Remote Control is not available: API-key authentication, a third-party gateway or proxy via ANTHROPIC_BASE_URL, Bedrock / Google Cloud Agent Platform / Microsoft Foundry, or a setup where the session transcript must not leave your machine.</p>
+  <h3>Does Claude Code Remote Control work with an API key or a third-party gateway?</h3>
+  <p>No. The official documentation states that API keys are not supported, and that Remote Control is unavailable when ANTHROPIC_BASE_URL points at a host other than api.anthropic.com, such as an LLM gateway or proxy. Claude Chat Mobile drives your local CLI directly, so it works with whatever provider that CLI is already configured for.</p>
+  <h3>Where is my session transcript stored?</h3>
+  <p>With the official Remote Control, the transcript is stored on Anthropic servers while the session is connected, so it can sync across devices. With Claude Chat Mobile the transcript stays on your own machine, in the same files your local CLI already writes.</p>
+  <h3>Does my computer need to stay on?</h3>
+  <p>Yes, for both. Both approaches drive a claude process running on your own machine; if that machine sleeps or the process exits, the session goes offline. Self-hosting does not change this.</p>
+
+  <div class="callout">
+    <strong>Still think this fits?</strong>
+    Try the <a href="../demo/">live demo</a> first &mdash; it runs the real frontend with a fake backend, so you can judge the interface before installing anything. Then the <a href="quickstart.html">Quickstart</a>.
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Apache-2.0</span>
+    <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub</a>
+    <a href="../">Home</a>
+    <a href="quickstart.html">Quickstart</a>
+    <a href="security.html">Security</a>
+    <a href="../demo/">Demo</a>
+  </div>
+</footer>
+</body>
+</html>

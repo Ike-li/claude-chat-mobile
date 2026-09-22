@@ -32,7 +32,11 @@ function linksOf(file) {
   if (!existsSync(abs)) return [];
   const html = readFileSync(abs, 'utf8');
   const out = new Set();
-  for (const [, href] of html.matchAll(/<a\s[^>]*href="([^"]+)"/g)) {
+  // href 前必须是属性边界（空白），否则贪婪的 [^>]* 会把 data-i18n-href="…" 的值
+  // 当成链接 —— 首页的 i18n 链接正是 `<a href="X" data-i18n-href="Y">` 这种写法。
+  // 旧写法下它们全被读成 "hub.xxxHref"，靠同一目标在别处还有一个属性顺序相反的
+  // 链接才侥幸可达；新加的页面没有那份巧合，会被误判成孤儿页。
+  for (const [, href] of html.matchAll(/<a\s(?:[^>]*\s)?href="([^"]+)"/g)) {
     if (/^(https?:|mailto:|#|javascript:|data:)/.test(href)) continue;
     const clean = href.split('#')[0].split('?')[0];
     if (!clean) continue;
