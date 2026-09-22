@@ -30,6 +30,7 @@ import {
   aggregateStates,
   owningWorkspace,
   resolveDrawerStatus,
+  isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
@@ -6754,7 +6755,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           closeLeftSidebar();
           let acked = false;
           const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) blocked(res?.error || t('切换失败')); });
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
+            acked = true;
+            if (!res?.ok) blocked(res?.error || t('切换失败'));
+            else dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
+          });
           setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
         }
       };
@@ -7721,8 +7726,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 只撤属于本次请求的那一张：这 4 秒里用户完全可能已经点开别的会话并撞上真实失败，
   // 无条件 hide 会把那条真实的错误提示一起抹掉。
   function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
-    const target = blockedSurfaceTarget;
-    if (target && target.sessionId === sessionId && target.cwd === cwd) hideSessionBlockedSurface();
+    if (isBlockedSurfaceTarget(blockedSurfaceTarget, { sessionId, cwd })) hideSessionBlockedSurface();
   }
   function retryBlockedSession() {
     const target = blockedSurfaceTarget;
@@ -7735,7 +7739,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       acked = true;
       if (btn) btn.disabled = false;
       // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-      if (res?.ok) hideSessionBlockedSurface();
+      // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
+      // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
+      if (res?.ok) dismissBlockedSurfaceIfTarget(target.sessionId, target.cwd);
       else setBlockedReason(res?.error || t('切换失败'));
     });
     setTimeout(() => {
@@ -7821,6 +7827,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
           acked = true;
           if (!res?.ok) blocked(res?.error || t('切换失败'));
+          else dismissBlockedSurfaceIfTarget(resume.sessionId, resume.cwd); // 同上：迟到的成功 ack 要撤页
         });
         setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       };
@@ -7917,6 +7924,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
         if (!res?.ok) blocked(res?.error || t('切换失败'));
+        else dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
       });
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
