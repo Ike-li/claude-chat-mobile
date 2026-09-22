@@ -625,6 +625,11 @@ test.describe('ack 形状守卫 —— 守键集而非键值', () => {
 // 永远绿的」——tests/unit/server-config.test.mjs 只测纯函数 parseServerConfig，不过真实 env:set
 // 这条 socket 事件；tests/e2e 打的是 mock server（零 import app/src）。这里补 S2 一侧：起真 server、
 // 真发 env:set、直接读磁盘上写入目标的文件内容断言。
+//
+// 【本用例只证明写入这一半】「启动侧读的也是这一份」靠 loadRuntimeEnvironment 认同一组
+// CCM_CONFIG_FILE_PATH/CCM_ENV_FILE_PATH 覆盖来保证，钉在 tests/unit/server-config.test.mjs
+// 的三条用例上（覆盖生效 / 新文件优先 / 未设覆盖时行为不变）。两边合起来才是「同源」：
+// 只有本用例的话，启动侧读仓库根、面板读写临时目录，它照样绿——正是那种假绿。
 test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是启动时读的那一份', () => {
   test('.env 部署：写入后目标文件里真的出现新值', async () => {
     const s = connectSocket();

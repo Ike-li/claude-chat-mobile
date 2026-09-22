@@ -70,9 +70,17 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet 
   // `cd "__REPO__" && exec node server.js`，两条入口 cwd 都落在仓库根），
   // ccm.config.json 优先、缺失回落 .env。显式 envFile 走兼容路径 —— doctor 的 `--env=prod.env`
   // 与单测都指向一个具体文件，那时不该再去扫目录。
+  // CCM_CONFIG_FILE_PATH / CCM_ENV_FILE_PATH 必须在这一侧也认：app/src/server/app.js 的
+  // CONFIG_FILE_PATH/ENV_FILE_PATH（面板 env:get/env:set 的读写目标）已经认它们，启动侧不认
+  // 就会变成「进程启动读仓库根、面板读写临时目录」——两条独立的路径解析，正是 CLAUDE.md
+  // 「读写必须同源，写错源＝假成功」点名的那条。覆盖只在测试/演练里设，生产两侧都回落同一目录。
   const sources = envFile
     ? { fileValues: dotenv.parse(readFileSync(envFile)), warnings: [] }
-    : loadConfigSources({ dir: dir ?? process.cwd() });
+    : loadConfigSources({
+      dir: dir ?? process.cwd(),
+      configPath: env.CCM_CONFIG_FILE_PATH,
+      envPath: env.CCM_ENV_FILE_PATH,
+    });
 
   const { values, warnings } = resolveConfigValues({
     fileValues: sources.fileValues,
