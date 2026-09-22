@@ -256,6 +256,27 @@ export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewi
   return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
 }
 
+// 离线消息的失败提示（「未发送 · 可重发」/「已停止重试」）该挂在哪儿。判据是两条独立的问题，
+// 只答一条就会把提示放错地方——而放错地方的两种形态都无声：
+//
+//   · 'indicator'  气泡上的 pending-indicator 还连在活 DOM 里 → 直接复用（原样式、原位置）。
+//   · 'bar'        indicator 不在活 DOM（会话切换会把整个气泡搬进 sessionDomCache，
+//                  querySelector 仍能从脱离的子树里找到它，所以「找得到」不等于「看得见」），
+//                  但这条消息确实属于【当前正在看的】会话 → 新开一条独立提示条。
+//                  addBar 写的是当前消息面，只有归属对得上时它才是正确落点。
+//   · 'stale'      不属于当前会话 → 仍写回那个已脱离的 indicator：用户切回该会话时缓存被重新
+//                  挂上，提示就在那条消息旁边。**绝不能改成 addBar**——那等于拿 A 会话的发送
+//                  失败去污染 B 会话的界面（操作在哪一层发起、回执就得在哪一层）。
+//   · 'none'       indicator 压根不存在（气泡从未建过，或缓存已被逐出）且又不属于当前会话：
+//                  没有任何正确的落点，放弃。宁可不提示，也不在别的会话里凭空多出一条红字。
+export function outboxNoticePlacement({
+  indicatorExists = false, indicatorConnected = false, targetsViewing = false,
+} = {}) {
+  if (indicatorExists && indicatorConnected) return 'indicator';
+  if (targetsViewing) return 'bar';
+  return indicatorExists ? 'stale' : 'none';
+}
+
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。
