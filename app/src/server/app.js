@@ -49,7 +49,7 @@ import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/servic
 import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { encodeQr } from '../shared/qrcode.js';
-import { resolvePublicTarget } from '../shared/public-target.js';
+import { resolvePublicTarget, isProxyFronted } from '../shared/public-target.js';
 import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
@@ -1072,10 +1072,23 @@ function computeServiceHealth() {
   // 说出「为什么/是谁」。都可能为 null——旧进程重启后 label 清零而计数时间戳仍在窗内，前端按缺席渲染。
   return {
     startedAt: SERVICE_STARTED_AT,
-    // 面板判「限速锁定来源是本机」时要不要断言"多半是自己的旧 token"就靠这个字段——反代/隧道
-    // 部署下直连地址恒是反代自己，TRUSTED_PROXY 已声明却仍判成 local 说明来源已不可靠
-    // （见 service-diag.js 的 formatServiceNotices）。
-    trustedProxyConfigured: TRUSTED_PROXY === 'loopback',
+    // 这台 server 前面有没有中间节点。面板判「限速锁定来自 127.0.0.1」要不要断言
+    // "多半是你自己的旧 token" 就靠它（见 service-diag.js 的 formatServiceNotices）。
+    //
+    // 【为什么不能只看 TRUSTED_PROXY】那个开关的语义是「允许采信反代追加的 XFF 末跳」，
+    // 而本仓刻意不让它随 reverse-proxy 自动打开（XFF 是客户端可写的，采信必须用户明确声明）。
+    // 于是最常见的反代/托管隧道部署恰恰是 TRUSTED_PROXY 未设、peer 恒 127.0.0.1——正是这句
+    // 断言最危险的那一档：真·公网暴力尝试会被说成"多半是你自己的旧 token"。
+    // 判据因此换成「拓扑上有没有中间节点」，三条来源任一成立即为 true：
+    //   · TRUSTED_PROXY=loopback —— 用户明说了前面有可信反代；
+    //   · ACCESS_PROFILE=reverse-proxy / cloudflare —— 声明的拓扑本身就含中间节点。
+    //     托管隧道（ngrok / Quick Tunnel / Tailscale Funnel）并入 reverse-proxy，
+    //     env-schema.js:69-72 明写它们的连带变化含「peer 是 loopback 导致限速桶全塌」；
+    //   · 未声明 profile 但 CF_ACCESS_* 三项齐全 —— 按 schema 的「未声明时按 CF_ACCESS_* 推断」，
+    //     流量经 cloudflared 进来，peer 同样是 loopback。
+    // vpn / direct / lan 三档【不】算：它们的 peer 就是真实客户端地址（tailnet IP / 公网 IP /
+    // 局域网 IP），此时 127.0.0.1 确实就是本机，原措辞成立、不该被改。
+    proxyFronted: isProxyFronted({ trustedProxy: TRUSTED_PROXY, accessProfile: ACCESS_PROFILE, accessConfigured: accessConfigured() }),
     deliveryFailure: failure
       ? {
         ...failure,
@@ -4067,7 +4080,7 @@ registerSocketConnection(io, socket => {
       clientError: health.clientError,
       // 面板自己的「异常告警」小节走这条 ack（不是 instances 广播），得同样带上——否则顶栏/抽屉
       // 与「服务状态」面板对同一次限速锁定会显示不一致的措辞（见 app.js renderServiceStatus）。
-      trustedProxyConfigured: health.trustedProxyConfigured,
+      proxyFronted: health.proxyFronted,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。

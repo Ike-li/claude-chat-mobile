@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePublicTarget, protectedByAccess } from '../../app/src/shared/public-target.js';
+import { resolvePublicTarget, protectedByAccess, isProxyFronted } from '../../app/src/shared/public-target.js';
 
 const PORT = 3000;
 
@@ -86,4 +86,35 @@ test('protectedByAccess：别的域名不受本策略保护', () => {
 
 test('protectedByAccess：畸形地址不算受保护（宁可多带令牌也不做出一张进不去的码）', () => {
   assert.equal(protectedByAccess('not a url', { cfHostname: 'ccm.example.com', accessEnabled: true }), false);
+});
+
+// isProxyFronted：限速告警措辞的分叉判据。踩过的坑是「只看 TRUSTED_PROXY」——那个开关表示
+// 「允许采信 XFF」，本仓刻意不让它随 reverse-proxy 自动打开，于是最常见的反代/托管隧道部署
+// 恰恰是它未设的那一档，判断会精确地漏在最需要它的配置上。
+test('isProxyFronted：显式声明可信反代 → true', () => {
+  assert.equal(isProxyFronted({ trustedProxy: 'loopback' }), true);
+});
+
+test('isProxyFronted：反代/托管隧道拓扑即使没开 XFF 采信也算有中间节点（本条是修复的要害）', () => {
+  assert.equal(isProxyFronted({ trustedProxy: '', accessProfile: 'reverse-proxy' }), true,
+    'TRUSTED_PROXY 未设正是 reverse-proxy 的受支持默认——漏掉它等于这条判断在主用例上不生效');
+  assert.equal(isProxyFronted({ trustedProxy: '', accessProfile: 'cloudflare' }), true);
+});
+
+test('isProxyFronted：未声明 profile 时按 CF_ACCESS_* 推断（流量经 cloudflared，peer 恒 loopback）', () => {
+  assert.equal(isProxyFronted({ accessProfile: '', accessConfigured: true }), true);
+  assert.equal(isProxyFronted({ accessProfile: '', accessConfigured: false }), false);
+});
+
+test('isProxyFronted：vpn / direct / lan 一律 false —— peer 就是真实客户端地址，127.0.0.1 确实是本机', () => {
+  for (const profile of ['vpn', 'direct', 'lan']) {
+    assert.equal(isProxyFronted({ accessProfile: profile }), false, `${profile} 不该被判成有中间节点`);
+    // 已声明这三档时，CF_ACCESS_* 是否齐全都不改变结论（推断只在「未声明」时生效）
+    assert.equal(isProxyFronted({ accessProfile: profile, accessConfigured: true }), false);
+  }
+});
+
+test('isProxyFronted：空入参 → false（不知道就不改措辞）', () => {
+  assert.equal(isProxyFronted(), false);
+  assert.equal(isProxyFronted({}), false);
 });

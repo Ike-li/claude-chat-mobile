@@ -1846,7 +1846,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         deliveryFailure: res.deliveryFailure,
         rateLimitLockout: res.rateLimitLockout,
         clientError: res.clientError,
-        trustedProxyConfigured: res.trustedProxyConfigured,
+        proxyFronted: res.proxyFronted,
       },
       now,
     });
