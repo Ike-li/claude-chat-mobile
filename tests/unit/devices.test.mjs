@@ -219,6 +219,30 @@ test.describe('devices.js 单元测试', () => {
 
     for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
   });
+
+  // ★ 登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point。
+  // app.js 的 TTY 处理器（终端里按回车批准 / 输入 deny）走的就是这里的同进程
+  // approveDevice/denyDevice，而它【不记审计】——文件监听器是它唯一的审计来源。
+  // 把「本进程里所有写入」一律登记成「已记过」，终端审批就彻底无痕了。
+  test('approveDevice / denyDevice 的同进程调用不得自动登记（TTY 审批靠监听器补审计）', () => {
+    loadTrustedDevices();
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+    takeSelfMutations();
+
+    addPendingDevice('tty-tok', { ip: '10.0.0.1', userAgent: 'x' });
+    takeSelfMutations(); // 清掉入列动作可能带来的登记，只观察下面两步
+
+    approveDevice('tty-tok');
+    let self = takeSelfMutations();
+    assert.equal(self.trustedAdded.size, 0,
+      '同进程 approveDevice 不得被当成「已记过审计」——那会让 TTY 回车批准一条审计都不留');
+
+    denyDevice('tty-tok');
+    self = takeSelfMutations();
+    assert.equal(self.trustedRemoved.size, 0, '同理，denyDevice 也不得自动登记');
+    assert.equal(self.pendingRemoved.size, 0);
+  });
 });
 
 // BE-011：吊销/批准的持久化失败必须可观测——落盘失败时不得把变更提交到内存、更不得谎报成功

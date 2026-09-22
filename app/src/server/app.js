@@ -88,6 +88,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
+  noteAuditedExternally,
   addPendingDevice,
   getLatestPendingDevice,
   approveDevice,
@@ -2701,6 +2702,9 @@ registerSocketConnection(io, socket => {
       broadcastPendingDevices();
       broadcastTrustedDevices();
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
+      // 已在这里记过 via:'web'，登记一下免得文件监听器按差集再补一条 via:'cli'（同一动作两条记录、
+      // 且归因是错的）。TTY 的回车批准【不】登记——它自己不记审计，监听器是它唯一的审计来源。
+      noteAuditedExternally({ trustedAdded: [deviceId], pendingRemoved: [deviceId] });
     } else {
       // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
       broadcastPendingDevices();
@@ -2718,6 +2722,8 @@ registerSocketConnection(io, socket => {
     broadcastTrustedDevices();
     if (revoked) {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
+      noteAuditedExternally({ trustedRemoved: [deviceId], pendingRemoved: [deviceId] }); // 同上：已记过，别让监听器再补
+
     } else {
       // BE-011：吊销落盘失败——磁盘仍含该设备，下次 isDeviceTrusted 重读会复活，不谎报成功，告警 + 提示重试。
       console.error(`[devices] 吊销 ${deviceId} 落盘失败，可能未生效`);
@@ -2774,6 +2780,8 @@ registerSocketConnection(io, socket => {
     broadcastTrustedDevices();
     if (revoked) {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'denied', meta: { via: 'web' } });
+      noteAuditedExternally({ trustedRemoved: [d.token], pendingRemoved: [d.token] }); // 同上：已记过，别让监听器再补
+
     } else {
       console.error(`[devices] 吊销 ${d.token} 落盘失败，可能未生效`);
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'error', meta: { via: 'web', persistFailed: true } });

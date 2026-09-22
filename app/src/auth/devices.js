@@ -59,25 +59,37 @@ export function getTrustedDeviceIds() {
   return [...trustedDevices];
 }
 
-// ── 本进程自己造成的集合变化（供 device-gate.js 的文件监听器排除）──────────────────
+// ── 已在别处记过审计的变化（供 device-gate.js 的文件监听器跳过）────────────────────
 //
-// 监听器的职责是捕捉【进程外】（CLI / scripts/device.js）对这两份文件的改动。本进程自己的
-// 写入不该再被它记一遍，有两类：
+// 监听器按「trusted / pending 两份文件的成员集合差集」补审计，覆盖的是那些【没人在动作发生处
+// 记账】的改动。有两类必须从差集里减掉：
 //   ① Web 侧的批准/拒绝/吊销——app.js 的 user:approveDevice / denyDevice / revoke 在动作发生处
-//      已经各记了一条带 via:'web' 的审计。监听器随后按差集再记一条 via:'cli'，是同一件事的
-//      第二条记录，而且归因是错的（离线目标设备尤其明显：web 操作被整条记成 CLI 操作）。
-//   ② addPendingDevice 的容量淘汰——超过 MAX_PENDING_DEVICES 时按插入序丢最旧（slice(-N)）。
-//      那是容量策略，不是任何人的拒绝决定；监听器看到条目消失会伪造一条 device_denied。
-//      审计是环形有上限的，第 51 台设备之后每来一台就伪造一条，真实安全事件会被挤出去。
+//      已各记一条 via:'web'。监听器再记一条 via:'cli'，是同一件事的第二条记录，归因还是错的。
+//   ② addPendingDevice 的容量淘汰——超过 MAX_PENDING_DEVICES 按插入序丢最旧。那是容量策略，
+//      不是任何人的拒绝决定；不减掉的话，第 51 台设备之后每来一台就伪造一条 device_denied，
+//      而审计表是环形有上限的，伪造记录会把真实安全事件挤出去。
 //
-// 登记点选在两个写盘 choke point（writeTrustedSet / savePendingDevices）而不是逐个 mutator：
-// 所有内存变更都必须经由它们落盘，将来新增 mutator 自动被覆盖，不会漏登记。
+// 【登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point】第一版登记在
+// writeTrustedSet / savePendingDevices 上，等于把「本进程里的所有写入」一律排除——而 TTY 的
+// 回车批准 / deny（app.js 的 stdin 处理器）走的正是同进程的 approveDevice/denyDevice，
+// 且它自己【不记审计】，文件监听器是它唯一的审计来源。一并排除的后果是终端审批彻底无痕，
+// 恰恰是本模块要防的那件事。集成测试当场咬住了（它用同进程调用模拟 CLI 批准）。
+//
+// 失败方向也因此是对的：调用方忘了登记，最多多一条重复审计（吵，但看得见）；
+// choke point 版忘了豁免，则是【少】一条安全记录——无声，且正好在最需要它的时候。
 const selfMutations = { trustedAdded: new Set(), trustedRemoved: new Set(), pendingRemoved: new Set() };
 
-// 取走并清空累积的自身变化。监听器每个 tick 调一次——取走即消费：不清空的话，下一次真实的
-// CLI 改动会被同一批陈旧条目误判成自身写入而漏审计，方向恰好与本修复相反。
+/** 调用方在自己记完审计后登记：这几个 token 的变化不需要监听器再补一条。 */
+export function noteAuditedExternally({ trustedAdded = [], trustedRemoved = [], pendingRemoved = [] } = {}) {
+  for (const t of trustedAdded) if (t) selfMutations.trustedAdded.add(t);
+  for (const t of trustedRemoved) if (t) selfMutations.trustedRemoved.add(t);
+  for (const t of pendingRemoved) if (t) selfMutations.pendingRemoved.add(t);
+}
+
+// 取走并清空累积的登记。监听器每个 tick 调一次——取走即消费：不清空的话，下一次真实的
+// 外部改动会被同一批陈旧条目误判成「已记过」而漏审计，方向恰好与本模块相反。
 // 必须与同一 tick 里读集合的那几行处在同一段同步代码中（Node 单线程，中间没有 await
-// 就不存在交错窗口），否则会有「差异已被取走、变化却还没出现在快照里」的丢审计缝隙。
+// 就不存在交错窗口），否则会有「登记已被取走、变化却还没出现在快照里」的丢审计缝隙。
 export function takeSelfMutations() {
   const out = {
     trustedAdded: new Set(selfMutations.trustedAdded),
@@ -96,11 +108,6 @@ function writeTrustedSet(set) {
   try {
     mkdirSync(dirname(TRUSTED_DEVICES_FILE), { recursive: true });
     writeOwnerOnlyFile(TRUSTED_DEVICES_FILE, JSON.stringify([...set], null, 2));
-    // 写成功才登记（失败时文件没变，监听器也看不到差异）。此刻 trustedDevices 仍是变更【之前】
-    // 的集合：persistTrustedChange 在副本上改，调用方要等这里返回 true 才提交到内存（BE-011），
-    // 所以这里拿得到干净的前态，不需要额外快照。
-    for (const t of set) if (!trustedDevices.has(t)) selfMutations.trustedAdded.add(t);
-    for (const t of trustedDevices) if (!set.has(t)) selfMutations.trustedRemoved.add(t);
     return true;
   } catch (err) {
     console.error('[devices] 保存 trusted-devices.json 失败:', err.message);
@@ -118,10 +125,6 @@ export function persistTrustedChange(currentSet, mutate, persist) {
   return ok ? next : null;
 }
 
-// 最近一次 loadPendingDevices 读到的成员集合。savePendingDevices 拿它当「本次写入之前盘上
-// 是什么」的前态，用来把本进程自己造成的移除登记进 selfMutations（见上方长注释）。
-let lastLoadedPendingTokens = new Set();
-
 export function loadPendingDevices() {
   try {
     if (!existsSync(PENDING_DEVICES_FILE)) {
@@ -137,10 +140,6 @@ export function loadPendingDevices() {
   } catch (err) {
     // 忽略加载暂存待审批文件的错误，通常为空或损坏
     pendingDevices = [];
-  } finally {
-    // finally：读失败回落空表时也要同步前态，否则下一次写入会把「盘上本来就有的条目」
-    // 全算成本进程移除的，把真实的 CLI 拒绝一并吞掉。
-    lastLoadedPendingTokens = new Set(pendingDevices.map(d => d.deviceToken));
   }
 }
 
@@ -148,12 +147,6 @@ function savePendingDevices() {
   try {
     mkdirSync(dirname(PENDING_DEVICES_FILE), { recursive: true });
     writeOwnerOnlyFile(PENDING_DEVICES_FILE, JSON.stringify(pendingDevices, null, 2));
-    // 前态取自 loadPendingDevices 的快照：四个 mutator（add/remove/approve/deny）都先
-    // loadPendingDevices() 再改内存，所以那份快照就是本次写入之前盘上的成员集合。
-    // 只登记移除——pending 的新增本来就不产生审计。
-    const next = new Set(pendingDevices.map(d => d.deviceToken));
-    for (const t of lastLoadedPendingTokens) if (!next.has(t)) selfMutations.pendingRemoved.add(t);
-    lastLoadedPendingTokens = next;
     return true;
   } catch (err) {
     console.error('[devices] 保存 pending-devices.json 失败:', err.message);
@@ -393,6 +386,10 @@ export function addPendingDevice(deviceToken, info) {
   // F1：容量上限，超则按插入序丢最旧（数组头部=最早插入）。getPendingDevices 另按 ts 排序供展示，
   // 此处按插入序裁剪确定性、不受同毫秒 ts 排序抖动影响。
   if (pendingDevices.length > MAX_PENDING_DEVICES) {
+    // 被挤掉的是容量策略的结果，不是任何人的拒绝决定——就地登记，免得文件监听器按 pending
+    // 差集把它伪造成一条 device_denied（见上方 selfMutations 的注释②）。
+    const dropped = pendingDevices.slice(0, pendingDevices.length - MAX_PENDING_DEVICES);
+    noteAuditedExternally({ pendingRemoved: dropped.map(d => d.deviceToken) });
     pendingDevices = pendingDevices.slice(-MAX_PENDING_DEVICES);
   }
   savePendingDevices();
