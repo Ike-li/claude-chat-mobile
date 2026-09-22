@@ -99,6 +99,23 @@ export function resolvePanelState({ mirrorReadonly = false, observedCli, web } =
   };
 }
 
+// 「此刻挂着的那张会话落地页，是不是本次请求弹出来的」。
+//
+// 用途只有一个：session:switch 的 4 秒兜底已经把「切换无响应」弹出来了，而迟到的【成功】ack
+// 随后到达（服务端可能先广播导航、后回 ack）——这时要把那张页撤掉，否则用户人已经在目标
+// 会话里，屏幕上却盖着一张说它没响应的落地页。
+//
+// 【为什么不能无条件撤】从 4 秒兜底弹出到迟到 ack 返回之间，用户完全可能已经点开别的会话
+// 并撞上一次【真实】失败，此刻挂着的是那一张。无条件 hide 会把那条真实错误一起抹掉，
+// 而它是用户当下唯一看得见的线索——修一个假提示的代价不该是吞掉一个真提示。
+//
+// sessionId 与 cwd 两者都要比：同一个 sessionId 在不同工作区是不同会话（托管 worktree 场景），
+// 只比 sessionId 会在那种场景下撤错。
+export function isBlockedSurfaceTarget(target, { sessionId = null, cwd = null } = {}) {
+  if (!target) return false;
+  return target.sessionId === sessionId && target.cwd === cwd;
+}
+
 // 工作区抽屉只显示需要用户理解/处理的四态。terminal 独立于 live 实例合并，避免 idle/done live tab
 // 遮住同会话正在运行的终端进程；done/aborted/idle 都是普通终态，不占抽屉主状态位。
 //
