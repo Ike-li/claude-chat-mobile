@@ -206,6 +206,14 @@ test.describe(
       const instances = await client.waitForType('instances', 5000);
       assert.ok(instances, '批准后应收到重放的 instances');
 
+      // ⑤b 门后能走路（三）：mirror_state 同样必须重放。这条此前不在 unlockSocket 里——只有
+      // 走整条 io.on('connection') 的物理重连才会拿到，设备刚被批准这一刻（socket 没断没重连）
+      // 收不到，前端不知道当前查看的会话是不是正被 CLI 只读驾驶，会一直显示可写、直到用户手动
+      // 刷新页面才追平。判据只看事件类型到没到，不深究 readonly 取值——这里没有任何 CLI 在驾驶，
+      // payload.readonly 必然是 false，重点是这个类型本身必须出现在重放序列里。
+      const mirrorState = await client.waitForType('mirror_state', 5000);
+      assert.ok(mirrorState, '批准后应收到重放的 mirror_state，否则前端只读态要等到下次重连才追平');
+
       // ⑥ 门后能走路（二）：同一条 socket、同一个事件，现在应真正进到业务 handler。
       //    判据是"错在业务上"而不是"被闸挡下"：会话确实不存在，那是正确的业务答复。
       const after = await emitWithAck(client.socket, 'session:history', { sessionId: 'no-such-session' });

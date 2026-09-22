@@ -1,5 +1,5 @@
 // tests/invariants/approval-store.test.mjs —— 审批持久化台账与重启 fail-closed
-// 守护：APPROVAL-02（重启后 pending 全部 expired、decidedBy=system:restart，不可再执行）
+// 守护：APPROVAL-02（重启后 pending 全部 expired、decidedBy=system:restart，不可再执行）、APPROVAL-01（一次审批只有一个终态：已落定的记录不得被二次 recordDecided 覆写）
 // 覆盖：重启 pending 变 expired（decidedBy=system:restart）+ 单向终态 + 重复 reqId 溯源 + 留存清理防越界 + 容错不阻塞
 // 槽位：S1（纯函数 + 状态机 + 一次性文件落盘）
 // 不测什么 + 为什么：不测真实 AgentSession 的 canUseTool SDK 挂起（属于 S2 server-approval 槽）
@@ -73,6 +73,33 @@ test.describe('APPROVAL-02: 审批台账记录与状态机单向终态', () => {
     assert.equal(entry.status, 'approved');
     assert.equal(entry.decidedBy, 'user:device_1');
     assert.equal(entry.decidedAt, 1500);
+  });
+
+  // APPROVAL-01 的前半句「一次审批只有一个终态」。此前 recordDecided 在找不到 pending 记录时
+  // 会回落到「最近一条同 reqId 记录」（不论其状态），于是一条已经落定的记录会被悄悄覆写成
+  // 别的状态，且没有任何信号提示这发生过。真实触发形态是竞态下的迟到决断——看门狗在用户的
+  // 真实决断已经落定之后才追上来，台账上就会把用户的决定记成系统的。
+  test('recordDecided: 无 pending 记录时是 no-op，不得覆写已落定的终态（APPROVAL-01）', () => {
+    AS.recordCreated({
+      reqId: 'req-oneway',
+      sessionId: 'sess-001',
+      tool: 'Bash',
+      args: { command: 'ls' },
+      cwd: '/workspace',
+      fingerprint: 'fp-oneway',
+      createdAt: 1000,
+      expiresAt: 2000,
+    });
+    AS.recordDecided('req-oneway', { status: 'deny', decidedBy: 'user', decidedAt: 1200 });
+    assert.equal(AS.getByReqId('req-oneway').status, 'deny', '用例前提：第一次决断要真的落定');
+
+    // 同一 reqId 此刻已经没有 pending 记录了——模拟迟到的第二次决断。
+    AS.recordDecided('req-oneway', { status: 'expired', decidedBy: 'system:idle-watchdog', decidedAt: 1500 });
+
+    const after = AS.getByReqId('req-oneway');
+    assert.equal(after.status, 'deny', '已落定的终态不得被二次 recordDecided 覆写');
+    assert.equal(after.decidedBy, 'user', 'decidedBy 同样不得被改写——否则用户的决定会被记成系统的');
+    assert.equal(after.decidedAt, 1200, 'decidedAt 也不得改写，留存清理按它算年龄');
   });
 
   test('重复 reqId（如跨进程或计数器回绕）：recordDecided 优先匹配处于 pending 的记录', () => {

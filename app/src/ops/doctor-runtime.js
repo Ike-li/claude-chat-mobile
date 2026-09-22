@@ -165,8 +165,12 @@ export function countConfigPermProblems(rootDir, { platform = process.platform, 
   for (const name of CONFIG_FILE_NAMES) {
     // 判据从「是不是 .env」换成「在不在 data/ 下」：清单里现在有两个项目根文件
     // （ccm.config.json 与 .env），按名字逐个列举迟早漏掉新加的那个。
-    const p = name.startsWith('data')
-      ? join(dataRoot, name.replace(/^data[/\\]/, ''))
+    // 必须判「data/ 前缀」而不是「data 开头」——否则将来加一个仓库根文件、名字恰好以
+    // data 开头（如 data-export.json，不在 data/ 目录下），会被错误挂到 dataRoot 而非
+    // rootDir，替换正则匹配不上、名字原样拼接，解析到一个永不存在的路径，静默不计入体检。
+    const dataPrefixMatch = /^data[/\\](.+)$/.exec(name);
+    const p = dataPrefixMatch
+      ? join(dataRoot, dataPrefixMatch[1])
       : join(rootDir, name);
     if (!existsSync(p)) continue;      // 文件不存在不算问题
     if (!isOwnerOnly(p)) problems++;   // 存在但非 0600 → 过宽

@@ -653,6 +653,23 @@ test('getSessionHistory: system/local_command 的 stdout 作为助手消息回�
   assert.equal(msgs[1].content, '发现 3 处问题：\n1. ...', '包装标签要剥掉，与 live 气泡同形');
 });
 
+// fix/own-write-misjudged-as-terminal（25ef4424）修的是 user/assistant 分支：catchUpStep 靠
+// entrypoint 判「这段增量是不是己方写盘」，缺了它就会把秒回的轮次误判成终端写入（重复气泡 +
+// 误锁「终端会话运行中」）。local_command 分支（斜杠命令的 web 端输出）是同一份 transcript 里
+// 会被 catchUpStep 用同一逻辑处理的另一类条目，必须同样透出 entrypoint，否则那次修复对
+// 秒回的 /status、/model 等斜杠命令不生效——bug 以同样的方式在这个分支重现。
+test('getSessionHistory: local_command 回显透出 entrypoint（catchUpStep 判己方写盘要用）', async () => {
+  const cwd = '/test/localcmd-entrypoint-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdentrypoint', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1', entrypoint: 'sdk-ts',
+      content: '<local-command-stdout>ok</local-command-stdout>', timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdentrypoint', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].entrypoint, 'sdk-ts', 'local_command 分支必须像 user/assistant 分支一样透出 entrypoint');
+});
+
 // history.js:991 记录的真实反例：同一个 subtype 下还落命令名回显，那是命令【开始】的记录、不是输出。
 // 只看 subtype 就会把它当结果渲染出来（并在 settle 判定那侧造成过双写分叉）。
 test('getSessionHistory: system/local_command 的命令名回显不当输出回显', async () => {

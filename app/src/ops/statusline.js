@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import * as diagLog from '../agent/diag-log.js';
 import { createUsageSnapshotStore, rememberUsage, fallbackUsage, snapshotAgeMs, clampRateMonotonic, RATE_WINDOW_KEYS } from './usage-snapshot.js';
+import { setLru } from '../shared/bounded-map.js';
 
 // 状态栏 project 字段：从 cwd 取末段目录名。原 `cwd.split('/').pop()` 手写实现只认 `/`，
 // server 跑在 Windows 上时 cwd 是 `C:\...`（无 `/`），会退化成整条路径。改用 path.win32/posix
@@ -22,6 +23,9 @@ export function projectNameFromCwd(cwd, { platform = process.platform } = {}) {
 // ---- 本机 git 段（per-cwd 短 TTL 缓存，避免每次刷新都 spawn git）----
 const GIT_TTL_MS = 5_000;
 const gitCache = new Map(); // cwd -> { at, data|null }
+// 托管 worktree 按会话创建/销毁，key 空间在常驻 server 上单调增长；同仓其它有界缓存（如
+// file-search.js 的候选缓存）都走 bounded-map.js 的有界纪律，这里补齐。
+const GIT_CACHE_MAX = 200;
 
 function execGit(args, cwd) {
   return new Promise(resolve => {
@@ -76,7 +80,7 @@ export async function gitStatus(cwd) {
     const repo = parseRepo(await execGit(['config', '--get', 'remote.origin.url'], cwd));
     data = { branch, changed, staged, modified, untracked, ahead, behind, repo };
   }
-  gitCache.set(cwd, { at: Date.now(), data });
+  setLru(gitCache, cwd, { at: Date.now(), data }, GIT_CACHE_MAX);
   return data;
 }
 

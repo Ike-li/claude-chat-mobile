@@ -159,6 +159,19 @@ test('createSessionWorktree: 源分支不存在 → 明确报错，不回落到�
   assert.equal(existsSync(join(repo, '.claude', 'worktrees', 'wt')), false, '失败不得留下半个目录');
 });
 
+// sourceBranch 客户端可控，拼进 argv 时两处都没有 `--` 分隔选项区与位置参数——同域
+// git-workspace.js 的 diff 路径一律带 `--`，这里是唯一没带的。git 本身不允许 ref 名以 `-`
+// 开头，所以能通过这里的值不可能被当成选项，但补上 `--` 让这条防线从「依赖 git 行为」
+// 变成「显式声明」，代价一行。这条测试锁住当前已经安全的行为，防加固时改出回归。
+test('createSessionWorktree: 形似命令行选项的源分支名被安全拒绝（不被当成 git 选项解析）', async () => {
+  const repo = makeRepo();
+  for (const weird of ['-q', '--help', '-', '--all', '--upload-pack=x']) {
+    const r = await createSessionWorktree(repo, { name: 'wt-opt', sourceBranch: weird });
+    assert.equal(r.ok, false, `sourceBranch=${JSON.stringify(weird)} 应被拒`);
+    assert.equal(r.code, 'bad_source', `不该被当成 git 选项吃掉，而是走「源分支不存在」`);
+  }
+});
+
 test('createSessionWorktree: 非法名被拒，不落盘', async () => {
   const repo = makeRepo();
   for (const bad of ['..', '.', '', '   ']) {

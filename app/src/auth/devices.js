@@ -26,6 +26,20 @@ let pendingDevices = []; // Array of { deviceToken, ip, userAgent, ts }
 // 正常单用户设备数远小于此；超出按插入序丢最旧（攻击 flood 是新到的，真实少量旧设备优先保留）。
 export const MAX_PENDING_DEVICES = 50;
 
+// deviceToken 来自 socket.io 握手 JSON 体，不经 HTTP header 过滤。app.js 在非交互模式下会把它
+// 原样拼进一条打印给操作员复制运行的 shell 命令（node scripts/device.js approve "<token>"），
+// 带 "/`/$/\ 的值就是一条可复制粘贴执行任意命令的注入；控制字符（含换行）能伪造额外的控制台输出。
+// 长度上限防单条把 pending-devices.json 不成比例撑大（maxHttpBufferSize 是 32MB）。
+// 不要求逐字节匹配客户端实际生成的 32 位十六进制格式——那会拒掉本文件其它测试与本仓一贯使用的
+// 可读占位符 token（如 'device-1'），这里只挡真正危险的字符类，不是格式。
+const MAX_DEVICE_TOKEN_LENGTH = 128;
+// eslint-disable-next-line no-control-regex -- 故意匹配控制字符（含换行），不是笔误
+const DANGEROUS_DEVICE_TOKEN_CHARS = /[\x00-\x1f\x7f"`$\\]/;
+export function isValidDeviceToken(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_DEVICE_TOKEN_LENGTH
+    && !DANGEROUS_DEVICE_TOKEN_CHARS.test(value);
+}
+
 export function loadTrustedDevices() {
   try {
     if (!existsSync(TRUSTED_DEVICES_FILE)) {
@@ -57,6 +71,49 @@ export function getTrustedCount() {
 export function getTrustedDeviceIds() {
   loadTrustedDevices();
   return [...trustedDevices];
+}
+
+// ── 已在别处记过审计的变化（供 device-gate.js 的文件监听器跳过）────────────────────
+//
+// 监听器按「trusted / pending 两份文件的成员集合差集」补审计，覆盖的是那些【没人在动作发生处
+// 记账】的改动。有两类必须从差集里减掉：
+//   ① Web 侧的批准/拒绝/吊销——app.js 的 user:approveDevice / denyDevice / revoke 在动作发生处
+//      已各记一条 via:'web'。监听器再记一条 via:'cli'，是同一件事的第二条记录，归因还是错的。
+//   ② addPendingDevice 的容量淘汰——超过 MAX_PENDING_DEVICES 按插入序丢最旧。那是容量策略，
+//      不是任何人的拒绝决定；不减掉的话，第 51 台设备之后每来一台就伪造一条 device_denied，
+//      而审计表是环形有上限的，伪造记录会把真实安全事件挤出去。
+//
+// 【登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point】第一版登记在
+// writeTrustedSet / savePendingDevices 上，等于把「本进程里的所有写入」一律排除——而 TTY 的
+// 回车批准 / deny（app.js 的 stdin 处理器）走的正是同进程的 approveDevice/denyDevice，
+// 且它自己【不记审计】，文件监听器是它唯一的审计来源。一并排除的后果是终端审批彻底无痕，
+// 恰恰是本模块要防的那件事。集成测试当场咬住了（它用同进程调用模拟 CLI 批准）。
+//
+// 失败方向也因此是对的：调用方忘了登记，最多多一条重复审计（吵，但看得见）；
+// choke point 版忘了豁免，则是【少】一条安全记录——无声，且正好在最需要它的时候。
+const selfMutations = { trustedAdded: new Set(), trustedRemoved: new Set(), pendingRemoved: new Set() };
+
+/** 调用方在自己记完审计后登记：这几个 token 的变化不需要监听器再补一条。 */
+export function noteAuditedExternally({ trustedAdded = [], trustedRemoved = [], pendingRemoved = [] } = {}) {
+  for (const t of trustedAdded) if (t) selfMutations.trustedAdded.add(t);
+  for (const t of trustedRemoved) if (t) selfMutations.trustedRemoved.add(t);
+  for (const t of pendingRemoved) if (t) selfMutations.pendingRemoved.add(t);
+}
+
+// 取走并清空累积的登记。监听器每个 tick 调一次——取走即消费：不清空的话，下一次真实的
+// 外部改动会被同一批陈旧条目误判成「已记过」而漏审计，方向恰好与本模块相反。
+// 必须与同一 tick 里读集合的那几行处在同一段同步代码中（Node 单线程，中间没有 await
+// 就不存在交错窗口），否则会有「登记已被取走、变化却还没出现在快照里」的丢审计缝隙。
+export function takeSelfMutations() {
+  const out = {
+    trustedAdded: new Set(selfMutations.trustedAdded),
+    trustedRemoved: new Set(selfMutations.trustedRemoved),
+    pendingRemoved: new Set(selfMutations.pendingRemoved),
+  };
+  selfMutations.trustedAdded.clear();
+  selfMutations.trustedRemoved.clear();
+  selfMutations.pendingRemoved.clear();
+  return out;
 }
 
 // 把给定信任集合原子写盘，返回成败布尔（BE-011：成败必须可观测，不再吞成 undefined——
@@ -211,7 +268,9 @@ export const MAX_DEVICE_ALIAS = 24;
 // 控制字符用 \p{Cc} 整类剥掉：换行会把一行卡片撑成多行，制表符能伪造对齐。
 export function normalizeDeviceAlias(raw) {
   if (typeof raw !== 'string') return null;
-  const cleaned = raw.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim();
+  // Cc=控制字符，Cf=格式字符（含 U+202E 等双向文本覆写符、零宽字符）——两者都能让这行别名
+  // 在受信任设备列表里视觉失真，而用户正是读这行字来决定吊销哪一台。
+  const cleaned = raw.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!cleaned) return null;
   const points = [...cleaned];
   return points.length > MAX_DEVICE_ALIAS ? points.slice(0, MAX_DEVICE_ALIAS).join('') : cleaned;
@@ -331,7 +390,7 @@ export function isDeviceTrusted(deviceToken) {
 }
 
 export function addPendingDevice(deviceToken, info) {
-  if (!deviceToken || typeof deviceToken !== 'string') return;
+  if (!isValidDeviceToken(deviceToken)) return;
   loadPendingDevices();
   // 过滤掉同设备已存在的旧记录
   pendingDevices = pendingDevices.filter(d => d.deviceToken !== deviceToken);
@@ -343,6 +402,10 @@ export function addPendingDevice(deviceToken, info) {
   // F1：容量上限，超则按插入序丢最旧（数组头部=最早插入）。getPendingDevices 另按 ts 排序供展示，
   // 此处按插入序裁剪确定性、不受同毫秒 ts 排序抖动影响。
   if (pendingDevices.length > MAX_PENDING_DEVICES) {
+    // 被挤掉的是容量策略的结果，不是任何人的拒绝决定——就地登记，免得文件监听器按 pending
+    // 差集把它伪造成一条 device_denied（见上方 selfMutations 的注释②）。
+    const dropped = pendingDevices.slice(0, pendingDevices.length - MAX_PENDING_DEVICES);
+    noteAuditedExternally({ pendingRemoved: dropped.map(d => d.deviceToken) });
     pendingDevices = pendingDevices.slice(-MAX_PENDING_DEVICES);
   }
   savePendingDevices();

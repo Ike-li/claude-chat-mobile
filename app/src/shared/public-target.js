@@ -13,6 +13,15 @@
 
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
 
+// 裸域名格式（不带 scheme / 端口 / 路径）。cf-access.js 的 isPublicHost 只比较
+// `host.split(':')[0]`——若这里存的是带 https:// 前缀或路径的完整 URL，比较永远不等，
+// Access 层静默永远不触发，但三项 env 非空的判据仍会让「已启用」的横幅照常打出。
+// 校验放在 shared（叶子层，供 auth/cf-access.js 与 ops/env-schema.js 两侧共用），而不是各判一次。
+const BARE_HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export function isBareHostname(value) {
+  return BARE_HOSTNAME_RE.test(normalizeHost(value));
+}
+
 /**
  * 这台 server 前面有没有中间节点（反向代理 / 隧道）。
  *

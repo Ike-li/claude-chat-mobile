@@ -280,8 +280,11 @@ export const EN_DICT = Object.freeze({
 
   // —— 设置面板（按作用域拆两个：会话设置 / 通用设置）——
   '⚙️ 会话设置': '⚙️ Session settings',
+  '⚙️ 设置与状态': '⚙️ Settings & status', // 通用设置面板标题（#generalSheetTitle，HTML 静态文本，与上面那条是两个不同字符串）
   '下拉关闭配置面板': 'Pull down to close settings',
   '下拉关闭设置': 'Pull down to close settings',
+  '下一条消息起效': 'Applies from your next message', // 模型分区头行小字：换模型不影响正在跑的这一轮
+  '永久 ·': 'Permanently ·', // 审批持久化范围单选项前缀，后面接一个动态生成的 <span> 说明具体落盘位置
   '宿主机': 'Host',
   '会话标识': 'Session ID',
   // 模型候选还没到（scout 在途）或取不到：不承诺进度，只给事实与出路

@@ -227,7 +227,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | CLI hooks 的 `Stop` / `Notification` | ✅ 终端会话完成一轮 / ⚠️ 终端会话需要你 | 不走 `agent:event` |
 | presence 跳变为「无前台」且此刻有实例在跑 | ⏳ 任务仍在后台运行 | 不走 `agent:event` |
 
-`agent:event` 的 31 种 type 里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
+`agent:event` 的 31 种 type（`AGENT_EVENT_TYPES`）里只有前五种命中，其余全部落 `default → null`——工具调用、流式文本、模型切换、压缩边界、`api_retry`、普通 system notice 一条都不推。后三条不属于任何 envelope type，**刻意拆成独立函数而非塞进那个 switch**：`NOTIFY_CATEGORY` 的节流键也按 type 建，混进去会让「type 对应真实 envelope 类型」这条隐含契约失效。
 
 `task_notification` 只认**真后台任务**。CLI 把跑得久的前台 Bash 也建模成 task（`task_type: local_bash`、`is_backgrounded: false`），完成时走同一条通道且全程不发 `background_tasks_changed`——所以「不在 `bgTasks` 里」不能当判据，唯一可靠的是 `task_started` 上的 `is_backgrounded`（`task_notification` 自己不带这个字段）。不过滤的话，每条跑过几秒的前台命令都会被播报成「后台任务完成」并打到锁屏手机上。
 

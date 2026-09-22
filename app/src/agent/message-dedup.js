@@ -26,13 +26,6 @@ export function commitProcessed(clientMessageId, state, cap = DEDUP_CAP) {
   return state;
 }
 
-// 查询 + 提交耦合成一步的旧原语（保留给不区分成败的调用方）。等价于 isProcessed 后 commitProcessed。
-// 注意：把「登记」与「成功」绑死，不适合需要「失败不登记」的路径（见 commitProcessed 说明）。
-export function checkAndRecord(clientMessageId, state = new Map(), cap = DEDUP_CAP) {
-  if (isProcessed(clientMessageId, state)) return { duplicate: true, next: state };
-  return { duplicate: false, next: commitProcessed(clientMessageId, state, cap) };
-}
-
 // ---- 处理中占用（区别于上面「已处理完」的永久记录）----
 // isProcessed/commitProcessed 之间横跨校验、resolveTarget、a.send 等多个 await，不是原子的：断线重连
 // 重发可能让同一 clientMessageId 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次

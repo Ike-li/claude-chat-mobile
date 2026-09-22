@@ -373,7 +373,7 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 30 种一致', () => {
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 31 种一致', () => {
   //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
   //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
   //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。

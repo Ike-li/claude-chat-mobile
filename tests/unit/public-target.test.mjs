@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePublicTarget, protectedByAccess, isProxyFronted } from '../../app/src/shared/public-target.js';
+import { resolvePublicTarget, protectedByAccess, isBareHostname, isProxyFronted } from '../../app/src/shared/public-target.js';
 
 const PORT = 3000;
 
@@ -117,4 +117,31 @@ test('isProxyFronted：vpn / direct / lan 一律 false —— peer 就是真实�
 test('isProxyFronted：空入参 → false（不知道就不改措辞）', () => {
   assert.equal(isProxyFronted(), false);
   assert.equal(isProxyFronted({}), false);
+});
+
+// isBareHostname：CF_ACCESS_HOSTNAME 只接受裸域名。cf-access.js 的 isPublicHost 用
+// host.split(':')[0] 比较，带 scheme/端口/路径的值永远比不出相等，Access 层会静默永远不触发。
+test('isBareHostname：合法裸域名放行', () => {
+  assert.equal(isBareHostname('ccm.example.com'), true);
+  assert.equal(isBareHostname('a.b.c.example.co'), true);
+  assert.equal(isBareHostname('CCM.Example.com'), true, '大小写不敏感');
+  assert.equal(isBareHostname('  ccm.example.com  '), true, '首尾空白应被 trim');
+});
+
+test('isBareHostname：带 scheme 的完整 URL 一律拒绝（真实事故形态：用户粘贴了控制台给的完整链接）', () => {
+  assert.equal(isBareHostname('https://ccm.example.com'), false);
+  assert.equal(isBareHostname('http://ccm.example.com'), false);
+});
+
+test('isBareHostname：带端口 / 路径 / 尾部斜杠一律拒绝', () => {
+  assert.equal(isBareHostname('ccm.example.com:8443'), false);
+  assert.equal(isBareHostname('ccm.example.com/path'), false);
+  assert.equal(isBareHostname('ccm.example.com/'), false);
+});
+
+test('isBareHostname：空值 / 纯空白 / 单标签（无点号）拒绝', () => {
+  assert.equal(isBareHostname(''), false);
+  assert.equal(isBareHostname('   '), false);
+  assert.equal(isBareHostname(undefined), false);
+  assert.equal(isBareHostname('localhost'), false, '生产用途要求至少一个点号，localhost 类单标签不是合法的公网 CF Access 域名');
 });

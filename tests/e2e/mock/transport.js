@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
+import { setSecurityHeaders } from '../../../app/src/server/http.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'app', 'public');
@@ -90,9 +91,12 @@ export function createMockTransport({
     next();
   });
 
-  app.use((_req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
+  // 复用真 server 的同一份安全头函数（含 CSP），不再手写一份子集——此前只带
+  // X-Content-Type-Options/Referrer-Policy 两个头，整套 E2E 套件在零 CSP 下跑，前端代码
+  // 哪怕不小心引入了内联脚本/eval/越权外部资源，这类违规只有真实生产环境才会拦，
+  // 测试永远不会红。
+  app.use((req, res, next) => {
+    setSecurityHeaders(res, req.headers?.host);
     next();
   });
 
@@ -107,8 +111,7 @@ export function createMockTransport({
   app.get(['/', '/index.html'], (_req, res) => {
     try {
       const html = readFileSync(join(publicDir, 'index.html'), 'utf8')
-        .replace(/(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g, `$1?v=${assetVersion}`)
-        .replace('</head>', '<script>window.SERVER_CF_ACCESS_ENABLED = false;</script></head>');
+        .replace(/(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g, `$1?v=${assetVersion}`);
       res.setHeader('Cache-Control', 'no-store');
       res.type('html').send(html);
     } catch (error) {

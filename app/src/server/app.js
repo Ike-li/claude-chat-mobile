@@ -88,6 +88,8 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
+  isValidDeviceToken,
+  noteAuditedExternally,
   addPendingDevice,
   getLatestPendingDevice,
   approveDevice,
@@ -133,8 +135,12 @@ authStrategy.init();
 // 三层向上：本文件在 app/src/server/，仓库根在 app/ 之外——data/、scripts/、ccm.config.json
 // 都住在仓库根，不随运行时代码进 app/。少一层会让它们全部解析到 app/ 下（且无语法错误）。
 const HERE = join(import.meta.dirname, '..', '..', '..'); // 项目根；从任何 cwd 启动都一致
-const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
-const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
+// 测试隔离覆盖（同 CCM_TRUSTED_DEVICES_FILE / CCM_AUDIT_FILE 等既有惯例）：生产上这两个路径
+// 必须锚定仓库根（这正是"面板读写目标与启动时读的必须同源"这条不变量的落点，不能靠 cwd 或
+// CCM_DATA_DIR 重定向——那样会削弱它），但集成测试若要真实验证 env:set 的写入路径，此前没有
+// 任何隔离口子，一旦发送非空 changes 就会实打实地改到仓库根那份真实 ccm.config.json/.env。
+const ENV_FILE_PATH = process.env.CCM_ENV_FILE_PATH || join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
+const CONFIG_FILE_PATH = process.env.CCM_CONFIG_FILE_PATH || join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
 
 // 面板读写的目标必须与 src/ops/config.js 启动时**读的那一份**是同一个文件。
 // 分流写错的后果不是报错而是假成功：用户改完看到「已写入」，重启后毫无变化 ——
@@ -398,7 +404,7 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
     [...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd, opts,
   );
   viewingInstanceId = r.viewingInstanceId;
-  viewingCwd = r.viewingCwd;
+  viewingCwd = workspaceCwdOf(r.viewingCwd); // 永远落工作区轴：托管 worktree 重选后不该把 viewingCwd 钉在 worktree 路径上
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
   clearMirrorOnViewChange();
 };
@@ -654,6 +660,7 @@ function unlockSocket(socket) {
   permModeTo(socket);
   effortTo(socket);
   instancesTo(socket);
+  mirrorStateTo(socket); // 解锁这一刻起该 socket 才第一次拿到只读快照——不经过 connection 回调，漏了会一直假当成可写
   scheduleStatusRefresh();
 }
 
@@ -879,6 +886,22 @@ io.use(async (socket, next) => {
         // 否则是 peer。此前直接取 peer，反代后每张卡都是 127.0.0.1，「核对再批」无从核对（2026-09-06 容器演练）。
         const ip = clientSourceAddress(socket.handshake, clientIp, rlTrust).address;
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
+        // 【整段副作用都必须挂在「真的进了待审列表」这个前提下】addPendingDevice 内部会拒掉
+        // 格式非法/缺失的 token（isValidDeviceToken 同一判据），但下面这一整套——广播、离线推送、
+        // 控制台审批提示——此前无条件照跑，于是为一台【并不存在的待审设备】报了警：
+        //  · TTY 提示写的是「按回车一键同意【此】设备」，而回车实际批的是 getLatestPendingDevice()，
+        //    即【另一台】设备。攻击者（持 AUTH_TOKEN，正是设备审批这层要防的那种）先用合法 token
+        //    排队一台，再用非法 token 触发这条提示，操作员核对的卡片与回车批准的对象就不是同一台，
+        //    而 F2 那条「另有 N 个待审」的告警在只有一台待审时也不会响。
+        //  · 推送节流是设备维度的【单一】窗口（DEVICE_NOTIFY_KEY / DEVICE_NOTIFY_INTERVAL_MS），
+        //    且放行与否都写回状态——无效连接刷一下就占住它，随后真实的设备申请静默不推，
+        //    而「人不在电脑前」恰是本项目的主用例。
+        // 所以这里直接短路：只打一行拒绝记录，不广播、不推送、不给任何审批入口。
+        if (!isValidDeviceToken(deviceToken)) {
+          console.log(`\n⚠️  [安全] 拒绝一个设备 ID ${deviceToken ? '格式非法' : '缺失'} 的接入请求（来自 ${ip}），`
+            + `未加入待审列表，不发广播与推送。\n`);
+          return next();
+        }
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
         // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，用户锁屏或在别的 app 时整道
@@ -898,7 +921,7 @@ io.use(async (socket, next) => {
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);
-        console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
+        console.log(`   设备 ID: ${deviceToken}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
         // 「电脑控制台」曾让用户满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
@@ -908,6 +931,7 @@ io.use(async (socket, next) => {
           console.log(`   -> 就在这个窗口（跑着 npm start 的这个终端）里按【回车键 (Enter)】一键同意此设备`);
           console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
         } else {
+          // 走到这里 deviceToken 必然已过 isValidDeviceToken（上面短路过了），拼进双引号是安全的。
           console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备（必须在本项目目录下跑）：`);
           console.log(`      cd ${HERE} && node scripts/device.js approve "${deviceToken}"`);
         }
@@ -971,12 +995,17 @@ function computeNeedsYou() {
     const title = sessions.getSession(a.sessionId)?.title ?? null;
     const lastActiveAt = sessions.getSession(a.sessionId)?.lastUsedAt ?? 0;
     let status; let awaitingSince;
-    if (a.pendingPermissions.size > 0) {
-      for (const [requestId, p] of a.pendingPermissions) {
-        if (now > p.expiresAt) continue; // 已过期：不计入聚合（fail-closed 语义下过期即失效，见审批 TTL 阶段）
-        pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
-      }
-    } else if (a.pendingQuestions.size > 0) {
+    // hasLiveApproval：与下面 hasLiveQuestion 同一套写法——外层门槛不能只看 Map.size，
+    // size>0 但里面全过期时这里会一条都不 push，若还按 size 做 if/else 门槛，会连带把
+    // 同一实例真实存在的 pendingQuestions 分支也一起挡掉（两者互斥判据本该是"有没有活的"，
+    // 不是"Map 是否非空"）。
+    let hasLiveApproval = false;
+    for (const [requestId, p] of a.pendingPermissions) {
+      if (now > p.expiresAt) continue; // 已过期：不计入聚合（fail-closed 语义下过期即失效，见审批 TTL 阶段）
+      hasLiveApproval = true;
+      pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
+    }
+    if (!hasLiveApproval && a.pendingQuestions.size > 0) {
       // AG-NEW-003：与 permissions 对称过滤 expiresAt（timer 已删 Map 时此窗极短，仍防 residual）
       let hasLiveQuestion = false;
       for (const [, q] of a.pendingQuestions) {
@@ -2176,10 +2205,11 @@ function dedupedResume(cwd, resumeId, extra = {}) {
 // scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose → 删除 CLI 残留文件。
 // 与缓存关系：缓存加速后续（免重复 spawn），但第一次靠 scout 保证确定性——不用猜、不等实例、不靠上区残留。
 const activeScouts = new Map(); // cwd → AgentSession：去重，防连点刷新/并发触发重复 spawn
-function disposeScoutFor(cwd) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
+function disposeScoutFor(cwd, opts) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
   const old = activeScouts.get(cwd);
   // 走 scout 自己的 cleanup 而非裸 dispose：后者不清 20s 兜底定时器、也不删 CLI 建的 <sid>.jsonl 残留。
-  if (old) { try { (old._scoutCleanup || (() => old.dispose()))(); } finally { activeScouts.delete(cwd); } }
+  // opts 透传给 cleanup（关闭路径传 { immediate: true }，见 cleanup 的注释）。
+  if (old) { try { (old._scoutCleanup || ((() => old.dispose())))(opts); } finally { activeScouts.delete(cwd); } }
 }
 function openScoutInstance(cwd) {
   if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
@@ -2233,7 +2263,10 @@ function openScoutInstance(cwd) {
   // 走的是 instance.dispose() 而非本函数——定时器没被清，20s 后照常进来，此时 disposed 已为 true
   // 便早早返回，连带跳过下面的 transcript 残留清理，留下这段注释自己声明要防的「(无标题)」幽灵条目。
   let cleanedUp = false;
-  function cleanup() {
+  // immediate：同步删 transcript 残留，不走那条 300ms 延时。关闭路径必须用它——shutdown()
+  // 末尾是 `io.close(() => process.exit(0))`，无长连接时 io.close 几乎立刻回调，进程在 300ms
+  // 定时器 fire 之前就没了，残留照样留在盘上，而 shutdown 里那行注释声称的正是「裸退出留不下这些」。
+  function cleanup({ immediate = false } = {}) {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimeout(timer);
@@ -2243,8 +2276,10 @@ function openScoutInstance(cwd) {
     // dispose 触发 abort → CLI 进程退出。CLI 启动时已在 ~/.claude/projects/<projectDir>/
     // 创建了 <sid>.jsonl 文件（含 init 系统消息等）；留之会在 listSessions 中出现「(无标题)」幽灵条目。
     // 异步延迟删除：给 CLI 进程一个信号处理的窗口，避免 unlink 与 CLI 写文件竞争。
+    // immediate 下放弃这个窗口是刻意的：进程马上就要退出，「删不干净」的代价确定发生，
+    // 而竞争的代价只是 unlink 早一点（POSIX 下 CLI 持有的 fd 不受影响，也不会把文件写回来）。
     if (sid) {
-      setTimeout(() => {
+      const removeTranscript = () => {
         try {
           const projectDir = getProjectDir(cwd);
           const file = join(CLAUDE_PROJECTS_DIR, projectDir, `${sid}.jsonl`);
@@ -2259,7 +2294,9 @@ function openScoutInstance(cwd) {
           unlinkSync(file);
           invalidateListCache(cwd);
         } catch { /* 文件可能已被 CLI 清理或不存在——非致命 */ }
-      }, 300);
+      };
+      if (immediate) removeTranscript();
+      else setTimeout(removeTranscript, 300);
     }
   }
 
@@ -2343,7 +2380,8 @@ registerSocketConnection(io, socket => {
   // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
   mirrorEngine.requestRebaseline();
 
-  if (socket.deviceApproved === false) {
+  // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
+  if (socket.deviceApproved !== true) {
     // 未经授权的设备：跳过任何敏感信息重放，只推送 pending 状态
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2398,18 +2436,7 @@ registerSocketConnection(io, socket => {
     instancesTo(socket);
     // 只读追平：向(重)连客户端补发权威完整快照（含 readonly=false）。setMirror 仅在变化时广播，
     // 若空闲态省略事件，断线前残留 readonly=true 的客户端会在重连后继续假锁；实例 ID 重启复用时尤其明显。
-    const currentMirrorAgent = agents.get(viewingInstanceId);
-    const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
-    const mirrorSnapshot = mirrorEngine.snapshot();
-    socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
-      instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(), type: 'mirror_state',
-      payload: {
-        readonly: mirrorReadonly,
-        stale: mirrorReadonly && mirrorSnapshot.stale,
-        ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous, waiting: mirrorSnapshot.waiting } : {}),
-      }
-    });
+    mirrorStateTo(socket);
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2601,7 +2628,7 @@ registerSocketConnection(io, socket => {
         }
         if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
-          viewingCwd = a.cwd;
+          viewingCwd = workspaceCwdOf(a.cwd);
         } else if (viewingInstanceId === disposedId) {
           // 安全网：理论上 silent 后 viewing 应仍是 disposedId 或用户已改；若仍死指针却未 claim，落 reselect
           reselectViewingAfter(cwd);
@@ -2718,6 +2745,9 @@ registerSocketConnection(io, socket => {
       broadcastPendingDevices();
       broadcastTrustedDevices();
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
+      // 已在这里记过 via:'web'，登记一下免得文件监听器按差集再补一条 via:'cli'（同一动作两条记录、
+      // 且归因是错的）。TTY 的回车批准【不】登记——它自己不记审计，监听器是它唯一的审计来源。
+      noteAuditedExternally({ trustedAdded: [deviceId], pendingRemoved: [deviceId] });
     } else {
       // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
       broadcastPendingDevices();
@@ -2728,6 +2758,14 @@ registerSocketConnection(io, socket => {
   on(socket, 'user:denyDevice', payload => {
     const deviceId = payload?.deviceId;
     if (typeof deviceId !== 'string' || !deviceId) return;
+    // 同 user:approveDevice 的纵深防御：只对「确在待审批列表里」的 deviceId 生效。denyDevice()
+    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端每次握手都带着自己完整
+    // 的 deviceToken——没有这道守卫，它能拿这个事件传自己的 deviceId 自吊销，绕开
+    // user:revokeTrustedDevice 专门加的 self 守卫（decideRevokeByShortId 的 requesterToken 检查）。
+    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
+      console.warn(`[devices] 忽略远程拒绝：${deviceId} 不在待审批列表`);
+      return;
+    }
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
     const revoked = denyDevice(deviceId);
     disconnectDeviceSockets(deviceId); // 断连照做：即便落盘失败，也先切断该设备当前连接（纵深防御）
@@ -2735,6 +2773,8 @@ registerSocketConnection(io, socket => {
     broadcastTrustedDevices();
     if (revoked) {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
+      noteAuditedExternally({ trustedRemoved: [deviceId], pendingRemoved: [deviceId] }); // 同上：已记过，别让监听器再补
+
     } else {
       // BE-011：吊销落盘失败——磁盘仍含该设备，下次 isDeviceTrusted 重读会复活，不谎报成功，告警 + 提示重试。
       console.error(`[devices] 吊销 ${deviceId} 落盘失败，可能未生效`);
@@ -2791,6 +2831,8 @@ registerSocketConnection(io, socket => {
     broadcastTrustedDevices();
     if (revoked) {
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'denied', meta: { via: 'web' } });
+      noteAuditedExternally({ trustedRemoved: [d.token], pendingRemoved: [d.token] }); // 同上：已记过，别让监听器再补
+
     } else {
       console.error(`[devices] 吊销 ${d.token} 落盘失败，可能未生效`);
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_revoked', target: d.token, outcome: 'error', meta: { via: 'web', persistFailed: true } });
@@ -2928,7 +2970,7 @@ registerSocketConnection(io, socket => {
     }
     if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
       viewingInstanceId = ni.instanceId;
-      viewingCwd = ni.cwd;
+      viewingCwd = workspaceCwdOf(ni.cwd);
     } else if (viewingInstanceId === disposedId) {
       reselectViewingAfter(cwd);
     }
@@ -2953,7 +2995,7 @@ registerSocketConnection(io, socket => {
     if (id === viewingInstanceId) return instancesTo(socket); // 幂等
     viewingInstanceId = id;
     const a = agents.get(id);
-    viewingCwd = a.cwd;
+    viewingCwd = workspaceCwdOf(a.cwd);
     // B2：列表/tab 聚焦也要更新 currentByCwd（此前只 session:switch/finishOpenFocus 写指针）
     if (a.sessionId) sessions.setCurrent(a.cwd, a.sessionId);
     // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
@@ -3016,8 +3058,10 @@ registerSocketConnection(io, socket => {
     const ack = typeof payload === 'function' ? payload : maybeAck;
     const obj = payload && typeof payload === 'object' ? payload : {};
     // 可选 cwd：在指定工作区上下文下开空首页（白名单内）；默认保留当前 viewingCwd。
+    // 当前唯一前端调用点（session:home 恒发 {}）不带 cwd，这个分支走不到；仍按「viewingCwd 永远
+    // 落工作区轴」这道不变量补 workspaceCwdOf 做防御性一致（同 reselectViewingAfter/setViewing 等处）。
     if (typeof obj.cwd === 'string' && obj.cwd) {
-      viewingCwd = ensureWhitelisted(routeCwd(obj.cwd), workDirs);
+      viewingCwd = workspaceCwdOf(ensureWhitelisted(routeCwd(obj.cwd), workDirs));
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
@@ -3050,7 +3094,10 @@ registerSocketConnection(io, socket => {
     const obj = (payload && typeof payload === 'object') ? payload : null;
     const cwd = ensureWhitelisted(obj ? routeCwd(obj.cwd) : viewingCwdOf(), workDirs);
 
-    viewingCwd = cwd;
+    // cwd（驾驶轴，供下面路由代次/当前指针/懒开使用）保持原样，可以是托管 worktree 路径；
+    // viewingCwd（工作区展示轴）另外归一化——两个前端调用点目前只会传顶层工作区目录（抽屉按行 /
+    // 全局 currentCwd），worktree 从不出现在这里，故此刻是无操作的防御性对齐，不改变现有行为。
+    viewingCwd = workspaceCwdOf(cwd);
     sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
@@ -3589,7 +3636,11 @@ registerSocketConnection(io, socket => {
     // 搜索态不补：搜索是另一条轴，往结果里塞未匹配的行等于污染搜索语义（用户搜 "foo" 却看见 "bar"）。
     // 已在本页的不补：那条已经有行了，补进来就是同一会话两行。
     const inPage = new Set(list.map(s => s.id));
-    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id));
+    // pendingDeleteIds 同样要排除：listSessionsPage 那条路径经 excludeIds 过滤了，这条独立的
+    // pinned（手动标未读、不受分页截断）走的是 listSessionsByIds——它没有 excludeIds 形参，
+    // 此前完全没挡，删除在途（sdkDeleteSession 的 await 窗口内）又恰好被手动标过未读的会话，
+    // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
+    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds) : [];
     // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
     // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
@@ -4002,6 +4053,7 @@ registerSocketConnection(io, socket => {
       fileExists: existsSync,
       isExecutable: p => canAccessPath(p, fsConstants.X_OK),
       probePort: () => portBusy,
+      usingConfigJson: usingConfigJson(),
     });
     if (!verdict.ok) return ack({ ok: false, results: verdict.results });
 
@@ -4493,6 +4545,26 @@ function instancesTo(socket) {
   });
 }
 
+// 只读追平：单发当前查看 tab 的镜像只读快照给指定 socket。原来只内联在 registerSocketConnection
+// 的已批准分支里（物理重连时才会跑到），unlockSocket()（批准待审批设备解锁已连接 socket，不经过
+// 这条连接回调）漏了这一步——设备刚被批准那一刻，若当前查看的会话正被 CLI 驾驶，前端会一直不知道
+// 自己该进只读态，直到用户手动刷新页面。抽成独立函数供两处共用，对齐 permModeTo/effortTo/instancesTo
+// 的既有写法。
+function mirrorStateTo(socket) {
+  const currentMirrorAgent = agents.get(viewingInstanceId);
+  const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
+  const mirrorSnapshot = mirrorEngine.snapshot();
+  socket.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
+    instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(), type: 'mirror_state',
+    payload: {
+      readonly: mirrorReadonly,
+      stale: mirrorReadonly && mirrorSnapshot.stale,
+      ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous, waiting: mirrorSnapshot.waiting } : {}),
+    }
+  });
+}
+
 function sysTo(socket, message, recoverable) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: null, cwd: viewingCwdOf(), ts: Date.now(),
@@ -4628,6 +4700,10 @@ function shutdown(sig) {
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
+  // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 删 CLI 建的 <sid>.jsonl 残留，裸退出留不下这些。
+  // immediate:true 不是可选的优化——cleanup 缺省把 unlink 挂在 300ms 定时器上，而本函数末尾
+  // io.close 的回调随即 process.exit(0)，无长连接时几乎立即返回，定时器根本轮不到 fire。
+  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd, { immediate: true });
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
