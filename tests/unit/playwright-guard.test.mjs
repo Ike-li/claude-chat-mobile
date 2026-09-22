@@ -67,6 +67,55 @@ test('手写 new Promise(...setTimeout...) 在 spec 里被抓住，在 tests/e2e
   }
 });
 
+// ★ 两种普通格式化就能绕过原判据的写法——不是对抗性构造，是 eslint/prettier 的常见输出：
+//   · 形参带括号：`[^)]*` 在 `(resolve)` 的右括号处就停了；
+//   · setTimeout 换到下一行：逐行扫描下两半各自都不完整。
+// 门禁被这两种写法绕过时的表现是「报告成功」，与"真的没有违规"完全无法区分。
+test('手写睡眠的带括号形参与跨行写法同样被抓住（原逐行判据对这两种完全失明）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-sleep-forms-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'paren.spec.ts'),
+      "await new Promise((resolve) => setTimeout(resolve, 1000));\n");
+    let r = run(root);
+    assert.equal(r.status, 1, '带括号形参必须被抓住');
+    assert.match(r.stderr, /paren\.spec\.ts/);
+
+    rmSync(join(root, 'tests', 'e2e', 'specs', 'paren.spec.ts'));
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'multiline.spec.ts'),
+      "await new Promise(resolve =>\n  setTimeout(resolve, 1000),\n);\n");
+    r = run(root);
+    assert.equal(r.status, 1, '跨行写法必须被抓住');
+    assert.match(r.stderr, /multiline\.spec\.ts:1/, '行号应报在 new Promise 那一行，不是 setTimeout 那一行');
+
+    rmSync(join(root, 'tests', 'e2e', 'specs', 'multiline.spec.ts'));
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'two-params.spec.ts'),
+      "await new Promise((resolve, reject) => setTimeout(resolve, 1000));\n");
+    r = run(root);
+    assert.equal(r.status, 1, '(resolve, reject) 形参同样是睡眠');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 反向：给一个【真事件】加超时兜底不是固定睡眠——setTimeout 的实参是 reject 的包装函数，
+// 不是 Promise 的 resolve 形参。误报这一档会让整道闸被嫌吵而绕开，等于没有闸。
+test('给真事件加超时兜底的 new Promise 不被误报（setTimeout 实参不是 resolve 形参）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-timeout-guard-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'guard.spec.ts'),
+      "await new Promise((resolve, reject) => {\n"
+      + "  page.once('dialog', resolve);\n"
+      + "  setTimeout(() => reject(new Error('no dialog')), 5000);\n"
+      + "});\n");
+    const r = run(root);
+    assert.equal(r.status, 0, `等真信号 + 超时兜底不该被判成手写睡眠：${r.stderr || r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // test.setTimeout(N) 是 Playwright 官方 API（延长这条测试的超时），字面上含 "setTimeout" 子串
 // 但语义与"手写睡眠"无关——不能被新规则误伤。
 test('test.setTimeout(N)（Playwright 官方的延长测试超时 API）不被新规则误伤', () => {
