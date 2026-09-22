@@ -41,6 +41,47 @@ test('Playwright guard scans tests/e2e and tests/playground/e2e, not node:test p
   }
 });
 
+// 手写 new Promise(...setTimeout...) 等价于被禁的 waitForTimeout，只是绕过了字面禁令——
+// 同样是不稳定的固定等待。但 tests/e2e/mock/ 下的 setTimeout 是模拟服务端时序延迟的工具函数
+// （const delay = ms => new Promise(res => setTimeout(res, ms))），用途完全不同，必须排除。
+test('手写 new Promise(...setTimeout...) 在 spec 里被抓住，在 tests/e2e/mock/ 下被放行', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-settimeout-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    mkdirSync(join(root, 'tests', 'e2e', 'mock'), { recursive: true });
+
+    writeFileSync(join(root, 'tests', 'e2e', 'mock', 'server.js'),
+      "const delay = ms => new Promise(res => setTimeout(res, ms));\nmodule.exports = { delay };\n");
+    const cleanMockOnly = run(root);
+    assert.equal(cleanMockOnly.status, 0, cleanMockOnly.stderr || cleanMockOnly.stdout);
+
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'sleepy.spec.ts'),
+      "await new Promise(resolve => setTimeout(resolve, 1000));\n");
+    const blocked = run(root);
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /specs\/sleepy\.spec\.ts/);
+    assert.match(blocked.stderr, /手写睡眠/);
+    assert.doesNotMatch(blocked.stderr, /mock\/server\.js/, 'mock 基建的合法用法不该被同一条规则误伤');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// test.setTimeout(N) 是 Playwright 官方 API（延长这条测试的超时），字面上含 "setTimeout" 子串
+// 但语义与"手写睡眠"无关——不能被新规则误伤。
+test('test.setTimeout(N)（Playwright 官方的延长测试超时 API）不被新规则误伤', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-testtimeout-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'slow.spec.ts'),
+      "test('slow', async ({ page }) => { test.setTimeout(60_000); });\n");
+    const result = run(root);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // TARGET_DIRS 与 tests/infra/playwright.config.ts 的 testDir 是两份独立真相。改 config 漏改门禁时，
 // 此前的行为是 existsSync 跳过 → 扫 0 个文件 → 打印「✅ 通过」并退出 0：E2E 照跑、门禁永久失明、
 // npm run check 全绿。扫描面塌陷必须与「没有违规」区分开。

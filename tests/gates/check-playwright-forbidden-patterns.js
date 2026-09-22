@@ -24,6 +24,15 @@ const FORBIDDEN = [
   { pattern: /\btest\.describe\.(?:only|skip|fixme)\s*\(/, label: 'test.describe.only/skip/fixme(' },
   { pattern: /\bnetworkidle\b/, label: 'networkidle' },
   { pattern: /\bwaitForTimeout\s*\(/, label: 'waitForTimeout(' },
+  // 手写 new Promise(...setTimeout...) 等价于被禁的 waitForTimeout——同样是不稳定的固定等待，
+  // 只是绕过了字面禁令。排除 tests/e2e/mock：那里的 setTimeout 是模拟服务端时序延迟的工具函数
+  // （如 const delay = ms => new Promise(res => setTimeout(res, ms))），不是 spec 里摸鱼等待，
+  // 用途完全不同——mock server.js 与 scenarios/*.js 现有 12+ 处这类合法写法。
+  {
+    pattern: /new\s+Promise\s*\([^)]*\bsetTimeout\s*\(/,
+    label: 'new Promise(...setTimeout...)（手写睡眠，等价于被禁的 waitForTimeout）',
+    excludeDirs: ['tests/e2e/mock'],
+  },
 ];
 
 function walk(dir, files = []) {
@@ -49,7 +58,8 @@ for (const dir of TARGET_DIRS) {
     const rel = file.slice(rootDir.length + 1);
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
-      for (const { pattern, label } of FORBIDDEN) {
+      for (const { pattern, label, excludeDirs } of FORBIDDEN) {
+        if (excludeDirs?.some(dir => rel.startsWith(`${dir}/`))) continue;
         if (pattern.test(line)) violations.push(`${rel}:${i + 1}: 禁止模式 "${label}" —— ${line.trim()}`);
       }
     });
