@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, promptWorkDirs, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
 import { ACCESS_PROFILES } from '../../app/src/ops/env-schema.js';
 
@@ -278,7 +279,7 @@ test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', 
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, LANG: 'C' },
-      cwd: new URL('../..', import.meta.url).pathname,
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
     });
     assert.equal(res.status, 0, res.stderr || res.stdout);
     assert.equal(existsSync(config), true);
