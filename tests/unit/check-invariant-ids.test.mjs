@@ -8,10 +8,10 @@
 // 编号悬空会在完全无症状的情况下重新长回来——那正是 2026-09-05 之前的状态。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { checkInvariantIds } from '../../tests/gates/check-invariant-ids.js';
+import { checkInvariantIds, SELF_FILES } from '../../tests/gates/check-invariant-ids.js';
 
 // 造一棵最小假仓库：tests/README.md（登记表）+ tests/invariants/（用例）
 function fakeRepo({ registryRows = [], files = {}, extraCorpus = {} } = {}) {
@@ -140,6 +140,57 @@ test('反向放宽：编号由门禁而非用例守护时不误报（PROTO-01 / 
     const r = checkInvariantIds({ rootDir: root });
     assert.equal(r.ok, true, `门禁里写了编号就该闭合，实际 ${JSON.stringify(r.problems)}`);
   } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// 【2026-09 收紧】反向检查此前是纯子串匹配（登记表 ID 在 tests/ 树任意文件任意位置出现即算数），
+// 不要求「守护：」声明行格式——一个编号只要在某处的散文里被写死过，哪怕守护它的用例早被删光，
+// 反向检查也会一直放行。这正是本闸最想堵住的那类恒绿：门禁绿着，管辖面却是空的。
+test('红侧⑤：编号只在散文里被提及、没有规范「守护：」行 → 仍判 dead_registry_entry（收紧前会误判为已提及）', () => {
+  const root = fakeRepo({
+    registryRows: [['AUTH-01', '令牌门'], ['SRV-777', '写了但只在散文里提过']],
+    files: { 'a.test.mjs': '// x\n// 守护：AUTH-01\n' },
+    // 散文提及：字符串里确实出现了 SRV-777，但这一行不以「守护：」开头，不构成声明。
+    extraCorpus: { 'unit/some-note.test.mjs': '// 这里顺带提一句 SRV-777，但没人真的守它\ntest("x", () => {});\n' },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    assert.deepEqual(codes(r), ['dead_registry_entry']);
+    assert.equal(r.problems[0].id, 'SRV-777');
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// 本闸自身文件（及其单测夹具）不该被算进反向扫描面——它们的源码/测试样本字符串里
+// 天然会出现 ID 字面量（本文件上面几条用例就写了 AUTH-01/GHOST-01/SRV-999 等），
+// 若不排除，任何登记表条目只要恰好在这份门禁自己的代码或测试文件里被提过一次
+// （哪怕是当作"编造的编号"这种反例），就会被误判成"仍有人守护"——自满足回路，
+// 且不需要真实仓库改动就能触发，纯粹是这道闸自己的源码在给自己作弊。
+test('排除自引用：编号只出现在本闸自身文件（或其单测夹具）里的规范守护行 → 仍判 dead_registry_entry', () => {
+  const root = fakeRepo({
+    registryRows: [['AUTH-01', '令牌门'], ['SRV-888', '只在门禁自身文件里被"声明"过']],
+    files: { 'a.test.mjs': '// x\n// 守护：AUTH-01\n' },
+    extraCorpus: {
+      'gates/check-invariant-ids.js': '// 守护：SRV-888（自引用，不该算数）\n',
+      'unit/check-invariant-ids.test.mjs': '// 守护：SRV-888（单测夹具里的样本文本，同样不该算数）\n',
+    },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    assert.deepEqual(codes(r), ['dead_registry_entry']);
+    assert.equal(r.problems[0].id, 'SRV-888');
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
+// SELF_FILES 是写死的两条路径。文件一旦改名/搬走，排除就【静默失效】——而失效方向恰好是
+// 这个 PR 要堵的那种：自满足回路复活，门禁又开始给自己作弊，且没有任何信号。
+// 这类「守卫本身悄悄失去管辖面」的缺口，就是本闸存在的理由，它自己不能犯。
+test('SELF_FILES 里的路径必须真实存在——写死的排除名单不得因改名而静默失效', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  for (const rel of SELF_FILES) {
+    assert.ok(existsSync(join(root, rel)),
+      `SELF_FILES 里的 ${rel} 不存在了（改名/搬走？）。排除名单对不上文件就等于没排除，`
+      + `自引用回路会悄悄复活——请同步更新这份名单。`);
+  }
+  assert.equal(SELF_FILES.size, 2, '名单增减时请一并确认上面那条排除自引用的用例仍然覆盖得到');
 });
 
 // 扫描面塌掉必须报错，不能静默当成「全部合规」——这是 repo-inventory 的同款判据。

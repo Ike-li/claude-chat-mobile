@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// tests/gates/check-config-gitignored.js —— 凭据文件必须被 .gitignore 覆盖（守护 CONFIG-03）
+// tests/gates/check-config-gitignored.js —— 凭据文件必须被 .gitignore 覆盖
+// 守护：CONFIG-03（存放凭据的配置文件必须被 .gitignore 覆盖）
 //
 // 【为什么有这条闸】docs/hard-rules.md §4.6 一直写着这个缺口：ccm.config.json 里装着
 // AUTH_TOKEN、VAPID 私钥、ntfy 令牌，而本仓是 **public** 的，可是删掉 .gitignore 里那三行
@@ -12,8 +13,8 @@
 // （「test:docker 不含 check：inventory:check 要 git ls-files……」），这里是同一条纪律：
 // **依赖 git 元数据的检查只能待在 check 链上**，而 check 本来就只在宿主机跑。
 //
-// 编号仍是 CONFIG-03：tests/gates/check-invariant-ids.js 的反向那半刻意放宽到整棵 tests/ 树，
-// 理由原文是「有些不变量由门禁守而非用例守」——正是这种情况。
+// 「守护：CONFIG-03」声明行放在文件头部而非 tests/invariants/ 下的用例里，正是
+// tests/gates/check-invariant-ids.js 头注里「有些不变量由门禁守而非用例守」的那种情况。
 //
 // 【gitleaks 不是替代品】那道 pre-commit 钩子扫的是「**内容**像不像凭据」，这条管的是
 // 「**路径**会不会被收进来」。一个 AUTH_TOKEN 恰好没命中 gitleaks 任何规则的配置文件，
