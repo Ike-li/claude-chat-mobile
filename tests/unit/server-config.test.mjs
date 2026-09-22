@@ -262,6 +262,20 @@ test('parseServerConfig falls back safely for invalid numeric configuration', ()
   assert.equal(config.dataDir, join('/repo', 'data'));
 });
 
+// env-schema.js 里 NOTIFY_THROTTLE_MS / SESSION_DELETE_QUIET_MS 都声明 min:0（配置面板接受 0），
+// 但这里此前用的是 positiveNumber（要求 >0），0 会被静默换成默认值——用户在面板里存的 "0"
+// 从未真正生效过，且没有任何报错提示。INSTANCE_IDLE_RECLAIM_MS 同样 min:0，一直用对的
+// nonNegativeNumber（上面那条测试已经在测它），这两个字段应该走同一条路径。
+test('parseServerConfig：NOTIFY_THROTTLE_MS / SESSION_DELETE_QUIET_MS 为 "0" 时必须原样采纳，不得换成默认值', () => {
+  const config = parseServerConfig({
+    NOTIFY_THROTTLE_MS: '0',
+    SESSION_DELETE_QUIET_MS: '0',
+  }, { projectRoot: '/repo' });
+
+  assert.equal(config.notifyThrottleMs, 0);
+  assert.equal(config.sessionDeleteQuietMs, 0);
+});
+
 // ── TRUSTED_PROXY / ACCESS_PROFILE 的运行时归一（2026-09-06）──
 // 两个键此前都是 app.js 裸读 process.env；限速采信开关必须走这里归一：未知值归空 = 不采信（fail-closed），
 // 否则 app.js 里任何一处「truthy 就算开」的写法都会把 '1' / 'on' 当成开关。
