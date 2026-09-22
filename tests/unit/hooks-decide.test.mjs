@@ -62,13 +62,40 @@ test('verify 事件 → 只出 ack，不推送不刷新（安装回环验证专�
   assert.equal(r.ignored, 0, 'verify 事件不受工作区白名单约束（安装时可能在任意目录跑）');
 });
 
-test('Stop：前台有客户端在看 → 不推完成通知；无前台 → 推', () => {
-  const withClient = decideHookEventActions([ev()], { ...base, hasForegroundClient: true });
+test('Stop：正看着这个会话 + 前台有客户端 → 不推完成通知；无前台 → 推', () => {
+  const withClient = decideHookEventActions([ev()], {
+    ...base, viewingSessionId: SID, viewingCwd: CWD, hasForegroundClient: true,
+  });
   assert.deepEqual(withClient.pushes, []);
-  const noClient = decideHookEventActions([ev()], base);
+  const noClient = decideHookEventActions([ev()], { ...base, viewingSessionId: SID, viewingCwd: CWD });
   assert.equal(noClient.pushes.length, 1);
   assert.equal(noClient.pushes[0].hookEventName, 'Stop');
   assert.equal(noClient.pushes[0].sessionId, SID);
+});
+
+// 修复前的漏洞：hasForegroundClient 是「随便哪个 approved 客户端在前台」的全局信号，与
+// viewingSessionId/viewingCwd 完全无关——用户正看着会话 A，会话 B（另一个 cwd）的 Stop
+// 事件也会被吞掉，B 完成了用户却永远不知道。现在收窄到「正看着的就是这一个」才抑制。
+test('Stop：前台有客户端，但看的是另一个会话 → 仍然推（此前的收窄缺口）', () => {
+  const r = decideHookEventActions([ev()], {
+    ...base, viewingSessionId: 'other-sess', viewingCwd: CWD, hasForegroundClient: true,
+  });
+  assert.equal(r.pushes.length, 1, '看的是别的会话，这条 Stop 不该被吞');
+  assert.equal(r.pushes[0].sessionId, SID);
+});
+
+test('Stop：前台有客户端，但看的是同会话的另一个 cwd（worktree）→ 仍然推', () => {
+  const r = decideHookEventActions([ev()], {
+    ...base, viewingSessionId: SID, viewingCwd: OTHER, hasForegroundClient: true,
+  });
+  assert.equal(r.pushes.length, 1);
+});
+
+test('Stop：正看着这个会话，但没有前台客户端（锁屏/切到别的 app）→ 仍然推', () => {
+  const r = decideHookEventActions([ev()], {
+    ...base, viewingSessionId: SID, viewingCwd: CWD, hasForegroundClient: false,
+  });
+  assert.equal(r.pushes.length, 1);
 });
 
 test('Notification：前台在看也照推（可能锁屏/在别的会话，"需要你"不能吞）', () => {

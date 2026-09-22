@@ -140,5 +140,28 @@ test.describe(
       assert.equal(local.socket.connected, true, '吊销无关 token 不应影响 trustBasis=bypass 的本机连接');
       local.socket.disconnect();
     });
+
+    // user:approveDevice 有「目标必须在待审批列表里」的纵深防御（app.js:2695），user:denyDevice
+    // 此前没有同款守卫——它接受任意 deviceId 直接调用 denyDevice()，而 denyDevice 对【已信任】
+    // 的 token 同样生效（从 trustedDevices 里删除）。已批准的客户端每次握手都会带上自己完整的
+    // deviceToken（socket.handshake.auth.deviceToken），于是可以拿 user:denyDevice 传自己的
+    // deviceId 自吊销——绕开了 user:revokeTrustedDevice 那条路径专门加的 self 守卫
+    // （decideRevokeByShortId 的 requesterToken 检查）。
+    test('user:denyDevice 不得允许已信任设备自吊销（须只对待审批列表里的 deviceId 生效）', async () => {
+      const token = `denydevice-self-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const client = connectAndCollect(`http://${LAN_IP}:${port}`, { token: 'secret-token', deviceToken: token });
+      await client.waitForType('device_status', 5000, e => e.payload.status === 'pending');
+
+      devicesModule.approveDevice(token);
+      await client.waitForType('device_status', 3000, e => e.payload.status === 'approved');
+      assert.equal(devicesModule.isDeviceTrusted(token), true, '前置条件：设备此刻应已受信任');
+
+      client.socket.emit('user:denyDevice', { deviceId: token });
+      await sleep(500); // 无 ack，等潜在的断连/落盘副作用发生
+
+      assert.equal(devicesModule.isDeviceTrusted(token), true,
+        '已信任设备不应能通过 user:denyDevice 传自己的 deviceId 自吊销');
+      client.socket.disconnect();
+    });
   },
 );

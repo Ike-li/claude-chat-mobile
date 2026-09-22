@@ -23,6 +23,7 @@ import {
   approveDevice,
   denyDevice,
   persistTrustedChange,
+  takeSelfMutations,
   getTrustedDeviceProfiles,
   shortDeviceId,
   resolveShortDeviceId,
@@ -180,6 +181,46 @@ test.describe('devices.js 单元测试', () => {
     assert.equal(denyDevice(null), false);
   });
 
+  // docs/testing.md 点名的反直觉方向之一：trusted-devices.json 瞬时读失败必须保留内存 last-good，
+  // 不能因为一次读失败就把所有设备当成未信任（会话中的 watcher 一轮就把全部 device-token
+  // 连接断光，与「所有异常都该拒绝」的直觉正好相反）。此前该分支没有任何测试锁着。
+  test('trusted-devices.json 读失败（JSON 损坏）→ 保留内存 last-good，不清空信任表', () => {
+    addPendingDevice('device-lastgood', { ip: '1.1.1.1' });
+    assert.equal(approveDevice('device-lastgood'), true);
+    assert.equal(isDeviceTrusted('device-lastgood'), true);
+
+    const saved = readFileSync(TRUSTED_DEVICES_FILE, 'utf8');
+    writeFileSync(TRUSTED_DEVICES_FILE, 'not valid json{{{');
+    try {
+      loadTrustedDevices();
+      assert.equal(isDeviceTrusted('device-lastgood'), true,
+        '读失败不得把已信任设备判成未信任——那是本机唯一在线设备时的自锁形态');
+    } finally {
+      writeFileSync(TRUSTED_DEVICES_FILE, saved);
+      loadTrustedDevices();
+    }
+    denyDevice('device-lastgood');
+  });
+
+  // deviceToken 来自 socket.io 握手 JSON 体，不经 HTTP header 过滤，控制字符/引号/换行都能带进来。
+  // 非交互模式下 app.js 会把它原样拼进一条打印给操作员复制运行的 shell 命令
+  // （`node scripts/device.js approve "${deviceToken}"`），带 "/`/$ 的值就是一条可执行任意命令的
+  // 注入；同时它会被落进 pending-devices.json，过大的值会让该文件被不成比例地撑大。
+  // 在 addPendingDevice 这个单点上拒绝，任何调用方（现在与未来）都受保护，不用在每个调用点各判一次。
+  test('deviceToken 含危险字符 / 超长 → 拒绝加入待审列表（防打印时命令注入、防文件被撑大）', () => {
+    addPendingDevice('has-a-"quote', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-`backtick', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-$dollar', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\\backslash', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\nnewline', { ip: '1.1.1.1' });
+    addPendingDevice('x'.repeat(200), { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 0, '危险字符/超长的 token 一个都不该进列表');
+
+    addPendingDevice('safe-token-abc123', { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 1, '不含危险字符的正常 token 仍应正常加入');
+    removePendingDevice('safe-token-abc123');
+  });
+
   // F1（code-review #5）：pendingDevices 有容量上限，防 LAN-authenticated flood 撑爆文件/刷屏。
   test('pendingDevices 有容量上限，超出丢最旧（防 flood）', () => {
     loadPendingDevices();
@@ -196,6 +237,51 @@ test.describe('devices.js 单元测试', () => {
 
     for (const d of getPendingDevices()) removePendingDevice(d.deviceToken); // 清理
     assert.equal(getPendingDevices().length, 0);
+  });
+
+  // 容量淘汰不是「有人拒绝了它」。device-gate.js 的文件监听器按 pending 集合差集记
+  // device_denied，看不出这条移除是谁造成的——不登记成「本进程自己移的」的话，第 51 台设备
+  // 之后每来一台就伪造一条 device_denied，而审计表是环形有上限的，伪造记录会把真实安全事件挤出去。
+  test('takeSelfMutations：容量淘汰掉的最旧条目登记为本进程自身移除（监听器据此不记成拒绝）', () => {
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+    takeSelfMutations(); // 清掉上面清理动作累积的条目，只观察下面这一段
+
+    const N = MAX_PENDING_DEVICES + 1;
+    for (let i = 0; i < N; i++) addPendingDevice(`evict-${i}`, { ip: '10.0.0.1', userAgent: 'x' });
+
+    const self = takeSelfMutations();
+    assert.ok(self.pendingRemoved.has('evict-0'),
+      `第 ${N} 台进来时最旧的 evict-0 被容量淘汰，必须登记为自身移除，实际：${JSON.stringify([...self.pendingRemoved])}`);
+    // 取走即消费：不清空的话，下一次真实的 CLI 拒绝会被这批陈旧条目误当成自身写入而漏审计——
+    // 方向恰好与本修复相反，且同样无声。
+    assert.equal(takeSelfMutations().pendingRemoved.size, 0, 'take 之后必须清空');
+
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+  });
+
+  // ★ 登记点必须是「已经自己记过审计的调用方」，不是写盘 choke point。
+  // app.js 的 TTY 处理器（终端里按回车批准 / 输入 deny）走的就是这里的同进程
+  // approveDevice/denyDevice，而它【不记审计】——文件监听器是它唯一的审计来源。
+  // 把「本进程里所有写入」一律登记成「已记过」，终端审批就彻底无痕了。
+  test('approveDevice / denyDevice 的同进程调用不得自动登记（TTY 审批靠监听器补审计）', () => {
+    loadTrustedDevices();
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken);
+    takeSelfMutations();
+
+    addPendingDevice('tty-tok', { ip: '10.0.0.1', userAgent: 'x' });
+    takeSelfMutations(); // 清掉入列动作可能带来的登记，只观察下面两步
+
+    approveDevice('tty-tok');
+    let self = takeSelfMutations();
+    assert.equal(self.trustedAdded.size, 0,
+      '同进程 approveDevice 不得被当成「已记过审计」——那会让 TTY 回车批准一条审计都不留');
+
+    denyDevice('tty-tok');
+    self = takeSelfMutations();
+    assert.equal(self.trustedRemoved.size, 0, '同理，denyDevice 也不得自动登记');
+    assert.equal(self.pendingRemoved.size, 0);
   });
 });
 
@@ -446,6 +532,14 @@ test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', 
       assert.equal([...cut].length, MAX_DEVICE_ALIAS);
       assert.ok(!cut.includes('\ufffd'), '不得留下半个代理对');
       assert.equal(cut, '📱'.repeat(MAX_DEVICE_ALIAS));
+    });
+
+    // \p{Cc}（控制字符）被剥了，但 \p{Cf}（格式字符，含双向文本覆写符）此前没有——一个 U+202E
+    // RIGHT-TO-LEFT OVERRIDE 能让这行别名在受信任设备列表里视觉反向显示，而那正是用户读来
+    // 决定吊销哪一台的界面。
+    test('剥掉双向文本覆写等格式字符（U+202E 等），防设备列表视觉欺骗', () => {
+      assert.equal(normalizeDeviceAlias('safe‮exe.txt'), 'safe exe.txt');
+      assert.equal(normalizeDeviceAlias('a​b'), 'a b', '零宽空格（Cf）同理');
     });
   });
 

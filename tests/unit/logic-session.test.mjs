@@ -394,6 +394,16 @@ test('summarizeOtherWorkspaces: aborted 不点亮顶部，但不遮蔽 error', (
   assert.equal(summarizeOtherWorkspaces({ '/a': 'aborted', '/b': 'error' }, dirs, '/cur'), 'error');
 });
 
+// bg_locked 是 resolveDrawerStatus 的第五个返回值，有意不进这张 rank 表（会话级占用不该抬到
+// 工作区层，见 panel-state.js 里 rank 表上方注释与 f0e193cf4）。这条测试钉住的是「有意排除」
+// 本身，不是「这个分支还没写」——防止有人照着 terminal_waiting 的先例把它也添进 rank 表。
+test('summarizeOtherWorkspaces: bg_locked 不参与排名（会话级占用不点亮工作区角标），也不崩', () => {
+  const dirs = ['/a', '/b'];
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'bg_locked' }, dirs, '/cur'), null);
+  // 与真正需要关注的状态同时出现时，bg_locked 不得盖过它、也不得被它排除在外
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'bg_locked', '/b': 'busy' }, dirs, '/cur'), 'busy');
+});
+
 test('projectDisplayName: 顶部/空状态只显示项目名，不显示完整路径', () => {
   assert.equal(projectDisplayName('/Users/you/code/claude-chat-mobile'), 'claude-chat-mobile');
   assert.equal(projectDisplayName('/Users/you/code/claude-chat-mobile/'), 'claude-chat-mobile');

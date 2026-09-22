@@ -72,10 +72,13 @@ export function flushSaveSync() {
 
 // 环形上限在写入时立即生效（而非留给独立的留存治理任务）——写入频率本就低（安全动作而非消息流），
 // 没有理由让上限之外的清理逻辑来做这件事，写入即治理最简单可靠。
-export function recordAudit({ actor, action, target, outcome, meta } = {}) {
-  const id = `audit_${Date.now()}_${++_seq}`;
+// ts 可选覆盖：对齐 ops/ 域内其它模块（如 cli-hooks-bridge.js 的 capturedAt/ackedAt）已有的
+// 「可选时钟覆盖参数、默认 Date.now()」惯例，供测试精确构造时间边界（同步调用背靠背时 ts 可能
+// 相同，_seq 递增仍保证 id 唯一）。生产调用点不传，行为不变。
+export function recordAudit({ actor, action, target, outcome, meta, ts = Date.now() } = {}) {
+  const id = `audit_${ts}_${++_seq}`;
   const record = {
-    id, ts: Date.now(),
+    id, ts,
     actor: actor ? { deviceId: actor.deviceId ?? null, via: actor.via ?? null } : { deviceId: null, via: null },
     action, target: target ?? null, outcome: outcome ?? null, meta: meta ?? null
   };

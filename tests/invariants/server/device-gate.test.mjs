@@ -24,12 +24,20 @@ import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 
 const TOKEN = 'inv-device-gate-token';
+const ROOT = join(import.meta.dirname, '..', '..', '..');
 
 let dir, server;
+
+// 子进程 stdout 是 piped 但没人消费：不挂监听器，数据一直攒在管道缓冲里，而挂上的那一刻
+// 又会把攒着的全量一次性吐出来——用例里临时挂会读到之前所有用例打印的内容。所以在 before 里
+// 就固定接住，用例侧用 markStdout() 取「从这一刻起」的切片。
+let serverOut = '';
+const markStdout = () => { const from = serverOut.length; return () => serverOut.slice(from); };
 
 test.before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ccm-inv-device-'));
   server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: dir, CCM_DATA_DIR: dir });
+  server.proc.stdout.on('data', chunk => { serverOut += chunk; });
 });
 test.after(async () => {
   if (server) await killServer(server.proc);
@@ -85,8 +93,20 @@ test('待审设备不加入 approved 房间：收不到任何会话内容广播'
   }
 });
 
+// collectEvents 在 connect_error 时直接 resolve 空数组、从不 reject——所以「连接彻底失败」与
+// 「bypass 正常生效、只是没什么好推的」在 pending.length===0 这一条断言上完全无法区分：握手
+// 全挂的一条死连接也会让下面三条测试绿。先断言确实握手成功、真的走了 approved 分支——
+// pending_devices/trusted_devices/mirror_state/permission_mode/effort_mode/instances 六个事件
+// 只在 io.on('connection') 的已批准分支无条件发送（app.js 约 2397-2474 行），不依赖 lastInit/
+// modelsCache 这类可能为空的全局态（用 init/models 做锚点会让新测试本身在无预置状态时不稳）。
+const APPROVED_ONLY_EVENT = 'pending_devices';
+const assertReachedApprovedBranch = types => assert.ok(types.includes(APPROVED_ONLY_EVENT),
+  `本机 bypass 应该收到 approved 分支才会发的 ${APPROVED_ONLY_EVENT}，实际收到：${JSON.stringify(types)}`);
+
 test('本机 Host + 本机 peer：bypass 生效，不落待审', async () => {
   const events = await collectEvents('localhost');
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0,
     '真·本机直连是设备审批的合法 bypass，否则本机自己用还要先批一次自己');
@@ -94,14 +114,52 @@ test('本机 Host + 本机 peer：bypass 生效，不落待审', async () => {
 
 test('127.0.0.1 与 localhost 等价（同一条本机判据的两种写法）', async () => {
   const events = await collectEvents('127.0.0.1');
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0);
 });
 
 test('带端口的本机 Host 仍算本机（判据取冒号前那段）', async () => {
   const events = await collectEvents(`localhost:${server.port}`);
+  const types = typesOf(events);
+  assertReachedApprovedBranch(types);
   const pending = events.filter(e => e.type === 'device_status' && e.payload?.status === 'pending');
   assert.equal(pending.length, 0, 'Host 头带端口是常态，不能因此把本机判成远程');
+});
+
+// ── 非法 deviceToken 的整条副作用链 ────────────────────────────────────────
+// isValidDeviceToken 挡住的值不会进待审列表（addPendingDevice 内部那道闸），但「发现新设备请求」
+// 那一整套副作用此前无条件照跑，于是为一台【并不存在的待审设备】报警：
+//  · TTY 提示写「按回车一键同意【此】设备」，回车实际批的却是 getLatestPendingDevice()，即另一台。
+//    攻击者（持 AUTH_TOKEN——正是设备审批这层要防的那种）先用合法 token 排一台，再用非法 token
+//    触发这条提示，操作员核对的卡片与回车批准的对象就不是同一台。
+//  · 推送节流是设备维度的单一窗口且放行与否都写回，无效连接刷一下就占住它，随后真实申请静默不推。
+// 观察面取子进程 stdout：那几行就是操作员真正看到的东西。广播与推送和公告同在被短路的那一段里，
+// 公告没打印即证明整段都没走到（同一条分支），但本用例只直接断言公告与待审列表两项。
+const pendingIds = (dataDir) => {
+  const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'device.js'), 'list', '--json'], {
+    cwd: ROOT, encoding: 'utf8', env: { ...process.env, CCM_DATA_DIR: dataDir },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).pending.map(p => p.deviceId);
+};
+
+test('非法 deviceToken：不落待审，且不触发「发现新设备请求」那一整套副作用', async () => {
+  const bad = 'bad"token`$(whoami)';
+  const since = markStdout();
+  await collectEvents('chat.example.com', { deviceToken: bad });
+  assert.ok(!pendingIds(dir).includes(bad), '非法 token 不得进待审列表');
+  assert.ok(!since().includes('发现新设备请求'),
+    `非法 token 不该触发新设备申请公告（广播/推送/审批提示同在这一段里），实际输出：\n${since()}`);
+});
+
+test('对照：合法 deviceToken 仍照常落待审并打印公告（证明上一条不是「什么都没打印」才绿）', async () => {
+  const good = `ctl-${randomUUID()}`;
+  const since = markStdout();
+  await collectEvents('chat.example.com', { deviceToken: good });
+  assert.ok(pendingIds(dir).includes(good), '合法 token 必须照常进待审列表');
+  assert.ok(since().includes('发现新设备请求'), '合法 token 的公告不能被这次短路一起挡掉');
 });
 
 // 2026-09-06 容器演练：反代（TRUSTED_PROXY=loopback，nginx 追加 XFF）后待审设备卡片上的 IP 恒 127.0.0.1——
@@ -109,7 +167,6 @@ test('带端口的本机 Host 仍算本机（判据取冒号前那段）', async
 // 声明了 TRUSTED_PROXY 且 peer 是 loopback（本测试客户端就是）→ 卡片记 XFF 末跳；未声明 → 仍记 peer（不采信客户端可写的头）。
 // 观察面用产品自己的 `node scripts/device.js list --json`：那是维护者「核对再批」时真正看到的东西。
 test.describe('待审设备卡片的来源 IP 与限速桶同一份判据（AUTH-04 × DEVICE-01）', () => {
-  const ROOT = join(import.meta.dirname, '..', '..', '..');
   const XFF = '203.0.113.9, 198.51.100.7';
   let pdir, pserver;
 

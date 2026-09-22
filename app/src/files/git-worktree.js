@@ -118,13 +118,16 @@ export async function createSessionWorktree(repo, { name, sourceBranch } = {}, o
   try {
     // `<branch>^{commit}` 强制解析成提交对象：只写分支名时 tag/远程同名 ref 也会命中，
     // 而那两种切出来的树和用户在 UI 上选的"分支"不是一回事。
+    // 这里【不能】加 `--`：对 rev-parse 来说 `--` 之后的参数按路径而非版本号解析，加了会让
+    // 合法分支名也验证失败（实测：加上后连 'main'/'dev' 都会报 bad_source）。防线保持现状——
+    // `^{commit}` 强制按提交对象解析，且 git 本身拒绝以 `-` 开头的 ref 名，已实测穷举确认安全。
     await gitExec(repo, ['rev-parse', '--verify', '--quiet', `${src}^{commit}`], o);
   } catch {
     return { ok: false, code: 'bad_source', error: `源分支不存在：${src}` };
   }
 
   try {
-    await gitExec(repo, ['worktree', 'add', path, '-b', branch, src], {
+    await gitExec(repo, ['worktree', 'add', path, '-b', branch, '--', src], {
       timeoutMs: opts.timeoutMs ?? ADD_TIMEOUT_MS,
       execFile: opts.execFile,
     });
@@ -183,25 +186,4 @@ export async function inspectWorktreeCleanliness(worktreePath, opts = {}) {
   }
 
   return { ok: true, clean: entries.length === 0 && unmergedCommits === 0, entries, unmergedCommits, code: null };
-}
-
-/**
- * 移除一棵已确认干净的 worktree。**调用方必须先拿到 inspectWorktreeCleanliness 的 clean:true**——
- * 本函数自己再复核一次，不信任调用方（两处都判，删除是不可逆的）。
- * 走 `git worktree remove`（不是 rm -rf）：git 自己会拒绝删有改动的树，是第三道保险。
- * 分支保留不删：分支上的提交是用户的东西，worktree 目录没了它们仍在 reflog/refs 里找得回来。
- */
-export async function removeSessionWorktree(worktreePath, opts = {}) {
-  const check = await inspectWorktreeCleanliness(worktreePath, opts);
-  if (!check.ok) return { ok: false, code: check.code || 'unknown', error: check.error, check };
-  if (!check.clean) return { ok: false, code: 'dirty', error: '该 worktree 仍有未保存的工作', check };
-  try {
-    // 不传 --force：git 会自己再查一遍工作树是否干净，这是独立于上面那次检查的第三道闸
-    await gitExec(worktreePath, ['worktree', 'remove', worktreePath], {
-      timeoutMs: opts.timeoutMs ?? STATUS_TIMEOUT_MS, execFile: opts.execFile,
-    });
-  } catch (err) {
-    return { ok: false, code: 'git_failed', error: String(err?.stderr || err?.message || err), check };
-  }
-  return { ok: true, code: null, check };
 }

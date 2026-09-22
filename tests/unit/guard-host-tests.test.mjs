@@ -137,6 +137,48 @@ test('边界: test:invariants 放行，但 test:invariants:env / test:invariants
   blocked('npm run test:invariants:env');      // 跑卸载器：隔离依赖被测代码认注入的 home/root/appPath
 });
 
+// ★ 第七个洞：SCRIPT_TEST_SCOPE['test:invariants'] 的允许前缀是 'tests/invariants/'，
+// 而 env/、server/ 子目录同样以这个前缀开头——`test:invariants:env`/`:server` 脚本名会被拦，
+// 但借道裸 `test:invariants` 脚本 + `-- tests/invariants/env/...` 参数就能绕过，
+// 落进和上面那条一模一样的洞：卸载器 / 真 server 子进程在宿主机上被跑起来。
+test('拦: 借 test:invariants 脚本名 + -- 参数点名 env/server 子目录', () => {
+  blocked('npm run test:invariants -- tests/invariants/env/uninstall-symmetry.test.mjs');
+  blocked('npm run test:invariants -- tests/invariants/server/auth-gate.test.mjs');
+  allowed('npm run test:invariants -- tests/invariants/mirror-engine.test.mjs'); // 顶层用例仍放行
+});
+
+// ★ 第八个洞：切段正则拿字面换行符当分隔符，而 shell 的反斜杠续行（`\` 紧跟换行）会被真实
+// shell 整体拼接成同一逻辑行。不折叠就先切段，会把 `-- ` 之后的测试目标切进独立的下一段——
+// 第一段找不到测试路径、附加参数为空直接放行；第二段命令头是裸路径，不是解释器，也放行。
+test('拦: 反斜杠续行拼出的命令不能靠字面换行绕开 scope 检查', () => {
+  blocked('npm run test:unit -- \\\ntests/integration/session-delete.test.mjs');
+  blocked('npm run test:invariants -- \\\ntests/invariants/server/auth-gate.test.mjs');
+  // 真正的两条独立命令（行尾没有反斜杠）必须继续被切开、各自判定，不能因为折叠而被误合并放行。
+  blocked('npm run test:unit\nnpm run mutate -- app/src/x.js');
+});
+
+// ★ 第九个洞（上面第七个洞的 deny 前缀被 glob 直接绕过）：testTargets 的字符类 [\w./-] 不含
+// glob 元字符，所以 `tests/invariants/e*/uninstall-symmetry.test.mjs` 在正则那里就被截断成
+// `tests/invariants/e`——它满足 allow 前缀、又不以任何 deny 前缀开头，于是整条放行，
+// 而真实 shell 展开出来的恰恰是 tests/invariants/env/uninstall-symmetry.test.mjs：那条跑的是
+// 卸载器，隔离依赖被测代码认注入的 home/root/appPath，回落就打在真实家目录上（8/2 同形态）。
+// 被 glob 截断的目标拿到的只是【前缀】，它的展开面是「所有以它开头的路径」，与 deny 前缀
+// 互为前缀就可能命中，两个方向都要判。
+test('拦: glob 截断出的前缀不能绕过 deny 子目录（e*/ 展开成 env/、s*/ 展开成 server/）', () => {
+  blocked('npm run test:invariants -- tests/invariants/e*/uninstall-symmetry.test.mjs');
+  blocked('npm run test:invariants -- tests/invariants/s*/*.test.mjs');
+  blocked('npm run test:invariants -- tests/invariants/{env,server}/x.test.mjs');
+  // 目录整体 glob（`tests/unit/*.test.mjs`）本就被拦，且与本次修法无关：normalizeRel 会剥掉
+  // 尾斜杠，`tests/unit` 不满足 startsWith('tests/unit/')。等价写法 `npm run test:unit`（不带
+  // -- 参数）照常放行，所以这条既不碍事也是 fail-closed 方向，一并钉住防止被当成误报"修"开。
+  blocked('npm run test:unit -- tests/unit/*.test.mjs');
+  blocked('npm run test:invariants -- tests/invariants/*/*.test.mjs');
+  // 合法的 glob 跑法不能被误伤：展开面整体落在 allow 前缀内、与 deny 前缀无交集。
+  // 误拦会让这道闸被嫌吵而绕开，那等于没有闸。
+  allowed('npm run test:unit -- tests/unit/logic-*.test.mjs');
+  allowed('npm run test:invariants -- tests/invariants/mirror-*.test.mjs');
+});
+
 // TDD 单文件循环必须留出来，否则「写一个失败测试→最小实现」这一步会被钩子逐次打断，
 // 而它带着 preload-env、只碰 tests/unit，隔离与 npm run test:unit 完全同款。
 test('放行: 带 preload-env 的单测单文件跑法（TDD 循环）', () => {

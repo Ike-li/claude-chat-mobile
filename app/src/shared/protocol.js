@@ -12,7 +12,7 @@
 // 两份清单都逐字保序：入向那份不是严格字典序（hooks/push 两项插在中间），排序只会制造 diff 噪声，
 // 且 tests/unit/agent-event-contract.test.mjs 对成员与数量都有断言。
 
-// 出向 agent:event 的 type 白名单。注意其中只有 17 型经 AgentSession 发出，
+// 出向 agent:event 的 type 白名单。注意其中只有 20 型经 AgentSession 发出，
 // 其余走 src/server/* 与 src/auth/device-gate.js 的服务端广播路径。
 export const AGENT_EVENT_TYPES = Object.freeze([
   'api_retry',

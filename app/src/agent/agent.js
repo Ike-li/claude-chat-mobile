@@ -24,7 +24,7 @@ import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
 // 只负责让问题在日志里可见；拦截等于让一个登记疏漏直接吃掉用户的一条消息，代价不对等。
-// 覆盖面仅限经 AgentSession 发出的 17 型；device_status/instances/mirror_state 等 9 型走 src/server/*
+// 覆盖面仅限经 AgentSession 发出的 20 型；device_status/instances/mirror_state 等 11 型走 src/server/*
 // 与 src/auth/device-gate.js 的服务端广播路径，不经过本类，仍只由门禁静态扫描把关。
 const KNOWN_EVENT_TYPES = new Set(AGENT_EVENT_TYPES);
 function assertKnownEventType(type) {
@@ -813,7 +813,7 @@ export class AgentSession {
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
     this._awaitingInterruptResult = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
-    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
+    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:exit' });
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
     for (const [toolUseID, pending] of this.pendingQuestions) {
       pending.signal?.removeEventListener('abort', pending.abortHandler);
@@ -1075,7 +1075,10 @@ export class AgentSession {
     if (this._interruptSettleTimer) { clearTimeout(this._interruptSettleTimer); this._interruptSettleTimer = null; }
   }
 
-  async interrupt() {
+  // decidedBy：默认 'user'（真实用户点了停止按钮），看门狗等系统触发路径显式传各自的标识——
+  // 两类调用方共用同一个方法，默认值必须保持 'user'，不能整体改成 system，否则会把用户真实
+  // 操作误标成系统决定。
+  async interrupt(decidedBy = 'user') {
     this._flushText(); this._flushThink();
     this.pendingAutoTurn = false; // 用户显式停止：作废任何待合成的后台自动汇报轮
     // S7：先同步把队列「换成新空数组」并快照旧队列——await q.interrupt() 是让出点，期间用户若在
@@ -1103,7 +1106,7 @@ export class AgentSession {
       }
       this._awaitingInterruptResult = false; // 无伴随 result 可消费
       this._clearLocalCommandProgress();      // 同 settle 看门狗：强制收口须带上本地命令状态机（review #1）
-      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
       for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
         pending.signal?.removeEventListener('abort', pending.abortHandler);
         if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
@@ -1111,7 +1114,7 @@ export class AgentSession {
         for (let i = 0; i < pending.questions.length; i++) {
           this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
         }
-        this.denyKinds.set(toolUseID, 'cancelled');
+        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
         try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
       }
       if (droppedIds.length > 0) {
@@ -1132,12 +1135,12 @@ export class AgentSession {
       if (this.disposed) {
         this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
         this._dropOpenTurnSlots(dropped);
-        for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+        for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
         for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
           pending.signal?.removeEventListener('abort', pending.abortHandler);
           if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
           this.pendingQuestions.delete(toolUseID);
-          this.denyKinds.set(toolUseID, 'cancelled');
+          setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
           try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
         }
         _diagOutcome = 'disposed';
@@ -1152,7 +1155,7 @@ export class AgentSession {
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
       // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
       // 必须 for (const id of keys) 或 entries() 解构。
-      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy });
       for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
         pending.signal?.removeEventListener('abort', pending.abortHandler);
         if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
@@ -1160,7 +1163,7 @@ export class AgentSession {
         for (let i = 0; i < pending.questions.length; i++) {
           this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
         }
-        this.denyKinds.set(toolUseID, 'cancelled');
+        setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
         pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
       }
       // 被丢弃消息的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
@@ -1192,6 +1195,10 @@ export class AgentSession {
       }
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
       this.queue = toDrop.concat(this.queue);
+      // 上面 await raceInterrupt() 期间队列曾是空的（this.queue=[] 发生在 await 之前）——若输入泵
+      // 在这个窗口里被调度到、见队列空就已经在 notifyInput 上挂起等待，这里塞回消息后不主动唤醒，
+      // 它感知不到新内容，会一直等到下一次 send() 才顺带被叫醒（无新消息时就此悬挂）。
+      this.notifyInput?.();
       this.emit('system', { kind: 'no_interruptible_task', message: '当前没有可中断的任务' });
       _diagOutcome = 'no_task';
     }
@@ -1473,7 +1480,7 @@ export class AgentSession {
           if (p?.expiryTimer) clearTimeout(p.expiryTimer); // BE-003：取消到期 timer，防僵尸回调
           this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'aborted' }); // M4
           approvalStore.recordDecided(requestId, { status: 'aborted', decidedBy: 'system:abort', decidedAt: Date.now() });
-          this.denyKinds.set(requestId, 'cancelled'); // requestId===toolUseID：供 tool_result 显 🚫 而非红 ❌
+          setCapped(this.denyKinds, requestId, 'cancelled', TOOL_INPUT_MAX); // requestId===toolUseID：供 tool_result 显 🚫 而非红 ❌
           resolve({ behavior: 'deny', message: '请求已取消', interrupt: true });
         }
       };
@@ -1497,7 +1504,7 @@ export class AgentSession {
     if (!pending) return;
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.pendingPermissions.delete(requestId);
-    this.denyKinds.set(requestId, 'denied');
+    setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
     approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'system:timeout', decidedAt: Date.now() });
     pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
@@ -1511,6 +1518,9 @@ export class AgentSession {
   // opts.exitMode：对齐 CLI plan-exit——批准 ExitPlanMode 时用户选的退出后权限档
   // （default / acceptEdits / bypassPermissions）；非法或缺省回落 default。
   resolvePermission(requestId, decision, alwaysThisSession, clientOp, opts = {}) {
+    // 决断者：默认 'user'（真实用户点了允许/拒绝），看门狗/进程退出/实例销毁等系统路径经 opts.decidedBy
+    // 传入各自的标识，不再一律记成用户操作——台账要能区分「谁/为什么」批的这条决定。
+    const decidedBy = opts?.decidedBy ?? 'user';
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) return undefined;
     // 移除 abort 监听器防僵尸累积（SDK 可能为多个 canUseTool 复用同一 signal）
@@ -1522,9 +1532,9 @@ export class AgentSession {
     // 拒绝处理，避免对一个可能已失去语境（主机/会话状态已变化）的操作误批。outcome 标 'expired' 以区别于
     // 用户主动 allow/deny，供前端提示"已过期，请重新触发"而非误显示为一次正常的拒绝。
     if (Date.now() > pending.expiresAt) {
-      this.denyKinds.set(requestId, 'denied');
+      setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
       this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
-      approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'user', decidedAt: Date.now() });
+      approvalStore.recordDecided(requestId, { status: 'expired', decidedBy, decidedAt: Date.now() });
       pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
       return 'expired';
     }
@@ -1535,7 +1545,7 @@ export class AgentSession {
       const integrityOk = clientOp ? verifyIntegritySync(pending.fp, clientOp) : false;
       if (!integrityOk) {
         console.error(`[integrity] 审批完整性校验失败 requestId=${requestId} name=${pending.name}：客户端回传操作与原始锚定指纹不符或缺失，fail-closed 拒绝`);
-        this.denyKinds.set(requestId, 'denied');
+        setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
         this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'integrity_mismatch' });
         approvalStore.recordDecided(requestId, { status: 'integrity_mismatch', decidedBy: 'system:integrity-check', decidedAt: Date.now() });
         pending.resolve({ behavior: 'deny', message: '完整性校验失败，操作已拒绝执行', interrupt: false });
@@ -1543,7 +1553,7 @@ export class AgentSession {
       }
     }
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: decision }); // M4
-    approvalStore.recordDecided(requestId, { status: decision, decidedBy: 'user', decidedAt: Date.now() });
+    approvalStore.recordDecided(requestId, { status: decision, decidedBy, decidedAt: Date.now() });
     if (decision === 'allow') {
       const suggestions = pending.suggestions || [];
       // setMode：批准内含的「模式切换」（如 ExitPlanMode 退出 plan）。它是工具批准的内在部分，应始终
@@ -1585,7 +1595,7 @@ export class AgentSession {
         this.emit('permission_mode', { mode: modeUpdate.mode });
       }
     } else {
-      this.denyKinds.set(requestId, 'denied'); // requestId===toolUseID：拒绝是有意操作非工具报错，前端显 🚫
+      setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX); // requestId===toolUseID：拒绝是有意操作非工具报错，前端显 🚫
       pending.resolve({ behavior: 'deny', message: '用户拒绝了此操作', interrupt: false });
     }
     return decision;
@@ -1615,7 +1625,7 @@ export class AgentSession {
           for (let i = 0; i < questions.length; i++) {
             this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' }); // M4
           }
-          this.denyKinds.set(toolUseID, 'cancelled'); // 取消≠已回答：前端显 🚫 而非 ☑️
+          setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX); // 取消≠已回答：前端显 🚫 而非 ☑️
           resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
         }
       };
@@ -1655,7 +1665,7 @@ export class AgentSession {
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
     this.pendingQuestions.delete(toolUseID);
-    this.denyKinds.set(toolUseID, 'denied');
+    setCapped(this.denyKinds, toolUseID, 'denied', TOOL_INPUT_MAX);
     for (let i = 0; i < pending.questions.length; i++) {
       if (pending.answers[i] === null) {
         this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'expired' });
@@ -1723,7 +1733,7 @@ export class AgentSession {
       this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
       const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
       this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4 整组终态
-      this.denyKinds.set(toolUseID, 'answered'); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
+      setCapped(this.denyKinds, toolUseID, 'answered', TOOL_INPUT_MAX); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
       pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
     }
   }
@@ -1847,7 +1857,11 @@ export class AgentSession {
       // 兜底会强杀），只有 q 本身不可达（启动早期等边缘态，无法发中断请求）才直接强杀防僵尸。
       this.lastActivity = Date.now(); // 防中断未决期间 30s tick 重复触发
       if (this.q && typeof this.q.interrupt === 'function') {
-        this.interrupt();
+        // checkIdle() 本身是同步方法，这里没法 await——interrupt() 内层 try/catch 之外还包了一层
+        // 只有 finally 没有 catch 的外层 try，万一内层 catch 自己再抛（比如 settleForce 内部出错），
+        // 异常会顺着 finally 冒出去变成未处理的 Promise rejection。补 .catch 兜底，不让看门狗自己
+        // 的一次失败变成进程级噪音。decidedBy 标成看门狗触发，与用户主动点停止区分开。
+        this.interrupt('system:idle-watchdog').catch(err => console.error('[agent] 看门狗 interrupt 失败:', err?.message || err));
       } else {
         this.terminating = true;
         try { this.abort?.abort(); } catch { /* noop */ }
@@ -2325,7 +2339,7 @@ export class AgentSession {
     this._clearLocalCommandProgress();    // 同上：停进度轮询表，不留悬挂 timer
     if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
     if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
-    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
+    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:dispose' });
     // F2：清理挂起的 AskUserQuestion——与 consume 清理路径一致：先 emit request_resolved 再 resolve，
     // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
     for (const [toolUseID, pending] of this.pendingQuestions) {
@@ -2334,7 +2348,7 @@ export class AgentSession {
       for (let i = 0; i < pending.questions.length; i++) {
         this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
       }
-      this.denyKinds.set(toolUseID, 'cancelled');
+      setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
       pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
     }
     this.pendingQuestions.clear();
@@ -2391,14 +2405,16 @@ export class AgentSession {
       payload
     };
     this._ringPush(envelope);
-    this.onEvent(envelope);
+    // onEvent 是注入的下游回调（server 侧的信封转发/广播），它抛出不该反噬 agent 自己的状态机——
+    // emit() 在 SDK 消息处理的深层调用栈里到处被调用，一次下游异常没有理由让整条消息处理链路中断。
+    try { this.onEvent(envelope); } catch (err) { console.error('[agent] onEvent 处理异常（已吞，不影响本轮）:', err?.message || err); }
   }
 
   // SDK 里一批带用户可见正文的 system 子类型（informational / mirror_error / notification /
   // model_refusal_* / status.compact_error）统一收敛到 system + kind:'notice' + level。
   // 【为什么不用 error 事件】前端 error(p) 会 finalizeStreams + failPendingToolCards + setBusy(false)，
   // 把这些非终态提示当成回合终点，会错杀正在跑的轮次。notice 只落一条按 level 配色的条。
-  // 【为什么不新增 event type】26 种契约表不必为「一段文本 + 一个级别」再开一路；system 已有 kind 分流位。
+  // 【为什么不新增 event type】31 种契约表不必为「一段文本 + 一个级别」再开一路；system 已有 kind 分流位。
   // 空正文直接丢弃——宁可无声，也不产一条空白条。
   emitNotice(message, level = 'info') {
     const text = truncate(stringify(message).trim(), TOOL_SUMMARY_CAP);
@@ -2473,13 +2489,16 @@ export class AgentSession {
 
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
-  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
+  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值）。
+  // 【transient 字段目前只是路径标记，前端不读它】前端靠 event.type 在硬编码的带外表
+  // （app.js outOfBand、event-dispatch.js DEFAULT_REPLAY_OOB_TYPES）里判断要不要跳过 seq/缓冲，
+  // 不检查这个字段——改这里不会影响前端行为，动前端分流逻辑要去改那两张表。
   emitTransient(type, payload) {
     assertKnownEventType(type);
     // 与 emit() 同一道撤表检查：task_progress / api_retry 只走这条路，漏了这行它们在
     // SLASH_QUIET_BREAKERS 里就是死条目（详见该常量上方注释）。
     if (this._slashQuietTimer && SLASH_QUIET_BREAKERS.has(type)) this._clearSlashQuietNotice();
-    this.onEvent({
+    const envelope = {
       seq: this.seq,            // 复用当前值、不递增：不占序列
       epoch: this.epoch,
       sessionId: this.sessionId,
@@ -2489,7 +2508,10 @@ export class AgentSession {
       type,
       payload,
       transient: true
-    });
+    };
+    // 同 emit()：下游异常不得反噬——task_progress/api_retry 这类高频心跳更不该因为一次下游
+    // 异常就打断当前消息处理。
+    try { this.onEvent(envelope); } catch (err) { console.error('[agent] onEvent 处理异常（已吞，不影响本轮）:', err?.message || err); }
   }
 
   // question 是否仍待回答（权威=pendingQuestions）。已答/已整组结束/非法 id → false。
@@ -2921,7 +2943,7 @@ export class AgentSession {
           const subType = msg.subagent_type ?? null;
           // 记住该子 agent 的类型：后续 stream_event（delta）/ user（tool_result）都不带 subagent_type，靠此缓存补标签。
           // 非 null 保护：一旦记住有效类型，不被后续不带 subagent_type 的同 parent 消息抹成 null。
-          if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
+          if (subType != null) setCapped(this.subagentTypeByParent, msg.parent_tool_use_id, subType, TOOL_INPUT_MAX);
           // msg.error：子 agent 自身 API 失败【仍不发 error 事件】——前端 error(p) 会 setBusy(false)，
           // 会把主轮次一起杀掉（这就是这道 P0 守卫的由来）。但也不能像从前那样整条吞掉：子 agent 被限流
           // 时手机端会完全无感，只看到卡片停在那里。改走 notice（只落一条带级别的条，不动 busy 态），

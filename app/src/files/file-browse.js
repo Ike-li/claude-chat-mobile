@@ -20,8 +20,10 @@ import { isOpenableTarget } from './file-security.js';
 export const MAX_BROWSE_ENTRIES = 500;
 export const MAX_BROWSE_BYTES = 256 * 1024;
 
-// relPath 拼到 cwd 后必须仍在 scopeDirs 内——isInScope 兜底 symlink 逃逸/../ 越界。
-// 返回 realpath 后的绝对路径，或 null（越界/不存在，调用方 fail-closed 拒绝 + 记审计，见 src/server/socket-files.js）。
+// relPath 拼到 cwd 后必须仍在 scopeDirs 内——isInScope 兜底 symlink 逃逸/../ 越界（内部对
+// 拼出的路径做 realpath 后再判定；本函数自己返回的是拼接后的【未解析】路径，不是 realpath——
+// 调用方在 syscall 之后各自还有一次范围复核，见 listDir/readFile/writeFileInScope）。
+// 越界或不存在返回 null，调用方 fail-closed 拒绝 + 记审计（见 src/server/socket-files.js）。
 function resolveInScope(cwd, relPath, scopeDirs) {
   const candidate = join(cwd, relPath || '.');
   return isInScope(candidate, scopeDirs) ? candidate : null;
@@ -96,8 +98,11 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
   let fd;
   try {
     fd = openSync(real, constants.O_RDONLY | NOFOLLOW);
-  } catch {
-    return null;
+  } catch (err) {
+    // ELOOP = 范围内一个合法的 symlink，O_NOFOLLOW 按设计把它挡在 open 之外——这不是越界，
+    // 是"这个文件类型现在读不了"。用可判别的返回值让调用方（socket-files.js）分得清两者，
+    // 不把它当成 scope_violation 记审计噪音，也不报「不在授权范围内」这种文不对题的错误。
+    return err?.code === 'ELOOP' ? { blockedSymlink: true } : null;
   }
   try {
     if (!isInScope(real, scopeDirs)) return null; // 读后复核

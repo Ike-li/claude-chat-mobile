@@ -186,7 +186,28 @@ function listJsFilesRecursive(dir) {
   return out.sort();
 }
 
-function computeAssetVersion(selfJsDir, publicDir, files) {
+// vendor/ 下的 .js/.css 同样进版本链。这批文件（tailwind.js、marked/purify/highlight、
+// CodeMirror 核心+9 个语言 mode、github-light/dark、codemirror.min.css）被静态服务那端
+// 打了 immutable, max-age=31536000（见 configureHttpShell 的 setHeaders）——一年内浏览器
+// 绝不会重新请求，唯一能逼它换新的手段就是让 URL 本身变。之前它们不在这个哈希范围内，
+// ?v= 只在 index.html 里的引用点原样打了个不会变的旧值，等于没有失效手段。
+function listVendorAssetFilesRecursive(dir) {
+  const out = [];
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listVendorAssetFilesRecursive(path));
+    else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.css'))) out.push(path);
+  }
+  return out.sort();
+}
+
+// vendorDir 缺省不传：既有单测靠 selfJsFiles 限定一个小而确定的哈希范围，不该被真实
+// vendor 目录的内容悄悄带进去，那会让"传固定 files 断言固定哈希"的用例失去确定性来源
+// （vendor 内容本身不变，值仍确定，但改动面从"仅测试指定文件"变成"外加一整个真实目录"，
+// 与该参数注释写的"单测用"用途不符）。生产启动路径显式传，其余调用点保持原样不受影响。
+function computeAssetVersion(selfJsDir, publicDir, files, vendorDir) {
   const hash = createHash('sha256');
   if (files?.length) {
     for (const file of files) {
@@ -199,6 +220,11 @@ function computeAssetVersion(selfJsDir, publicDir, files) {
   }
   // css 进版本链：顶栏胶囊样式改完也能逼浏览器换新
   try { hash.update(readFileSync(join(publicDir, 'css', 'app.css'))); } catch { /* optional */ }
+  if (vendorDir) {
+    for (const path of listVendorAssetFilesRecursive(vendorDir)) {
+      try { hash.update(readFileSync(path)); } catch { /* optional */ }
+    }
+  }
   return hash.digest('hex').slice(0, 8);
 }
 
@@ -218,7 +244,7 @@ export function injectCfAccessFlag(html, enabled) {
 
 export function rewriteIndexAssetUrls(html, assetVersion) {
   return html.replace(
-    /(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g,
+    /(\/(?:js|css|vendor)\/[\w./-]+\.(?:js|css))(?!\?)/g,
     `$1?v=${assetVersion}`,
   );
 }
@@ -264,7 +290,7 @@ export function configureHttpShell({
   const selfJsDir = join(publicDir, 'js');
   // SW 必须在站点根才能拿到覆盖 / 的 scope（见 public/sw.js 与 app/notifications.js 的注释）
   const swScriptPath = join(publicDir, 'sw.js');
-  const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles);
+  const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles, vendorDir);
 
   // 三个读盘口。热读档（ASSET_HOT_RELOAD=1）逐请求调；生产档启动时调一次、请求期只查表。
   // ★ index.html 与 /js/app.js 必须和子模块【走同一档】：只给子模块接热读时，开发者改了
@@ -326,7 +352,10 @@ export function configureHttpShell({
       // 读失败不能静默：那个文件此后会一路落到 static 被原样发出（相对 import 没戳 ?v=，
       // 正是本段要防的双实例形态），而没有任何东西会再提起它。
       if (source === undefined) console.warn(`[assets] 预读 /js/${rel} 失败，该子模块将由 static 原样发出（相对 import 不带 ?v=）`);
-      else selfJsSources.set(rel, source);
+      // 建表用的 key 与下面查表用的 req.path 必须同一大小写规则（下面对请求路径 .toLowerCase()
+      // 是为了 CodeQL js/case-sensitive-middleware-path），否则将来加一个非 kebab-case 文件名
+      // 会查表 miss → 落到 static 原样发出、不戳版本号，且静默——今天全是 kebab-case，潜伏不触发。
+      else selfJsSources.set(rel.toLowerCase(), source);
     }
     console.log(`[assets] /js/** ${selfJsSources.size} 个子模块已在启动时读入并戳版本 ${assetVersion}；`
       + '改前端源码需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');

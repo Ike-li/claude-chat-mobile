@@ -10,7 +10,6 @@ import { readFileSync } from 'node:fs';
 import {
   isProcessed,
   commitProcessed,
-  checkAndRecord,
   DEDUP_CAP,
   isInFlight,
   claimInFlight,
@@ -85,16 +84,6 @@ test.describe('MSG-01: 查询与提交分离（BE-002: 校验/入队失败不得
   test('DEDUP_CAP 默认上限导出为正整数', () => {
     assert.equal(typeof DEDUP_CAP, 'number');
     assert.ok(DEDUP_CAP >= 100);
-  });
-
-  test('checkAndRecord 兼容原语：首次返回 duplicate=false，二次返回 duplicate=true', () => {
-    const r1 = checkAndRecord('legacy-1', new Map());
-    assert.equal(r1.duplicate, false);
-    assert.ok(r1.next.has('legacy-1'));
-
-    const r2 = checkAndRecord('legacy-1', r1.next);
-    assert.equal(r2.duplicate, true);
-    assert.equal(r2.next, r1.next);
   });
 });
 

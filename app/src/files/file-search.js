@@ -6,6 +6,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setLru } from '../shared/bounded-map.js';
 
 export const FILE_SEARCH_LIMIT = 50;
 const FILE_SEARCH_MAX_CANDIDATES = 5000;
@@ -71,12 +72,15 @@ function walkFiles(root) {
 }
 
 const _candidateCache = new Map(); // cwd → { ts, paths }
+// 托管 worktree 按会话创建/销毁，key 空间在常驻 server 上单调增长；TTL 只管"多旧的数据还能用"，
+// 不管"缓存本身多大"。上限同仓其它有界缓存的量级（bounded-map.js 头注点名的那类安全承诺）。
+const CANDIDATE_CACHE_MAX = 200;
 
 async function listCandidatePaths(cwd, opts) {
   const cached = _candidateCache.get(cwd);
   if (cached && Date.now() - cached.ts < FILE_SEARCH_CACHE_TTL_MS) return cached.paths;
   const paths = (await gitLsFiles(cwd, opts)) ?? walkFiles(cwd);
-  _candidateCache.set(cwd, { ts: Date.now(), paths });
+  setLru(_candidateCache, cwd, { ts: Date.now(), paths }, CANDIDATE_CACHE_MAX);
   return paths;
 }
 
