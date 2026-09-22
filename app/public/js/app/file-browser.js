@@ -1,5 +1,6 @@
 /* global CodeMirror */
 import { t } from '../i18n.js';
+import { showPanelMessage } from './panel-message.js';
 
 const ICONS = { dir: '📁', file: '📄', symlink: '🔗' };
 
@@ -70,12 +71,7 @@ export function createFileBrowser(context, {
   }
 
   function showMessage(text, className) {
-    if (!dom.fileBrowseBody) return;
-    dom.fileBrowseBody.innerHTML = '';
-    const message = documentRef.createElement('div');
-    message.className = `p-4 text-xs ${className || 'text-ink-faint'}`;
-    message.textContent = text;
-    dom.fileBrowseBody.appendChild(message);
+    showPanelMessage(dom.fileBrowseBody, text, className, documentRef);
   }
 
   function fetchListPage(requestedPath, offset) {

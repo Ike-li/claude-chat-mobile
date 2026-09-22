@@ -8,6 +8,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
 import { dataFile } from '../shared/data-dir.js';
+import { isBareHostname } from '../shared/public-target.js';
 
 // CCM_DATA_DIR 是受支持的状态根——同 devices.js/sessions.js；生产迁出仓库，测试/探测隔离真实证书缓存。
 // （否则任何跑 initCfAccess 的测试会真发网络拉取并覆盖生产 cf-access-certs.json）。
@@ -89,8 +90,12 @@ async function fetchRemoteJwks() {
 // initCfAccess 内部也用它：判据只此一份，否则两处迟早各判出一套结论，
 // 而那种漂移的表现是「二维码扫开进不去」，没有任何报错指向真因。
 export function accessConfigured(env = process.env) {
+  // CF_ACCESS_HOSTNAME 必须是裸域名——isPublicHost 只比较 host.split(':')[0]，一个带
+  // scheme/端口/路径的值永远比不出相等，Access 层会静默永远不触发。判「配没配」时就拒绝
+  // 这种形态，比等到 isPublicHost 比对失败更早暴露问题：不视为已配置，enabled=false，
+  // 而不是让横幅打出「已启用」却在第一次真实请求时才发现从未生效过。
   return !!(
-    (env.CF_ACCESS_HOSTNAME || '').trim()
+    isBareHostname(env.CF_ACCESS_HOSTNAME)
     && (env.CF_ACCESS_TEAM || '').trim()
     && (env.CF_ACCESS_AUD || '').trim()
   );

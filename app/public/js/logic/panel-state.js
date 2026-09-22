@@ -264,11 +264,13 @@ export function aggregateStates(instances, dirs) {
 // 汇总「其他工作区」状态给左上角按钮角标：只提示需要你/终端需要你/出错/运行中；完成、中止、空闲
 // 都是普通终态，不持续点亮入口。排除 currentCwd（当前工作区动静在聊天视图内呈现）。
 //
-// ★ 这张 rank 表是 resolveDrawerStatus 四个返回值的【完整枚举】，不是子集。未登记的状态 rank 缺省 0
-// 会被静默吞掉——terminal_waiting 就这样漏了：抽屉折叠时「页外的终端卡在审批框上」在顶部毫无表示，
-// 而同一目录只要另有个在跑的会话反倒亮「运行中」，更轻的状态盖过更重的（2026-09-06 修）。
-// 序刻意与 resolveDrawerStatus 逐字同源，不另立一套：同样这四个状态在产品里出现两套优先级，
-// 迟早分叉，且分叉后两边各自都"看着对"。给 resolveDrawerStatus 加状态时这里必须同步。
+// ★ resolveDrawerStatus 现有五个非空返回值，这张 rank 表只登记其中四个——有意排除 bg_locked：
+// 调用方 drawerStateForDir（app.js）只喂 liveState+terminalState，从不传 bgLocked，
+// 「会话被占用打不开」是会话级的事，不该抬到工作区层去点亮全局角标（f0e193cf4，2026-09-07）。
+// 其余四个是 terminal_waiting 漏挂之后（2026-09-06）补的同源优先级，序刻意与 resolveDrawerStatus
+// 逐字同源，不另立一套：同样这几个状态在产品里出现两套优先级，迟早分叉，且分叉后两边各自都"看着对"。
+// 给 resolveDrawerStatus 加状态时要重新判断一次：新状态是工作区级的（该收进来）还是会话级的
+// （像 bg_locked 一样该排除），不能不假思索地照抄进来。
 //
 // 出口有两个消费者，语义不同、靠两张表分开，不在本函数里判：
 //   · #sessionsDot 图标 —— 走 DRAWER_STATUS_META（渲染白名单，含 terminal_waiting）

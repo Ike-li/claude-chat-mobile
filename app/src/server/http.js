@@ -326,7 +326,10 @@ export function configureHttpShell({
       // 读失败不能静默：那个文件此后会一路落到 static 被原样发出（相对 import 没戳 ?v=，
       // 正是本段要防的双实例形态），而没有任何东西会再提起它。
       if (source === undefined) console.warn(`[assets] 预读 /js/${rel} 失败，该子模块将由 static 原样发出（相对 import 不带 ?v=）`);
-      else selfJsSources.set(rel, source);
+      // 建表用的 key 与下面查表用的 req.path 必须同一大小写规则（下面对请求路径 .toLowerCase()
+      // 是为了 CodeQL js/case-sensitive-middleware-path），否则将来加一个非 kebab-case 文件名
+      // 会查表 miss → 落到 static 原样发出、不戳版本号，且静默——今天全是 kebab-case，潜伏不触发。
+      else selfJsSources.set(rel.toLowerCase(), source);
     }
     console.log(`[assets] /js/** ${selfJsSources.size} 个子模块已在启动时读入并戳版本 ${assetVersion}；`
       + '改前端源码需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');

@@ -4,7 +4,11 @@ import dotenv from 'dotenv';
 
 import { loadConfigSources, projectToEnv, resolveConfigValues } from './config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
-import { ACCESS_PROFILES, DEFAULT_PORT } from './env-schema.js';
+import {
+  ACCESS_PROFILES, DEFAULT_PORT,
+  DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_INSTANCE_IDLE_RECLAIM_MS, DEFAULT_APPROVAL_TTL_MS,
+  DEFAULT_NOTIFY_THROTTLE_MS, DEFAULT_SESSION_DELETE_QUIET_MS,
+} from './env-schema.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);
@@ -66,9 +70,17 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet 
   // `cd "__REPO__" && exec node server.js`，两条入口 cwd 都落在仓库根），
   // ccm.config.json 优先、缺失回落 .env。显式 envFile 走兼容路径 —— doctor 的 `--env=prod.env`
   // 与单测都指向一个具体文件，那时不该再去扫目录。
+  // CCM_CONFIG_FILE_PATH / CCM_ENV_FILE_PATH 必须在这一侧也认：app/src/server/app.js 的
+  // CONFIG_FILE_PATH/ENV_FILE_PATH（面板 env:get/env:set 的读写目标）已经认它们，启动侧不认
+  // 就会变成「进程启动读仓库根、面板读写临时目录」——两条独立的路径解析，正是 CLAUDE.md
+  // 「读写必须同源，写错源＝假成功」点名的那条。覆盖只在测试/演练里设，生产两侧都回落同一目录。
   const sources = envFile
     ? { fileValues: dotenv.parse(readFileSync(envFile)), warnings: [] }
-    : loadConfigSources({ dir: dir ?? process.cwd() });
+    : loadConfigSources({
+      dir: dir ?? process.cwd(),
+      configPath: env.CCM_CONFIG_FILE_PATH,
+      envPath: env.CCM_ENV_FILE_PATH,
+    });
 
   const { values, warnings } = resolveConfigValues({
     fileValues: sources.fileValues,
@@ -100,12 +112,12 @@ export function parseServerConfig(env, {
   return {
     port: positiveNumber(env.PORT, DEFAULT_PORT),
     authToken: env.AUTH_TOKEN || '',
-    idleTimeoutMs: positiveNumber(env.IDLE_TIMEOUT_MS, 600_000),
+    idleTimeoutMs: positiveNumber(env.IDLE_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS),
     // Zero explicitly disables fully-idle instance reclamation.
-    instanceIdleReclaimMs: nonNegativeNumber(env.INSTANCE_IDLE_RECLAIM_MS, 1_800_000),
-    approvalTtlMs: positiveNumber(env.APPROVAL_TTL_MS, 1_800_000),
-    notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, 60_000),
-    sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, 300_000),
+    instanceIdleReclaimMs: nonNegativeNumber(env.INSTANCE_IDLE_RECLAIM_MS, DEFAULT_INSTANCE_IDLE_RECLAIM_MS),
+    approvalTtlMs: positiveNumber(env.APPROVAL_TTL_MS, DEFAULT_APPROVAL_TTL_MS),
+    notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, DEFAULT_NOTIFY_THROTTLE_MS),
+    sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, DEFAULT_SESSION_DELETE_QUIET_MS),
     devMode: env.DEV_MODE === '1',
     // 监听地址的两个输入原样透传，判定留给 src/shared/bind-host.js 的 resolveBindPlan
     //（server 与两个 doctor 共用那一份，此处再判一次就又有分叉余地了）。

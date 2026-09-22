@@ -88,6 +88,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
+  isValidDeviceToken,
   noteAuditedExternally,
   addPendingDevice,
   getLatestPendingDevice,
@@ -134,8 +135,12 @@ authStrategy.init();
 // 三层向上：本文件在 app/src/server/，仓库根在 app/ 之外——data/、scripts/、ccm.config.json
 // 都住在仓库根，不随运行时代码进 app/。少一层会让它们全部解析到 app/ 下（且无语法错误）。
 const HERE = join(import.meta.dirname, '..', '..', '..'); // 项目根；从任何 cwd 启动都一致
-const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
-const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
+// 测试隔离覆盖（同 CCM_TRUSTED_DEVICES_FILE / CCM_AUDIT_FILE 等既有惯例）：生产上这两个路径
+// 必须锚定仓库根（这正是"面板读写目标与启动时读的必须同源"这条不变量的落点，不能靠 cwd 或
+// CCM_DATA_DIR 重定向——那样会削弱它），但集成测试若要真实验证 env:set 的写入路径，此前没有
+// 任何隔离口子，一旦发送非空 changes 就会实打实地改到仓库根那份真实 ccm.config.json/.env。
+const ENV_FILE_PATH = process.env.CCM_ENV_FILE_PATH || join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
+const CONFIG_FILE_PATH = process.env.CCM_CONFIG_FILE_PATH || join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
 
 // 面板读写的目标必须与 src/ops/config.js 启动时**读的那一份**是同一个文件。
 // 分流写错的后果不是报错而是假成功：用户改完看到「已写入」，重启后毫无变化 ——
@@ -880,6 +885,22 @@ io.use(async (socket, next) => {
         // 否则是 peer。此前直接取 peer，反代后每张卡都是 127.0.0.1，「核对再批」无从核对（2026-09-06 容器演练）。
         const ip = clientSourceAddress(socket.handshake, clientIp, rlTrust).address;
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
+        // 【整段副作用都必须挂在「真的进了待审列表」这个前提下】addPendingDevice 内部会拒掉
+        // 格式非法/缺失的 token（isValidDeviceToken 同一判据），但下面这一整套——广播、离线推送、
+        // 控制台审批提示——此前无条件照跑，于是为一台【并不存在的待审设备】报了警：
+        //  · TTY 提示写的是「按回车一键同意【此】设备」，而回车实际批的是 getLatestPendingDevice()，
+        //    即【另一台】设备。攻击者（持 AUTH_TOKEN，正是设备审批这层要防的那种）先用合法 token
+        //    排队一台，再用非法 token 触发这条提示，操作员核对的卡片与回车批准的对象就不是同一台，
+        //    而 F2 那条「另有 N 个待审」的告警在只有一台待审时也不会响。
+        //  · 推送节流是设备维度的【单一】窗口（DEVICE_NOTIFY_KEY / DEVICE_NOTIFY_INTERVAL_MS），
+        //    且放行与否都写回状态——无效连接刷一下就占住它，随后真实的设备申请静默不推，
+        //    而「人不在电脑前」恰是本项目的主用例。
+        // 所以这里直接短路：只打一行拒绝记录，不广播、不推送、不给任何审批入口。
+        if (!isValidDeviceToken(deviceToken)) {
+          console.log(`\n⚠️  [安全] 拒绝一个设备 ID ${deviceToken ? '格式非法' : '缺失'} 的接入请求（来自 ${ip}），`
+            + `未加入待审列表，不发广播与推送。\n`);
+          return next();
+        }
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
         // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，用户锁屏或在别的 app 时整道
@@ -899,7 +920,7 @@ io.use(async (socket, next) => {
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);
-        console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
+        console.log(`   设备 ID: ${deviceToken}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
         // 「电脑控制台」曾让用户满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
@@ -909,6 +930,7 @@ io.use(async (socket, next) => {
           console.log(`   -> 就在这个窗口（跑着 npm start 的这个终端）里按【回车键 (Enter)】一键同意此设备`);
           console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
         } else {
+          // 走到这里 deviceToken 必然已过 isValidDeviceToken（上面短路过了），拼进双引号是安全的。
           console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备（必须在本项目目录下跑）：`);
           console.log(`      cd ${HERE} && node scripts/device.js approve "${deviceToken}"`);
         }
@@ -2327,7 +2349,8 @@ registerSocketConnection(io, socket => {
   // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
   mirrorEngine.requestRebaseline();
 
-  if (socket.deviceApproved === false) {
+  // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
+  if (socket.deviceApproved !== true) {
     // 未经授权的设备：跳过任何敏感信息重放，只推送 pending 状态
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2715,6 +2738,14 @@ registerSocketConnection(io, socket => {
   on(socket, 'user:denyDevice', payload => {
     const deviceId = payload?.deviceId;
     if (typeof deviceId !== 'string' || !deviceId) return;
+    // 同 user:approveDevice 的纵深防御：只对「确在待审批列表里」的 deviceId 生效。denyDevice()
+    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端每次握手都带着自己完整
+    // 的 deviceToken——没有这道守卫，它能拿这个事件传自己的 deviceId 自吊销，绕开
+    // user:revokeTrustedDevice 专门加的 self 守卫（decideRevokeByShortId 的 requesterToken 检查）。
+    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
+      console.warn(`[devices] 忽略远程拒绝：${deviceId} 不在待审批列表`);
+      return;
+    }
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
     const revoked = denyDevice(deviceId);
     disconnectDeviceSockets(deviceId); // 断连照做：即便落盘失败，也先切断该设备当前连接（纵深防御）
@@ -3993,6 +4024,7 @@ registerSocketConnection(io, socket => {
       fileExists: existsSync,
       isExecutable: p => canAccessPath(p, fsConstants.X_OK),
       probePort: () => portBusy,
+      usingConfigJson: usingConfigJson(),
     });
     if (!verdict.ok) return ack({ ok: false, results: verdict.results });
 

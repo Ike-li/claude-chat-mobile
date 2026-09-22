@@ -24,7 +24,7 @@ import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
 // 只负责让问题在日志里可见；拦截等于让一个登记疏漏直接吃掉用户的一条消息，代价不对等。
-// 覆盖面仅限经 AgentSession 发出的 17 型；device_status/instances/mirror_state 等 9 型走 src/server/*
+// 覆盖面仅限经 AgentSession 发出的 20 型；device_status/instances/mirror_state 等 11 型走 src/server/*
 // 与 src/auth/device-gate.js 的服务端广播路径，不经过本类，仍只由门禁静态扫描把关。
 const KNOWN_EVENT_TYPES = new Set(AGENT_EVENT_TYPES);
 function assertKnownEventType(type) {
@@ -2398,7 +2398,7 @@ export class AgentSession {
   // model_refusal_* / status.compact_error）统一收敛到 system + kind:'notice' + level。
   // 【为什么不用 error 事件】前端 error(p) 会 finalizeStreams + failPendingToolCards + setBusy(false)，
   // 把这些非终态提示当成回合终点，会错杀正在跑的轮次。notice 只落一条按 level 配色的条。
-  // 【为什么不新增 event type】26 种契约表不必为「一段文本 + 一个级别」再开一路；system 已有 kind 分流位。
+  // 【为什么不新增 event type】31 种契约表不必为「一段文本 + 一个级别」再开一路；system 已有 kind 分流位。
   // 空正文直接丢弃——宁可无声，也不产一条空白条。
   emitNotice(message, level = 'info') {
     const text = truncate(stringify(message).trim(), TOOL_SUMMARY_CAP);
@@ -2473,7 +2473,10 @@ export class AgentSession {
 
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
-  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
+  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值）。
+  // 【transient 字段目前只是路径标记，前端不读它】前端靠 event.type 在硬编码的带外表
+  // （app.js outOfBand、event-dispatch.js DEFAULT_REPLAY_OOB_TYPES）里判断要不要跳过 seq/缓冲，
+  // 不检查这个字段——改这里不会影响前端行为，动前端分流逻辑要去改那两张表。
   emitTransient(type, payload) {
     assertKnownEventType(type);
     // 与 emit() 同一道撤表检查：task_progress / api_retry 只走这条路，漏了这行它们在

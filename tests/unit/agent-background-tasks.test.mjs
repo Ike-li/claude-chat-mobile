@@ -236,7 +236,7 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.map({ type: 'system', subtype: 'task_progress', task_id: 't1', task_type: 'local_agent', message: '正在跑测试…' });
     const prog = events.find(e => e.type === 'task_progress');
     assert.ok(prog, '应 emit task_progress 供前端原地刷新进度横幅');
-    assert.equal(prog.transient, true, '瞬时事件：前端据此带外分流、不占 seq / 不更新 lastSeq');
+    assert.equal(prog.transient, true, '瞬时事件路径标记：不占 seq / 不进 buffer（前端带外分流靠 event.type 硬编码表，不读这个字段）');
     assert.equal(prog.payload.message, '正在跑测试…');
     assert.equal(prog.payload.taskId, 't1');
     // 同一心跳还把该任务登记为"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥），但不改 pendingTurns、不进 buffer

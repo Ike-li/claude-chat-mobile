@@ -132,7 +132,14 @@ export function createDeviceGate({
   // 是 no-op），单看 trusted 差集永远看不出这次操作发生过——只有 pending 集合的差集能捕捉
   // 「移除但没有变成 trusted」这一种变化，这正是原始缺口（deny 从未产生过审计记录）。
   function watchDeviceFiles() {
-    if (!existsSync(trustedDevicesFile)) return;
+    // 正常路径下上面的初始化块已经把这个文件建出来了（哪怕内容是空数组）；这里还是不存在，
+    // 说明那次初始化已经失败过（同一块已经打过一条「初始化设备认证文件失败」）——这条日志
+    // 补的是它的直接后果：本次进程生命周期内，CLI 在别的终端 approve/deny 都不会被感知到，
+    // SEC-03 的对称断连不会触发，磁盘只读/写满这类场景会从「报过一次错」退化成「彻底沉默」。
+    if (!existsSync(trustedDevicesFile)) {
+      console.error(`[devices] ${trustedDevicesFile} 仍不存在，跳过文件监听——CLI 批准/拒绝在本次进程内不会被自动感知`);
+      return;
+    }
     const tdBase = basename(trustedDevicesFile);
     const pdBase = basename(pendingDevicesFile);
     let timer = null;
@@ -195,7 +202,9 @@ export function createDeviceGate({
           // ── 在线连接的即时解锁/断连：按当前连接的 socket 逐个核对，纯 UX，与上面的审计判定各自独立 ──
           const revokedTokens = new Set(); // SEC-03：CLI 从信任表移除的 deviceToken，本轮结束后统一断连（去重）
           for (const socket of io.sockets.sockets.values()) {
-            if (socket.deviceApproved === false) {
+            // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的
+            // fail-closed 方向——今天 io.use 的每条非错误路径都会显式赋值，此处是防御性一致。
+            if (socket.deviceApproved !== true) {
               const token = socket.handshake.auth?.deviceToken;
               if (isTrusted(token)) {
                 console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，自动解锁设备 ${token}`);

@@ -181,6 +181,46 @@ test.describe('devices.js 单元测试', () => {
     assert.equal(denyDevice(null), false);
   });
 
+  // docs/testing.md 点名的反直觉方向之一：trusted-devices.json 瞬时读失败必须保留内存 last-good，
+  // 不能因为一次读失败就把所有设备当成未信任（会话中的 watcher 一轮就把全部 device-token
+  // 连接断光，与「所有异常都该拒绝」的直觉正好相反）。此前该分支没有任何测试锁着。
+  test('trusted-devices.json 读失败（JSON 损坏）→ 保留内存 last-good，不清空信任表', () => {
+    addPendingDevice('device-lastgood', { ip: '1.1.1.1' });
+    assert.equal(approveDevice('device-lastgood'), true);
+    assert.equal(isDeviceTrusted('device-lastgood'), true);
+
+    const saved = readFileSync(TRUSTED_DEVICES_FILE, 'utf8');
+    writeFileSync(TRUSTED_DEVICES_FILE, 'not valid json{{{');
+    try {
+      loadTrustedDevices();
+      assert.equal(isDeviceTrusted('device-lastgood'), true,
+        '读失败不得把已信任设备判成未信任——那是本机唯一在线设备时的自锁形态');
+    } finally {
+      writeFileSync(TRUSTED_DEVICES_FILE, saved);
+      loadTrustedDevices();
+    }
+    denyDevice('device-lastgood');
+  });
+
+  // deviceToken 来自 socket.io 握手 JSON 体，不经 HTTP header 过滤，控制字符/引号/换行都能带进来。
+  // 非交互模式下 app.js 会把它原样拼进一条打印给操作员复制运行的 shell 命令
+  // （`node scripts/device.js approve "${deviceToken}"`），带 "/`/$ 的值就是一条可执行任意命令的
+  // 注入；同时它会被落进 pending-devices.json，过大的值会让该文件被不成比例地撑大。
+  // 在 addPendingDevice 这个单点上拒绝，任何调用方（现在与未来）都受保护，不用在每个调用点各判一次。
+  test('deviceToken 含危险字符 / 超长 → 拒绝加入待审列表（防打印时命令注入、防文件被撑大）', () => {
+    addPendingDevice('has-a-"quote', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-`backtick', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-$dollar', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\\backslash', { ip: '1.1.1.1' });
+    addPendingDevice('has-a-\nnewline', { ip: '1.1.1.1' });
+    addPendingDevice('x'.repeat(200), { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 0, '危险字符/超长的 token 一个都不该进列表');
+
+    addPendingDevice('safe-token-abc123', { ip: '1.1.1.1' });
+    assert.equal(getPendingDevices().length, 1, '不含危险字符的正常 token 仍应正常加入');
+    removePendingDevice('safe-token-abc123');
+  });
+
   // F1（code-review #5）：pendingDevices 有容量上限，防 LAN-authenticated flood 撑爆文件/刷屏。
   test('pendingDevices 有容量上限，超出丢最旧（防 flood）', () => {
     loadPendingDevices();
@@ -492,6 +532,14 @@ test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', 
       assert.equal([...cut].length, MAX_DEVICE_ALIAS);
       assert.ok(!cut.includes('\ufffd'), '不得留下半个代理对');
       assert.equal(cut, '📱'.repeat(MAX_DEVICE_ALIAS));
+    });
+
+    // \p{Cc}（控制字符）被剥了，但 \p{Cf}（格式字符，含双向文本覆写符）此前没有——一个 U+202E
+    // RIGHT-TO-LEFT OVERRIDE 能让这行别名在受信任设备列表里视觉反向显示，而那正是用户读来
+    // 决定吊销哪一台的界面。
+    test('剥掉双向文本覆写等格式字符（U+202E 等），防设备列表视觉欺骗', () => {
+      assert.equal(normalizeDeviceAlias('safe‮exe.txt'), 'safe exe.txt');
+      assert.equal(normalizeDeviceAlias('a​b'), 'a b', '零宽空格（Cf）同理');
     });
   });
 

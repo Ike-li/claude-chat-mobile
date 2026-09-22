@@ -4,6 +4,10 @@ import { t } from '../i18n.js';
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_TOTAL = 20 * 1024 * 1024;
 const MAX_COUNT = 10;
+// 与后端 uploads.js 的 MAX_THUMB_CHARS 对齐（single-source-of-truth.test.mjs 钉住相等）。
+// 边界差一是有意的：这里 < ，服务端是 > ——恰好 MAX_THUMB 个字符时前端丢缩略图、服务端放行，
+// 方向安全（前端少发一份缩略图不影响功能，服务端拒绝一条完整消息才是真正要避免的）。
+const MAX_THUMB = 100_000;
 
 export function createAttachmentController(context, options = {}) {
   const {
@@ -147,7 +151,7 @@ export function createAttachmentController(context, options = {}) {
           mimeType: file.type || 'application/octet-stream',
           size: file.size,
           data,
-          thumb: thumb && thumb.length < 100000 ? thumb : undefined,
+          thumb: thumb && thumb.length < MAX_THUMB ? thumb : undefined,
         });
         notifyChange();
       } catch {

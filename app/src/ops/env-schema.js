@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isLoopbackBindHost } from '../shared/bind-host.js';
+import { isBareHostname } from '../shared/public-target.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
 // src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
@@ -46,6 +47,13 @@ const t = (zh, en) => ({ zh, en });
 // 让配置面板和 doctor 显示新值（doctor 用 def.default 算「生效值」），server 照旧跑 3000。
 // 声明了却不被消费的事实源，比没有更糟：它看起来像唯一真相。
 export const DEFAULT_PORT = 3000;
+// 与下面 schema 里对应项的 default 共用同一个数字来源，config.js 的 parseServerConfig 引用
+// 这几个常量做运行时回落值——此前两处各写一份字面量，这次的整改只做了 PORT 一项。
+export const DEFAULT_IDLE_TIMEOUT_MS = 600_000;
+export const DEFAULT_INSTANCE_IDLE_RECLAIM_MS = 1_800_000;
+export const DEFAULT_APPROVAL_TTL_MS = 1_800_000;
+export const DEFAULT_NOTIFY_THROTTLE_MS = 60_000;
+export const DEFAULT_SESSION_DELETE_QUIET_MS = 300_000;
 
 // kind: text | number | path | url | secret | toggle | readonly | list | enum
 export const ENV_SCHEMA = {
@@ -197,24 +205,24 @@ export const ENV_SCHEMA = {
 
   // ── 超时与配额 ──────────────────────────────────────────────────────
   IDLE_TIMEOUT_MS: {
-    group: 'limits', kind: 'number', min: 1000, default: '600000', unit: 'ms',
+    group: 'limits', kind: 'number', min: 1000, default: String(DEFAULT_IDLE_TIMEOUT_MS), unit: 'ms',
     label: t('无输出判挂死', 'Idle timeout'),
   },
   INSTANCE_IDLE_RECLAIM_MS: {
-    group: 'limits', kind: 'number', min: 0, default: '1800000', unit: 'ms',
+    group: 'limits', kind: 'number', min: 0, default: String(DEFAULT_INSTANCE_IDLE_RECLAIM_MS), unit: 'ms',
     label: t('空闲实例回收', 'Idle instance reclaim'),
     help: t('0 = 不回收。', '0 disables reclaiming.'),
   },
   APPROVAL_TTL_MS: {
-    group: 'limits', kind: 'number', min: 1000, default: '1800000', unit: 'ms',
+    group: 'limits', kind: 'number', min: 1000, default: String(DEFAULT_APPROVAL_TTL_MS), unit: 'ms',
     label: t('审批自动过期', 'Approval TTL'),
   },
   NOTIFY_THROTTLE_MS: {
-    group: 'limits', kind: 'number', min: 0, default: '60000', unit: 'ms',
+    group: 'limits', kind: 'number', min: 0, default: String(DEFAULT_NOTIFY_THROTTLE_MS), unit: 'ms',
     label: t('同类通知最小间隔', 'Notification throttle'),
   },
   SESSION_DELETE_QUIET_MS: {
-    group: 'limits', kind: 'number', min: 0, default: '300000', unit: 'ms',
+    group: 'limits', kind: 'number', min: 0, default: String(DEFAULT_SESSION_DELETE_QUIET_MS), unit: 'ms',
     label: t('删除会话前静默期', 'Session delete quiet period'),
   },
 
@@ -506,9 +514,14 @@ function checkList(value, def, home) {
 function checkOne(key, value, def, d) {
   // 校验期与序列化期用**同一个判据**，否则会出现「校验说 ok、写盘时抛错」——
   // 用户填完点保存才收到一句看不懂的异常，而不是在输入时就被告知。
-  if (!isSerializableEnvValue(value)) {
-    if (hasControlChars(value)) return '值不能包含换行或控制字符';
-    // 三个否定条件各给各的理由。合并成一句「格式非法」会让「路径末尾多打了个反斜杠」这种
+  // 【单引号/反斜杠两条只在 .env 部署上生效】那两条是 dotenv 文件语法的专属限制——JSON.stringify
+  // 正确转义一切，config-file.js 自己的注释说得很直白："换成 JSON 之后这一整类问题不是被修好，
+  // 是不再存在"。已迁移到 ccm.config.json 的部署上，同一个撇号（如 /Users/O'Brien/...）会被
+  // 无关地拒绝，报错文案还在讲一台机器上根本不存在的 .env。控制字符检查不受此影响——那不是
+  // dotenv 专属问题，两种存储格式下都可能被下游当成命令行参数等场景滥用。
+  if (hasControlChars(value)) return '值不能包含换行或控制字符';
+  if (!d?.usingConfigJson && !isSerializableEnvValue(value)) {
+    // 两个否定条件各给各的理由。合并成一句「格式非法」会让「路径末尾多打了个反斜杠」这种
     // 最常见的形态收到一句关于单引号的提示，用户照着改也改不对。
     if (String(value).endsWith('\\')) {
       return '值不能以反斜杠（\\）结尾：dotenv 会把它与结尾引号读成转义，从而吞掉 .env 里后面的配置项（去掉末尾的 \\ 即可）';
@@ -541,6 +554,12 @@ function checkOne(key, value, def, d) {
   }
 
   if (def.kind === 'url') return checkUrl(key, value, def);
+
+  // isPublicHost（auth/cf-access.js）只比较 host.split(':')[0]，带 scheme/端口/路径的值
+  // 永远比不出相等，Access 层会静默永远不触发。在这里当场拒绝，比等到扫码进不去才发现好。
+  if (key === 'CF_ACCESS_HOSTNAME' && value && !isBareHostname(value)) {
+    return '只接受裸域名，不带 https:// 前缀、端口或路径（如 chat.example.com）';
+  }
 
   if (def.kind === 'toggle') {
     // 只认声明过的字面量。'true'/'0'/'yes' 这类值写进去是**静默失效**，

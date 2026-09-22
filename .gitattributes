@@ -33,7 +33,7 @@
 # 两个必须一起排除：只排 CLAUDE.md 会在包里留下一个断链的 AGENTS.md 符号链接。
 /CLAUDE.md                  export-ignore
 /AGENTS.md                  export-ignore
-# docs/testing.md。【判据不是「有没有引用 tests/」】——留在包里的 hard-rules.md（19 行）、
+# docs/testing.md。【判据不是「有没有引用 tests/」】——留在包里的 hard-rules.md、
 # getting-started.md、display-contracts.md、architecture.md 同样引用 tests/ 下的路径，那些是给
 # 维护者的指路，而维护者会 git clone，裁掉它们反而是错的。真正的判据是
 # 【整份文档的主体会不会随 tests/ 一起失效】：testing.md 通篇在讲怎么跑测试、怎么验红，

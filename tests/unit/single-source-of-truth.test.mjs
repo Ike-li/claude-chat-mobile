@@ -62,7 +62,7 @@ function findInSources(re, allow = []) {
 test('绑定地址只由 app/src/shared/bind-host.js 决定，不许再写内联三元', () => {
   const hits = findInSources(/['"]0\.0\.0\.0['"]\s*:\s*['"]127\.0\.0\.1['"]/, ['app/src/shared/bind-host.js']);
   assert.deepEqual(hits, [],
-    '把判据换成 resolveBindHost(authToken)：两个 doctor 要回答「这台机器对外可达吗」，\n'
+    '把判据换成 resolveBindPlan(...).host：两个 doctor 要回答「这台机器对外可达吗」，\n'
     + '  它们只能 import 函数，够不到你这一行三元。');
 });
 
@@ -123,9 +123,9 @@ test('~/.claude 的路径拼装只在 app/src/shared/claude-home.js', () => {
 });
 
 // ── ④ 附件上限：前后端两份 ────────────────────────────────────────────────
-// 边界闸禁止前后端互相 import，这三个上限只能各写各的。值必须相等，且必须由这道闸保证 ——
+// 边界闸禁止前后端互相 import，这四个上限只能各写各的。值必须相等，且必须由这道闸保证 ——
 // 前端那份是「提前告知用户」，后端那份才是真正的闸（前端不可信）。
-test('附件上限前后端一致（三项）', async () => {
+test('附件上限前后端一致（四项）', async () => {
   const be = await import(join(ROOT, 'app/src/files/uploads.js'));
   const feSrc = read('app/public/js/app/attachments.js');
   const num = (name) => {
@@ -136,6 +136,7 @@ test('附件上限前后端一致（三项）', async () => {
   assert.equal(num('MAX_COUNT'), be.MAX_FILES, '附件数量上限：前端 MAX_COUNT ⇔ 后端 MAX_FILES');
   assert.equal(num('MAX_FILE'), be.MAX_FILE_BYTES, '单文件上限：前端 MAX_FILE ⇔ 后端 MAX_FILE_BYTES');
   assert.equal(num('MAX_TOTAL'), be.MAX_TOTAL_BYTES, '总量上限：前端 MAX_TOTAL ⇔ 后端 MAX_TOTAL_BYTES');
+  assert.equal(num('MAX_THUMB'), be.MAX_THUMB_CHARS, '缩略图上限：前端 MAX_THUMB ⇔ 后端 MAX_THUMB_CHARS');
 });
 
 // 症状：错误文案里硬写着「单文件上限 10MB」「上限 20MB」，是这些值的**第三份**来源。
