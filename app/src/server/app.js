@@ -2160,10 +2160,11 @@ function dedupedResume(cwd, resumeId, extra = {}) {
 // scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose → 删除 CLI 残留文件。
 // 与缓存关系：缓存加速后续（免重复 spawn），但第一次靠 scout 保证确定性——不用猜、不等实例、不靠上区残留。
 const activeScouts = new Map(); // cwd → AgentSession：去重，防连点刷新/并发触发重复 spawn
-function disposeScoutFor(cwd) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
+function disposeScoutFor(cwd, opts) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
   const old = activeScouts.get(cwd);
   // 走 scout 自己的 cleanup 而非裸 dispose：后者不清 20s 兜底定时器、也不删 CLI 建的 <sid>.jsonl 残留。
-  if (old) { try { (old._scoutCleanup || (() => old.dispose()))(); } finally { activeScouts.delete(cwd); } }
+  // opts 透传给 cleanup（关闭路径传 { immediate: true }，见 cleanup 的注释）。
+  if (old) { try { (old._scoutCleanup || ((() => old.dispose())))(opts); } finally { activeScouts.delete(cwd); } }
 }
 function openScoutInstance(cwd) {
   if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
@@ -2217,7 +2218,10 @@ function openScoutInstance(cwd) {
   // 走的是 instance.dispose() 而非本函数——定时器没被清，20s 后照常进来，此时 disposed 已为 true
   // 便早早返回，连带跳过下面的 transcript 残留清理，留下这段注释自己声明要防的「(无标题)」幽灵条目。
   let cleanedUp = false;
-  function cleanup() {
+  // immediate：同步删 transcript 残留，不走那条 300ms 延时。关闭路径必须用它——shutdown()
+  // 末尾是 `io.close(() => process.exit(0))`，无长连接时 io.close 几乎立刻回调，进程在 300ms
+  // 定时器 fire 之前就没了，残留照样留在盘上，而 shutdown 里那行注释声称的正是「裸退出留不下这些」。
+  function cleanup({ immediate = false } = {}) {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimeout(timer);
@@ -2227,8 +2231,10 @@ function openScoutInstance(cwd) {
     // dispose 触发 abort → CLI 进程退出。CLI 启动时已在 ~/.claude/projects/<projectDir>/
     // 创建了 <sid>.jsonl 文件（含 init 系统消息等）；留之会在 listSessions 中出现「(无标题)」幽灵条目。
     // 异步延迟删除：给 CLI 进程一个信号处理的窗口，避免 unlink 与 CLI 写文件竞争。
+    // immediate 下放弃这个窗口是刻意的：进程马上就要退出，「删不干净」的代价确定发生，
+    // 而竞争的代价只是 unlink 早一点（POSIX 下 CLI 持有的 fd 不受影响，也不会把文件写回来）。
     if (sid) {
-      setTimeout(() => {
+      const removeTranscript = () => {
         try {
           const projectDir = getProjectDir(cwd);
           const file = join(CLAUDE_PROJECTS_DIR, projectDir, `${sid}.jsonl`);
@@ -2243,7 +2249,9 @@ function openScoutInstance(cwd) {
           unlinkSync(file);
           invalidateListCache(cwd);
         } catch { /* 文件可能已被 CLI 清理或不存在——非致命 */ }
-      }, 300);
+      };
+      if (immediate) removeTranscript();
+      else setTimeout(removeTranscript, 300);
     }
   }
 
@@ -4627,7 +4635,10 @@ function shutdown(sig) {
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
-  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd); // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 删 CLI 建的 <sid>.jsonl 残留，裸退出留不下这些
+  // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 删 CLI 建的 <sid>.jsonl 残留，裸退出留不下这些。
+  // immediate:true 不是可选的优化——cleanup 缺省把 unlink 挂在 300ms 定时器上，而本函数末尾
+  // io.close 的回调随即 process.exit(0)，无长连接时几乎立即返回，定时器根本轮不到 fire。
+  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd, { immediate: true });
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
