@@ -11,7 +11,7 @@
 | 任何页面的增删 | `build-sitemap.mjs` | sitemap 漏页或指向已删的文件 |
 | 重新生成了 `diagrams/` | `build-diagrams-seo.mjs` | archify 覆盖掉 canonical / description / 底部导航，13 张图页重新变回死胡同 |
 | 重新生成了 `docs-site/` | `build-docs-nav.mjs` | 手册 28 页重新变回只在内部循环、不回站点主干 |
-| 重新生成了 `docs-site/`，或改了 `book.config.cjs` | `build-llms.mjs` | **`llms.txt` 的页面清单与 token 标注过期**。它是 AI agent 读这个项目的入口（AEO），agent 按 token 标注决定先加载哪几页 —— 标错就是按错误预算加载。首次接上本脚本时实测 28 个标注**全部**与页面自己声明的对不上 |
+| 重新生成了 `docs-site/`，或改了 `book.config.cjs` | `build-llms.mjs` | **`llms.txt` 与 `llms-full.txt` 同时过期**（一条命令管两份）。它们是 AI agent 读这个项目的入口（AEO）：前者按 token 标注决定先加载哪几页，标错就是按错误预算加载（首次接上时实测 28 个标注**全部**对不上）；后者是 28 章正文的合成，**页面更新而它没重生成时 agent 读到的是旧正文，且没有任何外部症状** —— 线上 200、字节数也像那么回事 |
 
 ## 提交前跑
 
