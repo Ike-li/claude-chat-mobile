@@ -58,4 +58,23 @@ test.describe('AgentSession 出向事件 type 自检', () => {
     assert.deepEqual(calls, []);
     dispose();
   });
+
+  // onEvent 是注入的下游回调（server 侧的信封转发/广播）——emit()/emitTransient() 在 SDK 消息处理的
+  // 深层调用栈里到处被调用，一次下游异常不该反噬 agent 自己的状态机、中断当前消息处理。
+  test('emit()：onEvent 抛出被吞掉，不反噬调用方；环形缓冲仍正常写入', () => {
+    const { s, dispose } = makeSession();
+    s.onEvent = () => { throw new Error('downstream boom'); };
+    assert.doesNotThrow(() => s.emit('system', { text: 'hi' }));
+    assert.equal(s.buffer.length, 1, '下游异常不该连累 _ringPush，缓冲仍要留一份真实历史');
+    s.onEvent = () => {}; // dispose() 内部也会 emit，恢复成安全桩再收尾，测试范围保持精确
+    dispose();
+  });
+
+  test('emitTransient()：onEvent 抛出同样被吞掉，不反噬调用方', () => {
+    const { s, dispose } = makeSession();
+    s.onEvent = () => { throw new Error('downstream boom'); };
+    assert.doesNotThrow(() => s.emitTransient('task_progress', { tasks: [] }));
+    s.onEvent = () => {};
+    dispose();
+  });
 });

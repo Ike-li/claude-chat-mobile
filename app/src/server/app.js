@@ -995,12 +995,17 @@ function computeNeedsYou() {
     const title = sessions.getSession(a.sessionId)?.title ?? null;
     const lastActiveAt = sessions.getSession(a.sessionId)?.lastUsedAt ?? 0;
     let status; let awaitingSince;
-    if (a.pendingPermissions.size > 0) {
-      for (const [requestId, p] of a.pendingPermissions) {
-        if (now > p.expiresAt) continue; // 已过期：不计入聚合（fail-closed 语义下过期即失效，见审批 TTL 阶段）
-        pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
-      }
-    } else if (a.pendingQuestions.size > 0) {
+    // hasLiveApproval：与下面 hasLiveQuestion 同一套写法——外层门槛不能只看 Map.size，
+    // size>0 但里面全过期时这里会一条都不 push，若还按 size 做 if/else 门槛，会连带把
+    // 同一实例真实存在的 pendingQuestions 分支也一起挡掉（两者互斥判据本该是"有没有活的"，
+    // 不是"Map 是否非空"）。
+    let hasLiveApproval = false;
+    for (const [requestId, p] of a.pendingPermissions) {
+      if (now > p.expiresAt) continue; // 已过期：不计入聚合（fail-closed 语义下过期即失效，见审批 TTL 阶段）
+      hasLiveApproval = true;
+      pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
+    }
+    if (!hasLiveApproval && a.pendingQuestions.size > 0) {
       // AG-NEW-003：与 permissions 对称过滤 expiresAt（timer 已删 Map 时此窗极短，仍防 residual）
       let hasLiveQuestion = false;
       for (const [, q] of a.pendingQuestions) {

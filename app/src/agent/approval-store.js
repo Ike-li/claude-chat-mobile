@@ -80,12 +80,15 @@ export function recordDecided(reqId, { status, decidedBy, decidedAt }) {
   // `perm_${++permSeq}` 更是每实例从 0 起的计数器；而终态记录留存 90 天（purgeTerminalOlderThan
   // 之前一直在数组里）。原来的 find 取首个匹配 = 最旧那条，于是用户这次的批准被写到一条早已 expired
   // 的历史记录上，本次真实的新记录永远停在 pending —— 台账张冠李戴，事后查不出谁批准了什么。
+  // 单向终态：只找【仍 pending】的那条，找不到就是这个 reqId 已经没有可决断的记录了（要么从未
+  // create 过，要么早被决断过）——静默返回，绝不回落去覆写一条已经落定的终态记录。台账的终态
+  // 一旦写下就不该再变，回落分支会让后到的调用（比如竞态里的重复 resolvePermission）把一条
+  // 「已批准」悄悄改写成「已过期」，且没有任何信号提示这发生过。
   let existing = null;
   for (let i = state.requests.length - 1; i >= 0; i--) {
     const r = state.requests[i];
     if (r.reqId !== reqId) continue;
     if (r.status === 'pending') { existing = r; break; }
-    if (!existing) existing = r; // 无 pending 时回落最近一条，保持「找得到就记」的旧语义
   }
   if (!existing) return;
   existing.status = status;

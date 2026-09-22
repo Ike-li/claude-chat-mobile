@@ -137,15 +137,18 @@ test.describe('dispose()', () => {
     s.dispose();
   });
 
-  test('dispose：resolve 所有待处理权限（permission → deny）', () => {
+  test('dispose：resolve 所有待处理权限（permission → deny），台账记 decidedBy=system:dispose', async () => {
+    const AS = await import('../../app/src/agent/approval-store.js');
     const { s, events } = makeSession();
     const ac = new AbortController();
-    s.askPermission('Bash', { command: 'rm' }, { signal: ac.signal, toolUseID: 't1' });
+    s.askPermission('Bash', { command: 'rm' }, { signal: ac.signal, toolUseID: 'dispose-decidedby-t1' });
     assert.equal(s.pendingPermissions.size, 1);
     s.dispose();
     assert.equal(s.pendingPermissions.size, 0);
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.kind === 'permission');
     assert.equal(rr.payload.outcome, 'deny');
+    // 实例销毁不是用户主动决断——台账须能分清「谁批的」，不能笼统记成 'user'。
+    assert.equal(AS.getByReqId('dispose-decidedby-t1').decidedBy, 'system:dispose');
   });
 
   test('dispose：resolve 所有待处理问题 + emit request_resolved + denyKinds 清理', () => {
@@ -250,6 +253,38 @@ test.describe('checkIdle()', () => {
     s.checkIdle();
 
     assert.equal(interrupted, true, '切视图是「用户在看」，不是「模型有产出」——不得推迟挂死中断');
+    s.dispose();
+  });
+
+  test('看门狗触发的中断标记 decidedBy=system:idle-watchdog，不是裸调用（与用户主动停止区分开）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s.q = { interrupt: () => Promise.resolve() };
+    let capturedDecidedBy = 'not-called';
+    const realInterrupt = s.interrupt.bind(s);
+    s.interrupt = (decidedBy) => { capturedDecidedBy = decidedBy; return realInterrupt(decidedBy); };
+    s.checkIdle();
+    assert.equal(capturedDecidedBy, 'system:idle-watchdog');
+    s.dispose();
+  });
+
+  test('checkIdle() 触发看门狗中断：interrupt() 意外 reject 不产生未处理的 Promise rejection', async () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    // checkIdle() 本身是同步方法，没法 await interrupt()——全靠源码里那条 .catch 兜底；
+    // 直接换掉 interrupt() 本身模拟它意外 reject（比如内层 catch 自己又抛的极端情形），
+    // 不然这里会变成一条未处理的 Promise rejection，在真实进程里可能打出一条吓人的日志甚至
+    // 触发 Node 的 unhandledRejection 处理策略。
+    s.interrupt = () => Promise.reject(new Error('unexpected'));
+    let unhandled = null;
+    const onUnhandled = (err) => { unhandled = err; };
+    process.once('unhandledRejection', onUnhandled);
+    s.checkIdle();
+    await new Promise(r => setImmediate(r)); // 让微任务队列跑完，未处理的 rejection 会在这个窗口冒出来
+    process.removeListener('unhandledRejection', onUnhandled);
+    assert.equal(unhandled, null, 'interrupt() reject 必须被 .catch 接住，不能变成进程级未处理异常');
     s.dispose();
   });
 
@@ -1031,11 +1066,12 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
-  test('consume 清理：pendingTurns 清零、denyKinds clear、pendingPermissions 全部 deny', async () => {
+  test('consume 清理：pendingTurns 清零、denyKinds clear、pendingPermissions 全部 deny，台账记 decidedBy=system:exit', async () => {
+    const AS = await import('../../app/src/agent/approval-store.js');
     const { s } = makeSession();
     const ac = new AbortController();
     s.pendingTurns = 3;
-    s.askPermission('Read', { file_path: '/a' }, { signal: ac.signal, toolUseID: 't1' });
+    s.askPermission('Read', { file_path: '/a' }, { signal: ac.signal, toolUseID: 'consume-decidedby-t1' });
     s.denyKinds.set('old', 'denied');
 
     const fakeQ = {
@@ -1046,6 +1082,8 @@ test.describe('consume() 退出路径', () => {
     assert.equal(s.pendingTurns, 0);
     assert.equal(s.pendingPermissions.size, 0);
     assert.equal(s.denyKinds.size, 0);
+    // CLI 进程自然退出不是用户操作，也不是 dispose()——三条系统路径的台账标识必须各不相同。
+    assert.equal(AS.getByReqId('consume-decidedby-t1').decidedBy, 'system:exit');
     s.dispose();
   });
 });
