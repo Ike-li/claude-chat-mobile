@@ -121,6 +121,18 @@ test.describe('类型校验', () => {
     assert.equal(validateEnvChanges({ PORT: '8080' }, deps()).ok, true);
   });
 
+  // 真实事故形态：用户把 Cloudflare 控制台给的完整 URL 粘进这个字段。cf-access.js 的
+  // isPublicHost 只比较 host.split(':')[0]，带 scheme/端口/路径的值永远比不出相等，
+  // Access 层会静默永远不触发——在面板保存这一步就当场拒绝，比等用户扫码进不去时才发现好。
+  test('CF_ACCESS_HOSTNAME 带 scheme/端口/路径 → error，裸域名 → ok', () => {
+    // together 约束要求三项同设或同空，TEAM/AUD 走 current（已配好）只改 HOSTNAME 这一项。
+    const withTeamAud = { current: { CF_ACCESS_TEAM: 'myteam', CF_ACCESS_AUD: 'aud123' } };
+    assert.equal(validateEnvChanges({ CF_ACCESS_HOSTNAME: 'https://chat.example.com' }, deps(withTeamAud)).ok, false);
+    assert.equal(validateEnvChanges({ CF_ACCESS_HOSTNAME: 'chat.example.com:8443' }, deps(withTeamAud)).ok, false);
+    assert.equal(validateEnvChanges({ CF_ACCESS_HOSTNAME: 'chat.example.com/path' }, deps(withTeamAud)).ok, false);
+    assert.equal(validateEnvChanges({ CF_ACCESS_HOSTNAME: 'chat.example.com' }, deps(withTeamAud)).ok, true);
+  });
+
   // 当前 server 正绑在旧 PORT 上，无条件探测会恒报占用 —— 这正是 doctor D4 的既有 bug，别复制过来。
   test('PORT 没变时不探测端口占用', () => {
     let probed = false;

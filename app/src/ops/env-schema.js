@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isLoopbackBindHost } from '../shared/bind-host.js';
+import { isBareHostname } from '../shared/public-target.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
 // src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
@@ -541,6 +542,12 @@ function checkOne(key, value, def, d) {
   }
 
   if (def.kind === 'url') return checkUrl(key, value, def);
+
+  // isPublicHost（auth/cf-access.js）只比较 host.split(':')[0]，带 scheme/端口/路径的值
+  // 永远比不出相等，Access 层会静默永远不触发。在这里当场拒绝，比等到扫码进不去才发现好。
+  if (key === 'CF_ACCESS_HOSTNAME' && value && !isBareHostname(value)) {
+    return '只接受裸域名，不带 https:// 前缀、端口或路径（如 chat.example.com）';
+  }
 
   if (def.kind === 'toggle') {
     // 只认声明过的字面量。'true'/'0'/'yes' 这类值写进去是**静默失效**，

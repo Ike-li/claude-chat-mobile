@@ -88,6 +88,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
+  isValidDeviceToken,
   addPendingDevice,
   getLatestPendingDevice,
   approveDevice,
@@ -879,6 +880,22 @@ io.use(async (socket, next) => {
         // 否则是 peer。此前直接取 peer，反代后每张卡都是 127.0.0.1，「核对再批」无从核对（2026-09-06 容器演练）。
         const ip = clientSourceAddress(socket.handshake, clientIp, rlTrust).address;
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
+        // 【整段副作用都必须挂在「真的进了待审列表」这个前提下】addPendingDevice 内部会拒掉
+        // 格式非法/缺失的 token（isValidDeviceToken 同一判据），但下面这一整套——广播、离线推送、
+        // 控制台审批提示——此前无条件照跑，于是为一台【并不存在的待审设备】报了警：
+        //  · TTY 提示写的是「按回车一键同意【此】设备」，而回车实际批的是 getLatestPendingDevice()，
+        //    即【另一台】设备。攻击者（持 AUTH_TOKEN，正是设备审批这层要防的那种）先用合法 token
+        //    排队一台，再用非法 token 触发这条提示，操作员核对的卡片与回车批准的对象就不是同一台，
+        //    而 F2 那条「另有 N 个待审」的告警在只有一台待审时也不会响。
+        //  · 推送节流是设备维度的【单一】窗口（DEVICE_NOTIFY_KEY / DEVICE_NOTIFY_INTERVAL_MS），
+        //    且放行与否都写回状态——无效连接刷一下就占住它，随后真实的设备申请静默不推，
+        //    而「人不在电脑前」恰是本项目的主用例。
+        // 所以这里直接短路：只打一行拒绝记录，不广播、不推送、不给任何审批入口。
+        if (!isValidDeviceToken(deviceToken)) {
+          console.log(`\n⚠️  [安全] 拒绝一个设备 ID ${deviceToken ? '格式非法' : '缺失'} 的接入请求（来自 ${ip}），`
+            + `未加入待审列表，不发广播与推送。\n`);
+          return next();
+        }
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
         // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，用户锁屏或在别的 app 时整道
@@ -898,7 +915,7 @@ io.use(async (socket, next) => {
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);
-        console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
+        console.log(`   设备 ID: ${deviceToken}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
         // 「电脑控制台」曾让用户满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
@@ -908,6 +925,7 @@ io.use(async (socket, next) => {
           console.log(`   -> 就在这个窗口（跑着 npm start 的这个终端）里按【回车键 (Enter)】一键同意此设备`);
           console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
         } else {
+          // 走到这里 deviceToken 必然已过 isValidDeviceToken（上面短路过了），拼进双引号是安全的。
           console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备（必须在本项目目录下跑）：`);
           console.log(`      cd ${HERE} && node scripts/device.js approve "${deviceToken}"`);
         }
