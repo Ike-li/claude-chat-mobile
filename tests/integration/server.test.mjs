@@ -564,7 +564,7 @@ const ACK_SHAPES = [
   // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },

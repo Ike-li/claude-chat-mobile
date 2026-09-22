@@ -363,7 +363,20 @@ export function formatServiceNotices({ service, now } = {}) {
   if (lockout && typeof lockout.at === 'number') {
     const src = describeRateLimitSource(lockout.source);
     // unknown（旧 server ack 无 source）保留原保守措辞：说不清来源时，宁可提醒过度也不误导为安全。
-    const tail = src.scope === 'local' ? `${t('——来自本机')} ${src.addr}${t('，多半是你自己的旧 token')}`
+    //
+    // 【local 分支为什么再按 proxyFronted 分叉】反代/隧道部署下应用层看到的直连地址恒是中间节点
+    // 自己（同机时就是 127.0.0.1），背后可能是任何经它转发的公网来源——"多半是你自己的旧 token"
+    // 这句断言此时不成立，而它恰好出现在「真有人在暴力尝试」的时候，是在说反话。
+    // proxyFronted 由服务端按【拓扑】判定（TRUSTED_PROXY 声明 / ACCESS_PROFILE 含中间节点 /
+    // 未声明但 CF_ACCESS_* 齐全），**不是**单看 TRUSTED_PROXY：那个开关只表示「允许采信 XFF」，
+    // 本仓刻意不让它随 reverse-proxy 自动打开，于是最常见的反代部署反而是它未设的那一档。
+    // 判据详见 app/src/server/app.js 的 computeServiceHealth。
+    // 三档 vpn/direct/lan 下 proxyFronted 为 false，仍是原措辞——那时 peer 就是真实客户端地址，
+    // 127.0.0.1 确实就是本机，这句断言成立，不该被这次修复改掉。
+    const tail = src.scope === 'local'
+      ? (service?.proxyFronted
+        ? `${t('——反代/隧道后的')} ${src.addr}${t('，无法确认是否为本机')}`
+        : `${t('——来自本机')} ${src.addr}${t('，多半是你自己的旧 token')}`)
       : src.scope === 'lan' ? `${t('——来自局域网')} ${src.addr}`
         : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
           : t('——可能有人在暴力尝试你的入口');
