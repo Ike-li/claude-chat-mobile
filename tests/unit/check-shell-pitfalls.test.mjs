@@ -98,7 +98,30 @@ function gitFixture(files) {
 }
 
 test.describe('checkShellPitfalls：workflow run: 块与 .sh 文件走同一套判据', () => {
-  test('workflow 的 run: 块里 pipefail 下的 grep -q → 被抓住（GHA 默认 shell 隐式 pipefail，不需要文本里出现 set -o pipefail）', () => {
+  // ★ pipefail 开不开，取决于这一步【实际的】shell，不能按默认值猜。GitHub 官方
+  // workflow-syntax 的 shell 表：未声明 shell: 跑的是 `bash -e {0}`（**无** pipefail），
+  // 只有显式 shell: bash 才是 `bash --noprofile --norc -eo pipefail {0}`。
+  // 把默认档当成有 pipefail，会把完全合法的默认 shell 步骤判成违规——误报会让这道闸被嫌吵而绕开。
+  test('显式 shell: bash 的 run: 块 → pipefail 生效，grep -q 被抓住', () => {
+    const root = gitFixture({
+      '.github/workflows/test.yml': [
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - shell: bash',
+        '        run: |',
+        '          if echo "$X" | grep -q foo; then echo yes; fi',
+      ].join('\n'),
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+      assert.match(r.problems[0], /grep -q/);
+      assert.match(r.problems[0], /\.github\/workflows\/test\.yml:6/);
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  test('未声明 shell 的 run: 块 → 默认 `bash -e {0}` 无 pipefail，同样的 grep -q 不报', () => {
     const root = gitFixture({
       '.github/workflows/test.yml': [
         'jobs:',
@@ -110,9 +133,98 @@ test.describe('checkShellPitfalls：workflow run: 块与 .sh 文件走同一套�
     });
     try {
       const r = checkShellPitfalls({ rootDir: root });
+      assert.deepEqual(r.problems, [], '默认 shell 下 SIGPIPE 不决定管道退出码，这是合法写法');
+      assert.equal(r.workflowRunSteps, 1, '仍要扫到这一步——不报不等于没看');
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  test('run 文本自带 set -o pipefail → 即使未声明 shell 也按 pipefail 判', () => {
+    const root = gitFixture({
+      '.github/workflows/test.yml': [
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - run: |',
+        '          set -euo pipefail',
+        '          if echo "$X" | grep -q foo; then echo yes; fi',
+      ].join('\n'),
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  test('job/workflow 级 defaults.run.shell: bash 同样让整份 workflow 按 pipefail 判', () => {
+    const root = gitFixture({
+      '.github/workflows/test.yml': [
+        'defaults:',
+        '  run:',
+        '    shell: bash',
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - run: |',
+        '          if echo "$X" | grep -q foo; then echo yes; fi',
+      ].join('\n'),
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  // ★ 管道跨物理行是 run: | 块里最自然的写法，而逐行扫描对它完全失明：两半各自都不完整。
+  test('跨行管道（行尾 | 续到下一行）同样被抓住', () => {
+    const root = gitFixture({
+      '.github/workflows/test.yml': [
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - shell: bash',
+        '        run: |',
+        '          producer |',
+        '            grep -q value',
+      ].join('\n'),
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
       assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
       assert.match(r.problems[0], /grep -q/);
-      assert.match(r.problems[0], /\.github\/workflows\/test\.yml:5/);
+      assert.match(r.problems[0], /test\.yml:6/, '行号应报在管道起点那一行');
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  // 夹具刻意让 `|` 落在【行尾】：写成 `\n  | grep -q value` 的话，第二行自己就含 `| grep -q`，
+  // 不折叠也能匹配——那样这条用例对折叠逻辑完全失明（写它的第一版就是这么假绿的）。
+  test('.sh 里跨行管道同样折叠后判定（两半各自都不完整）', () => {
+    const root = gitFixture({
+      'scripts/x.sh': '#!/bin/bash\nset -euo pipefail\nproducer |\n  grep -q value\n',
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+      assert.match(r.problems[0], /grep -q/);
+    } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+  });
+
+  // ★ GitHub 对 .yml 与 .yaml 一视同仁。只扫一种的话，日后有人用 .yaml 落一个 workflow，
+  // 里面所有 run: 块都静默不被这道闸看见——扫描面缺口的典型形态。
+  test('.yaml 扩展名的 workflow 同样进扫描面', () => {
+    const root = gitFixture({
+      '.github/workflows/other.yaml': [
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - shell: bash',
+        '        run: |',
+        '          if echo "$X" | grep -q foo; then echo yes; fi',
+      ].join('\n'),
+    });
+    try {
+      const r = checkShellPitfalls({ rootDir: root });
+      assert.equal(r.workflowFiles.length, 1, '.yaml 必须被 git ls-files 的 pathspec 收进来');
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
     } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
   });
 
