@@ -116,8 +116,10 @@ export function parseServerConfig(env, {
     // Zero explicitly disables fully-idle instance reclamation.
     instanceIdleReclaimMs: nonNegativeNumber(env.INSTANCE_IDLE_RECLAIM_MS, DEFAULT_INSTANCE_IDLE_RECLAIM_MS),
     approvalTtlMs: positiveNumber(env.APPROVAL_TTL_MS, DEFAULT_APPROVAL_TTL_MS),
-    notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, DEFAULT_NOTIFY_THROTTLE_MS),
-    sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, DEFAULT_SESSION_DELETE_QUIET_MS),
+    // env-schema.js 里这两项都声明 min:0（配置面板接受 0），必须走 nonNegativeNumber——
+    // 用 positiveNumber 会把用户存的 "0" 静默换成默认值，且没有任何报错提示。
+    notifyThrottleMs: nonNegativeNumber(env.NOTIFY_THROTTLE_MS, DEFAULT_NOTIFY_THROTTLE_MS),
+    sessionDeleteQuietMs: nonNegativeNumber(env.SESSION_DELETE_QUIET_MS, DEFAULT_SESSION_DELETE_QUIET_MS),
     devMode: env.DEV_MODE === '1',
     // 监听地址的两个输入原样透传，判定留给 src/shared/bind-host.js 的 resolveBindPlan
     //（server 与两个 doctor 共用那一份，此处再判一次就又有分叉余地了）。
