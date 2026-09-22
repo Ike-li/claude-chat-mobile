@@ -174,15 +174,28 @@ wait_ci_for_sha() {
 # （我照着去查了 required_approving_review_count，它是 0，没问题），实际只是抢跑。
 #
 # `mergeStateStatus` 是 GitHub 自己算的：哪一批 check-runs 算数由它说了算，脚本不必猜。
-# 【为什么 UNSTABLE 也放行】它表示「非必需检查有红的，但保护规则已满足」，与旧代码
-# `--required` 的意图一致：非必需 job 变红不该挡住发版。
+#
+# 【UNSTABLE 不能无条件放行】它的字面语义是「可合并，但有 commit status 没通过」，
+# 而「没通过」**包含还在跑**。必需检查仍在 pending 时这里也是 UNSTABLE，照着放行
+# 就会被分支保护当场拒绝 —— 2026-09-22 发 v1.12.1 实测：脚本播报「✓ 可合并（UNSTABLE）」，
+# 下一步 `gh pr merge` 就是 `the base branch policy prohibits the merge`。
+# 本来想表达的「非必需 job 变红不该挡住发版」只在必需检查已经全部落定时才成立，
+# 所以多查一次 pending。查不到时按「还在跑」处理接着等：不确定就别合并。
+# （两批 check-runs 的抢跑不会走到这里 —— 那种情况 GitHub 给的是 BLOCKED，见下。）
 wait_pr_mergeable() {
-  local pr="$1" tries=0 state="" fails=""
+  local pr="$1" tries=0 state="" fails="" pending=""
   say "▶ 等 PR #${pr} 可合并…"
   while [ "$tries" -lt 120 ]; do
     state="$(gh pr view "$pr" --json mergeStateStatus -q .mergeStateStatus 2>/dev/null || true)"
     case "$state" in
-      CLEAN|UNSTABLE) say "  ✓ PR #${pr} 可合并（${state}）"; return 0 ;;
+      CLEAN) say "  ✓ PR #${pr} 可合并（${state}）"; return 0 ;;
+      UNSTABLE)
+        pending="$(gh pr checks "$pr" --required --json name,bucket \
+          -q '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 1)"
+        if [ "${pending:-1}" = "0" ]; then
+          say "  ✓ PR #${pr} 可合并（${state}）"; return 0
+        fi
+        ;;
       DIRTY) die "PR #${pr} 与 master 有冲突，先解决冲突再重跑本脚本。" ;;
       BLOCKED)
         # BLOCKED 同时覆盖「必需检查还在跑」与「必需检查真红了」，只有后者该停。
