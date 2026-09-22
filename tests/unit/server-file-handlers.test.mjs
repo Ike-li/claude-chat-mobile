@@ -244,3 +244,98 @@ test('R10b：落点就在声明 cwd 内时，审计 target 不变（不制造无
   assert.equal(entry.target, '/repo');
   assert.equal(entry.meta.declaredCwd, undefined, '同区时不加冗余字段');
 });
+
+// tool:preview 此前只有「实例不存在」这个形状分支有断言（不属于安全闸，只是找不到目标）。
+// 真正的安全闸——inWhitelist:false 的两条拒绝路径（白名单外 / 可疑符号链接分量）——零测试覆盖，
+// 也就是说这道闸此刻是不是真的在拦、还是被谁手滑改坏了，除了读代码没有第二种办法知道。
+test.describe('tool:preview 安全闸', () => {
+  function fakeAgent(overrides = {}) {
+    return {
+      cwd: '/repo',
+      getToolInput: () => ({ name: 'Edit', input: { file_path: '/repo/a.js' } }),
+      ...overrides,
+    };
+  }
+
+  test('路径不在白名单工作目录内 → inWhitelist:false，不落 attribution', async () => {
+    const { handlers } = register({
+      routeInstance: () => fakeAgent(),
+      attributePath: () => null, // 与 register() 默认值一致，这里显式写出以强调这条正是被测分支
+    });
+    let response;
+    await handlers.get('tool:preview')({ instanceId: 'i1', toolUseId: 't1' }, v => { response = v; });
+    assert.equal(response.ok, false);
+    assert.equal(response.inWhitelist, false);
+    assert.match(response.error, /白名单/);
+  });
+
+  test('路径含可疑符号链接分量 → inWhitelist:false，即使 attributePath 本身放行', async () => {
+    const { handlers } = register({
+      routeInstance: () => fakeAgent(),
+      attributePath: () => ({ resolved: '/repo/a.js', workDir: '/repo', relPath: 'a.js' }),
+      rejectableSymlinkComponent: () => true,
+    });
+    let response;
+    await handlers.get('tool:preview')({ instanceId: 'i1', toolUseId: 't1' }, v => { response = v; });
+    assert.equal(response.ok, false);
+    assert.equal(response.inWhitelist, false);
+    assert.match(response.error, /符号链接/);
+  });
+
+  test('正对照：白名单内且无符号链接 → 正常返回预览', async () => {
+    const { handlers } = register({
+      routeInstance: () => fakeAgent(),
+      attributePath: () => ({ resolved: '/repo/a.js', workDir: '/repo', relPath: 'a.js' }),
+      rejectableSymlinkComponent: () => false,
+      buildDiff: () => 'diff-text',
+    });
+    let response;
+    await handlers.get('tool:preview')({ instanceId: 'i1', toolUseId: 't1' }, v => { response = v; });
+    assert.equal(response.ok, true);
+    assert.equal(response.inWhitelist, true);
+    assert.equal(response.diff, 'diff-text');
+  });
+});
+
+// attachment:read 同样只测过「预览不可用」（功能未注入）这个形状分支。
+// isBareStoredName 是这里唯一的第一道闸（拒绝带路径分隔符/以 . 开头的输入），第二道闸是
+// browseReadFile 返回 null（scope 内定位到了文件，但实际读取时发现真实落点越界，例如符号链接）。
+test.describe('attachment:read 安全闸', () => {
+  test('storedName 不是裸文件名（含路径分隔符）→ 拒绝且记 scope_violation 审计', async () => {
+    // 真实 locateStoredAttachment 对这类输入本就定位不到（裸名校验在它内部，这里桩出同样的
+    // "找不到"结果）——handler 自己另外再用 isBareStoredName 判断这次落空要不要记审计。
+    const { handlers, audits } = register({
+      locateStoredAttachment: () => null,
+      browseReadFile: () => { throw new Error('不该被调用：locateStoredAttachment 已经落空'); },
+    });
+    let response;
+    await handlers.get('attachment:read')({ storedName: '../evil.png' }, v => { response = v; });
+    assert.equal(response.ok, false);
+    assert.match(response.error, /不存在或已被删除/);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].action, 'scope_violation');
+    assert.equal(audits[0].meta.via, 'attachment:read');
+  });
+
+  test('定位到文件，但实际读取时判定越界（如符号链接）→ 拒绝，不当作"文件不存在"以外的信息泄露', async () => {
+    const { handlers } = register({
+      locateStoredAttachment: () => ({ baseDir: '/data/uploads', storedName: 'x.png', scopeDirs: ['/data/uploads'] }),
+      browseReadFile: () => null, // 定位成功但读取阶段判越界
+    });
+    let response;
+    await handlers.get('attachment:read')({ storedName: 'x.png' }, v => { response = v; });
+    assert.equal(response.ok, false);
+    assert.match(response.error, /不存在或已被删除/);
+  });
+
+  test('正对照：裸文件名且定位/读取都成功 → 正常返回内容', async () => {
+    const { handlers } = register({
+      locateStoredAttachment: () => ({ baseDir: '/data/uploads', storedName: 'x.png', scopeDirs: ['/data/uploads'] }),
+      browseReadFile: () => ({ content: 'base64==', binary: true }),
+    });
+    let response;
+    await handlers.get('attachment:read')({ storedName: 'x.png' }, v => { response = v; });
+    assert.equal(response.ok, true);
+    assert.equal(response.content, 'base64==');
+  });
+});

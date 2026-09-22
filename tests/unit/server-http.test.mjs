@@ -61,6 +61,20 @@ test('rewriteIndexAssetUrls versions js and css under /js and /css', () => {
   );
 });
 
+// vendor/ 下的库文件被静态服务那端打了 immutable, max-age=31536000（一年）——?v= 是它们唯一的
+// 失效手段，此前 rewriteIndexAssetUrls 的正则不认 /vendor/ 前缀，这批文件的引用点从未被戳过版本号。
+test('rewriteIndexAssetUrls 同样覆盖 /vendor/（含嵌套子目录），这批文件被 immutable 缓存一年，?v= 是唯一失效手段', () => {
+  const html = [
+    '<script src="/vendor/purify.min.js"></script>',
+    '<link rel="stylesheet" href="/vendor/github-light.min.css">',
+    '<script src="/vendor/codemirror/mode-javascript.min.js"></script>', // 嵌套子目录
+  ].join('\n');
+  const out = rewriteIndexAssetUrls(html, 'deadbeef');
+  assert.match(out, /\/vendor\/purify\.min\.js\?v=deadbeef/);
+  assert.match(out, /\/vendor\/github-light\.min\.css\?v=deadbeef/);
+  assert.match(out, /\/vendor\/codemirror\/mode-javascript\.min\.js\?v=deadbeef/);
+});
+
 test('tokenMatches compares exact byte sequences and rejects missing configuration', () => {
   assert.equal(tokenMatches('', 'anything'), false);
   assert.equal(tokenMatches('secret', undefined), false);
@@ -687,6 +701,47 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
       if (saved.hot === undefined) delete process.env.ASSET_HOT_RELOAD; else process.env.ASSET_HOT_RELOAD = saved.hot;
       if (saved.dev === undefined) delete process.env.DEV_MODE; else process.env.DEV_MODE = saved.dev;
     }
+  });
+});
+
+// vendor/ 的内容必须真的进版本哈希——只让正则认得 /vendor/ 前缀而不把文件内容算进 assetVersion，
+// 效果等于给了一个永远不变的 ?v=，跟没有 immutable 失效手段没有区别（regex 测试那条能测出"格式
+// 对不对"，测不出"值会不会随内容变"，这条补上）。
+test.describe('configureHttpShell：vendor/ 的内容变化必须改变 assetVersion', () => {
+  const roots = [];
+  test.after(() => { for (const dir of roots) rmSync(dir, { recursive: true, force: true }); });
+
+  // 每次都建一棵全新的最小 fixture（index.html + js/app.js + vendor/<name>），
+  // vendorContent 是唯一变量，其余文件内容两次调用完全一致。
+  function assetVersionFor(vendorContent) {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-http-vendor-'));
+    roots.push(root);
+    mkdirSync(join(root, 'app/public/js/app'), { recursive: true });
+    mkdirSync(join(root, 'app/public/vendor'), { recursive: true });
+    writeFileSync(join(root, 'app/public/index.html'),
+      '<body><script src="/js/app.js"></script><script src="/vendor/fake-lib.js"></script></body>');
+    writeFileSync(join(root, 'app/public/js/app.js'), "console.log('app');\n");
+    writeFileSync(join(root, 'app/public/vendor/fake-lib.js'), vendorContent);
+
+    const routes = new Map();
+    const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h), disable: () => {} };
+    configureHttpShell({ app, projectRoot: root, strategy: strategyStub(), hotReloadJs: false });
+    const indexHandlers = routes.get(String(['/', '/index.html']));
+    const out = { body: null };
+    indexHandlers[indexHandlers.length - 1]({}, { setHeader: () => {}, type: () => ({ send: b => { out.body = b; } }) });
+    const m = out.body.match(/\/vendor\/fake-lib\.js\?v=([0-9a-f]{8})/);
+    assert.ok(m, `index.html 里的 vendor 脚本引用应该带上 ?v=，实际：${out.body}`);
+    return m[1];
+  }
+
+  test('同内容两次调用得到相同版本号（确定性、非随机戳）', () => {
+    assert.equal(assetVersionFor("console.log('v1');\n"), assetVersionFor("console.log('v1');\n"));
+  });
+
+  test('vendor 文件内容一变，版本号跟着变——否则 immutable 缓存的浏览器永远不会取新版本', () => {
+    const before = assetVersionFor("console.log('v1');\n");
+    const after = assetVersionFor("console.log('v2 — 库升级了');\n");
+    assert.notEqual(before, after);
   });
 });
 
