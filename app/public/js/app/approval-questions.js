@@ -126,10 +126,10 @@ export function createApprovalController(context, {
     const applyPermInput = (text) => {
       if (display.mode === 'markdown') {
         permInput.classList.remove('font-mono', 'whitespace-pre-wrap');
-        permInput.classList.add('msg-body', 'perm-input-md');
+        permInput.classList.add('msg-body');
         permInput.innerHTML = render(text);
       } else {
-        permInput.classList.remove('msg-body', 'perm-input-md');
+        permInput.classList.remove('msg-body');
         permInput.classList.add('font-mono', 'whitespace-pre-wrap');
         permInput.textContent = text;
       }

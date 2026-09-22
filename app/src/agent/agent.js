@@ -2473,7 +2473,10 @@ export class AgentSession {
 
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
-  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
+  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值）。
+  // 【transient 字段目前只是路径标记，前端不读它】前端靠 event.type 在硬编码的带外表
+  // （app.js outOfBand、event-dispatch.js DEFAULT_REPLAY_OOB_TYPES）里判断要不要跳过 seq/缓冲，
+  // 不检查这个字段——改这里不会影响前端行为，动前端分流逻辑要去改那两张表。
   emitTransient(type, payload) {
     assertKnownEventType(type);
     // 与 emit() 同一道撤表检查：task_progress / api_retry 只走这条路，漏了这行它们在
