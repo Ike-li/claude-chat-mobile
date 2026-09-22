@@ -4821,7 +4821,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     setPermMode(panel.permissionMode || 'default', true);
     setEffortMode(panel.effort, true);
-    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel);
+    // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
+    // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，触发一次没必要的 dispose+resume。
+    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
@@ -8607,7 +8610,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       mirrorObservedCli = { model: null, permissionMode: null, effort: null };
       _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
-      rebuildEffortOptions(currentModel || cwdDefaultModel);
+      // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
+      // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
+      // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
+      // 触发一次没必要的 dispose+resume——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
