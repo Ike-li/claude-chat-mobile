@@ -398,7 +398,7 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
     [...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd, opts,
   );
   viewingInstanceId = r.viewingInstanceId;
-  viewingCwd = r.viewingCwd;
+  viewingCwd = workspaceCwdOf(r.viewingCwd); // 永远落工作区轴：托管 worktree 重选后不该把 viewingCwd 钉在 worktree 路径上
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
   clearMirrorOnViewChange();
 };
@@ -654,6 +654,7 @@ function unlockSocket(socket) {
   permModeTo(socket);
   effortTo(socket);
   instancesTo(socket);
+  mirrorStateTo(socket); // 解锁这一刻起该 socket 才第一次拿到只读快照——不经过 connection 回调，漏了会一直假当成可写
   scheduleStatusRefresh();
 }
 
@@ -2381,18 +2382,7 @@ registerSocketConnection(io, socket => {
     instancesTo(socket);
     // 只读追平：向(重)连客户端补发权威完整快照（含 readonly=false）。setMirror 仅在变化时广播，
     // 若空闲态省略事件，断线前残留 readonly=true 的客户端会在重连后继续假锁；实例 ID 重启复用时尤其明显。
-    const currentMirrorAgent = agents.get(viewingInstanceId);
-    const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
-    const mirrorSnapshot = mirrorEngine.snapshot();
-    socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
-      instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(), type: 'mirror_state',
-      payload: {
-        readonly: mirrorReadonly,
-        stale: mirrorReadonly && mirrorSnapshot.stale,
-        ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous, waiting: mirrorSnapshot.waiting } : {}),
-      }
-    });
+    mirrorStateTo(socket);
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2584,7 +2574,7 @@ registerSocketConnection(io, socket => {
         }
         if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
-          viewingCwd = a.cwd;
+          viewingCwd = workspaceCwdOf(a.cwd);
         } else if (viewingInstanceId === disposedId) {
           // 安全网：理论上 silent 后 viewing 应仍是 disposedId 或用户已改；若仍死指针却未 claim，落 reselect
           reselectViewingAfter(cwd);
@@ -2911,7 +2901,7 @@ registerSocketConnection(io, socket => {
     }
     if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
       viewingInstanceId = ni.instanceId;
-      viewingCwd = ni.cwd;
+      viewingCwd = workspaceCwdOf(ni.cwd);
     } else if (viewingInstanceId === disposedId) {
       reselectViewingAfter(cwd);
     }
@@ -2936,7 +2926,7 @@ registerSocketConnection(io, socket => {
     if (id === viewingInstanceId) return instancesTo(socket); // 幂等
     viewingInstanceId = id;
     const a = agents.get(id);
-    viewingCwd = a.cwd;
+    viewingCwd = workspaceCwdOf(a.cwd);
     // B2：列表/tab 聚焦也要更新 currentByCwd（此前只 session:switch/finishOpenFocus 写指针）
     if (a.sessionId) sessions.setCurrent(a.cwd, a.sessionId);
     // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
@@ -2999,8 +2989,10 @@ registerSocketConnection(io, socket => {
     const ack = typeof payload === 'function' ? payload : maybeAck;
     const obj = payload && typeof payload === 'object' ? payload : {};
     // 可选 cwd：在指定工作区上下文下开空首页（白名单内）；默认保留当前 viewingCwd。
+    // 当前唯一前端调用点（session:home 恒发 {}）不带 cwd，这个分支走不到；仍按「viewingCwd 永远
+    // 落工作区轴」这道不变量补 workspaceCwdOf 做防御性一致（同 reselectViewingAfter/setViewing 等处）。
     if (typeof obj.cwd === 'string' && obj.cwd) {
-      viewingCwd = ensureWhitelisted(routeCwd(obj.cwd), workDirs);
+      viewingCwd = workspaceCwdOf(ensureWhitelisted(routeCwd(obj.cwd), workDirs));
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
@@ -3033,7 +3025,10 @@ registerSocketConnection(io, socket => {
     const obj = (payload && typeof payload === 'object') ? payload : null;
     const cwd = ensureWhitelisted(obj ? routeCwd(obj.cwd) : viewingCwdOf(), workDirs);
 
-    viewingCwd = cwd;
+    // cwd（驾驶轴，供下面路由代次/当前指针/懒开使用）保持原样，可以是托管 worktree 路径；
+    // viewingCwd（工作区展示轴）另外归一化——两个前端调用点目前只会传顶层工作区目录（抽屉按行 /
+    // 全局 currentCwd），worktree 从不出现在这里，故此刻是无操作的防御性对齐，不改变现有行为。
+    viewingCwd = workspaceCwdOf(cwd);
     sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
@@ -3572,7 +3567,11 @@ registerSocketConnection(io, socket => {
     // 搜索态不补：搜索是另一条轴，往结果里塞未匹配的行等于污染搜索语义（用户搜 "foo" 却看见 "bar"）。
     // 已在本页的不补：那条已经有行了，补进来就是同一会话两行。
     const inPage = new Set(list.map(s => s.id));
-    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id));
+    // pendingDeleteIds 同样要排除：listSessionsPage 那条路径经 excludeIds 过滤了，这条独立的
+    // pinned（手动标未读、不受分页截断）走的是 listSessionsByIds——它没有 excludeIds 形参，
+    // 此前完全没挡，删除在途（sdkDeleteSession 的 await 窗口内）又恰好被手动标过未读的会话，
+    // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
+    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds) : [];
     // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
     // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
@@ -4473,6 +4472,26 @@ function instancesTo(socket) {
   });
 }
 
+// 只读追平：单发当前查看 tab 的镜像只读快照给指定 socket。原来只内联在 registerSocketConnection
+// 的已批准分支里（物理重连时才会跑到），unlockSocket()（批准待审批设备解锁已连接 socket，不经过
+// 这条连接回调）漏了这一步——设备刚被批准那一刻，若当前查看的会话正被 CLI 驾驶，前端会一直不知道
+// 自己该进只读态，直到用户手动刷新页面。抽成独立函数供两处共用，对齐 permModeTo/effortTo/instancesTo
+// 的既有写法。
+function mirrorStateTo(socket) {
+  const currentMirrorAgent = agents.get(viewingInstanceId);
+  const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
+  const mirrorSnapshot = mirrorEngine.snapshot();
+  socket.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
+    instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(), type: 'mirror_state',
+    payload: {
+      readonly: mirrorReadonly,
+      stale: mirrorReadonly && mirrorSnapshot.stale,
+      ...(mirrorReadonly ? { observedCli: mirrorSnapshot.observedCli, autonomous: mirrorSnapshot.autonomous, waiting: mirrorSnapshot.waiting } : {}),
+    }
+  });
+}
+
 function sysTo(socket, message, recoverable) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: null, cwd: viewingCwdOf(), ts: Date.now(),
@@ -4608,6 +4627,7 @@ function shutdown(sig) {
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
+  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd); // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 删 CLI 建的 <sid>.jsonl 残留，裸退出留不下这些
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
