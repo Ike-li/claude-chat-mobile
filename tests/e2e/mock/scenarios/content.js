@@ -976,6 +976,43 @@ export function createContentScenarios(getContext) {
         });
       },
     },
+    {
+      // 服务端 result 事件恒带 text 字段（agent.js 的 assistantResponseBuffer，供前端断网恢复后
+      // 用权威全文覆盖可能因遗漏 text_delta 而截断的 s.raw，见 app.js 的 result(p) 处理）。
+      // mock 此前从未下发这个字段——app.js 那段"用权威全文覆盖"的分支代码在 E2E 全绿的情况下
+      // 从未被真正触达过：改错字段名、判断条件写反，测试都不会红。这里故意只发一小段 delta
+      // （模拟断网期间漏掉了后续内容），result.text 带着更长/不同的权威全文，断言最终渲染必须
+      // 是全文而不是 delta 累积的截断版本。
+      command: 'test:result-text-recovery',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
+        console.log('[mock] Emitting truncated text_delta + authoritative result.text');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        await delay(150);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_result_text_recovery', text: 'TRUNCATED-PREFIX-ONLY' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: {
+            messageId: 'msg_result_text_recovery', durationMs: 150, costUsd: 0, isError: false, models: [activeModel],
+            text: 'TRUNCATED-PREFIX-ONLY-plus-the-rest-that-only-arrives-via-result-text-AUTHORITATIVE-FULL-TEXT',
+          }
+        });
+      },
+    },
   ];
 }
 
