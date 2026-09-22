@@ -319,6 +319,29 @@ test.describe('权限闸门', () => {
       assert.equal(AS.getByReqId('store-t6').status, 'aborted');
       s.dispose();
     });
+
+    // 单向终态：一条记录一旦落定（非 pending），后续任何 recordDecided 调用都不该再改写它——
+    // 这类调用理应是「找不到 pending 记录，无事可做」。此前有一条回落分支：找不到 pending 时
+    // 改成回落到「最近一条」（不论其状态），会把一条已经是终态的记录悄悄覆写成别的状态，
+    // 且没有任何信号提示这发生过（竞态下的重复决断——比如看门狗在真实决断落定之后才追上来）。
+    test('approval-store 单向终态：无 pending 记录时 recordDecided 是 no-op，不覆写已落定的记录', async () => {
+      const AS = await import('../../app/src/agent/approval-store.js');
+      const { s } = makeSession();
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'terminal-t1' });
+      s.resolvePermission('terminal-t1', 'deny');
+      const before = AS.getByReqId('terminal-t1');
+      assert.equal(before.status, 'deny');
+      assert.equal(before.decidedBy, 'user');
+
+      // 同一 reqId 已经没有 pending 记录了——模拟迟到的第二次决断（比如竞态里的重复触发）。
+      AS.recordDecided('terminal-t1', { status: 'expired', decidedBy: 'system:idle-watchdog', decidedAt: Date.now() });
+
+      const after = AS.getByReqId('terminal-t1');
+      assert.equal(after.status, 'deny', '已落定的终态不得被二次 recordDecided 覆写');
+      assert.equal(after.decidedBy, 'user', 'decidedBy 同样不得被第二次调用改写');
+      s.dispose();
+    });
   });
 
   test('abort signal 触发 → pendingPermissions.delete + request_resolved(aborted) + denyKinds(cancelled)', () => {
