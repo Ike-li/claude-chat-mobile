@@ -261,6 +261,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         // dataset.uuid → resolveForkAnchorUuid 认 role==='assistant' 即采纳），sdkForkSession 遂拿到
         // 一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
         for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
+          // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
+          // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
+          // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
+          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
           pushCapped(item);
         }
       }
