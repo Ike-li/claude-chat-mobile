@@ -17,6 +17,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { encodeQr } from '../../app/src/shared/qrcode.js';
 
 const REF_URL = `http://192.168.1.1:3000/#token=${'a'.repeat(64)}`;
@@ -162,7 +163,7 @@ test('encodeQr：三个定位角与时序图案就位', () => {
 // 「拒绝」必须发生在生成之前，否则等于在一个连不上的配置下照样把凭据画了出来。
 // 【token 从哪来】显式传 AUTH_TOKEN，env 压过配置文件——绝不让用例读到仓库里的真令牌。
 test.describe('scripts/qr.js：地址必须来自 server 真正的监听计划', () => {
-  const QR_CLI = new URL('../../scripts/qr.js', import.meta.url).pathname;
+  const QR_CLI = fileURLToPath(new URL('../../scripts/qr.js', import.meta.url));
   const runQr = (env) => spawnSync(process.execPath, [QR_CLI], {
     env: { ...process.env, AUTH_TOKEN: 'a'.repeat(64), ...env },
     encoding: 'utf8',

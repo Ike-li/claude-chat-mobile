@@ -15,8 +15,9 @@
 // 已经跑完了才轮到守卫退出。位置错 = 保护没生效，而它看起来和加对了一模一样。
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 // 管辖目录 + 它为什么不能在开发机上跑。理由要点到形态，不能只写「危险」——
 // 看的人得据此判断新目录该不该进这张表。
@@ -159,7 +160,6 @@ function main() {
 
 if (process.argv[1]) {
   const { realpathSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
   try {
     if (realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) main();
   } catch { /* 比对失败就不自动执行 */ }

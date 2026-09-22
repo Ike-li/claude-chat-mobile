@@ -26,7 +26,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 
-const INFRA_DIR = new URL('../infra/', import.meta.url).pathname;
+const INFRA_DIR = fileURLToPath(new URL('../infra/', import.meta.url));
 const CONFIG_BASENAME = 'ccm.config.json';
 
 // 只解析本仓自己维护的这几份 compose，格式稳定（两空格缩进），故不引入 YAML 依赖。

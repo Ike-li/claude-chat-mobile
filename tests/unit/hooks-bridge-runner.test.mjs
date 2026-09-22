@@ -8,8 +8,9 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const RUNNER = new URL('../../scripts/hooks-bridge.js', import.meta.url).pathname;
+const RUNNER = fileURLToPath(new URL('../../scripts/hooks-bridge.js', import.meta.url));
 const SID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const CWD = '/Users/you/code/demo';
 

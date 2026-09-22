@@ -6,10 +6,14 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, promptWorkDirs, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
 import { ACCESS_PROFILES } from '../../app/src/ops/env-schema.js';
 
-const SETUP = new URL('../../scripts/setup.js', import.meta.url);
+// 直接存文件系统路径：它会被原样交给 spawnSync 当模块路径。存 URL 对象、到调用点再取
+// .pathname 的话，含空格的检出路径下会把 %20 传给 node，三条 CLI 用例全部
+// `Cannot find module '/…/ccm%20…/scripts/setup.js'`。
+const SETUP = fileURLToPath(new URL('../../scripts/setup.js', import.meta.url));
 
 // ── P1b：默认生成 ccm.config.json ────────────────────────────────────────────
 //
@@ -254,7 +258,7 @@ test('CLI：无 TTY 且未给 --yes → exit 2，不写配置', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-tty-'));
   const config = join(dir, 'ccm.config.json');
   try {
-    const res = spawnSync(process.execPath, [SETUP.pathname, `--config=${config}`], {
+    const res = spawnSync(process.execPath, [SETUP, `--config=${config}`], {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, LANG: 'C' },
@@ -273,12 +277,12 @@ test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', 
   const config = join(dir, 'ccm.config.json');
   try {
     const res = spawnSync(process.execPath, [
-      SETUP.pathname, '--yes', `--work-dir=${work}`, '--hooks=off', `--config=${config}`,
+      SETUP, '--yes', `--work-dir=${work}`, '--hooks=off', `--config=${config}`,
     ], {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, LANG: 'C' },
-      cwd: new URL('../..', import.meta.url).pathname,
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
     });
     assert.equal(res.status, 0, res.stderr || res.stdout);
     assert.equal(existsSync(config), true);
@@ -462,7 +466,7 @@ test('promptWorkDir：第一次就对则只问一次', async () => {
 });
 
 test('CLI：--help 在无 TTY 下 exit 0 并打印用法', () => {
-  const res = spawnSync(process.execPath, [SETUP.pathname, '--help'], {
+  const res = spawnSync(process.execPath, [SETUP, '--help'], {
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, LANG: 'C' },
