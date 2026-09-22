@@ -103,10 +103,20 @@ function normalizeRel(p) {
 }
 
 // 段内点名的测试文件路径（tests/setup/ 是预加载器本身，不算靶子）。
+//
+// truncated：这条路径后面紧跟 glob 元字符。上面的字符类不含 * ? [ {，匹配会在那里停下，
+// 拿到的只是【前缀】，而真实 shell 展开出的是「所有以它开头的路径」。不把这件事带出去，
+// `tests/invariants/e*/uninstall-symmetry.test.mjs` 就会被当成 `tests/invariants/e` 这个
+// 既不存在、也不落在任何 deny 前缀下的路径直接放行——shell 展开的却正是
+// tests/invariants/env/（跑卸载器那档，隔离依赖被测代码认注入的 home/root/appPath）。
 function testTargets(text) {
-  return (text.match(/\btests\/[\w./-]+/g) || [])
-    .map(normalizeRel)
-    .filter(t => !t.startsWith('tests/setup/'));
+  const out = [];
+  for (const m of text.matchAll(/\btests\/[\w./-]+/g)) {
+    const rel = normalizeRel(m[0]);
+    if (rel.startsWith('tests/setup/')) continue;
+    out.push({ rel, truncated: /[*?[{]/.test(text[m.index + m[0].length] ?? '') });
+  }
+  return out;
 }
 
 // 白名单脚本各自允许承载的测试目录。npm 会把 `-- ` 之后的参数原样追加到脚本命令行上，
@@ -142,7 +152,14 @@ function whitelistedRun(segment, script) {
   const targets = testTargets(extra);
   if (!targets.length) return true;                    // 附加参数没点名测试文件（--grep 之类）
   if (!scope) return false;
-  return targets.every(t => t.startsWith(scope.allow) && !scope.deny.some(d => t.startsWith(d)));
+  return targets.every(({ rel, truncated }) => {
+    // allow 侧不受截断影响：前缀本身落在 allow 内 ⇒ 所有以它开头的展开结果也落在 allow 内。
+    if (!rel.startsWith(scope.allow)) return false;
+    // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
+    // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
+    // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
+    return !scope.deny.some(d => rel.startsWith(d) || (truncated && d.startsWith(rel)));
+  });
 }
 
 // 这一段是不是在容器里跑。容器里 HOME 是一次性目录，够不到宿主机家目录。
@@ -157,7 +174,7 @@ function inContainer(head, script) {
 function isIsolatedUnitRun(segment) {
   if (!/--import\s+\S*tests\/setup\/preload-env\.mjs/.test(segment)) return false;
   const specs = testTargets(segment);
-  return specs.length > 0 && specs.every(t => t.startsWith('tests/unit/'));
+  return specs.length > 0 && specs.every(t => t.rel.startsWith('tests/unit/'));
 }
 
 function segmentReason(segment) {
