@@ -1,8 +1,14 @@
-// tests/unit/server-file-handlers.test.mjs —— socket 文件面的 handler（SCOPE-01 的接线侧）
-// 所有文件操作共用一张门表：越界一律 fail-closed 且【记审计】，审计的 target 记真实落点所属
-// workdir 而不是请求声明的 cwd（R10，2026-08-06——记错了归属，事后追责会指向错误的项目）。
-// 覆盖：browse/read/write/search/git 各自的范围门 · 越界审计的 via 标注 · 无 ack 时的静默路径
-// 纯函数判据在 tests/invariants/workdir-scope-guard.test.mjs，真组装根在 server/files-scope.test.mjs。
+// tests/invariants/server-file-handlers.test.mjs —— socket 文件面 handler 的范围门接线侧
+// 守护：SCOPE-01（任何用户可控路径经 realpath 后仍须落在授权工作区内——这一侧管的是「每条
+//   进 handler 的路径有没有真的被送进那道门」，以及越界时 fail-closed 且【记审计】；审计的
+//   target 记真实落点所属 workdir 而非请求声明的 cwd，R10，2026-08-06：记错归属会让事后追责
+//   指向错误的项目）
+// 覆盖：browse/read/write/search/git/tool:preview/attachment:read 各自的范围门 · 越界审计的
+//   via 标注与归属 · 无 ack 时的静默路径
+// 槽位：S1（全部依赖可注入的桩，零 I/O、不起 server、不 spawn claude）
+// 不测什么 + 为什么：不测范围判据本身（realpath 后的前缀比较属纯函数侧，在
+//   tests/invariants/workdir-scope-guard.test.mjs）；不测真组装根上的端到端（起真 server，
+//   属 S2 的 tests/invariants/server/files-scope.test.mjs）。三份各守一层，缺哪层都补不上另一层。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
