@@ -23,7 +23,6 @@ import { reachableIPv4s } from '../app/src/shared/net-addr.js';
 import { resolveBindPlan } from '../app/src/shared/bind-host.js';
 import { encodeQr } from '../app/src/shared/qrcode.js';
 import { encodePng } from '../app/src/shared/png.js';
-import { accessConfigured } from '../app/src/auth/cf-access.js';
 import { resolvePublicTarget, protectedByAccess } from '../app/src/shared/public-target.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +30,13 @@ const ROOT = join(HERE, '..');
 // 与 scripts/device.js 同一条加载路径：读错源的后果是对着一个空 token 工作，
 // 而「没设 token」和「读错配置文件了」长得一模一样。
 loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
+
+// cf-access.js 的 CACHE_FILE 是模块级常量、在 import 求值那一刻就用 dataFile() 锁定路径——
+// 必须等上面 loadRuntimeEnvironment 把 CCM_DATA_DIR 落进 process.env 之后再 import，否则
+// CCM_DATA_DIR 配在文件而非 shell 里时会解析到错误目录（同 scripts/device.js 已有的写法，
+// 之前这里是静态 import、写着"同一条加载路径"却没真的同源——当前零影响是因为 qr.js 只用
+// accessConfigured，它是调用期而非模块期读 env，但下一个从这里加调用点的人未必这么幸运）。
+const { accessConfigured } = await import('../app/src/auth/cf-access.js');
 
 // quiet zone 取标准值 4。逐档实测（2026-09-09，macOS Vision 解码）：2 检不出、3 和 4 可解——
 // 真机扫通的那一次也是 4。为省 4 列 2 行去赌单个解码器对 3 的宽容度不划算，扫不出来的成本

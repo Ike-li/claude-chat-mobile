@@ -1,13 +1,11 @@
 // tests/invariants/bind-host.test.mjs —— 监听地址与对外可达性判定单测
 // 守护：AUTH-01（启动前置令牌门）、CONFIG-01（绑定模式归一）
-// 测什么：resolveBindPlan 无 token / 空白 token 启动拒绝；各 BIND_MODE（loopback, lan, custom）解析；isLoopbackBindHost 判定；resolveBindHost / bindsPublicly 向后兼容
+// 测什么：resolveBindPlan 无 token / 空白 token 启动拒绝；各 BIND_MODE（loopback, lan, custom）解析；isLoopbackBindHost 判定
 // 不测什么 + 为什么：不测真端口绑定与网络监听——属于 server 集成测试
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveBindPlan,
-  resolveBindHost,
-  bindsPublicly,
   isLoopbackBindHost,
   isBlankToken,
   BIND_MODES,
@@ -122,15 +120,5 @@ test.describe('isLoopbackBindHost & isBlankToken 辅助判定', () => {
     assert.equal(isBlankToken('valid_token'), false);
     assert.equal(isBlankToken(null), false);
     assert.equal(isBlankToken(undefined), false);
-  });
-
-  test('向后兼容函数 resolveBindHost & bindsPublicly', () => {
-    assert.equal(bindsPublicly('token'), true);
-    assert.equal(bindsPublicly(''), false);
-    assert.equal(bindsPublicly(null), false);
-
-    assert.equal(resolveBindHost('token'), '0.0.0.0');
-    assert.equal(resolveBindHost(''), '127.0.0.1');
-    assert.equal(resolveBindHost(null), '127.0.0.1');
   });
 });

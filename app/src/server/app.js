@@ -134,8 +134,12 @@ authStrategy.init();
 // 三层向上：本文件在 app/src/server/，仓库根在 app/ 之外——data/、scripts/、ccm.config.json
 // 都住在仓库根，不随运行时代码进 app/。少一层会让它们全部解析到 app/ 下（且无语法错误）。
 const HERE = join(import.meta.dirname, '..', '..', '..'); // 项目根；从任何 cwd 启动都一致
-const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
-const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
+// 测试隔离覆盖（同 CCM_TRUSTED_DEVICES_FILE / CCM_AUDIT_FILE 等既有惯例）：生产上这两个路径
+// 必须锚定仓库根（这正是"面板读写目标与启动时读的必须同源"这条不变量的落点，不能靠 cwd 或
+// CCM_DATA_DIR 重定向——那样会削弱它），但集成测试若要真实验证 env:set 的写入路径，此前没有
+// 任何隔离口子，一旦发送非空 changes 就会实打实地改到仓库根那份真实 ccm.config.json/.env。
+const ENV_FILE_PATH = process.env.CCM_ENV_FILE_PATH || join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
+const CONFIG_FILE_PATH = process.env.CCM_CONFIG_FILE_PATH || join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
 
 // 面板读写的目标必须与 src/ops/config.js 启动时**读的那一份**是同一个文件。
 // 分流写错的后果不是报错而是假成功：用户改完看到「已写入」，重启后毫无变化 ——
@@ -2344,7 +2348,8 @@ registerSocketConnection(io, socket => {
   // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
   mirrorEngine.requestRebaseline();
 
-  if (socket.deviceApproved === false) {
+  // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
+  if (socket.deviceApproved !== true) {
     // 未经授权的设备：跳过任何敏感信息重放，只推送 pending 状态
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2729,6 +2734,14 @@ registerSocketConnection(io, socket => {
   on(socket, 'user:denyDevice', payload => {
     const deviceId = payload?.deviceId;
     if (typeof deviceId !== 'string' || !deviceId) return;
+    // 同 user:approveDevice 的纵深防御：只对「确在待审批列表里」的 deviceId 生效。denyDevice()
+    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端每次握手都带着自己完整
+    // 的 deviceToken——没有这道守卫，它能拿这个事件传自己的 deviceId 自吊销，绕开
+    // user:revokeTrustedDevice 专门加的 self 守卫（decideRevokeByShortId 的 requesterToken 检查）。
+    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
+      console.warn(`[devices] 忽略远程拒绝：${deviceId} 不在待审批列表`);
+      return;
+    }
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
     const revoked = denyDevice(deviceId);
     disconnectDeviceSockets(deviceId); // 断连照做：即便落盘失败，也先切断该设备当前连接（纵深防御）
@@ -4003,6 +4016,7 @@ registerSocketConnection(io, socket => {
       fileExists: existsSync,
       isExecutable: p => canAccessPath(p, fsConstants.X_OK),
       probePort: () => portBusy,
+      usingConfigJson: usingConfigJson(),
     });
     if (!verdict.ok) return ack({ ok: false, results: verdict.results });
 

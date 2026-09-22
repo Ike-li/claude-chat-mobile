@@ -231,9 +231,16 @@ export function resolveConfigValues({ fileValues = {}, shellEnv = {}, source = '
 // **坏 JSON 必须 fail-loud。** 回落到空配置会让 server 以「未设 AUTH_TOKEN」启动，
 // 而 app.js:3152 会据此把监听地址从 0.0.0.0 悄悄降级成 127.0.0.1 —— 手机全部连不上，
 // 却没有任何错误信息。这正是「配置层出错要吵，不要静默降级」的典型。
-export function loadConfigSources({ dir, configName = CONFIG_FILE_NAME, envName = '.env' } = {}) {
-  const configPath = join(dir, configName);
-  const envPath = join(dir, envName);
+// configPath/envPath：整条路径的显式覆盖，优先于 dir+name 拼接。存在的理由只有一个——
+// app/src/server/app.js 的 CONFIG_FILE_PATH/ENV_FILE_PATH（面板 env:get/env:set 的读写目标）
+// 认 CCM_CONFIG_FILE_PATH/CCM_ENV_FILE_PATH 两个覆盖，启动这一侧必须认同一份，否则进程启动
+// 读的是 A、面板读写的是 B，正是 CLAUDE.md「读写必须同源，写错源＝假成功」点名的那条。
+export function loadConfigSources({
+  dir, configName = CONFIG_FILE_NAME, envName = '.env',
+  configPath: configPathOverride, envPath: envPathOverride,
+} = {}) {
+  const configPath = configPathOverride || join(dir, configName);
+  const envPath = envPathOverride || join(dir, envName);
   const warnings = [];
 
   if (existsSync(configPath)) {

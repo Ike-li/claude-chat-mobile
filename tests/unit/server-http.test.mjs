@@ -575,6 +575,28 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     assert.equal(out.headers.get('Cache-Control'), 'no-cache');
   });
 
+  // 查表用的 key 与请求路径必须同一套大小写规则：请求路径 .toLowerCase() 是为了
+  // CodeQL js/case-sensitive-middleware-path，建表那侧此前没做同样的归一——只改请求侧是半边，
+  // 混大小写文件名会查表 miss → 落到 static 原样发出（相对 import 不戳 ?v=）且零提示。
+  test('混大小写文件名仍能命中（建表 key 与请求路径同一套大小写归一）', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'ccm-http-shell-'));
+    roots.push(root2);
+    mkdirSync(join(root2, 'app/public/js/app'), { recursive: true });
+    writeFileSync(join(root2, 'app/public/index.html'), '<body><script src="/js/app.js"></script></body>');
+    writeFileSync(join(root2, 'app/public/js/app.js'), "import './app/CamelCase.js';\n");
+    writeFileSync(join(root2, 'app/public/js/app/CamelCase.js'), "export const BUILD = 'mixed-case';\n");
+
+    const routes = new Map();
+    const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h), disable: () => {} };
+    configureHttpShell({ app, projectRoot: root2, strategy: strategyStub(), hotReloadJs: false });
+    const handlers = routes.get(String(/^\/js\/.+\.js$/i));
+    const res = { status() { return this; }, setHeader() { return this; }, type() { return this; }, send(b) { this.body = b; return this; }, end() {} };
+    let nextCalled = false;
+    handlers[handlers.length - 1]({ path: '/js/app/CamelCase.js' }, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, false, '不该落到 static——查表应该命中');
+    assert.match(res.body, /mixed-case/);
+  });
+
   test('路径穿越照旧 400（显式防线不因查表而失效）', () => {
     const out = mount().run('/js/../../etc/passwd.js');
     assert.equal(out.status, 400);

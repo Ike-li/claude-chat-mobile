@@ -38,9 +38,12 @@ const CORPUS_DIR = 'tests';
 const GUARD_PREFIX = '// 守护：';
 // 只在文件头找「守护：」行。正文里出现同样的字样是叙述，不是声明。
 const HEAD_LINES = 12;
-const ID_RE = /\b([A-Z]+-\d+)\b/g;
+// [A-Z]+(?:-[A-Z]+)* 吃掉像 SRV-NEW-004 这类【多段】复合编号的全部大写段——旧写法
+// [A-Z]+-\d+ 不含连字符，对 "SRV-NEW-004" 只会从 "NEW" 处第一次同时满足 \b 与 [A-Z]+-\d+，
+// 匹配出被截断的 "NEW-004"，报错时给的 id 是错的、对着登记表怎么查都查不到。
+const ID_RE = /\b([A-Z]+(?:-[A-Z]+)*-\d+)\b/g;
 // 登记表首列：`| \`AUTH-01\` | …`
-const REGISTRY_ROW_RE = /^\|\s*`([A-Z]+-\d+)`/gm;
+const REGISTRY_ROW_RE = /^\|\s*`([A-Z]+(?:-[A-Z]+)*-\d+)`/gm;
 
 function listFiles(rootDir, dir, filter) {
   const out = [];

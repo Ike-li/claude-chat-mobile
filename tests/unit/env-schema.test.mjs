@@ -402,8 +402,19 @@ test.describe('校验期与序列化期对齐', () => {
     assert.match(r.results[0].message, /单引号/);
   });
 
-  test('含换行同样在校验期拒', () => {
+  // 单引号/反斜杠两条是 dotenv 文件语法的专属限制——config-file.js 自己的注释说
+  // "换成 JSON 之后这一整类问题不是被修好，是不再存在"。已迁移到 ccm.config.json 的部署上，
+  // 这道检查此前对源无感知，会把 /Users/O'Brien/... 这种真实合法路径无关地拒绝，
+  // 报错文案还在讲一台机器上根本不存在的 .env。
+  test('JSON 部署（usingConfigJson:true）下单引号与反斜杠结尾均放行', () => {
+    assert.equal(validateEnvChanges({ NTFY_TOKEN: "it's mine" }, deps({ usingConfigJson: true })).ok, true);
+    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: '/Users/O\'Brien/wd.json' }, deps({ usingConfigJson: true })).ok, true);
+  });
+
+  test('含换行同样在校验期拒（不受部署方式影响——不是 dotenv 专属问题）', () => {
     assert.equal(validateEnvChanges({ NTFY_TOPIC: 'a\nb' }, deps()).ok, false);
+    assert.equal(validateEnvChanges({ NTFY_TOPIC: 'a\nb' }, deps({ usingConfigJson: true })).ok, false,
+      '控制字符检查两种部署下都该生效');
   });
 
   // 用 NTFY_TOKEN：它没有 together 成对约束，不会把两条规则搅在一起。

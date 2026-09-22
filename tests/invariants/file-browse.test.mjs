@@ -236,6 +236,15 @@ test.describe('SCOPE-01 & FILE-02: readFile 内容分片与特殊文件闸', () 
     const res = readFile(cwd, 'pipe.fifo', scopeDirs);
     assert.equal(res, null);
   });
+
+  // 范围【内】的合法 symlink（如 dotfile 仓、node_modules/.bin）与「越界逃逸」是两回事：
+  // isOpenableTarget 放行 symlink，O_NOFOLLOW 随后必 ELOOP——之前这条也回 null，与真正越界
+  // 在调用方眼里完全同形，导致报错文案说「不在授权范围内」且被记成 scope_violation 审计噪音。
+  test('范围内的合法 symlink：readFile 返回可判别的 {blockedSymlink:true}，不是裸 null（与越界区分开）', { skip: process.platform === 'win32' }, () => {
+    symlinkSync(join(cwd, 'short.txt'), join(cwd, 'link-inside'));
+    const res = readFile(cwd, 'link-inside', scopeDirs);
+    assert.deepEqual(res, { blockedSymlink: true });
+  });
 });
 
 test.describe('FILE-01 & FILE-02: writeFileInScope 编辑器写回与并发保护', () => {
