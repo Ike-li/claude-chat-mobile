@@ -363,7 +363,16 @@ export function formatServiceNotices({ service, now } = {}) {
   if (lockout && typeof lockout.at === 'number') {
     const src = describeRateLimitSource(lockout.source);
     // unknown（旧 server ack 无 source）保留原保守措辞：说不清来源时，宁可提醒过度也不误导为安全。
-    const tail = src.scope === 'local' ? `${t('——来自本机')} ${src.addr}${t('，多半是你自己的旧 token')}`
+    //
+    // 【local 分支为什么再按 trustedProxyConfigured 分叉】反代/隧道部署下，应用层看到的直连地址
+    // 恒是反代自己（同机时就是 127.0.0.1）——TRUSTED_PROXY 已声明时代码会尝试改读 XFF，但反代没
+    // 转发或 XFF 不合法时仍会退回直连地址，这时 scope 判成 local，背后却可能是任何经反代转发的
+    // 公网来源，"多半是你自己的旧 token"这句断言此时不成立。TRUSTED_PROXY 未配置（多数 n=1 用户
+    // 没有反代）仍是原措辞——那是"确实没有反代、直连就是本机"的默认假设，不该被这次修复改变。
+    const tail = src.scope === 'local'
+      ? (service?.trustedProxyConfigured
+        ? `${t('——反代/隧道后的')} ${src.addr}${t('，无法确认是否为本机')}`
+        : `${t('——来自本机')} ${src.addr}${t('，多半是你自己的旧 token')}`)
       : src.scope === 'lan' ? `${t('——来自局域网')} ${src.addr}`
         : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
           : t('——可能有人在暴力尝试你的入口');

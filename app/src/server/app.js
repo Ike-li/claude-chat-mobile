@@ -1072,6 +1072,10 @@ function computeServiceHealth() {
   // 说出「为什么/是谁」。都可能为 null——旧进程重启后 label 清零而计数时间戳仍在窗内，前端按缺席渲染。
   return {
     startedAt: SERVICE_STARTED_AT,
+    // 面板判「限速锁定来源是本机」时要不要断言"多半是自己的旧 token"就靠这个字段——反代/隧道
+    // 部署下直连地址恒是反代自己，TRUSTED_PROXY 已声明却仍判成 local 说明来源已不可靠
+    // （见 service-diag.js 的 formatServiceNotices）。
+    trustedProxyConfigured: TRUSTED_PROXY === 'loopback',
     deliveryFailure: failure
       ? {
         ...failure,
@@ -4061,6 +4065,9 @@ registerSocketConnection(io, socket => {
       deliveryFailure: health.deliveryFailure,
       rateLimitLockout: health.rateLimitLockout,
       clientError: health.clientError,
+      // 面板自己的「异常告警」小节走这条 ack（不是 instances 广播），得同样带上——否则顶栏/抽屉
+      // 与「服务状态」面板对同一次限速锁定会显示不一致的措辞（见 app.js renderServiceStatus）。
+      trustedProxyConfigured: health.trustedProxyConfigured,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。

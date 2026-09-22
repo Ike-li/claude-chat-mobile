@@ -1842,7 +1842,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section(t('异常告警'));
     const notices = formatServiceNotices({
-      service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
+      service: {
+        deliveryFailure: res.deliveryFailure,
+        rateLimitLockout: res.rateLimitLockout,
+        clientError: res.clientError,
+        trustedProxyConfigured: res.trustedProxyConfigured,
+      },
       now,
     });
     if (!notices.length) {

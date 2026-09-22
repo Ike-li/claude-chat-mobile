@@ -279,6 +279,36 @@ test.describe('限速告警文案按来源分叉（不再无条件说「有人�
   });
 });
 
+// 起因：反代/隧道部署下，应用层收到的直连地址恒是反代自己（同机时即 127.0.0.1）——
+// TRUSTED_PROXY 已声明时代码会尝试改读 XFF，但反代没转发/XFF 不合法时仍会退回直连地址，
+// 这时 scope 判成 local，而背后完全可能是任何经反代转发的公网来源。"多半是你自己的旧 token"
+// 这句断言只在"确实没有反代、直连就是本机"时成立——TRUSTED_PROXY 未配置就是这个默认假设，
+// 不该被这次修复改变（多数 n=1 用户没有反代）；只有用户已声明反代拓扑时才需要收回这句断言。
+test.describe('限速告警文案：反代/隧道声明后，本机来源不再断言"多半是你自己的旧 token"', () => {
+  const now = 100 * 60_000;
+  const lineWithProxy = (source, trustedProxyConfigured) => formatServiceNotices({
+    service: { rateLimitLockout: { at: now - 9 * 60_000, count: 1, source }, trustedProxyConfigured }, now,
+  })[0];
+
+  test('TRUSTED_PROXY 未配置（默认/旧 server 无此字段）→ 措辞不变，仍断言是自己的旧 token', () => {
+    assert.equal(
+      lineWithProxy('ip:127.0.0.1', undefined),
+      '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——来自本机 127.0.0.1，多半是你自己的旧 token',
+    );
+  });
+  test('TRUSTED_PROXY 已配置（反代/隧道拓扑）→ 收回"多半是自己"的断言，改用不确定措辞', () => {
+    const text = lineWithProxy('ip:127.0.0.1', true);
+    assert.doesNotMatch(text, /多半是你自己的旧 token/);
+    assert.match(text, /127\.0\.0\.1/);
+  });
+  test('反代拓扑下，局域网/公网 scope 不受影响（XFF 已经给出更精确的来源）', () => {
+    assert.equal(
+      lineWithProxy('ip:203.0.113.7', true),
+      '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——公网 203.0.113.7 在暴力尝试你的入口',
+    );
+  });
+});
+
 // 「终端会话推送」段：唯一暴露 CLI hooks 桥安装态的界面（手机上没法跑 npm，这是唯一入口）。
 // 旧 server 不带 hooksBridge 字段 → 整段优雅缺席，不显示误导性的"未安装"。
 test('formatHooksBridgeRow：四态文案 + 按钮动作，旧 server 缺字段则不渲染', () => {
