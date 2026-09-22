@@ -359,4 +359,80 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     assert.equal(recordsFor('device_denied', TOK).length, 0);
     assert.equal(recordsFor('device_revoked', TOK).length, 0);
   });
+
+  // ── 归因：差集要减掉本进程自己造成的那部分 ────────────────────────────────
+  // 监听器只为【进程外】的 CLI 改动记审计。本进程自己的写入有两类，都不该再被它记一遍：
+  //  · Web 侧的 approve/deny/revoke —— app.js 在动作发生处已各记一条 via:'web'，监听器再记
+  //    一条 via:'cli' 是同一件事的第二条记录，归因还是错的（目标设备离线时尤其明显）。
+  //  · addPendingDevice 的容量淘汰 —— 超过 MAX_PENDING_DEVICES 按插入序丢最旧，那是容量策略，
+  //    不是任何人的拒绝决定。伪造出来的 device_denied 会把真实安全事件挤出环形有上限的审计表。
+  // 两条用例都刻意让「自身写入」与「CLI 改动」落在同一个 tick 里：排除自身不能顺手把真实
+  // 操作一起吞掉——那个方向的错误正好与本修复相反，且同样无声。
+  function selfWriteStub() {
+    const empty = () => ({ trustedAdded: new Set(), trustedRemoved: new Set(), pendingRemoved: new Set() });
+    let queued = empty();
+    return {
+      queue: (patch) => { queued = { ...empty(), ...patch }; },
+      take: () => { const out = queued; queued = empty(); return out; },
+    };
+  }
+
+  test('本进程自己移出待审的条目不记 device_denied，同一 tick 里 CLI 的拒绝仍照记', async (t) => {
+    const f = makeFixture(t);
+    const EVICTED = `gate-self-evicted-${Date.now()}`;   // 容量淘汰或 Web 侧 deny
+    const CLI_DENIED = `gate-cli-denied-${Date.now()}`;  // 真·进程外拒绝
+    f.writeTrusted([]);
+    f.writePending([
+      { deviceToken: EVICTED, ip: '10.0.0.4', userAgent: 'ua', ts: Date.now() },
+      { deviceToken: CLI_DENIED, ip: '10.0.0.5', userAgent: 'ua', ts: Date.now() },
+    ]);
+    const self = selfWriteStub();
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } },
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+      takeSelfWrites: self.take,
+    });
+    await settleWatcher();
+
+    self.queue({ pendingRemoved: new Set([EVICTED]) });
+    f.writePending([]);
+
+    const ok = await waitUntil(() => recordsFor('device_denied', CLI_DENIED).length > 0);
+    assert.ok(ok, '排除自身写入不得把同一 tick 里真实的 CLI 拒绝一起吞掉');
+    assert.equal(recordsFor('device_denied', EVICTED).length, 0,
+      '本进程自己移出的条目（容量淘汰 / Web 侧已记过）不得再伪造一条 device_denied');
+  });
+
+  test('本进程自己造成的 trusted 增删不记 CLI 审计，同一 tick 里 CLI 的增删仍照记', async (t) => {
+    const f = makeFixture(t);
+    const stamp = Date.now();
+    const WEB_APPROVED = `gate-web-approved-${stamp}`, CLI_APPROVED = `gate-cli-approved-${stamp}`;
+    const WEB_REVOKED = `gate-web-revoked-${stamp}`, CLI_REVOKED = `gate-cli-revoked-${stamp}`;
+    f.writeTrusted([WEB_REVOKED, CLI_REVOKED]);
+    f.writePending([]);
+    const self = selfWriteStub();
+    createDeviceGate({
+      io: { sockets: { sockets: new Map() } },
+      dataDir: f.tempDir,
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+      takeSelfWrites: self.take,
+    });
+    await settleWatcher();
+
+    self.queue({ trustedAdded: new Set([WEB_APPROVED]), trustedRemoved: new Set([WEB_REVOKED]) });
+    f.writeTrusted([WEB_APPROVED, CLI_APPROVED]);
+
+    const ok = await waitUntil(() => recordsFor('device_approved', CLI_APPROVED).length > 0
+      && recordsFor('device_revoked', CLI_REVOKED).length > 0);
+    assert.ok(ok, 'CLI 侧的批准与吊销都必须照常记到');
+    assert.equal(recordsFor('device_approved', WEB_APPROVED).length, 0,
+      'Web 侧批准已由 app.js 记过 via:web，监听器不得再记一条 via:cli');
+    assert.equal(recordsFor('device_revoked', WEB_REVOKED).length, 0,
+      'Web 侧吊销同理');
+  });
 });

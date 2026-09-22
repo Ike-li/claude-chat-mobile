@@ -6,7 +6,7 @@
 import { statSync, existsSync, mkdirSync, watch } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles } from './devices.js';
+import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles, takeSelfMutations } from './devices.js';
 import * as audit from '../ops/audit.js';
 
 export function createDeviceGate({
@@ -16,6 +16,9 @@ export function createDeviceGate({
   listPendingDevices = getPendingDevices,
   listTrustedDevices = getTrustedDeviceProfiles,
   isTrusted = isDeviceTrusted,
+  // 取走本进程自己造成的集合变化（devices.js 在两个写盘 choke point 上登记）。监听器只为
+  // 进程外的 CLI 改动记审计，本进程的写入要排除掉——理由见 devices.js 里 selfMutations 的注释。
+  takeSelfWrites = takeSelfMutations,
   // CF Access 已启用且 DEVICE_APPROVAL_SCOPE !== 'all' —— 此时经隧道进来的连接【完全不查】
   // 这张信任表，吊销对它们既不掉线也不拦截。界面必须说出这件事：一个点得到、却对用户
   // 实际访问路径无效的控件，比没有这个控件更坏（2026-09-10 实测踩到）。
@@ -152,22 +155,33 @@ export function createDeviceGate({
         lastPendingMtime = pm;
         clearTimeout(timer);
         timer = setTimeout(() => {
-          // ── 审计：纯集合差集，与是否在线无关 ──
+          // ── 审计：集合差集，减去本进程自己造成的那部分 ──
+          // 读集合与取自身变化必须挨着、同一段同步代码（Node 单线程，中间没有 await 就没有
+          // 交错窗口）。分开会出现「差异已被取走、对应变化还没进快照」的丢审计缝隙。
           const nowTrustedSet = new Set(listTrustedDevices().map(d => d.deviceId));
           const nowPendingSet = new Set(listPendingDevices().map(d => d.deviceToken));
+          const selfWrites = takeSelfWrites();
           for (const token of nowTrustedSet) {
+            if (selfWrites.trustedAdded.has(token)) continue; // Web 侧批准：app.js 已记 via:'web'
             if (!lastTrustedSet.has(token)) {
               console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 新增信任（CLI）`);
               audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_approved', target: token, outcome: 'allowed', meta: { via: 'cli' } });
             }
           }
           for (const token of lastTrustedSet) {
+            if (selfWrites.trustedRemoved.has(token)) continue; // Web 侧吊销/拒绝：app.js 已记 via:'web'
             if (!nowTrustedSet.has(token)) {
               console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 信任已被吊销（CLI）`);
               audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
             }
           }
           for (const token of lastPendingSet) {
+            // 本进程自己移出待审的两类，都不是「有人拒绝了它」，一律跳过：
+            //  · Web 侧的 denyDevice —— app.js 已记过一条 via:'web'；
+            //  · addPendingDevice 的容量淘汰（超过 MAX_PENDING_DEVICES 丢最旧）—— 那是容量策略，
+            //    不记成拒绝。不跳过的话，第 51 台设备之后每来一台就伪造一条 device_denied，
+            //    而审计是环形有上限的，伪造记录会把真实安全事件挤出去。
+            if (selfWrites.pendingRemoved.has(token)) continue;
             // 从待审批移除、且没有变成受信任 → 是被 deny 的；变成受信任的那种情况已经在上面
             // 的 trusted 差集里记过 device_approved 了，这里不重复记。
             if (!nowPendingSet.has(token) && !nowTrustedSet.has(token)) {
