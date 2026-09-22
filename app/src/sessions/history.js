@@ -205,6 +205,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
       // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
       // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
+      // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
+      // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
+      // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
+      // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
+      // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
       if (liveUuids && entry.uuid && !entry.isSidechain
           && (entry.type === 'user' || entry.type === 'assistant')) {
         if (liveUuids.has(entry.uuid)) chainStarted = true;
