@@ -97,9 +97,12 @@ test.describe('desktop/launchd/*.plist.template ⇔ UNITS 表', () => {
 // 【为什么不用 plutil】上面那组「合法 plist」检查已经跳过了非 macOS——这条要在 CI（Linux 容器）
 // 上也生效，所以直接在渲染出的 XML 文本里用正则取 <key>/<string>/<array> 三种节点、解 XML 实体，
 // 不依赖任何系统工具。只覆盖本仓模板实际用到的这几种节点形状，不是通用 plist 解析器。
+// 【必须单遍替换】链式 .replace() 会二次解码：先把 &amp; 换成 &，下一步的 /&lt;/ 就能命中
+// 刚产出的那个 &，于是字面量文本 `&lt;`（正确转义形态是 &amp;lt;）被解成 `<`。
+// CodeQL 的 js/double-escaping 把这条判成高危，判得对——一遍扫完、每个实体只经手一次即可根治。
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 function decodeXmlEntities(s) {
-  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  return s.replace(/&(amp|lt|gt|quot|apos);/g, (_, name) => XML_ENTITIES[name]);
 }
 function parsePlistXmlDict(xml) {
   const obj = {};
@@ -116,6 +119,15 @@ function parsePlistXmlDict(xml) {
   }
   return obj;
 }
+
+// 钉住「单遍」本身，而不只是钉住当前模板恰好没有这种内容：链式 replace 写法下
+// `&amp;lt;`（字面量文本 `&lt;` 的正确转义形态）会被解成 `<`，多解了一层。
+test('decodeXmlEntities 单遍解码：&amp;lt; 还原成字面量 &lt;，不得二次解成 <', () => {
+  assert.equal(decodeXmlEntities('&amp;lt;'), '&lt;', '二次解码会给出 "<"');
+  assert.equal(decodeXmlEntities('a &amp;amp; b'), 'a &amp; b');
+  assert.equal(decodeXmlEntities('&lt;key&gt;'), '<key>', '正常单层实体仍要正确还原');
+  assert.equal(decodeXmlEntities('&quot;x&quot; &apos;y&apos;'), '"x" \'y\'');
+});
 
 test.describe('模板渲染产物与 service-units.js 的解析语义逐字段一致（不依赖 plutil，全平台生效）', () => {
   for (const unit of SERVICE_UNIT_NAMES) {
