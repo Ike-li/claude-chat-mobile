@@ -112,6 +112,7 @@ import {
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
+  outboxNoticePlacement,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
@@ -1313,12 +1314,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 撞上在途轮（排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
   // 同一 clientMessageId 可直接复用——服务端在 busy 拒绝路径上没有 commit 去重 ID。
-  function markOutboxBlocked(item, message) {
-    // 气泡可能已经不在活 DOM 里了（会话切换会把它搬进缓存）——这不代表提示该消失，只代表挂靠点
-    // 没了。indicator 存在就复用（原样式），不存在就新开一条独立提示条，否则这条「未发送」的
-    // 唯一出口就是气泡本身，气泡一消失，用户永远不知道这条消息卡住了。
-    const indicator = item.bubbleEl?.querySelector('.pending-indicator');
-    const host = indicator || addBar('', 'text-warning');
+  // 挑落点：判据与理由全在 logic/outbox-send.js 的 outboxNoticePlacement 注释里。
+  // 关键一条——querySelector 能从【已脱离 DOM】的缓存子树里找到 indicator，所以「找得到」
+  // 不等于「看得见」；而 addBar 写的是当前消息面，归属对不上就是把 A 会话的失败打到 B 会话上。
+  function outboxNoticeHost(item, targetsViewing, barClass) {
+    const indicator = item.bubbleEl?.querySelector('.pending-indicator') || null;
+    const where = outboxNoticePlacement({
+      indicatorExists: Boolean(indicator),
+      indicatorConnected: Boolean(indicator?.isConnected),
+      targetsViewing,
+    });
+    if (where === 'indicator' || where === 'stale') return indicator;
+    if (where === 'bar') return addBar('', barClass);
+    return null;
+  }
+
+  function markOutboxBlocked(item, message, targetsViewing = false) {
+    const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
+    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
     host.classList.remove('animate-pulse');
     host.textContent = '';
     const label = el(`<span></span>`);
@@ -1383,13 +1396,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
           const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
-          // 同 markOutboxBlocked：气泡可能已不在活 DOM 里，缺了挂靠点不该让这条永久失败静默消失。
-          if (indicator) indicator.textContent = permanentMsg;
-          else addBar(permanentMsg, 'text-danger');
+          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+          if (permanentHost) permanentHost.textContent = permanentMsg;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(item, decision.message);
+          markOutboxBlocked(item, decision.message, targetsViewing);
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -4861,6 +4874,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
         acked = true;
         if (!res?.ok) blocked(res?.error || t('深链目标会话已不可用'));
+        // ack 迟于 4s 兜底时落地页已经弹出来了，但这次切换其实成功了——撤掉它，
+        // 否则用户人在目标会话里、屏幕上却盖着一张「切换无响应」。
+        else dismissBlockedSurfaceIfTarget(r.sessionId, r.cwd);
       });
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     } else {
@@ -7692,6 +7708,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
   }
+  // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
+  // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
+  // 只撤属于本次请求的那一张：这 4 秒里用户完全可能已经点开别的会话并撞上真实失败，
+  // 无条件 hide 会把那条真实的错误提示一起抹掉。
+  function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
+    const target = blockedSurfaceTarget;
+    if (target && target.sessionId === sessionId && target.cwd === cwd) hideSessionBlockedSurface();
+  }
   function retryBlockedSession() {
     const target = blockedSurfaceTarget;
     if (!target?.sessionId) return;
@@ -8250,6 +8274,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       wrap.addEventListener('toggle', () => {
         if (!wrap.open || c.loaded) return;
         c.loaded = true;
+        // 上一次请求超时留下的占位行不算「已有内容」——它写的正是「请重试」，留着会被下面那道
+        // childElementCount 守卫挡住，于是 c.loaded=false 放开的重试永远发不出去，提示自相矛盾。
+        for (const n of [...c.body.children]) if (n.dataset?.outboxRetryable === '1') n.remove();
         if (c.body.childElementCount > 0) return; // 已有内容（老会话 sidechain 落在主 transcript 里）
         if (!flowSid) return;
         const hint = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-hint"></div>');
@@ -8270,6 +8297,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             if (err) c.loaded = false; // 超时不是终态：折叠再展开时允许重新拉取
             const empty = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-empty"></div>');
             empty.textContent = err ? t('请求超时，请重试') : t('没有可显示的子代理执行记录');
+            // 标记可重试：下次展开时先摘掉它，否则 childElementCount 守卫会把重试挡回去。
+            if (err) empty.dataset.outboxRetryable = '1';
             c.body.appendChild(empty);
             return;
           }
