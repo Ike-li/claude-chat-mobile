@@ -14,7 +14,7 @@
 // 守卫排在被测模块后面的话，那些模块的顶层代码（落盘路径常量、watcher、防抖定时器）
 // 已经跑完了才轮到守卫退出。位置错 = 保护没生效，而它看起来和加对了一模一样。
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 const ROOT = new URL('../..', import.meta.url).pathname;
 
@@ -92,20 +92,32 @@ export function checkSource(source) {
   return null;
 }
 
+/**
+ * 管辖目录下全部 .test.mjs 的相对路径（相对 baseDir 本身），递归子目录。
+ * 三个管辖目录目前都是纯平层，非递归扫描此前从未在真实仓库上露出问题——但那只是巧合，
+ * 不是这道闸的保证：测试文件一旦被挪进更深的子目录，会被静默漏扫，不报错也不提示。
+ * @returns {string[]} 相对路径，用 '/' 分隔（跨平台一致，不依赖 path.sep）
+ */
+export function listTestFiles(baseDir) {
+  return readdirSync(baseDir, { recursive: true })
+    .filter(f => f.endsWith('.test.mjs'))
+    .map(f => f.split(sep).join('/'))
+    .sort();
+}
+
 function main() {
   const violations = [];
   let scanned = 0;
 
   for (const [dir, why] of GUARDED_DIRS) {
-    let entries;
+    let tests;
     try {
-      entries = readdirSync(join(ROOT, dir));
+      tests = listTestFiles(join(ROOT, dir));
     } catch {
       // 目录读不到就是判据面塌了，不是「全部合规」——这一条必须红。
       violations.push({ file: dir, why: `管辖目录读不到：${dir}（目录改名或删除时，本闸的扫描面会静默变空）` });
       continue;
     }
-    const tests = entries.filter(f => f.endsWith('.test.mjs'));
     if (tests.length === 0) {
       violations.push({ file: dir, why: `管辖目录里一个 .test.mjs 都没有：${dir}` });
       continue;

@@ -116,6 +116,30 @@ test('n=1 门禁：// n1: 开头但格式不合 → 显式报错，不静默忽�
   assert.deepEqual(result.marked, ['N1-OK']);   // 合格的那个仍正常登记
 });
 
+// 起因：MARKER_LINE_RE 此前只认小写字面量 'n1:'，大写前缀会在识别"这是一条标记"这一步就
+// 直接 return，连 malformed 都进不去——对这道闸而言等价于"这里从来没写过标记"。已登记的 ID
+// 因为代码里找不到对应标记仍会被 n1_marker_missing 抓到；但未登记的假设点直接写成大写前缀，
+// 就会彻底隐身、两头绿。ID 本身仍强制大写（MARKER_BODY_RE 未变），这里只验证前缀大小写不敏感。
+test('n=1 门禁：标记前缀大小写不敏感 —— "// N1:"（大写）与 "// n1:"（小写）同样被识别', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-n1-case-insensitive-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'docs/hard-rules.md', [
+    '## 2. n=1 取舍', '', '| ID | 含义 |', '|----|------|', '',
+  ].join('\n'));
+  await writeFixture(root, 'app/src/server/app.js', [
+    '// N1: N1-UPPERCASE-PREFIX 大写前缀也该被认出来，而不是被当成"没写标记"',
+    'let a = null;',
+  ].join('\n'));
+
+  const result = checkN1Assumptions({ rootDir: root });
+
+  // 未登记（hard-rules.md 里没有这一行）：正确识别出标记，就该报 n1_marker_unregistered——
+  // 若前缀判据仍大小写敏感，这条标记会被直接忽略，problems 是空数组，两头绿。
+  assert.deepEqual(result.problems.map(p => p.code), ['n1_marker_unregistered']);
+  assert.deepEqual(result.marked, ['N1-UPPERCASE-PREFIX']);
+});
+
 test('n=1 门禁：当前仓库的登记簿与代码标记一致', () => {
   const result = checkN1Assumptions();
   assert.deepEqual(result.problems, []);
