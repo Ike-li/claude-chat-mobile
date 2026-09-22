@@ -17,6 +17,7 @@ import {
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
+  outboxNoticePlacement,
   SERVER_PRE_TURN_UPPER_BOUND_MS,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
@@ -713,6 +714,38 @@ test('shouldBusyAfterOfflineBatch: 首页无 viewing 实例 → 即便剩余项 
 // 却分居 app.js 与 logic/ 两个文件、各写各的 5000，于是同一个根因要被发现两次（第二次靠独立审查
 // 才挖出来）。把它们收进同一个模块并用断言钉住彼此关系——失配就在 test:unit 里当场炸，
 // 不必等真机上「运行条中途消失」。
+// 离线消息失败提示的落点。两条判据缺一条，放错的两种形态都无声：
+//  · 只看「indicator 取不取得到」：querySelector 能从已脱离 DOM 的缓存子树里找到它，
+//    于是提示写进一个看不见的节点，用户以为消息发出去了。
+//  · 只看「在不在活 DOM」、不在就 addBar：addBar 写的是当前消息面，A 会话的发送失败
+//    会打到 B 会话的界面上。
+test.describe('outboxNoticePlacement（离线失败提示挂哪儿）', () => {
+  test('indicator 在活 DOM → 直接复用，与归属无关', () => {
+    assert.equal(outboxNoticePlacement({ indicatorExists: true, indicatorConnected: true, targetsViewing: true }), 'indicator');
+    assert.equal(outboxNoticePlacement({ indicatorExists: true, indicatorConnected: true, targetsViewing: false }), 'indicator');
+  });
+
+  test('indicator 已脱离 DOM 但属于当前会话 → 新开提示条', () => {
+    assert.equal(outboxNoticePlacement({ indicatorExists: true, indicatorConnected: false, targetsViewing: true }), 'bar');
+  });
+
+  test('indicator 已脱离 DOM 且不属于当前会话 → 写回缓存里那个，切回去才看得到', () => {
+    assert.equal(outboxNoticePlacement({ indicatorExists: true, indicatorConnected: false, targetsViewing: false }), 'stale',
+      '这一档绝不能是 bar——那等于把 A 会话的发送失败打到 B 会话界面上');
+  });
+
+  test('根本没有 indicator：属于当前会话才给提示条，否则没有正确落点', () => {
+    assert.equal(outboxNoticePlacement({ indicatorExists: false, indicatorConnected: false, targetsViewing: true }), 'bar');
+    assert.equal(outboxNoticePlacement({ indicatorExists: false, indicatorConnected: false, targetsViewing: false }), 'none',
+      '宁可不提示，也不在别的会话里凭空多出一条红字');
+  });
+
+  test('缺省参数（什么都不知道）→ none，不猜', () => {
+    assert.equal(outboxNoticePlacement(), 'none');
+    assert.equal(outboxNoticePlacement({}), 'none');
+  });
+});
+
 test.describe('发送时序常量：序关系不变量', () => {
   test('UI 兜底必须早于传输判据（按钮先解锁，消息才谈得上「没送达」）', () => {
     assert.ok(SEND_ACK_FALLBACK_MS < SEND_ACK_TRANSPORT_MS);

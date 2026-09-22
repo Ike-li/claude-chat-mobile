@@ -24,7 +24,41 @@ const FORBIDDEN = [
   { pattern: /\btest\.describe\.(?:only|skip|fixme)\s*\(/, label: 'test.describe.only/skip/fixme(' },
   { pattern: /\bnetworkidle\b/, label: 'networkidle' },
   { pattern: /\bwaitForTimeout\s*\(/, label: 'waitForTimeout(' },
+  // 手写 new Promise(...setTimeout...) 等价于被禁的 waitForTimeout——同样是不稳定的固定等待，
+  // 只是绕过了字面禁令。排除 tests/e2e/mock：那里的 setTimeout 是模拟服务端时序延迟的工具函数
+  // （如 const delay = ms => new Promise(res => setTimeout(res, ms))），不是 spec 里摸鱼等待，
+  // 用途完全不同——mock server.js 与 scenarios/*.js 现有 12+ 处这类合法写法。
+  {
+    find: findPromiseSleeps,
+    label: 'new Promise(...setTimeout...)（手写睡眠，等价于被禁的 waitForTimeout）',
+    excludeDirs: ['tests/e2e/mock'],
+  },
 ];
+
+// 手写睡眠的查找。**不能像其余规则那样逐行正则**，两条都是普通格式化就能绕过的：
+//   · `new Promise((resolve) => setTimeout(resolve, 1000))` —— 形参加了括号，
+//     原来的 `[^)]*` 在 `(resolve)` 的右括号处就停了，整条不匹配；
+//   · `new Promise(r =>` 换行再 `setTimeout(r, 1000))` —— 逐行扫描下两半各自都不完整。
+// 所以整文件扫，行号由匹配位置反算（报告口径与其余规则一致）。
+//
+// 【判据锚在「setTimeout 的第一个实参就是 Promise 的 resolve 形参」】而不是「Promise 体里
+// 出现过 setTimeout」。后者会把「给一个真事件加超时兜底」一并误报：
+//   new Promise((resolve, reject) => { ws.on('open', resolve); setTimeout(() => reject(e), 5000); })
+// 那不是固定睡眠，而是在等真实信号——误报会让整道闸被嫌吵而绕开，等于没有闸。
+function findPromiseSleeps(text) {
+  const hits = [];
+  // 形参两种写法：裸标识符 `r =>` 与带括号 `(resolve)` / `(resolve, reject)`。
+  const head = /new\s+Promise\s*\(\s*(?:async\s+)?(?:(\w+)\s*=>|\(\s*(\w+)\s*[,)])/g;
+  let m;
+  while ((m = head.exec(text)) !== null) {
+    const param = m[1] || m[2];
+    if (!param) continue;
+    // 窗口有界：只看紧随其后的一小段，避免跨过整个文件把无关的 setTimeout 算进来。
+    const window = text.slice(m.index, m.index + 200);
+    if (new RegExp(`\\bsetTimeout\\s*\\(\\s*${param}\\s*[,)]`).test(window)) hits.push(m.index);
+  }
+  return hits;
+}
 
 function walk(dir, files = []) {
   for (const entry of readdirSync(dir)) {
@@ -47,12 +81,22 @@ for (const dir of TARGET_DIRS) {
   for (const file of walk(absDir)) {
     scanned.push(file);
     const rel = file.slice(rootDir.length + 1);
-    const lines = readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, i) => {
-      for (const { pattern, label } of FORBIDDEN) {
-        if (pattern.test(line)) violations.push(`${rel}:${i + 1}: 禁止模式 "${label}" —— ${line.trim()}`);
+    const text = readFileSync(file, 'utf8');
+    const lines = text.split('\n');
+    for (const { pattern, label, excludeDirs, find } of FORBIDDEN) {
+      if (excludeDirs?.some(dir => rel.startsWith(`${dir}/`))) continue;
+      if (find) {
+        // 整文件类规则：行号按匹配位置之前的换行数反算，报告口径与逐行规则一致。
+        for (const index of find(text)) {
+          const lineNo = text.slice(0, index).split('\n').length;
+          violations.push(`${rel}:${lineNo}: 禁止模式 "${label}" —— ${(lines[lineNo - 1] ?? '').trim()}`);
+        }
+        continue;
       }
-    });
+      lines.forEach((line, i) => {
+        if (pattern.test(line)) violations.push(`${rel}:${i + 1}: 禁止模式 "${label}" —— ${line.trim()}`);
+      });
+    }
   }
 }
 

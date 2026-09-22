@@ -13,6 +13,45 @@
 
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
 
+// 裸域名格式（不带 scheme / 端口 / 路径）。cf-access.js 的 isPublicHost 只比较
+// `host.split(':')[0]`——若这里存的是带 https:// 前缀或路径的完整 URL，比较永远不等，
+// Access 层静默永远不触发，但三项 env 非空的判据仍会让「已启用」的横幅照常打出。
+// 校验放在 shared（叶子层，供 auth/cf-access.js 与 ops/env-schema.js 两侧共用），而不是各判一次。
+const BARE_HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export function isBareHostname(value) {
+  return BARE_HOSTNAME_RE.test(normalizeHost(value));
+}
+
+/**
+ * 这台 server 前面有没有中间节点（反向代理 / 隧道）。
+ *
+ * 用途只有一个：判「限速锁定来自 127.0.0.1」时，能不能断言"多半是你自己的旧 token"。
+ * 有中间节点时应用层看到的直连地址恒是它自己，背后可能是任何经它转发的公网来源，
+ * 那句断言就成了在真有人暴力尝试时说反话（hard-rules：本机来源绝不说成「有人在暴力尝试」，
+ * 反过来也一样——不能把公网暴力尝试说成「是你自己」）。
+ *
+ * 【绝不能只看 trustedProxy】那个开关的语义是「允许采信反代追加的 XFF 末跳」，本仓刻意不让它
+ * 随 ACCESS_PROFILE=reverse-proxy 自动打开（XFF 是客户端可写的，采信必须用户显式声明）。
+ * 于是最常见的反代/托管隧道部署恰恰是 trustedProxy 未设、peer 恒 127.0.0.1 的那一档——
+ * 只看它就会把这条判断精确地漏在最需要它的配置上。
+ *
+ * 判据是「声明的拓扑里有没有中间节点」：
+ *   · trustedProxy === 'loopback' —— 用户明说了前面有可信反代；
+ *   · accessProfile 是 reverse-proxy / cloudflare —— 拓扑本身含中间节点。托管隧道
+ *     （ngrok / Quick Tunnel / Tailscale Funnel）并入 reverse-proxy，env-schema.js 明写它们的
+ *     连带变化含「peer 是 loopback 导致限速桶全塌」；
+ *   · 未声明 profile 但 CF_ACCESS_* 齐全 —— 按 schema 的「未声明时按 CF_ACCESS_* 推断」，
+ *     流量经 cloudflared 进来，peer 同样是 loopback。
+ * vpn / direct / lan 一律 false：它们的 peer 就是真实客户端地址（tailnet IP / 公网 IP /
+ * 局域网 IP），此时 127.0.0.1 确实就是本机。
+ */
+export function isProxyFronted({ trustedProxy = '', accessProfile = '', accessConfigured = false } = {}) {
+  if (trustedProxy === 'loopback') return true;
+  const profile = String(accessProfile || '').trim();
+  if (profile === 'reverse-proxy' || profile === 'cloudflare') return true;
+  return profile === '' && accessConfigured === true;
+}
+
 /**
  * 这个地址是否由 Cloudflare Access 把守（⇒ 二维码不该带令牌）。
  *

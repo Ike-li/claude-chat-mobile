@@ -41,6 +41,96 @@ test('Playwright guard scans tests/e2e and tests/playground/e2e, not node:test p
   }
 });
 
+// 手写 new Promise(...setTimeout...) 等价于被禁的 waitForTimeout，只是绕过了字面禁令——
+// 同样是不稳定的固定等待。但 tests/e2e/mock/ 下的 setTimeout 是模拟服务端时序延迟的工具函数
+// （const delay = ms => new Promise(res => setTimeout(res, ms))），用途完全不同，必须排除。
+test('手写 new Promise(...setTimeout...) 在 spec 里被抓住，在 tests/e2e/mock/ 下被放行', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-settimeout-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    mkdirSync(join(root, 'tests', 'e2e', 'mock'), { recursive: true });
+
+    writeFileSync(join(root, 'tests', 'e2e', 'mock', 'server.js'),
+      "const delay = ms => new Promise(res => setTimeout(res, ms));\nmodule.exports = { delay };\n");
+    const cleanMockOnly = run(root);
+    assert.equal(cleanMockOnly.status, 0, cleanMockOnly.stderr || cleanMockOnly.stdout);
+
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'sleepy.spec.ts'),
+      "await new Promise(resolve => setTimeout(resolve, 1000));\n");
+    const blocked = run(root);
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /specs\/sleepy\.spec\.ts/);
+    assert.match(blocked.stderr, /手写睡眠/);
+    assert.doesNotMatch(blocked.stderr, /mock\/server\.js/, 'mock 基建的合法用法不该被同一条规则误伤');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ★ 两种普通格式化就能绕过原判据的写法——不是对抗性构造，是 eslint/prettier 的常见输出：
+//   · 形参带括号：`[^)]*` 在 `(resolve)` 的右括号处就停了；
+//   · setTimeout 换到下一行：逐行扫描下两半各自都不完整。
+// 门禁被这两种写法绕过时的表现是「报告成功」，与"真的没有违规"完全无法区分。
+test('手写睡眠的带括号形参与跨行写法同样被抓住（原逐行判据对这两种完全失明）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-sleep-forms-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'paren.spec.ts'),
+      "await new Promise((resolve) => setTimeout(resolve, 1000));\n");
+    let r = run(root);
+    assert.equal(r.status, 1, '带括号形参必须被抓住');
+    assert.match(r.stderr, /paren\.spec\.ts/);
+
+    rmSync(join(root, 'tests', 'e2e', 'specs', 'paren.spec.ts'));
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'multiline.spec.ts'),
+      "await new Promise(resolve =>\n  setTimeout(resolve, 1000),\n);\n");
+    r = run(root);
+    assert.equal(r.status, 1, '跨行写法必须被抓住');
+    assert.match(r.stderr, /multiline\.spec\.ts:1/, '行号应报在 new Promise 那一行，不是 setTimeout 那一行');
+
+    rmSync(join(root, 'tests', 'e2e', 'specs', 'multiline.spec.ts'));
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'two-params.spec.ts'),
+      "await new Promise((resolve, reject) => setTimeout(resolve, 1000));\n");
+    r = run(root);
+    assert.equal(r.status, 1, '(resolve, reject) 形参同样是睡眠');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 反向：给一个【真事件】加超时兜底不是固定睡眠——setTimeout 的实参是 reject 的包装函数，
+// 不是 Promise 的 resolve 形参。误报这一档会让整道闸被嫌吵而绕开，等于没有闸。
+test('给真事件加超时兜底的 new Promise 不被误报（setTimeout 实参不是 resolve 形参）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-timeout-guard-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e', 'specs'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'specs', 'guard.spec.ts'),
+      "await new Promise((resolve, reject) => {\n"
+      + "  page.once('dialog', resolve);\n"
+      + "  setTimeout(() => reject(new Error('no dialog')), 5000);\n"
+      + "});\n");
+    const r = run(root);
+    assert.equal(r.status, 0, `等真信号 + 超时兜底不该被判成手写睡眠：${r.stderr || r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// test.setTimeout(N) 是 Playwright 官方 API（延长这条测试的超时），字面上含 "setTimeout" 子串
+// 但语义与"手写睡眠"无关——不能被新规则误伤。
+test('test.setTimeout(N)（Playwright 官方的延长测试超时 API）不被新规则误伤', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-playwright-guard-testtimeout-'));
+  try {
+    mkdirSync(join(root, 'tests', 'e2e'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'e2e', 'slow.spec.ts'),
+      "test('slow', async ({ page }) => { test.setTimeout(60_000); });\n");
+    const result = run(root);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // TARGET_DIRS 与 tests/infra/playwright.config.ts 的 testDir 是两份独立真相。改 config 漏改门禁时，
 // 此前的行为是 existsSync 跳过 → 扫 0 个文件 → 打印「✅ 通过」并退出 0：E2E 照跑、门禁永久失明、
 // npm run check 全绿。扫描面塌陷必须与「没有违规」区分开。

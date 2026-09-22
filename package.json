@@ -1,7 +1,7 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.12.0",
-  "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
+  "version": "1.12.1",
+  "description": "Self-hosted mobile web chat UI for Claude Code — drive your real local claude CLI from your phone. Same CLAUDE.md, MCP, skills, login; any gateway or API key.",
   "type": "module",
   "private": true,
   "license": "Apache-2.0",
@@ -24,7 +24,9 @@
     "websocket",
     "self-hosted",
     "remote-access",
-    "chat-ui"
+    "chat-ui",
+    "web-ui",
+    "coding-agent"
   ],
   "engines": {
     "node": ">=20"

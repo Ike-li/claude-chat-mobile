@@ -37,6 +37,66 @@ test('loadRuntimeEnvironment reads CCM_DATA_DIR before runtime modules are impor
   }
 });
 
+// app/src/server/app.js 的 CONFIG_FILE_PATH/ENV_FILE_PATH（面板 env:get/env:set 的读写目标）
+// 认 CCM_CONFIG_FILE_PATH/CCM_ENV_FILE_PATH 两个覆盖。启动这一侧如果不认，就变成「进程启动
+// 读仓库根那份真实配置、面板读写另一个目录」——两条独立的路径解析，而 CLAUDE.md 明写
+// 「读写必须同源，写错源＝假成功」。它的失效形态还特别隐蔽：面板保存成功、文件里也确实有新值，
+// 只是运行中的进程从来没读过那个文件。集成测试拿它做隔离时，后果是测试写的文件根本不是启动源，
+// 断言照样绿（假绿），同时仓库根那份真实配置的值还会漏进被测进程。
+test('loadRuntimeEnvironment：认 CCM_ENV_FILE_PATH 覆盖（与面板读写目标同源）', () => {
+  const startDir = mkdtempSync(join(tmpdir(), 'ccm-env-startdir-'));
+  const overrideDir = mkdtempSync(join(tmpdir(), 'ccm-env-override-'));
+  try {
+    // startDir 扮演「进程 cwd／仓库根」：不认覆盖时会读到这一份。
+    writeFileSync(join(startDir, '.env'), 'SESSION_DELETE_QUIET_MS=111\n');
+    writeFileSync(join(overrideDir, '.env'), 'SESSION_DELETE_QUIET_MS=222\n');
+    const env = { CCM_ENV_FILE_PATH: join(overrideDir, '.env') };
+
+    loadRuntimeEnvironment(env, { dir: startDir, quiet: true });
+
+    assert.equal(env.SESSION_DELETE_QUIET_MS, '222',
+      '读到了 111 说明启动侧仍按 dir 拼路径、没认覆盖——与面板读写的不是同一份文件');
+  } finally {
+    rmSync(startDir, { recursive: true, force: true });
+    rmSync(overrideDir, { recursive: true, force: true });
+  }
+});
+
+test('loadRuntimeEnvironment：认 CCM_CONFIG_FILE_PATH 覆盖，且仍保持「新文件优先于 .env」', () => {
+  const startDir = mkdtempSync(join(tmpdir(), 'ccm-cfg-startdir-'));
+  const overrideDir = mkdtempSync(join(tmpdir(), 'ccm-cfg-override-'));
+  try {
+    writeFileSync(join(startDir, 'ccm.config.json'), JSON.stringify({ SESSION_DELETE_QUIET_MS: 111 }));
+    writeFileSync(join(overrideDir, 'ccm.config.json'), JSON.stringify({ SESSION_DELETE_QUIET_MS: 222 }));
+    // 覆盖目录里同时放一份 .env：新文件存在时必须优先，回落只在它缺失时发生。
+    writeFileSync(join(overrideDir, '.env'), 'SESSION_DELETE_QUIET_MS=333\n');
+    const env = {
+      CCM_CONFIG_FILE_PATH: join(overrideDir, 'ccm.config.json'),
+      CCM_ENV_FILE_PATH: join(overrideDir, '.env'),
+    };
+
+    loadRuntimeEnvironment(env, { dir: startDir, quiet: true });
+
+    assert.equal(env.SESSION_DELETE_QUIET_MS, '222',
+      '应取覆盖路径下的 ccm.config.json：111=没认覆盖，333=回落到了 .env（新文件优先失效）');
+  } finally {
+    rmSync(startDir, { recursive: true, force: true });
+    rmSync(overrideDir, { recursive: true, force: true });
+  }
+});
+
+test('loadRuntimeEnvironment：未设覆盖时行为不变（仍按 dir 拼路径）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-env-nooverride-'));
+  try {
+    writeFileSync(join(dir, '.env'), 'SESSION_DELETE_QUIET_MS=111\n');
+    const env = {};
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+    assert.equal(env.SESSION_DELETE_QUIET_MS, '111', '生产路径（不设覆盖）不得被这次改动影响');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('loadRuntimeEnvironment：shell 空串 AUTH_TOKEN/CCM_DATA_DIR 不挡 .env 填入（SH-001）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-env-empty-shell-'));
   try {
@@ -260,6 +320,20 @@ test('parseServerConfig falls back safely for invalid numeric configuration', ()
   assert.equal(config.notifyThrottleMs, 60000);
   assert.equal(config.sessionDeleteQuietMs, 300000);
   assert.equal(config.dataDir, join('/repo', 'data'));
+});
+
+// env-schema.js 里 NOTIFY_THROTTLE_MS / SESSION_DELETE_QUIET_MS 都声明 min:0（配置面板接受 0），
+// 但这里此前用的是 positiveNumber（要求 >0），0 会被静默换成默认值——用户在面板里存的 "0"
+// 从未真正生效过，且没有任何报错提示。INSTANCE_IDLE_RECLAIM_MS 同样 min:0，一直用对的
+// nonNegativeNumber（上面那条测试已经在测它），这两个字段应该走同一条路径。
+test('parseServerConfig：NOTIFY_THROTTLE_MS / SESSION_DELETE_QUIET_MS 为 "0" 时必须原样采纳，不得换成默认值', () => {
+  const config = parseServerConfig({
+    NOTIFY_THROTTLE_MS: '0',
+    SESSION_DELETE_QUIET_MS: '0',
+  }, { projectRoot: '/repo' });
+
+  assert.equal(config.notifyThrottleMs, 0);
+  assert.equal(config.sessionDeleteQuietMs, 0);
 });
 
 // ── TRUSTED_PROXY / ACCESS_PROFILE 的运行时归一（2026-09-06）──

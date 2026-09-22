@@ -7,7 +7,10 @@
 // 【不测什么】main() 的目录扫描与退出码由 check 链每次跑真实文件覆盖；这里只测判据函数。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSource, checkEntrypointSource, GUARDED_DIRS, GUARDED_ENTRYPOINTS } from '../gates/check-disposable-env-guard.js';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { checkSource, checkEntrypointSource, GUARDED_DIRS, GUARDED_ENTRYPOINTS, listTestFiles } from '../gates/check-disposable-env-guard.js';
 
 const GUARD_1 = "import '../setup/require-disposable-env.mjs';";
 const GUARD_2 = "import '../../setup/require-disposable-env.mjs';";
@@ -71,6 +74,33 @@ test.describe('判据不该被这些形态骗过', () => {
   test('把守卫写成裸字符串或注释掉都不算数', () => {
     assert.match(checkSource("'../setup/require-disposable-env.mjs';\n"), /缺少执行位守卫/);
     assert.match(checkSource(`// ${GUARD_1}\n`), /缺少执行位守卫/);
+  });
+});
+
+// 【为什么这道扫描要单独测，即使 main() 整体按头注不测】三个管辖目录目前都是纯平层，
+// "main() 由 check 链每次跑真实文件覆盖"这句话对"扫描是否递归"这件事其实不成立——
+// 真实仓库现状根本不包含嵌套子目录，check 链永远触达不到这个场景。测试文件一旦被挪进
+// 更深的子目录，会被静默漏扫，不报错也不提示，和"加了守卫但排错位置"是同一类恒绿失效。
+test.describe('listTestFiles：管辖目录的扫描必须递归子目录', () => {
+  test('测试文件在更深的子目录里 → 仍然被扫到', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'ccm-disposable-env-guard-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, 'sub', 'nested'), { recursive: true });
+    await writeFile(join(root, 'top.test.mjs'), '// top\n');
+    await writeFile(join(root, 'sub', 'nested', 'deep.test.mjs'), '// deep\n');
+    await writeFile(join(root, 'sub', 'not-a-test.mjs'), '// 不是测试文件，不该被扫到\n');
+
+    const found = listTestFiles(root);
+
+    assert.deepEqual(found, ['sub/nested/deep.test.mjs', 'top.test.mjs']);
+  });
+
+  test('空目录（只有非测试文件）→ 返回空数组，不报错', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'ccm-disposable-env-guard-empty-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFile(join(root, 'readme.md'), '# 无测试文件\n');
+
+    assert.deepEqual(listTestFiles(root), []);
   });
 });
 

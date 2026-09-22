@@ -279,6 +279,44 @@ test.describe('限速告警文案按来源分叉（不再无条件说「有人�
   });
 });
 
+// 起因：反代/托管隧道部署下，应用层收到的直连地址恒是中间节点自己（同机时即 127.0.0.1），
+// 背后可能是任何经它转发的公网来源——此时说"多半是你自己的旧 token"恰好是在真有人暴力尝试时
+// 说反话。判据是【拓扑上有没有中间节点】（proxyFronted，服务端算好下发），**不是** TRUSTED_PROXY：
+// 那个开关只表示「允许采信反代追加的 XFF 末跳」，本仓刻意不让它随 reverse-proxy 自动打开
+// （XFF 客户端可写，采信必须显式声明），于是最常见的反代/托管隧道部署恰恰是它【未设】的那一档——
+// 只看它就会把这次修复精确地漏在最需要它的配置上。
+// vpn / direct / lan 三档 proxyFronted 为 false：peer 就是真实客户端地址，原措辞成立、不该改。
+test.describe('限速告警文案：前面有中间节点时，本机来源不再断言"多半是你自己的旧 token"', () => {
+  const now = 100 * 60_000;
+  const lineWithProxy = (source, proxyFronted) => formatServiceNotices({
+    service: { rateLimitLockout: { at: now - 9 * 60_000, count: 1, source }, proxyFronted }, now,
+  })[0];
+
+  test('无中间节点（默认/旧 server 无此字段）→ 措辞不变，仍断言是自己的旧 token', () => {
+    assert.equal(
+      lineWithProxy('ip:127.0.0.1', undefined),
+      '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——来自本机 127.0.0.1，多半是你自己的旧 token',
+    );
+    assert.equal(
+      lineWithProxy('ip:127.0.0.1', false),
+      '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——来自本机 127.0.0.1，多半是你自己的旧 token',
+      'vpn/direct/lan 三档显式 false，必须与「旧 server 缺字段」同措辞',
+    );
+  });
+  test('前面有中间节点 → 收回"多半是自己"的断言，改用不确定措辞', () => {
+    const text = lineWithProxy('ip:127.0.0.1', true);
+    assert.doesNotMatch(text, /多半是你自己的旧 token/);
+    assert.match(text, /127\.0\.0\.1/, '地址仍要给出——用户要靠它核对');
+    assert.match(text, /无法确认是否为本机/);
+  });
+  test('有中间节点时，局域网/公网 scope 不受影响（XFF 已经给出更精确的来源）', () => {
+    assert.equal(
+      lineWithProxy('ip:203.0.113.7', true),
+      '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——公网 203.0.113.7 在暴力尝试你的入口',
+    );
+  });
+});
+
 // 「终端会话推送」段：唯一暴露 CLI hooks 桥安装态的界面（手机上没法跑 npm，这是唯一入口）。
 // 旧 server 不带 hooksBridge 字段 → 整段优雅缺席，不显示误导性的"未安装"。
 test('formatHooksBridgeRow：四态文案 + 按钮动作，旧 server 缺字段则不渲染', () => {

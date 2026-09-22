@@ -99,6 +99,23 @@ export function resolvePanelState({ mirrorReadonly = false, observedCli, web } =
   };
 }
 
+// 「此刻挂着的那张会话落地页，是不是本次请求弹出来的」。
+//
+// 用途只有一个：session:switch 的 4 秒兜底已经把「切换无响应」弹出来了，而迟到的【成功】ack
+// 随后到达（服务端可能先广播导航、后回 ack）——这时要把那张页撤掉，否则用户人已经在目标
+// 会话里，屏幕上却盖着一张说它没响应的落地页。
+//
+// 【为什么不能无条件撤】从 4 秒兜底弹出到迟到 ack 返回之间，用户完全可能已经点开别的会话
+// 并撞上一次【真实】失败，此刻挂着的是那一张。无条件 hide 会把那条真实错误一起抹掉，
+// 而它是用户当下唯一看得见的线索——修一个假提示的代价不该是吞掉一个真提示。
+//
+// sessionId 与 cwd 两者都要比：同一个 sessionId 在不同工作区是不同会话（托管 worktree 场景），
+// 只比 sessionId 会在那种场景下撤错。
+export function isBlockedSurfaceTarget(target, { sessionId = null, cwd = null } = {}) {
+  if (!target) return false;
+  return target.sessionId === sessionId && target.cwd === cwd;
+}
+
 // 工作区抽屉只显示需要用户理解/处理的四态。terminal 独立于 live 实例合并，避免 idle/done live tab
 // 遮住同会话正在运行的终端进程；done/aborted/idle 都是普通终态，不占抽屉主状态位。
 //
@@ -264,11 +281,13 @@ export function aggregateStates(instances, dirs) {
 // 汇总「其他工作区」状态给左上角按钮角标：只提示需要你/终端需要你/出错/运行中；完成、中止、空闲
 // 都是普通终态，不持续点亮入口。排除 currentCwd（当前工作区动静在聊天视图内呈现）。
 //
-// ★ 这张 rank 表是 resolveDrawerStatus 四个返回值的【完整枚举】，不是子集。未登记的状态 rank 缺省 0
-// 会被静默吞掉——terminal_waiting 就这样漏了：抽屉折叠时「页外的终端卡在审批框上」在顶部毫无表示，
-// 而同一目录只要另有个在跑的会话反倒亮「运行中」，更轻的状态盖过更重的（2026-09-06 修）。
-// 序刻意与 resolveDrawerStatus 逐字同源，不另立一套：同样这四个状态在产品里出现两套优先级，
-// 迟早分叉，且分叉后两边各自都"看着对"。给 resolveDrawerStatus 加状态时这里必须同步。
+// ★ resolveDrawerStatus 现有五个非空返回值，这张 rank 表只登记其中四个——有意排除 bg_locked：
+// 调用方 drawerStateForDir（app.js）只喂 liveState+terminalState，从不传 bgLocked，
+// 「会话被占用打不开」是会话级的事，不该抬到工作区层去点亮全局角标（f0e193cf4，2026-09-07）。
+// 其余四个是 terminal_waiting 漏挂之后（2026-09-06）补的同源优先级，序刻意与 resolveDrawerStatus
+// 逐字同源，不另立一套：同样这几个状态在产品里出现两套优先级，迟早分叉，且分叉后两边各自都"看着对"。
+// 给 resolveDrawerStatus 加状态时要重新判断一次：新状态是工作区级的（该收进来）还是会话级的
+// （像 bg_locked 一样该排除），不能不假思索地照抄进来。
 //
 // 出口有两个消费者，语义不同、靠两张表分开，不在本函数里判：
 //   · #sessionsDot 图标 —— 走 DRAWER_STATUS_META（渲染白名单，含 terminal_waiting）

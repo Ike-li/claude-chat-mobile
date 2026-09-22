@@ -30,6 +30,7 @@ import {
   aggregateStates,
   owningWorkspace,
   resolveDrawerStatus,
+  isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
@@ -112,6 +113,7 @@ import {
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
+  outboxNoticePlacement,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
@@ -1313,26 +1315,41 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 撞上在途轮（排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
   // 同一 clientMessageId 可直接复用——服务端在 busy 拒绝路径上没有 commit 去重 ID。
-  function markOutboxBlocked(item, message) {
-    const indicator = item.bubbleEl?.querySelector('.pending-indicator');
-    if (!indicator) return;
-    indicator.classList.remove('animate-pulse');
-    indicator.textContent = '';
+  // 挑落点：判据与理由全在 logic/outbox-send.js 的 outboxNoticePlacement 注释里。
+  // 关键一条——querySelector 能从【已脱离 DOM】的缓存子树里找到 indicator，所以「找得到」
+  // 不等于「看得见」；而 addBar 写的是当前消息面，归属对不上就是把 A 会话的失败打到 B 会话上。
+  function outboxNoticeHost(item, targetsViewing, barClass) {
+    const indicator = item.bubbleEl?.querySelector('.pending-indicator') || null;
+    const where = outboxNoticePlacement({
+      indicatorExists: Boolean(indicator),
+      indicatorConnected: Boolean(indicator?.isConnected),
+      targetsViewing,
+    });
+    if (where === 'indicator' || where === 'stale') return indicator;
+    if (where === 'bar') return addBar('', barClass);
+    return null;
+  }
+
+  function markOutboxBlocked(item, message, targetsViewing = false) {
+    const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
+    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
+    host.classList.remove('animate-pulse');
+    host.textContent = '';
     const label = el(`<span></span>`);
     label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
-    indicator.appendChild(label);
+    host.appendChild(label);
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
     btn.onclick = async () => {
       btn.disabled = true;
       label.textContent = `🕐 ${t('正在发送...')}`;
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { indicator.remove(); return; }
+      if (d.outcome === 'ok') { host.remove(); return; }
       btn.disabled = false;
       label.textContent = d.outcome === 'blocked'
         ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
         : `⚠️ ${d.message || t('发送失败')}`;
     };
-    indicator.appendChild(btn);
+    host.appendChild(btn);
   }
 
   async function processOfflineQueue() {
@@ -1379,11 +1396,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
-          if (indicator) indicator.textContent = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
+          const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
+          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+          if (permanentHost) permanentHost.textContent = permanentMsg;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(item, decision.message);
+          markOutboxBlocked(item, decision.message, targetsViewing);
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -1842,7 +1862,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section(t('异常告警'));
     const notices = formatServiceNotices({
-      service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
+      service: {
+        deliveryFailure: res.deliveryFailure,
+        rateLimitLockout: res.rateLimitLockout,
+        clientError: res.clientError,
+        proxyFronted: res.proxyFronted,
+      },
       now,
     });
     if (!notices.length) {
@@ -2761,11 +2786,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           tbody.classList.toggle('hidden');
           if (loaded) return;
           loaded = true;
-          socket.emit('tool:preview', { instanceId: inst, toolUseId: p.toolUseId }, res => {
+          socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: p.toolUseId }, (err, res) => {
             tbody.replaceChildren();
-            if (!res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败）
+            if (err || !res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败/超时）
+              if (err) loaded = false; // 超时不是终态：ack 没回来不代表以后也回不来，得能再点一次重试
               const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-              m.textContent = res?.error || t('预览不可用');
+              m.textContent = err ? t('请求超时，请重试') : (res?.error || t('预览不可用'));
               tbody.appendChild(m);
               return;
             }
@@ -3359,9 +3385,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = t('加载中…');
-      socket.emit('tool:full', { instanceId: inst, toolUseId }, res => {
-        if (!res?.ok) {
-          btn.textContent = res?.error || t('全文不可用');
+      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId }, (err, res) => {
+        if (err || !res?.ok) {
+          btn.textContent = err ? t('请求超时，请重试') : (res?.error || t('全文不可用'));
           btn.disabled = false;
           return;
         }
@@ -3659,11 +3685,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         preview.classList.toggle('hidden');
         if (loaded || !f.toolUseId) return;
         loaded = true;
-        socket.emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, res => {
+        socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, (err, res) => {
           preview.replaceChildren();
-          if (!res?.ok) {
+          if (err || !res?.ok) {
+            if (err) loaded = false; // 超时不是终态，允许再点一次重试
             const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-            m.textContent = res?.error || t('预览不可用');
+            m.textContent = err ? t('请求超时，请重试') : (res?.error || t('预览不可用'));
             preview.appendChild(m);
             return;
           }
@@ -4821,7 +4848,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     setPermMode(panel.permissionMode || 'default', true);
     setEffortMode(panel.effort, true);
-    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel);
+    // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
+    // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，触发一次没必要的 dispose+resume。
+    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
@@ -4840,16 +4870,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       closeLeftSidebar();
     } else if (r.action === 'switch') {
       closeLeftSidebar();
-      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
-        // 会被读成"我点开的这个会话出错了"。
-        if (!res?.ok) showSessionBlockedSurface({
-          sessionId: r.sessionId, cwd: r.cwd,
-          // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
-          title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
-          message: res?.error || t('深链目标会话已不可用'),
-        });
+      // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
+      // 会被读成"我点开的这个会话出错了"；ack 迟迟不来同样不能让用户干等——同其它 4 处
+      // session:switch 入口一样补 4s 兜底（不把反馈压在 ack 上）。
+      let acked = false;
+      const blocked = message => showSessionBlockedSurface({
+        sessionId: r.sessionId, cwd: r.cwd,
+        // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
+        title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
+        message,
       });
+      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
+        acked = true;
+        if (!res?.ok) blocked(res?.error || t('深链目标会话已不可用'));
+        // ack 迟于 4s 兜底时落地页已经弹出来了，但这次切换其实成功了——撤掉它，
+        // 否则用户人在目标会话里、屏幕上却盖着一张「切换无响应」。
+        else dismissBlockedSurfaceIfTarget(r.sessionId, r.cwd);
+      });
+      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
     }
@@ -6169,7 +6207,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
   // 这里只做两件【只对发起方有意义】的事：说清处置建议、把那一轮的原话回填输入框。
-  const rewindCommand = createRewindCommandController(appContext, {
+  const rewindCommand = createRewindCommandController({
     $, socket, openSheet, closeSheet,
     getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: currentCwd }),
     onRewound: (res) => {
@@ -6717,7 +6755,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           closeLeftSidebar();
           let acked = false;
           const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) blocked(res?.error || t('切换失败')); });
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
+            acked = true;
+            if (!res?.ok) blocked(res?.error || t('切换失败'));
+            else dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
+          });
           setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
         }
       };
@@ -7679,6 +7721,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
   }
+  // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
+  // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
+  // 只撤属于本次请求的那一张：这 4 秒里用户完全可能已经点开别的会话并撞上真实失败，
+  // 无条件 hide 会把那条真实的错误提示一起抹掉。
+  function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
+    if (isBlockedSurfaceTarget(blockedSurfaceTarget, { sessionId, cwd })) hideSessionBlockedSurface();
+  }
   function retryBlockedSession() {
     const target = blockedSurfaceTarget;
     if (!target?.sessionId) return;
@@ -7690,7 +7739,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       acked = true;
       if (btn) btn.disabled = false;
       // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-      if (res?.ok) hideSessionBlockedSurface();
+      // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
+      // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
+      if (res?.ok) dismissBlockedSurfaceIfTarget(target.sessionId, target.cwd);
       else setBlockedReason(res?.error || t('切换失败'));
     });
     setTimeout(() => {
@@ -7776,6 +7827,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
           acked = true;
           if (!res?.ok) blocked(res?.error || t('切换失败'));
+          else dismissBlockedSurfaceIfTarget(resume.sessionId, resume.cwd); // 同上：迟到的成功 ack 要撤页
         });
         setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       };
@@ -7872,6 +7924,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
         if (!res?.ok) blocked(res?.error || t('切换失败'));
+        else dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
       });
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
@@ -8237,12 +8290,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       wrap.addEventListener('toggle', () => {
         if (!wrap.open || c.loaded) return;
         c.loaded = true;
+        // 上一次请求超时留下的占位行不算「已有内容」——它写的正是「请重试」，留着会被下面那道
+        // childElementCount 守卫挡住，于是 c.loaded=false 放开的重试永远发不出去，提示自相矛盾。
+        for (const n of [...c.body.children]) if (n.dataset?.outboxRetryable === '1') n.remove();
         if (c.body.childElementCount > 0) return; // 已有内容（老会话 sidechain 落在主 transcript 里）
         if (!flowSid) return;
         const hint = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-hint"></div>');
         hint.textContent = t('正在读取子代理执行记录…');
         c.body.appendChild(hint);
-        socket.emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, res => {
+        socket.timeout(8000).emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, (err, res) => {
           hint.remove();
           // 【渲染前再核一次「还在同一个会话吗」】上面那对快照保证的是**拉对了数据**，不保证
           // 响应回来时用户还没切走。切会话会清掉 histSubCards，于是下面的 renderHistoryBubbles
@@ -8253,9 +8309,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           // 只收属于这张卡的条目：服务端已按 toolUseId 归属，这里再挡一道——漏进主流的条目
           // 会变成凭空多出来的气泡，而那是刷新后才出现、极难归因的一类症状。
           const items = Array.isArray(res?.items) ? res.items.filter(m => m?.parentToolUseId === parentId) : [];
-          if (!res?.ok || !items.length) {
+          if (err || !res?.ok || !items.length) {
+            if (err) c.loaded = false; // 超时不是终态：折叠再展开时允许重新拉取
             const empty = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-empty"></div>');
-            empty.textContent = t('没有可显示的子代理执行记录');
+            empty.textContent = err ? t('请求超时，请重试') : t('没有可显示的子代理执行记录');
+            // 标记可重试：下次展开时先摘掉它，否则 childElementCount 守卫会把重试挡回去。
+            if (err) empty.dataset.outboxRetryable = '1';
             c.body.appendChild(empty);
             return;
           }
@@ -8607,7 +8666,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       mirrorObservedCli = { model: null, permissionMode: null, effort: null };
       _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
-      rebuildEffortOptions(currentModel || cwdDefaultModel);
+      // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
+      // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
+      // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
+      // 触发一次没必要的 dispose+resume——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009

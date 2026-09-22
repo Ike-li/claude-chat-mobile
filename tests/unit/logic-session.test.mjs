@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -33,6 +33,42 @@ test('aggregateStates: worktree cwd 归入最长前缀父仓（K2 角标）', ()
   );
   assert.equal(r['/repo/a'], 'busy');
   assert.equal(r['/repo/b'], 'idle');
+});
+
+// session:switch 的 4 秒兜底弹出「切换无响应」落地页后，迟到的【成功】ack 要把它撤掉——
+// 但只能撤属于本次请求的那一张。这条判据错在任一方向都是无声的：
+//   · 判得太松（无条件撤）→ 吞掉用户此刻唯一看得见的那条真实错误；
+//   · 判得太紧（漏撤）→ 人已经在目标会话里，屏幕上还盖着一张说它没响应的落地页。
+test.describe('isBlockedSurfaceTarget: 落地页只该被弹它的那次请求撤掉', () => {
+  const target = { sessionId: 's1', cwd: '/repo' };
+
+  test('同一 sessionId + cwd → 是本次请求弹的，可以撤', () => {
+    assert.equal(isBlockedSurfaceTarget(target, { sessionId: 's1', cwd: '/repo' }), true);
+  });
+
+  test('期间用户点开了别的会话并撞上真实失败 → 不得撤（那条错误是他唯一的线索）', () => {
+    assert.equal(isBlockedSurfaceTarget({ sessionId: 's2', cwd: '/repo' }, { sessionId: 's1', cwd: '/repo' }), false);
+  });
+
+  test('同一 sessionId 但不同工作区 → 不是同一个会话，不得撤（托管 worktree 场景）', () => {
+    assert.equal(isBlockedSurfaceTarget(target, { sessionId: 's1', cwd: '/repo-worktree' }), false,
+      '只比 sessionId 会在 worktree 场景下撤错那一张');
+  });
+
+  test('当前没有挂着落地页（target 为 null）→ 什么都不撤，不抛异常', () => {
+    assert.equal(isBlockedSurfaceTarget(null, { sessionId: 's1', cwd: '/repo' }), false);
+    assert.equal(isBlockedSurfaceTarget(undefined, { sessionId: 's1', cwd: '/repo' }), false);
+  });
+
+  test('缺省入参不匹配一个有内容的 target（不知道就不撤）', () => {
+    assert.equal(isBlockedSurfaceTarget(target), false);
+    assert.equal(isBlockedSurfaceTarget(target, {}), false);
+  });
+
+  test('深链那条路：target 的 cwd 可能是 null，两边同为 null 才算匹配', () => {
+    assert.equal(isBlockedSurfaceTarget({ sessionId: 's1', cwd: null }, { sessionId: 's1', cwd: null }), true);
+    assert.equal(isBlockedSurfaceTarget({ sessionId: 's1', cwd: null }, { sessionId: 's1', cwd: '/repo' }), false);
+  });
 });
 
 test('resolveDrawerStatus: 需要你/出错优先于 Web 或终端运行态', () => {
@@ -392,6 +428,16 @@ test('summarizeOtherWorkspaces: aborted 不点亮顶部，但不遮蔽 error', (
   const dirs = ['/a', '/b'];
   assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'aborted' }, dirs, '/cur'), null);
   assert.equal(summarizeOtherWorkspaces({ '/a': 'aborted', '/b': 'error' }, dirs, '/cur'), 'error');
+});
+
+// bg_locked 是 resolveDrawerStatus 的第五个返回值，有意不进这张 rank 表（会话级占用不该抬到
+// 工作区层，见 panel-state.js 里 rank 表上方注释与 f0e193cf4）。这条测试钉住的是「有意排除」
+// 本身，不是「这个分支还没写」——防止有人照着 terminal_waiting 的先例把它也添进 rank 表。
+test('summarizeOtherWorkspaces: bg_locked 不参与排名（会话级占用不点亮工作区角标），也不崩', () => {
+  const dirs = ['/a', '/b'];
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'bg_locked' }, dirs, '/cur'), null);
+  // 与真正需要关注的状态同时出现时，bg_locked 不得盖过它、也不得被它排除在外
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'bg_locked', '/b': 'busy' }, dirs, '/cur'), 'busy');
 });
 
 test('projectDisplayName: 顶部/空状态只显示项目名，不显示完整路径', () => {

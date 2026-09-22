@@ -653,6 +653,23 @@ test('getSessionHistory: system/local_command 的 stdout 作为助手消息回�
   assert.equal(msgs[1].content, '发现 3 处问题：\n1. ...', '包装标签要剥掉，与 live 气泡同形');
 });
 
+// fix/own-write-misjudged-as-terminal（25ef4424）修的是 user/assistant 分支：catchUpStep 靠
+// entrypoint 判「这段增量是不是己方写盘」，缺了它就会把秒回的轮次误判成终端写入（重复气泡 +
+// 误锁「终端会话运行中」）。local_command 分支（斜杠命令的 web 端输出）是同一份 transcript 里
+// 会被 catchUpStep 用同一逻辑处理的另一类条目，必须同样透出 entrypoint，否则那次修复对
+// 秒回的 /status、/model 等斜杠命令不生效——bug 以同样的方式在这个分支重现。
+test('getSessionHistory: local_command 回显透出 entrypoint（catchUpStep 判己方写盘要用）', async () => {
+  const cwd = '/test/localcmd-entrypoint-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdentrypoint', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1', entrypoint: 'sdk-ts',
+      content: '<local-command-stdout>ok</local-command-stdout>', timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdentrypoint', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].entrypoint, 'sdk-ts', 'local_command 分支必须像 user/assistant 分支一样透出 entrypoint');
+});
+
 // history.js:991 记录的真实反例：同一个 subtype 下还落命令名回显，那是命令【开始】的记录、不是输出。
 // 只看 subtype 就会把它当结果渲染出来（并在 settle 判定那侧造成过双写分叉）。
 test('getSessionHistory: system/local_command 的命令名回显不当输出回显', async () => {
@@ -744,9 +761,9 @@ test('getSessionHistory: stdout+stderr 并存的输出要完整回显，不整�
 // 之后的写入以新 parentUuid 挂上去形成新分支，被撤销的那一段仍留在文件里。按行顺序读会把
 // 它一并回显——实测会话 cdb36ede：按行 727 条而 CLI/SDK 口径 515 条，多出的 212 条正是被
 // rewind 掉的那段（锚点前 370 全留、废弃段 212 全剪、rewind 后新对话 145 全留）。
-// 哪些 uuid 属于当前链由 SDK 的 getSessionMessages 给：它同时处理了 compact 脱链（压缩摘要
-// 挂新 root，旧链整条脱钩）与并行工具调用的合法分叉（一个 turn 里多个 tool_use 各自成支），
-// 这两样自己回溯 parentUuid 都会算错——前者会把压缩前的历史全砍，后者会漏掉并行的那一支。
+// 哪些 uuid 属于当前链由 SDK 的 getSessionMessages 给：并行工具调用的合法分叉（一个 turn 里多个
+// tool_use 各自成支）自己回溯 parentUuid 会漏掉那一支。
+// 它【不】保留 compact 边界之前的历史——原注释说它「同时处理了 compact 脱链」是错的，见下面两条。
 test('getSessionHistory: 剪掉 rewind 废弃的分支，只回显 CLI 当前链', async () => {
   const cwd = '/test/rewind-chain';
   const dir = join(BASE, getProjectDir(cwd));
@@ -764,6 +781,59 @@ test('getSessionHistory: 剪掉 rewind 废弃的分支，只回显 CLI 当前链
   try {
     const msgs = await getSessionHistory('rewound', cwd, 50, { baseDir: BASE });
     assert.deepEqual(msgs.map(m => m.content), ['第一问', '第一答', '重来的问', '重来的答']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// ── 压缩边界之前的历史不是「被撤销的分支」（2026-09-22）────────────────────────
+// 那句「它同时处理了 compact 脱链」从没有用例验证过，而且是错的。
+// 真机全量对照（349 个会话，16 个压缩过，13 个丢了开头）：
+//   1ee3b415 主链 1284 条 → SDK 链返回 4 条 → web 上只剩 3 条，抽屉里却还挂着取自开头的标题；
+//   7365f4b5 主链 1453 条 → 51 条，丢弃游程是单段 drop×1402，切点正是 compact_boundary。
+// 根因是语义误用：getSessionMessages 给的是「还在模型上下文里的消息」，不是「还该显示的消息」。
+// 对 /rewind 两者重合（撤销的既不在上下文、也不该显示），对 /compact 就分叉了——压缩只把旧消息
+// 移出上下文，记录仍在磁盘上、仍属于这个会话。
+// 判据因此收窄成：当前链【开始之前】的不剪（SDK 对它们没有发言权），开始之后的照剪。
+test('getSessionHistory: compact 之后仍回显压缩边界之前的历史', async () => {
+  const cwd = '/test/compact-chain';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'compacted', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '压缩前的问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '压缩前的答' }, timestamp: '2024-01-01T00:00:01Z' },
+    { type: 'system', subtype: 'compact_boundary', uuid: 's-1', timestamp: '2024-01-01T00:00:02Z',
+      compactMetadata: { trigger: 'auto', preservedMessages: { uuids: ['u-2'] } } },
+    { type: 'user', uuid: 'u-2', parentUuid: null, message: { role: 'user', content: '压缩后的问' }, timestamp: '2024-01-01T00:00:03Z' },
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '压缩后的答' }, timestamp: '2024-01-01T00:00:04Z' },
+  ]);
+  // 真机形态：压缩边界之前的 uuid 一个都不在 SDK 的返回里。
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-2' }, { uuid: 'a-2' }]);
+  try {
+    const msgs = await getSessionHistory('compacted', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['压缩前的问', '压缩前的答', '压缩后的问', '压缩后的答']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 反向：别为了救压缩历史把过滤整个关掉。同一个会话里 compact 之后又 rewind 是常见组合
+// （真机 148c8017 的游程 drop×261|keep×1|drop×1|keep×309|drop×3|keep×226 就是这形态），
+// 当前链开始【之后】的废弃段必须照剪，否则上一条用例的修法会把 rewind 那条一起改坏。
+test('getSessionHistory: 当前链开始之后的 rewind 废弃段仍要剪掉', async () => {
+  const cwd = '/test/compact-then-rewind';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'mixed', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '压缩前的问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'system', subtype: 'compact_boundary', uuid: 's-1', timestamp: '2024-01-01T00:00:01Z', compactMetadata: { trigger: 'manual' } },
+    { type: 'user', uuid: 'u-2', parentUuid: null, message: { role: 'user', content: '压缩后的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    // ↓ 这条后来被 rewind 撤销
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '撤销的答' }, timestamp: '2024-01-01T00:00:03Z' },
+    { type: 'assistant', uuid: 'a-3', parentUuid: 'u-2', message: { role: 'assistant', content: '重来的答' }, timestamp: '2024-01-01T00:00:04Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-2' }, { uuid: 'a-3' }]);
+  try {
+    const msgs = await getSessionHistory('mixed', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['压缩前的问', '压缩后的问', '重来的答']);
   } finally {
     __setSdkGetSessionMessagesForTest(undefined);
   }

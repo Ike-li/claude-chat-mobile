@@ -85,8 +85,13 @@ export function isSafeSessionId(id) {
 //   ③ 在这些末端里挑【文件物理行序最靠后】的（排除 isSidechain/teamName/isMeta）当作当前叶子；
 //   ④ 从它单链回溯出主链；
 //   ⑤ 再按 message.id 把并行工具调用的兄弟条目、以及挂在它们下面的 tool_result 补回来。
-// 2026-09-18 我自己先猜过一版单链回溯，①⑤ 两步都漏掉：compact 过的会话被砍到只剩 3 条（实测
-// 1284 → 3），并行工具那一支整条不见（79 个会话的对照里 34 个有缺口）。
+// 2026-09-18 我自己先猜过一版单链回溯，①⑤ 两步都漏掉：并行工具那一支整条不见（79 个会话的
+// 对照里 34 个有缺口）。
+// ⚠️ 但 ① 的「缝合」只把 compactMetadata 点名的那几条接回链上，**压缩之前的其余历史仍然不在
+// 返回里**——当时把「compact 过的会话被砍到只剩 3 条（实测 1284 → 3）」一并归因为自己漏了 ①，
+// 是错的：同一个会话（1ee3b415）换成官方算法实测返回 4 条，3 → 4，问题从未被解决。
+// 这个集合的语义是「还在模型上下文里的消息」，不是「还该显示给用户的消息」。两者只在 rewind 上
+// 重合，在 compact 上分叉——调用方据此只用它剪「当前链开始之后」的废弃分支，见 getSessionHistory。
 // 它确实跟随 rewind：实测会话 cdb36ede 按时间窗切分——锚点前 370 条全留、被 rewind 撤销的 212 条
 // 全剪、rewind 后新对话 145 条全留，合计 515 = 它的返回数。
 //
@@ -163,6 +168,9 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   const seenUuids = new Set();
   // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
   let lastMainAgentToolId = null;
+  // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
+  // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
+  let chainStarted = false;
   // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
   // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
   // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
@@ -187,12 +195,26 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 跳过 meta 条目（local-command 输出等）
       if (entry.isMeta) continue;
 
-      // 不在当前链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们（见 readLiveChainUuids）。
+      // 当前链【开始之后】不在链上的主链消息 = 被 /rewind 撤销的分支，CLI 自己也不再显示它们。
       // 只筛 user/assistant：type:'system' 的本地命令输出不在 SDK 的返回里，一并筛会把它们全删掉。
       // sidechain 也豁免——子 agent 的 uuid 不挂主链，按 live 过滤会误删整棵折叠卡。
+      //
+      // 【为什么要等链开始】liveUuids 表达的是「还在模型上下文里」，compact 会把边界之前的整段
+      // 移出上下文却一行不删——那段记录仍属于这个会话，用户仍该看到（抽屉里这条会话的标题就取自
+      // 开头那段）。不等的话它们会被当成废弃分支一起剪掉：真机 349 个会话里 16 个压缩过，13 个
+      // 丢了开头，最狠的 1284 条只剩 3 条（1ee3b415，标题还挂着开头那句话）。
+      // 边界之前若也 rewind 过，那段废弃分支会重新露面——与本模块既有取舍同向（见 readLiveChainUuids
+      // 的 fail-open）：少显示历史是静默的，多显示几条废弃分支是看得见的。
+      // 【已知窗口，有意不修】compactMetadata 点名保留的 uuid 物理上位于边界之前（实测 preservedSegment
+      // 的 head/anchor/tail 都是边界前那几条），会让这里提前认定「链已开始」，于是它到边界之间那一小段
+      // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
+      // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
+      // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
       if (liveUuids && entry.uuid && !entry.isSidechain
-          && (entry.type === 'user' || entry.type === 'assistant')
-          && !liveUuids.has(entry.uuid)) continue;
+          && (entry.type === 'user' || entry.type === 'assistant')) {
+        if (liveUuids.has(entry.uuid)) chainStarted = true;
+        else if (chainStarted) continue;
+      }
 
       // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
       // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
@@ -261,6 +283,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         // dataset.uuid → resolveForkAnchorUuid 认 role==='assistant' 即采纳），sdkForkSession 遂拿到
         // 一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
         for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
+          // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
+          // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现
+          // fix/own-write-misjudged-as-terminal（25ef4424）修的那个 bug——只是换了个分支。
+          if (entry.entrypoint) item.entrypoint = entry.entrypoint;
           pushCapped(item);
         }
       }

@@ -118,4 +118,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // result.text 是服务端随每轮收尾下发的权威全文（供前端断网恢复后校正因遗漏 text_delta 而
+  // 截断的内容）。mock 场景刻意只发一小段 delta，result.text 带着更长的权威全文——断言最终
+  // 渲染的是全文而不是 delta 累积的截断版本。
+  test('P0-03e result.text 权威全文覆盖因遗漏 text_delta 而截断的内容', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:result-text-recovery');
+    await waitForIdle(page);
+
+    // 这个字符串只存在于 result.text，不在 text_delta 里——出现即证明覆盖生效了
+    // （若覆盖逻辑被删/改错，渲染内容只会停在 delta 累积的 'TRUNCATED-PREFIX-ONLY'）。
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('AUTHORITATIVE-FULL-TEXT');
+    // 覆盖是整体替换（s.raw = p.text）而非追加：若误写成追加，delta 前缀会重复出现两次。
+    const rendered = await reply.innerText();
+    expect(rendered.split('TRUNCATED-PREFIX-ONLY').length - 1).toBe(1);
+
+    await expectNoBrowserErrors(page);
+  });
 });

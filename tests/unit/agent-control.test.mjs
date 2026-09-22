@@ -262,6 +262,28 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
+  test('interrupt() 默认 decidedBy=user（真实用户点停止按钮的默认值不能变）', async () => {
+    const AS = await import('../../app/src/agent/approval-store.js');
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.askPermission('Bash', { command: 'sleep 9' }, { signal: ac.signal, toolUseID: 'interrupt-decidedby-user' });
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt(); // 不传参——真实用户点停止走的正是这条无参调用（app.js 的 user:interrupt handler）
+    assert.equal(AS.getByReqId('interrupt-decidedby-user').decidedBy, 'user');
+    s.dispose();
+  });
+
+  test('interrupt(decidedBy) 显式传参覆盖默认值，台账据此区分系统触发', async () => {
+    const AS = await import('../../app/src/agent/approval-store.js');
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.askPermission('Bash', { command: 'sleep 9' }, { signal: ac.signal, toolUseID: 'interrupt-decidedby-system' });
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt('system:idle-watchdog');
+    assert.equal(AS.getByReqId('interrupt-decidedby-system').decidedBy, 'system:idle-watchdog');
+    s.dispose();
+  });
+
   test('SDK interrupt 抛错且无在途轮 → 队列不动、pendingTurns 不动', async () => {
     const { s, events } = makeSession();
     s.pendingTurns = 0;
@@ -272,6 +294,21 @@ test.describe('interrupt()', () => {
     assert.equal(s.pendingTurns, 0); // 未变
     const sys = events.find(e => e.type === 'system' && e.payload.message === '当前没有可中断的任务');
     assert.ok(sys);
+    s.dispose();
+  });
+
+  // await raceInterrupt() 期间 this.queue 曾短暂为空（清空发生在 await 之前）——若输入泵恰好在
+  // 这个窗口被调度到、见队列空就已经挂在 notifyInput 上等待，toDrop 塞回队列后不主动唤醒，
+  // 它感知不到新内容，会一直卡到下一次 send() 才顺带被叫醒（若用户不再发消息则永久悬挂）。
+  test('SDK interrupt 抛错且无在途轮 → 重新入队后唤醒输入泵（notifyInput）', async () => {
+    const { s } = makeSession();
+    s.pendingTurns = 0;
+    s.queue.push({ text: 'msg' });
+    s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
+    let woken = false;
+    s.notifyInput = () => { woken = true; };
+    await s.interrupt();
+    assert.equal(woken, true, '重新入队后必须唤醒输入泵，否则挂起的泵永远不知道队列里多了消息');
     s.dispose();
   });
 

@@ -35,17 +35,25 @@ test.describe('formatProgressHistoryEntry（后台任务进度历史条目）', 
 });
 
 test.describe('formatProgressTimestamp（进度时间戳格式化）', () => {
+  const NOW = 1_700_000_000_000; // 固定基准：注入 now，断言精确输出而非只匹配形状
+
   test('30 秒内显示相对时间', () => {
-    const ts = Date.now() - 30000;
-    assert.match(formatProgressTimestamp(ts), /^\d+s$/);
+    assert.equal(formatProgressTimestamp(NOW - 30_000, NOW), '30s');
   });
   test('2 分钟显示相对时间', () => {
-    const ts = Date.now() - 120000;
-    assert.match(formatProgressTimestamp(ts), /^\d+m$/);
+    assert.equal(formatProgressTimestamp(NOW - 120_000, NOW), '2m');
   });
   test('超过 5 分钟显示绝对时间 HH:MM:SS', () => {
-    const ts = Date.now() - 600000;
-    assert.match(formatProgressTimestamp(ts), /^\d{2}:\d{2}:\d{2}$/);
+    const ts = NOW - 600_000;
+    const d = new Date(ts);
+    const expected = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    assert.equal(formatProgressTimestamp(ts, NOW), expected);
+  });
+  test('未来时间戳（时钟漂移）钉在 0s，不显示负数', () => {
+    assert.equal(formatProgressTimestamp(NOW + 5_000, NOW), '0s');
+  });
+  test('不传 now 时回落真实时钟（默认参数仍生效）', () => {
+    assert.match(formatProgressTimestamp(Date.now() - 1000), /^\d+s$/);
   });
 });
 

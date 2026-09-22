@@ -5,7 +5,10 @@
 // 正向（安全写法不许误报）保证它不会被嫌吵而绕过；反向（危险写法必须报）保证它真的在工作。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFile } from '../../tests/gates/check-destructive-deletes.js';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { checkFile, collectFiles } from '../../tests/gates/check-destructive-deletes.js';
 
 const check = src => checkFile(src, 'x.test.mjs');
 
@@ -35,6 +38,43 @@ test('反向: 循环删除数组，只要有一项来路不明就必须报', () 
 test('反向: 裸常量路径必须报', () => {
   const v = check("rmSync(join(homedir(), '.claude'), { recursive: true, force: true });");
   assert.equal(v.length, 1);
+});
+
+// ★ 第二个洞：「这个调用算不算递归删除」的判据曾经是对源码文本做字面量正则匹配（第二实参
+// 必须字面写着 recursive:true）。把 options 提成变量或用 spread 合并是完全普通的重构，不是
+// 对抗性构造——却会让整条调用对闸彻底隐身：不是「判定目标安全」，是「压根不被当成候选调用」，
+// 连目标路径可不可追溯都不会检查。这几条锁住 options 侧也要走来源展开，判据与目标路径侧
+// 同一套 fail-closed 方向：追不到来源就按可能递归处理。
+test('反向: options 提成变量的递归删除必须报（不能靠变量化让调用对闸隐身）', () => {
+  const v = check(`
+    const opts = { recursive: true, force: true };
+    rmSync(join(REAL_ROOT, name), opts);
+  `);
+  assert.equal(v.length, 1, 'options 变量化不能让调用对闸隐身');
+});
+
+test('反向: spread 合并的 options 必须报（无法证明不含 recursive:true 就按可能递归处理）', () => {
+  const v = check(`
+    rmSync(join(REAL_ROOT, name), { ...base, recursive: true });
+  `);
+  assert.equal(v.length, 1);
+});
+
+test('反向: options 来源追不到（如函数参数）必须保守按可能递归处理', () => {
+  const v = check(`
+    function cleanup(opts) {
+      rmSync(join(REAL_ROOT, name), opts);
+    }
+  `);
+  assert.equal(v.length, 1, '追不到来源时 fail-closed，不能放行');
+});
+
+test('正向: 变量化但字面量不含 recursive:true 的 options 仍不报', () => {
+  const v = check(`
+    const opts = { force: true };
+    rmSync(join(REAL_ROOT, name), opts);
+  `);
+  assert.deepEqual(v, [], '不含 recursive:true 的 options 不该被当成递归删除，误报会让这道闸被嫌吵而绕开');
 });
 
 // ── 正向：安全写法不许误报（误报会让闸被绕过，等于没有）────────────────────
@@ -288,4 +328,20 @@ test('豁免: argv 形态同样可用 safe-rm 放行', () => {
     // safe-rm: 容器内一次性环境
     spawnSync('rm', ['-rf', '/tmp/fixed-ci-dir']);
   `), []);
+});
+
+// ── 扫描面：collectFiles 此前只认 .js/.mjs，整棵 Playwright spec 树（.spec.ts / .config.ts）
+// 从未被扫描过。头注声称「把只覆盖已知变成覆盖所有未来的」，扩展名死角与这句话不符。
+test('扫描面: collectFiles 认 .ts 文件（此前只认 .js/.mjs，整棵 spec 树不在扫描面内）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-collect-files-'));
+  mkdirSync(join(dir, 'specs'), { recursive: true });
+  writeFileSync(join(dir, 'a.test.mjs'), '');
+  writeFileSync(join(dir, 'specs', 'b.spec.ts'), '');
+  writeFileSync(join(dir, 'specs', 'c.config.ts'), '');
+  writeFileSync(join(dir, 'd.txt'), '');
+  const found = collectFiles(dir).sort();
+  assert.equal(found.length, 3, `应找到 3 个 .mjs/.ts 文件，实际：${JSON.stringify(found)}`);
+  assert.ok(found.some(f => f.endsWith('a.test.mjs')));
+  assert.ok(found.some(f => f.endsWith('b.spec.ts')));
+  assert.ok(found.some(f => f.endsWith('c.config.ts')));
 });
