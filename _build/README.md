@@ -11,11 +11,12 @@
 | 任何页面的增删 | `build-sitemap.mjs` | sitemap 漏页或指向已删的文件 |
 | 重新生成了 `diagrams/` | `build-diagrams-seo.mjs` | archify 覆盖掉 canonical / description / 底部导航，13 张图页重新变回死胡同 |
 | 重新生成了 `docs-site/` | `build-docs-nav.mjs` | 手册 28 页重新变回只在内部循环、不回站点主干 |
+| 重新生成了 `docs-site/`，或改了 `book.config.cjs` | `build-llms.mjs` | **`llms.txt` 的页面清单与 token 标注过期**。它是 AI agent 读这个项目的入口（AEO），agent 按 token 标注决定先加载哪几页 —— 标错就是按错误预算加载。首次接上本脚本时实测 28 个标注**全部**与页面自己声明的对不上 |
 
 ## 提交前跑
 
 ```bash
-node _build/check-seo.mjs             # canonical / description / 重复 / 旧许可证残留
+node _build/check-seo.mjs             # canonical / description / 重复 / 旧许可证残留 / llms.txt 清单与 token
 node _build/check-event-contract.mjs  # 站点的事件清单 ⇔ 主仓 protocol.js
 node _build/check-link-graph.mjs      # 从首页 BFS，钉住「没有孤儿页」
 ```

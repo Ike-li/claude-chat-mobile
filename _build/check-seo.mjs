@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { createRequire } from 'node:module';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BASE = 'https://ike-li.github.io/claude-chat-mobile';
 const fail = [];
@@ -64,6 +65,46 @@ if (agpl.length) fail.push(`已入库文件仍有 AGPL 残留:\n      ${agpl.joi
 // 5. 构建脚本语法
 try { execFileSync('node', ['--check', `${ROOT}/demo/_build/build.cjs`]); }
 catch { fail.push('demo/_build/build.cjs 语法错误'); }
+
+// 6. llms.txt 是 AI agent 读这个项目的入口（AEO）。它此前是手工产物、无人看管，
+//    接上 build-llms.mjs 时实测已经漂了：28 个 token 标注【全部】与页面自己声明的
+//    对不上，系统性偏低 83–410。agent 拿这个数做「先加载哪几页」的预算，标错等于误导。
+//    链接用本地文件判存在、不发 HTTP —— 本脚本要保持零网络、秒级。
+//    【不管什么】`## Primary Documents & Specs` 那 8 条精选是手写的编辑决策，
+//    这里只保证它们不指向死链（6a），不管该收哪几篇 —— 管到那一层就是替人做编辑。
+const llmsFile = `${ROOT}/llms.txt`;
+if (!existsSync(llmsFile)) fail.push('llms.txt 不存在（agent 的入口文件）');
+else {
+  const llms = readFileSync(llmsFile, 'utf8');
+
+  // 6a. 站内链接都要有对应文件。死链在这里是静默失败：agent 取到 404 就丢弃该页，
+  //     而它不会回来告诉你少读了什么。
+  const linked = [...new Set([...llms.matchAll(/\((https:\/\/[^)\s]+)\)/g)].map((m) => m[1]))]
+    .filter((u) => u === BASE || u.startsWith(`${BASE}/`));
+  for (const u of linked) {
+    const f = fileFor(u);
+    if (!existsSync(`${ROOT}/${f}`)) fail.push(`llms.txt 指向不存在的文件: ${f}`);
+  }
+
+  // 6b. 手册清单 ⇔ book.config.cjs（结构真值）+ 各页产物的 Estimated Tokens（token 真值）。
+  //     llms.txt 只是这两者的投影，任何一处对不上都说明它没跟着重新生成。
+  const cfg = createRequire(import.meta.url)(`${ROOT}/docs-site/book.config.cjs`);
+  const listed = new Map(
+    [...llms.matchAll(/^- \[[^\]]*\]\((\S+)\):.*\(Tokens: ~(\d+)\)\s*$/gm)]
+      .map((m) => [m[1].replace(`${BASE}/`, ''), m[2]]),
+  );
+  for (const part of cfg.parts) {
+    for (const pg of part.pages) {
+      const rel = pg.home ? 'docs-site/index.md' : `docs-site/pages/${pg.slug}.md`;
+      if (!listed.has(rel)) { fail.push(`llms.txt 漏登记手册页: ${rel}（跑 node _build/build-llms.mjs）`); continue; }
+      if (!existsSync(`${ROOT}/${rel}`)) continue; // 6a 已经报过这条
+      const want = readFileSync(`${ROOT}/${rel}`, 'utf8').match(/\*\*Estimated Tokens\*\*:\s*~?(\d+)/)?.[1];
+      if (want && listed.get(rel) !== want) {
+        fail.push(`llms.txt 的 token 标注过期: ${rel} 标 ~${listed.get(rel)}，实为 ~${want}（跑 node _build/build-llms.mjs）`);
+      }
+    }
+  }
+}
 
 console.log(`检查 ${locs.length} 个 URL`);
 if (thin.length) {
