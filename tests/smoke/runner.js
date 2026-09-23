@@ -139,7 +139,7 @@ async function runScript(scenario, env, model, extraArgs = []) {
 // root 是本场景的一次性目录；baseEnv 只供单测构造「脏」环境，正常调用永远是 process.env。
 export function smokeEnv({ root, port }, baseEnv = process.env) {
   return {
-    ...stripInheritedEnv(baseEnv),        // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 SMOKE_ENV_BLOCKLIST）
+    ...stripInheritedEnv(baseEnv),        // 摘掉继承来的生产配置与启动者会话的身份变量（见 tests/helpers/spawn-env.mjs）
     AUTH_TOKEN: 'ccm-smoke-test-token',   // §1.9：没有 token server 拒绝启动
     PORT: String(port),
     // WORK_DIR 已退役（并入 WORKDIRS 首项）；WORK_DIRS env 压过配置文件，是隔离实例的注入点。
@@ -163,7 +163,7 @@ async function runScenario(name, model) {
   const scenario = SCENARIOS[name];
   const root = mkdtempSync(join(tmpdir(), `ccm-smoke-${name}-`));
   const env = smokeEnv({ root, port: await freePort() });
-  mkdirSync(env.WORK_DIRS, { recursive: true });
+  mkdirSync(env.CCM_SMOKE_WORK_DIR, { recursive: true });
   mkdirSync(env.CCM_DATA_DIR, { recursive: true, mode: 0o700 });
   let server = null;
 
