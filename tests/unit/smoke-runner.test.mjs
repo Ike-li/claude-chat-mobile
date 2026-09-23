@@ -6,7 +6,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { parseSmokeArgs, smokeScenarioNames, stripInheritedEnv, SPAWN_ENV_BLOCKLIST } from '../smoke/runner.js';
+import { parseSmokeArgs, smokeEnv, smokeScenarioNames, stripInheritedEnv, SPAWN_ENV_BLOCKLIST } from '../smoke/runner.js';
+
+const SCENARIO_DIR = join(import.meta.dirname, '..', 'smoke', 'scenarios');
 
 test('real Claude smoke runner requires an explicit list, scenario, or all action', () => {
   assert.deepEqual(parseSmokeArgs(['--list']), { action: 'list', names: [], model: null });
@@ -30,6 +32,34 @@ test('real Claude smoke scenarios do not hard-code the historical shared work di
     const source = readFileSync(join(dir, name), 'utf8');
     assert.doesNotMatch(source, /\/tmp\/ccm-test/, `${name} must use runner-provided WORK_DIR`);
   }
+});
+
+// runner 与 scenario 之间的约定只有环境变量这一条线，而 scenario 只在花真 token 时才跑——约定断了
+// 没有任何零 token 的东西会红。2026-09-08 WORK_DIR 退役（f1a06950）后 runner 不再传它，读它的 5 个
+// scenario 一启动就抛，到 09-23 真机验证才被发现。所以在这里静态对账：scenario 读的每个变量，
+// 要么在 runner 给的环境里，要么是调用方可选透传的旋钮。
+const OPTIONAL_SCENARIO_ENV = new Set([
+  'ANTHROPIC_MODEL', // 两个权限场景的模型覆盖（不设就用 CLI 默认）
+  'CLAUDE_BIN',      // slash-command 直接调 SDK 时的 CLI 路径（不设就 which claude）
+  'DEBUG_SERVER',    // concurrency 自起 server 时是否把 server 输出打到终端
+]);
+
+test('scenario 读的环境变量都由 runner 提供（或是显式列出的可选旋钮）', () => {
+  const provided = new Set(Object.keys(smokeEnv({ root: '/tmp/ccm-smoke-x', port: 1 }, {})));
+  const names = readdirSync(SCENARIO_DIR);
+  let reads = 0;
+  for (const name of names) {
+    const source = readFileSync(join(SCENARIO_DIR, name), 'utf8');
+    for (const [, key] of source.matchAll(/process\.env\.([A-Z0-9_]+)/g)) {
+      reads++;
+      assert.ok(
+        provided.has(key) || OPTIONAL_SCENARIO_ENV.has(key),
+        `${name} 读 process.env.${key}，但 runner 不提供它——这个场景在真跑时会拿到 undefined`,
+      );
+    }
+  }
+  // 扫描面塌了不是"没有违规"：正则或目录一变，循环一次都不执行，测试照样绿。
+  assert.ok(reads > 0, `${SCENARIO_DIR} 下没扫到任何 process.env 读取，扫描面塌了`);
 });
 
 // smoke 侧只需确认它确实接上了共享清单；清单本身的行为由 tests/unit/spawn-env.test.mjs 覆盖。
