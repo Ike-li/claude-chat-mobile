@@ -1493,7 +1493,7 @@ export class AgentSession {
       // deny + emit expired（与 resolvePermission 的惰性过期分支同义，只是这里「到时主动」而非「有人提交才发现」）。
       const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
       expiryTimer.unref?.(); // 不阻止进程退出
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer });
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations });
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
@@ -2560,7 +2560,11 @@ export class AgentSession {
       // "逐字段一致"的承诺——此前只带 name/input/cwd 三者，切会话重建的卡片会跳过完整性预检
       // （p.fp undefined）且悬置时长/倒计时展示落空，虽不影响后端 fail-closed 门槛（那边独立按
       // requestId 存 fp），但会让前端这条支线体验缺失。
-      permissions.push({ requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt });
+      // persistDestinations 同理：缺了它，重建出来的卡片没有「永久不再问」（2026-09-22 review P2）。
+      permissions.push({
+        requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt,
+        ...(p.persistDestinations?.length ? { persistDestinations: p.persistDestinations } : {}),
+      });
     }
     const questions = [];
     for (const [toolUseID, p] of this.pendingQuestions) {
