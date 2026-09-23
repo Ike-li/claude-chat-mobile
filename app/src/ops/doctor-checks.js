@@ -302,10 +302,49 @@ export function claudeBinDiagnostic({
   return { status: 'ok', detail: `${path} — ${version}`, safe: { found: true, version } };
 }
 
+// DEVICE_APPROVAL_SCOPE 写错时运行时按默认档跑（config.js 只认字面量 all，rate-limiter 不变量钉着），
+// 而默认档恰是较松的那一档：写成 'ALL' / 'yes' 的人以为所有路径都要审批，实际经 Access 与本机样 Host
+// 进来的连接全部跳过，且没有任何报错（2026-09-22 review P2）。两个 doctor 与启动告警共用这一份判据。
+// scope 传归一前的原值；返回的 scope 只出 '' / 'all' / 'unknown'，原值只进 detail。
+export function deviceApprovalScopeDiagnostic({ scope, lang = 'zh' } = {}) {
+  const name = 'DEVICE_APPROVAL_SCOPE';
+  const v = scope == null ? '' : String(scope);
+  if (v === '') {
+    return {
+      status: 'ok', name, scope: '',
+      detail: bi(lang,
+        '未声明（默认）：经 Cloudflare Access 已验的连接与本机样 Host 跳过设备审批。要让「已受信任的设备」管到所有路径，设为 all 并重启',
+        'Undeclared (default): connections verified by Cloudflare Access and loopback-looking Hosts skip device approval. Set it to all and restart to make the trusted-device list cover every path.'),
+    };
+  }
+  if (v === 'all') {
+    return {
+      status: 'ok', name, scope: 'all',
+      detail: bi(lang,
+        'all：所有路径都要过设备审批，含 Cloudflare Access 已验的连接与本机样 Host',
+        'all: every path requires device approval, including Cloudflare Access and loopback-looking Hosts.'),
+    };
+  }
+  return {
+    status: 'warn', name, scope: 'unknown',
+    detail: bi(lang,
+      `DEVICE_APPROVAL_SCOPE 写成 ${JSON.stringify(v)}，不是合法值——运行时按默认档处理：经 Cloudflare Access 已验的连接与本机样 Host 仍跳过设备审批。唯一合法值是 all（小写），留空即默认`,
+      `DEVICE_APPROVAL_SCOPE is set to ${JSON.stringify(v)}, which is not a valid value, so it runs as the default: connections verified by Cloudflare Access and loopback-looking Hosts still skip device approval. The only valid value is all (lowercase); leave it empty for the default.`),
+  };
+}
+
 // 设备审批（第二因子）在哪些连接上被跳过：真本机直连（peer 与 Host 都是本机样），或 Cloudflare Access
 // 已验的连接（Access 替代设备审批，不替代 token）。反代到 127.0.0.1 的隧道 Host 是公网域名，**不**跳过。
+// DEVICE_APPROVAL_SCOPE=all 时两条都不跳过（传归一后的值）。
 // 返回 { status, detail, safe } 供 runDoctor 挂 checks。
-export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {
+export function classifyDeviceGateTopology({ authTokenSet, cfEnabled, deviceApprovalScope = '' } = {}) {
+  if (deviceApprovalScope === 'all') {
+    return {
+      status: 'ok',
+      detail: 'DEVICE_APPROVAL_SCOPE=all：所有连接都要过设备审批，含 Cloudflare Access 已验的连接与本机样 Host；批准走菜单栏、终端回车或 node scripts/device.js approve',
+      safe: { risk: 'none', cfEnabled: !!cfEnabled, scope: 'all' },
+    };
+  }
   if (cfEnabled) {
     return {
       status: 'ok',

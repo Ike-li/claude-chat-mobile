@@ -9,7 +9,7 @@ import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
-import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
+import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, deviceApprovalScopeDiagnostic, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -356,8 +356,21 @@ export function runDoctor(ctx = {}) {
   // token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
   // 纯空白 token 现在判 fail（绑了公网却不设防），于是这里也正确地不再把它当成一道认证门 ——
   // 此前它是 warn/isSet=true，DEVICE_GATE 会以为公网侧有 AUTH_TOKEN 保护着。
-  const gate = classifyDeviceGateTopology({ authTokenSet: tok.safe.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
-  checks.push({ id: 'DEVICE_GATE', status: gate.status, detail: gate.detail, safe: gate.safe });
+  // DEVICE_APPROVAL_SCOPE 并进这一行而不另起一行：设成 all 时「Access 已验的连接跳过设备审批」就不成立了，
+  // 两行各说各的会自相矛盾。写错的值运行时按较松的默认档跑，必须说出来（2026-09-22 review P2）。
+  // ctx 传归一前的原值——归一后只剩 '' / 'all'，写错的痕迹已经没了。
+  const scope = deviceApprovalScopeDiagnostic({ scope: ctx.deviceApprovalScopeRaw, lang: ctx.lang });
+  const gate = classifyDeviceGateTopology({
+    authTokenSet: tok.safe.isSet && tok.status !== 'fail',
+    cfEnabled: !!ctx.cfEnabled,
+    deviceApprovalScope: scope.scope === 'all' ? 'all' : '',
+  });
+  checks.push({
+    id: 'DEVICE_GATE',
+    status: scope.status === 'warn' ? 'warn' : gate.status,
+    detail: scope.status === 'warn' ? `${scope.detail}。${gate.detail}` : gate.detail,
+    safe: { ...gate.safe, scope: scope.scope },
+  });
 
   // D20 的手机端出口（R45，2026-08-30）：FILE_EDIT 是唯一绕过 Agent 审批链的写入通道，而它的
   // 开关就住在这个配置面板里——web 体检的受众与该提示的受众重合度比装机时跑一次的 CLI doctor 高。
