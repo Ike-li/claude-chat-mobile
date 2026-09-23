@@ -105,9 +105,24 @@ export function maskSecret(value) {
 // （启动期会把空串 key 整个删掉，进程视为没设过）。
 // typeof 判串而不是真值判断：shellEnv 是普通对象，裸 shellEnv[k] 对 'constructor' /
 // 'toString' 这类原型链上的 key 恒 truthy，会把它们误报成「被覆盖」。
+//
+// 【不同名的覆盖】内联 WORKDIRS 的读取优先级是 shell WORK_DIRS > WORK_DIRS_FILE > 内联，这两个 shell 键与它不同名，
+// 只按同名判就看不见——面板上那一行与正常行长得一模一样，改完「已保存」、运行时仍是 shell 那份（2026-09-22 review P2）。
+// 别名表放在这里而不是某个消费者里，理由同上：两边必须同一份判据。
+const SHELL_OVERRIDE_ALIASES = Object.freeze({ WORKDIRS: ['WORK_DIRS', 'WORK_DIRS_FILE'] });
 export function shellOverriddenKeys(shellEnv, keys = []) {
   const env = shellEnv && typeof shellEnv === 'object' ? shellEnv : {};
-  return keys.filter((k) => typeof env[k] === 'string' && env[k] !== '');
+  const isSet = (k) => typeof env[k] === 'string' && env[k] !== '';
+  return keys.filter((k) => isSet(k) || (Object.hasOwn(SHELL_OVERRIDE_ALIASES, k) && SHELL_OVERRIDE_ALIASES[k].some(isSet)));
+}
+
+// 上面返回的是被压住的**配置键**（面板按它标行）；要让用户 unset 的是 shell 里**真正设着的变量名**。
+// 两者只在别名处不同：WORKDIRS 被 WORK_DIRS 压着时，`unset WORKDIRS` 什么也清不掉（2026-09-23 #152 review）。
+export function shellOverrideSources(shellEnv, keys = []) {
+  const env = shellEnv && typeof shellEnv === 'object' ? shellEnv : {};
+  const isSet = (k) => typeof env[k] === 'string' && env[k] !== '';
+  const names = shellOverriddenKeys(env, keys).flatMap((k) => (isSet(k) ? [k] : SHELL_OVERRIDE_ALIASES[k].filter(isSet)));
+  return [...new Set(names)];
 }
 
 // 行首是不是某个 key 的赋值行。容忍 `export KEY=`（有人习惯这么写）与两侧空白。

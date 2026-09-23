@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
+  workdirBreadthDiagnostic,
   UPLOADS_FOOTPRINT_WARN_BYTES,
   classifyAuthToken,
   authTokenDiagnostic,
@@ -940,6 +941,17 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
     }
   });
 
+  // WORKDIRS 被不同名的 shell 变量压着（WORK_DIRS / WORK_DIRS_FILE）。列出的被覆盖项是配置键 WORKDIRS，
+  // 但清除命令必须给真正设着的那个变量名——`unset WORKDIRS` 什么也清不掉（2026-09-23 #152 review）。
+  test('WORKDIRS 被不同名变量压着：清除命令给真变量名，不给 WORKDIRS', () => {
+    for (const keys of [['WORKDIRS'], ['WORKDIRS', 'WORK_DIRS']]) {
+      const d = envOverrideDiagnostic({ shellEnv: { WORK_DIRS: '/srv/x' }, keys, lang: 'zh' });
+      assert.equal(d.status, 'warn');
+      assert.ok(d.keys.includes('WORKDIRS'), '被覆盖的配置键照样要列出来');
+      assert.match(d.detail, /`unset WORK_DIRS`/, `keys=${keys}：${d.detail}`);
+    }
+  });
+
   test('空串按「未设置」口径不计（与 data-dir/normalizeLoadedEnvironment 同口径）', () => {
     const d = envOverrideDiagnostic({ shellEnv: { PORT: '' }, keys: ['PORT'], lang: 'zh' });
     assert.equal(d.status, 'ok');
@@ -1430,5 +1442,32 @@ test.describe('tailscaleDiagnostic（TAILSCALE / D23：检测 + 指路，不管�
     for (const input of [{ found: false, accessProfile: 'vpn' }, { found: false, accessProfile: '' }, { ...running, accessProfile: '' }, { found: true, backendState: 'NeedsLogin', accessProfile: 'vpn' }]) {
       assert.doesNotMatch(tailscaleDiagnostic({ ...input, lang: 'en' }).detail, /[一-鿿]/);
     }
+  });
+});
+
+// 两个 doctor 共用的过宽根判定。判据就是写入侧那一个（env-schema.js 的 overlyBroadWorkdir），这里不再
+// 自己写一份——两道闸不同源就等于没有闸（M2 那段注释的原话）。
+test.describe('workdirBreadthDiagnostic：工作区过宽根（只报不拦）', () => {
+  const home = '/home/ccm-doctor-tester';
+
+  test('家目录本身、根、所有家目录之父 → warn，broad 按原顺序列出', () => {
+    const d = workdirBreadthDiagnostic({ dirs: ['/srv/project', home, '/', '/Users'], home, lang: 'zh' });
+    assert.equal(d.status, 'warn');
+    assert.deepEqual(d.broad, [home, '/', '/Users']);
+    assert.match(d.detail, /3/);
+  });
+
+  test('具体项目目录与家目录下的子目录 → ok', () => {
+    const d = workdirBreadthDiagnostic({ dirs: ['/srv/project', `${home}/code/app`], home, lang: 'zh' });
+    assert.equal(d.status, 'ok');
+    assert.deepEqual(d.broad, []);
+  });
+
+  test('前缀相近的别人家目录不误伤（/home/ccm-doctor-tester2 不是 /home/ccm-doctor-tester）', () => {
+    assert.equal(workdirBreadthDiagnostic({ dirs: [`${home}2`], home, lang: 'zh' }).status, 'ok');
+  });
+
+  test('英文档没有中文残留', () => {
+    assert.doesNotMatch(workdirBreadthDiagnostic({ dirs: [home], home, lang: 'en' }).detail, /[一-鿿]/);
   });
 });

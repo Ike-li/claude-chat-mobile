@@ -60,6 +60,7 @@ import {
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
   tailscaleDiagnostic,
+  workdirBreadthDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
 import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
@@ -150,6 +151,12 @@ function checkWorkDir() {
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
     for (const w of result.warnings) warn(from, w);
     for (const { path } of result.entries) checkOneDir(from, path, true);
+    // 过宽根只报不拦（判据与写入侧同一个，见 workdirBreadthDiagnostic）。本机终端里逐条点名，路径可以出现。
+    for (const dir of workdirBreadthDiagnostic({ dirs: result.entries.map(e => e.path), home: homedir(), lang: LANG }).broad) {
+      warn(from, bi(
+        `过宽：${dir}（家目录本身，或 /、/Users、/home 这类根）——范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录`,
+        `Overly broad: ${dir} (the home directory itself, or a root such as /, /Users or /home) — everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow it to a specific project directory`));
+    }
   }
 }
 

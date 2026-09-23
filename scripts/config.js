@@ -412,7 +412,9 @@ function cmdCheck(dir) {
       if (def.kind === 'readonly') continue;
       changes[key] = value;
     }
-    const verdict = validateEnvChanges(toValidationShape(changes), validationDeps(structuredToStringValues(structured)));
+    // validatingExisting：这里校验的是现有配置合不合法，不是一次改动——只针对改动的规则（如 WORK_DIRS_FILE
+    // 只能清空）不适用，否则仍在用旧版外置文件、运行时照常支持的配置会被判红。
+    const verdict = validateEnvChanges(toValidationShape(changes), { ...validationDeps(structuredToStringValues(structured)), validatingExisting: true });
     for (const r of verdict.results.filter(x => x.level === 'error')) problems.push(`${r.key}: ${r.message}`);
   } else {
     // 旧格式特有的两个转义地雷。JSON 没有这个失败模式，所以只在这条分支查。

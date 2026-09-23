@@ -9,7 +9,7 @@ import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
-import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
+import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic, workdirBreadthDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -287,7 +287,14 @@ export function runDoctor(ctx = {}) {
   checks.push({ id: 'CLAUDE_BIN', status: cb.status, detail: cb.detail, safe: cb.safe });
 
   const wc = (ctx.workDirs || []).length;
-  checks.push({ id: 'WORK_DIRS', status: wc ? 'ok' : 'warn', detail: `${wc} 个工作目录`, safe: { count: wc } }); // 不回显路径
+  // 过宽根只报不拦（判定见 workdirBreadthDiagnostic）；这里只出个数，路径不进报告。
+  const wb = workdirBreadthDiagnostic({ dirs: ctx.workDirs || [], home: ctx.home, lang: ctx.lang });
+  checks.push({
+    id: 'WORK_DIRS',
+    status: wc && wb.status === 'ok' ? 'ok' : 'warn',
+    detail: wb.broad.length ? `${wc} 个工作目录；${wb.detail}` : `${wc} 个工作目录`,
+    safe: { count: wc, tooBroad: wb.broad.length },
+  }); // 不回显路径
 
   const sl = statuslineConfigDiagnostic(ctx.webStatuslineOff, ctx.lang);
   checks.push({ id: 'WEB_STATUSLINE', status: sl.status, detail: sl.detail });

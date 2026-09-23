@@ -568,3 +568,25 @@ test.describe('probeListeningProcesses —— 端口监听者取数', () => {
     assert.ok(calls.length > 0 && calls.every((c) => !c.startsWith('/')), `写死了绝对路径：${calls.join(',')}`);
   });
 });
+
+// 工作区过宽根（2026-09-22 review P2；维护者选「只在 doctor 里报、不拦」）。写入侧早已拒绝家目录与
+// /、/Users 这类根，可加载侧不查：手改配置、旧版 WORK_DIRS_FILE 的外置文件、shell 的 WORK_DIRS 都能把
+// 它们带进来。web 体检只报个数——报告会被贴进 issue / 聊天，路径不进报告（同这一格原有的纪律）。
+test.describe('WORK_DIRS：过宽根只报不拦', () => {
+  const home = '/home/ccm-doctor-tester';
+  const wd = (workDirs) => runDoctor({ ...stubProbes(), home, workDirs }).checks.find(c => c.id === 'WORK_DIRS');
+
+  test('工作区里有家目录本身或 / → warn，safe 只带个数、不带路径', () => {
+    const c = wd(['/srv/project', home, '/']);
+    assert.equal(c.status, 'warn');
+    assert.equal(c.safe.tooBroad, 2);
+    assert.equal(c.safe.count, 3);
+    assert.equal(JSON.stringify(c).includes(home), false, '家目录路径不进体检报告');
+  });
+
+  test('都是具体项目目录 → ok（正对照）', () => {
+    const c = wd(['/srv/project', `${home}/code/app`]);
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.tooBroad, 0);
+  });
+});
