@@ -349,6 +349,7 @@ test.describe('interrupt()', () => {
   test('interrupt() 成功后，紧跟的下一条 result 事件 payload.interrupted=true（一次性消费）', async () => {
     const { s, events } = makeSession();
     s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1; // 真 SDK 只在「确有在途轮被中断」时才吐这条终态 result（见下一条用例）
     await s.interrupt();
     s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {} });
     const r1 = events.find(e => e.type === 'result');
@@ -358,6 +359,24 @@ test.describe('interrupt()', () => {
     s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 20, modelUsage: {} });
     const results = events.filter(e => e.type === 'result');
     assert.equal(results[1].payload.interrupted, false, '标记应一次性消费，不应残留到下一轮 result');
+    s.dispose();
+  });
+
+  // 纯后台任务期空输入也会出现停止钮（resolveComposerPrimaryMode 的 busy && !hasContent 兜底）。点它时
+  // SDK 没有在途轮：q.interrupt() 照样 resolve，之后却不会有配对的终态 result；账面为 0 也不武装结算
+  // 兜底。标记若照样置上就没人清了——用户下一轮正常跑完的 result 被标 interrupted，界面与推送都说
+  //「任务已中止」。
+  test('没有在途轮时 interrupt 成功（纯后台任务期点停止）→ 下一轮正常完成的 result 不得标 interrupted', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    assert.equal(s.pendingTurns, 0, '前提：点停止时没有在途轮');
+    await s.interrupt();
+    assert.equal(await s.send('停止之后发的下一轮'), true);
+    s.queue = []; // 已泵进 CLI
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, false,
+      '这次停止没有中断任何一轮；把下一轮的正常完成标成中止，界面和推送都会谎报「任务已中止」');
     s.dispose();
   });
 

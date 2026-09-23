@@ -13,9 +13,11 @@
 #   只有 7 个 RUN_CLAUDE_INTEGRATION 门控的文件 + test:smoke 需要真 claude turn，那两档【不进容器】，
 #   要跑就在宿主机上单独跑、单独授权。
 #
-# 基础镜像用 Playwright 官方版：自带浏览器与系统依赖，tag 必须与 package.json 里的
-# @playwright/test 实际版本一致（当前 1.61.1），版本错开会报 "Executable doesn't exist"。
-FROM mcr.microsoft.com/playwright:v1.61.1-noble
+# 基础镜像用 Playwright 官方版：自带浏览器与系统依赖，tag 必须与 package-lock.json 里的
+# @playwright/test 实际版本一致（当前 1.63.0），版本错开会报 "Executable doesn't exist"。
+# dependabot 只升 npm 包、不动这里，所以由 tests/unit/playground-compose.test.mjs 钉住两边同版本
+# （2026-09-23 实测：1.61.1 镜像配 1.63.0 依赖，test:docker:e2e 起不来浏览器）。
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
 
 WORKDIR /app
 

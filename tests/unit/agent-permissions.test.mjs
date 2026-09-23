@@ -233,6 +233,25 @@ test.describe('权限闸门', () => {
       s.resolvePermission('t1', 'deny');
       s.dispose();
     });
+
+    // 切会话 / 重连 / 整页刷新时，审批卡是按这份快照重建的，走的是同一个 permission_request handler。
+    // 快照每少一个字段，重建出来的卡片就少一样东西——persistDestinations 缺了，卡片上的「永久不再问」
+    // 就没了（2026-09-22 review P2）。所以这里按整个 payload 比，不逐字段点名：下次再加字段忘了同步也会红。
+    test('pendingRequestsSnapshot()：与 live permission_request 的 payload 逐字段一致（含「永久不再问」用的 persistDestinations）', () => {
+      const { s, events } = makeSession({ cwd: '/tmp/proj' });
+      const ac = new AbortController();
+      // CLI 给了会落盘的规则建议（localSettings），卡片上才有「永久不再问」
+      s.askPermission('Bash', { command: 'npm test' }, {
+        signal: ac.signal, toolUseID: 't-persist',
+        suggestions: [{ type: 'addRules', destination: 'localSettings', behavior: 'allow', rules: [{ toolName: 'Bash', ruleContent: 'npm test' }] }],
+      });
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-persist').payload;
+      assert.deepEqual(live.persistDestinations, ['localSettings'], '前提：live 事件带着它');
+      const rebuilt = s.pendingRequestsSnapshot().permissions.find(p => p.requestId === 't-persist');
+      assert.deepEqual(rebuilt, live, '重建出来的卡片与当初弹出的那张必须一模一样');
+      s.resolvePermission('t-persist', 'deny');
+      s.dispose();
+    });
   });
 
   // 持久化台账（approval_request 表，承接 NFR-16/19/22，Phase 4）——askPermission/resolvePermission

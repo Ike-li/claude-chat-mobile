@@ -80,7 +80,7 @@
 | `AUTH-02` | `ownsHost(host)` 为真时，验签失败**不得**回退 `AUTH_TOKEN` |
 | `AUTH-03` | 限速只打鉴权口；成功认证后的业务 500 不计入失败。本机来源的锁定**不得**文案成「有人在暴力尝试」 |
 | `AUTH-04` | 只在声明的可信拓扑下采信边缘注入头：公网 Host + loopback peer → `CF-Connecting-IP`；`TRUSTED_PROXY=loopback` + loopback peer → `X-Forwarded-For` **末跳**。LAN/直连、未声明、开关值写错，一律不采信（失败方向 = 合桶，不是拆桶）。限速桶与待审设备卡片上的来源 IP 取同一份判据（`clientSourceAddress`），不允许各算一份 |
-| `AUTH-06` | CCM 自己的控制面密钥（`AUTH_TOKEN` · `VAPID_*` · `NTFY_*` · `CF_ACCESS_*`）不得随子进程环境流给 claude。**这不是「裁剪终端等价性」而是恢复它**：普通终端里的 claude 本来就没有这几个键，它们只存在于 `ccm.config.json`，是 server 的投影把它们带进 `process.env` 的。反向同样要钉——`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量属于 claude，剥了会静默砍掉第三方网关那条支持路径 |
+| `AUTH-06` | CCM 自己的控制面密钥（`AUTH_TOKEN` · `VAPID_*` · `NTFY_*` · `CF_ACCESS_*`）不得随子进程环境流给 claude，也不得流给 server 在工作区里跑的 git（仓库配置能让它执行任意命令）。**这不是「裁剪终端等价性」而是恢复它**：普通终端里的 claude 本来就没有这几个键，它们只存在于 `ccm.config.json`，是 server 的投影把它们带进 `process.env` 的。反向同样要钉——`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量属于 claude，剥了会静默砍掉第三方网关那条支持路径 |
 | `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面有两道早退，顺序不能换**：`DEVICE_APPROVAL_SCOPE === 'all'` 一律不 bypass（覆盖全部路径的总开关，含本机样 Host 那条——Host 是客户端填的头，纯 TCP 转发下可伪造，见 H1），其次 CF Access 已启用时直接 bypass、不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
 | `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏）。网络响应里的设备 ID 一律是短 ID：待审列表、审计记录、服务端日志回传都不带完整设备令牌——令牌就是准入凭据，一台日后被吊销的设备手里不能还攥着别台的 |
@@ -105,7 +105,7 @@
 | `MSG-01` | 同一 `clientMessageId` 对 Claude `send` 至多一次。校验失败不得 commit；并发重发靠 in-flight claim，无论成败都要 release（`REL-01` 两阶段 + claim/release · `SRV-001` FRESH 分支**同样**要单飞——「FRESH 不去重」是修过的坑） |
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
 | `SOCKET-01` | Socket 断开不得杀死 Agent；Agent 死必须清 busy、通知客户端、允许恢复 |
-| `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history` |
+| `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history`。一台设备连入触发的追平重定基线只对它自己生效：其余在线端照样收到终端刚写的那段 `history_append`，待审批设备连入不触发 |
 | `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |
 | `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行 |
 | `APPROVAL-02` | 启动时磁盘上残留的 pending 标为 expired（`decidedBy=system:restart`），不可再批准执行 |
@@ -120,7 +120,7 @@
 | `NOTIFY-01` | 审批/提问/后台任务完成无条件推；`result` 仅当 approved 房间有**前台可见**连接时抑制，判据是 `client:presence` 而非 socket 连着（`SEC-04` 正文不进第三方明文通道 · `OPS-3` `notify_failed` 须覆盖 push 与 ntfy 双通道） |
 | `ALERT-01` | 服务告警与「需要你(N)」是两根轴，绝不混判（`OPS-1` doctor readiness 假绿） |
 | `DISPLAY-01` | 模型列表、effort、statusline 只做 [display-contracts.md](../docs/display-contracts.md) 允许的变换（`OPS-2` `utilization` 必须夹在 `[0,100]`） |
-| `OPS-04` | `/health` 的 `busy` 反映「**有在途轮次**」（`anyTurnRunning()`），不是「有实例」。运维探针据此判断能否重启——报成空闲会让正在跑的回合被腰斩。<br>*（2026-09-05 反向补登：这条一直被 `invariants/server/health-busy.test.mjs` 守着，只是从未登记）* |
+| `OPS-04` | `/health` 的 `busy` 反映「**有在途轮次**」（`anyTurnRunning()`），不是「有实例」。运维探针据此判断能否重启——报成空闲会让正在跑的回合被腰斩。多端看到的 `instances.turnRunning` 同口径：后台任务完成触发的自动汇报轮由 agent 合成账面，开轮那一刻就要广播出去，否则其它端以为它空闲、发消息被在途轮闸拒掉。<br>*（2026-09-05 反向补登：这条一直被 `invariants/server/health-busy.test.mjs` 守着，只是从未登记）* |
 | `OPS-05` | 写进**外部配置**（launchd plist、`~/.claude/settings.json`）的 node 路径必须是跨版本升级存活的稳定 symlink，不得是 `process.execPath`（解析过 symlink 的版本化真身）。失效是**静默**的——node 一升级两个 hook 与 statusline 一起停摆，用户只看到「手机端收不到推送」，无任何报错指向 node。<br>*（2026-09-07：注释和局部函数拦不住——同一个坑在 `service.js`、`app-build.js` 修过两次后，两个 bridge 安装器照样踩了第三次）* |
 | `PROTO-01` | `AGENT_EVENT_TYPES` 与 `INBOUND_SOCKET_EVENTS` 是唯一名单；后端 emit / 后端 listen / 前端 handle / 假后端四处与名单双向相等 |
 | `DIST-01` | 分发树（GitHub `master` 归档）`npm ci --omit=dev` 可装可启、生产代码零 devDependency 泄漏；`uninstall` 只删产品自己写下的白名单，**永删不到** `~/.claude/projects` |

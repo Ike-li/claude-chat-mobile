@@ -9,6 +9,7 @@ import path from 'node:path';
 import * as diagLog from '../agent/diag-log.js';
 import { createUsageSnapshotStore, rememberUsage, fallbackUsage, snapshotAgeMs, clampRateMonotonic, RATE_WINDOW_KEYS } from './usage-snapshot.js';
 import { setLru } from '../shared/bounded-map.js';
+import { childEnv } from '../shared/child-env.js';
 
 // 状态栏 project 字段：从 cwd 取末段目录名。原 `cwd.split('/').pop()` 手写实现只认 `/`，
 // server 跑在 Windows 上时 cwd 是 `C:\...`（无 `/`），会退化成整条路径。改用 path.win32/posix
@@ -30,7 +31,8 @@ const GIT_CACHE_MAX = 200;
 function execGit(args, cwd) {
   return new Promise(resolve => {
     try {
-      execFile('git', ['-C', cwd, ...args], { timeout: 2_000, maxBuffer: 1 << 20 },
+      // env 走 childEnv：status 会触发仓库配置里的 core.fsmonitor 等命令，不能让它们拿到控制面密钥（AUTH-06）。
+      execFile('git', ['-C', cwd, ...args], { timeout: 2_000, maxBuffer: 1 << 20, env: childEnv() },
         (err, stdout) => resolve(err ? null : String(stdout).trim()));
     } catch { resolve(null); } // cwd 无效 / git 不存在：优雅缺席
   });

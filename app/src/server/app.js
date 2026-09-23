@@ -13,6 +13,7 @@ import { parse as dotenvParse } from 'dotenv';
 import { maskToken, sanitize } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
+import { childEnv } from '../shared/child-env.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -71,10 +72,10 @@ import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
-import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
+import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
-import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
+import { isProcessed, commitProcessed, processedInstanceId, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
   shouldRejectOutboxLazyOpen,
@@ -210,7 +211,7 @@ let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId �
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 // n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
 //     重启后同一 clientMessageId 会被当成新消息（n=1 下可接受：重启本就中断在途轮）。
-let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
+let messageDedupState = new Map(); // clientMessageId → { at, instanceId }（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 // isProcessed/commitProcessed 之间横跨多个 await，不是原子的：断线重连重发可能让同一 clientMessageId
 // 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次 a.send() 真实重复发送。
 // 这里补一层"眼下有没有人正处理这条、尚未落定成败"的占用（见 message-dedup.js 的 isInFlight 一族）。
@@ -373,7 +374,8 @@ function preflight() {
   // 失败被下面的 catch 吞掉不会崩，但 versions.cli 会恒为 unknown——而那一项的存在理由
   // 正是本段头注说的「升级后回归核对」。2026-09-17 安全审查评估后保留现状。
   try {
-    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
+    // env 走 childEnv：claude 子进程一律拿不到 CCM 自己的控制面密钥（AUTH-06），这一次也不例外。
+    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8', env: childEnv() }).trim();
   } catch { /* 非致命 */ }
   // 三段各自独立 try：任一来源失败只让自己留 unknown，不连坐其余（曾把 server 版本挂在 SDK 同块里被连坐跳过）。
   const require = createRequire(import.meta.url);
@@ -609,7 +611,7 @@ const io = new Server(httpServer, {
 // 机制下沉 src/auth/device-gate.js；unlockSocket（重放 init/models/statusline 初始态）
 // 耦合组装根状态（lastInit/viewing*/replay*），留在本文件、经回调注入。
 const deviceGate = createDeviceGate({
-  io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket),
+  io, onUnlockSocket: (socket) => unlockSocket(socket),
   accessBypassActive: authStrategy.isEnabled() && DEVICE_APPROVAL_SCOPE !== 'all',
 });
 const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices,
@@ -620,6 +622,7 @@ function unlockSocket(socket) {
   socket.deviceApproved = true;
   socket.trustBasis = 'device-token'; // SEC-03：待审批→批准走的就是设备信任表，受该表控制（吊销须能断连）
   socket.join('approved'); // SEC-01：批准后补入下行隔离房间，同 io.on('connection') 分支的即时批准路径
+  mirrorEngine.requestRebaseline(socket.id); // 同 connection 分支：这一刻它才开始拉历史（见那里的注释）
   // 未读角标：不在此 capture——批准另一台设备 ≠ 当前会话「重新进入查看」。
   // capture 会并入/清零活计数；若 viewing 会话已有未 ack 快照，新设备 join 不应触发多余状态机跳变。
   // 真正进入查看仍走 setViewing / session:switch / 本 socket 首次 connect 路径。
@@ -2389,11 +2392,6 @@ diagLog.setCallback((key, entry) => {
 
 registerSocketConnection(io, socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
-  // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
-  // 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
-  // BE-009：改为置 catchUpRebaselineRequested 标志（而非直接 catchUpKey=null）——让下一 tick 在重建 baseline
-  // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
-  mirrorEngine.requestRebaseline();
 
   // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
   if (socket.deviceApproved !== true) {
@@ -2406,6 +2404,12 @@ registerSocketConnection(io, socket => {
     // SEC-01：批准设备加入下行隔离房间——本函数下方全部 io.emit 已改 io.to('approved').emit，
     // 待审批 socket（deviceApproved===false）不在此房间，故收不到任何敏感广播，只收上面的 device_status。
     socket.join('approved');
+    // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
+    // 会把已显示的消息再 history_append 一遍成重复气泡。BE-009：置标志而非直接 catchUpKey=null——让下一 tick
+    // 在重建 baseline 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
+    // 带上 socket.id：那一 tick 的增量照推给其它在线端，只跳过这一台。只在已批准时请求——待审批设备收不到
+    // 任何会话内容也不会拉历史，旧实现让它每连一次都触发一次重定基线（批准时由 unlockSocket 补上）。
+    mirrorEngine.requestRebaseline(socket.id);
     // 未读角标：覆盖"同一会话内断线重连"场景（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
     // 断开 socket，但 viewingInstanceId 全程不变，前端不会重新 emit user:setViewing）。幂等、null 安全，
     // 无关紧要的网络抖动重连也可放心无脑调用。
@@ -2475,7 +2479,14 @@ registerSocketConnection(io, socket => {
     // 若在此提前登记（旧 checkAndRecord 行为），校验失败/队满失败的 ID 会被记入，第二次重发命中去重
     // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
     if (isProcessed(clientMessageId, messageDedupState)) {
-      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true }); return;
+      // 带回首发落点：首发 ack 在路上丢了的客户端只能从这里得知消息落在哪个实例（离线 worktree 锚点靠它）。
+      // 只带还活着的：实例在重连前被关闭 / 回收的话，客户端会把后续消息改投到它、拿到 stale 当永久失败丢掉。
+      // 不带则回到原先的行为——由下一条消息自己去开（2026-09-23 #156 review）。「活着」与 instance-manager 的
+      // forSession 同口径：空闲回收置了 terminating、或已 dispose 但 onExit 还没删表的，都算已经没了。
+      const stored = processedInstanceId(clientMessageId, messageDedupState);
+      const live = stored ? agents.get(stored) : null;
+      const instanceId = live && !live.terminating && !live.disposed ? stored : null;
+      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}) }); return;
     }
     // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
     // 不重复调用 a.send()，负 ack 可重试，client 既有重试机制稍后会再次命中（那时原请求已
@@ -2699,7 +2710,7 @@ registerSocketConnection(io, socket => {
       // 重跑并二次 a.send()，同一条 prompt 投给 Claude 两次。加 try/finally 之前那条陈旧的 in-flight
       // 占用反而会挡住重试（卡到重启，但至多一次），即修 F1 时把「卡死」换成了「可能重复投递」。
       // 顺序不变量由 tests/unit/message-dedup.test.mjs 的源码级断言钉住（2026-08-04 code review）。
-      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
+      messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: a.instanceId });
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
@@ -3364,16 +3375,12 @@ registerSocketConnection(io, socket => {
     // G5：回退是覆盖式写文件，工作区里没提交的活会被无声冲掉。
     // 【只报真有风险的那部分】不是「工作区 dirty 就警告」——开发中 dirty 是常态，每次都弹
     // 用户三次之后就学会无视了。只报「回退会碰 且 改动没进 git 对象库」的交集，判据见
-    // files/git-workspace.js 的 riskyUncommittedPaths。
+    // files/git-workspace.js 的 riskyUncommittedPaths；取改动的范围是整仓而不是工作区子树（见 rewindDirtyOverlap）。
     // 失败方向是【放行】：非 git 仓库、git 读失败、超时 —— 一律不拦也不警告。
     // 这条是知情提示不是安全闸，为它挡住一次合法回退才是更坏的结果。
     let dirtyOverlap = [];
     try {
-      const repoRoot = await gitRepoRoot(cwd);
-      if (repoRoot) {
-        const changes = await listGitChanges(cwd);
-        dirtyOverlap = overlapRiskyFiles(filesChanged, riskyUncommittedPaths(changes), repoRoot);
-      }
+      dirtyOverlap = await rewindDirtyOverlap(cwd, filesChanged);
     } catch (err) {
       console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
     }

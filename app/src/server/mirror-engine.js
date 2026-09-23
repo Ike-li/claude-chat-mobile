@@ -37,6 +37,8 @@ export function createMirrorEngine({
   // ~/.claude/sessions 塞活 pid 条目会让用户正在跑的 server 看到幻影「终端会话」。
   transcriptBaseDir = null,
   sessionRegistryDir = null,
+  // 读 transcript 的注入点（仅单测用；生产恒为 getSessionHistory）。测「tick 读盘 await 期间」的竞态靠它。
+  readHistory = getSessionHistory,
 } = {}) {
   // 展开进各 reader 的 options；null 时为空对象 = 走 reader 自己的默认根。
   const diskOpts = transcriptBaseDir ? { baseDir: transcriptBaseDir } : {};
@@ -166,6 +168,7 @@ export function createMirrorEngine({
   let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
   let catchUpState = { baseline: 0, wasBusy: false, lastTailKey: null };
   let catchUpRebaselineRequested = false;             // BE-009：客户端（重）连时置位，下一 tick 重定基线；先检测被吸收的外部增长再标 externalDirty，防分叉
+  const rebaselineSocketIds = new Set();              // 触发这次重定基线的 socket：它们自己会全量重载，重定基线那一 tick 的增量不推给它们
   // 只读锁释放状态机（history.js mirrorReleaseStep，含自动解锁计时）——修 code-review 发现 1：
   // 原实现上锁后无任何自动释放路径，终端写一次就把移动端输入锁死到手动切会话/接管为止。现每 tick 据
   // 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
@@ -178,11 +181,33 @@ export function createMirrorEngine({
   // （且随后本方轮次开跑会让 mirrorReleaseStep 维持锁，要再攒满 12.5s 静默才解锁）。
   // takeOver 递增本计数；tick 入口取快照，提交前比对——变了就整 tick 作废，与 viewing 守卫同款语义。
   let takeOverGeneration = 0;
+  // catchUpStep 的产出推给已批准设备（SEC-01）：满窗滑动走整窗替换，增量走 history_append。
+  // 正常 tick 与重定基线 tick 共用这一份，免得两处推送各写一份再漂开。
+  // exceptSocketIds：这一 tick 要跳过的 socket（刚连上、自己会全量重载的那几台）。
+  function emitCatchUp(a, id, { emit, reload, messages }, exceptSocketIds = []) {
+    const room = exceptSocketIds.length ? io.to('approved').except(exceptSocketIds) : io.to('approved');
+    // SS-001：满窗滑动 → reload：全量推当前 history 窗口（替代不可 slice 的增量）。
+    // 复用 history_append + replace:true（不新增契约事件类型），前端清屏后以 messages 重渲。
+    if (reload) {
+      metrics.inc('catch_up_reloads');
+      room.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+        type: 'history_append', payload: { messages, external: true, replace: true, reason: 'sliding_window' },
+      });
+    }
+    if (emit.length > 0) {                                               // 观察到外部写入 → 追平尾巴
+      metrics.inc('catch_up_hits'); // 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
+      room.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+        type: 'history_append', payload: { messages: emit, external: true },
+      });
+    }
+  }
   async function catchUpTickOnce() {
     const takeOverAtEntry = takeOverGeneration;
     const id = getViewingInstanceId();
     const a = id ? agents.get(id) : null;
-    if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id, 'no_session'); return; } // 无查看会话：停、复位释放态
+    if (!a || !a.sessionId) { catchUpKey = null; rebaselineSocketIds.clear(); mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id, 'no_session'); return; } // 无查看会话：停、复位释放态（catchUpKey 已空，下次重定基线走切入分支，攒的 socket id 用不上）
     const key = `${a.cwd}\x00${a.sessionId}`;
     const st = instanceState(id);
     const localBusy = st === 'busy' || st === 'permission';
@@ -199,38 +224,57 @@ export function createMirrorEngine({
     // 豁免」是为"隔天打开无人管的会话"设的——同会话连续观察不该走它，否则终端跑长工具跨过 5 分钟时，
     // 手机息屏/断网/刷新任一触发的一次重连就把已维持的锁清掉且再也建不回来（见 mirrorEntryLock）。
     let rebaselineSameSession = false;
+    let rebaselineSeed = null; // 同会话重定基线读到的那份快照——下面定基线必须用同一份，见赋值处
     if (catchUpRebaselineRequested) {
       catchUpRebaselineRequested = false;
+      const freshSocketIds = [...rebaselineSocketIds];
+      rebaselineSocketIds.clear();
       if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
         rebaselineSameSession = true;
         // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
-        const curMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
+        const curMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
         const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
         const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
         if (getViewingInstanceId() === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
-            && takeOverGeneration === takeOverAtEntry // R2：接管已 dispose+resume 吸收过磁盘，旧观察不得重新标脏
-            && rebaselineAbsorbedExternal({
-              sameSession: true,
-              curLen,
-              baseline: catchUpState.baseline,
-              localBusy, // 己方忙碌不算外部写入
-              // 己方 turn【上一 tick】还在写盘：baseline 被下面 localBusy 分支冻结着、这一轮的增长是自己
-              // 写的，只是尚未吸收。不传这一维，「发消息→锁屏→解锁」这条移动端主路就会把己方写入判成终端
-              // 写入。刻意用 wasOwnTurn 而非 localBusy 口径的 wasBusy——等审批(permission)期间的增长可能
-              // 真是终端写的，豁免它会漏标致分叉（2026-08-10，见 rebaselineAbsorbedExternal 注释）。
-              wasOwnTurn: catchUpState.wasOwnTurn === true,
-              prevTailKey: catchUpState.lastTailKey ?? null,
-              curTailKey,
-            })) {
-          a.externalDirty = true; // 被 rebaseline 吸收的终端外部增长 → 标脏防分叉
+            && takeOverGeneration === takeOverAtEntry) { // R2：接管已 dispose+resume 吸收过磁盘，旧观察不得重新标脏
+          if (rebaselineAbsorbedExternal({
+            sameSession: true,
+            curLen,
+            baseline: catchUpState.baseline,
+            localBusy, // 己方忙碌不算外部写入
+            // 己方 turn【上一 tick】还在写盘：baseline 被下面 localBusy 分支冻结着、这一轮的增长是自己
+            // 写的，只是尚未吸收。不传这一维，「发消息→锁屏→解锁」这条移动端主路就会把己方写入判成终端
+            // 写入。刻意用 wasOwnTurn 而非 localBusy 口径的 wasBusy——等审批(permission)期间的增长可能
+            // 真是终端写的，豁免它会漏标致分叉（2026-08-10，见 rebaselineAbsorbedExternal 注释）。
+            wasOwnTurn: catchUpState.wasOwnTurn === true,
+            prevTailKey: catchUpState.lastTailKey ?? null,
+            curTailKey,
+          })) {
+            a.externalDirty = true; // 被 rebaseline 吸收的终端外部增长 → 标脏防分叉
+          }
+          // 重定基线只为新连上的那几台设：它们自己会全量重载，沿用滞后 baseline 会给它们推成重复气泡。
+          // 可 baseline 是全局单值，下面一重建，连接前就在线的端就再也收不到上一 tick 之后终端写的那段——
+          // 所以先按正常 tick 的同一判据（catchUpStep）把它推给它们，只跳过新连上的 socket。
+          // localBusy 时不推：己方在写盘，正常 tick 同样整段跳过追平。
+          // 读盘 await 期间新连上的 socket 同样在全量重载：它们已登记进 rebaselineSocketIds（下一拍再为它们
+          // 重定基线），这一拍一并跳过——前端的历史加载闸只扣住、不去重，推给它们就是重复气泡。
+          if (!localBusy && Array.isArray(curMsgs)) {
+            emitCatchUp(a, id, { ...catchUpStep(catchUpState, { messages: curMsgs, localBusy: false }), messages: curMsgs },
+              [...freshSocketIds, ...rebaselineSocketIds]);
+          }
+          // 定基线沿用这份快照、不再读第二次：两次读之间终端若又写了一轮，基线会越过它，而旧查看端只收到了
+          // 这份——那一轮就再也补不上。沿用之后它留在基线之外，下一拍照常追平（2026-09-23 #147 review）。
+          if (Array.isArray(curMsgs)) rebaselineSeed = curMsgs;
         }
       }
       catchUpKey = null;                                               // 强制下方 switch 分支重建 baseline + 重评 mirror 入口锁
     }
     if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
-      let seedMsgs;
-      try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts); }
-      catch { return; }
+      let seedMsgs = rebaselineSeed;
+      if (!seedMsgs) {
+        try { seedMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts); }
+        catch { return; }
+      }
       const seedLen = seedMsgs.length;
       // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
       // wasOwnTurn 与 wasBusy 分开记：前者只认己方 turn 在写盘（st==='busy'），供重连 rebaseline 判「这段
@@ -354,7 +398,7 @@ export function createMirrorEngine({
     let registryWaiting;
     try {
       const sizeP = sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1);
-      const histP = getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts);
+      const histP = readHistory(a.sessionId, a.cwd, undefined, diskOpts);
       const regP = readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       curSize = await sizeP;
       const sizeOpt = { ...diskOpts, size: curSize >= 0 ? curSize : null };
@@ -382,25 +426,10 @@ export function createMirrorEngine({
     // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。
     const keepAlive = mirrorLastSize >= 0 && curSize > mirrorLastSize;
     if (curSize >= 0) mirrorLastSize = curSize; // 读取瞬时失败(curSize=-1)不覆盖基线：保留上次好值，避免把「基线未建立」哨兵误写回、平白吃掉 1-2 个 tick 的 keep-alive 信号
-    // SS-001：满窗滑动 → reload：全量推当前 history 窗口（替代不可 slice 的增量）+ 标 externalDirty。
-    // 复用 history_append + replace:true（不新增契约事件类型），前端清屏后以 messages 重渲。
-    if (reload) {
-      metrics.inc('catch_up_reloads');
-      a.externalDirty = true;
-      io.to('approved').emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
-        type: 'history_append', payload: { messages, external: true, replace: true, reason: 'sliding_window' },
-      });
-    }
     const externalWrite = emit.length > 0 || reload;
-    if (emit.length > 0) {                                               // 观察到外部写入 → 追平尾巴
-      metrics.inc('catch_up_hits'); // 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
-      a.externalDirty = true; // 该实例的 SDK 子进程内存上下文已落后于磁盘（外部驱动方写了新轮次）——web 下次发送前须置换实例吸收，否则模型看不到这些轮次、语义分叉
-      io.to('approved').emit('agent:event', { // SEC-01：会话内容，仅广播给已批准设备
-        seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
-        type: 'history_append', payload: { messages: emit, external: true }
-      });
-    }
+    // 该实例的 SDK 子进程内存上下文已落后于磁盘（外部驱动方写了新轮次 / 满窗滑动）——web 下次发送前须置换实例吸收，否则模型看不到这些轮次、语义分叉
+    if (externalWrite) a.externalDirty = true;
+    emitCatchUp(a, id, { emit, reload, messages });
     const tailPending = tail.verdict === 'pending';
     const rel = mirrorReleaseStep(mirrorRelease, {
       externalWrite, keepAlive, tailPending, localBusy: false, registryBusy, registryWaiting,
@@ -456,8 +485,12 @@ export function createMirrorEngine({
     isReadonly() { return mirrorReadonly; },
     // 切视图 / 切工作区 / 新会话 / 回空首页
     clearMirrorOnViewChange,
-    // 客户端(重)连：置位下一 tick 重定基线（BE-009）
-    requestRebaseline() { catchUpRebaselineRequested = true; },
+    // 已批准设备（重）连 / 刚被批准：置位下一 tick 重定基线（BE-009）。socketId = 这台会自己全量重载的连接，
+    // 那一 tick 的增量不推给它（其它端照推，见 catchUpTickOnce 的重定基线分支）
+    requestRebaseline(socketId) {
+      catchUpRebaselineRequested = true;
+      if (socketId) rebaselineSocketIds.add(socketId);
+    },
     // 前端显式接管后第一条消息成功入队：服务端切换驾驶方
     takeOver(sessionId) {
       takeOverGeneration += 1; // R2：作废所有在飞 tick 的观察（它们看到的是接管前的世界）

@@ -11,6 +11,9 @@ const DATA_DIR = resolveDataDir();
 // 生产 data/（避免 devices.test 的 rename 备份中断留残留 / 触发生产 watcher），又不动 CCM_DATA_DIR（不干扰集成测试）。
 const TRUSTED_DEVICES_FILE = process.env.CCM_TRUSTED_DEVICES_FILE || join(DATA_DIR, 'trusted-devices.json');
 const PENDING_DEVICES_FILE = process.env.CCM_PENDING_DEVICES_FILE || join(DATA_DIR, 'pending-devices.json');
+// 本模块实际读写的那一对文件。device-gate.js 的监听器必须盯同一对：它此前自己 join(dataDir, …)，
+// 设了上面的文件级覆盖就读写在 A、监听在 B，CLI 批准永远不被感知（2026-09-23 修）。
+export const DEVICE_FILES = Object.freeze({ trusted: TRUSTED_DEVICES_FILE, pending: PENDING_DEVICES_FILE });
 // 展示元数据【旁挂】文件（同 TC-001 的重定向优先级）。刻意不并进 trusted-devices.json：
 // 那份的解析在 loadTrustedDevices 里是「不是一维字符串数组 ⇒ 空集」，且不走 catch 的 last-good 分支，
 // 于是常驻 server 还跑着旧代码、磁盘上的 CLI 已是新代码时（本仓「改完未重启」是常态），

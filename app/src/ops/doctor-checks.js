@@ -1,7 +1,7 @@
 // 本文件此前零 import（纯决策函数）。唯一的例外是 shellOverriddenKeys —— 它必须与配置面板
 // 共用同一份实现，见 env-file.js 处注释（判据分叉时两边都不报错，只有用户被误导）。
-import { shellOverriddenKeys } from './env-file.js';
-import { ACCESS_PROFILES } from './env-schema.js';
+import { shellOverriddenKeys, shellOverrideSources } from './env-file.js';
+import { ACCESS_PROFILES, overlyBroadWorkdir } from './env-schema.js';
 import { isBlankToken, resolveBindPlan } from '../shared/bind-host.js';
 
 // 模型配置「永不打架」体检：settings 的 model 字段 vs 各工作目录的 ANTHROPIC_DEFAULT_*_MODEL 网关映射。
@@ -750,7 +750,8 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
   // 清除方式只给「真能清掉」的两条。**别建议 exec**：exec 只换进程映像、环境原样继承
   // （2026-08-19 照提示跑 exec zsh，doctor 输出一字未变）。同理开新标签页也没用——
   // 变量若在终端 app 进程上，每个新标签页都继承，只有整个 app 退出重开才换得掉。
-  const unsetCmd = `unset ${hits.join(' ')}`;
+  // 列的是被压住的配置键，清的是真正设着的变量名——两者在 WORKDIRS 这种别名处不同。
+  const unsetCmd = `unset ${shellOverrideSources(shellEnv, keys).join(' ')}`;
   return {
     status: 'warn',
     keys: hits,
@@ -876,6 +877,24 @@ function formatStaleAge(ms, lang) {
 // 照文档做还被追着 warn 是自相矛盾；抑制的信任级别与 FILE_EDIT=off 一致（用户显式声明即闭嘴）。
 // CF 信号不受任何声明抑制——那是实际开启的公网层，不是声明；未知 profile 严格 === 比较天然按
 // 未声明处理，不得抑制任何信号（fail-closed）。
+// 工作区过宽根（2026-09-22 review P2；维护者选「只在 doctor 里报、不拦」）。写入侧——面板 / CLI / 装机向导——
+// 早已拒绝家目录本身与 /、/Users、/home 这类根（env-schema.js 的 overlyBroadWorkdir，M2），可加载侧不查：手改配置、
+// 旧版 WORK_DIRS_FILE 指向的外置文件、shell 的 WORK_DIRS 都能把它们带进来。运行时不拦是有意的：那会让已经这么
+// 配着的安装升级后一重启就失去工作区。这里只负责说出来，判据与写入侧同一个函数。
+// broad 原样给调用方：CLI doctor 在本机终端逐条点名；web 体检只报个数（报告会被贴进 issue，路径不进报告）。
+export function workdirBreadthDiagnostic({ dirs = [], home, lang = 'zh' } = {}) {
+  const broad = (dirs || []).filter(d => overlyBroadWorkdir(d, home));
+  if (!broad.length) {
+    return { status: 'ok', name: 'WORK_DIRS', broad, detail: bi(lang, '没有过宽的工作区。', 'No overly broad workspace.') };
+  }
+  return {
+    status: 'warn', name: 'WORK_DIRS', broad,
+    detail: bi(lang,
+      `${broad.length} 个工作区过宽（家目录本身，或 /、/Users、/home 这类根）：范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录。`,
+      `${broad.length} workspace(s) are overly broad (the home directory itself, or a root such as /, /Users or /home): everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow them to specific project directories.`),
+  };
+}
+
 export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', accessProfile = '', lang = 'zh' } = {}) {
   if (fileEditOff) {
     return {
@@ -1017,8 +1036,8 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     return {
       status: 'ok', name,
       detail: bi(lang,
-        'Cloudflare Tunnel + Access：公网 Host 强制 Access JWT，为 AUTH_TOKEN + 设备审批基线之上的可选加层。',
-        'Cloudflare Tunnel + Access: public hosts require an Access JWT — an optional layer on top of the AUTH_TOKEN + device-approval baseline.'),
+        'Cloudflare Tunnel + Access：公网 Host 强制 Access JWT。这是可选加层：这条路上它替代 AUTH_TOKEN，缺省也替代设备审批；局域网 / 本机照旧认 AUTH_TOKEN。',
+        'Cloudflare Tunnel + Access: public hosts require an Access JWT. It is an optional layer: on that path it replaces AUTH_TOKEN and, by default, device approval; LAN and local access still use AUTH_TOKEN.'),
     };
   }
 
