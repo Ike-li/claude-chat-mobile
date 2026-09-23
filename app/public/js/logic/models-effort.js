@@ -130,6 +130,7 @@ export function effortLevelSubtitle(level) {
     xhigh: t('很深入更慢'),
     max: t('最深入更慢更贵'),
     ultracode: t('xhigh + 多 agent workflow · 最彻底'),
+    auto: t('跟随模型默认档'),
   };
   return map[lv] || '';
 }
@@ -155,6 +156,15 @@ export function withUltracodeTier(levels) {
   const arr = Array.isArray(levels) ? levels : [];
   if (!arr.includes('xhigh') || arr.includes('ultracode')) return arr;
   return [...arr, 'ultracode'];
+}
+
+// auto = CLI /effort auto：模型内置默认（CLI 会话档位 {kind:'default'}），是一等 UI 档，wire 上原样发 'auto'。
+// 它不是 null——null 是「没指定」（{kind:'inherit'}，先读 settings 里存的档）。
+// CLI usage 是 `[low|…|ultracode|auto]`：auto 恒在末位、不挑模型——该模型能调强度就有这一项，幂等。
+export function withAutoTier(levels) {
+  const arr = Array.isArray(levels) ? levels : [];
+  if (!arr.length || arr.includes('auto')) return arr;
+  return [...arr, 'auto'];
 }
 
 // UI 档 → SDK 参数：ultracode → { effort:'xhigh', ultracode:true }；其余原样。
@@ -260,18 +270,22 @@ export function effortLevelsFor(modelValue, modelsList) {
 }
 
 // effort 展示态必须保留后端真值；重建候选列表只决定 select 能否选中，绝不能把未知/null 猜成 low。
-// mirrorReadonly 时 null 的语义是「外部 CLI 活进程档位不可观测」，与 FRESH 的「模型默认」分开文案。
-export function effortUiState(level, supportedLevels, { mirrorReadonly = false } = {}) {
+// null 的两种语义分开文案：Web 驾驶时是「没指定」（CLI {kind:'inherit'}：settings 里给该模型存了档
+// 就用存的，否则模型默认）——不高亮任何磁贴，尤其不能冒充 auto（auto 是模型内置默认、无视 settings）；
+// mirrorReadonly 时是「外部 CLI 活进程档位不可观测」。effective 是服务端向 CLI 问来的实际生效档，
+// 只进文案、不当成钉住的档；镜像态不用它（那是 Web 实例的档，不是终端那个进程的）。
+export function effortUiState(level, supportedLevels, { mirrorReadonly = false, effective = null } = {}) {
   const normalized = level || null;
   const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
   const selected = normalized && levels.includes(normalized) ? normalized : '';
+  const inherited = effective ? `${effective} · ${t('CLI 默认')}` : t('CLI 默认');
   return {
     level: normalized,
     selected,
-    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : t('默认思考')),
+    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : inherited),
     placeholder: normalized
       ? `${normalized}${t('（当前模型不可选）')}`
-      : (mirrorReadonly ? t('CLI 当前档未知') : t('模型默认')),
+      : (mirrorReadonly ? t('CLI 当前档未知') : inherited),
   };
 }
 

@@ -60,6 +60,7 @@ import {
   consoleLogEntryLayout,
   defaultModelTileLabel,
   withUltracodeTier,
+  withAutoTier,
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
@@ -2629,6 +2630,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     // 思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
     effort_mode(p) {
+      // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
+      appContext.state.effortEffective = p.effective ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -4603,22 +4606,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（CLI /effort：五档 + ultracode；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（CLI /effort：五档 + ultracode + auto；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
   // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
-    const val = level || null; // 空串/undefined 归一为 null（模型默认）
+    const val = level || null; // 空串/undefined 归一为 null（没指定：CLI 按 settings / 模型默认继承）
     ultracodeArmed = val === 'ultracode';
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${val || t('模型默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${val || t('CLI 默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
     if (pillEffortText) {
-      pillEffortText.textContent = val || t('默认思考');
+      pillEffortText.textContent = effortUiState(val, [], {
+        mirrorReadonly: Boolean(mirrorReadonlySid),
+        effective: appContext.state.effortEffective,
+      }).label;
     }
 
     if (customEffortGrid) {
@@ -4647,12 +4653,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
   // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
   // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
-  // 对着一个空闲实例整个 dispose+resume 重开，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
+  // 把一个空闲实例用户选好的档位清回 auto，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
   function rebuildEffortOptions(modelValue, opts) {
     if (!effortSelect) return;
     const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
-    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
+    // xhigh-capable 模型上追加 ultracode 最高档，末位再追加 auto（= 模型默认），顺序同 CLI /effort
+    const show = withAutoTier(withUltracodeTier(baseLevels));
     // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
     // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
     // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
@@ -4664,7 +4671,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
       if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
-      effortSelect.value = '';
+      // 连 option 一起清：只置 value 的话，上个模型的候选还留着，随后到达的 effort_mode 回执经
+      // setEffortMode 能把 value 设回其中一档——不支持调档的模型上凭空冒出一个档（CI 上撞过）。
+      effortSelect.innerHTML = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
@@ -4687,7 +4696,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
     // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
-    const ui = effortUiState(currentEffort, show, { mirrorReadonly: Boolean(mirrorReadonlySid) });
+    const ui = effortUiState(currentEffort, show, {
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      effective: appContext.state.effortEffective,
+    });
     effortSelect.innerHTML = '';
     if (!ui.selected && !ultracodeArmed) {
       const placeholder = document.createElement('option');
@@ -4726,7 +4738,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         customEffortGrid.appendChild(lvTile);
       }
     }
-    // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
+    // 同步 pill 文案（没指定显「CLI 默认」，已知实际档时带上它）
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
@@ -4737,6 +4749,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
     if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
+    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
     const uiLevel = effortSelect.value || null;
     if (uiLevel === currentEffort) return;
     socket.emit('user:setEffort', { level: uiLevel });
@@ -4770,6 +4783,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       syncModelUI(currentModel);
     }
     setPermMode(inst.permissionMode || 'default', true);
+    appContext.state.effortEffective = inst.effortEffective ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -4861,7 +4875,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     setEffortMode(panel.effort, true);
     // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
     // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
-    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，触发一次没必要的 dispose+resume。
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，把实例档位误清回 auto。
     rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
@@ -8681,7 +8695,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
       // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
       // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
-      // 触发一次没必要的 dispose+resume——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
       rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐

@@ -689,10 +689,10 @@ test.skip('[边界] CLI 原生会话的 pending AskUserQuestion 不落磁盘 →
   // pendingQuestions 快照重建（agent.js:400）。此为硬边界、无磁盘侧修法，仅留基线防误报。
 });
 
-test.skip('[边界] CLI 不把 effort/thinking 档落 transcript → web 续接回落「默认思考」', () => {
+test.skip('[边界] CLI 不把 effort/thinking 档落 transcript → web 续接回落 auto（模型默认）', () => {
   // permission-mode 有 transcript 记录可恢复（见上 readLastPermissionMode），但 effort/thinking 档 CLI 完全不落盘：
   // transcript 里只有 assistant 的 thinking 内容块、无「档位」字段（low/med/high/xhigh/max）。故续接纯 CLI 会话
-  // 「默认思考」是诚实回退、无从恢复；只有 web 侧驱动过该会话，updateSessionPrefs 才持久化 effort。留基线防误报。
+  // 回落 auto 是诚实回退、无从恢复；只有 web 侧驱动过该会话，updateSessionPrefs 才持久化 effort。留基线防误报。
 });
 
 test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须被标脏', () => {

@@ -385,7 +385,7 @@ function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -407,6 +407,10 @@ export class AgentSession {
     // 采信权在 server：新 cwd 源自 EnterWorktree 的 path 参数、属用户可控面，要过白名单判据（SCOPE-01），
     // 而白名单的真相源在 server。返回 null = 不采信，实例保持原 cwd（见 handleCwdChanged）。
     this.onCwdChanged = onCwdChanged;
+    // (effort) => void，「没指定」时 CLI 实际生效的档变了（见 refreshEffectiveEffort）。不进事件流：
+    // 进了回放环，重连回放会把旧档重新套到界面上。
+    this.onEffortEffective = onEffortEffective;
+    this.effectiveEffort = null;
     // worktree 的 settings.local.json env 块（SDK resolveSettings 按 cwd 正确读出，CLI 自己读不到）。
     // 注意边界（2026-07-30 实证更正）：注入子进程环境**管不住网关**——CLI 的 settings.env 优先级高于
     // 继承环境，它从 canonical repo root 误读到的 ANTHROPIC_BASE_URL 等会盖掉这里注入的同名值。
@@ -501,15 +505,19 @@ export class AgentSession {
     // 当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
     // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
     this.permissionMode = permissionMode || 'default';
-    // 思考强度档（spawn 时注入 --effort），null=模型默认不传。
+    // 思考强度档（spawn 时注入 --effort），null=没指定、不传（CLI 按 settings / 模型默认继承）。
     // 【2026-09-03 实测更正】运行时可改：CLI 确无 set_effort 控制请求，但 apply_flag_settings
     // 认 effortLevel/ultracode 且中途下发即生效——启动时的 Options.effort 不构成阻挡（CLI 里那句
     // "launch-effort pin holds effort" 只在 /effort 斜杠命令路径上，不在 apply_flag_settings 路径）。
-    // 切档走 setEffort()，不再置换实例；唯一例外是「回模型默认档」(null)，见该方法注释 ③。
+    // 切档走 setEffort()，不置换实例；唯一例外是回到「没指定」(null)，见该方法注释。
     // ultracode：CLI /effort 菜单最高档；SDK Options.effort 不认该字面量——正式路径是
     // Settings.ultracode + effort xhigh（会话级 flag，不落盘），禁止改写用户消息塞关键词。
+    // effortAuto：CLI /effort auto（模型内置默认）。effort 同为 null 不传 --effort，
+    // 起来后由 _reassertEffort() 在首条消息前补发 effortLevel:null；_autoAsserted 记是否已落成。
     this.ultracode = Boolean(ultracode);
     this.effort = this.ultracode ? 'xhigh' : (effort || null);
+    this.effortAuto = !this.ultracode && !this.effort && Boolean(effortAuto);
+    this._autoAsserted = false;
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
@@ -869,6 +877,8 @@ export class AgentSession {
         this.activeModel = target;
         // 切模型会连带重置 effort（实测），补下发一次把用户选的档钉回去。见 _reassertEffort。
         await this._reassertEffort();
+        // 没指定时实际档随模型变（settings 按模型分表存）；不 await，不为文案拖住发送。
+        this.refreshEffectiveEffort();
       } catch (err) {
         // 区分两类失败：超时=CLI 侧可能已切也可能没切（诚实说"未确认"）；
         // 明确 reject（如 model not found）=确定没切，原模型继续。两者都不动 activeModel。
@@ -883,8 +893,12 @@ export class AgentSession {
       }
     }
 
+    // auto 实例：CLI 不认 --effort auto（带它启动照样按 settings 继承），只能在首条消息入队前补发
+    // effortLevel:null 把会话落成 {kind:'default'}。上面切模型时已重申过的话这里不再发。
+    if (this.effortAuto && !this._autoAsserted) await this._reassertEffort();
+
     if (this.disposed) return false; // S3：setModel 的 await 间隙实例可能已被 dispose，勿再往弃用实例排队
-    // 双重检查：setModel 是 await 让出点，间隙内其他 send 可能已经开了一轮
+    // 双重检查：setModel / 补发是 await 让出点，间隙内其他 send 可能已经开了一轮
     if (this.pendingTurns >= 1) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
@@ -1360,30 +1374,37 @@ export class AgentSession {
   // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
   // 与 logMeta() 的口径同源，差别只在这里用 null 表示「模型默认」而非 'model-default' 字面量。
   uiEffort() {
-    return this.ultracode ? 'ultracode' : (this.effort || null);
+    if (this.ultracode) return 'ultracode';
+    if (this.effortAuto) return 'auto';
+    return this.effort || null;
   }
 
   /**
    * 思考强度切档（与 setPermissionMode / send 的 setModel 同型：差分 + _raceControlRequest）。
    *
-   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有三个【静默失败】边界
+   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有两个【静默失败】边界
    * （都返回成功、都不抛错，2026-09-03 零 token 实测），全部在本方法挡住：
    *  ① 非法档位被 CLI 的 zod `.catch(void 0)` 静默吞掉、档位不变却回 OK
    *     → 先 normalizeEffortUiLevel 再发，非法值根本不出门。
    *  ② `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落
    *     → 两个字段【始终成对】下发，不做「只发变化的那个」的优化。
-   *  ③ `{effortLevel:null}` 清不回「模型默认」：CLI 的 applied.effort 恒是具体档
-   *     （不传 --effort 启动时也是模型自身的默认档），没有「未 pin」态可回
-   *     → 这个方向不在本方法处理，返回 needsSwap 让 server 置换实例还原启动态。
+   * auto 同样走这里：CLI 把 `effortLevel:null` 落成会话档位 `{kind:'default'}`（模型内置默认），
+   * 与 CLI 自己的 `/effort auto` 同一个构造器。2026-09-23 在 2.1.259/263/277/278/280 上零 token
+   * 复测：pin low 后下发 null、以 `--effort low` 启动后下发 null、从 ultracode 下发 null，
+   * 三种都回到模型默认档（09-03 记的「清不回」是最后 pin 的 high 恰等于模型默认造成的混淆）。
    *
-   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | null=模型默认）
+   * 回到「没指定」(null) 是唯一要置换实例的方向：没指定 = 不传 --effort 起来的 `{kind:'inherit'}`，
+   * 会先读 settings 里给该模型存的档；而 effortLevel:null 落成的是 `{kind:'default'}`，不是它。
+   * CLI 没有能回到 inherit 的控制请求，只能不带 --effort 重开。
+   *
+   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | 'auto' | null=没指定）
    * @returns {Promise<{ok:true}|{ok:false,needsSwap:true}|{ok:false,error:string}>}
    */
   async setEffort(uiLevel) {
     const norm = normalizeEffortUiLevel(uiLevel);
     if (!norm) return { ok: false, error: `未知思考强度档：${uiLevel}` };   // ①
     if (norm.ui === this.uiEffort()) return { ok: true };                   // 差分：无变化不调 SDK
-    if (norm.ui === null) return { ok: false, needsSwap: true };            // ③
+    if (norm.ui === null) return { ok: false, needsSwap: true };            // 回到没指定：见上
     if (!this.q) return { ok: false, needsSwap: true };                     // 半开/已弃用实例：无控制通道
     try {
       await this._raceControlRequest(
@@ -1392,6 +1413,8 @@ export class AgentSession {
       if (this.disposed) return { ok: false, error: '实例已关闭' };  // S3：await 间隙可能已被 dispose
       this.effort = norm.sdk;
       this.ultracode = norm.ultracode;
+      this.effortAuto = norm.ui === 'auto';
+      this._autoAsserted = this.effortAuto;
       return { ok: true };
     } catch (err) {
       // 超时与明确 reject 都不改本地档位——不对前端谎报未生效的档（同 setModel 的处理）
@@ -1399,15 +1422,35 @@ export class AgentSession {
     }
   }
 
-  // 切模型后重申思考强度。切模型会连带影响 effort（实测：切到不支持 effort 的模型，
-  // CLI 的 applied.effort 直接变 null），不补发的话用户选的档会在切模型后静默丢失。
-  // 尽力而为：档位是体验项，不该让「切模型」这一轮因为它发不出去，失败只吞不报。
+  // 重申思考强度，两个调用点：
+  //  · 切模型后——切模型会连带影响 effort（实测：切到不支持 effort 的模型，CLI 的 applied.effort
+  //    直接变 null），不补发的话用户选的档会在切模型后静默丢失。
+  //  · auto 实例首条消息前——auto 没法经 --effort 启动，只能起来后补这一条（见 send()）。
+  // 「没指定」(null) 不重申：不传 --effort 就是它要的 inherit，发 effortLevel:null 反而把它变成 auto。
+  // 尽力而为：档位是体验项，不该让这一轮因为它发不出去，失败只吞不报（auto 未落成则下一条重试）。
   async _reassertEffort() {
-    if (!this.effort || !this.q || this.disposed) return;
+    if ((!this.effort && !this.effortAuto) || !this.q || this.disposed) return;
     try {
       await this._raceControlRequest(
         () => this.q?.applyFlagSettings({ effortLevel: this.effort, ultracode: this.ultracode }),
         'apply_flag_settings');
+      if (this.effortAuto) this._autoAsserted = true;
+    } catch { /* 见上：静默 */ }
+  }
+
+  // 「没指定」时向 CLI 问此刻实际生效的档（get_settings 的 applied.effort）。没指定 = {kind:'inherit'}：
+  // settings 里给该模型存了档就用存的，否则模型内置默认——按模型分表、legacy 只对老模型生效、模型默认值
+  // 都只在 CLI 里，CCM 自己算不全。只为文案服务，所以钉了档（含 auto）时不问，拿不到就不显、只吞不报。
+  // getSettings 在 sdk.mjs 里有、sdk.d.ts 没声明（0.3.201 起实测可用），故先判存在。
+  async refreshEffectiveEffort() {
+    if (this.uiEffort() !== null || !this.q || this.disposed) return;
+    if (typeof this.q.getSettings !== 'function') return;
+    try {
+      const s = await this._raceControlRequest(() => this.q?.getSettings(), 'get_settings');
+      const effort = typeof s?.applied?.effort === 'string' ? s.applied.effort : null;
+      if (this.disposed || effort === this.effectiveEffort) return;
+      this.effectiveEffort = effort;
+      this.onEffortEffective?.(effort);
     } catch { /* 见上：静默 */ }
   }
 
@@ -2680,6 +2723,7 @@ export class AgentSession {
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();
+          this.refreshEffectiveEffort(); // 同为 fire-and-forget：没指定时问 CLI 实际生效的档
         } else if (msg.subtype === 'commands_changed') {
           // SDK 0.3.229 起：CLI 中途发现新命令/skill（如 agent 走进带 project skill 的子目录）时的
           // **全量**推送。上游契约：`supportedCommands()` 只在 initialize 捕获一次、拿不到中途变化，
@@ -3302,7 +3346,7 @@ export class AgentSession {
     return {
       model: this.activeModel || this.reportedModel || this.defaultModel || 'default',
       // UI/日志显 ultracode；SDK 实际 effort 仍是 this.effort（xhigh）
-      effort: this.ultracode ? 'ultracode' : (this.effort || 'model-default'),
+      effort: this.uiEffort() || 'model-default',
       permissionMode: this.permissionMode || 'default'
     };
   }

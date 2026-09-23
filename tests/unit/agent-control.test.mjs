@@ -1240,10 +1240,12 @@ test.describe('F1 回归的孪生（result 带 uuid，走精确出槽分支）',
 
 // ---- setEffort()（2026-09-03）----
 // 思考强度改走 apply_flag_settings 控制请求（此前是 dispose+resume 置换实例）。
-// CLI 侧这条路有三个【静默失败】边界——都返回成功、都不抛错，只能靠这里的用例钉住：
+// CLI 侧这条路有两个【静默失败】边界——都返回成功、都不抛错，只能靠这里的用例钉住：
 //   ① 非法档位被 CLI 的 zod .catch(void 0) 吞掉，档位不变却回 OK
 //   ② {ultracode:false} 只关 ultracode，effort 停在 xhigh 不回落
-//   ③ {effortLevel:null} 清不回「模型默认」（CLI 无未 pin 态）
+// ③ 曾记为「{effortLevel:null} 清不回模型默认」——2026-09-23 在 2.1.259–2.1.280 五个版本上复测推翻，
+//   09-03 那次是最后 pin 的 high 恰等于模型默认档造成的混淆。它落成的是 {kind:'default'}，即 auto，
+//   所以 auto 走控制请求；「没指定」(null，{kind:'inherit'}) 回不去，仍要置换。
 // 若有人把 ①②的防护「优化」掉，SDK 不会报错，只有这些用例会红。
 test.describe('setEffort()', () => {
   const spyQ = () => {
@@ -1302,12 +1304,34 @@ test.describe('setEffort()', () => {
     s.dispose();
   });
 
-  test('③ 回模型默认档 → needsSwap，不下发（CLI 无「未 pin」态可回）', async () => {
+  test("auto → 走控制请求下发 effortLevel:null，不置换实例；ultracode 成对清掉", async () => {
+    const { s } = makeSession({ effort: 'xhigh', ultracode: true });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.deepEqual(await s.setEffort('auto'), { ok: true },
+      'CLI 收到 effortLevel:null 会把会话档位置为 {kind:"default"}（= /effort auto），不需要重开实例');
+    assert.deepEqual(calls, [{ effortLevel: null, ultracode: false }],
+      '从 ultracode 回 auto 也要成对带 ultracode:false，否则 ultracode 仍开着');
+    assert.equal(s.uiEffort(), 'auto');
+    assert.equal(s.logMeta().effort, 'auto');
+    s.dispose();
+  });
+
+  test('没指定（null）→ needsSwap，不下发：CLI 没有能回到 {kind:"inherit"} 的控制请求', async () => {
     const { s } = makeSession({ effort: 'high' });
     const { calls, q } = spyQ(); s.q = q;
     assert.deepEqual(await s.setEffort(null), { ok: false, needsSwap: true });
-    assert.equal(calls.length, 0, 'effortLevel:null 清不回默认，发了也只是白等一次往返');
+    assert.equal(calls.length, 0,
+      'effortLevel:null 落成的是 auto（模型内置默认），不是「没指定」——发了就把 settings 里存的档悄悄换掉');
     assert.equal(s.effort, 'high', '未置换前本地档位不得先行改动');
+    s.dispose();
+  });
+
+  test('auto 与 null 不是同一档：auto 实例切回 null 仍要置换', async () => {
+    const { s } = makeSession({ effortAuto: true });
+    const { calls, q } = spyQ(); s.q = q;
+    assert.equal(s.uiEffort(), 'auto');
+    assert.deepEqual(await s.setEffort(null), { ok: false, needsSwap: true });
+    assert.equal(calls.length, 0);
     s.dispose();
   });
 
@@ -1378,5 +1402,129 @@ test.describe('send() 切模型后重申 effort', () => {
     assert.equal(await s.send('hi', 'sonnet'), true);
     assert.equal(calls.length, 0);
     s.dispose();
+  });
+
+  test('auto 实例切模型 → 重申 effortLevel:null（auto 也是用户选的档，不是「没指定」）', async () => {
+    const { s } = makeSession({ model: 'sonnet', effortAuto: true });
+    const calls = [];
+    s.q = { setModel: () => Promise.resolve(), applyFlagSettings(x) { calls.push(x); return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'opus'), true);
+    assert.deepEqual(calls, [{ effortLevel: null, ultracode: false }], '重申已覆盖首发补发，不得再多发一次');
+    s.dispose();
+  });
+});
+
+// ---- auto 启动补发 ----
+// CLI 不认 --effort auto（2.1.259 / 2.1.280 实测：带它启动照样按 settings 继承），
+// 所以 auto 实例只能不带 --effort 起来，再在首条消息前补发 applyFlagSettings({effortLevel:null})。
+test.describe('send()：auto 实例首条消息前补发 effortLevel:null', () => {
+  test('补发先于消息入队，且只发一次', async () => {
+    const { s, events } = makeSession({ effortAuto: true });
+    const calls = [];
+    let userMessageAlreadyOut = null;
+    s.q = { applyFlagSettings(x) {
+      calls.push(x);
+      userMessageAlreadyOut = events.some(e => e.type === 'user_message');
+      return Promise.resolve();
+    } };
+    assert.equal(await s.send('hi'), true);
+    assert.deepEqual(calls, [{ effortLevel: null, ultracode: false }]);
+    assert.equal(userMessageAlreadyOut, false, '补发晚于入队的话，第一轮仍按 settings 里存的档跑');
+    s.pendingTurns = 0; // 本轮收尾
+    assert.equal(await s.send('again'), true);
+    assert.equal(calls.length, 1, '已落成 auto 就不必每轮重发');
+    s.dispose();
+  });
+
+  test('补发失败 → 本条照发，下一条重试', async () => {
+    const { s } = makeSession({ effortAuto: true });
+    let n = 0;
+    s.q = { applyFlagSettings() { n += 1; return n === 1 ? Promise.reject(new Error('nope')) : Promise.resolve(); } };
+    assert.equal(await s.send('hi'), true, '档位是体验项，补发失败不该卡住发消息');
+    s.pendingTurns = 0;
+    assert.equal(await s.send('again'), true);
+    assert.equal(n, 2, '第一次没落成，下一条必须再试');
+    s.dispose();
+  });
+
+  test('没指定（null）实例 → 不补发（不传 --effort 就是 inherit，正是它要的）', async () => {
+    const { s } = makeSession();
+    const calls = [];
+    s.q = { applyFlagSettings(x) { calls.push(x); return Promise.resolve(); } };
+    assert.equal(await s.send('hi'), true);
+    assert.equal(calls.length, 0);
+    s.dispose();
+  });
+});
+
+// ---- 没指定时向 CLI 问实际生效档 ----
+// 没指定（null）= CLI {kind:'inherit'}：settings 里给该模型存了档就用存的，否则模型默认。CCM 自己算不全
+// （按模型分表、legacy 只对老模型生效、模型内置默认都只在 CLI 里），只能问 get_settings 的 applied.effort。
+// 它只进文案（「high · CLI 默认」），所以拿不到就不显，任何失败都不能影响收发。
+test.describe('没指定时的实际生效档（get_settings）', () => {
+  const tick = () => new Promise(r => setImmediate(r));
+  const settingsQ = (impl) => {
+    const calls = [];
+    return { calls, q: { getSettings() { calls.push(1); return impl(); }, setModel: () => Promise.resolve() } };
+  };
+
+  test('init 后问一次，回调带出实际档', async () => {
+    const seen = [];
+    const { s } = makeSession({ onEffortEffective: e => seen.push(e) });
+    const { calls, q } = settingsQ(() => Promise.resolve({ applied: { effort: 'high' } })); s.q = q;
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-eff', model: 'opus', cwd: '/tmp/test' });
+    assert.equal(calls.length, 1);
+    await tick();
+    assert.deepEqual(seen, ['high']);
+    assert.equal(s.effectiveEffort, 'high');
+    s.dispose();
+  });
+
+  test('钉了具体档 / auto → 不问（文案只在没指定时用得上）', async () => {
+    for (const opts of [{ effort: 'low' }, { effortAuto: true }]) {
+      const { s } = makeSession(opts);
+      const { calls, q } = settingsQ(() => Promise.resolve({ applied: { effort: 'high' } })); s.q = q;
+      s.map({ type: 'system', subtype: 'init', session_id: 'sid-pinned', model: 'opus', cwd: '/tmp/test' });
+      assert.equal(calls.length, 0, JSON.stringify(opts));
+      s.dispose();
+    }
+  });
+
+  test('切模型后重问（实际档随模型变：settings 按模型分表存）', async () => {
+    const seen = [];
+    const { s } = makeSession({ model: 'sonnet', onEffortEffective: e => seen.push(e) });
+    let n = 0;
+    const { q } = settingsQ(() => Promise.resolve({ applied: { effort: (n += 1) === 1 ? 'medium' : 'xhigh' } }));
+    s.q = q;
+    assert.equal(await s.send('hi', 'opus'), true);
+    await tick();
+    assert.deepEqual(seen, ['medium']);
+    s.dispose();
+  });
+
+  test('值没变不重复回调', async () => {
+    const seen = [];
+    const { s } = makeSession({ onEffortEffective: e => seen.push(e) });
+    const { q } = settingsQ(() => Promise.resolve({ applied: { effort: 'high' } })); s.q = q;
+    await s.refreshEffectiveEffort();
+    await s.refreshEffectiveEffort();
+    assert.deepEqual(seen, ['high']);
+    s.dispose();
+  });
+
+  test('getSettings 不存在 / reject / 回包没有 applied → 不抛、不回调', async () => {
+    const seen = [];
+    for (const q of [
+      {},
+      { getSettings: () => Promise.reject(new Error('nope')) },
+      { getSettings: () => Promise.resolve({}) },
+    ]) {
+      const { s } = makeSession({ onEffortEffective: e => seen.push(e) });
+      s.q = q;
+      await s.refreshEffectiveEffort();
+      assert.equal(s.effectiveEffort, null);
+      s.dispose();
+    }
+    assert.deepEqual(seen, []);
   });
 });

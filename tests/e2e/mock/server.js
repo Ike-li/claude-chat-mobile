@@ -65,6 +65,14 @@ function createDefaultInstances() {
 }
 
 const mockInstances = createDefaultInstances();
+// 与真 server 对齐：没指定（effort=null）时 server 向 CLI 问来实际生效档，随 instances 与 effort_mode
+// 下发（effortEffective / effective）。mock 没有 CLI，固定给一个值。挂在数组的 toJSON 上：85 处
+// `instances: mockInstances` 广播经 socket.io 序列化时统一带上，不必逐个改创建点。
+const MOCK_EFFORT_EFFECTIVE = 'medium';
+const mockEffortEffective = effort => (effort == null ? MOCK_EFFORT_EFFECTIVE : null);
+mockInstances.toJSON = function toJSON() {
+  return this.map(inst => ({ ...inst, effortEffective: mockEffortEffective(inst.effort) }));
+};
 
 // 「已 send 但还没送达 SDK」的窄窗（真 server：send() 返回 true 后消息可能仍在 this.queue）。
 // test:queue-drop 把消息收下但不回显、记在这里，等 user:interrupt 时走 queue_dropped 带 clientMessageIds。
@@ -955,7 +963,7 @@ io.on('connection', socket => {
     // 4. effort_mode
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortLevel }
+      type: 'effort_mode', payload: { level: effortLevel, effective: mockEffortEffective(effortLevel) }
     });
 
     // 5. instances
@@ -1040,7 +1048,7 @@ io.on('connection', socket => {
     if (inst) inst.effort = level;
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level }
+      type: 'effort_mode', payload: { level, effective: mockEffortEffective(level) }
     });
     // Broadcast instances update
     io.emit('agent:event', {
