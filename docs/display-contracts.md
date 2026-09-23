@@ -105,28 +105,31 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 非法 | `null` | 拒切 / 回落 |
 
 | **禁止** | 把字面量 `ultracode` 塞进 `Options.effort`；靠改写用户正文注入 `ultracode` 关键词（关键词仅用户自写时保留） |
-| **切档路径** | 见 §2.2.1——**具体档走控制请求，`null` 走 dispose+resume**；具体档也有一个例外：实例半开 / 已弃用（`!this.q`，无控制通道）时同样返回 `needsSwap` |
+| **切档路径** | 见 §2.2.1——**具体档与 `null`（auto）都走控制请求**；唯一例外：实例半开 / 已弃用（`!this.q`，无控制通道）时返回 `needsSwap`，走 dispose+resume |
 | **日志/chip** | UI 显 `ultracode` 时 `logMeta().effort === 'ultracode'`；SDK 实际仍是 xhigh |
 | **锚点** | `normalizeEffortUiLevel` · `AgentSession` ultracode 构造 · display-contracts · E2E P0-02e |
 
-### 2.2.1 切档路径（不对称，勿"统一"）
+### 2.2.1 切档路径
 
 CLI 无 `set_effort` 控制请求，但 `apply_flag_settings` 认 `effortLevel`/`ultracode`，中途下发即生效
 （启动时的 `Options.effort` 不构成阻挡——CLI 里 "launch-effort pin" 那道闸只在 `/effort` 斜杠命令路径上）。
 
 | 目标档 | 路径 | 理由 |
 |--------|------|------|
-| `low`…`max` / `ultracode` | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例。**例外**：`!this.q`（半开 / 已弃用实例，没有控制通道）时也返回 `needsSwap`，落到置换路径 |
-| **`null`（模型默认）** | 返回 `needsSwap` → server `dispose + resume` | CLI 的 `applied.effort` **恒是具体档**（不传 `--effort` 启动时也是模型自身默认档），没有"未 pin"态可回，`effortLevel:null` 清不回去 |
+| `low`…`max` / `ultracode` / **`null`（auto）** | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例，回合进行中也能切。**例外**：`!this.q`（半开 / 已弃用实例，没有控制通道）时返回 `needsSwap`，落到置换路径 |
 
-CLI 侧这条路有四个**静默失败**边界——都返回成功、都不抛错。①②③ 由 `setEffort()` 挡住，
+`null` 下发 `{effortLevel:null, ultracode:false}`，CLI 把会话档位落成 `{kind:'default'}`——与 CLI 自己的
+`/effort auto` 同一个构造器，取**模型内置默认档**。它与「不传 `--effort` 重开实例」不完全等价：后者是
+`{kind:'inherit'}`，会先读 settings 里给该模型存的默认档（`modelSettings[<模型>].effortLevel`）。
+
+CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛错。①② 由 `setEffort()` 挡住，
 ④ 在 `setEffort()` 之外：它由 `send()` 里 setModel 成功后调的 `_reassertEffort()` 补下发：
 
 | # | CLI 行为 | 防护 |
 |---|---------|------|
 | ① | 非法档位被 zod `.catch(void 0)` 吞掉，档位不变却回 OK | 先 `normalizeEffortUiLevel` 再发，非法值不出门 |
 | ② | `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落 | `effortLevel` 与 `ultracode` **始终成对**下发，禁止"只发变化的那个" |
-| ③ | `{effortLevel:null}` 清不回模型默认 | 该方向不走控制请求，返回 `needsSwap` |
+| ~~③~~ | ~~`{effortLevel:null}` 清不回模型默认~~——**已撤销**（2026-09-23）：2.1.259/263/277/278/280 零 token 复测，pin 后下发 null、`--effort` 启动后下发 null、从 ultracode 下发 null 都回到模型默认档。09-03 的结论来自最后 pin 的 `high` 恰等于模型默认档 | — |
 | ④ | `setModel()` 会连带重置 effort（切到不支持 effort 的模型 → `applied.effort` 变 `null`） | `send()` 里 setModel 成功后 `_reassertEffort()` 补下发 |
 
 | **锚点** | `AgentSession.setEffort` `_reassertEffort` · `app.js` `user:setEffort` · `agent-control.test.mjs` §setEffort |

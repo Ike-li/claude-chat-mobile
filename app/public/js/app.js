@@ -4650,7 +4650,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
   // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
   // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
-  // 对着一个空闲实例整个 dispose+resume 重开，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
+  // 把一个空闲实例用户选好的档位清回 auto，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
   function rebuildEffortOptions(modelValue, opts) {
     if (!effortSelect) return;
     const silentClear = Boolean(opts?.silentClear);
@@ -4867,7 +4867,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     setEffortMode(panel.effort, true);
     // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
     // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
-    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，触发一次没必要的 dispose+resume。
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，把实例档位误清回 auto。
     rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
@@ -8687,7 +8687,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
       // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
       // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
-      // 触发一次没必要的 dispose+resume——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
       rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐

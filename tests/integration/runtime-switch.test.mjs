@@ -1,13 +1,14 @@
 // tests/integration/runtime-switch.test.mjs —— 回合进行中还能改哪些参数（真 server + 可驱动假 CLI）
 //
 // 三个轴的 busy 语义各不相同，且【不对称是有意的】——它们受约束的理由根本不是同一个：
-//   · 思考强度：具体档互切走控制请求（放行）／回模型默认要置换实例（拒绝）
+//   · 思考强度：具体档互切、回 auto（模型默认）都走控制请求（放行）
 //   · 权限档：影响的是工具审批闸门而非 API 请求参数，推迟生效就失去意义 → 全程放行
 //   · 模型：没有独立控制事件，随 user:message 捎带，而在途轮闸会拒收消息 → 中途够不着
 // 把三条放一个文件，是因为「回合进行中能改什么」是同一个产品问题，读的人需要一次看全。
 //
 // 【为什么必须在这一层】观察点是 socket handler 的分支走向：回合进行中切【具体档】要走轻路径
-// （apply_flag_settings 控制请求、不置换实例）并广播 effort_mode；切回【模型默认】要被 busy 守卫拦下。
+// （apply_flag_settings 控制请求、不置换实例）并广播 effort_mode；切回【auto】同样如此（2026-09-23 前
+// 它走置换、会被 busy 守卫拦下）。
 // 纯函数层表达不了「守卫在 a.setEffort() 调用之前还是之后」，而那正是 2026-09-09 修的缺陷所在——
 // 守卫（7febabc，2026-07-28）加在分叉【之前】，那时切档必然 dispose+resume，拦住是对的；
 // 439bb02 把具体档互切改成控制请求后轻路径不再置换实例，守卫却没跟着下移，于是把本来安全的
@@ -19,12 +20,14 @@
 // （tests/fixtures/fake-claude.mjs），所以轻路径走得通，不会超时成 needsSwap 以外的第三种失败。
 //
 // 不测什么 + 为什么：
-//  ① 档位是否真被 CLI 应用 —— 假 CLI 无差别回 success，这一层证不了。真 CLI 的四条静默失败边界
-//     （非法值被 zod 吞 / ultracode 不回落 / null 清不回默认 / 切模型连带重置）由
+//  ① 档位是否真被 CLI 应用 —— 假 CLI 无差别回 success，这一层证不了。真 CLI 的静默失败边界
+//     （非法值被 zod 吞 / ultracode 不回落 / 切模型连带重置）由
 //     tests/unit/agent-control.test.mjs 的 setEffort() 组覆盖，那里 mock 的是 q，造得出 reject 与超时。
 //  ② 轮次中途切档在【本轮】还是【下一轮】生效 —— 要观察思考深度实际变化，需真模型，归 S5。
 //  ③ 重路径置换后的实例接续 —— 与 externalDirty 走同一条 dedupedResume，已由
 //     tests/invariants/server/external-dirty.test.mjs 覆盖，不在此重复。
+//  ④ 重路径（实例尚无控制通道时的 needsSwap）上的 busy 守卫 —— 半开实例在这里造不出来；
+//     needsSwap 的判定由 agent-control 的「实例无控制通道」用例覆盖。
 //
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 
@@ -127,12 +130,11 @@ test('回合进行中切【具体档】：走轻路径生效，不被 busy 拦�
   }
 });
 
-test('回合进行中切回【模型默认】：被守卫拦下，实例不置换', async () => {
-  const { sock, events, cleanup, lastInstances } = await openBusySession('swap');
+test('回合进行中切回【auto】（null）：同样走轻路径生效，实例不置换', async () => {
+  const { sock, events, cleanup, lastInstances } = await openBusySession('auto');
   try {
-    // 先 pin 一个具体档：实例初始 effort 就是 null，不先离开的话「切回模型默认」会被 handler 的
-    // 幂等闸（level === effortOf(id)）直接 return，测的就成了幂等而不是守卫。走的是上一条用例
-    // 已证明可行的轻路径。
+    // 先 pin 一个具体档：实例初始 effort 就是 null，不先离开的话「切回 auto」会被 handler 的
+    // 幂等闸（level === effortOf(id)）直接 return，测的就成了幂等而不是轻路径。
     setEffort(sock, 'high');
     await waitForCondition(
       () => events.find(e => e.type === 'effort_mode' && e.payload?.level === 'high'),
@@ -143,21 +145,22 @@ test('回合进行中切回【模型默认】：被守卫拦下，实例不置�
     const before = events.length;
     setEffort(sock, null);
 
-    // 回「模型默认」只能靠 dispose+resume（CLI 的 applied.effort 恒是具体档，没有「未 pin」态可回），
-    // 而置换会 kill 在途 turn / bg / 审批——危害与 SRV-003 同源，必须拒绝。
-    const refused = await waitForCondition(
-      () => events.slice(before).find(
-        e => e.type === 'system' && /有任务在运行/.test(e.payload?.message || '')),
-      { timeoutMs: 15000, label: '回模型默认被 busy 守卫拒绝' },
+    // 2026-09-23 前这条走 dispose+resume、回合中被拒（依据是「null 清不回模型默认」，已复测推翻）。
+    // 现在 effortLevel:null 走 apply_flag_settings，与具体档同一条轻路径。
+    const broadcast = await waitForCondition(
+      () => events.slice(before).find(e => e.type === 'effort_mode' && e.payload?.level === null),
+      { timeoutMs: 15000, label: 'effort_mode 广播 level=null' },
     );
-    assert.match(refused.payload.message, /具体档位/,
-      '拒绝文案要给出替代路径（具体档位此刻就能切），否则用户只知道被拒、不知道还能做什么');
+    assert.ok(broadcast, 'busy 时切回 auto 必须走轻路径并广播 level=null');
 
-    // 实例没被换掉——拒绝必须是真拒绝，不能先 dispose 了再报错。
+    const refused = events.slice(before).find(
+      e => e.type === 'system' && /有任务在运行/.test(e.payload?.message || ''));
+    assert.equal(refused, undefined,
+      `切回 auto 不置换实例，不该被 busy 拒绝，实际收到：${JSON.stringify(refused?.payload)}`);
     assert.equal(
       lastInstances().instances.find(x => x.sessionId === SESSION_ID)?.instanceId,
       instanceIdBefore,
-      '守卫拒绝后实例 id 不得变化（变了说明置换已经发生，在途 turn 已被 kill）',
+      '实例 id 变了说明走了置换路径，在途 turn 已被 kill',
     );
   } finally {
     await cleanup();

@@ -503,7 +503,7 @@ export class AgentSession {
     // 【2026-09-03 实测更正】运行时可改：CLI 确无 set_effort 控制请求，但 apply_flag_settings
     // 认 effortLevel/ultracode 且中途下发即生效——启动时的 Options.effort 不构成阻挡（CLI 里那句
     // "launch-effort pin holds effort" 只在 /effort 斜杠命令路径上，不在 apply_flag_settings 路径）。
-    // 切档走 setEffort()，不再置换实例；唯一例外是「回模型默认档」(null)，见该方法注释 ③。
+    // 切档走 setEffort()，不再置换实例（含回 auto / 模型默认档，见该方法注释）。
     // ultracode：CLI /effort 菜单最高档；SDK Options.effort 不认该字面量——正式路径是
     // Settings.ultracode + effort xhigh（会话级 flag，不落盘），禁止改写用户消息塞关键词。
     this.ultracode = Boolean(ultracode);
@@ -1363,24 +1363,26 @@ export class AgentSession {
   /**
    * 思考强度切档（与 setPermissionMode / send 的 setModel 同型：差分 + _raceControlRequest）。
    *
-   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有三个【静默失败】边界
+   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有两个【静默失败】边界
    * （都返回成功、都不抛错，2026-09-03 零 token 实测），全部在本方法挡住：
    *  ① 非法档位被 CLI 的 zod `.catch(void 0)` 静默吞掉、档位不变却回 OK
    *     → 先 normalizeEffortUiLevel 再发，非法值根本不出门。
    *  ② `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落
    *     → 两个字段【始终成对】下发，不做「只发变化的那个」的优化。
-   *  ③ `{effortLevel:null}` 清不回「模型默认」：CLI 的 applied.effort 恒是具体档
-   *     （不传 --effort 启动时也是模型自身的默认档），没有「未 pin」态可回
-   *     → 这个方向不在本方法处理，返回 needsSwap 让 server 置换实例还原启动态。
+   * null（auto / 模型默认）同样走这里：CLI 把 `effortLevel:null` 落成会话档位 `{kind:'default'}`，
+   * 与 CLI 自己的 `/effort auto` 同一个构造器。2026-09-23 在 2.1.259/263/277/278/280 上零 token
+   * 复测：pin low 后下发 null、以 `--effort low` 启动后下发 null、从 ultracode 下发 null，
+   * 三种都回到模型默认档（09-03 记的「清不回」是最后 pin 的 high 恰等于模型默认造成的混淆）。
+   * 注意它与「不传 --effort 重开实例」不完全等价：后者是 `{kind:'inherit'}`，会先读 settings 里
+   * 该模型存的默认档；前者直接用模型内置默认，与 CLI `/effort auto` 一致。
    *
-   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | null=模型默认）
+   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | null=auto，模型默认）
    * @returns {Promise<{ok:true}|{ok:false,needsSwap:true}|{ok:false,error:string}>}
    */
   async setEffort(uiLevel) {
     const norm = normalizeEffortUiLevel(uiLevel);
     if (!norm) return { ok: false, error: `未知思考强度档：${uiLevel}` };   // ①
     if (norm.ui === this.uiEffort()) return { ok: true };                   // 差分：无变化不调 SDK
-    if (norm.ui === null) return { ok: false, needsSwap: true };            // ③
     if (!this.q) return { ok: false, needsSwap: true };                     // 半开/已弃用实例：无控制通道
     try {
       await this._raceControlRequest(

@@ -1240,10 +1240,11 @@ test.describe('F1 回归的孪生（result 带 uuid，走精确出槽分支）',
 
 // ---- setEffort()（2026-09-03）----
 // 思考强度改走 apply_flag_settings 控制请求（此前是 dispose+resume 置换实例）。
-// CLI 侧这条路有三个【静默失败】边界——都返回成功、都不抛错，只能靠这里的用例钉住：
+// CLI 侧这条路有两个【静默失败】边界——都返回成功、都不抛错，只能靠这里的用例钉住：
 //   ① 非法档位被 CLI 的 zod .catch(void 0) 吞掉，档位不变却回 OK
 //   ② {ultracode:false} 只关 ultracode，effort 停在 xhigh 不回落
-//   ③ {effortLevel:null} 清不回「模型默认」（CLI 无未 pin 态）
+// ③ 曾记为「{effortLevel:null} 清不回模型默认」——2026-09-23 在 2.1.259–2.1.280 五个版本上复测推翻，
+//   09-03 那次是最后 pin 的 high 恰等于模型默认档造成的混淆。null 现在同样走控制请求。
 // 若有人把 ①②的防护「优化」掉，SDK 不会报错，只有这些用例会红。
 test.describe('setEffort()', () => {
   const spyQ = () => {
@@ -1302,12 +1303,14 @@ test.describe('setEffort()', () => {
     s.dispose();
   });
 
-  test('③ 回模型默认档 → needsSwap，不下发（CLI 无「未 pin」态可回）', async () => {
-    const { s } = makeSession({ effort: 'high' });
+  test('③ 回 auto（null）→ 走控制请求下发 effortLevel:null，不置换实例；ultracode 成对清掉', async () => {
+    const { s } = makeSession({ effort: 'xhigh', ultracode: true });
     const { calls, q } = spyQ(); s.q = q;
-    assert.deepEqual(await s.setEffort(null), { ok: false, needsSwap: true });
-    assert.equal(calls.length, 0, 'effortLevel:null 清不回默认，发了也只是白等一次往返');
-    assert.equal(s.effort, 'high', '未置换前本地档位不得先行改动');
+    assert.deepEqual(await s.setEffort(null), { ok: true },
+      'CLI 收到 effortLevel:null 会把会话档位置为 {kind:"default"}（= /effort auto），不需要重开实例');
+    assert.deepEqual(calls, [{ effortLevel: null, ultracode: false }],
+      '从 ultracode 回 auto 也要成对带 ultracode:false，否则 ultracode 仍开着');
+    assert.equal(s.uiEffort(), null);
     s.dispose();
   });
 

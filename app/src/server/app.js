@@ -2904,11 +2904,11 @@ registerSocketConnection(io, socket => {
   });
 
   // 台阶3：切思考强度档。
-  // 【2026-09-03 实测更正】具体档之间互切走 apply_flag_settings 控制请求，运行时生效、不置换实例
+  // 【2026-09-03 实测更正】切档走 apply_flag_settings 控制请求，运行时生效、不置换实例
   //（此前注释写的「SDK 无 effort 运行时控制」已不成立，见 agent.setEffort 注释）。
-  // 唯一仍需置换的方向是「回模型默认档」(level===null)：CLI 的 applied.effort 恒是具体档，
-  // 没有「未 pin」态可回，只有重开实例（不传 --effort）才能真正还原。
-  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（模型默认）。
+  // 【2026-09-23 复测更正】回 auto（level===null）也走控制请求——「null 清不回模型默认」是误判。
+  // 仍需置换的只剩实例尚无控制通道（半开 / 已弃用）这一种。
+  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（auto，模型默认）。
   on(socket, 'user:setEffort', async payload => {
     const rawLevel = payload?.level ?? null;
     const norm = normalizeEffortUiLevel(rawLevel);
@@ -2948,8 +2948,8 @@ registerSocketConnection(io, socket => {
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
     }
-    // 轻路径：具体档互切走控制请求。三条 SDK 静默失败边界由 agent.setEffort 统一挡住
-    //（非法值 / ultracode 不回落 / null 清不回默认），这里只负责接线与广播。
+    // 轻路径：切档（含回 auto）走控制请求。SDK 的静默失败边界由 agent.setEffort 统一挡住
+    //（非法值 / ultracode 不回落），这里只负责接线与广播。
     const light = await a.setEffort(level);
     if (light.ok) {
       effortByInstance.set(id, level);
@@ -2965,18 +2965,17 @@ registerSocketConnection(io, socket => {
     }
     if (!light.needsSwap) {
       // 明确失败（超时 / CLI reject）：档位没动，如实拨回，不谎报成功
-      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '模型默认'}」`, true);
+      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? 'auto'}」`, true);
       return effortTo(socket);
     }
-    // needsSwap → 落到下面的置换实例路径（回模型默认档，或实例尚无控制通道）。
+    // needsSwap → 落到下面的置换实例路径（实例尚无控制通道）。
     // busy 守卫只守到这里：置换会 kill 在途 turn / bg / 审批，理由与 SRV-003 同源（那条锚在
-    // externalDirty 路径上，这里是同一危害的另一个触发点）。文案给出替代路径——具体档位走轻路径，
-    // 此刻就能切，不必等回合结束。
+    // externalDirty 路径上，这里是同一危害的另一个触发点）。
     if (a.isBusy()) {
-      sysTo(socket, '切到 auto（模型默认档）要重开会话实例，而当前有任务在运行。请等本轮结束，或改选一个具体档位（立即生效）', true);
+      sysTo(socket, '会话实例还没就绪，切思考强度要重开实例，而当前有任务在运行。请等本轮结束后再切', true);
       return effortTo(socket);
     }
-    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
+    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || 'auto'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
     // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
     if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });
     socket.emit('agent:event', {
