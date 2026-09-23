@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（22 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单。
+// 检查项（23 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单。
 // 各函数头注里的 Dn 编号比这份清单大 1——历史遗留，两套都在用，别按其中一套去改另一套）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
@@ -26,6 +26,7 @@
 // 20. 公网访问方案自洽性（ACCESS_PROFILE 声明 vs CF_ACCESS_*/PUBLIC_URL/AUTH_TOKEN/通知配置的稳态核对，见 doctor-checks.accessProfileDiagnostic）
 // 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
 // 22. Tailscale 检测（不经 Cloudflare 的推荐公网路径；只探测 + 指路，不装不起不保活，见 doctor-checks.tailscaleDiagnostic）
+// 23. 设备审批管辖面（DEVICE_APPROVAL_SCOPE 写错的值运行时按较松的默认档跑，这里点名，见 doctor-checks.deviceApprovalScopeDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -54,6 +55,7 @@ import {
   envOverrideDiagnostic,
   fileEditExposureDiagnostic,
   accessProfileDiagnostic,
+  deviceApprovalScopeDiagnostic,
   bindDiagnostic,
   classifyAuthToken,
   identifySelfServer,
@@ -768,7 +770,13 @@ function checkTailscale() {
   }));
 }
 
-// 执行 22 项检查（D4 端口检查是 async，需 await）
+// D24: 设备审批管辖面（2026-09-22 review P2）。运行时只认字面量 all，写错一律按默认档跑（较松那档）、零报错；
+// 判定与 web 体检的 DEVICE_GATE、启动告警共用 deviceApprovalScopeDiagnostic。原样传，不在这里归一。
+function checkDeviceApprovalScope() {
+  results.push(deviceApprovalScopeDiagnostic({ scope: process.env.DEVICE_APPROVAL_SCOPE, lang: LANG }));
+}
+
+// 执行 23 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -792,6 +800,7 @@ function checkTailscale() {
   checkAccessProfile();
   checkBind();
   checkTailscale();
+  checkDeviceApprovalScope();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

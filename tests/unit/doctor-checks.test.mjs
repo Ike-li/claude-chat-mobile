@@ -35,7 +35,9 @@ import {
   summarizeDangerous,
   uploadsFootprintDiagnostic,
   menubarLivenessDiagnostic,
+  deviceApprovalScopeDiagnostic,
 } from '../../app/src/ops/doctor-checks.js';
+import { parseServerConfig } from '../../app/src/ops/config.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -446,6 +448,16 @@ test.describe('classifyDeviceGateTopology（AUTH-003）', () => {
   test('无 AUTH_TOKEN → ok（仅本机）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: false, cfEnabled: false });
     assert.equal(r.status, 'ok');
+  });
+  // 上面两条「跳过」在 DEVICE_APPROVAL_SCOPE=all 下都不成立。不看它的话，体检在 all 下照样说
+  // 「Access 已验的连接跳过设备审批」，与用户刚设的值正相反（2026-09-22 review P2 顺带查出）。
+  test('DEVICE_APPROVAL_SCOPE=all → 不再说任何连接跳过设备审批', () => {
+    for (const cfEnabled of [true, false]) {
+      const r = classifyDeviceGateTopology({ authTokenSet: true, cfEnabled, deviceApprovalScope: 'all' });
+      assert.equal(r.status, 'ok');
+      assert.equal(r.safe.scope, 'all');
+      assert.doesNotMatch(r.detail, /跳过/, `cfEnabled=${cfEnabled}：${r.detail}`);
+    }
   });
 });
 
@@ -1363,6 +1375,51 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.match(r.detail, /refuses to start/);
     assert.match(r.detail, /AUTH_TOKEN/i);
     assert.doesNotMatch(r.detail, /[一-鿿]/, '英文分支不得混中文');
+  });
+});
+
+// ── DEVICE_APPROVAL_SCOPE：写错的值按默认档跑，而默认档恰是较松的那一档 ─────────────
+// 运行时只认字面量 all，其余一律按未声明处理（rate-limiter 不变量钉着，不改）。缺的是「说出来」：
+// 写成 'ALL' / 'yes' 的人以为经 Access 与本机样 Host 进来的连接也要审批，实际全部跳过
+// （2026-09-22 review P2）。两个 doctor 与启动告警共用这一份判据。
+test.describe('deviceApprovalScopeDiagnostic（写错值不得静默回落）', () => {
+  test('未声明与 all 都是 ok，并说清各自管到哪', () => {
+    for (const scope of [undefined, '']) {
+      const r = deviceApprovalScopeDiagnostic({ scope });
+      assert.equal(r.status, 'ok');
+      assert.equal(r.name, 'DEVICE_APPROVAL_SCOPE');
+      assert.equal(r.scope, '');
+      assert.match(r.detail, /跳过设备审批/);
+    }
+    const all = deviceApprovalScopeDiagnostic({ scope: 'all' });
+    assert.equal(all.status, 'ok');
+    assert.equal(all.scope, 'all');
+  });
+
+  test('不认识的值 → warn：点名这个值、说清按默认档运行、给出合法值', () => {
+    for (const scope of ['ALL', 'yes', '1', ' all']) {
+      const r = deviceApprovalScopeDiagnostic({ scope });
+      assert.equal(r.status, 'warn', `${JSON.stringify(scope)} 被当成默认档，不说就是静默放宽`);
+      assert.equal(r.scope, 'unknown');
+      assert.ok(r.detail.includes(JSON.stringify(scope)), r.detail);
+      assert.match(r.detail, /默认/);
+      assert.match(r.detail, /\ball\b/);
+    }
+  });
+
+  // 诊断与运行时各判一次：doctor 说 ok 而运行时悄悄回落（或反过来），正是这一族缺陷的形状。
+  test('与运行时同口径：warn 当且仅当 parseServerConfig 把它归一成了别的值', () => {
+    for (const scope of ['', 'all', 'ALL', 'All', 'yes', '1', 'true', ' all', 'all ']) {
+      const effective = parseServerConfig({ DEVICE_APPROVAL_SCOPE: scope }, { projectRoot: '/repo' }).deviceApprovalScope;
+      assert.equal(deviceApprovalScopeDiagnostic({ scope }).status === 'warn', effective !== scope,
+        `scope=${JSON.stringify(scope)} 运行时生效=${JSON.stringify(effective)}`);
+    }
+  });
+
+  test('英文分支不混中文', () => {
+    for (const scope of ['', 'all', 'ALL']) {
+      assert.doesNotMatch(deviceApprovalScopeDiagnostic({ scope, lang: 'en' }).detail, /[一-鿿]/);
+    }
   });
 });
 

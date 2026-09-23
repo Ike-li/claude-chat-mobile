@@ -36,6 +36,7 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
+import { deviceApprovalScopeDiagnostic } from '../ops/doctor-checks.js';
 import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
@@ -188,6 +189,12 @@ const {
   accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
+// 写错的 DEVICE_APPROVAL_SCOPE（'ALL' / 'yes'）按默认档运行、零报错，而默认档恰是较松的那一档。语义不改
+// （rate-limiter 不变量钉着「非法值按未声明处理」），启动时吵一声；与两个 doctor 同一份判据（2026-09-22 review P2）。
+{
+  const scopeDiag = deviceApprovalScopeDiagnostic({ scope: process.env.DEVICE_APPROVAL_SCOPE });
+  if (scopeDiag.status === 'warn') console.warn(`[config] ${scopeDiag.detail}`);
+}
 
 // 多 repo 台阶1：可在 web 内切换的工作目录白名单（preflight 内构建，热加载可变）。
 // 各项已在 resolveWorkdirs 里经 realpathSync 规范化（与 CLI 的 ~/.claude/projects 命名一致，
@@ -3995,6 +4002,9 @@ registerSocketConnection(io, socket => {
       bindPlan,
       // 采信 XFF 的开关：传归一后的值——server 真正用的就是它，体检说的必须与限速真在做的一致。
       trustedProxy: TRUSTED_PROXY,
+      // 设备审批管辖面反过来传**原值**：归一后只剩 '' / 'all'，写错的痕迹已经没了，体检就说不出「你写的
+      // ALL 没生效」。生效档由同一份判据从原值推出，与 config.js 的归一逐值对齐（doctor-checks 单测钉着）。
+      deviceApprovalScopeRaw: process.env.DEVICE_APPROVAL_SCOPE || '',
       // TAILSCALE 项的 serve 提示要带实际端口。
       port,
     }));
