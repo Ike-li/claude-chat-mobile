@@ -355,6 +355,13 @@ const SLASH_QUIET_BREAKERS = new Set([
 // 不是修复。45 分钟 = 实测最长 31 分钟留余量后取整；超过它按挂死处理，回到原有中断路径。
 const SLASH_LOCAL_COMMAND_GRACE_MS = 45 * 60_000;
 
+// SDK 后台任务（workflow / 后台 agent / 后台 bash）给在途轮的静默豁免上限，按本轮开跑时长算。
+// 【为什么要上限】子代理在干活时 SDK 流本来就有消息（task_progress 等）刷新 lastActivity，这条豁免真正
+// 兜住的是「任务活着、整条流静默」。无界的话，几小时前起的 dev server 一直挂着，新的一轮卡在网关上
+// 就永远不告警、不中断（2026-09-22 review P2）。取值与上面同为 45 分钟（维护者选定）；超过后回到普通
+// 静默看护——还得再静默满 idleTimeoutMs 才中断，流里一直有动静的长轮次不受影响。
+const SDK_BG_TASK_GRACE_MS = 45 * 60_000;
+
 // 本地 slash 命令的进度轮询间隔。命令在途期间才跑，命令一结束即停——常态零开销。
 // 3s：真机实测一次扫描 6ms（762KB 单文件）~27ms（11 个子代理），3s 一拍的盘压可忽略，
 // 而移动端看「还在动」需要的正是这个量级的刷新率。
@@ -1782,6 +1789,7 @@ export class AgentSession {
   // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问、且无活后台任务时，
   //    长时间零活动 → abort。活的 bgTasks（workflow/后台 agent/后台 bash）视为仍在干活，
   //    刷新 lastActivity 豁免——否则多子代理并行时长主流通零消息会被 10 分钟误杀。
+  //    这条豁免只在本轮开跑 45 分钟内有效（见 SDK_BG_TASK_GRACE_MS）。
   // ② 空闲真回收（instanceIdleReclaimMs）：完全 !isBusy 且超阈 → abort 释放子进程；会话盘上仍在，
   //    下次发送/切换会 resume 重建。0 = 禁用。等审批/后台任务/提问都算 busy，不回收。
   //    当前 viewing 实例（this.viewed）也不回收——用户在读历史时 lastActivity 不会因 SDK 消息刷新。
@@ -1808,13 +1816,13 @@ export class AgentSession {
     // 本地 slash 命令第三条同理，且比前两者更极端——它整轮零 SDK 消息，连 tool_use 都没有
     // （见 SLASH_LOCAL_COMMAND_GRACE_MS）。
     // 与 pendingPermissions 同口径：刷新 lastActivity 后返回（不进静默中断、也不进空闲回收）。
-    // ★ 这里必须用 hasSdkBgTasks() 而非 hasBgTasks()：见该方法注释（否则本地命令的 45 分钟上限被
-    // 自家扫盘产物打穿）。
-    if (this.pendingTurns > 0 && (this.hasSdkBgTasks() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
+    // ★ 这里必须经 _sdkBgTasksExempt()（底层是 hasSdkBgTasks() 而非 hasBgTasks()）：见 hasSdkBgTasks 注释
+    // （否则本地命令的 45 分钟上限被自家扫盘产物打穿），且它自带 SDK_BG_TASK_GRACE_MS 上限。
+    if (this.pendingTurns > 0 && (this._sdkBgTasksExempt() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
       // 留痕：这三条豁免刷新 lastActivity 是「告警秒数比上一条还小」的直接来源（2026-08-10 真机
       // a90814ca：一条 271 秒的连续静默里先报 113 秒、后报 90 秒，事后无从判断是哪条豁免干的）。
       this._noteIdleExemption([
-        this.hasSdkBgTasks() && 'sdk_bg_task',
+        this._sdkBgTasksExempt() && 'sdk_bg_task',
         this.hasRunningForegroundTool() && 'foreground_tool',
         this._localCommandInFlight() && 'local_command',
       ].filter(Boolean).join('+'));
@@ -2119,6 +2127,13 @@ export class AgentSession {
       if (!key.startsWith(LOCAL_CMD_TASK_PREFIX)) return true;
     }
     return false;
+  }
+
+  // SDK 后台任务是否仍给在途轮豁免静默看门狗（上限见 SDK_BG_TASK_GRACE_MS）。
+  // turnStartedAt 缺失时按在期处理，维持旧行为——那是开表之前的边缘态，不该因此提前中断。
+  _sdkBgTasksExempt() {
+    if (!this.hasSdkBgTasks()) return false;
+    return !this.turnStartedAt || Date.now() - this.turnStartedAt <= SDK_BG_TASK_GRACE_MS;
   }
 
   // 本地 slash 命令是否仍在途（供 checkIdle 豁免，上限见 SLASH_LOCAL_COMMAND_GRACE_MS）。

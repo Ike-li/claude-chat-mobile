@@ -436,6 +436,38 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
+  // SDK 后台任务给在途轮的静默豁免也有上限（2026-09-22 review P2，维护者选 45 分钟）。
+  // 子代理在干活时 SDK 流本来就有消息刷新 lastActivity，这条豁免真正兜住的是「任务活着、整条流静默」——
+  // 典型是几小时前起的 dev server 还挂着，新的一轮卡在网关上：此前永远不告警、不中断。
+  test('SDK 后台任务在本轮开跑 45 分钟内豁免静默看门狗', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 44 * 60_000;
+    s.bgTaskUpsert('bg-dev-server', 'local_bash', 'npm run dev');
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+    s.checkIdle();
+    assert.equal(interrupted, false, '上限内后台任务仍算「在干活」');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  test('本轮开跑超 45 分钟：后台任务不再续命，静默挂死回到中断路径', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 46 * 60_000;
+    s.bgTaskUpsert('bg-dev-server', 'local_bash', 'npm run dev');
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+    s.checkIdle();
+    assert.equal(interrupted, true, '只剩一个静默的后台任务撑着的在途轮超上限须按挂死处理');
+    assert.ok(events.find(e => e.type === 'error'), '中断要告诉用户');
+    assert.equal(s.hasBgTasks(), true, '后台任务本身不受影响：看门狗中断的是在途轮，不是任务');
+    s.dispose();
+  });
+
   // 本地 slash 命令在途豁免（agent.js#_localCommandInFlight）。
   // 病灶：/code-review 这类本地命令由 CLI 在自己进程里跑，不产 task_progress、主链也没有 tool_use
   // （2026-08-03 那批真机会话主链 assistant 条数 = 0），既有两条豁免一条都不满足 ⇒ SDK 流全空、
