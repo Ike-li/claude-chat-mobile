@@ -377,6 +377,18 @@ describe('真 git：工作区是 monorepo 子目录', () => {
     return { root, foo: join(root, 'packages', 'foo') };
   }
 
+  // 工作区目录本身整个未跟踪（仓库里刚新建的包）：普通模式下 status 只给一条折叠的 `?? packages/fresh/`，
+  // 换算成相对工作区是空串，被丢掉后面板显示「没有改动」——修这个子目录问题之前至少还列出一条（2026-09-23 #151 review）。
+  test('工作区目录整个未跟踪 → 列出其中的文件，而不是报告没有改动', async () => {
+    const { root } = makeMonorepo();
+    mkdirSync(join(root, 'packages', 'fresh', 'sub'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'fresh', 'a.txt'), 'a\n');
+    writeFileSync(join(root, 'packages', 'fresh', 'sub', 'b.txt'), 'b\n');
+    const r = await listGitChanges(join(root, 'packages', 'fresh'));
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.untracked.map(e => e.path).sort(), ['a.txt', 'sub/b.txt']);
+  });
+
   test('只列工作区子树里的改动，路径相对工作区——兄弟包与仓库根的文件名不外露', async () => {
     const { foo } = makeMonorepo();
     const r = await listGitChanges(foo);

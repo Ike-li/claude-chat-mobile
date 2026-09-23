@@ -195,7 +195,17 @@ export async function listGitChanges(cwd, opts = {}) {
     return { ok: false, code: 'git_error', error: err.message || 'git status 失败' };
   }
 
-  const all = parsePorcelainZ(statusOut).map(e => relativeToCwd(e, prefix)).filter(Boolean);
+  let entries = parsePorcelainZ(statusOut);
+  // 工作区目录本身整个未跟踪（仓库里刚新建的包）：普通模式只给一条折叠的 `?? <前缀>`，换算成相对工作区是空串，
+  // 面板会显示「没有改动」。只在这种情况下再要一次展开到文件的列表——常态不加 -uall：未忽略的大目录会让
+  // status 慢到超时（2026-09-23 #151 review）。展开失败就维持折叠结果，不把整次查询判失败。
+  if (prefix && entries.some(e => e.xy === '??' && e.path === prefix)) {
+    try {
+      const st = await gitExec(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { timeoutMs, maxBuffer, execFile });
+      entries = parsePorcelainZ(st.stdout);
+    } catch { /* 见上 */ }
+  }
+  const all = entries.map(e => relativeToCwd(e, prefix)).filter(Boolean);
   const truncated = all.length > maxEntries;
   const sliced = truncated ? all.slice(0, maxEntries) : all;
   const classified = classifyGitEntries(sliced);
