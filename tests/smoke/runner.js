@@ -148,6 +148,11 @@ export function smokeEnv({ root, port }, baseEnv = process.env) {
     // 不跟 server 配置键的命名走——WORK_DIR 退役时，读它的 5 个 scenario 就是这样一起坏掉的。
     CCM_SMOKE_WORK_DIR: join(root, 'work'),
     CCM_DATA_DIR: join(root, 'data'),
+    // 两个配置文件都指进一次性目录（文件不存在＝没有文件配置）。不指的话，在仓库根起的 server 会读
+    // 仓库根的 ccm.config.json——维护者的生产配置就在那里，环境变量摘得再干净，DEVICE_APPROVAL_SCOPE
+    // 之类也会从文件补回来（loadRuntimeEnvironment 只填 env 里没有的键）。
+    CCM_CONFIG_FILE_PATH: join(root, 'ccm.config.json'),
+    CCM_ENV_FILE_PATH: join(root, '.env'),
     CCM_SMOKE_URL: `http://127.0.0.1:${port}`,
     // 同集成测 _spawn-server：禁桌面日志窗，防 smoke 起服堆 Terminal.app
     LOG_TERMINAL: 'off',

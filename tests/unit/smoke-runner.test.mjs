@@ -62,6 +62,17 @@ test('scenario 读的环境变量都由 runner 提供（或是显式列出的可
   assert.ok(reads > 0, `${SCENARIO_DIR} 下没扫到任何 process.env 读取，扫描面塌了`);
 });
 
+// runner 在仓库根起 server，server 默认读 cwd 下的 ccm.config.json / .env——维护者的生产配置就在
+// 那里。环境变量摘得再干净，文件照样把 DEVICE_APPROVAL_SCOPE=all 之类补回来（loadRuntimeEnvironment
+// 只填 env 里没有的键）。容器那边靠把 /work/ccm.config.json 清空解决，冒烟在宿主机上跑，不能动那份文件。
+test('runner 起的 server 不读仓库根的配置文件：两个配置路径都指进本场景的一次性目录', () => {
+  const root = '/tmp/ccm-smoke-x';
+  const env = smokeEnv({ root, port: 1 }, {});
+  for (const key of ['CCM_CONFIG_FILE_PATH', 'CCM_ENV_FILE_PATH']) {
+    assert.ok(env[key]?.startsWith(`${root}/`), `${key} 必须落在一次性目录里，实际 ${env[key]}`);
+  }
+});
+
 // smoke 侧只需确认它确实接上了共享清单；清单本身的行为由 tests/unit/spawn-env.test.mjs 覆盖。
 test('runner 复用共享的环境隔离清单（与集成测同一份）', async () => {
   const shared = await import('../helpers/spawn-env.mjs');
