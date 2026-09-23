@@ -105,7 +105,7 @@
 | `MSG-01` | 同一 `clientMessageId` 对 Claude `send` 至多一次。校验失败不得 commit；并发重发靠 in-flight claim，无论成败都要 release（`REL-01` 两阶段 + claim/release · `SRV-001` FRESH 分支**同样**要单飞——「FRESH 不去重」是修过的坑） |
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
 | `SOCKET-01` | Socket 断开不得杀死 Agent；Agent 死必须清 busy、通知客户端、允许恢复 |
-| `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history` |
+| `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history`。一台设备连入触发的追平重定基线只对它自己生效：其余在线端照样收到终端刚写的那段 `history_append`，待审批设备连入不触发 |
 | `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |
 | `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行 |
 | `APPROVAL-02` | 启动时磁盘上残留的 pending 标为 expired（`decidedBy=system:restart`），不可再批准执行 |

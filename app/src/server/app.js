@@ -613,6 +613,7 @@ function unlockSocket(socket) {
   socket.deviceApproved = true;
   socket.trustBasis = 'device-token'; // SEC-03：待审批→批准走的就是设备信任表，受该表控制（吊销须能断连）
   socket.join('approved'); // SEC-01：批准后补入下行隔离房间，同 io.on('connection') 分支的即时批准路径
+  mirrorEngine.requestRebaseline(socket.id); // 同 connection 分支：这一刻它才开始拉历史（见那里的注释）
   // 未读角标：不在此 capture——批准另一台设备 ≠ 当前会话「重新进入查看」。
   // capture 会并入/清零活计数；若 viewing 会话已有未 ack 快照，新设备 join 不应触发多余状态机跳变。
   // 真正进入查看仍走 setViewing / session:switch / 本 socket 首次 connect 路径。
@@ -2382,11 +2383,6 @@ diagLog.setCallback((key, entry) => {
 
 registerSocketConnection(io, socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
-  // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
-  // 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
-  // BE-009：改为置 catchUpRebaselineRequested 标志（而非直接 catchUpKey=null）——让下一 tick 在重建 baseline
-  // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
-  mirrorEngine.requestRebaseline();
 
   // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
   if (socket.deviceApproved !== true) {
@@ -2399,6 +2395,12 @@ registerSocketConnection(io, socket => {
     // SEC-01：批准设备加入下行隔离房间——本函数下方全部 io.emit 已改 io.to('approved').emit，
     // 待审批 socket（deviceApproved===false）不在此房间，故收不到任何敏感广播，只收上面的 device_status。
     socket.join('approved');
+    // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
+    // 会把已显示的消息再 history_append 一遍成重复气泡。BE-009：置标志而非直接 catchUpKey=null——让下一 tick
+    // 在重建 baseline 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
+    // 带上 socket.id：那一 tick 的增量照推给其它在线端，只跳过这一台。只在已批准时请求——待审批设备收不到
+    // 任何会话内容也不会拉历史，旧实现让它每连一次都触发一次重定基线（批准时由 unlockSocket 补上）。
+    mirrorEngine.requestRebaseline(socket.id);
     // 未读角标：覆盖"同一会话内断线重连"场景（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
     // 断开 socket，但 viewingInstanceId 全程不变，前端不会重新 emit user:setViewing）。幂等、null 安全，
     // 无关紧要的网络抖动重连也可放心无脑调用。

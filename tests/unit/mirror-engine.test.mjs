@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createMirrorEngine } from '../../app/src/server/mirror-engine.js';
-import { getProjectDir, MIRROR_STALE_PENDING_MS } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, MIRROR_STALE_PENDING_MS } from '../../app/src/sessions/history.js';
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +77,8 @@ function makeEngine({
   // 的那一刻 = 「tick 已开始、尚未结束」。测 stop() 与在飞 tick 的竞态需要精确卡在这个时刻。
   // 收 getEngine 而非 engine：探针在 createMirrorEngine 返回之前就可能被调到（构造期 tick）。
   onTickProbe = null,
+  // 读历史的注入点（缺省真读盘）。测「tick 读盘期间发生了什么」的竞态用：在真读完之后、交回引擎之前插一步。
+  readHistory,
 } = {}) {
   const emitted = [];
   const agents = new Map();
@@ -86,7 +88,13 @@ function makeEngine({
   let statusRefreshes = 0;
 
   const engine = createMirrorEngine({
-    io: { to: room => ({ emit: (event, envelope) => emitted.push({ room, event, ...envelope }) }) },
+    // except：Socket.IO 的「发给房间、但跳过这几个 socket」。记下被跳过的 id，用例据此判断谁收不到。
+    io: {
+      to: room => ({
+        emit: (event, envelope) => emitted.push({ room, event, ...envelope }),
+        except: ids => ({ emit: (event, envelope) => emitted.push({ room, except: [...ids], event, ...envelope }) }),
+      }),
+    },
     agents,
     instanceState: id => {
       onTickProbe?.(() => engine);
@@ -98,6 +106,7 @@ function makeEngine({
     scheduleStatusRefresh: () => { statusRefreshes += 1; },
     readCliSnapshotForSession: () => cliSnapshot,
     statusBridgeOff,
+    ...(readHistory ? { readHistory } : {}),
     ...roots,
   });
   engine.stop();
@@ -509,7 +518,7 @@ test('requestRebaseline 后同会话重连不重复推历史（只重定基线�
   assert.equal(a.externalDirty, false, '磁盘没长 → 没有被吸收的外部增长，不该标脏');
 });
 
-test('requestRebaseline 时磁盘已被终端写长 → 标脏（BE-009 防分叉），但不重推历史', async () => {
+test('requestRebaseline 时磁盘已被终端写长 → 标脏（BE-009 防分叉）', async () => {
   const h = makeEngine();
   const a = h.view('inst-A', 'sess-absorb');
   const base = Date.now() - 20_000;
@@ -526,6 +535,97 @@ test('requestRebaseline 时磁盘已被终端写长 → 标脏（BE-009 防分�
   await h.engine.catchUpTick();
 
   assert.equal(a.externalDirty, true, '被 rebaseline 吸收的外部增长必须标脏，否则下条手机消息从旧位置分叉');
+});
+
+// 重定基线是为【新连上的那台】设的：它自己会 loadHistory 全量重渲，沿用滞后的 baseline 会把已显示的
+// 消息再 history_append 一遍成重复气泡。可 baseline 是全局单值——旧实现在这一 tick 直接把它推到磁盘长度，
+// 连接前就在线、一直开着这个会话的其它端也就永远收不到上一 tick 之后终端写的那一段（2026-09-22 review P2）。
+// 每一次锁屏解锁、切网络都会触发它，待审批设备连一下也会。
+test('requestRebaseline 时磁盘已被终端写长 → 连接前就在线的端照样收到那段增量，新连上的 socket 不重复收', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-others');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-others', settledTail(base));
+  await h.engine.catchUpTick();
+
+  // 上一 tick 之后终端又写了一轮；下一 tick 之前，恰好有一台设备（重）连上来
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-others', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '终端里又问的' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '终端里又答的' }] }, timestamp: iso(base + 6_000) },
+  ]);
+  h.engine.requestRebaseline('sock-new');
+  await h.engine.catchUpTick();
+
+  const appends = h.historyAppends();
+  assert.equal(appends.length, 1, '终端写的那一轮必须推给连接前就在线的端——它们不会重载，这一 tick 不推就再也补不上');
+  assert.equal(appends[0].room, 'approved', 'SEC-01：会话内容只发给已批准设备');
+  assert.deepEqual(appends[0].except, ['sock-new'], '新连上的 socket 自己会全量重载，再收一遍就是重复气泡');
+  assert.equal(appends[0].payload.external, true);
+  assert.equal(appends[0].payload.messages.length, 2);
+
+  // 基线已对齐：下一 tick 不得把同一段再推一遍
+  await h.engine.catchUpTick();
+  assert.equal(h.historyAppends().length, 1, '同一段增量只推一次');
+});
+
+// 真读盘，读完之后跑一次挂上的钩子再交回引擎——钩子里做的事就发生在「tick 的读盘 await 期间」。
+function readHistoryWithHook() {
+  let hook = null;
+  return {
+    arm(fn) { hook = fn; },
+    readHistory: async (...args) => {
+      const r = await getSessionHistory(...args);
+      const fn = hook; hook = null; fn?.();
+      return r;
+    },
+  };
+}
+const terminalRound = (ts, n) => ([
+  { type: 'user', message: { role: 'user', content: `终端第${n}轮问` }, timestamp: iso(ts) },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `终端第${n}轮答` }] }, timestamp: iso(ts + 1_000) },
+]);
+
+// 2026-09-23（#147 bot review）：同会话重定基线曾在同一 tick 里读两次盘——一次给旧查看端算增量，一次给下面的
+// 切入分支定基线。两次之间终端又写了一轮，基线就被推过那一轮，而旧查看端只收到第一次的快照：那一轮永远补不上。
+test('重定基线的两次读盘之间终端又写了一轮 → 连接前就在线的端下一拍照样收到', async () => {
+  const hook = readHistoryWithHook();
+  const h = makeEngine({ readHistory: hook.readHistory });
+  const a = h.view('inst-A', 'sess-two-reads');
+  const base = Date.now() - 30_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads', settledTail(base));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads', [...settledTail(base), ...terminalRound(base + 5_000, 1)]);
+  h.engine.requestRebaseline('sock-new');
+  hook.arm(() => writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads',
+    [...settledTail(base), ...terminalRound(base + 5_000, 1), ...terminalRound(base + 8_000, 2)]));
+  await h.engine.catchUpTick();
+  await h.engine.catchUpTick(); // 下一拍：常规追平
+
+  const pushed = JSON.stringify(h.historyAppends().map(e => e.payload.messages));
+  assert.match(pushed, /终端第1轮答/);
+  assert.match(pushed, /终端第2轮答/, '读盘之后才落盘的那一轮被基线越过了，旧查看端再也收不到');
+});
+
+// 同一次 review：重定基线读盘期间又有设备连上来。它登记在 await 之后，不在本拍跳过名单里，于是本拍的增量
+// 推给了一个正在全量重载的端；前端的历史加载闸只扣住、不去重，历史渲染完就原样放出来——重复气泡。
+test('重定基线读盘期间又有设备连上 → 本拍的增量同样不推给它（它也在全量重载）', async () => {
+  const hook = readHistoryWithHook();
+  const h = makeEngine({ readHistory: hook.readHistory });
+  const a = h.view('inst-A', 'sess-late-join');
+  const base = Date.now() - 30_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-late-join', settledTail(base));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-late-join', [...settledTail(base), ...terminalRound(base + 5_000, 1)]);
+  h.engine.requestRebaseline('sock-new');
+  hook.arm(() => h.engine.requestRebaseline('sock-late'));
+  await h.engine.catchUpTick();
+
+  const appends = h.historyAppends();
+  assert.equal(appends.length, 1, '连接前就在线的端仍要收到这一段');
+  assert.deepEqual([...appends[0].except].sort(), ['sock-late', 'sock-new'], '读盘期间连上的那台也在全量重载，推给它就是重复气泡');
 });
 
 // 上一条的镜像对照（2026-08-10）：磁盘同样变长、同样在重连时比对，但写它的是【己方】刚跑完的 turn。
@@ -557,6 +657,8 @@ test('己方 turn 刚跑完（wasOwnTurn）时重连 → 不标脏：那段增�
   await h.engine.catchUpTick();
 
   assert.equal(a.externalDirty, false, '己方刚写完的那一轮不是终端写入，不得触发 dispose+resume 置换');
+  assert.equal(h.historyAppends().length, 0,
+    '己方这一轮其它端已经从 live 流里看到了，再当外部增量推一遍就是重复气泡');
 });
 
 // 上一条的边界守卫（2026-08-10 独立审查发现）：localBusy 把 busy 与 permission 压成同一个布尔，但两者
