@@ -4,15 +4,15 @@
 // unlockSocket（重放 init/models/statusline 初始态）依赖 app 层大量同步状态，故不并入本模块，
 // 而作为 onUnlockSocket 回调注入——本模块只管"哪些 socket、何时"，重放"放什么"仍属 app。
 import { statSync, existsSync, mkdirSync, watch } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { dirname, basename } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles, takeSelfMutations, shortDeviceId } from './devices.js';
+import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles, takeSelfMutations, shortDeviceId, DEVICE_FILES } from './devices.js';
 import * as audit from '../ops/audit.js';
 
 export function createDeviceGate({
   io,
-  dataDir,
   onUnlockSocket,
+  deviceFiles = DEVICE_FILES,
   listPendingDevices = getPendingDevices,
   listTrustedDevices = getTrustedDeviceProfiles,
   isTrusted = isDeviceTrusted,
@@ -24,8 +24,8 @@ export function createDeviceGate({
   // 实际访问路径无效的控件，比没有这个控件更坏（2026-09-10 实测踩到）。
   accessBypassActive = false,
 }) {
-  const trustedDevicesFile = join(dataDir, 'trusted-devices.json');
-  const pendingDevicesFile = join(dataDir, 'pending-devices.json');
+  // 与 devices.js 读写同一对文件（它认 CCM_*_DEVICES_FILE 覆盖）。只给测试留注入口，不再从 dataDir 自己拼。
+  const { trusted: trustedDevicesFile, pending: pendingDevicesFile } = deviceFiles;
 
   function getSocketsByDeviceToken(deviceToken) {
     const list = [];
@@ -111,7 +111,8 @@ export function createDeviceGate({
 
   // 确保数据文件存在，以便安全进行 watch 监听
   try {
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(dirname(trustedDevicesFile), { recursive: true });
+    mkdirSync(dirname(pendingDevicesFile), { recursive: true });
     if (!existsSync(trustedDevicesFile)) writeOwnerOnlyFile(trustedDevicesFile, JSON.stringify([], null, 2));
     if (!existsSync(pendingDevicesFile)) writeOwnerOnlyFile(pendingDevicesFile, JSON.stringify([], null, 2));
   } catch (err) {
