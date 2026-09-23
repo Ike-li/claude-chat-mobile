@@ -129,11 +129,10 @@ The ring buffer is not permanent history. If a gap has fallen out of the buffer 
 ## Authentication and scope boundaries
 
 ```text
-AUTH_TOKEN (required; no token, no server)
+AUTH_TOKEN (required; no token, no server) ‖ public IdP strategy (optional; Cloudflare Access today)
+  one or the other, by Host: public Hosts the IdP owns accept only IdP credentials; every other entry accepts only the token
             ↓
-public IdP strategy (optional; Cloudflare Access is the only implementation today)
-            ↓
-device trust (a true local connection is exempt from this layer, not from the token)
+device trust (a true local connection is exempt; IdP-verified connections are exempt by default, not with DEVICE_APPROVAL_SCOPE=all)
             ↓
 WORKDIRS scope gate
             ↓
@@ -144,7 +143,11 @@ Agent tool approval or direct user file edit
 
 The first layer is a prerequisite, not an option ([hard-rules §1, "auth is a startup
 prerequisite"](hard-rules.md)): without `AUTH_TOKEN` the server refuses to start — including for a
-browser on this machine — so every layer below it always assumes the caller already holds the token.
+browser on this machine. That does not mean every connection holds the token: with the IdP enabled, the
+public Hosts it owns accept only IdP credentials (a JWT), and `AUTH_TOKEN` is neither required nor
+accepted on that path. So what a lower layer may assume depends on the entry — "the caller passed the IdP"
+on the IdP's public Hosts, "the caller holds the token" everywhere else — and any logic that hands the
+token out (such as `connect:qr`) must check which path the connection took first ([hard-rules §6](hard-rules.md)).
 The second layer is named for the role rather than the product because core code only knows the
 interface shape in `app/src/auth/auth-strategy.js`; Cloudflare Access is today's only implementation, and
 swapping the IdP should not touch the core.
@@ -152,7 +155,7 @@ swapping the IdP should not touch the core.
 These boundaries do not replace each other:
 
 - `AUTH_TOKEN` proves possession of the instance secret; it does not prove that a device was approved.
-- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it replaces device approval (the second factor) **by default**, never the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
+- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it **replaces the token** on the public Hosts it owns (that path accepts only the JWT) and, **by default**, also replaces device approval (the second factor); LAN and local entries are unaffected and still accept only the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
   - ⚠ "Replaces" is literal: a connection arriving through Access is **never checked against** `trusted-devices.json`, so the trusted-device list **does not govern it** — revoking a phone that came in through the tunnel neither disconnects it nor blocks it (confirmed by testing on 2026-09-10). The decision is the first line of `shouldBypassDeviceApproval`.
   - To make that list apply to every path, set `DEVICE_APPROVAL_SCOPE` to `all` and restart. It is a **master switch covering every path**: a new device arriving through Access needs one approval, and the loopback-looking-Host path is closed too. That second half is required — the check reads Host, and **Host is a header the client writes**. Pure TCP forwarding (`ssh -R`, frp tcp) does not route on Host, so a remote client sending `Host: localhost` satisfies both conditions (peer is already loopback, since the forwarder lands locally). TCP cannot tell a real local browser apart from a tunnelled connection, and extra checks do not help (forwarded headers are absent on pure TCP forwarding; `localAddress` is identical), so the call is left to whoever knows their own topology (2026-09-17 security review, H1). With it on, the recovery paths are `node scripts/device.js approve`, the menu bar, or pressing Enter in the terminal running `npm start` — none of which read any network signal. The default keeps "Access replaces approval" and lets loopback-looking Hosts through, because flipping it would drop every in-use device back into the pending queue the first time an existing install restarts after an upgrade — at which point no device in the trust list can approve anything.
 - `WORKDIRS` constrains paths; it does not decide which Claude tools run automatically (**the first entry is the primary work directory** your phone opens by default; a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
