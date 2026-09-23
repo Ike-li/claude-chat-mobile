@@ -162,7 +162,7 @@ const KNOWN_KEYS = {
   registryBusy: '两侧都有：注册表权威自报（DRIVER_EVIDENCE）',
   // 两侧都收它，但作用【有意不同】——这不构成本文件要防的那种不对称：
   //   入口：仅在尾部已 pending 时豁免陈旧检查而上锁（不像 registryBusy 那样无视尾部形态）；
-  //   出口：与 keepAlive 同权，维持已有的锁、不造锁。
+  //   出口：同样仅在尾部 pending 时维持已有的锁、不造锁（尾部 settled 时不起作用——那时终端只是开着对话框）。
   // 于是不存在「入口不建锁、出口不释放」的自锁闭环：入口不建锁的唯一情形是尾部 settled，
   // 那时 prevReadonly=false，出口在 `if (!prevReadonly)` 就早退了。
   registryWaiting: '两侧都有：注册表权威自报终端等人（DRIVER_EVIDENCE）',

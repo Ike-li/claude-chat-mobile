@@ -542,9 +542,10 @@ export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror
 //   · registryBusy（P1，7/26 CCD 调研吸收）：~/.claude/sessions/<PID>.json 的 status:"busy" 权威自报
 //     （session-registry.js，已含 pid 验活+新鲜度）→ 比 keepAlive/tailPending 强一档：【可上锁也可维持】——
 //     它不是从磁盘形态猜的，是活着的终端进程自己说"我在跑"，堵「终端开跑但首条 text 未落盘」的上锁空窗。
-//   · registryWaiting（2026-09-04）：注册表自报终端卡在对话框上等人（含权限审批框）→ 与 keepAlive
-//     同权（维持已有的锁、不造锁）。等审批可长达 30 分钟且期间零写盘，没有它，12.5s 静默窗会在
-//     人还没走到电脑前时就解锁。刻意不给造锁权，理由见 mirrorEntryLock 处的说明。
+//   · registryWaiting（2026-09-04）：注册表自报终端卡在对话框上等人（含权限审批框）→ 尾部 pending 时
+//     维持已有的锁、不造锁。等审批可长达 30 分钟且期间零写盘，没有它，12.5s 静默窗会在人还没走到电脑前
+//     时就解锁。刻意不给造锁权，理由见 mirrorEntryLock 处的说明。尾部已 settled 时它不起作用（与入口
+//     同一前提）：轮次已收尾、只是开着 /model 对话框，维持锁等于让一个忘关的对话框把手机锁成只读。
 export function mirrorReleaseStep(state, {
   externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
   registryBusy = false, registryWaiting = false, tailEntrypoint = null,
@@ -562,7 +563,9 @@ export function mirrorReleaseStep(state, {
   // 缺了这半边会自锁：web 等一条 ExitPlanMode 审批时尾部恒 pending ⇒ 锁恒维持 ⇒ 手机只读 ⇒
   // 点不到「批准」⇒ 审批永远 pending。keepAlive/externalWrite/registryBusy 三条兜底不受影响：
   // 真有人在写盘或注册表自报在跑时，照锁不误。
-  if (keepAlive || registryWaiting || (tailPending && !isOwnSdkTail(tailEntrypoint))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/等人按键/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
+  // registryWaiting 只在尾部 pending 时撑锁（见上方头注），且那时连己方 sdk-ts 尾部也照样撑：真有一个活终端
+  // 卡在这个会话的对话框上，误锁可点「续接」化解，误放行造成的分叉不可逆。
+  if (keepAlive || (tailPending && (registryWaiting || !isOwnSdkTail(tailEntrypoint)))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/等人按键/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < need;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
