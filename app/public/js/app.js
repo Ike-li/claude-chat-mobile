@@ -4668,7 +4668,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
       if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
-      effortSelect.value = '';
+      // 连 option 一起清：只置 value 的话，上个模型的候选（含 auto）还留着，随后到达的 effort_mode(null)
+      // 回执经 setEffortMode 把 value 设回 'auto'——不支持调档的模型上凭空出现一个 auto 档。
+      effortSelect.innerHTML = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
