@@ -211,7 +211,8 @@ function exitableAgent(manager, sessionId, extra = {}) {
     ...extra,
   };
   manager.agents.set(agent.instanceId, agent);
-  return { agent, exit: () => exit() };
+  // 与生产同序：consume 走完先经 onExit 清表（app.js），再结算 exitPromise。已移出表的，清表是空操作。
+  return { agent, exit: () => { manager.clearTables(agent.instanceId); exit(); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
@@ -249,6 +250,42 @@ test('waitForSessionExits 等本会话里已移除、正在回收的实例退完
     await manager.waitForSessionExits('s-live', 10_000), true,
     '活实例和别的会话都不该等：前者由保护①拒绝，后者与本会话无关，等它们只会白等到上限',
   );
+});
+
+// 等待是异步的：这期间另一台设备可能又打开、又关掉了这个会话。只等调用那一刻收集到的，
+// 新关掉的那个 CLI 就漏了——等完它已不是活实例，保护①放行，删除又落在它的收尾写入前面。
+test('waitForSessionExits 等待期间新关掉的实例也要等到', async () => {
+  const manager = createInstanceManager();
+  const first = exitableAgent(manager, 's1');
+  manager.remove(first.agent.instanceId);
+
+  let result = null;
+  manager.waitForSessionExits('s1', 10_000).then(r => { result = r; });
+  const second = exitableAgent(manager, 's1');
+  manager.remove(second.agent.instanceId);
+  first.exit();
+  await flush();
+  assert.equal(result, null, '等待期间又关掉的那个 CLI 还在收尾写盘，不能放行');
+  second.exit();
+  await flush();
+  assert.equal(result, true);
+});
+
+// 每轮重新收集时，dispose 过却没走 onExit 清表的实例会一直留在表里，它那个早已结算的退出确认
+// 每轮都被收回来。重复等它就是在已结算的 promise 上空转，事件循环再也轮不到别的事——整个 server 卡死。
+// 用会数调用次数的 thenable 代替 promise：空转时它很快就抛，用例红，而不是把测试进程一起卡死。
+test('waitForSessionExits 不在已结算的退出确认上空转', async () => {
+  const manager = createInstanceManager();
+  let thenCalls = 0;
+  const alreadyExited = {
+    then(resolve) {
+      thenCalls++;
+      if (thenCalls > 20) throw new Error('同一个已结算的退出确认被反复等——在空转');
+      resolve();
+    },
+  };
+  exitableAgent(manager, 's1', { disposed: true, exitPromise: alreadyExited });
+  assert.equal(await manager.waitForSessionExits('s1', 10_000), true);
 });
 
 test('waitForSessionExits 有上限：等不到按时放行并返回 false，不让会话永远卡在关闭中', async t => {

@@ -96,9 +96,8 @@ export function createInstanceManager() {
     return agent;
   }
 
-  // 等该会话名下「已关、没退完」的 CLI 全部退出，最多等 timeoutMs；返回是否在上限内等到。
-  // 活实例不算：它由删除保护①直接拒绝，等它只会白等到上限。
-  function waitForSessionExits(sessionId, timeoutMs) {
+  // 该会话名下「已关、没退完」的实例的退出确认。活实例不算：它由删除保护①直接拒绝，等它只会白等到上限。
+  function exitPromisesOf(sessionId) {
     const pending = [];
     for (const agent of agents.values()) {
       if (agent.sessionId === sessionId && (agent.terminating || agent.disposed)) pending.push(agent.exitPromise);
@@ -106,12 +105,27 @@ export function createInstanceManager() {
     for (const agent of exiting) {
       if (agent.sessionId === sessionId) pending.push(agent.exitPromise);
     }
-    if (!pending.length) return Promise.resolve(true);
-    let timer;
-    return Promise.race([
-      Promise.all(pending).then(() => true),
-      new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, false); }),
-    ]).finally(() => clearTimeout(timer));
+    return pending;
+  }
+
+  // 等它们全部退出，最多等 timeoutMs；返回是否在上限内等到。
+  // 每轮等完要重新收集：等待期间另一台设备可能又开又关了这个会话，只等开头那一批会漏掉新关的那个。
+  // 重新收集时跳过已经等过的：dispose 过却没走 onExit 清表的实例会一直留在表里，它那个早已结算的
+  // promise 每轮都会被收回来——不跳过就是在已结算的 promise 上空转，微任务队列停不下来，整个进程卡死。
+  async function waitForSessionExits(sessionId, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    const awaited = new Set();
+    for (;;) {
+      const fresh = exitPromisesOf(sessionId).filter(p => !awaited.has(p));
+      if (!fresh.length) return true;
+      for (const p of fresh) awaited.add(p);
+      let timer;
+      const settled = await Promise.race([
+        Promise.all(fresh).then(() => true),
+        new Promise(resolve => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now()), false); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!settled) return false;
+    }
   }
 
   // 把活计数并入 entry 快照并清零活计数器。未 ack 的旧快照必须保留：重连抖动/二次 capture 时 live 常为 0，
