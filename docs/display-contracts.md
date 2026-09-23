@@ -92,7 +92,17 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 集合 | 值 | 用途 |
 |------|-----|------|
 | **SDK `Options.effort`** | `low` `medium` `high` `xhigh` `max` | 真正传给 Agent SDK |
-| **UI 档** | 上列 + **`ultracode`** + `null`（模型默认，磁贴名 **`auto`**，同 CLI `/effort auto`） | 设置磁贴 / pill / `effort_mode` 广播 |
+| **UI 档** | 上列 + **`ultracode`** + **`auto`** + `null` | 设置磁贴 / pill / `effort_mode` 广播 |
+
+**`auto` 与 `null` 是两档，不能互相冒充**（对应 CLI 会话档位的两种 kind）：
+
+| UI 档 | CLI 会话档位 | 实际生效 | 怎么到达 |
+|------|-------------|---------|---------|
+| `auto` | `{kind:'default'}` | 模型**内置**默认，无视 settings | 控制请求 `effortLevel:null`；启动 / resume 后首条消息前补发（CLI 不认 `--effort auto`，带它启动照样按 settings 继承） |
+| `null`（没指定） | `{kind:'inherit'}` | settings 给该模型存了档就用存的（`modelSettings[<模型>].effortLevel`），否则模型默认 | 不带 `--effort` 启动；**没有**控制请求能回到它 |
+
+持久化：`sessions.json` 存 SDK 档或 `'auto'` 字面量（ultracode 不落盘）。`resolveResumeEffort` 把 `'auto'` 当终值，
+把 `null` 当「没指定」继续往下兜底——auto 若存成 null，重启后会悄悄换成 settings 里存的档。
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
 ### 2.2 UI → SDK 映射（硬契约）
@@ -100,12 +110,13 @@ transcript 事实            stream / control / usage     status_line 组装    
 | UI 入参 | `normalizeEffortUiLevel` 结果 | Agent 行为 |
 |---------|------------------------------|------------|
 | `null` / `''` | `{ ui:null, sdk:null, ultracode:false }` | 不传 effort |
+| **`auto`** | `{ ui:'auto', sdk:null, ultracode:false }` | 不传 effort + `AgentSession.effortAuto`，首条消息前补发 `effortLevel:null` |
 | `low`…`max` | `{ ui, sdk 同值, ultracode:false }` | `Options.effort = 该档` |
 | **`ultracode`** | `{ ui:'ultracode', sdk:'xhigh', ultracode:true }` | `Options.effort=xhigh` + **`Settings.ultracode: true`** |
 | 非法 | `null` | 拒切 / 回落 |
 
 | **禁止** | 把字面量 `ultracode` 塞进 `Options.effort`；靠改写用户正文注入 `ultracode` 关键词（关键词仅用户自写时保留） |
-| **切档路径** | 见 §2.2.1——**具体档与 `null`（auto）都走控制请求**；唯一例外：实例半开 / 已弃用（`!this.q`，无控制通道）时返回 `needsSwap`，走 dispose+resume |
+| **切档路径** | 见 §2.2.1——**具体档与 `auto` 走控制请求**；回到 `null`（没指定）与实例半开 / 已弃用（`!this.q`）返回 `needsSwap`，走 dispose+resume |
 | **日志/chip** | UI 显 `ultracode` 时 `logMeta().effort === 'ultracode'`；SDK 实际仍是 xhigh |
 | **锚点** | `normalizeEffortUiLevel` · `AgentSession` ultracode 构造 · display-contracts · E2E P0-02e |
 
@@ -116,14 +127,13 @@ CLI 无 `set_effort` 控制请求，但 `apply_flag_settings` 认 `effortLevel`/
 
 | 目标档 | 路径 | 理由 |
 |--------|------|------|
-| `low`…`max` / `ultracode` / **`null`（auto）** | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例，回合进行中也能切。**例外**：`!this.q`（半开 / 已弃用实例，没有控制通道）时返回 `needsSwap`，落到置换路径 |
+| `low`…`max` / `ultracode` / **`auto`** | `AgentSession.setEffort()` → `applyFlagSettings` | 运行时生效，不置换实例，回合进行中也能切。**例外**：`!this.q`（半开 / 已弃用实例，没有控制通道）时返回 `needsSwap`，落到置换路径 |
+| **`null`（没指定）** | 返回 `needsSwap` → server `dispose + resume`（回合进行中被 busy 守卫拒绝） | `effortLevel:null` 落成的是 `{kind:'default'}`（= auto），不是 `{kind:'inherit'}`；CLI 没有能回到 inherit 的控制请求 |
 
-`null` 下发 `{effortLevel:null, ultracode:false}`，CLI 把会话档位落成 `{kind:'default'}`——与 CLI 自己的
-`/effort auto` 同一个构造器，取**模型内置默认档**。它与「不传 `--effort` 重开实例」不完全等价：后者是
-`{kind:'inherit'}`，会先读 settings 里给该模型存的默认档（`modelSettings[<模型>].effortLevel`）。
+`auto` 下发 `{effortLevel:null, ultracode:false}`，与 CLI 自己的 `/effort auto` 用同一个构造器。
 
 CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛错。①② 由 `setEffort()` 挡住，
-④ 在 `setEffort()` 之外：它由 `send()` 里 setModel 成功后调的 `_reassertEffort()` 补下发：
+④ 在 `setEffort()` 之外：它由 `send()` 里 setModel 成功后调的 `_reassertEffort()` 补下发（auto 实例的首发补发走同一个方法）：
 
 | # | CLI 行为 | 防护 |
 |---|---------|------|
@@ -139,9 +149,11 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | 项 | 契约 |
 |----|------|
 | **候选来源** | 当前模型条目的 `supportedEffortLevels`；解析不到 → 全候选并集；明确不支持 → 隐藏整行 |
-| **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；它只是 `null` 的磁贴名，wire 上发 `null`，服务端不认 `'auto'` 字面量 |
+| **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；wire 上原样发 `'auto'` |
+| **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；pill / 占位显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」 |
+| **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只进文案，不当成钉住的档 |
 | **未知档** | `effortUiState` **不得**把 `null` 猜成 `low` |
-| **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」、**不选中 auto**（未知 ≠ auto）；Web 驾驶的 null 选中 auto、pill 显 `auto` |
+| **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」，不用 Web 实例的实际档补 |
 | **面板数据源** | `resolvePanelState`：镜像态**整组**只用 CLI 观察值，禁止 Web 偏好补空 |
 | **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` · `logic-session.test.mjs` · E2E P0-09z / P0-09f |
 

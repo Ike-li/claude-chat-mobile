@@ -1,14 +1,14 @@
 // tests/integration/runtime-switch.test.mjs —— 回合进行中还能改哪些参数（真 server + 可驱动假 CLI）
 //
 // 三个轴的 busy 语义各不相同，且【不对称是有意的】——它们受约束的理由根本不是同一个：
-//   · 思考强度：具体档互切、回 auto（模型默认）都走控制请求（放行）
+//   · 思考强度：具体档互切、切 auto 都走控制请求（放行）／回到没指定（null）要置换实例（拒绝）
 //   · 权限档：影响的是工具审批闸门而非 API 请求参数，推迟生效就失去意义 → 全程放行
 //   · 模型：没有独立控制事件，随 user:message 捎带，而在途轮闸会拒收消息 → 中途够不着
 // 把三条放一个文件，是因为「回合进行中能改什么」是同一个产品问题，读的人需要一次看全。
 //
 // 【为什么必须在这一层】观察点是 socket handler 的分支走向：回合进行中切【具体档】要走轻路径
-// （apply_flag_settings 控制请求、不置换实例）并广播 effort_mode；切回【auto】同样如此（2026-09-23 前
-// 它走置换、会被 busy 守卫拦下）。
+// （apply_flag_settings 控制请求、不置换实例）并广播 effort_mode，切【auto】同样如此；切回【没指定】
+// 要被 busy 守卫拦下（CLI 没有能回到 {kind:'inherit'} 的控制请求，只能重开实例）。
 // 纯函数层表达不了「守卫在 a.setEffort() 调用之前还是之后」，而那正是 2026-09-09 修的缺陷所在——
 // 守卫（7febabc，2026-07-28）加在分叉【之前】，那时切档必然 dispose+resume，拦住是对的；
 // 439bb02 把具体档互切改成控制请求后轻路径不再置换实例，守卫却没跟着下移，于是把本来安全的
@@ -26,8 +26,8 @@
 //  ② 轮次中途切档在【本轮】还是【下一轮】生效 —— 要观察思考深度实际变化，需真模型，归 S5。
 //  ③ 重路径置换后的实例接续 —— 与 externalDirty 走同一条 dedupedResume，已由
 //     tests/invariants/server/external-dirty.test.mjs 覆盖，不在此重复。
-//  ④ 重路径（实例尚无控制通道时的 needsSwap）上的 busy 守卫 —— 半开实例在这里造不出来；
-//     needsSwap 的判定由 agent-control 的「实例无控制通道」用例覆盖。
+//  ④ 重路径的另一个触发点（实例尚无控制通道）—— 半开实例在这里造不出来；它与「回到没指定」
+//     共用同一道 busy 守卫，needsSwap 判定由 agent-control 的「实例无控制通道」用例覆盖。
 //
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 
@@ -36,7 +36,7 @@ import '../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -97,7 +97,7 @@ async function openBusySession(tag) {
       { timeoutMs: 15000, label: '实例进入 busy（turnRunning=true）' },
     );
 
-    return { server, sock, events, cwd, cleanup, lastInstances };
+    return { server, sock, events, cwd, root, cleanup, lastInstances };
   } catch (err) {
     await cleanup();
     throw err;
@@ -130,11 +130,50 @@ test('回合进行中切【具体档】：走轻路径生效，不被 busy 拦�
   }
 });
 
-test('回合进行中切回【auto】（null）：同样走轻路径生效，实例不置换', async () => {
-  const { sock, events, cleanup, lastInstances } = await openBusySession('auto');
+test('回合进行中切【auto】：走轻路径生效、实例不置换，且以 auto 字面量落盘', async () => {
+  const { sock, events, root, cleanup, lastInstances } = await openBusySession('auto');
   try {
-    // 先 pin 一个具体档：实例初始 effort 就是 null，不先离开的话「切回 auto」会被 handler 的
-    // 幂等闸（level === effortOf(id)）直接 return，测的就成了幂等而不是轻路径。
+    const instanceIdBefore = lastInstances().instances.find(x => x.sessionId === SESSION_ID).instanceId;
+    const before = events.length;
+    setEffort(sock, 'auto');
+
+    // auto 下发 effortLevel:null（CLI 落成 {kind:'default'}），与具体档同一条轻路径。
+    const broadcast = await waitForCondition(
+      () => events.slice(before).find(e => e.type === 'effort_mode' && e.payload?.level === 'auto'),
+      { timeoutMs: 15000, label: 'effort_mode 广播 level=auto' },
+    );
+    assert.ok(broadcast, 'busy 时切 auto 必须走轻路径并广播 level=auto');
+
+    const refused = events.slice(before).find(
+      e => e.type === 'system' && /有任务在运行/.test(e.payload?.message || ''));
+    assert.equal(refused, undefined,
+      `切 auto 不置换实例，不该被 busy 拒绝，实际收到：${JSON.stringify(refused?.payload)}`);
+    assert.equal(
+      lastInstances().instances.find(x => x.sessionId === SESSION_ID)?.instanceId,
+      instanceIdBefore,
+      '实例 id 变了说明走了置换路径，在途 turn 已被 kill',
+    );
+
+    // 落盘必须是 'auto' 而非 null：resume 把 null 当「没指定」往下兜底到 settings 里存的档，
+    // 重启 / 实例回收后 auto 会被悄悄换掉（PR #167 review）。sessions.json 写盘有 200ms 防抖。
+    const persisted = await waitForCondition(() => {
+      try {
+        const saved = JSON.parse(readFileSync(join(root, 'sessions.json'), 'utf8'))
+          .sessions?.find(x => x.id === SESSION_ID);
+        return saved?.effort === 'auto' ? saved : null;
+      } catch { return null; }
+    }, { timeoutMs: 5000, label: "sessions.json 里该会话 effort === 'auto'" });
+    assert.equal(persisted.effort, 'auto');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('回合进行中切回【没指定】（null）：要重开实例，被 busy 守卫拦下', async () => {
+  const { sock, events, cleanup, lastInstances } = await openBusySession('inherit');
+  try {
+    // 先 pin 一个具体档：实例初始就是 null，不先离开的话会被 handler 的幂等闸直接 return，
+    // 测的就成了幂等而不是守卫。
     setEffort(sock, 'high');
     await waitForCondition(
       () => events.find(e => e.type === 'effort_mode' && e.payload?.level === 'high'),
@@ -145,22 +184,17 @@ test('回合进行中切回【auto】（null）：同样走轻路径生效，实
     const before = events.length;
     setEffort(sock, null);
 
-    // 2026-09-23 前这条走 dispose+resume、回合中被拒（依据是「null 清不回模型默认」，已复测推翻）。
-    // 现在 effortLevel:null 走 apply_flag_settings，与具体档同一条轻路径。
-    const broadcast = await waitForCondition(
-      () => events.slice(before).find(e => e.type === 'effort_mode' && e.payload?.level === null),
-      { timeoutMs: 15000, label: 'effort_mode 广播 level=null' },
+    // 没指定 = CLI {kind:'inherit'}，没有控制请求能回去（effortLevel:null 落成的是 auto），
+    // 只能不带 --effort 重开——置换会 kill 在途 turn，危害与 SRV-003 同源，必须拒绝。
+    await waitForCondition(
+      () => events.slice(before).find(
+        e => e.type === 'system' && /有任务在运行/.test(e.payload?.message || '')),
+      { timeoutMs: 15000, label: '回到没指定被 busy 守卫拒绝' },
     );
-    assert.ok(broadcast, 'busy 时切回 auto 必须走轻路径并广播 level=null');
-
-    const refused = events.slice(before).find(
-      e => e.type === 'system' && /有任务在运行/.test(e.payload?.message || ''));
-    assert.equal(refused, undefined,
-      `切回 auto 不置换实例，不该被 busy 拒绝，实际收到：${JSON.stringify(refused?.payload)}`);
     assert.equal(
       lastInstances().instances.find(x => x.sessionId === SESSION_ID)?.instanceId,
       instanceIdBefore,
-      '实例 id 变了说明走了置换路径，在途 turn 已被 kill',
+      '守卫拒绝后实例 id 不得变化（变了说明置换已经发生，在途 turn 已被 kill）',
     );
   } finally {
     await cleanup();

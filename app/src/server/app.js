@@ -1205,6 +1205,7 @@ function instancesPayload() {
       // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
+      effortEffective: a.effectiveEffort ?? null, // 没指定（effort=null）时 CLI 实际生效的档，只进文案
       // 旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。**只有次数没有金额**：
       // 那笔钱由 CLI 计入会话总成本、随 result 一起来，已经在成本行里了；单独再报一份金额
       // 只会出现两个对不上的数字。搭 instances 的便车而不新开一条入向事件——两个整数，
@@ -1838,6 +1839,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     permissionMode: mode,
     effort: effNorm.sdk,
     ultracode: effNorm.ultracode,
+    effortAuto: effNorm.ui === 'auto',
+    // 没指定时 CLI 实际生效的档变了 → 合成一条 effort_mode 带上它（server 合成、seq 0，不进回放环）。
+    onEffortEffective: effective => io.to('approved').emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: instance.sessionId, instanceId: id, ts: Date.now(),
+      type: 'effort_mode', payload: { level: effortOf(id), effective },
+    }),
     idleTimeoutMs,
     instanceIdleReclaimMs,
     approvalTtlMs,
@@ -2056,8 +2063,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
-      // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
+      // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
       recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
@@ -2906,9 +2914,10 @@ registerSocketConnection(io, socket => {
   // 台阶3：切思考强度档。
   // 【2026-09-03 实测更正】切档走 apply_flag_settings 控制请求，运行时生效、不置换实例
   //（此前注释写的「SDK 无 effort 运行时控制」已不成立，见 agent.setEffort 注释）。
-  // 【2026-09-23 复测更正】回 auto（level===null）也走控制请求——「null 清不回模型默认」是误判。
-  // 仍需置换的只剩实例尚无控制通道（半开 / 已弃用）这一种。
-  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（auto，模型默认）。
+  // 【2026-09-23】auto（CLI /effort auto，模型内置默认）也走控制请求：effortLevel:null 落成 {kind:'default'}。
+  // 仍需置换的两种：回到「没指定」(level===null，CLI 的 {kind:'inherit'}，没有控制请求能回去)，
+  // 以及实例尚无控制通道（半开 / 已弃用）。
+  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| auto | null（没指定）。
   on(socket, 'user:setEffort', async payload => {
     const rawLevel = payload?.level ?? null;
     const norm = normalizeEffortUiLevel(rawLevel);
@@ -2917,6 +2926,9 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     const { ui: level, sdk: sdkEffort, ultracode } = norm;
+    // 持久化只存 SDK effort 或 'auto'；ultracode 不落盘（CLI: interactive toggles never persist）。
+    // auto 不能存成 null：null 在 resume 里是「没指定」、会往下兜底到 settings 里存的档。
+    const persistedEffort = level === 'auto' ? 'auto' : sdkEffort;
     const id = resolveInstanceId(payload?.instanceId);
     const a = agents.get(id);
     if (!a) {
@@ -2948,13 +2960,12 @@ registerSocketConnection(io, socket => {
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
     }
-    // 轻路径：切档（含回 auto）走控制请求。SDK 的静默失败边界由 agent.setEffort 统一挡住
+    // 轻路径：切档（含 auto）走控制请求。SDK 的静默失败边界由 agent.setEffort 统一挡住
     //（非法值 / ultracode 不回落），这里只负责接线与广播。
     const light = await a.setEffort(level);
     if (light.ok) {
       effortByInstance.set(id, level);
-      // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
-      sessions.updateSessionPrefs(sid, { effort: sdkEffort });
+      sessions.updateSessionPrefs(sid, { effort: persistedEffort });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level}${ultracode ? ' (Settings.ultracode)' : ''}, 运行时生效（未置换实例）`);
       io.to('approved').emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
@@ -2965,19 +2976,18 @@ registerSocketConnection(io, socket => {
     }
     if (!light.needsSwap) {
       // 明确失败（超时 / CLI reject）：档位没动，如实拨回，不谎报成功
-      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? 'auto'}」`, true);
+      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '没指定'}」`, true);
       return effortTo(socket);
     }
-    // needsSwap → 落到下面的置换实例路径（实例尚无控制通道）。
+    // needsSwap → 落到下面的置换实例路径（回到没指定，或实例尚无控制通道）。
     // busy 守卫只守到这里：置换会 kill 在途 turn / bg / 审批，理由与 SRV-003 同源（那条锚在
     // externalDirty 路径上，这里是同一危害的另一个触发点）。
     if (a.isBusy()) {
-      sysTo(socket, '会话实例还没就绪，切思考强度要重开实例，而当前有任务在运行。请等本轮结束后再切', true);
+      sysTo(socket, '这次切换要重开会话实例，而当前有任务在运行。请等本轮结束后再切', true);
       return effortTo(socket);
     }
-    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || 'auto'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
-    // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
-    if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });
+    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '没指定'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
+    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
@@ -4601,7 +4611,7 @@ function permModeTo(socket, id = viewingInstanceId) {
 function effortTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-    type: 'effort_mode', payload: { level: effortOf(id) }
+    type: 'effort_mode', payload: { level: effortOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
   });
 }
 

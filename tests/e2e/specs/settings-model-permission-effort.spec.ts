@@ -238,7 +238,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 行为契约不变：档位清回 model-default，隐藏的兼容 select 置空。
     // 先等服务端 effort_mode(null) 回执落地：隐藏分支同步置空 select，回执随后才到。早于回执断言
     // 只会看到瞬时的 ''，放过稳定态的错误（回执把 select 改回 'auto'，CI 上撞到过）。
-    await expect(page.locator('#messages')).toContainText('思考强度 → auto');
+    await expect(page.locator('#messages')).toContainText('思考强度 → CLI 默认');
     await expect(page.locator('.effort-tile')).toHaveCount(0);
     await expect(page.locator('#pillEffort')).toHaveClass(/hidden/);
     await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
@@ -254,7 +254,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-09z 思考强度有 auto（= CLI /effort auto）：未 pin 时选中，从具体档切回后按模型默认发送', async ({ page }) => {
+  test('P0-09z 思考强度：没指定显示 CLI 实际档且不冒充 auto；auto（= CLI /effort auto）是可选的一档', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
@@ -263,22 +263,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const auto = page.locator('.effort-tile[data-level="auto"]');
     // 末位，与 CLI usage `[…|ultracode|auto]` 同序
     await expect(page.locator('.effort-tile').last()).toHaveAttribute('data-level', 'auto');
-    await expect(auto).toHaveClass(/ring-accent/);
-    await expect(page.locator('#pillEffortText')).toHaveText('auto');
+    // 没指定（null）= CLI inherit：settings 里存了档就用存的。高亮 auto 就是替它声称「模型内置默认」，
+    // 所以一块都不高亮，pill 如实报 CLI 此刻生效的档（mock 固定回 medium）。
+    await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
+    await expect(page.locator('#pillEffortText')).toHaveText('medium · CLI 默认');
 
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
-    await expect(auto).not.toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
 
     await auto.click();
     await expect(auto).toHaveClass(/ring-accent/);
     await expect(page.locator('#pillEffortText')).toHaveText('auto');
     await closeSettings(page);
 
-    // wire 上必须是 null：误发字面量 'auto' 时 mock 会回显 effort=auto（真 server 则直接拒为未知档）
+    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；折成 null 的话 mock 会回显 model-default
     await sendChatMessage(page, 'test:settings-echo');
     await waitForIdle(page);
-    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=model-default');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=auto');
 
     await expectNoBrowserErrors(page);
   });

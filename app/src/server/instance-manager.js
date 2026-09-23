@@ -31,7 +31,7 @@ export function createInstanceManager() {
   function inheritedEffort(cwd) {
     let effort = null;
     for (const agent of agents.values()) {
-      if (agent.cwd === cwd) effort = agent.effort;
+      if (agent.cwd === cwd) effort = agent.effortAuto ? 'auto' : agent.effort;
     }
     return effort;
   }

@@ -113,17 +113,36 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     assert.equal(normalizeEffortUiLevel('nope'), null);
   });
 
-  test('effortUiState：null 不得猜成 low；Web 驾驶的 null 就是 CLI 的 auto，镜像的 null 是未知', () => {
+  test("normalizeEffortUiLevel：'auto' 是一等 UI 档，与 null（没指定 = CLI inherit）不同", () => {
+    assert.deepEqual(normalizeEffortUiLevel('auto'), { ui: 'auto', sdk: null, ultracode: false },
+      'auto 不传 --effort（CLI 不认 --effort auto，会落成 inherit），ui 必须保留 auto 供后续补发控制请求');
+    assert.notDeepEqual(normalizeEffortUiLevel('auto'), normalizeEffortUiLevel(null));
+    assert.ok(UI_EFFORT_LEVELS.includes('auto'));
+    assert.equal(CCM_EFFORT_LEVELS.includes('auto'), false, 'auto 不是 SDK Options.effort 的合法值');
+  });
+
+  test('effortUiState：null 是「没指定」（CLI inherit），不得猜成 low，也不得冒充 auto', () => {
     const levels = withAutoTier(['low', 'medium', 'high']);
     const fresh = effortUiState(null, levels, { mirrorReadonly: false });
     assert.equal(fresh.level, null);
-    assert.equal(fresh.selected, 'auto', 'Web 驾驶未 pin 档位 = CLI /effort auto，auto 磁贴应处于选中态');
-    assert.equal(fresh.label, 'auto');
+    assert.equal(fresh.selected, '',
+      '没指定时 CLI 先读 settings 里存的档——选中 auto 就是替它声称「模型内置默认」，settings 存了档时是假的');
+    assert.equal(fresh.label, 'CLI 默认');
 
-    const mirror = effortUiState(null, levels, { mirrorReadonly: true });
+    const known = effortUiState(null, levels, { mirrorReadonly: false, effective: 'high' });
+    assert.equal(known.selected, '', '实际生效档只用于文案，不当成钉住的档去高亮磁贴');
+    assert.equal(known.label, 'high · CLI 默认');
+
+    const mirror = effortUiState(null, levels, { mirrorReadonly: true, effective: 'high' });
     assert.equal(mirror.level, null);
-    assert.equal(mirror.selected, '', '镜像拿不到 CLI 档位时是「未知」，选中 auto 等于替 CLI 编造了一个档');
-    assert.match(mirror.label, /CLI|未知|unknown/i);
+    assert.equal(mirror.selected, '');
+    assert.match(mirror.label, /CLI|未知|unknown/i, '镜像态的 null 是「观察不到」，Web 实例的实际档不能拿来补');
+  });
+
+  test("effortUiState：'auto' 是显式选中的档，照常高亮", () => {
+    const ui = effortUiState('auto', withAutoTier(['low', 'high']), { mirrorReadonly: false, effective: 'medium' });
+    assert.equal(ui.selected, 'auto');
+    assert.equal(ui.label, 'auto');
   });
 
   test('withAutoTier：auto 恒在末位（CLI usage `[…|ultracode|auto]`），幂等；无档可调时不凭空加', () => {

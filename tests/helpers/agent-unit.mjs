@@ -10,6 +10,7 @@ export function makeSession(opts = {}) {
     permissionMode: opts.permissionMode || 'default',
     effort: opts.effort || null,
     ultracode: opts.ultracode || false,
+    effortAuto: opts.effortAuto || false,
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
     instanceIdleReclaimMs: opts.instanceIdleReclaimMs,
     approvalTtlMs: opts.approvalTtlMs,
@@ -24,6 +25,7 @@ export function makeSession(opts = {}) {
     onBgTaskChange: opts.onBgTaskChange || (() => {}),
     onStateSettled: opts.onStateSettled || (() => {}),
     onCwdChanged: opts.onCwdChanged, // 缺省不传：裁决方缺席时实例不得自行改 cwd
+    onEffortEffective: opts.onEffortEffective,
   });
   return { s: session, events, dispose: () => session.dispose() };
 }

@@ -587,6 +587,7 @@ export const EN_DICT = Object.freeze({
   'xhigh + 多 agent · 最彻底': 'xhigh + multi-agent · most thorough',
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
   '跟随模型默认档': "Uses the model's default",
+  'CLI 默认': 'CLI default',
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
 
