@@ -953,6 +953,28 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
+  // 彻底删除靠它判断「CLI 退完了没有」（app.js deletePermanent）：dispose 只是让 SDK 关 stdin，
+  // CLI 读到 EOF 后还要往 transcript 追加收尾元数据才退。在 dispose 时就结算，删除会落在那几行之前。
+  test('exitPromise 在 SDK 消息流结束时才结算，不是 dispose 那一刻', async () => {
+    const { s } = makeSession();
+    let endStream;
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return { next: () => new Promise(resolve => { endStream = () => resolve({ done: true }); }) };
+      },
+    };
+    let settled = false;
+    s.exitPromise.then(() => { settled = true; });
+    const consumed = s.consume(fakeQ);
+    s.dispose();
+    await new Promise(r => setImmediate(r));
+    assert.equal(settled, false, 'dispose 之后 CLI 还在收尾写盘，此刻不能算已退出');
+    endStream();
+    await consumed;
+    await new Promise(r => setImmediate(r));
+    assert.equal(settled, true, '消息流结束（CLI 已退）后必须结算，否则删除每次都要白等到上限');
+  });
+
   test('正常结束 + sawInit 未到 + resumeId 存在 → resumeFailed + emit error(recoverable:false) + onExit', async () => {
     let exited = false;
     const { s, events } = makeSession({ resumeId: 'bad-id', onExit() { exited = true; } });

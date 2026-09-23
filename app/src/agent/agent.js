@@ -478,8 +478,10 @@ export class AgentSession {
     this.disposed = false;
     this.assistantResponseBuffer = '';
     this.terminating = false;
-    // 最终退出确认：dispose/abort 后等待 consume 自然结束（SDK/CLI 子进程真正退出）才 resolve。
-    // 生产 shutdown 用它等最终退出确认，避免 process.exit 时留下孤儿 CLI 子进程。
+    // 最终退出确认：consume() 走完才 resolve，不是 dispose 那一刻。dispose 只是让 SDK 关 stdin，
+    // CLI 读到 EOF 后还会往 transcript 追加收尾元数据才退（2026-09-23 实测：EOF 后 70–80ms 写、
+    // 0.6–2s 退）。SDK 的消息流要到进程退出、或关 stdin 约 2s 后 SDK 发 SIGTERM 才结束，两者都晚于那几行。
+    // 消费方：彻底删除（app.js deletePermanent 经 instanceManager.waitForSessionExits）。
     this.exitPromise = new Promise(resolve => { this._exitResolve = resolve; });
 
     // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——唯一来源）。
@@ -839,6 +841,7 @@ export class AgentSession {
       this.inputEnded = true;
       this.onExit?.();
     }
+    this._exitResolve();
   }
 
   // ---- 对外操作 ----

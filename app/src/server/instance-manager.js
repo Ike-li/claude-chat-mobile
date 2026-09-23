@@ -9,6 +9,10 @@ export function createInstanceManager() {
   const unreadCounts = new Map();          // instanceId → number，非查看期间累加的顶层消息数（活计数器）
   const unreadSnapshotOnEntry = new Map(); // instanceId → number，最近一次"进入查看"时刻冻结的未读数，供前端展示；只在 user:ackUnread 才清
   const lastCountedTopLevelMessageId = new Map(); // instanceId → messageId，text_delta 未读去重游标（unread-tracker.js#resolveUnreadDelta 消费）
+  // 已移出 agents、CLI 子进程还没退完的实例（remove 放进来，exitPromise 结算后自行移出）。
+  // 它们退出前还会往 transcript 追加收尾元数据，彻底删除必须等（见 waitForSessionExits）。
+  // 空闲回收中的实例不在这里：它们带着 terminating 留在 agents 里，直到 consume 走完才被 onExit 清表。
+  const exiting = new Set();
 
   const nextId = () => `inst_${++counter}`;
   const permissionModeOf = id => permissionModes.get(id) ?? 'default';
@@ -87,7 +91,27 @@ export function createInstanceManager() {
     if (!agent) return null;
     agent.dispose();
     clearTables(id);
+    exiting.add(agent);
+    Promise.resolve(agent.exitPromise).then(() => exiting.delete(agent));
     return agent;
+  }
+
+  // 等该会话名下「已关、没退完」的 CLI 全部退出，最多等 timeoutMs；返回是否在上限内等到。
+  // 活实例不算：它由删除保护①直接拒绝，等它只会白等到上限。
+  function waitForSessionExits(sessionId, timeoutMs) {
+    const pending = [];
+    for (const agent of agents.values()) {
+      if (agent.sessionId === sessionId && (agent.terminating || agent.disposed)) pending.push(agent.exitPromise);
+    }
+    for (const agent of exiting) {
+      if (agent.sessionId === sessionId) pending.push(agent.exitPromise);
+    }
+    if (!pending.length) return Promise.resolve(true);
+    let timer;
+    return Promise.race([
+      Promise.all(pending).then(() => true),
+      new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, false); }),
+    ]).finally(() => clearTimeout(timer));
   }
 
   // 把活计数并入 entry 快照并清零活计数器。未 ack 的旧快照必须保留：重连抖动/二次 capture 时 live 常为 0，
@@ -122,5 +146,6 @@ export function createInstanceManager() {
     captureUnreadSnapshot,
     clearTables,
     remove,
+    waitForSessionExits,
   };
 }

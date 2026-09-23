@@ -29,8 +29,19 @@
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
 //
-// 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript。任何需要真回合语义的断言仍归 S5。
+// 【退出前的收尾写入】与模式正交，默认关：
+//   CCM_FAKE_CLAUDE_EXIT_APPEND=<transcript 路径> → 读到 stdin EOF 后隔 500ms 往该文件追加一行
+//             收尾元数据再退；CCM_FAKE_CLAUDE_EXIT_MARKER=<路径> 在追加之后落一个标记文件，
+//             供用例确认「收尾写入已经发生」（否则「文件不在」和「根本没写」分不开）。
+//   模拟的是真 CLI 的形态：2026-09-23 实测 CLI 2.1.280，SDK 关 stdin 后 70–80ms 追加 last-prompt /
+//   cost-state 等几行、0.6–2s 进程才退；文件已被删掉时这次追加会把它重新建出来。
+//   隔 500ms（比真 CLI 慢）是为了把窗口撑开，但必须短于 SDK 关 stdin 后约 2s 的宽限——过了宽限
+//   SDK 会 SIGTERM，写入就不会发生了。
+//
+// 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript（上面那一行收尾写入除外）。
+// 任何需要真回合语义的断言仍归 S5。
 
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
@@ -45,6 +56,8 @@ const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
 // filterSafeResolvedEnv 只放行 ANTHROPIC_/CLAUDE_CODE_ 前缀，别的名字根本进不到子进程。
 // 不置位时 response 仍是 {}，既有 S2 与集成用例建在其上的前提逐字不变（同本文件「显式 opt-in」原则）。
 const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
+const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
+const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
@@ -141,4 +154,11 @@ rl.on('line', (line) => {
 
 // 读到 EOF 才退。提前退出会让 SDK 那次 write 抛 EPIPE，而它在 sdk.mjs 内部不被 catch，
 // 直接冒成 uncaughtException 打死整个测试进程（原 .sh 的头注记录过这次事故）。
-rl.on('close', () => process.exit(0));
+rl.on('close', () => {
+  if (!EXIT_APPEND) process.exit(0);
+  setTimeout(() => {
+    appendFileSync(EXIT_APPEND, `${JSON.stringify({ type: 'cost-state', sessionId: SESSION_ID })}\n`);
+    if (EXIT_MARKER) writeFileSync(EXIT_MARKER, '');
+    process.exit(0);
+  }, 500);
+});
