@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { stripInheritedEnv, SPAWN_ENV_BLOCKLIST } from '../helpers/spawn-env.mjs';
-import { ENV_SCHEMA } from '../../app/src/ops/env-schema.js';
+import { ALL_CONFIG_KEYS } from '../../app/src/ops/config-file.js';
 
 test.describe('stripInheritedEnv：不把生产环境带进被测实例', () => {
   test('摘掉 CF Access 三键（否则实例会启用 Access 并对外拉生产 team 的 JWKS）', () => {
@@ -44,12 +44,15 @@ test.describe('stripInheritedEnv：不把生产环境带进被测实例', () => 
   // 2026-09-23：在 CCM 驱动的会话里跑冒烟，shell 继承了生产 server 投影进环境的配置
   // （DEVICE_APPROVAL_SCOPE=all 等），被测 server 于是要求设备审批，冒烟客户端卡在 pending、
   // 120s 超时——看着像 SDK 出了问题。逐个列键的清单在这里漏过一次，所以按配置面整体摘。
-  test('配置面（env-schema）的键一律不继承，只透传 AUTH_TOKEN / PORT / CLAUDE_BIN', () => {
-    const inherited = Object.fromEntries(Object.keys(ENV_SCHEMA).map(key => [key, 'from-production']));
+  // 配置面包括 passthrough 那几个（不进面板但照样投影进环境）：遗留的 WORK_DIR 一旦继承，
+  // resolveEnvPrimaryWorkdir 会把它当 shell 显式给的主目录折进列表首位——不带 cwd 的场景就跑在生产目录上。
+  test('配置键（env-schema 与 passthrough）一律不继承，只透传 AUTH_TOKEN / PORT / CLAUDE_BIN / CCM_DATA_DIR', () => {
+    const inherited = Object.fromEntries(ALL_CONFIG_KEYS.map(key => [key, 'from-production']));
     const out = stripInheritedEnv({ ...inherited, PATH: '/usr/bin' });
     assert.deepEqual(
-      Object.keys(out).sort(), ['AUTH_TOKEN', 'CLAUDE_BIN', 'PATH', 'PORT'],
-      'AUTH_TOKEN / PORT 调用方随后一定覆盖；CLAUDE_BIN 是 CI 与容器把被测实例指向 fake-claude 的开关，其余配置只能由调用方显式给',
+      Object.keys(out).sort(), ['AUTH_TOKEN', 'CCM_DATA_DIR', 'CLAUDE_BIN', 'PATH', 'PORT'],
+      'AUTH_TOKEN / PORT 调用方随后一定覆盖；CLAUDE_BIN 是 CI 与容器把被测实例指向 fake-claude 的开关；'
+      + 'CCM_DATA_DIR 是 preload-env 给测试进程的一次性目录，摘掉的话漏传它的调用方会落到仓库 data/。其余配置只能由调用方显式给',
     );
   });
 
