@@ -25,6 +25,9 @@
 //   turn-bg → 同 turn，但收尾前先吐一条 background_tasks_changed（一个常驻后台 Bash），
 //             回合结束后实例停在「pendingTurns=0 但有后台任务」——纯后台任务期（比如 dev server
 //             挂着）。形状照 CLI 2.1.263 的 wire schema：task_id / task_type / description。
+//   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
+//             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
+//             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
 //
 // 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript。任何需要真回合语义的断言仍归 S5。
 
@@ -82,7 +85,7 @@ rl.on('line', (line) => {
     });
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport') return;
 
   out({
     type: 'assistant',
@@ -115,6 +118,25 @@ rl.on('line', (line) => {
     result: REPLY,
     total_cost_usd: 0,
   });
+  if (MODE === 'turn-autoreport') {
+    out({
+      type: 'system',
+      subtype: 'task_notification',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      task_id: 'fake-bg-task',
+      status: 'completed',
+      summary: '后台任务跑完了',
+    });
+    // 模型被通知唤起、自动开讲：只有流式的 message_start，这一轮不吐 result
+    out({
+      type: 'stream_event',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      event: { type: 'message_start', message: { id: `msg_${randomUUID()}` } },
+    });
+  }
 });
 
 // 读到 EOF 才退。提前退出会让 SDK 那次 write 抛 EPIPE，而它在 sdk.mjs 内部不被 catch，

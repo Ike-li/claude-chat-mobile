@@ -3264,6 +3264,10 @@ export class AgentSession {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
       this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; // 合成轮同样开表
+      // 账面就地改写、没有伴随会触发 instances 广播的事件（message_start / text_delta 都不在 STATE_BOUNDARY
+      // 里）：不播的话其它端要等下一次无关广播才知道这一轮在跑，只有文本的汇报轮会一直等到 result，
+      // 这期间它们看到的是空闲，发出去的消息被在途轮闸拒掉。
+      this.onStateSettled();
     }
   }
 
