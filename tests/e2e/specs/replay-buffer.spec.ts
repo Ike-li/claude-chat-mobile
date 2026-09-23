@@ -102,6 +102,39 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     await expectNoBrowserErrors(page);
   });
 
+  // 弱网下 ack 晚于回放缓冲自己的 3s 超时才到。旧实现在超时点按「超阈值 → reload」丢掉队列、推进基线，
+  // 可重载历史的动作在 ack 回调里——超时那一刻没人去做；ack 迟到时 handle 已被顶替、缓冲已空，判成 flush，
+  // 于是既没重载、那 165 条也没了，屏幕停在切走前的旧内容（2026-09-22 review P2）。
+  test('P0-REPLAY-SLOWACK 大量积压且 ack 晚于 3s 超时 → 仍然清屏重载，不停在缺了一段的旧内容上', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:replay-buffer-flood-slowack-setup');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Flood Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('[data-testid="user-message"], [data-testid="assistant-message"]'))
+      .toHaveCount(4, { timeout: 10_000 });
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+
+    // 切回：165 条积压先到，ack 4 秒后才到
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Flood Session');
+    await expectSidebarClosed(page);
+
+    const reloadMarker = page.locator('[data-testid="assistant-message"]', { hasText: 'Flood reload marker' });
+    await expect(reloadMarker).toBeVisible({ timeout: 15_000 });
+    // 走的仍是批量重载，而不是超时之后把 165 条逐条吐出来
+    await expect(page.locator('text=/Flood live reply #/')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-REPLAY-2 少量积压（21 条，低于阈值）→ flush：正常增量渲染 + 抑制中间滚动，内容完整且顺序正确', async ({ page }) => {
     await gotoMock(page);
 

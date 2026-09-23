@@ -434,6 +434,7 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
       setSeq: (v) => { seq = v; },
       setEpoch: (v) => { epoch = v; },
       timeoutMs: opts.timeoutMs ?? 50,
+      deferMs: opts.deferMs ?? 60_000,
       decideTimeoutAction: opts.decideTimeoutAction,
       isOutOfBand: opts.isOutOfBand,
     });
@@ -464,18 +465,8 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(buf.bufferedCount('inst-1'), 0);
   });
 
-  test('超时：decideTimeoutAction 返回 reload → 只推进基线，不 flush 成打字机', async (t) => {
-    const { buf, dispatched, getSeq } = makeBuffer(t, {
-      timeoutMs: 20,
-      decideTimeoutAction: ({ bufferedCount }) => (bufferedCount >= 2 ? 'reload' : 'flush'),
-    });
-    buf.begin('inst-1');
-    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
-    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 2 });
-    await new Promise((r) => setTimeout(r, 50));
-    assert.deepEqual(dispatched, [], '超阈值超时应走 reload，不逐条 dispatch');
-    assert.equal(getSeq(), 2);
-  });
+  // 超时判 reload 之后事件不得被丢（2026-09-22 review P2）是 SYNC-01 红线，三条用例在
+  // tests/invariants/replay-buffer-late-ack.test.mjs。
 
   test('超时：decideTimeoutAction 返回 flush → 按序派发', async (t) => {
     const { buf, dispatched } = makeBuffer(t, {
