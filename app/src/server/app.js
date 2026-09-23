@@ -13,6 +13,7 @@ import { parse as dotenvParse } from 'dotenv';
 import { maskToken, sanitize } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
+import { childEnv } from '../shared/child-env.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -366,7 +367,8 @@ function preflight() {
   // 失败被下面的 catch 吞掉不会崩，但 versions.cli 会恒为 unknown——而那一项的存在理由
   // 正是本段头注说的「升级后回归核对」。2026-09-17 安全审查评估后保留现状。
   try {
-    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
+    // env 走 childEnv：claude 子进程一律拿不到 CCM 自己的控制面密钥（AUTH-06），这一次也不例外。
+    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8', env: childEnv() }).trim();
   } catch { /* 非致命 */ }
   // 三段各自独立 try：任一来源失败只让自己留 unknown，不连坐其余（曾把 server 版本挂在 SDK 同块里被连坐跳过）。
   const require = createRequire(import.meta.url);

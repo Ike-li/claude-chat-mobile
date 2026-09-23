@@ -11,6 +11,7 @@ import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
 import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
+import { childEnv } from '../shared/child-env.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
 // —— 那一层是纯判定。判定用 claudeBinDiagnostic(probeClaudeBin())，CLI 与 web 两个 doctor 同一对。
@@ -31,7 +32,8 @@ export function probeClaudeBin({ env = process.env } = {}) {
     return { explicit, resolvedPath, exists: true, executable: false };
   }
   try {
-    const version = String(execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 3000 })).trim();
+    // env 走 childEnv：与 SDK 会话是同一个二进制，同样拿不到 CCM 自己的控制面密钥（AUTH-06）。
+    const version = String(execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 3000, env: childEnv(env) })).trim();
     return { explicit, resolvedPath, exists: true, executable: true, version };
   } catch (err) {
     return { explicit, resolvedPath, exists: true, executable: true, versionError: err.message };

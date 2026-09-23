@@ -4,6 +4,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { resolve, relative, isAbsolute, sep, join } from 'node:path';
 import { promisify } from 'node:util';
+import { childEnv } from '../shared/child-env.js';
 
 export const MAX_GIT_ENTRIES = 500;
 export const MAX_GIT_DIFF_BYTES = 256 * 1024;
@@ -41,12 +42,13 @@ function runExecFile(execFile, cmd, args, options) {
 
 // 导出供同域的 git-worktree.js 复用：两个模块都要 spawn git，各写一份 execFile 封装迟早漂
 // （本仓吃过「注释写着同规则、实际各存一份」的亏，见 SS-004）。
+// env 走 childEnv：仓库配置能让 git 执行任意命令（core.fsmonitor 等），不能让它们拿到控制面密钥（AUTH-06）。
 export function gitExec(cwd, gitArgs, { timeoutMs, maxBuffer, execFile } = {}) {
   return runExecFile(
     execFile,
     'git',
     ['-C', cwd, ...gitArgs],
-    { timeout: timeoutMs ?? GIT_STATUS_TIMEOUT_MS, maxBuffer: maxBuffer ?? GIT_MAX_BUFFER },
+    { timeout: timeoutMs ?? GIT_STATUS_TIMEOUT_MS, maxBuffer: maxBuffer ?? GIT_MAX_BUFFER, env: childEnv() },
   );
 }
 
