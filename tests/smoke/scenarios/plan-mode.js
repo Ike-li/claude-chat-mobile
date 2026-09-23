@@ -10,8 +10,8 @@ import { join } from 'node:path';
 
 const URL = process.env.CCM_SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`;
 const MODEL = process.argv[2] || process.env.ANTHROPIC_MODEL || undefined;
-const workDir = process.env.WORK_DIR;
-if (!workDir) throw new Error('WORK_DIR is required; use tests/smoke/runner.js');
+const workDir = process.env.CCM_SMOKE_WORK_DIR;
+if (!workDir) throw new Error('CCM_SMOKE_WORK_DIR is required; use tests/smoke/runner.js');
 const PROBE = join(workDir, 'plan-probe.txt');
 const PROMPT = `请用 Bash 工具运行 \`touch ${PROBE}\` 创建一个文件。只执行这一条，不要解释。`;
 

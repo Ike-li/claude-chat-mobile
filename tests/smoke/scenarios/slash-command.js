@@ -14,7 +14,10 @@ if (!claudeBin) {
 }
 
 console.log('=== 模拟移动端斜杠命令流程 ===\n');
-const workDir = process.env.WORK_DIR || process.cwd();
+// 不回落 process.cwd()：runner 在仓库根起本脚本，回落过去会把这两个会话写进本仓库真实的
+// ~/.claude/projects 目录——WORK_DIR 退役后正是这样，不报错，只是悄悄混进真实会话列表。
+const workDir = process.env.CCM_SMOKE_WORK_DIR;
+if (!workDir) throw new Error('CCM_SMOKE_WORK_DIR is required; use tests/smoke/runner.js');
 
 // 测试场景 1：技能命令（应该可用）
 console.log('📱 场景 1：用户输入 /cag 实现一个 hello 函数\n');

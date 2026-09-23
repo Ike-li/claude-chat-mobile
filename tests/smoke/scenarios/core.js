@@ -6,8 +6,8 @@ import { io } from 'socket.io-client';
 import { readFileSync } from 'node:fs';
 
 const URL = process.env.CCM_SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`;
-const WORK = process.env.WORK_DIR;
-if (!WORK) throw new Error('WORK_DIR is required; use tests/smoke/runner.js');
+const WORK = process.env.CCM_SMOKE_WORK_DIR;
+if (!WORK) throw new Error('CCM_SMOKE_WORK_DIR is required; use tests/smoke/runner.js');
 const phase2 = process.argv.includes('--phase2');
 const results = [];
 const check = (name, ok, detail = '') =>
