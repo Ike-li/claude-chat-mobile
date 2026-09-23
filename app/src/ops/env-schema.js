@@ -627,8 +627,8 @@ const NOISY_TOGGLES = {
 // 不做成 readonly：那会让「在手机上配 CF Access」彻底没法做。改成 warn —— 前端对 warn 会弹
 // appConfirm 再重发，用户至少被明确告知自己在关掉什么。
 //
-// 措辞（2026-09-06）：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同；Cloudflare Access 是
-// 基线之上的可选加层。此前写「退化成只靠 AUTH_TOKEN」「实质降低防护等级」——对换用 Tailscale /
+// 措辞（2026-09-06）：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同；Cloudflare Access 是可选加层
+// （开着时它管的公网 Host 改认 Access 身份，见 hard-rules §6）。此前写「退化成只靠 AUTH_TOKEN」「实质降低防护等级」——对换用 Tailscale /
 // 反代的用户，清空三键是预期操作，那两句是把两道门说成一道的误报。
 const CF_ACCESS_KEYS = ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'];
 

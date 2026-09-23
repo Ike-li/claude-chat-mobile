@@ -978,8 +978,8 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     return {
       status: 'ok', name,
       detail: bi(lang,
-        'Cloudflare Tunnel + Access：公网 Host 强制 Access JWT，为 AUTH_TOKEN + 设备审批基线之上的可选加层。',
-        'Cloudflare Tunnel + Access: public hosts require an Access JWT — an optional layer on top of the AUTH_TOKEN + device-approval baseline.'),
+        'Cloudflare Tunnel + Access：公网 Host 强制 Access JWT。这是可选加层：这条路上它替代 AUTH_TOKEN，缺省也替代设备审批；局域网 / 本机照旧认 AUTH_TOKEN。',
+        'Cloudflare Tunnel + Access: public hosts require an Access JWT. It is an optional layer: on that path it replaces AUTH_TOKEN and, by default, device approval; LAN and local access still use AUTH_TOKEN.'),
     };
   }
 

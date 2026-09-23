@@ -311,7 +311,7 @@ export function runDoctor(ctx = {}) {
     id: 'CF_ACCESS',
     status: 'ok',
     detail: ctx.cfEnabled
-      ? '已启用：公网 Host 强制 Cloudflare Access JWT（AUTH_TOKEN + 设备审批基线之上的可选加层）'
+      ? '已启用：公网 Host 强制 Cloudflare Access JWT（可选加层：这条路上替代 AUTH_TOKEN，缺省也替代设备审批；局域网 / 本机照旧认 AUTH_TOKEN）'
       : '未启用；公网基线 = AUTH_TOKEN + 设备审批，按拓扑的针对性检查见 ACCESS_PROFILE 项',
     safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet }, // AUD 仅布尔
   });
