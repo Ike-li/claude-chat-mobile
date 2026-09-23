@@ -481,9 +481,13 @@ test('stop() 后定时器不再自驱；start() 能重新起来', async () => {
   h.engine.stop(); // 立刻停掉，避免把定时器泄漏给后续用例
 });
 
-test('stop() 在 in-flight tick 期间也要停住：tick 收尾不得把定时器重排回来', async () => {
+test('stop() 在 in-flight tick 期间也要停住：tick 收尾不得把定时器重排回来', async (t) => {
   // 上一个用例手动调 catchUpTick()，走不到「定时器回调 → tick → 收尾重排」那条链，
   // 因而漏掉了这个竞态：shutdown 恰好撞上一个在飞的 tick 时，stop() 会被它的收尾覆盖掉。
+  //
+  // 假时钟只接管 setTimeout（即追平定时器），tick 里的读盘仍是真 I/O。此前真等两个 2.5s 间隔，
+  // 这一条占了整个文件九成耗时。必须在 makeEngine 之前启用：构造期就已经排了定时器。
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   let ticks = 0;
   let stopRequested = false;
   const h = makeEngine({
@@ -496,9 +500,15 @@ test('stop() 在 in-flight tick 期间也要停住：tick 收尾不得把定时�
   writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-stop-inflight', settledTail(Date.now() - 5_000));
 
   h.engine.start();
-  // 常态追平间隔 2.5s：先等它驱动出首个 tick（探针在其中 stop），再多等一个完整间隔——
-  // 若 stop() 被 tick 收尾重排回来，第二个 tick 会在这个窗口内发生。
-  await new Promise(r => setTimeout(r, 5_600));
+  // 常态追平间隔 2.5s：先推进一个间隔驱动出首个 tick（探针在第一个 await 之前同步执行，在其中 stop）。
+  t.mock.timers.tick(2_500);
+  // 正对照：首个 tick 必须来自定时器。否则下一行的 catchUpTick() 会手动另起一个 tick，
+  // 用例就在根本没走「定时器 → tick → 收尾重排」的情况下空过。
+  assert.equal(ticks, 1, '推进一个追平间隔后，定时器应已驱动出首个 tick');
+  await h.engine.catchUpTick();            // 单飞：tick 在飞时返回同一个 promise，不另起 tick
+  await new Promise(r => setImmediate(r)); // 让定时器回调里的 .finally 收尾跑完——缺陷形态就在这里重排定时器
+  // 再推进两个间隔：若 stop() 被收尾重排回来，第二个 tick 会在这里被驱动。
+  t.mock.timers.tick(5_000);
   h.engine.stop();
 
   assert.equal(ticks, 1, 'stop() 之后不应再有自驱 tick');

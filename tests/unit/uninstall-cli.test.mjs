@@ -51,6 +51,10 @@ function testEnvFor(home, dataDir) {
     HOME: home,
     USERPROFILE: home,
     CCM_DATA_DIR: dataDir,
+    // hooks 桥 install 内嵌 L2 探活：不给 PORT 就读【真实仓库根】的配置拿端口。开发机上若正跑着 server，
+    // 就会探到它、再空等 3s ack——CI 上没有 server，所以这个文件只在开发机上慢（实测 8.1s → 1.9s）。
+    // 钉到无人监听的端口，与 hooks-bridge-setup.test.mjs 的 runSetup 同一理由。
+    PORT: '9',
   };
 }
 
