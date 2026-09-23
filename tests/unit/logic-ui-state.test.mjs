@@ -426,6 +426,15 @@ test.describe('foregroundReconnectAction / syncAckAction', () => {
     assert.equal(syncAckAction(null, { found: true, gap: false, diskLen: 12 }, { seenDiskLen: 5 }), 'reload');
     assert.equal(syncAckAction(null, { found: true, gap: false, diskLen: 5 }, { seenDiskLen: 5 }), 'none');
   });
+  // 真 server 在 replayed>0 时 diskLen 恒为 null（见 app.js sync:since），上面那条在这种重连里是
+  // 死代码：断线期间终端写进同一会话的内容，只要活缓冲里也有东西，就永远对不上账（2026-09-22 review P1）。
+  // diskExternalLen 只被非己方写入推高，己方 live 轮次不更新 seenDiskLen 也不会因此误重载。
+  test('syncAckAction：有回放（diskLen 为 null）但外部写入越过已渲染位置 → reload', () => {
+    assert.equal(syncAckAction(null, { found: true, gap: false, replayed: 4, diskLen: null, diskExternalLen: 12 }, { seenDiskLen: 5 }), 'reload');
+  });
+  test('syncAckAction：有回放、外部写入没越过已渲染位置（只有己方新写）→ none', () => {
+    assert.equal(syncAckAction(null, { found: true, gap: false, replayed: 4, diskLen: null, diskExternalLen: 5 }, { seenDiskLen: 5 }), 'none');
+  });
 
   test('err 优先于 res：超时即便带 res 也判 reconnect', () => {
     assert.equal(syncAckAction(new Error('timeout'), { found: false }), 'reconnect');
@@ -441,8 +450,14 @@ test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是
   test('有 DOM 缓存 + replayed>0 + 磁盘未 ahead → keep（切 tab 秒恢复）', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 10, seenDiskLen: 10 }), 'keep');
   });
-  test('有 DOM 缓存 + replayed>0 但磁盘 ahead → reload（G2：外部 CLI 写盘不可被 keep 吞）', () => {
-    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 99, seenDiskLen: 0 }), 'reload');
+  // G2 按真 server 的 ack 形状写：replayed>0 时 diskLen 恒为 null，外部写入只能靠 diskExternalLen 看见。
+  // 这条此前写成 { replayed: 5, diskLen: 99 }——生产上不存在的形状，于是它一直绿着，而真实路径上
+  // 「有回放就 keep」把外部写入吞掉了（2026-09-22 review P1）。
+  test('有 DOM 缓存 + replayed>0 但外部写入越过已渲染位置 → reload（G2：外部 CLI 写盘不可被 keep 吞）', () => {
+    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: null, diskExternalLen: 99, seenDiskLen: 10 }), 'reload');
+  });
+  test('有 DOM 缓存 + replayed>0、只有己方新写（外部写入没越过已渲染位置）→ keep（切 tab 秒恢复不受影响）', () => {
+    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: null, diskExternalLen: 10, seenDiskLen: 10 }), 'keep');
   });
   test('整页刷新/无 DOM 缓存：replayed>0 仍须 reload（活缓冲≠全量历史，BUFFER_CAP 外全丢）', () => {
     // 复刻 PWA 下拉刷新 bug：hard reload 后 sessionDomCache 清空(hasCache=false)，server 实例仍在、

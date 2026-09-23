@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -369,6 +369,25 @@ test('catchUpStep: 满窗但 tail 未变 → 不 reload', () => {
   );
   assert.equal(r.reload, false);
   assert.deepEqual(r.emit, []);
+});
+
+// ── externalHistoryExtent：重连对账时「外部写入到了第几条」（2026-09-22 review P1）────────────
+// sync:since 在 replayed>0 时不带 diskLen：web 自己的 live 轮次不更新前端的 seenDiskLen（已知边界），
+// 拿磁盘总条数去比会把每一轮己方写入都当成外部写入、每次切回都整页重载。可这样一来，断线期间
+// 终端写进同一会话的内容，在「活缓冲里也有东西」时就永远对不上账。这个量只被非己方写入推高。
+test('externalHistoryExtent: 最后一条非己方写入的位置（1-based）；己方写在后面不推高它', () => {
+  const cli = c => ({ role: 'user', content: c, entrypoint: 'cli' });
+  const own = c => ({ role: 'assistant', content: c, entrypoint: 'sdk-ts' });
+  assert.equal(externalHistoryExtent([]), 0);
+  assert.equal(externalHistoryExtent([own('a'), own('b')]), 0, '全是己方写的：没有外部写入');
+  assert.equal(externalHistoryExtent([cli('a'), cli('b'), own('c'), own('d')]), 2, '己方写在后面不推高它');
+  assert.equal(externalHistoryExtent([own('a'), cli('b'), own('c')]), 2);
+  assert.equal(externalHistoryExtent([cli('a'), own('b'), cli('c')]), 3, '终端又写了一条：推到最新那条');
+});
+
+test('externalHistoryExtent: 缺 entrypoint（老 transcript）保守当外部写入', () => {
+  // 与 catchUpStep 同一口径：不认识的来源当外部。多重载一次看得见，漏掉终端写入看不见。
+  assert.equal(externalHistoryExtent([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'x', entrypoint: 'sdk-ts' }]), 1);
 });
 
 // ── rebaselineAbsorbedExternal：重连重定基线是否吸收了未观察到的外部增长（BE-009 防分叉判据）──────

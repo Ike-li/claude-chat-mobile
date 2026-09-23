@@ -5463,7 +5463,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
       const action = shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
-        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
+        diskLen: res?.diskLen ?? 0, diskExternalLen: res?.diskExternalLen ?? 0,
+        seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
         // 无 sessionId = session:history 无从查起，清屏必然换来白屏（见 logic.js 该闸注释）
         hasSessionId: Boolean(sid),
       });

@@ -528,9 +528,10 @@ const ACK_SHAPES = [
     check: ack => assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历') },
 
   { event: 'sync:since', branch: '冷连接', payload: () => ({}),
-    required: ['found', 'gap', 'replayed', 'diskLen', 'pending', 'unreadOnEntry'],
+    required: ['found', 'gap', 'replayed', 'diskLen', 'diskExternalLen', 'pending', 'unreadOnEntry'],
     // diskLen 是历史教训：mock 从不返回它，于是 shouldReloadOnEnter 的「磁盘 ahead → 全量 reload」
     // 整条分支在 E2E 里够不着，2026-08-27 的「同一条消息两颗气泡」就漏在那里。
+    // diskExternalLen 是 replayed>0 时对账外部写入的唯一依据（那时 diskLen 恒空，2026-09-22）。
     check: ack => assert.equal(typeof ack.found, 'boolean') },
 
   { event: 'session:switch', branch: '拒绝支', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },

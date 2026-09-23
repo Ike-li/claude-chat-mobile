@@ -159,6 +159,7 @@ test('diskLen 只在 replayed=0 时读：活缓冲有内容就不必对账磁盘
   // 这个条件不是性能优化那么简单。diskLen 是给前端对账「离开期间被 CLI 从终端写过」用的
   // （logic.js shouldReloadOnEnter）；replayed>0 说明 web 这侧是活跃的、活缓冲可信，
   // 此时再塞一个磁盘条数进去，前端会拿它跟已渲染条数比，把正常状态误判成需要整页重载。
+  // replayed>0 时的外部写入改由 diskExternalLen 报（不被己方写入推高），见 sync-external-extent.test.mjs。
   const c = await connect('disk');
   const active = await c.since({ lastSeq: 0, instanceId });
   assert.ok(active.ack.replayed > 0, '前置：这次应有补发内容');
