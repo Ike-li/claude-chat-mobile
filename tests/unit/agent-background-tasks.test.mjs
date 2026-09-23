@@ -190,6 +190,35 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  // 合成只改了账面，没有伴随任何会触发 instances 广播的事件（message_start / text_delta 都不在 server 的
+  // STATE_BOUNDARY 里）。不通知的话，其它端（以及同一端的发送闸）要等下一次无关广播才知道这一轮在跑——
+  // 只有文本的汇报轮会一直等到 result。这期间它们看到的是空闲，发出去的消息被在途轮闸拒掉（2026-09-22 review P2）。
+  test('合成自动汇报轮的那一刻通知 server 重播 instances；没合成就不播', () => {
+    let settled = 0;
+    const { s } = makeSession({ onStateSettled: () => { settled += 1; } });
+    // ① message_start 路径
+    s.map({ type: 'user', message: { content: '<task-notification>\n<task-id>a</task-id>\n</task-notification>' } });
+    let before = settled;
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 1, '前提：合成了一轮');
+    assert.equal(settled, before + 1, '账面从 0 变 1 却不播，其它端这一整轮都以为它空闲、发消息会被拒');
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    // ② assistant 兜底路径（非流式网关没有 message_start）
+    s.pendingAutoTurn = true;
+    s.pendingAutoTurnAt = Date.now();
+    before = settled;
+    s.map({ type: 'assistant', message: { content: [{ type: 'text', text: '报告正文' }] }, uuid: 'a1' });
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(settled, before + 1, '兜底合成同样要播');
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    // ③ 没合成（无 flag 的 message_start）不播：它不改账面
+    before = settled;
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm2' } }, parent_tool_use_id: null, uuid: 'u2' });
+    assert.equal(s.pendingTurns, 0);
+    assert.equal(settled, before, '账面没变就别播');
+    s.dispose();
+  });
+
   test('普通 user 文本（非通知）→ 不触发、pendingTurns/flag 不动（回归）', () => {
     const { s, events } = makeSession();
     s.map({ type: 'user', message: { content: '这是一条普通用户消息' } });
