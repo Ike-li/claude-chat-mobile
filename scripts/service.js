@@ -866,12 +866,16 @@ export function createServiceManager(deps = {}) {
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? DEFAULT_PORT;
     const token = env.AUTH_TOKEN;
-    const url = `http://127.0.0.1:${port}/health`;
+    // token 优先走 x-auth-token 请求头（server 认它，见 app/src/server/http.js；与前端 push 同一方向）。
+    // 首尾空白或非 ASCII 的令牌放进头会变样——HTTP 解析器裁掉首尾空白、非 ASCII 字节按 latin1 读——而
+    // tokenMatches 逐字节比较，此前能用的令牌会被误报成「配置不一致」：这类回落 query（encodeURIComponent 保真）。
+    // 两条都不进 argv，由 realHttpGet 经 stdin 交给 curl（2026-09-23 #154 review）。
+    const headerSafe = typeof token === 'string' && /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(token);
+    const url = `http://127.0.0.1:${port}/health${token && !headerSafe ? `?token=${encodeURIComponent(token)}` : ''}`;
 
     let res;
     try {
-      // token 走 x-auth-token 请求头（server 两处都认，见 app/src/server/http.js），不拼进 URL：URL 是 curl 的 argv。
-      res = httpGet(url, token ? { headers: { 'x-auth-token': token } } : {});
+      res = httpGet(url, token && headerSafe ? { headers: { 'x-auth-token': token } } : {});
     } catch (err) {
       return { ok: false, reason: 'unreachable', error: `连不上 127.0.0.1:${port}（服务没在跑？）：${String(err?.message || err).split('\n')[0]}` };
     }
@@ -1034,15 +1038,16 @@ function realSleep(ms) {
 
 // 同步 HTTP GET。用 curl 而非 node 子进程：少一次 node 冷启（~50ms），且 curl 是 macOS 自带。
 // -w 把状态码追加到 body 末尾，靠最后一个换行切分。
-// 请求头经 stdin 交给 curl（-H @-，curl ≥ 7.55），不进 argv：argv 对同机所有用户的 ps 可见，
-// token 放 URL 或 -H 参数里都一样会被看到（2026-09-22 review P2）。
+// URL 与请求头都写进 curl 配置、经 stdin 交给 curl（-K -），不进 argv：argv 对同机所有用户的 ps 可见，
+// token 放 URL 或 -H 参数里都一样会被看到（2026-09-22 review P2）。配置里的值按 curl 规则转义 \ 与 "。
 export function realHttpGet(url, { headers = {} } = {}, { spawn = spawnSync } = {}) {
-  const headerLines = Object.entries(headers).map(([k, v]) => `${k}: ${v}\n`).join('');
-  const args = ['-sS', '-m', '5', '-w', '\n%{http_code}', ...(headerLines ? ['-H', '@-'] : []), url];
-  const r = spawn('/usr/bin/curl', args, {
+  const quote = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const config = [`url = ${quote(url)}`, ...Object.entries(headers).map(([k, v]) => `header = ${quote(`${k}: ${v}`)}`)]
+    .map((line) => `${line}\n`).join('');
+  const r = spawn('/usr/bin/curl', ['-sS', '-m', '5', '-w', '\n%{http_code}', '-K', '-'], {
     encoding: 'utf8',
     timeout: 8000,
-    ...(headerLines ? { input: headerLines } : {}),
+    input: config,
   });
   if (!r || r.status !== 0) throw new Error(String(r?.stderr || 'curl 失败').trim());
   const out = String(r.stdout || '');

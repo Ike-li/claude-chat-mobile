@@ -288,6 +288,25 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     assert.equal(r.reason, 'unreachable');
   });
 
+  // 2026-09-23（#154 review）：令牌首尾有空白或含非 ASCII 时，放进请求头会变样——HTTP 解析器裁掉首尾空白、
+  // 非 ASCII 字节按 latin1 读——而 tokenMatches 逐字节比较，于是一个此前能用的令牌被误报成「配置不一致」。
+  // 这类令牌回落 query（encodeURIComponent 保真）；它同样经 stdin 交给 curl，不进 argv。
+  test('令牌放不进请求头（首尾空白 / 非 ASCII）→ 回落 query，不发头', () => {
+    for (const token of [' tok', 'tok ', 'café-tok', 'tab\tin']) {
+      const { mgr, httpCalls } = setup({ env: { PORT: '3000', AUTH_TOKEN: token } });
+      mgr.health();
+      assert.deepEqual(httpCalls[0].headers, {}, `${JSON.stringify(token)} 走头会变样`);
+      assert.equal(new URL(httpCalls[0].url).searchParams.get('token'), token);
+    }
+  });
+
+  test('可打印 ASCII 的令牌（含中间空格）照常走请求头，URL 不带 token', () => {
+    const { mgr, httpCalls } = setup({ env: { PORT: '3000', AUTH_TOKEN: 'a b~!"#' } });
+    mgr.health();
+    assert.equal(httpCalls[0].url, 'http://127.0.0.1:3000/health');
+    assert.equal(httpCalls[0].headers['x-auth-token'], 'a b~!"#');
+  });
+
   test('.env 没有 AUTH_TOKEN 时不带 token（不发一个空的头上去）', () => {
     const { mgr, httpCalls } = setup({ env: { PORT: '3000' } });
     mgr.health();
@@ -478,29 +497,28 @@ test('强杀重启只有一个入口——kickstart 的 -k 不得出现在 killA
 // ── realHttpGet：请求头走 stdin（curl -H @-），不进 argv ──────────────────────────
 // argv 对同机所有用户的 ps 可见。把 token 从 URL 挪到 `-H 'x-auth-token: …'` 参数里等于没挪，
 // 所以头经 stdin 交给 curl（2026-09-22 review P2）。
-test.describe('realHttpGet —— 头的值不进 argv', () => {
-  test('带头：argv 里只有 -H @-，值在 stdin', () => {
+test.describe('realHttpGet —— URL 与请求头都不进 argv', () => {
+  test('argv 里只有 -K -，URL 与头都在 stdin 的 curl 配置里', () => {
     let seen;
     const spawn = (cmd, args, opts) => { seen = { cmd, args, opts }; return { status: 0, stdout: '{"status":"ok"}\n200', stderr: '' }; };
-    const r = realHttpGet('http://127.0.0.1:3000/health', { headers: { 'x-auth-token': 's3cret-tok' } }, { spawn });
+    const r = realHttpGet('http://127.0.0.1:3000/health?token=q-secret', { headers: { 'x-auth-token': 's3cret-tok' } }, { spawn });
     assert.deepEqual(r, { status: 200, body: '{"status":"ok"}' });
-    assert.equal(seen.args.some((a) => a.includes('s3cret-tok')), false, `argv 对 ps 可见：${JSON.stringify(seen.args)}`);
-    assert.deepEqual(seen.args.slice(seen.args.indexOf('-H'), seen.args.indexOf('-H') + 2), ['-H', '@-']);
-    assert.equal(seen.opts.input, 'x-auth-token: s3cret-tok\n');
+    assert.equal(seen.args.some((a) => /s3cret-tok|q-secret|127\.0\.0\.1/.test(a)), false, `argv 对 ps 可见：${JSON.stringify(seen.args)}`);
+    assert.deepEqual(seen.args.slice(seen.args.indexOf('-K'), seen.args.indexOf('-K') + 2), ['-K', '-']);
+    assert.equal(seen.opts.input, 'url = "http://127.0.0.1:3000/health?token=q-secret"\nheader = "x-auth-token: s3cret-tok"\n');
   });
 
-  test('不带头：不读 stdin（空的 @- 不该出现）', () => {
+  test('配置里的值按 curl 规则转义：引号与反斜杠不会截断或改写', () => {
     let seen;
-    const spawn = (cmd, args, opts) => { seen = { args, opts }; return { status: 0, stdout: 'x\n200', stderr: '' }; };
-    realHttpGet('http://127.0.0.1:3000/health', {}, { spawn });
-    assert.equal(seen.args.includes('@-'), false);
-    assert.equal(seen.opts.input, undefined);
+    const spawn = (cmd, args, opts) => { seen = { opts }; return { status: 0, stdout: 'x\n200', stderr: '' }; };
+    realHttpGet('http://127.0.0.1:3000/health', { headers: { 'x-auth-token': 'a"b\\c' } }, { spawn });
+    assert.equal(seen.opts.input, 'url = "http://127.0.0.1:3000/health"\nheader = "x-auth-token: a\\"b\\\\c"\n');
   });
 
-  // 上面两条只证明「交给 curl 的形状」对。这条证明 curl 真的把 stdin 里的头发出去了——
+  // 上面两条只证明「交给 curl 的形状」对。这两条证明 curl 真的照 stdin 的配置发出去了——
   // 形状对而 curl 不认，health 会恒 401 并误报成「该重启服务了」。回显服务器放子进程：
   // realHttpGet 是 spawnSync，会卡住本进程的事件循环，同进程的服务器应答不了。
-  test('真 curl：stdin 里的头原样到达服务端，URL 不带 token', { skip: !existsSync('/usr/bin/curl') && '本机没有 /usr/bin/curl' }, async () => {
+  async function withEchoServer(fn) {
     const echo = spawn(process.execPath, ['-e', `
       require('node:http').createServer((q, s) => s.end(JSON.stringify({ token: q.headers['x-auth-token'] ?? null, url: q.url })))
         .listen(0, '127.0.0.1', function () { console.log(this.address().port); });
@@ -513,12 +531,26 @@ test.describe('realHttpGet —— 头的值不进 argv', () => {
         echo.stdout.once('data', (d) => resolve(Number(String(d).trim())));
         echo.once('exit', (code) => reject(new Error(`回显服务器提前退出：${code}`)));
       });
-      const r = realHttpGet(`http://127.0.0.1:${port}/health`, { headers: { 'x-auth-token': 'tok-via-stdin' } });
-      assert.equal(r.status, 200);
-      assert.deepEqual(JSON.parse(r.body), { token: 'tok-via-stdin', url: '/health' });
+      return await fn(port);
     } finally {
       if (savedNoProxy === undefined) delete process.env.no_proxy; else process.env.no_proxy = savedNoProxy;
       echo.kill();
     }
-  });
+  }
+  const noCurl = !existsSync('/usr/bin/curl') && '本机没有 /usr/bin/curl';
+
+  test('真 curl：stdin 配置里的头原样到达服务端（含引号与反斜杠，验转义）', { skip: noCurl }, () => withEchoServer((port) => {
+    const token = 'tok"via\\stdin';
+    const r = realHttpGet(`http://127.0.0.1:${port}/health`, { headers: { 'x-auth-token': token } });
+    assert.equal(r.status, 200);
+    assert.deepEqual(JSON.parse(r.body), { token, url: '/health' });
+  }));
+
+  test('真 curl：stdin 配置里的 URL（带 encodeURIComponent 过的 query）逐字节到达', { skip: noCurl }, () => withEchoServer((port) => {
+    const token = ' café-tok ';
+    const r = realHttpGet(`http://127.0.0.1:${port}/health?token=${encodeURIComponent(token)}`);
+    assert.equal(r.status, 200);
+    const { url } = JSON.parse(r.body);
+    assert.equal(new URL(url, 'http://x').searchParams.get('token'), token);
+  }));
 });
