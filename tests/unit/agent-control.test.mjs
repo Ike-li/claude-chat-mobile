@@ -143,6 +143,7 @@ test.describe('send()', () => {
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
     assert.ok(err.payload.message.includes('模型切换失败'), '明确 reject=确定没切，文案说"失败"');
+    assert.equal(err.payload.endsTurn, false, '「已用原模型发送」：这一轮照常开跑，前端不得按轮次收尾熄灭 busy');
     assert.equal(s.activeModel, 'sonnet', '切换没成功 → activeModel 不推进（前端显示的是真生效模型）');
     assert.equal(s.attemptedModel, 'unknown-model', '已尝试过 → 差分基准推进，同一目标不再重试');
     s.dispose();

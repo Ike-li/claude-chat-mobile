@@ -39,6 +39,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-09-22 review P1：前端曾把所有 error 都当成轮次收尾——清掉挂着的审批、工具卡标失败、熄灭 busy。
+  // 可有几类 error 并不结束轮次：socket handler 抛错（不带 instanceId，落到当前 tab 上）、轮中切权限档
+  // 失败、模型切换失败。服务端那一轮还在等这张审批（30 分钟 TTL），用户却已经没有地方点「允许」了。
+  // 这类 error 现在带 endsTurn:false，前端只打一条提示。
+  test('P0-06-NOEND 审批挂着时收到不结束轮次的 error：审批仍在，批准后这一轮照常跑完', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission-then-noend-error');
+    await expect(page.locator('#messages')).toContainText('服务端处理 user:setPermissionMode 出错', { timeout: 5_000 });
+    // 按 class 断言而不是 toBeVisible：closeSheet 当场摘掉 sheet-open 再播关闭动画，可见性检查会和动画赛跑，
+    // 撞上动画中途就假绿。提示条出现时 error handler 已经跑完，class 状态是确定的。
+    await expect(page.locator('#permModal'), '不结束轮次的 error 不得清掉挂着的审批').toHaveClass(/sheet-open/);
+
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '成功');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Successfully pushed');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-06b 本会话总是允许同类操作后不再重复弹审批', async ({ page }) => {
     await gotoMock(page);
 

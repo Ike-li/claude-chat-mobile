@@ -3062,6 +3062,21 @@ io.on('connection', socket => {
       },
     },
     {
+      // P0-06-NOEND（2026-09-22 review P1）：审批挂着时来一条「不结束轮次」的 error。真 server 上是轮中切权限档
+      // 失败（agent.setPermissionMode 没有 busy 守卫）、socket handler 抛错这类，payload 带 endsTurn:false。
+      // 先走 test:permission 把审批挂上，再按 socket handler 抛错的形状推那条 error（epoch:'server'、不带
+      // instanceId——前端落到当前查看的 tab 上）。不占 seq：批准之后那一轮的续发从 seq 4 起，占了会被去重吞掉。
+      command: 'test:permission-then-noend-error',
+      run: async ctx => {
+        await scenarioRegistry.run('test:permission', ctx);
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'error', payload: { message: '服务端处理 user:setPermissionMode 出错：boom', recoverable: true, endsTurn: false },
+        });
+      },
+    },
+    {
       commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
