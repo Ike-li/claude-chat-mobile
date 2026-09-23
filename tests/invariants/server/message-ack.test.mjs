@@ -84,6 +84,10 @@ test('REL-01：同一 clientMessageId 重发 → ack 标 deduped，且只往 age
     const again = await send({ text: '第一条', clientMessageId: 'dup-1' });
     assert.equal(again.ok, true, '重复消息是「已处理过」不是失败——ok:false 会让客户端无限重发');
     assert.equal(again.deduped, true, '重发必须标 deduped');
+    // 2026-09-22 review P2：首发的 ack 在路上丢了时，客户端只能从这条重发的 ack 得知消息落在哪个实例。
+    // 不带的话，离线队列里「在新 worktree 里开」的下一条没有锚点，会再建一棵树（outbox-send.js 的
+    // nextOutboxWorktreeAnchor 只认 ack.instanceId）。
+    assert.equal(again.instanceId, first.instanceId, `去重 ack 要带回首发落点实例，实际 ${JSON.stringify(again)}`);
 
     // ★ 第二个独立信号：ack 说「去重了」，气泡说「确实没再发一次」。
     // 只看 ack 的话，一个「标了 deduped 但仍调了 a.send()」的实现照样全绿。
