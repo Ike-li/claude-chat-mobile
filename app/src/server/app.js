@@ -833,6 +833,8 @@ io.use(async (socket, next) => {
     // 同 HTTP 侧：不留「无 token 放行」的分支（§1.9 鉴权是启动前提，无 token 起不来）。
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
+      // 只有这条路证明过持有 AUTH_TOKEN。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）
+      socket.presentedAuthToken = true;
     }
 
     // 限速计数：成功清零、失败退避/锁定
@@ -4204,6 +4206,13 @@ registerSocketConnection(io, socket => {
         const lan = lanBaseUrlForQr();
         if (!lan) return ack({ ok: false, error: '取不到局域网地址：改用公网档，或在电脑上跑 node scripts/qr.js' });
         base = lan;
+      }
+      // 【只把令牌交给握手时出示过它的会话】经 Access 进来的会话没出示过 AUTH_TOKEN（公网那条路
+      // 只认 JWT，设备审批默认也 bypass）。给它一张含令牌的码，等于把局域网钥匙发给一个本不持有
+      // 它的身份，Access 吊销之后照样能从局域网进来——与横幅掩码、logs:server 脱敏同一条泄露路径（AUTH-05）。
+      if (includeToken && !socket.presentedAuthToken) {
+        return ack({ ok: false, error: '当前会话经 Cloudflare Access 登录、不持有访问令牌，不能生成含令牌的二维码。'
+          + '新设备直接打开公网地址、完成 Access 登录即可；要局域网码请在电脑上跑 node scripts/qr.js' });
       }
       if (includeToken && !token) return ack({ ok: false, error: '未设置 AUTH_TOKEN' });
       const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
