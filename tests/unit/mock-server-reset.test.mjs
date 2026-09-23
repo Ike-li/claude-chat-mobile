@@ -26,13 +26,18 @@ const EXEMPT = {
   mockReadState: '由 resetReadState() 重建，resetMockState() 调用它（下面单独断言这个前提）',
 };
 
-// 「这一行写了它」：赋值、复合赋值、自增自减、容器原地修改。
+// 「这一行写了它」：赋值、复合赋值、自增自减，以及经属性/下标链的写入、delete、容器原地修改、
+// Object.assign——const 只挡住重新赋值，挡不住 `x.armed = true` 或 `x.list.push()` 这种写法。
 function writes(name) {
   const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const head = `(^|[^.\\w$])${n}`;
+  const chain = '(\\.[\\w$]+|\\[[^\\]]*\\])*';
   return new RegExp(
-    `(^|[^.\\w$])${n}\\s*(=(?!=)|\\+=|-=|\\|\\|=|&&=|\\?\\?=|\\+\\+|--)`
+    `${head}${chain}\\s*(=(?!=)|\\+=|-=|\\|\\|=|&&=|\\?\\?=|\\+\\+|--)`
     + `|(\\+\\+|--)\\s*${n}\\b`
-    + `|(^|[^.\\w$])${n}\\.(set|add|push|splice|delete|clear|unshift|pop|shift|fill|sort|reverse)\\(`,
+    + `|\\bdelete\\s+${n}[.[]`
+    + `|${head}${chain}\\.(set|add|push|splice|delete|clear|unshift|pop|shift|fill|sort|reverse)\\(`
+    + `|Object\\.assign\\(\\s*${n}\\b`,
   );
 }
 
@@ -66,7 +71,7 @@ test('每个模块级 let 都在 resetMockState() 里被赋值，或在豁免表
     + '在 resetMockState() 里复位；确实该跨用例存活的，登记进本文件 EXEMPT 并写理由');
 });
 
-test('被原地修改的模块级 const 容器，resetMockState() 里也要清空或替换内容', () => {
+test('被原地修改的模块级 const（改属性或容器方法），resetMockState() 里也要复位', () => {
   const outsideReset = (i) => i < reset.start || i > reset.end;
   const missing = declared
     .filter(d => d.kind === 'const' && !(d.name in EXEMPT))
@@ -75,7 +80,7 @@ test('被原地修改的模块级 const 容器，resetMockState() 里也要清�
       return lines.some((l, i) => i + 1 !== d.line && outsideReset(i) && re.test(l)) && !re.test(reset.text);
     })
     .map(d => `${d.name}（server.js:${d.line}）`);
-  assert.deepEqual(missing, [], 'const 只挡住重新赋值，挡不住 .set/.push 往里攒东西——这些容器跨用例累积');
+  assert.deepEqual(missing, [], 'const 只挡住重新赋值，挡不住改属性、.set/.push 往里攒东西——这些状态跨用例存活');
 });
 
 test('豁免表不引用不存在的变量（改名或删掉后豁免会悄悄失效）', () => {
