@@ -164,6 +164,10 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
   // 同会话重连/probe：活缓冲可能有回放，但 CLI 外部写盘只增 diskLen——必须比 seenDiskLen（G1）
   const diskLen = res && Number.isFinite(res.diskLen) ? res.diskLen : 0;
   if (diskLen > seenDiskLen) return 'reload';
+  // 有回放时 server 不带 diskLen（恒 null），外部写入只能靠 diskExternalLen 看见：它是最后一条非己方
+  // 写入的位置，己方 live 轮次不推高它，越过已渲染位置就说明断线期间终端写过这个会话。
+  const diskExternalLen = res && Number.isFinite(res.diskExternalLen) ? res.diskExternalLen : 0;
+  if (diskExternalLen > seenDiskLen) return 'reload';
   return 'none';
 }
 
@@ -183,6 +187,7 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
 //   !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必再清）；
 //   hasCache && replayed>0 → 'keep'（切 tab 秒恢复：DOM 缓存已是全量渲染真相 + 活缓冲增量，不重载以免丢实时 thinking）；
 //   hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
+//   hasCache && diskExternalLen>seenDiskLen → 'reload'（同上，但覆盖 replayed>0：那时 diskLen 恒空）；
 //   否则 → 'keep'（缓存仍是最新，保留 DOM 秒恢复）。
 // ⚠️ 已知边界（code-review 发现4，有意不修）：seenDiskLen 只由 loadHistory/onHistoryAppend 维护，
 //   web 自己 live 流跑出来的轮次【不】更新它。于是"发一轮(磁盘增长)→切走→切回同实例(无外部活动、replayed=0、
@@ -191,7 +196,7 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
 //   数据丢失(正是 #1 盲区)。宁可闪一下、不可漏消息，故保留。
 // ⚠️ 冷入场 reload 的代价：环形缓冲里尚未落盘的实时 thinking/在跑工具卡会被 clearView 清掉；硬刷新本就是
 //   用户主动重入，可接受——后续 live 事件与 pending 快照仍会接上。
-export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0, hasSessionId = true } = {}) {
+export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, diskExternalLen = 0, seenDiskLen = 0, hasSessionId = true } = {}) {
   // 实例还没拿到 sessionId（CLI 未吐 system/init）：session:history 无从查起——server 端 handler 的
   // sessionFileExists 守卫会直接回「会话不存在」，清屏换来的必定是白屏。此时服务端环形缓冲里的回放
   // 是唯一能看到的内容（它就是 CLI 经 stdout 实时吐出来的那份），宁可残缺也不能清空。
@@ -205,6 +210,10 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   if (!hasCache) return (replayed > 0) ? 'reload' : 'load';
   // 磁盘 ahead 优先于 replayed>0 keep：外部 CLI 写盘不进活缓冲，切回/同会话有回放时仍可能漏显（G1/G2）。
   if (diskLen > seenDiskLen) return 'reload';
+  // replayed>0 时 server 不带 diskLen（恒 null），G2 只能靠 diskExternalLen：最后一条非己方写入的位置，
+  // 己方 live 轮次不推高它，所以切 tab 秒恢复不受影响。代价（安全侧，同上面「发现4」）：己方轮次之后
+  // 镜像又推过终端写入时，seenDiskLen 按条数累加、落后于它们的真实位置，下一次切回会多重载一次。
+  if (diskExternalLen > seenDiskLen) return 'reload';
   if (replayed > 0) return 'keep';
   return 'keep';
 }

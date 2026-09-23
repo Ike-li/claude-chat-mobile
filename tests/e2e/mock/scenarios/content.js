@@ -916,10 +916,17 @@ export function createContentScenarios(getContext) {
         const responseText = [
           'This response keeps **safe bold markdown** and `safe_inline_code` visible.',
           '',
+          '```js',
+          'const fenced = 1;',
+          '```',
+          '',
           '<script>window.__ccmUnsafeMarkdownScriptFired = true</script>',
           '<img src="/__unsafe-markdown-probe.png" onerror="window.__ccmUnsafeMarkdownImageFired = true" alt="unsafe image probe">',
           '<a href="javascript:window.__ccmUnsafeMarkdownClickFired = true">unsafe javascript link</a>',
-          '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>'
+          '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>',
+          '',
+          // Tailwind 运行时会把 class 现编成 CSS：不剥的话这就是一个盖住审批按钮的全屏遮罩
+          '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>'
         ].join('\n');
 
         socket.emit('agent:event', {

@@ -279,6 +279,11 @@ let dupOptimisticArmed = false;
 const DUP_OPTIMISTIC_CMD = 'test:dup-optimistic';
 const DUP_OPTIMISTIC_DELAY_MS = 2000;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
+// P0-SYNC-EXT：叠在 replaySmallSyncArmed 上。武装后第二次切回的 ack 按真 server 形状带 diskLen:null +
+// diskExternalLen（有回放时外部写入只能靠它报）。「终端写入」在那次 sync:since 时才落到磁盘历史里
+// （Written），首次冷切入拿到的仍是 4 条基线——否则首次加载就把它带回来了，测不出切回。
+let replaySmallExternalArmed = false;
+let replaySmallExternalWritten = false;
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
 // sync:since handler 内联的 extra.unreadOnEntry，自包含不受测试执行顺序影响）。
@@ -446,6 +451,8 @@ function resetMockState() {
   syncAckTimeoutArmed = false;
   staleInstancesOnNextNew = false;
   replaySmallSyncArmed = false;
+  replaySmallExternalArmed = false;
+  replaySmallExternalWritten = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
@@ -2115,6 +2122,7 @@ io.on('connection', socket => {
       for (let i = 0; i < 4; i++) {
         messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Small baseline message #${i}` });
       }
+      if (replaySmallExternalWritten) messages.push({ role: 'user', content: 'Small terminal message written while away' });
       callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-unread') {
       // P0-REPLAY-UNREAD-DISMISS：首次冷切入基线（同 mock-session-replay-small 套路，建 DOM 缓存）；
@@ -2539,8 +2547,9 @@ io.on('connection', socket => {
       }
     };
     // P0-DUP-OPT ②：ack 带 diskLen 大于前端已渲染的条数（timeline fixture 是 10 条），
-    // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 一直回这个字段，
-    // mock 从不回（恒 null→0），所以这条分支此前在整套 E2E 里【结构性不可达】。
+    // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 只在 replayed=0 时回这个字段
+    // （replayed>0 时恒 null，外部写入改由 diskExternalLen 报），mock 默认两个都不回（null→0），
+    // 所以这条分支此前在整套 E2E 里【结构性不可达】。
     if (dupOptimisticArmed && sessionId === 'mock-session-timeline') {
       console.log('[mock] P0-DUP-OPT — sync:since ack 带 diskLen=11，逼出全量重载');
       ack(0, { diskLen: 11 });
@@ -2731,7 +2740,9 @@ io.on('connection', socket => {
             type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
           });
         }
-        ack(21);
+        // 离开期间终端写了第 5 条（基线 4 条之后），前端已渲染 4 条 → 该重载
+        if (replaySmallExternalArmed) replaySmallExternalWritten = true;
+        ack(21, replaySmallExternalArmed ? { diskLen: null, diskExternalLen: 5 } : {});
       }
     } else if (instanceId === 'inst_replay_unread') {
       // P0-REPLAY-UNREAD-DISMISS（回放缓冲程序性落底 × 未读胶囊自动确认已读协同）：同 inst_replay_small
@@ -3050,6 +3061,21 @@ io.on('connection', socket => {
           });
           pendingQuestion = null;
         }
+      },
+    },
+    {
+      // P0-06-NOEND（2026-09-22 review P1）：审批挂着时来一条「不结束轮次」的 error。真 server 上是轮中切权限档
+      // 失败（agent.setPermissionMode 没有 busy 守卫）、socket handler 抛错这类，payload 带 endsTurn:false。
+      // 先走 test:permission 把审批挂上，再按 socket handler 抛错的形状推那条 error（epoch:'server'、不带
+      // instanceId——前端落到当前查看的 tab 上）。不占 seq：批准之后那一轮的续发从 seq 4 起，占了会被去重吞掉。
+      command: 'test:permission-then-noend-error',
+      run: async ctx => {
+        await scenarioRegistry.run('test:permission', ctx);
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'error', payload: { message: '服务端处理 user:setPermissionMode 出错：boom', recoverable: true, endsTurn: false },
+        });
       },
     },
     {
@@ -3523,6 +3549,16 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
+      },
+    },
+    {
+      // P0-SYNC-EXT：同 test:replay-buffer-small-setup，外加武装「离开期间终端写过这个会话」——在 Replay
+      // Small Session 的第二次切入（切回）时生效。合成一条命令：setup 发出后本轮不收尾、发送钮停在停止态，
+      // 紧接着再发第二条会卡住。
+      command: 'test:replay-buffer-small-external-setup',
+      run: async ctx => {
+        await scenarioRegistry.run('test:replay-buffer-small-setup', ctx);
+        replaySmallExternalArmed = true;
       },
     },
     {

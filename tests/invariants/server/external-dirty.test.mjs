@@ -2,6 +2,8 @@
 // 守护：SESSION-01 / SRV-003（externalDirty 为真且空闲时 dispose+resume 吸收外部轮次，
 //       否则 SDK 子进程内存里没有那些轮次 → 模型看不到 → 从旧位置分叉出第二条 parentUuid 链）
 // 覆盖：真实 transcript 外部增长 → catchUpTick 观察到 → 下一条 web 消息落在【新实例】上
+//       · 纯后台任务期（pendingTurns=0 但有后台任务）的终端写入同样要被观察到，且下一条 web 消息
+//         不得送进陈旧实例（2026-09-22 review P0：镜像引擎曾把后台任务期当成「己方在写盘」）
 // 槽位：S2（真 app/server.js 子进程 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 //
 // 【从哪来】2026-09-05 阶段 3：把源码文本断言换成行为断言。
@@ -20,11 +22,12 @@
 // 第二段用轮询到条件（外部 history_append 出现）而不是死等，坏掉时才耗满上限。
 //
 // 不测什么 + 为什么：
-//  ① 侧二（忙碌时【不】置换）—— 判定纯函数 externalDirtyBusyNack 已在
+//  ① 侧二（忙碌时【不】置换）的「在途轮」那一维 —— 判定纯函数 externalDirtyBusyNack 已在
 //     tests/unit/instance-routing.test.mjs 逐维覆盖（11 处断言）。本层要造它需要
 //     「己方 turn 在跑的同时磁盘外部增长」，而 mirror-engine 的 localBusy 分支会把
-//     忙碌期间的增长归因为己方写入、有意不标 externalDirty（2026-07-18 修的就是这条），
-//     所以这一侧在 S2 造不出干净的前置态。
+//     在途轮期间的增长归因为己方写入、有意不标 externalDirty（2026-07-18 修的就是这条），
+//     所以这一维在 S2 造不出干净的前置态。「后台任务」那一维造得出（fake-claude 的 turn-bg 档），
+//     由本文件第二条用例覆盖。
 //  ② 置换后模型是否真看到了那些轮次 —— 需要真模型，归 S5。
 
 // 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
@@ -156,6 +159,99 @@ test('SRV-003：终端写过之后，web 下一条消息必须落在置换后的
     const replaced = live.find(i => i.instanceId === second.instanceId);
     assert.ok(replaced, `新实例应出现在快照里，实际 ${JSON.stringify(live.map(i => i.instanceId))}`);
     assert.equal(replaced.sessionId, SESSION_ID, '置换必须 resume 回同一会话，不是另起一个');
+  } finally {
+    try { sock.close(); } catch { /* 已关闭 */ }
+    await killServer(server.proc);
+    rmSync(root, { recursive: true, force: true });      // safe-rm: mkdtemp 一次性目录
+    rmSync(projectDir, { recursive: true, force: true }); // safe-rm: 目录名由本用例一次性 cwd 编码而来
+  }
+});
+
+// 2026-09-22 review P0。纯后台任务期（web 起了个 dev server、回合已结束）：stateOf 把后台任务折进
+// 'busy'，镜像引擎曾拿它当「己方在写盘」——终端在同一会话写的内容既不追平也不标 externalDirty；
+// 而发送闸只拦在途轮（后台任务期本就允许发送，architecture.md「纯后台任务期不得锁发送」），于是
+// 手机消息直接送进 SDK 内存停在旧位置的实例，从旧 parentUuid 分叉出第二条链。
+// 修复后正确的结局是：终端写入被观察到（手机上能看见）+ 发送被拒（SRV-003：有后台任务时不能
+// dispose+resume，那会杀掉用户的 dev server），拒绝原因如实说是后台任务。
+test('SESSION-01：纯后台任务期终端写过之后，web 下一条消息不得送进陈旧实例', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-inv-extdirty-bg-'));
+  const ws = join(root, 'ws');
+  mkdirSync(ws);
+  const cwd = realpathSync(ws);
+  const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(cwd));
+  mkdirSync(projectDir, { recursive: true });
+  const transcript = join(projectDir, `${SESSION_ID}.jsonl`);
+
+  const seedUser = randomUUID();
+  const seedAssistant = randomUUID();
+  writeFileSync(
+    transcript,
+    transcriptLine('user', '终端里先说的', cwd, null, seedUser)
+      + transcriptLine('assistant', '终端里的回答', cwd, seedUser, seedAssistant),
+  );
+
+  const server = await spawnServer({
+    AUTH_TOKEN: TOKEN, WORK_DIRS: cwd, CCM_DATA_DIR: root,
+    CCM_FAKE_CLAUDE_MODE: 'turn-bg',              // 回合收尾但留下一个常驻后台任务
+    CCM_FAKE_CLAUDE_SESSION_ID: SESSION_ID,
+  });
+
+  const events = [];
+  const sock = ioClient(`http://127.0.0.1:${server.port}`, {
+    auth: { token: TOKEN, deviceToken: 'inv-extdirty-bg-device' },
+    transports: ['websocket'], reconnection: false, timeout: 4000,
+    extraHeaders: { Host: 'localhost' },
+  });
+  sock.on('agent:event', e => events.push(e));
+
+  try {
+    await new Promise((resolve, reject) => {
+      sock.on('connect', resolve);
+      sock.on('connect_error', reject);
+      setTimeout(() => reject(new Error('socket 未能在 5s 内连上')), 5000);
+    });
+    const send = payload => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`ack 超时：${JSON.stringify(payload)}`)), 15000);
+      sock.emit('user:message', payload, res => { clearTimeout(timer); resolve(res); });
+    });
+
+    const first = await send({ text: 'web 起一个 dev server', cwd, clientMessageId: 'edbg-1' });
+    assert.equal(first.ok, true, `首发应被接受，实际 ${JSON.stringify(first)}`);
+
+    // 前置：真的落在「纯后台任务期」——回合已结束、后台任务还在。造不出这个态，下面的断言就测不到缺陷窗口。
+    const snapshotOf = () => events.filter(e => e.type === 'instances').pop()
+      ?.payload?.instances?.find(i => i.instanceId === first.instanceId);
+    const ready = Date.now() + 5000;
+    while (!(snapshotOf()?.bgActive === true && snapshotOf()?.turnRunning === false) && Date.now() < ready) await sleep(100);
+    assert.deepEqual(
+      { bgActive: snapshotOf()?.bgActive, turnRunning: snapshotOf()?.turnRunning },
+      { bgActive: true, turnRunning: false },
+      '前置失败：没造出纯后台任务期（fake-claude 的 turn-bg 档没生效？）',
+    );
+
+    await sleep(TICK_MS * 2 + 500);   // 基线建牢，理由同上一条用例的 ②
+
+    const extUser = randomUUID();
+    const extAssistant = randomUUID();
+    appendFileSync(
+      transcript,
+      transcriptLine('user', '终端后来又说的', cwd, seedAssistant, extUser)
+        + transcriptLine('assistant', '终端的新回答', cwd, extUser, extAssistant),
+    );
+
+    const externalAppends = () => events.filter(e => e.type === 'history_append' && e.payload?.external).length;
+    const deadline = Date.now() + TICK_MS * 4;
+    while (externalAppends() === 0 && Date.now() < deadline) await sleep(150);
+
+    const second = await send({ text: 'web 第二条', cwd, clientMessageId: 'edbg-2' });
+    assert.equal(
+      second.ok, false,
+      `终端写过之后 web 消息被直接接受了（${JSON.stringify(second)}）——它进的是 SDK 内存里没有终端那两轮的`
+      + '陈旧实例，会从旧位置分叉出第二条 parentUuid 链',
+    );
+    assert.equal(second.reason, 'bg_tasks',
+      `拒绝原因应如实指向后台任务（有后台任务时不能 dispose+resume），实际 ${JSON.stringify(second)}`);
+    assert.ok(externalAppends() > 0, '终端写入没被推到手机——纯后台任务期镜像仍在把磁盘增长当成己方写盘');
   } finally {
     try { sock.close(); } catch { /* 已关闭 */ }
     await killServer(server.proc);

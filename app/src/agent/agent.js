@@ -868,6 +868,7 @@ export class AgentSession {
             ? `模型切换未确认（${err.message}），已继续发送`
             : `模型切换失败（${err.message}），已用原模型发送`,
           recoverable: true,
+          endsTurn: false, // 这一轮照常开跑：前端只打一条提示，不按轮次收尾（见前端 error handler）
         });
       }
     }
@@ -1402,7 +1403,7 @@ export class AgentSession {
     // 白名单 = SDK PermissionMode（CCM_PERMISSION_MODES）；manual → default 见 normalizePermissionMode
     const normalized = normalizePermissionMode(mode);
     if (!normalized) {
-      this.emit('error', { message: `未知权限档：${mode}`, recoverable: true });
+      this.emit('error', { message: `未知权限档：${mode}`, recoverable: true, endsTurn: false });
       return false;
     }
     mode = normalized;
@@ -1421,7 +1422,8 @@ export class AgentSession {
       this.permissionMode = mode;                  // 实例记真实档（含 bypass），canUseTool 据此放行
       return true;
     } catch (err) {
-      this.emit('error', { message: `权限档切换失败（${err.message}），仍为「${this.permissionMode}」`, recoverable: true });
+      // 本方法没有 busy 守卫、轮中可调：失败时那一轮照常跑、照常等审批，前端不得按轮次收尾
+      this.emit('error', { message: `权限档切换失败（${err.message}），仍为「${this.permissionMode}」`, recoverable: true, endsTurn: false });
       return false;
     }
   }

@@ -43,6 +43,9 @@ test('socket event registrar converts handler failures into one recoverable erro
   assert.equal(socket.emitted[0][1].type, 'error');
   assert.equal(socket.emitted[0][1].payload.recoverable, true);
   assert.match(socket.emitted[0][1].payload.message, /browse:read.*boom/);
+  // handler 抛错与在跑的轮次无关（且不带 instanceId，前端会落到当前查看的那个 tab 上）。不标这个，
+  // 前端按轮次收尾处理：清掉挂着的审批卡、工具卡标失败、熄灭 busy——服务端那一轮还在等审批。
+  assert.equal(socket.emitted[0][1].payload.endsTurn, false);
 });
 
 // SRV-NEW-005：handler 抛错时 trailing ack 必须收到负回执，否则离线队列/UI 永久 in-flight

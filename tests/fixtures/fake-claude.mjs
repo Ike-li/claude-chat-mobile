@@ -22,6 +22,9 @@
 //             turn 不收尾，实例保持 busy —— 需要「有 sessionId 但仍忙」的用例用这档。
 //   turn    → 在 init 之上再吐 assistant 文本与 result，turn 正常收尾、pendingTurns 归零。
 //             需要「发得出第二条消息」的用例用这档。
+//   turn-bg → 同 turn，但收尾前先吐一条 background_tasks_changed（一个常驻后台 Bash），
+//             回合结束后实例停在「pendingTurns=0 但有后台任务」——纯后台任务期（比如 dev server
+//             挂着）。形状照 CLI 2.1.263 的 wire schema：task_id / task_type / description。
 //
 // 【它仍然不是真 CLI】不跑模型、不认工具、不落 transcript。任何需要真回合语义的断言仍归 S5。
 
@@ -79,7 +82,7 @@ rl.on('line', (line) => {
     });
   }
 
-  if (MODE !== 'turn') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg') return;
 
   out({
     type: 'assistant',
@@ -88,6 +91,15 @@ rl.on('line', (line) => {
     parent_tool_use_id: null,
     message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
   });
+  if (MODE === 'turn-bg') {
+    out({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      tasks: [{ task_id: 'fake-bg-dev-server', task_type: 'local_bash', description: 'npm run dev' }],
+    });
+  }
   // user_message_uuid 原样回传：agent.js 的 _settleOneResultTurn 优先按 uuid 精确出槽，
   // 回传得对就不必依赖 FIFO 回落。
   out({

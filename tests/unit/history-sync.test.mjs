@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -369,6 +369,65 @@ test('catchUpStep: 满窗但 tail 未变 → 不 reload', () => {
   );
   assert.equal(r.reload, false);
   assert.deepEqual(r.emit, []);
+});
+
+// ── 满窗时己方秒回（2026-09-22 review P1）──────────────────────────────────────
+// 上面「己方写盘不得被判成终端写入」那段的满窗版本。窗口满了以后己方写入不会让 len 变长：
+// 头被 splice、尾接上新内容，于是 baseline 边界那一条（anchor）与尾条都换了——前缀重写与 SS-001
+// 两道检查都判 reload，而它们排在 entrypoint 豁免【之前】。整轮落在两次 tick 之间时就是：
+// 全量重推 + 标 externalDirty + mirrorReleaseStep 误锁「终端会话运行中」，只因为会话够长。
+const OWN_TS = (from, n) => Array.from({ length: n }, (_, i) => ({
+  role: (from + i) % 2 ? 'assistant' : 'user', content: `m${from + i}`, timestamp: `t${from + i}`, entrypoint: 'sdk-ts',
+}));
+
+test('catchUpStep: 满窗时己方秒回（头被削、尾接上 sdk-ts）→ 吸收，不 reload 不推', () => {
+  const cap = 5;
+  // 状态由 catchUpStep 自己种出来：anchorKey / lastTailKey 都是真实形态
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: OWN_TS(0, cap), localBusy: false, historyCap: cap });
+  const slid = OWN_TS(2, cap); // 己方又落盘两条：m0/m1 被挤出窗口，尾接上 m5/m6
+  const r = catchUpStep(seed.state, { messages: slid, localBusy: false, historyCap: cap });
+  assert.equal(r.reload, false, '己方写的触发了全量重推 + 标脏 + 误锁');
+  assert.deepEqual(r.emit, []);
+  assert.equal(r.state.lastTailKey, 't6|user|m6', '尾指纹要跟上，否则下一 tick 还会再判一次');
+  const next = catchUpStep(r.state, { messages: slid, localBusy: false, historyCap: cap });
+  assert.equal(next.reload, false, '吸收之后的静止 tick 不得再 reload');
+});
+
+test('catchUpStep: 己方秒回把窗口从未满撑到满（头被削、anchor 错位）→ 同样吸收', () => {
+  const cap = 5;
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: OWN_TS(0, 3), localBusy: false, historyCap: cap });
+  const grown = OWN_TS(2, cap); // 原本 3 条 + 己方 4 条 = 7，削头到 5：m0/m1 出窗，baseline 那一格换了人
+  const r = catchUpStep(seed.state, { messages: grown, localBusy: false, historyCap: cap });
+  assert.equal(r.reload, false);
+  assert.deepEqual(r.emit, [], '推回去就是重复气泡');
+  assert.equal(r.state.baseline, cap);
+});
+
+test('catchUpStep: 状态里只有 lastTailKey（没有 anchor）时，满窗己方滑动同样吸收', () => {
+  // 走的是 SS-001 那道检查而不是前缀重写那道：吸收判断必须排在两道之前
+  const cap = 5;
+  const r = catchUpStep(
+    { baseline: cap, wasBusy: false, lastTailKey: 't4|user|m4' },
+    { messages: OWN_TS(2, cap), localBusy: false, historyCap: cap },
+  );
+  assert.equal(r.reload, false);
+  assert.deepEqual(r.emit, []);
+});
+
+test('catchUpStep: 满窗滑动里有终端写的 → 照旧 reload（外部写入不能被一起吸收）', () => {
+  const cap = 5;
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: OWN_TS(0, cap), localBusy: false, historyCap: cap });
+  const slid = [...OWN_TS(1, 4), { role: 'user', content: '终端里说的', timestamp: 't5', entrypoint: 'cli' }];
+  const r = catchUpStep(seed.state, { messages: slid, localBusy: false, historyCap: cap });
+  assert.equal(r.reload, true);
+});
+
+test('catchUpStep: 满窗后上一次的尾条已不在窗口里 → 照旧 reload（分不清是谁写的，安全侧）', () => {
+  // 新写的超过一整窗，或者前缀被重写了：找不到上次的尾条就无从切出「新增的那段」
+  const cap = 5;
+  const seed = catchUpStep({ baseline: 0, wasBusy: false }, { messages: OWN_TS(0, cap), localBusy: false, historyCap: cap });
+  const r = catchUpStep(seed.state, { messages: OWN_TS(10, cap), localBusy: false, historyCap: cap });
+  assert.equal(r.reload, true);
 });
 
 // ── rebaselineAbsorbedExternal：重连重定基线是否吸收了未观察到的外部增长（BE-009 防分叉判据）──────
@@ -871,4 +930,23 @@ test.describe('readSubagentFlow', () => {
     const escaped = await readSubagentFlow(`../${projTo}/safvictim`, from, 'toolu_leak', { baseDir: BASE });
     assert.equal(escaped.ok, false, '非法 sessionId 必须在拼路径之前就被挡下');
   });
+});
+
+// ── externalHistoryExtent：重连对账时「外部写入到了第几条」（2026-09-22 review P1）────────────
+// sync:since 在 replayed>0 时不带 diskLen：web 自己的 live 轮次不更新前端的 seenDiskLen（已知边界），
+// 拿磁盘总条数去比会把每一轮己方写入都当成外部写入、每次切回都整页重载。可这样一来，断线期间
+// 终端写进同一会话的内容，在「活缓冲里也有东西」时就永远对不上账。这个量只被非己方写入推高。
+test('externalHistoryExtent: 最后一条非己方写入的位置（1-based）；己方写在后面不推高它', () => {
+  const cli = c => ({ role: 'user', content: c, entrypoint: 'cli' });
+  const own = c => ({ role: 'assistant', content: c, entrypoint: 'sdk-ts' });
+  assert.equal(externalHistoryExtent([]), 0);
+  assert.equal(externalHistoryExtent([own('a'), own('b')]), 0, '全是己方写的：没有外部写入');
+  assert.equal(externalHistoryExtent([cli('a'), cli('b'), own('c'), own('d')]), 2, '己方写在后面不推高它');
+  assert.equal(externalHistoryExtent([own('a'), cli('b'), own('c')]), 2);
+  assert.equal(externalHistoryExtent([cli('a'), own('b'), cli('c')]), 3, '终端又写了一条：推到最新那条');
+});
+
+test('externalHistoryExtent: 缺 entrypoint（老 transcript）保守当外部写入', () => {
+  // 与 catchUpStep 同一口径：不认识的来源当外部。多重载一次看得见，漏掉终端写入看不见。
+  assert.equal(externalHistoryExtent([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'x', entrypoint: 'sdk-ts' }]), 1);
 });

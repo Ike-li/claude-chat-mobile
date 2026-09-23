@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -39,6 +39,7 @@ import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
   createConfigReloader,
+  loadConfigSources,
   reloadKindOf,
   structuredToStringValues,
 } from '../ops/config-file.js';
@@ -835,6 +836,10 @@ io.use(async (socket, next) => {
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
     }
+    // 握手时出示过 AUTH_TOKEN 没有，与走哪条路鉴权无关：公网 Host 只认 JWT，但浏览器照样可能带着正确的
+    // 令牌（Access 启用前存过、或开过手动的 #token= 链接）。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）。
+    // 只是记一笔，不参与放行——公网那条路的鉴权仍然只认 JWT。
+    socket.presentedAuthToken = tokenMatches(socket.handshake.auth?.token);
 
     // 限速计数：成功清零、失败退避/锁定
     let rlResult = null;
@@ -1405,7 +1410,9 @@ function readCliSnapshotForSession(sessionId, cwd) {
 const mirrorEngine = createMirrorEngine({
   io,
   agents,
-  instanceState,
+  // 不是 instanceState：那份把后台任务折进 'busy'（抽屉口径），镜像会把纯后台任务期当成己方在写盘，
+  // 终端写入既不追平也不标脏（2026-09-22 review P0）。见 instance-manager.js driverStateOf。
+  instanceState: instanceManager.driverStateOf,
   getViewingInstanceId: () => viewingInstanceId,
   viewingCwdOf,
   serviceStartedAt: SERVICE_STARTED_AT,
@@ -4042,6 +4049,16 @@ registerSocketConnection(io, socket => {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       return ack({ ok: false, results: [{ key: '', level: 'error', message: '缺少 changes' }] });
     }
+    // 读不动当前配置就拒写（CONFIG-01）。下面写盘是「读出来 → 改几项 → 整份写回」，从 {} 长出来会把
+    // 没改的项（AUTH_TOKEN / WORKDIRS …）一起抹掉，下次启动直接起不来。判据与启动侧同一份：
+    // loadConfigSources 对坏 JSON / 顶层不是对象 fail-loud。CLI 的 config set 同场景同样拒写。
+    // 放在校验之前：拿读失败回落出来的空配置去校验，报出来的错也是错的。
+    const readConfigForWrite = () => loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+    const refuseUnreadable = err => ack({ ok: false, results: [{ key: '', level: 'error',
+      message: `${String(err?.message || err)}。已拒绝保存：从空配置重建会把其余配置项一起抹掉` }] });
+    if (usingConfigJson()) {
+      try { readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
+    }
     const current = readEnvValues();
 
     // 端口占用只在**值真的变了**时才探：当前 server 正绑在旧 PORT 上，无条件探测会恒报占用
@@ -4072,10 +4089,9 @@ registerSocketConnection(io, socket => {
     try {
       // 0600 + 唯一 tmp + fsync + rename：与 sessions / devices 同一个原子写
       if (usingConfigJson()) {
-        let currentConfig = {};
-        try {
-          currentConfig = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-        } catch { /* 读不动就从空配置长出来；校验已经过了，不该在这一步把用户挡在门外 */ }
+        // 写前重读：上面探端口有 await，这期间文件可能被改过。读不动同样拒写，理由见上。
+        let currentConfig;
+        try { currentConfig = readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
         writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(currentConfig, changes), null, 2)}\n`);
       } else {
         let text = '';
@@ -4208,6 +4224,13 @@ registerSocketConnection(io, socket => {
         const lan = lanBaseUrlForQr();
         if (!lan) return ack({ ok: false, error: '取不到局域网地址：改用公网档，或在电脑上跑 node scripts/qr.js' });
         base = lan;
+      }
+      // 【只把令牌交给握手时出示过它的会话】经 Access 进来的会话没出示过 AUTH_TOKEN（公网那条路
+      // 只认 JWT，设备审批默认也 bypass）。给它一张含令牌的码，等于把局域网钥匙发给一个本不持有
+      // 它的身份，Access 吊销之后照样能从局域网进来——与横幅掩码、logs:server 脱敏同一条泄露路径（AUTH-05）。
+      if (includeToken && !socket.presentedAuthToken) {
+        return ack({ ok: false, error: '当前会话经 Cloudflare Access 登录、不持有访问令牌，不能生成含令牌的二维码。'
+          + '新设备直接打开公网地址、完成 Access 登录即可；要局域网码请在电脑上跑 node scripts/qr.js' });
       }
       if (includeToken && !token) return ack({ ok: false, error: '未设置 AUTH_TOKEN' });
       const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
@@ -4376,8 +4399,11 @@ registerSocketConnection(io, socket => {
     // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
     // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字 = 冻结快照 + 尚未 capture 的 live。
     // PWA 切后台 socket 未断时 capture 不会跑，只回快照会把离开期间的增量丢掉。
-    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
+    // diskExternalLen=磁盘 history 里最后一条非己方写入的位置（externalHistoryExtent）。与 diskLen 不同，
+    // 它在 replayed>0 时照样带：己方 live 轮次不推高它，前端拿它比 seenDiskLen 不会把正常状态判成要重载，
+    // 而断线期间终端写进同一会话的内容只有靠它才对得上账（replayed>0 时 diskLen 恒空，见下）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0, diskExternalLen = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, diskExternalLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（重载口径：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
@@ -4402,11 +4428,18 @@ registerSocketConnection(io, socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
-    // 仅 replayed=0（活缓冲无可回放对话内容）时读磁盘 history 条数带回——正是「切入可能被外部写过的会话」候选；
-    // replayed>0=web 活跃、信活缓冲、不必对账磁盘。getSessionHistory 有 mtime 缓存，成本可忽略。
+    // diskLen 仅 replayed=0（活缓冲无可回放对话内容）时带回——正是「切入可能被外部写过的会话」候选。
+    // diskExternalLen 在 replayed>0 时也带（见 done 上方注释），但【有在途轮时不读】：文件正被己方追加，
+    // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
+    // 只等 5s——大会话会把健康连接拖成超时重连。此刻终端的并发写入本就落在已登记的「本地 turn 吸收窗」里。
     let diskLen = null;
-    if (replayed === 0) {
-      try { diskLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { diskLen = null; }
+    let diskExternalLen = null;
+    if (replayed === 0 || !(a.pendingTurns > 0)) {
+      try {
+        const history = await getSessionHistory(a.sessionId, a.cwd);
+        if (replayed === 0) diskLen = history.length;
+        diskExternalLen = externalHistoryExtent(history);
+      } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
     }
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
@@ -4420,7 +4453,7 @@ registerSocketConnection(io, socket => {
       snapshot: unreadSnapshotOnEntry.get(a.instanceId) || 0,
       live: unreadCounts.get(a.instanceId) || 0,
     });
-    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry);
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry, diskExternalLen);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
     // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。

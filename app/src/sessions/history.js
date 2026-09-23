@@ -348,6 +348,15 @@ export function historyTailKey(messages) {
   return messageKey(messages[messages.length - 1]);
 }
 
+// 上一次的尾条之后新写的条目是否全是己方（sdk-ts）。找不到那条、或它之后没有新条目时为 false。
+function ownWritesSince(messages, prevTailKey) {
+  if (prevTailKey == null) return false;
+  let i = messages.length - 1;
+  while (i >= 0 && messageKey(messages[i]) !== prevTailKey) i--;
+  if (i < 0 || i === messages.length - 1) return false;
+  return messages.slice(i + 1).every(m => isOwnSdkTail(m?.entrypoint));
+}
+
 export function catchUpStep(state, { messages, localBusy = false, historyCap = HISTORY_MAX_MESSAGES } = {}) {
   const len = messages.length;
   const tailKey = historyTailKey(messages);
@@ -358,6 +367,15 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
   }
   if (state.wasBusy) {
     // 吸收己方 turn 的写盘：重置 baseline + 同步 tail 指纹（己方写入也在窗口内）
+    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
+  }
+  // 【满窗时己方秒回】窗口满了以后己方写入不会让 len 变长：头被 splice、尾接上新内容，baseline 边界
+  // 那一条（anchor）与尾条都换了，下面的前缀重写与 SS-001 两道都会判 reload——而增长分支那道
+  // entrypoint 豁免排在它们后面，轮不到。于是整轮落在两次 tick 之间时，只因为会话够长，就全量重推 +
+  // 标脏 + 误锁（2026-09-22 review P1）。上一次的尾条还在窗口里 ⇒ 前缀没被重写（指纹带 timestamp，
+  // 重写出来的条目对不上）；它之后的就是这段时间新写的，全是 sdk-ts 就与增长分支同口径吸收。
+  // 找不到上一次的尾条（新写的超过一整窗、或确实被重写）就落回下面的检查，安全侧。
+  if (Number.isFinite(historyCap) && historyCap > 0 && len >= historyCap && ownWritesSince(messages, state.lastTailKey)) {
     return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
   }
   // 【前缀重写】已经推给前端的那一段被换掉了 → 增量无从下手，只能全量重推。
@@ -428,6 +446,18 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
       anchorKey: prevAnchor == null ? keyAt(state.baseline) : prevAnchor,
     },
   };
+}
+
+// 磁盘 history 里最后一条【非己方】写入的位置（1-based；没有则 0）。sync:since 在 replayed>0 时
+// 带给前端对账用：web 自己的 live 轮次不更新前端的 seenDiskLen（已知边界），拿总条数去比会把每一轮
+// 己方写入都当成外部写入；这个量不被己方（sdk-ts）写入推高，只有终端写入（cli，以及不认识的来源——
+// 与 catchUpStep 同口径保守当外部）才会。
+export function externalHistoryExtent(messages) {
+  if (!Array.isArray(messages)) return 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!isOwnSdkTail(messages[i]?.entrypoint)) return i + 1;
+  }
+  return 0;
 }
 
 // BE-009：客户端（重）连时 server 会强制重定 catch-up baseline（重连会 loadHistory 全量重渲，沿用滞后 baseline
