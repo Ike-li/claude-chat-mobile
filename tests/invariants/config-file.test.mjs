@@ -19,6 +19,7 @@ import {
 import {
   isSerializableEnvValue, serializeEnvValue, maskSecret, shellOverriddenKeys, applyEnvChanges,
 } from '../../app/src/ops/env-file.js';
+import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
 
 let base;
 test.before(() => { base = mkdtempSync(join(tmpdir(), 'ccm-inv-config-')); });
@@ -316,6 +317,14 @@ test.describe('shellOverriddenKeys：两个消费者共用的唯一实现', () =
     assert.deepEqual(shellOverriddenKeys(null, ['PORT']), []);
     assert.deepEqual(shellOverriddenKeys({ PORT: '1' }, []), []);
   });
+
+  // 内联 WORKDIRS 被两个不同名的 shell 键压着（优先级 WORK_DIRS > WORK_DIRS_FILE > 内联）。只按同名判，
+  // 面板那一行与正常行一模一样，改完「已保存」、运行时仍是 shell 那份（2026-09-22 review P2）。
+  test('WORKDIRS 被 shell 的 WORK_DIRS / WORK_DIRS_FILE 压着也算被覆盖；空串照旧不算', () => {
+    assert.deepEqual(shellOverriddenKeys({ WORK_DIRS: '/srv/b' }, ['WORKDIRS', 'PORT']), ['WORKDIRS']);
+    assert.deepEqual(shellOverriddenKeys({ WORK_DIRS_FILE: '/srv/w.json' }, ['WORKDIRS', 'WORK_DIRS_FILE']), ['WORKDIRS', 'WORK_DIRS_FILE']);
+    assert.deepEqual(shellOverriddenKeys({ WORK_DIRS: '' }, ['WORKDIRS']), []);
+  });
 });
 
 test.describe('applyEnvChanges：改值不得弄丢 export 前缀', () => {
@@ -438,5 +447,28 @@ test.describe('createConfigReloader：读失败保留旧快照', () => {
   test('回调缺席不抛错（onHot/onRestart 都是可选的）', () => {
     const r = createConfigReloader({ readConfig: () => ({ PORT: 1 }) });
     assert.doesNotThrow(() => { r.prime(); r.handleChange(); });
+  });
+});
+
+// 写入目标 ≠ 启动读取目标 = 假成功（docs/testing.md 失败方向表）。WORKDIRS 的读取优先级是
+// shell WORK_DIRS > WORK_DIRS_FILE > 内联 WORKDIRS，而配置文件里的 WORK_DIRS_FILE 会被投影进 process.env、
+// 与 shell 的同权——它挂着的时候面板改 WORKDIRS 报「已保存」，重启后工作区纹丝不动（2026-09-22 review P2）。
+test.describe('CONFIG-01 写了等于没写的，写入侧当场拒', () => {
+  const home = '/home/tester';
+
+  test('配置里挂着 WORK_DIRS_FILE 时改 WORKDIRS → 拒绝，并说清先清空它', () => {
+    const r = validateEnvChanges({ WORKDIRS: ['/srv/project-a'] }, { current: { WORK_DIRS_FILE: '/srv/workdirs.json' }, home });
+    assert.equal(r.ok, false, '它压着 WORKDIRS：放行就是一次「保存成功、重启后毫无变化」');
+    assert.match(r.results.find(x => x.key === 'WORKDIRS').message, /WORK_DIRS_FILE/);
+  });
+
+  test('同一批里把 WORK_DIRS_FILE 清掉（null）→ 放行（这正是出路）', () => {
+    const r = validateEnvChanges({ WORKDIRS: ['/srv/project-a'], WORK_DIRS_FILE: null },
+      { current: { WORK_DIRS_FILE: '/srv/workdirs.json' }, home });
+    assert.equal(r.ok, true, '清空之后 WORKDIRS 就是生效的那一份');
+  });
+
+  test('没挂 WORK_DIRS_FILE → 照常放行（正对照：这道闸不是恒拒）', () => {
+    assert.equal(validateEnvChanges({ WORKDIRS: ['/srv/project-a'] }, { current: {}, home }).ok, true);
   });
 });

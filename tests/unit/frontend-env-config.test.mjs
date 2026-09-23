@@ -367,3 +367,24 @@ test.describe('退出＝退回上一级', () => {
     assert.equal(h.backs.length, 1, '点在面板内容里不算关闭，不得触发退回');
   });
 });
+
+// 配置里还挂着旧版 WORK_DIRS_FILE：生效的是那份外置文件，内联工作区列表改了也不生效。服务端写入侧会拒，
+// 这里不给编辑器，并把出路说清楚——不然用户只会看到一个能改、却存不进去的列表（2026-09-22 review P2）。
+test.describe('工作区列表被 WORK_DIRS_FILE 压住', () => {
+  test('不给编辑器，说明先清空 WORK_DIRS_FILE', async () => {
+    const view = {
+      ok: true,
+      ...buildEnvView({ WORK_DIRS_FILE: '/srv/workdirs.json' }, {
+        structured: { WORK_DIRS_FILE: '/srv/workdirs.json', WORKDIRS: ['/srv/a'] },
+      }),
+      envFileExists: false,
+    };
+    const h = harness({ ackQueue: [view] });
+    h.panel.open();
+    await settle();
+    const shown = textOf(h.dom.envConfigBody);
+    assert.match(shown, /WORK_DIRS_FILE/, '得告诉用户是谁压着它');
+    assert.match(shown, /清空/, '得告诉用户出路');
+    assert.doesNotMatch(shown, /\/srv\/a/, '锁住时不该渲染出可编辑的条目');
+  });
+});

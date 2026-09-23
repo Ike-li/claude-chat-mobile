@@ -711,6 +711,58 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
       rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
     }
   });
+
+  // 2026-09-22 review P2：配置里还挂着旧版 WORK_DIRS_FILE 时生效的是那份外置文件，面板改内联 WORKDIRS
+  // 曾报「已保存」、重启后工作区纹丝不动。WORKDIRS 的值本身合法（绝对路径、不过宽），拒绝只能来自遮蔽判据。
+  test('WORK_DIRS_FILE 挂着时改 WORKDIRS 被拒，原文件一字不动', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    const original = `${JSON.stringify({ WORK_DIRS_FILE: join(tmpDir, 'workdirs.json'), WORKDIRS: ['/srv/work'] }, null, 2)}\n`;
+    writeFileSync(cfg, original);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { WORKDIRS: ['/srv/other'] } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, false, `应明确拒绝：${JSON.stringify(ack)}`);
+      assert.ok(ack.results?.some(r => r.key === 'WORKDIRS' && /WORK_DIRS_FILE/.test(r.message)),
+        `拒绝原因要指明是 WORK_DIRS_FILE 压着：${JSON.stringify(ack.results)}`);
+      assert.equal(readFileSync(cfg, 'utf8'), original, '被拒的写入不得落盘');
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
+    }
+  });
+
+  // 上一条的出路：同一批里把 WORK_DIRS_FILE 清掉（null）就放行——拒绝不能把「迁回内联」这条路也堵死。
+  test('同一批清空 WORK_DIRS_FILE 再改 WORKDIRS 照常写入', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    writeFileSync(cfg, `${JSON.stringify({ WORK_DIRS_FILE: join(tmpDir, 'workdirs.json'), WORKDIRS: ['/srv/work'] }, null, 2)}\n`);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { WORK_DIRS_FILE: null, WORKDIRS: ['/srv/other'] } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `清空 WORK_DIRS_FILE 的同一批应能写入：${JSON.stringify(ack)}`);
+      const onDisk = JSON.parse(readFileSync(cfg, 'utf8'));
+      assert.equal(Object.hasOwn(onDisk, 'WORK_DIRS_FILE'), false, `WORK_DIRS_FILE 应被删掉：${JSON.stringify(onDisk)}`);
+      assert.deepEqual(onDisk.WORKDIRS, ['/srv/other'], `WORKDIRS 应为新值：${JSON.stringify(onDisk)}`);
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
+    }
+  });
 });
 
 // ---- helpers ----

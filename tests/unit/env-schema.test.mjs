@@ -173,8 +173,12 @@ test.describe('类型校验', () => {
     assert.match(r.results[0].message, /占用/);
   });
 
+  // 样本用 CLAUDE_BIN（mustExist 的路径项）：WORK_DIRS_FILE 自 2026-09-23 起只许清空，拿它当样本
+  // 会因为那条规则先红，这里要测的「路径不存在」就成了空测。
   test('路径不存在 → error', () => {
-    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: '/nope' }, deps({ fileExists: () => false })).ok, false);
+    const r = validateEnvChanges({ CLAUDE_BIN: '/nope' }, deps({ fileExists: () => false }));
+    assert.equal(r.ok, false);
+    assert.match(r.results[0].message, /不存在/);
   });
 
   test('CLAUDE_BIN 不可执行 → error', () => {
@@ -182,7 +186,9 @@ test.describe('类型校验', () => {
   });
 
   test('相对路径 → error（启动后 cwd 未必是仓库根）', () => {
-    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: './rel' }, deps()).ok, false);
+    const r = validateEnvChanges({ LOG_FILE: './rel' }, deps());
+    assert.equal(r.ok, false);
+    assert.match(r.results[0].message, /绝对路径/);
   });
 
   test('toggle 只接受声明过的字面量', () => {
@@ -275,9 +281,9 @@ test.describe('成套配置：全设或全空', () => {
 
 test.describe('全或无', () => {
   test('一项 error 就整体拒写，即使其它项都合法', () => {
-    const r = validateEnvChanges({ PORT: '8080', WORK_DIRS_FILE: '/nope' }, deps({ fileExists: (p) => p !== '/nope' }));
+    const r = validateEnvChanges({ PORT: '8080', CLAUDE_BIN: '/nope' }, deps({ fileExists: (p) => p !== '/nope' }));
     assert.equal(r.ok, false);
-    assert.deepEqual(errorsOf(r), ['WORK_DIRS_FILE']);
+    assert.deepEqual(errorsOf(r), ['CLAUDE_BIN']);
   });
 
   test('warn 不阻断（但要报出来让 UI 弹确认）', () => {
@@ -408,7 +414,7 @@ test.describe('校验期与序列化期对齐', () => {
   // 报错文案还在讲一台机器上根本不存在的 .env。
   test('JSON 部署（usingConfigJson:true）下单引号与反斜杠结尾均放行', () => {
     assert.equal(validateEnvChanges({ NTFY_TOKEN: "it's mine" }, deps({ usingConfigJson: true })).ok, true);
-    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: '/Users/O\'Brien/wd.json' }, deps({ usingConfigJson: true })).ok, true);
+    assert.equal(validateEnvChanges({ LOG_FILE: '/Users/O\'Brien/ccm.log' }, deps({ usingConfigJson: true })).ok, true);
   });
 
   test('含换行同样在校验期拒（不受部署方式影响——不是 dotenv 专属问题）', () => {
@@ -849,5 +855,26 @@ test.describe('buildEnvView：老式 .env 安装下的结构化列表', () => {
     const item = findWorkdirs(buildEnvView({ PORT: '3000' }, { structured: { PORT: 3000 } }));
     assert.equal(item.locked, undefined);
     assert.deepEqual(item.list, []);
+  });
+
+  // 同一族的假成功：配置里还挂着旧版 WORK_DIRS_FILE 时，生效的是那份外置文件（它压过内联 WORKDIRS）。
+  // 列表照样能改、能存，重启后工作区纹丝不动（2026-09-22 review P2）。写入侧会拒，这里先别给编辑入口。
+  test('配置里挂着 WORK_DIRS_FILE → 标 locked=work-dirs-file，前端据此锁掉编辑器', () => {
+    const item = findWorkdirs(buildEnvView({ WORK_DIRS_FILE: '/srv/workdirs.json' }, {
+      structured: { WORK_DIRS_FILE: '/srv/workdirs.json', WORKDIRS: ['/srv/a'] },
+    }));
+    assert.equal(item.locked, 'work-dirs-file');
+  });
+
+  // shell 里的 WORK_DIRS / WORK_DIRS_FILE 同样压过内联 WORKDIRS，但它们不是同名键，
+  // 同名键那套 overriddenByEnv 判据看不见——面板上这一行与正常行长得一模一样。
+  test('shell 设了 WORK_DIRS 或 WORK_DIRS_FILE → WORKDIRS 标 overriddenByEnv', () => {
+    const structured = { WORKDIRS: ['/srv/a'] };
+    for (const shellEnv of [{ WORK_DIRS: '/srv/b' }, { WORK_DIRS_FILE: '/srv/workdirs.json' }]) {
+      const item = findWorkdirs(buildEnvView({}, { structured, shellEnv }));
+      assert.equal(item.overriddenByEnv, true, `${Object.keys(shellEnv)[0]} 压着它，却没标出来`);
+    }
+    assert.equal(findWorkdirs(buildEnvView({}, { structured, shellEnv: { WORK_DIRS: '' } })).overriddenByEnv, false,
+      '空串按「未设置」口径不计');
   });
 });
