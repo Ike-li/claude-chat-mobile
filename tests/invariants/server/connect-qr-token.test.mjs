@@ -108,6 +108,14 @@ test.describe('AUTH-05: connect:qr 只给出示过令牌的会话出含令牌的
     assert.equal(typeof r.error, 'string', `拒绝要带给用户看的原因：${brief(r)}`);
   });
 
+  // 判据是「握手时出示过令牌」，不是「走的哪条鉴权路」：公网 Host 只认 JWT，但浏览器照样可能带着正确的
+  // 令牌（Access 启用前就存过、或打开过手动的 #token= 链接）。它本来就持有令牌，拒绝它只是误伤。
+  test('Access 会话同时带着正确令牌 → 照常拿到局域网码', async () => {
+    const r = await requestQr({ ...viaAccess(), auth: { token: TOKEN } }, 'lan');
+    assert.equal(r?.ok, true, `出示过令牌的会话不该被拒：${brief(r)}`);
+    assert.ok(r.url.includes(`#token=${TOKEN}`), `局域网码里应带令牌：${r.url}`);
+  });
+
   test('Access 会话要公网码 → 照常拿到不含令牌的码', async () => {
     const r = await requestQr(viaAccess(), 'public');
     assert.equal(r?.ok, true, `Access 会话的公网码不该受影响：${brief(r)}`);

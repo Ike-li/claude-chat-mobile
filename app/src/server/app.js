@@ -833,9 +833,11 @@ io.use(async (socket, next) => {
     // 同 HTTP 侧：不留「无 token 放行」的分支（§1.9 鉴权是启动前提，无 token 起不来）。
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
-      // 只有这条路证明过持有 AUTH_TOKEN。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）
-      socket.presentedAuthToken = true;
     }
+    // 握手时出示过 AUTH_TOKEN 没有，与走哪条路鉴权无关：公网 Host 只认 JWT，但浏览器照样可能带着正确的
+    // 令牌（Access 启用前存过、或开过手动的 #token= 链接）。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）。
+    // 只是记一笔，不参与放行——公网那条路的鉴权仍然只认 JWT。
+    socket.presentedAuthToken = tokenMatches(socket.handshake.auth?.token);
 
     // 限速计数：成功清零、失败退避/锁定
     let rlResult = null;
