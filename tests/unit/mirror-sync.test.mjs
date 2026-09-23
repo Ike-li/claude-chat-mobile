@@ -384,16 +384,33 @@ test('mirrorEntryLock：registryWaiting 豁免陈旧检查但不无中生有造�
   assert.equal(mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false);
 });
 
-test('mirrorReleaseStep：registryWaiting 维持已有的锁，但未锁时不造锁', () => {
-  // 已锁 + 终端在等人 → 维持、静默清零（等审批可长达 30 分钟，不能被 12.5s 静默窗解锁）
-  let r = mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true });
+test('mirrorReleaseStep：registryWaiting 在尾部 pending 时维持已有的锁，但未锁时不造锁', () => {
+  // 已锁 + 终端卡在审批框上等人（尾部 pending）→ 维持、静默清零（等审批可长达 30 分钟，不能被 12.5s 静默窗解锁）
+  let r = mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true, tailPending: true });
   assert.deepEqual(r, { readonly: true, state: { readonly: true, quietTicks: 0 } });
+  // 尾部 pending 是己方 sdk-ts 残留、但真有一个活终端卡在这个会话的对话框上 → 仍维持（有意）。
+  // sdk-ts 豁免防的是「没有终端却自锁」；这里终端就在，误锁可点「续接」化解，误放行的分叉不可逆。
+  r = mirrorReleaseStep({ readonly: true, quietTicks: 4 }, { registryWaiting: true, tailPending: true, tailEntrypoint: 'sdk-ts' });
+  assert.equal(r.readonly, true, '活终端卡在对话框上时，不能靠 sdk-ts 豁免把锁放掉');
   // 未锁 → 不造锁（与 registryBusy 的关键差别）
-  r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryWaiting: true });
+  r = mirrorReleaseStep({ readonly: false, quietTicks: 0 }, { registryWaiting: true, tailPending: true });
   assert.equal(r.readonly, false);
   // 不传 → 既有行为不变（已锁且真静默 → 照常累计 quietTicks）
   r = mirrorReleaseStep({ readonly: true, quietTicks: 0 }, {});
   assert.equal(r.state.quietTicks, 1);
+});
+
+// 上一条的另一半：waiting 的三项作用都限定在「轮次确实卡在中间」（尾部 pending）这个前提上，
+// 入口侧（mirrorEntryLock）早就这么判了，出口侧原先没有——终端轮次已收尾、只是开着 /model 对话框
+// 忘了关，已经建立的锁就一直解不掉，手机一直只读。
+test('mirrorReleaseStep：终端轮次已收尾、只是开着对话框（/model 忘了关）→ 攒够静默照常解锁', () => {
+  let state = { readonly: true, quietTicks: 0 };
+  let readonly = true;
+  for (let i = 0; i < MIRROR_RELEASE_QUIET_TICKS + 3; i++) {
+    ({ readonly, state } = mirrorReleaseStep(state, { registryWaiting: true, tailPending: false, tailEntrypoint: 'cli' }));
+  }
+  assert.equal(readonly, false,
+    '尾部已 settled：终端没有卡在任何一轮中间，只是停在对话框上。维持锁等于让一个忘关的对话框把手机永久锁成只读');
 });
 
 test('mirrorStaleFlag：registryWaiting 压制"疑似中断"——等你按键不是进程死了', () => {
