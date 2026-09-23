@@ -236,6 +236,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
     // 档位区块留在原地并说明原因（见 P0-09p）；底栏 pill 仍隐藏——没有档位可显示，空 chip 是噪音。
     // 行为契约不变：档位清回 model-default，隐藏的兼容 select 置空。
+    // 先等服务端 effort_mode(null) 回执落地：隐藏分支同步置空 select，回执随后才到。早于回执断言
+    // 只会看到瞬时的 ''，放过稳定态的错误（回执把 select 改回 'auto'，CI 上撞到过）。
+    await expect(page.locator('#messages')).toContainText('思考强度 → auto');
     await expect(page.locator('.effort-tile')).toHaveCount(0);
     await expect(page.locator('#pillEffort')).toHaveClass(/hidden/);
     await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
