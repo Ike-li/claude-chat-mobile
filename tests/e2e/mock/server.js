@@ -458,6 +458,10 @@ function resetMockState() {
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
+  // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
+  // 同片时 1.2s 假绿（单跑要真等 15s）。
+  dupOptimisticArmed = false;
   staleInstancesOnNextNew = false;
   replaySmallSyncArmed = false;
   replaySmallExternalArmed = false;
@@ -468,6 +472,7 @@ function resetMockState() {
   activeEpoch = 'mock-epoch-init';
   deniedDeviceRetryPending = false;
   mockSessionLogsByInstance = new Map();
+  mockDiagLogsByInstance = new Map();
 }
 
 function pendingFreshPermissionOrDefault() {
