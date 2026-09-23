@@ -116,6 +116,15 @@ export function shellOverriddenKeys(shellEnv, keys = []) {
   return keys.filter((k) => isSet(k) || (Object.hasOwn(SHELL_OVERRIDE_ALIASES, k) && SHELL_OVERRIDE_ALIASES[k].some(isSet)));
 }
 
+// 上面返回的是被压住的**配置键**（面板按它标行）；要让用户 unset 的是 shell 里**真正设着的变量名**。
+// 两者只在别名处不同：WORKDIRS 被 WORK_DIRS 压着时，`unset WORKDIRS` 什么也清不掉（2026-09-23 #152 review）。
+export function shellOverrideSources(shellEnv, keys = []) {
+  const env = shellEnv && typeof shellEnv === 'object' ? shellEnv : {};
+  const isSet = (k) => typeof env[k] === 'string' && env[k] !== '';
+  const names = shellOverriddenKeys(env, keys).flatMap((k) => (isSet(k) ? [k] : SHELL_OVERRIDE_ALIASES[k].filter(isSet)));
+  return [...new Set(names)];
+}
+
 // 行首是不是某个 key 的赋值行。容忍 `export KEY=`（有人习惯这么写）与两侧空白。
 //
 // 返回 { key, prefix }：prefix 是 `=` 之前、key 之前的那一段原文（缩进 + 可能的 `export `）。

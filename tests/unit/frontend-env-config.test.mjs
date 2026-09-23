@@ -385,6 +385,10 @@ test.describe('工作区列表被 WORK_DIRS_FILE 压住', () => {
     const shown = textOf(h.dom.envConfigBody);
     assert.match(shown, /WORK_DIRS_FILE/, '得告诉用户是谁压着它');
     assert.match(shown, /清空/, '得告诉用户出路');
+    // 这个锁定态只在 ccm.config.json 下出现，而 config migrate 在配置文件已存在时直接拒绝——那条路走不通。
+    // WORK_DIRS_FILE 是启动时投影进进程环境的，清掉它要重启才生效，不说的话用户清完就去改列表，照样不生效。
+    assert.doesNotMatch(shown, /migrate/, '不能推荐一个在这个状态下走不通的命令');
+    assert.match(shown, /重启/, '清空 WORK_DIRS_FILE 要重启才生效，得说出来');
     assert.doesNotMatch(shown, /\/srv\/a/, '锁住时不该渲染出可编辑的条目');
   });
 });

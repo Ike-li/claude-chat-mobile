@@ -521,8 +521,8 @@ function checkWorkdirsShadowed(changes, current) {
   if (typeof file !== 'string' || !file.trim()) return [];
   return [{
     key: 'WORKDIRS', level: 'error',
-    message: '工作区列表此刻被 WORK_DIRS_FILE（旧版外置文件）压着，改了不会生效。先把 WORK_DIRS_FILE 清空'
-      + '（或在电脑上用 node scripts/config.js migrate 把那份文件内联进来），再改这里',
+    message: '工作区列表此刻被 WORK_DIRS_FILE（旧版外置文件）压着，改了不会生效。在同一次保存里把 WORK_DIRS_FILE 清空即可'
+      + '（它是启动时读进进程的，清空后要重启 server 才换成这里的列表）',
   }];
 }
 
@@ -761,11 +761,13 @@ export function validateEnvChanges(changes, d) {
     // WORK_DIRS_FILE 只能清空（2026-09-22 review P2）。它决定授权工作区从【哪个文件】读：能从面板 / CLI 设它，
     // 就能把工作区换成任意一个已存在文件里写的东西——下面 checkList 那道过宽根校验（M2）只看 WORKDIRS 的值，
     // 对它形同虚设，而那份文件的内容还是热加载的。该键已被 WORKDIRS 取代，旧部署用 config migrate 内联。
-    if (key === 'WORK_DIRS_FILE' && value !== null) {
+    // 这是**改动**规则：config check 校验现有配置时（validatingExisting）不适用——仍在用旧版外置文件的配置
+    // 运行时照常支持，照样走下面的路径校验（指向的文件必须存在）。
+    if (key === 'WORK_DIRS_FILE' && value !== null && !d?.validatingExisting) {
       results.push({
         key, level: 'error',
         message: `${def.label.zh} 只能清空、不能在这里设置：它决定工作区从哪个文件读，指向任意文件就绕过了工作区列表的校验。`
-          + '请直接改工作区列表；旧的外置文件可在电脑上用 node scripts/config.js migrate 内联进来',
+          + '请直接改工作区列表',
       });
       continue;
     }
@@ -796,7 +798,8 @@ export function validateEnvChanges(changes, d) {
   }
 
   results.push(...checkTogether(changes || {}, d?.current || {}));
-  results.push(...checkWorkdirsShadowed(changes || {}, d?.current || {}));
+  // 同上是改动规则：校验现有配置时，两个键同时在只说明内联那份暂时没用上，不算非法。
+  if (!d?.validatingExisting) results.push(...checkWorkdirsShadowed(changes || {}, d?.current || {}));
   results.push(...checkCfAccessTeardown(changes || {}, d?.current || {}));
   results.push(...checkAccessProfileConsistency(changes || {}, d?.current || {}));
   results.push(...checkBindConsistency(changes || {}, d?.current || {}));

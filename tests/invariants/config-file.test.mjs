@@ -459,7 +459,9 @@ test.describe('CONFIG-01 写了等于没写的，写入侧当场拒', () => {
   test('配置里挂着 WORK_DIRS_FILE 时改 WORKDIRS → 拒绝，并说清先清空它', () => {
     const r = validateEnvChanges({ WORKDIRS: ['/srv/project-a'] }, { current: { WORK_DIRS_FILE: '/srv/workdirs.json' }, home });
     assert.equal(r.ok, false, '它压着 WORKDIRS：放行就是一次「保存成功、重启后毫无变化」');
-    assert.match(r.results.find(x => x.key === 'WORKDIRS').message, /WORK_DIRS_FILE/);
+    const msg = r.results.find(x => x.key === 'WORKDIRS').message;
+    assert.match(msg, /WORK_DIRS_FILE/);
+    assert.doesNotMatch(msg, /migrate/, 'JSON 配置下 config migrate 走不通（配置文件已存在就拒绝），不能指这条路');
   });
 
   test('同一批里把 WORK_DIRS_FILE 清掉（null）→ 放行（这正是出路）', () => {

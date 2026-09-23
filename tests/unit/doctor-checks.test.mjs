@@ -941,6 +941,17 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
     }
   });
 
+  // WORKDIRS 被不同名的 shell 变量压着（WORK_DIRS / WORK_DIRS_FILE）。列出的被覆盖项是配置键 WORKDIRS，
+  // 但清除命令必须给真正设着的那个变量名——`unset WORKDIRS` 什么也清不掉（2026-09-23 #152 review）。
+  test('WORKDIRS 被不同名变量压着：清除命令给真变量名，不给 WORKDIRS', () => {
+    for (const keys of [['WORKDIRS'], ['WORKDIRS', 'WORK_DIRS']]) {
+      const d = envOverrideDiagnostic({ shellEnv: { WORK_DIRS: '/srv/x' }, keys, lang: 'zh' });
+      assert.equal(d.status, 'warn');
+      assert.ok(d.keys.includes('WORKDIRS'), '被覆盖的配置键照样要列出来');
+      assert.match(d.detail, /`unset WORK_DIRS`/, `keys=${keys}：${d.detail}`);
+    }
+  });
+
   test('空串按「未设置」口径不计（与 data-dir/normalizeLoadedEnvironment 同口径）', () => {
     const d = envOverrideDiagnostic({ shellEnv: { PORT: '' }, keys: ['PORT'], lang: 'zh' });
     assert.equal(d.status, 'ok');

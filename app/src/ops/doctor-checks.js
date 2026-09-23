@@ -1,6 +1,6 @@
 // 本文件此前零 import（纯决策函数）。唯一的例外是 shellOverriddenKeys —— 它必须与配置面板
 // 共用同一份实现，见 env-file.js 处注释（判据分叉时两边都不报错，只有用户被误导）。
-import { shellOverriddenKeys } from './env-file.js';
+import { shellOverriddenKeys, shellOverrideSources } from './env-file.js';
 import { ACCESS_PROFILES, overlyBroadWorkdir } from './env-schema.js';
 import { isBlankToken, resolveBindPlan } from '../shared/bind-host.js';
 
@@ -711,7 +711,8 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
   // 清除方式只给「真能清掉」的两条。**别建议 exec**：exec 只换进程映像、环境原样继承
   // （2026-08-19 照提示跑 exec zsh，doctor 输出一字未变）。同理开新标签页也没用——
   // 变量若在终端 app 进程上，每个新标签页都继承，只有整个 app 退出重开才换得掉。
-  const unsetCmd = `unset ${hits.join(' ')}`;
+  // 列的是被压住的配置键，清的是真正设着的变量名——两者在 WORKDIRS 这种别名处不同。
+  const unsetCmd = `unset ${shellOverrideSources(shellEnv, keys).join(' ')}`;
   return {
     status: 'warn',
     keys: hits,

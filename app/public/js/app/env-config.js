@@ -284,7 +284,7 @@ export function createEnvConfigPanel({
         // 同一族：配置里还挂着旧版 WORK_DIRS_FILE，生效的是那份外置文件，这里改了不生效（服务端写入侧也会拒）。
         // 同样提前 return、不登记进 fields。出路就在这个面板里：把 WORK_DIRS_FILE 那一项清空。
         row.append(el('div', 'text-[10px] text-warning leading-relaxed',
-          t('工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存（或在电脑上跑 node scripts/config.js migrate 把那份文件内联进来），再回来编辑。')));
+          t('工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。')));
         return row;
       }
       else if (item.kind === 'list') row.append(buildListEditor(item, field));

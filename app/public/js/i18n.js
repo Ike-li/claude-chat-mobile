@@ -426,8 +426,8 @@ export const EN_DICT = Object.freeze({
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
-  '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存（或在电脑上跑 node scripts/config.js migrate 把那份文件内联进来），再回来编辑。':
-    'The workspace list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below and save (or run `node scripts/config.js migrate` on the computer to inline that file), then come back.',
+  '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
+    'The workspace list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below, save, restart the server, then come back to edit (until the restart, that file still applies).',
   '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
   '立即重启': 'Restart now',
   '立即重启服务': 'Restart the service now',
