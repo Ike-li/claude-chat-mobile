@@ -70,7 +70,7 @@ import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
-import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
+import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
@@ -3357,16 +3357,12 @@ registerSocketConnection(io, socket => {
     // G5：回退是覆盖式写文件，工作区里没提交的活会被无声冲掉。
     // 【只报真有风险的那部分】不是「工作区 dirty 就警告」——开发中 dirty 是常态，每次都弹
     // 用户三次之后就学会无视了。只报「回退会碰 且 改动没进 git 对象库」的交集，判据见
-    // files/git-workspace.js 的 riskyUncommittedPaths。
+    // files/git-workspace.js 的 riskyUncommittedPaths；取改动的范围是整仓而不是工作区子树（见 rewindDirtyOverlap）。
     // 失败方向是【放行】：非 git 仓库、git 读失败、超时 —— 一律不拦也不警告。
     // 这条是知情提示不是安全闸，为它挡住一次合法回退才是更坏的结果。
     let dirtyOverlap = [];
     try {
-      const repoRoot = await gitRepoRoot(cwd);
-      if (repoRoot) {
-        const changes = await listGitChanges(cwd);
-        dirtyOverlap = overlapRiskyFiles(filesChanged, riskyUncommittedPaths(changes), repoRoot);
-      }
+      dirtyOverlap = await rewindDirtyOverlap(cwd, filesChanged);
     } catch (err) {
       console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
     }

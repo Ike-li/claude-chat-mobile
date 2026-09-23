@@ -1,6 +1,10 @@
 // tests/unit/git-workspace.test.mjs —— 工作区 git status/diff 只读能力（零 token）
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   parsePorcelainZ,
   classifyGitEntries,
@@ -11,6 +15,7 @@ import {
   MAX_GIT_DIFF_BYTES,
   riskyUncommittedPaths,
   overlapRiskyFiles,
+  rewindDirtyOverlap,
 } from '../../app/src/files/git-workspace.js';
 
 describe('parsePorcelainZ：解析 git status --porcelain=v1 -z', () => {
@@ -333,5 +338,94 @@ test.describe('overlapRiskyFiles（G5 的交集判定）', () => {
     assert.deepEqual(overlapRiskyFiles(null, ['a'], '/repo'), []);
     assert.deepEqual(overlapRiskyFiles(['/repo/a'], [], '/repo'), []);
     assert.deepEqual(overlapRiskyFiles(['/repo/a'], ['a'], null), []);
+  });
+});
+
+// ── 真 git：工作区是 monorepo 的一个子目录（2026-09-22 review P2）──────────────────────────
+// `git status --porcelain` 的路径【恒相对仓库根】（git 文档：porcelain 不认 status.relativePaths），
+// 且不带 pathspec 时列的是整仓改动。旧实现原样透传，于是工作区设成 `<仓库>/packages/foo` 时：
+//   · 面板把范围外兄弟目录（packages/bar）的文件名也列了出来；
+//   · 列表里的路径是 `packages/foo/src/a.js`，拿去 `git -C <foo> diff -- packages/foo/src/a.js`
+//     被当成相对 cwd 的 pathspec，指到 foo/packages/foo/…，diff 一律为空。
+// 路径门（status / diff 的 pathspec）属于「被测时必须是真的」那一类（docs/testing.md §2），这里起真 git。
+describe('真 git：工作区是 monorepo 子目录', () => {
+  // 隔离用户自己的 git 配置（全局 hooks、status.showUntrackedFiles 之类会改输出）；本文件独占进程，改 env 不外溢
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  const roots = [];
+  after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); }); // safe-rm: 下面 mkdtemp 出来的一次性仓库
+
+  function makeMonorepo() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-git-mono-')));
+    roots.push(root);
+    const git = (...args) => execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+      '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8' });
+    git('init', '-q');
+    const put = (rel, text) => { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), text); };
+    put('README.md', 'root\n');
+    put('packages/foo/src/a.js', 'a1\n');
+    put('packages/foo/src/old.js', 'same content\n');
+    put('packages/bar/b.js', 'b1\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    // 工作区内：改一个、新建一个、暂存一个纯改名；工作区外：改仓库根与兄弟包
+    put('packages/foo/src/a.js', 'a2\n');
+    put('packages/foo/new.txt', 'n\n');
+    git('mv', 'packages/foo/src/old.js', 'packages/foo/src/renamed.js');
+    put('README.md', 'root changed\n');
+    put('packages/bar/b.js', 'b2\n');
+    return { root, foo: join(root, 'packages', 'foo') };
+  }
+
+  test('只列工作区子树里的改动，路径相对工作区——兄弟包与仓库根的文件名不外露', async () => {
+    const { foo } = makeMonorepo();
+    const r = await listGitChanges(foo);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const all = [...r.staged, ...r.unstaged, ...r.untracked, ...r.conflicted].map(e => e.path);
+    assert.deepEqual(r.unstaged.map(e => e.path), ['src/a.js']);
+    assert.deepEqual(r.untracked.map(e => e.path), ['new.txt']);
+    assert.deepEqual(r.staged.map(e => e.path), ['src/renamed.js']);
+    assert.equal(r.staged[0].oldPath, 'src/old.js', '改名两端都在工作区里：两端都相对工作区');
+    assert.ok(!all.some(p => p.includes('bar') || p === 'README.md'),
+      `工作区外的改动不该出现在这个工作区的面板里，实际 ${JSON.stringify(all)}`);
+  });
+
+  test('列表里的路径原样拿去取 diff，得到的是那个文件的真实改动（不是空）', async () => {
+    const { foo } = makeMonorepo();
+    const listed = (await listGitChanges(foo)).unstaged[0].path;
+    const d = await readGitDiff(foo, listed, 'unstaged');
+    assert.equal(d.ok, true, JSON.stringify(d));
+    assert.equal(d.empty, false, `面板点开 ${listed} 看到的是空 diff——列表路径与 diff 的 pathspec 基准对不上`);
+    assert.match(d.patch, /\+a2/);
+  });
+
+  test('子目录里的纯改名：diff 复核出改名，而不是显示成整份新增', async () => {
+    const { foo } = makeMonorepo();
+    const d = await readGitDiff(foo, 'src/renamed.js', 'staged');
+    assert.equal(d.ok, true, JSON.stringify(d));
+    assert.match(d.patch, /rename from/, `应复核成改名，实际：\n${d.patch}`);
+    assert.doesNotMatch(d.patch, /new file mode/);
+  });
+
+  test('工作区就是仓库根时行为不变：整仓改动、路径相对仓库根', async () => {
+    const { root } = makeMonorepo();
+    const r = await listGitChanges(root);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.unstaged.map(e => e.path).sort(), ['README.md', 'packages/bar/b.js', 'packages/foo/src/a.js']);
+    assert.deepEqual(r.untracked.map(e => e.path), ['packages/foo/new.txt']);
+  });
+
+  // Rewind 的 G5 要的是另一种视角：回退会写回会话碰过的所有文件，不限于工作区子树。所以它对仓库根取改动，
+  // 不能跟着面板一起收窄——否则会话改过兄弟包里的文件时，那里没提交的活被回退冲掉也不再预警。
+  test('G5：工作区是子目录时，仍看得到回退会碰到的兄弟包里未提交的改动', async () => {
+    const { root, foo } = makeMonorepo();
+    const hit = await rewindDirtyOverlap(foo, [join(root, 'packages', 'bar', 'b.js'), join(root, 'packages', 'foo', 'src', 'a.js')]);
+    assert.deepEqual(hit.sort(), ['packages/bar/b.js', 'packages/foo/src/a.js']);
+  });
+
+  test('G5：不是 git 仓库 → 空数组（静默放行）', async () => {
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-git-plain-')));
+    roots.push(plain);
+    assert.deepEqual(await rewindDirtyOverlap(plain, [join(plain, 'x.txt')]), []);
   });
 });

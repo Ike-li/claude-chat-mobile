@@ -125,6 +125,18 @@ export function assertSafeRelPath(cwd, relPath) {
   return resolved;
 }
 
+// porcelain 条目（路径相对仓库根）→ 相对 cwd。prefix 是 cwd 相对仓库根的前缀（带尾斜杠，仓库根时为空串）。
+// `-- .` 之下只剩改名的原路径可能落在 cwd 外：那一端只摘掉 oldPath，不把兄弟目录的名字带出去。
+// 恰好等于 cwd 本身的条目（整个工作区都未跟踪时 status 会折叠成这一行）没有相对路径可言，丢掉。
+function relativeToCwd(entry, prefix) {
+  if (!prefix) return entry;
+  if (!entry.path.startsWith(prefix)) return null;
+  const path = entry.path.slice(prefix.length);
+  if (!path) return null;
+  const { oldPath, ...rest } = entry;
+  return oldPath && oldPath.startsWith(prefix) ? { ...rest, path, oldPath: oldPath.slice(prefix.length) } : { ...rest, path };
+}
+
 function isNotGitError(err) {
   // 退出码 128 也会用于权限不足、索引损坏等其它致命错误，不能单凭 code 判定；只认错误文案。
   const msg = `${err?.message || ''} ${err?.stderr || ''} ${err?.stdout || ''}`.toLowerCase();
@@ -162,9 +174,19 @@ export async function listGitChanges(cwd, opts = {}) {
     }
   }
 
+  // porcelain 的路径【恒相对仓库根】（不认 status.relativePaths），不带 pathspec 时列的是整仓改动。工作区是
+  // 仓库子目录（monorepo 的一个包）时两样都不对：面板会列出范围外兄弟目录的文件名；列表路径拿去当 diff 的
+  // pathspec 又是按 cwd 解析的，指到 <cwd>/<仓库相对路径>，diff 一律为空（2026-09-22 review P2，真 git 实测）。
+  // 所以用 `-- .` 把范围收到 cwd 子树，再按 --show-prefix 把路径换成相对 cwd。
+  let prefix = '';
+  try {
+    const p = await gitExec(cwd, ['rev-parse', '--show-prefix'], { timeoutMs, maxBuffer, execFile });
+    prefix = String(p.stdout || '').trim();
+  } catch { /* 取不到前缀就按仓库根处理；真不是仓库时下面的 status 会报 not_git */ }
+
   let statusOut;
   try {
-    const st = await gitExec(cwd, ['status', '--porcelain=v1', '-z'], { timeoutMs, maxBuffer, execFile });
+    const st = await gitExec(cwd, ['status', '--porcelain=v1', '-z', '--', '.'], { timeoutMs, maxBuffer, execFile });
     statusOut = st.stdout;
   } catch (err) {
     if (isNotGitError(err)) {
@@ -173,7 +195,7 @@ export async function listGitChanges(cwd, opts = {}) {
     return { ok: false, code: 'git_error', error: err.message || 'git status 失败' };
   }
 
-  const all = parsePorcelainZ(statusOut);
+  const all = parsePorcelainZ(statusOut).map(e => relativeToCwd(e, prefix)).filter(Boolean);
   const truncated = all.length > maxEntries;
   const sliced = truncated ? all.slice(0, maxEntries) : all;
   const classified = classifyGitEntries(sliced);
@@ -190,10 +212,12 @@ export async function listGitChanges(cwd, opts = {}) {
 
 // 单 pathspec 的 diff 若判给 relPath 一方的全量新增/删除，可能是重命名的另一端被 pathspec 排除、配不上对；
 // 用不带 pathspec 的 name-status 复核是否命中一条 rename/copy 记录，命中则回传双路径供重新 diff。
+// --relative：name-status 的路径默认相对仓库根，而 relPath 相对 cwd（见 listGitChanges）——工作区是仓库子目录时
+// 两边对不上，改名永远配不成对。加上它路径改为相对 cwd，且只列 cwd 子树里的改动。
 async function findRenamePair(cwd, side, relPath, execOpts) {
   const args = side === 'staged'
-    ? ['diff', '--cached', '--name-status', '-M', '-z']
-    : ['diff', '--name-status', '-M', '-z'];
+    ? ['diff', '--cached', '--name-status', '-M', '-z', '--relative']
+    : ['diff', '--name-status', '-M', '-z', '--relative'];
   let out;
   try {
     const r = await gitExec(cwd, args, execOpts);
@@ -349,6 +373,16 @@ export function overlapRiskyFiles(filesChanged, riskyRelPaths, repoRoot) {
   if (!Array.isArray(filesChanged) || !Array.isArray(riskyRelPaths) || !repoRoot) return [];
   const changed = new Set(filesChanged);
   return riskyRelPaths.filter(rel => changed.has(join(repoRoot, rel)));
+}
+
+// G5 的完整判定：回退会碰的文件里，哪些有没进 git 的改动。非 git 仓库 / 读失败返回 []（静默放行）。
+// 对【仓库根】取改动而不是对 cwd：回退写回的是会话碰过的所有文件，不限于工作区子树——面板那种收窄
+// 在这里会漏掉兄弟包里没提交的活。
+export async function rewindDirtyOverlap(cwd, filesChanged, opts = {}) {
+  const repoRoot = await gitRepoRoot(cwd, opts);
+  if (!repoRoot) return [];
+  const changes = await listGitChanges(repoRoot, opts);
+  return overlapRiskyFiles(filesChanged, riskyUncommittedPaths(changes), repoRoot);
 }
 
 // 仓库根（porcelain 路径的基准）。非 git 仓库返回 null——调用方据此跳过整个 G5。
