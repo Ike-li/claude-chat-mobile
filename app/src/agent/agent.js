@@ -436,7 +436,7 @@ export class AgentSession {
                                        // 只记主会话：子 agent 内部工具由父 Task 的 tool_use 代表（见 map 子分支）。
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
-    this._awaitingInterruptResult = false; // P1-4：interrupt() 成功后置真，标记"下一条 result 是这次中断的终态确认"
+    this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
@@ -1150,7 +1150,9 @@ export class AgentSession {
       // 成功中断：丢弃 toDrop（尚未送达 SDK 的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
       this._dropOpenTurnSlots(dropped);
-      this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
+      // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result。账面为 0（纯后台任务期空输入也有停止钮）
+      // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
+      this._awaitingInterruptResult = this.pendingTurns > 0;
       if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
