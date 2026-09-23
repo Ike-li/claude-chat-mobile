@@ -237,6 +237,7 @@ test.describe('result 分支 → diag-log queue/turn_settled', () => {
   test('interrupt() 成功后紧跟的 result → turn_settled(wasInterrupted:true)，一次性消费不残留', async () => {
     const { s } = makeSession();
     s.q = { interrupt() { return Promise.resolve(); } };
+    s.pendingTurns = 1; // 有在途轮才会有这条配对的终态 result（agent-control 那条无在途轮用例是反面）
     await s.interrupt();
     s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {} });
     const first = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'queue' && e.event === 'turn_settled').at(-1);
