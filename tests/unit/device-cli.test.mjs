@@ -1,7 +1,8 @@
 // tests/unit/device-cli.test.mjs —— scripts/device.js 的机读输出契约
 // 这个 CLI 是设备审批的 headless 入口，输出要被 Swift 菜单栏与脚本消费，所以格式即契约：
 // --json 时 stdout 【只有 JSON】（混入人类文案会让 JSONDecoder 直接失败）、
-// 空状态输出合法的空数组而不是空串（消费方不该靠特判活着）、pending 用 deviceId 命名与 socket 侧一致。
+// 空状态输出合法的空数组而不是空串（消费方不该靠特判活着）、pending 用 deviceId 命名并给全量令牌
+// （本机通道；socket 侧 pendingDevicesPayload 只给 shortId，见 DEVICE-03）。
 // 覆盖：list --json 的形状与空态 · approve / deny · 从 CCM_DATA_DIR 读信任表
 import test from 'node:test';
 import assert from 'node:assert/strict';
