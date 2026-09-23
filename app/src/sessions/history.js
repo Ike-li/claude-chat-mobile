@@ -348,6 +348,15 @@ export function historyTailKey(messages) {
   return messageKey(messages[messages.length - 1]);
 }
 
+// 上一次的尾条之后新写的条目是否全是己方（sdk-ts）。找不到那条、或它之后没有新条目时为 false。
+function ownWritesSince(messages, prevTailKey) {
+  if (prevTailKey == null) return false;
+  let i = messages.length - 1;
+  while (i >= 0 && messageKey(messages[i]) !== prevTailKey) i--;
+  if (i < 0 || i === messages.length - 1) return false;
+  return messages.slice(i + 1).every(m => isOwnSdkTail(m?.entrypoint));
+}
+
 export function catchUpStep(state, { messages, localBusy = false, historyCap = HISTORY_MAX_MESSAGES } = {}) {
   const len = messages.length;
   const tailKey = historyTailKey(messages);
@@ -358,6 +367,15 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
   }
   if (state.wasBusy) {
     // 吸收己方 turn 的写盘：重置 baseline + 同步 tail 指纹（己方写入也在窗口内）
+    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
+  }
+  // 【满窗时己方秒回】窗口满了以后己方写入不会让 len 变长：头被 splice、尾接上新内容，baseline 边界
+  // 那一条（anchor）与尾条都换了，下面的前缀重写与 SS-001 两道都会判 reload——而增长分支那道
+  // entrypoint 豁免排在它们后面，轮不到。于是整轮落在两次 tick 之间时，只因为会话够长，就全量重推 +
+  // 标脏 + 误锁（2026-09-22 review P1）。上一次的尾条还在窗口里 ⇒ 前缀没被重写（指纹带 timestamp，
+  // 重写出来的条目对不上）；它之后的就是这段时间新写的，全是 sdk-ts 就与增长分支同口径吸收。
+  // 找不到上一次的尾条（新写的超过一整窗、或确实被重写）就落回下面的检查，安全侧。
+  if (Number.isFinite(historyCap) && historyCap > 0 && len >= historyCap && ownWritesSince(messages, state.lastTailKey)) {
     return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
   }
   // 【前缀重写】已经推给前端的那一段被换掉了 → 增量无从下手，只能全量重推。
