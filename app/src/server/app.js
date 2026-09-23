@@ -99,6 +99,7 @@ import {
   getTrustedDeviceIds,
   decideRevokeByShortId,
   resolveShortDeviceId,
+  shortDeviceId,
   setDeviceAlias
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
@@ -2731,12 +2732,14 @@ registerSocketConnection(io, socket => {
   // 已信任设备远程审批待批设备（免终端）。这两个 handler 经 on() 统一闸保护——deviceApproved=false
   // 的待审批设备发来的审批会在 on() 入口被丢弃（无法自批），故审批权恒属已信任设备。复用既有 approve/deny 函数。
   on(socket, 'user:approveDevice', payload => {
-    const deviceId = payload?.deviceId;
-    if (typeof deviceId !== 'string' || !deviceId) return;
-    // 纵深防御：只批准“确在待审批列表里”的设备 token，不凭一个事件把任意 token 加进信任表
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    // 纵深防御：只在待审批列表里反查，不凭一个事件把任意 token 加进信任表
     // （防可信端误传/点到陈旧卡片，使从未请求接入的 token 被预置信任）。授予信任收敛到真实请求。
-    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
-      console.warn(`[devices] 忽略远程批准：${deviceId} 不在待审批列表`);
+    // 寻址用 shortId：待审广播不带全量 token（DEVICE-03）。0 命中或多命中一律不批（resolveShortDeviceId）。
+    const deviceId = resolveShortDeviceId(shortId, getPendingDevices().map(d => d.deviceToken));
+    if (!deviceId) {
+      console.warn(`[devices] 忽略远程批准：${shortId} 不在待审批列表`);
       return;
     }
     console.log(`[devices] 已信任设备 ${socket.id} 远程批准 ${deviceId}`);
@@ -2756,14 +2759,15 @@ registerSocketConnection(io, socket => {
     }
   });
   on(socket, 'user:denyDevice', payload => {
-    const deviceId = payload?.deviceId;
-    if (typeof deviceId !== 'string' || !deviceId) return;
-    // 同 user:approveDevice 的纵深防御：只对「确在待审批列表里」的 deviceId 生效。denyDevice()
-    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端每次握手都带着自己完整
-    // 的 deviceToken——没有这道守卫，它能拿这个事件传自己的 deviceId 自吊销，绕开
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    // 同 user:approveDevice 的纵深防御：只在待审批列表里反查。denyDevice()
+    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端知道自己的 token——
+    // 没有这道守卫，它能拿这个事件传自己的 ID 自吊销，绕开
     // user:revokeTrustedDevice 专门加的 self 守卫（decideRevokeByShortId 的 requesterToken 检查）。
-    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
-      console.warn(`[devices] 忽略远程拒绝：${deviceId} 不在待审批列表`);
+    const deviceId = resolveShortDeviceId(shortId, getPendingDevices().map(d => d.deviceToken));
+    if (!deviceId) {
+      console.warn(`[devices] 忽略远程拒绝：${shortId} 不在待审批列表`);
       return;
     }
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
@@ -4239,7 +4243,15 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     const raw = Number(payload?.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 200) : 50;
-    ack({ ok: true, records: audit.listRecent({ limit }), capacity: audit.capacity() });
+    // DEVICE-03：actor.deviceId 与设备类动作的 target 是全量 deviceToken，也就是准入凭据——只给 shortId，
+    // 理由同 trusted_devices：一台日后被吊销的设备手里不能还攥着别台的。在出口截而不是写入时截：
+    // 磁盘上已有的历史记录同样要截。
+    const records = audit.listRecent({ limit }).map(r => ({
+      ...r,
+      actor: { ...r.actor, deviceId: r.actor?.deviceId ? shortDeviceId(r.actor.deviceId) : null },
+      target: String(r.action).startsWith('device_') && r.target ? shortDeviceId(r.target) : r.target,
+    }));
+    ack({ ok: true, records, capacity: audit.capacity() });
   });
 
   // server 进程自己的 stdout/stderr。**与 logs:get 是两条不同的日志**：
@@ -4282,7 +4294,14 @@ registerSocketConnection(io, socket => {
       // 永远匹配不上——日志里的私钥被原样回给客户端，而每一行 base64 单看也不命中任何别的模式。
       // 实测：整段一次 → '***'；逐行 → 私钥完整漏出。
       // 整段更快也顺带成立（256KB 实测 6.3ms vs 逐行 10.6ms），不存在拿性能换安全的取舍。
-      const all = sanitize(text).split('\n');
+      let redacted = sanitize(text);
+      // DEVICE-03：日志里有全量设备令牌（新设备申请时的「设备 ID: …」与给操作员复制的 approve 命令、
+      // 监听器的批准/吊销行）。按此刻的信任表 ∪ 待审列表逐个换成 shortId：令牌格式不固定
+      // （isValidDeviceToken 只挡危险字符），按模式认不全。已吊销/已拒绝的不再是凭据，不在此列。
+      for (const token of [...getTrustedDeviceIds(), ...getPendingDevices().map(d => d.deviceToken)]) {
+        redacted = redacted.split(token).join(shortDeviceId(token));
+      }
+      const all = redacted.split('\n');
       // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
       if (start > 0 && all.length) all.shift();
       // 脱敏的理由（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里

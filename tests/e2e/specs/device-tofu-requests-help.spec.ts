@@ -21,7 +21,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:devicerequests');
     await waitForIdle(page);
     await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
-    await expect(page.locator('[data-testid="device-card"]').first()).toContainText('aa-bb-cc-dd');
+    await expect(page.locator('[data-testid="device-card"]').first()).toContainText('aabbccdd…1501');
     await expect(page.locator('[data-testid="device-card"]').first()).toContainText('192.168.1.100');
 
     // 3. 待批卡片还在时，访问帮助仍从常驻入口可达——卡片栈悬浮在 header **之下**，不吃顶栏点击。
@@ -89,13 +89,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
 
-    const iphoneCard = page.locator('[data-testid="device-card"][data-device-id="aa-bb-cc-dd-iphone-15-pro"]');
+    const iphoneCard = page.locator('[data-testid="device-card"][data-short-id="aabbccdd…1501"]');
     await iphoneCard.getByRole('button', { name: /准入/ }).click();
     await expect(page.locator('[data-testid="device-card"]')).toHaveCount(1);
-    await expect(page.locator('#deviceRequests')).not.toContainText('aa-bb-cc-dd-iphone-15-pro');
-    await expect(page.locator('#deviceRequests')).toContainText('ee-ff-00-11-ipad-air-m2');
+    await expect(page.locator('#deviceRequests')).not.toContainText('aabbccdd…1501');
+    await expect(page.locator('#deviceRequests')).toContainText('eeff0011…0a02');
 
-    const ipadCard = page.locator('[data-testid="device-card"][data-device-id="ee-ff-00-11-ipad-air-m2"]');
+    const ipadCard = page.locator('[data-testid="device-card"][data-short-id="eeff0011…0a02"]');
     await ipadCard.getByRole('button', { name: /拒绝/ }).click();
     await expect(page.locator('[data-testid="device-card"]')).toHaveCount(0);
     await expect(page.locator('#deviceRequests')).toHaveClass(/hidden/);

@@ -6,7 +6,7 @@
 import { statSync, existsSync, mkdirSync, watch } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
-import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles, takeSelfMutations } from './devices.js';
+import { isDeviceTrusted, getPendingDevices, getTrustedDeviceProfiles, takeSelfMutations, shortDeviceId } from './devices.js';
 import * as audit from '../ops/audit.js';
 
 export function createDeviceGate({
@@ -50,9 +50,11 @@ export function createDeviceGate({
     }
   }
 
-  // 当前全量待审批设备列表（deviceToken→deviceId，幂等载体）。
+  // 当前全量待审批设备列表（幂等载体）。只给 shortId，理由同下面 trustedDevicesPayload（DEVICE-03）：
+  // 待审设备一经批准，它的 token 就是准入凭据——广播里带全量，所有已批准会话手里就都有了一份。
+  // 批准/拒绝按 shortId 在待审列表里反查（app.js 的 user:approveDevice / user:denyDevice）。
   function pendingDevicesPayload() {
-    return { devices: listPendingDevices().map(d => ({ deviceId: d.deviceToken, ip: d.ip, userAgent: d.userAgent, ts: d.ts })) };
+    return { devices: listPendingDevices().map(d => ({ shortId: shortDeviceId(d.deviceToken), ip: d.ip, userAgent: d.userAgent, ts: d.ts })) };
   }
 
   // 已受信任设备列表的下发面（DEVICE-03）。**逐字段挑出来，不是把内部结构整个丢出去**：

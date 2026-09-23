@@ -51,7 +51,7 @@ test('device CLI reads trusted devices from CCM_DATA_DIR', async t => {
 // 菜单栏 app 不能解析给人看的那版输出（含表情/缩进/中文标签，改文案就崩）。与 service.js
 // 的 STATUS_SCHEMA_VERSION 同款契约：带 schemaVersion，Swift 侧据此判能否解析。
 test.describe('device.js list --json', () => {
-  test('输出机读 JSON：pending 用 deviceId 命名（与 socket 侧 pendingDevicesPayload 一致）', async t => {
+  test('输出机读 JSON：pending 用 deviceId 命名、给全量令牌（本机通道；网络侧 pendingDevicesPayload 只给 shortId）', async t => {
     const dataDir = await withDataDir(t);
     await seedPending(dataDir, [{ deviceToken: 'tok-pending-1', ip: '192.168.1.5', userAgent: 'iPhone', ts: 1700000000000 }]);
     await writeFile(join(dataDir, 'trusted-devices.json'), JSON.stringify(['tok-trusted-1']));
