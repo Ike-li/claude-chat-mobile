@@ -4,7 +4,7 @@
 // 不测什么 + 为什么：不测物理硬件指纹采集与操作系统真实推送通道——分别属于前端采集与 ops/push
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,9 @@ import {
   loadTrustedDevices,
 } from '../../app/src/auth/devices.js';
 import * as audit from '../../app/src/ops/audit.js';
+
+// 一次性目录里的一对设备文件。不注入就会用 devices.js 真正读写的路径（本进程里是 preload 那份），用例之间会互相干扰。
+const filesIn = (dir) => ({ trusted: join(dir, 'trusted-devices.json'), pending: join(dir, 'pending-devices.json') });
 
 function fakeIo(...sockets) {
   return { sockets: { sockets: new Map(sockets.map((s, i) => [`sid-${i}`, s])) } };
@@ -49,9 +52,33 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
   });
 
   test('DEVICE-02: 启动时确保 trusted/pending 两个文件存在且为 owner-only', () => {
-    createDeviceGate({ io: fakeIo(), dataDir: tempDir, onUnlockSocket: () => {} });
+    createDeviceGate({ io: fakeIo(), deviceFiles: filesIn(tempDir), onUnlockSocket: () => {} });
     assert.ok(existsSync(join(tempDir, 'trusted-devices.json')));
     assert.ok(existsSync(join(tempDir, 'pending-devices.json')));
+  });
+
+  // DEVICE-02（2026-09-23）：监听器必须盯 devices.js 实际读写的那一对文件。此前 device-gate 自己
+  // join(dataDir, …)，而 devices.js 认 CCM_*_DEVICES_FILE 覆盖——设了覆盖就读写在 A、监听在 B，CLI 批准
+  // 永远不被感知（三个集成 / S2 用例各自绕过它）。本进程的 preload 恰好设了覆盖，正好复现那种形态。
+  test('DEVICE-02: 另一个进程改写 devices.js 认的那份信任表（含文件级覆盖）→ 监听器照样解锁', async (t) => {
+    const trustedFile = process.env.CCM_TRUSTED_DEVICES_FILE;
+    assert.ok(trustedFile, '前提：preload 设了 CCM_TRUSTED_DEVICES_FILE（本用例靠它复现两处路径分叉）');
+    const before = existsSync(trustedFile) ? readFileSync(trustedFile, 'utf8') : null;
+    t.after(() => {
+      if (before === null) rmSync(trustedFile, { force: true }); else writeFileSync(trustedFile, before);
+      loadTrustedDevices();
+    });
+    const token = 'cd'.repeat(16);
+    const s1 = fakeSocket({ deviceToken: token });
+    const unlocked = [];
+    // 与生产调用同形：不注入文件路径（修复前传的是 dataDir，监听的是它下面那一对，不是覆盖路径）。
+    createDeviceGate({ io: fakeIo(s1), onUnlockSocket: (s) => unlocked.push(s) });
+
+    await new Promise(r => setTimeout(r, 50)); // 让 watcher 先挂上
+    writeFileSync(`${trustedFile}.tmp`, JSON.stringify([token]));
+    renameSync(`${trustedFile}.tmp`, trustedFile); // 与 CLI 同款原子写（tmp + rename）
+    for (let i = 0; i < 40 && unlocked.length === 0; i++) await new Promise(r => setTimeout(r, 50));
+    assert.deepEqual(unlocked, [s1], `监听器没感知到 ${trustedFile} 的变化——它盯的不是 devices.js 读写的那份`);
   });
 
   test('unlockDeviceSockets: 仅对持有匹配 deviceToken 的 Socket 调用 onUnlockSocket', () => {
@@ -61,7 +88,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
 
     const gate = createDeviceGate({
       io: fakeIo(s1, s2),
-      dataDir: tempDir,
+      deviceFiles: filesIn(tempDir),
       onUnlockSocket: (s) => unlocked.push(s),
     });
 
@@ -73,7 +100,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const s1 = fakeSocket({ deviceToken: 'revoked-token' });
     const gate = createDeviceGate({
       io: fakeIo(s1),
-      dataDir: tempDir,
+      deviceFiles: filesIn(tempDir),
       onUnlockSocket: () => {},
     });
 
@@ -92,7 +119,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
 
     const gate = createDeviceGate({
       io: fakeIo(trustedClient, unapprovedClient),
-      dataDir: tempDir,
+      deviceFiles: filesIn(tempDir),
       onUnlockSocket: () => {},
       listPendingDevices: () => [
         // 32 位是真实令牌的长度。不超过 16 位的 ID 截断后就是它自己，测不出给的是不是短 ID。
@@ -178,12 +205,12 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
   test('DEVICE-03: trusted_devices 下发面不含任何全量 deviceToken，寻址只用 shortId', (t) => {
     const FULL_A = 'a3f21b09c4d5e6f7a8b9c0d1e2f3a4b5';
     const FULL_B = 'ffffffff0000111122223333444455ee';
-    // createDeviceGate 会在 dataDir 下建两个文件并起 watcher，必须给它一次性目录
+    // createDeviceGate 会建两个文件并起 watcher，必须给它一次性目录里的路径
     const dir = mkdtempSync(join(tmpdir(), 'ccm-trusted-payload-'));
     t.after(() => rmSync(dir, { recursive: true, force: true })); // safe-rm: 上一行 mkdtemp 建的一次性目录
     const gate = createDeviceGate({
       io: fakeIo(),
-      dataDir: dir,
+      deviceFiles: filesIn(dir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => ([
         { deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: 'Safari 18', model: null, alias: '客厅平板', ua: 'Mozilla/5.0 (iPhone)', ip: '192.168.1.5', approvedAt: 1799913600000 },
@@ -203,7 +230,7 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     //   2026-09-10 注入实测：只有下面这条能咬住。
     const bypassGate = createDeviceGate({
       io: fakeIo(),
-      dataDir: dir,
+      deviceFiles: filesIn(dir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => ([{ deviceId: FULL_A, shortId: 'a3f21b09…a4b5', kind: 'iPhone', browser: null, model: null, alias: null, ua: null, ip: null, approvedAt: null }]),
       accessBypassActive: true,
@@ -291,7 +318,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     f.writePending([{ deviceToken: TOK, ip: '10.0.0.1', userAgent: 'ua', ts: Date.now() }]);
     createDeviceGate({
       io: { sockets: { sockets: new Map() } }, // 零连接：证明审计不依赖 io.sockets.sockets 遍历
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
@@ -317,7 +344,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     f.writePending([]);
     createDeviceGate({
       io: { sockets: { sockets: new Map() } },
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
@@ -338,7 +365,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     f.writePending([{ deviceToken: TOK, ip: '10.0.0.2', userAgent: 'ua', ts: Date.now() }]);
     createDeviceGate({
       io: { sockets: { sockets: new Map() } },
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
@@ -364,7 +391,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     f.writePending([]);
     createDeviceGate({
       io: { sockets: { sockets: new Map() } },
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
@@ -407,7 +434,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const self = selfWriteStub();
     createDeviceGate({
       io: { sockets: { sockets: new Map() } },
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
@@ -434,7 +461,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const self = selfWriteStub();
     createDeviceGate({
       io: { sockets: { sockets: new Map() } },
-      dataDir: f.tempDir,
+      deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
       listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
       listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),

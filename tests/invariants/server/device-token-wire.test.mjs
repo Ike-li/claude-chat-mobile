@@ -41,9 +41,9 @@ const short = t => `${t.slice(0, 8)}…${t.slice(-4)}`;
 
 let dir, home, logFile, server;
 
-// preload 把 CCM_*_DEVICES_FILE 指向它自己的临时目录，子进程会原样继承；而 server 的文件监听只盯
-// CCM_DATA_DIR（device-gate.js）。不显式对齐的话，CLI 批准写进了 preload 那份，监听永远不触发。
-// server 与 CLI 必须拿同一对路径（device-approval-grants-access.test.mjs 踩过同一个坑）。
+// preload 把 CCM_*_DEVICES_FILE 指向它自己的临时目录，子进程会原样继承。server 与 CLI 必须拿同一对路径，
+// 这里显式对齐到本用例的一次性目录。（2026-09-23 之前 server 的文件监听只盯 CCM_DATA_DIR、不认这两个覆盖，
+// 不对齐时 CLI 批准永远不被感知；device-gate 现已与 devices.js 同源，对齐保留是为了不去读 preload 那份。）
 const deviceFiles = () => ({
   CCM_TRUSTED_DEVICES_FILE: join(dir, 'trusted-devices.json'),
   CCM_PENDING_DEVICES_FILE: join(dir, 'pending-devices.json'),

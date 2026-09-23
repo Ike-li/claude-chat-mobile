@@ -602,7 +602,7 @@ const io = new Server(httpServer, {
 // 机制下沉 src/auth/device-gate.js；unlockSocket（重放 init/models/statusline 初始态）
 // 耦合组装根状态（lastInit/viewing*/replay*），留在本文件、经回调注入。
 const deviceGate = createDeviceGate({
-  io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket),
+  io, onUnlockSocket: (socket) => unlockSocket(socket),
   accessBypassActive: authStrategy.isEnabled() && DEVICE_APPROVAL_SCOPE !== 'all',
 });
 const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices,
