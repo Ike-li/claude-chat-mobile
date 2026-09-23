@@ -434,6 +434,7 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
       setSeq: (v) => { seq = v; },
       setEpoch: (v) => { epoch = v; },
       timeoutMs: opts.timeoutMs ?? 50,
+      deferMs: opts.deferMs ?? 60_000,
       decideTimeoutAction: opts.decideTimeoutAction,
       isOutOfBand: opts.isOutOfBand,
     });
@@ -464,17 +465,45 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.equal(buf.bufferedCount('inst-1'), 0);
   });
 
-  test('超时：decideTimeoutAction 返回 reload → 只推进基线，不 flush 成打字机', async (t) => {
+  // 超阈值时超时兜底【不在这里丢】：只推进基线等于把这批事件扔掉，而重载历史的动作在调用方的 ack 回调里，
+  // 超时路径上没人会去做。旧实现正是如此——弱网下 ack 晚于 3 秒、缓冲过百条，屏幕上直接缺一段，迟到的 ack
+  // 又因 handle 已被顶替而成了空操作（2026-09-22 review P2）。收尾权交还 ack 路径。
+  test('超时判 reload：不派发、也不自行丢队列推进基线——事件留给 ack 路径收尾', async (t) => {
     const { buf, dispatched, getSeq } = makeBuffer(t, {
       timeoutMs: 20,
       decideTimeoutAction: ({ bufferedCount }) => (bufferedCount >= 2 ? 'reload' : 'flush'),
     });
-    buf.begin('inst-1');
+    const h = buf.begin('inst-1');
     buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
     buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 2 });
     await new Promise((r) => setTimeout(r, 50));
-    assert.deepEqual(dispatched, [], '超阈值超时应走 reload，不逐条 dispatch');
+    assert.deepEqual(dispatched, [], '超阈值不逐条 dispatch（那正是回放缓冲要防的打字机）');
+    assert.equal(getSeq(), 0, '基线一推进，这批事件就再也不会被回放——没人去重载时屏幕上就缺一段');
+    assert.equal(buf.bufferedCount('inst-1'), 2, '事件留在缓冲里，等 ack 按它的判定收尾');
+    // ack 到了、判 reload：这时才丢队列推进基线（调用方随即清屏重载历史）
+    buf.resolve(h, 'reload');
     assert.equal(getSeq(), 2);
+    assert.deepEqual(dispatched, []);
+  });
+
+  test('超时判 reload 之后 ack 才到、判 flush（比如该实例正忙）→ 照样按序派发，一条不丢', async (t) => {
+    const { buf, dispatched } = makeBuffer(t, { timeoutMs: 20, decideTimeoutAction: () => 'reload' });
+    const h = buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    // 超时之后、ack 之前到的实时事件同样排在队里，保序
+    assert.equal(buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 2 }), true);
+    buf.resolve(h, 'flush');
+    assert.deepEqual(dispatched.map(e => e.seq), [1, 2], '迟到的 ack 不能是空操作：旧实现在这里一条都不派发');
+  });
+
+  test('超时判 reload 后 ack 始终没来收尾（回调抛错等）→ deferMs 到期按 flush 渲染，不永久扣住事件', async (t) => {
+    const { buf, dispatched } = makeBuffer(t, { timeoutMs: 20, deferMs: 30, decideTimeoutAction: () => 'reload' });
+    buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(dispatched.map(e => e.seq), [1], '宁可晚一点渲染，也不能让这个实例之后的事件一直被扣着');
+    assert.equal(buf.bufferedCount('inst-1'), 0);
   });
 
   test('超时：decideTimeoutAction 返回 flush → 按序派发', async (t) => {

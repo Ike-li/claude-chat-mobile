@@ -239,6 +239,8 @@ let switchBackReplayArmed = false;
 // 否则 sync:since 那次调用早把标记翻成 true，session:history 的"第一次"就会误读成"第二次"。
 let replayFloodSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 165 条积压事件（超阈值 → reload）
 let replayFloodHistoryArmed = false; // false=返回基线 4 条；true=返回 reload 专属标记文案（证明真走了 session:history）
+// P0-REPLAY-SLOWACK：切回那次的 ack 晚于前端回放缓冲的 3s 超时才到（弱网）。只推迟 ack，积压照常先推。
+let replayFloodSlowAck = false;
 // P0-ORDER：复现「loadHistory 在途时镜像追平插队」的 DOM 顺序竞态。武装后，下一次 session:history
 // 会先 emit 一条 history_append（模拟 catchUpTick 在 web 拉历史的窗口里检出终端新落定的消息，
 // 该事件是 out-of-band、不进 replay buffer、任何时候直接渲染），再返回历史本体。
@@ -446,6 +448,7 @@ function resetMockState() {
   switchBackReplayArmed = false;
   replayFloodSyncArmed = false;
   replayFloodHistoryArmed = false;
+  replayFloodSlowAck = false;
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
@@ -2712,7 +2715,13 @@ io.on('connection', socket => {
             type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
           });
         }
-        ack(165);
+        if (replayFloodSlowAck) {
+          replayFloodSlowAck = false;
+          console.log('[mock] P0-REPLAY-SLOWACK — 165 条已推，ack 推迟 4s（晚于前端回放缓冲的 3s 超时）');
+          setTimeout(() => ack(165), 4000);
+        } else {
+          ack(165);
+        }
       }
     } else if (instanceId === 'inst_replay_small') {
       // P0-REPLAY-BUFFER（少量积压→flush）：第二次（切回）推 7 轮×3 事件=21 条，低于阈值——客户端
@@ -3524,6 +3533,15 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
+      },
+    },
+    {
+      // P0-REPLAY-SLOWACK：同 test:replay-buffer-flood-setup，外加武装「切回那次 ack 晚于前端 3s 超时才到」。
+      // 合成一条命令：setup 发出后本轮不收尾、发送钮停在停止态，紧接着再发第二条会卡住。
+      command: 'test:replay-buffer-flood-slowack-setup',
+      run: async ctx => {
+        await scenarioRegistry.run('test:replay-buffer-flood-setup', ctx);
+        replayFloodSlowAck = true;
       },
     },
     {

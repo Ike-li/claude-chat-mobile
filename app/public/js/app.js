@@ -2439,9 +2439,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     setSeq: value => { lastSeq = value; },
     setEpoch: value => { curEpoch = value; },
-    // 超时兜底与 ack 路径同口径：超阈值走 reload 语义（只推进基线，不逐条吐成打字机）；
-    // 未超阈值 flush。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——宁可
-    // 超阈值时丢缓冲改走下次 history/sync，也不要 100+ 条 DOM 抖动。
+    // 超时兜底与 ack 路径同口径：未超阈值 flush；超阈值不在超时点收尾，留给 ack 回调（见 createReplayBuffer
+    // 的 armTimeout）。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——ack 回调那时会按
+    // 最新的 instances 广播重判。
+    // deferMs：ack 自己带 SYNC_ACK_TIMEOUT_MS 的超时、必定回调，这一道只兜回调在 resolve 之前抛了的坏情况。
+    deferMs: SYNC_ACK_TIMEOUT_MS + 5_000,
     decideTimeoutAction: ({ bufferedCount }) => resolveReplayBufferAction({
       bufferedCount,
       priorAction: 'keep',
