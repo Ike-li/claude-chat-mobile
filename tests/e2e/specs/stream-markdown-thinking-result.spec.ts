@@ -93,10 +93,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // class 走白名单：Tailwind 运行时会把任意 class 现编成 CSS，工具类不剥就能做出盖住审批按钮的遮罩；
     // 而 markdown 自己产出的 language-xxx 必须留下（hljs 靠它选语言）。
+    // 用会重试的断言：回复在收尾时可能整块重渲染，一次性 evaluate 会打在刚被换下、已脱离文档的旧节点上
+    // （getComputedStyle 对它返回空串），重复 12 次红 3 次。
     const overlay = reply.locator('[data-probe="class-overlay"]');
     await expect(overlay).toHaveCount(1);
-    expect(await overlay.evaluate(el => ({ cls: el.getAttribute('class'), position: getComputedStyle(el).position })))
-      .toEqual({ cls: null, position: 'static' });
+    await expect(overlay).not.toHaveAttribute('class');
+    await expect(overlay).toHaveCSS('position', 'static');
     await expect(reply.locator('pre code')).toHaveClass(/\blanguage-js\b/);
 
     const unsafeState = await reply.evaluate(el => {
