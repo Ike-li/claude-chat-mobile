@@ -120,13 +120,15 @@ test('watch 触发：落一个事件文件后无需手动 scan 也会被消费',
       eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20,
       onEvents: e => { if (e.length) resolveSeen(e); },
     });
+    // 超时定时器必须清掉：got 先赢时它仍挂在事件循环上，进程要等它烧完 3s 才肯退出。
+    let timer;
     try {
       put(d.events);
       const events = await Promise.race([
         got,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('watch 未在 3s 内触发')), 3000)),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('watch 未在 3s 内触发')), 3000); }),
       ]);
       assert.equal(events[0].sessionId, SID);
-    } finally { inbox.close(); }
+    } finally { clearTimeout(timer); inbox.close(); }
   } finally { rmSync(d.root, { recursive: true, force: true }); }
 });
