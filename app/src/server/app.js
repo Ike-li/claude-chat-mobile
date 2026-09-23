@@ -2469,7 +2469,10 @@ registerSocketConnection(io, socket => {
     // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
     if (isProcessed(clientMessageId, messageDedupState)) {
       // 带回首发落点：首发 ack 在路上丢了的客户端只能从这里得知消息落在哪个实例（离线 worktree 锚点靠它）。
-      const instanceId = processedInstanceId(clientMessageId, messageDedupState);
+      // 只带还活着的：实例在重连前被关闭 / 回收的话，客户端会把后续消息改投到它、拿到 stale 当永久失败丢掉。
+      // 不带则回到原先的行为——由下一条消息自己去开（2026-09-23 #156 review）。
+      const stored = processedInstanceId(clientMessageId, messageDedupState);
+      const instanceId = stored && agents.has(stored) ? stored : null;
       if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}) }); return;
     }
     // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
