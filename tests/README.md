@@ -83,7 +83,7 @@
 | `AUTH-06` | CCM 自己的控制面密钥（`AUTH_TOKEN` · `VAPID_*` · `NTFY_*` · `CF_ACCESS_*`）不得随子进程环境流给 claude。**这不是「裁剪终端等价性」而是恢复它**：普通终端里的 claude 本来就没有这几个键，它们只存在于 `ccm.config.json`，是 server 的投影把它们带进 `process.env` 的。反向同样要钉——`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量属于 claude，剥了会静默砍掉第三方网关那条支持路径 |
 | `DEVICE-01` | 走到 peer/Host 判定时，bypass 必须 peer 本机**且** Host 本机；空 Host 不视为本机。**前面有两道早退，顺序不能换**：`DEVICE_APPROVAL_SCOPE === 'all'` 一律不 bypass（覆盖全部路径的总开关，含本机样 Host 那条——Host 是客户端填的头，纯 TCP 转发下可伪造，见 H1），其次 CF Access 已启用时直接 bypass、不看 peer/Host |
 | `DEVICE-02` | 吊销后已建立的连接必须失权（文件监听驱动，不靠重连）；写盘成功才算数；pending 有界（`SEC-03` = macOS 上 `watch` 的 `eventType` 不可靠，监听形态本身是修过的坑） |
-| `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏） |
+| `DEVICE-03` | 设备 ID / IP 不进推送正文；网络响应不返回受信任设备列表（那只给本机 CLI 与菜单栏）。网络响应里的设备 ID 一律是短 ID：待审列表、审计记录、服务端日志回传都不带完整设备令牌——令牌就是准入凭据，一台日后被吊销的设备手里不能还攥着别台的 |
 | `AUTH-05` | `AUTH_TOKEN` 不得出现在服务端**自身**的输出里：启动横幅只打掩码（两条 `BIND_MODE` 分支都算），`logs:server` 回传前逐行 `sanitize`。泄露路径是两跳——横幅进 `LOG_FILE` / 日志窗口 / 投屏，而经 CF Access 进来的会话默认不需要 `AUTH_TOKEN`（设备审批也 bypass），读一次日志就能把它拿走。同一条路径的第三个出口是接入二维码：含令牌的码（`connect:qr`）只发给握手时出示过 `AUTH_TOKEN` 的会话 |
 | `SEC-01` | 未审批 socket 不加入 approved 房间，收不到任何会话内容广播 |
 

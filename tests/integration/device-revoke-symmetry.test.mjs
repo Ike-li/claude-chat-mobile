@@ -147,7 +147,10 @@ test.describe(
     // deviceToken（socket.handshake.auth.deviceToken），于是可以拿 user:denyDevice 传自己的
     // deviceId 自吊销——绕开了 user:revokeTrustedDevice 那条路径专门加的 self 守卫
     // （decideRevokeByShortId 的 requesterToken 检查）。
-    test('user:denyDevice 不得允许已信任设备自吊销（须只对待审批列表里的 deviceId 生效）', async () => {
+    // 寻址已改成 shortId（DEVICE-03：待审广播不带全量 token）。这里传的是【合法形态】的 shortId，
+    // 走到的才是「只在待审列表里反查」那道守卫；还传旧的 { deviceId } 的话，handler 在缺 shortId 的
+    // 入口就 return 了，本用例会变成永远绿。
+    test('user:denyDevice 不得允许已信任设备自吊销（须只在待审批列表里反查）', async () => {
       const token = `denydevice-self-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const client = connectAndCollect(`http://${LAN_IP}:${port}`, { token: 'secret-token', deviceToken: token });
       await client.waitForType('device_status', 5000, e => e.payload.status === 'pending');
@@ -156,7 +159,7 @@ test.describe(
       await client.waitForType('device_status', 3000, e => e.payload.status === 'approved');
       assert.equal(devicesModule.isDeviceTrusted(token), true, '前置条件：设备此刻应已受信任');
 
-      client.socket.emit('user:denyDevice', { deviceId: token });
+      client.socket.emit('user:denyDevice', { shortId: devicesModule.shortDeviceId(token) });
       await sleep(500); // 无 ack，等潜在的断连/落盘副作用发生
 
       assert.equal(devicesModule.isDeviceTrusted(token), true,

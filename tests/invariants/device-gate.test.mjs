@@ -95,18 +95,20 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
       dataDir: tempDir,
       onUnlockSocket: () => {},
       listPendingDevices: () => [
-        { deviceToken: 'device-x', ip: '192.168.1.50', userAgent: 'Safari/iOS', ts: 123456 },
+        // 32 位是真实令牌的长度。不超过 16 位的 ID 截断后就是它自己，测不出给的是不是短 ID。
+        // 拼出来而不写成字面量：32 位十六进制字面量会被 gitleaks 的 generic-api-key 规则拦下。
+        { deviceToken: 'ab'.repeat(16), ip: '192.168.1.50', userAgent: 'Safari/iOS', ts: 123456 },
       ],
     });
 
     gate.broadcastPendingDevices();
 
-    // 已批准的客户端收到待审批列表
+    // 已批准的客户端收到待审批列表，设备只以短 ID 出现（DEVICE-03：待审设备一经批准，token 就是准入凭据）
     assert.equal(trustedClient.emitted.length, 1);
     assert.equal(trustedClient.emitted[0].payload.type, 'pending_devices');
     assert.deepEqual(trustedClient.emitted[0].payload.payload, {
       devices: [
-        { deviceId: 'device-x', ip: '192.168.1.50', userAgent: 'Safari/iOS', ts: 123456 },
+        { shortId: 'abababab…abab', ip: '192.168.1.50', userAgent: 'Safari/iOS', ts: 123456 },
       ],
     });
 

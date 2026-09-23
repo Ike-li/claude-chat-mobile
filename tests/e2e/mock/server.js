@@ -560,10 +560,12 @@ function openFreshMockInstance(requestedModel) {
   return freshInst;
 }
 
+// 待审设备（真 server 的 device-gate.pendingDevicesPayload 的对位）。同下面 createTrustedDevices：
+// **载荷里没有全量 token，只有 shortId**（DEVICE-03），批准/拒绝也按 shortId 寻址。
 function createPendingDeviceRequests() {
   return [
-    { deviceId: 'aa-bb-cc-dd-iphone-15-pro', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
-    { deviceId: 'ee-ff-00-11-ipad-air-m2', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
+    { shortId: 'aabbccdd…1501', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
+    { shortId: 'eeff0011…0a02', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
   ];
 }
 
@@ -5417,14 +5419,12 @@ io.on('connection', socket => {
   });
 
   socket.on('user:approveDevice', payload => {
-    const { deviceId } = payload || {};
-    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    pendingDevices = pendingDevices.filter(d => d.shortId !== payload?.shortId);
     emitPendingDevices();
   });
 
   socket.on('user:denyDevice', payload => {
-    const { deviceId } = payload || {};
-    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    pendingDevices = pendingDevices.filter(d => d.shortId !== payload?.shortId);
     emitPendingDevices();
   });
 
