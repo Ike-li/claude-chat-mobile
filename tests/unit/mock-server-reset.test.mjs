@@ -28,7 +28,7 @@ const EXEMPT = {
 
 // 「这一行写了它」：赋值、复合赋值、自增自减、容器原地修改。
 function writes(name) {
-  const n = name.replace(/\$/g, '\\$');
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(
     `(^|[^.\\w$])${n}\\s*(=(?!=)|\\+=|-=|\\|\\|=|&&=|\\?\\?=|\\+\\+|--)`
     + `|(\\+\\+|--)\\s*${n}\\b`
