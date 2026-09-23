@@ -866,11 +866,12 @@ export function createServiceManager(deps = {}) {
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? DEFAULT_PORT;
     const token = env.AUTH_TOKEN;
-    const url = `http://127.0.0.1:${port}/health${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const url = `http://127.0.0.1:${port}/health`;
 
     let res;
     try {
-      res = httpGet(url);
+      // token 走 x-auth-token 请求头（server 两处都认，见 app/src/server/http.js），不拼进 URL：URL 是 curl 的 argv。
+      res = httpGet(url, token ? { headers: { 'x-auth-token': token } } : {});
     } catch (err) {
       return { ok: false, reason: 'unreachable', error: `连不上 127.0.0.1:${port}（服务没在跑？）：${String(err?.message || err).split('\n')[0]}` };
     }
@@ -1033,10 +1034,15 @@ function realSleep(ms) {
 
 // 同步 HTTP GET。用 curl 而非 node 子进程：少一次 node 冷启（~50ms），且 curl 是 macOS 自带。
 // -w 把状态码追加到 body 末尾，靠最后一个换行切分。
-function realHttpGet(url) {
-  const r = spawnSync('/usr/bin/curl', ['-sS', '-m', '5', '-w', '\n%{http_code}', url], {
+// 请求头经 stdin 交给 curl（-H @-，curl ≥ 7.55），不进 argv：argv 对同机所有用户的 ps 可见，
+// token 放 URL 或 -H 参数里都一样会被看到（2026-09-22 review P2）。
+export function realHttpGet(url, { headers = {} } = {}, { spawn = spawnSync } = {}) {
+  const headerLines = Object.entries(headers).map(([k, v]) => `${k}: ${v}\n`).join('');
+  const args = ['-sS', '-m', '5', '-w', '\n%{http_code}', ...(headerLines ? ['-H', '@-'] : []), url];
+  const r = spawn('/usr/bin/curl', args, {
     encoding: 'utf8',
     timeout: 8000,
+    ...(headerLines ? { input: headerLines } : {}),
   });
   if (!r || r.status !== 0) throw new Error(String(r?.stderr || 'curl 失败').trim());
   const out = String(r.stdout || '');

@@ -6,11 +6,12 @@
 // 把用户连同手机一起关在门外 15 分钟。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createServiceManager, launchctlTimeoutMs } from '../../scripts/service.js';
+import { createServiceManager, launchctlTimeoutMs, realHttpGet } from '../../scripts/service.js';
 
 const HOME = '/Users/you';
 const REPO = '/Users/you/code/claude-chat-mobile';
@@ -65,7 +66,7 @@ function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () 
     sleep: () => {},
     readEvents: () => events,
     writeEvents: writeEvents ?? ((arr) => { written.push(arr); }),
-    httpGet: httpGet ?? ((url) => { httpCalls.push(url); return { status: 200, body: '{"status":"ok"}' }; }),
+    httpGet: httpGet ?? ((url, opts) => { httpCalls.push({ url, headers: opts?.headers ?? {} }); return { status: 200, body: '{"status":"ok"}' }; }),
   });
 
   return { mgr, calls, httpCalls, written };
@@ -249,7 +250,16 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     const r = mgr.health();
     assert.equal(r.ok, true);
     assert.equal(httpCalls.length, 1);
-    assert.match(httpCalls[0], /token=tok/);
+    assert.equal(httpCalls[0].headers['x-auth-token'], 'tok');
+  });
+
+  // 2026-09-22 review P2：token 曾拼在 URL 的 query 里，而 URL 是 curl 的命令行参数——同机任何用户
+  // ps 都看得到。server 本来就认 x-auth-token 请求头（app/src/server/http.js）。
+  test('token 走请求头，不进 URL', () => {
+    const { mgr, httpCalls } = setup({ env: { PORT: '3000', AUTH_TOKEN: 'tok-in-header-only' } });
+    mgr.health();
+    assert.equal(httpCalls[0].url, 'http://127.0.0.1:3000/health');
+    assert.equal(httpCalls[0].headers['x-auth-token'], 'tok-in-header-only');
   });
 
   // ★ 这条测试直接锁住限速自锁那个坑
@@ -278,10 +288,11 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     assert.equal(r.reason, 'unreachable');
   });
 
-  test('.env 没有 AUTH_TOKEN 时不带 token 参数（未设 token 的部署本就放行）', () => {
+  test('.env 没有 AUTH_TOKEN 时不带 token（不发一个空的头上去）', () => {
     const { mgr, httpCalls } = setup({ env: { PORT: '3000' } });
     mgr.health();
-    assert.ok(!httpCalls[0].includes('token='), '没 token 就别拼一个空的上去');
+    assert.ok(!httpCalls[0].url.includes('token='));
+    assert.deepEqual(httpCalls[0].headers, {}, '没 token 就别发一个空的上去');
   });
 
   test('health 结果里不回显 token', () => {
@@ -462,4 +473,52 @@ test('强杀重启只有一个入口——kickstart 的 -k 不得出现在 killA
 
   const body = src.slice(start, end);
   assert.ok(body.includes('recordRestartIntent'), 'killAndRestart 里必须记意图，否则这次重启会被判成崩溃');
+});
+
+// ── realHttpGet：请求头走 stdin（curl -H @-），不进 argv ──────────────────────────
+// argv 对同机所有用户的 ps 可见。把 token 从 URL 挪到 `-H 'x-auth-token: …'` 参数里等于没挪，
+// 所以头经 stdin 交给 curl（2026-09-22 review P2）。
+test.describe('realHttpGet —— 头的值不进 argv', () => {
+  test('带头：argv 里只有 -H @-，值在 stdin', () => {
+    let seen;
+    const spawn = (cmd, args, opts) => { seen = { cmd, args, opts }; return { status: 0, stdout: '{"status":"ok"}\n200', stderr: '' }; };
+    const r = realHttpGet('http://127.0.0.1:3000/health', { headers: { 'x-auth-token': 's3cret-tok' } }, { spawn });
+    assert.deepEqual(r, { status: 200, body: '{"status":"ok"}' });
+    assert.equal(seen.args.some((a) => a.includes('s3cret-tok')), false, `argv 对 ps 可见：${JSON.stringify(seen.args)}`);
+    assert.deepEqual(seen.args.slice(seen.args.indexOf('-H'), seen.args.indexOf('-H') + 2), ['-H', '@-']);
+    assert.equal(seen.opts.input, 'x-auth-token: s3cret-tok\n');
+  });
+
+  test('不带头：不读 stdin（空的 @- 不该出现）', () => {
+    let seen;
+    const spawn = (cmd, args, opts) => { seen = { args, opts }; return { status: 0, stdout: 'x\n200', stderr: '' }; };
+    realHttpGet('http://127.0.0.1:3000/health', {}, { spawn });
+    assert.equal(seen.args.includes('@-'), false);
+    assert.equal(seen.opts.input, undefined);
+  });
+
+  // 上面两条只证明「交给 curl 的形状」对。这条证明 curl 真的把 stdin 里的头发出去了——
+  // 形状对而 curl 不认，health 会恒 401 并误报成「该重启服务了」。回显服务器放子进程：
+  // realHttpGet 是 spawnSync，会卡住本进程的事件循环，同进程的服务器应答不了。
+  test('真 curl：stdin 里的头原样到达服务端，URL 不带 token', { skip: !existsSync('/usr/bin/curl') && '本机没有 /usr/bin/curl' }, async () => {
+    const echo = spawn(process.execPath, ['-e', `
+      require('node:http').createServer((q, s) => s.end(JSON.stringify({ token: q.headers['x-auth-token'] ?? null, url: q.url })))
+        .listen(0, '127.0.0.1', function () { console.log(this.address().port); });
+    `], { stdio: ['ignore', 'pipe', 'inherit'] });
+    // 目标是 loopback：本机若配了 http_proxy，curl 会把请求交给代理，与被测的东西无关。
+    const savedNoProxy = process.env.no_proxy;
+    process.env.no_proxy = '127.0.0.1';
+    try {
+      const port = await new Promise((resolve, reject) => {
+        echo.stdout.once('data', (d) => resolve(Number(String(d).trim())));
+        echo.once('exit', (code) => reject(new Error(`回显服务器提前退出：${code}`)));
+      });
+      const r = realHttpGet(`http://127.0.0.1:${port}/health`, { headers: { 'x-auth-token': 'tok-via-stdin' } });
+      assert.equal(r.status, 200);
+      assert.deepEqual(JSON.parse(r.body), { token: 'tok-via-stdin', url: '/health' });
+    } finally {
+      if (savedNoProxy === undefined) delete process.env.no_proxy; else process.env.no_proxy = savedNoProxy;
+      echo.kill();
+    }
+  });
 });
