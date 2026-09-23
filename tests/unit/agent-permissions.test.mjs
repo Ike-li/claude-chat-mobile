@@ -339,6 +339,7 @@ test.describe('权限闸门', () => {
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
     assert.ok(err.payload.message.includes('未知权限档'));
+    assert.equal(err.payload.endsTurn, false, '切档失败不结束轮次：前端不得因此清掉挂着的审批');
     s.dispose();
   });
 
@@ -396,6 +397,8 @@ test.describe('权限闸门', () => {
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
     assert.ok(err.payload.message.includes('权限档切换失败'));
+    // setPermissionMode 没有 busy 守卫、轮中可调；失败时服务端那一轮照常跑、照常等审批
+    assert.equal(err.payload.endsTurn, false, '切档失败不结束轮次：前端不得因此清掉挂着的审批');
     s.dispose();
   });
 

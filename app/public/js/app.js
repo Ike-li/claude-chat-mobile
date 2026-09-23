@@ -3087,6 +3087,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       updateSendButtonState();
     },
     error(p, ev) {
+      // endsTurn:false = 报个错、轮次照常（socket handler 抛错、轮中切权限档/模型失败）。只打提示，
+      // 不走下面那套轮次收尾：清审批、工具卡标失败、熄 busy——服务端那一轮还在等审批（30 分钟 TTL），
+      // 清掉了用户就没地方点「允许」了（2026-09-22 review P1）。
+      if (p?.endsTurn === false) {
+        alertCue('error');
+        hideLoadingCard();
+        addBar(`⚠️ ${p.message}`, 'text-danger');
+        return;
+      }
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);

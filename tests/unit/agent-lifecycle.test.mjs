@@ -936,6 +936,9 @@ test.describe('consume() 退出路径', () => {
     const err = events.find(e => e.type === 'error' && !e.payload.recoverable);
     assert.ok(err);
     assert.ok(err.payload.message.includes('无法恢复会话'));
+    // 反向对照：会话恢复失败是真的结束——前端必须走收尾（清审批、熄 busy）。endsTurn:false 只给
+    // 「报个错、轮次照常」的那几类，一刀切全标上等于把这里的收尾也关掉。
+    assert.notEqual(err.payload.endsTurn, false);
     s.dispose();
   });
 
