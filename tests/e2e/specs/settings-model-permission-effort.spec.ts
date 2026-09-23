@@ -251,6 +251,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-09z 思考强度有 auto（= CLI /effort auto）：未 pin 时选中，从具体档切回后按模型默认发送', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'effort');
+    const auto = page.locator('.effort-tile[data-level="auto"]');
+    // 末位，与 CLI usage `[…|ultracode|auto]` 同序
+    await expect(page.locator('.effort-tile').last()).toHaveAttribute('data-level', 'auto');
+    await expect(auto).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('auto');
+
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await expect(page.locator('#effortSelect')).toHaveValue('high');
+    await expect(auto).not.toHaveClass(/ring-accent/);
+
+    await auto.click();
+    await expect(auto).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('auto');
+    await closeSettings(page);
+
+    // wire 上必须是 null：误发字面量 'auto' 时 mock 会回显 effort=auto（真 server 则直接拒为未知档）
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=model-default');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09d 新会话空首页设置会应用到首条消息', async ({ page }) => {
     await gotoMock(page);
 
@@ -318,6 +347,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#pillDefaults').click();
     await expect(page.locator('#effortSelect')).toHaveValue('');
     await expect(page.locator('#effortSelect option:checked')).toHaveText('CLI 当前档未知');
+    // 未知 ≠ auto：选中 auto 等于替 CLI 编造了一个档位
+    await openSettingsSection(page, 'effort');
+    await expect(page.locator('.effort-tile[data-level="auto"]')).toHaveCount(1);
+    await expect(page.locator('.effort-tile[data-level="auto"]')).not.toHaveClass(/ring-accent/);
 
     await expectNoBrowserErrors(page);
   });

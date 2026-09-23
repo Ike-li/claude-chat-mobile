@@ -10,6 +10,7 @@ import {
   resolveGatewayModelName,
   effortLevelsFor,
   effortUiState,
+  withAutoTier,
   resolvePanelState,
   formatStatuslineCollapsedSummary,
   formatStatuslineCtxBrief,
@@ -112,16 +113,27 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     assert.equal(normalizeEffortUiLevel('nope'), null);
   });
 
-  test('effortUiState：null 不得猜成 low；镜像与 FRESH 文案分离', () => {
-    const fresh = effortUiState(null, ['low', 'medium', 'high'], { mirrorReadonly: false });
+  test('effortUiState：null 不得猜成 low；Web 驾驶的 null 就是 CLI 的 auto，镜像的 null 是未知', () => {
+    const levels = withAutoTier(['low', 'medium', 'high']);
+    const fresh = effortUiState(null, levels, { mirrorReadonly: false });
     assert.equal(fresh.level, null);
-    assert.equal(fresh.selected, '');
-    assert.match(fresh.label, /默认|default/i);
+    assert.equal(fresh.selected, 'auto', 'Web 驾驶未 pin 档位 = CLI /effort auto，auto 磁贴应处于选中态');
+    assert.equal(fresh.label, 'auto');
 
-    const mirror = effortUiState(null, ['low', 'medium', 'high'], { mirrorReadonly: true });
+    const mirror = effortUiState(null, levels, { mirrorReadonly: true });
     assert.equal(mirror.level, null);
-    assert.equal(mirror.selected, '');
+    assert.equal(mirror.selected, '', '镜像拿不到 CLI 档位时是「未知」，选中 auto 等于替 CLI 编造了一个档');
     assert.match(mirror.label, /CLI|未知|unknown/i);
+  });
+
+  test('withAutoTier：auto 恒在末位（CLI usage `[…|ultracode|auto]`），幂等；无档可调时不凭空加', () => {
+    assert.deepEqual(
+      withAutoTier(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']),
+      ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode', 'auto'],
+    );
+    assert.deepEqual(withAutoTier(['low', 'auto']), ['low', 'auto']);
+    assert.deepEqual(withAutoTier([]), []);
+    assert.deepEqual(withAutoTier(null), []);
   });
 
   test('effortLevelsFor：明确无 supportedEffortLevels → 隐藏', () => {

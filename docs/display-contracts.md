@@ -92,7 +92,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 集合 | 值 | 用途 |
 |------|-----|------|
 | **SDK `Options.effort`** | `low` `medium` `high` `xhigh` `max` | 真正传给 Agent SDK |
-| **UI 档** | 上列 + **`ultracode`** + `null`（模型默认） | 设置磁贴 / pill / `effort_mode` 广播 |
+| **UI 档** | 上列 + **`ultracode`** + `null`（模型默认，磁贴名 **`auto`**，同 CLI `/effort auto`） | 设置磁贴 / pill / `effort_mode` 广播 |
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
 ### 2.2 UI → SDK 映射（硬契约）
@@ -136,10 +136,11 @@ CLI 侧这条路有四个**静默失败**边界——都返回成功、都不抛
 | 项 | 契约 |
 |----|------|
 | **候选来源** | 当前模型条目的 `supportedEffortLevels`；解析不到 → 全候选并集；明确不支持 → 隐藏整行 |
+| **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；它只是 `null` 的磁贴名，wire 上发 `null`，服务端不认 `'auto'` 字面量 |
 | **未知档** | `effortUiState` **不得**把 `null` 猜成 `low` |
-| **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」，与 FRESH「模型默认」分开 |
+| **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」、**不选中 auto**（未知 ≠ auto）；Web 驾驶的 null 选中 auto、pill 显 `auto` |
 | **面板数据源** | `resolvePanelState`：镜像态**整组**只用 CLI 观察值，禁止 Web 偏好补空 |
-| **锚点** | `effortLevelsFor` `effortUiState` `resolvePanelState` · `logic-session.test.mjs` |
+| **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` · `logic-session.test.mjs` · E2E P0-09z / P0-09f |
 
 ### 2.4 Statusline 中的 effort
 

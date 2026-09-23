@@ -60,6 +60,8 @@ import {
   consoleLogEntryLayout,
   defaultModelTileLabel,
   withUltracodeTier,
+  withAutoTier,
+  effortTileValue,
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
@@ -4603,7 +4605,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（CLI /effort：五档 + ultracode；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（CLI /effort：五档 + ultracode + auto；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
   // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
   function setEffortMode(level, silent = false) {
@@ -4611,18 +4613,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
     ultracodeArmed = val === 'ultracode';
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${val || t('模型默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${val || 'auto'}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
-    effortSelect.value = val || '';
+    const mirrorReadonly = Boolean(mirrorReadonlySid);
+    effortSelect.value = effortTileValue(val, { mirrorReadonly });
 
     if (pillEffortText) {
-      pillEffortText.textContent = val || t('默认思考');
+      pillEffortText.textContent = effortUiState(val, [], { mirrorReadonly }).label;
     }
 
     if (customEffortGrid) {
-      const activeLevel = val || '';
+      const activeLevel = effortTileValue(val, { mirrorReadonly });
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
         const isCurrent = activeLevel === tileVal;
@@ -4652,7 +4655,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!effortSelect) return;
     const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
-    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
+    // xhigh-capable 模型上追加 ultracode 最高档，末位再追加 auto（= 模型默认），顺序同 CLI /effort
+    const show = withAutoTier(withUltracodeTier(baseLevels));
     // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
     // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
     // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
@@ -4726,7 +4730,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         customEffortGrid.appendChild(lvTile);
       }
     }
-    // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
+    // 同步 pill 文案（未 pin 档位显 auto，与 CLI 同名）
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
@@ -4737,7 +4741,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
     if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
-    const uiLevel = effortSelect.value || null;
+    // auto 只是 null 的磁贴名：wire 上发 null，服务端不认 'auto' 字面量。
+    const picked = effortSelect.value;
+    const uiLevel = picked && picked !== 'auto' ? picked : null;
     if (uiLevel === currentEffort) return;
     socket.emit('user:setEffort', { level: uiLevel });
     // 不做乐观提示：前端预知不了服务端走轻路径（控制请求、不续接会话）还是重路径（dispose+resume），

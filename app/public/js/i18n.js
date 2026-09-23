@@ -579,7 +579,6 @@ export const EN_DICT = Object.freeze({
   'claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。': 'claude will edit files and run commands without asking — a single prompt injection can reach the whole machine.',
   '开启 bypass': 'Enable bypass',
   '思考强度 →': 'Thinking effort →',
-  '默认思考': 'Thinking: default',
   '更快更省': 'Faster and cheaper',
   '均衡': 'Balanced',
   '更深入': 'Deeper',
@@ -587,6 +586,7 @@ export const EN_DICT = Object.freeze({
   '最深入更慢更贵': 'Deepest, slowest, priciest',
   'xhigh + 多 agent · 最彻底': 'xhigh + multi-agent · most thorough',
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
+  '跟随模型默认档': "Uses the model's default",
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
 

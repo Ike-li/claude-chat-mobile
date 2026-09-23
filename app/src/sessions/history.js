@@ -1417,7 +1417,7 @@ async function readHeadMeta(file, size) {
 // 但 web 的 sessions.json 不记（那是 web 端才写的增强）。故续接一个纯 CLI 会话时，从 transcript 末条
 // permission-mode 记录恢复，避免一律回落「默认审批」。dontAsk 是 web 专属档、CLI transcript 不会出现，
 // 不列入白名单。⚠️ thinking/effort 档 CLI 完全不落盘（transcript 里只有 thinking 内容块、无档位字段），
-// 无从恢复——「默认思考」是诚实回退，属已知边界。
+// 无从恢复——回落 auto（模型默认）是诚实回退，属已知边界。
 const VALID_CLI_PERM_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
 
 // 纯函数：倒序找最后一条主链 user/assistant 的 timestamp（ms）。

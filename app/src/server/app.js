@@ -2973,7 +2973,7 @@ registerSocketConnection(io, socket => {
     // externalDirty 路径上，这里是同一危害的另一个触发点）。文案给出替代路径——具体档位走轻路径，
     // 此刻就能切，不必等回合结束。
     if (a.isBusy()) {
-      sysTo(socket, '回「模型默认」要重开会话实例，而当前有任务在运行。请等本轮结束，或改选一个具体档位（立即生效）', true);
+      sysTo(socket, '切到 auto（模型默认档）要重开会话实例，而当前有任务在运行。请等本轮结束，或改选一个具体档位（立即生效）', true);
       return effortTo(socket);
     }
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);

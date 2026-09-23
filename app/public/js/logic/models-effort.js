@@ -130,6 +130,7 @@ export function effortLevelSubtitle(level) {
     xhigh: t('很深入更慢'),
     max: t('最深入更慢更贵'),
     ultracode: t('xhigh + 多 agent workflow · 最彻底'),
+    auto: t('跟随模型默认档'),
   };
   return map[lv] || '';
 }
@@ -155,6 +156,14 @@ export function withUltracodeTier(levels) {
   const arr = Array.isArray(levels) ? levels : [];
   if (!arr.includes('xhigh') || arr.includes('ultracode')) return arr;
   return [...arr, 'ultracode'];
+}
+
+// auto = CLI /effort 的「不 pin 档位、按模型默认」，即 UI 档 null（wire 上仍发 null，服务端不认 'auto' 字面量）。
+// CLI usage 是 `[low|…|ultracode|auto]`：auto 恒在末位、不挑模型——该模型能调强度就有这一项，幂等。
+export function withAutoTier(levels) {
+  const arr = Array.isArray(levels) ? levels : [];
+  if (!arr.length || arr.includes('auto')) return arr;
+  return [...arr, 'auto'];
 }
 
 // UI 档 → SDK 参数：ultracode → { effort:'xhigh', ultracode:true }；其余原样。
@@ -259,16 +268,22 @@ export function effortLevelsFor(modelValue, modelsList) {
   return { hidden: false, levels: show };
 }
 
+// UI 档 → 磁贴/select 值：Web 驾驶的 null 就是 auto；镜像的 null 是「CLI 档位不可观测」，不对应任何磁贴。
+export function effortTileValue(level, { mirrorReadonly = false } = {}) {
+  return level || (mirrorReadonly ? '' : 'auto');
+}
+
 // effort 展示态必须保留后端真值；重建候选列表只决定 select 能否选中，绝不能把未知/null 猜成 low。
 // mirrorReadonly 时 null 的语义是「外部 CLI 活进程档位不可观测」，与 FRESH 的「模型默认」分开文案。
 export function effortUiState(level, supportedLevels, { mirrorReadonly = false } = {}) {
   const normalized = level || null;
   const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
-  const selected = normalized && levels.includes(normalized) ? normalized : '';
+  const tile = effortTileValue(normalized, { mirrorReadonly });
+  const selected = tile && levels.includes(tile) ? tile : '';
   return {
     level: normalized,
     selected,
-    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : t('默认思考')),
+    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : 'auto'),
     placeholder: normalized
       ? `${normalized}${t('（当前模型不可选）')}`
       : (mirrorReadonly ? t('CLI 当前档未知') : t('模型默认')),
