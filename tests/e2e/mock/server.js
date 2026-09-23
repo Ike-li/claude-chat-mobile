@@ -225,6 +225,11 @@ const mockServicePayload = () => ({
   statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
+// __reset 代数：每次 resetMockState 自增。user:message 进入时记下，await 醒来发现代数变了就收手。
+// 否则上一条用例里还睡着的处理会在重置后醒来改【新】状态：test:slow-echo 的 2s 延迟跨过 __reset，醒来把
+// 新 inst_1 的 turnSeq 加一、改写 activeEpoch，下一条用例的 stream-long 当场判定「被新回合取代」而停发——
+// P0-04 间歇红的根因（2026-09-23 用 DEBUG=pw:webserver 成对跑 live-status-tail + long-stream-interrupt 实测）。
+let mockResetGeneration = 0;
 let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
 let foregroundSyncReplayMode = false;
@@ -378,6 +383,7 @@ let mockRestarts = DEFAULT_MOCK_RESTARTS;
 let mockCanRestart = true;
 
 function resetMockState() {
+  mockResetGeneration += 1;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -5024,6 +5030,7 @@ io.on('connection', socket => {
     // REL-01：真实 app/server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
     if (typeof ack === 'function') ack({ ok: true });
+    const resetGen = mockResetGeneration; // 见 mockResetGeneration：下面的 await 醒来时用它判断是否已换了用例
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
     const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';
@@ -5115,6 +5122,12 @@ io.on('connection', socket => {
     if (cmd === 'test:slow-echo') {
       console.log(`[mock] test:slow-echo — 模拟服务端前置慢路径，延迟 ${SLOW_ECHO_DELAY_MS}ms 后才回显 user_message`);
       await delay(SLOW_ECHO_DELAY_MS);
+    }
+
+    // 上面两处 await 期间可能已经 __reset（下一条用例开始了）：迟到的处理不得再碰新用例的状态。
+    if (resetGen !== mockResetGeneration) {
+      console.log(`[mock] user:message "${cmd}" 醒来时已 __reset，丢弃`);
+      return;
     }
 
     // Always echo user message back
