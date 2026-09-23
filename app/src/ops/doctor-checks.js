@@ -334,7 +334,7 @@ export function deviceApprovalScopeDiagnostic({ scope, lang = 'zh' } = {}) {
 }
 
 // 设备审批（第二因子）在哪些连接上被跳过：真本机直连（peer 与 Host 都是本机样），或 Cloudflare Access
-// 已验的连接（Access 替代设备审批，不替代 token）。反代到 127.0.0.1 的隧道 Host 是公网域名，**不**跳过。
+// 已验的连接（它管的公网 Host 只认 JWT、不查 token，默认也替代设备审批）。反代到 127.0.0.1 的隧道 Host 是公网域名，**不**跳过。
 // DEVICE_APPROVAL_SCOPE=all 时两条都不跳过（传归一后的值）。
 // 返回 { status, detail, safe } 供 runDoctor 挂 checks。
 export function classifyDeviceGateTopology({ authTokenSet, cfEnabled, deviceApprovalScope = '' } = {}) {
