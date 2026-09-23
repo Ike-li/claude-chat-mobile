@@ -135,25 +135,36 @@ async function runScript(scenario, env, model, extraArgs = []) {
   }
 }
 
-async function runScenario(name, model) {
-  const scenario = SCENARIOS[name];
-  const root = mkdtempSync(join(tmpdir(), `ccm-smoke-${name}-`));
-  const workDir = join(root, 'work');
-  const dataDir = join(root, 'data');
-  mkdirSync(workDir, { recursive: true });
-  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const port = await freePort();
-  const env = {
-    ...stripInheritedEnv(process.env),    // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 SMOKE_ENV_BLOCKLIST）
+// 被测 server 与 scenario 脚本共用的这一份环境（scenario 由 runScript 带着它起）。
+// root 是本场景的一次性目录；baseEnv 只供单测构造「脏」环境，正常调用永远是 process.env。
+export function smokeEnv({ root, port }, baseEnv = process.env) {
+  return {
+    ...stripInheritedEnv(baseEnv),        // 摘掉继承来的生产配置与启动者会话的身份变量（见 tests/helpers/spawn-env.mjs）
     AUTH_TOKEN: 'ccm-smoke-test-token',   // §1.9：没有 token server 拒绝启动
     PORT: String(port),
     // WORK_DIR 已退役（并入 WORKDIRS 首项）；WORK_DIRS env 压过配置文件，是隔离实例的注入点。
-    WORK_DIRS: workDir,
-    CCM_DATA_DIR: dataDir,
+    WORK_DIRS: join(root, 'work'),
+    // scenario 用的工作目录。与上一行同值，但单起一个 CCM_SMOKE_ 名：scenario 读的是 runner 的约定，
+    // 不跟 server 配置键的命名走——WORK_DIR 退役时，读它的 5 个 scenario 就是这样一起坏掉的。
+    CCM_SMOKE_WORK_DIR: join(root, 'work'),
+    CCM_DATA_DIR: join(root, 'data'),
+    // 两个配置文件都指进一次性目录（文件不存在＝没有文件配置）。不指的话，在仓库根起的 server 会读
+    // 仓库根的 ccm.config.json——维护者的生产配置就在那里，环境变量摘得再干净，DEVICE_APPROVAL_SCOPE
+    // 之类也会从文件补回来（loadRuntimeEnvironment 只填 env 里没有的键）。
+    CCM_CONFIG_FILE_PATH: join(root, 'ccm.config.json'),
+    CCM_ENV_FILE_PATH: join(root, '.env'),
     CCM_SMOKE_URL: `http://127.0.0.1:${port}`,
     // 同集成测 _spawn-server：禁桌面日志窗，防 smoke 起服堆 Terminal.app
     LOG_TERMINAL: 'off',
   };
+}
+
+async function runScenario(name, model) {
+  const scenario = SCENARIOS[name];
+  const root = mkdtempSync(join(tmpdir(), `ccm-smoke-${name}-`));
+  const env = smokeEnv({ root, port: await freePort() });
+  mkdirSync(env.CCM_SMOKE_WORK_DIR, { recursive: true });
+  mkdirSync(env.CCM_DATA_DIR, { recursive: true, mode: 0o700 });
   let server = null;
 
   try {

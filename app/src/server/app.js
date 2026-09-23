@@ -2182,6 +2182,9 @@ function withRewindTimeout(promise, ms = REWIND_REQUEST_TIMEOUT_MS) {
 // 不落盘——崩溃后孤儿文件重新可见，与 CLI 等价、可重试。必须在 registerSocketConnection
 // 之外：每条 socket 一份的话，另一台设备的 SWR 在删文件窗口内仍会把行吐回去。
 const pendingDeleteIds = new Set();
+// deletePermanent 等「刚关掉的 CLI」退出的上限。SDK 关 stdin 后给约 2s 宽限，再 SIGTERM，
+// 5s 后 SIGKILL（sdk.mjs ProcessTransport.close），到这个上限时进程必然已死；实测平常 0.6–2s。
+const SESSION_EXIT_WAIT_MS = 10_000;
 // 「在新 worktree 里开」的懒创建（2026-09-11）。**只有真发出第一条消息才建**——勾了不发就什么
 // 都没发生，磁盘上不留没人用过的空树。与 Claude Code Desktop 同构：它的 lazyWorktrees.prepare 同样
 // 挂在 start_session 上（日志原文 `Lazy worktree: starting session … its worktree is being prepared
@@ -3734,6 +3737,12 @@ registerSocketConnection(io, socket => {
     const cwd = routeCwd(payload?.cwd);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
+    }
+    // 刚关掉（或正在空闲回收）的实例，CLI 退出前还会往 transcript 追加收尾元数据：删在它前面，
+    // 文件会被写回来，成了只有元数据的孤儿，ack 却已经报了 ok。所以先等它退完，再做下面的判定——
+    // 保护①必须在等完之后判，等待期间用户可能又打开了这个会话。
+    if (!(await instanceManager.waitForSessionExits(sessionId, SESSION_EXIT_WAIT_MS))) {
+      console.warn(`[session-delete] 等 CLI 退出超过 ${SESSION_EXIT_WAIT_MS}ms，照常继续 sessionId=${sessionId}`);
     }
     // 两道保护共用这一个出口。**拒绝也要留痕**：这两条路既不写日志也不写审计时，用户报
     // 「点了 🗑 没反应、会话还在」事后无法验尸——2026-09-12 那次只能靠"审计里没有 success 记录"

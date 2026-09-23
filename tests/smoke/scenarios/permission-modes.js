@@ -13,8 +13,8 @@ const URL = process.env.CCM_SMOKE_URL || `http://127.0.0.1:${process.env.PORT ||
 const MODEL = process.argv[2] || process.env.ANTHROPIC_MODEL || undefined;
 // 非白名单 + 有副作用（创建文件）→ default 档触发审批；只读"安全命令"（echo/ls/pwd）CLI 默认放行测不出拦截，
 // 故用 touch（同 smoke-m2 A3）。两轮用不同文件名：轮① allow 创建后，轮② 若同名 claude 可能判"已存在"而不调 Bash。
-const workDir = process.env.WORK_DIR;
-if (!workDir) throw new Error('WORK_DIR is required; use tests/smoke/runner.js');
+const workDir = process.env.CCM_SMOKE_WORK_DIR;
+if (!workDir) throw new Error('CCM_SMOKE_WORK_DIR is required; use tests/smoke/runner.js');
 const PROBE = n => `touch ${JSON.stringify(join(workDir, `ccm-probe-${n}.txt`))}`;
 const promptFor = n => `请用 shell（Bash 工具）运行 \`${PROBE(n)}\` 创建一个空文件。只执行这一条，不要解释、不要做别的。`;
 
