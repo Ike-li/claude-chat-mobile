@@ -139,11 +139,10 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 ## 鉴权与范围边界
 
 ```text
-AUTH_TOKEN（必备，无它不启动）
+AUTH_TOKEN（必备，无它不启动） ‖ 公网 IdP 策略（可选，当前唯一实现 Cloudflare Access）
+  按 Host 二选一：IdP 管的公网 Host 只认 IdP 凭据，其余入口只认 token
         ↓
-公网 IdP 策略（可选，当前唯一实现 Cloudflare Access）
-        ↓
-设备信任（真·本机直连豁免此层，不豁免 token）
+设备信任（真·本机直连豁免；经 IdP 进来的连接默认也豁免，DEVICE_APPROVAL_SCOPE=all 时不豁免）
         ↓
 WORKDIRS 范围门
         ↓
@@ -153,14 +152,17 @@ Agent 工具审批或用户直接文件编辑
 ```
 
 第一层是**前提而非选项**（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）：没有 `AUTH_TOKEN`
-连 server 都起不来，本机浏览器打开也一样，所以下游各层永远建立在「对方已持令牌」之上。
+连 server 都起不来，本机浏览器打开也一样。但这不等于每个连接都持有令牌：IdP 开着时，它管的公网 Host
+只认 IdP 凭据（JWT），`AUTH_TOKEN` 在那条路上既不要求也不放行。所以下游各层的前提按入口分两种——
+IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方已持令牌」；要把 token 交出去的逻辑
+（如 `connect:qr`）必须先看连接走的是哪条（[hard-rules §6](hard-rules.md)）。
 第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js`
 的接口形状；Cloudflare Access 是当前唯一实现，换 IdP 不该动核心。
 
 这些边界互不替代：
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
-- Cloudflare Access 是**可选的**公网身份层，不扩大工作区；默认开着时**替代**设备审批（第二因子），不替代 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
+- Cloudflare Access 是**可选的**公网身份层，不扩大工作区。开着时在它管的公网 Host 上**替代 token**（那条路只认 JWT），默认还**替代**设备审批（第二因子）；LAN / 本机入口不受影响，仍只认 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
   - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
   - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
