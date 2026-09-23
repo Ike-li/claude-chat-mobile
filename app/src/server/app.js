@@ -834,6 +834,10 @@ io.use(async (socket, next) => {
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
     }
+    // 握手时出示过 AUTH_TOKEN 没有，与走哪条路鉴权无关：公网 Host 只认 JWT，但浏览器照样可能带着正确的
+    // 令牌（Access 启用前存过、或开过手动的 #token= 链接）。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）。
+    // 只是记一笔，不参与放行——公网那条路的鉴权仍然只认 JWT。
+    socket.presentedAuthToken = tokenMatches(socket.handshake.auth?.token);
 
     // 限速计数：成功清零、失败退避/锁定
     let rlResult = null;
@@ -4206,6 +4210,13 @@ registerSocketConnection(io, socket => {
         const lan = lanBaseUrlForQr();
         if (!lan) return ack({ ok: false, error: '取不到局域网地址：改用公网档，或在电脑上跑 node scripts/qr.js' });
         base = lan;
+      }
+      // 【只把令牌交给握手时出示过它的会话】经 Access 进来的会话没出示过 AUTH_TOKEN（公网那条路
+      // 只认 JWT，设备审批默认也 bypass）。给它一张含令牌的码，等于把局域网钥匙发给一个本不持有
+      // 它的身份，Access 吊销之后照样能从局域网进来——与横幅掩码、logs:server 脱敏同一条泄露路径（AUTH-05）。
+      if (includeToken && !socket.presentedAuthToken) {
+        return ack({ ok: false, error: '当前会话经 Cloudflare Access 登录、不持有访问令牌，不能生成含令牌的二维码。'
+          + '新设备直接打开公网地址、完成 Access 登录即可；要局域网码请在电脑上跑 node scripts/qr.js' });
       }
       if (includeToken && !token) return ack({ ok: false, error: '未设置 AUTH_TOKEN' });
       const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
