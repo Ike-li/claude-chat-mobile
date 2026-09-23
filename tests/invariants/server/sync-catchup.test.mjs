@@ -164,6 +164,9 @@ test('diskLen 只在 replayed=0 时读：活缓冲有内容就不必对账磁盘
   const active = await c.since({ lastSeq: 0, instanceId });
   assert.ok(active.ack.replayed > 0, '前置：这次应有补发内容');
   assert.equal(active.ack.diskLen, null, 'replayed>0 时不读磁盘，diskLen 必须留空');
+  // stub 下种子那一轮永不收尾（pendingTurns 恒 1）：有在途轮时连 diskExternalLen 也不读——文件正被
+  // 己方追加、缓存必失效，这一读是全量重建，会把前台探活（5s）拖成超时重连。
+  assert.equal(active.ack.diskExternalLen, null, '有在途轮时不该为 diskExternalLen 读磁盘');
 
   const idle = await c.since({ lastSeq: seededEvent.seq, instanceId });
   assert.equal(idle.ack.replayed, 0, '前置：这次应无补发内容');

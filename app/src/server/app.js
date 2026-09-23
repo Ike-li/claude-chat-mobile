@@ -4386,15 +4386,19 @@ registerSocketConnection(io, socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
-    // 仅 replayed=0（活缓冲无可回放对话内容）时读磁盘 history 条数带回——正是「切入可能被外部写过的会话」候选；
-    // replayed>0=web 活跃、信活缓冲、不必对账磁盘。getSessionHistory 有 mtime 缓存，成本可忽略。
+    // diskLen 仅 replayed=0（活缓冲无可回放对话内容）时带回——正是「切入可能被外部写过的会话」候选。
+    // diskExternalLen 在 replayed>0 时也带（见 done 上方注释），但【有在途轮时不读】：文件正被己方追加，
+    // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
+    // 只等 5s——大会话会把健康连接拖成超时重连。此刻终端的并发写入本就落在已登记的「本地 turn 吸收窗」里。
     let diskLen = null;
     let diskExternalLen = null;
-    try {
-      const history = await getSessionHistory(a.sessionId, a.cwd);
-      if (replayed === 0) diskLen = history.length;
-      diskExternalLen = externalHistoryExtent(history);
-    } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
+    if (replayed === 0 || !(a.pendingTurns > 0)) {
+      try {
+        const history = await getSessionHistory(a.sessionId, a.cwd);
+        if (replayed === 0) diskLen = history.length;
+        diskExternalLen = externalHistoryExtent(history);
+      } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
+    }
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
     // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
