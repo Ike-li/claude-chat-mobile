@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createMirrorEngine } from '../../app/src/server/mirror-engine.js';
-import { getProjectDir, MIRROR_STALE_PENDING_MS } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, MIRROR_STALE_PENDING_MS } from '../../app/src/sessions/history.js';
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +77,8 @@ function makeEngine({
   // 的那一刻 = 「tick 已开始、尚未结束」。测 stop() 与在飞 tick 的竞态需要精确卡在这个时刻。
   // 收 getEngine 而非 engine：探针在 createMirrorEngine 返回之前就可能被调到（构造期 tick）。
   onTickProbe = null,
+  // 读历史的注入点（缺省真读盘）。测「tick 读盘期间发生了什么」的竞态用：在真读完之后、交回引擎之前插一步。
+  readHistory,
 } = {}) {
   const emitted = [];
   const agents = new Map();
@@ -104,6 +106,7 @@ function makeEngine({
     scheduleStatusRefresh: () => { statusRefreshes += 1; },
     readCliSnapshotForSession: () => cliSnapshot,
     statusBridgeOff,
+    ...(readHistory ? { readHistory } : {}),
     ...roots,
   });
   engine.stop();
@@ -564,6 +567,65 @@ test('requestRebaseline 时磁盘已被终端写长 → 连接前就在线的端
   // 基线已对齐：下一 tick 不得把同一段再推一遍
   await h.engine.catchUpTick();
   assert.equal(h.historyAppends().length, 1, '同一段增量只推一次');
+});
+
+// 真读盘，读完之后跑一次挂上的钩子再交回引擎——钩子里做的事就发生在「tick 的读盘 await 期间」。
+function readHistoryWithHook() {
+  let hook = null;
+  return {
+    arm(fn) { hook = fn; },
+    readHistory: async (...args) => {
+      const r = await getSessionHistory(...args);
+      const fn = hook; hook = null; fn?.();
+      return r;
+    },
+  };
+}
+const terminalRound = (ts, n) => ([
+  { type: 'user', message: { role: 'user', content: `终端第${n}轮问` }, timestamp: iso(ts) },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `终端第${n}轮答` }] }, timestamp: iso(ts + 1_000) },
+]);
+
+// 2026-09-23（#147 bot review）：同会话重定基线曾在同一 tick 里读两次盘——一次给旧查看端算增量，一次给下面的
+// 切入分支定基线。两次之间终端又写了一轮，基线就被推过那一轮，而旧查看端只收到第一次的快照：那一轮永远补不上。
+test('重定基线的两次读盘之间终端又写了一轮 → 连接前就在线的端下一拍照样收到', async () => {
+  const hook = readHistoryWithHook();
+  const h = makeEngine({ readHistory: hook.readHistory });
+  const a = h.view('inst-A', 'sess-two-reads');
+  const base = Date.now() - 30_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads', settledTail(base));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads', [...settledTail(base), ...terminalRound(base + 5_000, 1)]);
+  h.engine.requestRebaseline('sock-new');
+  hook.arm(() => writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-two-reads',
+    [...settledTail(base), ...terminalRound(base + 5_000, 1), ...terminalRound(base + 8_000, 2)]));
+  await h.engine.catchUpTick();
+  await h.engine.catchUpTick(); // 下一拍：常规追平
+
+  const pushed = JSON.stringify(h.historyAppends().map(e => e.payload.messages));
+  assert.match(pushed, /终端第1轮答/);
+  assert.match(pushed, /终端第2轮答/, '读盘之后才落盘的那一轮被基线越过了，旧查看端再也收不到');
+});
+
+// 同一次 review：重定基线读盘期间又有设备连上来。它登记在 await 之后，不在本拍跳过名单里，于是本拍的增量
+// 推给了一个正在全量重载的端；前端的历史加载闸只扣住、不去重，历史渲染完就原样放出来——重复气泡。
+test('重定基线读盘期间又有设备连上 → 本拍的增量同样不推给它（它也在全量重载）', async () => {
+  const hook = readHistoryWithHook();
+  const h = makeEngine({ readHistory: hook.readHistory });
+  const a = h.view('inst-A', 'sess-late-join');
+  const base = Date.now() - 30_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-late-join', settledTail(base));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-late-join', [...settledTail(base), ...terminalRound(base + 5_000, 1)]);
+  h.engine.requestRebaseline('sock-new');
+  hook.arm(() => h.engine.requestRebaseline('sock-late'));
+  await h.engine.catchUpTick();
+
+  const appends = h.historyAppends();
+  assert.equal(appends.length, 1, '连接前就在线的端仍要收到这一段');
+  assert.deepEqual([...appends[0].except].sort(), ['sock-late', 'sock-new'], '读盘期间连上的那台也在全量重载，推给它就是重复气泡');
 });
 
 // 上一条的镜像对照（2026-08-10）：磁盘同样变长、同样在重连时比对，但写它的是【己方】刚跑完的 turn。

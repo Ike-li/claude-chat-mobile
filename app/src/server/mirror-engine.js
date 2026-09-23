@@ -37,6 +37,8 @@ export function createMirrorEngine({
   // ~/.claude/sessions 塞活 pid 条目会让用户正在跑的 server 看到幻影「终端会话」。
   transcriptBaseDir = null,
   sessionRegistryDir = null,
+  // 读 transcript 的注入点（仅单测用；生产恒为 getSessionHistory）。测「tick 读盘 await 期间」的竞态靠它。
+  readHistory = getSessionHistory,
 } = {}) {
   // 展开进各 reader 的 options；null 时为空对象 = 走 reader 自己的默认根。
   const diskOpts = transcriptBaseDir ? { baseDir: transcriptBaseDir } : {};
@@ -222,6 +224,7 @@ export function createMirrorEngine({
     // 豁免」是为"隔天打开无人管的会话"设的——同会话连续观察不该走它，否则终端跑长工具跨过 5 分钟时，
     // 手机息屏/断网/刷新任一触发的一次重连就把已维持的锁清掉且再也建不回来（见 mirrorEntryLock）。
     let rebaselineSameSession = false;
+    let rebaselineSeed = null; // 同会话重定基线读到的那份快照——下面定基线必须用同一份，见赋值处
     if (catchUpRebaselineRequested) {
       catchUpRebaselineRequested = false;
       const freshSocketIds = [...rebaselineSocketIds];
@@ -229,7 +232,7 @@ export function createMirrorEngine({
       if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
         rebaselineSameSession = true;
         // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
-        const curMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
+        const curMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
         const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
         const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
         if (getViewingInstanceId() === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
@@ -253,17 +256,25 @@ export function createMirrorEngine({
           // 可 baseline 是全局单值，下面一重建，连接前就在线的端就再也收不到上一 tick 之后终端写的那段——
           // 所以先按正常 tick 的同一判据（catchUpStep）把它推给它们，只跳过新连上的 socket。
           // localBusy 时不推：己方在写盘，正常 tick 同样整段跳过追平。
+          // 读盘 await 期间新连上的 socket 同样在全量重载：它们已登记进 rebaselineSocketIds（下一拍再为它们
+          // 重定基线），这一拍一并跳过——前端的历史加载闸只扣住、不去重，推给它们就是重复气泡。
           if (!localBusy && Array.isArray(curMsgs)) {
-            emitCatchUp(a, id, { ...catchUpStep(catchUpState, { messages: curMsgs, localBusy: false }), messages: curMsgs }, freshSocketIds);
+            emitCatchUp(a, id, { ...catchUpStep(catchUpState, { messages: curMsgs, localBusy: false }), messages: curMsgs },
+              [...freshSocketIds, ...rebaselineSocketIds]);
           }
+          // 定基线沿用这份快照、不再读第二次：两次读之间终端若又写了一轮，基线会越过它，而旧查看端只收到了
+          // 这份——那一轮就再也补不上。沿用之后它留在基线之外，下一拍照常追平（2026-09-23 #147 review）。
+          if (Array.isArray(curMsgs)) rebaselineSeed = curMsgs;
         }
       }
       catchUpKey = null;                                               // 强制下方 switch 分支重建 baseline + 重评 mirror 入口锁
     }
     if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
-      let seedMsgs;
-      try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts); }
-      catch { return; }
+      let seedMsgs = rebaselineSeed;
+      if (!seedMsgs) {
+        try { seedMsgs = await readHistory(a.sessionId, a.cwd, undefined, diskOpts); }
+        catch { return; }
+      }
       const seedLen = seedMsgs.length;
       // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
       // wasOwnTurn 与 wasBusy 分开记：前者只认己方 turn 在写盘（st==='busy'），供重连 rebaseline 判「这段
@@ -387,7 +398,7 @@ export function createMirrorEngine({
     let registryWaiting;
     try {
       const sizeP = sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1);
-      const histP = getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts);
+      const histP = readHistory(a.sessionId, a.cwd, undefined, diskOpts);
       const regP = readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       curSize = await sizeP;
       const sizeOpt = { ...diskOpts, size: curSize >= 0 ? curSize : null };
