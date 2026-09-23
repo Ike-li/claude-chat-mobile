@@ -39,6 +39,7 @@ import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
   createConfigReloader,
+  loadConfigSources,
   reloadKindOf,
   structuredToStringValues,
 } from '../ops/config-file.js';
@@ -4038,6 +4039,16 @@ registerSocketConnection(io, socket => {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       return ack({ ok: false, results: [{ key: '', level: 'error', message: '缺少 changes' }] });
     }
+    // 读不动当前配置就拒写（CONFIG-01）。下面写盘是「读出来 → 改几项 → 整份写回」，从 {} 长出来会把
+    // 没改的项（AUTH_TOKEN / WORKDIRS …）一起抹掉，下次启动直接起不来。判据与启动侧同一份：
+    // loadConfigSources 对坏 JSON / 顶层不是对象 fail-loud。CLI 的 config set 同场景同样拒写。
+    // 放在校验之前：拿读失败回落出来的空配置去校验，报出来的错也是错的。
+    const readConfigForWrite = () => loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+    const refuseUnreadable = err => ack({ ok: false, results: [{ key: '', level: 'error',
+      message: `${String(err?.message || err)}。已拒绝保存：从空配置重建会把其余配置项一起抹掉` }] });
+    if (usingConfigJson()) {
+      try { readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
+    }
     const current = readEnvValues();
 
     // 端口占用只在**值真的变了**时才探：当前 server 正绑在旧 PORT 上，无条件探测会恒报占用
@@ -4068,10 +4079,9 @@ registerSocketConnection(io, socket => {
     try {
       // 0600 + 唯一 tmp + fsync + rename：与 sessions / devices 同一个原子写
       if (usingConfigJson()) {
-        let currentConfig = {};
-        try {
-          currentConfig = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-        } catch { /* 读不动就从空配置长出来；校验已经过了，不该在这一步把用户挡在门外 */ }
+        // 写前重读：上面探端口有 await，这期间文件可能被改过。读不动同样拒写，理由见上。
+        let currentConfig;
+        try { currentConfig = readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
         writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(currentConfig, changes), null, 2)}\n`);
       } else {
         let text = '';

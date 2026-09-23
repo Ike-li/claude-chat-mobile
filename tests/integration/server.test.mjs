@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as ioc } from 'socket.io-client';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -654,6 +654,60 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
         `写入目标文件里必须真的出现新值，实际内容：${onDisk}`);
     } finally {
       s.disconnect();
+    }
+  });
+
+  // 2026-09-22 review P1：ccm.config.json 读不动时，写盘路径曾「从 {} 长出来」——只写回这次改的几项，
+  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required / SCOPE-03）。
+  // CLI 的 config set 同场景一直是拒写的。坏文件用尾逗号造：手改 JSON 最常见的那种笔误。
+  test('ccm.config.json 损坏时拒绝写入，原文件一字不动（不从空配置重建）', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    const corrupt = '{\n  "WORKDIRS": ["/srv/work"],\n  "SESSION_DELETE_QUIET_MS": 1,\n}\n';
+    writeFileSync(cfg, corrupt);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { SESSION_DELETE_QUIET_MS: '654321' } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(readFileSync(cfg, 'utf8'), corrupt,
+        `坏文件被重写了——其余配置项（这里是 WORKDIRS）随之丢失。ack=${JSON.stringify(ack)}`);
+      assert.equal(ack.ok, false, `应明确拒绝：${JSON.stringify(ack)}`);
+      assert.match(ack.results?.[0]?.message ?? '', /ccm\.config\.json/, '拒绝原因要指明是哪个文件坏了');
+    } finally {
+      s.disconnect();
+      // 单文件删除：本用例自己在 mkdtemp 出来的 tmpDir 里写的坏文件，不能留给后面的用例（usingConfigJson 是动态判断）
+      rmSync(cfg, { force: true });
+    }
+  });
+
+  // 上一条的对照：拒绝只针对「读不动」，不是把 JSON 这条写路径整个关掉。写回必须保留没改的项。
+  test('ccm.config.json 正常时照常写入，没改的项原样保留', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    writeFileSync(cfg, `${JSON.stringify({ WORKDIRS: ['/srv/work'], SESSION_DELETE_QUIET_MS: 1 }, null, 2)}\n`);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { SESSION_DELETE_QUIET_MS: '654321' } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `正常配置应能写入：${JSON.stringify(ack)}`);
+      const onDisk = JSON.parse(readFileSync(cfg, 'utf8'));
+      assert.equal(onDisk.SESSION_DELETE_QUIET_MS, 654321, `新值应按 schema 类型写入：${JSON.stringify(onDisk)}`);
+      assert.deepEqual(onDisk.WORKDIRS, ['/srv/work'], `没改的项必须原样保留：${JSON.stringify(onDisk)}`);
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
     }
   });
 });
