@@ -74,7 +74,7 @@ import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
-import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
+import { isProcessed, commitProcessed, processedInstanceId, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
   shouldRejectOutboxLazyOpen,
@@ -204,7 +204,7 @@ let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId �
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 // n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
 //     重启后同一 clientMessageId 会被当成新消息（n=1 下可接受：重启本就中断在途轮）。
-let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
+let messageDedupState = new Map(); // clientMessageId → { at, instanceId }（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 // isProcessed/commitProcessed 之间横跨多个 await，不是原子的：断线重连重发可能让同一 clientMessageId
 // 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次 a.send() 真实重复发送。
 // 这里补一层"眼下有没有人正处理这条、尚未落定成败"的占用（见 message-dedup.js 的 isInFlight 一族）。
@@ -2472,7 +2472,14 @@ registerSocketConnection(io, socket => {
     // 若在此提前登记（旧 checkAndRecord 行为），校验失败/队满失败的 ID 会被记入，第二次重发命中去重
     // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
     if (isProcessed(clientMessageId, messageDedupState)) {
-      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true }); return;
+      // 带回首发落点：首发 ack 在路上丢了的客户端只能从这里得知消息落在哪个实例（离线 worktree 锚点靠它）。
+      // 只带还活着的：实例在重连前被关闭 / 回收的话，客户端会把后续消息改投到它、拿到 stale 当永久失败丢掉。
+      // 不带则回到原先的行为——由下一条消息自己去开（2026-09-23 #156 review）。「活着」与 instance-manager 的
+      // forSession 同口径：空闲回收置了 terminating、或已 dispose 但 onExit 还没删表的，都算已经没了。
+      const stored = processedInstanceId(clientMessageId, messageDedupState);
+      const live = stored ? agents.get(stored) : null;
+      const instanceId = live && !live.terminating && !live.disposed ? stored : null;
+      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}) }); return;
     }
     // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
     // 不重复调用 a.send()，负 ack 可重试，client 既有重试机制稍后会再次命中（那时原请求已
@@ -2696,7 +2703,7 @@ registerSocketConnection(io, socket => {
       // 重跑并二次 a.send()，同一条 prompt 投给 Claude 两次。加 try/finally 之前那条陈旧的 in-flight
       // 占用反而会挡住重试（卡到重启，但至多一次），即修 F1 时把「卡死」换成了「可能重复投递」。
       // 顺序不变量由 tests/unit/message-dedup.test.mjs 的源码级断言钉住（2026-08-04 code review）。
-      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
+      messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: a.instanceId });
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续

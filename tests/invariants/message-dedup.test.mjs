@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import {
   isProcessed,
   commitProcessed,
+  processedInstanceId,
   DEDUP_CAP,
   isInFlight,
   claimInFlight,
@@ -56,6 +57,18 @@ test.describe('MSG-01: 查询与提交分离（BE-002: 校验/入队失败不得
     assert.equal(state.size, 0);
   });
 
+  // 2026-09-22 review P2：去重 ack 此前只回 {ok,deduped}。离线队列里首条「在新 worktree 里开」的消息
+  // 若 ack 在路上丢了，重连重发撞上去重就拿不到它落在哪个实例，下一条会再建一棵树（见 S2 message-ack）。
+  test('commitProcessed 记下落点实例，重发时 processedInstanceId 能取回', () => {
+    const state = new Map();
+    commitProcessed('msg-wt', state, { instanceId: 'inst_7' });
+    assert.equal(processedInstanceId('msg-wt', state), 'inst_7');
+    commitProcessed('msg-plain', state);
+    assert.equal(processedInstanceId('msg-plain', state), null, '没记实例就回 null，不编一个');
+    assert.equal(processedInstanceId('never-seen', state), null);
+    assert.equal(processedInstanceId(undefined, state), null);
+  });
+
   test('commitProcessed 幂等：重复提交相同 ID 原样返回同一引用', () => {
     const state = new Map();
     const s1 = commitProcessed('msg-idem', state);
@@ -67,13 +80,13 @@ test.describe('MSG-01: 查询与提交分离（BE-002: 校验/入队失败不得
   test('超出 DEDUP_CAP 容量有界驱逐最旧的一条（近似 LRU，防内存无限增长）', () => {
     let state = new Map();
     const cap = 3;
-    state = commitProcessed('m-0', state, cap);
-    state = commitProcessed('m-1', state, cap);
-    state = commitProcessed('m-2', state, cap);
+    state = commitProcessed('m-0', state, { cap });
+    state = commitProcessed('m-1', state, { cap });
+    state = commitProcessed('m-2', state, { cap });
     assert.equal(state.size, 3);
 
     // 写入第 4 条，最旧的 m-0 应被剔除
-    state = commitProcessed('m-3', state, cap);
+    state = commitProcessed('m-3', state, { cap });
     assert.equal(state.size, 3);
     assert.equal(isProcessed('m-0', state), false, '最旧一条应被驱逐');
     assert.equal(isProcessed('m-1', state), true);

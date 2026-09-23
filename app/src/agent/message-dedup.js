@@ -18,12 +18,21 @@ export function isProcessed(clientMessageId, state) {
 // 纯函数：【提交】一个已成功处理的 clientMessageId（有界窗口）。返回新 state（幂等：已存在则原样返回引用）。
 // 无 ID → 原样返回。BE-002：调用方必须在消息真正成功入队后才 commit——校验失败/队满失败时【不要】commit，
 // 否则失败的 ID 被提前登记，第二次重发命中去重被当作成功静默丢弃。
-export function commitProcessed(clientMessageId, state, cap = DEDUP_CAP) {
+// instanceId：这条消息落在哪个实例。去重 ack 要原样带回（见 processedInstanceId）。
+export function commitProcessed(clientMessageId, state, { cap = DEDUP_CAP, instanceId = null } = {}) {
   if (!clientMessageId) return state;
   if (state.has(clientMessageId)) return state;
   // 原地写入：热路径避免每条消息 clone Map；调用方持有同一引用即可（仍返回 state 保持链式 API）
-  setCapped(state, clientMessageId, Date.now(), cap);
+  setCapped(state, clientMessageId, { at: Date.now(), instanceId: instanceId || null }, cap);
   return state;
+}
+
+// 纯函数：已处理过的这条消息当初落在哪个实例；没记或没处理过 → null。
+// 去重 ack 只回 {ok,deduped} 的话，首发 ack 在路上丢了的客户端无从得知落点：离线队列里「在新 worktree
+// 里开」的下一条没有锚点，会再建一棵树（2026-09-22 review P2，前端判据见 outbox-send.js）。
+export function processedInstanceId(clientMessageId, state) {
+  if (!clientMessageId) return null;
+  return state.get(clientMessageId)?.instanceId ?? null;
 }
 
 // ---- 处理中占用（区别于上面「已处理完」的永久记录）----

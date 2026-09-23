@@ -66,7 +66,12 @@ async function withClient(fn) {
       await new Promise(r => setTimeout(r, 250));
       return events.filter(e => e.type === 'user_message');
     };
-    return await fn({ send, bubbles, events });
+    // 其它带 ack 的事件（如 session:close）。
+    const emitAck = (event, payload) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时`)), 8000);
+      sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
+    });
+    return await fn({ send, bubbles, events, emitAck });
   } finally {
     try { sock.close(); } catch { /* 已关闭 */ }
     await killServer(server.proc);
@@ -84,6 +89,10 @@ test('REL-01：同一 clientMessageId 重发 → ack 标 deduped，且只往 age
     const again = await send({ text: '第一条', clientMessageId: 'dup-1' });
     assert.equal(again.ok, true, '重复消息是「已处理过」不是失败——ok:false 会让客户端无限重发');
     assert.equal(again.deduped, true, '重发必须标 deduped');
+    // 2026-09-22 review P2：首发的 ack 在路上丢了时，客户端只能从这条重发的 ack 得知消息落在哪个实例。
+    // 不带的话，离线队列里「在新 worktree 里开」的下一条没有锚点，会再建一棵树（outbox-send.js 的
+    // nextOutboxWorktreeAnchor 只认 ack.instanceId）。
+    assert.equal(again.instanceId, first.instanceId, `去重 ack 要带回首发落点实例，实际 ${JSON.stringify(again)}`);
 
     // ★ 第二个独立信号：ack 说「去重了」，气泡说「确实没再发一次」。
     // 只看 ack 的话，一个「标了 deduped 但仍调了 a.send()」的实现照样全绿。
@@ -93,6 +102,23 @@ test('REL-01：同一 clientMessageId 重发 → ack 标 deduped，且只往 age
       + `${JSON.stringify(list.map(b => b.payload?.text))}`);
     assert.equal(list[0].payload?.clientMessageId, 'dup-1',
       '气泡要透传 clientMessageId，否则前端的离线乐观气泡无从精确对账（FE-002）');
+  });
+});
+
+// 2026-09-23（#156 review）：去重 ack 带回的是首发落点实例。可原始 ack 丢了、重连之前那个实例又被关闭或
+// 空闲回收的话，带回的就是一个已经没了的 ID：客户端把后续「在新 worktree 里开」的消息改投到它，拿到 stale 就
+// 当永久失败丢出离线队列——一条都没发出去。实例已不在就不带，客户端回到原先的行为（由下一条去开）。
+test('REL-01：首发落点实例已关闭 → 去重 ack 不带回那个死 ID', async () => {
+  await withClient(async ({ send, emitAck }) => {
+    const first = await send({ text: '第一条', clientMessageId: 'dup-closed' });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const closed = await emitAck('session:close', { instanceId: first.instanceId });
+    assert.equal(closed.ok, true, `前提：实例要真的关掉：${JSON.stringify(closed)}`);
+
+    const again = await send({ text: '第一条', clientMessageId: 'dup-closed' });
+    assert.equal(again.ok, true);
+    assert.equal(again.deduped, true, '关了实例不改变「这条已经处理过」这件事');
+    assert.equal(again.instanceId, undefined, `实例已不在，不该把死 ID 带回去：${JSON.stringify(again)}`);
   });
 });
 
