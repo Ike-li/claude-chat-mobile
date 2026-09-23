@@ -25,7 +25,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -4370,8 +4370,11 @@ registerSocketConnection(io, socket => {
     // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
     // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字 = 冻结快照 + 尚未 capture 的 live。
     // PWA 切后台 socket 未断时 capture 不会跑，只回快照会把离开期间的增量丢掉。
-    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
+    // diskExternalLen=磁盘 history 里最后一条非己方写入的位置（externalHistoryExtent）。与 diskLen 不同，
+    // 它在 replayed>0 时照样带：己方 live 轮次不推高它，前端拿它比 seenDiskLen 不会把正常状态判成要重载，
+    // 而断线期间终端写进同一会话的内容只有靠它才对得上账（replayed>0 时 diskLen 恒空，见下）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0, diskExternalLen = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, diskExternalLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（重载口径：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
@@ -4396,11 +4399,18 @@ registerSocketConnection(io, socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
-    // 仅 replayed=0（活缓冲无可回放对话内容）时读磁盘 history 条数带回——正是「切入可能被外部写过的会话」候选；
-    // replayed>0=web 活跃、信活缓冲、不必对账磁盘。getSessionHistory 有 mtime 缓存，成本可忽略。
+    // diskLen 仅 replayed=0（活缓冲无可回放对话内容）时带回——正是「切入可能被外部写过的会话」候选。
+    // diskExternalLen 在 replayed>0 时也带（见 done 上方注释），但【有在途轮时不读】：文件正被己方追加，
+    // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
+    // 只等 5s——大会话会把健康连接拖成超时重连。此刻终端的并发写入本就落在已登记的「本地 turn 吸收窗」里。
     let diskLen = null;
-    if (replayed === 0) {
-      try { diskLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { diskLen = null; }
+    let diskExternalLen = null;
+    if (replayed === 0 || !(a.pendingTurns > 0)) {
+      try {
+        const history = await getSessionHistory(a.sessionId, a.cwd);
+        if (replayed === 0) diskLen = history.length;
+        diskExternalLen = externalHistoryExtent(history);
+      } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
     }
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
@@ -4414,7 +4424,7 @@ registerSocketConnection(io, socket => {
       snapshot: unreadSnapshotOnEntry.get(a.instanceId) || 0,
       live: unreadCounts.get(a.instanceId) || 0,
     });
-    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry);
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry, diskExternalLen);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
     // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。

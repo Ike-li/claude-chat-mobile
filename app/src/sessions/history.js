@@ -448,6 +448,18 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
   };
 }
 
+// 磁盘 history 里最后一条【非己方】写入的位置（1-based；没有则 0）。sync:since 在 replayed>0 时
+// 带给前端对账用：web 自己的 live 轮次不更新前端的 seenDiskLen（已知边界），拿总条数去比会把每一轮
+// 己方写入都当成外部写入；这个量不被己方（sdk-ts）写入推高，只有终端写入（cli，以及不认识的来源——
+// 与 catchUpStep 同口径保守当外部）才会。
+export function externalHistoryExtent(messages) {
+  if (!Array.isArray(messages)) return 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!isOwnSdkTail(messages[i]?.entrypoint)) return i + 1;
+  }
+  return 0;
+}
+
 // BE-009：客户端（重）连时 server 会强制重定 catch-up baseline（重连会 loadHistory 全量重渲，沿用滞后 baseline
 // 会把已显示消息再 history_append 一遍成重复气泡——前端 renderHistoryBubbles 不按 uuid 去重，故须靠 rebaseline
 // 避重复）。但该 rebaseline 有副作用：若「连接前终端写了新轮次、catchUpTick 尚未观察/推送」，这段外部增长会被
