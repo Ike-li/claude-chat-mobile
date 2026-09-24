@@ -122,6 +122,12 @@ export function defaultsFromEffectiveSettings(effective) {
     // model：settings 有顶层 model 才 pin；多数环境无此键 → undefined（交给 CLI 自选 + scout/init）
     model: rawModel,
     env,
+    // CLI 的「额度墙到点自动继续」。CLI 自己在 SDK 会话里用不上它（只在交互模式生效），但它表达了
+    // 用户的意图：终端里关掉了，web 侧的自动续跑也跟着只给选项（server/app.js 的 isAutoEnabled）。
+    // 只认显式布尔——CLI 缺省视为开，把非布尔当 false 会关掉用户从没关过的功能。
+    autoContinueAtUsageLimit: typeof effective?.autoContinueAtUsageLimit === 'boolean'
+      ? effective.autoContinueAtUsageLimit
+      : undefined,
   };
 }
 

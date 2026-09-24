@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -69,7 +69,7 @@ import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
@@ -125,6 +125,7 @@ import { createInstanceManager } from './instance-manager.js';
 import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
+import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers } from './socket-files.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
@@ -1221,6 +1222,10 @@ function instancesPayload() {
   // （症状：打开一个 worktree 会话后侧栏突然只剩那一条，看着像会话丢了）。
   // 驾驶轴仍由 instances[].cwd 逐条如实下发，前端的文件/改动面板走那一条（resolvePanelCwd）。
   const payload = { viewingInstanceId, viewingCwd: workspaceCwdOf(viewingCwdOf()), dirs: workDirs, instances: list, devMode: DEV_MODE, canRestart: canRestartNow(), needsYou: computeNeedsYou(), service: computeServiceHealth() };
+  // 额度墙自动继续的横幅数据，按 sessionId 归键而非挂在 instances[] 上：等待期间实例多半已被
+  // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
+  // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
+  payload.autoContinue = autoContinue.snapshot();
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -1415,6 +1420,30 @@ function readCliSnapshotForSession(sessionId, cwd) {
   if (process.env.CLI_STATUSLINE_DIR) options.dir = process.env.CLI_STATUSLINE_DIR;
   return readCliStatusSnapshot(sessionId, options);
 }
+
+// 额度墙「到点自动继续」。CLI 自带的 autoContinueAtUsageLimit 只在交互模式生效，SDK 会话恒进不去，
+// 由这里补齐（机制与取舍见 src/server/auto-continue.js 头注）。此处只做装配。
+// 自动布防的开关有两道，任一关掉都退回「只给选项」：CCM 自己的 CCM_AUTO_CONTINUE_AT_LIMIT（面板可关），
+// 以及 CLI 的 autoContinueAtUsageLimit——用户在终端 /config 里关掉了，web 这边也跟着关（终端等价）。
+const autoContinue = createAutoContinue({
+  isAutoEnabled: cwd => process.env.CCM_AUTO_CONTINUE_AT_LIMIT !== '0'
+    && cliDefaultsByCwd.get(cwd)?.autoContinueAtUsageLimit !== false,
+  readTailEntries: (sessionId, cwd) => readTranscriptTailEntries(sessionId, cwd),
+  // 否定证据入口：读不全返回 null（调度器据此转 stale，不当成「没人」照发）。不传 classifyTail：
+  // 这里只问「有没有别的驾驶员开着这个会话」，忙闲不影响结论。
+  listTerminalStates: () => listTerminalSessionStatesOrNull(),
+  getLiveInstance: sessionId => instanceForSession(sessionId) || null,
+  resumeInstance: (cwd, sessionId) => {
+    // 等待期间该工作区被移出 WORKDIRS：产品判据是「已开会话继续跑、仅拒新开」，到点 resume 就是新开。
+    if (!resolveDrivingCwd(cwd, workDirs)) throw new Error('该工作区已不在 WORKDIRS 里');
+    return dedupedResume(cwd, sessionId);
+  },
+  onChange: () => broadcastInstances(),
+  log: (sessionId, line) => {
+    if (sessionId) interactionLog.addSessionLog(sessionId, 'sys_info', line);
+    else console.warn(line);
+  },
+});
 
 // 只读镜像 / catchUp 追平引擎：15 个状态与整套编排已归 src/server/mirror-engine.js 所有，
 // 此处只做装配。注入面即本引擎与 app.js 的全部耦合点。
@@ -2028,6 +2057,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，
     // 否则前端要等下一次无关广播才知道该实例已不忙，spinner 一直挂着。
     onStateSettled: () => broadcastInstances(),
+    // 额度墙 → 自动续跑调度。sessionId / cwd 在回调那一刻现取：会话 id 可能晚于构造才落定，
+    // cwd 也可能中途被 EnterWorktree 换掉（transcript 随之搬家，到点复核要读新位置）。
+    onQuotaWall: wall => autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall }),
     // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
     //
     // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
@@ -2722,6 +2754,8 @@ registerSocketConnection(io, socket => {
       // 占用反而会挡住重试（卡到重启，但至多一次），即修 F1 时把「卡死」换成了「可能重复投递」。
       // 顺序不变量由 tests/unit/message-dedup.test.mjs 的源码级断言钉住（2026-08-04 code review）。
       messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: a.instanceId });
+      // 用户自己接着发了：这个会话的「到点自动继续」作废（人已经接手，到点再代发就是插队的第二条）
+      autoContinue.onManualSend(a.sessionId);
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
@@ -3079,6 +3113,16 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
+  // 额度墙自动继续横幅的三个按钮：取消 / 到点自动继续 / 立即继续。相位合不合法由 auto-continue.js 的
+  // act() 判，这里只校验形状——sessionId 过 SS-003 字符集守卫，action 只认三个字面量。
+  on(socket, 'user:autoContinue', (payload, ack) => {
+    const sessionId = payload?.sessionId;
+    const action = payload?.action;
+    const result = isSafeSessionId(sessionId) && ['cancel', 'arm', 'continueNow'].includes(action)
+      ? autoContinue.act(sessionId, action)
+      : { ok: false, error: 'invalid_payload' };
+    if (typeof ack === 'function') ack(result);
+  });
   // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
@@ -3609,7 +3653,10 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:close', (payload, ack) => {
     const id = payload?.instanceId;
     if (!agents.has(id)) { if (typeof ack === 'function') ack({ ok: false, error: '实例不存在' }); return; }
+    const closedSessionId = agents.get(id).sessionId;
     disposeInstance(id); // 内含 viewingInstanceId 回落 + broadcastInstances
+    // 用户亲手关掉的会话，到点不该在后台自己跑起来（CLI 退出进程同样作废等待）
+    if (closedSessionId) autoContinue.onSessionGone(closedSessionId, 'closed');
     lastStatusLine = null;
     scheduleStatusRefresh();
     if (typeof ack === 'function') ack({ ok: true, viewingInstanceId });
@@ -3787,6 +3834,7 @@ registerSocketConnection(io, socket => {
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
     // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
+    autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     // 会话在托管 worktree 里时一并报告那棵树的状态：transcript 删掉了，**worktree 还在磁盘上**，
     // 不说一声用户就不知道它在哪、里面还剩什么。
@@ -4783,6 +4831,7 @@ function shutdown(sig) {
   // 卡住关闭路径（5s timeout）。与上面两条同一理由，一起清。
   clearInterval(serviceSampleInterval);
   mirrorEngine.stop();     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
+  autoContinue.stop();     // 到点续跑的 tick 定时器 + 布防表。重启即作废是有意的（同 CLI，见 auto-continue.js 头注）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances

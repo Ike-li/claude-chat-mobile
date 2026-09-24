@@ -26,6 +26,7 @@ export function makeSession(opts = {}) {
     onStateSettled: opts.onStateSettled || (() => {}),
     onCwdChanged: opts.onCwdChanged, // 缺省不传：裁决方缺席时实例不得自行改 cwd
     onEffortEffective: opts.onEffortEffective,
+    onQuotaWall: opts.onQuotaWall,   // 缺省不传：没人接也不得影响撞墙既有的 notice / error
   });
   return { s: session, events, dispose: () => session.dispose() };
 }

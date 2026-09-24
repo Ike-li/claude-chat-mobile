@@ -91,7 +91,7 @@
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 57 个） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 58 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -180,6 +180,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 - 服务状态面板只渲染判定化告警，不展示裸计数器（原始数留 `/metrics`）。
 - 重启历史两条路径**互斥**：macOS 走 launchctl 快照比对（还能看到隧道等其它 unit），其余平台走 server 自身启动记录。双写会让同一次重启进两条、flapping 阈值虚高一倍。  
 - 推送 body 最小化（SEC-04）；完成类通知在前台在线时可不推。
+- 额度墙「到点自动继续」**重启即作废、不落盘**（同 CLI 退出即作废；与 APPROVAL-02 同立场：重启时残留的待执行动作不再执行）。它是在无人值守时替用户开一轮，「重启后自动开跑」比「重启后要手动点一下」更难预期。别为「更可靠」加持久化，取舍见 [architecture.md](architecture.md#额度墙到点自动继续)。
 
 ### 4.6 配置文件
 

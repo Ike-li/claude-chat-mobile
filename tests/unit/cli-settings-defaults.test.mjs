@@ -59,16 +59,26 @@ test.describe('defaultsFromEffectiveSettings（L3 抽取）', () => {
         permissions: { defaultMode: 'default' },
         effortLevel: 'low',
       }),
-      { mode: 'default', effort: 'low', model: undefined, env: undefined },
+      { mode: 'default', effort: 'low', model: undefined, env: undefined, autoContinueAtUsageLimit: undefined },
     );
   });
   test('缺字段 → L4 形状（mode=default, effort=null）', () => {
     assert.deepEqual(defaultsFromEffectiveSettings(undefined), {
-      mode: 'default', effort: null, model: undefined, env: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined, autoContinueAtUsageLimit: undefined,
     });
     assert.deepEqual(defaultsFromEffectiveSettings({}), {
-      mode: 'default', effort: null, model: undefined, env: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined, autoContinueAtUsageLimit: undefined,
     });
+  });
+  // CLI 的「额度墙到点自动继续」设置。CLI 缺省视为开，所以只有显式布尔才透传：
+  // undefined = 用户没设过（web 侧按开处理），false = 用户在终端 /config 里关掉了（web 侧也只给选项）。
+  test('autoContinueAtUsageLimit：只透传显式布尔，其余一律 undefined', () => {
+    assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: false }).autoContinueAtUsageLimit, false);
+    assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: true }).autoContinueAtUsageLimit, true);
+    for (const junk of ['false', 0, null, {}]) {
+      assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: junk }).autoContinueAtUsageLimit, undefined,
+        `${JSON.stringify(junk)} 不是 CLI 会认的值——当成 false 会把用户没关的功能关掉`);
+    }
   });
   test('顶层 model 有值才 pin', () => {
     assert.equal(

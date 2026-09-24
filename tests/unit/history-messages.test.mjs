@@ -318,6 +318,23 @@ test('getSessionHistory: API Error 条带出 isApiErrorMessage / apiErrorStatus 
   assert.equal(msgs[0].isApiErrorMessage, undefined);
 });
 
+// 额度墙自动续跑发出的那句 user 消息：live 侧 user_message 带 origin，前端据此标「自动继续」。
+// 刷新后从磁盘读回来若不带，这条就退化成「用户自己打了一句英文」——同 API 报错标记那条的理由。
+test('getSessionHistory: 自动续跑发出的 user 条带出 origin，普通 user 条不带', async () => {
+  const cwd = '/test/auto-continuation-origin';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'autocont', [
+    { type: 'user', uuid: 'u1', origin: { kind: 'human' }, message: { role: 'user', content: '跑个长任务' } },
+    { type: 'user', uuid: 'u2', origin: { kind: 'auto-continuation' }, promptSource: 'sdk', message: { role: 'user', content: [{ type: 'text', text: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.' }] } },
+    { type: 'assistant', uuid: 'a1', origin: { kind: 'auto-continuation' }, message: { role: 'assistant', content: [{ type: 'text', text: '好的，继续' }] } },
+  ]);
+  const msgs = await getSessionHistory('autocont', cwd, 50, { baseDir: BASE });
+  const byUuid = Object.fromEntries(msgs.map(m => [m.uuid, m]));
+  assert.equal(byUuid.u2.origin, 'auto-continuation');
+  assert.equal('origin' in byUuid.u1, false, 'human 是缺省，不加字段——前端只认有值的那一种');
+  assert.equal('origin' in byUuid.a1, false, '只标 user 条：这是「谁发的这句话」，assistant 回复没有这个问题');
+});
+
 test('getSessionHistory: apiErrorStatus 为 null（连接错误无 HTTP 响应）仍标记为错误', async () => {
   const cwd = '/test/api-error-nostatus';
   const dir = join(BASE, getProjectDir(cwd));
