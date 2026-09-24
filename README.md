@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>电脑上的 Claude Code，出门用手机接着干。</strong><br>
-  审批 · 提问 · 续接会话 · 控制面留在你自己的机器上
+  就是你电脑上那个 claude · 任何网关和 API key 都能用 · 控制面在你自己机器上
 </p>
 
 <p align="center">
@@ -14,6 +14,30 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
+
+![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
+</p>
+
+![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+
+## 为什么用它
+
+* **手机上驱动的就是你电脑上那个 claude。** 通过 Agent SDK 驱动本机的 `claude` CLI，同一份 CLAUDE.md、MCP、skills、登录和权限规则。目标是终端里能做的事，手机上都能做。
+* **官方 Remote Control 进不去的配置，它都能用。** 中转、第三方网关、API key、国产模型、Bedrock / Vertex、关了遥测，你的 `claude` 怎么配就怎么用。
+* **会话不用提前准备。** 放行工作区里的全部会话都能看能续，终端里开的、上周的、忘了开远程开关的都在。
+* **控制面在你自己机器上。** 服务、会话记录、设备信任、审计全在本机，局域网内可以完全闭环，不用注册任何账号。
 
 ## 终端里的哪些事，手机上也能做
 
@@ -71,35 +95,13 @@ npm ci --omit=dev && npm run setup && npm start
 
 手机打开终端打印的地址即可。首次从新设备进来要批准一次：`node scripts/device.js list` 再 `approve <ID>`。手输 64 位 token 很痛苦，`node scripts/qr.js` 能把地址打成二维码扫一下。
 
-> **起服 ≠ 能聊天。** CCM 的令牌 / 设备审批只决定手机能不能进主壳；**主机终端里的 `claude` 能不能正常跑完一轮会话**，才决定手机上能不能真对话。官方订阅要本机已 `/login`；第三方网关不走 Anthropic 登录、**不会**出现 `Not logged in`，它要的是 `ANTHROPIC_*` 真的生效。手机上收到 CLI 透传的具体报错反而是好消息——说明这条链路本身是通的。两种情况收敛到同一个动作：**先在主机终端把 `claude` 聊通一轮，再从手机重试**。验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
+> **起服 ≠ 能聊天。** 手机上聊不通时，先在电脑终端里把 `claude` 聊通一轮再重试，验收清单见 [首次使用指南 §8](docs/getting-started.md#8-完成首次验收)。
 
 要改代码或跑测试请 `git clone` 完整仓库。配置、非交互 setup、PWA、CLI hooks、**更新方式**：**→ [首次使用指南](docs/getting-started.md)**
 
 ## 界面长什么样
 
 **不想先装也能摸一遍：[在线演示](https://ike-li.github.io/claude-chat-mobile/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
-
-<details>
-<summary>展开 8 张截图</summary>
-
-![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
-
-![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
-</p>
-
-![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
-
-![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
-
-![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
-
-![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
-
-</details>
 
 ## 它是怎么工作的
 
@@ -141,10 +143,16 @@ npm ci --omit=dev && npm run setup && npm start
 
 ## 文档
 
+**使用**
+
 * **[首次使用指南](docs/getting-started.md)** · [Getting Started (EN)](docs/getting-started.en.md) —— 装机到手机发出第一条消息、配置、更新、命令速查
 * **[部署与运维](docs/deployment.md)** —— 局域网到长期公网、Cloudflare Tunnel / Access、不经 Cloudflare 的替代入口
+* [安全策略](SECURITY.md) —— 漏洞怎么私下报告
+
+**参与开发**
+
 * **[架构说明](docs/architecture.md)** · [Architecture (EN)](docs/architecture.en.md) · [架构图集](https://ike-li.github.io/claude-chat-mobile/diagrams/)
-* [硬性规则与技术债](docs/hard-rules.md) · [展示契约](docs/display-contracts.md) · [安全策略](SECURITY.md)
+* [硬性规则与技术债](docs/hard-rules.md) · [展示契约](docs/display-contracts.md)
 
 配置项和命令都不维护静态列表：`node scripts/config.js schema` 打印当前配置定义，每条 CLI 不带子命令就打印自己的用法。
 

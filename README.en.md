@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>The Claude Code on your computer — keep driving it from your phone.</strong><br>
-  Approvals · questions · resume sessions · the control plane stays on your own machine
+  Your own local claude · any gateway or API key works · the control plane stays on your machine
 </p>
 
 <p align="center">
@@ -14,6 +14,32 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
+
+> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
+
+![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
+<p align="center">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
+</p>
+
+![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
+
+## Why use it
+
+* **It drives the same `claude` you use on your computer.** Your local `claude` CLI, through the Agent SDK: the same CLAUDE.md, MCP servers, skills, login and permission rules. The goal is that anything you can do in the terminal, you can do from the phone.
+* **It works where official Remote Control can't.** Relays, third-party gateways, API keys, non-Anthropic models, Bedrock / Vertex, telemetry disabled: however your `claude` is configured, that is what it uses.
+* **Every session is already there.** All sessions in your allowlisted workspaces can be viewed and resumed: ones started in the terminal, last week's, ones you never turned remote access on for.
+* **The control plane stays on your machine.** Server, transcripts, device trust and audit logs all live on your computer, fully self-contained on a LAN, with no account to sign up for.
 
 ## What you do in the terminal, and how it works on the phone
 
@@ -71,37 +97,13 @@ npm ci --omit=dev && npm run setup && npm start
 
 Open the address printed in the terminal on your phone. The first time a new device connects it needs one approval: `node scripts/device.js list`, then `approve <ID>`. Typing a 64-character token on a phone is painful — `node scripts/qr.js` renders the address as a terminal QR code.
 
-> **A running server ≠ a working chat.** CCM's token and device approval only decide whether the phone gets into the shell; **whether `claude` in your host terminal can complete one normal turn** decides whether you can actually talk. A Claude subscription needs that host signed in; a third-party gateway does not use Anthropic login and will **never** show `Not logged in` — it needs `ANTHROPIC_*` to actually take effect. A specific CLI error reaching your phone is good news: the link itself works. Both cases converge on one action: **get `claude` through a turn in your host terminal, then retry from the phone.** Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
+> **A running server ≠ a working chat.** If chat doesn't work from the phone, get `claude` through one turn in your host terminal first, then retry. Full checklist: [Getting Started §8](docs/getting-started.en.md#8-complete-the-first-run-check).
 
 To change code or run tests, `git clone` the full repository instead. Configuration, non-interactive setup, PWA, CLI hooks and **how to update**: **→ [Getting Started](docs/getting-started.en.md)**
 
 ## What it looks like
 
 **Try it before installing anything: [live demo](https://ike-li.github.io/claude-chat-mobile/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
-
-<details>
-<summary>Show 8 screenshots</summary>
-
-> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
-
-![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
-
-![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
-</p>
-
-![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
-
-![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
-
-![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
-
-![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
-
-</details>
 
 ## How it works
 
@@ -143,10 +145,16 @@ Read [deployment and operations](docs/deployment.md) (Chinese) before exposing i
 
 ## Docs
 
+**Using it**
+
 * **[Getting Started](docs/getting-started.en.md)** — from install to your phone's first message; configuration, updating, command reference
 * **[Deployment and operations](docs/deployment.md)** (Chinese) — LAN to long-term public entry points, Cloudflare Tunnel / Access, off-Cloudflare alternatives
+* [Security policy](SECURITY.md) — how to report a vulnerability privately
+
+**Contributing**
+
 * **[Architecture guide](docs/architecture.en.md)** · [Architecture diagrams](https://ike-li.github.io/claude-chat-mobile/diagrams/)
-* [Hard rules and tech debt](docs/hard-rules.md) (Chinese) · [Display contracts](docs/display-contracts.md) (Chinese) · [Security policy](SECURITY.md)
+* [Hard rules and tech debt](docs/hard-rules.md) (Chinese) · [Display contracts](docs/display-contracts.md) (Chinese)
 
 Config keys and commands are not maintained as static lists: `node scripts/config.js schema` prints the current definitions, and every CLI prints its own usage when run without a subcommand.
 
