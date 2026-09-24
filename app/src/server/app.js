@@ -69,7 +69,7 @@ import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
@@ -1429,8 +1429,9 @@ const autoContinue = createAutoContinue({
   isAutoEnabled: cwd => process.env.CCM_AUTO_CONTINUE_AT_LIMIT !== '0'
     && cliDefaultsByCwd.get(cwd)?.autoContinueAtUsageLimit !== false,
   readTailEntries: (sessionId, cwd) => readTranscriptTailEntries(sessionId, cwd),
-  // 不传 classifyTail：这里只问「有没有别的驾驶员开着这个会话」，忙闲不影响结论
-  listTerminalStates: () => listTerminalSessionStates(),
+  // 否定证据入口：读不全返回 null（调度器据此转 stale，不当成「没人」照发）。不传 classifyTail：
+  // 这里只问「有没有别的驾驶员开着这个会话」，忙闲不影响结论。
+  listTerminalStates: () => listTerminalSessionStatesOrNull(),
   getLiveInstance: sessionId => instanceForSession(sessionId) || null,
   resumeInstance: (cwd, sessionId) => {
     // 等待期间该工作区被移出 WORKDIRS：产品判据是「已开会话继续跑、仅拒新开」，到点 resume 就是新开。

@@ -180,6 +180,18 @@ test.describe('到点但不发', () => {
     assert.deepEqual([entryOf(h).phase, entryOf(h).reason], ['stale', 'other_driver']);
   });
 
+  test('注册表读不全（listTerminalStates 给 null）→ stale（unverified），不把「没读到」当「没人」', async () => {
+    const h = harness();
+    const inst = fakeInstance();
+    h.live.set(SID, inst);
+    h.wall();
+    h.terminal = null;
+    await h.tickAt(FIRE_AT - 10_000);
+    await h.tickAt(FIRE_AT + 1);
+    assert.equal(inst.sent.length, 0, '读不动的那条可能正是开着本会话的终端（PR #170 Codex review P1）');
+    assert.deepEqual([entryOf(h).phase, entryOf(h).reason], ['stale', 'unverified']);
+  });
+
   test('等待期间机器睡过了重置点 → stale（slept），醒来不自动发', async () => {
     const h = harness();
     const inst = fakeInstance();
@@ -310,6 +322,21 @@ test.describe('用户的动作', () => {
     await h.ac.idle();
     assert.equal(inst.sent.length, 1);
     assert.equal(entryOf(h), null);
+  });
+
+  test('自动布防转 stale 后用户关了开关再点「继续」→ 照发：点这一下就是人拍板', async () => {
+    const h = harness();
+    const inst = fakeInstance();
+    h.live.set(SID, inst);
+    h.wall();
+    await h.tickAt(T0 + 30_000);
+    await h.tickAt(FIRE_AT + 2 * 3600_000);
+    assert.deepEqual([entryOf(h).phase, entryOf(h).origin], ['stale', 'auto']);
+    h.autoEnabled = false;
+    assert.deepEqual(h.ac.act(SID, 'continueNow'), { ok: true });
+    await h.ac.idle();
+    assert.equal(inst.sent.length, 1,
+      '开关管的是「自动」；按 auto 条目复核会删掉条目却不发、ack 还回 ok，用户这一下就丢了（PR #170 Codex review P2）');
   });
 
   test('不认识的会话 / 动作 → ok:false，不改任何状态', () => {

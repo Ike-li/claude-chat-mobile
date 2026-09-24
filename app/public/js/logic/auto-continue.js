@@ -27,7 +27,7 @@ export function formatAutoContinueClock(ms, now = Date.now()) {
 const STALE_TEXT = {
   slept: '额度已于 {time} 重置；主机期间休眠，没有自动继续',
   other_driver: '终端或桌面端正开着这个会话，没有自动继续',
-  unverified: '读不到这个会话的记录，没有自动继续',
+  unverified: '无法确认这个会话的最新状态，没有自动继续', // 会话记录或终端注册表读不全
   resume_failed: '会话没能重新打开，没有自动继续',
 };
 const STALE_FALLBACK = '到点了，但没有自动继续';

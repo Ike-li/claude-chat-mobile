@@ -15,7 +15,7 @@
 // 【到点时的四道复核】（任一不过都不发——代发是替用户做决定，没有证据就不做）
 //   1. 自动布防的条目：开关此刻仍开着（手动布防的不看开关：开关管的是「自动」）
 //   2. transcript 尾窗里墙仍是主链最后一条对话（没人在终端 / 别的设备上接着干过），读不到就不发
-//   3. 注册表里没有终端或桌面端开着这个会话（单驾驶员，SESSION-01）
+//   3. 注册表里没有终端或桌面端开着这个会话（单驾驶员，SESSION-01）；注册表读不全也不发
 //   4. 实例没有在跑一轮、内存上下文没有陈旧（externalDirty）
 // 2、3 不过且原因是「有别人可能在驾驶」时转 stale：横幅留一个「继续」按钮，由用户拍板。
 import {
@@ -129,8 +129,10 @@ export function createAutoContinue({
       if (remove(sessionId, 'superseded')) onChange();
       return;
     }
+    // null = 注册表读不全。这里拿它当否定证据（没有别的驾驶员 ⇒ 可以代发），读不全时结论不成立。
     const states = await listTerminalStates();
-    const st = states?.get?.(terminalStateKey(cwd, sessionId));
+    if (!states) { toStale(entry, 'unverified'); onChange(); return; }
+    const st = states.get(terminalStateKey(cwd, sessionId));
     if (st && (st.state || st.blocked)) { toStale(entry, 'other_driver'); onChange(); return; }
     let inst = getLiveInstance(sessionId);
     if (inst?.pendingTurns > 0) {
@@ -209,7 +211,15 @@ export function createAutoContinue({
       return { ok: true };
     }
     if (action === 'continueNow' && entry.phase === 'stale') {
-      void startFire(entry);
+      // 点「继续」就是人拍板：按手动处理（同 arm 那一支），不再受「自动」开关约束——否则开关关着时
+      // 复核会删掉条目却不发，ack 还回 ok，用户这一下就丢了。
+      // 已有在途的那一次就什么都不动：换掉表里的条目对象会让在途那次醒来认不出自己（fire 末尾按
+      // 对象身份复核），而 startFire 又按 sessionId 复用它——两边一错开，连点两下就一条都不发。
+      if (!firing.has(sessionId)) {
+        const manual = { ...entry, origin: 'manual' };
+        entries.set(sessionId, manual);
+        void startFire(manual);
+      }
       return { ok: true };
     }
     return { ok: false, error: 'invalid_action' };

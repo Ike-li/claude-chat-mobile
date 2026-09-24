@@ -1,8 +1,8 @@
 // tests/invariants/auto-continue-single-driver.test.mjs —— 额度墙自动续跑不得绕过单驾驶员
 // 守护：SESSION-01（终端仍在驾驶时 Web 不得向同一会话发新消息——server 自己到点发起的续跑同样是 Web 在写）
-// 测什么：调度器到点复核接上【真】注册表（listTerminalSessionStates）与【真】transcript 尾窗
-//   （readTranscriptTailEntries），终端 / 桌面端开着这个会话、或终端在墙之后写过，都不得代发；
-//   外加一条正对照——两者都干净时确实会发，证明这套仪器看得见「发了」。
+// 测什么：调度器到点复核接上【真】注册表（listTerminalSessionStatesOrNull，与 app.js 生产接线同一入口）
+//   与【真】transcript 尾窗（readTranscriptTailEntries），终端 / 桌面端开着这个会话、终端在墙之后写过、
+//   或注册表读不全，都不得代发；外加一条正对照——都干净时确实会发，证明这套仪器看得见「发了」。
 // 不测什么 + 为什么：① 判定规则本身（尾部怎么认、注册表怎么归一）在 quota-auto-continue / session-registry
 //   的单测里，这里只证接线后方向对 ② 真 server 组装根上的接线（app.js 的注入）属 S2，未建——本仓 S2 的
 //   假 CLI 不产出额度墙，要造墙得先给 fake-claude 加场景，成本与收益不成比例 ③ 真 CLI 撞真墙属 S5，
@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { createAutoContinue } from '../../app/src/server/auto-continue.js';
 import { AUTO_CONTINUE_JITTER_MIN_MS } from '../../app/src/agent/quota-auto-continue.js';
 import { getProjectDir, readTranscriptTailEntries } from '../../app/src/sessions/history.js';
-import { listTerminalSessionStates } from '../../app/src/sessions/session-registry.js';
+import { listTerminalSessionStatesOrNull } from '../../app/src/sessions/session-registry.js';
 
 const SID = '6f0c2a55-1b7e-4a4e-9d0f-0a1b2c3d4e5f';
 const CWD = '/Users/you/code/app';
@@ -72,7 +72,7 @@ function makeScheduler({ projects, registry }) {
     clearIntervalFn: () => {},
     isAutoEnabled: () => true,
     readTailEntries: (sid, cwd) => readTranscriptTailEntries(sid, cwd, { baseDir: projects }),
-    listTerminalStates: () => listTerminalSessionStates({ dir: registry }),
+    listTerminalStates: () => listTerminalSessionStatesOrNull({ dir: registry }),
     getLiveInstance: () => inst,
     resumeInstance: async () => inst,
   });
@@ -110,6 +110,17 @@ test('桌面端 Code 标签开着这个会话（不自报 status）→ 不代发
   const { sent, fireNow } = makeScheduler(roots);
   await fireNow();
   assert.equal(sent.length, 0);
+});
+
+test('开着本会话的终端，其注册表文件正写到一半（读不全）→ 不代发', async () => {
+  const roots = setup();
+  writeTranscript(roots.projects, [human('跑个长任务'), wallEntry]);
+  // CLI 状态变化时重写自己的条目；撞上这一瞬，宽松读法会跳过它，看起来就像「没有终端」
+  writeFileSync(join(roots.registry, `${process.pid}.json`), `{"pid":${process.pid},"sessionId":"${SID}","cwd":"${CWD}","entry`);
+  const { ac, sent, fireNow } = makeScheduler(roots);
+  await fireNow();
+  assert.equal(sent.length, 0, '把「没读到」当「没有」，读不动的那一条恰好就是开着本会话的终端（PR #170 Codex review P1）');
+  assert.equal(ac.snapshot()[0]?.phase, 'stale');
 });
 
 test('终端在墙之后已经写过（进程已退出、注册表里没有它）→ 不代发', async () => {

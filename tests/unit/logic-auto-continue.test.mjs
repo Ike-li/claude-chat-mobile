@@ -64,7 +64,7 @@ test('stale：每种原因都要说清为什么没自动继续，按钮是「继
   const cases = {
     slept: /休眠/,
     other_driver: /终端|桌面端/,
-    unverified: /读不到.*记录/,
+    unverified: /无法确认/,
     resume_failed: /重新打开/,
   };
   for (const [reason, re] of Object.entries(cases)) {

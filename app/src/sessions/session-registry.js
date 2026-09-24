@@ -329,6 +329,21 @@ export async function listTerminalSessionStates({
   return map;
 }
 
+// 把这张表当【否定证据】用的调用方入口：「表里没有别的驾驶员 ⇒ 可以往这个会话里写」。
+// 读不全（目录读不动、某条写到一半）返回 null，调用方据此 fail-closed——与 listTerminalSessionStates
+// 自己的 fail-open 方向相反：那是给状态显示的，读不动少标一个运行中无害；这里读不动的那一条可能正是
+// 开着本会话的终端，把「没读到」当成「没有」就是两端同时写。目录不存在（ENOENT）是确定的「没有」，
+// 照常返回空表（readAllEntries 不对它回调 onUnreadable）。rewind confirm 在 app.js 里内联了同一判据。
+export async function listTerminalSessionStatesOrNull({ dir = DEFAULT_SESSION_REGISTRY_DIR, isAlive = defaultIsAlive } = {}) {
+  let unreadable = false;
+  try {
+    const states = await listTerminalSessionStates({ dir, isAlive, onUnreadable: () => { unreadable = true; } });
+    return unreadable ? null : states;
+  } catch {
+    return null;
+  }
+}
+
 // 负证据状态机（2026-07-28 真机 b06fb05d：杀 CLI 后 web 排队续接干等 5 分钟）：被杀的进程留不下
 // 遗言，但它的注册表条目会消失（正常退出删文件；强杀留陈尸但 pid 验活过不了）——「曾观测到
 // entrypoint=cli 的活条目 → 现在没有了」因此是终端已死/已退的强信号，比 5 分钟零写入阈值快得多。
