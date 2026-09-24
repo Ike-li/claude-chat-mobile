@@ -269,15 +269,22 @@ export function buildAgentQueryOptions(session, env = process.env) {
       session._recordStderr(data);
       if (env.LOG_STDERR) console.error('[claude]', sanitize(data));
     },
-    // 会话中途换 cwd 的唯一通知通道。EnterWorktree / ExitWorktree 会在**运行途中**把工作目录换掉，
-    // transcript 随之迁到新 cwd 的 project 目录——实例 cwd 不跟着走，历史回显/子代理扫描/resume/附件
-    // 就全按一个已经空掉的目录解析（症状见 handleCwdChanged）。SDK 流里没有等价的消息类型，
-    // 只有这个 hook 报得出 old_cwd/new_cwd，删掉它等于这条链整条断开且无任何报错。
+    // 会话中途换 cwd 的冗余通道（主通道是主链 tool_use_result，见 DRIVING_CWD_TOOLS）。
+    // CLI 2.1.280 的 CwdChanged 只由 Bash 工具「命令跑完发现 shell cwd 变了」那条路派发，
+    // EnterWorktree / ExitWorktree 不派发（2026-09-23 读 CLI 本体 + 生产日志缺席双重确认）。
+    // 留着它是为了 Bash 那条路、以及上游哪天补上派发时不用改这里——两路幂等，见 _adoptDrivingCwd。
     hooks: {
       CwdChanged: [{ hooks: [async (input) => { session.handleCwdChanged(input); return {}; }] }],
     },
   };
 }
+// 会话中途换工作目录的两个工具，以及从各自的结构化输出取新驾驶轴的方式（SDK 公开类型
+// EnterWorktreeOutput.worktreePath / ExitWorktreeOutput.originalCwd，经 user 消息的 tool_use_result 送达）。
+// 判据是工具名而不是结果形状：别的工具的输出恰好带 worktreePath 字段不算数。
+const DRIVING_CWD_TOOLS = Object.freeze({
+  EnterWorktree: r => r?.worktreePath,
+  ExitWorktree: r => r?.originalCwd,
+});
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
 // B2：已完成后台任务的留存条数。面板只用来「回头看一眼刚跑完的那批」，不是历史归档——
 // 20 条足够覆盖一次会话里的并发批次，且上限恒定、不随会话长度涨。
@@ -663,22 +670,35 @@ export class AgentSession {
       ?.catch?.(() => {});
   }
 
-  // 会话中途换 cwd（EnterWorktree / ExitWorktree 触发的 CwdChanged hook）。
-  //
-  // 【为什么实例 cwd 必须跟着走】2026-09-13 真机形态：会话在父仓开，中途 EnterWorktree 进
-  // `.claude/worktrees/<name>`，CLI 把整份 transcript 迁到新 cwd 的 project 目录，父仓那边一个
-  // 字节不留。this.cwd 停在父仓的话，getSessionHistory / scanSubagents / resume / saveAttachments
-  // 全按一个已经空掉的目录去解析——用户侧的症状是切回会话「历史消息加载失败」，而磁盘上那份完好。
-  //
-  // 【采信权在 server】new_cwd 源自 EnterWorktree 的 path 参数，属用户可控面，必须过白名单判据
-  // （SCOPE-01），而白名单的真相源在 server。裁决方缺席 = 不采信，不是无条件信任。
-  // 存的是 server 归一（realpath）后的值而不是 CLI 报来的原串：macOS 上 /var 与 /private/var 是
-  // 同一目录的两种写法，存未解析的那个会让 getProjectDir 静默查空（同 resolveManagedWorktree 的理由）。
+  // 会话中途换 cwd（SESSION-03）：CwdChanged hook 报上来的那一路。
   handleCwdChanged(input) {
-    const next = typeof input?.new_cwd === 'string' ? input.new_cwd : '';
-    if (!next) return;
-    const accepted = this.onCwdChanged?.(next, this.cwd);
-    if (!accepted) return;
+    this._adoptDrivingCwd(typeof input?.new_cwd === 'string' ? input.new_cwd : '', 'hook');
+  }
+
+  // 主链 tool_result 报上来的那一路：只认 DRIVING_CWD_TOOLS 里的工具（调用方已排除子 agent 与 is_error）。
+  _adoptCwdFromToolResult(toolName, result) {
+    if (!Object.hasOwn(DRIVING_CWD_TOOLS, toolName)) return;
+    const next = DRIVING_CWD_TOOLS[toolName](result);
+    if (typeof next === 'string') this._adoptDrivingCwd(next, 'tool_result');
+  }
+
+  // 【为什么实例 cwd 必须跟着走】会话在父仓开，中途 EnterWorktree，CLI 把整份 transcript 迁到新 cwd
+  // 的 project 目录，父仓那边一个字节不留。this.cwd 停在父仓的话，getSessionHistory / scanSubagents /
+  // resume / saveAttachments 全按一个已经空掉的目录去解析——用户侧的症状是切回会话「历史消息加载失败」，
+  // 而磁盘上那份完好。9/13 那版只接了 CwdChanged hook，而 CLI 对 EnterWorktree 根本不派发它，
+  // 于是这条修复从未生效（2026-09-23 真机会话 1c401b5d）。
+  //
+  // 【采信权在 server】新 cwd 源自 EnterWorktree 的 path 参数，属用户可控面，必须过范围判据，
+  // 而判据的真相源在 server。裁决方缺席 = 不采信，不是无条件信任。存的是 server 归一（realpath）后
+  // 的值而不是 CLI 报来的原串：macOS 上 /var 与 /private/var 是同一目录的两种写法，存未解析的那个
+  // 会让 getProjectDir 静默查空。
+  //
+  // 【两路幂等】hook 与 tool_result 可能先后报同一次换目录。原串相同直接短路；归一后与当前值相同
+  // 也不写回、不重播——否则同一次换目录广播两遍，前端白重建一次。
+  _adoptDrivingCwd(next, via) {
+    if (!next || next === this.cwd) return;
+    const accepted = this.onCwdChanged?.(next, this.cwd, { via });
+    if (!accepted || accepted === this.cwd) return;
     this.cwd = accepted;
     // 驾驶轴变了但不重播 instances，前端的 entry.cwd / panelCwd 会一直停在旧值——
     // 病灶从这里挪到广播链上，而症状与完全没修一模一样。onStateSettled 正是为这类
@@ -3242,6 +3262,8 @@ export class AgentSession {
           if (doneTaskId != null) this.bgTaskDone(doneTaskId);
           break; // 注入消息不含 tool_result，独立分支返回
         }
+        // tool_use_result 是**消息级**字段：一条消息里只有一个 tool_result 时才分得清它属于哪个工具。
+        const toolResultCount = asArray(msg.message?.content).filter(b => b?.type === 'tool_result').length;
         for (const block of asArray(msg.message?.content)) {
           if (block?.type === 'tool_result') {
             const raw = msg.tool_use_result ?? block.content;
@@ -3251,7 +3273,8 @@ export class AgentSession {
             this.denyKinds.delete(block.tool_use_id);
             this.cacheToolOutput(block.tool_use_id, raw);        // 缓存原始结构，getToolOutput 返回时红线
             const fullRedacted = stringify(redactBase64(raw));    // 摘要层红线（结构层递归替换嵌套 base64）
-            const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
+            const toolName = this.toolNames.get(block.tool_use_id); // 下一行就删，驾驶轴判据还要用它
+            const cap = toolResultCap(toolName);
             this.toolNames.delete(block.tool_use_id);
             this.pendingToolUses.delete(block.tool_use_id); // 工具收工，豁免销账
             const outputSummary = truncate(fullRedacted, cap);
@@ -3262,6 +3285,8 @@ export class AgentSession {
               truncated: fullRedacted.length > cap,
               denyKind
             });
+            // SESSION-03：EnterWorktree / ExitWorktree 成功后驾驶轴跟着走（子 agent 已在上方分流出去）
+            if (!block.is_error && toolResultCount === 1) this._adoptCwdFromToolResult(toolName, msg.tool_use_result);
           }
         }
         break;

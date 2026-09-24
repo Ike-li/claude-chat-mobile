@@ -2060,7 +2060,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 额度墙 → 自动续跑调度。sessionId / cwd 在回调那一刻现取：会话 id 可能晚于构造才落定，
     // cwd 也可能中途被 EnterWorktree 换掉（transcript 随之搬家，到点复核要读新位置）。
     onQuotaWall: wall => autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall }),
-    // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
+    // 会话中途换 cwd（EnterWorktree / ExitWorktree，SESSION-03）。agent 从两条通道报上来——
+    // 主链 tool_use_result（主通道）与 CwdChanged hook（冗余），channel 标出是哪条，这里裁决。
     //
     // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
     // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而白名单的真相源在这里。
@@ -2072,11 +2073,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 热移除保护：工作区被移出 WORKDIRS 后，其上的已开会话按产品判据「继续运行、仅拒新开」，
     // 所以校验要带上本实例创建时的授权根（instanceAuthorizedDirs）。只认当前 workDirs 的话，
     // 这类实例的 worktree 切换会被拒、instance.cwd 停在旧值，静默复发历史加载失败。
-    onCwdChanged: (nextCwd, prevCwd) => {
+    onCwdChanged: (nextCwd, prevCwd, { via: channel = 'hook' } = {}) => {
       const resolved = resolveDrivingCwd(nextCwd, instanceAuthorizedDirs(workDirs, authorizedRoot));
       if (!resolved) {
-        console.warn(`[scope] 会话中途换 cwd 被拒：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
-        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed' } });
+        console.warn(`[scope] 会话中途换 cwd 被拒（${channel}）：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
+        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed', channel } });
         return null;
       }
       return resolved;

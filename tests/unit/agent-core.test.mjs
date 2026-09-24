@@ -335,10 +335,12 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
     return { s, dispose, hook };
   };
 
-  test('装了 CwdChanged hook——没有它，CLI 换了 cwd 服务端永远不会知道', () => {
+  // 主通道是主链 tool_use_result（CLI 2.1.280 对 EnterWorktree 不派发 CwdChanged，见
+  // tests/invariants/agent-driving-cwd.test.mjs）。hook 是冗余通道：Bash 里的 cd 只由它报。
+  test('装了 CwdChanged hook——Bash 换 shell cwd 那条路只有它报得上来', () => {
     const { dispose, hook } = cwdHook();
     try {
-      assert.equal(typeof hook, 'function', 'hook 缺席 = 这条修复整条不存在，且症状与没修一模一样');
+      assert.equal(typeof hook, 'function', 'hook 缺席 = Bash 那条路换了 cwd 服务端不会知道');
     } finally { dispose(); }
   });
 
