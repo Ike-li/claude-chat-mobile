@@ -12,8 +12,10 @@ const BASE = 'https://ike-li.github.io/claude-chat-mobile';
 const TODAY = new Date().toISOString().slice(0, 10);
 
 const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+// 不走 git()：它 trim 整段输出，会吃掉第一行开头那个表示「未暂存改动」的空格（" M path"），
+// slice(3) 随之多切一个字符，排在最前的改动文件就拿不到今天的 lastmod。
 const dirty = new Set(
-  git(['status', '--porcelain'])
+  execFileSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
     .split('\n').filter(Boolean)
     .map((l) => l.slice(3).trim()),
 );
