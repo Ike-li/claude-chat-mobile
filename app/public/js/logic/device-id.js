@@ -1,5 +1,7 @@
 // logic/device-id.js —— 本机设备指纹的短形式。数据进数据出，不碰 DOM/window/socket。
 
+import { t } from '../i18n.js';
+
 // 32 位 hex 在任何界面里都既放不下也读不出来，截成 `前8…后4`。
 //
 // ★ 同一判据有三份实现，跨语言 + 前后端禁止互相 import，合不了一份：
@@ -19,14 +21,15 @@ export function shortDeviceId(id) {
 //
 // ★ 与 desktop/CCMCore.swift 的 approvedAtLabel 互为镜像（跨语言没法共用，两边各写一份
 //   同样的断言：本仓 tests/unit/logic-device-id.test.mjs 与 desktop/ccm-menubar-tests.swift）。
+//   这一侧经 t() 跟随界面语言；中文输出与 Swift 那份逐字一致。
 // ★ now 必须可注入，否则断言会随运行日期漂——跑一次绿、下周再跑就红。
 // ms 为空/0 表示这条是【本功能上线之前】批准的：元数据只在批准那一刻记得下来，
 // 事后无从补，所以如实说「无批准记录」而不是编一个时间。
 export function formatRelativeApprovedAt(ms, now = Date.now()) {
-  if (typeof ms !== 'number' || !(ms > 0)) return '无批准记录';
+  if (typeof ms !== 'number' || !(ms > 0)) return t('无批准记录');
   const days = Math.floor((now - ms) / 86_400_000);
-  if (days <= 0) return '今天批准';   // 含时钟回拨造出的负数
-  if (days === 1) return '昨天批准';
-  if (days < 30) return `${days} 天前批准`;
-  return `${Math.floor(days / 30)} 个月前批准`;
+  if (days <= 0) return t('今天批准');   // 含时钟回拨造出的负数
+  if (days === 1) return t('昨天批准');
+  if (days < 30) return t('{n} 天前批准').replace('{n}', days);
+  return t('{n} 个月前批准').replace('{n}', Math.floor(days / 30));
 }

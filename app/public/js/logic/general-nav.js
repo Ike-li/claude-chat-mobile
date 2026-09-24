@@ -40,7 +40,7 @@ const sep = () => (getLang() === 'zh' ? '' : ' ');
 
 // 开/关读成人话。**不要简化成「开着的才列出来」**：那样"提示音关了"和"这项不存在"在文案上
 // 不可区分，而用户来这一行恰恰是想确认"我关过的那个是不是还关着"。
-const onOff = (label, on) => `${label}${sep()}${t(on ? '开' : '关')}`;
+const onOff = (label, on) => `${label}${sep()}${on ? t('开') : t('关')}`;
 
 // items → 完整行。summary 只在这里拼一次，别在各 row 函数里另写。
 const row = (id, icon, title, items, dot = false) => ({
@@ -116,7 +116,8 @@ function hostRow({ service = null, now = Date.now() } = {}) {
 }
 
 function behaviorRow({ lang = 'zh' } = {}) {
-  const langLabel = { zh: t('中文'), en: 'English', auto: t('跟随浏览器') }[lang] || t('中文');
+  // 语言名用它自己的写法，不翻译：英文界面里「中文」仍是中文，与 English 同理
+  const langLabel = { zh: '中文', en: 'English', auto: t('跟随浏览器') }[lang] || '中文';
   return row('behavior', '🛠', t('行为与开关'), [
     { text: langLabel, el: 'prefLangGroup' },
     { text: t('审批规则'), el: 'permissionRulesSection' },

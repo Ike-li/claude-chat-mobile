@@ -3,9 +3,20 @@
 // 未收录 key 静默回落中文（渐进式覆盖，不是"未翻译就报错"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
+import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
 
 test.afterEach(() => setLang('zh')); // 每个用例后复位，测试间不串扰全局 currentLang
+
+// tk() 只给常量表里的中文做记号（供 tests/gates/i18n-check.js 抓 key），翻译留到取用点的 t()。
+test.describe('tk()：恒等标记，不查词典', () => {
+  test('en locale 下也原样返回中文原文；取用点再 t() 才得到译文', () => {
+    setLang('en');
+    const zhKey = Object.keys(EN_DICT)[0];
+    assert.equal(tk(zhKey), zhKey,
+      '常量表在 setLang() 之前求值，tk 若查词典，表里的文案会被钉死在导入那一刻的语言');
+    assert.equal(t(tk(zhKey)), EN_DICT[zhKey]);
+  });
+});
 
 test.describe('t()：zh 恒等 + en 查字典回落', () => {
   test('默认 zh locale → 原样返回任意中文（零开销，既有测试断言不受影响）', () => {

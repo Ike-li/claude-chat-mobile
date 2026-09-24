@@ -7,7 +7,7 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
 // 合成任务 id：SDK 侧不存在这个 id，任何「停止」都必然静默失败，展示上也不该露出内部命名空间。
@@ -117,12 +117,12 @@ export function formatBgTaskBannerCopy(tasks = []) {
 //
 // 状态字面量取自 CLI 2.1.263 的 zod 枚举（pending/running/completed/failed/killed/paused）。
 // 未知值原样透出而非吞掉：CLI 后续加档时宁可显示一个陌生词，也好过悄悄按「正常运行」渲染。
-// 表里存中文原文、取用点才 t()——顶层直接 t() 会在 import 阶段求值，把语言钉死在 zh。
+// 表里用 tk() 标记中文原文、取用点才 t()——顶层直接 t() 会在 import 阶段求值，把语言钉死在 zh。
 const BG_TASK_STATUS_VIEW = Object.freeze({
-  paused: { key: '已暂停', tone: 'warning' },
-  failed: { key: '失败', tone: 'danger' },
-  killed: { key: '已终止', tone: 'danger' },
-  completed: { key: '已完成', tone: 'muted' },
+  paused: { key: tk('已暂停'), tone: 'warning' },
+  failed: { key: tk('失败'), tone: 'danger' },
+  killed: { key: tk('已终止'), tone: 'danger' },
+  completed: { key: tk('已完成'), tone: 'muted' },
 });
 
 export function bgTaskStatusView({ status, error } = {}) {
