@@ -3,11 +3,13 @@
 <head>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; font-src 'self'; form-action 'none'; base-uri 'none'">
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <!-- 自愈脚本：注销残留的 v1 缓存型 service worker（旧 PWA 会喂陈旧外壳致「未连接」），
        但放过当前合法的 /sw.js（E15 Web Push，无缓存/offline，见 sw-cleanup.js 头注释）。
-       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
-  <script src="./js/sw-cleanup.js"></script>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。
+       defer + 排在 viewport meta 之后：脚本不碰 DOM，没理由在渲染阻塞窗口里抢跑，
+       解析器应该先拿到 viewport 才开始布局。 -->
+  <script src="./js/sw-cleanup.js" defer></script>
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
   <title>在线演示 · Claude Chat Mobile — 浏览器里直接试手机端 Claude Code 界面</title>
@@ -179,7 +181,18 @@
     <!-- 侧边栏顶部标题区 -->
     <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
       <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
-      <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+      <!-- gap-4：两个 hit-44 各向外扩 8px，间距 16px 时热区刚好相接不重叠，✕ 仍在最右 -->
+      <div class="flex items-center gap-4 shrink-0">
+        <!-- GitHub 仓库常驻入口：纯静态 <a>，无需 app.js 接线。设置「帮助」页那条（#linkGithub）要点三下才到。
+             刻意不显示 star 数：那得让前端去请求 api.github.com，平白多一条数据出口。 -->
+        <a id="drawerGithubLink" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
+          class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95" title="在浏览器打开 GitHub 仓库" aria-label="在浏览器打开 GitHub 仓库">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+          </svg>
+        </a>
+        <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+      </div>
     </div>
     <!-- 抽屉内操作的失败回执（当前唯一来源：🗑 彻底删除被服务端拒绝）。
          【为什么不复用 addBar】addBar 写的是聊天消息流 #messages，而抽屉打开时 #sidebarScrim
@@ -340,6 +353,34 @@
         <button id="confirmCancel" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
         <button id="confirmAlt" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium hidden"></button>
         <button id="confirmOk" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- /rewind 面板：两步，对齐终端 /rewind（先选回到哪一轮之前，再选三个模式之一） -->
+  <div id="rewindModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="回退">
+    <div id="rewindSheet" class="w-full max-h-[80vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="sheet-handle shrink-0"></div>
+      <div class="px-4 pb-2 shrink-0">
+        <div id="rewindTitle" class="text-accent-deep font-semibold">Rewind</div>
+        <div id="rewindHint" class="text-sm text-ink-soft mt-1"></div>
+      </div>
+      <!-- 第一步：候选清单。大会话有几百轮，这里是唯一需要滚动的区域 -->
+      <div id="rewindList" class="flex-1 overflow-y-auto px-4 py-1 min-h-0"></div>
+      <!-- 第二步：选中某一轮后的确认与模式选择 -->
+      <div id="rewindStep2" class="hidden px-4 py-1 overflow-y-auto min-h-0">
+        <div id="rewindPicked" class="text-sm text-ink border-l-2 border-line pl-3 py-1 mb-3 whitespace-pre-wrap break-words"></div>
+        <div id="rewindEffect" class="text-sm text-ink-soft mb-3"></div>
+        <div class="flex flex-col gap-2">
+          <button id="rewindModeBoth" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium text-sm"></button>
+          <button id="rewindModeConversation" class="w-full py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium text-sm"></button>
+          <button id="rewindModeCode" class="w-full py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium text-sm"></button>
+        </div>
+        <div id="rewindFootnote" class="text-xs text-ink-soft mt-3"></div>
+      </div>
+      <div class="flex gap-2 px-4 pt-3 pb-1 shrink-0">
+        <button id="rewindBack" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium hidden">返回</button>
+        <button id="rewindCancel" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
       </div>
     </div>
   </div>
@@ -528,6 +569,16 @@
           </div>
           <button type="button" id="btnTaskStop" class="hidden shrink-0 px-2 py-1 rounded-lg border border-warning text-warning font-semibold hover:bg-warning hover:text-surface active:scale-95 transition-all" data-testid="task-stop-btn" title="停止该后台任务">停止</button>
         </div>
+      </div>
+
+      <!-- 额度墙「到点自动继续」（src/server/auto-continue.js）：只对当前查看的会话显示。文案与唯一的按钮
+           （取消 / 到点自动继续 / 继续）由 logic/auto-continue.js 按相位给出，接线在 app/auto-continue-banner.js。
+           数据来自 instances 广播的 autoContinue（按 sessionId 归键）——等待期间实例多半已被空闲回收，
+           挂在实例上的话横幅会跟着消失。class 由模块整条改写（含 hidden），这里只是初始态。 -->
+      <div id="autoContinueBanner" class="hidden px-3 py-2 bg-surface border border-accent rounded-xl text-xs mb-1 shrink-0 flex items-center gap-2" role="status" data-testid="auto-continue-banner">
+        <span aria-hidden="true">⏳</span>
+        <span id="autoContinueText" class="flex-1 min-w-0 text-ink-soft" data-testid="auto-continue-text"></span>
+        <button type="button" id="autoContinueAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="auto-continue-action"></button>
       </div>
 
       <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。

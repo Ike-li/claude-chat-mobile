@@ -280,8 +280,11 @@ export const EN_DICT = Object.freeze({
 
   // —— 设置面板（按作用域拆两个：会话设置 / 通用设置）——
   '⚙️ 会话设置': '⚙️ Session settings',
+  '⚙️ 设置与状态': '⚙️ Settings & status', // 通用设置面板标题（#generalSheetTitle，HTML 静态文本，与上面那条是两个不同字符串）
   '下拉关闭配置面板': 'Pull down to close settings',
   '下拉关闭设置': 'Pull down to close settings',
+  '下一条消息起效': 'Applies from your next message', // 模型分区头行小字：换模型不影响正在跑的这一轮
+  '永久 ·': 'Permanently ·', // 审批持久化范围单选项前缀，后面接一个动态生成的 <span> 说明具体落盘位置
   '宿主机': 'Host',
   '会话标识': 'Session ID',
   // 模型候选还没到（scout 在途）或取不到：不承诺进度，只给事实与出路
@@ -423,6 +426,8 @@ export const EN_DICT = Object.freeze({
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
+  '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
+    'The workspace list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below, save, restart the server, then come back to edit (until the restart, that file still applies).',
   '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
   '立即重启': 'Restart now',
   '立即重启服务': 'Restart the service now',
@@ -574,7 +579,6 @@ export const EN_DICT = Object.freeze({
   'claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。': 'claude will edit files and run commands without asking — a single prompt injection can reach the whole machine.',
   '开启 bypass': 'Enable bypass',
   '思考强度 →': 'Thinking effort →',
-  '默认思考': 'Thinking: default',
   '更快更省': 'Faster and cheaper',
   '均衡': 'Balanced',
   '更深入': 'Deeper',
@@ -582,6 +586,8 @@ export const EN_DICT = Object.freeze({
   '最深入更慢更贵': 'Deepest, slowest, priciest',
   'xhigh + 多 agent · 最彻底': 'xhigh + multi-agent · most thorough',
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
+  '跟随模型默认档': "Uses the model's default",
+  'CLI 默认': 'CLI default',
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
 
@@ -792,21 +798,12 @@ export const EN_DICT = Object.freeze({
   '会话已切换，分叉已取消，请重新发起': 'The session changed, so the fork was cancelled — start it again',
   '已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）': 'Reverted {n} file(s) and forked a new session from that point (the original is kept)',
   '已回退 {n} 个文件，但新会话创建失败': 'Reverted {n} file(s), but the new session could not be created',
-  '无法回退这一轮': 'Cannot revert this turn',
-  '这一轮没有可回退的文件改动': 'This turn made no file changes to revert',
-  '回退到这轮对话之前？': 'Revert to before this turn?',
-  '将恢复 {files}（+{ins} / −{del} 行），并分叉出一个回到那一刻的新会话。当前会话完整保留，随时可以切回来。': 'This restores {files} (+{ins} / −{del} lines) and forks a new session from that point. The current session is kept intact — you can switch back any time.',
   '回退': 'Revert',
   '等 {n} 个文件': ' and {n} files in total',
-  '⚠️ 其中 {names} 有未提交的改动，回退会覆盖掉且无法找回。': '⚠️ {names} has uncommitted changes — reverting overwrites them for good.',
-  '等 {n} 处': ' and {n} more',
   '⚠️ 这些文件未能恢复：{names}{suffix}。建议在 Git 面板核对。': '⚠️ These files could not be restored: {names}{suffix}. Check them in the Git panel.',
   '{n} 个文件是符号链接或硬链接，已跳过、未回退。': '{n} file(s) are symlinks or hard links — skipped, not reverted.',
   '会话已切换，回退已取消，请重新发起': 'The session changed, so the revert was cancelled — start it again',
   '回退失败': 'Revert failed',
-  '对这条消息做什么？': 'What do you want to do with this message?',
-  '「回退」会把文件恢复到你发出这条消息之前，并分叉出一个回到那一刻的新会话；「分叉」只复制对话、不动文件。两者都保留当前会话。': '"Revert" restores files to how they were before you sent this message and forks a new session from that point. "Fork" copies the conversation only, leaving files alone. Both keep the current session.',
-  '回退到此轮前': 'Revert to before this turn',
   '从这里分叉': 'Fork from here',
   '分叉失败': 'Fork failed',
   '放弃未保存的修改？': 'Discard unsaved changes?',
@@ -990,6 +987,20 @@ export const EN_DICT = Object.freeze({
   '24 小时内': 'in the last 24h:',
   '上次': 'last',
   '启动': 'started',
+  // 额度墙「到点自动继续」横幅（logic/auto-continue.js）与续跑气泡标记。用语对齐 CLI 限额对话框：
+  // "Continuing automatically at 3:50pm · esc to cancel" / "Wait here, then continue automatically"。
+  '额度 {time} 重置，届时自动继续': 'Usage limit resets at {time} — continuing automatically then',
+  '额度要到 {time} 才重置（超过 24 小时），不会自动继续': 'Usage limit resets at {time} (more than 24 hours out) — not continuing automatically',
+  '额度 {time} 重置': 'Usage limit resets at {time}',
+  '仍要到点继续': 'Continue at reset anyway',
+  '到点自动继续': 'Continue automatically at reset',
+  '额度已于 {time} 重置；主机期间休眠，没有自动继续': 'Usage limit reset at {time}, but the host was asleep — did not continue automatically',
+  '终端或桌面端正开着这个会话，没有自动继续': 'This session is open in a terminal or the desktop app — did not continue automatically',
+  '无法确认这个会话的最新状态，没有自动继续': 'Could not confirm this session\'s current state — did not continue automatically',
+  '会话没能重新打开，没有自动继续': 'The session could not be reopened — did not continue automatically',
+  '到点了，但没有自动继续': 'The reset time passed, but it did not continue automatically',
+  '继续': 'Continue',
+  '额度重置后自动继续': 'Continued automatically after the usage limit reset',
 });
 
 // 需要翻译的属性白名单：这四个是「屏幕上/读屏器里真会念出来」的，其余属性（data-*、aria-labelledby

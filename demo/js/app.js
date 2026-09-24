@@ -30,6 +30,7 @@ import {
   aggregateStates,
   owningWorkspace,
   resolveDrawerStatus,
+  isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
@@ -44,6 +45,7 @@ import {
   formatComposeDefaultsSummary,
   shouldRestoreOptimisticBusy,
   planSessionDraftSwap,
+  draftKeyFor,
   foregroundReconnectAction,
   shouldAttemptReconnect,
   describeHandshakeError,
@@ -58,6 +60,7 @@ import {
   consoleLogEntryLayout,
   defaultModelTileLabel,
   withUltracodeTier,
+  withAutoTier,
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
@@ -111,6 +114,7 @@ import {
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
+  outboxNoticePlacement,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
@@ -179,6 +183,7 @@ import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
+import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
@@ -199,6 +204,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
+import { createRewindCommandController } from './app/rewind-command.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -384,7 +390,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
-  // per-session 未发送草稿 {text, attachments}（切会话存/切回恢复；同会话静默换实例不读写，见 planSessionDraftSwap）。
+  // 按表面分槽的未发送草稿 {text, attachments}（切走存/切回恢复；同一表面静默换实例不读写，见 planSessionDraftSwap）。
+  // 槽的 key 见 draftKeyFor：有 sessionId 用它，新会话页（首发前无 id）用 `new:<cwd>`。
   // 仅内存、不落盘——刷新页面后丢失可接受（与 sessionDomCache 同寿）。
   // per-session「上次为该会话渲染到的磁盘 history 条数」（history 口径，非活缓冲 seq）。切入时与 server 报的
   // diskLen 比对，判「离开期间被终端外部写过」→ 清屏重载（见 shouldReloadOnEnter）。独立于 sessionDomCache：
@@ -674,7 +681,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 「viewingInstanceId 确为 null（新会话懒开空窗口，须丢弃后台实例事件防污染）」——见 logic.js shouldDropAgentEvent。
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
+  // 用户刚显式新建（btnNew / 目录行＋）而权威广播还没落地的那段窗口。
+  // 【为什么需要】那两处只重置得了 displayedSessionId，displayedInstanceId 仍指着旧实例；
+  // 一条在 session:new 之前就在途、之后才到的 instances 包会命中下面 FE-001 那个分支
+  // （同实例 + 无 sessionId → 从条目重填 displayedSessionId），把用户刚放弃的会话 id 填回来。
+  // 于是下一条权威包让 bindView 读到 prev=旧会话 / new=null，又走回 swap，把正在打的字清掉。
+  // 【为什么不改成把 displayedInstanceId 也置 null】那会让 newViewing !== displayedInstanceId 成立，
+  // 在途旧包转而走进 bindView、把视图绑【回】旧会话——比重填更糟。
+  let sessionIdClearedByNav = false;
   let displayedSessionId = null;
+  // 与 displayedSessionId 配套的「当前表面 cwd」住在 sessionWorkspaceState.displayedCwd
+  // （新前端状态不再落 app.js 顶层作用域）。它只服务草稿槽的 key，见 draftKeyFor。
   // R65（2026-08-30 需求合稿）未读点：已读表状态在模块内，此处只持句柄。onChange 把每次「看过/标记」上报服务端共享
   // （2026-09-03）——不上报就退回每设备一份，换设备时在另一台读过的会话会整屏复亮。
   // 刻意不带 ack：丢一条不致命，下次 connect 的 read:sync 全量归并会补回来。
@@ -767,6 +784,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       connBannerDetail: connBannerDetailEl,
       connBannerSpinner: connBannerSpinnerEl,
       connBannerRetry: connBannerRetryEl,
+      autoContinueBanner: $('autoContinueBanner'),
+      autoContinueText: $('autoContinueText'),
+      autoContinueAction: $('autoContinueAction'),
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -1300,26 +1320,41 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // 撞上在途轮（排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
   // 同一 clientMessageId 可直接复用——服务端在 busy 拒绝路径上没有 commit 去重 ID。
-  function markOutboxBlocked(item, message) {
-    const indicator = item.bubbleEl?.querySelector('.pending-indicator');
-    if (!indicator) return;
-    indicator.classList.remove('animate-pulse');
-    indicator.textContent = '';
+  // 挑落点：判据与理由全在 logic/outbox-send.js 的 outboxNoticePlacement 注释里。
+  // 关键一条——querySelector 能从【已脱离 DOM】的缓存子树里找到 indicator，所以「找得到」
+  // 不等于「看得见」；而 addBar 写的是当前消息面，归属对不上就是把 A 会话的失败打到 B 会话上。
+  function outboxNoticeHost(item, targetsViewing, barClass) {
+    const indicator = item.bubbleEl?.querySelector('.pending-indicator') || null;
+    const where = outboxNoticePlacement({
+      indicatorExists: Boolean(indicator),
+      indicatorConnected: Boolean(indicator?.isConnected),
+      targetsViewing,
+    });
+    if (where === 'indicator' || where === 'stale') return indicator;
+    if (where === 'bar') return addBar('', barClass);
+    return null;
+  }
+
+  function markOutboxBlocked(item, message, targetsViewing = false) {
+    const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
+    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
+    host.classList.remove('animate-pulse');
+    host.textContent = '';
     const label = el(`<span></span>`);
     label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
-    indicator.appendChild(label);
+    host.appendChild(label);
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
     btn.onclick = async () => {
       btn.disabled = true;
       label.textContent = `🕐 ${t('正在发送...')}`;
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { indicator.remove(); return; }
+      if (d.outcome === 'ok') { host.remove(); return; }
       btn.disabled = false;
       label.textContent = d.outcome === 'blocked'
         ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
         : `⚠️ ${d.message || t('发送失败')}`;
     };
-    indicator.appendChild(btn);
+    host.appendChild(btn);
   }
 
   async function processOfflineQueue() {
@@ -1366,11 +1401,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
-          if (indicator) indicator.textContent = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
+          const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
+          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+          if (permanentHost) permanentHost.textContent = permanentMsg;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(item, decision.message);
+          markOutboxBlocked(item, decision.message, targetsViewing);
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -1535,6 +1573,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+
+  // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
+  // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
+  const autoContinueBanner = createAutoContinueBannerController(appContext, {
+    onAction: ({ sessionId, action }) => {
+      socket.timeout(10_000).emit('user:autoContinue', { sessionId, action }, (err, ack) => {
+        if (err || !ack?.ok) autoContinueBanner.refresh();
+      });
+    },
+    onToggle: () => scrollBottom(), // 同连接横幅：占一行会改 #messages 高度，非 force 调用不贴底会自动 no-op
+  });
 
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
@@ -1829,7 +1878,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section(t('异常告警'));
     const notices = formatServiceNotices({
-      service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
+      service: {
+        deliveryFailure: res.deliveryFailure,
+        rateLimitLockout: res.rateLimitLockout,
+        clientError: res.clientError,
+        proxyFronted: res.proxyFronted,
+      },
       now,
     });
     if (!notices.length) {
@@ -2096,14 +2150,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const card = document.createElement('div');
       card.className = 'pointer-events-auto mx-auto w-full max-w-sm bg-surface border border-line rounded-xl p-3';
       card.setAttribute('data-testid', 'device-card');
-      card.setAttribute('data-device-id', d.deviceId);
+      card.setAttribute('data-short-id', d.shortId || '');
       card.style.boxShadow = 'var(--shadow-pop)';
       const title = document.createElement('div');
       title.className = 'text-sm font-semibold text-ink mb-1.5';
       title.textContent = t('🔔 新设备请求接入');
       const meta = document.createElement('div');
       meta.className = 'text-[11px] text-ink-soft leading-snug mb-2.5 break-all';
-      const idLine = document.createElement('div'); idLine.textContent = 'ID：' + (d.deviceId || '—');
+      const idLine = document.createElement('div'); idLine.textContent = 'ID：' + (d.shortId || '—');
       const ipLine = document.createElement('div'); ipLine.textContent = 'IP：' + (d.ip || '—');
       const uaLine = document.createElement('div'); uaLine.className = 'text-ink-faint'; uaLine.textContent = d.userAgent || '';
       meta.append(idLine, ipLine, uaLine);
@@ -2113,12 +2167,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       approve.type = 'button';
       approve.className = 'flex-1 py-2 rounded-lg bg-cta text-white active:brightness-95 text-xs font-medium';
       approve.textContent = t('✓ 准入');
-      approve.addEventListener('click', () => { socket.emit('user:approveDevice', { deviceId: d.deviceId }); });
+      approve.addEventListener('click', () => { socket.emit('user:approveDevice', { shortId: d.shortId }); });
       const deny = document.createElement('button');
       deny.type = 'button';
       deny.className = 'flex-1 py-2 rounded-lg bg-sunk text-ink-soft active:bg-line-soft text-xs font-medium';
       deny.textContent = t('✕ 拒绝');
-      deny.addEventListener('click', () => { socket.emit('user:denyDevice', { deviceId: d.deviceId }); });
+      deny.addEventListener('click', () => { socket.emit('user:denyDevice', { shortId: d.shortId }); });
       btns.append(approve, deny);
       card.append(title, meta, btns);
       deviceRequests.appendChild(card);
@@ -2304,10 +2358,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 只有正看着这个会话时才需要动 UI：对话树被截断、文件也变了，本地这两份都过期。
         if (!ev?.sessionId || ev.sessionId !== displayedSessionId) return;
         const n = Array.isArray(p.filesChanged) ? p.filesChanged.length : 0;
-        addBar(p.forkedSessionId
-          ? t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n)
-          : t('已回退 {n} 个文件，但新会话创建失败').replace('{n}', n),
-          p.forkedSessionId ? 'text-ink-faint' : 'text-danger');
+        // 三个模式的成功形态不同，不能只看 forkedSessionId 在不在：
+        // 「只恢复代码」本来就不产生新会话，照 forkedSessionId 判会把它误报成创建失败。
+        if (p.mode === 'code') {
+          addBar(t('已回退 {n} 个文件（对话未改动）').replace('{n}', n), 'text-ink-faint');
+        } else if (!p.forkedSessionId) {
+          addBar(t('已回退 {n} 个文件，但新会话创建失败').replace('{n}', n), 'text-danger');
+        } else if (p.mode === 'conversation') {
+          addBar(t('已分叉出回到那一刻的新会话（原会话保留，文件未改动）'), 'text-ink-faint');
+        } else {
+          addBar(t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n), 'text-ink-faint');
+        }
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
         loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
@@ -2394,9 +2455,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     setSeq: value => { lastSeq = value; },
     setEpoch: value => { curEpoch = value; },
-    // 超时兜底与 ack 路径同口径：超阈值走 reload 语义（只推进基线，不逐条吐成打字机）；
-    // 未超阈值 flush。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——宁可
-    // 超阈值时丢缓冲改走下次 history/sync，也不要 100+ 条 DOM 抖动。
+    // 超时兜底与 ack 路径同口径：未超阈值 flush；超阈值不在超时点收尾，留给 ack 回调（见 createReplayBuffer
+    // 的 armTimeout）。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——ack 回调那时会按
+    // 最新的 instances 广播重判。
+    // deferMs：ack 自己带 SYNC_ACK_TIMEOUT_MS 的超时、必定回调，这一道只兜回调在 resolve 之前抛了的坏情况。
+    deferMs: SYNC_ACK_TIMEOUT_MS + 5_000,
     decideTimeoutAction: ({ bufferedCount }) => resolveReplayBufferAction({
       bufferedCount,
       priorAction: 'keep',
@@ -2582,6 +2645,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     // 思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
     effort_mode(p) {
+      // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
+      appContext.state.effortEffective = p.effective ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -2741,11 +2806,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           tbody.classList.toggle('hidden');
           if (loaded) return;
           loaded = true;
-          socket.emit('tool:preview', { instanceId: inst, toolUseId: p.toolUseId }, res => {
+          socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: p.toolUseId }, (err, res) => {
             tbody.replaceChildren();
-            if (!res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败）
+            if (err || !res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败/超时）
+              if (err) loaded = false; // 超时不是终态：ack 没回来不代表以后也回不来，得能再点一次重试
               const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-              m.textContent = res?.error || t('预览不可用');
+              m.textContent = err ? t('请求超时，请重试') : (res?.error || t('预览不可用'));
               tbody.appendChild(m);
               return;
             }
@@ -2963,6 +3029,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
+      if (p.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 额度墙到点续跑发的，不是用户打的
       if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
@@ -3041,6 +3108,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       updateSendButtonState();
     },
     error(p, ev) {
+      // endsTurn:false = 报个错、轮次照常（socket handler 抛错、轮中切权限档/模型失败）。只打提示，
+      // 不走下面那套轮次收尾：清审批、工具卡标失败、熄 busy——服务端那一轮还在等审批（30 分钟 TTL），
+      // 清掉了用户就没地方点「允许」了（2026-09-22 review P1）。
+      if (p?.endsTurn === false) {
+        alertCue('error');
+        hideLoadingCard();
+        addBar(`⚠️ ${p.message}`, 'text-danger');
+        return;
+      }
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
@@ -3339,9 +3415,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = t('加载中…');
-      socket.emit('tool:full', { instanceId: inst, toolUseId }, res => {
-        if (!res?.ok) {
-          btn.textContent = res?.error || t('全文不可用');
+      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId }, (err, res) => {
+        if (err || !res?.ok) {
+          btn.textContent = err ? t('请求超时，请重试') : (res?.error || t('全文不可用'));
           btn.disabled = false;
           return;
         }
@@ -3639,11 +3715,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         preview.classList.toggle('hidden');
         if (loaded || !f.toolUseId) return;
         loaded = true;
-        socket.emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, res => {
+        socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, (err, res) => {
           preview.replaceChildren();
-          if (!res?.ok) {
+          if (err || !res?.ok) {
+            if (err) loaded = false; // 超时不是终态，允许再点一次重试
             const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-            m.textContent = res?.error || t('预览不可用');
+            m.textContent = err ? t('请求超时，请重试') : (res?.error || t('预览不可用'));
             preview.appendChild(m);
             return;
           }
@@ -3760,6 +3837,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!text && attachments.items().length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
+    // /rewind 前端拦截——同 /model：TUI 命令不可透传（SDK 非交互，出不来那两步选择界面）。
+    // 映射到本地的两步面板，最终仍落在 session:rewind:preview / confirm 上。
+    if (/^\/rewind(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('rewind')) {
+      if (!displayedSessionId) { addBar(t('还没有会话可回退'), 'text-info'); return; }
+      inputEl.value = '';
+      inputEl.dispatchEvent(new Event('input'));
+      autosize();
+      updateSendButtonState();
+      rewindCommand.openPanel(displayedSessionId, currentCwd);
+      return;
+    }
     if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
       const arg = rawText.slice(6).trim();
       if (arg) {
@@ -3855,8 +3943,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       });
 
       inputEl.value = '';
-      // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
-      if (currentSessionId) sessionDraftCache.delete(currentSessionId);
+      // 已发出：清掉该表面缓存的草稿，避免切走切回把已发送内容当草稿恢复。
+      // 新会话首发时还没有 sessionId，槽是 `new:<cwd>`——不按同一份判据删就会残留一条
+      // 「已经发出去的话」，下次从别处回到这个工作区的新会话页时被当草稿恢复。
+      dropDraftForCurrentSurface();
       attachments.clear();
       hints.classList.add('hidden');
       autosize();
@@ -3975,8 +4065,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
     // 气泡已在上方本地 append（buildPendingUserBubble），服务端回推的 user_message 只负责认领转正。
     inputEl.value = '';
-    // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
-    if (currentSessionId) sessionDraftCache.delete(currentSessionId);
+    // 已发出：清掉该表面缓存的草稿（口径同上面离线入队那处）
+    dropDraftForCurrentSurface();
     attachments.clear();
     hints.classList.add('hidden');
     autosize();
@@ -4179,7 +4269,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (row?.dataset?.path) pickAtMention(row.dataset.path);
   });
   // 前端本地拦截命令（不透传后端），并入提示列表
-  const LOCAL_COMMANDS = ['model'];
+  const LOCAL_COMMANDS = ['model', 'rewind'];
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
@@ -4532,22 +4622,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（CLI /effort：五档 + ultracode；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（CLI /effort：五档 + ultracode + auto；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
   // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
-    const val = level || null; // 空串/undefined 归一为 null（模型默认）
+    const val = level || null; // 空串/undefined 归一为 null（没指定：CLI 按 settings / 模型默认继承）
     ultracodeArmed = val === 'ultracode';
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${val || t('模型默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${val || t('CLI 默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
     if (pillEffortText) {
-      pillEffortText.textContent = val || t('默认思考');
+      pillEffortText.textContent = effortUiState(val, [], {
+        mirrorReadonly: Boolean(mirrorReadonlySid),
+        effective: appContext.state.effortEffective,
+      }).label;
     }
 
     if (customEffortGrid) {
@@ -4576,12 +4669,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
   // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
   // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
-  // 对着一个空闲实例整个 dispose+resume 重开，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
+  // 把一个空闲实例用户选好的档位清回 auto，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
   function rebuildEffortOptions(modelValue, opts) {
     if (!effortSelect) return;
     const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
-    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
+    // xhigh-capable 模型上追加 ultracode 最高档，末位再追加 auto（= 模型默认），顺序同 CLI /effort
+    const show = withAutoTier(withUltracodeTier(baseLevels));
     // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
     // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
     // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
@@ -4593,7 +4687,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
       if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
-      effortSelect.value = '';
+      // 连 option 一起清：只置 value 的话，上个模型的候选还留着，随后到达的 effort_mode 回执经
+      // setEffortMode 能把 value 设回其中一档——不支持调档的模型上凭空冒出一个档（CI 上撞过）。
+      effortSelect.innerHTML = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
@@ -4616,7 +4712,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
     // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
-    const ui = effortUiState(currentEffort, show, { mirrorReadonly: Boolean(mirrorReadonlySid) });
+    const ui = effortUiState(currentEffort, show, {
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      effective: appContext.state.effortEffective,
+    });
     effortSelect.innerHTML = '';
     if (!ui.selected && !ultracodeArmed) {
       const placeholder = document.createElement('option');
@@ -4655,7 +4754,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         customEffortGrid.appendChild(lvTile);
       }
     }
-    // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
+    // 同步 pill 文案（没指定显「CLI 默认」，已知实际档时带上它）
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
@@ -4666,6 +4765,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
     if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
+    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
     const uiLevel = effortSelect.value || null;
     if (uiLevel === currentEffort) return;
     socket.emit('user:setEffort', { level: uiLevel });
@@ -4699,6 +4799,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       syncModelUI(currentModel);
     }
     setPermMode(inst.permissionMode || 'default', true);
+    appContext.state.effortEffective = inst.effortEffective ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -4788,7 +4889,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     setPermMode(panel.permissionMode || 'default', true);
     setEffortMode(panel.effort, true);
-    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel);
+    // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
+    // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，把实例档位误清回 auto。
+    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
@@ -4807,16 +4911,24 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       closeLeftSidebar();
     } else if (r.action === 'switch') {
       closeLeftSidebar();
-      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
-        // 会被读成"我点开的这个会话出错了"。
-        if (!res?.ok) showSessionBlockedSurface({
-          sessionId: r.sessionId, cwd: r.cwd,
-          // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
-          title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
-          message: res?.error || t('深链目标会话已不可用'),
-        });
+      // 深链尤其需要落地页：从推送点进来时用户对"当前在哪个会话"毫无预期，一条落在别处的红字
+      // 会被读成"我点开的这个会话出错了"；ack 迟迟不来同样不能让用户干等——同其它 4 处
+      // session:switch 入口一样补 4s 兜底（不把反馈压在 ack 上）。
+      let acked = false;
+      const blocked = message => showSessionBlockedSurface({
+        sessionId: r.sessionId, cwd: r.cwd,
+        // 签名是具名参数（sessionsCache + instances 两条来源），位置参数会静默返回空标题
+        title: lookupNotifySessionTitle({ sessionId: r.sessionId, cwd: r.cwd, sessionsCache, instances: instancesList }),
+        message,
       });
+      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
+        acked = true;
+        if (!res?.ok) blocked(res?.error || t('深链目标会话已不可用'));
+        // ack 迟于 4s 兜底时落地页已经弹出来了，但这次切换其实成功了——撤掉它，
+        // 否则用户人在目标会话里、屏幕上却盖着一张「切换无响应」。
+        else dismissBlockedSurfaceIfTarget(r.sessionId, r.cwd);
+      });
+      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
     }
@@ -4912,6 +5024,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
     // 发送闸：随 instances 广播的权威 turnRunning 字段驱动（undefined/旧服务端=保守 false 不误禁）。
     _turnRunning = viewedInst?.turnRunning === true;
+    // 额度墙自动继续横幅：按当前查看会话的 sessionId 取条目。字段缺失（mock 的旧式内联载荷）时模块内保留上一份。
+    autoContinueBanner.update({ entries: p?.autoContinue, sessionId: viewedInst?.sessionId || null });
 
     // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
     syncTopContextLabel();
@@ -4994,7 +5108,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
       }
-    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId) {
+    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId && !sessionIdClearedByNav) {
       // FE-001：同一实例后续 instances 广播补上了 sessionId（懒开后 init），须补丁 displayedSessionId，
       // 否则 newViewing === displayedInstanceId 永远不进 bindView，requestSync 持续早退。
       const target = instancesList.find(x => x.instanceId === newViewing);
@@ -5174,6 +5288,55 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
+  // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取（有 sessionId 用它，新会话页用 `new:<cwd>`）。
+  // bindView（收到广播后的真实切换）与 btnNew（同步本地重置）共用这一份：两处分头实现必然漂，
+  // 而 btnNew 漏做这一步正是 2026-09-18「在新会话页打的字被清空、还被归档进旧会话草稿」的成因。
+  // draft 由调用方传快照而不是这里现读 inputEl：bindView 是在 clearView 之前取的值。
+  // forceSwap：用户显式发起的新建（btnNew / 目录行＋）。keep 判据挡的是 instances 广播，
+  // 不该把用户自己点的导航也挡掉——否则「已经在新会话页时再按新建」会带着上一页的草稿。
+  function applySessionDraftSwap(prevSessionId, newSessionId, draft, { forceSwap = false, prevCwd = null, newCwd = null } = {}) {
+    const plan = planSessionDraftSwap({
+      prevSessionId,
+      newSessionId,
+      prevCwd,
+      newCwd,
+      currentDraft: draft?.text ?? '',
+      currentAttachments: draft?.attachments ?? [],
+      drafts: sessionDraftCache,
+      forceSwap,
+    });
+    if (plan.action !== 'swap') return;
+    if (plan.discard) sessionDraftCache.delete(plan.discard);
+    if (plan.save) {
+      sessionDraftCache.set(plan.save.key, {
+        text: plan.save.text,
+        attachments: plan.save.attachments,
+      });
+      if (sessionDraftCache.size > 40) {
+        const oldestKey = sessionDraftCache.keys().next().value;
+        sessionDraftCache.delete(oldestKey);
+      }
+    }
+    if (inputEl) {
+      inputEl.value = plan.restoreText;
+      inputEl.dispatchEvent(new Event('input'));
+    }
+    attachments.setItems(plan.restoreAttachments);
+  }
+
+  // 发出一条消息后丢弃当前表面的草稿槽。身份必须取 displayed*（与存草稿时逐字同源），
+  // 【不能用 currentSessionId】：它有三个写入者、语义是「事件流里最近见过的 sessionId」，
+  // 而且按 ＋ 之后它要等 instances 广播落地、bindView→clearView 才更新。那段窗口里（离线时
+  // 无限长）拿它算 key，删掉的是【上一个会话刚存下的草稿】，而新会话页这条已发出去的话
+  // 留在 `new:<cwd>` 槽里，下次回到这个工作区会被当草稿恢复出来。
+  function dropDraftForCurrentSurface() {
+    const key = draftKeyFor({
+      sessionId: displayedSessionId,
+      cwd: sessionWorkspaceState.displayedCwd || currentCwd,
+    });
+    if (key) sessionDraftCache.delete(key);
+  }
+
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
@@ -5183,12 +5346,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
+    const prevCwd = sessionWorkspaceState.displayedCwd; // 同上，新会话页没有 sessionId 时草稿按它分槽
+    sessionIdClearedByNav = false;             // 权威广播已落到 bindView，那段「等广播」的窗口到此为止
     // R65：离开旧会话的瞬间把它记为「已看到此刻」——正在看时到达的消息不该在离开后亮点。
     // 入场侧（下方真实会话分支）另有一记，覆盖「看完直接关页面」的路径；重复标记无害。
     if (prevSessionId) unread.markSeen(prevSessionId);
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
+    const cwd = entry?.cwd || currentCwd || null;
+    sessionWorkspaceState.displayedCwd = cwd;
     // 清除①②：切到别的实例/空表面（id 变了），或该实例这一刻已经拿到 sessionId（sid 非空）——
     // 两种情况都意味着"sessionId 未到即被中断"这个待续档态不再适用，须清掉，否则会悬留到下一个
     // 无关场景把它误判成该显示中断态。
@@ -5218,32 +5385,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       attachments: attachments.items(),
     };
     clearView(sid, null);
-    // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
+    // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取：同一表面静默换实例(keep)不动；真实切换(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
-    const draftPlan = planSessionDraftSwap({
-      prevSessionId,
-      newSessionId: sid,
-      currentDraft: draftSnapshot.text,
-      currentAttachments: draftSnapshot.attachments,
-      drafts: sessionDraftCache,
-    });
-    if (draftPlan.action === 'swap') {
-      if (draftPlan.save) {
-        sessionDraftCache.set(draftPlan.save.sessionId, {
-          text: draftPlan.save.text,
-          attachments: draftPlan.save.attachments,
-        });
-        if (sessionDraftCache.size > 40) {
-          const oldestKey = sessionDraftCache.keys().next().value;
-          sessionDraftCache.delete(oldestKey);
-        }
-      }
-      if (inputEl) {
-        inputEl.value = draftPlan.restoreText;
-        inputEl.dispatchEvent(new Event('input'));
-      }
-      attachments.setItems(draftPlan.restoreAttachments);
-    }
+    applySessionDraftSwap(prevSessionId, sid, draftSnapshot, { prevCwd, newCwd: cwd });
 
     // clearView 刚 setBusy(false)：发送窗口内（首发懒开 / 同会话静默换实例）立即补回，避免 live 行闪没。
     // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
@@ -5362,7 +5506,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
       const action = shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
-        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
+        diskLen: res?.diskLen ?? 0, diskExternalLen: res?.diskExternalLen ?? 0,
+        seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
         // 无 sessionId = session:history 无从查起，清屏必然换来白屏（见 logic.js 该闸注释）
         hasSessionId: Boolean(sid),
       });
@@ -6103,6 +6248,29 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
   });
 
+  // ---- /rewind 面板（对齐终端的两步交互）----
+  // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
+  // 这里只做两件【只对发起方有意义】的事：说清处置建议、把那一轮的原话回填输入框。
+  const rewindCommand = createRewindCommandController({
+    $, socket, openSheet, closeSheet,
+    getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: currentCwd }),
+    onRewound: (res) => {
+      // 整体性失败（warning）、哪些文件没恢复（unrestored）、几个链接被跳过（skippedLinks）——
+      // 三者可叠加、有轻重，组装在 logic/rewind.js（可单测）。
+      for (const note of rewindOutcomeNotes(res)) {
+        addBar(note.text, note.tone === 'danger' ? 'text-danger' : note.tone);
+      }
+      // 回退的下一步多半是把这句话改一改重说。守卫同发送失败时的草稿恢复：**只在输入框空且
+      // 无附件时**回填，绝不覆盖用户已经打的字。
+      if (res.prefill && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
+        inputEl.value = res.prefill;
+        inputEl.dispatchEvent(new Event('input'));
+        autosize();
+        updateSendButtonState();
+      }
+    },
+  });
+
   // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
   const fileBrowser = createFileBrowser(appContext, {
     baseName,
@@ -6378,6 +6546,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 【displayedSessionId 也要同步置空】上面那条 Bug A 的保证只做了一半：漏了这个变量，
+    // 一次迟到的 instances 广播会拿「prev=旧会话 / new=null」进 bindView 判成 swap，
+    // 把用户【刚在新会话页打的字】存进旧会话的草稿缓存，再用空串覆盖输入框
+    // （E2E 的 P0-33 / P0-12 稳定红就是撞这个：fill 之后几十毫秒被清空，发送键随之隐藏）。
+    // 草稿交换在这里同步做完——语义与 bindView 那次一致（存旧、清空、进空白的新会话页），
+    // 做完之后两侧都是 null，后续广播一律 keep，不再碰输入框。
+    applySessionDraftSwap(displayedSessionId, null, {
+      text: inputEl ? inputEl.value : '',
+      attachments: attachments.items(),
+    }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: currentCwd });
+    displayedSessionId = null;
+    sessionWorkspaceState.displayedCwd = currentCwd;
+    sessionIdClearedByNav = true;
     // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
     freshInterruptedInstanceId = null;
     enterComposeReady();
@@ -6464,6 +6645,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
       viewingInstanceId = null;
       currentCwd = d;
+      // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
+      // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
+      // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
+      // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
+      applySessionDraftSwap(displayedSessionId, null, {
+        text: inputEl ? inputEl.value : '',
+        attachments: attachments.items(),
+      }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: d });
+      displayedSessionId = null;
+      sessionWorkspaceState.displayedCwd = d;
+      sessionIdClearedByNav = true;
       // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
       freshInterruptedInstanceId = null;
       enterComposeReady();
@@ -6607,7 +6799,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           closeLeftSidebar();
           let acked = false;
           const blocked = message => showSessionBlockedSurface({ sessionId: s.id, cwd: rowCwd, title: s.title, message });
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) blocked(res?.error || t('切换失败')); });
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => {
+            acked = true;
+            if (!res?.ok) blocked(res?.error || t('切换失败'));
+            else dismissBlockedSurfaceIfTarget(s.id, rowCwd); // 迟到的成功 ack：撤掉 4s 兜底弹出的落地页
+          });
           setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
         }
       };
@@ -7569,6 +7765,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
   }
+  // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
+  // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
+  // 只撤属于本次请求的那一张：这 4 秒里用户完全可能已经点开别的会话并撞上真实失败，
+  // 无条件 hide 会把那条真实的错误提示一起抹掉。
+  function dismissBlockedSurfaceIfTarget(sessionId, cwd) {
+    if (isBlockedSurfaceTarget(blockedSurfaceTarget, { sessionId, cwd })) hideSessionBlockedSurface();
+  }
   function retryBlockedSession() {
     const target = blockedSurfaceTarget;
     if (!target?.sessionId) return;
@@ -7580,7 +7783,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       acked = true;
       if (btn) btn.disabled = false;
       // 成功后不必自己导航：服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
-      if (res?.ok) hideSessionBlockedSurface();
+      // 按目标撤而不是无条件 hide：这次重试的 ack 可能迟到，期间用户已经点开别的会话并撞上
+      // 真实失败，此刻挂着的是那一张——无条件 hide 会把那条真实错误一起抹掉。
+      if (res?.ok) dismissBlockedSurfaceIfTarget(target.sessionId, target.cwd);
       else setBlockedReason(res?.error || t('切换失败'));
     });
     setTimeout(() => {
@@ -7666,6 +7871,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
           acked = true;
           if (!res?.ok) blocked(res?.error || t('切换失败'));
+          else dismissBlockedSurfaceIfTarget(resume.sessionId, resume.cwd); // 同上：迟到的成功 ack 要撤页
         });
         setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
       };
@@ -7762,6 +7968,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
         if (!res?.ok) blocked(res?.error || t('切换失败'));
+        else dismissBlockedSurfaceIfTarget(s.id, s.cwd); // 同上：迟到的成功 ack 要撤页
       });
       setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
     };
@@ -7959,13 +8166,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       timer = setTimeout(() => {
         timer = null;
         if (moved) return;
-        // user 气泡上两个动作都成立，用一次确认框二选一（不新造 sheet，见 appConfirm 的 altText）：
-        //  · 主动作「回退到此轮前」= 文件轴 Rewind，锚点是气泡【自己】的 uuid
-        //  · 次动作「从这里分叉」  = 对话轴 fork，锚点是【前一条 assistant】的 uuid
-        // 两个锚点语义相反，共用一个解析函数必然写反其中一条——所以分成两条调用路径。
-        // assistant 气泡上只有 fork 成立（rewindFiles 只认 user prompt 的 uuid），直接走。
-        if (role === 'user') requestBubbleAction(bubble);
-        else requestSessionFork(bubble, role);
+        // 长按只剩「从这里分叉」这一个动作。
+        // 【2026-09-20 撤掉 user 气泡上的二选一】原来长按 user 气泡会弹「回退 / 分叉」确认框，
+        // 回退现在走 /rewind 斜杠命令（对齐终端的两步交互，见 app/rewind-command.js）——
+        // 长按是隐藏手势、发现不了，而回退在终端里本来就有名字。
+        requestSessionFork(bubble, role);
       }, 550);
     }, { passive: true });
     bubble.addEventListener('touchmove', ev => {
@@ -7988,93 +8193,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return null;
   }
 
-  // 长按用户气泡后的二选一。放在这里而不是塞进 requestSessionRewind：
-  // 「选哪个动作」与「回退要不要执行」是两个决定，混在一个函数里会让取消语义含混。
-  async function requestBubbleAction(bubble) {
-    const choice = await appConfirm({
-      title: t('对这条消息做什么？'),
-      body: t('「回退」会把文件恢复到你发出这条消息之前，并分叉出一个回到那一刻的新会话；「分叉」只复制对话、不动文件。两者都保留当前会话。'),
-      okText: t('回退到此轮前'),
-      altText: t('从这里分叉'),
-    });
-    if (choice === 'alt') { requestSessionFork(bubble, 'user'); return; }
-    if (choice) requestSessionRewind(bubble);
-  }
-
-  // 文件轴 Rewind：两步（preview 只读 → 用户确认 → confirm 真回滚）。
-  // 【为什么锚点是气泡自己的 uuid】rewindFiles 只认「被丢弃那一轮 prompt 自身」的 uuid——
-  // 与 fork 的锚点语义相反（那个取前一条 assistant）。**绝不能复用 resolveForkAnchorUuid**，
-  // 送 assistant uuid 会让 CLI 报「找不到检查点」。
-  async function requestSessionRewind(bubble) {
-    const promptUuid = bubble.dataset.uuid || null;
-    if (!promptUuid) return; // live 气泡还没有 uuid（历史气泡才绑长按）
-    if (!displayedSessionId) return;
-    // 快照：确认框等待期间任何 instances 广播都可能改写 currentCwd/displayedSessionId，
-    // 不快照会把 A 会话的锚点和已变成 B 的 cwd 拼到一起发出去（同 requestSessionFork）。
-    const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
-    haptic('tap');
-
-    const preview = await new Promise(resolve => {
-      socket.emit('session:rewind:preview',
-        { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
-    });
-    if (!preview?.ok) { addBar(preview?.error || t('无法回退这一轮'), 'text-danger'); return; }
-    if (!preview.canRewind) { addBar(t('这一轮没有可回退的文件改动'), 'text-ink-faint'); return; }
-
-    const files = Array.isArray(preview.filesChanged) ? preview.filesChanged : [];
-    const names = files.map(p => p.split('/').pop()).slice(0, 3).join('、');
-    const more = files.length > 3 ? t('等 {n} 个文件').replace('{n}', files.length) : '';
-    // G5：只在【回退会碰 且 改动没进 git】时才警告。服务端已经取过交集，这里不再二次判断——
-    // 它非空就意味着这次回退真会冲掉找不回来的东西，必须摆在确认框里，不能只记在日志。
-    const dirty = Array.isArray(preview.dirtyOverlap) ? preview.dirtyOverlap : [];
-    const dirtyWarn = dirty.length
-      ? '\n\n' + t('⚠️ 其中 {names} 有未提交的改动，回退会覆盖掉且无法找回。')
-        .replace('{names}', dirty.slice(0, 3).join('、') + (dirty.length > 3 ? t('等 {n} 处').replace('{n}', dirty.length) : ''))
-      : '';
-    const ok = await appConfirm({
-      title: t('回退到这轮对话之前？'),
-      body: t('将恢复 {files}（+{ins} / −{del} 行），并分叉出一个回到那一刻的新会话。当前会话完整保留，随时可以切回来。')
-        .replace('{files}', names + more).replace('{ins}', preview.insertions ?? 0).replace('{del}', preview.deletions ?? 0)
-        + dirtyWarn,
-      okText: t('回退'),
-      tone: 'danger',
-    });
-    if (!ok) return;
-    if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
-      addBar(t('会话已切换，回退已取消，请重新发起'), 'text-info');
-      return;
-    }
-
-    const res = await new Promise(resolve => {
-      socket.emit('session:rewind:confirm',
-        { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, promptUuid }, resolve);
-    });
-    if (!res?.ok) { addBar(res?.error || t('回退失败'), 'text-danger'); return; }
-    // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
-    // 这里只做两件【只对发起方有意义】的事：
-    //  ① warning（部分文件没恢复 / 新会话没建成的处置建议）
-    //  ② prefill：把那一轮的原话回填输入框——回退的下一步多半是改一改重说。
-    // 回退之后还得说清三件事：整体性失败（warning）、哪些文件没恢复（unrestored）、
-    // 几个链接被跳过（skippedLinks）。三者可叠加、有轻重，组装逻辑在 logic/rewind.js（可单测）。
-    for (const note of rewindOutcomeNotes(res)) {
-      addBar(note.text, note.tone === 'danger' ? 'text-danger' : note.tone);
-    }
-    // 守卫同发送失败时的草稿恢复：**只在输入框空且无附件时**回填，绝不覆盖用户已经打的字。
-    if (res.prefill && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
-      inputEl.value = res.prefill;
-      inputEl.dispatchEvent(new Event('input'));
-      autosize();
-      updateSendButtonState();
-    }
-  }
-
   async function requestSessionFork(bubble, role) {
-    const anchor = resolveForkAnchorUuid({
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+    // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
+    // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
+    const ownUuid = bubble.dataset.uuid || null;
+    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
+    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
+    const reachable = resolveForkAnchorUuid({
       role,
-      ownUuid: bubble.dataset.uuid || null,
+      ownUuid,
       precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
     });
-    if (!anchor) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
+    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
@@ -8091,7 +8222,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       return;
     }
     haptic('tap');
-    socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
+    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    socket.emit('session:fork', {
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+    }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
   }
@@ -8199,12 +8334,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       wrap.addEventListener('toggle', () => {
         if (!wrap.open || c.loaded) return;
         c.loaded = true;
+        // 上一次请求超时留下的占位行不算「已有内容」——它写的正是「请重试」，留着会被下面那道
+        // childElementCount 守卫挡住，于是 c.loaded=false 放开的重试永远发不出去，提示自相矛盾。
+        for (const n of [...c.body.children]) if (n.dataset?.outboxRetryable === '1') n.remove();
         if (c.body.childElementCount > 0) return; // 已有内容（老会话 sidechain 落在主 transcript 里）
         if (!flowSid) return;
         const hint = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-hint"></div>');
         hint.textContent = t('正在读取子代理执行记录…');
         c.body.appendChild(hint);
-        socket.emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, res => {
+        socket.timeout(8000).emit('subagent:flow', { cwd: flowCwd, sessionId: flowSid, toolUseId: parentId }, (err, res) => {
           hint.remove();
           // 【渲染前再核一次「还在同一个会话吗」】上面那对快照保证的是**拉对了数据**，不保证
           // 响应回来时用户还没切走。切会话会清掉 histSubCards，于是下面的 renderHistoryBubbles
@@ -8215,9 +8353,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           // 只收属于这张卡的条目：服务端已按 toolUseId 归属，这里再挡一道——漏进主流的条目
           // 会变成凭空多出来的气泡，而那是刷新后才出现、极难归因的一类症状。
           const items = Array.isArray(res?.items) ? res.items.filter(m => m?.parentToolUseId === parentId) : [];
-          if (!res?.ok || !items.length) {
+          if (err || !res?.ok || !items.length) {
+            if (err) c.loaded = false; // 超时不是终态：折叠再展开时允许重新拉取
             const empty = el('<div class="text-ink-faint text-xs" data-testid="subagent-flow-empty"></div>');
-            empty.textContent = t('没有可显示的子代理执行记录');
+            empty.textContent = err ? t('请求超时，请重试') : t('没有可显示的子代理执行记录');
+            // 标记可重试：下次展开时先摘掉它，否则 childElementCount 守卫会把重试挡回去。
+            if (err) empty.dataset.outboxRetryable = '1';
             c.body.appendChild(empty);
             return;
           }
@@ -8372,7 +8513,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
-      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
+      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
+      if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;
@@ -8569,7 +8711,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       mirrorObservedCli = { model: null, permissionMode: null, effort: null };
       _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
-      rebuildEffortOptions(currentModel || cwdDefaultModel);
+      // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
+      // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
+      // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
+      // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
@@ -8766,7 +8912,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
 
   // E18: Redesigned premium utility row under each message block with copy, speak (TTS), and edit capabilities
-  function appendCopyAction(container, getText, align) {
+  // anchorUuid：这条气泡自己的权威 uuid。缺了就不挂需要锚点的入口（见下方 align==='left' 分支）。
+  function appendCopyAction(container, getText, align, anchorUuid) {
     if (!getText()) return;   // Empty messages have no action bar
     
     // For User messages (aligned to the right), render a single clean copy icon button aligned to the right
@@ -8900,6 +9047,29 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       window.speechSynthesis.speak(utterance);
     };
     bar.appendChild(speakBtn);
+
+    // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
+    // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
+    // 且 bindBubbleLongPress 只绑 touch 事件，桌面鼠标按不出来。
+    //
+    // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
+    // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——
+    // 那两档摆出按钮就是摆一个点了必然失败的东西。「复制」不需要锚点，所以它照常在。
+    if (anchorUuid) {
+      const forkBtn = el(`
+        <button class="msg-action-btn" data-testid="fork-action" title="${t('从这里分叉')}">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 3v12m0 0a3 3 0 103 3 3 3 0 00-3-3zm0-12a3 3 0 110 6 3 3 0 010-6zm12 0a3 3 0 100 6 3 3 0 000-6zm0 6c0 6-6 3-6 9" />
+          </svg>
+          <span>${t('分叉')}</span>
+        </button>
+      `);
+      // 确认框在 requestSessionFork 里，haptic 同理——按钮可见不等于一键执行。
+      // uuid 在点击时由该函数从 container.dataset 读，不用这里的 anchorUuid：
+      // 气泡的 dataset 才是权威值，且历史回显路径是先挂操作栏、后补 uuid。
+      forkBtn.onclick = () => requestSessionFork(container, 'assistant');
+      bar.appendChild(forkBtn);
+    }
 
     // UX-012：编辑已迁到用户气泡「改写重发」
 

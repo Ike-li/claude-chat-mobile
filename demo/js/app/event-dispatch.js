@@ -126,6 +126,9 @@ export function createAgentEventDispatcher(context, {
 //   setSeq/setEpoch        续传基线前移（桥接 app.js 的 lastSeq/curEpoch 两个闭包变量的 setter；只写
 //                          不读——'reload' 收尾时直接把队尾值覆盖过去，调用方无需先读旧值）
 //   timeoutMs             ack 迟迟不来的兜底超时（默认 3000ms：不能无限期黑屏攒着不渲染）
+//   deferMs               超时时判 reload 的那一档要再等多久才强制 flush（见 armTimeout）。须长于调用方
+//                         sync:since ack 自己的超时——正常情况下 ack 一定先回来收尾，这一道只兜「ack 回调在
+//                         resolve 之前抛了」这种坏情况
 // 同一时刻只可能有一个实例在缓冲（当前查看实例），single-slot 而非 Map；bindView（切视图）与
 // requestSync（重连/前台探活）两条入口共用同一份实现，不允许各写一份不一致的逻辑。用 begin() 返回的
 // handle 做身份校验防串扰——迟到的 ack / 超时回调若发现自己的 handle 已被更晚一次 begin/discard 顶替，
@@ -154,8 +157,9 @@ export function createReplayBuffer({
   setSeq,
   setEpoch,
   timeoutMs = 3000,
-  // 超时兜底决策：默认走 resolveReplayBufferAction 同口径（超阈值 → reload 语义，只推进基线不逐条吐；
-  // 未超阈值 → flush）。调用方注入，避免本模块 import logic.js 形成循环/耦合。
+  deferMs = 20_000,
+  // 超时兜底决策：默认走 resolveReplayBufferAction 同口径（超阈值 → reload，未超阈值 → flush）。
+  // 调用方注入，避免本模块 import logic.js 形成循环/耦合。reload 在这里的含义见 armTimeout。
   // 形参：({ bufferedCount }) => 'reload' | 'flush'；缺省恒 'flush'（与旧行为兼容，但生产路径必注入）。
   decideTimeoutAction = () => 'flush',
   isOutOfBand = (event) => DEFAULT_REPLAY_OOB_TYPES.has(event?.type),
@@ -173,16 +177,25 @@ export function createReplayBuffer({
     active = null;
   }
 
-  // 兜底：ack 超时未至，按 decideTimeoutAction 决定 reload/flush（不能无限期黑屏攒着；也不能无脑
-  // flush 把超阈值积压重新变成打字机——那正是本机制要修的问题）。
+  // 兜底：ack 超时未至，按 decideTimeoutAction 分两档（不能无限期黑屏攒着；也不能无脑 flush 把超阈值积压
+  // 重新变成打字机——那正是本机制要修的问题）：
+  //   · flush：少量积压，直接按序渲染出来；
+  //   · reload：【不在这里收尾】。在这里 resolve('reload') 只会推进基线、丢掉队列，而重载历史的动作在调用方
+  //     的 ack 回调里，超时路径上没有人会去做——弱网下 ack 晚于 timeoutMs、缓冲又过百条时，屏幕上直接缺一段，
+  //     迟到的 ack 还因 handle 已被顶替成了空操作（2026-09-22 review P2）。反正这一刻重载也看不到任何新东西，
+  //     就把收尾权留给 ack：两个入口的 ack 都带 socket.timeout，必定回调，各分支都会 resolve 本 handle，
+  //     那时手里有 busy 与磁盘对账的信息，判得比这里准。期间到的事件继续排队保序。
+  //     再挂一道 deferMs 的兜底：ack 回调万一在 resolve 之前抛了，缓冲不能永久扣住这个实例之后的事件，
+  //     到期按 flush 渲染出来——宁可晚、宁可抖一下，不丢。
   function armTimeout(handle) {
     handle.timeoutId = setTimeout(() => {
       if (active !== handle) return; // 已被更晚一次 begin/discard 顶替，本次超时失效
+      if (decideTimeoutAction({ bufferedCount: handle.queue.length }) === 'reload') {
+        handle.timeoutId = setTimeout(() => { if (active === handle) resolve(handle, 'flush'); }, deferMs);
+        return;
+      }
       // 走 resolve 统一收尾（清 active / 清 timer 已在 resolve 内；这里 timer 已触发故 clear 无害）。
-      const action = decideTimeoutAction({ bufferedCount: handle.queue.length }) === 'reload'
-        ? 'reload'
-        : 'flush';
-      resolve(handle, action);
+      resolve(handle, 'flush');
     }, timeoutMs);
   }
 

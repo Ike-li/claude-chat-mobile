@@ -1,5 +1,6 @@
 /* ── Claude 设计 token（暖米白浅色单主题；改色只动此处，tw-config.js 把它们桥接成语义类）── */
 :root {
+  color-scheme: light dark;
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
   --line:#E3E0D6; --line-soft:#ECEAE1;
   --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
@@ -193,28 +194,6 @@ body.ccm-sheet-open #messages {
 @keyframes dash-in {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: none; }
-}
-.premium-card {
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg);
-  padding: 1.15rem 1.25rem;
-  text-align: left;
-  cursor: pointer;
-  box-shadow: var(--shadow-card);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-@media (hover: hover) {
-  .premium-card:hover {
-    border-color: var(--accent-bright);
-    background: var(--surface);
-    transform: translateY(-2.5px);
-    box-shadow: var(--shadow-lift);
-  }
-}
-.premium-card:active {
-  transform: scale(0.975);
-  background: var(--surface-sunk);
 }
 .dash-recent-item {
   background: var(--surface);
@@ -490,17 +469,6 @@ body.ccm-sheet-open #messages {
 .empty-start {
   min-height: 0;
 }
-.empty-start-card {
-  min-height: 42vh;
-}
-.empty-project-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: .45rem;
-  color: var(--ink-soft);
-  font-weight: 650;
-  letter-spacing: -.01em;
-}
 .msg-action-bar {
   display: flex;
   align-items: center;
@@ -537,6 +505,16 @@ body.ccm-sheet-open #messages {
 .scrollbar-none::-webkit-scrollbar { display: none; }
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* header 顶部安全区：之前只在 max-width:767px 里处理，768px 到 1024px 之间（竖屏平板等）
+   完全没有对应规则、落进两条宽度媒体查询之间的空档——不带 env() 的 Tailwind py-2.5 是唯一基线。
+   这里改成不分宽度的通用兜底：无刘海/无遮挡设备上 env() 恒为 0，max() 取 Tailwind 原有的 0.625rem，
+   视觉不变；只有真有顶部安全区的设备才会看到差异。!important 是因为要压过同规格的 .py-2\.5 类选择器
+   （类选择器优先级高于元素选择器，纯 header{} 规则赢不了，此文件其它处也这么处理，非本次新增习惯）。
+   max-width:767px 块的 header 规则源码序在其后，会按预期覆盖掉这条。 */
+header {
+  padding-top: max(0.625rem, env(safe-area-inset-top)) !important;
+}
+
 @media (max-width: 767px) {
   header {
     padding: max(1.25rem, env(safe-area-inset-top)) 1rem 0.5rem !important;
@@ -551,9 +529,6 @@ body.ccm-sheet-open #messages {
     background: var(--surface) !important;
     border: 1px solid var(--line-soft) !important;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
-  }
-  #connDot {
-    /* Connection dot positioning is self-contained in its button wrapper */
   }
   #headerActions {
     display: flex !important;
@@ -575,10 +550,6 @@ body.ccm-sheet-open #messages {
     flex-direction: column;
     align-items: center;
     justify-content: flex-start;
-  }
-  .empty-start-card {
-    min-height: 50vh;
-    padding-bottom: 4vh;
   }
   footer {
     padding: 0 1rem max(1rem, env(safe-area-inset-bottom)) !important;
@@ -873,14 +844,11 @@ body.ccm-sheet-open #messages {
   inset: -6px;
 }
 
-/* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡） */
+/* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡）。
+   不需要单独的暗色覆盖：--accent 本身已经在顶部的暗色 :root 块里被重定义过，
+   这里再写一次 var(--accent) 到暗色 --activity 只是抄一遍同一个引用，最终值不变。 */
 :root {
   --activity: var(--accent);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --activity: var(--accent);
-  }
 }
 #streamLiveStatus {
   color: var(--activity);

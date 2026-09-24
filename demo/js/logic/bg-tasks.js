@@ -165,8 +165,9 @@ export function formatProgressHistoryEntry({ ts, description, lastToolName, summ
 }
 
 // 进度时间戳：5 分钟内显示相对时间（如 "30s前"、"2m前"），超过显示 HH:MM:SS。
-export function formatProgressTimestamp(ts) {
-  const diff = Date.now() - ts;
+// now 可注入（对齐同层 advanceThinkingClock 的 nowTs），默认取真实时钟；测试用固定值断言精确输出。
+export function formatProgressTimestamp(ts, now = Date.now()) {
+  const diff = now - ts;
   if (diff < 0) return '0s';
   if (diff < 60000) return `${Math.floor(diff / 1000)}s`;
   if (diff < 300000) return `${Math.floor(diff / 60000)}m`;

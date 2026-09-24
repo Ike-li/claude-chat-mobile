@@ -21,9 +21,11 @@ export function createSheetController(context, {
   const confirmTitle = byId('confirmTitle'), confirmBody = byId('confirmBody');
   const confirmOk = byId('confirmOk'), confirmCancel = byId('confirmCancel'), confirmAlt = byId('confirmAlt');
 
-  // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）
-  let sheetFocusPrev = null;
-  let sheetKeyHandler = null;
+  // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）。
+  // 栈式而非单槽位——appConfirm 会在已开着的业务 sheet（如 #workspaceModal）之上再开一层
+  // （如「放弃未保存的修改？」）。单槽位下内层关闭会把外层的 keydown 监听器一并摘掉
+  // （变量被内层开启时覆盖，内层 close 时置 null），外层就此永久失去 Tab 陷阱，直到重新打开。
+  let sheetStack = []; // { el, focusPrev, keyHandler }
   let confirmResolve = null;
 
   function sheetFocusables(root) {
@@ -42,7 +44,7 @@ export function createSheetController(context, {
 
   function openSheet(el) {
     haptic('tap');
-    sheetFocusPrev = doc.activeElement;
+    const focusPrev = doc.activeElement;
     el.classList.remove('hidden');
     // Force reflow
     el.offsetHeight;
@@ -54,8 +56,9 @@ export function createSheetController(context, {
       const list = sheetFocusables(el);
       (list[0] || el).focus?.();
     });
-    if (sheetKeyHandler) doc.removeEventListener('keydown', sheetKeyHandler, true);
-    sheetKeyHandler = (e) => {
+    // 每层自己的 handler，只在自己的 sheet-open 期间生效——同时挂多个不冲突：非本层的 Tab
+    // 事件命中不了本层的 first/last，直接 no-op（见上方模块注释）。
+    const keyHandler = (e) => {
       if (e.key !== 'Tab' || !el.classList.contains('sheet-open')) return;
       const list = sheetFocusables(el);
       if (!list.length) return;
@@ -66,7 +69,8 @@ export function createSheetController(context, {
         e.preventDefault(); first.focus();
       }
     };
-    doc.addEventListener('keydown', sheetKeyHandler, true);
+    doc.addEventListener('keydown', keyHandler, true);
+    sheetStack.push({ el, focusPrev, keyHandler });
     syncNavEscapeLayer();
   }
 
@@ -74,19 +78,17 @@ export function createSheetController(context, {
     haptic('tap');
     el.classList.remove('sheet-open');
     onClosed(el); // 业务钩子：如审批弹窗需要清防误触 arming
-    if (sheetKeyHandler) {
-      doc.removeEventListener('keydown', sheetKeyHandler, true);
-      sheetKeyHandler = null;
-    }
-    const prev = sheetFocusPrev;
-    sheetFocusPrev = null;
+    const idx = sheetStack.findIndex(s => s.el === el);
+    const entry = idx >= 0 ? sheetStack[idx] : null;
+    if (idx >= 0) sheetStack.splice(idx, 1);
+    if (entry) doc.removeEventListener('keydown', entry.keyHandler, true);
     syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
     setTimeout(() => {
       if (!el.classList.contains('sheet-open')) {
         el.classList.add('hidden');
-        try { prev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
+        try { entry?.focusPrev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
       }
     }, 300);
   }
