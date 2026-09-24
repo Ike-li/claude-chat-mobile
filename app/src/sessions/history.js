@@ -239,6 +239,9 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           isApiErrorMessage: entry.isApiErrorMessage === true,
           apiErrorStatus: entry.apiErrorStatus ?? null,
           apiError: entry.error ?? null,
+          // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
+          // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
+          autoContinuation: entry.origin?.kind === 'auto-continuation',
         });
         for (const item of expanded) {
           // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
@@ -659,6 +662,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
   const apiErrorField = opts.isApiErrorMessage
     ? { isApiErrorMessage: true, apiErrorStatus: opts.apiErrorStatus ?? null, apiError: opts.apiError ?? null }
     : {};
+  // 与 live 侧 user_message.origin 同名同值：前端两条渲染路径共用一个判据
+  const originField = opts.autoContinuation && role === 'user' ? { origin: 'auto-continuation' } : {};
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -668,7 +673,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...(attachments ? { attachments } : {}) });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}) });
     else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
   };
   if (typeof content === 'string') {
@@ -1773,17 +1778,17 @@ export function classifyTailEntries(entries) {
   return { ...main, autonomous }; // 主链 settled（子链无活动或也已 settled）
 }
 
-// IO 包装：读 transcript 尾窗 → 解析 → classifyTailEntries。尾窗/半行处理与 readLastPermissionMode 同款。
-// 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
-// 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
-export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // SS-003
+// 读 transcript 尾窗（TAIL_READ_BYTES）并逐行解析。尾窗/半行处理与 readLastPermissionMode 同款。
+// 读不到（非法 id / 文件不存在 / IO 失败）返回 null，空文件返回 []——两者对调用方意义不同：
+// classifyTranscriptTail 两种都判 settled（不锁），而自动续跑必须把「无法核实」当成不代发的理由。
+export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
     try {
       if (size == null) ({ size } = await fh.stat());
-      if (size === 0) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false };
+      if (size === 0) return [];
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
       const { bytesRead } = await fh.read(buf, 0, size - start, start);
@@ -1792,13 +1797,23 @@ export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_
         if (!line.trim()) continue;
         try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/写入中的截断尾行：跳过 */ }
       }
-      return classifyTailEntries(entries);
+      return entries;
     } finally {
       await fh.close().catch(() => {});
     }
   } catch {
-    return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // 文件不存在/读失败：不锁
+    return null;
   }
+}
+
+// IO 包装：读 transcript 尾窗 → classifyTailEntries。
+// 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
+// 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
+export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, { baseDir, size });
+  // 文件不存在/读失败/非法 id（SS-003）：不锁
+  if (!entries) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false };
+  return classifyTailEntries(entries);
 }
 
 // 会话归属校验：该 sessionId 的 jsonl 是否就在本 cwd 的 project 目录（server 用它把跨 cwd 的

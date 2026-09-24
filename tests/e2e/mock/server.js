@@ -201,6 +201,10 @@ let mockStatuslineState = 'not-installed';
 let mockAccessProtected = false;
 // test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
 let mockServerLogMissing = false;
+// test:auto-continue-*：instances 广播里的 autoContinue（真 server：src/server/auto-continue.js 的 snapshot，
+// 按 sessionId 归键的额度墙「到点自动继续」横幅数据）。只由 broadcastAutoContinue 带出——其余十几处内联
+// instances 载荷不带这个字段，前端对「缺字段」的约定正是保留上一份，所以不必逐处补。
+let mockAutoContinue = [];
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
 // 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
@@ -443,6 +447,7 @@ function resetMockState() {
   mockStatuslineState = 'not-installed';
   mockAccessProtected = false;
   mockServerLogMissing = false;
+  mockAutoContinue = [];
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
     { path: '/Users/you/code/other', sessionLimit: 3 },
@@ -730,6 +735,20 @@ app.post('/__resolve-session-id', (_req, res) => {
   });
   res.json({ ok: true });
 });
+
+// 带 autoContinue 的 instances 广播（真 server 的 instancesPayload 恒带该字段）。
+function broadcastAutoContinue() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+      dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+      instances: mockInstances, service: mockServicePayload(),
+      autoContinue: mockAutoContinue,
+    },
+  });
+}
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -2944,6 +2963,36 @@ io.on('connection', socket => {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'prompt_suggestion', payload: { text: '给 agent.js 补几个边界用例' },
         });
+      },
+    },
+    {
+      // 额度墙「到点自动继续」（真 server：src/server/auto-continue.js）。前三条各造一个相位的横幅条目，
+      // resetsAt 取「今天 15:50」让文案可断言；第四条模拟到点后真 server 代发的那句（user_message 带
+      // origin:auto-continuation）。先发 result 收尾本轮：场景命中后不走回合收尾，不发的话发送钮停在 stop。
+      commands: ['test:auto-continue-armed', 'test:auto-continue-offered', 'test:auto-continue-stale', 'test:auto-continue-fired'],
+      run: async ({ cmd, activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: activeInst.sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_auto_continue', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        if (cmd === 'test:auto-continue-fired') {
+          socket.emit('agent:event', {
+            seq: 2, epoch: activeEpoch, sessionId: activeInst.sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'user_message',
+            payload: { text: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.', uuid: 'u-auto-continue-1', origin: 'auto-continuation' },
+          });
+          return;
+        }
+        const reset = new Date(); reset.setHours(15, 50, 0, 0);
+        const phase = cmd.slice('test:auto-continue-'.length);
+        mockAutoContinue = [{
+          sessionId: activeInst.sessionId, cwd: activeInst.cwd, phase,
+          reason: phase === 'offered' ? 'disabled' : phase === 'stale' ? 'slept' : null,
+          resetsAt: reset.getTime(), fireAt: phase === 'armed' ? reset.getTime() + 30_000 : null,
+          rateLimitType: 'five_hour', origin: 'auto',
+        }];
+        broadcastAutoContinue();
       },
     },
     {
@@ -5505,6 +5554,34 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // 额度墙自动继续横幅的按钮（真 server：app.js 的 user:autoContinue → auto-continue.js 的 act()）。
+  // 相位迁移照抄真 server：cancel 撤条目 · arm 只接受 offered → armed · continueNow 只接受 stale（真 server
+  // 随即代发续跑、条目撤掉）。其余组合 ok:false 且不改状态——前端据此重画、解锁按钮。
+  socket.on('user:autoContinue', (payload, ack) => {
+    const { sessionId, action } = payload || {};
+    const idx = mockAutoContinue.findIndex(e => e.sessionId === sessionId);
+    const e = idx >= 0 ? mockAutoContinue[idx] : null;
+    let ok = false;
+    if (e && action === 'cancel') { mockAutoContinue.splice(idx, 1); ok = true; }
+    else if (e && action === 'arm' && e.phase === 'offered') {
+      mockAutoContinue[idx] = { ...e, phase: 'armed', reason: null, origin: 'manual', fireAt: e.resetsAt + 30_000 };
+      ok = true;
+    } else if (e && action === 'continueNow' && e.phase === 'stale') {
+      mockAutoContinue.splice(idx, 1);
+      ok = true;
+      // 真 server 接着就代发续跑那句（fire → a.send(..., { origin: 'auto-continuation' })）。
+      // 必须模拟出来：否则 continueNow 与 cancel 在前端看到的结果一样（横幅收起），发错动作也测不出来。
+      // epoch:'server' + seq:0：前端只对非 server epoch 做 seq 去重（同 user:interrupt 那条合成事件的约定）。
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'user_message',
+        payload: { text: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.', uuid: 'u-auto-continue-now', origin: 'auto-continuation' },
+      });
+    }
+    if (ok) broadcastAutoContinue();
+    if (typeof ack === 'function') ack(ok ? { ok: true } : { ok: false, error: e ? 'invalid_action' : 'not_found' });
   });
 
   // Handle user interrupt (stop button / question skip)

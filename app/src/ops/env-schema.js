@@ -317,6 +317,15 @@ export const ENV_SCHEMA = {
     help: t('离开一段时间后回到会话，由模型写一句「进行到哪了」。每次回来最多一次，频率远低于上一项。',
       'When you return after being away, the model writes one line on where things stand. At most once per return.'),
   },
+  // 额度墙「到点自动继续」（server/auto-continue.js）。默认开是终端等价：CLI 的同名设置
+  // autoContinueAtUsageLimit 缺省就是开，桌面端也会自动续。它会在无人值守时替用户开一轮（产生计费），
+  // 所以和上面几项一样必须在面板上看得见、关得掉。消费点 server/app.js 的 isAutoEnabled（严格 === '0'）。
+  CCM_AUTO_CONTINUE_AT_LIMIT: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('额度重置后自动继续', 'Continue after usage limit resets'),
+    help: t('撞上用量额度墙后，到重置时刻自动发一句「继续」，把没做完的任务接着做（同 Claude Code 终端的同名设置；终端里关掉了，这里也只给按钮）。重置点远于 24 小时（多半是周额度）只给按钮、不自动等；只认上游给出了重置时刻的墙，第三方网关若只回 429 不带重置时间就无法自动继续。关掉后撞墙时仍有「到点自动继续」按钮可点。等待期间重启服务会作废。',
+      'After you hit a usage limit, sends a short "continue" at the reset time so the unfinished task carries on (mirrors Claude Code\'s own setting; if you turned that off in the terminal, you only get a button here too). Resets more than 24 hours out (usually the weekly limit) get a button, not an automatic wait. Needs the upstream to report a reset time: a third-party gateway that answers a bare 429 cannot auto-continue. When off, the banner still offers a one-tap "continue at reset". Restarting the server during the wait cancels it.'),
+  },
 
   // ── 日志 ────────────────────────────────────────────────────────────
   LOG_INTERACTIONS: {

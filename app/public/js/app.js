@@ -183,6 +183,7 @@ import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
+import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
@@ -783,6 +784,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       connBannerDetail: connBannerDetailEl,
       connBannerSpinner: connBannerSpinnerEl,
       connBannerRetry: connBannerRetryEl,
+      autoContinueBanner: $('autoContinueBanner'),
+      autoContinueText: $('autoContinueText'),
+      autoContinueAction: $('autoContinueAction'),
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -1569,6 +1573,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+
+  // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
+  // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
+  const autoContinueBanner = createAutoContinueBannerController(appContext, {
+    onAction: ({ sessionId, action }) => {
+      socket.timeout(10_000).emit('user:autoContinue', { sessionId, action }, (err, ack) => {
+        if (err || !ack?.ok) autoContinueBanner.refresh();
+      });
+    },
+    onToggle: () => scrollBottom(), // 同连接横幅：占一行会改 #messages 高度，非 force 调用不贴底会自动 no-op
+  });
 
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
@@ -3014,6 +3029,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
+      if (p.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 额度墙到点续跑发的，不是用户打的
       if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
@@ -5008,6 +5024,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
     // 发送闸：随 instances 广播的权威 turnRunning 字段驱动（undefined/旧服务端=保守 false 不误禁）。
     _turnRunning = viewedInst?.turnRunning === true;
+    // 额度墙自动继续横幅：按当前查看会话的 sessionId 取条目。字段缺失（mock 的旧式内联载荷）时模块内保留上一份。
+    autoContinueBanner.update({ entries: p?.autoContinue, sessionId: viewedInst?.sessionId || null });
 
     // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
     syncTopContextLabel();
@@ -8496,6 +8514,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
+      if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;

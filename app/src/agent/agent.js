@@ -385,7 +385,7 @@ function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -411,6 +411,12 @@ export class AgentSession {
     // 进了回放环，重连回放会把旧档重新套到界面上。
     this.onEffortEffective = onEffortEffective;
     this.effectiveEffort = null;
+    // (wall) => void，主循环撞上 rate_limit 墙时上报给 server 的自动续跑调度（server/auto-continue.js）。
+    // 只交事实不做判定：判定在 agent/quota-auto-continue.js 的 planQuotaWall，这里的三个字段是它的输入。
+    this.onQuotaWall = onQuotaWall;
+    this._turnOrigin = null;            // 本轮由谁发起：'human' | 'auto-continuation' | 'task-notification'（合成轮）
+    this._turnHadOutput = false;        // 本轮是否已有真模型输出——续跑后「一个字没产出又撞墙」才算空转
+    this._lastRejectedRateLimit = null; // 本轮收到的 rejected rate_limit_info：老 CLI 的墙不带 quotaLimits 时的重置时刻来源
     // worktree 的 settings.local.json env 块（SDK resolveSettings 按 cwd 正确读出，CLI 自己读不到）。
     // 注意边界（2026-07-30 实证更正）：注入子进程环境**管不住网关**——CLI 的 settings.env 优先级高于
     // 继承环境，它从 canonical repo root 误读到的 ANTHROPIC_BASE_URL 等会盖掉这里注入的同名值。
@@ -607,14 +613,17 @@ export class AgentSession {
           session_id: this.sessionId || '',
           uuid: item.uuid, // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
           // 归属标记。SDK 契约原文：包装键盘输入的宿主**必须**显式打 {kind:'human'}，缺失被当成
-          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主，且这个断言是准确的
-          // 而非伪造来源——queue 的唯一写入点是 send()，send() 的唯一调用者是 user:message handler，
-          // 队列里只可能是经鉴权用户敲进来的字。
+          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主。
+          // queue 的唯一写入点是 send()，它有两个调用者：user:message handler（经鉴权用户敲进来的字 → human）
+          // 与额度墙自动续跑（server/auto-continue.js → auto-continuation，同 CLI 自己续跑时打的那个 kind）。
+          // 后者若也标 human 就是伪造来源：机器发的一句话会被当成人话去过关键词触发这类信任门。
           // 缺了它的后果**静默**：正文关键词的单回合触发（ultracode → 多 agent 编排 + 自动加载
           // workflow-authoring）与 @提及 peer 会话两条路一起走不通，用户只看到「这个词没反应」、零报错。
           // 2026-09-11 单变量实测：同一句话、同一 entrypoint，带 origin 产出 workflow_keyword_request
           // 与两条 turnCompanion 注入，不带则两项皆无。这道闸只守这两处，不影响审批/权限面。
-          origin: { kind: 'human' }
+          // 取值已在 send() 归一化过（只认 auto-continuation，其余为 null）：只在入口收口一次，
+          // 两层各收一次会互相兜底，任何一层单独坏掉都没有测试能发现。
+          origin: { kind: item.origin || 'human' }
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
@@ -915,12 +924,15 @@ export class AgentSession {
     // 2026-09-10 实测：transcript 落盘的 user 行 uuid 与此处推入值【逐字相同】，
     // 所以 live 气泡与刷新后的历史气泡携带同一个锚点，回退行为一致。
     const msgUuid = randomUUID();
+    // 只认一种非人类来源（额度墙自动续跑），其余一律按人：send() 的调用者就这两个，不给第三种开口子。
+    const origin = opts.origin === 'auto-continuation' ? 'auto-continuation' : null;
     // FE-002：透传 clientMessageId，供前端离线乐观气泡精确对账（含纯附件无文本）。
     this.emit('user_message', {
       text: displayText,
       attachments: opts.attachments,
       uuid: msgUuid, // Rewind 锚点：live 气泡靠它拿到 dataset.uuid（无静态门禁守，改动须补形状断言）
       ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
+      ...(origin ? { origin } : {}), // 前端据此把这条气泡标成「自动继续」，否则看着像用户自己打了一句英文
     }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
@@ -929,10 +941,11 @@ export class AgentSession {
     this._openTurnSlot(msgUuid);
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
+    this._markTurnStart(origin || 'human');
     this._armSlashQuietNotice(text); // slash 命令可能整轮静默（fork 上下文），到点提示一次「不是卡死」
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
-    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText });
+    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText, origin });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
     return true;
@@ -3092,6 +3105,24 @@ export class AgentSession {
           const quotaNotice = formatQuotaWall(msg.quotaLimits);
           if (quotaNotice) this.emitNotice(quotaNotice, 'warning');
           this.emit('error', { message: detail || `API 错误：${msg.error}`, recoverable: true });
+          // 额度墙上报给自动续跑。只报主循环（子 agent 撞墙在上面那个分支，主循环可能还在跑）；
+          // 只看 error 桶不看有没有 quotaLimits：网关裸 429 也要报，由判定层给出「无法自动继续」的理由。
+          // 包 try：回调在 server 侧，它的任何意外都不能从这里抛出去——map() 的抛出会被消息泵当成
+          // 流错误、中断整个会话，一个辅助功能的缺陷不该拿会话陪葬。
+          if (msg.error === 'rate_limit' && this.onQuotaWall) {
+            const q = msg.quotaLimits;
+            try {
+              this.onQuotaWall({
+                uuid: msg.uuid ?? null,
+                quota: q && typeof q === 'object' && !Array.isArray(q) ? q : null,
+                fallback: this._lastRejectedRateLimit,
+                turnOrigin: this._turnOrigin,
+                turnHadOutput: this._turnHadOutput,
+              });
+            } catch (err) {
+              console.error('[agent] onQuotaWall 回调异常（已隔离，不影响会话）:', err?.message || err);
+            }
+          }
           // ⚠️ 此处【不】减 pendingTurns——整套配平依赖「轮⇒result 假设」：每个已启动轮次恰好产出一个
           // result（成功/报错/被中断都算），由随后的 result 事件减掉本轮。若某 SDK/网关版本把终态 API 错误
           // 只发 assistant{error} 不发 result，pendingTurns 会泄漏 → 排队提示早一轮 / idle 仍 busy（idle
@@ -3100,6 +3131,11 @@ export class AgentSession {
           break;
         }
         this.maybeSynthesizeAutoTurn(); // 非流式网关无 message_start，assistant 边界兜底合成（flag 已被 message_start 消费则 no-op）
+        // 本轮有真模型产出（自动续跑的空转判据）。<synthetic> 排除：那是 CLI 自己合成的零 token 回复，
+        // 典型是 resume 被打断回合时补的「No response requested.」。
+        if (msg.message?.model !== '<synthetic>' && asArray(msg.message?.content).some(b => b && typeof b === 'object')) {
+          this._turnHadOutput = true;
+        }
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
@@ -3300,6 +3336,7 @@ export class AgentSession {
         const info = msg.rate_limit_info || {};
         if (info.status === 'rejected') {
           this.emitNotice(`已达${RATE_LIMIT_LABELS[info.rateLimitType] || '用量'}上限`, 'warning');
+          this._lastRejectedRateLimit = info; // 随后那条主循环墙若不带 quotaLimits，重置时刻从这里取
         }
         break;
       }
@@ -3326,11 +3363,21 @@ export class AgentSession {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
       this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; // 合成轮同样开表
+      this._markTurnStart('task-notification');
       // 账面就地改写、没有伴随会触发 instances 广播的事件（message_start / text_delta 都不在 STATE_BOUNDARY
       // 里）：不播的话其它端要等下一次无关广播才知道这一轮在跑，只有文本的汇报轮会一直等到 result，
       // 这期间它们看到的是空闲，发出去的消息被在途轮闸拒掉。
       this.onStateSettled();
     }
+  }
+
+  // 一轮开始：重置自动续跑判定用的三个本轮事实（见构造函数 onQuotaWall 处）。
+  // 只在「真开了一轮」的两处调用（send 入队、合成自动轮），拒收路径不碰——否则一次被拒的发送
+  // 会抹掉在途轮已攒下的产出标记。
+  _markTurnStart(origin) {
+    this._turnOrigin = origin;
+    this._turnHadOutput = false;
+    this._lastRejectedRateLimit = null;
   }
 
   // 交互日志缓冲键：有真 sessionId 用它；FRESH 首轮 init 前用 provisionalKey(instanceId)。

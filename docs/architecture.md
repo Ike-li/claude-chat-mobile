@@ -101,6 +101,21 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 轮询意味着存在最多一个检查周期的观察窗口。切换会话、手动刷新镜像与 hooks 信号会主动插队触发检查，但它们仍不能证明对另一个活进程拥有控制权。
 
+## 额度墙到点自动继续
+
+终端里的 Claude Code 撞上用量额度墙后，会等到重置时刻自动发一句「继续」（设置项 `autoContinueAtUsageLimit`，默认开）。但这个能力只在**交互模式**里生效：CLI 的总闸是 `launchOptions.isInteractive()`，`-p` / `--sdk-url` / stdout 不是 TTY 任一成立就进不去，而 SDK 拉起的 CLI 恰好是管道（本项目与桌面端 Code 标签都是）。桌面端的「到点续跑」是它前端自己补的。所以本项目也在 server 里补：`app/src/server/auto-continue.js` 管状态与调度，`app/src/agent/quota-auto-continue.js` 放判定纯函数。
+
+1. **布防**：主循环撞上 `rate_limit` 墙时，`AgentSession` 通过 `onQuotaWall` 上报墙的事实（`quotaLimits`、同一轮收到的 rejected `rate_limit_event`、这一轮由谁发起、撞墙前有没有真模型输出）。判定照抄 CLI：`status='rejected'`、带有限的 `resetsAt`、没在用超额额度，才能布防；到点 = 重置时刻 + 30–90 秒抖动；重置点远于 24 小时（多半是周额度）不自动等，只在横幅上给「仍要到点继续」。子 agent 撞墙不布防：那时主循环可能还在跑。
+2. **状态按 sessionId 挂在 server，不挂在实例上**。等待常达 5 小时，而空闲 30 分钟的实例就会被回收；到点时实例多半已不在，要 resume 一个出来再发。空闲回收不影响布防，但用户显式关掉这个会话的标签、删除会话、或自己接着发了消息，布防即作废（CLI 的对应物是退出进程）。横幅数据随 `instances` 广播的 `autoContinue` 字段下发（真 server 恒带数组；前端把缺字段当成「保留上一份」，只为兼容 E2E mock 的旧式载荷）。
+3. **到点前四道复核**，任一不过都不代发：自动布防的条目开关此刻仍开着；transcript 尾窗里墙仍是主链最后一条对话（CLI resume 被打断回合时补的 isMeta「Continue from where you left off.」与 `<synthetic>` 的「No response requested.」不算）；注册表里没有终端或桌面端开着这个会话（单驾驶员，`SESSION-01`）；实例没有在跑一轮、没有 `externalDirty`。复核读不到或可能有别的驾驶员时转 **stale**，由用户在横幅上点「继续」。
+4. **发出去的是 CLI 同款提示词**，但去掉了 `claude.ai` 字样，SDK 归属标成 `{kind:'auto-continuation'}`（CLI 自己续跑用的也是它），不冒充人类键盘输入。前端据 `user_message.origin` 与历史条目的 `origin` 给这条气泡加「额度重置后自动继续」标注。
+5. **睡眠与重启**：tick 每 30 秒一拍，两拍间隔超过 30 分钟且已过点，就当作机器睡过了重置点，转 stale、不自动发（同 CLI）。**重启即作废，不落盘**，理由有两条：CLI 退出时同样作废；另外这与 `APPROVAL-02` 是同一个立场，重启时残留的待执行动作不再执行。布防事实本来可以从 transcript 重建（墙条目自带 `quotaLimits`），重建不了的只有用户点过的「取消」，而为它新增持久化层换来的是「重启后自动替你开跑」，这种行为更难预期（hard-rules §1「不新增持久化层」）。
+6. **续跑后又撞墙**：续跑那一轮一个字没产出就撞墙，才算空转，计一次，重试最少间隔 60 秒、300 秒，超过 2 次熔断。与 CLI 有一处有意差异：CLI 把「续跑那一轮里撞墙」一律计数，跨多个 5 小时窗口的长任务因此会在第三个窗口被截停，而这恰恰是本功能的主用例。
+
+**官方订阅与第三方网关**：一律数据驱动，不判断上游是谁（hard-rules §1「对模型通路零假设」）。官方订阅的墙恒带重置时刻；第三方网关如果透传了 unified 限额头，CLI 会报出同样的结构化墙，行为完全一致；网关只回一个裸 429 时，CLI 报不出重置时刻，这里不布防，也不拿「多久以后再试」去猜，会话里提示一句「上游没有给出额度重置时间，无法到点自动继续」。重试有熔断，网关重置时刻不准时最多多撞两次墙。
+
+**开关**：`CCM_AUTO_CONTINUE_AT_LIMIT`（面板可关，默认开）与 CLI 的 `autoContinueAtUsageLimit`（在终端 `/config` 里关掉，web 这边也跟着关）任一关掉，都退回「只给选项」：撞墙时横幅提供「到点自动继续」按钮，用户点了才布防。手动布防的条目不受开关约束，因为开关管的只是「自动」。
+
 ## 事件信封与断线回放
 
 出向 Socket.io 只使用一个 `agent:event` 信封：
@@ -249,6 +264,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |
+| 额度墙自动继续的布防 | server 进程内存（`auto-continue.js`） | 到点续跑与横幅；**重启即作废、不落盘** |
 
 `CCM_DATA_DIR` 不保存 Claude 原始 transcript。清理它会影响 CCM 的控制面状态，但不会等同删除全部 Claude 会话；SDK 真删会话是另一条显式操作。
 
@@ -288,6 +304,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 - `app/server.js`：兼容启动入口；实际装配在 `app/src/server/app.js`。
 - `app/src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
 - `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
+- `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`：额度墙到点自动继续的调度（状态自持）与判定纯函数。
 - `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `app/public/js/app.js` 与 `app/public/js/app/`：客户端状态、事件派发与交互模块。

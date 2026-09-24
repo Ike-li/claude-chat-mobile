@@ -545,6 +545,16 @@
         </div>
       </div>
 
+      <!-- 额度墙「到点自动继续」（src/server/auto-continue.js）：只对当前查看的会话显示。文案与唯一的按钮
+           （取消 / 到点自动继续 / 继续）由 logic/auto-continue.js 按相位给出，接线在 app/auto-continue-banner.js。
+           数据来自 instances 广播的 autoContinue（按 sessionId 归键）——等待期间实例多半已被空闲回收，
+           挂在实例上的话横幅会跟着消失。class 由模块整条改写（含 hidden），这里只是初始态。 -->
+      <div id="autoContinueBanner" class="hidden px-3 py-2 bg-surface border border-accent rounded-xl text-xs mb-1 shrink-0 flex items-center gap-2" role="status" data-testid="auto-continue-banner">
+        <span aria-hidden="true">⏳</span>
+        <span id="autoContinueText" class="flex-1 min-w-0 text-ink-soft" data-testid="auto-continue-text"></span>
+        <button type="button" id="autoContinueAction" class="hit-44 shrink-0 px-2 py-1 rounded-lg border border-accent text-accent font-semibold active:scale-95" data-testid="auto-continue-action"></button>
+      </div>
+
       <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
            #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
       <div id="mirrorBanner" class="hidden" aria-hidden="true">

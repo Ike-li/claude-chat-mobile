@@ -189,6 +189,184 @@ test.describe('子 agent 额度墙 — P0 守卫回归锚点', () => {
   });
 });
 
+// 自动续跑的输入面（app/src/agent/quota-auto-continue.js 的 planQuotaWall 吃的就是这份上报）。
+// 判定本身在那边单测；这里只管 agent 有没有把判定需要的事实如实交出去。
+test.describe('onQuotaWall：主循环撞墙上报给自动续跑', () => {
+  const collect = () => {
+    const walls = [];
+    const { s, events } = makeSession({ onQuotaWall: w => walls.push(w) });
+    s.q = { setModel() { return Promise.resolve(); } };
+    return { s, events, walls };
+  };
+  const modelReply = text => ({
+    type: 'assistant', uuid: `a-${text}`,
+    message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] },
+  });
+
+  test('主循环 rate_limit 墙 → 上报一次：uuid + 原样 quotaLimits + 本轮是谁发起的', async () => {
+    const { s, walls } = collect();
+    await s.send('跑一个长任务');
+    s.map(wallMessage(REAL_QUOTA, { uuid: 'wall-1' }));
+    assert.equal(walls.length, 1);
+    assert.equal(walls[0].uuid, 'wall-1', '到点前按它确认墙仍是 transcript 尾部');
+    assert.deepEqual(walls[0].quota, REAL_QUOTA);
+    assert.equal(walls[0].fallback, null);
+    assert.equal(walls[0].turnOrigin, 'human');
+    assert.equal(walls[0].turnHadOutput, false);
+    s.dispose();
+  });
+
+  test('撞墙前本轮已有真模型输出 → turnHadOutput=true（空转熔断只数没产出的那种）', async () => {
+    const { s, walls } = collect();
+    await s.send('跑一个长任务');
+    s.map(modelReply('先看一下目录'));
+    s.map(wallMessage(REAL_QUOTA));
+    assert.equal(walls[0].turnHadOutput, true);
+    s.dispose();
+  });
+
+  test('<synthetic> 的非错误 assistant（「No response requested.」）不算产出', async () => {
+    const { s, walls } = collect();
+    await s.send('继续');
+    s.map({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } });
+    s.map(wallMessage(REAL_QUOTA));
+    assert.equal(walls[0].turnHadOutput, false, '那是 CLI resume 时补的合成回复，零 token，算产出会让空转永不熔断');
+    s.dispose();
+  });
+
+  test('产出标记不跨轮：上一轮干过活，这一轮一上来就撞墙 → false', async () => {
+    const { s, walls } = collect();
+    await s.send('第一轮');
+    s.map(modelReply('第一轮的回复'));
+    s.map({ type: 'result', subtype: 'success', is_error: false, result: 'ok', duration_ms: 1, num_turns: 1, total_cost_usd: 0 });
+    await s.send('第二轮');
+    s.map(wallMessage(REAL_QUOTA));
+    assert.equal(walls[0].turnHadOutput, false);
+    s.dispose();
+  });
+
+  test('续跑发出去的那一轮撞墙 → turnOrigin=auto-continuation', async () => {
+    const { s, walls } = collect();
+    await s.send('Your usage limit has reset. Continue …', undefined, { origin: 'auto-continuation' });
+    s.map(wallMessage(REAL_QUOTA));
+    assert.equal(walls[0].turnOrigin, 'auto-continuation');
+    s.dispose();
+  });
+
+  test('墙没带 quotaLimits 时附上同一轮收到的 rejected rate_limit_event（老 CLI 形态）', async () => {
+    const { s, walls } = collect();
+    await s.send('x');
+    const info = { status: 'rejected', resetsAt: todayAt(10), rateLimitType: 'five_hour' };
+    s.map({ type: 'rate_limit_event', rate_limit_info: info });
+    s.map(wallMessage(undefined));
+    assert.equal(walls[0].quota, null);
+    assert.deepEqual(walls[0].fallback, info);
+    s.dispose();
+  });
+
+  test('上一轮收到的 rate_limit_event 不串到下一轮', async () => {
+    const { s, walls } = collect();
+    s.map({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: todayAt(10), rateLimitType: 'five_hour' } });
+    await s.send('新的一轮');
+    s.map(wallMessage(undefined));
+    assert.equal(walls[0].fallback, null, '陈旧的重置时刻会让续跑在错误的时刻发出去');
+    s.dispose();
+  });
+
+  test('子 agent 撞墙不上报：主循环可能还在跑，到点续跑会重做一件没停下来的事', async () => {
+    const { s, walls } = collect();
+    await s.send('x');
+    s.map(wallMessage(REAL_QUOTA, { parent_tool_use_id: 'toolu_1', subagent_type: 'general-purpose' }));
+    assert.equal(walls.length, 0);
+    s.dispose();
+  });
+
+  test('非额度类 API 错误不上报', async () => {
+    const { s, walls } = collect();
+    await s.send('x');
+    s.map({
+      type: 'assistant', error: 'invalid_request', isApiErrorMessage: true, apiErrorStatus: 400,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'API Error: bad request' }] },
+    });
+    assert.equal(walls.length, 0);
+    s.dispose();
+  });
+
+  test('网关裸 429（rate_limit 但没有任何额度信息）照样上报，由判定层说明「无法自动继续」', async () => {
+    const { s, walls } = collect();
+    await s.send('x');
+    s.map({
+      type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, apiErrorStatus: 429,
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 429 {"error":"quota exhausted"}' }] },
+    });
+    assert.equal(walls.length, 1);
+    assert.equal(walls[0].quota, null);
+    assert.equal(walls[0].fallback, null);
+    s.dispose();
+  });
+
+  test('接收方抛异常不得从 map() 冒出去：消息泵会把它当流错误、中断整个会话', async () => {
+    const { s, events } = makeSession({ onQuotaWall: () => { throw new Error('boom'); } });
+    s.q = { setModel() { return Promise.resolve(); } };
+    await s.send('x');
+    const origError = console.error;
+    console.error = () => {}; // 该条日志是预期内的，别污染测试输出
+    try {
+      assert.doesNotThrow(() => s.map(wallMessage(REAL_QUOTA)));
+    } finally {
+      console.error = origError;
+    }
+    assert.equal(errors(events).length, 1, '撞墙的 error 事件照发');
+    s.dispose();
+  });
+});
+
+test.describe('自动续跑发出的消息：归属如实标注', () => {
+  test('以 auto-continuation 归属送进 SDK，不冒充人类键盘输入', async () => {
+    const { s } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('Your usage limit has reset. …', undefined, { origin: 'auto-continuation' }), true);
+    const it = s.inputStream();
+    const { value } = await it.next();
+    assert.deepEqual(value.origin, { kind: 'auto-continuation' },
+      'SDK 的 isHuman() 信任门据此放行关键词触发等；机器发的话标成 human 是伪造来源');
+    await it.return();
+    s.dispose();
+  });
+
+  test('user_message 事件带 origin，前端据此把这条气泡标成「自动继续」', async () => {
+    const { s, events } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    await s.send('Your usage limit has reset. …', undefined, { origin: 'auto-continuation' });
+    const um = events.find(e => e.type === 'user_message');
+    assert.equal(um.payload.origin, 'auto-continuation');
+    s.dispose();
+  });
+
+  test('普通发送：SDK 归属仍是 human，user_message 载荷不多出 origin 键', async () => {
+    const { s, events } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    await s.send('hello');
+    const it = s.inputStream();
+    const { value } = await it.next();
+    assert.deepEqual(value.origin, { kind: 'human' });
+    await it.return();
+    assert.equal('origin' in events.find(e => e.type === 'user_message').payload, false);
+    s.dispose();
+  });
+
+  test('未知 origin 值不透传给 SDK：只认 auto-continuation，其余一律按 human', async () => {
+    const { s } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    await s.send('hello', undefined, { origin: 'peer' });
+    const it = s.inputStream();
+    const { value } = await it.next();
+    assert.deepEqual(value.origin, { kind: 'human' }, 'send() 的调用方只有两个，不给第三种来源开口子');
+    await it.return();
+    s.dispose();
+  });
+});
+
 test.describe('rate_limit_event 原通道不受影响', () => {
   test('rejected 仍走原措辞，两条路径口径一致', () => {
     const { s, events } = makeSession();

@@ -987,6 +987,20 @@ export const EN_DICT = Object.freeze({
   '24 小时内': 'in the last 24h:',
   '上次': 'last',
   '启动': 'started',
+  // 额度墙「到点自动继续」横幅（logic/auto-continue.js）与续跑气泡标记。用语对齐 CLI 限额对话框：
+  // "Continuing automatically at 3:50pm · esc to cancel" / "Wait here, then continue automatically"。
+  '额度 {time} 重置，届时自动继续': 'Usage limit resets at {time} — continuing automatically then',
+  '额度要到 {time} 才重置（超过 24 小时），不会自动继续': 'Usage limit resets at {time} (more than 24 hours out) — not continuing automatically',
+  '额度 {time} 重置': 'Usage limit resets at {time}',
+  '仍要到点继续': 'Continue at reset anyway',
+  '到点自动继续': 'Continue automatically at reset',
+  '额度已于 {time} 重置；主机期间休眠，没有自动继续': 'Usage limit reset at {time}, but the host was asleep — did not continue automatically',
+  '终端或桌面端正开着这个会话，没有自动继续': 'This session is open in a terminal or the desktop app — did not continue automatically',
+  '读不到这个会话的记录，没有自动继续': 'Could not read this session\'s transcript — did not continue automatically',
+  '会话没能重新打开，没有自动继续': 'The session could not be reopened — did not continue automatically',
+  '到点了，但没有自动继续': 'The reset time passed, but it did not continue automatically',
+  '继续': 'Continue',
+  '额度重置后自动继续': 'Continued automatically after the usage limit reset',
 });
 
 // 需要翻译的属性白名单：这四个是「屏幕上/读屏器里真会念出来」的，其余属性（data-*、aria-labelledby

@@ -181,6 +181,27 @@ test.describe('事件流 — 新连接重放', () => {
     assert.ok(hasExpected, `expected one of ${expectedTypes.join('/')}, got: ${types.join(', ')}`);
     s.disconnect();
   });
+
+  // 额度墙自动继续横幅的数据面（src/server/auto-continue.js 的 snapshot）。前端对「缺这个字段」的约定是
+  // 保留上一份（为兼容 E2E mock 的十几处内联载荷），所以真 server 漏发不会报错，只会让横幅在条目撤掉后
+  // 永远清不掉。这一层只有这里能守：E2E 打的是 mock，删掉真 server 的这个字段它照样全绿。
+  test('instances 广播恒带 autoContinue 数组（没有布防也要是空数组，不能缺席）', async () => {
+    const events = [];
+    const s = connectSocket();
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const inst = events.find(e => e.type === 'instances');
+    assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
+    assert.ok(Array.isArray(inst.payload.autoContinue),
+      `autoContinue 必须是数组，实际 ${JSON.stringify(inst.payload.autoContinue)}——缺席时前端会一直显示上一份横幅`);
+    assert.equal(inst.payload.autoContinue.length, 0);
+    s.disconnect();
+  });
 });
 
 test.describe('session:list — 空工作目录', () => {
@@ -594,6 +615,10 @@ const ACK_SHAPES = [
   { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
   // 同上：statusline 安装器也只驱动非法 action 这一支，绝不用合法 action 触发真安装。
   { event: 'statusline:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
+  // 额度墙自动继续横幅的按钮。前端只看 ok（失败就按手上的快照重画、解锁按钮），成功支 { ok } 要先有一条
+  // 布防——S2 的假 CLI 不产出额度墙，造不出来，只覆盖两条免夹具的失败支。
+  { event: 'user:autoContinue', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
+  { event: 'user:autoContinue', branch: '没有布防', payload: () => ({ sessionId: 'no-such-session', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.ok, false) },
 ];
 
 // 未纳入（各有理由，不是遗漏）：
