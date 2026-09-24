@@ -436,6 +436,38 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
+  // SDK 后台任务给在途轮的静默豁免也有上限（2026-09-22 review P2，维护者选 45 分钟）。
+  // 子代理在干活时 SDK 流本来就有消息刷新 lastActivity，这条豁免真正兜住的是「任务活着、整条流静默」——
+  // 典型是几小时前起的 dev server 还挂着，新的一轮卡在网关上：此前永远不告警、不中断。
+  test('SDK 后台任务在本轮开跑 45 分钟内豁免静默看门狗', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 44 * 60_000;
+    s.bgTaskUpsert('bg-dev-server', 'local_bash', 'npm run dev');
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+    s.checkIdle();
+    assert.equal(interrupted, false, '上限内后台任务仍算「在干活」');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  test('本轮开跑超 45 分钟：后台任务不再续命，静默挂死回到中断路径', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 46 * 60_000;
+    s.bgTaskUpsert('bg-dev-server', 'local_bash', 'npm run dev');
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+    s.checkIdle();
+    assert.equal(interrupted, true, '只剩一个静默的后台任务撑着的在途轮超上限须按挂死处理');
+    assert.ok(events.find(e => e.type === 'error'), '中断要告诉用户');
+    assert.equal(s.hasBgTasks(), true, '后台任务本身不受影响：看门狗中断的是在途轮，不是任务');
+    s.dispose();
+  });
+
   // 本地 slash 命令在途豁免（agent.js#_localCommandInFlight）。
   // 病灶：/code-review 这类本地命令由 CLI 在自己进程里跑，不产 task_progress、主链也没有 tool_use
   // （2026-08-03 那批真机会话主链 assistant 条数 = 0），既有两条豁免一条都不满足 ⇒ SDK 流全空、
@@ -921,6 +953,28 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
+  // 彻底删除靠它判断「CLI 退完了没有」（app.js deletePermanent）：dispose 只是让 SDK 关 stdin，
+  // CLI 读到 EOF 后还要往 transcript 追加收尾元数据才退。在 dispose 时就结算，删除会落在那几行之前。
+  test('exitPromise 在 SDK 消息流结束时才结算，不是 dispose 那一刻', async () => {
+    const { s } = makeSession();
+    let endStream;
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return { next: () => new Promise(resolve => { endStream = () => resolve({ done: true }); }) };
+      },
+    };
+    let settled = false;
+    s.exitPromise.then(() => { settled = true; });
+    const consumed = s.consume(fakeQ);
+    s.dispose();
+    await new Promise(r => setImmediate(r));
+    assert.equal(settled, false, 'dispose 之后 CLI 还在收尾写盘，此刻不能算已退出');
+    endStream();
+    await consumed;
+    await new Promise(r => setImmediate(r));
+    assert.equal(settled, true, '消息流结束（CLI 已退）后必须结算，否则删除每次都要白等到上限');
+  });
+
   test('正常结束 + sawInit 未到 + resumeId 存在 → resumeFailed + emit error(recoverable:false) + onExit', async () => {
     let exited = false;
     const { s, events } = makeSession({ resumeId: 'bad-id', onExit() { exited = true; } });
@@ -936,6 +990,9 @@ test.describe('consume() 退出路径', () => {
     const err = events.find(e => e.type === 'error' && !e.payload.recoverable);
     assert.ok(err);
     assert.ok(err.payload.message.includes('无法恢复会话'));
+    // 反向对照：会话恢复失败是真的结束——前端必须走收尾（清审批、熄 busy）。endsTurn:false 只给
+    // 「报个错、轮次照常」的那几类，一刀切全标上等于把这里的收尾也关掉。
+    assert.notEqual(err.payload.endsTurn, false);
     s.dispose();
   });
 

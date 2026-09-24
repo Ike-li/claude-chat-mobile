@@ -36,12 +36,14 @@ export const CCM_EFFORT_LEVELS = Object.freeze([
 ]);
 
 /**
- * UI 合法思考档 = SDK 五档 + ultracode。
- * ultracode 是 CLI /effort 菜单项，不是 Options.effort 字面量。
+ * UI 合法思考档 = SDK 五档 + ultracode + auto。
+ * ultracode / auto 都是 CLI /effort 菜单项，不是 Options.effort 字面量。
+ * auto（= CLI 会话档位 {kind:'default'}，模型内置默认）≠ null（没指定 = {kind:'inherit'}，先读 settings）。
  */
 export const UI_EFFORT_LEVELS = Object.freeze([
   ...CCM_EFFORT_LEVELS,
   'ultracode',
+  'auto',
 ]);
 
 /**
@@ -70,8 +72,10 @@ export function normalizeEffortLevel(level) {
 
 /**
  * UI → SDK effort 归一（user:setEffort / openInstance 入参）。
- * · null/'' → { ui:null, sdk:null, ultracode:false }（模型默认）
+ * · null/'' → { ui:null, sdk:null, ultracode:false }（没指定：不传 --effort，CLI 按 settings/模型默认继承）
  * · ultracode → { ui:'ultracode', sdk:'xhigh', ultracode:true }（Settings.ultracode + xhigh）
+ * · auto → { ui:'auto', sdk:null, ultracode:false }（同样不传 --effort——CLI 把 --effort auto 当没传；
+ *   由 AgentSession 起来后补发 applyFlagSettings({effortLevel:null}) 落成模型内置默认）
  * · SDK 五档 → { ui, sdk 同值, ultracode:false }
  * · 非法 → null（调用方拒切/回落）
  *
@@ -83,6 +87,9 @@ export function normalizeEffortUiLevel(level) {
   }
   if (level === 'ultracode') {
     return { ui: 'ultracode', sdk: 'xhigh', ultracode: true };
+  }
+  if (level === 'auto') {
+    return { ui: 'auto', sdk: null, ultracode: false };
   }
   if (CCM_EFFORT_LEVELS.includes(level)) {
     return { ui: level, sdk: level, ultracode: false };
@@ -115,6 +122,12 @@ export function defaultsFromEffectiveSettings(effective) {
     // model：settings 有顶层 model 才 pin；多数环境无此键 → undefined（交给 CLI 自选 + scout/init）
     model: rawModel,
     env,
+    // CLI 的「额度墙到点自动继续」。CLI 自己在 SDK 会话里用不上它（只在交互模式生效），但它表达了
+    // 用户的意图：终端里关掉了，web 侧的自动续跑也跟着只给选项（server/app.js 的 isAutoEnabled）。
+    // 只认显式布尔——CLI 缺省视为开，把非布尔当 false 会关掉用户从没关过的功能。
+    autoContinueAtUsageLimit: typeof effective?.autoContinueAtUsageLimit === 'boolean'
+      ? effective.autoContinueAtUsageLimit
+      : undefined,
   };
 }
 
@@ -279,12 +292,13 @@ export function resolveFreshPrefs({
 
   // pending 是 UI 档（可含 ultracode）；L3 base 仍是 SDK 五档（settings 不认 ultracode）。
   // 旧逻辑 normalizeEffortLevel(pendingEffort) 把 ultracode 剥成 null → FRESH 首条无 Settings.ultracode（H1）。
+  // auto 的 sdk 也是 null，但必须保留 'auto' 字面量：折成 null 就成了「没指定」，按 inherit 读 settings。
   let effort = baseEffort;
   let ultracode = false;
   if (hasPendingEffort) {
     const ui = normalizeEffortUiLevel(pendingEffort);
     if (ui) {
-      effort = ui.sdk;
+      effort = ui.ui === 'auto' ? 'auto' : ui.sdk;
       ultracode = ui.ultracode;
     } else {
       effort = null;
@@ -308,6 +322,9 @@ export function resolveFreshPrefs({
  * L3；用户当下主动选"模型默认"的意图经 openInstance 的显式 effort 参数分支立即生效，不经过、
  * 也不依赖本函数——本函数只管"当下没有显式意图时，该按什么权威顺序找一个此刻值得展示/采用的档"。
  *
+ * 'auto' 不同：它是用户显式选的「模型内置默认」（CLI {kind:'default'}），持久化成 'auto' 字面量，
+ * 在这条链里与具体档同样是终值。若折成 null 往下兜底，重启后会悄悄换成 settings 里存的档。
+ *
  * @param {object} opts
  * @param {string|null|undefined} [opts.savedEffort] sessions.json 持久值（saved?.effort，键不存在则 undefined）
  * @param {string|null|undefined} [opts.inheritedEffortValue] 同 cwd 存活实例继承档（inheritedEffort(cwd)）
@@ -315,8 +332,9 @@ export function resolveFreshPrefs({
  * @returns {string|null}
  */
 export function resolveResumeEffort({ savedEffort, inheritedEffortValue, cliDefaults = null } = {}) {
-  const saved = normalizeEffortLevel(savedEffort);
-  const inherited = normalizeEffortLevel(inheritedEffortValue);
+  const keep = v => (v === 'auto' ? 'auto' : normalizeEffortLevel(v));
+  const saved = keep(savedEffort);
+  const inherited = keep(inheritedEffortValue);
   const l3 = cliDefaults && 'effort' in cliDefaults ? normalizeEffortLevel(cliDefaults.effort) : null;
   return saved ?? inherited ?? l3 ?? null;
 }

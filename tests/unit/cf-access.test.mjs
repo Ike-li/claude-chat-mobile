@@ -45,10 +45,13 @@ function writeOwnerOnly(filepath, content) {
 
 // ---- 模块级动态导入（每次 initCfAccess 会改模块内部状态） ----
 let cfAccess;
+let moduleGeneration = 0;
 
 async function reloadModule() {
-  // 动态导入 + 缓存破除以获取干净模块状态
-  cfAccess = await import(`../../app/src/auth/cf-access.js?v=${Date.now()}`);
+  // 动态导入 + 缓存破除以获取干净模块状态。版本号用自增计数而不是 Date.now()：同一毫秒里连着
+  // 重载两次时 URL 相同，ESM 按 URL 缓存，拿回的是上一条用例已经 initCfAccess 过的旧实例——
+  // 「未调用 initCfAccess → false」约 1/7 间歇红，正是紧跟在一条 1ms 内跑完、置了 enabled=true 的用例之后。
+  cfAccess = await import(`../../app/src/auth/cf-access.js?v=${++moduleGeneration}`);
 }
 
 // ---- 环境变量辅助 ----

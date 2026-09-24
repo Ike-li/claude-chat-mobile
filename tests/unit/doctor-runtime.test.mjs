@@ -516,6 +516,37 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
   });
 });
 
+// ── DEVICE_APPROVAL_SCOPE：并进 DEVICE_GATE 那一行 ──────────────────────────────
+// 不另起一行：设成 all 时 DEVICE_GATE 原来那句「Access 已验的连接跳过设备审批」就不成立了，两行各说
+// 各的会在同一份报告里自相矛盾。判定与 scripts/doctor.js 共用 deviceApprovalScopeDiagnostic（逐条在
+// doctor-checks.test.mjs）。这里钉接线：server 传的是归一前的原值——归一后只剩 '' / 'all'，写错的痕迹已经没了。
+test.describe('DEVICE_GATE × DEVICE_APPROVAL_SCOPE（web 体检）', () => {
+  const gateCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], authToken: 'x'.repeat(32), cfEnabled: true, ...ctx })
+    .checks.find(c => c.id === 'DEVICE_GATE');
+
+  test('写错 → warn 并点名；safe 只出枚举字面量，不回显原值', () => {
+    const c = gateCheck({ deviceApprovalScopeRaw: 'ALL' });
+    assert.equal(c.status, 'warn', c.detail);
+    assert.match(c.detail, /"ALL"/);
+    assert.equal(c.safe.scope, 'unknown');
+    assert.equal(JSON.stringify(c.safe).includes('ALL'), false);
+  });
+
+  test('all → ok，且不再说 Access 已验的连接跳过设备审批', () => {
+    const c = gateCheck({ deviceApprovalScopeRaw: 'all' });
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.scope, 'all');
+    assert.doesNotMatch(c.detail, /跳过/, c.detail);
+  });
+
+  test('未声明 → ok，行为描述不变（既有部署零新告警）', () => {
+    const c = gateCheck({});
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.scope, '');
+    assert.match(c.detail, /Access 已验的连接跳过设备审批/);
+  });
+});
+
 // 2026-09-06 容器演练：Linux 上 doctor 的 PORT 恒报「被不明进程占用」——取数写死了 /usr/sbin/lsof 与 /bin/ps。
 // Linux 改走 /proc（零外部工具），macOS 仍用 lsof/ps 但只允许 PATH 查找。这里用一次性目录造一棵假 /proc 树，
 // 与 identifySelfServer 接成整条链：端口 → inode → pid → 命令行/cwd → 认出是自家 server。
@@ -566,5 +597,27 @@ test.describe('probeListeningProcesses —— 端口监听者取数', () => {
     const r = probeListeningProcesses(3000, { platform: 'darwin', execFile });
     assert.deepEqual(r, [{ pid: 39090, command: 'node app/server.js', cwd: '/Users/you/code/claude-chat-mobile' }]);
     assert.ok(calls.length > 0 && calls.every((c) => !c.startsWith('/')), `写死了绝对路径：${calls.join(',')}`);
+  });
+});
+
+// 工作区过宽根（2026-09-22 review P2；维护者选「只在 doctor 里报、不拦」）。写入侧早已拒绝家目录与
+// /、/Users 这类根，可加载侧不查：手改配置、旧版 WORK_DIRS_FILE 的外置文件、shell 的 WORK_DIRS 都能把
+// 它们带进来。web 体检只报个数——报告会被贴进 issue / 聊天，路径不进报告（同这一格原有的纪律）。
+test.describe('WORK_DIRS：过宽根只报不拦', () => {
+  const home = '/home/ccm-doctor-tester';
+  const wd = (workDirs) => runDoctor({ ...stubProbes(), home, workDirs }).checks.find(c => c.id === 'WORK_DIRS');
+
+  test('工作区里有家目录本身或 / → warn，safe 只带个数、不带路径', () => {
+    const c = wd(['/srv/project', home, '/']);
+    assert.equal(c.status, 'warn');
+    assert.equal(c.safe.tooBroad, 2);
+    assert.equal(c.safe.count, 3);
+    assert.equal(JSON.stringify(c).includes(home), false, '家目录路径不进体检报告');
+  });
+
+  test('都是具体项目目录 → ok（正对照）', () => {
+    const c = wd(['/srv/project', `${home}/code/app`]);
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.tooBroad, 0);
   });
 });

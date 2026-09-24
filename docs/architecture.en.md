@@ -100,6 +100,21 @@ The project reduces that risk with these rules:
 
 Polling leaves an observation window of up to one check interval. Session switches, manual mirror refresh, and hook signals can schedule an earlier check, but none of them proves control over another live process.
 
+## Continuing automatically after a usage limit resets
+
+When Claude Code in a terminal hits a usage limit, it waits for the reset and then sends a short "continue" on its own (the `autoContinueAtUsageLimit` setting, on by default). That only works in **interactive mode**: the CLI gates it on `launchOptions.isInteractive()`, which is false whenever `-p` / `--sdk-url` is passed or stdout is not a TTY — exactly how the SDK launches the CLI, both here and in the desktop app's Code tab. The desktop app fills the gap in its own front end, and this project fills it on the server: `app/src/server/auto-continue.js` owns state and scheduling, `app/src/agent/quota-auto-continue.js` holds the pure decisions.
+
+1. **Arming**: when the main loop hits a `rate_limit` wall, `AgentSession` reports the facts through `onQuotaWall` (the `quotaLimits`, any rejected `rate_limit_event` from the same turn, who started the turn, and whether the model produced anything before the wall). The rules mirror the CLI: only a wall with `status='rejected'`, a finite `resetsAt`, and no overage in use is armed; it fires at the reset time plus 30–90 seconds of jitter; a reset more than 24 hours out (usually the weekly limit) is not waited on automatically — the banner offers "Continue at reset anyway". A subagent's wall does not arm anything: the main loop may still be running.
+2. **State is keyed by sessionId on the server, not on the instance.** The wait is often five hours, while an idle instance is reclaimed after thirty minutes; by the time the reset comes the instance is usually gone and one is resumed to send. Idle reclamation leaves the wait armed; explicitly closing the session's tab, deleting the session, or sending a message yourself cancels it (the CLI's equivalent is exiting the process). Banner data rides on the `instances` broadcast as `autoContinue` (the real server always sends an array; the front end treats a missing field as "keep the last one" only to stay compatible with the E2E mock's older inline payloads).
+3. **Four checks right before sending**; failing any of them means nothing is sent: an auto-armed entry still has the switch on; the wall is still the last conversational entry on the main chain of the transcript tail (the isMeta "Continue from where you left off." and the `<synthetic>` "No response requested." that the CLI adds when resuming an interrupted turn do not count); no terminal or desktop-app process has the session open in the registry (single driver, `SESSION-01`); the instance is not mid-turn and not `externalDirty`. When the check cannot read what it needs, or someone else may be driving, the entry turns **stale** and waits for the user to tap "Continue".
+4. **What gets sent is the CLI's own prompt** with the `claude.ai` wording removed, attributed to the SDK as `{kind:'auto-continuation'}` (the same kind the CLI uses for its own continuation) rather than posing as typed human input. The front end marks that bubble "Continued automatically after the usage limit reset" from `user_message.origin` and from the `origin` carried on history entries.
+5. **Sleep and restart**: a tick runs every 30 seconds; if two ticks are more than 30 minutes apart and the fire time has passed, the machine slept through the reset and the entry turns stale instead of firing (as in the CLI). **A server restart cancels any wait — nothing is persisted.** The CLI does the same when it exits, and it matches `APPROVAL-02`: pending actions left over from before a restart do not run. The armed facts could be rebuilt from the transcript (the wall entry carries `quotaLimits`); what cannot be rebuilt is a user's "Cancel", and adding a persistence layer for it would buy the harder-to-predict behavior of "started running for you after a restart" (hard rules §1, "no new persistence layer").
+6. **Hitting the wall again after continuing**: only a continuation turn that hits the wall before producing any model output counts as a futile retry; retries wait at least 60 s and then 300 s, and more than two stop the chain. This deliberately differs from the CLI, which counts every wall inside a continuation turn and therefore stops a long task in its third five-hour window — the main use case here.
+
+**Official subscription vs. third-party gateway**: purely data-driven; the upstream is never guessed (hard rules §1, "no assumptions about the model path"). Subscription walls always carry a reset time. A gateway that passes the unified rate-limit headers through produces the same structured wall and behaves identically. A gateway that answers with a bare 429 gives the CLI no reset time, so nothing is armed — no "retry in N minutes" guessing — and the session shows a one-line note that it cannot continue automatically. Retries are capped, so a gateway with an inaccurate reset time costs at most two extra rejected attempts.
+
+**Switches**: turning off either `CCM_AUTO_CONTINUE_AT_LIMIT` (settings panel, on by default) or the CLI's `autoContinueAtUsageLimit` (terminal `/config`) falls back to "offer only": on a wall the banner shows "Continue automatically at reset", and nothing is armed until the user taps it. Entries the user armed by hand ignore the switches — they only govern what happens automatically.
+
 ## Event envelope and reconnect replay
 
 Outbound Socket.io traffic uses one `agent:event` envelope:
@@ -129,11 +144,10 @@ The ring buffer is not permanent history. If a gap has fallen out of the buffer 
 ## Authentication and scope boundaries
 
 ```text
-AUTH_TOKEN (required; no token, no server)
+AUTH_TOKEN (required; no token, no server) ‖ public IdP strategy (optional; Cloudflare Access today)
+  one or the other, by Host: public Hosts the IdP owns accept only IdP credentials; every other entry accepts only the token
             ↓
-public IdP strategy (optional; Cloudflare Access is the only implementation today)
-            ↓
-device trust (a true local connection is exempt from this layer, not from the token)
+device trust (a true local connection is exempt; IdP-verified connections are exempt by default, not with DEVICE_APPROVAL_SCOPE=all)
             ↓
 WORKDIRS scope gate
             ↓
@@ -144,7 +158,11 @@ Agent tool approval or direct user file edit
 
 The first layer is a prerequisite, not an option ([hard-rules §1, "auth is a startup
 prerequisite"](hard-rules.md)): without `AUTH_TOKEN` the server refuses to start — including for a
-browser on this machine — so every layer below it always assumes the caller already holds the token.
+browser on this machine. That does not mean every connection holds the token: with the IdP enabled, the
+public Hosts it owns accept only IdP credentials (a JWT), and `AUTH_TOKEN` is neither required nor
+accepted on that path. So what a lower layer may assume depends on the entry — "the caller passed the IdP"
+on the IdP's public Hosts, "the caller holds the token" everywhere else — and any logic that hands the
+token out (such as `connect:qr`) must check which path the connection took first ([hard-rules §6](hard-rules.md)).
 The second layer is named for the role rather than the product because core code only knows the
 interface shape in `app/src/auth/auth-strategy.js`; Cloudflare Access is today's only implementation, and
 swapping the IdP should not touch the core.
@@ -152,7 +170,7 @@ swapping the IdP should not touch the core.
 These boundaries do not replace each other:
 
 - `AUTH_TOKEN` proves possession of the instance secret; it does not prove that a device was approved.
-- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it replaces device approval (the second factor) **by default**, never the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
+- Cloudflare Access is an **optional** public-edge identity layer; it does not expand workspace scope. When enabled it **replaces the token** on the public Hosts it owns (that path accepts only the JWT) and, **by default**, also replaces device approval (the second factor); LAN and local entries are unaffected and still accept only the token. When disabled, device approval takes over — `AUTH_TOKEN` plus device approval is the public baseline shared by every topology.
   - ⚠ "Replaces" is literal: a connection arriving through Access is **never checked against** `trusted-devices.json`, so the trusted-device list **does not govern it** — revoking a phone that came in through the tunnel neither disconnects it nor blocks it (confirmed by testing on 2026-09-10). The decision is the first line of `shouldBypassDeviceApproval`.
   - To make that list apply to every path, set `DEVICE_APPROVAL_SCOPE` to `all` and restart. It is a **master switch covering every path**: a new device arriving through Access needs one approval, and the loopback-looking-Host path is closed too. That second half is required — the check reads Host, and **Host is a header the client writes**. Pure TCP forwarding (`ssh -R`, frp tcp) does not route on Host, so a remote client sending `Host: localhost` satisfies both conditions (peer is already loopback, since the forwarder lands locally). TCP cannot tell a real local browser apart from a tunnelled connection, and extra checks do not help (forwarded headers are absent on pure TCP forwarding; `localAddress` is identical), so the call is left to whoever knows their own topology (2026-09-17 security review, H1). With it on, the recovery paths are `node scripts/device.js approve`, the menu bar, or pressing Enter in the terminal running `npm start` — none of which read any network signal. The default keeps "Access replaces approval" and lets loopback-looking Hosts through, because flipping it would drop every in-use device back into the pending queue the first time an existing install restarts after an upgrade — at which point no device in the trust list can approve anything.
 - `WORKDIRS` constrains paths; it does not decide which Claude tools run automatically (**the first entry is the primary work directory** your phone opens by default; a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
@@ -171,6 +189,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 | Web-driver status line | SDK events | Current model, context, cost, and effort |
 | CLI-driver status line | Optional statusline snapshots | Read-only terminal-session status |
 | Immediate CLI signals | Optional hooks inbox | Faster Stop / Notification handling |
+| Armed usage-limit auto-continue | Server process memory (`auto-continue.js`) | Continue at reset and the banner; **cancelled on restart, never persisted** |
 
 `CCM_DATA_DIR` does not store the original Claude transcript. Clearing it affects CCM control-plane state but is not the same operation as deleting every Claude session; SDK-level session deletion is a separate explicit action.
 
@@ -179,6 +198,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 - `app/server.js`: compatibility launcher; assembly lives in `app/src/server/app.js`.
 - `app/src/agent/agent.js`: `AgentSession`, SDK mapping, permission gate, and ring buffer.
 - `app/src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
+- `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`: usage-limit auto-continue scheduling (owns its state) and its pure decisions.
 - `app/src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
 - `app/public/js/app.js` and `app/public/js/app/`: client state, event dispatch, and interaction modules.

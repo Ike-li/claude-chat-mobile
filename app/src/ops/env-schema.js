@@ -317,6 +317,15 @@ export const ENV_SCHEMA = {
     help: t('离开一段时间后回到会话，由模型写一句「进行到哪了」。每次回来最多一次，频率远低于上一项。',
       'When you return after being away, the model writes one line on where things stand. At most once per return.'),
   },
+  // 额度墙「到点自动继续」（server/auto-continue.js）。默认开是终端等价：CLI 的同名设置
+  // autoContinueAtUsageLimit 缺省就是开，桌面端也会自动续。它会在无人值守时替用户开一轮（产生计费），
+  // 所以和上面几项一样必须在面板上看得见、关得掉。消费点 server/app.js 的 isAutoEnabled（严格 === '0'）。
+  CCM_AUTO_CONTINUE_AT_LIMIT: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('额度重置后自动继续', 'Continue after usage limit resets'),
+    help: t('撞上用量额度墙后，到重置时刻自动发一句「继续」，把没做完的任务接着做（同 Claude Code 终端的同名设置；终端里关掉了，这里也只给按钮）。重置点远于 24 小时（多半是周额度）只给按钮、不自动等；只认上游给出了重置时刻的墙，第三方网关若只回 429 不带重置时间就无法自动继续。关掉后撞墙时仍有「到点自动继续」按钮可点。等待期间重启服务会作废。',
+      'After you hit a usage limit, sends a short "continue" at the reset time so the unfinished task carries on (mirrors Claude Code\'s own setting; if you turned that off in the terminal, you only get a button here too). Resets more than 24 hours out (usually the weekly limit) get a button, not an automatic wait. Needs the upstream to report a reset time: a third-party gateway that answers a bare 429 cannot auto-continue. When off, the banner still offers a one-tap "continue at reset". Restarting the server during the wait cancels it.'),
+  },
 
   // ── 日志 ────────────────────────────────────────────────────────────
   LOG_INTERACTIONS: {
@@ -510,6 +519,22 @@ function checkList(value, def, home) {
   return null;
 }
 
+// WORKDIRS 被 WORK_DIRS_FILE 压着时改它 = 写了等于没写（CONFIG-01）。读取优先级是 shell WORK_DIRS >
+// WORK_DIRS_FILE > 内联 WORKDIRS，而配置文件里的 WORK_DIRS_FILE 会被投影进 process.env、与 shell 的同权——
+// 它挂着的时候面板报「已保存」，重启后工作区纹丝不动（2026-09-22 review P2）。同一批里把它清掉（null）就放行，
+// 那正是出路。shell 里的 WORK_DIRS / WORK_DIRS_FILE 不在这里拒：同名键被 shell 压住的一贯处理是只标注
+// （buildEnvView 的 overriddenByEnv），unset 掉那个环境变量之后这里写的值仍然要生效。
+function checkWorkdirsShadowed(changes, current) {
+  if (!Object.hasOwn(changes, 'WORKDIRS')) return [];
+  const file = Object.hasOwn(changes, 'WORK_DIRS_FILE') ? changes.WORK_DIRS_FILE : current.WORK_DIRS_FILE;
+  if (typeof file !== 'string' || !file.trim()) return [];
+  return [{
+    key: 'WORKDIRS', level: 'error',
+    message: '工作区列表此刻被 WORK_DIRS_FILE（旧版外置文件）压着，改了不会生效。在同一次保存里把 WORK_DIRS_FILE 清空即可'
+      + '（它是启动时读进进程的，清空后要重启 server 才换成这里的列表）',
+  }];
+}
+
 // 单项类型校验。返回错误文案或 null。
 function checkOne(key, value, def, d) {
   // 校验期与序列化期用**同一个判据**，否则会出现「校验说 ok、写盘时抛错」——
@@ -627,8 +652,8 @@ const NOISY_TOGGLES = {
 // 不做成 readonly：那会让「在手机上配 CF Access」彻底没法做。改成 warn —— 前端对 warn 会弹
 // appConfirm 再重发，用户至少被明确告知自己在关掉什么。
 //
-// 措辞（2026-09-06）：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同；Cloudflare Access 是
-// 基线之上的可选加层。此前写「退化成只靠 AUTH_TOKEN」「实质降低防护等级」——对换用 Tailscale /
+// 措辞（2026-09-06）：公网基线 = AUTH_TOKEN + 逐设备审批，对所有拓扑相同；Cloudflare Access 是可选加层
+// （开着时它管的公网 Host 改认 Access 身份，见 hard-rules §6）。此前写「退化成只靠 AUTH_TOKEN」「实质降低防护等级」——对换用 Tailscale /
 // 反代的用户，清空三键是预期操作，那两句是把两道门说成一道的误报。
 const CF_ACCESS_KEYS = ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'];
 
@@ -742,6 +767,19 @@ export function validateEnvChanges(changes, d) {
       results.push({ key, level: 'error', message: `${def.label.zh} 在此处只读，${def.help?.zh || ''}`.trim() });
       continue;
     }
+    // WORK_DIRS_FILE 只能清空（2026-09-22 review P2）。它决定授权工作区从【哪个文件】读：能从面板 / CLI 设它，
+    // 就能把工作区换成任意一个已存在文件里写的东西——下面 checkList 那道过宽根校验（M2）只看 WORKDIRS 的值，
+    // 对它形同虚设，而那份文件的内容还是热加载的。该键已被 WORKDIRS 取代，旧部署用 config migrate 内联。
+    // 这是**改动**规则：config check 校验现有配置时（validatingExisting）不适用——仍在用旧版外置文件的配置
+    // 运行时照常支持，照样走下面的路径校验（指向的文件必须存在）。
+    if (key === 'WORK_DIRS_FILE' && value !== null && !d?.validatingExisting) {
+      results.push({
+        key, level: 'error',
+        message: `${def.label.zh} 只能清空、不能在这里设置：它决定工作区从哪个文件读，指向任意文件就绕过了工作区列表的校验。`
+          + '请直接改工作区列表',
+      });
+      continue;
+    }
     if (value === null) continue; // 删除不做类型校验
 
     // list 是唯一的非字符串 kind，必须在「必须是字符串」与 .env 序列化检查之前分流：
@@ -769,6 +807,8 @@ export function validateEnvChanges(changes, d) {
   }
 
   results.push(...checkTogether(changes || {}, d?.current || {}));
+  // 同上是改动规则：校验现有配置时，两个键同时在只说明内联那份暂时没用上，不算非法。
+  if (!d?.validatingExisting) results.push(...checkWorkdirsShadowed(changes || {}, d?.current || {}));
   results.push(...checkCfAccessTeardown(changes || {}, d?.current || {}));
   results.push(...checkAccessProfileConsistency(changes || {}, d?.current || {}));
   results.push(...checkBindConsistency(changes || {}, d?.current || {}));
@@ -838,6 +878,9 @@ export function buildEnvView(values = {}, { shellEnv = null, structured = null }
           // .env 那条路消费的是逗号分隔的 WORK_DIRS，不是这个结构化 key。于是面板报保存成功、
           // 授权面纹丝不动，正是「写错源＝假成功」。标出来让前端锁掉，别给一个假的编辑入口。
           if (!structured) item.locked = 'legacy-env';
+          // 同一族：配置里还挂着旧版 WORK_DIRS_FILE 时生效的是那份外置文件，这里改了同样不生效
+          // （写入侧 checkWorkdirsShadowed 会拒）。锁住并让前端说清先清空它。
+          else if (typeof structured.WORK_DIRS_FILE === 'string' && structured.WORK_DIRS_FILE.trim()) item.locked = 'work-dirs-file';
           const cur = structured && Object.hasOwn(structured, key) ? structured[key] : null;
           item.list = (Array.isArray(cur) ? cur : []).flatMap((e) => {
             if (typeof e === 'string') return e.trim() ? [{ path: e }] : [];

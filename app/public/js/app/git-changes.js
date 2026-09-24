@@ -2,15 +2,15 @@
 // 与 file-browser 同骨架：懒加载详情；diff 用 textContent 防 XSS。
 // 两个导出分工：createGitChangesPanel = 「改动」tab 的数据与渲染；createWorkspacePanel = 外壳
 // （#workspaceModal 的开合 + 文件/改动 tab 切换），后者同时驱动 file-browser.js 那半边。
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 import { showPanelMessage } from './panel-message.js';
 
-// title 存中文原文、到渲染时才 t()：模块顶层常量在 import 阶段就求值，那时 app.js 还没跑到 setLang()，
-// 在这里直接 t() 会把界面语言永久钉死成 zh。
+// title 用 tk() 标记中文原文、到渲染时才 t()：模块顶层常量在 import 阶段就求值，那时 app.js 还没跑到
+// setLang()，在这里直接 t() 会把界面语言永久钉死成 zh。
 const SECTION_META = [
-  { key: 'staged', title: '已暂存', side: 'staged' },
-  { key: 'unstaged', title: '未暂存', side: 'unstaged' },
-  { key: 'untracked', title: '未跟踪', side: null },
+  { key: 'staged', title: tk('已暂存'), side: 'staged' },
+  { key: 'unstaged', title: tk('未暂存'), side: 'unstaged' },
+  { key: 'untracked', title: tk('未跟踪'), side: null },
 ];
 
 export function renderPatchLines(patch, createElement) {

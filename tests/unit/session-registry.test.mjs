@@ -14,6 +14,7 @@ import {
   registryIndicatesTerminalBusy,
   registryIndicatesTerminalWaiting,
   listTerminalSessionStates,
+  listTerminalSessionStatesOrNull,
   applyTerminalStatesToSessions,
   hasBusyTerminalSessionForCwd,
   hasWaitingTerminalSessionForCwd,
@@ -141,6 +142,35 @@ test('listTerminalSessionStates：按 cwd+sessionId 归键返回 busy/alive，�
 
 test('listTerminalSessionStates：目录不存在 → 空 Map（fail-open，列表不受影响）', async () => {
   const map = await listTerminalSessionStates({ dir: join(tmpdir(), 'ccm-sreg-absent-2'), isAlive: () => true });
+  assert.equal(map.size, 0);
+});
+
+// 否定证据的入口（额度墙自动续跑到点前用：「表里没有别的驾驶员 ⇒ 可以代发」）。
+// 失败方向与上面那条相反：读不全时「没有别的驾驶员」这个结论不成立，必须能和「确实没有」区分开。
+test('listTerminalSessionStatesOrNull：表读全了 → 与 listTerminalSessionStates 同一张 Map', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 41, { status: 'idle' });
+    const map = await listTerminalSessionStatesOrNull({ dir, isAlive: () => true });
+    assert.deepEqual(map.get(terminalStateKey(CWD, SID)), { state: 'alive', source: 'cli' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('listTerminalSessionStatesOrNull：有一条读不动（写到一半的 JSON）→ null，不是「少一条的 Map」', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 42, { status: 'idle', sessionId: 'other-session' });
+    writeFileSync(join(dir, '43.json'), '{"pid":43,"sessionId":"'); // CLI 正写着的那一瞬
+    assert.equal(await listTerminalSessionStatesOrNull({ dir, isAlive: () => true }), null,
+      '读不动的那条可能正是开着本会话的终端——当成没有就会两端同时写');
+    const lenient = await listTerminalSessionStates({ dir, isAlive: () => true });
+    assert.equal(lenient.size, 1, '对照：宽松版照旧跳过坏条目，只是这里不能用它');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('listTerminalSessionStatesOrNull：目录不存在（没装 CLI / 从没跑过终端）→ 空 Map，不是 null', async () => {
+  const map = await listTerminalSessionStatesOrNull({ dir: join(tmpdir(), 'ccm-sreg-absent-3'), isAlive: () => true });
+  assert.ok(map instanceof Map, 'ENOENT 是确定的「没有」，当成读不动会让这类用户永远续不了');
   assert.equal(map.size, 0);
 });
 

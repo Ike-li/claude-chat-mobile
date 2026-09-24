@@ -1,8 +1,14 @@
 #!/usr/bin/env node
-// i18n-check.js —— i18n 的孤儿词典 key 扫描（app/public/js/i18n.js EN_DICT 有、但 index.html 的界面文案
-// 与各 js 的 t('原文') 调用里再没有它）。zh 原文即 key 的设计下，改文案 = 改 key，
-// 旧 key 容易变成词典孤儿——本脚本挂进 npm run check 兜住漂移，不做翻译完整性检查（未翻译=静默回落
-// 中文是设计内行为，见 app/public/js/i18n.js 头注，不是错误）。
+// i18n-check.js —— i18n 词典的双向扫描，挂在 npm run check 里。
+//   · 孤儿 key：app/public/js/i18n.js EN_DICT 有、但 index.html 的界面文案与各 js 的 t('原文') 调用里再没有它。
+//     zh 原文即 key 的设计下，改文案 = 改 key，旧 key 容易变成词典孤儿。
+//   · 未翻译 key：t('原文') 用了含中文的 key、EN_DICT 里没有。运行时仍静默回落中文（i18n.js 头注），
+//     但开发时就要拦下——2026-09-24 之前不查这一向，/rewind 面板上线时 30 条文案漏翻 26 条，没有任何东西报出来。
+//     有意不译的文案（语言名「中文」这类）不要包 t()，直接写字面量。
+//     常量表里的中文用 tk('原文') 标记，取用点 t(变量)——tk() 的 key 一并收（PR #175 review）。
+//     只查 t() / tk() 文案，看不见的有两类：index.html 静态外壳（有两条有意不译：「中文」「语言 / Language」）；
+//     直接写死在代码里、不经 t() 就上屏的中文（2026-09-24 人工审计修过两处：设备列表的「N 天前批准」、
+//     后台任务行的「N条」）。
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,12 +79,87 @@ export function extractHtmlCopyKeys(html) {
 
 // t('...') / t("...") / t(`...`) 调用的字符串字面量参数（无模板插值场景——本仓 t() 用法目前恒为
 // 静态字面量，见 app/public/js/i18n.js t() 签名）。非字符串参数（变量/三元表达式的非字面量分支）安全跳过。
+// tk('...') 一并收：常量表里的中文用它标记，取用点再 t(变量)（见 i18n.js tk() 头注）。
 export function extractTCallKeys(source) {
   const keys = [];
-  const callRe = /\bt\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1/g;
+  const callRe = /\btk?\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1/g;
   let m;
   while ((m = callRe.exec(source))) keys.push(m[2]);
   return keys;
+}
+
+// 剥掉 JS 注释：注释换成等长空白（总长与行号不变），字符串、模板字面量（含 ${} 里的嵌套）与正则
+// 字面量原样保留。未翻译检查只看代码——注释里举个 t('中文示例') 的例子不是界面文案（PR #175 review）。
+// 正则字面量按前一个有效字符判定：行首或 ( , = : [ ! & | ? { } ; 之后的 / 才算正则开头，这是常见的
+// 近似；极端写法下会把除号当正则或反过来，代价是那一行少剥或多剥注释。
+export function stripJsComments(source) {
+  const s = String(source);
+  let out = '';
+  let i = 0;
+  let prev = '';             // 上一个有效字符（跳过空白与注释），用来区分除号和正则
+  const exprDepth = [];      // 每层模板 ${…} 里尚未闭合的 { 个数
+
+  // i 指在模板文本里（` 或 } 之后），拷到闭合的 ` 或下一个 ${ 为止
+  const copyTemplateText = () => {
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === '\\') { out += s.slice(i, i + 2); i += 2; continue; }
+      if (ch === '`') { out += ch; i++; prev = ch; return; }
+      if (ch === '$' && s[i + 1] === '{') { out += '${'; i += 2; exprDepth.push(0); prev = '{'; return; }
+      out += ch; i++;
+    }
+  };
+
+  while (i < s.length) {
+    const c = s[i];
+    const n = s[i + 1];
+    if (c === '/' && n === '/') {
+      const nl = s.indexOf('\n', i);
+      const end = nl === -1 ? s.length : nl;
+      out += ' '.repeat(end - i);
+      i = end;
+    } else if (c === '/' && n === '*') {
+      const close = s.indexOf('*/', i + 2);
+      const end = close === -1 ? s.length : close + 2;
+      out += s.slice(i, end).replace(/[^\n]/g, ' ');
+      i = end;
+    } else if (c === '\'' || c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== c && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
+      out += s.slice(i, j + 1);
+      i = j + 1;
+      prev = c;
+    } else if (c === '`') {
+      out += c;
+      i++;
+      copyTemplateText();
+    } else if (c === '}' && exprDepth.length && exprDepth[exprDepth.length - 1] === 0) {
+      exprDepth.pop();
+      out += c;
+      i++;
+      copyTemplateText();
+    } else if (c === '/' && (prev === '' || '(,=:[!&|?{};'.includes(prev))) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < s.length && s[j] !== '\n') {
+        if (s[j] === '\\') { j += 2; continue; }
+        if (s[j] === '[') inClass = true;
+        else if (s[j] === ']') inClass = false;
+        else if (s[j] === '/' && !inClass) break;
+        j++;
+      }
+      out += s.slice(i, j + 1);
+      i = j + 1;
+      prev = '/';
+    } else {
+      if (exprDepth.length && c === '{') exprDepth[exprDepth.length - 1]++;
+      else if (exprDepth.length && c === '}') exprDepth[exprDepth.length - 1]--;
+      out += c;
+      i++;
+      if (!/\s/.test(c)) prev = c;
+    }
+  }
+  return out;
 }
 
 // key 是否作为字符串字面量出现在源码里。覆盖查表式用法——顶层常量表不能直接 t()（会在 setLang()
@@ -105,14 +186,24 @@ export function checkI18n({ rootDir = ROOT } = {}) {
     for (const key of extractHtmlCopyKeys(readFileSync(htmlFile, 'utf8'))) usedKeys.add(key);
   }
   const sources = [];
+  const tKeyFiles = new Map(); // 含中文的 t() / tk() key → 用到它的文件（相对路径）
   for (const relPath of walkFiles(rootDir, 'app/public/js', /\.(?:js|mjs)$/)) {
     const text = readFileSync(join(rootDir, relPath), 'utf8');
     // 词典文件自身不算引用来源：每个 key 都写在它的 EN_DICT 里，算进去等于这道闸永远绿。
-    if (relPath.replace(/\\/g, '/') !== 'app/public/js/i18n.js') sources.push(text);
+    // 同理也不算「用到」：它是词典，不是界面。
+    const isDictFile = relPath.replace(/\\/g, '/') === 'app/public/js/i18n.js';
+    if (!isDictFile) sources.push(text);
     for (const key of extractTCallKeys(text)) usedKeys.add(key);
+    if (isDictFile) continue;
+    // 未翻译只看代码：先剥注释，注释里的 t('…') 用法示例不是界面文案
+    for (const key of extractTCallKeys(stripJsComments(text))) {
+      if (!HAS_CHINESE.test(key)) continue;
+      if (!tKeyFiles.has(key)) tKeyFiles.set(key, new Set());
+      tKeyFiles.get(key).add(relPath.replace(/\\/g, '/'));
+    }
   }
 
-  const problems = dictKeys
+  const orphans = dictKeys
     .filter(key => !usedKeys.has(key) && !sources.some(src => keyAppearsAsLiteral(src, key)))
     .map(key => ({
       code: 'orphan_dict_key',
@@ -120,7 +211,19 @@ export function checkI18n({ rootDir = ROOT } = {}) {
       message: `EN_DICT key "${key}" no longer appears in index.html copy or any t('...') call`,
     }));
 
-  return { rootDir, dictKeys, problems };
+  const dictKeySet = new Set(dictKeys);
+  const untranslated = [...tKeyFiles]
+    .filter(([key]) => !dictKeySet.has(key))
+    .map(([key, files]) => ({
+      code: 'untranslated_t_key',
+      key,
+      files: [...files],
+      message: `t('${key}') has no English translation in EN_DICT (used in ${[...files].join(', ')}); `
+        + 'the English UI falls back to the Chinese original. Add it to app/public/js/i18n.js, '
+        + 'or drop the t() if the text is meant to stay untranslated (e.g. a language name)',
+    }));
+
+  return { rootDir, dictKeys, problems: [...orphans, ...untranslated] };
 }
 
 export function formatI18nCheck(result) {

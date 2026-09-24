@@ -162,14 +162,14 @@ export function createRewindCommandController({
           ? t('找不到这一轮的文件快照，只能恢复对话。')
           : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
-      const shown = files.slice(0, 3).map(esc).join('、');
+      const shown = files.slice(0, 3).map(esc).join(t('、'));
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;
       // G5：工作区里有会被这次回退覆盖的未提交改动。警告必须摆在【选模式之前】——
       // 事后再说就晚了，那些改动已经没了。
       const dirty = Array.isArray(res.dirtyOverlap) ? res.dirtyOverlap : [];
       if (dirty.length) {
         codeLine += `<div class="text-danger mt-1">${t('其中')} ${dirty.length} ${t('个文件有未提交的改动，回退会覆盖它们：')}`
-          + `${dirty.slice(0, 3).map(esc).join('、')}${dirty.length > 3 ? '…' : ''}</div>`;
+          + `${dirty.slice(0, 3).map(esc).join(t('、'))}${dirty.length > 3 ? '…' : ''}</div>`;
       }
     } else {
       codeLine = t('这一轮没有代码改动。');

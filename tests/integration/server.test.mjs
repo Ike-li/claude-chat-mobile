@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { io as ioc } from 'socket.io-client';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -179,6 +179,27 @@ test.describe('事件流 — 新连接重放', () => {
     const expectedTypes = ['instances', 'device_status', 'pending_devices', 'permission_mode', 'effort_mode'];
     const hasExpected = expectedTypes.some(t => types.includes(t));
     assert.ok(hasExpected, `expected one of ${expectedTypes.join('/')}, got: ${types.join(', ')}`);
+    s.disconnect();
+  });
+
+  // 额度墙自动继续横幅的数据面（src/server/auto-continue.js 的 snapshot）。前端对「缺这个字段」的约定是
+  // 保留上一份（为兼容 E2E mock 的十几处内联载荷），所以真 server 漏发不会报错，只会让横幅在条目撤掉后
+  // 永远清不掉。这一层只有这里能守：E2E 打的是 mock，删掉真 server 的这个字段它照样全绿。
+  test('instances 广播恒带 autoContinue 数组（没有布防也要是空数组，不能缺席）', async () => {
+    const events = [];
+    const s = connectSocket();
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const inst = events.find(e => e.type === 'instances');
+    assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
+    assert.ok(Array.isArray(inst.payload.autoContinue),
+      `autoContinue 必须是数组，实际 ${JSON.stringify(inst.payload.autoContinue)}——缺席时前端会一直显示上一份横幅`);
+    assert.equal(inst.payload.autoContinue.length, 0);
     s.disconnect();
   });
 });
@@ -528,9 +549,10 @@ const ACK_SHAPES = [
     check: ack => assert.ok(Array.isArray(ack.messages), 'messages 必须是数组——前端无条件对它做 .length/遍历') },
 
   { event: 'sync:since', branch: '冷连接', payload: () => ({}),
-    required: ['found', 'gap', 'replayed', 'diskLen', 'pending', 'unreadOnEntry'],
+    required: ['found', 'gap', 'replayed', 'diskLen', 'diskExternalLen', 'pending', 'unreadOnEntry'],
     // diskLen 是历史教训：mock 从不返回它，于是 shouldReloadOnEnter 的「磁盘 ahead → 全量 reload」
     // 整条分支在 E2E 里够不着，2026-08-27 的「同一条消息两颗气泡」就漏在那里。
+    // diskExternalLen 是 replayed>0 时对账外部写入的唯一依据（那时 diskLen 恒空，2026-09-22）。
     check: ack => assert.equal(typeof ack.found, 'boolean') },
 
   { event: 'session:switch', branch: '拒绝支', payload: () => ({ sessionId: 'nope', cwd: tmpDir }), required: ['ok', 'error'] },
@@ -593,6 +615,10 @@ const ACK_SHAPES = [
   { event: 'hooks:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
   // 同上：statusline 安装器也只驱动非法 action 这一支，绝不用合法 action 触发真安装。
   { event: 'statusline:setup', branch: '非法 action', payload: () => ({ action: '__bogus__' }), required: ['ok', 'error'] },
+  // 额度墙自动继续横幅的按钮。前端只看 ok（失败就按手上的快照重画、解锁按钮），成功支 { ok } 要先有一条
+  // 布防——S2 的假 CLI 不产出额度墙，造不出来，只覆盖两条免夹具的失败支。
+  { event: 'user:autoContinue', branch: '非法 sessionId', payload: () => ({ sessionId: '../x', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.error, 'invalid_payload') },
+  { event: 'user:autoContinue', branch: '没有布防', payload: () => ({ sessionId: 'no-such-session', action: 'cancel' }), required: ['ok', 'error'], check: ack => assert.equal(ack.ok, false) },
 ];
 
 // 未纳入（各有理由，不是遗漏）：
@@ -654,6 +680,112 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
         `写入目标文件里必须真的出现新值，实际内容：${onDisk}`);
     } finally {
       s.disconnect();
+    }
+  });
+
+  // 2026-09-22 review P1：ccm.config.json 读不动时，写盘路径曾「从 {} 长出来」——只写回这次改的几项，
+  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required / SCOPE-03）。
+  // CLI 的 config set 同场景一直是拒写的。坏文件用尾逗号造：手改 JSON 最常见的那种笔误。
+  test('ccm.config.json 损坏时拒绝写入，原文件一字不动（不从空配置重建）', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    const corrupt = '{\n  "WORKDIRS": ["/srv/work"],\n  "SESSION_DELETE_QUIET_MS": 1,\n}\n';
+    writeFileSync(cfg, corrupt);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { SESSION_DELETE_QUIET_MS: '654321' } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(readFileSync(cfg, 'utf8'), corrupt,
+        `坏文件被重写了——其余配置项（这里是 WORKDIRS）随之丢失。ack=${JSON.stringify(ack)}`);
+      assert.equal(ack.ok, false, `应明确拒绝：${JSON.stringify(ack)}`);
+      assert.match(ack.results?.[0]?.message ?? '', /ccm\.config\.json/, '拒绝原因要指明是哪个文件坏了');
+    } finally {
+      s.disconnect();
+      // 单文件删除：本用例自己在 mkdtemp 出来的 tmpDir 里写的坏文件，不能留给后面的用例（usingConfigJson 是动态判断）
+      rmSync(cfg, { force: true });
+    }
+  });
+
+  // 上一条的对照：拒绝只针对「读不动」，不是把 JSON 这条写路径整个关掉。写回必须保留没改的项。
+  test('ccm.config.json 正常时照常写入，没改的项原样保留', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    writeFileSync(cfg, `${JSON.stringify({ WORKDIRS: ['/srv/work'], SESSION_DELETE_QUIET_MS: 1 }, null, 2)}\n`);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { SESSION_DELETE_QUIET_MS: '654321' } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `正常配置应能写入：${JSON.stringify(ack)}`);
+      const onDisk = JSON.parse(readFileSync(cfg, 'utf8'));
+      assert.equal(onDisk.SESSION_DELETE_QUIET_MS, 654321, `新值应按 schema 类型写入：${JSON.stringify(onDisk)}`);
+      assert.deepEqual(onDisk.WORKDIRS, ['/srv/work'], `没改的项必须原样保留：${JSON.stringify(onDisk)}`);
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
+    }
+  });
+
+  // 2026-09-22 review P2：配置里还挂着旧版 WORK_DIRS_FILE 时生效的是那份外置文件，面板改内联 WORKDIRS
+  // 曾报「已保存」、重启后工作区纹丝不动。WORKDIRS 的值本身合法（绝对路径、不过宽），拒绝只能来自遮蔽判据。
+  test('WORK_DIRS_FILE 挂着时改 WORKDIRS 被拒，原文件一字不动', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    const original = `${JSON.stringify({ WORK_DIRS_FILE: join(tmpDir, 'workdirs.json'), WORKDIRS: ['/srv/work'] }, null, 2)}\n`;
+    writeFileSync(cfg, original);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { WORKDIRS: ['/srv/other'] } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, false, `应明确拒绝：${JSON.stringify(ack)}`);
+      assert.ok(ack.results?.some(r => r.key === 'WORKDIRS' && /WORK_DIRS_FILE/.test(r.message)),
+        `拒绝原因要指明是 WORK_DIRS_FILE 压着：${JSON.stringify(ack.results)}`);
+      assert.equal(readFileSync(cfg, 'utf8'), original, '被拒的写入不得落盘');
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
+    }
+  });
+
+  // 上一条的出路：同一批里把 WORK_DIRS_FILE 清掉（null）就放行——拒绝不能把「迁回内联」这条路也堵死。
+  test('同一批清空 WORK_DIRS_FILE 再改 WORKDIRS 照常写入', async () => {
+    const cfg = join(tmpDir, 'ccm.config.json');
+    writeFileSync(cfg, `${JSON.stringify({ WORK_DIRS_FILE: join(tmpDir, 'workdirs.json'), WORKDIRS: ['/srv/work'] }, null, 2)}\n`);
+    const s = connectSocket();
+    try {
+      await new Promise((resolve, reject) => {
+        s.on('connect', resolve);
+        s.on('connect_error', reject);
+        setTimeout(() => reject(new Error('connect timeout')), 3000);
+      });
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { WORK_DIRS_FILE: null, WORKDIRS: ['/srv/other'] } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `清空 WORK_DIRS_FILE 的同一批应能写入：${JSON.stringify(ack)}`);
+      const onDisk = JSON.parse(readFileSync(cfg, 'utf8'));
+      assert.equal(Object.hasOwn(onDisk, 'WORK_DIRS_FILE'), false, `WORK_DIRS_FILE 应被删掉：${JSON.stringify(onDisk)}`);
+      assert.deepEqual(onDisk.WORKDIRS, ['/srv/other'], `WORKDIRS 应为新值：${JSON.stringify(onDisk)}`);
+    } finally {
+      s.disconnect();
+      rmSync(cfg, { force: true }); // 同上：单文件，本用例自己写的
     }
   });
 });

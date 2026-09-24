@@ -7,7 +7,7 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 import { formatUptime } from './format.js';
 
 // 长会话切入分块渲染的推进数学：给定已处理条数/总数/块大小，算出这一块的结束位置与是否处理完。
@@ -120,20 +120,20 @@ export const CONN_BANNER_RECONNECTED_LINGER_MS = 1600; // 「已重新连接」�
 // phase：'connecting'（从未连上过）| 'offline'（连上过又断了）| 'online'
 // elapsedMs：当前 phase 已持续时长；suppressed：鉴权门/Access 重登门打开中（全屏页与横幅不能并存）
 // wasVisible：进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」，秒连不该闪绿条
-// 返回 null（不显示）或 { tone, label, detail, spinner, retry }；label 是中文原文（key），接线层才 t()
+// 返回 null（不显示）或 { tone, label, detail, spinner, retry }；label 是 tk() 标记的中文原文（key），接线层才 t()
 export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false } = {}) {
   if (suppressed) return null;
   if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
   if (phase === 'connecting') {
     if (elapsedMs < CONN_BANNER_CONNECTING_DELAY_MS) return null;
     // 首连不报「已断开 N 秒」：从没连上过，无「断开」可言
-    return { tone: 'info', label: '连接中…', detail: '', spinner: true, retry: elapsedMs >= CONN_BANNER_RETRY_DELAY_MS };
+    return { tone: 'info', label: tk('连接中…'), detail: '', spinner: true, retry: elapsedMs >= CONN_BANNER_RETRY_DELAY_MS };
   }
   if (phase === 'offline') {
     if (elapsedMs < CONN_BANNER_DISCONNECT_DELAY_MS) return null;
     return {
       tone: 'warn',
-      label: '连接断开，自动重连中…',
+      label: tk('连接断开，自动重连中…'),
       detail: `${t('已断开')} ${formatUptime(elapsedMs)}`,
       spinner: true,
       retry: elapsedMs >= CONN_BANNER_RETRY_DELAY_MS,
@@ -142,7 +142,7 @@ export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, 
   if (phase === 'online') {
     if (!wasVisible || elapsedMs >= CONN_BANNER_RECONNECTED_LINGER_MS) return null;
     // 已经连上了，不该还转圈
-    return { tone: 'success', label: '已重新连接', detail: '', spinner: false, retry: false };
+    return { tone: 'success', label: tk('已重新连接'), detail: '', spinner: false, retry: false };
   }
   return null;
 }
@@ -164,6 +164,10 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
   // 同会话重连/probe：活缓冲可能有回放，但 CLI 外部写盘只增 diskLen——必须比 seenDiskLen（G1）
   const diskLen = res && Number.isFinite(res.diskLen) ? res.diskLen : 0;
   if (diskLen > seenDiskLen) return 'reload';
+  // 有回放时 server 不带 diskLen（恒 null），外部写入只能靠 diskExternalLen 看见：它是最后一条非己方
+  // 写入的位置，己方 live 轮次不推高它，越过已渲染位置就说明断线期间终端写过这个会话。
+  const diskExternalLen = res && Number.isFinite(res.diskExternalLen) ? res.diskExternalLen : 0;
+  if (diskExternalLen > seenDiskLen) return 'reload';
   return 'none';
 }
 
@@ -183,6 +187,7 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
 //   !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必再清）；
 //   hasCache && replayed>0 → 'keep'（切 tab 秒恢复：DOM 缓存已是全量渲染真相 + 活缓冲增量，不重载以免丢实时 thinking）；
 //   hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
+//   hasCache && diskExternalLen>seenDiskLen → 'reload'（同上，但覆盖 replayed>0：那时 diskLen 恒空）；
 //   否则 → 'keep'（缓存仍是最新，保留 DOM 秒恢复）。
 // ⚠️ 已知边界（code-review 发现4，有意不修）：seenDiskLen 只由 loadHistory/onHistoryAppend 维护，
 //   web 自己 live 流跑出来的轮次【不】更新它。于是"发一轮(磁盘增长)→切走→切回同实例(无外部活动、replayed=0、
@@ -191,7 +196,7 @@ export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true }
 //   数据丢失(正是 #1 盲区)。宁可闪一下、不可漏消息，故保留。
 // ⚠️ 冷入场 reload 的代价：环形缓冲里尚未落盘的实时 thinking/在跑工具卡会被 clearView 清掉；硬刷新本就是
 //   用户主动重入，可接受——后续 live 事件与 pending 快照仍会接上。
-export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0, hasSessionId = true } = {}) {
+export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, diskExternalLen = 0, seenDiskLen = 0, hasSessionId = true } = {}) {
   // 实例还没拿到 sessionId（CLI 未吐 system/init）：session:history 无从查起——server 端 handler 的
   // sessionFileExists 守卫会直接回「会话不存在」，清屏换来的必定是白屏。此时服务端环形缓冲里的回放
   // 是唯一能看到的内容（它就是 CLI 经 stdout 实时吐出来的那份），宁可残缺也不能清空。
@@ -205,6 +210,10 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   if (!hasCache) return (replayed > 0) ? 'reload' : 'load';
   // 磁盘 ahead 优先于 replayed>0 keep：外部 CLI 写盘不进活缓冲，切回/同会话有回放时仍可能漏显（G1/G2）。
   if (diskLen > seenDiskLen) return 'reload';
+  // replayed>0 时 server 不带 diskLen（恒 null），G2 只能靠 diskExternalLen：最后一条非己方写入的位置，
+  // 己方 live 轮次不推高它，所以切 tab 秒恢复不受影响。代价（安全侧，同上面「发现4」）：己方轮次之后
+  // 镜像又推过终端写入时，seenDiskLen 按条数累加、落后于它们的真实位置，下一次切回会多重载一次。
+  if (diskExternalLen > seenDiskLen) return 'reload';
   if (replayed > 0) return 'keep';
   return 'keep';
 }

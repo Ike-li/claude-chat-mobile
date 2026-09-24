@@ -333,7 +333,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        对齐终端 /rewind 的两步交互：先选回退点，再选三个模式之一。只读，不能复用
   //        session:history——那份是展平后的气泡（一轮展成多条 text/tool_use）且工具卡不带 uuid，
   //        而回退锚点只认人类 prompt 自身的 uuid，得从原始 jsonl 条目取。入向 56→57）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 57);
+  //      + user:autoContinue（2026-09-23，额度墙「到点自动继续」横幅的三个按钮：取消 / 到点继续 /
+  //        立即继续。CLI 的 autoContinueAtUsageLimit 只在交互模式生效，SDK 会话恒进不去，由 server
+  //        自己调度（server/auto-continue.js）。**刻意不拆成三个事件**：三个动作共用同一份按 sessionId
+  //        归键的状态、同一道相位校验（act()），拆开等于把相位机抄三份。入向 57→58）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 58);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('user:autoContinue'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('logs:server'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('connect:qr'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:branches'));

@@ -182,6 +182,18 @@ test.describe('SCOPE-01: WORKDIRS 写入侧', () => {
   // 管的是**回落**；这里管**显式写入**。两条路不同，家目录暴露的后果相同，都要堵。
   const homeDeps = (home = '/home/tester') => ({ ...envDeps(), home });
 
+  // WORK_DIRS_FILE 决定授权工作区从【哪个文件】读。能从面板 / CLI 设它，就能把工作区换成任意一个已存在
+  // 文件里写的东西——这一组过宽根校验只看 WORKDIRS 的值，对它形同虚设；那份文件的内容还是热加载的
+  // （2026-09-22 review P2）。该键已被 WORKDIRS 取代，只保留「清空」这一个写法。
+  test('WORK_DIRS_FILE 只能清空、不能设置——指向任意已存在的文件就绕过了这一组过宽根校验', () => {
+    const deps = { ...homeDeps(), fileExists: () => true };
+    const r = validateEnvChanges({ WORK_DIRS_FILE: '/tmp/some/workdirs.json' }, deps);
+    assert.equal(r.ok, false, '设成一个已存在的文件也得拒：mustExist 只证明文件在，不证明里面写的工作区合规');
+    assert.match(r.results.find(x => x.key === 'WORK_DIRS_FILE').message, /清空|WORKDIRS|工作区列表/);
+    // 清空在写入协议里是 null（前端把清空的输入框转成 null 再发，同上面「null 表示删除该配置项」那条）
+    assert.equal(validateEnvChanges({ WORK_DIRS_FILE: null }, deps).ok, true, '清空要放行：那是从旧部署迁出的一步');
+  });
+
   test('家目录本身被拒——装机向导拒的东西，运行时不能从面板绕进来', () => {
     for (const home of ['/home/tester', '/Users/tester']) {
       const r = validateEnvChanges({ WORKDIRS: [home] }, homeDeps(home));

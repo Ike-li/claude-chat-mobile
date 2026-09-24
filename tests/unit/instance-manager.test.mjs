@@ -193,3 +193,114 @@ test('remove() clears unreadCounts, unreadSnapshotOnEntry and lastCountedTopLeve
   assert.equal(manager.unreadSnapshotOnEntry.has(agent.instanceId), false);
   assert.equal(manager.lastCountedTopLevelMessageId.has(agent.instanceId), false);
 });
+
+// 彻底删除要等「已关、没退完」的 CLI（app.js deletePermanent）：它们退出前还会往 transcript 追加
+// 收尾元数据，删在前面文件就被写回来。session:close 把实例同步移出表；空闲回收则让实例带着
+// terminating 留在表里直到退出——两种都得等。
+function exitableAgent(manager, sessionId, extra = {}) {
+  let exit;
+  const agent = {
+    instanceId: manager.nextId(),
+    sessionId,
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => false,
+    dispose() {},
+    exitPromise: new Promise(resolve => { exit = resolve; }),
+    ...extra,
+  };
+  manager.agents.set(agent.instanceId, agent);
+  // 与生产同序：consume 走完先经 onExit 清表（app.js），再结算 exitPromise。已移出表的，清表是空操作。
+  return { agent, exit: () => { manager.clearTables(agent.instanceId); exit(); } };
+}
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('waitForSessionExits 等本会话里已移除、正在回收的实例退完；活实例与别的会话不算', async () => {
+  const manager = createInstanceManager();
+  const watch = sessionId => {
+    const box = { result: null };
+    manager.waitForSessionExits(sessionId, 10_000).then(r => { box.result = r; });
+    return box;
+  };
+
+  // 两种「没退完」各自单独验：放在同一次等待里，其中一种就能撑住「还在等」，另一种漏了看不出来。
+  const closed = exitableAgent(manager, 's-closed');
+  manager.remove(closed.agent.instanceId);
+  let box = watch('s-closed');
+  await flush();
+  assert.equal(box.result, null, 'session:close 移出了表，但 CLI 还在收尾写盘，删除得等');
+  closed.exit();
+  await flush();
+  assert.equal(box.result, true);
+
+  const reclaiming = exitableAgent(manager, 's-reclaiming', { terminating: true });
+  box = watch('s-reclaiming');
+  await flush();
+  assert.equal(box.result, null, '空闲回收中的实例 CLI 还没退，删除得等');
+  reclaiming.exit();
+  await flush();
+  assert.equal(box.result, true);
+
+  // 不算的两种：活实例由删除保护①拒绝（等它只会白等到上限）；别的会话没退完不牵连。
+  exitableAgent(manager, 's-live');
+  const other = exitableAgent(manager, 's-other');
+  manager.remove(other.agent.instanceId);
+  assert.equal(
+    await manager.waitForSessionExits('s-live', 10_000), true,
+    '活实例和别的会话都不该等：前者由保护①拒绝，后者与本会话无关，等它们只会白等到上限',
+  );
+});
+
+// 等待是异步的：这期间另一台设备可能又打开、又关掉了这个会话。只等调用那一刻收集到的，
+// 新关掉的那个 CLI 就漏了——等完它已不是活实例，保护①放行，删除又落在它的收尾写入前面。
+test('waitForSessionExits 等待期间新关掉的实例也要等到', async () => {
+  const manager = createInstanceManager();
+  const first = exitableAgent(manager, 's1');
+  manager.remove(first.agent.instanceId);
+
+  let result = null;
+  manager.waitForSessionExits('s1', 10_000).then(r => { result = r; });
+  const second = exitableAgent(manager, 's1');
+  manager.remove(second.agent.instanceId);
+  first.exit();
+  await flush();
+  assert.equal(result, null, '等待期间又关掉的那个 CLI 还在收尾写盘，不能放行');
+  second.exit();
+  await flush();
+  assert.equal(result, true);
+});
+
+// 每轮重新收集时，dispose 过却没走 onExit 清表的实例会一直留在表里，它那个早已结算的退出确认
+// 每轮都被收回来。重复等它就是在已结算的 promise 上空转，事件循环再也轮不到别的事——整个 server 卡死。
+// 用会数调用次数的 thenable 代替 promise：空转时它很快就抛，用例红，而不是把测试进程一起卡死。
+test('waitForSessionExits 不在已结算的退出确认上空转', async () => {
+  const manager = createInstanceManager();
+  let thenCalls = 0;
+  const alreadyExited = {
+    then(resolve) {
+      thenCalls++;
+      if (thenCalls > 20) throw new Error('同一个已结算的退出确认被反复等——在空转');
+      resolve();
+    },
+  };
+  exitableAgent(manager, 's1', { disposed: true, exitPromise: alreadyExited });
+  assert.equal(await manager.waitForSessionExits('s1', 10_000), true);
+});
+
+test('waitForSessionExits 有上限：等不到按时放行并返回 false，不让会话永远卡在关闭中', async t => {
+  // Date 也要冻住：实现按 Date.now() 算剩余时长，真时钟在两次读之间跨过毫秒边界时定时器只剩 9999ms
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const manager = createInstanceManager();
+  const hung = exitableAgent(manager, 's1');
+  manager.remove(hung.agent.instanceId);
+
+  let result = null;
+  manager.waitForSessionExits('s1', 10_000).then(r => { result = r; });
+  t.mock.timers.tick(9_999);
+  await flush();
+  assert.equal(result, null, '上限之前要一直等');
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(result, false, '到上限必须结算，并如实说明没等到');
+});

@@ -1,5 +1,92 @@
 # 变更记录
 
+## v1.13.0 — 2026-09-24
+
+Changes since v1.12.1.
+
+### Verified environment
+- claude CLI: 2.1.281
+- Agent SDK: @anthropic-ai/claude-agent-sdk 0.3.278
+
+### Features
+- feat(drawer): 侧栏标题行常驻 GitHub 仓库入口
+- feat(auto-continue): 额度墙重置后到点自动继续，补上 SDK 会话里用不上的 CLI 同名能力
+- feat(effort): auto 与「没指定」分成两档，对齐 CLI 的 default / inherit
+- feat(effort): 切回 auto 改走控制请求，不再重开实例、回合中也能切
+- feat(effort): 思考强度补上 auto 档，对齐 CLI /effort auto
+
+### Fixes
+- fix(i18n): 按 review 堵上间接 key 与注释误报，再补 6 条漏译
+- fix(i18n): 补齐剩余 10 条英文翻译，i18n-check 开始拦下漏翻
+- fix(i18n): /rewind 面板与回退结果提示补英文翻译
+- fix(auto-continue): 注册表读不全时不代发；stale 上点「继续」按手动处理
+- fix(smoke): 配置键按完整键面摘，遗留的 WORK_DIR 等 passthrough 键也不继承
+- fix(smoke): 被测 server 不继承启动它的会话与生产配置
+- fix(session-delete): 等待期间新关掉的实例也要等到
+- fix(smoke): 场景改读 runner 注入的工作目录——WORK_DIR 退役后 5 个场景一启动就抛
+- fix(session-delete): 关掉会话后紧接着彻底删除，先等 CLI 退完再删
+- fix(effort): 不支持调档的模型上 select 被回执改回 auto
+- fix(message): 去重 ack 的「实例还活着」与 instance-manager 同口径
+- fix(message): 去重 ack 只带回仍然活着的落点实例
+- fix(service): health 的 URL 与请求头都经 stdin 交给 curl；放不进请求头的令牌回落 query
+- fix(git): 工作区目录整个未跟踪时展开列出其中文件，不再报「没有改动」
+- fix(mirror): 重定基线沿用同一份快照定基线，读盘期间连上的设备也跳过本拍增量
+- fix(config): config check 放行旧版 WORK_DIRS_FILE；D18 清除命令给真变量名；锁定文案不再推荐走不通的 migrate
+- fix(devices): 设备审批网关的文件监听改盯 devices.js 实际读写的那一对文件
+- fix(test-infra): docker:build 恢复真构建，测试镜像 Playwright 升到与 lock 一致的 1.63.0
+- fix(agent): SDK 后台任务给在途轮的看门狗豁免加 45 分钟上限
+- fix(message): 去重 ack 带回首发落点实例，离线队列不再多建一棵 worktree
+- fix(security): server 自己派生的 git 与 claude --version 也剥控制面密钥（AUTH-06）
+- fix(service): health 的 token 经 stdin 以请求头发出，不再进 curl 的 argv
+- fix(doctor): DEVICE_APPROVAL_SCOPE 写错值时两个 doctor 与启动日志都点名
+- fix(config): WORK_DIRS_FILE 只能清空，挂着时拒写 WORKDIRS，doctor 报过宽根
+- fix(git): 工作区是 monorepo 子目录时，改动面板只列本工作区、点开有 diff
+- fix(replay): 回放 ack 晚于 3 秒超时，不再丢掉积压、停在缺了一段的旧内容
+- fix(agent): 自动汇报轮一开讲就广播「在跑」，其它端不再误以为空闲
+- fix(approval): 切会话重建的审批卡不再丢掉「永久不再问」
+- fix(mirror): 一台设备连上来，不再让其它在线端漏掉终端刚写的那段
+- fix(mirror): 终端轮次已收尾、只是开着对话框时，镜像锁照常自动解锁
+- fix(agent): 没有在途轮时点停止，不再把下一轮标成「已中止」
+- fix(auth): 出示过令牌的 Access 会话也能拿局域网二维码
+- fix(config): env:set 读不动 ccm.config.json 时拒绝写入，不再从空配置重建
+- fix(approval): 不结束轮次的 error 不再清掉挂着的审批
+- fix(sync): 有回放的重连/切回也能对上「离开期间终端写过」的账
+- fix(mirror): 满窗时己方秒回不再被当成终端写入
+- fix(devices): 待审广播、审计回传、日志回传不再带完整设备令牌
+- fix(auth): 经 Access 登录的会话不再能从接入二维码拿到 AUTH_TOKEN
+- fix(mirror): 纯后台任务期不再算「己方在写盘」，终端写入照常追平并标脏
+- fix(security): markdown 净化剥掉工具类 class，堵住 Tailwind 运行时造的审批遮罩
+- fix(release): UNSTABLE 不再无条件放行，必需检查还在跑时接着等
+
+### Other
+- test(instance-manager): 等退出上限用例把 Date 一起冻住，修掉 Node 24 上的偶发红
+- docs: 分叉按钮只在带锚点的回复上出现，README 照实写
+- docs: README 与 architecture.md 的回退入口改为 /rewind
+- docs(readme): 首屏改用八张截图，去掉单张审批图
+- docs(readme): 首屏放产品图，先讲为什么用它，安装与文档各减一层
+- refactor(smoke): runner 挪过来的那行注释写成实际剥掉的内容，建工作目录用 CCM_SMOKE_WORK_DIR
+- test(gates): 图 00 的 SDK 版本断言随升级改为 0.3.278
+- chore(deps): bump @anthropic-ai/claude-agent-sdk from 0.3.263 to 0.3.278
+- chore(deps): bump dotenv from 17.4.2 to 18.0.1
+- chore(deps-dev): bump eslint from 10.10.0 to 10.11.0
+- test(e2e-mock): 守卫也认 const 对象的属性写入
+- test(e2e-mock): 守卫里拼正则的变量名改为完整转义元字符
+- perf(test): 本机 E2E 分片缺省从 4 提到 min(8, 核数-2)——10 核 207s → ~105s
+- test(e2e-mock): resetMockState 补上漏归零的两个状态，并加守卫防再漏
+- perf(test): 单测去掉三处空等——test:unit 本机 17.3s → 13.4s
+- docs(security): §1 与 deployment、doctor 文案同步改掉「Access 是基线之上的加层」
+- test(replay): 回放 ack 迟到不丢事件的三条用例移进 invariants，守护 SYNC-01
+- test(e2e-mock): __reset 后丢弃上一条用例迟到的 user:message 处理，修掉 P0-04 间歇红
+- test(cf-access): 模块重载改用自增版本号，修掉「未调用 initCfAccess → false」间歇红
+- docs(doctor): 设备门头注改正「Access 不替代 token」
+- docs(security): 改正「下游各层永远建立在已持令牌之上」——Access 路径不持令牌
+- test(e2e): P0-03d 的 class 遮罩断言改用会重试的 Playwright 断言
+- perf(sync): 有在途轮时 sync:since 不为 diskExternalLen 读磁盘
+- refactor(sync): externalHistoryExtent 与其单测挪到不与 #141 相撞的位置
+- test(devices): device-cli 文件头不再声称 pending 与 socket 侧同形
+
+**Full Changelog**: https://github.com/Ike-li/claude-chat-mobile/compare/v1.12.1...v1.13.0
+
 ## v1.12.1 — 2026-09-22
 
 Changes since v1.12.0.

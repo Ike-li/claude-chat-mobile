@@ -102,6 +102,39 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     await expectNoBrowserErrors(page);
   });
 
+  // 弱网下 ack 晚于回放缓冲自己的 3s 超时才到。旧实现在超时点按「超阈值 → reload」丢掉队列、推进基线，
+  // 可重载历史的动作在 ack 回调里——超时那一刻没人去做；ack 迟到时 handle 已被顶替、缓冲已空，判成 flush，
+  // 于是既没重载、那 165 条也没了，屏幕停在切走前的旧内容（2026-09-22 review P2）。
+  test('P0-REPLAY-SLOWACK 大量积压且 ack 晚于 3s 超时 → 仍然清屏重载，不停在缺了一段的旧内容上', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:replay-buffer-flood-slowack-setup');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Flood Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('[data-testid="user-message"], [data-testid="assistant-message"]'))
+      .toHaveCount(4, { timeout: 10_000 });
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+
+    // 切回：165 条积压先到，ack 4 秒后才到
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Flood Session');
+    await expectSidebarClosed(page);
+
+    const reloadMarker = page.locator('[data-testid="assistant-message"]', { hasText: 'Flood reload marker' });
+    await expect(reloadMarker).toBeVisible({ timeout: 15_000 });
+    // 走的仍是批量重载，而不是超时之后把 165 条逐条吐出来
+    await expect(page.locator('text=/Flood live reply #/')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-REPLAY-2 少量积压（21 条，低于阈值）→ flush：正常增量渲染 + 抑制中间滚动，内容完整且顺序正确', async ({ page }) => {
     await gotoMock(page);
 
@@ -148,6 +181,44 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     // 里的 user_message/text_delta/result 各自触发滚动累加出的数量级——直接验证"抑制中间滚动、只在
     // 收尾落底一次"这条要求，而不仅仅是内容顺序正确。
     expect(await readScrollWriteCount(page)).toBeLessThanOrEqual(10);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-SYNC-EXT（2026-09-22 review P1）：真 server 在有回放（replayed>0）时 sync:since 的 diskLen 恒为 null，
+  // 于是「离开期间终端写进同一会话」在切回时被 keep 吞掉——活缓冲里只有 web 自己的事件，终端写的那条
+  // 永远不出现，直到用户再切走切回一次。ack 现在带 diskExternalLen（最后一条非己方写入的位置），
+  // 越过已渲染条数就清屏全量重载。纯函数判定在 logic-ui-state 单测里；这条钉的是 bindView 真的把它传进去。
+  test('P0-SYNC-EXT 有回放的切回：ack 报出离开期间终端写过 → 全量重载，终端写的那条出现', async ({ page }) => {
+    await gotoMock(page);
+
+    // 1. 注册实例、武装「离开期间终端写过」（mock 在切回那次 sync:since 才把它写进磁盘历史），
+    //    再首次冷切入（4 条基线，建立 DOM 缓存；前端记下已渲染 4 条）。
+    await sendChatMessage(page, 'test:replay-buffer-small-external-setup');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Small Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('[data-testid="user-message"], [data-testid="assistant-message"]'))
+      .toHaveCount(4, { timeout: 10_000 });
+
+    // 2. 切走（模拟"离开"）。
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+
+    // 3. 切回：mock 先推 21 条 web 自己的积压事件（replayed>0、DOM 缓存还在 → 修复前判 keep），
+    //    ack 带 diskLen:null + diskExternalLen:5。
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Replay Small Session');
+    await expectSidebarClosed(page);
+
+    // 核心断言：终端写的那条必须出现（只有走了 session:history 全量重载才拿得到它）。
+    await expect(page.getByText('Small terminal message written while away')).toBeVisible({ timeout: 10_000 });
+    // 走的是清屏重载，不是 flush：被丢弃的 live 回放件不该渲染出来。
+    await expect(page.getByText('Small live reply #6 rendered via flush')).toHaveCount(0);
 
     await expectNoBrowserErrors(page);
   });

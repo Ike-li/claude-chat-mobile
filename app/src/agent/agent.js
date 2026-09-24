@@ -355,6 +355,13 @@ const SLASH_QUIET_BREAKERS = new Set([
 // 不是修复。45 分钟 = 实测最长 31 分钟留余量后取整；超过它按挂死处理，回到原有中断路径。
 const SLASH_LOCAL_COMMAND_GRACE_MS = 45 * 60_000;
 
+// SDK 后台任务（workflow / 后台 agent / 后台 bash）给在途轮的静默豁免上限，按本轮开跑时长算。
+// 【为什么要上限】子代理在干活时 SDK 流本来就有消息（task_progress 等）刷新 lastActivity，这条豁免真正
+// 兜住的是「任务活着、整条流静默」。无界的话，几小时前起的 dev server 一直挂着，新的一轮卡在网关上
+// 就永远不告警、不中断（2026-09-22 review P2）。取值与上面同为 45 分钟（维护者选定）；超过后回到普通
+// 静默看护——还得再静默满 idleTimeoutMs 才中断，流里一直有动静的长轮次不受影响。
+const SDK_BG_TASK_GRACE_MS = 45 * 60_000;
+
 // 本地 slash 命令的进度轮询间隔。命令在途期间才跑，命令一结束即停——常态零开销。
 // 3s：真机实测一次扫描 6ms（762KB 单文件）~27ms（11 个子代理），3s 一拍的盘压可忽略，
 // 而移动端看「还在动」需要的正是这个量级的刷新率。
@@ -378,7 +385,7 @@ function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -400,6 +407,16 @@ export class AgentSession {
     // 采信权在 server：新 cwd 源自 EnterWorktree 的 path 参数、属用户可控面，要过白名单判据（SCOPE-01），
     // 而白名单的真相源在 server。返回 null = 不采信，实例保持原 cwd（见 handleCwdChanged）。
     this.onCwdChanged = onCwdChanged;
+    // (effort) => void，「没指定」时 CLI 实际生效的档变了（见 refreshEffectiveEffort）。不进事件流：
+    // 进了回放环，重连回放会把旧档重新套到界面上。
+    this.onEffortEffective = onEffortEffective;
+    this.effectiveEffort = null;
+    // (wall) => void，主循环撞上 rate_limit 墙时上报给 server 的自动续跑调度（server/auto-continue.js）。
+    // 只交事实不做判定：判定在 agent/quota-auto-continue.js 的 planQuotaWall，这里的三个字段是它的输入。
+    this.onQuotaWall = onQuotaWall;
+    this._turnOrigin = null;            // 本轮由谁发起：'human' | 'auto-continuation' | 'task-notification'（合成轮）
+    this._turnHadOutput = false;        // 本轮是否已有真模型输出——续跑后「一个字没产出又撞墙」才算空转
+    this._lastRejectedRateLimit = null; // 本轮收到的 rejected rate_limit_info：老 CLI 的墙不带 quotaLimits 时的重置时刻来源
     // worktree 的 settings.local.json env 块（SDK resolveSettings 按 cwd 正确读出，CLI 自己读不到）。
     // 注意边界（2026-07-30 实证更正）：注入子进程环境**管不住网关**——CLI 的 settings.env 优先级高于
     // 继承环境，它从 canonical repo root 误读到的 ANTHROPIC_BASE_URL 等会盖掉这里注入的同名值。
@@ -436,7 +453,7 @@ export class AgentSession {
                                        // 只记主会话：子 agent 内部工具由父 Task 的 tool_use 代表（见 map 子分支）。
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
-    this._awaitingInterruptResult = false; // P1-4：interrupt() 成功后置真，标记"下一条 result 是这次中断的终态确认"
+    this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
@@ -471,8 +488,10 @@ export class AgentSession {
     this.disposed = false;
     this.assistantResponseBuffer = '';
     this.terminating = false;
-    // 最终退出确认：dispose/abort 后等待 consume 自然结束（SDK/CLI 子进程真正退出）才 resolve。
-    // 生产 shutdown 用它等最终退出确认，避免 process.exit 时留下孤儿 CLI 子进程。
+    // 最终退出确认：consume() 走完才 resolve，不是 dispose 那一刻。dispose 只是让 SDK 关 stdin，
+    // CLI 读到 EOF 后还会往 transcript 追加收尾元数据才退（2026-09-23 实测：EOF 后 70–80ms 写、
+    // 0.6–2s 退）。SDK 的消息流要到进程退出、或关 stdin 约 2s 后 SDK 发 SIGTERM 才结束，两者都晚于那几行。
+    // 消费方：彻底删除（app.js deletePermanent 经 instanceManager.waitForSessionExits）。
     this.exitPromise = new Promise(resolve => { this._exitResolve = resolve; });
 
     // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——唯一来源）。
@@ -492,15 +511,19 @@ export class AgentSession {
     // 当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
     // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
     this.permissionMode = permissionMode || 'default';
-    // 思考强度档（spawn 时注入 --effort），null=模型默认不传。
+    // 思考强度档（spawn 时注入 --effort），null=没指定、不传（CLI 按 settings / 模型默认继承）。
     // 【2026-09-03 实测更正】运行时可改：CLI 确无 set_effort 控制请求，但 apply_flag_settings
     // 认 effortLevel/ultracode 且中途下发即生效——启动时的 Options.effort 不构成阻挡（CLI 里那句
     // "launch-effort pin holds effort" 只在 /effort 斜杠命令路径上，不在 apply_flag_settings 路径）。
-    // 切档走 setEffort()，不再置换实例；唯一例外是「回模型默认档」(null)，见该方法注释 ③。
+    // 切档走 setEffort()，不置换实例；唯一例外是回到「没指定」(null)，见该方法注释。
     // ultracode：CLI /effort 菜单最高档；SDK Options.effort 不认该字面量——正式路径是
     // Settings.ultracode + effort xhigh（会话级 flag，不落盘），禁止改写用户消息塞关键词。
+    // effortAuto：CLI /effort auto（模型内置默认）。effort 同为 null 不传 --effort，
+    // 起来后由 _reassertEffort() 在首条消息前补发 effortLevel:null；_autoAsserted 记是否已落成。
     this.ultracode = Boolean(ultracode);
     this.effort = this.ultracode ? 'xhigh' : (effort || null);
+    this.effortAuto = !this.ultracode && !this.effort && Boolean(effortAuto);
+    this._autoAsserted = false;
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
@@ -590,14 +613,17 @@ export class AgentSession {
           session_id: this.sessionId || '',
           uuid: item.uuid, // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
           // 归属标记。SDK 契约原文：包装键盘输入的宿主**必须**显式打 {kind:'human'}，缺失被当成
-          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主，且这个断言是准确的
-          // 而非伪造来源——queue 的唯一写入点是 send()，send() 的唯一调用者是 user:message handler，
-          // 队列里只可能是经鉴权用户敲进来的字。
+          // unattributed 并在 isHuman() 信任门上 fail-closed。本服务正是那个宿主。
+          // queue 的唯一写入点是 send()，它有两个调用者：user:message handler（经鉴权用户敲进来的字 → human）
+          // 与额度墙自动续跑（server/auto-continue.js → auto-continuation，同 CLI 自己续跑时打的那个 kind）。
+          // 后者若也标 human 就是伪造来源：机器发的一句话会被当成人话去过关键词触发这类信任门。
           // 缺了它的后果**静默**：正文关键词的单回合触发（ultracode → 多 agent 编排 + 自动加载
           // workflow-authoring）与 @提及 peer 会话两条路一起走不通，用户只看到「这个词没反应」、零报错。
           // 2026-09-11 单变量实测：同一句话、同一 entrypoint，带 origin 产出 workflow_keyword_request
           // 与两条 turnCompanion 注入，不带则两项皆无。这道闸只守这两处，不影响审批/权限面。
-          origin: { kind: 'human' }
+          // 取值已在 send() 归一化过（只认 auto-continuation，其余为 null）：只在入口收口一次，
+          // 两层各收一次会互相兜底，任何一层单独坏掉都没有测试能发现。
+          origin: { kind: item.origin || 'human' }
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
@@ -832,6 +858,7 @@ export class AgentSession {
       this.inputEnded = true;
       this.onExit?.();
     }
+    this._exitResolve();
   }
 
   // ---- 对外操作 ----
@@ -859,6 +886,8 @@ export class AgentSession {
         this.activeModel = target;
         // 切模型会连带重置 effort（实测），补下发一次把用户选的档钉回去。见 _reassertEffort。
         await this._reassertEffort();
+        // 没指定时实际档随模型变（settings 按模型分表存）；不 await，不为文案拖住发送。
+        this.refreshEffectiveEffort();
       } catch (err) {
         // 区分两类失败：超时=CLI 侧可能已切也可能没切（诚实说"未确认"）；
         // 明确 reject（如 model not found）=确定没切，原模型继续。两者都不动 activeModel。
@@ -868,12 +897,17 @@ export class AgentSession {
             ? `模型切换未确认（${err.message}），已继续发送`
             : `模型切换失败（${err.message}），已用原模型发送`,
           recoverable: true,
+          endsTurn: false, // 这一轮照常开跑：前端只打一条提示，不按轮次收尾（见前端 error handler）
         });
       }
     }
 
+    // auto 实例：CLI 不认 --effort auto（带它启动照样按 settings 继承），只能在首条消息入队前补发
+    // effortLevel:null 把会话落成 {kind:'default'}。上面切模型时已重申过的话这里不再发。
+    if (this.effortAuto && !this._autoAsserted) await this._reassertEffort();
+
     if (this.disposed) return false; // S3：setModel 的 await 间隙实例可能已被 dispose，勿再往弃用实例排队
-    // 双重检查：setModel 是 await 让出点，间隙内其他 send 可能已经开了一轮
+    // 双重检查：setModel / 补发是 await 让出点，间隙内其他 send 可能已经开了一轮
     if (this.pendingTurns >= 1) {
       this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
@@ -890,12 +924,15 @@ export class AgentSession {
     // 2026-09-10 实测：transcript 落盘的 user 行 uuid 与此处推入值【逐字相同】，
     // 所以 live 气泡与刷新后的历史气泡携带同一个锚点，回退行为一致。
     const msgUuid = randomUUID();
+    // 只认一种非人类来源（额度墙自动续跑），其余一律按人：send() 的调用者就这两个，不给第三种开口子。
+    const origin = opts.origin === 'auto-continuation' ? 'auto-continuation' : null;
     // FE-002：透传 clientMessageId，供前端离线乐观气泡精确对账（含纯附件无文本）。
     this.emit('user_message', {
       text: displayText,
       attachments: opts.attachments,
       uuid: msgUuid, // Rewind 锚点：live 气泡靠它拿到 dataset.uuid（无静态门禁守，改动须补形状断言）
       ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
+      ...(origin ? { origin } : {}), // 前端据此把这条气泡标成「自动继续」，否则看着像用户自己打了一句英文
     }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
@@ -904,10 +941,11 @@ export class AgentSession {
     this._openTurnSlot(msgUuid);
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
+    this._markTurnStart(origin || 'human');
     this._armSlashQuietNotice(text); // slash 命令可能整轮静默（fork 上下文），到点提示一次「不是卡死」
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
-    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText });
+    this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText, origin });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
     return true;
@@ -1149,7 +1187,9 @@ export class AgentSession {
       // 成功中断：丢弃 toDrop（尚未送达 SDK 的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
       this._dropOpenTurnSlots(dropped);
-      this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
+      // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result。账面为 0（纯后台任务期空输入也有停止钮）
+      // 时没有这条 result，标记置上就没人清，会把用户下一轮的正常完成标成「已中止」。
+      this._awaitingInterruptResult = this.pendingTurns > 0;
       if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
@@ -1347,30 +1387,37 @@ export class AgentSession {
   // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
   // 与 logMeta() 的口径同源，差别只在这里用 null 表示「模型默认」而非 'model-default' 字面量。
   uiEffort() {
-    return this.ultracode ? 'ultracode' : (this.effort || null);
+    if (this.ultracode) return 'ultracode';
+    if (this.effortAuto) return 'auto';
+    return this.effort || null;
   }
 
   /**
    * 思考强度切档（与 setPermissionMode / send 的 setModel 同型：差分 + _raceControlRequest）。
    *
-   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有三个【静默失败】边界
+   * 走 apply_flag_settings 控制请求，不置换实例。CLI 侧这条路有两个【静默失败】边界
    * （都返回成功、都不抛错，2026-09-03 零 token 实测），全部在本方法挡住：
    *  ① 非法档位被 CLI 的 zod `.catch(void 0)` 静默吞掉、档位不变却回 OK
    *     → 先 normalizeEffortUiLevel 再发，非法值根本不出门。
    *  ② `{ultracode:false}` 只关 ultracode，effort 停在 xhigh 不回落
    *     → 两个字段【始终成对】下发，不做「只发变化的那个」的优化。
-   *  ③ `{effortLevel:null}` 清不回「模型默认」：CLI 的 applied.effort 恒是具体档
-   *     （不传 --effort 启动时也是模型自身的默认档），没有「未 pin」态可回
-   *     → 这个方向不在本方法处理，返回 needsSwap 让 server 置换实例还原启动态。
+   * auto 同样走这里：CLI 把 `effortLevel:null` 落成会话档位 `{kind:'default'}`（模型内置默认），
+   * 与 CLI 自己的 `/effort auto` 同一个构造器。2026-09-23 在 2.1.259/263/277/278/280 上零 token
+   * 复测：pin low 后下发 null、以 `--effort low` 启动后下发 null、从 ultracode 下发 null，
+   * 三种都回到模型默认档（09-03 记的「清不回」是最后 pin 的 high 恰等于模型默认造成的混淆）。
    *
-   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | null=模型默认）
+   * 回到「没指定」(null) 是唯一要置换实例的方向：没指定 = 不传 --effort 起来的 `{kind:'inherit'}`，
+   * 会先读 settings 里给该模型存的档；而 effortLevel:null 落成的是 `{kind:'default'}`，不是它。
+   * CLI 没有能回到 inherit 的控制请求，只能不带 --effort 重开。
+   *
+   * @param {string|null} uiLevel UI 档（SDK 五档 | 'ultracode' | 'auto' | null=没指定）
    * @returns {Promise<{ok:true}|{ok:false,needsSwap:true}|{ok:false,error:string}>}
    */
   async setEffort(uiLevel) {
     const norm = normalizeEffortUiLevel(uiLevel);
     if (!norm) return { ok: false, error: `未知思考强度档：${uiLevel}` };   // ①
     if (norm.ui === this.uiEffort()) return { ok: true };                   // 差分：无变化不调 SDK
-    if (norm.ui === null) return { ok: false, needsSwap: true };            // ③
+    if (norm.ui === null) return { ok: false, needsSwap: true };            // 回到没指定：见上
     if (!this.q) return { ok: false, needsSwap: true };                     // 半开/已弃用实例：无控制通道
     try {
       await this._raceControlRequest(
@@ -1379,6 +1426,8 @@ export class AgentSession {
       if (this.disposed) return { ok: false, error: '实例已关闭' };  // S3：await 间隙可能已被 dispose
       this.effort = norm.sdk;
       this.ultracode = norm.ultracode;
+      this.effortAuto = norm.ui === 'auto';
+      this._autoAsserted = this.effortAuto;
       return { ok: true };
     } catch (err) {
       // 超时与明确 reject 都不改本地档位——不对前端谎报未生效的档（同 setModel 的处理）
@@ -1386,15 +1435,35 @@ export class AgentSession {
     }
   }
 
-  // 切模型后重申思考强度。切模型会连带影响 effort（实测：切到不支持 effort 的模型，
-  // CLI 的 applied.effort 直接变 null），不补发的话用户选的档会在切模型后静默丢失。
-  // 尽力而为：档位是体验项，不该让「切模型」这一轮因为它发不出去，失败只吞不报。
+  // 重申思考强度，两个调用点：
+  //  · 切模型后——切模型会连带影响 effort（实测：切到不支持 effort 的模型，CLI 的 applied.effort
+  //    直接变 null），不补发的话用户选的档会在切模型后静默丢失。
+  //  · auto 实例首条消息前——auto 没法经 --effort 启动，只能起来后补这一条（见 send()）。
+  // 「没指定」(null) 不重申：不传 --effort 就是它要的 inherit，发 effortLevel:null 反而把它变成 auto。
+  // 尽力而为：档位是体验项，不该让这一轮因为它发不出去，失败只吞不报（auto 未落成则下一条重试）。
   async _reassertEffort() {
-    if (!this.effort || !this.q || this.disposed) return;
+    if ((!this.effort && !this.effortAuto) || !this.q || this.disposed) return;
     try {
       await this._raceControlRequest(
         () => this.q?.applyFlagSettings({ effortLevel: this.effort, ultracode: this.ultracode }),
         'apply_flag_settings');
+      if (this.effortAuto) this._autoAsserted = true;
+    } catch { /* 见上：静默 */ }
+  }
+
+  // 「没指定」时向 CLI 问此刻实际生效的档（get_settings 的 applied.effort）。没指定 = {kind:'inherit'}：
+  // settings 里给该模型存了档就用存的，否则模型内置默认——按模型分表、legacy 只对老模型生效、模型默认值
+  // 都只在 CLI 里，CCM 自己算不全。只为文案服务，所以钉了档（含 auto）时不问，拿不到就不显、只吞不报。
+  // getSettings 在 sdk.mjs 里有、sdk.d.ts 没声明（0.3.201 起实测可用），故先判存在。
+  async refreshEffectiveEffort() {
+    if (this.uiEffort() !== null || !this.q || this.disposed) return;
+    if (typeof this.q.getSettings !== 'function') return;
+    try {
+      const s = await this._raceControlRequest(() => this.q?.getSettings(), 'get_settings');
+      const effort = typeof s?.applied?.effort === 'string' ? s.applied.effort : null;
+      if (this.disposed || effort === this.effectiveEffort) return;
+      this.effectiveEffort = effort;
+      this.onEffortEffective?.(effort);
     } catch { /* 见上：静默 */ }
   }
 
@@ -1402,7 +1471,7 @@ export class AgentSession {
     // 白名单 = SDK PermissionMode（CCM_PERMISSION_MODES）；manual → default 见 normalizePermissionMode
     const normalized = normalizePermissionMode(mode);
     if (!normalized) {
-      this.emit('error', { message: `未知权限档：${mode}`, recoverable: true });
+      this.emit('error', { message: `未知权限档：${mode}`, recoverable: true, endsTurn: false });
       return false;
     }
     mode = normalized;
@@ -1421,7 +1490,8 @@ export class AgentSession {
       this.permissionMode = mode;                  // 实例记真实档（含 bypass），canUseTool 据此放行
       return true;
     } catch (err) {
-      this.emit('error', { message: `权限档切换失败（${err.message}），仍为「${this.permissionMode}」`, recoverable: true });
+      // 本方法没有 busy 守卫、轮中可调：失败时那一轮照常跑、照常等审批，前端不得按轮次收尾
+      this.emit('error', { message: `权限档切换失败（${err.message}），仍为「${this.permissionMode}」`, recoverable: true, endsTurn: false });
       return false;
     }
   }
@@ -1489,7 +1559,7 @@ export class AgentSession {
       // deny + emit expired（与 resolvePermission 的惰性过期分支同义，只是这里「到时主动」而非「有人提交才发现」）。
       const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
       expiryTimer.unref?.(); // 不阻止进程退出
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer });
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations });
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
@@ -1778,6 +1848,7 @@ export class AgentSession {
   // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问、且无活后台任务时，
   //    长时间零活动 → abort。活的 bgTasks（workflow/后台 agent/后台 bash）视为仍在干活，
   //    刷新 lastActivity 豁免——否则多子代理并行时长主流通零消息会被 10 分钟误杀。
+  //    这条豁免只在本轮开跑 45 分钟内有效（见 SDK_BG_TASK_GRACE_MS）。
   // ② 空闲真回收（instanceIdleReclaimMs）：完全 !isBusy 且超阈 → abort 释放子进程；会话盘上仍在，
   //    下次发送/切换会 resume 重建。0 = 禁用。等审批/后台任务/提问都算 busy，不回收。
   //    当前 viewing 实例（this.viewed）也不回收——用户在读历史时 lastActivity 不会因 SDK 消息刷新。
@@ -1804,13 +1875,13 @@ export class AgentSession {
     // 本地 slash 命令第三条同理，且比前两者更极端——它整轮零 SDK 消息，连 tool_use 都没有
     // （见 SLASH_LOCAL_COMMAND_GRACE_MS）。
     // 与 pendingPermissions 同口径：刷新 lastActivity 后返回（不进静默中断、也不进空闲回收）。
-    // ★ 这里必须用 hasSdkBgTasks() 而非 hasBgTasks()：见该方法注释（否则本地命令的 45 分钟上限被
-    // 自家扫盘产物打穿）。
-    if (this.pendingTurns > 0 && (this.hasSdkBgTasks() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
+    // ★ 这里必须经 _sdkBgTasksExempt()（底层是 hasSdkBgTasks() 而非 hasBgTasks()）：见 hasSdkBgTasks 注释
+    // （否则本地命令的 45 分钟上限被自家扫盘产物打穿），且它自带 SDK_BG_TASK_GRACE_MS 上限。
+    if (this.pendingTurns > 0 && (this._sdkBgTasksExempt() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
       // 留痕：这三条豁免刷新 lastActivity 是「告警秒数比上一条还小」的直接来源（2026-08-10 真机
       // a90814ca：一条 271 秒的连续静默里先报 113 秒、后报 90 秒，事后无从判断是哪条豁免干的）。
       this._noteIdleExemption([
-        this.hasSdkBgTasks() && 'sdk_bg_task',
+        this._sdkBgTasksExempt() && 'sdk_bg_task',
         this.hasRunningForegroundTool() && 'foreground_tool',
         this._localCommandInFlight() && 'local_command',
       ].filter(Boolean).join('+'));
@@ -2115,6 +2186,13 @@ export class AgentSession {
       if (!key.startsWith(LOCAL_CMD_TASK_PREFIX)) return true;
     }
     return false;
+  }
+
+  // SDK 后台任务是否仍给在途轮豁免静默看门狗（上限见 SDK_BG_TASK_GRACE_MS）。
+  // turnStartedAt 缺失时按在期处理，维持旧行为——那是开表之前的边缘态，不该因此提前中断。
+  _sdkBgTasksExempt() {
+    if (!this.hasSdkBgTasks()) return false;
+    return !this.turnStartedAt || Date.now() - this.turnStartedAt <= SDK_BG_TASK_GRACE_MS;
   }
 
   // 本地 slash 命令是否仍在途（供 checkIdle 豁免，上限见 SLASH_LOCAL_COMMAND_GRACE_MS）。
@@ -2556,7 +2634,11 @@ export class AgentSession {
       // "逐字段一致"的承诺——此前只带 name/input/cwd 三者，切会话重建的卡片会跳过完整性预检
       // （p.fp undefined）且悬置时长/倒计时展示落空，虽不影响后端 fail-closed 门槛（那边独立按
       // requestId 存 fp），但会让前端这条支线体验缺失。
-      permissions.push({ requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt });
+      // persistDestinations 同理：缺了它，重建出来的卡片没有「永久不再问」（2026-09-22 review P2）。
+      permissions.push({
+        requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt,
+        ...(p.persistDestinations?.length ? { persistDestinations: p.persistDestinations } : {}),
+      });
     }
     const questions = [];
     for (const [toolUseID, p] of this.pendingQuestions) {
@@ -2654,6 +2736,7 @@ export class AgentSession {
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();
+          this.refreshEffectiveEffort(); // 同为 fire-and-forget：没指定时问 CLI 实际生效的档
         } else if (msg.subtype === 'commands_changed') {
           // SDK 0.3.229 起：CLI 中途发现新命令/skill（如 agent 走进带 project skill 的子目录）时的
           // **全量**推送。上游契约：`supportedCommands()` 只在 initialize 捕获一次、拿不到中途变化，
@@ -3022,6 +3105,24 @@ export class AgentSession {
           const quotaNotice = formatQuotaWall(msg.quotaLimits);
           if (quotaNotice) this.emitNotice(quotaNotice, 'warning');
           this.emit('error', { message: detail || `API 错误：${msg.error}`, recoverable: true });
+          // 额度墙上报给自动续跑。只报主循环（子 agent 撞墙在上面那个分支，主循环可能还在跑）；
+          // 只看 error 桶不看有没有 quotaLimits：网关裸 429 也要报，由判定层给出「无法自动继续」的理由。
+          // 包 try：回调在 server 侧，它的任何意外都不能从这里抛出去——map() 的抛出会被消息泵当成
+          // 流错误、中断整个会话，一个辅助功能的缺陷不该拿会话陪葬。
+          if (msg.error === 'rate_limit' && this.onQuotaWall) {
+            const q = msg.quotaLimits;
+            try {
+              this.onQuotaWall({
+                uuid: msg.uuid ?? null,
+                quota: q && typeof q === 'object' && !Array.isArray(q) ? q : null,
+                fallback: this._lastRejectedRateLimit,
+                turnOrigin: this._turnOrigin,
+                turnHadOutput: this._turnHadOutput,
+              });
+            } catch (err) {
+              console.error('[agent] onQuotaWall 回调异常（已隔离，不影响会话）:', err?.message || err);
+            }
+          }
           // ⚠️ 此处【不】减 pendingTurns——整套配平依赖「轮⇒result 假设」：每个已启动轮次恰好产出一个
           // result（成功/报错/被中断都算），由随后的 result 事件减掉本轮。若某 SDK/网关版本把终态 API 错误
           // 只发 assistant{error} 不发 result，pendingTurns 会泄漏 → 排队提示早一轮 / idle 仍 busy（idle
@@ -3030,6 +3131,11 @@ export class AgentSession {
           break;
         }
         this.maybeSynthesizeAutoTurn(); // 非流式网关无 message_start，assistant 边界兜底合成（flag 已被 message_start 消费则 no-op）
+        // 本轮有真模型产出（自动续跑的空转判据）。<synthetic> 排除：那是 CLI 自己合成的零 token 回复，
+        // 典型是 resume 被打断回合时补的「No response requested.」。
+        if (msg.message?.model !== '<synthetic>' && asArray(msg.message?.content).some(b => b && typeof b === 'object')) {
+          this._turnHadOutput = true;
+        }
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
@@ -3230,6 +3336,7 @@ export class AgentSession {
         const info = msg.rate_limit_info || {};
         if (info.status === 'rejected') {
           this.emitNotice(`已达${RATE_LIMIT_LABELS[info.rateLimitType] || '用量'}上限`, 'warning');
+          this._lastRejectedRateLimit = info; // 随后那条主循环墙若不带 quotaLimits，重置时刻从这里取
         }
         break;
       }
@@ -3256,7 +3363,21 @@ export class AgentSession {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
       this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; // 合成轮同样开表
+      this._markTurnStart('task-notification');
+      // 账面就地改写、没有伴随会触发 instances 广播的事件（message_start / text_delta 都不在 STATE_BOUNDARY
+      // 里）：不播的话其它端要等下一次无关广播才知道这一轮在跑，只有文本的汇报轮会一直等到 result，
+      // 这期间它们看到的是空闲，发出去的消息被在途轮闸拒掉。
+      this.onStateSettled();
     }
+  }
+
+  // 一轮开始：重置自动续跑判定用的三个本轮事实（见构造函数 onQuotaWall 处）。
+  // 只在「真开了一轮」的两处调用（send 入队、合成自动轮），拒收路径不碰——否则一次被拒的发送
+  // 会抹掉在途轮已攒下的产出标记。
+  _markTurnStart(origin) {
+    this._turnOrigin = origin;
+    this._turnHadOutput = false;
+    this._lastRejectedRateLimit = null;
   }
 
   // 交互日志缓冲键：有真 sessionId 用它；FRESH 首轮 init 前用 provisionalKey(instanceId)。
@@ -3272,7 +3393,7 @@ export class AgentSession {
     return {
       model: this.activeModel || this.reportedModel || this.defaultModel || 'default',
       // UI/日志显 ultracode；SDK 实际 effort 仍是 this.effort（xhigh）
-      effort: this.ultracode ? 'ultracode' : (this.effort || 'model-default'),
+      effort: this.uiEffort() || 'model-default',
       permissionMode: this.permissionMode || 'default'
     };
   }

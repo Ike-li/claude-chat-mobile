@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs, isSafeSessionId, getSessionHistory, classifyTranscriptTail, readLastPermissionMode } from '../../app/src/sessions/history.js';
+import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs, isSafeSessionId, getSessionHistory, classifyTranscriptTail, readLastPermissionMode, readTranscriptTailEntries } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -149,6 +149,28 @@ test('isSafeSessionId + 路径构建函数对穿越 id 安全（SS-003）', asyn
   assert.deepEqual(await getSessionHistory('../etc/passwd', '/cwd', 10, { baseDir: BASE }), []);
   assert.deepEqual(await classifyTranscriptTail('../x', '/cwd', { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false });
   assert.equal(await readLastPermissionMode('../x', '/cwd', { baseDir: BASE }), null);
+});
+
+// readTranscriptTailEntries：自动续跑到点前读尾窗复核「墙之后没人动过」。
+// 失败方向与 classifyTranscriptTail 相反——那边读不到就判 settled（不锁、不误伤输入），
+// 这边读不到必须能和「空文件」区分开：调用方据 null 判「无法核实 → 不代发」，据 [] 判「确实没东西」。
+test('readTranscriptTailEntries: 读出尾窗条目，跳过写到一半的尾行', async () => {
+  const cwd = '/test/tail-entries';
+  const dir = join(BASE, getProjectDir(cwd));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'tail-1.jsonl'), `${JSON.stringify({ type: 'user', uuid: 'u1' })}\n${JSON.stringify({ type: 'assistant', uuid: 'a1' })}\n{"type":"assis`);
+  const entries = await readTranscriptTailEntries('tail-1', cwd, { baseDir: BASE });
+  assert.deepEqual(entries.map(e => e.uuid), ['u1', 'a1']);
+});
+
+test('readTranscriptTailEntries: 文件不存在 / 非法 id → null，空文件 → []', async () => {
+  const cwd = '/test/tail-entries-missing';
+  assert.equal(await readTranscriptTailEntries('no-such', cwd, { baseDir: BASE }), null);
+  assert.equal(await readTranscriptTailEntries('../x', cwd, { baseDir: BASE }), null, 'SS-003 同字符集守卫');
+  const dir = join(BASE, getProjectDir(cwd));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'empty.jsonl'), '');
+  assert.deepEqual(await readTranscriptTailEntries('empty', cwd, { baseDir: BASE }), []);
 });
 
 test('sessionFileExists: 含 / 的路径穿越被拒', async () => {

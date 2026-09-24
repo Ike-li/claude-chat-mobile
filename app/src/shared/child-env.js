@@ -1,4 +1,5 @@
-// child-env.js —— ccm 派生 claude 子进程时的环境变量漏斗（唯一事实源）。
+// child-env.js —— ccm 派生子进程时的环境变量漏斗（唯一事实源）：SDK 会话用 sdkChildEnv，
+// server 自己派生的 git / `claude --version` 用 childEnv。
 //
 // 放在 src/shared（叶子层、不 import 任何后端域）的原因：两个消费方分处不同域且已有单向依赖——
 // src/agent/agent.js（SDK query 的子进程）与 src/ops/cli-bg-session-lock.js（`claude agents` 探测
@@ -37,10 +38,19 @@ function isCcmControlPlaneKey(key) {
     || CCM_CONTROL_PLANE_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 
+// server 自己派生的其余子进程用这一份：原样继承，只剥控制面密钥，不带下面两个 SDK 专用的 origin 标记。
+// 不止 claude——server 在工作区里跑的 git 同样要走这里：仓库配置能让 git 执行任意命令（core.fsmonitor
+// 在 status 时执行、diff 驱动、过滤器），而 .git/config 对模型是可写的。只剥 SDK 那一路的话，一次已放行的
+// 写文件就能把命令挂上去，等 server 下次跑 git status 时带着完整 env 执行（2026-09-22 review P2）。
+// 只执行系统工具的 spawn（launchctl / lsof / ps / osascript / tailscale / which）不经工作区可控代码，不必走。
+export function childEnv(base = process.env) {
+  return Object.fromEntries(Object.entries(base || {})
+    .filter(([key, value]) => value !== '' && !isCcmControlPlaneKey(key)));
+}
+
 export function sdkChildEnv(base = process.env) {
   return {
-    ...Object.fromEntries(Object.entries(base || {})
-      .filter(([key, value]) => value !== '' && !isCcmControlPlaneKey(key))),
+    ...childEnv(base),
     // statusline wrapper 据此只转发 renderer、不捕获：防 Web SDK 子进程覆盖真实终端 session 快照。
     CCM_STATUSLINE_ORIGIN: 'web-sdk',
     // hooks runner 据此直接静默退出。SDK 会话的 settingSources 含 'user'，会加载用户全局 hooks——

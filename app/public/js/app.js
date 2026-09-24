@@ -60,6 +60,7 @@ import {
   consoleLogEntryLayout,
   defaultModelTileLabel,
   withUltracodeTier,
+  withAutoTier,
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
@@ -172,7 +173,7 @@ import {
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
 } from './logic.js';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
+import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge } from './logic/unread.js';
@@ -182,6 +183,7 @@ import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
+import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
@@ -782,6 +784,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       connBannerDetail: connBannerDetailEl,
       connBannerSpinner: connBannerSpinnerEl,
       connBannerRetry: connBannerRetryEl,
+      autoContinueBanner: $('autoContinueBanner'),
+      autoContinueText: $('autoContinueText'),
+      autoContinueAction: $('autoContinueAction'),
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -1569,6 +1574,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
 
+  // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
+  // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
+  const autoContinueBanner = createAutoContinueBannerController(appContext, {
+    onAction: ({ sessionId, action }) => {
+      socket.timeout(10_000).emit('user:autoContinue', { sessionId, action }, (err, ack) => {
+        if (err || !ack?.ok) autoContinueBanner.refresh();
+      });
+    },
+    onToggle: () => scrollBottom(), // 同连接横幅：占一行会改 #messages 高度，非 force 调用不贴底会自动 no-op
+  });
+
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
@@ -1808,7 +1824,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function setDoctorOpen(open) {
     doctorBox.classList.toggle('hidden', !open);
     if (!open) doctorBox.replaceChildren(); // 收起即清空：下次展开必重跑，不留过期快照
-    btnSecurityCheck.textContent = t(open ? '🔍 安全体检 · 收起结果 ▲' : '🔍 安全体检 · 公网暴露前自查 →');
+    btnSecurityCheck.textContent = open ? t('🔍 安全体检 · 收起结果 ▲') : t('🔍 安全体检 · 公网暴露前自查 →');
     btnSecurityCheck.setAttribute('aria-expanded', String(open));
   }
   if (btnSecurityCheck && doctorBox) btnSecurityCheck.onclick = () => {
@@ -2134,14 +2150,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const card = document.createElement('div');
       card.className = 'pointer-events-auto mx-auto w-full max-w-sm bg-surface border border-line rounded-xl p-3';
       card.setAttribute('data-testid', 'device-card');
-      card.setAttribute('data-device-id', d.deviceId);
+      card.setAttribute('data-short-id', d.shortId || '');
       card.style.boxShadow = 'var(--shadow-pop)';
       const title = document.createElement('div');
       title.className = 'text-sm font-semibold text-ink mb-1.5';
       title.textContent = t('🔔 新设备请求接入');
       const meta = document.createElement('div');
       meta.className = 'text-[11px] text-ink-soft leading-snug mb-2.5 break-all';
-      const idLine = document.createElement('div'); idLine.textContent = 'ID：' + (d.deviceId || '—');
+      const idLine = document.createElement('div'); idLine.textContent = 'ID：' + (d.shortId || '—');
       const ipLine = document.createElement('div'); ipLine.textContent = 'IP：' + (d.ip || '—');
       const uaLine = document.createElement('div'); uaLine.className = 'text-ink-faint'; uaLine.textContent = d.userAgent || '';
       meta.append(idLine, ipLine, uaLine);
@@ -2151,12 +2167,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       approve.type = 'button';
       approve.className = 'flex-1 py-2 rounded-lg bg-cta text-white active:brightness-95 text-xs font-medium';
       approve.textContent = t('✓ 准入');
-      approve.addEventListener('click', () => { socket.emit('user:approveDevice', { deviceId: d.deviceId }); });
+      approve.addEventListener('click', () => { socket.emit('user:approveDevice', { shortId: d.shortId }); });
       const deny = document.createElement('button');
       deny.type = 'button';
       deny.className = 'flex-1 py-2 rounded-lg bg-sunk text-ink-soft active:bg-line-soft text-xs font-medium';
       deny.textContent = t('✕ 拒绝');
-      deny.addEventListener('click', () => { socket.emit('user:denyDevice', { deviceId: d.deviceId }); });
+      deny.addEventListener('click', () => { socket.emit('user:denyDevice', { shortId: d.shortId }); });
       btns.append(approve, deny);
       card.append(title, meta, btns);
       deviceRequests.appendChild(card);
@@ -2439,9 +2455,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     setSeq: value => { lastSeq = value; },
     setEpoch: value => { curEpoch = value; },
-    // 超时兜底与 ack 路径同口径：超阈值走 reload 语义（只推进基线，不逐条吐成打字机）；
-    // 未超阈值 flush。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——宁可
-    // 超阈值时丢缓冲改走下次 history/sync，也不要 100+ 条 DOM 抖动。
+    // 超时兜底与 ack 路径同口径：未超阈值 flush；超阈值不在超时点收尾，留给 ack 回调（见 createReplayBuffer
+    // 的 armTimeout）。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——ack 回调那时会按
+    // 最新的 instances 广播重判。
+    // deferMs：ack 自己带 SYNC_ACK_TIMEOUT_MS 的超时、必定回调，这一道只兜回调在 resolve 之前抛了的坏情况。
+    deferMs: SYNC_ACK_TIMEOUT_MS + 5_000,
     decideTimeoutAction: ({ bufferedCount }) => resolveReplayBufferAction({
       bufferedCount,
       priorAction: 'keep',
@@ -2627,6 +2645,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
     // 思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
     effort_mode(p) {
+      // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
+      appContext.state.effortEffective = p.effective ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -3009,6 +3029,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
+      if (p.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 额度墙到点续跑发的，不是用户打的
       if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
@@ -3087,6 +3108,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       updateSendButtonState();
     },
     error(p, ev) {
+      // endsTurn:false = 报个错、轮次照常（socket handler 抛错、轮中切权限档/模型失败）。只打提示，
+      // 不走下面那套轮次收尾：清审批、工具卡标失败、熄 busy——服务端那一轮还在等审批（30 分钟 TTL），
+      // 清掉了用户就没地方点「允许」了（2026-09-22 review P1）。
+      if (p?.endsTurn === false) {
+        alertCue('error');
+        hideLoadingCard();
+        addBar(`⚠️ ${p.message}`, 'text-danger');
+        return;
+      }
       finalizeStreams();
       const errFileCard = flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
@@ -4592,22 +4622,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（CLI /effort：五档 + ultracode；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（CLI /effort：五档 + ultracode + auto；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
   // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
-    const val = level || null; // 空串/undefined 归一为 null（模型默认）
+    const val = level || null; // 空串/undefined 归一为 null（没指定：CLI 按 settings / 模型默认继承）
     ultracodeArmed = val === 'ultracode';
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${val || t('模型默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${val || t('CLI 默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
     if (pillEffortText) {
-      pillEffortText.textContent = val || t('默认思考');
+      pillEffortText.textContent = effortUiState(val, [], {
+        mirrorReadonly: Boolean(mirrorReadonlySid),
+        effective: appContext.state.effortEffective,
+      }).label;
     }
 
     if (customEffortGrid) {
@@ -4636,12 +4669,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
   // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
   // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
-  // 对着一个空闲实例整个 dispose+resume 重开，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
+  // 把一个空闲实例用户选好的档位清回 auto，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
   function rebuildEffortOptions(modelValue, opts) {
     if (!effortSelect) return;
     const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
-    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
+    // xhigh-capable 模型上追加 ultracode 最高档，末位再追加 auto（= 模型默认），顺序同 CLI /effort
+    const show = withAutoTier(withUltracodeTier(baseLevels));
     // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
     // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
     // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
@@ -4653,7 +4687,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
       if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
-      effortSelect.value = '';
+      // 连 option 一起清：只置 value 的话，上个模型的候选还留着，随后到达的 effort_mode 回执经
+      // setEffortMode 能把 value 设回其中一档——不支持调档的模型上凭空冒出一个档（CI 上撞过）。
+      effortSelect.innerHTML = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
@@ -4676,7 +4712,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
     // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
-    const ui = effortUiState(currentEffort, show, { mirrorReadonly: Boolean(mirrorReadonlySid) });
+    const ui = effortUiState(currentEffort, show, {
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      effective: appContext.state.effortEffective,
+    });
     effortSelect.innerHTML = '';
     if (!ui.selected && !ultracodeArmed) {
       const placeholder = document.createElement('option');
@@ -4715,7 +4754,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         customEffortGrid.appendChild(lvTile);
       }
     }
-    // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
+    // 同步 pill 文案（没指定显「CLI 默认」，已知实际档时带上它）
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
@@ -4726,6 +4765,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
     if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
+    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
     const uiLevel = effortSelect.value || null;
     if (uiLevel === currentEffort) return;
     socket.emit('user:setEffort', { level: uiLevel });
@@ -4759,6 +4799,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       syncModelUI(currentModel);
     }
     setPermMode(inst.permissionMode || 'default', true);
+    appContext.state.effortEffective = inst.effortEffective ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -4850,7 +4891,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     setEffortMode(panel.effort, true);
     // silentClear：这里跑的时候 mirrorReadonlySid 已经在 applyMirror 里被置回 null（赋值发生在
     // 三个分支判断之前），若恢复出的模型恰好不支持 effort 又留着非空 currentEffort，不加这个参数
-    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，触发一次没必要的 dispose+resume。
+    // 会像 applyMirror 第三分支同款那样误发 user:setEffort({level:null})，把实例档位误清回 auto。
     rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel, { silentClear: true });
   }
 
@@ -4983,6 +5024,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
     // 发送闸：随 instances 广播的权威 turnRunning 字段驱动（undefined/旧服务端=保守 false 不误禁）。
     _turnRunning = viewedInst?.turnRunning === true;
+    // 额度墙自动继续横幅：按当前查看会话的 sessionId 取条目。字段缺失（mock 的旧式内联载荷）时模块内保留上一份。
+    autoContinueBanner.update({ entries: p?.autoContinue, sessionId: viewedInst?.sessionId || null });
 
     // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
     syncTopContextLabel();
@@ -5463,7 +5506,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
       const action = shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
-        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
+        diskLen: res?.diskLen ?? 0, diskExternalLen: res?.diskExternalLen ?? 0,
+        seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
         // 无 sessionId = session:history 无从查起，清屏必然换来白屏（见 logic.js 该闸注释）
         hasSessionId: Boolean(sid),
       });
@@ -5540,15 +5584,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 注意：这张表是 resolveDrawerStatus 的**渲染侧白名单**——appendSessionStatusChip 拿不到 meta
   // 就直接 return。给纯函数加了新状态却漏了这里，chip 会静默不显示（判据全绿、界面照旧）。
   const DRAWER_STATUS_META = {
-    busy: { icon: 'busy', tone: 'text-accent', label: '运行中' },
-    permission: { icon: 'warn', tone: 'text-warning', label: '需要你' },
+    busy: { icon: 'busy', tone: 'text-accent', label: tk('运行中') },
+    permission: { icon: 'warn', tone: 'text-warning', label: tk('需要你') },
     // 与 Web 侧 permission 同色（都是"要人动手"），文案区分谁能处理它
-    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: '终端需要你' },
-    error: { icon: 'error', tone: 'text-danger', label: '出错' },
+    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: tk('终端需要你') },
+    error: { icon: 'error', tone: 'text-danger', label: tk('出错') },
     // 中性色不是随手选的：warning 这一档在本产品里专指「点一下就能处理」的待办（宪法里
     // 「需要你(N)」那条轴），而被后台 agent 占用恰恰是【处理不了】——手机上点它只会被拒。
     // 用 warning 会让它去抢待办的注意力预算，最后是真正要人批的审批被淹掉。
-    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: '后台占用' },
+    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: tk('后台占用') },
   };
   function drawerStatusMeta(state) {
     const meta = DRAWER_STATUS_META[state];
@@ -8470,6 +8514,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
+      if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       if (msg.uuid) {
         bubble.dataset.uuid = msg.uuid;
@@ -8669,7 +8714,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
       // silentClear：mirrorReadonlySid 在函数顶部已被置 null（早于这里的分支判断），不加这个参数，
       // 当前模型恰好不支持 effort 又留着非空 currentEffort 时会误发 user:setEffort({level:null})，
-      // 触发一次没必要的 dispose+resume——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
+      // 把实例档位误清回 auto——对齐 adoptPanelState（同文件 4728/4736 附近）已有写法。
       rebuildEffortOptions(currentModel || cwdDefaultModel, { silentClear: true });
     }
     if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐

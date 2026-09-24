@@ -27,7 +27,7 @@
 | **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 维护者确认；`app/src/agent/agent.js` 的 `USAGE_THIRD_PARTY_INTERVAL_MS` 头注「不猜 ANTHROPIC_BASE_URL」；`app/src/shared/child-env.js`；[getting-started.md](getting-started.md) |
 | **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 维护者确认；`app/src/sessions/history.js`；`app/src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
 | **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 维护者确认；`app/src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/invariants/bind-host.test.mjs` |
-| **公网入口：一条基线、一个受管加层** | 基线 = `AUTH_TOKEN` + 逐设备审批，对所有拓扑（局域网 / 加密隧道 / 反代 / 直连 / Cloudflare）相同；**Cloudflare Access 是基线之上的可选加层**，关掉它不是「退化」。产品**受管**的第三方进程只有 `cloudflared`（unit 模板、install/uninstall、菜单栏主服务位）；Tailscale / WireGuard / 反代等**一等支持但不受管**：文档配方、向导提示、doctor 检测，产品不装、不起、不保活。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；限速来源不随 `ACCESS_PROFILE` 变，采信边缘注入头只有两条路：Access 层启用时公网 Host 的 `CF-Connecting-IP`，以及 `TRUSTED_PROXY=loopback` 显式 opt-in 的反代 `X-Forwarded-For` 末跳；默认不采信任何转发头（`AUTH-04`，失败方向是合桶不是拆桶）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 维护者确认；2026-09-06 维护者确认基线口径（用户反馈不想用 Cloudflare）；`app/src/auth/auth-strategy.js`；`app/src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
+| **公网入口：一条基线、一个受管加层** | 基线 = `AUTH_TOKEN` + 逐设备审批，对所有拓扑（局域网 / 加密隧道 / 反代 / 直连 / Cloudflare）相同；**Cloudflare Access 是可选加层**：开着时它管的公网 Host 改认 Access 身份——替代 `AUTH_TOKEN`，缺省也替代设备审批（见 §6）；关掉它回到基线，不是「退化」。产品**受管**的第三方进程只有 `cloudflared`（unit 模板、install/uninstall、菜单栏主服务位）；Tailscale / WireGuard / 反代等**一等支持但不受管**：文档配方、向导提示、doctor 检测，产品不装、不起、不保活。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；限速来源不随 `ACCESS_PROFILE` 变，采信边缘注入头只有两条路：Access 层启用时公网 Host 的 `CF-Connecting-IP`，以及 `TRUSTED_PROXY=loopback` 显式 opt-in 的反代 `X-Forwarded-For` 末跳；默认不采信任何转发头（`AUTH-04`，失败方向是合桶不是拆桶）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 维护者确认；2026-09-06 维护者确认基线口径（用户反馈不想用 Cloudflare）；`app/src/auth/auth-strategy.js`；`app/src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
 
 ---
 
@@ -68,7 +68,7 @@
 | 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；用户即 root，对操作面限速违背产品目的 |
 | 工作区白名单 | 路径门，不决定 Claude 工具是否自动放行 |
 | 范围内文件不敏感过滤 | `.env` 等照读——与「用户即 root」一致 |
-| 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*` 或 CLI settings 文件的 `env` 块（SDK 会话的 `settingSources` 含 user/project/local，写法见 getting-started「官方订阅与第三方网关」）。`app/src/shared/child-env.js` 有三处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据），以及**剥掉 CCM 自己的控制面密钥**（`AUTH_TOKEN` 与 `VAPID_*` / `NTFY_*` / `CF_ACCESS_*` 三组前缀，2026-09-17 安全审查 H1，红线登记为 `AUTH-06`）。第三条**不是对「不做白名单裁剪」的削弱，而是对它的补齐**：本条规则要的是「与终端 claude 一致」，而 server 会把 `ccm.config.json` 的值投影进 `process.env`（`ops/config.js` 的投影循环），于是子进程实际拿到的**比终端更宽**——普通终端里的 claude 环境里根本没有这几个键。剥掉之后才真的等宽。判据是「这个键属于 CCM 还是属于 claude」，`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量一律原样透传，第三方网关路径不受影响。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
+| 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*` 或 CLI settings 文件的 `env` 块（SDK 会话的 `settingSources` 含 user/project/local，写法见 getting-started「官方订阅与第三方网关」）。`app/src/shared/child-env.js` 有三处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据），以及**剥掉 CCM 自己的控制面密钥**（`AUTH_TOKEN` 与 `VAPID_*` / `NTFY_*` / `CF_ACCESS_*` 三组前缀，2026-09-17 安全审查 H1，红线登记为 `AUTH-06`）。第三条**不是对「不做白名单裁剪」的削弱，而是对它的补齐**：本条规则要的是「与终端 claude 一致」，而 server 会把 `ccm.config.json` 的值投影进 `process.env`（`ops/config.js` 的投影循环），于是子进程实际拿到的**比终端更宽**——普通终端里的 claude 环境里根本没有这几个键。剥掉之后才真的等宽。判据是「这个键属于 CCM 还是属于 claude」，`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量一律原样透传，第三方网关路径不受影响。剥离不只对 SDK 会话：server 自己在工作区里跑的 git（变更面板、状态栏）与 `claude --version` 走同一份 `childEnv()`——仓库配置能让 git 执行任意命令（`core.fsmonitor` 等），而 `.git/config` 对模型可写，只剥 SDK 那一路等于留了条绕行（2026-09-22 review P2）。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
 
 ---
 
@@ -91,7 +91,7 @@
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 57 个） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 58 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -180,6 +180,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 - 服务状态面板只渲染判定化告警，不展示裸计数器（原始数留 `/metrics`）。
 - 重启历史两条路径**互斥**：macOS 走 launchctl 快照比对（还能看到隧道等其它 unit），其余平台走 server 自身启动记录。双写会让同一次重启进两条、flapping 阈值虚高一倍。  
 - 推送 body 最小化（SEC-04）；完成类通知在前台在线时可不推。
+- 额度墙「到点自动继续」**重启即作废、不落盘**（同 CLI 退出即作废；与 APPROVAL-02 同立场：重启时残留的待执行动作不再执行）。它是在无人值守时替用户开一轮，「重启后自动开跑」比「重启后要手动点一下」更难预期。别为「更可靠」加持久化，取舍见 [architecture.md](architecture.md#额度墙到点自动继续)。
 
 ### 4.6 配置文件
 
@@ -250,9 +251,9 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 详见 [架构说明 · 鉴权与范围边界](architecture.md#鉴权与范围边界)（完整分层图与各层互不替代的边界）。摘要：
 
-**AUTH_TOKEN（必备，无它不启动）** → 公网 IdP 策略（可选加层，当前唯一实现 CF Access） → 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
+**入口凭据：AUTH_TOKEN（必备，无它不启动）‖ 公网 IdP 策略（可选加层，当前唯一实现 CF Access）**，按 Host 二选一 → 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
 
-第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来，所以下游各层永远建立在「对方已持令牌」之上。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。它是**可选的**：第一层 + 第三层就是公网基线（§1「公网入口」），加层开着时替代第三层，关着时第三层自动顶上——两种状态都是完整防线，doctor 不把「未开加层」算成缺陷。
+第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来。**但「起得来」不等于「每个连接都持有令牌」**：IdP 开着时，它管的公网 Host 只认 IdP 凭据（JWT），`AUTH_TOKEN` 在那条路上既不要求也不放行（带着正确 token、没有 JWT 照样 401）。所以下游判据的前提按入口分两种：IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方已持令牌」。凡是要把 `AUTH_TOKEN` 交出去、或以「反正对方有 token」为由放宽的逻辑，都得先看连接走的是哪条——2026-09-22 review 查出 `connect:qr` 把明文 token 回给了本不持有它的 Access 会话，推理起点正是旧版这里写的「下游永远已持令牌」。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。它是**可选的**：第一层 + 第三层就是公网基线（§1「公网入口」）。加层开着时，在它管的公网 Host 上替代第一层，默认档下也替代第三层（`DEVICE_APPROVAL_SCOPE=all` 时第三层照查）；关着时这两层照常生效——两种状态都是完整防线，doctor 不把「未开加层」算成缺陷。
 
 第三层（设备信任）对**本机样连接**放行——peer 是 loopback 且 Host 也是 loopback 名。那是第二因子的豁免，不是 token 的豁免。**Host 是客户端填的头**：纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 即可满足两个条件（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，故不再往判据里加条件，而是把 `DEVICE_APPROVAL_SCOPE=all` 定成**覆盖全部路径的总开关**（含 Access 那条与本机样那条；2026-09-17 安全审查 H1，`DEVICE-01`）。默认值不变——翻默认等于给既有安装投递一次远程锁死。
 

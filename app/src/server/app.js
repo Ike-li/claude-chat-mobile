@@ -13,6 +13,7 @@ import { parse as dotenvParse } from 'dotenv';
 import { maskToken, sanitize } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
+import { childEnv } from '../shared/child-env.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -25,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail } from '../sessions/history.js';
+import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -35,10 +36,12 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
+import { deviceApprovalScopeDiagnostic } from '../ops/doctor-checks.js';
 import {
   applyConfigChanges,
   CONFIG_FILE_NAME,
   createConfigReloader,
+  loadConfigSources,
   reloadKindOf,
   structuredToStringValues,
 } from '../ops/config-file.js';
@@ -66,13 +69,13 @@ import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
-import { listGitChanges, readGitDiff, gitRepoRoot, riskyUncommittedPaths, overlapRiskyFiles } from '../files/git-workspace.js';
+import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
 import { listBranches, createSessionWorktree, worktreeNameFromMessage, inspectWorktreeCleanliness } from '../files/git-worktree.js';
 import { searchFiles } from '../files/file-search.js';
-import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
+import { isProcessed, commitProcessed, processedInstanceId, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
   shouldRejectOutboxLazyOpen,
@@ -99,6 +102,7 @@ import {
   getTrustedDeviceIds,
   decideRevokeByShortId,
   resolveShortDeviceId,
+  shortDeviceId,
   setDeviceAlias
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
@@ -121,6 +125,7 @@ import { createInstanceManager } from './instance-manager.js';
 import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
+import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers } from './socket-files.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
@@ -185,6 +190,12 @@ const {
   accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
+// 写错的 DEVICE_APPROVAL_SCOPE（'ALL' / 'yes'）按默认档运行、零报错，而默认档恰是较松的那一档。语义不改
+// （rate-limiter 不变量钉着「非法值按未声明处理」），启动时吵一声；与两个 doctor 同一份判据（2026-09-22 review P2）。
+{
+  const scopeDiag = deviceApprovalScopeDiagnostic({ scope: process.env.DEVICE_APPROVAL_SCOPE });
+  if (scopeDiag.status === 'warn') console.warn(`[config] ${scopeDiag.detail}`);
+}
 
 // 多 repo 台阶1：可在 web 内切换的工作目录白名单（preflight 内构建，热加载可变）。
 // 各项已在 resolveWorkdirs 里经 realpathSync 规范化（与 CLI 的 ~/.claude/projects 命名一致，
@@ -201,7 +212,7 @@ let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId �
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 // n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
 //     重启后同一 clientMessageId 会被当成新消息（n=1 下可接受：重启本就中断在途轮）。
-let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
+let messageDedupState = new Map(); // clientMessageId → { at, instanceId }（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 // isProcessed/commitProcessed 之间横跨多个 await，不是原子的：断线重连重发可能让同一 clientMessageId
 // 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次 a.send() 真实重复发送。
 // 这里补一层"眼下有没有人正处理这条、尚未落定成败"的占用（见 message-dedup.js 的 isInFlight 一族）。
@@ -364,7 +375,8 @@ function preflight() {
   // 失败被下面的 catch 吞掉不会崩，但 versions.cli 会恒为 unknown——而那一项的存在理由
   // 正是本段头注说的「升级后回归核对」。2026-09-17 安全审查评估后保留现状。
   try {
-    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
+    // env 走 childEnv：claude 子进程一律拿不到 CCM 自己的控制面密钥（AUTH-06），这一次也不例外。
+    versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8', env: childEnv() }).trim();
   } catch { /* 非致命 */ }
   // 三段各自独立 try：任一来源失败只让自己留 unknown，不连坐其余（曾把 server 版本挂在 SDK 同块里被连坐跳过）。
   const require = createRequire(import.meta.url);
@@ -600,7 +612,7 @@ const io = new Server(httpServer, {
 // 机制下沉 src/auth/device-gate.js；unlockSocket（重放 init/models/statusline 初始态）
 // 耦合组装根状态（lastInit/viewing*/replay*），留在本文件、经回调注入。
 const deviceGate = createDeviceGate({
-  io, dataDir: DATA_DIR, onUnlockSocket: (socket) => unlockSocket(socket),
+  io, onUnlockSocket: (socket) => unlockSocket(socket),
   accessBypassActive: authStrategy.isEnabled() && DEVICE_APPROVAL_SCOPE !== 'all',
 });
 const { unlockDeviceSockets, disconnectDeviceSockets, pendingDevicesPayload, broadcastPendingDevices,
@@ -611,6 +623,7 @@ function unlockSocket(socket) {
   socket.deviceApproved = true;
   socket.trustBasis = 'device-token'; // SEC-03：待审批→批准走的就是设备信任表，受该表控制（吊销须能断连）
   socket.join('approved'); // SEC-01：批准后补入下行隔离房间，同 io.on('connection') 分支的即时批准路径
+  mirrorEngine.requestRebaseline(socket.id); // 同 connection 分支：这一刻它才开始拉历史（见那里的注释）
   // 未读角标：不在此 capture——批准另一台设备 ≠ 当前会话「重新进入查看」。
   // capture 会并入/清零活计数；若 viewing 会话已有未 ack 快照，新设备 join 不应触发多余状态机跳变。
   // 真正进入查看仍走 setViewing / session:switch / 本 socket 首次 connect 路径。
@@ -834,6 +847,10 @@ io.use(async (socket, next) => {
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
     }
+    // 握手时出示过 AUTH_TOKEN 没有，与走哪条路鉴权无关：公网 Host 只认 JWT，但浏览器照样可能带着正确的
+    // 令牌（Access 启用前存过、或开过手动的 #token= 链接）。connect:qr 据此决定能不能把令牌拼进码里（AUTH-05）。
+    // 只是记一笔，不参与放行——公网那条路的鉴权仍然只认 JWT。
+    socket.presentedAuthToken = tokenMatches(socket.handshake.auth?.token);
 
     // 限速计数：成功清零、失败退避/锁定
     let rlResult = null;
@@ -1189,6 +1206,7 @@ function instancesPayload() {
       // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
+      effortEffective: a.effectiveEffort ?? null, // 没指定（effort=null）时 CLI 实际生效的档，只进文案
       // 旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。**只有次数没有金额**：
       // 那笔钱由 CLI 计入会话总成本、随 result 一起来，已经在成本行里了；单独再报一份金额
       // 只会出现两个对不上的数字。搭 instances 的便车而不新开一条入向事件——两个整数，
@@ -1204,6 +1222,10 @@ function instancesPayload() {
   // （症状：打开一个 worktree 会话后侧栏突然只剩那一条，看着像会话丢了）。
   // 驾驶轴仍由 instances[].cwd 逐条如实下发，前端的文件/改动面板走那一条（resolvePanelCwd）。
   const payload = { viewingInstanceId, viewingCwd: workspaceCwdOf(viewingCwdOf()), dirs: workDirs, instances: list, devMode: DEV_MODE, canRestart: canRestartNow(), needsYou: computeNeedsYou(), service: computeServiceHealth() };
+  // 额度墙自动继续的横幅数据，按 sessionId 归键而非挂在 instances[] 上：等待期间实例多半已被
+  // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
+  // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
+  payload.autoContinue = autoContinue.snapshot();
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -1399,12 +1421,38 @@ function readCliSnapshotForSession(sessionId, cwd) {
   return readCliStatusSnapshot(sessionId, options);
 }
 
+// 额度墙「到点自动继续」。CLI 自带的 autoContinueAtUsageLimit 只在交互模式生效，SDK 会话恒进不去，
+// 由这里补齐（机制与取舍见 src/server/auto-continue.js 头注）。此处只做装配。
+// 自动布防的开关有两道，任一关掉都退回「只给选项」：CCM 自己的 CCM_AUTO_CONTINUE_AT_LIMIT（面板可关），
+// 以及 CLI 的 autoContinueAtUsageLimit——用户在终端 /config 里关掉了，web 这边也跟着关（终端等价）。
+const autoContinue = createAutoContinue({
+  isAutoEnabled: cwd => process.env.CCM_AUTO_CONTINUE_AT_LIMIT !== '0'
+    && cliDefaultsByCwd.get(cwd)?.autoContinueAtUsageLimit !== false,
+  readTailEntries: (sessionId, cwd) => readTranscriptTailEntries(sessionId, cwd),
+  // 否定证据入口：读不全返回 null（调度器据此转 stale，不当成「没人」照发）。不传 classifyTail：
+  // 这里只问「有没有别的驾驶员开着这个会话」，忙闲不影响结论。
+  listTerminalStates: () => listTerminalSessionStatesOrNull(),
+  getLiveInstance: sessionId => instanceForSession(sessionId) || null,
+  resumeInstance: (cwd, sessionId) => {
+    // 等待期间该工作区被移出 WORKDIRS：产品判据是「已开会话继续跑、仅拒新开」，到点 resume 就是新开。
+    if (!resolveDrivingCwd(cwd, workDirs)) throw new Error('该工作区已不在 WORKDIRS 里');
+    return dedupedResume(cwd, sessionId);
+  },
+  onChange: () => broadcastInstances(),
+  log: (sessionId, line) => {
+    if (sessionId) interactionLog.addSessionLog(sessionId, 'sys_info', line);
+    else console.warn(line);
+  },
+});
+
 // 只读镜像 / catchUp 追平引擎：15 个状态与整套编排已归 src/server/mirror-engine.js 所有，
 // 此处只做装配。注入面即本引擎与 app.js 的全部耦合点。
 const mirrorEngine = createMirrorEngine({
   io,
   agents,
-  instanceState,
+  // 不是 instanceState：那份把后台任务折进 'busy'（抽屉口径），镜像会把纯后台任务期当成己方在写盘，
+  // 终端写入既不追平也不标脏（2026-09-22 review P0）。见 instance-manager.js driverStateOf。
+  instanceState: instanceManager.driverStateOf,
   getViewingInstanceId: () => viewingInstanceId,
   viewingCwdOf,
   serviceStartedAt: SERVICE_STARTED_AT,
@@ -1820,6 +1868,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     permissionMode: mode,
     effort: effNorm.sdk,
     ultracode: effNorm.ultracode,
+    effortAuto: effNorm.ui === 'auto',
+    // 没指定时 CLI 实际生效的档变了 → 合成一条 effort_mode 带上它（server 合成、seq 0，不进回放环）。
+    onEffortEffective: effective => io.to('approved').emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: instance.sessionId, instanceId: id, ts: Date.now(),
+      type: 'effort_mode', payload: { level: effortOf(id), effective },
+    }),
     idleTimeoutMs,
     instanceIdleReclaimMs,
     approvalTtlMs,
@@ -2003,6 +2057,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，
     // 否则前端要等下一次无关广播才知道该实例已不忙，spinner 一直挂着。
     onStateSettled: () => broadcastInstances(),
+    // 额度墙 → 自动续跑调度。sessionId / cwd 在回调那一刻现取：会话 id 可能晚于构造才落定，
+    // cwd 也可能中途被 EnterWorktree 换掉（transcript 随之搬家，到点复核要读新位置）。
+    onQuotaWall: wall => autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall }),
     // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
     //
     // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
@@ -2038,8 +2095,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
-      // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
+      // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
       recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
@@ -2156,6 +2214,9 @@ function withRewindTimeout(promise, ms = REWIND_REQUEST_TIMEOUT_MS) {
 // 不落盘——崩溃后孤儿文件重新可见，与 CLI 等价、可重试。必须在 registerSocketConnection
 // 之外：每条 socket 一份的话，另一台设备的 SWR 在删文件窗口内仍会把行吐回去。
 const pendingDeleteIds = new Set();
+// deletePermanent 等「刚关掉的 CLI」退出的上限。SDK 关 stdin 后给约 2s 宽限，再 SIGTERM，
+// 5s 后 SIGKILL（sdk.mjs ProcessTransport.close），到这个上限时进程必然已死；实测平常 0.6–2s。
+const SESSION_EXIT_WAIT_MS = 10_000;
 // 「在新 worktree 里开」的懒创建（2026-09-11）。**只有真发出第一条消息才建**——勾了不发就什么
 // 都没发生，磁盘上不留没人用过的空树。与 Claude Code Desktop 同构：它的 lazyWorktrees.prepare 同样
 // 挂在 start_session 上（日志原文 `Lazy worktree: starting session … its worktree is being prepared
@@ -2374,11 +2435,6 @@ diagLog.setCallback((key, entry) => {
 
 registerSocketConnection(io, socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
-  // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
-  // 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
-  // BE-009：改为置 catchUpRebaselineRequested 标志（而非直接 catchUpKey=null）——让下一 tick 在重建 baseline
-  // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
-  mirrorEngine.requestRebaseline();
 
   // !== true（非 === false）：未显式置位时也按「未批准」处理，SEC-01 隔离边界的 fail-closed 方向。
   if (socket.deviceApproved !== true) {
@@ -2391,6 +2447,12 @@ registerSocketConnection(io, socket => {
     // SEC-01：批准设备加入下行隔离房间——本函数下方全部 io.emit 已改 io.to('approved').emit，
     // 待审批 socket（deviceApproved===false）不在此房间，故收不到任何敏感广播，只收上面的 device_status。
     socket.join('approved');
+    // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
+    // 会把已显示的消息再 history_append 一遍成重复气泡。BE-009：置标志而非直接 catchUpKey=null——让下一 tick
+    // 在重建 baseline 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
+    // 带上 socket.id：那一 tick 的增量照推给其它在线端，只跳过这一台。只在已批准时请求——待审批设备收不到
+    // 任何会话内容也不会拉历史，旧实现让它每连一次都触发一次重定基线（批准时由 unlockSocket 补上）。
+    mirrorEngine.requestRebaseline(socket.id);
     // 未读角标：覆盖"同一会话内断线重连"场景（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
     // 断开 socket，但 viewingInstanceId 全程不变，前端不会重新 emit user:setViewing）。幂等、null 安全，
     // 无关紧要的网络抖动重连也可放心无脑调用。
@@ -2460,7 +2522,14 @@ registerSocketConnection(io, socket => {
     // 若在此提前登记（旧 checkAndRecord 行为），校验失败/队满失败的 ID 会被记入，第二次重发命中去重
     // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
     if (isProcessed(clientMessageId, messageDedupState)) {
-      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true }); return;
+      // 带回首发落点：首发 ack 在路上丢了的客户端只能从这里得知消息落在哪个实例（离线 worktree 锚点靠它）。
+      // 只带还活着的：实例在重连前被关闭 / 回收的话，客户端会把后续消息改投到它、拿到 stale 当永久失败丢掉。
+      // 不带则回到原先的行为——由下一条消息自己去开（2026-09-23 #156 review）。「活着」与 instance-manager 的
+      // forSession 同口径：空闲回收置了 terminating、或已 dispose 但 onExit 还没删表的，都算已经没了。
+      const stored = processedInstanceId(clientMessageId, messageDedupState);
+      const live = stored ? agents.get(stored) : null;
+      const instanceId = live && !live.terminating && !live.disposed ? stored : null;
+      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true, ...(instanceId ? { instanceId } : {}) }); return;
     }
     // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
     // 不重复调用 a.send()，负 ack 可重试，client 既有重试机制稍后会再次命中（那时原请求已
@@ -2684,7 +2753,9 @@ registerSocketConnection(io, socket => {
       // 重跑并二次 a.send()，同一条 prompt 投给 Claude 两次。加 try/finally 之前那条陈旧的 in-flight
       // 占用反而会挡住重试（卡到重启，但至多一次），即修 F1 时把「卡死」换成了「可能重复投递」。
       // 顺序不变量由 tests/unit/message-dedup.test.mjs 的源码级断言钉住（2026-08-04 code review）。
-      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
+      messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: a.instanceId });
+      // 用户自己接着发了：这个会话的「到点自动继续」作废（人已经接手，到点再代发就是插队的第二条）
+      autoContinue.onManualSend(a.sessionId);
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
@@ -2731,12 +2802,14 @@ registerSocketConnection(io, socket => {
   // 已信任设备远程审批待批设备（免终端）。这两个 handler 经 on() 统一闸保护——deviceApproved=false
   // 的待审批设备发来的审批会在 on() 入口被丢弃（无法自批），故审批权恒属已信任设备。复用既有 approve/deny 函数。
   on(socket, 'user:approveDevice', payload => {
-    const deviceId = payload?.deviceId;
-    if (typeof deviceId !== 'string' || !deviceId) return;
-    // 纵深防御：只批准“确在待审批列表里”的设备 token，不凭一个事件把任意 token 加进信任表
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    // 纵深防御：只在待审批列表里反查，不凭一个事件把任意 token 加进信任表
     // （防可信端误传/点到陈旧卡片，使从未请求接入的 token 被预置信任）。授予信任收敛到真实请求。
-    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
-      console.warn(`[devices] 忽略远程批准：${deviceId} 不在待审批列表`);
+    // 寻址用 shortId：待审广播不带全量 token（DEVICE-03）。0 命中或多命中一律不批（resolveShortDeviceId）。
+    const deviceId = resolveShortDeviceId(shortId, getPendingDevices().map(d => d.deviceToken));
+    if (!deviceId) {
+      console.warn(`[devices] 忽略远程批准：${shortId} 不在待审批列表`);
       return;
     }
     console.log(`[devices] 已信任设备 ${socket.id} 远程批准 ${deviceId}`);
@@ -2756,14 +2829,15 @@ registerSocketConnection(io, socket => {
     }
   });
   on(socket, 'user:denyDevice', payload => {
-    const deviceId = payload?.deviceId;
-    if (typeof deviceId !== 'string' || !deviceId) return;
-    // 同 user:approveDevice 的纵深防御：只对「确在待审批列表里」的 deviceId 生效。denyDevice()
-    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端每次握手都带着自己完整
-    // 的 deviceToken——没有这道守卫，它能拿这个事件传自己的 deviceId 自吊销，绕开
+    const shortId = payload?.shortId;
+    if (typeof shortId !== 'string' || !shortId) return;
+    // 同 user:approveDevice 的纵深防御：只在待审批列表里反查。denyDevice()
+    // 对已信任 token 同样有效（从 trustedDevices 删除），而已批准客户端知道自己的 token——
+    // 没有这道守卫，它能拿这个事件传自己的 ID 自吊销，绕开
     // user:revokeTrustedDevice 专门加的 self 守卫（decideRevokeByShortId 的 requesterToken 检查）。
-    if (!getPendingDevices().some(d => d.deviceToken === deviceId)) {
-      console.warn(`[devices] 忽略远程拒绝：${deviceId} 不在待审批列表`);
+    const deviceId = resolveShortDeviceId(shortId, getPendingDevices().map(d => d.deviceToken));
+    if (!deviceId) {
+      console.warn(`[devices] 忽略远程拒绝：${shortId} 不在待审批列表`);
       return;
     }
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
@@ -2875,11 +2949,12 @@ registerSocketConnection(io, socket => {
   });
 
   // 台阶3：切思考强度档。
-  // 【2026-09-03 实测更正】具体档之间互切走 apply_flag_settings 控制请求，运行时生效、不置换实例
+  // 【2026-09-03 实测更正】切档走 apply_flag_settings 控制请求，运行时生效、不置换实例
   //（此前注释写的「SDK 无 effort 运行时控制」已不成立，见 agent.setEffort 注释）。
-  // 唯一仍需置换的方向是「回模型默认档」(level===null)：CLI 的 applied.effort 恒是具体档，
-  // 没有「未 pin」态可回，只有重开实例（不传 --effort）才能真正还原。
-  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（模型默认）。
+  // 【2026-09-23】auto（CLI /effort auto，模型内置默认）也走控制请求：effortLevel:null 落成 {kind:'default'}。
+  // 仍需置换的两种：回到「没指定」(level===null，CLI 的 {kind:'inherit'}，没有控制请求能回去)，
+  // 以及实例尚无控制通道（半开 / 已弃用）。
+  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| auto | null（没指定）。
   on(socket, 'user:setEffort', async payload => {
     const rawLevel = payload?.level ?? null;
     const norm = normalizeEffortUiLevel(rawLevel);
@@ -2888,6 +2963,9 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     const { ui: level, sdk: sdkEffort, ultracode } = norm;
+    // 持久化只存 SDK effort 或 'auto'；ultracode 不落盘（CLI: interactive toggles never persist）。
+    // auto 不能存成 null：null 在 resume 里是「没指定」、会往下兜底到 settings 里存的档。
+    const persistedEffort = level === 'auto' ? 'auto' : sdkEffort;
     const id = resolveInstanceId(payload?.instanceId);
     const a = agents.get(id);
     if (!a) {
@@ -2919,13 +2997,12 @@ registerSocketConnection(io, socket => {
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
     }
-    // 轻路径：具体档互切走控制请求。三条 SDK 静默失败边界由 agent.setEffort 统一挡住
-    //（非法值 / ultracode 不回落 / null 清不回默认），这里只负责接线与广播。
+    // 轻路径：切档（含 auto）走控制请求。SDK 的静默失败边界由 agent.setEffort 统一挡住
+    //（非法值 / ultracode 不回落），这里只负责接线与广播。
     const light = await a.setEffort(level);
     if (light.ok) {
       effortByInstance.set(id, level);
-      // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
-      sessions.updateSessionPrefs(sid, { effort: sdkEffort });
+      sessions.updateSessionPrefs(sid, { effort: persistedEffort });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level}${ultracode ? ' (Settings.ultracode)' : ''}, 运行时生效（未置换实例）`);
       io.to('approved').emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
@@ -2936,20 +3013,18 @@ registerSocketConnection(io, socket => {
     }
     if (!light.needsSwap) {
       // 明确失败（超时 / CLI reject）：档位没动，如实拨回，不谎报成功
-      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '模型默认'}」`, true);
+      sysTo(socket, `思考强度切换失败（${light.error}），仍为「${effortOf(id) ?? '没指定'}」`, true);
       return effortTo(socket);
     }
-    // needsSwap → 落到下面的置换实例路径（回模型默认档，或实例尚无控制通道）。
+    // needsSwap → 落到下面的置换实例路径（回到没指定，或实例尚无控制通道）。
     // busy 守卫只守到这里：置换会 kill 在途 turn / bg / 审批，理由与 SRV-003 同源（那条锚在
-    // externalDirty 路径上，这里是同一危害的另一个触发点）。文案给出替代路径——具体档位走轻路径，
-    // 此刻就能切，不必等回合结束。
+    // externalDirty 路径上，这里是同一危害的另一个触发点）。
     if (a.isBusy()) {
-      sysTo(socket, '回「模型默认」要重开会话实例，而当前有任务在运行。请等本轮结束，或改选一个具体档位（立即生效）', true);
+      sysTo(socket, '这次切换要重开会话实例，而当前有任务在运行。请等本轮结束后再切', true);
       return effortTo(socket);
     }
-    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
-    // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
-    if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });
+    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '没指定'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
+    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
@@ -3038,6 +3113,16 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
+  // 额度墙自动继续横幅的三个按钮：取消 / 到点自动继续 / 立即继续。相位合不合法由 auto-continue.js 的
+  // act() 判，这里只校验形状——sessionId 过 SS-003 字符集守卫，action 只认三个字面量。
+  on(socket, 'user:autoContinue', (payload, ack) => {
+    const sessionId = payload?.sessionId;
+    const action = payload?.action;
+    const result = isSafeSessionId(sessionId) && ['cancel', 'arm', 'continueNow'].includes(action)
+      ? autoContinue.act(sessionId, action)
+      : { ok: false, error: 'invalid_payload' };
+    if (typeof ack === 'function') ack(result);
+  });
   // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
@@ -3346,16 +3431,12 @@ registerSocketConnection(io, socket => {
     // G5：回退是覆盖式写文件，工作区里没提交的活会被无声冲掉。
     // 【只报真有风险的那部分】不是「工作区 dirty 就警告」——开发中 dirty 是常态，每次都弹
     // 用户三次之后就学会无视了。只报「回退会碰 且 改动没进 git 对象库」的交集，判据见
-    // files/git-workspace.js 的 riskyUncommittedPaths。
+    // files/git-workspace.js 的 riskyUncommittedPaths；取改动的范围是整仓而不是工作区子树（见 rewindDirtyOverlap）。
     // 失败方向是【放行】：非 git 仓库、git 读失败、超时 —— 一律不拦也不警告。
     // 这条是知情提示不是安全闸，为它挡住一次合法回退才是更坏的结果。
     let dirtyOverlap = [];
     try {
-      const repoRoot = await gitRepoRoot(cwd);
-      if (repoRoot) {
-        const changes = await listGitChanges(cwd);
-        dirtyOverlap = overlapRiskyFiles(filesChanged, riskyUncommittedPaths(changes), repoRoot);
-      }
+      dirtyOverlap = await rewindDirtyOverlap(cwd, filesChanged);
     } catch (err) {
       console.error('[rewind] G5 脏改动检查失败（放行）', err?.message || err);
     }
@@ -3572,7 +3653,10 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:close', (payload, ack) => {
     const id = payload?.instanceId;
     if (!agents.has(id)) { if (typeof ack === 'function') ack({ ok: false, error: '实例不存在' }); return; }
+    const closedSessionId = agents.get(id).sessionId;
     disposeInstance(id); // 内含 viewingInstanceId 回落 + broadcastInstances
+    // 用户亲手关掉的会话，到点不该在后台自己跑起来（CLI 退出进程同样作废等待）
+    if (closedSessionId) autoContinue.onSessionGone(closedSessionId, 'closed');
     lastStatusLine = null;
     scheduleStatusRefresh();
     if (typeof ack === 'function') ack({ ok: true, viewingInstanceId });
@@ -3701,6 +3785,12 @@ registerSocketConnection(io, socket => {
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
+    // 刚关掉（或正在空闲回收）的实例，CLI 退出前还会往 transcript 追加收尾元数据：删在它前面，
+    // 文件会被写回来，成了只有元数据的孤儿，ack 却已经报了 ok。所以先等它退完，再做下面的判定——
+    // 保护①必须在等完之后判，等待期间用户可能又打开了这个会话。
+    if (!(await instanceManager.waitForSessionExits(sessionId, SESSION_EXIT_WAIT_MS))) {
+      console.warn(`[session-delete] 等 CLI 退出超过 ${SESSION_EXIT_WAIT_MS}ms，照常继续 sessionId=${sessionId}`);
+    }
     // 两道保护共用这一个出口。**拒绝也要留痕**：这两条路既不写日志也不写审计时，用户报
     // 「点了 🗑 没反应、会话还在」事后无法验尸——2026-09-12 那次只能靠"审计里没有 success 记录"
     // 反推是被拒了，分不出是哪道。收敛成一个出口而不是逐处 recordAudit：两处拒绝是同一件事的
@@ -3744,6 +3834,7 @@ registerSocketConnection(io, socket => {
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
     // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
+    autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     // 会话在托管 worktree 里时一并报告那棵树的状态：transcript 删掉了，**worktree 还在磁盘上**，
     // 不说一声用户就不知道它在哪、里面还剩什么。
@@ -3977,6 +4068,9 @@ registerSocketConnection(io, socket => {
       bindPlan,
       // 采信 XFF 的开关：传归一后的值——server 真正用的就是它，体检说的必须与限速真在做的一致。
       trustedProxy: TRUSTED_PROXY,
+      // 设备审批管辖面反过来传**原值**：归一后只剩 '' / 'all'，写错的痕迹已经没了，体检就说不出「你写的
+      // ALL 没生效」。生效档由同一份判据从原值推出，与 config.js 的归一逐值对齐（doctor-checks 单测钉着）。
+      deviceApprovalScopeRaw: process.env.DEVICE_APPROVAL_SCOPE || '',
       // TAILSCALE 项的 serve 提示要带实际端口。
       port,
     }));
@@ -4038,6 +4132,16 @@ registerSocketConnection(io, socket => {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       return ack({ ok: false, results: [{ key: '', level: 'error', message: '缺少 changes' }] });
     }
+    // 读不动当前配置就拒写（CONFIG-01）。下面写盘是「读出来 → 改几项 → 整份写回」，从 {} 长出来会把
+    // 没改的项（AUTH_TOKEN / WORKDIRS …）一起抹掉，下次启动直接起不来。判据与启动侧同一份：
+    // loadConfigSources 对坏 JSON / 顶层不是对象 fail-loud。CLI 的 config set 同场景同样拒写。
+    // 放在校验之前：拿读失败回落出来的空配置去校验，报出来的错也是错的。
+    const readConfigForWrite = () => loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+    const refuseUnreadable = err => ack({ ok: false, results: [{ key: '', level: 'error',
+      message: `${String(err?.message || err)}。已拒绝保存：从空配置重建会把其余配置项一起抹掉` }] });
+    if (usingConfigJson()) {
+      try { readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
+    }
     const current = readEnvValues();
 
     // 端口占用只在**值真的变了**时才探：当前 server 正绑在旧 PORT 上，无条件探测会恒报占用
@@ -4068,10 +4172,9 @@ registerSocketConnection(io, socket => {
     try {
       // 0600 + 唯一 tmp + fsync + rename：与 sessions / devices 同一个原子写
       if (usingConfigJson()) {
-        let currentConfig = {};
-        try {
-          currentConfig = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
-        } catch { /* 读不动就从空配置长出来；校验已经过了，不该在这一步把用户挡在门外 */ }
+        // 写前重读：上面探端口有 await，这期间文件可能被改过。读不动同样拒写，理由见上。
+        let currentConfig;
+        try { currentConfig = readConfigForWrite(); } catch (err) { return refuseUnreadable(err); }
         writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(currentConfig, changes), null, 2)}\n`);
       } else {
         let text = '';
@@ -4205,6 +4308,13 @@ registerSocketConnection(io, socket => {
         if (!lan) return ack({ ok: false, error: '取不到局域网地址：改用公网档，或在电脑上跑 node scripts/qr.js' });
         base = lan;
       }
+      // 【只把令牌交给握手时出示过它的会话】经 Access 进来的会话没出示过 AUTH_TOKEN（公网那条路
+      // 只认 JWT，设备审批默认也 bypass）。给它一张含令牌的码，等于把局域网钥匙发给一个本不持有
+      // 它的身份，Access 吊销之后照样能从局域网进来——与横幅掩码、logs:server 脱敏同一条泄露路径（AUTH-05）。
+      if (includeToken && !socket.presentedAuthToken) {
+        return ack({ ok: false, error: '当前会话经 Cloudflare Access 登录、不持有访问令牌，不能生成含令牌的二维码。'
+          + '新设备直接打开公网地址、完成 Access 登录即可；要局域网码请在电脑上跑 node scripts/qr.js' });
+      }
       if (includeToken && !token) return ack({ ok: false, error: '未设置 AUTH_TOKEN' });
       const url = includeToken ? `${base}/#token=${encodeURIComponent(token)}` : base;
       const { matrix, size } = encodeQr(url);
@@ -4239,7 +4349,15 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     const raw = Number(payload?.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 200) : 50;
-    ack({ ok: true, records: audit.listRecent({ limit }), capacity: audit.capacity() });
+    // DEVICE-03：actor.deviceId 与设备类动作的 target 是全量 deviceToken，也就是准入凭据——只给 shortId，
+    // 理由同 trusted_devices：一台日后被吊销的设备手里不能还攥着别台的。在出口截而不是写入时截：
+    // 磁盘上已有的历史记录同样要截。
+    const records = audit.listRecent({ limit }).map(r => ({
+      ...r,
+      actor: { ...r.actor, deviceId: r.actor?.deviceId ? shortDeviceId(r.actor.deviceId) : null },
+      target: String(r.action).startsWith('device_') && r.target ? shortDeviceId(r.target) : r.target,
+    }));
+    ack({ ok: true, records, capacity: audit.capacity() });
   });
 
   // server 进程自己的 stdout/stderr。**与 logs:get 是两条不同的日志**：
@@ -4282,7 +4400,14 @@ registerSocketConnection(io, socket => {
       // 永远匹配不上——日志里的私钥被原样回给客户端，而每一行 base64 单看也不命中任何别的模式。
       // 实测：整段一次 → '***'；逐行 → 私钥完整漏出。
       // 整段更快也顺带成立（256KB 实测 6.3ms vs 逐行 10.6ms），不存在拿性能换安全的取舍。
-      const all = sanitize(text).split('\n');
+      let redacted = sanitize(text);
+      // DEVICE-03：日志里有全量设备令牌（新设备申请时的「设备 ID: …」与给操作员复制的 approve 命令、
+      // 监听器的批准/吊销行）。按此刻的信任表 ∪ 待审列表逐个换成 shortId：令牌格式不固定
+      // （isValidDeviceToken 只挡危险字符），按模式认不全。已吊销/已拒绝的不再是凭据，不在此列。
+      for (const token of [...getTrustedDeviceIds(), ...getPendingDevices().map(d => d.deviceToken)]) {
+        redacted = redacted.split(token).join(shortDeviceId(token));
+      }
+      const all = redacted.split('\n');
       // 从中间截断时丢掉第一行残片——半行日志读起来像另一条记录
       if (start > 0 && all.length) all.shift();
       // 脱敏的理由（M1，2026-09-17 安全审查）。此前这里「只截断限流、不改内容」，于是日志文件里
@@ -4357,8 +4482,11 @@ registerSocketConnection(io, socket => {
     // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
     // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字 = 冻结快照 + 尚未 capture 的 live。
     // PWA 切后台 socket 未断时 capture 不会跑，只回快照会把离开期间的增量丢掉。
-    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
+    // diskExternalLen=磁盘 history 里最后一条非己方写入的位置（externalHistoryExtent）。与 diskLen 不同，
+    // 它在 replayed>0 时照样带：己方 live 轮次不推高它，前端拿它比 seenDiskLen 不会把正常状态判成要重载，
+    // 而断线期间终端写进同一会话的内容只有靠它才对得上账（replayed>0 时 diskLen 恒空，见下）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0, diskExternalLen = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, diskExternalLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（重载口径：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
@@ -4383,11 +4511,18 @@ registerSocketConnection(io, socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
-    // 仅 replayed=0（活缓冲无可回放对话内容）时读磁盘 history 条数带回——正是「切入可能被外部写过的会话」候选；
-    // replayed>0=web 活跃、信活缓冲、不必对账磁盘。getSessionHistory 有 mtime 缓存，成本可忽略。
+    // diskLen 仅 replayed=0（活缓冲无可回放对话内容）时带回——正是「切入可能被外部写过的会话」候选。
+    // diskExternalLen 在 replayed>0 时也带（见 done 上方注释），但【有在途轮时不读】：文件正被己方追加，
+    // mtime 缓存几乎必然失效，这一读就是全量重建（链真相源 + 流式读整份 transcript），而前台探活的 ack
+    // 只等 5s——大会话会把健康连接拖成超时重连。此刻终端的并发写入本就落在已登记的「本地 turn 吸收窗」里。
     let diskLen = null;
-    if (replayed === 0) {
-      try { diskLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { diskLen = null; }
+    let diskExternalLen = null;
+    if (replayed === 0 || !(a.pendingTurns > 0)) {
+      try {
+        const history = await getSessionHistory(a.sessionId, a.cwd);
+        if (replayed === 0) diskLen = history.length;
+        diskExternalLen = externalHistoryExtent(history);
+      } catch { /* 读不到就两个都留空：前端按 0 处理，不因此重载 */ }
     }
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
@@ -4401,7 +4536,7 @@ registerSocketConnection(io, socket => {
       snapshot: unreadSnapshotOnEntry.get(a.instanceId) || 0,
       live: unreadCounts.get(a.instanceId) || 0,
     });
-    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry);
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry, diskExternalLen);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
     // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。
@@ -4533,7 +4668,7 @@ function permModeTo(socket, id = viewingInstanceId) {
 function effortTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-    type: 'effort_mode', payload: { level: effortOf(id) }
+    type: 'effort_mode', payload: { level: effortOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
   });
 }
 
@@ -4696,6 +4831,7 @@ function shutdown(sig) {
   // 卡住关闭路径（5s timeout）。与上面两条同一理由，一起清。
   clearInterval(serviceSampleInterval);
   mirrorEngine.stop();     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
+  autoContinue.stop();     // 到点续跑的 tick 定时器 + 布防表。重启即作废是有意的（同 CLI，见 auto-continue.js 头注）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances

@@ -16,6 +16,8 @@ const WORK_DIR = '/home/ccm-test/workspace';
 const COMPOSE = join(ROOT, 'tests/infra/docker-compose.playground.yml');
 const TEST_OVERRIDE = join(ROOT, 'tests/infra/docker-compose.playground.test.yml');
 const TEST_COMPOSE = join(ROOT, 'tests/infra/docker-compose.test.yml');
+const DOCKERFILE_TEST = join(ROOT, 'tests/infra/Dockerfile.test');
+const PACKAGE_LOCK = join(ROOT, 'package-lock.json');
 const RUNTIME_ENV = join(ROOT, 'tests/infra/playground/runtime.env');
 const PACKAGE_JSON = join(ROOT, 'package.json');
 
@@ -132,6 +134,23 @@ test('test compose 仍不发端口，并与 playground 共享 claude-chat-mobile
   // 其它项目的构建覆盖，而 compose run 见镜像已存在就直接用 → 测试静默跑在别人的 node_modules 上。
   assert.match(yaml, /image:\s*claude-chat-mobile-test:local/);
   assert.doesNotMatch(yaml, /^\s+ports:/m);
+});
+
+// `npm run docker:build` 是 `compose build`，只构建带 build 段的服务。4f0062f9 改挂载方式时连带删了这一段，
+// 此后它什么也不做、镜像停在旧依赖上，没有任何报错（2026-09-23 撞见）。
+test('test compose 带 build 段：npm run docker:build 真的会构建 Dockerfile.test', () => {
+  const block = serviceBlock(read(TEST_COMPOSE), 'test');
+  assert.match(block, /^ {4}build:\n {6}context: \.\.\/\.\.\n {6}dockerfile: tests\/infra\/Dockerfile\.test$/m);
+  assert.match(read(PACKAGE_JSON), /"docker:build": "docker compose -f tests\/infra\/docker-compose\.test\.yml build"/);
+});
+
+// 基础镜像自带的浏览器按 Playwright 版本走。dependabot 只升 package.json / lock、不动 Dockerfile，两边一错开
+// test:docker:e2e 就报 "Executable doesn't exist"（2026-09-23 实测：1.61.1 镜像配 1.63.0 依赖，chromium 1228 ≠ 1243）。
+test('Dockerfile.test 的 Playwright 基础镜像与 package-lock 里的 @playwright/test 同版本', () => {
+  const tag = /^FROM mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-/m.exec(read(DOCKERFILE_TEST))?.[1];
+  const locked = JSON.parse(read(PACKAGE_LOCK)).packages['node_modules/@playwright/test']?.version;
+  assert.ok(tag, 'Dockerfile.test 的 FROM 不是 Playwright 官方镜像了——这条判据要跟着改');
+  assert.equal(tag, locked, `Dockerfile.test 基于 Playwright ${tag}，而 lock 里是 ${locked}：改 FROM 的 tag`);
 });
 
 test('playground test override：共享 testdata volume，禁止单服务 tmpfs', () => {

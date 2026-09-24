@@ -324,6 +324,22 @@ test.describe('runConfigCommand —— check', () => {
     assert.ok(r.problems.some(p => p.includes('PORT')));
   }));
 
+  // 2026-09-23（#152 review）：「WORK_DIRS_FILE 只能清空」与「它挂着时不许改 WORKDIRS」是**改动**规则。
+  // check 校验的是现有配置合不合法——仍在用旧版外置文件的配置运行时照常支持，不能因此判红；
+  // 但它原有的路径校验（指向的文件必须存在）还得在。
+  test('仍在用 WORK_DIRS_FILE 的旧配置照样通过 check；指向的文件不存在仍然判红', () => withTempDir((dir) => {
+    const wf = join(dir, 'workdirs.json');
+    writeFileSync(wf, JSON.stringify(['/srv/a']));
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ AUTH_TOKEN: 'x'.repeat(32), WORK_DIRS_FILE: wf, WORKDIRS: ['/srv/b'] }));
+    const ok = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(ok.ok, true, `旧配置不该被改动规则判红：${JSON.stringify(ok.problems)}`);
+
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ AUTH_TOKEN: 'x'.repeat(32), WORK_DIRS_FILE: join(dir, 'missing.json') }));
+    const bad = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(bad.ok, false, '指向不存在的文件仍要判红');
+    assert.ok(bad.problems.some(p => p.startsWith('WORK_DIRS_FILE')), JSON.stringify(bad.problems));
+  }));
+
   // .env 时代的两个转义地雷只在旧格式下需要检查（JSON 没有这个失败模式）
   test('旧 .env 里以反斜杠结尾的值被抓出（会吞掉后续配置项）', () => withTempDir((dir) => {
     writeFileSync(join(dir, '.env'), 'WORK_DIR=/Users/you/dir\\\nAUTH_TOKEN=would-be-swallowed\n');

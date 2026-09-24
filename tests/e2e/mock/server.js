@@ -65,6 +65,14 @@ function createDefaultInstances() {
 }
 
 const mockInstances = createDefaultInstances();
+// 与真 server 对齐：没指定（effort=null）时 server 向 CLI 问来实际生效档，随 instances 与 effort_mode
+// 下发（effortEffective / effective）。mock 没有 CLI，固定给一个值。挂在数组的 toJSON 上：85 处
+// `instances: mockInstances` 广播经 socket.io 序列化时统一带上，不必逐个改创建点。
+const MOCK_EFFORT_EFFECTIVE = 'medium';
+const mockEffortEffective = effort => (effort == null ? MOCK_EFFORT_EFFECTIVE : null);
+mockInstances.toJSON = function toJSON() {
+  return this.map(inst => ({ ...inst, effortEffective: mockEffortEffective(inst.effort) }));
+};
 
 // 「已 send 但还没送达 SDK」的窄窗（真 server：send() 返回 true 后消息可能仍在 this.queue）。
 // test:queue-drop 把消息收下但不回显、记在这里，等 user:interrupt 时走 queue_dropped 带 clientMessageIds。
@@ -193,6 +201,10 @@ let mockStatuslineState = 'not-installed';
 let mockAccessProtected = false;
 // test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
 let mockServerLogMissing = false;
+// test:auto-continue-*：instances 广播里的 autoContinue（真 server：src/server/auto-continue.js 的 snapshot，
+// 按 sessionId 归键的额度墙「到点自动继续」横幅数据）。只由 broadcastAutoContinue 带出——其余十几处内联
+// instances 载荷不带这个字段，前端对「缺字段」的约定正是保留上一份，所以不必逐处补。
+let mockAutoContinue = [];
 // WORKDIRS 的可变状态：env:set 收到数组时更新，后续 env:get 回显——
 // 这样 E2E 验的是「提交的真是数组、且 sessionLimit 原样回来了」这条端到端语义，
 // 而不只是「点了保存按钮」。收到非数组时**不更新**，正是真 server 校验会拒的那一档。
@@ -225,6 +237,11 @@ const mockServicePayload = () => ({
   statuslineBridge: { state: mockStatuslineState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
+// __reset 代数：每次 resetMockState 自增。user:message 进入时记下，await 醒来发现代数变了就收手。
+// 否则上一条用例里还睡着的处理会在重置后醒来改【新】状态：test:slow-echo 的 2s 延迟跨过 __reset，醒来把
+// 新 inst_1 的 turnSeq 加一、改写 activeEpoch，下一条用例的 stream-long 当场判定「被新回合取代」而停发——
+// P0-04 间歇红的根因（2026-09-23 用 DEBUG=pw:webserver 成对跑 live-status-tail + long-stream-interrupt 实测）。
+let mockResetGeneration = 0;
 let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
 let foregroundSyncReplayMode = false;
@@ -239,6 +256,8 @@ let switchBackReplayArmed = false;
 // 否则 sync:since 那次调用早把标记翻成 true，session:history 的"第一次"就会误读成"第二次"。
 let replayFloodSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 165 条积压事件（超阈值 → reload）
 let replayFloodHistoryArmed = false; // false=返回基线 4 条；true=返回 reload 专属标记文案（证明真走了 session:history）
+// P0-REPLAY-SLOWACK：切回那次的 ack 晚于前端回放缓冲的 3s 超时才到（弱网）。只推迟 ack，积压照常先推。
+let replayFloodSlowAck = false;
 // P0-ORDER：复现「loadHistory 在途时镜像追平插队」的 DOM 顺序竞态。武装后，下一次 session:history
 // 会先 emit 一条 history_append（模拟 catchUpTick 在 web 拉历史的窗口里检出终端新落定的消息，
 // 该事件是 out-of-band、不进 replay buffer、任何时候直接渲染），再返回历史本体。
@@ -279,6 +298,11 @@ let dupOptimisticArmed = false;
 const DUP_OPTIMISTIC_CMD = 'test:dup-optimistic';
 const DUP_OPTIMISTIC_DELAY_MS = 2000;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
+// P0-SYNC-EXT：叠在 replaySmallSyncArmed 上。武装后第二次切回的 ack 按真 server 形状带 diskLen:null +
+// diskExternalLen（有回放时外部写入只能靠它报）。「终端写入」在那次 sync:since 时才落到磁盘历史里
+// （Written），首次冷切入拿到的仍是 4 条基线——否则首次加载就把它带回来了，测不出切回。
+let replaySmallExternalArmed = false;
+let replaySmallExternalWritten = false;
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
 // sync:since handler 内联的 extra.unreadOnEntry，自包含不受测试执行顺序影响）。
@@ -371,6 +395,7 @@ let mockRestarts = DEFAULT_MOCK_RESTARTS;
 let mockCanRestart = true;
 
 function resetMockState() {
+  mockResetGeneration += 1;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -422,6 +447,7 @@ function resetMockState() {
   mockStatuslineState = 'not-installed';
   mockAccessProtected = false;
   mockServerLogMissing = false;
+  mockAutoContinue = [];
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
     { path: '/Users/you/code/other', sessionLimit: 3 },
@@ -441,17 +467,25 @@ function resetMockState() {
   switchBackReplayArmed = false;
   replayFloodSyncArmed = false;
   replayFloodHistoryArmed = false;
+  replayFloodSlowAck = false;
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
+  // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
+  // 同片时 1.2s 假绿（单跑要真等 15s）。
+  dupOptimisticArmed = false;
   staleInstancesOnNextNew = false;
   replaySmallSyncArmed = false;
+  replaySmallExternalArmed = false;
+  replaySmallExternalWritten = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
   deniedDeviceRetryPending = false;
   mockSessionLogsByInstance = new Map();
+  mockDiagLogsByInstance = new Map();
 }
 
 function pendingFreshPermissionOrDefault() {
@@ -553,10 +587,12 @@ function openFreshMockInstance(requestedModel) {
   return freshInst;
 }
 
+// 待审设备（真 server 的 device-gate.pendingDevicesPayload 的对位）。同下面 createTrustedDevices：
+// **载荷里没有全量 token，只有 shortId**（DEVICE-03），批准/拒绝也按 shortId 寻址。
 function createPendingDeviceRequests() {
   return [
-    { deviceId: 'aa-bb-cc-dd-iphone-15-pro', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
-    { deviceId: 'ee-ff-00-11-ipad-air-m2', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
+    { shortId: 'aabbccdd…1501', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
+    { shortId: 'eeff0011…0a02', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
   ];
 }
 
@@ -699,6 +735,20 @@ app.post('/__resolve-session-id', (_req, res) => {
   });
   res.json({ ok: true });
 });
+
+// 带 autoContinue 的 instances 广播（真 server 的 instancesPayload 恒带该字段）。
+function broadcastAutoContinue() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+      dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+      instances: mockInstances, service: mockServicePayload(),
+      autoContinue: mockAutoContinue,
+    },
+  });
+}
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -932,7 +982,7 @@ io.on('connection', socket => {
     // 4. effort_mode
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortLevel }
+      type: 'effort_mode', payload: { level: effortLevel, effective: mockEffortEffective(effortLevel) }
     });
 
     // 5. instances
@@ -1017,7 +1067,7 @@ io.on('connection', socket => {
     if (inst) inst.effort = level;
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level }
+      type: 'effort_mode', payload: { level, effective: mockEffortEffective(level) }
     });
     // Broadcast instances update
     io.emit('agent:event', {
@@ -2113,6 +2163,7 @@ io.on('connection', socket => {
       for (let i = 0; i < 4; i++) {
         messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Small baseline message #${i}` });
       }
+      if (replaySmallExternalWritten) messages.push({ role: 'user', content: 'Small terminal message written while away' });
       callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-unread') {
       // P0-REPLAY-UNREAD-DISMISS：首次冷切入基线（同 mock-session-replay-small 套路，建 DOM 缓存）；
@@ -2537,8 +2588,9 @@ io.on('connection', socket => {
       }
     };
     // P0-DUP-OPT ②：ack 带 diskLen 大于前端已渲染的条数（timeline fixture 是 10 条），
-    // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 一直回这个字段，
-    // mock 从不回（恒 null→0），所以这条分支此前在整套 E2E 里【结构性不可达】。
+    // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 只在 replayed=0 时回这个字段
+    // （replayed>0 时恒 null，外部写入改由 diskExternalLen 报），mock 默认两个都不回（null→0），
+    // 所以这条分支此前在整套 E2E 里【结构性不可达】。
     if (dupOptimisticArmed && sessionId === 'mock-session-timeline') {
       console.log('[mock] P0-DUP-OPT — sync:since ack 带 diskLen=11，逼出全量重载');
       ack(0, { diskLen: 11 });
@@ -2701,7 +2753,13 @@ io.on('connection', socket => {
             type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
           });
         }
-        ack(165);
+        if (replayFloodSlowAck) {
+          replayFloodSlowAck = false;
+          console.log('[mock] P0-REPLAY-SLOWACK — 165 条已推，ack 推迟 4s（晚于前端回放缓冲的 3s 超时）');
+          setTimeout(() => ack(165), 4000);
+        } else {
+          ack(165);
+        }
       }
     } else if (instanceId === 'inst_replay_small') {
       // P0-REPLAY-BUFFER（少量积压→flush）：第二次（切回）推 7 轮×3 事件=21 条，低于阈值——客户端
@@ -2729,7 +2787,9 @@ io.on('connection', socket => {
             type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
           });
         }
-        ack(21);
+        // 离开期间终端写了第 5 条（基线 4 条之后），前端已渲染 4 条 → 该重载
+        if (replaySmallExternalArmed) replaySmallExternalWritten = true;
+        ack(21, replaySmallExternalArmed ? { diskLen: null, diskExternalLen: 5 } : {});
       }
     } else if (instanceId === 'inst_replay_unread') {
       // P0-REPLAY-UNREAD-DISMISS（回放缓冲程序性落底 × 未读胶囊自动确认已读协同）：同 inst_replay_small
@@ -2906,6 +2966,36 @@ io.on('connection', socket => {
       },
     },
     {
+      // 额度墙「到点自动继续」（真 server：src/server/auto-continue.js）。前三条各造一个相位的横幅条目，
+      // resetsAt 取「今天 15:50」让文案可断言；第四条模拟到点后真 server 代发的那句（user_message 带
+      // origin:auto-continuation）。先发 result 收尾本轮：场景命中后不走回合收尾，不发的话发送钮停在 stop。
+      commands: ['test:auto-continue-armed', 'test:auto-continue-offered', 'test:auto-continue-stale', 'test:auto-continue-fired'],
+      run: async ({ cmd, activeInst }) => {
+        activeInst.state = 'idle';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: activeInst.sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_auto_continue', durationMs: 30, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        if (cmd === 'test:auto-continue-fired') {
+          socket.emit('agent:event', {
+            seq: 2, epoch: activeEpoch, sessionId: activeInst.sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'user_message',
+            payload: { text: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.', uuid: 'u-auto-continue-1', origin: 'auto-continuation' },
+          });
+          return;
+        }
+        const reset = new Date(); reset.setHours(15, 50, 0, 0);
+        const phase = cmd.slice('test:auto-continue-'.length);
+        mockAutoContinue = [{
+          sessionId: activeInst.sessionId, cwd: activeInst.cwd, phase,
+          reason: phase === 'offered' ? 'disabled' : phase === 'stale' ? 'slept' : null,
+          resetsAt: reset.getTime(), fireAt: phase === 'armed' ? reset.getTime() + 30_000 : null,
+          rateLimitType: 'five_hour', origin: 'auto',
+        }];
+        broadcastAutoContinue();
+      },
+    },
+    {
       // 建议条的生命周期：显示之后【不经输入框】开一轮新的，再在轮内补一条迟到的建议。
       // 中段对应真实里几条都不碰输入框的驾驶路径（审批/选项回答、另一台设备、CLI 侧），
       // 末段对应 server 的 askSide 先返回、用户那条消息随后才到的窗口——maybeSuggest 的
@@ -3048,6 +3138,21 @@ io.on('connection', socket => {
           });
           pendingQuestion = null;
         }
+      },
+    },
+    {
+      // P0-06-NOEND（2026-09-22 review P1）：审批挂着时来一条「不结束轮次」的 error。真 server 上是轮中切权限档
+      // 失败（agent.setPermissionMode 没有 busy 守卫）、socket handler 抛错这类，payload 带 endsTurn:false。
+      // 先走 test:permission 把审批挂上，再按 socket handler 抛错的形状推那条 error（epoch:'server'、不带
+      // instanceId——前端落到当前查看的 tab 上）。不占 seq：批准之后那一轮的续发从 seq 4 起，占了会被去重吞掉。
+      command: 'test:permission-then-noend-error',
+      run: async ctx => {
+        await scenarioRegistry.run('test:permission', ctx);
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'error', payload: { message: '服务端处理 user:setPermissionMode 出错：boom', recoverable: true, endsTurn: false },
+        });
       },
     },
     {
@@ -3499,6 +3604,15 @@ io.on('connection', socket => {
       },
     },
     {
+      // P0-REPLAY-SLOWACK：同 test:replay-buffer-flood-setup，外加武装「切回那次 ack 晚于前端 3s 超时才到」。
+      // 合成一条命令：setup 发出后本轮不收尾、发送钮停在停止态，紧接着再发第二条会卡住。
+      command: 'test:replay-buffer-flood-slowack-setup',
+      run: async ctx => {
+        await scenarioRegistry.run('test:replay-buffer-flood-setup', ctx);
+        replayFloodSlowAck = true;
+      },
+    },
+    {
       // P0-REPLAY-BUFFER（少量积压→flush）：第二次切回时 sync:since 只推 21 条积压事件（低于阈值）——
       // 客户端应判定 flush，正常增量派发但抑制中间滚动，不清屏、不重拉 session:history。
       command: 'test:replay-buffer-small-setup',
@@ -3521,6 +3635,16 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
+      },
+    },
+    {
+      // P0-SYNC-EXT：同 test:replay-buffer-small-setup，外加武装「离开期间终端写过这个会话」——在 Replay
+      // Small Session 的第二次切入（切回）时生效。合成一条命令：setup 发出后本轮不收尾、发送钮停在停止态，
+      // 紧接着再发第二条会卡住。
+      command: 'test:replay-buffer-small-external-setup',
+      run: async ctx => {
+        await scenarioRegistry.run('test:replay-buffer-small-setup', ctx);
+        replaySmallExternalArmed = true;
       },
     },
     {
@@ -4968,6 +5092,7 @@ io.on('connection', socket => {
     // REL-01：真实 app/server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
     if (typeof ack === 'function') ack({ ok: true });
+    const resetGen = mockResetGeneration; // 见 mockResetGeneration：下面的 await 醒来时用它判断是否已换了用例
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
     const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';
@@ -5059,6 +5184,12 @@ io.on('connection', socket => {
     if (cmd === 'test:slow-echo') {
       console.log(`[mock] test:slow-echo — 模拟服务端前置慢路径，延迟 ${SLOW_ECHO_DELAY_MS}ms 后才回显 user_message`);
       await delay(SLOW_ECHO_DELAY_MS);
+    }
+
+    // 上面两处 await 期间可能已经 __reset（下一条用例开始了）：迟到的处理不得再碰新用例的状态。
+    if (resetGen !== mockResetGeneration) {
+      console.log(`[mock] user:message "${cmd}" 醒来时已 __reset，丢弃`);
+      return;
     }
 
     // Always echo user message back
@@ -5381,14 +5512,12 @@ io.on('connection', socket => {
   });
 
   socket.on('user:approveDevice', payload => {
-    const { deviceId } = payload || {};
-    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    pendingDevices = pendingDevices.filter(d => d.shortId !== payload?.shortId);
     emitPendingDevices();
   });
 
   socket.on('user:denyDevice', payload => {
-    const { deviceId } = payload || {};
-    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    pendingDevices = pendingDevices.filter(d => d.shortId !== payload?.shortId);
     emitPendingDevices();
   });
 
@@ -5425,6 +5554,34 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // 额度墙自动继续横幅的按钮（真 server：app.js 的 user:autoContinue → auto-continue.js 的 act()）。
+  // 相位迁移照抄真 server：cancel 撤条目 · arm 只接受 offered → armed · continueNow 只接受 stale（真 server
+  // 随即代发续跑、条目撤掉）。其余组合 ok:false 且不改状态——前端据此重画、解锁按钮。
+  socket.on('user:autoContinue', (payload, ack) => {
+    const { sessionId, action } = payload || {};
+    const idx = mockAutoContinue.findIndex(e => e.sessionId === sessionId);
+    const e = idx >= 0 ? mockAutoContinue[idx] : null;
+    let ok = false;
+    if (e && action === 'cancel') { mockAutoContinue.splice(idx, 1); ok = true; }
+    else if (e && action === 'arm' && e.phase === 'offered') {
+      mockAutoContinue[idx] = { ...e, phase: 'armed', reason: null, origin: 'manual', fireAt: e.resetsAt + 30_000 };
+      ok = true;
+    } else if (e && action === 'continueNow' && e.phase === 'stale') {
+      mockAutoContinue.splice(idx, 1);
+      ok = true;
+      // 真 server 接着就代发续跑那句（fire → a.send(..., { origin: 'auto-continuation' })）。
+      // 必须模拟出来：否则 continueNow 与 cancel 在前端看到的结果一样（横幅收起），发错动作也测不出来。
+      // epoch:'server' + seq:0：前端只对非 server epoch 做 seq 去重（同 user:interrupt 那条合成事件的约定）。
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'user_message',
+        payload: { text: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.', uuid: 'u-auto-continue-now', origin: 'auto-continuation' },
+      });
+    }
+    if (ok) broadcastAutoContinue();
+    if (typeof ack === 'function') ack(ok ? { ok: true } : { ok: false, error: e ? 'invalid_action' : 'not_found' });
   });
 
   // Handle user interrupt (stop button / question skip)

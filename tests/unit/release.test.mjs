@@ -102,6 +102,49 @@ test('wait_pr_mergeable：BLOCKED 且必需检查真红 —— 必须停下并�
   assert.match(r.stderr, /e2e/, `停下来了但没点名哪一项红，人得自己去 PR 页面翻：${r.stderr}`);
 });
 
+// UNSTABLE 的字面语义是「可合并，但有 commit status 没通过」——「没通过」**包含还在跑**。
+// 必需检查仍在 pending 时这里也是 UNSTABLE，照着放行就会被分支保护当场拒绝。
+// 2026-09-22 发 v1.12.1 实测：脚本播报「✓ 可合并（UNSTABLE）」，下一步
+// `gh pr merge` 就是 `the base branch policy prohibits the merge`。
+// 两个方向都要测：不得在必需检查还在跑时放行，也不得因此把「非必需 job 红了」空等到超时。
+
+test('wait_pr_mergeable：UNSTABLE 但必需检查还在跑 —— 不得放行，要等到 CLEAN', () => {
+  const r = runWithFakeGh(`
+    case "$1 $2" in
+      "pr view")
+        c="$(dirname "$0")/calls"
+        n=$(cat "$c" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$c"
+        if [ "$n" -ge 3 ]; then echo CLEAN; else echo UNSTABLE; fi ;;
+      "pr checks")
+        c="$(dirname "$0")/calls"
+        n=$(cat "$c" 2>/dev/null || echo 0)
+        if [ "$n" -ge 3 ]; then echo 0; else echo 2; fi ;;
+    esac
+  `, 'wait_pr_mergeable 105');
+  assert.equal(r.status, 0, `等到 CLEAN 之前就退出了：${r.stderr}`);
+  assert.doesNotMatch(
+    r.stdout, /UNSTABLE/,
+    `在必需检查还有 2 项 pending 时就判了可合并。真实后果是 gh pr merge 被分支保护拒绝，\n` +
+    `每次发版都要人工重跑一遍：${r.stdout}`,
+  );
+  assert.match(r.stdout, /CLEAN/, `没有等到 CLEAN：${r.stdout}`);
+});
+
+test('wait_pr_mergeable：UNSTABLE 且必需检查已落定 —— 放行，非必需 job 红了不该挡发版', () => {
+  const r = runWithFakeGh(`
+    case "$1 $2" in
+      "pr view")   echo UNSTABLE ;;
+      "pr checks") echo 0 ;;
+    esac
+  `, 'wait_pr_mergeable 105');
+  assert.equal(
+    r.status, 0,
+    `必需检查已经全部落定、只剩非必需 job 红着，却空等到超时。\n` +
+    `这种 UNSTABLE 不会再变成 CLEAN，等下去就是把发版永久卡死：${r.stderr}`,
+  );
+  assert.match(r.stdout, /UNSTABLE/, `放行了但没说清是哪种状态：${r.stdout}`);
+});
+
 test('wait_pr_mergeable：DIRTY —— 有冲突时立刻停，不要空等到超时', () => {
   const r = runWithFakeGh(`
     case "$1 $2" in

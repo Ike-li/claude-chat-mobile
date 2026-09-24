@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // zh 原文即词典 key 的运行时 t()，en locale 查表、未收录静默回落中文。本 spec 是唯一跑 en 的用例，
 // 其余 P0 spec 全部保持 zh 断言不变（见 app/public/js/i18n.js 头注 + tests/gates/i18n-check.js 孤儿扫描）。
@@ -82,6 +83,98 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // data-p 是发给 Claude 的提示词本身，英文界面下也该是英文
     await expect(surface.locator('.esg-prompt').first())
       .toHaveAttribute('data-p', /Summarize this repo/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // /rewind 面板整段是 rewind-command.js 的运行时模板，不经 applyI18nToDocument，只能靠 t()。
+  // 断言「面板里没有 CJK 字符」而不是逐句比译文：面板 9/20 上线时 30 条文案漏翻了 26 条，
+  // 逐句断言只守得住写进用例的那几句，下一句漏翻照样绿。夹具的 prompt 与文件名本身是英文，
+  // 所以任何 CJK 字符都只能来自没翻译的界面文案。中文标点也算：文件清单原先用「、」拼接。
+  const CJK = /[　-〿一-鿿＀-￯]/;
+  const expectNoCjk = async (locator: import('@playwright/test').Locator, where: string) => {
+    const text = await locator.innerText();
+    const leaked = text.match(new RegExp(`${CJK.source}+`, 'g'));
+    expect(leaked, `${where}在英文界面下仍显示中文（漏翻或写死的中文）：${leaked?.join(' / ')}`).toBeNull();
+  };
+  // Composer C：空闲无内容时 #btnSend 是 hidden 的，要等 input 事件把它露出来再点（同 history-fork.spec.ts）
+  const runRewindCommand = async (page: import('@playwright/test').Page) => {
+    await page.locator('#input').fill('/rewind');
+    const btnSend = page.locator('#btnSend');
+    await expect(btnSend).toBeVisible({ timeout: 5_000 });
+    await btnSend.click();
+  };
+  const openArchivedEn = async (page: import('@playwright/test').Page) => {
+    await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
+  };
+
+  test('P0-I18N en /rewind：两步面板、三个模式按钮与回退结果提示都是英文', async ({ page }) => {
+    await openArchivedEn(page);
+    await runRewindCommand(page);
+    const modal = page.locator('#rewindModal');
+    await expect(modal).toBeVisible({ timeout: 3_000 });
+
+    // 第一步：夹具里「N 个文件改动 / 无代码改动 / 代码改动待确认 / 会话首轮只能恢复代码」四种标注都有
+    await expect(page.locator('#rewindList')).toContainText('One more thing please', { timeout: 3_000 });
+    await expectNoCjk(modal, '/rewind 第一步');
+
+    // 第二步用有未提交改动的那一轮：影响面、两个文件的清单、覆盖警告、脚注全部摆出来
+    await page.locator('#rewindList').getByText('One more thing please', { exact: false }).click();
+    await expect(page.locator('#rewindStep2')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('#rewindEffect')).toContainText('README.md', { timeout: 3_000 });
+    await expectNoCjk(modal, '/rewind 第二步');
+    // 三个模式与终端 /rewind 第二步同名同序
+    await expect(page.locator('#rewindModeBoth')).toHaveText('Restore code and conversation');
+    await expect(page.locator('#rewindModeConversation')).toHaveText('Restore conversation');
+    await expect(page.locator('#rewindModeCode')).toHaveText('Restore code');
+
+    // 结果提示由 app.js 的 onRewound 写进消息流，不在面板里。换一轮没有冲突的走「只恢复对话」
+    await page.locator('#rewindBack').click();
+    await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
+    await expect(page.locator('#rewindModeConversation')).toBeEnabled({ timeout: 3_000 });
+    await page.locator('#rewindModeConversation').click();
+    await expect(modal).toBeHidden({ timeout: 5_000 });
+    const notice = page.locator('#messages').getByText('Forked a new session', { exact: false });
+    await expect(notice).toBeVisible({ timeout: 10_000 });
+    await expectNoCjk(notice, '「只恢复对话」的结果提示');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-I18N en /rewind：没有会话时的提示、首轮只恢复代码的文案与结果都是英文', async ({ page }) => {
+    // 还没打开任何会话就敲 /rewind：app.js 拦截 /rewind 时的第一道判断
+    await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    await runRewindCommand(page);
+    const noSession = page.locator('#messages').getByText('No session to revert yet', { exact: false });
+    await expect(noSession).toBeVisible({ timeout: 3_000 });
+    await expectNoCjk(noSession, '没有会话时的 /rewind 提示');
+
+    // 首轮：不能分叉对话、只能恢复代码，第二步的说明换成另一句，结果提示也是另一句
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    await runRewindCommand(page);
+    await page.locator('#rewindList').getByText('Summarize archived plan', { exact: false }).click();
+    await expect(page.locator('#rewindStep2')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('#rewindModeCode')).toBeEnabled({ timeout: 3_000 });
+    await expectNoCjk(page.locator('#rewindModal'), '首轮的 /rewind 第二步');
+    await page.locator('#rewindModeCode').click();
+    await expect(page.locator('#rewindModal')).toBeHidden({ timeout: 5_000 });
+    const notice = page.locator('#messages').getByText('(the conversation is unchanged)', { exact: false });
+    await expect(notice).toBeVisible({ timeout: 10_000 });
+    await expectNoCjk(notice, '「只恢复代码」的结果提示');
 
     await expectNoBrowserErrors(page);
   });

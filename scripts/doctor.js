@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（22 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单。
+// 检查项（23 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单。
 // 各函数头注里的 Dn 编号比这份清单大 1——历史遗留，两套都在用，别按其中一套去改另一套）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
@@ -26,6 +26,7 @@
 // 20. 公网访问方案自洽性（ACCESS_PROFILE 声明 vs CF_ACCESS_*/PUBLIC_URL/AUTH_TOKEN/通知配置的稳态核对，见 doctor-checks.accessProfileDiagnostic）
 // 21. 监听地址自洽性（BIND_MODE/BIND_HOST 绑到哪、会不会让 server 拒绝启动，见 doctor-checks.bindDiagnostic）
 // 22. Tailscale 检测（不经 Cloudflare 的推荐公网路径；只探测 + 指路，不装不起不保活，见 doctor-checks.tailscaleDiagnostic）
+// 23. 设备审批管辖面（DEVICE_APPROVAL_SCOPE 写错的值运行时按较松的默认档跑，这里点名，见 doctor-checks.deviceApprovalScopeDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -54,12 +55,14 @@ import {
   envOverrideDiagnostic,
   fileEditExposureDiagnostic,
   accessProfileDiagnostic,
+  deviceApprovalScopeDiagnostic,
   bindDiagnostic,
   classifyAuthToken,
   identifySelfServer,
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
   tailscaleDiagnostic,
+  workdirBreadthDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
 import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
@@ -150,6 +153,12 @@ function checkWorkDir() {
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。
     for (const w of result.warnings) warn(from, w);
     for (const { path } of result.entries) checkOneDir(from, path, true);
+    // 过宽根只报不拦（判据与写入侧同一个，见 workdirBreadthDiagnostic）。本机终端里逐条点名，路径可以出现。
+    for (const dir of workdirBreadthDiagnostic({ dirs: result.entries.map(e => e.path), home: homedir(), lang: LANG }).broad) {
+      warn(from, bi(
+        `过宽：${dir}（家目录本身，或 /、/Users、/home 这类根）——范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录`,
+        `Overly broad: ${dir} (the home directory itself, or a root such as /, /Users or /home) — everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow it to a specific project directory`));
+    }
   }
 }
 
@@ -761,7 +770,13 @@ function checkTailscale() {
   }));
 }
 
-// 执行 22 项检查（D4 端口检查是 async，需 await）
+// D24: 设备审批管辖面（2026-09-22 review P2）。运行时只认字面量 all，写错一律按默认档跑（较松那档）、零报错；
+// 判定与 web 体检的 DEVICE_GATE、启动告警共用 deviceApprovalScopeDiagnostic。原样传，不在这里归一。
+function checkDeviceApprovalScope() {
+  results.push(deviceApprovalScopeDiagnostic({ scope: process.env.DEVICE_APPROVAL_SCOPE, lang: LANG }));
+}
+
+// 执行 23 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -785,6 +800,7 @@ function checkTailscale() {
   checkAccessProfile();
   checkBind();
   checkTailscale();
+  checkDeviceApprovalScope();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

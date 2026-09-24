@@ -1,6 +1,7 @@
 // i18n.js —— 运行时词典（无构建步骤：zh 原文即 key，恒等设计）。
 // t() 在 zh locale（默认）下原样返回中文——零开销，且不影响任何既有断言中文文案的测试（单测/E2E 除
-// 一个 en spec 外全部固定跑 zh）。en locale 下查字典，未收录的 key 静默回落中文原文，不是"未翻译就报错"。
+// 一个 en spec 外全部固定跑 zh）。en locale 下查字典，未收录的 key 运行时静默回落中文原文，不报错；
+// 但 t() 用到的中文 key 没进词典，npm run check 的 i18n-check 会红（2026-09-24 起）。有意不译的文案别包 t()。
 // 语言选择持久化 localStorage；切换后提示用户手动刷新生效（不做响应式重渲，保持极简）。
 //
 // 覆盖分两条路径，缺一不可：
@@ -10,12 +11,14 @@
 //
 // 两个反复踩到的坑，加词条前先看一眼：
 //   1. 模块顶层常量表里不能直接 t()：那在 import 阶段就求值，早于 app.js 的 setLang()，语言会被钉死在
-//      zh。表里存中文原文、到取用点才 t()（见 logic.js STATUS_ICONS、git-changes.js SECTION_META）。
+//      zh。表里用 tk('原文') 存（恒等，只做标记让 i18n-check 抓得到 key）、到取用点才 t()
+//      （见 logic/panel-state.js STATUS_ICONS、app/git-changes.js SECTION_META）。
 //   2. 局部变量别叫 t：会静默遮蔽成 "t is not a function"，而 ESLint 看不出问题（t 确实有定义）。
 export const LANG_STORAGE_KEY = 'ccm_lang';
 
 // 译文用语对齐 Claude Code CLI（permission mode / workspace / interrupt / resume 等），让从 CLI 切过来的
-// 人零认知成本。tests/gates/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key。
+// 人零认知成本。tests/gates/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key，
+// 也报 t() 用了、词典里没有的中文 key。
 //
 // 注意混排句：`令牌在服务器 <code>ccm.config.json</code> 的 <code>AUTH_TOKEN</code> 或启动日志里。` 会被 DOM 切成
 // 好几个文本节点，词典 key 因此是「的」「或启动日志里。」这样的碎片。译文按英文语序分配到各碎片上，
@@ -314,6 +317,8 @@ export const EN_DICT = Object.freeze({
   '无批准记录': 'No approval record',
   '今天批准': 'Approved today',
   '昨天批准': 'Approved yesterday',
+  '{n} 天前批准': 'Approved {n} day(s) ago',
+  '{n} 个月前批准': 'Approved {n} month(s) ago',
   '未知设备': 'Unknown device',
   '其他设备': 'Other device',
   '吊销这台设备的信任？': 'Revoke trust for this device?',
@@ -426,6 +431,8 @@ export const EN_DICT = Object.freeze({
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
+  '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
+    'The workspace list currently comes from the external file WORK_DIRS_FILE points to, so edits here would not take effect. Clear WORK_DIRS_FILE below, save, restart the server, then come back to edit (until the restart, that file still applies).',
   '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
   '立即重启': 'Restart now',
   '立即重启服务': 'Restart the service now',
@@ -553,9 +560,12 @@ export const EN_DICT = Object.freeze({
   'Claude 正在执行任务...': 'Claude is working...',
   '没有可中断的任务': 'Nothing to interrupt',
   '停止请求超时，可再试一次': 'Stop request timed out — try again',
+  '停止请求未生效：任务可能已结束': 'The stop request had no effect — the task may have already finished',
+  '{n}条': '{n} update(s)', // 后台任务行尾「· 3条」：这个任务已经上报过的进度条数
   '目标会话已关闭，请刷新后重发': 'The target session is closed — refresh and send again',
   '发送失败：': 'Send failed: ',
   '未确认送达': 'Delivery unconfirmed',
+  '未确认送达，已排队重试': 'Delivery unconfirmed — queued for retry',
 
   // —— 模型 / 权限档 / 思考强度 ——
   '当前加载模型': 'Currently loaded model',
@@ -577,7 +587,6 @@ export const EN_DICT = Object.freeze({
   'claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。': 'claude will edit files and run commands without asking — a single prompt injection can reach the whole machine.',
   '开启 bypass': 'Enable bypass',
   '思考强度 →': 'Thinking effort →',
-  '默认思考': 'Thinking: default',
   '更快更省': 'Faster and cheaper',
   '均衡': 'Balanced',
   '更深入': 'Deeper',
@@ -585,6 +594,8 @@ export const EN_DICT = Object.freeze({
   '最深入更慢更贵': 'Deepest, slowest, priciest',
   'xhigh + 多 agent · 最彻底': 'xhigh + multi-agent · most thorough',
   'xhigh + 多 agent workflow · 最彻底': 'xhigh + multi-agent workflow · most thorough',
+  '跟随模型默认档': "Uses the model's default",
+  'CLI 默认': 'CLI default',
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
 
@@ -638,6 +649,9 @@ export const EN_DICT = Object.freeze({
   '工作流': 'Workflow',
   '其它': 'Other',
   'N 个子代理': 'N subagents',
+  '正在读取子代理执行记录…': 'Loading the subagent\'s activity…',
+  '没有可显示的子代理执行记录': 'No subagent activity to show',
+  '（只显示最近的部分记录）': '(showing only the most recent activity)',
   'N 条命令': 'N commands',
   'N 个工作流': 'N workflows',
   'N 个其它': 'N other',
@@ -694,6 +708,9 @@ export const EN_DICT = Object.freeze({
   '——来自本机': ' — from this machine,',
   '，多半是你自己的旧 token': ', most likely your own stale token',
   '——来自局域网': ' — from the local network,',
+  // 「——反代/隧道后的 127.0.0.1，无法确认是否为本机」：地址夹在两个片段中间
+  '——反代/隧道后的': ' — behind a reverse proxy/tunnel,',
+  '，无法确认是否为本机': ', so it can\'t be confirmed as this machine',
   '——公网': ' — public IP',
   '在暴力尝试你的入口': 'is brute-forcing your entry point',
   '🔔 推送最近失败于': '🔔 Push last failed at',
@@ -719,6 +736,10 @@ export const EN_DICT = Object.freeze({
   '修改配置': 'Config changed',
   '重启服务': 'Service restart',
   '永久删除会话': 'Permanently deleted session',
+  // 删除被拒的原因，跟在「永久删除会话 <id> · 」后面（service-diag.js AUDIT_DELETE_REJECT_REASON）
+  '会话正被本产品驱动': 'the session is being driven by this app',
+  '会话正在打开中': 'the session is still opening',
+  '可能正被终端使用': 'it may be in use in a terminal',
   '写入文件': 'Wrote file',
   '审批记录留存清理': 'Approval retention cleanup',
   '重启使待审批请求失效': 'Restart invalidated pending approvals',
@@ -803,6 +824,38 @@ export const EN_DICT = Object.freeze({
   '回退失败': 'Revert failed',
   '从这里分叉': 'Fork from here',
   '分叉失败': 'Fork failed',
+  // —— /rewind 面板（app/rewind-command.js）与回退结果 ——
+  // 三个模式名与终端 /rewind 第二步逐字一致；其余沿用上面「回退 = revert」的叫法。
+  '把代码和/或对话恢复到某条消息发出之前……': 'Restore the code and/or conversation to the point before one of your messages…',
+  '正在读取会话…': 'Reading the session…',
+  '这个会话还没有可回退的轮次': 'This session has no turns to revert yet',
+  '代码改动待确认': 'Code changes not known yet',
+  '个文件改动': 'file(s) changed',
+  '无代码改动': 'No code changes',
+  '会话首轮，只能恢复代码': 'First turn of the session — code only',
+  '（空消息）': '(empty message)',
+  '确认要恢复到这条消息发出之前：': 'Confirm you want to restore to the point before this message:',
+  '正在计算影响面…': 'Working out what will change…',
+  '回退不影响手动或通过 bash 改过的文件。': 'Reverting doesn\'t affect files you edited by hand or through bash.',
+  '无法读取回退预览': 'Couldn\'t load the revert preview',
+  '对话将分叉出新会话，原会话完整保留。': 'The conversation will be forked into a new session; the original stays intact.',
+  '这是会话首轮，无法分叉对话，只能恢复代码。': 'This is the session\'s first turn: the conversation can\'t be forked, only the code can be restored.',
+  '这一轮既没有可恢复的文件，也无法分叉对话。': 'This turn has no files to restore, and the conversation can\'t be forked.',
+  '找不到这一轮的文件快照，只能恢复对话。': 'No file snapshot was found for this turn, so only the conversation can be restored.',
+  '这一轮没有代码改动，只能恢复对话。': 'This turn made no code changes, so only the conversation can be restored.',
+  '这一轮没有代码改动。': 'This turn made no code changes.',
+  // 「将恢复 N 个文件：a、b」「其中 N 个文件有未提交的改动…：a、b」由片段与数字拼成，译文按英文语序分给各片段
+  '将恢复': 'Will restore',
+  '个文件：': 'file(s): ',
+  '其中': 'Of these,',
+  '个文件有未提交的改动，回退会覆盖它们：': 'file(s) have uncommitted changes the revert will overwrite: ',
+  '恢复代码和对话': 'Restore code and conversation',
+  '只恢复对话': 'Restore conversation',
+  '只恢复代码': 'Restore code',
+  '请求超时，请重试': 'Request timed out — try again',
+  '还没有会话可回退': 'No session to revert yet',
+  '已回退 {n} 个文件（对话未改动）': 'Reverted {n} file(s) (the conversation is unchanged)',
+  '已分叉出回到那一刻的新会话（原会话保留，文件未改动）': 'Forked a new session from that point (the original is kept, files unchanged)',
   '放弃未保存的修改？': 'Discard unsaved changes?',
   '编辑内容尚未保存，离开后将丢失。': 'Your edits are unsaved and will be lost if you leave.',
   '放弃修改': 'Discard',
@@ -852,12 +905,14 @@ export const EN_DICT = Object.freeze({
   '续接 CLI 会话：运行中会排队等本轮结束，疑似中断需确认': 'Resume the CLI session: queues until the current turn ends; needs confirming if it looks interrupted',
   '只读镜像：本会话自主循环执行中——点右侧续接可在手机继续': 'Read-only mirror: this session is in an autonomous loop — tap Resume on the right to continue on your phone',
   '只读镜像：终端会话运行中——点右侧续接可在手机继续': 'Read-only mirror: the terminal session is running — tap Resume on the right to continue on your phone',
+  '只读镜像：终端正在等你操作——点右侧续接可在手机继续': 'Read-only mirror: the terminal is waiting for you — tap Resume on the right to continue on your phone',
   '只读镜像：已请求续接，等待自主循环当前操作完成…': 'Read-only mirror: resume requested — waiting for the autonomous loop to finish its current operation…',
   '只读镜像：已请求续接，等待终端当前操作完成…': 'Read-only mirror: resume requested — waiting for the terminal to finish its current operation…',
   '只读镜像：自主循环疑似中断——确认已停可续接': 'Read-only mirror: the autonomous loop looks interrupted — confirm it stopped, then resume',
   '只读镜像：终端疑似中断——确认已停可续接': 'Read-only mirror: the terminal looks interrupted — confirm it stopped, then resume',
   '只读镜像：本会话自主循环执行中，移动端当前只读': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only for now',
   '只读镜像：终端会话运行中，移动端当前只读': 'Read-only mirror: the terminal session is running; mobile is read-only for now',
+  '只读镜像：终端正在等你操作，移动端当前只读': 'Read-only mirror: the terminal is waiting for you; mobile is read-only for now',
   '终端会话推送': 'Terminal session alerts',
   '推送通知': 'Push notifications',
   '🔔 发一条测试推送': '🔔 Send a test notification',
@@ -910,6 +965,7 @@ export const EN_DICT = Object.freeze({
   '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。': 'Read-only mirror: the terminal looks interrupted. Once you have confirmed the terminal stopped, tap "Resume" to continue on your phone (the history is still there).',
   '只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only · Cannot: type, send images, change model/permissions/thinking · Can: read messages, and writing unlocks once the loop goes quiet · To force it on your phone: tap "Resume" on the right (waits for this turn to end; risks forking)',
   '只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）': 'Read-only mirror: the terminal session is running; mobile is read-only · Cannot: type, send images, change model/permissions/thinking · Can: read messages, and writing unlocks once the terminal goes quiet · To force it on your phone: tap "Resume" on the right (waits for this turn to end; resumes right away if it looks interrupted; risks forking)',
+  '只读镜像：终端正在等你操作（多半是一条待批准的工具调用）· 不能：打字/发图/改模型权限思考 · 处理办法：到电脑上的终端里按键回应 · 不想管它：点右侧「续接」强行接管（终端那边的操作会被放弃，有分叉风险）': 'Read-only mirror: the terminal is waiting for you (most likely a tool call awaiting approval) · Cannot: type, send images, change model/permissions/thinking · To handle it: answer with a keypress in the terminal on your computer · To skip it: tap "Resume" on the right to take over (the terminal\'s pending action is dropped; risks forking)',
   '续接 CLI 会话？': 'Resume the CLI session?',
   '这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。': 'This is the same conversation your computer\'s terminal is running. Resuming does not stop the terminal process — sending from both sides forks the session (each side\'s messages may be invisible to the other).\n\nBetter to Ctrl+C in the terminal, or let it finish, before resuming.',
   '仍要续接': 'Resume anyway',
@@ -984,6 +1040,20 @@ export const EN_DICT = Object.freeze({
   '24 小时内': 'in the last 24h:',
   '上次': 'last',
   '启动': 'started',
+  // 额度墙「到点自动继续」横幅（logic/auto-continue.js）与续跑气泡标记。用语对齐 CLI 限额对话框：
+  // "Continuing automatically at 3:50pm · esc to cancel" / "Wait here, then continue automatically"。
+  '额度 {time} 重置，届时自动继续': 'Usage limit resets at {time} — continuing automatically then',
+  '额度要到 {time} 才重置（超过 24 小时），不会自动继续': 'Usage limit resets at {time} (more than 24 hours out) — not continuing automatically',
+  '额度 {time} 重置': 'Usage limit resets at {time}',
+  '仍要到点继续': 'Continue at reset anyway',
+  '到点自动继续': 'Continue automatically at reset',
+  '额度已于 {time} 重置；主机期间休眠，没有自动继续': 'Usage limit reset at {time}, but the host was asleep — did not continue automatically',
+  '终端或桌面端正开着这个会话，没有自动继续': 'This session is open in a terminal or the desktop app — did not continue automatically',
+  '无法确认这个会话的最新状态，没有自动继续': 'Could not confirm this session\'s current state — did not continue automatically',
+  '会话没能重新打开，没有自动继续': 'The session could not be reopened — did not continue automatically',
+  '到点了，但没有自动继续': 'The reset time passed, but it did not continue automatically',
+  '继续': 'Continue',
+  '额度重置后自动继续': 'Continued automatically after the usage limit reset',
 });
 
 // 需要翻译的属性白名单：这四个是「屏幕上/读屏器里真会念出来」的，其余属性（data-*、aria-labelledby
@@ -1008,6 +1078,13 @@ export function t(zh) {
   if (currentLang !== 'en' || typeof zh !== 'string') return zh;
   // 用 hasOwnProperty 而非 `in`：避免 'constructor'/'toString' 等原型链同名属性被误命中
   return Object.prototype.hasOwnProperty.call(EN_DICT, zh) ? EN_DICT[zh] : zh;
+}
+
+// 常量表里的中文用 tk('原文') 标记：恒等返回、不查词典（表在 setLang() 之前求值，查了会把语言钉死），
+// 翻译留给取用点的 t(变量)。存在的唯一理由是让 tests/gates/i18n-check.js 抓得到这些 key——
+// t(变量) 的实参上抽不出中文原文，不标记的话表里漏译没有任何东西会报出来。
+export function tk(zh) {
+  return zh;
 }
 
 // 翻译一个文本节点的值。HTML 里的文本节点带着源码缩进（'\n      取消\n    '），词典 key 却是净文案，

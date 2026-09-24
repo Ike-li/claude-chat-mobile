@@ -78,7 +78,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 - hooks 可以缩短“回合结束/需要你”的发现时间，但不会把镜像变成共享 TTY。
 - 终端里的 `/rewind` 在**发出下一条消息之前完全不落盘**（它只切 REPL 内存里的消息数组，`~/.claude/sessions/` 的注册表也只有进程元数据、不含链状态），镜像侧因此无从感知——刷新页面或重启服务都读的是同一份没变的文件。这不是轮询延迟，是没有可观测的状态。**该窗口内不要从 Web 端发消息**：Web 的 SDK 子进程从磁盘重建上下文，会挂在 rewind 前的叶子上，那次回退当场作废，随后两端各写一条链。窗口通常只有几秒——在终端把下一条消息发掉，两边就一致了。
 
-> Web 端自己也有回退（长按 user 气泡 →「回退到此轮前」），但走的是 `forkSession` 到**新会话**、原会话一个字节不动，与终端的原地回退是两套语义。判据与取舍见 `app/src/sessions/rewind-plan.js` 头注。
+> Web 端自己也有回退（同样输入 `/rewind`，两步面板与终端的三个模式一一对应），但动到对话的两种模式走的是 `forkSession` 到**新会话**、原会话一个字节不动，与终端的原地回退是两套语义；「只恢复代码」不分叉。判据与取舍见 `app/src/sessions/rewind-plan.js` 头注。
 
 ## 单驾驶员模型
 
@@ -100,6 +100,21 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 若终端此后继续写同一会话，仍会形成两条 transcript 分支。这个逃生口是有意保留的：用户常常比判定链更早知道终端已经关掉。
 
 轮询意味着存在最多一个检查周期的观察窗口。切换会话、手动刷新镜像与 hooks 信号会主动插队触发检查，但它们仍不能证明对另一个活进程拥有控制权。
+
+## 额度墙到点自动继续
+
+终端里的 Claude Code 撞上用量额度墙后，会等到重置时刻自动发一句「继续」（设置项 `autoContinueAtUsageLimit`，默认开）。但这个能力只在**交互模式**里生效：CLI 的总闸是 `launchOptions.isInteractive()`，`-p` / `--sdk-url` / stdout 不是 TTY 任一成立就进不去，而 SDK 拉起的 CLI 恰好是管道（本项目与桌面端 Code 标签都是）。桌面端的「到点续跑」是它前端自己补的。所以本项目也在 server 里补：`app/src/server/auto-continue.js` 管状态与调度，`app/src/agent/quota-auto-continue.js` 放判定纯函数。
+
+1. **布防**：主循环撞上 `rate_limit` 墙时，`AgentSession` 通过 `onQuotaWall` 上报墙的事实（`quotaLimits`、同一轮收到的 rejected `rate_limit_event`、这一轮由谁发起、撞墙前有没有真模型输出）。判定照抄 CLI：`status='rejected'`、带有限的 `resetsAt`、没在用超额额度，才能布防；到点 = 重置时刻 + 30–90 秒抖动；重置点远于 24 小时（多半是周额度）不自动等，只在横幅上给「仍要到点继续」。子 agent 撞墙不布防：那时主循环可能还在跑。
+2. **状态按 sessionId 挂在 server，不挂在实例上**。等待常达 5 小时，而空闲 30 分钟的实例就会被回收；到点时实例多半已不在，要 resume 一个出来再发。空闲回收不影响布防，但用户显式关掉这个会话的标签、删除会话、或自己接着发了消息，布防即作废（CLI 的对应物是退出进程）。横幅数据随 `instances` 广播的 `autoContinue` 字段下发（真 server 恒带数组；前端把缺字段当成「保留上一份」，只为兼容 E2E mock 的旧式载荷）。
+3. **到点前四道复核**，任一不过都不代发：自动布防的条目开关此刻仍开着；transcript 尾窗里墙仍是主链最后一条对话（CLI resume 被打断回合时补的 isMeta「Continue from where you left off.」与 `<synthetic>` 的「No response requested.」不算）；注册表里没有终端或桌面端开着这个会话（单驾驶员，`SESSION-01`）；实例没有在跑一轮、没有 `externalDirty`。复核读不到或可能有别的驾驶员时转 **stale**，由用户在横幅上点「继续」。
+4. **发出去的是 CLI 同款提示词**，但去掉了 `claude.ai` 字样，SDK 归属标成 `{kind:'auto-continuation'}`（CLI 自己续跑用的也是它），不冒充人类键盘输入。前端据 `user_message.origin` 与历史条目的 `origin` 给这条气泡加「额度重置后自动继续」标注。
+5. **睡眠与重启**：tick 每 30 秒一拍，两拍间隔超过 30 分钟且已过点，就当作机器睡过了重置点，转 stale、不自动发（同 CLI）。**重启即作废，不落盘**，理由有两条：CLI 退出时同样作废；另外这与 `APPROVAL-02` 是同一个立场，重启时残留的待执行动作不再执行。布防事实本来可以从 transcript 重建（墙条目自带 `quotaLimits`），重建不了的只有用户点过的「取消」，而为它新增持久化层换来的是「重启后自动替你开跑」，这种行为更难预期（hard-rules §1「不新增持久化层」）。
+6. **续跑后又撞墙**：续跑那一轮一个字没产出就撞墙，才算空转，计一次，重试最少间隔 60 秒、300 秒，超过 2 次熔断。与 CLI 有一处有意差异：CLI 把「续跑那一轮里撞墙」一律计数，跨多个 5 小时窗口的长任务因此会在第三个窗口被截停，而这恰恰是本功能的主用例。
+
+**官方订阅与第三方网关**：一律数据驱动，不判断上游是谁（hard-rules §1「对模型通路零假设」）。官方订阅的墙恒带重置时刻；第三方网关如果透传了 unified 限额头，CLI 会报出同样的结构化墙，行为完全一致；网关只回一个裸 429 时，CLI 报不出重置时刻，这里不布防，也不拿「多久以后再试」去猜，会话里提示一句「上游没有给出额度重置时间，无法到点自动继续」。重试有熔断，网关重置时刻不准时最多多撞两次墙。
+
+**开关**：`CCM_AUTO_CONTINUE_AT_LIMIT`（面板可关，默认开）与 CLI 的 `autoContinueAtUsageLimit`（在终端 `/config` 里关掉，web 这边也跟着关）任一关掉，都退回「只给选项」：撞墙时横幅提供「到点自动继续」按钮，用户点了才布防。手动布防的条目不受开关约束，因为开关管的只是「自动」。
 
 ## 事件信封与断线回放
 
@@ -139,11 +154,10 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 ## 鉴权与范围边界
 
 ```text
-AUTH_TOKEN（必备，无它不启动）
+AUTH_TOKEN（必备，无它不启动） ‖ 公网 IdP 策略（可选，当前唯一实现 Cloudflare Access）
+  按 Host 二选一：IdP 管的公网 Host 只认 IdP 凭据，其余入口只认 token
         ↓
-公网 IdP 策略（可选，当前唯一实现 Cloudflare Access）
-        ↓
-设备信任（真·本机直连豁免此层，不豁免 token）
+设备信任（真·本机直连豁免；经 IdP 进来的连接默认也豁免，DEVICE_APPROVAL_SCOPE=all 时不豁免）
         ↓
 WORKDIRS 范围门
         ↓
@@ -153,14 +167,17 @@ Agent 工具审批或用户直接文件编辑
 ```
 
 第一层是**前提而非选项**（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）：没有 `AUTH_TOKEN`
-连 server 都起不来，本机浏览器打开也一样，所以下游各层永远建立在「对方已持令牌」之上。
+连 server 都起不来，本机浏览器打开也一样。但这不等于每个连接都持有令牌：IdP 开着时，它管的公网 Host
+只认 IdP 凭据（JWT），`AUTH_TOKEN` 在那条路上既不要求也不放行。所以下游各层的前提按入口分两种——
+IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方已持令牌」；要把 token 交出去的逻辑
+（如 `connect:qr`）必须先看连接走的是哪条（[hard-rules §6](hard-rules.md)）。
 第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js`
 的接口形状；Cloudflare Access 是当前唯一实现，换 IdP 不该动核心。
 
 这些边界互不替代：
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
-- Cloudflare Access 是**可选的**公网身份层，不扩大工作区；默认开着时**替代**设备审批（第二因子），不替代 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
+- Cloudflare Access 是**可选的**公网身份层，不扩大工作区。开着时在它管的公网 Host 上**替代 token**（那条路只认 JWT），默认还**替代**设备审批（第二因子）；LAN / 本机入口不受影响，仍只认 token。关着时设备审批自动顶上——`AUTH_TOKEN` + 设备审批就是所有拓扑共同的公网基线。
   - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
   - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
@@ -247,6 +264,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |
+| 额度墙自动继续的布防 | server 进程内存（`auto-continue.js`） | 到点续跑与横幅；**重启即作废、不落盘** |
 
 `CCM_DATA_DIR` 不保存 Claude 原始 transcript。清理它会影响 CCM 的控制面状态，但不会等同删除全部 Claude 会话；SDK 真删会话是另一条显式操作。
 
@@ -286,6 +304,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 - `app/server.js`：兼容启动入口；实际装配在 `app/src/server/app.js`。
 - `app/src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
 - `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
+- `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`：额度墙到点自动继续的调度（状态自持）与判定纯函数。
 - `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `app/public/js/app.js` 与 `app/public/js/app/`：客户端状态、事件派发与交互模块。

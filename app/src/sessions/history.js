@@ -239,6 +239,9 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           isApiErrorMessage: entry.isApiErrorMessage === true,
           apiErrorStatus: entry.apiErrorStatus ?? null,
           apiError: entry.error ?? null,
+          // 额度墙自动续跑发出的那句（server/auto-continue.js，SDK 归属 auto-continuation）。只认这一种：
+          // human 是缺省，其余来源（peer / task-notification…）另有各自的呈现，不在这里混进来。
+          autoContinuation: entry.origin?.kind === 'auto-continuation',
         });
         for (const item of expanded) {
           // 谁写的这一条（sdk-ts=己方 / cli=终端）。catchUpStep 靠它判增量是不是己方写盘——
@@ -348,6 +351,15 @@ export function historyTailKey(messages) {
   return messageKey(messages[messages.length - 1]);
 }
 
+// 上一次的尾条之后新写的条目是否全是己方（sdk-ts）。找不到那条、或它之后没有新条目时为 false。
+function ownWritesSince(messages, prevTailKey) {
+  if (prevTailKey == null) return false;
+  let i = messages.length - 1;
+  while (i >= 0 && messageKey(messages[i]) !== prevTailKey) i--;
+  if (i < 0 || i === messages.length - 1) return false;
+  return messages.slice(i + 1).every(m => isOwnSdkTail(m?.entrypoint));
+}
+
 export function catchUpStep(state, { messages, localBusy = false, historyCap = HISTORY_MAX_MESSAGES } = {}) {
   const len = messages.length;
   const tailKey = historyTailKey(messages);
@@ -358,6 +370,15 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
   }
   if (state.wasBusy) {
     // 吸收己方 turn 的写盘：重置 baseline + 同步 tail 指纹（己方写入也在窗口内）
+    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
+  }
+  // 【满窗时己方秒回】窗口满了以后己方写入不会让 len 变长：头被 splice、尾接上新内容，baseline 边界
+  // 那一条（anchor）与尾条都换了，下面的前缀重写与 SS-001 两道都会判 reload——而增长分支那道
+  // entrypoint 豁免排在它们后面，轮不到。于是整轮落在两次 tick 之间时，只因为会话够长，就全量重推 +
+  // 标脏 + 误锁（2026-09-22 review P1）。上一次的尾条还在窗口里 ⇒ 前缀没被重写（指纹带 timestamp，
+  // 重写出来的条目对不上）；它之后的就是这段时间新写的，全是 sdk-ts 就与增长分支同口径吸收。
+  // 找不到上一次的尾条（新写的超过一整窗、或确实被重写）就落回下面的检查，安全侧。
+  if (Number.isFinite(historyCap) && historyCap > 0 && len >= historyCap && ownWritesSince(messages, state.lastTailKey)) {
     return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey, anchorKey: keyAt(len) } };
   }
   // 【前缀重写】已经推给前端的那一段被换掉了 → 增量无从下手，只能全量重推。
@@ -428,6 +449,18 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
       anchorKey: prevAnchor == null ? keyAt(state.baseline) : prevAnchor,
     },
   };
+}
+
+// 磁盘 history 里最后一条【非己方】写入的位置（1-based；没有则 0）。sync:since 在 replayed>0 时
+// 带给前端对账用：web 自己的 live 轮次不更新前端的 seenDiskLen（已知边界），拿总条数去比会把每一轮
+// 己方写入都当成外部写入；这个量不被己方（sdk-ts）写入推高，只有终端写入（cli，以及不认识的来源——
+// 与 catchUpStep 同口径保守当外部）才会。
+export function externalHistoryExtent(messages) {
+  if (!Array.isArray(messages)) return 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!isOwnSdkTail(messages[i]?.entrypoint)) return i + 1;
+  }
+  return 0;
 }
 
 // BE-009：客户端（重）连时 server 会强制重定 catch-up baseline（重连会 loadHistory 全量重渲，沿用滞后 baseline
@@ -512,9 +545,10 @@ export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror
 //   · registryBusy（P1，7/26 CCD 调研吸收）：~/.claude/sessions/<PID>.json 的 status:"busy" 权威自报
 //     （session-registry.js，已含 pid 验活+新鲜度）→ 比 keepAlive/tailPending 强一档：【可上锁也可维持】——
 //     它不是从磁盘形态猜的，是活着的终端进程自己说"我在跑"，堵「终端开跑但首条 text 未落盘」的上锁空窗。
-//   · registryWaiting（2026-09-04）：注册表自报终端卡在对话框上等人（含权限审批框）→ 与 keepAlive
-//     同权（维持已有的锁、不造锁）。等审批可长达 30 分钟且期间零写盘，没有它，12.5s 静默窗会在
-//     人还没走到电脑前时就解锁。刻意不给造锁权，理由见 mirrorEntryLock 处的说明。
+//   · registryWaiting（2026-09-04）：注册表自报终端卡在对话框上等人（含权限审批框）→ 尾部 pending 时
+//     维持已有的锁、不造锁。等审批可长达 30 分钟且期间零写盘，没有它，12.5s 静默窗会在人还没走到电脑前
+//     时就解锁。刻意不给造锁权，理由见 mirrorEntryLock 处的说明。尾部已 settled 时它不起作用（与入口
+//     同一前提）：轮次已收尾、只是开着 /model 对话框，维持锁等于让一个忘关的对话框把手机锁成只读。
 export function mirrorReleaseStep(state, {
   externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
   registryBusy = false, registryWaiting = false, tailEntrypoint = null,
@@ -532,7 +566,9 @@ export function mirrorReleaseStep(state, {
   // 缺了这半边会自锁：web 等一条 ExitPlanMode 审批时尾部恒 pending ⇒ 锁恒维持 ⇒ 手机只读 ⇒
   // 点不到「批准」⇒ 审批永远 pending。keepAlive/externalWrite/registryBusy 三条兜底不受影响：
   // 真有人在写盘或注册表自报在跑时，照锁不误。
-  if (keepAlive || registryWaiting || (tailPending && !isOwnSdkTail(tailEntrypoint))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/等人按键/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
+  // registryWaiting 只在尾部 pending 时撑锁（见上方头注），且那时连己方 sdk-ts 尾部也照样撑：真有一个活终端
+  // 卡在这个会话的对话框上，误锁可点「续接」化解，误放行造成的分叉不可逆。
+  if (keepAlive || (tailPending && (registryWaiting || !isOwnSdkTail(tailEntrypoint)))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/等人按键/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < need;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
@@ -626,6 +662,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
   const apiErrorField = opts.isApiErrorMessage
     ? { isApiErrorMessage: true, apiErrorStatus: opts.apiErrorStatus ?? null, apiError: opts.apiError ?? null }
     : {};
+  // 与 live 侧 user_message.origin 同名同值：前端两条渲染路径共用一个判据
+  const originField = opts.autoContinuation && role === 'user' ? { origin: 'auto-continuation' } : {};
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -635,7 +673,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...(attachments ? { attachments } : {}) });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}) });
     else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
   };
   if (typeof content === 'string') {
@@ -1384,7 +1422,7 @@ async function readHeadMeta(file, size) {
 // 但 web 的 sessions.json 不记（那是 web 端才写的增强）。故续接一个纯 CLI 会话时，从 transcript 末条
 // permission-mode 记录恢复，避免一律回落「默认审批」。dontAsk 是 web 专属档、CLI transcript 不会出现，
 // 不列入白名单。⚠️ thinking/effort 档 CLI 完全不落盘（transcript 里只有 thinking 内容块、无档位字段），
-// 无从恢复——「默认思考」是诚实回退，属已知边界。
+// 无从恢复——回落 auto（模型默认）是诚实回退，属已知边界。
 const VALID_CLI_PERM_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
 
 // 纯函数：倒序找最后一条主链 user/assistant 的 timestamp（ms）。
@@ -1740,17 +1778,17 @@ export function classifyTailEntries(entries) {
   return { ...main, autonomous }; // 主链 settled（子链无活动或也已 settled）
 }
 
-// IO 包装：读 transcript 尾窗 → 解析 → classifyTailEntries。尾窗/半行处理与 readLastPermissionMode 同款。
-// 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
-// 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
-export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // SS-003
+// 读 transcript 尾窗（TAIL_READ_BYTES）并逐行解析。尾窗/半行处理与 readLastPermissionMode 同款。
+// 读不到（非法 id / 文件不存在 / IO 失败）返回 null，空文件返回 []——两者对调用方意义不同：
+// classifyTranscriptTail 两种都判 settled（不锁），而自动续跑必须把「无法核实」当成不代发的理由。
+export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
     try {
       if (size == null) ({ size } = await fh.stat());
-      if (size === 0) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false };
+      if (size === 0) return [];
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
       const { bytesRead } = await fh.read(buf, 0, size - start, start);
@@ -1759,13 +1797,23 @@ export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_
         if (!line.trim()) continue;
         try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/写入中的截断尾行：跳过 */ }
       }
-      return classifyTailEntries(entries);
+      return entries;
     } finally {
       await fh.close().catch(() => {});
     }
   } catch {
-    return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // 文件不存在/读失败：不锁
+    return null;
   }
+}
+
+// IO 包装：读 transcript 尾窗 → classifyTailEntries。
+// 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
+// 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
+export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, { baseDir, size });
+  // 文件不存在/读失败/非法 id（SS-003）：不锁
+  if (!entries) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false };
+  return classifyTailEntries(entries);
 }
 
 // 会话归属校验：该 sessionId 的 jsonl 是否就在本 cwd 的 project 目录（server 用它把跨 cwd 的

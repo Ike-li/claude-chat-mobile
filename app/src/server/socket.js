@@ -31,6 +31,9 @@ export function createSocketEventRegistrar({ logger = console } = {}) {
           payload: {
             message: `服务端处理 ${event} 出错：${error.message}`,
             recoverable: true,
+            // 报个错、轮次照常：handler 抛错与在跑的轮次无关（且不带 instanceId，前端落到当前查看的 tab）。
+            // 不标的话前端按轮次收尾处理——清掉挂着的审批卡、工具卡标失败、熄 busy，服务端那一轮还在等审批。
+            endsTurn: false,
           },
         });
         // SRV-NEW-005：结构化负 ack（默认 retryable——未知错误客户端可重试）；ack 本身抛错不掩盖主路径。

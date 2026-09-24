@@ -54,3 +54,47 @@ test('markdown sanitizer forbids clickjacking and form-exfiltration primitives',
     assert.ok(attrs.includes(attr), `必须禁 ${attr} 属性：全屏覆盖 + 激活按钮的两个必要原语`);
   }
 });
+
+// SEC（2026-09-22 review P0）：禁了 style 还不够——页面跑的是 Tailwind **运行时**（vendor/tailwind.js 用
+// MutationObserver 盯 class 现编 CSS），class="fixed z-[2147483647] pointer-events-none …" 能做到 style
+// 能做的一切：在真「允许」按钮上方画一个「拒绝」，点击穿透过去（真 Chromium 实测触发 allow）。
+// markdown 自己只产出 <code class="language-xxx">（hljs 据此选语言），其余 class 一律不该出现。
+function captureClassHook() {
+  const hooks = {};
+  const context = createAppContext({
+    dependencies: {
+      marked: { setOptions() {}, parse: raw => raw },
+      DOMPurify: { addHook: (name, fn) => { hooks[name] = fn; }, sanitize: html => html },
+    },
+  });
+  createMessageRenderer(context);
+  const hook = hooks.uponSanitizeAttribute;
+  assert.equal(typeof hook, 'function', '必须注册 uponSanitizeAttribute 过滤 class——否则 Tailwind 运行时把任意 class 编成 CSS');
+  return value => {
+    const data = { attrName: 'class', attrValue: value, keepAttr: true };
+    hook({ nodeName: 'DIV' }, data);
+    return data.keepAttr ? data.attrValue : null;
+  };
+}
+
+test('markdown sanitizer drops utility classes that Tailwind runtime would compile into an overlay', () => {
+  const filter = captureClassHook();
+  assert.equal(filter('fixed inset-0 z-[2147483647] pointer-events-none'), null, '纯工具类必须整条剥掉，否则就是一个可盖住审批按钮的遮罩');
+  assert.equal(filter('language-js fixed z-50'), 'language-js', '混入的工具类要剥掉，代码语言标注要留');
+  assert.equal(filter('language-c++'), 'language-c++', 'marked 原样输出 info string，含 + 的语言名不能被误杀（否则 hljs 失去语言提示）');
+  assert.equal(filter('language-[x] language-'), null, '伪装成 language- 前缀的任意值写法与空语言名都不放行');
+});
+
+test('markdown class filter leaves non-class attributes to DOMPurify defaults', () => {
+  const hooks = {};
+  const context = createAppContext({
+    dependencies: {
+      marked: { setOptions() {}, parse: raw => raw },
+      DOMPurify: { addHook: (name, fn) => { hooks[name] = fn; }, sanitize: html => html },
+    },
+  });
+  createMessageRenderer(context);
+  const data = { attrName: 'href', attrValue: 'https://example.com', keepAttr: true };
+  hooks.uponSanitizeAttribute({ nodeName: 'A' }, data);
+  assert.deepEqual(data, { attrName: 'href', attrValue: 'https://example.com', keepAttr: true }, '只管 class，别的属性原样交回 DOMPurify');
+});

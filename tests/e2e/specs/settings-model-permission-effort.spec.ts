@@ -236,6 +236,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
     // 档位区块留在原地并说明原因（见 P0-09p）；底栏 pill 仍隐藏——没有档位可显示，空 chip 是噪音。
     // 行为契约不变：档位清回 model-default，隐藏的兼容 select 置空。
+    // 先等服务端 effort_mode(null) 回执落地：隐藏分支同步置空 select，回执随后才到。早于回执断言
+    // 只会看到瞬时的 ''，放过稳定态的错误（回执把 select 改回 'auto'，CI 上撞到过）。
+    await expect(page.locator('#messages')).toContainText('思考强度 → CLI 默认');
     await expect(page.locator('.effort-tile')).toHaveCount(0);
     await expect(page.locator('#pillEffort')).toHaveClass(/hidden/);
     await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
@@ -247,6 +250,37 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const reply = page.locator('[data-testid="assistant-message"]').last();
     await expect(reply).toContainText('model=claude-3-5-haiku');
     await expect(reply).toContainText('effort=model-default');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-09z 思考强度：没指定显示 CLI 实际档且不冒充 auto；auto（= CLI /effort auto）是可选的一档', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'effort');
+    const auto = page.locator('.effort-tile[data-level="auto"]');
+    // 末位，与 CLI usage `[…|ultracode|auto]` 同序
+    await expect(page.locator('.effort-tile').last()).toHaveAttribute('data-level', 'auto');
+    // 没指定（null）= CLI inherit：settings 里存了档就用存的。高亮 auto 就是替它声称「模型内置默认」，
+    // 所以一块都不高亮，pill 如实报 CLI 此刻生效的档（mock 固定回 medium）。
+    await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
+    await expect(page.locator('#pillEffortText')).toHaveText('medium · CLI 默认');
+
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await expect(page.locator('#effortSelect')).toHaveValue('high');
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+
+    await auto.click();
+    await expect(auto).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('auto');
+    await closeSettings(page);
+
+    // auto 原样发（服务端映射成 effortLevel:null 控制请求）；折成 null 的话 mock 会回显 model-default
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=auto');
 
     await expectNoBrowserErrors(page);
   });
@@ -318,6 +352,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#pillDefaults').click();
     await expect(page.locator('#effortSelect')).toHaveValue('');
     await expect(page.locator('#effortSelect option:checked')).toHaveText('CLI 当前档未知');
+    // 未知 ≠ auto：选中 auto 等于替 CLI 编造了一个档位
+    await openSettingsSection(page, 'effort');
+    await expect(page.locator('.effort-tile[data-level="auto"]')).toHaveCount(1);
+    await expect(page.locator('.effort-tile[data-level="auto"]')).not.toHaveClass(/ring-accent/);
 
     await expectNoBrowserErrors(page);
   });

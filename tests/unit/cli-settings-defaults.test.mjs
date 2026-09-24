@@ -59,16 +59,26 @@ test.describe('defaultsFromEffectiveSettings（L3 抽取）', () => {
         permissions: { defaultMode: 'default' },
         effortLevel: 'low',
       }),
-      { mode: 'default', effort: 'low', model: undefined, env: undefined },
+      { mode: 'default', effort: 'low', model: undefined, env: undefined, autoContinueAtUsageLimit: undefined },
     );
   });
   test('缺字段 → L4 形状（mode=default, effort=null）', () => {
     assert.deepEqual(defaultsFromEffectiveSettings(undefined), {
-      mode: 'default', effort: null, model: undefined, env: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined, autoContinueAtUsageLimit: undefined,
     });
     assert.deepEqual(defaultsFromEffectiveSettings({}), {
-      mode: 'default', effort: null, model: undefined, env: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined, autoContinueAtUsageLimit: undefined,
     });
+  });
+  // CLI 的「额度墙到点自动继续」设置。CLI 缺省视为开，所以只有显式布尔才透传：
+  // undefined = 用户没设过（web 侧按开处理），false = 用户在终端 /config 里关掉了（web 侧也只给选项）。
+  test('autoContinueAtUsageLimit：只透传显式布尔，其余一律 undefined', () => {
+    assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: false }).autoContinueAtUsageLimit, false);
+    assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: true }).autoContinueAtUsageLimit, true);
+    for (const junk of ['false', 0, null, {}]) {
+      assert.equal(defaultsFromEffectiveSettings({ autoContinueAtUsageLimit: junk }).autoContinueAtUsageLimit, undefined,
+        `${JSON.stringify(junk)} 不是 CLI 会认的值——当成 false 会把用户没关的功能关掉`);
+    }
   });
   test('顶层 model 有值才 pin', () => {
     assert.equal(
@@ -163,6 +173,13 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
     );
   });
 
+  test("pending auto → effort 保留 'auto' 字面量，不被折叠成 null（null 会按 L3/inherit 走，丢掉用户选的 auto）", () => {
+    assert.deepEqual(
+      resolveFreshPrefs({ hasPendingEffort: true, pendingEffort: 'auto', cliDefaults: cliLow }),
+      { mode: 'acceptEdits', effort: 'auto', ultracode: false, model: undefined },
+    );
+  });
+
     test('cli model 透传（仅当字符串非空）', () => {
     assert.equal(
       resolveFreshPrefs({ cliDefaults: { mode: 'default', effort: null, model: 'sonnet' } }).model,
@@ -229,6 +246,22 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
     assert.equal(
       resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
       'high',
+    );
+  });
+
+  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3 或继承值——那等于把 auto 悄悄换成
+  // settings 里存的档（PR #167 review 指出）。auto 与 null 的区别正在这里：null 是「没指定、继续兜底」。
+  test("saved 'auto' → 终值 'auto'，不往下兜底", () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: 'auto', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      'auto',
+    );
+  });
+
+  test("inherited 'auto'（该 cwd 末活实例是 auto）→ 与具体档同样被继承", () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'auto', cliDefaults: cliHigh }),
+      'auto',
     );
   });
 });
