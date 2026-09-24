@@ -289,7 +289,8 @@ test('waitForSessionExits 不在已结算的退出确认上空转', async () => 
 });
 
 test('waitForSessionExits 有上限：等不到按时放行并返回 false，不让会话永远卡在关闭中', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Date 也要冻住：实现按 Date.now() 算剩余时长，真时钟在两次读之间跨过毫秒边界时定时器只剩 9999ms
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const manager = createInstanceManager();
   const hung = exitableAgent(manager, 's1');
   manager.remove(hung.agent.instanceId);
