@@ -15,9 +15,24 @@
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
+> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
+
+![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
 <p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.webp" width="300" alt="Approving a file write from Claude on the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
 </p>
+
+![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
 
 ## Why use it
 
@@ -89,30 +104,6 @@ To change code or run tests, `git clone` the full repository instead. Configurat
 ## What it looks like
 
 **Try it before installing anything: [live demo](https://ike-li.github.io/claude-chat-mobile/demo/).** It runs this repo's real frontend (`app/public/` verbatim) with only the backend swapped for an in-browser script — workspace switching, streaming replies, tool calls, approval cards, file browsing, background tasks and the settings pages are all clickable, but **replies are canned and no model is ever called**.
-
-<details>
-<summary>Show 8 screenshots</summary>
-
-> The screenshots below show the Chinese UI. The app ships with an English locale too — switch it in Settings.
-
-![Sign-in and new-device approval](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
-
-![Home screen, workspace list and the session drawer](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="Carrying on with coding from the phone">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="Quota usage and background tasks">
-</p>
-
-![Switching to a third-party gateway model in session settings](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
-
-![Workspace file browser and slash commands](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
-
-![Settings and status, device management, notifications and lock-screen push](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
-
-![Service status, security events and the on-phone security check](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
-
-</details>
 
 ## How it works
 

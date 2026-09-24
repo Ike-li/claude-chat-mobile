@@ -15,9 +15,22 @@
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
 
+![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
+
+![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
+
 <p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-zh.webp" width="300" alt="在手机上审批 Claude 的一次写文件请求">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
+  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
 </p>
+
+![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
+
+![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
+
+![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
+
+![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
 
 ## 为什么用它
 
@@ -89,28 +102,6 @@ npm ci --omit=dev && npm run setup && npm start
 ## 界面长什么样
 
 **不想先装也能摸一遍：[在线演示](https://ike-li.github.io/claude-chat-mobile/demo/)。** 跑的是本仓库的真实前端（`app/public/` 原样），只把后端换成了一层浏览器内脚本——工作区切换、流式回复、工具调用、审批卡、文件浏览、后台任务、设置与状态都点得动，但**回复是固定脚本，不会真的调用模型**。
-
-<details>
-<summary>展开 8 张截图</summary>
-
-![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
-
-![主页、工作区列表与会话侧栏](https://ike-li.github.io/claude-chat-mobile/screenshots/02-home.webp)
-
-<p align="center">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/03-coding.webp" width="49%" alt="在手机上接着写代码">
-  <img src="https://ike-li.github.io/claude-chat-mobile/screenshots/04-usage.webp" width="49%" alt="用量与后台任务">
-</p>
-
-![会话设置里切到第三方网关的模型](https://ike-li.github.io/claude-chat-mobile/screenshots/05-gateways.webp)
-
-![工作区文件浏览与斜杠命令](https://ike-li.github.io/claude-chat-mobile/screenshots/06-files.webp)
-
-![设置与状态、设备管理、通知与锁屏推送](https://ike-li.github.io/claude-chat-mobile/screenshots/07-settings.webp)
-
-![服务状态、安全事件与手机端安全体检](https://ike-li.github.io/claude-chat-mobile/screenshots/08-ops.webp)
-
-</details>
 
 ## 它是怎么工作的
 
