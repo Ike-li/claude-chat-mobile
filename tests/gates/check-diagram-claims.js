@@ -139,8 +139,8 @@ const CLAIMS = [
     actual: () => /SDK_TAIL_ENTRYPOINTS = new Set\(\['sdk-ts'\]\)/.test(read('app/src/sessions/history.js')) ? "只认 sdk-ts" : '白名单已改', expect: '只认 sdk-ts' },
   { diagram: '06', shown: '前台判据是 client:presence（hidden !== true）',
     actual: () => /s\?\.data\?\.hidden !== true/.test(read('app/src/ops/notifications.js')) ? 'hidden !== true' : '判据已改', expect: 'hidden !== true' },
-  { diagram: '00', shown: 'claude-agent-sdk 0.3.278',
-    actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.278' },
+  { diagram: '00', shown: 'claude-agent-sdk 0.3.281',
+    actual: () => JSON.parse(read('package.json')).dependencies['@anthropic-ai/claude-agent-sdk'], expect: '0.3.281' },
   { diagram: '00 / 01 / 08 / 11', shown: '共 31 种 type',
     // 同上：27 → 31（trusted_devices、session_recap、prompt_suggestion、rewind_applied）。
     actual: () => (/AGENT_EVENT_TYPES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(read('app/src/shared/protocol.js'))?.[1].match(/'[a-z_]+'/g) || []).length,
