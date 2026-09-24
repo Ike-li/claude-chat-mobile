@@ -3,19 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Chat Mobile vs. Claude Code Remote Control — which one should you use?</title>
-<meta name="description" content="An honest comparison: most people should use the official Claude Code Remote Control. Claude Chat Mobile only makes sense for API keys, third-party gateways, Bedrock/Vertex/Foundry, or when the transcript must stay on your machine.">
+<title>Claude Code on your phone: Remote Control, Happy, CloudCLI or Claude Chat Mobile?</title>
+<meta name="description" content="An honest selection guide. Most people should use the official Claude Code Remote Control; if it cannot work for you, here is how Happy, CloudCLI, SSH + tmux and Claude Chat Mobile differ in shape.">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
 <link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/zh/compare.html">
 <link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 <meta property="og:type" content="article">
-<meta property="og:title" content="Claude Chat Mobile vs. Claude Code Remote Control">
-<meta property="og:description" content="Most people should use the official Remote Control. Here are the specific cases where it cannot work, and where a self-hosted bridge is the answer.">
+<meta property="og:title" content="Claude Code on your phone: which option should you use?">
+<meta property="og:description" content="Most people should use the official Remote Control. Here are the cases where it cannot work, and how the self-hosted options differ.">
 <meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
 <meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Claude Chat Mobile vs. Claude Code Remote Control">
+<meta name="twitter:title" content="Claude Code on your phone: which option should you use?">
 <meta name="twitter:description" content="An honest selection guide, including when NOT to use this project.">
 <meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 <script type="application/ld+json">
@@ -36,7 +37,8 @@
     {"@type":"Question","name":"Should I use Claude Chat Mobile or the official Claude Code Remote Control?","acceptedAnswer":{"@type":"Answer","text":"For most people, the official Remote Control. It is included with a Pro, Max, Team or Enterprise plan, needs one command, and there is no server to run or secure. Claude Chat Mobile is for the cases where Remote Control is not available: API-key authentication, a third-party gateway or proxy via ANTHROPIC_BASE_URL, Bedrock / Google Cloud Agent Platform / Microsoft Foundry, or a setup where the session transcript must not leave your machine."}},
     {"@type":"Question","name":"Does Claude Code Remote Control work with an API key or a third-party gateway?","acceptedAnswer":{"@type":"Answer","text":"No. The official documentation states that API keys are not supported, and that Remote Control is unavailable when ANTHROPIC_BASE_URL points at a host other than api.anthropic.com, such as an LLM gateway or proxy. Claude Chat Mobile drives your local CLI directly, so it works with whatever provider that CLI is already configured for."}},
     {"@type":"Question","name":"Where is my session transcript stored?","acceptedAnswer":{"@type":"Answer","text":"With the official Remote Control, the transcript is stored on Anthropic servers while the session is connected, so it can sync across devices. With Claude Chat Mobile the transcript stays on your own machine, in the same files your local CLI already writes."}},
-    {"@type":"Question","name":"Does my computer need to stay on?","acceptedAnswer":{"@type":"Answer","text":"Yes, for both. Both approaches drive a claude process running on your own machine; if that machine sleeps or the process exits, the session goes offline. Self-hosting does not change this."}}
+    {"@type":"Question","name":"Does my computer need to stay on?","acceptedAnswer":{"@type":"Answer","text":"Yes, for both. Both approaches drive a claude process running on your own machine; if that machine sleeps or the process exits, the session goes offline. Self-hosting does not change this."}},
+    {"@type":"Question","name":"Happy, CloudCLI or Claude Chat Mobile: which self-hosted option should I use?","acceptedAnswer":{"@type":"Answer","text":"They solve the same problem in different shapes. Happy gives you native iOS and Android apps and handles the networking through an end-to-end encrypted relay server, which you can also run yourself. CloudCLI is a browser workspace with chat, shell, file and git views that also drives Cursor CLI and Codex; the phone reaches it over your network or a proxy you set up. Claude Chat Mobile is a phone-first web UI that follows your local claude CLI as closely as it can, with the server, transcripts and device trust on your own machine. If the official Remote Control works for your setup, use that first."}}
   ]
 }
 </script>
@@ -149,6 +151,7 @@
     </a>
     <div class="nav-spacer"></div>
     <a class="meta" href="quickstart.html">Quickstart</a>
+    <a class="meta" href="../zh/compare.html" hreflang="zh-CN">中文</a>
     <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
   </div>
 </nav>
@@ -156,9 +159,9 @@
 <header class="page">
   <div class="wrap">
     <div class="kicker">Honest comparison</div>
-    <h1>Should you use this, or the official Remote Control?</h1>
-    <p class="lead">Short answer: <strong>most people should use the official Claude Code Remote Control</strong>. It ships with your Claude subscription, takes one command, and there is no server to run or secure. This page exists to tell you the specific cases where it <em>cannot</em> work &mdash; those are the only reasons to self-host something like this project.</p>
-    <p class="alts">Facts about Remote Control below are from the <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">official Claude Code documentation</a> &middot; <time datetime="2026-09-22">Checked 2026-09-22</time></p>
+    <h1>Official Remote Control, or a self-hosted option?</h1>
+    <p class="lead">Short answer: <strong>most people should use the official Claude Code Remote Control</strong>. It ships with your Claude subscription, takes one command, and there is no server to run or secure. This page exists to tell you the specific cases where it <em>cannot</em> work &mdash; those are the only reasons to self-host something like this project. If one of them applies to you, the <a href="#self-hosted-options">second half</a> compares the self-hosted options, this project included.</p>
+    <p class="alts">Facts about Remote Control are from the <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">official Claude Code documentation</a>; facts about other projects are from their own README and docs, linked where they appear &middot; <time datetime="2026-09-24">Checked 2026-09-24</time></p>
   </div>
 </header>
 
@@ -184,6 +187,10 @@
       <tr>
         <td>You run on <strong>Amazon Bedrock, Google Cloud&rsquo;s Agent Platform or Microsoft Foundry</strong></td>
         <td>Explicitly listed as unavailable API-endpoint configurations.</td>
+      </tr>
+      <tr>
+        <td>You sign in through an <strong>enterprise Claude apps gateway</strong></td>
+        <td>Listed in the same place as the other unavailable API-endpoint configurations.</td>
       </tr>
       <tr>
         <td>You set <code>DISABLE_TELEMETRY</code>, <code>DO_NOT_TRACK</code>, <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> or <code>DISABLE_GROWTHBOOK</code></td>
@@ -230,13 +237,45 @@
     </tbody>
   </table>
 
-  <h2 id="other-options">Other self-hosted projects</h2>
-  <p>This project is not the only one in this space, and it is not the largest. If it does not fit, these are worth a look &mdash; check each project&rsquo;s own README for current capabilities rather than trusting a comparison table that will drift:</p>
-  <ul>
-    <li><a href="https://github.com/siteboon/claudecodeui" target="_blank" rel="noopener">siteboon/claudecodeui</a> &mdash; web and mobile UI with a file explorer, git integration and a built-in shell.</li>
-    <li><a href="https://github.com/slopus/happy" target="_blank" rel="noopener">slopus/happy</a> &mdash; mobile client with its own companion CLI.</li>
-    <li><a href="https://github.com/sugyan/claude-code-webui" target="_blank" rel="noopener">sugyan/claude-code-webui</a> &mdash; a lighter web interface with streaming responses.</li>
-  </ul>
+  <h2 id="self-hosted-options">Which self-hosted option fits</h2>
+  <p>This project is not the only one in this space, and it is not the largest. The options below differ less in features, which change every week, than in <strong>shape</strong>: what you use on the phone, how the phone reaches your computer, and what has to run on the computer. This section sticks to those, because they rarely change. For current features, read each project&rsquo;s own README.</p>
+  <table>
+    <thead><tr><th>If you want&hellip;</th><th>Pick</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Native phone apps, with no port or tunnel to configure</td>
+        <td><strong>Happy</strong></td>
+        <td>Phone and computer both connect out to a relay server, and everything is end-to-end encrypted before it leaves your computer. You can run your own relay.</td>
+      </tr>
+      <tr>
+        <td>A full browser workspace (shell, file tree, git), and you also use Cursor CLI or Codex</td>
+        <td><strong>CloudCLI</strong></td>
+        <td>A web UI served from your machine with chat, shell, file and git views; on the same network the phone opens it by IP and port.</td>
+      </tr>
+      <tr>
+        <td>Nothing new on the computer; you already live in the terminal</td>
+        <td><strong>SSH + tmux</strong></td>
+        <td>An SSH client on the phone, a private network such as Tailscale, and plain <code>claude</code> inside tmux.</td>
+      </tr>
+      <tr>
+        <td>A phone-first UI that follows the terminal (approvals, <code>AskUserQuestion</code>, background tasks, the session you left running in the terminal), with the control plane on your own machine</td>
+        <td><strong>This project</strong></td>
+        <td>A server on your machine drives your local <code>claude</code> CLI through the Agent SDK; server, transcripts, device trust and audit log all stay there.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="happy">Happy</h3>
+  <p>Native iOS and Android apps plus a web app, for Claude Code and Codex. On the computer you install the <code>happy</code> CLI and start sessions with <code>happy</code> instead of <code>claude</code>. The CLI encrypts everything before it leaves your computer; a relay server forwards the encrypted messages to your phone and cannot read them. Because both sides connect out to the relay, there is no port forwarding to set up. The relay is open source and can be self-hosted. Sources: <a href="https://github.com/slopus/happy" target="_blank" rel="noopener">README</a>, <a href="https://happy.engineering/docs/how-it-works/" target="_blank" rel="noopener">How it works</a>, <a href="https://happy.engineering/docs/guides/self-hosting/" target="_blank" rel="noopener">Self-hosting</a>.</p>
+
+  <h3 id="cloudcli">CloudCLI (claudecodeui)</h3>
+  <p>A desktop and mobile web UI for Claude Code, Cursor CLI and Codex, with chat, an integrated shell, a file explorer and a git explorer. Self-hosted, it runs as a Node server on your machine and discovers your existing sessions automatically. On the same network the phone opens <code>http://[your-machine-ip]:3001</code>, and the page can be added to the home screen. For access from elsewhere, its docs suggest a reverse proxy with an auth layer in front, or a tunnel for temporary use. A paid, hosted CloudCLI Cloud runs the agents in the cloud instead. Sources: <a href="https://github.com/siteboon/claudecodeui" target="_blank" rel="noopener">README</a>, <a href="https://cloudcli.ai/docs/features/mobile-app" target="_blank" rel="noopener">Access from mobile</a>, <a href="https://cloudcli.ai/docs/installation/remote-server" target="_blank" rel="noopener">Remote server</a>.</p>
+
+  <h3 id="ssh-tmux">SSH + tmux, no extra software</h3>
+  <p>Keep using the terminal, just from the phone. On Android, Termux; on iOS, an SSH client such as Blink or Prompt. Tailscale gives the phone a private route to your computer, mosh helps on unreliable connections, and tmux keeps the <code>claude</code> session running between connections. Source: <a href="https://www.skeptrune.com/posts/claude-code-on-mobile-termux-tailscale" target="_blank" rel="noopener">How I Use Claude Code on My Phone with Termux and Tailscale</a>.</p>
+
+  <h3 id="this-project">Claude Chat Mobile (this project)</h3>
+  <p>A phone-first web UI, installable as a PWA, that aims for parity with your terminal: tool approvals, <code>AskUserQuestion</code>, background tasks, and the session you left running in the terminal, with one driver at a time. The server runs on your machine and drives your local <code>claude</code> CLI through the Agent SDK, so it uses whatever provider that CLI is configured for. Reach it over your LAN, or through a tunnel, VPN or reverse proxy you choose; it refuses to start without a token, and each new remote device needs a one-time approval unless an identity layer such as Cloudflare Access sits in front. Sources: <a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">README</a>, <a href="security.html">Security</a>.</p>
 
   <h2 id="faq">FAQ</h2>
   <h3>Should I use Claude Chat Mobile or the official Claude Code Remote Control?</h3>
@@ -247,6 +286,8 @@
   <p>With the official Remote Control, the transcript is stored on Anthropic servers while the session is connected, so it can sync across devices. With Claude Chat Mobile the transcript stays on your own machine, in the same files your local CLI already writes.</p>
   <h3>Does my computer need to stay on?</h3>
   <p>Yes, for both. Both approaches drive a claude process running on your own machine; if that machine sleeps or the process exits, the session goes offline. Self-hosting does not change this.</p>
+  <h3>Happy, CloudCLI or Claude Chat Mobile: which self-hosted option should I use?</h3>
+  <p>They solve the same problem in different shapes. Happy gives you native iOS and Android apps and handles the networking through an end-to-end encrypted relay server, which you can also run yourself. CloudCLI is a browser workspace with chat, shell, file and git views that also drives Cursor CLI and Codex; the phone reaches it over your network or a proxy you set up. Claude Chat Mobile is a phone-first web UI that follows your local claude CLI as closely as it can, with the server, transcripts and device trust on your own machine. If the official Remote Control works for your setup, use that first.</p>
 
   <div class="callout">
     <strong>Still think this fits?</strong>

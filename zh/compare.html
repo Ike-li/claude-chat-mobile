@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手机上用 Claude Code：官方 Remote Control、Happy、CloudCLI 还是 Claude Chat Mobile？</title>
+<meta name="description" content="一份诚实的选型说明：多数人应该直接用官方 Claude Code Remote Control；它用不了的时候，Happy、CloudCLI、SSH + tmux 和 Claude Chat Mobile 各是什么形态、该怎么选。">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/zh/compare.html">
+<link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/zh/compare.html">
+<link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/compare.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:title" content="手机上用 Claude Code：该选哪个方案？">
+<meta property="og:description" content="多数人该用官方 Remote Control。这里写明它用不了的情况，以及几种自托管方案在形态上的区别。">
+<meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/zh/compare.html">
+<meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="手机上用 Claude Code：该选哪个方案？">
+<meta name="twitter:description" content="一份诚实的选型说明，也写了什么时候不该用本项目。">
+<meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Claude Chat Mobile",
+      "item": "https://ike-li.github.io/claude-chat-mobile/zh/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "选型对比",
+      "item": "https://ike-li.github.io/claude-chat-mobile/zh/compare.html"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "该用 Claude Chat Mobile 还是官方的 Claude Code Remote Control？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "大多数人用官方 Remote Control。Pro、Max、Team 或 Enterprise 套餐都带它，一条命令就能用，不用自己跑服务，也不用操心安全。Claude Chat Mobile 是给 Remote Control 用不了的情况准备的：用 API key 认证、通过 ANTHROPIC_BASE_URL 接了第三方网关或代理、跑在 Bedrock / Google Cloud Agent Platform / Microsoft Foundry 上，或者会话记录不能离开你的电脑。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Claude Code Remote Control 支持 API key 或第三方网关吗？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "不支持。官方文档写明不支持 API key；ANTHROPIC_BASE_URL 指向 api.anthropic.com 以外的主机（例如 LLM 网关或代理）时，Remote Control 也不可用。Claude Chat Mobile 直接驱动你本机的 CLI，那个 CLI 配的是哪家，它就用哪家。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "我的会话记录存在哪？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "用官方 Remote Control 时，连接期间会话记录存放在 Anthropic 的服务器上，以便在多台设备间同步。用 Claude Chat Mobile 时，会话记录留在你自己的电脑上，就是本机 CLI 本来就会写的那些文件。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "电脑需要一直开着吗？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "两种都需要。两者驱动的都是你电脑上的 claude 进程，电脑休眠或进程退出，会话就离线了。自托管改变不了这一点。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Happy、CloudCLI 和 Claude Chat Mobile，自托管该选哪个？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "它们解决的是同一个问题，只是形态不同。Happy 提供 iOS 和 Android 原生 App，网络由一台端到端加密的中继服务器解决，中继也可以自己搭。CloudCLI 是带对话、终端、文件和 git 视图的浏览器工作台，还能驱动 Cursor CLI 和 Codex，手机通过你的网络或你自己配置的代理访问它。Claude Chat Mobile 是以手机为先的网页界面，尽可能贴近你本机的 claude CLI，服务、会话记录和设备信任都在你自己的电脑上。如果官方 Remote Control 在你的配置下能用，先用它。"
+      }
+    }
+  ]
+}
+</script>
+<style>
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+    --line:#E3E0D6; --line-soft:#ECEAE1;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+    --accent:#C96442; --accent-deep:#AE5238; --accent-wash:#F0E4DD;
+    --warn-bg:#F7EFE4; --warn-ink:#7A4E1E;
+    --ok-bg:#E8F0EA; --ok-ink:#2F5C3A;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --font-read: Georgia, Charter, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius:0.625rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#121211; --surface:#1C1B1A; --surface-sunk:#161514;
+      --line:#2E2C2A; --line-soft:#242221;
+      --ink:#EEEEEC; --ink-soft:#A3A19D; --ink-faint:#7A7874;
+      --accent:#D97757; --accent-deep:#E2886A; --accent-wash:#2D231E;
+      --warn-bg:#2A2218; --warn-ink:#E0B57A;
+      --ok-bg:#1A2620; --ok-ink:#8FBE9A;
+    }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:var(--font-ui); background:var(--canvas); color:var(--ink);
+    line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code, pre { font-family:var(--font-mono); }
+  code {
+    background:var(--surface-sunk); border:1px solid var(--line-soft);
+    padding:.08em .35em; border-radius:.28em; font-size:.9em; color:var(--accent-deep);
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:0 22px; }
+  nav {
+    position:sticky; top:0; z-index:20;
+    background:color-mix(in srgb, var(--canvas) 86%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
+  }
+  .nav-in { display:flex; align-items:center; gap:12px; height:56px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:600; color:var(--ink); }
+  .brand:hover { text-decoration:none; }
+  .mark {
+    width:26px; height:26px; border-radius:7px; background:var(--accent); color:#F4F3EE;
+    display:grid; place-items:center; font-family:var(--font-read); font-size:16px;
+  }
+  .nav-spacer { flex:1; }
+  .nav-in a.meta { font-size:14px; color:var(--ink-soft); }
+  header.page { padding:40px 0 18px; }
+  .kicker { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--accent); letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+  h1 { font-family:var(--font-read); font-size:clamp(28px,4vw,38px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin-bottom:12px; }
+  .lead { font-size:17.5px; color:var(--ink-soft); margin-bottom:14px; }
+  .alts { font-size:14px; color:var(--ink-faint); margin-bottom:8px; }
+  main { padding-bottom:64px; }
+  h2 { font-family:var(--font-read); font-size:22px; margin:32px 0 12px; font-weight:600; }
+  h3 { font-size:16.5px; margin:18px 0 8px; font-weight:600; }
+  p, li { font-size:15.5px; color:var(--ink); }
+  ul, ol { padding-left:1.25em; margin:8px 0 14px; }
+  li { margin:6px 0; }
+  pre {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; overflow:auto; font-size:13.5px; line-height:1.55; margin:12px 0 16px;
+    box-shadow:0 1px 2px rgba(60,50,40,.04);
+  }
+  pre code { background:none; border:0; padding:0; color:var(--ink); font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 18px; font-size:14.5px; }
+  th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--surface-sunk); font-weight:600; }
+  .callout {
+    border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:14px 0;
+    background:var(--surface);
+  }
+  .callout.warn { background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn-ink) 25%, var(--line)); color:var(--warn-ink); }
+  .callout.ok { background:var(--ok-bg); border-color:color-mix(in srgb, var(--ok-ink) 25%, var(--line)); color:var(--ok-ink); }
+  .callout strong { display:block; margin-bottom:4px; }
+  .steps { counter-reset:step; list-style:none; padding-left:0; }
+  .steps > li {
+    position:relative; padding:14px 14px 14px 52px; margin:0 0 12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  }
+  .steps > li::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%;
+    background:var(--accent-wash); color:var(--accent-deep); font-weight:700; font-size:13px;
+    display:grid; place-items:center;
+  }
+  footer {
+    border-top:1px solid var(--line-soft); padding:22px 0 36px; color:var(--ink-faint); font-size:13.5px;
+  }
+  footer .foot { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
+</style>
+<style>
+  /* 本页特有：表格里有 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 这类超长标识符，
+     420px 视口下会撑破表格、让整页横向滚动（实测 546px vs 420px）。共用样式块与
+     其他英文页保持逐字一致，断词规则只加在这一页。 */
+  td, th { overflow-wrap:anywhere; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="../zh/">
+      <span class="mark">C</span>
+      <span>Claude Chat Mobile</span>
+    </a>
+    <div class="nav-spacer"></div>
+    <a class="meta" href="../docs-site/pages/quickstart.html">快速开始</a>
+    <a class="meta" href="../en/compare.html" hreflang="en">English</a>
+    <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<header class="page">
+  <div class="wrap">
+    <div class="kicker">诚实的对比</div>
+    <h1>官方 Remote Control，还是自托管？</h1>
+    <p class="lead">先说结论：<strong>大多数人应该直接用官方的 Claude Code Remote Control</strong>。它随 Claude 订阅附带，一条命令就能开，不用自己跑服务，也不用操心安全。这一页只讲它<em>用不了</em>的那几种情况，那才是自托管本项目这类工具的理由。如果你正好命中其中一条，<a href="#self-hosted-options">后半部分</a>再比较几种自托管方案，包括本项目。</p>
+    <p class="alts">关于 Remote Control 的事实取自 <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">Claude Code 官方文档</a>；其他项目的事实取自它们各自的 README 和文档，出处就近给出 &middot; <time datetime="2026-09-24">核对于 2026-09-24</time></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="callout ok">
+    <strong>下表没有一条符合你的情况，就用官方 Remote Control</strong>
+    在任意 Claude Code 会话里运行 <code>/remote-control</code>，用 Claude App 扫一下二维码就行。不用装任何东西，不用开端口，也没有要你自己打补丁的服务器。它能用的话就是更好的选择，本项目没有什么可补充的。
+  </div>
+
+  <h2 id="when-rc-cannot-work">官方 Remote Control 用不了的情况</h2>
+  <p>下面是 Anthropic 官方文档里写明的硬性要求，不是观点。你的配置只要符合其中一行，Remote Control 就用不了，自托管的桥接工具是剩下为数不多的选择之一。</p>
+  <table>
+    <thead><tr><th>你的配置</th><th>官方文档怎么说</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>用 <strong>API key</strong> 认证</td>
+        <td>原文「API keys are not supported.」Remote Control 要求用 claude.ai 账号登录，套餐为 Pro、Max、Team 或 Enterprise。</td>
+      </tr>
+      <tr>
+        <td>把 <code>ANTHROPIC_BASE_URL</code> 指向<strong>中转、第三方网关或代理</strong>（包括接国产模型的兼容端点）</td>
+        <td>变量指向「api.anthropic.com 以外的主机，例如 LLM 网关或代理」时不可用。（CLI v2.1.196 之前允许，此后收紧。）</td>
+      </tr>
+      <tr>
+        <td>跑在 <strong>Amazon Bedrock、Google Cloud 的 Agent Platform 或 Microsoft Foundry</strong> 上</td>
+        <td>官方明确列为不可用的 API 端点配置。</td>
+      </tr>
+      <tr>
+        <td>通过<strong>企业版 Claude apps gateway</strong> 登录</td>
+        <td>和上面几种列在一起，同属不可用的 API 端点配置。</td>
+      </tr>
+      <tr>
+        <td>设置了 <code>DISABLE_TELEMETRY</code>、<code>DO_NOT_TRACK</code>、<code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> 或 <code>DISABLE_GROWTHBOOK</code></td>
+        <td>任意一个都会关掉 Remote Control 所依赖的功能开关评估，要用 Remote Control 必须先取消设置。</td>
+      </tr>
+      <tr>
+        <td>组织要求<strong>零数据保留（Zero Data Retention）</strong></td>
+        <td>原文「Organizations with compliance requirements such as Zero Data Retention can&rsquo;t enable Remote Control.」</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="transcript">会话记录存在哪</h2>
+  <p>这是另一处真正的区别，而且各有利弊。</p>
+  <ul>
+    <li><strong>官方 Remote Control：</strong>连接期间，会话记录（你的消息、Claude 的回复和工具调用）存放在 Anthropic 的服务器上，这样才能在多台设备间同步，网络断了也能接上。代码执行和文件访问仍在你的电脑上。</li>
+    <li><strong>本项目：</strong>会话记录就留在 CLI 本来就会写的那些本地文件里，不在电脑以外存任何东西。代价是跨设备同步和断线重连要靠你自己的服务来做，而不是 Anthropic。</li>
+  </ul>
+
+  <h2 id="what-is-not-different">哪些<em>不是</em>区别</h2>
+  <div class="callout">
+    <strong>两种方式都得让电脑开着</strong>
+    两者驱动的都是你电脑上的 <code>claude</code> 进程。电脑休眠或进程退出，会话就离线了。自托管换不来一个不依赖你电脑的会话，如果你要的是那个，这两种都不对。
+  </div>
+
+  <h2 id="what-you-take-on">自托管要自己承担什么</h2>
+  <p>直说，因为对比页通常会略过这一段：</p>
+  <ul>
+    <li>你要自己运行和更新一个 Node 服务，并决定手机怎么连到它：局域网、隧道，还是 Cloudflare Access。项目默认上锁，没有令牌就拒绝启动，但暴露到哪一步由你决定。</li>
+    <li>一个实例只服务<strong>一个用户</strong>。没有多租户，也不打算做。</li>
+    <li>推送通知要用你自己的 Web Push 密钥或 ntfy 主题，背后没有托管服务。</li>
+    <li>没有官方手机 App，它是一个加到主屏幕的 PWA。</li>
+  </ul>
+
+  <h2 id="decide">一句话决定</h2>
+  <table>
+    <thead><tr><th>如果&hellip;</th><th>那就</th></tr></thead>
+    <tbody>
+      <tr><td>你用的是 Pro/Max，正常用 claude.ai 账号登录</td><td><strong>官方 Remote Control。</strong>不用往下看了。</td></tr>
+      <tr><td>你的 CLI 走中转、第三方网关或 API key</td><td>Remote Control 用不了，本项目就是为这种情况做的。</td></tr>
+      <tr><td>会话记录不能离开你的电脑</td><td>自托管。本项目或同类方案。</td></tr>
+      <tr><td>你要的是和终端等价的控制，而不是投屏</td><td>两者都行；本项目追求和 CLI 对齐（审批、<code>AskUserQuestion</code>、子代理、后台任务）。</td></tr>
+      <tr><td>你想让会话在笔记本关机时继续跑</td><td>两者都不行，去看云端托管的 agent。</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="self-hosted-options">自托管方案怎么选</h2>
+  <p>这个领域不只有本项目，它也不是最大的那个。下面几种方案的区别主要不在功能（功能每周都在变），而在<strong>形态</strong>：手机上用什么、手机怎么连到你的电脑、电脑上要跑什么。本节只讲这几点，因为它们很少变。各家当前有哪些功能，请看它们自己的 README。</p>
+  <table>
+    <thead><tr><th>如果你想要&hellip;</th><th>选</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>原生手机 App，不用配置端口或隧道</td>
+        <td><strong>Happy</strong></td>
+        <td>手机和电脑都主动连到一台中继服务器，所有内容在离开电脑前就做了端到端加密。中继可以自己搭。</td>
+      </tr>
+      <tr>
+        <td>完整的浏览器工作台（终端、文件树、git），而且也用 Cursor CLI 或 Codex</td>
+        <td><strong>CloudCLI</strong></td>
+        <td>由你电脑上的服务提供网页界面，有对话、终端、文件和 git 视图；同一网络下手机用 IP 加端口打开。</td>
+      </tr>
+      <tr>
+        <td>电脑上不装任何新东西，你本来就习惯终端</td>
+        <td><strong>SSH + tmux</strong></td>
+        <td>手机上一个 SSH 客户端，加一张 Tailscale 这样的私有网络，再在 tmux 里跑原生的 <code>claude</code>。</td>
+      </tr>
+      <tr>
+        <td>以手机为先、跟着终端走的界面（审批、<code>AskUserQuestion</code>、后台任务、你在终端里开着的那个会话），控制面留在自己电脑上</td>
+        <td><strong>本项目</strong></td>
+        <td>你电脑上的服务通过 Agent SDK 驱动本机的 <code>claude</code> CLI；服务、会话记录、设备信任和审计日志都留在那台电脑上。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="happy">Happy</h3>
+  <p>有 iOS、Android 原生 App 和网页版，支持 Claude Code 和 Codex。电脑上安装 <code>happy</code> CLI，之后用 <code>happy</code> 代替 <code>claude</code> 启动会话。CLI 在内容离开电脑前先加密，由中继服务器把加密后的消息转给手机，中继本身读不了内容。因为两端都是主动连出去，所以不用设置端口转发。中继开源，可以自己部署。出处：<a href="https://github.com/slopus/happy" target="_blank" rel="noopener">README</a>、<a href="https://happy.engineering/docs/how-it-works/" target="_blank" rel="noopener">How it works</a>、<a href="https://happy.engineering/docs/guides/self-hosting/" target="_blank" rel="noopener">Self-hosting</a>。</p>
+
+  <h3 id="cloudcli">CloudCLI（claudecodeui）</h3>
+  <p>面向 Claude Code、Cursor CLI 和 Codex 的桌面与手机网页界面，带对话、内置终端、文件浏览器和 git 浏览器。自托管时它作为 Node 服务跑在你的电脑上，会自动发现你已有的会话。同一网络下手机打开 <code>http://[你的电脑 IP]:3001</code>，页面可以加到主屏幕。从外面访问时，它的文档建议前面放一个带认证的反向代理，临时用可以走隧道。另有付费的托管版 CloudCLI Cloud，agent 跑在云上。出处：<a href="https://github.com/siteboon/claudecodeui" target="_blank" rel="noopener">README</a>、<a href="https://cloudcli.ai/docs/features/mobile-app" target="_blank" rel="noopener">Access from mobile</a>、<a href="https://cloudcli.ai/docs/installation/remote-server" target="_blank" rel="noopener">Remote server</a>。</p>
+
+  <h3 id="ssh-tmux">SSH + tmux，不装额外软件</h3>
+  <p>继续用终端，只是换到手机上。安卓用 Termux；iOS 用 Blink 或 Prompt 这类 SSH 客户端。Tailscale 让手机有一条到你电脑的私有线路，网络不稳时 mosh 更好用，tmux 让 <code>claude</code> 会话在两次连接之间一直跑着。出处：<a href="https://www.skeptrune.com/posts/claude-code-on-mobile-termux-tailscale" target="_blank" rel="noopener">How I Use Claude Code on My Phone with Termux and Tailscale</a>。</p>
+
+  <h3 id="this-project">Claude Chat Mobile（本项目）</h3>
+  <p>以手机为先的网页界面，可以作为 PWA 装到主屏幕，目标是和终端对齐：工具审批、<code>AskUserQuestion</code>、后台任务，以及你在终端里开着的那个会话，同一时刻只有一个驾驶端。服务跑在你的电脑上，通过 Agent SDK 驱动本机的 <code>claude</code> CLI，所以那个 CLI 配的是哪家模型通路，它就用哪家。可以走局域网，也可以走你自己选的隧道、VPN 或反向代理；没有令牌就拒绝启动，新的远程设备要先审批一次，除非前面有 Cloudflare Access 这样的身份层。出处：<a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">README</a>、<a href="../docs-site/pages/security-model.html">安全模型</a>。</p>
+
+  <h2 id="faq">常见问题</h2>
+  <h3>该用 Claude Chat Mobile 还是官方的 Claude Code Remote Control？</h3>
+  <p>大多数人用官方 Remote Control。Pro、Max、Team 或 Enterprise 套餐都带它，一条命令就能用，不用自己跑服务，也不用操心安全。Claude Chat Mobile 是给 Remote Control 用不了的情况准备的：用 API key 认证、通过 ANTHROPIC_BASE_URL 接了第三方网关或代理、跑在 Bedrock / Google Cloud Agent Platform / Microsoft Foundry 上，或者会话记录不能离开你的电脑。</p>
+  <h3>Claude Code Remote Control 支持 API key 或第三方网关吗？</h3>
+  <p>不支持。官方文档写明不支持 API key；ANTHROPIC_BASE_URL 指向 api.anthropic.com 以外的主机（例如 LLM 网关或代理）时，Remote Control 也不可用。Claude Chat Mobile 直接驱动你本机的 CLI，那个 CLI 配的是哪家，它就用哪家。</p>
+  <h3>我的会话记录存在哪？</h3>
+  <p>用官方 Remote Control 时，连接期间会话记录存放在 Anthropic 的服务器上，以便在多台设备间同步。用 Claude Chat Mobile 时，会话记录留在你自己的电脑上，就是本机 CLI 本来就会写的那些文件。</p>
+  <h3>电脑需要一直开着吗？</h3>
+  <p>两种都需要。两者驱动的都是你电脑上的 claude 进程，电脑休眠或进程退出，会话就离线了。自托管改变不了这一点。</p>
+  <h3>Happy、CloudCLI 和 Claude Chat Mobile，自托管该选哪个？</h3>
+  <p>它们解决的是同一个问题，只是形态不同。Happy 提供 iOS 和 Android 原生 App，网络由一台端到端加密的中继服务器解决，中继也可以自己搭。CloudCLI 是带对话、终端、文件和 git 视图的浏览器工作台，还能驱动 Cursor CLI 和 Codex，手机通过你的网络或你自己配置的代理访问它。Claude Chat Mobile 是以手机为先的网页界面，尽可能贴近你本机的 claude CLI，服务、会话记录和设备信任都在你自己的电脑上。如果官方 Remote Control 在你的配置下能用，先用它。</p>
+
+  <div class="callout">
+    <strong>还是觉得适合你？</strong>
+    先试试<a href="../demo/">在线演示</a>：跑的是真实前端加假后端，装之前就能判断界面合不合用。然后看<a href="../docs-site/pages/quickstart.html">快速开始</a>。
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Apache-2.0</span>
+    <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub</a>
+    <a href="../zh/">首页</a>
+    <a href="../docs-site/pages/quickstart.html">快速开始</a>
+    <a href="../docs-site/pages/security-model.html">安全模型</a>
+    <a href="../demo/">演示</a>
+  </div>
+</footer>
+</body>
+</html>

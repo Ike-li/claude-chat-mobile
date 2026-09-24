@@ -38,6 +38,7 @@ const ENTRIES = [
   ['/zh/', 'weekly', '1.0'],
   ['/demo/', 'monthly', '0.9'],
   ['/en/compare.html', 'monthly', '0.9'],
+  ['/zh/compare.html', 'monthly', '0.9'],
   ['/en/quickstart.html', 'monthly', '0.9'],
   ['/en/security.html', 'monthly', '0.9'],
   ['/docs-site/', 'weekly', '0.9'],
