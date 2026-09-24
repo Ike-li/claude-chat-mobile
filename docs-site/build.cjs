@@ -257,7 +257,7 @@ function shell(p, bodyHtml, toc, flat) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(p.title)} · ${esc(book.title)}</title>
-<meta name="description" content="${esc(p.lead || '')}">
+<meta name="description" content="${esc(p.description || p.lead || '')}">
 <meta name="llm:tokens" content="${p.tokens}">
 <link rel="alternate" type="text/markdown" href="${p.home ? 'index.md' : p.slug + '.md'}">
 <link rel="canonical" href="${canonicalUrl}">${hreflangTags}

@@ -60,7 +60,9 @@ module.exports = {
           lead: '事件契约、import 边界、inventory、check 流水线。',
           src: ['tests/gates/', 'docs/testing.md'] },
         { slug: 'glossary', title: '术语表', time: 6,
-          lead: 'instance、envelope、mirror、TOFU 等高频词。' },
+          lead: 'instance、envelope、mirror、TOFU 等高频词。',
+          // 正文是一张表、没有 h2，build-descriptions 拼不出「本页讲」，meta description 只能在这里写
+          description: 'Claude Chat Mobile 核心术语的标准定义：instanceId、sessionId、epoch、seq、mirrorReadonly、externalDirty、terminalWaiting、Tail Attribution、TOFU、ACCESS_PROFILE、CCM_DATA_DIR、canUseTool、环形缓冲。' },
       ],
     },
     {
