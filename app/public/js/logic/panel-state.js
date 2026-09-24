@@ -263,6 +263,39 @@ export function owningWorkspace(cwd, dirs) {
   return best;
 }
 
+// SESSION-02：抽屉里活着的实例必须有一行。下面三个函数合起来把每个活实例分到恰好一个去处，
+// sectionKeys 是抽屉当前所有小节的键。
+//
+// 一个小节的活实例：有 sessionId 的进 liveMap（给列表行贴运行态），没有的进 freshTabs（新会话 tab）。
+// freshTabs 不再要求 cwd 就是小节本身——懒开到托管 worktree、还没拿到 sessionId 的实例 cwd 是
+// `<工作区>/.claude/worktrees/<n>`，只收 cwd === 小节的话它哪一节都不画。
+export function liveRowsForSection(instances, sectionKey, sectionKeys) {
+  const liveMap = new Map();
+  const freshTabs = [];
+  for (const inst of Array.isArray(instances) ? instances : []) {
+    if (!inst?.instanceId) continue;
+    if ((owningWorkspace(inst.cwd, sectionKeys) || inst.cwd) !== sectionKey) continue;
+    if (inst.sessionId) liveMap.set(inst.sessionId, inst);
+    else freshTabs.push(inst);
+  }
+  return { liveMap, freshTabs };
+}
+
+// liveMap 里、列表没返回的那些：被分页挤出本页，或 transcript 被 EnterWorktree 迁到了别的 project 目录。
+// 只给行贴运行态的话，它们在抽屉里整行消失——正在跑，却既看不见也关不掉。
+export function orphanLiveRows(liveMap, listedIds) {
+  const listed = listedIds instanceof Set ? listedIds : new Set(listedIds || []);
+  const out = [];
+  for (const [sid, inst] of liveMap) if (!listed.has(sid)) out.push(inst);
+  return out;
+}
+
+// cwd 不在任何小节之下的活实例（例如刚进了仓库外的平级 worktree）：由抽屉单独成一节。
+export function unownedLiveInstances(instances, sectionKeys) {
+  return (Array.isArray(instances) ? instances : [])
+    .filter(inst => inst?.instanceId && !owningWorkspace(inst.cwd, sectionKeys));
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。

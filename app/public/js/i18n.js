@@ -629,6 +629,7 @@ export const EN_DICT = Object.freeze({
   '工具': 'tool',
   '个运行中': 'running',
   '运行中': 'Running',
+  '运行中（不在已连接的文件夹里）': 'Running (outside your connected folders)',
   '终端运行中': 'Terminal running',
   // 桌面端 Code 模式（Claude.app 里的 Code 标签）驾驶的会话。它跑的是同一份 claude 二进制，但
   // 说成"终端"会给出错误的处理预期——用户要去的是桌面 app 的窗口，不是某个终端标签页。
