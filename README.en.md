@@ -62,7 +62,7 @@ The rest is about getting work done:
 | `/` slash commands | Type `/` for candidates, including the skills you installed |
 | Seeing what it actually changed | Open a tool card to preview the diff; each turn ends with a changed-files summary (± lines) |
 | A quick `git diff` | The "Changes" tab in the workspace panel |
-| Rewind or branch off | Long-press a message: **rewind** restores the workspace files to before that message and forks a new session from that moment; **fork** copies the conversation only, leaving files alone. The original session survives either way |
+| Rewind or branch off | Type `/rewind` — two steps, as in the terminal: pick the turn to go back before, then restore the code and conversation, the conversation only, or the code only. Anything that touches the conversation forks a new session from that moment; the original survives. To just branch off, tap **Fork from here** under a reply (or long-press a message on a touchscreen): it copies the conversation only, leaving files alone |
 | Glancing at the statusline | Always-on summary in the composer. Expand for model / branch / ctx usage / **5h and 7d quota usage with reset countdowns** / estimated spend, copyable in one tap |
 | Watching background tasks | A task banner; stop any single one |
 | **That session you left open in the terminal** | Visible, and you can take the wheel — one driver at a time, and it warns you on takeover |
