@@ -1,6 +1,7 @@
 // i18n.js —— 运行时词典（无构建步骤：zh 原文即 key，恒等设计）。
 // t() 在 zh locale（默认）下原样返回中文——零开销，且不影响任何既有断言中文文案的测试（单测/E2E 除
-// 一个 en spec 外全部固定跑 zh）。en locale 下查字典，未收录的 key 静默回落中文原文，不是"未翻译就报错"。
+// 一个 en spec 外全部固定跑 zh）。en locale 下查字典，未收录的 key 运行时静默回落中文原文，不报错；
+// 但 t() 用到的中文 key 没进词典，npm run check 的 i18n-check 会红（2026-09-24 起）。有意不译的文案别包 t()。
 // 语言选择持久化 localStorage；切换后提示用户手动刷新生效（不做响应式重渲，保持极简）。
 //
 // 覆盖分两条路径，缺一不可：
@@ -15,7 +16,8 @@
 export const LANG_STORAGE_KEY = 'ccm_lang';
 
 // 译文用语对齐 Claude Code CLI（permission mode / workspace / interrupt / resume 等），让从 CLI 切过来的
-// 人零认知成本。tests/gates/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key。
+// 人零认知成本。tests/gates/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key，
+// 也报 t() 用了、词典里没有的中文 key。
 //
 // 注意混排句：`令牌在服务器 <code>ccm.config.json</code> 的 <code>AUTH_TOKEN</code> 或启动日志里。` 会被 DOM 切成
 // 好几个文本节点，词典 key 因此是「的」「或启动日志里。」这样的碎片。译文按英文语序分配到各碎片上，
@@ -555,9 +557,11 @@ export const EN_DICT = Object.freeze({
   'Claude 正在执行任务...': 'Claude is working...',
   '没有可中断的任务': 'Nothing to interrupt',
   '停止请求超时，可再试一次': 'Stop request timed out — try again',
+  '停止请求未生效：任务可能已结束': 'The stop request had no effect — the task may have already finished',
   '目标会话已关闭，请刷新后重发': 'The target session is closed — refresh and send again',
   '发送失败：': 'Send failed: ',
   '未确认送达': 'Delivery unconfirmed',
+  '未确认送达，已排队重试': 'Delivery unconfirmed — queued for retry',
 
   // —— 模型 / 权限档 / 思考强度 ——
   '当前加载模型': 'Currently loaded model',
@@ -641,6 +645,9 @@ export const EN_DICT = Object.freeze({
   '工作流': 'Workflow',
   '其它': 'Other',
   'N 个子代理': 'N subagents',
+  '正在读取子代理执行记录…': 'Loading the subagent\'s activity…',
+  '没有可显示的子代理执行记录': 'No subagent activity to show',
+  '（只显示最近的部分记录）': '(showing only the most recent activity)',
   'N 条命令': 'N commands',
   'N 个工作流': 'N workflows',
   'N 个其它': 'N other',
@@ -697,6 +704,9 @@ export const EN_DICT = Object.freeze({
   '——来自本机': ' — from this machine,',
   '，多半是你自己的旧 token': ', most likely your own stale token',
   '——来自局域网': ' — from the local network,',
+  // 「——反代/隧道后的 127.0.0.1，无法确认是否为本机」：地址夹在两个片段中间
+  '——反代/隧道后的': ' — behind a reverse proxy/tunnel,',
+  '，无法确认是否为本机': ', so it can\'t be confirmed as this machine',
   '——公网': ' — public IP',
   '在暴力尝试你的入口': 'is brute-forcing your entry point',
   '🔔 推送最近失败于': '🔔 Push last failed at',
@@ -887,12 +897,14 @@ export const EN_DICT = Object.freeze({
   '续接 CLI 会话：运行中会排队等本轮结束，疑似中断需确认': 'Resume the CLI session: queues until the current turn ends; needs confirming if it looks interrupted',
   '只读镜像：本会话自主循环执行中——点右侧续接可在手机继续': 'Read-only mirror: this session is in an autonomous loop — tap Resume on the right to continue on your phone',
   '只读镜像：终端会话运行中——点右侧续接可在手机继续': 'Read-only mirror: the terminal session is running — tap Resume on the right to continue on your phone',
+  '只读镜像：终端正在等你操作——点右侧续接可在手机继续': 'Read-only mirror: the terminal is waiting for you — tap Resume on the right to continue on your phone',
   '只读镜像：已请求续接，等待自主循环当前操作完成…': 'Read-only mirror: resume requested — waiting for the autonomous loop to finish its current operation…',
   '只读镜像：已请求续接，等待终端当前操作完成…': 'Read-only mirror: resume requested — waiting for the terminal to finish its current operation…',
   '只读镜像：自主循环疑似中断——确认已停可续接': 'Read-only mirror: the autonomous loop looks interrupted — confirm it stopped, then resume',
   '只读镜像：终端疑似中断——确认已停可续接': 'Read-only mirror: the terminal looks interrupted — confirm it stopped, then resume',
   '只读镜像：本会话自主循环执行中，移动端当前只读': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only for now',
   '只读镜像：终端会话运行中，移动端当前只读': 'Read-only mirror: the terminal session is running; mobile is read-only for now',
+  '只读镜像：终端正在等你操作，移动端当前只读': 'Read-only mirror: the terminal is waiting for you; mobile is read-only for now',
   '终端会话推送': 'Terminal session alerts',
   '推送通知': 'Push notifications',
   '🔔 发一条测试推送': '🔔 Send a test notification',
@@ -945,6 +957,7 @@ export const EN_DICT = Object.freeze({
   '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。': 'Read-only mirror: the terminal looks interrupted. Once you have confirmed the terminal stopped, tap "Resume" to continue on your phone (the history is still there).',
   '只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only · Cannot: type, send images, change model/permissions/thinking · Can: read messages, and writing unlocks once the loop goes quiet · To force it on your phone: tap "Resume" on the right (waits for this turn to end; risks forking)',
   '只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）': 'Read-only mirror: the terminal session is running; mobile is read-only · Cannot: type, send images, change model/permissions/thinking · Can: read messages, and writing unlocks once the terminal goes quiet · To force it on your phone: tap "Resume" on the right (waits for this turn to end; resumes right away if it looks interrupted; risks forking)',
+  '只读镜像：终端正在等你操作（多半是一条待批准的工具调用）· 不能：打字/发图/改模型权限思考 · 处理办法：到电脑上的终端里按键回应 · 不想管它：点右侧「续接」强行接管（终端那边的操作会被放弃，有分叉风险）': 'Read-only mirror: the terminal is waiting for you (most likely a tool call awaiting approval) · Cannot: type, send images, change model/permissions/thinking · To handle it: answer with a keypress in the terminal on your computer · To skip it: tap "Resume" on the right to take over (the terminal\'s pending action is dropped; risks forking)',
   '续接 CLI 会话？': 'Resume the CLI session?',
   '这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。': 'This is the same conversation your computer\'s terminal is running. Resuming does not stop the terminal process — sending from both sides forks the session (each side\'s messages may be invisible to the other).\n\nBetter to Ctrl+C in the terminal, or let it finish, before resuming.',
   '仍要续接': 'Resume anyway',

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-// i18n-check.js —— i18n 的孤儿词典 key 扫描（app/public/js/i18n.js EN_DICT 有、但 index.html 的界面文案
-// 与各 js 的 t('原文') 调用里再没有它）。zh 原文即 key 的设计下，改文案 = 改 key，
-// 旧 key 容易变成词典孤儿——本脚本挂进 npm run check 兜住漂移，不做翻译完整性检查（未翻译=静默回落
-// 中文是设计内行为，见 app/public/js/i18n.js 头注，不是错误）。
+// i18n-check.js —— i18n 词典的双向扫描，挂在 npm run check 里。
+//   · 孤儿 key：app/public/js/i18n.js EN_DICT 有、但 index.html 的界面文案与各 js 的 t('原文') 调用里再没有它。
+//     zh 原文即 key 的设计下，改文案 = 改 key，旧 key 容易变成词典孤儿。
+//   · 未翻译 key：t('原文') 用了含中文的 key、EN_DICT 里没有。运行时仍静默回落中文（i18n.js 头注），
+//     但开发时就要拦下——2026-09-24 之前不查这一向，/rewind 面板上线时 30 条文案漏翻 26 条，没有任何东西报出来。
+//     有意不译的文案（语言名「中文」这类）不要包 t()，直接写字面量。
+//     只查 t() 文案：index.html 静态外壳里有两条有意不译（「中文」「语言 / Language」），不在此列。
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,14 +108,22 @@ export function checkI18n({ rootDir = ROOT } = {}) {
     for (const key of extractHtmlCopyKeys(readFileSync(htmlFile, 'utf8'))) usedKeys.add(key);
   }
   const sources = [];
+  const tKeyFiles = new Map(); // 含中文的 t() key → 用到它的文件（相对路径）
   for (const relPath of walkFiles(rootDir, 'app/public/js', /\.(?:js|mjs)$/)) {
     const text = readFileSync(join(rootDir, relPath), 'utf8');
     // 词典文件自身不算引用来源：每个 key 都写在它的 EN_DICT 里，算进去等于这道闸永远绿。
-    if (relPath.replace(/\\/g, '/') !== 'app/public/js/i18n.js') sources.push(text);
-    for (const key of extractTCallKeys(text)) usedKeys.add(key);
+    // 同理也不算「用到」：它的头注里有 t('原文') 这类用法示例，不是界面文案。
+    const isDictFile = relPath.replace(/\\/g, '/') === 'app/public/js/i18n.js';
+    if (!isDictFile) sources.push(text);
+    for (const key of extractTCallKeys(text)) {
+      usedKeys.add(key);
+      if (isDictFile || !HAS_CHINESE.test(key)) continue;
+      if (!tKeyFiles.has(key)) tKeyFiles.set(key, new Set());
+      tKeyFiles.get(key).add(relPath.replace(/\\/g, '/'));
+    }
   }
 
-  const problems = dictKeys
+  const orphans = dictKeys
     .filter(key => !usedKeys.has(key) && !sources.some(src => keyAppearsAsLiteral(src, key)))
     .map(key => ({
       code: 'orphan_dict_key',
@@ -120,7 +131,19 @@ export function checkI18n({ rootDir = ROOT } = {}) {
       message: `EN_DICT key "${key}" no longer appears in index.html copy or any t('...') call`,
     }));
 
-  return { rootDir, dictKeys, problems };
+  const dictKeySet = new Set(dictKeys);
+  const untranslated = [...tKeyFiles]
+    .filter(([key]) => !dictKeySet.has(key))
+    .map(([key, files]) => ({
+      code: 'untranslated_t_key',
+      key,
+      files: [...files],
+      message: `t('${key}') has no English translation in EN_DICT (used in ${[...files].join(', ')}); `
+        + 'the English UI falls back to the Chinese original. Add it to app/public/js/i18n.js, '
+        + 'or drop the t() if the text is meant to stay untranslated (e.g. a language name)',
+    }));
+
+  return { rootDir, dictKeys, problems: [...orphans, ...untranslated] };
 }
 
 export function formatI18nCheck(result) {

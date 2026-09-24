@@ -116,7 +116,8 @@ function hostRow({ service = null, now = Date.now() } = {}) {
 }
 
 function behaviorRow({ lang = 'zh' } = {}) {
-  const langLabel = { zh: t('中文'), en: 'English', auto: t('跟随浏览器') }[lang] || t('中文');
+  // 语言名用它自己的写法，不翻译：英文界面里「中文」仍是中文，与 English 同理
+  const langLabel = { zh: '中文', en: 'English', auto: t('跟随浏览器') }[lang] || '中文';
   return row('behavior', '🛠', t('行为与开关'), [
     { text: langLabel, el: 'prefLangGroup' },
     { text: t('审批规则'), el: 'permissionRulesSection' },
