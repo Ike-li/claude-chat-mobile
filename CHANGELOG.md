@@ -59,6 +59,7 @@ Changes since v1.12.1.
 - fix(release): UNSTABLE 不再无条件放行，必需检查还在跑时接着等
 
 ### Other
+- test(instance-manager): 等退出上限用例把 Date 一起冻住，修掉 Node 24 上的偶发红
 - docs: 分叉按钮只在带锚点的回复上出现，README 照实写
 - docs: README 与 architecture.md 的回退入口改为 /rewind
 - docs(readme): 首屏改用八张截图，去掉单张审批图
