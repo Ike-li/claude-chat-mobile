@@ -107,6 +107,7 @@
   table { width:100%; border-collapse:collapse; margin:12px 0 18px; font-size:14.5px; }
   th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
   th { background:var(--surface-sunk); font-weight:600; }
+  td code { overflow-wrap:anywhere; }
   .callout {
     border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:14px 0;
     background:var(--surface);
@@ -149,7 +150,7 @@
     <div class="kicker">English install path</div>
     <h1>Quickstart</h1>
     <p class="lead">Self-hosted mobile Web UI for your <strong>real local</strong> <code>claude</code> CLI—same agent, same <code>CLAUDE.md</code>, same session. Not a remote desktop, not multi-tenant SaaS.</p>
-    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a> · <time datetime="2026-07-23">Updated 2026-07-23</time></p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> and <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.en.md">Getting Started</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a> · <time datetime="2026-09-24">Updated 2026-09-24</time></p>
   </div>
 </header>
 
@@ -157,38 +158,43 @@
   <h2 id="prerequisites">Prerequisites</h2>
   <ul>
     <li><strong>Node.js ≥ 20</strong> — <code>node --version</code></li>
-    <li><strong>A working local <code>claude</code> CLI</strong> — installed and logged in (<code>which claude</code>). This project drives <em>your</em> CLI; it does not ship Claude.</li>
-    <li><strong>macOS or Linux</strong> (first-class). Native Windows is experimental; WSL2 is more reliable.</li>
+    <li><strong>A working local <code>claude</code> CLI</strong> — <code>which claude</code> finds it, and it can finish a normal conversation in your terminal. This project drives <em>your</em> CLI; it does not install Claude or sign you in.</li>
+    <li><strong>macOS or Linux</strong> (first-class). Native Windows is experimental; WSL2 is recommended.</li>
   </ul>
   <div class="callout">
-    <strong>Official subscription or third-party gateway</strong>
-    Web inherits provider settings from the <strong>shell that starts the server</strong>. Official subscription: no extra env. Gateway/relay: <code>export</code> the required <code>ANTHROPIC_*</code> in that shell, then start. Values in <code>.env</code> for <code>ANTHROPIC_*</code> are stripped at startup and have no effect.
+    <strong>Claude subscription or third-party gateway</strong>
+    Model access belongs to the <code>claude</code> CLI, not to this project: every session loads the CLI’s settings for its workspace, so whatever works in your terminal works on your phone. A subscription only needs that account signed in. For a gateway, put <code>ANTHROPIC_*</code> in the <code>env</code> block of a CLI settings file (the workspace’s <code>.claude/settings.local.json</code>, or <code>~/.claude/settings.json</code>); that also works for the service the macOS desktop app keeps running. Exporting them in the shell that runs <code>npm start</code> works for the headless entrypoint only. <code>ANTHROPIC_*</code> placed in this project’s <code>ccm.config.json</code> or <code>.env</code> are stripped at startup, and the startup log names each one.
   </div>
 
   <h2 id="install">Install and start</h2>
   <ol class="steps">
     <li>
-      <strong>Clone and verify the host.</strong>
-<pre><code>git clone https://github.com/Ike-li/claude-chat-mobile.git
-cd claude-chat-mobile
-node --version           # need Node ≥ 20
-which claude             # must be installed &amp; logged in</code></pre>
+      <strong>Download the latest release and install runtime dependencies.</strong>
+<pre><code>curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev</code></pre>
+      <code>master</code> only moves on release, so this archive is the latest release. It leaves out the test tree and maintainer gates; to change code or run tests, <code>git clone</code> the full repository instead (same <code>npm ci --omit=dev</code>, plus a plain <code>npm ci</code> before running tests).
     </li>
     <li>
-      <strong>Install runtime deps and run setup.</strong>
-<pre><code>npm install --omit=dev   # runtime only; full install if you run UI tests
-npm run setup            # generates AUTH_TOKEN, asks WORK_DIR, writes .env (mode 0600)
-# or: cp .env.example .env and edit by hand</code></pre>
+      <strong>Create the config.</strong>
+<pre><code>npm run setup   # writes ccm.config.json (mode 0600): a random AUTH_TOKEN,
+                # the project folders your phone may open (WORKDIRS; the first is the default),
+                # and how your phone will reach this machine (ACCESS_PROFILE)
+# no TTY (coding agent, CI):
+node scripts/setup.js --yes --work-dir=/absolute/path/to/project --hooks=off</code></pre>
     </li>
     <li>
       <strong>Pre-flight check.</strong>
 <pre><code>node scripts/doctor.js
-node scripts/doctor.js --fix  # tighten .env and data JSON → 0600</code></pre>
+node scripts/doctor.js --fix   # only tightens permissions on the config file and control-plane JSON</code></pre>
     </li>
     <li>
       <strong>Start the server.</strong>
-<pre><code>npm start                 # http://localhost:3000
-# startup log prints usable URLs with #token=…</code></pre>
+<pre><code>npm start
+# the startup banner masks the token and prints the addresses to open, e.g.
+#   http://&lt;lan-ip&gt;:3000/#token=&lt;YOUR_TOKEN&gt;
+# the full token is in ccm.config.json; node scripts/qr.js turns the address into a QR code</code></pre>
+      <code>AUTH_TOKEN</code> is a startup prerequisite: without one the server refuses to start. There is no “local means no auth” mode.
     </li>
   </ol>
 
@@ -198,23 +204,24 @@ node scripts/doctor.js --fix  # tighten .env and data JSON → 0600</code></pre>
     <tbody>
       <tr>
         <td>Same Wi‑Fi</td>
-        <td>Set a non-empty <code>AUTH_TOKEN</code> in <code>.env</code>, then open the LAN URL from the startup log: <code>http://&lt;lan-ip&gt;:3000/#token=…</code>. Without a token the server binds <code>127.0.0.1</code> only—phones cannot connect (intentional).</td>
+        <td>Open <code>http://&lt;lan-ip&gt;:3000/#token=&lt;AUTH_TOKEN&gt;</code>, or scan the QR code from <code>node scripts/qr.js</code>. The server listens on all interfaces by default (<code>BIND_MODE</code>). On first load the browser stores the token and removes it from the address bar.</td>
       </tr>
       <tr>
-        <td>Temporary public / PWA https</td>
-        <td>In another terminal: <code>cloudflared tunnel --url http://localhost:3000</code>. Open the random HTTPS host with <code>#token=</code>. Token is stored in <code>localStorage</code> on first load, then cleared from the address bar.</td>
+        <td>Temporary HTTPS (PWA install, Web Push)</td>
+        <td>In another terminal: <code>cloudflared tunnel --url http://localhost:3000</code>, then open <code>https://&lt;random&gt;.trycloudflare.com/#token=&lt;AUTH_TOKEN&gt;</code>. To stay off Cloudflare, install Tailscale and run <code>tailscale serve --bg 3000</code>; <code>node scripts/doctor.js</code> prints the address. On iOS, Web Push also needs 16.4+ and adding the page to the Home Screen first.</td>
       </tr>
       <tr>
-        <td>Fixed production</td>
-        <td>Named tunnel + Cloudflare Access 2FA + a long-running process. See the Chinese handbook page <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a> and repo <code>docs/deployment.md</code>.</td>
+        <td>Long-term public</td>
+        <td>A fixed domain with Cloudflare Tunnel + Access, or Tailscale, another encrypted tunnel, or your own reverse proxy. Keep the server running with <code>npm start</code> under a supervisor of your choice, or with the macOS menu-bar app. See the Chinese handbook page <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a> and the repo’s <code>docs/deployment.md</code>.</td>
       </tr>
     </tbody>
   </table>
 
-  <h3 id="tofu">First non-local connection: device trust (TOFU)</h3>
-  <p>A valid token alone is not enough for the first non-loopback client. Approve the device once on the host:</p>
+  <h3 id="tofu">First non-local connection: device approval</h3>
+  <p>A valid token is not enough for a new device: its first non-local connection waits until you approve it. Use the macOS menu-bar app, tap Approve on another device you already trust, press Enter in the terminal running <code>npm start</code> (headless only), or use the command line:</p>
 <pre><code>node scripts/device.js list
 node scripts/device.js approve &lt;ID&gt;</code></pre>
+  <p>Only two kinds of connection skip approval: one already validated by Cloudflare Access, and a genuine local one (loopback peer <em>and</em> a <code>localhost</code> / <code>127.0.0.1</code> / <code>::1</code> Host). Traffic forwarded by cloudflared, nginx or an SSH tunnel also arrives from loopback, but with a public Host, so it still needs approval unless Access validated it. Set <code>DEVICE_APPROVAL_SCOPE=all</code> to require approval on every path.</p>
   <div class="callout warn">
     <strong>Security</strong>
     This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="./security.html" hreflang="en">English Security Model</a> · <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文安全模型</a> · <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md</a>.
@@ -222,58 +229,71 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
 
   <h2 id="iron-rules">Security iron rules (quotable)</h2>
   <ol>
-    <li><strong>One user per instance</strong> — not multi-tenant SaaS; anyone who passes auth has terminal-equivalent power.</li>
-    <li><strong>No <code>AUTH_TOKEN</code> → bind <code>127.0.0.1</code> only</strong> — phones and tunnels cannot reach it until you set a token.</li>
-    <li><strong>CLI allow-list is inherited</strong> — no second “Web super-allowlist”; audit <code>~/.claude/settings.json</code> before public exposure.</li>
-    <li><strong>Device trust (TOFU)</strong> — first non-local client needs <code>device.js approve</code> (Access JWT can skip).</li>
+    <li><strong>One user per instance</strong> — not multi-tenant SaaS; anything that passes auth carries the permissions of the local account running <code>claude</code>.</li>
+    <li><strong>No token, no server</strong> — <code>AUTH_TOKEN</code> is a startup prerequisite under every bind mode, even for a browser on the same machine.</li>
+    <li><strong>Workspaces are allow-listed</strong> — files and sessions are reachable only inside <code>WORKDIRS</code>; do not add your whole home directory.</li>
+    <li><strong>New devices need approval</strong> — only Cloudflare Access–validated and genuine local connections skip it; <code>DEVICE_APPROVAL_SCOPE=all</code> removes those exceptions.</li>
+    <li><strong>CLI permissions are inherited</strong> — no second “Web super-allowlist”; review <code>permissions.allow</code> in your Claude settings before public exposure.</li>
+    <li><strong>The file editor writes directly</strong> — it skips tool approval (it is still scope-checked, size-limited, conflict-checked and audited); set <code>FILE_EDIT=off</code> for long-term public exposure.</li>
     <li><strong>Not Anthropic’s official app</strong> — independent open source; drives your local CLI via the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</li>
   </ol>
   <p>Full write-up: <a href="./security.html">English Security Model</a>.</p>
+
+  <h2 id="update">Update</h2>
+  <p>Update the way you installed. From the archive: go back to the directory you unpacked into (the parent of <code>claude-chat-mobile-master/</code>), re-run the same <code>curl … | tar xz</code>, then <code>npm ci --omit=dev</code>. <code>ccm.config.json</code> and <code>data/</code> are not in the archive, so nothing overwrites them. From a clone: <code>git pull</code>, then <code>npm ci --omit=dev</code>. Either way, restart the server and re-run <code>node scripts/doctor.js</code>; on macOS also pick “更新桌面端（重新编译）” (rebuild the desktop app) in the menu.</p>
 
   <h2 id="troubleshoot">If something fails</h2>
   <table>
     <thead><tr><th>Symptom</th><th>Likely cause</th><th>What to try</th></tr></thead>
     <tbody>
       <tr>
-        <td>Phone cannot open the page on LAN</td>
-        <td>No <code>AUTH_TOKEN</code> (server on loopback only)</td>
-        <td>Set token in <code>.env</code>, restart, use the URL with <code>#token=…</code> from the log</td>
+        <td>Server exits right after <code>npm start</code></td>
+        <td>No <code>AUTH_TOKEN</code> (it is a startup prerequisite)</td>
+        <td>Run <code>npm run setup</code> first; it generates the token</td>
       </tr>
       <tr>
-        <td>Token works but UI stays locked</td>
-        <td>Device TOFU pending</td>
-        <td><code>node scripts/device.js list</code> then <code>approve &lt;ID&gt;</code> on the host</td>
+        <td>Phone cannot open the page on the LAN</td>
+        <td>Not on the same network, a firewall, or <code>BIND_MODE=loopback</code></td>
+        <td>Use an address the startup banner lists. With <code>BIND_MODE=loopback</code> the banner says so: forward the port yourself, or set <code>BIND_MODE=lan</code> and restart</td>
       </tr>
       <tr>
-        <td><code>doctor</code> flags gateway / model</td>
-        <td><code>ANTHROPIC_*</code> only in <code>.env</code></td>
-        <td>Export vars in the <strong>same shell</strong> that runs <code>npm start</code></td>
+        <td>Token works but the UI stays locked</td>
+        <td>Device approval pending</td>
+        <td><code>node scripts/device.js list</code>, then <code>approve &lt;ID&gt;</code> on the host</td>
+      </tr>
+      <tr>
+        <td>The page opens but chat fails</td>
+        <td><code>claude</code> on the host cannot finish a turn</td>
+        <td>A specific CLI error on the phone means the link works. Get <code>claude</code> through one turn in your terminal, in the same workspace directory: <code>/login</code> for a subscription; for a gateway, check which settings layer holds <code>ANTHROPIC_*</code>, then read the <code>MODEL_SETTINGS</code> line of <code>doctor</code></td>
+      </tr>
+      <tr>
+        <td>Startup log or <code>doctor</code> says <code>ANTHROPIC_*</code> were ignored</td>
+        <td>They are in <code>ccm.config.json</code> or <code>.env</code>, where startup strips them</td>
+        <td>Move them to the <code>env</code> block of a CLI settings file (or export them in the shell, headless only)</td>
       </tr>
       <tr>
         <td>Port 3000 already in use</td>
-        <td>Existing daemon or old process</td>
-        <td>Do not stack a second <code>npm start</code>; stop the resident service or change <code>PORT</code></td>
-      </tr>
-      <tr>
-        <td><code>claude</code> missing / not logged in</td>
-        <td>Host CLI not ready</td>
-        <td>Fix <code>which claude</code> and open a terminal conversation first</td>
+        <td>The desktop app or an existing <code>npm start</code></td>
+        <td>Do not start a second server; restart from the desktop menu or in the same terminal, or change <code>PORT</code></td>
       </tr>
     </tbody>
   </table>
 
   <h2 id="optional">Optional</h2>
   <ul>
-    <li><strong>Statusline bridge</strong> (CLI-driven sessions mirrored in the Web status line): <code>npm run statusline:install</code> — never auto-run by install/start. Check with <code>npm run statusline:status</code>.</li>
-    <li><strong>Dev loop:</strong> <code>npm run dev</code> · pre-push gate: <code>npm run check</code>.</li>
+    <li><strong>CLI hooks bridge</strong> — lets a session running in your terminal wake the phone when a turn ends or needs you: <code>npm run hooks:install</code> (check with <code>hooks:status</code>, remove with <code>hooks:uninstall</code>). It writes to <code>~/.claude/settings.json</code>, and only when you run it.</li>
+    <li><strong>Statusline bridge</strong> — shows the CLI’s model, effort, context, cost and quota on the read-only view of a terminal-driven session: <code>npm run statusline:install</code> (check with <code>statusline:status</code>). Explicit opt-in; it wraps your existing CLI statusline command.</li>
+    <li><strong>macOS desktop app</strong> — a menu-bar console that keeps the server running: <code>npm run app:install</code> (needs the Xcode Command Line Tools).</li>
+    <li><strong>Working on the code</strong> (full <code>git clone</code> only): <code>npm run dev</code> · pre-push gate <code>npm run check</code>.</li>
   </ul>
   <div class="callout ok">
-    <strong>Already running a production daemon on port 3000?</strong>
-    Do not start a second <code>npm start</code> against the same port for “just checking.” Use the Chinese ops page <a href="../docs-site/pages/ops-troubleshoot.html" hreflang="zh-CN">运维与排错</a> or stop the daemon first.
+    <strong>Already running the server on port 3000?</strong>
+    Do not start a second <code>npm start</code> “just to check.” Restart from the desktop menu, or in the same terminal for headless. See the Chinese ops page <a href="../docs-site/pages/ops-troubleshoot.html" hreflang="zh-CN">运维与排错</a>.
   </div>
 
   <h2 id="next">Next</h2>
   <ul>
+    <li><a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.en.md">Getting Started</a> — the full English guide: configuration, non-interactive setup, updating, command reference</li>
     <li><a href="./security.html">English security model</a></li>
     <li><a href="../">Product landing</a></li>
     <li><a href="../docs-site/" hreflang="zh-CN">Full project handbook (Chinese)</a></li>
@@ -290,7 +310,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     <a href="./security.html" hreflang="en">English security</a>
     <a href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文快速开始</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">Apache-2.0</a>
-    <time datetime="2026-09-21">Updated 2026-09-21</time>
+    <time datetime="2026-09-24">Updated 2026-09-24</time>
   </div>
 </footer>
 </body>

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Security Model — Claude Chat Mobile</title>
-<meta name="description" content="Security model for Claude Chat Mobile: single-user per instance, AUTH_TOKEN binds loopback when empty, CLI allow-list inheritance, device TOFU. Read before public exposure.">
+<meta name="description" content="Security model for Claude Chat Mobile: single-user per instance, no token no server, allow-listed workspaces, device approval, inherited CLI permissions. Read before public exposure.">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
 <link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
 <link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
@@ -169,28 +169,31 @@
     <div class="kicker">English security path</div>
     <h1>Security model</h1>
     <p class="lead">Read this <strong>before</strong> exposing the server beyond your machine. This project is a remotely reachable <strong>code-execution channel into your local shell</strong>—not multi-tenant SaaS, not Anthropic’s official mobile app.</p>
-    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a> · Chinese handbook: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> · <time datetime="2026-07-23">Updated 2026-07-23</time></p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a> · Chinese handbook: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> · <time datetime="2026-09-24">Updated 2026-09-24</time></p>
   </div>
 </header>
 
 <main class="wrap">
   <div class="callout danger">
     <strong>Danger</strong>
-    Anyone who passes authentication has the same power you have at a terminal on that host. Do not run a shared instance for multiple people. Do not expose it to the public internet without token, device trust, CLI allow-list review, and (recommended) Cloudflare Access.
+    Anyone who passes authentication has the same power you have at a terminal on that host. Do not run a shared instance for multiple people. Do not expose it to the public internet without a strong token, device approval, a review of your CLI allow-lists, and (recommended) Cloudflare Access or a private tailnet.
   </div>
 
   <h2 id="is-it-safe">Is it safe on the public internet?</h2>
-  <p><strong>Only if you deliberately open it.</strong> This is a code-execution channel into your shell. Default is locked to loopback without <code>AUTH_TOKEN</code>. Before any public URL: set a strong token, review CLI allow-lists, use device trust (and prefer Cloudflare Access for production). Details below.</p>
+  <p><strong>Only if you deliberately open it.</strong> This is a code-execution channel into your shell. There is no token-less mode: the server refuses to start without <code>AUTH_TOKEN</code>. By default it listens on all interfaces so a phone on the same Wi‑Fi can connect (<code>BIND_MODE=loopback</code> keeps it on this machine); reaching it from the internet takes a tunnel, a VPN or a reverse proxy that you set up. Before any public URL: review CLI allow-lists, approve only your own devices, and prefer Cloudflare Access or a private tailnet for long-term use. Details below.</p>
 
-  <h2 id="iron-rules">Four iron rules</h2>
+  <h2 id="iron-rules">Six rules</h2>
 
   <h3 id="rule-single-user">1. Single-user per instance</h3>
-  <p><strong>One operator, one instance.</strong> There is no multi-user account system. Anyone who passes auth has the same power as you at that host’s terminal. Do not treat Claude Chat Mobile as multi-tenant SaaS or share one instance across people.</p>
+  <p><strong>One operator, one instance.</strong> There is no multi-user account system or tenant isolation. Anything that passes auth carries the permissions of the local account running <code>claude</code>. Do not treat Claude Chat Mobile as multi-tenant SaaS or share one instance across people.</p>
 
-  <h3 id="rule-token">2. No token, no leaving the host</h3>
-  <p><strong>Empty <code>AUTH_TOKEN</code> ⇒ bind <code>127.0.0.1</code> only.</strong> There is no “empty = open to the world” path. Phones on LAN and tunnels cannot connect until you set a token and restart. Reaching the public internet <em>requires</em> a non-empty token.</p>
+  <h3 id="rule-token">2. No token, no server</h3>
+  <p><strong><code>AUTH_TOKEN</code> is a startup prerequisite under every bind mode.</strong> Without one the server refuses to start, before it listens on any port. Even a browser on the same machine needs the token: there is no “local means no auth” path. <code>npm run setup</code> generates a random 64-character token; the startup banner only ever shows it masked.</p>
 
-  <h3 id="rule-cli">3. CLI permissions are inherited</h3>
+  <h3 id="rule-workdirs">3. Workspaces are explicitly allow-listed</h3>
+  <p>Files, sessions and related operations reach only the folders listed in <code>WORKDIRS</code>. Do not add your whole home directory for convenience: setup rejects the home directory itself as a workspace.</p>
+
+  <h3 id="rule-cli">4. CLI permissions are inherited</h3>
   <p><strong>No second “Web super-allowlist.”</strong> Auto-approve is the merged <code>permissions.allow</code> from your existing Claude config (global <code>~/.claude/settings.json</code>, project, and local settings)—the same sources as the terminal. Matches run; everything else is suspended and pushed to the phone with full command + working directory.</p>
   <div class="callout warn">
     <strong>Before public exposure</strong>
@@ -198,17 +201,20 @@
   </div>
   <p>Web runtime modes (<code>dontAsk</code> / <code>auto</code> / <code>bypassPermissions</code>) and approval TTL are not “UI equals interactive terminal step for step”—shared is the settings source, not every interaction.</p>
 
-  <h3 id="rule-tofu">4. Device trust (TOFU)</h3>
-  <p><strong>A valid token alone is not enough</strong> for the first non-local client. Approve the device once on the host:</p>
+  <h3 id="rule-tofu">5. New devices need approval</h3>
+  <p><strong>A valid token alone is not enough.</strong> A new device’s first non-local connection waits until you approve it: from the macOS menu-bar app, from another device you already trust, by pressing Enter in the terminal running <code>npm start</code>, or on the command line:</p>
 <pre><code>node scripts/device.js list
 node scripts/device.js approve &lt;ID&gt;
 # revoke: node scripts/device.js deny &lt;ID&gt;</code></pre>
-  <p>Loopback and Cloudflare Access JWT clients can skip TOFU. Temporary random <code>cloudflared</code> tunnels have <strong>no</strong> Access—you still need <code>device.js approve</code>.</p>
+  <p>Only two kinds of connection skip approval: a genuine local one (loopback peer <em>and</em> a <code>localhost</code> / <code>127.0.0.1</code> / <code>::1</code> Host) and one already validated by Cloudflare Access. Traffic that cloudflared, nginx or an SSH tunnel forwards also arrives from loopback, but carries a public Host, so it still needs approval unless Access validated it. Temporary random <code>cloudflared</code> tunnels have <strong>no</strong> Access. Note that <strong>when Access is on it replaces device approval</strong>: the trust list does not govern connections that Access validated, so revoking a device there does not lock it out. Set <code>DEVICE_APPROVAL_SCOPE=all</code> to require approval on every path.</p>
+
+  <h3 id="rule-file-edit">6. The file editor writes directly</h3>
+  <p>The phone’s file editor <strong>does not go through the Agent tool-approval chain</strong>. It still enforces workspace scope, a size limit, content-hash conflict detection and an audit log. Set <code>FILE_EDIT=off</code> to disable it; turning it off is recommended for long-term public exposure.</p>
 
   <h2 id="quotable">Quotable facts</h2>
   <ul>
     <li>Self-hosted bridge to a <strong>real local</strong> <code>claude</code> CLI via the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</li>
-    <li>Empty <code>AUTH_TOKEN</code> ⇒ bind <code>127.0.0.1</code> only.</li>
+    <li>No <code>AUTH_TOKEN</code>, no server: the token is a startup prerequisite under every bind mode.</li>
     <li>One user per instance; not multi-tenant SaaS.</li>
     <li>Not Anthropic’s official mobile application.</li>
     <li>License: Apache-2.0.</li>
@@ -216,10 +222,11 @@ node scripts/device.js approve &lt;ID&gt;
 
   <h2 id="before-public">Checklist before public exposure</h2>
   <ol>
-    <li>Set a strong non-empty <code>AUTH_TOKEN</code>.</li>
-    <li>Prefer fixed domain + Cloudflare Access 2FA for production (see repo <code>docs/deployment.md</code> / Chinese <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a>).</li>
+    <li>Keep the random <code>AUTH_TOKEN</code> that setup generated, and never paste it, your public domain or raw <code>doctor</code> output into issues, chats or screenshots.</li>
+    <li>Prefer a fixed domain + Cloudflare Access 2FA, or Tailscale if you would rather stay off Cloudflare (see repo <code>docs/deployment.md</code> / Chinese <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a>). With Access on, decide whether you also want <code>DEVICE_APPROVAL_SCOPE=all</code>.</li>
     <li>Review global and project CLI allow-lists for overly broad <code>Bash</code> / write rules.</li>
-    <li>Approve only devices you control (<code>device.js</code>).</li>
+    <li>Approve only devices you control (<code>device.js</code>), and revoke lost ones.</li>
+    <li>Set <code>FILE_EDIT=off</code> if the phone does not need to edit files directly.</li>
     <li>Keep the instance single-user—never share credentials across people.</li>
   </ol>
 
@@ -241,7 +248,7 @@ node scripts/device.js approve &lt;ID&gt;
     <a href="./security.html" hreflang="en">English security</a>
     <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文安全模型</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">Apache-2.0</a>
-    <time datetime="2026-07-23">Updated 2026-07-23</time>
+    <time datetime="2026-09-24">Updated 2026-09-24</time>
   </div>
 </footer>
 </body>

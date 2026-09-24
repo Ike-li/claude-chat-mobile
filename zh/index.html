@@ -31,8 +31,8 @@
   "operatingSystem": "macOS, Linux (self-hosted server); any modern mobile browser (client)",
   "url": "https://ike-li.github.io/claude-chat-mobile/zh/",
   "description": "自托管的手机端 Claude Code 界面：通过 Agent SDK 驱动你自己终端里的 claude CLI，同一个会话、同一套本机配置。为触控重排，不是投屏。",
-  "softwareVersion": "1.12.0",
-  "dateModified": "2026-09-21",
+  "softwareVersion": "1.12.1",
+  "dateModified": "2026-09-24",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -408,7 +408,7 @@
       <div class="eyebrow"><span class="dot"></span><span data-i18n="hero.eyebrow">$ claude · 在你手机上</span></div>
       <h1 class="hero-title" data-i18n-html="hero.title">终端里的<span class="cli"> <code>claude</code> CLI</span>，<br><span class="accent">手机上也能用。</span></h1>
       <p class="hero-sub" data-i18n-html="hero.sub">手机 UI 通过 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK</a> 驱动你终端里的 <code>claude</code>——同一会话、同一套本机配置；界面为触控重排，不是投屏。同一时刻只有一个驾驶员：终端在写时，手机只读追盘，接管后再写。</p>
-      <p class="hero-note" data-i18n="hero.note">审批在 App 内展示完整命令与工作目录；推送只有类型级提示（工具名，不含命令正文）。</p>
+      <p class="hero-note" data-i18n="hero.note">审批在 App 内展示完整命令与工作目录；推送默认只有类型级提示（工具名，不含命令正文），锁屏预览要你自己打开。</p>
       <p class="hero-note fine" data-i18n-html="hero.notOfficial">不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。</p>
       <div class="hero-cta">
         <a class="btn btn-primary" data-i18n-href="hero.cta1Href" href="../docs-site/pages/quickstart.html"><span data-i18n="hero.cta1">打开快速开始手册</span> <span aria-hidden="true">▸</span></a>
@@ -417,7 +417,7 @@
       </div>
       <details class="what-is" id="what-is">
         <summary data-i18n="hero.whatIsTitle">什么是 Claude Chat Mobile？</summary>
-        <div class="what-is-body" data-i18n-html="hero.whatIsBody"><p><strong>Claude Chat Mobile</strong> 是一层自托管的<strong>手机 UI</strong>：通过 Claude Agent SDK 驱动<strong>你终端里的</strong> <code>claude</code>——同一会话、同一套本机配置（user/project/local）。界面为触控重排（气泡、工具卡），不是远程桌面投屏，也不是云端另一套 Claude 或 Anthropic 官方手机 App。</p><p>面向已在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；同一时刻只有一个写端（单驾驶员）。公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>不设 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>。</li><li>继承 CLI settings 白名单；未命中则挂起，在 <em>App 内</em>展示完整命令与工作目录。推送仅含工具名。</li><li>独立开源（Apache-2.0）。公网暴露前请读<a href="../docs-site/pages/security-model.html">安全模型</a>。</li></ul></div>
+        <div class="what-is-body" data-i18n-html="hero.whatIsBody"><p><strong>Claude Chat Mobile</strong> 是一层自托管的<strong>手机 UI</strong>：通过 Claude Agent SDK 驱动<strong>你终端里的</strong> <code>claude</code>——同一会话、同一套本机配置（user/project/local）。界面为触控重排（气泡、工具卡），不是远程桌面投屏，也不是云端另一套 Claude 或 Anthropic 官方手机 App。</p><p>面向已在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；同一时刻只有一个写端（单驾驶员）。公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>没有 <code>AUTH_TOKEN</code> 就不启动：令牌是启动前提。</li><li>继承 CLI settings 白名单；未命中则挂起，在 <em>App 内</em>展示完整命令与工作目录。推送默认只含工具名。</li><li>独立开源（Apache-2.0）。公网暴露前请读<a href="../docs-site/pages/security-model.html">安全模型</a>。</li></ul></div>
       </details>
     </div>
     <div class="phone">
@@ -482,7 +482,7 @@
       <div class="moment">
         <div class="n">05</div>
         <h3 data-i18n="moments.m5t">灵感来了，手机输入更顺</h3>
-        <p data-i18n="moments.m5b">可点的斜杠命令、相册或文件附图、长按复制。触控优先，不是缩小终端。附图来自相册/文件，不是宣传「拍照直传摄像头」。</p>
+        <p data-i18n="moments.m5b">可点的斜杠命令、相册或文件附图、回复一键复制。触控优先，不是缩小终端。附图来自相册/文件，不是宣传「拍照直传摄像头」。</p>
       </div>
       <div class="moment">
         <div class="n">06</div>
@@ -514,7 +514,7 @@
       <div class="shot">
         <div class="frame"><picture data-i18n-img="img.approval"><source type="image/webp" srcset="../screenshots/03-approval-zh.webp"><img src="../screenshots/03-approval-zh.png" loading="lazy" width="750" height="1624" alt="Dangerous actions approved from the phone"></picture></div>
         <h3 data-i18n="shots.t3">回手机审批</h3>
-        <p data-i18n="shots.p3">App 内完整命令 + cwd；推送仅类型级</p>
+        <p data-i18n="shots.p3">App 内完整命令 + cwd；推送默认仅类型级</p>
       </div>
       <div class="shot">
         <div class="frame"><picture data-i18n-img="img.workspace"><source type="image/webp" srcset="../screenshots/04-workspace-en.webp"><img src="../screenshots/04-workspace-en.png" loading="lazy" width="750" height="1624" alt="Multi-repository workspace session switcher"></picture></div>
@@ -545,7 +545,7 @@
     <div class="features">
       <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">终端里的 claude，不是克隆</h3><p data-i18n-html="features.f1b">它不打包任何自己的 Claude。Agent SDK 驱动你主机上的 <code>claude</code> 与本机配置（MCP、技能、hooks、白名单）——与桌前同一会话路径。手机只改变这条流的呈现方式。</p></div>
       <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">同一会话，单驾驶员</h3><p data-i18n="features.f2b">同一会话、同一套本机配置；触控重排，不是缩小终端。同一时刻只有一个写端：终端在写时，手机只读追盘，接管后再写。</p></div>
-      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">风险操作回手机批准</h3><p data-i18n="features.f3b">不在 allowlist 上的操作会被挂起。App 内展示完整命令与工作目录；推送只报工具名。你在 App 里允许后才执行。</p></div>
+      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">风险操作回手机批准</h3><p data-i18n="features.f3b">不在 allowlist 上的操作会被挂起。App 内展示完整命令与工作目录；推送默认只报工具名。你在 App 里允许后才执行。</p></div>
       <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">处理移动网络断连</h3><p data-i18n="features.f4b">任务活在服务端，和 socket 解耦。手机网络断了以后，页面会重连并补发错过的事件。</p></div>
     </div>
     <div class="subfeatures">
@@ -570,11 +570,11 @@
     </div>
     <div class="sec-list">
       <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">每实例单用户</h3><p data-i18n="security.b1">你运行自己的实例，给自己用。项目没有账号或多用户控制；任何通过鉴权的请求，权限都和你坐在终端前一样。</p></div></div>
-      <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">没有 token，出不了本机</h3><p data-i18n-html="security.b2">不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>。没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。</p></div></div>
-      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">继承 CLI 权限</h3><p data-i18n="security.b3">自动放行来自你现有 CLI settings 的 allowlist（user/project/local）。未命中则挂起；App 内展示完整命令 + cwd。推送只有类型级（工具名）。</p></div></div>
-      <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">设备信任（TOFU）</h3><p data-i18n="security.b4">既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。</p></div></div>
+      <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">没有 token，就不启动</h3><p data-i18n-html="security.b2"><code>AUTH_TOKEN</code> 是启动前提，任何监听模式下都一样：没有它，server 直接拒绝启动。不存在「本机就免鉴权」这条路，同一台电脑上的浏览器也要带 token。</p></div></div>
+      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">继承 CLI 权限</h3><p data-i18n="security.b3">自动放行来自你现有 CLI settings 的 allowlist（user/project/local）。未命中则挂起；App 内展示完整命令 + cwd。推送默认只有类型级（工具名）。</p></div></div>
+      <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">设备信任（TOFU）</h3><p data-i18n="security.b4">既非本地、也未经 Access 校验的连接，必须先批准一次（在你电脑上，或在另一台已信任的设备上）才能做任何事。光有合法 token 不够。</p></div></div>
     </div>
-    <p class="locked" data-i18n-html="security.locked">不设 <code>AUTH_TOKEN</code> ⇒ 只绑 <code>127.0.0.1</code>。在你主动开放之前，它触达不了公网。</p>
+    <p class="locked" data-i18n-html="security.locked">不设 <code>AUTH_TOKEN</code> ⇒ 服务不启动。默认监听所有网卡；主机有公网 IP 时，请用防火墙挡住端口，或设 <code>BIND_MODE=loopback</code>。</p>
   </div>
 </section>
 
@@ -586,7 +586,7 @@
       <h2 data-i18n="worth.heading">什么时候值得用</h2>
     </div>
     <div class="worth-body">
-      <p data-i18n="worth.b1">这不是「从手机开个远程桌面连回电脑」。远程桌面是投屏；这里是终端 claude 会话的手机 UI：同一会话与本机配置、触控重排；App 内审批、单驾驶员交接、多工作区进度、相册/文件上传、长按复制。</p>
+      <p data-i18n="worth.b1">这不是「从手机开个远程桌面连回电脑」。远程桌面是投屏；这里是终端 claude 会话的手机 UI：同一会话与本机配置、触控重排；App 内审批、单驾驶员交接、多工作区进度、相册/文件上传、一键复制。</p>
       <p class="verdict" data-i18n="worth.b2">如果你只是偶尔远程看一眼，远程桌面就够了。这个项目适合把手机当成终端的随身入口来高频使用。</p>
     </div>
   </div>
@@ -599,7 +599,7 @@
       <h2 data-i18n="get.heading">在你自己的机器上跑起来</h2>
       <p data-i18n="get.sub">自托管。没有公共 demo：手机 UI 通过 Agent SDK 驱动你自己主机上的 claude。</p>
     </div>
-    <p class="prereq" data-i18n-html="get.prereq"><strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。</p>
+    <p class="prereq" data-i18n-html="get.prereq"><strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转配在 CLI 自己的 settings 文件 <code>env</code> 块里即可，终端能跑通的，这里就能用。</p>
     <nav class="start-hub" aria-label="Start here">
       <a href="../zh/compare.html" data-i18n-href="hub.compareHref" data-i18n="hub.compare">该不该用本项目</a>
       <a href="../docs-site/pages/quickstart.html" data-i18n-href="hub.quickstartHref" data-i18n="hub.quickstart">快速开始</a>
@@ -608,13 +608,12 @@
       <a href="../docs-site/pages/overview.html" data-i18n="hub.overview">项目总览</a>
     </nav>
     <div class="clone">
-<span class="c"># clone, install runtime deps, configure, run</span>
-git clone https://github.com/Ike-li/claude-chat-mobile.git
-<span class="p">cd</span> claude-chat-mobile
-npm install --omit=dev
-npm run setup          <span class="c"># generate AUTH_TOKEN + ask WORK_DIR</span>
-<span class="c"># Optional gateway: export ANTHROPIC_* in this shell before starting</span>
-npm start              <span class="c"># http://localhost:3000</span>
+<span class="c"># download the latest release, install runtime deps, configure, run</span>
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+<span class="p">cd</span> claude-chat-mobile-master
+npm ci --omit=dev
+npm run setup          <span class="c"># AUTH_TOKEN, workspaces, how your phone connects</span>
+npm start              <span class="c"># prints the addresses to open; token shown masked</span>
     </div>
     <div class="get-ctas">
       <a class="btn btn-primary" data-i18n-href="get.ctaHref" href="../docs-site/pages/quickstart.html"><span data-i18n="get.cta">打开手册「快速开始」</span> <span aria-hidden="true">▸</span></a>
@@ -639,7 +638,7 @@ npm start              <span class="c"># http://localhost:3000</span>
     <span aria-hidden="true">·</span>
     <span data-i18n="foot.tag">终端 claude——手机 UI，不是投屏。</span>
   </div>
-  <p class="foot-meta wrap" data-i18n-html="foot.meta">维护者 <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · 基于终端 <code>claude</code> CLI 真实使用 · <time datetime="2026-07-23">更新于 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK 文档</a></p>
+  <p class="foot-meta wrap" data-i18n-html="foot.meta">维护者 <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · 基于终端 <code>claude</code> CLI 真实使用 · <time datetime="2026-09-24">更新于 2026-09-24</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK 文档</a></p>
 </footer>
 
 
