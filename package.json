@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.12.1",
+  "version": "1.13.0",
   "description": "Self-hosted mobile web chat UI for Claude Code — drive your real local claude CLI from your phone. Same CLAUDE.md, MCP, skills, login; any gateway or API key.",
   "type": "module",
   "private": true,
@@ -32,7 +32,7 @@
     "node": ">=20"
   },
   "verifiedWith": {
-    "claudeCli": "2.1.278"
+    "claudeCli": "2.1.281"
   },
   "scripts": {
     "start": "node app/server.js",
