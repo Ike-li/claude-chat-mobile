@@ -7,7 +7,7 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -63,19 +63,19 @@ export function formatStreamPreviewIntervalMs(ms) {
 // 变成棕色的 ✓（2026-09-09）。并进同一张表后，「加了 kind 忘了配色」在结构上写不出来。
 //
 // path 是可信静态串（无用户输入），currentColor 吃 tone 给的语义色。
-// label 存中文原文、到 statusIconSpec 里才 t()：模块顶层常量在 import 阶段求值，那时 app.js
+// label 用 tk() 标记中文原文、到 statusIconSpec 里才 t()：模块顶层常量在 import 阶段求值，那时 app.js
 // 还没跑到 setLang()，直接在表里 t() 会把标签永久钉死成中文。
 export const STATUS_ICONS = {
   // hourglass-ish circle for pending/busy
-  pending: { tone: 'text-warning', label: '进行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
-  busy: { tone: 'text-warning', label: '运行中', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
-  ok: { tone: 'text-success', label: '成功', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
-  error: { tone: 'text-danger', label: '出错', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
-  warn: { tone: 'text-warning', label: '待审批', path: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
-  denied: { tone: 'text-danger', label: '已拒绝', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  pending: { tone: 'text-warning', label: tk('进行中'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  busy: { tone: 'text-warning', label: tk('运行中'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  ok: { tone: 'text-success', label: tk('成功'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  error: { tone: 'text-danger', label: tk('出错'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  warn: { tone: 'text-warning', label: tk('待审批'), path: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  denied: { tone: 'text-danger', label: tk('已拒绝'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
   // answered / aborted 是中性终态：不是工具失败，也不该占用绿色去邀功——刻意让它们退出红/绿的注意力预算
-  answered: { tone: 'text-ink-soft', label: '已回答', path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
-  aborted: { tone: 'text-ink-soft', label: '已中止', path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
+  answered: { tone: 'text-ink-soft', label: tk('已回答'), path: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+  aborted: { tone: 'text-ink-soft', label: tk('已中止'), path: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>' },
 };
 // 供调用点在换色前清掉上一个状态的色（不能只 add，否则两个色类叠着靠 CSS 顺序决胜负）
 export const STATUS_ICON_TONES = [...new Set(Object.values(STATUS_ICONS).map(s => s.tone))];
@@ -136,15 +136,15 @@ export function resolveDrawerStatus({ liveState, terminalState, bgLocked = false
 }
 
 const DRAWER_STATUS_LABELS = {
-  permission: '需要你',
-  error: '出错',
+  permission: tk('需要你'),
+  error: tk('出错'),
   // 「占用」不说成「运行中」：被占的会话可能自报 idle（后台 agent 挂着一个长跑 Bash 就是这形态），
   // 说它在运行是编造状态。这条 chip 唯一要传达的是「点了打不开」。
-  bg_locked: '后台占用',
+  bg_locked: tk('后台占用'),
   // 措辞刻意与 Web 侧「需要你」区分：那个点开就能批，这个批不了——审批 prompt 活在 CLI 进程的
   // TUI 里，不经过 web 后端的 canUseTool，web 端替不了你按键。说成「需要你」会给出错误的操作预期。
-  terminal_waiting: '终端需要你',
-  busy: '运行中',
+  terminal_waiting: tk('终端需要你'),
+  busy: tk('运行中'),
 };
 
 // 会话行 chip：kind 仍是需要你/出错/运行中，busy 的文案按「此刻谁在干活」区分。
@@ -165,10 +165,10 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
   // busy × bgLocked 不是二选一：占用者自己在跑时两件事都真，措辞要同时带上。说成「终端运行中」
   // 会把人指向错误的接管路径——那不是一个终端窗口，是 `claude agents` 里的后台 job，走到电脑前
   // 打开终端也看不到它。
-  const label = (status === 'busy' && bgLocked) ? '后台任务运行中'
+  const label = (status === 'busy' && bgLocked) ? tk('后台任务运行中')
     : (status === 'busy' && terminalState === 'busy')
-      ? (terminalSource === 'claude-desktop' ? '桌面端运行中' : '终端运行中')
-      : (DRAWER_STATUS_LABELS[status] || '运行中');
+      ? (terminalSource === 'claude-desktop' ? tk('桌面端运行中') : tk('终端运行中'))
+      : (DRAWER_STATUS_LABELS[status] || tk('运行中'));
   return { status, label };
 }
 

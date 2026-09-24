@@ -11,7 +11,8 @@
 //
 // 两个反复踩到的坑，加词条前先看一眼：
 //   1. 模块顶层常量表里不能直接 t()：那在 import 阶段就求值，早于 app.js 的 setLang()，语言会被钉死在
-//      zh。表里存中文原文、到取用点才 t()（见 logic.js STATUS_ICONS、git-changes.js SECTION_META）。
+//      zh。表里用 tk('原文') 存（恒等，只做标记让 i18n-check 抓得到 key）、到取用点才 t()
+//      （见 logic/panel-state.js STATUS_ICONS、app/git-changes.js SECTION_META）。
 //   2. 局部变量别叫 t：会静默遮蔽成 "t is not a function"，而 ESLint 看不出问题（t 确实有定义）。
 export const LANG_STORAGE_KEY = 'ccm_lang';
 
@@ -316,6 +317,8 @@ export const EN_DICT = Object.freeze({
   '无批准记录': 'No approval record',
   '今天批准': 'Approved today',
   '昨天批准': 'Approved yesterday',
+  '{n} 天前批准': 'Approved {n} day(s) ago',
+  '{n} 个月前批准': 'Approved {n} month(s) ago',
   '未知设备': 'Unknown device',
   '其他设备': 'Other device',
   '吊销这台设备的信任？': 'Revoke trust for this device?',
@@ -558,6 +561,7 @@ export const EN_DICT = Object.freeze({
   '没有可中断的任务': 'Nothing to interrupt',
   '停止请求超时，可再试一次': 'Stop request timed out — try again',
   '停止请求未生效：任务可能已结束': 'The stop request had no effect — the task may have already finished',
+  '{n}条': '{n} update(s)', // 后台任务行尾「· 3条」：这个任务已经上报过的进度条数
   '目标会话已关闭，请刷新后重发': 'The target session is closed — refresh and send again',
   '发送失败：': 'Send failed: ',
   '未确认送达': 'Delivery unconfirmed',
@@ -732,6 +736,10 @@ export const EN_DICT = Object.freeze({
   '修改配置': 'Config changed',
   '重启服务': 'Service restart',
   '永久删除会话': 'Permanently deleted session',
+  // 删除被拒的原因，跟在「永久删除会话 <id> · 」后面（service-diag.js AUDIT_DELETE_REJECT_REASON）
+  '会话正被本产品驱动': 'the session is being driven by this app',
+  '会话正在打开中': 'the session is still opening',
+  '可能正被终端使用': 'it may be in use in a terminal',
   '写入文件': 'Wrote file',
   '审批记录留存清理': 'Approval retention cleanup',
   '重启使待审批请求失效': 'Restart invalidated pending approvals',
@@ -1070,6 +1078,13 @@ export function t(zh) {
   if (currentLang !== 'en' || typeof zh !== 'string') return zh;
   // 用 hasOwnProperty 而非 `in`：避免 'constructor'/'toString' 等原型链同名属性被误命中
   return Object.prototype.hasOwnProperty.call(EN_DICT, zh) ? EN_DICT[zh] : zh;
+}
+
+// 常量表里的中文用 tk('原文') 标记：恒等返回、不查词典（表在 setLang() 之前求值，查了会把语言钉死），
+// 翻译留给取用点的 t(变量)。存在的唯一理由是让 tests/gates/i18n-check.js 抓得到这些 key——
+// t(变量) 的实参上抽不出中文原文，不标记的话表里漏译没有任何东西会报出来。
+export function tk(zh) {
+  return zh;
 }
 
 // 翻译一个文本节点的值。HTML 里的文本节点带着源码缩进（'\n      取消\n    '），词典 key 却是净文案，

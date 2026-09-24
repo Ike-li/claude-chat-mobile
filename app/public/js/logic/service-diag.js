@@ -7,7 +7,7 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 import { formatRttMs, formatUptime } from './format.js';
 
 // 交互日志(控制台)某条目是否该在当前查看实例下显示。修「切工作区残留上个区日志」：clientLogBuffer 是
@@ -408,16 +408,16 @@ export function formatServiceNotices({ service, now } = {}) {
 // JSON——折叠会重蹈 logs:clientError 链路"只知道发生过、不知道具体是哪条"的覆辙，这里刻意保留
 // 每条事件的细节和时间顺序；"判定化"精神只用在 severity 着色上，不用在合并/折叠时间线上。
 const DIAG_TAG_LABEL = {
-  interrupt: '停止', stop_task: '停止单任务',
-  set_model: '切换模型', set_permission_mode: '切换权限档',
+  interrupt: tk('停止'), stop_task: tk('停止单任务'),
+  set_model: tk('切换模型'), set_permission_mode: tk('切换权限档'),
 };
 // statusline 额度(5h/7d)不可用原因 → 一句话文案。third_party_auth 是预期状态（API Key/Bedrock/
 // Vertex 等本就不带订阅额度），非故障；其余三种代表"本该有却没显示"，值得警觉。
 const RATE_REASON_LABEL = {
-  rpc_no_method: 'Claude Code 版本过旧，暂不支持额度查询接口',
-  rpc_error: 'SDK 额度接口调用失败或超时',
-  third_party_auth: '当前鉴权（API Key / Bedrock / Vertex 等）不提供订阅额度信息',
-  no_valid_window: 'SDK 返回的额度数据缺失或超出正常范围',
+  rpc_no_method: tk('Claude Code 版本过旧，暂不支持额度查询接口'),
+  rpc_error: tk('SDK 额度接口调用失败或超时'),
+  third_party_auth: tk('当前鉴权（API Key / Bedrock / Vertex 等）不提供订阅额度信息'),
+  no_valid_window: tk('SDK 返回的额度数据缺失或超出正常范围'),
 };
 export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
   const d = detail && typeof detail === 'object' ? detail : {};
@@ -480,17 +480,17 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
 // 审计记录 → 一行人话 + severity（服务状态面板「安全日志」段）。
 // 抽屉告警只说「发生了什么」；这一段回答「是谁、几次、从哪来」。
 // 判定只用在 severity 着色，不做合并。未知 action 兜底渲染，不静默吞。
-const AUDIT_SCOPE_LABEL = { local: '本机', lan: '局域网', public: '公网' };
+const AUDIT_SCOPE_LABEL = { local: tk('本机'), lan: tk('局域网'), public: tk('公网') };
 const AUDIT_NEUTRAL_TEXT = {
-  retention_cleanup: '审批记录留存清理',
-  approval_restart_expired: '重启使待审批请求失效',
+  retention_cleanup: tk('审批记录留存清理'),
+  approval_restart_expired: tk('重启使待审批请求失效'),
 };
 // 删除被拒时服务端写进 meta.reason 的三道保护（app.js 的 rejectDelete）。查不到的 reason
 // 退回原文案而不是渲染 undefined——将来新增一道保护而这里忘了补时，坏的是信息量不是排版。
 const AUDIT_DELETE_REJECT_REASON = {
-  live: '会话正被本产品驱动',
-  opening: '会话正在打开中',
-  quiet_period: '可能正被终端使用',
+  live: tk('会话正被本产品驱动'),
+  opening: tk('会话正在打开中'),
+  quiet_period: tk('可能正被终端使用'),
 };
 export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   const d = meta && typeof meta === 'object' ? meta : {};

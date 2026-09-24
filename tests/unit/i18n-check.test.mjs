@@ -15,6 +15,7 @@ import {
   extractDictKeys,
   extractHtmlCopyKeys,
   extractTCallKeys,
+  stripJsComments,
   checkI18n,
 } from '../../tests/gates/i18n-check.js';
 
@@ -88,6 +89,32 @@ test.describe('extractTCallKeys：解析 JS 里 t(\'...\') 调用的字面量参
   });
   test('无 t() 调用 → 空数组', () => {
     assert.deepEqual(extractTCallKeys('const t = 1;'), []);
+  });
+});
+
+// 未翻译检查只看代码，先剥注释。剥错的两个方向代价不同：少剥 → 注释里的例子被当成漏译（红，看得见）；
+// 多剥 → 把字符串里的 // 当成注释，同一行后面真正的 t() 被一起剥掉（静默漏检）。下面三条守的都是后者。
+test.describe('stripJsComments：剥掉注释，不碰字符串 / 模板 / 正则里的 // 与 /*', () => {
+  test('行注释与块注释换成等长空白：总长度与换行位置不变', () => {
+    const src = "a(); // 注释 t('甲')\n/* 块\n注释 t('乙') */ b();";
+    const out = stripJsComments(src);
+    assert.equal(out.length, src.length);
+    assert.deepEqual([...out].map((c, i) => (c === '\n' ? i : -1)).filter(i => i >= 0),
+      [...src].map((c, i) => (c === '\n' ? i : -1)).filter(i => i >= 0));
+    assert.deepEqual(extractTCallKeys(out), []);
+    assert.match(out, /a\(\);/);
+    assert.match(out, /b\(\);/);
+  });
+
+  test("字符串与模板（含 ${} 里嵌套的模板）中的 // 不是注释：同一行后面的 t() 照样抓得到", () => {
+    const src = "const u = 'https://a.example/x'; f(t('甲'));\n"
+      + 'const v = `${ok ? `//b` : "c"} ${t(\'乙\')}`; g(t(\'丙\')); // 尾注释 t(\'丁\')';
+    assert.deepEqual(extractTCallKeys(stripJsComments(src)), ['甲', '乙', '丙']);
+  });
+
+  test('正则字面量里的 // 与引号不是注释也不是字符串', () => {
+    const src = "const re = /[\"']\\/\\/x/g; h(t('甲')); // 尾注释 t('乙')";
+    assert.deepEqual(extractTCallKeys(stripJsComments(src)), ['甲']);
   });
 });
 
@@ -217,6 +244,41 @@ test.describe('checkI18n：t() 用到的中文原文必须有英文译文（未�
 
     assert.deepEqual(untranslatedOf(checkI18n({ rootDir: root })), [],
       '把说明文字里的示例当成界面文案，这道闸会对着一段注释永远红');
+  });
+
+  // 顶层常量表不能直接 t()（会在 setLang() 之前求值），于是表里存中文、到取用点 t(变量)——这类 key
+  // 从 t(...) 的实参上抽不到。表值用恒等的 tk('原文') 包一层，门禁才看得见（PR #175 review）。
+  test("常量表里用 tk('原文') 标记、经 t(变量) 显示的中文 → 同样要求有译文", async t => {
+    const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-untr-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFixture(root, 'app/public/js/i18n.js', `
+      export const EN_DICT = Object.freeze({ '本机': 'This machine' });
+    `);
+    await writeFixture(root, 'app/public/index.html', '<div></div>');
+    await writeFixture(root, 'app/public/js/logic/service-diag.js', `
+      const SCOPE_LABEL = { local: tk('本机'), lan: tk('局域网') };
+      export const label = scope => t(SCOPE_LABEL[scope]);
+    `);
+
+    const untranslated = untranslatedOf(checkI18n({ rootDir: root }));
+    assert.deepEqual(untranslated.map(p => p.key), ['局域网'],
+      '表里新加一条没配译文，英文界面会显示中文——这正是 t(变量) 那条路原先完全看不见的漏译');
+  });
+
+  test("任何模块注释里的 t('中文') 用法说明都不算用到", async t => {
+    const root = await mkdtemp(join(tmpdir(), 'ccm-i18n-untr-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFixture(root, 'app/public/js/i18n.js', 'export const EN_DICT = Object.freeze({});');
+    await writeFixture(root, 'app/public/index.html', '<div></div>');
+    await writeFixture(root, 'app/public/js/app/panel.js', `
+      // 三元写成 cond ? t('开') : t('关') 才能各自被抓到
+      /* 旧写法 t('已废弃的说明') 不要再用 */
+      const url = 'https://example.com/a'; // 行尾注释 t('行尾示例')
+      export const x = url;
+    `);
+
+    assert.deepEqual(untranslatedOf(checkI18n({ rootDir: root })), [],
+      '注释不是界面文案；当真的话，谁在注释里举个例子，必需的 check 就红了');
   });
 
   test('有意不译的文案不包 t()（如语言名「中文」与旁边的 English），不算未翻译', async t => {

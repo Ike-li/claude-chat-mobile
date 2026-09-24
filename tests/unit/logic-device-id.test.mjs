@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shortDeviceId, formatRelativeApprovedAt } from '../../app/public/js/logic/device-id.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 const FULL = '0123456789abcdef0123456789abcdef'; // 32 位，与 app.js 生成的形状一致（16 字节 hex）
 
@@ -52,5 +53,17 @@ test.describe('formatRelativeApprovedAt', () => {
 
   test('时钟回拨造出的未来时间不显示成负数天', () => {
     assert.equal(formatRelativeApprovedAt(NOW + DAY, NOW), '今天批准');
+  });
+
+  // 设备列表那一行直接显示返回值。此前这里写死中文、没走 t()，英文界面的设备列表整列都是中文；
+  // 词典里其实早有「今天批准」三条译文，只是没人用上（「N 天前 / N 个月前」连译文都没有）。
+  test('英文界面下每一档都是英文', t => {
+    setLang('en');
+    t.after(() => setLang('zh'));
+    assert.equal(formatRelativeApprovedAt(null, NOW), 'No approval record');
+    assert.equal(formatRelativeApprovedAt(NOW - 3_600_000, NOW), 'Approved today');
+    assert.equal(formatRelativeApprovedAt(NOW - DAY * 1.2, NOW), 'Approved yesterday');
+    assert.equal(formatRelativeApprovedAt(NOW - DAY * 5, NOW), 'Approved 5 day(s) ago');
+    assert.equal(formatRelativeApprovedAt(NOW - DAY * 95, NOW), 'Approved 3 month(s) ago');
   });
 });

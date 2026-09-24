@@ -40,7 +40,7 @@ const sep = () => (getLang() === 'zh' ? '' : ' ');
 
 // 开/关读成人话。**不要简化成「开着的才列出来」**：那样"提示音关了"和"这项不存在"在文案上
 // 不可区分，而用户来这一行恰恰是想确认"我关过的那个是不是还关着"。
-const onOff = (label, on) => `${label}${sep()}${t(on ? '开' : '关')}`;
+const onOff = (label, on) => `${label}${sep()}${on ? t('开') : t('关')}`;
 
 // items → 完整行。summary 只在这里拼一次，别在各 row 函数里另写。
 const row = (id, icon, title, items, dot = false) => ({

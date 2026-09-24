@@ -204,7 +204,7 @@ export function createTaskStatusController(context, {
           message: task.message,
           taskId,
         });
-        const histTag = histLen > 0 ? ` · ${histLen}条` : '';
+        const histTag = histLen > 0 ? ` · ${t('{n}条').replace('{n}', histLen)}` : '';
         label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
         label.title = task.message || taskId;
         // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了

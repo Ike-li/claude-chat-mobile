@@ -173,7 +173,7 @@ import {
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
 } from './logic.js';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
+import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge } from './logic/unread.js';
@@ -1824,7 +1824,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function setDoctorOpen(open) {
     doctorBox.classList.toggle('hidden', !open);
     if (!open) doctorBox.replaceChildren(); // 收起即清空：下次展开必重跑，不留过期快照
-    btnSecurityCheck.textContent = t(open ? '🔍 安全体检 · 收起结果 ▲' : '🔍 安全体检 · 公网暴露前自查 →');
+    btnSecurityCheck.textContent = open ? t('🔍 安全体检 · 收起结果 ▲') : t('🔍 安全体检 · 公网暴露前自查 →');
     btnSecurityCheck.setAttribute('aria-expanded', String(open));
   }
   if (btnSecurityCheck && doctorBox) btnSecurityCheck.onclick = () => {
@@ -5584,15 +5584,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 注意：这张表是 resolveDrawerStatus 的**渲染侧白名单**——appendSessionStatusChip 拿不到 meta
   // 就直接 return。给纯函数加了新状态却漏了这里，chip 会静默不显示（判据全绿、界面照旧）。
   const DRAWER_STATUS_META = {
-    busy: { icon: 'busy', tone: 'text-accent', label: '运行中' },
-    permission: { icon: 'warn', tone: 'text-warning', label: '需要你' },
+    busy: { icon: 'busy', tone: 'text-accent', label: tk('运行中') },
+    permission: { icon: 'warn', tone: 'text-warning', label: tk('需要你') },
     // 与 Web 侧 permission 同色（都是"要人动手"），文案区分谁能处理它
-    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: '终端需要你' },
-    error: { icon: 'error', tone: 'text-danger', label: '出错' },
+    terminal_waiting: { icon: 'warn', tone: 'text-warning', label: tk('终端需要你') },
+    error: { icon: 'error', tone: 'text-danger', label: tk('出错') },
     // 中性色不是随手选的：warning 这一档在本产品里专指「点一下就能处理」的待办（宪法里
     // 「需要你(N)」那条轴），而被后台 agent 占用恰恰是【处理不了】——手机上点它只会被拒。
     // 用 warning 会让它去抢待办的注意力预算，最后是真正要人批的审批被淹掉。
-    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: '后台占用' },
+    bg_locked: { icon: 'warn', tone: 'text-ink-faint', label: tk('后台占用') },
   };
   function drawerStatusMeta(state) {
     const meta = DRAWER_STATUS_META[state];

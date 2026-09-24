@@ -5,7 +5,7 @@
 //   armed    已布防，到点自动发一句「继续」         → 「取消」          （CLI：esc to cancel）
 //   offered  没自动布防（开关关着 / 重置点远于 24h） → 「到点自动继续」  （CLI：Wait here, then continue automatically）
 //   stale    到点了但没发（睡过头 / 有别的驾驶员 …）→ 「继续」          （CLI 的 stale 相位同样改为询问）
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 
 const pad2 = n => String(n).padStart(2, '0');
 
@@ -23,14 +23,14 @@ export function formatAutoContinueClock(ms, now = Date.now()) {
   return sameDay ? hhmm : `${at.getMonth() + 1}/${at.getDate()} ${hhmm}`;
 }
 
-// stale 的原因 → 说清「为什么没自动继续」。表里存中文原文、取用点才 t()（模块顶层求值会把语言钉死在 zh）。
+// stale 的原因 → 说清「为什么没自动继续」。表里用 tk() 标记中文原文、取用点才 t()（模块顶层求值会把语言钉死在 zh）。
 const STALE_TEXT = {
-  slept: '额度已于 {time} 重置；主机期间休眠，没有自动继续',
-  other_driver: '终端或桌面端正开着这个会话，没有自动继续',
-  unverified: '无法确认这个会话的最新状态，没有自动继续', // 会话记录或终端注册表读不全
-  resume_failed: '会话没能重新打开，没有自动继续',
+  slept: tk('额度已于 {time} 重置；主机期间休眠，没有自动继续'),
+  other_driver: tk('终端或桌面端正开着这个会话，没有自动继续'),
+  unverified: tk('无法确认这个会话的最新状态，没有自动继续'), // 会话记录或终端注册表读不全
+  resume_failed: tk('会话没能重新打开，没有自动继续'),
 };
-const STALE_FALLBACK = '到点了，但没有自动继续';
+const STALE_FALLBACK = tk('到点了，但没有自动继续');
 
 export function resolveAutoContinueBanner(entries, sessionId, now = Date.now()) {
   if (!Array.isArray(entries) || !sessionId) return null;
