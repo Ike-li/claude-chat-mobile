@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>终端等价性 · Claude Chat Mobile</title>
 <meta name="description" content="CLI 有什么 Web 就有什么；权限与配置同源。本页讲：等价原则与心智模型、终端里的事，手机上怎么做、权限放行：不注入 allowedTools、六档权限模式。">
-<meta name="llm:tokens" content="1931">
+<meta name="llm:tokens" content="1973">
 <link rel="alternate" type="text/markdown" href="terminal-parity.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -74,7 +74,7 @@
 <tr><td><code>claude</code> / <code>--resume</code></td><td>顶栏 <code>+</code> 新建（选工作区、分支、是否开在新 worktree）；侧栏列出该工作区全部会话</td></tr>
 <tr><td><code>/model</code>、权限档、思考强度</td><td>底栏 chip 点开就改，下一条起效；思考强度在回合进行中也能切</td></tr>
 <tr><td><code>@</code> 引用文件、<code>/</code> 斜杠命令</td><td>输入 <code>@</code> 搜工作区文件；输入 <code>/</code> 列候选，含你装的 skills。只能在终端里用的命令不进手机菜单；会话中途命令变化时同步到手机</td></tr>
-<tr><td><code>/rewind</code> 与分叉</td><td><code>/rewind</code> 两步面板（Web 上是分叉出新会话，原会话不动）；assistant 气泡常驻「分叉」入口</td></tr>
+<tr><td><code>/rewind</code> 与分叉</td><td><code>/rewind</code> 两步面板（Web 上涉及对话的模式分叉出新会话，原会话不动；只恢复代码不分叉）；回复下方的「分叉」按钮（刚流式输出完的回复要重新打开会话后才有）</td></tr>
 <tr><td>statusline、后台任务</td><td>底栏常驻摘要；任务横幅显示耗时与用量，可单独停掉某一个，完成后能查看 CLI 落盘的输出</td></tr>
 <tr><td>终端里开着的会话</td><td>能看，也能接着驾驶；同一时刻只有一个驾驶端，接管时会提示</td></tr>
 </tbody>

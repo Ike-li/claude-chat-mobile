@@ -27,10 +27,10 @@
 - [职责边界](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.md): 做什么、不做什么；与 CLI / 云 / SaaS 的分界。 (Tokens: ~2394)
 
 ### 第二部分 · 演进历程
-- [架构演进主线](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): 同步引擎、单驾驶员、门禁、文档极简等关键阶段。 (Tokens: ~2188)
+- [架构演进主线](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): 同步引擎、单驾驶员、门禁、文档极简等关键阶段。 (Tokens: ~2193)
 
 ### 第三部分 · 方法论
-- [终端等价性](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.md): CLI 有什么 Web 就有什么；权限与配置同源。 (Tokens: ~2299)
+- [终端等价性](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.md): CLI 有什么 Web 就有什么；权限与配置同源。 (Tokens: ~2342)
 - [安全模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.md): 单用户、令牌是启动前提、按 Host 的鉴权分支、设备审批与两个边界。 (Tokens: ~2199)
 - [单驾驶员模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/single-driver.md): Web 与 CLI 不可同时写同一会话；镜像只读追平。 (Tokens: ~1894)
 - [契约与工程门禁](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.md): 事件契约、import 边界、inventory、check 流水线。 (Tokens: ~2329)
@@ -40,7 +40,7 @@
 - [启动与组装根](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.md): server.js 薄入口与 app.js 组装根的启动时序。 (Tokens: ~1775)
 - [AgentSession](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.md): 长驻 SDK query、权限闸、环形缓冲、中断与运行时切档。 (Tokens: ~1711)
 - [事件信封与同步](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.md): agent:event 信封、seq/epoch、sync:since、catch-up。 (Tokens: ~1594)
-- [会话与历史](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.md): 事实源分工、worktree、/rewind 与分叉、删除保护。 (Tokens: ~1962)
+- [会话与历史](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.md): 事实源分工、worktree、/rewind 与分叉、删除保护。 (Tokens: ~2029)
 - [鉴权与设备信赖](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.md): AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。 (Tokens: ~1644)
 - [文件与上传](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.md): 工作区白名单、三层路径闸、附件与预览。 (Tokens: ~1387)
 - [前端与 PWA](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.md): app/public/ 分层、Socket 客户端、可安装 PWA。 (Tokens: ~1405)
@@ -59,7 +59,7 @@
 - [项目规范](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): 分支纪律、门禁、worktree 约定、测试分层。 (Tokens: ~1772)
 - [事件与端点参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): 入向 socket 事件、agent:event 类型、HTTP 运维端点。 (Tokens: ~1787)
 - [环境变量参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): 从 ccm.config.json 与 env-schema 核对的配置表。 (Tokens: ~2483)
-- [漂移清单](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): 文档与代码不一致处，以代码为准。 (Tokens: ~2207)
+- [漂移清单](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): 文档与代码不一致处，以代码为准。 (Tokens: ~2333)
 
 ## Agent Quick-Load (Combined)
 - [Full Knowledge Base (https://ike-li.github.io/claude-chat-mobile/llms-full.txt)](https://ike-li.github.io/claude-chat-mobile/llms-full.txt): Complete 28 chapters compiled into single document

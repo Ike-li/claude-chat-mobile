@@ -3,7 +3,7 @@
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~2207
+- **Estimated Tokens**: ~2333
 
 ---
 
@@ -19,7 +19,7 @@
 | 第三方网关配置 | 「必须在启动 server 的 shell 里 export ANTHROPIC_* 」 | 推荐写在 CLI settings 文件的 env 块，桌面端拉起的常驻服务也认；shell export 只对 headless 有效 | 写进 ccm.config.json 的 ANTHROPIC_* 仍会被剥除 |
 | ACCESS_PROFILE | 三候选，决定鉴权与反代采信分支 | 五个取值的纯声明，只供 doctor 与安全体检；鉴权按请求的 Host 分支 | TRUSTED_PROXY 只决定限速分桶 |
 | 默认工作区 | WORK_DIR ，未配置时回落 | WORKDIRS 第一项；静默回落家目录的路径已删除，过宽的根一律拒绝 | — |
-| 回退入口 | 长按用户气泡 | /rewind 两步面板（2026-09-20）；assistant 气泡常驻「分叉」入口 | Web 回退分叉出新会话，原会话不动 |
+| 回退入口 | 长按用户气泡 | /rewind 两步面板（2026-09-20）；分叉是回复下方的「分叉」按钮，只出现在带 transcript uuid 的回复上（刚流式输出完的回复要重新打开会话后才有），触屏长按消息也是分叉 | 涉及对话的回退模式分叉出新会话，原会话不动；只恢复代码不分叉 |
 | 会话隐藏（L1） | 左滑隐藏，仍可找回 | 已移除；只剩关闭与彻底删除（两道保护） | — |
 | 已读位点存放 | 写在 sessions.json | 单独的 read-state.json | — |
 | 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 58（+ user:autoContinue ）；最新发布版 v1.12.1 仍为 57 | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
@@ -38,10 +38,9 @@
 | 测试运行安全 | 未限制宿主机测试范围 | guard-host-tests 白名单 + 破坏性测试目录的执行位守卫 | 可能破坏数据的测试一律进容器 |
 | 产品立场 | 偶有多租户扩展的提案 | hard-rules 明确 n=1 自托管，不做多租户 | 要改先改 hard-rules 的立场 |
 
-## 产品仓自身的文档漂移（待修）
+## 产品仓自身的文档漂移
 
-- README.md / README.en.md 的对照表仍写「长按消息：回退 / 分叉」。回退已改走 /rewind ，分叉是 assistant 气泡上的常驻入口。
-- docs/architecture.md 第 81 行 仍写「长按 user 气泡 → 回退到此轮前」，同上。
+- 已修（PR #173，合入 dev@e6abb0bf） ： README.md / README.en.md 的对照表原写「长按消息：回退 / 分叉」， docs/architecture.md 第 81 行 原写「长按 user 气泡 → 回退到此轮前」。现在都改为 /rewind 两步面板，并写明分叉按钮只在带 transcript uuid 的回复上出现。发布版 v1.12.1 的 master README 仍是旧说法，下次发版随 master 生效。
 
 ## 关于历史 design.md 标记
 
