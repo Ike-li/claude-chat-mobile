@@ -1,59 +1,76 @@
 # 运维与排错
-> 重启、日志轮转、/health /metrics、常见故障。
+> 按入口重启、看日志、两种体检、常见故障。
 
 - **Part**: 第六部分 · 部署与运维
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~991
+- **Estimated Tokens**: ~1660
 
 ---
 
-常驻服务的日常运维速查、高频故障排查树、监控探针与系统体检（Doctor）。修改配置后若未生效，绝大多数情况是未执行服务重启。
+常驻服务的日常运维速查、高频故障排查与两种体检。改了配置不生效，绝大多数情况是没有重启服务。
 
 ## 常用运维指令速查
 
 ```
-# 1. 结构化配置查看与修改
+# 1. 配置查看与修改
 node scripts/config.js get PORT
 node scripts/config.js set ACCESS_PROFILE reverse-proxy
+node scripts/config.js schema
 
-# 2. 全面健康自检
+# 2. 启动自检
 node scripts/doctor.js
 
-# 3. macOS 常驻服务热管理 (LaunchAgent)
-npm run service:status     # 查看当前进程 PID、运行时间与错误码
-npm run service:restart    # 优雅重启服务
-npm run service:logs       # 查看实时日志输出
+# 3. 重启：按你用的那条入口
+#    headless：在跑 npm start 的那个终端里停掉再起
+#    macOS 桌面端：菜单里 server 一行点「重启」，日志用「查看日志」
+#    人在 SSH 里、服务却是桌面端装的：
+npm run service:status
+npm run service:restart -- server
+npm run service:logs -- server
 
-# 4. 设备授权管理
+# 4. 设备
 node scripts/device.js list
 node scripts/device.js approve <DEVICE_ID>
 ```
 
 ## 高频故障排错表
 
-| 故障现象 | 最可能根因 | 排查与修复动作 |
+| 故障现象 | 最可能根因 | 排查与修复 |
 | --- | --- | --- |
-| 外网访问报 502 / 1033 | CCM Server 未启动或隧道未正确映射端口 | 先检查 npm run service:status 确认 Server 在跑；再看 Cloudflare 隧道日志是否输出 Registered tunnel connection |
-| OTP 验证通过但应用连不上 | Cloudflare Access JWT 校验失败 | 在服务端日志搜索 Access JWT ；核对 CF_ACCESS_TEAM 与 AUD 是否与控制台严格匹配 |
-| 修改配置后行为未发生改变 | 常驻进程尚未重载配置 | 执行 npm run service:restart （仅 WORKDIRS 修改支持热重载免重启） |
-| 手机端无法打开且控制台无报错 | 未配置 AUTH_TOKEN | 有意设计 ：未设 Token 时服务恒定仅绑 127.0.0.1 ；需配置有效 Token 并重启 |
-| 新手机接入始终处于 pending | 触发设备信赖门禁 (TOFU) | 在电脑终端敲 node scripts/device.js approve   放行该设备 |
-| 运行耗时任务被中断 | 误碰全局空闲超时 | 检查是否派生子代理；系统依赖 bgTasks 刷新心跳，如无子代理但任务耗时极长，调大 IDLE_TIMEOUT_MS |
+| npm start 立即退出，提示缺令牌 | 没有 AUTH_TOKEN ，它是启动前提 | npm run setup 生成；不存在「不设令牌先绑本机」的路径 |
+| 服务起来了，手机打不开 | 地址或监听面不对 | 同 WiFi 用横幅里的局域网地址，或 node scripts/qr.js 扫码； BIND_MODE=loopback 时手机无法直连，横幅会写明，要自己转发 |
+| 能进页面，但聊不通 | 电脑终端里的 claude 本身跑不通 | 手机上收到的是 CLI 透传的具体报错，说明链路是通的。先在电脑终端、同一工作区目录下把 claude 聊通一轮：官方订阅要 /login ；第三方网关检查 ANTHROPIC_* 写在哪一层，再看 doctor 的 MODEL_SETTINGS |
+| 新手机一直停在待审批 | 设备审批 | node scripts/device.js approve   ，或在跑 npm start 的终端按回车、用菜单栏、在另一台已信任设备上点「准入」 |
+| 公网 502 / 1033 | server 没跑，或隧道挂了 | 看 server 日志并重启；隧道日志里有没有 Registered tunnel connection ；部署机开着全局代理 / VPN 时，给 cloudflared 配直连规则 |
+| OTP 登录过了，但应用连不上 | Access JWT 校验失败 | server 日志搜 [http-auth] 鉴权失败（access_jwt） （socket 握手侧是 [conn] … 握手鉴权 ），核对 CF_ACCESS_TEAM / CF_ACCESS_AUD 与 Cloudflare 应用是否一致 |
+| 改了配置不生效 | 没重启 | 只有 WORKDIRS 热加载，其余都要重启 |
+| Android 收不到推送 | Chromium 系推送经 Google FCM | 订阅那一刻开代理重试；宿主机要能长期访问 Google（失败会出现在抽屉「服务」小节）；不想依赖 Google 就用 ntfy |
+| 第三方网关报 model_not_found | 模型名需要后缀（如  [1m] ） | 在工作区 .claude/settings.local.json 的 env 块写 ANTHROPIC_MODEL ，或在 Web 端 /model   切换 |
+| 回复只有工具卡、没有正文 | 网关可能不流式 | 服务端已有全文兜底；仍复现就带 LOG_STDERR=1 看子进程日志 |
+| 长时间无输出被判挂死 | IDLE_TIMEOUT_MS （默认 10 分钟） | 后台任务运行期间在途轮有看门狗豁免（有上限）；确实需要更长的静默时调大该值 |
 
-## 系统体检：CLI Doctor 与 UI Doctor 的分界
+## 两种体检的分界
 
  
    
     
-#### CLI Doctor (scripts/doctor.js)
+#### CLI doctor（scripts/doctor.js）
 
     
-冷启动前由运维执行：检测配置文件自洽性、本地 `claude` 二进制路径、工作区写权限、端口冲突以及文件安全权限等硬性条件。
+启动前在电脑上跑：配置文件是否自洽、`claude` 路径、工作区与过宽根、端口、配置文件权限（`--fix` 自动收紧）、访问方案与公网配置是否矛盾、Tailscale 检测等硬条件。
 
    
    
     
-#### UI 运行态体检 (doctor-runtime.js)
+#### 手机端安全体检（doctor-runtime.js）
 
     
-服务启动后由 Web/手机端调起：输出脱敏的安全视图，包含 Access 校验生效态、设备审批队列、IPv6 限速分桶状态以及全局 `settings.json` 敏感工具白名单摘要。
+服务启动后在「设置 → 排查」里跑，输出脱敏视图：令牌、监听面、claude 路径、工作区、配置权限、Cloudflare Access、访问方案、Tailscale、设备闸、文件编辑、推送、设备数、模型设置、被环境变量覆盖的键，以及权限放行规则里的危险项。
+
+   
+ 
+
+## 看日志
+
+- 手机上： 「设置 → 排查」能读 server 进程日志（整段脱敏后再切行）、会话日志与安全日志；服务状态面板里有判定化告警与重启记录。
+- 电脑上： headless 就是 npm start 那个终端；桌面端用菜单「查看日志」，或 npm run service:logs -- server 。

@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>鉴权与设备信赖 · Claude Chat Mobile</title>
-<meta name="description" content="AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。本页讲：绑定模式与网络暴露控制、鉴权流程与多层校验机制、反向代理陷阱与 ACCESS_PROFILE 判据。">
-<meta name="llm:tokens" content="1148">
+<meta name="description" content="AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。">
+<meta name="llm:tokens" content="1467">
 <link rel="alternate" type="text/markdown" href="auth-device.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html" class="active"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html" class="active"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,63 +52,65 @@
       <span class="src" title="原始文档来源">源自 app/src/auth/ · app/src/server/http.js</span>
     </div>
   </header>
-<p class="lead-extra">系统鉴权采用严格的纵深防御：Token（或 Access 边缘 JWT）证明客户端知晓通信密钥，而设备指纹 TOFU 机制则证明「持有该 Token 的物理设备已经过机主显式授权」。单凭 Token 无法突破未受信任设备的隔离防线。</p>
+<p class="lead-extra">鉴权是纵深的两层：令牌（或 Cloudflare Access 的边缘 JWT）证明客户端知道密钥；设备信任证明「持有令牌的这台设备已被主机所有者显式批准过」。只凭令牌进不了未受信任的设备。</p>
 
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>绑定模式与网络暴露控制</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>监听地址与网络暴露</h2>
+<p><code>AUTH_TOKEN</code> 是启动前提：缺令牌时 <code>resolveBindPlan</code> 在 listen 之前就拒绝启动，不存在「未设令牌就降级绑本机」的路径。监听面由 <code>BIND_MODE</code> 决定：</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>配置状态</th><th>监听绑定地址</th><th>网络可达性与安全保证</th></tr></thead>
+<thead><tr><th><code>BIND_MODE</code></th><th>实际监听</th><th>适用</th></tr></thead>
 <tbody>
-<tr><td><code>AUTH_TOKEN</code> 为有效串</td><td><code>0.0.0.0</code>（全接口）</td><td>局域网直连与公网反代/隧道均可正常路由</td></tr>
-<tr><td>未配置或留空</td><td><code>127.0.0.1</code>（仅环回地址）</td><td>手机与外部隧道物理不可达，杜绝无鉴权暴露</td></tr>
+<tr><td>不设（默认）/ <code>lan</code></td><td><code>0.0.0.0</code></td><td>绝大多数情况：同 WiFi 的手机可直连，隧道 / 反代也能落到本机端口</td></tr>
+<tr><td><code>loopback</code></td><td><code>127.0.0.1</code></td><td>自己用 SSH <code>-L</code>、Tailscale Serve 或反代转发，不想让端口出现在局域网上</td></tr>
+<tr><td><code>custom</code> + <code>BIND_HOST</code></td><td>指定地址（<code>::</code> 为 IPv6 双栈）</td><td>只想在某一块网卡上监听</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>鉴权流程与多层校验机制</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>鉴权流程</h2>
 <div class="mermaid">
 flowchart TD
-  Conn["收到新网络连接 (HTTP / WS)"] --> Topo{"检查 ACCESS_PROFILE"}
-  Topo -->|cloudflare| JWT["校验 Cloudflare Access JWT\n(jose + JWKS 签名核验)"]
-  Topo -->|reverse-proxy / lan| Tok{"校验 AUTH_TOKEN\n(Header / #token= / Auth)"}
-  JWT --> RL["限速状态机 onAuthResult\n(IPv6 /64 分桶聚合)"]
-  Tok -->|通过| RL
-  Tok -->|失败| Reject["抛出 401 并计入失败桶"]
-  RL --> Dev{"检查设备指纹信赖态"}
-  Dev -->|已批准设备或本地环回| Allow["放行进入 approved 业务房间"]
-  Dev -->|未授权新设备| TOFU["挂起进入 pending-devices\n(仅推送审批，不开放操作)"]
+  Conn["收到新连接 (HTTP / WebSocket)"] --> Host{"Cloudflare Access 已启用<br>且 Host 是它的公网域名？"}
+  Host -->|"是"| JWT["校验 Access JWT（jose + JWKS）<br>fail-closed，不回退 AUTH_TOKEN<br>+ 跨站握手 Origin 校验"]
+  Host -->|"否"| Tok{"校验 AUTH_TOKEN"}
+  Tok -->|"失败"| Reject["拒绝并计入登录限速桶"]
+  Tok -->|"通过"| Dev{"设备信任"}
+  JWT --> Dev
+  Dev -->|"已批准设备 / 本机样 Host 且 peer 是本机 / 已过 Access"| Allow["进入 approved 房间"]
+  Dev -->|"新设备"| TOFU["记入待审批：只推送审批请求，不开放操作"]
 </div>
+<p>鉴权分支由 <code>app/src/auth/auth-strategy.js</code> 按 Host 决定，核心不依赖任何具体 IdP。<code>ACCESS_PROFILE</code> 不参与这个判定，它只是给 doctor 与手机端安全体检用的声明。</p>
 
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>反向代理陷阱与 ACCESS_PROFILE 判据</h2>
-<div class="callout danger"><div class="body">
-<strong>防范反代 IP 坍塌陷阱</strong>任何将公网流量通过本地反代（如 Nginx、Caddy、FRP、SSH 端口转发）直连 <code>127.0.0.1:3000</code> 的拓扑，都会导致客户端对端 IP 坍塌为 <code>127.0.0.1</code>，从而导致设备审批门被静默跳过。
-</div></div>
-<p>为消除该隐患，系统采用三候选配置：</p>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>本机免审批的判据与反代陷阱</h2>
+<p>设备审批不会只凭 socket 对端是 loopback 就跳过：server 还会检查 Host。只有「对端是本机」且「Host 是本机样的」同时成立，才免审批。</p>
 <ul>
-  <li><code>cloudflare</code>：适用于 Cloudflare Tunnel 场景，公网有 Access 2FA 严格兜底。</li>
-  <li><code>reverse-proxy</code>：<strong>一等支持路径</strong>。强制要求显式配置 <code>TRUSTED_PROXY</code>（如配置反代服务器 IP）后才采信 <code>X-Forwarded-For</code>，防止外部伪造客户端来源；同时要求使用强随机 Token。</li>
-  <li><code>lan</code>：纯私网直连，只采信直接 Socket 对端 IP。</li>
+  <li><strong>按 Host 路由的入口</strong>（cloudflared、配了 <code>server_name</code> 的 nginx）：对端虽然是 loopback，但公网请求带的是公网 Host，仍要设备审批。</li>
+  <li><strong>纯 TCP 转发</strong>（<code>ssh -R</code>、frp tcp、socat）：不按 Host 路由，而 Host 是客户端自己填的头，远程来客发 <code>Host: localhost</code> 就能凑齐两个条件。TCP 层面区分不了真本机浏览器和转发进来的连接，所以用这类方式暴露时请设 <code>DEVICE_APPROVAL_SCOPE=all</code> 并重启。</li>
+  <li><strong><code>DEVICE_APPROVAL_SCOPE=all</code></strong> 是覆盖全部路径的总开关，经 Cloudflare Access 与本机样 Host 进来的也要批一次。此后本机浏览器首次也要批准。</li>
 </ul>
 
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>设备信赖（TOFU 机制）与审批流</h2>
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>设备信任与审批</h2>
 <ul>
-  <li><code>$CCM_DATA_DIR/trusted-devices.json</code>：已受信任设备列表（持久化设备指纹与签名 Token）。</li>
-  <li><code>$CCM_DATA_DIR/pending-devices.json</code>：等待机主审批的新设备队列。</li>
-  <li><strong>本机免审批：</strong>仅本机真实环回（<code>127.0.0.1</code> / <code>::1</code>）可跳过设备门直接放行。</li>
-  <li><strong>命令行审批入口：</strong>在电脑终端可随时通过 <code>node scripts/device.js list | approve &lt;ID&gt; | deny &lt;ID&gt;</code> 审查并批准手机接入。</li>
+  <li><code>$CCM_DATA_DIR/trusted-devices.json</code>：已受信任的设备。</li>
+  <li><code>$CCM_DATA_DIR/pending-devices.json</code>：等待批准的新设备。</li>
+  <li><code>$CCM_DATA_DIR/device-profiles.json</code>：设备元数据（机型、浏览器、别名），让多台同为「Android」的设备可以分辨。</li>
+  <li><strong>批准渠道：</strong><code>node scripts/device.js list | approve &lt;ID&gt; | deny &lt;ID&gt;</code>；在跑 <code>npm start</code> 的终端里按回车批准最新的新设备；macOS 菜单栏；或另一台已信任设备上弹出的「新设备请求接入」。前三条不读任何网络判据。</li>
+  <li><strong>吊销：</strong>手机「设置」与菜单栏都能吊销；吊销后，已连着的连接会失权。经 Access 进来的连接不受这张表管辖，除非 <code>DEVICE_APPROVAL_SCOPE=all</code>。</li>
+  <li><strong>反直觉的失败方向：</strong><code>trusted-devices.json</code> 瞬时读失败时保留内存里上一份可用的信任表，避免本机被一次抖动锁在门外。</li>
 </ul>
 
-<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>防暴力尝试与限速保护</h2>
-<p>系统内置共享限速状态机（位于 <code>app/src/auth/rate-limiter.js</code>）：</p>
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>防暴力尝试与限速</h2>
+<p>限速状态机在 <code>app/src/auth/rate-limiter.js</code>：</p>
 <ul>
-  <li><strong>统一管控：</strong>HTTP 端点（含 <code>/health</code>、<code>/metrics</code>、<code>/push/*</code>）与 WebSocket 握手共用限速池。</li>
-  <li><strong>IPv6 聚合防护：</strong>将同一 <code>/64</code> 地址段聚类到单个限速桶，彻底瓦解利用海量动态 IPv6 绕过锁定的手段。</li>
-  <li><strong>渐进式退避与锁定：</strong>连续尝试失败后触发阶梯式指数退避，达到硬阈值后予以锁定。本机来源与外部来源告警严格区分，绝不在控制台制造假警报。</li>
+  <li><strong>统一口径：</strong>HTTP 端点与 WebSocket 握手的拒绝语义一致，限速时告诉用户还要等多久。</li>
+  <li><strong>IPv6 按 /64 归桶</strong>，堵住轮换源地址绕过。</li>
+  <li><strong>默认不采信转发头：</strong>反代后面所有公网客户端共用一个桶；<code>TRUSTED_PROXY=loopback</code> 才按 loopback 反代追加的 <code>X-Forwarded-For</code> 末跳分桶。</li>
+  <li><strong>只挡鉴权口：</strong>鉴权通过后 handler 抛出的 500 不计入限速；本机来源的锁定不说成「有人在暴力尝试」。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="sessions-history.html"><span class="dir">← 上一篇</span><span class="ttl">会话与历史</span></a><a class="next" href="files-upload.html"><span class="dir">下一篇 →</span><span class="ttl">文件与上传</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">绑定模式与网络暴露控制</a></li><li class="h2"><a href="#s2">鉴权流程与多层校验机制</a></li><li class="h2"><a href="#s3">反向代理陷阱与 ACCESS_PROFILE 判据</a></li><li class="h2"><a href="#s4">设备信赖（TOFU 机制）与审批流</a></li><li class="h2"><a href="#s5">防暴力尝试与限速保护</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">监听地址与网络暴露</a></li><li class="h2"><a href="#s2">鉴权流程</a></li><li class="h2"><a href="#s3">本机免审批的判据与反代陷阱</a></li><li class="h2"><a href="#s4">设备信任与审批</a></li><li class="h2"><a href="#s5">防暴力尝试与限速</a></li></ul></aside>
     </div>
   </div>
 </div>

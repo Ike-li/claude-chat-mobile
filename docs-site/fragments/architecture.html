@@ -9,7 +9,7 @@ flowchart TB
     UI["PWA 聊天交互界面\n流式气泡 · 审批卡片 · 工作区抽屉"]
   end
 
-  subgraph Network["网络拓扑 (ACCESS_PROFILE)"]
+  subgraph Network["公网 / 局域网入口（任选其一）"]
     CF["Cloudflare Tunnel + Access\n(公网 2FA 隧道)"]
     RP["纯反向代理 / 内网穿透\n(Nginx / Tailscale)"]
     LAN["局域网直接连接\n(本地绑定)"]
@@ -27,14 +27,14 @@ flowchart TB
       SessMgr["Session Registry (app/src/sessions)\n会话注册表 · 历史回放 · 工作区门禁"]
     end
 
-    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.263)"]
+    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.278)"]
     CLI["本机已安装的 claude CLI 进程"]
   end
 
   subgraph LocalStorage["本地持久化存储"]
-    DataDir["CCM_DATA_DIR (仓库根/data/)\n会话元数据 · 设备指纹 · 附件 · 审计日志"]
+    DataDir["CCM_DATA_DIR（默认 ./data，建议外置）\n会话索引 · 设备信任 · 附件 · 审计"]
     ClaudeHome["~/.claude/projects/\nCLI 会话 Transcript · 记忆 · 本地配置"]
-    WorkTree["用户开发工作区 (WORK_DIR / Git 仓库)"]
+    WorkTree["WORKDIRS 放行的工作区（含 worktree）"]
   end
 
   UI <-->|"双向 WebSocket (agent:event)"| Network
@@ -71,7 +71,7 @@ flowchart TB
 <ol class="steps">
   <li><strong>Web 驾驶通道（双向流）。</strong>由 Web 发起的交互直接进入 SDK query，流式接收 Agent 事件，通过 <code>agent:event</code> 信封（包含 seq/epoch/cwd 等）进入 2000 条环形缓冲并下发前端。</li>
   <li><strong>CLI 终端驾驶通道（只读镜像）。</strong>当检测到用户正在终端直接操作该会话时，Web 端退化为只读镜像模式（通过轮询磁盘 Transcript 增量追平状态），前端输入框切换为「终端会话运行中」并上锁。</li>
-  <li><strong>接管与锁释放。</strong>终端进程退出或超时后，Web 端可安全接管会话，由 <code>applyFlagSettings</code> 和 SDK 会话恢复状态。</li>
+  <li><strong>接管与锁释放。</strong>终端回合结束并经过静默判定后锁释放；发送前若 transcript 有外部增长，先 dispose 旧实例再 resume 吸收。终端仍在跑时也可以显式续接，但要过一道写明分叉风险的确认框，且不会停止终端进程。</li>
 </ol>
 
 <h2>两处架构脆弱点</h2>
@@ -80,13 +80,13 @@ flowchart TB
 </div></div>
 
 <div class="callout warn"><div class="body">
-<strong>脆弱点二：macOS 服务模板与解析字符串对齐</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码<strong>逐字保持严格一致</strong>，否则菜单栏服务状态面板会将工作区解析为 null。
+<strong>脆弱点二：macOS 服务模板与解析字符串对齐</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码<strong>逐字保持严格一致</strong>，否则服务面板的 repo / node 恒为 null，且没有任何报错。
 </div></div>
 
 <h2>前端架构分层</h2>
 <ul>
   <li><code>app/public/js/app.js</code>：顶层编排器，负责全局 Socket 挂载与状态同步。</li>
-  <li><code>app/public/js/app/*</code>：按业务域拆分的模块工厂（如 <code>event-dispatch.js</code>、<code>chat-ui.js</code>、<code>settings-panel.js</code>），采用 Context 注入。</li>
+  <li><code>app/public/js/app/*</code>：按业务域拆分的模块工厂（如 <code>event-dispatch.js</code>、<code>message-renderer.js</code>、<code>drawer.js</code>、<code>settings.js</code>），采用 Context 注入；新状态进这里，不再挂进 <code>app.js</code> 顶层。</li>
   <li><code>app/public/js/logic/*</code>：零依赖纯函数集合（数据进、数据出），不触碰任何 DOM、Window 或全局 Socket，直接在 Node.js 单测与浏览器零构建复用。</li>
   <li><code>app/public/js/canonicalize.js</code>：前后端共用的指纹规范化唯一共享模块。</li>
 </ul>

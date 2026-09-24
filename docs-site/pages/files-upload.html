@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>文件与上传 · Claude Chat Mobile</title>
-<meta name="description" content="工作区白名单、三层路径闸、附件与预览。本页讲：工作区白名单 (WORKDIRS) 与热重载、附件上传与存储搬迁、三层路径防护闸门 (FILES-1)、相关通讯端点。">
-<meta name="llm:tokens" content="962">
+<meta name="description" content="工作区白名单、三层路径闸、附件与预览。">
+<meta name="llm:tokens" content="1204">
 <link rel="alternate" type="text/markdown" href="files-upload.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html" class="active"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html" class="active"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,50 +52,52 @@
       <span class="src" title="原始文档来源">源自 app/src/files/</span>
     </div>
   </header>
-<p class="lead-extra">文件能力围绕「白名单工作区隔离」与「只读越界防护」构建：上传附件为会话注入上下文，文件浏览、文件搜索与预览严禁逃逸出白名单目录之外。</p>
+<p class="lead-extra">文件能力围绕「白名单工作区」与「越界即拒」构建：上传附件为会话注入上下文，文件浏览、搜索、预览与编辑都不能逃出白名单目录。</p>
 
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>工作区白名单 (WORKDIRS) 与热重载</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>工作区白名单（WORKDIRS）</h2>
 <ul>
-  <li><strong>默认工作区：</strong>以 <code>WORK_DIR</code> 为准（未配置时默认取当前工作根目录）。</li>
-  <li><strong>多项目白名单：</strong>通过 <code>ccm.config.json</code> 中的 <code>WORKDIRS</code> 数组进行管理。</li>
-  <li><strong>免重启热重载 (Hot Reload)：</strong>服务端深度监听配置文件变更（带防抖与 mtime 核验）。添加或移除工作区改完即生效，免重启 Server。</li>
-  <li><strong>存量会话保护：</strong>已从白名单移除的工作区，其<strong>正在运行的旧会话继续保持执行</strong>；但<strong>禁止新开会话</strong>（由 <code>ensureWhitelisted</code> 闸门拦截）。</li>
+  <li><strong>默认工作区：</strong><code>WORKDIRS</code> 的第一项就是手机端默认打开的目录。旧的单值 <code>WORK_DIR</code> 已并入首项，原先三处静默回落到家目录的路径都已删除；装机向导在非交互模式下遇到「回落 <code>$HOME</code>」直接拒绝。</li>
+  <li><strong>拒绝过宽的根：</strong>不能填家目录本身，也不能填 <code>/</code>、<code>/Users</code>、<code>/home</code> 这类根；判定前先做路径归一与 symlink 解析，等价写法绕不过去。向导与写入侧共用这一份判据。</li>
+  <li><strong>手机上可编辑：</strong>「设置 → 行为与开关」进「全部配置」，有工作区列表的结构化编辑器；它是唯一免重启的配置项。</li>
+  <li><strong>热加载：</strong>server 监听配置文件变化，增删工作区改完即生效。被移除的工作区上，已开的会话继续运行，但禁止新开（<code>ensureWhitelisted</code> 拦截）。</li>
 </ul>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>附件上传与存储搬迁</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>附件上传</h2>
 <div class="callout tip"><div class="body">
-<strong>附件已搬出用户项目根目录</strong>早期版本附件落在每个项目下的 <code>.ccm-uploads/</code>，不仅污染用户 Git 状态，还可能触发 CLI 审批。现已全面搬迁至受管数据目录 <code>data/uploads/&lt;bucket&gt;/</code>，并自动通过 <code>--add-dir</code> 注入给 CLI，旧目录仅保留只读兼容。
+<strong>附件已搬出用户项目</strong>早期附件落在各工作目录的 <code>.ccm-uploads/</code>，会弄脏 git 状态，还可能触发 CLI 审批。2026-09-06 起落在受管数据目录 <code>$CCM_DATA_DIR/uploads/&lt;工作区桶&gt;/</code>。旧的 <code>.ccm-uploads/</code> 既不迁移也不删除，历史消息预览会自动回落过去读。
 </div></div>
-
 <ol class="steps">
-  <li>移动端通过 Socket 传输附件原始二进制数据（严格校验 MIME 类型与单文件尺寸限制）。</li>
-  <li>服务端落盘至 <code>$CCM_DATA_DIR/uploads/&lt;sessionId&gt;/&lt;safeName&gt;</code>。</li>
-  <li>通过 <code>buildPromptText</code> 将附件真实绝对路径拼装入 Prompt，CLI 即可通过原生 <code>Read</code> 工具直接解析图片与文档。</li>
-  <li>CLI 启动时自动快照挂载 <code>data/uploads</code> 授权目录，彻底消灭用户上传图片时弹出的权限审批。</li>
+  <li>手机端上传图片或粘贴截图，经 Socket 传到服务端，校验类型与大小上限（前后端的上限数字一致）。</li>
+  <li>服务端落盘到 <code>$CCM_DATA_DIR/uploads/&lt;工作区桶&gt;/</code>，文件权限 <code>0600</code>，文件名做防穿越处理。</li>
+  <li>附件的绝对路径拼进提示词，CLI 用原生 <code>Read</code> 工具读取图片与文档。</li>
+  <li>上传目录通过 <code>additionalDirectories</code>（即 <code>--add-dir</code>）交给 CLI，保住免审批。注意这是 spawn 时的快照：实例启动之后才出现的新目录要等下次启动才生效。</li>
 </ol>
 
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>三层路径防护闸门 (FILES-1)</h2>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>路径防护</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>防御层级</th><th>核心模块</th><th>防御威胁与防护策略</th></tr></thead>
+<thead><tr><th>防御层级</th><th>核心模块</th><th>防什么、怎么防</th></tr></thead>
 <tbody>
-<tr><td>写安全闸</td><td><code>app/src/files/file-security.js</code></td><td>仅所有者读写（0600）、强制防御符号链接（Symlink 劫持检测）与原子化写入辅助</td></tr>
-<tr><td>工作区范围门</td><td><code>app/src/files/workdir-scope-guard.js</code></td><td>所有入向文件路径必须经 realpath 解析，严格校验其归属于已授权的 <code>WORKDIRS</code> 之下</td></tr>
-<tr><td>安全浏览与预览</td><td><code>app/src/files/file-browse.js</code> · <code>file-preview.js</code></td><td>只读文件列表、分段按需读取与 Git Diff 查看；绝不开设公开无鉴权的文件下载 URL</td></tr>
+<tr><td>写安全</td><td><code>app/src/files/file-security.js</code></td><td>仅所有者读写（<code>0600</code>）、symlink 劫持检测、原子写入</td></tr>
+<tr><td>工作区范围门</td><td><code>app/src/files/workdir-scope-guard.js</code></td><td>入向路径一律经 <code>realpath</code> 解析，必须落在已授权的 <code>WORKDIRS</code> 之下；symlink 逃出工作区即拒绝并记审计</td></tr>
+<tr><td>浏览与预览</td><td><code>app/src/files/file-browse.js</code> · <code>file-preview.js</code></td><td>只读列表、分段读取与 git diff；<strong>FIFO、字符设备、unix socket 在 <code>open</code> 之前就拒绝</strong>，否则整个 Node 进程会卡死；不开任何无鉴权的文件下载 URL</td></tr>
 </tbody>
 </table>
 </div>
+<p>内置文件编辑器直接写盘，<strong>不经 Agent 的工具审批链</strong>：写入时带上读到时的内容哈希，与磁盘不符就拒绝，不静默覆盖；另有范围校验、大小上限与审计。<code>FILE_EDIT=off</code> 可关闭。</p>
 
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>相关通讯端点</h2>
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>相关通讯事件</h2>
 <ul>
-  <li><code>browse:list</code>：分页读取白名单目录下的文件树（受 <code>.gitignore</code> 过滤）。</li>
-  <li><code>browse:read</code>：按需只读读取指定文本片段（限制单次最大读取行数）。</li>
-  <li><code>tool:preview</code> / <code>tool:full</code>：获取工具输出卡片的缩略快照与完整执行结果。</li>
+  <li><code>browse:list</code>：读取白名单目录下的一层文件树（根目录传 <code>'.'</code>）。</li>
+  <li><code>browse:read</code>：只读读取文件内容。</li>
+  <li><code>files:search</code>：在工作区里搜索文件，也用于输入 <code>@</code> 时的补全候选。</li>
+  <li><code>files:write</code>：内置编辑器写入，带 <code>baseHash</code> 冲突检测。</li>
+  <li><code>tool:preview</code> / <code>tool:full</code>：工具卡的变更预览与完整结果。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="auth-device.html"><span class="dir">← 上一篇</span><span class="ttl">鉴权与设备信赖</span></a><a class="next" href="frontend-pwa.html"><span class="dir">下一篇 →</span><span class="ttl">前端与 PWA</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">工作区白名单 (WORKDIRS) 与热重载</a></li><li class="h2"><a href="#s2">附件上传与存储搬迁</a></li><li class="h2"><a href="#s3">三层路径防护闸门 (FILES-1)</a></li><li class="h2"><a href="#s4">相关通讯端点</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">工作区白名单（WORKDIRS）</a></li><li class="h2"><a href="#s2">附件上传</a></li><li class="h2"><a href="#s3">路径防护</a></li><li class="h2"><a href="#s4">相关通讯事件</a></li></ul></aside>
     </div>
   </div>
 </div>

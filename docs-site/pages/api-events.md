@@ -3,11 +3,11 @@
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1478
+- **Estimated Tokens**: ~1787
 
 ---
 
-入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（当前基线：出向类型 **31** 种、入向事件 **57** 种）。
+入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **58** 种；最新发布版 v1.12.1 的入向为 57 种，差的是 `user:autoContinue`）。
 
 ## 出向 agent:event 契约类型 (31 种)
 
@@ -25,14 +25,14 @@
 | 设备门禁 | device_status 、 pending_devices 、 trusted_devices | 当前设备认证态、待审批新设备清单与已信任设备表 |
 | 错误处理 | error 、 system | 业务异常与系统级别通知提示 |
 
-## 入向 Socket 契约事件 (57 种)
+## 入向 Socket 契约事件 (58 种)
 
 由客户端主动发往服务端的事件总线，受 `tests/gates/contract-check.js` 门禁进行双向严格比对校验：
 
 | 业务领域 | 包含的入向事件 |
 | --- | --- |
 | 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm |
-| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing permissions:rules |
+| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮，dev 已合入、尚未发版） permissions:rules |
 | 设备与状态同步 | user:approveDevice user:denyDevice user:renameTrustedDevice user:revokeTrustedDevice connect:qr sync:since mirror:syncNow conn:ping client:presence |
 | 已读位点共享 | read:mark read:sync user:ackUnread |
 | 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read |
@@ -44,7 +44,8 @@
 
 | 端点路径 | 请求方法 | 鉴权与功能说明 |
 | --- | --- | --- |
-| /health | GET | 受 AUTH_TOKEN 鉴权保护，输出服务健康状况 JSON |
-| /metrics | GET | 受 AUTH_TOKEN 鉴权保护，输出内存指标快照（零外部泄露） |
-| /push/vapid-public-key | GET | 获取浏览器 Web Push 所需的 VAPID 公钥 |
-| /push/subscribe | POST | 保存移动端生成的推送订阅凭据 |
+| /health | GET | 过鉴权（令牌，或公网 Host 上的 Access JWT），输出服务健康状况 JSON；含 versions.server 与运行态 |
+| /metrics | GET | 过鉴权；进程内计数的 JSON 快照，不是 Prometheus 文本，重启清零 |
+| /push/vapid-public-key | GET | 过鉴权；推送未配置时返回 503 |
+| /push/subscribe | POST | 过鉴权，且设备须已被信任（或属于 Access 已验 / 真本机直连这类免审批连接）；保存这台设备的推送订阅 |
+| /push/unsubscribe | POST | 与订阅同一道设备判据；只摘掉请求里点名的那一条 endpoint，不清空全表 |

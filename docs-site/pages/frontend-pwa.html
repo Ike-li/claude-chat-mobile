@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>前端与 PWA · Claude Chat Mobile</title>
-<meta name="description" content="app/public/ 分层、Socket 客户端、可安装 PWA。本页讲：目录分层与职责划分、状态管理与交互体验设计、PWA 与 Service Worker。">
-<meta name="llm:tokens" content="1063">
+<meta name="description" content="app/public/ 分层、Socket 客户端、可安装 PWA。">
+<meta name="llm:tokens" content="1224">
 <link rel="alternate" type="text/markdown" href="frontend-pwa.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html" class="active"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html" class="active"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,47 +52,48 @@
       <span class="src" title="原始文档来源">源自 app/public/</span>
     </div>
   </header>
-<p class="lead-extra">前端采用原生纯 ESM 规范的单页应用（PWA）架构：Express 静态直接托管 <code>app/public/</code>，无需 Webpack / Vite 等前置编译，零外部 CDN 运行时依赖。</p>
+<p class="lead-extra">前端是原生 ESM 的单页应用（PWA）：Express 直接托管 <code>app/public/</code> 静态文件，不经 Webpack / Vite 编译，运行期零外部 CDN 依赖。</p>
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>目录分层与职责划分</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>文件 / 目录路径</th><th>职责定位与架构约束</th></tr></thead>
+<thead><tr><th>文件 / 目录路径</th><th>职责与约束</th></tr></thead>
 <tbody>
-<tr><td><code>app/public/index.html</code></td><td>HTML 宿主外壳、移动端视口设置、PWA Manifest 引用</td></tr>
-<tr><td><code>app/public/css/app.css</code></td><td>样式定义（基于原生 CSS 变量系统与纯色 Tailwind Token，禁止 Alpha 复合透明度）</td></tr>
-<tr><td><code>app/public/js/app.js</code></td><td>顶层协调器：挂载全局 Socket、路由事件、装配子模块</td></tr>
-<tr><td><code>app/public/js/app/*</code></td><td>按业务域划分的子模块工厂（如 <code>event-dispatch.js</code>、<code>chat-ui.js</code>），采用 Context 依赖注入</td></tr>
-<tr><td><code>app/public/js/logic/*</code></td><td><strong>纯逻辑层</strong>：零依赖纯函数集合（数据进、数据出），不碰 DOM/Window/Socket，与单测零构建同源复用</td></tr>
-<tr><td><code>app/public/js/canonicalize.js</code></td><td>前后端共享白名单工具：统一操作指纹与规范化逻辑</td></tr>
-<tr><td><code>app/public/vendor/</code></td><td>第三方库本地离线托管（Tailwind 运行时、marked 解析器、highlight.js 代码高亮、DOMPurify 防 XSS）</td></tr>
-<tr><td><code>app/public/manifest.webmanifest</code></td><td>PWA 安装清单文件，支持独立全屏显示与移动端沉浸模式</td></tr>
+<tr><td><code>app/public/index.html</code></td><td>HTML 外壳、移动端视口、PWA Manifest 引用</td></tr>
+<tr><td><code>app/public/css/app.css</code></td><td>样式（原生 CSS 变量体系 + Tailwind 运行时）</td></tr>
+<tr><td><code>app/public/js/app.js</code></td><td>顶层协调器：挂载 Socket、路由事件、装配子模块。存量状态留在这里，新状态不再往里放</td></tr>
+<tr><td><code>app/public/js/app/*</code></td><td>按业务域划分的子模块工厂，Context 依赖注入（如 <code>event-dispatch.js</code>、<code>message-renderer.js</code>、<code>drawer.js</code>、<code>rewind-command.js</code>）</td></tr>
+<tr><td><code>app/public/js/logic/*</code></td><td><strong>纯逻辑层</strong>：数据进、数据出，不碰 DOM / window / socket / 应用可变态，唯一宿主外 import 是 <code>i18n.js</code>；浏览器与 <code>tests/unit/logic-*.test.mjs</code> 零构建共用同一份文件</td></tr>
+<tr><td><code>app/public/js/canonicalize.js</code></td><td>前后端唯一共用的文件：审批指纹的规范化</td></tr>
+<tr><td><code>app/public/vendor/</code></td><td>第三方库本地托管（Tailwind 运行时、marked、highlight.js、DOMPurify）</td></tr>
+<tr><td><code>app/public/manifest.webmanifest</code></td><td>PWA 安装清单，独立全屏显示</td></tr>
 </tbody>
 </table>
 </div>
 
 <div class="callout tip"><div class="body">
-<strong>前端状态架构原则</strong>任何新功能的状态<strong>严禁再直接挂入</strong> <code>app.js</code> 的顶层作用域。新状态必须进 <code>app/public/js/app/</code> 域模块；纯计算逻辑一律下沉为 <code>app/public/js/logic/*</code> 纯函数。
+<strong>前端状态架构原则</strong>新功能的状态<strong>不再挂进</strong> <code>app.js</code> 的顶层作用域：新状态进 <code>app/public/js/app/</code> 域模块（工厂 + context 注入，样板是 <code>event-dispatch.js</code>）；能写成纯函数的一律先落 <code>app/public/js/logic/*</code>。
 </div></div>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>状态管理与交互体验设计</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>状态管理与交互设计</h2>
 <ul>
-  <li><strong>鉴权凭据安全存取。</strong>首次通过 URL Hash（<code>#token=...</code>）注入密钥，存入本地 <code>localStorage</code> 后立即从浏览器地址栏抹除，避免分享截图或误发 URL 泄露密钥。</li>
-  <li><strong>跨设备已读状态与长按标未读。</strong>会话列表支持长按将已读会话反向标为未读。该状态采用 LWW（Last-Write-Wins）时间戳比对模型实时同步至服务端，实现跨设备状态一致。</li>
-  <li><strong>阻塞落地页智能导引。</strong>当试图打开一个正在被后台子代理独占锁定的会话时，系统不会跳空白页，而是精准渲染该会话自身的专属阻塞提示栏，展示锁来源并在其解锁时无感自动恢复。</li>
-  <li><strong>输入框长文本智能防截断。</strong>针对手机软键盘「发送」与「换行」键行为进行针对性适配，杜绝移动端长文本发送时的意外截断问题。</li>
+  <li><strong>令牌存取：</strong>首次通过 URL hash（<code>#token=...</code>）带入，存进 <code>localStorage</code> 后立即用 <code>history.replaceState</code> 从地址栏抹掉，避免截图或转发 URL 时泄露。</li>
+  <li><strong>回车语义按设备区分：</strong>触摸设备上回车是换行，发送只走发送按钮（软键盘的回车键提示也改成「换行」）；桌面仍是回车发送、Shift+Enter 换行。软键盘没有 Shift+Enter，旧行为会把多行消息在换行处切断、只发出前半段。</li>
+  <li><strong>未读：</strong>抽屉会话行与首页最近行在上次打开后有新活动才亮；抽屉会话行支持长按手动标为未读。已读位点存在服务端（<code>read-state.json</code>），换设备后读过的会话不会整屏复亮。</li>
+  <li><strong>会话打不开时：</strong>落到目标会话自己的页面，说明打不开的原因，给「重试打开」与「选择其他会话」两个出口；不在当前会话的消息流里插一条红字，免得读起来像当前会话出了事。</li>
+  <li><strong>设置两级导航：</strong>侧栏底部常驻「设置与状态」入口；一级页是六行摘要（通知、接入与设备、宿主机、行为与开关、排查、帮助），每行摘要都绑定二级页里真实存在的元素，点进去才是完整设置。首页、新会话页、会话已中断页都能打开。</li>
+  <li><strong>草稿：</strong>输入框草稿按会话保存，新会话页的草稿按工作区分槽，切走再回来不丢。</li>
 </ul>
 
 <h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>PWA 与 Service Worker</h2>
-<p>Service Worker（位于 <code>app/public/sw.js</code>，另有清理脚本 <code>app/public/js/sw-cleanup.js</code>）负责后台生命周期管理：</p>
 <ul>
-  <li>支持 Web App Manifest，在 iOS Safari 与 Android Chrome 上均可一键「添加到主屏幕」化身为独立 Native 质感应用。</li>
-  <li>配合 <code>web-push</code> 协议，在屏幕熄灭或切换到其他 App 时接收后台系统级推送；点击通知直接精准直达对应的会话标签页。</li>
+  <li><strong>添加到主屏幕：</strong>iOS Safari 与 Android Chrome 都能装成独立全屏的 PWA；PWA 与 Web Push 需要 HTTPS，iOS 还要 16.4+ 并先添加到主屏幕。</li>
+  <li><strong>Service Worker 只管推送：</strong><code>app/public/sw.js</code> 处理 install / activate / push / 点击通知 / <code>pushsubscriptionchange</code>，<strong>不做缓存、不做离线</strong>；点开通知直达对应会话。<code>app/public/js/sw-cleanup.js</code> 负责清理旧版遗留的 Service Worker。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="files-upload.html"><span class="dir">← 上一篇</span><span class="ttl">文件与上传</span></a><a class="next" href="notify-status.html"><span class="dir">下一篇 →</span><span class="ttl">通知与状态栏</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">目录分层与职责划分</a></li><li class="h2"><a href="#s2">状态管理与交互体验设计</a></li><li class="h2"><a href="#s3">PWA 与 Service Worker</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">目录分层与职责划分</a></li><li class="h2"><a href="#s2">状态管理与交互设计</a></li><li class="h2"><a href="#s3">PWA 与 Service Worker</a></li></ul></aside>
     </div>
   </div>
 </div>

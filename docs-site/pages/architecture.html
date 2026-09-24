@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>系统架构 · Claude Chat Mobile</title>
-<meta name="description" content="从手机 UI 到本机 CLI 的分层与数据路径。本页讲：双通道分层架构、后端领域模块划分、双通道通信与单驾驶员保证、两处架构脆弱点、前端架构分层。">
-<meta name="llm:tokens" content="1837">
+<meta name="description" content="从手机 UI 到本机 CLI 的分层与数据路径。">
+<meta name="llm:tokens" content="1921">
 <link rel="alternate" type="text/markdown" href="architecture.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html" class="active"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html" class="active"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -61,7 +61,7 @@ flowchart TB
     UI["PWA 聊天交互界面\n流式气泡 · 审批卡片 · 工作区抽屉"]
   end
 
-  subgraph Network["网络拓扑 (ACCESS_PROFILE)"]
+  subgraph Network["公网 / 局域网入口（任选其一）"]
     CF["Cloudflare Tunnel + Access\n(公网 2FA 隧道)"]
     RP["纯反向代理 / 内网穿透\n(Nginx / Tailscale)"]
     LAN["局域网直接连接\n(本地绑定)"]
@@ -79,14 +79,14 @@ flowchart TB
       SessMgr["Session Registry (app/src/sessions)\n会话注册表 · 历史回放 · 工作区门禁"]
     end
 
-    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.263)"]
+    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.278)"]
     CLI["本机已安装的 claude CLI 进程"]
   end
 
   subgraph LocalStorage["本地持久化存储"]
-    DataDir["CCM_DATA_DIR (仓库根/data/)\n会话元数据 · 设备指纹 · 附件 · 审计日志"]
+    DataDir["CCM_DATA_DIR（默认 ./data，建议外置）\n会话索引 · 设备信任 · 附件 · 审计"]
     ClaudeHome["~/.claude/projects/\nCLI 会话 Transcript · 记忆 · 本地配置"]
-    WorkTree["用户开发工作区 (WORK_DIR / Git 仓库)"]
+    WorkTree["WORKDIRS 放行的工作区（含 worktree）"]
   end
 
   UI <-->|"双向 WebSocket (agent:event)"| Network
@@ -123,7 +123,7 @@ flowchart TB
 <ol class="steps">
   <li><strong>Web 驾驶通道（双向流）。</strong>由 Web 发起的交互直接进入 SDK query，流式接收 Agent 事件，通过 <code>agent:event</code> 信封（包含 seq/epoch/cwd 等）进入 2000 条环形缓冲并下发前端。</li>
   <li><strong>CLI 终端驾驶通道（只读镜像）。</strong>当检测到用户正在终端直接操作该会话时，Web 端退化为只读镜像模式（通过轮询磁盘 Transcript 增量追平状态），前端输入框切换为「终端会话运行中」并上锁。</li>
-  <li><strong>接管与锁释放。</strong>终端进程退出或超时后，Web 端可安全接管会话，由 <code>applyFlagSettings</code> 和 SDK 会话恢复状态。</li>
+  <li><strong>接管与锁释放。</strong>终端回合结束并经过静默判定后锁释放；发送前若 transcript 有外部增长，先 dispose 旧实例再 resume 吸收。终端仍在跑时也可以显式续接，但要过一道写明分叉风险的确认框，且不会停止终端进程。</li>
 </ol>
 
 <h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>两处架构脆弱点</h2>
@@ -132,13 +132,13 @@ flowchart TB
 </div></div>
 
 <div class="callout warn"><div class="body">
-<strong>脆弱点二：macOS 服务模板与解析字符串对齐</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码<strong>逐字保持严格一致</strong>，否则菜单栏服务状态面板会将工作区解析为 null。
+<strong>脆弱点二：macOS 服务模板与解析字符串对齐</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码<strong>逐字保持严格一致</strong>，否则服务面板的 repo / node 恒为 null，且没有任何报错。
 </div></div>
 
 <h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>前端架构分层</h2>
 <ul>
   <li><code>app/public/js/app.js</code>：顶层编排器，负责全局 Socket 挂载与状态同步。</li>
-  <li><code>app/public/js/app/*</code>：按业务域拆分的模块工厂（如 <code>event-dispatch.js</code>、<code>chat-ui.js</code>、<code>settings-panel.js</code>），采用 Context 注入。</li>
+  <li><code>app/public/js/app/*</code>：按业务域拆分的模块工厂（如 <code>event-dispatch.js</code>、<code>message-renderer.js</code>、<code>drawer.js</code>、<code>settings.js</code>），采用 Context 注入；新状态进这里，不再挂进 <code>app.js</code> 顶层。</li>
   <li><code>app/public/js/logic/*</code>：零依赖纯函数集合（数据进、数据出），不触碰任何 DOM、Window 或全局 Socket，直接在 Node.js 单测与浏览器零构建复用。</li>
   <li><code>app/public/js/canonicalize.js</code>：前后端共用的指纹规范化唯一共享模块。</li>
 </ul>

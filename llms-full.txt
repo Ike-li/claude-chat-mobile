@@ -1,6 +1,6 @@
 # Claude Chat Mobile · Full Architecture & Developer Handbook (Combined)
 > Automatic compilation of all 28 handbook chapters into a single markdown for LLM consumption.
-> Baseline: dev@687bca3 · n=1 Self-Hosted Architecture
+> Baseline: dev@3f488861 · n=1 Self-Hosted Architecture
 
 
 
@@ -11,13 +11,13 @@
 
 - **Part**: 起点
 - **Reading Time**: ~5 min
-- **Estimated Tokens**: ~1536
+- **Estimated Tokens**: ~1604
 
 ---
 
-手册 v2.0 更新于 2026-09-08  · 源码基线 dev@687bca3 · 维护者 [Ike-li](https://github.com/Ike-li)
+手册 v2.1 更新于 2026-09-24  · 源码基线 dev@3f488861 · 维护者 [Ike-li](https://github.com/Ike-li)
 
-Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机已登录的 `claude` CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。
+Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机的 `claude` CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。
 
  
     1  用户 / 实例 (n=1)  
@@ -46,7 +46,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 ## 这本手册从哪来
 
-源码分支为 **dev**（当前基线 HEAD `687bca3`）。仓库采用产品宪法 C1–C5 与硬性规则治理（详见 `docs/hard-rules.md` 与 `docs/architecture.md`），本手册按真实运行代码与架构契约重叙述，不照搬历史陈旧文档。
+源码分支为 **dev**（当前基线 HEAD `3f488861`；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 `docs/hard-rules.md`（产品边界、n=1 取舍、架构不变量、已决不做）与 `docs/architecture.md` 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。
 
 > **WARNING:** 事实基线约定 — 手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 tests/gates/ 门禁为准，并应在漂移清单中透明登记。
 
@@ -77,10 +77,10 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 | 层级 | 技术选型 | 关键特性 |
 | --- | --- | --- |
 | 运行时 | Node ≥20 · ESM · Express 5 · Socket.IO 4 | 三层架构，前后端零构建纯 ESM |
-| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.263 | 双向流控制，驱动本机已登录的 claude CLI |
+| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.278（v1.12.1 为 0.3.263） | 双向流控制，驱动本机的 claude CLI |
 | 配置与运维 | ccm.config.json · env-schema.js | 统一结构化配置、热重载工作区、统一读写源 |
-| 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 单用户强制 Token，非本地网络设备指纹审批 |
-| 离线推送 | web-push (VAPID) · 可选 ntfy | 审批/提问无条件推送，前台可见连接智能抑制 |
+| 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外） |
+| 离线推送 | web-push (VAPID) · 可选 ntfy | 审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制 |
 | 测试与门禁 | node --test · Playwright · 宿主机白名单 | S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作 |
 | 开源许可 | Apache-2.0 · NOTICE 归属声明 | 可自由自托管、商用与闭源再分发 |
 
@@ -97,7 +97,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 - **Part**: 起点
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~1331
+- **Estimated Tokens**: ~1329
 
 ---
 
@@ -133,7 +133,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 ## 事实基线约定
 
-> **DRIFT NOTICE:** 以代码为准 — 手册基于 dev 源码深度核对（基线 HEAD 687bca3），紧密对齐 docs/hard-rules.md 与各项架构不变量。代码若持续演进，以生产代码和自动化门禁为准，所有已知出入透明沉淀于漂移清单。
+> **DRIFT NOTICE:** 以代码为准 — 手册基于 dev 源码核对（基线 HEAD 3f488861），紧密对齐 docs/hard-rules.md 与各项架构不变量。代码若持续演进，以生产代码和自动化门禁为准，所有已知出入透明沉淀于漂移清单。
 
 > **TIP:** 全局搜索与深浅色 — 在手册任意页面按下 ⌘K / Ctrl+K 可快速调起全文即时搜索。点击顶栏月亮/太阳图标或按下键盘快捷键 T 即可平滑切换深浅色模式，首屏加载内置防闪白机制。
 
@@ -148,33 +148,33 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 - **Part**: 第一部分 · 认识项目
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~2064
+- **Estimated Tokens**: ~2389
 
 ---
 
-项目面向已经在终端使用 `claude` CLI 的开发者：在手机上与同一个 Agent 对话交互，体验与效果完全等同于坐在电脑前操作终端。
+项目面向已经在终端使用 `claude` CLI 的开发者：在手机上与同一个 Agent 对话交互，目标是和坐在电脑前对终端打字效果一样。
 
 ## 一句话定位
 
-移动端聊天式 Web UI，通过官方 `@anthropic-ai/claude-agent-sdk` 驱动**本机已登录的** `claude` CLI。项目不打包独立的模型后端，不另搞平行的 Agent 逻辑；无缝继承同一套 `CLAUDE.md`、MCP 工具、自定义 Skills、Hooks 以及本地会话历史（Transcripts）。
+移动端聊天式 Web UI，通过官方 `@anthropic-ai/claude-agent-sdk` 驱动**本机的** `claude` CLI：你的 CLI 怎么配就怎么用，官方订阅、API key、第三方网关、Bedrock / Vertex 一视同仁。项目不打包独立的模型后端，不另搞平行的 Agent 逻辑；沿用同一套 `CLAUDE.md`、MCP 工具、Skills、Hooks 与本地会话记录（transcript）。
 
 ## 核心适用场景
 
-- 长耗时任务在后台跑，人离开电脑。 终端执行中的工具审批、人机提问和后台子代理完成事件实时推送到手机通知栏，轻点即可放行或驳回。
-- 同一会话，跨设备无缝续接。 手机端与终端基于同一份本地 CLI Transcript 会话记录流转；在路上掏出手机起头，回到办公室敲 claude --resume 即刻连上。
-- 多项目工作区快速切换。 基于严格的工作区路径白名单，支持在多个本地 Git 仓库或 Worktree 之间一键切换并并发监视进展。
-- 原生触控与移动端优化。 专为触屏调优的输入框、斜杠命令面板（ / 菜单）、相册图片直传、长按快捷操作与代码块折叠，而不是机械地缩放终端窗口。
+- 长任务在跑，人离开电脑。 Web 驱动的会话里，工具审批、 AskUserQuestion 提问和后台任务完成都推到锁屏，手机上直接点。终端里跑的会话，装上可选的 hooks bridge 后，回合结束与「需要你」也能即时通知到手机，但审批要回终端处理。
+- 同一会话，跨设备续接。 手机端与终端基于同一份本地 transcript 流转；手机上开的会话，回到电脑敲 claude --resume 就能接上。同一时刻只有一个驾驶端，接管时会提示。
+- 多个工作区之间切换。 在白名单放行的多个本地仓库或 worktree 之间切换，侧栏标出各工作区里正在运行的会话。
+- 为触屏重排，不是投屏。 审批卡、提问选项、斜杠命令面板（ / 菜单）、 @ 引用文件、上传图片与粘贴截图、工具卡与变更预览，而不是把终端窗口缩小了放到手机上。
 
-如果只是偶尔临时查看电脑屏幕，远程桌面已足够。Claude Chat Mobile 面向的是「将移动端打造成电脑 CLI 随身等价入口」的高频生产力需求。
+如果只是偶尔看一眼电脑屏幕，远程桌面已经够用。Claude Chat Mobile 面向的是把手机当成电脑上那个 CLI 的随身等价入口。
 
 ## 技术栈与基础选型
 
- Node ≥20 · ESM 规范 · Express 5 · Socket.IO 4 · compression  
-    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.263 · 本机 `claude` CLI  
-    鉴权 / 推送  `jose` 6（JWT 验证）· `web-push`（VAPID 协议）· 可选 ntfy  
-    前端架构  原生 ESM PWA 架构；依赖完全本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
-    测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 容器沙箱 HOME 隔离  
-    配置管理  `ccm.config.json`（结构化配置，支持工作区热重载与统一 Schema）  
+ Node ≥20 · ESM · Express 5 · Socket.IO 4 · compression  
+    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.278（dev；最新发布版 v1.12.1 为 0.3.263）· 本机 `claude` CLI  
+    鉴权 / 推送  `jose` 6（JWT 验证）· `web-push`（VAPID）· 可选 ntfy  
+    前端架构  原生 ESM PWA，零构建；依赖全部本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
+    测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 破坏性测试进容器  
+    配置管理  `ccm.config.json`（结构化配置，统一 Schema；工作区列表热加载）  
     开源许可  Apache-2.0 · NOTICE 归属声明（可自托管、商用与闭源再分发）  
  
 
@@ -182,29 +182,30 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 | 目录路径 | 职责范围 | 关键约束 |
 | --- | --- | --- |
-| app/server.js | 运行时启动入口 | 薄封装：加载环境变量、注入安全时戳并引导 app/src/server/app.js |
-| app/src/ | 服务端业务域 | 按域严密分层（agent, sessions, server, auth, files, ops, shared） |
-| app/public/ | 前端 PWA 界面 | 纯静态无打包构建，静态资源与 logic 纯函数与后端零构建同源复用 |
-| scripts/ | 维护者与装机工具 | setup.js 、 doctor.js 、 config.js 、 device.js 、 release.sh |
-| desktop/ | macOS 状态栏应用 | 原生 Swift 状态栏菜单栏工具（CCM.app）与 LaunchAgent 模板 |
-| tests/ | 测试体系唯一根目录 | unit/ 、 invariants/ 、 integration/ 、 e2e/ 、 gates/ 、 infra/ |
-| docs/ | 架构真相源文档 | architecture.md 、 hard-rules.md 、 testing.md 、 display-contracts.md |
+| app/server.js | 运行时启动入口 | 薄封装：加载配置并引导 app/src/server/app.js |
+| app/src/ | 服务端业务域 | 按域分层（agent, sessions, server, auth, files, ops, shared），边界由 import 门禁硬闸执行 |
+| app/public/ | 前端 PWA 界面 | 纯静态、零构建； js/logic/* 纯函数与单测零构建共用同一份文件 |
+| scripts/ | 用户运维命令 + 少量维护者工具 | 用户命令： setup 、 doctor 、 config 、 device 、 qr 、 service 、 uninstall 与两个 CLI 桥； release.sh 等维护者工具不进分发归档 |
+| desktop/ | macOS 菜单栏应用 | 原生 Swift 菜单栏工具（CCM.app）与 LaunchAgent 模板 |
+| tests/ | 测试与门禁的唯一根目录 | unit/ 、 invariants/ 、 integration/ 、 e2e/ 、 gates/ 、 infra/ ；整棵树不进分发归档 |
+| docs/ | 产品文档 | getting-started.md 、 deployment.md 、 architecture.md 、 hard-rules.md 、 display-contracts.md 、 testing.md |
 
 > **WARNING:** 架构脆弱点警示：项目根路径计算 — app/src/** 下计算项目根目录必须向上穿透三层（如 app/src/server/app.js 或 app/src/shared/data-dir.js）。因为 data/、scripts/ 与 ccm.config.json 位于仓库顶级根目录，若少算一层会导致数据和配置文件静默解析到 app/ 目录下且毫无报错。
 
-## 分支纪律与工作流
+## 分支纪律与分发
 
-- dev ：日常开发与新特性主干，日常改动一律在 dev 上进行。
-- master ：生产稳定分支与 GitHub 默认分支，受分支保护。仅在发版时通过 scripts/release.sh 执行 fast-forward 合并与分发裁剪。
-- gh-pages ：独立展示与全景手册分支，纯静态产物托管。
-- promo ：宣发文案创作工作区，非源码逻辑。
+- dev ：开发主线。日常改动走 feature 分支 → PR → dev，每个小改动一个 PR；dev 要求 PR 且 CI 必须绿。
+- master ：对外发布的稳定版本，HEAD 恒等于最新发布，同时是 GitHub 默认分支。只接受 scripts/release.sh 开的 dev → master 发版 PR（等真 CI 绿、合并后在 master HEAD 上打 tag）。
+- 分发 ：装机的 curl 直接拉 GitHub 对 master 的源码归档，GitHub 现场 git archive 并遵守 .gitattributes 的 export-ignore ；发版不打包、不上传资产。
+- gh-pages ：站点（落地页、在线演示、架构图集、本手册），孤儿分支。
+- promo ：宣传文案创作区，孤儿分支，非源码。
 
 ## 装机与运行前置条件
 
-1. Node.js 运行环境。 需 Node ≥20（推荐 LTS 版本），纯 ESM 模式运行。
-2. 本机可用且已登录的 claude CLI。 执行 which claude 确认命令可寻址，且能在本地终端正常交互。
-3. Anthropic 订阅或 API 凭据。 使用官方订阅沿用 CLI 登录凭据；如使用第三方网关， 必须在启动 server 的 shell 中 export ANTHROPIC_* 。写入配置文件（无论是 ccm.config.json 还是 .env ）都会在启动期被 无条件剥除并告警 ，以确保配置文件不压过 shell 中的 provider 凭据（遵循终端等价性）。
-4. 操作系统支持。 以 macOS（原生支持桌面菜单栏 CCM.app 与 launchd）和 Linux（systemd / Docker）为一等支持平台。
+1. Node.js ≥ 20。
+2. 本机 claude CLI 能在终端正常跑完一轮会话。 官方订阅要已 /login ；第三方网关不走 Anthropic 登录，永远不会出现 Not logged in ，要的是 ANTHROPIC_* 真的生效。
+3. 模型通路配置属于 claude CLI，不属于本项目。 第三方网关推荐写在 CLI settings 文件的 env 块（工作区的 .claude/settings.local.json ，或 ~/.claude/settings.json ），它按工作区目录生效，macOS 桌面端拉起的常驻服务同样认。也可以在启动 server 的 shell 里 export ，但只对 headless 终端入口有效。写进 ccm.config.json / .env 的 ANTHROPIC_* 会在启动期被剥除，并在启动日志里点名。
+4. 操作系统。 macOS 或 Linux；原生 Windows 属实验路径，推荐 WSL2。常驻只有两条入口：headless 终端 npm start ，或 macOS 菜单栏应用 CCM.app。
 
 
 ---
@@ -217,7 +218,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 - **Part**: 第一部分 · 认识项目
 - **Reading Time**: ~14 min
-- **Estimated Tokens**: ~2030
+- **Estimated Tokens**: ~2117
 
 ---
 
@@ -231,7 +232,7 @@ flowchart TB
     UI["PWA 聊天交互界面\n流式气泡 · 审批卡片 · 工作区抽屉"]
   end
 
-  subgraph Network["网络拓扑 (ACCESS_PROFILE)"]
+  subgraph Network["公网 / 局域网入口（任选其一）"]
     CF["Cloudflare Tunnel + Access\n(公网 2FA 隧道)"]
     RP["纯反向代理 / 内网穿透\n(Nginx / Tailscale)"]
     LAN["局域网直接连接\n(本地绑定)"]
@@ -249,14 +250,14 @@ flowchart TB
       SessMgr["Session Registry (app/src/sessions)\n会话注册表 · 历史回放 · 工作区门禁"]
     end
 
-    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.263)"]
+    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.278)"]
     CLI["本机已安装的 claude CLI 进程"]
   end
 
   subgraph LocalStorage["本地持久化存储"]
-    DataDir["CCM_DATA_DIR (仓库根/data/)\n会话元数据 · 设备指纹 · 附件 · 审计日志"]
+    DataDir["CCM_DATA_DIR（默认 ./data，建议外置）\n会话索引 · 设备信任 · 附件 · 审计"]
     ClaudeHome["~/.claude/projects/\nCLI 会话 Transcript · 记忆 · 本地配置"]
-    WorkTree["用户开发工作区 (WORK_DIR / Git 仓库)"]
+    WorkTree["WORKDIRS 放行的工作区（含 worktree）"]
   end
 
   UI <-->|"双向 WebSocket (agent:event)"| Network
@@ -290,18 +291,18 @@ flowchart TB
 
 1. Web 驾驶通道（双向流）。 由 Web 发起的交互直接进入 SDK query，流式接收 Agent 事件，通过 agent:event 信封（包含 seq/epoch/cwd 等）进入 2000 条环形缓冲并下发前端。
 2. CLI 终端驾驶通道（只读镜像）。 当检测到用户正在终端直接操作该会话时，Web 端退化为只读镜像模式（通过轮询磁盘 Transcript 增量追平状态），前端输入框切换为「终端会话运行中」并上锁。
-3. 接管与锁释放。 终端进程退出或超时后，Web 端可安全接管会话，由 applyFlagSettings 和 SDK 会话恢复状态。
+3. 接管与锁释放。 终端回合结束并经过静默判定后锁释放；发送前若 transcript 有外部增长，先 dispose 旧实例再 resume 吸收。终端仍在跑时也可以显式续接，但要过一道写明分叉风险的确认框，且不会停止终端进程。
 
 ## 两处架构脆弱点
 
 > **WARNING:** 脆弱点一：项目根路径解析 — app/src/** 模块计算仓库根路径必须上溯三层（app/src/server/app.js 与 app/src/shared/data-dir.js）。少算一层会导致配置文件和持久化数据目录被意外创建到 app/ 内部，且无系统级报错。
 
-> **WARNING:** 脆弱点二：macOS 服务模板与解析字符串对齐 — desktop/launchd/server.plist.template 中的启动命令 exec   app/server.js 必须与 app/src/ops/service-units.js 解析常驻进程后缀的代码逐字保持严格一致，否则菜单栏服务状态面板会将工作区解析为 null。
+> **WARNING:** 脆弱点二：macOS 服务模板与解析字符串对齐 — desktop/launchd/server.plist.template 中的启动命令 exec   app/server.js 必须与 app/src/ops/service-units.js 解析常驻进程后缀的代码逐字保持严格一致，否则服务面板的 repo / node 恒为 null，且没有任何报错。
 
 ## 前端架构分层
 
 - app/public/js/app.js ：顶层编排器，负责全局 Socket 挂载与状态同步。
-- app/public/js/app/* ：按业务域拆分的模块工厂（如 event-dispatch.js 、 chat-ui.js 、 settings-panel.js ），采用 Context 注入。
+- app/public/js/app/* ：按业务域拆分的模块工厂（如 event-dispatch.js 、 message-renderer.js 、 drawer.js 、 settings.js ），采用 Context 注入；新状态进这里，不再挂进 app.js 顶层。
 - app/public/js/logic/* ：零依赖纯函数集合（数据进、数据出），不触碰任何 DOM、Window 或全局 Socket，直接在 Node.js 单测与浏览器零构建复用。
 - app/public/js/canonicalize.js ：前后端共用的指纹规范化唯一共享模块。
 
@@ -316,94 +317,87 @@ flowchart TB
 
 - **Part**: 第一部分 · 认识项目
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~1804
+- **Estimated Tokens**: ~2394
 
 ---
 
-为项目确定边界，其价值往往大于堆叠功能。明确产品「坚决不做什么」，是防止项目滑向失控复杂度的核心防线。
+为项目确定边界，价值往往大于堆叠功能。明确「不做什么」，是防止项目滑向失控复杂度的核心防线。
 
-## 产品定位与产品宪法 C1–C5
+## 产品边界（改这些等于换产品）
 
-Claude Chat Mobile 遵循明确的自托管产品宪法（见 `docs/hard-rules.md`）：
+以下各条出自产品仓 `docs/hard-rules.md` 第 1 节，其中多条是 2026-09-01 维护者确认后固化进去的：
 
- 
-    C1 
-#### 严格单用户 (n=1)
-
-单实例单用户。通过鉴权的请求等价于物理坐在终端前的机主，不设立租户隔离或多账号概念。
- 
-    C2 
-#### 数据不出本机
-
-模型 API Token、会话记录与开发源码绝不经过任何第三方托管平台或中心云中继。
- 
-    C3 
-#### 继承原生权限体系
-
-完全复用本机 `claude` CLI 的已有配置（`settings.json`）与 MCP 规则，不发明并行的权限孤岛。
- 
-    C4 
-#### 单驾驶员防分叉
-
-任意时刻同一会话只允许终端或 Web 之一持有写入锁，通过只读镜像与锁流转彻底杜绝数据分叉。
- 
-    C5 
-#### 终端行为等价性
-
-CLI 有的功能 Web 端无缝对齐；CLI 放弃的复杂性 Web 坚决不自造轮子。
- 
- 
+| 规则 | 说明 |
+| --- | --- |
+| 终端等价 | 在手机上打字与在电脑前对 claude 打字效果一样；CLI 有什么 Web 就有什么 |
+| 单用户 = 主机所有者 | 没有多用户或租户隔离；鉴权通过就等于本机启动 claude 的那个账号的权限 |
+| 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端的 stdin / stdout |
+| 对模型通路零假设 | 不关心 claude CLI 接的是官方订阅、API key、Bedrock / Vertex 还是第三方网关；不匹配 ANTHROPIC_BASE_URL 、不设厂商白名单、不探测上游，唯一据以调整行为的是 CLI 自报的能力位 |
+| 不新增持久化层 | 消息的真相源永远是 CLI 的 transcript，CCM 一条都不存；新增持久化必须同时满足「claude 侧没有这个概念」与「不能从 transcript 重建」，缓存类必须能随时删 |
+| 鉴权是启动前提 | 没有 AUTH_TOKEN 就不启动，任何绑定模式都一样，本机浏览器也要令牌 |
+| 公网入口：一条基线、一个受管加层 | 基线是令牌 + 逐设备审批，对所有拓扑相同；Cloudflare Access 是可选加层；产品受管的第三方进程只有 cloudflared ，Tailscale、WireGuard、反代一等支持但不受管 |
+| 不替用户决定怎么后台运行 | 启动只有两条入口：headless 终端 npm start ，与 macOS 桌面端 CCM.app；macOS 之外不做官方常驻适配 |
+| 可选功能由用户开关，不猜 | 桌面控制台、两个 CLI 桥、推送等默认全关，装机向导逐项问；非交互模式下会动全局的项缺省关，会扩大攻击面的回落直接拒绝 |
 
 ## 系统核心职责：做什么
 
-- 提供移动端原生友好的终端等价界面。 实时流式输出渲染、Markdown 与代码语法高亮、工具调用过程卡片、用户确认提问（AskUserQuestion）交互。
-- 会话生命周期与双向同步。 复用本机 CLI 的 Transcript 记录（ ~/.claude/projects/ ），支持 Web 端发起会话、继续历史会话（ resume ）、工作区切换与中断。
-- 安全闭环的人机权限审批。 当 Agent 尝试执行白名单外的危险工具（如执行命令、写敏感文件）时，推送审批请求并在移动端提供一键同意/拒绝。
-- 本地工作区保护与安全浏览。 在显式配置的 WORKDIRS 白名单内安全浏览、检索项目文件与查看 Git 变更，杜绝路径穿越。
-- 自托管基础设施服务。 结构化配置管理、启动自检（doctor）、智能离线推送与跨设备已读状态同步。
+- 移动端友好的终端等价界面。 流式输出、Markdown 与代码高亮、工具调用卡片、 AskUserQuestion 交互、审批卡。
+- 会话生命周期与双向同步。 复用本机 CLI 的 transcript（ ~/.claude/projects/ ），支持 Web 发起会话、续接历史会话、切换工作区、中断、 /rewind 与分叉；与终端之间守单驾驶员模型。
+- 人机权限审批。 Agent 调用白名单外的工具时，推送审批请求，手机上一键允许、拒绝或中止本轮。
+- 工作区保护与安全浏览。 在显式配置的 WORKDIRS 内浏览、检索文件与查看 git 改动，杜绝路径穿越。
+- 自托管基础设施。 结构化配置、启动自检（doctor）、离线推送、跨设备已读状态同步。
 
-## 明确不做的技术债清单
+## 立场上不做的方向
 
-| 编号 | 决议不做的方向 | 架构理由与考量 |
+- 多租户、RBAC、按用户隔离数据： 违背 n=1 自托管前提。真要做，先改 hard-rules 的立场，而不是局部打补丁。
+- SaaS 或托管服务： 项目自己不运营任何中继或云端；公网入口由用户自选，CCM 承诺的是「模型请求之外不再多一条数据出口」。
+- 重新实现 Agent 状态机与编排层： 直接依托官方 Agent SDK 与本机 CLI，功能先看 CLI 怎么做。
+- 无鉴权的 HTTP 数据端点： /health 、 /metrics 、历史回显都过鉴权。
+- 插件机制： 2026-08-14 否决；认证策略虽已抽成接口，但仍在仓内、受全部门禁约束。扩展走 CLI 原生的 MCP 与 Skills。
+
+## 已评估不做的技术债（hard-rules §5）
+
+| ID | 内容 | 决定 |
 | --- | --- | --- |
-| AD-1 | 多租户、RBAC 角色权限与按用户数据隔离 | 违背 n=1 自托管核心。引入租户会严重破坏单用户与本机 CLI 的映射边界，带来数倍无收益复杂度。 |
-| AD-2 | 云端托管代理或中心化 SaaS 服务 | 代码和会话是用户核心隐私，架构设计上只允许直连或点对点隧道连接。 |
-| AD-3 | 重新实现 Agent 状态机与 LLM 编排层 | 直接依托官方 Agent SDK。自造 Agent 调度不仅极易滞后于官方演化，还会破坏工具执行契约。 |
-| AD-4 | 开放免鉴权的网络数据端点 | 即使是 /health 、 /metrics 或静态状态检查，也一律过鉴权网关拦截，杜绝信息侧漏。 |
-| AD-5 | 全端端到端加密（E2EE）离线推送 | 推送仅作为唤醒信号；真实正文拉取依然走 WebSocket 双向受控通道，避免引入重型加密握手协议。 |
-| AD-6 | 自造插件系统与动态运行包管理 | 插件出仓库会导致静态类型与安全门禁体系全面失明，扩展统一使用 CLI 原生的 MCP 与 Skills。 |
+| AD-5 | 按（会话，连接）粒度的镜像锁， readonly_changed 定向下发 | 不做。已知代价：两台设备同时看不同会话时，会话 B 的 mirror_state 可能误解锁正在看 A 的那一端 |
+| SP-10 | busy→idle 吸收窗口的完整闭合（前端 uuid 幂等 + live 记 uuid） | 不做。已知代价：本地回合收尾的吸收窗口里撞进来的终端写入可能被吞，需切会话重载 |
+| OQ-09 | 审批时延之类的「人机 / 价值」埋点遥测 | 拒绝；管道健康指标走 /metrics |
+| UP-1 | 让 Web 端的内置斜杠命令像终端那样 inline 跑 | 做不到：CLI 判据是「宿主有没有 ReportFindings 工具」，SDK 宿主没有，所以恒 fork。等上游开口子 |
+| DT-1 | 在仓库里放编译好的 CCM.app 供下载 | 不做：下载来的 app 必带 quarantine，首次打开必撞 Gatekeeper；公证要付费开发者账号，对自托管工具不成比例 |
 
-## 与相邻系统的分工分界
+重开条件：产品明确放弃 n=1，或「一人多机看不同会话」成为常态痛点；或有可测复现，并愿意承担 AD-5 / SP-10 的全链路改动。
+
+## 与相邻系统的分工
 
 ```mermaid
 flowchart LR
   subgraph Client["移动端 (手机 PWA)"]
-    UI["聊天操作界面\n输入 · 审批 · 工作区切换"]
+    UI["聊天界面\n输入 · 审批 · 工作区切换"]
   end
 
-  subgraph Edge["公网 / 隧道边缘"]
-    CF["Cloudflare Tunnel / 反代\n负责传输加密与外网接入"]
+  subgraph Edge["公网 / 隧道入口（可选）"]
+    CF["Cloudflare Tunnel + Access / Tailscale / 反代\n传输加密与外网接入"]
   end
 
   subgraph CCM["Claude Chat Mobile 本地服务"]
     App["CCM Server\n鉴权 · 协议转发 · 镜像锁 · 状态同步"]
   end
 
-  subgraph Native["本机环境与系统"]
+  subgraph Native["本机环境"]
     CLI["claude CLI & Agent SDK\n执行决策 · 权限判断 · 工具调用"]
-    Disk["本地代码工作区 & ~/.claude\n项目源码 · 配置 · 会话记录"]
+    Disk["工作区 & ~/.claude\n源码 · 配置 · 会话记录"]
   end
 
-  UI <-->|"HTTPS / WSS"| CF
+  UI <-->|"HTTPS / WSS 或局域网直连"| CF
   CF <--> CCM
-  CCM <-->|"Agent SDK Stdio"| CLI
+  CCM <-->|"Agent SDK"| CLI
   CLI <--> Disk
-  CCM -.->|"读元数据"| Disk
+  CCM -.->|"读 transcript / 元数据"| Disk
 ```
 
- 真实任务执行者，拥有工具执行与全局权限判定的最终决定权。  
-    Cloudflare / 反代  外部网络打通与证书接入层，CCM 自身不负责动态管理 tunnel 守护进程。  
-    Web Push / ntfy  仅提供异步通知唤醒功能，通道不可用不影响主流程的正常运转。
+ 真实的任务执行者，工具执行与权限判定的最终决定权在它。  
+    公网入口  `cloudflared` 是产品唯一受管的第三方进程（桌面端可安装、启停）；Tailscale、其他加密隧道与反代只给文档配方和 doctor 检测，产品不装、不起、不保活。  
+    Web Push / ntfy  只做异步唤醒，通道不可用不影响主流程。
 
 
 ---
@@ -416,7 +410,7 @@ flowchart LR
 
 - **Part**: 第二部分 · 演进历程
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1583
+- **Estimated Tokens**: ~2188
 
 ---
 
@@ -443,12 +437,17 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
     第四阶段 
 #### 配置与网络拓扑重构（2026-08 末 ~ 2026-09）
 
-从松散 .env 升级为结构化 `ccm.config.json`；确立 ACCESS_PROFILE 三候选拓扑，支持无 Cloudflare 部署。
+从松散 .env 升级为结构化 `ccm.config.json`；令牌成为启动前提；`ACCESS_PROFILE` 作为纯声明落地、`BIND_MODE` 可收窄监听面，Cloudflare 降为可选加层，不经 Cloudflare 的部署成为一等路径。
  
     第五阶段 
 #### SDK 升级与活体感知深化（2026-09）
 
 升至 SDK 0.3.263，接入 `applyFlagSettings` 运行时调参；完善终端等待态感知与 tail attribution 归因。
+ 
+    第六阶段 
+#### 分发、安全与终端对齐的收口（2026-09 中下旬）
+
+分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；dev 上又合入额度重置自动继续、思考强度 auto 档，SDK 升到 0.3.278。
  
  
 
@@ -459,9 +458,12 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
 | 8/2 删库事故与沙箱防线 | mutate 测试在改坏源码时把路径函数算成空串，误打在宿主机真实 ~/.claude/projects 上造成数据清除。 | 宿主机仅跑白名单命令 （ guard-host-tests.js ）；所有可能造成破坏的测试一律在容器中跑（容器内 HOME 为一次性沙箱）。 |
 | 8/14 插件化提案被否决 | 曾提案将系统扩展插件化、允许动态加载外部模块。 | 坚决不做插件化 。插件出仓库会导致 import 边界、双向事件契约与静态门禁彻底失明，扩展全走 CLI 原生 MCP/Skills。 |
 | 8/26 计数失明与长轮次 | 模型输出数分钟无 token 刷新，被误判为卡死。 | 确立以 transcript 字节增长作为真实死活判据；避免基于静态超时武断终止活跃长工具执行。 |
-| 9/1 拓扑重构与三候选落地 | 原网络判定过度与 Cloudflare 绑定，纯反代或局域网部署难以通过健康检查。 | 落地 ACCESS_PROFILE （ cloudflare , reverse-proxy , lan ），将非 Cloudflare 部署正式升为一等支持路径。 |
+| 9/1 五条原则写进 hard-rules | 调查发现：改造前不设令牌时，本机浏览器打开 localhost 就是零凭证的全权控制台；网络判定与 Cloudflare 绑得过紧。 | 固化进 hard-rules §1：对模型通路零假设、不新增持久化层、鉴权是启动前提、公网入口一条基线加一个受管加层。 ACCESS_PROFILE 作为纯声明落地（后扩到 cloudflare / vpn / reverse-proxy / direct / lan 五档）。 |
 | 9/3 运行时 effort 动态切换 | 历史实现认为 SDK 无法动态改 effort，切档必须重启实例。 | 实证实测推翻旧假设：SDK 原生支持 applyFlagSettings({effortLevel}) 运行时生效，改掉低效的实例置换。 |
 | 9/6-8 终端活体识别与归因修复 | 桌面端写活体条目但不写 status；Web 续接后误将已结束的 pending 归因于桌面端。 | 深化活体与终端等待态（terminalWaiting）感知；严格区分锁判定（宁可误锁）与列表展示（宁可少报）的相反判定方向。 |
+| 9/8 分发改为源码归档 | 发版时自己打包、改写 package.json 、上传 Release 资产，流水线长，还出现过「Release 在、资产空」的半发布态。 | 装机直接拉 GitHub 对 master 的源码归档，裁剪交给 export-ignore ； master 上不得有未发版提交。 |
+| 9/17 安全审查 | 控制面密钥会被 claude 子进程继承；启动横幅会打印完整令牌；纯 TCP 转发下可以伪造本机 Host。 | 子进程剥掉控制面密钥（AUTH-06）；令牌不再出现在服务端输出里； DEVICE_APPROVAL_SCOPE=all 成为覆盖全部路径的总开关；公网 IdP 路径加跨站握手门。 |
+| 9/20 回退改走 /rewind | 长按用户气泡是隐藏手势，用户发现不了。 | 撤掉长按入口，照搬终端的 /rewind 两步面板；Web 上的回退分叉出新会话，原会话不动。 |
 
 ## 组装根与代码演进约束
 
@@ -482,11 +484,11 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1747
+- **Estimated Tokens**: ~2299
 
 ---
 
-Claude Chat Mobile 的核心产品目标是终端等价：终端 CLI 有什么，移动端 Web 就有什么。实现上不重造 Agent 调度，而是直接由 Agent SDK 驱动本机已登录的 `claude` CLI，并共用同一套配置、权限与 Transcript 历史。
+核心产品目标是终端等价：终端 CLI 有什么，手机上的 Web 就有什么。实现上不重造 Agent 调度，而是由 Agent SDK 驱动本机的 `claude` CLI，共用同一套配置、权限与 transcript。
 
 ## 等价原则与心智模型
 
@@ -494,64 +496,75 @@ Claude Chat Mobile 的核心产品目标是终端等价：终端 CLI 有什么�
 当你不知道某个功能该怎么做时：CLI 有什么 web 就有什么，先去找 claude code CLI 是怎么实现的。—— `CLAUDE.md`
  
 
-本项目不是远程桌面投屏，更不是另一个平行实现的 Claude 客户端。在手机上发送一条提示词、批准一次工具调用、切换一次模型或调整思考强度，在底层必须等价于坐在电脑前直接敲击终端命令。任何「Web 还需要什么新功能」的需求，默认动作是寻找 CLI 原生实现进行对接，严禁在桥接层私造平行逻辑。
+本项目不是远程桌面投屏，也不是另一个平行实现的 Claude 客户端。在手机上发一条提示词、批准一次工具调用、切一次模型或思考强度，底层都要等价于坐在电脑前敲终端。「Web 还缺什么功能」的默认动作是去找 CLI 的原生实现对接，不在桥接层私造平行逻辑。
 
  
     01 
 #### 驱动同源
 
-依托官方 Agent SDK 与本机已登录的 `claude` 二进制建立 IPC 通信，而非自写工具循环。
+经官方 Agent SDK 驱动本机的 `claude` 二进制，不自写工具循环；CLI 怎么配（官方订阅、API key、第三方网关）就怎么用。
  
     02 
 #### 配置同源
 
-`settingSources: ['user','project','local']`，完整遵循 CLI 的配置分层继承顺序。
+`settingSources: ['user','project','local']`，按 CLI 的配置分层继承，并按工作区目录加载。
  
     03 
 #### 会话同源
 
-Transcript 统一持久化在 `~/.claude/projects/`，与 CLI `/resume` 指向完全一致的记录文件。
+transcript 统一在 `~/.claude/projects/`，与 CLI `/resume` 指向同一份记录文件。
  
  
 
-## 配置加载与权限体系
+## 终端里的事，手机上怎么做
 
-系统启动 Agent 时显式声明：
+| 终端里 | 手机上 |
+| --- | --- |
+| 工具审批（y / n） | 审批卡：允许 / 拒绝 / 中止本轮（对齐 Esc ）；可勾「总是允许」，选仅本会话或永久 |
+| AskUserQuestion | 选项直接点；多选、「其他…」自己填、「跳过并中止本轮」都在 |
+| claude / --resume | 顶栏 + 新建（选工作区、分支、是否开在新 worktree）；侧栏列出该工作区全部会话 |
+| /model 、权限档、思考强度 | 底栏 chip 点开就改，下一条起效；思考强度在回合进行中也能切 |
+| @ 引用文件、 / 斜杠命令 | 输入 @ 搜工作区文件；输入 / 列候选，含你装的 skills。只能在终端里用的命令不进手机菜单；会话中途命令变化时同步到手机 |
+| /rewind 与分叉 | /rewind 两步面板（Web 上是分叉出新会话，原会话不动）；assistant 气泡常驻「分叉」入口 |
+| statusline、后台任务 | 底栏常驻摘要；任务横幅显示耗时与用量，可单独停掉某一个，完成后能查看 CLI 落盘的输出 |
+| 终端里开着的会话 | 能看，也能接着驾驶；同一时刻只有一个驾驶端，接管时会提示 |
 
-```
-settingSources: ['user', 'project', 'local']
-```
+## 权限放行：不注入 allowedTools
 
-这意味着用户在电脑端 `~/.claude/settings.json` 或当前项目 `.claude/settings.json` 中配置的自定义规则、API 环境变量、自定义 MCP 服务器和 Hooks 会自动对 Web 端生效。
+创建 SDK 实例时**不注入** `options.allowedTools`，放行集合完全来自 settings 里 `permissions.allow` 的并集，与终端 CLI 的逻辑相同：
 
-## 权限放行：绝不注入 allowedTools
-
-在创建 SDK 实例时，系统**坚决不注入** `options.allowedTools`。放行集合完全依托于 settings 中 `permissions.allow` 的并集（与终端 CLI 逻辑逐字相同）：
-
-| 层级 | 触发行为 | 处理策略 |
+| 层级 | 触发 | 处理 |
 | --- | --- | --- |
-| settings permissions.allow | 与用户本地配置命中 | SDK 内部底层直接放行，不触发 canUseTool 回调，手机不弹窗 |
-| canUseTool 拦截闸 | 未在白名单中的操作（如非只读 Bash） | 由 CCM 捕获，根据当前权限档位决定直接放行、拒绝或推送到手机界面弹窗审批 |
-| 桥接层自设规则 | 禁止建立独立的白名单配置 | 严格避免 Web 端与 CLI 终端规则分叉 |
+| settings permissions.allow | 命中用户配置 | SDK 直接放行，不触发 canUseTool ，手机不弹窗 |
+| canUseTool 回调 | 白名单外的操作 | 由 CCM 按当前权限档决定放行、拒绝，或推到手机弹审批卡 |
+| 「总是允许」 | 审批时勾选 | 「仅本会话」只改本会话、不落盘；「永久」把 CLI 给出的建议规则原样交回 SDK，按各自目的地写进 CLI 自己的 settings（实测为工作区的 .claude/settings.local.json ），CCM 不另建白名单 |
 
-> **WARNING:** 公网暴露前的安全审查 — 公网暴露服务前，必须仔细审查全局 ~/.claude/settings.json。如果在终端中长期积累了过宽的 Bash(...) 自动放行规则，移动端连接后同样会自动放行，而不会弹窗二次确认。
+「设置」里有审批规则的只读面，能看到哪些工具不弹审批。
+
+> **WARNING:** 公网暴露前的安全审查 — 公网暴露前，仔细检查 ~/.claude/settings.json 与各工作区的 settings。终端里长期积累的过宽 Bash(...) 放行规则，手机连上之后同样会自动放行，不会弹窗二次确认。手机端安全体检会列出其中的危险项。
 
 ## 六档权限模式
 
-系统在运行时支持 6 档权限模式（通过 `setPermissionMode` 动态切换）：
+运行时支持六档，可随时切换，差分决定是否调 `setPermissionMode`：
 
-| 模式枚举 | 语义与行为 | 与 CLI 的对应关系 |
+| 模式 | 语义 | 实现要点 |
 | --- | --- | --- |
-| default | 默认安全档：白名单外操作通过 canUseTool 弹出手机卡片审批 | 与 CLI 默认交互行为完全等价 |
-| plan | 计划模式：禁止破坏性写操作，仅允许规划与只读探索 | 与 CLI Plan 模式语义一致 |
-| acceptEdits | 接受编辑档：自动放行常规文件修改与编辑工具 | 对齐 CLI 接受编辑档位 |
-| bypassPermissions | 跳过审批档：给 SDK 映射为 default，由 CCM 内部直接放行，避免传全局危险标志 | 等价于 CLI --dangerously-skip-permissions |
-| dontAsk | 静默拒绝档：白名单外工具一律自动拒绝，手机绝不弹窗打扰 | Web 独有安全档，CLI Transcript 不会产生此标记 |
-| auto | 自动模型裁决档：依托 SDK 内部模型分类器自动判定批准或拒绝 | 对接 SDK 实验性智能判权特性 |
+| default （Manual） | 危险操作弹审批卡 | 与 CLI 默认交互等价 |
+| plan | 只规划，不执行工具 | 与 CLI Plan 模式一致 |
+| acceptEdits | 自动放行文件编辑类操作 | 对齐 CLI |
+| dontAsk | 白名单外一律拒绝，不弹窗 | CLI 的非交互严格档，原样透传给 SDK；白名单外在终端层直接拒绝，不走 canUseTool |
+| auto | 由模型分类器判定批准或拒绝 | 对接 SDK 的自动判权 |
+| bypassPermissions | 跳过审批 | 给 SDK 映射为 default ，由 CCM 的闸门直接放行，避免传全局危险标志；从 bypass 降档立即在本地生效，不等 SDK 回包 |
 
-## 模型切换与思考强度 (effort) 控制
+## 模型与思考强度
 
-用户可以在移动端输入框随时切换活跃模型（如 Sonnet / Opus / Haiku / Fable）与思考强度（`effort`）。得益于 SDK 升级，思考强度支持通过 `applyFlagSettings({effortLevel})` 运行时即刻生效，无需销毁重建实例。新开会话（FRESH）默认采用 CLI 设置合并后的基线配置，保证与直接新起命令行体验完全一致。
+模型与思考强度都能在底栏随时切换。思考强度的档位分两层（语义以产品仓 `docs/display-contracts.md` 为准）：
+
+- SDK 档： low 、 medium 、 high 、 xhigh 、 max ，真正传给 Agent SDK。
+- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto （dev 已合入，尚未发版）；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
+- 切换路径： 具体档与 auto 经控制请求（ applyFlagSettings ）即刻生效，不重建实例，回合进行中也能切；切回「没指定」没有对应的控制请求，要重开实例。
+
+新会话（FRESH）默认采用 CLI 设置合并后的基线，与直接新起命令行一致。
 
 
 ---
@@ -560,62 +573,73 @@ settingSources: ['user', 'project', 'local']
 # Chapter: 安全模型 (第三部分 · 方法论)
 
 # 安全模型
-> 单用户、token 不出本机、权限继承 CLI、设备 TOFU。
+> 单用户、令牌是启动前提、按 Host 的鉴权分支、设备审批与两个边界。
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1416
+- **Estimated Tokens**: ~2199
 
 ---
 
-安全模型围绕一条铁律展开：这是**每实例单用户 (n=1)** 的自托管桥，绝非多租户 SaaS。任何通过鉴权的远程请求，都与机主物理坐在本机终端前拥有完全等价的系统操作权限。
+安全模型围绕一个前提展开：这是**每实例单用户 (n=1)** 的自托管桥，不是多租户 SaaS。任何通过鉴权的远程请求，权限都等同于运行 `claude` 的那个本机账号。
 
 > **NOTE:** English —  Security model for non-Chinese readers: English Security Model（与 README.en.md 对齐）。
 
-> **CRITICAL / DANGER:** 高危警示 — 这是直通你本机开发环境与 Shell 执行权限的代码执行通道。向局域网或公网暴露前，必须严格完成 Token 强随机化、设备审批门禁确认、CLI 权限审计与网络拓扑防护。
+> **CRITICAL / DANGER:** 高危警示 — 这是一个可以远程触达本机 Claude Code、并间接获得本机代码执行能力的入口。请把它当开发机远程控制工具，不是普通网页。长期暴露到公网前，先确认令牌强度、设备审批、CLI 自动放行规则与公网入口的防护。
 
-## 四大安全铁律
+## 六条安全边界
 
-1. 每实例严格单用户。 拒绝任何形式的多用户隔离、账户体系或登录注册机制。鉴权通过即代表机主本人。
-2. 无 Token 绝不出本机。 未显式配置 AUTH_TOKEN 时，服务恒定只绑定 127.0.0.1 环回地址。不存在留空等于对公网开放的危险回落。
-3. 权限同源继承 CLI。 CCM 自身不自建独立放行白名单，全部权限放行严格以本机 ~/.claude/settings.json 及其项目 local 覆盖为准。
-4. 设备信赖审批（TOFU 机制）。 任何非本机且未受公网身份代理（如 Cloudflare Access）验证的新设备，即便持有合法 Token，首次接入仍必须在电脑端一次性审批。
+1. 单用户。 没有多用户或租户隔离，没有账户体系；鉴权通过后的权限就是运行 claude 的本机账号的权限。
+2. 没有令牌就不启动。 AUTH_TOKEN 是启动前提，任何绑定模式都一样，本机浏览器打开也要令牌，不存在「本地免鉴权」，也不存在「未设令牌就降级绑本机」。
+3. 工作区显式放行。 文件、会话和相关操作只能进入配置的 WORKDIRS 。白名单拒绝家目录本身与 / 、 /Users 、 /home 这类过宽的根，判定前先做路径归一与 symlink 解析。
+4. 新设备需要信任。 除本机样 Host 的直连、以及已通过 Cloudflare Access 的连接外，持正确令牌的新设备仍需一次审批。批准可以在电脑终端（ node scripts/device.js approve ，或在跑 npm start 的终端按回车）、macOS 菜单栏，或另一台已信任的设备上完成。
+5. 继承 Claude Code 权限。 CCM 不自建放行白名单， permissions.allow 等 CLI 规则照常生效；公网使用前应检查 Bash、Write 的自动放行规则。
+6. 文件编辑属于直接写入。 内置编辑器 不经过 Agent 的工具审批链 （有范围校验、大小限制、哈希冲突检测与审计）， FILE_EDIT=off 可关闭，长期公网暴露建议关闭。
 
-## 网络拓扑与 ACCESS_PROFILE 三候选
+## 入口怎么鉴权
 
-为防止反代或隧道导致客户端 IP 坍缩为 `127.0.0.1` 从而打穿设备门禁，系统通过 `ACCESS_PROFILE` 显式声明网络拓扑：
-
-| 拓扑枚举 | 适用场景与安全行为 | 反向代理与设备门判据 |
-| --- | --- | --- |
-| cloudflare | 公网经 Cloudflare Tunnel + Access 接入 | 必须配置 3 项 Access 环境变量；依赖边缘 JWT 提供 2FA 身份保证 |
-| reverse-proxy | 纯 Nginx / Caddy 反代或内网穿透（如 Tailscale） | 一等支持路径 ：强制要求强 Token，显式配置 TRUSTED_PROXY 方采信 X-Forwarded-For，防止伪造 |
-| lan | 纯局域网或本机直连 | 仅允许私网 IP 访问，真实外部设备严格触发 TOFU 弹窗审批 |
-
-## 鉴权流程与多层防护
+鉴权分支看的是请求的 Host，不是 `ACCESS_PROFILE`：Cloudflare Access 启用、且请求落在它的公网域名上时，改认 Access 身份；其余一律认 `AUTH_TOKEN`。`ACCESS_PROFILE` 只是「你打算怎么从手机访问」的声明，不改变任何运行时行为，doctor 与手机端安全体检据此做针对性检查。
 
 ```mermaid
 flowchart TB
-  A["入向连接请求 (HTTP / WS)"] --> B{"匹配 ACCESS_PROFILE"}
-  B -->|cloudflare| C["校验 Cloudflare Access JWT"]
-  B -->|reverse-proxy / lan| D["校验 AUTH_TOKEN (Header / URL #token)"]
-  C --> E["IP 限速分桶 (IPv6 /64 分组)"]
-  D --> E
-  E -->|通过| F{"判定来源设备信任态"}
-  F -->|本机 / 已批准设备| G["放行进入业务交互通道"]
-  F -->|未知非本机设备| H["挂起 TOFU: 设备待审批状态"]
+  A["入向连接 (HTTP / WebSocket)"] --> B{"Cloudflare Access 已启用<br>且 Host 是它的公网域名？"}
+  B -->|"是"| C["校验 Access JWT（fail-closed，不回退 AUTH_TOKEN）<br>+ 跨站握手 Origin 校验"]
+  B -->|"否"| D["校验 AUTH_TOKEN"]
+  D -->|"失败"| R["拒绝，计入登录限速桶（IPv6 按 /64 归桶）"]
+  C --> E{"设备信任"}
+  D -->|"通过"| E
+  E -->|"已批准设备 / 本机样 Host 的直连 / 已过 Access"| G["放行"]
+  E -->|"新设备"| H["进入待审批：只推送审批请求，不开放操作"]
 ```
 
-## 防暴力尝试与限速分桶
+`DEVICE_APPROVAL_SCOPE=all` 会让「本机样 Host 的直连」与「已过 Access」这两条也要过设备审批。
 
-- IPv6 /64 分桶防护。 针对 IPv6 客户端，自动将同一 /64 子网聚类为单桶，杜绝攻击者通过轮换公网 IPv6 地址绕过限速。
-- 分档锁定与措辞规范。 本机 127.0.0.1 误试绝不说成「有人在暴力尝试」；仅针对真实外部未信任来源进行阶梯式退避与锁定告警。
-- 开箱即用鉴权拦截。 即使是 /health 与 /metrics 端点，未携带合法凭据同样直接打回 401，严防网络探测与指纹泄露。
+## 两个必须知道的边界
+
+- 开着 Access 时，它替代设备审批。 经 Access 进来的连接不受「已受信任的设备」这张表管辖，在表里吊销对它们无效。要让吊销生效，设 DEVICE_APPROVAL_SCOPE=all 。
+- 本机判据读的是 Host 头，而 Host 由客户端填。 按 Host 路由的入口（cloudflared、配了 server_name 的 nginx）上，公网请求带的就是公网 Host，仍要设备审批；但纯 TCP 转发（ ssh -R 、frp tcp、socat）不按 Host 路由，远程来客发一个 Host: localhost 就能冒充本机。用这类方式暴露时，设 DEVICE_APPROVAL_SCOPE=all 并重启。
+
+## 限速与措辞
+
+- 限速只挡鉴权口的暴破。 鉴权通过后，用户就是主机所有者，操作面不限速；鉴权通过后 handler 抛出的 500 也不得计入限速。
+- IPv6 按 /64 归桶 ，堵住轮换源地址绕过登录限速。
+- 默认不采信任何转发头。 反代后面所有公网客户端共用一个限速桶；只有显式 TRUSTED_PROXY=loopback 才采信 loopback 反代追加的 X-Forwarded-For 末跳。失败方向是合桶，不是拆桶。
+- 措辞按来源分档。 本机来源的限速锁定绝不说成「有人在暴力尝试」。
+- 不开无鉴权的 HTTP 数据端点。 /health 、 /metrics 、历史回显都要过鉴权。
+
+## 2026-09 的几处加固
+
+- 子进程不继承控制面密钥 （AUTH-06）：claude 子进程，以及 server 在工作区里跑的 git 与 claude --version ，都剥掉 AUTH_TOKEN 与 VAPID_* / NTFY_* / CF_ACCESS_* ； ANTHROPIC_* 、 CLAUDE_CODE_* 与代理变量原样透传，第三方网关不受影响。
+- 令牌不出现在服务端自己的输出里： 启动横幅只显示掩码， logs:server 整段脱敏后再切行；免手输令牌改用需要人主动敲的 node scripts/qr.js 。
+- 跨站握手门： 公网 IdP 路径上校验完整的 Origin，不只比主机名；这类拒绝不计入限速桶。
+- CSP 的 connect-src 收紧到同源。
+- 推送端点的令牌走 x-auth-token 请求头 ，不拼进 URL；只有请求头走不通时才回落到 query。
 
 ## 明确不做的安全技术债
 
-- 坚决不做多租户环境下的容器化用户沙箱或细粒度 ACL。
-- 坚决不做第三方密钥集中托管服务。
-- 坚决不开设任何无鉴权的 HTTP 数据透传端点。
+- 不做多租户下的容器化用户沙箱或细粒度 ACL。
+- 不做第三方密钥集中托管。
+- 不开任何无鉴权的 HTTP 数据端点。
 
 
 ---
@@ -628,7 +652,7 @@ flowchart TB
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1636
+- **Estimated Tokens**: ~1894
 
 ---
 
@@ -662,20 +686,20 @@ flowchart TB
 | --- | --- | --- | --- |
 | Web 驾驶态 | CCM AgentSession 实例 | 完全可写；实时推流文本与工具卡片 | SDK 双向流占用；输入即时响应 |
 | CLI 驾驶态（只读镜像） | 终端正在执行的 CLI | 输入框显示「终端会话运行中」并锁定，只读观看 | 通过 Mirror Engine 轮询增量并以 history_append 广播 |
-| 接管状态 (Takeover) | Web 端主动发起接管 | 终端静默超时后，用户可点击发送强行接管写入 | 触发 externalDirty 置换逻辑，先冷读磁盘再建新 query |
+| 接管状态 (Takeover) | Web 端主动发起接管 | 终端回合结束并经过静默判定后，锁自动释放、Web 恢复可写；终端仍在跑时，也可以点「强制立即续接」或「仍要续接」显式解锁，两条路都要过一道写明分叉风险的确认框 | 发送前若 transcript 相对现有实例有外部增长，先 dispose 旧实例再 resume 吸收（ externalDirty 置换）。解锁只撤掉 Web 侧的锁， 不会停止终端进程 ；终端之后若继续写同一会话，仍会形成两条分支 |
 
 ## 活体识别与 Tail Attribution 判据
 
 在识别「终端是否仍在活跃执行」时，存在复杂的边缘时序。系统历经多次迭代确立了精确的判定准则：
 
-1. 终端等待态感知 (terminalWaiting)。 当终端执行长耗时工具（如跑大单测、长构建）而未向 Transcript 写盘时，单纯看「文件是否增长」会误判为终端已退出。系统结合终端状态判定与探针，准确维持锁定状态，防止意外接管。
-2. 桌面端与 Web 归因隔离 (Tail Attribution)。 桌面端和 Web 端可能轮流向会话写盘。系统对尾部未完成的 pending 消息进行归因检测，区分「是自己 Web 发出的在途请求」还是「终端/桌面端遗留的活体动作」，彻底消灭闲置桌面端被误标繁忙的假警报。
+1. 终端运行态以 CLI 自报为准。 终端跑长工具（大单测、长构建）时可能很久不写 transcript，只看文件增长会误判终端已退出。CLI 在会话注册表里自报 status（ busy / shell / idle / waiting ），这才是权威信号；其中 waiting 就是 terminalWaiting ，表示终端停在审批或提问上。桌面端 Code 模式从不写 status，只能回落看 transcript 尾部形态。
+2. 尾部归因 (Tail Attribution)。 桌面端、终端和 Web 可能轮流向会话写盘。transcript 逐条自报写入方（CLI 写 cli ，本项目 SDK 写 sdk-ts ），静默判定只认 终端写的 未完结尾部。己方留下的未完结尾部如果也能撑住锁，Web 等一条审批时就会自锁：尾部恒未完结 → 锁恒维持 → 手机只读 → 点不到「批准」。
 3. 相反判据的架构合理性。 镜像锁判定（宁可误锁，因为并发写会导致不可逆的分叉）与会话列表状态展示（宁可少报忙碌，因为谎报运行中比稍后刷新代价更大）方向相反，两者各有其专门守护边界。
 
 ## 镜像机制关键内部组件
 
  增量轮询器：只读态约 1s 一拍，常态约 2.5s，抓取 jsonl 追加字节。  
-    mirrorReleaseStep  自动解锁看门狗：终端持续静默约 12.5s 且无未完成 pending 时自动释放只读锁。  
+    mirrorReleaseStep  自动解锁：终端持续静默约 12.5s（按墙钟折算），且没有终端写的未完结尾部时释放只读锁。终端轮次已收尾、只是开着对话框时，也照常解锁。  
     forInstanceId 守卫  多标签页防串锁：异步 tick 提交前校验当前视图未切换，防止切回其他项目时污染锁状态。  
     clearMirrorOnViewChange  切换会话强制清理全局镜像，防止跨工作区幽灵锁。  
  
@@ -703,7 +727,7 @@ stateDiagram-v2
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1583
+- **Estimated Tokens**: ~2329
 
 ---
 
@@ -711,21 +735,26 @@ stateDiagram-v2
 
 ## npm run check 门禁矩阵
 
-在根目录下执行 `npm run check` 是零 Token、耗时最短（本地通常 5–15 秒）的综合健康检查。它由以下核心环节链接而成：
+在根目录下执行 `npm run check` 是零 Token、耗时最短的综合检查（desktop 没改动时 Swift 那一环按指纹缓存跳过，约 5 秒）。截至 dev@3f488861 共 16 道，**完整清单以 `package.json` 的 `check` 为准**：产品仓曾在文档里抄过一份清单，漂过两次，已删；新门禁忘了接线会被 `tests/unit/gate-wiring.test.mjs` 抓住。主要环节：
 
 | 门禁脚本 / 环节 | 守护不变量与拦截范围 | 失效后果 |
 | --- | --- | --- |
 | npm run lint | ESLint 规则：语法正确性、无未定义引用、禁止死代码 | 代码风格散乱，隐式全局变量泄露 |
 | check-import-boundaries.js | 架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖） | 分层被穿透，模块相互缠绕演变为巨型单体 |
 | contract-check.js | 出向 agent:event （31 种）与入向 socket 事件在代码、前端与 Mock 中的双向一致性 | 协议静默失效，前端收不到特定类型事件 |
+| doc-consistency.js · check-diagram-claims.js | 文档与代码的一致性（含契约计数）；gh-pages 架构图集里的常量、路径与基线 | 文档与图集静默过期 |
+| check-n1-assumptions.js · i18n-check.js | n=1 假设面登记簿双向对齐（代码里的 // n1: 标记 ⇔ hard-rules 表）；i18n 孤儿 key | 改立场那天找不全要动的地方；词条漂移 |
+| check-shell-pitfalls.js · check-config-gitignored.js | 脚本与 workflow 里的 shell 陷阱； ccm.config.json 等凭据文件必须被 gitignore（CONFIG-03） | 管道静默吞错；凭据被提交进公开仓库 |
+| check-disposable-env-guard.js · check-container-config-isolation.js | 破坏性测试目录的首条 import 必须是执行位守卫；容器挂仓库根时必须覆盖 ccm.config.json | 破坏性测试在宿主机上真跑；容器读到生产配置 |
+| app-build.js --test-only | desktop 的 Swift typecheck 与 CCMCore 单测 | 菜单栏代码编不过 |
 | check-invariant-ids.js | 测试命名规范： tests/invariants/ 内的用例必须以 // 守护：  声明守护条目 | 不变量与测试脱节，出现无法追踪的假测试 |
 | check-destructive-deletes.js | 破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免 | 防止测试代码意外删除真实开发数据 |
-| check-playwright-forbidden-patterns.js | E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码 | E2E 测试出现偶发假红，耗费排查精力 |
+| check-playwright-forbidden-patterns.js | E2E 反模式：禁止 test.only / skip / fixme 、 networkidle 、 waitForTimeout 与手写的 setTimeout 睡眠 | E2E 测试出现偶发假红，耗费排查精力 |
 | repo-inventory.js | 文件树前缀管控：新增文件必须显式归类于受控目录前缀或文档登记 | 临时审计、提案和日志文件悄悄回堆污染主树 |
 
 ## 架构分层硬门禁：check-import-boundaries
 
-该脚本对全仓执行静态 AST 依赖分析（包含动态 `import()` 扫描），强制执行以下铁律：
+该脚本对全仓做静态依赖分析（含动态 `import()`），强制执行以下规则，违反时它会自己说清是哪一条：
 
 ```
 1. 前后端互不 import：app/public/js 与 app/src 严格禁止互相引入（唯一豁免规范化工具 canonicalize.js）。
@@ -748,7 +777,7 @@ stateDiagram-v2
     02 
 #### 失败方向严格受控
 
-产品的 Fail-Closed 是逐条权衡的（如配置读取异常保留 last-good），按盲目拒绝编写会把测试测反。
+产品的 fail-closed 是逐条选过的：配置 JSON 语法错误要抛错、不回落另一份文件；但 `trusted-devices.json` 瞬时读失败要保留上一份可用的信任表，鉴权通过后 handler 抛 500 不得计入限速。按「所有异常都拒绝」写会把后两条测反。
  
     03 
 #### 必须反向证明不恒绿
@@ -762,7 +791,8 @@ stateDiagram-v2
 为杜绝类似 2026-08-02 误删本地数据的事故重演，仓库设立了严密的物理隔离界限（由 `tests/gates/guard-host-tests.js` 守卫）：
 
 - 宿主机允许运行白名单 ：仅允许 npm run lint 、 npm run check 、 npm run test:unit 和 npm run test:e2e （打纯内存 Mock Server）。
-- 进容器运行的黑盒测试 ：所有会拉起真实后台进程、测试卸载器或执行变异测试的指令（如 test:docker 、 mutate:docker 、 test:invariants:env ），一律强制在 Docker 容器中执行，容器内 HOME 为一次性虚拟挂载，物理切断对开发机家目录的破坏能力。
+- 进容器运行的黑盒测试 ：所有会拉起真实后台进程、测试卸载器或执行变异测试的指令（如 test:docker 、 mutate:docker 、 test:invariants:env ），一律强制在 Docker 容器中执行，容器内 HOME 为一次性目录，物理切断对开发机家目录的破坏能力。
+- 执行位守卫 ： tests/invariants/env/ 、 tests/invariants/server/ 、 tests/integration/ 下每个文件的首条 import 是 tests/setup/require-disposable-env.mjs ，不在一次性环境里就直接 exit 1； mutate 在 main() 开头调用同一份判据。它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」，但不是物理隔离，真正的隔离仍然是容器。
 
 
 ---
@@ -775,31 +805,36 @@ stateDiagram-v2
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~6 min
-- **Estimated Tokens**: ~1112
+- **Estimated Tokens**: ~1753
 
 ---
 
-高频专有名词与概念定义。在阅读系统核心实现前，建议先快速通读本表，以拉齐心智模型与语境。
+高频专有名词与概念定义。阅读核心实现前，建议先通读本表，拉齐心智模型与语境。
 
-| 核心术语 | 标准定义与架构语义 |
+| 核心术语 | 定义与架构语义 |
 | --- | --- |
-| instanceId | 运行时代号（如 inst_1 ），代表内存中活跃的 AgentSession 实体。每次会话重启或切换思考强度时递增。 |
-| sessionId | Claude CLI 原生会话标识符，对应磁盘 ~/.claude/projects/ / .jsonl 文件名。 |
-| epoch | 实例世代标识。当服务端置换实例后自增，客户端收到新 epoch 必须重置消息去重基准。 |
-| seq | 单实例生命周期内单调递增的事件序号，用于网络闪断后的 sync:since 增量补发与断点续传。 |
-| agent:event Envelope | 统一出向事件信封，标准外壳： {seq, epoch, sessionId, instanceId, cwd, ts, type, payload} 。 |
-| mirrorReadonly | 单驾驶员模型中施加的只读互斥锁。当终端正在执行写入时，Web 端强制处于只读态。 |
-| externalDirty | 外部变脏标记。指磁盘 Transcript 已经超前于内存 SDK 会话，Web 端下次发送必须强制销毁置换。 |
-| terminalWaiting | 终端等待态。指终端 CLI 正在执行耗时工具（如跑测试）且尚未落盘，提示 Web 端保持镜像锁锁定。 |
-| Tail Attribution | 尾部归因。在识别会话繁忙状态时，准确将悬挂的在途消息归因为「Web 自身」还是「外部终端/桌面端」。 |
-| TOFU (Trust On First Use) | 首次接入信赖机制。新外部设备即使持有正确 Token，首次连接也必须在物理电脑上显式点击批准。 |
-| ACCESS_PROFILE | 网络接入拓扑声明（ cloudflare , reverse-proxy , lan ），决定反代采信与设备审批分支。 |
-| CCM_DATA_DIR | 持久化数据根目录（仓库根下 data/ ），管理会话元数据、设备指纹、附件上传与审计日志。 |
-| canUseTool | SDK 权限回调拦截点。当操作未命中预设白名单时，触发向手机端投递 permission_request 。 |
-| Ring Buffer (环形缓冲) | 每实例分配的循环事件队列，固定上限 2000 条，支撑高速重连补发。 |
-| settingSources | SDK 加载本地配置的层级，固定为 ['user', 'project', 'local'] ，完整继承命令行配置。 |
-| applyFlagSettings | 运行时标志应用机制。无需销毁实例，直接中途热修改 SDK 的 effortLevel 思考强度。 |
-| guard-host-tests | 测试运行保护门禁。宿主机只允许运行只读或纯内存测试脚本，其余所有测试强制在容器沙箱中跑。 |
+| instanceId | 运行时代号（如 inst_1 ），代表内存里一个活跃的 AgentSession 实例。实例重建（dispose + resume）时换新；切具体思考强度走控制请求，不重建实例。 |
+| sessionId | Claude CLI 原生会话标识，对应磁盘上 ~/.claude/projects/ / .jsonl 的文件名。 |
+| epoch | 实例世代标识。服务端置换实例后自增，客户端收到新 epoch 必须重置去重基线。 |
+| seq | 单实例生命周期内单调递增的事件序号，用于断线后 sync:since 的增量补发。 |
+| agent:event 信封 | 唯一的出向事件信封： {seq, epoch, sessionId, instanceId, cwd, ts, type, payload} ； type 白名单在 protocol.js （31 种）。 |
+| 驾驶端 / 单驾驶员 | 同一会话同一时刻只有一个写入方：Web 的 AgentSession，或终端里的 CLI。另一端只读镜像，接管要显式续接，可能分叉。 |
+| mirrorReadonly | 单驾驶员模型的只读镜像锁：终端在驾驶时，Web 端输入被锁住。 |
+| externalDirty | 外部变脏标记：磁盘 transcript 已经超前于内存里的 SDK 会话，Web 下次发送前要先 dispose 旧实例再 resume 吸收。 |
+| terminalWaiting | 终端等待态：终端 CLI 在会话注册表里自报 waiting ，也就是停在审批或提问上。抽屉的会话行与目录行会标出来，折叠着也看得见；它不进顶栏的「需要你」聚合，要即时通知得靠可选的 hooks bridge。 |
+| 尾部归因（Tail Attribution） | 判断会话尾部那条未完结记录是谁写的。transcript 逐条自报写入方（CLI 写 cli ，本项目 SDK 写 sdk-ts ）；镜像锁的静默判定只认终端写的尾部。 |
+| entrypoint-marker | CCM 往 claude 的 jsonl 里追加的唯一一行，让终端的 /resume 看得到 Web 建的会话。这是「CCM 不存消息」原则的唯一反向例外。 |
+| 设备审批（TOFU） | 首次信任：持正确令牌的新设备首次接入仍要批准一次，可在电脑终端、菜单栏或另一台已信任设备上批。本机样 Host 的直连与已过 Cloudflare Access 的连接默认免审批， DEVICE_APPROVAL_SCOPE=all 时也要批。 |
+| ACCESS_PROFILE | 「打算怎么从手机访问」的纯声明（ cloudflare / vpn / reverse-proxy / direct / lan ），不改运行时行为，只供 doctor 与手机端安全体检做针对性检查。鉴权分支按请求的 Host 决定，与它无关。 |
+| BIND_MODE | 监听地址模式：默认 0.0.0.0 ， loopback 只听本机， custom 配合 BIND_HOST 。缺令牌时不存在降级绑本机的路径。 |
+| CCM_DATA_DIR | 控制面数据根，默认仓库下的 ./data ，长期实例建议设成仓库外的绝对路径；存会话索引、已读位点、设备信任、审批台账、审计、附件与缓存。 |
+| 「需要你(N)」 | 顶栏 chip 与角标只表达点一下就能处理的待办：审批与提问。服务告警是另一条轴，只出现在抽屉「服务」小节与服务状态面板。 |
+| canUseTool | SDK 的权限回调。命中 settings 放行规则的调用根本不会走到这里；只有白名单外的调用才由 CCM 按权限档裁决或推审批卡。 |
+| 环形缓冲（Ring Buffer） | 每个实例的事件循环队列，上限 2000 条（ BUFFER_CAP ），支撑重连补发；瞬态进度不进缓冲。 |
+| settingSources | SDK 加载配置的层级，固定为 ['user', 'project', 'local'] ，按工作区目录继承 CLI 配置。 |
+| applyFlagSettings | 运行时设置控制请求。切具体思考强度档与 auto 时用它即刻生效，不销毁实例。 |
+| /rewind （Web 语义） | 对齐终端的两步回退面板；Web 上涉及对话的模式都是分叉出一个回到那一刻的新会话，原会话不动，与终端的原地回退是两套语义。 |
+| guard-host-tests | 宿主机测试白名单钩子：agent 在宿主机上只能跑 lint / check / test:unit / test:e2e 这几档，其余测试一律进容器。它防手滑，不是物理隔离。 |
 
 
 ---
@@ -812,7 +847,7 @@ stateDiagram-v2
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1482
+- **Estimated Tokens**: ~1775
 
 ---
 
@@ -822,21 +857,26 @@ stateDiagram-v2
 
 ```
 // 运行时入口：app/server.js
-import { loadRuntimeEnvironment } from './src/ops/config-file.js';
-import { installLogTimestamps } from './src/shared/log-timestamps.js';
+import { join } from 'node:path';
+import { loadRuntimeEnvironment } from './src/ops/config.js';
+import { installLogTimestamps } from './src/shared/log-time.js';
 
-loadRuntimeEnvironment();   // 加载 ccm.config.json / .env
-installLogTimestamps();     // 劫持 console 注入安全 ISO 时戳
+// 显式传仓库根，不回落 process.cwd()：启动方式不保证 cwd 落在仓库根
+const HERE = join(import.meta.dirname, '..');
+loadRuntimeEnvironment(process.env, { dir: HERE });   // 读 ccm.config.json，缺失才回落 .env
+installLogTimestamps();   // 须在动态 import(app.js) 之前，让模块级启动输出也带时间戳
 
-const { httpServer, io, port } = await import('./src/server/app.js');
-export { httpServer, io, port };
+const runtime = await import('./src/server/app.js');
+export const httpServer = runtime.httpServer;
+export const io = runtime.io;
+export const port = runtime.port;
 ```
 
-薄入口仅数行。不管是命令行 `npm start`、macOS LaunchAgent 常驻、Linux systemd 还是端到端集成测试，一律通过此入口拉起。
+薄入口只有这几行。headless 的 `npm start`、macOS 桌面端的 LaunchAgent、集成测试都从这里拉起；自己写的保活方式（tmux、systemd、docker）也应该指向它。配置文件必须按仓库根定位：若回落到当前目录，启动时读到的会和配置面板写入的不是同一份，结果是静默的假成功。
 
 ## 配置求值与优先级
 
-- 配置同源加载。 启动时由 app/src/ops/config-file.js 统一加载根目录下的 ccm.config.json （结构化配置，优先）并回落 .env 。
+- 配置同源加载。 启动时由 app/src/ops/config.js 的 loadRuntimeEnvironment 加载仓库根下的 ccm.config.json （优先）并回落 .env ；读写与类型归一在 app/src/ops/config-file.js 。 CCM_CONFIG_FILE_PATH / CCM_ENV_FILE_PATH 可覆盖文件位置，启动侧与写入侧都认。
 - 环境变量最高优先。 终端 Shell 中直接 export 的环境变量始终压过配置文件。
 - 两处目录解析陷阱。 app/src/** 模块计算仓库根目录必须上溯 三层 。另外，LaunchAgent 启动命令 exec <node> app/server.js 必须与 service-units.js 解析常驻进程后缀的代码逐字严格一致。
 
@@ -845,7 +885,7 @@ export { httpServer, io, port };
 1. 依赖导入。 完成后端各领域核心模块（agent, sessions, files, auth, ops, shared）的静态与动态装配。
 2. 解析配置。 执行 parseServerConfig() ，提取端口、Token、超时阈值、 ACCESS_PROFILE 及工作区配置。
 3. 初始化通知通道。 装配 Web Push（VAPID）与可选 ntfy 实例（尽力而为，通道故障不阻塞主业务）。
-4. Preflight 前置自检。 检查默认工作区（ WORK_DIR ）目录真实存在、校验 claude 二进制路径可执行（ CLAUDE_BIN ）。
+4. Preflight 前置自检。 检查默认工作区（ WORKDIRS 首项）目录真实存在、校验 claude 二进制可执行（ CLAUDE_BIN ，留空则从 PATH 查找）。
 5. 构建工作区白名单。 加载 WORKDIRS 白名单列表并建立文件监听，支持运行期免重启热加载。
 6. 配置 Express HTTP 壳。 挂载 gzip 压缩、静态资源 CSP 策略、带 ?v= 指纹的防缓存头。
 7. HTTP 鉴权与运维路由。 挂载统一鉴权中间件，并提供 /health 、 /metrics 、 /push/* 受控路由（杜绝免密端点）。
@@ -853,7 +893,7 @@ export { httpServer, io, port };
 9. 实例化 InstanceManager 与通信管道。 建立会话实例池与 Socket 进出向事件信封转发总线。
 10. 进程级未捕获异常兜底。 注册 uncaughtException 与 unhandledRejection ，只记日志不退进程。
 11. 孤儿审批清理（Fail-closed）。 在服务监听前执行 expireOrphanedPending() ，将因进程重启而失效的挂起审批彻底归档。
-12. 绑定端口监听。 依据 AUTH_TOKEN 与网络模式选择绑定地址（无 Token 强制绑 127.0.0.1 ，有 Token 绑 0.0.0.0 ）。
+12. 绑定端口监听。 resolveBindPlan 先过令牌门：缺 AUTH_TOKEN 在 listen 之前就拒绝启动并退出。再按 BIND_MODE 选地址：默认 0.0.0.0 ， loopback 为 127.0.0.1 ， custom 用 BIND_HOST 。随后打印只含掩码令牌的启动横幅。
 
 ## 默认运行超时参数
 
@@ -872,11 +912,11 @@ export { httpServer, io, port };
 # Chapter: AgentSession (第四部分 · 核心实现)
 
 # AgentSession
-> 长驻 SDK query、权限闸、环形缓冲、排队与中断。
+> 长驻 SDK query、权限闸、环形缓冲、中断与运行时切档。
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~14 min
-- **Estimated Tokens**: ~1520
+- **Estimated Tokens**: ~1711
 
 ---
 
@@ -887,12 +927,12 @@ export { httpServer, io, port };
 - 持有一条到 @anthropic-ai/claude-agent-sdk 的 streaming input 双向长会话（支持基于原有 sessionId 执行 resume）。
 - 将 SDK 吐出的原始异步消息流（Chunks / Actions）通过 map() 规范化为标准 agent:event 信封并广播。
 - 通过 canUseTool 拦截点实现细粒度的工具放行、挂起与手机卡片审批，维护活跃的审批台账。
-- 处理前端的主动中断（interrupt）、排队消息撤回（cancelQueued）、动态切换模型与思考强度（ effort ）。
+- 处理前端的主动中断（interrupt），以及运行时切换模型、权限档与思考强度（ effort ）。
 
 ## 忙碌判定与看门狗
 
  在途轮次计数。仅由发送（+1）与结果返回/主动中断/撤回成功（-1）闭环结算，严禁双扣。  
-    bgTasks  活跃后台子代理/任务表。后台子代理仍在执行时持续刷新心跳，防止被空闲超时误杀。  
+    bgTasks  活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限（dev 已合入，尚未发版）。  
     isBusy  `pendingTurns > 0` 或存在未完成的后台任务，或挂起未决的工具审批/用户提问。  
     idle hang watchdog  若 `pendingTurns > 0` 但长达 `IDLE_TIMEOUT_MS` 没有任何新事件产生，触发看门狗强制中断。  
  
@@ -913,36 +953,37 @@ export { httpServer, io, port };
 | tool_result | tool_result | 回填工具执行结果（支持大输出折叠展示） |
 | canUseTool (未放行) | permission_request | 挂起等待，向移动端投递审批交互卡片 |
 | AskUserQuestion | question | 在输入区域上方弹出单选/多选题交互面板 |
-| turn_complete | result | 轮次收尾，回传 Token 消耗并持久化状态 |
+| result | result | 轮次收尾，回传用量；网关不流式时由它的全文兜底正文 |
 
 ## 权限闸 (canUseTool) 执行时序
 
 ```mermaid
 sequenceDiagram
-  participant CLI as Claude CLI
-  participant SDK as Agent SDK
+  participant SDK as Agent SDK / CLI
   participant AS as AgentSession
   participant S as Server
   participant UI as 手机端 UI
 
-  CLI->>SDK: 请求执行工具 (如 Bash)
-  SDK->>AS: canUseTool(tool, input)
-  AS->>AS: 校验 settingSources 自动白名单
-  alt 命中用户本地白名单
-    AS-->>SDK: allow (直接放行)
-  else 未命中预设白名单
+  SDK->>SDK: 先按 settings 的 permissions.allow 判定
+  alt 命中放行规则
+    SDK->>SDK: 直接执行，不调用 canUseTool，手机不弹窗
+  else 未命中
+    SDK->>AS: canUseTool(tool, input)
+    AS->>AS: 按当前权限档裁决（bypass 由 CCM 直接放行）
     AS->>S: 派发 permission_request 事件
-    S->>UI: agent:event 信封 (推送+卡片弹窗)
-    UI->>S: 发送 user:approve {requestId, allow}
-    S->>AS: resolvePermission(allow)
-    AS-->>SDK: 返回裁决结果 (allow/deny)
+    S->>UI: agent:event 信封（推送 + 审批卡）
+    UI->>S: user:approve（允许 / 拒绝 / 中止本轮，可带「总是允许」）
+    S->>AS: 裁决
+    AS-->>SDK: allow / deny（永久规则经 updatedPermissions 交回 SDK 落盘）
     AS->>UI: 广播 request_resolved 事件
   end
 ```
 
+`dontAsk` 档不走这张图：白名单外的调用在 SDK 那一层直接拒绝，不调用 `canUseTool`。审批台账只记裁决，挂着的审批遇到指纹不符、超过 `APPROVAL_TTL_MS` 或进程重启，一律不可再执行。
+
 ## 思考强度 (effort) 运行时热修改
 
-在最新实现中，得益于 SDK 0.3.263 升级，用户在手机端切换思考强度（低、中、高）时，服务端直接调用底层 `applyFlagSettings({effortLevel})` 实时下发至活跃进程。彻底淘汰了早期由于无法热调参而被迫采取的「销毁旧实例 + 重启新实例」低效模式。
+切换具体档（`low` … `max`，以及 `ultracode`）与 `auto` 时，服务端经控制请求 `applyFlagSettings({effortLevel})` 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；`ultracode` 实际下发 `xhigh` 并打开 `Settings.ultracode`。只有切回「没指定」没有对应的控制请求，要 dispose + resume。`auto` 档 dev 已合入，尚未发版。
 
 
 ---
@@ -955,7 +996,7 @@ sequenceDiagram
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1402
+- **Estimated Tokens**: ~1594
 
 ---
 
@@ -992,6 +1033,8 @@ sequenceDiagram
 2. 服务端提取环形缓冲中大于 lastSeq 的事件子集。
 3. 自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。
 4. 若客户端请求的 lastSeq 早于环形缓冲中最旧的一条，回传携带 gap: true ，客户端触发完整历史拉取。
+5. 回放有超时兜底： sync:since 的 ack 超时后转拉磁盘历史，而不是让加载卡一直转；ack 迟到也不会丢掉已积压的事件。
+6. 回放出来的事件对运行态中性：已经结束的回合不会因为回放被重新点亮成「运行中」，回放后再按广播口径对一次账。
 
 ## 出向 31 种契约事件分组
 
@@ -1005,7 +1048,7 @@ sequenceDiagram
 | 后台任务与子代理 | task_notification 、 task_progress 、 api_retry |
 | 设备与元数据 | device_status 、 pending_devices 、 trusted_devices 、 session_log 、 history_append |
 
-事件定义真相源唯一维护于 `app/src/shared/protocol.js`。门禁 `tests/gates/agent-event-contract.js` 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。
+事件定义真相源唯一维护于 `app/src/shared/protocol.js`。`npm run check` 里的 `tests/gates/contract-check.js` 与 `agent-event-contract.js` 对生产代码、mock 与前端做双向校验：改一个 type 必须同时改 protocol、真实的 emit 路径、mock 与前端 handler，否则 check 变红。
 
 
 ---
@@ -1014,39 +1057,56 @@ sequenceDiagram
 # Chapter: 会话与历史 (第四部分 · 核心实现)
 
 # 会话与历史
-> sessions.json、transcript 冷读、worktree 会话发现。
+> 事实源分工、worktree、/rewind 与分叉、删除保护。
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1112
+- **Estimated Tokens**: ~1962
 
 ---
 
-会话数据存在清晰的双层事实源（SoT）：Web 端元数据保存在 `data/sessions.json`；而完整的对话记录则保存在 CLI Transcript（jsonl）中。理清两者边界是理解系统持久化的关键。
+消息内容的真相源永远是 CLI 的 transcript（jsonl），CCM 一条都不存；CCM 自己只存索引、指针与 Web 特有的状态。理清这条边界，是理解会话持久化的关键。
 
-## 双层事实源 (Double SoT)
+## 事实源分工
 
-| 层次 | 物理存储路径 | 负责记录的内容 | 生命周期特性 |
+| 层次 | 物理位置 | 记录什么 | 丢了会怎样 |
 | --- | --- | --- | --- |
-| 元数据 SoT | $CCM_DATA_DIR/sessions.json | 各工作区当前激活会话、会话自定义标题、模型与权限档记忆、隐藏列表、跨设备已读位点 | 受控于 CCM 控制面，丢失仅影响界面展示偏好 |
-| 消息正文 SoT | ~/.claude/projects/ / .jsonl | 完整对话历史、ToolUse 参数、命令输出、Token 开销全量快照 | 与本机 claude CLI 共享；CCM 仅作读写追加，绝不篡改历史格式 |
+| 消息正文 | ~/.claude/projects/ / .jsonl | 完整对话、工具调用与输出、用量 | 与本机 claude CLI 共享。CCM 唯一的写入是追加一行 entrypoint-marker ，让 CLI 的 /resume 看得到 Web 建的会话 |
+| 会话索引 | $CCM_DATA_DIR/sessions.json | 会话指针、各工作区当前会话、模型 / 权限档 / 思考强度等偏好 | 只影响界面偏好，可从 transcript 重建 |
+| 已读位点 | $CCM_DATA_DIR/read-state.json | 各会话读到哪里，跨设备共享 | 未读标记可能重新亮起 |
 
-## 会话发现与 Worktree 触达
+新增持久化必须同时满足：claude 侧不存在这个概念，且无法从 transcript 重建。缓存类不受此限，但必须能随时删除、损坏就当作没有。
 
-- 会话发现机制。 优先调用 SDK listSessions ，当遇到文件锁或异常时平滑回落扫盘，并与 sessions.json 元数据深度合并。
-- Git Worktree 隔离与触达。 系统通过 git worktree list 动态感知各个 Worktree 分支。合法工作目录包含显式配置的 WORKDIRS 本身及其合法 Worktree。当主仓库被移出配置时，其衍生 Worktree 即刻失效。
-- 父子目录归属过滤。 SDK 的目录检索会向下匹配子目录导致混入，系统通过针对 Transcript 真实路径的精准过滤，确保每个会话严格归属于其对应的分支工作区。
+## 会话发现与 worktree
+
+- 发现： 优先用 SDK 的会话列表，异常时回落扫盘，再与 sessions.json 合并。侧栏列出放行工作区里的 全部 会话：终端开的、上周的、忘了开远程开关的都在，标题自动生成、可按标题搜索，在跑的标「运行中」，终端正在驾驶的标「终端运行中」。
+- 归属： SDK 的目录检索会向下匹配子目录，系统按 transcript 里记录的真实路径过滤，确保每个会话归到它自己的工作区。
+- 新会话可开在新 worktree： 顶栏 + 新建时可选工作区、分支，以及要不要开在一棵新的 worktree 里。托管 worktree 里的会话在父仓的会话列表里可见、可驾驶。
+- worktree 的边界： 孤儿 worktree 的归属用 transcript 的 cwd 回验，不信有损的 project 目录名；worktree 被删之后，会话不会从抽屉里消失，改动面板改看主仓并说明原因。主仓被移出 WORKDIRS 时，它衍生的 worktree 一并失效。
 
 ## 冷启动与实例恢复
 
-1. FRESH（新建独立会话）。 通过 session:new 触发，或者在空首页直接键入第一条消息。不会盲目继承上次残留的复杂权限，保证与直接新起命令行体验完全一致。
-2. Resume（恢复已有会话）。 点击历史会话切入，先执行 prepareSessionForWebResume 解除后台冲突，再基于原有 sessionId 恢复 SDK 会话。
-3. 空闲实例自动回收 (Idle Reclaim)。 当会话持续空闲超过 INSTANCE_IDLE_RECLAIM_MS （默认 30 分钟）后，系统平滑断开 SDK 进程释放系统内存；磁盘 Transcript 永久保留，下次用户在手机端发言时自动无感 Resume。
+1. FRESH（新建会话）： 通过 session:new 触发，或在新会话页直接发第一条消息。采用 CLI 设置合并后的基线，不继承上一个会话的档位，与直接新起命令行一致。
+2. Resume（恢复已有会话）： 点开历史会话，先经 prepareSessionForWebResume 处理与终端的冲突，再按原 sessionId 恢复 SDK 会话。
+3. 空闲回收： 会话空闲超过 INSTANCE_IDLE_RECLAIM_MS （默认 30 分钟）后释放 SDK 进程；transcript 永久保留，下次发言时自动 resume。
 
-## 会话分层删除策略
+## 回退与分叉
 
-- L1 隐藏 (Hide)。 在移动端左滑点击隐藏，仅在 sessions.json 中打上隐藏标记，磁盘 Transcript 保持完好，可随时通过 CLI 重新找回。
-- L2 彻底物理销毁 (Delete)。 物理移除磁盘文件。执行前受严格保护：如果会话活跃时间在静默窗口内（ SESSION_DELETE_QUIET_MS 默认 5 分钟），或检测到仍有活体终端连接，拒绝删除，防止误删电脑端正在跑的任务。
+- 回退走 /rewind ： 输入 /rewind 打开两步面板。第一步选「回到哪一轮之前」，每一轮标出动过几个文件；第二步选模式，与终端同名同序：恢复代码与对话、只恢复对话、只恢复代码。原来长按用户气泡的入口已于 2026-09-20 撤掉。
+- Web 的回退不改原会话： 涉及对话的模式走 forkSession ，分叉出一个回到那一刻的新会话，原会话一个字节不动；这和终端的原地回退是两套语义。回退后，那一轮的原话回填进输入框。
+- 说清风险与没做完的部分： 确认前预警会被覆盖且找不回来的脏改动；完成后说明哪些文件没恢复、几个链接被跳过；那一轮没有文件改动时，给出改用分叉的出路。
+- 分叉： assistant 气泡上常驻「分叉」入口（对齐 Desktop），只复制对话、不动文件；分叉锚点由服务端计算。
+- 终端 /rewind 的不可见窗口： 终端里的 /rewind 在发出下一条消息之前完全不落盘，镜像侧无从感知。这个窗口内不要从 Web 端发消息，否则那次回退当场作废、两端各写一条链；在终端把下一条消息发掉，两边就一致了。
+
+## 历史回显跟随当前链
+
+回显跟随 CLI 的**当前链**，而不是文件的物理行序：`/rewind` 撤掉的那一段不会留在手机上。`/compact` 边界之前的记录仍属于这个会话，照常回显，不会因为移出了模型上下文而被剪掉。
+
+## 关闭与彻底删除
+
+- 关闭： 关掉会话实例，transcript 不动，随时可以从列表里重新打开。
+- 彻底删除： 删除磁盘上的 transcript，受两道保护：会话最近有活动、还在静默期内（ SESSION_DELETE_QUIET_MS ，默认 5 分钟）时拒绝；终端或桌面端仍开着这个会话时也拒绝。拒绝的理由留在抽屉里显示，并记入审计。
+- 关掉后紧接着删（dev 已合入，尚未发版）： 先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。
 
 
 ---
@@ -1059,58 +1119,63 @@ sequenceDiagram
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1276
+- **Estimated Tokens**: ~1644
 
 ---
 
-系统鉴权采用严格的纵深防御：Token（或 Access 边缘 JWT）证明客户端知晓通信密钥，而设备指纹 TOFU 机制则证明「持有该 Token 的物理设备已经过机主显式授权」。单凭 Token 无法突破未受信任设备的隔离防线。
+鉴权是纵深的两层：令牌（或 Cloudflare Access 的边缘 JWT）证明客户端知道密钥；设备信任证明「持有令牌的这台设备已被主机所有者显式批准过」。只凭令牌进不了未受信任的设备。
 
-## 绑定模式与网络暴露控制
+## 监听地址与网络暴露
 
-| 配置状态 | 监听绑定地址 | 网络可达性与安全保证 |
+`AUTH_TOKEN` 是启动前提：缺令牌时 `resolveBindPlan` 在 listen 之前就拒绝启动，不存在「未设令牌就降级绑本机」的路径。监听面由 `BIND_MODE` 决定：
+
+| BIND_MODE | 实际监听 | 适用 |
 | --- | --- | --- |
-| AUTH_TOKEN 为有效串 | 0.0.0.0 （全接口） | 局域网直连与公网反代/隧道均可正常路由 |
-| 未配置或留空 | 127.0.0.1 （仅环回地址） | 手机与外部隧道物理不可达，杜绝无鉴权暴露 |
+| 不设（默认）/ lan | 0.0.0.0 | 绝大多数情况：同 WiFi 的手机可直连，隧道 / 反代也能落到本机端口 |
+| loopback | 127.0.0.1 | 自己用 SSH -L 、Tailscale Serve 或反代转发，不想让端口出现在局域网上 |
+| custom + BIND_HOST | 指定地址（ :: 为 IPv6 双栈） | 只想在某一块网卡上监听 |
 
-## 鉴权流程与多层校验机制
+## 鉴权流程
 
 ```mermaid
 flowchart TD
-  Conn["收到新网络连接 (HTTP / WS)"] --> Topo{"检查 ACCESS_PROFILE"}
-  Topo -->|cloudflare| JWT["校验 Cloudflare Access JWT\n(jose + JWKS 签名核验)"]
-  Topo -->|reverse-proxy / lan| Tok{"校验 AUTH_TOKEN\n(Header / #token= / Auth)"}
-  JWT --> RL["限速状态机 onAuthResult\n(IPv6 /64 分桶聚合)"]
-  Tok -->|通过| RL
-  Tok -->|失败| Reject["抛出 401 并计入失败桶"]
-  RL --> Dev{"检查设备指纹信赖态"}
-  Dev -->|已批准设备或本地环回| Allow["放行进入 approved 业务房间"]
-  Dev -->|未授权新设备| TOFU["挂起进入 pending-devices\n(仅推送审批，不开放操作)"]
+  Conn["收到新连接 (HTTP / WebSocket)"] --> Host{"Cloudflare Access 已启用<br>且 Host 是它的公网域名？"}
+  Host -->|"是"| JWT["校验 Access JWT（jose + JWKS）<br>fail-closed，不回退 AUTH_TOKEN<br>+ 跨站握手 Origin 校验"]
+  Host -->|"否"| Tok{"校验 AUTH_TOKEN"}
+  Tok -->|"失败"| Reject["拒绝并计入登录限速桶"]
+  Tok -->|"通过"| Dev{"设备信任"}
+  JWT --> Dev
+  Dev -->|"已批准设备 / 本机样 Host 且 peer 是本机 / 已过 Access"| Allow["进入 approved 房间"]
+  Dev -->|"新设备"| TOFU["记入待审批：只推送审批请求，不开放操作"]
 ```
 
-## 反向代理陷阱与 ACCESS_PROFILE 判据
+鉴权分支由 `app/src/auth/auth-strategy.js` 按 Host 决定，核心不依赖任何具体 IdP。`ACCESS_PROFILE` 不参与这个判定，它只是给 doctor 与手机端安全体检用的声明。
 
-> **CRITICAL / DANGER:** 防范反代 IP 坍塌陷阱 — 任何将公网流量通过本地反代（如 Nginx、Caddy、FRP、SSH 端口转发）直连 127.0.0.1:3000 的拓扑，都会导致客户端对端 IP 坍塌为 127.0.0.1，从而导致设备审批门被静默跳过。
+## 本机免审批的判据与反代陷阱
 
-为消除该隐患，系统采用三候选配置：
+设备审批不会只凭 socket 对端是 loopback 就跳过：server 还会检查 Host。只有「对端是本机」且「Host 是本机样的」同时成立，才免审批。
 
-- cloudflare ：适用于 Cloudflare Tunnel 场景，公网有 Access 2FA 严格兜底。
-- reverse-proxy ： 一等支持路径 。强制要求显式配置 TRUSTED_PROXY （如配置反代服务器 IP）后才采信 X-Forwarded-For ，防止外部伪造客户端来源；同时要求使用强随机 Token。
-- lan ：纯私网直连，只采信直接 Socket 对端 IP。
+- 按 Host 路由的入口 （cloudflared、配了 server_name 的 nginx）：对端虽然是 loopback，但公网请求带的是公网 Host，仍要设备审批。
+- 纯 TCP 转发 （ ssh -R 、frp tcp、socat）：不按 Host 路由，而 Host 是客户端自己填的头，远程来客发 Host: localhost 就能凑齐两个条件。TCP 层面区分不了真本机浏览器和转发进来的连接，所以用这类方式暴露时请设 DEVICE_APPROVAL_SCOPE=all 并重启。
+- DEVICE_APPROVAL_SCOPE=all 是覆盖全部路径的总开关，经 Cloudflare Access 与本机样 Host 进来的也要批一次。此后本机浏览器首次也要批准。
 
-## 设备信赖（TOFU 机制）与审批流
+## 设备信任与审批
 
-- $CCM_DATA_DIR/trusted-devices.json ：已受信任设备列表（持久化设备指纹与签名 Token）。
-- $CCM_DATA_DIR/pending-devices.json ：等待机主审批的新设备队列。
-- 本机免审批： 仅本机真实环回（ 127.0.0.1 / ::1 ）可跳过设备门直接放行。
-- 命令行审批入口： 在电脑终端可随时通过 node scripts/device.js list | approve <ID> | deny <ID> 审查并批准手机接入。
+- $CCM_DATA_DIR/trusted-devices.json ：已受信任的设备。
+- $CCM_DATA_DIR/pending-devices.json ：等待批准的新设备。
+- $CCM_DATA_DIR/device-profiles.json ：设备元数据（机型、浏览器、别名），让多台同为「Android」的设备可以分辨。
+- 批准渠道： node scripts/device.js list | approve <ID> | deny <ID> ；在跑 npm start 的终端里按回车批准最新的新设备；macOS 菜单栏；或另一台已信任设备上弹出的「新设备请求接入」。前三条不读任何网络判据。
+- 吊销： 手机「设置」与菜单栏都能吊销；吊销后，已连着的连接会失权。经 Access 进来的连接不受这张表管辖，除非 DEVICE_APPROVAL_SCOPE=all 。
+- 反直觉的失败方向： trusted-devices.json 瞬时读失败时保留内存里上一份可用的信任表，避免本机被一次抖动锁在门外。
 
-## 防暴力尝试与限速保护
+## 防暴力尝试与限速
 
-系统内置共享限速状态机（位于 `app/src/auth/rate-limiter.js`）：
+限速状态机在 `app/src/auth/rate-limiter.js`：
 
-- 统一管控： HTTP 端点（含 /health 、 /metrics 、 /push/* ）与 WebSocket 握手共用限速池。
-- IPv6 聚合防护： 将同一 /64 地址段聚类到单个限速桶，彻底瓦解利用海量动态 IPv6 绕过锁定的手段。
-- 渐进式退避与锁定： 连续尝试失败后触发阶梯式指数退避，达到硬阈值后予以锁定。本机来源与外部来源告警严格区分，绝不在控制台制造假警报。
+- 统一口径： HTTP 端点与 WebSocket 握手的拒绝语义一致，限速时告诉用户还要等多久。
+- IPv6 按 /64 归桶 ，堵住轮换源地址绕过。
+- 默认不采信转发头： 反代后面所有公网客户端共用一个桶； TRUSTED_PROXY=loopback 才按 loopback 反代追加的 X-Forwarded-For 末跳分桶。
+- 只挡鉴权口： 鉴权通过后 handler 抛出的 500 不计入限速；本机来源的锁定不说成「有人在暴力尝试」。
 
 
 ---
@@ -1123,41 +1188,45 @@ flowchart TD
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1102
+- **Estimated Tokens**: ~1387
 
 ---
 
-文件能力围绕「白名单工作区隔离」与「只读越界防护」构建：上传附件为会话注入上下文，文件浏览、文件搜索与预览严禁逃逸出白名单目录之外。
+文件能力围绕「白名单工作区」与「越界即拒」构建：上传附件为会话注入上下文，文件浏览、搜索、预览与编辑都不能逃出白名单目录。
 
-## 工作区白名单 (WORKDIRS) 与热重载
+## 工作区白名单（WORKDIRS）
 
-- 默认工作区： 以 WORK_DIR 为准（未配置时默认取当前工作根目录）。
-- 多项目白名单： 通过 ccm.config.json 中的 WORKDIRS 数组进行管理。
-- 免重启热重载 (Hot Reload)： 服务端深度监听配置文件变更（带防抖与 mtime 核验）。添加或移除工作区改完即生效，免重启 Server。
-- 存量会话保护： 已从白名单移除的工作区，其 正在运行的旧会话继续保持执行 ；但 禁止新开会话 （由 ensureWhitelisted 闸门拦截）。
+- 默认工作区： WORKDIRS 的第一项就是手机端默认打开的目录。旧的单值 WORK_DIR 已并入首项，原先三处静默回落到家目录的路径都已删除；装机向导在非交互模式下遇到「回落 $HOME 」直接拒绝。
+- 拒绝过宽的根： 不能填家目录本身，也不能填 / 、 /Users 、 /home 这类根；判定前先做路径归一与 symlink 解析，等价写法绕不过去。向导与写入侧共用这一份判据。
+- 手机上可编辑： 「设置 → 行为与开关」进「全部配置」，有工作区列表的结构化编辑器；它是唯一免重启的配置项。
+- 热加载： server 监听配置文件变化，增删工作区改完即生效。被移除的工作区上，已开的会话继续运行，但禁止新开（ ensureWhitelisted 拦截）。
 
-## 附件上传与存储搬迁
+## 附件上传
 
-> **TIP:** 附件已搬出用户项目根目录 — 早期版本附件落在每个项目下的 .ccm-uploads/，不仅污染用户 Git 状态，还可能触发 CLI 审批。现已全面搬迁至受管数据目录 data/uploads/ /，并自动通过 --add-dir 注入给 CLI，旧目录仅保留只读兼容。
+> **TIP:** 附件已搬出用户项目 — 早期附件落在各工作目录的 .ccm-uploads/，会弄脏 git 状态，还可能触发 CLI 审批。2026-09-06 起落在受管数据目录 $CCM_DATA_DIR/uploads/ /。旧的 .ccm-uploads/ 既不迁移也不删除，历史消息预览会自动回落过去读。
 
-1. 移动端通过 Socket 传输附件原始二进制数据（严格校验 MIME 类型与单文件尺寸限制）。
-2. 服务端落盘至 $CCM_DATA_DIR/uploads/<sessionId>/<safeName> 。
-3. 通过 buildPromptText 将附件真实绝对路径拼装入 Prompt，CLI 即可通过原生 Read 工具直接解析图片与文档。
-4. CLI 启动时自动快照挂载 data/uploads 授权目录，彻底消灭用户上传图片时弹出的权限审批。
+1. 手机端上传图片或粘贴截图，经 Socket 传到服务端，校验类型与大小上限（前后端的上限数字一致）。
+2. 服务端落盘到 $CCM_DATA_DIR/uploads/<工作区桶>/ ，文件权限 0600 ，文件名做防穿越处理。
+3. 附件的绝对路径拼进提示词，CLI 用原生 Read 工具读取图片与文档。
+4. 上传目录通过 additionalDirectories （即 --add-dir ）交给 CLI，保住免审批。注意这是 spawn 时的快照：实例启动之后才出现的新目录要等下次启动才生效。
 
-## 三层路径防护闸门 (FILES-1)
+## 路径防护
 
-| 防御层级 | 核心模块 | 防御威胁与防护策略 |
+| 防御层级 | 核心模块 | 防什么、怎么防 |
 | --- | --- | --- |
-| 写安全闸 | app/src/files/file-security.js | 仅所有者读写（0600）、强制防御符号链接（Symlink 劫持检测）与原子化写入辅助 |
-| 工作区范围门 | app/src/files/workdir-scope-guard.js | 所有入向文件路径必须经 realpath 解析，严格校验其归属于已授权的 WORKDIRS 之下 |
-| 安全浏览与预览 | app/src/files/file-browse.js · file-preview.js | 只读文件列表、分段按需读取与 Git Diff 查看；绝不开设公开无鉴权的文件下载 URL |
+| 写安全 | app/src/files/file-security.js | 仅所有者读写（ 0600 ）、symlink 劫持检测、原子写入 |
+| 工作区范围门 | app/src/files/workdir-scope-guard.js | 入向路径一律经 realpath 解析，必须落在已授权的 WORKDIRS 之下；symlink 逃出工作区即拒绝并记审计 |
+| 浏览与预览 | app/src/files/file-browse.js · file-preview.js | 只读列表、分段读取与 git diff； FIFO、字符设备、unix socket 在 open 之前就拒绝 ，否则整个 Node 进程会卡死；不开任何无鉴权的文件下载 URL |
 
-## 相关通讯端点
+内置文件编辑器直接写盘，**不经 Agent 的工具审批链**：写入时带上读到时的内容哈希，与磁盘不符就拒绝，不静默覆盖；另有范围校验、大小上限与审计。`FILE_EDIT=off` 可关闭。
 
-- browse:list ：分页读取白名单目录下的文件树（受 .gitignore 过滤）。
-- browse:read ：按需只读读取指定文本片段（限制单次最大读取行数）。
-- tool:preview / tool:full ：获取工具输出卡片的缩略快照与完整执行结果。
+## 相关通讯事件
+
+- browse:list ：读取白名单目录下的一层文件树（根目录传 '.' ）。
+- browse:read ：只读读取文件内容。
+- files:search ：在工作区里搜索文件，也用于输入 @ 时的补全候选。
+- files:write ：内置编辑器写入，带 baseHash 冲突检测。
+- tool:preview / tool:full ：工具卡的变更预览与完整结果。
 
 
 ---
@@ -1170,40 +1239,40 @@ flowchart TD
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1200
+- **Estimated Tokens**: ~1405
 
 ---
 
-前端采用原生纯 ESM 规范的单页应用（PWA）架构：Express 静态直接托管 `app/public/`，无需 Webpack / Vite 等前置编译，零外部 CDN 运行时依赖。
+前端是原生 ESM 的单页应用（PWA）：Express 直接托管 `app/public/` 静态文件，不经 Webpack / Vite 编译，运行期零外部 CDN 依赖。
 
 ## 目录分层与职责划分
 
-| 文件 / 目录路径 | 职责定位与架构约束 |
+| 文件 / 目录路径 | 职责与约束 |
 | --- | --- |
-| app/public/index.html | HTML 宿主外壳、移动端视口设置、PWA Manifest 引用 |
-| app/public/css/app.css | 样式定义（基于原生 CSS 变量系统与纯色 Tailwind Token，禁止 Alpha 复合透明度） |
-| app/public/js/app.js | 顶层协调器：挂载全局 Socket、路由事件、装配子模块 |
-| app/public/js/app/* | 按业务域划分的子模块工厂（如 event-dispatch.js 、 chat-ui.js ），采用 Context 依赖注入 |
-| app/public/js/logic/* | 纯逻辑层 ：零依赖纯函数集合（数据进、数据出），不碰 DOM/Window/Socket，与单测零构建同源复用 |
-| app/public/js/canonicalize.js | 前后端共享白名单工具：统一操作指纹与规范化逻辑 |
-| app/public/vendor/ | 第三方库本地离线托管（Tailwind 运行时、marked 解析器、highlight.js 代码高亮、DOMPurify 防 XSS） |
-| app/public/manifest.webmanifest | PWA 安装清单文件，支持独立全屏显示与移动端沉浸模式 |
+| app/public/index.html | HTML 外壳、移动端视口、PWA Manifest 引用 |
+| app/public/css/app.css | 样式（原生 CSS 变量体系 + Tailwind 运行时） |
+| app/public/js/app.js | 顶层协调器：挂载 Socket、路由事件、装配子模块。存量状态留在这里，新状态不再往里放 |
+| app/public/js/app/* | 按业务域划分的子模块工厂，Context 依赖注入（如 event-dispatch.js 、 message-renderer.js 、 drawer.js 、 rewind-command.js ） |
+| app/public/js/logic/* | 纯逻辑层 ：数据进、数据出，不碰 DOM / window / socket / 应用可变态，唯一宿主外 import 是 i18n.js ；浏览器与 tests/unit/logic-*.test.mjs 零构建共用同一份文件 |
+| app/public/js/canonicalize.js | 前后端唯一共用的文件：审批指纹的规范化 |
+| app/public/vendor/ | 第三方库本地托管（Tailwind 运行时、marked、highlight.js、DOMPurify） |
+| app/public/manifest.webmanifest | PWA 安装清单，独立全屏显示 |
 
-> **TIP:** 前端状态架构原则 — 任何新功能的状态严禁再直接挂入 app.js 的顶层作用域。新状态必须进 app/public/js/app/ 域模块；纯计算逻辑一律下沉为 app/public/js/logic/* 纯函数。
+> **TIP:** 前端状态架构原则 — 新功能的状态不再挂进 app.js 的顶层作用域：新状态进 app/public/js/app/ 域模块（工厂 + context 注入，样板是 event-dispatch.js）；能写成纯函数的一律先落 app/public/js/logic/*。
 
-## 状态管理与交互体验设计
+## 状态管理与交互设计
 
-- 鉴权凭据安全存取。 首次通过 URL Hash（ #token=... ）注入密钥，存入本地 localStorage 后立即从浏览器地址栏抹除，避免分享截图或误发 URL 泄露密钥。
-- 跨设备已读状态与长按标未读。 会话列表支持长按将已读会话反向标为未读。该状态采用 LWW（Last-Write-Wins）时间戳比对模型实时同步至服务端，实现跨设备状态一致。
-- 阻塞落地页智能导引。 当试图打开一个正在被后台子代理独占锁定的会话时，系统不会跳空白页，而是精准渲染该会话自身的专属阻塞提示栏，展示锁来源并在其解锁时无感自动恢复。
-- 输入框长文本智能防截断。 针对手机软键盘「发送」与「换行」键行为进行针对性适配，杜绝移动端长文本发送时的意外截断问题。
+- 令牌存取： 首次通过 URL hash（ #token=... ）带入，存进 localStorage 后立即用 history.replaceState 从地址栏抹掉，避免截图或转发 URL 时泄露。
+- 回车语义按设备区分： 触摸设备上回车是换行，发送只走发送按钮（软键盘的回车键提示也改成「换行」）；桌面仍是回车发送、Shift+Enter 换行。软键盘没有 Shift+Enter，旧行为会把多行消息在换行处切断、只发出前半段。
+- 未读： 抽屉会话行与首页最近行在上次打开后有新活动才亮；抽屉会话行支持长按手动标为未读。已读位点存在服务端（ read-state.json ），换设备后读过的会话不会整屏复亮。
+- 会话打不开时： 落到目标会话自己的页面，说明打不开的原因，给「重试打开」与「选择其他会话」两个出口；不在当前会话的消息流里插一条红字，免得读起来像当前会话出了事。
+- 设置两级导航： 侧栏底部常驻「设置与状态」入口；一级页是六行摘要（通知、接入与设备、宿主机、行为与开关、排查、帮助），每行摘要都绑定二级页里真实存在的元素，点进去才是完整设置。首页、新会话页、会话已中断页都能打开。
+- 草稿： 输入框草稿按会话保存，新会话页的草稿按工作区分槽，切走再回来不丢。
 
 ## PWA 与 Service Worker
 
-Service Worker（位于 `app/public/sw.js`，另有清理脚本 `app/public/js/sw-cleanup.js`）负责后台生命周期管理：
-
-- 支持 Web App Manifest，在 iOS Safari 与 Android Chrome 上均可一键「添加到主屏幕」化身为独立 Native 质感应用。
-- 配合 web-push 协议，在屏幕熄灭或切换到其他 App 时接收后台系统级推送；点击通知直接精准直达对应的会话标签页。
+- 添加到主屏幕： iOS Safari 与 Android Chrome 都能装成独立全屏的 PWA；PWA 与 Web Push 需要 HTTPS，iOS 还要 16.4+ 并先添加到主屏幕。
+- Service Worker 只管推送： app/public/sw.js 处理 install / activate / push / 点击通知 / pushsubscriptionchange ， 不做缓存、不做离线 ；点开通知直达对应会话。 app/public/js/sw-cleanup.js 负责清理旧版遗留的 Service Worker。
 
 
 ---
@@ -1216,40 +1285,53 @@ Service Worker（位于 `app/public/sw.js`，另有清理脚本 `app/public/js/s
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1115
+- **Estimated Tokens**: ~1733
 
 ---
 
-离线通知与运行态展示属于「尽力而为的体验增强」：通知通道的偶然失败绝不阻塞核心交互；状态栏根据当前的驾驶员主体动态选择权威数据源。
+离线通知与运行态展示属于尽力而为的体验增强：通知通道偶尔失败绝不阻塞核心交互；状态栏按当前的驾驶方选择数据源，不混拼。
 
-## 离线通知体系：双通道机制
+## 离线通知：两条通道
 
-系统内置两种独立的异步离线消息通道，完全由 `app/src/ops/notify-channels.js` 统一调度：
+两条通道由 `app/src/ops/notify-channels.js` 统一调度，可以同时开：
 
-| 通道类型 | 底层协议与配置要求 | 优势与典型场景 |
+| 通道 | 配置 | 适用 |
 | --- | --- | --- |
-| Web Push (首选) | 标准 W3C Push 规范，需配置 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT | 体验最佳 ：配合 PWA 实现系统级原生通知，点击直接调起应用直达该会话 |
-| ntfy (高可用后备) | 基于 HTTP 的 ntfy 协议，配置 NTFY_URL 与 NTFY_TOPIC （支持自建与私有 Token） | 无 HTTPS/内网场景首选 ：局域网纯 HTTP 下仍可稳定推送，适合 iOS 免证书直达 |
+| Web Push | VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT ，三项全齐才启用；需要 HTTPS | 系统级通知，点开直达该会话。Android 的 Chromium 系经 Google FCM，iPhone（Safari 16.4+ 且已添加到主屏幕）走 Apple 的推送服务 |
+| ntfy | NTFY_URL / NTFY_TOPIC ，私有实例加 NTFY_TOKEN ；点开深链靠 PUBLIC_URL | 全程不经 Google；iOS 在局域网 http 下用不了 Web Push 时的替代。标题带工作区与会话标题，请自托管或用私密 topic |
 
-## 推送抑制策略：严禁假静音与噪音打扰
+- 通知标题带身份： 「事件 · 项目 · 会话」三段，锁屏上就能看出是哪个工作区的哪个会话。
+- 正文默认最小化： 设置里可以开「锁屏带内容预览」，让锁屏通知带上问题、工具或任务摘要；ntfy 的正文恒最小化。
+- 可自检、可关闭： 设置里有「发一条测试推送」，不必等真实审批出现才发现通道不通；推送订阅也能关掉，改预览开关不会把已关掉的推送偷偷订回来。
 
-> **TIP:** 推送判定铁律 — 审批（permission_request）、提问（question）与后台长任务完成属于紧急人机待办，无条件推送（用户可能正在锁屏或使用其他应用）；仅常规对话的 result 结果，在「approved 房间检测到前台可见连接」时才会被智能抑制。
+## 推送抑制：该推的一定推
 
-- 前台可见性依据： 以客户端上报的 client:presence （基于 Page Visibility API）为准， 而不是单纯根据 Socket 是否保持连通 。
-- 通知节流窗： 同一会话内的同类通知遵循 NOTIFY_THROTTLE_MS （默认 60 秒）节流防轰炸。
+> **TIP:** 推送判定铁律 — 审批、提问、后台任务完成无条件推送（用户可能锁屏或正在别的 App）。只有回合完成的 result 与网关静默告警（system 信封里的 gateway_stall notice），才会在「approved 房间有前台可见连接」时被抑制，两者共用 notifyHasClientsAtSend 这一条判据。
 
-## Statusline 状态栏双源选择
+- 前台判据： 客户端上报的 client:presence （Page Visibility）， 不是 socket 连着没有。
+- 「后台任务完成」只算真后台任务： CLI 把跑得久的前台 Bash 也建模成 task、走同一条 task_notification ，靠 CLI 在任务开始时带的 is_backgrounded 标记过滤掉。删了这道过滤，每条跑几秒的命令都会推到锁屏上。
+- 节流： 同类通知的最小间隔为 NOTIFY_THROTTLE_MS （默认 60 秒，可显式设 0）。
 
-| 当前运行场景 | 数据真相源 | 展示内容 |
+## Statusline 状态栏：按驾驶方选数据源
+
+| 场景 | 数据源 | 展示 |
 | --- | --- | --- |
-| Web 端驾驶中 | SDK 内部运行态 | 当前模型别名、上下文窗口占用比例（ctx%）、累计 Token 消耗 |
-| CLI 终端驾驶中（只读镜像） | CLI Statusline 快照 | 通过 npm run statusline:install 安装的快照桥接器，精准镜像终端原生状态行 |
+| Web 驾驶中 | SDK 运行态，开箱即用 | 底栏常驻摘要；展开看模型、分支、ctx 占用、5h 与 7d 额度用量和重置倒计时、预估花费，可一键复制 |
+| 终端驾驶中（Web 只读镜像） | CLI statusline 快照 | 需安装可选的 statusline bridge（ npm run statusline:install ），同步 CLI 的模型、思考强度、上下文、成本与额度 |
 
-## 状态可见性：告警轴与待办轴绝不混淆
+两路数据**禁止混拼**：唯一的例外是额度这种账号级数据可以回落，且必须标注为非实时。展示语义以产品仓的 `docs/display-contracts.md` 为准。
 
-- 待办轴（「需要你」）： 顶栏角标与数字 Chip 只用于展示「用户点击即可立刻处理」的人机交互项（如待审批的命令、待回答的问题、后台跑完的任务）。
-- 运维告警轴： 系统级运行故障（如通知通道失联、鉴权限速封禁、客户端网络异常）只沉淀在侧边抽屉的「服务状态面板」中，两轴严格分离，绝不混判。
-- 动态动词与收尾行： 运行时支持实时展示过去式动词、秒表与输出速率，对齐终端 CLI 的动态状态展示。
+## 两条轴：「需要你」与服务告警绝不混判
+
+- 「需要你(N)」： 顶栏 chip 与角标只表达「点一下就能处理」的待办，也就是审批与提问。推送投递失败这类事混进来，用户点进去发现无事可做，这个数字就失去了意义。
+- 服务告警： 推送投递失败、登录限速锁定、客户端错误这类，只出现在会话抽屉的「服务」小节与服务状态面板里。
+- 服务状态面板： 四段，基础信息、判定化告警、安全日志、重启记录。不展示裸计数器，原始计数留给 /metrics ；每条告警说得出「是谁、为什么」，24 小时后自动退场。
+
+## 运行中的动态行
+
+- 动态状态行： 回合进行中显示与终端同款的进行时动词、秒表与等待提示（例如「仍在等待响应」）。
+- 收尾行： 回合结束留一行过去时动词与耗时，对齐 CLI。
+- 额度墙横幅（dev 已合入，尚未发版）： 撞上用量额度墙时，输入框上方出现横幅，按所处状态给一个按钮：已布防时可「取消」，只给选项时可「到点自动继续」，错过重置点或无法确认安全时给「继续」由你手动发。
 
 
 ---
@@ -1262,54 +1344,63 @@ Service Worker（位于 `app/public/sw.js`，另有清理脚本 `app/public/js/s
 
 - **Part**: 第五部分 · 数据与集成
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1235
+- **Estimated Tokens**: ~1741
 
 ---
 
-控制面状态、CLI Transcript、附件存储与内存态在物理上分属不同目录。备份与清理磁盘前，必须分清「受管控制面数据」与「CLI 原生记录」。
+控制面状态、CLI transcript、附件与内存态在物理上分属不同位置。备份与清理磁盘前，先分清「CCM 受管的控制面数据」与「CLI 原生记录」。
 
-## 存储体系全景
+## 存储全景
 
-| 数据存储路径 | 职责角色 | 归属与生命周期 |
+| 位置 | 是什么 | 性质 |
 | --- | --- | --- |
-| $CCM_DATA_DIR/sessions.json | 会话控制元数据（当前激活指针、重命名、隐藏列表、跨设备已读位点等） | 持久化元数据；仅存展示偏好，非对话正文 |
-| …/approval-requests.json | 工具审批台账记录 | 持久化审计记录（内存执行闸门为真实判权源） |
-| …/trusted-devices.json | 已授权设备指纹与签名 Token（TOFU 机制） | 核心安全状态；删除后手机接入需重新在电脑端点击批准 |
-| …/pending-devices.json | 等待批准的外部设备连接队列 | 临时待审批列表 |
-| …/uploads/ / | 受管附件目录 ：手机端上传的图片与文档原件 | 受管持久化数据；通过 --add-dir 自动授权给 CLI |
-| …/audit-records.json | 系统安全审计日志（限速、封禁与越界访问等） | 持久化环形审计 |
-| ccm.config.json （仓库顶级根） | 统一结构化配置文件 （端口、Token、工作区、网络拓扑等） | 由 config-file.js 统管； WORKDIRS 支持热重载 |
-| ~/.claude/projects/ /*.jsonl | 真实对话 Transcript ：完整对话流与工具执行记录 | 完全由本机 claude CLI 维护，不随 CCM 搬家 |
-| 内存 Ring Buffer (2000条) | 在途事件流与近期信封缓存 | 进程易失，用于断线快速补发 |
+| $CCM_DATA_DIR/sessions.json | 会话索引与指针：各工作区当前会话、模型 / 权限档 / 思考强度等偏好 | 持久；不存对话正文，可从 transcript 重建 |
+| …/read-state.json | 已读位点，跨设备共享 | 持久；丢了只是未读标记重新亮起 |
+| …/approval-requests.json | 工具审批台账 | 持久审计记录；执行闸门以内存判权为准，重启时挂着的审批不可再执行 |
+| …/trusted-devices.json | 已信任的设备 | 核心安全状态；删了之后所有设备都要重新批准 |
+| …/pending-devices.json | 等待批准的新设备 | 临时待审队列 |
+| …/device-profiles.json | 设备元数据：机型、浏览器、别名 | 持久；只影响设备的显示名 |
+| …/push-subscription.json | Web Push 订阅 | 持久；存浏览器的推送订阅（endpoint 与加密密钥），不存设备令牌 |
+| …/audit-records.json | 安全审计：限速锁定、越界访问、设备审批与吊销、删除被拒等 | 持久；只经鉴权后的 audit:get 读取，不开 HTTP 端点 |
+| …/uploads/ / | 手机上传的附件原件 | 持久；经 additionalDirectories 交给 CLI，免审批读取 |
+| …/service-events.json 、 service-snapshot.json | 重启记录与服务状态快照 | 运维用，供服务状态面板的重启记录与 flapping 判定 |
+| …/init-cache.json 、 cf-access-certs.json | 启动水合缓存、Access 公钥缓存 | 缓存：可随时删除，损坏就当作没有 |
+| ccm.config.json （仓库根） | 统一结构化配置 | 由 config-file.js 统管；与 .env 同等敏感，已在 .gitignore 里；不在源码归档里，覆盖升级碰不到 |
+| ~/.claude/projects/ /*.jsonl | 对话 transcript：完整对话与工具执行记录 | 由本机 claude CLI 维护，不随 CCM 搬家；CCM 只追加一行 entrypoint-marker |
+| ~/.claude/ccm/hooks-v1/ | hooks bridge 的文件投递箱（装了才有） | 加速触发器；server 消费后删除，过期文件定期清理；transcript 仍是真相源 |
+| 内存环形缓冲（2000 条） | 近期事件信封，按 seq + epoch 编号 | 进程易失，断线重连时按序补发 |
 
-> **WARNING:** 附件已完成搬家 — 历史版本中附件位于各项目工作区下的 .ccm-uploads/。当前版本已全部统一收敛至受管数据根下的 $CCM_DATA_DIR/uploads/，避免向用户 Git 仓库写入脏文件，旧目录仅作为只读兼容回落。
+没有设置 `CCM_DATA_DIR` 时，数据根是仓库下的 `./data`。长期跑着的实例建议设成仓库外的绝对路径，免得切分支、清理仓库或测试脚本碰到生产状态。
 
-## 双层事实源 (Double SoT) 与备份边界
+> **WARNING:** 附件已完成搬家 — 早期附件位于各工作区的 .ccm-uploads/。2026-09-06 起统一落在 $CCM_DATA_DIR/uploads/，不再往用户的 git 仓库写文件；旧目录既不迁移也不删除，历史消息预览会自动回落过去读。
+
+## 备份边界
 
  
    
     
-#### CCM 控制面 ($CCM_DATA_DIR)
+#### CCM 控制面（$CCM_DATA_DIR）
 
     
-管理「Web 端如何看待会话、哪些设备被授权连入、附件文件保存在哪」。丢失仅导致设备需重新认证、会话标题回退，不会破坏聊天事实。
+管「Web 端怎么看待会话、哪些设备被授权、附件放在哪」。丢了会让设备需要重新批准、界面偏好回到默认，但不会破坏聊天记录本身。
 
    
    
     
-#### CLI Transcript (~/.claude/projects/)
+#### CLI transcript（~/.claude/projects/）
 
     
-管理「历史说了什么、执行了哪些代码、Token 开销多少」。由 CLI 原生写入，CCM 仅执行追平与安全追加。
+管「说了什么、执行了什么、花了多少」。由 CLI 原生写入，CCM 只读取追平，外加那一行 `entrypoint-marker`。注意 Claude Code 会按修改时间清理 30 天前的 transcript。
 
    
  
 
-## 全量迁移与灾备建议
+## 迁移与灾备
 
-- 完整迁移清单： 停止服务进程 → 拷贝 $CCM_DATA_DIR → 拷贝 ~/.claude/projects/ → 导出 ccm.config.json 。
-- 敏感文件权限防护： 建议配置数据目录文件权限为 0600 ，目录权限为 0700 ，防范本地非特权用户读取。
-- 自动化测试沙箱隔离： 执行破坏性测试或运行变异测试时，必须通过 Docker 容器隔离，容器内 HOME 为虚拟空壳，彻底隔绝真实数据。
+- 迁移数据目录： 先停掉 server（桌面端菜单或 headless 那个终端）并备份，拷贝 $CCM_DATA_DIR ，在 ccm.config.json 里写上新的 CCM_DATA_DIR ，跑一遍 node scripts/doctor.js ，再按原入口拉起。 scripts/device.js 、server 与 doctor 都读同一个 CCM_DATA_DIR 。
+- 权限： 数据目录文件保持 0600 ，目录 0700 ，防本机其他用户读取。
+- 卸载： npm run uninstall 只删产品自己装的东西，manifest 之外的 unit、 ~/.cloudflared 与 ~/.claude/projects 永远不碰。
+- 测试隔离： 破坏性测试与变异检查一律进容器，容器里的 HOME 是一次性目录，真实数据碰不到。
 
 
 ---
@@ -1322,52 +1413,60 @@ Service Worker（位于 `app/public/sw.js`，另有清理脚本 `app/public/js/s
 
 - **Part**: 第五部分 · 数据与集成
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~958
+- **Estimated Tokens**: ~1745
 
 ---
 
-外部依赖恪守「做桥梁而不做中心」的准则：不承接多租户账户体系，不替代本机 CLI，每一层系统都有极其明确的分工边界。
+外部依赖恪守「做桥梁而不做中心」：不承接多租户账户体系，不替代本机 CLI，每一层都有明确的分工边界。
 
-## 外部核心依赖分工矩阵
+## 外部集成分工矩阵
 
-| 外部集成组件 | 核心职责（做什么） | 严格禁区（不做什么） |
+| 外部集成 | 做什么 | 不做什么 |
 | --- | --- | --- |
-| Claude Agent SDK + 本机 claude CLI | 提供双向流 query() 、事件映射、权限拦截回调；自动继承本机 settings.json 、MCP 工具、自定义 Skills 与 Hooks | 不重造 Agent 内部循环；不设立独立的工具放行清单；不自行托管独立登录凭据 |
-| Cloudflare Tunnel + Access | 提供固定公网安全域名与 2FA 身份认证；在边缘向 CCM 传递经签名的身份 JWT | 不替代应用级 AUTH_TOKEN ；不侵入业务内部的细粒度操作鉴权 |
-| web-push (标准 VAPID 协议) | 原生浏览器推送：审批弹窗、用户提问与长任务完成通知 | 未配置时优雅降级，不阻断核心对话；不传输完整的复杂正文 |
-| ntfy (HTTP 订阅通道) | 极简外部推送：直接通过 HTTP POST 派发通知，适合纯局域网或无法使用 Web Push 的场景 | 未配置时完全关闭；不作为核心数据信道 |
+| Claude Agent SDK + 本机 claude CLI | 双向流 query() 、事件映射、权限回调；SDK 会话按工作区目录加载 CLI 的 user / project / local 三层 settings，沿用 CLAUDE.md 、MCP、Skills 与 Hooks | 不重造 Agent 循环；不自建工具放行清单；不托管登录凭据 |
+| 模型通路 （官方订阅 / API key / 第三方网关 / Bedrock / Vertex） | 配置属于 claude CLI，不属于本项目。第三方网关推荐写在 CLI settings 文件的 env 块（工作区 .claude/settings.local.json 或 ~/.claude/settings.json ），按工作区目录生效，macOS 桌面端拉起的常驻服务也认；headless 也可在启动 server 的 shell 里 export | 对模型通路零假设：不匹配 ANTHROPIC_BASE_URL 、不设厂商白名单、不探测上游；唯一据以调整行为的是 CLI 自报的能力位（如 rate_limits_available ）。 ccm.config.json / .env 里的 ANTHROPIC_* 启动期剥除并点名 |
+| Cloudflare Tunnel + Access | 固定公网域名与 2FA；边缘签发身份 JWT。开着时它管的公网 Host 改认 Access 身份，替代 AUTH_TOKEN ，缺省也替代设备审批。产品受管的第三方进程只有 cloudflared | 不是硬依赖： CF_ACCESS_* 三项留空即整层关闭，server 零改动 |
+| Tailscale / 其他加密隧道 / 自建反代 | 不经 Cloudflare 的公网入口，Tailscale 为推荐路径（自带 HTTPS） | 一等支持但不受管：只给文档配方、向导提示与 doctor 检测，不装、不起、不保活 |
+| web-push （VAPID） | 浏览器推送。审批、提问、后台任务完成无条件推；回合完成与网关静默告警在有前台可见连接时才抑制。正文默认最小化，可在设置里开锁屏内容预览 | 未配置时优雅缺席，不阻断对话。Android 的 Chromium 系浏览器经 Google FCM 投递（中国大陆网络下订阅那一刻要代理，宿主机要长期能访问 Google）；iPhone（Safari 16.4+ 且已添加到主屏幕）走 Apple 的推送服务；不想依赖 Google 就用 ntfy |
+| ntfy （HTTP 订阅通道） | server 一行 POST 到 ntfy，手机装 ntfy app 订阅 topic 收锁屏通知；适合 iOS 局域网 http 这类 Web Push 用不了的场景 | 正文恒最小化，但标题带工作区目录名与会话标题且明文经第三方：请自托管，或用私密 topic 加 NTFY_TOKEN |
+| CLI statusline bridge （可选） | Web 只读查看终端正在运行的会话时，同步 CLI 的模型、思考强度、上下文、成本与额度 | 显式安装才写 ~/.claude ：包装已有的 statusline 命令，未配置 statusline 时拒绝；卸载按 manifest 恢复原命令 |
+| CLI hooks bridge （可选） | 终端回合的 Stop / Notification 写入受限文件投递箱 ~/.claude/ccm/hooks-v1/ ，server 即时消费，把「回合结束 / 需要你」从 2.5 秒轮询变成即时信号 | 只追加自己的 hook 条目；server 不在线时只落盘、静默退出，不阻断 CLI；设 CLI_HOOKS_BRIDGE: false 可暂停消费。磁盘 transcript 仍是真相源 |
 
 ## 系统生态链路图
 
 ```mermaid
 flowchart TB
   Phone["移动端 (手机浏览器 / PWA)"]
-  CF["Cloudflare 边缘 2FA (可选)"]
+  CF["Cloudflare 边缘 Access (可选)"]
   Tunnel["cloudflared 命名隧道"]
+  Alt["Tailscale / 其他隧道 / 反代 (可选)"]
   Server["CCM Server (app/server.js)"]
-  SDK["Agent SDK (0.3.263)"]
+  SDK["Agent SDK (0.3.278)"]
   CLI["本机 claude CLI 进程"]
   FS["开发项目工作区 (WORKDIRS)"]
   Push["Web Push / ntfy 通道"]
-  Data["持久化数据 (CCM_DATA_DIR)"]
-  Disk["CLI Transcript (~/.claude)"]
+  Data["控制面数据 (CCM_DATA_DIR)"]
+  Disk["CLI Transcript (~/.claude/projects)"]
+  Hooks["hooks 投递箱 (可选)"]
 
   Phone -->|"公网接入"| CF --> Tunnel --> Server
+  Phone -.->|"公网接入"| Alt -.-> Server
   Phone -.->|"局域网直连 (#token=)"| Server
   Server --> SDK --> CLI --> FS
   Server --> Data
   CLI --> Disk
+  CLI -.-> Hooks -.-> Server
   Server --> Push
   Push -.->|"离线唤醒"| Phone
 ```
 
-## 关键生产依赖概览
+## 关键生产依赖
 
-- @anthropic-ai/claude-agent-sdk （当前基线 0.3.263 ）：与 CLI 保持同源驱动与最新特性支持。
-- express (v5) · socket.io (v4) · compression ：高吞吐低延迟的 WebSocket 与 HTTP 服务基础。
-- jose (v6)：轻量且安全的 JWT 校验引擎，零外部 C 绑定依赖。
-- web-push ：基于 RFC 8291 / 8292 标准的离线推送协议实现。
-- 前端全部第三方库采用本地完全自托管（位于 app/public/vendor/ ），生产运行期零任何外部 CDN 网络依赖。
+- @anthropic-ai/claude-agent-sdk ：dev 基线 0.3.278 （最新发布版 v1.12.1 为 0.3.263）。
+- express (v5) · socket.io (v4) · compression ：HTTP 与 WebSocket 服务基础。
+- jose (v6)：JWT 校验，零外部 C 绑定依赖。
+- web-push ：RFC 8291 / 8292 标准的推送协议实现。
+- 前端第三方库全部本地自托管（ app/public/vendor/ ），运行期零外部 CDN 依赖。
 
 
 ---
@@ -1380,63 +1479,82 @@ flowchart TB
 
 - **Part**: 第六部分 · 部署与运维
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1081
+- **Estimated Tokens**: ~1941
 
 ---
 
-最短可跑路径：依赖安装、结构化配置、doctor 健康自检、启动服务。局域网访问必须配置 `AUTH_TOKEN`；公网暴露推荐使用临时隧道或生产拓扑。
+最短可跑路径：下载源码归档、装运行依赖、用装机向导生成配置、启动自检、启动服务，再从手机打开并批准这台设备。`AUTH_TOKEN` 是启动前提，没有它服务直接拒绝启动；长期公网访问另见[生产部署](production-deploy.md)。
 
 > **NOTE:** English —  Install path for non-Chinese readers: English Quickstart（与 README.en.md 对齐）。
 
 ## 环境前置准备
 
-- Node.js ≥ 20（通过 node --version 验证，要求纯 ESM 规范支持）。
-- 本机已安装并且可正常登录交互的 claude CLI（ which claude 确认可寻址）。
-- 平台支持：推荐 macOS（完整支持桌面菜单栏与 LaunchAgent）或 Linux（支持 systemd 与容器化部署）。
+- Node.js ≥ 20（ node --version ）。
+- 本机的 claude CLI 能在终端里正常跑完一轮会话。官方订阅要已 /login ；第三方网关不走 Anthropic 登录，要的是 ANTHROPIC_* 真的生效（推荐写在 CLI settings 文件的 env 块，见 外部集成 ）。项目不会替你安装或登录 claude。
+- macOS 或 Linux。原生 Windows 属实验路径，推荐 WSL2。macOS 另有菜单栏应用 CCM.app。
 
-## 装机与运行四步走
+## 装机与运行
 
-1. 克隆仓库与确认依赖： ```
-git clone https://github.com/Ike-li/claude-chat-mobile.git
-cd claude-chat-mobile
-npm install
-```
-2. 初始化结构化配置： ```
-# 交互式装机向导：生成高强 AUTH_TOKEN、配置工作区、建立 ccm.config.json
+1. 下载源码归档，安装运行依赖： ```
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev
+``` master 只在发版时前进，归档就是最新发布版；测试树与维护者门禁已按 .gitattributes 裁掉。要改代码或跑测试，改用 git clone 完整仓库，同样 npm ci --omit=dev ，需要跑测试时再执行一次不带参数的 npm ci 。
+2. 生成配置： ```
+# 交互式装机向导：生成高强度 AUTH_TOKEN、放行工作区、问你打算怎么从手机访问，写入 ccm.config.json
 npm run setup
 
-# 或者使用非交互式配置 CLI 直接初始化：
+# 或者用非交互的配置 CLI 初始化：
 node scripts/config.js init
 ```
-3. 运行全量环境健康自检 (Doctor)： ```
-# 检查端口可用性、工作区路径有效性、CLI 二进制、网络拓扑自洽性
+3. 启动自检（doctor）： ```
+# 端口、工作区、claude CLI、访问方案与配置是否自洽
 node scripts/doctor.js
 
-# 若权限不规范，执行自动修复收紧权限：
+# 配置文件权限不规范时自动收紧：
 node scripts/doctor.js --fix
 ```
 4. 启动服务： ```
 npm start
-# 启动成功后，终端将输出控制台日志及带授权 Token 的访问 URL：
-# Local:   http://localhost:3000/#token=...
-# Network: http://<lan-ip>:3000/#token=...
+# 横幅只显示掩码后的令牌，按场景给出地址，例如：
+#   本机:   http://localhost:3000/#token=<YOUR_TOKEN>
+#   可访问: http://<lan-ip>:3000/#token=<YOUR_TOKEN>  ← 同 WiFi 或已连隧道时可用
+# 完整令牌在 ccm.config.json 里；免手输用下一步的二维码
 ```
+5. 手机打开，批准这台设备： ```
+# 把地址和令牌打成终端二维码，手机扫码进入（二维码含凭据，投屏时勿用）
+node scripts/qr.js
+
+# 新设备首次进入要批准一次
+node scripts/device.js list
+node scripts/device.js approve <ID>
+``` 也可以在跑着 npm start 的终端里按回车批准最新的新设备、在另一台已信任的设备上点「准入」，或用 macOS 菜单栏。令牌首次进入后存进浏览器，之后免带。
+
+> **WARNING:** 起服 ≠ 能聊天 — 令牌与设备审批只决定手机能不能进主壳；电脑终端里的 claude 能不能正常跑完一轮，才决定手机上能不能真对话。首次验收时在手机上新建会话发一条消息：只要看到 CLI 透传上来的真实结果（正常回答，或一条具体的报错）就说明链路是通的。聊不通时，先在电脑终端、同一个工作区目录下把 claude 聊通一轮，再从手机重试。
 
 ## 从移动端连接的场景方案
 
 | 连接场景 | 配置与网络路径 | 关键注意事项 |
 | --- | --- | --- |
-| 同一 WiFi 局域网 | 配置有效 AUTH_TOKEN ，手机浏览器访问控制台输出的局域网 IP 带 Hash URL（ http:// :3000/#token=... ） | 未配置 Token 时服务恒定只绑定 127.0.0.1 ，手机无法连入；手机首次连接需在电脑端点击批准设备（TOFU） |
-| 公网临时体验 / 开启 HTTPS PWA | 另开终端执行临时隧道： cloudflared tunnel --url http://localhost:3000 | 手机端打开 Cloudflare 分配的 HTTPS 临时域名，即可满足 iOS PWA 添加到主屏幕与 Web Push 的前置条件 |
-| 常驻生产部署 | 搭配 Cloudflare 命名隧道 + 2FA Access，或使用 Nginx / Tailscale 纯反代；详见 生产部署 | 推荐使用 macOS 专属的 CCM.app 菜单栏应用或 systemd 常驻守护 |
+| 同一 WiFi 局域网 | 手机打开横幅里的局域网地址，或扫 node scripts/qr.js 的二维码 | 默认监听 0.0.0.0 ；没有令牌服务不会启动，不存在「未设令牌就只绑本机」的降级路径。首次连接要批准设备 |
+| 临时公网 / 要 HTTPS 装 PWA | 另开终端跑 Cloudflare Quick Tunnel： cloudflared tunnel --url http://localhost:3000 不想经 Cloudflare：装 Tailscale 后 tailscale serve --bg 3000 | PWA 与 Web Push 需要 HTTPS；iOS 还要 16.4+ 并先添加到主屏幕 |
+| 长期公网 | 固定域名 + Cloudflare Tunnel + Access，或 Tailscale / 其他加密隧道 / 自建反代；详见 生产部署 | 常驻只有两条入口：headless 终端 npm start （保活方式自定），macOS 菜单栏应用 CCM.app |
 
-## 常用日常维护指令
+## 更新
+
+归档装的，回到当初解压的**父目录**重跑同一条 `curl … | tar xz`，再 `npm ci --omit=dev`，然后重启服务。`ccm.config.json` 与 `data/` 不在归档里，覆盖不到。`git clone` 装的照常 `git pull`。
+
+## 常用命令
 
 ```
-npm run dev          # 调试热加载开发：node --watch app/server.js
-npm run check        # 快速门禁流水线（零 Token，极速检查规范、边界与契约）
-npm run app:install  # (macOS 专属) 编译并安装 CCM.app 到 /Applications 目录
+node scripts/doctor.js            # 启动自检；改完配置先跑一遍
+node scripts/config.js schema     # 打印当前全部配置项定义
+node scripts/device.js list       # 待批与已信任的设备
+node scripts/qr.js --public       # 公网地址的连接二维码（受 Access 保护的域名不带令牌）
+npm run app:install               # macOS：编译并安装 CCM.app 到 /Applications
 ```
+
+`npm run check`、`npm test`、`npm run lint` 引用的测试树与门禁不在归档里，只在 `git clone` 的完整仓库里可用。
 
 
 ---
@@ -1445,73 +1563,71 @@ npm run app:install  # (macOS 专属) 编译并安装 CCM.app 到 /Applications 
 # Chapter: 生产部署 (第六部分 · 部署与运维)
 
 # 生产部署
-> LaunchAgent、命名隧道、Access 2FA、CCM_DATA_DIR。
+> 两条启动入口、公网入口选型、ACCESS_PROFILE 与 BIND_MODE。
 
 - **Part**: 第六部分 · 部署与运维
 - **Reading Time**: ~14 min
-- **Estimated Tokens**: ~1121
+- **Estimated Tokens**: ~2124
 
 ---
 
-生产形态是基于登录 Shell 托管的常驻守护进程与端到端安全网络通道：确保关掉终端终端后台不掉线，自动维持与电脑终端完全一致的 `PATH`、环境变量与登录凭据。
+生产形态是一个常驻的 server 进程加一条公网入口。启动只有两条入口：headless 终端里 `npm start`（全平台基线，保活方式自己定），或 macOS 菜单栏应用 CCM.app。Cloudflare Tunnel / Access 这些是公网怎么进来，不是第三条启动方式。
 
 ## 生产架构拓扑
 
 ```mermaid
 flowchart LR
-  Phone["手机端 PWA"] --> PublicEdge["公网边界 (Cloudflare / 反向代理)"]
-  PublicEdge -->|"加密隧道 / 反代"| Local["localhost:3000"]
-  Local --> CCMServer["CCM 常驻服务 (LaunchAgent / systemd)"]
+  Phone["手机端 PWA"] --> PublicEdge["公网入口 (Cloudflare Access / 加密隧道 / 反代)"]
+  PublicEdge -->|"隧道 / 反代"| Local["localhost:3000"]
+  Local --> CCMServer["CCM server (经登录 shell 启动)"]
   CCMServer --> NativeCLI["本机 claude CLI & 宿主环境"]
 ```
 
- 通过 Cloudflare Access（2FA）或独立反向代理直连  
-    局域网 / 本机  内网可直接通过 `http:// :3000/#token=...` 连入  
-    常驻守护  通过 macOS LaunchAgent 或 Linux systemd，支持崩溃自愈与开机自启  
+ `AUTH_TOKEN` + 逐设备审批，对所有拓扑相同。Cloudflare Access 是可选加层：开着时它管的公网 Host 改认 Access 身份，替代令牌，缺省也替代设备审批  
+    局域网 / 本机  `http:// :3000/#token=…` 走 `AUTH_TOKEN`，新设备首次仍要批准  
+    常驻  macOS 用 CCM.app（崩溃拉起、开机自启、日志、重启都在菜单里）；其他平台 headless `npm start`，保活用 tmux、自己的 systemd 或 docker 都行，仓库不提供官方 unit  
+    控制面数据  长期实例建议把 `CCM_DATA_DIR` 设成仓库外的绝对路径，免得切分支、清理仓库碰到生产状态；文件保持 `0600`  
  
 
-## macOS 生产常驻与菜单栏应用 (CCM.app)
+## macOS：菜单栏应用 CCM.app
 
-在 macOS 上，推荐使用项目原生提供的两套生产管理入口：
-
-1. 原生状态栏应用 CCM.app： ```
-# 编译并安装原生 Swift 菜单栏应用至 /Applications/CCM.app
+1. 安装： ```
+# 编译 Swift 菜单栏应用并装进 /Applications/CCM.app
 npm run app:install
-``` 支持在系统顶部菜单栏一键查看 Server 状态、一键重启、一键扫码在手机打开当前会话，并支持工作区快速切换。
-2. 标准常驻服务 CLI 驱动： ```
-npm run service:install   # 渲染 plist 模板并注册入 launchd 系统服务
-npm run service:status    # 检查服务运行态、PID 与日志位置
-npm run service:restart   # 一键热重启常驻服务进程
-```
+``` 菜单里安装并启动 server，需要的话勾「开机自启（菜单栏）」。菜单栏还能重启 server、查看日志、批准或吊销设备、弹出连接二维码（扫码带着令牌进 Web UI；PNG 由 qr.js 在自己的进程里渲染，令牌明文不进菜单栏进程）。
+2. 它背后的 CLI（一般不用手敲，不是第三条入口）： ```
+npm run service:install -- server   # 渲染 plist 并注册 launchd，RunAtLoad + KeepAlive
+npm run service:status              # 各 unit 运行态、归属与漂移
+npm run service:restart -- server
+npm run service:logs -- server
+npm run service:adopt -- server     # 接管手工装的 plist：只写 manifest，不碰 plist
+``` 装出来的 label 固定是 com.ccm.<unit> ，状态、接管与桌面端都只扫这个前缀。
 
-> **WARNING:** macOS 常驻启动命令约束 — desktop/launchd/server.plist.template 中的启动命令为 exec   app/server.js，必须与 app/src/ops/service-units.js 解析常驻进程后缀的代码逐字严格一致，改动一侧必须同步另一侧。
+> **WARNING:** macOS 常驻启动命令约束 — desktop/launchd/server.plist.template 中的启动命令为 exec   app/server.js，必须与 app/src/ops/service-units.js 解析常驻进程后缀的代码逐字严格一致，改动一侧必须同步另一侧，否则服务面板的 repo / node 恒为 null。
 
-## Linux 常驻部署 (systemd)
+## Linux 与其他平台：headless
 
-在 Linux 服务器或无头工作站上，建议注册为 systemd 用户服务（`~/.config/systemd/user/ccm.service`）：
+终端里 `npm start`，窗口别关；要关终端也能活，用你自己的保活方式。项目不替用户决定怎么后台运行，macOS 之外不做官方常驻适配。桌面端和 `npm start` 都要用户登录后的会话，开机未登录就跑不在这两条入口里。server 要经登录 shell 启动，才能让 claude 的 `PATH` 与登录态和你的终端一致。
 
-```
-[Unit]
-Description=Claude Chat Mobile Service
-After=network.target
+## 公网入口怎么选
 
-[Service]
-Type=simple
-WorkingDirectory=%h/code/claude-chat-mobile
-ExecStart=%h/.nvm/versions/node/v20.x/bin/node app/server.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
+| 方案 | 要点 |
+| --- | --- |
+| Cloudflare 命名隧道 + Access | 默认路径：固定域名，Access 把守（Email OTP 或 Google / Microsoft 2FA），公网不带 #token= 。产品受管的第三方进程只有 cloudflared |
+| Tailscale | 不经 Cloudflare 时的推荐路径，自带 HTTPS。产品一等支持但不受管：文档配方、向导提示、doctor 检测，不装不起不保活 |
+| 其他加密隧道 / VPN、自建反代 | CF_ACCESS_* 三项留空即整层关闭，server 零改动。托管隧道（ngrok、Quick Tunnel、Tailscale Funnel）归反代一档 |
 
-[Install]
-WantedBy=default.target
-```
+选定后用 `ACCESS_PROFILE` 声明方案（`cloudflare` / `vpn` / `reverse-proxy` / `direct` / `lan`）。它是纯声明，不改变任何运行时行为，但 doctor 与手机端安全体检会按它做针对性检查，与 `CF_ACCESS_*`、`PUBLIC_URL`、通知配置互相矛盾时当场指出。
+
+默认监听 `0.0.0.0`。打算「本机只开 loopback，公网入口完全由自己转发」（SSH `-L`、Tailscale Serve、反代）时，设 `BIND_MODE=loopback` 收窄监听面。不存在「未设令牌就降级绑本机」的路径，缺令牌一律拒绝启动。
 
 ## 运维铁律与管理边界
 
-- 端口防撞： 常驻服务已经占用 3000 端口时，切勿在终端重复敲 npm start 。需要临时排查请在菜单栏点重启或执行 npm run service:restart 。
-- 配置生效时机： 改动 ccm.config.json 中的 PORT 、 AUTH_TOKEN 或 ACCESS_PROFILE 必须重启服务；仅修改 WORKDIRS 工作区列表支持热加载生效。
-- 反代安全配置： 公网反代必须显式设置 ACCESS_PROFILE=reverse-proxy 并声明 TRUSTED_PROXY ，严防客户端伪造 X-Forwarded-For 绕过鉴权。
+- 端口防撞： 桌面端占着 3000 时，不要再手动 npm start 。改了配置或拉了新代码，在菜单里 server 一行点「重启」；headless 在跑 npm start 的那个终端里停掉再起。
+- 配置生效时机： 只有 WORKDIRS 工作区列表热加载（被移除目录上已开的会话继续运行，仅拒新开）；其余配置项改完都要重启服务。
+- 限速来源： 默认不采信任何转发头，反代后面所有公网客户端共用一个登录限速桶；只有显式设 TRUSTED_PROXY=loopback 才采信 loopback 反代追加的 X-Forwarded-For 末跳。它只决定限速怎么分桶，不参与鉴权。
+- 纯 TCP 转发： 本机判据读的是 Host 头，而 Host 由客户端填。用 ssh -R 、frp tcp 这类打洞方式暴露时，设 DEVICE_APPROVAL_SCOPE=all 并重启，让设备审批覆盖全部路径。
+- 通知隐私： ntfy 的正文最小化，但标题带工作区目录名与会话标题，且明文经第三方；请自托管 ntfy，或用私密 topic 加 NTFY_TOKEN 。
 
 
 ---
@@ -1520,64 +1636,81 @@ WantedBy=default.target
 # Chapter: 运维与排错 (第六部分 · 部署与运维)
 
 # 运维与排错
-> 重启、日志轮转、/health /metrics、常见故障。
+> 按入口重启、看日志、两种体检、常见故障。
 
 - **Part**: 第六部分 · 部署与运维
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~991
+- **Estimated Tokens**: ~1660
 
 ---
 
-常驻服务的日常运维速查、高频故障排查树、监控探针与系统体检（Doctor）。修改配置后若未生效，绝大多数情况是未执行服务重启。
+常驻服务的日常运维速查、高频故障排查与两种体检。改了配置不生效，绝大多数情况是没有重启服务。
 
 ## 常用运维指令速查
 
 ```
-# 1. 结构化配置查看与修改
+# 1. 配置查看与修改
 node scripts/config.js get PORT
 node scripts/config.js set ACCESS_PROFILE reverse-proxy
+node scripts/config.js schema
 
-# 2. 全面健康自检
+# 2. 启动自检
 node scripts/doctor.js
 
-# 3. macOS 常驻服务热管理 (LaunchAgent)
-npm run service:status     # 查看当前进程 PID、运行时间与错误码
-npm run service:restart    # 优雅重启服务
-npm run service:logs       # 查看实时日志输出
+# 3. 重启：按你用的那条入口
+#    headless：在跑 npm start 的那个终端里停掉再起
+#    macOS 桌面端：菜单里 server 一行点「重启」，日志用「查看日志」
+#    人在 SSH 里、服务却是桌面端装的：
+npm run service:status
+npm run service:restart -- server
+npm run service:logs -- server
 
-# 4. 设备授权管理
+# 4. 设备
 node scripts/device.js list
 node scripts/device.js approve <DEVICE_ID>
 ```
 
 ## 高频故障排错表
 
-| 故障现象 | 最可能根因 | 排查与修复动作 |
+| 故障现象 | 最可能根因 | 排查与修复 |
 | --- | --- | --- |
-| 外网访问报 502 / 1033 | CCM Server 未启动或隧道未正确映射端口 | 先检查 npm run service:status 确认 Server 在跑；再看 Cloudflare 隧道日志是否输出 Registered tunnel connection |
-| OTP 验证通过但应用连不上 | Cloudflare Access JWT 校验失败 | 在服务端日志搜索 Access JWT ；核对 CF_ACCESS_TEAM 与 AUD 是否与控制台严格匹配 |
-| 修改配置后行为未发生改变 | 常驻进程尚未重载配置 | 执行 npm run service:restart （仅 WORKDIRS 修改支持热重载免重启） |
-| 手机端无法打开且控制台无报错 | 未配置 AUTH_TOKEN | 有意设计 ：未设 Token 时服务恒定仅绑 127.0.0.1 ；需配置有效 Token 并重启 |
-| 新手机接入始终处于 pending | 触发设备信赖门禁 (TOFU) | 在电脑终端敲 node scripts/device.js approve   放行该设备 |
-| 运行耗时任务被中断 | 误碰全局空闲超时 | 检查是否派生子代理；系统依赖 bgTasks 刷新心跳，如无子代理但任务耗时极长，调大 IDLE_TIMEOUT_MS |
+| npm start 立即退出，提示缺令牌 | 没有 AUTH_TOKEN ，它是启动前提 | npm run setup 生成；不存在「不设令牌先绑本机」的路径 |
+| 服务起来了，手机打不开 | 地址或监听面不对 | 同 WiFi 用横幅里的局域网地址，或 node scripts/qr.js 扫码； BIND_MODE=loopback 时手机无法直连，横幅会写明，要自己转发 |
+| 能进页面，但聊不通 | 电脑终端里的 claude 本身跑不通 | 手机上收到的是 CLI 透传的具体报错，说明链路是通的。先在电脑终端、同一工作区目录下把 claude 聊通一轮：官方订阅要 /login ；第三方网关检查 ANTHROPIC_* 写在哪一层，再看 doctor 的 MODEL_SETTINGS |
+| 新手机一直停在待审批 | 设备审批 | node scripts/device.js approve   ，或在跑 npm start 的终端按回车、用菜单栏、在另一台已信任设备上点「准入」 |
+| 公网 502 / 1033 | server 没跑，或隧道挂了 | 看 server 日志并重启；隧道日志里有没有 Registered tunnel connection ；部署机开着全局代理 / VPN 时，给 cloudflared 配直连规则 |
+| OTP 登录过了，但应用连不上 | Access JWT 校验失败 | server 日志搜 [http-auth] 鉴权失败（access_jwt） （socket 握手侧是 [conn] … 握手鉴权 ），核对 CF_ACCESS_TEAM / CF_ACCESS_AUD 与 Cloudflare 应用是否一致 |
+| 改了配置不生效 | 没重启 | 只有 WORKDIRS 热加载，其余都要重启 |
+| Android 收不到推送 | Chromium 系推送经 Google FCM | 订阅那一刻开代理重试；宿主机要能长期访问 Google（失败会出现在抽屉「服务」小节）；不想依赖 Google 就用 ntfy |
+| 第三方网关报 model_not_found | 模型名需要后缀（如  [1m] ） | 在工作区 .claude/settings.local.json 的 env 块写 ANTHROPIC_MODEL ，或在 Web 端 /model   切换 |
+| 回复只有工具卡、没有正文 | 网关可能不流式 | 服务端已有全文兜底；仍复现就带 LOG_STDERR=1 看子进程日志 |
+| 长时间无输出被判挂死 | IDLE_TIMEOUT_MS （默认 10 分钟） | 后台任务运行期间在途轮有看门狗豁免（有上限）；确实需要更长的静默时调大该值 |
 
-## 系统体检：CLI Doctor 与 UI Doctor 的分界
+## 两种体检的分界
 
  
    
     
-#### CLI Doctor (scripts/doctor.js)
+#### CLI doctor（scripts/doctor.js）
 
     
-冷启动前由运维执行：检测配置文件自洽性、本地 `claude` 二进制路径、工作区写权限、端口冲突以及文件安全权限等硬性条件。
+启动前在电脑上跑：配置文件是否自洽、`claude` 路径、工作区与过宽根、端口、配置文件权限（`--fix` 自动收紧）、访问方案与公网配置是否矛盾、Tailscale 检测等硬条件。
 
    
    
     
-#### UI 运行态体检 (doctor-runtime.js)
+#### 手机端安全体检（doctor-runtime.js）
 
     
-服务启动后由 Web/手机端调起：输出脱敏的安全视图，包含 Access 校验生效态、设备审批队列、IPv6 限速分桶状态以及全局 `settings.json` 敏感工具白名单摘要。
+服务启动后在「设置 → 排查」里跑，输出脱敏视图：令牌、监听面、claude 路径、工作区、配置权限、Cloudflare Access、访问方案、Tailscale、设备闸、文件编辑、推送、设备数、模型设置、被环境变量覆盖的键，以及权限放行规则里的危险项。
+
+   
+ 
+
+## 看日志
+
+- 手机上： 「设置 → 排查」能读 server 进程日志（整段脱敏后再切行）、会话日志与安全日志；服务状态面板里有判定化告警与重启记录。
+- 电脑上： headless 就是 npm start 那个终端；桌面端用菜单「查看日志」，或 npm run service:logs -- server 。
 
 
 ---
@@ -1590,7 +1723,7 @@ node scripts/device.js approve <DEVICE_ID>
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1454
+- **Estimated Tokens**: ~1772
 
 ---
 
@@ -1598,8 +1731,9 @@ node scripts/device.js approve <DEVICE_ID>
 
 ## 分支纪律与 Worktree 约定
 
-- 日常开发严格在 dev 分支 ：严禁直接在 master 上提交改动。 master 为发布保护分支，仅在发版时通过 scripts/release.sh 由 dev 执行 fast-forward 合并。
-- 分发裁剪 (Export-Ignore) ：发版会自动通过 git archive 打出纯净安装包。所有新增的测试、门禁脚本必须同步登记至 .gitattributes 的 export-ignore ，防止测试代码混入轻量安装包。
+- 日常改动走 feature 分支 → PR → dev ，每个小改动一个 PR； dev 要求 PR 且 CI 必须绿。GitHub 默认分支是 master ，所以开 PR 必须显式 --base dev 。
+- master 只接受发版 PR ：由 scripts/release.sh 开 dev → master 的 PR，等真 CI 绿后合并（产生 merge commit），再在合并后的 master HEAD 上打 tag、建 Release。开了 enforce_admins ，谁都不能直推； master 上不得出现未发版的提交，因为装机拉的就是它。
+- 分发裁剪 (export-ignore) ：装机的 curl 直接拉 GitHub 对 master 的源码归档，GitHub 现场 git archive 并遵守 .gitattributes ；发版不打包、不上传资产。一条 /tests/** 前缀就裁掉了全部用例、测试基建与门禁，所以 新增的测试与门禁文件只要落在 tests/ 下就自动覆盖 ，不用逐个登记。例外： scripts/doc-consistency.js 与 scripts/collect-source-files.js 被 doctor import，不能移进 tests/ 。
 - 常驻 Worktree 物理外置 ：其他分支（如 gh-pages 、 promo 等）常驻于与主仓平级的兄弟目录（如 ../claude-chat-mobile-gh-pages ），物理上不在源码树内，杜绝搜索和工具扫描污染。
 
 ## 自动化测试执行槽 (S0–S7) 与防假绿
@@ -1621,18 +1755,15 @@ node scripts/device.js approve <DEVICE_ID>
 
 ## 代码决策留痕与 Git Commit 规范
 
-根据工作宪法，开发会话会定期清理，而 Git 历史永久留存。重要架构取舍直接记录在 Commit Message 的 Trailer 中，不新增多余的设计文档：
+会话日志只在本机，commit 跟着仓库走，所以取舍与验证过程写进 commit message 的 trailer，不新增一次性的设计文档（`repo-inventory` 闸也会拦下审计报告、进度笔记这类文件）。两侧验收的证据写在 `Tested:` 里：注入了什么、哪一条红了。下面的 trailer 取自产品仓 `docs/testing.md`：
 
 ```
-feat(auth): 引入 IPv6 /64 分桶聚合限速机制
-
-对同一 /64 子网的入向请求聚合至单桶，防御动态轮换 IPv6 绕过策略。
-
-Constraint: 不引入外部 Redis，完全基于进程内 LRU Map 实现
-Rejected: 按单一完整 IPv6 限速（极易被攻击者动态前缀绕过）
-Tested: tests/unit/auth-rate-limit.test.mjs 注入单 IP 测试变红，/64 聚类通过
-Not-tested: 超过 10 万并发连接下的内存极限水线
+Tested: 注入 `live: 0` 到 app.js:3322 → unread-on-entry 精确红 1 条（"后台累积的未读必须随 ack 带回，实际 0"）
+Tested: 容器全链五段 rc=0（unit 3570 / invariants 532 / :server 53 / :env 13 / integration 101）
+Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 ```
+
+有取舍时再加 `Constraint:`（限制方案选择的外部条件）与 `Rejected:`（否决的方案及原因）。写「已做双向验收」零成本，写不出「注入了什么、哪一条红了」就是没做。
 
 
 ---
@@ -1645,11 +1776,11 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1478
+- **Estimated Tokens**: ~1787
 
 ---
 
-入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（当前基线：出向类型 **31** 种、入向事件 **57** 种）。
+入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **58** 种；最新发布版 v1.12.1 的入向为 57 种，差的是 `user:autoContinue`）。
 
 ## 出向 agent:event 契约类型 (31 种)
 
@@ -1667,14 +1798,14 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 | 设备门禁 | device_status 、 pending_devices 、 trusted_devices | 当前设备认证态、待审批新设备清单与已信任设备表 |
 | 错误处理 | error 、 system | 业务异常与系统级别通知提示 |
 
-## 入向 Socket 契约事件 (57 种)
+## 入向 Socket 契约事件 (58 种)
 
 由客户端主动发往服务端的事件总线，受 `tests/gates/contract-check.js` 门禁进行双向严格比对校验：
 
 | 业务领域 | 包含的入向事件 |
 | --- | --- |
 | 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm |
-| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing permissions:rules |
+| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮，dev 已合入、尚未发版） permissions:rules |
 | 设备与状态同步 | user:approveDevice user:denyDevice user:renameTrustedDevice user:revokeTrustedDevice connect:qr sync:since mirror:syncNow conn:ping client:presence |
 | 已读位点共享 | read:mark read:sync user:ackUnread |
 | 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read |
@@ -1686,10 +1817,11 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 
 | 端点路径 | 请求方法 | 鉴权与功能说明 |
 | --- | --- | --- |
-| /health | GET | 受 AUTH_TOKEN 鉴权保护，输出服务健康状况 JSON |
-| /metrics | GET | 受 AUTH_TOKEN 鉴权保护，输出内存指标快照（零外部泄露） |
-| /push/vapid-public-key | GET | 获取浏览器 Web Push 所需的 VAPID 公钥 |
-| /push/subscribe | POST | 保存移动端生成的推送订阅凭据 |
+| /health | GET | 过鉴权（令牌，或公网 Host 上的 Access JWT），输出服务健康状况 JSON；含 versions.server 与运行态 |
+| /metrics | GET | 过鉴权；进程内计数的 JSON 快照，不是 Prometheus 文本，重启清零 |
+| /push/vapid-public-key | GET | 过鉴权；推送未配置时返回 503 |
+| /push/subscribe | POST | 过鉴权，且设备须已被信任（或属于 Access 已验 / 真本机直连这类免审批连接）；保存这台设备的推送订阅 |
+| /push/unsubscribe | POST | 与订阅同一道设备判据；只摘掉请求里点名的那一条 endpoint，不清空全表 |
 
 
 ---
@@ -1702,40 +1834,56 @@ Not-tested: 超过 10 万并发连接下的内存极限水线
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1163
+- **Estimated Tokens**: ~2483
 
 ---
 
-配置体系以仓库顶级根目录的 `ccm.config.json`（单一真相源 Schema 由 `app/src/ops/env-schema.js` 定义）与 `config-file.js` 为准。传统 `.env` 仍受向后兼容支持，新文件存在时优先。
+配置统一放在仓库根的 `ccm.config.json`，Schema 的单一事实源是 `app/src/ops/env-schema.js`，读写与类型归一在 `app/src/ops/config-file.js`。旧版 `.env` 仍受支持：新文件存在时优先，缺失才回落。环境变量始终压过配置文件。下表只列常用项，完整清单以 `node scripts/config.js schema` 的输出为准。
 
-## 核心配置项全览
+## 核心配置项
 
-| 配置键名 | 默认值 / 类型 | 功能与安全语义 | 生效与重载机制 |
+| 配置键名 | 默认值 / 类型 | 功能与安全语义 | 生效方式 |
 | --- | --- | --- | --- |
-| AUTH_TOKEN | 必填随机字符串 | 核心共享密钥；未配置时服务恒定只绑定 127.0.0.1 | 需重启生效 |
-| PORT | 3000 (number) | 服务监听端口 | 需重启生效 |
-| ACCESS_PROFILE | lan (enum) | 网络拓扑： cloudflare （Cloudflare 隧道）、 reverse-proxy （纯反代）或 lan | 需重启生效 |
-| WORKDIRS | [] (string[]) | 工作区白名单路径数组 | 支持热重载 (Hot Reload) ，修改保存即刻生效 |
-| TRUSTED_PROXY | '' / 'loopback' (enum) | 采信 loopback 反代追加的 X-Forwarded-For 末跳（AUTH-04）；默认空不采信任何头 | 需重启生效 |
-| CCM_DATA_DIR | ./data (path) | 持久化控制面数据根目录（建议生产外置绝对路径） | 需重启生效 |
-| CLAUDE_BIN | which claude (path) | 本机 claude CLI 可执行二进制物理路径 | 需重启生效 |
-| IDLE_TIMEOUT_MS | 600000 (ms) | 长耗时无输出任务的静默看门狗超时时间（默认 10 分钟） | 需重启生效 |
-| INSTANCE_IDLE_RECLAIM_MS | 1800000 (ms) | 空闲 AgentSession 内存回收超时时间（默认 30 分钟） | 需重启生效 |
-| APPROVAL_TTL_MS | 1800000 (ms) | 移动端工具审批卡片未决定的失效过期超时 | 需重启生效 |
-| NOTIFY_THROTTLE_MS | 60000 (ms) | 同一会话连续通知的防轰炸抑制窗口 | 需重启生效 |
-| CF_ACCESS_HOSTNAME / CF_ACCESS_TEAM / CF_ACCESS_AUD | 空 (string) | Cloudflare Access 三项配置，三项同时设置或同时留空 | 需重启生效 |
-| VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT | 空 (string) | Web Push 协议所需的公私钥与联系主题，三项全齐才启用 | 需重启生效 |
-| NTFY_URL / NTFY_TOPIC / NTFY_TOKEN | 空 (string) | ntfy 服务的地址、主题与私有凭据 | 需重启生效 |
+| AUTH_TOKEN | 必填随机字符串（面板只读） | 访问令牌。留空服务拒绝启动，任何访问都要令牌，本机也一样；更换请在电脑上跑 npm run setup | 需重启 |
+| PORT | 3000 | 监听端口 | 需重启 |
+| BIND_MODE / BIND_HOST | 空（= 对外监听 0.0.0.0 ） | loopback ：只监听 127.0.0.1，自己用 SSH / Tailscale / 反代转发； lan ：对外监听； custom ：配合 BIND_HOST 指定地址，填 :: 为 IPv6 双栈。缺令牌时没有降级绑本机的路径 | 需重启 |
+| ACCESS_PROFILE | 空（未声明） | 声明从手机怎么访问： cloudflare / vpn / reverse-proxy / direct / lan 。纯声明，不改变运行时行为；doctor 与手机端安全体检据此做针对性检查。托管隧道归 reverse-proxy | 需重启 |
+| WORKDIRS | 列表（绝对路径或 {path, sessionLimit} ） | 工作区白名单， 第一项就是手机端默认打开的目录 。不能填家目录本身，也不能填 / 、 /Users 、 /home 这类过宽的根。旧的单值 WORK_DIR 已并入首项；旧版 WORK_DIRS_FILE 指向外部 workdirs.json ，挂着时拒写 WORKDIRS | 热加载 ：改完即生效，被移除目录上已开的会话继续运行、仅拒新开 |
+| DEVICE_APPROVAL_SCOPE | 空 | 默认：经 Cloudflare Access 验过的连接跳过设备审批。 all ：所有路径都要审批，含 Access 与本机样 Host；用 ssh -R 、frp tcp 这类纯 TCP 转发暴露时必需，因为 Host 是客户端自己填的头 | 需重启 |
+| TRUSTED_PROXY | 空 | 默认不采信任何转发头，反代下所有公网客户端共用一个登录限速桶； loopback ：采信 loopback 反代追加的 X-Forwarded-For 末跳（AUTH-04）。只决定限速分桶，不参与鉴权 | 需重启 |
+| CCM_DATA_DIR | ./data | 控制面数据根（会话指针、设备信任、审批、审计、推送、附件、缓存），建议生产外置为仓库外的绝对路径。它不在 Schema 里：可写进 ccm.config.json 或设为环境变量，但 config set 与面板写不了 | 需重启 |
+| CLAUDE_BIN | 空（从 PATH 查找） | claude 可执行文件路径 | 需重启 |
+| FILE_EDIT | 开 | 内置文件编辑器直写。它 不经过 Agent 的工具审批链 （有范围校验、大小限制、哈希冲突检测与审计）；设 off 关闭，长期公网暴露建议关 | 需重启 |
+| CCM_AUTO_CONTINUE_AT_LIMIT | 开（dev 已合入，尚未发版） | 撞上用量额度墙后，到重置时刻自动发一句「继续」。重置点远于 24 小时只给按钮；上游只回 429、不给重置时间时无法自动继续；等待期间重启服务会作废。设 0 关闭，撞墙时仍有按钮可点 | 需重启 |
+| IDLE_TIMEOUT_MS | 600000（10 分钟） | 无输出判挂死 | 需重启 |
+| INSTANCE_IDLE_RECLAIM_MS | 1800000（30 分钟） | 空闲 AgentSession 实例回收；0 为不回收 | 需重启 |
+| APPROVAL_TTL_MS | 1800000（30 分钟） | 审批卡未决定时自动过期 | 需重启 |
+| NOTIFY_THROTTLE_MS | 60000 | 同类通知最小间隔，可显式设为 0 | 需重启 |
+| SESSION_DELETE_QUIET_MS | 300000（5 分钟） | 彻底删除会话前的静默期，可显式设为 0 | 需重启 |
+| PUBLIC_URL | 空 | 通知深链用的公网地址。配了 Cloudflare Access 时留空回退到它的域名；Tailscale / 反代 / 直连必须填手机可达的 https 地址，否则通知能收到、点开不跳转 | 需重启 |
+| CF_ACCESS_HOSTNAME / CF_ACCESS_TEAM / CF_ACCESS_AUD | 空 | Cloudflare Access 三项，三项同时设置或同时留空；留空即整层关闭 | 需重启 |
+| VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT | 空 | Web Push 的公私钥与联系主题，三项全齐才启用 | 需重启 |
+| NTFY_URL / NTFY_TOPIC / NTFY_TOKEN | 空 | ntfy 的地址、主题与私有凭据；标题带工作区与会话标题，请自托管或用私密 topic | 需重启 |
+
+## 几条读写规则
+
+- 优先级： shell 环境变量 > 配置文件 > 内置默认。 ANTHROPIC_* 只认真实的 shell export 或 CLI settings 文件的 env 块；写进 ccm.config.json / .env 会在启动期被剥除，并在启动日志里逐个点名。
+- 读写同源： 面板与 CLI 写入的文件必须与启动时读的是同一份，写错源不报错而是「假成功」。 CCM_CONFIG_FILE_PATH / CCM_ENV_FILE_PATH 可覆盖配置文件路径，启动侧与写入侧都认。
+- 未登记的键读宽写严： 读取侧原样放进 process.env （claude 子进程继承， HTTPS_PROXY 、 CLAUDE_CONFIG_DIR 这类才有效）；写入侧只认 Schema 登记过的可写键。
+- 迁移是显式动作： 没有代码路径会自动创建 ccm.config.json ，只有 setup 与 config migrate 会写。
 
 ## CLI 配置管理工具
 
-在无头（Headless）服务器上，推荐通过官方 CLI 脚本统一管理配置，避免手写 JSON 产生语法错误：
+在无头服务器上，推荐用配置 CLI 统一管理，避免手写 JSON 出错：
 
 ```
-node scripts/config.js get <KEY>           # 读取配置项值（秘密值默认打码）
-node scripts/config.js get <KEY> --reveal  # 明文读取 Token 等机密信息
-node scripts/config.js set <KEY> <VALUE>   # 经过 Schema 严格校验后写入配置
-node scripts/config.js check               # 校验当前配置是否符合 Schema 规范
+node scripts/config.js schema              # 打印当前全部配置项定义
+node scripts/config.js get <KEY>           # 读取配置项（秘密值默认打码）
+node scripts/config.js get <KEY> --reveal  # 明文读取令牌等秘密值，须显式带 --reveal
+node scripts/config.js set <KEY> <VALUE>   # 经 Schema 校验后写入
+node scripts/config.js unset <KEY>
+node scripts/config.js check               # 校验当前配置
+node scripts/config.js migrate             # 从旧版 .env 迁到 ccm.config.json
 ```
 
 
@@ -1749,33 +1897,56 @@ node scripts/config.js check               # 校验当前配置是否符合 Sche
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~1153
+- **Estimated Tokens**: ~2207
 
 ---
 
-下列条目是文档、注释与当前真实生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码实现与本手册的最新记录为基线。
+下列条目是文档、注释与当前生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码为准。本页于 2026-09-24 随手册 v2.1 刷新，基线 dev@3f488861。
 
-## 已知漂移与历史修正清单
+## 2026-09-24 刷新时修正的漂移
 
-| 关注领域 | 陈旧文档/历史描述 | 代码最新事实（以此为准） | 影响与说明 |
+| 关注领域 | 旧描述 | 代码最新事实（以此为准） | 影响与说明 |
 | --- | --- | --- | --- |
-| 源码目录重构 | 旧文档大量引用 src/** 与 public/** | 运行时代码已全部迁入 app/ （ app/src/ 与 app/public/ ） | 计算项目根路径需上溯三层，防止数据写到 app/data |
-| 思考强度调整机制 | 旧手册声称 effort 无法动态修改，切档必须重建实例 | SDK 0.3.263 支持 applyFlagSettings({effortLevel}) 实时生效 | 彻底废弃实例销毁重建的低效方案 |
-| 附件物理存放位置 | 旧文档描述附件存放在工作区 .ccm-uploads/ | 附件已搬迁至 data/uploads/ / 受管数据根目录 | 旧目录仅作只读回退，避免污染用户代码仓库的 Git 树 |
-| 配置格式与单一源 | 旧文档以 .env 为主要配置说明 | 以根目录 ccm.config.json 结构化配置为首要真相源，优先于 .env | 由 config-file.js 统管读写，支持工作区热加载 |
-| 契约事件数量统计 | 旧手册记录入向 32 种、出向 25 种 | 基线已演进为： 出向 31 种，入向 57 种 | 新增了已读共享、设备管理、文件检索等大量双向事件 |
-| 测试运行安全防线 | 旧指南未限制宿主机测试范围 | 落地 guard-host-tests 门禁，宿主机只允许跑 4 类白名单命令 | 可能破坏数据的测试一律强制进 Docker 沙箱执行 |
-| 多租户与产品立场 | 偶有讨论多租户扩展的提案 | 确立硬性规则 hard-rules.md 与产品宪法 C1–C5，坚决不做多租户 | 杜绝一切向 SaaS 模式演化的复杂设计 |
+| 安装方式 | git clone + npm install | 用户装机拉 GitHub 对 master 的源码归档， npm ci --omit=dev ； git clone 留给要改代码、跑测试的人 | 归档里没有测试树与门禁， npm run check 等只在完整仓库可用 |
+| 无令牌时的行为 | 「未设 AUTH_TOKEN 时只绑定 127.0.0.1」 | 令牌是启动前提：缺令牌在 listen 之前就拒绝启动；监听面由 BIND_MODE 决定 | 不存在「本地免鉴权」 |
+| 启动横幅 | 打印带完整令牌的访问 URL | 任何情况下都只显示掩码；免手输改用 node scripts/qr.js | 2026-09-17 安全审查 |
+| 第三方网关配置 | 「必须在启动 server 的 shell 里 export ANTHROPIC_* 」 | 推荐写在 CLI settings 文件的 env 块，桌面端拉起的常驻服务也认；shell export 只对 headless 有效 | 写进 ccm.config.json 的 ANTHROPIC_* 仍会被剥除 |
+| ACCESS_PROFILE | 三候选，决定鉴权与反代采信分支 | 五个取值的纯声明，只供 doctor 与安全体检；鉴权按请求的 Host 分支 | TRUSTED_PROXY 只决定限速分桶 |
+| 默认工作区 | WORK_DIR ，未配置时回落 | WORKDIRS 第一项；静默回落家目录的路径已删除，过宽的根一律拒绝 | — |
+| 回退入口 | 长按用户气泡 | /rewind 两步面板（2026-09-20）；assistant 气泡常驻「分叉」入口 | Web 回退分叉出新会话，原会话不动 |
+| 会话隐藏（L1） | 左滑隐藏，仍可找回 | 已移除；只剩关闭与彻底删除（两道保护） | — |
+| 已读位点存放 | 写在 sessions.json | 单独的 read-state.json | — |
+| 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 58（+ user:autoContinue ）；最新发布版 v1.12.1 仍为 57 | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
+| Agent SDK 版本 | 0.3.263 | dev 为 0.3.278；v1.12.1 为 0.3.263 | — |
+| 分支与发版 | 日常在 dev 直接开发，master 由 dev fast-forward | feature 分支 → PR → dev；master 只接 release.sh 开的发版 PR，合并后打 tag | master 上不得有未发版提交 |
+| 「产品宪法 C1–C5」 | 手册自编的五条，并注明「见 hard-rules.md」 | 产品仓文档里没有这个标签；对应内容是 hard-rules §1 的产品边界，已在「职责边界」页按原文重写 | 「不做」清单的编号同样改用 hard-rules §5 的真实 ID |
 
-## 关于历史 design.md 标记的说明
+## 早先已登记的漂移
 
-在现有代码的注释中，可能依然能看到类似 `// 守护：SRV-003` 或引用 `docs/design.md` 的注释。这是早期架构演进留下的历史溯源锚点。历史设计文档本身早已废弃并删除，代码中的规则守护全部由 `tests/README.md` 中的不变量编号体系接管，切勿将其当作仍存在的文档路径。
+| 关注领域 | 陈旧描述 | 代码事实 | 影响与说明 |
+| --- | --- | --- | --- |
+| 源码目录 | 旧文档大量引用 src/** 与 public/** | 运行时代码在 app/ （ app/src/ 与 app/public/ ） | 计算项目根要上溯三层，防止数据写到 app/data |
+| 思考强度调整 | effort 不能动态修改，切档必须重建实例 | 经控制请求 applyFlagSettings 即刻生效，回合进行中也能切 | 只有切回「没指定」才需要重开实例 |
+| 附件存放 | 工作区下的 .ccm-uploads/ | $CCM_DATA_DIR/uploads/ / | 旧目录既不迁移也不删除，历史预览自动回落 |
+| 配置格式 | 以 .env 为主 | ccm.config.json 优先，缺失才回落 .env | 由 config-file.js 统管读写 |
+| 测试运行安全 | 未限制宿主机测试范围 | guard-host-tests 白名单 + 破坏性测试目录的执行位守卫 | 可能破坏数据的测试一律进容器 |
+| 产品立场 | 偶有多租户扩展的提案 | hard-rules 明确 n=1 自托管，不做多租户 | 要改先改 hard-rules 的立场 |
+
+## 产品仓自身的文档漂移（待修）
+
+- README.md / README.en.md 的对照表仍写「长按消息：回退 / 分叉」。回退已改走 /rewind ，分叉是 assistant 气泡上的常驻入口。
+- docs/architecture.md 第 81 行 仍写「长按 user 气泡 → 回退到此轮前」，同上。
+
+## 关于历史 design.md 标记
+
+代码注释里仍能看到 `// 守护：SRV-003` 这类编号，或指向 `docs/design.md` 的引用。前者由 `tests/README.md` 的不变量编号体系接管；后者是早期设计文档留下的溯源锚点，文件本身早已删除，不要当成仍存在的文档路径。
 
 ## 手册维护约定
 
-- 本手册生成物部署于 gh-pages 分支，不随 dev 主分支自动无感更新。
-- 在后续的迭代中，如果生产代码发生结构性变更，必须优先将真实代码行为登记于本漂移清单，再更新全书正文。
-- 严禁通过修改文档来掩盖代码实际存在的行为缺陷。
+- 手册部署在 gh-pages 分支，不随 dev 自动更新。刷新时先对照 CHANGELOG 里自上次基线以来的各版本，再逐页核对正文。
+- audit-consistency.cjs 只能证明手册引用的路径、配置项、事件名与 npm 脚本还存在，查不出「描述过时」「漏写新功能」「数字不对」这类漂移；它还把仓库根写死为主工作树，核对最新 dev 时要指向一份最新检出。
+- 生产代码有结构性变更时，先把真实行为登记进本清单，再更新正文。
+- 不通过修改文档来掩盖代码实际存在的缺陷。
 
 
 ---

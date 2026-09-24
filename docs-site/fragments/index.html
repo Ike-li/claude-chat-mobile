@@ -5,8 +5,8 @@
   <h1>封面与导读</h1>
   <p class="lead">Claude Chat Mobile 项目全景手册：认识项目、阅读路线与事实基线。</p>
 </header>
-<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-09-08">手册 v2.0 更新于 2026-09-08</time> · 源码基线 dev@687bca3 · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
-<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机已登录的 <code>claude</code> CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
+<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-09-24">手册 v2.1 更新于 2026-09-24</time> · 源码基线 dev@3f488861 · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
+<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机的 <code>claude</code> CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
 
 <div class="statband">
   <div class="stat"><div class="num">1</div><div class="lbl">用户 / 实例 (n=1)</div></div>
@@ -22,7 +22,7 @@
 </div>
 
 <h2>这本手册从哪来</h2>
-<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>687bca3</code>）。仓库采用产品宪法 C1–C5 与硬性规则治理（详见 <code>docs/hard-rules.md</code> 与 <code>docs/architecture.md</code>），本手册按真实运行代码与架构契约重叙述，不照搬历史陈旧文档。</p>
+<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>3f488861</code>；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 <code>docs/hard-rules.md</code>（产品边界、n=1 取舍、架构不变量、已决不做）与 <code>docs/architecture.md</code> 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。</p>
 
 <div class="callout warn"><div class="body">
 <strong>事实基线约定</strong>手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 <code>tests/gates/</code> 门禁为准，并应在<a href="drift.html">漂移清单</a>中透明登记。
@@ -45,10 +45,10 @@
 <thead><tr><th>层级</th><th>技术选型</th><th>关键特性</th></tr></thead>
 <tbody>
 <tr><td>运行时</td><td>Node ≥20 · ESM · Express 5 · Socket.IO 4</td><td>三层架构，前后端零构建纯 ESM</td></tr>
-<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.263</td><td>双向流控制，驱动本机已登录的 <code>claude</code> CLI</td></tr>
+<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.278（v1.12.1 为 0.3.263）</td><td>双向流控制，驱动本机的 <code>claude</code> CLI</td></tr>
 <tr><td>配置与运维</td><td><code>ccm.config.json</code> · <code>env-schema.js</code></td><td>统一结构化配置、热重载工作区、统一读写源</td></tr>
-<tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>单用户强制 Token，非本地网络设备指纹审批</td></tr>
-<tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批/提问无条件推送，前台可见连接智能抑制</td></tr>
+<tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外）</td></tr>
+<tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制</td></tr>
 <tr><td>测试与门禁</td><td><code>node --test</code> · Playwright · 宿主机白名单</td><td>S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作</td></tr>
 <tr><td>开源许可</td><td>Apache-2.0 · NOTICE 归属声明</td><td>可自由自托管、商用与闭源再分发</td></tr>
 </tbody>

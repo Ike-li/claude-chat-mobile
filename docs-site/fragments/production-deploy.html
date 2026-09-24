@@ -1,61 +1,66 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">生产形态是基于登录 Shell 托管的常驻守护进程与端到端安全网络通道：确保关掉终端终端后台不掉线，自动维持与电脑终端完全一致的 <code>PATH</code>、环境变量与登录凭据。</p>
+<p class="lead-extra">生产形态是一个常驻的 server 进程加一条公网入口。启动只有两条入口：headless 终端里 <code>npm start</code>（全平台基线，保活方式自己定），或 macOS 菜单栏应用 CCM.app。Cloudflare Tunnel / Access 这些是公网怎么进来，不是第三条启动方式。</p>
 
 <h2>生产架构拓扑</h2>
 <div class="mermaid">
 flowchart LR
-  Phone["手机端 PWA"] --> PublicEdge["公网边界 (Cloudflare / 反向代理)"]
-  PublicEdge -->|"加密隧道 / 反代"| Local["localhost:3000"]
-  Local --> CCMServer["CCM 常驻服务 (LaunchAgent / systemd)"]
+  Phone["手机端 PWA"] --> PublicEdge["公网入口 (Cloudflare Access / 加密隧道 / 反代)"]
+  PublicEdge -->|"隧道 / 反代"| Local["localhost:3000"]
+  Local --> CCMServer["CCM server (经登录 shell 启动)"]
   CCMServer --> NativeCLI["本机 claude CLI & 宿主环境"]
 </div>
 
 <div class="kv">
-  <div class="row"><div class="key">公网入口</div><div class="val">通过 Cloudflare Access（2FA）或独立反向代理直连</div></div>
-  <div class="row"><div class="key">局域网 / 本机</div><div class="val">内网可直接通过 <code>http://&lt;lan-ip&gt;:3000/#token=...</code> 连入</div></div>
-  <div class="row"><div class="key">常驻守护</div><div class="val">通过 macOS LaunchAgent 或 Linux systemd，支持崩溃自愈与开机自启</div></div>
+  <div class="row"><div class="key">公网基线</div><div class="val"><code>AUTH_TOKEN</code> + 逐设备审批，对所有拓扑相同。Cloudflare Access 是可选加层：开着时它管的公网 Host 改认 Access 身份，替代令牌，缺省也替代设备审批</div></div>
+  <div class="row"><div class="key">局域网 / 本机</div><div class="val"><code>http://&lt;lan-ip&gt;:3000/#token=…</code> 走 <code>AUTH_TOKEN</code>，新设备首次仍要批准</div></div>
+  <div class="row"><div class="key">常驻</div><div class="val">macOS 用 CCM.app（崩溃拉起、开机自启、日志、重启都在菜单里）；其他平台 headless <code>npm start</code>，保活用 tmux、自己的 systemd 或 docker 都行，仓库不提供官方 unit</div></div>
+  <div class="row"><div class="key">控制面数据</div><div class="val">长期实例建议把 <code>CCM_DATA_DIR</code> 设成仓库外的绝对路径，免得切分支、清理仓库碰到生产状态；文件保持 <code>0600</code></div></div>
 </div>
 
-<h2>macOS 生产常驻与菜单栏应用 (CCM.app)</h2>
-<p>在 macOS 上，推荐使用项目原生提供的两套生产管理入口：</p>
+<h2>macOS：菜单栏应用 CCM.app</h2>
 <ol class="steps">
-  <li><strong>原生状态栏应用 CCM.app：</strong>
-<pre><code># 编译并安装原生 Swift 菜单栏应用至 /Applications/CCM.app
+  <li><strong>安装：</strong>
+<pre><code># 编译 Swift 菜单栏应用并装进 /Applications/CCM.app
 npm run app:install</code></pre>
-  支持在系统顶部菜单栏一键查看 Server 状态、一键重启、一键扫码在手机打开当前会话，并支持工作区快速切换。
+  菜单里安装并启动 server，需要的话勾「开机自启（菜单栏）」。菜单栏还能重启 server、查看日志、批准或吊销设备、弹出连接二维码（扫码带着令牌进 Web UI；PNG 由 <code>qr.js</code> 在自己的进程里渲染，令牌明文不进菜单栏进程）。
   </li>
-  <li><strong>标准常驻服务 CLI 驱动：</strong>
-<pre><code>npm run service:install   # 渲染 plist 模板并注册入 launchd 系统服务
-npm run service:status    # 检查服务运行态、PID 与日志位置
-npm run service:restart   # 一键热重启常驻服务进程</code></pre>
+  <li><strong>它背后的 CLI（一般不用手敲，不是第三条入口）：</strong>
+<pre><code>npm run service:install -- server   # 渲染 plist 并注册 launchd，RunAtLoad + KeepAlive
+npm run service:status              # 各 unit 运行态、归属与漂移
+npm run service:restart -- server
+npm run service:logs -- server
+npm run service:adopt -- server     # 接管手工装的 plist：只写 manifest，不碰 plist</code></pre>
+  装出来的 label 固定是 <code>com.ccm.&lt;unit&gt;</code>，状态、接管与桌面端都只扫这个前缀。
   </li>
 </ol>
 
 <div class="callout warn"><div class="body">
-<strong>macOS 常驻启动命令约束</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令为 <code>exec &lt;node&gt; app/server.js</code>，必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码逐字严格一致，改动一侧必须同步另一侧。
+<strong>macOS 常驻启动命令约束</strong><code>desktop/launchd/server.plist.template</code> 中的启动命令为 <code>exec &lt;node&gt; app/server.js</code>，必须与 <code>app/src/ops/service-units.js</code> 解析常驻进程后缀的代码逐字严格一致，改动一侧必须同步另一侧，否则服务面板的 repo / node 恒为 null。
 </div></div>
 
-<h2>Linux 常驻部署 (systemd)</h2>
-<p>在 Linux 服务器或无头工作站上，建议注册为 systemd 用户服务（<code>~/.config/systemd/user/ccm.service</code>）：</p>
-<pre><code>[Unit]
-Description=Claude Chat Mobile Service
-After=network.target
+<h2>Linux 与其他平台：headless</h2>
+<p>终端里 <code>npm start</code>，窗口别关；要关终端也能活，用你自己的保活方式。项目不替用户决定怎么后台运行，macOS 之外不做官方常驻适配。桌面端和 <code>npm start</code> 都要用户登录后的会话，开机未登录就跑不在这两条入口里。server 要经登录 shell 启动，才能让 claude 的 <code>PATH</code> 与登录态和你的终端一致。</p>
 
-[Service]
-Type=simple
-WorkingDirectory=%h/code/claude-chat-mobile
-ExecStart=%h/.nvm/versions/node/v20.x/bin/node app/server.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=default.target</code></pre>
+<h2>公网入口怎么选</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>方案</th><th>要点</th></tr></thead>
+<tbody>
+<tr><td>Cloudflare 命名隧道 + Access</td><td>默认路径：固定域名，Access 把守（Email OTP 或 Google / Microsoft 2FA），公网不带 <code>#token=</code>。产品受管的第三方进程只有 <code>cloudflared</code></td></tr>
+<tr><td>Tailscale</td><td>不经 Cloudflare 时的推荐路径，自带 HTTPS。产品一等支持但不受管：文档配方、向导提示、doctor 检测，不装不起不保活</td></tr>
+<tr><td>其他加密隧道 / VPN、自建反代</td><td><code>CF_ACCESS_*</code> 三项留空即整层关闭，server 零改动。托管隧道（ngrok、Quick Tunnel、Tailscale Funnel）归反代一档</td></tr>
+</tbody>
+</table>
+</div>
+<p>选定后用 <code>ACCESS_PROFILE</code> 声明方案（<code>cloudflare</code> / <code>vpn</code> / <code>reverse-proxy</code> / <code>direct</code> / <code>lan</code>）。它是纯声明，不改变任何运行时行为，但 doctor 与手机端安全体检会按它做针对性检查，与 <code>CF_ACCESS_*</code>、<code>PUBLIC_URL</code>、通知配置互相矛盾时当场指出。</p>
+<p>默认监听 <code>0.0.0.0</code>。打算「本机只开 loopback，公网入口完全由自己转发」（SSH <code>-L</code>、Tailscale Serve、反代）时，设 <code>BIND_MODE=loopback</code> 收窄监听面。不存在「未设令牌就降级绑本机」的路径，缺令牌一律拒绝启动。</p>
 
 <h2>运维铁律与管理边界</h2>
 <ul>
-  <li><strong>端口防撞：</strong>常驻服务已经占用 3000 端口时，切勿在终端重复敲 <code>npm start</code>。需要临时排查请在菜单栏点重启或执行 <code>npm run service:restart</code>。</li>
-  <li><strong>配置生效时机：</strong>改动 <code>ccm.config.json</code> 中的 <code>PORT</code>、<code>AUTH_TOKEN</code> 或 <code>ACCESS_PROFILE</code> 必须重启服务；仅修改 <code>WORKDIRS</code> 工作区列表支持热加载生效。</li>
-  <li><strong>反代安全配置：</strong>公网反代必须显式设置 <code>ACCESS_PROFILE=reverse-proxy</code> 并声明 <code>TRUSTED_PROXY</code>，严防客户端伪造 <code>X-Forwarded-For</code> 绕过鉴权。</li>
+  <li><strong>端口防撞：</strong>桌面端占着 3000 时，不要再手动 <code>npm start</code>。改了配置或拉了新代码，在菜单里 server 一行点「重启」；headless 在跑 <code>npm start</code> 的那个终端里停掉再起。</li>
+  <li><strong>配置生效时机：</strong>只有 <code>WORKDIRS</code> 工作区列表热加载（被移除目录上已开的会话继续运行，仅拒新开）；其余配置项改完都要重启服务。</li>
+  <li><strong>限速来源：</strong>默认不采信任何转发头，反代后面所有公网客户端共用一个登录限速桶；只有显式设 <code>TRUSTED_PROXY=loopback</code> 才采信 loopback 反代追加的 <code>X-Forwarded-For</code> 末跳。它只决定限速怎么分桶，不参与鉴权。</li>
+  <li><strong>纯 TCP 转发：</strong>本机判据读的是 Host 头，而 Host 由客户端填。用 <code>ssh -R</code>、frp tcp 这类打洞方式暴露时，设 <code>DEVICE_APPROVAL_SCOPE=all</code> 并重启，让设备审批覆盖全部路径。</li>
+  <li><strong>通知隐私：</strong>ntfy 的正文最小化，但标题带工作区目录名与会话标题，且明文经第三方；请自托管 ntfy，或用私密 topic 加 <code>NTFY_TOKEN</code>。</li>
 </ul>

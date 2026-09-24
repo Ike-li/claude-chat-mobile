@@ -8,58 +8,58 @@
 ## Primary Documents & Specs
 - [Project Overview](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.md): Core positioning, architecture, tech stack & fragile points
 - [System Architecture](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.md): Web & CLI dual-channel model, single-driver state machine & import boundaries
-- [Security Model](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.md): Mandatory token, ACCESS_PROFILE 3 topologies & device TOFU
+- [Security Model](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.md): Mandatory token, host-based auth strategy, device approval & DEVICE_APPROVAL_SCOPE
 - [Configuration Reference](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): Single source of truth schema for ccm.config.json & runtime options
 - [Architecture Evolution](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): Key decisions (sandbox isolation, access topology, tail attribution)
 - [Project Rules & Testing](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): Host command whitelist, S0-S7 execution slots & commit trailers
-- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 31 outbound agent:event types & 57 inbound socket events
+- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 31 outbound agent:event types & 58 inbound socket events
 - [Drift Notice](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): Documented reality vs code facts
 
 ## Full Handbook Pages (Markdown)
 
 ### 起点
-- [封面与导读](https://ike-li.github.io/claude-chat-mobile/docs-site/index.md): 一句话认识项目，看清这本手册怎么读。 (Tokens: ~1536)
-- [阅读顺序指南](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/reading-guide.md): 主线通读、30 分钟速览、按角色切入。 (Tokens: ~1331)
+- [封面与导读](https://ike-li.github.io/claude-chat-mobile/docs-site/index.md): 一句话认识项目，看清这本手册怎么读。 (Tokens: ~1604)
+- [阅读顺序指南](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/reading-guide.md): 主线通读、30 分钟速览、按角色切入。 (Tokens: ~1329)
 
 ### 第一部分 · 认识项目
-- [项目总览](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.md): 定位、适用场景、技术栈与仓库形态。 (Tokens: ~2064)
-- [系统架构](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.md): 从手机 UI 到本机 CLI 的分层与数据路径。 (Tokens: ~2030)
-- [职责边界](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.md): 做什么、不做什么；与 CLI / 云 / SaaS 的分界。 (Tokens: ~1804)
+- [项目总览](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.md): 定位、适用场景、技术栈与仓库形态。 (Tokens: ~2389)
+- [系统架构](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.md): 从手机 UI 到本机 CLI 的分层与数据路径。 (Tokens: ~2117)
+- [职责边界](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.md): 做什么、不做什么；与 CLI / 云 / SaaS 的分界。 (Tokens: ~2394)
 
 ### 第二部分 · 演进历程
-- [架构演进主线](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): 同步引擎、单驾驶员、门禁、文档极简等关键阶段。 (Tokens: ~1583)
+- [架构演进主线](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): 同步引擎、单驾驶员、门禁、文档极简等关键阶段。 (Tokens: ~2188)
 
 ### 第三部分 · 方法论
-- [终端等价性](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.md): CLI 有什么 Web 就有什么；权限与配置同源。 (Tokens: ~1747)
-- [安全模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.md): 单用户、token 不出本机、权限继承 CLI、设备 TOFU。 (Tokens: ~1416)
-- [单驾驶员模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/single-driver.md): Web 与 CLI 不可同时写同一会话；镜像只读追平。 (Tokens: ~1636)
-- [契约与工程门禁](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.md): 事件契约、import 边界、inventory、check 流水线。 (Tokens: ~1583)
-- [术语表](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/glossary.md): instance、envelope、mirror、TOFU 等高频词。 (Tokens: ~1112)
+- [终端等价性](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.md): CLI 有什么 Web 就有什么；权限与配置同源。 (Tokens: ~2299)
+- [安全模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.md): 单用户、令牌是启动前提、按 Host 的鉴权分支、设备审批与两个边界。 (Tokens: ~2199)
+- [单驾驶员模型](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/single-driver.md): Web 与 CLI 不可同时写同一会话；镜像只读追平。 (Tokens: ~1894)
+- [契约与工程门禁](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.md): 事件契约、import 边界、inventory、check 流水线。 (Tokens: ~2329)
+- [术语表](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/glossary.md): instance、envelope、mirror、TOFU 等高频词。 (Tokens: ~1753)
 
 ### 第四部分 · 核心实现
-- [启动与组装根](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.md): server.js 薄入口与 app.js 组装根的启动时序。 (Tokens: ~1482)
-- [AgentSession](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.md): 长驻 SDK query、权限闸、环形缓冲、排队与中断。 (Tokens: ~1520)
-- [事件信封与同步](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.md): agent:event 信封、seq/epoch、sync:since、catch-up。 (Tokens: ~1402)
-- [会话与历史](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.md): sessions.json、transcript 冷读、worktree 会话发现。 (Tokens: ~1112)
-- [鉴权与设备信赖](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.md): AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。 (Tokens: ~1276)
-- [文件与上传](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.md): 工作区白名单、三层路径闸、附件与预览。 (Tokens: ~1102)
-- [前端与 PWA](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.md): app/public/ 分层、Socket 客户端、可安装 PWA。 (Tokens: ~1200)
-- [通知与状态栏](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/notify-status.md): Web Push / ntfy、statusline 与 CLI bridge。 (Tokens: ~1115)
+- [启动与组装根](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.md): server.js 薄入口与 app.js 组装根的启动时序。 (Tokens: ~1775)
+- [AgentSession](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.md): 长驻 SDK query、权限闸、环形缓冲、中断与运行时切档。 (Tokens: ~1711)
+- [事件信封与同步](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.md): agent:event 信封、seq/epoch、sync:since、catch-up。 (Tokens: ~1594)
+- [会话与历史](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.md): 事实源分工、worktree、/rewind 与分叉、删除保护。 (Tokens: ~1962)
+- [鉴权与设备信赖](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.md): AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。 (Tokens: ~1644)
+- [文件与上传](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.md): 工作区白名单、三层路径闸、附件与预览。 (Tokens: ~1387)
+- [前端与 PWA](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.md): app/public/ 分层、Socket 客户端、可安装 PWA。 (Tokens: ~1405)
+- [通知与状态栏](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/notify-status.md): Web Push / ntfy、statusline 与 CLI bridge。 (Tokens: ~1733)
 
 ### 第五部分 · 数据与集成
-- [数据全景](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/data-store.md): CCM_DATA_DIR、transcript、上传与忽略态文件。 (Tokens: ~1235)
-- [外部集成](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/integrations.md): Agent SDK、claude CLI、Cloudflare、推送通道。 (Tokens: ~958)
+- [数据全景](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/data-store.md): CCM_DATA_DIR、transcript、上传与忽略态文件。 (Tokens: ~1741)
+- [外部集成](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/integrations.md): Agent SDK、claude CLI、Cloudflare、推送通道。 (Tokens: ~1745)
 
 ### 第六部分 · 部署与运维
-- [快速开始](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.md): 安装、setup、doctor、局域网与临时隧道。 (Tokens: ~1081)
-- [生产部署](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/production-deploy.md): LaunchAgent、命名隧道、Access 2FA、CCM_DATA_DIR。 (Tokens: ~1121)
-- [运维与排错](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/ops-troubleshoot.md): 重启、日志轮转、/health /metrics、常见故障。 (Tokens: ~991)
+- [快速开始](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.md): 安装、setup、doctor、局域网与临时隧道。 (Tokens: ~1941)
+- [生产部署](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/production-deploy.md): 两条启动入口、公网入口选型、ACCESS_PROFILE 与 BIND_MODE。 (Tokens: ~2124)
+- [运维与排错](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/ops-troubleshoot.md): 按入口重启、看日志、两种体检、常见故障。 (Tokens: ~1660)
 
 ### 第七部分 · 参考与规范
-- [项目规范](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): 分支纪律、门禁、worktree 约定、测试分层。 (Tokens: ~1454)
-- [事件与端点参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): 入向 socket 事件、agent:event 类型、HTTP 运维端点。 (Tokens: ~1478)
-- [环境变量参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): 从 ccm.config.json 与 env-schema 核对的配置表。 (Tokens: ~1163)
-- [漂移清单](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): 文档与代码不一致处，以代码为准。 (Tokens: ~1153)
+- [项目规范](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): 分支纪律、门禁、worktree 约定、测试分层。 (Tokens: ~1772)
+- [事件与端点参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): 入向 socket 事件、agent:event 类型、HTTP 运维端点。 (Tokens: ~1787)
+- [环境变量参考](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): 从 ccm.config.json 与 env-schema 核对的配置表。 (Tokens: ~2483)
+- [漂移清单](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): 文档与代码不一致处，以代码为准。 (Tokens: ~2207)
 
 ## Agent Quick-Load (Combined)
 - [Full Knowledge Base (https://ike-li.github.io/claude-chat-mobile/llms-full.txt)](https://ike-li.github.io/claude-chat-mobile/llms-full.txt): Complete 28 chapters compiled into single document

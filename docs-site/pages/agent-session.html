@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentSession · Claude Chat Mobile</title>
-<meta name="description" content="长驻 SDK query、权限闸、环形缓冲、排队与中断。本页讲：核心职责、忙碌判定与看门狗、事件信封与 2000 条环形缓冲、SDK 消息映射矩阵 (map)。">
-<meta name="llm:tokens" content="1286">
+<meta name="description" content="长驻 SDK query、权限闸、环形缓冲、中断与运行时切档。">
+<meta name="llm:tokens" content="1449">
 <link rel="alternate" type="text/markdown" href="agent-session.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html" class="active"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html" class="active"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -45,7 +45,7 @@
         <header class="page-head">
     <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
     <h1>AgentSession</h1>
-    <p class="lead">长驻 SDK query、权限闸、环形缓冲、排队与中断。</p>
+    <p class="lead">长驻 SDK query、权限闸、环形缓冲、中断与运行时切档。</p>
     <div class="meta">
       <span><span class="lbl">阅读约</span> 14 分钟</span>
       <span><span class="lbl">第</span> 13 / 28 篇</span>
@@ -59,13 +59,13 @@
   <li>持有一条到 <code>@anthropic-ai/claude-agent-sdk</code> 的 streaming input 双向长会话（支持基于原有 <code>sessionId</code> 执行 resume）。</li>
   <li>将 SDK 吐出的原始异步消息流（Chunks / Actions）通过 <code>map()</code> 规范化为标准 <code>agent:event</code> 信封并广播。</li>
   <li>通过 <code>canUseTool</code> 拦截点实现细粒度的工具放行、挂起与手机卡片审批，维护活跃的审批台账。</li>
-  <li>处理前端的主动中断（interrupt）、排队消息撤回（cancelQueued）、动态切换模型与思考强度（<code>effort</code>）。</li>
+  <li>处理前端的主动中断（interrupt），以及运行时切换模型、权限档与思考强度（<code>effort</code>）。</li>
 </ul>
 
 <h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>忙碌判定与看门狗</h2>
 <div class="kv">
   <div class="row"><div class="key">pendingTurns</div><div class="val">在途轮次计数。仅由发送（+1）与结果返回/主动中断/撤回成功（-1）闭环结算，严禁双扣。</div></div>
-  <div class="row"><div class="key">bgTasks</div><div class="val">活跃后台子代理/任务表。后台子代理仍在执行时持续刷新心跳，防止被空闲超时误杀。</div></div>
+  <div class="row"><div class="key">bgTasks</div><div class="val">活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限（dev 已合入，尚未发版）。</div></div>
   <div class="row"><div class="key">isBusy</div><div class="val"><code>pendingTurns &gt; 0</code> 或存在未完成的后台任务，或挂起未决的工具审批/用户提问。</div></div>
   <div class="row"><div class="key">idle hang watchdog</div><div class="val">若 <code>pendingTurns &gt; 0</code> 但长达 <code>IDLE_TIMEOUT_MS</code> 没有任何新事件产生，触发看门狗强制中断。</div></div>
 </div>
@@ -88,7 +88,7 @@
 <tr><td><code>tool_result</code></td><td><code>tool_result</code></td><td>回填工具执行结果（支持大输出折叠展示）</td></tr>
 <tr><td><code>canUseTool</code> (未放行)</td><td><code>permission_request</code></td><td>挂起等待，向移动端投递审批交互卡片</td></tr>
 <tr><td><code>AskUserQuestion</code></td><td><code>question</code></td><td>在输入区域上方弹出单选/多选题交互面板</td></tr>
-<tr><td><code>turn_complete</code></td><td><code>result</code></td><td>轮次收尾，回传 Token 消耗并持久化状态</td></tr>
+<tr><td><code>result</code></td><td><code>result</code></td><td>轮次收尾，回传用量；网关不流式时由它的全文兜底正文</td></tr>
 </tbody>
 </table>
 </div>
@@ -96,29 +96,29 @@
 <h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>权限闸 (canUseTool) 执行时序</h2>
 <div class="mermaid">
 sequenceDiagram
-  participant CLI as Claude CLI
-  participant SDK as Agent SDK
+  participant SDK as Agent SDK / CLI
   participant AS as AgentSession
   participant S as Server
   participant UI as 手机端 UI
 
-  CLI->>SDK: 请求执行工具 (如 Bash)
-  SDK->>AS: canUseTool(tool, input)
-  AS->>AS: 校验 settingSources 自动白名单
-  alt 命中用户本地白名单
-    AS-->>SDK: allow (直接放行)
-  else 未命中预设白名单
+  SDK->>SDK: 先按 settings 的 permissions.allow 判定
+  alt 命中放行规则
+    SDK->>SDK: 直接执行，不调用 canUseTool，手机不弹窗
+  else 未命中
+    SDK->>AS: canUseTool(tool, input)
+    AS->>AS: 按当前权限档裁决（bypass 由 CCM 直接放行）
     AS->>S: 派发 permission_request 事件
-    S->>UI: agent:event 信封 (推送+卡片弹窗)
-    UI->>S: 发送 user:approve {requestId, allow}
-    S->>AS: resolvePermission(allow)
-    AS-->>SDK: 返回裁决结果 (allow/deny)
+    S->>UI: agent:event 信封（推送 + 审批卡）
+    UI->>S: user:approve（允许 / 拒绝 / 中止本轮，可带「总是允许」）
+    S->>AS: 裁决
+    AS-->>SDK: allow / deny（永久规则经 updatedPermissions 交回 SDK 落盘）
     AS->>UI: 广播 request_resolved 事件
   end
 </div>
+<p><code>dontAsk</code> 档不走这张图：白名单外的调用在 SDK 那一层直接拒绝，不调用 <code>canUseTool</code>。审批台账只记裁决，挂着的审批遇到指纹不符、超过 <code>APPROVAL_TTL_MS</code> 或进程重启，一律不可再执行。</p>
 
 <h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>思考强度 (effort) 运行时热修改</h2>
-<p>在最新实现中，得益于 SDK 0.3.263 升级，用户在手机端切换思考强度（低、中、高）时，服务端直接调用底层 <code>applyFlagSettings({effortLevel})</code> 实时下发至活跃进程。彻底淘汰了早期由于无法热调参而被迫采取的「销毁旧实例 + 重启新实例」低效模式。</p>
+<p>切换具体档（<code>low</code> … <code>max</code>，以及 <code>ultracode</code>）与 <code>auto</code> 时，服务端经控制请求 <code>applyFlagSettings({effortLevel})</code> 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；<code>ultracode</code> 实际下发 <code>xhigh</code> 并打开 <code>Settings.ultracode</code>。只有切回「没指定」没有对应的控制请求，要 dispose + resume。<code>auto</code> 档 dev 已合入，尚未发版。</p>
 
         <nav class="pager"><a class="prev" href="runtime-assembly.html"><span class="dir">← 上一篇</span><span class="ttl">启动与组装根</span></a><a class="next" href="events-sync.html"><span class="dir">下一篇 →</span><span class="ttl">事件信封与同步</span></a></nav>
       </article>

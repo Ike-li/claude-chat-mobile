@@ -3,7 +3,7 @@
 
 - **Part**: 第二部分 · 演进历程
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1583
+- **Estimated Tokens**: ~2188
 
 ---
 
@@ -30,12 +30,17 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
     第四阶段 
 #### 配置与网络拓扑重构（2026-08 末 ~ 2026-09）
 
-从松散 .env 升级为结构化 `ccm.config.json`；确立 ACCESS_PROFILE 三候选拓扑，支持无 Cloudflare 部署。
+从松散 .env 升级为结构化 `ccm.config.json`；令牌成为启动前提；`ACCESS_PROFILE` 作为纯声明落地、`BIND_MODE` 可收窄监听面，Cloudflare 降为可选加层，不经 Cloudflare 的部署成为一等路径。
  
     第五阶段 
 #### SDK 升级与活体感知深化（2026-09）
 
 升至 SDK 0.3.263，接入 `applyFlagSettings` 运行时调参；完善终端等待态感知与 tail attribution 归因。
+ 
+    第六阶段 
+#### 分发、安全与终端对齐的收口（2026-09 中下旬）
+
+分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；dev 上又合入额度重置自动继续、思考强度 auto 档，SDK 升到 0.3.278。
  
  
 
@@ -46,9 +51,12 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
 | 8/2 删库事故与沙箱防线 | mutate 测试在改坏源码时把路径函数算成空串，误打在宿主机真实 ~/.claude/projects 上造成数据清除。 | 宿主机仅跑白名单命令 （ guard-host-tests.js ）；所有可能造成破坏的测试一律在容器中跑（容器内 HOME 为一次性沙箱）。 |
 | 8/14 插件化提案被否决 | 曾提案将系统扩展插件化、允许动态加载外部模块。 | 坚决不做插件化 。插件出仓库会导致 import 边界、双向事件契约与静态门禁彻底失明，扩展全走 CLI 原生 MCP/Skills。 |
 | 8/26 计数失明与长轮次 | 模型输出数分钟无 token 刷新，被误判为卡死。 | 确立以 transcript 字节增长作为真实死活判据；避免基于静态超时武断终止活跃长工具执行。 |
-| 9/1 拓扑重构与三候选落地 | 原网络判定过度与 Cloudflare 绑定，纯反代或局域网部署难以通过健康检查。 | 落地 ACCESS_PROFILE （ cloudflare , reverse-proxy , lan ），将非 Cloudflare 部署正式升为一等支持路径。 |
+| 9/1 五条原则写进 hard-rules | 调查发现：改造前不设令牌时，本机浏览器打开 localhost 就是零凭证的全权控制台；网络判定与 Cloudflare 绑得过紧。 | 固化进 hard-rules §1：对模型通路零假设、不新增持久化层、鉴权是启动前提、公网入口一条基线加一个受管加层。 ACCESS_PROFILE 作为纯声明落地（后扩到 cloudflare / vpn / reverse-proxy / direct / lan 五档）。 |
 | 9/3 运行时 effort 动态切换 | 历史实现认为 SDK 无法动态改 effort，切档必须重启实例。 | 实证实测推翻旧假设：SDK 原生支持 applyFlagSettings({effortLevel}) 运行时生效，改掉低效的实例置换。 |
 | 9/6-8 终端活体识别与归因修复 | 桌面端写活体条目但不写 status；Web 续接后误将已结束的 pending 归因于桌面端。 | 深化活体与终端等待态（terminalWaiting）感知；严格区分锁判定（宁可误锁）与列表展示（宁可少报）的相反判定方向。 |
+| 9/8 分发改为源码归档 | 发版时自己打包、改写 package.json 、上传 Release 资产，流水线长，还出现过「Release 在、资产空」的半发布态。 | 装机直接拉 GitHub 对 master 的源码归档，裁剪交给 export-ignore ； master 上不得有未发版提交。 |
+| 9/17 安全审查 | 控制面密钥会被 claude 子进程继承；启动横幅会打印完整令牌；纯 TCP 转发下可以伪造本机 Host。 | 子进程剥掉控制面密钥（AUTH-06）；令牌不再出现在服务端输出里； DEVICE_APPROVAL_SCOPE=all 成为覆盖全部路径的总开关；公网 IdP 路径加跨站握手门。 |
+| 9/20 回退改走 /rewind | 长按用户气泡是隐藏手势，用户发现不了。 | 撤掉长按入口，照搬终端的 /rewind 两步面板；Web 上的回退分叉出新会话，原会话不动。 |
 
 ## 组装根与代码演进约束
 

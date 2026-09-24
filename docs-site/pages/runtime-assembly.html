@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>启动与组装根 · Claude Chat Mobile</title>
-<meta name="description" content="server.js 薄入口与 app.js 组装根的启动时序。本页讲：server.js（薄入口）、配置求值与优先级、app.js 组装时序（12 步）、默认运行超时参数。">
-<meta name="llm:tokens" content="1269">
+<meta name="description" content="server.js 薄入口与 app.js 组装根的启动时序。">
+<meta name="llm:tokens" content="1534">
 <link rel="alternate" type="text/markdown" href="runtime-assembly.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html" class="active"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html" class="active"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -56,19 +56,24 @@
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>server.js（薄入口）</h2>
 <pre><code>// 运行时入口：app/server.js
-import { loadRuntimeEnvironment } from './src/ops/config-file.js';
-import { installLogTimestamps } from './src/shared/log-timestamps.js';
+import { join } from 'node:path';
+import { loadRuntimeEnvironment } from './src/ops/config.js';
+import { installLogTimestamps } from './src/shared/log-time.js';
 
-loadRuntimeEnvironment();   // 加载 ccm.config.json / .env
-installLogTimestamps();     // 劫持 console 注入安全 ISO 时戳
+// 显式传仓库根，不回落 process.cwd()：启动方式不保证 cwd 落在仓库根
+const HERE = join(import.meta.dirname, '..');
+loadRuntimeEnvironment(process.env, { dir: HERE });   // 读 ccm.config.json，缺失才回落 .env
+installLogTimestamps();   // 须在动态 import(app.js) 之前，让模块级启动输出也带时间戳
 
-const { httpServer, io, port } = await import('./src/server/app.js');
-export { httpServer, io, port };</code></pre>
-<p>薄入口仅数行。不管是命令行 <code>npm start</code>、macOS LaunchAgent 常驻、Linux systemd 还是端到端集成测试，一律通过此入口拉起。</p>
+const runtime = await import('./src/server/app.js');
+export const httpServer = runtime.httpServer;
+export const io = runtime.io;
+export const port = runtime.port;</code></pre>
+<p>薄入口只有这几行。headless 的 <code>npm start</code>、macOS 桌面端的 LaunchAgent、集成测试都从这里拉起；自己写的保活方式（tmux、systemd、docker）也应该指向它。配置文件必须按仓库根定位：若回落到当前目录，启动时读到的会和配置面板写入的不是同一份，结果是静默的假成功。</p>
 
 <h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>配置求值与优先级</h2>
 <ul>
-  <li><strong>配置同源加载。</strong>启动时由 <code>app/src/ops/config-file.js</code> 统一加载根目录下的 <code>ccm.config.json</code>（结构化配置，优先）并回落 <code>.env</code>。</li>
+  <li><strong>配置同源加载。</strong>启动时由 <code>app/src/ops/config.js</code> 的 <code>loadRuntimeEnvironment</code> 加载仓库根下的 <code>ccm.config.json</code>（优先）并回落 <code>.env</code>；读写与类型归一在 <code>app/src/ops/config-file.js</code>。<code>CCM_CONFIG_FILE_PATH</code> / <code>CCM_ENV_FILE_PATH</code> 可覆盖文件位置，启动侧与写入侧都认。</li>
   <li><strong>环境变量最高优先。</strong>终端 Shell 中直接 <code>export</code> 的环境变量始终压过配置文件。</li>
   <li><strong>两处目录解析陷阱。</strong><code>app/src/**</code> 模块计算仓库根目录必须上溯<strong>三层</strong>。另外，LaunchAgent 启动命令 <code>exec &lt;node&gt; app/server.js</code> 必须与 <code>service-units.js</code> 解析常驻进程后缀的代码逐字严格一致。</li>
 </ul>
@@ -78,7 +83,7 @@ export { httpServer, io, port };</code></pre>
   <li><strong>依赖导入。</strong>完成后端各领域核心模块（agent, sessions, files, auth, ops, shared）的静态与动态装配。</li>
   <li><strong>解析配置。</strong>执行 <code>parseServerConfig()</code>，提取端口、Token、超时阈值、<code>ACCESS_PROFILE</code> 及工作区配置。</li>
   <li><strong>初始化通知通道。</strong>装配 Web Push（VAPID）与可选 ntfy 实例（尽力而为，通道故障不阻塞主业务）。</li>
-  <li><strong>Preflight 前置自检。</strong>检查默认工作区（<code>WORK_DIR</code>）目录真实存在、校验 <code>claude</code> 二进制路径可执行（<code>CLAUDE_BIN</code>）。</li>
+  <li><strong>Preflight 前置自检。</strong>检查默认工作区（<code>WORKDIRS</code> 首项）目录真实存在、校验 <code>claude</code> 二进制可执行（<code>CLAUDE_BIN</code>，留空则从 PATH 查找）。</li>
   <li><strong>构建工作区白名单。</strong>加载 <code>WORKDIRS</code> 白名单列表并建立文件监听，支持运行期免重启热加载。</li>
   <li><strong>配置 Express HTTP 壳。</strong>挂载 gzip 压缩、静态资源 CSP 策略、带 <code>?v=</code> 指纹的防缓存头。</li>
   <li><strong>HTTP 鉴权与运维路由。</strong>挂载统一鉴权中间件，并提供 <code>/health</code>、<code>/metrics</code>、<code>/push/*</code> 受控路由（杜绝免密端点）。</li>
@@ -86,7 +91,7 @@ export { httpServer, io, port };</code></pre>
   <li><strong>实例化 InstanceManager 与通信管道。</strong>建立会话实例池与 Socket 进出向事件信封转发总线。</li>
   <li><strong>进程级未捕获异常兜底。</strong>注册 <code>uncaughtException</code> 与 <code>unhandledRejection</code>，只记日志不退进程。</li>
   <li><strong>孤儿审批清理（Fail-closed）。</strong>在服务监听前执行 <code>expireOrphanedPending()</code>，将因进程重启而失效的挂起审批彻底归档。</li>
-  <li><strong>绑定端口监听。</strong>依据 <code>AUTH_TOKEN</code> 与网络模式选择绑定地址（无 Token 强制绑 <code>127.0.0.1</code>，有 Token 绑 <code>0.0.0.0</code>）。</li>
+  <li><strong>绑定端口监听。</strong><code>resolveBindPlan</code> 先过令牌门：缺 <code>AUTH_TOKEN</code> 在 listen 之前就拒绝启动并退出。再按 <code>BIND_MODE</code> 选地址：默认 <code>0.0.0.0</code>，<code>loopback</code> 为 <code>127.0.0.1</code>，<code>custom</code> 用 <code>BIND_HOST</code>。随后打印只含掩码令牌的启动横幅。</li>
 </ol>
 
 <h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>默认运行超时参数</h2>

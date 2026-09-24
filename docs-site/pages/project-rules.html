@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>项目规范 · Claude Chat Mobile</title>
-<meta name="description" content="分支纪律、门禁、worktree 约定、测试分层。本页讲：分支纪律与 Worktree 约定、自动化测试执行槽 (S0–S7) 与防假绿、代码决策留痕与 Git Commit 规范。">
-<meta name="llm:tokens" content="1253">
+<meta name="description" content="分支纪律、门禁、worktree 约定、测试分层。">
+<meta name="llm:tokens" content="1505">
 <link rel="alternate" type="text/markdown" href="project-rules.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html" class="active"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html" class="active"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -56,8 +56,9 @@
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>分支纪律与 Worktree 约定</h2>
 <ul>
-  <li><strong>日常开发严格在 <code>dev</code> 分支</strong>：严禁直接在 <code>master</code> 上提交改动。<code>master</code> 为发布保护分支，仅在发版时通过 <code>scripts/release.sh</code> 由 <code>dev</code> 执行 fast-forward 合并。</li>
-  <li><strong>分发裁剪 (Export-Ignore)</strong>：发版会自动通过 <code>git archive</code> 打出纯净安装包。所有新增的测试、门禁脚本必须同步登记至 <code>.gitattributes</code> 的 <code>export-ignore</code>，防止测试代码混入轻量安装包。</li>
+  <li><strong>日常改动走 feature 分支 → PR → <code>dev</code></strong>，每个小改动一个 PR；<code>dev</code> 要求 PR 且 CI 必须绿。GitHub 默认分支是 <code>master</code>，所以开 PR 必须显式 <code>--base dev</code>。</li>
+  <li><strong><code>master</code> 只接受发版 PR</strong>：由 <code>scripts/release.sh</code> 开 <code>dev</code> → <code>master</code> 的 PR，等真 CI 绿后合并（产生 merge commit），再在合并后的 <code>master</code> HEAD 上打 tag、建 Release。开了 <code>enforce_admins</code>，谁都不能直推；<code>master</code> 上不得出现未发版的提交，因为装机拉的就是它。</li>
+  <li><strong>分发裁剪 (export-ignore)</strong>：装机的 <code>curl</code> 直接拉 GitHub 对 <code>master</code> 的源码归档，GitHub 现场 <code>git archive</code> 并遵守 <code>.gitattributes</code>；发版不打包、不上传资产。一条 <code>/tests/**</code> 前缀就裁掉了全部用例、测试基建与门禁，所以<strong>新增的测试与门禁文件只要落在 <code>tests/</code> 下就自动覆盖</strong>，不用逐个登记。例外：<code>scripts/doc-consistency.js</code> 与 <code>scripts/collect-source-files.js</code> 被 <code>doctor</code> import，不能移进 <code>tests/</code>。</li>
   <li><strong>常驻 Worktree 物理外置</strong>：其他分支（如 <code>gh-pages</code>、<code>promo</code> 等）常驻于与主仓平级的兄弟目录（如 <code>../claude-chat-mobile-gh-pages</code>），物理上不在源码树内，杜绝搜索和工具扫描污染。</li>
 </ul>
 
@@ -84,15 +85,11 @@
 </div></div>
 
 <h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>代码决策留痕与 Git Commit 规范</h2>
-<p>根据工作宪法，开发会话会定期清理，而 Git 历史永久留存。重要架构取舍直接记录在 Commit Message 的 Trailer 中，不新增多余的设计文档：</p>
-<pre><code>feat(auth): 引入 IPv6 /64 分桶聚合限速机制
-
-对同一 /64 子网的入向请求聚合至单桶，防御动态轮换 IPv6 绕过策略。
-
-Constraint: 不引入外部 Redis，完全基于进程内 LRU Map 实现
-Rejected: 按单一完整 IPv6 限速（极易被攻击者动态前缀绕过）
-Tested: tests/unit/auth-rate-limit.test.mjs 注入单 IP 测试变红，/64 聚类通过
-Not-tested: 超过 10 万并发连接下的内存极限水线</code></pre>
+<p>会话日志只在本机，commit 跟着仓库走，所以取舍与验证过程写进 commit message 的 trailer，不新增一次性的设计文档（<code>repo-inventory</code> 闸也会拦下审计报告、进度笔记这类文件）。两侧验收的证据写在 <code>Tested:</code> 里：注入了什么、哪一条红了。下面的 trailer 取自产品仓 <code>docs/testing.md</code>：</p>
+<pre><code>Tested: 注入 `live: 0` 到 app.js:3322 → unread-on-entry 精确红 1 条（"后台累积的未读必须随 ack 带回，实际 0"）
+Tested: 容器全链五段 rc=0（unit 3570 / invariants 532 / :server 53 / :env 13 / integration 101）
+Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/</code></pre>
+<p>有取舍时再加 <code>Constraint:</code>（限制方案选择的外部条件）与 <code>Rejected:</code>（否决的方案及原因）。写「已做双向验收」零成本，写不出「注入了什么、哪一条红了」就是没做。</p>
 
         <nav class="pager"><a class="prev" href="ops-troubleshoot.html"><span class="dir">← 上一篇</span><span class="ttl">运维与排错</span></a><a class="next" href="api-events.html"><span class="dir">下一篇 →</span><span class="ttl">事件与端点参考</span></a></nav>
       </article>

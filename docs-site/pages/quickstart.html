@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>快速开始 · Claude Chat Mobile</title>
-<meta name="description" content="安装、setup、doctor、局域网与临时隧道。本页讲：环境前置准备、装机与运行四步走、从移动端连接的场景方案、常用日常维护指令。">
-<meta name="llm:tokens" content="953">
+<meta name="description" content="安装、setup、doctor、局域网与临时隧道。">
+<meta name="llm:tokens" content="1704">
 <link rel="alternate" type="text/markdown" href="quickstart.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html">
 <link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html">
@@ -28,7 +28,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html" class="active"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html" class="active"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -55,7 +55,7 @@
       <span class="src" title="原始文档来源">源自 README.md · docs/getting-started.md · scripts/setup.js</span>
     </div>
   </header>
-<p class="lead-extra">最短可跑路径：依赖安装、结构化配置、doctor 健康自检、启动服务。局域网访问必须配置 <code>AUTH_TOKEN</code>；公网暴露推荐使用临时隧道或生产拓扑。</p>
+<p class="lead-extra">最短可跑路径：下载源码归档、装运行依赖、用装机向导生成配置、启动自检、启动服务，再从手机打开并批准这台设备。<code>AUTH_TOKEN</code> 是启动前提，没有它服务直接拒绝启动；长期公网访问另见<a href="production-deploy.html">生产部署</a>。</p>
 
 <div class="callout note"><div class="body">
 <strong>English</strong> Install path for non-Chinese readers: <a href="../../en/quickstart.html" hreflang="en">English Quickstart</a>（与 README.en.md 对齐）。
@@ -63,60 +63,81 @@
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>环境前置准备</h2>
 <ul>
-  <li>Node.js ≥ 20（通过 <code>node --version</code> 验证，要求纯 ESM 规范支持）。</li>
-  <li>本机已安装并且可正常登录交互的 <code>claude</code> CLI（<code>which claude</code> 确认可寻址）。</li>
-  <li>平台支持：推荐 macOS（完整支持桌面菜单栏与 LaunchAgent）或 Linux（支持 systemd 与容器化部署）。</li>
+  <li>Node.js ≥ 20（<code>node --version</code>）。</li>
+  <li>本机的 <code>claude</code> CLI 能在终端里正常跑完一轮会话。官方订阅要已 <code>/login</code>；第三方网关不走 Anthropic 登录，要的是 <code>ANTHROPIC_*</code> 真的生效（推荐写在 CLI settings 文件的 <code>env</code> 块，见<a href="integrations.html">外部集成</a>）。项目不会替你安装或登录 claude。</li>
+  <li>macOS 或 Linux。原生 Windows 属实验路径，推荐 WSL2。macOS 另有菜单栏应用 CCM.app。</li>
 </ul>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>装机与运行四步走</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>装机与运行</h2>
 <ol class="steps">
-  <li><strong>克隆仓库与确认依赖：</strong>
-<pre><code>git clone https://github.com/Ike-li/claude-chat-mobile.git
-cd claude-chat-mobile
-npm install</code></pre>
+  <li><strong>下载源码归档，安装运行依赖：</strong>
+<pre><code>curl -fsSL https://github.com/Ike-li/claude-chat-mobile/archive/refs/heads/master.tar.gz | tar xz
+cd claude-chat-mobile-master
+npm ci --omit=dev</code></pre>
+  <code>master</code> 只在发版时前进，归档就是最新发布版；测试树与维护者门禁已按 <code>.gitattributes</code> 裁掉。要改代码或跑测试，改用 <code>git clone</code> 完整仓库，同样 <code>npm ci --omit=dev</code>，需要跑测试时再执行一次不带参数的 <code>npm ci</code>。
   </li>
-  <li><strong>初始化结构化配置：</strong>
-<pre><code># 交互式装机向导：生成高强 AUTH_TOKEN、配置工作区、建立 ccm.config.json
+  <li><strong>生成配置：</strong>
+<pre><code># 交互式装机向导：生成高强度 AUTH_TOKEN、放行工作区、问你打算怎么从手机访问，写入 ccm.config.json
 npm run setup
 
-# 或者使用非交互式配置 CLI 直接初始化：
+# 或者用非交互的配置 CLI 初始化：
 node scripts/config.js init</code></pre>
   </li>
-  <li><strong>运行全量环境健康自检 (Doctor)：</strong>
-<pre><code># 检查端口可用性、工作区路径有效性、CLI 二进制、网络拓扑自洽性
+  <li><strong>启动自检（doctor）：</strong>
+<pre><code># 端口、工作区、claude CLI、访问方案与配置是否自洽
 node scripts/doctor.js
 
-# 若权限不规范，执行自动修复收紧权限：
+# 配置文件权限不规范时自动收紧：
 node scripts/doctor.js --fix</code></pre>
   </li>
   <li><strong>启动服务：</strong>
 <pre><code>npm start
-# 启动成功后，终端将输出控制台日志及带授权 Token 的访问 URL：
-# Local:   http://localhost:3000/#token=...
-# Network: http://&lt;lan-ip&gt;:3000/#token=...</code></pre>
+# 横幅只显示掩码后的令牌，按场景给出地址，例如：
+#   本机:   http://localhost:3000/#token=&lt;YOUR_TOKEN&gt;
+#   可访问: http://&lt;lan-ip&gt;:3000/#token=&lt;YOUR_TOKEN&gt;  ← 同 WiFi 或已连隧道时可用
+# 完整令牌在 ccm.config.json 里；免手输用下一步的二维码</code></pre>
+  </li>
+  <li><strong>手机打开，批准这台设备：</strong>
+<pre><code># 把地址和令牌打成终端二维码，手机扫码进入（二维码含凭据，投屏时勿用）
+node scripts/qr.js
+
+# 新设备首次进入要批准一次
+node scripts/device.js list
+node scripts/device.js approve &lt;ID&gt;</code></pre>
+  也可以在跑着 <code>npm start</code> 的终端里按回车批准最新的新设备、在另一台已信任的设备上点「准入」，或用 macOS 菜单栏。令牌首次进入后存进浏览器，之后免带。
   </li>
 </ol>
+
+<div class="callout warn"><div class="body">
+<strong>起服 ≠ 能聊天</strong>令牌与设备审批只决定手机能不能进主壳；电脑终端里的 <code>claude</code> 能不能正常跑完一轮，才决定手机上能不能真对话。首次验收时在手机上新建会话发一条消息：只要看到 CLI 透传上来的真实结果（正常回答，或一条具体的报错）就说明链路是通的。聊不通时，先在电脑终端、同一个工作区目录下把 <code>claude</code> 聊通一轮，再从手机重试。
+</div></div>
 
 <h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>从移动端连接的场景方案</h2>
 <div class="table-wrap">
 <table>
 <thead><tr><th>连接场景</th><th>配置与网络路径</th><th>关键注意事项</th></tr></thead>
 <tbody>
-<tr><td>同一 WiFi 局域网</td><td>配置有效 <code>AUTH_TOKEN</code>，手机浏览器访问控制台输出的局域网 IP 带 Hash URL（<code>http://&lt;lan-ip&gt;:3000/#token=...</code>）</td><td>未配置 Token 时服务恒定只绑定 <code>127.0.0.1</code>，手机无法连入；手机首次连接需在电脑端点击批准设备（TOFU）</td></tr>
-<tr><td>公网临时体验 / 开启 HTTPS PWA</td><td>另开终端执行临时隧道：<br><code>cloudflared tunnel --url http://localhost:3000</code></td><td>手机端打开 Cloudflare 分配的 HTTPS 临时域名，即可满足 iOS PWA 添加到主屏幕与 Web Push 的前置条件</td></tr>
-<tr><td>常驻生产部署</td><td>搭配 Cloudflare 命名隧道 + 2FA Access，或使用 Nginx / Tailscale 纯反代；详见<a href="production-deploy.html">生产部署</a></td><td>推荐使用 macOS 专属的 CCM.app 菜单栏应用或 systemd 常驻守护</td></tr>
+<tr><td>同一 WiFi 局域网</td><td>手机打开横幅里的局域网地址，或扫 <code>node scripts/qr.js</code> 的二维码</td><td>默认监听 <code>0.0.0.0</code>；没有令牌服务不会启动，不存在「未设令牌就只绑本机」的降级路径。首次连接要批准设备</td></tr>
+<tr><td>临时公网 / 要 HTTPS 装 PWA</td><td>另开终端跑 Cloudflare Quick Tunnel：<br><code>cloudflared tunnel --url http://localhost:3000</code><br>不想经 Cloudflare：装 Tailscale 后 <code>tailscale serve --bg 3000</code></td><td>PWA 与 Web Push 需要 HTTPS；iOS 还要 16.4+ 并先添加到主屏幕</td></tr>
+<tr><td>长期公网</td><td>固定域名 + Cloudflare Tunnel + Access，或 Tailscale / 其他加密隧道 / 自建反代；详见<a href="production-deploy.html">生产部署</a></td><td>常驻只有两条入口：headless 终端 <code>npm start</code>（保活方式自定），macOS 菜单栏应用 CCM.app</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>常用日常维护指令</h2>
-<pre><code>npm run dev          # 调试热加载开发：node --watch app/server.js
-npm run check        # 快速门禁流水线（零 Token，极速检查规范、边界与契约）
-npm run app:install  # (macOS 专属) 编译并安装 CCM.app 到 /Applications 目录</code></pre>
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>更新</h2>
+<p>归档装的，回到当初解压的<strong>父目录</strong>重跑同一条 <code>curl … | tar xz</code>，再 <code>npm ci --omit=dev</code>，然后重启服务。<code>ccm.config.json</code> 与 <code>data/</code> 不在归档里，覆盖不到。<code>git clone</code> 装的照常 <code>git pull</code>。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>常用命令</h2>
+<pre><code>node scripts/doctor.js            # 启动自检；改完配置先跑一遍
+node scripts/config.js schema     # 打印当前全部配置项定义
+node scripts/device.js list       # 待批与已信任的设备
+node scripts/qr.js --public       # 公网地址的连接二维码（受 Access 保护的域名不带令牌）
+npm run app:install               # macOS：编译并安装 CCM.app 到 /Applications</code></pre>
+<p><code>npm run check</code>、<code>npm test</code>、<code>npm run lint</code> 引用的测试树与门禁不在归档里，只在 <code>git clone</code> 的完整仓库里可用。</p>
 
         <nav class="pager"><a class="prev" href="integrations.html"><span class="dir">← 上一篇</span><span class="ttl">外部集成</span></a><a class="next" href="production-deploy.html"><span class="dir">下一篇 →</span><span class="ttl">生产部署</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">环境前置准备</a></li><li class="h2"><a href="#s2">装机与运行四步走</a></li><li class="h2"><a href="#s3">从移动端连接的场景方案</a></li><li class="h2"><a href="#s4">常用日常维护指令</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">环境前置准备</a></li><li class="h2"><a href="#s2">装机与运行</a></li><li class="h2"><a href="#s3">从移动端连接的场景方案</a></li><li class="h2"><a href="#s4">更新</a></li><li class="h2"><a href="#s5">常用命令</a></li></ul></aside>
     </div>
   </div>
 </div>

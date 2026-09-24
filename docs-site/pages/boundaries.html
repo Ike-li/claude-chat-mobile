@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>职责边界 · Claude Chat Mobile</title>
-<meta name="description" content="做什么、不做什么；与 CLI / 云 / SaaS 的分界。本页讲：产品定位与产品宪法 C1–C5、系统核心职责：做什么、明确不做的技术债清单、与相邻系统的分工分界。">
-<meta name="llm:tokens" content="1602">
+<meta name="description" content="做什么、不做什么；与 CLI / 云 / SaaS 的分界。">
+<meta name="llm:tokens" content="2138">
 <link rel="alternate" type="text/markdown" href="boundaries.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html" class="active"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html" class="active"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,78 +52,96 @@
       <span class="src" title="原始文档来源">源自 README.md · docs/hard-rules.md · SECURITY.md</span>
     </div>
   </header>
-<p class="lead-extra">为项目确定边界，其价值往往大于堆叠功能。明确产品「坚决不做什么」，是防止项目滑向失控复杂度的核心防线。</p>
+<p class="lead-extra">为项目确定边界，价值往往大于堆叠功能。明确「不做什么」，是防止项目滑向失控复杂度的核心防线。</p>
 
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>产品定位与产品宪法 C1–C5</h2>
-<p>Claude Chat Mobile 遵循明确的自托管产品宪法（见 <code>docs/hard-rules.md</code>）：</p>
-<div class="cards">
-  <div class="card"><span class="k">C1</span><h4>严格单用户 (n=1)</h4><p>单实例单用户。通过鉴权的请求等价于物理坐在终端前的机主，不设立租户隔离或多账号概念。</p></div>
-  <div class="card"><span class="k">C2</span><h4>数据不出本机</h4><p>模型 API Token、会话记录与开发源码绝不经过任何第三方托管平台或中心云中继。</p></div>
-  <div class="card"><span class="k">C3</span><h4>继承原生权限体系</h4><p>完全复用本机 <code>claude</code> CLI 的已有配置（<code>settings.json</code>）与 MCP 规则，不发明并行的权限孤岛。</p></div>
-  <div class="card"><span class="k">C4</span><h4>单驾驶员防分叉</h4><p>任意时刻同一会话只允许终端或 Web 之一持有写入锁，通过只读镜像与锁流转彻底杜绝数据分叉。</p></div>
-  <div class="card"><span class="k">C5</span><h4>终端行为等价性</h4><p>CLI 有的功能 Web 端无缝对齐；CLI 放弃的复杂性 Web 坚决不自造轮子。</p></div>
-</div>
-
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>系统核心职责：做什么</h2>
-<ul>
-  <li><strong>提供移动端原生友好的终端等价界面。</strong>实时流式输出渲染、Markdown 与代码语法高亮、工具调用过程卡片、用户确认提问（AskUserQuestion）交互。</li>
-  <li><strong>会话生命周期与双向同步。</strong>复用本机 CLI 的 Transcript 记录（<code>~/.claude/projects/</code>），支持 Web 端发起会话、继续历史会话（<code>resume</code>）、工作区切换与中断。</li>
-  <li><strong>安全闭环的人机权限审批。</strong>当 Agent 尝试执行白名单外的危险工具（如执行命令、写敏感文件）时，推送审批请求并在移动端提供一键同意/拒绝。</li>
-  <li><strong>本地工作区保护与安全浏览。</strong>在显式配置的 <code>WORKDIRS</code> 白名单内安全浏览、检索项目文件与查看 Git 变更，杜绝路径穿越。</li>
-  <li><strong>自托管基础设施服务。</strong>结构化配置管理、启动自检（doctor）、智能离线推送与跨设备已读状态同步。</li>
-</ul>
-
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>明确不做的技术债清单</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>产品边界（改这些等于换产品）</h2>
+<p>以下各条出自产品仓 <code>docs/hard-rules.md</code> 第 1 节，其中多条是 2026-09-01 维护者确认后固化进去的：</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>编号</th><th>决议不做的方向</th><th>架构理由与考量</th></tr></thead>
+<thead><tr><th>规则</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>AD-1</td><td>多租户、RBAC 角色权限与按用户数据隔离</td><td>违背 n=1 自托管核心。引入租户会严重破坏单用户与本机 CLI 的映射边界，带来数倍无收益复杂度。</td></tr>
-<tr><td>AD-2</td><td>云端托管代理或中心化 SaaS 服务</td><td>代码和会话是用户核心隐私，架构设计上只允许直连或点对点隧道连接。</td></tr>
-<tr><td>AD-3</td><td>重新实现 Agent 状态机与 LLM 编排层</td><td>直接依托官方 Agent SDK。自造 Agent 调度不仅极易滞后于官方演化，还会破坏工具执行契约。</td></tr>
-<tr><td>AD-4</td><td>开放免鉴权的网络数据端点</td><td>即使是 <code>/health</code>、<code>/metrics</code> 或静态状态检查，也一律过鉴权网关拦截，杜绝信息侧漏。</td></tr>
-<tr><td>AD-5</td><td>全端端到端加密（E2EE）离线推送</td><td>推送仅作为唤醒信号；真实正文拉取依然走 WebSocket 双向受控通道，避免引入重型加密握手协议。</td></tr>
-<tr><td>AD-6</td><td>自造插件系统与动态运行包管理</td><td>插件出仓库会导致静态类型与安全门禁体系全面失明，扩展统一使用 CLI 原生的 MCP 与 Skills。</td></tr>
+<tr><td>终端等价</td><td>在手机上打字与在电脑前对 claude 打字效果一样；CLI 有什么 Web 就有什么</td></tr>
+<tr><td>单用户 = 主机所有者</td><td>没有多用户或租户隔离；鉴权通过就等于本机启动 claude 的那个账号的权限</td></tr>
+<tr><td>不是远程桌面 / 共享 TTY / 多租户托管</td><td>不附着终端的 stdin / stdout</td></tr>
+<tr><td>对模型通路零假设</td><td>不关心 claude CLI 接的是官方订阅、API key、Bedrock / Vertex 还是第三方网关；不匹配 <code>ANTHROPIC_BASE_URL</code>、不设厂商白名单、不探测上游，唯一据以调整行为的是 CLI 自报的能力位</td></tr>
+<tr><td>不新增持久化层</td><td>消息的真相源永远是 CLI 的 transcript，CCM 一条都不存；新增持久化必须同时满足「claude 侧没有这个概念」与「不能从 transcript 重建」，缓存类必须能随时删</td></tr>
+<tr><td>鉴权是启动前提</td><td>没有 <code>AUTH_TOKEN</code> 就不启动，任何绑定模式都一样，本机浏览器也要令牌</td></tr>
+<tr><td>公网入口：一条基线、一个受管加层</td><td>基线是令牌 + 逐设备审批，对所有拓扑相同；Cloudflare Access 是可选加层；产品受管的第三方进程只有 <code>cloudflared</code>，Tailscale、WireGuard、反代一等支持但不受管</td></tr>
+<tr><td>不替用户决定怎么后台运行</td><td>启动只有两条入口：headless 终端 <code>npm start</code>，与 macOS 桌面端 CCM.app；macOS 之外不做官方常驻适配</td></tr>
+<tr><td>可选功能由用户开关，不猜</td><td>桌面控制台、两个 CLI 桥、推送等默认全关，装机向导逐项问；非交互模式下会动全局的项缺省关，会扩大攻击面的回落直接拒绝</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>与相邻系统的分工分界</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>系统核心职责：做什么</h2>
+<ul>
+  <li><strong>移动端友好的终端等价界面。</strong>流式输出、Markdown 与代码高亮、工具调用卡片、<code>AskUserQuestion</code> 交互、审批卡。</li>
+  <li><strong>会话生命周期与双向同步。</strong>复用本机 CLI 的 transcript（<code>~/.claude/projects/</code>），支持 Web 发起会话、续接历史会话、切换工作区、中断、<code>/rewind</code> 与分叉；与终端之间守单驾驶员模型。</li>
+  <li><strong>人机权限审批。</strong>Agent 调用白名单外的工具时，推送审批请求，手机上一键允许、拒绝或中止本轮。</li>
+  <li><strong>工作区保护与安全浏览。</strong>在显式配置的 <code>WORKDIRS</code> 内浏览、检索文件与查看 git 改动，杜绝路径穿越。</li>
+  <li><strong>自托管基础设施。</strong>结构化配置、启动自检（doctor）、离线推送、跨设备已读状态同步。</li>
+</ul>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>立场上不做的方向</h2>
+<ul>
+  <li><strong>多租户、RBAC、按用户隔离数据：</strong>违背 n=1 自托管前提。真要做，先改 hard-rules 的立场，而不是局部打补丁。</li>
+  <li><strong>SaaS 或托管服务：</strong>项目自己不运营任何中继或云端；公网入口由用户自选，CCM 承诺的是「模型请求之外不再多一条数据出口」。</li>
+  <li><strong>重新实现 Agent 状态机与编排层：</strong>直接依托官方 Agent SDK 与本机 CLI，功能先看 CLI 怎么做。</li>
+  <li><strong>无鉴权的 HTTP 数据端点：</strong><code>/health</code>、<code>/metrics</code>、历史回显都过鉴权。</li>
+  <li><strong>插件机制：</strong>2026-08-14 否决；认证策略虽已抽成接口，但仍在仓内、受全部门禁约束。扩展走 CLI 原生的 MCP 与 Skills。</li>
+</ul>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>已评估不做的技术债（hard-rules §5）</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>内容</th><th>决定</th></tr></thead>
+<tbody>
+<tr><td>AD-5</td><td>按（会话，连接）粒度的镜像锁，<code>readonly_changed</code> 定向下发</td><td>不做。已知代价：两台设备同时看不同会话时，会话 B 的 <code>mirror_state</code> 可能误解锁正在看 A 的那一端</td></tr>
+<tr><td>SP-10</td><td>busy→idle 吸收窗口的完整闭合（前端 uuid 幂等 + live 记 uuid）</td><td>不做。已知代价：本地回合收尾的吸收窗口里撞进来的终端写入可能被吞，需切会话重载</td></tr>
+<tr><td>OQ-09</td><td>审批时延之类的「人机 / 价值」埋点遥测</td><td>拒绝；管道健康指标走 <code>/metrics</code></td></tr>
+<tr><td>UP-1</td><td>让 Web 端的内置斜杠命令像终端那样 inline 跑</td><td>做不到：CLI 判据是「宿主有没有 <code>ReportFindings</code> 工具」，SDK 宿主没有，所以恒 fork。等上游开口子</td></tr>
+<tr><td>DT-1</td><td>在仓库里放编译好的 CCM.app 供下载</td><td>不做：下载来的 app 必带 quarantine，首次打开必撞 Gatekeeper；公证要付费开发者账号，对自托管工具不成比例</td></tr>
+</tbody>
+</table>
+</div>
+<p>重开条件：产品明确放弃 n=1，或「一人多机看不同会话」成为常态痛点；或有可测复现，并愿意承担 AD-5 / SP-10 的全链路改动。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>与相邻系统的分工</h2>
 <div class="mermaid">
 flowchart LR
   subgraph Client["移动端 (手机 PWA)"]
-    UI["聊天操作界面\n输入 · 审批 · 工作区切换"]
+    UI["聊天界面\n输入 · 审批 · 工作区切换"]
   end
 
-  subgraph Edge["公网 / 隧道边缘"]
-    CF["Cloudflare Tunnel / 反代\n负责传输加密与外网接入"]
+  subgraph Edge["公网 / 隧道入口（可选）"]
+    CF["Cloudflare Tunnel + Access / Tailscale / 反代\n传输加密与外网接入"]
   end
 
   subgraph CCM["Claude Chat Mobile 本地服务"]
     App["CCM Server\n鉴权 · 协议转发 · 镜像锁 · 状态同步"]
   end
 
-  subgraph Native["本机环境与系统"]
+  subgraph Native["本机环境"]
     CLI["claude CLI & Agent SDK\n执行决策 · 权限判断 · 工具调用"]
-    Disk["本地代码工作区 & ~/.claude\n项目源码 · 配置 · 会话记录"]
+    Disk["工作区 & ~/.claude\n源码 · 配置 · 会话记录"]
   end
 
-  UI <-->|"HTTPS / WSS"| CF
+  UI <-->|"HTTPS / WSS 或局域网直连"| CF
   CF <--> CCM
-  CCM <-->|"Agent SDK Stdio"| CLI
+  CCM <-->|"Agent SDK"| CLI
   CLI <--> Disk
-  CCM -.->|"读元数据"| Disk
+  CCM -.->|"读 transcript / 元数据"| Disk
 </div>
 
 <div class="kv">
-  <div class="row"><div class="key">claude CLI</div><div class="val">真实任务执行者，拥有工具执行与全局权限判定的最终决定权。</div></div>
-  <div class="row"><div class="key">Cloudflare / 反代</div><div class="val">外部网络打通与证书接入层，CCM 自身不负责动态管理 tunnel 守护进程。</div></div>
-  <div class="row"><div class="key">Web Push / ntfy</div><div class="val">仅提供异步通知唤醒功能，通道不可用不影响主流程的正常运转。</div></div>
+  <div class="row"><div class="key">claude CLI</div><div class="val">真实的任务执行者，工具执行与权限判定的最终决定权在它。</div></div>
+  <div class="row"><div class="key">公网入口</div><div class="val"><code>cloudflared</code> 是产品唯一受管的第三方进程（桌面端可安装、启停）；Tailscale、其他加密隧道与反代只给文档配方和 doctor 检测，产品不装、不起、不保活。</div></div>
+  <div class="row"><div class="key">Web Push / ntfy</div><div class="val">只做异步唤醒，通道不可用不影响主流程。</div></div>
 </div>
 
         <nav class="pager"><a class="prev" href="architecture.html"><span class="dir">← 上一篇</span><span class="ttl">系统架构</span></a><a class="next" href="evolution.html"><span class="dir">下一篇 →</span><span class="ttl">架构演进主线</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">产品定位与产品宪法 C1–C5</a></li><li class="h2"><a href="#s2">系统核心职责：做什么</a></li><li class="h2"><a href="#s3">明确不做的技术债清单</a></li><li class="h2"><a href="#s4">与相邻系统的分工分界</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">产品边界（改这些等于换产品）</a></li><li class="h2"><a href="#s2">系统核心职责：做什么</a></li><li class="h2"><a href="#s3">立场上不做的方向</a></li><li class="h2"><a href="#s4">已评估不做的技术债（hard-rules §5）</a></li><li class="h2"><a href="#s5">与相邻系统的分工</a></li></ul></aside>
     </div>
   </div>
 </div>

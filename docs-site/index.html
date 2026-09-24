@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>封面与导读 · Claude Chat Mobile</title>
-<meta name="description" content="一句话认识项目，看清这本手册怎么读。本页讲：这本手册从哪来、三条阅读路线、技术栈一瞥。">
-<meta name="llm:tokens" content="1151">
+<meta name="description" content="一句话认识项目，看清这本手册怎么读。">
+<meta name="llm:tokens" content="1219">
 <link rel="alternate" type="text/markdown" href="index.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/">
 <link rel="stylesheet" href="assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="index.html" class="active"><span class="idx">00</span><span>封面与导读</span></a><a href="pages/reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="pages/overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="pages/architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="pages/boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="pages/evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="pages/terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="pages/security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="pages/single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="pages/contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="pages/glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="pages/runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="pages/agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="pages/events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="pages/sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="pages/auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="pages/files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="pages/frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="pages/notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="pages/data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="pages/integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="pages/quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="pages/production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="pages/ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="pages/project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="pages/api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="pages/env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="pages/drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../zh/">项目主页</a><span class="sep">·</span><a href="../demo/">在线演示</a><span class="sep">·</span><a href="../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="index.html" class="active"><span class="idx">00</span><span>封面与导读</span></a><a href="pages/reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="pages/overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="pages/architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="pages/boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="pages/evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="pages/terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="pages/security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="pages/single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="pages/contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="pages/glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="pages/runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="pages/agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="pages/events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="pages/sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="pages/auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="pages/files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="pages/frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="pages/notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="pages/data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="pages/integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="pages/quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="pages/production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="pages/ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="pages/project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="pages/api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="pages/env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="pages/drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../zh/">项目主页</a><span class="sep">·</span><a href="../demo/">在线演示</a><span class="sep">·</span><a href="../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -47,8 +47,8 @@
   <h1>封面与导读</h1>
   <p class="lead">Claude Chat Mobile 项目全景手册：认识项目、阅读路线与事实基线。</p>
 </header>
-<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-09-08">手册 v2.0 更新于 2026-09-08</time> · 源码基线 dev@687bca3 · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
-<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机已登录的 <code>claude</code> CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
+<p class="meta-line" style="font-size:13px;color:var(--ink-faint);margin:0 0 1em;"><time datetime="2026-09-24">手册 v2.1 更新于 2026-09-24</time> · 源码基线 dev@3f488861 · 维护者 <a href="https://github.com/Ike-li">Ike-li</a></p>
+<p class="lead-extra">Claude Chat Mobile 是一层默认上锁的桥接转发层：把你本机的 <code>claude</code> CLI 接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
 
 <div class="statband">
   <div class="stat"><div class="num">1</div><div class="lbl">用户 / 实例 (n=1)</div></div>
@@ -64,7 +64,7 @@
 </div>
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>这本手册从哪来</h2>
-<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>687bca3</code>）。仓库采用产品宪法 C1–C5 与硬性规则治理（详见 <code>docs/hard-rules.md</code> 与 <code>docs/architecture.md</code>），本手册按真实运行代码与架构契约重叙述，不照搬历史陈旧文档。</p>
+<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>3f488861</code>；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 <code>docs/hard-rules.md</code>（产品边界、n=1 取舍、架构不变量、已决不做）与 <code>docs/architecture.md</code> 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。</p>
 
 <div class="callout warn"><div class="body">
 <strong>事实基线约定</strong>手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 <code>tests/gates/</code> 门禁为准，并应在<a href="pages/drift.html">漂移清单</a>中透明登记。
@@ -87,10 +87,10 @@
 <thead><tr><th>层级</th><th>技术选型</th><th>关键特性</th></tr></thead>
 <tbody>
 <tr><td>运行时</td><td>Node ≥20 · ESM · Express 5 · Socket.IO 4</td><td>三层架构，前后端零构建纯 ESM</td></tr>
-<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.263</td><td>双向流控制，驱动本机已登录的 <code>claude</code> CLI</td></tr>
+<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.278（v1.12.1 为 0.3.263）</td><td>双向流控制，驱动本机的 <code>claude</code> CLI</td></tr>
 <tr><td>配置与运维</td><td><code>ccm.config.json</code> · <code>env-schema.js</code></td><td>统一结构化配置、热重载工作区、统一读写源</td></tr>
-<tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>单用户强制 Token，非本地网络设备指纹审批</td></tr>
-<tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批/提问无条件推送，前台可见连接智能抑制</td></tr>
+<tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外）</td></tr>
+<tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制</td></tr>
 <tr><td>测试与门禁</td><td><code>node --test</code> · Playwright · 宿主机白名单</td><td>S0–S7 执行槽分层，容器沙箱 HOME 隔离破坏性操作</td></tr>
 <tr><td>开源许可</td><td>Apache-2.0 · NOTICE 归属声明</td><td>可自由自托管、商用与闭源再分发</td></tr>
 </tbody>

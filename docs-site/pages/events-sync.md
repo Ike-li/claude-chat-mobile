@@ -3,7 +3,7 @@
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1402
+- **Estimated Tokens**: ~1594
 
 ---
 
@@ -40,6 +40,8 @@
 2. 服务端提取环形缓冲中大于 lastSeq 的事件子集。
 3. 自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。
 4. 若客户端请求的 lastSeq 早于环形缓冲中最旧的一条，回传携带 gap: true ，客户端触发完整历史拉取。
+5. 回放有超时兜底： sync:since 的 ack 超时后转拉磁盘历史，而不是让加载卡一直转；ack 迟到也不会丢掉已积压的事件。
+6. 回放出来的事件对运行态中性：已经结束的回合不会因为回放被重新点亮成「运行中」，回放后再按广播口径对一次账。
 
 ## 出向 31 种契约事件分组
 
@@ -53,4 +55,4 @@
 | 后台任务与子代理 | task_notification 、 task_progress 、 api_retry |
 | 设备与元数据 | device_status 、 pending_devices 、 trusted_devices 、 session_log 、 history_append |
 
-事件定义真相源唯一维护于 `app/src/shared/protocol.js`。门禁 `tests/gates/agent-event-contract.js` 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。
+事件定义真相源唯一维护于 `app/src/shared/protocol.js`。`npm run check` 里的 `tests/gates/contract-check.js` 与 `agent-event-contract.js` 对生产代码、mock 与前端做双向校验：改一个 type 必须同时改 protocol、真实的 emit 路径、mock 与前端 handler，否则 check 变红。

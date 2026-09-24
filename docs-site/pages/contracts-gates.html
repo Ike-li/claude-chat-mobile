@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>契约与工程门禁 · Claude Chat Mobile</title>
-<meta name="description" content="事件契约、import 边界、inventory、check 流水线。本页讲：npm run check 门禁矩阵、测试体系与防假绿铁律、宿主机只跑白名单，其余进容器。">
-<meta name="llm:tokens" content="1409">
+<meta name="description" content="事件契约、import 边界、inventory、check 流水线。">
+<meta name="llm:tokens" content="2027">
 <link rel="alternate" type="text/markdown" href="contracts-gates.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html" class="active"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html" class="active"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -55,7 +55,7 @@
 <p class="lead-extra">契约与门禁是防止代码库在多会话、重度自动化演化过程中腐化的核心武器。将「口头约定」转化为 <code>npm run check</code> 中的硬性拦截卡口，做到违规即红灯。</p>
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>npm run check 门禁矩阵</h2>
-<p>在根目录下执行 <code>npm run check</code> 是零 Token、耗时最短（本地通常 5–15 秒）的综合健康检查。它由以下核心环节链接而成：</p>
+<p>在根目录下执行 <code>npm run check</code> 是零 Token、耗时最短的综合检查（desktop 没改动时 Swift 那一环按指纹缓存跳过，约 5 秒）。截至 dev@3f488861 共 16 道，<strong>完整清单以 <code>package.json</code> 的 <code>check</code> 为准</strong>：产品仓曾在文档里抄过一份清单，漂过两次，已删；新门禁忘了接线会被 <code>tests/unit/gate-wiring.test.mjs</code> 抓住。主要环节：</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>门禁脚本 / 环节</th><th>守护不变量与拦截范围</th><th>失效后果</th></tr></thead>
@@ -63,16 +63,21 @@
 <tr><td><code>npm run lint</code></td><td>ESLint 规则：语法正确性、无未定义引用、禁止死代码</td><td>代码风格散乱，隐式全局变量泄露</td></tr>
 <tr><td><code>check-import-boundaries.js</code></td><td>架构分层边界（前后端绝对隔离、shared 为纯叶子、server 为唯一 sink、零循环依赖）</td><td>分层被穿透，模块相互缠绕演变为巨型单体</td></tr>
 <tr><td><code>contract-check.js</code></td><td>出向 <code>agent:event</code>（31 种）与入向 <code>socket</code> 事件在代码、前端与 Mock 中的双向一致性</td><td>协议静默失效，前端收不到特定类型事件</td></tr>
+<tr><td><code>doc-consistency.js</code> · <code>check-diagram-claims.js</code></td><td>文档与代码的一致性（含契约计数）；gh-pages 架构图集里的常量、路径与基线</td><td>文档与图集静默过期</td></tr>
+<tr><td><code>check-n1-assumptions.js</code> · <code>i18n-check.js</code></td><td>n=1 假设面登记簿双向对齐（代码里的 <code>// n1:</code> 标记 ⇔ hard-rules 表）；i18n 孤儿 key</td><td>改立场那天找不全要动的地方；词条漂移</td></tr>
+<tr><td><code>check-shell-pitfalls.js</code> · <code>check-config-gitignored.js</code></td><td>脚本与 workflow 里的 shell 陷阱；<code>ccm.config.json</code> 等凭据文件必须被 gitignore（CONFIG-03）</td><td>管道静默吞错；凭据被提交进公开仓库</td></tr>
+<tr><td><code>check-disposable-env-guard.js</code> · <code>check-container-config-isolation.js</code></td><td>破坏性测试目录的首条 import 必须是执行位守卫；容器挂仓库根时必须覆盖 <code>ccm.config.json</code></td><td>破坏性测试在宿主机上真跑；容器读到生产配置</td></tr>
+<tr><td><code>app-build.js --test-only</code></td><td>desktop 的 Swift typecheck 与 CCMCore 单测</td><td>菜单栏代码编不过</td></tr>
 <tr><td><code>check-invariant-ids.js</code></td><td>测试命名规范：<code>tests/invariants/</code> 内的用例必须以 <code>// 守护：&lt;编号&gt;</code> 声明守护条目</td><td>不变量与测试脱节，出现无法追踪的假测试</td></tr>
 <tr><td><code>check-destructive-deletes.js</code></td><td>破坏性删除防护：单文件与递归删除必须可追溯到临时目录（mkdtemp）或标明豁免</td><td>防止测试代码意外删除真实开发数据</td></tr>
-<tr><td><code>check-playwright-forbidden-patterns.js</code></td><td>E2E 测试反模式：禁止不稳定选择器、无等待断言等脆弱代码</td><td>E2E 测试出现偶发假红，耗费排查精力</td></tr>
+<tr><td><code>check-playwright-forbidden-patterns.js</code></td><td>E2E 反模式：禁止 <code>test.only</code> / <code>skip</code> / <code>fixme</code>、<code>networkidle</code>、<code>waitForTimeout</code> 与手写的 <code>setTimeout</code> 睡眠</td><td>E2E 测试出现偶发假红，耗费排查精力</td></tr>
 <tr><td><code>repo-inventory.js</code></td><td>文件树前缀管控：新增文件必须显式归类于受控目录前缀或文档登记</td><td>临时审计、提案和日志文件悄悄回堆污染主树</td></tr>
 </tbody>
 </table>
 </div>
 
 <h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>架构分层硬门禁：check-import-boundaries</h2>
-<p>该脚本对全仓执行静态 AST 依赖分析（包含动态 <code>import()</code> 扫描），强制执行以下铁律：</p>
+<p>该脚本对全仓做静态依赖分析（含动态 <code>import()</code>），强制执行以下规则，违反时它会自己说清是哪一条：</p>
 <pre><code>1. 前后端互不 import：app/public/js 与 app/src 严格禁止互相引入（唯一豁免规范化工具 canonicalize.js）。
 2. shared 是纯叶子层：app/src/shared 严禁反向引入其他任何后端领域模块。
 3. server 是组装根：除入口 app/server.js 和自身外，任何域模块禁止反向依赖 app/src/server。
@@ -83,7 +88,7 @@
 <p>根据 <code>docs/testing.md</code> 的规范，编写与修改测试遵循三大铁律：</p>
 <div class="cards">
   <div class="card"><span class="k">01</span><h4>测试放哪里唯一判据</h4><p>在编号表中查得到编号的进 <code>tests/invariants/</code> 并标注守护行；查不到进 <code>tests/unit/</code> 且不写守护行。</p></div>
-  <div class="card"><span class="k">02</span><h4>失败方向严格受控</h4><p>产品的 Fail-Closed 是逐条权衡的（如配置读取异常保留 last-good），按盲目拒绝编写会把测试测反。</p></div>
+  <div class="card"><span class="k">02</span><h4>失败方向严格受控</h4><p>产品的 fail-closed 是逐条选过的：配置 JSON 语法错误要抛错、不回落另一份文件；但 <code>trusted-devices.json</code> 瞬时读失败要保留上一份可用的信任表，鉴权通过后 handler 抛 500 不得计入限速。按「所有异常都拒绝」写会把后两条测反。</p></div>
   <div class="card"><span class="k">03</span><h4>必须反向证明不恒绿</h4><p>在 Commit Message 的 <code>Tested:</code> 中写明曾注入什么错误使得测试变红。看着漂亮却永不变红的测试比没有更危险。</p></div>
 </div>
 
@@ -91,7 +96,8 @@
 <p>为杜绝类似 2026-08-02 误删本地数据的事故重演，仓库设立了严密的物理隔离界限（由 <code>tests/gates/guard-host-tests.js</code> 守卫）：</p>
 <ul>
   <li><strong>宿主机允许运行白名单</strong>：仅允许 <code>npm run lint</code>、<code>npm run check</code>、<code>npm run test:unit</code> 和 <code>npm run test:e2e</code>（打纯内存 Mock Server）。</li>
-  <li><strong>进容器运行的黑盒测试</strong>：所有会拉起真实后台进程、测试卸载器或执行变异测试的指令（如 <code>test:docker</code>、<code>mutate:docker</code>、<code>test:invariants:env</code>），一律强制在 Docker 容器中执行，容器内 <code>HOME</code> 为一次性虚拟挂载，物理切断对开发机家目录的破坏能力。</li>
+  <li><strong>进容器运行的黑盒测试</strong>：所有会拉起真实后台进程、测试卸载器或执行变异测试的指令（如 <code>test:docker</code>、<code>mutate:docker</code>、<code>test:invariants:env</code>），一律强制在 Docker 容器中执行，容器内 <code>HOME</code> 为一次性目录，物理切断对开发机家目录的破坏能力。</li>
+  <li><strong>执行位守卫</strong>：<code>tests/invariants/env/</code>、<code>tests/invariants/server/</code>、<code>tests/integration/</code> 下每个文件的首条 import 是 <code>tests/setup/require-disposable-env.mjs</code>，不在一次性环境里就直接 exit 1；<code>mutate</code> 在 <code>main()</code> 开头调用同一份判据。它把「需要正确归类才能生效」降成「需要刻意绕过才能失效」，但不是物理隔离，真正的隔离仍然是容器。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="single-driver.html"><span class="dir">← 上一篇</span><span class="ttl">单驾驶员模型</span></a><a class="next" href="glossary.html"><span class="dir">下一篇 →</span><span class="ttl">术语表</span></a></nav>

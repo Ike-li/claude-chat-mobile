@@ -3,11 +3,11 @@
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1747
+- **Estimated Tokens**: ~2299
 
 ---
 
-Claude Chat Mobile 的核心产品目标是终端等价：终端 CLI 有什么，移动端 Web 就有什么。实现上不重造 Agent 调度，而是直接由 Agent SDK 驱动本机已登录的 `claude` CLI，并共用同一套配置、权限与 Transcript 历史。
+核心产品目标是终端等价：终端 CLI 有什么，手机上的 Web 就有什么。实现上不重造 Agent 调度，而是由 Agent SDK 驱动本机的 `claude` CLI，共用同一套配置、权限与 transcript。
 
 ## 等价原则与心智模型
 
@@ -15,61 +15,72 @@ Claude Chat Mobile 的核心产品目标是终端等价：终端 CLI 有什么�
 当你不知道某个功能该怎么做时：CLI 有什么 web 就有什么，先去找 claude code CLI 是怎么实现的。—— `CLAUDE.md`
  
 
-本项目不是远程桌面投屏，更不是另一个平行实现的 Claude 客户端。在手机上发送一条提示词、批准一次工具调用、切换一次模型或调整思考强度，在底层必须等价于坐在电脑前直接敲击终端命令。任何「Web 还需要什么新功能」的需求，默认动作是寻找 CLI 原生实现进行对接，严禁在桥接层私造平行逻辑。
+本项目不是远程桌面投屏，也不是另一个平行实现的 Claude 客户端。在手机上发一条提示词、批准一次工具调用、切一次模型或思考强度，底层都要等价于坐在电脑前敲终端。「Web 还缺什么功能」的默认动作是去找 CLI 的原生实现对接，不在桥接层私造平行逻辑。
 
  
     01 
 #### 驱动同源
 
-依托官方 Agent SDK 与本机已登录的 `claude` 二进制建立 IPC 通信，而非自写工具循环。
+经官方 Agent SDK 驱动本机的 `claude` 二进制，不自写工具循环；CLI 怎么配（官方订阅、API key、第三方网关）就怎么用。
  
     02 
 #### 配置同源
 
-`settingSources: ['user','project','local']`，完整遵循 CLI 的配置分层继承顺序。
+`settingSources: ['user','project','local']`，按 CLI 的配置分层继承，并按工作区目录加载。
  
     03 
 #### 会话同源
 
-Transcript 统一持久化在 `~/.claude/projects/`，与 CLI `/resume` 指向完全一致的记录文件。
+transcript 统一在 `~/.claude/projects/`，与 CLI `/resume` 指向同一份记录文件。
  
  
 
-## 配置加载与权限体系
+## 终端里的事，手机上怎么做
 
-系统启动 Agent 时显式声明：
+| 终端里 | 手机上 |
+| --- | --- |
+| 工具审批（y / n） | 审批卡：允许 / 拒绝 / 中止本轮（对齐 Esc ）；可勾「总是允许」，选仅本会话或永久 |
+| AskUserQuestion | 选项直接点；多选、「其他…」自己填、「跳过并中止本轮」都在 |
+| claude / --resume | 顶栏 + 新建（选工作区、分支、是否开在新 worktree）；侧栏列出该工作区全部会话 |
+| /model 、权限档、思考强度 | 底栏 chip 点开就改，下一条起效；思考强度在回合进行中也能切 |
+| @ 引用文件、 / 斜杠命令 | 输入 @ 搜工作区文件；输入 / 列候选，含你装的 skills。只能在终端里用的命令不进手机菜单；会话中途命令变化时同步到手机 |
+| /rewind 与分叉 | /rewind 两步面板（Web 上是分叉出新会话，原会话不动）；assistant 气泡常驻「分叉」入口 |
+| statusline、后台任务 | 底栏常驻摘要；任务横幅显示耗时与用量，可单独停掉某一个，完成后能查看 CLI 落盘的输出 |
+| 终端里开着的会话 | 能看，也能接着驾驶；同一时刻只有一个驾驶端，接管时会提示 |
 
-```
-settingSources: ['user', 'project', 'local']
-```
+## 权限放行：不注入 allowedTools
 
-这意味着用户在电脑端 `~/.claude/settings.json` 或当前项目 `.claude/settings.json` 中配置的自定义规则、API 环境变量、自定义 MCP 服务器和 Hooks 会自动对 Web 端生效。
+创建 SDK 实例时**不注入** `options.allowedTools`，放行集合完全来自 settings 里 `permissions.allow` 的并集，与终端 CLI 的逻辑相同：
 
-## 权限放行：绝不注入 allowedTools
-
-在创建 SDK 实例时，系统**坚决不注入** `options.allowedTools`。放行集合完全依托于 settings 中 `permissions.allow` 的并集（与终端 CLI 逻辑逐字相同）：
-
-| 层级 | 触发行为 | 处理策略 |
+| 层级 | 触发 | 处理 |
 | --- | --- | --- |
-| settings permissions.allow | 与用户本地配置命中 | SDK 内部底层直接放行，不触发 canUseTool 回调，手机不弹窗 |
-| canUseTool 拦截闸 | 未在白名单中的操作（如非只读 Bash） | 由 CCM 捕获，根据当前权限档位决定直接放行、拒绝或推送到手机界面弹窗审批 |
-| 桥接层自设规则 | 禁止建立独立的白名单配置 | 严格避免 Web 端与 CLI 终端规则分叉 |
+| settings permissions.allow | 命中用户配置 | SDK 直接放行，不触发 canUseTool ，手机不弹窗 |
+| canUseTool 回调 | 白名单外的操作 | 由 CCM 按当前权限档决定放行、拒绝，或推到手机弹审批卡 |
+| 「总是允许」 | 审批时勾选 | 「仅本会话」只改本会话、不落盘；「永久」把 CLI 给出的建议规则原样交回 SDK，按各自目的地写进 CLI 自己的 settings（实测为工作区的 .claude/settings.local.json ），CCM 不另建白名单 |
 
-> **WARNING:** 公网暴露前的安全审查 — 公网暴露服务前，必须仔细审查全局 ~/.claude/settings.json。如果在终端中长期积累了过宽的 Bash(...) 自动放行规则，移动端连接后同样会自动放行，而不会弹窗二次确认。
+「设置」里有审批规则的只读面，能看到哪些工具不弹审批。
+
+> **WARNING:** 公网暴露前的安全审查 — 公网暴露前，仔细检查 ~/.claude/settings.json 与各工作区的 settings。终端里长期积累的过宽 Bash(...) 放行规则，手机连上之后同样会自动放行，不会弹窗二次确认。手机端安全体检会列出其中的危险项。
 
 ## 六档权限模式
 
-系统在运行时支持 6 档权限模式（通过 `setPermissionMode` 动态切换）：
+运行时支持六档，可随时切换，差分决定是否调 `setPermissionMode`：
 
-| 模式枚举 | 语义与行为 | 与 CLI 的对应关系 |
+| 模式 | 语义 | 实现要点 |
 | --- | --- | --- |
-| default | 默认安全档：白名单外操作通过 canUseTool 弹出手机卡片审批 | 与 CLI 默认交互行为完全等价 |
-| plan | 计划模式：禁止破坏性写操作，仅允许规划与只读探索 | 与 CLI Plan 模式语义一致 |
-| acceptEdits | 接受编辑档：自动放行常规文件修改与编辑工具 | 对齐 CLI 接受编辑档位 |
-| bypassPermissions | 跳过审批档：给 SDK 映射为 default，由 CCM 内部直接放行，避免传全局危险标志 | 等价于 CLI --dangerously-skip-permissions |
-| dontAsk | 静默拒绝档：白名单外工具一律自动拒绝，手机绝不弹窗打扰 | Web 独有安全档，CLI Transcript 不会产生此标记 |
-| auto | 自动模型裁决档：依托 SDK 内部模型分类器自动判定批准或拒绝 | 对接 SDK 实验性智能判权特性 |
+| default （Manual） | 危险操作弹审批卡 | 与 CLI 默认交互等价 |
+| plan | 只规划，不执行工具 | 与 CLI Plan 模式一致 |
+| acceptEdits | 自动放行文件编辑类操作 | 对齐 CLI |
+| dontAsk | 白名单外一律拒绝，不弹窗 | CLI 的非交互严格档，原样透传给 SDK；白名单外在终端层直接拒绝，不走 canUseTool |
+| auto | 由模型分类器判定批准或拒绝 | 对接 SDK 的自动判权 |
+| bypassPermissions | 跳过审批 | 给 SDK 映射为 default ，由 CCM 的闸门直接放行，避免传全局危险标志；从 bypass 降档立即在本地生效，不等 SDK 回包 |
 
-## 模型切换与思考强度 (effort) 控制
+## 模型与思考强度
 
-用户可以在移动端输入框随时切换活跃模型（如 Sonnet / Opus / Haiku / Fable）与思考强度（`effort`）。得益于 SDK 升级，思考强度支持通过 `applyFlagSettings({effortLevel})` 运行时即刻生效，无需销毁重建实例。新开会话（FRESH）默认采用 CLI 设置合并后的基线配置，保证与直接新起命令行体验完全一致。
+模型与思考强度都能在底栏随时切换。思考强度的档位分两层（语义以产品仓 `docs/display-contracts.md` 为准）：
+
+- SDK 档： low 、 medium 、 high 、 xhigh 、 max ，真正传给 Agent SDK。
+- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto （dev 已合入，尚未发版）；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
+- 切换路径： 具体档与 auto 经控制请求（ applyFlagSettings ）即刻生效，不重建实例，回合进行中也能切；切回「没指定」没有对应的控制请求，要重开实例。
+
+新会话（FRESH）默认采用 CLI 设置合并后的基线，与直接新起命令行一致。

@@ -3,51 +3,60 @@
 
 - **Part**: 第五部分 · 数据与集成
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1235
+- **Estimated Tokens**: ~1741
 
 ---
 
-控制面状态、CLI Transcript、附件存储与内存态在物理上分属不同目录。备份与清理磁盘前，必须分清「受管控制面数据」与「CLI 原生记录」。
+控制面状态、CLI transcript、附件与内存态在物理上分属不同位置。备份与清理磁盘前，先分清「CCM 受管的控制面数据」与「CLI 原生记录」。
 
-## 存储体系全景
+## 存储全景
 
-| 数据存储路径 | 职责角色 | 归属与生命周期 |
+| 位置 | 是什么 | 性质 |
 | --- | --- | --- |
-| $CCM_DATA_DIR/sessions.json | 会话控制元数据（当前激活指针、重命名、隐藏列表、跨设备已读位点等） | 持久化元数据；仅存展示偏好，非对话正文 |
-| …/approval-requests.json | 工具审批台账记录 | 持久化审计记录（内存执行闸门为真实判权源） |
-| …/trusted-devices.json | 已授权设备指纹与签名 Token（TOFU 机制） | 核心安全状态；删除后手机接入需重新在电脑端点击批准 |
-| …/pending-devices.json | 等待批准的外部设备连接队列 | 临时待审批列表 |
-| …/uploads/ / | 受管附件目录 ：手机端上传的图片与文档原件 | 受管持久化数据；通过 --add-dir 自动授权给 CLI |
-| …/audit-records.json | 系统安全审计日志（限速、封禁与越界访问等） | 持久化环形审计 |
-| ccm.config.json （仓库顶级根） | 统一结构化配置文件 （端口、Token、工作区、网络拓扑等） | 由 config-file.js 统管； WORKDIRS 支持热重载 |
-| ~/.claude/projects/ /*.jsonl | 真实对话 Transcript ：完整对话流与工具执行记录 | 完全由本机 claude CLI 维护，不随 CCM 搬家 |
-| 内存 Ring Buffer (2000条) | 在途事件流与近期信封缓存 | 进程易失，用于断线快速补发 |
+| $CCM_DATA_DIR/sessions.json | 会话索引与指针：各工作区当前会话、模型 / 权限档 / 思考强度等偏好 | 持久；不存对话正文，可从 transcript 重建 |
+| …/read-state.json | 已读位点，跨设备共享 | 持久；丢了只是未读标记重新亮起 |
+| …/approval-requests.json | 工具审批台账 | 持久审计记录；执行闸门以内存判权为准，重启时挂着的审批不可再执行 |
+| …/trusted-devices.json | 已信任的设备 | 核心安全状态；删了之后所有设备都要重新批准 |
+| …/pending-devices.json | 等待批准的新设备 | 临时待审队列 |
+| …/device-profiles.json | 设备元数据：机型、浏览器、别名 | 持久；只影响设备的显示名 |
+| …/push-subscription.json | Web Push 订阅 | 持久；存浏览器的推送订阅（endpoint 与加密密钥），不存设备令牌 |
+| …/audit-records.json | 安全审计：限速锁定、越界访问、设备审批与吊销、删除被拒等 | 持久；只经鉴权后的 audit:get 读取，不开 HTTP 端点 |
+| …/uploads/ / | 手机上传的附件原件 | 持久；经 additionalDirectories 交给 CLI，免审批读取 |
+| …/service-events.json 、 service-snapshot.json | 重启记录与服务状态快照 | 运维用，供服务状态面板的重启记录与 flapping 判定 |
+| …/init-cache.json 、 cf-access-certs.json | 启动水合缓存、Access 公钥缓存 | 缓存：可随时删除，损坏就当作没有 |
+| ccm.config.json （仓库根） | 统一结构化配置 | 由 config-file.js 统管；与 .env 同等敏感，已在 .gitignore 里；不在源码归档里，覆盖升级碰不到 |
+| ~/.claude/projects/ /*.jsonl | 对话 transcript：完整对话与工具执行记录 | 由本机 claude CLI 维护，不随 CCM 搬家；CCM 只追加一行 entrypoint-marker |
+| ~/.claude/ccm/hooks-v1/ | hooks bridge 的文件投递箱（装了才有） | 加速触发器；server 消费后删除，过期文件定期清理；transcript 仍是真相源 |
+| 内存环形缓冲（2000 条） | 近期事件信封，按 seq + epoch 编号 | 进程易失，断线重连时按序补发 |
 
-> **WARNING:** 附件已完成搬家 — 历史版本中附件位于各项目工作区下的 .ccm-uploads/。当前版本已全部统一收敛至受管数据根下的 $CCM_DATA_DIR/uploads/，避免向用户 Git 仓库写入脏文件，旧目录仅作为只读兼容回落。
+没有设置 `CCM_DATA_DIR` 时，数据根是仓库下的 `./data`。长期跑着的实例建议设成仓库外的绝对路径，免得切分支、清理仓库或测试脚本碰到生产状态。
 
-## 双层事实源 (Double SoT) 与备份边界
+> **WARNING:** 附件已完成搬家 — 早期附件位于各工作区的 .ccm-uploads/。2026-09-06 起统一落在 $CCM_DATA_DIR/uploads/，不再往用户的 git 仓库写文件；旧目录既不迁移也不删除，历史消息预览会自动回落过去读。
+
+## 备份边界
 
  
    
     
-#### CCM 控制面 ($CCM_DATA_DIR)
+#### CCM 控制面（$CCM_DATA_DIR）
 
     
-管理「Web 端如何看待会话、哪些设备被授权连入、附件文件保存在哪」。丢失仅导致设备需重新认证、会话标题回退，不会破坏聊天事实。
+管「Web 端怎么看待会话、哪些设备被授权、附件放在哪」。丢了会让设备需要重新批准、界面偏好回到默认，但不会破坏聊天记录本身。
 
    
    
     
-#### CLI Transcript (~/.claude/projects/)
+#### CLI transcript（~/.claude/projects/）
 
     
-管理「历史说了什么、执行了哪些代码、Token 开销多少」。由 CLI 原生写入，CCM 仅执行追平与安全追加。
+管「说了什么、执行了什么、花了多少」。由 CLI 原生写入，CCM 只读取追平，外加那一行 `entrypoint-marker`。注意 Claude Code 会按修改时间清理 30 天前的 transcript。
 
    
  
 
-## 全量迁移与灾备建议
+## 迁移与灾备
 
-- 完整迁移清单： 停止服务进程 → 拷贝 $CCM_DATA_DIR → 拷贝 ~/.claude/projects/ → 导出 ccm.config.json 。
-- 敏感文件权限防护： 建议配置数据目录文件权限为 0600 ，目录权限为 0700 ，防范本地非特权用户读取。
-- 自动化测试沙箱隔离： 执行破坏性测试或运行变异测试时，必须通过 Docker 容器隔离，容器内 HOME 为虚拟空壳，彻底隔绝真实数据。
+- 迁移数据目录： 先停掉 server（桌面端菜单或 headless 那个终端）并备份，拷贝 $CCM_DATA_DIR ，在 ccm.config.json 里写上新的 CCM_DATA_DIR ，跑一遍 node scripts/doctor.js ，再按原入口拉起。 scripts/device.js 、server 与 doctor 都读同一个 CCM_DATA_DIR 。
+- 权限： 数据目录文件保持 0600 ，目录 0700 ，防本机其他用户读取。
+- 卸载： npm run uninstall 只删产品自己装的东西，manifest 之外的 unit、 ~/.cloudflared 与 ~/.claude/projects 永远不碰。
+- 测试隔离： 破坏性测试与变异检查一律进容器，容器里的 HOME 是一次性目录，真实数据碰不到。

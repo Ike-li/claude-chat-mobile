@@ -1,47 +1,62 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">常驻服务的日常运维速查、高频故障排查树、监控探针与系统体检（Doctor）。修改配置后若未生效，绝大多数情况是未执行服务重启。</p>
+<p class="lead-extra">常驻服务的日常运维速查、高频故障排查与两种体检。改了配置不生效，绝大多数情况是没有重启服务。</p>
 
 <h2>常用运维指令速查</h2>
-<pre><code># 1. 结构化配置查看与修改
+<pre><code># 1. 配置查看与修改
 node scripts/config.js get PORT
 node scripts/config.js set ACCESS_PROFILE reverse-proxy
+node scripts/config.js schema
 
-# 2. 全面健康自检
+# 2. 启动自检
 node scripts/doctor.js
 
-# 3. macOS 常驻服务热管理 (LaunchAgent)
-npm run service:status     # 查看当前进程 PID、运行时间与错误码
-npm run service:restart    # 优雅重启服务
-npm run service:logs       # 查看实时日志输出
+# 3. 重启：按你用的那条入口
+#    headless：在跑 npm start 的那个终端里停掉再起
+#    macOS 桌面端：菜单里 server 一行点「重启」，日志用「查看日志」
+#    人在 SSH 里、服务却是桌面端装的：
+npm run service:status
+npm run service:restart -- server
+npm run service:logs -- server
 
-# 4. 设备授权管理
+# 4. 设备
 node scripts/device.js list
 node scripts/device.js approve &lt;DEVICE_ID&gt;</code></pre>
 
 <h2>高频故障排错表</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>故障现象</th><th>最可能根因</th><th>排查与修复动作</th></tr></thead>
+<thead><tr><th>故障现象</th><th>最可能根因</th><th>排查与修复</th></tr></thead>
 <tbody>
-<tr><td>外网访问报 502 / 1033</td><td>CCM Server 未启动或隧道未正确映射端口</td><td>先检查 <code>npm run service:status</code> 确认 Server 在跑；再看 Cloudflare 隧道日志是否输出 <code>Registered tunnel connection</code></td></tr>
-<tr><td>OTP 验证通过但应用连不上</td><td>Cloudflare Access JWT 校验失败</td><td>在服务端日志搜索 <code>Access JWT</code>；核对 <code>CF_ACCESS_TEAM</code> 与 <code>AUD</code> 是否与控制台严格匹配</td></tr>
-<tr><td>修改配置后行为未发生改变</td><td>常驻进程尚未重载配置</td><td>执行 <code>npm run service:restart</code>（仅 <code>WORKDIRS</code> 修改支持热重载免重启）</td></tr>
-<tr><td>手机端无法打开且控制台无报错</td><td>未配置 <code>AUTH_TOKEN</code></td><td><strong>有意设计</strong>：未设 Token 时服务恒定仅绑 <code>127.0.0.1</code>；需配置有效 Token 并重启</td></tr>
-<tr><td>新手机接入始终处于 pending</td><td>触发设备信赖门禁 (TOFU)</td><td>在电脑终端敲 <code>node scripts/device.js approve &lt;ID&gt;</code> 放行该设备</td></tr>
-<tr><td>运行耗时任务被中断</td><td>误碰全局空闲超时</td><td>检查是否派生子代理；系统依赖 <code>bgTasks</code> 刷新心跳，如无子代理但任务耗时极长，调大 <code>IDLE_TIMEOUT_MS</code></td></tr>
+<tr><td><code>npm start</code> 立即退出，提示缺令牌</td><td>没有 <code>AUTH_TOKEN</code>，它是启动前提</td><td><code>npm run setup</code> 生成；不存在「不设令牌先绑本机」的路径</td></tr>
+<tr><td>服务起来了，手机打不开</td><td>地址或监听面不对</td><td>同 WiFi 用横幅里的局域网地址，或 <code>node scripts/qr.js</code> 扫码；<code>BIND_MODE=loopback</code> 时手机无法直连，横幅会写明，要自己转发</td></tr>
+<tr><td>能进页面，但聊不通</td><td>电脑终端里的 claude 本身跑不通</td><td>手机上收到的是 CLI 透传的具体报错，说明链路是通的。先在电脑终端、同一工作区目录下把 <code>claude</code> 聊通一轮：官方订阅要 <code>/login</code>；第三方网关检查 <code>ANTHROPIC_*</code> 写在哪一层，再看 doctor 的 MODEL_SETTINGS</td></tr>
+<tr><td>新手机一直停在待审批</td><td>设备审批</td><td><code>node scripts/device.js approve &lt;ID&gt;</code>，或在跑 <code>npm start</code> 的终端按回车、用菜单栏、在另一台已信任设备上点「准入」</td></tr>
+<tr><td>公网 502 / 1033</td><td>server 没跑，或隧道挂了</td><td>看 server 日志并重启；隧道日志里有没有 <code>Registered tunnel connection</code>；部署机开着全局代理 / VPN 时，给 <code>cloudflared</code> 配直连规则</td></tr>
+<tr><td>OTP 登录过了，但应用连不上</td><td>Access JWT 校验失败</td><td>server 日志搜 <code>[http-auth] 鉴权失败（access_jwt）</code>（socket 握手侧是 <code>[conn] … 握手鉴权</code>），核对 <code>CF_ACCESS_TEAM</code> / <code>CF_ACCESS_AUD</code> 与 Cloudflare 应用是否一致</td></tr>
+<tr><td>改了配置不生效</td><td>没重启</td><td>只有 <code>WORKDIRS</code> 热加载，其余都要重启</td></tr>
+<tr><td>Android 收不到推送</td><td>Chromium 系推送经 Google FCM</td><td>订阅那一刻开代理重试；宿主机要能长期访问 Google（失败会出现在抽屉「服务」小节）；不想依赖 Google 就用 ntfy</td></tr>
+<tr><td>第三方网关报 <code>model_not_found</code></td><td>模型名需要后缀（如 <code>&lt;model&gt;[1m]</code>）</td><td>在工作区 <code>.claude/settings.local.json</code> 的 <code>env</code> 块写 <code>ANTHROPIC_MODEL</code>，或在 Web 端 <code>/model &lt;带后缀名&gt;</code> 切换</td></tr>
+<tr><td>回复只有工具卡、没有正文</td><td>网关可能不流式</td><td>服务端已有全文兜底；仍复现就带 <code>LOG_STDERR=1</code> 看子进程日志</td></tr>
+<tr><td>长时间无输出被判挂死</td><td><code>IDLE_TIMEOUT_MS</code>（默认 10 分钟）</td><td>后台任务运行期间在途轮有看门狗豁免（有上限）；确实需要更长的静默时调大该值</td></tr>
 </tbody>
 </table>
 </div>
 
-<h2>系统体检：CLI Doctor 与 UI Doctor 的分界</h2>
+<h2>两种体检的分界</h2>
 <div class="split">
   <div>
-    <h4>CLI Doctor (scripts/doctor.js)</h4>
-    <p>冷启动前由运维执行：检测配置文件自洽性、本地 <code>claude</code> 二进制路径、工作区写权限、端口冲突以及文件安全权限等硬性条件。</p>
+    <h4>CLI doctor（scripts/doctor.js）</h4>
+    <p>启动前在电脑上跑：配置文件是否自洽、<code>claude</code> 路径、工作区与过宽根、端口、配置文件权限（<code>--fix</code> 自动收紧）、访问方案与公网配置是否矛盾、Tailscale 检测等硬条件。</p>
   </div>
   <div>
-    <h4>UI 运行态体检 (doctor-runtime.js)</h4>
-    <p>服务启动后由 Web/手机端调起：输出脱敏的安全视图，包含 Access 校验生效态、设备审批队列、IPv6 限速分桶状态以及全局 <code>settings.json</code> 敏感工具白名单摘要。</p>
+    <h4>手机端安全体检（doctor-runtime.js）</h4>
+    <p>服务启动后在「设置 → 排查」里跑，输出脱敏视图：令牌、监听面、claude 路径、工作区、配置权限、Cloudflare Access、访问方案、Tailscale、设备闸、文件编辑、推送、设备数、模型设置、被环境变量覆盖的键，以及权限放行规则里的危险项。</p>
   </div>
 </div>
+
+<h2>看日志</h2>
+<ul>
+  <li><strong>手机上：</strong>「设置 → 排查」能读 server 进程日志（整段脱敏后再切行）、会话日志与安全日志；服务状态面板里有判定化告警与重启记录。</li>
+  <li><strong>电脑上：</strong>headless 就是 <code>npm start</code> 那个终端；桌面端用菜单「查看日志」，或 <code>npm run service:logs -- server</code>。</li>
+</ul>

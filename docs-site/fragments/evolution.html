@@ -7,8 +7,9 @@
   <div class="node"><span class="pnum">第一阶段</span><h4>桥接层打通（2026-06）</h4><p>放弃自造 LLM 编排器，通过 Agent SDK 建立双向流，确立终端等价性立场。</p></div>
   <div class="node"><span class="pnum">第二阶段</span><h4>双通道与单驾驶员（2026-07）</h4><p>确立「单驾驶员模型」，引入磁盘轮询镜像引擎与读写互斥锁，彻底杜绝数据分叉。</p></div>
   <div class="node"><span class="pnum">第三阶段</span><h4>测试安全重构与沙箱防线（2026-08）</h4><p>经历变异测试误伤数据的教训，确立容器隔离 HOME、宿主机命令白名单与 S0–S7 执行槽分层。</p></div>
-  <div class="node"><span class="pnum">第四阶段</span><h4>配置与网络拓扑重构（2026-08 末 ~ 2026-09）</h4><p>从松散 .env 升级为结构化 <code>ccm.config.json</code>；确立 ACCESS_PROFILE 三候选拓扑，支持无 Cloudflare 部署。</p></div>
+  <div class="node"><span class="pnum">第四阶段</span><h4>配置与网络拓扑重构（2026-08 末 ~ 2026-09）</h4><p>从松散 .env 升级为结构化 <code>ccm.config.json</code>；令牌成为启动前提；<code>ACCESS_PROFILE</code> 作为纯声明落地、<code>BIND_MODE</code> 可收窄监听面，Cloudflare 降为可选加层，不经 Cloudflare 的部署成为一等路径。</p></div>
   <div class="node"><span class="pnum">第五阶段</span><h4>SDK 升级与活体感知深化（2026-09）</h4><p>升至 SDK 0.3.263，接入 <code>applyFlagSettings</code> 运行时调参；完善终端等待态感知与 tail attribution 归因。</p></div>
+  <div class="node"><span class="pnum">第六阶段</span><h4>分发、安全与终端对齐的收口（2026-09 中下旬）</h4><p>分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 <code>/rewind</code>、assistant 气泡加分叉入口；dev 上又合入额度重置自动继续、思考强度 auto 档，SDK 升到 0.3.278。</p></div>
 </div>
 
 <h2>近期重大关键决策与事故教训</h2>
@@ -19,9 +20,12 @@
 <tr><td>8/2 删库事故与沙箱防线</td><td><code>mutate</code> 测试在改坏源码时把路径函数算成空串，误打在宿主机真实 <code>~/.claude/projects</code> 上造成数据清除。</td><td><strong>宿主机仅跑白名单命令</strong>（<code>guard-host-tests.js</code>）；所有可能造成破坏的测试一律在容器中跑（容器内 HOME 为一次性沙箱）。</td></tr>
 <tr><td>8/14 插件化提案被否决</td><td>曾提案将系统扩展插件化、允许动态加载外部模块。</td><td><strong>坚决不做插件化</strong>。插件出仓库会导致 import 边界、双向事件契约与静态门禁彻底失明，扩展全走 CLI 原生 MCP/Skills。</td></tr>
 <tr><td>8/26 计数失明与长轮次</td><td>模型输出数分钟无 token 刷新，被误判为卡死。</td><td>确立以 transcript 字节增长作为真实死活判据；避免基于静态超时武断终止活跃长工具执行。</td></tr>
-<tr><td>9/1 拓扑重构与三候选落地</td><td>原网络判定过度与 Cloudflare 绑定，纯反代或局域网部署难以通过健康检查。</td><td>落地 <code>ACCESS_PROFILE</code>（<code>cloudflare</code>, <code>reverse-proxy</code>, <code>lan</code>），将非 Cloudflare 部署正式升为一等支持路径。</td></tr>
+<tr><td>9/1 五条原则写进 hard-rules</td><td>调查发现：改造前不设令牌时，本机浏览器打开 localhost 就是零凭证的全权控制台；网络判定与 Cloudflare 绑得过紧。</td><td>固化进 hard-rules §1：对模型通路零假设、不新增持久化层、鉴权是启动前提、公网入口一条基线加一个受管加层。<code>ACCESS_PROFILE</code> 作为纯声明落地（后扩到 <code>cloudflare</code> / <code>vpn</code> / <code>reverse-proxy</code> / <code>direct</code> / <code>lan</code> 五档）。</td></tr>
 <tr><td>9/3 运行时 effort 动态切换</td><td>历史实现认为 SDK 无法动态改 effort，切档必须重启实例。</td><td>实证实测推翻旧假设：SDK 原生支持 <code>applyFlagSettings({effortLevel})</code> 运行时生效，改掉低效的实例置换。</td></tr>
 <tr><td>9/6-8 终端活体识别与归因修复</td><td>桌面端写活体条目但不写 status；Web 续接后误将已结束的 pending 归因于桌面端。</td><td>深化活体与终端等待态（terminalWaiting）感知；严格区分锁判定（宁可误锁）与列表展示（宁可少报）的相反判定方向。</td></tr>
+<tr><td>9/8 分发改为源码归档</td><td>发版时自己打包、改写 <code>package.json</code>、上传 Release 资产，流水线长，还出现过「Release 在、资产空」的半发布态。</td><td>装机直接拉 GitHub 对 <code>master</code> 的源码归档，裁剪交给 <code>export-ignore</code>；<code>master</code> 上不得有未发版提交。</td></tr>
+<tr><td>9/17 安全审查</td><td>控制面密钥会被 claude 子进程继承；启动横幅会打印完整令牌；纯 TCP 转发下可以伪造本机 Host。</td><td>子进程剥掉控制面密钥（AUTH-06）；令牌不再出现在服务端输出里；<code>DEVICE_APPROVAL_SCOPE=all</code> 成为覆盖全部路径的总开关；公网 IdP 路径加跨站握手门。</td></tr>
+<tr><td>9/20 回退改走 /rewind</td><td>长按用户气泡是隐藏手势，用户发现不了。</td><td>撤掉长按入口，照搬终端的 <code>/rewind</code> 两步面板；Web 上的回退分叉出新会话，原会话不动。</td></tr>
 </tbody>
 </table>
 </div>

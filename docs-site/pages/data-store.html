@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>数据全景 · Claude Chat Mobile</title>
-<meta name="description" content="CCM_DATA_DIR、transcript、上传与忽略态文件。本页讲：存储体系全景、双层事实源 (Double SoT) 与备份边界、全量迁移与灾备建议。">
-<meta name="llm:tokens" content="1067">
+<meta name="description" content="CCM_DATA_DIR、transcript、上传与忽略态文件。">
+<meta name="llm:tokens" content="1470">
 <link rel="alternate" type="text/markdown" href="data-store.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/data-store.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html" class="active"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html" class="active"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,52 +52,60 @@
       <span class="src" title="原始文档来源">源自 docs/hard-rules.md · app/src/shared/data-dir.js · app/src/sessions/sessions.js</span>
     </div>
   </header>
-<p class="lead-extra">控制面状态、CLI Transcript、附件存储与内存态在物理上分属不同目录。备份与清理磁盘前，必须分清「受管控制面数据」与「CLI 原生记录」。</p>
+<p class="lead-extra">控制面状态、CLI transcript、附件与内存态在物理上分属不同位置。备份与清理磁盘前，先分清「CCM 受管的控制面数据」与「CLI 原生记录」。</p>
 
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>存储体系全景</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>存储全景</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>数据存储路径</th><th>职责角色</th><th>归属与生命周期</th></tr></thead>
+<thead><tr><th>位置</th><th>是什么</th><th>性质</th></tr></thead>
 <tbody>
-<tr><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>会话控制元数据（当前激活指针、重命名、隐藏列表、跨设备已读位点等）</td><td>持久化元数据；仅存展示偏好，非对话正文</td></tr>
-<tr><td><code>…/approval-requests.json</code></td><td>工具审批台账记录</td><td>持久化审计记录（内存执行闸门为真实判权源）</td></tr>
-<tr><td><code>…/trusted-devices.json</code></td><td>已授权设备指纹与签名 Token（TOFU 机制）</td><td>核心安全状态；删除后手机接入需重新在电脑端点击批准</td></tr>
-<tr><td><code>…/pending-devices.json</code></td><td>等待批准的外部设备连接队列</td><td>临时待审批列表</td></tr>
-<tr><td><code>…/uploads/&lt;bucket&gt;/</code></td><td><strong>受管附件目录</strong>：手机端上传的图片与文档原件</td><td>受管持久化数据；通过 <code>--add-dir</code> 自动授权给 CLI</td></tr>
-<tr><td><code>…/audit-records.json</code></td><td>系统安全审计日志（限速、封禁与越界访问等）</td><td>持久化环形审计</td></tr>
-<tr><td><code>ccm.config.json</code>（仓库顶级根）</td><td><strong>统一结构化配置文件</strong>（端口、Token、工作区、网络拓扑等）</td><td>由 <code>config-file.js</code> 统管；<code>WORKDIRS</code> 支持热重载</td></tr>
-<tr><td><code>~/.claude/projects/&lt;encoded_cwd&gt;/*.jsonl</code></td><td><strong>真实对话 Transcript</strong>：完整对话流与工具执行记录</td><td>完全由本机 <code>claude</code> CLI 维护，不随 CCM 搬家</td></tr>
-<tr><td>内存 Ring Buffer (2000条)</td><td>在途事件流与近期信封缓存</td><td>进程易失，用于断线快速补发</td></tr>
+<tr><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>会话索引与指针：各工作区当前会话、模型 / 权限档 / 思考强度等偏好</td><td>持久；不存对话正文，可从 transcript 重建</td></tr>
+<tr><td><code>…/read-state.json</code></td><td>已读位点，跨设备共享</td><td>持久；丢了只是未读标记重新亮起</td></tr>
+<tr><td><code>…/approval-requests.json</code></td><td>工具审批台账</td><td>持久审计记录；执行闸门以内存判权为准，重启时挂着的审批不可再执行</td></tr>
+<tr><td><code>…/trusted-devices.json</code></td><td>已信任的设备</td><td>核心安全状态；删了之后所有设备都要重新批准</td></tr>
+<tr><td><code>…/pending-devices.json</code></td><td>等待批准的新设备</td><td>临时待审队列</td></tr>
+<tr><td><code>…/device-profiles.json</code></td><td>设备元数据：机型、浏览器、别名</td><td>持久；只影响设备的显示名</td></tr>
+<tr><td><code>…/push-subscription.json</code></td><td>Web Push 订阅</td><td>持久；存浏览器的推送订阅（endpoint 与加密密钥），不存设备令牌</td></tr>
+<tr><td><code>…/audit-records.json</code></td><td>安全审计：限速锁定、越界访问、设备审批与吊销、删除被拒等</td><td>持久；只经鉴权后的 <code>audit:get</code> 读取，不开 HTTP 端点</td></tr>
+<tr><td><code>…/uploads/&lt;工作区桶&gt;/</code></td><td>手机上传的附件原件</td><td>持久；经 <code>additionalDirectories</code> 交给 CLI，免审批读取</td></tr>
+<tr><td><code>…/service-events.json</code>、<code>service-snapshot.json</code></td><td>重启记录与服务状态快照</td><td>运维用，供服务状态面板的重启记录与 flapping 判定</td></tr>
+<tr><td><code>…/init-cache.json</code>、<code>cf-access-certs.json</code></td><td>启动水合缓存、Access 公钥缓存</td><td>缓存：可随时删除，损坏就当作没有</td></tr>
+<tr><td><code>ccm.config.json</code>（仓库根）</td><td>统一结构化配置</td><td>由 <code>config-file.js</code> 统管；与 <code>.env</code> 同等敏感，已在 <code>.gitignore</code> 里；不在源码归档里，覆盖升级碰不到</td></tr>
+<tr><td><code>~/.claude/projects/&lt;encoded_cwd&gt;/*.jsonl</code></td><td>对话 transcript：完整对话与工具执行记录</td><td>由本机 claude CLI 维护，不随 CCM 搬家；CCM 只追加一行 <code>entrypoint-marker</code></td></tr>
+<tr><td><code>~/.claude/ccm/hooks-v1/</code></td><td>hooks bridge 的文件投递箱（装了才有）</td><td>加速触发器；server 消费后删除，过期文件定期清理；transcript 仍是真相源</td></tr>
+<tr><td>内存环形缓冲（2000 条）</td><td>近期事件信封，按 <code>seq</code> + <code>epoch</code> 编号</td><td>进程易失，断线重连时按序补发</td></tr>
 </tbody>
 </table>
 </div>
+<p>没有设置 <code>CCM_DATA_DIR</code> 时，数据根是仓库下的 <code>./data</code>。长期跑着的实例建议设成仓库外的绝对路径，免得切分支、清理仓库或测试脚本碰到生产状态。</p>
 
 <div class="callout warn"><div class="body">
-<strong>附件已完成搬家</strong>历史版本中附件位于各项目工作区下的 <code>.ccm-uploads/</code>。当前版本已全部统一收敛至受管数据根下的 <code>$CCM_DATA_DIR/uploads/</code>，避免向用户 Git 仓库写入脏文件，旧目录仅作为只读兼容回落。
+<strong>附件已完成搬家</strong>早期附件位于各工作区的 <code>.ccm-uploads/</code>。2026-09-06 起统一落在 <code>$CCM_DATA_DIR/uploads/</code>，不再往用户的 git 仓库写文件；旧目录既不迁移也不删除，历史消息预览会自动回落过去读。
 </div></div>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>双层事实源 (Double SoT) 与备份边界</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>备份边界</h2>
 <div class="split">
   <div>
-    <h4>CCM 控制面 ($CCM_DATA_DIR)</h4>
-    <p>管理「Web 端如何看待会话、哪些设备被授权连入、附件文件保存在哪」。丢失仅导致设备需重新认证、会话标题回退，不会破坏聊天事实。</p>
+    <h4>CCM 控制面（$CCM_DATA_DIR）</h4>
+    <p>管「Web 端怎么看待会话、哪些设备被授权、附件放在哪」。丢了会让设备需要重新批准、界面偏好回到默认，但不会破坏聊天记录本身。</p>
   </div>
   <div>
-    <h4>CLI Transcript (~/.claude/projects/)</h4>
-    <p>管理「历史说了什么、执行了哪些代码、Token 开销多少」。由 CLI 原生写入，CCM 仅执行追平与安全追加。</p>
+    <h4>CLI transcript（~/.claude/projects/）</h4>
+    <p>管「说了什么、执行了什么、花了多少」。由 CLI 原生写入，CCM 只读取追平，外加那一行 <code>entrypoint-marker</code>。注意 Claude Code 会按修改时间清理 30 天前的 transcript。</p>
   </div>
 </div>
 
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>全量迁移与灾备建议</h2>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>迁移与灾备</h2>
 <ul>
-  <li><strong>完整迁移清单：</strong>停止服务进程 → 拷贝 <code>$CCM_DATA_DIR</code> → 拷贝 <code>~/.claude/projects/</code> → 导出 <code>ccm.config.json</code>。</li>
-  <li><strong>敏感文件权限防护：</strong>建议配置数据目录文件权限为 <code>0600</code>，目录权限为 <code>0700</code>，防范本地非特权用户读取。</li>
-  <li><strong>自动化测试沙箱隔离：</strong>执行破坏性测试或运行变异测试时，必须通过 Docker 容器隔离，容器内 <code>HOME</code> 为虚拟空壳，彻底隔绝真实数据。</li>
+  <li><strong>迁移数据目录：</strong>先停掉 server（桌面端菜单或 headless 那个终端）并备份，拷贝 <code>$CCM_DATA_DIR</code>，在 <code>ccm.config.json</code> 里写上新的 <code>CCM_DATA_DIR</code>，跑一遍 <code>node scripts/doctor.js</code>，再按原入口拉起。<code>scripts/device.js</code>、server 与 doctor 都读同一个 <code>CCM_DATA_DIR</code>。</li>
+  <li><strong>权限：</strong>数据目录文件保持 <code>0600</code>，目录 <code>0700</code>，防本机其他用户读取。</li>
+  <li><strong>卸载：</strong><code>npm run uninstall</code> 只删产品自己装的东西，manifest 之外的 unit、<code>~/.cloudflared</code> 与 <code>~/.claude/projects</code> 永远不碰。</li>
+  <li><strong>测试隔离：</strong>破坏性测试与变异检查一律进容器，容器里的 <code>HOME</code> 是一次性目录，真实数据碰不到。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="notify-status.html"><span class="dir">← 上一篇</span><span class="ttl">通知与状态栏</span></a><a class="next" href="integrations.html"><span class="dir">下一篇 →</span><span class="ttl">外部集成</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">存储体系全景</a></li><li class="h2"><a href="#s2">双层事实源 (Double SoT) 与备份边界</a></li><li class="h2"><a href="#s3">全量迁移与灾备建议</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">存储全景</a></li><li class="h2"><a href="#s2">备份边界</a></li><li class="h2"><a href="#s3">迁移与灾备</a></li></ul></aside>
     </div>
   </div>
 </div>

@@ -1,42 +1,56 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">离线通知与运行态展示属于「尽力而为的体验增强」：通知通道的偶然失败绝不阻塞核心交互；状态栏根据当前的驾驶员主体动态选择权威数据源。</p>
+<p class="lead-extra">离线通知与运行态展示属于尽力而为的体验增强：通知通道偶尔失败绝不阻塞核心交互；状态栏按当前的驾驶方选择数据源，不混拼。</p>
 
-<h2>离线通知体系：双通道机制</h2>
-<p>系统内置两种独立的异步离线消息通道，完全由 <code>app/src/ops/notify-channels.js</code> 统一调度：</p>
+<h2>离线通知：两条通道</h2>
+<p>两条通道由 <code>app/src/ops/notify-channels.js</code> 统一调度，可以同时开：</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>通道类型</th><th>底层协议与配置要求</th><th>优势与典型场景</th></tr></thead>
+<thead><tr><th>通道</th><th>配置</th><th>适用</th></tr></thead>
 <tbody>
-<tr><td>Web Push (首选)</td><td>标准 W3C Push 规范，需配置 <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code></td><td><strong>体验最佳</strong>：配合 PWA 实现系统级原生通知，点击直接调起应用直达该会话</td></tr>
-<tr><td>ntfy (高可用后备)</td><td>基于 HTTP 的 ntfy 协议，配置 <code>NTFY_URL</code> 与 <code>NTFY_TOPIC</code>（支持自建与私有 Token）</td><td><strong>无 HTTPS/内网场景首选</strong>：局域网纯 HTTP 下仍可稳定推送，适合 iOS 免证书直达</td></tr>
+<tr><td>Web Push</td><td><code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code>，三项全齐才启用；需要 HTTPS</td><td>系统级通知，点开直达该会话。Android 的 Chromium 系经 Google FCM，iPhone（Safari 16.4+ 且已添加到主屏幕）走 Apple 的推送服务</td></tr>
+<tr><td>ntfy</td><td><code>NTFY_URL</code> / <code>NTFY_TOPIC</code>，私有实例加 <code>NTFY_TOKEN</code>；点开深链靠 <code>PUBLIC_URL</code></td><td>全程不经 Google；iOS 在局域网 http 下用不了 Web Push 时的替代。标题带工作区与会话标题，请自托管或用私密 topic</td></tr>
 </tbody>
 </table>
 </div>
-
-<h2>推送抑制策略：严禁假静音与噪音打扰</h2>
-<div class="callout tip"><div class="body">
-<strong>推送判定铁律</strong>审批（<code>permission_request</code>）、提问（<code>question</code>）与后台长任务完成属于紧急人机待办，<strong>无条件推送</strong>（用户可能正在锁屏或使用其他应用）；仅常规对话的 <code>result</code> 结果，在「approved 房间检测到前台可见连接」时才会被智能抑制。
-</div></div>
 <ul>
-  <li><strong>前台可见性依据：</strong>以客户端上报的 <code>client:presence</code>（基于 Page Visibility API）为准，<strong>而不是单纯根据 Socket 是否保持连通</strong>。</li>
-  <li><strong>通知节流窗：</strong>同一会话内的同类通知遵循 <code>NOTIFY_THROTTLE_MS</code>（默认 60 秒）节流防轰炸。</li>
+  <li><strong>通知标题带身份：</strong>「事件 · 项目 · 会话」三段，锁屏上就能看出是哪个工作区的哪个会话。</li>
+  <li><strong>正文默认最小化：</strong>设置里可以开「锁屏带内容预览」，让锁屏通知带上问题、工具或任务摘要；ntfy 的正文恒最小化。</li>
+  <li><strong>可自检、可关闭：</strong>设置里有「发一条测试推送」，不必等真实审批出现才发现通道不通；推送订阅也能关掉，改预览开关不会把已关掉的推送偷偷订回来。</li>
 </ul>
 
-<h2>Statusline 状态栏双源选择</h2>
+<h2>推送抑制：该推的一定推</h2>
+<div class="callout tip"><div class="body">
+<strong>推送判定铁律</strong>审批、提问、后台任务完成<strong>无条件推送</strong>（用户可能锁屏或正在别的 App）。只有回合完成的 <code>result</code> 与网关静默告警（<code>system</code> 信封里的 <code>gateway_stall</code> notice），才会在「approved 房间有前台可见连接」时被抑制，两者共用 <code>notifyHasClientsAtSend</code> 这一条判据。
+</div></div>
+<ul>
+  <li><strong>前台判据：</strong>客户端上报的 <code>client:presence</code>（Page Visibility），<strong>不是</strong> socket 连着没有。</li>
+  <li><strong>「后台任务完成」只算真后台任务：</strong>CLI 把跑得久的前台 Bash 也建模成 task、走同一条 <code>task_notification</code>，靠 CLI 在任务开始时带的 <code>is_backgrounded</code> 标记过滤掉。删了这道过滤，每条跑几秒的命令都会推到锁屏上。</li>
+  <li><strong>节流：</strong>同类通知的最小间隔为 <code>NOTIFY_THROTTLE_MS</code>（默认 60 秒，可显式设 0）。</li>
+</ul>
+
+<h2>Statusline 状态栏：按驾驶方选数据源</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>当前运行场景</th><th>数据真相源</th><th>展示内容</th></tr></thead>
+<thead><tr><th>场景</th><th>数据源</th><th>展示</th></tr></thead>
 <tbody>
-<tr><td>Web 端驾驶中</td><td>SDK 内部运行态</td><td>当前模型别名、上下文窗口占用比例（ctx%）、累计 Token 消耗</td></tr>
-<tr><td>CLI 终端驾驶中（只读镜像）</td><td>CLI Statusline 快照</td><td>通过 <code>npm run statusline:install</code> 安装的快照桥接器，精准镜像终端原生状态行</td></tr>
+<tr><td>Web 驾驶中</td><td>SDK 运行态，开箱即用</td><td>底栏常驻摘要；展开看模型、分支、ctx 占用、5h 与 7d 额度用量和重置倒计时、预估花费，可一键复制</td></tr>
+<tr><td>终端驾驶中（Web 只读镜像）</td><td>CLI statusline 快照</td><td>需安装可选的 statusline bridge（<code>npm run statusline:install</code>），同步 CLI 的模型、思考强度、上下文、成本与额度</td></tr>
 </tbody>
 </table>
 </div>
+<p>两路数据<strong>禁止混拼</strong>：唯一的例外是额度这种账号级数据可以回落，且必须标注为非实时。展示语义以产品仓的 <code>docs/display-contracts.md</code> 为准。</p>
 
-<h2>状态可见性：告警轴与待办轴绝不混淆</h2>
+<h2>两条轴：「需要你」与服务告警绝不混判</h2>
 <ul>
-  <li><strong>待办轴（「需要你」）：</strong>顶栏角标与数字 Chip 只用于展示「用户点击即可立刻处理」的人机交互项（如待审批的命令、待回答的问题、后台跑完的任务）。</li>
-  <li><strong>运维告警轴：</strong>系统级运行故障（如通知通道失联、鉴权限速封禁、客户端网络异常）只沉淀在侧边抽屉的「服务状态面板」中，两轴严格分离，绝不混判。</li>
-  <li><strong>动态动词与收尾行：</strong>运行时支持实时展示过去式动词、秒表与输出速率，对齐终端 CLI 的动态状态展示。</li>
+  <li><strong>「需要你(N)」：</strong>顶栏 chip 与角标只表达「点一下就能处理」的待办，也就是审批与提问。推送投递失败这类事混进来，用户点进去发现无事可做，这个数字就失去了意义。</li>
+  <li><strong>服务告警：</strong>推送投递失败、登录限速锁定、客户端错误这类，只出现在会话抽屉的「服务」小节与服务状态面板里。</li>
+  <li><strong>服务状态面板：</strong>四段，基础信息、判定化告警、安全日志、重启记录。不展示裸计数器，原始计数留给 <code>/metrics</code>；每条告警说得出「是谁、为什么」，24 小时后自动退场。</li>
+</ul>
+
+<h2>运行中的动态行</h2>
+<ul>
+  <li><strong>动态状态行：</strong>回合进行中显示与终端同款的进行时动词、秒表与等待提示（例如「仍在等待响应」）。</li>
+  <li><strong>收尾行：</strong>回合结束留一行过去时动词与耗时，对齐 CLI。</li>
+  <li><strong>额度墙横幅（dev 已合入，尚未发版）：</strong>撞上用量额度墙时，输入框上方出现横幅，按所处状态给一个按钮：已布防时可「取消」，只给选项时可「到点自动继续」，错过重置点或无法确认安全时给「继续」由你手动发。</li>
 </ul>

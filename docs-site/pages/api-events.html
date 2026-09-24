@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>事件与端点参考 · Claude Chat Mobile</title>
-<meta name="description" content="入向 socket 事件、agent:event 类型、HTTP 运维端点。本页讲：出向 agent:event 契约类型 (31 种)、入向 Socket 契约事件 (57 种)、受控 HTTP 运维端点。">
-<meta name="llm:tokens" content="1073">
+<meta name="description" content="入向 socket 事件、agent:event 类型、HTTP 运维端点。">
+<meta name="llm:tokens" content="1322">
 <link rel="alternate" type="text/markdown" href="api-events.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html" class="active"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html" class="active"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,7 +52,7 @@
       <span class="src" title="原始文档来源">源自 app/src/shared/protocol.js · tests/gates/agent-event-contract.js</span>
     </div>
   </header>
-<p class="lead-extra">入向 Socket 事件、出向 <code>agent:event</code> 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 <code>app/src/shared/protocol.js</code>（当前基线：出向类型 <strong>31</strong> 种、入向事件 <strong>57</strong> 种）。</p>
+<p class="lead-extra">入向 Socket 事件、出向 <code>agent:event</code> 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 <code>app/src/shared/protocol.js</code>（dev 基线：出向类型 <strong>31</strong> 种、入向事件 <strong>58</strong> 种；最新发布版 v1.12.1 的入向为 57 种，差的是 <code>user:autoContinue</code>）。</p>
 
 <h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>出向 agent:event 契约类型 (31 种)</h2>
 <p>所有服务端向客户端推送的事件统一封装为 <code>agent:event</code> 信封：</p>
@@ -73,14 +73,14 @@
 </table>
 </div>
 
-<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>入向 Socket 契约事件 (57 种)</h2>
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>入向 Socket 契约事件 (58 种)</h2>
 <p>由客户端主动发往服务端的事件总线，受 <code>tests/gates/contract-check.js</code> 门禁进行双向严格比对校验：</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>业务领域</th><th>包含的入向事件</th></tr></thead>
 <tbody>
 <tr><td>会话管理与调度</td><td><code>session:list</code> <code>session:new</code> <code>session:switch</code> <code>session:close</code> <code>session:home</code> <code>session:history</code> <code>session:fork</code> <code>session:deletePermanent</code> <code>session:rewind:candidates</code> <code>session:rewind:preview</code> <code>session:rewind:confirm</code></td></tr>
-<tr><td>用户交互与输入</td><td><code>user:message</code> <code>user:interrupt</code> <code>user:answer</code> <code>user:approve</code> <code>user:setEffort</code> <code>user:setPermissionMode</code> <code>user:setViewing</code> <code>permissions:rules</code></td></tr>
+<tr><td>用户交互与输入</td><td><code>user:message</code> <code>user:interrupt</code> <code>user:answer</code> <code>user:approve</code> <code>user:setEffort</code> <code>user:setPermissionMode</code> <code>user:setViewing</code> <code>user:autoContinue</code>（额度墙横幅的按钮，dev 已合入、尚未发版） <code>permissions:rules</code></td></tr>
 <tr><td>设备与状态同步</td><td><code>user:approveDevice</code> <code>user:denyDevice</code> <code>user:renameTrustedDevice</code> <code>user:revokeTrustedDevice</code> <code>connect:qr</code> <code>sync:since</code> <code>mirror:syncNow</code> <code>conn:ping</code> <code>client:presence</code></td></tr>
 <tr><td>已读位点共享</td><td><code>read:mark</code> <code>read:sync</code> <code>user:ackUnread</code></td></tr>
 <tr><td>文件操作与工作区</td><td><code>browse:list</code> <code>browse:read</code> <code>files:search</code> <code>files:write</code> <code>attachment:read</code></td></tr>
@@ -96,17 +96,18 @@
 <table>
 <thead><tr><th>端点路径</th><th>请求方法</th><th>鉴权与功能说明</th></tr></thead>
 <tbody>
-<tr><td><code>/health</code></td><td>GET</td><td>受 <code>AUTH_TOKEN</code> 鉴权保护，输出服务健康状况 JSON</td></tr>
-<tr><td><code>/metrics</code></td><td>GET</td><td>受 <code>AUTH_TOKEN</code> 鉴权保护，输出内存指标快照（零外部泄露）</td></tr>
-<tr><td><code>/push/vapid-public-key</code></td><td>GET</td><td>获取浏览器 Web Push 所需的 VAPID 公钥</td></tr>
-<tr><td><code>/push/subscribe</code></td><td>POST</td><td>保存移动端生成的推送订阅凭据</td></tr>
+<tr><td><code>/health</code></td><td>GET</td><td>过鉴权（令牌，或公网 Host 上的 Access JWT），输出服务健康状况 JSON；含 <code>versions.server</code> 与运行态</td></tr>
+<tr><td><code>/metrics</code></td><td>GET</td><td>过鉴权；进程内计数的 JSON 快照，不是 Prometheus 文本，重启清零</td></tr>
+<tr><td><code>/push/vapid-public-key</code></td><td>GET</td><td>过鉴权；推送未配置时返回 503</td></tr>
+<tr><td><code>/push/subscribe</code></td><td>POST</td><td>过鉴权，且设备须已被信任（或属于 Access 已验 / 真本机直连这类免审批连接）；保存这台设备的推送订阅</td></tr>
+<tr><td><code>/push/unsubscribe</code></td><td>POST</td><td>与订阅同一道设备判据；只摘掉请求里点名的那一条 endpoint，不清空全表</td></tr>
 </tbody>
 </table>
 </div>
 
         <nav class="pager"><a class="prev" href="project-rules.html"><span class="dir">← 上一篇</span><span class="ttl">项目规范</span></a><a class="next" href="env-reference.html"><span class="dir">下一篇 →</span><span class="ttl">环境变量参考</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">出向 agent:event 契约类型 (31 种)</a></li><li class="h2"><a href="#s2">入向 Socket 契约事件 (57 种)</a></li><li class="h2"><a href="#s3">受控 HTTP 运维端点</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">出向 agent:event 契约类型 (31 种)</a></li><li class="h2"><a href="#s2">入向 Socket 契约事件 (58 种)</a></li><li class="h2"><a href="#s3">受控 HTTP 运维端点</a></li></ul></aside>
     </div>
   </div>
 </div>

@@ -32,6 +32,8 @@
   <li>服务端提取环形缓冲中大于 <code>lastSeq</code> 的事件子集。</li>
   <li>自动过滤已完成（resolved）的历史审批与提问，避免向用户重弹旧卡片。</li>
   <li>若客户端请求的 <code>lastSeq</code> 早于环形缓冲中最旧的一条，回传携带 <code>gap: true</code>，客户端触发完整历史拉取。</li>
+  <li>回放有超时兜底：<code>sync:since</code> 的 ack 超时后转拉磁盘历史，而不是让加载卡一直转；ack 迟到也不会丢掉已积压的事件。</li>
+  <li>回放出来的事件对运行态中性：已经结束的回合不会因为回放被重新点亮成「运行中」，回放后再按广播口径对一次账。</li>
 </ol>
 
 <h2>出向 31 种契约事件分组</h2>
@@ -49,4 +51,4 @@
 </tbody>
 </table>
 </div>
-<p>事件定义真相源唯一维护于 <code>app/src/shared/protocol.js</code>。门禁 <code>tests/gates/agent-event-contract.js</code> 会对生产代码与前端进行双向 AST 校验，杜绝任何未登记事件产生。</p>
+<p>事件定义真相源唯一维护于 <code>app/src/shared/protocol.js</code>。<code>npm run check</code> 里的 <code>tests/gates/contract-check.js</code> 与 <code>agent-event-contract.js</code> 对生产代码、mock 与前端做双向校验：改一个 type 必须同时改 protocol、真实的 emit 路径、mock 与前端 handler，否则 check 变红。</p>

@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>术语表 · Claude Chat Mobile</title>
-<meta name="description" content="Claude Chat Mobile 核心术语的标准定义：instanceId、sessionId、epoch、seq、mirrorReadonly、externalDirty、terminalWaiting、Tail Attribution、TOFU、ACCESS_PROFILE、CCM_DATA_DIR、canUseTool、环形缓冲。">
-<meta name="llm:tokens" content="955">
+<meta name="description" content="instance、envelope、mirror、TOFU 等高频词。">
+<meta name="llm:tokens" content="1522">
 <link rel="alternate" type="text/markdown" href="glossary.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/glossary.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html" class="active"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html" class="active"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,29 +52,34 @@
       
     </div>
   </header>
-<p class="lead-extra">高频专有名词与概念定义。在阅读系统核心实现前，建议先快速通读本表，以拉齐心智模型与语境。</p>
+<p class="lead-extra">高频专有名词与概念定义。阅读核心实现前，建议先通读本表，拉齐心智模型与语境。</p>
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>核心术语</th><th>标准定义与架构语义</th></tr></thead>
+<thead><tr><th>核心术语</th><th>定义与架构语义</th></tr></thead>
 <tbody>
-<tr><td><code>instanceId</code></td><td>运行时代号（如 <code>inst_1</code>），代表内存中活跃的 AgentSession 实体。每次会话重启或切换思考强度时递增。</td></tr>
-<tr><td><code>sessionId</code></td><td>Claude CLI 原生会话标识符，对应磁盘 <code>~/.claude/projects/&lt;project&gt;/&lt;session_id&gt;.jsonl</code> 文件名。</td></tr>
-<tr><td><code>epoch</code></td><td>实例世代标识。当服务端置换实例后自增，客户端收到新 epoch 必须重置消息去重基准。</td></tr>
-<tr><td><code>seq</code></td><td>单实例生命周期内单调递增的事件序号，用于网络闪断后的 <code>sync:since</code> 增量补发与断点续传。</td></tr>
-<tr><td><code>agent:event</code> Envelope</td><td>统一出向事件信封，标准外壳：<code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code>。</td></tr>
-<tr><td><code>mirrorReadonly</code></td><td>单驾驶员模型中施加的只读互斥锁。当终端正在执行写入时，Web 端强制处于只读态。</td></tr>
-<tr><td><code>externalDirty</code></td><td>外部变脏标记。指磁盘 Transcript 已经超前于内存 SDK 会话，Web 端下次发送必须强制销毁置换。</td></tr>
-<tr><td><code>terminalWaiting</code></td><td>终端等待态。指终端 CLI 正在执行耗时工具（如跑测试）且尚未落盘，提示 Web 端保持镜像锁锁定。</td></tr>
-<tr><td>Tail Attribution</td><td>尾部归因。在识别会话繁忙状态时，准确将悬挂的在途消息归因为「Web 自身」还是「外部终端/桌面端」。</td></tr>
-<tr><td>TOFU (Trust On First Use)</td><td>首次接入信赖机制。新外部设备即使持有正确 Token，首次连接也必须在物理电脑上显式点击批准。</td></tr>
-<tr><td><code>ACCESS_PROFILE</code></td><td>网络接入拓扑声明（<code>cloudflare</code>, <code>reverse-proxy</code>, <code>lan</code>），决定反代采信与设备审批分支。</td></tr>
-<tr><td><code>CCM_DATA_DIR</code></td><td>持久化数据根目录（仓库根下 <code>data/</code>），管理会话元数据、设备指纹、附件上传与审计日志。</td></tr>
-<tr><td><code>canUseTool</code></td><td>SDK 权限回调拦截点。当操作未命中预设白名单时，触发向手机端投递 <code>permission_request</code>。</td></tr>
-<tr><td>Ring Buffer (环形缓冲)</td><td>每实例分配的循环事件队列，固定上限 <strong>2000</strong> 条，支撑高速重连补发。</td></tr>
-<tr><td><code>settingSources</code></td><td>SDK 加载本地配置的层级，固定为 <code>['user', 'project', 'local']</code>，完整继承命令行配置。</td></tr>
-<tr><td><code>applyFlagSettings</code></td><td>运行时标志应用机制。无需销毁实例，直接中途热修改 SDK 的 <code>effortLevel</code> 思考强度。</td></tr>
-<tr><td><code>guard-host-tests</code></td><td>测试运行保护门禁。宿主机只允许运行只读或纯内存测试脚本，其余所有测试强制在容器沙箱中跑。</td></tr>
+<tr><td><code>instanceId</code></td><td>运行时代号（如 <code>inst_1</code>），代表内存里一个活跃的 AgentSession 实例。实例重建（dispose + resume）时换新；切具体思考强度走控制请求，不重建实例。</td></tr>
+<tr><td><code>sessionId</code></td><td>Claude CLI 原生会话标识，对应磁盘上 <code>~/.claude/projects/&lt;project&gt;/&lt;session_id&gt;.jsonl</code> 的文件名。</td></tr>
+<tr><td><code>epoch</code></td><td>实例世代标识。服务端置换实例后自增，客户端收到新 epoch 必须重置去重基线。</td></tr>
+<tr><td><code>seq</code></td><td>单实例生命周期内单调递增的事件序号，用于断线后 <code>sync:since</code> 的增量补发。</td></tr>
+<tr><td><code>agent:event</code> 信封</td><td>唯一的出向事件信封：<code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code>；<code>type</code> 白名单在 <code>protocol.js</code>（31 种）。</td></tr>
+<tr><td>驾驶端 / 单驾驶员</td><td>同一会话同一时刻只有一个写入方：Web 的 AgentSession，或终端里的 CLI。另一端只读镜像，接管要显式续接，可能分叉。</td></tr>
+<tr><td><code>mirrorReadonly</code></td><td>单驾驶员模型的只读镜像锁：终端在驾驶时，Web 端输入被锁住。</td></tr>
+<tr><td><code>externalDirty</code></td><td>外部变脏标记：磁盘 transcript 已经超前于内存里的 SDK 会话，Web 下次发送前要先 dispose 旧实例再 resume 吸收。</td></tr>
+<tr><td><code>terminalWaiting</code></td><td>终端等待态：终端 CLI 在会话注册表里自报 <code>waiting</code>，也就是停在审批或提问上。抽屉的会话行与目录行会标出来，折叠着也看得见；它不进顶栏的「需要你」聚合，要即时通知得靠可选的 hooks bridge。</td></tr>
+<tr><td>尾部归因（Tail Attribution）</td><td>判断会话尾部那条未完结记录是谁写的。transcript 逐条自报写入方（CLI 写 <code>cli</code>，本项目 SDK 写 <code>sdk-ts</code>）；镜像锁的静默判定只认终端写的尾部。</td></tr>
+<tr><td><code>entrypoint-marker</code></td><td>CCM 往 claude 的 jsonl 里追加的唯一一行，让终端的 <code>/resume</code> 看得到 Web 建的会话。这是「CCM 不存消息」原则的唯一反向例外。</td></tr>
+<tr><td>设备审批（TOFU）</td><td>首次信任：持正确令牌的新设备首次接入仍要批准一次，可在电脑终端、菜单栏或另一台已信任设备上批。本机样 Host 的直连与已过 Cloudflare Access 的连接默认免审批，<code>DEVICE_APPROVAL_SCOPE=all</code> 时也要批。</td></tr>
+<tr><td><code>ACCESS_PROFILE</code></td><td>「打算怎么从手机访问」的纯声明（<code>cloudflare</code> / <code>vpn</code> / <code>reverse-proxy</code> / <code>direct</code> / <code>lan</code>），不改运行时行为，只供 doctor 与手机端安全体检做针对性检查。鉴权分支按请求的 Host 决定，与它无关。</td></tr>
+<tr><td><code>BIND_MODE</code></td><td>监听地址模式：默认 <code>0.0.0.0</code>，<code>loopback</code> 只听本机，<code>custom</code> 配合 <code>BIND_HOST</code>。缺令牌时不存在降级绑本机的路径。</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>控制面数据根，默认仓库下的 <code>./data</code>，长期实例建议设成仓库外的绝对路径；存会话索引、已读位点、设备信任、审批台账、审计、附件与缓存。</td></tr>
+<tr><td>「需要你(N)」</td><td>顶栏 chip 与角标只表达点一下就能处理的待办：审批与提问。服务告警是另一条轴，只出现在抽屉「服务」小节与服务状态面板。</td></tr>
+<tr><td><code>canUseTool</code></td><td>SDK 的权限回调。命中 settings 放行规则的调用根本不会走到这里；只有白名单外的调用才由 CCM 按权限档裁决或推审批卡。</td></tr>
+<tr><td>环形缓冲（Ring Buffer）</td><td>每个实例的事件循环队列，上限 <strong>2000</strong> 条（<code>BUFFER_CAP</code>），支撑重连补发；瞬态进度不进缓冲。</td></tr>
+<tr><td><code>settingSources</code></td><td>SDK 加载配置的层级，固定为 <code>['user', 'project', 'local']</code>，按工作区目录继承 CLI 配置。</td></tr>
+<tr><td><code>applyFlagSettings</code></td><td>运行时设置控制请求。切具体思考强度档与 <code>auto</code> 时用它即刻生效，不销毁实例。</td></tr>
+<tr><td><code>/rewind</code>（Web 语义）</td><td>对齐终端的两步回退面板；Web 上涉及对话的模式都是分叉出一个回到那一刻的新会话，原会话不动，与终端的原地回退是两套语义。</td></tr>
+<tr><td><code>guard-host-tests</code></td><td>宿主机测试白名单钩子：agent 在宿主机上只能跑 lint / check / test:unit / test:e2e 这几档，其余测试一律进容器。它防手滑，不是物理隔离。</td></tr>
 </tbody>
 </table>
 </div>

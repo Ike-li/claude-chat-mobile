@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>外部集成 · Claude Chat Mobile</title>
-<meta name="description" content="Agent SDK、claude CLI、Cloudflare、推送通道。本页讲：外部核心依赖分工矩阵、系统生态链路图、关键生产依赖概览。">
-<meta name="llm:tokens" content="875">
+<meta name="description" content="Agent SDK、claude CLI、Cloudflare、推送通道。">
+<meta name="llm:tokens" content="1574">
 <link rel="alternate" type="text/markdown" href="integrations.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/integrations.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -25,7 +25,7 @@
   <aside class="sidebar"><div class="brand"><a href="../index.html">
     <span class="logo"><span class="mark">C</span>Claude Chat Mobile</span>
     <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
-  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html" class="active"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.0 · dev@687bca3 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html" class="active"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v2.1 · dev@3f488861 · claude-chat-mobile<span class="ccm-sitelinks"><a href="../../zh/">项目主页</a><span class="sep">·</span><a href="../../demo/">在线演示</a><span class="sep">·</span><a href="../../diagrams/">架构图集</a></span></div></aside>
   <script>window.__restoreNavScroll&&window.__restoreNavScroll();</script>
   <div class="main">
     <header class="topbar">
@@ -52,17 +52,21 @@
       <span class="src" title="原始文档来源">源自 package.json · app/src/auth/cf-access.js</span>
     </div>
   </header>
-<p class="lead-extra">外部依赖恪守「做桥梁而不做中心」的准则：不承接多租户账户体系，不替代本机 CLI，每一层系统都有极其明确的分工边界。</p>
+<p class="lead-extra">外部依赖恪守「做桥梁而不做中心」：不承接多租户账户体系，不替代本机 CLI，每一层都有明确的分工边界。</p>
 
-<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>外部核心依赖分工矩阵</h2>
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>外部集成分工矩阵</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>外部集成组件</th><th>核心职责（做什么）</th><th>严格禁区（不做什么）</th></tr></thead>
+<thead><tr><th>外部集成</th><th>做什么</th><th>不做什么</th></tr></thead>
 <tbody>
-<tr><td><strong>Claude Agent SDK</strong> + 本机 <code>claude</code> CLI</td><td>提供双向流 <code>query()</code>、事件映射、权限拦截回调；自动继承本机 <code>settings.json</code>、MCP 工具、自定义 Skills 与 Hooks</td><td>不重造 Agent 内部循环；不设立独立的工具放行清单；不自行托管独立登录凭据</td></tr>
-<tr><td><strong>Cloudflare Tunnel</strong> + <strong>Access</strong></td><td>提供固定公网安全域名与 2FA 身份认证；在边缘向 CCM 传递经签名的身份 JWT</td><td>不替代应用级 <code>AUTH_TOKEN</code>；不侵入业务内部的细粒度操作鉴权</td></tr>
-<tr><td><strong>web-push</strong> (标准 VAPID 协议)</td><td>原生浏览器推送：审批弹窗、用户提问与长任务完成通知</td><td>未配置时优雅降级，不阻断核心对话；不传输完整的复杂正文</td></tr>
-<tr><td><strong>ntfy</strong> (HTTP 订阅通道)</td><td>极简外部推送：直接通过 HTTP POST 派发通知，适合纯局域网或无法使用 Web Push 的场景</td><td>未配置时完全关闭；不作为核心数据信道</td></tr>
+<tr><td><strong>Claude Agent SDK</strong> + 本机 <code>claude</code> CLI</td><td>双向流 <code>query()</code>、事件映射、权限回调；SDK 会话按工作区目录加载 CLI 的 user / project / local 三层 settings，沿用 <code>CLAUDE.md</code>、MCP、Skills 与 Hooks</td><td>不重造 Agent 循环；不自建工具放行清单；不托管登录凭据</td></tr>
+<tr><td><strong>模型通路</strong>（官方订阅 / API key / 第三方网关 / Bedrock / Vertex）</td><td>配置属于 claude CLI，不属于本项目。第三方网关推荐写在 CLI settings 文件的 <code>env</code> 块（工作区 <code>.claude/settings.local.json</code> 或 <code>~/.claude/settings.json</code>），按工作区目录生效，macOS 桌面端拉起的常驻服务也认；headless 也可在启动 server 的 shell 里 <code>export</code></td><td>对模型通路零假设：不匹配 <code>ANTHROPIC_BASE_URL</code>、不设厂商白名单、不探测上游；唯一据以调整行为的是 CLI 自报的能力位（如 <code>rate_limits_available</code>）。<code>ccm.config.json</code> / <code>.env</code> 里的 <code>ANTHROPIC_*</code> 启动期剥除并点名</td></tr>
+<tr><td><strong>Cloudflare Tunnel</strong> + <strong>Access</strong></td><td>固定公网域名与 2FA；边缘签发身份 JWT。开着时它管的公网 Host 改认 Access 身份，替代 <code>AUTH_TOKEN</code>，缺省也替代设备审批。产品受管的第三方进程只有 <code>cloudflared</code></td><td>不是硬依赖：<code>CF_ACCESS_*</code> 三项留空即整层关闭，server 零改动</td></tr>
+<tr><td><strong>Tailscale</strong> / 其他加密隧道 / 自建反代</td><td>不经 Cloudflare 的公网入口，Tailscale 为推荐路径（自带 HTTPS）</td><td>一等支持但不受管：只给文档配方、向导提示与 doctor 检测，不装、不起、不保活</td></tr>
+<tr><td><strong>web-push</strong>（VAPID）</td><td>浏览器推送。审批、提问、后台任务完成无条件推；回合完成与网关静默告警在有前台可见连接时才抑制。正文默认最小化，可在设置里开锁屏内容预览</td><td>未配置时优雅缺席，不阻断对话。Android 的 Chromium 系浏览器经 Google FCM 投递（中国大陆网络下订阅那一刻要代理，宿主机要长期能访问 Google）；iPhone（Safari 16.4+ 且已添加到主屏幕）走 Apple 的推送服务；不想依赖 Google 就用 ntfy</td></tr>
+<tr><td><strong>ntfy</strong>（HTTP 订阅通道）</td><td>server 一行 POST 到 ntfy，手机装 ntfy app 订阅 topic 收锁屏通知；适合 iOS 局域网 http 这类 Web Push 用不了的场景</td><td>正文恒最小化，但标题带工作区目录名与会话标题且明文经第三方：请自托管，或用私密 topic 加 <code>NTFY_TOKEN</code></td></tr>
+<tr><td><strong>CLI statusline bridge</strong>（可选）</td><td>Web 只读查看终端正在运行的会话时，同步 CLI 的模型、思考强度、上下文、成本与额度</td><td>显式安装才写 <code>~/.claude</code>：包装已有的 statusline 命令，未配置 statusline 时拒绝；卸载按 manifest 恢复原命令</td></tr>
+<tr><td><strong>CLI hooks bridge</strong>（可选）</td><td>终端回合的 Stop / Notification 写入受限文件投递箱 <code>~/.claude/ccm/hooks-v1/</code>，server 即时消费，把「回合结束 / 需要你」从 2.5 秒轮询变成即时信号</td><td>只追加自己的 hook 条目；server 不在线时只落盘、静默退出，不阻断 CLI；设 <code>CLI_HOOKS_BRIDGE: false</code> 可暂停消费。磁盘 transcript 仍是真相源</td></tr>
 </tbody>
 </table>
 </div>
@@ -71,37 +75,41 @@
 <div class="mermaid">
 flowchart TB
   Phone["移动端 (手机浏览器 / PWA)"]
-  CF["Cloudflare 边缘 2FA (可选)"]
+  CF["Cloudflare 边缘 Access (可选)"]
   Tunnel["cloudflared 命名隧道"]
+  Alt["Tailscale / 其他隧道 / 反代 (可选)"]
   Server["CCM Server (app/server.js)"]
-  SDK["Agent SDK (0.3.263)"]
+  SDK["Agent SDK (0.3.278)"]
   CLI["本机 claude CLI 进程"]
   FS["开发项目工作区 (WORKDIRS)"]
   Push["Web Push / ntfy 通道"]
-  Data["持久化数据 (CCM_DATA_DIR)"]
-  Disk["CLI Transcript (~/.claude)"]
+  Data["控制面数据 (CCM_DATA_DIR)"]
+  Disk["CLI Transcript (~/.claude/projects)"]
+  Hooks["hooks 投递箱 (可选)"]
 
   Phone -->|"公网接入"| CF --> Tunnel --> Server
+  Phone -.->|"公网接入"| Alt -.-> Server
   Phone -.->|"局域网直连 (#token=)"| Server
   Server --> SDK --> CLI --> FS
   Server --> Data
   CLI --> Disk
+  CLI -.-> Hooks -.-> Server
   Server --> Push
   Push -.->|"离线唤醒"| Phone
 </div>
 
-<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>关键生产依赖概览</h2>
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>关键生产依赖</h2>
 <ul>
-  <li><code>@anthropic-ai/claude-agent-sdk</code>（当前基线 <strong>0.3.263</strong>）：与 CLI 保持同源驱动与最新特性支持。</li>
-  <li><code>express</code> (v5) · <code>socket.io</code> (v4) · <code>compression</code>：高吞吐低延迟的 WebSocket 与 HTTP 服务基础。</li>
-  <li><code>jose</code> (v6)：轻量且安全的 JWT 校验引擎，零外部 C 绑定依赖。</li>
-  <li><code>web-push</code>：基于 RFC 8291 / 8292 标准的离线推送协议实现。</li>
-  <li>前端全部第三方库采用本地完全自托管（位于 <code>app/public/vendor/</code>），生产运行期零任何外部 CDN 网络依赖。</li>
+  <li><code>@anthropic-ai/claude-agent-sdk</code>：dev 基线 <strong>0.3.278</strong>（最新发布版 v1.12.1 为 0.3.263）。</li>
+  <li><code>express</code> (v5) · <code>socket.io</code> (v4) · <code>compression</code>：HTTP 与 WebSocket 服务基础。</li>
+  <li><code>jose</code> (v6)：JWT 校验，零外部 C 绑定依赖。</li>
+  <li><code>web-push</code>：RFC 8291 / 8292 标准的推送协议实现。</li>
+  <li>前端第三方库全部本地自托管（<code>app/public/vendor/</code>），运行期零外部 CDN 依赖。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="data-store.html"><span class="dir">← 上一篇</span><span class="ttl">数据全景</span></a><a class="next" href="quickstart.html"><span class="dir">下一篇 →</span><span class="ttl">快速开始</span></a></nav>
       </article>
-      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">外部核心依赖分工矩阵</a></li><li class="h2"><a href="#s2">系统生态链路图</a></li><li class="h2"><a href="#s3">关键生产依赖概览</a></li></ul></aside>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">外部集成分工矩阵</a></li><li class="h2"><a href="#s2">系统生态链路图</a></li><li class="h2"><a href="#s3">关键生产依赖</a></li></ul></aside>
     </div>
   </div>
 </div>

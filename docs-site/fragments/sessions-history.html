@@ -1,34 +1,50 @@
 <!-- build fragment: not a public page; stripped by build.cjs -->
 <meta name="robots" content="noindex, nofollow">
-<p class="lead-extra">会话数据存在清晰的双层事实源（SoT）：Web 端元数据保存在 <code>data/sessions.json</code>；而完整的对话记录则保存在 CLI Transcript（jsonl）中。理清两者边界是理解系统持久化的关键。</p>
+<p class="lead-extra">消息内容的真相源永远是 CLI 的 transcript（jsonl），CCM 一条都不存；CCM 自己只存索引、指针与 Web 特有的状态。理清这条边界，是理解会话持久化的关键。</p>
 
-<h2>双层事实源 (Double SoT)</h2>
+<h2>事实源分工</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>层次</th><th>物理存储路径</th><th>负责记录的内容</th><th>生命周期特性</th></tr></thead>
+<thead><tr><th>层次</th><th>物理位置</th><th>记录什么</th><th>丢了会怎样</th></tr></thead>
 <tbody>
-<tr><td>元数据 SoT</td><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>各工作区当前激活会话、会话自定义标题、模型与权限档记忆、隐藏列表、跨设备已读位点</td><td>受控于 CCM 控制面，丢失仅影响界面展示偏好</td></tr>
-<tr><td>消息正文 SoT</td><td><code>~/.claude/projects/&lt;encoded_cwd&gt;/&lt;sessionId&gt;.jsonl</code></td><td>完整对话历史、ToolUse 参数、命令输出、Token 开销全量快照</td><td>与本机 <code>claude</code> CLI 共享；CCM 仅作读写追加，绝不篡改历史格式</td></tr>
+<tr><td>消息正文</td><td><code>~/.claude/projects/&lt;encoded_cwd&gt;/&lt;sessionId&gt;.jsonl</code></td><td>完整对话、工具调用与输出、用量</td><td>与本机 claude CLI 共享。CCM 唯一的写入是追加一行 <code>entrypoint-marker</code>，让 CLI 的 <code>/resume</code> 看得到 Web 建的会话</td></tr>
+<tr><td>会话索引</td><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>会话指针、各工作区当前会话、模型 / 权限档 / 思考强度等偏好</td><td>只影响界面偏好，可从 transcript 重建</td></tr>
+<tr><td>已读位点</td><td><code>$CCM_DATA_DIR/read-state.json</code></td><td>各会话读到哪里，跨设备共享</td><td>未读标记可能重新亮起</td></tr>
 </tbody>
 </table>
 </div>
+<p>新增持久化必须同时满足：claude 侧不存在这个概念，且无法从 transcript 重建。缓存类不受此限，但必须能随时删除、损坏就当作没有。</p>
 
-<h2>会话发现与 Worktree 触达</h2>
+<h2>会话发现与 worktree</h2>
 <ul>
-  <li><strong>会话发现机制。</strong>优先调用 SDK <code>listSessions</code>，当遇到文件锁或异常时平滑回落扫盘，并与 <code>sessions.json</code> 元数据深度合并。</li>
-  <li><strong>Git Worktree 隔离与触达。</strong>系统通过 <code>git worktree list</code> 动态感知各个 Worktree 分支。合法工作目录包含显式配置的 <code>WORKDIRS</code> 本身及其合法 Worktree。当主仓库被移出配置时，其衍生 Worktree 即刻失效。</li>
-  <li><strong>父子目录归属过滤。</strong>SDK 的目录检索会向下匹配子目录导致混入，系统通过针对 Transcript 真实路径的精准过滤，确保每个会话严格归属于其对应的分支工作区。</li>
+  <li><strong>发现：</strong>优先用 SDK 的会话列表，异常时回落扫盘，再与 <code>sessions.json</code> 合并。侧栏列出放行工作区里的<strong>全部</strong>会话：终端开的、上周的、忘了开远程开关的都在，标题自动生成、可按标题搜索，在跑的标「运行中」，终端正在驾驶的标「终端运行中」。</li>
+  <li><strong>归属：</strong>SDK 的目录检索会向下匹配子目录，系统按 transcript 里记录的真实路径过滤，确保每个会话归到它自己的工作区。</li>
+  <li><strong>新会话可开在新 worktree：</strong>顶栏 <code>+</code> 新建时可选工作区、分支，以及要不要开在一棵新的 worktree 里。托管 worktree 里的会话在父仓的会话列表里可见、可驾驶。</li>
+  <li><strong>worktree 的边界：</strong>孤儿 worktree 的归属用 transcript 的 cwd 回验，不信有损的 project 目录名；worktree 被删之后，会话不会从抽屉里消失，改动面板改看主仓并说明原因。主仓被移出 <code>WORKDIRS</code> 时，它衍生的 worktree 一并失效。</li>
 </ul>
 
 <h2>冷启动与实例恢复</h2>
 <ol class="steps">
-  <li><strong>FRESH（新建独立会话）。</strong>通过 <code>session:new</code> 触发，或者在空首页直接键入第一条消息。不会盲目继承上次残留的复杂权限，保证与直接新起命令行体验完全一致。</li>
-  <li><strong>Resume（恢复已有会话）。</strong>点击历史会话切入，先执行 <code>prepareSessionForWebResume</code> 解除后台冲突，再基于原有 <code>sessionId</code> 恢复 SDK 会话。</li>
-  <li><strong>空闲实例自动回收 (Idle Reclaim)。</strong>当会话持续空闲超过 <code>INSTANCE_IDLE_RECLAIM_MS</code>（默认 30 分钟）后，系统平滑断开 SDK 进程释放系统内存；磁盘 Transcript 永久保留，下次用户在手机端发言时自动无感 Resume。</li>
+  <li><strong>FRESH（新建会话）：</strong>通过 <code>session:new</code> 触发，或在新会话页直接发第一条消息。采用 CLI 设置合并后的基线，不继承上一个会话的档位，与直接新起命令行一致。</li>
+  <li><strong>Resume（恢复已有会话）：</strong>点开历史会话，先经 <code>prepareSessionForWebResume</code> 处理与终端的冲突，再按原 <code>sessionId</code> 恢复 SDK 会话。</li>
+  <li><strong>空闲回收：</strong>会话空闲超过 <code>INSTANCE_IDLE_RECLAIM_MS</code>（默认 30 分钟）后释放 SDK 进程；transcript 永久保留，下次发言时自动 resume。</li>
 </ol>
 
-<h2>会话分层删除策略</h2>
+<h2>回退与分叉</h2>
 <ul>
-  <li><strong>L1 隐藏 (Hide)。</strong>在移动端左滑点击隐藏，仅在 <code>sessions.json</code> 中打上隐藏标记，磁盘 Transcript 保持完好，可随时通过 CLI 重新找回。</li>
-  <li><strong>L2 彻底物理销毁 (Delete)。</strong>物理移除磁盘文件。执行前受严格保护：如果会话活跃时间在静默窗口内（<code>SESSION_DELETE_QUIET_MS</code> 默认 5 分钟），或检测到仍有活体终端连接，拒绝删除，防止误删电脑端正在跑的任务。</li>
+  <li><strong>回退走 <code>/rewind</code>：</strong>输入 <code>/rewind</code> 打开两步面板。第一步选「回到哪一轮之前」，每一轮标出动过几个文件；第二步选模式，与终端同名同序：恢复代码与对话、只恢复对话、只恢复代码。原来长按用户气泡的入口已于 2026-09-20 撤掉。</li>
+  <li><strong>Web 的回退不改原会话：</strong>涉及对话的模式走 <code>forkSession</code>，分叉出一个回到那一刻的新会话，原会话一个字节不动；这和终端的原地回退是两套语义。回退后，那一轮的原话回填进输入框。</li>
+  <li><strong>说清风险与没做完的部分：</strong>确认前预警会被覆盖且找不回来的脏改动；完成后说明哪些文件没恢复、几个链接被跳过；那一轮没有文件改动时，给出改用分叉的出路。</li>
+  <li><strong>分叉：</strong>assistant 气泡上常驻「分叉」入口（对齐 Desktop），只复制对话、不动文件；分叉锚点由服务端计算。</li>
+  <li><strong>终端 <code>/rewind</code> 的不可见窗口：</strong>终端里的 <code>/rewind</code> 在发出下一条消息之前完全不落盘，镜像侧无从感知。这个窗口内不要从 Web 端发消息，否则那次回退当场作废、两端各写一条链；在终端把下一条消息发掉，两边就一致了。</li>
+</ul>
+
+<h2>历史回显跟随当前链</h2>
+<p>回显跟随 CLI 的<strong>当前链</strong>，而不是文件的物理行序：<code>/rewind</code> 撤掉的那一段不会留在手机上。<code>/compact</code> 边界之前的记录仍属于这个会话，照常回显，不会因为移出了模型上下文而被剪掉。</p>
+
+<h2>关闭与彻底删除</h2>
+<ul>
+  <li><strong>关闭：</strong>关掉会话实例，transcript 不动，随时可以从列表里重新打开。</li>
+  <li><strong>彻底删除：</strong>删除磁盘上的 transcript，受两道保护：会话最近有活动、还在静默期内（<code>SESSION_DELETE_QUIET_MS</code>，默认 5 分钟）时拒绝；终端或桌面端仍开着这个会话时也拒绝。拒绝的理由留在抽屉里显示，并记入审计。</li>
+  <li><strong>关掉后紧接着删（dev 已合入，尚未发版）：</strong>先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。</li>
 </ul>
