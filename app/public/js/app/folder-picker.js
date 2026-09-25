@@ -80,15 +80,7 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
     back.classList.add('hidden');
     body.innerHTML = '';
     setStatus('');
-    const head = el('<div class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-ink-faint"></div>');
-    head.textContent = t('已连接的文件夹');
-    body.appendChild(head);
-    for (const p of getProjects().filter(x => x.kind !== 'scratch')) {
-      body.appendChild(row({
-        icon: '📁', label: projectLabel(p), sub: p.key, testid: 'folder-picker-project',
-        onClick: () => pick(p.key), onEnter: () => enterBrowse('pick', p.key),
-      }));
-    }
+    // 「无文件夹」「添加文件夹」放在清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下
     const scratch = getScratchRoot();
     if (scratch) {
       body.appendChild(row({
@@ -100,6 +92,15 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
       icon: '＋', label: t('添加文件夹'), sub: t('从家目录里选一个文件夹连接进来'), testid: 'folder-picker-add',
       onClick: () => enterBrowse('add', null),
     }));
+    const head = el('<div class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-ink-faint"></div>');
+    head.textContent = t('已连接的文件夹');
+    body.appendChild(head);
+    for (const p of getProjects().filter(x => x.kind !== 'scratch')) {
+      body.appendChild(row({
+        icon: '📁', label: projectLabel(p), sub: p.key, testid: 'folder-picker-project',
+        onClick: () => pick(p.key), onEnter: () => enterBrowse('pick', p.key),
+      }));
+    }
   }
 
   // purpose：pick = 在已连接的文件夹里挑子文件夹开会话；add = 在家目录里挑一个加进来。

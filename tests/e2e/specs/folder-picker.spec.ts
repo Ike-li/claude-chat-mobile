@@ -31,6 +31,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-PICK-1 新会话页的文件夹胶囊打开选择器：进已连接文件夹挑一个子文件夹，就在那里开新会话', async ({ page }) => {
     await openPickerFromCompose(page);
+    // 「无文件夹」「添加文件夹」在已连接文件夹之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下
+    const actionsFirst = await picker(page).evaluate(sheet => {
+      const firstProject = sheet.querySelector('[data-testid="folder-picker-project"]');
+      return ['folder-picker-no-folder', 'folder-picker-add'].every(id => {
+        const node = sheet.querySelector(`[data-testid="${id}"]`);
+        return Boolean(node && firstProject && (node.compareDocumentPosition(firstProject) & Node.DOCUMENT_POSITION_FOLLOWING));
+      });
+    });
+    expect(actionsFirst, '「无文件夹」「添加文件夹」排在了已连接的文件夹后面').toBe(true);
     const main = picker(page).locator('[data-testid="folder-picker-project"]', { hasText: 'claude-chat-mobile' }).first();
     await expect(main).toBeVisible();
     await main.locator('[data-testid="folder-picker-enter"]').click();
