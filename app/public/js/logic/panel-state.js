@@ -263,6 +263,15 @@ export function owningWorkspace(cwd, dirs) {
   return best;
 }
 
+// 一个活实例归抽屉的哪一节。服务端给了 projectKey 且它是一节，就用它——仓库外的平级 worktree 按 cwd
+// 前缀归不到任何一节，只有服务端（从仓库侧双向回验）认得出它属于哪个仓库。否则按 cwd 取最长前缀
+// （旧服务端 / E2E mock 的旧载荷不带 projectKey；那一节还没下发时同理）。
+export function sectionOfInstance(inst, sectionKeys) {
+  const keys = Array.isArray(sectionKeys) ? sectionKeys : [];
+  if (typeof inst?.projectKey === 'string' && keys.includes(inst.projectKey)) return inst.projectKey;
+  return owningWorkspace(inst?.cwd, keys);
+}
+
 // SESSION-02：抽屉里活着的实例必须有一行。下面三个函数合起来把每个活实例分到恰好一个去处，
 // sectionKeys 是抽屉当前所有小节的键。
 //
@@ -274,7 +283,7 @@ export function liveRowsForSection(instances, sectionKey, sectionKeys) {
   const freshTabs = [];
   for (const inst of Array.isArray(instances) ? instances : []) {
     if (!inst?.instanceId) continue;
-    if ((owningWorkspace(inst.cwd, sectionKeys) || inst.cwd) !== sectionKey) continue;
+    if ((sectionOfInstance(inst, sectionKeys) || inst.cwd) !== sectionKey) continue;
     if (inst.sessionId) liveMap.set(inst.sessionId, inst);
     else freshTabs.push(inst);
   }
@@ -293,7 +302,7 @@ export function orphanLiveRows(liveMap, listedIds) {
 // cwd 不在任何小节之下的活实例（例如刚进了仓库外的平级 worktree）：由抽屉单独成一节。
 export function unownedLiveInstances(instances, sectionKeys) {
   return (Array.isArray(instances) ? instances : [])
-    .filter(inst => inst?.instanceId && !owningWorkspace(inst.cwd, sectionKeys));
+    .filter(inst => inst?.instanceId && !sectionOfInstance(inst, sectionKeys));
 }
 
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
@@ -304,7 +313,7 @@ export function aggregateStates(instances, dirs) {
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
   for (const x of instances || []) {
-    const key = owningWorkspace(x.cwd, Object.keys(out)) || x.cwd;
+    const key = sectionOfInstance(x, Object.keys(out)) || x.cwd;
     if (!(key in out)) out[key] = 'idle';
     if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
@@ -738,8 +747,11 @@ export function buildDirInstanceSignatures(instances = [], dirs = []) {
   for (const d of (dirs || [])) byDir.set(d, []);
   for (const inst of (instances || [])) {
     if (!inst?.instanceId) continue;
-    if (!byDir.has(inst.cwd)) byDir.set(inst.cwd, []);
-    byDir.get(inst.cwd).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
+    // 按它归属的那一节记签名，局部重建才落在对的节上；哪一节都不归的仍按 cwd 记（它的变化会让
+    // rebuildDirSections 找不到节点、退化成整段重建——「不在已连接的文件夹里」那一节靠的正是这条）。
+    const key = sectionOfInstance(inst, dirs) || inst.cwd;
+    if (!byDir.has(key)) byDir.set(key, []);
+    byDir.get(key).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
   }
   const out = {};
   for (const [d, frags] of byDir) out[d] = frags.join(',');

@@ -222,7 +222,7 @@ export function createStatusScenarios(getContext) {
             service: mockServicePayload(),
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
-            dirs: getContext().mockDirs(),
+            ...getContext().mockDirFields(),
             instances: mockInstances,
             defaultModel: 'opus', // scout 探得的 cwd 默认（档位别名）
           },
@@ -412,7 +412,7 @@ export function createStatusScenarios(getContext) {
             canRestart: false,
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
-            dirs: getContext().mockDirs(),
+            ...getContext().mockDirFields(),
             instances: mockInstances,
             service: mockServicePayload(),
           },
@@ -498,7 +498,7 @@ export function createStatusScenarios(getContext) {
       run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload, getMockCanRestart }) => {
         const removedCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
           ?? '/Users/you/code/claude-chat-mobile';
-        const dirs = getContext().mockDirs();
+        const dirFields = getContext().mockDirFields(); // 清空实例之前取：缺省口径从实例 cwd 现算
         mockInstances.length = 0; // 重启 = 所有 live 实例消失（不只正在看的那个）
         setViewingInstanceId(null);
         bumpServiceStartedAt();
@@ -508,7 +508,7 @@ export function createStatusScenarios(getContext) {
             canRestart: getMockCanRestart(),
             viewingInstanceId: null,
             viewingCwd: removedCwd,
-            dirs,
+            ...dirFields,
             instances: mockInstances,
             service: mockServicePayload(),
           },

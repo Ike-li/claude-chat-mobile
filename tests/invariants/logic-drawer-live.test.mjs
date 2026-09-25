@@ -84,3 +84,41 @@ test('SESSION-02 整体：各种形态混在一起时，每个活实例都有且
   const missing = everyLiveInstanceHasARow(instances, DIRS, { [MAIN]: ['sid-listed'], [OTHER]: ['sid-o'] });
   assert.deepEqual(missing, [], `这些活实例在抽屉里一行都没有：${missing.join(', ')}`);
 });
+
+// ── 小节 = 项目（2026-09-24「已连接的文件夹」）：服务端给每个实例带 projectKey ──────────────
+// 仓库外的平级 worktree 按 cwd 前缀归不到任何小节，服务端认得出它属于哪个仓库（双向回验）；
+// 前端不能只看前缀，否则 1c401b5d 那种会话照样被画进「不在已连接的文件夹里」。
+
+test('带 projectKey 的实例归它说的那一节——仓库外的平级 worktree 归仓库', () => {
+  const sib = inst('sib', '/Users/you/code/app-feat', 'sid-sib', { projectKey: MAIN });
+  const fresh = inst('sib-fresh', '/Users/you/code/app-feat2', null, { projectKey: MAIN });
+  const { liveMap, freshTabs } = liveRowsForSection([sib, fresh], MAIN, DIRS);
+  assert.equal(liveMap.get('sid-sib')?.instanceId, 'sib');
+  assert.deepEqual(freshTabs.map(i => i.instanceId), ['sib-fresh']);
+  assert.deepEqual(unownedLiveInstances([sib, fresh], DIRS), [], '服务端已经说了它归哪，还把它画进「不在已连接的文件夹里」');
+});
+
+test('projectKey 不是任何一节（旧载荷、或那一节还没下发）：回落按 cwd 前缀归', () => {
+  const sub = `${MAIN}/pkg`;
+  const i = inst('sub', sub, 'sid-sub', { projectKey: sub }); // 子项目还没进清单
+  assert.equal(liveRowsForSection([i], MAIN, DIRS).liveMap.get('sid-sub')?.instanceId, 'sub');
+  // 那一节出现之后归它自己
+  const withSub = [...DIRS, sub];
+  assert.equal(liveRowsForSection([i], sub, withSub).liveMap.get('sid-sub')?.instanceId, 'sub');
+  assert.equal(liveRowsForSection([i], MAIN, withSub).liveMap.size, 0, '同一个实例不能两节都画');
+});
+
+test('SESSION-02 整体（项目小节）：子项目、平级 worktree、无文件夹混在一起时，每个活实例都有且只有一个去处', () => {
+  const SUB = `${MAIN}/pkg`;
+  const SCRATCH = '/Users/you/Library/scratch-workspaces';
+  const sections = [MAIN, SUB, OTHER, SCRATCH];
+  const instances = [
+    inst('sub', `${SUB}/deeper`, 'sid-sub'),
+    inst('sib', '/Users/you/code/app-feat', 'sid-sib', { projectKey: MAIN }),
+    inst('scratch', `${SCRATCH}/scratch-2026-09-24-abcdef`, null, { projectKey: SCRATCH }),
+    inst('stray', '/tmp/elsewhere', 'sid-stray', { projectKey: '/tmp/elsewhere' }),
+  ];
+  const missing = everyLiveInstanceHasARow(instances, sections, {});
+  assert.deepEqual(missing, [], `这些活实例在抽屉里一行都没有：${missing.join(', ')}`);
+  assert.deepEqual(unownedLiveInstances(instances, sections).map(i => i.instanceId), ['stray']);
+});

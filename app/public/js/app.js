@@ -36,7 +36,6 @@ import {
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
-  projectDisplayName,
   shouldShowStartScreen,
   shouldShowComposer,
   shouldShowTopContextPill,
@@ -202,6 +201,7 @@ import { createEnvConfigPanel } from './app/env-config.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
+import { createProjectsState } from './app/projects-state.js';
 import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
@@ -673,7 +673,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
   // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
   const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
-  let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
+  // 抽屉小节的键 = 项目键（已连接的文件夹、其下有会话的子文件夹、「无文件夹」；旧载荷回落 dirs）
+  let availableDirs = [];
+  const projectsState = createProjectsState(); // 项目清单与展示名（见 app/projects-state.js）
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
   // 台阶3：viewingInstanceId = 当前查看 tab 实例（前端分流锚点）；displayedInstanceId/Session =
@@ -4778,7 +4780,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   // ---- 工作目录切换（台阶1：多目录单并发）----
   // basename：路径太长，目录切换器/顶部胶囊只显末段，title 挂全路径兜底重名
-  const baseName = projectDisplayName;
+  // 工作区展示名：子文件夹是「根 › 相对路径」、scratch 目录是「无文件夹」，其余取末段（见 projects-state）
+  const baseName = c => projectsState.labelFor(c);
 
   // 切 tab：静默把顶部面板（权限档/思考强度/模型 select）同步到目标实例的档。上下文恢复显示、
   // 非用户主动切档 → silent=true 不上屏系统条。model 先于 effort（effort 档位按当前模型 rebuildEffortOptions
@@ -4957,7 +4960,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let _canRestart = false; // 由 instances 广播维护，供配置面板判断能否就地重启
 
   function setInstances(p) {
-    availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
+    projectsState.set(p);
+    availableDirs = projectsState.keys();
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
     // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
@@ -6954,7 +6958,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       });
 
       // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
-      // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
+      // worktree 的会话由服务端并进所属仓库的列表（行带自己的 cwd），不自成一节。
       const renderRows = (sessions, hasMore, total = null, pinned = []) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
@@ -7168,7 +7172,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     sessionPanel.appendChild(buildNeedsYouSection());
     sessionPanel.appendChild(buildServiceSection());
 
-    // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
+    // 按项目清单顺序（已连接的文件夹按配置顺序、各自的子文件夹紧随其后、「无文件夹」垫底），每节一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
     //   折叠：📁 ▶ basename + 角标 → 点击展开（若非当前 cwd 则同时切换）
     dirSectionNodes = new Map();
@@ -7964,8 +7968,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     };
     container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
 
-    // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
-    // git worktree 须作为独立 workdir 写入 workdirs.json，才会出现在 availableDirs 里被扫到。
+    // 跨全部项目拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
+    // worktree 的会话随所属仓库的列表一起回来。
     const recentsSection = container.querySelector('#dashRecentsSection');
     const recentsList = container.querySelector('#dashRecentsList');
     const workspacesSection = container.querySelector('#dashWorkspacesSection');
@@ -8072,7 +8076,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const renderRecentsIncompleteNotice = ({ complete, failedCount, failedDirs } = {}) => {
       if (!incompleteEl) return;
       if (complete !== false) { incompleteEl.classList.add('hidden'); incompleteEl.textContent = ''; return; }
-      const names = failedDirs.map(projectDisplayName).join('、');
+      const names = failedDirs.map(baseName).join('、');
       incompleteEl.textContent = `${t('{n} 个工作区未能加载').replace('{n}', String(failedCount))}：${names}`;
       incompleteEl.classList.remove('hidden');
       recentsSection?.classList.remove('hidden');
@@ -8086,7 +8090,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const listMain = (cwd) => new Promise(resolve => {
         let settled = false;
         const done = (sessions, timedOut = false) => {
-          if (!settled) { settled = true; resolve({ cwd, sessions, timedOut }); }
+          if (!settled) { settled = true; resolve({ cwd, sessions, timedOut, workspaceName: baseName(cwd) }); }
         };
         socket.emit('session:list', { cwd }, state => {
           unread.hydrate(state?.readState); // 首页最近行也画未读 chip；Promise.all 之后才渲染，天然同帧

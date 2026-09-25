@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir } from '../../app/src/sessions/history.js';
 import { resolveAuthorizedCwd } from '../../app/src/sessions/folder-access.js';
-import { discoverSubProjects, composeProjects, createProjectIndex } from '../../app/src/sessions/projects.js';
+import { discoverSubProjects, composeProjects, createProjectIndex, hasScratchSessions } from '../../app/src/sessions/projects.js';
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-projects-')));
 test.after(() => rmSync(ROOT, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
@@ -259,4 +259,20 @@ test('createProjectIndex.start：先扫一次，之后按周期补扫；没人�
   t.mock.timers.tick(120_000);
   await new Promise(r => setImmediate(r));
   assert.equal(calls, 2, 'stop 之后定时器还在跑，关闭期间会继续读盘');
+});
+
+// 「无文件夹」一节只在有东西时出现（官方侧栏同样只列有会话的项目）：从没用过无文件夹会话的人，
+// 抽屉里不该平白多一节空的。判据：scratch 根下某个 scratch 目录的 project 目录里有 transcript。
+test('hasScratchSessions：只认 scratch 形态目录里真有 transcript 的', async () => {
+  const { baseDir } = fixture();
+  const scratchRoot = join(ROOT, `scratch-root-${seq++}`);
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '什么都没有');
+  const empty = join(scratchRoot, 'scratch-2026-09-24-EMPTY0');
+  mkdirSync(join(baseDir, getProjectDir(empty)), { recursive: true });
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '会话删光后留下的空 project 目录不算');
+  writeTranscript(baseDir, join(scratchRoot, 'not-a-scratch'), [join(scratchRoot, 'not-a-scratch')]);
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '根下不是 app 建的目录不算');
+  const used = join(scratchRoot, 'scratch-2026-09-24-USED00');
+  writeTranscript(baseDir, used, [used]);
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), true);
 });

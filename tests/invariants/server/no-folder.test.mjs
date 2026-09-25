@@ -99,6 +99,8 @@ test('首条消息：懒建一个 scratch 目录，会话开在里面，归「�
   assert.match(basename(inst.cwd), SCRATCH_DIR_RE);
   assert.equal(inst.projectKey, realpathSync(scratchRoot), '前端按它把这一行挂到「无文件夹」下');
   assert.equal(scratchDirs().length, before + 1);
+  assert.ok(latestInstances()?.projects?.some(p => p.kind === 'scratch' && p.key === realpathSync(scratchRoot)),
+    '有会话开在里面，抽屉里就该有「无文件夹」这一节——否则这一行只能被画进「不在已连接的文件夹里」');
   await emit('session:close', { instanceId: inst.instanceId });
 });
 
@@ -127,13 +129,18 @@ test('删会话：目录里还有别的会话就留着；删到最后一个，�
   assert.ok(listed.sessions.some(s => s.id === first && s.scratch === true && s.cwd === dir),
     `「无文件夹」项目列不出里面的会话：${JSON.stringify(listed.sessions)}`);
 
+  // 离开「无文件夹」的新会话页：此后这一节还在不在，只取决于扫盘认不认得出里面的会话
+  assert.equal((await emit('session:new', { cwd: home + '/code/a' }))?.ok, true);
   const r1 = await emit('session:deletePermanent', { sessionId: first, cwd: dir });
   assert.equal(r1.ok, true, JSON.stringify(r1));
   assert.equal(r1.scratchRemoved, false);
   assert.ok(existsSync(dir), '还有别的会话在用这个目录，删了就是把另一个会话的工作文件一起删了');
+  await waitFor(() => latestInstances()?.projects?.some(p => p.kind === 'scratch'),
+    '还有一条无文件夹会话：删一条之后的补扫要认得出它，这一节不能跟着消失');
 
   const r2 = await emit('session:deletePermanent', { sessionId: second, cwd: dir });
   assert.equal(r2.ok, true, JSON.stringify(r2));
   assert.equal(r2.scratchRemoved, true);
   assert.equal(existsSync(dir), false, '最后一个会话删了，一次性目录不该留在磁盘上');
+  await waitFor(() => !latestInstances()?.projects?.some(p => p.kind === 'scratch'), '「无文件夹」一节随最后一个会话消失');
 });

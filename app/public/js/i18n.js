@@ -598,6 +598,7 @@ export const EN_DICT = Object.freeze({
   'CLI 默认': 'CLI default',
   '使用工作区默认配置': 'Uses the workspace defaults',
   '无项目': 'No project',
+  '无文件夹': 'No folder',
 
   // —— statusline / CLI 侧状态 ——
   'CLI 状态暂不可用': 'CLI status unavailable',

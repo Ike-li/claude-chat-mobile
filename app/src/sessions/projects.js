@@ -9,6 +9,7 @@
 import { readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { getProjectDir, projectCwdOf } from './history.js';
+import { SCRATCH_DIR_RE } from './folder-access.js';
 
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
@@ -47,6 +48,26 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize, 
     if (owner?.kind === 'connected') found.set(key, { key, root: owner.root });
   }
   return [...found.values()].sort(byKey);
+}
+
+// 「无文件夹」项目有没有会话：scratch 根下某个 mkdtemp 形态目录的 project 目录里有 transcript。
+// 只决定抽屉里这一节显不显示（官方侧栏也只列有会话的项目），不认领任何会话——所以按名字判就够：
+// `<根的编码>-` 之后那一段必须整段就是 scratch 形态（它全是字母数字与连字符，编码前后不变），
+// 根下别的目录、scratch 目录里的子目录都会在这里被挡掉。
+export async function hasScratchSessions({ baseDir, scratchRoot }) {
+  const prefix = getProjectDir(scratchRoot) + '-';
+  let names;
+  try {
+    names = (await readdir(baseDir, { withFileTypes: true }))
+      .filter(e => e.isDirectory() && e.name.startsWith(prefix) && SCRATCH_DIR_RE.test(e.name.slice(prefix.length)))
+      .map(e => e.name);
+  } catch { return false; }
+  for (const name of names) {
+    try {
+      if ((await readdir(join(baseDir, name))).some(f => f.endsWith('.jsonl'))) return true;
+    } catch { /* 读不了：同没有 */ }
+  }
+  return false;
 }
 
 // 组出下发给前端的清单。连接根在这里现算（加 / 删文件夹后立刻准确，不等下一次扫盘）；

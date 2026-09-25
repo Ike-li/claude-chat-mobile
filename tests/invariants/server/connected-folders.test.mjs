@@ -129,13 +129,12 @@ test('仓库的列表并进平级 worktree 的会话（行带自己的 cwd），
   assert.ok(!sessions.some(s => s.id === SID.forged), '伪造目录的会话被当成仓库成员并了进来');
 });
 
-test('项目清单：连接根、有会话的子目录、无文件夹；平级 worktree 不自成项目', async () => {
+test('项目清单：连接根、有会话的子目录；平级 worktree 不自成项目；没在用的「无文件夹」不占一节', async () => {
   const payload = await waitFor(() => (latestInstances()?.projects?.some(p => p.key === sub) ? latestInstances() : null),
     '有会话的子目录出现在 instances 的项目清单里');
   assert.deepEqual(payload.projects.map(p => [p.key, p.kind, p.label]), [
     [repo, 'connected', 'repo'],
     [sub, 'subfolder', 'repo › app'],
-    [payload.scratchRoot, 'scratch', null],
   ]);
 });
 

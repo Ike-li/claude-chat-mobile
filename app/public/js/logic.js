@@ -26,6 +26,7 @@ export * from './logic/mirror.js';
 export * from './logic/models-effort.js';
 export * from './logic/outbox-send.js';
 export * from './logic/panel-state.js';
+export * from './logic/projects.js';
 export * from './logic/permissions.js';
 export * from './logic/service-diag.js';
 export * from './logic/session-search.js';

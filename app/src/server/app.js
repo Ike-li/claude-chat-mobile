@@ -90,7 +90,7 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
-import { composeProjects, createProjectIndex, discoverSubProjects } from '../sessions/projects.js';
+import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
 import { scratchRoot as defaultScratchRoot } from '../shared/scratch-root.js';
 import {
@@ -253,7 +253,10 @@ const scratchAllocator = createScratchAllocator(SCRATCH_ROOT);
 // 抽屉的项目清单：子项目靠扫 ~/.claude/projects 反查（sessions/projects.js），扫出的结果变了才广播。
 // 触发：启动、工作区热加载、删除会话、活实例所在的子项目还没扫到、每分钟一次（有已批准连接时，见 listen 前）。
 const projectIndex = createProjectIndex({
-  discover: cwdCache => discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize, cwdCache }),
+  discover: async cwdCache => ({
+    subProjects: await discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize, cwdCache }),
+    scratchInUse: await hasScratchSessions({ baseDir: CLAUDE_PROJECTS_DIR, scratchRoot: scratchRootKey() }),
+  }),
   onChange: () => broadcastInstances(),
 });
 // 成员目录（平级 worktree、scratch 目录）并不并进项目的列表，由同一份授权判据裁决（history.js）
@@ -1308,11 +1311,16 @@ function instancesPayload() {
   payload.autoContinue = autoContinue.snapshot();
   // 项目清单（按官方桌面端的侧栏分组）：连接根现算；子项目 = 扫盘结果 ∪ 活实例所在的子项目——新会话的
   // transcript 可能还没落盘，只等扫盘的话正在跑的会话所属项目要晚一分钟才出现。
+  // 「无文件夹」只在用着时占一节（有会话、有实例开在里面、或正停在它的新会话页上）：从没用过的人，
+  // 抽屉里不该平白多一节空的。scratchRoot 恒带——前端「选文件夹」面板靠它发起无文件夹会话。
+  const scanned = projectIndex.get();
   payload.scratchRoot = scratchRootKey();
+  const scratchInUse = Boolean(scanned?.scratchInUse) || isNoFolderKey(viewingCwdOf())
+    || list.some(i => i.projectKey === payload.scratchRoot);
   payload.projects = composeProjects({
     connected: workDirs,
-    subProjects: [...(projectIndex.get() ?? []), ...liveSubProjects(list)],
-    scratchRoot: payload.scratchRoot,
+    subProjects: [...(scanned?.subProjects ?? []), ...liveSubProjects(list)],
+    scratchRoot: scratchInUse ? payload.scratchRoot : null,
   });
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
@@ -1498,11 +1506,15 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
     seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
-  // 活实例所在的子项目扫盘还没认出来（transcript 刚落盘）：补扫一趟，免得实例一退出这个项目就从抽屉消失。
-  // 单飞合并，认出来之后就不再触发。
+  // 活实例所在的子项目 / 无文件夹扫盘还没认出来（transcript 刚落盘）：补扫一趟，免得实例一退出这一节
+  // 就从抽屉消失。单飞合并，认出来之后就不再触发。
   const scanned = projectIndex.get();
-  if (scanned && liveSubProjects([...agents.values()].map(a => ({ projectKey: workspaceCwdOf(a.cwd) })))
-    .some(p => !scanned.some(x => x.key === p.key))) projectIndex.refresh();
+  if (scanned) {
+    const liveKeys = [...agents.values()].map(a => ({ projectKey: workspaceCwdOf(a.cwd) }));
+    const subMissing = liveSubProjects(liveKeys).some(p => !scanned.subProjects.some(x => x.key === p.key));
+    const scratchMissing = !scanned.scratchInUse && liveKeys.some(k => k.projectKey === scratchRootKey());
+    if (subMissing || scratchMissing) projectIndex.refresh();
+  }
 }
 // 后台任务集合变化 → 会话列表 ⏳ 重算的 500ms 合并节流：agent 侧 onBgTaskChange 只在"空↔非空/成员增删"时回调（稳态高频心跳不触发），
 // 这里再合并同一 tick 内的多次变化（TTL 批量清 + 新任务同时到）成一次 broadcastInstances，避免重复全量广播。单飞：已排期则忽略。

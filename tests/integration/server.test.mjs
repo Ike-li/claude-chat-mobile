@@ -205,7 +205,7 @@ test.describe('事件流 — 新连接重放', () => {
 
   // 项目清单（2026-09-24「已连接的文件夹」）。前端对「缺这个字段」的约定是回落到 dirs（兼容 E2E mock 与
   // 演示站的旧载荷），所以真 server 漏发不报错，只会让抽屉永远按旧的目录列表画——E2E 打的是 mock，守不住。
-  test('instances 广播带项目清单与 scratch 根；「无文件夹」项目列得出（根还没建也不越界拒绝）', async () => {
+  test('instances 广播带项目清单与 scratch 根；「无文件夹」没在用时不占一节，但列得出（根还没建也不越界拒绝）', async () => {
     const events = [];
     const s = connectSocket();
     s.on('agent:event', e => events.push(e));
@@ -219,9 +219,10 @@ test.describe('事件流 — 新连接重放', () => {
     assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
     const { projects, scratchRoot } = inst.payload;
     assert.equal(typeof scratchRoot, 'string', `scratchRoot 缺席：${JSON.stringify(inst.payload).slice(0, 300)}`);
-    assert.ok(Array.isArray(projects) && projects.length >= 2, `projects 必须是数组（连接根 + 无文件夹），实际 ${JSON.stringify(projects)}`);
+    assert.ok(Array.isArray(projects) && projects.length >= 1, `projects 必须是数组，实际 ${JSON.stringify(projects)}`);
     assert.equal(projects[0].kind, 'connected');
-    assert.deepEqual(projects.at(-1), { key: scratchRoot, root: scratchRoot, label: null, kind: 'scratch' });
+    // 从没用过无文件夹会话：抽屉里不该平白多一节空的（官方侧栏同样只列有会话的项目）
+    assert.ok(!projects.some(p => p.kind === 'scratch'), `没在用的「无文件夹」占了一节：${JSON.stringify(projects)}`);
     for (const p of projects) assert.deepEqual(Object.keys(p).sort(), ['key', 'kind', 'label', 'root']);
 
     const ack = await new Promise((resolve, reject) => {
