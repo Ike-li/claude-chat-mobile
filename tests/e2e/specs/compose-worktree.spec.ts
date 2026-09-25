@@ -75,6 +75,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 第一次被 mock 以可重试的负 ack 拒掉 → 进 outbox → 重发送达；只有重发带着意图，mock 才回这一行
     await expect(page.locator('#messages')).toContainText('worktree requested from dev', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('在新 worktree 里干活');
+
+    await expectNoBrowserErrors(page);
   });
 
   test('P0-40b 勾了又回新会话：意图不残留（勾选不是全局偏好）', async ({ page }) => {
