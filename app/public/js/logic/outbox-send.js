@@ -480,6 +480,22 @@ export function planOutboxWorktreeReuse(item, openedInstanceId) {
   return { ...item, useWorktree: false, sourceBranch: null, instanceId: openedInstanceId };
 }
 
+// 同一件事的「无文件夹」版（2026-09-24）：离线时在「无文件夹」的新会话页上连打几条，每条都以
+// {instanceId:null, cwd:<scratch 根>} 入队；服务端的 scratch 分配器只合并并发、合并不了先后，
+// 逐条重放就会一条建一个 scratch 目录、开一个会话。第一条照原样发（由它懒开），后续各条改投它开出来的实例。
+// scratchRoot 未知（旧服务端）时不动任何条目。
+export function planOutboxScratchReuse(item, openedInstanceId, scratchRoot) {
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return item;
+  if (!openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
+}
+export function nextOutboxScratchAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return current ?? null;
+  if (!decision || decision.outcome !== 'ok') return current ?? null;
+  return decision.instanceId || null;
+}
+
 // 这一条重放成功后，本批的「worktree 已开」锚点该变成什么。
 // 只认【原始意图是 useWorktree 且此前还没锚】的那一条 —— 后续条目已被改投，不该覆盖锚点；
 // 普通条目（没勾 worktree）更不该把无关会话的实例写进来。

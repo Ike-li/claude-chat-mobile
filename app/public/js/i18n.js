@@ -613,6 +613,8 @@ export const EN_DICT = Object.freeze({
   '只列出了前 500 个': 'Only the first 500 are listed',
   '新文件夹的名字': 'New folder name',
   '新建': 'Create',
+  '这是「无文件夹」会话：临时目录和里面的文件会一并删除（目录里还有别的会话时保留）。': 'This is a "No folder" session: its throwaway folder and the files in it will be deleted too (kept if other sessions still use it).',
+  '（临时目录已一并删除）': ' (its throwaway folder was deleted too)',
   '不能添加整个家目录': 'Your whole home folder can\'t be added',
   '不能添加磁盘根目录': 'The disk root can\'t be added',
   '只能添加家目录里的文件夹': 'Only folders inside your home folder can be added',

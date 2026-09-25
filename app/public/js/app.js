@@ -121,6 +121,8 @@ import {
   OFFLINE_RESEND_ACK_MS,
   planOutboxDrainNotice,
   planOutboxWorktreeReuse,
+  planOutboxScratchReuse,
+  nextOutboxScratchAnchor,
   nextOutboxWorktreeAnchor,
   planOutboxEnqueue,
   parseDurableOutbox,
@@ -1380,6 +1382,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     let hadViewingOk = false;
     // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
     let worktreeAnchorId = null;
+    // 同理，本批第一条「无文件夹」消息开出来的实例（否则一条建一个 scratch 目录、开一个会话）
+    let scratchAnchorId = null;
+    const scratchRoot = projectsState.scratchRoot();
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
@@ -1399,8 +1404,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
         // 例外是「在新 worktree 里开」：这一批里它只该兑现一次（判据见 planOutboxWorktreeReuse），
         // 否则每条各建一棵树、各开一个会话，同一个任务被拆进互不相干的分支与上下文。
-        const decision = await deliverOutboxItem(planOutboxWorktreeReuse(item, worktreeAnchorId));
+        const decision = await deliverOutboxItem(planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchorId), scratchAnchorId, scratchRoot));
         worktreeAnchorId = nextOutboxWorktreeAnchor(item, decision, worktreeAnchorId);
+        scratchAnchorId = nextOutboxScratchAnchor(item, decision, scratchAnchorId, scratchRoot);
         const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -6248,8 +6254,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
     socket, addBar, appConfirm, showDrawerNotice: drawer.showNotice,
-    onDeleted: ({ cwd } = {}) => {
-      // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
+    isNoFolderCwd: cwd => projectsState.isNoFolder(cwd),
+    onDeleted: ({ cwd, sectionKey } = {}) => {
+      // 立刻丢掉这一行所在小节的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
+      // 缓存按小节归键：worktree / scratch 会话的 cwd 是成员目录，只按 cwd 删等于没删。
+      if (sectionKey) sessionsCache.delete(sectionKey);
       if (cwd) sessionsCache.delete(cwd);
       openSessionPanel();
     },
@@ -6768,7 +6777,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       delBtn.onclick = e => {
         e.stopPropagation();
         haptic('warning');
-        openDeleteSession(s.id, rowCwd, s.title);
+        openDeleteSession(s.id, rowCwd, s.title, workspaceCwd);
       };
       rowContent.appendChild(delBtn);
     }

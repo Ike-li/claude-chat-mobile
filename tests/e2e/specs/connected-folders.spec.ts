@@ -41,4 +41,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await scratchRow.locator('button').first().click();
     await expect(page.locator('#topProjectText'), '顶栏写成 scratch 目录名，用户根本认不出这是哪').toHaveText('无文件夹');
   });
+
+  test('P0-PROJ-2 删除「无文件夹」会话：确认框说清临时目录会一并删除，删完这一行不再出现', async ({ page }) => {
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, SCRATCH);
+    const row = subtreeOf(page, SCRATCH).locator('[data-testid="session-row"]', { hasText: '以前的无文件夹会话' });
+    await expect(row).toHaveCount(1);
+    await row.locator('[data-testid="session-delete"]').click();
+    await expect(page.locator('#confirmBody'), '不说一声就把模型写在临时目录里的文件一起删了').toContainText('临时目录和里面的文件会一并删除');
+    await page.locator('#confirmOk').click();
+    await expect(subtreeOf(page, SCRATCH).locator('[data-testid="session-row"]', { hasText: '以前的无文件夹会话' })).toHaveCount(0);
+    await expect(page.locator('#messages')).toContainText('临时目录已一并删除');
+  });
 });

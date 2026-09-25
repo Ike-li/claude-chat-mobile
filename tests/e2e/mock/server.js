@@ -412,6 +412,7 @@ function mockDirs() {
 // 缺省口径与 dirs 一一对应（每个目录一节，与改动前逐字相同）；子项目、无文件夹由场景显式开启。
 const MOCK_SCRATCH_ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
 let mockSubProjects = []; // [{ key, root }]：有会话的子文件夹（真 server 扫盘得出），场景显式开启
+let mockScratchSessions = []; // 「无文件夹」项目 session:list 的行（真 server 由各 scratch 目录的会话并成），场景显式开启
 function mockDirFields() {
   const dirs = mockDirs();
   const projects = [];
@@ -463,6 +464,7 @@ function resetMockState() {
   mockResetGeneration += 1;
   mockDirsOverride = null;
   mockSubProjects = [];
+  mockScratchSessions = [];
   mockFolderTree = createMockFolderTree();
   mockAddedFolders = [];
   mockFoldersAddError = null;
@@ -1203,7 +1205,9 @@ io.on('connection', socket => {
       return;
     }
     deletedSessionIds.add(sessionId);
-    if (typeof ack === 'function') ack({ ok: true });
+    // 「无文件夹」会话：真 server 在它是那个 scratch 目录里最后一个会话时连目录一起删，ack 带 scratchRemoved
+    const scratch = typeof payload?.cwd === 'string' && payload.cwd.startsWith(`${MOCK_SCRATCH_ROOT}/`);
+    if (typeof ack === 'function') ack({ ok: true, ...(scratch ? { scratchRemoved: true } : {}) });
   });
 
   // Handle Tab close
@@ -1411,6 +1415,11 @@ io.on('connection', socket => {
       }
       : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
+    if (cwd === MOCK_SCRATCH_ROOT) {
+      const sessions = mockScratchSessions.filter(s => !deletedSessionIds.has(s.id));
+      if (typeof callback === 'function') callback({ currentSessionId: null, sessions, terminalBusy: false, terminalWaiting: false, hasMore: false, total: sessions.length });
+      return;
+    }
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
         const sessions = mainCwdSessions().filter(s => !deletedSessionIds.has(s.id));
@@ -4579,6 +4588,10 @@ io.on('connection', socket => {
         const main = '/Users/you/code/claude-chat-mobile';
         const sub = `${main}/packages/web`;
         mockSubProjects = [{ key: sub, root: main }];
+        mockScratchSessions = [{
+          id: 'mock-session-scratch-old', title: '以前的无文件夹会话', model: activeModel, entrypoint: 'sdk-ts',
+          lastUsedAt: Date.now() - 3_600_000, cwd: `${MOCK_SCRATCH_ROOT}/scratch-2026-09-20-old001`, scratch: true,
+        }];
         for (const inst of [
           { instanceId: 'inst_sub', cwd: sub, projectKey: sub, sessionId: 'mock-session-sub', title: '子文件夹里的会话' },
           { instanceId: 'inst_sib_owned', cwd: '/Users/you/code/claude-chat-mobile-feat-y', projectKey: main, sessionId: 'mock-session-sib-owned', title: '仓库外 worktree 里的会话' },
