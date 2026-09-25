@@ -63,6 +63,21 @@ test('generateWorktreeName: 可读 + 唯一，落在 CLI 字符集内', () => {
   assert.notEqual(a, b);
 });
 
+// 缺省随机源（上面的用例都注入 rand，这条路径此前零覆盖）：同一分钟里同一条消息发两次也得是两个名字，
+// 否则第二次 createSessionWorktree 撞 exists、新会话开不出来。
+test('缺省随机后缀：4 位、落在 CLI 字符集内，同一时刻反复生成不撞名', () => {
+  const now = new Date('2026-09-11T08:30:00Z');
+  const names = Array.from({ length: 20 }, () => generateWorktreeName(now));
+  for (const n of names) {
+    assert.match(n, /^ccm-20260911-0830-[0-9a-z]{4}$/);
+    assert.equal(sanitizeWorktreeName(n), n);
+  }
+  assert.ok(new Set(names).size > 1, '随机段没有参与');
+  const fromMsg = Array.from({ length: 20 }, () => worktreeNameFromMessage('fix the login redirect bug', { now }));
+  for (const n of fromMsg) assert.match(n, /^fix-the-login-[0-9a-z]{4}$/);
+  assert.ok(new Set(fromMsg).size > 1, '随机段没有参与');
+});
+
 // ── 纯函数：从第一条消息取名 ────────────────────────────────────────────────
 // 对照 Claude Desktop 的 generateWorktreeName(branchHint)：名字跟任务内容相关，
 // 在 `git worktree list` 和分支名里一眼认得出这棵树在干什么，时间戳做不到这件事。
