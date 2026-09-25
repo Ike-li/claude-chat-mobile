@@ -93,10 +93,14 @@
 |---|---|
 | `SCOPE-01` | 任何用户可控路径经 `realpath` 后仍须落在授权工作区内。**三层窗口各有编号，缺一层就是一个可逃逸的时间窗**：`FILES-1` readdir 之后复校（目录级）· `FILES-2` mkdir 之后用 realpath 后的目录做前缀校验（中间路径级）· `FILES-3` `O_NOFOLLOW` 打开（叶节点级） |
 | `SCOPE-02` | 上传：只留 basename、去控制字符与前导点；不把服务端绝对路径交给不可信面；个数/单文件/总量上限前后端必须同一数字（`FILES-4` 缩略图上限两侧对齐） |
+| `SCOPE-04` | git linked worktree 随所属仓库授权（含仓库外的平级目录），但归属只能**从已授权仓库一侧双向回验**：worktree 的 `.git` 必须是普通文件（不是 symlink）且指向 `<仓库>/.git/worktrees/<名>`，**同时**仓库侧 `<仓库>/.git/worktrees/<名>/gitdir` 回链到这个 worktree 的 `.git`；任一侧缺失、指向不一致一律拒。`.git` 文件模型写得动，单看它等于任何目录都能冒充已授权仓库的 worktree。**判定全程不执行 git**（`.git/config` 模型可写，能让 git 执行任意命令，`AUTH-06` 同一理由） |
+| `SCOPE-05` | 已连接文件夹的子目录经 `realpath` 后即是合法 cwd（官方桌面端语义：子文件夹直接可达）；嵌套时归最长的那个根。禁区（`~/.claude`、CCM 数据目录）的子树永远不是合法 cwd；scratch 根下只认 app 用 `mkdtemp` 建的 `scratch-YYYY-MM-DD-xxxxxx` 单段目录。**显式传入的越界 cwd 一律拒绝并记审计**，不得静默回落到别的目录——抽屉按项目请求会话列表后，回落 = 把 A 文件夹的会话画到 B 的标题下 |
 | `SCOPE-03` | 授权工作区列表必须来自**显式配置**；一个都解析不出时拒绝启动，**绝不回落家目录**。`SCOPE-01` 管的是「路径必须落在白名单内」，白名单本身 = `[家目录]` 时它全绿而整个家目录已经暴露 —— 这是它的上游，不是同一条 |
 | `FILE-01` | 编辑器直写不走审批链，但走独立的闸：已存在文件、大小硬顶、`baseHash`、写前后范围门、审计、`FILE_EDIT=off` 整段关闭 |
 | `FILE-02` | `open` 之前拒绝 FIFO / 字符设备 / unix socket。实现是**白名单**（只放行常规文件与 symlink），测试要按白名单写，否则新增一种特殊文件类型时不会红 |
 | `FILE-03` | 控制面状态文件（设备、审批、配置、审计、上传附件）owner-only `0600` |
+| `FOLDER-01` | 手机上「添加文件夹 / 新建文件夹」扩的是授权面，只能照官方桌面端的口径放：浏览**只回目录名**（不回文件、不跟随 symlink、隐藏点目录、有上限），范围以家目录为界；**不能添加**的：家目录本身、磁盘根、家目录以外、禁区（`~/.claude`、CCM 数据目录、scratch 根）内、已是 git linked worktree 的目录（跟随所属仓库，要加就加仓库）。新建只接受单段名字、非递归，建完用 realpath 复核仍在范围内，不在就撤掉那个空目录再拒<br>*（2026-09-24 建：WORKDIRS 改为「已连接的文件夹」、手机上可直接添加）* |
+| `SCRATCH-01` | 删除「无文件夹」会话的 scratch 目录是 `app/src` 里唯一一处递归删除，只在**全部**成立时才删：realpath 后的父目录**恰好是** scratch 根、目录名是 `mkdtemp` 建的 `scratch-YYYY-MM-DD-xxxxxx` 形态、目录本身不是 symlink、scratch 根不是家目录也不是磁盘根、目录里没有别的会话的 transcript（`/clear` 之后同一目录会有多条）、没有活实例开在里面。任一条不成立就不删——留下一个空目录只是垃圾，删错是数据丢失<br>*（2026-09-24 建，同上）* |
 
 ### 会话与 Claude
 
@@ -104,6 +108,8 @@
 |---|---|
 | `MSG-01` | 同一 `clientMessageId` 对 Claude `send` 至多一次。校验失败不得 commit；并发重发靠 in-flight claim，无论成败都要 release（`REL-01` 两阶段 + claim/release · `SRV-001` FRESH 分支**同样**要单飞——「FRESH 不去重」是修过的坑） |
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
+| `SESSION-02` | 活着的实例在抽屉里必须有一行：不依赖 `session:list` 有没有返回它（被分页挤出本页、transcript 被 EnterWorktree 迁到别的 project 目录），不依赖它有没有 sessionId（懒开的 worktree 新会话），也不依赖它的 cwd 还属不属于某个工作区。行都没有，用户就既看不到它在跑、也关不掉它。<br>*（2026-09-24 建：真机会话 `1c401b5d` 正在跑，抽屉里整行消失）* |
+| `SESSION-03` | 会话中途 `EnterWorktree` / `ExitWorktree` 之后，实例的驾驶轴 cwd 必须跟到新目录——CLI 已把整份 transcript 迁到新 cwd 的 project 目录，停在旧值 = 历史、resume、附件全按一个空目录解析。信号以主链 `tool_use_result`（`worktreePath` / `originalCwd`）为准：CLI 2.1.280 实测 EnterWorktree **不派发** CwdChanged，hook 只是另一条冗余通道。两路先后到达必须幂等；子 agent 的、`is_error` 的、别的工具的结果一律不采信；采信前仍过 server 的范围判据。<br>*（2026-09-24 建：9/13 那版只接了 hook，真机会话 `1c401b5d` 证明它从未生效）* |
 | `SOCKET-01` | Socket 断开不得杀死 Agent；Agent 死必须清 busy、通知客户端、允许恢复 |
 | `SYNC-01` | 出向唯一信封 `agent:event`（`seq` + `epoch` + `type`）。重连用 `sync:since` 补缺口，超缓冲或换 epoch 走鉴权 `session:history`。一台设备连入触发的追平重定基线只对它自己生效：其余在线端照样收到终端刚写的那段 `history_append`，待审批设备连入不触发 |
 | `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |

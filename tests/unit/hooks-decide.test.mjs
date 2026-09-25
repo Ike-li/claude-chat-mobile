@@ -54,6 +54,20 @@ test('cwd 不在工作区白名单 → 整条丢弃并计数（机器上其他�
   assert.deepEqual(r.invalidateCwds, []);
 });
 
+// 「已连接的文件夹」（2026-09-24）：子目录与随仓库授权的 worktree 里跑的终端会话，它们的 hook 事件
+// 必须照常推送——只认 cwd === 工作区本身的话，这些会话的完成 / 等你回应通知全被当成「别的项目」丢掉。
+test('注入授权判据：连接文件夹子目录与仓库外 worktree 的事件照常推送，判据说不的照样丢', () => {
+  const SUB = `${CWD}/app`;
+  const SIBLING = '/Users/you/code/demo-feat';
+  const isAuthorizedCwd = c => c === CWD || c.startsWith(`${CWD}/`) || c === SIBLING;
+  const r = decideHookEventActions(
+    [ev({ cwd: SUB, sessionId: 's-sub' }), ev({ cwd: SIBLING, sessionId: 's-sib' }), ev({ cwd: OTHER, sessionId: 's-other' })],
+    { ...base, isAuthorizedCwd },
+  );
+  assert.deepEqual(r.pushes.map(p => p.sessionId).sort(), ['s-sib', 's-sub']);
+  assert.equal(r.ignored, 1, '判据说不的仍要丢——注入判据不是开闸');
+});
+
 test('verify 事件 → 只出 ack，不推送不刷新（安装回环验证专用）', () => {
   const r = decideHookEventActions([ev({ sessionId: 'ccm-verify-abc', cwd: OTHER })], base);
   assert.deepEqual(r.acks, ['ccm-verify-abc']);

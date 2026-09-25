@@ -66,7 +66,7 @@
 | 规则 | 说明 |
 |------|------|
 | 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；用户即 root，对操作面限速违背产品目的 |
-| 工作区白名单 | 路径门，不决定 Claude 工具是否自动放行 |
+| 已连接的文件夹（`WORKDIRS`） | 路径门，不决定 Claude 工具是否自动放行。子目录与所属仓库的 linked worktree 直接可达，手机上可添加（只浏览家目录内的目录名）；显式越界 cwd 拒绝、不回落（SCOPE-04/05、FOLDER-01） |
 | 范围内文件不敏感过滤 | `.env` 等照读——与「用户即 root」一致 |
 | 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*` 或 CLI settings 文件的 `env` 块（SDK 会话的 `settingSources` 含 user/project/local，写法见 getting-started「官方订阅与第三方网关」）。`app/src/shared/child-env.js` 有三处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据），以及**剥掉 CCM 自己的控制面密钥**（`AUTH_TOKEN` 与 `VAPID_*` / `NTFY_*` / `CF_ACCESS_*` 三组前缀，2026-09-17 安全审查 H1，红线登记为 `AUTH-06`）。第三条**不是对「不做白名单裁剪」的削弱，而是对它的补齐**：本条规则要的是「与终端 claude 一致」，而 server 会把 `ccm.config.json` 的值投影进 `process.env`（`ops/config.js` 的投影循环），于是子进程实际拿到的**比终端更宽**——普通终端里的 claude 环境里根本没有这几个键。剥掉之后才真的等宽。判据是「这个键属于 CCM 还是属于 claude」，`ANTHROPIC_*` / `CLAUDE_CODE_*` / 代理变量一律原样透传，第三方网关路径不受影响。剥离不只对 SDK 会话：server 自己在工作区里跑的 git（变更面板、状态栏）与 `claude --version` 走同一份 `childEnv()`——仓库配置能让 git 执行任意命令（`core.fsmonitor` 等），而 `.git/config` 对模型可写，只剥 SDK 那一路等于留了条绕行（2026-09-22 review P2）。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
 
@@ -91,7 +91,7 @@
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 58 个） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 61 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -170,7 +170,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 
 - 桌面端占着端口：**勿再手动 `npm start` 撞端口**。  
 - 改配置/代码：桌面端菜单里 server 一行点「重启」；headless 停掉当前 `npm start` 再起。  
-- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
+- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`；手机上「添加文件夹」写的也是这份内联 `WORKDIRS`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决
 
@@ -251,7 +251,7 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 详见 [架构说明 · 鉴权与范围边界](architecture.md#鉴权与范围边界)（完整分层图与各层互不替代的边界）。摘要：
 
-**入口凭据：AUTH_TOKEN（必备，无它不启动）‖ 公网 IdP 策略（可选加层，当前唯一实现 CF Access）**，按 Host 二选一 → 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
+**入口凭据：AUTH_TOKEN（必备，无它不启动）‖ 公网 IdP 策略（可选加层，当前唯一实现 CF Access）**，按 Host 二选一 → 设备信任 → 已连接文件夹范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
 
 第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来。**但「起得来」不等于「每个连接都持有令牌」**：IdP 开着时，它管的公网 Host 只认 IdP 凭据（JWT），`AUTH_TOKEN` 在那条路上既不要求也不放行（带着正确 token、没有 JWT 照样 401）。所以下游判据的前提按入口分两种：IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方已持令牌」。凡是要把 `AUTH_TOKEN` 交出去、或以「反正对方有 token」为由放宽的逻辑，都得先看连接走的是哪条——2026-09-22 review 查出 `connect:qr` 把明文 token 回给了本不持有它的 Access 会话，推理起点正是旧版这里写的「下游永远已持令牌」。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `app/src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。它是**可选的**：第一层 + 第三层就是公网基线（§1「公网入口」）。加层开着时，在它管的公网 Host 上替代第一层，默认档下也替代第三层（`DEVICE_APPROVAL_SCOPE=all` 时第三层照查）；关着时这两层照常生效——两种状态都是完整防线，doctor 不把「未开加层」算成缺陷。
 

@@ -11,8 +11,11 @@ import {
   READONLY_DIAGNOSTICS,
   WRITABLE_KEYS,
   buildEnvView,
+  overlyBroadWorkdir,
   validateEnvChanges,
 } from '../../app/src/ops/env-schema.js';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 // 跨模块引一次 doctor 的 D18：本文件末尾那条「判据同源」断言要拿它当对照物。
 import { envOverrideDiagnostic } from '../../app/src/ops/doctor-checks.js';
 // 同理，末尾 CCM_AGENT_PROGRESS_SUMMARIES 那组要把「配置侧投影」与「消费侧判据」串起来跑，
@@ -877,4 +880,12 @@ test.describe('buildEnvView：老式 .env 安装下的结构化列表', () => {
     assert.equal(findWorkdirs(buildEnvView({}, { structured, shellEnv: { WORK_DIRS: '' } })).overriddenByEnv, false,
       '空串按「未设置」口径不计');
   });
+});
+
+// 过宽根与家目录是拒绝名单：比较前要落到磁盘上的真实写法。macOS 缺省不分大小写，/USERS 就是 /Users、
+// 家目录换个大小写还是家目录——按字面比会被换个大小写绕过去。分大小写的系统上（Linux CI）构造不出来，跳过。
+test('过宽根与家目录换个大小写照样拒（不分大小写的文件系统）', { skip: !(existsSync('/Users') && existsSync('/USERS')) }, () => {
+  assert.equal(overlyBroadWorkdir('/USERS', '/Users/nobody'), 'work_dir_too_broad');
+  const home = homedir();
+  assert.equal(overlyBroadWorkdir(home.toUpperCase(), home), 'work_dir_is_home');
 });

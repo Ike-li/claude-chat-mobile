@@ -149,7 +149,7 @@ AUTH_TOKEN (required; no token, no server) ‖ public IdP strategy (optional; Cl
             ↓
 device trust (a true local connection is exempt; IdP-verified connections are exempt by default, not with DEVICE_APPROVAL_SCOPE=all)
             ↓
-WORKDIRS scope gate
+connected-folder scope gate (WORKDIRS)
             ↓
 CLI permissions.allow + current Web permission mode
             ↓
@@ -174,6 +174,9 @@ These boundaries do not replace each other:
   - ⚠ "Replaces" is literal: a connection arriving through Access is **never checked against** `trusted-devices.json`, so the trusted-device list **does not govern it** — revoking a phone that came in through the tunnel neither disconnects it nor blocks it (confirmed by testing on 2026-09-10). The decision is the first line of `shouldBypassDeviceApproval`.
   - To make that list apply to every path, set `DEVICE_APPROVAL_SCOPE` to `all` and restart. It is a **master switch covering every path**: a new device arriving through Access needs one approval, and the loopback-looking-Host path is closed too. That second half is required — the check reads Host, and **Host is a header the client writes**. Pure TCP forwarding (`ssh -R`, frp tcp) does not route on Host, so a remote client sending `Host: localhost` satisfies both conditions (peer is already loopback, since the forwarder lands locally). TCP cannot tell a real local browser apart from a tunnelled connection, and extra checks do not help (forwarded headers are absent on pure TCP forwarding; `localAddress` is identical), so the call is left to whoever knows their own topology (2026-09-17 security review, H1). With it on, the recovery paths are `node scripts/device.js approve`, the menu bar, or pressing Enter in the terminal running `npm start` — none of which read any network signal. The default keeps "Access replaces approval" and lets loopback-looking Hosts through, because flipping it would drop every in-use device back into the pending queue the first time an existing install restarts after an upgrade — at which point no device in the trust list can approve anything.
 - `WORKDIRS` constrains paths; it does not decide which Claude tools run automatically (**the first entry is the primary work directory** your phone opens by default; a legacy external `workdirs.json` still works via `WORK_DIRS_FILE`; shell env outranks config-file inline `WORKDIRS`).
+  - Scope follows the official desktop app's "connected folders" semantics, and there is exactly one check: `resolveAuthorizedCwd` in `app/src/sessions/folder-access.js`, which always compares after realpath. Subfolders of a connected folder are reachable (nested roots resolve to the deepest one); git linked worktrees of a connected repository — including sibling directories outside it — follow the repository, with ownership verified in both directions from the repository's side and **git never executed** (`.git/config` is model-writable, SCOPE-04); "No folder" sessions run under a scratch root in the app-data directory, and only the app's own `scratch-YYYY-MM-DD-xxxxxx` subdirectories are accepted (SCRATCH-01). `~/.claude` and the CCM data directory are off-limits as whole subtrees.
+  - **An explicitly passed out-of-scope cwd is rejected** (`routeCwd` returns null and records a `scope_violation` audit) instead of falling back to the currently viewed directory — the drawer requests lists per project and the offline queue resends with the cwd it was queued under, so a fallback would draw A's sessions under B or deliver a message into another workspace (SCOPE-05). Only read-type requests additionally accept a running instance's own cwd, so sessions keep working after their folder is hot-removed.
+  - Adding a folder from the phone (`folders:add`) browses folder names inside the home directory only (symlinks not followed, dot-directories hidden); the home directory itself, the disk root, the off-limits trees and linked worktrees can't be added (FOLDER-01). It only writes the config file's inline `WORKDIRS` and hot-reloads synchronously; it is refused when the list comes from environment variables or the legacy external file, or when there is no config file.
 - Agent `canUseTool` approvals govern autonomous Agent actions. Clicking Save in the file editor is a direct user write with separate scope, size, content-hash, and audit controls.
 
 See the [README security model](../README.en.md#security-model) for the concise boundary list and [deployment and operations](deployment.md) for network topology.
@@ -185,7 +188,8 @@ See the [README security model](../README.en.md#security-model) for the concise 
 | Claude conversations | `~/.claude/projects/` transcript | CLI/Web resume and stable history |
 | Web instance runtime | In-memory `AgentSession` | Streaming turns, approvals, event buffer |
 | CCM control plane | `CCM_DATA_DIR` | Session pointers, devices, approvals, audit, push, read markers, and caches |
-| Workspace allowlist | `WORKDIRS` | Limits visible and operable directories (first entry = primary) |
+| Connected folders | `WORKDIRS` | Limits visible and operable directories (including subfolders and owned worktrees; first entry = primary) |
+| No-folder session directories | `scratch-workspaces/` under the app-data directory | Throwaway cwds; deleted with their session, only reported (not deleted) by uninstall `--purge` |
 | Web-driver status line | SDK events | Current model, context, cost, and effort |
 | CLI-driver status line | Optional statusline snapshots | Read-only terminal-session status |
 | Immediate CLI signals | Optional hooks inbox | Faster Stop / Notification handling |

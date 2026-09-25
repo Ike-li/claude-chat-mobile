@@ -9,7 +9,7 @@
 // 未消费的 tempo/state/detail/waitingFor/needs 字段（取值时机未实证，别凭猜接入）。
 // 注册表缺失/损坏一律 fail-open 返回 null——调用方回落既有尾部形态判定，绝不因本模块锁死。
 import { readdir, lstat, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { claudeHome } from '../shared/claude-home.js';
 
 const DEFAULT_SESSION_REGISTRY_DIR = join(claudeHome(), 'sessions');
@@ -224,6 +224,21 @@ export function hasBusyTerminalSessionForCwd(cwd, states) {
 // 与 busy 并列成两个判据而不是合成一个三态：同一 cwd 下完全可能一个会话在跑、另一个卡在审批上。
 export function hasWaitingTerminalSessionForCwd(cwd, states) {
   return hasTerminalStateForCwd(cwd, states, 'waiting');
+}
+
+// rewind 的否定证据（2026-09-24）：已连接文件夹的子目录可达之后，父目录或子目录里跑着 / 等着的终端会话
+// 改的可能正是 rewind 要覆盖的那批文件——上面两个按 cwd 相等判的汇总会把它们漏掉，而 rewind 没有下游兜底。
+// 判「重叠」= 一方是另一方的祖先（含相等），带分隔符边界（/code/app-x 不是 /code/app 的后代）。
+export function hasTerminalSessionOverlapping(cwd, states, wants = ['busy', 'waiting']) {
+  if (!(states instanceof Map)) return false;
+  const target = resolve(String(cwd ?? ''));
+  const within = (a, b) => a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+  for (const [key, info] of states) {
+    if (!wants.includes(info?.state)) continue;
+    const keyCwd = key.slice(0, key.indexOf('\u0000'));
+    if (within(keyCwd, target) || within(target, keyCwd)) return true;
+  }
+  return false;
 }
 
 // 参与会话列表「外部驾驶员在驾驶」标注的 entrypoint，以及各自的状态取数方式：

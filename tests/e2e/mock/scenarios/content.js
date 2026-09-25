@@ -8,7 +8,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(250);
@@ -23,7 +23,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -42,7 +42,7 @@ export function createContentScenarios(getContext) {
         const instancesPayload = () => ({
           viewingInstanceId,
           viewingCwd: activeInst.cwd,
-          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          ...getContext().mockDirFields(),
           instances: mockInstances,
           canRestart: getMockCanRestart(),
           service: mockServicePayload(),
@@ -95,6 +95,11 @@ export function createContentScenarios(getContext) {
       // P0-ORDER：武装「loadHistory 在途时镜像追平插队」的顺序竞态，下一次切入 Timeline Session 生效。
       command: 'test:arm-history-order-race',
       run: async () => { getContext().armHistoryOrderRace(); },
+    },
+    {
+      // P0-PICK-8：武装「下一个懒开的实例一开出来就有一轮在跑」，离线连发的第二条因此撞上在途轮。
+      command: 'test:arm-fresh-turn-running',
+      run: async () => { getContext().armFreshTurnRunning(); },
     },
     {
       // P0-ACK-TIMEOUT：武装「session:history 的 ack 永不返回、但连接没断」，下一次切入 Timeline Session 生效。
@@ -186,7 +191,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -247,7 +252,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -264,7 +269,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -293,7 +298,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -309,7 +314,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -321,7 +326,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -340,7 +345,7 @@ export function createContentScenarios(getContext) {
         activeInst.turnRunning = true;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -357,7 +362,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -421,7 +426,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -437,7 +442,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(100);
@@ -449,7 +454,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -474,7 +479,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -539,7 +544,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         // 主会话：启动 Agent 工具（input 含 subagent_type + description）→ 前端预建可折叠卡
@@ -631,7 +636,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -654,7 +659,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -714,7 +719,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -768,7 +773,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         // Send thinking indicator
@@ -814,7 +819,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -831,7 +836,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -865,7 +870,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -884,7 +889,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         await delay(80);
         socket.emit('agent:event', {
@@ -894,7 +899,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -910,7 +915,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         const responseText = [
@@ -938,7 +943,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         socket.emit('agent:event', {
@@ -997,7 +1002,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(150);
@@ -1009,7 +1014,7 @@ export function createContentScenarios(getContext) {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),

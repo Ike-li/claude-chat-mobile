@@ -202,6 +202,38 @@ test.describe('事件流 — 新连接重放', () => {
     assert.equal(inst.payload.autoContinue.length, 0);
     s.disconnect();
   });
+
+  // 项目清单（2026-09-24「已连接的文件夹」）。前端对「缺这个字段」的约定是回落到 dirs（兼容 E2E mock 与
+  // 演示站的旧载荷），所以真 server 漏发不报错，只会让抽屉永远按旧的目录列表画——E2E 打的是 mock，守不住。
+  test('instances 广播带项目清单与 scratch 根；「无文件夹」没在用时不占一节，但列得出（根还没建也不越界拒绝）', async () => {
+    const events = [];
+    const s = connectSocket();
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const inst = events.find(e => e.type === 'instances');
+    assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
+    const { projects, scratchRoot } = inst.payload;
+    assert.equal(typeof scratchRoot, 'string', `scratchRoot 缺席：${JSON.stringify(inst.payload).slice(0, 300)}`);
+    assert.ok(Array.isArray(projects) && projects.length >= 1, `projects 必须是数组，实际 ${JSON.stringify(projects)}`);
+    assert.equal(projects[0].kind, 'connected');
+    // 从没用过无文件夹会话：抽屉里不该平白多一节空的（官方侧栏同样只列有会话的项目）
+    assert.ok(!projects.some(p => p.kind === 'scratch'), `没在用的「无文件夹」占了一节：${JSON.stringify(projects)}`);
+    for (const p of projects) assert.deepEqual(Object.keys(p).sort(), ['key', 'kind', 'label', 'root']);
+
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('session:list 超时')), 3000);
+      s.emit('session:list', { cwd: scratchRoot }, res => { clearTimeout(t); resolve(res); });
+    });
+    assertAckShape(ack, { required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState'] },
+      'session:list（无文件夹，scratch 根尚未建）');
+    assert.deepEqual(ack.sessions, []);
+    s.disconnect();
+  });
 });
 
 test.describe('session:list — 空工作目录', () => {
@@ -568,6 +600,20 @@ const ACK_SHAPES = [
       assert.ok(Array.isArray(ack.pinned), 'pinned 必须是数组——前端无条件对它做 .length/展开');
       assert.ok(Array.isArray(ack.sessions), 'sessions 必须是数组');
     } },
+  // 显式越界支（SCOPE-05，2026-09-24）：拒绝时键集与正常回执一致、外加 error——前端按字段取，
+  // 不能因为被拒就换一个形状；而此前这一支根本不存在（越界静默回落成别的目录的列表）。
+  { event: 'session:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }),
+    required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState', 'error'],
+    check: ack => assert.deepEqual(ack.sessions, [], '拒绝支不得带任何会话——回落成别的目录的会话就是错数据') },
+  { event: 'permissions:rules', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }), required: ['ok', 'cwd', 'rules', 'error'] },
+  { event: 'browse:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected', path: '.' }), required: ['ok', 'error'] },
+  // 手机上添加 / 新建文件夹（FOLDER-01，2026-09-24）。浏览的成功支免夹具：家目录本身照样返回完整键集。
+  { event: 'folders:browse', branch: '家目录', payload: () => ({ path: '' }),
+    required: ['ok', 'home', 'path', 'reason', 'entries', 'truncated'],
+    check: ack => assert.ok(Array.isArray(ack.entries), 'entries 必须是数组——前端无条件遍历') },
+  { event: 'folders:browse', branch: '越界', payload: () => ({ path: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:mkdir', branch: '名字不合法', payload: () => ({ path: '', name: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:add', branch: '家目录不能加', payload: () => ({ path: '' }), required: ['ok', 'error'] },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },

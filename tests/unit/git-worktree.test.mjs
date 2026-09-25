@@ -132,7 +132,7 @@ test('createSessionWorktree: 建在 .claude/worktrees/<name> 并切出新分支'
 
   assert.equal(r.ok, true, r.error);
   assert.equal(r.path, join(repo, '.claude', 'worktrees', 'feature-x'),
-    '落点必须是这个——routeCwd 的派生放行集只认它，建在别处等于建了也打不开');
+    '落点必须是这个——它在仓库子树里（直接按子目录授权），也是抽屉按「托管 worktree」列会话、树删后推父仓的那条固定路径');
   assert.equal(existsSync(join(r.path, 'README.md')), true, 'worktree 里要有内容，不是空目录');
   assert.equal(r.branch, 'feature-x');
 

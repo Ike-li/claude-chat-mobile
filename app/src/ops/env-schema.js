@@ -184,10 +184,12 @@ export const ENV_SCHEMA = {
     // 文案曾写「手机面板没有数组编辑器，故此处只读」——2026-09-11 起前端有了 buildListEditor、
     // readonly 也已是 false，那句话从此在说一件代码里不成立的事（2026-09-17 安全审查 M2 顺带查出）。
     help: t('每项是绝对路径，或 {path, sessionLimit}。**第一项就是手机端默认打开的目录**。'
+      + '子文件夹与所属仓库的 git worktree 直接可用，不必单独列出；手机上也能在文件夹选择器里「添加文件夹」。'
       + '改完即生效，无需重启。不能填家目录本身或 /、/Users、/home 这类过宽的根——'
       + '范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。',
       'Each entry is an absolute path, or {path, sessionLimit}. **The first entry is the one your '
-      + 'phone opens by default.** Hot-reloads without a restart. It cannot be your home directory '
+      + 'phone opens by default.** Subfolders and the repository\'s own git worktrees are reachable '
+      + 'without their own entries, and the phone\'s folder picker can "Add folder" too. Hot-reloads without a restart. It cannot be your home directory '
       + 'itself, nor an overly broad root such as /, /Users or /home — everything in scope is readable '
       + 'by the remote entrypoint, and writable too while FILE_EDIT is on (the default).'),
   },
@@ -461,7 +463,8 @@ function workdirForms(rawPath) {
   if (!path) return null;
   const lexical = resolve(path);
   let real = lexical;
-  try { real = realpathSync(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
+  // .native：落到磁盘上的真实写法——macOS 不分大小写，/USERS 就是 /Users，JS 版会原样保留而漏拦
+  try { real = realpathSync.native(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
   return { lexical, real };
 }
 

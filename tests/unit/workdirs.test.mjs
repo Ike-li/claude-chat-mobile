@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
-  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
+  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
   foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
 } from '../../app/src/sessions/workdirs.js';
@@ -143,34 +143,11 @@ test.describe('resolveWorkdirs', () => {
   });
 });
 
-// ── ensureWhitelisted（纯函数）───────────────────────────────────────────
-// 背景：routeCwd 类回退逻辑可能落到「仍有 live 实例挂着、因此未被 reloadWorkdirs 归位」的已移除目录
-// （该目录不在当前 workDirs 里）。新开会话前必须再夯一次白名单，否则「热移除目录仅拒新开」的不变量
-// 会被绕过——同 session:new(#8) 的归位逻辑，抽成共享纯函数防各 handler 各自为政再漂移。
-test.describe('ensureWhitelisted', () => {
-  test('cwd 在白名单内 → 原样放行', () => {
-    assert.equal(ensureWhitelisted('/a', ['/a', '/b']), '/a');
-  });
-
-  test('cwd 不在白名单内（已被热移除）→ 归位到白名单首位', () => {
-    assert.equal(ensureWhitelisted('/removed', ['/a', '/b']), '/a');
-  });
-});
-
-// ── isWhitelisted（纯函数：越界检测，不做归位；供 routeCwd 记审计信号 FR-23）────
-test.describe('isWhitelisted', () => {
-  test('白名单内 → true', () => {
-    assert.equal(isWhitelisted('/a', ['/a', '/b']), true);
-  });
-  test('显式越界（不在白名单）→ false', () => {
-    assert.equal(isWhitelisted('/evil', ['/a', '/b']), false);
-  });
-  test('空串 / 非字符串 → false（无 cwd 回退场景，非越界尝试）', () => {
-    assert.equal(isWhitelisted('', ['/a']), false);
-    assert.equal(isWhitelisted(undefined, ['/a']), false);
-    assert.equal(isWhitelisted(null, ['/a']), false);
-  });
-});
+// ── cwd 授权判据已迁出（2026-09-24「已连接的文件夹」）──────────────────────
+// ensureWhitelisted / isWhitelisted 连同「只认白名单本身、worktree 须显式列入」的语义一起退役：
+// cwd 授权统一由 sessions/folder-access.js 的 resolveAuthorizedCwd 判（子目录可达、worktree 随仓库），
+// 用例在 tests/invariants/folder-access.test.mjs 与 worktree-ownership.test.mjs。「在册放行 / 越界拒」
+// 由那两份覆盖；「热移除目录上的新开归位到首项」是 server 接线（app.js 的 ensureAuthorized），由 S2 覆盖。
 
 test.describe('findProjectDirCollisions（SS-004）', () => {
   test('无碰撞 → []', () => {
@@ -182,25 +159,6 @@ test.describe('findProjectDirCollisions（SS-004）', () => {
     assert.equal(c.length, 1);
     assert.equal(c[0].encoded, '-tmp-foo');
     assert.deepEqual(c[0].paths.sort(), ['/tmp-foo', '/tmp/foo'].sort());
-  });
-});
-
-// 工作区 cwd 合法性：只认 workdirs 白名单本身。git linked worktree 若要用，须显式写入 workdirs.json
-// 成为独立条目——不再有「父仓下自动挂载 worktree 路径」的隐式放行。
-test.describe('isWhitelisted / ensureWhitelisted（显式 workdir 白名单，无 worktree 隐式放行）', () => {
-  const dirs = ['/repo/a', '/repo/b', '/repo/a-wt-promo'];
-  test('白名单目录本身 → true', () => {
-    assert.equal(isWhitelisted('/repo/a', dirs), true);
-    assert.equal(isWhitelisted('/repo/a-wt-promo', dirs), true);
-  });
-  test('形似 worktree 但未列入白名单 → false（须手动加进 workdirs.json）', () => {
-    assert.equal(isWhitelisted('/repo/a/.worktrees/promo', dirs), false);
-    assert.equal(isWhitelisted('/repo/a/.claude/worktrees/feat', dirs), false);
-  });
-  test('ensureWhitelisted：在册路径原样保留；越界夯到 dirs[0]', () => {
-    assert.equal(ensureWhitelisted('/repo/a-wt-promo', dirs), '/repo/a-wt-promo');
-    assert.equal(ensureWhitelisted('/elsewhere', dirs), '/repo/a');
-    assert.equal(ensureWhitelisted('/repo/a/.worktrees/promo', dirs), '/repo/a');
   });
 });
 

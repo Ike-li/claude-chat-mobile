@@ -114,13 +114,13 @@ test.describe('browse:list / browse:read 接线集成测试', () => {
     assert.ok(rows.some(r => r.meta?.via === 'browse:read'), `应有 browse:read 越界审计，实际：${JSON.stringify(rows)}`);
   });
 
-  test('browse:list 未授权 cwd（不在白名单）→ 归位当前 cwd 后仍在范围内正常返回（不是任意穿越）', async () => {
-    // routeCwd 对不在白名单的 cwd 会回退到当前查看目录（同 session:list 现状），不是"拒绝连接"，
-    // 但归位后的目录仍受 WorkdirScopeGuard 约束——不会因传了个野路径就打开任意目录。
+  // 2026-09-24（SCOPE-05）：显式越界从「静默回退当前查看目录」改为拒绝。回退在按项目浏览之后就是错数据——
+  // 用户点的是 A，面板里列的却是另一个目录的文件，而且不报任何错。
+  test('browse:list 未授权 cwd（不在已连接的文件夹里）→ 拒绝，既不列 /etc 也不偷偷换成别的目录', async () => {
     const res = await emitAck(socket, 'browse:list', { cwd: '/etc', relPath: '.' });
-    assert.equal(res.ok, true); // 归位到授权目录后正常返回，而不是列出 /etc
-    const names = res.entries.map(e => e.name).sort();
-    assert.deepEqual(names, ['README.md', 'src']); // 证明确实回落到 projectDir，不是 /etc 内容
+    assert.equal(res.ok, false, `越界 cwd 必须拒绝，实际 ${JSON.stringify(res)}`);
+    assert.equal(res.entries, undefined, '拒绝就不该带任何目录项——不管是 /etc 的还是回退目录的');
+    assert.match(res.error, /不在已连接的文件夹里/);
   });
 
   test('未鉴权连接不可达 browse:list（握手层已拦，无 ack 回执）', async () => {

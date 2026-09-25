@@ -69,7 +69,7 @@ import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
@@ -88,7 +88,11 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveManagedWorktree, resolveDrivingCwd, resolveGoneWorktreeParent, instanceAuthorizedDirs, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
+import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
+import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
+import { scratchRoot as defaultScratchRoot } from '../shared/scratch-root.js';
 import {
   isDeviceTrusted,
   isValidDeviceToken,
@@ -126,8 +130,9 @@ import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
-import { registerFileSocketHandlers } from './socket-files.js';
-import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
+import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
+import { registerFolderSocketHandlers } from './socket-folders.js';
+import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 
 // 公网身份提供方策略（当前唯一实现是 Cloudflare Access）。init 必须在 env 规整之后——
 // server.js 先跑 loadRuntimeEnvironment 再动态 import 本模块，那个顺序被
@@ -208,6 +213,55 @@ const primaryWorkDir = () => workDirs[0];
 // 每工作区历史会话显示条数（session:list 默认截断量）；未指定的目录用 DEFAULT_SESSION_LIMIT。
 let sessionLimitByDir = new Map();
 
+// ---- 授权判据：「已连接的文件夹」（SCOPE-04/05）。唯一一份，所有 cwd 闸门都经它 ----
+// 已连接文件夹 = workDirs（子目录直接可达）；git linked worktree 随所属仓库（双向回验）；
+// 禁区 = CLI 自己的 ~/.claude 与 CCM 数据目录（控制面状态）；scratch 根 = 无文件夹会话的落点
+// （在任何仓库之外，见 shared/scratch-root.js）。判据本身见 sessions/folder-access.js。
+const SCRATCH_ROOT = defaultScratchRoot();
+const FORBIDDEN_ROOTS = [claudeHome(), DATA_DIR];
+const authorize = (cwd, extraRoots = []) => resolveAuthorizedCwd(cwd, {
+  connected: workDirs, extraRoots, scratchRoot: SCRATCH_ROOT, forbidden: FORBIDDEN_ROOTS,
+});
+// 能当实例 cwd / 路由目标的授权结果。scratch-root 只是「无文件夹」的启动键（在它上面懒建一个
+// scratch 子目录再开实例），本身永远不是驾驶轴。
+const routableAuth = (cwd, extraRoots) => {
+  const auth = authorize(cwd, extraRoots);
+  return auth && auth.kind !== 'scratch-root' ? auth : null;
+};
+// 「仅拒新开」的归位：routeCwd 的缺省回退（viewingCwdOf）可能是已被热移除、但仍挂着 live 实例的
+// 目录——只按当前授权判，不带 extraRoots，判不过就归位到主工作目录。
+const ensureAuthorized = cwd => routableAuth(cwd)?.path ?? primaryWorkDir();
+// 文件浏览 / 编辑 / 预览的范围根：全部已连接文件夹，外加这个 cwd 自己的范围（仓库外的 worktree、
+// scratch 目录不在任何已连接文件夹之下，不补上就连会话自己的目录都读不了）。
+// 正在跑的实例自己的 cwd：工作区被热移除后，其上已开的会话继续运行、仍可查看（读档放行，见 routeCwd）。
+const isLiveInstanceCwd = c => {
+  for (const a of agents.values()) if (a.cwd === c) return true;
+  return false;
+};
+const fileScopeRootsFor = cwd => {
+  const auth = routableAuth(cwd);
+  if (auth) return auth.kind === 'worktree' || auth.kind === 'scratch' ? [...workDirs, auth.scopeRoot] : workDirs;
+  // 读档放行的已开会话（工作区已被热移除）：范围补上它自己的目录，否则 routeCwd 放行了、范围门又拒掉。
+  return isLiveInstanceCwd(cwd) ? [...workDirs, cwd] : workDirs;
+};
+// 「无文件夹」项目的键：scratch 根解析后的真实路径；从没开过无文件夹会话时根还不存在，用配置值。
+const scratchRootKey = () => authorize(SCRATCH_ROOT)?.path ?? SCRATCH_ROOT;
+// 这个 cwd 是不是「无文件夹」的入口（scratch 根本身）。根还没建时 authorize 认不出它，按配置值比。
+const isNoFolderKey = c => typeof c === 'string' && c !== '' && (c === SCRATCH_ROOT || authorize(c)?.kind === 'scratch-root');
+// 「无文件夹」首条消息的 scratch 目录分配（并发的共用一个，见 scratch-workspaces.js）
+const scratchAllocator = createScratchAllocator(SCRATCH_ROOT);
+// 抽屉的项目清单：子项目靠扫 ~/.claude/projects 反查（sessions/projects.js），扫出的结果变了才广播。
+// 触发：启动、工作区热加载、删除会话、活实例所在的子项目还没扫到、每分钟一次（有已批准连接时，见 listen 前）。
+const projectIndex = createProjectIndex({
+  discover: async cwdCache => ({
+    subProjects: await discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize, cwdCache }),
+    scratchInUse: await hasScratchSessions({ baseDir: CLAUDE_PROJECTS_DIR, scratchRoot: scratchRootKey() }),
+  }),
+  onChange: () => broadcastInstances(),
+});
+// 成员目录（平级 worktree、scratch 目录）并不并进项目的列表，由同一份授权判据裁决（history.js）
+const memberOptions = { authorize };
+
 let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 // n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
@@ -269,7 +323,7 @@ function readInlineWorkdirConfig() {
 // 那次是 doctor 自己写了 `if (Array.isArray(inline)) return`，把 WORK_DIRS env 吃掉了。
 function readWorkdirSource() {
   const inline = readInlineWorkdirConfig();
-  const { result, warnings } = resolveWorkdirSource({
+  const { result, warnings, from } = resolveWorkdirSource({
     envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
     envFile: process.env.WORK_DIRS_FILE,
     inline: inline.list,
@@ -283,7 +337,7 @@ function readWorkdirSource() {
     }),
     inlinePrimary: inline.primary,
   });
-  return { result, warnings };
+  return { result, warnings, from };
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
 // 返回 warnings[]（调用方决定打印）。
@@ -316,10 +370,40 @@ function reloadWorkdirs() {
   // 被移除目录的已开实例保留运行、新开被拒；但若 viewingCwd 停在已移除目录且其上无实例，
   // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录。
   const viewingHasInstance = agents.get(viewingInstanceId)?.cwd === viewingCwd;
-  // 被热移除且无 live 实例时归位：只认 workDirs 白名单（git worktree 须显式列入 workdirs.json）。
-  if (!isWhitelisted(viewingCwd, workDirs) && !viewingHasInstance) viewingCwd = workDirs[0];
+  // 被热移除且无 live 实例时归位（viewingCwd 是项目轴：连接文件夹、其子目录或仓库，都按当前授权判）。
+  if (!routableAuth(viewingCwd) && !isNoFolderKey(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
+  projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
+}
+
+// 手机上「添加文件夹」（FOLDER-01）：追加进配置文件的内联 WORKDIRS，同步热加载，回报生效后的列表。
+// 只在工作区列表**确实来自**那份内联配置时才写——来源是 WORK_DIRS / WORK_DIRS_FILE 时写了也不生效
+// （环境变量压过文件），报成功就是假成功；配置文件不存在时也不替用户建（hard-rules §4.6）。
+// 校验与写盘走 env:set 同一套：validateEnvChanges（过宽根、家目录、条目形状）、applyConfigChanges、原子写。
+// 读与写之间没有 await：追加到的是写入前那一刻的列表，原有条目（含 sessionLimit）原样保留。
+// 不等文件监听：那条要过防抖，ack 回来时新目录还没生效，手机上接着点进去会被当成越界。
+function addConnectedFolder(path) {
+  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
+  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
+  let config;
+  try {
+    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+  } catch {
+    return { ok: false, error: 'config_unreadable' };
+  }
+  const next = [...(Array.isArray(config.WORKDIRS) ? config.WORKDIRS : []), path];
+  const verdict = validateEnvChanges({ WORKDIRS: next }, {
+    current: structuredToStringValues(config), fileExists: existsSync, isExecutable: () => true, probePort: () => false, usingConfigJson: true,
+  });
+  if (!verdict.ok) return { ok: false, error: 'invalid', message: verdict.results.find(r => r.level === 'error')?.message ?? '' };
+  try {
+    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
+  } catch {
+    return { ok: false, error: 'write_failed' };
+  }
+  reloadWorkdirs();
+  return workDirs.includes(path) ? { ok: true, dirs: workDirs } : { ok: false, error: 'not_applied', dirs: workDirs };
 }
 
 // ---- 启动预检（验收 A9）----
@@ -407,6 +491,12 @@ let viewingInstanceId = null;
 // n1: N1-VIEWING-CWD 同上，全局单值：随 viewingInstanceId 一起被最后切换的那台设备决定。
 let viewingCwd = primaryWorkDir();
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
+// 新会话页上选中的驾驶轴目录：选择器里挑中一个 worktree 时它归仓库这个项目，viewingCwd 因而是仓库，
+// 首条消息该开在哪只能靠这一条带给前端（广播的 composeCwd）。只有 session:new 写；回到空页的另两条路
+// （session:home、查看实例被移除后的重选）清掉；取用时再核一遍仍归当前项目、仍在授权范围内。
+let composeCwd = null;
+const composeCwdNow = () => (!viewingInstanceId && composeCwd && composeCwd !== viewingCwd
+  && routableAuth(composeCwd) && workspaceCwdOf(composeCwd) === viewingCwd ? composeCwd : null);
 // BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
 // 刚移除实例的 cwd（它是最后实际查看的），避免裸 viewingCwd 停在更早旧值致新会话选目录/statusline 跳回旧工作区。
 // 调用点须在 agents.delete(退出实例) 之后调用（此时 [...agents.keys()] 已是剩余实例）。
@@ -416,34 +506,35 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
     [...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd, opts,
   );
   viewingInstanceId = r.viewingInstanceId;
+  composeCwd = null;
   viewingCwd = workspaceCwdOf(r.viewingCwd); // 永远落工作区轴：托管 worktree 重选后不该把 viewingCwd 钉在 worktree 路径上
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
   clearMirrorOnViewChange();
 };
-// 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
-// 合法路径 = workdirs 白名单本身（含用户把 git worktree 路径显式写入 workdirs.json 的条目），
-// 外加一种派生形态：白名单目录下 `.claude/worktrees/<name>` 的托管 worktree（见下）。
-const routeCwd = cwd => {
-  if (isWhitelisted(cwd, workDirs)) return cwd;
-  // 托管 worktree 的派生放行（2026-09-11）：CLI 的 EnterWorktree / --worktree / agent isolation
-  // 把 worktree 建在 `<workdir>/.claude/worktrees/<name>`——**那条路径在白名单目录子树内**，
-  // 所以这不是给范围门开口子，SCOPE-01 原样成立（判据与边界见 workdirs.js 的 resolveManagedWorktree）。
-  // 不放行的话，这类会话即便列得出来也点不开：cwd 在这里被换成父仓，再拿父仓 cwd 去 resume 一个
-  // transcript 根本不在那个 project 目录下的会话，症状是「点开一片空白」而不是任何报错。
-  // 返回解析后的 path 而非原始入参：下游要拿它算 getProjectDir，未解析的路径在 macOS 上会静默查空。
-  const managed = resolveManagedWorktree(cwd, workDirs);
-  if (managed) return managed.path;
-  // 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
-  // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
-  if (typeof cwd === 'string' && cwd) {
-    console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在白名单，回退当前查看目录`);
-    // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，
-    // 此处 actor 留空——目录越界信号的价值在"发生过"本身，不在于精确到哪个连接（真正的访问控制
-    // 已经生效，这里只是留痕，同 WorkdirScopeGuard 的既有 [scope] 日志一个粒度）。
-    audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
-  }
-  return viewingCwdOf();
+// 授权校验 + 缺省落 viewingCwd：cwd 维度的事件（session:list/new/switch…）经此解析目标 cwd。
+// 合法路径 = 已连接文件夹及其子目录、所属仓库已连接的 linked worktree（判据见 authorize）。
+// 返回解析后的 path 而非原始入参：下游要拿它算 getProjectDir，未解析的路径在 macOS 上会静默查空。
+//
+// 【显式越界 → null，调用方必须拒绝（SCOPE-05，2026-09-24）】此前越界一律静默回退当前查看目录。
+// 抽屉按项目发 session:list、离线队列带着入队时的 cwd 重发之后，回退就是错数据：把 A 文件夹的会话
+// 画到 B 的标题下、把消息投进另一个工作区。没传 cwd 仍落查看目录——那不是用户给的值，是缺省。
+// tier='read'（历史、文件面板、切到已在跑的实例……）额外放行「正在跑的实例自己的 cwd」：工作区被热移除
+// 后，其上已开的会话继续运行、仍可查看（产品判据：仅拒新开）。开 / 建类一律只认当前授权。
+const routeCwd = (cwd, { tier = 'open' } = {}) => {
+  if (typeof cwd !== 'string' || !cwd) return viewingCwdOf();
+  const auth = routableAuth(cwd);
+  if (auth) return auth.path;
+  if (tier === 'read' && isLiveInstanceCwd(cwd)) return cwd;
+  // 「无文件夹」的键（scratch 根）只是新会话页的启动键，不是可路由的目录——带着它来的请求要拒，但那不是
+  // 越界尝试：记成 scope_violation 会让每个「无文件夹」会话都在服务面板里刷出红色告警。
+  if (isNoFolderKey(cwd)) return null;
+  console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
+  // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
+  // 目录越界信号的价值在"发生过"本身，拒绝由调用方完成。
+  audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
+  return null;
 };
+
 // 台阶3：按实例路由（BE-001 fail-closed）——缺省（无 instanceId）落 viewingInstanceId（向后兼容缺参旧调用）；
 // 显式命中 live 取该实例；显式但已关闭 → stale（id=null，绝不静默回退 viewing、绝不误投别的会话）。见 instance-routing.js。
 const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), opts);
@@ -985,8 +1076,8 @@ const instanceState = instanceManager.stateOf;
 // 此空窗期切档无实例可作用——按 cwd 暂存，待首条消息 openInstance FRESH 懒开时消费。
 // 权威源：L0 pending > L3 CLI settings（cliDefaultsByCwd / resolveSettings）> L4 硬默认；
 // resume 走会话数据(L2)，不读本 pending/cliDefaults。effort 的 null（模型默认）合法 → Map.has 判存在。
-const pendingModeByCwd = new Map();           // cwd → 待应用权限档（新会话懒创建期，L0）
-const pendingEffortByCwd = new Map();         // cwd → 待应用思考强度档（同上；null 合法）
+const pendingModeByCwd = new Map();           // 项目键（workspaceCwdOf）→ 待应用权限档（新会话懒创建期，L0）
+const pendingEffortByCwd = new Map();         // 项目键 → 待应用思考强度档（同上；null 合法）
 // L3：按 cwd 缓存的 CLI settings 默认（resolveSettings 合并 user/project/local）。失败不缓存以便重试。
 const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model, env }
 const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重）
@@ -1189,6 +1280,8 @@ function instancesPayload() {
     const panelCwd = panelCwdOf(a.cwd);
     list.push({
       instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
+      // 抽屉按项目分组，在跑的这一行挂在哪个项目下：worktree 归所属仓库，scratch 目录归「无文件夹」
+      projectKey: workspaceCwdOf(a.cwd),
       panelCwd, worktreeGone: panelCwd !== a.cwd,
       title: sessions.getSession(a.sessionId)?.title ?? null, state,
       // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）。
@@ -1226,6 +1319,21 @@ function instancesPayload() {
   // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
   // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
   payload.autoContinue = autoContinue.snapshot();
+  const composeTarget = composeCwdNow();
+  if (composeTarget) payload.composeCwd = composeTarget; // 只在和 viewingCwd 不同时才有（见 composeCwd）
+  // 项目清单（按官方桌面端的侧栏分组）：连接根现算；子项目 = 扫盘结果 ∪ 活实例所在的子项目——新会话的
+  // transcript 可能还没落盘，只等扫盘的话正在跑的会话所属项目要晚一分钟才出现。
+  // 「无文件夹」只在用着时占一节（有会话、有实例开在里面、或正停在它的新会话页上）：从没用过的人，
+  // 抽屉里不该平白多一节空的。scratchRoot 恒带——前端「选文件夹」面板靠它发起无文件夹会话。
+  const scanned = projectIndex.get();
+  payload.scratchRoot = scratchRootKey();
+  const scratchInUse = Boolean(scanned?.scratchInUse) || isNoFolderKey(viewingCwdOf())
+    || list.some(i => i.projectKey === payload.scratchRoot);
+  payload.projects = composeProjects({
+    connected: workDirs,
+    subProjects: [...(scanned?.subProjects ?? []), ...liveSubProjects(list)],
+    scratchRoot: scratchInUse ? payload.scratchRoot : null,
+  });
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -1235,11 +1343,12 @@ function instancesPayload() {
   // （L0 pending > L3 CLI settings > L4 硬默认），修「空首页残留上个会话档」+ 与终端 settings 对齐。
   if (!viewingInstanceId) {
     const cwd = viewingCwdOf();
+    const prefsKey = workspaceCwdOf(cwd);
     const fresh = resolveFreshPrefs({
-      hasPendingMode: pendingModeByCwd.has(cwd),
-      pendingMode: pendingModeByCwd.get(cwd),
-      hasPendingEffort: pendingEffortByCwd.has(cwd),
-      pendingEffort: pendingEffortByCwd.get(cwd),
+      hasPendingMode: pendingModeByCwd.has(prefsKey),
+      pendingMode: pendingModeByCwd.get(prefsKey),
+      hasPendingEffort: pendingEffortByCwd.has(prefsKey),
+      pendingEffort: pendingEffortByCwd.get(prefsKey),
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
     payload.defaultPermissionMode = fresh.mode;
@@ -1259,8 +1368,11 @@ function instancesPayload() {
 // 隔离文件——把前者误当后者，会在一次瞬时失败里删掉仍有效的中和文件，见 decideWorktreeSettingsAction。
 async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
   let canonicalRoot = null;
+  // 子目录可达之后，会话 cwd 可能是 worktree 里的某个子目录：`<cwd>/.git` 不存在不代表「不是 worktree」。
+  // 先用授权判据（已双向回验）找到那棵树的根，再按原逻辑判；判不出就退回 cwd 本身（原行为）。
+  const treeRoot = authorize(cwd)?.worktreeRoot ?? cwd;
   try {
-    const dotGit = join(cwd, '.git');
+    const dotGit = join(treeRoot, '.git');
     if (statSync(dotGit).isFile()) canonicalRoot = parseWorktreeCanonicalRoot(readFileSync(dotGit, 'utf8'));
   } catch (err) {
     // ENOENT/ENOTDIR = 没有 .git（非 git 仓）或父路径不是目录：绝大多数工作区的正常形态，
@@ -1271,7 +1383,7 @@ async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
     console.warn(`[cli-settings] 读取 ${cwd}/.git 失败，本次跳过 worktree 网关判定:`, err?.message || err);
     return { env: undefined, settled: false };
   }
-  if (!canonicalRoot || canonicalRoot === cwd) return { env: undefined, settled: true };
+  if (!canonicalRoot || canonicalRoot === treeRoot) return { env: undefined, settled: true };
   // canonical 的 settings **每次实时读，绝不复用 cliDefaultsByCwd 的缓存**：它是污染源，必须准确。
   // 曾为省这一次调用而复用缓存，结果引入一整类静默失效——缓存里的 env 若为空/过期，
   // buildWorktreeGatewayEnv(worktreeEnv, undefined) 会返回 undefined，隔离静默不生效且零日志。
@@ -1384,6 +1496,16 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
 // 的兑现前提是拉起者存在，判据必须对准它。与 dev:restart handler 用同一个判据，两处不能分叉。
 const canRestartNow = () => willBeRespawned();
 
+// 活实例所在、自己不是连接根的项目（热移除后已不在任何连接根下的实例不算，前端另画「运行中」一节）
+function liveSubProjects(instanceRows) {
+  const out = [];
+  for (const { projectKey } of instanceRows) {
+    const owner = routableAuth(projectKey);
+    if (owner?.kind === 'connected' && owner.path !== owner.root) out.push({ key: owner.path, root: owner.root });
+  }
+  return out;
+}
+
 function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 各实例角标状态，合成事件惯例）
   // 与 viewing 对齐：当前查看实例豁免空闲回收（用户读历史时 lastActivity 不会因 SDK 刷新）。
   // 放在每次 broadcast 前扫一遍——viewing 变更路径多（switch/setViewing/reselect/lazy open），
@@ -1396,6 +1518,15 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
     seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
+  // 活实例所在的子项目 / 无文件夹扫盘还没认出来（transcript 刚落盘）：补扫一趟，免得实例一退出这一节
+  // 就从抽屉消失。单飞合并，认出来之后就不再触发。
+  const scanned = projectIndex.get();
+  if (scanned) {
+    const liveKeys = [...agents.values()].map(a => ({ projectKey: workspaceCwdOf(a.cwd) }));
+    const subMissing = liveSubProjects(liveKeys).some(p => !scanned.subProjects.some(x => x.key === p.key));
+    const scratchMissing = !scanned.scratchInUse && liveKeys.some(k => k.projectKey === scratchRootKey());
+    if (subMissing || scratchMissing) projectIndex.refresh();
+  }
 }
 // 后台任务集合变化 → 会话列表 ⏳ 重算的 500ms 合并节流：agent 侧 onBgTaskChange 只在"空↔非空/成员增删"时回调（稳态高频心跳不触发），
 // 这里再合并同一 tick 内的多次变化（TTL 批量清 + 新任务同时到）成一次 broadcastInstances，避免重复全量广播。单飞：已排期则忽略。
@@ -1435,7 +1566,7 @@ const autoContinue = createAutoContinue({
   getLiveInstance: sessionId => instanceForSession(sessionId) || null,
   resumeInstance: (cwd, sessionId) => {
     // 等待期间该工作区被移出 WORKDIRS：产品判据是「已开会话继续跑、仅拒新开」，到点 resume 就是新开。
-    if (!resolveDrivingCwd(cwd, workDirs)) throw new Error('该工作区已不在 WORKDIRS 里');
+    if (!routableAuth(cwd)) throw new Error('该工作区已不在 WORKDIRS 里');
     return dedupedResume(cwd, sessionId);
   },
   onChange: () => broadcastInstances(),
@@ -1474,6 +1605,7 @@ function processHookEvents(events) {
     viewingSessionId: viewing?.sessionId ?? null,
     viewingCwd: viewing?.cwd ?? null,
     workDirs,
+    isAuthorizedCwd: c => Boolean(routableAuth(c)),
     hasForegroundClient: hasForegroundApprovedClient(approvedSocketObjects()),
     now: Date.now(),
     throttleState: hooksNotifyThrottleState,
@@ -1747,7 +1879,9 @@ serviceSampleInterval.unref?.(); // 不阻止进程退出
 // （切目录/跨 cwd 启动时指针可能指向别目录会话）。终端会话不在 sessions.json → 返回 {id} 仅凭 id resume
 // （model 由 CLI 从 jsonl 恢复裸名；首轮 onSessionId 会把它 upsert 进 sessions.json「收编」）。
 async function currentSessionForCwd(cwd) {
-  const id = sessions.getCurrent(cwd);
+  // 指针按项目轴归键（同 finishOpenFocus / onSessionId）；文件存在性仍按 cwd 精确校验——仓库的新会话页
+  // 懒开时不会误续那个项目下、transcript 落在 worktree 里的会话。
+  const id = sessions.getCurrent(workspaceCwdOf(cwd));
   if (!id || !(await sessionFileExists(cwd, id))) return null;
   return sessions.getSession(id) || { id };
 }
@@ -1791,9 +1925,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     throw err;
   }
   const id = newInstanceId();
-  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
+  // 项目轴路由键（workspaceCwdOf）：路由代次、当前指针、空首页暂存的档位都按它归键。cwd 是驾驶轴
+  // （worktree / scratch 子目录），两轴在懒开时分叉——按 cwd 取暂存值会静默丢掉用户在空首页选的档。
+  const routeKey = workspaceCwdOf(cwd);
+  // 路由代次快照：本实例的 onSessionId 之后只有在该项目代次未前进（未被 session:new/home/switch 作废）
   // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
-  const generation = sessions.getGeneration(cwd);
+  const generation = sessions.getGeneration(routeKey);
   // B1：可被 session:switch 聚焦 live 时刷新；闭包 const 无法在 switch 后对齐 getGeneration
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
@@ -1815,17 +1952,17 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   const isFresh = !resumeId;
   const fresh = isFresh
     ? resolveFreshPrefs({
-        hasPendingMode: pendingModeByCwd.has(cwd),
-        pendingMode: pendingModeByCwd.get(cwd),
-        hasPendingEffort: pendingEffortByCwd.has(cwd),
-        pendingEffort: pendingEffortByCwd.get(cwd),
+        hasPendingMode: pendingModeByCwd.has(routeKey),
+        pendingMode: pendingModeByCwd.get(routeKey),
+        hasPendingEffort: pendingEffortByCwd.has(routeKey),
+        pendingEffort: pendingEffortByCwd.get(routeKey),
         cliDefaults: cliDefaultsByCwd.get(cwd) || null,
       })
     : null;
   if (mode === undefined) {
     if (isFresh) {
       mode = fresh.mode;
-      pendingModeByCwd.delete(cwd); // 消费 L0（无 pending 时 delete 无害）
+      pendingModeByCwd.delete(routeKey); // 消费 L0（无 pending 时 delete 无害）
     } else {
       mode = saved?.permissionMode || transcriptMode || 'default';
     }
@@ -1834,7 +1971,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   if (effort !== undefined) effUi = effort;
   else if (isFresh) {
     effUi = fresh.effort;
-    pendingEffortByCwd.delete(cwd);
+    pendingEffortByCwd.delete(routeKey);
   } else {
     effUi = resolveResumeEffort({
       savedEffort: saved?.effort,
@@ -1855,9 +1992,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
   // CLI 会自动采纳（优先级在 --model 之下、settings.model 之上），与 startModel=undefined 不冲突。
   const startModel = saved?.model || undefined;
-  // 本实例创建时所属的工作区（worktree 会话归父仓）。只用于 onCwdChanged 的热移除保护——
-  // 该目录之后被移出 WORKDIRS 时，已发出去的授权不在会话半途收回（见 instanceAuthorizedDirs）。
-  const authorizedRoot = workspaceCwdOf(cwd);
+  // 本实例创建时所属的连接根（worktree 会话取其仓库所在的根）。只用于 onCwdChanged 的热移除保护——
+  // 该根之后被移出 WORKDIRS 时，已发出去的授权不在会话半途收回（作为 extraRoots 传给 authorize）。
+  const authorizedRoot = authorize(cwd)?.root ?? workspaceCwdOf(cwd);
   const instance = new AgentSession({
     instanceId: id,
     resumeId: saved?.id,
@@ -2060,23 +2197,24 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 额度墙 → 自动续跑调度。sessionId / cwd 在回调那一刻现取：会话 id 可能晚于构造才落定，
     // cwd 也可能中途被 EnterWorktree 换掉（transcript 随之搬家，到点复核要读新位置）。
     onQuotaWall: wall => autoContinue.onWall({ sessionId: instance.sessionId, cwd: instance.cwd, instance, wall }),
-    // 会话中途换 cwd（EnterWorktree / ExitWorktree）。SDK 的 CwdChanged hook 报上来，这里裁决。
+    // 会话中途换 cwd（EnterWorktree / ExitWorktree，SESSION-03）。agent 从两条通道报上来——
+    // 主链 tool_use_result（主通道）与 CwdChanged hook（冗余），channel 标出是哪条，这里裁决。
     //
     // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
-    // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而白名单的真相源在这里。
-    // 合法集与 routeCwd 同源（白名单目录本身 + 其下的托管 worktree），差别只在失败方向：
-    // 那边回退 viewingCwd 是「纠正传错」，这里没有安全回退可言，拒绝即保持原样。
+    // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而授权判据的真相源在这里。
+    // 合法集与 routeCwd 同源（authorize：连接文件夹及子目录 + 所属仓库已连接的 worktree，含平级目录），
+    // 差别只在失败方向：那边回退 viewingCwd 是「纠正传错」，这里没有安全回退可言，拒绝即保持原样。
     //
     // 采信之后 agent 会 onStateSettled → broadcastInstances，前端的 entry.cwd / panelCwd 随之跟上。
     //
     // 热移除保护：工作区被移出 WORKDIRS 后，其上的已开会话按产品判据「继续运行、仅拒新开」，
-    // 所以校验要带上本实例创建时的授权根（instanceAuthorizedDirs）。只认当前 workDirs 的话，
+    // 所以校验要带上本实例创建时的连接根（extraRoots）。只认当前 workDirs 的话，
     // 这类实例的 worktree 切换会被拒、instance.cwd 停在旧值，静默复发历史加载失败。
-    onCwdChanged: (nextCwd, prevCwd) => {
-      const resolved = resolveDrivingCwd(nextCwd, instanceAuthorizedDirs(workDirs, authorizedRoot));
+    onCwdChanged: (nextCwd, prevCwd, { via: channel = 'hook' } = {}) => {
+      const resolved = routableAuth(nextCwd, [authorizedRoot])?.path ?? null;
       if (!resolved) {
-        console.warn(`[scope] 会话中途换 cwd 被拒：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
-        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed' } });
+        console.warn(`[scope] 会话中途换 cwd 被拒（${channel}）：${nextCwd} 不在白名单，实例保持 ${prevCwd}`);
+        audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed', channel } });
         return null;
       }
       return resolved;
@@ -2097,7 +2235,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
       recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
@@ -2116,7 +2254,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         interactionLog.addSessionLog(instance.sessionId, 'sys_info', `[SYS] 实例已退出 (onExit): instanceId=${id}, resumeFailed=${instance.resumeFailed}`);
       }
       if (agents.get(id) === instance) {
-        if (instance.resumeFailed) sessions.setCurrent(cwd, null);
+        if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
         // 只清表、不 dispose（实例已在退出路径上）。与 remove() 共用 clearTables，防再漏表。
         instanceManager.clearTables(id);
         // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
@@ -2238,13 +2376,14 @@ function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
   }
   return p;
 }
-// 工作区轴：托管 worktree 里的实例归其父仓。viewingCwd 是「新开会话落哪、侧栏列哪一页」的锚，
-// 设成 worktree 路径等于让它事实上变成一个工作区条目——而 worktree 是临时模式，不占抽屉。
+// 工作区轴（项目轴）：worktree 里的实例（托管的，或仓库外平级的）归其所属仓库，其余归它自己所在的
+// 目录（连接文件夹或其子目录）。viewingCwd 是「新开会话落哪、侧栏列哪一页」的锚，设成 worktree 路径
+// 等于让它事实上变成一个工作区条目——而 worktree 是临时模式，不占抽屉。判据见 authorize 的 projectKey。
 //
-// 第二条回落管「worktree 目录已经被删掉」那一档（2026-09-13）：resolveManagedWorktree 先 realpath，
+// 第二条回落管「worktree 目录已经被删掉」那一档（2026-09-13）：authorize 先 realpath，
 // 对悬空路径必然返回 null，于是 `|| c` 把实例归到一个不存在的「工作区」上——症状是抽屉里父仓
 // 那一节再也看不到这个会话（用户报的「工作区抽屉没有会话」正是这条）。
-const workspaceCwdOf = c => resolveManagedWorktree(c, workDirs)?.parent
+const workspaceCwdOf = c => routableAuth(c)?.projectKey
   || resolveGoneWorktreeParent(c, workDirs) || c;
 // 展示轴：文件面板 / 改动面板 / statusline 的 git 段该读哪个目录。与驾驶轴（instance.cwd）的**唯一**
 // 分叉点是「worktree 目录已删」——那时驾驶轴必须原样保留（transcript 落在按它算出的 project 目录里，
@@ -2602,44 +2741,71 @@ registerSocketConnection(io, socket => {
           ack({ ok: false, error: 'stale_instance', stale: true });
           return;
         }
-        // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
-        // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-        const workspaceCwd = ensureWhitelisted(routeCwd(rawCwd), workDirs);
-        // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
-        // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
-        // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（resolveManagedWorktree 非空即是）。
-        const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
-        let cwd = workspaceCwd;
-        if (wantsWorktree && !resolveManagedWorktree(workspaceCwd, workDirs)) {
-          const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
-          if (!made.ok) {
-            console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
-            audit.recordAudit({
-              actor: actorFromSocket(socket), action: 'worktree_create', target: workspaceCwd,
-              outcome: 'failed', meta: { code: made.code, sourceBranch: payload.sourceBranch ?? null },
-            });
-            sysTo(socket, `无法创建 worktree：${made.error || made.code}`, true);
-            ack({ ok: false, error: made.error || '创建 worktree 失败' });
+        // 「无文件夹」：同 worktree 的懒建——只有真发出第一条消息才建 scratch 目录，不发就什么都不留。
+        // 并发的首条消息共用一个目录（分配器），下游按 cwd 的单飞才合得掉。租约在实例开好之后释放。
+        let scratchLease = null;
+        let cwd;
+        if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
+          try {
+            scratchLease = scratchAllocator.acquire();
+          } catch (err) {
+            sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
+            ack({ ok: false, error: 'scratch_unavailable' });
             return;
           }
-          cwd = made.path;
-          // 说一声建了什么：名字来自这条消息，但用户没见过生成结果，而它会成为分支名进 git。
-          sysTo(socket, `已在新 worktree「${made.branch}」中打开（源分支 ${payload.sourceBranch || '当前分支'}）`);
-          audit.recordAudit({
-            actor: actorFromSocket(socket), action: 'worktree_create', target: made.path,
-            outcome: 'ok', meta: { branch: made.branch, sourceBranch: payload.sourceBranch ?? null },
-          });
+          cwd = scratchLease.cwd;
+        } else {
+          // ensureAuthorized 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
+          // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
+          const routedCwd = routeCwd(rawCwd);
+          if (routedCwd === null) {
+            // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
+            sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+            ack({ ok: false, error: OUT_OF_SCOPE_ERROR, permanent: true });
+            return;
+          }
+          const workspaceCwd = ensureAuthorized(routedCwd);
+          // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
+          // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
+          // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（authorize 带回的 worktreeRoot 非空即是，
+          // 托管的与仓库外平级的都算）。
+          const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
+          cwd = workspaceCwd;
+          if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
+            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
+            if (!made.ok) {
+              console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
+              audit.recordAudit({
+                actor: actorFromSocket(socket), action: 'worktree_create', target: workspaceCwd,
+                outcome: 'failed', meta: { code: made.code, sourceBranch: payload.sourceBranch ?? null },
+              });
+              sysTo(socket, `无法创建 worktree：${made.error || made.code}`, true);
+              ack({ ok: false, error: made.error || '创建 worktree 失败' });
+              return;
+            }
+            cwd = made.path;
+            // 说一声建了什么：名字来自这条消息，但用户没见过生成结果，而它会成为分支名进 git。
+            sysTo(socket, `已在新 worktree「${made.branch}」中打开（源分支 ${payload.sourceBranch || '当前分支'}）`);
+            audit.recordAudit({
+              actor: actorFromSocket(socket), action: 'worktree_create', target: made.path,
+              outcome: 'ok', meta: { branch: made.branch, sourceBranch: payload.sourceBranch ?? null },
+            });
+          }
         }
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
-        const saved = await currentSessionForCwd(cwd);
-        // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
-        // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
-        // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
-        const justOpened = agents.get(viewingInstanceId);
-        a = (saved && instanceForSession(saved.id))
-          || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-          || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+        try {
+          const saved = await currentSessionForCwd(cwd);
+          // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
+          // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
+          // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
+          const justOpened = agents.get(viewingInstanceId);
+          a = (saved && instanceForSession(saved.id))
+            || (justOpened && justOpened.cwd === cwd ? justOpened : null)
+            || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+        } finally {
+          scratchLease?.release();
+        }
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
@@ -2988,7 +3154,7 @@ registerSocketConnection(io, socket => {
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
     // B3：FRESH 尚无 sessionId 时 dispose+resume(null) 会丢掉在途首条/半开实例——只记 pending，等懒开消费
     if (!sid) {
-      pendingEffortByCwd.set(cwd, level);
+      pendingEffortByCwd.set(workspaceCwdOf(cwd), level);
       effortByInstance.set(id, level);
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
@@ -3072,7 +3238,7 @@ registerSocketConnection(io, socket => {
     const a = agents.get(id);
     viewingCwd = workspaceCwdOf(a.cwd);
     // B2：列表/tab 聚焦也要更新 currentByCwd（此前只 session:switch/finishOpenFocus 写指针）
-    if (a.sessionId) sessions.setCurrent(a.cwd, a.sessionId);
+    if (a.sessionId) sessions.setCurrent(workspaceCwdOf(a.cwd), a.sessionId);
     // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
     a.touchActivity?.();
     // 切视图立即清全局 mirror（否则 catchUpTick 切换分支完成前，A 的锁仍挂着）
@@ -3146,10 +3312,16 @@ registerSocketConnection(io, socket => {
     // 当前唯一前端调用点（session:home 恒发 {}）不带 cwd，这个分支走不到；仍按「viewingCwd 永远
     // 落工作区轴」这道不变量补 workspaceCwdOf 做防御性一致（同 reselectViewingAfter/setViewing 等处）。
     if (typeof obj.cwd === 'string' && obj.cwd) {
-      viewingCwd = workspaceCwdOf(ensureWhitelisted(routeCwd(obj.cwd), workDirs));
+      const routed = routeCwd(obj.cwd);
+      if (routed === null) {
+        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+        return;
+      }
+      viewingCwd = workspaceCwdOf(ensureAuthorized(routed));
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
+    composeCwd = null; // 首页属于项目本身，不沿用上一个新会话页选的 worktree
     sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(viewingCwd, null); // 空首页 compose → FRESH（与 session:new 同；列表进入仍 resume）
     // 回空首页立即清全局 mirror，防 A 工作区 CLI 驾驶锁挂到空首页/下一会话
@@ -3174,21 +3346,41 @@ registerSocketConnection(io, socket => {
     const ack = typeof payload === 'function' ? payload : maybeAck;
     // #8 灰边界修：热移除目录上「仅拒新开」。若正查看该目录的 live 实例，viewingCwd 会停在已移除目录
     // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。
-    // ensureWhitelisted 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
+    // ensureAuthorized 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const obj = (payload && typeof payload === 'object') ? payload : null;
-    const cwd = ensureWhitelisted(obj ? routeCwd(obj.cwd) : viewingCwdOf(), workDirs);
+    let cwd;
+    if (isNoFolderKey(obj ? obj.cwd : viewingCwdOf())) {
+      // 「无文件夹」：空首页停在 scratch 根上，首条消息再懒建 scratch 目录（见 user:message）。
+      // 根要先建出来：下面 scout 探模型清单要一个真实存在的 cwd。
+      try { mkdirSync(SCRATCH_ROOT, { recursive: true }); } catch (err) {
+        sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
+        if (typeof ack === 'function') ack({ ok: false, error: 'scratch_unavailable' });
+        return;
+      }
+      cwd = scratchRootKey();
+    } else {
+      const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
+      if (routed === null) {
+        // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
+        sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+        return;
+      }
+      cwd = ensureAuthorized(routed);
+    }
 
-    // cwd（驾驶轴，供下面路由代次/当前指针/懒开使用）保持原样，可以是托管 worktree 路径；
-    // viewingCwd（工作区展示轴）另外归一化——两个前端调用点目前只会传顶层工作区目录（抽屉按行 /
-    // 全局 currentCwd），worktree 从不出现在这里，故此刻是无操作的防御性对齐，不改变现有行为。
+    // cwd（驾驶轴）保持原样，可以是托管 worktree 路径；路由代次 / 当前指针 / 暂存档位一律按项目轴
+    // （viewingCwd = workspaceCwdOf(cwd)）归键——懒开到 worktree / scratch 子目录时，openInstance 也按
+    // 同一个项目键取，两边对得上（2026-09-24：此前暂存在项目键、取用在驾驶轴，懒开 worktree 时档位静默丢失）。
     viewingCwd = workspaceCwdOf(cwd);
-    sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
-    sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
+    composeCwd = cwd;
+    sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
+    sessions.setCurrent(viewingCwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
     // 新会话空窗口立即清全局 mirror（跨工作区新建最易撞「A 驾驶锁挂到 B」）
     clearMirrorOnViewChange();
-    pendingModeByCwd.delete(cwd); pendingEffortByCwd.delete(cwd); // 重置 L0（防上次未发的残留被误消费）
+    pendingModeByCwd.delete(viewingCwd); pendingEffortByCwd.delete(viewingCwd); // 重置 L0（防上次未发的残留被误消费）
     broadcastInstances(); // 先推一帧（可能仍是 L4 或旧 L3 缓存）；下方 force 刷新 L3 后再补广播
     pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无缓存由下方 scout 补发
     pushSlashCommandsForCwd(cwd); // 有缓存即时推 slash 提示；无缓存保留前端 localStorage，首条消息真 init 校正
@@ -3264,7 +3456,7 @@ registerSocketConnection(io, socket => {
       });
       return;
     }
-    // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureWhitelisted 同 session:new(#8)：
+    // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureAuthorized 同 session:new(#8)：
     // routeCwd 的缺省回退(viewingCwdOf)可能仍是热移除目录（该目录有 live 实例挂着未被归位），不夯一次
     // 白名单会绕过「仅拒新开」——落到非白名单目录后 sessionFileExists 大概率会因该目录下无此 sessionId 而
     // 拒绝（ack 回 '会话不存在'），是安全的失败模式，不会误开其他目录下的会话。
@@ -3272,7 +3464,13 @@ registerSocketConnection(io, socket => {
     // 树已删 + live：cwd 必须取实例自己的驾驶轴。走 routeCwd 的话那条悬空路径会被判越界、回退成父仓，
     // 紧接着的 sessionFileExists 按父仓的 project 目录去查必然查空 —— 用户被锁在一个自己正跑着的
     // 会话外面，拿到的还是「会话不存在」。这一支不新增授权面：live 实例的 CLI 本来就在那儿跑着。
-    const cwd = goneWorktree ? live.cwd : ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    // 切到已在跑的实例只是换视图，按读档放行（热移除后的已开会话仍可查看）；要 spawn 的按开档。
+    const routed = goneWorktree ? live.cwd : routeCwd(payload?.cwd, { tier: live ? 'read' : 'open' });
+    if (routed === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
+    const cwd = goneWorktree || live ? routed : ensureAuthorized(routed);
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
@@ -3293,10 +3491,10 @@ registerSocketConnection(io, socket => {
     // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
     // 必须在 dedupedResume 之前 bump：若下面需要新 spawn 实例，openInstance 内会同步捕获代次快照——
     // bump 放这之后会让刚 spawn 的、本该是"当前权威"的实例反而捕获到旧代次，被自己后续 onSessionId 误判陈旧。
-    sessions.bumpGeneration(cwd);
+    sessions.bumpGeneration(workspaceCwdOf(cwd));
     const inst = live || await dedupedResume(cwd, sessionId);
     // B1：live 复用时把代次快照拉到当前——否则 /clear 后 onSessionId 因 generation 陈旧不写 currentByCwd
-    if (inst) inst.routeGeneration = sessions.getGeneration(cwd);
+    if (inst) inst.routeGeneration = sessions.getGeneration(workspaceCwdOf(cwd));
     finishOpenFocus(inst, cwd, sessionId, ack);
   });
 
@@ -3306,7 +3504,12 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:fork', async (payload, ack) => {
     const sessionId = payload?.sessionId;
     const uuid = payload?.uuid;
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
@@ -3328,7 +3531,7 @@ registerSocketConnection(io, socket => {
       return;
     }
     const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid });
-    sessions.bumpGeneration(cwd);
+    sessions.bumpGeneration(workspaceCwdOf(cwd));
     const inst = await dedupedResume(cwd, newId);
     finishOpenFocus(inst, cwd, newId, ack);
   });
@@ -3348,7 +3551,9 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:rewind:candidates', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3372,7 +3577,9 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3385,7 +3592,7 @@ registerSocketConnection(io, socket => {
     // G2 跨驾驶员：终端在跑命令或卡在审批框上，手机端回退会破坏对端环境。fail-closed。
     let states = new Map();
     try { states = await listTerminalSessionStates({ classifyTail: classifyTranscriptTail }); } catch { /* fail-open 到空表 */ }
-    if (hasBusyTerminalSessionForCwd(cwd, states) || hasWaitingTerminalSessionForCwd(cwd, states)) {
+    if (hasTerminalSessionOverlapping(cwd, states)) {
       reply({ ok: false, error: '终端会话正在运行或等待审批，暂时无法回退' });
       return;
     }
@@ -3474,7 +3681,9 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3512,7 +3721,7 @@ registerSocketConnection(io, socket => {
         reply({ ok: false, error: '读不到终端会话注册表，无法确认电脑上是否正在驾驶该工作区，已中止回退', reason: 'terminal-state-unknown' });
         return;
       }
-      if (hasBusyTerminalSessionForCwd(cwd, states) || hasWaitingTerminalSessionForCwd(cwd, states)) {
+      if (hasTerminalSessionOverlapping(cwd, states)) {
         reply({ ok: false, error: '终端会话正在运行或等待审批，暂时无法回退' });
         return;
       }
@@ -3595,7 +3804,7 @@ registerSocketConnection(io, socket => {
       if (forkConversation) {
         try {
           ({ sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid }));
-          sessions.bumpGeneration(cwd);
+          sessions.bumpGeneration(workspaceCwdOf(cwd));
         } catch (err) {
           forkError = err?.message || String(err);
           console.error('[rewind] 分叉失败', forkError);
@@ -3691,12 +3900,20 @@ registerSocketConnection(io, socket => {
     const ack = typeof payload === 'function' ? payload : maybeAck;
     if (typeof ack !== 'function') return;
     const obj = payload && typeof payload === 'object' ? payload : {};
-    const cwd = routeCwd(obj.cwd); // 缺省查看实例 cwd
+    // 「无文件夹」项目：scratch 根本身不可路由（不能直接在它上面开实例），但要列得出它下面的会话；
+    // 从没开过无文件夹会话时根还不存在，照样回空列表而不是越界拒绝。
+    const cwd = isNoFolderKey(obj.cwd) ? scratchRootKey() : routeCwd(obj.cwd); // 缺省查看实例 cwd
+    if (cwd === null) {
+      // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
+      // 就会被画在这个项目的标题下——那是错数据，不是降级。
+      return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
+        hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+    }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
-    const id = sessions.getCurrent(cwd);
+    const id = sessions.getCurrent(workspaceCwdOf(cwd));
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
-    const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id)) ? id : null;
+    const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
@@ -3704,9 +3921,11 @@ registerSocketConnection(io, socket => {
     const all = obj.all === true;
     const limit = query
       ? SEARCH_RESULT_LIMIT
-      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT));
+      // 子文件夹这类项目沿用所属连接根配的条数
+      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT));
     const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
       limit,
+      memberOptions,
       query: query || undefined,
       excludeIds: pendingDeleteIds.size ? new Set(pendingDeleteIds) : undefined,
     });
@@ -3725,7 +3944,7 @@ registerSocketConnection(io, socket => {
     // 此前完全没挡，删除在途（sdkDeleteSession 的 await 窗口内）又恰好被手动标过未读的会话，
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
     const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
-    const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds) : [];
+    const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
     // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
     // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
     // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
@@ -3782,6 +4001,7 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     const { sessionId } = payload || {};
     const cwd = routeCwd(payload?.cwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
@@ -3817,7 +4037,7 @@ registerSocketConnection(io, socket => {
     }
     // 原子性：先清当前指针 + 记入 pendingDeleteIds（列表临时排除），再删文件。
     // 崩溃窗口：pending 不落盘 → 孤儿文件重新可见，可重试；绝不会留下「指针指向已删文件」。
-    if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null);
+    if (sessions.getCurrent(workspaceCwdOf(cwd)) === sessionId) sessions.setCurrent(workspaceCwdOf(cwd), null);
     pendingDeleteIds.add(sessionId);
     invalidateListCache(cwd);
     try {
@@ -3834,25 +4054,34 @@ registerSocketConnection(io, socket => {
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
     // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
+    projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
-    // 会话在托管 worktree 里时一并报告那棵树的状态：transcript 删掉了，**worktree 还在磁盘上**，
-    // 不说一声用户就不知道它在哪、里面还剩什么。
+    // 会话在 worktree 里时（托管的，或随仓库授权的平级 worktree）一并报告那棵树的状态：transcript
+    // 删掉了，**worktree 还在磁盘上**，不说一声用户就不知道它在哪、里面还剩什么。
+    // 用户显式连接的 worktree（连接根开在树内部）不报——那是常驻工作区，不是临时模式。
     // 这里只报告、**不删**——那棵树里可能是这份改动唯一的存在，而「查不到状态」与「真的干净」
     // 在返回值上必须区分得开（inspectWorktreeCleanliness 已对前者 fail-closed 报不干净）。
     // 自动回收是 Claude Desktop 那套 reaper 的事，它有 PR 合并状态可依据，本仓没有。
+    // 「无文件夹」会话：官方删会话时一并删它的 scratch 目录。只在它是这个目录里最后一个会话、且没有活实例
+    // 开在里面时才删（SCRATCH-01，护栏在 removeScratchWorkspace）——/clear 之后同一目录会有多条会话。
+    const cwdAuth = authorize(cwd);
+    const scratchRemoved = cwdAuth?.kind === 'scratch'
+      ? removeScratchWorkspace(cwdAuth.path, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, liveCwds: () => [...agents.values()].map(a => a.cwd) }).removed
+      : undefined;
+    if (scratchRemoved) audit.recordAudit({ actor: actorFromSocket(socket), action: 'scratch_removed', target: cwdAuth.path, outcome: 'success', meta: { sessionId } });
     let worktreeLeft = null;
-    const managed = resolveManagedWorktree(cwd, workDirs);
-    if (managed) {
-      const c = await inspectWorktreeCleanliness(managed.path);
+    const leftTree = cwdAuth?.worktreeRoot && !isWithin(cwdAuth.root, cwdAuth.worktreeRoot) ? cwdAuth.worktreeRoot : null;
+    if (leftTree) {
+      const c = await inspectWorktreeCleanliness(leftTree);
       worktreeLeft = {
-        path: managed.path,
+        path: leftTree,
         clean: c.clean === true,
         dirtyCount: c.entries.length,
         unmergedCommits: c.unmergedCommits,
       };
     }
-    ack({ ok: true, worktreeLeft });
+    ack({ ok: true, worktreeLeft, ...(scratchRemoved === undefined ? {} : { scratchRemoved }) });
   });
 
   // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable
@@ -3861,7 +4090,8 @@ registerSocketConnection(io, socket => {
   registerFileSocketHandlers({
     socket,
     on,
-    routeCwd,
+    routeCwd: c => routeCwd(c, { tier: 'read' }), // 文件面板是读档：热移除后的已开会话仍可查看自己的文件
+    routeWriteCwd: c => routeCwd(c), // 写回是开档：移出清单的文件夹不再可直写（查看照旧）
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
@@ -3878,6 +4108,18 @@ registerSocketConnection(io, socket => {
     rejectableSymlinkComponent,
     buildDiff,
     readPreview,
+    // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
+    isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
+    scopeRootsFor: fileScopeRootsFor,
+  });
+  registerFolderSocketHandlers({
+    socket,
+    on,
+    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
+    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
+    addConnectedFolder,
+    audit,
+    actorFromSocket,
   });
 
   // web 端一键重启 server（改完配置/代码后免上电脑动手）。放行判据见 willBeRespawned；
@@ -3928,7 +4170,8 @@ registerSocketConnection(io, socket => {
     // 归属校验与 session:switch 同款：jsonl 在本 cwd 的 project 目录即有效——接纳终端创建的
     // 会话（不在 sessions.json，原 getSession 守卫会把它们误判为「会话不存在」→ 切入后黑屏）。
     // 列表/切换/历史三环节统一按文件存在性裁决（双向互见互续）。
-    const cwd = routeCwd(payload?.cwd); // 台阶2：读指定目录的历史（缺省 viewingCwd）
+    const cwd = routeCwd(payload?.cwd, { tier: 'read' }); // 读指定目录的历史（缺省 viewingCwd）
+    if (cwd === null) return ack({ messages: [], error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ messages: [], error: '会话不存在' });
     }
@@ -3953,7 +4196,8 @@ registerSocketConnection(io, socket => {
   // 会话归属校验与 session:history 同款（按文件存在性裁决，接纳终端创建的会话）。
   on(socket, 'subagent:flow', async ({ cwd: reqCwd, sessionId, toolUseId } = {}, ack) => {
     if (typeof ack !== 'function') return;
-    const cwd = routeCwd(reqCwd);
+    const cwd = routeCwd(reqCwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
@@ -4334,7 +4578,10 @@ registerSocketConnection(io, socket => {
   // 数据来自 ensureCliDefaults 已经解析好的 effective settings，不额外 spawn CLI。
   on(socket, 'permissions:rules', async (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    // 读档：已授权目录，或正在跑的实例自己的 cwd（其工作区已被热移除时，那里正是用户在看的会话的规则）。
+    // 「无文件夹」的键落到 scratch 根：新会话页的默认档本来就是在那里探的（session:new 的 scout）。
+    const cwd = isNoFolderKey(payload?.cwd) ? scratchRootKey() : routeCwd(payload?.cwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, cwd: null, rules: null, error: OUT_OF_SCOPE_ERROR });
     try {
       const resolved = await sdkResolveSettings({ cwd, settingSources: ['user', 'project', 'local'] });
       ack({ ok: true, cwd, rules: permissionRulesFromEffectiveSettings(resolved?.effective) });
@@ -4438,7 +4685,12 @@ registerSocketConnection(io, socket => {
   // ensureCliDefaults 内部已 try/catch 不抛（失败落 L4 硬默认形状），这里的 try/catch 是双重兜底，
   // 保证 broadcastInstances/ack 本身出岔子时也不把 socket 处理器崩掉。
   on(socket, 'config:refresh', async (payload, ack) => {
-    const cwd = routeCwd(payload?.cwd); // 缺省/越界回落 viewingCwd（含白名单校验，同 session:history）
+    // 缺省落 viewingCwd；显式越界拒绝（SCOPE-05）；「无文件夹」的键落到 scratch 根（同 permissions:rules）
+    const cwd = isNoFolderKey(payload?.cwd) ? scratchRootKey() : routeCwd(payload?.cwd);
+    if (cwd === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
     try {
       await ensureCliDefaults(cwd, { force: true });
       // 模型缓存也须刷新：modelsCache / defaultModelByCwd / init-cache.json 可能因终端侧改 settings 而过期。
@@ -4741,6 +4993,7 @@ httpServer.on('error', err => {
 // + 留存治理（启动即清一次 + 每 24h）。实现下沉 src/agent/approval-lifecycle.js。
 expireOrphanedPending();
 startApprovalRetentionSweep();
+projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
 httpServer.listen(port, host, () => {
   // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
@@ -4830,6 +5083,7 @@ function shutdown(sig) {
   // 重启历史采样器：虽有 .unref() 不阻止退出，但关闭期间 fire 会同步 execFileSync('launchctl')
   // 卡住关闭路径（5s timeout）。与上面两条同一理由，一起清。
   clearInterval(serviceSampleInterval);
+  projectIndex.stop();     // 抽屉子项目的周期补扫（同上：关闭期间不再读盘）
   mirrorEngine.stop();     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
   autoContinue.stop();     // 到点续跑的 tick 定时器 + 布防表。重启即作废是有意的（同 CLI，见 auto-continue.js 头注）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
