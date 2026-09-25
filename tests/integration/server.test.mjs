@@ -202,6 +202,37 @@ test.describe('事件流 — 新连接重放', () => {
     assert.equal(inst.payload.autoContinue.length, 0);
     s.disconnect();
   });
+
+  // 项目清单（2026-09-24「已连接的文件夹」）。前端对「缺这个字段」的约定是回落到 dirs（兼容 E2E mock 与
+  // 演示站的旧载荷），所以真 server 漏发不报错，只会让抽屉永远按旧的目录列表画——E2E 打的是 mock，守不住。
+  test('instances 广播带项目清单与 scratch 根；「无文件夹」项目列得出（根还没建也不越界拒绝）', async () => {
+    const events = [];
+    const s = connectSocket();
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const inst = events.find(e => e.type === 'instances');
+    assert.ok(inst, `连接后应收到 instances，实际：${events.map(e => e.type).join(', ')}`);
+    const { projects, scratchRoot } = inst.payload;
+    assert.equal(typeof scratchRoot, 'string', `scratchRoot 缺席：${JSON.stringify(inst.payload).slice(0, 300)}`);
+    assert.ok(Array.isArray(projects) && projects.length >= 2, `projects 必须是数组（连接根 + 无文件夹），实际 ${JSON.stringify(projects)}`);
+    assert.equal(projects[0].kind, 'connected');
+    assert.deepEqual(projects.at(-1), { key: scratchRoot, root: scratchRoot, label: null, kind: 'scratch' });
+    for (const p of projects) assert.deepEqual(Object.keys(p).sort(), ['key', 'kind', 'label', 'root']);
+
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('session:list 超时')), 3000);
+      s.emit('session:list', { cwd: scratchRoot }, res => { clearTimeout(t); resolve(res); });
+    });
+    assertAckShape(ack, { required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState'] },
+      'session:list（无文件夹，scratch 根尚未建）');
+    assert.deepEqual(ack.sessions, []);
+    s.disconnect();
+  });
 });
 
 test.describe('session:list — 空工作目录', () => {

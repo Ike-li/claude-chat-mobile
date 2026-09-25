@@ -3,6 +3,8 @@
 //       SCOPE-04（所属仓库已连接的 linked worktree——含仓库外的平级目录——同样合法；伪造的不认）
 // 测什么：真 app/server.js 子进程上，routeCwd / ensureAuthorized / 文件范围根这几道成对闸门确实都换成了
 //   同一个授权判据：子目录与平级 worktree 的会话列得出、打得开、文件浏览得到；伪造的 worktree 列不出它的会话。
+//   以及「worktree 跟随所属仓库」落到抽屉那一侧：平级 worktree 的会话并进仓库的列表、不自成项目，
+//   它上面的实例归仓库这个项目（projectKey）；有会话的子目录自成项目。
 // 不测什么 + 为什么：① 判据本身的各种边界（symlink、前缀碰撞、禁区、scratch）在 S1
 //   （folder-access.test.mjs / worktree-ownership.test.mjs），这里只证明 socket 路径走了那道判据
 //   ② 显式越界改为拒绝（SCOPE-05 后半）在 request-cwd-scope.test.mjs
@@ -94,6 +96,16 @@ const emit = (event, payload) => new Promise((resolve, reject) => {
   sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
 });
 const listedIds = async cwd => ((await emit('session:list', { cwd }))?.sessions ?? []).map(s => s.id);
+const latestInstances = () => events.filter(e => e.type === 'instances').pop()?.payload;
+const waitFor = async (pred, what, ms = 8000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const hit = pred();
+    if (hit) return hit;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  throw new Error(`等不到：${what}`);
+};
 
 test('子目录：列出的是子目录自己的会话，不回落成连接根的', async () => {
   const underSub = await listedIds(sub);
@@ -107,6 +119,35 @@ test('仓库外的平级 worktree（仓库已连接）：列得出它自己的�
   const ids = await listedIds(sibling);
   assert.ok(ids.includes(SID.sibling),
     `平级 worktree 的会话没列出来：${JSON.stringify(ids)}——真机 1c401b5d 那种会话照样进不了抽屉`);
+});
+
+test('仓库的列表并进平级 worktree 的会话（行带自己的 cwd），伪造的不并', async () => {
+  const { sessions } = await emit('session:list', { cwd: repo });
+  const row = sessions.find(s => s.id === SID.sibling);
+  assert.ok(row, `仓库列表里没有平级 worktree 的会话：${JSON.stringify(sessions.map(s => s.id))}——1c401b5d 在抽屉里找不到`);
+  assert.equal(row.cwd, sibling, '点开时要用真实 cwd，用仓库 cwd 会查到空目录（「历史消息加载失败」）');
+  assert.ok(!sessions.some(s => s.id === SID.forged), '伪造目录的会话被当成仓库成员并了进来');
+});
+
+test('项目清单：连接根、有会话的子目录、无文件夹；平级 worktree 不自成项目', async () => {
+  const payload = await waitFor(() => (latestInstances()?.projects?.some(p => p.key === sub) ? latestInstances() : null),
+    '有会话的子目录出现在 instances 的项目清单里');
+  assert.deepEqual(payload.projects.map(p => [p.key, p.kind, p.label]), [
+    [repo, 'connected', 'repo'],
+    [sub, 'subfolder', 'repo › app'],
+    [payload.scratchRoot, 'scratch', null],
+  ]);
+});
+
+test('刚开在子目录里、transcript 还没落盘的会话：实例活着时它所在的子目录就在项目清单里', async () => {
+  // 假 CLI 不写 transcript，扫盘永远认不出这个子目录——在跑的会话所属项目只能靠活实例现算
+  const fresh = join(repo, 'fresh');
+  mkdirSync(fresh);
+  const res = await emit('user:message', { text: '在 fresh 里开', cwd: fresh, clientMessageId: 'connected-fresh-1' });
+  assert.equal(res?.ok, true, `前提：子目录里能开，实际 ${JSON.stringify(res)}`);
+  const payload = await waitFor(() => (latestInstances()?.instances?.some(i => i.cwd === fresh) ? latestInstances() : null), 'fresh 上的实例出现在广播里');
+  assert.ok(payload.projects.some(p => p.key === fresh && p.kind === 'subfolder'),
+    `在跑的会话所属子目录不在项目清单里：${JSON.stringify(payload.projects.map(p => p.key))}——前端只能把它画进「不在已连接的文件夹里」`);
 });
 
 test('伪造的 worktree：不认，列不出它的会话', async () => {
@@ -125,4 +166,13 @@ test('子目录会话：在子目录里打开（驾驶轴就是子目录）', as
   assert.equal(res?.ok, true, `打不开：${JSON.stringify(res)}——ensureAuthorized 把子目录归位到了连接根`);
   const inst = events.filter(e => e.type === 'instances').pop()?.payload?.instances?.find(i => i.instanceId === res.instanceId);
   assert.equal(inst?.cwd, sub, `实例开在了 ${inst?.cwd}——transcript 在子目录的 project 目录里，开错目录就是历史加载失败`);
+  assert.equal(inst?.projectKey, sub, '子目录自成项目：在跑的这一行要挂在它下面');
+});
+
+test('平级 worktree 会话：实例驾驶在 worktree 里，归仓库这个项目', async () => {
+  const res = await emit('session:switch', { sessionId: SID.sibling, cwd: sibling });
+  assert.equal(res?.ok, true, `打不开：${JSON.stringify(res)}`);
+  const inst = await waitFor(() => latestInstances()?.instances?.find(i => i.instanceId === res.instanceId), '实例出现在广播里');
+  assert.equal(inst.cwd, sibling);
+  assert.equal(inst.projectKey, repo, `projectKey=${inst.projectKey}——前端按它分组，归错了这一行就挂到一个不存在的项目下`);
 });

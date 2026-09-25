@@ -90,6 +90,7 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
+import { composeProjects, createProjectIndex, discoverSubProjects } from '../sessions/projects.js';
 import { scratchRoot as defaultScratchRoot } from '../shared/scratch-root.js';
 import {
   isDeviceTrusted,
@@ -241,6 +242,16 @@ const fileScopeRootsFor = cwd => {
   // 读档放行的已开会话（工作区已被热移除）：范围补上它自己的目录，否则 routeCwd 放行了、范围门又拒掉。
   return isLiveInstanceCwd(cwd) ? [...workDirs, cwd] : workDirs;
 };
+// 「无文件夹」项目的键：scratch 根解析后的真实路径；从没开过无文件夹会话时根还不存在，用配置值。
+const scratchRootKey = () => authorize(SCRATCH_ROOT)?.path ?? SCRATCH_ROOT;
+// 抽屉的项目清单：子项目靠扫 ~/.claude/projects 反查（sessions/projects.js），扫出的结果变了才广播。
+// 触发：启动、工作区热加载、删除会话、活实例所在的子项目还没扫到、每分钟一次（有已批准连接时，见 listen 前）。
+const projectIndex = createProjectIndex({
+  discover: cwdCache => discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize, cwdCache }),
+  onChange: () => broadcastInstances(),
+});
+// 成员目录（平级 worktree、scratch 目录）并不并进项目的列表，由同一份授权判据裁决（history.js）
+const memberOptions = { authorize };
 
 let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
@@ -354,6 +365,7 @@ function reloadWorkdirs() {
   if (!routableAuth(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
+  projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
 }
 
 // ---- 启动预检（验收 A9）----
@@ -1220,6 +1232,8 @@ function instancesPayload() {
     const panelCwd = panelCwdOf(a.cwd);
     list.push({
       instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
+      // 抽屉按项目分组，在跑的这一行挂在哪个项目下：worktree 归所属仓库，scratch 目录归「无文件夹」
+      projectKey: workspaceCwdOf(a.cwd),
       panelCwd, worktreeGone: panelCwd !== a.cwd,
       title: sessions.getSession(a.sessionId)?.title ?? null, state,
       // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）。
@@ -1257,6 +1271,14 @@ function instancesPayload() {
   // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
   // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
   payload.autoContinue = autoContinue.snapshot();
+  // 项目清单（按官方桌面端的侧栏分组）：连接根现算；子项目 = 扫盘结果 ∪ 活实例所在的子项目——新会话的
+  // transcript 可能还没落盘，只等扫盘的话正在跑的会话所属项目要晚一分钟才出现。
+  payload.scratchRoot = scratchRootKey();
+  payload.projects = composeProjects({
+    connected: workDirs,
+    subProjects: [...(projectIndex.get() ?? []), ...liveSubProjects(list)],
+    scratchRoot: payload.scratchRoot,
+  });
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -1419,6 +1441,16 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
 // 的兑现前提是拉起者存在，判据必须对准它。与 dev:restart handler 用同一个判据，两处不能分叉。
 const canRestartNow = () => willBeRespawned();
 
+// 活实例所在、自己不是连接根的项目（热移除后已不在任何连接根下的实例不算，前端另画「运行中」一节）
+function liveSubProjects(instanceRows) {
+  const out = [];
+  for (const { projectKey } of instanceRows) {
+    const owner = routableAuth(projectKey);
+    if (owner?.kind === 'connected' && owner.path !== owner.root) out.push({ key: owner.path, root: owner.root });
+  }
+  return out;
+}
+
 function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 各实例角标状态，合成事件惯例）
   // 与 viewing 对齐：当前查看实例豁免空闲回收（用户读历史时 lastActivity 不会因 SDK 刷新）。
   // 放在每次 broadcast 前扫一遍——viewing 变更路径多（switch/setViewing/reselect/lazy open），
@@ -1431,6 +1463,11 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
     seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
+  // 活实例所在的子项目扫盘还没认出来（transcript 刚落盘）：补扫一趟，免得实例一退出这个项目就从抽屉消失。
+  // 单飞合并，认出来之后就不再触发。
+  const scanned = projectIndex.get();
+  if (scanned && liveSubProjects([...agents.values()].map(a => ({ projectKey: workspaceCwdOf(a.cwd) })))
+    .some(p => !scanned.some(x => x.key === p.key))) projectIndex.refresh();
 }
 // 后台任务集合变化 → 会话列表 ⏳ 重算的 500ms 合并节流：agent 侧 onBgTaskChange 只在"空↔非空/成员增删"时回调（稳态高频心跳不触发），
 // 这里再合并同一 tick 内的多次变化（TTL 批量清 + 新任务同时到）成一次 broadcastInstances，避免重复全量广播。单飞：已排期则忽略。
@@ -3771,7 +3808,10 @@ registerSocketConnection(io, socket => {
     const ack = typeof payload === 'function' ? payload : maybeAck;
     if (typeof ack !== 'function') return;
     const obj = payload && typeof payload === 'object' ? payload : {};
-    const cwd = routeCwd(obj.cwd); // 缺省查看实例 cwd
+    // 「无文件夹」项目：scratch 根本身不可路由（不能直接在它上面开实例），但要列得出它下面的会话；
+    // 从没开过无文件夹会话时根还不存在，照样回空列表而不是越界拒绝。
+    const scratchList = typeof obj.cwd === 'string' && (obj.cwd === SCRATCH_ROOT || authorize(obj.cwd)?.kind === 'scratch-root');
+    const cwd = scratchList ? scratchRootKey() : routeCwd(obj.cwd); // 缺省查看实例 cwd
     if (cwd === null) {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
@@ -3782,7 +3822,7 @@ registerSocketConnection(io, socket => {
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(workspaceCwdOf(cwd));
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
-    const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id)) ? id : null;
+    const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
@@ -3790,9 +3830,11 @@ registerSocketConnection(io, socket => {
     const all = obj.all === true;
     const limit = query
       ? SEARCH_RESULT_LIMIT
-      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT));
+      // 子文件夹这类项目沿用所属连接根配的条数
+      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT));
     const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
       limit,
+      memberOptions,
       query: query || undefined,
       excludeIds: pendingDeleteIds.size ? new Set(pendingDeleteIds) : undefined,
     });
@@ -3811,7 +3853,7 @@ registerSocketConnection(io, socket => {
     // 此前完全没挡，删除在途（sdkDeleteSession 的 await 窗口内）又恰好被手动标过未读的会话，
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
     const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
-    const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds) : [];
+    const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
     // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
     // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
     // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
@@ -3921,6 +3963,7 @@ registerSocketConnection(io, socket => {
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
     // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
+    projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     // 会话在 worktree 里时（托管的，或随仓库授权的平级 worktree）一并报告那棵树的状态：transcript
@@ -4841,6 +4884,7 @@ httpServer.on('error', err => {
 // + 留存治理（启动即清一次 + 每 24h）。实现下沉 src/agent/approval-lifecycle.js。
 expireOrphanedPending();
 startApprovalRetentionSweep();
+projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
 httpServer.listen(port, host, () => {
   // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
@@ -4930,6 +4974,7 @@ function shutdown(sig) {
   // 重启历史采样器：虽有 .unref() 不阻止退出，但关闭期间 fire 会同步 execFileSync('launchctl')
   // 卡住关闭路径（5s timeout）。与上面两条同一理由，一起清。
   clearInterval(serviceSampleInterval);
+  projectIndex.stop();     // 抽屉子项目的周期补扫（同上：关闭期间不再读盘）
   mirrorEngine.stop();     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
   autoContinue.stop();     // 到点续跑的 tick 定时器 + 布防表。重启即作废是有意的（同 CLI，见 auto-continue.js 头注）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）

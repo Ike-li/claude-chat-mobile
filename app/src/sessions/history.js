@@ -3,9 +3,10 @@
 import { open, stat, readdir, readFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
 import { toolSummary } from '../shared/tool-summary.js';
@@ -816,25 +817,21 @@ function isCliSystemLine(content) {
 //   total = 该 cwd 会话总数（query 过滤前）；hasMore = 过滤后仍有未返回项（浏览：total>limit；搜索：匹配数>limit）。
 // 缓存键含 limit；有 query 时另加 `q:` 段——否则搜索结果会污染浏览缓存，或反过来。
 // excludeIds：进程内临时排除（删文件窗口 pendingDeleteIds）；传空 Set/不传 = 不过滤。
-export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query } = {}) {
+// memberOptions：项目成员目录的裁决（见 listProjectMemberDirs）；不传 = 只并托管 worktree。
+export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query, memberOptions } = {}) {
   const normalizedQuery = typeof query === 'string' ? query.trim() : '';
   const own = await scanOneCwd(cwd, baseDir, limit, normalizedQuery);
 
-  // 托管 worktree 的会话并进本列表（2026-09-11）。绝大多数工作区没有 .claude/worktrees/，
-  // 那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
-  const worktrees = await listManagedWorktreeDirs(cwd, baseDir);
-  if (worktrees.length === 0) return applyExcludeIds(own, excludeIds);
+  // 成员目录（托管 / 平级 worktree、scratch 目录）的会话并进本列表（2026-09-11 起）。绝大多数项目
+  // 没有成员，那条路径原样返回 own——**包括不给会话对象平白加上 cwd 字段**，免得前端与 ack 形状凭空多一维。
+  const members = await listProjectMemberDirs(cwd, baseDir, memberOptions);
+  if (members.length === 0) return applyExcludeIds(own, excludeIds);
 
-  const extra = await Promise.all(worktrees.map(async wt => {
-    const r = await scanOneCwd(wt.cwd, baseDir, limit, normalizedQuery);
-    // cwd 必须带上：父仓只是展示归属，前端点开时拿它去定位 transcript——用父仓 cwd 会查到空目录。
+  const extra = await Promise.all(members.map(async m => {
+    const r = await scanOneCwd(m.cwd, baseDir, limit, normalizedQuery);
+    // cwd 必须带上：项目根只是展示归属，前端点开时拿它去定位 transcript——用项目根会查到空目录。
     // worktreeGone 只在真没了时才加：活树上平白多一个恒 false 的字段，前端还得记得判它。
-    return {
-      ...r,
-      sessions: r.sessions.map(s => ({
-        ...s, cwd: wt.cwd, worktree: wt.name, ...(wt.gone ? { worktreeGone: true } : {}),
-      })),
-    };
+    return { ...r, sessions: r.sessions.map(s => ({ ...s, ...memberRowFields(m) })) };
   }));
 
   // ★ 截断必须发生在合并之后。各处各取 limit 条是对的（每处内部已按活动时间取了最近 N，
@@ -873,6 +870,48 @@ async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
   return cached && Date.now() - cached.ts < LIST_CACHE_TTL
     ? cached.result
     : scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
+}
+
+// 成员目录里的会话行比项目根自己的多带的字段。scratch 目录不是 worktree，不能标成 worktree。
+const memberRowFields = m => ({
+  cwd: m.cwd,
+  ...(m.scratch ? { scratch: true } : { worktree: m.name }),
+  ...(m.gone ? { worktreeGone: true } : {}),
+});
+
+// 一个项目除了自己的 cwd，还有哪些目录的会话算它的（2026-09-24「已连接的文件夹」）：
+//   · 托管 worktree（`<cwd>/.claude/worktrees/*`，含已删的）——一直都有，不依赖 memberOptions；
+//   · 仓库外的平级 linked worktree——从仓库侧读 `.git/worktrees/*` 列出，逐个问授权判据
+//     「你归哪个项目」，答案是本项目才并进来。被显式连接的平级 worktree 自成项目，判据会答它自己；
+//   · 项目本身是 scratch 根时：根下各个 scratch 目录。
+// 并不并由 memberOptions.authorize 决定，也就是 server 判 cwd 用的那一份——列表与「点开能不能打开」
+// 同口径，不在这里另写一套会漂移的规则。平级 worktree 被 `git worktree remove/prune` 之后仓库侧的
+// 回链没了，它的会话就不再归到仓库（已知边界：没有非有损的证据能把它们认回来）。
+async function listProjectMemberDirs(cwd, baseDir, memberOptions) {
+  const authorize = memberOptions?.authorize;
+  if (typeof authorize !== 'function') return listManagedWorktreeDirs(cwd, baseDir);
+  const self = authorize(cwd);
+  if (self?.kind === 'scratch-root') return listScratchMembers(self.path, authorize);
+  const managed = await listManagedWorktreeDirs(cwd, baseDir);
+  const seen = new Set(managed.map(m => getProjectDir(m.cwd)));
+  const linked = listLinkedWorktrees(cwd)
+    // 托管 worktree 也是 linked worktree，已经在上面那份里了
+    .filter(w => !seen.has(getProjectDir(w.path)) && authorize(w.path)?.projectKey === cwd)
+    .map(w => ({ name: basename(w.path), cwd: w.path, gone: false }));
+  return [...managed, ...linked];
+}
+
+// scratch 根下的 scratch 目录。readdir 的 isDirectory 不跟随 symlink；形态与归属交给授权判据。
+async function listScratchMembers(root, authorize) {
+  const out = [];
+  try {
+    for (const e of await readdir(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const auth = authorize(join(root, e.name));
+      if (auth?.kind === 'scratch') out.push({ name: e.name, cwd: auth.path, gone: false, scratch: true });
+    }
+  } catch { /* 根还没建（从没开过无文件夹会话）：没有成员 */ }
+  return out;
 }
 
 const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size === 0
@@ -928,7 +967,7 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
       if (name) candidates.push({ project: e.name, name, wtCwd: join(root, name) });
     }
     const verified = await Promise.all(candidates.map(async c => (
-      await transcriptCwdOf(join(baseDir, c.project)) === c.wtCwd ? c : null
+      await transcriptMentionsCwd(join(baseDir, c.project), c.wtCwd) ? c : null
     )));
     for (const c of verified) {
       if (c) byProject.set(c.project, { name: c.name, cwd: c.wtCwd, gone: true });
@@ -937,7 +976,7 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
   return [...byProject.values()];
 }
 
-// 一个 project 目录当初是从哪个 cwd 落下来的 —— 取该目录里任一 transcript 头部记录的 cwd 字段。
+// 一个 project 目录是不是从 wanted 这个 cwd 落下来的 —— 看该目录里有没有 transcript 记着这个 cwd。
 //
 // 【为什么需要非有损的证据】encodeProjectDir 把每个非字母数字字符都换成 '-'，于是
 // `<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**，磁盘上就是
@@ -948,15 +987,59 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
 // 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）一律返回 null，
 // 于是那棵树扫不到——退回的是「这条会话看不见」（= 本判据存在之前的行为），而不是「可能列错项目的
 // 会话」。少列一条比列错一条安全。实测本机 128 个 project 目录全部带这个字段（2026-09-13）。
-async function transcriptCwdOf(projectDir) {
+//
+// 【不能只取第一个 cwd】会话中途 EnterWorktree 时 CLI 把整份 transcript 搬进新 project 目录，
+// 搬迁前的记录照旧写着原仓的 cwd（真机 1c401b5d：6.7MB 的文件，新 cwd 从 1.25MB 处才开始）。
+// 于是头窗里只有原仓——拿它比对，这棵树的会话就被当成「查无证据」整批丢掉。
+async function transcriptMentionsCwd(projectDir, wanted) {
   try {
     for (const f of await readdir(projectDir)) {
-      if (!f.endsWith('.jsonl')) continue;
-      const meta = await readHeadMeta(join(projectDir, f), null);
-      if (meta?.cwd) return meta.cwd;
+      if (f.endsWith('.jsonl') && (await readCwdEvidence(join(projectDir, f))).has(wanted)) return true;
     }
   } catch { /* 目录不可读 */ }
+  return false;
+}
+
+// 一个 project 目录是从哪个 cwd 落下来的：找一个「编码后正好等于这个目录名」的 cwd。
+// 目录名是有损编码（`/a/b-c` 与 `/a/b/c` 同名），不能反解成路径；也不能取第一个 cwd（理由同上）。
+// 只抽查前几份 transcript：同一目录里的会话落在同一个 cwd，找不到多半是老文件没这个字段。
+const PROJECT_CWD_PROBE_FILES = 5;
+export async function projectCwdOf(projectDir) {
+  const name = basename(projectDir);
+  let files;
+  try { files = (await readdir(projectDir)).filter(f => f.endsWith('.jsonl')); } catch { return null; }
+  for (const f of files.slice(0, PROJECT_CWD_PROBE_FILES)) {
+    for (const c of await readCwdEvidence(join(projectDir, f))) {
+      if (getProjectDir(c) === name) return c;
+    }
+  }
   return null;
+}
+
+// transcript 头窗与尾窗里出现过的 cwd。只读两个窗，与 readHeadMeta 同一对上限：搬迁后仍在
+// 活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
+async function readCwdEvidence(file) {
+  const out = new Set();
+  let fh;
+  try {
+    fh = await open(file, 'r');
+    const { size } = await fh.stat();
+    const windows = size > HEAD_READ_BYTES + TAIL_READ_BYTES
+      ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
+      : [[0, size]];
+    for (const [start, len] of windows) {
+      const buf = Buffer.allocUnsafe(len);
+      const { bytesRead } = await fh.read(buf, 0, len, start);
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; } // 空行 / 窗口切开的半行
+        if (typeof entry?.cwd === 'string' && entry.cwd) out.add(entry.cwd);
+      }
+    }
+  } catch { /* 读不出：没有证据 */ } finally {
+    await fh?.close().catch(() => {});
+  }
+  return out;
 }
 
 // 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
@@ -1267,16 +1350,13 @@ export async function listSessions(cwd, opts = {}) {
 //
 // 不存在 / 不属于本 cwd / id 非法一律静默跳过（allSettled）：调用方拿到的就是「确实还在这个工作区里」
 // 的那些。会话被删掉后 manual 标记会残留在 read-state 里（那张表不知道文件没了），这里正是它的收口。
-export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {}) {
+export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR, memberOptions } = {}) {
   const wanted = [...new Set(ids || [])].filter(id => isSafeSessionId(id));
   if (!wanted.length) return [];
-  // 候选目录 = 工作区自身 + 它的托管 worktree。只查父仓的话，worktree 里被手动标未读的会话
+  // 候选目录 = 项目自身 + 它的成员目录（与 listSessionsPage 同一份）。只查父仓的话，worktree 里被手动标未读的会话
   // 在被 limit 挤出时间窗后就永远拉不回来了——标记还在 read-state 里，行却再也不出现，
   // 而长按确认框对用户的承诺恰恰是「这一行会一直显示未读，直到你再次打开它」。
-  const owners = [
-    { cwd, worktree: null, gone: false },
-    ...(await listManagedWorktreeDirs(cwd, baseDir)).map(w => ({ cwd: w.cwd, worktree: w.name, gone: w.gone })),
-  ];
+  const owners = [{ cwd, member: null }, ...(await listProjectMemberDirs(cwd, baseDir, memberOptions)).map(m => ({ cwd: m.cwd, member: m }))];
   const settled = await Promise.allSettled(wanted.map(async id => {
     // 逐个候选找 jsonl；都没有就抛，由下面的 filter 丢弃（不返回幽灵行）。
     //
@@ -1319,9 +1399,8 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR } = {})
       model: (meta && meta.model) || null,
       entrypoint: (meta && meta.entrypoint) || null,
       lastUsedAt: Math.round(activityAt ?? st.mtimeMs),
-      // 与 listSessionsPage 的行同形：父仓行不带 cwd，worktree 行带——前端点开时要用真实 cwd
-      ...(owner.worktree ? { cwd: owner.cwd, worktree: owner.worktree } : {}),
-      ...(owner.gone ? { worktreeGone: true } : {}),
+      // 与 listSessionsPage 的行同形：项目根的行不带 cwd，成员目录的行带——前端点开时要用真实 cwd
+      ...(owner.member ? memberRowFields(owner.member) : {}),
     };
   }));
   return settled
@@ -1345,9 +1424,7 @@ export function invalidateListCache(cwd) {
 // 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
 // size 由 listSessionsPage 的 stat 透传复用（省一次 syscall）；未传时回退 fstat，保持可独立调用。
 async function readHeadMeta(file, size) {
-  // cwd 是 CLI 逐条记录写进 transcript 的**真实路径**（非有损，不同于 project 目录名那份编码）。
-  // 孤儿 worktree 的归属回验只认它，见 listManagedWorktreeDirs。
-  const meta = { title: '', model: null, entrypoint: null, cwd: null };
+  const meta = { title: '', model: null, entrypoint: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
   let aiTitle = '', firstUser = '', firstCmd = '';
@@ -1368,7 +1445,6 @@ async function readHeadMeta(file, size) {
         // 见 app.js writeSessionEntrypoint），恒在头部、早于真实消息行——排除掉，否则所有 web 会话的
         // entrypoint 全部被它抢先误判成 cli。
         if (!meta.entrypoint && entry.entrypoint && entry.type !== 'entrypoint-marker') meta.entrypoint = entry.entrypoint;
-        if (!meta.cwd && typeof entry.cwd === 'string' && entry.cwd) meta.cwd = entry.cwd;
         if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
         if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
           aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
@@ -1836,9 +1912,9 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
 // 放宽它等于削弱纵深防御。本函数只服务「工作区级」的判断——最典型的是 session:list 的
 // currentSessionId：那个指针存在父仓名下（工作区轴归父仓），值却可能是 worktree 里的会话，
 // 按父仓单点查会恒判不存在，侧栏于是永远不高亮当前会话。
-export async function sessionExistsInWorkspace(cwd, id, { baseDir = CLAUDE_DIR } = {}) {
+export async function sessionExistsInWorkspace(cwd, id, { baseDir = CLAUDE_DIR, memberOptions } = {}) {
   if (await sessionFileExists(cwd, id, { baseDir })) return true;
-  for (const w of await listManagedWorktreeDirs(cwd)) {
+  for (const w of await listProjectMemberDirs(cwd, baseDir, memberOptions)) {
     if (await sessionFileExists(w.cwd, id, { baseDir })) return true;
   }
   return false;
