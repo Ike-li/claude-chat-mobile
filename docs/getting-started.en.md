@@ -214,12 +214,14 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 `WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
 decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
-A git worktree outside the repository (`../repo-<branch>` and friends) must be listed as its own absolute path.
-**The one exception is a "managed worktree"**: anything under `<allowlisted workspace>/.claude/worktrees/<single-segment name>`
-(the default landing spot for `EnterWorktree`, `--worktree`, and agent isolation) is authorized by derivation via
-`resolveManagedWorktree` without being listed in `WORKDIRS`, and its sessions are folded into the parent repo's session
-list. Depth is fixed at 1, the prefix is compared after `realpath`, and a non-existent directory is rejected.
-Anything outside that shape still has to be listed explicitly.
+
+`WORKDIRS` is your list of **connected folders**, with the same meaning as the folder list the Claude desktop app opens up to your phone:
+
+- **Subfolders just work**: once `~/code` is connected, a session in `~/code/app` needs no separate entry; each subfolder that has sessions gets its own section in the drawer. When connected folders nest, the deepest one owns the path.
+- **git worktrees follow their repository**: when a repository is connected, its worktrees — managed ones under `.claude/worktrees/` and sibling directories outside the repo (`../repo-<branch>`) alike — are usable, and their sessions are folded into the repository's list. Ownership is verified from the repository's side in both directions (the worktree's `.git` pointer and the repository's back-link must agree), and git is never executed to decide it.
+- **Can't be connected**: your home folder itself, the disk root, `~/.claude`, and this app's own data directory.
+- **Add folders from the phone**: tap the folder chip on the new-session page, or "＋ Add folder" at the bottom of the drawer — it browses folder names inside your home folder only, and greys out the ones that can't be added with the reason. Adding writes the folder back into `WORKDIRS` in the config file and takes effect immediately; if your folder list comes from environment variables (the two legacy keys below), it can't be changed from the phone.
+- **No folder**: a new session can also live outside every folder, in a throwaway directory the app creates (on macOS under `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`, on Linux under `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`). It is created when the first message is sent and deleted together with the session (kept if other sessions still use it).
 
 The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.

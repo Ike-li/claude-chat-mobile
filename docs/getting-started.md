@@ -203,10 +203,14 @@ node scripts/setup.js \
 
 `WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
 `node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
-仓库外的 git worktree（`../repo-<分支>` 这类）必须作为独立绝对路径显式加入。**唯一例外是「托管 worktree」**：
-落在 `<已放行工作区>/.claude/worktrees/<单段目录名>` 下的那些（`EnterWorktree`、`--worktree`、agent isolation
-的默认落点）由 `resolveManagedWorktree` 派生放行，无需写进 `WORKDIRS`，其会话也会并进父仓的会话列表；
-深度固定 1、realpath 后比前缀、目录不存在即拒。跳出这个形态的仍然一律要显式加入。
+
+`WORKDIRS` 就是「已连接的文件夹」，与 Claude 桌面端给手机开的那份文件夹清单同一语义：
+
+- **子文件夹直接可用**：连上 `~/code` 之后，`~/code/app` 里开会话不必再单独列出；抽屉里有会话的子文件夹各成一节。连接互相嵌套时归最深的那个。
+- **git worktree 跟随所属仓库**：仓库已连接时，它的 worktree——`.claude/worktrees/` 下的托管 worktree、仓库外的平级目录（`../repo-<分支>`）都算——直接可用，会话并进仓库的会话列表。归属从仓库一侧双向回验（worktree 的 `.git` 指针与仓库侧的回链必须互相对上），全程不执行 git。
+- **不能连接的**：家目录本身、磁盘根、`~/.claude` 与本应用的数据目录。
+- **手机上可以直接添加**：新会话页点文件夹胶囊，或抽屉末尾「＋ 添加文件夹」——只浏览家目录里的目录名，不能加的会置灰并写明原因。添加会写回配置文件里的 `WORKDIRS` 并立即生效；工作区列表来自环境变量（下面那两个旧键）时手机上改不了。
+- **无文件夹**：新会话也可以不放进任何文件夹，跑在应用自建的一次性目录里（macOS 在 `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`，Linux 在 `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`）。第一条消息发出时才建，删除会话时一并删除（目录里还有别的会话时保留）。
 
 旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
 优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。

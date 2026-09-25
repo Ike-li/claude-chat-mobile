@@ -444,12 +444,11 @@ function cmdSchema() {
     if (!group.items.length) continue;
     lines.push('', `【${group.label.zh}】`);
     for (const item of group.items) {
-      // ★ 判据用 kind 而不是 item.readonly：后者是**给手机面板的**渲染提示，list 项被标成
-      // readonly 只是因为前端没有数组编辑器。在 CLI 上照搬会告诉用户「WORKDIRS 只读」——
-      // 而他此刻正拿着能改它的那个命令。
+      // ★ 判据用 kind 而不是 item.readonly：后者是**给手机面板的**渲染提示。在 CLI 上照搬会告诉用户
+      // 「WORKDIRS 只读」——而他此刻正拿着能改它的那个命令。list 项曾标「仅 CLI / 桌面端可改」：
+      // 手机设置页有了列表编辑器（2026-09-11）、又有了「添加文件夹」之后，那句话不再成立，已删。
       const tags = [
         item.kind === 'readonly' ? '只读' : null,
-        item.kind === 'list' ? '仅 CLI / 桌面端可改' : null,
         item.default !== undefined ? `默认 ${item.default}${item.unit || ''}` : null,
         reloadKindOf(item.key) === 'hot' ? '热加载' : null,
       ].filter(Boolean);

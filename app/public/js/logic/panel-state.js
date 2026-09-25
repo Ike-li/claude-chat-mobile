@@ -512,12 +512,12 @@ export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady 
   return false;
 }
 
-// 空首页「最近活跃」：把各显式 workdir 的 session 列表摊平，按 lastUsedAt 降序取 topN。
+// 空首页「最近活跃」：把各项目的 session 列表摊平，按 lastUsedAt 降序取 topN。
 // 每条附 cwd + workspaceName，前端可一键 session:switch，不必先开侧栏目录树。
 // dirLists: Array<{ cwd, sessions, workspaceName? }>
-//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)
+//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)（子项目的「父名 › 相对路径」、「无文件夹」靠它）
 // 无 id 的行跳过；缺 lastUsedAt 的排最后（仍可点开）；非法 limit 回落默认 8。
-// git worktree 路径若要用，须写入 workdirs.json 成为独立 workdir，不再有自动分组通道。
+// worktree 会话由服务端并进所属仓库的列表（listProjectMemberDirs），这里不再分组。
 export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}) {
   const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
   const rows = [];

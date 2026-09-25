@@ -159,7 +159,7 @@ AUTH_TOKEN（必备，无它不启动） ‖ 公网 IdP 策略（可选，当前
         ↓
 设备信任（真·本机直连豁免；经 IdP 进来的连接默认也豁免，DEVICE_APPROVAL_SCOPE=all 时不豁免）
         ↓
-WORKDIRS 范围门
+已连接文件夹范围门（WORKDIRS）
         ↓
 CLI permissions.allow + Web 当前权限档
         ↓
@@ -181,6 +181,9 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
   - ⚠ 「替代」是字面意义上的：经 Access 进来的连接**完全不查** `trusted-devices.json`，于是「已受信任的设备」那张表**管不到它们**——吊销一台经隧道进来的手机既不会断线也不会被拦（2026-09-10 实测确认）。判据在 `shouldBypassDeviceApproval` 的第一行。
   - 想让那张表对所有路径生效，把 `DEVICE_APPROVAL_SCOPE` 设为 `all` 并重启。它是**覆盖全部路径的总开关**：经 Access 进来的新设备要批准一次，本机样 Host 那条也一并关掉。后半条是必须的——那条判据读 Host，而 **Host 是客户端填的头**，纯 TCP 转发（`ssh -R`、frp tcp）不按 Host 路由，远程来客自填 `Host: localhost` 就满足「peer 本机 + Host 本机」（peer 本来就是 loopback）。TCP 层面区分不了真本机与隧道转发，加判据也挡不住（转发头纯转发不加，`localAddress` 两者相同），所以交给知道自己拓扑的人决定（2026-09-17 安全审查 H1）。开了之后自救通道是 `node scripts/device.js approve`、菜单栏、跑 `npm start` 那个终端里按回车——都不读网络判据。缺省保持「Access 替代审批」且本机样放行，因为翻默认会让既有安装升级后一重启就把所有在用设备打回待审，而那时信任表里没有任何一台能用来批准。
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。
+  - 范围按官方桌面端「已连接的文件夹」语义，判据只有一份：`app/src/sessions/folder-access.js` 的 `resolveAuthorizedCwd`，一律 realpath 后比较。已连接文件夹的子目录直接可达（嵌套时归最深的根）；所属仓库已连接的 git linked worktree（含仓库外的平级目录）跟随仓库，归属从仓库一侧双向回验、**全程不执行 git**（`.git/config` 模型可写，SCOPE-04）；「无文件夹」会话跑在应用数据目录下的 scratch 根里，只认 app 自己建的 `scratch-YYYY-MM-DD-xxxxxx` 子目录（SCRATCH-01）。`~/.claude` 与 CCM 数据目录整棵是禁区。
+  - **显式传入越界 cwd 一律拒绝**（`routeCwd` 返回 null 并记 `scope_violation` 审计），不回落到当前查看目录——抽屉按项目请求列表、离线队列带着入队时的 cwd 重发，回落会把 A 的会话画到 B 下、把消息投进别的工作区（SCOPE-05）。只有读类请求额外放行正在跑的实例自己的 cwd，保住「热移除后已开会话继续用」。
+  - 手机上添加文件夹（`folders:add`）只浏览家目录内的目录名（不跟随 symlink、隐藏点目录），家目录本身、磁盘根、禁区、linked worktree 不能添加（FOLDER-01）；只写配置文件内联 `WORKDIRS` 并同步热加载，来源是环境变量或旧外置文件、或配置文件不存在时拒绝。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
 安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。
@@ -260,7 +263,8 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 | Claude 对话 | `~/.claude/projects/` transcript | CLI/Web 续接与稳定历史 |
 | Web 实例运行态 | 内存中的 `AgentSession` | 流式 turn、审批、事件缓冲 |
 | CCM 控制面 | `CCM_DATA_DIR` | 会话指针、设备、审批、审计、推送、已读位点与缓存 |
-| 工作区白名单 | `WORKDIRS` | 限定可见与可操作目录（首项 = 主工作目录） |
+| 已连接的文件夹 | `WORKDIRS` | 限定可见与可操作目录（含子目录与所属 worktree；首项 = 主工作目录） |
+| 无文件夹会话的目录 | 应用数据目录下的 `scratch-workspaces/` | 一次性 cwd；删会话时一并删除，卸载 `--purge` 只报不删 |
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |
