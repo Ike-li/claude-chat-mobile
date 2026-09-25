@@ -78,6 +78,15 @@ test('缺省随机后缀：4 位、落在 CLI 字符集内，同一时刻反复�
   assert.ok(new Set(fromMsg).size > 1, '随机段没有参与');
 });
 
+// 后缀是撞名时唯一的区分：worktreeNameFromMessage 的名字里没有时间戳，前三个词相同的任务开多了只靠它。
+// 4 位要用满 base-36（约 168 万种）；只用十六进制就只剩 65536 种，同前缀 100 棵时撞名概率约 7%，撞上即
+// createSessionWorktree 返回 exists、新会话开不出来。800 个字符里一个 g–z 都不出现的概率约 (16/36)^800。
+test('缺省随机后缀用满 base-36 字母表（不是十六进制）', () => {
+  const now = new Date('2026-09-11T08:30:00Z');
+  const suffixes = Array.from({ length: 200 }, () => generateWorktreeName(now).slice(-4)).join('');
+  assert.match(suffixes, /[g-z]/, `200 个后缀里没有 g–z：${suffixes.slice(0, 40)}…`);
+});
+
 // ── 纯函数：从第一条消息取名 ────────────────────────────────────────────────
 // 对照 Claude Desktop 的 generateWorktreeName(branchHint)：名字跟任务内容相关，
 // 在 `git worktree list` 和分支名里一眼认得出这棵树在干什么，时间戳做不到这件事。

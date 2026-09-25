@@ -13,7 +13,7 @@
 // git 失败）一律 fail-closed 报不干净——查不到状态时报 clean 等于给删除放行。
 // 对照 Claude Desktop：它有定时 reaper 自动清扫过期的脏 worktree，靠的是它能查 PR 合并状态
 // （branchLanded）。本仓没有那条信息，判"已合并"会判错，所以不做自动回收。
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 import { gitExec } from './git-workspace.js';
 import { CLAUDE_DIR_NAME } from '../shared/claude-home.js';
@@ -43,10 +43,11 @@ export function sanitizeWorktreeName(raw) {
   return cut;
 }
 
-// 防重名后缀：4 位十六进制。用 crypto 不是因为它要保密（猜中一个 worktree 目录名拿不到任何东西），而是
+// 防重名后缀：4 位 base-36（约 168 万种，与原来 Math.random 那版同量级；worktreeNameFromMessage 的名字里
+// 没有时间戳，撞名时只靠它区分，十六进制只有 65536 种）。用 crypto 不是因为它要保密（猜中一个 worktree 目录名拿不到任何东西），而是
 // CodeQL 的 js/insecure-randomness 会把 Math.random 顺着「worktree 路径 → 实例 cwd → 会话指针」追进
 // 会话判断里，链路上任何一处签名变化都会重报同一个误报（#21–#28、#31–#33 全部驳回过）。换掉源头一次了结。
-const randomSuffix = () => randomBytes(2).toString('hex');
+const randomSuffix = () => randomInt(36 ** 4).toString(36).padStart(4, '0');
 
 /** 缺省 worktree 名：`ccm-<日期>-<时分>-<随机>`。可读（列表里认得出）+ 唯一。 */
 export function generateWorktreeName(now = new Date(), rand = randomSuffix) {
