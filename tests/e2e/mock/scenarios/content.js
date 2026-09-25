@@ -107,6 +107,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armSyncAckTimeout(); },
     },
     {
+      // P0-40c：武装「下一条 user:message 回一个可重试的负 ack」，前端会把它转进 outbox 自动重发。
+      command: 'test:arm-send-transient-fail',
+      run: async () => { getContext().armSendTransientFail(); },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。

@@ -273,6 +273,11 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-40c：武装「下一条 user:message 回一个可重试的负 ack（服务端临时失败）」。前端据此把消息转进 outbox
+// 自动重发——「在线发送没被确认」那条路要带上什么（worktree 意图），只有走一遍它才验得到。
+// 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
+// 一次性：拒一次就解除，重发那条照常处理。
+let sendTransientFailArmed = false;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -471,6 +476,7 @@ function resetMockState() {
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  sendTransientFailArmed = false;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -2897,6 +2903,7 @@ io.on('connection', socket => {
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armSendTransientFail: () => { sendTransientFailArmed = true; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5087,6 +5094,12 @@ io.on('connection', socket => {
       if (typeof ack === 'function') {
         ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
       }
+      return;
+    }
+    if (sendTransientFailArmed) {
+      sendTransientFailArmed = false;
+      console.log('[mock] user:message transient failure (armed)');
+      if (typeof ack === 'function') ack({ ok: false, error: '临时失败（mock）', retryable: true });
       return;
     }
     // REL-01：真实 app/server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；

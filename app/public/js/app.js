@@ -4000,6 +4000,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // markOutboxBlocked 会在它上面挂「未发送 + 重发」按钮。不传的话在线 requeue 的消息在屏幕上
       // 就是一颗永远转圈的气泡，用户既看不出它在排队、也没有手动重发的入口。
       bubbleEl: pendingBubble,
+      // worktree 意图与 text 同属「发出那一刻的快照」（离线入队那条同理）。漏了它，在线没被确认、
+      // 转进 outbox 重发的第一条消息会开在父仓里——勾的「新 worktree」静默失效。
+      ...worktreeArgs,
     };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
     // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字。
