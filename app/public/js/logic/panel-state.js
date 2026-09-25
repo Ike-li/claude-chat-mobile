@@ -536,6 +536,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
         // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
         cwd: s.cwd || cwd,
+        workspaceCwd: cwd, // 所属项目的键（这一行来自哪一节的列表）：首页胶囊按它一个项目一个
         workspaceName,
         worktree: s.worktree ?? null,
         entrypoint: s.entrypoint ?? null,
@@ -549,6 +550,20 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
     return tb - ta;
   });
   return rows.slice(0, cap);
+}
+
+// 首页的项目胶囊：一个项目一个，取它最近的那一条（recent 已按时间降序）。按行自己的 cwd 去重不行——
+// worktree、scratch 目录里的会话各有各的目录，同一个项目会冒出好几个同名胶囊。
+export function recentWorkspaceChips(recent) {
+  const seen = new Set();
+  const chips = [];
+  for (const r of Array.isArray(recent) ? recent : []) {
+    const key = r.workspaceCwd ?? r.cwd;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push(r);
+  }
+  return chips;
 }
 
 // 首页「最近活跃」这次合并有没有缺角。listMain 逐 workdir 发 session:list，单目录 4s 超时兜底

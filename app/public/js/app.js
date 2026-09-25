@@ -79,6 +79,7 @@ import {
   resolveHeaderAttentionChip,
   userBubbleFold,
   mergeRecentSessionsAcrossWorkspaces,
+  recentWorkspaceChips,
   remainingOlderSessionCount,
   formatNotifyIdentity,
   notifySessionTag,
@@ -8035,15 +8036,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     };
 
     const renderDashRecents = (recent) => {
-      // 工作区 chips：按最近会话时间去重排序，点 chip → 进入该区最近一条
+      // 工作区 chips：一个项目一个、按最近会话时间排，点 chip → 进入该区最近一条
       if (workspacesSection && workspacesList) {
-        const seen = new Set();
-        const wsOrder = [];
-        for (const s of recent) {
-          if (seen.has(s.cwd)) continue;
-          seen.add(s.cwd);
-          wsOrder.push(s);
-        }
+        const wsOrder = recentWorkspaceChips(recent);
         workspacesList.innerHTML = '';
         for (const s of wsOrder) {
           const chip = el(`
@@ -8053,7 +8048,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             </button>`);
           chip.querySelector('.dash-ws-icon').textContent = '📁';
           chip.querySelector('span.truncate').textContent = s.workspaceName;
-          chip.title = s.cwd;
+          chip.title = s.workspaceCwd;
           chip.onclick = (e) => {
             e.stopPropagation();
             haptic('tap');
