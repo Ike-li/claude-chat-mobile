@@ -11,7 +11,7 @@ import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -63,6 +63,7 @@ test.before(async () => {
   server = await spawnServer({
     AUTH_TOKEN: TOKEN, WORK_DIRS: work, CCM_DATA_DIR: join(root, 'data'),
     HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), SESSION_DELETE_QUIET_MS: '0',
+    CCM_AUDIT_FILE: join(root, 'audit-records.json'),
   });
   sock = ioClient(`http://127.0.0.1:${server.port}`, {
     auth: { token: TOKEN, deviceToken: 'inv-nofolder-device' },
@@ -102,6 +103,46 @@ test('首条消息：懒建一个 scratch 目录，会话开在里面，归「�
   assert.ok(latestInstances()?.projects?.some(p => p.kind === 'scratch' && p.key === realpathSync(scratchRoot)),
     '有会话开在里面，抽屉里就该有「无文件夹」这一节——否则这一行只能被画进「不在已连接的文件夹里」');
   await emit('session:close', { instanceId: inst.instanceId });
+});
+
+// 「无文件夹」那一节的键是 scratch 根：它只是新会话页的启动键，不是可路由的目录。按 cwd 发的请求（@ 文件搜索、
+// 权限规则、刷新配置）带着它来时应当安静地拒——那不是越界尝试，记成 scope_violation 会让服务面板满屏假告警。
+// 会话自己的 scratch 目录照常可用（前端在那一节里改用它）。
+test('按 cwd 的请求：scratch 根安静地拒（不记越界），会话自己的 scratch 目录照常可用', async () => {
+  const inst = await openNoFolderSession('search');
+  writeFileSync(join(inst.cwd, 'notes.md'), '# x\n');
+  const inside = await emit('files:search', { cwd: inst.cwd, query: 'notes' });
+  assert.equal(inside.ok, true, `会话自己的 scratch 目录里搜不了文件：${JSON.stringify(inside)}`);
+  assert.ok(inside.paths.some(p => p.includes('notes.md')), JSON.stringify(inside.paths));
+  assert.equal((await emit('permissions:rules', { cwd: inst.cwd }))?.cwd, inst.cwd, '会话自己的 scratch 目录读不到权限规则');
+
+  assert.equal((await emit('files:search', { cwd: scratchRoot, query: 'notes' })).ok, false);
+  // 「没有审计」要能看见才算数：随后发一条真越界的，等它落盘，再断言 scratch 根那条不在
+  const elsewhere = join(root, 'not-connected');
+  mkdirSync(elsewhere, { recursive: true });
+  await emit('files:search', { cwd: elsewhere, query: 'x' });
+  const auditPath = join(root, 'audit-records.json');
+  const violations = () => {
+    try {
+      const audit = existsSync(auditPath) ? JSON.parse(readFileSync(auditPath, 'utf8')) : {};
+      return (Array.isArray(audit) ? audit : (audit.records ?? [])).filter(r => r.action === 'scope_violation');
+    } catch { return []; }
+  };
+  await waitFor(() => violations().some(r => r.target === elsewhere), '真越界那条落盘（正对照）');
+  assert.deepEqual(violations().filter(r => r.target === scratchRoot || r.target === realpathSync(scratchRoot)), [],
+    'scratch 根被记成了越界');
+  await emit('session:close', { instanceId: inst.instanceId });
+});
+
+// 只读设置、不列文件的两条例外：新会话页的默认档和模型清单本来就是在 scratch 根上探的（session:new 的 scout），
+// 权限规则与「刷新配置」带着「无文件夹」的键来，就该落到同一个目录上，而不是回一句「不在已连接的文件夹里」。
+test('新会话页：权限规则与刷新配置认「无文件夹」的键（落到 scratch 根，与 session:new 同一个目标）', async () => {
+  assert.equal((await emit('session:new', { cwd: scratchRoot }))?.ok, true);
+  const rules = await emit('permissions:rules', { cwd: scratchRoot });
+  assert.equal(rules?.ok, true, `权限规则被拒：${JSON.stringify(rules)}`);
+  assert.equal(rules.cwd, realpathSync(scratchRoot));
+  const refreshed = await emit('config:refresh', { cwd: scratchRoot });
+  assert.equal(refreshed?.ok, true, `刷新配置被拒：${JSON.stringify(refreshed)}`);
 });
 
 // 【这条守的不是分配器的并发合并】真 server 上两条连发的首条消息实际被串行化了：第一条的懒开在第二条

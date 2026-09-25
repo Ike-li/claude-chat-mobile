@@ -143,4 +143,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('xpath=following-sibling::*[1]').locator('[data-instance-id="inst_fresh"]')).toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
+
+  // 「无文件夹」那一节的键是 scratch 根，它只是新会话页的启动键：@ 找文件拿它去问，服务端会拒。
+  // 新会话页上还没有目录、也就没有文件；会话开起来之后，文件在它自己的 scratch 目录里。
+  test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
+    await openPickerFromCompose(page);
+    await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
+    const input = page.locator('#input');
+    await input.fill('@');
+    await expect(page.locator('[data-testid="at-mention-empty"]')).toHaveText('无匹配文件');
+
+    await input.fill('');
+    await sendChatMessage(page, '在无文件夹里说句话');
+    await expect(page.locator('#topProjectText')).toHaveText('无文件夹');
+    await expect(input).toHaveValue('');
+    await input.fill('@');
+    await expect(input).toHaveValue('@');
+    await expect(page.locator('[data-testid="at-mention-chip"]').first()).toBeVisible({ timeout: 3_000 });
+    await expectNoBrowserErrors(page);
+  });
 });

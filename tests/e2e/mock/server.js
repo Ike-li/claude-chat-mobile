@@ -2407,6 +2407,8 @@ io.on('connection', socket => {
     if (typeof callback !== 'function') return;
     const q = String(payload?.query || '').toLowerCase().trim();
     console.log(`[mock] files:search query=${q}`);
+    // 同真 server：「无文件夹」的键（scratch 根）不可路由，按 cwd 找文件要用会话自己的 scratch 目录
+    if (payload?.cwd === MOCK_SCRATCH_ROOT) return callback({ ok: false, error: '这个目录不在已连接的文件夹里' });
     // 空 query：对齐真服务 / CLI @ 补全，返回全部候选（不筛）
     const paths = q
       ? MOCK_MENTION_FILES.filter(p => p.toLowerCase().includes(q))

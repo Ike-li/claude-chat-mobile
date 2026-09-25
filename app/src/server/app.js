@@ -518,6 +518,9 @@ const routeCwd = (cwd, { tier = 'open' } = {}) => {
   const auth = routableAuth(cwd);
   if (auth) return auth.path;
   if (tier === 'read' && isLiveInstanceCwd(cwd)) return cwd;
+  // 「无文件夹」的键（scratch 根）只是新会话页的启动键，不是可路由的目录——带着它来的请求要拒，但那不是
+  // 越界尝试：记成 scope_violation 会让每个「无文件夹」会话都在服务面板里刷出红色告警。
+  if (isNoFolderKey(cwd)) return null;
   console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
   // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
   // 目录越界信号的价值在"发生过"本身，拒绝由调用方完成。
@@ -4565,7 +4568,8 @@ registerSocketConnection(io, socket => {
   on(socket, 'permissions:rules', async (payload, ack) => {
     if (typeof ack !== 'function') return;
     // 读档：已授权目录，或正在跑的实例自己的 cwd（其工作区已被热移除时，那里正是用户在看的会话的规则）。
-    const cwd = routeCwd(payload?.cwd, { tier: 'read' });
+    // 「无文件夹」的键落到 scratch 根：新会话页的默认档本来就是在那里探的（session:new 的 scout）。
+    const cwd = isNoFolderKey(payload?.cwd) ? scratchRootKey() : routeCwd(payload?.cwd, { tier: 'read' });
     if (cwd === null) return ack({ ok: false, cwd: null, rules: null, error: OUT_OF_SCOPE_ERROR });
     try {
       const resolved = await sdkResolveSettings({ cwd, settingSources: ['user', 'project', 'local'] });
@@ -4670,7 +4674,8 @@ registerSocketConnection(io, socket => {
   // ensureCliDefaults 内部已 try/catch 不抛（失败落 L4 硬默认形状），这里的 try/catch 是双重兜底，
   // 保证 broadcastInstances/ack 本身出岔子时也不把 socket 处理器崩掉。
   on(socket, 'config:refresh', async (payload, ack) => {
-    const cwd = routeCwd(payload?.cwd); // 缺省落 viewingCwd；显式越界拒绝（SCOPE-05）
+    // 缺省落 viewingCwd；显式越界拒绝（SCOPE-05）；「无文件夹」的键落到 scratch 根（同 permissions:rules）
+    const cwd = isNoFolderKey(payload?.cwd) ? scratchRootKey() : routeCwd(payload?.cwd);
     if (cwd === null) {
       if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
       return;

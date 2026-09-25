@@ -674,6 +674,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const drivingCwdOf = (instanceId) => resolveSessionCwd({ instances: instancesList, viewingInstanceId: instanceId, workspaceCwd: currentCwd });
   // 文件/改动面板跟的是「当前会话在哪个工作树」，不是 currentCwd（判据见 logic/panel-state.js）。
   const panelCwd = () => resolvePanelCwd({ instances: instancesList, viewingInstanceId, workspaceCwd: currentCwd });
+  // 按 cwd 找文件、读规则时用哪个目录。「无文件夹」那一节的键是 scratch 根——它只是新会话页的启动键，
+  // 服务端不让拿它找文件；看着一个会话时改用它自己的 scratch 目录。新会话页上仍是 scratch 根（还没有目录）。
+  const requestCwd = () => (projectsState.isNoFolder(currentCwd) && viewingInstanceId ? panelCwd() : currentCwd);
   // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
   const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
   // 抽屉小节的键 = 项目键（已连接的文件夹、其下有会话的子文件夹、「无文件夹」；旧载荷回落 dirs）
@@ -4203,7 +4206,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (reqId === atMentionReqId) renderAtMentionList([], { emptyHint: t('未连接，无法搜索文件') });
         return;
       }
-      socket.emit('files:search', { cwd: currentCwd, query: hit.query }, res => {
+      const cwd = requestCwd();
+      // 「无文件夹」的新会话页：目录要等首条消息才建，还没有任何文件
+      if (projectsState.isNoFolder(cwd) && !viewingInstanceId) { renderAtMentionList([], { emptyHint: t('无匹配文件') }); return; }
+      socket.emit('files:search', { cwd, query: hit.query }, res => {
         if (reqId !== atMentionReqId) return; // 迟到 ack：期间已改 query / 取消触发，丢弃
         if (!res?.ok) {
           renderAtMentionList([], { emptyHint: res?.error || t('文件搜索失败') });
@@ -6133,7 +6139,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let permissionRulesCache = null;
   async function loadPermissionRules() {
     const res = await new Promise(resolve => {
-      socket.timeout(5000).emit('permissions:rules', { cwd: currentCwd || null }, (err, r) => resolve(err ? null : r));
+      socket.timeout(5000).emit('permissions:rules', { cwd: requestCwd() || null }, (err, r) => resolve(err ? null : r));
     });
     // 断线/读失败：保留上一次拿到的名单，不把已经显示对的东西刷成空
     if (res?.ok === true) permissionRulesCache = res.rules;
