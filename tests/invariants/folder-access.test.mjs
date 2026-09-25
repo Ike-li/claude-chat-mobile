@@ -43,6 +43,8 @@ test('子目录直接可达（官方语义）：放行，项目是子目录本�
   assert.equal(auth.root, a);
   assert.equal(auth.projectKey, sub, '子文件夹里的会话在抽屉里自成一个项目');
   assert.equal(auth.scopeRoot, a);
+  assert.equal(auth.worktreeRoot, null, '不在 worktree 里就不能带回 worktree 根');
+  assert.equal(auth.repo, null);
 });
 
 test('嵌套连接时归最长的那个根', () => {
@@ -88,6 +90,19 @@ test('禁区：连接范围内的禁区子树不是合法 cwd', () => {
   assert.ok(resolveAuthorizedCwd(join(a, 'x'), ctx), '禁区只挡它自己的子树，不连坐兄弟目录');
 });
 
+// 禁区挡的是「连了个祖先（如 CCM 仓库）就顺带把数据目录开成会话目录」。连接根本身显式开在禁区里面，
+// 是用户自己写进配置的选择（大量 S2 测试就是 WORK_DIRS=<CCM_DATA_DIR>/repo），显式优先。
+test('禁区：显式连接的根开在禁区内部时，显式优先', () => {
+  const { base } = fixture();
+  const dataDir = join(base, 'data');
+  const repo = join(dataDir, 'repo');
+  mkdirSync(join(repo, 'sub'), { recursive: true });
+  const ctx = { connected: [repo], forbidden: [dataDir] };
+  assert.equal(resolveAuthorizedCwd(repo, ctx)?.root, repo);
+  assert.equal(resolveAuthorizedCwd(join(repo, 'sub'), ctx)?.root, repo);
+  assert.equal(resolveAuthorizedCwd(dataDir, ctx), null, '禁区本身仍不放行（没有连接根覆盖它）');
+});
+
 test('不存在的路径、普通文件：拒绝', () => {
   const { a } = fixture();
   writeFileSync(join(a, 'file.txt'), 'x');
@@ -111,6 +126,22 @@ test('extraRoots：已被热移除的工作区，对它上面已开的会话仍�
   const removed = join(base, 'outside');
   assert.equal(resolveAuthorizedCwd(removed, { connected: [a] }), null);
   assert.equal(resolveAuthorizedCwd(removed, { connected: [a], extraRoots: [removed] })?.root, removed);
+});
+
+// 热移除保护只多出「那个实例自己的根」，不是开闸：带着被移除的根，别的越界路径照样拒。
+test('extraRoots：保留的只有那一个根，别的仍越界', () => {
+  const { base } = fixture();
+  const removed = join(base, 'outside');
+  const ctx = { connected: [], extraRoots: [removed] };
+  assert.equal(resolveAuthorizedCwd(join(base, 'scope-a'), ctx), null);
+  assert.equal(resolveAuthorizedCwd(join(base, 'scope-ab'), ctx), null);
+  assert.equal(resolveAuthorizedCwd(base, ctx), null);
+});
+
+test('一个连接文件夹都没有：一律拒绝', () => {
+  const { a } = fixture();
+  assert.equal(resolveAuthorizedCwd(a, { connected: [] }), null);
+  assert.equal(resolveAuthorizedCwd(a, {}), null);
 });
 
 test('scratch：根本身是启动键，mkdtemp 形态的单段目录及其子目录放行，其它都不认', () => {

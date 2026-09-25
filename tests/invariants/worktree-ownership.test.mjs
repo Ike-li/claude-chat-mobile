@@ -80,6 +80,8 @@ test('托管 worktree（名字带 / 分段）落在仓库子树里：按子目�
   assert.equal(auth?.kind, 'connected');
   assert.equal(auth.root, repo);
   assert.equal(auth.projectKey, repo, '托管 worktree 的会话也要挂在仓库名下，不能因为能按子目录授权就自成项目');
+  assert.equal(auth.worktreeRoot, managed, '已经在 worktree 里——懒建 worktree 靠它避免「worktree 里再套一棵」');
+  assert.equal(auth.repo, repo, '网关隔离靠它找到 CLI 会误读 settings.local.json 的那个主仓');
 });
 
 test('仓库没连接：它的 worktree 也不授权', () => {
@@ -163,6 +165,8 @@ test('worktree 自己被显式连接：显式优先，自成项目（兼容把�
   assert.equal(auth?.kind, 'connected');
   assert.equal(auth.root, sibling);
   assert.equal(auth.projectKey, sibling);
+  assert.equal(auth.worktreeRoot, sibling, '显式连接不改变「它物理上是一棵 worktree」这个事实');
+  assert.equal(auth.repo, repo);
 });
 
 test('listLinkedWorktrees：从仓库侧列出双向校验通过的 worktree，被篡改的不列', () => {

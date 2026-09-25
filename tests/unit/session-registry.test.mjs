@@ -18,6 +18,7 @@ import {
   applyTerminalStatesToSessions,
   hasBusyTerminalSessionForCwd,
   hasWaitingTerminalSessionForCwd,
+  hasTerminalSessionOverlapping,
   terminalStateKey,
   cliPresenceStep,
   findBlockingLiveAgent,
@@ -471,6 +472,19 @@ test('hasWaitingTerminalSessionForCwd：独立于分页行判断整个 cwd 是�
   assert.equal(hasWaitingTerminalSessionForCwd(CWD, undefined), false);
   // 两条判据互不吞并：跑着的那个仍要被 busy 判据看见
   assert.equal(hasBusyTerminalSessionForCwd(CWD, states), false);
+});
+
+// rewind 的否定证据（2026-09-24）：子目录可达之后，父目录或子目录里跑着的终端会话改的可能正是 rewind
+// 要覆盖的那批文件——只比 cwd 相等会把它们漏掉，而 rewind 没有下游兜底。判「重叠」= 一方是另一方的祖先。
+test('hasTerminalSessionOverlapping：父目录、子目录里在跑或在等的终端都算重叠，兄弟与前缀邻居不算', () => {
+  const at = (cwd, state) => new Map([[terminalStateKey(cwd, 'sid'), { state, source: 'cli' }]]);
+  assert.equal(hasTerminalSessionOverlapping(CWD, at(CWD, 'busy')), true, '同目录');
+  assert.equal(hasTerminalSessionOverlapping(CWD, at('/Users/you/code', 'busy')), true, '父目录里的终端也在改这批文件');
+  assert.equal(hasTerminalSessionOverlapping(CWD, at(`${CWD}/app`, 'waiting')), true, '子目录里等审批的终端');
+  assert.equal(hasTerminalSessionOverlapping(CWD, at('/Users/you/code/demo-x', 'busy')), false, '前缀邻居不是祖先');
+  assert.equal(hasTerminalSessionOverlapping(CWD, at('/Users/you/code/other', 'busy')), false, '兄弟目录');
+  assert.equal(hasTerminalSessionOverlapping(CWD, at(CWD, 'alive')), false, '空闲的终端不挡');
+  assert.equal(hasTerminalSessionOverlapping(CWD, undefined), false);
 });
 
 // 负证据（2026-07-28 真机 b06fb05d：杀掉 CLI 后 web 排队续接卡满 5 分钟）：注册表条目「曾观测到

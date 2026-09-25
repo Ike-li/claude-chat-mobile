@@ -23,6 +23,10 @@ export function registerFileSocketHandlers({
   rejectableSymlinkComponent,
   buildDiff,
   readPreview,
+  // 「已连接的文件夹」判据（SCOPE-04/05，由组装根注入）：cwd 是否授权 / 这个 cwd 的文件范围有哪些根。
+  // 缺省退回旧行为（只认白名单本身）——那是更窄的一侧，漏注入不会扩大授权面。
+  isAuthorizedCwd = null,
+  scopeRootsFor = null,
   logger = console,
 }) {
   on(socket, 'browse:list', (payload, ack) => {
@@ -102,20 +106,23 @@ export function registerFileSocketHandlers({
     return ack({ ok: true, ...result });
   });
 
-  // cwd 是否授权：仅 workdirs 白名单本身（git worktree 路径须显式列入）。
-  // attributePath 覆盖「cwd 是白名单子路径」的边角（例如临时落到子目录）。
+  // cwd 是否授权（git / 搜索这一侧的第二道闸）。注入的判据经 realpath 严判；缺省退回旧的
+  // 「白名单本身或其词法子路径」——只在 routeCwd 已 realpath 严判过的前提下才成立，故只作兜底。
   function cwdInWorkDirs(cwd, workDirs) {
-    if (!cwd || !Array.isArray(workDirs)) return false;
+    if (!cwd) return false;
+    if (typeof isAuthorizedCwd === 'function') return Boolean(isAuthorizedCwd(cwd));
+    if (!Array.isArray(workDirs)) return false;
     if (workDirs.includes(cwd)) return true;
     return Boolean(attributePath(cwd, workDirs, cwd));
   }
 
-  // browse/write 的 scopeDirs：白名单即可（显式 workdir 已在列表内）。
+  // browse/write/preview 的 scopeDirs：全部已连接文件夹，外加这个 cwd 自己的范围根（仓库外的
+  // worktree、scratch 目录不在已连接文件夹之下，不补上就连自己的会话目录都读不了）。
   // 【为什么不收紧到单个 cwd】n=1 自托管、用户即 root：跨 workdir 的 relPath 读到的仍是用户自己的
   // 文件（直接切到那个工作区就能读），不构成越权。宽 scope 是有意的，收紧反而会挡掉「在 A 项目里
   // 让 claude 参考 B 项目代码」这类正常用法。真正的问题在审计归属，见 auditTargetFor（R10）。
-  function scopeDirsFor(_cwd, workDirs) {
-    return workDirs;
+  function scopeDirsFor(cwd, workDirs) {
+    return typeof scopeRootsFor === 'function' ? scopeRootsFor(cwd) : workDirs;
   }
 
   // R10（2026-08-06）：审计的 target 必须是【真实落点所属的 workdir】，不能是请求声明的 cwd。
@@ -366,7 +373,7 @@ export function registerFileSocketHandlers({
     if (!toolInput) return ack({ ok: false, error: '预览不可用（已过期或非文件工具）' });
 
     const filePath = toolInput.input?.file_path ?? toolInput.input?.notebook_path ?? null;
-    const workDirs = getWorkDirs();
+    const workDirs = scopeDirsFor(agent.cwd, getWorkDirs());
     const attribution = attributePath(filePath, workDirs, agent.cwd);
     if (!attribution) return ack({ ok: false, inWhitelist: false, error: '路径不在白名单工作目录内，预览已拒绝' });
     if (rejectableSymlinkComponent(attribution.resolved)) {

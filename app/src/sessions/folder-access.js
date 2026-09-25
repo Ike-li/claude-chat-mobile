@@ -90,7 +90,9 @@ function findWorktreeOwner(real) {
 //   root       归属的连接根（scratch 类为 scratch 根）
 //   projectKey 抽屉里归到哪个项目：worktree（含托管的）归所属仓库，scratch 归 scratch 根，其余是它自己
 //   scopeRoot  文件面板的范围：连接根 / worktree 根 / 这一个 scratch 目录
-//   repo       仅 worktree：所属仓库
+//   worktreeRoot / repo  落在一棵已双向回验的 linked worktree 里时：那棵树的根与所属仓库（否则 null）。
+//              与授权无关的两个事实——懒建 worktree 要据此避免「worktree 里再套 worktree」，
+//              网关隔离要据此找到 CLI 会误读 settings.local.json 的那个主仓。
 export function resolveAuthorizedCwd(candidate, ctx = {}) {
   if (typeof candidate !== 'string' || !candidate) return null;
   const real = realOrNull(candidate);
@@ -98,32 +100,36 @@ export function resolveAuthorizedCwd(candidate, ctx = {}) {
 
   const scratchRoot = typeof ctx.scratchRoot === 'string' && ctx.scratchRoot ? realOrNull(ctx.scratchRoot) : null;
   if (scratchRoot && isWithin(real, scratchRoot)) {
-    if (real === scratchRoot) {
-      return { kind: 'scratch-root', path: real, root: scratchRoot, projectKey: scratchRoot, scopeRoot: scratchRoot };
-    }
+    const base = { root: scratchRoot, projectKey: scratchRoot, worktreeRoot: null, repo: null };
+    if (real === scratchRoot) return { kind: 'scratch-root', path: real, scopeRoot: scratchRoot, ...base };
     const seg = real.slice(scratchRoot.length).split(sep).find(Boolean);
     if (!SCRATCH_DIR_RE.test(seg || '')) return null;
-    return { kind: 'scratch', path: real, root: scratchRoot, projectKey: scratchRoot, scopeRoot: join(scratchRoot, seg) };
+    return { kind: 'scratch', path: real, scopeRoot: join(scratchRoot, seg), ...base };
   }
-
-  const forbidden = (Array.isArray(ctx.forbidden) ? ctx.forbidden : []).map(realOrNull).filter(Boolean);
-  if (forbidden.some(f => isWithin(real, f))) return null;
 
   const roots = [...(Array.isArray(ctx.connected) ? ctx.connected : []), ...(Array.isArray(ctx.extraRoots) ? ctx.extraRoots : [])];
   const root = longestRoot(real, roots);
+
+  // 禁区挡的是「连了个祖先（如 CCM 仓库）就顺带把数据目录开成会话目录」。覆盖它的连接根若本身就开在
+  // 禁区里面，那是用户显式写进配置的选择——显式优先，与 worktree 的显式连接同一条规则。
+  const forbidden = (Array.isArray(ctx.forbidden) ? ctx.forbidden : []).map(realOrNull).filter(Boolean);
+  const blockedBy = (p, byRoot) => forbidden.some(f => isWithin(p, f) && !(byRoot && isWithin(byRoot, f)));
+  if (blockedBy(real, root)) return null;
+
   const wt = findWorktreeOwner(real);
   const repoRoot = wt ? longestRoot(wt.repo, roots) : null;
-  const repoAuthorized = Boolean(repoRoot) && !forbidden.some(f => isWithin(wt.repo, f));
+  const repoAuthorized = Boolean(repoRoot) && !blockedBy(wt.repo, repoRoot);
 
+  const worktreeFacts = { worktreeRoot: wt?.worktreeRoot ?? null, repo: wt?.repo ?? null };
   if (root) {
     // 连接范围内。若它属于某个已授权仓库的 worktree（托管的，或父目录整个连上后的平级那种），项目归仓库；
     // 但覆盖它的连接根若开在 worktree 内部（用户把这棵 worktree 显式连上了）——显式优先，自成项目。
     const explicitInsideWorktree = Boolean(wt) && isWithin(root, wt.worktreeRoot);
     const projectKey = repoAuthorized && !explicitInsideWorktree ? wt.repo : real;
-    return { kind: 'connected', path: real, root, projectKey, scopeRoot: root };
+    return { kind: 'connected', path: real, root, projectKey, scopeRoot: root, ...worktreeFacts };
   }
   if (repoAuthorized) {
-    return { kind: 'worktree', path: real, root: repoRoot, projectKey: wt.repo, scopeRoot: wt.worktreeRoot, repo: wt.repo };
+    return { kind: 'worktree', path: real, root: repoRoot, projectKey: wt.repo, scopeRoot: wt.worktreeRoot, ...worktreeFacts };
   }
   return null;
 }

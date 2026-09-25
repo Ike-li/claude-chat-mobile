@@ -1598,7 +1598,7 @@ io.on('connection', socket => {
     }
     const meta = knownArchived[sessionId];
     // 归组后再比：托管 worktree 会话的列表项 cwd 是 `<父仓>/.claude/worktrees/<name>`，
-    // 真 server 的 routeCwd 放行这一形态（resolveManagedWorktree）。只比字面量会把它判成
+    // 真 server 的 routeCwd 放行这一形态（在仓库子树里，授权判据按子目录直接放行）。只比字面量会把它判成
     // 「session not found」，那条路径在 E2E 里就永远走不到。
     if (!meta || workspaceCwdOf(cwd) !== '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });

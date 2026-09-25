@@ -886,8 +886,8 @@ const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
 // 枚举该工作区下的托管 worktree（CLI 的 EnterWorktree / --worktree / agent isolation 的落点）。
 //
 // 【为什么 readdir 而不是 `git worktree list`】判据只是"目录在不在"，readdir 零子进程；而 git 那份
-// 会把仓库外的平级兄弟 worktree（`../repo-<分支>`）一并列出来——那类跳出白名单子树，不在派生放行集里
-// （见 workdirs.js 的 resolveManagedWorktree），列出来也点不开，等于造一批必然失败的行。
+// 会跑 git 子进程，而授权判据刻意不在任何目录里执行 git（见 folder-access.js 文件头）。仓库外的平级
+// worktree 由 folder-access.js 的 listLinkedWorktrees 从仓库侧读 `.git/worktrees/*` 列出，不走这里。
 //
 // 残留目录（worktree 已 `git worktree remove`、目录还在）不特意排除：它的 transcript 确实存在过，
 // 列出来是诚实的；真打开时 routeCwd 那道判据仍会独立复核一次。

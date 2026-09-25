@@ -411,7 +411,11 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
       join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js'), 'utf8',
     );
     assert.match(src, /onCwdChanged:\s*\(/, 'app.js 没给驾驶实例传 onCwdChanged，换 cwd 后实例仍停在旧目录');
-    assert.match(src, /resolveDrivingCwd\(/, '裁决必须走 resolveDrivingCwd（SCOPE-01 同源判据），不得自行放行');
+    // 2026-09-24：判据换成「已连接的文件夹」的 authorize（与 routeCwd 同一套合法集）。钉两件事：
+    // 走的是那个判据；拒绝时返回 null 保持原样——不是 ensureAuthorized 那样归位到主工作目录
+    // （那会把驾驶轴指到一个 SDK 并不在那儿跑的地方）。
+    assert.match(src, /routableAuth\(nextCwd, \[authorizedRoot\]\)\?\.path \?\? null/,
+      '裁决必须走授权判据（同 routeCwd 一套合法集，带热移除保护的 extraRoots），拒绝时返回 null 而不是归位');
   });
 
   // 【为什么光改 instance.cwd 不够】openInstance 的回调闭包捕获的是**开实例那一刻**的 cwd。
