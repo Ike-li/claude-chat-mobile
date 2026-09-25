@@ -13,7 +13,8 @@ export const MAX_BROWSE_ENTRIES = 500;
 const MAX_NAME_BYTES = 255; // 文件系统单段名字上限（字节，不是字符）
 const CONTROL_RE = /\p{Cc}/u; // 控制字符整类（C0、DEL、C1），同 auth/devices.js 的别名归一
 
-const realOrNull = p => { try { return realpathSync(p); } catch { return null; } };
+// 与 folder-access.js 同一种 realpath（.native：磁盘上的真实写法），否则换个大小写能绕过禁区
+const realOrNull = p => { try { return realpathSync.native(p); } catch { return null; } };
 const inForbidden = (real, forbidden = []) => forbidden.map(realOrNull).some(f => f && isWithin(real, f));
 
 // 家目录相对路径 → 家目录内的真实路径。出界（../、绝对路径、经 symlink 指出去）一律 null。
@@ -52,7 +53,7 @@ export function resolveFolderToAdd(rel, ctx = {}) {
   if (isAbsolute(rel)) return { ok: false, error: 'outside_home' };
   const candidate = resolve(homeReal, rel);
   const reason = connectRefusalReason(candidate, ctx);
-  return reason ? { ok: false, error: reason } : { ok: true, path: realpathSync(candidate) };
+  return reason ? { ok: false, error: reason } : { ok: true, path: realpathSync.native(candidate) };
 }
 
 // 列出一个目录下的子目录名（只有名字）。Dirent.isDirectory 不跟随 symlink，于是文件、FIFO、symlink

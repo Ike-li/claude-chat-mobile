@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 
@@ -36,6 +36,19 @@ function fixture() {
   const forbidden = [join(home, '.claude')];
   return { base, home, outside, forbidden, ctx: { home, forbidden, connected: [] } };
 }
+
+// 文件系统分不分大小写（macOS 缺省的 APFS 不分：~/.CLAUDE 就是 ~/.claude）。分大小写的系统上（Linux CI）
+// 构造不出「换个大小写的同一个目录」，那几条跳过。
+function caseInsensitiveFs() {
+  const d = mkdtempSync(join(tmpdir(), 'ccm-case-'));
+  try { return existsSync(join(dirname(d), basename(d).toUpperCase())); } finally { rmSync(d, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+}
+
+test('禁区换个大小写照样拒（不分大小写的文件系统）', { skip: !caseInsensitiveFs() }, () => {
+  const { home, ctx } = fixture();
+  assert.equal(connectRefusalReason(join(home, '.CLAUDE'), ctx), 'forbidden', '换个大小写就能把 ~/.claude 连进来');
+  assert.equal(connectRefusalReason(join(home, '.Claude', 'x'), ctx), 'forbidden');
+});
 
 test('浏览只回真实目录的名字：文件、FIFO、symlink、点目录都不出现，也不回绝对路径', () => {
   const { ctx } = fixture();

@@ -237,7 +237,7 @@ export function locateStoredAttachment(workDir, storedName, env = process.env) {
 // 恒被 fail-closed 拒掉——这个坑本仓踩过一次。解析失败时回退原值，交由 isInScope 自己拒。
 function realOrSelf(p) {
   try {
-    return realpathSync(resolve(p));
+    return realpathSync.native(resolve(p)); // 与 isInScope 同一种 realpath
   } catch {
     return resolve(p);
   }

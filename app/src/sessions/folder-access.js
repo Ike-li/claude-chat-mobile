@@ -18,7 +18,9 @@ export const SCRATCH_DIR_RE = /^scratch-\d{4}-\d{2}-\d{2}-[A-Za-z0-9]{6}$/;
 // 向上找 .git 的层数上限：防一条畸形路径（或挂载环）让判据空转。正常路径远到不了这个数。
 const MAX_ANCESTOR_WALK = 64;
 
-const realOrNull = (p) => { try { return realpathSync(p); } catch { return null; } };
+// 用 realpathSync.native：它返回磁盘上的真实写法。JS 版原样保留传入的大小写，而 macOS 缺省不分大小写——
+// ~/.CLAUDE 就是 ~/.claude，按字面比会被换个大小写绕过禁区（2026-09-25 review）。授权链上的 realpath 必须同一种。
+const realOrNull = (p) => { try { return realpathSync.native(p); } catch { return null; } };
 const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 // 仓库侧的 gitdir 只读普通文件：.git 对模型可写，换成 FIFO 的话 readFileSync 会阻塞整个进程直到出现写端。
 const readRegularFile = (p) => { try { return statSync(p).isFile() ? readFileSync(p, 'utf8') : null; } catch { return null; } };

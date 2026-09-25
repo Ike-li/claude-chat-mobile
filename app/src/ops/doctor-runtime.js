@@ -19,7 +19,7 @@ import { findWorktreeOwner, resolveAuthorizedCwd } from '../sessions/folder-acce
 //     resolveAuthorizedCwd，不另写一套会漂移的规则——所属仓库没连时这一条是必需的，不能劝删。
 //   scratch：scratch 根向上第一个带 .git 的祖先；可写性看它自己，还没建时看最近的已存在祖先（server 会 mkdir -p）。
 export function probeConnectedFolders({ dirs = [], scratchRoot } = {}) {
-  const real = (dirs || []).map(d => { try { return realpathSync(d); } catch { return null; } }).filter(Boolean);
+  const real = (dirs || []).map(d => { try { return realpathSync.native(d); } catch { return null; } }).filter(Boolean);
   const redundantWorktrees = [];
   for (const dir of real) {
     if (!findWorktreeOwner(dir)) continue;

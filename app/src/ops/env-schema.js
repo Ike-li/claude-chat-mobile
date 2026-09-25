@@ -463,7 +463,8 @@ function workdirForms(rawPath) {
   if (!path) return null;
   const lexical = resolve(path);
   let real = lexical;
-  try { real = realpathSync(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
+  // .native：落到磁盘上的真实写法——macOS 不分大小写，/USERS 就是 /Users，JS 版会原样保留而漏拦
+  try { real = realpathSync.native(lexical); } catch { /* 尚不存在 / 无权限：落点就按词法算，不因此放行 */ }
   return { lexical, real };
 }
 

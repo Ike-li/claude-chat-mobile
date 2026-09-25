@@ -392,7 +392,7 @@ export function registerFileSocketHandlers({
     }
 
     let realPath = attribution.resolved;
-    try { realPath = realpathSync(attribution.resolved); } catch { /* deleted files are handled by readPreview */ }
+    try { realPath = realpathSync.native(attribution.resolved); } catch { /* deleted files are handled by readPreview */ }
     if (realPath !== attribution.resolved && !attributePath(realPath, workDirs, agent.cwd)) {
       return ack({ ok: false, inWhitelist: false, error: '路径解析后越出白名单，预览已拒绝' });
     }

@@ -12,7 +12,7 @@ export function isInScope(candidate, scopeDirs) {
   if (!Array.isArray(scopeDirs) || scopeDirs.length === 0) return false;
   let real;
   try {
-    real = realpathSync(candidate); // 绝对化 + 解析 ./ ../ + resolve 符号链接；不存在的路径在此抛错
+    real = realpathSync.native(candidate); // 绝对化 + 解析 ./ ../ + resolve 符号链接；不存在的路径在此抛错。.native 同 folder-access.js
   } catch {
     return false; // fail-closed：无法确认真实落点（不存在/不可达）一律拒绝，不假设安全
   }

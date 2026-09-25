@@ -7,8 +7,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { resolveAuthorizedCwd, SCRATCH_DIR_RE, isWithin } from '../../app/src/sessions/folder-access.js';
@@ -88,6 +88,22 @@ test('禁区：连接范围内的禁区子树不是合法 cwd', () => {
   assert.equal(resolveAuthorizedCwd(data, ctx), null);
   assert.equal(resolveAuthorizedCwd(join(data, 'inner'), ctx), null);
   assert.ok(resolveAuthorizedCwd(join(a, 'x'), ctx), '禁区只挡它自己的子树，不连坐兄弟目录');
+});
+
+// 文件系统分不分大小写（macOS 缺省的 APFS 不分：~/.CLAUDE 就是 ~/.claude）。分大小写的系统上（Linux CI）
+// 构造不出「换个大小写的同一个目录」，那几条跳过。
+function caseInsensitiveFs() {
+  const d = mkdtempSync(join(tmpdir(), 'ccm-case-'));
+  try { return existsSync(join(dirname(d), basename(d).toUpperCase())); } finally { rmSync(d, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+}
+
+test('禁区换个大小写照样挡（不分大小写的文件系统）', { skip: !caseInsensitiveFs() }, () => {
+  const { a } = fixture();
+  const data = join(a, 'data');
+  mkdirSync(join(data, 'inner'), { recursive: true });
+  const ctx = { connected: [a], forbidden: [data] };
+  assert.equal(resolveAuthorizedCwd(join(a, 'DATA'), ctx), null, '换个大小写就能把数据目录开成会话目录');
+  assert.equal(resolveAuthorizedCwd(join(a, 'Data', 'inner'), ctx), null);
 });
 
 // 禁区挡的是「连了个祖先（如 CCM 仓库）就顺带把数据目录开成会话目录」。连接根本身显式开在禁区里面，

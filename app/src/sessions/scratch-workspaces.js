@@ -11,14 +11,14 @@ import { basename, dirname, join, parse } from 'node:path';
 import { SCRATCH_DIR_RE, isWithin } from './folder-access.js';
 import { encodeProjectDir } from '../shared/project-dir.js';
 
-const realOrNull = p => { try { return realpathSync(p); } catch { return null; } };
+const realOrNull = p => { try { return realpathSync.native(p); } catch { return null; } }; // 同 folder-access.js
 const pad = n => String(n).padStart(2, '0');
 
 // 在 scratch 根下建一个新目录（根不存在时一并建出）。日期取本地时间：用户看到的是自己那一天。
 export function createScratchWorkspace(root, { now = new Date() } = {}) {
   mkdirSync(root, { recursive: true });
   const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  return mkdtempSync(join(realpathSync(root), `scratch-${day}-`));
+  return mkdtempSync(join(realpathSync.native(root), `scratch-${day}-`));
 }
 
 // 删会话之后调用：满足全部护栏才连同内容删掉这个 scratch 目录。返回 { removed, reason }。

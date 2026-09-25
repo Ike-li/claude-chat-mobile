@@ -282,7 +282,7 @@ export function resolveWorkdirs(entries) {
   for (const { path, sessionLimit } of entries) {
     let real;
     try {
-      real = realpathSync(path);
+      real = realpathSync.native(path); // 与 folder-access.js 同一种 realpath：连接根与候选路径的写法必须一致
       if (!statSync(real).isDirectory()) { warnings.push(`工作区忽略（不是目录）：${path}`); continue; }
     } catch {
       warnings.push(`工作区忽略（不存在/不可达）：${path}`);
