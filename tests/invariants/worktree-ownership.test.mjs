@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveAuthorizedCwd, listLinkedWorktrees } from '../../app/src/sessions/folder-access.js';
 
@@ -189,6 +189,30 @@ test('listLinkedWorktrees：从仓库侧列出双向校验通过的 worktree，�
   writeFileSync(join(metaDirOf(repo, aliasWt), 'gitdir'), join(alias, '.git') + '\n');
   const listed = listLinkedWorktrees(repo).map(w => w.path).sort();
   assert.deepEqual(listed, [managed, sibling].sort());
+});
+
+// 仓库侧的 gitdir 被换成 FIFO（.git 对模型可写）：readFileSync 读 FIFO 会一直阻塞到出现写端——阻塞的是整个
+// server 进程，而且之后每次 session:list / 授权都会再撞上。读之前必须确认是普通文件。
+// 放在子进程里跑：同步阻塞在本进程里连超时都救不回来，整个测试文件会跟着挂住。
+test('仓库侧 gitdir 被换成 FIFO：列 worktree 与授权照常返回，不阻塞进程', { skip: process.platform === 'win32' }, () => {
+  const { repo, sibling, code, git } = makeFixture();
+  const fifoWt = join(code, 'repo-fifo');
+  git(repo, 'worktree', 'add', '-b', 'fifo', fifoWt);
+  const gitdir = join(metaDirOf(repo, fifoWt), 'gitdir');
+  rmSync(gitdir);
+  execFileSync('mkfifo', [gitdir]);
+  const mod = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/folder-access.js')).href;
+  const script = `const m = await import(${JSON.stringify(mod)});
+    const listed = m.listLinkedWorktrees(${JSON.stringify(repo)}).map(w => w.path);
+    const auth = m.resolveAuthorizedCwd(${JSON.stringify(fifoWt)}, { connected: [${JSON.stringify(repo)}] });
+    process.stdout.write(JSON.stringify({ listed, auth }));`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(r.signal, null, '读 FIFO 阻塞到超时被杀——在 server 里就是整个进程卡死');
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.listed.includes(sibling), '正常的 worktree 照常列出');
+  assert.ok(!out.listed.includes(fifoWt), '回链读不出来的不列');
+  assert.equal(out.auth, null, '回链读不出来：不认它是已连接仓库的 worktree');
 });
 
 test('判定不执行 git：folder-access.js 不 import child_process', () => {

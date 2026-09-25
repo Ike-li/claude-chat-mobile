@@ -20,6 +20,8 @@ const MAX_ANCESTOR_WALK = 64;
 
 const realOrNull = (p) => { try { return realpathSync(p); } catch { return null; } };
 const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+// 仓库侧的 gitdir 只读普通文件：.git 对模型可写，换成 FIFO 的话 readFileSync 会阻塞整个进程直到出现写端。
+const readRegularFile = (p) => { try { return statSync(p).isFile() ? readFileSync(p, 'utf8') : null; } catch { return null; } };
 
 // child 是否在 parent 之下（含相等）。必须带分隔符边界：/code/app-x 不在 /code/app 之下。
 export function isWithin(child, parent) {
@@ -58,7 +60,7 @@ function verifyWorktreeAt(dir) {
   const gitDir = dirname(worktreesDir);
   if (basename(worktreesDir) !== 'worktrees' || basename(gitDir) !== '.git') return null;
   let back;
-  try { back = readFileSync(join(metaDir, 'gitdir'), 'utf8').trim(); } catch { return null; }
+  back = readRegularFile(join(metaDir, 'gitdir'))?.trim();
   if (!back) return null;
   if (realOrNull(isAbsolute(back) ? back : resolve(metaDir, back)) !== realOrNull(dotGit)) return null;
   return { worktreeRoot: dir, repo: dirname(gitDir) };
@@ -147,7 +149,7 @@ export function listLinkedWorktrees(repo) {
   const out = [];
   for (const name of names) {
     let back;
-    try { back = readFileSync(join(metaRoot, name, 'gitdir'), 'utf8').trim(); } catch { continue; }
+    back = readRegularFile(join(metaRoot, name, 'gitdir'))?.trim();
     if (!back) continue;
     const wtReal = realOrNull(dirname(isAbsolute(back) ? back : resolve(metaRoot, name, back)));
     if (!wtReal) continue;
