@@ -120,6 +120,7 @@ test('显式越界的首条消息：拒绝且不在别的工作区里懒开实�
 });
 
 test('热移除之后：已开会话自己的目录仍可读，但不能在那里新开、也不再列它', async () => {
+  writeFileSync(join(b, 'kept.txt'), '移除之前的内容');
   const first = await emit('user:message', { text: '在 B 里开', cwd: b, clientMessageId: 'reqscope-b-1' });
   assert.equal(first.ok, true, `前提：B 已连接时能开，实际 ${JSON.stringify(first)}`);
   await waitFor(() => latestInstances()?.instances?.some(i => i.cwd === b), 'B 上的实例出现在广播里');
@@ -129,6 +130,14 @@ test('热移除之后：已开会话自己的目录仍可读，但不能在那�
 
   const browse = await emit('browse:list', { cwd: b, relPath: '.' });
   assert.equal(browse.ok, true, `已开会话的目录被热移除后仍须可读（读档），实际 ${JSON.stringify(browse)}`);
+
+  // 查看可以，直写不行：写回不经工具审批，移出清单就是「别再碰它」。写回只改已有文件、要带读时的
+  // 内容哈希——先用读档把哈希拿到手，保证被拒只可能是因为范围，不是因为参数不全。
+  const read = await emit('browse:read', { cwd: b, relPath: 'kept.txt' });
+  assert.ok(read.contentHash, `前提：读档能读到文件并给出哈希，实际 ${JSON.stringify(read)}`);
+  const wrote = await emit('files:write', { cwd: b, relPath: 'kept.txt', content: '移除之后改的', baseHash: read.contentHash });
+  assert.equal(wrote.ok, false, `热移除的目录不得再被文件编辑器直写，实际 ${JSON.stringify(wrote)}`);
+  assert.equal(readFileSync(join(b, 'kept.txt'), 'utf8'), '移除之前的内容');
 
   const created = await emit('session:new', { cwd: b });
   assert.equal(created.ok, false, '热移除的目录上不得新开（仅拒新开）');

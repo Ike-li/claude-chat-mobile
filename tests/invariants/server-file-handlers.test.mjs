@@ -88,6 +88,25 @@ test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:fals
   assert.deepEqual(touched, [], '判了越界还去读盘 / 跑 git');
 });
 
+// 文件夹被热移除后，上面已开的会话「继续运行、仍可查看」（读档放行活实例的 cwd），但写回是用户直写、
+// 不经工具审批——必须只认当前授权（开档）。读档与开档的裁决分开注入，写只问开档。
+test('写回只认当前授权：读档放行（热移除后的活实例目录）而开档拒绝时，files:write 拒绝且不落盘', async () => {
+  let wrote = false;
+  const { handlers } = register({
+    routeCwd: () => '/removed',        // 读档：活实例开在这里，照常放行
+    routeWriteCwd: () => null,          // 开档：已经不在连接的文件夹里
+    writeFileInScope: () => { wrote = true; return { ok: true, contentHash: 'h', bytesWritten: 1 }; },
+  });
+  let response;
+  await handlers.get('files:write')({ cwd: '/removed', relPath: 'a.txt', content: 'x', baseHash: null }, v => { response = v; });
+  assert.deepEqual(response, { ok: false, error: OUT_OF_SCOPE_ERROR });
+  assert.equal(wrote, false, '已移除的文件夹还能被文件编辑器直写');
+  // 正对照：读档照样放行
+  let listed;
+  await handlers.get('browse:list')({ cwd: '/removed', relPath: '.' }, v => { listed = v; });
+  assert.notDeepEqual(listed, { ok: false, error: OUT_OF_SCOPE_ERROR });
+});
+
 test('git:status 成功透传 listGitChanges', async () => {
   const { handlers } = register({
     listGitChanges: async cwd => {

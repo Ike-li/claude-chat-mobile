@@ -30,6 +30,9 @@ export function registerFileSocketHandlers({
   // 缺省退回旧行为（只认白名单本身）——那是更窄的一侧，漏注入不会扩大授权面。
   isAuthorizedCwd = null,
   scopeRootsFor = null,
+  // 写回的 cwd 裁决（开档：只认当前授权）。routeCwd 是读档，额外放行热移除后仍在跑的实例目录——
+  // 查看可以，直写不行（写回不经工具审批）。缺省回落 routeCwd，只为不注入的旧调用方。
+  routeWriteCwd = null,
   logger = console,
 }) {
   on(socket, 'browse:list', (payload, ack) => {
@@ -296,7 +299,7 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, code: 'unavailable', error: '文件编辑未启用' });
     }
     const { cwd: requestedCwd, relPath, content, baseHash } = payload || {};
-    const cwd = routeCwd(requestedCwd);
+    const cwd = (routeWriteCwd || routeCwd)(requestedCwd);
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const meta = { relPath: typeof relPath === 'string' ? relPath : null };
     const result = writeFileInScope(cwd, relPath, content, scopeDirsFor(cwd, getWorkDirs()), { baseHash });

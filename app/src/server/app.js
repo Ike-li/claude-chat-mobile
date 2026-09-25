@@ -4077,6 +4077,7 @@ registerSocketConnection(io, socket => {
     socket,
     on,
     routeCwd: c => routeCwd(c, { tier: 'read' }), // 文件面板是读档：热移除后的已开会话仍可查看自己的文件
+    routeWriteCwd: c => routeCwd(c), // 写回是开档：移出清单的文件夹不再可直写（查看照旧）
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
