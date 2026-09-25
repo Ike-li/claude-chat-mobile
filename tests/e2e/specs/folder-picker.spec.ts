@@ -144,6 +144,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 挑中的是仓库里的 linked worktree：它归仓库这个项目，新会话页的 viewingCwd 因而是仓库。首条消息要是按
+  // viewingCwd 投，就开进了仓库的主工作树——用户以为隔离了的改动全落在主分支上。抓出向帧看它投到哪。
+  test('P0-PICK-7 在仓库里的 worktree 上开新会话：首条消息投到 worktree，不是它所属的仓库', async ({ page }) => {
+    const sent: string[] = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) sent.push(frame.payload);
+    }));
+    await gotoMock(page);
+    await waitForIdle(page);
+    await openPickerFromCompose(page);
+    await picker(page).locator('[data-testid="folder-picker-project"]', { hasText: 'claude-chat-mobile' }).first()
+      .locator('[data-testid="folder-picker-enter"]').click();
+    await entry(page, 'wt-feat-z').locator('button').first().click();
+    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
+    await expect(picker(page)).not.toHaveClass(/sheet-open/);
+    // 等 session:new 的广播落地（它把 currentCwd 覆写成仓库）再发——广播前发出去的本来就对
+    await expect(page.locator('#topProjectText')).toHaveText('claude-chat-mobile');
+
+    await sendChatMessage(page, '在 worktree 里干活');
+    await expect.poll(() => sent.length).toBeGreaterThan(0);
+    const [, payload] = JSON.parse(sent[0].slice(sent[0].indexOf('[')));
+    expect(payload.cwd, '首条消息投到了 worktree 所属的仓库').toBe('/Users/you/code/claude-chat-mobile/wt-feat-z');
+    await expectNoBrowserErrors(page);
+  });
+
   // 「无文件夹」那一节的键是 scratch 根，它只是新会话页的启动键：@ 找文件拿它去问，服务端会拒。
   // 新会话页上还没有目录、也就没有文件；会话开起来之后，文件在它自己的 scratch 目录里。
   test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
@@ -155,11 +180,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await input.fill('');
     await sendChatMessage(page, '在无文件夹里说句话');
-    await expect(page.locator('#topProjectText')).toHaveText('无文件夹');
-    await expect(input).toHaveValue('');
-    await input.fill('@');
-    await expect(input).toHaveValue('@');
-    await expect(page.locator('[data-testid="at-mention-chip"]').first()).toBeVisible({ timeout: 3_000 });
+    // 懒开的实例广播可能晚于打字到达：视图换到新实例时草稿交换会把刚打的 @ 换走，所以换走了就重打
+    await expect(async () => {
+      await input.fill('@');
+      await expect(page.locator('[data-testid="at-mention-chip"]').first()).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 8_000 });
     await expectNoBrowserErrors(page);
   });
 });

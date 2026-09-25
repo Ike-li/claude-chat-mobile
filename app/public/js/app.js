@@ -665,6 +665,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
                                         // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
+  // 新会话页上选中的驾驶轴目录（instances.composeCwd）：选择器里挑中一个 worktree 时 currentCwd 是它所属的仓库，
+  // 首条消息却要开在 worktree 里。只在新会话页上、且和 currentCwd 不同时才有。
+  let composeCwd = null;
   // 【驾驶轴 cwd】某个实例的 claude 实际在哪棵树里跑。托管 worktree 的会话工作区轴归父仓
   // （server 的 workspaceCwdOf），但文件改在、transcript 也落在 .claude/worktrees/<name> 下。
   // 凡是「按 cwd 去磁盘找这个会话的东西」都必须走这条，拿 currentCwd 去查必然扑空。
@@ -677,6 +680,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 按 cwd 找文件、读规则时用哪个目录。「无文件夹」那一节的键是 scratch 根——它只是新会话页的启动键，
   // 服务端不让拿它找文件；看着一个会话时改用它自己的 scratch 目录。新会话页上仍是 scratch 根（还没有目录）。
   const requestCwd = () => (projectsState.isNoFolder(currentCwd) && viewingInstanceId ? panelCwd() : currentCwd);
+  // 首条消息（含离线入队）投到哪个目录：新会话页上选中了 worktree 就是它，其余一律 currentCwd
+  const sendCwd = () => (!viewingInstanceId && composeCwd) || currentCwd;
   // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
   const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
   // 抽屉小节的键 = 项目键（已连接的文件夹、其下有会话的子文件夹、「无文件夹」；旧载荷回落 dirs）
@@ -3950,7 +3955,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // REL-01：保存入队时刻的目标，重发时须用这个而非"当下"的 viewingInstanceId/currentCwd——
         // 否则用户离线期间切换了查看的会话，消息会被错发到现在正看着的会话，而非当初想发的那个。
         instanceId: viewingInstanceId,
-        cwd: currentCwd,
+        cwd: sendCwd(),
         // worktree 意图与 text 同属"入队时刻的快照"：离线期间用户可能取消勾选，
         // 但这条消息当初就是要发往新 worktree 的。序列化白名单见 logic/outbox-send.js。
         ...worktreeArgs,
@@ -3983,7 +3988,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
     // 按会话登记在途态（而非裸全局布尔）：切到另一会话发消息不该被这条送出的等待窗口阻塞。
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
-    const reqCwd = currentCwd;
+    const reqCwd = sendCwd();
     const reqViewingInstanceId = viewingInstanceId;
     _sendInFlightSessionIds.add(reqSessionId);
     const clearSendInFlight = () => {
@@ -5028,6 +5033,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       applyMirror(false, null);
     }
     currentCwd = newCwd;
+    composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
@@ -6869,6 +6875,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚选的这个 d。
     viewingInstanceId = null;
     currentCwd = d;
+    composeCwd = null; // 广播落地前 currentCwd 就是 d；上一页选的 worktree 不能留到这一页
     // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
     // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
     // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——

@@ -491,6 +491,12 @@ let viewingInstanceId = null;
 // n1: N1-VIEWING-CWD 同上，全局单值：随 viewingInstanceId 一起被最后切换的那台设备决定。
 let viewingCwd = primaryWorkDir();
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
+// 新会话页上选中的驾驶轴目录：选择器里挑中一个 worktree 时它归仓库这个项目，viewingCwd 因而是仓库，
+// 首条消息该开在哪只能靠这一条带给前端（广播的 composeCwd）。只有 session:new 写；回到空页的另两条路
+// （session:home、查看实例被移除后的重选）清掉；取用时再核一遍仍归当前项目、仍在授权范围内。
+let composeCwd = null;
+const composeCwdNow = () => (!viewingInstanceId && composeCwd && composeCwd !== viewingCwd
+  && routableAuth(composeCwd) && workspaceCwdOf(composeCwd) === viewingCwd ? composeCwd : null);
 // BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
 // 刚移除实例的 cwd（它是最后实际查看的），避免裸 viewingCwd 停在更早旧值致新会话选目录/statusline 跳回旧工作区。
 // 调用点须在 agents.delete(退出实例) 之后调用（此时 [...agents.keys()] 已是剩余实例）。
@@ -500,6 +506,7 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
     [...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd, opts,
   );
   viewingInstanceId = r.viewingInstanceId;
+  composeCwd = null;
   viewingCwd = workspaceCwdOf(r.viewingCwd); // 永远落工作区轴：托管 worktree 重选后不该把 viewingCwd 钉在 worktree 路径上
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
   clearMirrorOnViewChange();
@@ -1312,6 +1319,8 @@ function instancesPayload() {
   // 空闲回收，挂在实例上的话横幅会随实例一起消失。恒带（可能是空数组）——前端对「缺字段」的
   // 约定是不动横幅（兼容 E2E mock 的各处内联载荷），只有真 server 的空数组才表示「没有」。
   payload.autoContinue = autoContinue.snapshot();
+  const composeTarget = composeCwdNow();
+  if (composeTarget) payload.composeCwd = composeTarget; // 只在和 viewingCwd 不同时才有（见 composeCwd）
   // 项目清单（按官方桌面端的侧栏分组）：连接根现算；子项目 = 扫盘结果 ∪ 活实例所在的子项目——新会话的
   // transcript 可能还没落盘，只等扫盘的话正在跑的会话所属项目要晚一分钟才出现。
   // 「无文件夹」只在用着时占一节（有会话、有实例开在里面、或正停在它的新会话页上）：从没用过的人，
@@ -3312,6 +3321,7 @@ registerSocketConnection(io, socket => {
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
+    composeCwd = null; // 首页属于项目本身，不沿用上一个新会话页选的 worktree
     sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(viewingCwd, null); // 空首页 compose → FRESH（与 session:new 同；列表进入仍 resume）
     // 回空首页立即清全局 mirror，防 A 工作区 CLI 驾驶锁挂到空首页/下一会话
@@ -3364,6 +3374,7 @@ registerSocketConnection(io, socket => {
     // （viewingCwd = workspaceCwdOf(cwd)）归键——懒开到 worktree / scratch 子目录时，openInstance 也按
     // 同一个项目键取，两边对得上（2026-09-24：此前暂存在项目键、取用在驾驶轴，懒开 worktree 时档位静默丢失）。
     viewingCwd = workspaceCwdOf(cwd);
+    composeCwd = cwd;
     sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(viewingCwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开

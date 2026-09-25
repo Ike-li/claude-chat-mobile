@@ -432,16 +432,20 @@ function mockDirFields() {
 
 // 「选文件夹」面板的假家目录（只有目录名，同真 server 的 folders:browse）。键 = 家目录相对路径。
 const MOCK_HOME = '/Users/you';
-const MOCK_WORKTREE_DIRS = new Set(['code/claude-chat-mobile-feat-y']); // 真 server 由双向回验认出
+const MOCK_WORKTREE_DIRS = new Set(['code/claude-chat-mobile-feat-y', 'code/claude-chat-mobile/wt-feat-z']); // 真 server 由双向回验认出
+// 放在仓库里面的 linked worktree（`git worktree add ./wt-feat-z`）：挑子文件夹时看得到它。它归仓库这个项目，
+// 所以在它上面开新会话时 viewingCwd 是仓库，首条消息的目标另由 composeCwd 带（同真 server）。
+const MOCK_REPO_WORKTREES = new Map([[`${MOCK_HOME}/code/claude-chat-mobile/wt-feat-z`, `${MOCK_HOME}/code/claude-chat-mobile`]]);
 function createMockFolderTree() {
   return {
     '': ['code', 'Documents'],
     code: ['another-react-project', 'claude-chat-mobile', 'claude-chat-mobile-feat-y', 'new-idea'],
     'code/another-react-project': [],
-    'code/claude-chat-mobile': ['app', 'packages'],
+    'code/claude-chat-mobile': ['app', 'packages', 'wt-feat-z'],
     'code/claude-chat-mobile/app': [],
     'code/claude-chat-mobile/packages': ['web'],
     'code/claude-chat-mobile/packages/web': [],
+    'code/claude-chat-mobile/wt-feat-z': [],
     'code/claude-chat-mobile-feat-y': [],
     'code/new-idea': [],
     Documents: [],
@@ -1334,16 +1338,19 @@ io.on('connection', socket => {
     pendingFreshPermissionMode = undefined;
     pendingFreshEffortLevel = undefined;
     pendingFreshCwd = viewingCwd;
+    // 挑中的是仓库里的 worktree：工作区轴归仓库，驾驶轴（首条消息开在哪）经 composeCwd 带给前端
+    const repoOfWorktree = MOCK_REPO_WORKTREES.get(viewingCwd);
     // 「无文件夹」不是工作区：不能照下面那样把请求的 cwd 塞进 dirs（会被画成一个叫 scratch-workspaces 的文件夹）
     // scratchRoot 恒带（同真 server）：新会话页的「选文件夹」面板靠它发起无文件夹会话
     const dirFields = viewingCwd === MOCK_SCRATCH_ROOT
       ? mockDirFields()
-      : { dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])), scratchRoot: MOCK_SCRATCH_ROOT };
+      : { dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), repoOfWorktree ?? viewingCwd])), scratchRoot: MOCK_SCRATCH_ROOT };
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId: null,
-        viewingCwd,
+        viewingCwd: repoOfWorktree ?? viewingCwd,
+        ...(repoOfWorktree ? { composeCwd: viewingCwd } : {}),
         ...dirFields,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),

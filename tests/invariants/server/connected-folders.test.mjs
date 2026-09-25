@@ -175,3 +175,25 @@ test('平级 worktree 会话：实例驾驶在 worktree 里，归仓库这个项
   assert.equal(inst.cwd, sibling);
   assert.equal(inst.projectKey, repo, `projectKey=${inst.projectKey}——前端按它分组，归错了这一行就挂到一个不存在的项目下`);
 });
+
+// 选择器里挑中的是一个 worktree 目录：它归仓库这个项目，新会话页的 viewingCwd 因而是仓库，前端收到广播后
+// currentCwd 也被覆写成仓库。要是广播里没有别的字段说「这一页的会话开在 worktree 里」，首条消息就开进了仓库的
+// 主工作树——用户以为隔离了的改动全落在主分支上。
+test('新会话页选中平级 worktree：广播带 composeCwd，按它发首条消息开在 worktree 里；回到别的空页后不再带', async () => {
+  assert.equal((await emit('session:new', { cwd: sibling }))?.ok, true);
+  const page = latestInstances();
+  assert.equal(page.viewingInstanceId, null);
+  assert.equal(page.viewingCwd, repo, '工作区轴仍归仓库（抽屉、顶栏按它）');
+  assert.equal(page.composeCwd, sibling, `广播里没有新会话页选中的 worktree：${JSON.stringify(page.composeCwd)}`);
+  const res = await emit('user:message', { text: '在 worktree 的新会话里', cwd: page.composeCwd, clientMessageId: `compose-wt-${randomUUID()}` });
+  assert.equal(res?.ok, true, JSON.stringify(res));
+  const inst = await waitFor(() => latestInstances()?.instances?.find(i => i.instanceId === res.instanceId), '实例出现在广播里');
+  assert.equal(inst.cwd, sibling, `开在了 ${inst.cwd}`);
+  assert.equal(latestInstances().composeCwd, undefined, '看着一个会话时不该带新会话页的目标');
+
+  // 从这个会话回到首页：空页属于仓库本身，不能沿用上一个新会话页选的 worktree
+  assert.equal((await emit('session:new', { cwd: sibling }))?.ok, true);
+  assert.equal((await emit('session:home', {}))?.ok, true);
+  assert.equal(latestInstances().composeCwd, undefined, 'session:home 之后还带着上一个新会话页的 worktree');
+  await emit('session:close', { instanceId: inst.instanceId });
+});
