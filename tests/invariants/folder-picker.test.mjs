@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 
 import {
-  browseFolderNames, connectRefusalReason, validateFolderName, createSubfolder, MAX_BROWSE_ENTRIES,
+  browseFolderNames, connectRefusalReason, validateFolderName, createSubfolder, resolveFolderToAdd, MAX_BROWSE_ENTRIES,
 } from '../../app/src/sessions/folders.js';
 
 const ROOTS = [];
@@ -44,6 +44,7 @@ test('浏览只回真实目录的名字：文件、FIFO、symlink、点目录都
   assert.deepEqual(res.entries.map(e => e.name), ['app'],
     '回文件名 = 把目录浏览变成文件浏览；跟 symlink = 一跳出家目录；点目录多是工具的内部状态');
   assert.equal(res.path, 'code');
+  assert.equal(res.home, ctx.home, '客户端要靠它把相对位置换成会话 cwd');
   for (const e of res.entries) assert.deepEqual(Object.keys(e).sort(), ['name', 'reason']);
 });
 
@@ -97,6 +98,16 @@ test('已连接的不重复加；已连接文件夹的子目录可以单独加�
   const withCode = { ...ctx, connected: [code] };
   assert.equal(connectRefusalReason(code, withCode), 'already_connected');
   assert.equal(connectRefusalReason(join(code, 'app'), withCode), null);
+});
+
+test('要添加的位置（家目录相对路径）：能加时给出真实路径，不能加时给出原因', () => {
+  const { home, ctx } = fixture();
+  assert.deepEqual(resolveFolderToAdd('code/app', ctx), { ok: true, path: join(home, 'code', 'app') });
+  assert.deepEqual(resolveFolderToAdd('', ctx), { ok: false, error: 'home' });
+  assert.deepEqual(resolveFolderToAdd('..', ctx), { ok: false, error: 'outside_home' });
+  assert.deepEqual(resolveFolderToAdd('code/link-out', ctx), { ok: false, error: 'outside_home' }, '经 symlink 出界');
+  assert.deepEqual(resolveFolderToAdd('/etc', ctx), { ok: false, error: 'outside_home' }, '绝对路径不收：位置一律是家目录相对的');
+  assert.deepEqual(resolveFolderToAdd(42, ctx), { ok: false, error: 'not_found' });
 });
 
 test('git linked worktree（及其子目录）不能单独加：它跟随所属仓库', () => {

@@ -44,6 +44,16 @@ export function connectRefusalReason(candidate, { home, forbidden = [], connecte
   return null;
 }
 
+// 「添加文件夹」的目标：家目录相对路径 → 能加时给真实路径，否则给原因（同 connectRefusalReason）。
+export function resolveFolderToAdd(rel, ctx = {}) {
+  const homeReal = typeof rel === 'string' ? realOrNull(ctx.home) : null;
+  if (!homeReal) return { ok: false, error: 'not_found' };
+  if (isAbsolute(rel)) return { ok: false, error: 'outside_home' };
+  const candidate = resolve(homeReal, rel);
+  const reason = connectRefusalReason(candidate, ctx);
+  return reason ? { ok: false, error: reason } : { ok: true, path: realpathSync(candidate) };
+}
+
 // 列出一个目录下的子目录名（只有名字）。Dirent.isDirectory 不跟随 symlink，于是文件、FIFO、symlink
 // 天然不在其列；点目录多是工具的内部状态，不列。每条带能不能加，当前目录自身也带。
 export function browseFolderNames(rel, ctx = {}) {
@@ -55,6 +65,7 @@ export function browseFolderNames(rel, ctx = {}) {
   const shown = names.slice(0, MAX_BROWSE_ENTRIES);
   return {
     ok: true,
+    home: at.homeReal, // 客户端据此把相对位置换成会话 cwd
     path: relative(at.homeReal, at.real),
     reason: connectRefusalReason(at.real, ctx),
     entries: shown.map(name => ({ name, reason: connectRefusalReason(join(at.real, name), ctx) })),

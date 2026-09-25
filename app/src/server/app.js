@@ -91,6 +91,7 @@ import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { composeProjects, createProjectIndex, discoverSubProjects } from '../sessions/projects.js';
+import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
 import { scratchRoot as defaultScratchRoot } from '../shared/scratch-root.js';
 import {
   isDeviceTrusted,
@@ -130,6 +131,7 @@ import { createSocketEventRegistrar, registerSocketConnection } from './socket.j
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
+import { registerFolderSocketHandlers } from './socket-folders.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 
 // 公网身份提供方策略（当前唯一实现是 Cloudflare Access）。init 必须在 env 规整之后——
@@ -244,6 +246,10 @@ const fileScopeRootsFor = cwd => {
 };
 // 「无文件夹」项目的键：scratch 根解析后的真实路径；从没开过无文件夹会话时根还不存在，用配置值。
 const scratchRootKey = () => authorize(SCRATCH_ROOT)?.path ?? SCRATCH_ROOT;
+// 这个 cwd 是不是「无文件夹」的入口（scratch 根本身）。根还没建时 authorize 认不出它，按配置值比。
+const isNoFolderKey = c => typeof c === 'string' && c !== '' && (c === SCRATCH_ROOT || authorize(c)?.kind === 'scratch-root');
+// 「无文件夹」首条消息的 scratch 目录分配（并发的共用一个，见 scratch-workspaces.js）
+const scratchAllocator = createScratchAllocator(SCRATCH_ROOT);
 // 抽屉的项目清单：子项目靠扫 ~/.claude/projects 反查（sessions/projects.js），扫出的结果变了才广播。
 // 触发：启动、工作区热加载、删除会话、活实例所在的子项目还没扫到、每分钟一次（有已批准连接时，见 listen 前）。
 const projectIndex = createProjectIndex({
@@ -314,7 +320,7 @@ function readInlineWorkdirConfig() {
 // 那次是 doctor 自己写了 `if (Array.isArray(inline)) return`，把 WORK_DIRS env 吃掉了。
 function readWorkdirSource() {
   const inline = readInlineWorkdirConfig();
-  const { result, warnings } = resolveWorkdirSource({
+  const { result, warnings, from } = resolveWorkdirSource({
     envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
     envFile: process.env.WORK_DIRS_FILE,
     inline: inline.list,
@@ -328,7 +334,7 @@ function readWorkdirSource() {
     }),
     inlinePrimary: inline.primary,
   });
-  return { result, warnings };
+  return { result, warnings, from };
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
 // 返回 warnings[]（调用方决定打印）。
@@ -362,10 +368,39 @@ function reloadWorkdirs() {
   // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录。
   const viewingHasInstance = agents.get(viewingInstanceId)?.cwd === viewingCwd;
   // 被热移除且无 live 实例时归位（viewingCwd 是项目轴：连接文件夹、其子目录或仓库，都按当前授权判）。
-  if (!routableAuth(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
+  if (!routableAuth(viewingCwd) && !isNoFolderKey(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
   projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
+}
+
+// 手机上「添加文件夹」（FOLDER-01）：追加进配置文件的内联 WORKDIRS，同步热加载，回报生效后的列表。
+// 只在工作区列表**确实来自**那份内联配置时才写——来源是 WORK_DIRS / WORK_DIRS_FILE 时写了也不生效
+// （环境变量压过文件），报成功就是假成功；配置文件不存在时也不替用户建（hard-rules §4.6）。
+// 校验与写盘走 env:set 同一套：validateEnvChanges（过宽根、家目录、条目形状）、applyConfigChanges、原子写。
+// 读与写之间没有 await：追加到的是写入前那一刻的列表，原有条目（含 sessionLimit）原样保留。
+// 不等文件监听：那条要过防抖，ack 回来时新目录还没生效，手机上接着点进去会被当成越界。
+function addConnectedFolder(path) {
+  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
+  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
+  let config;
+  try {
+    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+  } catch {
+    return { ok: false, error: 'config_unreadable' };
+  }
+  const next = [...(Array.isArray(config.WORKDIRS) ? config.WORKDIRS : []), path];
+  const verdict = validateEnvChanges({ WORKDIRS: next }, {
+    current: structuredToStringValues(config), fileExists: existsSync, isExecutable: () => true, probePort: () => false, usingConfigJson: true,
+  });
+  if (!verdict.ok) return { ok: false, error: 'invalid', message: verdict.results.find(r => r.level === 'error')?.message ?? '' };
+  try {
+    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
+  } catch {
+    return { ok: false, error: 'write_failed' };
+  }
+  reloadWorkdirs();
+  return workDirs.includes(path) ? { ok: true, dirs: workDirs } : { ok: false, error: 'not_applied', dirs: workDirs };
 }
 
 // ---- 启动预检（验收 A9）----
@@ -2682,52 +2717,71 @@ registerSocketConnection(io, socket => {
           ack({ ok: false, error: 'stale_instance', stale: true });
           return;
         }
-        // ensureAuthorized 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
-        // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-        const routedCwd = routeCwd(rawCwd);
-        if (routedCwd === null) {
-          // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
-          sysTo(socket, OUT_OF_SCOPE_ERROR, true);
-          ack({ ok: false, error: OUT_OF_SCOPE_ERROR, permanent: true });
-          return;
-        }
-        const workspaceCwd = ensureAuthorized(routedCwd);
-        // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
-        // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
-        // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（authorize 带回的 worktreeRoot 非空即是，
-        // 托管的与仓库外平级的都算）。
-        const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
-        let cwd = workspaceCwd;
-        if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
-          const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
-          if (!made.ok) {
-            console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
-            audit.recordAudit({
-              actor: actorFromSocket(socket), action: 'worktree_create', target: workspaceCwd,
-              outcome: 'failed', meta: { code: made.code, sourceBranch: payload.sourceBranch ?? null },
-            });
-            sysTo(socket, `无法创建 worktree：${made.error || made.code}`, true);
-            ack({ ok: false, error: made.error || '创建 worktree 失败' });
+        // 「无文件夹」：同 worktree 的懒建——只有真发出第一条消息才建 scratch 目录，不发就什么都不留。
+        // 并发的首条消息共用一个目录（分配器），下游按 cwd 的单飞才合得掉。租约在实例开好之后释放。
+        let scratchLease = null;
+        let cwd;
+        if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
+          try {
+            scratchLease = scratchAllocator.acquire();
+          } catch (err) {
+            sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
+            ack({ ok: false, error: 'scratch_unavailable' });
             return;
           }
-          cwd = made.path;
-          // 说一声建了什么：名字来自这条消息，但用户没见过生成结果，而它会成为分支名进 git。
-          sysTo(socket, `已在新 worktree「${made.branch}」中打开（源分支 ${payload.sourceBranch || '当前分支'}）`);
-          audit.recordAudit({
-            actor: actorFromSocket(socket), action: 'worktree_create', target: made.path,
-            outcome: 'ok', meta: { branch: made.branch, sourceBranch: payload.sourceBranch ?? null },
-          });
+          cwd = scratchLease.cwd;
+        } else {
+          // ensureAuthorized 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
+          // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
+          const routedCwd = routeCwd(rawCwd);
+          if (routedCwd === null) {
+            // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
+            sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+            ack({ ok: false, error: OUT_OF_SCOPE_ERROR, permanent: true });
+            return;
+          }
+          const workspaceCwd = ensureAuthorized(routedCwd);
+          // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
+          // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
+          // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（authorize 带回的 worktreeRoot 非空即是，
+          // 托管的与仓库外平级的都算）。
+          const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
+          cwd = workspaceCwd;
+          if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
+            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
+            if (!made.ok) {
+              console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
+              audit.recordAudit({
+                actor: actorFromSocket(socket), action: 'worktree_create', target: workspaceCwd,
+                outcome: 'failed', meta: { code: made.code, sourceBranch: payload.sourceBranch ?? null },
+              });
+              sysTo(socket, `无法创建 worktree：${made.error || made.code}`, true);
+              ack({ ok: false, error: made.error || '创建 worktree 失败' });
+              return;
+            }
+            cwd = made.path;
+            // 说一声建了什么：名字来自这条消息，但用户没见过生成结果，而它会成为分支名进 git。
+            sysTo(socket, `已在新 worktree「${made.branch}」中打开（源分支 ${payload.sourceBranch || '当前分支'}）`);
+            audit.recordAudit({
+              actor: actorFromSocket(socket), action: 'worktree_create', target: made.path,
+              outcome: 'ok', meta: { branch: made.branch, sourceBranch: payload.sourceBranch ?? null },
+            });
+          }
         }
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
-        const saved = await currentSessionForCwd(cwd);
-        // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
-        // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
-        // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
-        const justOpened = agents.get(viewingInstanceId);
-        a = (saved && instanceForSession(saved.id))
-          || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-          || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+        try {
+          const saved = await currentSessionForCwd(cwd);
+          // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
+          // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
+          // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
+          const justOpened = agents.get(viewingInstanceId);
+          a = (saved && instanceForSession(saved.id))
+            || (justOpened && justOpened.cwd === cwd ? justOpened : null)
+            || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+        } finally {
+          scratchLease?.release();
+        }
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
@@ -3270,14 +3324,26 @@ registerSocketConnection(io, socket => {
     // ensureAuthorized 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const obj = (payload && typeof payload === 'object') ? payload : null;
-    const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
-    if (routed === null) {
-      // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
-      sysTo(socket, OUT_OF_SCOPE_ERROR, true);
-      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
-      return;
+    let cwd;
+    if (isNoFolderKey(obj ? obj.cwd : viewingCwdOf())) {
+      // 「无文件夹」：空首页停在 scratch 根上，首条消息再懒建 scratch 目录（见 user:message）。
+      // 根要先建出来：下面 scout 探模型清单要一个真实存在的 cwd。
+      try { mkdirSync(SCRATCH_ROOT, { recursive: true }); } catch (err) {
+        sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
+        if (typeof ack === 'function') ack({ ok: false, error: 'scratch_unavailable' });
+        return;
+      }
+      cwd = scratchRootKey();
+    } else {
+      const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
+      if (routed === null) {
+        // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
+        sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+        return;
+      }
+      cwd = ensureAuthorized(routed);
     }
-    const cwd = ensureAuthorized(routed);
 
     // cwd（驾驶轴）保持原样，可以是托管 worktree 路径；路由代次 / 当前指针 / 暂存档位一律按项目轴
     // （viewingCwd = workspaceCwdOf(cwd)）归键——懒开到 worktree / scratch 子目录时，openInstance 也按
@@ -3810,8 +3876,7 @@ registerSocketConnection(io, socket => {
     const obj = payload && typeof payload === 'object' ? payload : {};
     // 「无文件夹」项目：scratch 根本身不可路由（不能直接在它上面开实例），但要列得出它下面的会话；
     // 从没开过无文件夹会话时根还不存在，照样回空列表而不是越界拒绝。
-    const scratchList = typeof obj.cwd === 'string' && (obj.cwd === SCRATCH_ROOT || authorize(obj.cwd)?.kind === 'scratch-root');
-    const cwd = scratchList ? scratchRootKey() : routeCwd(obj.cwd); // 缺省查看实例 cwd
+    const cwd = isNoFolderKey(obj.cwd) ? scratchRootKey() : routeCwd(obj.cwd); // 缺省查看实例 cwd
     if (cwd === null) {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
@@ -3972,8 +4037,14 @@ registerSocketConnection(io, socket => {
     // 这里只报告、**不删**——那棵树里可能是这份改动唯一的存在，而「查不到状态」与「真的干净」
     // 在返回值上必须区分得开（inspectWorktreeCleanliness 已对前者 fail-closed 报不干净）。
     // 自动回收是 Claude Desktop 那套 reaper 的事，它有 PR 合并状态可依据，本仓没有。
-    let worktreeLeft = null;
+    // 「无文件夹」会话：官方删会话时一并删它的 scratch 目录。只在它是这个目录里最后一个会话、且没有活实例
+    // 开在里面时才删（SCRATCH-01，护栏在 removeScratchWorkspace）——/clear 之后同一目录会有多条会话。
     const cwdAuth = authorize(cwd);
+    const scratchRemoved = cwdAuth?.kind === 'scratch'
+      ? removeScratchWorkspace(cwdAuth.path, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, isLiveCwd: isLiveInstanceCwd }).removed
+      : undefined;
+    if (scratchRemoved) audit.recordAudit({ actor: actorFromSocket(socket), action: 'scratch_removed', target: cwdAuth.path, outcome: 'success', meta: { sessionId } });
+    let worktreeLeft = null;
     const leftTree = cwdAuth?.worktreeRoot && !isWithin(cwdAuth.root, cwdAuth.worktreeRoot) ? cwdAuth.worktreeRoot : null;
     if (leftTree) {
       const c = await inspectWorktreeCleanliness(leftTree);
@@ -3984,7 +4055,7 @@ registerSocketConnection(io, socket => {
         unmergedCommits: c.unmergedCommits,
       };
     }
-    ack({ ok: true, worktreeLeft });
+    ack({ ok: true, worktreeLeft, ...(scratchRemoved === undefined ? {} : { scratchRemoved }) });
   });
 
   // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable
@@ -4013,6 +4084,15 @@ registerSocketConnection(io, socket => {
     // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
     isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
+  });
+  registerFolderSocketHandlers({
+    socket,
+    on,
+    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
+    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
+    addConnectedFolder,
+    audit,
+    actorFromSocket,
   });
 
   // web 端一键重启 server（改完配置/代码后免上电脑动手）。放行判据见 willBeRespawned；

@@ -37,3 +37,28 @@ export function removeScratchWorkspace(dir, { root, home, baseDir, isLiveCwd }) 
   rmSync(real, { recursive: true, force: true }); // safe-rm: SCRATCH-01 护栏逐条通过——父目录恰为 scratch 根、mkdtemp 形态、非 symlink、根非家目录/磁盘根、无别的会话、无活实例
   return { removed: true, reason: null };
 }
+
+// 「无文件夹」首条消息的目录分配。懒开是「建目录 → 查当前会话 → 开实例」，中间有 await：两条并发的
+// 首条消息若各建一个目录，下游按 cwd 的单飞（dedupedResume）就合不掉，会各开一个会话。
+// 在途期间（从建目录到实例开好）来的请求拿到同一个目录；全部释放之后，下一条才建新的。
+export function createScratchAllocator(root, { create = createScratchWorkspace } = {}) {
+  let current = null;
+  let holders = 0;
+  return {
+    acquire() {
+      if (!current) current = create(root);
+      holders += 1;
+      const cwd = current;
+      let released = false;
+      return {
+        cwd,
+        release() {
+          if (released) return;
+          released = true;
+          holders -= 1;
+          if (holders === 0) current = null;
+        },
+      };
+    },
+  };
+}

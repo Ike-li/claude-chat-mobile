@@ -2457,6 +2457,22 @@ io.on('connection', socket => {
     });
   });
 
+  // 手机上添加 / 新建文件夹（FOLDER-01）。真 server 走 sessions/folders.js 判据 + 写配置文件；
+  // mock 先给形状一致的最小回执（空家目录、不可写配置），面板的完整流程随前端一起补。
+  socket.on('folders:browse', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof payload?.path !== 'string' || payload.path.startsWith('..') || payload.path.startsWith('/')) return ack({ ok: false, error: 'out_of_range' });
+    ack({ ok: true, home: '/mock/home', path: payload.path, reason: payload.path ? null : 'home', entries: [], truncated: false });
+  });
+  socket.on('folders:add', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: false, error: 'no_config_file' });
+  });
+  socket.on('folders:mkdir', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: false, error: 'out_of_range' });
+  });
+
   socket.on('statusline:setup', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;

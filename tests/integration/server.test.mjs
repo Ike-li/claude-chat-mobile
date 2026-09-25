@@ -606,6 +606,13 @@ const ACK_SHAPES = [
     check: ack => assert.deepEqual(ack.sessions, [], '拒绝支不得带任何会话——回落成别的目录的会话就是错数据') },
   { event: 'permissions:rules', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }), required: ['ok', 'cwd', 'rules', 'error'] },
   { event: 'browse:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected', path: '.' }), required: ['ok', 'error'] },
+  // 手机上添加 / 新建文件夹（FOLDER-01，2026-09-24）。浏览的成功支免夹具：家目录本身照样返回完整键集。
+  { event: 'folders:browse', branch: '家目录', payload: () => ({ path: '' }),
+    required: ['ok', 'home', 'path', 'reason', 'entries', 'truncated'],
+    check: ack => assert.ok(Array.isArray(ack.entries), 'entries 必须是数组——前端无条件遍历') },
+  { event: 'folders:browse', branch: '越界', payload: () => ({ path: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:mkdir', branch: '名字不合法', payload: () => ({ path: '', name: '..' }), required: ['ok', 'error'] },
+  { event: 'folders:add', branch: '家目录不能加', payload: () => ({ path: '' }), required: ['ok', 'error'] },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
