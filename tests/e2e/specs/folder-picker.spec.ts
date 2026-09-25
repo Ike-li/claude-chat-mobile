@@ -8,7 +8,7 @@
 // 热加载生没生效由真 server 判（tests/invariants/folder-picker.test.mjs 与 server/folders.test.mjs），
 // mock 只用一棵假家目录树回放那几种原因码。
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
 
 const SCRATCH = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
@@ -166,6 +166,45 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => sent.length).toBeGreaterThan(0);
     const [, payload] = JSON.parse(sent[0].slice(sent[0].indexOf('[')));
     expect(payload.cwd, '首条消息投到了 worktree 所属的仓库').toBe('/Users/you/code/claude-chat-mobile/wt-feat-z');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 离线时在「无文件夹」的新会话页上连发两条：重放时第一条懒开实例，第二条改投它（不再各建一个 scratch 目录），
+  // 撞上第一条开跑的回合就落「未发送 + 重发」。「重发」要投给改投后的那个会话——拿入队时的原始条目
+  // （instanceId 为空、cwd 是 scratch 根）去发，服务端会再建一个目录、再开一个会话，同一件事被拆成两半。
+  test('P0-PICK-8 离线在「无文件夹」里连发两条：第二条撞上在途轮后，「重发」投给第一条开出来的会话', async ({ page }) => {
+    const sent: Array<{ text?: string; instanceId?: string | null; cwd?: string }> = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
+        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+      }
+    }));
+    await gotoMock(page);
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:arm-fresh-turn-running');
+    await openPickerFromCompose(page);
+    await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
+    await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('无文件夹');
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线第一条', '离线第二条']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const resend = page.locator('[data-testid="outbox-resend"]');
+    await expect(resend).toBeVisible();
+    const before = sent.length;
+    await resend.click();
+    await expect.poll(() => sent.length).toBeGreaterThan(before);
+    const again = sent[sent.length - 1];
+    expect(again.text).toBe('离线第二条');
+    expect(again.instanceId, `重发拿的是入队时的原始条目：${JSON.stringify(again)}`).toBe('inst_fresh');
     await expectNoBrowserErrors(page);
   });
 

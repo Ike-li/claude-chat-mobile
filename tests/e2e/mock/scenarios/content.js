@@ -97,6 +97,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armHistoryOrderRace(); },
     },
     {
+      // P0-PICK-8：武装「下一个懒开的实例一开出来就有一轮在跑」，离线连发的第二条因此撞上在途轮。
+      command: 'test:arm-fresh-turn-running',
+      run: async () => { getContext().armFreshTurnRunning(); },
+    },
+    {
       // P0-ACK-TIMEOUT：武装「session:history 的 ack 永不返回、但连接没断」，下一次切入 Timeline Session 生效。
       command: 'test:arm-history-ack-timeout',
       run: async () => { getContext().armHistoryAckTimeout(); },

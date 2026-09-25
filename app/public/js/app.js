@@ -1396,6 +1396,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
+        // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
+        // 例外是「在新 worktree 里开」「无文件夹」：这一批里各只该兑现一次（判据见 planOutboxWorktreeReuse），
+        // 否则每条各建一棵树 / 一个 scratch 目录、各开一个会话，同一个任务被拆进互不相干的上下文。
+        // 改投过的条目此后一律按改投后的走（重新入队、「重发」按钮都是）：拿原始条目再发，锚点已不在，又会另开一个。
+        const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchorId), scratchAnchorId, scratchRoot);
         // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
         // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
         // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
@@ -1403,16 +1408,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // processOfflineQueue() 直接早退空转，条目要拖到【再下一次】connect 才动。断了就整批留在队列里
         // 等 reconnect——那本来就是 outbox 的语义，不必替它在离线时空转。
         if (!socket.connected) {
-          enqueueOutbox(item);
+          enqueueOutbox(planned);
           if (indicator) indicator.textContent = t('🕐 正在等待连接...');
           continue;
         }
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
-        // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
-        // 例外是「在新 worktree 里开」：这一批里它只该兑现一次（判据见 planOutboxWorktreeReuse），
-        // 否则每条各建一棵树、各开一个会话，同一个任务被拆进互不相干的分支与上下文。
-        const decision = await deliverOutboxItem(planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchorId), scratchAnchorId, scratchRoot));
+        const decision = await deliverOutboxItem(planned);
         worktreeAnchorId = nextOutboxWorktreeAnchor(item, decision, worktreeAnchorId);
         scratchAnchorId = nextOutboxScratchAnchor(item, decision, scratchAnchorId, scratchRoot);
         const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
@@ -1427,7 +1429,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(item, decision.message, targetsViewing);
+          markOutboxBlocked(planned, decision.message, targetsViewing);
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -1435,7 +1437,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           logClientEvent('send', `[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发`);
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
-          enqueueOutbox(item);
+          enqueueOutbox(planned);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
       }

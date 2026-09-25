@@ -265,6 +265,9 @@ let replayFloodSlowAck = false;
 // 会先 emit 一条 history_append（模拟 catchUpTick 在 web 拉历史的窗口里检出终端新落定的消息，
 // 该事件是 out-of-band、不进 replay buffer、任何时候直接渲染），再返回历史本体。
 let historyOrderRaceArmed = false;
+// test:arm-fresh-turn-running：下一个懒开的实例一开出来就「一轮在跑」（真 server 上首条消息开出实例后
+// 回合立刻开跑，紧跟着的第二条必撞在途轮）。一次性。
+let freshTurnRunningArmed = false;
 // P0-ACK-TIMEOUT：复刻「ACK 永不返回、但连接没断」。武装后，下一次 session:history 会先 emit 一条
 // history_append（闸门此刻正扣着它），然后【故意不调用 callback】——前端 socket.timeout(15s) 到点走
 // err 分支。这条被扣住的增量是它在客户端的唯一副本（out-of-band、不进 replay buffer，server 的
@@ -545,6 +548,7 @@ function resetMockState() {
   replayFloodHistoryArmed = false;
   replayFloodSlowAck = false;
   historyOrderRaceArmed = false;
+  freshTurnRunningArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
@@ -662,6 +666,7 @@ function openFreshMockInstance(requestedModel) {
       model: freshModel
     });
   }
+  if (freshTurnRunningArmed) { freshTurnRunningArmed = false; freshInst.turnRunning = true; }
   viewingInstanceId = freshId;
   permissionMode = freshPrefs.permissionMode;
   effortLevel = freshPrefs.effort;
@@ -3040,6 +3045,7 @@ io.on('connection', socket => {
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart, mockDirs, mockDirFields,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
+      armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
     })),
@@ -5315,7 +5321,9 @@ io.on('connection', socket => {
     }
     // REL-01：真实 app/server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
-    if (typeof ack === 'function') ack({ ok: true });
+    // 同真 server 回投到的实例：离线重放靠它认出「本批第一条开出来的实例」，后续同意图的条目改投它。
+    // 懒开的实例恒为 inst_fresh（openFreshMockInstance）。
+    if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' });
     const resetGen = mockResetGeneration; // 见 mockResetGeneration：下面的 await 醒来时用它判断是否已换了用例
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
