@@ -9,6 +9,7 @@ import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   workdirBreadthDiagnostic,
+  connectedFoldersDiagnostic,
   UPLOADS_FOOTPRINT_WARN_BYTES,
   classifyAuthToken,
   authTokenDiagnostic,
@@ -1526,5 +1527,52 @@ test.describe('workdirBreadthDiagnostic：工作区过宽根（只报不拦）',
 
   test('英文档没有中文残留', () => {
     assert.doesNotMatch(workdirBreadthDiagnostic({ dirs: [home], home, lang: 'en' }).detail, /[一-鿿]/);
+  });
+});
+
+// 「已连接的文件夹」布局提示（2026-09-25）。只报不拦：两类都不挡启动，但用户看不出原因——
+// 显式列着的 worktree 自成一节、会话不并回仓库；scratch 根在 git 仓库里时「无文件夹」会话以为自己在那个仓库。
+test.describe('connectedFoldersDiagnostic：已连接文件夹的布局提示（只报不拦）', () => {
+  const fine = { root: '/h/Library/scratch-workspaces', repoRoot: null, writable: true };
+
+  test('都正常：一条 ok', () => {
+    const r = connectedFoldersDiagnostic({ redundantWorktrees: [], scratch: fine, lang: 'zh' });
+    assert.deepEqual(r.map(x => x.status), ['ok']);
+  });
+
+  test('显式列着、其实不必列的 worktree：逐条点名它与所属仓库，说清删了之后会怎样', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }, { path: '/c/app-fix', repo: '/c/app' }],
+      scratch: fine, lang: 'zh',
+    });
+    assert.deepEqual(r.map(x => x.status), ['warn', 'warn']);
+    assert.ok(r[0].detail.includes('/c/app-feat') && r[0].detail.includes('/c/app'), r[0].detail);
+    assert.match(r[0].detail, /并回/, '只说「可以删」不说后果，用户不知道该不该删');
+    assert.ok(r[1].detail.includes('/c/app-fix'));
+  });
+
+  test('标签与措辞用实际来源键名：清单来自 WORK_DIRS 环境变量时，叫人去改 WORKDIRS 就是让他找一个自己配置里没有的键', () => {
+    const [d] = connectedFoldersDiagnostic({ redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }], scratch: fine, source: 'WORK_DIRS', lang: 'zh' });
+    assert.equal(d.name, 'WORK_DIRS');
+    assert.match(d.detail, /从 WORK_DIRS 删掉/);
+  });
+
+  test('scratch 根在 git 仓库里、不可写：各一条 warn，点名那个仓库', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [], scratch: { root: '/h/Library/scratch-workspaces', repoRoot: '/h', writable: false }, lang: 'zh',
+    });
+    assert.deepEqual(r.map(x => x.status), ['warn', 'warn']);
+    assert.ok(r.some(x => x.detail.includes('/h') && /CLAUDE\.md/.test(x.detail)), JSON.stringify(r));
+    assert.ok(r.some(x => /不可写/.test(x.detail)), JSON.stringify(r));
+  });
+
+  test('英文档没有中文残留', () => {
+    const r = connectedFoldersDiagnostic({
+      redundantWorktrees: [{ path: '/c/app-feat', repo: '/c/app' }],
+      scratch: { root: '/h/s', repoRoot: '/h', writable: false }, lang: 'en',
+    });
+    for (const x of [...r, ...connectedFoldersDiagnostic({ redundantWorktrees: [], scratch: fine, lang: 'en' })]) {
+      assert.doesNotMatch(`${x.name} ${x.detail}`, /[一-鿿]/);
+    }
   });
 });

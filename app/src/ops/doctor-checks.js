@@ -895,6 +895,50 @@ export function workdirBreadthDiagnostic({ dirs = [], home, lang = 'zh' } = {}) 
   };
 }
 
+// 「已连接的文件夹」布局提示（2026-09-25）。纯判定：读盘的部分由 doctor-runtime 的 probeConnectedFolders 算好。
+//   redundantWorktrees [{ path, repo }]：WORKDIRS 里显式列着、但所属仓库已连接的 worktree。列着它就自成一节，
+//     会话不并回仓库（兼容旧配置：从前仓库外的 worktree 必须显式列入）。
+//   scratch { root, repoRoot, writable }：「无文件夹」会话的 scratch 根。落在 git 仓库里时 CLI 会向上加载那个仓库的
+//     CLAUDE.md 与 .claude/settings；不可写时第一条消息建不出目录。
+//   source：清单的实际来源键名（WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），标签与「从哪删」都用它，同 D3。
+// 已连接文件夹互相嵌套不报：官方同样支持（手机上也能添加已被覆盖的子文件夹），报了就是跟产品自己的界面唱反调。
+export function connectedFoldersDiagnostic({ redundantWorktrees = [], scratch = null, source = 'WORKDIRS', lang = 'zh' } = {}) {
+  const out = [];
+  for (const { path, repo } of redundantWorktrees || []) {
+    out.push({
+      status: 'warn', name: source,
+      detail: bi(lang,
+        `${path} 是 ${repo} 的 git worktree，仓库已经连接，这一条不必单独列出。列着它就自成一节；从 ${source} 删掉之后，它的会话会并回 ${repo} 那一节。`,
+        `${path} is a git worktree of ${repo}, which is already connected, so it doesn't need its own entry. Listed, it gets its own section; remove it from ${source} and its sessions fold back into ${repo}.`),
+    });
+  }
+  const scratchName = bi(lang, '无文件夹', 'No folder');
+  if (scratch?.repoRoot) {
+    out.push({
+      status: 'warn', name: scratchName,
+      detail: bi(lang,
+        `无文件夹会话的目录 ${scratch.root} 落在 git 仓库 ${scratch.repoRoot} 里：会话会加载那个仓库的 CLAUDE.md 与 .claude/settings，git status 报的也是那个仓库。`,
+        `The no-folder session directory ${scratch.root} is inside the git repository ${scratch.repoRoot}: sessions will load that repository's CLAUDE.md and .claude/settings, and git status will report that repository.`),
+    });
+  }
+  if (scratch && !scratch.writable) {
+    out.push({
+      status: 'warn', name: scratchName,
+      detail: bi(lang,
+        `无文件夹会话的目录 ${scratch.root} 不可写：选「无文件夹」发第一条消息时会建不出目录。`,
+        `The no-folder session directory ${scratch.root} is not writable: the first message in a "No folder" session will fail to create it.`),
+    });
+  }
+  if (!out.length) {
+    out.push({
+      status: 'ok', name: bi(lang, '已连接的文件夹', 'Connected folders'),
+      detail: bi(lang, '没有多余的 worktree 条目；无文件夹会话的目录可写、不在 git 仓库里。',
+        'No redundant worktree entries; the no-folder session directory is writable and outside any git repository.'),
+    });
+  }
+  return out;
+}
+
 export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', accessProfile = '', lang = 'zh' } = {}) {
   if (fileEditOff) {
     return {

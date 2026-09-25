@@ -1,10 +1,10 @@
 // doctor-runtime.js —— UI 安全体检（④）的运行时编排：读合并白名单 + 6 项检查 + 脱敏聚合。
 // server 的 doctor:run 事件调 runDoctor(ctx)，ctx 由 server 喂（env + 已在内存的 workDirs/版本/pushEnabled/设备数）。
 // 脱敏原则：绝不回显明文 token / 绝对路径 / AUD / 密钥——只出布尔、计数、以及危险白名单规则串（用户须据此收紧）。
-import { readFileSync, existsSync, accessSync, constants, readdirSync, readlinkSync } from 'node:fs';
+import { readFileSync, existsSync, accessSync, constants, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
@@ -12,6 +12,33 @@ import { ACCESS_PROFILES } from './env-schema.js';
 import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, deviceApprovalScopeDiagnostic, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic, workdirBreadthDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 import { childEnv } from '../shared/child-env.js';
+import { findWorktreeOwner, resolveAuthorizedCwd } from '../sessions/folder-access.js';
+
+// 「已连接的文件夹」布局的取数（判定在 doctor-checks 的 connectedFoldersDiagnostic）。要读盘，所以住这里。
+//   redundantWorktrees：WORKDIRS 里落在 git linked worktree 中、拿掉它之后仍被授权的条目。判据直接问
+//     resolveAuthorizedCwd，不另写一套会漂移的规则——所属仓库没连时这一条是必需的，不能劝删。
+//   scratch：scratch 根向上第一个带 .git 的祖先；可写性看它自己，还没建时看最近的已存在祖先（server 会 mkdir -p）。
+export function probeConnectedFolders({ dirs = [], scratchRoot } = {}) {
+  const real = (dirs || []).map(d => { try { return realpathSync(d); } catch { return null; } }).filter(Boolean);
+  const redundantWorktrees = [];
+  for (const dir of real) {
+    if (!findWorktreeOwner(dir)) continue;
+    const auth = resolveAuthorizedCwd(dir, { connected: real.filter(d => d !== dir), scratchRoot });
+    if (auth) redundantWorktrees.push({ path: dir, repo: auth.projectKey });
+  }
+  let repoRoot = null;
+  let existing = null;
+  for (let dir = scratchRoot; dir;) {
+    if (!existing && existsSync(dir)) existing = dir;
+    if (existsSync(join(dir, '.git'))) { repoRoot = dir; break; }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  let writable = false;
+  try { if (existing) { accessSync(existing, constants.W_OK); writable = true; } } catch { /* 不可写 */ }
+  return { redundantWorktrees, scratch: { root: scratchRoot, repoRoot, writable } };
+}
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
 // —— 那一层是纯判定。判定用 claudeBinDiagnostic(probeClaudeBin())，CLI 与 web 两个 doctor 同一对。

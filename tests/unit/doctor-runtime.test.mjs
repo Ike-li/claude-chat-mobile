@@ -1,10 +1,11 @@
 // tests/unit/doctor-runtime.test.mjs —— UI 安全体检编排（④）。重点：白名单合并容错 + 报告脱敏（明文绝不外泄）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot, probeTailscale, probeListeningProcesses } from '../../app/src/ops/doctor-runtime.js';
+import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot, probeTailscale, probeListeningProcesses, probeConnectedFolders } from '../../app/src/ops/doctor-runtime.js';
 import { modelSettingsConflictDiagnostic, identifySelfServer } from '../../app/src/ops/doctor-checks.js';
 import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 
@@ -619,5 +620,58 @@ test.describe('WORK_DIRS：过宽根只报不拦', () => {
     const c = wd(['/srv/project', `${home}/code/app`]);
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.tooBroad, 0);
+  });
+});
+
+// 「已连接的文件夹」布局取数（2026-09-25）。「显式列着的 worktree 是否多余」直接问授权判据：
+// 拿掉它之后仍被授权才算多余——所属仓库没连时这一条是必需的，劝删就是让它不可达。
+test.describe('probeConnectedFolders：已连接文件夹的布局取数', () => {
+  const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { stdio: 'pipe' });
+
+  test('WORKDIRS 里的平级 worktree：所属仓库也连着时算多余，仓库没连时不算', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-doctor-')));
+    try {
+      const repo = join(root, 'repo');
+      mkdirSync(repo);
+      git(repo, 'init', '-q', '-b', 'main');
+      git(repo, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init');
+      const sibling = join(root, 'repo-feat');
+      git(repo, 'worktree', 'add', '-q', '-b', 'feat', sibling);
+      const other = join(root, 'other');
+      mkdirSync(other);
+      const scratchRoot = join(root, 'scratch-workspaces');
+      assert.deepEqual(probeConnectedFolders({ dirs: [repo, sibling, other], scratchRoot }).redundantWorktrees, [{ path: sibling, repo }]);
+      assert.deepEqual(probeConnectedFolders({ dirs: [sibling, other], scratchRoot }).redundantWorktrees, [],
+        '仓库没连：删掉这一条它就不可达了');
+    } finally {
+      rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
+  });
+
+  test('scratch 根：向上找到带 .git 的祖先就报出来；还没建时看最近的已存在祖先能不能写', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-scratch-')));
+    try {
+      const plain = probeConnectedFolders({ dirs: [], scratchRoot: join(root, 'Library', 'scratch-workspaces') });
+      assert.deepEqual(plain.scratch, { root: join(root, 'Library', 'scratch-workspaces'), repoRoot: null, writable: true });
+      // 用 git 管家目录（dotfiles）的人：家目录下任何目录都在那个仓库里
+      mkdirSync(join(root, 'home', '.git'), { recursive: true });
+      const inRepo = probeConnectedFolders({ dirs: [], scratchRoot: join(root, 'home', 'Library', 'scratch-workspaces') });
+      assert.equal(inRepo.scratch.repoRoot, join(root, 'home'));
+    } finally {
+      rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
+  });
+
+  test('scratch 根（或它最近的已存在祖先）不可写', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-locked-')));
+    const locked = join(root, 'locked');
+    mkdirSync(locked);
+    chmodSync(locked, 0o555);
+    try {
+      assert.equal(probeConnectedFolders({ dirs: [], scratchRoot: join(locked, 'scratch-workspaces') }).scratch.writable, false);
+    } finally {
+      chmodSync(locked, 0o755);
+      rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
   });
 });
