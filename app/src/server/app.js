@@ -1005,8 +1005,8 @@ const instanceState = instanceManager.stateOf;
 // 此空窗期切档无实例可作用——按 cwd 暂存，待首条消息 openInstance FRESH 懒开时消费。
 // 权威源：L0 pending > L3 CLI settings（cliDefaultsByCwd / resolveSettings）> L4 硬默认；
 // resume 走会话数据(L2)，不读本 pending/cliDefaults。effort 的 null（模型默认）合法 → Map.has 判存在。
-const pendingModeByCwd = new Map();           // cwd → 待应用权限档（新会话懒创建期，L0）
-const pendingEffortByCwd = new Map();         // cwd → 待应用思考强度档（同上；null 合法）
+const pendingModeByCwd = new Map();           // 项目键（workspaceCwdOf）→ 待应用权限档（新会话懒创建期，L0）
+const pendingEffortByCwd = new Map();         // 项目键 → 待应用思考强度档（同上；null 合法）
 // L3：按 cwd 缓存的 CLI settings 默认（resolveSettings 合并 user/project/local）。失败不缓存以便重试。
 const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model, env }
 const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重）
@@ -1255,11 +1255,12 @@ function instancesPayload() {
   // （L0 pending > L3 CLI settings > L4 硬默认），修「空首页残留上个会话档」+ 与终端 settings 对齐。
   if (!viewingInstanceId) {
     const cwd = viewingCwdOf();
+    const prefsKey = workspaceCwdOf(cwd);
     const fresh = resolveFreshPrefs({
-      hasPendingMode: pendingModeByCwd.has(cwd),
-      pendingMode: pendingModeByCwd.get(cwd),
-      hasPendingEffort: pendingEffortByCwd.has(cwd),
-      pendingEffort: pendingEffortByCwd.get(cwd),
+      hasPendingMode: pendingModeByCwd.has(prefsKey),
+      pendingMode: pendingModeByCwd.get(prefsKey),
+      hasPendingEffort: pendingEffortByCwd.has(prefsKey),
+      pendingEffort: pendingEffortByCwd.get(prefsKey),
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
     payload.defaultPermissionMode = fresh.mode;
@@ -1771,7 +1772,9 @@ serviceSampleInterval.unref?.(); // 不阻止进程退出
 // （切目录/跨 cwd 启动时指针可能指向别目录会话）。终端会话不在 sessions.json → 返回 {id} 仅凭 id resume
 // （model 由 CLI 从 jsonl 恢复裸名；首轮 onSessionId 会把它 upsert 进 sessions.json「收编」）。
 async function currentSessionForCwd(cwd) {
-  const id = sessions.getCurrent(cwd);
+  // 指针按项目轴归键（同 finishOpenFocus / onSessionId）；文件存在性仍按 cwd 精确校验——仓库的新会话页
+  // 懒开时不会误续那个项目下、transcript 落在 worktree 里的会话。
+  const id = sessions.getCurrent(workspaceCwdOf(cwd));
   if (!id || !(await sessionFileExists(cwd, id))) return null;
   return sessions.getSession(id) || { id };
 }
@@ -1815,9 +1818,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     throw err;
   }
   const id = newInstanceId();
-  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
+  // 项目轴路由键（workspaceCwdOf）：路由代次、当前指针、空首页暂存的档位都按它归键。cwd 是驾驶轴
+  // （worktree / scratch 子目录），两轴在懒开时分叉——按 cwd 取暂存值会静默丢掉用户在空首页选的档。
+  const routeKey = workspaceCwdOf(cwd);
+  // 路由代次快照：本实例的 onSessionId 之后只有在该项目代次未前进（未被 session:new/home/switch 作废）
   // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
-  const generation = sessions.getGeneration(cwd);
+  const generation = sessions.getGeneration(routeKey);
   // B1：可被 session:switch 聚焦 live 时刷新；闭包 const 无法在 switch 后对齐 getGeneration
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
@@ -1839,17 +1845,17 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   const isFresh = !resumeId;
   const fresh = isFresh
     ? resolveFreshPrefs({
-        hasPendingMode: pendingModeByCwd.has(cwd),
-        pendingMode: pendingModeByCwd.get(cwd),
-        hasPendingEffort: pendingEffortByCwd.has(cwd),
-        pendingEffort: pendingEffortByCwd.get(cwd),
+        hasPendingMode: pendingModeByCwd.has(routeKey),
+        pendingMode: pendingModeByCwd.get(routeKey),
+        hasPendingEffort: pendingEffortByCwd.has(routeKey),
+        pendingEffort: pendingEffortByCwd.get(routeKey),
         cliDefaults: cliDefaultsByCwd.get(cwd) || null,
       })
     : null;
   if (mode === undefined) {
     if (isFresh) {
       mode = fresh.mode;
-      pendingModeByCwd.delete(cwd); // 消费 L0（无 pending 时 delete 无害）
+      pendingModeByCwd.delete(routeKey); // 消费 L0（无 pending 时 delete 无害）
     } else {
       mode = saved?.permissionMode || transcriptMode || 'default';
     }
@@ -1858,7 +1864,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   if (effort !== undefined) effUi = effort;
   else if (isFresh) {
     effUi = fresh.effort;
-    pendingEffortByCwd.delete(cwd);
+    pendingEffortByCwd.delete(routeKey);
   } else {
     effUi = resolveResumeEffort({
       savedEffort: saved?.effort,
@@ -2122,7 +2128,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: cwd, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
       recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
@@ -2141,7 +2147,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         interactionLog.addSessionLog(instance.sessionId, 'sys_info', `[SYS] 实例已退出 (onExit): instanceId=${id}, resumeFailed=${instance.resumeFailed}`);
       }
       if (agents.get(id) === instance) {
-        if (instance.resumeFailed) sessions.setCurrent(cwd, null);
+        if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
         // 只清表、不 dispose（实例已在退出路径上）。与 remove() 共用 clearTables，防再漏表。
         instanceManager.clearTables(id);
         // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
@@ -3015,7 +3021,7 @@ registerSocketConnection(io, socket => {
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
     // B3：FRESH 尚无 sessionId 时 dispose+resume(null) 会丢掉在途首条/半开实例——只记 pending，等懒开消费
     if (!sid) {
-      pendingEffortByCwd.set(cwd, level);
+      pendingEffortByCwd.set(workspaceCwdOf(cwd), level);
       effortByInstance.set(id, level);
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
@@ -3099,7 +3105,7 @@ registerSocketConnection(io, socket => {
     const a = agents.get(id);
     viewingCwd = workspaceCwdOf(a.cwd);
     // B2：列表/tab 聚焦也要更新 currentByCwd（此前只 session:switch/finishOpenFocus 写指针）
-    if (a.sessionId) sessions.setCurrent(a.cwd, a.sessionId);
+    if (a.sessionId) sessions.setCurrent(workspaceCwdOf(a.cwd), a.sessionId);
     // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
     a.touchActivity?.();
     // 切视图立即清全局 mirror（否则 catchUpTick 切换分支完成前，A 的锁仍挂着）
@@ -3206,16 +3212,16 @@ registerSocketConnection(io, socket => {
     const obj = (payload && typeof payload === 'object') ? payload : null;
     const cwd = ensureAuthorized(obj ? routeCwd(obj.cwd) : viewingCwdOf());
 
-    // cwd（驾驶轴，供下面路由代次/当前指针/懒开使用）保持原样，可以是托管 worktree 路径；
-    // viewingCwd（工作区展示轴）另外归一化——两个前端调用点目前只会传顶层工作区目录（抽屉按行 /
-    // 全局 currentCwd），worktree 从不出现在这里，故此刻是无操作的防御性对齐，不改变现有行为。
+    // cwd（驾驶轴）保持原样，可以是托管 worktree 路径；路由代次 / 当前指针 / 暂存档位一律按项目轴
+    // （viewingCwd = workspaceCwdOf(cwd)）归键——懒开到 worktree / scratch 子目录时，openInstance 也按
+    // 同一个项目键取，两边对得上（2026-09-24：此前暂存在项目键、取用在驾驶轴，懒开 worktree 时档位静默丢失）。
     viewingCwd = workspaceCwdOf(cwd);
-    sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
-    sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
+    sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
+    sessions.setCurrent(viewingCwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
     // 新会话空窗口立即清全局 mirror（跨工作区新建最易撞「A 驾驶锁挂到 B」）
     clearMirrorOnViewChange();
-    pendingModeByCwd.delete(cwd); pendingEffortByCwd.delete(cwd); // 重置 L0（防上次未发的残留被误消费）
+    pendingModeByCwd.delete(viewingCwd); pendingEffortByCwd.delete(viewingCwd); // 重置 L0（防上次未发的残留被误消费）
     broadcastInstances(); // 先推一帧（可能仍是 L4 或旧 L3 缓存）；下方 force 刷新 L3 后再补广播
     pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无缓存由下方 scout 补发
     pushSlashCommandsForCwd(cwd); // 有缓存即时推 slash 提示；无缓存保留前端 localStorage，首条消息真 init 校正
@@ -3320,10 +3326,10 @@ registerSocketConnection(io, socket => {
     // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
     // 必须在 dedupedResume 之前 bump：若下面需要新 spawn 实例，openInstance 内会同步捕获代次快照——
     // bump 放这之后会让刚 spawn 的、本该是"当前权威"的实例反而捕获到旧代次，被自己后续 onSessionId 误判陈旧。
-    sessions.bumpGeneration(cwd);
+    sessions.bumpGeneration(workspaceCwdOf(cwd));
     const inst = live || await dedupedResume(cwd, sessionId);
     // B1：live 复用时把代次快照拉到当前——否则 /clear 后 onSessionId 因 generation 陈旧不写 currentByCwd
-    if (inst) inst.routeGeneration = sessions.getGeneration(cwd);
+    if (inst) inst.routeGeneration = sessions.getGeneration(workspaceCwdOf(cwd));
     finishOpenFocus(inst, cwd, sessionId, ack);
   });
 
@@ -3355,7 +3361,7 @@ registerSocketConnection(io, socket => {
       return;
     }
     const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid });
-    sessions.bumpGeneration(cwd);
+    sessions.bumpGeneration(workspaceCwdOf(cwd));
     const inst = await dedupedResume(cwd, newId);
     finishOpenFocus(inst, cwd, newId, ack);
   });
@@ -3622,7 +3628,7 @@ registerSocketConnection(io, socket => {
       if (forkConversation) {
         try {
           ({ sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: plan.keepUuid }));
-          sessions.bumpGeneration(cwd);
+          sessions.bumpGeneration(workspaceCwdOf(cwd));
         } catch (err) {
           forkError = err?.message || String(err);
           console.error('[rewind] 分叉失败', forkError);
@@ -3721,7 +3727,7 @@ registerSocketConnection(io, socket => {
     const cwd = routeCwd(obj.cwd); // 缺省查看实例 cwd
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
-    const id = sessions.getCurrent(cwd);
+    const id = sessions.getCurrent(workspaceCwdOf(cwd));
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
     const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id)) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
@@ -3844,7 +3850,7 @@ registerSocketConnection(io, socket => {
     }
     // 原子性：先清当前指针 + 记入 pendingDeleteIds（列表临时排除），再删文件。
     // 崩溃窗口：pending 不落盘 → 孤儿文件重新可见，可重试；绝不会留下「指针指向已删文件」。
-    if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null);
+    if (sessions.getCurrent(workspaceCwdOf(cwd)) === sessionId) sessions.setCurrent(workspaceCwdOf(cwd), null);
     pendingDeleteIds.add(sessionId);
     invalidateListCache(cwd);
     try {

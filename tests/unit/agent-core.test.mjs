@@ -430,7 +430,7 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
     );
     assert.match(src, /writeSessionEntrypoint\(sid,\s*drivingCwd\)/,
       'entrypoint 写进旧 cwd 的 project 目录 = 在父仓造幽灵 jsonl，把「查不到」变成「查到一个空的」');
-    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*cwd/,
+    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*routeKey\b/,
       '条目 cwd 必须是驾驶轴、路由键必须是工作区轴——两轴合一时必有一条是错的');
     assert.match(src, /recordCwdDefaultModel\(drivingCwd,/,
       'defaultModelByCwd 的消费方是 viewingCwdOf()（驾驶轴），归键必须同轴');
