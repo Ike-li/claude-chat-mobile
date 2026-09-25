@@ -7194,6 +7194,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     sessionPanel.appendChild(buildNeedsYouSection());
     sessionPanel.appendChild(buildServiceSection());
 
+    // 「添加文件夹」放在文件夹清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下，得先滚才看得到。
+    // 点开是家目录浏览（只看得到目录名，能不能加由服务端判）。
+    const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk" data-testid="drawer-add-folder"></button>`);
+    addFolder.textContent = `＋ ${t('添加文件夹')}`;
+    addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
+    sessionPanel.appendChild(addFolder);
+
     // 按项目清单顺序（已连接的文件夹按配置顺序、各自的子文件夹紧随其后、「无文件夹」垫底），每节一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
     //   折叠：📁 ▶ basename + 角标 → 点击展开（若非当前 cwd 则同时切换）
@@ -7206,11 +7213,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     const unowned = buildUnownedLiveSection();
     if (unowned) sessionPanel.appendChild(unowned);
-    // 照官方侧栏：文件夹清单的末尾就能加新文件夹（浏览家目录、只看得到目录名，判据在服务端）
-    const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk" data-testid="drawer-add-folder"></button>`);
-    addFolder.textContent = `＋ ${t('添加文件夹')}`;
-    addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
-    sessionPanel.appendChild(addFolder);
     startSessionPanelRevalidator();
   }
 

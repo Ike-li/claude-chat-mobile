@@ -55,6 +55,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-PICK-2 添加文件夹：不能加的置灰并写明原因；加上之后就在那里开新会话，抽屉里多一节', async ({ page }) => {
     await openSessionsSidebar(page);
+    // 入口在文件夹清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下，得先滚才找得到
+    const addFirst = await page.locator('#sessionPanel').evaluate(panel => {
+      const add = panel.querySelector('[data-testid="drawer-add-folder"]');
+      const firstDir = panel.querySelector('div[data-dir]');
+      return Boolean(add && firstDir && (add.compareDocumentPosition(firstDir) & Node.DOCUMENT_POSITION_FOLLOWING));
+    });
+    expect(addFirst, '「添加文件夹」排在了文件夹清单后面').toBe(true);
     await page.locator('[data-testid="drawer-add-folder"]').click();
     await expect(picker(page)).toHaveClass(/sheet-open/);
     await expect(pickerTitle(page)).toHaveText('~');
