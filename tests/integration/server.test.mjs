@@ -568,6 +568,13 @@ const ACK_SHAPES = [
       assert.ok(Array.isArray(ack.pinned), 'pinned 必须是数组——前端无条件对它做 .length/展开');
       assert.ok(Array.isArray(ack.sessions), 'sessions 必须是数组');
     } },
+  // 显式越界支（SCOPE-05，2026-09-24）：拒绝时键集与正常回执一致、外加 error——前端按字段取，
+  // 不能因为被拒就换一个形状；而此前这一支根本不存在（越界静默回落成别的目录的列表）。
+  { event: 'session:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }),
+    required: ['currentSessionId', 'sessions', 'pinned', 'terminalBusy', 'terminalWaiting', 'hasMore', 'total', 'readState', 'error'],
+    check: ack => assert.deepEqual(ack.sessions, [], '拒绝支不得带任何会话——回落成别的目录的会话就是错数据') },
+  { event: 'permissions:rules', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected' }), required: ['ok', 'cwd', 'rules', 'error'] },
+  { event: 'browse:list', branch: '越界 cwd', payload: () => ({ cwd: '/definitely/not/connected', path: '.' }), required: ['ok', 'error'] },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },

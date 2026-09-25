@@ -3,6 +3,9 @@ import { basename } from 'node:path';
 import { assertSafeRelPath } from '../files/git-workspace.js';
 import { isBareStoredName } from '../files/uploads.js';
 
+// 显式传入的 cwd 不在已连接的文件夹里（routeCwd 返回 null）时的统一拒绝文案（SCOPE-05）。组装根也用它。
+export const OUT_OF_SCOPE_ERROR = '这个目录不在已连接的文件夹里';
+
 export function registerFileSocketHandlers({
   socket,
   on,
@@ -33,6 +36,7 @@ export function registerFileSocketHandlers({
     if (typeof ack !== 'function') return;
     const { cwd: requestedCwd, relPath, offset, maxEntries } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const result = listDir(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxEntries });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
@@ -52,6 +56,7 @@ export function registerFileSocketHandlers({
     if (typeof ack !== 'function') return;
     const { cwd: requestedCwd, relPath, offset, maxBytes, encoding } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     // encoding:'base64' → 附件/二进制按片 base64 回传（E18 附件预览）；其余值走默认文本模式
     const result = browseReadFile(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxBytes, encoding });
     if (result?.blockedSymlink) {
@@ -85,6 +90,7 @@ export function registerFileSocketHandlers({
     }
     const { cwd: requestedCwd, storedName, offset, maxBytes } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const loc = locateStoredAttachment(cwd, storedName);
     if (!loc) {
       // 两种失败合成同一句：storedName 不是裸名（可疑输入）与文件确实不在（已删/从未上传）。
@@ -145,6 +151,7 @@ export function registerFileSocketHandlers({
     }
     const { cwd: requestedCwd } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
       logger.warn(`[scope] git status 越界拒绝：cwd=${cwd}`);
@@ -184,6 +191,7 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, code: 'unavailable', error: '分支列表不可用' });
     }
     const cwd = routeCwd(payload?.cwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
       logger.warn(`[scope] git branches 越界拒绝：cwd=${cwd}`);
@@ -209,6 +217,7 @@ export function registerFileSocketHandlers({
     }
     const { cwd: requestedCwd, path: relPath, side } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
       logger.warn(`[scope] git diff 越界拒绝：cwd=${cwd}`);
@@ -260,6 +269,7 @@ export function registerFileSocketHandlers({
     }
     const { cwd: requestedCwd, query, limit } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const workDirs = getWorkDirs();
     if (!cwdInWorkDirs(cwd, workDirs)) {
       logger.warn(`[scope] files:search 越界拒绝：cwd=${cwd}`);
@@ -287,6 +297,7 @@ export function registerFileSocketHandlers({
     }
     const { cwd: requestedCwd, relPath, content, baseHash } = payload || {};
     const cwd = routeCwd(requestedCwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const meta = { relPath: typeof relPath === 'string' ? relPath : null };
     const result = writeFileInScope(cwd, relPath, content, scopeDirsFor(cwd, getWorkDirs()), { baseHash });
     if (!result.ok && result.code === 'scope') {

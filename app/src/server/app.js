@@ -128,7 +128,7 @@ import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
 import { createAutoContinue } from './auto-continue.js';
-import { registerFileSocketHandlers } from './socket-files.js';
+import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
 
 // 公网身份提供方策略（当前唯一实现是 Cloudflare Access）。init 必须在 env 规整之后——
@@ -230,9 +230,16 @@ const routableAuth = (cwd, extraRoots) => {
 const ensureAuthorized = cwd => routableAuth(cwd)?.path ?? primaryWorkDir();
 // 文件浏览 / 编辑 / 预览的范围根：全部已连接文件夹，外加这个 cwd 自己的范围（仓库外的 worktree、
 // scratch 目录不在任何已连接文件夹之下，不补上就连会话自己的目录都读不了）。
+// 正在跑的实例自己的 cwd：工作区被热移除后，其上已开的会话继续运行、仍可查看（读档放行，见 routeCwd）。
+const isLiveInstanceCwd = c => {
+  for (const a of agents.values()) if (a.cwd === c) return true;
+  return false;
+};
 const fileScopeRootsFor = cwd => {
   const auth = routableAuth(cwd);
-  return auth && (auth.kind === 'worktree' || auth.kind === 'scratch') ? [...workDirs, auth.scopeRoot] : workDirs;
+  if (auth) return auth.kind === 'worktree' || auth.kind === 'scratch' ? [...workDirs, auth.scopeRoot] : workDirs;
+  // 读档放行的已开会话（工作区已被热移除）：范围补上它自己的目录，否则 routeCwd 放行了、范围门又拒掉。
+  return isLiveInstanceCwd(cwd) ? [...workDirs, cwd] : workDirs;
 };
 
 let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId → {[category]:{notifiedAt,pending}}；
@@ -450,20 +457,24 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
 // 授权校验 + 缺省落 viewingCwd：cwd 维度的事件（session:list/new/switch…）经此解析目标 cwd。
 // 合法路径 = 已连接文件夹及其子目录、所属仓库已连接的 linked worktree（判据见 authorize）。
 // 返回解析后的 path 而非原始入参：下游要拿它算 getProjectDir，未解析的路径在 macOS 上会静默查空。
-const routeCwd = cwd => {
+//
+// 【显式越界 → null，调用方必须拒绝（SCOPE-05，2026-09-24）】此前越界一律静默回退当前查看目录。
+// 抽屉按项目发 session:list、离线队列带着入队时的 cwd 重发之后，回退就是错数据：把 A 文件夹的会话
+// 画到 B 的标题下、把消息投进另一个工作区。没传 cwd 仍落查看目录——那不是用户给的值，是缺省。
+// tier='read'（历史、文件面板、切到已在跑的实例……）额外放行「正在跑的实例自己的 cwd」：工作区被热移除
+// 后，其上已开的会话继续运行、仍可查看（产品判据：仅拒新开）。开 / 建类一律只认当前授权。
+const routeCwd = (cwd, { tier = 'open' } = {}) => {
+  if (typeof cwd !== 'string' || !cwd) return viewingCwdOf();
   const auth = routableAuth(cwd);
   if (auth) return auth.path;
-  // 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
-  // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
-  if (typeof cwd === 'string' && cwd) {
-    console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在白名单，回退当前查看目录`);
-    // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，
-    // 此处 actor 留空——目录越界信号的价值在"发生过"本身，不在于精确到哪个连接（真正的访问控制
-    // 已经生效，这里只是留痕，同 WorkdirScopeGuard 的既有 [scope] 日志一个粒度）。
-    audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
-  }
-  return viewingCwdOf();
+  if (tier === 'read' && isLiveInstanceCwd(cwd)) return cwd;
+  console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
+  // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
+  // 目录越界信号的价值在"发生过"本身，拒绝由调用方完成。
+  audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
+  return null;
 };
+
 // 台阶3：按实例路由（BE-001 fail-closed）——缺省（无 instanceId）落 viewingInstanceId（向后兼容缺参旧调用）；
 // 显式命中 live 取该实例；显式但已关闭 → stale（id=null，绝不静默回退 viewing、绝不误投别的会话）。见 instance-routing.js。
 const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), opts);
@@ -2636,7 +2647,14 @@ registerSocketConnection(io, socket => {
         }
         // ensureAuthorized 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
         // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-        const workspaceCwd = ensureAuthorized(routeCwd(rawCwd));
+        const routedCwd = routeCwd(rawCwd);
+        if (routedCwd === null) {
+          // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
+          sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+          ack({ ok: false, error: OUT_OF_SCOPE_ERROR, permanent: true });
+          return;
+        }
+        const workspaceCwd = ensureAuthorized(routedCwd);
         // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
         // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
         // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（authorize 带回的 worktreeRoot 非空即是，
@@ -3179,7 +3197,12 @@ registerSocketConnection(io, socket => {
     // 当前唯一前端调用点（session:home 恒发 {}）不带 cwd，这个分支走不到；仍按「viewingCwd 永远
     // 落工作区轴」这道不变量补 workspaceCwdOf 做防御性一致（同 reselectViewingAfter/setViewing 等处）。
     if (typeof obj.cwd === 'string' && obj.cwd) {
-      viewingCwd = workspaceCwdOf(ensureAuthorized(routeCwd(obj.cwd)));
+      const routed = routeCwd(obj.cwd);
+      if (routed === null) {
+        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+        return;
+      }
+      viewingCwd = workspaceCwdOf(ensureAuthorized(routed));
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
@@ -3210,7 +3233,14 @@ registerSocketConnection(io, socket => {
     // ensureAuthorized 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const obj = (payload && typeof payload === 'object') ? payload : null;
-    const cwd = ensureAuthorized(obj ? routeCwd(obj.cwd) : viewingCwdOf());
+    const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
+    if (routed === null) {
+      // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
+      sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
+    const cwd = ensureAuthorized(routed);
 
     // cwd（驾驶轴）保持原样，可以是托管 worktree 路径；路由代次 / 当前指针 / 暂存档位一律按项目轴
     // （viewingCwd = workspaceCwdOf(cwd)）归键——懒开到 worktree / scratch 子目录时，openInstance 也按
@@ -3305,7 +3335,13 @@ registerSocketConnection(io, socket => {
     // 树已删 + live：cwd 必须取实例自己的驾驶轴。走 routeCwd 的话那条悬空路径会被判越界、回退成父仓，
     // 紧接着的 sessionFileExists 按父仓的 project 目录去查必然查空 —— 用户被锁在一个自己正跑着的
     // 会话外面，拿到的还是「会话不存在」。这一支不新增授权面：live 实例的 CLI 本来就在那儿跑着。
-    const cwd = goneWorktree ? live.cwd : ensureAuthorized(routeCwd(payload?.cwd));
+    // 切到已在跑的实例只是换视图，按读档放行（热移除后的已开会话仍可查看）；要 spawn 的按开档。
+    const routed = goneWorktree ? live.cwd : routeCwd(payload?.cwd, { tier: live ? 'read' : 'open' });
+    if (routed === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
+    const cwd = goneWorktree || live ? routed : ensureAuthorized(routed);
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
@@ -3339,7 +3375,12 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:fork', async (payload, ack) => {
     const sessionId = payload?.sessionId;
     const uuid = payload?.uuid;
-    const cwd = ensureAuthorized(routeCwd(payload?.cwd));
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
@@ -3381,7 +3422,9 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:rewind:candidates', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
-    const cwd = ensureAuthorized(routeCwd(payload?.cwd));
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3405,7 +3448,9 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
-    const cwd = ensureAuthorized(routeCwd(payload?.cwd));
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3507,7 +3552,9 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
-    const cwd = ensureAuthorized(routeCwd(payload?.cwd));
+    const routed = routeCwd(payload?.cwd);
+    if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
+    const cwd = ensureAuthorized(routed);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       reply({ ok: false, error: '会话不存在' });
       return;
@@ -3725,6 +3772,12 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     const obj = payload && typeof payload === 'object' ? payload : {};
     const cwd = routeCwd(obj.cwd); // 缺省查看实例 cwd
+    if (cwd === null) {
+      // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
+      // 就会被画在这个项目的标题下——那是错数据，不是降级。
+      return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
+        hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+    }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(workspaceCwdOf(cwd));
@@ -3815,6 +3868,7 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     const { sessionId } = payload || {};
     const cwd = routeCwd(payload?.cwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
@@ -3896,7 +3950,7 @@ registerSocketConnection(io, socket => {
   registerFileSocketHandlers({
     socket,
     on,
-    routeCwd,
+    routeCwd: c => routeCwd(c, { tier: 'read' }), // 文件面板是读档：热移除后的已开会话仍可查看自己的文件
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
@@ -3913,7 +3967,8 @@ registerSocketConnection(io, socket => {
     rejectableSymlinkComponent,
     buildDiff,
     readPreview,
-    isAuthorizedCwd: c => Boolean(routableAuth(c)),
+    // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
+    isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
   });
 
@@ -3965,7 +4020,8 @@ registerSocketConnection(io, socket => {
     // 归属校验与 session:switch 同款：jsonl 在本 cwd 的 project 目录即有效——接纳终端创建的
     // 会话（不在 sessions.json，原 getSession 守卫会把它们误判为「会话不存在」→ 切入后黑屏）。
     // 列表/切换/历史三环节统一按文件存在性裁决（双向互见互续）。
-    const cwd = routeCwd(payload?.cwd); // 台阶2：读指定目录的历史（缺省 viewingCwd）
+    const cwd = routeCwd(payload?.cwd, { tier: 'read' }); // 读指定目录的历史（缺省 viewingCwd）
+    if (cwd === null) return ack({ messages: [], error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ messages: [], error: '会话不存在' });
     }
@@ -3990,7 +4046,8 @@ registerSocketConnection(io, socket => {
   // 会话归属校验与 session:history 同款（按文件存在性裁决，接纳终端创建的会话）。
   on(socket, 'subagent:flow', async ({ cwd: reqCwd, sessionId, toolUseId } = {}, ack) => {
     if (typeof ack !== 'function') return;
-    const cwd = routeCwd(reqCwd);
+    const cwd = routeCwd(reqCwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
@@ -4371,7 +4428,9 @@ registerSocketConnection(io, socket => {
   // 数据来自 ensureCliDefaults 已经解析好的 effective settings，不额外 spawn CLI。
   on(socket, 'permissions:rules', async (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const cwd = ensureAuthorized(routeCwd(payload?.cwd));
+    // 读档：已授权目录，或正在跑的实例自己的 cwd（其工作区已被热移除时，那里正是用户在看的会话的规则）。
+    const cwd = routeCwd(payload?.cwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, cwd: null, rules: null, error: OUT_OF_SCOPE_ERROR });
     try {
       const resolved = await sdkResolveSettings({ cwd, settingSources: ['user', 'project', 'local'] });
       ack({ ok: true, cwd, rules: permissionRulesFromEffectiveSettings(resolved?.effective) });
@@ -4475,7 +4534,11 @@ registerSocketConnection(io, socket => {
   // ensureCliDefaults 内部已 try/catch 不抛（失败落 L4 硬默认形状），这里的 try/catch 是双重兜底，
   // 保证 broadcastInstances/ack 本身出岔子时也不把 socket 处理器崩掉。
   on(socket, 'config:refresh', async (payload, ack) => {
-    const cwd = routeCwd(payload?.cwd); // 缺省/越界回落 viewingCwd（含白名单校验，同 session:history）
+    const cwd = routeCwd(payload?.cwd); // 缺省落 viewingCwd；显式越界拒绝（SCOPE-05）
+    if (cwd === null) {
+      if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+      return;
+    }
     try {
       await ensureCliDefaults(cwd, { force: true });
       // 模型缓存也须刷新：modelsCache / defaultModelByCwd / init-cache.json 可能因终端侧改 settings 而过期。
