@@ -401,7 +401,11 @@ let mockCanRestart = true;
 // （SESSION-02 的「不属于任何工作区的活实例」），而缺省口径下 mock 永远造不出这种形态。
 let mockDirsOverride = null;
 function mockDirs() {
-  return mockDirsOverride ? [...mockDirsOverride] : Array.from(new Set(mockInstances.map(i => i.cwd)));
+  // 缺省口径不收「归别的项目」的实例 cwd（scratch 目录、仓库外的 worktree）：它们不是工作区
+  const base = mockDirsOverride ? [...mockDirsOverride]
+    : Array.from(new Set(mockInstances.filter(i => !i.projectKey || i.projectKey === i.cwd).map(i => i.cwd)));
+  for (const d of mockAddedFolders) if (!base.includes(d)) base.push(d);
+  return base;
 }
 
 // 「已连接的文件夹」（2026-09-24）：真 server 的 instances 载荷除 dirs 外还带 projects 与 scratchRoot。
@@ -418,17 +422,50 @@ function mockDirFields() {
       if (sub.root === d) projects.push({ key: sub.key, root: d, label: `${name} › ${sub.key.slice(d.length + 1)}`, kind: 'subfolder' });
     }
   }
-  // 「无文件夹」只在用着时占一节（同真 server）
-  if (mockInstances.some(i => i.projectKey === MOCK_SCRATCH_ROOT)) {
+  // 「无文件夹」只在用着时占一节（同真 server：有实例开在里面，或正停在它的新会话页上）
+  if (mockInstances.some(i => i.projectKey === MOCK_SCRATCH_ROOT) || (!viewingInstanceId && pendingFreshCwd === MOCK_SCRATCH_ROOT)) {
     projects.push({ key: MOCK_SCRATCH_ROOT, root: MOCK_SCRATCH_ROOT, label: null, kind: 'scratch' });
   }
   return { dirs, projects, scratchRoot: MOCK_SCRATCH_ROOT };
 }
 
+// 「选文件夹」面板的假家目录（只有目录名，同真 server 的 folders:browse）。键 = 家目录相对路径。
+const MOCK_HOME = '/Users/you';
+const MOCK_WORKTREE_DIRS = new Set(['code/claude-chat-mobile-feat-y']); // 真 server 由双向回验认出
+function createMockFolderTree() {
+  return {
+    '': ['code', 'Documents'],
+    code: ['another-react-project', 'claude-chat-mobile', 'claude-chat-mobile-feat-y', 'new-idea'],
+    'code/another-react-project': [],
+    'code/claude-chat-mobile': ['app', 'packages'],
+    'code/claude-chat-mobile/app': [],
+    'code/claude-chat-mobile/packages': ['web'],
+    'code/claude-chat-mobile/packages/web': [],
+    'code/claude-chat-mobile-feat-y': [],
+    'code/new-idea': [],
+    Documents: [],
+  };
+}
+let mockFolderTree = createMockFolderTree();
+let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
+let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
+const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
+function mockFolderReason(rel) {
+  if (!Object.hasOwn(mockFolderTree, rel)) return 'not_found';
+  if (rel === '') return 'home';
+  if (MOCK_WORKTREE_DIRS.has(rel)) return 'worktree';
+  if (mockDirs().includes(mockFolderAbs(rel))) return 'already_connected';
+  return null;
+}
+const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') && !rel.split('/').includes('..');
+
 function resetMockState() {
   mockResetGeneration += 1;
   mockDirsOverride = null;
   mockSubProjects = [];
+  mockFolderTree = createMockFolderTree();
+  mockAddedFolders = [];
+  mockFoldersAddError = null;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -591,11 +628,15 @@ function openFreshMockInstance(requestedModel) {
     || mockInstances[0]?.cwd
     || '/Users/you/code/claude-chat-mobile';
   pendingFreshCwd = undefined;
+  // 「无文件夹」：首条消息时才建 scratch 目录（同真 server），实例归 scratch 根这个项目
+  const noFolder = freshCwd === MOCK_SCRATCH_ROOT;
+  const drivingCwd = noFolder ? `${MOCK_SCRATCH_ROOT}/scratch-2026-09-24-mock01` : freshCwd;
   let freshInst = mockInstances.find(i => i.instanceId === freshId);
   if (!freshInst) {
     freshInst = {
       instanceId: freshId,
-      cwd: freshCwd,
+      cwd: drivingCwd,
+      ...(noFolder ? { projectKey: MOCK_SCRATCH_ROOT } : {}),
       sessionId: null,
       title: null,
       state: 'busy',
@@ -605,9 +646,11 @@ function openFreshMockInstance(requestedModel) {
     };
     mockInstances.push(freshInst);
   } else {
+    if (!noFolder) delete freshInst.projectKey;
     Object.assign(freshInst, {
+      ...(noFolder ? { projectKey: MOCK_SCRATCH_ROOT } : {}),
       state: 'busy',
-      cwd: freshCwd,
+      cwd: drivingCwd,
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
       model: freshModel
@@ -1287,13 +1330,17 @@ io.on('connection', socket => {
     pendingFreshPermissionMode = undefined;
     pendingFreshEffortLevel = undefined;
     pendingFreshCwd = viewingCwd;
-    const dirs = Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd]));
+    // 「无文件夹」不是工作区：不能照下面那样把请求的 cwd 塞进 dirs（会被画成一个叫 scratch-workspaces 的文件夹）
+    // scratchRoot 恒带（同真 server）：新会话页的「选文件夹」面板靠它发起无文件夹会话
+    const dirFields = viewingCwd === MOCK_SCRATCH_ROOT
+      ? mockDirFields()
+      : { dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])), scratchRoot: MOCK_SCRATCH_ROOT };
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId: null,
         viewingCwd,
-        dirs,
+        ...dirFields,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()
@@ -1336,6 +1383,7 @@ io.on('connection', socket => {
         viewingInstanceId: null,
         viewingCwd,
         dirs,
+        scratchRoot: MOCK_SCRATCH_ROOT,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()
@@ -2483,19 +2531,49 @@ io.on('connection', socket => {
   });
 
   // 手机上添加 / 新建文件夹（FOLDER-01）。真 server 走 sessions/folders.js 判据 + 写配置文件；
-  // mock 先给形状一致的最小回执（空家目录、不可写配置），面板的完整流程随前端一起补。
+  // mock 用一棵只有目录名的假家目录树，判据只保留面板要画的几种原因（家目录 / 已连接 / worktree）。
   socket.on('folders:browse', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    if (typeof payload?.path !== 'string' || payload.path.startsWith('..') || payload.path.startsWith('/')) return ack({ ok: false, error: 'out_of_range' });
-    ack({ ok: true, home: '/mock/home', path: payload.path, reason: payload.path ? null : 'home', entries: [], truncated: false });
+    const rel = payload?.path ?? '';
+    if (!mockFolderRelOk(rel) || !Object.hasOwn(mockFolderTree, rel)) return ack({ ok: false, error: 'out_of_range' });
+    ack({
+      ok: true, home: MOCK_HOME, path: rel, reason: mockFolderReason(rel),
+      entries: mockFolderTree[rel].map(name => ({ name, reason: mockFolderReason(rel ? `${rel}/${name}` : name) })),
+      truncated: false,
+    });
   });
-  socket.on('folders:add', (_payload, ack) => {
+  socket.on('folders:add', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: false, error: 'no_config_file' });
+    const rel = payload?.path;
+    if (!mockFolderRelOk(rel)) return ack({ ok: false, error: 'not_found' });
+    const reason = mockFolderReason(rel);
+    if (reason) return ack({ ok: false, error: reason });
+    if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
+    mockAddedFolders.push(mockFolderAbs(rel));
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart,
+        viewingInstanceId,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+        ...mockDirFields(),
+        instances: mockInstances, service: mockServicePayload()
+      }
+    });
+    ack({ ok: true, dirs: mockDirs() });
   });
-  socket.on('folders:mkdir', (_payload, ack) => {
+  socket.on('folders:mkdir', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: false, error: 'out_of_range' });
+    const rel = payload?.path ?? '';
+    const name = payload?.name;
+    if (typeof name !== 'string' || !name) return ack({ ok: false, error: 'empty' });
+    if (name.startsWith('.')) return ack({ ok: false, error: 'hidden' });
+    if (name.includes('/')) return ack({ ok: false, error: 'separator' });
+    if (!mockFolderRelOk(rel) || !Object.hasOwn(mockFolderTree, rel)) return ack({ ok: false, error: 'out_of_range' });
+    if (mockFolderTree[rel].includes(name)) return ack({ ok: false, error: 'exists' });
+    const child = rel ? `${rel}/${name}` : name;
+    mockFolderTree[rel] = [...mockFolderTree[rel], name].sort();
+    mockFolderTree[child] = [];
+    ack({ ok: true, path: mockFolderAbs(child) });
   });
 
   socket.on('statusline:setup', (payload, ack) => {
@@ -4481,6 +4559,18 @@ io.on('connection', socket => {
       },
     },
     {
+      // test:folders-readonly：工作区列表来自环境变量 WORK_DIRS 的安装——真 server 的 folders:add 写了也不生效，
+      // 回 source_readonly。面板要把原因说出来，而不是静默没反应。
+      command: 'test:folders-readonly',
+      run: async () => {
+        mockFoldersAddError = 'source_readonly';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'test:folders-readonly ready' }
+        });
+      },
+    },
+    {
       // test:projects：抽屉按项目分组（「已连接的文件夹」）——有会话的子文件夹自成一节、仓库外的平级 worktree
       // 随所属仓库（靠实例的 projectKey，按 cwd 前缀归不到）、「无文件夹」有会话时垫底一节。
       command: 'test:projects',
@@ -5265,6 +5355,16 @@ io.on('connection', socket => {
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+      });
+    }
+
+    // 「无文件夹」的首条消息：真 server 此刻懒建 scratch 目录并开实例（见 openFreshMockInstance）。
+    // mock 的通用路径在空首页上不开实例；只对这一种对齐，别的空首页首发维持原样。
+    if (viewingInstanceId === null && pendingFreshCwd === MOCK_SCRATCH_ROOT) {
+      openFreshMockInstance(requestedModel);
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
       });
     }
 

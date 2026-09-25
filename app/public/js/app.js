@@ -202,6 +202,7 @@ import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
 import { createProjectsState } from './app/projects-state.js';
+import { createFolderPicker } from './app/folder-picker.js';
 import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
@@ -6307,6 +6308,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     gitChanges,
   });
   const openWorkspacePanel = workspacePanel.open;
+  // 「选文件夹」面板：新会话在哪开（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
+  const folderPicker = createFolderPicker({
+    $, el, socket, openSheet, closeSheet, haptic,
+    getProjects: () => projectsState.entries(),
+    getScratchRoot: () => projectsState.scratchRoot(),
+    onPick: cwd => startNewSessionIn(cwd),
+  });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
   // ——不重新订阅的话，服务端那份旧订阅记录的 prefs 就跟本地开关脱节，下次推送还是按旧偏好选 body。
   const pushPreview = {
@@ -6840,6 +6848,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return container;
   };
 
+  // 在指定目录开一个新会话（进空首页，首条消息时服务端懒开实例）。抽屉每节的 ＋ 与「选文件夹」面板共用。
+  function startNewSessionIn(d) {
+    // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
+    // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚选的这个 d。
+    viewingInstanceId = null;
+    currentCwd = d;
+    // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
+    // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
+    // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
+    // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
+    applySessionDraftSwap(displayedSessionId, null, {
+      text: inputEl ? inputEl.value : '',
+      attachments: attachments.items(),
+    }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: d });
+    displayedSessionId = null;
+    sessionWorkspaceState.displayedCwd = d;
+    sessionIdClearedByNav = true;
+    // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
+    freshInterruptedInstanceId = null;
+    enterComposeReady();
+    ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
+    newSessionWorktree.reset(); // 换工作区：分支列表与勾选都属于上一个工作区
+    socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
+  }
+
   // 台阶3 Step B：工作区面板 = 目录树（当前 cwd 展开，其他折叠）——类似 IDE 项目浏览器。
   // 单个工作区目录的 DOM 子树构建（dirRow 头行 + subtree 展开区）——从 openSessionPanel 抽出以支持
   // 局部重建（见 rebuildDirSections）：只有这个函数知道"一个目录该怎么画"，openSessionPanel（全量）
@@ -6896,27 +6929,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       e.stopPropagation();
       closeLeftSidebar();
       haptic('tap');
-      // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
-      // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
-      viewingInstanceId = null;
-      currentCwd = d;
-      // displayedSessionId 同样要立刻置空 + 同步做完草稿交换，理由与 btnNew 那处逐字相同：
-      // 漏了它，一次迟到的 instances 广播会拿「prev=旧会话 / new=null」判 swap，把用户刚在
-      // 新会话页打的字存进旧会话草稿、再用空串覆盖输入框（E2E P0-11h 撞的就是这条路径——
-      // 它走的是目录行的 ＋，不经过 btnNew，所以只修 btnNew 那一处时它照旧红）。
-      applySessionDraftSwap(displayedSessionId, null, {
-        text: inputEl ? inputEl.value : '',
-        attachments: attachments.items(),
-      }, { forceSwap: true, prevCwd: sessionWorkspaceState.displayedCwd, newCwd: d });
-      displayedSessionId = null;
-      sessionWorkspaceState.displayedCwd = d;
-      sessionIdClearedByNav = true;
-      // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
-      freshInterruptedInstanceId = null;
-      enterComposeReady();
-      ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
-      newSessionWorktree.reset(); // 换工作区：分支列表与勾选都属于上一个工作区
-      socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
+      startNewSessionIn(d);
     };
     dirRow.appendChild(newSessionBtn);
 
@@ -7184,6 +7197,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     const unowned = buildUnownedLiveSection();
     if (unowned) sessionPanel.appendChild(unowned);
+    // 照官方侧栏：文件夹清单的末尾就能加新文件夹（浏览家目录、只看得到目录名，判据在服务端）
+    const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk" data-testid="drawer-add-folder"></button>`);
+    addFolder.textContent = `＋ ${t('添加文件夹')}`;
+    addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
+    sessionPanel.appendChild(addFolder);
     startSessionPanelRevalidator();
   }
 
@@ -7713,7 +7731,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         <div class="text-center mb-5 w-full">
           <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">${t('新会话已就绪')}</h1>
           <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1" data-compose-sub>${t('将在此工作区开新 CLI 会话')}</div>
-          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('点击打开会话列表（按工作区浏览）')}">
+          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="compose-project-pill" title="${t('换一个文件夹')}">
             <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
             </svg>
@@ -7735,10 +7753,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         </div>
       </div>`);
 
+    // 照官方新会话页：胶囊就是「在哪开」的选择器（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
     container.querySelector('.compose-project-pill').onclick = (e) => {
       e.stopPropagation();
       haptic('tap');
-      if (btnSessions) btnSessions.onclick();
+      folderPicker.open();
     };
     container.querySelectorAll('.esg-prompt').forEach(btn => {
       btn.onclick = () => {

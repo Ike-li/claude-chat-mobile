@@ -17,6 +17,7 @@ export function createProjectsState() {
       scratchRoot = typeof payload?.scratchRoot === 'string' && payload.scratchRoot ? payload.scratchRoot : null;
     },
     keys: () => list.map(p => p.key),
+    entries: () => list.slice(),
     scratchRoot: () => scratchRoot,
     // 任一 cwd 的展示名：是一节就用那一节的标题；scratch 根及其下的目录（「无文件夹」那一节可能还没下发、
     // 或给的是某个会话的 scratch 目录）叫「无文件夹」；其余取末段（与改动前相同）。
