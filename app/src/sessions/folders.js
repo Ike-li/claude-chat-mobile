@@ -38,9 +38,10 @@ export function connectRefusalReason(candidate, { home, forbidden = [], connecte
   if (real === homeReal) return 'home';
   if (!homeReal || !isWithin(real, homeReal)) return 'outside_home';
   if (inForbidden(real, forbidden)) return 'forbidden';
+  // 先于 worktree 判：存量配置里显式连着的平级 worktree 该说「已经连接」，不是「请添加仓库」
+  if (connected.some(c => realOrNull(c) === real)) return 'already_connected';
   // 官方：「Worktrees … can't be added on their own. Add the repository」
   if (findWorktreeOwner(real)) return 'worktree';
-  if (connected.some(c => realOrNull(c) === real)) return 'already_connected';
   return null;
 }
 

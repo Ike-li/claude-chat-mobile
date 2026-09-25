@@ -122,6 +122,9 @@ test('git linked worktree（及其子目录）不能单独加：它跟随所属�
   assert.equal(connectRefusalReason(wt, ctx), 'worktree');
   assert.equal(connectRefusalReason(join(wt, 'sub'), ctx), 'worktree');
   assert.equal(connectRefusalReason(repo, ctx), null, '仓库本身可以加');
+  // 存量配置里显式连着平级 worktree（兼容：它自成项目）：再浏览到它时说「已经连接」——
+  // 说「请添加仓库本身」会让人以为这一项没连上
+  assert.equal(connectRefusalReason(wt, { ...ctx, connected: [wt] }), 'already_connected');
 });
 
 test('文件夹名：只收单段、非点开头、无控制字符、不超 255 字节', () => {
