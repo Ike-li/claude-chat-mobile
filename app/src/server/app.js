@@ -4053,7 +4053,7 @@ registerSocketConnection(io, socket => {
     // 开在里面时才删（SCRATCH-01，护栏在 removeScratchWorkspace）——/clear 之后同一目录会有多条会话。
     const cwdAuth = authorize(cwd);
     const scratchRemoved = cwdAuth?.kind === 'scratch'
-      ? removeScratchWorkspace(cwdAuth.path, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, isLiveCwd: isLiveInstanceCwd }).removed
+      ? removeScratchWorkspace(cwdAuth.path, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, liveCwds: () => [...agents.values()].map(a => a.cwd) }).removed
       : undefined;
     if (scratchRemoved) audit.recordAudit({ actor: actorFromSocket(socket), action: 'scratch_removed', target: cwdAuth.path, outcome: 'success', meta: { sessionId } });
     let worktreeLeft = null;

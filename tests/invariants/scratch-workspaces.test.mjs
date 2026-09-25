@@ -2,7 +2,7 @@
 // 守护：SCRATCH-01（app/src 唯一一处递归删除：父目录恰好是 scratch 根、mkdtemp 形态、非 symlink、根不是家目录/磁盘根、
 //        没有别的会话的 transcript、没有活实例——全部成立才删）
 // 测什么：sessions/scratch-workspaces.js 在一次性目录上的真 fs 行为。每条拒删用例都断言目录（及里面的文件）还在。
-// 不测什么 + 为什么：① 删会话时是否调用它、ack 怎么报在 server 层（tests/invariants/server/folders.test.mjs）
+// 不测什么 + 为什么：① 删会话时是否调用它、ack 怎么报在 server 层（tests/invariants/server/no-folder.test.mjs）
 //   ② scratch 目录能不能当 cwd 在 folder-access.test.mjs（SCOPE-05）
 // 槽位：S1（一次性目录上的真 fs）
 
@@ -29,7 +29,7 @@ function fixture() {
   mkdirSync(home, { recursive: true });
   return { base, home, root, baseDir };
 }
-const opts = (f, extra = {}) => ({ root: f.root, home: f.home, baseDir: f.baseDir, isLiveCwd: () => false, ...extra });
+const opts = (f, extra = {}) => ({ root: f.root, home: f.home, baseDir: f.baseDir, liveCwds: () => [], ...extra });
 const withFile = dir => { writeFileSync(join(dir, 'work.txt'), '用户在这个目录里写的东西'); return dir; };
 const writeTranscript = (baseDir, cwd, id) => {
   const dir = join(baseDir, encodeProjectDir(cwd));
@@ -133,8 +133,41 @@ test('拒删：目录里还有别的会话的 transcript（/clear 之后同一�
 test('拒删：有活实例开在里面', () => {
   const f = fixture();
   const dir = withFile(createScratchWorkspace(f.root));
-  assert.deepEqual(removeScratchWorkspace(dir, opts(f, { isLiveCwd: c => c === dir })), { removed: false, reason: 'in_use' });
+  assert.deepEqual(removeScratchWorkspace(dir, opts(f, { liveCwds: () => [dir] })), { removed: false, reason: 'in_use' });
   assert.ok(existsSync(join(dir, 'work.txt')));
+});
+
+// 会话 cwd 可以落在 scratch 目录的子目录里（模型 git init 之后 EnterWorktree 进 .claude/worktrees/x、
+// 或 Bash cd 触发 CwdChanged）。那时活实例的 cwd 不等于 scratch 目录本身，它的 transcript 也在另一个
+// project 目录里——只比「恰好相等」的话，删同一目录下另一条旧会话会把这棵正在用的子树整个删掉。
+test('拒删：活实例开在它的子目录里（例如里面的 worktree）', () => {
+  const f = fixture();
+  const dir = withFile(createScratchWorkspace(f.root));
+  const sub = join(dir, '.claude', 'worktrees', 'w');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, 'wip.txt'), '还没提交的改动');
+  assert.deepEqual(removeScratchWorkspace(dir, opts(f, { liveCwds: () => [sub] })), { removed: false, reason: 'in_use' });
+  assert.ok(existsSync(join(sub, 'wip.txt')));
+});
+
+test('拒删：子目录里还有会话的 transcript（会话被 CLI 搬进了子目录的 project 目录）', () => {
+  const f = fixture();
+  const dir = withFile(createScratchWorkspace(f.root));
+  const sub = join(dir, 'pkg');
+  mkdirSync(sub);
+  writeTranscript(f.baseDir, sub, 'moved-session');
+  assert.deepEqual(removeScratchWorkspace(dir, opts(f)), { removed: false, reason: 'in_use' });
+  assert.ok(existsSync(join(dir, 'work.txt')));
+});
+
+test('正对照：别的 scratch 目录有会话、有活实例，不妨碍删这一个', () => {
+  const f = fixture();
+  const dir = withFile(createScratchWorkspace(f.root));
+  const other = createScratchWorkspace(f.root);
+  writeTranscript(f.baseDir, other, 'other-dir-session');
+  assert.deepEqual(removeScratchWorkspace(dir, opts(f, { liveCwds: () => [other, join(other, 'x')] })), { removed: true, reason: null });
+  assert.ok(!existsSync(dir));
+  assert.ok(existsSync(other));
 });
 
 test('拒删：scratch 根被配成家目录或磁盘根时，一个都不删', () => {
