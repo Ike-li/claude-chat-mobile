@@ -66,7 +66,8 @@ function verifyWorktreeAt(dir) {
 
 // 从 real 向上找第一个 `.git`，交给 verifyWorktreeAt 判：是目录（普通仓库 / 主仓）或 symlink 都会在
 // 那里被「必须是普通文件」挡掉——判据只留一处，不在这里重复。返回 { worktreeRoot, repo } 或 null。
-function findWorktreeOwner(real) {
+// 导出给 folders.js：「worktree 不能单独添加」要用同一份双向回验，不另判一套。
+export function findWorktreeOwner(real) {
   let dir = real;
   for (let i = 0; i < MAX_ANCESTOR_WALK; i += 1) {
     let found = false;
