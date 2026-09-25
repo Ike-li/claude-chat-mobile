@@ -217,6 +217,7 @@ test('createProjectIndex：并发刷新合并成一次在途 + 一次补跑，�
   assert.equal(calls, 2, '在途期间来过刷新请求：补跑一次，不丢掉那期间出现的新项目');
   release();
   await new Promise(r => setImmediate(r));
+  assert.equal(calls, 2, '补跑完就停：补跑标志没清掉，每次扫完都会再起一次，变成持续空转扫盘');
   assert.deepEqual(index.get(), result);
   assert.equal(changes.length, 1, '两次扫出同样的结果只通知一次（每次都广播就是每分钟一次无谓的全量推送）');
 
@@ -267,6 +268,8 @@ test('hasScratchSessions：只认 scratch 形态目录里真有 transcript 的',
   const { baseDir } = fixture();
   const scratchRoot = join(ROOT, `scratch-root-${seq++}`);
   assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '什么都没有');
+  assert.equal(await hasScratchSessions({ baseDir: join(ROOT, `no-projects-${seq++}`), scratchRoot }), false,
+    '全新安装还没有 ~/.claude/projects：抽屉里不该平白多一节空的「无文件夹」');
   const empty = join(scratchRoot, 'scratch-2026-09-24-EMPTY0');
   mkdirSync(join(baseDir, getProjectDir(empty)), { recursive: true });
   assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '会话删光后留下的空 project 目录不算');

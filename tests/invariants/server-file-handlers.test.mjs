@@ -11,7 +11,7 @@
 //   属 S2 的 tests/invariants/server/files-scope.test.mjs）。三份各守一层，缺哪层都补不上另一层。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
+import { OUT_OF_SCOPE_ERROR, registerFileSocketHandlers } from '../../app/src/server/socket-files.js';
 import { attributePath as realAttributePath } from '../../app/src/files/file-preview.js';
 // R10 归属断言用真实 attributePath（纯函数、零 I/O）：手写 stub 曾把契约编错——它对 relPath 直接看
 // 前缀，而真实实现先 resolve(cwd, relPath)，于是测试与实现互相印证、恒绿。
@@ -52,6 +52,40 @@ test('file socket handlers fail closed and audit out-of-scope browse requests', 
   assert.equal(audits.length, 1);
   assert.equal(audits[0].action, 'scope_violation');
   assert.equal(audits[0].meta.via, 'browse:list');
+});
+
+// 显式越界的 cwd（routeCwd 判 null，SCOPE-05 起不再回落查看目录）：每个走 routeCwd 的文件事件都要
+// 明确拒绝、不碰盘、不跑 git。ok 必须是 false——前端按 ok 分支，ok:true 带 error 会被当成一次空结果画出来。
+test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:false 并说明原因，不读盘、不跑 git', async () => {
+  const touched = [];
+  const spy = name => () => { touched.push(name); return null; };
+  const { handlers } = register({
+    routeCwd: () => null,
+    listDir: spy('listDir'),
+    browseReadFile: spy('browseReadFile'),
+    locateStoredAttachment: spy('locateStoredAttachment'),
+    listGitChanges: spy('listGitChanges'),
+    readGitDiff: spy('readGitDiff'),
+    listGitBranches: spy('listGitBranches'),
+    searchFiles: spy('searchFiles'),
+    writeFileInScope: spy('writeFileInScope'),
+  });
+  const cases = [
+    ['browse:list', { cwd: '/elsewhere', relPath: '.' }],
+    ['browse:read', { cwd: '/elsewhere', relPath: 'a.txt' }],
+    ['attachment:read', { cwd: '/elsewhere', storedName: '1700000000-abcd1234-a.png' }],
+    ['git:status', { cwd: '/elsewhere' }],
+    ['git:branches', { cwd: '/elsewhere' }],
+    ['git:diff', { cwd: '/elsewhere', path: 'a.js' }],
+    ['files:search', { cwd: '/elsewhere', query: 'a' }],
+    ['files:write', { cwd: '/elsewhere', relPath: 'a.txt', content: 'x', baseHash: null }],
+  ];
+  for (const [event, payload] of cases) {
+    let response;
+    await handlers.get(event)(payload, value => { response = value; });
+    assert.deepEqual(response, { ok: false, error: OUT_OF_SCOPE_ERROR }, event);
+  }
+  assert.deepEqual(touched, [], '判了越界还去读盘 / 跑 git');
 });
 
 test('git:status 成功透传 listGitChanges', async () => {

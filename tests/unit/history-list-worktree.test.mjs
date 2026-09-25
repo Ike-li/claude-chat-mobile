@@ -395,6 +395,7 @@ test('仓库外的平级 worktree：会话并进仓库这个项目，行带自�
   assert.ok(sib, `平级 worktree 的会话没并进来：${JSON.stringify(sessions.map(s => s.id))}——1c401b5d 那种会话照样看不见`);
   assert.equal(sib.cwd, sibling, '前端打开要用真实 cwd，用仓库 cwd 会查到空目录');
   assert.equal(sib.worktree, 'repo-feat');
+  assert.equal(sib.worktreeGone, undefined, '活着的平级 worktree 被标成已删 = 提示条常驻，用户以为自己的工作没了');
   // 不传 memberOptions：与从前逐字相同
   const legacy = await listSessionsPage(repo, { baseDir, limit: 10 });
   assert.deepEqual(legacy.sessions.map(s => s.id), ['main-1']);
@@ -432,6 +433,7 @@ test('scratch 根：列出各个 scratch 目录里的会话，行带 cwd 与 scr
   assert.deepEqual(sessions.map(s => s.id), ['s-2', 's-1']);
   assert.deepEqual(sessions.map(s => s.cwd), [d2, d1]);
   assert.ok(sessions.every(s => s.scratch === true && s.worktree === undefined), 'scratch 行不能标成 worktree');
+  assert.ok(sessions.every(s => s.worktreeGone === undefined), '还在的 scratch 目录不能带「已删」标记');
 });
 
 // 真机 1c401b5d：transcript 被 EnterWorktree 整份搬到新 project 目录，头部 ~300 行的 cwd 仍是原仓，
