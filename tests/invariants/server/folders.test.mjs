@@ -66,7 +66,10 @@ test.before(async () => {
   configPath = join(root, 'ccm.config.json');
   writeFileSync(configPath, `${JSON.stringify({ WORKDIRS: [{ path: a, sessionLimit: 9 }] }, null, 2)}\n`);
   auditFile = join(root, 'audit-records.json');
-  server = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: configPath, CCM_AUDIT_FILE: auditFile }));
+  // 数据目录放进家目录（点目录，浏览看不见）：禁区用例要证明它是被「禁区」挡下的，不是被「家目录之外」挡下的
+  const dataDir = join(home, '.ccm-data');
+  mkdirSync(dataDir, { recursive: true });
+  server = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: configPath, CCM_AUDIT_FILE: auditFile, CCM_DATA_DIR: dataDir }));
   sock = await connect(server.port);
   sock.on('agent:event', e => events.push(e));
 });
@@ -108,6 +111,19 @@ test('不能加的一律拒绝，配置文件逐字节不变', async () => {
   await waitFor(() => violations('folders:add').length > 0, 'folders:add 越界审计').catch(() => {});
   assert.deepEqual(violations('folders:add').map(r => r.target), ['..']);
   assert.deepEqual(violations('folders:browse'), [], '成功的浏览被记成了越界');
+});
+
+// 禁区清单在组装根里拼（~/.claude、CCM 数据目录、scratch 根）。S1 的判据用例是自己把清单传进去的——
+// 这条管的是 server 真把那三样传进去了：清空那份清单，其余用例照样全绿，而手工拼的
+// folders:add {path:'.claude'} 就会把 ~/.claude 写进 WORKDIRS（浏览看不见点目录，添加却认任意相对路径）。
+test('添加：禁区一律拒（~/.claude、CCM 数据目录、scratch 根），配置文件逐字节不变', async () => {
+  mkdirSync(join(home, '.claude', 'x'), { recursive: true });
+  mkdirSync(join(home, '.local', 'share', 'claude-chat-mobile', 'scratch-workspaces'), { recursive: true });
+  const before = readFileSync(configPath, 'utf8');
+  for (const path of ['.claude', '.claude/x', '.ccm-data', '.local/share/claude-chat-mobile/scratch-workspaces']) {
+    assert.deepEqual(await emit('folders:add', { path }), { ok: false, error: 'forbidden' }, path);
+  }
+  assert.equal(readFileSync(configPath, 'utf8'), before);
 });
 
 test('新建：范围内建出一层，越界拒绝且什么都没建出来', async () => {

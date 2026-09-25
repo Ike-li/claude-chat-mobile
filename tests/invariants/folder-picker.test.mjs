@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync, readdirSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -156,6 +156,34 @@ test('新建：在范围内建出单层目录，返回真实路径', () => {
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.path, join(home, 'code', 'new-proj'));
   assert.ok(existsSync(res.path));
+});
+
+// 建完再 realpath 复核：判完父目录到 mkdir 之间，路径可能被换成 symlink（家目录里的东西模型写得动）。
+// mkdir 注入成「先换、再建」，把这个窗口确定地复现出来。
+test('新建后复核：父目录在建的一刻被换成指向外面的 symlink——拒绝，并把被骗建到外面的空目录删掉', () => {
+  const { home, outside, ctx } = fixture();
+  const parent = join(home, 'code');
+  const mkdir = target => {
+    renameSync(parent, `${parent}-moved`);
+    symlinkSync(outside, parent);
+    mkdirSync(target);
+  };
+  assert.deepEqual(createSubfolder('code', 'swapped', { ...ctx, mkdir }), { ok: false, error: 'out_of_range' });
+  assert.equal(existsSync(join(outside, 'swapped')), false, '建到家目录外的目录留在了那里');
+  assert.ok(existsSync(outside), '外面那个目录本身不能被动');
+});
+
+test('新建后复核：刚建好的目录被换成指向别人目录的 symlink——拒绝，且别人的目录原样保留', () => {
+  const { outside, ctx } = fixture();
+  const victim = join(outside, 'someone-else');
+  mkdirSync(victim);
+  const mkdir = target => {
+    mkdirSync(target);
+    rmdirSync(target);
+    symlinkSync(victim, target);
+  };
+  assert.deepEqual(createSubfolder('code', 'decoy', { ...ctx, mkdir }), { ok: false, error: 'out_of_range' });
+  assert.ok(existsSync(victim), '复核时跟着 symlink 把别人的空目录删了');
 });
 
 test('新建：已存在、名字不合法、父目录出界或在禁区里，一律拒绝且什么都没建出来', () => {

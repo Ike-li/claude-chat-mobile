@@ -5,7 +5,7 @@
 // 禁区、linked worktree 不能加。加进去之后怎么授权在 folder-access.js（子目录可达、worktree 随仓库）。
 //
 // 协议里的位置一律是「家目录相对路径」（'' = 家目录）：客户端不必、也不该拼服务端的绝对路径。
-import { mkdirSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { findWorktreeOwner, isWithin } from './folder-access.js';
 
@@ -95,13 +95,17 @@ export function createSubfolder(parentRel, name, ctx = {}) {
   if (!at || inForbidden(at.real, ctx.forbidden)) return { ok: false, error: 'out_of_range' };
   const target = join(at.real, name);
   try {
-    mkdirSync(target);
+    (ctx.mkdir ?? mkdirSync)(target);
   } catch (err) {
     return { ok: false, error: err?.code === 'EEXIST' ? 'exists' : 'mkdir_failed' };
   }
   const real = realOrNull(target);
   if (real !== target) {
-    if (real) { try { rmdirSync(real); } catch { /* 非空或已不在：不再动它 */ } }
+    // 只删自己刚建的那个空目录：父目录被换成 symlink 时它被建到了外面，经 target 删掉它；target 本身
+    // 若已被换成 symlink，跟着 realpath 删掉的会是别人的目录——lstat 不跟最后一级链接，是链接就不动。
+    let st = null;
+    try { st = lstatSync(target); } catch { /* 已不在 */ }
+    if (st?.isDirectory()) { try { rmdirSync(target); } catch { /* 非空：不再动它 */ } }
     return { ok: false, error: 'out_of_range' };
   }
   return { ok: true, path: real };
