@@ -34,6 +34,11 @@ export function claudeSettingsPath(home = homedir()) {
   return join(claudeHome(home), 'settings.json');
 }
 
+/** CLI 全局配置 ~/.claude.json（在 home 根下，不在 ~/.claude/ 里）。终端 /chrome 的「默认启用」等存在这里。 */
+export function claudeGlobalConfigPath(home = homedir()) {
+  return join(home, `${CLAUDE_DIR_NAME}.json`);
+}
+
 /** 本产品写进 CLI 目录的东西全部收在这一层下（两个桥的投递箱/快照/manifest）。一键卸载据此对称移除。 */
 export function ccmUnderClaudeHome(home = homedir(), ...segments) {
   return join(claudeHome(home), 'ccm', ...segments);

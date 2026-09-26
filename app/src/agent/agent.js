@@ -3,10 +3,12 @@
 // SDK 消息 → agent:event 统一信封，seq 单调 + 环形缓冲。
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as interactionLog from './interaction-log.js';
 import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
+import { claudeGlobalConfigPath as defaultClaudeGlobalConfigPath } from '../shared/claude-home.js';
 import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
@@ -214,7 +216,19 @@ function filterSafeResolvedEnv(env) {
 // 只留尾部：报错行总在最末，长跑会话的 stderr 不会把内存撑大。4000 字符足够容纳 CLI 的多行报错。
 const STDERR_TAIL_MAX = 4000;
 
-// SDK query options 纯函数（可单测）：集中「与 CLI 对齐的桥接开关」，避免 start() 内联大对象难测。
+// 终端 `/chrome` →「Enabled by default」存在 ~/.claude.json，交互模式认它，SDK 会话不认、只认显式
+// `--chrome`（2026-09-26 零 token 探针：不传则 mcpServerStatus 无 claude-in-chrome，传了即 connected）。
+// 每次开会话现读，终端里切了开关，下一个 web 会话就跟上，不必重启服务。
+// 读不到 / 半截 JSON（CLI 频繁重写这个文件）→ 按没开处理，即修复前的行为；不能让可选能力拖垮开会话。
+function chromeDefaultEnabled(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))?.claudeInChromeDefaultEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+// SDK query options 装配（可单测；唯一的 I/O 是只读 ~/.claude.json，见 chromeDefaultEnabled）：集中「与 CLI 对齐的桥接开关」，避免 start() 内联大对象难测。
 // agentProgressSummaries：默认开——子 agent ~30s AI 进度写 task_progress.summary，刷新 lastSeenAt + 横幅文案；
 // 关：CCM_AGENT_PROGRESS_SUMMARIES=0（省 fork token；静默期只靠 tool description 变化）。
 export function buildAgentQueryOptions(session, env = process.env) {
@@ -253,6 +267,7 @@ export function buildAgentQueryOptions(session, env = process.env) {
     effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
     // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
     ...(settings ? { settings } : {}),
+    ...(chromeDefaultEnabled(session.claudeGlobalConfigPath) ? { extraArgs: { chrome: null } } : {}),
     permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
     // 附件已不落在 cwd 内（见 files/uploads.js 头注释），这一行把附件根纳入权限范围，Read 才免审批。
     // 映射到 CLI 的 --add-dir。**只加 uploads 这一个子目录**，绝不是整个 dataDir——那里有设备信任
@@ -385,7 +400,7 @@ function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -599,6 +614,8 @@ export class AgentSession {
     // transcript 根目录：生产恒为 undefined（history.js 内默认 ~/.claude/projects）。
     // 单测注入 tmpdir 用——扫盘类逻辑若只能打真实目录，测试就得在真实会话树上跑（曾出过事故）。
     this.transcriptBaseDir = transcriptBaseDir;
+    // CLI 全局配置 ~/.claude.json：生产恒为缺省，单测注入 tmpdir 下的文件（见 chromeDefaultEnabled）。
+    this.claudeGlobalConfigPath = claudeGlobalConfigPath || defaultClaudeGlobalConfigPath();
   }
 
   // ---- streaming input：用户消息队列 → AsyncIterable<SDKUserMessage> ----
