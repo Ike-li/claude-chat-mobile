@@ -9,6 +9,7 @@
 // 与 AUTH-06 剥控制面密钥同一理由）——在授权判据里跑 git，等于把判定交给被判定的对象。
 // 由 tests/invariants/worktree-ownership.test.mjs 的源码守卫钉住：本文件不得 import child_process。
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 // mkdtempSync(prefix) 在前缀后追加 6 个 [A-Za-z0-9] 随机字符。只认这个形态：scratch 根下别的目录
@@ -45,7 +46,9 @@ function longestRoot(real, roots) {
 //   ① `<dir>/.git` 是普通文件（不是 symlink、不是目录），内容 `gitdir: <R>/.git/worktrees/<名>`；
 //   ② 那个管理目录真实存在，且确实位于某个仓库的 `.git/worktrees/` 下；
 //   ③ 仓库侧 `<管理目录>/gitdir` 回链到的正是 `<dir>/.git`。
-// ①是 worktree 侧的一面之词——模型在任何可写目录里写一行就能伪造；③在仓库那一侧，才是证据。
+// ①是 worktree 侧的一面之词——模型在任何可写目录里写一行就能伪造；③要求仓库那一侧也认它。
+// 但③也不是铁证：仓库就在连接范围里，模型能在里面造个假仓库、两侧一起伪造（2026-10-10 review P1）。
+// 所以授权时另由 overreaches 限住伪造能换来的范围，见 resolveAuthorizedCwd。
 // 管理目录名不一定等于 worktree 目录名（本机实测 .git/worktrees/agent → …-third-party），只能沿指针走。
 function verifyWorktreeAt(dir) {
   const dotGit = join(dir, '.git');
@@ -84,11 +87,25 @@ export function findWorktreeOwner(real) {
   return null;
 }
 
+// 两侧元数据都在模型写得动的地方，双向回验挡不住一起伪造；挡不住伪造，就限住伪造换来的范围：
+// 范围外的 worktree 根若是家目录或其上级（含文件系统根）、罩住它自己所属的仓库（伪造成上级目录必然如此——
+// 假仓库得在连接范围里）、或罩住禁区，一律不认。真的 git worktree 不会长在这些位置。
+// 只用在「范围外凭 worktree 身份授权」这一处：连接范围内的路径本来就由连接根授权，worktree 只决定归属，
+// 而被显式连上的 worktree 天然罩住一个连接根，套用这条会把它的 worktree 事实一并抹掉。
+// 剩下的：写得动范围外某个普通目录的进程，仍能把那个目录冒充成 worktree。它本来就能把那里的文件
+// 拷进连接范围，这一步不再给它多出什么。
+function overreaches(worktreeRoot, repo, { home, forbidden }) {
+  if (home && isWithin(home, worktreeRoot)) return true;
+  if (isWithin(repo, worktreeRoot)) return true;
+  return forbidden.some(f => isWithin(f, worktreeRoot));
+}
+
 // 授权判据（唯一一份）。ctx：
 //   connected   已连接文件夹（已 realpath 的 WORKDIRS）
 //   extraRoots  额外放行的根（热移除保护：实例创建时所属、之后被移出清单的那个工作区）
 //   scratchRoot 无文件夹会话的 scratch 根（可不存在 = 不认任何 scratch）
 //   forbidden   禁区（~/.claude、CCM 数据目录）：其子树永远不是合法 cwd
+//   home        家目录（缺省 os.homedir()）：伪造的 worktree 根不得是它或它的上级
 // 返回 null（不放行）或：
 //   kind       connected（连接范围内）| worktree（范围外、但属于已连接仓库）| scratch | scratch-root
 //   path       realpath 后的 cwd（下游拿它算 project 目录，未解析的路径在 macOS 上会静默查空）
@@ -133,7 +150,8 @@ export function resolveAuthorizedCwd(candidate, ctx = {}) {
     const projectKey = repoAuthorized && !explicitInsideWorktree ? wt.repo : real;
     return { kind: 'connected', path: real, root, projectKey, scopeRoot: root, ...worktreeFacts };
   }
-  if (repoAuthorized) {
+  const home = realOrNull(typeof ctx.home === 'string' && ctx.home ? ctx.home : homedir());
+  if (repoAuthorized && !overreaches(wt.worktreeRoot, wt.repo, { home, forbidden })) {
     return { kind: 'worktree', path: real, root: repoRoot, projectKey: wt.repo, scopeRoot: wt.worktreeRoot, ...worktreeFacts };
   }
   return null;

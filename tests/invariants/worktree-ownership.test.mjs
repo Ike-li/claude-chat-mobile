@@ -123,6 +123,56 @@ test('仓库侧回链被改到别处：不放行', () => {
   assert.equal(resolveAuthorizedCwd(sibling, { connected: [repo] }), null);
 });
 
+// 两侧一起伪造（2026-10-10 review P1）：仓库就在连接范围里，模型能在里面造一个假仓库
+// `<仓库>/fake/.git/worktrees/x/gitdir` 指向目标，再在目标里写回指的 `.git`——双向回验两侧都对得上。
+// 挡不住伪造，判据只能限住伪造换来的范围，下面三条各只踩一条规则。
+function forgeReciprocal(repo, target) {
+  const meta = join(repo, 'fake', '.git', 'worktrees', 'x');
+  mkdirSync(meta, { recursive: true });
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(meta, 'gitdir'), join(target, '.git') + '\n');
+  writeFileSync(join(target, '.git'), `gitdir: ${meta}\n`);
+}
+
+test('两侧一起伪造、worktree 根是家目录：不放行（显式添加时家目录本来就被拒）', () => {
+  const { base, repo } = makeFixture();
+  const home = join(base, 'home');                       // 家目录不罩住连接根：只踩「家目录」这一条
+  forgeReciprocal(repo, home);
+  const docs = join(home, 'Documents');
+  mkdirSync(docs);
+  assert.equal(resolveAuthorizedCwd(docs, { connected: [repo], home }), null,
+    '伪造的 worktree 根落在家目录 = 整个家目录挂给手机，绕过「不能连家目录」');
+  assert.equal(resolveAuthorizedCwd(home, { connected: [repo], home }), null);
+});
+
+test('两侧一起伪造、worktree 根是连接根的上级目录（罩住了它自己所属的假仓库）：不放行', () => {
+  const { base, code, repo } = makeFixture();
+  forgeReciprocal(repo, code);
+  const other = join(code, 'other-project');
+  mkdirSync(other);
+  assert.equal(resolveAuthorizedCwd(other, { connected: [repo], home: join(base, 'elsewhere') }), null,
+    '伪造的 worktree 根是连接根的上级 = 连一个仓库就把它的整个上级目录开出来');
+});
+
+test('两侧一起伪造、worktree 根罩住禁区：不放行', () => {
+  const { base, repo } = makeFixture();
+  const outside = join(base, 'opt', 'ccm');
+  const dataDir = join(outside, 'data');
+  mkdirSync(dataDir, { recursive: true });
+  forgeReciprocal(repo, outside);
+  const tools = join(outside, 'tools');
+  mkdirSync(tools);
+  assert.equal(resolveAuthorizedCwd(tools, { connected: [repo], home: join(base, 'elsewhere'), forbidden: [dataDir] }), null,
+    '伪造的 worktree 根罩住 CCM 数据目录 = 文件面板的范围根里含着设备信任表与令牌');
+});
+
+test('正对照：真的平级 worktree 在家目录里照样放行（限范围的规则不误伤正常布局）', () => {
+  const { base, repo, sibling } = makeFixture();
+  const auth = resolveAuthorizedCwd(sibling, { connected: [repo], home: base });
+  assert.equal(auth?.kind, 'worktree', `正常的平级 worktree 被新规则挡掉了：${JSON.stringify(auth)}`);
+  assert.equal(auth.projectKey, repo);
+});
+
 // 只认标准布局 `<仓库>/.git/worktrees/<名>`：`--separate-git-dir` 的仓库，管理目录在
 // `<别处>/r.git/worktrees/<名>`，从它推不出工作区在哪。变异实测：把两级目录名的判断从 `||` 改成 `&&`，
 // 会把 `<别处>` 当成仓库——而之前没有任何用例红。
