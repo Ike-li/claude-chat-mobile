@@ -51,7 +51,7 @@ const FOLDER_REASON_TEXT = Object.freeze({
   root: tk('不能添加磁盘根目录'),
   outside_home: tk('只能添加家目录里的文件夹'),
   forbidden: tk('这是 Claude 或本应用自己的目录，不能添加'),
-  worktree: tk('这是 git worktree，跟随所属仓库；请添加仓库本身'),
+  worktree: tk('这是 Claude Code 建的 worktree，跟随所属仓库；请添加仓库本身'),
   already_connected: tk('已经连接'),
   not_found: tk('文件夹不存在'),
   not_directory: tk('不是文件夹'),

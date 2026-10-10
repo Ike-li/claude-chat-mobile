@@ -1,5 +1,5 @@
-// tests/invariants/worktree-ownership.test.mjs —— linked worktree 随所属仓库授权，但归属必须双向回验
-// 守护：SCOPE-04（worktree 的 .git 指针 + 仓库侧 .git/worktrees/<名>/gitdir 回链，两侧都成立才认；判定不执行 git）
+// tests/invariants/worktree-ownership.test.mjs —— worktree 只在连接范围内随所属仓库归组，范围外的要显式连接
+// 守护：SCOPE-04（worktree 身份只决定归属、不授权；归属要 .git 指针 + 仓库侧回链双向成立；判定不执行 git）
 // 测什么：用真 git（git init + git worktree add）造出平级 / 托管 / 伪造 / 被篡改的各种 worktree，
 //   看 resolveAuthorizedCwd 与 listLinkedWorktrees 认不认、认成谁的。
 // 不测什么 + 为什么：① server 各闸门有没有用上这个判据——属接线，S2（tests/invariants/server/）
@@ -53,25 +53,16 @@ function metaDirOf(repo, worktree) {
   throw new Error(`fixture: 找不到 ${worktree} 的管理目录`);
 }
 
-test('仓库外的平级 worktree：仓库已连接即授权，归到仓库名下', () => {
+// 照官方桌面端（2026-10-10 读安装包）：它只认自己建在 `<仓库>/.claude/worktrees/` 或指定位置的 worktree，
+// 用户自己 `git worktree add ../x` 建的平级目录就是个普通文件夹，手机要用得单独加进清单。
+// 凭 worktree 身份放行范围外的目录，等于让写得动 `.git` 元数据的进程自己扩授权（2026-10-10 review P1）。
+test('仓库外的平级 worktree：仓库连着也不授权，要显式连接', () => {
   const { repo, sibling } = makeFixture();
-  const auth = resolveAuthorizedCwd(sibling, { connected: [repo] });
-  assert.ok(auth, '仓库已连接、worktree 两侧指针都成立却不放行 = 真机 1c401b5d 那种会话照样进不了抽屉');
-  assert.equal(auth.kind, 'worktree');
-  assert.equal(auth.path, sibling);
-  assert.equal(auth.projectKey, repo, 'worktree 会话要归到所属仓库的项目下，而不是自成一个项目');
-  assert.equal(auth.repo, repo);
-  assert.equal(auth.scopeRoot, sibling, '文件面板的范围是这棵 worktree 本身，不是整个仓库');
-});
-
-test('平级 worktree 里的子目录同样授权，范围仍是 worktree 根', () => {
-  const { repo, sibling } = makeFixture();
+  assert.equal(resolveAuthorizedCwd(sibling, { connected: [repo] }), null,
+    '凭 worktree 身份放行范围外的目录 = 两侧元数据写得动的进程能把授权扩到连接范围以外');
   const sub = join(sibling, 'app', 'src');
   mkdirSync(sub, { recursive: true });
-  const auth = resolveAuthorizedCwd(sub, { connected: [repo] });
-  assert.equal(auth?.kind, 'worktree');
-  assert.equal(auth.projectKey, repo);
-  assert.equal(auth.scopeRoot, sibling);
+  assert.equal(resolveAuthorizedCwd(sub, { connected: [repo] }), null);
 });
 
 test('托管 worktree（名字带 / 分段）落在仓库子树里：按子目录授权，项目仍归仓库', () => {
@@ -125,7 +116,7 @@ test('仓库侧回链被改到别处：不放行', () => {
 
 // 两侧一起伪造（2026-10-10 review P1）：仓库就在连接范围里，模型能在里面造一个假仓库
 // `<仓库>/fake/.git/worktrees/x/gitdir` 指向目标，再在目标里写回指的 `.git`——双向回验两侧都对得上。
-// 挡不住伪造，判据只能限住伪造换来的范围，下面三条各只踩一条规则。
+// 范围外不再凭 worktree 身份授权，伪造到哪里都换不来访问；三种曾经要单独挡的落点各验一次。
 function forgeReciprocal(repo, target) {
   const meta = join(repo, 'fake', '.git', 'worktrees', 'x');
   mkdirSync(meta, { recursive: true });
@@ -134,43 +125,20 @@ function forgeReciprocal(repo, target) {
   writeFileSync(join(target, '.git'), `gitdir: ${meta}\n`);
 }
 
-test('两侧一起伪造、worktree 根是家目录：不放行（显式添加时家目录本来就被拒）', () => {
-  const { base, repo } = makeFixture();
-  const home = join(base, 'home');                       // 家目录不罩住连接根：只踩「家目录」这一条
-  forgeReciprocal(repo, home);
-  const docs = join(home, 'Documents');
-  mkdirSync(docs);
-  assert.equal(resolveAuthorizedCwd(docs, { connected: [repo], home }), null,
-    '伪造的 worktree 根落在家目录 = 整个家目录挂给手机，绕过「不能连家目录」');
-  assert.equal(resolveAuthorizedCwd(home, { connected: [repo], home }), null);
-});
-
-test('两侧一起伪造、worktree 根是连接根的上级目录（罩住了它自己所属的假仓库）：不放行', () => {
+test('两侧一起伪造：worktree 根落在家目录、连接根的上级、罩住禁区的地方，都换不来授权', () => {
   const { base, code, repo } = makeFixture();
-  forgeReciprocal(repo, code);
-  const other = join(code, 'other-project');
-  mkdirSync(other);
-  assert.equal(resolveAuthorizedCwd(other, { connected: [repo], home: join(base, 'elsewhere') }), null,
-    '伪造的 worktree 根是连接根的上级 = 连一个仓库就把它的整个上级目录开出来');
-});
-
-test('两侧一起伪造、worktree 根罩住禁区：不放行', () => {
-  const { base, repo } = makeFixture();
+  const home = join(base, 'home');
   const outside = join(base, 'opt', 'ccm');
   const dataDir = join(outside, 'data');
   mkdirSync(dataDir, { recursive: true });
-  forgeReciprocal(repo, outside);
-  const tools = join(outside, 'tools');
-  mkdirSync(tools);
-  assert.equal(resolveAuthorizedCwd(tools, { connected: [repo], home: join(base, 'elsewhere'), forbidden: [dataDir] }), null,
-    '伪造的 worktree 根罩住 CCM 数据目录 = 文件面板的范围根里含着设备信任表与令牌');
-});
-
-test('正对照：真的平级 worktree 在家目录里照样放行（限范围的规则不误伤正常布局）', () => {
-  const { base, repo, sibling } = makeFixture();
-  const auth = resolveAuthorizedCwd(sibling, { connected: [repo], home: base });
-  assert.equal(auth?.kind, 'worktree', `正常的平级 worktree 被新规则挡掉了：${JSON.stringify(auth)}`);
-  assert.equal(auth.projectKey, repo);
+  for (const [root, probe] of [[home, 'Documents'], [code, 'other-project'], [outside, 'tools']]) {
+    rmSync(join(repo, 'fake'), { recursive: true, force: true }); // safe-rm: 本用例在 mkdtemp 夹具里造的假仓库
+    forgeReciprocal(repo, root);
+    const target = join(root, probe);
+    mkdirSync(target, { recursive: true });
+    assert.equal(resolveAuthorizedCwd(target, { connected: [repo], home, forbidden: [dataDir] }), null,
+      `伪造的 worktree 根 ${root} 换来了授权`);
+  }
 });
 
 // 只认标准布局 `<仓库>/.git/worktrees/<名>`：`--separate-git-dir` 的仓库，管理目录在
@@ -254,7 +222,7 @@ test('仓库侧 gitdir 被换成 FIFO：列 worktree 与授权照常返回，不
   const mod = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/folder-access.js')).href;
   const script = `const m = await import(${JSON.stringify(mod)});
     const listed = m.listLinkedWorktrees(${JSON.stringify(repo)}).map(w => w.path);
-    const auth = m.resolveAuthorizedCwd(${JSON.stringify(fifoWt)}, { connected: [${JSON.stringify(repo)}] });
+    const auth = m.resolveAuthorizedCwd(${JSON.stringify(fifoWt)}, { connected: [${JSON.stringify(code)}] });
     process.stdout.write(JSON.stringify({ listed, auth }));`;
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 });
   assert.equal(r.signal, null, '读 FIFO 阻塞到超时被杀——在 server 里就是整个进程卡死');
@@ -262,7 +230,9 @@ test('仓库侧 gitdir 被换成 FIFO：列 worktree 与授权照常返回，不
   const out = JSON.parse(r.stdout);
   assert.ok(out.listed.includes(sibling), '正常的 worktree 照常列出');
   assert.ok(!out.listed.includes(fifoWt), '回链读不出来的不列');
-  assert.equal(out.auth, null, '回链读不出来：不认它是已连接仓库的 worktree');
+  // 父目录连着：它按普通子目录授权，只是认不出是谁的 worktree（判归属同样要读那个 gitdir）
+  assert.equal(out.auth?.kind, 'connected');
+  assert.equal(out.auth.repo, null, '回链读不出来：不认它是仓库的 worktree');
 });
 
 test('判定不执行 git：folder-access.js 不 import child_process', () => {

@@ -30,7 +30,7 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize }
   const found = new Map();
   for (const cwd of cwds) {
     const auth = authorize(cwd);
-    if (auth?.kind !== 'connected' && auth?.kind !== 'worktree') continue;
+    if (auth?.kind !== 'connected') continue;
     const key = auth.projectKey;
     if (known.has(key) || found.has(key)) continue;
     // worktree 的项目键是仓库：仓库本身落在哪个连接根里，要对仓库再判一次

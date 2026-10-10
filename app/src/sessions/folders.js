@@ -2,12 +2,13 @@
 //
 // 官方桌面端给手机开的是一份文件夹清单，手机上能直接加（2026-09-23 从桌面端安装包实证）。这里收口
 // 「能看到什么、能加什么、能在哪建」：浏览只回目录名、以家目录为界；家目录本身、磁盘根、家目录以外、
-// 禁区、linked worktree 不能加。加进去之后怎么授权在 folder-access.js（子目录可达、worktree 随仓库）。
+// 禁区、仓库里的托管 worktree 不能加。加进去之后怎么授权在 folder-access.js（子目录可达、范围里的 worktree 随仓库）。
 //
 // 协议里的位置一律是「家目录相对路径」（'' = 家目录）：客户端不必、也不该拼服务端的绝对路径。
 import { lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { findWorktreeOwner, isWithin } from './folder-access.js';
+import { managedWorktreeRoot } from './workdirs.js';
 
 export const MAX_BROWSE_ENTRIES = 500;
 const MAX_NAME_BYTES = 255; // 文件系统单段名字上限（字节，不是字符）
@@ -41,8 +42,11 @@ export function connectRefusalReason(candidate, { home, forbidden = [], connecte
   if (inForbidden(real, forbidden)) return 'forbidden';
   // 先于 worktree 判：存量配置里显式连着的平级 worktree 该说「已经连接」，不是「请添加仓库」
   if (connected.some(c => realOrNull(c) === real)) return 'already_connected';
-  // 官方：「Worktrees … can't be added on their own. Add the repository」
-  if (findWorktreeOwner(real)) return 'worktree';
+  // 官方：「Worktrees that Claude Code created can't be added on their own. Add the repository」——只拦建在仓库
+  // `.claude/worktrees/` 下的（CCM 与 CLI 的 EnterWorktree 都建在那里，随仓库就够了）。用户自建的平级 worktree 是
+  // 普通文件夹：范围外的 worktree 不随仓库授权（SCOPE-04），这里再不让加，手机上就再也用不上它。
+  const wt = findWorktreeOwner(real);
+  if (wt && isWithin(wt.worktreeRoot, managedWorktreeRoot(wt.repo))) return 'worktree';
   return null;
 }
 

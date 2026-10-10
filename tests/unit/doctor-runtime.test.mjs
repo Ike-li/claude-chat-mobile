@@ -628,7 +628,8 @@ test.describe('WORK_DIRS：过宽根只报不拦', () => {
 test.describe('probeConnectedFolders：已连接文件夹的布局取数', () => {
   const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { stdio: 'pipe' });
 
-  test('WORKDIRS 里的平级 worktree：所属仓库也连着时算多余，仓库没连时不算', () => {
+  // 范围外的 worktree 不随仓库授权（2026-10-10，照官方桌面端）：仓库连着也不算多余，罩住它的父目录连着才算
+  test('WORKDIRS 里的平级 worktree：父目录也连着时算多余，只连了仓库或仓库没连时不算', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-doctor-')));
     try {
       const repo = join(root, 'repo');
@@ -640,7 +641,9 @@ test.describe('probeConnectedFolders：已连接文件夹的布局取数', () =>
       const other = join(root, 'other');
       mkdirSync(other);
       const scratchRoot = join(root, 'scratch-workspaces');
-      assert.deepEqual(probeConnectedFolders({ dirs: [repo, sibling, other], scratchRoot }).redundantWorktrees, [{ path: sibling, repo }]);
+      assert.deepEqual(probeConnectedFolders({ dirs: [root, sibling], scratchRoot }).redundantWorktrees, [{ path: sibling, repo }]);
+      assert.deepEqual(probeConnectedFolders({ dirs: [repo, sibling, other], scratchRoot }).redundantWorktrees, [],
+        '只连了仓库：删掉这一条它就不可达了，劝删等于让它在手机上消失');
       assert.deepEqual(probeConnectedFolders({ dirs: [sibling, other], scratchRoot }).redundantWorktrees, [],
         '仓库没连：删掉这一条它就不可达了');
     } finally {

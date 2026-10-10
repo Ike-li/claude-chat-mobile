@@ -619,7 +619,7 @@ export const EN_DICT = Object.freeze({
   '不能添加磁盘根目录': 'The disk root can\'t be added',
   '只能添加家目录里的文件夹': 'Only folders inside your home folder can be added',
   '这是 Claude 或本应用自己的目录，不能添加': 'This is Claude\'s or this app\'s own folder and can\'t be added',
-  '这是 git worktree，跟随所属仓库；请添加仓库本身': 'This is a git worktree; it follows its repository — add the repository instead',
+  '这是 Claude Code 建的 worktree，跟随所属仓库；请添加仓库本身': 'This worktree was created by Claude Code; it follows its repository — add the repository instead',
   '已经连接': 'Already connected',
   '文件夹不存在': 'Folder not found',
   '不是文件夹': 'Not a folder',

@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace } from '../../app/src/sessions/history.js';
 import { resolveAuthorizedCwd } from '../../app/src/sessions/folder-access.js';
@@ -363,7 +363,8 @@ test('listSessionsByIds: 父仓那份更新 → 选父仓（证明不是恒选 w
 });
 
 // ── 「已连接的文件夹」（2026-09-24）：项目的成员目录不止托管 worktree ──────────────────────────
-// 仓库外的平级 worktree（真机会话 1c401b5d 的形态）随所属仓库授权，它的会话也要并进仓库这个项目；
+// 平级 worktree（真机会话 1c401b5d 的形态）落在连接范围里时（父目录整个连着）归所属仓库，会话并进仓库这个项目；
+// 只连了仓库时它在范围外，要显式连接（2026-10-10，照官方桌面端）。
 // 无文件夹会话的项目（scratch 根）由各个 scratch 目录组成。成员由 memberOptions.authorize 裁决——
 // 就是 server 用来判 cwd 的那一份授权判据，列表与「能不能打开」同口径；没传时行为与从前逐字相同
 // （只认托管 worktree）。
@@ -385,12 +386,21 @@ function makeRepoWithSibling() {
 }
 const authorizeWith = ctx => ({ authorize: c => resolveAuthorizedCwd(c, ctx) });
 
-test('仓库外的平级 worktree：会话并进仓库这个项目，行带自己的 cwd', async () => {
+test('平级 worktree 在范围外（只连了仓库）：会话不并进仓库', async () => {
+  const { baseDir, repo, sibling } = makeRepoWithSibling();
+  writeSession(baseDir, repo, 'main-1', { at: T0 });
+  writeSession(baseDir, sibling, 'sib-0', { at: T0 + 1000 });
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [repo] }) });
+  assert.deepEqual(sessions.map(s => s.id), ['main-1'], '列得出就点得开：范围外的目录凭 worktree 身份混进了仓库的列表');
+});
+
+test('平级 worktree 在范围里（父目录连着）：会话并进仓库这个项目，行带自己的 cwd', async () => {
   const { baseDir, repo, sibling } = makeRepoWithSibling();
   writeSession(baseDir, repo, 'main-1', { at: T0 });
   writeSession(baseDir, sibling, 'sib-1', { text: '平级 worktree 里的会话', at: T0 + 1000 });
 
-  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [repo] }) });
+  const parent = dirname(repo);
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [parent] }) });
   const sib = sessions.find(s => s.id === 'sib-1');
   assert.ok(sib, `平级 worktree 的会话没并进来：${JSON.stringify(sessions.map(s => s.id))}——1c401b5d 那种会话照样看不见`);
   assert.equal(sib.cwd, sibling, '前端打开要用真实 cwd，用仓库 cwd 会查到空目录');
@@ -408,14 +418,17 @@ test('平级 worktree 被显式连接时不并进仓库（它自己就是一个�
   assert.deepEqual(sessions.map(s => s.id), [], '显式连接的 worktree 在自己的项目里列，这里再列一遍就是两行');
 });
 
-test('listSessionsByIds / sessionExistsInWorkspace 同样认得平级 worktree', async () => {
+test('listSessionsByIds / sessionExistsInWorkspace 与列表同口径：范围里的平级 worktree 认，范围外的不认', async () => {
   const { baseDir, repo, sibling } = makeRepoWithSibling();
   writeSession(baseDir, sibling, 'sib-3', { at: T0 });
-  const memberOptions = authorizeWith({ connected: [repo] });
+  const memberOptions = authorizeWith({ connected: [dirname(repo)] });
   const rows = await listSessionsByIds(repo, ['sib-3'], { baseDir, memberOptions });
   assert.equal(rows[0]?.cwd, sibling, '标了未读、被挤出本页的平级 worktree 会话补不回来');
   assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir, memberOptions }), true);
   assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir }), false, '不传成员选项时行为不变');
+  const repoOnly = authorizeWith({ connected: [repo] });
+  assert.deepEqual(await listSessionsByIds(repo, ['sib-3'], { baseDir, memberOptions: repoOnly }), []);
+  assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir, memberOptions: repoOnly }), false);
 });
 
 test('scratch 根：列出各个 scratch 目录里的会话，行带 cwd 与 scratch 标记', async () => {

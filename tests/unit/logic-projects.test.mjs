@@ -55,7 +55,7 @@ test('folderReasonText：服务端的原因码都有人话，未知码回落「�
     assert.notEqual(folderReasonText(code), '操作失败', code);
   }
   assert.equal(folderReasonText('whatever'), '操作失败');
-  assert.equal(folderReasonText('worktree'), '这是 git worktree，跟随所属仓库；请添加仓库本身');
+  assert.equal(folderReasonText('worktree'), '这是 Claude Code 建的 worktree，跟随所属仓库；请添加仓库本身');
   setLang('en');
   assert.equal(folderReasonText('home'), 'Your whole home folder can\'t be added');
   setLang('zh');

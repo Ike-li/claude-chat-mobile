@@ -2,14 +2,15 @@
 //
 // 语义对齐官方 Claude 桌面端给手机开的那份文件夹清单（2026-09-23 从桌面端安装包实证）：
 //   · 已连接文件夹的子文件夹直接可达（"It's already reachable as part of the folder it's inside"）；
-//   · git linked worktree 跟随所属仓库（"Worktrees … can't be added on their own. Add the repository"）；
+//   · 连接范围里的 git linked worktree 归所属仓库（"Worktrees … can't be added on their own. Add the repository"）；
+//     范围外的不凭 worktree 身份授权，要显式连接——桌面端只认自己建在仓库 `.claude/worktrees/` 或指定位置的
+//     worktree，用户自建的平级 worktree 就是个普通文件夹（2026-10-10 读安装包）；
 //   · 无文件夹会话跑在 app 自建的一次性 scratch 目录里。
 //
 // 【判定全程只读文件，不执行 git】.git/config 模型可写（core.fsmonitor 等能让 git 执行任意命令，
 // 与 AUTH-06 剥控制面密钥同一理由）——在授权判据里跑 git，等于把判定交给被判定的对象。
 // 由 tests/invariants/worktree-ownership.test.mjs 的源码守卫钉住：本文件不得 import child_process。
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 // mkdtempSync(prefix) 在前缀后追加 6 个 [A-Za-z0-9] 随机字符。只认这个形态：scratch 根下别的目录
@@ -48,7 +49,7 @@ function longestRoot(real, roots) {
 //   ③ 仓库侧 `<管理目录>/gitdir` 回链到的正是 `<dir>/.git`。
 // ①是 worktree 侧的一面之词——模型在任何可写目录里写一行就能伪造；③要求仓库那一侧也认它。
 // 但③也不是铁证：仓库就在连接范围里，模型能在里面造个假仓库、两侧一起伪造（2026-10-10 review P1）。
-// 所以授权时另由 overreaches 限住伪造能换来的范围，见 resolveAuthorizedCwd。
+// 所以 worktree 身份只决定归属（抽屉里挂在哪个仓库下），不授予连接范围以外的访问，见 resolveAuthorizedCwd。
 // 管理目录名不一定等于 worktree 目录名（本机实测 .git/worktrees/agent → …-third-party），只能沿指针走。
 function verifyWorktreeAt(dir) {
   const dotGit = join(dir, '.git');
@@ -87,31 +88,17 @@ export function findWorktreeOwner(real) {
   return null;
 }
 
-// 两侧元数据都在模型写得动的地方，双向回验挡不住一起伪造；挡不住伪造，就限住伪造换来的范围：
-// 范围外的 worktree 根若是家目录或其上级（含文件系统根）、罩住它自己所属的仓库（伪造成上级目录必然如此——
-// 假仓库得在连接范围里）、或罩住禁区，一律不认。真的 git worktree 不会长在这些位置。
-// 只用在「范围外凭 worktree 身份授权」这一处：连接范围内的路径本来就由连接根授权，worktree 只决定归属，
-// 而被显式连上的 worktree 天然罩住一个连接根，套用这条会把它的 worktree 事实一并抹掉。
-// 剩下的：写得动范围外某个普通目录的进程，仍能把那个目录冒充成 worktree。它本来就能把那里的文件
-// 拷进连接范围，这一步不再给它多出什么。
-function overreaches(worktreeRoot, repo, { home, forbidden }) {
-  if (home && isWithin(home, worktreeRoot)) return true;
-  if (isWithin(repo, worktreeRoot)) return true;
-  return forbidden.some(f => isWithin(f, worktreeRoot));
-}
-
 // 授权判据（唯一一份）。ctx：
 //   connected   已连接文件夹（已 realpath 的 WORKDIRS）
 //   extraRoots  额外放行的根（热移除保护：实例创建时所属、之后被移出清单的那个工作区）
 //   scratchRoot 无文件夹会话的 scratch 根（可不存在 = 不认任何 scratch）
 //   forbidden   禁区（~/.claude、CCM 数据目录）：其子树永远不是合法 cwd
-//   home        家目录（缺省 os.homedir()）：伪造的 worktree 根不得是它或它的上级
 // 返回 null（不放行）或：
-//   kind       connected（连接范围内）| worktree（范围外、但属于已连接仓库）| scratch | scratch-root
+//   kind       connected（连接范围内）| scratch | scratch-root
 //   path       realpath 后的 cwd（下游拿它算 project 目录，未解析的路径在 macOS 上会静默查空）
 //   root       归属的连接根（scratch 类为 scratch 根）
-//   projectKey 抽屉里归到哪个项目：worktree（含托管的）归所属仓库，scratch 归 scratch 根，其余是它自己
-//   scopeRoot  文件面板的范围：连接根 / worktree 根 / 这一个 scratch 目录
+//   projectKey 抽屉里归到哪个项目：范围里的 worktree 归所属仓库，scratch 归 scratch 根，其余是它自己
+//   scopeRoot  文件面板的范围：连接根 / 这一个 scratch 目录
 //   worktreeRoot / repo  落在一棵已双向回验的 linked worktree 里时：那棵树的根与所属仓库（否则 null）。
 //              与授权无关的两个事实——懒建 worktree 要据此避免「worktree 里再套 worktree」，
 //              网关隔离要据此找到 CLI 会误读 settings.local.json 的那个主仓。
@@ -136,25 +123,16 @@ export function resolveAuthorizedCwd(candidate, ctx = {}) {
   // 禁区里面，那是用户显式写进配置的选择——显式优先，与 worktree 的显式连接同一条规则。
   const forbidden = (Array.isArray(ctx.forbidden) ? ctx.forbidden : []).map(realOrNull).filter(Boolean);
   const blockedBy = (p, byRoot) => forbidden.some(f => isWithin(p, f) && !(byRoot && isWithin(byRoot, f)));
-  if (blockedBy(real, root)) return null;
+  if (!root || blockedBy(real, root)) return null;
 
+  // 连接范围内。若它属于某个已授权仓库的 worktree（托管的，或父目录整个连上后的平级那种），项目归仓库；
+  // 但覆盖它的连接根若开在 worktree 内部（用户把这棵 worktree 显式连上了）——显式优先，自成项目。
   const wt = findWorktreeOwner(real);
   const repoRoot = wt ? longestRoot(wt.repo, roots) : null;
   const repoAuthorized = Boolean(repoRoot) && !blockedBy(wt.repo, repoRoot);
-
-  const worktreeFacts = { worktreeRoot: wt?.worktreeRoot ?? null, repo: wt?.repo ?? null };
-  if (root) {
-    // 连接范围内。若它属于某个已授权仓库的 worktree（托管的，或父目录整个连上后的平级那种），项目归仓库；
-    // 但覆盖它的连接根若开在 worktree 内部（用户把这棵 worktree 显式连上了）——显式优先，自成项目。
-    const explicitInsideWorktree = Boolean(wt) && isWithin(root, wt.worktreeRoot);
-    const projectKey = repoAuthorized && !explicitInsideWorktree ? wt.repo : real;
-    return { kind: 'connected', path: real, root, projectKey, scopeRoot: root, ...worktreeFacts };
-  }
-  const home = realOrNull(typeof ctx.home === 'string' && ctx.home ? ctx.home : homedir());
-  if (repoAuthorized && !overreaches(wt.worktreeRoot, wt.repo, { home, forbidden })) {
-    return { kind: 'worktree', path: real, root: repoRoot, projectKey: wt.repo, scopeRoot: wt.worktreeRoot, ...worktreeFacts };
-  }
-  return null;
+  const explicitInsideWorktree = Boolean(wt) && isWithin(root, wt.worktreeRoot);
+  const projectKey = repoAuthorized && !explicitInsideWorktree ? wt.repo : real;
+  return { kind: 'connected', path: real, root, projectKey, scopeRoot: root, worktreeRoot: wt?.worktreeRoot ?? null, repo: wt?.repo ?? null };
 }
 
 // 从仓库一侧列出它的 linked worktree（每条都过 verifyWorktreeAt 的双向回验）。

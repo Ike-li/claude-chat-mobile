@@ -37,13 +37,14 @@ const enterResult = path => ({
 function session(onCwdChanged) {
   let settled = 0;
   const calls = [];
-  const { s, dispose } = makeSession({
+  const { s, dispose, events } = makeSession({
     cwd: REPO,
     onCwdChanged: (next, prev, meta) => { calls.push({ next, prev, via: meta?.via }); return onCwdChanged(next, prev); },
     onStateSettled: () => { settled += 1; },
   });
-  return { s, dispose, calls, settledCount: () => settled };
+  return { s, dispose, calls, events, settledCount: () => settled };
 }
+const warnings = events => events.filter(e => e.type === 'system' && e.payload?.kind === 'notice' && e.payload.level === 'warning');
 
 test('EnterWorktree 的结果把驾驶轴带到 worktreePath（CLI 不发 CwdChanged 时唯一的信号）', () => {
   const { s, dispose, calls, settledCount } = session(next => next);
@@ -125,6 +126,32 @@ test('裁决拒绝时保持原样、不重播', () => {
     s.map(toolResult('toolu_enter', enterResult('/etc')));
     assert.equal(s.cwd, REPO, '拒绝必须是「保持原样」，不是回退到别的目录');
     assert.equal(settledCount(), 0);
+  } finally { dispose(); }
+});
+
+// 仓库外的平级 worktree 要显式连接（2026-10-10）之后，「EnterWorktree 进了没连接的目录」是正常用法就会走到的路：
+// CLI 已经换了目录、把 transcript 搬走，手机这边没跟过去——切走就找不到这个会话。不说一声，用户只会看到
+// 「历史消息加载失败」或会话凭空消失。
+test('裁决拒绝时在会话里留一条警告；两条通道报同一次也只留一条', async () => {
+  const { s, dispose, events } = session(() => null);
+  try {
+    s.abort = new AbortController();
+    const hook = buildAgentQueryOptions(s, { ...process.env })?.hooks?.CwdChanged?.[0]?.hooks?.[0];
+    s.map(toolUse('toolu_enter', 'EnterWorktree', { path: SIBLING }));
+    s.map(toolResult('toolu_enter', enterResult(SIBLING)));
+    await hook({ hook_event_name: 'CwdChanged', old_cwd: REPO, new_cwd: SIBLING });
+    assert.equal(warnings(events).length, 1, `警告条数 ${warnings(events).length}：没有 = 会话静默丢失；两条 = 同一件事说两遍`);
+    assert.match(warnings(events)[0].payload.message, /添加文件夹/, '要告诉用户怎么在手机上接着用');
+  } finally { dispose(); }
+});
+
+test('采信时不留警告（正对照：警告不是每次换目录都发）', () => {
+  const { s, dispose, events } = session(next => next);
+  try {
+    s.map(toolUse('toolu_enter', 'EnterWorktree', { path: SIBLING }));
+    s.map(toolResult('toolu_enter', enterResult(SIBLING)));
+    assert.equal(s.cwd, SIBLING);
+    assert.deepEqual(warnings(events), []);
   } finally { dispose(); }
 });
 

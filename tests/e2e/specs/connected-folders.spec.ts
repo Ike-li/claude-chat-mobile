@@ -4,7 +4,9 @@ import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, sessionRowByInsta
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
 //   · 已连接文件夹里有会话的子文件夹自成一节，紧跟所属文件夹，标题「根 › 相对路径」；
-//   · 仓库外的平级 worktree 不自成一节，会话挂在所属仓库下（真机 1c401b5d 就是这种会话从抽屉里消失）；
+//   · worktree 不自成一节，按实例的 projectKey 挂在所属仓库下，cwd 前缀归不到时也一样（真机 1c401b5d 就是这种会话
+//     从抽屉里消失）。真 server 只对连接范围里的 worktree 这样给（2026-10-10 起范围外的要显式连接）；
+//     mock 直接给 projectKey，这里测的是前端按它归节；
 //   · 「无文件夹」有会话时垫底一节。
 const SUB = `${MAIN_WORKSPACE}/packages/web`;
 const SCRATCH = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';

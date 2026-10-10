@@ -882,8 +882,9 @@ const memberRowFields = m => ({
 
 // 一个项目除了自己的 cwd，还有哪些目录的会话算它的（2026-09-24「已连接的文件夹」）：
 //   · 托管 worktree（`<cwd>/.claude/worktrees/*`，含已删的）——一直都有，不依赖 memberOptions；
-//   · 仓库外的平级 linked worktree——从仓库侧读 `.git/worktrees/*` 列出，逐个问授权判据
-//     「你归哪个项目」，答案是本项目才并进来。被显式连接的平级 worktree 自成项目，判据会答它自己；
+//   · 平级 linked worktree——从仓库侧读 `.git/worktrees/*` 列出，逐个问授权判据「你归哪个项目」，答案是本项目
+//     才并进来。只有落在连接范围里的（父目录整个连着）会答成本项目，范围外的判据不授权（SCOPE-04）；
+//     被显式连接的平级 worktree 自成项目，判据会答它自己；
 //   · 项目本身是 scratch 根时：根下各个 scratch 目录。
 // 并不并由 memberOptions.authorize 决定，也就是 server 判 cwd 用的那一份——列表与「点开能不能打开」
 // 同口径，不在这里另写一套会漂移的规则。平级 worktree 被 `git worktree remove/prune` 之后仓库侧的

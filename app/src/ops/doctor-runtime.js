@@ -16,7 +16,7 @@ import { findWorktreeOwner, resolveAuthorizedCwd } from '../sessions/folder-acce
 
 // 「已连接的文件夹」布局的取数（判定在 doctor-checks 的 connectedFoldersDiagnostic）。要读盘，所以住这里。
 //   redundantWorktrees：WORKDIRS 里落在 git linked worktree 中、拿掉它之后仍被授权的条目。判据直接问
-//     resolveAuthorizedCwd，不另写一套会漂移的规则——所属仓库没连时这一条是必需的，不能劝删。
+//     resolveAuthorizedCwd，不另写一套会漂移的规则——只连了仓库、或仓库没连时这一条是必需的，不能劝删。
 //   scratch：scratch 根向上第一个带 .git 的祖先；可写性看它自己，还没建时看最近的已存在祖先（server 会 mkdir -p）。
 export function probeConnectedFolders({ dirs = [], scratchRoot } = {}) {
   const real = (dirs || []).map(d => { try { return realpathSync.native(d); } catch { return null; } }).filter(Boolean);

@@ -896,8 +896,8 @@ export function workdirBreadthDiagnostic({ dirs = [], home, lang = 'zh' } = {}) 
 }
 
 // 「已连接的文件夹」布局提示（2026-09-25）。纯判定：读盘的部分由 doctor-runtime 的 probeConnectedFolders 算好。
-//   redundantWorktrees [{ path, repo }]：WORKDIRS 里显式列着、但所属仓库已连接的 worktree。列着它就自成一节，
-//     会话不并回仓库（兼容旧配置：从前仓库外的 worktree 必须显式列入）。
+//   redundantWorktrees [{ path, repo }]：WORKDIRS 里显式列着、但已落在别的连接范围里（如父目录整个连着）的 worktree。
+//     列着它就自成一节，会话不并回仓库。只连了仓库时不算：仓库外的 worktree 不随仓库授权，必须显式列入（2026-10-10）。
 //   scratch { root, repoRoot, writable }：「无文件夹」会话的 scratch 根。落在 git 仓库里时 CLI 会向上加载那个仓库的
 //     CLAUDE.md 与 .claude/settings；不可写时第一条消息建不出目录。
 //   source：清单的实际来源键名（WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），标签与「从哪删」都用它，同 D3。
@@ -908,8 +908,8 @@ export function connectedFoldersDiagnostic({ redundantWorktrees = [], scratch = 
     out.push({
       status: 'warn', name: source,
       detail: bi(lang,
-        `${path} 是 ${repo} 的 git worktree，仓库已经连接，这一条不必单独列出。列着它就自成一节；从 ${source} 删掉之后，它的会话会并回 ${repo} 那一节。`,
-        `${path} is a git worktree of ${repo}, which is already connected, so it doesn't need its own entry. Listed, it gets its own section; remove it from ${source} and its sessions fold back into ${repo}.`),
+        `${path} 是 ${repo} 的 git worktree，已经在已连接的文件夹里，这一条不必单独列出。列着它就自成一节；从 ${source} 删掉之后，它的会话会并回 ${repo} 那一节。`,
+        `${path} is a git worktree of ${repo} and is already inside a connected folder, so it doesn't need its own entry. Listed, it gets its own section; remove it from ${source} and its sessions fold back into ${repo}.`),
     });
   }
   const scratchName = bi(lang, '无文件夹', 'No folder');

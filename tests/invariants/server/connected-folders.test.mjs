@@ -1,9 +1,10 @@
 // tests/invariants/server/connected-folders.test.mjs —— 「已连接的文件夹」在真 server 各闸门上的接线
 // 守护：SCOPE-05（已连接文件夹的子目录经 realpath 后即合法 cwd，各 handler 不得回落成连接根）
-//       SCOPE-04（所属仓库已连接的 linked worktree——含仓库外的平级目录——同样合法；伪造的不认）
+//       SCOPE-04（worktree 身份只决定归属、不授权：仓库外的平级 worktree 要显式连接；伪造的不认）
 // 测什么：真 app/server.js 子进程上，routeCwd / ensureAuthorized / 文件范围根这几道成对闸门确实都换成了
-//   同一个授权判据：子目录与平级 worktree 的会话列得出、打得开、文件浏览得到；伪造的 worktree 列不出它的会话。
-//   以及「worktree 跟随所属仓库」落到抽屉那一侧：平级 worktree 的会话并进仓库的列表、不自成项目，
+//   同一个授权判据：子目录与仓库里的 worktree 的会话列得出、打得开；只连了仓库时，仓库外的平级 worktree
+//   列不出、打不开、浏览不了；伪造的 worktree 列不出它的会话。
+//   以及「worktree 跟随所属仓库」落到抽屉那一侧：仓库里的 worktree 的会话并进仓库的列表、不自成项目，
 //   它上面的实例归仓库这个项目（projectKey）；有会话的子目录自成项目。
 // 不测什么 + 为什么：① 判据本身的各种边界（symlink、前缀碰撞、禁区、scratch）在 S1
 //   （folder-access.test.mjs / worktree-ownership.test.mjs），这里只证明 socket 路径走了那道判据
@@ -24,9 +25,9 @@ import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
 import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
 
 const TOKEN = 'inv-connected-folders-token';
-const SID = { root: randomUUID(), sub: randomUUID(), sibling: randomUUID(), forged: randomUUID() };
+const SID = { root: randomUUID(), sub: randomUUID(), managed: randomUUID(), sibling: randomUUID(), forged: randomUUID() };
 
-let root, repo, sub, sibling, forged, server, sock;
+let root, repo, sub, managed, sibling, forged, server, sock;
 const projectDirs = [];
 const events = [];
 
@@ -55,7 +56,9 @@ test.before(async () => {
   writeFileSync(join(repo, 'README.md'), '# fixture\n');
   git(repo, 'add', '.');
   git(repo, 'commit', '-m', 'init');
-  sibling = join(root, 'code', 'repo-feat');                 // 仓库外的平级 worktree（真机 1c401b5d 的形态）
+  managed = join(repo, '.claude', 'worktrees', 'wt');        // 仓库里的 worktree（CCM 与 CLI EnterWorktree 新建的都在这里）
+  git(repo, 'worktree', 'add', '-b', 'managed', managed);
+  sibling = join(root, 'code', 'repo-feat');                 // 仓库外的平级 worktree（真机 1c401b5d 的形态），没有显式连接
   git(repo, 'worktree', 'add', '-b', 'feat', sibling);
   // 伪造：别的目录里写一个指向平级 worktree 管理目录的 .git——只看 worktree 侧指针就会被骗
   forged = join(root, 'code', 'forged');
@@ -67,6 +70,7 @@ test.before(async () => {
 
   writeTranscript(repo, SID.root, '连接根里的会话');
   writeTranscript(sub, SID.sub, '子目录里的会话');
+  writeTranscript(managed, SID.managed, '仓库里的 worktree 里的会话');
   writeTranscript(sibling, SID.sibling, '平级 worktree 里的会话');
   writeTranscript(forged, SID.forged, '伪造目录里的会话');
 
@@ -115,17 +119,27 @@ test('子目录：列出的是子目录自己的会话，不回落成连接根�
   assert.ok((await listedIds(repo)).includes(SID.root));
 });
 
-test('仓库外的平级 worktree（仓库已连接）：列得出它自己的会话', async () => {
+// 照官方桌面端：用户自建的平级 worktree 是普通文件夹，手机要用得显式连接（2026-10-10）。
+// 每道闸门各问一次：只拦了列表的话，客户端带着 cwd 直接打开 / 浏览照样进得去。
+test('仓库外的平级 worktree（只连了仓库）：列不出、打不开、浏览不了、开不了新会话', async () => {
   const ids = await listedIds(sibling);
-  assert.ok(ids.includes(SID.sibling),
-    `平级 worktree 的会话没列出来：${JSON.stringify(ids)}——真机 1c401b5d 那种会话照样进不了抽屉`);
+  assert.ok(!ids.includes(SID.sibling), `范围外的平级 worktree 列出了会话：${JSON.stringify(ids)}`);
+  const sw = await emit('session:switch', { sessionId: SID.sibling, cwd: sibling });
+  assert.notEqual(sw?.ok, true, `打开了范围外的会话：${JSON.stringify(sw)}`);
+  const br = await emit('browse:list', { cwd: sibling, relPath: '.' });
+  assert.notEqual(br?.ok, true, `浏览到了范围外的目录：${JSON.stringify(br)}`);
+  const nw = await emit('session:new', { cwd: sibling });
+  assert.notEqual(nw?.ok, true, `在范围外的目录开了新会话页：${JSON.stringify(nw)}`);
+  // 正对照：同一套闸门对仓库里的 worktree 放行（排除「闸门对所有 worktree 一律拒」也能让上面全绿）
+  assert.equal((await emit('browse:list', { cwd: managed, relPath: '.' }))?.ok, true);
 });
 
-test('仓库的列表并进平级 worktree 的会话（行带自己的 cwd），伪造的不并', async () => {
+test('仓库的列表并进仓库里 worktree 的会话（行带自己的 cwd）；平级的、伪造的不并', async () => {
   const { sessions } = await emit('session:list', { cwd: repo });
-  const row = sessions.find(s => s.id === SID.sibling);
-  assert.ok(row, `仓库列表里没有平级 worktree 的会话：${JSON.stringify(sessions.map(s => s.id))}——1c401b5d 在抽屉里找不到`);
-  assert.equal(row.cwd, sibling, '点开时要用真实 cwd，用仓库 cwd 会查到空目录（「历史消息加载失败」）');
+  const row = sessions.find(s => s.id === SID.managed);
+  assert.ok(row, `仓库列表里没有它 worktree 的会话：${JSON.stringify(sessions.map(s => s.id))}`);
+  assert.equal(row.cwd, managed, '点开时要用真实 cwd，用仓库 cwd 会查到空目录（「历史消息加载失败」）');
+  assert.ok(!sessions.some(s => s.id === SID.sibling), '范围外的平级 worktree 的会话被当成仓库成员并了进来');
   assert.ok(!sessions.some(s => s.id === SID.forged), '伪造目录的会话被当成仓库成员并了进来');
 });
 
@@ -154,12 +168,6 @@ test('伪造的 worktree：不认，列不出它的会话', async () => {
   assert.ok(!ids.includes(SID.forged), '只信 worktree 侧 .git 文件就会把伪造目录当成已授权仓库的 worktree');
 });
 
-test('平级 worktree 的文件浏览：范围包含那棵树本身', async () => {
-  const res = await emit('browse:list', { cwd: sibling, relPath: '.' });
-  assert.equal(res?.ok, true, `浏览被拒：${JSON.stringify(res)}——范围根没补上 worktree 根，连会话自己的目录都读不了`);
-  assert.ok((res.entries ?? []).some(e => e.name === 'README.md'));
-});
-
 test('子目录会话：在子目录里打开（驾驶轴就是子目录）', async () => {
   const res = await emit('session:switch', { sessionId: SID.sub, cwd: sub });
   assert.equal(res?.ok, true, `打不开：${JSON.stringify(res)}——ensureAuthorized 把子目录归位到了连接根`);
@@ -168,31 +176,31 @@ test('子目录会话：在子目录里打开（驾驶轴就是子目录）', as
   assert.equal(inst?.projectKey, sub, '子目录自成项目：在跑的这一行要挂在它下面');
 });
 
-test('平级 worktree 会话：实例驾驶在 worktree 里，归仓库这个项目', async () => {
-  const res = await emit('session:switch', { sessionId: SID.sibling, cwd: sibling });
+test('仓库里的 worktree 会话：实例驾驶在 worktree 里，归仓库这个项目', async () => {
+  const res = await emit('session:switch', { sessionId: SID.managed, cwd: managed });
   assert.equal(res?.ok, true, `打不开：${JSON.stringify(res)}`);
   const inst = await waitFor(() => latestInstances()?.instances?.find(i => i.instanceId === res.instanceId), '实例出现在广播里');
-  assert.equal(inst.cwd, sibling);
+  assert.equal(inst.cwd, managed);
   assert.equal(inst.projectKey, repo, `projectKey=${inst.projectKey}——前端按它分组，归错了这一行就挂到一个不存在的项目下`);
 });
 
 // 选择器里挑中的是一个 worktree 目录：它归仓库这个项目，新会话页的 viewingCwd 因而是仓库，前端收到广播后
 // currentCwd 也被覆写成仓库。要是广播里没有别的字段说「这一页的会话开在 worktree 里」，首条消息就开进了仓库的
 // 主工作树——用户以为隔离了的改动全落在主分支上。
-test('新会话页选中平级 worktree：广播带 composeCwd，按它发首条消息开在 worktree 里；回到别的空页后不再带', async () => {
-  assert.equal((await emit('session:new', { cwd: sibling }))?.ok, true);
+test('新会话页选中仓库里的 worktree：广播带 composeCwd，按它发首条消息开在 worktree 里；回到别的空页后不再带', async () => {
+  assert.equal((await emit('session:new', { cwd: managed }))?.ok, true);
   const page = latestInstances();
   assert.equal(page.viewingInstanceId, null);
   assert.equal(page.viewingCwd, repo, '工作区轴仍归仓库（抽屉、顶栏按它）');
-  assert.equal(page.composeCwd, sibling, `广播里没有新会话页选中的 worktree：${JSON.stringify(page.composeCwd)}`);
+  assert.equal(page.composeCwd, managed, `广播里没有新会话页选中的 worktree：${JSON.stringify(page.composeCwd)}`);
   const res = await emit('user:message', { text: '在 worktree 的新会话里', cwd: page.composeCwd, clientMessageId: `compose-wt-${randomUUID()}` });
   assert.equal(res?.ok, true, JSON.stringify(res));
   const inst = await waitFor(() => latestInstances()?.instances?.find(i => i.instanceId === res.instanceId), '实例出现在广播里');
-  assert.equal(inst.cwd, sibling, `开在了 ${inst.cwd}`);
+  assert.equal(inst.cwd, managed, `开在了 ${inst.cwd}`);
   assert.equal(latestInstances().composeCwd, undefined, '看着一个会话时不该带新会话页的目标');
 
   // 从这个会话回到首页：空页属于仓库本身，不能沿用上一个新会话页选的 worktree
-  assert.equal((await emit('session:new', { cwd: sibling }))?.ok, true);
+  assert.equal((await emit('session:new', { cwd: managed }))?.ok, true);
   assert.equal((await emit('session:home', {}))?.ok, true);
   assert.equal(latestInstances().composeCwd, undefined, 'session:home 之后还带着上一个新会话页的 worktree');
   await emit('session:close', { instanceId: inst.instanceId });
@@ -204,8 +212,8 @@ test('新会话页选中 worktree：空页显示的默认权限档按 worktree �
   const settings = mode => JSON.stringify({ permissions: { defaultMode: mode } });
   mkdirSync(join(repo, '.claude'), { recursive: true });
   writeFileSync(join(repo, '.claude', 'settings.json'), settings('plan'));
-  mkdirSync(join(sibling, '.claude'), { recursive: true });
-  writeFileSync(join(sibling, '.claude', 'settings.json'), settings('acceptEdits'));
+  mkdirSync(join(managed, '.claude'), { recursive: true });
+  writeFileSync(join(managed, '.claude', 'settings.json'), settings('acceptEdits'));
   const pageShows = async (cwd, want, what) => {
     assert.equal((await emit('session:new', { cwd }))?.ok, true);
     try {
@@ -216,7 +224,7 @@ test('新会话页选中 worktree：空页显示的默认权限档按 worktree �
   };
   // 仪器先证明自己看得见：仓库自己的新会话页显示仓库 settings 里的档
   await pageShows(repo, 'plan', '仓库的新会话页显示仓库 settings 里的 plan');
-  await pageShows(sibling, 'acceptEdits', '选中 worktree 的新会话页显示 worktree settings 里的 acceptEdits');
-  assert.equal(latestInstances().composeCwd, sibling);
+  await pageShows(managed, 'acceptEdits', '选中 worktree 的新会话页显示 worktree settings 里的 acceptEdits');
+  assert.equal(latestInstances().composeCwd, managed);
   await emit('session:home', {});
 });

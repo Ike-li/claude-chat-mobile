@@ -440,7 +440,6 @@ function mockDirFields() {
 
 // 「选文件夹」面板的假家目录（只有目录名，同真 server 的 folders:browse）。键 = 家目录相对路径。
 const MOCK_HOME = '/Users/you';
-const MOCK_WORKTREE_DIRS = new Set(['code/claude-chat-mobile-feat-y', 'code/claude-chat-mobile/wt-feat-z']); // 真 server 由双向回验认出
 // 放在仓库里面的 linked worktree（`git worktree add ./wt-feat-z`）：挑子文件夹时看得到它。它归仓库这个项目，
 // 所以在它上面开新会话时 viewingCwd 是仓库，首条消息的目标另由 composeCwd 带（同真 server）。
 const MOCK_REPO_WORKTREES = new Map([[`${MOCK_HOME}/code/claude-chat-mobile/wt-feat-z`, `${MOCK_HOME}/code/claude-chat-mobile`]]);
@@ -466,7 +465,7 @@ const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
 function mockFolderReason(rel) {
   if (!Object.hasOwn(mockFolderTree, rel)) return 'not_found';
   if (rel === '') return 'home';
-  if (MOCK_WORKTREE_DIRS.has(rel)) return 'worktree';
+  // 「worktree」只拦仓库 .claude/worktrees 下 Claude Code 建的（同真 server），点目录不进浏览清单，这里碰不到
   if (mockDirs().includes(mockFolderAbs(rel))) return 'already_connected';
   return null;
 }
@@ -4602,8 +4601,8 @@ io.on('connection', socket => {
       },
     },
     {
-      // test:projects：抽屉按项目分组（「已连接的文件夹」）——有会话的子文件夹自成一节、仓库外的平级 worktree
-      // 随所属仓库（靠实例的 projectKey，按 cwd 前缀归不到）、「无文件夹」有会话时垫底一节。
+      // test:projects：抽屉按项目分组（「已连接的文件夹」）——有会话的子文件夹自成一节、平级 worktree
+      // 随所属仓库（靠实例的 projectKey，按 cwd 前缀归不到；真 server 只对连接范围里的这样给）、「无文件夹」有会话时垫底一节。
       command: 'test:projects',
       run: async () => {
         mockDirsOverride = mockDirs(); // 钉住连接列表：缺省口径会把下面这些实例的 cwd 现算成新工作区

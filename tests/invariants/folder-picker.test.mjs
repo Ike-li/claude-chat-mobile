@@ -1,5 +1,5 @@
 // tests/invariants/folder-picker.test.mjs —— 手机上添加 / 新建文件夹的后端判据
-// 守护：FOLDER-01（浏览只回目录名、以家目录为界；家目录 / 磁盘根 / 家目录外 / 禁区 / linked worktree 不能添加；
+// 守护：FOLDER-01（浏览只回目录名、以家目录为界；家目录 / 磁盘根 / 家目录外 / 禁区 / 仓库里的托管 worktree 不能添加；
 //        新建只收单段名字、非递归、建完 realpath 复核）
 // 测什么：sessions/folders.js 在一次性「家目录」上的真 fs 行为——普通文件、FIFO、symlink、点目录、真 git worktree。
 // 不测什么 + 为什么：① 把目录写进配置、热加载生效在 server 层（tests/invariants/server/folders.test.mjs）
@@ -123,20 +123,25 @@ test('要添加的位置（家目录相对路径）：能加时给出真实路�
   assert.deepEqual(resolveFolderToAdd(42, ctx), { ok: false, error: 'not_found' });
 });
 
-test('git linked worktree（及其子目录）不能单独加：它跟随所属仓库', () => {
+// 照官方桌面端：只有它自己建的 worktree 不能单独加（"Worktrees that Claude Code created can't be added on
+// their own"）；用户自建的平级 worktree 是普通文件夹——范围外的 worktree 不随仓库授权，不让加就再也用不上。
+test('仓库里的托管 worktree（及其子目录）不能单独加；自己建的平级 worktree 能加', () => {
   const { home, ctx } = fixture();
   const repo = join(home, 'code', 'app');
   const git = (...a) => execFileSync('git', ['-C', repo, ...a], { stdio: 'pipe' });
   git('init', '-b', 'main');
   git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'init');
+  const managed = join(repo, '.claude', 'worktrees', 'x');
+  git('worktree', 'add', '-b', 'managed', managed);
+  mkdirSync(join(managed, 'sub'));
+  assert.equal(connectRefusalReason(managed, ctx), 'worktree');
+  assert.equal(connectRefusalReason(join(managed, 'sub'), ctx), 'worktree');
   const wt = join(home, 'code', 'app-feat');
   git('worktree', 'add', '-b', 'feat', wt);
   mkdirSync(join(wt, 'sub'));
-  assert.equal(connectRefusalReason(wt, ctx), 'worktree');
-  assert.equal(connectRefusalReason(join(wt, 'sub'), ctx), 'worktree');
+  assert.equal(connectRefusalReason(wt, ctx), null, '平级 worktree 不让加，手机上就再也用不上它');
+  assert.equal(connectRefusalReason(join(wt, 'sub'), ctx), null);
   assert.equal(connectRefusalReason(repo, ctx), null, '仓库本身可以加');
-  // 存量配置里显式连着平级 worktree（兼容：它自成项目）：再浏览到它时说「已经连接」——
-  // 说「请添加仓库本身」会让人以为这一项没连上
   assert.equal(connectRefusalReason(wt, { ...ctx, connected: [wt] }), 'already_connected');
 });
 

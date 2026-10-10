@@ -695,10 +695,22 @@ export class AgentSession {
   //
   // 【两路幂等】hook 与 tool_result 可能先后报同一次换目录。原串相同直接短路；归一后与当前值相同
   // 也不写回、不重播——否则同一次换目录广播两遍，前端白重建一次。
+  //
+  // 【拒绝要说一声】仓库外的平级 worktree 要显式连接（2026-10-10）之后，EnterWorktree 进了没连接的目录是正常
+  // 用法就会走到的路：CLI 已经换目录、搬走 transcript，这边停在原处——切走之后列表里没有它、历史读不出来。
+  // 同一个目录两条通道各报一次只说一遍。
   _adoptDrivingCwd(next, via) {
     if (!next || next === this.cwd) return;
     const accepted = this.onCwdChanged?.(next, this.cwd, { via });
-    if (!accepted || accepted === this.cwd) return;
+    if (!accepted) {
+      if (this._rejectedCwd !== next) {
+        this._rejectedCwd = next;
+        this.emitNotice('会话切到了已连接的文件夹以外，手机这边没有跟过去：切走之后就找不到这个会话了。要在手机上接着用，先在「添加文件夹」里把那个文件夹连上。', 'warning');
+      }
+      return;
+    }
+    this._rejectedCwd = null;
+    if (accepted === this.cwd) return;
     this.cwd = accepted;
     // 驾驶轴变了但不重播 instances，前端的 entry.cwd / panelCwd 会一直停在旧值——
     // 病灶从这里挪到广播链上，而症状与完全没修一模一样。onStateSettled 正是为这类

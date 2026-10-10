@@ -80,7 +80,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await entry(page, 'code').locator('button').first().click();
     await expect(entry(page, 'claude-chat-mobile').locator('[data-folder-sub]')).toHaveText('已经连接');
-    await expect(entry(page, 'claude-chat-mobile-feat-y').locator('[data-folder-sub]')).toHaveText('这是 git worktree，跟随所属仓库；请添加仓库本身');
+    // 自己建的平级 worktree 能加（照官方桌面端：只拦 Claude Code 建的）——它不随仓库授权，不让加就用不上
+    await expect(entry(page, 'claude-chat-mobile-feat-y').locator('[data-folder-sub]')).toHaveCount(0);
     await expect(entry(page, 'new-idea').locator('[data-folder-sub]')).toHaveCount(0);
 
     await entry(page, 'new-idea').locator('button').first().click();

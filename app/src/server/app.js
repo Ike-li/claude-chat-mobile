@@ -231,8 +231,8 @@ const routableAuth = (cwd, extraRoots) => {
 // 「仅拒新开」的归位：routeCwd 的缺省回退（viewingCwdOf）可能是已被热移除、但仍挂着 live 实例的
 // 目录——只按当前授权判，不带 extraRoots，判不过就归位到主工作目录。
 const ensureAuthorized = cwd => routableAuth(cwd)?.path ?? primaryWorkDir();
-// 文件浏览 / 编辑 / 预览的范围根：全部已连接文件夹，外加这个 cwd 自己的范围（仓库外的 worktree、
-// scratch 目录不在任何已连接文件夹之下，不补上就连会话自己的目录都读不了）。
+// 文件浏览 / 编辑 / 预览的范围根：全部已连接文件夹，外加这个 cwd 自己的范围（scratch 目录不在任何
+// 已连接文件夹之下，不补上就连会话自己的目录都读不了）。
 // 正在跑的实例自己的 cwd：工作区被热移除后，其上已开的会话继续运行、仍可查看（读档放行，见 routeCwd）。
 const isLiveInstanceCwd = c => {
   for (const a of agents.values()) if (a.cwd === c) return true;
@@ -240,7 +240,7 @@ const isLiveInstanceCwd = c => {
 };
 const fileScopeRootsFor = cwd => {
   const auth = routableAuth(cwd);
-  if (auth) return auth.kind === 'worktree' || auth.kind === 'scratch' ? [...workDirs, auth.scopeRoot] : workDirs;
+  if (auth) return auth.kind === 'scratch' ? [...workDirs, auth.scopeRoot] : workDirs;
   // 读档放行的已开会话（工作区已被热移除）：范围补上它自己的目录，否则 routeCwd 放行了、范围门又拒掉。
   return isLiveInstanceCwd(cwd) ? [...workDirs, cwd] : workDirs;
 };
@@ -2205,7 +2205,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     //
     // 【为什么裁决在 server】nextCwd 源自 EnterWorktree 的 path 参数，是会话内可被引导的值，
     // 与前端传来的路径同属用户可控面 —— SCOPE-01 原样适用，而授权判据的真相源在这里。
-    // 合法集与 routeCwd 同源（authorize：连接文件夹及子目录 + 所属仓库已连接的 worktree，含平级目录），
+    // 合法集与 routeCwd 同源（authorize：连接文件夹及子目录；范围外的 worktree 不算，SCOPE-04），
     // 差别只在失败方向：那边回退 viewingCwd 是「纠正传错」，这里没有安全回退可言，拒绝即保持原样。
     //
     // 采信之后 agent 会 onStateSettled → broadcastInstances，前端的 entry.cwd / panelCwd 随之跟上。
@@ -2379,7 +2379,7 @@ function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
   }
   return p;
 }
-// 工作区轴（项目轴）：worktree 里的实例（托管的，或仓库外平级的）归其所属仓库，其余归它自己所在的
+// 工作区轴（项目轴）：worktree 里的实例（托管的，或父目录连着时平级的）归其所属仓库，其余归它自己所在的
 // 目录（连接文件夹或其子目录）。viewingCwd 是「新开会话落哪、侧栏列哪一页」的锚，设成 worktree 路径
 // 等于让它事实上变成一个工作区条目——而 worktree 是临时模式，不占抽屉。判据见 authorize 的 projectKey。
 //
@@ -2771,7 +2771,7 @@ registerSocketConnection(io, socket => {
           // 「在新 worktree 里开」：意图跟着这条消息传来，不在服务端留待决状态。建不出来**整条失败**
           // 而不是回落父仓——静默回落意味着用户以为改动隔离了、实际全落在主工作树上，要到 git status
           // 一堆意外改动时才发现。已经在 worktree 里的会话不再嵌套建（authorize 带回的 worktreeRoot 非空即是，
-          // 托管的与仓库外平级的都算）。
+          // 托管的与范围里平级的都算）。
           const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
           cwd = workspaceCwd;
           if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
@@ -4061,7 +4061,7 @@ registerSocketConnection(io, socket => {
     projectIndex.refresh(); // 子文件夹的最后一个会话被删了，这个项目就该从抽屉里消失
     autoContinue.onSessionGone(sessionId); // 会话都没了，到点不该再 resume 一个空壳去发
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
-    // 会话在 worktree 里时（托管的，或随仓库授权的平级 worktree）一并报告那棵树的状态：transcript
+    // 会话在 worktree 里时（托管的，或范围里的平级 worktree）一并报告那棵树的状态：transcript
     // 删掉了，**worktree 还在磁盘上**，不说一声用户就不知道它在哪、里面还剩什么。
     // 用户显式连接的 worktree（连接根开在树内部）不报——那是常驻工作区，不是临时模式。
     // 这里只报告、**不删**——那棵树里可能是这份改动唯一的存在，而「查不到状态」与「真的干净」
