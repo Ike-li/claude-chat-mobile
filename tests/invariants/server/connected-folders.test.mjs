@@ -197,3 +197,26 @@ test('新会话页选中平级 worktree：广播带 composeCwd，按它发首条
   assert.equal(latestInstances().composeCwd, undefined, 'session:home 之后还带着上一个新会话页的 worktree');
   await emit('session:close', { instanceId: inst.instanceId });
 });
+
+// 空页显示的默认档位（L3 CLI settings）要按首条消息真正开在哪取：新会话页选中 worktree 时 viewingCwd 是仓库、
+// 实例却按 composeCwd 开在 worktree，两边 settings 不同就显示的是一个、用的是另一个（2026-10-10 review P2）。
+test('新会话页选中 worktree：空页显示的默认权限档按 worktree 自己的 settings，不按它所属的仓库', async () => {
+  const settings = mode => JSON.stringify({ permissions: { defaultMode: mode } });
+  mkdirSync(join(repo, '.claude'), { recursive: true });
+  writeFileSync(join(repo, '.claude', 'settings.json'), settings('plan'));
+  mkdirSync(join(sibling, '.claude'), { recursive: true });
+  writeFileSync(join(sibling, '.claude', 'settings.json'), settings('acceptEdits'));
+  const pageShows = async (cwd, want, what) => {
+    assert.equal((await emit('session:new', { cwd }))?.ok, true);
+    try {
+      await waitFor(() => latestInstances()?.defaultPermissionMode === want, what);
+    } catch (err) {
+      throw new Error(`${err.message}（广播里实际是 ${latestInstances()?.defaultPermissionMode}）`, { cause: err });
+    }
+  };
+  // 仪器先证明自己看得见：仓库自己的新会话页显示仓库 settings 里的档
+  await pageShows(repo, 'plan', '仓库的新会话页显示仓库 settings 里的 plan');
+  await pageShows(sibling, 'acceptEdits', '选中 worktree 的新会话页显示 worktree settings 里的 acceptEdits');
+  assert.equal(latestInstances().composeCwd, sibling);
+  await emit('session:home', {});
+});

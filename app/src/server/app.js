@@ -1338,11 +1338,14 @@ function instancesPayload() {
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
   // 实例时也带，覆盖无记录续接显示）；未探到→null，前端回落「沿用当前」。
-  payload.defaultModel = defaultModelByCwd.get(viewingCwdOf()) ?? null;
+  // 新会话页选中的是 worktree 时，首条消息开在 composeCwd 而不是 viewingCwd（那是它所属的仓库）——
+  // 默认档位与默认模型要按首条消息真正开在哪取，暂存档位的键才收回项目轴（2026-10-10 review P2）。
+  const defaultsCwd = composeCwdNow() ?? viewingCwdOf();
+  payload.defaultModel = defaultModelByCwd.get(defaultsCwd) ?? null;
   // 空首页（viewingInstanceId 为空、无 live 实例）另下发「下一条新会话(FRESH)将用的」权限/思考强度档
   // （L0 pending > L3 CLI settings > L4 硬默认），修「空首页残留上个会话档」+ 与终端 settings 对齐。
   if (!viewingInstanceId) {
-    const cwd = viewingCwdOf();
+    const cwd = defaultsCwd;
     const prefsKey = workspaceCwdOf(cwd);
     const fresh = resolveFreshPrefs({
       hasPendingMode: pendingModeByCwd.has(prefsKey),
@@ -3391,7 +3394,8 @@ registerSocketConnection(io, socket => {
       .catch(err => console.warn('[cli-settings] session:new 刷新失败:', err?.message || err))
       .finally(() => {
         if (!viewingInstanceId) openScoutInstance(cwd); // 无实例：scout 获取真实模型（不留幽灵会话）
-        if (viewingCwdOf() === cwd && !viewingInstanceId) broadcastInstances();
+        // 比的是新会话页的目标：选中 worktree 时 viewingCwd 已归到仓库，拿它比 cwd 永远不等，补播就丢了
+        if (!viewingInstanceId && (composeCwdNow() ?? viewingCwdOf()) === cwd) broadcastInstances();
       });
     lastStatusLine = null;
     scheduleStatusRefresh();
