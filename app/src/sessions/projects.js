@@ -52,14 +52,18 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize, 
 
 // 「无文件夹」项目有没有会话：scratch 根下某个 mkdtemp 形态目录的 project 目录里有 transcript。
 // 只决定抽屉里这一节显不显示（官方侧栏也只列有会话的项目），不认领任何会话——所以按名字判就够：
-// `<根的编码>-` 之后那一段必须整段就是 scratch 形态（它全是字母数字与连字符，编码前后不变），
-// 根下别的目录、scratch 目录里的子目录都会在这里被挡掉。
+// `<根的编码>-` 之后必须以一段 scratch 形态开头（它全是字母数字与连字符，编码前后不变），根下别的目录
+// 在这里被挡掉。后面还可以跟 `-…`：会话中途进了 scratch 目录下面的子目录（如托管 worktree）时，CLI 把
+// transcript 整份搬进那个子目录的 project 目录，只认整段的话重启后这一节就没了（2026-10-10 review P2）。
+const SCRATCH_SEG_LEN = 'scratch-0000-00-00-xxxxxx'.length;
+const isScratchProjectSuffix = s => SCRATCH_DIR_RE.test(s.slice(0, SCRATCH_SEG_LEN))
+  && (s.length === SCRATCH_SEG_LEN || s[SCRATCH_SEG_LEN] === '-');
 export async function hasScratchSessions({ baseDir, scratchRoot }) {
   const prefix = getProjectDir(scratchRoot) + '-';
   let names;
   try {
     names = (await readdir(baseDir, { withFileTypes: true }))
-      .filter(e => e.isDirectory() && e.name.startsWith(prefix) && SCRATCH_DIR_RE.test(e.name.slice(prefix.length)))
+      .filter(e => e.isDirectory() && e.name.startsWith(prefix) && isScratchProjectSuffix(e.name.slice(prefix.length)))
       .map(e => e.name);
   } catch { return false; }
   for (const name of names) {

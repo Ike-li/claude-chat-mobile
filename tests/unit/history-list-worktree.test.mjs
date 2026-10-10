@@ -436,6 +436,21 @@ test('scratch 根：列出各个 scratch 目录里的会话，行带 cwd 与 scr
   assert.ok(sessions.every(s => s.worktreeGone === undefined), '还在的 scratch 目录不能带「已删」标记');
 });
 
+// 无文件夹会话中途 EnterWorktree：CLI 把 transcript 整份搬进 scratch 目录下托管 worktree 的 project 目录。
+// 「无文件夹」这一节显示了（hasScratchSessions），里面却列不出这条会话 = 一节空壳（2026-10-10 review P2）。
+test('scratch 根：会话搬进了 scratch 目录下的托管 worktree，照样列在「无文件夹」里', async () => {
+  const { baseDir } = fixture();
+  const scratchRoot = join(realpathSync(ROOT), `scratch-${seq++}`);
+  mkdirSync(scratchRoot);
+  const d1 = mkdtempSync(join(scratchRoot, 'scratch-2026-10-10-'));
+  const wt = join(d1, '.claude', 'worktrees', 'x');
+  mkdirSync(wt, { recursive: true });
+  writeSession(baseDir, wt, 's-moved', { at: T0 });
+  const { sessions } = await listSessionsPage(scratchRoot, { baseDir, limit: 10, memberOptions: authorizeWith({ scratchRoot }) });
+  assert.deepEqual(sessions.map(s => s.id), ['s-moved'], `搬进 scratch 目录下 worktree 的会话列不出来：${JSON.stringify(sessions)}`);
+  assert.equal(sessions[0].cwd, wt, '点开要定位到它真实所在的 project 目录');
+});
+
 // 真机 1c401b5d：transcript 被 EnterWorktree 整份搬到新 project 目录，头部 ~300 行的 cwd 仍是原仓，
 // 搬迁后的记录才是新 cwd，而那时文件已经 1.8MB。只看头窗取「第一个 cwd」会拿到原仓，与这个 project
 // 目录对不上，这棵（已删的）worktree 的会话就被当成「查无证据」丢掉。

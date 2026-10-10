@@ -891,7 +891,7 @@ async function listProjectMemberDirs(cwd, baseDir, memberOptions) {
   const authorize = memberOptions?.authorize;
   if (typeof authorize !== 'function') return listManagedWorktreeDirs(cwd, baseDir);
   const self = authorize(cwd);
-  if (self?.kind === 'scratch-root') return listScratchMembers(self.path, authorize);
+  if (self?.kind === 'scratch-root') return listScratchMembers(self.path, authorize, baseDir);
   const managed = await listManagedWorktreeDirs(cwd, baseDir);
   const seen = new Set(managed.map(m => getProjectDir(m.cwd)));
   const linked = listLinkedWorktrees(cwd)
@@ -902,13 +902,17 @@ async function listProjectMemberDirs(cwd, baseDir, memberOptions) {
 }
 
 // scratch 根下的 scratch 目录。readdir 的 isDirectory 不跟随 symlink；形态与归属交给授权判据。
-async function listScratchMembers(root, authorize) {
+// 每个 scratch 目录下的托管 worktree 也算：会话中途 EnterWorktree 时 CLI 把 transcript 整份搬进那里的
+// project 目录，不并进来的话「无文件夹」这一节在、会话却列不出来（2026-10-10 review P2）。
+async function listScratchMembers(root, authorize, baseDir) {
   const out = [];
   try {
     for (const e of await readdir(root, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
       const auth = authorize(join(root, e.name));
-      if (auth?.kind === 'scratch') out.push({ name: e.name, cwd: auth.path, gone: false, scratch: true });
+      if (auth?.kind !== 'scratch') continue;
+      out.push({ name: e.name, cwd: auth.path, gone: false, scratch: true });
+      for (const w of await listManagedWorktreeDirs(auth.path, baseDir)) out.push({ ...w, scratch: true });
     }
   } catch { /* 根还没建（从没开过无文件夹会话）：没有成员 */ }
   return out;

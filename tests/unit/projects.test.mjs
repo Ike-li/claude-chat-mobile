@@ -279,3 +279,18 @@ test('hasScratchSessions：只认 scratch 形态目录里真有 transcript 的',
   writeTranscript(baseDir, used, [used]);
   assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), true);
 });
+
+// 无文件夹会话中途进了 scratch 目录下面的托管 worktree：CLI 把 transcript 整份搬进那个子目录的
+// project 目录。只认「整段就是 scratch 形态」的名字的话，重启后这一节就没了，而 listScratchMembers
+// 仍列得出这条会话（2026-10-10 review P2）。
+test('hasScratchSessions：会话搬进了 scratch 目录下面的子目录，照样算在用；不是 app 建的目录下面的照样不算', async () => {
+  const { baseDir } = fixture();
+  const scratchRoot = join(ROOT, `scratch-root-${seq++}`);
+  const notScratch = join(scratchRoot, 'not-a-scratch', 'sub');
+  writeTranscript(baseDir, notScratch, [notScratch]);
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false, '根下不是 app 建的目录，它下面的也不算');
+  const moved = join(scratchRoot, 'scratch-2026-10-10-MOVED0', '.claude', 'worktrees', 'x');
+  writeTranscript(baseDir, moved, [moved]);
+  assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), true,
+    '会话搬进 scratch 目录下的 worktree 后，重启就丢了「无文件夹」这一节');
+});
