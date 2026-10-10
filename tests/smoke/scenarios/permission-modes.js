@@ -83,7 +83,15 @@ const run = async () => {
   s.emit('user:message', { text: promptFor('a'), model: MODEL });
   const perm = await waitFor(col, e => col.events.indexOf(e) >= mark1 && e.type === 'permission_request', 90000, 'default 审批弹窗');
   check('default 档：非白名单 Bash 触发 permission_request', perm.payload.name === 'Bash', `工具=${perm.payload.name}`);
-  s.emit('user:approve', { requestId: perm.payload.requestId, decision: 'allow' });
+  // 必须回显所见操作（op）并路由回本实例：服务端按 op 重算指纹比对（审批完整性绑定），不带 op 的 allow
+  // 一律 fail-closed 拒掉——Bash 没跑，claude 记下「被拒」，正是上面那行注释要避免的、会扰乱轮②的状态。
+  // 形状与 plan-mode.js、前端 approval-questions.js 一致。
+  s.emit('user:approve', {
+    requestId: perm.payload.requestId,
+    decision: 'allow',
+    instanceId: perm.instanceId,
+    op: { tool: perm.payload.name, args: perm.payload.input, cwd: perm.payload.cwd },
+  });
   await waitFor(col, e => col.events.indexOf(e) >= mark1 && e.type === 'result', 90000, 'default 轮结束');
 
   // ---- 切 bypass：agent 已存在 → 走真实 q.setPermissionMode（核心：非假功能验证）----

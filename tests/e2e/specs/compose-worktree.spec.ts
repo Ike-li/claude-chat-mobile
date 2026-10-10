@@ -12,7 +12,7 @@
 // mock 侧固定返回 branches=['dev','main','feature/login'] / current='dev'。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-40 新会话 worktree：源分支可换、勾选不发请求、意图随第一条消息发出', async ({ page }) => {
@@ -51,6 +51,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('改点东西');
     await page.locator('#btnSend').click();
     await expect(page.locator('#messages')).toContainText('worktree requested from main');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 在线发送没被确认（服务端临时失败 / 半开连接超时）时，这条消息转进 outbox 自动重发。worktree 意图与
+  // text 同属「发出那一刻的快照」，重发必须带着它——漏了，消息照样送达、会话照样开，只是开在父仓里，
+  // 用户勾的「新 worktree」静默失效。离线入队那条路一直带着，在线转入这条曾经漏了。
+  test('P0-40c 首条消息在线发送失败、转入重发：重发仍带着 worktree 意图', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:arm-send-transient-fail');
+
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    await expect(surface).toBeVisible();
+    const wtToggle = surface.locator('[data-testid="compose-worktree-toggle"]');
+    await wtToggle.click();
+    await expect(wtToggle).toHaveAttribute('aria-pressed', 'true');
+
+    await page.locator('#input').fill('在新 worktree 里干活');
+    await page.locator('#btnSend').click();
+    // 第一次被 mock 以可重试的负 ack 拒掉 → 进 outbox → 重发送达；只有重发带着意图，mock 才回这一行
+    await expect(page.locator('#messages')).toContainText('worktree requested from dev', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('在新 worktree 里干活');
 
     await expectNoBrowserErrors(page);
   });
