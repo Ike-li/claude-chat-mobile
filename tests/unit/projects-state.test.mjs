@@ -36,3 +36,15 @@ test('旧载荷（没有 projects / scratchRoot）：每个目录一节、取末
   assert.equal(state.labelFor('/c/b'), 'b');
   assert.equal(state.scratchRoot(), null);
 });
+
+// 原生 Windows（实验路径）上 scratch 目录是 \ 分隔的。认不出来的话，删除确认框不会提醒「临时目录连同里面的
+// 文件一并删除」，而后端照样递归删（2026-10-10 review P2）。
+test('Windows 路径：scratch 根下的目录照样认作「无文件夹」，相邻前缀不算', () => {
+  setLang('zh');
+  const W = 'C:\\Users\\you\\AppData\\Local\\claude-chat-mobile\\scratch-workspaces';
+  const state = createProjectsState();
+  state.set({ dirs: ['C:\\c\\app'], projects: [{ key: 'C:\\c\\app', root: 'C:\\c\\app', label: 'app', kind: 'connected' }], scratchRoot: W });
+  assert.equal(state.isNoFolder(`${W}\\scratch-2026-10-10-abcdef`), true, 'Windows 上的 scratch 会话没被认作「无文件夹」');
+  assert.equal(state.labelFor(`${W}\\scratch-2026-10-10-abcdef`), '无文件夹');
+  assert.equal(state.isNoFolder(`${W}-other\\x`), false, '前缀相邻的目录不算');
+});

@@ -8,6 +8,21 @@ import { projectDisplayName } from './panel-state.js';
 
 const KINDS = new Set(['connected', 'subfolder', 'scratch']);
 
+// p 是不是 root 本身或在它下面。两种分隔符都认：headless server 可能跑在原生 Windows（实验路径），
+// 家目录、项目键、scratch 目录里是 \。必须带分隔符边界：/Users/you2 不在 /Users/you 下。
+export function isPathWithin(p, root) {
+  if (typeof p !== 'string' || typeof root !== 'string' || !p || !root) return false;
+  if (p === root) return true;
+  const base = root.replace(/[/\\]+$/, '');
+  return p.length > base.length && p.startsWith(base) && /[/\\]/.test(p[base.length]);
+}
+
+// p 相对 root 的路径，统一用 / 分隔（协议里的位置都是 / 分隔的，服务端 resolve 两种都认）；不在其下返回 null。
+export function relPathUnder(p, root) {
+  if (!isPathWithin(p, root)) return null;
+  return p.slice(root.replace(/[/\\]+$/, '').length).split(/[/\\]+/).filter(Boolean).join('/');
+}
+
 export function normalizeProjects(payload) {
   const raw = Array.isArray(payload?.projects) ? payload.projects : null;
   if (!raw) {

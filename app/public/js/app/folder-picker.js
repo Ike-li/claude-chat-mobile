@@ -7,7 +7,7 @@
 // 开合走 sheets 原语；数据只走 folders:browse / folders:add / folders:mkdir 三条事件，判据全在服务端
 // （FOLDER-01）——这里不替服务端判断能不能加，只把它的原因码翻成人话。
 import { t } from '../i18n.js';
-import { folderReasonText, projectLabel } from '../logic/projects.js';
+import { folderReasonText, projectLabel, relPathUnder } from '../logic/projects.js';
 
 const ACK_TIMEOUT_MS = 8000;
 
@@ -27,7 +27,7 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
     socket.emit(event, payload, res => done(res || { ok: false }));
     setTimeout(() => done({ ok: false }), ACK_TIMEOUT_MS);
   });
-  const relOf = abs => (home && (abs === home || abs.startsWith(`${home}/`)) ? abs.slice(home.length + 1) : null);
+  const relOf = abs => (home ? relPathUnder(abs, home) : null);
   const absOf = rel => (rel ? `${home}/${rel}` : home);
 
   function setStatus(text) {
