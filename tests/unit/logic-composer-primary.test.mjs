@@ -42,6 +42,7 @@ import {
   nextOutboxWorktreeAnchor,
   planOutboxScratchReuse,
   nextOutboxScratchAnchor,
+  outboxComposeKey,
 } from '../../app/public/js/logic.js';
 // F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
 import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
@@ -987,6 +988,17 @@ test.describe('离线重放：无文件夹每批只开一个会话', () => {
     assert.equal(nextOutboxScratchAnchor(first, { outcome: 'requeue', instanceId: null }, null, ROOT), null);
     assert.equal(nextOutboxScratchAnchor(second, { outcome: 'ok', instanceId: 'inst_t' }, 'inst_s', ROOT), 'inst_s');
     assert.equal(nextOutboxScratchAnchor(elsewhere, { outcome: 'ok', instanceId: 'inst_e' }, null, ROOT), null);
+  });
+
+  // 锚点按新会话页分组（2026-10-10 第四轮 review P2）：两页的条目在 instanceId / cwd 上一模一样，
+  // 只有入队时记下的页标识分得开；它要活过 localStorage 往返，否则重载页面之后两页又并成一个会话。
+  test('新会话页标识随条目活过入队与 localStorage 往返；旧条目没有它时归同一组（行为同从前）', () => {
+    const [back] = parseDurableOutbox(dumpDurableOutbox([{ ...first, composeId: 'page-a' }]));
+    assert.equal(back.composeId, 'page-a');
+    assert.equal(outboxComposeKey(back), 'page-a');
+    assert.notEqual(outboxComposeKey({ ...second, composeId: 'page-b' }), outboxComposeKey(back));
+    assert.equal(outboxComposeKey(first), '', '升级前入队的条目：照旧归一组');
+    assert.equal('composeId' in parseDurableOutbox(dumpDurableOutbox([first]))[0], false, '没有就不平白多一个键');
   });
 });
 

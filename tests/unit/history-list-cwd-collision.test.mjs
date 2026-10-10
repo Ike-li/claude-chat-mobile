@@ -9,7 +9,7 @@
 // 照旧算谁的都行（少列一条比列错一条安全，但老文件本来就列着，不能因为这次改动消失）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir, listSessionsPage, listSessionsByIds, sessionFileExists } from '../../app/src/sessions/history.js';
@@ -101,6 +101,37 @@ test('读不出 cwd 的老 transcript：照旧两边都列、都能打开（不�
   assert.deepEqual((await listSessionsPage(a, { baseDir, limit: 10 })).sessions.map(s => s.id), ['mine-1', 'old-1']);
   assert.deepEqual((await listSessionsPage(b, { baseDir, limit: 10 })).sessions.map(s => s.id), ['theirs-1', 'old-1']);
   assert.equal(await sessionFileExists(b, 'old-1', { baseDir }), true);
+});
+
+// 会话可以在两个撞名的路径之间换驾驶目录（EnterWorktree 进一个编码相同的已有 worktree）：两个 cwd 共用一个
+// project 目录，CLI 不搬文件，后面的记录照写进来、cwd 记的是新的。只认第一条匹配的记录，它就永远归旧的那个，
+// 在旧目录里列出、在旧目录里 resume（2026-10-10 第四轮 review P1）。
+test('会话在两个撞名路径之间换过 cwd：归最近一条记录的那个；之前查过一次也跟得上', async () => {
+  const { baseDir, a, b } = fixture('e-f', join('e', 'f'));
+  writeSession(baseDir, a, 'moved');
+  assert.equal(await sessionFileExists(a, 'moved', { baseDir }), true, '前提：这时它确实是 a 的');
+  const later = new Date(T0 + 5000).toISOString();
+  appendFileSync(join(baseDir, getProjectDir(a), 'moved.jsonl'), [
+    { type: 'user', timestamp: later, cwd: b, message: { role: 'user', content: '在 b 里接着干' } },
+    { type: 'assistant', timestamp: later, cwd: b, message: { role: 'assistant', content: 'ok' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  assert.equal(await sessionFileExists(b, 'moved', { baseDir }), true, '换到 b 之后在 b 里打不开');
+  assert.equal(await sessionFileExists(a, 'moved', { baseDir }), false, '换走之后还在 a 里 resume = 在错的目录里接着干');
+  assert.deepEqual((await listSessionsPage(b, { baseDir, limit: 10 })).sessions.map(s => s.id), ['moved']);
+  assert.deepEqual((await listSessionsPage(a, { baseDir, limit: 10 })).sessions.map(s => s.id), []);
+});
+
+// 尾部只读一小段：最后一条记录是一大段工具输出时，这一段落在那一行中间，一个 cwd 都解析不出来。
+// 这时归属得往前找，不能当成「读不出 cwd 的老文件」——那会让它在两个撞名的目录里都列、都能打开。
+test('最后一条记录特别长（尾部那一小段解析不出 cwd）：往前找，不当成读不出 cwd', async () => {
+  const { baseDir, a, b } = fixture('g-h', join('g', 'h'));
+  writeSession(baseDir, a, 'long-tail');
+  appendFileSync(join(baseDir, getProjectDir(a), 'long-tail.jsonl'), JSON.stringify({
+    type: 'user', timestamp: new Date(T0 + 1000).toISOString(), cwd: a,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x'.repeat(64 * 1024) }] },
+  }) + '\n');
+  assert.equal(await sessionFileExists(b, 'long-tail', { baseDir }), false, '别人的会话在 b 里也打得开');
+  assert.equal(await sessionFileExists(a, 'long-tail', { baseDir }), true);
 });
 
 test('不撞名的目录：行为不变（自己的会话照列，没有别人的可剔）', async () => {

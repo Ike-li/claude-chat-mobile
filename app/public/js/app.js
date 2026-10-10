@@ -125,6 +125,7 @@ import {
   planOutboxScratchReuse,
   nextOutboxScratchAnchor,
   nextOutboxWorktreeAnchor,
+  outboxComposeKey,
   planOutboxEnqueue,
   parseDurableOutbox,
   dumpDurableOutbox,
@@ -198,6 +199,7 @@ import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
 import { attachLongPress } from './app/long-press.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createNewSessionWorktree } from './app/new-session-worktree.js';
+import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
 import { createEnvConfigPanel } from './app/env-config.js';
@@ -1390,18 +1392,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
     // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
-    let worktreeAnchorId = null;
-    // 同理，本批第一条「无文件夹」消息开出来的实例（否则一条建一个 scratch 目录、开一个会话）
-    let scratchAnchorId = null;
+    // 同理，本批第一条「无文件夹」消息开出来的实例（否则一条建一个 scratch 目录、开一个会话）。
+    // 两种锚都按新会话页分（outboxComposeKey）：用户有意新开的另一页要各开各的。
+    const worktreeAnchors = new Map();
+    const scratchAnchors = new Map();
     const scratchRoot = projectsState.scratchRoot();
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
-        // 例外是「在新 worktree 里开」「无文件夹」：这一批里各只该兑现一次（判据见 planOutboxWorktreeReuse），
+        // 例外是「在新 worktree 里开」「无文件夹」：同一个新会话页里各只该兑现一次（判据见 planOutboxWorktreeReuse），
         // 否则每条各建一棵树 / 一个 scratch 目录、各开一个会话，同一个任务被拆进互不相干的上下文。
         // 改投过的条目此后一律按改投后的走（重新入队、「重发」按钮都是）：拿原始条目再发，锚点已不在，又会另开一个。
-        const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchorId), scratchAnchorId, scratchRoot);
+        const page = outboxComposeKey(item);
+        const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchors.get(page) ?? null), scratchAnchors.get(page) ?? null, scratchRoot);
         // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
         // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
         // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
@@ -1416,8 +1420,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
         const decision = await deliverOutboxItem(planned);
-        worktreeAnchorId = nextOutboxWorktreeAnchor(item, decision, worktreeAnchorId);
-        scratchAnchorId = nextOutboxScratchAnchor(item, decision, scratchAnchorId, scratchRoot);
+        const worktreeAnchor = nextOutboxWorktreeAnchor(item, decision, worktreeAnchors.get(page) ?? null);
+        if (worktreeAnchor) worktreeAnchors.set(page, worktreeAnchor);
+        const scratchAnchor = nextOutboxScratchAnchor(item, decision, scratchAnchors.get(page) ?? null, scratchRoot);
+        if (scratchAnchor) scratchAnchors.set(page, scratchAnchor);
         const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -3932,6 +3938,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 放到在线分支里会让离线入队撞 TDZ——而 ESLint 的 no-undef 查不出这个，症状是离线路径整条炸掉
     // （2026-09-11 实测：三条离线队列 E2E 一起红，而 lint 全绿）。
     const worktreeArgs = viewingInstanceId ? {} : newSessionWorktree.newSessionArgs();
+    // 只进 outbox、不上线：服务端用不着它，离线重放靠它分开两个新会话页（见 outboxComposeKey）
+    const composeArgs = viewingInstanceId ? {} : { composeId: composePage.id() };
 
     // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
     // 反复无法送达。提前拦下，超长消息根本不入队（在线分支原来的重复校验已随之移到这里）。
@@ -3962,6 +3970,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // worktree 意图与 text 同属"入队时刻的快照"：离线期间用户可能取消勾选，
         // 但这条消息当初就是要发往新 worktree 的。序列化白名单见 logic/outbox-send.js。
         ...worktreeArgs,
+        ...composeArgs,
       });
 
       inputEl.value = '';
@@ -4025,6 +4034,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // worktree 意图与 text 同属「发出那一刻的快照」（离线入队那条同理）。漏了它，在线没被确认、
       // 转进 outbox 重发的第一条消息会开在父仓里——勾的「新 worktree」静默失效。
       ...worktreeArgs,
+      ...composeArgs,
     };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
     // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字。
@@ -6326,6 +6336,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const newSessionWorktree = createNewSessionWorktree(appContext, {
     onChange: () => { try { renderWorktreeChips(); } catch { /* 空首页未渲染时无事可做 */ } },
   });
+  // 「这一个新会话页」的标识：离线重放时同一页的几条并成一个会话、另开的一页各开各的（见 compose-page.js）
+  const composePage = createComposePage();
   // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
   const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,
@@ -6605,6 +6617,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     enterComposeReady();
     ensureEmptySurface();
     newSessionWorktree.reset(); // 新一轮新会话：勾选/源分支/已建路径全部作废
+    composePage.renew();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   };
   function toggleSessions() {
@@ -6898,6 +6911,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     enterComposeReady();
     ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
     newSessionWorktree.reset(); // 换工作区：分支列表与勾选都属于上一个工作区
+    composePage.renew();
     socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   }
 

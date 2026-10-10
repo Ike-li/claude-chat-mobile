@@ -4069,11 +4069,12 @@ registerSocketConnection(io, socket => {
     // 自动回收是 Claude Desktop 那套 reaper 的事，它有 PR 合并状态可依据，本仓没有。
     // 「无文件夹」会话：官方删会话时一并删它的 scratch 目录。只在它是这个目录里最后一个会话、且没有活实例
     // 开在里面时才删（SCRATCH-01，护栏在 removeScratchWorkspace）——/clear 之后同一目录会有多条会话。
+    // 删的是 scratch 目录本身（scopeRoot），不是会话的 cwd：cwd 可以落在它的子目录里（cd、托管 worktree）。
     const cwdAuth = authorize(cwd);
     const scratchRemoved = cwdAuth?.kind === 'scratch'
-      ? removeScratchWorkspace(cwdAuth.path, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, liveCwds: () => [...agents.values()].map(a => a.cwd) }).removed
+      ? removeScratchWorkspace(cwdAuth.scopeRoot, { root: SCRATCH_ROOT, home: homedir(), baseDir: CLAUDE_PROJECTS_DIR, liveCwds: () => [...agents.values()].map(a => a.cwd) }).removed
       : undefined;
-    if (scratchRemoved) audit.recordAudit({ actor: actorFromSocket(socket), action: 'scratch_removed', target: cwdAuth.path, outcome: 'success', meta: { sessionId } });
+    if (scratchRemoved) audit.recordAudit({ actor: actorFromSocket(socket), action: 'scratch_removed', target: cwdAuth.scopeRoot, outcome: 'success', meta: { sessionId } });
     let worktreeLeft = null;
     const leftTree = cwdAuth?.worktreeRoot && !isWithin(cwdAuth.root, cwdAuth.worktreeRoot) ? cwdAuth.worktreeRoot : null;
     if (leftTree) {

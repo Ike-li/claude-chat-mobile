@@ -1000,7 +1000,7 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
 async function transcriptMentionsCwd(projectDir, wanted) {
   try {
     for (const f of await readdir(projectDir)) {
-      if (f.endsWith('.jsonl') && (await readCwdEvidence(join(projectDir, f))).has(wanted)) return true;
+      if (f.endsWith('.jsonl') && (await readCwdEvidence(join(projectDir, f))).includes(wanted)) return true;
     }
   } catch { /* 目录不可读 */ }
   return false;
@@ -1018,24 +1018,26 @@ export async function projectCwdsOf(projectDir) {
 
 // ── transcript 的归属（2026-10-10 review P1）─────────────────────────────────────────────
 // 编码撞名时一个 project 目录归两个 cwd，目录说不清会话是谁的；transcript 每条记录自己记着 cwd。
-// 归属 = 记录里第一个「编码后等于目录名」的 cwd。读不出 → null：老文件没这个字段，谁问都算它的（照旧列着）。
-// 先只读头部 OWNER_HEAD_BYTES——CLI 头几行就带 cwd；头部找不到（会话中途搬进来的、首行特别长）才读头尾两窗。
-// 按文件缓存：找到了就一直用，transcript 只追加，归属不会变（文件变小 = 被整份重写，才作废）；没找到的
-// 只在大小不变时复用——CLI 刚建文件、第一条记录还没写完时扫到的「没有」，下次长大了要重读。
-const OWNER_HEAD_BYTES = 16 * 1024;
+// 归属 = 最近一条「编码后等于目录名」的记录记的 cwd。不能取第一条：会话可以在两个撞名路径之间换驾驶目录
+// （EnterWorktree 进一个编码相同的已有 worktree），CLI 不搬文件、后面的记录照写进来，只认第一条它就永远归旧的
+// 那个（第四轮 review P1）；也不能取最后一条记录不论是否匹配：会话 cd 进子目录后记的 cwd 编码对不上这个目录。
+// 读不出 → null：老文件没这个字段，谁问都算它的（照旧列着）。
+// 先读尾部 OWNER_TAIL_BYTES——CLI 每条记录都带 cwd，最近的一条几乎总在这里；找不到（尾部是一条超长的工具输出）
+// 才读头尾两窗，取其中最后一个匹配的。按文件缓存，大小与修改时间都没变才复用：一追加，最近的记录就可能换了 cwd。
+const OWNER_TAIL_BYTES = 16 * 1024;
 const OWNER_SCAN_BATCH = 32; // 同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
 const OWNER_CACHE_CAP = 8192;
-const _ownerCache = new Map(); // file → { owner, size }
+const _ownerCache = new Map(); // file → { owner, size, mtimeMs }
 
 async function transcriptOwnerCwd(file, dirName) {
-  let size;
-  try { ({ size } = await stat(file)); } catch { return null; }
+  let st;
+  try { st = await stat(file); } catch { return null; }
   const hit = _ownerCache.get(file);
-  if (hit && (hit.owner ? size >= hit.size : size === hit.size)) return hit.owner;
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.owner;
   const matches = c => getProjectDir(c) === dirName;
-  let owner = [...await readCwdEvidence(file, OWNER_HEAD_BYTES)].find(matches) ?? null;
-  if (!owner && size > OWNER_HEAD_BYTES) owner = [...await readCwdEvidence(file)].find(matches) ?? null;
-  setCapped(_ownerCache, file, { owner, size }, OWNER_CACHE_CAP);
+  let owner = (await readCwdEvidence(file, OWNER_TAIL_BYTES)).findLast(matches) ?? null;
+  if (!owner && st.size > OWNER_TAIL_BYTES) owner = (await readCwdEvidence(file)).findLast(matches) ?? null;
+  setCapped(_ownerCache, file, { owner, size: st.size, mtimeMs: st.mtimeMs }, OWNER_CACHE_CAP);
   return owner;
 }
 
@@ -1068,16 +1070,16 @@ async function foreignSessionIds(dir, cwd) {
   return out;
 }
 
-// transcript 头窗与尾窗里出现过的 cwd（按出现先后）。只读两个窗，与 readHeadMeta 同一对上限：搬迁后仍在
-// 活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
-// headBytes：只读文件开头这么多（归属判定的快路径）。
-async function readCwdEvidence(file, headBytes = 0) {
-  const out = new Set();
+// transcript 头窗与尾窗里各条记录的 cwd（按记录先后，可重复）。只读两个窗，与 readHeadMeta 同一对上限：
+// 搬迁后仍在活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
+// tailBytes：只读文件末尾这么多（归属判定的快路径）。
+async function readCwdEvidence(file, tailBytes = 0) {
+  const out = [];
   let fh;
   try {
     fh = await open(file, 'r');
     const { size } = await fh.stat();
-    const windows = headBytes ? [[0, Math.min(size, headBytes)]]
+    const windows = tailBytes ? [[Math.max(0, size - tailBytes), Math.min(size, tailBytes)]]
       : size > HEAD_READ_BYTES + TAIL_READ_BYTES
         ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
         : [[0, size]];
@@ -1087,7 +1089,7 @@ async function readCwdEvidence(file, headBytes = 0) {
       for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
         let entry;
         try { entry = JSON.parse(line); } catch { continue; } // 空行 / 窗口切开的半行
-        if (typeof entry?.cwd === 'string' && entry.cwd) out.add(entry.cwd);
+        if (typeof entry?.cwd === 'string' && entry.cwd) out.push(entry.cwd);
       }
     }
   } catch { /* 读不出：没有证据 */ } finally {

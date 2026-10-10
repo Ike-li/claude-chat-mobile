@@ -185,3 +185,22 @@ test('删会话：目录里还有别的会话就留着；删到最后一个，�
   assert.equal(existsSync(dir), false, '最后一个会话删了，一次性目录不该留在磁盘上');
   await waitFor(() => !latestInstances()?.projects?.some(p => p.kind === 'scratch'), '「无文件夹」一节随最后一个会话消失');
 });
+
+// 会话 cwd 可以落进 scratch 目录的子目录（Bash cd、git init 后 EnterWorktree）。删的是那个子目录里的会话时，
+// 要删的仍是整个 scratch 目录——拿子目录去删，护栏「父目录恰为 scratch 根」不成立，目录连同生成的文件
+// 永远留在磁盘上（2026-10-10 第四轮 review P2）。
+test('删会话：会话在 scratch 目录的子目录里，删到最后一个也连整个 scratch 目录一起删', async () => {
+  const inst = await openNoFolderSession('nested');
+  const dir = inst.cwd;
+  const sub = join(dir, 'sub');
+  mkdirSync(sub);
+  const sid = randomUUID();
+  writeTranscript(sub, sid);
+  await emit('session:close', { instanceId: inst.instanceId });
+  await waitFor(() => !latestInstances()?.instances?.some(i => i.cwd === dir), '实例关掉');
+  assert.equal((await emit('session:new', { cwd: home + '/code/a' }))?.ok, true);
+  const r = await emit('session:deletePermanent', { sessionId: sid, cwd: sub });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.scratchRemoved, true, `子目录里的最后一个会话删了，scratch 目录没删：${JSON.stringify(r)}`);
+  assert.equal(existsSync(dir), false);
+});

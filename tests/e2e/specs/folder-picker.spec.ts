@@ -209,6 +209,39 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 同一页连打几条该并成一个会话（P0-PICK-8），但两个「无文件夹」新会话页是用户有意分开的两个会话：
+  // 两页的条目都是 instanceId:null + scratch 根，只按这两个字段认，第二页的话就被投进第一页开出来的会话，
+  // 带着别人的上下文跑（2026-10-10 第四轮 review P2）。
+  test('P0-PICK-9 离线时开了两个「无文件夹」新会话页：重放时各开各的，第二页的话不并进第一页的会话', async ({ page }) => {
+    const sent: Array<{ text?: string; instanceId?: string | null; cwd?: string }> = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
+        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+      }
+    }));
+    await gotoMock(page);
+    await waitForIdle(page);
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['第一页的话', '第二页的话']) {
+      await openPickerFromCompose(page);
+      await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
+      await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('无文件夹');
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect.poll(() => sent.map(m => m.text)).toEqual(['第一页的话', '第二页的话']);
+    const second = sent[1];
+    expect(second.cwd).toBe(SCRATCH);
+    expect(second.instanceId, `第二页的话被投进了第一页开出来的会话：${JSON.stringify(second)}`).toBeNull();
+    await expectNoBrowserErrors(page);
+  });
+
   // 「无文件夹」那一节的键是 scratch 根，它只是新会话页的启动键：@ 找文件拿它去问，服务端会拒。
   // 新会话页上还没有目录、也就没有文件；会话开起来之后，文件在它自己的 scratch 目录里。
   test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
