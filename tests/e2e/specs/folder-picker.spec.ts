@@ -170,6 +170,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 新会话页选中 worktree 之后点 ＋：新的一页属于仓库本身，上一页的 worktree 目标要当场作废。等 session:new 的
+  // 广播来清是来不及的——广播落地前发出去的首条消息会开进上一页的 worktree（2026-10-10 第五轮 review P1）。
+  // 断网把广播挡在外面，「广播前就发」这个窗口就稳定可复现。
+  test('P0-PICK-10 worktree 新会话页上点 ＋ 再发：开在仓库里，不沿用上一页的 worktree', async ({ page }) => {
+    const sent: Array<{ text?: string; cwd?: string }> = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
+        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+      }
+    }));
+    await gotoMock(page);
+    await waitForIdle(page);
+    await openPickerFromCompose(page);
+    await picker(page).locator('[data-testid="folder-picker-project"]', { hasText: 'claude-chat-mobile' }).first()
+      .locator('[data-testid="folder-picker-enter"]').click();
+    await entry(page, 'wt-feat-z').locator('button').first().click();
+    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
+    await expect(page.locator('#topProjectText')).toHaveText('claude-chat-mobile');
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#btnNew').click();
+    await page.locator('#input').fill('新的一页');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect.poll(() => sent.map(m => m.text)).toEqual(['新的一页']);
+    expect(sent[0].cwd, '点了 ＋ 的新会话开进了上一页选的 worktree').toBe(MAIN_WORKSPACE);
+    await expectNoBrowserErrors(page);
+  });
+
   // 离线时在「无文件夹」的新会话页上连发两条：重放时第一条懒开实例，第二条改投它（不再各建一个 scratch 目录），
   // 撞上第一条开跑的回合就落「未发送 + 重发」。「重发」要投给改投后的那个会话——拿入队时的原始条目
   // （instanceId 为空、cwd 是 scratch 根）去发，服务端会再建一个目录、再开一个会话，同一件事被拆成两半。

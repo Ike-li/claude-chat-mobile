@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createScratchWorkspace, removeScratchWorkspace } from '../../app/src/sessions/scratch-workspaces.js';
 import { SCRATCH_DIR_RE } from '../../app/src/sessions/folder-access.js';
@@ -168,6 +170,59 @@ test('正对照：别的 scratch 目录有会话、有活实例，不妨碍删�
   assert.deepEqual(removeScratchWorkspace(dir, opts(f, { liveCwds: () => [other, join(other, 'x')] })), { removed: true, reason: null });
   assert.ok(!existsSync(dir));
   assert.ok(existsSync(other));
+});
+
+// scratch 根路径长到 project 目录名被截断加 hash（自定义的长 XDG_DATA_HOME 之类）：本目录与子孙各接不同的 hash，
+// 只剩前 200 个字符相同。拿带 hash 的整段名比前缀，子目录里的会话一个都看不见，递归删除就把它的工作树一起删了
+// （2026-10-10 第五轮 review P1）。前缀只挑候选，归属看 transcript 记的 cwd。
+function longFixture() {
+  const f = fixture();
+  const root = join(f.home, 'x'.repeat(150), 'scratch-workspaces');
+  const dir = withFile(createScratchWorkspace(root));
+  assert.notEqual(encodeProjectDir(dir), dir.replace(/[^a-zA-Z0-9]/g, '-'), '前提：目录名确实被截断了');
+  return { ...f, root, dir };
+}
+const writeCwdTranscript = (baseDir, cwd, id) => {
+  const dir = join(baseDir, encodeProjectDir(cwd));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.jsonl`), `${JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'hi' } })}\n`);
+};
+
+test('拒删：scratch 根很长、目录名被截断时，子目录里还有会话的 transcript', () => {
+  const f = longFixture();
+  const wt = join(f.dir, '.claude', 'worktrees', 'feat');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, 'wip.txt'), '那个会话还在写的东西');
+  writeCwdTranscript(f.baseDir, wt, 'in-worktree');
+  assert.deepEqual(removeScratchWorkspace(f.dir, opts(f)), { removed: false, reason: 'in_use' });
+  assert.ok(existsSync(join(wt, 'wip.txt')), '删掉了另一个会话的工作树');
+});
+
+test('正对照：scratch 根很长时，同一前缀下别的 scratch 目录的会话不妨碍删这一个', () => {
+  const f = longFixture();
+  const other = createScratchWorkspace(f.root);
+  writeCwdTranscript(f.baseDir, other, 'other-dir-session');
+  assert.deepEqual(removeScratchWorkspace(f.dir, opts(f)), { removed: true, reason: null });
+  assert.ok(!existsSync(f.dir));
+  assert.ok(existsSync(other));
+});
+
+// 判归属要读候选目录里的 transcript。.claude 下的文件模型写得动，换成 FIFO 的话普通 open 会一直阻塞到出现写端——
+// 阻塞的是整个 server。放在子进程里跑：同步阻塞在本进程里连超时都救不回来。
+test('候选目录里的 transcript 被换成 FIFO：不阻塞，当成在用（不删）', { skip: process.platform === 'win32' }, () => {
+  const f = fixture();
+  const dir = withFile(createScratchWorkspace(f.root));
+  const subDir = join(f.baseDir, encodeProjectDir(join(dir, 'pkg')));
+  mkdirSync(subDir, { recursive: true });
+  execFileSync('mkfifo', [join(subDir, 'x.jsonl')]);
+  const mod = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/scratch-workspaces.js')).href;
+  const script = `const m = await import(${JSON.stringify(mod)});
+    process.stdout.write(JSON.stringify(m.removeScratchWorkspace(${JSON.stringify(dir)}, ${JSON.stringify({ root: f.root, home: f.home, baseDir: f.baseDir })})));`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(r.signal, null, '读 FIFO 阻塞到超时被杀——在 server 里就是整个进程卡死');
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { removed: false, reason: 'in_use' });
+  assert.ok(existsSync(join(dir, 'work.txt')));
 });
 
 test('拒删：scratch 根被配成家目录或磁盘根时，一个都不删', () => {

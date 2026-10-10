@@ -6599,6 +6599,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 新的一页属于项目本身：上一页在选择器里挑的 worktree 要当场作废（同 startNewSessionIn）。
+    // 等广播来清就晚了——广播落地前发出的首条消息会被 sendCwd() 投进那个 worktree。
+    composeCwd = null;
     // 【displayedSessionId 也要同步置空】上面那条 Bug A 的保证只做了一半：漏了这个变量，
     // 一次迟到的 instances 广播会拿「prev=旧会话 / new=null」进 bindView 判成 swap，
     // 把用户【刚在新会话页打的字】存进旧会话的草稿缓存，再用空串覆盖输入框

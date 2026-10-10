@@ -168,6 +168,18 @@ test('路径长到目录名被截断加 hash 的子文件夹照样认得出', as
   assert.deepEqual(await discover(baseDir, { connected: [code] }), [{ key: long, root: code }]);
 });
 
+// 根自己被截断时，子孙各自接不同的 hash，只剩前 200 个字符与根相同；拿根带 hash 的整段名当前缀，
+// 一个子文件夹都挑不出来，重启后它们的会话从抽屉里整片消失（2026-10-10 第五轮 review P2）。
+test('连接根自己的路径长到目录名被截断加 hash：它下面的子文件夹照样认得出', async () => {
+  const { baseDir, code } = fixture();
+  const longRoot = mk(join(code, 'r'.repeat(120), 's'.repeat(100)));
+  assert.notEqual(getProjectDir(longRoot), longRoot.replace(/[^a-zA-Z0-9]/g, '-'), '前提：根的目录名确实被截断了');
+  const sub = mk(join(longRoot, 'sub'));
+  writeTranscript(baseDir, sub, [sub]);
+  writeTranscript(baseDir, longRoot, [longRoot]); // 根自己的会话不算子项目
+  assert.deepEqual(await discover(baseDir, { connected: [longRoot] }), [{ key: sub, root: longRoot }]);
+});
+
 test('composeProjects：连接根按配置顺序，各自的子项目紧随其后，无文件夹垫底', () => {
   const projects = composeProjects({
     connected: ['/c/one', '/c/two'],

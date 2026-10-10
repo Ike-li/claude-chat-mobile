@@ -10,6 +10,7 @@ import { readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { getProjectDir, projectCwdsOf } from './history.js';
 import { SCRATCH_DIR_RE } from './folder-access.js';
+import { projectDirDescendantPrefix } from '../shared/project-dir.js';
 
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
@@ -20,8 +21,8 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize }
   try {
     names = (await readdir(baseDir, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name);
   } catch { return []; }
-  // 前缀只是候选筛选（`/code/app-x` 编码后也以 `-code-app-` 开头），归属由下面的授权判据答
-  const prefixes = connected.map(r => getProjectDir(r) + '-');
+  // 前缀只是候选筛选（`/code/app-x` 编码后也以 `-code-app-` 开头；根的编码被截断时更宽），归属由下面的授权判据答
+  const prefixes = connected.map(projectDirDescendantPrefix);
   const candidates = new Set(names.filter(n => prefixes.some(p => n.startsWith(p))));
   // 会话删光之后 project 目录还在（SDK 只删 jsonl）：没有 transcript 就没有归属，自然不算项目
   const cwds = (await Promise.all([...candidates].map(name => projectCwdsOf(join(baseDir, name))))).flat();
