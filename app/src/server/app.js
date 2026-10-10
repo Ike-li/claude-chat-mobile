@@ -253,8 +253,8 @@ const scratchAllocator = createScratchAllocator(SCRATCH_ROOT);
 // 抽屉的项目清单：子项目靠扫 ~/.claude/projects 反查（sessions/projects.js），扫出的结果变了才广播。
 // 触发：启动、工作区热加载、删除会话、活实例所在的子项目还没扫到、每分钟一次（有已批准连接时，见 listen 前）。
 const projectIndex = createProjectIndex({
-  discover: async cwdCache => ({
-    subProjects: await discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize, cwdCache }),
+  discover: async () => ({
+    subProjects: await discoverSubProjects({ connected: workDirs, baseDir: CLAUDE_PROJECTS_DIR, authorize }),
     scratchInUse: await hasScratchSessions({ baseDir: CLAUDE_PROJECTS_DIR, scratchRoot: scratchRootKey() }),
   }),
   onChange: () => broadcastInstances(),

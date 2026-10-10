@@ -129,26 +129,24 @@ test('transcript 里没有 cwd：查无证据，不列', async () => {
   assert.deepEqual(await discover(baseDir, { connected: [code] }), []);
 });
 
-test('查不到 cwd 的目录不记进缓存：下一次扫描 transcript 写好了就认得出', async () => {
+test('这一次没查到 cwd，下一次扫描 transcript 写好了就认得出', async () => {
   // 扫描可能恰好撞上 CLI 刚建目录、第一条记录还没写完；把「没查到」记下来，这个子项目就永远不出现
   const { baseDir, code } = fixture();
   const sub = mk(join(code, 'sub'));
   writeTranscript(baseDir, sub, [null]);
-  const cwdCache = new Map();
   const ctx = { connected: [code] };
-  const run = () => discoverSubProjects({ connected: [code], baseDir, authorize: c => resolveAuthorizedCwd(c, ctx), cwdCache });
+  const run = () => discoverSubProjects({ connected: [code], baseDir, authorize: c => resolveAuthorizedCwd(c, ctx) });
   assert.deepEqual(await run(), []);
   writeTranscript(baseDir, sub, [sub]);
   assert.deepEqual(await run(), [{ key: sub, root: code }]);
 });
 
-test('子文件夹的会话删光了（project 目录还在、里面没有 transcript）：不再列，缓存里记着也不列', async () => {
+test('子文件夹的会话删光了（project 目录还在、里面没有 transcript）：不再列，上一次扫出来过也不列', async () => {
   const { baseDir, code } = fixture();
   const sub = mk(join(code, 'sub'));
   writeTranscript(baseDir, sub, [sub]);
-  const cwdCache = new Map();
   const ctx = { connected: [code] };
-  const run = () => discoverSubProjects({ connected: [code], baseDir, authorize: c => resolveAuthorizedCwd(c, ctx), cwdCache });
+  const run = () => discoverSubProjects({ connected: [code], baseDir, authorize: c => resolveAuthorizedCwd(c, ctx) });
   assert.deepEqual(await run(), [{ key: sub, root: code }]);
   rmSync(join(baseDir, getProjectDir(sub), 's1.jsonl')); // safe-path: 本用例自己写的单个夹具文件
   assert.deepEqual(await run(), [], 'SDK 删会话只删 jsonl，留下空目录；照缓存列出来就是一个点进去什么都没有的项目');
@@ -293,4 +291,18 @@ test('hasScratchSessions：会话搬进了 scratch 目录下面的子目录，�
   writeTranscript(baseDir, moved, [moved]);
   assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), true,
     '会话搬进 scratch 目录下的 worktree 后，重启就丢了「无文件夹」这一节');
+});
+
+// 编码撞名（2026-10-10 review P1）：`a-b` 与 `a/b`、两个等长中文文件夹落进同一个 project 目录。
+// 只认「第一个对得上的 cwd」的话，另一个文件夹有会话也成不了一节。
+test('编码撞名的两个子文件夹各成一个项目，不只认第一个', async () => {
+  const { baseDir, code } = fixture();
+  const pairs = [[mk(join(code, 'a-b')), mk(join(code, 'a', 'b'))], [mk(join(code, '笔记')), mk(join(code, '文档'))]];
+  for (const [x, y] of pairs) {
+    assert.equal(getProjectDir(x), getProjectDir(y), '夹具前提：编码后同名');
+    writeTranscript(baseDir, x, [x], 's-x');
+    writeTranscript(baseDir, y, [y], 's-y');
+  }
+  const keys = (await discover(baseDir, { connected: [code] })).map(p => p.key);
+  for (const p of pairs.flat()) assert.ok(keys.includes(p), `${p} 有会话却没成为一节：${JSON.stringify(keys)}`);
 });

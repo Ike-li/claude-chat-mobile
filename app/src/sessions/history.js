@@ -861,15 +861,16 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
 async function scanOneCwd(cwd, baseDir, limit, normalizedQuery) {
   const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = normalizedQuery
-    ? `${dir}:q:${normalizedQuery.toLowerCase()}:${limit}`
-    : `${dir}:${limit}`;
+    ? `${dir}:${cwd}:q:${normalizedQuery.toLowerCase()}:${limit}`
+    : `${dir}:${cwd}:${limit}`;
   // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——
   // excludeIds 不进缓存键：缓存的是扫盘结果，排除在缓存之后应用。
-  // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉。
+  // 缓存键含 dir，所以父仓与各 worktree 各自成键，不会互相顶掉；也含 cwd——编码撞名时两个 cwd 共用一个
+  // 目录、结果各不相同（invalidateListCache 按 `${dir}:` 前缀清，照样清得到）。
   const cached = _listCache.get(cacheKey);
-  return cached && Date.now() - cached.ts < LIST_CACHE_TTL
-    ? cached.result
-    : scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
+  if (cached && Date.now() - cached.ts < LIST_CACHE_TTL) return cached.result;
+  // 编码撞名：目录里记着别的 cwd 的会话，在排序、截 limit 之前剔掉（见 transcriptOwnerCwd）
+  return scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery, await foreignSessionIds(dir, cwd));
 }
 
 // 成员目录里的会话行比项目根自己的多带的字段。scratch 目录不是 worktree，不能标成 worktree。
@@ -1004,33 +1005,81 @@ async function transcriptMentionsCwd(projectDir, wanted) {
   return false;
 }
 
-// 一个 project 目录是从哪个 cwd 落下来的：找一个「编码后正好等于这个目录名」的 cwd。
-// 目录名是有损编码（`/a/b-c` 与 `/a/b/c` 同名），不能反解成路径；也不能取第一个 cwd（理由同上）。
-// 只抽查前几份 transcript：同一目录里的会话落在同一个 cwd，找不到多半是老文件没这个字段。
-const PROJECT_CWD_PROBE_FILES = 5;
-export async function projectCwdOf(projectDir) {
-  const name = basename(projectDir);
-  let files;
-  try { files = (await readdir(projectDir)).filter(f => f.endsWith('.jsonl')); } catch { return null; }
-  for (const f of files.slice(0, PROJECT_CWD_PROBE_FILES)) {
-    for (const c of await readCwdEvidence(join(projectDir, f))) {
-      if (getProjectDir(c) === name) return c;
-    }
-  }
-  return null;
+// 一个 project 目录是从哪些 cwd 落下来的：每份 transcript 记的、编码后正好等于这个目录名的那个 cwd。
+// 目录名是有损编码——非字母数字一律变 '-'，中文也是，`/a/b-c` 与 `/a/b/c`、同一父目录下两个等长的中文名
+// 同名——不能反解成路径；也不能只认第一个：两个 cwd 撞名时另一个就永远成不了项目（2026-10-10 review P1）。
+// 读不出 cwd 的老文件不算数。
+export async function projectCwdsOf(projectDir) {
+  const out = new Set();
+  for (const owner of (await transcriptOwners(projectDir)).values()) if (owner) out.add(owner);
+  return [...out];
 }
 
-// transcript 头窗与尾窗里出现过的 cwd。只读两个窗，与 readHeadMeta 同一对上限：搬迁后仍在
+// ── transcript 的归属（2026-10-10 review P1）─────────────────────────────────────────────
+// 编码撞名时一个 project 目录归两个 cwd，目录说不清会话是谁的；transcript 每条记录自己记着 cwd。
+// 归属 = 记录里第一个「编码后等于目录名」的 cwd。读不出 → null：老文件没这个字段，谁问都算它的（照旧列着）。
+// 先只读头部 OWNER_HEAD_BYTES——CLI 头几行就带 cwd；头部找不到（会话中途搬进来的、首行特别长）才读头尾两窗。
+// 按文件缓存：找到了就一直用，transcript 只追加，归属不会变（文件变小 = 被整份重写，才作废）；没找到的
+// 只在大小不变时复用——CLI 刚建文件、第一条记录还没写完时扫到的「没有」，下次长大了要重读。
+const OWNER_HEAD_BYTES = 16 * 1024;
+const OWNER_SCAN_BATCH = 32; // 同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
+const OWNER_CACHE_CAP = 8192;
+const _ownerCache = new Map(); // file → { owner, size }
+
+async function transcriptOwnerCwd(file, dirName) {
+  let size;
+  try { ({ size } = await stat(file)); } catch { return null; }
+  const hit = _ownerCache.get(file);
+  if (hit && (hit.owner ? size >= hit.size : size === hit.size)) return hit.owner;
+  const matches = c => getProjectDir(c) === dirName;
+  let owner = [...await readCwdEvidence(file, OWNER_HEAD_BYTES)].find(matches) ?? null;
+  if (!owner && size > OWNER_HEAD_BYTES) owner = [...await readCwdEvidence(file)].find(matches) ?? null;
+  setCapped(_ownerCache, file, { owner, size }, OWNER_CACHE_CAP);
+  return owner;
+}
+
+const sameCwd = (a, b) => a === b || a.normalize('NFC') === b.normalize('NFC');
+
+// 这份 transcript 算不算 cwd 的：归属读不出来算；读出来就得是它
+async function transcriptBelongsTo(file, cwd) {
+  const owner = await transcriptOwnerCwd(file, getProjectDir(cwd));
+  return owner === null || sameCwd(owner, cwd);
+}
+
+// 目录里每份 transcript 的归属：id → cwd | null
+async function transcriptOwners(dir) {
+  const dirName = basename(dir);
+  let names;
+  try { names = (await readdir(dir)).filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6))); } catch { return new Map(); }
+  const out = new Map();
+  for (let i = 0; i < names.length; i += OWNER_SCAN_BATCH) {
+    await Promise.all(names.slice(i, i + OWNER_SCAN_BATCH).map(async n => {
+      out.set(n.slice(0, -6), await transcriptOwnerCwd(join(dir, n), dirName));
+    }));
+  }
+  return out;
+}
+
+// 目录里记着别的 cwd 的会话 id——只有编码撞名时才非空
+async function foreignSessionIds(dir, cwd) {
+  const out = new Set();
+  for (const [id, owner] of await transcriptOwners(dir)) if (owner !== null && !sameCwd(owner, cwd)) out.add(id);
+  return out;
+}
+
+// transcript 头窗与尾窗里出现过的 cwd（按出现先后）。只读两个窗，与 readHeadMeta 同一对上限：搬迁后仍在
 // 活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
-async function readCwdEvidence(file) {
+// headBytes：只读文件开头这么多（归属判定的快路径）。
+async function readCwdEvidence(file, headBytes = 0) {
   const out = new Set();
   let fh;
   try {
     fh = await open(file, 'r');
     const { size } = await fh.stat();
-    const windows = size > HEAD_READ_BYTES + TAIL_READ_BYTES
-      ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
-      : [[0, size]];
+    const windows = headBytes ? [[0, Math.min(size, headBytes)]]
+      : size > HEAD_READ_BYTES + TAIL_READ_BYTES
+        ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
+        : [[0, size]];
     for (const [start, len] of windows) {
       const buf = Buffer.allocUnsafe(len);
       const { bytesRead } = await fh.read(buf, 0, len, start);
@@ -1230,7 +1279,7 @@ async function fetchSdkSummaryMap(cwd) {
   return map;
 }
 
-async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '') {
+async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '', foreign = new Set()) {
   // 标题搜索必须绕开 SDK 快路径：其 fetchLimit≈51，窗外旧会话永远进不了候选集。
   // query 非空 → 强制全量 readdir + readHeadMeta 再过滤（n=1 下百~数百级可接受）。
   if (query) {
@@ -1238,9 +1287,10 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '') 
     if (useSdk(baseDir)) {
       try { titleById = await fetchSdkSummaryMap(cwd); } catch { /* overlay 失败：仍按 readHeadMeta 搜 */ }
     }
-    return scanViaReaddir(dir, limit, cacheKey, query, titleById);
+    return scanViaReaddir(dir, limit, cacheKey, query, titleById, foreign);
   }
-  if (useSdk(baseDir)) {
+  // 目录里有别的 cwd 的会话（编码撞名）时也绕开 SDK：它按目录列，剔掉之后凑不满 limit、total 也不对
+  if (useSdk(baseDir) && !foreign.size) {
     try {
       const result = await scanSessionsViaSdk(cwd, limit);
       _listCache.set(cacheKey, { ts: Date.now(), result });
@@ -1250,14 +1300,14 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '') 
       return scanViaReaddir(dir, limit, cacheKey, '');
     }
   }
-  return scanViaReaddir(dir, limit, cacheKey, '');
+  return scanViaReaddir(dir, limit, cacheKey, '', new Map(), foreign);
 }
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
 // readdir + N×stat + 全量尾窗活动时间 + readHeadMeta。
 // 浏览：只对前 limit 条读 meta。搜索：对前 SEARCH_SCAN_LIMIT 条读 meta 再按标题过滤。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
-async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map()) {
+async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map(), exclude = new Set()) {
   let names;
   try {
     names = await readdir(dir);
@@ -1267,7 +1317,8 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
 
   // B2：stat 并发（Promise.allSettled 容错：单文件失败不影响其他）
   // 只认安全 session id（与 SDK 补齐同口径），避免备份文件进列表。
-  const jsonlNames = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)));
+  // exclude：记着别的 cwd 的会话（编码撞名），在排序、截 limit 之前剔掉
+  const jsonlNames = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)) && !exclude.has(n.slice(0, -6)));
   const statResults = await Promise.allSettled(
     jsonlNames.map(async name => {
       const file = join(dir, name);
@@ -1382,6 +1433,7 @@ export async function listSessionsByIds(cwd, ids, { baseDir = CLAUDE_DIR, member
       const candidate = join(baseDir, getProjectDir(o.cwd), `${id}.jsonl`);
       try {
         const s = await stat(candidate);
+        if (!(await transcriptBelongsTo(candidate, o.cwd))) continue; // 编码撞名：别的 cwd 的会话
         // 判据与 listSessionsPage 同口径：按最后一条消息的时间，读不出来才回落 mtime。
         // 不能只比 mtime——transcript 被复制/touch 过时 mtime 会说谎，而两个入口对同一个会话
         // 给出不同历史是最难归因的一类症状。候选数就是「父仓 + 它的 worktree 数」，逐个读尾部
@@ -1903,12 +1955,14 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   // session:switch 是纵深防御层：前端列表已按 cwd 过滤，但构造 payload（如 '../别的cwd/<id>'）不得
   // 借 join 规范化越出本 cwd 的 project 目录（/verify 2026-06-12 实测抓出）。空串也被 + 量词挡掉。
   if (!isSafeSessionId(id)) return false;
+  const file = join(baseDir, getProjectDir(cwd), `${id}.jsonl`);
   try {
-    await stat(join(baseDir, getProjectDir(cwd), `${id}.jsonl`));
-    return true;
+    await stat(file);
   } catch {
     return false;
   }
+  // 编码撞名时目录里可能是别的 cwd 的会话：在这里 resume 等于在错的文件夹里接着干（2026-10-10 review P1）
+  return transcriptBelongsTo(file, cwd);
 }
 
 // 会话是否属于这个**工作区**（含它的托管 worktree）。与 sessionFileExists 分开是刻意的：

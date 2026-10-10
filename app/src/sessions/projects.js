@@ -3,19 +3,19 @@
 // 官方桌面端的侧栏按项目分组。这里的项目 = 已连接的文件夹（按配置顺序）+ 其下有会话的子文件夹
 // + 无文件夹（scratch 根）。worktree 不自成项目，跟随所属仓库（由授权判据的 projectKey 决定）。
 //
-// 子项目只能从 ~/.claude/projects 反查：目录名是有损编码，读 transcript 记下的 cwd（projectCwdOf），
+// 子项目只能从 ~/.claude/projects 反查：目录名是有损编码，读 transcript 记下的 cwd（projectCwdsOf），
 // 再问授权判据它归哪个项目——已删的目录、禁区、连接范围外的，判据都答 null，于是自然不列。
 // 这份清单只管展示分组，不授予任何访问：打开会话时每个 cwd 仍要单独过授权判据。
 import { readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
-import { getProjectDir, projectCwdOf } from './history.js';
+import { getProjectDir, projectCwdsOf } from './history.js';
 import { SCRATCH_DIR_RE } from './folder-access.js';
 
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 // 扫出已连接文件夹之下、自己不是连接根的项目 → [{ key, root }]。
-// cwdCache：project 目录名 → cwd 的记忆（目录名对应的 cwd 不会变，只记查到的；目录消失时剪掉）。
-export async function discoverSubProjects({ connected = [], baseDir, authorize, cwdCache = new Map() }) {
+// 一个 project 目录可能落着几个 cwd（编码撞名），各自成项目；逐份 transcript 的归属由 history.js 按文件缓存。
+export async function discoverSubProjects({ connected = [], baseDir, authorize }) {
   let names;
   try {
     names = (await readdir(baseDir, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name);
@@ -23,23 +23,13 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize, 
   // 前缀只是候选筛选（`/code/app-x` 编码后也以 `-code-app-` 开头），归属由下面的授权判据答
   const prefixes = connected.map(r => getProjectDir(r) + '-');
   const candidates = new Set(names.filter(n => prefixes.some(p => n.startsWith(p))));
-  for (const k of cwdCache.keys()) if (!candidates.has(k)) cwdCache.delete(k);
-  const cwds = await Promise.all([...candidates].map(async name => {
-    const dir = join(baseDir, name);
-    // 会话删光之后 project 目录还在（SDK 只删 jsonl）：没有 transcript 就不算项目，缓存里记着也不算
-    let files = [];
-    try { files = await readdir(dir); } catch { /* 读不了：同没有 */ }
-    if (!files.some(f => f.endsWith('.jsonl'))) return null;
-    if (cwdCache.has(name)) return cwdCache.get(name);
-    const cwd = await projectCwdOf(dir);
-    if (cwd) cwdCache.set(name, cwd);
-    return cwd;
-  }));
+  // 会话删光之后 project 目录还在（SDK 只删 jsonl）：没有 transcript 就没有归属，自然不算项目
+  const cwds = (await Promise.all([...candidates].map(name => projectCwdsOf(join(baseDir, name))))).flat();
 
   const known = new Set(connected);
   const found = new Map();
   for (const cwd of cwds) {
-    const auth = cwd ? authorize(cwd) : null;
+    const auth = authorize(cwd);
     if (auth?.kind !== 'connected' && auth?.kind !== 'worktree') continue;
     const key = auth.projectKey;
     if (known.has(key) || found.has(key)) continue;
@@ -98,14 +88,13 @@ export function composeProjects({ connected = [], subProjects = [], scratchRoot 
 // 扫描抛错保留上一次的结果——一次读盘失败就清空，抽屉的子项目会整片闪没。
 // start 周期补扫：终端里在新子目录开的会话只有扫盘认得出；shouldScan 为假（没人在看）时跳过这一趟。
 export function createProjectIndex({ discover, onChange }) {
-  const cwdCache = new Map();
   let current = null; // null = 还没扫过（≠ 没有子项目）
   let signature = null;
   let inflight = null;
   let again = false;
   async function run() {
     try {
-      const next = await discover(cwdCache);
+      const next = await discover();
       const sig = JSON.stringify(next);
       if (sig !== signature) {
         signature = sig;
