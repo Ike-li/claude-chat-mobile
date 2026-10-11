@@ -1585,9 +1585,19 @@ export class AgentSession {
         .filter(u => u?.type !== 'setMode' && u?.destination && u.destination !== 'session' && u.destination !== 'cliArg')
         .map(u => u.destination),
     )];
+    // Claude in Chrome 的 read_page / find / computer 只带 tabId，网站只在 CLI 的建议规则里。卡片拿它写标题，
+    // 并把「总是允许」写成「本会话内允许 <网站> 上的所有操作」——那是对授权范围的陈述，而勾选回传的是
+    // 全部 session 档建议（resolvePermission），所以 session 档恰好只有这一条网站规则时才下发。
+    // 判据照 CLI 自己的审批框：它也只在建议恰为一条 ClaudeInChromeDomain 时才给「Allow all actions on …」。
+    const sessionRules = (suggestions || []).filter(u => u?.type !== 'setMode' && u?.destination === 'session');
+    const siteRule = sessionRules.length === 1 && sessionRules[0].type === 'addRules' && sessionRules[0].behavior === 'allow'
+      && sessionRules[0].rules?.length === 1 ? sessionRules[0].rules[0] : null;
+    const chromeSite = siteRule?.toolName === 'ClaudeInChromeDomain' && typeof siteRule.ruleContent === 'string' && siteRule.ruleContent
+      ? siteRule.ruleContent : null;
     this.emit('permission_request', {
       requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
       ...(persistDestinations.length ? { persistDestinations } : {}),
+      ...(chromeSite ? { chromeSite } : {}),
     });
     // 持久化台账：只是台账记录，写入失败
     // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
@@ -1608,7 +1618,7 @@ export class AgentSession {
       // deny + emit expired（与 resolvePermission 的惰性过期分支同义，只是这里「到时主动」而非「有人提交才发现」）。
       const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
       expiryTimer.unref?.(); // 不阻止进程退出
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations });
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations, chromeSite });
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
@@ -2687,6 +2697,7 @@ export class AgentSession {
       permissions.push({
         requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt,
         ...(p.persistDestinations?.length ? { persistDestinations: p.persistDestinations } : {}),
+        ...(p.chromeSite ? { chromeSite: p.chromeSite } : {}),
       });
     }
     const questions = [];

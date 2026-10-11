@@ -295,4 +295,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-10-11 真会话：Claude in Chrome 的 read_page / find / computer 只带 tabId，卡片上只有工具名和
+  // {"tabId":…}，看不出要动哪个网站；「总是允许此类操作」实际回传的是「本会话内允许这个网站」。
+  // 第二段走一张普通卡片：标题与勾选文案是按卡片改写的，上一张的改写不得粘到下一张。
+  test('P0-06k Claude in Chrome 审批卡片写出网站，勾选文案写明只在本会话放行这个网站', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission-chrome');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    await expect(page.locator('[data-testid="perm-title"]')).toBeVisible();
+    await expect(page.locator('[data-testid="perm-title"]')).toHaveText('Claude in Chrome 想在 example.org 上读取页面');
+    // 原始工具名仍在，标题是补充不是替换
+    await expect(page.locator('#permTool')).toHaveText('mcp__claude-in-chrome__read_page');
+    await expect(page.locator('[data-testid="perm-always-label"]')).toHaveText('本会话内允许 example.org 上的所有操作');
+
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permTool')).toHaveText('run_command');
+    await expect(page.locator('[data-testid="perm-title"]'), '普通工具没有这行标题').toBeHidden();
+    await expect(page.locator('[data-testid="perm-always-label"]'), '上一张 Chrome 卡片的范围文案不得粘到这张').toHaveText('总是允许此类操作');
+
+    await expectNoBrowserErrors(page);
+  });
+
 });

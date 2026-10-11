@@ -3313,6 +3313,37 @@ io.on('connection', socket => {
       },
     },
     {
+      // P0-06k：Claude in Chrome 的审批卡片。read_page 只带 tabId，网站只在 CLI 建议的
+      // ClaudeInChromeDomain 规则里；真 server 在 session 档恰好只有这一条规则时把它下发成 chromeSite
+      // （agent.js#askPermission）。2026-10-11 真会话日志里的建议就是这个形状。
+      command: 'test:permission-chrome',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+        });
+        const name = 'mcp__claude-in-chrome__read_page';
+        const input = { tabId: 1234 };
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_chrome_read', name, inputSummary: JSON.stringify(input) }
+        });
+        pendingPermission = {
+          requestId: 'req_perm_chrome_read', toolUseId: 't_chrome_read', messageId: 'msg_perm_chrome',
+          name, input, cwd: activeInst.cwd, approveOutput: 'page read', approveText: '\n\nRead the page on example.org.',
+        };
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: {
+            requestId: pendingPermission.requestId, name, input, cwd: activeInst.cwd,
+            ...mockPermFields(name, input, activeInst.cwd),
+            chromeSite: 'example.org',
+          }
+        });
+      },
+    },
+    {
       commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);

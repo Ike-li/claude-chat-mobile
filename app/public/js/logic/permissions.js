@@ -7,7 +7,7 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
-import { t } from '../i18n.js';
+import { t, tk } from '../i18n.js';
 
 // ---- 权限档：与 @anthropic-ai/claude-agent-sdk PermissionMode 枚举对齐 ----
 // SDK 仅类型层有枚举、无运行时 list；本数组 = 前端显示/校验的权威源，由
@@ -140,4 +140,77 @@ export function describePersistScope(destinations) {
     return { label: t('本项目'), hint: t('写入项目里的 .claude/settings.json —— 这个文件会进 git，团队其他人也会拿到') };
   }
   return { label: t('本工作区'), hint: t('写入 .claude/settings.local.json，只影响这台电脑上的这个工作区') };
+}
+
+// ---- Claude in Chrome 的审批卡片（2026-10-11）----
+//
+// read_page / find / computer 只带 tabId，光看工具名和参数看不出要动哪个网站。服务端在 CLI 建议的
+// session 档规则恰好是「允许这个网站」一条时下发 chromeSite（判据见 agent.js#askPermission），这里把它
+// 写成一句话。句式与动作表照抄 CLI 审批框：「Claude in Chrome wants to <动作> on <网站>」，
+// 勾选项「Allow all actions on <网站> for this session」。
+//
+// 表里存 tk() 标记、取用时再 t()：表在 import 阶段求值，早于 setLang()（见 i18n.js 头部）。
+const CHROME_TOOL_PREFIX = 'mcp__claude-in-chrome__';
+const CHROME_TOOL_ACTIONS = Object.freeze({
+  navigate: tk('打开页面'),
+  read_page: tk('读取页面'),
+  get_page_text: tk('提取页面文字'),
+  find: tk('查找页面元素'),
+  form_input: tk('填写表单字段'),
+  javascript_tool: tk('运行 JavaScript'),
+  read_console_messages: tk('读取控制台消息'),
+  read_network_requests: tk('读取网络请求'),
+  upload_image: tk('上传图片'),
+  file_upload: tk('上传文件'),
+  select_browser: tk('选择浏览器'),
+  gif_creator: tk('录制页面 GIF'),
+  shortcuts_execute: tk('运行已保存的浏览器快捷操作'),
+  tabs_create_mcp: tk('打开新标签页'),
+});
+const CHROME_COMPUTER_ACTIONS = Object.freeze({
+  screenshot: tk('截图'),
+  left_click: tk('点击'),
+  right_click: tk('右键点击'),
+  middle_click: tk('中键点击'),
+  double_click: tk('双击'),
+  triple_click: tk('三击'),
+  type: tk('输入文字'),
+  key: tk('按键'),
+  hold_key: tk('按住按键'),
+  scroll: tk('滚动页面'),
+  scroll_to: tk('滚动到元素'),
+  left_click_drag: tk('拖拽'),
+  zoom: tk('放大查看'),
+  hover: tk('悬停'),
+  mouse_move: tk('移动鼠标'),
+  left_mouse_down: tk('按下鼠标键'),
+  left_mouse_up: tk('松开鼠标键'),
+  cursor_position: tk('读取光标位置'),
+  wait: tk('等待'),
+});
+const own = (table, key) => (Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null);
+
+function chromeAction(tool, input) {
+  if (tool === 'computer') return own(CHROME_COMPUTER_ACTIONS, input?.action) || tk('使用浏览器');
+  if (tool === 'tabs_context_mcp') return input?.createIfEmpty ? tk('新建浏览器窗口并读取你的标签页') : tk('读取你的浏览器标签页');
+  // browser_batch 也落到这里：CLI 会把批里各步的动作拼起来，但它先滤掉一批免审的步骤，那份名单不公开，
+  // 照拼会和 CLI 说的不一样；批里的每一步卡片正文的参数里都看得到。
+  return own(CHROME_TOOL_ACTIONS, tool) || tk('使用浏览器');
+}
+
+/**
+ * @param {string} name 工具全名（mcp__claude-in-chrome__read_page）
+ * @param {object} [input] 工具参数
+ * @param {string} [site] permission_request.chromeSite
+ * @returns {{title: string, alwaysLabel: string|null}|null} null = 不是 Claude in Chrome 的工具；
+ *   alwaysLabel 为 null 时调用方保留通用的「总是允许此类操作」——没有网站就说不清勾选放行的是什么
+ */
+export function describeChromePermission(name, input, site) {
+  if (typeof name !== 'string' || !name.startsWith(CHROME_TOOL_PREFIX)) return null;
+  const action = t(chromeAction(name.slice(CHROME_TOOL_PREFIX.length), input));
+  if (!site) return { title: t('Claude in Chrome 想{action}').replace('{action}', () => action), alwaysLabel: null };
+  return {
+    title: t('Claude in Chrome 想在 {site} 上{action}').replace('{site}', () => site).replace('{action}', () => action),
+    alwaysLabel: t('本会话内允许 {site} 上的所有操作').replace('{site}', () => site),
+  };
 }

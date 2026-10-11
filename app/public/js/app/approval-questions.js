@@ -1,6 +1,6 @@
 import { isAnsweredQuestionId } from '../logic/composer.js';
 import { formatPermInputDisplay } from '../logic/tool-cards.js';
-import { describePersistScope } from '../logic/permissions.js';
+import { describePersistScope, describeChromePermission } from '../logic/permissions.js';
 import { verifyIntegrity } from '../canonicalize.js';
 import { t } from '../i18n.js';
 
@@ -57,8 +57,8 @@ export function createApprovalController(context, {
   updateSendButtonState = () => {},
   getViewingInstanceId = () => null,
 } = {}) {
-  const permTool = byId('permTool'), permCwd = byId('permCwd'), permInput = byId('permInput');
-  const permAlways = byId('permAlways'), permIntegrityWarn = byId('permIntegrityWarn');
+  const permTitle = byId('permTitle'), permTool = byId('permTool'), permCwd = byId('permCwd'), permInput = byId('permInput');
+  const permAlways = byId('permAlways'), permAlwaysLabel = byId('permAlwaysLabel'), permIntegrityWarn = byId('permIntegrityWarn');
   const permPersistWrap = byId('permPersistWrap'), permPersistLabel = byId('permPersistLabel'), permPersistHint = byId('permPersistHint');
   const permExitModeWrap = byId('permExitModeWrap'), permInterrupt = byId('permInterrupt');
   const questionText = byId('questionText'), questionOptions = byId('questionOptions');
@@ -112,6 +112,13 @@ export function createApprovalController(context, {
   function showNextPerm() {
     if (activePerm || permQueue.length === 0) return;
     activePerm = permQueue.shift();
+    // Claude in Chrome：标题写出网站，勾选文案写明实际放行范围。两处都每张卡片重写——上一张的改写不能粘到下一张。
+    const chrome = describeChromePermission(activePerm.name, activePerm.input, activePerm.chromeSite);
+    if (permTitle) {
+      permTitle.textContent = chrome?.title || '';
+      permTitle.classList.toggle('hidden', !chrome);
+    }
+    if (permAlwaysLabel) permAlwaysLabel.textContent = chrome?.alwaysLabel || t('总是允许此类操作');
     permTool.textContent = activePerm.name;
     permCwd.textContent = `${t('工作目录：')}${activePerm.cwd}`;
     // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；若这条请求排队期间已判定过指纹不符
