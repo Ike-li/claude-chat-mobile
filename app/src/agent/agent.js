@@ -1546,7 +1546,7 @@ export class AgentSession {
   }
 
   // ---- 权限闸门（第二层）+ AskUserQuestion 特判（F2）----
-  handleCanUseTool(name, input, { suggestions, signal, toolUseID }) {
+  handleCanUseTool(name, input, { suggestions, signal, toolUseID, mcpServer }) {
     // F2：canAskUserQuestion 在 SDK 0.1.77 不存在（静默被忽略），AskUserQuestion 走此统一入口。
     // ⚠️ 必须在 bypass 短路之前：AskUserQuestion 是模型「向用户提问」，与「绕过工具权限审批」正交——
     // bypass 也应弹窗作答。若放在 bypass 之后，bypass 档会先 return allow 把提问当普通工具放行，
@@ -1557,10 +1557,10 @@ export class AgentSession {
     // bypass 档自实现放行。不用 SDK allowDangerouslySkipPermissions——实测 2026-06-12 该 flag=true
     // 是全局 skip，会连 default 档的审批一起废掉（default 假安全），故 bypass 改在此直接 allow。
     if (this.permissionMode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };
-    return this.askPermission(name, input, { suggestions, signal, toolUseID });
+    return this.askPermission(name, input, { suggestions, signal, toolUseID, mcpServer });
   }
 
-  askPermission(name, input, { suggestions, signal, toolUseID }) {
+  askPermission(name, input, { suggestions, signal, toolUseID, mcpServer }) {
     // 实证日志：已证实 SDK 的 ExitPlanMode 不经 suggestions 给 setMode（headless 路径 permission_suggestions
     // 恒空，见 resolvePermission 兜底注释）；保留此日志以便 SDK 版本变更后能第一时间发现 setMode 开始下发。
     if (suggestions?.length) console.log(`[canUseTool] ${name} suggestions: ${JSON.stringify(suggestions)}`);
@@ -1589,14 +1589,19 @@ export class AgentSession {
     // 并把「总是允许」写成「本会话内允许 <网站> 上的所有操作」——那是对授权范围的陈述，而勾选回传的是
     // 全部 session 档建议（resolvePermission），所以 session 档恰好只有这一条网站规则时才下发。
     // 判据照 CLI 自己的审批框：它也只在建议恰为一条 ClaudeInChromeDomain 时才给「Allow all actions on …」。
+    // 「是内置的 Claude in Chrome」认 mcpServer.source 不认名字：项目 / 用户 / 插件都能配一个叫 claude-in-chrome
+    // 的服务器（source 是 project / user / plugin），按名字认它就能在卡片上冒用这个名义。CLI 把内置那个配成
+    // scope:'dynamic'，source 即 'dynamic'；旧版 CLI 不带 mcpServer，按不可信处理，卡片退回原样。
+    const claudeInChrome = mcpServer?.name === 'claude-in-chrome' && mcpServer?.source === 'dynamic';
     const sessionRules = (suggestions || []).filter(u => u?.type !== 'setMode' && u?.destination === 'session');
-    const siteRule = sessionRules.length === 1 && sessionRules[0].type === 'addRules' && sessionRules[0].behavior === 'allow'
-      && sessionRules[0].rules?.length === 1 ? sessionRules[0].rules[0] : null;
+    const siteRule = claudeInChrome && sessionRules.length === 1 && sessionRules[0].type === 'addRules'
+      && sessionRules[0].behavior === 'allow' && sessionRules[0].rules?.length === 1 ? sessionRules[0].rules[0] : null;
     const chromeSite = siteRule?.toolName === 'ClaudeInChromeDomain' && typeof siteRule.ruleContent === 'string' && siteRule.ruleContent
       ? siteRule.ruleContent : null;
     this.emit('permission_request', {
       requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
       ...(persistDestinations.length ? { persistDestinations } : {}),
+      ...(claudeInChrome ? { claudeInChrome } : {}),
       ...(chromeSite ? { chromeSite } : {}),
     });
     // 持久化台账：只是台账记录，写入失败
@@ -1618,7 +1623,7 @@ export class AgentSession {
       // deny + emit expired（与 resolvePermission 的惰性过期分支同义，只是这里「到时主动」而非「有人提交才发现」）。
       const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
       expiryTimer.unref?.(); // 不阻止进程退出
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations, chromeSite });
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer, persistDestinations, claudeInChrome, chromeSite });
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
@@ -2697,6 +2702,7 @@ export class AgentSession {
       permissions.push({
         requestId, name: p.name, input: p.input, cwd: this.cwd, fp: p.fp, createdAt: p.createdAt, expiresAt: p.expiresAt,
         ...(p.persistDestinations?.length ? { persistDestinations: p.persistDestinations } : {}),
+        ...(p.claudeInChrome ? { claudeInChrome: true } : {}),
         ...(p.chromeSite ? { chromeSite: p.chromeSite } : {}),
       });
     }

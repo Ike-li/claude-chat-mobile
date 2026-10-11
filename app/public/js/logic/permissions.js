@@ -199,14 +199,15 @@ function chromeAction(tool, input) {
 }
 
 /**
- * @param {string} name 工具全名（mcp__claude-in-chrome__read_page）
- * @param {object} [input] 工具参数
- * @param {string} [site] permission_request.chromeSite
- * @returns {{title: string, alwaysLabel: string|null}|null} null = 不是 Claude in Chrome 的工具；
+ * @param {{name: string, input?: object, claudeInChrome?: boolean, chromeSite?: string}} perm permission_request 的 payload
+ * @returns {{title: string, alwaysLabel: string|null}|null} null = 不是（核对过来源的）内置 Claude in Chrome；
  *   alwaysLabel 为 null 时调用方保留通用的「总是允许此类操作」——没有网站就说不清勾选放行的是什么
+ *
+ * 只认服务端的 claudeInChrome 标记，不认工具名前缀：项目 / 插件里配个同名服务器就能拿到同样的前缀，
+ * 来源只有服务端看得到（agent.js#askPermission 核对 mcpServer.source）。
  */
-export function describeChromePermission(name, input, site) {
-  if (typeof name !== 'string' || !name.startsWith(CHROME_TOOL_PREFIX)) return null;
+export function describeChromePermission({ name, input, claudeInChrome, chromeSite: site } = {}) {
+  if (claudeInChrome !== true || typeof name !== 'string' || !name.startsWith(CHROME_TOOL_PREFIX)) return null;
   const action = t(chromeAction(name.slice(CHROME_TOOL_PREFIX.length), input));
   if (!site) return { title: t('Claude in Chrome 想{action}').replace('{action}', () => action), alwaysLabel: null };
   return {

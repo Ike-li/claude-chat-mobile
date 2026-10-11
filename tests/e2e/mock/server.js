@@ -3314,8 +3314,8 @@ io.on('connection', socket => {
     },
     {
       // P0-06k：Claude in Chrome 的审批卡片。read_page 只带 tabId，网站只在 CLI 建议的
-      // ClaudeInChromeDomain 规则里；真 server 在 session 档恰好只有这一条规则时把它下发成 chromeSite
-      // （agent.js#askPermission）。2026-10-11 真会话日志里的建议就是这个形状。
+      // ClaudeInChromeDomain 规则里；真 server 核对 mcpServer.source 是内置那个后标 claudeInChrome，
+      // session 档恰好只有这一条规则时再下发 chromeSite（agent.js#askPermission）。2026-10-11 真会话日志里的建议就是这个形状。
       command: 'test:permission-chrome',
       run: async ({ activeInst }) => {
         activeInst.state = 'permission';
@@ -3338,6 +3338,7 @@ io.on('connection', socket => {
           type: 'permission_request', payload: {
             requestId: pendingPermission.requestId, name, input, cwd: activeInst.cwd,
             ...mockPermFields(name, input, activeInst.cwd),
+            claudeInChrome: true,
             chromeSite: 'example.org',
           }
         });

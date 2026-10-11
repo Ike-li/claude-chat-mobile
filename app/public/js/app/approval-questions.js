@@ -113,7 +113,7 @@ export function createApprovalController(context, {
     if (activePerm || permQueue.length === 0) return;
     activePerm = permQueue.shift();
     // Claude in Chrome：标题写出网站，勾选文案写明实际放行范围。两处都每张卡片重写——上一张的改写不能粘到下一张。
-    const chrome = describeChromePermission(activePerm.name, activePerm.input, activePerm.chromeSite);
+    const chrome = describeChromePermission(activePerm);
     if (permTitle) {
       permTitle.textContent = chrome?.title || '';
       permTitle.classList.toggle('hidden', !chrome);

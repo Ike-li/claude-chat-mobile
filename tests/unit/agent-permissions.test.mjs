@@ -260,16 +260,20 @@ test.describe('权限闸门', () => {
     const chromeSiteRule = (site, destination = 'session') => ({
       type: 'addRules', destination, behavior: 'allow', rules: [{ toolName: 'ClaudeInChromeDomain', ruleContent: site }],
     });
-    const askChrome = (s, toolUseID, suggestions) => s.askPermission('mcp__claude-in-chrome__read_page', { tabId: 7 }, {
-      signal: new AbortController().signal, toolUseID, suggestions,
+    // 内置 Claude in Chrome 的来源：CLI 把它配成 scope:'dynamic' 的 stdio 服务器，mcp_server.source 因此是 'dynamic'；
+    // 项目 / 用户 / 插件里配一个同名的 claude-in-chrome，source 会是 project / user / plugin（SDK 文档：名字不可信，认 source）。
+    const BUILTIN_CHROME = { name: 'claude-in-chrome', source: 'dynamic' };
+    const askChrome = (s, toolUseID, suggestions, mcpServer = BUILTIN_CHROME) => s.handleCanUseTool('mcp__claude-in-chrome__read_page', { tabId: 7 }, {
+      signal: new AbortController().signal, toolUseID, suggestions, mcpServer,
     });
 
-    test('askPermission：session 档建议恰好是一条 ClaudeInChromeDomain → 下发 chromeSite，快照重建同样带着', () => {
+    test('handleCanUseTool：内置 Claude in Chrome、session 档建议恰好是一条 ClaudeInChromeDomain → 下发 chromeSite，快照重建同样带着', () => {
       const { s, events } = makeSession();
       // 形状取自 2026-10-11 真会话的 server 日志
       askChrome(s, 't-chrome', [chromeSiteRule('example.org')]);
       const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-chrome').payload;
       assert.equal(live.chromeSite, 'example.org', '卡片要靠它显示网站；缺了就只剩 tabId，看不出要操作哪个网站');
+      assert.equal(live.claudeInChrome, true, '来源核对过是内置 Claude in Chrome，卡片才能用它的名义写标题');
       const rebuilt = s.pendingRequestsSnapshot().permissions.find(p => p.requestId === 't-chrome');
       assert.deepEqual(rebuilt, live, '切会话重建的卡片也得看得出网站');
       s.resolvePermission('t-chrome', 'deny');
@@ -294,6 +298,26 @@ test.describe('权限闸门', () => {
       const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-local').payload;
       assert.equal(live.chromeSite, undefined);
       s.resolvePermission('t-local', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：项目里配了个同名 claude-in-chrome（source=project）→ 不标 claudeInChrome、不下发 chromeSite', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-fake', [chromeSiteRule('example.org')], { name: 'claude-in-chrome', source: 'project' });
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-fake').payload;
+      assert.equal(live.claudeInChrome, undefined, '同名的第三方服务器不得在卡片上冒充成 Claude in Chrome');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-fake', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：CLI 没带 mcpServer（旧版 CLI）→ 不标 claudeInChrome，卡片退回原样', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-nosrc', [chromeSiteRule('example.org')], null);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-nosrc').payload;
+      assert.equal(live.claudeInChrome, undefined, '来源不明时按不可信处理');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-nosrc', 'deny');
       s.dispose();
     });
   });
