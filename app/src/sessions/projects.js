@@ -7,8 +7,8 @@
 // 再问授权判据它归哪个项目——已删的目录、禁区、连接范围外的，判据都答 null，于是自然不列。
 // 这份清单只管展示分组，不授予任何访问：打开会话时每个 cwd 仍要单独过授权判据。
 import { readdir } from 'node:fs/promises';
-import { basename, join, relative } from 'node:path';
-import { getProjectDir, projectCwdsOf } from './history.js';
+import { basename, join, relative, sep } from 'node:path';
+import { projectCwdsOf } from './history.js';
 import { SCRATCH_DIR_RE } from './folder-access.js';
 import { projectDirDescendantPrefix } from '../shared/project-dir.js';
 
@@ -41,26 +41,25 @@ export async function discoverSubProjects({ connected = [], baseDir, authorize }
   return [...found.values()].sort(byKey);
 }
 
-// 「无文件夹」项目有没有会话：scratch 根下某个 mkdtemp 形态目录的 project 目录里有 transcript。
-// 只决定抽屉里这一节显不显示（官方侧栏也只列有会话的项目），不认领任何会话——所以按名字判就够：
-// `<根的编码>-` 之后必须以一段 scratch 形态开头（它全是字母数字与连字符，编码前后不变），根下别的目录
-// 在这里被挡掉。后面还可以跟 `-…`：会话中途进了 scratch 目录下面的子目录（如托管 worktree）时，CLI 把
-// transcript 整份搬进那个子目录的 project 目录，只认整段的话重启后这一节就没了（2026-10-10 review P2）。
-const SCRATCH_SEG_LEN = 'scratch-0000-00-00-xxxxxx'.length;
-const isScratchProjectSuffix = s => SCRATCH_DIR_RE.test(s.slice(0, SCRATCH_SEG_LEN))
-  && (s.length === SCRATCH_SEG_LEN || s[SCRATCH_SEG_LEN] === '-');
+// 「无文件夹」项目有没有会话：transcript 记的 cwd 落在 scratch 根下某个 mkdtemp 形态目录里（或它下面）。
+// 只决定抽屉里这一节显不显示（官方侧栏也只列有会话的项目），不认领任何会话。
+// 目录名只用来挑候选，不按名字判形态：根的路径长到编码被截断时，scratch 目录的目录名截到 200 再接 hash，里面
+// 不再有完整的 scratch 那一段，这一节就永远不显示（2026-10-10 第五轮 review 同类）；候选里还会混进根自己、
+// 根下别的目录与前 200 个字符相同的邻居，所以看 cwd 的第一段是不是 scratch 形态。cwd 落在更深处也算：会话中途
+// 进了 scratch 目录下面的子目录（如托管 worktree）时，CLI 把 transcript 整份搬进那个子目录的 project 目录，
+// 只认 scratch 目录本身的话重启后这一节就没了（2026-10-10 review P2）。
 export async function hasScratchSessions({ baseDir, scratchRoot }) {
-  const prefix = getProjectDir(scratchRoot) + '-';
+  const prefix = projectDirDescendantPrefix(scratchRoot);
+  const root = scratchRoot.normalize('NFC'); // 与编码同口径：编码前先 NFC 归一
+  const inScratchDir = c => SCRATCH_DIR_RE.test(relative(root, c.normalize('NFC')).split(sep)[0]);
   let names;
   try {
     names = (await readdir(baseDir, { withFileTypes: true }))
-      .filter(e => e.isDirectory() && e.name.startsWith(prefix) && isScratchProjectSuffix(e.name.slice(prefix.length)))
+      .filter(e => e.isDirectory() && e.name.startsWith(prefix))
       .map(e => e.name);
   } catch { return false; }
   for (const name of names) {
-    try {
-      if ((await readdir(join(baseDir, name))).some(f => f.endsWith('.jsonl'))) return true;
-    } catch { /* 读不了：同没有 */ }
+    if ((await projectCwdsOf(join(baseDir, name))).some(inScratchDir)) return true;
   }
   return false;
 }

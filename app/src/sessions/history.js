@@ -3,7 +3,7 @@
 import { open, stat, readdir, readFile } from 'node:fs/promises';
 import { constants as fsConstants, createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
 import { listLinkedWorktrees } from './folder-access.js';
@@ -13,7 +13,7 @@ import { toolSummary } from '../shared/tool-summary.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
-import { encodeProjectDir } from '../shared/project-dir.js';
+import { encodeProjectDir, projectDirDescendantPrefix } from '../shared/project-dir.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
@@ -924,10 +924,6 @@ const applyExcludeIds = (result, excludeIds) => (!excludeIds || excludeIds.size 
   ? result
   : { ...result, sessions: result.sessions.filter(s => !excludeIds.has(s.id)) });
 
-// project 目录名里 `/.claude/worktrees/` 这一段编码后的样子。encodeProjectDir 是逐字符的
-// 「非字母数字 → '-'」，所以整条路径的编码 = 各段编码的拼接，这个中缀可以直接当前缀用。
-const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
-
 // 枚举该工作区下的托管 worktree（CLI 的 EnterWorktree / --worktree / agent isolation 的落点）。
 //
 // 【为什么 readdir 而不是 `git worktree list`】判据只是"目录在不在"，readdir 零子进程；而 git 那份
@@ -941,17 +937,24 @@ const WORKTREE_PROJECT_INFIX = '--claude-worktrees-';
 // 那棵树下的会话在抽屉里整批消失，而 jsonl 一个字节没少——用户看到的是「工作区抽屉没有这个会话」。
 // 这不是异常路径：CLI 的 ExitWorktree 只认本会话 EnterWorktree 建的树，对 CCM 自己 `git worktree add`
 // 建的那批一律 no-op，于是「干完活退出 worktree」唯一走得通的路就是让模型自己敲 `git worktree remove`。
-// 后半条判据靠 project 目录名的前缀匹配，因为 getProjectDir 是纯字符串编码、不碰磁盘：
-// 一条已经不存在的路径照样算得出它当初落在哪个 project 目录。
+// 后半条判据从 ~/.claude/projects 反查：project 目录名按前缀挑候选，是哪棵 worktree 看 transcript 记的 cwd。
 //
-// 【两处已知的不精确，都无害】① 名字含 `.` 的 worktree，反推出的 name 会把点显示成连字符——
-// 但用它拼回去的路径再编码一次仍是同一个 project 目录（编码幂等），历史读的还是对的那份；
-// ② 父仓路径编码后逼近 200 字符时 encodeProjectDir 会截断 + 接 hash，前缀匹配失效，那种工作区的
-// 孤儿 worktree 扫不到——退回没有这条判据时的行为，不会错列成别人的会话。
+// 【名字与路径不从目录名里切】目录名是有损编码（`.` 也变 `-`），超过 200 字符时还截到 200 再接 hash——
+// worktrees 根与每棵 worktree 各接各的，只剩前 200 个字符相同，切出来的名字带着 hash、拼回去的路径不存在，
+// 仓库路径一长，已删 worktree 的会话就整批消失（2026-10-10 第五轮 review 同类）。
+//
+// 【为什么需要非有损的证据】`<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**；
+// 截断时前 200 个字符相同的别的目录（仓库的其他子目录、名字更长的邻居）也会被前缀挑进来。只按前缀认领的话，
+// 与本仓毫无关系的项目的会话会被列进本仓抽屉、还标成「worktree 已删除」；而 baseDir 装的是本机所有 Claude
+// 项目的 transcript，这个面不小。所以只认父目录正好是本仓 worktrees 根的 cwd。
+//
+// 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）的 transcript 不算数，
+// 那棵树就扫不到——退回的是「这条会话看不见」，而不是「可能列错项目的会话」。少列一条比列错一条安全。
+// 实测本机 128 个 project 目录全部带这个字段（2026-09-13）。归属取「最近一条编码后等于目录名的记录」
+// （projectCwdsOf），被 EnterWorktree 整份搬过来、头部还记着原仓的 transcript 照样认得出（真机 1c401b5d）。
 async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
   const root = managedWorktreeRoot(cwd);
-  // 去重键用 project 目录名而不是 name：两条枚举路径给出的 name 规范不同（readdir 是原始目录名，
-  // 前缀匹配是编码后的串），拿 name 去重会让含 `.` 的活树同时出现「活着」与「已删」两行。
+  // 去重键用 project 目录名：活树的 project 目录在下面反查时直接跳过，同一棵树不会既「活着」又「已删」。
   const byProject = new Map();
   try {
     for (const e of await readdir(root, { withFileTypes: true })) {
@@ -961,49 +964,22 @@ async function listManagedWorktreeDirs(cwd, baseDir = CLAUDE_DIR) {
     }
   } catch { /* 没有 .claude/worktrees/ —— 绝大多数工作区的常态，不是异常 */ }
 
-  const prefix = getProjectDir(cwd) + WORKTREE_PROJECT_INFIX;
+  // 前缀只是**候选筛选**，挡掉的是绝大多数无关目录（`/repo-x` 与 `/repo/sub` 编码后分别是
+  // `-repo-x-…` 与 `-repo-sub-…`，都接不上 `-repo--claude-worktrees-`）。它答不了所有权——见上。
+  const prefix = projectDirDescendantPrefix(root);
   try {
     const candidates = [];
     for (const e of await readdir(baseDir, { withFileTypes: true })) {
-      // 前缀只是**候选筛选**，挡掉的是绝大多数无关目录（`/repo-x` 与 `/repo/sub` 编码后分别是
-      // `-repo-x-…` 与 `-repo-sub-…`，都接不上 `-repo--claude-worktrees-`）。它答不了所有权——
-      // 见下面那道回验。
-      if (!e.isDirectory() || !e.name.startsWith(prefix) || byProject.has(e.name)) continue;
-      const name = e.name.slice(prefix.length);
-      if (name) candidates.push({ project: e.name, name, wtCwd: join(root, name) });
+      if (e.isDirectory() && e.name.startsWith(prefix) && !byProject.has(e.name)) candidates.push(e.name);
     }
-    const verified = await Promise.all(candidates.map(async c => (
-      await transcriptMentionsCwd(join(baseDir, c.project), c.wtCwd) ? c : null
-    )));
-    for (const c of verified) {
-      if (c) byProject.set(c.project, { name: c.name, cwd: c.wtCwd, gone: true });
+    const owned = await Promise.all(candidates.map(async project => [
+      project, (await projectCwdsOf(join(baseDir, project))).find(c => sameCwd(dirname(c), root)),
+    ]));
+    for (const [project, wtCwd] of owned) {
+      if (wtCwd) byProject.set(project, { name: basename(wtCwd), cwd: wtCwd, gone: true });
     }
   } catch { /* ~/.claude/projects 不可读：退回只认实际目录 */ }
   return [...byProject.values()];
-}
-
-// 一个 project 目录是不是从 wanted 这个 cwd 落下来的 —— 看该目录里有没有 transcript 记着这个 cwd。
-//
-// 【为什么需要非有损的证据】encodeProjectDir 把每个非字母数字字符都换成 '-'，于是
-// `<repo>--claude-worktrees-foo` 与 `<repo>/.claude/worktrees/foo` **编码完全相同**，磁盘上就是
-// 同一个目录名。只按前缀认领的话，前者（一个与本仓毫无关系的独立项目）的会话会被列进本仓抽屉、
-// 还标成「worktree foo 已删除」；而 baseDir 装的是本机所有 Claude 项目的 transcript，这个面不小。
-// CLI 逐条记录写的 cwd 是真实路径，正好是那份编码丢掉的信息。
-//
-// 【失败方向：查不到证据就不认领】读不出 cwd（目录空、文件截断、老版本没这个字段）一律返回 null，
-// 于是那棵树扫不到——退回的是「这条会话看不见」（= 本判据存在之前的行为），而不是「可能列错项目的
-// 会话」。少列一条比列错一条安全。实测本机 128 个 project 目录全部带这个字段（2026-09-13）。
-//
-// 【不能只取第一个 cwd】会话中途 EnterWorktree 时 CLI 把整份 transcript 搬进新 project 目录，
-// 搬迁前的记录照旧写着原仓的 cwd（真机 1c401b5d：6.7MB 的文件，新 cwd 从 1.25MB 处才开始）。
-// 于是头窗里只有原仓——拿它比对，这棵树的会话就被当成「查无证据」整批丢掉。
-async function transcriptMentionsCwd(projectDir, wanted) {
-  try {
-    for (const f of await readdir(projectDir)) {
-      if (f.endsWith('.jsonl') && (await readCwdEvidence(join(projectDir, f))).includes(wanted)) return true;
-    }
-  } catch { /* 目录不可读 */ }
-  return false;
 }
 
 // 一个 project 目录是从哪些 cwd 落下来的：每份 transcript 记的、编码后正好等于这个目录名的那个 cwd。
