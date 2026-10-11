@@ -518,6 +518,8 @@ export const EN_DICT = Object.freeze({
   '预览': 'Preview',
   '预览不可用': 'Preview unavailable',
   '点击预览': 'Tap to preview',
+  '图表': 'Chart',
+  '交互图表，请在桌面端查看': 'Interactive widget — open it in the desktop app to use it',
   ' …（已截断）': ' …(truncated)',
   '\n…（已截断）': '\n…(truncated)',
   '…（已截断）': '…(truncated)',

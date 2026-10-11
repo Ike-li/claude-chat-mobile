@@ -345,4 +345,68 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 桌面端 show_widget：SVG 必须作为 data URI 图片显示（不进页面 DOM、不执行脚本），颜色随主题；
+  // HTML 组件只给提示；源码残缺 / XML 解析失败退回一行工具调用。
+  const decodeSvgSrc = (src: string | null) => decodeURIComponent(String(src).replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));
+
+  test('P0-05w 桌面端 show_widget：SVG 画成图片且按主题上色，HTML 不执行，残缺/坏 XML 退回工具卡', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:widget');
+    await expect(page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]')).toHaveCount(4, { timeout: 10_000 });
+    await waitForIdle(page);
+
+    // ① SVG → 一张已解码成功的图片（naturalWidth 来自按 viewBox 补的固有尺寸；缺 xmlns 时根本解不出来）
+    const svgFig = page.locator('figure.widget-card[data-widget-kind="svg"]');
+    await expect(svgFig).toHaveCount(1);
+    const img = svgFig.locator('img.widget-svg');
+    await expect(img).toHaveAttribute('src', /^data:image\/svg\+xml/);
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+    expect(await svgFig.locator('svg, script, iframe').count(), 'SVG 源码不得进页面 DOM').toBe(0);
+    // 浅色：c-purple 用 50 填充 / 600 描边（read_me quick pick）
+    expect(decodeSvgSrc(await img.getAttribute('src'))).toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}');
+
+    // ② HTML 组件：只有标题与提示，带来的 code 不进 DOM
+    const htmlFig = page.locator('figure.widget-card[data-widget-kind="html"]');
+    await expect(htmlFig).toHaveCount(1);
+    await expect(htmlFig).toContainText('mock calculator');
+    await expect(htmlFig).toContainText('交互图表，请在桌面端查看');
+    expect(await htmlFig.locator('img, script, iframe').count(), 'HTML 组件源码不得进页面 DOM').toBe(0);
+
+    // ③④ 半截 SVG 与坏 XML：只剩一行工具卡（坏 XML 要等图片解码失败后撤掉，故 poll）
+    await expect(page.locator('figure.widget-card')).toHaveCount(2);
+    expect(await page.evaluate(() => (window as unknown as { __widgetRan?: string }).__widgetRan ?? null), '组件里的脚本/事件处理器不得执行').toBeNull();
+
+    // 系统切深色：已显示的图按深色重算（800 填充 / 200 描边）
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+
+    // 点开看大图：复用附件灯箱
+    await img.click();
+    await expect(page.locator('#attachPreviewModal')).not.toHaveClass(/\bhidden\b/);
+    await expect(page.locator('#attachPreviewImg')).toHaveAttribute('src', /^data:image\/svg\+xml/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05x 桌面端会话的 show_widget 经历史追平同样画成图片', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:widget-history');
+    await expect(page.locator('#messages')).toContainText('Draw the architecture', { timeout: 10_000 });
+    const img = page.locator('figure.widget-card[data-widget-kind="svg"] img.widget-svg');
+    await expect(img).toHaveCount(1);
+    await expect(img).toHaveAttribute('src', /^data:image\/svg\+xml/);
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
+    expect(decodeSvgSrc(await img.getAttribute('src'))).toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+    // 图紧跟在自己的工具卡后面，工具卡仍在（一行工具调用 + 图）
+    const card = page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]');
+    await expect(card).toHaveCount(1);
+    expect(await card.evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
 });

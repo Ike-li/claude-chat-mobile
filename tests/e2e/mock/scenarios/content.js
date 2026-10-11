@@ -189,6 +189,71 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 桌面端 visualize 工具（show_widget）画的图。字段形态复刻 app/src/shared/tool-summary.js 的 widgetPayload：
+      // SVG 带完整 code；超限的后端根本不带 widget（与普通工具卡无异，这里不再造）。
+      // 四张卡各验一条：① 完整 SVG → 图片 ② HTML 组件 → 只显示提示，带了 code 也不执行
+      // ③ 半截 SVG → 退回一行工具调用 ④ XML 不合法（裸 &）→ 图片解码失败，撤掉图、留工具卡。
+      // ①② 的源码里埋了脚本与事件处理器：任何一条路径把它们放进页面 DOM，window.__widgetRan 就会被写上。
+      command: 'test:widget',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const base = seq => ({ seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now() });
+        const widgets = [
+          { id: 't_widget_svg', widget: { title: 'mock_architecture', kind: 'svg', code: MOCK_WIDGET_SVG } },
+          { id: 't_widget_html', widget: { title: 'mock_calculator', kind: 'html', code: '<div>calc</div><img src="x" onerror="window.__widgetRan=\'html\'"><script>window.__widgetRan=\'html-script\'</script>' } },
+          { id: 't_widget_half', widget: { title: 'mock_half', kind: 'svg', code: '<svg viewBox="0 0 100 40"><rect width="10" height="10"/>' } },
+          { id: 't_widget_badxml', widget: { title: 'mock_bad_xml', kind: 'svg', code: '<svg viewBox="0 0 100 40"><text class="t" x="4" y="20">R&D</text></svg>' } },
+        ];
+        let seq = 1;
+        for (const w of widgets) {
+          socket.emit('agent:event', {
+            ...base(seq++), type: 'tool_use', payload: {
+              toolUseId: w.id, name: 'mcp__visualize__show_widget',
+              inputSummary: JSON.stringify({ title: w.widget.title, loading_messages: ['drawing'], widget_code: w.widget.code }).slice(0, 600),
+              widget: w.widget,
+            },
+          });
+          await delay(60);
+          socket.emit('agent:event', {
+            ...base(seq++), type: 'tool_result',
+            payload: { toolUseId: w.id, ok: true, outputSummary: '[{"type":"text","text":"Content rendered and shown to the user."}]' },
+          });
+        }
+        socket.emit('agent:event', { ...base(seq++), type: 'text_delta', payload: { messageId: 'msg_widget_1', text: 'Widget fixture done.' } });
+        socket.emit('agent:event', {
+          ...base(seq), type: 'result', payload: { messageId: 'msg_widget_1', durationMs: 120, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
+      // 同一张图走历史追平（history_append → renderHistoryBubbles，与刷新后 loadHistory 同一个渲染器）。
+      // 桌面端会话在 CCM 里就是这么显示的：server 轮询 transcript，history.js 展开出带 widget 的 tool_use 条目。
+      command: 'test:widget-history',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        const ts = new Date().toISOString();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append', payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: 'Draw the architecture', uuid: 'u-widget-h1', timestamp: ts, entrypoint: 'claude-desktop' },
+              {
+                kind: 'tool_use', role: 'assistant', toolUseId: 'h_widget_svg', name: 'mcp__visualize__show_widget',
+                inputSummary: JSON.stringify({ title: 'mock_architecture', widget_code: MOCK_WIDGET_SVG }).slice(0, 600) + ' …（已截断）',
+                widget: { title: 'mock_architecture', kind: 'svg', code: MOCK_WIDGET_SVG }, timestamp: ts, entrypoint: 'claude-desktop',
+              },
+              { kind: 'tool_result', role: 'user', toolUseId: 'h_widget_svg', ok: true, outputSummary: 'Content rendered and shown to the user.', timestamp: ts },
+            ],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_widget_history', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       command: 'test:tool',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
@@ -1035,3 +1100,20 @@ export function createContentScenarios(getContext) {
 
 // 与 app/server.js MOCK_ATTACH_PNG 字节数一致（1×1 PNG fixture 的解码长度）；仅用于 meta.size 展示，无行为语义。
 const MOCK_PNG_SIZE = 70;
+
+// show_widget 夹具：形态照桌面端真实产出（无 xmlns、width="100%"、viewBox 680 宽、c-* 色板 class、
+// var(--b) 变量、onclick 里的 sendPrompt），另埋脚本与 onload 验证图片里不执行。
+const MOCK_WIDGET_SVG = '<svg width="100%" viewBox="0 0 680 200" role="img" onload="window.__widgetRan=\'svg-onload\'">'
+  + '<title>Mock architecture</title><desc>Two boxes and an arrow.</desc>'
+  + '<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">'
+  + '<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs>'
+  + '<script>window.__widgetRan=\'svg-script\'</script>'
+  + '<rect x="20" y="10" width="640" height="180" rx="20" fill="none" stroke="var(--b)" stroke-width="0.5" stroke-dasharray="4 4"/>'
+  + '<g class="node c-purple" onclick="sendPrompt(\'phone\')"><rect x="60" y="60" width="220" height="56" rx="8" stroke-width="0.5"/>'
+  + '<text class="th" x="170" y="78" text-anchor="middle" dominant-baseline="central">手机 / PWA</text>'
+  + '<text class="ts" x="170" y="96" text-anchor="middle" dominant-baseline="central">单页应用</text></g>'
+  + '<line x1="280" y1="88" x2="398" y2="88" class="arr" marker-end="url(#arrow)"/>'
+  + '<g class="c-gray"><rect x="400" y="60" width="220" height="56" rx="8" stroke-width="0.5"/>'
+  + '<text class="th" x="510" y="78" text-anchor="middle" dominant-baseline="central">本机 claude</text>'
+  + '<text class="ts" x="510" y="96" text-anchor="middle" dominant-baseline="central">transcript</text></g>'
+  + '</svg>';

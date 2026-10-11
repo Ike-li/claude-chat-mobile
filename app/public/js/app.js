@@ -213,6 +213,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createRewindCommandController } from './app/rewind-command.js';
+import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -2876,11 +2877,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // Workflow 是有意的例外：它不预建聚合卡（预建会留「🤖 workflow 已完成」空壳），
       // 等首条子流事件才懒建，此刻通用卡已 append 进流、再摘要动已插入的时间分隔行，故不合。
       const isMergedSpawn = !isSubagentPayload(p) && isSpawnToolName(p.name) && p.name !== 'Workflow';
+      // show_widget 的图紧跟在工具卡后面；render 返回 null = 退回只有一行工具调用
+      const widgetNode = p.widget ? widgets.render(p.widget) : null;
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         sa.body.appendChild(card);
+        if (widgetNode) sa.body.appendChild(widgetNode);
       } else if (!isMergedSpawn) {
         appendMessage(card);
+        if (widgetNode) appendMessage(widgetNode);
       }
       scrollBottom();
       setBusyFromStreamEvent(ev);
@@ -4263,6 +4268,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // E18：气泡附件按需预览——live/历史点击经 browse:read 拉原图，复用托盘灯箱
   const storedPreview = createStoredPreviewLoader(appContext, {
     addBar,
+    openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
+  });
+  // 桌面端 show_widget 图表：SVG 当图片插在工具卡后面，点开复用同一个灯箱（live / 历史两路共用）
+  const widgets = createWidgetRenderer({
     openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
   });
 
@@ -8529,7 +8538,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             histToolCards.set(msg.toolUseId, sa.el);
           }
         }
-        if (!histMergedSpawn) appendNode(card, msg);
+        if (!histMergedSpawn) {
+          appendNode(card, msg);
+          const widgetNode = msg.widget ? widgets.render(msg.widget) : null; // 同 live：图紧跟工具卡
+          if (widgetNode) appendNode(widgetNode, msg);
+        }
         return;
       }
       if (msg?.kind === 'tool_result') {

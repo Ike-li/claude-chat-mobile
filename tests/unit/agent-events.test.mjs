@@ -244,6 +244,33 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // show_widget 的 inputSummary 只剩半截 SVG，图要靠 widget 字段带完整源码；主链与子 agent 两个发射点各接一次，
+  // 漏接哪一个都只有这里会红（E2E 的 mock 是平行实现，不经过 map()）。
+  test('show_widget → payload.widget 带完整 SVG；inputSummary 照旧截断；别的工具没有 widget', () => {
+    const { s, events } = makeSession();
+    const svg = `<svg viewBox="0 0 680 100">${'<rect width="1" height="1"/>'.repeat(60)}</svg>`;
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'w1', name: 'mcp__visualize__show_widget', input: { title: 'arch', loading_messages: [], widget_code: svg } },
+      { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/a.txt' } },
+    ] } });
+    const [w, r] = events.filter(e => e.type === 'tool_use').map(e => e.payload);
+    assert.deepEqual(w.widget, { title: 'arch', kind: 'svg', code: svg }, '主链 show_widget 必须带完整源码');
+    assert.match(w.inputSummary, /已截断/, 'inputSummary 口径不变');
+    assert.equal('widget' in r, false, '非 show_widget 工具不得多出 widget 字段');
+    s.dispose();
+  });
+
+  test('子 agent 里的 show_widget 同样带 widget', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'parent-1', message: { content: [
+      { type: 'tool_use', id: 'w2', name: 'mcp__visualize__show_widget', input: { title: 'sub', widget_code: '<svg viewBox="0 0 1 1"></svg>' } },
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use');
+    assert.equal(tu.payload.parentToolUseId, 'parent-1');
+    assert.deepEqual(tu.payload.widget, { title: 'sub', kind: 'svg', code: '<svg viewBox="0 0 1 1"></svg>' });
+    s.dispose();
+  });
+
   test('文件类工具 tool_use → payload.file{path,changeKind}；非文件工具无 file（③）', () => {
     const { s, events } = makeSession();
     s.map({ type: 'assistant', message: { content: [

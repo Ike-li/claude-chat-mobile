@@ -9,7 +9,7 @@ import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { claudeGlobalConfigPath as defaultClaudeGlobalConfigPath } from '../shared/claude-home.js';
-import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
+import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP, widgetPayload } from '../shared/tool-summary.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
@@ -3146,6 +3146,7 @@ export class AgentSession {
                   };
                 }
               }
+              const widget = widgetPayload(block.name, block.input); // show_widget 的完整源码，见 tool-summary.js
               this.emit('tool_use', {
                 toolUseId: block.id,
                 name: block.name,
@@ -3153,6 +3154,7 @@ export class AgentSession {
                 parentToolUseId: msg.parent_tool_use_id,
                 subagentType: subType,
                 ...(file ? { file } : {}),
+                ...(widget ? { widget } : {}),
               });
             }
           }
@@ -3240,11 +3242,13 @@ export class AgentSession {
             }
             this.rememberToolName(block.id, block.name);
             this.pendingToolUses.set(block.id, Date.now()); // 静默看护豁免起点：工具在跑 = 本轮在推进
+            const widget = widgetPayload(block.name, block.input); // show_widget 的完整源码，见 tool-summary.js
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
               inputSummary: truncate(stringify(redactBase64(block.input)), TOOL_SUMMARY_CAP),
-              file
+              file,
+              ...(widget ? { widget } : {}),
             });
           } else if (block.type === 'text' && block.text && !this.sawTextDelta) {
             // 网关不流式时用完整 assistant 文本兜底
