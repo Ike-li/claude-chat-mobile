@@ -1,7 +1,7 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
 import { open, stat, readdir, readFile } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { constants as fsConstants, createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
@@ -1073,12 +1073,17 @@ async function foreignSessionIds(dir, cwd) {
 // transcript 头窗与尾窗里各条记录的 cwd（按记录先后，可重复）。只读两个窗，与 readHeadMeta 同一对上限：
 // 搬迁后仍在活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
 // tailBytes：只读文件末尾这么多（归属判定的快路径）。
+// O_NONBLOCK 打开再看是不是普通文件：~/.claude/projects 下的文件模型写得动，被换成 FIFO 的话阻塞式 open
+// 永远不返回，占死一个 libuv 线程（默认只有 4 个，几个就让列表与项目发现的读盘整体停摆；2026-10-11 review）。
+// 不是普通文件同读不出：没有证据。
 async function readCwdEvidence(file, tailBytes = 0) {
   const out = [];
   let fh;
   try {
-    fh = await open(file, 'r');
-    const { size } = await fh.stat();
+    fh = await open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const st = await fh.stat();
+    if (!st.isFile()) return out;
+    const { size } = st;
     const windows = tailBytes ? [[Math.max(0, size - tailBytes), Math.min(size, tailBytes)]]
       : size > HEAD_READ_BYTES + TAIL_READ_BYTES
         ? [[0, HEAD_READ_BYTES], [size - TAIL_READ_BYTES, TAIL_READ_BYTES]]
@@ -1960,7 +1965,7 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   if (!isSafeSessionId(id)) return false;
   const file = join(baseDir, getProjectDir(cwd), `${id}.jsonl`);
   try {
-    await stat(file);
+    if (!(await stat(file)).isFile()) return false; // FIFO 之类不是会话：放行了，打开时读历史就卡死
   } catch {
     return false;
   }

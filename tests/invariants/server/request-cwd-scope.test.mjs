@@ -139,6 +139,18 @@ test('热移除之后：已开会话自己的目录仍可读，但不能在那�
   assert.equal(wrote.ok, false, `热移除的目录不得再被文件编辑器直写，实际 ${JSON.stringify(wrote)}`);
   assert.equal(readFileSync(join(b, 'kept.txt'), 'utf8'), '移除之前的内容');
 
+  // 不传 cwd：缺省落查看目录，而正看着的就是 B 上那个实例。缺省值不过开档的话，不传 cwd 就绕过了上面那条——
+  // 直写照样写进去、刷新配置照样在 B 上起一个 scout（2026-10-11 review）。
+  const viewing = latestInstances()?.instances?.find(i => i.instanceId === latestInstances()?.viewingInstanceId);
+  assert.equal(viewing?.cwd, b, `前提：正看着 B 上的实例，实际 ${JSON.stringify(viewing)}`);
+  const wroteDefault = await emit('files:write', { relPath: 'kept.txt', content: '不传 cwd 改的', baseHash: read.contentHash });
+  assert.equal(wroteDefault.ok, false, `不传 cwd 就写进了热移除的目录：${JSON.stringify(wroteDefault)}`);
+  assert.equal(readFileSync(join(b, 'kept.txt'), 'utf8'), '移除之前的内容');
+  const refreshed = await emit('config:refresh', {});
+  assert.equal(refreshed?.ok, false, `不传 cwd 就在热移除的目录上起了 scout：${JSON.stringify(refreshed)}`);
+  // 读档照旧：缺省落到 B 也能读（已开会话自己的目录仍可查看）
+  assert.equal((await emit('browse:list', { relPath: '.' }))?.ok, true, '读档的缺省目录被一起收紧了');
+
   const created = await emit('session:new', { cwd: b });
   assert.equal(created.ok, false, '热移除的目录上不得新开（仅拒新开）');
 

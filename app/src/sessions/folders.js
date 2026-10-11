@@ -6,7 +6,7 @@
 //
 // 协议里的位置一律是「家目录相对路径」（'' = 家目录）：客户端不必、也不该拼服务端的绝对路径。
 import { lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { findWorktreeOwner, isWithin } from './folder-access.js';
 import { managedWorktreeRoot } from './workdirs.js';
 
@@ -72,7 +72,9 @@ export function browseFolderNames(rel, ctx = {}) {
   return {
     ok: true,
     home: at.homeReal, // 客户端据此把相对位置换成会话 cwd
-    path: relative(at.homeReal, at.real),
+    // 协议里的位置一律 / 分隔（前端返回上一级、拼子目录都按 / 切）；原生 Windows 上 relative() 给的是 \，
+    // 原样交出去，返回键会一步跳回家目录（2026-10-11 review）。服务端 resolve 两种分隔符都认。
+    path: relative(at.homeReal, at.real).split(sep).join('/'),
     reason: connectRefusalReason(at.real, ctx),
     entries: shown.map(name => ({ name, reason: connectRefusalReason(join(at.real, name), ctx) })),
     truncated: names.length > shown.length,
@@ -92,24 +94,31 @@ export function validateFolderName(name) {
 // 在家目录内某个目录下新建一层子目录（非递归：父目录必须已存在）。
 // 建完复核（FILES-2 同款）：判定与 mkdir 之间父目录可能被换成 symlink，mkdir 会跟着它建到别处——
 // 真实路径不是预期的那一个，就撤掉这个刚建的空目录再拒。
+// ctx.mkdir 是测试注入：建目录并交回刚建好那个目录的 lstat（真实实现建完立刻 lstat）。
+const mkdirAndPin = target => { mkdirSync(target); return lstatSync(target); };
 export function createSubfolder(parentRel, name, ctx = {}) {
   const bad = validateFolderName(name);
   if (bad) return { ok: false, error: bad };
   const at = resolveInHome(parentRel ?? '', ctx.home);
   if (!at || inForbidden(at.real, ctx.forbidden)) return { ok: false, error: 'out_of_range' };
   const target = join(at.real, name);
+  let made;
   try {
-    (ctx.mkdir ?? mkdirSync)(target);
+    made = (ctx.mkdir ?? mkdirAndPin)(target);
   } catch (err) {
     return { ok: false, error: err?.code === 'EEXIST' ? 'exists' : 'mkdir_failed' };
   }
+  if (!made) { try { made = lstatSync(target); } catch { /* 已不在 */ } }
   const real = realOrNull(target);
   if (real !== target) {
     // 只删自己刚建的那个空目录：父目录被换成 symlink 时它被建到了外面，经 target 删掉它；target 本身
     // 若已被换成 symlink，跟着 realpath 删掉的会是别人的目录——lstat 不跟最后一级链接，是链接就不动。
+    // 还得是建好那一刻的同一个 inode：建好之后父目录才被换走时，target 指到的是外面同名的别人的目录
+    // （lstat 跟着父目录走），只看「是目录」就把它删了（2026-10-11 review）。
     let st = null;
     try { st = lstatSync(target); } catch { /* 已不在 */ }
-    if (st?.isDirectory()) { try { rmdirSync(target); } catch { /* 非空：不再动它 */ } }
+    const same = st?.isDirectory() && made && st.dev === made.dev && st.ino === made.ino;
+    if (same) { try { rmdirSync(target); } catch { /* 非空：不再动它 */ } }
     return { ok: false, error: 'out_of_range' };
   }
   return { ok: true, path: real };

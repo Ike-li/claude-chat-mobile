@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync, readdirSync, renameSync, rmdirSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, existsSync, readdirSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -189,6 +189,25 @@ test('新建后复核：刚建好的目录被换成指向别人目录的 symlink
   };
   assert.deepEqual(createSubfolder('code', 'decoy', { ...ctx, mkdir }), { ok: false, error: 'out_of_range' });
   assert.ok(existsSync(victim), '复核时跟着 symlink 把别人的空目录删了');
+});
+
+// 建好之后父目录才被换成 symlink：target 的最后一段仍是目录（外面那个同名的），lstat 不跟最后一段、却跟着
+// 父目录——只看「是不是目录」就会把别人的空目录 rmdir 掉（2026-10-11 review）。认的是建好那一刻的那个 inode。
+// 注入的 mkdir 照真实实现那样建好、记下 lstat 再交回，换父目录发生在那之后。
+test('新建后复核：建好之后父目录才被换成 symlink——外面同名的空目录不是自己建的，不删', () => {
+  const { home, outside, ctx } = fixture();
+  const parent = join(home, 'code');
+  const victim = join(outside, 'late');
+  mkdirSync(victim);
+  const mkdir = target => {
+    mkdirSync(target);
+    const made = lstatSync(target);
+    renameSync(parent, `${parent}-moved`);
+    symlinkSync(outside, parent);
+    return made;
+  };
+  assert.deepEqual(createSubfolder('code', 'late', { ...ctx, mkdir }), { ok: false, error: 'out_of_range' });
+  assert.ok(existsSync(victim), '把父目录换走之后，外面那个同名的空目录被当成自己建的删了');
 });
 
 test('新建：已存在、名字不合法、父目录出界或在禁区里，一律拒绝且什么都没建出来', () => {

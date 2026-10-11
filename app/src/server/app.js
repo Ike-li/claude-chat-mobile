@@ -228,8 +228,9 @@ const routableAuth = (cwd, extraRoots) => {
   const auth = authorize(cwd, extraRoots);
   return auth && auth.kind !== 'scratch-root' ? auth : null;
 };
-// 「仅拒新开」的归位：routeCwd 的缺省回退（viewingCwdOf）可能是已被热移除、但仍挂着 live 实例的
-// 目录——只按当前授权判，不带 extraRoots，判不过就归位到主工作目录。
+// 「仅拒新开」的归位：查看目录（viewingCwdOf）可能是已被热移除、但仍挂着 live 实例的目录——只按当前授权判，
+// 不带 extraRoots，判不过就归位到主工作目录。routeCwd 的缺省值 2026-10-11 起也过开档、不再交出这种目录，
+// 这里是第二道（session:new 不带 payload 时直接取 viewingCwdOf，不经 routeCwd）。
 const ensureAuthorized = cwd => routableAuth(cwd)?.path ?? primaryWorkDir();
 // 文件浏览 / 编辑 / 预览的范围根：全部已连接文件夹，外加这个 cwd 自己的范围（scratch 目录不在任何
 // 已连接文件夹之下，不补上就连会话自己的目录都读不了）。
@@ -520,14 +521,19 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
 // 画到 B 的标题下、把消息投进另一个工作区。没传 cwd 仍落查看目录——那不是用户给的值，是缺省。
 // tier='read'（历史、文件面板、切到已在跑的实例……）额外放行「正在跑的实例自己的 cwd」：工作区被热移除
 // 后，其上已开的会话继续运行、仍可查看（产品判据：仅拒新开）。开 / 建类一律只认当前授权。
+// 缺省值同样要过授权与分档：查看的实例可能开在已被热移除的文件夹里，缺省值原样放行就绕过了开档——
+// files:write 不传 cwd 照样写进去、config:refresh 照样在那里起 scout（2026-10-11 review）。
 const routeCwd = (cwd, { tier = 'open' } = {}) => {
-  if (typeof cwd !== 'string' || !cwd) return viewingCwdOf();
-  const auth = routableAuth(cwd);
+  const explicit = typeof cwd === 'string' && cwd !== '';
+  const target = explicit ? cwd : viewingCwdOf();
+  const auth = routableAuth(target);
   if (auth) return auth.path;
-  if (tier === 'read' && isLiveInstanceCwd(cwd)) return cwd;
-  // 「无文件夹」的键（scratch 根）只是新会话页的启动键，不是可路由的目录——带着它来的请求要拒，但那不是
-  // 越界尝试：记成 scope_violation 会让每个「无文件夹」会话都在服务面板里刷出红色告警。
-  if (isNoFolderKey(cwd)) return null;
+  if (tier === 'read' && isLiveInstanceCwd(target)) return target;
+  // 「无文件夹」的键（scratch 根）只是新会话页的启动键，不是可路由的目录——显式带着它来的请求要拒，但那不是
+  // 越界尝试：记成 scope_violation 会让每个「无文件夹」会话都在服务面板里刷出红色告警。缺省落到它（正看着
+  // 「无文件夹」的新会话页）时原样交回，调用方各自按 isNoFolderKey 处理，与从前相同。
+  if (isNoFolderKey(target)) return explicit ? null : target;
+  if (!explicit) return null; // 缺省目标不在当前授权里：拒，但不记越界——那不是请求方给的值
   console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在已连接的文件夹里`);
   // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，此处 actor 留空——
   // 目录越界信号的价值在"发生过"本身，拒绝由调用方完成。
@@ -2758,8 +2764,8 @@ registerSocketConnection(io, socket => {
           }
           cwd = scratchLease.cwd;
         } else {
-          // ensureAuthorized 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
-          // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
+          // ensureAuthorized 同 session:new(#8)/session:switch：查看目录可能是热移除目录（该目录有 live 实例挂着
+          // 未被 reloadWorkdirs 归位），在其上新开 FRESH 会话就绕过了「仅拒新开」。routeCwd 的缺省值已过开档，这里是第二道。
           const routedCwd = routeCwd(rawCwd);
           if (routedCwd === null) {
             // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
@@ -3348,7 +3354,7 @@ registerSocketConnection(io, socket => {
     // 兼容两种调用形态：emit('session:new', cb) 与 emit('session:new', {cwd}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
     // #8 灰边界修：热移除目录上「仅拒新开」。若正查看该目录的 live 实例，viewingCwd 会停在已移除目录
-    // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。
+    // （reloadWorkdirs 有实例时不归位），不带 payload 时下面直接取它 → 新会话仍落非白名单目录。
     // ensureAuthorized 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const obj = (payload && typeof payload === 'object') ? payload : null;
@@ -3461,7 +3467,7 @@ registerSocketConnection(io, socket => {
       return;
     }
     // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureAuthorized 同 session:new(#8)：
-    // routeCwd 的缺省回退(viewingCwdOf)可能仍是热移除目录（该目录有 live 实例挂着未被归位），不夯一次
+    // 查看目录可能是热移除目录（该目录有 live 实例挂着未被归位；routeCwd 的读档缺省会放行它），不夯一次
     // 白名单会绕过「仅拒新开」——落到非白名单目录后 sessionFileExists 大概率会因该目录下无此 sessionId 而
     // 拒绝（ack 回 '会话不存在'），是安全的失败模式，不会误开其他目录下的会话。
     //

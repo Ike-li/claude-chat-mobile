@@ -10,8 +10,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getProjectDir, listSessionsPage, listSessionsByIds, sessionFileExists } from '../../app/src/sessions/history.js';
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-collide-')));
@@ -132,6 +134,27 @@ test('最后一条记录特别长（尾部那一小段解析不出 cwd）：往�
   }) + '\n');
   assert.equal(await sessionFileExists(b, 'long-tail', { baseDir }), false, '别人的会话在 b 里也打得开');
   assert.equal(await sessionFileExists(a, 'long-tail', { baseDir }), true);
+});
+
+// 判归属要读目录里每份 *.jsonl。~/.claude/projects 下的文件模型写得动，换成 FIFO 的话阻塞式 open 永远不返回，
+// 占住一个 libuv 线程；默认线程池只有 4 个，几个 FIFO 就让列表、项目发现的读盘整体停摆（2026-10-11 review）。
+// 放在子进程里跑：卡住的 open 会让本进程退不出去。
+test('目录里的 *.jsonl 被换成 FIFO：归属扫描不卡住，它也不算一份会话', { skip: process.platform === 'win32' }, () => {
+  const { baseDir, a } = fixture('k-l', join('k', 'l'));
+  writeSession(baseDir, a, 'mine-1');
+  const dir = join(baseDir, getProjectDir(a));
+  execFileSync('mkfifo', [join(dir, 'fifo-1.jsonl')]);
+  const mod = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/history.js')).href;
+  const [A, B, D] = [a, baseDir, dir].map(v => JSON.stringify(v));
+  const script = `const m = await import(${JSON.stringify(mod)});
+    const out = { cwds: await m.projectCwdsOf(${D}), fifo: await m.sessionFileExists(${A}, 'fifo-1', { baseDir: ${B} }),
+      mine: await m.sessionFileExists(${A}, 'mine-1', { baseDir: ${B} }) };
+    process.stdout.write(JSON.stringify(out));
+    process.exit(0);`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 8000 });
+  assert.equal(r.signal, null, '打开 FIFO 卡到超时被杀——在 server 里就是读盘线程被占死');
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { cwds: [a], fifo: false, mine: true });
 });
 
 test('不撞名的目录：行为不变（自己的会话照列，没有别人的可剔）', async () => {
