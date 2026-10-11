@@ -10,7 +10,7 @@ import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { claudeGlobalConfigPath as defaultClaudeGlobalConfigPath } from '../shared/claude-home.js';
 import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
-import { imageRefsOf, toolImageRef, nthImageBlock, stripImageBlocks } from '../shared/transcript-image.js';
+import { imageRefsOf, toolImageRef, nthImageBlock, stripImageBlocks, parseImageRef } from '../shared/transcript-image.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
@@ -302,8 +302,9 @@ const DRIVING_CWD_TOOLS = Object.freeze({
   ExitWorktree: r => r?.originalCwd,
 });
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
-// live 工具截图在实例内存里的总字节上限（解码后）。只为盖住「事件已到、transcript 还没落盘」那几秒，
-// 挤出去的由 image:get 回落读 transcript；按字节而不按条数，computer use 一轮能连截几十张。
+// live 工具截图在实例内存里的总量上限，按真正留在内存里的 base64 字符数计。只为盖住「事件已到、
+// transcript 还没落盘」那几秒，挤出去的由 image:get 回落读 transcript；按体积而不按条数，computer use
+// 一轮能连截几十张。
 const TOOL_IMAGE_CACHE_BYTES = 12 * 1024 * 1024;
 // B2：已完成后台任务的留存条数。面板只用来「回头看一眼刚跑完的那批」，不是历史归档——
 // 20 条足够覆盖一次会话里的并发批次，且上限恒定、不随会话长度涨。
@@ -467,7 +468,7 @@ export class AgentSession {
     this._bufferView = []; // 惰性缓存；_ringPush 置脏为 null
     this.toolInputs = new Map(); // ③：toolUseId → {name, input, ts}（文件类工具完整 input，供 tool:preview 重建 diff）
     this.toolOutputs = new Map(); // 工具完整 output（截断前），供 tool:full 展开；TTL + FIFO 容量上限与 toolInputs 同口径
-    this.toolImages = new Map();  // toolUseId → {content, bytes, ts}：live 工具截图，供 image:get 在落盘前取图
+    this.toolImages = new Map();  // toolUseId → {blocks: Map<序号, {mediaType, data}>, bytes, ts}：live 工具截图，供 image:get 在落盘前取图
     this.toolImageBytes = 0;
     this.toolNames = new Map();   // toolUseId → name（tool_result 选 cap 用，短命）
     this.bufferTrimmed = false;
@@ -2456,18 +2457,39 @@ export class AgentSession {
     return stringify(redactBase64(e.raw));
   }
 
-  // live 工具截图：缓存 tool_result 的 content（含图片块），image:get 按引用序号取。TTL 同 toolOutputs，
-  // 另按总字节挤出最旧的——挤出的不是丢了，transcript 落盘后 image:get 会回落去那里读。
+  // live 工具截图：只留引用点名的那几张图（按「第几个图片块」的序号存，与 image:get 的引用同口径），
+  // 同一结果里的文字与其它块一概不留——上限只有按真正留在内存里的东西算才有意义（PR #201 review：
+  // 存整段 content 却只按图片计，一个带小图的长输出就能绕开上限）。超单张上限的不存，反正不会被取。
+  // TTL 同 toolOutputs，写入时顺带清掉过期的；另按总量挤出最旧的——挤出的不是丢了，transcript 落盘后
+  // image:get 会回落去那里读。
   cacheToolImages(id, content, images) {
     if (!id || !images.length) return;
-    const bytes = images.reduce((sum, r) => sum + r.bytes, 0);
-    if (bytes > TOOL_IMAGE_CACHE_BYTES) return;
+    this._sweepExpiredToolImages();
+    const blocks = new Map();
+    let bytes = 0;
+    for (const r of images) {
+      if (r.tooLarge) continue;
+      const n = parseImageRef(r.ref)?.index;
+      const block = n == null ? null : nthImageBlock(content, n);
+      if (!block) continue;
+      blocks.set(n, block);
+      bytes += block.data.length;
+    }
+    if (!blocks.size || bytes > TOOL_IMAGE_CACHE_BYTES) return;
     const prev = this.toolImages.get(id);
     if (prev) { this.toolImages.delete(id); this.toolImageBytes -= prev.bytes; }
-    this.toolImages.set(id, { content, bytes, ts: Date.now() });
+    this.toolImages.set(id, { blocks, bytes, ts: Date.now() });
     this.toolImageBytes += bytes;
     for (const [k, e] of this.toolImages) {
       if (this.toolImageBytes <= TOOL_IMAGE_CACHE_BYTES) break;
+      this.toolImages.delete(k);
+      this.toolImageBytes -= e.bytes;
+    }
+  }
+  _sweepExpiredToolImages() {
+    const now = Date.now();
+    for (const [k, e] of this.toolImages) { // 插入序 = 时间序，遇到第一条没过期的就停
+      if (now - e.ts <= TOOL_INPUT_TTL_MS) break;
       this.toolImages.delete(k);
       this.toolImageBytes -= e.bytes;
     }
@@ -2481,7 +2503,7 @@ export class AgentSession {
       this.toolImageBytes -= e.bytes;
       return null;
     }
-    return nthImageBlock(e.content, index);
+    return e.blocks.get(index) ?? null;
   }
 
   dispose() {

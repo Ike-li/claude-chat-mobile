@@ -151,7 +151,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 环形缓冲不是永久历史。缺口超出缓冲或服务重启时，客户端回退到鉴权的 `session:history`，从 CLI transcript 重建稳定消息。高频瞬态状态不会全部进入永久历史。
 
-会话里的图片（工具截图、用户贴进对话的图）**不内联进 `agent:event` 也不内联进 `session:history`**：两边都只带引用 `images:[{ref, mediaType, bytes, tooLarge?}]`，前端在格子进入可视区时经鉴权的 `image:get` 按需取。截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。取图先查发出它的实例内存（live 截图到达时 transcript 未必已落盘），再按与 `session:history` 同款的范围门与会话归属读 transcript；只认 png / jpeg / gif / webp，单张有上限，超限只显示占位。判据在 `app/src/shared/transcript-image.js`。
+会话里的图片（工具截图、用户贴进对话的图）**不内联进 `agent:event` 也不内联进 `session:history`**：两边都只带引用 `images:[{ref, mediaType, bytes, tooLarge?}]`，前端在格子进入可视区时经鉴权的 `image:get` 按需取。截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。取图先过与 `session:history` 同款的范围门与会话归属（越界 cwd 拒绝并记审计，带着有效实例 id 也一样），再查发出它的实例内存（live 截图到达时 transcript 未必已写到这一条），最后读 transcript；只认 png / jpeg / gif / webp，单张有上限，超限只显示占位。判据在 `app/src/shared/transcript-image.js`。
 
 ## 鉴权与范围边界
 

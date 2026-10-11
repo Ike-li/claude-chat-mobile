@@ -73,3 +73,40 @@ test('内存有字节上限：持续截图时挤出最旧的（之后由 transcr
   s.dispose();
   assert.equal(s.getToolImage('toolu_39', 0), null, 'dispose 后不再持有图片');
 });
+
+// 内存里留了什么只能看那张表本身：没有对外接口暴露「实例此刻持有多少字节」，而这条要守的恰恰是
+// 「12MB 上限算的是不是真正留在内存里的东西」。上限只按图片字节计，若把整段 content（含大段文字）
+// 一起存进去，一个带小图的长输出就能绕开上限（PR #201 review）。
+test('缓存只留可显示的图片块：同一结果里的大段文字不进内存，序号语义不变', () => {
+  const { s } = makeSession();
+  const bigText = 'LONG-TOOL-OUTPUT-MARKER '.repeat(200_000); // ~4.8MB 文字
+  s.map({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_mixed', is_error: false,
+      content: [img('image/svg+xml'), { type: 'text', text: bigText }, img('image/png')] },
+  ] } });
+  const retained = JSON.stringify([...s.toolImages.values()]);
+  assert.ok(!retained.includes('LONG-TOOL-OUTPUT-MARKER'), '缓存留着整段工具输出 = 12MB 上限形同虚设');
+  assert.ok(!retained.includes('svg'), '白名单外的图本来就不会被取，也不该占内存');
+  assert.equal(s.getToolImage('toolu_mixed', 0), null, '第 0 个图片块是 svg，按序号取它必须落空');
+  assert.deepEqual(s.getToolImage('toolu_mixed', 1), { mediaType: 'image/png', data: PNG }, '被拒的 svg 仍占序号：引用 t:…:1 指的是 png');
+  s.dispose();
+});
+
+test('过期条目在写入新截图时就清掉，不必等有人来取', () => {
+  const { s } = makeSession();
+  const realNow = Date.now;
+  try {
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'toolu_old', is_error: false, content: [img('image/png')] },
+    ] } });
+    Date.now = () => realNow() + 11 * 60 * 1000; // 越过 10 分钟 TTL
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'toolu_new', is_error: false, content: [img('image/png')] },
+    ] } });
+    assert.equal(s.toolImages.has('toolu_old'), false, '没人来取的过期截图一直挂在内存里');
+    assert.ok(s.getToolImage('toolu_new', 0));
+  } finally {
+    Date.now = realNow;
+    s.dispose();
+  }
+});

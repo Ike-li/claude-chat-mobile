@@ -4230,16 +4230,25 @@ registerSocketConnection(io, socket => {
   // 手机上的历史加载；绝大多数工具卡用户不会展开。同 tool:full / subagent:flow 的范式：客户端只传
   // 引用，路径由服务端从 sessionId + cwd 自己算。
   //
-  // 【两个来源，先内存后磁盘】live 截图到达时 transcript 未必已落盘，先看发出它的实例内存
-  // （routeInstance 同 tool:full 的授权口径）；没有再读 transcript，那一路过与 session:history 同款的
-  // 范围门与会话归属校验——只能取「这个 cwd 下这个会话」里的图，越界 cwd 不回落（SCOPE-05）。
+  // 【先过门，再取图】范围门与会话归属在两个来源之前裁决，与 session:history 同款：只能取「这个 cwd
+  // 下这个会话」里的图，越界 cwd 拒绝并记审计、不回落（SCOPE-05）。read 档放行在跑实例自己的 cwd，
+  // 热移除后的在跑会话不受影响。先查内存再过门的话，带一个有效实例 id 就能绕开范围门（PR #201 review）。
+  // live 截图同样要求 transcript 已在：CLI 在回合开始就写入用户消息，工具结果总在其后。
+  //
+  // 【两个来源，先内存后磁盘】live 截图到达时 transcript 未必已写到这一条，先看发出它的实例内存
+  // （routeInstance 同 tool:full 的口径，另要求实例就是这个会话）；没有再读 transcript。
   // 两路回传前都过 checkImagePayload：白名单外、超上限、非 base64 一律不交出数据。
   on(socket, 'image:get', async ({ instanceId, cwd: reqCwd, sessionId, ref } = {}, ack) => {
     if (typeof ack !== 'function') return;
     const parsed = parseImageRef(ref);
     if (!parsed) return ack({ ok: false, code: 'bad_ref', error: '图片引用无效' });
+    const cwd = routeCwd(reqCwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, code: 'not_found', error: '会话不存在' });
+    }
     const agent = instanceId ? routeInstance(instanceId) : null;
-    if (agent && parsed.kind === 'tool' && (!sessionId || agent.sessionId === sessionId)) {
+    if (agent && parsed.kind === 'tool' && agent.sessionId === sessionId) {
       const hit = agent.getToolImage(parsed.id, parsed.index);
       if (hit) {
         const check = checkImagePayload(hit);
@@ -4247,11 +4256,6 @@ registerSocketConnection(io, socket => {
           ? { ok: true, mediaType: hit.mediaType, data: hit.data, bytes: check.bytes }
           : { ok: false, code: check.code });
       }
-    }
-    const cwd = routeCwd(reqCwd, { tier: 'read' });
-    if (cwd === null) return ack({ ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
-    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
-      return ack({ ok: false, code: 'not_found', error: '会话不存在' });
     }
     try {
       ack(await readTranscriptImage(sessionId, cwd, ref));
