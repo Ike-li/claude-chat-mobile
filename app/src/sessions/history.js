@@ -1,7 +1,6 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
-import { open, stat, readdir } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
@@ -15,6 +14,8 @@ import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-comm
 import { setCapped } from '../shared/bounded-map.js';
 import { encodeProjectDir, projectDirDescendantPrefix } from '../shared/project-dir.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
+// 本模块打开 ~/.claude/projects 下的文件一律走这两个：O_NONBLOCK 打开、只认普通文件，FIFO 不再卡死读盘线程。
+import { openRegularFile, readRegularText } from '../shared/regular-file.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -73,27 +74,6 @@ export function getProjectDir(cwd) {
 // 拒绝含 / \ . 等的穿越形态；非法 id 调用方返回空/settled/-1，不拼进 join。
 export function isSafeSessionId(id) {
   return typeof id === 'string' && /^[0-9a-zA-Z_-]+$/.test(id);
-}
-
-// 本模块打开 ~/.claude/projects 下的文件（transcript、子代理的 jsonl 与 meta）一律走这里：O_NONBLOCK 打开，
-// fstat 不是普通文件就抛。那棵树模型写得动，某个文件被换成 FIFO 的话阻塞式 open 永远不返回，占死一个 libuv 线程
-// （默认只有 4 个，几个就让列表、历史、项目发现的读盘整体停摆；2026-10-11 review）。普通文件上 O_NONBLOCK 不影响读。
-// 抛出来交给各调用点原有的读失败分支：FIFO 与读不出的文件同一个结果，不另起语义。
-async function openRegularFile(file) {
-  const fh = await open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-  const st = await fh.stat().catch(() => null);
-  if (st?.isFile()) return { fh, st };
-  await fh.close().catch(() => {});
-  throw new Error(`not a regular file: ${file}`);
-}
-
-async function readRegularText(file) {
-  const { fh } = await openRegularFile(file);
-  try {
-    return await fh.readFile('utf-8');
-  } finally {
-    await fh.close().catch(() => {});
-  }
 }
 
 // 「当前链」的 uuid 集合——即 CLI 自己还认的那些消息。返回 null = 拿不到，调用方据此【不过滤】。
