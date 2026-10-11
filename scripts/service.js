@@ -714,6 +714,16 @@ export function createServiceManager(deps = {}) {
       + '用 `npm run service:health` 复核。';
   }
 
+  // start 与 restart 共用的单次判据。null ＝ 端口上还没人在听：进程还在启动，调用方继续轮询。
+  // 只有被别的进程占着才立即失败——那种情况等下去也不会变好。
+  function checkServerPort(port, pid) {
+    const listenPid = portListenerPid(port);
+    if (listenPid && listenPid !== pid) return { ok: false, error: portConflictError({ port, listenPid }) };
+    if (listenPid === pid) return { ok: true };
+    if (tcpProbe(port)) return { ok: true, unverified: true, warning: unverifiedWarning(port) };
+    return null;
+  }
+
   function confirmServerListening(label, { timeoutMs = 15000, intervalMs = 300 } = {}) {
     const port = positivePort((readEnv() || {}).PORT) ?? DEFAULT_PORT;
     const maxTries = Math.max(1, Math.ceil(timeoutMs / intervalMs));
@@ -721,12 +731,8 @@ export function createServiceManager(deps = {}) {
       if (i > 0) sleep(intervalMs);
       const pid = currentPid(label);
       if (!pid) continue;
-      const listenPid = portListenerPid(port);
-      if (listenPid && listenPid !== pid) {
-        return { ok: false, pid, error: portConflictError({ port, listenPid }) };
-      }
-      if (listenPid === pid) return { ok: true, pid };
-      if (tcpProbe(port)) return { ok: true, pid, unverified: true, warning: unverifiedWarning(port) };
+      const seen = checkServerPort(port, pid);
+      if (seen) return { ...seen, pid };
     }
     return { ok: false, error: `启动后未能确认进程在听端口 ${port}` };
   }
@@ -835,26 +841,22 @@ export function createServiceManager(deps = {}) {
     // 用轮询次数而不是墙钟截止：now 是可注入的（测试里恒定），拿它算 deadline 会死循环。
     const maxTries = Math.max(1, Math.ceil(timeoutMs / intervalMs));
     const port = positivePort((readEnv() || {}).PORT) ?? DEFAULT_PORT;
+    // 新 PID 出现得比端口就绪早得多（2026-10-10 生产实测：PID ~300ms 可见，listen 要 ~1.1s）。
+    // 端口判据只在 PID ≠ oldPid 之后才跑，免得把旧进程的监听认成新进程的。
+    let newPid = null;
     for (let i = 0; i < maxTries; i += 1) {
       sleep(intervalMs);
       const pid = currentPid(label);
-      if (pid && pid !== oldPid) {
-        let proof = {};
-        if (unit === 'server') {
-          const listenPid = portListenerPid(port);
-          if (listenPid && listenPid !== pid) {
-            return { ok: false, unit, label, oldPid, newPid: pid, error: portConflictError({ port, listenPid }) };
-          }
-          if (listenPid !== pid) {
-            if (!tcpProbe(port)) {
-              return { ok: false, unit, label, oldPid, newPid: pid, error: `新进程已起（pid=${pid}）但端口 ${port} 连不上，看日志` };
-            }
-            // lsof 没认出是自己、只有 TCP 通 —— 与 start 同一条弱判据，同样要标出来。
-            proof = { unverified: true, warning: unverifiedWarning(port) };
-          }
-        }
-        return { ok: true, unit, label, action: 'restarted', oldPid, newPid: pid, ...proof };
-      }
+      if (!pid || pid === oldPid) continue;
+      newPid = pid;
+      if (unit !== 'server') return { ok: true, unit, label, action: 'restarted', oldPid, newPid };
+      const seen = checkServerPort(port, pid);
+      if (!seen) continue;
+      if (!seen.ok) return { ok: false, unit, label, oldPid, newPid, error: seen.error };
+      return { ok: true, unit, label, action: 'restarted', oldPid, newPid, ...weakProof(seen) };
+    }
+    if (newPid) {
+      return { ok: false, unit, label, oldPid, newPid, error: `新进程已起（pid=${newPid}）但端口 ${port} 在 ${timeoutMs}ms 内一直连不上，看日志` };
     }
     return { ok: false, unit, label, oldPid, error: `重启后未能确认新进程（超时 ${timeoutMs}ms）` };
   }

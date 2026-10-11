@@ -367,3 +367,27 @@ test('peekSessionListTitle: getSessionInfo 无 summary → 回落 jsonl 的 ai-t
     rmProjectDir(dir);
   }
 });
+
+// 编码撞名（2026-10-10 review P1）：SDK 按目录列，同一个 project 目录里两个 cwd 的会话会一起回来。
+// 只按「jsonl 在不在本目录」过滤挡不住——两边的 jsonl 都在这个目录里。
+test('SDK 快路径: 编码撞名时只留 transcript 记的是本 cwd 的会话，total 也按自己的算', async () => {
+  const cwd = '/sdk/a-b';
+  const other = '/sdk/a/b';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  assert.equal(getProjectDir(other), getProjectDir(cwd), '夹具前提：两个 cwd 编码后同名');
+  const ts = '2026-10-10T00:00:00Z';
+  writeJSONL(dir, 'mine', [{ type: 'user', cwd, timestamp: ts, message: { role: 'user', content: 'hi' } }]);
+  writeJSONL(dir, 'theirs', [{ type: 'user', cwd: other, timestamp: ts, message: { role: 'user', content: 'yo' } }]);
+  __setSdkListSessionsForTest(async () => [
+    { sessionId: 'mine', summary: '我的', lastModified: 1000 },
+    { sessionId: 'theirs', summary: '别人的', lastModified: 2000 },
+  ]);
+  try {
+    const { sessions, total } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    assert.deepEqual(sessions.map(s => s.id), ['mine'], '别的文件夹的会话混进了列表，点开就在这里 resume');
+    assert.equal(total, 1);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});

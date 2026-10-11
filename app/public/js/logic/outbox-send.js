@@ -154,6 +154,8 @@ function serializeOutboxItem(item) {
     // 只在真勾选时落字段：没勾的消息不该平白多两个键，服务端判的是 `=== true`。
     ...(item.useWorktree === true ? { useWorktree: true } : {}),
     ...(typeof item.sourceBranch === 'string' && item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
+    // 入队时在哪一个新会话页上（见 outboxComposeKey）：重载页面之后两页的条目还要分得开
+    ...(typeof item.composeId === 'string' && item.composeId ? { composeId: item.composeId } : {}),
   };
 }
 
@@ -478,6 +480,27 @@ export function planOutboxWorktreeReuse(item, openedInstanceId) {
   if (!item || item.useWorktree !== true) return item;
   if (!openedInstanceId) return item; // 本批第一条：由它去建树
   return { ...item, useWorktree: false, sourceBranch: null, instanceId: openedInstanceId };
+}
+
+// 上面这组锚点按「哪一个新会话页」分组：同一页连打的几条并成一个会话，但用户有意新开的另一页要各开各的
+// （2026-10-10 第四轮 review P2）。两页的条目 instanceId 都是 null、cwd 也一样，只有入队时记下的页标识分得开。
+// 升级前入队的条目没有它，归同一组——行为与从前相同。
+export const outboxComposeKey = item => (typeof item?.composeId === 'string' ? item.composeId : '');
+
+// 同一件事的「无文件夹」版（2026-09-24）：离线时在「无文件夹」的新会话页上连打几条，每条都以
+// {instanceId:null, cwd:<scratch 根>} 入队；服务端的 scratch 分配器只合并并发、合并不了先后，
+// 逐条重放就会一条建一个 scratch 目录、开一个会话。第一条照原样发（由它懒开），后续各条改投它开出来的实例。
+// scratchRoot 未知（旧服务端）时不动任何条目。
+export function planOutboxScratchReuse(item, openedInstanceId, scratchRoot) {
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return item;
+  if (!openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
+}
+export function nextOutboxScratchAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || !scratchRoot || item.instanceId || item.cwd !== scratchRoot) return current ?? null;
+  if (!decision || decision.outcome !== 'ok') return current ?? null;
+  return decision.instanceId || null;
 }
 
 // 这一条重放成功后，本批的「worktree 已开」锚点该变成什么。

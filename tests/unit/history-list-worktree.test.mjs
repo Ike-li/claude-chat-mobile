@@ -9,10 +9,12 @@
 // 只把会话并进父仓列表；每条带自己的 cwd（父仓只是展示归属，打开时要用真实 cwd 才找得到 transcript）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace } from '../../app/src/sessions/history.js';
+import { resolveAuthorizedCwd } from '../../app/src/sessions/folder-access.js';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'ccm-hist-wt-'));
 test.after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -334,6 +336,36 @@ test('transcript 没有 cwd 字段 → 不认领（查不到证据不认领）',
   assert.deepEqual(sessions.map(s => s.id), []);
 });
 
+// 路径编码超过 200 字符就截到 200 再接 '-' + hash，仓库与每棵 worktree 各接各的 hash，只剩前 200 个字符相同。
+// 拿「仓库的编码 + --claude-worktrees-」当前缀：仓库自己被截断时一棵都挑不出来；仓库没截断、只有 worktree 截断时
+// 挑得出，但从目录名里切出来的名字带着 hash，拼回去的路径不存在，回验落空。两种都让已删 worktree 的会话从抽屉里消失。
+// 候选只靠那前 200 个字符挑，同一段开头的别的目录也会进来——归属得看 transcript 记的 cwd。
+test('仓库路径长到 project 目录名被截断：已删托管 worktree 的会话照样列出，同前缀的别的目录不认领', async () => {
+  const truncated = p => getProjectDir(p) !== p.replace(/[^a-zA-Z0-9]/g, '-');
+  for (const [label, repoLen] of [['仓库自己的目录名被截断', 230], ['只有 worktree 的目录名被截断', 175]]) {
+    const { baseDir, repo: base } = fixture();
+    const repo = join(base, 'p'.repeat(repoLen - base.length - 1));
+    mkdirSync(repo);
+    const gone = join(repo, '.claude', 'worktrees', 'feature-x');
+    assert.equal(truncated(repo), repoLen > 200, `${label}：夹具前提（仓库截不截断）不成立`);
+    assert.ok(truncated(gone), `${label}：夹具前提（worktree 的目录名被截断）不成立`);
+    writeSession(baseDir, repo, 'main-1', { at: T0 });
+    writeSession(baseDir, gone, 'orphan-1', { at: T0 + 1000 });
+    // 下面两个与 worktree 共享前 200 个字符（仓库被截断时）：比谁都新，认领错了就排在最前面
+    writeSession(baseDir, join(repo, 'src'), 'src-1', { at: T0 + 2000 });
+    writeSession(baseDir, join(`${repo}x`, '.claude', 'worktrees', 'feature-x'), 'neighbor-1', { at: T0 + 3000 });
+
+    const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+    assert.deepEqual(sessions.map(s => s.id), ['orphan-1', 'main-1'],
+      `${label}：已删 worktree 的会话没列出来（= 盘上活着、抽屉里查无此人），或把别的目录的会话认成了本仓的`);
+    const row = sessions.find(s => s.id === 'orphan-1');
+    assert.equal(row.cwd, gone, `${label}：cwd 不是那棵 worktree 的真实路径，点开就去查一个空目录`);
+    assert.equal(row.worktree, 'feature-x', `${label}：worktree 名是从截断的目录名里切出来的`);
+    assert.equal(row.worktreeGone, true);
+    assert.equal(total, 2);
+  }
+});
+
 test('listSessionsByIds 同样认得已删 worktree 的会话', async () => {
   const { baseDir, repo } = fixture();
   const gone = join(repo, '.claude', 'worktrees', 'removed-wt');
@@ -358,4 +390,138 @@ test('listSessionsByIds: 父仓那份更新 → 选父仓（证明不是恒选 w
   // 行与 listSessionsPage 同形：父仓行**不带** cwd（前端回落工作区 cwd），只有 worktree 行才带。
   assert.equal(rows[0].cwd, undefined, '选中的是 worktree 那份陈旧副本');
   assert.equal(rows[0].lastUsedAt, Date.parse('2026-09-11T00:00:00Z'));
+});
+
+// ── 「已连接的文件夹」（2026-09-24）：项目的成员目录不止托管 worktree ──────────────────────────
+// 平级 worktree（真机会话 1c401b5d 的形态）落在连接范围里时（父目录整个连着）归所属仓库，会话并进仓库这个项目；
+// 只连了仓库时它在范围外，要显式连接（2026-10-10，照官方桌面端）。
+// 无文件夹会话的项目（scratch 根）由各个 scratch 目录组成。成员由 memberOptions.authorize 裁决——
+// 就是 server 用来判 cwd 的那一份授权判据，列表与「能不能打开」同口径；没传时行为与从前逐字相同
+// （只认托管 worktree）。
+
+// 真 git：从仓库侧读 .git/worktrees/* 才认得出平级 worktree，手写的假 .git 指针会让夹具与实现互相自洽。
+function makeRepoWithSibling() {
+  const { baseDir, repo } = fixture();
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(repo, 'README.md'), '# fixture\n');
+  git('add', '.');
+  git('commit', '-m', 'init');
+  const sibling = realpathSync(join(repo, '..')) + '/repo-feat';
+  git('worktree', 'add', '-b', 'feat', sibling);
+  return { baseDir, repo: realpathSync(repo), sibling };
+}
+const authorizeWith = ctx => ({ authorize: c => resolveAuthorizedCwd(c, ctx) });
+
+test('平级 worktree 在范围外（只连了仓库）：会话不并进仓库', async () => {
+  const { baseDir, repo, sibling } = makeRepoWithSibling();
+  writeSession(baseDir, repo, 'main-1', { at: T0 });
+  writeSession(baseDir, sibling, 'sib-0', { at: T0 + 1000 });
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [repo] }) });
+  assert.deepEqual(sessions.map(s => s.id), ['main-1'], '列得出就点得开：范围外的目录凭 worktree 身份混进了仓库的列表');
+});
+
+test('平级 worktree 在范围里（父目录连着）：会话并进仓库这个项目，行带自己的 cwd', async () => {
+  const { baseDir, repo, sibling } = makeRepoWithSibling();
+  writeSession(baseDir, repo, 'main-1', { at: T0 });
+  writeSession(baseDir, sibling, 'sib-1', { text: '平级 worktree 里的会话', at: T0 + 1000 });
+
+  const parent = dirname(repo);
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [parent] }) });
+  const sib = sessions.find(s => s.id === 'sib-1');
+  assert.ok(sib, `平级 worktree 的会话没并进来：${JSON.stringify(sessions.map(s => s.id))}——1c401b5d 那种会话照样看不见`);
+  assert.equal(sib.cwd, sibling, '前端打开要用真实 cwd，用仓库 cwd 会查到空目录');
+  assert.equal(sib.worktree, 'repo-feat');
+  assert.equal(sib.worktreeGone, undefined, '活着的平级 worktree 被标成已删 = 提示条常驻，用户以为自己的工作没了');
+  // 不传 memberOptions：与从前逐字相同
+  const legacy = await listSessionsPage(repo, { baseDir, limit: 10 });
+  assert.deepEqual(legacy.sessions.map(s => s.id), ['main-1']);
+});
+
+test('平级 worktree 被显式连接时不并进仓库（它自己就是一个项目）', async () => {
+  const { baseDir, repo, sibling } = makeRepoWithSibling();
+  writeSession(baseDir, sibling, 'sib-2', { at: T0 });
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10, memberOptions: authorizeWith({ connected: [repo, sibling] }) });
+  assert.deepEqual(sessions.map(s => s.id), [], '显式连接的 worktree 在自己的项目里列，这里再列一遍就是两行');
+});
+
+test('listSessionsByIds / sessionExistsInWorkspace 与列表同口径：范围里的平级 worktree 认，范围外的不认', async () => {
+  const { baseDir, repo, sibling } = makeRepoWithSibling();
+  writeSession(baseDir, sibling, 'sib-3', { at: T0 });
+  const memberOptions = authorizeWith({ connected: [dirname(repo)] });
+  const rows = await listSessionsByIds(repo, ['sib-3'], { baseDir, memberOptions });
+  assert.equal(rows[0]?.cwd, sibling, '标了未读、被挤出本页的平级 worktree 会话补不回来');
+  assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir, memberOptions }), true);
+  assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir }), false, '不传成员选项时行为不变');
+  const repoOnly = authorizeWith({ connected: [repo] });
+  assert.deepEqual(await listSessionsByIds(repo, ['sib-3'], { baseDir, memberOptions: repoOnly }), []);
+  assert.equal(await sessionExistsInWorkspace(repo, 'sib-3', { baseDir, memberOptions: repoOnly }), false);
+});
+
+test('scratch 根：列出各个 scratch 目录里的会话，行带 cwd 与 scratch 标记', async () => {
+  const { baseDir } = fixture();
+  const scratchRoot = join(realpathSync(ROOT), `scratch-${seq++}`);
+  mkdirSync(scratchRoot);
+  const d1 = mkdtempSync(join(scratchRoot, 'scratch-2026-09-24-'));
+  const d2 = mkdtempSync(join(scratchRoot, 'scratch-2026-09-24-'));
+  mkdirSync(join(scratchRoot, 'not-a-scratch'));
+  writeSession(baseDir, d1, 's-1', { at: T0 });
+  writeSession(baseDir, d2, 's-2', { at: T0 + 1000 });
+  writeSession(baseDir, join(scratchRoot, 'not-a-scratch'), 's-x', { at: T0 });
+
+  const { sessions } = await listSessionsPage(scratchRoot, { baseDir, limit: 10, memberOptions: authorizeWith({ scratchRoot }) });
+  assert.deepEqual(sessions.map(s => s.id), ['s-2', 's-1']);
+  assert.deepEqual(sessions.map(s => s.cwd), [d2, d1]);
+  assert.ok(sessions.every(s => s.scratch === true && s.worktree === undefined), 'scratch 行不能标成 worktree');
+  assert.ok(sessions.every(s => s.worktreeGone === undefined), '还在的 scratch 目录不能带「已删」标记');
+});
+
+// 无文件夹会话中途 EnterWorktree：CLI 把 transcript 整份搬进 scratch 目录下托管 worktree 的 project 目录。
+// 「无文件夹」这一节显示了（hasScratchSessions），里面却列不出这条会话 = 一节空壳（2026-10-10 review P2）。
+test('scratch 根：会话搬进了 scratch 目录下的托管 worktree，照样列在「无文件夹」里', async () => {
+  const { baseDir } = fixture();
+  const scratchRoot = join(realpathSync(ROOT), `scratch-${seq++}`);
+  mkdirSync(scratchRoot);
+  const d1 = mkdtempSync(join(scratchRoot, 'scratch-2026-10-10-'));
+  const wt = join(d1, '.claude', 'worktrees', 'x');
+  mkdirSync(wt, { recursive: true });
+  writeSession(baseDir, wt, 's-moved', { at: T0 });
+  const { sessions } = await listSessionsPage(scratchRoot, { baseDir, limit: 10, memberOptions: authorizeWith({ scratchRoot }) });
+  assert.deepEqual(sessions.map(s => s.id), ['s-moved'], `搬进 scratch 目录下 worktree 的会话列不出来：${JSON.stringify(sessions)}`);
+  assert.equal(sessions[0].cwd, wt, '点开要定位到它真实所在的 project 目录');
+});
+
+// 真机 1c401b5d：transcript 被 EnterWorktree 整份搬到新 project 目录，头部 ~300 行的 cwd 仍是原仓，
+// 搬迁后的记录才是新 cwd，而那时文件已经 1.8MB。只看头窗取「第一个 cwd」会拿到原仓，与这个 project
+// 目录对不上，这棵（已删的）worktree 的会话就被当成「查无证据」丢掉。
+test('被搬走的 transcript（头部 cwd 是原仓）：已删托管 worktree 的回验仍认它', async () => {
+  const { baseDir, repo } = fixture();
+  const gone = join(repo, '.claude', 'worktrees', 'moved-wt');
+  const dir = join(baseDir, getProjectDir(gone));
+  mkdirSync(dir, { recursive: true });
+  const ts = new Date(T0).toISOString();
+  const pad = 'x'.repeat(2000);
+  // 300 × 2KB ≈ 600KB：大过「头 64KB + 尾 512KB」，头尾两个读窗之间真的有一段没读——与真机同形
+  const head = Array.from({ length: 300 }, () => JSON.stringify({ type: 'user', timestamp: ts, cwd: repo, message: { role: 'user', content: pad } }));
+  const tail = [
+    JSON.stringify({ type: 'relocated', sessionId: 'moved-1', relocatedCwd: gone }),
+    JSON.stringify({ type: 'user', timestamp: ts, cwd: gone, message: { role: 'user', content: '进了 worktree 之后' } }),
+  ];
+  writeFileSync(join(dir, 'moved-1.jsonl'), [...head, ...tail].join('\n') + '\n');
+
+  const { sessions } = await listSessionsPage(repo, { baseDir, limit: 10 });
+  const row = sessions.find(s => s.id === 'moved-1');
+  assert.ok(row, '头窗里只有原仓的 cwd，只认第一个 cwd 就会把这棵树的会话整批丢掉');
+  assert.equal(row.worktreeGone, true);
+});
+
+test('sessionExistsInWorkspace 在注入的 baseDir 里找已删托管 worktree 的会话', async () => {
+  // 此前枚举已删 worktree 时没透传 baseDir，回验去扫了默认的 ~/.claude/projects——侧栏高亮
+  // 「当前会话」要靠它，当前会话在一棵已删 worktree 里时就恒判不存在。
+  const { baseDir, repo } = fixture();
+  writeSession(baseDir, join(repo, '.claude', 'worktrees', 'gone-wt'), 'gone-1', { at: T0 });
+  assert.equal(await sessionExistsInWorkspace(repo, 'gone-1', { baseDir }), true);
 });

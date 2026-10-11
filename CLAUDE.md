@@ -135,7 +135,7 @@
 
 ## 常用命令
 
-> ⚠️ **启动只有两条入口**：headless = 终端 `npm start`；macOS 还可走 `desktop/` 的 CCM.app。桌面端占着 3000 时**勿再手动 `npm start`**。改配置/代码后，桌面端菜单里 server 一行点「重启」，headless 重启那个进程。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
+> ⚠️ **启动只有两条入口**：headless = 终端 `npm start`；macOS 还可走 `desktop/` 的 CCM.app。桌面端占着 3000 时**勿再手动 `npm start`**。改配置/代码后，桌面端菜单里 server 一行点「重启」，headless 重启那个进程。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开；手机上「添加文件夹」写的也是这份内联 `WORKDIRS`）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
 
 配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `app/src/ops/env-schema.js`，读写与类型归一在 `app/src/ops/config-file.js`（**读写必须同源，写错源＝假成功**）。环境变量始终压过文件。
 

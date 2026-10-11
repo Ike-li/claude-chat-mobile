@@ -22,6 +22,9 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
     if (text.includes('Blocked call to navigator.vibrate')) return;
     const resourceStatus = text.match(/Failed to load resource: the server responded with a status of (\d+)/);
     if (resourceStatus && ignoredResourceStatusCodes.has(Number(resourceStatus[1]))) return;
+    // 用例刻意断网（context.setOffline）时，socket.io 按退避发出的重连长轮询必然失败——那是重连在工作，
+    // 不是页面出错。只放过 /socket.io/ 这一种：离线时别的资源加载失败照样记错。
+    if (text.includes('net::ERR_INTERNET_DISCONNECTED') && (message.location()?.url || '').includes('/socket.io/')) return;
     if (message.type() === 'error') errors.push(text);
   });
 }

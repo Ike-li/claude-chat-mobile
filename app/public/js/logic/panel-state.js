@@ -263,6 +263,48 @@ export function owningWorkspace(cwd, dirs) {
   return best;
 }
 
+// 一个活实例归抽屉的哪一节。服务端给了 projectKey 且它是一节，就用它——仓库外的平级 worktree 按 cwd
+// 前缀归不到任何一节，只有服务端（从仓库侧双向回验）认得出它属于哪个仓库。否则按 cwd 取最长前缀
+// （旧服务端 / E2E mock 的旧载荷不带 projectKey；那一节还没下发时同理）。
+export function sectionOfInstance(inst, sectionKeys) {
+  const keys = Array.isArray(sectionKeys) ? sectionKeys : [];
+  if (typeof inst?.projectKey === 'string' && keys.includes(inst.projectKey)) return inst.projectKey;
+  return owningWorkspace(inst?.cwd, keys);
+}
+
+// SESSION-02：抽屉里活着的实例必须有一行。下面三个函数合起来把每个活实例分到恰好一个去处，
+// sectionKeys 是抽屉当前所有小节的键。
+//
+// 一个小节的活实例：有 sessionId 的进 liveMap（给列表行贴运行态），没有的进 freshTabs（新会话 tab）。
+// freshTabs 不再要求 cwd 就是小节本身——懒开到托管 worktree、还没拿到 sessionId 的实例 cwd 是
+// `<工作区>/.claude/worktrees/<n>`，只收 cwd === 小节的话它哪一节都不画。
+export function liveRowsForSection(instances, sectionKey, sectionKeys) {
+  const liveMap = new Map();
+  const freshTabs = [];
+  for (const inst of Array.isArray(instances) ? instances : []) {
+    if (!inst?.instanceId) continue;
+    if ((sectionOfInstance(inst, sectionKeys) || inst.cwd) !== sectionKey) continue;
+    if (inst.sessionId) liveMap.set(inst.sessionId, inst);
+    else freshTabs.push(inst);
+  }
+  return { liveMap, freshTabs };
+}
+
+// liveMap 里、列表没返回的那些：被分页挤出本页，或 transcript 被 EnterWorktree 迁到了别的 project 目录。
+// 只给行贴运行态的话，它们在抽屉里整行消失——正在跑，却既看不见也关不掉。
+export function orphanLiveRows(liveMap, listedIds) {
+  const listed = listedIds instanceof Set ? listedIds : new Set(listedIds || []);
+  const out = [];
+  for (const [sid, inst] of liveMap) if (!listed.has(sid)) out.push(inst);
+  return out;
+}
+
+// cwd 不在任何小节之下的活实例（例如刚进了仓库外的平级 worktree）：由抽屉单独成一节。
+export function unownedLiveInstances(instances, sectionKeys) {
+  return (Array.isArray(instances) ? instances : [])
+    .filter(inst => inst?.instanceId && !sectionOfInstance(inst, sectionKeys));
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。
@@ -271,7 +313,7 @@ export function aggregateStates(instances, dirs) {
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
   for (const x of instances || []) {
-    const key = owningWorkspace(x.cwd, Object.keys(out)) || x.cwd;
+    const key = sectionOfInstance(x, Object.keys(out)) || x.cwd;
     if (!(key in out)) out[key] = 'idle';
     if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
@@ -470,12 +512,12 @@ export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady 
   return false;
 }
 
-// 空首页「最近活跃」：把各显式 workdir 的 session 列表摊平，按 lastUsedAt 降序取 topN。
+// 空首页「最近活跃」：把各项目的 session 列表摊平，按 lastUsedAt 降序取 topN。
 // 每条附 cwd + workspaceName，前端可一键 session:switch，不必先开侧栏目录树。
 // dirLists: Array<{ cwd, sessions, workspaceName? }>
-//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)
+//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)（子项目的「父名 › 相对路径」、「无文件夹」靠它）
 // 无 id 的行跳过；缺 lastUsedAt 的排最后（仍可点开）；非法 limit 回落默认 8。
-// git worktree 路径若要用，须写入 workdirs.json 成为独立 workdir，不再有自动分组通道。
+// worktree 会话由服务端并进所属仓库的列表（listProjectMemberDirs），这里不再分组。
 export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}) {
   const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
   const rows = [];
@@ -494,6 +536,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
         // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
         cwd: s.cwd || cwd,
+        workspaceCwd: cwd, // 所属项目的键（这一行来自哪一节的列表）：首页胶囊按它一个项目一个
         workspaceName,
         worktree: s.worktree ?? null,
         entrypoint: s.entrypoint ?? null,
@@ -507,6 +550,20 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
     return tb - ta;
   });
   return rows.slice(0, cap);
+}
+
+// 首页的项目胶囊：一个项目一个，取它最近的那一条（recent 已按时间降序）。按行自己的 cwd 去重不行——
+// worktree、scratch 目录里的会话各有各的目录，同一个项目会冒出好几个同名胶囊。
+export function recentWorkspaceChips(recent) {
+  const seen = new Set();
+  const chips = [];
+  for (const r of Array.isArray(recent) ? recent : []) {
+    const key = r.workspaceCwd ?? r.cwd;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push(r);
+  }
+  return chips;
 }
 
 // 首页「最近活跃」这次合并有没有缺角。listMain 逐 workdir 发 session:list，单目录 4s 超时兜底
@@ -705,8 +762,11 @@ export function buildDirInstanceSignatures(instances = [], dirs = []) {
   for (const d of (dirs || [])) byDir.set(d, []);
   for (const inst of (instances || [])) {
     if (!inst?.instanceId) continue;
-    if (!byDir.has(inst.cwd)) byDir.set(inst.cwd, []);
-    byDir.get(inst.cwd).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
+    // 按它归属的那一节记签名，局部重建才落在对的节上；哪一节都不归的仍按 cwd 记（它的变化会让
+    // rebuildDirSections 找不到节点、退化成整段重建——「不在已连接的文件夹里」那一节靠的正是这条）。
+    const key = sectionOfInstance(inst, dirs) || inst.cwd;
+    if (!byDir.has(key)) byDir.set(key, []);
+    byDir.get(key).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
   }
   const out = {};
   for (const [d, frags] of byDir) out[d] = frags.join(',');

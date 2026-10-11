@@ -214,12 +214,14 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 `WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
 decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
-A git worktree outside the repository (`../repo-<branch>` and friends) must be listed as its own absolute path.
-**The one exception is a "managed worktree"**: anything under `<allowlisted workspace>/.claude/worktrees/<single-segment name>`
-(the default landing spot for `EnterWorktree`, `--worktree`, and agent isolation) is authorized by derivation via
-`resolveManagedWorktree` without being listed in `WORKDIRS`, and its sessions are folded into the parent repo's session
-list. Depth is fixed at 1, the prefix is compared after `realpath`, and a non-existent directory is rejected.
-Anything outside that shape still has to be listed explicitly.
+
+`WORKDIRS` is your list of **connected folders**, with the same meaning as the folder list the Claude desktop app opens up to your phone:
+
+- **Subfolders just work**: once `~/code` is connected, a session in `~/code/app` needs no separate entry; each subfolder that has sessions gets its own section in the drawer. When connected folders nest, the deepest one owns the path.
+- **git worktrees follow their repository**: worktrees inside a connected repository (such as the managed ones under `.claude/worktrees/`) are usable, and their sessions are folded into the repository's list. Sibling worktrees outside the repository (`../repo-<branch>`) don't follow it — as in the official desktop app, such a worktree is just another folder: connect it on its own ("+ Add folder" on the phone works) and it gets its own section. If its parent folder is connected, it is already in scope and still folds into the repository. Ownership is verified from the repository's side in both directions (the worktree's `.git` pointer and the repository's back-link must agree), and git is never executed to decide it.
+- **Can't be connected**: your home folder itself and the disk root (the config file rejects them too). `~/.claude` and this app's own data directory can't be added from the phone, and connecting a parent (say `~/code`, with this app inside it) doesn't turn them into session directories — unless you list them in `WORKDIRS` explicitly in the config file. A worktree under a repository's `.claude/worktrees/` can't be added on its own; add the repository it belongs to.
+- **Add folders from the phone**: tap the folder chip on the new-session page, or "＋ Add folder" at the top of the drawer — it browses folder names inside your home folder only, and greys out the ones that can't be added with the reason. Adding writes the folder back into `WORKDIRS` in the config file and takes effect immediately. Two cases can't be changed from the phone: the folder list comes from environment variables (the two legacy keys below), or there is no `ccm.config.json` (legacy `.env` only) — run `npm run config:migrate` on the computer to create one (it keeps your token; see [Upgrading from a legacy `.env`](#upgrading-from-a-legacy-env)).
+- **No folder**: a new session can also live outside every folder, in a throwaway directory the app creates (on macOS under `~/Library/Application Support/claude-chat-mobile/scratch-workspaces`, on Linux under `${XDG_DATA_HOME:-~/.local/share}/claude-chat-mobile/scratch-workspaces`). It is created when the first message is sent and deleted together with the session (kept if other sessions still use it).
 
 The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
 Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
@@ -651,6 +653,57 @@ refreshing and hook-triggered pushes stop arriving, with nothing in any error po
 npm run statusline:install
 npm run hooks:install
 ```
+
+### Upgrading from v1.13.0: connected folders
+
+In v1.13.0 and earlier, `WORKDIRS` was an exact allowlist: a session directory had to be exactly one of the
+entries (plus the managed worktrees under its `.claude/worktrees/`). The new version replaces it with "connected
+folders"; the meaning is described at the end of [step 3](#3-create-local-configuration). **No data migration is
+needed, and your existing `WORKDIRS` keeps working**; what changes is that the same list now lets more through,
+and a few places that used to quietly correct a request now reject it.
+
+**The scope is wider, so review the list before upgrading.** Subfolders now just work, and when connected folders
+nest, the deepest one owns the path. If your list connects a broad parent such as `~/code`, after the upgrade the
+whole subtree can host sessions, and sessions you opened from a terminal anywhere in it show up in the drawer, one
+section per subfolder that has sessions. If you only meant to expose a few projects, replace the parent with
+those. `~/.claude` and this app's data directory are still off limits; connecting their parent doesn't bring them
+along.
+
+**The hooks bridge pushes more.** With the CLI hooks bridge installed, "needs you" and turn-finished events from
+terminal sessions in subfolders now reach your phone too; before, only the listed directories themselves did.
+
+**Adding folders from the phone needs the list in `WORKDIRS` in `ccm.config.json`**; otherwise tapping it only
+tells you it can't be changed. Both fixes below are only picked up at startup, so do them before restarting the
+server:
+
+- Still on `.env` (including a `workdirs.json` that `WORK_DIRS_FILE` points to): run `npm run config:migrate`.
+  It inlines the list and keeps your existing `AUTH_TOKEN` (see
+  [Upgrading from a legacy `.env`](#upgrading-from-a-legacy-env)). If your `ccm.config.json` itself contains
+  `WORK_DIRS_FILE`, edit the file directly: put that list into `WORKDIRS` and delete `WORK_DIRS_FILE`.
+- `WORK_DIRS` or `WORK_DIRS_FILE` exported in your shell: remove them. Environment variables beat the config
+  file, and while they are set the phone can only view the list, not add to it.
+
+**Sibling worktrees still have to be connected explicitly.** A `../repo-<branch>` outside the repository doesn't
+follow the repository, same as before: one you listed keeps working after the upgrade in its own section, and one
+you didn't list won't appear on its own. One case gets a new hint: a worktree entry that already sits inside
+another connected folder (say its parent is connected as a whole) still gets its own section, and
+`node scripts/doctor.js` points out that the entry can go; remove it and its sessions fold back into the
+repository's section.
+
+**Out-of-scope requests are now rejected.** Before, a directory that wasn't on the list was quietly swapped for the
+one you were viewing; now the request is refused. You're most likely to notice this in the offline queue: a queued
+message that would open a session in a folder removed from the list before it went out now stops with a "stopped
+retrying" notice instead of landing in another folder. Resend it by hand if you still want it.
+
+**When a session leaves the scope mid-run, the phone doesn't follow.** If a session started from the phone moves
+into a directory outside the connected folders while it runs (most often `EnterWorktree` into a sibling worktree
+that isn't connected), the phone stays where it was and the session shows a notice. Switch away at that point and
+you won't find the session again; to keep using it on the phone, connect that folder first.
+
+**Finally, reload the page on the phone once.** After the server restarts, a page that was already open on the
+phone is still running the old front end; reload it once to get the folder picker (the folder chip on the
+new-session page and "＋ Add folder" at the top of the drawer). If you opened it from a home-screen icon, close it
+fully and open it again.
 
 ### Checking whether there is a new version
 
