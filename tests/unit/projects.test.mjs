@@ -305,6 +305,29 @@ test('hasScratchSessions：会话搬进了 scratch 目录下面的子目录，�
     '会话搬进 scratch 目录下的 worktree 后，重启就丢了「无文件夹」这一节');
 });
 
+// scratch 根的路径很长时（同上面连接根被截断那条）：scratch 目录的目录名截到 200 再接 hash，里面不再有完整的
+// scratch 那一段，按名字判形态，「无文件夹」一节就永远不显示。候选只靠前 200 个字符挑，根自己、根下别的目录、
+// 同一段开头的邻居都会进来——是不是 scratch 目录得看 transcript 记的 cwd。
+test('hasScratchSessions：scratch 根的路径长到目录名被截断，照样认得出；同前缀的别的目录照样不算', async () => {
+  const truncated = p => getProjectDir(p) !== p.replace(/[^a-zA-Z0-9]/g, '-');
+  for (const [label, rootLen] of [['根自己的目录名被截断', 230], ['只有 scratch 目录的目录名被截断', 190]]) {
+    const { baseDir } = fixture();
+    const base = join(ROOT, `scratch-root-${seq++}`);
+    const scratchRoot = join(base, 'r'.repeat(rootLen - base.length - 1));
+    const used = join(scratchRoot, 'scratch-2026-10-10-LONG00');
+    assert.equal(truncated(scratchRoot), rootLen > 200, `${label}：夹具前提（根截不截断）不成立`);
+    assert.ok(truncated(used), `${label}：夹具前提（scratch 目录的目录名被截断）不成立`);
+    for (const other of [scratchRoot, join(scratchRoot, 'not-a-scratch'), join(`${scratchRoot}x`, 'scratch-2026-10-10-NEIGHB')]) {
+      writeTranscript(baseDir, other, [other]);
+    }
+    assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), false,
+      `${label}：根自己、根下不是 app 建的目录、邻居目录里的会话被当成了无文件夹会话`);
+    writeTranscript(baseDir, used, [used]);
+    assert.equal(await hasScratchSessions({ baseDir, scratchRoot }), true,
+      `${label}：scratch 目录里有会话，「无文件夹」一节却不显示`);
+  }
+});
+
 // 编码撞名（2026-10-10 review P1）：`a-b` 与 `a/b`、两个等长中文文件夹落进同一个 project 目录。
 // 只认「第一个对得上的 cwd」的话，另一个文件夹有会话也成不了一节。
 test('编码撞名的两个子文件夹各成一个项目，不只认第一个', async () => {

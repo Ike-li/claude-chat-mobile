@@ -336,6 +336,36 @@ test('transcript 没有 cwd 字段 → 不认领（查不到证据不认领）',
   assert.deepEqual(sessions.map(s => s.id), []);
 });
 
+// 路径编码超过 200 字符就截到 200 再接 '-' + hash，仓库与每棵 worktree 各接各的 hash，只剩前 200 个字符相同。
+// 拿「仓库的编码 + --claude-worktrees-」当前缀：仓库自己被截断时一棵都挑不出来；仓库没截断、只有 worktree 截断时
+// 挑得出，但从目录名里切出来的名字带着 hash，拼回去的路径不存在，回验落空。两种都让已删 worktree 的会话从抽屉里消失。
+// 候选只靠那前 200 个字符挑，同一段开头的别的目录也会进来——归属得看 transcript 记的 cwd。
+test('仓库路径长到 project 目录名被截断：已删托管 worktree 的会话照样列出，同前缀的别的目录不认领', async () => {
+  const truncated = p => getProjectDir(p) !== p.replace(/[^a-zA-Z0-9]/g, '-');
+  for (const [label, repoLen] of [['仓库自己的目录名被截断', 230], ['只有 worktree 的目录名被截断', 175]]) {
+    const { baseDir, repo: base } = fixture();
+    const repo = join(base, 'p'.repeat(repoLen - base.length - 1));
+    mkdirSync(repo);
+    const gone = join(repo, '.claude', 'worktrees', 'feature-x');
+    assert.equal(truncated(repo), repoLen > 200, `${label}：夹具前提（仓库截不截断）不成立`);
+    assert.ok(truncated(gone), `${label}：夹具前提（worktree 的目录名被截断）不成立`);
+    writeSession(baseDir, repo, 'main-1', { at: T0 });
+    writeSession(baseDir, gone, 'orphan-1', { at: T0 + 1000 });
+    // 下面两个与 worktree 共享前 200 个字符（仓库被截断时）：比谁都新，认领错了就排在最前面
+    writeSession(baseDir, join(repo, 'src'), 'src-1', { at: T0 + 2000 });
+    writeSession(baseDir, join(`${repo}x`, '.claude', 'worktrees', 'feature-x'), 'neighbor-1', { at: T0 + 3000 });
+
+    const { sessions, total } = await listSessionsPage(repo, { baseDir, limit: 10 });
+    assert.deepEqual(sessions.map(s => s.id), ['orphan-1', 'main-1'],
+      `${label}：已删 worktree 的会话没列出来（= 盘上活着、抽屉里查无此人），或把别的目录的会话认成了本仓的`);
+    const row = sessions.find(s => s.id === 'orphan-1');
+    assert.equal(row.cwd, gone, `${label}：cwd 不是那棵 worktree 的真实路径，点开就去查一个空目录`);
+    assert.equal(row.worktree, 'feature-x', `${label}：worktree 名是从截断的目录名里切出来的`);
+    assert.equal(row.worktreeGone, true);
+    assert.equal(total, 2);
+  }
+});
+
 test('listSessionsByIds 同样认得已删 worktree 的会话', async () => {
   const { baseDir, repo } = fixture();
   const gone = join(repo, '.claude', 'worktrees', 'removed-wt');
