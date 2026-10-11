@@ -59,6 +59,9 @@ test.describe('widgetDisplayMode：显示成图、显示提示，还是退回一
     assert.equal(widgetDisplayMode({ kind: 'svg', code: '<svgx></svgx>' }), null);
     const big = '<svg>' + 'x'.repeat(WIDGET_CODE_MAX) + '</svg>';
     assert.equal(widgetDisplayMode({ kind: 'svg', code: big }), null, '超过上限');
+    // 上限按条压到 64K：回放缓冲与历史缓存都按条数封顶，单条过大会在常驻内存里成倍累积（真实图约 4.5KB）
+    const svg65k = '<svg viewBox="0 0 1 1">' + 'x'.repeat(65 * 1024) + '</svg>';
+    assert.equal(widgetDisplayMode({ kind: 'svg', code: svg65k }), null, '65KB 的 SVG 已超上限');
   });
 
   test('缺字段、未知 kind、非对象 → null', () => {
@@ -167,6 +170,16 @@ test.describe('widgetSvgDataUri', () => {
 
   test('源码不合格 → null', () => {
     assert.equal(widgetSvgDataUri('<div/>', { theme: 'light' }), null);
+  });
+
+  // 孤立代理字符能经合法的 JSON 转义（\\ud800）一路到前端；encodeURIComponent 遇到它直接抛 URIError——
+  // live 路径会在工具卡插入之前抛出，历史路径会中断整块渲染、历史闸门永远关不上。必须退回，不能抛。
+  test('孤立代理字符：不抛错，返回 null 走回退', () => {
+    for (const code of ['<svg viewBox="0 0 1 1"><text>\ud800</text></svg>', '<svg viewBox="0 0 1 1"><text>\udfff x</text></svg>']) {
+      assert.doesNotThrow(() => widgetSvgDataUri(code, { theme: 'light' }));
+      assert.equal(widgetSvgDataUri(code, { theme: 'dark' }), null);
+    }
+    assert.ok(widgetSvgDataUri('<svg viewBox="0 0 1 1"><text>\ud83d\ude00</text></svg>', { theme: 'light' }), '成对的代理（emoji）照常出图');
   });
 });
 

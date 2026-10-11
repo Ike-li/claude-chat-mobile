@@ -203,6 +203,8 @@ export function createContentScenarios(getContext) {
           { id: 't_widget_html', widget: { title: 'mock_calculator', kind: 'html', code: '<div>calc</div><img src="x" onerror="window.__widgetRan=\'html\'"><script>window.__widgetRan=\'html-script\'</script>' } },
           { id: 't_widget_half', widget: { title: 'mock_half', kind: 'svg', code: '<svg viewBox="0 0 100 40"><rect width="10" height="10"/>' } },
           { id: 't_widget_badxml', widget: { title: 'mock_bad_xml', kind: 'svg', code: '<svg viewBox="0 0 100 40"><text class="t" x="4" y="20">R&D</text></svg>' } },
+          // ⑤ 孤立代理字符（合法 JSON 转义就能进来）：encodeURIComponent 会抛，抛了工具卡都插不进去
+          { id: 't_widget_surrogate', widget: { title: 'mock_surrogate', kind: 'svg', code: MOCK_WIDGET_SURROGATE } },
         ];
         let seq = 1;
         for (const w of widgets) {
@@ -238,6 +240,12 @@ export function createContentScenarios(getContext) {
             external: true,
             messages: [
               { role: 'user', content: 'Draw the architecture', uuid: 'u-widget-h1', timestamp: ts, entrypoint: 'claude-desktop' },
+              // 坏数据在前：抛错会中断整块历史渲染，后面的图和文字都出不来
+              {
+                kind: 'tool_use', role: 'assistant', toolUseId: 'h_widget_surrogate', name: 'mcp__visualize__show_widget',
+                inputSummary: '{"title":"mock_surrogate"}',
+                widget: { title: 'mock_surrogate', kind: 'svg', code: MOCK_WIDGET_SURROGATE }, timestamp: ts, entrypoint: 'claude-desktop',
+              },
               {
                 kind: 'tool_use', role: 'assistant', toolUseId: 'h_widget_svg', name: 'mcp__visualize__show_widget',
                 inputSummary: JSON.stringify({ title: 'mock_architecture', widget_code: MOCK_WIDGET_SVG }).slice(0, 600) + ' …（已截断）',
@@ -1117,3 +1125,6 @@ const MOCK_WIDGET_SVG = '<svg width="100%" viewBox="0 0 680 200" role="img" onlo
   + '<text class="th" x="510" y="78" text-anchor="middle" dominant-baseline="central">本机 claude</text>'
   + '<text class="ts" x="510" y="96" text-anchor="middle" dominant-baseline="central">transcript</text></g>'
   + '</svg>';
+
+// 孤立代理字符的 SVG：\ud800 经 JSON 转义原样到前端，单独一个高位代理没有配对。
+const MOCK_WIDGET_SURROGATE = '<svg viewBox="0 0 100 40"><text class="t" x="4" y="20">\ud800</text></svg>';

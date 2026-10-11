@@ -41,8 +41,8 @@ const NEUTRAL = Object.freeze({
 // 与 CCM 界面同一套系统字体栈（app.css --font-ui）。图片里加载不了网页字体，桌面端的 Anthropic Sans 用不上。
 const FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif';
 
-// 与后端 tool-summary.js 的 WIDGET_CODE_CAP 同值（前后端互不 import，各守一道）
-export const WIDGET_CODE_MAX = 256 * 1024;
+// 与后端 tool-summary.js 的 WIDGET_CODE_CAP 同值（前后端互不 import，各守一道；为什么是 64K 见那边）
+export const WIDGET_CODE_MAX = 64 * 1024;
 
 const SVG_HEAD_RE = /^\s*<svg[\s>/]/i;
 const SVG_TAIL_RE = /<\/svg>\s*$/i;
@@ -126,5 +126,12 @@ export function themeWidgetSvg(code, { theme = 'light', background } = {}) {
 
 export function widgetSvgDataUri(code, opts) {
   const svg = themeWidgetSvg(code, opts);
-  return svg == null ? null : 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  if (svg == null) return null;
+  // 孤立代理字符（经合法 JSON 转义 \ud800 就能进来）让 encodeURIComponent 抛 URIError：退回，不抛。
+  // 不用 String#toWellFormed 修补：iOS Safari 16.4 才有，且替换成 U+FFFD 等于静默改了模型的图。
+  try {
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  } catch {
+    return null;
+  }
 }

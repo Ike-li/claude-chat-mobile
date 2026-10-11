@@ -354,7 +354,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.emulateMedia({ colorScheme: 'light' });
     await gotoMock(page);
     await sendChatMessage(page, 'test:widget');
-    await expect(page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]')).toHaveCount(4, { timeout: 10_000 });
+    // 5 张工具卡一张不少：第 5 张是孤立代理字符，编码抛错的话连工具卡都插不进去
+    await expect(page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]')).toHaveCount(5, { timeout: 10_000 });
     await waitForIdle(page);
 
     // ① SVG → 一张已解码成功的图片（naturalWidth 来自按 viewBox 补的固有尺寸；缺 xmlns 时根本解不出来）
@@ -374,7 +375,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(htmlFig).toContainText('交互图表，请在桌面端查看');
     expect(await htmlFig.locator('img, script, iframe').count(), 'HTML 组件源码不得进页面 DOM').toBe(0);
 
-    // ③④ 半截 SVG 与坏 XML：只剩一行工具卡（坏 XML 要等图片解码失败后撤掉，故 poll）
+    // ③④⑤ 半截 SVG、坏 XML、孤立代理字符：只剩一行工具卡（坏 XML 要等图片解码失败后撤掉，故 poll）
     await expect(page.locator('figure.widget-card')).toHaveCount(2);
     expect(await page.evaluate(() => (window as unknown as { __widgetRan?: string }).__widgetRan ?? null), '组件里的脚本/事件处理器不得执行').toBeNull();
 
@@ -403,9 +404,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
     expect(decodeSvgSrc(await img.getAttribute('src'))).toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
     // 图紧跟在自己的工具卡后面，工具卡仍在（一行工具调用 + 图）
-    const card = page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]');
-    await expect(card).toHaveCount(1);
-    expect(await card.evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+    // 两张工具卡都在（孤立代理字符那张退回一行工具调用，且没中断这批历史的渲染）；图紧跟在自己的工具卡后面
+    const cards = page.locator('details.toolcard[data-tool-name="mcp__visualize__show_widget"]');
+    await expect(cards).toHaveCount(2);
+    expect(await cards.nth(0).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(false);
+    expect(await cards.nth(1).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
 
     await expectNoBrowserErrors(page);
   });

@@ -64,8 +64,11 @@ export function toolSummary(value, cap = TOOL_SUMMARY_CAP) {
 // 【HTML 不带 code】交互组件要在桌面端的沙箱 iframe 里跑脚本，CCM 不执行任何模型生成的 HTML，
 // 前端只显示标题和提示——源码用不上，就不往事件流和回放缓冲里塞。
 // 【上限按字符数】SVG 基本是 ASCII，字符数≈字节数；超限整个不带，前端退回一行工具调用。
+// 【为什么是 64K】带 widget 的事件会常驻在两处按【条数】封顶的缓存里：回放环形缓冲（每实例 2000 条）
+// 与历史缓存（每会话 2000 条 × LRU 10）。单条上限直接决定常驻内存的量级——256K 时一个满缓冲就能
+// 留下约 512MB 源码，再乘实例数 / LRU 就到 GB 级。真实的图约 4.5KB，64K 留足十倍余量。
 export const WIDGET_TOOL_NAME = 'mcp__visualize__show_widget';
-export const WIDGET_CODE_CAP = 256 * 1024;
+export const WIDGET_CODE_CAP = 64 * 1024;
 const WIDGET_TITLE_CAP = 200;
 const SVG_HEAD_RE = /^\s*<svg[\s>/]/i;
 

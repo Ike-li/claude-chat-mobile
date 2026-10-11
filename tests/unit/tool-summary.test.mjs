@@ -162,6 +162,15 @@ test.describe('widgetPayload（show_widget 的完整源码通道）', () => {
     assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: atCap + 'x' }), null);
   });
 
+  // 回放缓冲（每实例 2000 条）与历史缓存（每会话 2000 条 × LRU 10）都按条数封顶，单条上限决定常驻内存的量级：
+  // 256K 时一个满缓冲就能留下约 512MB 源码。真实图约 4.5KB，64K 留足十倍余量。
+  test('上限是 64K 字符：65KB 的 SVG 不带', () => {
+    const svg65k = '<svg viewBox="0 0 1 1">' + 'x'.repeat(65 * 1024) + '</svg>';
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: svg65k }), null);
+    const svg60k = '<svg viewBox="0 0 1 1">' + 'x'.repeat(60 * 1024) + '</svg>';
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: svg60k })?.kind, 'svg');
+  });
+
   test('输入畸形一律 null，不抛', () => {
     for (const input of [undefined, null, 'str', [], {}, { widget_code: '' }, { widget_code: '   ' }, { widget_code: 42 }]) {
       assert.equal(widgetPayload(WIDGET_TOOL_NAME, input), null, `input=${JSON.stringify(input)}`);
