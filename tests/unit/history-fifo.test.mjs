@@ -4,23 +4,21 @@
 // 不返回，占死一个 libuv 线程；默认线程池只有 4 个，几个就让列表、历史、项目发现的读盘整体停摆，没有自愈。
 // 判据：每个入口照常返回，FIFO 按「读不出」处理——各入口原有的读失败结果（空历史、null、无标题、read_failed）。
 //
-// 子进程里跑：卡住的 open 会让测试进程自己退不出去。每个调用单独限时，卡住的记成 'HANG'，断言的 diff 直接
-// 指出是哪个入口；线程池调大，免得前面卡住的调用把后面的饿死、看起来像是一起卡的。
+// 子进程里跑（tests/helpers/fifo-child.mjs）：卡住的 open 会让测试进程自己退不出去；每个调用单独限时，卡住的记成 'HANG'。
 // 「FIFO 那一行该不该出现在列表里」不在这里钉：读不出的普通文件今天也照列成无标题，FIFO 与它同口径。
 import test from 'node:test';
-import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { getProjectDir } from '../../app/src/sessions/history.js';
+import { expectInChild as expectInChildOf } from '../helpers/fifo-child.mjs';
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-fifo-')));
 test.after(() => rmSync(ROOT, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
-const MOD = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/history.js')).href;
-const CALL_TIMEOUT_MS = 3000;
+const MOD = join(dirname(fileURLToPath(import.meta.url)), '../../app/src/sessions/history.js');
 const skip = process.platform === 'win32'; // 没有 mkfifo
 
 let seq = 0;
@@ -41,32 +39,8 @@ function fixture({ projectsRoot = join(ROOT, `p${seq}`), mineId = 'mine-1', fifo
   return { cwd, dir, baseDir: projectsRoot, mineId, fifoId };
 }
 
-// calls：一段 JS 源码，求值为 [名字, async () => 值] 的数组，模块在 m 里。env 里值为 undefined 的键从子进程环境删掉。
-// 结果同步写出：有调用卡在 FIFO 上时 process.exit 也退不出去（退出要等线程池收工），只能 SIGKILL 自己，
-// 异步的 stdout 会丢。父进程先比对结果（HANG 落在哪个入口一眼可见），再看退出状态。
-function expectInChild(calls, expected, env = {}) {
-  const script = `const m = await import(${JSON.stringify(MOD)});
-    const out = {};
-    for (const [name, fn] of ${calls}) {
-      let timer;
-      out[name] = await Promise.race([
-        fn().then(v => v ?? null, e => 'THREW ' + (e && e.message)),
-        new Promise(r => { timer = setTimeout(() => r('HANG'), ${CALL_TIMEOUT_MS}); }),
-      ]);
-      clearTimeout(timer);
-    }
-    (await import('node:fs')).writeSync(1, JSON.stringify(out));
-    if (Object.values(out).includes('HANG')) process.kill(process.pid, 'SIGKILL');
-    process.exit(0);`;
-  const childEnv = { ...process.env, UV_THREADPOOL_SIZE: '64', ...env };
-  for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60_000, env: childEnv });
-  let out = null;
-  try { out = JSON.parse(r.stdout); } catch { /* 下一行报 */ }
-  assert.ok(out, `子进程没给出结果（signal=${r.signal}）：${r.stderr}`);
-  assert.deepEqual(out, expected, 'HANG = 这个入口打开 FIFO 时卡住了，在 server 里就是读盘线程被占死');
-  assert.equal(r.status, 0, r.stderr);
-}
+// calls：一段 JS 源码，求值为 [名字, async () => 值] 的数组，模块在 m 里。
+const expectInChild = (calls, expected, env) => expectInChildOf({ m: MOD }, calls, expected, { env });
 
 const q = v => JSON.stringify(v);
 

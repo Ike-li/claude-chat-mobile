@@ -1,13 +1,13 @@
 // cli-mirror-state.js —— 从 Claude CLI transcript 观察只读镜像的模型/权限态。
 // 这里仅描述 CLI 已落盘的观察值；不得把它写回 Web 接管实例的偏好。
 
-import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CCM_PERMISSION_MODES } from './cli-settings-defaults.js';
 // project 目录名编码走 shared 唯一实现：本文件曾自带第三份复制品（无 200 截断 + hash 后缀），
 // 与 history/workdirs 分叉后会造成「历史同步正常、镜像观察态静默为空」的不对称失效。
 import { encodeProjectDir } from '../shared/project-dir.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
+import { openRegularFile } from '../shared/regular-file.js';
 
 // 根路径走 shared 唯一实现（同 encodeProjectDir 的收敛理由，见上）。
 const EMPTY_OBSERVED_STATE = Object.freeze({ model: null, permissionMode: null });
@@ -38,9 +38,10 @@ export async function readCliObservedState(sessionId, cwd, { baseDir = CLAUDE_PR
   }
   const file = join(baseDir, encodeProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    // 不是普通文件（FIFO 等）与读不出同一个结果：空观察态
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      if (size == null) ({ size } = st);
       if (!Number.isFinite(size) || size <= 0) return { ...EMPTY_OBSERVED_STATE };
       const end = Math.trunc(size);
       const start = end > TAIL_READ_BYTES ? end - TAIL_READ_BYTES : 0;

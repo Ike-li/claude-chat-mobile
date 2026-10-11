@@ -7,7 +7,7 @@
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { statSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { statSync, readFileSync, existsSync, mkdirSync, unlinkSync, accessSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken, sanitize } from '../shared/sanitizer.js';
@@ -133,6 +133,7 @@ import { createAutoContinue } from './auto-continue.js';
 import { registerFileSocketHandlers, OUT_OF_SCOPE_ERROR } from './socket-files.js';
 import { registerFolderSocketHandlers } from './socket-folders.js';
 import { CLAUDE_PROJECTS_DIR, claudeHome } from '../shared/claude-home.js';
+import { appendRegularFileSync } from '../shared/regular-file.js';
 
 // 公网身份提供方策略（当前唯一实现是 Cloudflare Access）。init 必须在 env 规整之后——
 // server.js 先跑 loadRuntimeEnvironment 再动态 import 本模块，那个顺序被
@@ -1915,7 +1916,9 @@ function writeSessionEntrypoint(sessionId, cwd) {
       timestamp: new Date().toISOString()
     };
     mkdirSync(join(sessionFile, '..'), { recursive: true });
-    appendFileSync(sessionFile, JSON.stringify(meta) + '\n', { mode: 0o600 });
+    // 不是普通文件就抛进下面的 catch：Web 首次续接终端建的会话时 sid 已知、路径模型写得动，换成没有读端的
+    // FIFO 的话阻塞式 open 会卡死主线程（整个 server 不动、/health 也不应）。见 shared/regular-file.js。
+    appendRegularFileSync(sessionFile, JSON.stringify(meta) + '\n', { mode: 0o600 });
     invalidateListCache(cwd);
   } catch (err) {
     // 非致命：写失败不影响会话功能，仅 CLI /resume 选择器看不到（可用 --resume <id> 绕过）

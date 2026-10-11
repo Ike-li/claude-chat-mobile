@@ -22,9 +22,9 @@
 // 代价：会话 id 会变（本仓的会话身份就是 CLI 的 sessionId，没有 Desktop 那层映射）。
 // 用户看到的是「回退后进入一个新会话」，与既有的 session:fork 同款，不是新概念。
 
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
+import { readRegularText } from '../shared/regular-file.js';
 import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
 
 // forkSession / resumeSessionAt 真正认得的 entry 类型。逆向 SDK 的 transcript 读取器
@@ -258,13 +258,13 @@ export function describeRewindBlocker(plan) {
  * transcript 通常几百 KB，一次读可接受；真成为瓶颈再谈增量。
  *
  * 失败一律返回空数组（不抛）：调用方拿空数组走 planRewind，必然得到 prompt-not-found ⇒ 拒绝。
- * 失败方向仍是拒绝，与 §5.2 的整体口径一致。
+ * 失败方向仍是拒绝，与 §5.2 的整体口径一致。不是普通文件（FIFO 等）同属读失败，见 shared/regular-file.js。
  */
 export async function readSessionEntries(cwd, sessionId, { baseDir = CLAUDE_PROJECTS_DIR } = {}) {
   if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼进 join
   try {
     const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
-    const raw = await readFile(file, 'utf8');
+    const raw = await readRegularText(file);
     const out = [];
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
