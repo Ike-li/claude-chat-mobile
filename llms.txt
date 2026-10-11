@@ -12,7 +12,7 @@
 - [Configuration Reference](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.md): Single source of truth schema for ccm.config.json & runtime options
 - [Architecture Evolution](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.md): Key decisions (sandbox isolation, access topology, tail attribution)
 - [Project Rules & Testing](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.md): Host command whitelist, S0-S7 execution slots & commit trailers
-- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 31 outbound agent:event types & 58 inbound socket events
+- [API & Events Contract](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.md): Full contract for 31 outbound agent:event types & 62 inbound socket events (dev baseline; v1.13.0 has 58)
 - [Drift Notice](https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.md): Documented reality vs code facts
 
 ## Full Handbook Pages (Markdown)
