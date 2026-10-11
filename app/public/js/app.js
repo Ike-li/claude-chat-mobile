@@ -7703,8 +7703,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     const row = el('<div class="flex items-center justify-center gap-1.5 flex-wrap"></div>');
 
-    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all" data-testid="compose-source-branch">
-      <span class="text-ink-faint">⑂</span><span class="max-w-[9rem] truncate">${esc(st.sourceBranch || '')}</span><span class="text-ink-faint">⌄</span>
+    // 没勾时胶囊锁定、显示仓库当前分支：源分支只对新 worktree 有意义，没勾时会话就开在主工作树上。
+    // 此前没勾也能选，胶囊写着 feat、会话却开在 main，没有任何提示（2026-10-10 真机）。
+    const locked = !st.enabled;
+    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all disabled:opacity-50" data-testid="compose-source-branch"${locked ? ` disabled title="${esc(t('勾选「在新 worktree 里开」后可换源分支'))}"` : ''}>
+      <span class="text-ink-faint">⑂</span><span class="max-w-[9rem] truncate">${esc(st.sourceBranch || '')}</span>${locked ? '' : '<span class="text-ink-faint">⌄</span>'}
     </button>`);
     branchBtn.onclick = (e) => { e.stopPropagation(); haptic('tap'); branchListOpen = !branchListOpen; renderWorktreeChips(); };
     row.appendChild(branchBtn);
@@ -7729,7 +7732,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       host.appendChild(errEl);
     }
 
-    if (branchListOpen && st.branches.length) {
+    // 锁定时列表也不画：branchListOpen 不随 reset() 清零，勾上→点开列表→回新会话会留一个开着的
+    // 列表挂在锁定的胶囊下面，照样能选。
+    if (!locked && branchListOpen && st.branches.length) {
       // 自绘按钮组，不用原生 select：移动端上原生下拉会把弹层渲染到页面另一头（2026-09-11 实测）
       const list = el('<div class="flex flex-wrap items-center justify-center gap-1 max-h-32 overflow-y-auto px-1" data-testid="compose-branch-list"></div>');
       for (const b of st.branches) {
