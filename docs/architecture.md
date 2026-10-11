@@ -153,11 +153,11 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 会话里的图片（工具截图、用户贴进对话的图）**不内联进 `agent:event` 也不内联进 `session:history`**：两边都只带引用 `images:[{ref, mediaType, bytes, tooLarge?}]`，前端在格子进入可视区时经鉴权的 `image:get` 按需取。截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。取图先过与 `session:history` 同款的范围门与会话归属（越界 cwd 拒绝并记审计，带着有效实例 id 也一样），再查发出它的实例内存（live 截图到达时 transcript 未必已写到这一条），最后读 transcript；只认 png / jpeg / gif / webp，单张有上限，超限只显示占位。判据在 `app/src/shared/transcript-image.js`。
 
-桌面端给会话挂了 visualize MCP，模型用 `mcp__visualize__show_widget` 在聊天里画 SVG 图或交互组件；终端 CLI 没有这个工具。图的源码在工具 input 的 `widget_code` 里，走普通工具摘要会被截到 600 字、只剩半截，所以**只对这一个工具名**，`tool_use` 事件与 `session:history` 的工具条目多带一个 `widget: {title, kind, code?}` 字段，live 与历史两路共用 `app/src/shared/tool-summary.js` 的 `widgetPayload`。不新增事件 type，其他工具的事件形状一个字节不变。
+Claude 官方桌面端（不是本项目的 CCM.app）给会话挂了 visualize MCP，模型用 `mcp__visualize__show_widget` 在聊天里画 SVG 图或交互组件；终端 CLI 没有这个工具。图的源码在工具 input 的 `widget_code` 里，走普通工具摘要会被截到 600 字、只剩半截，所以**只对这一个工具名**，`tool_use` 事件与 `session:history` 的工具条目多带一个 `widget: {title, kind, code?}` 字段，live 与历史两路共用 `app/src/shared/tool-summary.js` 的 `widgetPayload`。不新增事件 type，其他工具的事件形状一个字节不变。
 
 - **SVG 源码内联，所以有单条上限。** 与上面的图片相反，`code` 随事件下发；超过 64K 字符就整个不带，前端退回一行工具调用。上限按常驻内存定：带 widget 的事件住在两处按条数封顶的缓存里（每实例 2000 条的环形缓冲、每会话 2000 条 × LRU 10 的历史缓存），256K 时一个满缓冲就能留下约 512MB 源码，而真实的图约 4.5KB。前后端互不 import，64K 两边各守一道。
 - **只当图片显示，不执行任何模型生成的代码。** SVG 只经 `data:image/svg+xml` 的 `<img>` 显示，图片文档不执行脚本、不加载外部资源，现有 CSP（`img-src 'self' data:`）不用改。交互 HTML（`kind: 'html'`）不带源码，前端只显示标题和「交互图表，请在桌面端查看」。
-- **主题由前端补。** 原样的 SVG 依赖桌面端宿主样式表里的 class 与变量，直接当图片会变成黑方块；`app/public/js/logic/widget.js` 按 visualize 工具公开的色板补一段 `<style>`、`xmlns` 与固有尺寸，系统深浅色切换时重算，渲染在 `app/public/js/app/widget-render.js`。XML 解析失败、源码含孤立代理字符时同样退回一行工具调用，不留裂图。
+- **主题由前端补。** 原样的 SVG 依赖官方桌面端宿主样式表里的 class 与变量，直接当图片会变成黑方块；`app/public/js/logic/widget.js` 按 visualize 工具公开的色板补一段 `<style>`、`xmlns` 与固有尺寸，系统深浅色切换时重算，渲染在 `app/public/js/app/widget-render.js`。XML 解析失败、源码含孤立代理字符时同样退回一行工具调用，不留裂图。
 
 ## 鉴权与范围边界
 
