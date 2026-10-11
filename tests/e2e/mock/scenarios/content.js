@@ -151,6 +151,66 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 会话里的图片 · live 工具截图。形态复刻 app/src/agent/agent.js：tool_result 只带 images 引用
+      // （一张可取、一张超单张上限 tooLarge），摘要只剩文字。图由前端经 image:get 按需取（server.js 的 mock）。
+      command: 'test:tool-screenshot',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
+        console.log('[mock] Starting test:tool-screenshot sequence');
+        const instancesPayload = () => ({ canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances });
+        activeInst.state = 'busy';
+        io.emit('agent:event', { seq: 0, epoch: 'server', sessionId: null, ts: Date.now(), type: 'instances', payload: instancesPayload() });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_shot', name: 'mcp__claude-in-chrome__computer', inputSummary: '{"action":"screenshot"}' }
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 't_shot', ok: true, outputSummary: 'Successfully captured screenshot',
+            images: [
+              { ref: 't:t_shot:0', mediaType: 'image/png', bytes: 159 },
+              { ref: 't:t_shot:1', mediaType: 'image/png', bytes: 3355443, tooLarge: true },
+            ],
+          }
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', { seq: 0, epoch: 'server', sessionId: null, ts: Date.now(), type: 'instances', payload: instancesPayload() });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_screenshot', durationMs: 200, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 会话里的图片 · 用户贴图（终端 / 桌面端粘贴）。走 history_append（与刷新后 loadHistory 同一渲染器），
+      // 形态复刻 app/src/sessions/history.js：images 挂在用户文本条上；纯图消息 content 为空串。
+      // 第二张的引用 mock 不认 → 取图失败，必须显示「图片无法加载」而不是让整条消息出错。
+      command: 'test:history-images',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        console.log('[mock] Starting test:history-images sequence');
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '[Image #1] 这个按钮的位置不对', uuid: 'u-img-paste', images: [{ ref: 'u:u-img-paste:0', mediaType: 'image/png', bytes: 159 }] },
+              { role: 'user', content: '', uuid: 'u-img-gone', images: [{ ref: 'u:u-img-gone:0', mediaType: 'image/jpeg', bytes: 2048 }] },
+              { role: 'assistant', content: '看到了，按钮偏右了。', uuid: 'a-img-1' },
+            ],
+          },
+        });
+        // 收尾 result：客户端发这条命令即 setBusy(true)，不收尾的话同页面后续 sendChatMessage 会白等（同 test:history-append-ts）
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_history_images', durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] },
+        });
+      },
+    },
+    {
       // 历史里的 API Error 差异化渲染。走 history_append（前端 onHistoryAppend → renderHistoryBubbles，
       // 与刷新后 loadHistory 同一渲染器），字段形态复刻 app/src/sessions/history.js 真实产出：
       // isApiErrorMessage/apiErrorStatus/apiError 只挂文本条。apiErrorStatus 有 null 的真形态

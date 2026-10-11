@@ -90,6 +90,8 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
+import { readTranscriptImage } from '../sessions/transcript-image-read.js';
+import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
 import { scratchRoot as defaultScratchRoot } from '../shared/scratch-root.js';
@@ -4219,6 +4221,46 @@ registerSocketConnection(io, socket => {
       ack(await readSubagentFlow(sessionId, cwd, toolUseId));
     } catch (err) {
       ack({ ok: false, error: err.message });
+    }
+  });
+
+  // 会话里的图片（工具截图、用户贴图）：事件与历史只带引用，图本身走这里按需取。
+  //
+  // 【为什么不随事件 / 历史内联】截图中位 ~100KB、最大见过 ~670KB（base64），内联会撑爆环形缓冲与
+  // 手机上的历史加载；绝大多数工具卡用户不会展开。同 tool:full / subagent:flow 的范式：客户端只传
+  // 引用，路径由服务端从 sessionId + cwd 自己算。
+  //
+  // 【先过门，再取图】范围门与会话归属在两个来源之前裁决，与 session:history 同款：只能取「这个 cwd
+  // 下这个会话」里的图，越界 cwd 拒绝并记审计、不回落（SCOPE-05）。read 档放行在跑实例自己的 cwd，
+  // 热移除后的在跑会话不受影响。先查内存再过门的话，带一个有效实例 id 就能绕开范围门（PR #201 review）。
+  // live 截图同样要求 transcript 已在：CLI 在回合开始就写入用户消息，工具结果总在其后。
+  //
+  // 【两个来源，先内存后磁盘】live 截图到达时 transcript 未必已写到这一条，先看发出它的实例内存
+  // （routeInstance 同 tool:full 的口径，另要求实例就是这个会话）；没有再读 transcript。
+  // 两路回传前都过 checkImagePayload：白名单外、超上限、非 base64 一律不交出数据。
+  on(socket, 'image:get', async ({ instanceId, cwd: reqCwd, sessionId, ref } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const parsed = parseImageRef(ref);
+    if (!parsed) return ack({ ok: false, code: 'bad_ref', error: '图片引用无效' });
+    const cwd = routeCwd(reqCwd, { tier: 'read' });
+    if (cwd === null) return ack({ ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, code: 'not_found', error: '会话不存在' });
+    }
+    const agent = instanceId ? routeInstance(instanceId) : null;
+    if (agent && parsed.kind === 'tool' && agent.sessionId === sessionId) {
+      const hit = agent.getToolImage(parsed.id, parsed.index);
+      if (hit) {
+        const check = checkImagePayload(hit);
+        return ack(check.ok
+          ? { ok: true, mediaType: hit.mediaType, data: hit.data, bytes: check.bytes }
+          : { ok: false, code: check.code });
+      }
+    }
+    try {
+      ack(await readTranscriptImage(sessionId, cwd, ref));
+    } catch (err) {
+      ack({ ok: false, code: 'read_failed', error: err.message });
     }
   });
 

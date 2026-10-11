@@ -25,6 +25,9 @@
 //   turn-bg → 同 turn，但收尾前先吐一条 background_tasks_changed（一个常驻后台 Bash），
 //             回合结束后实例停在「pendingTurns=0 但有后台任务」——纯后台任务期（比如 dev server
 //             挂着）。形状照 CLI 2.1.263 的 wire schema：task_id / task_type / description。
+//   turn-screenshot → 同 turn，但回答前先吐一次截图工具调用：assistant tool_use 与一条带 png 图片块的
+//             user tool_result（形态照真 CLI 落盘的 API 形态）。live 截图只存在实例内存里、本文件又不落
+//             transcript，所以「图从内存取到了」可以被单独观察到。
 //   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
@@ -57,6 +60,9 @@ const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
 // 不置位时 response 仍是 {}，既有 S2 与集成用例建在其上的前提逐字不变（同本文件「显式 opt-in」原则）。
 const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
+// turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
+const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
+const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
 const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -98,7 +104,27 @@ rl.on('line', (line) => {
     });
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot') return;
+
+  if (MODE === 'turn-screenshot') {
+    out({
+      type: 'assistant',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: SCREENSHOT_TOOL_USE_ID, name: 'mcp__claude-in-chrome__computer', input: { action: 'screenshot' } }] },
+    });
+    out({
+      type: 'user',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: SCREENSHOT_TOOL_USE_ID, content: [
+        { type: 'text', text: 'Took screenshot' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: SCREENSHOT_PNG } },
+      ] }] },
+    });
+  }
 
   out({
     type: 'assistant',

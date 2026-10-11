@@ -1,6 +1,6 @@
 // tests/invariants/server/request-cwd-scope.test.mjs —— 显式越界的 cwd 一律拒绝，不回落成别的目录
 // 守护：SCOPE-05（显式传入的越界 cwd 一律拒绝并记审计，不得静默回落到别的目录）
-// 测什么：真 server 上，带着一个不在已连接文件夹里的 cwd 发请求——列表、历史、文件浏览、首条消息——
+// 测什么：真 server 上，带着一个不在已连接文件夹里的 cwd 发请求——列表、历史、取图、文件浏览、首条消息——
 //   都拿不到**另一个目录**的数据、也不会把消息投进另一个工作区；以及热移除之后的分档：
 //   已开会话自己的目录仍可读（读档），但不能在那里新开、也不再列它（开 / 建档）。
 // 不测什么 + 为什么：① 判据本身（子目录、worktree、禁区）在 S1 的 folder-access / worktree-ownership
@@ -21,6 +21,8 @@ import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
 
 const TOKEN = 'inv-request-cwd-scope-token';
 const SID_A = randomUUID();
+const IMG_UUID = randomUUID();
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
 
 let root, a, b, c, configPath, auditFile, server, sock;
 const projectDirs = [];
@@ -40,6 +42,10 @@ test.before(async () => {
   writeFileSync(join(dir, `${SID_A}.jsonl`), `${JSON.stringify({
     type: 'user', uuid: randomUUID(), parentUuid: null, timestamp: new Date().toISOString(),
     sessionId: SID_A, cwd: a, isMeta: false, message: { role: 'user', content: [{ type: 'text', text: 'A 里说的话' }] },
+  })}\n${JSON.stringify({
+    type: 'user', uuid: IMG_UUID, parentUuid: null, timestamp: new Date().toISOString(),
+    sessionId: SID_A, cwd: a, isMeta: false,
+    message: { role: 'user', content: [{ type: 'text', text: 'A 里贴的图' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } }] },
   })}\n`);
 
   configPath = join(root, 'ccm.config.json');
@@ -109,6 +115,30 @@ test('显式越界：列表、历史、文件浏览都拒绝，拿不到另一�
   const rows = await waitFor(() => (rowsForC().length >= 3 ? rowsForC() : null), '三次越界各留一条 scope_violation 审计')
     .catch(() => rowsForC());
   assert.ok(rows.length >= 3, `每次越界都要留痕，实际 ${rows.length} 条`);
+});
+
+test('取图：越界 cwd 与「会话不属于这个目录」都拿不到图', async () => {
+  const ref = `u:${IMG_UUID}:0`;
+  // 正对照：历史里给出了这个引用，按 A 取得到——否则下面的「拒绝」可能只是这条通道本身不通
+  const hist = await emit('session:history', { sessionId: SID_A, cwd: a });
+  assert.ok(hist.messages.some(m => m.images?.some(i => i.ref === ref)), `前提：A 的历史给出图片引用，实际 ${JSON.stringify(hist.messages)}`);
+  const ok = await emit('image:get', { cwd: a, sessionId: SID_A, ref });
+  assert.equal(ok.ok, true, `前提：A 自己取得到，实际 ${JSON.stringify(ok)}`);
+  assert.equal(ok.data, PNG);
+
+  const out = await emit('image:get', { cwd: c, sessionId: SID_A, ref });
+  assert.equal(out.ok, false, '拿越界 cwd 取到了 A 的图 = 回落把别的目录的数据交了出去');
+  assert.equal(out.data, undefined);
+  assert.match(out.error ?? '', /不在已连接的文件夹里/);
+
+  // b 在范围内，但 SID_A 不是 b 的会话：会话归属要按 cwd 裁决，不能只看引用找得到
+  const wrongDir = await emit('image:get', { cwd: b, sessionId: SID_A, ref });
+  assert.equal(wrongDir.ok, false, `会话不属于这个目录也给了图：${JSON.stringify(wrongDir).slice(0, 200)}`);
+  assert.equal(wrongDir.data, undefined);
+
+  // 带一个不存在的实例 id 不能绕过上面两道
+  const viaInstance = await emit('image:get', { instanceId: 'no-such-instance', cwd: c, sessionId: SID_A, ref });
+  assert.equal(viaInstance.data, undefined);
 });
 
 test('显式越界的首条消息：拒绝且不在别的工作区里懒开实例', async () => {
