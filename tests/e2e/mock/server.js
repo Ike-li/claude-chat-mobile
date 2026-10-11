@@ -485,6 +485,7 @@ function resetMockState() {
   mockClientError = null;
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
+  mockImageRequests = [];
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
   effortLevel = null;
@@ -748,6 +749,10 @@ app.get('/__read-state', (_req, res) => {
   res.json(readStateSnapshot());
 });
 
+app.get('/__image-requests', (_req, res) => {
+  res.json(mockImageRequests);
+});
+
 // 走 query string：这个 mock server 没装 body parser（其余 __arm-* 端点全是无参的）。
 app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
@@ -998,6 +1003,17 @@ const MOCK_UPLOAD_FILES = new Map([
   ['1700000000000-abcd1234-photo.png', MOCK_ATTACH_PNG],
   ['1700000000001-deadbeef-old.png', MOCK_ATTACH_PNG],
 ]);
+
+// 会话里的图片（对齐 server image:get）：引用 → 载荷。test:transcript-images 场景（scenarios/content.js）
+// 发出这些引用；不在表里的引用回 not_found（真 server 在 transcript 里找不到时就是这个形状）。
+// 48×32 纯色 PNG：比 1×1 大一点，截图时肉眼看得出缩略图确实渲染了。
+const MOCK_TRANSCRIPT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAN0lEQVR4nO3OQQ0AMAgEMFwiBa1zMxccjyYV0HrTp1R8ICQkJJQeCAkJCaUHQkJCQumBkJDQsg8CT+qIkkF+GgAAAABJRU5ErkJggg==';
+const MOCK_TRANSCRIPT_IMAGES = new Map([
+  ['t:t_shot:0', { mediaType: 'image/png', data: MOCK_TRANSCRIPT_PNG }],
+  ['u:u-img-paste:0', { mediaType: 'image/png', data: MOCK_TRANSCRIPT_PNG }],
+]);
+// 收到过的 image:get，供 E2E 断言「收起的卡不取、超上限的不取」（GET /__image-requests）
+let mockImageRequests = [];
 
 
 io.on('connection', socket => {
@@ -5675,6 +5691,14 @@ io.on('connection', socket => {
         { kind: 'tool_result', role: 'user', toolUseId: 'sah-read-1', ok: true, outputSummary: 'export function login() { /* ... */ }', timestamp: new Date(Date.now() - 7 * 60_000).toISOString(), isSidechain: true, parentToolUseId: 'sah-agent-1' },
       ],
     });
+  });
+
+  socket.on('image:get', ({ ref, sessionId, cwd, instanceId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    mockImageRequests.push({ ref, sessionId: sessionId ?? null, cwd: cwd ?? null, instanceId: instanceId ?? null });
+    const hit = MOCK_TRANSCRIPT_IMAGES.get(ref);
+    if (!hit) return ack({ ok: false, code: 'not_found', error: '图片不存在' });
+    ack({ ok: true, mediaType: hit.mediaType, data: hit.data, bytes: Buffer.from(hit.data, 'base64').length });
   });
 
   socket.on('tool:full', ({ toolUseId } = {}, ack) => {

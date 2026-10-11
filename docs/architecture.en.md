@@ -141,6 +141,8 @@ Outbound Socket.io traffic uses one `agent:event` envelope:
 
 The ring buffer is not permanent history. If a gap has fallen out of the buffer or the service restarted, the client falls back to authenticated `session:history` and rebuilds stable messages from the CLI transcript. High-frequency transient state is not all persisted.
 
+Images in a session (tool screenshots, images pasted into the conversation) are **never inlined into `agent:event` or `session:history`**: both carry only references, `images:[{ref, mediaType, bytes, tooLarge?}]`, and the client fetches each one on demand through the authenticated `image:get` when its tile scrolls into view. Screenshots are often hundreds of KB; inlining them would blow up the ring buffer and history loading on the phone. A fetch checks the emitting instance's memory first (a live screenshot can arrive before the transcript is written), then reads the transcript behind the same scope gate and session ownership check as `session:history`. Only png / jpeg / gif / webp are shown, and a single image has a size cap; anything over it shows a placeholder. The rules live in `app/src/shared/transcript-image.js`.
+
 ## Authentication and scope boundaries
 
 ```text

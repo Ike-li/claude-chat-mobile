@@ -1077,6 +1077,14 @@ export const EN_DICT = Object.freeze({
   '读取不完整（文件可能正被改写）': 'Incomplete read (the file may be changing)',
   '预览加载失败：': 'preview failed to load: ',
 
+  // —— 会话里的图片（工具截图、用户贴图）——
+  '图片': 'Image',
+  '图片加载中…': 'Loading image…',
+  '图片无法加载': 'Image unavailable',
+  '图片过大（': 'Image too large (',
+  'MB），未加载': 'MB), not loaded',
+  '点按重试': 'Tap to retry',
+
   // —— 文件浏览 / git 改动 ——
   '无法加载：': 'Could not load: ',
   '加载更多（已显示': 'Load more (showing',
