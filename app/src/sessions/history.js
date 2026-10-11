@@ -8,7 +8,7 @@ import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './wor
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
-import { toolSummary } from '../shared/tool-summary.js';
+import { toolSummary, widgetPayload } from '../shared/tool-summary.js';
 // 会话里的图片只出引用（{ref, mediaType, bytes}），图本身走鉴权的 image:get 按需取，判据与 live 侧共用。
 import { imageRefsOf, toolImageRef, userImageRef, stripImageBlocks } from '../shared/transcript-image.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
@@ -737,6 +737,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       flushText();
       const id = block.id || block.tool_use_id;
       if (!id || !block.name) continue;
+      const widget = widgetPayload(block.name, block.input); // 桌面端 show_widget 的完整源码，见 tool-summary.js
       out.push({
         kind: 'tool_use',
         role: 'assistant',
@@ -745,6 +746,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
         inputSummary: toolSummary(block.input ?? {}),
         timestamp,
         ...side,
+        ...(widget ? { widget } : {}),
       });
       continue;
     }

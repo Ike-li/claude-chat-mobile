@@ -54,3 +54,30 @@ export function redactBase64(value, seen = new WeakSet()) {
 export function toolSummary(value, cap = TOOL_SUMMARY_CAP) {
   return truncate(stringify(redactBase64(value)), cap);
 }
+
+// ── 桌面端 visualize 工具（show_widget）的完整源码通道 ──────────────────────────────────────────
+// 桌面端给会话挂了一个 visualize MCP，模型用它在聊天里画 SVG 图或交互组件；终端 CLI 没有这个工具。
+// 它的 input 是 {title, loading_messages, widget_code}，widget_code 是整段 <svg …> 或 HTML 片段，
+// 走上面的 toolSummary 会被截到 600 字、只剩半截 SVG，前端只能显示成一行工具调用。
+// 这里另出一个字段带完整源码，只对这一个工具名生效，其他工具的事件形状一个字节都不变。
+//
+// 【HTML 不带 code】交互组件要在桌面端的沙箱 iframe 里跑脚本，CCM 不执行任何模型生成的 HTML，
+// 前端只显示标题和提示——源码用不上，就不往事件流和回放缓冲里塞。
+// 【上限按字符数】SVG 基本是 ASCII，字符数≈字节数；超限整个不带，前端退回一行工具调用。
+// 【为什么是 64K】带 widget 的事件会常驻在两处按【条数】封顶的缓存里：回放环形缓冲（每实例 2000 条）
+// 与历史缓存（每会话 2000 条 × LRU 10）。单条上限直接决定常驻内存的量级——256K 时一个满缓冲就能
+// 留下约 512MB 源码，再乘实例数 / LRU 就到 GB 级。真实的图约 4.5KB，64K 留足十倍余量。
+export const WIDGET_TOOL_NAME = 'mcp__visualize__show_widget';
+export const WIDGET_CODE_CAP = 64 * 1024;
+const WIDGET_TITLE_CAP = 200;
+const SVG_HEAD_RE = /^\s*<svg[\s>/]/i;
+
+export function widgetPayload(name, input) {
+  if (name !== WIDGET_TOOL_NAME || !input || typeof input !== 'object') return null;
+  const code = input.widget_code;
+  if (typeof code !== 'string' || !code.trim()) return null;
+  const title = typeof input.title === 'string' ? input.title.slice(0, WIDGET_TITLE_CAP) : '';
+  if (!SVG_HEAD_RE.test(code)) return { title, kind: 'html' };
+  if (code.length > WIDGET_CODE_CAP) return null;
+  return { title, kind: 'svg', code };
+}

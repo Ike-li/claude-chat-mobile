@@ -466,6 +466,13 @@ body.ccm-sheet-open #messages {
   overflow-wrap: break-word;
   word-break: break-word;
 }
+/* 桌面端 show_widget 图表（app/widget-render.js）：SVG 以 data URI 图片显示，宽跟消息流、高按 viewBox 比例；
+   底色已由 logic/widget.js 按 --surface 写进图里，这里只给边框 */
+.widget-card { margin: 0; }
+.widget-card img.widget-svg {
+  display: block; width: 100%; max-width: 680px; height: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-md); cursor: zoom-in;
+}
 .empty-start {
   min-height: 0;
 }

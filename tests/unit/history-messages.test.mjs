@@ -929,3 +929,23 @@ test('getSessionHistory: sidechain 子 agent 消息不受链过滤影响', async
     __setSdkGetSessionMessagesForTest(undefined);
   }
 });
+
+// 桌面端会话在 CCM 里是镜像回显，图只能从 transcript 里来：tool_use 条目必须带 show_widget 的完整源码。
+test('getSessionHistory: show_widget 的 tool_use 条目带完整 widget 源码，别的工具不带', async () => {
+  const cwd = '/test/widget-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const svg = `<svg width="100%" viewBox="0 0 680 530" role="img">${'<text class="ts" x="1" y="1">节点</text>'.repeat(40)}</svg>`;
+  writeJSONL(dir, 'widgethist', [
+    { type: 'assistant', entrypoint: 'claude-desktop', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'w', name: 'mcp__visualize__show_widget', input: { title: 'ccm_arch', loading_messages: ['a'], widget_code: svg } },
+    ] }, timestamp: '2026-10-11T10:00:00.000Z' },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'w', content: [{ type: 'text', text: 'Content rendered and shown to the user.' }] }] }, timestamp: '2026-10-11T10:00:01.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'ls' } }] }, timestamp: '2026-10-11T10:00:02.000Z' },
+  ]);
+  const msgs = await getSessionHistory('widgethist', cwd, 50, { baseDir: BASE });
+  const w = msgs.find(m => m.toolUseId === 'w' && m.kind === 'tool_use');
+  assert.deepEqual(w.widget, { title: 'ccm_arch', kind: 'svg', code: svg });
+  assert.match(w.inputSummary, /已截断/);
+  const b = msgs.find(m => m.toolUseId === 'b');
+  assert.equal('widget' in b, false);
+});

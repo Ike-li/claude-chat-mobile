@@ -3,7 +3,7 @@
 // 只有 live 侧带循环引用护栏。本模块取超集合并，这里锚定合并后的口径。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { truncate, stringify, redactBase64, toolSummary, TOOL_SUMMARY_CAP } from '../../app/src/shared/tool-summary.js';
+import { truncate, stringify, redactBase64, toolSummary, TOOL_SUMMARY_CAP, widgetPayload, WIDGET_TOOL_NAME, WIDGET_CODE_CAP } from '../../app/src/shared/tool-summary.js';
 
 test.describe('truncate', () => {
   test('超过 cap 截断并加尾标', () => {
@@ -125,5 +125,60 @@ test.describe('toolSummary', () => {
   test('脱敏发生在截断之前：大 base64 不占满截断额度', () => {
     const summary = toolSummary({ img: 'A'.repeat(5000), keep: 'important' });
     assert.match(summary, /important/);
+  });
+});
+
+// 桌面端 visualize 工具画的图：inputSummary 截到 600 字只剩半截 SVG，前端只能显示一行工具调用。
+// widget 字段是唯一带完整源码的通道——它不在，图就画不出来；它对别的工具出现，就是把任意大的输入塞进事件流。
+test.describe('widgetPayload（show_widget 的完整源码通道）', () => {
+  const svg = `<svg width="100%" viewBox="0 0 680 120" role="img"><title>t</title>${'<rect x="1" y="1" width="2" height="2"/>'.repeat(40)}</svg>`;
+
+  test('SVG：kind=svg，code 原样不截断，title 透传', () => {
+    assert.ok(svg.length > TOOL_SUMMARY_CAP, '夹具必须超过摘要截断线，否则证明不了「不截断」');
+    const w = widgetPayload(WIDGET_TOOL_NAME, { title: 'arch_overview', loading_messages: ['x'], widget_code: svg });
+    assert.deepEqual(w, { title: 'arch_overview', kind: 'svg', code: svg });
+  });
+
+  test('HTML 片段：kind=html，不带 code（前端不执行也不需要源码）', () => {
+    const w = widgetPayload(WIDGET_TOOL_NAME, { title: 'calc', widget_code: '<div><input type="range"></div><script>go()</script>' });
+    assert.deepEqual(w, { title: 'calc', kind: 'html' });
+  });
+
+  test('开头有空白的 <svg 仍判为 svg；<svgfoo 之类不算', () => {
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: '\n  <svg viewBox="0 0 1 1"></svg>' })?.kind, 'svg');
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: '<svgfoo></svgfoo>' })?.kind, 'html');
+  });
+
+  test('只认 show_widget：别的工具即使带同名字段也不出 widget', () => {
+    assert.equal(widgetPayload('Bash', { widget_code: svg }), null);
+    assert.equal(widgetPayload('mcp__other__show_widget', { widget_code: svg }), null);
+  });
+
+  test('超过上限不带（回退一行工具调用），恰好等于上限照带', () => {
+    const head = '<svg>';
+    const atCap = head + 'x'.repeat(WIDGET_CODE_CAP - head.length);
+    assert.equal(atCap.length, WIDGET_CODE_CAP);
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: atCap })?.code, atCap);
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: atCap + 'x' }), null);
+  });
+
+  // 回放缓冲（每实例 2000 条）与历史缓存（每会话 2000 条 × LRU 10）都按条数封顶，单条上限决定常驻内存的量级：
+  // 256K 时一个满缓冲就能留下约 512MB 源码。真实图约 4.5KB，64K 留足十倍余量。
+  test('上限是 64K 字符：65KB 的 SVG 不带', () => {
+    const svg65k = '<svg viewBox="0 0 1 1">' + 'x'.repeat(65 * 1024) + '</svg>';
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: svg65k }), null);
+    const svg60k = '<svg viewBox="0 0 1 1">' + 'x'.repeat(60 * 1024) + '</svg>';
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: svg60k })?.kind, 'svg');
+  });
+
+  test('输入畸形一律 null，不抛', () => {
+    for (const input of [undefined, null, 'str', [], {}, { widget_code: '' }, { widget_code: '   ' }, { widget_code: 42 }]) {
+      assert.equal(widgetPayload(WIDGET_TOOL_NAME, input), null, `input=${JSON.stringify(input)}`);
+    }
+  });
+
+  test('title 缺失或非字符串记空串', () => {
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { widget_code: '<svg></svg>' }).title, '');
+    assert.equal(widgetPayload(WIDGET_TOOL_NAME, { title: { x: 1 }, widget_code: '<svg></svg>' }).title, '');
   });
 });
