@@ -97,7 +97,15 @@ test.describe('下发与回执', () => {
     assert.equal(h.bars.length, 1);
     assert.ok(h.bars[0].text.includes('重构分支'));
     assert.equal(h.bars[0].cls, 'text-ink-faint');
-    assert.deepEqual(h.deleted, [{ sessionId: 's-1', cwd: '/w/a' }]);
+    assert.deepEqual(h.deleted, [{ sessionId: 's-1', cwd: '/w/a', sectionKey: '/w/a' }]);
+  });
+
+  // worktree / scratch 会话的 cwd 是成员目录，而抽屉的会话缓存按小节归键：只把 cwd 带回去，
+  // 调用方失效的是一个根本不存在的缓存键，重建时先画一帧「含已删行」的旧快照。
+  test('ok:true → 成员目录里的会话，onDeleted 同时带回它所在小节的键', async () => {
+    const h = harness({ res: { ok: true } });
+    await h.ctl.openDeleteSession('s-2', '/w/a/.claude/worktrees/x', 'worktree 里的会话', '/w/a');
+    assert.deepEqual(h.deleted, [{ sessionId: 's-2', cwd: '/w/a/.claude/worktrees/x', sectionKey: '/w/a' }]);
   });
 
   // 删 A 失败（抽屉里挂着 A 的错因）→ 删 B 成功。B 那一行当场消失，而 A 的错因还挂在抽屉顶上，

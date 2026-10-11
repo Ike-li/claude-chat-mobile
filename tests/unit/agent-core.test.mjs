@@ -335,10 +335,12 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
     return { s, dispose, hook };
   };
 
-  test('装了 CwdChanged hook——没有它，CLI 换了 cwd 服务端永远不会知道', () => {
+  // 主通道是主链 tool_use_result（CLI 2.1.280 对 EnterWorktree 不派发 CwdChanged，见
+  // tests/invariants/agent-driving-cwd.test.mjs）。hook 是冗余通道：Bash 里的 cd 只由它报。
+  test('装了 CwdChanged hook——Bash 换 shell cwd 那条路只有它报得上来', () => {
     const { dispose, hook } = cwdHook();
     try {
-      assert.equal(typeof hook, 'function', 'hook 缺席 = 这条修复整条不存在，且症状与没修一模一样');
+      assert.equal(typeof hook, 'function', 'hook 缺席 = Bash 那条路换了 cwd 服务端不会知道');
     } finally { dispose(); }
   });
 
@@ -409,7 +411,11 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
       join(dirname(fileURLToPath(import.meta.url)), '../../app/src/server/app.js'), 'utf8',
     );
     assert.match(src, /onCwdChanged:\s*\(/, 'app.js 没给驾驶实例传 onCwdChanged，换 cwd 后实例仍停在旧目录');
-    assert.match(src, /resolveDrivingCwd\(/, '裁决必须走 resolveDrivingCwd（SCOPE-01 同源判据），不得自行放行');
+    // 2026-09-24：判据换成「已连接的文件夹」的 authorize（与 routeCwd 同一套合法集）。钉两件事：
+    // 走的是那个判据；拒绝时返回 null 保持原样——不是 ensureAuthorized 那样归位到主工作目录
+    // （那会把驾驶轴指到一个 SDK 并不在那儿跑的地方）。
+    assert.match(src, /routableAuth\(nextCwd, \[authorizedRoot\]\)\?\.path \?\? null/,
+      '裁决必须走授权判据（同 routeCwd 一套合法集，带热移除保护的 extraRoots），拒绝时返回 null 而不是归位');
   });
 
   // 【为什么光改 instance.cwd 不够】openInstance 的回调闭包捕获的是**开实例那一刻**的 cwd。
@@ -424,7 +430,7 @@ test.describe('AgentSession — 会话中途换 cwd', () => {
     );
     assert.match(src, /writeSessionEntrypoint\(sid,\s*drivingCwd\)/,
       'entrypoint 写进旧 cwd 的 project 目录 = 在父仓造幽灵 jsonl，把「查不到」变成「查到一个空的」');
-    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*cwd/,
+    assert.match(src, /cwd:\s*drivingCwd,\s*routeCwd:\s*routeKey\b/,
       '条目 cwd 必须是驾驶轴、路由键必须是工作区轴——两轴合一时必有一条是错的');
     assert.match(src, /recordCwdDefaultModel\(drivingCwd,/,
       'defaultModelByCwd 的消费方是 viewingCwdOf()（驾驶轴），归键必须同轴');

@@ -40,6 +40,9 @@ import {
   INTERRUPT_PENDING_TIMEOUT_MS,
   planOutboxWorktreeReuse,
   nextOutboxWorktreeAnchor,
+  planOutboxScratchReuse,
+  nextOutboxScratchAnchor,
+  outboxComposeKey,
 } from '../../app/public/js/logic.js';
 // F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
 import { externalDirtyBusyNack } from '../../app/src/server/instance-routing.js';
@@ -953,6 +956,49 @@ test.describe('离线重放：worktree 意图每批只兑现一次', () => {
   test('ack 透传 instanceId —— 不传锚点就永远设不上', () => {
     assert.equal(presentOfflineResendAck(null, { ok: true, instanceId: 'inst_7' }).instanceId, 'inst_7');
     assert.equal(presentOfflineResendAck(null, { ok: true }).instanceId, null);
+  });
+});
+
+// 同一件事的「无文件夹」版（2026-09-24）：离线时在「无文件夹」的新会话页上连打几条，每条都以
+// {instanceId:null, cwd:<scratch 根>} 入队。重连后逐条重放，服务端的 scratch 分配器只合并**并发**的首条消息，
+// 合并不了**先后**——第二条又懒建一个 scratch 目录、又开一个会话。
+test.describe('离线重放：无文件夹每批只开一个会话', () => {
+  const ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
+  const first = { clientMessageId: 'n1', text: '第一条', instanceId: null, cwd: ROOT };
+  const second = { clientMessageId: 'n2', text: '第二条', instanceId: null, cwd: ROOT };
+  const elsewhere = { clientMessageId: 'n3', text: '别的文件夹', instanceId: null, cwd: '/repo' };
+
+  test('还没有锚 → 第一条原样发出（由它去懒开）；有锚 → 后续条改投那个实例', () => {
+    assert.deepEqual(planOutboxScratchReuse(first, null, ROOT), first);
+    const out = planOutboxScratchReuse(second, 'inst_s', ROOT);
+    assert.equal(out.instanceId, 'inst_s', '不改投就会再建一个 scratch 目录、再开一个会话');
+    assert.equal(out.text, '第二条');
+    assert.equal(second.instanceId, null, '不得就地改写队列项');
+  });
+
+  test('不是无文件夹的条目不受影响；scratch 根未知时一律不动', () => {
+    assert.deepEqual(planOutboxScratchReuse(elsewhere, 'inst_s', ROOT), elsewhere);
+    assert.deepEqual(planOutboxScratchReuse(second, 'inst_s', null), second);
+    const targeted = { ...second, instanceId: 'inst_x' };
+    assert.deepEqual(planOutboxScratchReuse(targeted, 'inst_s', ROOT), targeted, '入队时已经有实例的，照原样投');
+  });
+
+  test('锚点：只从本批第一条成功的无文件夹条目取；失败不设、已有不覆盖、别的条目不写', () => {
+    assert.equal(nextOutboxScratchAnchor(first, { outcome: 'ok', instanceId: 'inst_s' }, null, ROOT), 'inst_s');
+    assert.equal(nextOutboxScratchAnchor(first, { outcome: 'requeue', instanceId: null }, null, ROOT), null);
+    assert.equal(nextOutboxScratchAnchor(second, { outcome: 'ok', instanceId: 'inst_t' }, 'inst_s', ROOT), 'inst_s');
+    assert.equal(nextOutboxScratchAnchor(elsewhere, { outcome: 'ok', instanceId: 'inst_e' }, null, ROOT), null);
+  });
+
+  // 锚点按新会话页分组（2026-10-10 第四轮 review P2）：两页的条目在 instanceId / cwd 上一模一样，
+  // 只有入队时记下的页标识分得开；它要活过 localStorage 往返，否则重载页面之后两页又并成一个会话。
+  test('新会话页标识随条目活过入队与 localStorage 往返；旧条目没有它时归同一组（行为同从前）', () => {
+    const [back] = parseDurableOutbox(dumpDurableOutbox([{ ...first, composeId: 'page-a' }]));
+    assert.equal(back.composeId, 'page-a');
+    assert.equal(outboxComposeKey(back), 'page-a');
+    assert.notEqual(outboxComposeKey({ ...second, composeId: 'page-b' }), outboxComposeKey(back));
+    assert.equal(outboxComposeKey(first), '', '升级前入队的条目：照旧归一组');
+    assert.equal('composeId' in parseDurableOutbox(dumpDurableOutbox([first]))[0], false, '没有就不平白多一个键');
   });
 });
 

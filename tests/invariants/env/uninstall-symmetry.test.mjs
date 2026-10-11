@@ -117,6 +117,10 @@ function makeSandbox() {
   w(join(primary, '.ccm-uploads', 'shot.png'), 'PNG-BYTES-2');                    // 同上，走 env.WORK_DIR
   w(join(fromConfig, '.ccm-uploads', 'cfg.png'), 'PNG-BYTES-3');                  // 同上，走文件里的 WORK_DIR
   w(join(viaEnvList, '.ccm-uploads', 'env.png'), 'PNG-BYTES-4');                  // 同上，走 WORK_DIRS env
+  // 「无文件夹」会话的 scratch 目录（系统应用数据目录下，platform 注入成 darwin）：只报不删——
+  // 里面是用户让模型写下的文件，与工作区代码同一条线。
+  const scratch = join(home, 'Library', 'Application Support', 'claude-chat-mobile', 'scratch-workspaces');
+  w(join(scratch, 'scratch-2026-09-24-Ab12Cd', 'notes.md'), '# 草稿\n');
   w(join(root, 'package.json'), '{"name":"fake-repo","type":"module"}\n');        // 仓库自己的文件
   w(join(root, 'app', 'src', 'keep.js'), '// 仓库代码\n');
 
@@ -138,7 +142,7 @@ function makeSandbox() {
   w(join(data, 'approval-requests.json.bak-手动备份'), '{"mine":true}');
   w(join(data, '我的备注.md'), '# 别删我\n');
 
-  return { box, home, root, work, primary, fromConfig, viaEnvList, data, appPath };
+  return { box, home, root, work, primary, fromConfig, viaEnvList, data, appPath, scratch };
 }
 
 // settings.json 里【用户自己的】条目：桥装完再卸之后必须原样还在。
@@ -297,6 +301,18 @@ test('工作区代码与 .ccm-uploads 不变；仓库里的构建产物只报不
     before.get('root/desktop/build/CCM.app/Contents/Info.plist'),
     'desktop/build 里的中间产物属仓库，伸手删它与永不碰 ~/.claude/projects 是同一条线');
   assert.match(lines.join('\n'), /desktop\/build\/CCM\.app/, '留下的构建产物必须报告，否则用户会以为没卸干净');
+});
+
+test('无文件夹会话的 scratch 根只报不删：内容不变，输出里点名并讲明是什么', () => {
+  const { before, after, lines } = runPurge(sb);
+  const keys = [...before.keys()].filter(k => k.includes('scratch-workspaces'));
+  assert.ok(keys.length >= 3, `夹具本身要有内容，否则这条断言在测空气：${JSON.stringify(keys)}`);
+  for (const k of keys) assert.equal(after.get(k), before.get(k), `scratch 目录被动了：${k}`);
+  // 不报的话，用户以为已经卸干净了，而家目录下还躺着一堆会话目录
+  const line = lines.find(l => l.includes(sb.scratch));
+  assert.ok(line, `scratch 根必须在输出里点名，实际输出：\n${lines.join('\n')}`);
+  assert.match(line, /无文件夹/, `必须讲明它是什么：${line}`);
+  assert.doesNotMatch(line, /未识别/, `刻意保留、不是残留垃圾：${line}`);
 });
 
 test('settings.json 里用户自己的条目原样保留（只回收桥自己写的那部分）', () => {

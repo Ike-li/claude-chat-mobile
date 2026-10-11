@@ -4,7 +4,7 @@
 // worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../../app/public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces, recentWorkspaceChips, summarizeRecentsLoad } from '../../app/public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
@@ -32,6 +32,26 @@ test('mergeRecentSessionsAcrossWorkspaces: 会话自带 cwd 时不被工作区 c
   // 正对照：父仓行照旧回落工作区 cwd
   assert.equal(byId['main-1'].cwd, '/repo');
   assert.equal(byId['main-1'].worktree, null);
+});
+
+// 首页的项目胶囊：点一下进那个项目最近的一条。行的 cwd 是会话自己的目录（worktree、scratch 目录），
+// 按它去重的话同一个项目会冒出好几个同名胶囊——「无文件夹」每个会话各一个。
+test('recentWorkspaceChips: 一个项目一个胶囊，取它最近的那一条；worktree、scratch 目录里的会话不各占一个', () => {
+  const recent = mergeRecentSessionsAcrossWorkspaces([
+    { cwd: '/repo', workspaceName: 'repo', sessions: [
+      { id: 'wt', lastUsedAt: 3000, cwd: '/repo-feat', worktree: 'feat' },
+      { id: 'main', lastUsedAt: 1000 },
+    ] },
+    { cwd: '/scratch', workspaceName: '无文件夹', sessions: [
+      { id: 's1', lastUsedAt: 2500, cwd: '/scratch/scratch-2026-09-24-aaaaaa' },
+      { id: 's2', lastUsedAt: 2000, cwd: '/scratch/scratch-2026-09-24-bbbbbb' },
+    ] },
+    { cwd: '/other', workspaceName: 'other', sessions: [{ id: 'o', lastUsedAt: 500 }] },
+  ], { limit: 10 });
+  const chips = recentWorkspaceChips(recent);
+  assert.deepEqual(chips.map(c => c.id), ['wt', 's1', 'o'], '每个项目取最近那一条，按时间序');
+  assert.deepEqual(chips.map(c => c.workspaceName), ['repo', '无文件夹', 'other']);
+  assert.equal(chips[0].cwd, '/repo-feat', '点胶囊进的是那一条会话：cwd 仍是它自己的目录');
 });
 
 test('mergeRecentSessionsAcrossWorkspaces: 跨 cwd 合并、按 lastUsedAt 降序截断、补 workspaceName', () => {

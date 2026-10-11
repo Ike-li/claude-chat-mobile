@@ -4,7 +4,7 @@
 // .claude/settings.local.json）后，web 端 compose 页默认档摘要不会自动感知。config:refresh 是手动
 // 兜底入口：force 重读 + broadcastInstances。
 // 验证：①ack {ok:true}；②instances 广播携带强制重读后的最新 defaultPermissionMode（证明真的重读了
-// 磁盘，不是吐缓存里的旧值）；③显式传非法/越界 cwd 时回落 viewingCwd，ack 仍 ok。
+// 磁盘，不是吐缓存里的旧值）；③显式传非法/越界 cwd 时拒绝（ok:false），不拿别的目录的配置冒充（SCOPE-05）。
 // 零 token 成本（不起真 claude turn，只读本地 settings.local.json；sdkResolveSettings 不 spawn CLI）。
 // 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
 import '../setup/require-disposable-env.mjs';
@@ -134,14 +134,15 @@ test.describe('config:refresh（CLI 配置刷新按钮）', () => {
     }
   });
 
-  test('显式传非法/越界 cwd 时回落当前 viewingCwd，ack 仍 ok', async () => {
+  // 2026-09-24（SCOPE-05）：此前回落当前 viewingCwd 且 ack ok——刷新的是另一个目录的配置，用户却以为刷了自己点的那个。
+  test('显式传非法/越界 cwd 时拒绝，ack ok:false', async () => {
     const client = createClient();
     try {
       await client.waitForConnect();
       await client.waitForEvent('instances');
 
       const ack = await client.emitAck('config:refresh', { cwd: '/definitely/not/whitelisted' });
-      assert.equal(ack.ok, true);
+      assert.equal(ack.ok, false, '越界 cwd 不得回落成别的目录去刷新');
     } finally {
       client.disconnect();
     }

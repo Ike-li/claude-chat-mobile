@@ -39,6 +39,7 @@ import { resolveWorkdirSource as loadWorkdirSource, resolveEnvPrimaryWorkdir } f
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../app/src/ops/config.js';
 import { resolveBindPlan } from '../app/src/shared/bind-host.js';
+import { scratchRoot } from '../app/src/shared/scratch-root.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency, isDistributionInstall } from './doc-consistency.js';
 import {
   authTokenDiagnostic,
@@ -63,9 +64,10 @@ import {
   uploadsFootprintDiagnostic,
   tailscaleDiagnostic,
   workdirBreadthDiagnostic,
+  connectedFoldersDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
-import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
+import { CONFIG_FILE_NAMES, probeClaudeBin, probeTailscale, probeListeningProcesses, probeConnectedFolders } from '../app/src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude / tailscale 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
 import { DEFAULT_PORT } from '../app/src/ops/env-schema.js';
@@ -159,6 +161,9 @@ function checkWorkDir() {
         `过宽：${dir}（家目录本身，或 /、/Users、/home 这类根）——范围内的文件对远程入口全部可读，FILE_EDIT 缺省开着时还可直写。请改成具体的项目目录`,
         `Overly broad: ${dir} (the home directory itself, or a root such as /, /Users or /home) — everything in scope is readable by the remote entrypoint, and writable while FILE_EDIT is on (the default). Narrow it to a specific project directory`));
     }
+    // 「已连接的文件夹」布局：多余的 worktree 条目、无文件夹目录落在 git 仓库里或不可写（只报不拦）。
+    const layout = probeConnectedFolders({ dirs: result.entries.map(e => e.path), scratchRoot: scratchRoot() });
+    for (const d of connectedFoldersDiagnostic({ ...layout, source: from, lang: LANG })) ({ ok, warn, fail })[d.status](d.name, d.detail);
   }
 }
 

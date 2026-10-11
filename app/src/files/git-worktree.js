@@ -3,10 +3,9 @@
 // 与同域 git-workspace.js 的分工：那边是**只读**的 status/diff（"看改了什么"），本模块会
 // `git worktree add`（建一棵新工作树），所以单独成文件、单独声明，不把写操作混进那份只读声明里。
 //
-// 【落点固定】worktree 恒建在 `<repo>/.claude/worktrees/<name>`。这不是审美选择：那条路径正是
-// sessions/workdirs.js 的 resolveManagedWorktree 唯一放行的形态，也是 history.js 枚举会话时唯一
-// 会扫的目录。建在别处 = 建完既打不开也看不见。该目录已被本仓 .gitignore 的 `/.claude/*` 覆盖，
-// 不污染父仓 git status。
+// 【落点固定】worktree 恒建在 `<repo>/.claude/worktrees/<name>`。这不是审美选择：那条路径在仓库
+// 子树里（授权判据按子目录直接放行），也是 history.js 枚举托管 worktree 会话、树删后推父仓的固定路径。
+// 该目录已被本仓 .gitignore 的 `/.claude/*` 覆盖，不污染父仓 git status。
 //
 // 【删除极度保守】本模块只提供"证明干净"的检查，**不提供删除**。判据取交集：工作树无改动
 // （含未跟踪文件）**且**没有只存在于本分支的提交。任何一项拿不到（路径不在、不是 worktree、

@@ -339,6 +339,8 @@ export function decideHookEventActions(events, {
   viewingSessionId = null,
   viewingCwd = null,
   workDirs = [],
+  // 授权判据（组装根注入 authorize）：子目录与随仓库授权的 worktree 也算。缺省退回只认工作区本身。
+  isAuthorizedCwd = null,
   hasForegroundClient = false,
   now = Date.now(),
   throttleState = new Map(),
@@ -358,7 +360,8 @@ export function decideHookEventActions(events, {
     // verify 事件不受工作区白名单约束：安装回环验证可能在任意目录执行
     if (isVerifyEvent(event)) { acks.push(event.sessionId); continue; }
     const cwd = resolve(event.cwd);
-    if (!allowed.has(cwd)) { ignored += 1; continue; }
+    const authorized = typeof isAuthorizedCwd === 'function' ? Boolean(isAuthorizedCwd(event.cwd)) : allowed.has(cwd);
+    if (!authorized) { ignored += 1; continue; }
     invalidate.add(event.cwd);
     // 「正看着这个会话」= 视图落在这个 session/cwd 上，不是随便哪个 approved 客户端在前台就算——
     // 下面 Stop 的抑制判据与 catchUp 复用同一个收窄条件，此前 Stop 只喂了 hasForegroundClient，

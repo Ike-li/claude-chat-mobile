@@ -7,7 +7,8 @@
 //   永不动：~/.claude/projects、~/.cloudflared、不在 manifest 的 launchd unit（含手工装的
 //   com.ccm.tunnel*）、settings.json 里桥条目以外的内容、**两处附件目录**（只报不删——历史消息
 //   的附件预览要读它们，沿用 doctor 的立场）：数据根下的 uploads/（2026-09-06 起的落点，刻意
-//   不进 DATA_DIR_WHITELIST，所以 --purge 也不删），以及各工作区搬家前遗留的 .ccm-uploads/。
+//   不进 DATA_DIR_WHITELIST，所以 --purge 也不删），以及各工作区搬家前遗留的 .ccm-uploads/；
+//   还有「无文件夹」会话的 scratch 根（同样只报不删：里面是用户让模型写下的文件，与工作区代码同一条线）。
 //
 // 两档语义：默认只卸安装面（launchd 受管 unit / CCM.app / 偏好域 / 两个 CLI 桥及其
 // ~/.claude/ccm 残余）；--purge 追加数据面（数据根白名单逐项、仓库根配置文件、受管 unit 日志）。
@@ -29,6 +30,7 @@ import { readConfigFileRaw, readConfigFileValues } from '../app/src/ops/config-f
 import { resolveWorkdirSource } from '../app/src/sessions/workdirs.js';
 import { claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
 import { UPLOADS_SUBDIR, LEGACY_UPLOAD_DIR } from '../app/src/files/uploads.js';
+import { scratchRoot } from '../app/src/shared/scratch-root.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(HERE);
@@ -376,6 +378,11 @@ export function createUninstaller({
         const uploads = join(dir, LEGACY_UPLOAD_DIR);
         if (existsSync(uploads)) out(`  ⚠ 保留（附件改落数据目录前的遗留，只报不删）：${uploads}`);
       }
+
+      // 6e. 「无文件夹」会话的 scratch 根：只报不删。它在系统应用数据目录、不在数据根里，
+      //     解析与 server 同源（scratch-root.js）；platform / home 走注入值，测试才落得进沙箱。
+      const scratch = scratchRoot({ platform, home, env });
+      if (existsSync(scratch)) out(`  ⚠ 保留（无文件夹会话的工作目录，里面可能有你让 Claude 写下的文件，只报不删）：${scratch}`);
     }
 
     // ---- 收尾：永不动 + 手动清单 ----

@@ -454,6 +454,21 @@
     </div>
   </div>
 
+  <!-- 「选文件夹」面板（已连接的文件夹，2026-09-24）：新会话在哪开——已连接的文件夹（可进子文件夹、就地新建）、
+       无文件夹、添加文件夹（浏览家目录）。内容由 app/folder-picker.js 渲染，开合走 openSheet/closeSheet。 -->
+  <div id="folderPickerModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="选择文件夹" data-testid="folder-picker">
+    <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <button id="folderPickerBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级" aria-label="返回上一级" data-testid="folder-picker-back">←</button>
+        <div id="folderPickerTitle" class="flex-1 min-w-0 text-sm font-semibold text-ink truncate" data-testid="folder-picker-title">选择文件夹</div>
+        <button id="folderPickerClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
+      </div>
+      <div id="folderPickerStatus" class="hidden px-4 py-1.5 text-[11px] text-danger bg-danger/5 border-b border-line shrink-0" data-testid="folder-picker-status" role="status"></div>
+      <div id="folderPickerBody" class="flex-1 overflow-y-auto"></div>
+    </div>
+  </div>
+
   <!-- 服务状态面板（NFR-15 可见性）：设置「访问与设备」组入口 → 两段式（基础/异常告警，判定化：裸计数留 /metrics）。
        数据走鉴权 service:status ack，面板开着时 5s 定时重拉；结构同 workspaceModal，开合走 openSheet/closeSheet。 -->
   <div id="serviceStatusModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
