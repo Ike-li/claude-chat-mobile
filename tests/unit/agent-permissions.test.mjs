@@ -252,6 +252,74 @@ test.describe('权限闸门', () => {
       s.resolvePermission('t-persist', 'deny');
       s.dispose();
     });
+
+    // Claude in Chrome 的 read_page / find / computer 只带 tabId，卡片上看不出网站；网站只在 CLI 的建议规则里。
+    // 卡片拿 chromeSite 做两件事：标题写出网站，「总是允许」写成「本会话内允许 <网站> 上的所有操作」。
+    // 后一句是对授权范围的陈述，而勾选回传的是**全部** session 档建议（见 resolvePermission）——
+    // 所以只有 session 档恰好就是「允许这个网站」这一条时才下发，多一条别的规则就不能这么说。
+    const chromeSiteRule = (site, destination = 'session') => ({
+      type: 'addRules', destination, behavior: 'allow', rules: [{ toolName: 'ClaudeInChromeDomain', ruleContent: site }],
+    });
+    // 内置 Claude in Chrome 的来源：CLI 把它配成 scope:'dynamic' 的 stdio 服务器，mcp_server.source 因此是 'dynamic'；
+    // 项目 / 用户 / 插件里配一个同名的 claude-in-chrome，source 会是 project / user / plugin（SDK 文档：名字不可信，认 source）。
+    const BUILTIN_CHROME = { name: 'claude-in-chrome', source: 'dynamic' };
+    const askChrome = (s, toolUseID, suggestions, mcpServer = BUILTIN_CHROME) => s.handleCanUseTool('mcp__claude-in-chrome__read_page', { tabId: 7 }, {
+      signal: new AbortController().signal, toolUseID, suggestions, mcpServer,
+    });
+
+    test('handleCanUseTool：内置 Claude in Chrome、session 档建议恰好是一条 ClaudeInChromeDomain → 下发 chromeSite，快照重建同样带着', () => {
+      const { s, events } = makeSession();
+      // 形状取自 2026-10-11 真会话的 server 日志
+      askChrome(s, 't-chrome', [chromeSiteRule('example.org')]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-chrome').payload;
+      assert.equal(live.chromeSite, 'example.org', '卡片要靠它显示网站；缺了就只剩 tabId，看不出要操作哪个网站');
+      assert.equal(live.claudeInChrome, true, '来源核对过是内置 Claude in Chrome，卡片才能用它的名义写标题');
+      const rebuilt = s.pendingRequestsSnapshot().permissions.find(p => p.requestId === 't-chrome');
+      assert.deepEqual(rebuilt, live, '切会话重建的卡片也得看得出网站');
+      s.resolvePermission('t-chrome', 'deny');
+      s.dispose();
+    });
+
+    test('askPermission：session 档除了网站规则还有别的规则 → 不下发 chromeSite（不能把授权范围说小）', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-mixed', [
+        chromeSiteRule('example.org'),
+        { type: 'addRules', destination: 'session', behavior: 'allow', rules: [{ toolName: 'Bash', ruleContent: 'ls' }] },
+      ]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-mixed').payload;
+      assert.equal(live.chromeSite, undefined, '勾选会连 Bash 规则一起放行，卡片却只说网站——用户会批准一个他没看清的授权');
+      s.resolvePermission('t-mixed', 'deny');
+      s.dispose();
+    });
+
+    test('askPermission：网站规则不是 session 档 → 不下发 chromeSite（「本会话内」那句话就不成立）', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-local', [chromeSiteRule('example.org', 'localSettings')]);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-local').payload;
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-local', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：项目里配了个同名 claude-in-chrome（source=project）→ 不标 claudeInChrome、不下发 chromeSite', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-fake', [chromeSiteRule('example.org')], { name: 'claude-in-chrome', source: 'project' });
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-fake').payload;
+      assert.equal(live.claudeInChrome, undefined, '同名的第三方服务器不得在卡片上冒充成 Claude in Chrome');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-fake', 'deny');
+      s.dispose();
+    });
+
+    test('handleCanUseTool：CLI 没带 mcpServer（旧版 CLI）→ 不标 claudeInChrome，卡片退回原样', () => {
+      const { s, events } = makeSession();
+      askChrome(s, 't-nosrc', [chromeSiteRule('example.org')], null);
+      const live = events.find(e => e.type === 'permission_request' && e.payload.requestId === 't-nosrc').payload;
+      assert.equal(live.claudeInChrome, undefined, '来源不明时按不可信处理');
+      assert.equal(live.chromeSite, undefined);
+      s.resolvePermission('t-nosrc', 'deny');
+      s.dispose();
+    });
   });
 
   // 持久化台账（approval_request 表，承接 NFR-16/19/22，Phase 4）——askPermission/resolvePermission

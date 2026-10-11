@@ -261,6 +261,9 @@
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <div class="sheet-handle"></div>
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
+      <!-- Claude in Chrome 工具的一句话标题（「Claude in Chrome 想在 example.org 上读取页面」），其它工具隐藏。
+           文案由 logic/permissions.js 的 describeChromePermission 算，showNextPerm 每张卡片重写。 -->
+      <div id="permTitle" class="hidden text-sm mb-1 text-ink" data-testid="perm-title"></div>
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
       <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
@@ -269,7 +272,7 @@
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
       <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
-        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">总是允许此类操作
+        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)"><span id="permAlwaysLabel" data-testid="perm-always-label">总是允许此类操作</span>
       </label>
       <!-- 「永久」档：仅当 CLI 给出了会落盘的规则（permission_request.persistDestinations）时才出现。
            默认停在「仅本会话」——这是改版前的唯一行为，不勾任何东西就不该悄悄多出持久授权。
