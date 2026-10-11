@@ -1,7 +1,7 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
-import { open, stat, readdir, readFile } from 'node:fs/promises';
-import { constants as fsConstants, createReadStream } from 'node:fs';
+import { open, stat, readdir } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
@@ -73,6 +73,27 @@ export function getProjectDir(cwd) {
 // 拒绝含 / \ . 等的穿越形态；非法 id 调用方返回空/settled/-1，不拼进 join。
 export function isSafeSessionId(id) {
   return typeof id === 'string' && /^[0-9a-zA-Z_-]+$/.test(id);
+}
+
+// 本模块打开 ~/.claude/projects 下的文件（transcript、子代理的 jsonl 与 meta）一律走这里：O_NONBLOCK 打开，
+// fstat 不是普通文件就抛。那棵树模型写得动，某个文件被换成 FIFO 的话阻塞式 open 永远不返回，占死一个 libuv 线程
+// （默认只有 4 个，几个就让列表、历史、项目发现的读盘整体停摆；2026-10-11 review）。普通文件上 O_NONBLOCK 不影响读。
+// 抛出来交给各调用点原有的读失败分支：FIFO 与读不出的文件同一个结果，不另起语义。
+async function openRegularFile(file) {
+  const fh = await open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  const st = await fh.stat().catch(() => null);
+  if (st?.isFile()) return { fh, st };
+  await fh.close().catch(() => {});
+  throw new Error(`not a regular file: ${file}`);
+}
+
+async function readRegularText(file) {
+  const { fh } = await openRegularFile(file);
+  try {
+    return await fh.readFile('utf-8');
+  } finally {
+    await fh.close().catch(() => {});
+  }
 }
 
 // 「当前链」的 uuid 集合——即 CLI 自己还认的那些消息。返回 null = 拿不到，调用方据此【不过滤】。
@@ -181,13 +202,12 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
     }
   };
+  let input;
   try {
     // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
     // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
-    const rl = createInterface({
-      input: createReadStream(historyFile, { encoding: 'utf-8' }),
-      crlfDelay: Infinity
-    });
+    input = (await openRegularFile(historyFile)).fh.createReadStream({ encoding: 'utf-8' });
+    const rl = createInterface({ input, crlfDelay: Infinity });
     for await (const line of rl) {
       if (!line.trim()) continue;
       let entry;
@@ -300,7 +320,9 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
     }
   } catch {
-    return []; // 读取失败
+    return []; // 读取失败（含不是普通文件）
+  } finally {
+    input?.destroy(); // 读完已自行关闭；中途抛出时也要把句柄关掉
   }
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
@@ -1073,16 +1095,13 @@ async function foreignSessionIds(dir, cwd) {
 // transcript 头窗与尾窗里各条记录的 cwd（按记录先后，可重复）。只读两个窗，与 readHeadMeta 同一对上限：
 // 搬迁后仍在活动的会话，尾窗里就是新 cwd；两窗之间的死区只会让证据更少（方向是少认领，见上）。
 // tailBytes：只读文件末尾这么多（归属判定的快路径）。
-// O_NONBLOCK 打开再看是不是普通文件：~/.claude/projects 下的文件模型写得动，被换成 FIFO 的话阻塞式 open
-// 永远不返回，占死一个 libuv 线程（默认只有 4 个，几个就让列表与项目发现的读盘整体停摆；2026-10-11 review）。
-// 不是普通文件同读不出：没有证据。
+// 不是普通文件（FIFO 等，见 openRegularFile）同读不出：没有证据。
 async function readCwdEvidence(file, tailBytes = 0) {
   const out = [];
   let fh;
   try {
-    fh = await open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-    const st = await fh.stat();
-    if (!st.isFile()) return out;
+    let st;
+    ({ fh, st } = await openRegularFile(file));
     const { size } = st;
     const windows = tailBytes ? [[Math.max(0, size - tailBytes), Math.min(size, tailBytes)]]
       : size > HEAD_READ_BYTES + TAIL_READ_BYTES
@@ -1486,16 +1505,16 @@ export function invalidateListCache(cwd) {
 // 读文件头部 HEAD_READ_BYTES，提取 title（ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
 // model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
 // 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
-// size 由 listSessionsPage 的 stat 透传复用（省一次 syscall）；未传时回退 fstat，保持可独立调用。
+// size 由 listSessionsPage 的 stat 透传（与排序用的同一份）；未传时用打开时 fstat 的。
 async function readHeadMeta(file, size) {
   const meta = { title: '', model: null, entrypoint: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
   let aiTitle = '', firstUser = '', firstCmd = '';
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       const headLen = Math.min(HEAD_READ_BYTES, size);
       // 两个 buffer 都被 fh.read 全量写入、只 toString 到 bytesRead——allocUnsafe 免去无谓零填充（尤其尾窗 512KB）。
       const buf = Buffer.allocUnsafe(headLen);
@@ -1581,12 +1600,12 @@ export function lastMessageActivityMs(entries) {
   return null;
 }
 
-// 读 transcript 尾窗，解析最后主链消息时间。size 可注入省一次 stat；失败/空文件 → null。
+// 读 transcript 尾窗，解析最后主链消息时间。size 可注入（缺省用 fstat 的）；失败/空文件 → null。
 async function readLastMessageActivityMs(file, size) {
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (!size) return null;
       const start = size > LIST_ACTIVITY_TAIL_BYTES ? size - LIST_ACTIVITY_TAIL_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1619,14 +1638,14 @@ export function lastPermissionMode(entries) {
 
 // 从 transcript 尾部读回末条 permission-mode（tail-oriented：档记录随会话推进落盘，最后一条在文件尾）。
 // 只读末尾 TAIL_READ_BYTES：与 readHeadMeta 尾窗同款权衡——极端超大会话里若末条档记录距尾 >512KB
-// 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入省一次 stat；baseDir 供单测指向 tmpdir。
+// 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入（缺省用 fstat 的）；baseDir 供单测指向 tmpdir。
 export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return null;
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1665,9 +1684,9 @@ export async function readLastAssistantModel(sessionId, cwd, { baseDir = CLAUDE_
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return null;
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -1925,9 +1944,9 @@ export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAU
   if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
-    const fh = await open(file, 'r');
+    const { fh, st } = await openRegularFile(file);
     try {
-      if (size == null) ({ size } = await fh.stat());
+      size ??= st.size;
       if (size === 0) return [];
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
@@ -2056,16 +2075,16 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
     const entry = { agentId, agentType: null, description: null, lastToolName: null, lastActivityMs: 0 };
     // meta.json：agentType 恒有，description 只有被 spawn 的子代理有（顶层编排 agent 没有）
     try {
-      const meta = JSON.parse(await readFile(join(dir, `agent-${agentId}.meta.json`), 'utf-8'));
+      const meta = JSON.parse(await readRegularText(join(dir, `agent-${agentId}.meta.json`)));
       if (meta && typeof meta === 'object') {
         if (typeof meta.agentType === 'string') entry.agentType = meta.agentType;
         if (typeof meta.description === 'string') entry.description = meta.description;
       }
     } catch { /* meta 缺失/损坏：仍按无描述的子代理报出，不整条丢弃 */ }
     try {
-      const fh = await open(join(dir, name), 'r');
+      const { fh, st } = await openRegularFile(join(dir, name));
       try {
-        const { size, mtimeMs } = await fh.stat();
+        const { size, mtimeMs } = st;
         entry.lastActivityMs = mtimeMs;
         if (size > 0) {
           const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
@@ -2125,7 +2144,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
     const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
     if (!m) continue;
     try {
-      const meta = JSON.parse(await readFile(join(dir, name), 'utf-8'));
+      const meta = JSON.parse(await readRegularText(join(dir, name)));
       if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
         hit = { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
           description: typeof meta.description === 'string' ? meta.description : null };
@@ -2144,12 +2163,11 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
     items.push(item);
     if (items.length > limit * 2) items.splice(0, items.length - limit);
   };
+  let input;
   try {
     // 流式逐行读：单文件可达 1.2MB，一次性 buffer 会在 always-on 进程里堆出峰值
-    const rl = createInterface({
-      input: createReadStream(join(dir, `agent-${hit.agentId}.jsonl`), { encoding: 'utf-8' }),
-      crlfDelay: Infinity,
-    });
+    input = (await openRegularFile(join(dir, `agent-${hit.agentId}.jsonl`))).fh.createReadStream({ encoding: 'utf-8' });
+    const rl = createInterface({ input, crlfDelay: Infinity });
     for await (const line of rl) {
       if (!line.trim()) continue;
       let entry;
@@ -2167,6 +2185,8 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
     }
   } catch {
     return { ok: false, reason: 'read_failed' };
+  } finally {
+    input?.destroy();
   }
   const kept = items.slice(-limit);
   return {
