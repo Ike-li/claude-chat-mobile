@@ -2,183 +2,890 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>架构图集 · Claude Chat Mobile</title>
-  <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/diagrams/">
-<meta name="description" content="Claude Chat Mobile 的 13 张可交互架构图：双通道同步、单驾驶员模型、鉴权六道门、审批生命周期、推送抑制、文件与会话域、测试归类。">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/diagrams/">
+<meta name="description" content="Claude Chat Mobile 架构总览：两条驾驶通道、单驾驶员状态、断线回放、鉴权五层与代码分布，并附 13 张按功能域拆开的可交互详图。">
+<style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
 <style>
-:root{
-  --bg:#f6f7f9; --panel:#ffffff; --ink:#111827; --muted:#5b6472; --line:#e3e6eb;
-  --accent:#0f8a6a; --accent-soft:#e6f4ef; --chip:#eef1f5; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+/* 布局：760px 正文列 + 可放宽到 1320px 的图；总览图下方两栏（路径步骤 | 组件详情），窄屏叠成一列 */
+:root {
+  --bg: #F4F3EE; --surface: #FBFAF6; --sunk: #EFEDE4;
+  --line: #E3E0D6; --line-strong: #CBC6B8;
+  --ink: #1F1E1B; --ink-soft: #54514A; --ink-faint: #73706A;
+  --accent: #AE5238; --accent-wash: #F0E4DD;
+  --cli: #1B6FB3; --cli-wash: #E1EBF4;
+  --push: #9A5F22; --push-wash: #F2E7D8;
+  --danger: #BC4334;
+  --font-display: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "PingFang SC", monospace;
 }
-@media (prefers-color-scheme:dark){
-  :root{ --bg:#0b0f14; --panel:#121821; --ink:#e6eaf0; --muted:#93a0b1; --line:#222b38;
-         --accent:#3ddba4; --accent-soft:#10281f; --chip:#1a222d; --shadow:none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121211; --surface: #1C1B1A; --sunk: #171615;
+    --line: #2E2C2A; --line-strong: #47443F;
+    --ink: #EEEEEC; --ink-soft: #A9A7A2; --ink-faint: #85837E;
+    --accent: #E08566; --accent-wash: #2D231E;
+    --cli: #5AA2E0; --cli-wash: #15212C;
+    --push: #D9A752; --push-wash: #2A2317;
+    --danger: #E86452;
+    color-scheme: dark;
+  }
 }
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  -webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:26px 24px 72px}
-nav{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:26px;font-size:13.5px}
-nav a{color:var(--muted);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:1px}
-nav a:hover{color:var(--accent);border-bottom-color:var(--accent)}
-header{margin-bottom:34px}
-h1{margin:0 0 10px;font-size:26px;letter-spacing:.2px;display:flex;align-items:center;gap:11px}
-h1::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--accent);flex:none}
-.lede{margin:0;color:var(--muted);max-width:70ch}
-.pin{margin-top:14px;display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;
-  font-family:var(--mono);font-size:12px;color:var(--muted);
-  background:var(--chip);border:1px solid var(--line);border-radius:7px;padding:6px 11px}
-.pin b{color:var(--ink);font-weight:600}
-h2{margin:36px 0 4px;font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
-  font-family:var(--mono);font-weight:600}
-h2 + .sub{margin:0 0 16px;color:var(--muted);font-size:13.5px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
-a.card{display:flex;flex-direction:column;gap:9px;text-decoration:none;color:inherit;
-  background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px 16px 16px;
-  box-shadow:var(--shadow);transition:border-color .14s,transform .14s}
-a.card:hover{border-color:var(--accent);transform:translateY(-1px)}
-a.card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.top{display:flex;align-items:center;gap:9px}
-.num{font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--accent);
-  background:var(--accent-soft);border-radius:5px;padding:2px 7px;letter-spacing:.04em}
-.kind{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--chip);
-  border:1px solid var(--line);border-radius:5px;padding:2px 7px}
-.title{font-size:15.5px;font-weight:650;line-height:1.4}
-.desc{margin:0;color:var(--muted);font-size:13.5px}
-ul{margin:2px 0 0;padding-left:16px;color:var(--muted);font-size:12.8px;line-height:1.6}
-li::marker{color:var(--accent)}
-code{font-family:var(--mono);font-size:.92em;background:var(--chip);border-radius:4px;padding:1px 4px}
-footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
-footer p{margin:0 0 8px}
-footer a{color:var(--accent);text-decoration:none}
-footer a:hover{text-decoration:underline}
-footer code{font-size:12.4px}
+:root[data-theme="dark"] {
+  --bg: #121211; --surface: #1C1B1A; --sunk: #171615;
+  --line: #2E2C2A; --line-strong: #47443F;
+  --ink: #EEEEEC; --ink-soft: #A9A7A2; --ink-faint: #85837E;
+  --accent: #E08566; --accent-wash: #2D231E;
+  --cli: #5AA2E0; --cli-wash: #15212C;
+  --push: #D9A752; --push-wash: #2A2317;
+  --danger: #E86452;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg); color: var(--ink);
+  font: 15px/1.7 var(--font-ui);
+  padding-inline: 16px; padding-block: 40px 72px;
+}
+.wrap { max-width: 1320px; margin: 0 auto; display: grid; gap: 56px; }
+.col { max-width: 760px; min-width: 0; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.005em; }
+h1 { font-size: clamp(30px, 4.4vw, 44px); line-height: 1.15; font-weight: 700; }
+h2 { font-size: 24px; line-height: 1.3; font-weight: 700; }
+h3 { font-size: 18px; line-height: 1.35; font-weight: 600; }
+p { margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+code { background: var(--sunk); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+
+.eyebrow { font: 12px/1.4 var(--font-mono); letter-spacing: 0.06em; color: var(--ink-faint); }
+header { display: grid; gap: 16px; }
+header .lede { font-size: 17px; color: var(--ink-soft); max-width: 66ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 13.5px; color: var(--ink-soft); }
+.facts b { font-family: var(--font-mono); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+section { display: grid; gap: 18px; }
+.sec-head { display: grid; gap: 8px; }
+.sec-head p { color: var(--ink-soft); max-width: 68ch; }
+
+figure { margin: 0; display: grid; gap: 12px; }
+.fig { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-width: 0; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.scroll svg { display: block; width: 100%; height: auto; }
+#arch { min-width: 1040px; }
+.svg-mid { min-width: 680px; }
+figcaption { font-size: 13.5px; color: var(--ink-soft); max-width: 80ch; }
+figcaption b { color: var(--ink); font-weight: 600; }
+.hint { display: none; font-size: 12.5px; color: var(--ink-faint); }
+@media (max-width: 900px) { .hint { display: block; } }
+
+/* SVG 通用 */
+svg text { font-family: var(--font-ui); }
+.node rect { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; transition: stroke .15s; }
+.node.store rect { fill: var(--sunk); }
+.node.opt rect { stroke-dasharray: 5 4; }
+.node text { text-anchor: middle; }
+.t { font: 600 13px var(--font-ui); fill: var(--ink); }
+.tm { font: 600 12px var(--font-mono); fill: var(--ink); }
+.s { font: 11.5px var(--font-mono); fill: var(--ink-soft); }
+.s2 { font: 11.5px var(--font-ui); fill: var(--ink-faint); }
+.host { fill: var(--sunk); stroke: var(--line-strong); stroke-dasharray: 2 5; }
+.proc { fill: var(--bg); stroke: var(--line-strong); }
+.glabel { font: 11.5px var(--font-mono); fill: var(--ink-faint); letter-spacing: 0.04em; }
+.tag { font: 11px var(--font-ui); fill: var(--ink-faint); text-anchor: middle; }
+.edge { fill: none; stroke: var(--ink-faint); stroke-width: 1.4; transition: opacity .2s, stroke .2s; }
+.elabel { font: 11px var(--font-mono); fill: var(--ink-faint); transition: opacity .2s; }
+.mk-n { color: var(--ink-faint); }
+.mk-web { color: var(--accent); }
+.mk-cli { color: var(--cli); }
+.mk-push { color: var(--push); }
+.mk-danger { color: var(--danger); }
+
+/* 总览图：路径高亮 */
+#arch .node { cursor: pointer; outline: none; }
+#arch .node:hover rect { stroke: var(--ink-soft); }
+#arch .node.sel rect { stroke: var(--ink); stroke-width: 2; }
+#arch .node:focus-visible rect { stroke: var(--accent); stroke-width: 2.6; }
+#arch .node, #arch .edge, #arch .elabel { transition: opacity .2s; }
+#arch:not([data-mode="all"]) .node:not(.on) { opacity: .3; }
+#arch:not([data-mode="all"]) .edge:not(.on),
+#arch:not([data-mode="all"]) .elabel:not(.on) { opacity: .1; }
+#arch .edge.on { stroke-width: 2.2; stroke-dasharray: 7 5; animation: flow .9s linear infinite; }
+#arch[data-mode="web"] .edge.on { stroke: var(--accent); }
+#arch[data-mode="cli"] .edge.on { stroke: var(--cli); }
+#arch[data-mode="push"] .edge.on { stroke: var(--push); }
+#arch[data-mode="web"] .elabel.on { fill: var(--accent); }
+#arch[data-mode="cli"] .elabel.on { fill: var(--cli); }
+#arch[data-mode="push"] .elabel.on { fill: var(--push); }
+@keyframes flow { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) {
+  #arch .edge.on { animation: none; stroke-dasharray: none; }
+  #arch .node, #arch .edge, #arch .elabel, .node rect { transition: none; }
+}
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.toolbar .lbl { font-size: 13px; color: var(--ink-faint); margin-right: 4px; }
+.modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.modes button {
+  font: 500 13.5px var(--font-ui); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px;
+  padding: 6px 14px 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+}
+.modes button:hover { border-color: var(--ink-soft); }
+.modes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.modes button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+.dot.web { background: var(--accent); } .dot.cli { background: var(--cli); } .dot.push { background: var(--push); }
+.legend { margin-left: auto; font-size: 12.5px; color: var(--ink-faint); }
+@media (max-width: 900px) { .legend { margin-left: 0; flex-basis: 100%; } }
+
+.below { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 820px) { .below { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel .kicker { font: 12px var(--font-mono); letter-spacing: .05em; color: var(--ink-faint); }
+.panel .where { font: 12.5px/1.5 var(--font-mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.panel ol, .panel ul { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: 14.5px; }
+.panel li::marker { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.panel[data-mode="web"] { border-top: 3px solid var(--accent); }
+.panel[data-mode="cli"] { border-top: 3px solid var(--cli); }
+.panel[data-mode="push"] { border-top: 3px solid var(--push); }
+
+/* 代码分布 */
+.bars { display: grid; gap: 10px; }
+.bar-row { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) 10.5rem; gap: 12px; align-items: center; font-size: 13.5px; }
+.bar-row .name { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.bar-row .name small { display: block; font-family: var(--font-ui); color: var(--ink-faint); font-size: 11.5px; }
+.track { height: 14px; background: var(--sunk); border-radius: 3px; position: relative; overflow: hidden; }
+.fill { position: absolute; inset: 0 auto 0 0; background: var(--line-strong); border-radius: 3px; }
+.fill .big { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.bar-row .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--ink-soft); }
+.bar-row .num b { color: var(--ink); font-weight: 600; }
+.bar-row .num small { display: block; font-size: 11.5px; color: var(--ink-faint); }
+@media (max-width: 640px) {
+  .bar-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .bar-row .track { grid-column: 1 / -1; grid-row: 2; }
+}
+.bar-key { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--ink-faint); }
+.bar-key span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 10px; border-radius: 2px; background: var(--line-strong); }
+.sw.big { background: var(--accent); }
+
+.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: var(--ink-soft); }
+.rules li { padding-left: 2px; }
+
+/* 表格 */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--font-ui); letter-spacing: .05em; color: var(--ink-faint); background: var(--sunk); }
+tr:last-child td { border-bottom: 0; }
+td.k { font-weight: 600; white-space: nowrap; }
+td.m { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-soft); }
+
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: var(--surface); display: grid; gap: 6px; align-content: start; min-width: 0; }
+.card h3 { font-size: 16px; }
+.card p { color: var(--ink-soft); font-size: 14px; }
+.site-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; }
+.site-nav a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid transparent; }
+.site-nav a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.site-nav a:focus-visible, .deep a:focus-visible, footer a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.deep { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px 16px; }
+.deep a {
+  display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; align-items: baseline; gap: 10px;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  color: var(--ink); text-decoration: none;
+}
+.deep a:hover { border-color: var(--accent); }
+.deep .no { font: 600 12px var(--font-mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+.deep .ttl { font-size: 14px; }
+.deep .kd { font: 11px var(--font-mono); color: var(--ink-faint); }
+
+footer { font-size: 12.5px; color: var(--ink-faint); border-top: 1px solid var(--line); padding-top: 16px; max-width: 80ch; }
+footer a { color: var(--ink-soft); }
 </style>
+
 </head>
 <body>
 <div class="wrap">
-<nav>
-  <a href="../">← 项目主页</a>
-  <a href="../docs-site/index.html">全景手册</a>
-  <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub 仓库</a>
-</nav>
-<header>
-  <h1>架构图集</h1>
-  <p class="lede">Claude Chat Mobile 按功能域拆开的 13 张可交互图。每张都是自包含 HTML：支持明暗主题、平移缩放、搜索聚焦、关系追踪与导出，无需联网或任何依赖。图中事实取自代码与 <code>docs/architecture.md</code>，不是示意。</p>
-  <div class="pin"><b>事实基线</b> 7d4aa87 · <b>规格源</b> 同目录 <code>*.json</code> · <b>校验</b> 13/13 showcase 9/9 · <b>漂移闸</b> check 链上</div>
+
+<header class="col">
+  <nav class="site-nav" aria-label="站点导航">
+    <a href="https://ike-li.github.io/claude-chat-mobile/">← 项目主页</a>
+    <a href="https://ike-li.github.io/claude-chat-mobile/docs-site/index.html">全景手册</a>
+    <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub 仓库</a>
+  </nav>
+  <div class="eyebrow">claude-chat-mobile · 架构总览</div>
+  <h1>Claude Chat Mobile 架构</h1>
+  <p class="lede">一台电脑上的本机服务，把这台电脑的 <code>claude</code> CLI 接到手机浏览器。在手机上发消息时，server 通过 Agent SDK 拉起 CLI；坐在电脑前用终端时，server 不碰那个进程，只读它写到磁盘的 transcript，在手机上显示成只读镜像。同一个会话，同一时刻只有一端能写。</p>
+  <ul class="facts">
+    <li>运行时代码约 <b>5.2 万</b>行</li>
+    <li>后端 <b>7</b> 个域 · 前端零构建</li>
+    <li><b>n=1</b> 自托管，单用户</li>
+  </ul>
 </header>
 
-<h2>全局</h2>
-<p class="sub">先看这张，再按需要下钻。</p>
-<div class="grid">
-  <a class="card" href="00-overview.html">
-    <div class="top"><span class="num">00</span><span class="kind">architecture</span></div>
-    <div class="title">系统总览</div>
-    <p class="desc">Web 驾驶与 CLI 驾驶两条数据路径，以及它们共享的 transcript 与控制面。</p>
-    <ul><li>Web 走 Agent SDK 双向流；CLI 驾驶不经过 SDK</li><li>同一时刻只允许一个驾驶员写入</li><li>Cloudflare 非必需，同 WiFi 直连是主路径</li></ul>
-  </a>
+<section>
+  <div class="sec-head col">
+    <h2>两条驾驶通道</h2>
+    <p>选一条路径，看数据怎么走；点任一方框，下方会显示它对应的代码位置和职责。</p>
+  </div>
+  <figure>
+    <div class="fig">
+      <div class="toolbar" style="margin-bottom:12px">
+        <span class="lbl">路径</span>
+        <div class="modes" role="group" aria-label="高亮路径">
+          <button type="button" id="mode-all" data-mode="all" aria-pressed="true"><span class="dot"></span>全部</button>
+          <button type="button" id="mode-web" data-mode="web" aria-pressed="false"><span class="dot web"></span>Web 驾驶</button>
+          <button type="button" id="mode-cli" data-mode="cli" aria-pressed="false"><span class="dot cli"></span>终端驾驶 · 只读镜像</button>
+          <button type="button" id="mode-push" data-mode="push" aria-pressed="false"><span class="dot push"></span>离线推送</button>
+        </div>
+        <span class="legend">圆角框是进程或模块，灰底直角框是磁盘数据，虚线框可选</span>
+      </div>
+      <div class="scroll">
+<svg id="arch" data-mode="all" viewBox="0 0 1290 650" role="group" aria-label="系统总览：手机经可选的 Cloudflare 入口连到本机 Node 进程；Web 驾驶经 AgentSession 和 SDK 拉起 claude 子进程，终端驾驶由用户直接运行 claude，两者共用工作区和 transcript，server 轮询 transcript 做只读镜像，并经推送服务唤醒手机。">
+  <defs>
+    <marker id="mk-n" class="mk-n" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    <marker id="mk-web" class="mk-web" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    <marker id="mk-cli" class="mk-cli" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    <marker id="mk-push" class="mk-push" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+  </defs>
+
+  <!-- 边界 -->
+  <rect class="host" x="330" y="14" width="950" height="622" rx="16"/>
+  <text class="glabel" x="348" y="35">本机</text>
+  <rect class="proc" x="345" y="48" width="300" height="546" rx="12"/>
+  <text class="glabel" x="361" y="69">Node 进程 · app/src/server/app.js</text>
+
+  <!-- 连线（先画，压在方框下面） -->
+  <path class="edge" id="e-phone-cf" data-m="web cli" d="M160 107 H185" marker-start="url(#mk-n)" marker-end="url(#mk-n)"/>
+  <path class="edge" id="e-cf-gate" data-m="web cli" d="M315 107 H375" marker-start="url(#mk-n)" marker-end="url(#mk-n)"/>
+  <path class="edge" id="e-gate-hub" data-m="web cli" d="M395 132 V160" marker-start="url(#mk-n)" marker-end="url(#mk-n)"/>
+  <path class="edge" id="e-hub-agents" data-m="web" d="M415 182 H470" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="web" x="442" y="175" text-anchor="middle">user:*</text>
+  <path class="edge" id="e-agents-hub" data-m="web push" d="M470 210 H415" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="web push" x="442" y="226" text-anchor="middle">事件</text>
+  <path class="edge" id="e-agents-sdk" data-m="web" d="M625 195 H690" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="web" x="657" y="188" text-anchor="middle">SDK 流</text>
+  <path class="edge" id="e-sdk-ws" data-m="web" d="M765 160 V107 H910" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="web" x="838" y="100" text-anchor="middle">读写文件</text>
+  <path class="edge" id="e-sdk-tr" data-m="web" d="M840 210 H870 V268 H910" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="web" x="876" y="244">落盘 sdk-ts</text>
+
+  <path class="edge" id="e-term-ws" data-m="cli" d="M1195 252 V107 H1060" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="1128" y="100" text-anchor="middle">读写文件</text>
+  <path class="edge" id="e-term-tr" data-m="cli" d="M1130 280 H1060" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="1095" y="273" text-anchor="middle">落盘 cli</text>
+  <path class="edge" id="e-term-reg" data-m="cli" d="M1130 332 H1060" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="1095" y="325" text-anchor="middle">PID 登记</text>
+  <path class="edge" id="e-term-br" data-m="cli push" d="M1160 372 V399 H1060" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli push" x="1100" y="416" text-anchor="middle">hooks 写入</text>
+
+  <path class="edge" id="e-tr-mirror" data-m="cli" d="M910 292 H625" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="765" y="285" text-anchor="middle">轮询读取</text>
+  <path class="edge" id="e-reg-mirror" data-m="cli" d="M910 332 H625" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="765" y="325" text-anchor="middle">终端忙 / 等待</text>
+  <path class="edge" id="e-br-inbox" data-m="cli push" d="M910 399 H625" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli push" x="765" y="392" text-anchor="middle">fs.watch</text>
+  <path class="edge" id="e-inbox-mirror" data-m="cli" d="M510 374 V342" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="503" y="362" text-anchor="end">插队</text>
+  <path class="edge" id="e-mirror-hub" data-m="cli" d="M470 302 H415" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="cli" x="442" y="295" text-anchor="middle">回显</text>
+
+  <path class="edge" id="e-hub-notify" data-m="push" d="M395 490 V520" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="push" x="403" y="509">出向信封</text>
+  <path class="edge" id="e-inbox-notify" data-m="push" d="M585 424 V520" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="push" x="578" y="476" text-anchor="end">Stop · Notification</text>
+  <path class="edge" id="e-notify-push" data-m="push" d="M375 545 H315" marker-end="url(#mk-n)"/>
+  <path class="edge" id="e-push-phone" data-m="push" d="M185 545 H90 V162" marker-end="url(#mk-n)"/>
+  <text class="elabel" data-m="push" x="98" y="352">锁屏通知</text>
+
+  <path class="edge" id="e-srv-data" d="M645 545 H690" marker-end="url(#mk-n)"/>
+  <text class="elabel" x="667" y="538" text-anchor="middle">读写</text>
+  <path class="edge" id="e-desk-data" d="M910 545 H840" marker-end="url(#mk-n)"/>
+  <text class="elabel" x="875" y="538" text-anchor="middle">设备审批</text>
+
+  <!-- 方框 -->
+  <g class="node" data-id="phone" data-m="web cli push" tabindex="0" role="button" aria-label="手机 PWA">
+    <rect x="20" y="52" width="140" height="110" rx="12"/>
+    <text class="t" x="90" y="96">手机 PWA</text>
+    <text class="s" x="90" y="117">app/public/</text>
+    <text class="s2" x="90" y="136">浏览器 · 主屏 App</text>
+  </g>
+  <text class="tag" x="250" y="74">可选</text>
+  <g class="node opt" data-id="cf" data-m="web cli" tabindex="0" role="button" aria-label="Cloudflare Tunnel 与 Access，可选">
+    <rect x="185" y="82" width="130" height="50" rx="10"/>
+    <text class="t" x="250" y="103">Cloudflare</text>
+    <text class="s" x="250" y="121">Tunnel + Access</text>
+  </g>
+  <g class="node" data-id="push" data-m="push" tabindex="0" role="button" aria-label="推送服务">
+    <rect x="185" y="520" width="130" height="50" rx="10"/>
+    <text class="t" x="250" y="541">推送服务</text>
+    <text class="s" x="250" y="559">Web Push · ntfy</text>
+  </g>
+
+  <g class="node" data-id="gate" data-m="web cli" tabindex="0" role="button" aria-label="鉴权栈">
+    <rect x="375" y="82" width="250" height="50" rx="10"/>
+    <text class="t" x="500" y="103">鉴权栈</text>
+    <text class="s" x="500" y="121">token‖Access → 设备门 → 范围门</text>
+  </g>
+  <g class="node" data-id="hub" data-m="web cli push" tabindex="0" role="button" aria-label="Socket.io 路由">
+    <rect x="375" y="160" width="40" height="330" rx="10"/>
+    <text class="t" transform="translate(395 325) rotate(-90)" x="0" y="5">Socket.io 路由</text>
+  </g>
+  <g class="node" data-id="agents" data-m="web push" tabindex="0" role="button" aria-label="AgentSession">
+    <rect x="470" y="160" width="155" height="70" rx="10"/>
+    <text class="t" x="547" y="189">AgentSession × N</text>
+    <text class="s" x="547" y="210">agent.js · 缓冲 2000</text>
+  </g>
+  <g class="node" data-id="mirror" data-m="cli" tabindex="0" role="button" aria-label="mirror-engine">
+    <rect x="470" y="262" width="155" height="80" rx="10"/>
+    <text class="t" x="547" y="296">mirror-engine</text>
+    <text class="s" x="547" y="317">轮询 2.5s / 镜像 1s</text>
+  </g>
+  <g class="node" data-id="inbox" data-m="cli push" tabindex="0" role="button" aria-label="CLI 桥消费">
+    <rect x="470" y="374" width="155" height="50" rx="10"/>
+    <text class="t" x="547" y="395">CLI 桥消费</text>
+    <text class="s" x="547" y="413">hooks · statusline</text>
+  </g>
+  <g class="node" data-id="notify" data-m="push" tabindex="0" role="button" aria-label="通知判定">
+    <rect x="375" y="520" width="250" height="50" rx="10"/>
+    <text class="t" x="500" y="541">通知判定</text>
+    <text class="s" x="500" y="559">notifications.js</text>
+  </g>
+
+  <g class="node" data-id="cliSdk" data-m="web" tabindex="0" role="button" aria-label="claude CLI，SDK 子进程">
+    <rect x="690" y="160" width="150" height="70" rx="10"/>
+    <text class="t" x="765" y="185">claude CLI</text>
+    <text class="s2" x="765" y="204">SDK 子进程</text>
+    <text class="s" x="765" y="221">Agent SDK</text>
+  </g>
+  <g class="node store" data-id="datadir" tabindex="0" role="button" aria-label="CCM_DATA_DIR">
+    <rect x="690" y="520" width="150" height="50" rx="2"/>
+    <text class="tm" x="765" y="541">CCM_DATA_DIR</text>
+    <text class="s2" x="765" y="559">设备 · 审批 · 审计</text>
+  </g>
+
+  <g class="node store" data-id="workspace" data-m="web cli" tabindex="0" role="button" aria-label="已连接的文件夹">
+    <rect x="910" y="82" width="150" height="50" rx="2"/>
+    <text class="t" x="985" y="103">已连接的文件夹</text>
+    <text class="s" x="985" y="121">WORKDIRS</text>
+  </g>
+  <g class="node store" data-id="transcript" data-m="web cli" tabindex="0" role="button" aria-label="~/.claude/projects transcript">
+    <rect x="910" y="258" width="150" height="44" rx="2"/>
+    <text class="tm" x="985" y="276">~/.claude/projects</text>
+    <text class="s2" x="985" y="293">transcript · 真相源</text>
+  </g>
+  <g class="node store" data-id="registry" data-m="cli" tabindex="0" role="button" aria-label="~/.claude/sessions 注册表">
+    <rect x="910" y="310" width="150" height="44" rx="2"/>
+    <text class="tm" x="985" y="328">~/.claude/sessions</text>
+    <text class="s2" x="985" y="345">CLI 进程注册表</text>
+  </g>
+  <g class="node store" data-id="bridges" data-m="cli push" tabindex="0" role="button" aria-label="~/.claude/ccm 桥目录">
+    <rect x="910" y="377" width="150" height="44" rx="2"/>
+    <text class="tm" x="985" y="395">~/.claude/ccm</text>
+    <text class="s2" x="985" y="412">两个桥的投递目录</text>
+  </g>
+  <g class="node" data-id="desktop" tabindex="0" role="button" aria-label="CCM.app 菜单栏">
+    <rect x="910" y="520" width="150" height="50" rx="10"/>
+    <text class="t" x="985" y="541">CCM.app 菜单栏</text>
+    <text class="s" x="985" y="559">macOS · launchd</text>
+  </g>
+
+  <g class="node" data-id="term" data-m="cli push" tabindex="0" role="button" aria-label="claude CLI，终端">
+    <rect x="1130" y="252" width="130" height="120" rx="12"/>
+    <text class="t" x="1195" y="298">claude CLI</text>
+    <text class="s2" x="1195" y="319">终端里直接运行</text>
+    <text class="s2" x="1195" y="337">不经过本项目</text>
+  </g>
+</svg>
+      </div>
+      <p class="hint">图较宽，可左右滑动。</p>
+    </div>
+    <figcaption><b>图 1</b>　两条通道共用同一个工作区和同一份 transcript。Web 驾驶时 SDK 子进程写入；终端驾驶时 server 不碰那个进程，只读它落盘的结果。</figcaption>
+  </figure>
+
+  <div class="below">
+    <div class="panel" id="steps" data-mode="all" aria-live="polite"></div>
+    <div class="panel" id="detail" aria-live="polite"></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>单驾驶员</h2>
+    <p>共享 transcript 不等于两端可以同时写：两个独立回合同时跑，会让上下文分叉、改同一批文件。所以手机端有三种状态，判定在 <code>mirror-engine.js</code>，判形态的纯函数在 <code>sessions/history.js</code>。</p>
+  </div>
+  <figure>
+    <div class="fig scroll">
+<svg class="svg-mid" viewBox="0 0 980 320" role="img" aria-label="单驾驶员状态机：空闲时检测到终端写入进入只读镜像，终端静默 12.5 秒且尾部收尾后回到空闲；用户可强制续接；空闲时用户发送进入 Web 驾驶，回合结束回到空闲。">
+  <defs>
+    <marker id="mk2-n" class="mk-n" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    <marker id="mk2-d" class="mk-danger" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+  </defs>
+  <path class="edge" d="M430 120 C430 76 220 76 220 120" marker-end="url(#mk2-n)"/>
+  <text class="t" x="325" y="44" text-anchor="middle">检测到终端写入</text>
+  <text class="s2" x="325" y="62" text-anchor="middle">尾部写入方是 cli，或注册表显示终端忙</text>
+  <path class="edge" d="M240 196 C240 236 420 236 420 196" marker-end="url(#mk2-n)"/>
+  <text class="s2" x="330" y="250" text-anchor="middle">终端静默 12.5s 且尾部已收尾</text>
+  <path class="edge" d="M140 196 C140 300 520 300 520 196" stroke="var(--danger)" stroke-dasharray="5 4" marker-end="url(#mk2-d)"/>
+  <text class="s2" x="330" y="300" text-anchor="middle" style="fill:var(--danger)">强制续接：过确认框，只撤 Web 侧的锁，终端照样能写</text>
+  <path class="edge" d="M550 120 C550 76 760 76 760 120" marker-end="url(#mk2-n)"/>
+  <text class="t" x="655" y="44" text-anchor="middle">用户发送</text>
+  <text class="s2" x="655" y="62" text-anchor="middle">有外部增长时先 dispose 旧实例再 resume 吸收</text>
+  <path class="edge" d="M780 196 C780 236 540 236 540 196" marker-end="url(#mk2-n)"/>
+  <text class="s" x="660" y="250" text-anchor="middle">result · error · 中止</text>
+
+  <g class="node"><rect x="40" y="120" width="240" height="76" rx="14" style="stroke:var(--cli)"/>
+    <text class="t" x="160" y="152">只读镜像</text>
+    <text class="s2" x="160" y="174">终端在写 · Web 输入锁住 · 轮询 1s</text></g>
+  <g class="node"><rect x="370" y="120" width="240" height="76" rx="14"/>
+    <text class="t" x="490" y="152">空闲</text>
+    <text class="s2" x="490" y="174">Web 可以发送或续接</text></g>
+  <g class="node"><rect x="700" y="120" width="240" height="76" rx="14" style="stroke:var(--accent)"/>
+    <text class="t" x="820" y="152">Web 驾驶</text>
+    <text class="s2" x="820" y="174">一轮一条 · 发送键变停止键</text></g>
+</svg>
+    </div>
+    <figcaption><b>图 2</b>　解锁只认<b>终端写的</b>未收尾尾部。己方 SDK 留下的未收尾尾部不算，否则 Web 等一条审批时会把自己锁住，审批卡片永远点不到。这些规则是默认路径，不是硬约束：项目管得住自己的 SDK 实例，管不住终端里那个独立进程。</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>断线回放</h2>
+    <p>出向只有 <code>agent:event</code> 一种信封，带 <code>seq</code> 与 <code>epoch</code>。手机切后台再回来时，先从实例的环形缓冲补，补不上再读盘。</p>
+  </div>
+  <figure>
+    <div class="fig scroll">
+<svg class="svg-mid" viewBox="0 0 900 470" role="img" aria-label="断线回放时序：手机断线期间事件照常进入 AgentSession 的环形缓冲；重连后手机发 sync:since，server 从缓冲取出缺失事件标记 replay 补发；缺口超出缓冲或实例已不在时，手机改用 session:history，server 读 transcript 重建；运行态只看 instances 广播。">
+  <defs>
+    <marker id="mk3-n" class="mk-n" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+  </defs>
+  <g class="node"><rect x="35" y="16" width="150" height="40" rx="10"/><text class="t" x="110" y="41">手机</text></g>
+  <g class="node"><rect x="265" y="16" width="150" height="40" rx="10"/><text class="t" x="340" y="41">server 路由</text></g>
+  <g class="node"><rect x="485" y="16" width="170" height="40" rx="10"/><text class="t" x="570" y="41">AgentSession 缓冲</text></g>
+  <g class="node store"><rect x="715" y="16" width="150" height="40" rx="2"/><text class="tm" x="790" y="41">transcript</text></g>
+  <path class="edge" d="M110 56 V452" stroke-dasharray="3 4"/>
+  <path class="edge" d="M340 56 V452" stroke-dasharray="3 4"/>
+  <path class="edge" d="M570 56 V452" stroke-dasharray="3 4"/>
+  <path class="edge" d="M790 56 V452" stroke-dasharray="3 4"/>
+
+  <path class="edge" d="M570 96 H112" marker-end="url(#mk3-n)" style="stroke:var(--ink-soft)"/>
+  <text class="s" x="340" y="88" text-anchor="middle">agent:event · seq 41、42（实时）</text>
+
+  <path d="M103 123 L117 137 M117 123 L103 137" stroke="var(--danger)" stroke-width="2.2"/>
+  <text class="s2" x="126" y="135" style="fill:var(--danger)">断线：切后台、换网络</text>
+  <rect x="585" y="128" width="190" height="34" rx="4" fill="var(--sunk)" stroke="var(--line-strong)"/>
+  <text class="s" x="680" y="150" text-anchor="middle">seq 43–45 照常进缓冲</text>
+
+  <path class="edge" d="M110 206 H338" marker-end="url(#mk3-n)" style="stroke:var(--ink-soft)"/>
+  <text class="s" x="225" y="198" text-anchor="middle">sync:since { lastSeq: 42 }</text>
+  <path class="edge" d="M340 242 H568" marker-end="url(#mk3-n)" style="stroke:var(--ink-soft)"/>
+  <text class="s" x="455" y="234" text-anchor="middle">eventsSince(42)</text>
+  <path class="edge" d="M340 280 H112" marker-end="url(#mk3-n)" style="stroke:var(--accent);stroke-width:2"/>
+  <text class="s" x="225" y="272" text-anchor="middle" style="fill:var(--accent)">seq 43–45 · replay: true</text>
+  <text class="s2" x="225" y="297" text-anchor="middle">只补渲染，不碰运行态</text>
+
+  <rect x="40" y="316" width="820" height="82" rx="6" fill="none" stroke="var(--line-strong)" stroke-dasharray="5 4"/>
+  <text class="s2" x="52" y="333" style="font-weight:600">缺口超出缓冲，或实例已不在</text>
+  <path class="edge" d="M110 354 H338" marker-end="url(#mk3-n)" style="stroke:var(--ink-soft)"/>
+  <text class="s" x="225" y="347" text-anchor="middle">session:history</text>
+  <path class="edge" d="M340 382 H788" marker-end="url(#mk3-n)" style="stroke:var(--ink-soft)"/>
+  <text class="s2" x="565" y="375" text-anchor="middle">读盘，按 CLI 当前链重建稳定历史</text>
+
+  <path class="edge" d="M340 428 H112" marker-end="url(#mk3-n)" style="stroke:var(--cli);stroke-width:2"/>
+  <text class="s" x="225" y="420" text-anchor="middle" style="fill:var(--cli)">instances 广播</text>
+  <text class="s2" x="225" y="446" text-anchor="middle">state · turnRunning · bgActive</text>
+</svg>
+    </div>
+    <figcaption><b>图 3</b>　回放批次只补内容，运行条和停止钮只看 <code>instances</code> 广播：<code>turnRunning</code> 管停止钮和发送闸，<code>bgActive</code> 为真且没有在途轮时不亮运行条。缓冲不是永久历史，服务重启后一律走 <code>session:history</code>。会话图片只带引用，进入可视区才经 <code>image:get</code> 取。</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>鉴权与范围</h2>
+    <p>五层各证明一件事，互不替代。</p>
+  </div>
+  <figure>
+    <div class="fig scroll">
+<svg class="svg-mid" viewBox="0 0 820 420" role="img" aria-label="鉴权栈五层：入口凭据、设备信任、已连接文件夹范围门、权限规则、工具审批。经 Cloudflare Access 的连接与真本机直连默认跳过设备门；用户在文件编辑器里保存走独立防线，不经过 Agent 审批。">
+  <defs>
+    <marker id="mk4-n" class="mk-n" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    <marker id="mk4-p" class="mk-push" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+  </defs>
+  <path class="edge" d="M260 74 V94" marker-end="url(#mk4-n)"/>
+  <path class="edge" d="M260 150 V170" marker-end="url(#mk4-n)"/>
+  <path class="edge" d="M260 226 V246" marker-end="url(#mk4-n)"/>
+  <path class="edge" d="M260 302 V322" marker-end="url(#mk4-n)"/>
+  <path class="edge" d="M480 40 H520 V192 H482" stroke="var(--push)" stroke-dasharray="5 4" marker-end="url(#mk4-p)"/>
+  <text class="t" x="534" y="92" style="fill:var(--push)">默认跳过设备门</text>
+  <text class="s2" x="534" y="112">· 经 Cloudflare Access 的连接</text>
+  <text class="s2" x="534" y="130">· 真·本机直连</text>
+  <text class="s" x="534" y="150">DEVICE_APPROVAL_SCOPE=all 时不跳过</text>
+  <path class="edge" d="M480 214 H660 V260" marker-end="url(#mk4-n)"/>
+
+  <g class="node"><rect x="40" y="20" width="440" height="54" rx="10"/>
+    <text class="t" x="260" y="43">入口凭据</text><text class="s" x="260" y="62">AUTH_TOKEN ‖ Cloudflare Access，按 Host 二选一</text></g>
+  <g class="node"><rect x="40" y="96" width="440" height="54" rx="10"/>
+    <text class="t" x="260" y="119">设备信任</text><text class="s" x="260" y="138">trusted-devices.json · 四个审批入口</text></g>
+  <g class="node"><rect x="40" y="172" width="440" height="54" rx="10"/>
+    <text class="t" x="260" y="195">已连接文件夹范围门</text><text class="s" x="260" y="214">realpath 后比较 · 越界 cwd 拒绝并记审计</text></g>
+  <g class="node"><rect x="40" y="248" width="440" height="54" rx="10"/>
+    <text class="t" x="260" y="271">权限规则</text><text class="s" x="260" y="290">CLI permissions.allow + Web 当前权限档</text></g>
+  <g class="node"><rect x="40" y="324" width="440" height="54" rx="10"/>
+    <text class="t" x="260" y="347">工具审批</text><text class="s" x="260" y="366">canUseTool → 手机上的审批卡片</text></g>
+  <g class="node"><rect x="540" y="262" width="240" height="78" rx="10"/>
+    <text class="t" x="660" y="287">用户在文件编辑器里保存</text>
+    <text class="s" x="660" y="306">范围 · 大小 · 哈希 · 审计</text>
+    <text class="s2" x="660" y="325">不经过 Agent 审批</text></g>
+</svg>
+    </div>
+    <figcaption><b>图 4</b>　没有 <code>AUTH_TOKEN</code>，server 起不来。经 Access 进来的连接完全不查信任表，所以在设备列表里吊销一台经隧道连进来的手机，既不会断它的线，也拦不住它。要让信任表对所有入口生效，设 <code>DEVICE_APPROVAL_SCOPE=all</code> 并重启。</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>代码分布</h2>
+    <p>后端 <code>app/src/</code> 按域分成七个目录，前端零构建。条长按行数画，同一刻度，数字是 2026 年 10 月统计的约数；砖橙色是单个大文件占的部分。前端 <code>app.js</code>、<code>server/app.js</code>、<code>agent.js</code>、<code>history.js</code> 四个文件合计约 2 万行，约占运行时代码四成，改同步、回放、镜像时绕不开它们。</p>
+  </div>
+  <div class="fig">
+    <div class="bars" id="bars"></div>
+    <div class="bar-key" style="margin-top:14px">
+      <span><i class="sw big"></i>单个大文件</span>
+      <span><i class="sw"></i>同目录其余文件</span>
+      <span>未列出：index.html、app.css 及若干小文件</span>
+    </div>
+  </div>
+  <div class="two">
+    <div class="card">
+      <h3>模块边界</h3>
+      <ul class="rules">
+        <li>前后端互不 import，唯一例外是 <code>app/public/js/canonicalize.js</code>（设备指纹规范化）</li>
+        <li><code>shared/</code> 是叶子，不得反向 import 其他后端域</li>
+        <li><code>server/</code> 是组装根，只有 <code>app/server.js</code> 和它自己能 import</li>
+        <li>运行时不得 import <code>scripts/</code> 与 <code>tests/</code>，零循环依赖</li>
+      </ul>
+      <p>由 <code>tests/gates/check-import-boundaries.js</code> 在 <code>npm run check</code> 里拦截。</p>
+    </div>
+    <div class="card">
+      <h3>运行时代码之外</h3>
+      <ul class="rules">
+        <li><code>desktop/</code>：macOS 菜单栏 CCM.app（Swift）与四个 launchd 模板</li>
+        <li><code>scripts/</code>：用户要敲的命令，setup、config、doctor、service、uninstall、device、qr</li>
+        <li><code>tests/</code>：unit、invariants、integration、e2e、smoke、playground，<code>gates/</code> 下是门禁脚本</li>
+        <li>宿主机只跑白名单命令，其余测试进容器</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>状态存在哪</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>数据</th><th>位置</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Claude 对话</td><td class="m">~/.claude/projects/</td><td>唯一真相源，本项目不复制</td></tr>
+        <tr><td class="k">Web 实例运行态</td><td class="m">AgentSession 内存</td><td>流式回合、审批、事件缓冲；最多 20 个实例，空闲 30 分钟回收</td></tr>
+        <tr><td class="k">控制面</td><td class="m">CCM_DATA_DIR</td><td>会话指针、设备、审批、审计、推送订阅、已读位点、附件</td></tr>
+        <tr><td class="k">已连接的文件夹</td><td class="m">ccm.config.json · WORKDIRS</td><td>首项是主工作目录，改动热加载</td></tr>
+        <tr><td class="k">无文件夹会话</td><td class="m">数据目录 scratch-workspaces/</td><td>删会话时一并删除</td></tr>
+        <tr><td class="k">终端会话状态与信号</td><td class="m">~/.claude/ccm/</td><td>hooks 与 statusline 两个桥，可选安装，卸载对称移除</td></tr>
+        <tr><td class="k">额度墙自动继续</td><td class="m">server 内存</td><td>重启即作废，不落盘</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head col">
+    <h2>分主题详图</h2>
+    <p>按功能域拆开的 13 张可交互图，每张可平移缩放、搜索、追踪关系。事实基线停在 2026 年 9 月，之后合入的已连接的文件夹、额度墙自动继续、会话图片按需取等还没有画进去，以本页和 <code>docs/architecture.md</code> 为准。</p>
+  </div>
+  <ul class="deep">
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/00-overview.html"><span class="no">00</span><span class="ttl">系统总览</span><span class="kd">architecture</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/01-web-drive.html"><span class="no">01</span><span class="ttl">Web 驾驶：一条消息的完整时序</span><span class="kd">sequence</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/02-cli-mirror.html"><span class="no">02</span><span class="ttl">CLI 驾驶：只读镜像的建立与解锁</span><span class="kd">sequence</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/03-single-driver.html"><span class="no">03</span><span class="ttl">单驾驶员模型：镜像锁状态迁移</span><span class="kd">lifecycle</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/04-auth-gates.html"><span class="no">04</span><span class="ttl">鉴权与范围边界：两种拓扑</span><span class="kd">workflow</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/05-approval.html"><span class="no">05</span><span class="ttl">工具审批的生命周期与终态</span><span class="kd">lifecycle</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/06-push.html"><span class="no">06</span><span class="ttl">离线唤醒：按可见性分档的推送抑制</span><span class="kd">workflow</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/07-files.html"><span class="no">07</span><span class="ttl">文件域：四段闸门</span><span class="kd">dataflow</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/08-envelope.html"><span class="no">08</span><span class="ttl">事件信封与断线回放</span><span class="kd">sequence</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/09-ops.html"><span class="no">09</span><span class="ttl">运维与可观测</span><span class="kd">architecture</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/10-sessions.html"><span class="no">10</span><span class="ttl">会话域：三条互不混判的聚合链</span><span class="kd">dataflow</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/11-frontend.html"><span class="no">11</span><span class="ttl">前端模块地图</span><span class="kd">architecture</span></a></li>
+    <li><a href="https://ike-li.github.io/claude-chat-mobile/diagrams/12-testing.html"><span class="no">12</span><span class="ttl">测试跑在哪：白名单在宿主机，其余进容器</span><span class="kd">workflow</span></a></li>
+  </ul>
+</section>
+
+<footer>文字口径以仓库里的 <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/architecture.md">docs/architecture.md</a> 为准。常量与路径对照过代码；行数是 2026 年 10 月的约数。</footer>
+
 </div>
 
-<h2>双通道与同步</h2>
-<p class="sub">改这几处前务必先读——凭直觉改基本会错。</p>
-<div class="grid">
-  <a class="card" href="01-web-drive.html">
-    <div class="top"><span class="num">01</span><span class="kind">sequence</span></div>
-    <div class="title">Web 驾驶：一条消息的完整时序</div>
-    <p class="desc">从 <code>user:message</code> 到 <code>agent:event</code> 回流，含幂等闸与实例置换。</p>
-    <ul><li>去重 ID 只在 send 已 resolve 后才登记</li><li>三种负 ack 各自对应不同的客户端行为</li></ul>
-  </a>
-  <a class="card" href="02-cli-mirror.html">
-    <div class="top"><span class="num">02</span><span class="kind">sequence</span></div>
-    <div class="title">CLI 驾驶：只读镜像的建立与解锁</div>
-    <p class="desc">磁盘轮询追平、hooks 即时信号，以及静默判定后的锁释放。</p>
-    <ul><li>常态 2.5s 轮询，进镜像后收紧到 1s</li><li>hooks 只是加速触发器，transcript 才是真相源</li></ul>
-  </a>
-  <a class="card" href="03-single-driver.html">
-    <div class="top"><span class="num">03</span><span class="kind">lifecycle</span></div>
-    <div class="title">单驾驶员模型：镜像锁状态迁移</div>
-    <p class="desc">五条默认规则、防自锁的那条判定，以及有意保留的逃生口。</p>
-    <ul><li>只认终端写的未完结尾部，己方 sdk-ts 撑不住锁</li><li>解锁只撤 Web 侧的锁，不会停止终端进程</li></ul>
-  </a>
-  <a class="card" href="08-envelope.html">
-    <div class="top"><span class="num">08</span><span class="kind">sequence</span></div>
-    <div class="title">事件信封与断线回放</div>
-    <p class="desc"><code>seq</code> 去重、<code>epoch</code> 世代，以及超出环形缓冲后的两级回退。</p>
-    <ul><li>缓冲有界，缺口过大就回退鉴权的 session:history</li><li>事件 type 是闭合集合，双向契约硬闸校验</li></ul>
-  </a>
-</div>
+<script>
+(function () {
+  var STEPS = {
+    all: {
+      kicker: '三条路径',
+      title: '数据怎么流动',
+      items: [
+        'Web 驾驶：手机 → 鉴权栈 → AgentSession → SDK → claude 子进程，事件原路推回手机',
+        '终端驾驶：用户在电脑上直接用 claude，server 轮询 transcript，在手机上显示只读镜像',
+        '离线推送：通知判定挑出该推的事件，经 Web Push 或 ntfy 送到锁屏'
+      ],
+      ordered: false
+    },
+    web: {
+      kicker: 'Web 驾驶',
+      title: '在手机上发一条消息',
+      items: [
+        '手机经 Socket.io 连入（公网时经 Cloudflare），先过鉴权栈',
+        'user:send 按 instanceId 路由到当前会话的 AgentSession',
+        'AgentSession 把消息送进 SDK 的 streaming input，SDK 拉起或续接本机 claude',
+        'CLI 在已连接的文件夹里读写文件，回合内容落盘到 transcript，写入方记为 sdk-ts',
+        'SDK 输出映射成产品事件，进环形缓冲，以 agent:event 推回手机'
+      ],
+      ordered: true
+    },
+    cli: {
+      kicker: '终端驾驶 · 只读镜像',
+      title: '坐在电脑前用终端',
+      items: [
+        '用户在终端运行 claude，直接读写文件，回合内容落盘到 transcript，写入方记为 cli',
+        '终端进程在 ~/.claude/sessions 登记；装了 hooks 桥时，把 Stop / Notification 写进投递目录',
+        'mirror-engine 每 2.5s 检查一次 transcript，镜像中改为 1s；hooks 信号会插队触发检查',
+        '发现终端在写，手机进入只读镜像，新内容以 history_append / mirror_state 推过去',
+        '终端静默 12.5s 且尾部已收尾，自动解锁，手机可以续接'
+      ],
+      ordered: true
+    },
+    push: {
+      kicker: '离线推送',
+      title: '手机锁屏时怎么叫醒你',
+      items: [
+        'Web 驾驶的出向信封里，permission_request、question、task_notification、result、gateway_stall 五种可能触发推送',
+        '终端会话经 hooks 桥产生 Stop / Notification',
+        '通知判定：审批、提问、真后台任务完成无条件推；result 与 gateway_stall 在有前台可见连接且正看着这条会话时抑制',
+        '经 Web Push 或 ntfy 送到锁屏；正文默认最小化'
+      ],
+      ordered: true
+    }
+  };
 
-<h2>安全与边界</h2>
-<p class="sub">失败方向是逐条选过的，不是「所有异常都拒绝」。</p>
-<div class="grid">
-  <a class="card" href="04-auth-gates.html">
-    <div class="top"><span class="num">04</span><span class="kind">workflow</span></div>
-    <div class="title">鉴权与范围边界：两种拓扑</div>
-    <p class="desc">局域网走 <code>AUTH_TOKEN</code>、公网 Access 走 JWT，两条路在范围门汇合。</p>
-    <ul><li>六层收窄是文档的分类学，不是请求路径</li><li>局域网没有 IdP 层；Access 已验则跳过设备门</li></ul>
-  </a>
-  <a class="card" href="05-approval.html">
-    <div class="top"><span class="num">05</span><span class="kind">lifecycle</span></div>
-    <div class="title">工具审批的生命周期与终态</div>
-    <p class="desc">pending / approved / denied / expired，以及留存治理。</p>
-    <ul><li>重启后遗留 pending 一律标 expired</li><li>批一个已无执行上下文的操作是危险假象</li></ul>
-  </a>
-  <a class="card" href="06-push.html">
-    <div class="top"><span class="num">06</span><span class="kind">workflow</span></div>
-    <div class="title">离线唤醒：按可见性分档的推送抑制</div>
-    <p class="desc">哪些无条件推、哪一类才抑制，以及正文最小化。</p>
-    <ul><li>前台判据是 client:presence，不是 socket 连着</li><li>「后台完成」只算真后台，前台 Bash 被 is_backgrounded 滤掉</li></ul>
-  </a>
-</div>
+  var DETAIL = {
+    phone: { name: '手机 PWA', where: 'app/public/ · 零构建', items: [
+      '浏览器直接加载 ES 模块；js/logic/ 的纯函数模块与单测共用同一份文件',
+      'js/app.js 是存量的顶层状态与派发表（近万行），新状态按约定进 js/app/ 下的模块',
+      '派发表 handle + outOfBand 必须恰好覆盖 31 种 agent:event，少一个就静默丢事件，npm run check 会拦',
+      'sw.js 接收离线推送；会话图片进入可视区才经 image:get 取'
+    ]},
+    cf: { name: 'Cloudflare Tunnel + Access（可选）', where: 'app/src/auth/cf-access.js · auth-strategy.js', items: [
+      '固定公网入口才需要；同一 Wi-Fi 或本机访问不经过它',
+      '开着时，它管的公网 Host 只认 Access JWT，AUTH_TOKEN 在那条路上不放行',
+      '默认替代设备审批：经 Access 的连接不查 trusted-devices.json，吊销对它们无效',
+      '核心代码只认 auth-strategy.js 的接口形状，Cloudflare 是当前唯一实现'
+    ]},
+    gate: { name: '鉴权栈', where: 'app/src/auth/ · 范围门在 sessions/folder-access.js', items: [
+      'AUTH_TOKEN 是启动前提，没有它 server 起不来',
+      '设备信任以 trusted-devices.json 为准，四个审批入口：菜单栏、已受信任的设备、终端回车、scripts/device.js',
+      '范围门 resolveAuthorizedCwd 一律 realpath 后比较，显式越界的 cwd 拒绝并记 scope_violation 审计',
+      '限速锁定按来源分档措辞，本机来源不说成有人在暴力尝试'
+    ]},
+    hub: { name: 'Socket.io 路由', where: 'server/app.js · socket.js · socket-files.js · socket-folders.js', items: [
+      '入向事件走白名单，定义在 shared/protocol.js 的 INBOUND_SOCKET_EVENTS',
+      '出向只有 agent:event 一种信封：seq、epoch、sessionId、instanceId、cwd、type、payload',
+      '按 instanceId 和当前视图把请求路由到对应的 AgentSession',
+      '推送判定挂在出向信封这条管道上'
+    ]},
+    agents: { name: 'AgentSession × N', where: 'app/src/agent/agent.js', items: [
+      '把 SDK 输出映射成文本、工具、审批、提问、状态、后台任务等产品事件',
+      'canUseTool 审批闸门；审批存进 approval-store，重启时残留的待执行动作不再执行',
+      '每个实例一个 2000 条的环形缓冲，断线后用 sync:since 补缺口',
+      '最多 20 个活实例，空闲 30 分钟回收；额度墙到点续跑由 server/auto-continue.js 按 sessionId 调度'
+    ]},
+    mirror: { name: 'mirror-engine', where: 'server/mirror-engine.js + sessions/history.js', items: [
+      '镜像状态机的唯一所有者；读盘与判形态的纯函数留在 history.js',
+      '常态 2.5s 检查一次，镜像中 1s；终端静默 12.5s 且尾部收尾才解锁',
+      '回显跟随 CLI 当前链；/rewind 会让文件变长而有效历史变短，这时走全量重推',
+      '读 ~/.claude/sessions 注册表，判断终端是否开着、在忙、在等你'
+    ]},
+    inbox: { name: 'CLI 桥消费', where: 'server/hooks-inbox.js · ops/cli-hooks-bridge.js · ops/cli-statusline-bridge.js', items: [
+      'hooks 桥：fs.watch 监听投递目录，Stop / Notification 把回合结束从轮询变成即时信号',
+      'statusline 桥：读终端会话的模型、上下文、成本与额度快照',
+      '两个桥都要显式安装（npm run hooks:install / statusline:install），没装就回落轮询',
+      '只是加速器，transcript 仍是真相源'
+    ]},
+    notify: { name: '通知判定', where: 'ops/notifications.js · ops/notify-channels.js', items: [
+      '审批、提问、真后台任务完成：无条件推',
+      'result 与 gateway_stall：有前台可见连接且正看着这条会话时才抑制，前台判据是 client:presence，不是 socket 连着',
+      '后台任务只认 task_started 带 is_backgrounded 的，跑得久的前台 Bash 不推',
+      '节流两层：没处理的审批和提问不重复推；同类最小间隔 60s，gateway_stall 10 分钟'
+    ]},
+    push: { name: '推送服务', where: '第三方：浏览器的 Web Push 服务、ntfy', items: [
+      '锁屏、切到别的 app、PWA 被系统冻结时都收得到',
+      '正文默认最小化，可按设备开内容预览',
+      '新设备审批的通知不含设备 ID 与 IP，因为推送通道未必端到端加密'
+    ]},
+    cliSdk: { name: 'claude CLI（SDK 子进程）', where: '@anthropic-ai/claude-agent-sdk，版本见 package.json', items: [
+      'SDK 启动或续接本机 claude，不是远端聊天页',
+      '继承本机登录态、CLAUDE.md、settings、MCP、skills、hooks',
+      '在授权的 cwd 里工作，transcript 里写入方记为 sdk-ts'
+    ]},
+    term: { name: 'claude CLI（终端）', where: '用户在电脑前直接运行', items: [
+      '不经过本项目；手机不能向它输入，只能读它落盘的内容',
+      '写入方记为 cli，镜像锁据此判断是不是终端在驾驶',
+      '终端里的 /rewind 在发出下一条消息前完全不落盘，这段时间别从手机发消息'
+    ]},
+    workspace: { name: '已连接的文件夹', where: 'ccm.config.json 的 WORKDIRS · sessions/folder-access.js', items: [
+      '首项是主工作目录；改动热加载，不用重启',
+      '子目录与范围内的 git worktree 可达，范围外的平级 worktree 要显式连接',
+      '无文件夹会话跑在数据目录的 scratch-workspaces/',
+      '~/.claude 与 CCM 数据目录整棵是禁区'
+    ]},
+    transcript: { name: '~/.claude/projects/', where: 'Claude Code 的会话记录，不归本项目所有', items: [
+      '对话的唯一真相源，手机和终端续接都读它',
+      '本项目不复制它，CCM_DATA_DIR 里没有原始 transcript',
+      '环形缓冲补不上时，session:history 从这里按当前链重建'
+    ]},
+    registry: { name: '~/.claude/sessions/', where: 'sessions/session-registry.js 读取', items: [
+      'CLI 进程活体注册表，每个进程一份 <PID>.json',
+      '用来判断终端是否开着、在忙、在等待',
+      '只有进程元数据，不含链状态'
+    ]},
+    bridges: { name: '~/.claude/ccm/', where: 'hooks-v1/ · statusline-v1/snapshots', items: [
+      '本项目自己的命名空间',
+      'hooks-v1：Stop / Notification 事件文件，tmp + rename 原子写入',
+      'statusline-v1/snapshots：终端会话的状态快照',
+      '一键卸载对称移除'
+    ]},
+    datadir: { name: 'CCM_DATA_DIR', where: '默认仓库根 data/ · shared/data-dir.js', items: [
+      '设备信任表与设备档案、审批、审计、推送订阅、已读位点、附件',
+      '清空它只影响控制面状态，不等于删除 Claude 会话',
+      '临时起的第二个实例必须指定独立目录，否则会写进生产 data/'
+    ]},
+    desktop: { name: 'CCM.app 菜单栏', where: 'desktop/*.swift · desktop/launchd/', items: [
+      'macOS 上的第二个启动入口；launchd 模板含 server、tunnel、menubar、log-rotate',
+      '设备审批与吊销入口之一，读 trusted-devices.json',
+      '服务面板消费 npm run service:status --json'
+    ]}
+  };
 
-<h2>域地图</h2>
-<p class="sub">按后端分层与前端模块边界组织。</p>
-<div class="grid">
-  <a class="card" href="07-files.html">
-    <div class="top"><span class="num">07</span><span class="kind">dataflow</span></div>
-    <div class="title">文件域：四段闸门</div>
-    <p class="desc">浏览、预览、搜索、写入、git 变更与附件通道。</p>
-    <ul><li>附件落数据目录，不写进用户项目</li><li>symlink 判据是「父目录用户可写」</li></ul>
-  </a>
-  <a class="card" href="09-ops.html">
-    <div class="top"><span class="num">09</span><span class="kind">architecture</span></div>
-    <div class="title">运维与可观测</div>
-    <p class="desc">配置事实源、启动自检、受管服务、审计与告警。</p>
-    <ul><li>配置读写必须同源，写错源等于假成功</li><li>面板判定化，不展示裸计数器</li></ul>
-  </a>
-  <a class="card" href="10-sessions.html">
-    <div class="top"><span class="num">10</span><span class="kind">dataflow</span></div>
-    <div class="title">会话域：三条互不混判的聚合链</div>
-    <p class="desc">会话列表、「需要你」待办、跨设备未读位点。</p>
-    <ul><li>服务告警绝不进「需要你」那个数字</li><li>未读位点在服务端合并，manual 胜过 seen</li></ul>
-  </a>
-  <a class="card" href="11-frontend.html">
-    <div class="top"><span class="num">11</span><span class="kind">architecture</span></div>
-    <div class="title">前端模块地图</div>
-    <p class="desc">新状态该落在哪一层，纯函数层的边界在哪。</p>
-    <ul><li>新状态进 app/ 模块，存量顶层不动</li><li>logic/ 唯一允许的宿主外 import 是 i18n.js</li></ul>
-  </a>
-</div>
+  var svg = document.getElementById('arch');
+  var stepsEl = document.getElementById('steps');
+  var detailEl = document.getElementById('detail');
+  var buttons = document.querySelectorAll('.modes button');
+  var selected = 'agents';
 
-<h2>工程</h2>
-<p class="sub">这条判据救过一次删库。</p>
-<div class="grid">
-  <a class="card" href="12-testing.html">
-    <div class="top"><span class="num">12</span><span class="kind">workflow</span></div>
-    <div class="title">测试跑在哪：白名单在宿主机，其余进容器</div>
-    <p class="desc">归类决策、check 链上的 16 道门禁，以及两处覆盖盲区。</p>
-    <ul><li>白名单而非危险命令清单：代价不对称</li><li>tests/infra/ 的编排脚本不在任何门禁覆盖范围</li></ul>
-  </a>
-</div>
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
 
-<footer>
-  <p>每张图旁边有同名 <code>.json</code> 规格源（点开图后可在同目录取），改完规格用 archify 重新出图即可。</p>
-  <p>本页托管在仓库的 <code>gh-pages</code> 分支，与 <code>master</code> / <code>dev</code> 零共同历史——<code>git clone</code> 默认拿不到这些图，装机归档里也没有。</p>
-  <p><a href="../">项目主页</a> · <a href="../docs-site/index.html">全景手册</a> · <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub 仓库</a></p>
-</footer>
-</div>
+  function renderSteps(mode) {
+    var s = STEPS[mode];
+    stepsEl.dataset.mode = mode;
+    stepsEl.replaceChildren();
+    stepsEl.appendChild(el('div', 'kicker', s.kicker));
+    stepsEl.appendChild(el('h3', null, s.title));
+    var list = el(s.ordered ? 'ol' : 'ul');
+    s.items.forEach(function (t) { list.appendChild(el('li', null, t)); });
+    stepsEl.appendChild(list);
+  }
+
+  function renderDetail(id) {
+    var d = DETAIL[id];
+    if (!d) return;
+    detailEl.replaceChildren();
+    detailEl.appendChild(el('div', 'kicker', '组件'));
+    detailEl.appendChild(el('h3', null, d.name));
+    detailEl.appendChild(el('div', 'where', d.where));
+    var list = el('ul');
+    d.items.forEach(function (t) { list.appendChild(el('li', null, t)); });
+    detailEl.appendChild(list);
+    svg.querySelectorAll('.node').forEach(function (n) {
+      n.classList.toggle('sel', n.dataset.id === id);
+    });
+  }
+
+  function setMode(mode) {
+    svg.dataset.mode = mode;
+    svg.querySelectorAll('.edge, .elabel, .node').forEach(function (n) {
+      var ms = (n.dataset.m || '').split(' ');
+      var on = mode !== 'all' && ms.indexOf(mode) !== -1;
+      n.classList.toggle('on', on);
+      if (n.classList.contains('edge')) {
+        var mk = on ? 'url(#mk-' + mode + ')' : 'url(#mk-n)';
+        if (n.hasAttribute('marker-end')) n.setAttribute('marker-end', mk);
+        if (n.hasAttribute('marker-start')) n.setAttribute('marker-start', mk);
+      }
+    });
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.mode === mode)); });
+    renderSteps(mode);
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { setMode(b.dataset.mode); });
+  });
+  svg.querySelectorAll('.node[data-id]').forEach(function (n) {
+    n.addEventListener('click', function () { selected = n.dataset.id; renderDetail(selected); });
+    n.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selected = n.dataset.id; renderDetail(selected); }
+    });
+  });
+
+  var BARS = [
+    ['public/js/app.js', '前端 · 单文件', 9600, 9600, ''],
+    ['server/', '组装根', 7400, 5200, 'app.js'],
+    ['ops/', '配置 · doctor · 推送 · 服务', 6800, 0, ''],
+    ['public/js/app/', '前端 · 交互模块', 5800, 0, ''],
+    ['public/js/logic/', '前端 · 纯函数', 5400, 0, ''],
+    ['agent/', 'SDK 会话驱动', 4800, 3600, 'agent.js'],
+    ['sessions/', '会话 · 历史 · 文件夹', 4300, 2200, 'history.js'],
+    ['files/', '浏览 · 上传 · git', 1500, 0, ''],
+    ['shared/', '叶子工具层', 1500, 0, ''],
+    ['auth/', '限速 · Access · 设备门', 1300, 0, ''],
+    ['public/js/i18n.js', '前端 · 文案表', 1300, 0, '']
+  ];
+  var SCALE = 10000;
+  var barsEl = document.getElementById('bars');
+  BARS.forEach(function (r) {
+    var row = el('div', 'bar-row');
+    var name = el('div', 'name', r[0]);
+    name.appendChild(el('small', null, r[1]));
+    var track = el('div', 'track');
+    var fill = el('div', 'fill');
+    fill.style.width = (r[2] / SCALE * 100) + '%';
+    if (r[3]) {
+      var big = el('div', 'big');
+      big.style.width = (r[3] / r[2] * 100) + '%';
+      fill.appendChild(big);
+    }
+    track.appendChild(fill);
+    var num = el('div', 'num');
+    num.appendChild(document.createTextNode('约 '));
+    num.appendChild(el('b', null, r[2].toLocaleString('en-US')));
+    if (r[4]) num.appendChild(el('small', null, '其中 ' + r[4] + ' 约 ' + r[3].toLocaleString('en-US')));
+    row.appendChild(name); row.appendChild(track); row.appendChild(num);
+    barsEl.appendChild(row);
+  });
+
+  setMode('all');
+  renderDetail(selected);
+})();
+</script>
+
 </body>
 </html>
