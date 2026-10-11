@@ -189,10 +189,54 @@ test.describe('restart --wait —— 用 PID 变化判就绪', () => {
   });
 
   test('新 PID 起来了但端口连不上 → 报出来（进程活着不等于服务可用）', () => {
-    const { mgr } = setup({ pids: [26867, 30001], tcpProbe: () => false });
+    let probes = 0;
+    const { mgr } = setup({ pids: [26867, 30001], tcpProbe: () => { probes += 1; return false; } });
     const r = mgr.restart('server', { wait: true, timeoutMs: 300, intervalMs: 100 });
     assert.equal(r.ok, false);
-    assert.match(r.error, /端口|监听/);
+    assert.equal(r.newPid, 30001);
+    assert.match(r.error, /连不上/);
+    assert.equal(probes, 3, '要探满整个超时窗口才下结论，不是看一眼就报');
+  });
+
+  // 2026-10-10 生产重启实测：新 PID 约 300ms 就在 launchctl list 里可见，而 server 从 SIGTERM
+  // 到 listen 要约 1.1s。新 PID 一出现就只看一眼端口 ⇒ 每次重启都报「连不上」，15s 窗口形同虚设。
+  // 端口没在听 ≠ 失败，是还在启动——与 start 的 confirmServerListening 同一判据：继续轮询。
+  test('新 PID 刚出现时端口还没在听 → 继续等，听上了就算成功（lsof 认出是新进程）', () => {
+    let listenChecks = 0;
+    const { mgr } = setup({
+      // 占用检查认出旧进程在听时自己也查一次 PID，所以旧 PID 要占两格
+      pids: [26867, 26867, 30001],
+      // 第一次是 kickstart 前的占用检查（旧进程在听）；之后三次轮询还没 listen，再之后新进程在听
+      portListenerPid: () => { listenChecks += 1; return listenChecks === 1 ? 26867 : listenChecks <= 4 ? null : 30001; },
+      tcpProbe: () => false,
+    });
+    const r = mgr.restart('server', { wait: true });
+    assert.equal(r.ok, true, `端口晚于 PID 就绪是正常启动过程，不是失败：${r.error}`);
+    assert.equal(r.newPid, 30001);
+    assert.equal(r.unverified, undefined, 'lsof 认出了新进程，是强判据，不该标未验证');
+  });
+
+  test('lsof 看不清时同样要等：tcpProbe 前几次不通、之后通 → 成功但标未验证', () => {
+    let probes = 0;
+    const { mgr } = setup({ pids: [26867, 30001], portListenerPid: () => null, tcpProbe: () => (probes += 1) > 3 });
+    const r = mgr.restart('server', { wait: true });
+    assert.equal(r.ok, true, `端口晚于 PID 就绪是正常启动过程，不是失败：${r.error}`);
+    assert.equal(r.unverified, true, '弱判据语义不变');
+  });
+
+  test('等端口期间端口被别的进程占了 → 立即失败，不等满窗口', () => {
+    let listenChecks = 0;
+    let probes = 0;
+    const { mgr } = setup({
+      pids: [26867, 30001],
+      portListenerPid: () => { listenChecks += 1; return listenChecks === 1 ? null : listenChecks === 2 ? null : 4242; },
+      tcpProbe: () => { probes += 1; return false; },
+    });
+    const r = mgr.restart('server', { wait: true });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /4242/);
+    assert.equal(listenChecks, 3, '看到占用就该停，别再轮询');
+    assert.equal(probes, 1);
   });
 
   test('restart 同样拒绝：端口被前台 npm start 占着时不得 kickstart -k', () => {
