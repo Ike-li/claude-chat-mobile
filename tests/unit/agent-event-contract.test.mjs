@@ -343,7 +343,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        复用它等于把文件浏览的范围门放宽到整个家目录。也不走 env:set 改 WORKDIRS：那条是整份覆盖写，
   //        手机上拿到的列表可能已过期，而且它不做「家目录内 / 不是 worktree / 不在禁区」的判据（FOLDER-01）。
   //        三个动作的判据与失败处置各不相同（只读 / 写配置 / 建目录），不合成一个事件。入向 58→61）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 61);
+  //      + image:get（2026-10-11，会话里的图片：工具截图与用户贴图。事件与历史只带引用，图按需取——
+  //        截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。不复用 tool:full：那条只认实例内存，
+  //        而历史回放里的图在 transcript 里、实例早已不在；也不复用 attachment:read：那条读的是 CCM
+  //        自己的上传目录，transcript 里的图不在任何文件里。入向 61→62）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 62);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:browse'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:add'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:mkdir'));

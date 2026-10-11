@@ -139,6 +139,16 @@ test('附件上限前后端一致（四项）', async () => {
   assert.equal(num('MAX_THUMB'), be.MAX_THUMB_CHARS, '缩略图上限：前端 MAX_THUMB ⇔ 后端 MAX_THUMB_CHARS');
 });
 
+// ── ④b 会话图片的 media_type 白名单：前后端两份 ─────────────────────────────
+// 同上，边界闸让两侧只能各写一份。后端那份决定发不发引用、给不给数据；前端那份是拼 data: URL 前的
+// 第二道（svg 进 data: URL 能带脚本）。两份不等时，要么列出来的图前端拒画，要么前端放行了后端没审过的类型。
+test('会话图片白名单前后端一致', async () => {
+  const be = await import(join(ROOT, 'app/src/shared/transcript-image.js'));
+  const fe = await import(join(ROOT, 'app/public/js/logic/transcript-images.js'));
+  assert.deepEqual([...fe.TRANSCRIPT_IMAGE_TYPES].sort(), [...be.IMAGE_MEDIA_TYPES].sort(),
+    '前端 TRANSCRIPT_IMAGE_TYPES ⇔ 后端 IMAGE_MEDIA_TYPES');
+});
+
 // 症状：错误文案里硬写着「单文件上限 10MB」「上限 20MB」，是这些值的**第三份**来源。
 // 改常量不改文案，用户会看到「11.0MB，单文件上限 10MB」而实际上限已经是 15MB。
 test('上传错误文案不硬编码 MB 数（由常量算）', () => {

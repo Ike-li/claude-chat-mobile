@@ -186,6 +186,7 @@ import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
+import { createTranscriptImages } from './app/transcript-images.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createConnectionBannerController } from './app/connection-banner.js';
 import { createAutoContinueBannerController, tagAutoContinueBubble } from './app/auto-continue-banner.js';
@@ -2906,7 +2907,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         renderLiveLine();
       }
     },
-    tool_result(p) {
+    tool_result(p, ev) {
       // 主会话 Agent/Task 完成 → 对应子 agent 卡标题改「已完成」（键 = toolUseId = 子事件的 parentToolUseId）
       if (!isSubagentPayload(p) && subagentCards.has(p.toolUseId)) {
         markSubagentCardDone(p.toolUseId);
@@ -2951,6 +2952,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           attachToolFullExpand(card, p.toolUseId);
         }
       }
+      // 截图：只带引用，卡片展开、格子进入可视区才取图。坐标取信封（发出它的那个实例与会话）
+      const shots = transcriptImages.render(p.images, { sessionId: ev?.sessionId, cwd: ev?.cwd, instanceId: ev?.instanceId });
+      if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
       toolCards.delete(p.toolUseId);
       // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
       if (agentToolIds.has(p.toolUseId)) {
@@ -4268,6 +4272,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // E18：气泡附件按需预览——live/历史点击经 browse:read 拉原图，复用托盘灯箱
   const storedPreview = createStoredPreviewLoader(appContext, {
     addBar,
+    openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
+  });
+  // 会话里的图片（工具截图、用户贴图）：引用 → 缩略图，经 image:get 按需取，点开复用同一个灯箱
+  const transcriptImages = createTranscriptImages(appContext, {
+    createElement: el,
     openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
   });
   // 桌面端 show_widget 图表：SVG 当图片插在工具卡后面，点开复用同一个灯箱（live / 历史两路共用）
@@ -8380,6 +8389,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
+    // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
+    // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
+    const imageScope = { sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId), instanceId: displayedInstanceId };
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
     //  · 全量加载：null —— 这批就是整个会话的开头。
     //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
@@ -8564,6 +8576,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             code.textContent = formatToolSummary(msg.outputSummary || '');
             codeBlocks.push(code);
           }
+          const orphanShots = transcriptImages.render(msg.images, imageScope);
+          if (orphanShots) orphan.querySelector('.t-out')?.parentElement.appendChild(orphanShots);
           appendNode(orphan, msg);
           return;
         }
@@ -8578,6 +8592,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (taskText) card.open = true; // 清单即结果本体（同 live）
           out.classList.remove('hidden');
         }
+        const shots = transcriptImages.render(msg.images, imageScope);
+        if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
         histToolCards.delete(msg.toolUseId);
         // 主链 Agent 完成 → 子卡标题「已完成」；带上 sa.type，不然会把已提取的具体类型冲成泛泛的「子 agent」
         if (!msg.parentToolUseId && histSubCards.has(msg.toolUseId)) {
@@ -8607,6 +8623,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
+      // 终端 / 桌面端里贴进对话的图（transcript 里的图片块，不是 CCM 上传的附件）
+      const pasted = isUser ? transcriptImages.render(msg.images, imageScope) : null;
+      if (pasted) bubble.appendChild(pasted);
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
       if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return

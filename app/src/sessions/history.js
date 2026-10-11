@@ -9,6 +9,8 @@ import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
 import { toolSummary, widgetPayload } from '../shared/tool-summary.js';
+// 会话里的图片只出引用（{ref, mediaType, bytes}），图本身走鉴权的 image:get 按需取，判据与 live 侧共用。
+import { imageRefsOf, toolImageRef, userImageRef, stripImageBlocks } from '../shared/transcript-image.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
@@ -667,6 +669,19 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
     : {};
   // 与 live 侧 user_message.origin 同名同值：前端两条渲染路径共用一个判据
   const originField = opts.autoContinuation && role === 'user' ? { origin: 'auto-continuation' } : {};
+  // 用户贴进对话的图（终端 / 桌面端粘贴）：整条消息的图挂在它展开出的第一条文字气泡上——终端把图放在
+  // 文字后、桌面端放在文字前，两种顺序都是「这条消息带了这些图」。只认主链且有 uuid 的：引用靠 uuid 回找。
+  // 纯图消息（没写字）展开不出文字条，扫完后单独补一条空文本气泡，不得整条消失（同纯附件消息）。
+  let pendingImages = null;
+  if (role === 'user' && !opts.isSidechain && opts.uuid && Array.isArray(content)) {
+    const refs = imageRefsOf(content, n => userImageRef(String(opts.uuid), n));
+    if (refs.length) pendingImages = refs;
+  }
+  const takeImages = () => {
+    const imgs = pendingImages;
+    pendingImages = null;
+    return imgs ? { images: imgs } : {};
+  };
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -676,8 +691,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}) });
-    else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...originField, ...(attachments ? { attachments } : {}), ...takeImages() });
+    else if (attachments || pendingImages) out.push({ role, content: '', timestamp, ...side, ...uuidField, ...(attachments ? { attachments } : {}), ...takeImages() });
   };
   if (typeof content === 'string') {
     pushText(content);
@@ -739,20 +754,25 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       flushText();
       const id = block.tool_use_id || block.toolUseId || block.id;
       if (!id) continue;
+      // 工具截图（浏览器 / computer use / Read 图片）。子代理流水里的带上那张子代理卡的 id：
+      // 新版 CLI 把子代理写在 subagents/agent-*.jsonl，按引用取图时主 transcript 里找不到它。
+      const images = imageRefsOf(block.content, n => toolImageRef(String(id), n, opts.isSidechain ? opts.parentToolUseId : null));
       out.push({
         kind: 'tool_result',
         role: 'user',
         toolUseId: String(id),
         ok: !block.is_error,
-        outputSummary: toolSummary(block.content ?? ''),
+        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? '')),
+        ...(images.length ? { images } : {}),
         timestamp,
         ...side,
       });
       continue;
     }
-    // 其它未知块：跳过
+    // 其它未知块（含图片块：用户贴图已在上面收进 pendingImages）：跳过
   }
   flushText();
+  if (pendingImages) out.push({ role, content: '', timestamp, ...side, ...uuidField, ...takeImages() });
   return out;
 }
 
@@ -2087,29 +2107,34 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, sinc
 //
 // 【为什么保尾部】与 getSessionHistory 的 pushCapped 同口径。子代理的结论在末尾，
 // 砍尾等于砍掉答案；开头那几十条读文件反而是最不需要的。
-export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CLAUDE_DIR, limit = 400 } = {}) {
-  if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'bad_session' }; // SS-003 同口径：拼路径前先挡
-  const wanted = typeof toolUseId === 'string' ? toolUseId.trim() : '';
-  if (!wanted) return { ok: false, reason: 'bad_tool_use_id' };
-  const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
+// 按主链那次 Agent 调用的 toolUseId 找出是哪一个子代理（读 agent-*.meta.json）。meta 极小（几十字节），
+// 全扫代价可忽略；找不到返回 null，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
+// 目录不存在返回 undefined（调用方据此区分「本会话没有子代理」与「有，但没有这一个」）。
+// 子代理流水与按引用取图（transcript-image-read.js）共用。
+export async function findSubagentByToolUseId(dir, wanted) {
   let names;
-  try { names = await readdir(dir); } catch { return { ok: false, reason: 'no_subagents' }; }
-
-  // 先按 meta 找出是哪一个 agent。meta 极小（几十字节），全扫代价可忽略；
-  // 找不到就返回 false，【不得】回落成「随便给一个」——那会把别的子代理内容显示在这张卡上。
-  let hit = null;
+  try { names = await readdir(dir); } catch { return undefined; }
   for (const name of names) {
     const m = /^agent-([0-9a-zA-Z_-]+)\.meta\.json$/.exec(name); // 字符集同 isSafeSessionId
     if (!m) continue;
     try {
       const meta = JSON.parse(await readRegularText(join(dir, name)));
       if (meta && typeof meta === 'object' && meta.toolUseId === wanted) {
-        hit = { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
+        return { agentId: m[1], agentType: typeof meta.agentType === 'string' ? meta.agentType : null,
           description: typeof meta.description === 'string' ? meta.description : null };
-        break;
       }
     } catch { /* meta 损坏/写入中：跳过，不整条失败 */ }
   }
+  return null;
+}
+
+export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CLAUDE_DIR, limit = 400 } = {}) {
+  if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'bad_session' }; // SS-003 同口径：拼路径前先挡
+  const wanted = typeof toolUseId === 'string' ? toolUseId.trim() : '';
+  if (!wanted) return { ok: false, reason: 'bad_tool_use_id' };
+  const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
+  const hit = await findSubagentByToolUseId(dir, wanted);
+  if (hit === undefined) return { ok: false, reason: 'no_subagents' };
   // 无 toolUseId 的 agent 存在（实证 179 个里 7 个：spawnDepth:2 的嵌套子代理，以及本地 slash
   // 命令的顶层编排 agent），它们锚不到主链的任何一次 tool_use，本函数天然找不到——这是已知边界，
   // 不是缺陷：没有锚点就没有可以挂载的卡片。
