@@ -910,6 +910,7 @@ export const EN_DICT = Object.freeze({
   '新会话已就绪': 'New session ready',
   '将在此工作区开新 CLI 会话': 'Starts a new CLI session in this workspace',
   '在新 worktree 里开': 'Open in a new worktree',
+  '勾选「在新 worktree 里开」后可换源分支': 'Check "Open in a new worktree" to pick a source branch',
   '将在 %s 的新 worktree 里开，不动当前工作树': 'Opens in a new worktree off %s, leaving your working tree untouched',
   '读取分支超时': 'Timed out reading branches',
   '读取分支失败': 'Failed to read branches',
