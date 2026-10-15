@@ -37,9 +37,10 @@ jobs:
       # 会被 skip；而被 skip 的 job 若列进分支保护的 required checks，PR 会永久停在 pending。
       # 塞进一个本来就恒跑的 required job 里就没有这个坑。
       #
-      # 【这道闸挡的是什么】2026-09-12 之前 dependabot 的 PR 默认开到 master（#23 就是），合进去
+      # 【这道闸挡的是什么】dependabot 的安全更新 PR 永远开到默认分支 master（#23 就是），合进去
       # master 立刻带上未发版提交，那一刻拉归档的人拿到的代码与版本号对不上、且没有任何地方报错。
-      # 根因已由 .github/dependabot.yml 的 target-branch 修掉，这里是第二道——它管所有来源，
+      # .github/dependabot.yml 的 target-branch 只管版本更新、管不到安全更新，所以对安全更新这里
+      # 是唯一一道（2026-09-29 的 #184 就是被它拦下的），对版本更新是第二道——它管所有来源，
       # 包括人手开的 PR。
       - name: 只有 dev → master 的发版 PR 能进 master
         if: github.event_name == 'pull_request' && github.base_ref == 'master'

@@ -123,7 +123,7 @@
 - 发版顺序：bump → 推 `dev` → 等真 CI 绿 → 开发版 PR → 等 PR 检查绿 → 合并 → 在合并后的 `master` HEAD 上打 tag → 建 Release。**tag 必须在合并之后打**：PR 合并没有 ff-only，合出来是 merge commit，tag 打早了就指不到 `master` 的 HEAD。
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
 - **`master` 归档即最新发布**：装机 `curl` 直接指向 GitHub 对 `master` 的源码归档（§4.1.1），所以 `master` 上不得出现未发版的提交。这条此前靠人守，2026-09-12 破过一次——dependabot 的 PR 默认开到默认分支（当时是 `master`），合进去就带上了未发版提交。当时的止血是三道齐上：`.github/dependabot.yml` 的 `target-branch: dev`、默认分支改为 `dev`、以及 `quality` 里那道「只有 `dev` 能进 `master`」。
-- **同日稍后默认分支又切回了 `master`**，现在靠两道：`target-branch: dev` 与 `quality` 那道闸。切回的理由是另一条同样硬的约束——装机拉的是 `master`，而**默认分支决定了访客在仓库首页看到哪份 README**；停在 `dev` 会让首页展示的内容领先于任何人能装到的版本（README 重写合进 `dev` 的那一刻就分叉了）。撤掉的那道是冗余而非唯一：原事故的直接成因是 dependabot 把 PR 开到默认分支，而那条路已被 `target-branch: dev` 写死堵上（它不读默认分支设置），`quality` 那道闸也仍然显式报错拦住任何 head 不是 `dev` 的 PR。**代价是开 PR 时默认 base 变成 `master`，要显式 `--base dev`**；且默认分支是仓库设置，被改回去不会有任何提示——这正是 `dependabot.yml` 里那条注释说「两道一起用」的原因，那份文件在代码评审里看得见，而仓库设置看不见。
+- **同日稍后默认分支又切回了 `master`**，版本更新现在靠两道：`target-branch: dev` 与 `quality` 那道闸。切回的理由是另一条同样硬的约束——装机拉的是 `master`，而**默认分支决定了访客在仓库首页看到哪份 README**；停在 `dev` 会让首页展示的内容领先于任何人能装到的版本（README 重写合进 `dev` 的那一刻就分叉了）。撤掉的那道对版本更新是冗余的：它们由 `target-branch: dev` 写死（不读默认分支设置），`quality` 那道闸也仍然显式报错拦住任何 head 不是 `dev` 的 PR。**代价有两个**：开 PR 时默认 base 变成 `master`，要显式 `--base dev`；以及**安全更新重新开到 `master`**——GitHub 的安全更新不读 `target-branch`、永远开到默认分支，而原事故的 #23 本身就是一条安全更新（它开出时还没有 `dependabot.yml`，那时 dependabot 只开安全更新）。这类 PR 现在只靠 `quality` 那道闸拦下（2026-09-29 的 #184 就是），要把同样的升级移植到 `dev` 处理，做法见 `dependabot.yml` 文件头。
 
 ### 4.1.1 分发形态（GitHub 对 `master` 的源码归档：裁剪过的源码树，不是 npm 包、不上传资产）
 
