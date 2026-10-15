@@ -305,3 +305,19 @@ export function resolveWorkdirs(entries) {
   }
   return { dirs, limits, warnings, missing };
 }
+
+// 清单的运行态：从哪来（WORKDIRS / WORK_DIRS / WORK_DIRS_FILE）、配置了却找不到（被删、改名、外置盘没挂上）
+// 几个。组装根在启动与每次热加载应用清单时写入，服务告警、体检、instances 广播、启动日志读取；广播时不重读外置文件。
+// 找不到的只存个数不存路径：告警只说个数，路径在启动日志与 doctor 里。配置文件在不在是组装根的事，注入进来。
+export function createWorkdirStatus({ usingConfigJson }) {
+  let from = 'WORKDIRS';
+  let missing = 0;
+  return {
+    setSource(next) { from = next; },
+    setMissing(n) { missing = n; },
+    missing: () => missing,
+    // 手机上改不了清单时的原因码（与 folders:add 拒绝时同一套：先看配置文件在不在，再看来源是不是内联 WORKDIRS）；
+    // 能改时 null。进广播（foldersReadonly）：零文件夹引导据此不给一个走完选择面板才报错的按钮（2026-10-15 Codex review #204）。
+    readonlyReason: () => (!usingConfigJson() ? 'no_config_file' : from !== 'WORKDIRS' ? 'source_readonly' : null),
+  };
+}

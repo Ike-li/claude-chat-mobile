@@ -88,7 +88,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -216,15 +216,9 @@ let workDirs = [];
 const primaryWorkDir = () => workDirs[0] ?? scratchRootKey();
 // 每工作区历史会话显示条数（session:list 默认截断量）；未指定的目录用 DEFAULT_SESSION_LIMIT。
 let sessionLimitByDir = new Map();
-// 配置里有、却找不到（被删、改名、外置盘没挂上）的文件夹个数，喂服务告警。与 workDirs 同一次应用里算出，
-// 不另存路径：告警只说个数，路径在启动日志与 doctor 里。
-let missingFolderCount = 0;
-// 清单从哪来（WORKDIRS / WORK_DIRS / WORK_DIRS_FILE），启动与热加载时记下，广播时不重读外置文件。
-let workdirSourceFrom = 'WORKDIRS';
-// 手机上改不了清单时的原因码（与 folders:add 拒绝时同一套：先看配置文件在不在，再看来源是不是内联 WORKDIRS）；
-// 能改时 null。进广播（foldersReadonly）：零文件夹引导据此不给一个走完选择面板才报错的按钮（2026-10-15 Codex review #204）。
-const foldersReadonlyReason = () => (!usingConfigJson() ? 'no_config_file'
-  : workdirSourceFrom !== 'WORKDIRS' ? 'source_readonly' : null);
+// 清单从哪来、配置了却找不到几个（喂服务告警、体检、广播里的 foldersReadonly）：状态在 workdirs.js，
+// 与 workDirs 同一次应用里写入（applyWorkdirs、preflight、reloadWorkdirs）。
+const workdirStatus = createWorkdirStatus({ usingConfigJson });
 
 // ---- 授权判据：「已连接的文件夹」（SCOPE-04/05）。唯一一份，所有 cwd 闸门都经它 ----
 // 已连接文件夹 = workDirs（子目录直接可达）；git linked worktree 随所属仓库（双向回验）；
@@ -363,7 +357,7 @@ function applyWorkdirs(source) {
   const { dirs, limits, warnings: rw, missing } = resolveWorkdirs(source.entries);
   workDirs = dirs;
   sessionLimitByDir = limits;
-  missingFolderCount = missing.length;
+  workdirStatus.setMissing(missing.length);
   return [...source.warnings, ...rw];
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
@@ -371,7 +365,7 @@ function applyWorkdirs(source) {
 // explicit：调用方是用户明确的操作（手机上断开文件夹），哪怕剩下的条目一个都解析不出也照常生效。
 function reloadWorkdirs({ explicit = false } = {}) {
   const { result: source, warnings: srcWarnings, from } = readWorkdirSource();
-  workdirSourceFrom = from;
+  workdirStatus.setSource(from);
   if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
   for (const w of srcWarnings) console.warn(`⚠️  [workdirs 热加载] ${w}`);
   // 「有条目却一个都解析不出」时保留旧白名单：起因多半是编辑器写到一半、或外置盘临时掉线，这时把
@@ -470,7 +464,7 @@ function preflight() {
   // 工作区白名单：条目支持 string 或 {path,sessionLimit}，来源优先级与主目录折叠都在 workdirs.js
   //（doctor.js D3 共用同一份）。单个无效项告警跳过、不挡启动；列表只剩一个的话目录切换器隐藏。
   const { result: source, warnings: srcWarnings, from, filePath } = readWorkdirSource();
-  workdirSourceFrom = from;
+  workdirStatus.setSource(from);
   // 外置清单文件（WORK_DIRS_FILE）读不出来：配置坏了，不是「还没连」。照常启动会把它说成「在手机上选一个」，可来源是
   // 外置文件时手机上加不了。启动时没有旧清单可保留（热加载读失败保留旧清单，同一道判据），只能拒绝启动并点名那个文件。
   if (source === null) {
@@ -486,10 +480,10 @@ function preflight() {
   // 手机整个关在外面。那条理由仍然成立的一半——配置了却全找不到——改由这里的日志与服务告警（missingFolders）说清。
   if (!workDirs.length) {
     // 手机上改不了清单时（来源是环境变量 / 外置文件、或没有配置文件），别叫人去手机上选
-    const readonly = foldersReadonlyReason();
+    const readonly = workdirStatus.readonlyReason();
     const where = from === 'WORKDIRS' ? `${CONFIG_FILE_NAME} 的 WORKDIRS` : from;
-    console.warn(missingFolderCount
-      ? `⚠️  ${where} 里配置的目录全都找不到（${missingFolderCount} 个：被删、改名，或外置盘没挂上），先只开放「无文件夹」。目录回来后重启${readonly ? '' : '，或在手机上另选文件夹'}。`
+    console.warn(workdirStatus.missing()
+      ? `⚠️  ${where} 里配置的目录全都找不到（${workdirStatus.missing()} 个：被删、改名，或外置盘没挂上），先只开放「无文件夹」。目录回来后重启${readonly ? '' : '，或在手机上另选文件夹'}。`
       : readonly ? '还没有连接任何文件夹，先只开放「无文件夹」。' : '还没有连接任何文件夹：在手机上新建会话时选一个，或直接用「无文件夹」。');
   }
   let claudeBin = process.env.CLAUDE_BIN || '';
@@ -1300,7 +1294,7 @@ function computeServiceHealth() {
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
     // 配置里有、却找不到的文件夹个数（被删、改名、外置盘没挂上）。清单为空也能启动之后（SCOPE-03），
     // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。只给个数，路径不出网。
-    missingFolders: missingFolderCount,
+    missingFolders: workdirStatus.missing(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
@@ -1391,7 +1385,7 @@ function instancesPayload() {
   // 抽屉里不该平白多一节空的。scratchRoot 恒带——前端「选文件夹」面板靠它发起无文件夹会话。
   const scanned = projectIndex.get();
   payload.scratchRoot = scratchRootKey();
-  payload.foldersReadonly = foldersReadonlyReason();
+  payload.foldersReadonly = workdirStatus.readonlyReason();
   const scratchInUse = Boolean(scanned?.scratchInUse) || isNoFolderKey(viewingCwdOf())
     || list.some(i => i.projectKey === payload.scratchRoot);
   payload.projects = composeProjects({
@@ -4423,7 +4417,7 @@ registerSocketConnection(io, socket => {
       // 填了进去，来源分不开（那会做出一个永远报「全被覆盖」的假功能）。
       shellEnv: getShellEnvSnapshot(),
       // 配置了却找不到的文件夹个数：与服务告警同一个数，体检不能把它说成「还没连」（workDirs 两种情况下都是空的）。
-      missingFolders: missingFolderCount,
+      missingFolders: workdirStatus.missing(),
       // D20（R45，2026-08-30）：直写开关 + 公网声明信号。cfEnabled 上面已传（isAccessEnabled 权威判定），
       // 这里补 FILE_EDIT 与 PUBLIC_URL 两个输入；URL 值不进报告（runDoctor 只出布尔）。
       fileEditOff: process.env.FILE_EDIT === 'off',
@@ -5128,9 +5122,9 @@ httpServer.listen(port, host, () => {
   console.log('  Claude Chat Mobile v2');
   console.log(workDirs.length
     ? `  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`
-    : missingFolderCount
+    : workdirStatus.missing()
       ? '  工作目录: 配置的都找不到（见上方告警；「无文件夹」随时可用）'
-      : `  工作目录: 还没有（${foldersReadonlyReason() ? '' : '在手机上新建会话时选择；'}「无文件夹」随时可用）`);
+      : `  工作目录: 还没有（${workdirStatus.readonlyReason() ? '' : '在手机上新建会话时选择；'}「无文件夹」随时可用）`);
   console.log(`  claude: ${claudeBin} (${versions.cli})`);
   console.log(`  工具放行: 由 .claude/settings.json 的 permissions 决定（投屏层不注入白名单）`);
   // 无 AUTH_TOKEN 的分支已删除：那个状态到不了这里——resolveBindPlan 会在 listen 之前
