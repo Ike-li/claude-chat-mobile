@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, sessionRowByInstance, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
@@ -56,5 +56,39 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#confirmOk').click();
     await expect(subtreeOf(page, SCRATCH).locator('[data-testid="session-row"]', { hasText: '以前的无文件夹会话' })).toHaveCount(0);
     await expect(page.locator('#messages')).toContainText('临时目录已一并删除');
+  });
+
+  // 抽屉里断开文件夹（2026-10-15）：只有连接根给「⋯」（子文件夹小节、「无文件夹」不是连接根）。确认框说清
+  // 断开不动文件与会话，并说出这里开着几个会话；断开后那一节消失，开着的会话照常在（挪到「不在已连接的文件夹里」）。
+  test('P0-PROJ-3 断开文件夹：只有连接根有入口；确认框说出开着几个会话；断开后那一节消失，会话照常在', async ({ page }) => {
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+
+    const more = (cwd: string) => workspaceRow(page, cwd).locator('[data-testid="dir-disconnect"]');
+    await expect(more(SUB), '子文件夹小节不是连接根，断开它什么也断不掉').toHaveCount(0);
+    await expect(more(SCRATCH), '「无文件夹」不能断开').toHaveCount(0);
+    await expect(more(MAIN_WORKSPACE)).toHaveCount(1);
+
+    await more(MAIN_WORKSPACE).click();
+    await expect(page.locator('#confirmTitle')).toHaveText('断开「claude-chat-mobile」？');
+    await expect(page.locator('#confirmBody'), '没说开着的会话会怎样，用户会以为点下去就全关了').toContainText('个会话开着，会照常继续');
+    await page.locator('#confirmOk').click();
+
+    await expect(workspaceRow(page, MAIN_WORKSPACE), '断开之后那一节还在').toHaveCount(0);
+    await expect(page.locator('[data-testid="unowned-live-section"]').locator('[data-testid="session-row"][data-instance-id="inst_1"]'),
+      '断开把开着的会话从抽屉里弄丢了').toHaveCount(1);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 清单来自环境变量 / 外置文件、或没有配置文件时，手机上断不开（folders:remove 回 source_readonly / no_config_file）。
+  // 不给「⋯」：点下去只会在确认之后才报「改不了」（同首页零文件夹引导，2026-10-15 Codex review #204）。
+  // 能改时给入口由 P0-PROJ-3 钉着。
+  test('P0-PROJ-4 手机上改不了清单时不给断开入口', async ({ page }) => {
+    await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(MAIN_WORKSPACE)}&readonly=source_readonly`);
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, MAIN_WORKSPACE)).toHaveCount(1);
+    await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-disconnect"]'), '断不开却给了入口，确认之后才报改不了').toHaveCount(0);
+    await expectNoBrowserErrors(page);
   });
 });

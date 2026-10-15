@@ -644,6 +644,13 @@ export const EN_DICT = Object.freeze({
   '选择文件夹': 'Choose a folder',
   '还没有连接文件夹': 'No folders connected yet',
   '已连接的文件夹都找不到了': 'Your connected folders can\'t be found',
+  '这个文件夹已经不在已连接的清单里了': 'This folder is no longer in your connected list',
+  '断开后抽屉里不再显示它，也不能在里面新开会话；文件夹里的文件和会话记录都不动，随时可以再选回来。':
+    'It disappears from the drawer and you can\'t start new sessions in it. Its files and session history stay untouched, and you can pick it again anytime. ',
+  '这里有 {n} 个会话开着，会照常继续。': '{n} open session(s) here will keep running.',
+  '断开「{name}」？': 'Disconnect "{name}"?',
+  '断开': 'Disconnect',
+  '断开这个文件夹': 'Disconnect this folder',
   '选一个项目文件夹，claude 就在里面读写代码。只是聊聊的话，点 ＋ 直接在「无文件夹」里开。':
     'Pick a project folder and claude will read and write code there. Just want to chat? Tap ＋ to start in "No folder".',
   '已连接的文件夹': 'Connected folders',
@@ -652,7 +659,6 @@ export const EN_DICT = Object.freeze({
   '从家目录里选一个文件夹连接进来': 'Pick a folder in your home folder to connect',
   '查看子文件夹': 'Show subfolders',
   '这个文件夹不在家目录里，看不了它的子文件夹': 'This folder isn\'t inside your home folder, so its subfolders can\'t be browsed',
-  '添加这个文件夹': 'Add this folder',
   '在这里开始会话': 'Start a session here',
   '新建文件夹': 'New folder',
   '这里没有子文件夹': 'No subfolders here',

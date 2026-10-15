@@ -45,7 +45,7 @@ export function normalizeProjects(payload) {
 }
 
 // 「选文件夹」面板里服务端回的原因码 → 给人看的一句话（能不能加、为什么建不了、为什么没加上）。
-// 码的出处：sessions/folders.js（判据）、app.js addConnectedFolder（写配置）、socket-folders.js。
+// 码的出处：sessions/folders.js（判据）、app.js addConnectedFolder / removeConnectedFolder（写配置）、socket-folders.js。
 const FOLDER_REASON_TEXT = Object.freeze({
   home: tk('不能添加整个家目录'),
   root: tk('不能添加磁盘根目录'),
@@ -61,6 +61,7 @@ const FOLDER_REASON_TEXT = Object.freeze({
   write_failed: tk('写入配置文件失败'),
   not_applied: tk('已写入配置，但没有生效'),
   invalid: tk('配置校验没通过'),
+  not_connected: tk('这个文件夹已经不在已连接的清单里了'),
   exists: tk('同名文件夹已存在'),
   hidden: tk('名字不能以 . 开头'),
   separator: tk('名字里不能有斜杠'),
@@ -74,6 +75,25 @@ const FOLDER_REASON_TEXT = Object.freeze({
 export const FOLDER_REASON_CODES = Object.freeze(Object.keys(FOLDER_REASON_TEXT));
 export function folderReasonText(code) {
   return t(Object.hasOwn(FOLDER_REASON_TEXT, code) ? FOLDER_REASON_TEXT[code] : tk('操作失败'));
+}
+
+// 抽屉「⋯ → 断开这个文件夹」的确认框（2026-10-15）。断开只是不再显示、不能在里面新开：文件和会话记录都不动，
+// 开着的会话照常跑。有会话开着时说出几个——不说，用户会以为点下去就全关了。
+// 名字用函数替换：字符串参数会把名字里的 $& 之类当成替换模式。
+export function disconnectFolderConfirm({ name, openSessions = 0 } = {}) {
+  let body = t('断开后抽屉里不再显示它，也不能在里面新开会话；文件夹里的文件和会话记录都不动，随时可以再选回来。');
+  if (Number.isFinite(openSessions) && openSessions > 0) {
+    body += t('这里有 {n} 个会话开着，会照常继续。').replace('{n}', String(openSessions));
+  }
+  return { title: t('断开「{name}」？').replace('{name}', () => String(name ?? '')), body, okText: t('断开') };
+}
+
+// 首页「最近活跃会话」去哪些目录拉：服务端给的项目清单。回落到查看目录只给载荷里没带清单的旧服务端——
+// 服务端明说一个文件夹都没连时，查看目录可能还停在刚断开、但里面有会话开着的文件夹上（服务端只在没有实例时
+// 才把它归位），显式拿它去拉列表会被当成越界尝试、记一条审计（2026-10-15）。
+export function dashboardDirs({ keys = [], connectedCount = null, currentCwd = null } = {}) {
+  if (keys.length) return keys.slice();
+  return currentCwd && connectedCount == null ? [currentCwd] : [];
 }
 
 // 小节标题：「无文件夹」的文案归前端 i18n；子文件夹用服务端给的「根 › 相对路径」；其余取末段。

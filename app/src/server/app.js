@@ -7,7 +7,7 @@
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { statSync, readFileSync, existsSync, mkdirSync, unlinkSync, accessSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { statSync, readFileSync, existsSync, mkdirSync, unlinkSync, accessSync, openSync, readSync, closeSync, realpathSync, constants as fsConstants } from 'node:fs';
 import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken, sanitize } from '../shared/sanitizer.js';
@@ -368,7 +368,8 @@ function applyWorkdirs(source) {
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
 // 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
-function reloadWorkdirs() {
+// explicit：调用方是用户明确的操作（手机上断开文件夹），哪怕剩下的条目一个都解析不出也照常生效。
+function reloadWorkdirs({ explicit = false } = {}) {
   const { result: source, warnings: srcWarnings, from } = readWorkdirSource();
   workdirSourceFrom = from;
   if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
@@ -376,8 +377,9 @@ function reloadWorkdirs() {
   // 「有条目却一个都解析不出」时保留旧白名单：起因多半是编辑器写到一半、或外置盘临时掉线，这时把
   // 正在用的文件夹一把清空，代价远大于晚一拍生效（与 source === null 同档）。
   // 显式写成空清单（[] 或删掉这一项）则照常生效：没有文件夹也能用（SCOPE-03），清空是用户的真实意图。
+  // 旧清单本来就是空的时没有什么可保留，照常应用（找不到的个数才会跟着进服务告警）。
   const { dirs: probe } = resolveWorkdirs(source.entries);
-  if (!probe.length && source.entries.length) {
+  if (!explicit && !probe.length && source.entries.length && workDirs.length) {
     console.warn('⚠️  [workdirs 热加载] 新配置里没有一个可用工作区，保留旧白名单（未生效）');
     return;
   }
@@ -420,6 +422,36 @@ function addConnectedFolder(path) {
   }
   reloadWorkdirs();
   return workDirs.includes(path) ? { ok: true, dirs: workDirs } : { ok: false, error: 'not_applied', dirs: workDirs };
+}
+
+// 手机上「断开这个文件夹」（2026-10-15）：从配置文件的内联 WORKDIRS 里删掉指向它的条目（realpath 相等的都删），
+// 其余条目连同 sessionLimit 原样保留，同步热加载。前置检查与添加同一套：配置文件存在、来源确实是内联 WORKDIRS。
+// 只认与当前清单精确相等的连接根：子文件夹小节、「无文件夹」、不在清单里的一律 not_connected。
+// 不过 validateEnvChanges：只删不加，挡下来的只会是别的条目里早就存在的问题，那不该让这次断开失败。
+// 热加载走 explicit：剩下的条目全都找不到时，「保留旧清单」那道保护（防编辑器写到一半）会把这次断开吞掉。
+// 已开在里面的会话照常跑，只拒新开（同设置面板里删掉一项）。
+function removeConnectedFolder(path) {
+  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
+  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
+  if (typeof path !== 'string' || !workDirs.includes(path)) return { ok: false, error: 'not_connected' };
+  let config;
+  try {
+    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+  } catch {
+    return { ok: false, error: 'config_unreadable' };
+  }
+  const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
+  const realOf = p => { try { return realpathSync.native(p); } catch { return null; } };
+  const next = list.filter(e => realOf(typeof e === 'string' ? e : e?.path) !== path);
+  // 清单里有它、配置的 WORKDIRS 里却没有：是退役的 WORK_DIR 折进来的那一项，删 WORKDIRS 删不掉它
+  if (next.length === list.length) return { ok: false, error: 'not_connected' };
+  try {
+    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
+  } catch {
+    return { ok: false, error: 'write_failed' };
+  }
+  reloadWorkdirs({ explicit: true });
+  return workDirs.includes(path) ? { ok: false, error: 'not_applied', dirs: workDirs } : { ok: true, dirs: workDirs };
 }
 
 // ---- 启动预检（验收 A9）----
@@ -4166,6 +4198,7 @@ registerSocketConnection(io, socket => {
     // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
     folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
     addConnectedFolder,
+    removeConnectedFolder,
     audit,
     actorFromSocket,
   });

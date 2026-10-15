@@ -5,6 +5,7 @@
 //   · 不带 cwd 的新会话页也落在「无文件夹」，并当场建出 scratch 根（scout 要一个真实存在的 cwd）；
 //   · 找不到的文件夹进服务告警（instances 广播的 service.missingFolders）与体检（WORK_DIRS warn），不让手机上只剩一片空却说不出原因；
 //   · 热加载时显式清空即生效，而「有条目但一个都解析不出」仍保留原清单（编辑器写到一半、外置盘临时掉线）；
+//     原清单已经是空的时没有什么可保留，照常应用，找不到的进服务告警；
 //   · 外置清单文件（WORK_DIRS_FILE）读不出来是配置坏了：拒绝启动并点名那个文件，不当成「还没连」；
 //   · 正在看的文件夹被移出清单且它是最后一个时，不带参数的新会话页回落到「无文件夹」，不是 undefined。
 // 不测什么 + 为什么：① 部分目录无效时的 warn-skip 归 tests/unit/workdirs.test.mjs ② WORK_DIR 折叠的纯函数契约同上
@@ -206,6 +207,11 @@ test('热加载：有条目但一个都解析不出时保留原清单；显式�
 
   writeConfig(s.configPath, { WORKDIRS: [] });
   await waitFor(() => s.latest()?.dirs?.length === 0, '显式清空后广播里的 dirs 变成 []');
+
+  // 旧清单已经是空的：没有什么可保留，照常应用——找不到的那个才进得了服务告警
+  writeConfig(s.configPath, { WORKDIRS: [join(home, 'code', 'gone')] });
+  await waitFor(() => s.latest()?.service?.missingFolders === 1, '空清单时写进一个找不到的目录，服务告警说出来');
+  assert.deepEqual(s.latest().dirs, []);
 });
 
 // 前端发的是 {cwd}，带着已移出清单的目录会按 SCOPE-05 被拒（request-cwd-scope 那批用例管）。

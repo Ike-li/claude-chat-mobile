@@ -23,6 +23,8 @@ export function createProjectsState() {
     keys: () => list.map(p => p.key),
     connectedCount: () => connected,
     foldersReadonly: () => readonly,
+    // 这一节是什么：connected（连接根）/ subfolder / scratch；不在清单里 → null。抽屉据此决定给不给「断开」。
+    kindOf: key => byKey.get(key)?.kind ?? null,
     entries: () => list.slice(),
     scratchRoot: () => scratchRoot,
     // 这个 cwd 是不是「无文件夹」（scratch 根本身或它下面的某个 scratch 目录）
