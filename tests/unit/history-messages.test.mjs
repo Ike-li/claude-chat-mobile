@@ -1020,6 +1020,31 @@ test('getSessionHistory: 当前链末尾挂着 system 行时 rewind 废弃段照
   }
 });
 
+// 同理，带 teamName 的条目两版 SDK 选叶都跳过（sdk.mjs 的候选过滤里写着），它排在最后不说明选错了叶。
+// 下面的链是 0.3.300 对这份文件的真实返回（10/15 用真 SDK 跑过；0.3.281 会选回 u-2/a-2 那条废弃分支，
+// 那种情况保护照样兜得住）。本机 transcript 里没有带 teamName 的条目，形态按 SDK 判的那个字段造。
+test('getSessionHistory: 链尾是带 teamName 的条目时不算 SDK 选错叶，rewind 废弃段照剪', async () => {
+  const cwd = '/test/rewind-then-team';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'rewindteam', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '第一问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '第一答' }, timestamp: '2024-01-01T00:00:01Z' },
+    // ↓ 这两条后来被 rewind 撤销
+    { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '撤销的答' }, timestamp: '2024-01-01T00:00:03Z' },
+    { type: 'user', uuid: 'u-3', parentUuid: 'a-1', message: { role: 'user', content: '重来的问' }, timestamp: '2024-01-01T00:00:04Z' },
+    { type: 'assistant', uuid: 'a-3', parentUuid: 'u-3', message: { role: 'assistant', content: '重来的答' }, timestamp: '2024-01-01T00:00:05Z' },
+    { type: 'user', uuid: 't-1', parentUuid: 'a-3', teamName: 'research', message: { role: 'user', content: '队友发来的' }, timestamp: '2024-01-01T00:00:06Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }, { uuid: 'u-3' }, { uuid: 'a-3' }]);
+  try {
+    const msgs = await getSessionHistory('rewindteam', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['第一问', '第一答', '重来的问', '重来的答'],
+      '撤销的分支重新露面了：保护把 SDK 本就不当叶子的 teamName 条目算成了最新主链消息');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
 // 桌面端会话在 CCM 里是镜像回显，图只能从 transcript 里来：tool_use 条目必须带 show_widget 的完整源码。
 test('getSessionHistory: show_widget 的 tool_use 条目带完整 widget 源码，别的工具不带', async () => {
   const cwd = '/test/widget-hist';
