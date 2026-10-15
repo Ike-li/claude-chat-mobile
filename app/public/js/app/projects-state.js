@@ -11,15 +11,18 @@ export function createProjectsState() {
   let byKey = new Map();
   let scratchRoot = null;
   let connected = null; // 已连接的文件夹个数（广播里的 dirs）；null = 还没收到、或载荷没带——不知道就不当成零
+  let readonly = null; // 手机上改不了清单时的原因码（广播里的 foldersReadonly）；null = 能改，或载荷没带
   return {
     set(payload) {
       list = normalizeProjects(payload);
       byKey = new Map(list.map(p => [p.key, p]));
       scratchRoot = typeof payload?.scratchRoot === 'string' && payload.scratchRoot ? payload.scratchRoot : null;
       connected = Array.isArray(payload?.dirs) ? payload.dirs.length : null;
+      readonly = typeof payload?.foldersReadonly === 'string' && payload.foldersReadonly ? payload.foldersReadonly : null;
     },
     keys: () => list.map(p => p.key),
     connectedCount: () => connected,
+    foldersReadonly: () => readonly,
     entries: () => list.slice(),
     scratchRoot: () => scratchRoot,
     // 这个 cwd 是不是「无文件夹」（scratch 根本身或它下面的某个 scratch 目录）

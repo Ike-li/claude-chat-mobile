@@ -437,7 +437,8 @@ function mockDirFields() {
   if (mockInstances.some(i => i.projectKey === MOCK_SCRATCH_ROOT) || (!viewingInstanceId && pendingFreshCwd === MOCK_SCRATCH_ROOT)) {
     projects.push({ key: MOCK_SCRATCH_ROOT, root: MOCK_SCRATCH_ROOT, label: null, kind: 'scratch' });
   }
-  return { dirs, projects, scratchRoot: MOCK_SCRATCH_ROOT };
+  // foldersReadonly：手机上改不了清单时的原因码（同真 server；test:folders-readonly 那种安装下 folders:add 就回它）
+  return { dirs, projects, scratchRoot: MOCK_SCRATCH_ROOT, foldersReadonly: mockFoldersAddError };
 }
 
 // 「选文件夹」面板的假家目录（只有目录名，同真 server 的 folders:browse）。键 = 家目录相对路径。
@@ -774,10 +775,12 @@ app.post('/__arm-history-error', (_req, res) => {
 // P0-PICK-11/12/13：钉住已连接的文件夹清单（instances 广播的 dirs），查看目录停在「无文件夹」、不看任何实例——
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
+// readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
   mockMissingFolders = Number(req.query?.missing) || 0;
+  if (typeof req.query?.readonly === 'string') mockFoldersAddError = req.query.readonly || null;
   viewingInstanceId = null;
   pendingFreshCwd = MOCK_SCRATCH_ROOT;
   io.emit('agent:event', {

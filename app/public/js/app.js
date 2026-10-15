@@ -177,6 +177,7 @@ import {
   shortDeviceId,
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
+  folderReasonText,
 } from './logic.js';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
@@ -8025,6 +8026,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           <p class="text-sm font-semibold text-ink mb-1" data-dash-no-folders-title>${t('还没有连接文件夹')}</p>
           <p class="text-xs text-ink-faint mb-3">${t('选一个项目文件夹，claude 就在里面读写代码。只是聊聊的话，点 ＋ 直接在「无文件夹」里开。')}</p>
           <button type="button" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-cta text-white text-xs font-semibold shadow-sm active:scale-[0.98] transition-all" data-testid="dash-pick-folder">${t('选择文件夹')}</button>
+          <p class="hidden text-xs text-ink-soft" data-testid="dash-folders-readonly"></p>
         </div>
 
         <div id="dashWorkspacesSection" class="w-full hidden mb-5">
@@ -8222,6 +8224,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     box.classList.toggle('hidden', projectsState.connectedCount() !== 0);
     box.querySelector('[data-dash-no-folders-title]').textContent = latestServiceHealth?.missingFolders > 0
       ? t('已连接的文件夹都找不到了') : t('还没有连接文件夹');
+    // 手机上改不了清单（来源是环境变量 / 外置文件、或没有配置文件）：不给一个走完选择面板才报错的按钮，直接说为什么
+    const readonly = projectsState.foldersReadonly();
+    box.querySelector('[data-testid="dash-pick-folder"]').classList.toggle('hidden', Boolean(readonly));
+    const why = box.querySelector('[data-testid="dash-folders-readonly"]');
+    why.textContent = readonly ? folderReasonText(readonly) : '';
+    why.classList.toggle('hidden', !readonly);
   }
 
   // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊

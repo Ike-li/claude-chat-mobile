@@ -5,6 +5,7 @@
 //   · 不带 cwd 的新会话页也落在「无文件夹」，并当场建出 scratch 根（scout 要一个真实存在的 cwd）；
 //   · 找不到的文件夹进服务告警（instances 广播的 service.missingFolders）与体检（WORK_DIRS warn），不让手机上只剩一片空却说不出原因；
 //   · 热加载时显式清空即生效，而「有条目但一个都解析不出」仍保留原清单（编辑器写到一半、外置盘临时掉线）；
+//   · 外置清单文件（WORK_DIRS_FILE）读不出来是配置坏了：拒绝启动并点名那个文件，不当成「还没连」；
 //   · 正在看的文件夹被移出清单且它是最后一个时，不带参数的新会话页回落到「无文件夹」，不是 undefined。
 // 不测什么 + 为什么：① 部分目录无效时的 warn-skip 归 tests/unit/workdirs.test.mjs ② WORK_DIR 折叠的纯函数契约同上
 //   ③ 前端的零文件夹引导属 S3
@@ -24,12 +25,14 @@ import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { io as ioClient } from 'socket.io-client';
 import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
+import { stripInheritedEnv } from '../../helpers/spawn-env.mjs';
 import { OUT_OF_SCOPE_ERROR } from '../../../app/src/server/socket-files.js';
 
 const TOKEN = 'inv-scope03-token';
@@ -100,6 +103,30 @@ async function start(config) {
   return handle;
 }
 
+// 起一个 server 子进程并等它自己退出（或超时判定为「起来了」）。不用 spawnServer：它在启动失败时抛错，
+// 而这里要断言的正是失败本身——退出码与输出都得看得见。超时是缺陷存在时走的分支，得能干净收场并带回证据。
+function runServer(env, { timeoutMs = 15_000 } = {}) {
+  return new Promise(resolve => {
+    const proc = spawn('node', ['app/server.js'], {
+      env: {
+        ...stripInheritedEnv(process.env), DEV_MODE: '0', LOG_TERMINAL: 'off', CCM_TEST_PRESERVE_EMPTY_ENV: '1',
+        // 预检先查工作区、再查 claude：找不到 claude 也是非 0 退出，会让「没拒绝」的缺陷照样过退出码那一关
+        CLAUDE_BIN: join(process.cwd(), 'tests', 'fixtures', 'fake-claude.sh'),
+        PORT: '0', ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: process.cwd(),
+    });
+    let out = '';
+    let timedOut = false;
+    proc.stdout.on('data', c => { out += c; });
+    proc.stderr.on('data', c => { out += c; });
+    const timer = setTimeout(() => { timedOut = true; proc.kill('SIGKILL'); }, timeoutMs);
+    proc.on('exit', code => { clearTimeout(timer); resolve({ code, out, timedOut }); });
+    proc.on('error', err => { clearTimeout(timer); resolve({ code: null, out: `${out}\n${err}`, timedOut }); });
+  });
+}
+
 test.before(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope03-')));
   home = join(root, 'home');
@@ -146,6 +173,25 @@ test('配置的文件夹一个都找不到：照常启动，进服务告警，�
   const doc = await s.emit('doctor:run', {});
   const wd = doc?.checks?.find(c => c.id === 'WORK_DIRS');
   assert.equal(wd?.status, 'warn', `体检把「配置了却找不到」说成了「还没连」：${JSON.stringify(wd)}`);
+});
+
+// 外置清单文件（旧版 WORK_DIRS_FILE）读不出来、或不是合法 JSON：那是配置坏了，不是「还没连」。照常启动的话，
+// 启动日志与手机首页都会说「还没有连接任何文件夹，在手机上选一个」——可来源是外置文件时手机上加不了（source_readonly），
+// 只剩一条走到底才报错的死路。启动时没有旧清单可保留（热加载读失败保留旧清单，同一道判据），只能拒绝启动并点名
+// 那个文件（2026-10-15 Codex review #204）。
+test('外置清单文件读不出来：拒绝启动并点名那个文件，不当成「还没连」', async () => {
+  const broken = join(root, 'workdirs.broken.json');
+  writeFileSync(broken, '{ 不是 JSON');
+  const configPath = join(root, 'ccm.config.broken-file.json');
+  writeConfig(configPath, {});
+  const r = await runServer({
+    AUTH_TOKEN: TOKEN, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'),
+    CCM_DATA_DIR: join(root, 'data-broken-file'), CCM_CONFIG_FILE_PATH: configPath,
+    CCM_ENV_FILE_PATH: join(root, 'no-such-broken-file.env'), WORK_DIRS: '', WORK_DIRS_FILE: broken,
+  });
+  assert.equal(r.timedOut, false, `外置清单文件读不出来，server 却照常起来了——配置错误被当成了「还没连」。输出：\n${r.out}`);
+  assert.notEqual(r.code, 0, `退出码必须非 0（实际 ${r.code}）。输出：\n${r.out}`);
+  assert.ok(r.out.includes(broken), `拒绝理由没点名是哪个文件，用户无从下手：\n${r.out}`);
 });
 
 test('热加载：有条目但一个都解析不出时保留原清单；显式清空立即生效', async () => {

@@ -321,6 +321,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 清单来自环境变量 / 外置文件、或没有配置文件时，手机上加不了文件夹（folders:add 回 source_readonly / no_config_file）。
+  // 零文件夹引导不能给一个走完整个选择面板才报错的按钮：广播里带着原因，引导把按钮换成这句话（2026-10-15 Codex review #204）。
+  test('P0-PICK-15 零文件夹但手机上改不了清单：引导不给「选择文件夹」，直接说清为什么', async ({ page }) => {
+    await page.request.post('/__set-connected-folders?dirs=&missing=1&readonly=source_readonly');
+    const guide = page.locator('[data-testid="dash-no-folders"]');
+    await expect(guide).toBeVisible();
+    await expect(guide.locator('[data-testid="dash-pick-folder"]'), '手机上加不了，引导却给了一个走到底才报错的按钮').toBeHidden();
+    await expect(guide.locator('[data-testid="dash-folders-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    // 改得了的时候按钮回来、原因收起（同一页上随广播切换）
+    await page.request.post('/__set-connected-folders?dirs=&readonly=');
+    await expect(guide.locator('[data-testid="dash-pick-folder"]')).toBeVisible();
+    await expect(guide.locator('[data-testid="dash-folders-readonly"]')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
     await openPickerFromCompose(page);
     await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
