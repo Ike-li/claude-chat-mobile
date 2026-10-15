@@ -213,7 +213,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
   // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
   let chainStarted = false;
-  // 物理上最新的主链 user/assistant（口径与下面剪枝的那道闸相同，剪掉的也算）。
+  // 物理上最新的主链 user/assistant（口径与下面剪枝的那道闸相同、另跳过 teamName，剪掉的也算）。
   let newestMainUuid = null;
   // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
   // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
@@ -254,7 +254,8 @@ async function readHistoryMessages(historyFile, liveUuids) {
       // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
       // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
       if (entry.uuid && !entry.isSidechain && (entry.type === 'user' || entry.type === 'assistant')) {
-        newestMainUuid = entry.uuid;
+        // teamName 条目 SDK 选叶本就跳过（两版同），它排在最后不说明叶子选错了。
+        if (!entry.teamName) newestMainUuid = entry.uuid;
         if (liveUuids) {
           if (liveUuids.has(entry.uuid)) chainStarted = true;
           else if (chainStarted) continue;
