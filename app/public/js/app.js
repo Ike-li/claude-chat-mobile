@@ -36,7 +36,6 @@ import {
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
-  shouldShowStartScreen,
   shouldShowComposer,
   shouldShowTopContextPill,
   sessionIdBlockView,
@@ -6600,11 +6599,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     haptic('tap');
     closeLeftSidebar();
     leaveComposeReady();
-    // 清除③：用户显式回主页——放弃"sessionId 未到即中断"的待续档态，让 shouldShowStartScreen 按
-    // 正常规则判定（不应被 freshInterrupted 拦住，用户就是要去主页）。
+    // 清除③：用户显式回主页——放弃"sessionId 未到即中断"的待续档态（用户就是要去主页）。
     freshInterruptedInstanceId = null;
-    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId || null;
-    if (shouldShowStartScreen({ viewingInstanceId, sessionId: sid })) {
+    // 「已在空表面」只认没有正在看的实例，不看 sessionId 有没有到。sessionId 未到的实例可能正在跑
+    // （首轮头几秒、网关卡住）：本地画了首页，服务端却仍当它是正在看的，busy 也还归它，动态状态行的
+    // 下一次刷新（每秒一拍的 ticker、status_line、流式 delta）就经 leaveStartScreen 清掉首页、挂回那一行
+    // （2026-10-15 复现，首页撑不过 1 秒）。也不能改成看它在不在跑：懒开的那条广播发在 send 之前，
+    // send 还要先等 setModel / effort 的控制请求才计入在途轮（CLI 没起来时可达数秒），这段时间广播里
+    // 实例还不是 busy，本地却已乐观 busy。所以有实例就走 session:home，广播回来经 bindView 落首页，
+    // 实例在后台照跑。
+    if (!viewingInstanceId) {
       showDashboard();
       return;
     }

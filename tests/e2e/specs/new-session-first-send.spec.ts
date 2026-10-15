@@ -251,4 +251,45 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 首轮 sessionId 还没到（CLI 还没吐 system/init：新会话头几秒，或网关卡住）时点 🏠，首页必须留在屏上。
+  // 2026-10-15 fake-claude 复现：首页画出来不到 1 秒就被拿掉，屏幕回到只有一行动态状态的聊天视图。
+  // 拿掉它的是动态状态行的刷新：busy 还归那个实例，刷新时发现那一行不在 DOM 里，就经 leaveStartScreen
+  // 清掉首页再挂回去。刷新源里每秒一拍的 ticker 必定会来，所以等待交给 page.clock：runFor 让它
+  // 确定地走过三拍，不赌墙钟（waitForTimeout 被门禁禁掉）。
+  test('P0-13f 全新会话首轮 sessionId 未到时点 🏠，首页不被动态状态行顶掉', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    // mock 懒开 inst_fresh：sessionId 恒 null、state busy、不发 result，轮次一直挂着
+    await sendChatMessage(page, 'test:fresh-interrupt');
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:fresh-interrupt');
+
+    // 记首页【出现之后】有没有离开过屏幕。同 P0-12c：回调排在同步块之后，同步清屏再重画不算离开。
+    await page.evaluate(() => {
+      const w = window as unknown as { __dashSeen: boolean; __dashGone: number };
+      w.__dashSeen = false;
+      w.__dashGone = 0;
+      const box = document.getElementById('messages')!;
+      new MutationObserver(() => {
+        if (box.querySelector('[data-testid="home-dashboard"]')) w.__dashSeen = true;
+        else if (w.__dashSeen) w.__dashGone += 1;
+      }).observe(box, { childList: true, subtree: true });
+    });
+
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+
+    await page.clock.runFor(3000);
+
+    const gone = await page.evaluate(() => (window as unknown as { __dashGone: number }).__dashGone);
+    expect(gone, '首页出现后又离开过屏幕：🏠 之后仍有东西往 #messages 里画').toBe(0);
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+    await expect(page.locator('#streamLiveStatus')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
 });
