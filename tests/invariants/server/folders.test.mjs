@@ -1,9 +1,10 @@
-// tests/invariants/server/folders.test.mjs —— 手机上添加 / 新建文件夹在真 server 上的接线
-// 守护：FOLDER-01（能加什么、写到哪、写完是否真的生效；新建只在范围内、越界什么都不建）
-// 测什么：真 app/server.js 子进程上 folders:browse / folders:add / folders:mkdir 三条事件：
+// tests/invariants/server/folders.test.mjs —— 手机上添加 / 新建 / 断开文件夹在真 server 上的接线
+// 守护：FOLDER-01（能加什么、写到哪、写完是否真的生效；新建只在范围内、越界什么都不建；断开只认连接根）
+// 测什么：真 app/server.js 子进程上 folders:browse / folders:add / folders:mkdir / folders:remove 四条事件：
 //   加进去的目录立刻出现在 ack 与广播里、配置文件原有条目（含 sessionLimit）原样保留、留审计；
 //   不能加的一律拒绝且配置文件逐字节不变；配置文件不存在时不替用户建、来源是环境变量时不假装成功；
-//   这两种「手机上改不了」在 instances 广播的 foldersReadonly 里提前说清，能改时是 null。
+//   这两种「手机上改不了」在 instances 广播的 foldersReadonly 里提前说清，能改时是 null；
+//   已经连着的不重复写；断开只认连接根、其余条目原样保留、剩下的全都找不到也照样生效、开着的会话照常跑。
 // 不测什么 + 为什么：① 判据本身（只回目录名、symlink、worktree、名字校验）在 S1 folder-picker.test.mjs
 //   ② 前端的选择面板属 S3
 // 槽位：S2（真 app/server.js 子进程 + 假 CLI；HOME 与配置文件都在一次性目录里）
@@ -112,7 +113,7 @@ test('添加：ack 带回生效后的列表、广播跟上、原有条目原样�
 
 test('不能加的一律拒绝，配置文件逐字节不变', async () => {
   const before = readFileSync(configPath, 'utf8');
-  for (const [path, error] of [['', 'home'], ['..', 'outside_home'], ['code/a', 'already_connected'], ['code/nope', 'not_found']]) {
+  for (const [path, error] of [['', 'home'], ['..', 'outside_home'], ['code/nope', 'not_found']]) {
     assert.deepEqual(await emit('folders:add', { path }), { ok: false, error }, path);
   }
   assert.equal(readFileSync(configPath, 'utf8'), before);
@@ -121,6 +122,19 @@ test('不能加的一律拒绝，配置文件逐字节不变', async () => {
   await waitFor(() => violations('folders:add').length > 0, 'folders:add 越界审计').catch(() => {});
   assert.deepEqual(violations('folders:add').map(r => r.target), ['..']);
   assert.deepEqual(violations('folders:browse'), [], '成功的浏览被记成了越界');
+});
+
+// 「在这里开始会话」也用在已经连着的文件夹上：再点一次不该报错，也不该把同一个目录再写一遍。
+test('添加已经连着的文件夹：照常成功、标明没有新加，配置逐字节不变，不再记一条扩授权面的审计', async () => {
+  const before = readFileSync(configPath, 'utf8');
+  const connectedRows = () => auditRows(r => r.action === 'folder_connected' && r.target === a).length;
+  const rowsBefore = connectedRows();
+  const res = await emit('folders:add', { path: 'code/a' });
+  assert.equal(res?.ok, true, `已经连着的文件夹点「在这里开始会话」却报错：${JSON.stringify(res)}`);
+  assert.equal(res.added, false);
+  assert.ok(res.dirs.includes(a));
+  assert.equal(readFileSync(configPath, 'utf8'), before, '同一个目录被再写了一遍');
+  assert.equal(connectedRows(), rowsBefore);
 });
 
 // 禁区清单在组装根里拼（~/.claude、CCM 数据目录、scratch 根）。S1 的判据用例是自己把清单传进去的——
@@ -189,6 +203,113 @@ test('工作区来自环境变量：写进配置文件也不会生效，拒绝�
     assert.equal(await readonlyOf(s), 'source_readonly', '广播没说手机上改不了：零文件夹引导会给一个走完选择面板才报错的按钮');
     assert.deepEqual(await emitOn(s, 'folders:add', { path: 'code/b' }), { ok: false, error: 'source_readonly' });
     assert.equal(readFileSync(cfg, 'utf8'), before);
+  } finally {
+    s.close();
+    await killServer(other.proc);
+  }
+});
+
+// ---- 断开（2026-10-15）：抽屉里「⋯ → 断开这个文件夹」。与添加对称：只写配置文件内联 WORKDIRS、同步热加载、留审计。
+// 位置用绝对路径（抽屉小节的 key）：连接根可以在家目录之外，家目录相对路径表达不了；只认与清单精确相等的那个。
+
+// 起一台只认这份配置的 server，连上 socket，收广播。
+async function startWith(workdirs, extra = {}) {
+  const cfg = join(root, `remove-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(cfg, `${JSON.stringify({ WORKDIRS: workdirs }, null, 2)}\n`);
+  const srv = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: cfg, CCM_AUDIT_FILE: auditFile, ...extra }));
+  const s = await connect(srv.port);
+  const seen = [];
+  s.on('agent:event', e => seen.push(e));
+  const latest = () => seen.filter(e => e.type === 'instances').pop()?.payload;
+  return { cfg, s, latest, stop: async () => { s.close(); await killServer(srv.proc); } };
+}
+
+test('断开：只认连接根；子文件夹、无文件夹、不在清单里的一律拒，配置逐字节不变', async () => {
+  const sub = join(a, 'sub');
+  mkdirSync(sub, { recursive: true });
+  const before = readFileSync(configPath, 'utf8');
+  const { scratchRoot } = await waitFor(() => events.filter(e => e.type === 'instances').pop()?.payload, 'instances 广播');
+  for (const path of [sub, scratchRoot, join(home, 'code'), '/definitely/not/connected', '', 42, null]) {
+    assert.deepEqual(await emit('folders:remove', { path }), { ok: false, error: 'not_connected' }, String(path));
+  }
+  assert.equal(readFileSync(configPath, 'utf8'), before);
+});
+
+test('断开：其他条目连同 sessionLimit 原样保留，ack 带回生效后的列表，广播跟上，留审计', async () => {
+  const c = join(home, 'code', 'c');
+  mkdirSync(c, { recursive: true });
+  const srv = await startWith([{ path: a, sessionLimit: 9 }, b, c]);
+  try {
+    const res = await emitOn(srv.s, 'folders:remove', { path: b });
+    assert.deepEqual(res, { ok: true, dirs: [a, c] }, '写进文件却没生效 = 假成功');
+    await waitFor(() => srv.latest()?.dirs?.join('|') === [a, c].join('|'), '广播里少了断开的目录');
+    assert.deepEqual(JSON.parse(readFileSync(srv.cfg, 'utf8')).WORKDIRS, [{ path: a, sessionLimit: 9 }, c],
+      '断开一个却动了别的条目（sessionLimit 被抹掉 = 用户配过的东西凭空消失）');
+    const rows = () => auditRows(r => r.action === 'folder_disconnected' && r.target === b);
+    await waitFor(() => rows().length === 1, 'folder_disconnected 审计记录').catch(() => {});
+    assert.equal(rows().length, 1, '缩授权面的操作同样要留痕');
+  } finally {
+    await srv.stop();
+  }
+});
+
+test('断开最后一个：清单变空，只剩「无文件夹」', async () => {
+  const srv = await startWith([a]);
+  try {
+    const res = await emitOn(srv.s, 'folders:remove', { path: a });
+    assert.deepEqual(res, { ok: true, dirs: [] });
+    await waitFor(() => srv.latest()?.dirs?.length === 0, '广播里的 dirs 变成 []');
+    const { scratchRoot, viewingCwd } = srv.latest();
+    assert.equal(viewingCwd, scratchRoot, `断开最后一个之后缺省目录没落到「无文件夹」：${viewingCwd}`);
+  } finally {
+    await srv.stop();
+  }
+});
+
+// 剩下的条目都找不到（外置盘没挂上）时，热加载的「有条目却一个都解析不出 → 保留旧清单」会把这次断开吞掉。
+// 那条保护防的是编辑器写到一半；断开是用户在手机上点的，意图明确，必须生效。
+test('断开：剩下的都找不到时照样生效，不被「保留旧清单」吞掉', async () => {
+  const srv = await startWith([a, join(home, 'code', 'gone')]);
+  try {
+    const res = await emitOn(srv.s, 'folders:remove', { path: a });
+    assert.deepEqual(res, { ok: true, dirs: [] }, `断开被吞了：${JSON.stringify(res)}`);
+  } finally {
+    await srv.stop();
+  }
+});
+
+test('断开正在用的文件夹：已开会话继续，只拒新开', async () => {
+  const srv = await startWith([a, b]);
+  try {
+    const sent = await emitOn(srv.s, 'user:message', { text: '在 a 里开个会话', cwd: a, clientMessageId: `folders-remove-${Date.now()}` });
+    assert.equal(sent?.ok, true, `首条消息被拒：${JSON.stringify(sent)}`);
+    await waitFor(() => srv.latest()?.instances?.some(i => i.cwd === a), 'a 里的实例出现在广播里');
+    const res = await emitOn(srv.s, 'folders:remove', { path: a });
+    assert.deepEqual(res, { ok: true, dirs: [b] });
+    await waitFor(() => srv.latest()?.dirs?.join('|') === b, '广播里的 dirs 只剩 b');
+    assert.ok(srv.latest().instances.some(i => i.cwd === a), '断开把正在跑的会话一起关掉了');
+    const fresh = await emitOn(srv.s, 'session:new', { cwd: a });
+    assert.equal(fresh?.ok, false, `断开之后还能在里面新开会话：${JSON.stringify(fresh)}`);
+  } finally {
+    await srv.stop();
+  }
+});
+
+test('断开：工作区来自环境变量时拒绝（写了也不生效）；配置文件不存在时拒绝，也不替用户建', async () => {
+  const shadowed = await startWith([a], { WORK_DIRS: a });
+  try {
+    const before = readFileSync(shadowed.cfg, 'utf8');
+    assert.deepEqual(await emitOn(shadowed.s, 'folders:remove', { path: a }), { ok: false, error: 'source_readonly' });
+    assert.equal(readFileSync(shadowed.cfg, 'utf8'), before);
+  } finally {
+    await shadowed.stop();
+  }
+  const missing = join(root, 'no-such-config-remove.json');
+  const other = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: missing, WORK_DIRS: a }));
+  const s = await connect(other.port);
+  try {
+    assert.deepEqual(await emitOn(s, 'folders:remove', { path: a }), { ok: false, error: 'no_config_file' });
+    assert.equal(existsSync(missing), false);
   } finally {
     s.close();
     await killServer(other.proc);

@@ -191,7 +191,8 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
 - `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（**首项即主工作目录**，手机端默认打开它；旧版外置 `workdirs.json` 仍受支持，经 `WORK_DIRS_FILE`；shell env 压过配置文件内联 `WORKDIRS`）。清单可以为空：一个文件夹都没连（或配置的全都找不到）时照常启动、只剩「无文件夹」，**绝不回落家目录**；找不到的个数进服务告警（SCOPE-03）。外置清单文件（`WORK_DIRS_FILE`）读不出来则拒绝启动并点名那个文件：那是配置坏了，不是「还没连」。清单不来自配置文件内联 `WORKDIRS`、或没有配置文件时，手机上改不了它：instances 广播的 `foldersReadonly` 带上原因，首页零文件夹引导据此不给「选择文件夹」。
   - 范围按官方桌面端「已连接的文件夹」语义，判据只有一份：`app/src/sessions/folder-access.js` 的 `resolveAuthorizedCwd`，一律 realpath 后比较。已连接文件夹的子目录直接可达（嵌套时归最深的根）；连接范围里的 git linked worktree 归所属仓库，归属从仓库一侧双向回验、**全程不执行 git**（`.git/config` 模型可写）；范围外的（如仓库外的平级目录）不凭 worktree 身份授权，要显式连接，照官方桌面端（SCOPE-04）；「无文件夹」会话跑在应用数据目录下的 scratch 根里，只认 app 自己建的 `scratch-YYYY-MM-DD-xxxxxx` 子目录（SCRATCH-01）。`~/.claude` 与 CCM 数据目录整棵是禁区。
   - **显式传入越界 cwd 一律拒绝**（`routeCwd` 返回 null 并记 `scope_violation` 审计），不回落到当前查看目录——抽屉按项目请求列表、离线队列带着入队时的 cwd 重发，回落会把 A 的会话画到 B 下、把消息投进别的工作区（SCOPE-05）。只有读类请求额外放行正在跑的实例自己的 cwd，保住「热移除后已开会话继续用」。
-  - 手机上添加文件夹（`folders:add`）只浏览家目录内的目录名（不跟随 symlink、隐藏点目录），家目录本身、磁盘根、禁区、仓库里 Claude Code 建的 worktree 不能添加（FOLDER-01）；只写配置文件内联 `WORKDIRS` 并同步热加载，来源是环境变量或旧外置文件、或配置文件不存在时拒绝。
+  - 手机上添加文件夹（`folders:add`）只浏览家目录内的目录名（不跟随 symlink、隐藏点目录），家目录本身、磁盘根、禁区、仓库里 Claude Code 建的 worktree 不能添加（FOLDER-01）；只写配置文件内联 `WORKDIRS` 并同步热加载，来源是环境变量或旧外置文件、或配置文件不存在时拒绝。已经是连接根时不重复写，回 `added:false`。
+  - 断开（`folders:remove`）是它的对称面：只认与当前清单精确相等的连接根（绝对路径——连接根可以在家目录之外），子文件夹小节、「无文件夹」一律拒；删掉配置里 realpath 指向它的条目，其余条目连同 `sessionLimit` 原样保留。热加载强制生效：剩下的条目全都找不到时，「保留旧清单」那道防编辑器写到一半的保护不能把这次断开吞掉。开在里面的会话照常跑、只拒新开，与在配置里删掉一项相同。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
 安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。

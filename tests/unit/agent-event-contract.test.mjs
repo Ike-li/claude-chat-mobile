@@ -347,7 +347,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        截图常有几百 KB，内联会撑爆环形缓冲与手机上的历史加载。不复用 tool:full：那条只认实例内存，
   //        而历史回放里的图在 transcript 里、实例早已不在；也不复用 attachment:read：那条读的是 CCM
   //        自己的上传目录，transcript 里的图不在任何文件里。入向 61→62）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 62);
+  //      + folders:remove（2026-10-15，抽屉里「⋯ → 断开这个文件夹」，添加的对称面。不走 env:set 改 WORKDIRS，
+  //        理由同 folders:add：那条是整份覆盖写，手机上拿到的列表可能已过期；也不并进 folders:add：一个扩授权面、
+  //        一个缩，审计动作与失败处置不同。入向 62→63）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 63);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:remove'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:browse'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:add'));

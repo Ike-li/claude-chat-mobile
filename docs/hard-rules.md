@@ -91,7 +91,7 @@
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`app/src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 31 种） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 62 个） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 63 个） |
 | 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
@@ -170,7 +170,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 
 - 桌面端占着端口：**勿再手动 `npm start` 撞端口**。  
 - 改配置/代码：桌面端菜单里 server 一行点「重启」；headless 停掉当前 `npm start` 再起。  
-- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`；手机上「添加文件夹」写的也是这份内联 `WORKDIRS`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
+- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`；手机上添加与断开文件夹写的也是这份内联 `WORKDIRS`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决
 

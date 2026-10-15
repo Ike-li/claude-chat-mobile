@@ -113,6 +113,16 @@ test('已连接的不重复加；已连接文件夹的子目录可以单独加�
   assert.equal(connectRefusalReason(join(code, 'app'), withCode), null);
 });
 
+// 「在这里开始会话」也用在已经连着的文件夹上（2026-10-15）：已经是连接根时照常交出真实路径并标明，
+// 由上层直接开会话、不再写一遍配置。判据层的「已连接」（浏览时标出来）与「子目录能单独加」都不变。
+test('要添加的位置已经是连接根：交出真实路径并标明已连接，不当成拒绝；子目录照旧单独加', () => {
+  const { home, ctx } = fixture();
+  const code = join(home, 'code');
+  const withCode = { ...ctx, connected: [code] };
+  assert.deepEqual(resolveFolderToAdd('code', withCode), { ok: true, path: code, connected: true });
+  assert.deepEqual(resolveFolderToAdd('code/app', withCode), { ok: true, path: join(code, 'app') });
+});
+
 test('要添加的位置（家目录相对路径）：能加时给出真实路径，不能加时给出原因', () => {
   const { home, ctx } = fixture();
   assert.deepEqual(resolveFolderToAdd('code/app', ctx), { ok: true, path: join(home, 'code', 'app') });

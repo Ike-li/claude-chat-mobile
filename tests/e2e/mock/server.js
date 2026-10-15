@@ -2618,9 +2618,32 @@ io.on('connection', socket => {
     const rel = payload?.path;
     if (!mockFolderRelOk(rel)) return ack({ ok: false, error: 'not_found' });
     const reason = mockFolderReason(rel);
+    // 已经是连接根：「在这里开始会话」照常往下走，不重复添加（同真 server 的 folders:add）
+    if (reason === 'already_connected') return ack({ ok: true, added: false, dirs: mockDirs() });
     if (reason) return ack({ ok: false, error: reason });
     if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
     mockAddedFolders.push(mockFolderAbs(rel));
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart,
+        viewingInstanceId,
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+        ...mockDirFields(),
+        instances: mockInstances, service: mockServicePayload()
+      }
+    });
+    ack({ ok: true, dirs: mockDirs() });
+  });
+  // 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
+  // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
+  socket.on('folders:remove', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const path = payload?.path;
+    const dirs = mockDirs();
+    if (typeof path !== 'string' || !dirs.includes(path)) return ack({ ok: false, error: 'not_connected' });
+    if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
+    mockDirsOverride = dirs.filter(d => d !== path);
+    mockAddedFolders = mockAddedFolders.filter(d => d !== path);
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,

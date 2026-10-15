@@ -51,12 +51,15 @@ export function connectRefusalReason(candidate, { home, forbidden = [], connecte
 }
 
 // 「添加文件夹」的目标：家目录相对路径 → 能加时给真实路径，否则给原因（同 connectRefusalReason）。
+// 已经是连接根时不当成拒绝（2026-10-15）：手机上「在这里开始会话」也用在已经连着的文件夹上，交出路径并标明
+// connected，由上层直接开会话、不再写一遍配置。浏览时照旧标「已经连接」（那是提示，不再挡路）。
 export function resolveFolderToAdd(rel, ctx = {}) {
   const homeReal = typeof rel === 'string' ? realOrNull(ctx.home) : null;
   if (!homeReal) return { ok: false, error: 'not_found' };
   if (isAbsolute(rel)) return { ok: false, error: 'outside_home' };
   const candidate = resolve(homeReal, rel);
   const reason = connectRefusalReason(candidate, ctx);
+  if (reason === 'already_connected') return { ok: true, path: realpathSync.native(candidate), connected: true };
   return reason ? { ok: false, error: reason } : { ok: true, path: realpathSync.native(candidate) };
 }
 

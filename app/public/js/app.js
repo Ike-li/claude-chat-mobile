@@ -177,6 +177,9 @@ import {
   shortDeviceId,
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
+  disconnectFolderConfirm,
+  openSessionsUnderRoot,
+  dashboardDirs,
   folderReasonText,
 } from './logic.js';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
@@ -7000,6 +7003,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     };
     dirRow.appendChild(newSessionBtn);
 
+    // 断开（2026-10-15）：只给连接根——子文件夹小节与「无文件夹」不是连接根，断开它们什么也断不掉（服务端也拒）。
+    // 已开在里面的会话照常跑，只是不能再在这里新开；确认框里说出这里开着几个。
+    // 手机上改不了清单时（来源是环境变量 / 外置文件、或没有配置文件）不给：点下去只会在确认之后报「改不了」。
+    if (projectsState.kindOf(d) === 'connected' && !projectsState.foldersReadonly()) {
+      const disconnectBtn = el(`<button class="shrink-0 w-8 h-8 ml-1 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="dir-disconnect" title="${t('断开这个文件夹')}" aria-label="${t('断开这个文件夹')}">⋯</button>`);
+      disconnectBtn.onclick = async (e) => {
+        e.stopPropagation();
+        haptic('tap');
+        const openSessions = openSessionsUnderRoot({ projects: projectsState.entries(), instances: instancesList, root: d, sectionKeys: availableDirs });
+        if (!(await appConfirm(disconnectFolderConfirm({ name: baseName(d), openSessions })))) return;
+        socket.emit('folders:remove', { path: d }, res => {
+          if (!res?.ok) drawer.showNotice(folderReasonText(res?.error));
+        });
+      };
+      dirRow.appendChild(disconnectBtn);
+    }
+
     // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
 
     // ---- 展开区容器（所有目录均常驻 DOM 以支持 CSS max-height 过渡，仅通过类来控制动画） ----
@@ -7252,10 +7272,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     sessionPanel.appendChild(buildNeedsYouSection());
     sessionPanel.appendChild(buildServiceSection());
 
-    // 「添加文件夹」放在文件夹清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下，得先滚才看得到。
+    // 「选择文件夹」放在文件夹清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下，得先滚才看得到。
     // 点开是家目录浏览（只看得到目录名，能不能加由服务端判）。
     const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk" data-testid="drawer-add-folder"></button>`);
-    addFolder.textContent = `＋ ${t('添加文件夹')}`;
+    addFolder.textContent = `＋ ${t('选择文件夹')}`;
     addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
     sessionPanel.appendChild(addFolder);
 
@@ -8081,7 +8101,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const workspacesSection = container.querySelector('#dashWorkspacesSection');
     const workspacesList = container.querySelector('#dashWorkspacesList');
     const emptyHint = container.querySelector('#dashEmptyHint');
-    const dirs = (availableDirs && availableDirs.length) ? availableDirs.slice() : (currentCwd ? [currentCwd] : []);
+    const dirs = dashboardDirs({ keys: availableDirs, connectedCount: projectsState.connectedCount(), currentCwd });
     const gen = ++_dashRecentsGen;
 
     const switchToSession = (s) => {

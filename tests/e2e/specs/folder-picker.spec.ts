@@ -70,12 +70,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       const firstDir = panel.querySelector('div[data-dir]');
       return Boolean(add && firstDir && (add.compareDocumentPosition(firstDir) & Node.DOCUMENT_POSITION_FOLLOWING));
     });
-    expect(addFirst, '「添加文件夹」排在了文件夹清单后面').toBe(true);
+    expect(addFirst, '「选择文件夹」排在了文件夹清单后面').toBe(true);
+    await expect(page.locator('[data-testid="drawer-add-folder"]')).toContainText('选择文件夹');
     await page.locator('[data-testid="drawer-add-folder"]').click();
     await expect(picker(page)).toHaveClass(/sheet-open/);
     await expect(pickerTitle(page)).toHaveText('~');
     // 家目录本身不能加（官方同）：按钮是灰的，原因写出来
-    await expect(picker(page).locator('[data-testid="folder-picker-add-here"]')).toBeDisabled();
+    await expect(picker(page).locator('[data-testid="folder-picker-start-here"]')).toBeDisabled();
     await expect(picker(page).locator('[data-testid="folder-picker-here-reason"]')).toHaveText('不能添加整个家目录');
 
     await entry(page, 'code').locator('button').first().click();
@@ -86,7 +87,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await entry(page, 'new-idea').locator('button').first().click();
     await expect(pickerTitle(page)).toHaveText('~/code/new-idea');
-    await picker(page).locator('[data-testid="folder-picker-add-here"]').click();
+    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
 
     await expect(picker(page)).not.toHaveClass(/sheet-open/);
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
@@ -103,13 +104,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="drawer-add-folder"]').click();
     await entry(page, 'code').locator('button').first().click();
     await entry(page, 'new-idea').locator('button').first().click();
-    await picker(page).locator('[data-testid="folder-picker-add-here"]').click();
+    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
     await expect(page.locator('[data-testid="folder-picker-status"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
     await expect(picker(page), '没加上却关了面板，用户会以为加上了').toHaveClass(/sheet-open/);
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-PICK-3 就地新建文件夹：名字不合法时说清为什么；建好之后进到新文件夹里', async ({ page }) => {
+  // 浏览家目录时新建（2026-10-15 起）：建好就连上、就在里面开新会话——建一个空文件夹本来就是为了在里面干活。
+  test('P0-PICK-3 就地新建文件夹：名字不合法时说清为什么；建好之后直接在新文件夹里开新会话', async ({ page }) => {
     await openPickerFromCompose(page);
     await picker(page).locator('[data-testid="folder-picker-add"]').click();
     await entry(page, 'code').locator('button').first().click();
@@ -122,8 +124,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await name.fill('fresh-proj');
     await picker(page).locator('[data-testid="folder-picker-mkdir-submit"]').click();
-    await expect(pickerTitle(page)).toHaveText('~/code/fresh-proj');
-    await expect(picker(page).locator('[data-testid="folder-picker-add-here"]')).toBeEnabled();
+    await expect(picker(page), '建好之后还停在面板里，得再点一次才能开会话').not.toHaveClass(/sheet-open/);
+    await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('fresh-proj');
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, '/Users/you/code/fresh-proj')).toHaveCount(1);
     await expectNoBrowserErrors(page);
   });
 
@@ -291,7 +295,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(pickerTitle(page), '引导按钮该直接进家目录浏览，而不是先停在一份空的「已连接的文件夹」上').toHaveText('~');
     await entry(page, 'code').locator('button').first().click();
     await entry(page, 'new-idea').locator('button').first().click();
-    await picker(page).locator('[data-testid="folder-picker-add-here"]').click();
+    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
     await expect(picker(page)).not.toHaveClass(/sheet-open/);
     await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('new-idea');
     await expectNoBrowserErrors(page);
@@ -318,6 +322,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(guide, '外置盘没挂上时首页说「还没有连接文件夹」，用户会以为配置丢了').toContainText('已连接的文件夹都找不到了');
     await openSessionsSidebar(page);
     await expect(page.locator('#serviceSection')).toContainText('2 个已连接的文件夹找不到了');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 浏览家目录时走到一个已经连着的文件夹：「在这里开始会话」直接开，不报「已经连接」也不重复添加。
+  // 「已经连接」只作提示，不再置灰。
+  test('P0-PICK-14 家目录里点已经连着的文件夹：在这里开始会话直接开，不重复添加', async ({ page }) => {
+    await openSessionsSidebar(page);
+    await page.locator('[data-testid="drawer-add-folder"]').click();
+    await entry(page, 'code').locator('button').first().click();
+    await expect(entry(page, 'claude-chat-mobile').locator('[data-folder-sub]')).toHaveText('已经连接');
+    await entry(page, 'claude-chat-mobile').locator('button').first().click();
+    await expect(pickerTitle(page)).toHaveText('~/code/claude-chat-mobile');
+    const start = picker(page).locator('[data-testid="folder-picker-start-here"]');
+    await expect(start, '已经连着的文件夹反而开不了会话').toBeEnabled();
+    await start.click();
+    await expect(picker(page)).not.toHaveClass(/sheet-open/);
+    await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('claude-chat-mobile');
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, MAIN_WORKSPACE), '同一个文件夹被加了第二遍').toHaveCount(1);
     await expectNoBrowserErrors(page);
   });
 

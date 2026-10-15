@@ -614,6 +614,8 @@ const ACK_SHAPES = [
   { event: 'folders:browse', branch: '越界', payload: () => ({ path: '..' }), required: ['ok', 'error'] },
   { event: 'folders:mkdir', branch: '名字不合法', payload: () => ({ path: '', name: '..' }), required: ['ok', 'error'] },
   { event: 'folders:add', branch: '家目录不能加', payload: () => ({ path: '' }), required: ['ok', 'error'] },
+  // 断开（2026-10-15）：成功支要先连上一个文件夹再断，归 S2 tests/invariants/server/folders.test.mjs；这里只登记免夹具的拒绝支。
+  { event: 'folders:remove', branch: '不在清单里', payload: () => ({ path: '/definitely/not/connected' }), required: ['ok', 'error'] },
   { event: 'read:sync', payload: () => ({ seen: {}, manual: {} }), required: ['ok', 'state'] },
   { event: 'env:get', payload: () => ({}), required: ['ok', 'groups', 'configFile', 'envFileExists', 'readonlyDiagnostics'] },
   { event: 'env:set', branch: '缺 changes', payload: () => ({}), required: ['ok', 'results'] },
