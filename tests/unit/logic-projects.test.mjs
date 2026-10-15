@@ -80,6 +80,27 @@ test('disconnectFolderConfirm：说清断开不动文件与会话；有会话开
   setLang('zh');
 });
 
+// 断开连接根时一起消失的小节里开着几个会话（2026-10-15 Codex review #205）。会话按最具体的那一节归属，
+// 只数根那一节会漏掉它下面自成一节的子文件夹里在跑的会话——确认框恰好在要说清「会照常继续」的时候说少了。
+test('openSessionsUnderRoot：连接根连同它下面的子文件夹小节一起数，别的根不算', async () => {
+  const { openSessionsUnderRoot } = await import('../../app/public/js/logic/projects.js');
+  const projects = [
+    { key: '/repo', root: '/repo', kind: 'connected' },
+    { key: '/repo/sub', root: '/repo', kind: 'subfolder' },
+    { key: '/other', root: '/other', kind: 'connected' },
+  ];
+  const sectionKeys = projects.map(p => p.key);
+  const instances = [
+    { instanceId: 'a', sessionId: 's-a', cwd: '/repo' },
+    { instanceId: 'b', sessionId: 's-b', cwd: '/repo/sub/pkg' },
+    { instanceId: 'c', cwd: '/repo/sub' }, // 还没拿到 sessionId 的新会话也算
+    { instanceId: 'd', sessionId: 's-d', cwd: '/other' },
+  ];
+  assert.equal(openSessionsUnderRoot({ projects, instances, root: '/repo', sectionKeys }), 3, '子文件夹小节里在跑的会话没算进去');
+  assert.equal(openSessionsUnderRoot({ projects, instances, root: '/other', sectionKeys }), 1);
+  assert.equal(openSessionsUnderRoot({ projects, instances: [], root: '/repo', sectionKeys }), 0);
+});
+
 // 首页「最近活跃会话」去哪些目录拉（2026-10-15）。断开最后一个文件夹时查看目录可能还停在它上面（里面有会话开着，
 // 服务端只在没有实例时才把查看目录归位）；显式拿它去拉列表，服务端会当成越界尝试记一条红色审计。
 test('dashboardDirs：只列服务端给的项目；明说一个都没连时不拿查看目录去拉；载荷没带清单才回落查看目录', async () => {

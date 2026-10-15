@@ -4,7 +4,7 @@
 // 「无文件夹」（在用时才有）。worktree 不自成项目，跟随所属仓库。载荷里没有 projects 时（旧服务端、
 // E2E mock 的旧载荷、在线演示站）回落到 dirs，每个目录一节——与改动前逐字相同。
 import { t, tk } from '../i18n.js';
-import { projectDisplayName } from './panel-state.js';
+import { projectDisplayName, liveRowsForSection } from './panel-state.js';
 
 const KINDS = new Set(['connected', 'subfolder', 'scratch']);
 
@@ -86,6 +86,18 @@ export function disconnectFolderConfirm({ name, openSessions = 0 } = {}) {
     body += t('这里有 {n} 个会话开着，会照常继续。').replace('{n}', String(openSessions));
   }
   return { title: t('断开「{name}」？').replace('{name}', () => String(name ?? '')), body, okText: t('断开') };
+}
+
+// 断开连接根时一起消失的小节里开着几个会话：根本身，加上它下面自成一节的子文件夹。会话按最具体的那一节归属
+// （liveRowsForSection），只数根那一节会漏掉子文件夹里在跑的——它们断开后同样照常继续（2026-10-15 Codex review #205）。
+export function openSessionsUnderRoot({ projects = [], instances = [], root, sectionKeys = [] } = {}) {
+  let n = 0;
+  for (const p of projects) {
+    if (p?.root !== root) continue;
+    const { liveMap, freshTabs } = liveRowsForSection(instances, p.key, sectionKeys);
+    n += liveMap.size + freshTabs.length;
+  }
+  return n;
 }
 
 // 首页「最近活跃会话」去哪些目录拉：服务端给的项目清单。回落到查看目录只给载荷里没带清单的旧服务端——

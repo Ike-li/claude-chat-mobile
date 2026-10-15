@@ -72,7 +72,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await more(MAIN_WORKSPACE).click();
     await expect(page.locator('#confirmTitle')).toHaveText('断开「claude-chat-mobile」？');
-    await expect(page.locator('#confirmBody'), '没说开着的会话会怎样，用户会以为点下去就全关了').toContainText('个会话开着，会照常继续');
+    // 开着的：inst_1、仓库外 worktree 里的（归这个仓库）、子文件夹小节里的——子文件夹那一节会跟着一起消失
+    await expect(page.locator('#confirmBody'), '没说开着的会话会怎样，或者说少了（子文件夹小节里在跑的没算）')
+      .toContainText('这里有 3 个会话开着，会照常继续');
     await page.locator('#confirmOk').click();
 
     await expect(workspaceRow(page, MAIN_WORKSPACE), '断开之后那一节还在').toHaveCount(0);

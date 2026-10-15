@@ -178,6 +178,7 @@ import {
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
   disconnectFolderConfirm,
+  openSessionsUnderRoot,
   dashboardDirs,
   folderReasonText,
 } from './logic.js';
@@ -7010,8 +7011,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       disconnectBtn.onclick = async (e) => {
         e.stopPropagation();
         haptic('tap');
-        const { liveMap, freshTabs } = liveRowsForSection(instancesList, d, availableDirs);
-        if (!(await appConfirm(disconnectFolderConfirm({ name: baseName(d), openSessions: liveMap.size + freshTabs.length })))) return;
+        const openSessions = openSessionsUnderRoot({ projects: projectsState.entries(), instances: instancesList, root: d, sectionKeys: availableDirs });
+        if (!(await appConfirm(disconnectFolderConfirm({ name: baseName(d), openSessions })))) return;
         socket.emit('folders:remove', { path: d }, res => {
           if (!res?.ok) drawer.showNotice(folderReasonText(res?.error));
         });
