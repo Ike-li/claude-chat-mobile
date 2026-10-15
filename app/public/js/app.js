@@ -1913,6 +1913,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         rateLimitLockout: res.rateLimitLockout,
         clientError: res.clientError,
         proxyFronted: res.proxyFronted,
+        missingFolders: res.missingFolders,
       },
       now,
     });
@@ -5014,6 +5015,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function setInstances(p) {
     projectsState.set(p);
     availableDirs = projectsState.keys();
+    syncDashNoFolders(); // 首页开着时连上/断开了文件夹：引导跟着广播走，不等下次重画首页
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
     // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
@@ -5920,6 +5922,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     latestServiceHealth = service;
     // 只存快照 + 刷抽屉文案。顶栏角标由 setInstances 末尾的 updateAttentionSignal 重算。
     refreshServiceSection();
+    syncDashNoFolders(); // 首页引导的标题吃 missingFolders：这份快照比项目清单晚一步落地
     renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
     renderStatuslineBridgeSection(); // 同上：两个桥的安装态都随 instances 广播刷新
     generalNav?.render(); // L1「宿主机」那行的运行时长吃的就是这份广播
@@ -8018,6 +8021,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           <p class="text-xs text-ink-faint">${t('从最近会话继续，或点 ＋ 新建')}</p>
         </div>
 
+        <div class="w-full hidden mb-5 p-4 rounded-xl border border-line-soft bg-surface text-center" data-testid="dash-no-folders">
+          <p class="text-sm font-semibold text-ink mb-1" data-dash-no-folders-title>${t('还没有连接文件夹')}</p>
+          <p class="text-xs text-ink-faint mb-3">${t('选一个项目文件夹，claude 就在里面读写代码。只是聊聊的话，点 ＋ 直接在「无文件夹」里开。')}</p>
+          <button type="button" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-cta text-white text-xs font-semibold shadow-sm active:scale-[0.98] transition-all" data-testid="dash-pick-folder">${t('选择文件夹')}</button>
+        </div>
+
         <div id="dashWorkspacesSection" class="w-full hidden mb-5">
           <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-2 px-1 flex items-center gap-1">
             <span>📁</span>
@@ -8056,6 +8065,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (btnSessions) btnSessions.onclick();
     };
     container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
+    // 零文件夹引导：直接进家目录浏览（加上一个就在那里开新会话，见 folder-picker.js 的 add）
+    container.querySelector('[data-testid="dash-pick-folder"]').onclick = (e) => {
+      e.stopPropagation();
+      haptic('tap');
+      folderPicker.open({ mode: 'add' });
+    };
 
     // 跨全部项目拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
     // worktree 的会话随所属仓库的列表一起回来。
@@ -8194,6 +8209,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
 
     messagesEl.appendChild(container);
+    syncDashNoFolders();
+  }
+
+  // 首页的零文件夹引导（2026-10-15）。一个文件夹都没连时 server 照常起、只剩「无文件夹」（SCOPE-03），
+  // 首页得说清下一步。判据是广播里的 dirs（服务端的已连接清单）：第一条广播到之前不知道，不显示——
+  // 有文件夹的人在那一瞬间看到「还没有连接文件夹」比晚一拍出现更糟。配置了却全都找不到时 dirs 同样是空的，
+  // 标题改说「找不到」（服务快照里的 missingFolders），原因与恢复办法在抽屉的「服务」小节。
+  function syncDashNoFolders() {
+    const box = messagesEl.querySelector('[data-testid="dash-no-folders"]');
+    if (!box) return;
+    box.classList.toggle('hidden', projectsState.connectedCount() !== 0);
+    box.querySelector('[data-dash-no-folders-title]').textContent = latestServiceHealth?.missingFolders > 0
+      ? t('已连接的文件夹都找不到了') : t('还没有连接文件夹');
   }
 
   // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊

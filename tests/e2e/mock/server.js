@@ -236,6 +236,7 @@ const mockServicePayload = () => ({
   deliveryFailure: mockDeliveryFailure,
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
+  missingFolders: mockMissingFolders,
   hooksBridge: { state: mockHooksState, off: false },
   statuslineBridge: { state: mockStatuslineState, off: false },
 });
@@ -395,6 +396,7 @@ let mockServiceStartedAtOverride = null;
 let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
+let mockMissingFolders = 0; // 配置了却找不到的文件夹个数（同真 server 的 service.missingFolders），由 __set-connected-folders?missing= 注入
 const DEFAULT_MOCK_RESTARTS = {
   units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
   recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
@@ -483,6 +485,7 @@ function resetMockState() {
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
   mockClientError = null;
+  mockMissingFolders = 0;
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
   mockImageRequests = [];
@@ -766,6 +769,27 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
+});
+
+// P0-PICK-11/12/13：钉住已连接的文件夹清单（instances 广播的 dirs），查看目录停在「无文件夹」、不看任何实例——
+// 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
+// dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
+app.post('/__set-connected-folders', (req, res) => {
+  const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
+  mockDirsOverride = raw ? raw.split(',') : [];
+  mockMissingFolders = Number(req.query?.missing) || 0;
+  viewingInstanceId = null;
+  pendingFreshCwd = MOCK_SCRATCH_ROOT;
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId: null,
+      viewingCwd: MOCK_SCRATCH_ROOT,
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true, dirs: mockDirs() });
 });
 
 // P0-11o / P0-13e：发出「关闭的那个实例的迟到事件」。由用例在【确认视图切换已完成之后】显式调用，
@@ -2700,6 +2724,7 @@ io.on('connection', socket => {
       deliveryFailure: mockDeliveryFailure,
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
+      missingFolders: mockMissingFolders,
       // 「重启记录」段夹具：默认给一条例行的（每天一次的 DHCP 漂移重启，**不标黄**）。
       // 默认不给 flapping 样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
       // flapping 那条路径由 test:service-flapping 场景注入 —— 否则 alert→text-warning 这个映射

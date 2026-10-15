@@ -93,7 +93,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
+2. 询问「手机端要打开哪个项目目录」。填绝对路径（或 `~/` 路径），家目录本身会被拒绝；**直接回车跳过**——一个文件夹都不连也能用，以后在手机上新建会话时再选，或直接用「无文件夹」。填了第一个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，**第一项就是手机端默认打开的那个**。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
 3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 反向代理与托管隧道 / 公网直连）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
 4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
 5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
@@ -177,7 +177,7 @@ node scripts/setup.js \
   --hooks=off
 ```
 
-- `--work-dir` 必填，不会静默回落到 `$HOME`。
+- `--work-dir` 可选：不给就一个文件夹都不连（手机上新建会话时再选）；给了就必须是绝对路径、不能是家目录本身。任何情况下都不会回落到 `$HOME`；显式给空值（`--work-dir=`，多半是变量没展开）会被拒绝。
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
@@ -518,13 +518,13 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
 2. 运行 npm ci --omit=dev。
-3. 先跟我确认工作区的绝对路径，以及是否安装 CLI hooks bridge。
-   不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
+3. 先跟我确认要不要先连一个项目文件夹（要的话确认它的绝对路径；不连也行，以后在手机上选），
+   以及是否安装 CLI hooks bridge。不要把整个家目录当工作区；hooks=on 会修改 ~/.claude/settings.json。
 4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT CCM_DATA_DIR
    WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
    以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
-   如果配置文件已存在就停下来，不要自行加 --force。
+   （不连文件夹就去掉 --work-dir 这一项。）如果配置文件已存在就停下来，不要自行加 --force。
 5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
 6. 确认 3000 没被桌面端或另一个 npm start 占用后，用 `npm start` 启动（headless）。
    用鉴权后的 /health JSON 验证，不要只看进程是否存在。
@@ -739,7 +739,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 |---|---|
 | server 起不来，日志说没有 `AUTH_TOKEN` | 令牌是启动前提，不再降级绑本机。跑 `npm run setup` 生成一个后重启 |
 | 启动日志只列了本机地址，没有手机地址 | `BIND_MODE=loopback` 只绑 `127.0.0.1`，那些局域网地址上没人在听。要手机直连改回默认或 `lan` |
-| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
+| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --hooks=...`（要连文件夹再加 `--work-dir=...`） |
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |

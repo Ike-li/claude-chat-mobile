@@ -64,6 +64,7 @@ import {
   uploadsFootprintDiagnostic,
   tailscaleDiagnostic,
   workdirBreadthDiagnostic,
+  workdirPresenceDiagnostic,
   connectedFoldersDiagnostic,
 } from '../app/src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../app/src/ops/config-file.js';
@@ -147,9 +148,9 @@ function checkWorkDir() {
   if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   for (const w of srcWarnings || []) warn('WORK_DIR', w);
   if (result) {
-    // SCOPE-03：一个可用工作区都没有 = server 会拒绝启动，doctor 必须先把它报成 fail 而不是
-    // 沉默 —— 这条正是 doctor 存在的意义（启动前就说清为什么起不来）。
-    if (!result.entries.length) fail(from, '没有配置任何工作区：server 会拒绝启动');
+    // SCOPE-03：一个工作区都没配是正常状态（2026-10-15 起 server 照常启动、只剩「无文件夹」；此前这里报 fail
+    // 「server 会拒绝启动」）。配置了却找不到的由下面 checkOneDir 逐条 warn，路径在本机终端里可以点名。
+    if (!result.entries.length) ok(from, workdirPresenceDiagnostic({ count: 0, lang: LANG }).detail);
     // 标签用**实际来源键名**（from：WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），不再硬编码成旧的
     // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
     // 自己配置里根本不存在的键（2026-08-19 新装实测）。

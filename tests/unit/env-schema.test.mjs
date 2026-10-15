@@ -748,7 +748,7 @@ test('validateEnvChanges: WORKDIRS 接受路径字符串与 {path,sessionLimit} 
   assert.equal(validateEnvChanges({ WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] }, d).ok, true);
 });
 
-test('validateEnvChanges: WORKDIRS 空数组本身合法（列表是否为空由 server preflight 判，见 SCOPE-03）', () => {
+test('validateEnvChanges: WORKDIRS 空数组合法（一个文件夹都不连是正常状态，server 照常启动、只剩「无文件夹」，见 SCOPE-03）', () => {
   const d = { current: {}, fileExists: () => true, isExecutable: () => true, probePort: () => false };
   assert.equal(validateEnvChanges({ WORKDIRS: [] }, d).ok, true);
 });

@@ -623,6 +623,26 @@ test.describe('WORK_DIRS：过宽根只报不拦', () => {
   });
 });
 
+// 零文件夹与找不到的文件夹（2026-10-15）：web 体检的 workDirs 是解析结果，两种情况它都是 []——
+// 「找不到」的个数只能由 server 另外喂进来（ctx.missingFolders，与服务告警同一个数）。
+test.describe('WORK_DIRS：一个都没连是正常状态，配置了却找不到才 warn', () => {
+  const home = '/home/ccm-doctor-tester';
+  const wd = (ctx) => runDoctor({ ...stubProbes(), home, ...ctx }).checks.find(c => c.id === 'WORK_DIRS');
+
+  test('一个都没连 → ok（新装、全部断开之后都是这样，不该亮黄）', () => {
+    const c = wd({ workDirs: [] });
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.count, 0);
+  });
+
+  test('配置了却找不到 → warn，个数进 safe、路径不进报告', () => {
+    const c = wd({ workDirs: [], missingFolders: 2 });
+    assert.equal(c.status, 'warn');
+    assert.equal(c.safe.missing, 2);
+    assert.match(c.detail, /找不到/);
+  });
+});
+
 // 「已连接的文件夹」布局取数（2026-09-25）。「显式列着的 worktree 是否多余」直接问授权判据：
 // 拿掉它之后仍被授权才算多余——所属仓库没连时这一条是必需的，劝删就是让它不可达。
 test.describe('probeConnectedFolders：已连接文件夹的布局取数', () => {

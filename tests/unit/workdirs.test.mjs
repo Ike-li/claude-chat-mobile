@@ -141,6 +141,21 @@ test.describe('resolveWorkdirs', () => {
     const { dirs } = resolveWorkdirs([{ path: real, sessionLimit: 6 }, { path: join(real, '.'), sessionLimit: 9 }]);
     assert.equal(dirs.length, 1);
   });
+
+  // 服务告警按它报「有几个已连接的文件夹找不到」：清单为空也能启动之后，全部失效不再以拒绝启动示警。
+  test('找不到的与不是目录的条目按原样路径进 missing；重复项不算找不到', () => {
+    const real = join(base, 'proj3');
+    mkdirSync(real);
+    const ghost = join(base, 'ghost3');
+    const file = join(base, 'afile3');
+    writeFileSync(file, 'x');
+    const { dirs, missing } = resolveWorkdirs([
+      { path: real, sessionLimit: 6 }, { path: ghost, sessionLimit: 6 },
+      { path: file, sessionLimit: 6 }, { path: join(real, '.'), sessionLimit: 6 },
+    ]);
+    assert.deepEqual(dirs, [realpathSync(real)]);
+    assert.deepEqual(missing, [ghost, file]);
+  });
 });
 
 // ── cwd 授权判据已迁出（2026-09-24「已连接的文件夹」）──────────────────────
@@ -247,6 +262,15 @@ test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
     const r = resolveWorkdirSource({ envList: [], envFile: '', inline: ['/from/config'] });
     assert.equal(r.from, 'WORKDIRS');
     assert.deepEqual(r.result.entries.map(e => e.path), ['/from/config']);
+  });
+
+  // 什么都没配（没有 env、配置里也没有 WORKDIRS 键）：新装时跳过了文件夹就是这样（2026-10-15 起可以跳过）。
+  // 来源记作 WORKDIRS——要加就加在那里，手机上的「添加文件夹」据此放行写入，doctor 的标签也指向它。
+  // 记成 WORK_DIRS 的后果：第一次添加就被当成「来自环境变量」拒掉，而那个环境变量谁都没设。
+  test('什么都没配 → 空清单，来源记作 WORKDIRS（不是一个谁都没设的环境变量）', () => {
+    const r = resolveWorkdirSource({ envList: [], envFile: '', inline: null });
+    assert.equal(r.from, 'WORKDIRS');
+    assert.deepEqual(r.result.entries, []);
   });
 
   test('getting-started / schema 不得再说内联 WORKDIRS 压过 WORK_DIRS env', () => {

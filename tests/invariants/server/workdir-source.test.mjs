@@ -1,116 +1,184 @@
-// tests/invariants/server/workdir-source.test.mjs —— 工作区白名单的来源必须显式，空则拒绝启动
-// 守护：SCOPE-03（授权工作区列表必须来自显式配置；一个都解析不出时拒绝启动，绝不回落家目录）
-// 测什么：配置里的工作区全部解析不出来（路径被删 / 外置盘没挂载 / 手滑写错）时，server 必须
-//         非 0 退出并说明原因，而不是悄悄把 $HOME 当成唯一工作区继续服务。
-// 槽位：S2（真 app/server.js 子进程 + 一次性 HOME/CCM_DATA_DIR；不建立连接，只看退出码与 stderr）
+// tests/invariants/server/workdir-source.test.mjs —— 授权范围只来自显式连接的文件夹；清单为空也照常可用
+// 守护：SCOPE-03（授权范围只来自用户显式连接的文件夹；清单为空或全部失效时照常启动、只剩「无文件夹」，绝不回落家目录）
+// 测什么：真 app/server.js 上，配置里没有文件夹、或配置的文件夹全都找不到时：
+//   · server 照常起来，家目录及其下的目录一律越界，缺省目录落在「无文件夹」；
+//   · 不带 cwd 的新会话页也落在「无文件夹」，并当场建出 scratch 根（scout 要一个真实存在的 cwd）；
+//   · 找不到的文件夹进服务告警（instances 广播的 service.missingFolders）与体检（WORK_DIRS warn），不让手机上只剩一片空却说不出原因；
+//   · 热加载时显式清空即生效，而「有条目但一个都解析不出」仍保留原清单（编辑器写到一半、外置盘临时掉线）；
+//   · 正在看的文件夹被移出清单且它是最后一个时，不带参数的新会话页回落到「无文件夹」，不是 undefined。
+// 不测什么 + 为什么：① 部分目录无效时的 warn-skip 归 tests/unit/workdirs.test.mjs ② WORK_DIR 折叠的纯函数契约同上
+//   ③ 前端的零文件夹引导属 S3
+// 槽位：S2（真 app/server.js 子进程 + 假 CLI；HOME / 配置文件 / 数据目录都在一次性目录里）
 //
-// 【这条为什么不是 SCOPE-01 的一部分】SCOPE-01 管「用户可控路径 realpath 后必须落在授权工作区内」。
-// 白名单本身等于 [家目录] 时 SCOPE-01 每一条都是绿的 —— 每个路径确实都落在「授权工作区」内，
-// 而那个工作区是整个家目录。它是 SCOPE-01 的上游，两条都要钉。
+// 【这条为什么不是 SCOPE-01 的一部分】SCOPE-01 管「用户可控路径 realpath 后必须落在授权范围内」。
+// 授权范围本身等于家目录时 SCOPE-01 每一条都是绿的，所以要单独钉住「范围从哪来」。
+// 2026-09-08 实测过那种塌陷：`workDir: env.WORK_DIR || home` 加上「WORKDIRS 里的目录一个都不存在」，
+// 白名单就恰好变成 [$HOME]，全程零报错，启动日志还打印「工作目录: /Users/xxx」。
 //
-// 【缺陷的真实形态】2026-09-08 实测：parseServerConfig 里 `workDir: env.WORK_DIR || home`，
-// 而 applyWorkdirs 又无条件把 WORK_DIR 放进白名单首位。于是「WORKDIRS 里的目录一个都不存在」
-// + 「没写 WORK_DIR」两件事一撞，白名单就恰好塌成 [$HOME] —— 全程零报错，启动日志还打印
-// 「工作目录: /Users/xxx」，看起来一切正常。README 明写「不要把整个 Home 目录加入工作区」，
-// 装机向导也有 work_dir_is_home 专门拒绝这种输入，只有这条静默路径绕开了两者。
-//
-// 【为什么用「路径不存在」而不是「配置为空」】CONFIG_FILE_PATH 写死在仓库根（app.js:124 的
-// join(HERE, ...)），子进程必然读到真实 ccm.config.json，构造不出「配置里没有 WORKDIRS」。
-// 而 workdirs.js 有意规定 `WORK_DIRS=` 空串视为「没设」而非「设成空」，也堵死了这条路。
-// 指向不存在的目录反而是更真实的场景，且走的是同一个塌陷分支（resolveWorkdirs 全部 warn-skip）。
-//
-// 不测什么 + 为什么：
-//  ① 部分目录有效时的行为 —— 那是 warn-skip 的既有语义，归 tests/unit/workdirs.test.mjs。
-//     这里只钉「一个都不剩」这一档，因为只有它会塌到家目录。
-//  ② WORK_DIR env 的折叠告警 —— 纯函数契约，归 tests/unit/workdirs.test.mjs 的 foldPrimaryWorkdir。
+// 【2026-10-15 改语义】原先一个都解析不出时拒绝启动。维护者定「WORKDIRS 留在配置文件、没有文件夹也能用」之后，
+// 空清单是正常状态（新装、全部断开），拒绝启动反而把手机整个关在外面；原先拒绝启动要防的「手机上一片空、
+// 却不知道是配置问题」改由服务告警与启动日志说清。不变的只有一条：绝不回落家目录。
 
 // 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
 import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { stripInheritedEnv } from '../../helpers/spawn-env.mjs';
+import { randomUUID } from 'node:crypto';
+import { io as ioClient } from 'socket.io-client';
+import { spawnServer, killServer } from '../../integration/_spawn-server.mjs';
+import { OUT_OF_SCOPE_ERROR } from '../../../app/src/server/socket-files.js';
 
-// 起一个 server 子进程并等它自行退出（或超时判定为「起来了」）。
-// 不用 _spawn-server.mjs 的 spawnServer：那个在启动失败时抛错，而本用例要断言的正是失败本身
-// —— 退出码与 stderr 内容都得看得见。
-function runServer(envOverrides, { timeoutMs = 15_000 } = {}) {
-  return new Promise((resolve) => {
-    const proc = spawn('node', ['app/server.js'], {
-      env: {
-        ...stripInheritedEnv(process.env),
-        DEV_MODE: '0',
-        LOG_TERMINAL: 'off',
-        CCM_TEST_PRESERVE_EMPTY_ENV: '1',
-        ...envOverrides,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: process.cwd(),
-    });
+const TOKEN = 'inv-scope03-token';
+let root, home;
+const started = [];
 
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', c => { stdout += c; });
-    proc.stderr.on('data', c => { stderr += c; });
+const waitFor = async (pred, what, ms = 8000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const hit = await pred();
+    if (hit) return hit;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  throw new Error(`等不到：${what}`);
+};
+const writeConfig = (path, config) => writeFileSync(path, `${JSON.stringify({ $schemaVersion: 1, ...config }, null, 2)}\n`);
 
-    // 超时 = 它没有拒绝启动。这是缺陷存在时走的分支，必须能干净地收场并把证据带回去，
-    // 否则用例会挂死在这里而不是给出可读的失败。
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill('SIGKILL');
-    }, timeoutMs);
-    let timedOut = false;
-
-    proc.on('exit', (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal, stdout, stderr, timedOut });
-    });
-    proc.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ code: null, signal: null, stdout, stderr: String(err), timedOut });
-    });
+// 起一台只认这份配置文件的 server，连上 socket。返回读广播、发事件、看输出的几个小工具。
+async function start(config) {
+  const id = randomUUID().slice(0, 8);
+  const configPath = join(root, `ccm.config.${id}.json`);
+  writeConfig(configPath, config);
+  const server = await spawnServer({
+    AUTH_TOKEN: TOKEN,
+    HOME: home,
+    XDG_DATA_HOME: join(home, '.local', 'share'),
+    CCM_DATA_DIR: join(root, `data-${id}`),
+    CCM_CONFIG_FILE_PATH: configPath,
+    CCM_ENV_FILE_PATH: join(root, `no-such-${id}.env`),
+    WORK_DIRS: '',
+    WORK_DIRS_FILE: '',
   });
+  let output = '';
+  server.proc.stdout.on('data', c => { output += c; });
+  server.proc.stderr.on('data', c => { output += c; });
+  const events = [];
+  const sock = await new Promise((resolve, reject) => {
+    const s = ioClient(`http://127.0.0.1:${server.port}`, {
+      auth: { token: TOKEN, deviceToken: `inv-scope03-${id}` },
+      transports: ['websocket'], reconnection: false, timeout: 4000,
+      extraHeaders: { Host: 'localhost' },
+    });
+    s.on('agent:event', e => events.push(e));
+    s.on('connect', () => resolve(s));
+    s.on('connect_error', reject);
+    setTimeout(() => reject(new Error('socket 未能在 5s 内连上')), 5000);
+  });
+  const handle = {
+    configPath,
+    output: () => output,
+    latest: () => events.filter(e => e.type === 'instances').pop()?.payload,
+    instances: () => waitFor(() => handle.latest(), 'instances 广播'),
+    emit: (event, payload) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时`)), 10000);
+      sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
+    }),
+    // 只带回调、不带 payload：session:new 的兼容调用形态（emit('session:new', cb)），走的是「归位」那条路
+    emitBare: event => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时`)), 10000);
+      sock.emit(event, res => { clearTimeout(timer); resolve(res); });
+    }),
+    stop: async () => {
+      try { sock.close(); } catch { /* 已关闭 */ }
+      await killServer(server.proc);
+    },
+  };
+  started.push(handle);
+  return handle;
 }
 
-test.describe('SCOPE-03: 工作区白名单来源', () => {
-  let home, dataDir;
+test.before(() => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope03-')));
+  home = join(root, 'home');
+  mkdirSync(join(home, 'code', 'x'), { recursive: true });
+});
 
-  test.before(() => {
-    home = mkdtempSync(join(tmpdir(), 'ccm-inv-wdsrc-home-'));
-    dataDir = mkdtempSync(join(tmpdir(), 'ccm-inv-wdsrc-data-'));
-  });
-  test.after(() => {
-    // safe-rm: 两处都是本文件 mkdtemp 出来的一次性目录
-    if (home) rmSync(home, { recursive: true, force: true });
-    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
-  });
+test.after(async () => {
+  for (const s of started) await s.stop().catch(() => {});
+  if (root) rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录（HOME 也在里面）
+});
 
-  test('配置的工作区一个都解析不出来 → 拒绝启动，不得回落家目录', async () => {
-    const missing = join(dataDir, 'no-such-workspace-here');
-    const r = await runServer({
-      AUTH_TOKEN: 'inv-scope03-token',
-      HOME: home,               // homedir() 在 POSIX 上读 $HOME —— 塌陷时白名单会变成它
-      CCM_DATA_DIR: dataDir,
-      WORK_DIRS: missing,       // env 压过配置文件里的内联 WORKDIRS（pickWorkdirSource 的优先级）
-      PORT: '0',                // 真起监听时让 OS 随便给个端口，避免撞上开发实例的 3000
-    });
+test('清单为空：照常启动，只剩「无文件夹」，家目录与其下的目录一律越界', async () => {
+  const s = await start({}); // 配置里根本没有 WORKDIRS（新装、或全部断开之后）
+  const inst = await s.instances();
+  assert.deepEqual(inst.dirs, [], `空清单被补成了别的目录：${JSON.stringify(inst.dirs)}`);
+  assert.deepEqual((inst.projects ?? []).filter(p => p.kind !== 'scratch'), [], '抽屉里凭空多出了文件夹');
+  assert.equal(inst.viewingCwd, inst.scratchRoot, `缺省目录必须落在「无文件夹」，实际是 ${inst.viewingCwd}`);
+  for (const cwd of [home, join(home, 'code', 'x')]) {
+    const res = await s.emit('session:list', { cwd });
+    assert.equal(res.error, OUT_OF_SCOPE_ERROR, `${cwd} 在空清单下竟然可达——授权范围塌成了家目录`);
+  }
+  assert.doesNotMatch(s.output(), new RegExp(`工作目录:\\s*${home}\\s*$`, 'm'), '启动横幅把家目录说成了工作目录');
+});
 
-    assert.equal(r.timedOut, false,
-      `server 没有拒绝启动 —— 工作区全部无效时它仍然起来了。stdout:\n${r.stdout}`);
-    assert.notEqual(r.code, 0,
-      `退出码必须非 0（实际 ${r.code}）。stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+test('清单为空：不带 cwd 的新会话页落在「无文件夹」，scratch 根当场建出来', async () => {
+  const s = await start({});
+  const { scratchRoot } = await s.instances();
+  const res = await s.emit('session:new', {});
+  assert.equal(res?.ok, true, `新会话页被拒：${JSON.stringify(res)}`);
+  assert.ok(existsSync(scratchRoot), 'scratch 根没建——scout 会在一个不存在的目录里起');
+  assert.equal(s.latest()?.viewingCwd, scratchRoot);
+});
 
-    // 光看退出码不够：EADDRINUSE 之类也会非 0 退出。必须确认它是因为「没有工作区」而死的。
-    const out = `${r.stdout}\n${r.stderr}`;
-    assert.match(out, /工作区/,
-      `拒绝理由必须指向工作区配置，否则用户无从下手。实际输出：\n${out}`);
+test('配置的文件夹一个都找不到：照常启动，进服务告警，不回落家目录', async () => {
+  const gone = join(home, 'code', 'gone');
+  const s = await start({ WORKDIRS: [gone] });
+  const inst = await s.instances();
+  assert.deepEqual(inst.dirs, []);
+  assert.equal(inst.service?.missingFolders, 1, '配置里的文件夹找不到却没进服务告警——手机上只看到一片空');
+  assert.ok(s.output().includes(gone), `启动日志没说是哪个目录找不到：\n${s.output()}`);
+  const res = await s.emit('session:list', { cwd: home });
+  assert.equal(res.error, OUT_OF_SCOPE_ERROR, '全部失效之后家目录变得可达');
+  // 体检与服务告警得是同一句话：两种情况下 workDirs 都是空的，找不到的个数只能由 server 另外喂给 runDoctor
+  const doc = await s.emit('doctor:run', {});
+  const wd = doc?.checks?.find(c => c.id === 'WORK_DIRS');
+  assert.equal(wd?.status, 'warn', `体检把「配置了却找不到」说成了「还没连」：${JSON.stringify(wd)}`);
+});
 
-    // 最关键的一条：家目录不得出现在任何「这是你的工作区」类输出里。
-    // 塌陷时启动日志会打印 `  工作目录: <home>`，这条断言直指那一行。
-    assert.doesNotMatch(out, new RegExp(`工作目录:\\s*${home}`),
-      `家目录被当成工作目录了 —— 这正是 SCOPE-03 要堵的塌陷。实际输出：\n${out}`);
-  });
+test('热加载：有条目但一个都解析不出时保留原清单；显式清空立即生效', async () => {
+  const a = join(home, 'code', 'a');
+  mkdirSync(a, { recursive: true });
+  const s = await start({ WORKDIRS: [a] });
+  assert.deepEqual((await s.instances()).dirs, [a]);
+
+  writeConfig(s.configPath, { WORKDIRS: [join(home, 'code', 'gone')] });
+  await waitFor(() => /保留旧白名单/.test(s.output()), '「保留旧白名单」的热加载日志');
+  assert.deepEqual(s.latest().dirs, [a], '编辑器写到一半 / 外置盘掉线时整份清单被清空');
+
+  writeConfig(s.configPath, { WORKDIRS: [] });
+  await waitFor(() => s.latest()?.dirs?.length === 0, '显式清空后广播里的 dirs 变成 []');
+});
+
+// 前端发的是 {cwd}，带着已移出清单的目录会按 SCOPE-05 被拒（request-cwd-scope 那批用例管）。
+// 这里管的是不带 payload 的那条「归位」路径：它取 primaryWorkDir，清单空了就必须是「无文件夹」，而不是 undefined。
+test('正在看的文件夹被移出清单且它是最后一个：不带参数的新会话页回落到「无文件夹」', async () => {
+  const b = join(home, 'code', 'b');
+  mkdirSync(b, { recursive: true });
+  const s = await start({ WORKDIRS: [b] });
+  const { scratchRoot } = await s.instances();
+  const sent = await s.emit('user:message', { text: '在 b 里开个会话', cwd: b, clientMessageId: `scope03-${randomUUID()}` });
+  assert.equal(sent?.ok, true, `首条消息被拒：${JSON.stringify(sent)}`);
+  await waitFor(() => s.latest()?.instances?.some(i => i.cwd === b), 'b 里的实例出现在广播里');
+
+  writeConfig(s.configPath, { WORKDIRS: [] });
+  await waitFor(() => s.latest()?.dirs?.length === 0, '清空后广播里的 dirs 变成 []');
+  assert.equal(s.latest().viewingCwd, b, '在跑的会话所在的文件夹被移出后，查看目录不该被抢走（仅拒新开）');
+
+  const res = await s.emitBare('session:new');
+  assert.equal(res?.ok, true, `新会话页被拒：${JSON.stringify(res)}`);
+  await waitFor(() => s.latest()?.viewingCwd === scratchRoot, '新会话页回落到「无文件夹」');
+  assert.ok(existsSync(scratchRoot), 'scratch 根没建——scout 会在一个不存在的目录里起');
 });

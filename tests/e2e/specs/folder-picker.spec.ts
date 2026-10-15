@@ -278,6 +278,49 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // 「无文件夹」那一节的键是 scratch 根，它只是新会话页的启动键：@ 找文件拿它去问，服务端会拒。
   // 新会话页上还没有目录、也就没有文件；会话开起来之后，文件在它自己的 scratch 目录里。
+  // 一个文件夹都没连（新装时跳过了，或全部断开了）：server 照常起、缺省停在「无文件夹」（SCOPE-03）。
+  // 首页要说清下一步，而不是只摆一个空的「最近会话」——按钮直接进家目录浏览，加上一个就在那里开新会话。
+  test('P0-PICK-11 一个文件夹都没连：首页给出引导，点「选择文件夹」加上一个就在那里开新会话', async ({ page }) => {
+    await page.request.post('/__set-connected-folders?dirs=');
+    const guide = page.locator('[data-testid="dash-no-folders"]');
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+    await expect(guide, '零文件夹的首页没有引导：只剩一个空的「最近会话」，用户不知道去哪加文件夹').toBeVisible();
+
+    await guide.locator('[data-testid="dash-pick-folder"]').click();
+    await expect(picker(page)).toHaveClass(/sheet-open/);
+    await expect(pickerTitle(page), '引导按钮该直接进家目录浏览，而不是先停在一份空的「已连接的文件夹」上').toHaveText('~');
+    await entry(page, 'code').locator('button').first().click();
+    await entry(page, 'new-idea').locator('button').first().click();
+    await picker(page).locator('[data-testid="folder-picker-add-here"]').click();
+    await expect(picker(page)).not.toHaveClass(/sheet-open/);
+    await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('new-idea');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 首页开着时别处连上了文件夹（电脑上改了配置，热加载广播）：引导跟着广播消失，不等下次重画首页。
+  // 有文件夹时首页不出引导，也由这条的终态钉住。
+  test('P0-PICK-12 首页开着时连上了文件夹：引导随广播消失', async ({ page }) => {
+    await page.request.post('/__set-connected-folders?dirs=');
+    const guide = page.locator('[data-testid="dash-no-folders"]');
+    await expect(guide).toBeVisible();
+    await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(MAIN_WORKSPACE)}`);
+    await expect(guide, '已经连上了文件夹，首页还在说「还没有连接文件夹」').toBeHidden();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
+
+  // 配置了文件夹、却一个都找不到（外置盘没挂上、目录被改名）：清单同样是空的，但首页不能说「还没有连接文件夹」——
+  // 用户明明连过。标题说找不到，抽屉「服务」小节说出几个、怎么恢复。
+  test('P0-PICK-13 配置的文件夹都找不到：首页说「找不到」而不是「还没连」，抽屉服务小节说出几个', async ({ page }) => {
+    await page.request.post('/__set-connected-folders?dirs=&missing=2');
+    const guide = page.locator('[data-testid="dash-no-folders"]');
+    await expect(guide).toBeVisible();
+    await expect(guide, '外置盘没挂上时首页说「还没有连接文件夹」，用户会以为配置丢了').toContainText('已连接的文件夹都找不到了');
+    await openSessionsSidebar(page);
+    await expect(page.locator('#serviceSection')).toContainText('2 个已连接的文件夹找不到了');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
     await openPickerFromCompose(page);
     await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();

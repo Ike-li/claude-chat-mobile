@@ -148,6 +148,25 @@ test('配置文件不存在：拒绝，也不替用户建一个（hard-rules §4
   }
 });
 
+// 配置里根本没有 WORKDIRS 键、也没设环境变量：新装时跳过了问文件夹就是这样（2026-10-15 起可以跳过）。
+// 来源就是这份配置文件，加进去热加载即生效。此前这一格被当成「来自环境变量」拒掉，零文件夹首页上
+// 点「选择文件夹」第一次添加就失败（隔离实例实测撞上，mock 那层看不见）。
+test('配置里还没有 WORKDIRS（新装跳过了文件夹）：照常加进配置文件，立刻可用', async () => {
+  const cfg = join(root, 'no-workdirs-key.json');
+  writeFileSync(cfg, `${JSON.stringify({ $schemaVersion: 1 })}\n`);
+  const other = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: cfg }));
+  const s = await connect(other.port);
+  try {
+    const res = await emitOn(s, 'folders:add', { path: 'code/b' });
+    assert.equal(res?.ok, true, `第一次添加就被拒：${JSON.stringify(res)}`);
+    assert.deepEqual(res.dirs, [b]);
+    assert.deepEqual(JSON.parse(readFileSync(cfg, 'utf8')).WORKDIRS, [b]);
+  } finally {
+    s.close();
+    await killServer(other.proc);
+  }
+});
+
 test('工作区来自环境变量：写进配置文件也不会生效，拒绝而不是报成功', async () => {
   const cfg = join(root, 'env-shadowed.json');
   writeFileSync(cfg, `${JSON.stringify({ WORKDIRS: [a] })}\n`);

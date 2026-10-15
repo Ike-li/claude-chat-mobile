@@ -631,8 +631,9 @@ const ACK_SHAPES = [
   { event: 'connect:qr', branch: '非法 target', payload: () => ({ target: '__bogus__' }), required: ['ok', 'error'] },
   // statuslineBridge 与 hooksBridge 并列：两个 CLI 桥的安装态都要下发，少一个就是面板上少一整段。
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
+  // missingFolders 同理：抽屉吃 instances 广播里的那份，面板吃这条 ack，少了它两处对同一件事说法不一。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders'] },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
@@ -730,7 +731,7 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
   });
 
   // 2026-09-22 review P1：ccm.config.json 读不动时，写盘路径曾「从 {} 长出来」——只写回这次改的几项，
-  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required / SCOPE-03）。
+  // AUTH_TOKEN / WORKDIRS 等其余配置一起被抹掉，下次启动直接起不来（token_required），连好的文件夹也全丢了。
   // CLI 的 config set 同场景一直是拒写的。坏文件用尾逗号造：手改 JSON 最常见的那种笔误。
   test('ccm.config.json 损坏时拒绝写入，原文件一字不动（不从空配置重建）', async () => {
     const cfg = join(tmpDir, 'ccm.config.json');

@@ -155,17 +155,32 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       ['🐞 前端错误发生于 1 分钟前，详见日志面板']
     );
   });
-  test('全类命中 → 固定顺序：限速锁定 → 投递失败 → 前端错误', () => {
+  // 清单为空也能启动之后（SCOPE-03），「配置了却一个都找不到」不再拒绝启动，抽屉里只剩「无文件夹」——
+  // 没有这一行，用户看到的就是文件夹凭空消失、说不出原因。恢复路径两条都写上：抽屉里的「断开」
+  // 够不着它们（找不到的目录根本不进抽屉），只能去配置里的工作区列表删。
+  test('配置的文件夹找不到 → 📁 行：个数 + 可能原因 + 怎么恢复', () => {
+    assert.deepEqual(
+      formatServiceNotices({ service: { missingFolders: 2 }, now: 1000 }),
+      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉']
+    );
+  });
+  test('missingFolders 为 0 / 缺席（旧 server）/ 脏值 → 不出这一行', () => {
+    for (const missingFolders of [0, undefined, null, -1, 'x', Number.NaN]) {
+      assert.deepEqual(formatServiceNotices({ service: { missingFolders }, now: 1000 }), [], String(missingFolders));
+    }
+  });
+  test('全类命中 → 固定顺序：限速锁定 → 投递失败 → 前端错误 → 找不到的文件夹', () => {
     const now = 100 * 60_000;
     const notices = formatServiceNotices({
       service: {
+        missingFolders: 1,
         deliveryFailure: { channel: 'ntfy', at: now - 1000, count: 1 },
         rateLimitLockout: { at: now - 2000, count: 1 },
         clientError: { at: now - 3000, count: 1 },
       },
       now,
     });
-    assert.deepEqual(notices.map(l => [...l][0]), ['⛔', '🔔', '🐞']);
+    assert.deepEqual(notices.map(l => [...l][0]), ['⛔', '🔔', '🐞', '📁']);
   });
   test('旧 server ack 无新字段 → 优雅缺席不报错', () => {
     assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, now: 1000 }), []);
