@@ -106,7 +106,7 @@
     "dotenv": "^18.0.5",
     "express": "^5.0.0",
     "jose": "^6.2.12",
-    "socket.io": "^4.8.0",
+    "socket.io": "^4.8.4",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
