@@ -642,6 +642,10 @@ export const EN_DICT = Object.freeze({
   '无项目': 'No project',
   '无文件夹': 'No folder',
   '选择文件夹': 'Choose a folder',
+  '还没有连接文件夹': 'No folders connected yet',
+  '已连接的文件夹都找不到了': 'Your connected folders can\'t be found',
+  '选一个项目文件夹，claude 就在里面读写代码。只是聊聊的话，点 ＋ 直接在「无文件夹」里开。':
+    'Pick a project folder and claude will read and write code there. Just want to chat? Tap ＋ to start in "No folder".',
   '已连接的文件夹': 'Connected folders',
   '一次性目录，不属于任何项目': 'A throwaway folder that isn\'t part of any project',
   '添加文件夹': 'Add folder',
@@ -801,6 +805,8 @@ export const EN_DICT = Object.freeze({
   '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
+  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉':
+    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — restart the service once they\'re back, or remove them from "Workspaces" in the config',
 
   // —— 安全日志段（审计记录 → 人话）——
   '安全日志': 'Security log',

@@ -895,6 +895,23 @@ export function workdirBreadthDiagnostic({ dirs = [], home, lang = 'zh' } = {}) 
   };
 }
 
+// 有没有文件夹（2026-10-15）。清单为空是正常状态：新装、或在手机上全部断开之后 server 照常启动、只剩「无文件夹」
+// （SCOPE-03）；配置了却找不到才 warn。count 是可用的个数，missing 是配置了却找不到的个数——两种情况下解析结果
+// 都是空的，不分开就会把后者说成「还没连」，和服务告警（同一个 missingFolders）自相矛盾。CLI D3 与 web 体检共用。
+export function workdirPresenceDiagnostic({ count = 0, missing = 0, lang = 'zh' } = {}) {
+  const lost = Number.isFinite(missing) && missing > 0 ? missing : 0;
+  if (!count && !lost) {
+    return { status: 'ok', name: 'WORK_DIRS', detail: bi(lang,
+      '还没有连接任何文件夹：在手机上新建会话时选一个，或直接用「无文件夹」。',
+      'No folders connected yet: pick one when you start a session on your phone, or just use "No folder".') };
+  }
+  const head = bi(lang, `${count} 个工作目录`, `${count} workspace(s)`);
+  if (!lost) return { status: 'ok', name: 'WORK_DIRS', detail: head };
+  return { status: 'warn', name: 'WORK_DIRS', detail: head + bi(lang,
+    `；${lost} 个配置了却找不到（被删、改名或外置盘没挂上）——恢复后重启服务，或从配置的工作区列表里删掉。`,
+    `; ${lost} configured folder(s) can't be found (deleted, renamed, or the drive isn't mounted) — restart the service once they're back, or remove them from the workspace list.`) };
+}
+
 // 「已连接的文件夹」布局提示（2026-09-25）。纯判定：读盘的部分由 doctor-runtime 的 probeConnectedFolders 算好。
 //   redundantWorktrees [{ path, repo }]：WORKDIRS 里显式列着、但已落在别的连接范围里（如父目录整个连着）的 worktree。
 //     列着它就自成一节，会话不并回仓库。只连了仓库时不算：仓库外的 worktree 不随仓库授权，必须显式列入（2026-10-10）。

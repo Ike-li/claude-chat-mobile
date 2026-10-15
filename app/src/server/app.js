@@ -88,7 +88,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -212,9 +212,13 @@ let workDirs = [];
 // 主工作目录 = 列表首项。2026-09-08 前它是独立配置项 WORK_DIR，与 WORKDIRS 在装机向导里
 // 必然重复第一项（setup 写的就是 `{workDir: dirs[0], workDirs: dirs}`），用户打开配置只看到
 // 同一个路径写了两遍。取派生量而非另存一份：两份就会分叉，而热加载只会更新其中一份。
-const primaryWorkDir = () => workDirs[0];
+// 清单为空（新装、全部断开、全部失效）时落「无文件夹」的键——绝不回落家目录（SCOPE-03）。
+const primaryWorkDir = () => workDirs[0] ?? scratchRootKey();
 // 每工作区历史会话显示条数（session:list 默认截断量）；未指定的目录用 DEFAULT_SESSION_LIMIT。
 let sessionLimitByDir = new Map();
+// 清单从哪来、配置了却找不到几个（喂服务告警、体检、广播里的 foldersReadonly）：状态在 workdirs.js，
+// 与 workDirs 同一次应用里写入（applyWorkdirs、preflight、reloadWorkdirs）。
+const workdirStatus = createWorkdirStatus({ usingConfigJson });
 
 // ---- 授权判据：「已连接的文件夹」（SCOPE-04/05）。唯一一份，所有 cwd 闸门都经它 ----
 // 已连接文件夹 = workDirs（子目录直接可达）；git linked worktree 随所属仓库（双向回验）；
@@ -327,7 +331,7 @@ function readInlineWorkdirConfig() {
 // 那次是 doctor 自己写了 `if (Array.isArray(inline)) return`，把 WORK_DIRS env 吃掉了。
 function readWorkdirSource() {
   const inline = readInlineWorkdirConfig();
-  const { result, warnings, from } = resolveWorkdirSource({
+  const { result, warnings, from, filePath } = resolveWorkdirSource({
     envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
     envFile: process.env.WORK_DIRS_FILE,
     inline: inline.list,
@@ -341,7 +345,7 @@ function readWorkdirSource() {
     }),
     inlinePrimary: inline.primary,
   });
-  return { result, warnings, from };
+  return { result, warnings, from, filePath };
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
 // 返回 warnings[]（调用方决定打印）。
@@ -350,32 +354,34 @@ function readWorkdirSource() {
 // 白名单的首位 —— 2026-09-01 修「内联 WORKDIRS 压过 env」时漏掉的同族分支，2026-09-08 容器内实测
 // 确认仍在。顺序现在完全由来源决定，主目录的折叠在 workdirs.js 的 resolveWorkdirSource 里按来源分档。
 function applyWorkdirs(source) {
-  const { dirs, limits, warnings: rw } = resolveWorkdirs(source.entries);
+  const { dirs, limits, warnings: rw, missing } = resolveWorkdirs(source.entries);
   workDirs = dirs;
   sessionLimitByDir = limits;
+  workdirStatus.setMissing(missing.length);
   return [...source.warnings, ...rw];
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
 // 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
 function reloadWorkdirs() {
-  const { result: source, warnings: srcWarnings } = readWorkdirSource();
+  const { result: source, warnings: srcWarnings, from } = readWorkdirSource();
+  workdirStatus.setSource(from);
   if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
   for (const w of srcWarnings) console.warn(`⚠️  [workdirs 热加载] ${w}`);
-  // 热加载路径上「一个都不剩」不能像启动期那样 exit —— 那会把正在跑的回合一起杀掉，
-  // 而起因可能只是编辑器写到一半、或外置盘临时掉线。保留旧白名单是这里的正确失败方向
-  //（与 source === null 同档）；SCOPE-03 的拒绝只发生在启动期，那时还没有东西可失去。
+  // 「有条目却一个都解析不出」时保留旧白名单：起因多半是编辑器写到一半、或外置盘临时掉线，这时把
+  // 正在用的文件夹一把清空，代价远大于晚一拍生效（与 source === null 同档）。
+  // 显式写成空清单（[] 或删掉这一项）则照常生效：没有文件夹也能用（SCOPE-03），清空是用户的真实意图。
   const { dirs: probe } = resolveWorkdirs(source.entries);
-  if (!probe.length) {
+  if (!probe.length && source.entries.length) {
     console.warn('⚠️  [workdirs 热加载] 新配置里没有一个可用工作区，保留旧白名单（未生效）');
     return;
   }
   const prevKey = workDirs.join('|');
   for (const w of applyWorkdirs(source)) console.warn(`⚠️  [workdirs 热加载] ${w}`);
   // 被移除目录的已开实例保留运行、新开被拒；但若 viewingCwd 停在已移除目录且其上无实例，
-  // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录。
+  // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录（清单空了就是「无文件夹」）。
   const viewingHasInstance = agents.get(viewingInstanceId)?.cwd === viewingCwd;
   // 被热移除且无 live 实例时归位（viewingCwd 是项目轴：连接文件夹、其子目录或仓库，都按当前授权判）。
-  if (!routableAuth(viewingCwd) && !isNoFolderKey(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
+  if (!routableAuth(viewingCwd) && !isNoFolderKey(viewingCwd) && !viewingHasInstance) viewingCwd = primaryWorkDir();
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
   projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
@@ -425,20 +431,28 @@ function preflight() {
   };
   // 工作区白名单：条目支持 string 或 {path,sessionLimit}，来源优先级与主目录折叠都在 workdirs.js
   //（doctor.js D3 共用同一份）。单个无效项告警跳过、不挡启动；列表只剩一个的话目录切换器隐藏。
-  const { result: source, warnings: srcWarnings } = readWorkdirSource();
-  for (const w of srcWarnings) console.warn(`⚠️  ${w}`);
-  for (const w of applyWorkdirs(source ?? { entries: [], warnings: ['WORK_DIRS_FILE 读取/解析失败'] })) {
-    console.warn(`⚠️  ${w}`);
+  const { result: source, warnings: srcWarnings, from, filePath } = readWorkdirSource();
+  workdirStatus.setSource(from);
+  // 外置清单文件（WORK_DIRS_FILE）读不出来：配置坏了，不是「还没连」。照常启动会把它说成「在手机上选一个」，可来源是
+  // 外置文件时手机上加不了。启动时没有旧清单可保留（热加载读失败保留旧清单，同一道判据），只能拒绝启动并点名那个文件。
+  if (source === null) {
+    fail(`WORK_DIRS_FILE 指向的工作区清单读不出来：${filePath}（不存在、没有读权限，或不是合法 JSON）。\n`
+      + `   修好这个文件，或去掉 WORK_DIRS_FILE、改用 ${CONFIG_FILE_NAME} 的 WORKDIRS。`);
   }
-  // SCOPE-03：一个可用工作区都没有时拒绝启动。
+  for (const w of srcWarnings) console.warn(`⚠️  ${w}`);
+  for (const w of applyWorkdirs(source)) console.warn(`⚠️  ${w}`);
+  // SCOPE-03：一个可用工作区都没有时照常启动，只开放「无文件夹」，绝不回落家目录（primaryWorkDir 落 scratch 根）。
   //
-  // 这里曾经不可能触发 —— WORK_DIR 无条件占首位，而它自己回落 $HOME，所以白名单最少也有一项，
-  // 那一项恰好是整个家目录。删掉那条回落之后，「全部无效」就成了一个必须显式处理的真实状态：
-  // 用户删了项目目录、外置盘没挂载、路径手滑写错。fail-loud 是唯一正确的方向 —— 静默起一个
-  // 什么都打不开的 server，用户只会看到手机端空列表，无从知道是配置问题。
+  // 2026-10-15 前这里拒绝启动，理由是「静默起一个什么都打不开的 server，用户只会看到手机端空列表，无从知道是
+  // 配置问题」。维护者定「没有文件夹也能用」之后，空清单是正常状态（新装、在手机上全部断开），拒绝启动反而把
+  // 手机整个关在外面。那条理由仍然成立的一半——配置了却全找不到——改由这里的日志与服务告警（missingFolders）说清。
   if (!workDirs.length) {
-    fail('没有可用的工作区：WORKDIRS 里的目录一个都不存在或不可达。\n'
-      + `   请检查 ${CONFIG_FILE_NAME} 的 WORKDIRS，或用 node scripts/config.js set 重设。`);
+    // 手机上改不了清单时（来源是环境变量 / 外置文件、或没有配置文件），别叫人去手机上选
+    const readonly = workdirStatus.readonlyReason();
+    const where = from === 'WORKDIRS' ? `${CONFIG_FILE_NAME} 的 WORKDIRS` : from;
+    console.warn(workdirStatus.missing()
+      ? `⚠️  ${where} 里配置的目录全都找不到（${workdirStatus.missing()} 个：被删、改名，或外置盘没挂上），先只开放「无文件夹」。目录回来后重启${readonly ? '' : '，或在手机上另选文件夹'}。`
+      : readonly ? '还没有连接任何文件夹，先只开放「无文件夹」。' : '还没有连接任何文件夹：在手机上新建会话时选一个，或直接用「无文件夹」。');
   }
   let claudeBin = process.env.CLAUDE_BIN || '';
   if (!claudeBin) {
@@ -1246,6 +1260,9 @@ function computeServiceHealth() {
       ? { ...lockout, count: c.rate_limit_lockouts ?? 0, source: metrics.getLabel('rate_limit_last_source') }
       : null,
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
+    // 配置里有、却找不到的文件夹个数（被删、改名、外置盘没挂上）。清单为空也能启动之后（SCOPE-03），
+    // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。只给个数，路径不出网。
+    missingFolders: workdirStatus.missing(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
@@ -1336,6 +1353,7 @@ function instancesPayload() {
   // 抽屉里不该平白多一节空的。scratchRoot 恒带——前端「选文件夹」面板靠它发起无文件夹会话。
   const scanned = projectIndex.get();
   payload.scratchRoot = scratchRootKey();
+  payload.foldersReadonly = workdirStatus.readonlyReason();
   const scratchInUse = Boolean(scanned?.scratchInUse) || isNoFolderKey(viewingCwdOf())
     || list.some(i => i.projectKey === payload.scratchRoot);
   payload.projects = composeProjects({
@@ -3363,8 +3381,23 @@ registerSocketConnection(io, socket => {
     // ensureAuthorized 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const obj = (payload && typeof payload === 'object') ? payload : null;
-    let cwd;
+    // 先定目标再分支：ensureAuthorized 的归位在清单为空时给的正是「无文件夹」的键（primaryWorkDir），
+    // 它也得走下面建根的那一支——否则 scout 会在一个还不存在的 scratch 根里起（SCOPE-03）。
+    let target;
     if (isNoFolderKey(obj ? obj.cwd : viewingCwdOf())) {
+      target = SCRATCH_ROOT;
+    } else {
+      const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
+      if (routed === null) {
+        // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
+        sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+        return;
+      }
+      target = ensureAuthorized(routed);
+    }
+    let cwd;
+    if (isNoFolderKey(target)) {
       // 「无文件夹」：空首页停在 scratch 根上，首条消息再懒建 scratch 目录（见 user:message）。
       // 根要先建出来：下面 scout 探模型清单要一个真实存在的 cwd。
       try { mkdirSync(SCRATCH_ROOT, { recursive: true }); } catch (err) {
@@ -3374,14 +3407,7 @@ registerSocketConnection(io, socket => {
       }
       cwd = scratchRootKey();
     } else {
-      const routed = obj ? routeCwd(obj.cwd) : viewingCwdOf();
-      if (routed === null) {
-        // 前端的 session:new 不接 ack，只能靠 sysTo 让用户看见——静默不动比开到别的目录好，但仍要说出来。
-        sysTo(socket, OUT_OF_SCOPE_ERROR, true);
-        if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
-        return;
-      }
-      cwd = ensureAuthorized(routed);
+      cwd = target;
     }
 
     // cwd（驾驶轴）保持原样，可以是托管 worktree 路径；路由代次 / 当前指针 / 暂存档位一律按项目轴
@@ -4357,6 +4383,8 @@ registerSocketConnection(io, socket => {
       // D18：投影**之前**的 shell 快照。现读 process.env 是没用的——config.js 已经把文件值
       // 填了进去，来源分不开（那会做出一个永远报「全被覆盖」的假功能）。
       shellEnv: getShellEnvSnapshot(),
+      // 配置了却找不到的文件夹个数：与服务告警同一个数，体检不能把它说成「还没连」（workDirs 两种情况下都是空的）。
+      missingFolders: workdirStatus.missing(),
       // D20（R45，2026-08-30）：直写开关 + 公网声明信号。cfEnabled 上面已传（isAccessEnabled 权威判定），
       // 这里补 FILE_EDIT 与 PUBLIC_URL 两个输入；URL 值不进报告（runDoctor 只出布尔）。
       fileEditOff: process.env.FILE_EDIT === 'off',
@@ -4536,6 +4564,7 @@ registerSocketConnection(io, socket => {
       // 面板自己的「异常告警」小节走这条 ack（不是 instances 广播），得同样带上——否则顶栏/抽屉
       // 与「服务状态」面板对同一次限速锁定会显示不一致的措辞（见 app.js renderServiceStatus）。
       proxyFronted: health.proxyFronted,
+      missingFolders: health.missingFolders, // 同上：抽屉与面板对「配置的文件夹找不到」得是同一句话
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。
@@ -5058,7 +5087,11 @@ httpServer.listen(port, host, () => {
   startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
   console.log('========================================');
   console.log('  Claude Chat Mobile v2');
-  console.log(`  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`);
+  console.log(workDirs.length
+    ? `  工作目录: ${primaryWorkDir()}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`
+    : workdirStatus.missing()
+      ? '  工作目录: 配置的都找不到（见上方告警；「无文件夹」随时可用）'
+      : `  工作目录: 还没有（${workdirStatus.readonlyReason() ? '' : '在手机上新建会话时选择；'}「无文件夹」随时可用）`);
   console.log(`  claude: ${claudeBin} (${versions.cli})`);
   console.log(`  工具放行: 由 .claude/settings.json 的 permissions 决定（投屏层不注入白名单）`);
   // 无 AUTH_TOKEN 的分支已删除：那个状态到不了这里——resolveBindPlan 会在 listen 之前

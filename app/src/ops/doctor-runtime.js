@@ -9,7 +9,7 @@ import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js
 import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
-import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, deviceApprovalScopeDiagnostic, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic, workdirBreadthDiagnostic } from './doctor-checks.js';
+import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, deviceApprovalScopeDiagnostic, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic, workdirBreadthDiagnostic, workdirPresenceDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 import { childEnv } from '../shared/child-env.js';
 import { findWorktreeOwner, resolveAuthorizedCwd } from '../sessions/folder-access.js';
@@ -316,13 +316,15 @@ export function runDoctor(ctx = {}) {
   checks.push({ id: 'CLAUDE_BIN', status: cb.status, detail: cb.detail, safe: cb.safe });
 
   const wc = (ctx.workDirs || []).length;
+  // 一个都没连是正常状态，配置了却找不到才 warn（missingFolders 由 server 喂，同服务告警那个数）。
+  const wp = workdirPresenceDiagnostic({ count: wc, missing: ctx.missingFolders, lang: ctx.lang });
   // 过宽根只报不拦（判定见 workdirBreadthDiagnostic）；这里只出个数，路径不进报告。
   const wb = workdirBreadthDiagnostic({ dirs: ctx.workDirs || [], home: ctx.home, lang: ctx.lang });
   checks.push({
     id: 'WORK_DIRS',
-    status: wc && wb.status === 'ok' ? 'ok' : 'warn',
-    detail: wb.broad.length ? `${wc} 个工作目录；${wb.detail}` : `${wc} 个工作目录`,
-    safe: { count: wc, tooBroad: wb.broad.length },
+    status: wp.status === 'ok' && wb.status === 'ok' ? 'ok' : 'warn',
+    detail: wb.broad.length ? `${wp.detail}；${wb.detail}` : wp.detail,
+    safe: { count: wc, missing: Number.isFinite(ctx.missingFolders) && ctx.missingFolders > 0 ? ctx.missingFolders : 0, tooBroad: wb.broad.length },
   }); // 不回显路径
 
   const sl = statuslineConfigDiagnostic(ctx.webStatuslineOff, ctx.lang);

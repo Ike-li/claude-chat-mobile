@@ -101,7 +101,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
+2. Asks which project folder should open on your phone. Give an absolute (or `~/`) path; your home directory itself is rejected. **Press Enter to skip** — it works with no folders connected at all; pick one from your phone when you start a session, or just use "No folder". After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, and **the first entry is the one your phone opens by default**. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
 3. Asks how your phone will reach this machine (LAN only / Cloudflare / encrypted tunnel VPN / reverse proxy and hosted tunnels / direct public exposure). Press Enter to skip; if you pick one it is stored as `ACCESS_PROFILE`, `doctor` and the phone security check tailor their checks to it, and the wizard ends with the matching docs pointer.
 4. Asks whether to enable the phone file editor's direct writes (the only write path that bypasses the Agent tool-approval chain). Enter keeps the default on; answering `n` writes `FILE_EDIT=off`.
 5. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
@@ -189,7 +189,7 @@ node scripts/setup.js \
   --hooks=off
 ```
 
-- `--work-dir` is required and never silently falls back to `$HOME`.
+- `--work-dir` is optional: leave it out and no folder is connected (pick one from your phone when you start a session); if given, it must be an absolute path and not your home directory itself. It never falls back to `$HOME`, and an explicitly empty value (`--work-dir=`, usually an unexpanded variable) is rejected.
 - `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
 - `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
   non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
@@ -501,13 +501,14 @@ Follow these steps in order and verify each result before continuing:
 1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
    Stop and tell me if any check fails; do not install or sign in to claude yourself.
 2. Run npm ci --omit=dev.
-3. Ask me for the absolute workspace path and whether to install the CLI hooks bridge.
+3. Ask me whether to connect a project folder now (if so, confirm its absolute path; skipping is fine,
+   I can pick one from my phone later) and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
 4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR WORK_DIRS PORT
    CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
    so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
-   If a config file already exists, stop instead of adding --force yourself.
+   (Drop --work-dir if no folder is being connected.) If a config file already exists, stop instead of adding --force yourself.
 5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
 6. Confirm port 3000 is not held by the desktop app or another npm start, then start with `npm start` (headless).
    Verify authenticated /health JSON; do not rely only on the process existing.
@@ -747,7 +748,7 @@ site data and the installed PWA must be cleared manually.
 |---|---|
 | The server refuses to start, saying `AUTH_TOKEN` is missing | The token is a startup prerequisite; it no longer degrades to a loopback bind. Run `npm run setup` to generate one, then restart |
 | Startup logs list only the local URL, no phone URL | `BIND_MODE=loopback` binds `127.0.0.1` only, so nothing is listening on those LAN addresses. Switch back to the default or `lan` for direct phone access |
-| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
+| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --hooks=...` (add `--work-dir=...` to connect a folder) |
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIRS` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |

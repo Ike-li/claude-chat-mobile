@@ -9,6 +9,7 @@ import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   workdirBreadthDiagnostic,
+  workdirPresenceDiagnostic,
   connectedFoldersDiagnostic,
   UPLOADS_FOOTPRINT_WARN_BYTES,
   classifyAuthToken,
@@ -1499,6 +1500,43 @@ test.describe('tailscaleDiagnostic（TAILSCALE / D23：检测 + 指路，不管�
   test('英文分支不混中文', () => {
     for (const input of [{ found: false, accessProfile: 'vpn' }, { found: false, accessProfile: '' }, { ...running, accessProfile: '' }, { found: true, backendState: 'NeedsLogin', accessProfile: 'vpn' }]) {
       assert.doesNotMatch(tailscaleDiagnostic({ ...input, lang: 'en' }).detail, /[一-鿿]/);
+    }
+  });
+});
+
+// 两个 doctor 共用的「有没有文件夹」判定（2026-10-15）。清单为空是正常状态：新装、或在手机上全部断开之后
+// server 照常启动、只剩「无文件夹」（SCOPE-03）——此前 CLI 体检把它报成 fail「server 会拒绝启动」。
+// 配置了却找不到时解析结果同样是空的，不分开就会把它说成「还没连」，和服务告警自相矛盾。
+test.describe('workdirPresenceDiagnostic：零文件夹是正常状态，找不到的才 warn', () => {
+  test('一个都没连 → ok，并说清以后在哪选', () => {
+    const zh = workdirPresenceDiagnostic({ count: 0, missing: 0, lang: 'zh' });
+    assert.equal(zh.status, 'ok');
+    assert.match(zh.detail, /无文件夹/);
+    const en = workdirPresenceDiagnostic({ count: 0, lang: 'en' });
+    assert.equal(en.status, 'ok');
+    assert.match(en.detail, /No folder/);
+    assert.doesNotMatch(en.detail, /[一-鿿]/);
+  });
+
+  test('有可用的、没有找不到的 → ok，报个数', () => {
+    const d = workdirPresenceDiagnostic({ count: 2, missing: 0, lang: 'zh' });
+    assert.equal(d.status, 'ok');
+    assert.match(d.detail, /2/);
+  });
+
+  test('配置了却找不到 → warn，说的是「找不到」而不是「还没连」', () => {
+    for (const count of [0, 3]) {
+      const d = workdirPresenceDiagnostic({ count, missing: 2, lang: 'zh' });
+      assert.equal(d.status, 'warn', `count=${count}`);
+      assert.match(d.detail, /2 个.*找不到/);
+      assert.doesNotMatch(d.detail, /还没有连接/);
+    }
+    assert.doesNotMatch(workdirPresenceDiagnostic({ count: 0, missing: 1, lang: 'en' }).detail, /[一-鿿]/);
+  });
+
+  test('missing 缺席或脏值（旧调用方）→ 按 0 处理', () => {
+    for (const missing of [undefined, null, Number.NaN, -1, '2']) {
+      assert.equal(workdirPresenceDiagnostic({ count: 0, missing, lang: 'zh' }).status, 'ok', String(missing));
     }
   });
 });

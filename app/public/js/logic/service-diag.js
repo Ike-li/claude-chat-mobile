@@ -401,6 +401,12 @@ export function formatServiceNotices({ service, now } = {}) {
   if (ce && typeof ce.at === 'number') {
     notices.push(`${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`);
   }
+  // 清单为空也能启动之后（SCOPE-03），「配置了却全找不到」只剩这一行能说出原因。找不到的目录不进抽屉，
+  // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表。
+  const missing = service && service.missingFolders;
+  if (Number.isFinite(missing) && missing > 0) {
+    notices.push(t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉').replace('{n}', String(missing)));
+  }
   return notices;
 }
 

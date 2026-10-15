@@ -186,7 +186,9 @@ export function resolveWorkdirSource({
   }
   return {
     ...fold(normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : [])),
-    from: 'WORK_DIRS',
+    // 什么都没配（kind none：新装时跳过了文件夹）记作 WORKDIRS：要加就加在配置文件里（手机上的「添加文件夹」
+    // 据此放行写入），doctor 的标签也指向它，而不是一个谁都没设的环境变量。
+    from: picked.kind === 'env-list' ? 'WORK_DIRS' : 'WORKDIRS',
   };
 }
 
@@ -274,18 +276,21 @@ export function findProjectDirCollisions(dirs = []) {
 }
 
 // realpathSync（解符号链接/相对段，与 CLI 命名一致）+ isDirectory 校验，warn-skip 无效项；realpath 后二次去重。
-// 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings }。
+// 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings, missing: [找不到或不是目录的原样路径] }。
+// missing 喂服务告警：清单为空也能启动之后，全部失效不再以「拒绝启动」示警（SCOPE-03）。
 export function resolveWorkdirs(entries) {
   const dirs = [];
   const limits = new Map();
   const warnings = [];
+  const missing = [];
   for (const { path, sessionLimit } of entries) {
     let real;
     try {
       real = realpathSync.native(path); // 与 folder-access.js 同一种 realpath：连接根与候选路径的写法必须一致
-      if (!statSync(real).isDirectory()) { warnings.push(`工作区忽略（不是目录）：${path}`); continue; }
+      if (!statSync(real).isDirectory()) { warnings.push(`工作区忽略（不是目录）：${path}`); missing.push(path); continue; }
     } catch {
       warnings.push(`工作区忽略（不存在/不可达）：${path}`);
+      missing.push(path);
       continue;
     }
     if (limits.has(real)) continue; // realpath 后去重（首见 sessionLimit 优先）
@@ -298,5 +303,21 @@ export function resolveWorkdirs(entries) {
       `工作区 project 目录名碰撞（CLI 编码「${c.encoded}」）：${c.paths.join(' ↔ ')}——会话列表/历史可能混用，请避免仅分隔符不同的路径`,
     );
   }
-  return { dirs, limits, warnings };
+  return { dirs, limits, warnings, missing };
+}
+
+// 清单的运行态：从哪来（WORKDIRS / WORK_DIRS / WORK_DIRS_FILE）、配置了却找不到（被删、改名、外置盘没挂上）
+// 几个。组装根在启动与每次热加载应用清单时写入，服务告警、体检、instances 广播、启动日志读取；广播时不重读外置文件。
+// 找不到的只存个数不存路径：告警只说个数，路径在启动日志与 doctor 里。配置文件在不在是组装根的事，注入进来。
+export function createWorkdirStatus({ usingConfigJson }) {
+  let from = 'WORKDIRS';
+  let missing = 0;
+  return {
+    setSource(next) { from = next; },
+    setMissing(n) { missing = n; },
+    missing: () => missing,
+    // 手机上改不了清单时的原因码（与 folders:add 拒绝时同一套：先看配置文件在不在，再看来源是不是内联 WORKDIRS）；
+    // 能改时 null。进广播（foldersReadonly）：零文件夹引导据此不给一个走完选择面板才报错的按钮（2026-10-15 Codex review #204）。
+    readonlyReason: () => (!usingConfigJson() ? 'no_config_file' : from !== 'WORKDIRS' ? 'source_readonly' : null),
+  };
 }

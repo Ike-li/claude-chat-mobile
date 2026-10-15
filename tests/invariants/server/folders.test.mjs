@@ -2,7 +2,8 @@
 // 守护：FOLDER-01（能加什么、写到哪、写完是否真的生效；新建只在范围内、越界什么都不建）
 // 测什么：真 app/server.js 子进程上 folders:browse / folders:add / folders:mkdir 三条事件：
 //   加进去的目录立刻出现在 ack 与广播里、配置文件原有条目（含 sessionLimit）原样保留、留审计；
-//   不能加的一律拒绝且配置文件逐字节不变；配置文件不存在时不替用户建、来源是环境变量时不假装成功。
+//   不能加的一律拒绝且配置文件逐字节不变；配置文件不存在时不替用户建、来源是环境变量时不假装成功；
+//   这两种「手机上改不了」在 instances 广播的 foldersReadonly 里提前说清，能改时是 null。
 // 不测什么 + 为什么：① 判据本身（只回目录名、symlink、worktree、名字校验）在 S1 folder-picker.test.mjs
 //   ② 前端的选择面板属 S3
 // 槽位：S2（真 app/server.js 子进程 + 假 CLI；HOME 与配置文件都在一次性目录里）
@@ -50,6 +51,15 @@ const auditRows = pred => {
     const audit = existsSync(auditFile) ? JSON.parse(readFileSync(auditFile, 'utf8')) : {};
     return (Array.isArray(audit) ? audit : (audit.records ?? [])).filter(pred);
   } catch { return []; }
+};
+// 这台 server 的广播里说的「手机上能不能改清单」：null = 能；否则是原因码（与 folders:add 拒绝时同一套）。
+// 首页零文件夹引导据此决定给不给「选择文件夹」。先触发一帧广播再读，不赌连上时那一帧到没到。
+const readonlyOf = async s => {
+  const got = [];
+  s.on('agent:event', e => { if (e.type === 'instances') got.push(e.payload); });
+  await emitOn(s, 'session:home', {});
+  await waitFor(() => got.length, 'instances 广播');
+  return got.at(-1).foldersReadonly;
 };
 const serverEnv = extra => ({
   AUTH_TOKEN: TOKEN, CCM_DATA_DIR: join(root, `data-${Math.random().toString(36).slice(2)}`),
@@ -135,11 +145,12 @@ test('新建：范围内建出一层，越界拒绝且什么都没建出来', as
   assert.equal(existsSync(join(root, 'escaped')), false);
 });
 
-test('配置文件不存在：拒绝，也不替用户建一个（hard-rules §4.6）', async () => {
+test('配置文件不存在：拒绝，也不替用户建一个（hard-rules §4.6）；广播里先说清手机上改不了', async () => {
   const missing = join(root, 'no-such-config.json');
   const other = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: missing, WORK_DIRS: a }));
   const s = await connect(other.port);
   try {
+    assert.equal(await readonlyOf(s), 'no_config_file', '广播没说手机上改不了：零文件夹引导会给一个走完选择面板才报错的按钮');
     assert.deepEqual(await emitOn(s, 'folders:add', { path: 'code/b' }), { ok: false, error: 'no_config_file' });
     assert.equal(existsSync(missing), false);
   } finally {
@@ -148,13 +159,34 @@ test('配置文件不存在：拒绝，也不替用户建一个（hard-rules §4
   }
 });
 
-test('工作区来自环境变量：写进配置文件也不会生效，拒绝而不是报成功', async () => {
+// 配置里根本没有 WORKDIRS 键、也没设环境变量：新装时跳过了问文件夹就是这样（2026-10-15 起可以跳过）。
+// 来源就是这份配置文件，加进去热加载即生效。此前这一格被当成「来自环境变量」拒掉，零文件夹首页上
+// 点「选择文件夹」第一次添加就失败（隔离实例实测撞上，mock 那层看不见）。
+test('配置里还没有 WORKDIRS（新装跳过了文件夹）：照常加进配置文件，立刻可用', async () => {
+  const cfg = join(root, 'no-workdirs-key.json');
+  writeFileSync(cfg, `${JSON.stringify({ $schemaVersion: 1 })}\n`);
+  const other = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: cfg }));
+  const s = await connect(other.port);
+  try {
+    assert.equal(await readonlyOf(s), null, '能加却说成改不了：零文件夹引导会把唯一的入口藏起来');
+    const res = await emitOn(s, 'folders:add', { path: 'code/b' });
+    assert.equal(res?.ok, true, `第一次添加就被拒：${JSON.stringify(res)}`);
+    assert.deepEqual(res.dirs, [b]);
+    assert.deepEqual(JSON.parse(readFileSync(cfg, 'utf8')).WORKDIRS, [b]);
+  } finally {
+    s.close();
+    await killServer(other.proc);
+  }
+});
+
+test('工作区来自环境变量：写进配置文件也不会生效，拒绝而不是报成功；广播里先说清手机上改不了', async () => {
   const cfg = join(root, 'env-shadowed.json');
   writeFileSync(cfg, `${JSON.stringify({ WORKDIRS: [a] })}\n`);
   const before = readFileSync(cfg, 'utf8');
   const other = await spawnServer(serverEnv({ CCM_CONFIG_FILE_PATH: cfg, WORK_DIRS: a }));
   const s = await connect(other.port);
   try {
+    assert.equal(await readonlyOf(s), 'source_readonly', '广播没说手机上改不了：零文件夹引导会给一个走完选择面板才报错的按钮');
     assert.deepEqual(await emitOn(s, 'folders:add', { path: 'code/b' }), { ok: false, error: 'source_readonly' });
     assert.equal(readFileSync(cfg, 'utf8'), before);
   } finally {
