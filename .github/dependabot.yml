@@ -1,4 +1,5 @@
-# .github/dependabot.yml —— 让 dependabot 的 PR 落到 dev，而不是默认分支。
+# .github/dependabot.yml —— 让 dependabot 的版本更新 PR 落到 dev，而不是默认分支。
+# 安全更新不归这份文件管，见下面【安全更新】一段。
 #
 # 【为什么需要这份文件】没有它时 dependabot 把 PR 开到仓库的**默认分支**。master 同时是
 # 「对外发布的稳定版本」——装机 `curl` 拉的就是它的源码归档，所以 master 的 HEAD 必须恒等于
@@ -6,8 +7,17 @@
 # （hono 4.13.0 → 4.13.7）合进 master 之后，master 上就挂了 2 个未发版提交，那一刻拉归档的人
 # 拿到的代码与版本号对不上，而没有任何地方会报错。
 #
-# target-branch 写死 dev 而不是只依赖「默认分支已改成 dev」：默认分支是仓库设置，改回去不会
-# 有任何提示，而这份文件在代码评审里看得见。两道一起用。
+# 默认分支就是 master（仓库首页的 README 要与装机拿到的那份一致），所以版本更新能落到 dev
+# 只靠这里的 target-branch。漏写了，PR 会开到 master，被 quality 里「只有 dev → master 的
+# 发版 PR 能进 master」那一步拦下。
+#
+# 【安全更新】GitHub 文档（Dependabot options reference 的 target-branch 一节）写明：一段配置
+# 设了 target-branch，它的选项（包括 labels）就不再作用于安全更新，安全更新永远开到默认分支。
+# 上面的 #23 本身就是安全更新（它开出来时这份文件还不存在，那时 dependabot 只开安全更新），
+# 所以这份文件挡不住那一类：安全更新 PR 照样开到 master，靠上面那一步拦下、不能直接合
+# （2026-09-29 的 #184 就是）。处理办法是把同样的升级移植到 dev：在 dev 的 feature 分支上跑
+# `npm audit fix`（不加 --force；超出 semver 范围的另行评估），PR 到 dev，随下次发版进
+# master。发版后那条 PR 一般由 dependabot 自己关掉，没关就手动关。
 version: 2
 updates:
   - package-ecosystem: npm
@@ -16,7 +26,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # 安全更新走同一条路：它们同样不该直接落到发布分支上。
+    # 本段选项（含 labels）只作用于版本更新；安全更新不读这里，见文件头【安全更新】。
     labels:
       - dependencies
 
