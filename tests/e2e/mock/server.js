@@ -308,6 +308,9 @@ const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
 // 一次性：置换一次就解除。
 let outboxReplaySwapArmed = null;
 let outboxReplaySwapReloadInstanceId = null;
+// 置换那条（同一批的第 1 条）收下之后，重载拉回来的历史里就有它：真 server 收下即交给 CLI 写进 transcript。
+// 前端那颗被保住的离线气泡要被这条历史认领，屏幕上只能有一颗。
+let outboxReplaySwapDeliveredText = null;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -587,6 +590,7 @@ function resetMockState() {
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
+  outboxReplaySwapDeliveredText = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -2247,7 +2251,8 @@ io.on('connection', socket => {
           // `now?.sessionId && now.sessionId !== frozen` 会在这里短路失效，仍对冻结的旧会话
           // 执行破坏性回退（PR #102 review 的 P1）。
           { role: 'user', content: 'Go home while I decide', uuid: 'u-archived-7' },
-          { role: 'assistant', content: 'Okay, heading home.', uuid: 'a-archived-7' }
+          { role: 'assistant', content: 'Okay, heading home.', uuid: 'a-archived-7' },
+          ...(outboxReplaySwapDeliveredText ? [{ role: 'user', content: outboxReplaySwapDeliveredText, uuid: 'u-archived-replayed' }] : []),
         ]
       });
     } else if (sessionId === 'mock-session-worktree-forked') {
@@ -5566,6 +5571,7 @@ io.on('connection', socket => {
       // 入队即在跑：真 server 在 ack 之前广播 turnRunning=true。之后不再推任何事件，这一轮一直挂着。
       replaySwapInst.state = 'busy';
       replaySwapInst.turnRunning = true;
+      outboxReplaySwapDeliveredText = typeof payload?.text === 'string' ? payload.text : null;
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },

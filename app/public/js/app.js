@@ -116,6 +116,7 @@ import {
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
   outboxNoticePlacement,
+  shouldCarryOutboxBubbleOnClear,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
@@ -766,6 +767,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
   }
   function enqueueOutbox(item) {
+    // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）
+    if (item?.bubbleEl && item.sessionId) item.bubbleEl.dataset.outboxSessionId = item.sessionId;
     const { queue, dropped } = planOutboxEnqueue(offlineQueue, item, { maxItems: OUTBOX_MAX_ITEMS });
     offlineQueue = queue;
     persistOutbox();
@@ -1342,7 +1345,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 告诉服务端「这是入队时刻的快照，不是眼下的意图」：缺 instanceId 时不得回退到服务端
         // 当前 viewing（断线期间可能已换工作区），见 instance-routing.js 的 allowViewingFallback。
         fromOutbox: true,
-      }, (err, ack) => resolve(presentOfflineResendAck(err, ack)));
+      }, (err, ack) => {
+        const decision = presentOfflineResendAck(err, ack);
+        // 气泡记下最近这次是不是被服务端拒收了（在途轮、续接分叉闸、stale、永久失败）：拒收的没进 transcript，
+        // 清屏重载时不让历史里同文的旧消息认领它（settleCarriedPendingBubbles）。送达了、或超时说不准，就交还给历史去认。
+        item.bubbleEl?.toggleAttribute('data-outbox-rejected', decision.outcome === 'blocked' || decision.outcome === 'permanent');
+        resolve(decision);
+      });
     });
   }
 
@@ -1522,7 +1531,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 归零后若再 sync 会把环形缓冲整段再叠到磁盘历史上。恢复基线，仅丢未落盘的实时中间态。
     const keepSeq = lastSeq;
     const keepEpoch = curEpoch;
-    clearView(displayedSessionId, null);
+    clearView(displayedSessionId, null, { prevSessionId: displayedSessionId });
     lastSeq = keepSeq;
     curEpoch = keepEpoch;
     // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
@@ -5506,7 +5515,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       text: inputEl ? inputEl.value : '',
       attachments: attachments.items(),
     };
-    clearView(sid, null);
+    clearView(sid, null, { prevSessionId });
     // 未发送草稿（文字+附件）按 draftKeyFor 的槽存/取：同一表面静默换实例(keep)不动；真实切换(swap)存旧恢复新。
     // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
     applySessionDraftSwap(prevSessionId, sid, draftSnapshot, { prevCwd, newCwd: cwd });
@@ -5659,7 +5668,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 恢复前移后的基线即可让后续增量从缓冲尾部续。
         const keepSeq = lastSeq;
         const keepEpoch = curEpoch;
-        clearView(sid, null);
+        clearView(sid, null, { prevSessionId: displayedSessionId });
         lastSeq = keepSeq;
         curEpoch = keepEpoch;
         // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
@@ -7554,7 +7563,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     messagesEl.appendChild(guide);
   }
 
-  function clearView(sessionId, tip) {
+  // prevSessionId：清屏前屏幕上是哪个会话。调用方说清是同一会话的重载，离线条目的气泡才保得住（缺省不保）。
+  // 不能在这里读 displayedSessionId 代替：bindView 先改写它再调本函数。
+  function clearView(sessionId, tip, { prevSessionId = null } = {}) {
     currentSessionId = sessionId;
     lastSeq = 0;
     curEpoch = null;
@@ -7575,11 +7586,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       viewingInstanceId: displayedInstanceId,
       sessionId,
     });
+    // 离线条目（交给 outbox 的）气泡另判一次，只保气泡、不补 busy。这是有意拆开，不是漏扩：发送窗口那条问的是
+    // 「有没有一次乐观 busy 会被这次清屏冲掉」，离线条目没有这样一个 busy——断线时入队不点亮运行条，重放那一批的
+    // busy 在批后按结果结算（shouldBusyAfterOfflineBatch），两条重载路径清屏之后又按 instances 权威态重种。
+    // 照着发送窗口补 busy，还在等连接的那几条会凭空点亮一条运行条，没有 result 来收。
+    // 保它们是为了让同一会话的清屏重载不把气泡摘掉：负 ack 常常先于重载的历史到达，气泡不在，「未发送 + 重发」
+    // 就只能另起一条提示条，被随后的历史压到顶上（判据见 shouldCarryOutboxBubbleOnClear）。
     // 只捞未确认的（.opacity-70）——已被 user_message 认领转正的那些属于历史，照常随清屏走、
     // 由 sessionDomCache 或 loadHistory 负责复原，重复留下会和历史回放撞成两条。
-    const keptPending = inSendWindow
-      ? [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]
-      : [];
+    const keptPending = [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]
+      .filter(b => inSendWindow || shouldCarryOutboxBubbleOnClear({
+        outboxSessionId: b.dataset.outboxSessionId || null, prevSessionId, sessionId,
+      }));
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     clearStreams(); thinkings.clear(); toolCards.clear();
@@ -7600,12 +7618,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (inSendWindow) {
       setBusy(true);
       _turnRunning = true; // 同会话静默换实例：那条刚发出的消息仍在跑，闸不能松
-      // 未确认气泡放回（innerHTML='' 只是把节点摘出 DOM 树，节点本身连同已绑的监听器都还完好）。
-      // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
-      // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
-      // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
-      for (const node of keptPending) messagesEl.appendChild(node);
     }
+    // 未确认气泡放回（innerHTML='' 只是把节点摘出 DOM 树，节点本身连同已绑的监听器都还完好）。
+    // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
+    // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
+    // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
+    for (const node of keptPending) messagesEl.appendChild(node);
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     hideStatuslineWrap();
@@ -8504,6 +8522,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 全量重载后处置被 clearView 保住的未确认气泡。
   // 历史已带回这条 → 丢乐观气泡并移交 clientMessageId（否则随后 user_message 会再新建一颗）。
   // 历史还没有 → 移到末尾。必须在 append 之后做：渲染前先摘会闪一下。
+  // 被服务端拒收过的离线条目（data-outbox-rejected，见 deliverOutboxItem）一定没进 transcript，不认领，直接移到末尾。
   // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
     for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
@@ -8512,6 +8531,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         text: tDiv ? tDiv.textContent : '',
         attNames: bubble.dataset.attNames || '',
         messages: msgs,
+        rejected: bubble.hasAttribute('data-outbox-rejected'),
       });
       if (!claim) {
         messagesEl.appendChild(bubble); // 同一节点 appendChild = 移动；已绑的监听器与 dataset 都还在

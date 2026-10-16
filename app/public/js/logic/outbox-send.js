@@ -318,6 +318,18 @@ export function outboxNoticePlacement({
   return indicatorExists ? 'stale' : 'none';
 }
 
+// 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：
+// 规则 5 置换、磁盘 ahead 都会清屏再拉历史，负 ack 常常先于历史到达，气泡已被摘下，提示条只能插进清空的 #messages，
+// 历史随后接在它下面，把它压到顶上。保住气泡，提示就挂在它自己的气泡上，等历史落地再随气泡排到末尾。
+//
+// 只在同一会话的重载里保、只保发往这个会话的。切到别的会话时旧界面的节点归旧会话的 DOM 缓存，带过来就是串会话；
+// 调用方没说清屏前是哪个会话（prevSessionId 缺省）就不保——丢一颗气泡是本来的样子，串会话不是。
+// outboxSessionId 是条目入队时记下的会话；没有会话（新会话页、懒开还没拿到 id）一律不保。
+export function shouldCarryOutboxBubbleOnClear({ outboxSessionId = null, prevSessionId = null, sessionId = null } = {}) {
+  if (typeof sessionId !== 'string' || sessionId === '') return false;
+  return prevSessionId === sessionId && outboxSessionId === sessionId;
+}
+
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。

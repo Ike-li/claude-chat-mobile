@@ -18,6 +18,7 @@ import {
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
   outboxNoticePlacement,
+  shouldCarryOutboxBubbleOnClear,
   SERVER_PRE_TURN_UPPER_BOUND_MS,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
@@ -770,6 +771,36 @@ test.describe('outboxNoticePlacement（离线失败提示挂哪儿）', () => {
   test('缺省参数（什么都不知道）→ none，不猜', () => {
     assert.equal(outboxNoticePlacement(), 'none');
     assert.equal(outboxNoticePlacement({}), 'none');
+  });
+});
+
+// 清屏时离线条目的未确认气泡要不要保住。不保：同一会话的清屏重载（规则 5 置换、磁盘 ahead）把气泡摘下 DOM，
+// 第 2 条的「未发送 + 重发」只能另起一条提示条，插在空的 #messages 里，重载的历史接在它下面，要往上翻才看得到。
+// 保错：别的会话的离线气泡被带进眼前这个会话。
+test.describe('shouldCarryOutboxBubbleOnClear（清屏时保不保离线气泡）', () => {
+  test('同一会话的清屏重载，条目发往的就是它 → 保住', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', prevSessionId: 'sess_a', sessionId: 'sess_a' }), true);
+  });
+
+  test('切到别的会话：哪怕条目发往新会话也不保，旧界面上的节点归旧会话的 DOM 缓存', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_b', prevSessionId: 'sess_a', sessionId: 'sess_b' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', prevSessionId: 'sess_a', sessionId: 'sess_b' }), false,
+      '旧会话的离线气泡绝不能带进新会话');
+  });
+
+  test('同一会话，但条目发往别的会话（/clear 换了会话、号没变那种窄窗里入的队）→ 不保', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_old', prevSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+  });
+
+  test('没有会话（新会话页、懒开还没拿到 id）或条目没记会话 → 不保', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: null, prevSessionId: null, sessionId: null }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: '', prevSessionId: '', sessionId: '' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: null, prevSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+  });
+
+  test('调用方没说清屏前是哪个会话 → 不保（宁可丢气泡，不串会话）', () => {
+    assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', sessionId: 'sess_a' }), false);
+    assert.equal(shouldCarryOutboxBubbleOnClear(), false);
   });
 });
 
