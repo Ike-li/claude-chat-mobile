@@ -12,10 +12,10 @@ import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSideb
 // 不守：结论算得对不对（tests/unit/resume-anchor.test.mjs）；闸与自动继续（tests/invariants/resume-divergence-gate.test.mjs）。
 const TEXT = '手机上接着问：上一步的结论是什么？';
 
-async function openArmedArchivedSession(page: Page) {
+async function openArmedArchivedSession(page: Page, arm = 'test:arm-resume-divergence') {
   await gotoMock(page);
   await ensureComposerReady(page);
-  await sendChatMessage(page, 'test:arm-resume-divergence');
+  await sendChatMessage(page, arm);
   await openSessionsSidebar(page);
   await expandWorkspace(page, MAIN_WORKSPACE);
   await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
@@ -106,6 +106,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#input')).toHaveValue(TEXT);
     await expect(bubblesWithText(page)).toHaveCount(0); // 挪回输入框了，不留一颗挂着「未发送」的气泡
+
+    await page.locator('#confirmAlt').click();
+    await expect(bubblesWithText(page)).toHaveCount(1, { timeout: 10_000 });
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但离线那条重放撞闸时先发生了规则 5 置换（同一会话换成新实例）：入队时的句柄此后就不在了，服务端按条目里的
+  // 会话改投新实例（MSG-02），「重发」照样撞上同一道闸。挪回输入框要按会话认——按实例号的话，置换之后认不出这条，
+  // 面板永远出不来，「重发」只会原地打转（2026-10-16 review P2 改成按会话改投之后才走得到这里，之前是「目标会话已关闭」）。
+  test('P0-RESUME-DIVf 离线那条撞闸前同一会话被置换换了实例：点「重发」照样挪回输入框并弹出面板', async ({ page }) => {
+    await openArmedArchivedSession(page, 'test:arm-resume-divergence-swap');
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill(TEXT);
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const resend = page.locator('[data-testid="outbox-resend"]');
+    await expect(resend).toBeVisible({ timeout: 10_000 });
+    await resend.click();
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#input')).toHaveValue(TEXT);
+    await expect(bubblesWithText(page)).toHaveCount(0);
 
     await page.locator('#confirmAlt').click();
     await expect(bubblesWithText(page)).toHaveCount(1, { timeout: 10_000 });

@@ -3182,6 +3182,9 @@ io.on('connection', socket => {
       armResumeDivergenceWorktreeSwap: () => {
         resumeDivergenceArmed = { sessionId: 'mock-session-worktree', divergence: MOCK_RESUME_DIVERGENCE_TTURN, swap: true };
       },
+      armResumeDivergenceSwap: () => {
+        resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE, swap: true };
+      },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5479,7 +5482,10 @@ io.on('connection', socket => {
     // mock 不 import app/src，wire 形状由集成层守，见 docs/testing.md「平行实现」）。位置同真 server：排在在途轮拒收之前。
     // 确认必须是【这一段】的 newestUuid——前端把确认送错（布尔、旧 uuid），这里照样拒，面板会再弹一次。
     // 真 server 把结论挂在 resume 出来的实例上；mock 的实例与会话一一对应，按会话挂。
-    const divergenceInst = mockInstances.find(i => i.instanceId === (payload?.instanceId || viewingInstanceId));
+    // 离线重放的句柄在置换之后已不在：真 server 按条目里入队时的会话改投那个会话此刻的实例（MSG-02，
+    // instance-routing.js 的 liveInstanceOfSession），这道闸照样过。
+    const divergenceInst = mockInstances.find(i => i.instanceId === (payload?.instanceId || viewingInstanceId))
+      || (payload?.fromOutbox === true && payload?.sessionId ? mockInstances.find(i => i.sessionId === payload.sessionId) : undefined);
     if (resumeDivergenceArmed && divergenceInst?.sessionId === resumeDivergenceArmed.sessionId) {
       const { divergence } = resumeDivergenceArmed;
       if (payload?.ackDivergence !== divergence.newestUuid) {

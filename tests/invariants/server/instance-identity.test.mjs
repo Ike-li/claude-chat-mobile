@@ -1,10 +1,13 @@
-// tests/invariants/server/instance-identity.test.mjs —— 真重启之后，客户端手里的旧实例句柄不得命中别的会话
-// 守护：MSG-02（客户端手里的 instanceId 不得指到另一个会话：发号跨重启不复用；带着入队时 sessionId 的重放，命中的实例换了会话按 stale 拒收）
+// tests/invariants/server/instance-identity.test.mjs —— 客户端手里的旧实例句柄：不得命中别的会话，同一会话换了实例要跟过去
+// 守护：MSG-02（客户端手里的 instanceId 不得指到另一个会话：发号跨重启不复用；带着入队时 sessionId 的重放，句柄失效或指着别的会话时改投该会话此刻的活实例，没有才按 stale 拒收）
 // 覆盖：① 云端全量 review（2026-10-16）P0-2 的原样复现：A 在 projA 拿到句柄 → 重启 → B 在 projB 开会话 →
 //          A 的离线队列带着旧句柄重放（升级前入队的条目，不带 sessionId）→ 必须 stale，projB 的会话里不得出现这条
 //       ② 同一个旧句柄的断线续传（同一份 review 的 P2「sync:since 不比 epoch」）：重启后同一会话被续接出新实例，
 //          旧句柄不得被认成它——认了，客户端拿上一进程的 lastSeq 去接新进程的序列，中间的事件就丢了
 //       ③ 同一进程内：重放带着入队时的 sessionId，命中的实例跑的已是别的会话 → stale；会话对得上照常投递（正对照）
+//       ④ 同一份 review 的 P2「离线同一批第 2 条起被判 stale」：终端写过之后，第 1 条触发规则 5 置换（换了实例号），
+//          第 2 条带着置换前的句柄 → 必须跟到这个会话的新实例上：撞上第 1 条的在途轮落 busy（前端「未发送 + 重发」），
+//          轮次结束后同一条重发送进同一个会话，而不是「目标会话已关闭」永久失败
 // 槽位：S2（真 app/server.js 子进程，①② 各起两次 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 //
 // ⚠ 必须真 spawn 两次（理由同 approval-restart.test.mjs）：「进程真的重启过、计数真的归零过」正是要证明的事，
@@ -12,14 +15,16 @@
 //
 // 不测什么 + 为什么：
 //  ① 前端入队时记下哪个 sessionId、重放时有没有带上 —— 在 app.js 里，归 S3（tests/e2e/specs/input-send-empty.spec.ts）
-//  ② 规则 5 置换换了号之后，同一批离线消息第 2 条起被判 stale —— 另一个缺陷（review P2），本条不管
+//  ② 前端怎么呈现第 2 条的 busy（「未发送 + 重发」挂在哪）—— presentOfflineResendAck 归 S1（tests/invariants/logic-outbox-ack.test.mjs），
+//     挂载点归 S3
 //  ③ 通知深链拿着旧句柄 —— 前端 resolveDeepLinkTarget 早已按 sessionId 兜底（tests/unit/logic-deeplink.test.mjs）
+//  ④ 会话此刻没有活实例（空闲回收、用户关掉了）时的重放 —— 仍按 stale 拒收，改投只认活实例，判定在 S1（tests/invariants/instance-identity.test.mjs）
 // 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
 import '../../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -199,5 +204,80 @@ test('MSG-02：重放带着入队时的会话，命中的实例跑的已是别�
     });
   } finally {
     rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});
+
+// ④ 的时序照 external-dirty.test.mjs：catchUpTick 每 2500ms 一拍，先建基线再判增长——在基线之前追加，
+// 追加的内容会被当成基线本身，externalDirty 永不置位，第 1 条就不会置换，这条用例测的就是空气。
+const TICK_MS = 2500;
+
+test('MSG-02（review P2）：第 1 条触发规则 5 置换之后，同一批第 2 条带着旧句柄要跟到这个会话的新实例，不得判 stale', async () => {
+  const dirs = makeRoot();
+  const sessionId = randomUUID();
+  // 只在容器 / CI 跑（test:invariants:server 不在宿主机白名单），那里的 HOME 本身就是一次性目录。
+  const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(dirs.projA));
+  mkdirSync(projectDir, { recursive: true });
+  const transcript = join(projectDir, `${sessionId}.jsonl`);
+  // 种子：终端先聊过一轮，链串好（断链的夹具在真实世界不存在，见 external-dirty.test.mjs）
+  const seedUser = randomUUID();
+  const seedAssistant = randomUUID();
+  writeFileSync(transcript,
+    transcriptLine(sessionId, 'user', '终端里先说的', dirs.projA, null, seedUser)
+      + transcriptLine(sessionId, 'assistant', '终端里的回答', dirs.projA, seedUser, seedAssistant));
+  const env = {
+    CCM_FAKE_CLAUDE_MODE: 'turn',               // 回合会收尾：空闲时才走得到「该置换」那一侧
+    CCM_FAKE_CLAUDE_SESSION_ID: sessionId,      // 钉死 sid：置换 resume 的还是这个会话，transcript 落点也算得出
+    CCM_FAKE_CLAUDE_RESULT_DELAY_MS: '2000',    // 回合跑 2s：第 2 条到达时第 1 条一定还在跑，同真模型的常态
+  };
+  try {
+    await withBoot(dirs, env, async ({ connect }) => {
+      const phone = await connect('phone');
+      const opened = await phone.call('user:message', { text: '在线时说的', cwd: dirs.projA, clientMessageId: 'p-0' });
+      assert.equal(opened.ok, true, `前提：首条消息要开出实例，实际 ${JSON.stringify(opened)}`);
+      const handle = opened.instanceId;
+      await turnDone(phone.events, handle);
+
+      // 基线建牢之后，终端在同一会话上又跑了一轮（接在种子那条链的末端）
+      await sleep(TICK_MS * 2 + 500);
+      const extUser = randomUUID();
+      appendFileSync(transcript,
+        transcriptLine(sessionId, 'user', '终端后来又说的', dirs.projA, seedAssistant, extUser)
+          + transcriptLine(sessionId, 'assistant', '终端的新回答', dirs.projA, extUser, randomUUID()));
+      await waitForCondition(
+        () => phone.events.some(e => e.type === 'history_append' && e.payload?.external),
+        { timeoutMs: TICK_MS * 4, intervalMs: 150, label: 'catchUpTick 观察到终端写入（externalDirty 置位的前提）' },
+      );
+
+      // 离线时排着的两条：形状照 deliverOutboxItem，句柄与会话都是入队那一刻的。
+      // 逐条重放、等上一条 ack 回来再发下一条，同 processOfflineQueue。
+      const queued = n => ({
+        text: `离线时打的第 ${n} 条`, cwd: dirs.projA, instanceId: handle, sessionId,
+        clientMessageId: `q-${n}`, fromOutbox: true,
+      });
+      const first = await phone.call('user:message', queued(1));
+      assert.equal(first.ok, true, `第 1 条应被接受，实际 ${JSON.stringify(first)}`);
+      assert.notEqual(first.instanceId, handle,
+        '前提：第 1 条要触发规则 5 置换（dispose + resume 换了实例号）；没换就测不到缺陷窗口');
+
+      const second = await phone.call('user:message', queued(2));
+      assert.notEqual(second.stale, true,
+        `第 2 条带着置换前的句柄被判成「目标会话已关闭」，前端会落永久失败、不给重发：会话明明还开着，`
+        + `只是换了实例号（${handle} → ${first.instanceId}）。实际 ${JSON.stringify(second)}`);
+      assert.equal(second.busy, true,
+        `第 1 条的回合还在跑，第 2 条应按在途轮拒收（前端落「未发送 + 重发」），实际 ${JSON.stringify(second)}`);
+
+      // 回合跑完之后点「重发」：同一条、同一个旧句柄，送进同一个会话的新实例
+      await turnDone(phone.events, first.instanceId);
+      const resent = await phone.call('user:message', queued(2));
+      assert.equal(resent.ok, true, `轮次结束后重发应送达，实际 ${JSON.stringify(resent)}`);
+      await sleep(250); // ack 已回，服务端要广播的都已发出，这里只等它到达客户端
+      const landed = phone.events.filter(e => e.type === 'user_message' && e.payload?.clientMessageId === 'q-2');
+      assert.deepEqual(landed.map(e => ({ instanceId: e.instanceId, sessionId: e.sessionId })),
+        [{ instanceId: first.instanceId, sessionId }],
+        '第 2 条要恰好送进一次，而且落在入队时那个会话此刻的实例上');
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
+    rmSync(projectDir, { recursive: true, force: true });  // safe-rm: 目录名由本用例一次性 cwd 编码而来
   }
 });

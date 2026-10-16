@@ -32,6 +32,11 @@
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
 //
+// 【回合晚一点收尾】与模式正交，默认关：
+//   CCM_FAKE_CLAUDE_RESULT_DELAY_MS=<毫秒> → turn 系各档在 init 之后隔这么久才吐回答与 result。
+//             不设时回合几乎瞬间收尾，「上一条刚开跑、下一条就到」这个窗口在 S2 里造不出来；
+//             真模型的回合以秒计，离线队列逐条重放时第 2 条撞上第 1 条的在途轮才是常态。
+//
 // 【退出前的收尾写入】与模式正交，默认关：
 //   CCM_FAKE_CLAUDE_EXIT_APPEND=<transcript 路径> → 读到 stdin EOF 后隔 500ms 往该文件追加一行
 //             收尾元数据再退；CCM_FAKE_CLAUDE_EXIT_MARKER=<路径> 在追加之后落一个标记文件，
@@ -64,6 +69,7 @@ const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
 const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
+const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
@@ -106,6 +112,11 @@ rl.on('line', (line) => {
 
   if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot') return;
 
+  if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
+  else finishTurn(msg);
+});
+
+function finishTurn(msg) {
   if (MODE === 'turn-screenshot') {
     out({
       type: 'assistant',
@@ -176,7 +187,7 @@ rl.on('line', (line) => {
       event: { type: 'message_start', message: { id: `msg_${randomUUID()}` } },
     });
   }
-});
+}
 
 // 读到 EOF 才退。提前退出会让 SDK 那次 write 抛 EPIPE，而它在 sdk.mjs 内部不被 catch，
 // 直接冒成 uncaughtException 打死整个测试进程（原 .sh 的头注记录过这次事故）。

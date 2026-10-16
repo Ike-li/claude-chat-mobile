@@ -2832,18 +2832,22 @@ registerSocketConnection(io, socket => {
       // 投给它从没指向过的会话，故关掉回退；交互式首发不置此位，回退仍是正确行为。
       const fromOutbox = payload && typeof payload === 'object' && payload.fromOutbox === true;
       const target = resolveTarget(rawInstanceId, {
-        ...(fromOutbox ? { allowViewingFallback: false } : {}),
+        // 离线重放的句柄失效了（规则 5 置换、切 effort 换了号）而入队时那个会话还开着 → 改投它（MSG-02）
+        ...(fromOutbox ? { allowViewingFallback: false, liveInstanceOfSession: sid => instanceForSession(sid)?.instanceId ?? null } : {}),
         expectedSessionId: payload?.sessionId, // 离线重放带着入队时那个会话（MSG-02）
       });
       if (target.stale) {
-        // BE-001：显式指定了一个已关闭 / 未知实例，或命中的实例跑的已不是入队时那个会话（MSG-02）——
-        // fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
+        // BE-001：显式指定了一个已关闭 / 未知实例，或命中的实例跑的已不是入队时那个会话、而那个会话也没有
+        // 活实例可改投（MSG-02）——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
         // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
         sysTo(socket, '目标会话已关闭，请刷新后重发', true);
         ack({ ok: false, error: 'stale_instance', stale: true });
         return;
       }
       let a = target.id ? (agents.get(target.id) ?? null) : null;
+      if (a && target.followed) {
+        interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 离线重放的句柄 ${rawInstanceId} 已失效，按入队时的会话改投实例 ${a.instanceId}`);
+      }
       if (!a) {
         const rawCwd = payload && typeof payload === 'object' ? payload.cwd : undefined;
         // outbox 重发既无 live 实例、又没带入队时刻的 cwd → 目标无从确定。下面 routeCwd 的缺省回退会落到

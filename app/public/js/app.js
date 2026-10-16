@@ -1363,10 +1363,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return null;
   }
 
-  // 离线重放撞上续接分叉闸的那一条，挪回输入框交给面板。只挪投给眼前这个实例、且输入框空着的——
-  // 否则不是覆盖了用户新打的字，就是把别的会话的话塞到这里。
+  // 离线重放撞上续接分叉闸的那一条，挪回输入框交给面板。只挪投给眼前这个会话、且输入框空着的——
+  // 否则不是覆盖了用户新打的字，就是把别的会话的话塞到这里。条目带着会话时按会话认：规则 5 置换、切 effort
+  // 之后同一会话换了实例号，服务端按会话改投（MSG-02），按实例号比就认不出它，「重发」会原地打转。
   function moveOutboxItemToComposer(item) {
-    if (!item || item.instanceId !== displayedInstanceId) return false;
+    if (!item) return false;
+    const sameSession = typeof item.sessionId === 'string' && item.sessionId !== '' && item.sessionId === displayedSessionId;
+    if (item.instanceId !== displayedInstanceId && !sameSession) return false;
     if (inputEl.value.trim() || attachments.items().length) return false;
     dropPendingUserBubble(item.bubbleEl);
     inputEl.value = item.text || '';

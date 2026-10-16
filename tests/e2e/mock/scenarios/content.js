@@ -127,6 +127,12 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armResumeDivergenceWorktreeSwap(); },
     },
     {
+      // P0-RESUME-DIVf：挂在 Archived Planning Session 上，拒收前先模拟规则 5 置换——离线重放的那条撞闸时，
+      // 入队时的句柄就此作废，「重发」要靠服务端按会话改投（MSG-02）。
+      command: 'test:arm-resume-divergence-swap',
+      run: async () => { getContext().armResumeDivergenceSwap(); },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。
