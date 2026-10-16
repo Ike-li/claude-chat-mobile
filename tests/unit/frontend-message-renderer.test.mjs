@@ -53,6 +53,9 @@ test('markdown sanitizer forbids clickjacking and form-exfiltration primitives',
   for (const attr of ['style', 'for']) {
     assert.ok(attrs.includes(attr), `必须禁 ${attr} 属性：全屏覆盖 + 激活按钮的两个必要原语`);
   }
+  // FORBID_ATTR 的 style 只管属性。<style> 元素在 DOMPurify 默认表里（HTML 与 SVG 两份都有），
+  // CSP 又放行 inline style（2026-10-16 review P0-4）。
+  assert.ok(tags.includes('style'), '必须禁 <style> 元素：它是整页生效的样式表，能按 id 改写 #permAllow/#permDeny 的位置、文字与颜色');
 });
 
 // SEC（2026-09-22 review P0）：禁了 style 还不够——页面跑的是 Tailwind **运行时**（vendor/tailwind.js 用

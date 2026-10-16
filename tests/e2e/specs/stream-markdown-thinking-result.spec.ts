@@ -101,6 +101,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(overlay).toHaveCSS('position', 'static');
     await expect(reply.locator('pre code')).toHaveClass(/\blanguage-js\b/);
 
+    // <style> 元素：FORBID_ATTR 的 style 只管属性，CSP 又放行 inline style。漏过去的 <style> 整页生效，
+    // 隐藏着的审批按钮也照样被改写——所以直接看按钮本身的计算样式（HTML 与 SVG 两个探针各打一个）。
+    await expect(reply.locator('style')).toHaveCount(0);
+    await expect(reply).not.toContainText('permAllow'); // 剥掉的 <style> 连同 CSS 一起丢，不漏成正文
+    await expect(page.locator('#permAllow')).toHaveCSS('position', 'static');
+    await expect(page.locator('#permDeny')).toHaveCSS('position', 'static');
+
     const unsafeState = await reply.evaluate(el => {
       const win = window as typeof window & {
         __ccmUnsafeMarkdownScriptFired?: boolean;

@@ -32,8 +32,12 @@ export function createMessageRenderer(context, { scrollBottom = () => {} } = {})
     if (kept.length) data.attrValue = kept.join(' ');
     else data.keepAttr = false;
   });
+  // <style> 元素（2026-10-16 review P0-4）：FORBID_ATTR 的 style 只管属性，而 DOMPurify 默认表的 HTML 与
+  // SVG 两份都放行 <style>，CSP 又是 style-src 'unsafe-inline'。一段 <style> 整页生效，按 id 就能把
+  // #permAllow 改成铺满视口的透明层。FORBID_TAGS 按标签名匹配，<svg> 里的那份一并剥掉；
+  // 默认 FORBID_CONTENTS 含 style，CSS 文本也不会漏成正文。
   const SANITIZE_CONFIG = {
-    FORBID_TAGS: ['label', 'form', 'button', 'select', 'textarea', 'option', 'fieldset', 'legend'],
+    FORBID_TAGS: ['label', 'form', 'button', 'select', 'textarea', 'option', 'fieldset', 'legend', 'style'],
     FORBID_ATTR: ['style', 'for', 'tabindex', 'accesskey', 'autofocus', 'contenteditable', 'draggable'],
   };
 

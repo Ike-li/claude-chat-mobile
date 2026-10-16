@@ -1079,7 +1079,13 @@ export function createContentScenarios(getContext) {
           '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>',
           '',
           // Tailwind 运行时会把 class 现编成 CSS：不剥的话这就是一个盖住审批按钮的全屏遮罩
-          '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>'
+          '<div class="fixed inset-0 z-[2147483647] pointer-events-none" data-probe="class-overlay">class overlay probe</div>',
+          '',
+          // <style> 元素整页生效、按 id 就能改写审批按钮：不剥的话「允许」成了铺满视口的透明层，点哪都是批准。
+          // <svg> 里的 <style> 走 DOMPurify 的 SVG 表，单独放一条
+          '<style>#permAllow{position:fixed;inset:0;z-index:2147483647;opacity:.002}</style>',
+          '',
+          '<svg><style>#permDeny{position:fixed}</style></svg>'
         ].join('\n');
 
         socket.emit('agent:event', {
