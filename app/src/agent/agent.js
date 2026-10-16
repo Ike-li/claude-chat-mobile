@@ -414,7 +414,7 @@ function mergeMessageUsage(prev, next) {
 export class AgentSession {
   constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
-    // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
+    // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（instance-manager 的 nextId）。
     this.instanceId = instanceId;
     this.cwd = cwd;
     this.claudeBin = claudeBin;

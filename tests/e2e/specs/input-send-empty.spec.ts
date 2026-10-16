@@ -1,7 +1,8 @@
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -105,6 +106,63 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // MSG-02：离线队列里的实例句柄活得比 server 进程久，重启后可能撞上同号的另一个会话。重放要带上入队时
+  // 那个实例跑的会话，服务端据此核对（核对本身在 tests/invariants/server/instance-identity.test.mjs）。
+  // 两个入队点都得带：离线时发的、在线发出去没被确认转进重发的。mock 是平行实现、不做这道核对，这里只钉前端送出去的是什么。
+  const captureUserMessages = (page: Page) => {
+    const sent: Array<Record<string, unknown>> = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
+        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+      }
+    }));
+    return sent;
+  };
+
+  test('P0-02d2 离线时发的消息，重放带上入队时那个会话（MSG-02）', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:disconnect-now');
+    await waitUntilDisconnected(page);
+
+    await page.locator('#input').fill('离线时打的字');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true).length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true)!;
+    expect(replay.text).toBe('离线时打的字');
+    expect(replay.instanceId).toBe('inst_1');
+    expect(replay.sessionId, `重放没带入队时的会话，服务端认不出同号的另一个会话：${JSON.stringify(replay)}`)
+      .toBe('mock-session-visual-test');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-02d3 在线发出去没被确认、转进重发的那条，重放同样带上会话（MSG-02）', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-send-transient-fail');
+    // 武装命令本身不收尾（运行条一直亮着），照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await sendChatMessage(page, '在线没被确认的那条');
+    // 第一次被 mock 以可重试的负 ack 拒掉 → 进 outbox → 重发送达
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true).length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true)!;
+    expect(replay.text).toBe('在线没被确认的那条');
+    expect(replay.instanceId).toBe('inst_archived');
+    expect(replay.sessionId, `在线转入重发的条目没带会话：${JSON.stringify(replay)}`).toBe('mock-session-archived');
     await expectNoBrowserErrors(page);
   });
 

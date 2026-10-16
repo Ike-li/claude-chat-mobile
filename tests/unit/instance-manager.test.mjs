@@ -28,8 +28,8 @@ test('instance manager owns IDs, per-instance preferences, lookup, and teardown'
   manager.permissionModes.set(first.instanceId, 'plan');
   manager.efforts.set(first.instanceId, 'high');
 
-  assert.equal(first.instanceId, 'inst_1');
-  assert.equal(manager.nextId(), 'inst_2');
+  // 号码的具体形态不是契约（跨重启不复用由 tests/invariants/instance-identity.test.mjs 钉，MSG-02）
+  assert.notEqual(manager.nextId(), first.instanceId);
   assert.equal(manager.forSession('s1'), first);
   assert.equal(manager.permissionModeOf(first.instanceId), 'plan');
   assert.equal(manager.effortOf(first.instanceId), 'high');

@@ -165,6 +165,9 @@ function serializeOutboxItem(item) {
     clientMessageId,
     instanceId: item.instanceId == null ? null : item.instanceId,
     cwd: item.cwd == null ? null : item.cwd,
+    // 入队时那个实例跑的会话（MSG-02）：服务端据它核对重放命中的实例还是不是那段对话。instanceId 活得比
+    // server 进程久，单凭它认不出「同号的另一个会话」。入队时会话还没开出来（新会话页）就不落键。
+    ...(typeof item.sessionId === 'string' && item.sessionId ? { sessionId: item.sessionId } : {}),
     // 「在新 worktree 里开」的意图必须活过入队与 localStorage 往返：服务端在懒开实例时据它
     // `git worktree add`，丢了就是一条没有意图的消息——实例开在父仓，而用户以为改动隔离了。
     // 本函数是白名单，新字段不显式登记就被静默丢掉（这一条就是那么漏过一次的）。

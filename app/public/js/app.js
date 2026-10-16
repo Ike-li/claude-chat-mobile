@@ -691,6 +691,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const requestCwd = () => (projectsState.isNoFolder(currentCwd) && viewingInstanceId ? panelCwd() : currentCwd);
   // 首条消息（含离线入队）投到哪个目录：新会话页上选中了 worktree 就是它，其余一律 currentCwd
   const sendCwd = () => (!viewingInstanceId && composeCwd) || currentCwd;
+  // 进离线队列的消息记下目标实例此刻跑的会话（MSG-02），与 instanceId 同取自 instances 快照——不用 displayedSessionId，
+  // 切视图的窗口里两者可能分属两个实例。新会话页、会话还没开出来时为 null（服务端照旧只核对实例在不在）。
+  const sendSessionId = () => (viewingInstanceId && instancesList.find(x => x?.instanceId === viewingInstanceId)?.sessionId) || null;
   // panelCwd() 悄悄换成父仓时要说一句——两个 openWorkspacePanel 调用点共用这一条，判据在纯函数里。
   const worktreeGoneNotice = () => resolveWorktreeGoneNotice({ instances: instancesList, viewingInstanceId });
   // 抽屉小节的键 = 项目键（已连接的文件夹、其下有会话的子文件夹、「无文件夹」；旧载荷回落 dirs）
@@ -1333,6 +1336,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         instanceId: item.instanceId,
         cwd: item.cwd,
         clientMessageId: item.clientMessageId,
+        ...(item.sessionId ? { sessionId: item.sessionId } : {}), // 服务端据它核对命中的实例还是不是那个会话（MSG-02）
         ...(item.useWorktree === true ? { useWorktree: true } : {}),
         ...(item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
         // 告诉服务端「这是入队时刻的快照，不是眼下的意图」：缺 instanceId 时不得回退到服务端
@@ -4006,6 +4010,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 否则用户离线期间切换了查看的会话，消息会被错发到现在正看着的会话，而非当初想发的那个。
         instanceId: viewingInstanceId,
         cwd: sendCwd(),
+        sessionId: sendSessionId(),
         // worktree 意图与 text 同属"入队时刻的快照"：离线期间用户可能取消勾选，
         // 但这条消息当初就是要发往新 worktree 的。序列化白名单见 logic/outbox-send.js。
         ...worktreeArgs,
@@ -4069,6 +4074,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       clientMessageId,
       instanceId: reqViewingInstanceId,
       cwd: reqCwd,
+      sessionId: sendSessionId(), // 与 reqViewingInstanceId 同一刻取：本对象在 emit 之前同步建好
       // 交给 outbox 接管这颗气泡：重发期间 processOfflineQueue 会改它的待发文案、撞上在途轮时
       // markOutboxBlocked 会在它上面挂「未发送 + 重发」按钮。不传的话在线 requeue 的消息在屏幕上
       // 就是一颗永远转圈的气泡，用户既看不出它在排队、也没有手动重发的入口。

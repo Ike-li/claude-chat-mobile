@@ -19,13 +19,21 @@
 // 给离线 outbox 重发用：它携带的 instanceId/cwd 是【入队时刻】的快照，而服务端 viewing 在断线期间
 // 可能已经换了会话——此时回退等于把一条旧消息投给它从没指向过的会话。交互式首发不传此项：
 // 那条路径上服务端 viewing 就是用户眼下看的，回退才是正确行为。
+//
+// opts.expectedSessionId（非空字符串才算）+ opts.sessionOf(id)：显式命中活实例时再核对它此刻跑的会话（MSG-02）。
+// 离线重放带着入队时那个会话，实例对得上号、跑的却不是它（重启前的旧号、/clear 换了会话）→ 与「已不在」同样 stale。
+// 实例还没有会话而条目有，同样判 stale：客户端只可能从服务端得知 sessionId，而实例的 sessionId 有了就不会变回空。
 export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, opts = {}) {
   if (requestedId == null) {
     if (opts.allowViewingFallback === false) return { id: null, stale: false };
     return { id: viewingInstanceId ?? null, stale: false };
   }
-  if (isLive(requestedId)) return { id: requestedId, stale: false };
-  return { id: null, stale: true };
+  if (!isLive(requestedId)) return { id: null, stale: true };
+  const expected = opts.expectedSessionId;
+  if (typeof expected === 'string' && expected && opts.sessionOf?.(requestedId) !== expected) {
+    return { id: null, stale: true };
+  }
+  return { id: requestedId, stale: false };
 }
 
 // allowViewingFallback=false 的另一半：关掉实例回退后 outbox 重发会落到懒开分支，而那里的
