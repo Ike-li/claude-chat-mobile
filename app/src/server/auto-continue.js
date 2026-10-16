@@ -18,6 +18,7 @@
 //   3. 注册表里没有终端或桌面端开着这个会话（单驾驶员，SESSION-01）；注册表读不全也不发
 //   4. 实例没有在跑一轮、内存上下文没有陈旧（externalDirty）
 // 2、3 不过且原因是「有别人可能在驾驶」时转 stale：横幅留一个「继续」按钮，由用户拍板。
+// 另：resume 出来的实例带分叉结论（这次续接会丢掉最新那段对话）时同样转 stale(diverged)，见 fire()。
 import {
   AUTO_CONTINUE_PROMPT,
   computeFireAt,
@@ -152,6 +153,13 @@ export function createAutoContinue({
     }
     // resume 的 await 间隙里用户可能已经取消、手动发送或删了会话：条目不在了就不发。
     if (entries.get(sessionId) !== entry) return;
+    // 这次续接会丢掉最新那段对话（SESSION-04，实例上的结论见 sessions/resume-anchor.js）：代发的「继续」会接在
+    // CLI 选的那一支上，模型忘了手机上刚聊的那段。只有用户在 diverged 横幅上点过「继续」才算知情放行——
+    // 因别的原因 stale 时点的那一下确认的不是这件事，先改成 diverged 再问一次。
+    if (inst.resumeDivergence) {
+      if (!(entry.phase === 'stale' && entry.reason === 'diverged')) { toStale(entry, 'diverged'); onChange(); return; }
+      inst.resumeDivergence = null;
+    }
     inst.emitNotice?.(FIRED_NOTICE, 'info');
     const sent = await inst.send(AUTO_CONTINUE_PROMPT, undefined, { origin: 'auto-continuation' });
     remove(sessionId, sent ? 'fired' : 'busy');

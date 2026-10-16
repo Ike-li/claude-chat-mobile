@@ -1158,6 +1158,29 @@ export const EN_DICT = Object.freeze({
   '到点了，但没有自动继续': 'The reset time passed, but it did not continue automatically',
   '继续': 'Continue',
   '额度重置后自动继续': 'Continued automatically after the usage limit reset',
+  '续接会丢掉最近一段对话，没有自动继续：点「继续」照常发；想保住那段，就自己发一条消息再选分叉': 'Resuming would leave out the latest messages, so it did not continue automatically. Tap Continue to send anyway, or send a message yourself to get the option to fork',
+  // 续接会丢掉一段对话（SESSION-04）：发送被拒后的面板（logic/resume-divergence.js、app/resume-divergence.js）
+  // 与离线重发落 blocked 的说明（logic/outbox-send.js）。{anchor}/{newest} 由下面两组短语填：
+  // 「终端那一轮」类填进「从…接上」，「终端上」类填进「…最近 n 条」，英文按这两个位置各自成句。
+  '续接会丢掉一段对话': 'Resuming would leave part of the conversation out',
+  '模型会从{anchor}接上，{newest}最近 {n} 条消息不在它的上下文里。': 'The model would continue from {anchor}; the latest {n} message(s) {newest} would not be in its context.',
+  '终端那一轮': 'the terminal turn',
+  '桌面端那一轮': 'the desktop app turn',
+  '手机那一轮': 'the phone turn',
+  '另一端那一轮': 'the other client\'s turn',
+  '终端上': 'in the terminal',
+  '桌面端上': 'in the desktop app',
+  '手机上': 'on your phone',
+  '另一端上': 'on the other client',
+  '分叉到新会话：从最新那条复制出一个新会话，这 {n} 条都在，但另一支的 {m} 条不在；你的消息会放回它的输入框，原会话不动。': 'Fork to new session: copies the conversation up to the latest message into a new session. It keeps those {n} message(s) but not the {m} on the other branch. Your message goes back into its input box; the original session is left as is.',
+  '分叉到新会话：从最新那条复制出一个新会话，这 {n} 条都在；你的消息会放回它的输入框，原会话不动。': 'Fork to new session: copies the conversation up to the latest message into a new session, keeping all {n} message(s). Your message goes back into its input box; the original session is left as is.',
+  '仍然发送：在原会话照常发，模型看不到这 {n} 条。': 'Send anyway: sends in the original session; the model will not see those {n} message(s).',
+  '分叉到新会话': 'Fork to new session',
+  '仍然发送': 'Send anyway',
+  '会话已切换，没有发送；那条消息在原会话的输入框里': 'The session changed, so nothing was sent. Your message is in the original session\'s input box',
+  '已分叉到新会话，那条消息在输入框里，确认后发送': 'Forked to a new session. Your message is in the input box; send it when ready',
+  '续接会丢掉一段对话，这条没有发出去': 'Resuming would leave part of the conversation out, so this message was not sent',
+  '这次续接会丢掉最近一段对话，点「重发」后选择怎么续': 'Resuming would leave out the latest messages. Tap Resend to choose how to continue',
 });
 
 // 需要翻译的属性白名单：这四个是「屏幕上/读屏器里真会念出来」的，其余属性（data-*、aria-labelledby

@@ -285,6 +285,16 @@ let syncAckTimeoutArmed = false;
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
 // 一次性：拒一次就解除，重发那条照常处理。
 let sendTransientFailArmed = false;
+// P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
+// 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
+// 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
+// newestUuid 取 a-archived-2：mock 的 session:fork 护栏只认 keepAnchorTurn=true + a-archived-*，
+// 前端把「从最新那条分叉」的方向送反或锚错 uuid，分叉会被拒。用户确认「仍然发送」后自动解除（同真 server 清掉结论）。
+let resumeDivergenceArmed = null;
+const MOCK_RESUME_DIVERGENCE = Object.freeze({
+  newestUuid: 'a-archived-2', newestEntrypoint: 'sdk-ts', newestAt: '2024-01-01T00:10:00Z',
+  droppedCount: 2, anchorOnlyCount: 0, anchorEntrypoint: 'cli', anchorAt: '2024-01-01T00:06:00Z',
+});
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -561,6 +571,7 @@ function resetMockState() {
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
   sendTransientFailArmed = false;
+  resumeDivergenceArmed = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -3121,6 +3132,7 @@ io.on('connection', socket => {
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
+      armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5414,6 +5426,22 @@ io.on('connection', socket => {
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {
+    // P0-RESUME-DIV：续接分叉的发送闸，镜像真 server 的 gateResumeDivergence（app/src/sessions/resume-anchor.js；
+    // mock 不 import app/src，wire 形状由集成层守，见 docs/testing.md「平行实现」）。位置同真 server：排在在途轮拒收之前。
+    // 确认必须是【这一段】的 newestUuid——前端把确认送错（布尔、旧 uuid），这里照样拒，面板会再弹一次。
+    // 真 server 把结论挂在 resume 出来的实例上；mock 的实例与会话一一对应，按会话挂。
+    const divergenceInst = mockInstances.find(i => i.instanceId === (payload?.instanceId || viewingInstanceId));
+    if (resumeDivergenceArmed && divergenceInst?.sessionId === resumeDivergenceArmed.sessionId) {
+      const { divergence } = resumeDivergenceArmed;
+      if (payload?.ackDivergence !== divergence.newestUuid) {
+        console.log('[mock] user:message refused — resume divergence');
+        if (typeof ack === 'function') {
+          ack({ ok: false, reason: 'resume_divergent', permanent: true, error: '续接会丢掉一段对话（mock）', divergence: { ...divergence } });
+        }
+        return;
+      }
+      resumeDivergenceArmed = null;
+    }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
     const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);

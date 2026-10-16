@@ -217,6 +217,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createRewindCommandController } from './app/rewind-command.js';
+import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 (() => {
@@ -1358,6 +1359,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return null;
   }
 
+  // 离线重放撞上续接分叉闸的那一条，挪回输入框交给面板。只挪投给眼前这个实例、且输入框空着的——
+  // 否则不是覆盖了用户新打的字，就是把别的会话的话塞到这里。
+  function moveOutboxItemToComposer(item) {
+    if (!item || item.instanceId !== displayedInstanceId) return false;
+    if (inputEl.value.trim() || attachments.items().length) return false;
+    dropPendingUserBubble(item.bubbleEl);
+    inputEl.value = item.text || '';
+    inputEl.dispatchEvent(new Event('input'));
+    if (Array.isArray(item.attachments) && item.attachments.length) attachments.setItems(item.attachments);
+    autosize();
+    updateSendButtonState();
+    return true;
+  }
+
   function markOutboxBlocked(item, message, targetsViewing = false) {
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
     if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
@@ -1372,6 +1387,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       label.textContent = `🕐 ${t('正在发送...')}`;
       const d = await deliverOutboxItem(item);
       if (d.outcome === 'ok') { host.remove(); return; }
+      // 续接会丢掉一段对话（SESSION-04）：再发一遍还是同一道闸。把这条挪回输入框，出在线路径同一块面板——
+      // 两个选项都作用于输入框里的话。挪不了（不是眼前这个会话的、输入框里已有新打的字）就留在这里。
+      if (d.divergence && moveOutboxItemToComposer(item)) {
+        host.remove();
+        resumeDivergencePrompt.prompt({ divergence: d.divergence, sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) });
+        return;
+      }
       btn.disabled = false;
       label.textContent = d.outcome === 'blocked'
         ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
@@ -1445,8 +1467,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
-          if (viewingInstanceId != null && targetsViewing) _turnRunning = true;
-          logClientEvent('send', `[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发`);
+          // 续接分叉闸（divergence）也落 blocked，但那边没有在途轮：锁了发送闸，面板上的「仍然发送」就发不出去。
+          if (viewingInstanceId != null && targetsViewing && !decision.divergence) _turnRunning = true;
+          logClientEvent('send', decision.divergence
+            ? '[WEB_SEND] 离线消息撞上续接分叉闸，落未发送终态待手动重发'
+            : '[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发');
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
           enqueueOutbox(planned);
@@ -3848,7 +3873,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
-  function send() {
+  // ackDivergence：续接分叉面板上选了「仍然发送」时带上（确认的是哪一段，见 app/resume-divergence.js）
+  function send({ ackDivergence } = {}) {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点发送位「续接 CLI 会话」）
       showMirrorComposerHint();
@@ -4054,7 +4080,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 窗口用 SEND_ACK_TRANSPORT_MS 而非上面那个 UI 兜底：见其声明处的注释（服务端慢路径 ≫ 5s）。
     socket.timeout(SEND_ACK_TRANSPORT_MS).emit(
       'user:message',
-      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs },
+      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs, ...(ackDivergence ? { ackDivergence } : {}) },
       (err, ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendTransport(err, ack);
@@ -4098,7 +4124,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         updateSendButtonState();
       }
       if (decision.message) addBar(decision.message, decision.busy ? 'text-info' : 'text-danger');
+      let restored = false;
       if (decision.restoreDraft && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
+        restored = true;
         if (restoreDraftOnFail.text) {
           inputEl.value = restoreDraftOnFail.text;
           inputEl.dispatchEvent(new Event('input'));
@@ -4108,6 +4136,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         autosize();
         updateSendButtonState();
+      }
+      // 续接会丢掉一段对话（SESSION-04）：话已回到输入框，面板问怎么续。输入框里已有用户新打的字时不弹——
+      // 两个选项作用的都是输入框里的话，那不是被拒的这一条。
+      if (decision.divergence) {
+        if (restored) {
+          resumeDivergencePrompt.prompt({ divergence: decision.divergence, sessionId: reqSessionId, cwd: drivingCwdOf(reqViewingInstanceId) });
+        } else {
+          addBar(t('续接会丢掉一段对话，这条没有发出去'), 'text-danger');
+        }
       }
     });
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
@@ -6336,6 +6373,37 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         autosize();
         updateSendButtonState();
       }
+    },
+  });
+
+  // ---- 续接会丢掉一段对话（SESSION-04）：发送被拒后问「分叉到新会话 / 仍然发送」----
+  // 话的去留在这里：分叉要把它从这个会话的输入框挪进新会话（正看着就直接放，否则放进草稿槽，
+  // 切过去时 bindView 的草稿交换会恢复它——fork 的 ack 与 instances 广播谁先到都对）。
+  const resumeDivergencePrompt = createResumeDivergencePrompt({
+    socket, appConfirm, addBar,
+    getCurrentSession: () => ({ sessionId: displayedSessionId }),
+    resend: (opts) => send(opts),
+    takeDraft: () => {
+      const draft = { text: inputEl.value, attachments: attachments.items() };
+      if (!draft.text.trim() && draft.attachments.length === 0) return null;
+      inputEl.value = '';
+      inputEl.dispatchEvent(new Event('input'));
+      dropDraftForCurrentSurface();
+      attachments.clear();
+      autosize();
+      updateSendButtonState();
+      return draft;
+    },
+    putDraft: (sessionId, draft) => {
+      if (displayedSessionId === sessionId && !inputEl.value.trim() && attachments.items().length === 0) {
+        inputEl.value = draft.text;
+        inputEl.dispatchEvent(new Event('input'));
+        attachments.setItems(draft.attachments);
+        autosize();
+        updateSendButtonState();
+        return;
+      }
+      sessionDraftCache.set(draftKeyFor({ sessionId }), { text: draft.text, attachments: draft.attachments });
     },
   });
 

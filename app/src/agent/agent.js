@@ -517,6 +517,10 @@ export class AgentSession {
     this.disposed = false;
     this.assistantResponseBuffer = '';
     this.terminating = false;
+    // 续接分叉结论（SESSION-04）：server 在 resume 前按 CLI 的选叶规则算好、挂上来（sessions/resume-anchor.js）。
+    // 非 null = 这个实例接上的链不含最新那段对话；发送闸与自动继续据它拒发，用户确认「仍然发送」后清掉。
+    this.resumeDivergence = null;
+    this.liveHolderNoticed = false; // 接管提醒（终端 / 桌面端还开着这个会话）每个实例只说一次，见 app.js
     // 最终退出确认：consume() 走完才 resolve，不是 dispose 那一刻。dispose 只是让 SDK 关 stdin，
     // CLI 读到 EOF 后还会往 transcript 追加收尾元数据才退（2026-09-23 实测：EOF 后 70–80ms 写、
     // 0.6–2s 退）。SDK 的消息流要到进程退出、或关 stdin 约 2s 后 SDK 发 SIGTERM 才结束，两者都晚于那几行。
