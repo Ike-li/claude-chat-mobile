@@ -167,16 +167,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
-  // 离线条目还拿着入队时的旧号。归属按实例号比的话，① 第 1 条明明投给了眼前这个会话，却被判成「别的会话」，批后
-  // setBusy(false) 收掉新实例正在跑那轮的运行条 ② 第 2 条撞上那轮落「未发送 + 重发」，而置换后的清屏重载已把它的气泡
-  // 摘下 DOM，提示写进摘下的节点，哪儿都找不到。
-  // 只守到「提示进了当前会话的消息流」，不守它在不在视口里：负 ack 先于重载的历史到达，提示条先插进 #messages，
-  // 历史随后 appendChild 接在它下面，于是它落在整段历史上方（实测 top 为负、要往上翻）。离线气泡不在 clearView
-  // 保住未确认气泡的那个发送窗口里，这是另一处的事，没在这里修。
-  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」落在当前会话里', async ({ page }) => {
+  // 离线条目还拿着入队时的旧号。新实例的 sync:since 报磁盘 ahead，前端清屏重载；第 2 条拿着旧号撞上第 1 条开跑的那轮，
+  // 落「未发送 + 重发」。mock 的时序是：清屏 → 第 2 条的负 ack → 历史落地。
+  // 守三件事：① 归属按会话认，批后结算不收掉新实例那轮的运行条 ② 清屏保住同一会话的离线气泡，第 2 条的提示挂在它自己
+  // 的气泡上，气泡排在重载的历史之后、落底可见（修之前气泡随清屏摘下，提示退成一条独立提示条插在空的 #messages 里，
+  // 历史接在它下面，实测 top 为负、要往上翻）③ 已送达的第 1 条被历史认领，屏幕上只有一颗。
+  const replayTwoOfflineAcrossSwap = async (page: Page, [first, second]: [string, string], arm = 'test:arm-outbox-replay-swap') => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    await sendChatMessage(page, 'test:arm-outbox-replay-swap');
+    await sendChatMessage(page, arm);
     // 武装命令本身不收尾，照其它 arm 用例的做法切到另一个会话再发
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
@@ -186,7 +185,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.context().setOffline(true);
     await waitUntilDisconnected(page);
-    for (const text of ['离线第一条', '离线第二条']) {
+    for (const text of [first, second]) {
       await page.locator('#input').fill(text);
       await page.locator('#btnSend').click();
       await expect(page.locator('#input')).toHaveValue('');
@@ -194,10 +193,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.context().setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await waitUntilConnected(page);
+    // 重载的历史落地的标志：mock 只在第 1 条送达之后才把它写进这个会话的历史（uuid 只此一处）
+    await expect(page.locator('[data-testid="user-message"][data-uuid="u-archived-replayed"]'), '清屏重载的历史没有落地').toHaveCount(1, { timeout: 10_000 });
+  };
 
-    // 「重发」与批后结算 busy 在同一段同步代码里（markOutboxBlocked 之后紧跟 finally），找得到它时这一批已经收尾
-    await expect(page.locator('[data-testid="outbox-resend"]'), '第 2 条的「未发送 + 重发」没进当前会话的消息流（写进了脱离 DOM 的旧气泡）').toBeVisible({ timeout: 10_000 });
+  const expectResendOnSecondBubbleAfterHistory = async (page: Page, second: string) => {
+    const secondPending = page.locator('[data-testid="user-message"].opacity-70').filter({ hasText: second });
+    await expect(secondPending, '第 2 条的离线气泡不在了：同一会话的清屏重载没保住它，或历史落地时被同文的旧消息认领撤掉').toHaveCount(1);
+    await expect(secondPending.locator('[data-testid="outbox-resend"]'), '「未发送 + 重发」没挂在第 2 条自己的气泡上').toBeVisible();
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '提示另起了一条（落在重载的历史上方），不只挂在气泡上').toHaveCount(1);
+    await expect.poll(() => page.evaluate(text => {
+      const tops = [...document.querySelectorAll('#messages > [data-top-level="1"]')];
+      const last = tops[tops.length - 1];
+      return Boolean(last?.classList.contains('opacity-70') && last.textContent?.includes(text));
+    }, second), { message: '第 2 条的气泡要排在重载的历史之后（它是最新的一条）' }).toBe(true);
+    await expect(secondPending.locator('[data-testid="outbox-resend"]'), '「重发」不在视口里，要往上翻才看得到').toBeInViewport();
+  };
+
+  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」挂在它排在历史之后的气泡上', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', '离线第二条']);
+
+    await expectResendOnSecondBubbleAfterHistory(page, '离线第二条');
+    const first = page.locator('[data-testid="user-message"]').filter({ hasText: '离线第一条' });
+    await expect(first, '已送达的第 1 条：历史带回它之后，被保住的离线气泡要让历史认领，屏幕上只能有一颗').toHaveCount(1);
+    await expect(first, '第 1 条留下的应是历史里那颗确认态气泡').not.toHaveClass(/opacity-70/);
     await expect(page.locator('#streamLiveStatus'), '第 1 条在新实例上开跑的那轮，运行条被批后结算收掉了').toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
+
+  // 第 2 条被在途轮拒收，确定没进 transcript。历史里恰好有一条同文的旧消息（「继续」这类短句天天重复），按文本认领
+  // 会把它当成第 2 条已经落盘，撤掉保住的气泡，「重发」跟着没了。
+  test('P0-02d5 同上，第 2 条与历史里一条旧消息同文：被拒收的气泡不让旧消息认领，「重发」照样留着', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', 'Any follow-up questions?']);
+
+    await expectResendOnSecondBubbleAfterHistory(page, 'Any follow-up questions?');
+    await expect(page.locator('[data-testid="user-message"]').filter({ hasText: 'Any follow-up questions?' }),
+      '历史里那条旧消息与被拒收的第 2 条应各占一颗').toHaveCount(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但重载的历史先于第 2 条的拒收落地：历史渲染时第 2 条还没有结论。按文字认领会把它当成已落盘，clientMessageId
+  // 交给那条同文的旧消息、撤掉气泡；拒收再到时「重发」只能另起一条，点了送达，回显带着同一个 id，被当成「旧消息已在屏幕上」
+  // 吞掉，这条送达的消息哪儿都不显示。mock 放出拒收后那一轮随即跑完，「重发」照常收下并回显。
+  test('P0-02d6 历史先于第 2 条的拒收落地、且与旧消息同文：气泡不被认领，「重发」送达后这条照样显示', async ({ page }) => {
+    const second = 'Any follow-up questions?';
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', second], 'test:arm-outbox-replay-swap-history-first');
+
+    await expectResendOnSecondBubbleAfterHistory(page, second);
+    await page.locator('#messages [data-testid="outbox-resend"]').click();
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '「重发」送达之后提示应收起').toHaveCount(0);
+    const same = page.locator('[data-testid="user-message"]').filter({ hasText: second });
+    await expect(same, '「重发」送达的那条没显示出来（回显被当成历史里同文的旧消息吞掉了）').toHaveCount(2);
+    await expect(same.last(), '送达的那条应被回显转正').not.toHaveClass(/opacity-70/);
     await expectNoBrowserErrors(page);
   });
 

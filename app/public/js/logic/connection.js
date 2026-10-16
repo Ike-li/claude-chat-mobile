@@ -20,6 +20,7 @@ export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
 // 全量重载时，未确认乐观气泡该由哪条历史消息认领（否则 null）。
 // clearView 保住的气泡 + 已入 transcript 的同一条会撞成两颗。
 // 判据与 handle.user_message 的 matchedBubble 对齐；历史没有 clientMessageId，按内容从后往前认。
+// 交给 outbox 的气泡该不该进这里，先过 logic/outbox-send.js 的 canTextClaimPendingBubble。
 export function findHistoryClaimForPending({ text = '', attNames = '', messages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   const wantText = String(text ?? '');
