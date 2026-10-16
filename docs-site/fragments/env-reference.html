@@ -17,7 +17,7 @@
 <tr><td><code>CCM_DATA_DIR</code></td><td><code>./data</code></td><td>控制面数据根（会话指针、设备信任、审批、审计、推送、附件、缓存），建议生产外置为仓库外的绝对路径。它不在 Schema 里：可写进 <code>ccm.config.json</code> 或设为环境变量，但 <code>config set</code> 与面板写不了</td><td>需重启</td></tr>
 <tr><td><code>CLAUDE_BIN</code></td><td>空（从 PATH 查找）</td><td><code>claude</code> 可执行文件路径</td><td>需重启</td></tr>
 <tr><td><code>FILE_EDIT</code></td><td>开</td><td>内置文件编辑器直写。它<strong>不经过 Agent 的工具审批链</strong>（有范围校验、大小限制、哈希冲突检测与审计）；设 <code>off</code> 关闭，长期公网暴露建议关</td><td>需重启</td></tr>
-<tr><td><code>CCM_AUTO_CONTINUE_AT_LIMIT</code></td><td>开（dev 已合入，尚未发版）</td><td>撞上用量额度墙后，到重置时刻自动发一句「继续」。重置点远于 24 小时只给按钮；上游只回 429、不给重置时间时无法自动继续；等待期间重启服务会作废。设 <code>0</code> 关闭，撞墙时仍有按钮可点</td><td>需重启</td></tr>
+<tr><td><code>CCM_AUTO_CONTINUE_AT_LIMIT</code></td><td>开</td><td>撞上用量额度墙后，到重置时刻自动发一句「继续」。重置点远于 24 小时只给按钮；上游只回 429、不给重置时间时无法自动继续；等待期间重启服务会作废。设 <code>0</code> 关闭，撞墙时仍有按钮可点</td><td>需重启</td></tr>
 <tr><td><code>IDLE_TIMEOUT_MS</code></td><td>600000（10 分钟）</td><td>无输出判挂死</td><td>需重启</td></tr>
 <tr><td><code>INSTANCE_IDLE_RECLAIM_MS</code></td><td>1800000（30 分钟）</td><td>空闲 AgentSession 实例回收；0 为不回收</td><td>需重启</td></tr>
 <tr><td><code>APPROVAL_TTL_MS</code></td><td>1800000（30 分钟）</td><td>审批卡未决定时自动过期</td><td>需重启</td></tr>

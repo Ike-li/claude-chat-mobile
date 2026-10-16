@@ -3,11 +3,11 @@
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1787
+- **Estimated Tokens**: ~1893
 
 ---
 
-入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **58** 种；最新发布版 v1.12.1 的入向为 57 种，差的是 `user:autoContinue`）。
+入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **63** 种；最新发布版 v1.13.0 的入向为 58 种，差的是 `folders:add`、`folders:browse`、`folders:mkdir`、`folders:remove` 与 `image:get`）。
 
 ## 出向 agent:event 契约类型 (31 种)
 
@@ -25,17 +25,17 @@
 | 设备门禁 | device_status 、 pending_devices 、 trusted_devices | 当前设备认证态、待审批新设备清单与已信任设备表 |
 | 错误处理 | error 、 system | 业务异常与系统级别通知提示 |
 
-## 入向 Socket 契约事件 (58 种)
+## 入向 Socket 契约事件 (63 种)
 
 由客户端主动发往服务端的事件总线，受 `tests/gates/contract-check.js` 门禁进行双向严格比对校验：
 
 | 业务领域 | 包含的入向事件 |
 | --- | --- |
-| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm |
-| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮，dev 已合入、尚未发版） permissions:rules |
+| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm image:get （会话里的图片按引用按需取，dev 已合入、尚未发版） |
+| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮） permissions:rules |
 | 设备与状态同步 | user:approveDevice user:denyDevice user:renameTrustedDevice user:revokeTrustedDevice connect:qr sync:since mirror:syncNow conn:ping client:presence |
 | 已读位点共享 | read:mark read:sync user:ackUnread |
-| 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read |
+| 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read folders:browse folders:mkdir folders:add folders:remove （手机上浏览、新建、连接与断开文件夹，dev 已合入、尚未发版） |
 | 代码与 Git 集成 | git:status git:diff git:branches hooks:setup |
 | 后台任务管理 | task:stop task:output tool:preview tool:full subagent:flow |
 | 系统运维与诊断 | service:status doctor:run dev:restart logs:get logs:server logs:clientError audit:get push:test config:refresh env:get env:set statusline:setup |

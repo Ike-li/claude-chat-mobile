@@ -25,7 +25,7 @@
 ## 技术栈与基础选型
 
  Node ≥20 · ESM · Express 5 · Socket.IO 4 · compression  
-    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.278（dev；最新发布版 v1.12.1 为 0.3.263）· 本机 `claude` CLI  
+    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.301（dev；最新发布版 v1.13.0 为 0.3.278）· 本机 `claude` CLI  
     鉴权 / 推送  `jose` 6（JWT 验证）· `web-push`（VAPID）· 可选 ntfy  
     前端架构  原生 ESM PWA，零构建；依赖全部本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
     测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 破坏性测试进容器  

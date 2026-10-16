@@ -11,7 +11,7 @@
 
 - **Part**: 起点
 - **Reading Time**: ~5 min
-- **Estimated Tokens**: ~1604
+- **Estimated Tokens**: ~1625
 
 ---
 
@@ -46,7 +46,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 ## 这本手册从哪来
 
-源码分支为 **dev**（当前基线 HEAD `3f488861`；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 `docs/hard-rules.md`（产品边界、n=1 取舍、架构不变量、已决不做）与 `docs/architecture.md` 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。
+源码分支为 **dev**（当前基线 HEAD `3f488861`，事件契约与 SDK 版本已跟进到 `eb2b6e45`；最新发布版为 v1.13.0，dev 上尚未发版的改动在各页单独标注）。仓库以 `docs/hard-rules.md`（产品边界、n=1 取舍、架构不变量、已决不做）与 `docs/architecture.md` 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。
 
 > **WARNING:** 事实基线约定 — 手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 tests/gates/ 门禁为准，并应在漂移清单中透明登记。
 
@@ -77,7 +77,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 | 层级 | 技术选型 | 关键特性 |
 | --- | --- | --- |
 | 运行时 | Node ≥20 · ESM · Express 5 · Socket.IO 4 | 三层架构，前后端零构建纯 ESM |
-| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.278（v1.12.1 为 0.3.263） | 双向流控制，驱动本机的 claude CLI |
+| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.301（v1.13.0 为 0.3.278） | 双向流控制，驱动本机的 claude CLI |
 | 配置与运维 | ccm.config.json · env-schema.js | 统一结构化配置、热重载工作区、统一读写源 |
 | 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外） |
 | 离线推送 | web-push (VAPID) · 可选 ntfy | 审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制 |
@@ -170,7 +170,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 ## 技术栈与基础选型
 
  Node ≥20 · ESM · Express 5 · Socket.IO 4 · compression  
-    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.278（dev；最新发布版 v1.12.1 为 0.3.263）· 本机 `claude` CLI  
+    Agent 驱动  `@anthropic-ai/claude-agent-sdk` 0.3.301（dev；最新发布版 v1.13.0 为 0.3.278）· 本机 `claude` CLI  
     鉴权 / 推送  `jose` 6（JWT 验证）· `web-push`（VAPID）· 可选 ntfy  
     前端架构  原生 ESM PWA，零构建；依赖全部本地自托管（Tailwind / marked / highlight.js / DOMPurify）  
     测试体系  内置 `node --test`（S0–S7 执行槽分层）· Playwright 移动端 UI E2E · 破坏性测试进容器  
@@ -250,7 +250,7 @@ flowchart TB
       SessMgr["Session Registry (app/src/sessions)\n会话注册表 · 历史回放 · 工作区门禁"]
     end
 
-    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.278)"]
+    SDK["@anthropic-ai/claude-agent-sdk\n(0.3.301)"]
     CLI["本机已安装的 claude CLI 进程"]
   end
 
@@ -410,7 +410,7 @@ flowchart LR
 
 - **Part**: 第二部分 · 演进历程
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~2193
+- **Estimated Tokens**: ~2190
 
 ---
 
@@ -447,7 +447,7 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
     第六阶段 
 #### 分发、安全与终端对齐的收口（2026-09 中下旬）
 
-分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；dev 上又合入额度重置自动继续、思考强度 auto 档，SDK 升到 0.3.278。
+分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；额度重置自动继续、思考强度 auto 档随 v1.13.0 发布（SDK 0.3.278）。
  
  
 
@@ -484,7 +484,7 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~2342
+- **Estimated Tokens**: ~2331
 
 ---
 
@@ -561,7 +561,7 @@ transcript 统一在 `~/.claude/projects/`，与 CLI `/resume` 指向同一份�
 模型与思考强度都能在底栏随时切换。思考强度的档位分两层（语义以产品仓 `docs/display-contracts.md` 为准）：
 
 - SDK 档： low 、 medium 、 high 、 xhigh 、 max ，真正传给 Agent SDK。
-- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto （dev 已合入，尚未发版）；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
+- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto ；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
 - 切换路径： 具体档与 auto 经控制请求（ applyFlagSettings ）即刻生效，不重建实例，回合进行中也能切；切回「没指定」没有对应的控制请求，要重开实例。
 
 新会话（FRESH）默认采用 CLI 设置合并后的基线，与直接新起命令行一致。
@@ -916,7 +916,7 @@ export const port = runtime.port;
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~14 min
-- **Estimated Tokens**: ~1711
+- **Estimated Tokens**: ~1684
 
 ---
 
@@ -932,7 +932,7 @@ export const port = runtime.port;
 ## 忙碌判定与看门狗
 
  在途轮次计数。仅由发送（+1）与结果返回/主动中断/撤回成功（-1）闭环结算，严禁双扣。  
-    bgTasks  活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限（dev 已合入，尚未发版）。  
+    bgTasks  活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限。  
     isBusy  `pendingTurns > 0` 或存在未完成的后台任务，或挂起未决的工具审批/用户提问。  
     idle hang watchdog  若 `pendingTurns > 0` 但长达 `IDLE_TIMEOUT_MS` 没有任何新事件产生，触发看门狗强制中断。  
  
@@ -983,7 +983,7 @@ sequenceDiagram
 
 ## 思考强度 (effort) 运行时热修改
 
-切换具体档（`low` … `max`，以及 `ultracode`）与 `auto` 时，服务端经控制请求 `applyFlagSettings({effortLevel})` 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；`ultracode` 实际下发 `xhigh` 并打开 `Settings.ultracode`。只有切回「没指定」没有对应的控制请求，要 dispose + resume。`auto` 档 dev 已合入，尚未发版。
+切换具体档（`low` … `max`，以及 `ultracode`）与 `auto` 时，服务端经控制请求 `applyFlagSettings({effortLevel})` 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；`ultracode` 实际下发 `xhigh` 并打开 `Settings.ultracode`。只有切回「没指定」没有对应的控制请求，要 dispose + resume。
 
 
 ---
@@ -1061,7 +1061,7 @@ sequenceDiagram
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~2029
+- **Estimated Tokens**: ~2018
 
 ---
 
@@ -1106,7 +1106,7 @@ sequenceDiagram
 
 - 关闭： 关掉会话实例，transcript 不动，随时可以从列表里重新打开。
 - 彻底删除： 删除磁盘上的 transcript，受两道保护：会话最近有活动、还在静默期内（ SESSION_DELETE_QUIET_MS ，默认 5 分钟）时拒绝；终端或桌面端仍开着这个会话时也拒绝。拒绝的理由留在抽屉里显示，并记入审计。
-- 关掉后紧接着删（dev 已合入，尚未发版）： 先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。
+- 关掉后紧接着删： 先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。
 
 
 ---
@@ -1285,7 +1285,7 @@ flowchart TD
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~1733
+- **Estimated Tokens**: ~1722
 
 ---
 
@@ -1331,7 +1331,7 @@ flowchart TD
 
 - 动态状态行： 回合进行中显示与终端同款的进行时动词、秒表与等待提示（例如「仍在等待响应」）。
 - 收尾行： 回合结束留一行过去时动词与耗时，对齐 CLI。
-- 额度墙横幅（dev 已合入，尚未发版）： 撞上用量额度墙时，输入框上方出现横幅，按所处状态给一个按钮：已布防时可「取消」，只给选项时可「到点自动继续」，错过重置点或无法确认安全时给「继续」由你手动发。
+- 额度墙横幅： 撞上用量额度墙时，输入框上方出现横幅，按所处状态给一个按钮：已布防时可「取消」，只给选项时可「到点自动继续」，错过重置点或无法确认安全时给「继续」由你手动发。
 
 
 ---
@@ -1441,7 +1441,7 @@ flowchart TB
   Tunnel["cloudflared 命名隧道"]
   Alt["Tailscale / 其他隧道 / 反代 (可选)"]
   Server["CCM Server (app/server.js)"]
-  SDK["Agent SDK (0.3.278)"]
+  SDK["Agent SDK (0.3.301)"]
   CLI["本机 claude CLI 进程"]
   FS["开发项目工作区 (WORKDIRS)"]
   Push["Web Push / ntfy 通道"]
@@ -1462,7 +1462,7 @@ flowchart TB
 
 ## 关键生产依赖
 
-- @anthropic-ai/claude-agent-sdk ：dev 基线 0.3.278 （最新发布版 v1.12.1 为 0.3.263）。
+- @anthropic-ai/claude-agent-sdk ：dev 基线 0.3.301 （最新发布版 v1.13.0 为 0.3.278）。
 - express (v5) · socket.io (v4) · compression ：HTTP 与 WebSocket 服务基础。
 - jose (v6)：JWT 校验，零外部 C 绑定依赖。
 - web-push ：RFC 8291 / 8292 标准的推送协议实现。
@@ -1776,11 +1776,11 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~1787
+- **Estimated Tokens**: ~1893
 
 ---
 
-入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **58** 种；最新发布版 v1.12.1 的入向为 57 种，差的是 `user:autoContinue`）。
+入向 Socket 事件、出向 `agent:event` 信封类型与鉴权 HTTP 运维端点。真相源唯一维护于 `app/src/shared/protocol.js`（dev 基线：出向类型 **31** 种、入向事件 **63** 种；最新发布版 v1.13.0 的入向为 58 种，差的是 `folders:add`、`folders:browse`、`folders:mkdir`、`folders:remove` 与 `image:get`）。
 
 ## 出向 agent:event 契约类型 (31 种)
 
@@ -1798,17 +1798,17 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 | 设备门禁 | device_status 、 pending_devices 、 trusted_devices | 当前设备认证态、待审批新设备清单与已信任设备表 |
 | 错误处理 | error 、 system | 业务异常与系统级别通知提示 |
 
-## 入向 Socket 契约事件 (58 种)
+## 入向 Socket 契约事件 (63 种)
 
 由客户端主动发往服务端的事件总线，受 `tests/gates/contract-check.js` 门禁进行双向严格比对校验：
 
 | 业务领域 | 包含的入向事件 |
 | --- | --- |
-| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm |
-| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮，dev 已合入、尚未发版） permissions:rules |
+| 会话管理与调度 | session:list session:new session:switch session:close session:home session:history session:fork session:deletePermanent session:rewind:candidates session:rewind:preview session:rewind:confirm image:get （会话里的图片按引用按需取，dev 已合入、尚未发版） |
+| 用户交互与输入 | user:message user:interrupt user:answer user:approve user:setEffort user:setPermissionMode user:setViewing user:autoContinue （额度墙横幅的按钮） permissions:rules |
 | 设备与状态同步 | user:approveDevice user:denyDevice user:renameTrustedDevice user:revokeTrustedDevice connect:qr sync:since mirror:syncNow conn:ping client:presence |
 | 已读位点共享 | read:mark read:sync user:ackUnread |
-| 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read |
+| 文件操作与工作区 | browse:list browse:read files:search files:write attachment:read folders:browse folders:mkdir folders:add folders:remove （手机上浏览、新建、连接与断开文件夹，dev 已合入、尚未发版） |
 | 代码与 Git 集成 | git:status git:diff git:branches hooks:setup |
 | 后台任务管理 | task:stop task:output tool:preview tool:full subagent:flow |
 | 系统运维与诊断 | service:status doctor:run dev:restart logs:get logs:server logs:clientError audit:get push:test config:refresh env:get env:set statusline:setup |
@@ -1834,7 +1834,7 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~2483
+- **Estimated Tokens**: ~2472
 
 ---
 
@@ -1854,7 +1854,7 @@ Not-tested: e2e 未跑——本次零生产代码改动且未触及 tests/e2e/
 | CCM_DATA_DIR | ./data | 控制面数据根（会话指针、设备信任、审批、审计、推送、附件、缓存），建议生产外置为仓库外的绝对路径。它不在 Schema 里：可写进 ccm.config.json 或设为环境变量，但 config set 与面板写不了 | 需重启 |
 | CLAUDE_BIN | 空（从 PATH 查找） | claude 可执行文件路径 | 需重启 |
 | FILE_EDIT | 开 | 内置文件编辑器直写。它 不经过 Agent 的工具审批链 （有范围校验、大小限制、哈希冲突检测与审计）；设 off 关闭，长期公网暴露建议关 | 需重启 |
-| CCM_AUTO_CONTINUE_AT_LIMIT | 开（dev 已合入，尚未发版） | 撞上用量额度墙后，到重置时刻自动发一句「继续」。重置点远于 24 小时只给按钮；上游只回 429、不给重置时间时无法自动继续；等待期间重启服务会作废。设 0 关闭，撞墙时仍有按钮可点 | 需重启 |
+| CCM_AUTO_CONTINUE_AT_LIMIT | 开 | 撞上用量额度墙后，到重置时刻自动发一句「继续」。重置点远于 24 小时只给按钮；上游只回 429、不给重置时间时无法自动继续；等待期间重启服务会作废。设 0 关闭，撞墙时仍有按钮可点 | 需重启 |
 | IDLE_TIMEOUT_MS | 600000（10 分钟） | 无输出判挂死 | 需重启 |
 | INSTANCE_IDLE_RECLAIM_MS | 1800000（30 分钟） | 空闲 AgentSession 实例回收；0 为不回收 | 需重启 |
 | APPROVAL_TTL_MS | 1800000（30 分钟） | 审批卡未决定时自动过期 | 需重启 |
@@ -1897,11 +1897,11 @@ node scripts/config.js migrate             # 从旧版 .env 迁到 ccm.config.js
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~2333
+- **Estimated Tokens**: ~2413
 
 ---
 
-下列条目是文档、注释与当前生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码为准。本页于 2026-09-24 随手册 v2.1 刷新，基线 dev@3f488861。
+下列条目是文档、注释与当前生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码为准。本页于 2026-09-24 随手册 v2.1 刷新，基线 dev@3f488861；2026-10-16 按 dev@eb2b6e45 跟进了事件契约与 SDK 版本，发布版改按 v1.13.0 标注。
 
 ## 2026-09-24 刷新时修正的漂移
 
@@ -1916,8 +1916,8 @@ node scripts/config.js migrate             # 从旧版 .env 迁到 ccm.config.js
 | 回退入口 | 长按用户气泡 | /rewind 两步面板（2026-09-20）；分叉是回复下方的「分叉」按钮，只出现在带 transcript uuid 的回复上（刚流式输出完的回复要重新打开会话后才有），触屏长按消息也是分叉 | 涉及对话的回退模式分叉出新会话，原会话不动；只恢复代码不分叉 |
 | 会话隐藏（L1） | 左滑隐藏，仍可找回 | 已移除；只剩关闭与彻底删除（两道保护） | — |
 | 已读位点存放 | 写在 sessions.json | 单独的 read-state.json | — |
-| 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 58（+ user:autoContinue ）；最新发布版 v1.12.1 仍为 57 | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
-| Agent SDK 版本 | 0.3.263 | dev 为 0.3.278；v1.12.1 为 0.3.263 | — |
+| 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 63（v1.13.0 之后加了 folders:add / folders:browse / folders:mkdir / folders:remove / image:get ）；最新发布版 v1.13.0 为出向 31、入向 58（比 v1.12.1 多 user:autoContinue ） | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
+| Agent SDK 版本 | 0.3.263 | dev 为 0.3.301；最新发布版 v1.13.0 为 0.3.278 | — |
 | 分支与发版 | 日常在 dev 直接开发，master 由 dev fast-forward | feature 分支 → PR → dev；master 只接 release.sh 开的发版 PR，合并后打 tag | master 上不得有未发版提交 |
 | 「产品宪法 C1–C5」 | 手册自编的五条，并注明「见 hard-rules.md」 | 产品仓文档里没有这个标签；对应内容是 hard-rules §1 的产品边界，已在「职责边界」页按原文重写 | 「不做」清单的编号同样改用 hard-rules §5 的真实 ID |
 
@@ -1934,7 +1934,7 @@ node scripts/config.js migrate             # 从旧版 .env 迁到 ccm.config.js
 
 ## 产品仓自身的文档漂移
 
-- 已修（PR #173，合入 dev@e6abb0bf） ： README.md / README.en.md 的对照表原写「长按消息：回退 / 分叉」， docs/architecture.md 第 81 行 原写「长按 user 气泡 → 回退到此轮前」。现在都改为 /rewind 两步面板，并写明分叉按钮只在带 transcript uuid 的回复上出现。发布版 v1.12.1 的 master README 仍是旧说法，下次发版随 master 生效。
+- 已修（PR #173，合入 dev@e6abb0bf） ： README.md / README.en.md 的对照表原写「长按消息：回退 / 分叉」， docs/architecture.md 第 81 行 原写「长按 user 气泡 → 回退到此轮前」。现在都改为 /rewind 两步面板，并写明分叉按钮只在带 transcript uuid 的回复上出现。这些改动已随 v1.13.0 发版进入 master。
 
 ## 关于历史 design.md 标记
 

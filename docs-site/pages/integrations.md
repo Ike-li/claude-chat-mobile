@@ -31,7 +31,7 @@ flowchart TB
   Tunnel["cloudflared 命名隧道"]
   Alt["Tailscale / 其他隧道 / 反代 (可选)"]
   Server["CCM Server (app/server.js)"]
-  SDK["Agent SDK (0.3.278)"]
+  SDK["Agent SDK (0.3.301)"]
   CLI["本机 claude CLI 进程"]
   FS["开发项目工作区 (WORKDIRS)"]
   Push["Web Push / ntfy 通道"]
@@ -52,7 +52,7 @@ flowchart TB
 
 ## 关键生产依赖
 
-- @anthropic-ai/claude-agent-sdk ：dev 基线 0.3.278 （最新发布版 v1.12.1 为 0.3.263）。
+- @anthropic-ai/claude-agent-sdk ：dev 基线 0.3.301 （最新发布版 v1.13.0 为 0.3.278）。
 - express (v5) · socket.io (v4) · compression ：HTTP 与 WebSocket 服务基础。
 - jose (v6)：JWT 校验，零外部 C 绑定依赖。
 - web-push ：RFC 8291 / 8292 标准的推送协议实现。

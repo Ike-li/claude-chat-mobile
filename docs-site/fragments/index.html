@@ -22,7 +22,7 @@
 </div>
 
 <h2>这本手册从哪来</h2>
-<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>3f488861</code>；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 <code>docs/hard-rules.md</code>（产品边界、n=1 取舍、架构不变量、已决不做）与 <code>docs/architecture.md</code> 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。</p>
+<p>源码分支为 <strong>dev</strong>（当前基线 HEAD <code>3f488861</code>，事件契约与 SDK 版本已跟进到 <code>eb2b6e45</code>；最新发布版为 v1.13.0，dev 上尚未发版的改动在各页单独标注）。仓库以 <code>docs/hard-rules.md</code>（产品边界、n=1 取舍、架构不变量、已决不做）与 <code>docs/architecture.md</code> 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。</p>
 
 <div class="callout warn"><div class="body">
 <strong>事实基线约定</strong>手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 <code>tests/gates/</code> 门禁为准，并应在<a href="drift.html">漂移清单</a>中透明登记。
@@ -45,7 +45,7 @@
 <thead><tr><th>层级</th><th>技术选型</th><th>关键特性</th></tr></thead>
 <tbody>
 <tr><td>运行时</td><td>Node ≥20 · ESM · Express 5 · Socket.IO 4</td><td>三层架构，前后端零构建纯 ESM</td></tr>
-<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.278（v1.12.1 为 0.3.263）</td><td>双向流控制，驱动本机的 <code>claude</code> CLI</td></tr>
+<tr><td>Agent 驱动</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.301（v1.13.0 为 0.3.278）</td><td>双向流控制，驱动本机的 <code>claude</code> CLI</td></tr>
 <tr><td>配置与运维</td><td><code>ccm.config.json</code> · <code>env-schema.js</code></td><td>统一结构化配置、热重载工作区、统一读写源</td></tr>
 <tr><td>鉴权与安全</td><td><code>jose</code> 6 (JWT) · 设备 TOFU · IPv6 /64 限速</td><td>令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外）</td></tr>
 <tr><td>离线推送</td><td><code>web-push</code> (VAPID) · 可选 ntfy</td><td>审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制</td></tr>

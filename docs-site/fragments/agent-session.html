@@ -13,7 +13,7 @@
 <h2>忙碌判定与看门狗</h2>
 <div class="kv">
   <div class="row"><div class="key">pendingTurns</div><div class="val">在途轮次计数。仅由发送（+1）与结果返回/主动中断/撤回成功（-1）闭环结算，严禁双扣。</div></div>
-  <div class="row"><div class="key">bgTasks</div><div class="val">活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限（dev 已合入，尚未发版）。</div></div>
+  <div class="row"><div class="key">bgTasks</div><div class="val">活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限。</div></div>
   <div class="row"><div class="key">isBusy</div><div class="val"><code>pendingTurns &gt; 0</code> 或存在未完成的后台任务，或挂起未决的工具审批/用户提问。</div></div>
   <div class="row"><div class="key">idle hang watchdog</div><div class="val">若 <code>pendingTurns &gt; 0</code> 但长达 <code>IDLE_TIMEOUT_MS</code> 没有任何新事件产生，触发看门狗强制中断。</div></div>
 </div>
@@ -66,4 +66,4 @@ sequenceDiagram
 <p><code>dontAsk</code> 档不走这张图：白名单外的调用在 SDK 那一层直接拒绝，不调用 <code>canUseTool</code>。审批台账只记裁决，挂着的审批遇到指纹不符、超过 <code>APPROVAL_TTL_MS</code> 或进程重启，一律不可再执行。</p>
 
 <h2>思考强度 (effort) 运行时热修改</h2>
-<p>切换具体档（<code>low</code> … <code>max</code>，以及 <code>ultracode</code>）与 <code>auto</code> 时，服务端经控制请求 <code>applyFlagSettings({effortLevel})</code> 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；<code>ultracode</code> 实际下发 <code>xhigh</code> 并打开 <code>Settings.ultracode</code>。只有切回「没指定」没有对应的控制请求，要 dispose + resume。<code>auto</code> 档 dev 已合入，尚未发版。</p>
+<p>切换具体档（<code>low</code> … <code>max</code>，以及 <code>ultracode</code>）与 <code>auto</code> 时，服务端经控制请求 <code>applyFlagSettings({effortLevel})</code> 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；<code>ultracode</code> 实际下发 <code>xhigh</code> 并打开 <code>Settings.ultracode</code>。只有切回「没指定」没有对应的控制请求，要 dispose + resume。</p>

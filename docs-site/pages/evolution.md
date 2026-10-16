@@ -3,7 +3,7 @@
 
 - **Part**: 第二部分 · 演进历程
 - **Reading Time**: ~12 min
-- **Estimated Tokens**: ~2193
+- **Estimated Tokens**: ~2190
 
 ---
 
@@ -40,7 +40,7 @@ Claude Chat Mobile 今天的系统形态来自长期的渐进式决策与真实�
     第六阶段 
 #### 分发、安全与终端对齐的收口（2026-09 中下旬）
 
-分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；dev 上又合入额度重置自动继续、思考强度 auto 档，SDK 升到 0.3.278。
+分发改为 GitHub 对 master 的源码归档；安全审查一轮加固；许可证改为 Apache-2.0；回退改走 `/rewind`、assistant 气泡加分叉入口；额度重置自动继续、思考强度 auto 档随 v1.13.0 发布（SDK 0.3.278）。
  
  
 

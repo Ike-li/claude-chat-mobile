@@ -24,8 +24,8 @@ Read this card in <500 tokens to understand architecture, boundaries, configurat
 3. **Takeover**: When terminal turns idle (>12.5s), Web safely resumes with `externalDirty` absorption.
 
 ## 3. Technology Stack & Key Constants
-- **Runtime**: Node ≥20 · Pure ESM · Express 5 · Socket.IO 4 · `@anthropic-ai/claude-agent-sdk` (0.3.263 in release v1.12.1; 0.3.278 on dev) · `jose` 6 (JWT).
-- **Protocols**: Outbound: 31 `agent:event` types; Inbound: 57 socket events in v1.12.1, 58 on dev (+`user:autoContinue`). Source of truth: `app/src/shared/protocol.js`.
+- **Runtime**: Node ≥20 · Pure ESM · Express 5 · Socket.IO 4 · `@anthropic-ai/claude-agent-sdk` (0.3.278 in release v1.13.0; 0.3.301 on dev) · `jose` 6 (JWT).
+- **Protocols**: Outbound: 31 `agent:event` types; Inbound: 58 socket events in release v1.13.0, 63 on dev (+`folders:add`, `folders:browse`, `folders:mkdir`, `folders:remove`, `image:get`). Source of truth: `app/src/shared/protocol.js`.
 - **Ring Buffer**: In-memory circular buffer of **2000** events per session (`BUFFER_CAP = 2000`).
 - **History Cap**: Transcript cold-read max **2000** messages (`HISTORY_MAX_MESSAGES = 2000`).
 

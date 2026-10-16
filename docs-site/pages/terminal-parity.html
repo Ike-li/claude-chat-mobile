@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>终端等价性 · Claude Chat Mobile</title>
 <meta name="description" content="CLI 有什么 Web 就有什么；权限与配置同源。本页讲：等价原则与心智模型、终端里的事，手机上怎么做、权限放行：不注入 allowedTools、六档权限模式。">
-<meta name="llm:tokens" content="1973">
+<meta name="llm:tokens" content="1963">
 <link rel="alternate" type="text/markdown" href="terminal-parity.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -119,7 +119,7 @@
 <p>模型与思考强度都能在底栏随时切换。思考强度的档位分两层（语义以产品仓 <code>docs/display-contracts.md</code> 为准）：</p>
 <ul>
   <li><strong>SDK 档：</strong><code>low</code>、<code>medium</code>、<code>high</code>、<code>xhigh</code>、<code>max</code>，真正传给 Agent SDK。</li>
-  <li><strong>UI 额外的档：</strong><code>ultracode</code> 等于 <code>xhigh</code> 加 <code>Settings.ultracode: true</code>，只在支持 <code>xhigh</code> 的模型上出现；<code>auto</code> 用模型内置的默认档，对齐 CLI 的 <code>/effort auto</code>（dev 已合入，尚未发版）；「没指定」继承 settings 里为该模型存的档。<code>auto</code> 与「没指定」是两档，不能互相冒充。</li>
+  <li><strong>UI 额外的档：</strong><code>ultracode</code> 等于 <code>xhigh</code> 加 <code>Settings.ultracode: true</code>，只在支持 <code>xhigh</code> 的模型上出现；<code>auto</code> 用模型内置的默认档，对齐 CLI 的 <code>/effort auto</code>；「没指定」继承 settings 里为该模型存的档。<code>auto</code> 与「没指定」是两档，不能互相冒充。</li>
   <li><strong>切换路径：</strong>具体档与 <code>auto</code> 经控制请求（<code>applyFlagSettings</code>）即刻生效，不重建实例，回合进行中也能切；切回「没指定」没有对应的控制请求，要重开实例。</li>
 </ul>
 <p>新会话（FRESH）默认采用 CLI 设置合并后的基线，与直接新起命令行一致。</p>

@@ -3,7 +3,7 @@
 
 - **Part**: 第四部分 · 核心实现
 - **Reading Time**: ~14 min
-- **Estimated Tokens**: ~1711
+- **Estimated Tokens**: ~1684
 
 ---
 
@@ -19,7 +19,7 @@
 ## 忙碌判定与看门狗
 
  在途轮次计数。仅由发送（+1）与结果返回/主动中断/撤回成功（-1）闭环结算，严禁双扣。  
-    bgTasks  活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限（dev 已合入，尚未发版）。  
+    bgTasks  活跃后台子代理/任务表。后台任务运行期间，在途轮次的看门狗有豁免，防止被无输出超时误杀；豁免有 45 分钟上限。  
     isBusy  `pendingTurns > 0` 或存在未完成的后台任务，或挂起未决的工具审批/用户提问。  
     idle hang watchdog  若 `pendingTurns > 0` 但长达 `IDLE_TIMEOUT_MS` 没有任何新事件产生，触发看门狗强制中断。  
  
@@ -70,4 +70,4 @@ sequenceDiagram
 
 ## 思考强度 (effort) 运行时热修改
 
-切换具体档（`low` … `max`，以及 `ultracode`）与 `auto` 时，服务端经控制请求 `applyFlagSettings({effortLevel})` 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；`ultracode` 实际下发 `xhigh` 并打开 `Settings.ultracode`。只有切回「没指定」没有对应的控制请求，要 dispose + resume。`auto` 档 dev 已合入，尚未发版。
+切换具体档（`low` … `max`，以及 `ultracode`）与 `auto` 时，服务端经控制请求 `applyFlagSettings({effortLevel})` 直接下发到活跃进程，不销毁重建实例，回合进行中也能切；`ultracode` 实际下发 `xhigh` 并打开 `Settings.ultracode`。只有切回「没指定」没有对应的控制请求，要 dispose + resume。

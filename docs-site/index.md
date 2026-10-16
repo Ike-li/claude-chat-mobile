@@ -3,7 +3,7 @@
 
 - **Part**: 起点
 - **Reading Time**: ~5 min
-- **Estimated Tokens**: ~1604
+- **Estimated Tokens**: ~1625
 
 ---
 
@@ -38,7 +38,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 ## 这本手册从哪来
 
-源码分支为 **dev**（当前基线 HEAD `3f488861`；最新发布版为 v1.12.1，dev 上尚未发版的改动在各页单独标注）。仓库以 `docs/hard-rules.md`（产品边界、n=1 取舍、架构不变量、已决不做）与 `docs/architecture.md` 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。
+源码分支为 **dev**（当前基线 HEAD `3f488861`，事件契约与 SDK 版本已跟进到 `eb2b6e45`；最新发布版为 v1.13.0，dev 上尚未发版的改动在各页单独标注）。仓库以 `docs/hard-rules.md`（产品边界、n=1 取舍、架构不变量、已决不做）与 `docs/architecture.md` 为治理依据，本手册按真实运行代码与架构契约重述，不照搬历史陈旧文档。
 
 > **WARNING:** 事实基线约定 — 手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 tests/gates/ 门禁为准，并应在漂移清单中透明登记。
 
@@ -69,7 +69,7 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 | 层级 | 技术选型 | 关键特性 |
 | --- | --- | --- |
 | 运行时 | Node ≥20 · ESM · Express 5 · Socket.IO 4 | 三层架构，前后端零构建纯 ESM |
-| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.278（v1.12.1 为 0.3.263） | 双向流控制，驱动本机的 claude CLI |
+| Agent 驱动 | @anthropic-ai/claude-agent-sdk 0.3.301（v1.13.0 为 0.3.278） | 双向流控制，驱动本机的 claude CLI |
 | 配置与运维 | ccm.config.json · env-schema.js | 统一结构化配置、热重载工作区、统一读写源 |
 | 鉴权与安全 | jose 6 (JWT) · 设备 TOFU · IPv6 /64 限速 | 令牌是启动前提；新设备要审批（本机样 Host 与已过 Access 的连接除外） |
 | 离线推送 | web-push (VAPID) · 可选 ntfy | 审批、提问、后台任务完成无条件推；回合完成在有前台可见连接时抑制 |

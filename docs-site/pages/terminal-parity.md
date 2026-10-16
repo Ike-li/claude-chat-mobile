@@ -3,7 +3,7 @@
 
 - **Part**: 第三部分 · 方法论
 - **Reading Time**: ~10 min
-- **Estimated Tokens**: ~2342
+- **Estimated Tokens**: ~2331
 
 ---
 
@@ -80,7 +80,7 @@ transcript 统一在 `~/.claude/projects/`，与 CLI `/resume` 指向同一份�
 模型与思考强度都能在底栏随时切换。思考强度的档位分两层（语义以产品仓 `docs/display-contracts.md` 为准）：
 
 - SDK 档： low 、 medium 、 high 、 xhigh 、 max ，真正传给 Agent SDK。
-- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto （dev 已合入，尚未发版）；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
+- UI 额外的档： ultracode 等于 xhigh 加 Settings.ultracode: true ，只在支持 xhigh 的模型上出现； auto 用模型内置的默认档，对齐 CLI 的 /effort auto ；「没指定」继承 settings 里为该模型存的档。 auto 与「没指定」是两档，不能互相冒充。
 - 切换路径： 具体档与 auto 经控制请求（ applyFlagSettings ）即刻生效，不重建实例，回合进行中也能切；切回「没指定」没有对应的控制请求，要重开实例。
 
 新会话（FRESH）默认采用 CLI 设置合并后的基线，与直接新起命令行一致。

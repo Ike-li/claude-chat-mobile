@@ -3,11 +3,11 @@
 
 - **Part**: 第七部分 · 参考与规范
 - **Reading Time**: ~8 min
-- **Estimated Tokens**: ~2333
+- **Estimated Tokens**: ~2413
 
 ---
 
-下列条目是文档、注释与当前生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码为准。本页于 2026-09-24 随手册 v2.1 刷新，基线 dev@3f488861。
+下列条目是文档、注释与当前生产代码之间已经确认的漂移记录。阅读、排障与开发时，一律以最新代码为准。本页于 2026-09-24 随手册 v2.1 刷新，基线 dev@3f488861；2026-10-16 按 dev@eb2b6e45 跟进了事件契约与 SDK 版本，发布版改按 v1.13.0 标注。
 
 ## 2026-09-24 刷新时修正的漂移
 
@@ -22,8 +22,8 @@
 | 回退入口 | 长按用户气泡 | /rewind 两步面板（2026-09-20）；分叉是回复下方的「分叉」按钮，只出现在带 transcript uuid 的回复上（刚流式输出完的回复要重新打开会话后才有），触屏长按消息也是分叉 | 涉及对话的回退模式分叉出新会话，原会话不动；只恢复代码不分叉 |
 | 会话隐藏（L1） | 左滑隐藏，仍可找回 | 已移除；只剩关闭与彻底删除（两道保护） | — |
 | 已读位点存放 | 写在 sessions.json | 单独的 read-state.json | — |
-| 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 58（+ user:autoContinue ）；最新发布版 v1.12.1 仍为 57 | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
-| Agent SDK 版本 | 0.3.263 | dev 为 0.3.278；v1.12.1 为 0.3.263 | — |
+| 契约事件数量 | 出向 31、入向 57 | dev：出向 31、入向 63（v1.13.0 之后加了 folders:add / folders:browse / folders:mkdir / folders:remove / image:get ）；最新发布版 v1.13.0 为出向 31、入向 58（比 v1.12.1 多 user:autoContinue ） | 站点的 check-event-contract.mjs 读的是主工作树的 protocol.js ，主工作树不在最新 dev 时会报不一致 |
+| Agent SDK 版本 | 0.3.263 | dev 为 0.3.301；最新发布版 v1.13.0 为 0.3.278 | — |
 | 分支与发版 | 日常在 dev 直接开发，master 由 dev fast-forward | feature 分支 → PR → dev；master 只接 release.sh 开的发版 PR，合并后打 tag | master 上不得有未发版提交 |
 | 「产品宪法 C1–C5」 | 手册自编的五条，并注明「见 hard-rules.md」 | 产品仓文档里没有这个标签；对应内容是 hard-rules §1 的产品边界，已在「职责边界」页按原文重写 | 「不做」清单的编号同样改用 hard-rules §5 的真实 ID |
 
@@ -40,7 +40,7 @@
 
 ## 产品仓自身的文档漂移
 
-- 已修（PR #173，合入 dev@e6abb0bf） ： README.md / README.en.md 的对照表原写「长按消息：回退 / 分叉」， docs/architecture.md 第 81 行 原写「长按 user 气泡 → 回退到此轮前」。现在都改为 /rewind 两步面板，并写明分叉按钮只在带 transcript uuid 的回复上出现。发布版 v1.12.1 的 master README 仍是旧说法，下次发版随 master 生效。
+- 已修（PR #173，合入 dev@e6abb0bf） ： README.md / README.en.md 的对照表原写「长按消息：回退 / 分叉」， docs/architecture.md 第 81 行 原写「长按 user 气泡 → 回退到此轮前」。现在都改为 /rewind 两步面板，并写明分叉按钮只在带 transcript uuid 的回复上出现。这些改动已随 v1.13.0 发版进入 master。
 
 ## 关于历史 design.md 标记
 

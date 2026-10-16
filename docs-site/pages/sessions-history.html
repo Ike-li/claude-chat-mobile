@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>会话与历史 · Claude Chat Mobile</title>
 <meta name="description" content="事实源分工、worktree、/rewind 与分叉、删除保护。本页讲：事实源分工、会话发现与 worktree、冷启动与实例恢复、回退与分叉、历史回显跟随当前链。">
-<meta name="llm:tokens" content="1840">
+<meta name="llm:tokens" content="1829">
 <link rel="alternate" type="text/markdown" href="sessions-history.md">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.html">
 <link rel="stylesheet" href="../assets/style.css">
@@ -98,7 +98,7 @@
 <ul>
   <li><strong>关闭：</strong>关掉会话实例，transcript 不动，随时可以从列表里重新打开。</li>
   <li><strong>彻底删除：</strong>删除磁盘上的 transcript，受两道保护：会话最近有活动、还在静默期内（<code>SESSION_DELETE_QUIET_MS</code>，默认 5 分钟）时拒绝；终端或桌面端仍开着这个会话时也拒绝。拒绝的理由留在抽屉里显示，并记入审计。</li>
-  <li><strong>关掉后紧接着删（dev 已合入，尚未发版）：</strong>先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。</li>
+  <li><strong>关掉后紧接着删：</strong>先等 CLI 子进程退完再删，等待期间新关掉的实例也一并等到。</li>
 </ul>
 
         <nav class="pager"><a class="prev" href="events-sync.html"><span class="dir">← 上一篇</span><span class="ttl">事件信封与同步</span></a><a class="next" href="auth-device.html"><span class="dir">下一篇 →</span><span class="ttl">鉴权与设备信赖</span></a></nav>
