@@ -448,7 +448,11 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
 //     页内那个 compose-project-pill 也补不上：它的 onclick 是打开会话列表抽屉，不通向文件。
 //   · 空首页：工作区尚未选定（页面就是让你选的），pill 无处可指，仍隐藏。
 // cwd 为空时一律隐藏——宁可没入口，也不给一个指向 null 的入口。
-export function shouldShowTopContextPill({ viewingInstanceId, sessionId, composeReady = false, cwd = null } = {}) {
+// cwd 是 scratch 根时同理（2026-10-16）：那是「无文件夹」新会话页的启动键，目录要等首条消息才建，而服务端
+// 范围门只放行根下的 scratch 目录、不放行根本身（根下是所有无文件夹会话），点开必报「不在已连接的文件夹里」。
+// 会话开起来以后 cwd 是它自己的 scratch 目录，照常显示。
+export function shouldShowTopContextPill({ viewingInstanceId, sessionId, composeReady = false, cwd = null, scratchRoot = null } = {}) {
+  if (scratchRoot && cwd === scratchRoot) return false;
   if (!shouldShowStartScreen({ viewingInstanceId, sessionId })) return true;
   return Boolean(composeReady && cwd);
 }

@@ -7649,7 +7649,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       ?? displayedSessionId
       ?? null;
     const show = shouldShowTopContextPill({
-      viewingInstanceId: viewingId, sessionId: sid, composeReady, cwd: panelCwd(),
+      viewingInstanceId: viewingId, sessionId: sid, composeReady, cwd: panelCwd(), scratchRoot: projectsState.scratchRoot(),
     });
     topContextPill.classList.toggle('hidden', !show);
     // 隐藏时不可聚焦，避免读屏仍读到工作区入口
@@ -7668,7 +7668,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     topContextChanges.dataset.cwd = currentCwd || '';
   }
   // 顶栏主 pill 文案：固定工作区 basename（维护者拍板不要会话标题——同仓多会话靠侧栏区分）。
-  // #topTitleText 仍 hidden；title 挂完整 cwd 供长按辨认。
+  // #topTitleText 仍 hidden；title 挂点开会浏览的那个完整目录供长按辨认——取 panelCwd()，与 onclick 同源。
+  // 取工作区 cwd 会和落点分叉：「无文件夹」会话写成 scratch 根（点开看的是它自己的 scratch 目录），
+  // worktree 会话写成父仓（点开看的是 worktree）。
   function syncTopContextLabel() {
     const project = baseName(currentCwd);
     if (topProjectText) topProjectText.textContent = project || '…';
@@ -7678,8 +7680,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       updateWorkspaceChangeBadge(null);
     }
     if (topContextPill) {
-      topContextPill.title = currentCwd
-        ? `${t('工作区：浏览或查看改动')} · ${currentCwd}`
+      const target = panelCwd();
+      topContextPill.title = target
+        ? `${t('工作区：浏览或查看改动')} · ${target}`
         : t('工作区：浏览或查看改动');
     }
   }

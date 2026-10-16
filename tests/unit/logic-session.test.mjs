@@ -484,6 +484,19 @@ test('shouldShowTopContextPill: 真实会话恒显；compose 有 cwd 即显；�
   assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, cwd: '/repo' }), false);
 });
 
+// 「无文件夹」新会话页的 cwd 是 scratch 根：它只是启动键，首条消息才建目录，服务端不让浏览它（范围门只放行
+// 根下的 scratch 目录）。显示出来就是一个点开必报「不在已连接的文件夹里」的入口（2026-10-16 真机）。
+test('shouldShowTopContextPill: 要打开的是 scratch 根时隐藏；会话自己的 scratch 目录照常显示', () => {
+  const scratchRoot = '/data/scratch-workspaces';
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: scratchRoot, scratchRoot }), false);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: 'abc', cwd: `${scratchRoot}/scratch-2026-10-16-abc123`, scratchRoot }), true);
+  // 首发在途：实例已懒开、目录已建，compose 表面还在——指向的是那个目录，照常显示
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true, cwd: `${scratchRoot}/scratch-2026-10-16-abc123`, scratchRoot }), true);
+  // 普通文件夹的新会话页不受影响；scratchRoot 未知（旧服务端）时与改动前同形
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: '/repo', scratchRoot }), true);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null, composeReady: true, cwd: scratchRoot, scratchRoot: null }), true);
+});
+
 // 空首页枢纽不展示底部输入条：须先选会话或点 ＋ 进入 compose 就绪态。
 test('shouldShowComposer: 空首页隐藏；composeReady/有 session/首发在途显示', () => {
   assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null }), false);

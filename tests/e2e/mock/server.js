@@ -2425,8 +2425,10 @@ io.on('connection', socket => {
     });
   });
   // 文件浏览列表：P0-21 选「浏览项目文件」后需可渲染；另两条供 P0-21b 覆盖 CM 查看器命中/回退两路。
-  socket.on('browse:list', (_payload, callback) => {
+  socket.on('browse:list', (payload, callback) => {
     if (typeof callback !== 'function') return;
+    // 同真 server：范围门不放行 scratch 根本身（根下是所有无文件夹会话），只放行会话自己的 scratch 目录
+    if (payload?.cwd === MOCK_SCRATCH_ROOT) return callback({ ok: false, error: '这个目录不在已连接的文件夹里' });
     callback({
       ok: true,
       entries: [
