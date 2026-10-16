@@ -1701,16 +1701,23 @@ export class AgentSession {
     approvalStore.recordDecided(requestId, { status: decision, decidedBy, decidedAt: Date.now() });
     if (decision === 'allow') {
       const suggestions = pending.suggestions || [];
-      // setMode：批准内含的「模式切换」（如 ExitPlanMode 退出 plan）。它是工具批准的内在部分，应始终
-      // 应用（非「始终允许」可选项）；优先跟随 SDK 的 suggestion、不硬编码切到哪档。
-      let modeUpdate = suggestions.find(u => u.type === 'setMode');
+      const isExitPlan = pending.name === 'ExitPlanMode';
+      // setMode 分两种，口径不同：
+      //   · ExitPlanMode：批准它就是「退出计划、切到某档」，切档是被批准的那件事本身，普通允许也要应用；
+      //     优先跟随 SDK 的 suggestion、不硬编码切到哪档。
+      //   · 其余工具：CLI 随审批附带的 setMode 建议（真机日志：Write、越界 Bash 都带 acceptEdits）和下面的
+      //     规则建议一样，只属于「总是允许」——SDK 对 suggestions 的说明就是给「always allow」那类选项回传的。
+      //     普通允许也应用它，等于批一次写文件就把整个会话升到 acceptEdits，此后的写、删、移全都不再审批
+      //     （2026-10-16 全量 review P0-3，APPROVAL-01 所批即所行）。
+      let modeUpdate = (isExitPlan || alwaysThisSession || opts?.persistRules)
+        ? suggestions.find(u => u.type === 'setMode') : undefined;
       // 兜底：实测 SDK 的 ExitPlanMode 工具 checkPermissions 只回 {behavior:'ask'}、不带任何 suggestions
       // （交互式 CLI 的切档由 plan-exit 弹窗用户选 default/acceptEdits/bypass 时补 setMode；headless/
       // canUseTool 路径没有那个弹窗 → permission_suggestions 为 undefined）。若不兜底，批准后 updatedPermissions
       // 为空 → SDK 内部 toolPermissionContext.mode 仍停在 plan。web 现支持 opts.exitMode 对齐 CLI 三档；
       // 非法/缺省 → default（=终端平按 yes）。destination:'session' 只改本会话、不落盘 settings。
       // SDK 未来若开始发 setMode suggestion，则上面的 suggestion 优先、此兜底不触发。
-      if (!modeUpdate && pending.name === 'ExitPlanMode') {
+      if (!modeUpdate && isExitPlan) {
         const EXIT_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
         const exitMode = EXIT_MODES.has(opts?.exitMode) ? opts.exitMode : 'default';
         modeUpdate = { type: 'setMode', mode: exitMode, destination: 'session' };

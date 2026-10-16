@@ -489,18 +489,18 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
-  // 批准内含的模式切换：若 SDK 经 canUseTool 的 suggestions 给出 setMode PermissionUpdate，批准时应始终
-  // 应用（非「始终允许」可选项）→ 回传 SDK + 更新本实例档 + emit permission_mode 让 server 同步手机端图标。
-  // 注：这是「SDK 主动下发 suggestion」的前向兼容路径——实测当前 SDK 的 ExitPlanMode 并不走这里（见下条），
-  // 但别的工具/未来版本可能给 setMode，故此路径优先于兜底。
-  test('resolvePermission(allow)：setMode suggestion → 应用 + emit permission_mode + 更新 permissionMode', async () => {
+  // 勾了「总是允许」时，CLI 随审批附带的 setMode 建议照旧应用 → 回传 SDK + 更新本实例档 + emit permission_mode
+  // 让 server 同步手机端图标。2026-10-16 前这条用例传的是普通允许（alwaysThisSession=false），断言的却是
+  // 「档位切到 acceptEdits」——那正是全量 review P0-3 的缺陷本身：真机上 Write、越界 Bash 都带这条建议，
+  // 批一次写文件整个会话就不再审批写删移。普通允许那一侧现由 tests/invariants/approval-allow-once.test.mjs 守。
+  test('resolvePermission(allow + 总是允许)：setMode suggestion → 应用 + emit permission_mode + 更新 permissionMode', async () => {
     const { s, events } = makeSession({ permissionMode: 'plan' });
     const ac = new AbortController();
     const promise = s.askPermission('SomeTool', { x: 1 }, {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]
     });
-    s.resolvePermission('t1', 'allow', false, { tool: 'SomeTool', args: { x: 1 }, cwd: s.cwd }); // 非「始终允许」，但 setMode 仍应应用
+    s.resolvePermission('t1', 'allow', true, { tool: 'SomeTool', args: { x: 1 }, cwd: s.cwd });
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     assert.deepEqual(result.updatedPermissions, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]);
@@ -744,8 +744,8 @@ test('persistRules 在完整性校验失败时不得生效', async () => {
   s.dispose();
 });
 
-// setMode 是工具批准的内在部分（如 ExitPlanMode 退出 plan），与「记不记住」正交。
-// persist 档不得把它重复塞两次——SDK 收到两条同类 update 的行为未定义。
+// persist 档会连同 CLI 建议里的 setMode 一起回传（普通允许不会，见 resolvePermission 注释），
+// 但不得把它重复塞两次——SDK 收到两条同类 update 的行为未定义。
 test('persistRules：setMode 只出现一次，不因走 persist 分支而重复', async () => {
   const { s } = makeSession();
   const ac = new AbortController();
