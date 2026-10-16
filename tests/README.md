@@ -107,6 +107,7 @@
 | ID | 红线 |
 |---|---|
 | `MSG-01` | 同一 `clientMessageId` 对 Claude `send` 至多一次。校验失败不得 commit；并发重发靠 in-flight claim，无论成败都要 release（`REL-01` 两阶段 + claim/release · `SRV-001` FRESH 分支**同样**要单飞——「FRESH 不去重」是修过的坑） |
+| `MSG-02` | 客户端手里的实例句柄（`instanceId`）不得指到另一个会话。句柄活得比 server 进程久：离线队列存在 localStorage 里、通知深链和断线续传也都带着它，所以发号**跨重启不复用**（每次启动带一段随机段）。进程内计数从 1 重新发号的话，A 项目里排着的消息会投进 B 项目恰好同号的会话，模型在错误的仓库里执行它。离线重放另带入队时的 `sessionId`：命中的实例此刻跑的不是那个会话，按 stale 拒收，不投递<br>*（2026-10-16 建：云端全量 review P0-2）* |
 | `SESSION-01` | 终端仍在驾驶时 Web 不得向同一会话发新消息；接管前若有外部增长先 dispose + resume 吸收（`SRV-003` 该置换时置换、**忙碌时禁止置换**，两侧都要钉） |
 | `SESSION-02` | 活着的实例在抽屉里必须有一行：不依赖 `session:list` 有没有返回它（被分页挤出本页、transcript 被 EnterWorktree 迁到别的 project 目录），不依赖它有没有 sessionId（懒开的 worktree 新会话），也不依赖它的 cwd 还属不属于某个工作区。行都没有，用户就既看不到它在跑、也关不掉它。<br>*（2026-09-24 建：真机会话 `1c401b5d` 正在跑，抽屉里整行消失）* |
 | `SESSION-03` | 会话中途 `EnterWorktree` / `ExitWorktree` 之后，实例的驾驶轴 cwd 必须跟到新目录——CLI 已把整份 transcript 迁到新 cwd 的 project 目录，停在旧值 = 历史、resume、附件全按一个空目录解析。信号以主链 `tool_use_result`（`worktreePath` / `originalCwd`）为准：CLI 2.1.280 实测 EnterWorktree **不派发** CwdChanged，hook 只是另一条冗余通道。两路先后到达必须幂等；子 agent 的、`is_error` 的、别的工具的结果一律不采信；采信前仍过 server 的范围判据。<br>*（2026-09-24 建：9/13 那版只接了 hook，真机会话 `1c401b5d` 证明它从未生效）* |

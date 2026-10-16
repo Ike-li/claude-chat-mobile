@@ -593,7 +593,10 @@ const routeCwd = (cwd, { tier = 'open' } = {}) => {
 
 // 台阶3：按实例路由（BE-001 fail-closed）——缺省（无 instanceId）落 viewingInstanceId（向后兼容缺参旧调用）；
 // 显式命中 live 取该实例；显式但已关闭 → stale（id=null，绝不静默回退 viewing、绝不误投别的会话）。见 instance-routing.js。
-const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), opts);
+const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), {
+  sessionOf: x => agents.get(x)?.sessionId ?? null, // 只有带 expectedSessionId 的调用（离线重放）才会用到
+  ...opts,
+});
 const resolveInstanceId = id => resolveTarget(id).id;   // 仅取 id：显式 stale → null（不再回退 viewing），无实例的 handler 自然 no-op/echo 拨回
 const routeInstance = id => { const rid = resolveInstanceId(id); return rid ? (agents.get(rid) ?? null) : null; };
 // audit_record 的 actor 字段：deviceId 取握手带的 deviceToken（isLocal/CF Access
@@ -2828,9 +2831,13 @@ registerSocketConnection(io, socket => {
       // 快照，而断线期间服务端 viewing 可能已换到别的工作区/会话。此时缺省回退 viewing 会把一条旧消息
       // 投给它从没指向过的会话，故关掉回退；交互式首发不置此位，回退仍是正确行为。
       const fromOutbox = payload && typeof payload === 'object' && payload.fromOutbox === true;
-      const target = resolveTarget(rawInstanceId, fromOutbox ? { allowViewingFallback: false } : undefined);
+      const target = resolveTarget(rawInstanceId, {
+        ...(fromOutbox ? { allowViewingFallback: false } : {}),
+        expectedSessionId: payload?.sessionId, // 离线重放带着入队时那个会话（MSG-02）
+      });
       if (target.stale) {
-        // BE-001：显式指定了一个已关闭 / 未知实例——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
+        // BE-001：显式指定了一个已关闭 / 未知实例，或命中的实例跑的已不是入队时那个会话（MSG-02）——
+        // fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
         // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
         sysTo(socket, '目标会话已关闭，请刷新后重发', true);
         ack({ ok: false, error: 'stale_instance', stale: true });

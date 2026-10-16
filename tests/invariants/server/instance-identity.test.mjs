@@ -1,0 +1,203 @@
+// tests/invariants/server/instance-identity.test.mjs —— 真重启之后，客户端手里的旧实例句柄不得命中别的会话
+// 守护：MSG-02（客户端手里的 instanceId 不得指到另一个会话：发号跨重启不复用；带着入队时 sessionId 的重放，命中的实例换了会话按 stale 拒收）
+// 覆盖：① 云端全量 review（2026-10-16）P0-2 的原样复现：A 在 projA 拿到句柄 → 重启 → B 在 projB 开会话 →
+//          A 的离线队列带着旧句柄重放（升级前入队的条目，不带 sessionId）→ 必须 stale，projB 的会话里不得出现这条
+//       ② 同一个旧句柄的断线续传（同一份 review 的 P2「sync:since 不比 epoch」）：重启后同一会话被续接出新实例，
+//          旧句柄不得被认成它——认了，客户端拿上一进程的 lastSeq 去接新进程的序列，中间的事件就丢了
+//       ③ 同一进程内：重放带着入队时的 sessionId，命中的实例跑的已是别的会话 → stale；会话对得上照常投递（正对照）
+// 槽位：S2（真 app/server.js 子进程，①② 各起两次 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
+//
+// ⚠ 必须真 spawn 两次（理由同 approval-restart.test.mjs）：「进程真的重启过、计数真的归零过」正是要证明的事，
+//   在同一个进程里 import 两次拿到的是同一份模块状态，这条用例会在测空气。
+//
+// 不测什么 + 为什么：
+//  ① 前端入队时记下哪个 sessionId、重放时有没有带上 —— 在 app.js 里，归 S3（tests/e2e/specs/input-send-empty.spec.ts）
+//  ② 规则 5 置换换了号之后，同一批离线消息第 2 条起被判 stale —— 另一个缺陷（review P2），本条不管
+//  ③ 通知深链拿着旧句柄 —— 前端 resolveDeepLinkTarget 早已按 sessionId 兜底（tests/unit/logic-deeplink.test.mjs）
+// 执行位守卫：必须是第一条 import（它一旦放行晚了，下面那些模块的顶层代码已经跑过了）。
+import '../../setup/require-disposable-env.mjs';
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { io as ioClient } from 'socket.io-client';
+import { spawnServer, killServer, waitForCondition } from '../../integration/_spawn-server.mjs';
+import { encodeProjectDir } from '../../../app/src/shared/project-dir.js';
+
+const TOKEN = 'inv-instance-identity-token';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function makeRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'ccm-inv-identity-'));
+  mkdirSync(join(root, 'projA'));
+  mkdirSync(join(root, 'projB'));
+  mkdirSync(join(root, 'data'));
+  return {
+    root,
+    projA: realpathSync(join(root, 'projA')),
+    projB: realpathSync(join(root, 'projB')),
+    data: join(root, 'data'),
+  };
+}
+
+// 起一台 server、跑完必定收尸。两次启动共用同一个数据目录：真重启也是同一份 sessions.json。
+async function withBoot({ projA, projB, data }, env, fn) {
+  const server = await spawnServer({
+    AUTH_TOKEN: TOKEN, WORK_DIRS: `${projA},${projB}`, CCM_DATA_DIR: data, ...env,
+  });
+  const sockets = [];
+  try {
+    return await fn({
+      connect: async tag => {
+        const events = [];
+        const sock = ioClient(`http://127.0.0.1:${server.port}`, {
+          auth: { token: TOKEN, deviceToken: `inv-identity-${tag}` },
+          transports: ['websocket'], reconnection: false, timeout: 4000,
+          extraHeaders: { Host: 'localhost' }, // 本机直连：bypass 设备门，本文件只测路由
+        });
+        sockets.push(sock);
+        sock.on('agent:event', e => events.push(e));
+        await new Promise((resolve, reject) => {
+          sock.on('connect', resolve);
+          sock.on('connect_error', reject);
+          setTimeout(() => reject(new Error('socket 未能在 5s 内连上')), 5000);
+        });
+        const call = (event, payload) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时：${JSON.stringify(payload)}`)), 15000);
+          sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
+        });
+        return { events, call };
+      },
+    });
+  } finally {
+    for (const s of sockets) { try { s.close(); } catch { /* 已关闭 */ } }
+    await killServer(server.proc);
+  }
+}
+
+const turnDone = (events, instanceId) => waitForCondition(
+  () => events.find(e => e.type === 'result' && e.instanceId === instanceId),
+  { timeoutMs: 10000, label: `实例 ${instanceId} 的回合收尾` },
+);
+
+test('MSG-02（review P0-2）：重启后，带着旧句柄的离线重放不得投进别的项目的会话', async () => {
+  const dirs = makeRoot();
+  const env = { CCM_FAKE_CLAUDE_MODE: 'turn' }; // 回合会收尾：B 的实例空闲时，误投会被直接收下开跑
+  try {
+    let handleA;
+    await withBoot(dirs, env, async ({ connect }) => {
+      const a = await connect('a');
+      const ack = await a.call('user:message', { text: 'A 在 projA 说的', cwd: dirs.projA, clientMessageId: 'a-1' });
+      assert.equal(ack.ok, true, `前提：A 的首条消息要开出实例，实际 ${JSON.stringify(ack)}`);
+      handleA = ack.instanceId;
+    });
+
+    await withBoot(dirs, env, async ({ connect }) => {
+      const b = await connect('b');
+      const ackB = await b.call('user:message', { text: 'B 在 projB 说的', cwd: dirs.projB, clientMessageId: 'b-1' });
+      assert.equal(ackB.ok, true, `前提：B 的首条消息要开出实例，实际 ${JSON.stringify(ackB)}`);
+      const doneB = await turnDone(b.events, ackB.instanceId);
+
+      // A 重连，离线队列按 deliverOutboxItem 的形状重放。升级前入队的条目没有 sessionId，只有句柄和 cwd。
+      const a = await connect('a-again');
+      const replay = await a.call('user:message', {
+        text: '离线时排在 projA 的', cwd: dirs.projA, instanceId: handleA, clientMessageId: 'a-queued', fromOutbox: true,
+      });
+      await sleep(250); // ack 已回，服务端要广播的都已发出，这里只等它到达客户端
+      const landed = b.events.filter(e => e.type === 'user_message' && e.payload?.clientMessageId === 'a-queued');
+      assert.deepEqual(landed.map(e => ({ cwd: e.cwd, sessionId: e.sessionId })), [],
+        `A 排在 projA 的消息落进了 B 的会话（projB=${dirs.projB}，sessionId=${doneB.sessionId}）：模型会在错误的仓库里执行它`);
+      assert.equal(replay.ok, false, `旧句柄在新进程里不该命中任何实例，实际 ${JSON.stringify(replay)}`);
+      assert.equal(replay.stale, true,
+        `必须按 stale 拒收：客户端据此停止重试、提示刷新，而不是当成忙碌留着「重发」按钮，实际 ${JSON.stringify(replay)}`);
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});
+
+// transcript 一行（history.js 的解析形状），链由调用方串起来——断链的夹具在真实世界不存在（见 external-dirty.test.mjs）。
+function transcriptLine(sessionId, type, text, cwd, parentUuid, uuid) {
+  return `${JSON.stringify({
+    type, uuid, parentUuid, sessionId, cwd, isMeta: false,
+    timestamp: new Date().toISOString(),
+    message: { role: type, content: [{ type: 'text', text }] },
+  })}\n`;
+}
+
+test('MSG-02（review P2）：重启后同一会话被续接出新实例，旧句柄的断线续传不得被认成它', async () => {
+  const dirs = makeRoot();
+  const sessionId = randomUUID();
+  // session:switch 先查 transcript 在不在。只在容器 / CI 跑（test:invariants:server 不在宿主机白名单），
+  // 那里的 HOME 本身就是一次性目录；cwd 是 mkdtemp 出来的，编码出的 project 目录也不会撞上别的会话。
+  const projectDir = join(homedir(), '.claude', 'projects', encodeProjectDir(dirs.projA));
+  mkdirSync(projectDir, { recursive: true });
+  const u1 = randomUUID();
+  writeFileSync(join(projectDir, `${sessionId}.jsonl`),
+    transcriptLine(sessionId, 'user', '终端里说过的', dirs.projA, null, u1)
+      + transcriptLine(sessionId, 'assistant', '终端里的回答', dirs.projA, u1, randomUUID()));
+  // 钉死假 CLI 报的 session_id：续接后实例跑的仍是同一个会话，续传的会话核对挡不住，只剩句柄本身
+  const env = { CCM_FAKE_CLAUDE_MODE: 'turn', CCM_FAKE_CLAUDE_SESSION_ID: sessionId };
+  try {
+    let handle;
+    let lastSeq = 0;
+    await withBoot(dirs, env, async ({ connect }) => {
+      const a = await connect('a');
+      const opened = await a.call('session:switch', { sessionId, cwd: dirs.projA });
+      assert.equal(opened.ok, true, `前提：要能打开这个会话，实际 ${JSON.stringify(opened)}`);
+      handle = opened.instanceId;
+      const ack = await a.call('user:message', { text: '续接后说一句', instanceId: handle, clientMessageId: 'a-1' });
+      assert.equal(ack.ok, true, JSON.stringify(ack));
+      await turnDone(a.events, handle);
+      lastSeq = Math.max(...a.events.filter(e => e.instanceId === handle).map(e => e.seq));
+      assert.ok(lastSeq > 0, '前提：客户端手里要有上一进程的续传基线');
+    });
+
+    await withBoot(dirs, env, async ({ connect }) => {
+      const b = await connect('b');
+      const reopened = await b.call('session:switch', { sessionId, cwd: dirs.projA });
+      assert.equal(reopened.ok, true, `前提：重启后同一会话要能再打开，实际 ${JSON.stringify(reopened)}`);
+
+      const a = await connect('a-again');
+      const synced = await a.call('sync:since', { instanceId: handle, sessionId, lastSeq });
+      assert.equal(synced.found, false,
+        `上一进程的句柄 ${handle} 被认成了新进程的实例 ${reopened.instanceId}：客户端会拿旧序列的 lastSeq=${lastSeq} `
+        + `去接新序列，以为没漏东西（实际 ${JSON.stringify(synced)}）`);
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
+    rmSync(projectDir, { recursive: true, force: true });  // safe-rm: 目录名由本用例一次性 cwd 编码而来
+  }
+});
+
+test('MSG-02：重放带着入队时的会话，命中的实例跑的已是别的会话 → stale；对得上照常投递', async () => {
+  const dirs = makeRoot();
+  try {
+    await withBoot(dirs, { CCM_FAKE_CLAUDE_MODE: 'turn' }, async ({ connect }) => {
+      const b = await connect('b');
+      const ackB = await b.call('user:message', { text: 'B 在 projB 说的', cwd: dirs.projB, clientMessageId: 'b-1' });
+      assert.equal(ackB.ok, true, JSON.stringify(ackB));
+      const { sessionId } = await turnDone(b.events, ackB.instanceId);
+      assert.ok(sessionId, '前提：回合收尾时实例要已有会话');
+
+      const replay = payload => b.call('user:message', {
+        cwd: dirs.projB, instanceId: ackB.instanceId, fromOutbox: true, ...payload,
+      });
+      const foreign = await replay({ text: '入队时属于别的会话', sessionId: `${sessionId}-other`, clientMessageId: 'q-foreign' });
+      assert.equal(foreign.stale, true, `实例还是那个实例，跑的却不是入队时那个会话，必须拒收，实际 ${JSON.stringify(foreign)}`);
+
+      // 正对照：会话对得上的重放照常送达——否则上面那条 stale 可能只是「带了 sessionId 就一律拒」
+      const own = await replay({ text: '入队时就属于它', sessionId, clientMessageId: 'q-own' });
+      assert.equal(own.ok, true, `会话对得上的重放不该被拦，实际 ${JSON.stringify(own)}`);
+      await sleep(250);
+      const texts = b.events.filter(e => e.type === 'user_message').map(e => e.payload?.text);
+      assert.ok(!texts.includes('入队时属于别的会话'), `被拒的那条不该进会话：${JSON.stringify(texts)}`);
+      assert.ok(texts.includes('入队时就属于它'), `对得上的那条要真的发出去：${JSON.stringify(texts)}`);
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});

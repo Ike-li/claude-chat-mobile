@@ -1,5 +1,11 @@
+import { randomBytes } from 'node:crypto';
+
 export function createInstanceManager() {
   let counter = 0;
+  // instanceId 活得比进程久：手机离线队列（localStorage）、通知深链、断线续传都拿着它。只靠进程内计数的话，
+  // 重启后又从 1 发号，旧句柄会命中一个恰好同号、跑的却是别的会话（甚至别的项目）的新实例——
+  // 离线消息就投进去执行了（2026-10-16 云端 review P0-2，MSG-02）。每次启动带一段随机段，跨重启不复用。
+  const bootTag = randomBytes(6).toString('hex');
   const agents = new Map();
   const permissionModes = new Map();
   const efforts = new Map();
@@ -14,7 +20,7 @@ export function createInstanceManager() {
   // 空闲回收中的实例不在这里：它们带着 terminating 留在 agents 里，直到 consume 走完才被 onExit 清表。
   const exiting = new Set();
 
-  const nextId = () => `inst_${++counter}`;
+  const nextId = () => `inst_${bootTag}_${++counter}`;
   const permissionModeOf = id => permissionModes.get(id) ?? 'default';
   const effortOf = id => efforts.get(id) ?? null;
 

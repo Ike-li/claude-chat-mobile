@@ -697,7 +697,7 @@ export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount =
 //   list       = 都定位不到（缺 sessionId 或无 instanceId）→ 打开会话列表让用户手选
 export function resolveDeepLinkTarget(target, instances = []) {
   if (!target || !target.instanceId) return { action: 'list' };
-  // instanceId 是【进程内计数器】（instance-manager 的 `inst_${++counter}`，server 重启即从 inst_1 重新发号），
+  // instanceId 曾是【进程内计数器】（server 重启即从 inst_1 重新发号；2026-10-16 起每次启动带随机段，MSG-02），
   // 所以「同号」不等于「同一个会话」。重启后点一条留在通知栏的旧通知，很可能落进另一个项目的会话——
   // 用户以为自己在 A、实际在 B，在 B 里发消息/授权都是错投，比点不开严重得多。通知 data 里本来就带了
   // sessionId，这里一并校验：对不上就不当 live，回落到下面按 sessionId 懒 resume 的 switch 分支。
