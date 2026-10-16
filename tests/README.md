@@ -116,6 +116,7 @@
 | `READ-01` | 未读位点跨设备共享、按时间戳单调合并。手动标未读**不得**用「删条目」表达已读——LWW 合并里会被另一台设备复活；标记也**不得**被分页截断吞掉——`session:list` 要把挤出本页的那些补回列表（否则确认框承诺的「会一直显示未读」当场食言） |
 | `APPROVAL-01` | 一次审批只有一个终态。所批即所行：前后端同一份 `canonicalizeOp`（`app/public/js/canonicalize.js` 是前后端唯一豁免的共用文件），指纹不符不得执行 |
 | `APPROVAL-02` | 启动时磁盘上残留的 pending 标为 expired（`decidedBy=system:restart`），不可再批准执行 |
+| `APPROVAL-03` | 仓库自带的 settings（project 层 `.claude/settings.json`、local 层 `.claude/settings.local.json`）不得把 Web 新会话的初始权限档升级成免审批档。采纳 `permissions.defaultMode` 之前先过 SDK 的 `filterEscalatingDefaultMode`（与 CLI 的信任分层同源：`bypassPermissions` / `auto` 只认 policy / user / flag 层，`acceptEdits` 不认 project 层），被剔掉就落回 `default`。user 层 `~/.claude/settings.json` 照常生效。CCM 把这个档作为显式 `permissionMode` 交给 SDK，`bypassPermissions` 还由 CCM 自己在 `canUseTool` 里放行，所以 CLI 自己那道过滤一次都轮不到<br>*（2026-10-16 建：云端全量 review P0-1，第三方仓库提交一份 settings 就能让手机上新开的会话整场不弹审批）* |
 
 ### 配置、通知、分发
 

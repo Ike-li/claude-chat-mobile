@@ -213,7 +213,8 @@ test('新会话页选中 worktree：空页显示的默认权限档按 worktree �
   mkdirSync(join(repo, '.claude'), { recursive: true });
   writeFileSync(join(repo, '.claude', 'settings.json'), settings('plan'));
   mkdirSync(join(managed, '.claude'), { recursive: true });
-  writeFileSync(join(managed, '.claude', 'settings.json'), settings('acceptEdits'));
+  // 取值要和仓库的 plan 分得开、又过得了 APPROVAL-03 的信任过滤：project 层的 acceptEdits 会被剔成 default
+  writeFileSync(join(managed, '.claude', 'settings.json'), settings('dontAsk'));
   const pageShows = async (cwd, want, what) => {
     assert.equal((await emit('session:new', { cwd }))?.ok, true);
     try {
@@ -224,7 +225,7 @@ test('新会话页选中 worktree：空页显示的默认权限档按 worktree �
   };
   // 仪器先证明自己看得见：仓库自己的新会话页显示仓库 settings 里的档
   await pageShows(repo, 'plan', '仓库的新会话页显示仓库 settings 里的 plan');
-  await pageShows(managed, 'acceptEdits', '选中 worktree 的新会话页显示 worktree settings 里的 acceptEdits');
+  await pageShows(managed, 'dontAsk', '选中 worktree 的新会话页显示 worktree settings 里的 dontAsk');
   assert.equal(latestInstances().composeCwd, managed);
   await emit('session:home', {});
 });
