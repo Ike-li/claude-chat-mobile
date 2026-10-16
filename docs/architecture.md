@@ -93,6 +93,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
    （transcript 逐条自报写入方：CLI 写 `cli`，本项目 SDK 写 `sdk-ts`）——己方 SDK 留下的未完结尾部撑不住锁，
    否则 Web 等一条审批时就会自锁：尾部恒未完结 ⇒ 锁恒维持 ⇒ 手机只读 ⇒ 点不到「批准」⇒ 审批永远等下去。
 5. **Web 接管发送前**，若 transcript 相对现有 SDK 实例有外部增长，server 先 dispose 旧实例并 resume 吸收，再发送新消息。
+   吸收的前提是终端写在同一条链上。终端在旧叶子下另起一支（分叉）时，resume 只能接上其中一支，见下节「续接锚点」。
 
 **这五条是默认路径，不是硬约束。** 项目管得住自己的 SDK 实例，管不住终端里那个独立进程：镜像锁只作用于 Web 端的输入，
 用户仍可在只读态下点「强制立即续接」/「仍要续接」显式解锁（`app/public/js/app.js` 的 `requestMirrorResume` /
@@ -100,6 +101,25 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 若终端此后继续写同一会话，仍会形成两条 transcript 分支。这个逃生口是有意保留的：用户常常比判定链更早知道终端已经关掉。
 
 轮询意味着存在最多一个检查周期的观察窗口。切换会话、手动刷新镜像与 hooks 信号会主动插队触发检查，但它们仍不能证明对另一个活进程拥有控制权。
+
+## 续接锚点
+
+transcript 是一棵树（每行带 `parentUuid`），CLI 每次 `--resume` 只把其中一条链放进模型上下文。本项目自己的续接（懒开、切会话、规则 5 置换、切 effort、空闲回收后续聊）走的是同一个加载器：CLI 选哪条链，模型就只看得见哪条。
+
+**选链规则**（CLI 2.1.281–2.1.301 零 token 实测一致，2026-10-16）：取物理上最后一条 `last-prompt` 行的 `leafUuid` 记作 Kn，物理上最后一条非 sidechain 的消息记作 In。Kn 存在、且既不是 In 也不是 In 的祖先时接 Kn，否则接 In。每个 CLI 进程都会把 `last-prompt` 重贴成**它自己**最后写的那行（退出时、resume 后、写入过阈值时；2.1.301 起每轮结束也贴），所以**谁最后重贴，谁说了算**。这条规则不是公开契约，CLI 改了它，`app/src/sessions/resume-anchor.js` 要跟着改。
+
+**会丢什么**：电脑上开着的终端，内存里停在旧叶子上。你在手机上接着聊的时候，那个终端只要在旧叶子下写过任何一行（离开摘要、Remote Control 断开提示、本地命令、新的一轮），之后又比手机侧进程晚重贴（最常见的是回到电脑后退出终端），此后所有续接都接回终端那一支，终端的和本项目的都一样。手机上那段不进模型上下文，回显却照样画出来。反过来，终端在旧叶子下真打过一轮时，规则 5 置换让旧 SDK 进程最后重贴，接上的是手机那支，终端那一轮进不了上下文。还有一个丢失口：SDK 子进程被 SIGKILL，来不及重贴。这只影响 2.1.284，2.1.301 每轮结束时已经贴过。
+
+本项目自己的 dispose → resume 不会丢：旧进程在 dispose 后 4–14ms 就把 `last-prompt` 重贴到手机末条，新进程 spawn 后约 210–255ms 才读盘。resume 前还会先等同一会话的旧进程退出（上限 1.5s），把这段余量变成确定的先后。
+
+**守卫**（`SESSION-04`）：
+
+1. **resume 前预测**：按上面的规则算出 CLI 会接上哪条链（`resume-anchor.js`）。物理上最新的那条对话消息不在链上，就把结论挂在实例上。最后那条 `last-prompt` 是显式的（`/rewind` 等用户刻意选分支时 CLI 写 `explicit:true`）不报；读不动 transcript 时也不报，fail-open，等于改动前的行为。
+2. **发送闸**：在带结论的实例上发消息，server 以 `resume_divergent` 拒收，不记去重。前端把话放回输入框，弹出面板，说清模型会从哪一端接上、哪一端最近几条会被丢，给两个选项。「分叉到新会话」从最新那条 `forkSession` 出一个新会话，把话挪进它的输入框，原会话不动。「仍然发送」带上确认的是哪一段（最新那条的 uuid）重发，server 放行并清掉结论。两支各有对方没有的对话时，面板会写明分叉会少掉另一支的几条。
+3. **额度墙自动继续**同样不代发，转 stale（`diverged`），由用户在横幅上点「继续」。
+4. **接管提醒**：Web 在一个会话上发出第一条消息时，如果会话注册表显示终端或桌面端还开着它，提醒一次：那个进程之后再写东西或退出，下次续接会接回它那一支。
+
+**用法上的根治**：离开电脑前在终端里 `/exit`，回到电脑时用 `claude -c` 或 `claude --resume` 重新打开。任一时刻只有一个活进程在写这个会话，树就不会分叉。
 
 ## 额度墙到点自动继续
 
@@ -319,6 +339,7 @@ Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里�
 - `app/src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
 - `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`：额度墙到点自动继续的调度（状态自持）与判定纯函数。
 - `app/src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
+- `app/src/sessions/resume-anchor.js`：预测 CLI 续接会接上哪条链，以及「续接会丢掉一段对话」的发送闸。
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `app/public/js/app.js` 与 `app/public/js/app/`：客户端状态、事件派发与交互模块。
 - `tests/gates/contract-check.js`：双向 Socket.io 事件契约门禁。

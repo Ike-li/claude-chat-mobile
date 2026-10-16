@@ -117,6 +117,16 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armSendTransientFail(); },
     },
     {
+      // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」，之后在那个会话里发消息被发送闸拒收。
+      command: 'test:arm-resume-divergence',
+      run: async () => { getContext().armResumeDivergence(); },
+    },
+    {
+      // P0-RESUME-DIVe：同上，但挂在 worktree 会话上，且拒收前先模拟规则 5 置换（同一会话换成新实例并广播）。
+      command: 'test:arm-resume-divergence-worktree-swap',
+      run: async () => { getContext().armResumeDivergenceWorktreeSwap(); },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。
