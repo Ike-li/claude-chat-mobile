@@ -4041,6 +4041,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
     const reqCwd = sendCwd();
     const reqViewingInstanceId = viewingInstanceId;
+    // 驾驶轴 cwd 要在发出这一刻取：拒收若在规则 5 置换之后到达，旧实例已不在 instancesList 里，那时现算会回落到
+    // 工作区轴（父仓），worktree 会话的分叉就找不到 transcript（reqCwd 是 sendCwd()，看着实例时同样是工作区轴，不能用它）。
+    const reqDrivingCwd = drivingCwdOf(reqViewingInstanceId);
     _sendInFlightSessionIds.add(reqSessionId);
     const clearSendInFlight = () => {
       if (!_sendInFlightSessionIds.has(reqSessionId)) return;
@@ -4116,7 +4119,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
       // （错误提示会贴到无关会话、setBusy(false) 会打断无关会话真实在跑的轮次、草稿会覆盖无关会话的输入）。
-      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
+      // 续接分叉的拒收只比会话：它常在规则 5 置换之后到达（server 先 dispose 旧实例、resume 新实例并广播，再过闸），
+      // 同一会话此时已换了新 instanceId。按实例比对会当成「已切走」——话被撤掉却不回填、面板不出、busy 也不清。
+      const sameSurface = decision.divergence
+        ? displayedSessionId === reqSessionId
+        : displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId;
+      if (!sameSurface) return;
       if (decision.clearBusy) setBusy(false);
       // busy 拒收：服务端说那边有轮在跑——同步锁上发送闸（本端 _turnRunning 可能因广播未到而滞后）
       if (decision.busy) {
@@ -4141,7 +4149,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 两个选项作用的都是输入框里的话，那不是被拒的这一条。
       if (decision.divergence) {
         if (restored) {
-          resumeDivergencePrompt.prompt({ divergence: decision.divergence, sessionId: reqSessionId, cwd: drivingCwdOf(reqViewingInstanceId) });
+          resumeDivergencePrompt.prompt({ divergence: decision.divergence, sessionId: reqSessionId, cwd: reqDrivingCwd });
         } else {
           addBar(t('续接会丢掉一段对话，这条没有发出去'), 'text-danger');
         }

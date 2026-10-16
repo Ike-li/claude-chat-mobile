@@ -113,4 +113,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 规则 5 置换之后才拒收：终端在旧叶子下真打过一轮的那种分叉，正是在置换（dispose 旧实例 → resume 新实例）时算出来的，
+  // 拒收到达前前端已收到「同一会话换了新实例」的广播。① 迟到负 ack 守卫按实例比对的话，会把它当成「已切走」：
+  // 话被撤掉却不回填、面板也不出 ② 分叉要送发送那一刻的驾驶轴 cwd——旧实例已不在列表里，现算会回落到父仓，
+  // 服务端按父仓找不到 worktree 的 transcript，回「会话不存在」（PR #210 Codex review P2）。
+  test('P0-RESUME-DIVe 规则 5 置换后才拒收（worktree 会话）：话回到输入框、面板照出；分叉送驾驶轴 cwd 并成功', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-resume-divergence-worktree-swap');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('WORKTREE_HISTORY_LOADED', { timeout: 15_000 });
+
+    await sendChatMessage(page, TEXT);
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#confirmBody')).toContainText('模型会从手机那一轮接上，终端上最近 2 条消息不在它的上下文里');
+    await expect(page.locator('#confirmBody')).toContainText('另一支的 2 条不在');
+    await expect(page.locator('#input')).toHaveValue(TEXT);
+    await expect(bubblesWithText(page)).toHaveCount(0);
+
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#messages')).toContainText('WORKTREE_FORK_READY', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('已分叉到新会话');
+    await expect(page.locator('#input')).toHaveValue(TEXT);
+
+    await expectNoBrowserErrors(page);
+  });
 });
