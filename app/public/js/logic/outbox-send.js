@@ -330,6 +330,24 @@ export function shouldCarryOutboxBubbleOnClear({ outboxSessionId = null, prevSes
   return prevSessionId === sessionId && outboxSessionId === sessionId;
 }
 
+// 全量重载时，一颗被保住的未确认气泡能不能按文字让历史认领（app.js 的 settleCarriedPendingBubbles）。
+// 认领会把气泡的 clientMessageId 交给历史里那颗，之后同一个 id 的 user_message 回显被当成「已在屏幕上」、不再渲染。
+// 历史没有 clientMessageId，只能按文字从后往前认；同文的旧消息（「继续」这类短句）认错了，就是把 id 交给了别人。
+//
+// 在线发送的乐观气泡（outboxOutcome 为空，没交给 outbox）照旧认领（P0-DUP-OPT）。交给 outbox 的只在有证据说它进了
+// transcript 时认领，outboxOutcome 是它最近一次投递的结论（入队时为 'queued'），maybeSent 是有过一次结局不明的投递
+// （超时、服务端让重试）：
+//   · 'ok'：服务端收下了。
+//   · 'permanent' 且 maybeSent：放弃重试了，但先前那次可能已写进 transcript、只是回执没到——server 重启丢了去重表，
+//     再重放就回 stale。不会再拿这个 id 重发，认错的代价只是收掉一颗失败气泡；不认，已送达的历史旁边就多一颗「没发出去」。
+// 其余一律不认：排队中、在途（还没有结论）、撞闸等「重发」、等重连重试的，之后都还会拿同一个 id 再发，id 一旦交给旧消息，
+// 送达那次的回显就被吞掉；'permanent' 而没有结局不明的投递，是服务端明确没收下，历史里同文的只能是别的消息。
+export function canTextClaimPendingBubble({ outboxOutcome = null, maybeSent = false } = {}) {
+  if (outboxOutcome == null || outboxOutcome === 'ok') return true;
+  if (outboxOutcome === 'permanent') return maybeSent;
+  return false;
+}
+
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。

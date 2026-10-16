@@ -311,6 +311,10 @@ let outboxReplaySwapReloadInstanceId = null;
 // 置换那条（同一批的第 1 条）收下之后，重载拉回来的历史里就有它：真 server 收下即交给 CLI 写进 transcript。
 // 前端那颗被保住的离线气泡要被这条历史认领，屏幕上只能有一颗。
 let outboxReplaySwapDeliveredText = null;
+// P0-02d6：同一批后面那条的在途轮拒收压到这个会话的历史回包之后才发（historyFirst），前端先渲染历史、后收拒收。
+// 放出拒收后那一轮随即跑完，之后的「重发」照常收下并回显。
+let outboxReplaySwapHistoryFirst = false;
+let outboxReplaySwapHeldRefusal = null;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -591,6 +595,8 @@ function resetMockState() {
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
   outboxReplaySwapDeliveredText = null;
+  outboxReplaySwapHistoryFirst = false;
+  outboxReplaySwapHeldRefusal = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -2255,6 +2261,12 @@ io.on('connection', socket => {
           ...(outboxReplaySwapDeliveredText ? [{ role: 'user', content: outboxReplaySwapDeliveredText, uuid: 'u-archived-replayed' }] : []),
         ]
       });
+      // P0-02d6：历史回包发出去之后才放出压着的拒收
+      if (outboxReplaySwapHeldRefusal) {
+        const release = outboxReplaySwapHeldRefusal;
+        outboxReplaySwapHeldRefusal = null;
+        setTimeout(release, 50);
+      }
     } else if (sessionId === 'mock-session-worktree-forked') {
       // P0-RESUME-DIVe：worktree 会话分叉出的新会话，历史同样只在驾驶轴下
       callback(cwd === MOCK_WT_CWD
@@ -3207,6 +3219,7 @@ io.on('connection', socket => {
         resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE, swap: true };
       },
       armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
+      armOutboxReplaySwapHistoryFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', historyFirst: true }; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5537,6 +5550,7 @@ io.on('connection', socket => {
       ? mockInstances.find(i => i.instanceId === payload?.instanceId && i.sessionId === outboxReplaySwapArmed.sessionId)
       : undefined;
     if (replaySwapInst) {
+      outboxReplaySwapHistoryFirst = outboxReplaySwapArmed.historyFirst === true;
       outboxReplaySwapArmed = null;
       const oldId = replaySwapInst.instanceId;
       replaySwapInst.instanceId = `${oldId}_swapped`;
@@ -5552,9 +5566,26 @@ io.on('connection', socket => {
     const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');
-      if (typeof ack === 'function') {
-        ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
+      const refuse = () => {
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
+        }
+      };
+      // P0-02d6：拒收压到历史回包之后（见 outboxReplaySwapHistoryFirst），放出之后那一轮跑完
+      if (outboxReplaySwapHistoryFirst && payload?.fromOutbox === true) {
+        outboxReplaySwapHistoryFirst = false;
+        outboxReplaySwapHeldRefusal = () => {
+          refuse();
+          gateInst.state = 'idle';
+          gateInst.turnRunning = false;
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(gateInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+          });
+        };
+        return;
       }
+      refuse();
       return;
     }
     if (sendTransientFailArmed) {

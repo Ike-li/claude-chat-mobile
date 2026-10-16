@@ -51,15 +51,6 @@ test.describe('findHistoryClaimForPending', () => {
     assert.deepEqual(findHistoryClaimForPending({ text: '带图', attNames: '完全不同', messages }), { index: 0, uuid: 'u-1' });
   });
 
-  // 离线重放撞上在途轮 / 续接分叉闸 / stale 被拒收的那颗：服务端没收下它，transcript 里不会有它。历史里同文的
-  // 只能是更早的另一条（「继续」这类短句天天重复），认了就把它当成已落盘、撤掉气泡，「重发」跟着没了。
-  test('服务端拒收过的气泡 → 不认领，即便历史里有同文的旧消息', () => {
-    const messages = [userMsg('继续'), { role: 'assistant', content: 'ok' }];
-    assert.equal(findHistoryClaimForPending({ text: '继续', messages, rejected: true }), null);
-    assert.deepEqual(findHistoryClaimForPending({ text: '继续', messages, rejected: false }), { index: 0, uuid: 'u-继续' },
-      '没被拒收过的照旧按文本认领（已送达的那条要被历史认领，不能变成两颗）');
-  });
-
   test('既无文本又无附件 → null（无从认领，宁可不认也不能瞎认）', () => {
     assert.equal(findHistoryClaimForPending({ text: '', attNames: '', messages: [userMsg('')] }), null);
   });

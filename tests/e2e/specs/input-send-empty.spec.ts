@@ -172,10 +172,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 守三件事：① 归属按会话认，批后结算不收掉新实例那轮的运行条 ② 清屏保住同一会话的离线气泡，第 2 条的提示挂在它自己
   // 的气泡上，气泡排在重载的历史之后、落底可见（修之前气泡随清屏摘下，提示退成一条独立提示条插在空的 #messages 里，
   // 历史接在它下面，实测 top 为负、要往上翻）③ 已送达的第 1 条被历史认领，屏幕上只有一颗。
-  const replayTwoOfflineAcrossSwap = async (page: Page, [first, second]: [string, string]) => {
+  const replayTwoOfflineAcrossSwap = async (page: Page, [first, second]: [string, string], arm = 'test:arm-outbox-replay-swap') => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    await sendChatMessage(page, 'test:arm-outbox-replay-swap');
+    await sendChatMessage(page, arm);
     // 武装命令本身不收尾，照其它 arm 用例的做法切到另一个会话再发
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
@@ -229,6 +229,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectResendOnSecondBubbleAfterHistory(page, 'Any follow-up questions?');
     await expect(page.locator('[data-testid="user-message"]').filter({ hasText: 'Any follow-up questions?' }),
       '历史里那条旧消息与被拒收的第 2 条应各占一颗').toHaveCount(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但重载的历史先于第 2 条的拒收落地：历史渲染时第 2 条还没有结论。按文字认领会把它当成已落盘，clientMessageId
+  // 交给那条同文的旧消息、撤掉气泡；拒收再到时「重发」只能另起一条，点了送达，回显带着同一个 id，被当成「旧消息已在屏幕上」
+  // 吞掉，这条送达的消息哪儿都不显示。mock 放出拒收后那一轮随即跑完，「重发」照常收下并回显。
+  test('P0-02d6 历史先于第 2 条的拒收落地、且与旧消息同文：气泡不被认领，「重发」送达后这条照样显示', async ({ page }) => {
+    const second = 'Any follow-up questions?';
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', second], 'test:arm-outbox-replay-swap-history-first');
+
+    await expectResendOnSecondBubbleAfterHistory(page, second);
+    await page.locator('#messages [data-testid="outbox-resend"]').click();
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '「重发」送达之后提示应收起').toHaveCount(0);
+    const same = page.locator('[data-testid="user-message"]').filter({ hasText: second });
+    await expect(same, '「重发」送达的那条没显示出来（回显被当成历史里同文的旧消息吞掉了）').toHaveCount(2);
+    await expect(same.last(), '送达的那条应被回显转正').not.toHaveClass(/opacity-70/);
     await expectNoBrowserErrors(page);
   });
 

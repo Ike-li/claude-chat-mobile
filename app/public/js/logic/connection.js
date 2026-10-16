@@ -20,10 +20,8 @@ export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
 // 全量重载时，未确认乐观气泡该由哪条历史消息认领（否则 null）。
 // clearView 保住的气泡 + 已入 transcript 的同一条会撞成两颗。
 // 判据与 handle.user_message 的 matchedBubble 对齐；历史没有 clientMessageId，按内容从后往前认。
-// rejected：这颗气泡最近一次投递被服务端拒收了（离线重放撞上在途轮、续接分叉闸、stale）。它没进 transcript，
-// 历史里同文的只能是更早的另一条，认了就会撤掉这颗气泡、连同上面的「重发」。
-export function findHistoryClaimForPending({ text = '', attNames = '', messages = [], rejected = false } = {}) {
-  if (rejected) return null;
+// 交给 outbox 的气泡该不该进这里，先过 logic/outbox-send.js 的 canTextClaimPendingBubble。
+export function findHistoryClaimForPending({ text = '', attNames = '', messages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   const wantText = String(text ?? '');
   const wantAtt = String(attNames ?? '');

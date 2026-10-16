@@ -19,6 +19,7 @@ import {
   outboxItemTargetsViewing,
   outboxNoticePlacement,
   shouldCarryOutboxBubbleOnClear,
+  canTextClaimPendingBubble,
   SERVER_PRE_TURN_UPPER_BOUND_MS,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
@@ -801,6 +802,41 @@ test.describe('shouldCarryOutboxBubbleOnClear（清屏时保不保离线气泡�
   test('调用方没说清屏前是哪个会话 → 不保（宁可丢气泡，不串会话）', () => {
     assert.equal(shouldCarryOutboxBubbleOnClear({ outboxSessionId: 'sess_a', sessionId: 'sess_a' }), false);
     assert.equal(shouldCarryOutboxBubbleOnClear(), false);
+  });
+});
+
+// 全量重载时被保住的气泡能不能按文字让历史认领。认领会把气泡的 clientMessageId 交给历史里那颗，之后同一个 id 的回显
+// 被当成已在屏幕上、不再渲染。历史没有 clientMessageId，只能按文字认，同文的旧消息（「继续」）认错了，就是把 id 交给了别人。
+test.describe('canTextClaimPendingBubble（被保住的气泡能不能按文字认领）', () => {
+  test('在线发送的乐观气泡（没交给 outbox）照旧认领', () => {
+    assert.equal(canTextClaimPendingBubble({}), true);
+    assert.equal(canTextClaimPendingBubble(), true);
+  });
+
+  test('离线条目服务端收下了 → 认领（已送达的那条要被历史认领，不能变成两颗）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'ok' }), true);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'ok', maybeSent: true }), true);
+  });
+
+  test('还没有结论（排队、在途）→ 不认：历史先于拒收落地时认错，之后「重发」成功的回显被旧消息吞掉', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'queued' }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'queued', maybeSent: true }), false,
+      '等着重试的条目还会拿同一个 id 重发，结局不明也不能认');
+  });
+
+  test('撞闸等「重发」、等重连重试 → 不认（同一个 id 还要再发）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'blocked' }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'blocked', maybeSent: true }), false);
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'requeue', maybeSent: true }), false);
+  });
+
+  test('放弃重试：之前没有结局不明的投递 → 服务端明确没收下，不认', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'permanent' }), false);
+  });
+
+  test('放弃重试，但之前有一次结局不明的投递 → 认（可能早已写进 transcript，server 重启丢了去重表才回 stale）', () => {
+    assert.equal(canTextClaimPendingBubble({ outboxOutcome: 'permanent', maybeSent: true }), true,
+      '不认的话，重载后已送达的历史消息旁边会多一颗「没发出去」的失败气泡');
   });
 });
 

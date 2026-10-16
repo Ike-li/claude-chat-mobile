@@ -117,6 +117,7 @@ import {
   outboxItemTargetsViewing,
   outboxNoticePlacement,
   shouldCarryOutboxBubbleOnClear,
+  canTextClaimPendingBubble,
   SEND_ACK_FALLBACK_MS,
   SEND_ACK_TRANSPORT_MS,
   OFFLINE_RESEND_ACK_MS,
@@ -767,8 +768,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
   }
   function enqueueOutbox(item) {
-    // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）
-    if (item?.bubbleEl && item.sessionId) item.bubbleEl.dataset.outboxSessionId = item.sessionId;
+    // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）。
+    // 投递结论从 'queued' 起记（deliverOutboxItem 改写），历史重载时据此判能不能按文字认领（canTextClaimPendingBubble）。
+    if (item?.bubbleEl) {
+      if (item.sessionId) item.bubbleEl.dataset.outboxSessionId = item.sessionId;
+      item.bubbleEl.dataset.outboxOutcome = 'queued';
+    }
     const { queue, dropped } = planOutboxEnqueue(offlineQueue, item, { maxItems: OUTBOX_MAX_ITEMS });
     offlineQueue = queue;
     persistOutbox();
@@ -1347,9 +1352,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         fromOutbox: true,
       }, (err, ack) => {
         const decision = presentOfflineResendAck(err, ack);
-        // 气泡记下最近这次是不是被服务端拒收了（在途轮、续接分叉闸、stale、永久失败）：拒收的没进 transcript，
-        // 清屏重载时不让历史里同文的旧消息认领它（settleCarriedPendingBubbles）。送达了、或超时说不准，就交还给历史去认。
-        item.bubbleEl?.toggleAttribute('data-outbox-rejected', decision.outcome === 'blocked' || decision.outcome === 'permanent');
+        // 气泡记下这次投递的结论；结局不明（超时、服务端让重试）的记一笔、粘住不撤——它可能已写进 transcript，
+        // 只是回执没到。历史重载时据这两样判能不能按文字认领（canTextClaimPendingBubble）。
+        if (item.bubbleEl) {
+          item.bubbleEl.dataset.outboxOutcome = decision.outcome;
+          if (decision.outcome === 'requeue') item.bubbleEl.dataset.outboxMaybeSent = '1';
+        }
         resolve(decision);
       });
     });
@@ -4129,6 +4137,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 迎面一颗永远转圈的假消息。
       if (decision.dropBubble) dropPendingUserBubble(pendingBubble);
       if (decision.requeue) {
+        // 这次在线投递结局不明（超时，或服务端让重试），同 deliverOutboxItem 的 requeue 记一笔
+        pendingBubble.dataset.outboxMaybeSent = '1';
         enqueueOutbox(outboxPayload);
         // 视图仍在本会话时提示已排队；切走则静默入队
         if (displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId) {
@@ -8522,17 +8532,21 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 全量重载后处置被 clearView 保住的未确认气泡。
   // 历史已带回这条 → 丢乐观气泡并移交 clientMessageId（否则随后 user_message 会再新建一颗）。
   // 历史还没有 → 移到末尾。必须在 append 之后做：渲染前先摘会闪一下。
-  // 被服务端拒收过的离线条目（data-outbox-rejected，见 deliverOutboxItem）一定没进 transcript，不认领，直接移到末尾。
+  // 交给 outbox 的气泡多一道闸（canTextClaimPendingBubble）：没有证据说它进了 transcript 就不认领，直接移到末尾。
   // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
     for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
       const tDiv = bubble.querySelector('.whitespace-pre-wrap');
-      const claim = findHistoryClaimForPending({
-        text: tDiv ? tDiv.textContent : '',
-        attNames: bubble.dataset.attNames || '',
-        messages: msgs,
-        rejected: bubble.hasAttribute('data-outbox-rejected'),
-      });
+      const claim = canTextClaimPendingBubble({
+        outboxOutcome: bubble.dataset.outboxOutcome ?? null,
+        maybeSent: Boolean(bubble.dataset.outboxMaybeSent),
+      })
+        ? findHistoryClaimForPending({
+          text: tDiv ? tDiv.textContent : '',
+          attNames: bubble.dataset.attNames || '',
+          messages: msgs,
+        })
+        : null;
       if (!claim) {
         messagesEl.appendChild(bubble); // 同一节点 appendChild = 移动；已绑的监听器与 dataset 都还在
         continue;
