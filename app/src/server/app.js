@@ -2490,6 +2490,10 @@ const workspaceCwdOf = c => routableAuth(c)?.projectKey
 // 分叉点是「worktree 目录已删」——那时驾驶轴必须原样保留（transcript 落在按它算出的 project 目录里，
 // 改掉就是历史加载失败），而展示轴回落父仓，否则三个消费点各报一条互不相干的技术错误。
 const panelCwdOf = c => resolveGoneWorktreeParent(c, workDirs) || c;
+// 会话所在的托管 worktree 已被删掉时给用户的那句话：是哪一棵、记录还在、怎么救。打开 / 分叉 / 回退共用，
+// consequence 说这一步因此做不成什么。
+const worktreeGoneError = (cwd, consequence) => `这个会话的 worktree「${projectNameFromCwd(cwd)}」已被删除，${consequence}。`
+  + '对话记录还在磁盘上，把那棵 worktree 重新建回原路径即可恢复。';
 
 function dedupedResume(cwd, resumeId, extra = {}) {
   const key = resumeId || `fresh:${cwd}`;
@@ -3571,11 +3575,7 @@ registerSocketConnection(io, socket => {
     const live = typeof sessionId === 'string' ? instanceForSession(sessionId) : null;
     const goneWorktree = resolveGoneWorktreeParent(payload?.cwd, workDirs);
     if (goneWorktree && !live) {
-      ack?.({
-        ok: false,
-        error: `这个会话的 worktree「${projectNameFromCwd(payload.cwd)}」已被删除，所以打不开了。`
-          + `对话记录还在磁盘上，把那棵 worktree 重新建回原路径即可恢复。`,
-      });
+      ack?.({ ok: false, error: worktreeGoneError(payload.cwd, '所以打不开了') });
       return;
     }
     // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureAuthorized 同 session:new(#8)：
@@ -3626,6 +3626,13 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:fork', async (payload, ack) => {
     const sessionId = payload?.sessionId;
     const uuid = payload?.uuid;
+    // 树已删（前端送的是驾驶轴，会话的 worktree 被删后它就悬空）：分叉出来的新会话要在那棵树里 spawn，起不来；
+    // 而交给 routeCwd 的话，悬空路径会被判成越界、记一条 scope_violation。与 session:switch 不同，live 实例
+    // 也不放行——switch 对 live 只是换视图，分叉总要新 spawn。
+    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) {
+      if (typeof ack === 'function') ack({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法分叉') });
+      return;
+    }
     const routed = routeCwd(payload?.cwd);
     if (routed === null) {
       if (typeof ack === 'function') ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
@@ -3673,6 +3680,9 @@ registerSocketConnection(io, socket => {
   on(socket, 'session:rewind:candidates', async (payload, ack) => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
+    // 树已删：同 session:fork。回退三步都在这里先拦——要往那棵树里还原文件、再从那里分叉，无处落地；
+    // 清单这一步就说清，免得列出一串点了也做不成的轮次。
+    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
     const routed = routeCwd(payload?.cwd);
     if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
     const cwd = ensureAuthorized(routed);
@@ -3699,6 +3709,7 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
+    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
     const routed = routeCwd(payload?.cwd);
     if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
     const cwd = ensureAuthorized(routed);
@@ -3803,6 +3814,7 @@ registerSocketConnection(io, socket => {
     const reply = (r) => { if (typeof ack === 'function') ack(r); };
     const sessionId = payload?.sessionId;
     const promptUuid = payload?.promptUuid;
+    if (resolveGoneWorktreeParent(payload?.cwd, workDirs)) { reply({ ok: false, error: worktreeGoneError(payload.cwd, '所以没法回退') }); return; }
     const routed = routeCwd(payload?.cwd);
     if (routed === null) { reply({ ok: false, error: OUT_OF_SCOPE_ERROR }); return; }
     const cwd = ensureAuthorized(routed);

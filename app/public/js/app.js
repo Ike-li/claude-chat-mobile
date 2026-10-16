@@ -3912,7 +3912,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       inputEl.dispatchEvent(new Event('input'));
       autosize();
       updateSendButtonState();
-      rewindCommand.openPanel(displayedSessionId, currentCwd);
+      rewindCommand.openPanel(displayedSessionId, drivingCwdOf(displayedInstanceId)); // 驾驶轴，同 requestSessionFork
       return;
     }
     if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
@@ -6366,7 +6366,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 这里只做两件【只对发起方有意义】的事：说清处置建议、把那一轮的原话回填输入框。
   const rewindCommand = createRewindCommandController({
     $, socket, openSheet, closeSheet,
-    getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: currentCwd }),
+    getCurrentSession: () => ({ sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) }),
     onRewound: (res) => {
       // 整体性失败（warning）、哪些文件没恢复（unrestored）、几个链接被跳过（skippedLinks）——
       // 三者可叠加、有轻重，组装在 logic/rewind.js（可单测）。
@@ -8442,17 +8442,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
-    // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
+    // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 cwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
     // 消息的 anchor 和 await 后已变成 B 的 cwd/sessionId 拼到一起发出去。
-    const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
+    // cwd 取驾驶轴：服务端按它找 transcript、也在那里开分叉出来的会话。worktree 会话的 currentCwd 是父仓，
+    // 拿它分叉就是「会话不存在」。
+    const cwdAtRequest = drivingCwdOf(displayedInstanceId), sessionIdAtRequest = displayedSessionId;
     const ok = await appConfirm({
       title: t('从这里分叉新会话？'),
       body: t('会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。'),
       okText: t('分叉'),
     });
     if (!ok) return;
-    if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+    if (drivingCwdOf(displayedInstanceId) !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
       addBar(t('会话已切换，分叉已取消，请重新发起'), 'text-info');
       return;
     }

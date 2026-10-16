@@ -1816,6 +1816,16 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:rewind:candidates sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof callback !== 'function') return;
+    // P0-WT-REWIND：归属校验同 session:fork 的 worktree 那支——真 server 只查传入 cwd 的那一个 project 目录。
+    // 唯一一轮既是首轮（不能分叉对话）又是末轮（改动数未知），字段取值与 listRewindCandidates 一致。
+    if (sessionId === 'mock-session-worktree') {
+      if (cwd !== MOCK_WT_CWD) { callback({ ok: false, error: '会话不存在' }); return; }
+      callback({
+        ok: true,
+        items: [{ promptUuid: 'u-wt-1', text: 'Worktree prompt', timestamp: '2024-01-01T00:00:00Z', changedFiles: null, canForkConversation: false, canRestoreCode: true }],
+      });
+      return;
+    }
     if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
       callback({ ok: false, error: '会话不存在' });
       return;
@@ -1991,7 +2001,8 @@ io.on('connection', socket => {
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}, keepAnchorTurn=${keepAnchorTurn}`);
     if (typeof callback !== 'function') return;
     // P0-RESUME-DIVe：worktree 会话的分叉。归属校验同真 server（sessionFileExists 只查传入 cwd 编码出的那个目录）：
-    // transcript 在驾驶轴（worktree）下，拿工作区轴（父仓）来分叉 → 「会话不存在」。
+    // transcript 在驾驶轴（worktree）下，拿工作区轴（父仓）来分叉 → 「会话不存在」。P0-WT-FORK（长按 / 操作栏分叉）同走这支。
+    // 真 server 的这两侧由 tests/integration/worktree-fork-rewind.test.mjs 钉住，改判法先看那边。
     if (sessionId === 'mock-session-worktree') {
       if (cwd !== MOCK_WT_CWD) { callback({ ok: false, error: '会话不存在' }); return; }
       if (keepAnchorTurn === false || !/^a-wt-\d+$/.test(uuid || '')) { callback({ ok: false, error: 'mock fork source not found' }); return; }
