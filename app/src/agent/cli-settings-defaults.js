@@ -17,6 +17,8 @@
 // L3 误盖掉的历史事实，L3 兜底只是补全"历史事实本就不存在"时的展示/取值，风险与 mode/model
 // 不对称，故单独放行。
 
+import { filterEscalatingDefaultMode } from '@anthropic-ai/claude-agent-sdk';
+
 /**
  * CCM / SDK 支持的权限档（与 @anthropic-ai/claude-agent-sdk PermissionMode 集合一致）。
  * 展示顺序：安全档在前，bypassPermissions 置底。集合由 tests/unit/permission-modes-sdk-sync 锁住。
@@ -100,6 +102,7 @@ export function normalizeEffortUiLevel(level) {
 /**
  * 从 resolveSettings().effective 抽出 L3 三字段（未归一前的原始意图 + 归一后的可用值）+ env 块。
  * 不抛；effective 缺失时返回硬默认形状。
+ * mode 没过仓库信任过滤：要采纳 mode 走 defaultsFromResolvedSettings。
  *
  * env 块：worktree 场景下 CLI 的 local source 解析到主 checkout（2.1.211+ 行为），
  * 但 SDK resolveSettings 按 cwd 正确读到 worktree 的 settings.local.json——所以这里拿到的是权威值。
@@ -129,6 +132,24 @@ export function defaultsFromEffectiveSettings(effective) {
       ? effective.autoContinueAtUsageLimit
       : undefined,
   };
+}
+
+// CLI 启动时按来源拦的只有这两档（2.1.284 / 2.1.301 实测）。SDK 的 filterEscalatingDefaultMode 还会剔
+// project 层的 acceptEdits，比终端严；机主 2026-10-16 选终端等价，所以只把这两档交给它。
+const SOURCE_GATED_MODES = new Set(['bypassPermissions', 'auto']);
+
+/**
+ * L3 的入口：吃 resolveSettings() 的完整结果，defaultMode 是 bypassPermissions / auto 时先过 SDK 的
+ * filterEscalatingDefaultMode 再采纳（APPROVAL-03）。新会话的 mode 只许从这里取。
+ *
+ * resolveSettings 原样报告各层的 defaultMode，包括仓库可控的 project / local 层；而 CCM 把它当显式
+ * permissionMode 交给 SDK（bypassPermissions 还是 CCM 自己在 canUseTool 里放行），CLI 自己那道信任过滤
+ * 一次都轮不到。哪几层不认这两档照 SDK（project、local），被剔掉就落回 default、不回落到更低层
+ * （CLI 忽略后同样落 default）。
+ */
+export function defaultsFromResolvedSettings(resolved) {
+  const gated = SOURCE_GATED_MODES.has(resolved.effective?.permissions?.defaultMode);
+  return defaultsFromEffectiveSettings(gated ? filterEscalatingDefaultMode(resolved) : resolved.effective);
 }
 
 // 审批规则（allow / deny / ask）。数据源与 defaultsFromEffectiveSettings 同一份 effective——
