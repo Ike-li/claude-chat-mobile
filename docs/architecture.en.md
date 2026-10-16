@@ -95,10 +95,30 @@ The project reduces that risk with these rules:
 3. **While the CLI is still active**, Web does not send another message to that session and shows terminal-driver state.
 4. **After the terminal turn ends and passes the quiet-period check**, the mirror lock is released and Web may resume.
 5. **Before a Web takeover send**, if the transcript has grown beyond the current SDK instance, the server disposes that stale instance and resumes from disk before sending.
+   This only absorbs the terminal's writes when they are on the same chain. If the terminal started a separate branch under its old leaf (a fork), a resume can only pick up one branch; see "Resume anchor" below.
 
 **These five rules are the default path, not a hard constraint.** The project controls its own SDK instance; it cannot control the independent process running in your terminal. The mirror lock only gates input on the Web side, and the user can still unlock it explicitly from the read-only state via "force resume now" / "resume anyway" (`requestMirrorResume` / `appendForceResumeAction` in `app/public/js/app.js`, both behind a confirmation that spells out the fork risk). Unlocking merely drops the Web-side lock and **does not stop the terminal process** — if the terminal keeps writing to the same session afterwards, the transcript can still fork into two branches. The escape hatch is deliberate: users often know the terminal is already closed well before the detection chain can prove it.
 
 Polling leaves an observation window of up to one check interval. Session switches, manual mirror refresh, and hook signals can schedule an earlier check, but none of them proves control over another live process.
+
+## Resume anchor
+
+A transcript is a tree (every line carries a `parentUuid`), and each CLI `--resume` puts only one chain of it into the model's context. This project's own resumes (lazy open, switching sessions, the rule-5 swap, changing effort, continuing after idle reclaim) go through the same loader, so the model sees exactly the chain the CLI picks.
+
+**How the chain is picked** (identical across CLI 2.1.281–2.1.301 in zero-token experiments, 2026-10-16): let Kn be the `leafUuid` of the physically last `last-prompt` line and In the physically last non-sidechain message. If Kn exists and is neither In nor an ancestor of In, the CLI resumes from Kn; otherwise from In. Every CLI process re-stamps `last-prompt` to the line **it** wrote last (on exit, after resume, past a size threshold, and from 2.1.301 also at every turn end), so **whoever re-stamps last decides**. The rule is not a public contract; if the CLI changes it, `app/src/sessions/resume-anchor.js` has to follow.
+
+**What gets lost**: a terminal left open on the computer keeps its old leaf in memory. While you continue on the phone, if that terminal writes anything under its old leaf (an away summary, a Remote Control disconnect notice, a local command, a new turn) and then re-stamps after the phone-side process (most often: you come back and exit the terminal), every later resume, the terminal's and this project's alike, continues from the terminal's branch. The phone segment is no longer in the model's context, even though the history view still shows it. In the other direction, if the terminal really ran a turn under its old leaf, a rule-5 swap lets the old SDK process re-stamp last, the phone's branch is picked, and the terminal's turn is left out. One more way to lose it: the SDK child is SIGKILLed before it can re-stamp. That only affects 2.1.284; 2.1.301 has already stamped at the end of each turn.
+
+This project's own dispose → resume does not lose anything: the old process re-stamps `last-prompt` to the phone's last message 4–14 ms after dispose, and the new process reads the file about 210–255 ms after spawn. Before resuming, the server also waits for the session's old process to exit (up to 1.5 s), which turns that margin into a guaranteed order.
+
+**Guards** (`SESSION-04`):
+
+1. **Prediction before resume**: the server applies the rule above (`resume-anchor.js`). If the physically newest conversation message is not on the chain that will be resumed, the finding is attached to the instance. It is not reported when the last `last-prompt` is explicit (the CLI writes `explicit:true` when the user deliberately picks a branch, e.g. `/rewind`), or when the transcript cannot be read (fail-open, same as before the change).
+2. **Send gate**: a message sent on an instance with a finding is rejected with `resume_divergent` and is not recorded for dedup. The front end puts the text back in the input box and opens a sheet that says which side the model would continue from and how many recent messages from which side would be left out, with two choices. "Fork to new session" `forkSession`s a new session from the newest message and moves the text into its input box; the original session is left as is. "Send anyway" resends with a confirmation of which segment it is (the newest message's uuid); the server lets it through and clears the finding. When both branches hold conversation the other lacks, the sheet states how many messages the fork leaves behind.
+3. **Auto-continue after a usage limit** does not send on the user's behalf either; it turns stale (`diverged`) and waits for the user to tap "Continue" on the banner.
+4. **Takeover notice**: when Web sends the first message on a session that the session registry shows as still open in a terminal or the desktop app, it warns once that if that process writes anything or exits later, the next resume will continue from its branch.
+
+**The fix in how you use it**: before leaving the computer, `/exit` in the terminal; when you come back, reopen with `claude -c` or `claude --resume`. With only one live process writing the session at any time, the tree never forks.
 
 ## Continuing automatically after a usage limit resets
 
@@ -213,6 +233,7 @@ See the [README security model](../README.en.md#security-model) for the concise 
 - `app/src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
 - `app/src/server/auto-continue.js` / `app/src/agent/quota-auto-continue.js`: usage-limit auto-continue scheduling (owns its state) and its pure decisions.
 - `app/src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
+- `app/src/sessions/resume-anchor.js`: predicts which chain a CLI resume will pick up, plus the send gate for "resuming would leave part of the conversation out".
 - `app/src/ops/cli-hooks-bridge.js` / `app/src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
 - `app/public/js/app.js` and `app/public/js/app/`: client state, event dispatch, and interaction modules.
 - `tests/gates/contract-check.js`: bidirectional Socket.io event-contract gate.

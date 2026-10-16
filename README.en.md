@@ -115,6 +115,8 @@ The phone is only a **remote control plane**. What actually executes code, reads
 
 **One boundary worth knowing**: a live session has exactly one driver at a time. While the terminal is driving, the Web side is read-only by default; you can explicitly resume from the Web, but that may fork the session. The two never type into the same live Claude process at once.
 
+Before leaving the computer, `/exit` the session in the terminal; when you are back, reopen it with `claude -c` or `claude --resume`. A terminal left open does not know what you said on the phone. If it writes anything or exits later, the next resume continues from its branch, and the phone segment is not in the model's context. If that happens, you are asked before sending: fork a new session that keeps the phone segment, or send anyway.
+
 Dual path, event sync, session takeover: **→ [Architecture guide](docs/architecture.en.md)**
 
 ## Remote access
