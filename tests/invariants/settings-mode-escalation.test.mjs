@@ -1,13 +1,16 @@
 // tests/invariants/settings-mode-escalation.test.mjs —— 仓库自带的 settings 不得把 Web 新会话升级成免审批档
-// 守护：APPROVAL-03（project / local 层 settings 的 defaultMode 不得升级新会话的初始权限档；user 层照常生效）
+// 守护：APPROVAL-03（project / local 层 settings 的 defaultMode 不得把新会话初始档升级成 bypassPermissions / auto；acceptEdits 与 user 层同终端照常生效）
 // 测什么：真 SDK resolveSettings 读一次性目录里的真 settings 文件，走 CCM 采纳 L3 默认的同一条链
-//   （defaultsFromResolvedSettings → resolveFreshPrefs），看「下一条新会话」的权限档：仓库层写的升级档落回
-//   default；user 层写的升级档、仓库层写的非升级档（plan）照常生效
+//   （defaultsFromResolvedSettings → resolveFreshPrefs），看「下一条新会话」的权限档：仓库层写的 bypassPermissions /
+//   auto 落回 default；仓库层写的 acceptEdits、user 层各档、仓库层的 plan 照常生效
 // 不测什么 + 为什么：① 组装根真的走了这条链（ensureCliDefaults 落缓存、FRESH 懒开读缓存）属 S2，见
-//   tests/invariants/server/settings-mode-escalation.test.mjs ② 哪一层、哪一档算升级是 SDK
+//   tests/invariants/server/settings-mode-escalation.test.mjs ② bypass / auto 不认哪几层是 SDK
 //   filterEscalatingDefaultMode 的口径（与 CLI 的信任分层同源），这里只钉「CCM 采纳前过了它」，不逐支重测 SDK
 //   ③ resume 不读 L3 的 mode（读 sessions.json / transcript 末档），不在本条范围
 // 槽位：S1（纯函数 + 一次性目录里的真 settings 文件；真 SDK resolveSettings，不 spawn CLI、零 token）
+//
+// 【acceptEdits 为什么不拦】SDK 的 filterEscalatingDefaultMode 连 project 层的 acceptEdits 也剔，比终端严：
+// CLI 2.1.284 / 2.1.301 的启动代码只按来源拦 bypassPermissions / auto。机主 2026-10-16 选终端等价。
 //
 // 【缺陷的真实形态】2026-10-16 云端全量 review P0-1。resolveSettings 原样报告各层的 defaultMode（SDK 文档明写
 // 它不是安全判定），CCM 拿它当新会话初值，再作为显式 permissionMode 交给 SDK——显式参数 CLI 照单全收，它自己
@@ -60,8 +63,8 @@ async function freshModeWith(layers) {
   return resolveFreshPrefs({ cliDefaults: defaultsFromResolvedSettings(resolved) }).mode;
 }
 
-test('仓库 project 层写的升级档不采纳：新会话落回 default', async () => {
-  for (const mode of ['bypassPermissions', 'auto', 'acceptEdits']) {
+test('仓库 project 层写的 bypassPermissions / auto 不采纳：新会话落回 default', async () => {
+  for (const mode of ['bypassPermissions', 'auto']) {
     assert.equal(await freshModeWith({ project: mode }), 'default',
       `第三方仓库的 .claude/settings.json 写 ${mode}，手机上新会话就以 ${mode} 开——仓库替用户关掉了审批`);
   }
@@ -71,6 +74,13 @@ test('local 层写的 bypassPermissions / auto 同样不采纳', async () => {
   for (const mode of ['bypassPermissions', 'auto']) {
     assert.equal(await freshModeWith({ local: mode }), 'default',
       `.claude/settings.local.json 写 ${mode} 被采纳了——它和 project 层一样在仓库目录里，CLI 不认它授予免审批档`);
+  }
+});
+
+test('acceptEdits 与终端一致：仓库 project / local 层写的照常采纳', async () => {
+  for (const layer of ['project', 'local']) {
+    assert.equal(await freshModeWith({ [layer]: 'acceptEdits' }), 'acceptEdits',
+      `${layer} 层的 acceptEdits 被剔成了 default——终端里 CLI 只按来源拦 bypassPermissions / auto，机主 10/16 定的是与终端一致`);
   }
 });
 

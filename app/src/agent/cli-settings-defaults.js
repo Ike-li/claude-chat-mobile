@@ -134,17 +134,22 @@ export function defaultsFromEffectiveSettings(effective) {
   };
 }
 
+// CLI 启动时按来源拦的只有这两档（2.1.284 / 2.1.301 实测）。SDK 的 filterEscalatingDefaultMode 还会剔
+// project 层的 acceptEdits，比终端严；机主 2026-10-16 选终端等价，所以只把这两档交给它。
+const SOURCE_GATED_MODES = new Set(['bypassPermissions', 'auto']);
+
 /**
- * L3 的入口：吃 resolveSettings() 的完整结果，defaultMode 先过 SDK 的 filterEscalatingDefaultMode 再采纳
- * （APPROVAL-03）。新会话的 mode 只许从这里取。
+ * L3 的入口：吃 resolveSettings() 的完整结果，defaultMode 是 bypassPermissions / auto 时先过 SDK 的
+ * filterEscalatingDefaultMode 再采纳（APPROVAL-03）。新会话的 mode 只许从这里取。
  *
  * resolveSettings 原样报告各层的 defaultMode，包括仓库可控的 project / local 层；而 CCM 把它当显式
  * permissionMode 交给 SDK（bypassPermissions 还是 CCM 自己在 canUseTool 里放行），CLI 自己那道信任过滤
- * 一次都轮不到。过滤口径照 SDK：bypassPermissions / auto 不认 project、local，acceptEdits 不认 project；
- * 被剔掉就落回 default、不回落到更低层（CLI 忽略后同样落 default）。
+ * 一次都轮不到。哪几层不认这两档照 SDK（project、local），被剔掉就落回 default、不回落到更低层
+ * （CLI 忽略后同样落 default）。
  */
 export function defaultsFromResolvedSettings(resolved) {
-  return defaultsFromEffectiveSettings(filterEscalatingDefaultMode(resolved));
+  const gated = SOURCE_GATED_MODES.has(resolved.effective?.permissions?.defaultMode);
+  return defaultsFromEffectiveSettings(gated ? filterEscalatingDefaultMode(resolved) : resolved.effective);
 }
 
 // 审批规则（allow / deny / ask）。数据源与 defaultsFromEffectiveSettings 同一份 effective——

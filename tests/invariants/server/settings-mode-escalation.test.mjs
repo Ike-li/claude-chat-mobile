@@ -1,5 +1,5 @@
 // tests/invariants/server/settings-mode-escalation.test.mjs —— 真 server 上，仓库 settings 的升级档进不了新会话
-// 守护：APPROVAL-03（project / local 层 settings 的 defaultMode 不得升级新会话的初始权限档；user 层照常生效）
+// 守护：APPROVAL-03（project / local 层 settings 的 defaultMode 不得把新会话初始档升级成 bypassPermissions / auto；acceptEdits 与 user 层同终端照常生效）
 // 测什么：真 app/server.js 子进程上，已连接文件夹里的仓库提交了 permissions.defaultMode=bypassPermissions，
 //   在它的新会话页发首条消息懒开出来的 FRESH 实例，权限档是 default。正对照：另一个仓库写 plan，同一条路径
 //   开出来就是 plan，证明这条路径读到了仓库 settings、不是读不到才落 default
