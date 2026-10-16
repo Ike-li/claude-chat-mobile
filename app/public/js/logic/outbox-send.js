@@ -268,7 +268,12 @@ export function presentOfflineResendAck(err, ack) {
 // 而那一维从没对齐过）。合成一个函数后，"一致" 由语言保证，不再靠注释纪律。
 //
 // 两条判据分工：
-// ① instanceId 非空 → 严格相等。同一工作区可并存多个会话，cwd 相同也不得改判。
+// ① instanceId 非空 → 条目与视图两侧的会话都已知时按会话认，否则严格比实例号。同一工作区可并存多个会话，
+//    cwd 相同也不得改判。按会话认是跟着服务端走：离线重放带着入队时的 sessionId，服务端按它改投（MSG-02，
+//    instance-routing.js 的 resolveInstanceTarget）。规则 5 置换、切 effort 只换实例号不换会话——同一批的
+//    第 1 条触发置换，新号的 instances 广播先于它的 ack 到达，于是它和后面各条都拿着旧号去对新视图，按实例号比
+//    全成了「别的会话」；/clear 反过来，实例号没变、会话换了，服务端不投给它。viewingSessionId 取 instances
+//    快照里当前查看实例此刻跑的会话（与 viewingInstanceId 同一份快照）；查不到时回落实例号。
 // ② instanceId 为空（入队时实例还没开：新会话首发、或在线 ack 超时把首发消息推进 outbox）→
 //    按 cwd 判。cwd 任一侧缺失/空串就判不属于，与服务端 shouldRejectOutboxLazyOpen 的 fail-closed
 //    对齐（它同样拒 cwd.trim() === ''），不在 UI 上谎称它属于眼下这个会话。
@@ -279,9 +284,14 @@ export function presentOfflineResendAck(err, ack) {
 //    「一个工作区开了两个会话」或「离线期间 session:new 清过指针」时，这里判 true 而服务端可能
 //    投给另一个会话。可达性窄（要 ≥2 个同目录会话，或离线 session:new），代价仅是文案归属标错，
 //    故接受启发式而不引入 instances 列表依赖把纯函数复杂化。
-export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null } = {}) {
+export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null, viewingSessionId = null } = {}) {
   if (!item || typeof item !== 'object') return false;
-  if (item.instanceId != null) return item.instanceId === viewingInstanceId;
+  if (item.instanceId != null) {
+    const itemSid = typeof item.sessionId === 'string' ? item.sessionId : '';
+    const viewSid = typeof viewingSessionId === 'string' ? viewingSessionId : '';
+    if (itemSid && viewSid) return itemSid === viewSid;
+    return item.instanceId === viewingInstanceId;
+  }
   const itemCwd = typeof item.cwd === 'string' ? item.cwd.trim() : '';
   const viewCwd = typeof viewingCwd === 'string' ? viewingCwd.trim() : '';
   return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
@@ -311,13 +321,13 @@ export function outboxNoticePlacement({
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。
-export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = null, remainingItems = [], hadViewingOk = false } = {}) {
+export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = null, viewingSessionId = null, remainingItems = [], hadViewingOk = false } = {}) {
   // 首页（无 viewing 实例）恒不 busy：那里没有会话承载运行条，且 instances 广播里的 busy 看门狗
   // 被 `newViewing && newViewing === displayedInstanceId` 包着（app.js），newViewing 为 null 时整段
   // 跳过 ⇒ 此处一旦置上就没人清得掉，主按钮卡成「停止」直到下次 clearView。下面 hadViewingOk 那条
   // 早有同款 `viewingInstanceId != null` 前提，这里补齐 viewingPending 那一半（按 cwd 归属后才够得着）。
   if (viewingInstanceId == null) return false;
-  const viewingPending = remainingItems.some(it => outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd }));
+  const viewingPending = remainingItems.some(it => outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd, viewingSessionId }));
   if (viewingPending) return true;
   // 本批对当前 viewing 成功发出 → 短暂 busy 等 result（与在线一致）；非 viewing 成功不抬 busy
   if (hadViewingOk && viewingInstanceId != null) return true;
@@ -328,7 +338,7 @@ export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = nu
 // 是【入队时刻】那个实例——两者不是一回事。不标注就会读成「这条排队消息在本会话发了」，
 // 叠上服务端 sysTo 的「目标会话已关闭」（同样贴当前视图）尤其像串会话。
 // 归属判据走 outboxItemTargetsViewing（与 shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 同一份）。
-export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, viewingCwd = null } = {}) {
+export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, viewingCwd = null, viewingSessionId = null } = {}) {
   const list = Array.isArray(items) ? items : [];
   const total = list.length;
   // 冷启动/刷新后 connect 即 drain（app.js 的 socket.on('connect')），而横幅在第一个 await 之前同步
@@ -336,7 +346,7 @@ export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, vi
   // 不标注：说「发往其它会话」和说「本会话」一样是编的。foreign 归 0 自然走下面不带标注的中性文案。
   const hasViewContext = viewingInstanceId != null || viewingCwd != null;
   const foreign = hasViewContext
-    ? list.filter(it => !outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd })).length
+    ? list.filter(it => !outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd, viewingSessionId })).length
     : 0;
   let text;
   if (foreign === 0) {

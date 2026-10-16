@@ -302,6 +302,12 @@ const MOCK_RESUME_DIVERGENCE_TTURN = Object.freeze({
   droppedCount: 2, anchorOnlyCount: 2, anchorEntrypoint: 'sdk-ts', anchorAt: '2024-01-01T00:15:00Z',
 });
 const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
+// P0-02d4：武装「Archived Planning Session 的下一条离线重放触发规则 5 置换」。顺序照真 server：externalDirty → dispose 旧实例
+// → resume 新实例 → 广播 instances → send → 广播 turnRunning=true → ack ok。前端先收到同一会话换了实例号，再收到这条的 ack，
+// 同一批后面各条还拿着旧号。终端写过盘才会置换，所以新实例的 sync:since 报磁盘 ahead，前端清屏重载，排着的气泡随之脱离 DOM。
+// 一次性：置换一次就解除。
+let outboxReplaySwapArmed = null;
+let outboxReplaySwapReloadInstanceId = null;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -579,6 +585,8 @@ function resetMockState() {
   syncAckTimeoutArmed = false;
   sendTransientFailArmed = false;
   resumeDivergenceArmed = null;
+  outboxReplaySwapArmed = null;
+  outboxReplaySwapReloadInstanceId = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -2866,6 +2874,14 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // P0-02d4：置换出来的新实例头一次 sync 报磁盘 ahead（终端写过盘才会置换。真 server 在缓冲为空时报 diskLen，缓冲里已有
+    // 这一轮时报 diskExternalLen，两者都让前端清屏重载），排着的离线气泡随之脱离 DOM。一次性。
+    if (outboxReplaySwapReloadInstanceId && instanceId === outboxReplaySwapReloadInstanceId) {
+      outboxReplaySwapReloadInstanceId = null;
+      console.log('[mock] P0-02d4 — 置换后的新实例 sync:since 报 diskLen，逼出清屏重载');
+      ack(0, { diskLen: 99 });
+      return;
+    }
     // P0-DUP-OPT ②：ack 带 diskLen 大于前端已渲染的条数（timeline fixture 是 10 条），
     // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 只在 replayed=0 时回这个字段
     // （replayed>0 时恒 null，外部写入改由 diskExternalLen 报），mock 默认两个都不回（null→0），
@@ -3185,6 +3201,7 @@ io.on('connection', socket => {
       armResumeDivergenceSwap: () => {
         resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE, swap: true };
       },
+      armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5509,6 +5526,22 @@ io.on('connection', socket => {
       }
       resumeDivergenceArmed = null;
     }
+    // P0-02d4：离线重放的第 1 条先置换（见 outboxReplaySwapArmed）。位置照真 server：置换在在途轮闸之前，新实例刚 resume、
+    // 还没有在跑的轮，这一条照常过闸；下面「入队即在跑」之后，同一批后面各条才撞上它。
+    const replaySwapInst = outboxReplaySwapArmed && payload?.fromOutbox === true
+      ? mockInstances.find(i => i.instanceId === payload?.instanceId && i.sessionId === outboxReplaySwapArmed.sessionId)
+      : undefined;
+    if (replaySwapInst) {
+      outboxReplaySwapArmed = null;
+      const oldId = replaySwapInst.instanceId;
+      replaySwapInst.instanceId = `${oldId}_swapped`;
+      if (viewingInstanceId === oldId) viewingInstanceId = replaySwapInst.instanceId;
+      outboxReplaySwapReloadInstanceId = replaySwapInst.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
     const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
@@ -5529,6 +5562,15 @@ io.on('connection', socket => {
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
     // 同真 server 回投到的实例：离线重放靠它认出「本批第一条开出来的实例」，后续同意图的条目改投它。
     // 懒开的实例恒为 inst_fresh（openFreshMockInstance）。
+    if (replaySwapInst) {
+      // 入队即在跑：真 server 在 ack 之前广播 turnRunning=true。之后不再推任何事件，这一轮一直挂着。
+      replaySwapInst.state = 'busy';
+      replaySwapInst.turnRunning = true;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
     if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' });
     const resetGen = mockResetGeneration; // 见 mockResetGeneration：下面的 await 醒来时用它判断是否已换了用例
     const messagePayload = payload && typeof payload === 'object' ? payload : {};

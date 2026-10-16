@@ -600,6 +600,18 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
     assert.equal(out.foreign, 1);
     assert.match(out.text, /其它会话/);
   });
+
+  // drain 开始前同一会话已换了实例号：在线发出去的那条没被确认、转进重发前置换的广播先到了，或离线期间另一台
+  // 设备切了 effort。服务端按条目里的会话改投，这条就是发往本会话的；横幅要把视图会话传给归属判据才认得出。
+  test('同一会话换了实例号 → 不标注发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'old', sessionId: 's1' }],
+      viewingInstanceId: 'new',
+      viewingSessionId: 's1',
+    });
+    assert.equal(out.foreign, 0);
+    assert.doesNotMatch(out.text, /其它会话/);
+  });
 });
 
 // 归属判据抽成单一函数：此前 planOutboxDrainNotice / shouldBusyAfterOfflineBatch / app.js 的
@@ -612,6 +624,9 @@ test.describe('outboxItemTargetsViewing（三处共用的归属判据）', () =>
   test('instanceId 不等 → 不属于', () => {
     assert.equal(outboxItemTargetsViewing({ instanceId: 'x' }, { viewingInstanceId: 'v' }), false);
   });
+
+  // 条目与视图两侧都带会话时按会话认的那几条（置换换号、/clear、缺一侧回落）是红线，
+  // 在 tests/invariants/instance-identity.test.mjs。
 
   test('两边 instanceId 同为 null 且无 cwd → 不得配成一对', () => {
     assert.equal(outboxItemTargetsViewing({ instanceId: null }, { viewingInstanceId: null }), false);
@@ -687,6 +702,15 @@ test('shouldBusyAfterOfflineBatch: 剩余首发项 cwd 同当前视图 → busy'
     viewingInstanceId: 'v',
     viewingCwd: '/w/a',
     remainingItems: [{ instanceId: null, cwd: '/w/a' }],
+    hadViewingOk: false,
+  }), true);
+});
+
+test('shouldBusyAfterOfflineBatch: 同一会话换了实例号，剩余项拿着旧号 → busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'new',
+    viewingSessionId: 's1',
+    remainingItems: [{ instanceId: 'old', sessionId: 's1' }],
     hadViewingOk: false,
   }), true);
 });

@@ -133,6 +133,12 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armResumeDivergenceSwap(); },
     },
     {
+      // P0-02d4：Archived Planning Session 的下一条离线重放触发规则 5 置换（同一会话换成新实例），新实例的 sync:since
+      // 报磁盘 ahead 逼出清屏重载。同一批后面各条拿着旧号撞上第 1 条开跑的那轮。
+      command: 'test:arm-outbox-replay-swap',
+      run: async () => { getContext().armOutboxReplaySwap(); },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。
