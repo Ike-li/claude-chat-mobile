@@ -8,10 +8,10 @@
 // 两处实测撞见、单靠读代码不会想到的真实行为，记录下来避免后来者重踩：
 // ①用 Write 工具而非 Bash——`echo` 这类只读/无副作用命令，当前 claude CLI 有内置"安全命令"启发式，
 //   直接跳过 canUseTool、根本不触发 permission_request（与本项目 settings 白名单无关，是 SDK 内部行为）。
-// ②两条用例分处两个 WORK_DIRS 白名单目录（dirA/dirB）、各自独立 AgentSession——同一 cwd 内 Write 一旦
-//   被批准，SDK 会隐含下发 setMode→acceptEdits suggestion（resolvePermission 对 modeUpdate 无条件应用，
-//   见 agent.js 注释），导致同会话后续 Write 调用直接跳过 canUseTool；若两个用例共用一个会话，第二个
-//   永远等不到 permission_request。用两个 cwd 而非重启 server：app/server.js 用动态 import()，同进程二次
+// ②两条用例分处两个 WORK_DIRS 白名单目录（dirA/dirB）、各自独立 AgentSession——Write 的审批请求附带
+//   setMode→acceptEdits suggestion，当时 resolvePermission 不论是否「总是允许」都应用它，同会话后续 Write
+//   直接跳过 canUseTool；若两个用例共用一个会话，第二个永远等不到 permission_request。2026-10-16 起普通允许
+//   不再应用它（全量 review P0-3），但没有拿真 turn 重验过，两个 cwd 的布局照旧保留。用两个 cwd 而非重启 server：app/server.js 用动态 import()，同进程二次
 //   import 会命中 ESM 模块缓存、不会真正重新执行 preflight/listen（实测验证过，故不用「重启」方案）。
 //   ③user:message 的 payload.cwd 只在「当前无可路由实例」时才生效（routeInstance(undefined) 优先回落到
 //   viewingInstanceId，实测第一版直接在第二条消息带 cwd:dirB 仍复用了第一条消息留下的 dirA 实例）——
