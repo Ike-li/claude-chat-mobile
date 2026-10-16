@@ -359,6 +359,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 「无文件夹」新会话页的 cwd 是 scratch 根：目录要等首条消息才建，服务端也不让浏览根本身（根下是所有无文件夹
+  // 会话）。顶栏胶囊此前照样露出来，一点就是「无法加载：这个目录不在已连接的文件夹里」（2026-10-16 真机，
+  // 零文件夹安装每次点 ＋ 都落在这一页）。会话开起来之后胶囊指向它自己的 scratch 目录，长按看到的也得是那个目录。
+  test('P0-PICK-16 无文件夹：新会话页不给顶栏文件夹入口；会话开起来后入口指向它自己的 scratch 目录', async ({ page }) => {
+    const browsed: string[] = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('"browse:list"')) {
+        browsed.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]?.cwd);
+      }
+    }));
+    await gotoMock(page);
+    await waitForIdle(page);
+    await openPickerFromCompose(page);
+    await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
+    await expect(page.locator('[data-testid="compose-project-pill"]')).toContainText('无文件夹');
+    await expect(page.locator('#topContextPill'), '还没有目录可看，入口点开只会报「不在已连接的文件夹里」').toBeHidden();
+
+    await sendChatMessage(page, '在无文件夹里说句话');
+    const pill = page.locator('#topContextPill');
+    await expect(pill).toBeVisible();
+    await expect(pill, '长按看到的是 scratch 根，而点开浏览的是会话自己的目录').toHaveAttribute('title', `工作区：浏览或查看改动 · ${SCRATCH}/scratch-2026-09-24-mock01`);
+    await pill.click();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
+    await expect(page.locator('[data-testid="browse-entry"]').first()).toBeVisible();
+    expect(browsed).toEqual([`${SCRATCH}/scratch-2026-09-24-mock01`]);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-PICK-6 无文件夹里打 @：新会话页说「无匹配文件」而不是报越界；会话开起来之后在它自己的目录里找', async ({ page }) => {
     await openPickerFromCompose(page);
     await picker(page).locator('[data-testid="folder-picker-no-folder"]').click();
