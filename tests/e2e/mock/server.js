@@ -1798,6 +1798,16 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:rewind:candidates sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof callback !== 'function') return;
+    // P0-WT-REWIND：归属校验同 session:fork 的 worktree 那支——真 server 只查传入 cwd 的那一个 project 目录。
+    // 唯一一轮既是首轮（不能分叉对话）又是末轮（改动数未知），字段取值与 listRewindCandidates 一致。
+    if (sessionId === 'mock-session-worktree') {
+      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') { callback({ ok: false, error: '会话不存在' }); return; }
+      callback({
+        ok: true,
+        items: [{ promptUuid: 'u-wt-1', text: 'Worktree prompt', timestamp: '2024-01-01T00:00:00Z', changedFiles: null, canForkConversation: false, canRestoreCode: true }],
+      });
+      return;
+    }
     if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived') {
       callback({ ok: false, error: '会话不存在' });
       return;
@@ -1972,6 +1982,36 @@ io.on('connection', socket => {
     const { sessionId, cwd, uuid, keepAnchorTurn } = payload || {};
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}, keepAnchorTurn=${keepAnchorTurn}`);
     if (typeof callback !== 'function') return;
+    // 收尾对齐真 server 的 finishOpenFocus：建/聚焦新实例，viewingCwd 落工作区轴（worktree 归父仓），广播，ack。
+    const focusForked = (seed) => {
+      let forkedInst = mockInstances.find(i => i.instanceId === seed.instanceId);
+      if (!forkedInst) {
+        forkedInst = { ...seed, state: 'idle', permissionMode: 'default', effort: null, model: 'claude-3-5-sonnet' };
+        mockInstances.push(forkedInst);
+      }
+      viewingInstanceId = forkedInst.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart,
+          viewingInstanceId,
+          viewingCwd: workspaceCwdOf(forkedInst.cwd),
+          ...mockDirFields(),
+          instances: mockInstances, service: mockServicePayload()
+        }
+      });
+      callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
+    };
+    // P0-WT-FORK：worktree 会话。真 server 的 session:fork 先 sessionFileExists(cwd, id)，只查这个 cwd 编码出来的
+    // 那一个 project 目录——transcript 在驾驶轴（worktree）下，拿工作区轴（父仓）来分叉必然「会话不存在」
+    // （同 session:history 里 mock-session-worktree 那一支）。新会话由 dedupedResume(cwd, newId) 开在同一棵树里。
+    // 真 server 的这两侧由 tests/integration/worktree-fork-rewind.test.mjs 钉住，改判法先看那边。
+    if (sessionId === 'mock-session-worktree') {
+      const wt = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
+      if (cwd !== wt) { callback({ ok: false, error: '会话不存在' }); return; }
+      if (keepAnchorTurn === false || uuid !== 'a-wt-1') { callback({ ok: false, error: 'mock fork source not found' }); return; }
+      focusForked({ instanceId: 'inst_worktree_forked', cwd: wt, sessionId: 'mock-session-worktree-forked', title: 'Worktree Driving Session (fork)' });
+      return;
+    }
     // 【护栏随协议翻转】2026-09-18 起锚点由服务端对着 transcript 算（planFork），前端只送
     // 「这条气泡自己的 uuid + 语义标志」。于是这道护栏守的东西换了——不再是「只收 assistant 侧」，
     // 而是【uuid 侧别必须与 keepAnchorTurn 一致】：
@@ -1993,32 +2033,7 @@ io.on('connection', socket => {
       callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
       return;
     }
-    const forkedId = 'inst_forked';
-    let forkedInst = mockInstances.find(i => i.instanceId === forkedId);
-    if (!forkedInst) {
-      forkedInst = {
-        instanceId: forkedId,
-        cwd: '/Users/you/code/claude-chat-mobile',
-        sessionId: 'mock-session-forked',
-        title: 'Archived Planning Session (fork)',
-        state: 'idle',
-        permissionMode: 'default',
-        effort: null,
-        model: 'claude-3-5-sonnet'
-      };
-      mockInstances.push(forkedInst);
-    }
-    viewingInstanceId = forkedInst.instanceId;
-    io.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'instances', payload: { canRestart: mockCanRestart,
-        viewingInstanceId,
-        viewingCwd: forkedInst.cwd,
-        ...mockDirFields(),
-        instances: mockInstances, service: mockServicePayload()
-      }
-    });
-    callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
+    focusForked({ instanceId: 'inst_forked', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-forked', title: 'Archived Planning Session (fork)' });
   });
 
   // 存量 fixture 统一落在「今天、彼此相差 1 秒」：消息流时间戳只会在每段历史顶部多一行日期，
@@ -2220,6 +2235,18 @@ io.on('connection', socket => {
         messages: [
           { role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' },
           { role: 'assistant', content: 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
+        ]
+      });
+    } else if (sessionId === 'mock-session-worktree-forked') {
+      // P0-WT-FORK：分叉出来的新会话同样落在那棵 worktree 的 project 目录里，归属校验同上一支。
+      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') {
+        callback({ messages: [], error: '会话不存在' });
+        return;
+      }
+      callback({
+        messages: [
+          { role: 'user', content: 'Worktree prompt', uuid: 'u-wtf-1' },
+          { role: 'assistant', content: 'WORKTREE_FORK_READY', uuid: 'a-wtf-1' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {

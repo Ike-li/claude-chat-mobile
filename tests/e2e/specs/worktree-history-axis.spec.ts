@@ -52,6 +52,53 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 分叉同样是「按 cwd 去磁盘找这个会话」：真 server 的 session:fork 先 sessionFileExists(cwd, id)，
+  // 只查这个 cwd 编码出来的那一个 project 目录，worktree 会话的 transcript 在驾驶轴那边。
+  // 送工作区轴（父仓）就是「会话不存在」，新会话也就开不到那棵 worktree 里去。
+  // 长按气泡与操作栏「分叉」走同一个 requestSessionFork，这里点按钮（长按只绑 touch，见 history-fork.spec.ts）。
+  test('P0-WT-FORK worktree 会话里点「分叉」：按驾驶轴分叉，新会话开在同一棵 worktree', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+    await expect(page.locator('#messages')).toContainText('WORKTREE_HISTORY_LOADED', { timeout: 15_000 });
+
+    const bubble = page.locator('[data-testid="assistant-message"]', { hasText: 'WORKTREE_HISTORY_LOADED' });
+    await bubble.locator('[data-testid="fork-action"]').click();
+    await expect(page.locator('#confirmTitle')).toContainText('分叉', { timeout: 3_000 });
+    await page.locator('#confirmOk').click();
+
+    // 分叉出来的会话历史有自己的文案，出现了才说明真切过去了。mock 只在驾驶轴上认它（同真 server），
+    // 所以这一条同时证明了「分叉送对了 cwd」和「切过去之后拉历史也送对了 cwd」。
+    await expect(page.locator('#messages')).toContainText('WORKTREE_FORK_READY', { timeout: 10_000 });
+    await expect(page.locator('#messages')).not.toContainText('会话不存在');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // `/rewind` 同一类：三步（候选清单 / 预览 / 执行）都按面板打开那一刻冻结的 cwd 去找 transcript，
+  // 第一步拿错了轴，清单处就是「会话不存在」，后两步根本到不了。
+  test('P0-WT-REWIND worktree 会话里 /rewind：候选清单按驾驶轴读出来', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Worktree Driving Session');
+    await expect(page.locator('#messages')).toContainText('WORKTREE_HISTORY_LOADED', { timeout: 15_000 });
+
+    // 同 history-fork.spec.ts 的 runRewindCommand：空闲无内容时 #btnSend 是 hidden 的，要等 input 事件把它露出来
+    await page.locator('#input').fill('/rewind');
+    await expect(page.locator('#btnSend')).toBeVisible({ timeout: 5_000 });
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#rewindModal')).toBeVisible({ timeout: 3_000 });
+
+    await expect(page.locator('#rewindList')).toContainText('Worktree prompt', { timeout: 5_000 });
+    await expect(page.locator('#rewindList')).not.toContainText('会话不存在');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // worktree 目录被删掉之后（真机会话 5a8793ca）：ExitWorktree 对 CCM 自己建的树是 no-op，
   // 模型转而用 Bash `git worktree remove`，而 Bash 的 cd 改不了会话 cwd —— 驾驶轴就此悬空。
   // 那之后四个消费点各报一条互不相干的技术错误：文件面板「路径不在授权范围内」、改动面板
