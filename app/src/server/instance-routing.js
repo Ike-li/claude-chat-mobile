@@ -30,6 +30,8 @@
 // 规则 5 置换、切 effort 都是 dispose + resume，换号不换会话；同一批离线消息的第 1 条触发了置换，后面各条还拿着
 // 旧号（2026-10-16 review P2）。没有活实例（空闲回收了、用户关掉了）照旧 stale：不替用户把会话重新拉起来。
 // 改投之后与客户端直接拿着那个实例的句柄来发同路，下游的规则 5 置换、续接分叉闸、在途轮闸照样过。
+// 本函数只看此刻登记着的实例：置换进行到一半（旧实例已移出、新实例还没登记）时它查不到，调用方（user:message）
+// 在落 stale 之前先等同会话在途的续接（resumeInFlight）落定，再调一次。
 export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, opts = {}) {
   if (requestedId == null) {
     if (opts.allowViewingFallback === false) return { id: null, stale: false };

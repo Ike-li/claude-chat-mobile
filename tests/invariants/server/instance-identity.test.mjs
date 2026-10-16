@@ -8,6 +8,8 @@
 //       ④ 同一份 review 的 P2「离线同一批第 2 条起被判 stale」：终端写过之后，第 1 条触发规则 5 置换（换了实例号），
 //          第 2 条带着置换前的句柄 → 必须跟到这个会话的新实例上：撞上第 1 条的在途轮落 busy（前端「未发送 + 重发」），
 //          轮次结束后同一条重发送进同一个会话，而不是「目标会话已关闭」永久失败
+//       ⑤ PR #218 review（Codex P2）：另一台设备正在置换同一会话（这里用切 effort 的重路径）时到达的重放——旧实例已移出、
+//          新实例还没登记，改投查不到它。必须等那次续接落定再判，送进新实例，而不是在窗口里判 stale
 // 槽位：S2（真 app/server.js 子进程，①② 各起两次 + 一次性 CCM_DATA_DIR + 可驱动假 CLI）
 //
 // ⚠ 必须真 spawn 两次（理由同 approval-restart.test.mjs）：「进程真的重启过、计数真的归零过」正是要证明的事，
@@ -74,7 +76,8 @@ async function withBoot({ projA, projB, data }, env, fn) {
           const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时：${JSON.stringify(payload)}`)), 15000);
           sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
         });
-        return { events, call };
+        const emit = (event, payload) => sock.emit(event, payload); // 没有 ack 的事件（如 user:setEffort）
+        return { events, call, emit };
       },
     });
   } finally {
@@ -279,5 +282,57 @@ test('MSG-02（review P2）：第 1 条触发规则 5 置换之后，同一批�
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
     rmSync(projectDir, { recursive: true, force: true });  // safe-rm: 目录名由本用例一次性 cwd 编码而来
+  }
+});
+
+// ⑤ 置换的两条路径（externalDirty、切 effort 的重路径）都是先 disposeInstance（旧实例同步移出），再 await dedupedResume；
+// 新实例要等 openResumeInstance 里「等同会话旧进程退出」与几路读盘都走完才登记。这段窗口里 resumeInFlight 已经有
+// 这个会话，instanceForSession 却查不到任何实例。
+test('MSG-02（PR #218 review）：另一台设备正在置换同一会话时到达的重放，等置换落定后送进新实例，不得判 stale', async () => {
+  const dirs = makeRoot();
+  const env = {
+    CCM_FAKE_CLAUDE_MODE: 'turn',
+    // 旧进程读到 stdin EOF 后隔 500ms 才退（往一次性目录里的文件追加一行再退）：置换里「等同会话旧进程退出」那一步
+    // 因此至少等这么久，窗口被撑开到能确定地打进去。不设的话假 CLI 立刻退，窗口只有几十毫秒，用例赌的是调度。
+    CCM_FAKE_CLAUDE_EXIT_APPEND: join(dirs.root, 'fake-exit.log'),
+  };
+  try {
+    await withBoot(dirs, env, async ({ connect }) => {
+      const phone = await connect('phone');
+      const laptop = await connect('laptop');
+      const opened = await phone.call('user:message', { text: '在线时说的', cwd: dirs.projA, clientMessageId: 'r-0' });
+      assert.equal(opened.ok, true, `前提：首条消息要开出实例，实际 ${JSON.stringify(opened)}`);
+      const handle = opened.instanceId;
+      const { sessionId } = await turnDone(phone.events, handle);
+      assert.ok(sessionId, '前提：回合收尾时实例要已有会话');
+
+      // 另一台设备切思考强度：先切到具体档（轻路径，只发控制请求、不换实例），再切回「没指定」——这一步要置换实例
+      laptop.emit('user:setEffort', { instanceId: handle, level: 'high' });
+      await waitForCondition(
+        () => phone.events.some(e => e.type === 'effort_mode' && e.instanceId === handle && e.payload?.level === 'high'),
+        { label: '轻路径切到 high（置换的前提：回到「没指定」才走重路径）' },
+      );
+      laptop.emit('user:setEffort', { instanceId: handle, level: null });
+      // 重路径在 disposeInstance 之前同步发这条：收到它时旧实例已移出，新实例还在等旧进程退出
+      await waitForCondition(
+        () => laptop.events.some(e => e.type === 'system' && e.instanceId === handle && e.payload?.kind === 'resuming'),
+        { label: '切 effort 的重路径开始置换' },
+      );
+
+      const replay = await phone.call('user:message', {
+        text: '离线时排着的', cwd: dirs.projA, instanceId: handle, sessionId, clientMessageId: 'q-race', fromOutbox: true,
+      });
+      assert.notEqual(replay.stale, true,
+        `置换进行中到达的重放被判成「目标会话已关闭」，前端会永久停止重试：那个会话正在续接，几百毫秒后就有新实例。实际 ${JSON.stringify(replay)}`);
+      assert.equal(replay.ok, true, `等置换落定后应送进新实例，实际 ${JSON.stringify(replay)}`);
+      assert.notEqual(replay.instanceId, handle, '前提：重放落在置换出来的新实例上（旧号已作废）');
+      await sleep(250); // ack 已回，服务端要广播的都已发出，这里只等它到达客户端
+      const landed = phone.events.filter(e => e.type === 'user_message' && e.payload?.clientMessageId === 'q-race');
+      assert.deepEqual(landed.map(e => ({ instanceId: e.instanceId, sessionId: e.sessionId })),
+        [{ instanceId: replay.instanceId, sessionId }],
+        '重放要恰好送进一次，落在这个会话置换后的实例上');
+    });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
   }
 });
