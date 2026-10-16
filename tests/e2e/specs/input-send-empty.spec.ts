@@ -169,8 +169,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
   // 离线条目还拿着入队时的旧号。归属按实例号比的话，① 第 1 条明明投给了眼前这个会话，却被判成「别的会话」，批后
   // setBusy(false) 收掉新实例正在跑那轮的运行条 ② 第 2 条撞上那轮落「未发送 + 重发」，而置换后的清屏重载已把它的气泡
-  // 摘下 DOM，提示写进摘下的节点，用户看不见这条没发出去。
-  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」挂在看得见的地方', async ({ page }) => {
+  // 摘下 DOM，提示写进摘下的节点，哪儿都找不到。
+  // 只守到「提示进了当前会话的消息流」，不守它在不在视口里：负 ack 先于重载的历史到达，提示条先插进 #messages，
+  // 历史随后 appendChild 接在它下面，于是它落在整段历史上方（实测 top 为负、要往上翻）。离线气泡不在 clearView
+  // 保住未确认气泡的那个发送窗口里，这是另一处的事，没在这里修。
+  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」落在当前会话里', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
     await sendChatMessage(page, 'test:arm-outbox-replay-swap');
@@ -192,8 +195,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await waitUntilConnected(page);
 
-    // 「重发」与批后结算 busy 在同一段同步代码里（markOutboxBlocked 之后紧跟 finally），看得见它时这一批已经收尾
-    await expect(page.locator('[data-testid="outbox-resend"]'), '第 2 条的「未发送 + 重发」不在当前界面上').toBeVisible({ timeout: 10_000 });
+    // 「重发」与批后结算 busy 在同一段同步代码里（markOutboxBlocked 之后紧跟 finally），找得到它时这一批已经收尾
+    await expect(page.locator('[data-testid="outbox-resend"]'), '第 2 条的「未发送 + 重发」没进当前会话的消息流（写进了脱离 DOM 的旧气泡）').toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#streamLiveStatus'), '第 1 条在新实例上开跑的那轮，运行条被批后结算收掉了').toBeVisible();
     await expectNoBrowserErrors(page);
   });
