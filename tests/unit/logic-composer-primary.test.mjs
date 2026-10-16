@@ -602,7 +602,7 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
   });
 
   // drain 开始前同一会话已换了实例号：在线发出去的那条没被确认、转进重发前置换的广播先到了，或离线期间另一台
-  // 设备切了 effort。服务端按条目里的会话改投（MSG-02），这条就是发往本会话的。
+  // 设备切了 effort。服务端按条目里的会话改投，这条就是发往本会话的；横幅要把视图会话传给归属判据才认得出。
   test('同一会话换了实例号 → 不标注发往其它会话', () => {
     const out = planOutboxDrainNotice({
       items: [{ instanceId: 'old', sessionId: 's1' }],
@@ -625,41 +625,8 @@ test.describe('outboxItemTargetsViewing（三处共用的归属判据）', () =>
     assert.equal(outboxItemTargetsViewing({ instanceId: 'x' }, { viewingInstanceId: 'v' }), false);
   });
 
-  // 规则 5 置换、切 effort 都是 dispose + resume：会话没换，实例号换了。条目还拿着入队时的旧号，服务端按条目里的
-  // 会话改投新实例（MSG-02）。按实例号比会判成「别的会话」：第 1 条经置换送达后，批后 setBusy(false) 收掉新实例
-  // 正在跑那轮的运行条；第 2 条撞上在途轮，「未发送 + 重发」写进清屏重载后脱离 DOM 的旧气泡，用户看不见。
-  test('同一会话换了实例号（规则 5 置换 / 切 effort）→ 按会话认，仍属于本视图', () => {
-    assert.equal(
-      outboxItemTargetsViewing({ instanceId: 'old', sessionId: 's1' }, { viewingInstanceId: 'new', viewingSessionId: 's1' }),
-      true,
-    );
-  });
-
-  // 反方向同一条理：/clear 只换会话不换实例号，服务端不把旧会话的话投给它（改投那个会话的活实例，没有就 stale）。
-  test('两侧会话都已知且不同 → 不属于，实例号对得上也不算（/clear 换了会话）', () => {
-    assert.equal(
-      outboxItemTargetsViewing({ instanceId: 'v', sessionId: 's1' }, { viewingInstanceId: 'v', viewingSessionId: 's2' }),
-      false,
-    );
-    assert.equal(
-      outboxItemTargetsViewing({ instanceId: 'x', sessionId: 's1' }, { viewingInstanceId: 'v', viewingSessionId: 's2' }),
-      false,
-    );
-  });
-
-  // 会话缺一侧就比不了：条目入队时实例还没拿到会话（懒开的 init 没回）、旧版本入队的条目，或视图那侧
-  // 一时查不到（置换窗口里服务端 viewing 还指着已 dispose 的旧号）。这时照旧比实例号，不放宽也不收紧。
-  test('两侧会话缺一 → 回落按实例号比', () => {
-    assert.equal(outboxItemTargetsViewing({ instanceId: 'v' }, { viewingInstanceId: 'v', viewingSessionId: 's1' }), true);
-    assert.equal(outboxItemTargetsViewing({ instanceId: 'old' }, { viewingInstanceId: 'new', viewingSessionId: 's1' }), false);
-    assert.equal(outboxItemTargetsViewing({ instanceId: 'v', sessionId: 's1' }, { viewingInstanceId: 'v' }), true);
-    assert.equal(outboxItemTargetsViewing({ instanceId: 'old', sessionId: 's1' }, { viewingInstanceId: 'new' }), false);
-    assert.equal(
-      outboxItemTargetsViewing({ instanceId: 'old', sessionId: '' }, { viewingInstanceId: 'new', viewingSessionId: '' }),
-      false,
-      '空串会话不是已知会话，两边空串不得配成一对',
-    );
-  });
+  // 条目与视图两侧都带会话时按会话认的那几条（置换换号、/clear、缺一侧回落）是红线，
+  // 在 tests/invariants/instance-identity.test.mjs。
 
   test('两边 instanceId 同为 null 且无 cwd → 不得配成一对', () => {
     assert.equal(outboxItemTargetsViewing({ instanceId: null }, { viewingInstanceId: null }), false);

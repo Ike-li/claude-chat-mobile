@@ -4,9 +4,13 @@
 //         ② resolveInstanceTarget 带上 expectedSessionId 时，命中活实例还要核对它此刻跑的会话
 //         ③ 句柄失效（规则 5 置换、切 effort 换了号）或指着别的会话时，改投入队时那个会话此刻的活实例；没有活实例照旧 stale
 //         ④ 离线队列条目的 sessionId 活过 localStorage 往返（序列化是白名单，不登记就被静默丢掉）
+//         ⑤ 前端判「这条重放是不是发往眼前这个会话」（outboxItemTargetsViewing）同样以会话为身份，与服务端改投一致：
+//            置换换了号、会话没换仍算本视图；/clear 换了会话、号没变不算；任一侧没有会话才回落比实例号
 // 不测什么 + 为什么：① 真重启后的重放与续传接线、规则 5 置换后同一批第 2 条的真实接线 —— 要真组装根，
 //                      归 S2（tests/invariants/server/instance-identity.test.mjs）
 //                   ② 前端入队时记下哪个 sessionId、重放时有没有带上 —— 在 app.js 里，归 S3（tests/e2e/specs/input-send-empty.spec.ts）
+//                   ③ ⑤ 判错之后界面上的后果（批后运行条、第 2 条「未发送 + 重发」挂到哪）—— 接线在 app.js，归 S3（同上，P0-02d4）；
+//                      批后 busy、重发横幅这两个组合函数有没有把视图会话传下去，是界面细节，在 tests/unit/logic-composer-primary.test.mjs
 // 槽位：S1（纯函数，数据进数据出）
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +20,7 @@ import {
   planOutboxEnqueue,
   dumpDurableOutbox,
   parseDurableOutbox,
+  outboxItemTargetsViewing,
 } from '../../app/public/js/logic/outbox-send.js';
 
 test.describe('发号跨重启不复用', () => {
@@ -163,5 +168,45 @@ test.describe('离线队列条目带着会话过 localStorage 往返', () => {
       const [row] = parseDurableOutbox(dumpDurableOutbox(queue));
       assert.equal('sessionId' in row, false, `sessionId=${JSON.stringify(sessionId)} 不该留下来`);
     }
+  });
+});
+
+// 服务端按会话改投之后，前端对条目归属的判断也得按会话认。按实例号比的话，同一批第 1 条触发置换、新号的广播先于它的
+// ack 到达，它和后面各条都拿着旧号去对新视图：第 1 条判成「别的会话」，批后 setBusy(false) 收掉新实例正在跑那轮的运行条；
+// 第 2 条撞上那轮落「未发送 + 重发」，而置换后的清屏重载已把它的气泡摘下 DOM，提示写进摘下的节点，用户找不到这条没发出去。
+test.describe('outboxItemTargetsViewing：前端判离线条目发往哪个会话，也以会话为身份', () => {
+  test('同一会话换了实例号（规则 5 置换 / 切 effort）→ 仍属于本视图', () => {
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: 'old', sessionId: 's1' }, { viewingInstanceId: 'new', viewingSessionId: 's1' }),
+      true,
+      '服务端把这条改投到了眼前这个会话的新实例上，前端却判成别的会话',
+    );
+  });
+
+  // 反方向同一条理：/clear 只换会话不换实例号，服务端不把旧会话的话投给它（改投那个会话的活实例，没有就 stale）。
+  test('两侧会话都已知且不同 → 不属于，实例号对得上也不算（/clear 换了会话）', () => {
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: 'v', sessionId: 's1' }, { viewingInstanceId: 'v', viewingSessionId: 's2' }),
+      false,
+      '服务端不会把 s1 的话投给已经换成 s2 的实例，前端却判成发往本视图',
+    );
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: 'x', sessionId: 's1' }, { viewingInstanceId: 'v', viewingSessionId: 's2' }),
+      false,
+    );
+  });
+
+  // 会话缺一侧就比不了：条目入队时实例还没拿到会话（懒开的 init 没回）、升级前入队的条目，或视图那侧一时查不到
+  // （置换窗口里服务端 viewing 还指着已 dispose 的旧号）。这时照旧比实例号，与服务端「条目不带会话只看句柄」一致。
+  test('两侧会话缺一 → 回落按实例号比', () => {
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'v' }, { viewingInstanceId: 'v', viewingSessionId: 's1' }), true);
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'old' }, { viewingInstanceId: 'new', viewingSessionId: 's1' }), false);
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'v', sessionId: 's1' }, { viewingInstanceId: 'v' }), true);
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'old', sessionId: 's1' }, { viewingInstanceId: 'new' }), false);
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: 'old', sessionId: '' }, { viewingInstanceId: 'new', viewingSessionId: '' }),
+      false,
+      '空串会话不是已知会话（服务端判的是非空字符串），两边空串不得配成一对',
+    );
   });
 });
