@@ -219,11 +219,25 @@ export function planFork(entries, anchorUuid, { keepAnchorTurn } = {}) {
   // 丢弃方向与 planRewind 是同一个问题，直接委派——两条路径对同一个问题必须同一个答案。
   if (!keepAnchorTurn) return planRewind(entries, anchorUuid);
 
-  // 保留方向：从 anchor 往后走到下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  // 保留方向：从 anchor 往后走到【本支】下一条人类 prompt 之前，取沿途最后一条 chain entry。
+  //
+  // 【只走 anchor 的后代，不按物理行序】两个进程写同一会话时（电脑上开着的终端 + 手机这边的 SDK 进程，
+  // 2026-10-16），各自挂在自己的叶子下，物理行序里两支交错。按行序会把另一支的行当成本轮尾巴——
+  // 真机 c78e8b47 手机末条后紧跟着终端的 informational，锚到它上面，forkSession 的 inclusive slice
+  // 就把它切进新会话、成为物理最后一行，新会话 resume 时又接回终端那支；另一支的人类 prompt 夹在
+  // 本轮中间时，按行序会在那里截断，本轮的 tool_result 被丢、tool_use 悬空。
+  // 判据：带着父指针、且父不在本轮已保留集合里的，属于别的分支，跳过。不带父指针的老形态行照旧算本轮。
+  // 压缩边界 parentUuid 为 null、接续写在 logicalParentUuid 上（?? 只在 null/undefined 时落到后者）。
+  const kept = new Set([anchorUuid]);
   let keepUuid = null;
   for (let i = at; i < entries.length; i++) {
-    if (i > at && isHumanPrompt(entries[i])) break;
-    if (isChainEntry(entries[i])) keepUuid = entries[i].uuid;
+    const e = entries[i];
+    if (i > at) {
+      const parent = e?.parentUuid ?? e?.logicalParentUuid;
+      if (typeof parent === 'string' && parent && !kept.has(parent)) continue;
+      if (isHumanPrompt(e)) break;
+    }
+    if (isChainEntry(e)) { keepUuid = e.uuid; kept.add(e.uuid); }
   }
   return keepUuid ? { ok: true, keepUuid } : { ok: false, reason: 'anchor-not-found' };
 }
