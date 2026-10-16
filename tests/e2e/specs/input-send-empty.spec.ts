@@ -166,6 +166,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
+  // 离线条目还拿着入队时的旧号。归属按实例号比的话，① 第 1 条明明投给了眼前这个会话，却被判成「别的会话」，批后
+  // setBusy(false) 收掉新实例正在跑那轮的运行条 ② 第 2 条撞上那轮落「未发送 + 重发」，而置换后的清屏重载已把它的气泡
+  // 摘下 DOM，提示写进摘下的节点，用户看不见这条没发出去。
+  test('P0-02d4 离线重放的第 1 条让同一会话换了实例：运行条留着，第 2 条的「重发」挂在看得见的地方', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-replay-swap');
+    // 武装命令本身不收尾，照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线第一条', '离线第二条']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    // 「重发」与批后结算 busy 在同一段同步代码里（markOutboxBlocked 之后紧跟 finally），看得见它时这一批已经收尾
+    await expect(page.locator('[data-testid="outbox-resend"]'), '第 2 条的「未发送 + 重发」不在当前界面上').toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#streamLiveStatus'), '第 1 条在新实例上开跑的那轮，运行条被批后结算收掉了').toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-02f 前台恢复 sync 不重复已见回复', async ({ page }) => {
     await gotoMock(page);
 

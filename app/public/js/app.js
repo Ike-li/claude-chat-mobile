@@ -1409,6 +1409,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     host.appendChild(btn);
   }
 
+  // 离线批处理眼里的「当前视图」：横幅、逐条 targetsViewing、批后 busy 三处归属判据共用这一份，少传一维就和另外两处分叉。
+  // 每次现取——drain 期间到达的 instances 广播（规则 5 置换、切 effort）会换掉视图的实例号。会话取 sendSessionId()：
+  // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
+  const outboxViewing = () => ({ viewingInstanceId, viewingCwd: currentCwd, viewingSessionId: sendSessionId() });
+
   async function processOfflineQueue() {
     if (_offlineDrainInFlight || offlineQueue.length === 0) return;
     // 断线时根本不开工：下面的横幅是无条件同步贴的，若此时离线，用户会看到「正在重发 N 条…」
@@ -1421,7 +1426,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     persistOutbox();
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
-    const notice = planOutboxDrainNotice({ items, viewingInstanceId, viewingCwd: currentCwd });
+    const notice = planOutboxDrainNotice({ items, ...outboxViewing() });
     addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
@@ -1458,7 +1463,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (worktreeAnchor) worktreeAnchors.set(page, worktreeAnchor);
         const scratchAnchor = nextOutboxScratchAnchor(item, decision, scratchAnchors.get(page) ?? null, scratchRoot);
         if (scratchAnchor) scratchAnchors.set(page, scratchAnchor);
-        const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
+        const targetsViewing = outboxItemTargetsViewing(item, outboxViewing());
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
@@ -1490,8 +1495,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       persistOutbox();
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
-        viewingInstanceId,
-        viewingCwd: currentCwd,
+        ...outboxViewing(),
         remainingItems: offlineQueue,
         hadViewingOk,
       }));
