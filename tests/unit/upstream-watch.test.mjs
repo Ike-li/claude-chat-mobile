@@ -167,8 +167,10 @@ test('落后时必须带上 A/B 判据段落', () => {
   // 就是升级，而那个反应已经被一次 67 条的逐条核对否定过了。
   assert.ok(body.includes(TRIAGE_NOTE), '判据段落必须整段进报告');
   assert.match(body, /版本差数不是风险指标/);
-  assert.match(body, /getProcessExitError/, 'A 类四块要点名，否则"分两类"是句空话');
+  assert.match(body, /getProcessExitError/, 'A 类各块要点名，否则"分两类"是句空话');
   assert.match(body, /listSessions/);
+  // 0.3.283 的选叶回归出在当时没列进 A 类的 getSessionMessages 上（2026-10-07 实测，c78e8b47）
+  assert.match(body, /getSessionMessages/, 'A 类漏列本仓在用的 SDK 读盘函数，那块的变更会被当成 B 类放过');
 });
 
 test('报告不再提 issue / 邮件这套已经拆掉的机制', () => {

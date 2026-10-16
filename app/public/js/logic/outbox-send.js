@@ -33,6 +33,23 @@ export function presentOnlineSendAck(ack) {
   const error = (ack && typeof ack.error === 'string' && ack.error.trim())
     ? ack.error.trim()
     : t('发送失败');
+  // 续接会丢掉最新那段对话（SESSION-04）：服务端没收下这条，等用户在面板上选「分叉」还是「仍然发送」。
+  // 不进 outbox——自动重发要么一直撞同一道闸，要么就是替用户做了决定。话先回填输入框，面板的两个选项都作用于
+  // 输入框里的话（app/resume-divergence.js），取消就留在那儿。ack 里的 permanent 是给不认 reason 的旧前端的，这里先于它判。
+  if (ack?.reason === 'resume_divergent' && ack.divergence && typeof ack.divergence === 'object') {
+    return {
+      ok: false,
+      clearBusy: true,
+      restoreDraft: true,
+      retryable: false,
+      permanent: false,
+      stale: false,
+      requeue: false,
+      dropBubble: true,
+      message: '',
+      divergence: ack.divergence,
+    };
+  }
   // 在途轮拒收（排队已移除）：被拒的是【这条新消息】，不是正在跑的那轮——
   // clearBusy 必须 false，否则会把在跑那轮的状态行/停止钮一起清掉；也不 requeue，
   // 自动重发等于把排队搬到客户端。文字回填输入框（send 已清空它）。
@@ -209,6 +226,15 @@ export function presentOfflineResendAck(err, ack) {
   if (!err && ack && ack.ok === false && ack.busy === true) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('当前任务运行中，完成后可发送');
     return { outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: false, message: error };
+  }
+  // 续接会丢掉最新那段对话（SESSION-04）：要人拍板，后台重放不能替他选。落 blocked；点「重发」再撞上时，
+  // 调用方据 divergence 把这条挪回输入框、弹出与在线路径同一块面板（app.js markOutboxBlocked）。
+  if (!err && ack && ack.ok === false && ack.reason === 'resume_divergent') {
+    return {
+      outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: true,
+      message: t('这次续接会丢掉最近一段对话，点「重发」后选择怎么续'),
+      ...(ack.divergence && typeof ack.divergence === 'object' ? { divergence: ack.divergence } : {}),
+    };
   }
   // stale（目标实例已关闭）也是死信：服务端 fail-closed 的负 ack 只带 {stale:true}、【不带】permanent，
   // 落到下面的兜底 requeue 就成了「每次重连重发一遍、永不退场」。判据与在线路径 presentOnlineSendAck

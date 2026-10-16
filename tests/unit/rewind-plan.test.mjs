@@ -401,6 +401,45 @@ test.describe('planFork / planRewind：锚点资格', () => {
     assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a1' });
   });
 
+  // ── 两个进程交错写同一会话（2026-10-16）──
+  // 电脑上开着的终端与手机这边的 SDK 进程各自挂在自己的叶子下写，物理行序里两支交错。
+  // 「保留这一轮」只能沿父链往下走：按物理行序会把另一支的行当成本轮尾巴。
+  test('另一支的行排在保留轮之后：不当本轮尾巴（真机 c78e8b47：手机末条后紧跟终端的 informational）', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'terminal q' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'terminal a' }] } },
+      { uuid: 'u2', parentUuid: 'a1', type: 'user', message: { content: 'phone q' } },
+      { uuid: 's9', parentUuid: 'a1', type: 'system', subtype: 'away_summary' },
+      { uuid: 'at2', parentUuid: 'u2', type: 'attachment' },
+      { uuid: 'a2', parentUuid: 'at2', type: 'assistant', message: { content: [{ type: 'text', text: 'phone a' }] } },
+      { uuid: 's10', parentUuid: 's9', type: 'system', subtype: 'informational' },
+    ];
+    // 锚到 s10 的话，forkSession 的 inclusive slice 会把它切进新会话、成为物理最后一行，新会话又锚回终端那支
+    assert.deepEqual(planFork(entries, 'a2', { keepAnchorTurn: true }), { ok: true, keepUuid: 'a2' });
+  });
+
+  test('另一支的人类 prompt 夹在保留轮中间：不在那里截断，本轮的 tool_result 照样保留', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 't1' }] } },
+      { uuid: 'u9', parentUuid: 'x0', type: 'user', message: { content: 'typed in the other process' } },
+      { uuid: 'r1', parentUuid: 'a1', type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } },
+    ];
+    // 停在 a1 会让 a1 的 tool_use 悬空（正是 planFork 头注里那 1% 的形态）
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'r1' });
+  });
+
+  test('本轮里的压缩边界经 logicalParentUuid 接续，仍算本轮', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'b1', parentUuid: null, logicalParentUuid: 'a1', type: 'system', subtype: 'compact_boundary' },
+      // 另一个进程在它那一支上压缩：parentUuid 同样为 null，只有 logicalParentUuid 说明它属于哪一支
+      { uuid: 'b9', parentUuid: null, logicalParentUuid: 'x0', type: 'system', subtype: 'compact_boundary' },
+    ];
+    assert.deepEqual(planFork(entries, 'a1', { keepAnchorTurn: true }), { ok: true, keepUuid: 'b1' });
+  });
+
   test('P2 的反面：tool_result 承载行不算人类输入，仍属于同一轮', () => {
     const entries = [
       { uuid: 'u1', type: 'user', message: { content: 'go' } },

@@ -6,9 +6,10 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
@@ -895,19 +896,22 @@ test('getSessionHistory: 链真相源返回空集合时保留全量', async () =
 test('getSessionHistory: 链真相源一次失败不得被缓存成永久全量', async () => {
   const cwd = '/test/chain-failopen-cache';
   const dir = join(BASE, getProjectDir(cwd));
+  // 重来的问写在撤销的问之后：真 SDK 的当前叶子就是物理最靠后的那条，链不走到文件最后一条
+  // 主链消息的话会触发下面「SDK 选错叶」那道保护，那就测不到缓存这件事了。
   writeJSONL(dir, 'failcache', [
     { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '问' }, timestamp: '2024-01-01T00:00:00Z' },
     { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '答' }, timestamp: '2024-01-01T00:00:01Z' },
     { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    { type: 'user', uuid: 'u-3', parentUuid: 'a-1', message: { role: 'user', content: '重来的问' }, timestamp: '2024-01-01T00:00:03Z' },
   ]);
   __setSdkGetSessionMessagesForTest(async () => { throw new Error('临时故障'); });
   try {
     const first = await getSessionHistory('failcache', cwd, 50, { baseDir: BASE });
-    assert.deepEqual(first.map(m => m.content), ['问', '答', '撤销的问'], 'fail-open 当次应回全量');
+    assert.deepEqual(first.map(m => m.content), ['问', '答', '撤销的问', '重来的问'], 'fail-open 当次应回全量');
     // 文件一个字节没动，链真相源恢复 —— 不得吃上一次那份未过滤的缓存
-    __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }]);
+    __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }, { uuid: 'u-3' }]);
     const second = await getSessionHistory('failcache', cwd, 50, { baseDir: BASE });
-    assert.deepEqual(second.map(m => m.content), ['问', '答']);
+    assert.deepEqual(second.map(m => m.content), ['问', '答', '重来的问']);
   } finally {
     __setSdkGetSessionMessagesForTest(undefined);
   }
@@ -925,6 +929,117 @@ test('getSessionHistory: sidechain 子 agent 消息不受链过滤影响', async
   try {
     const msgs = await getSessionHistory('sidechain', cwd, 50, { baseDir: BASE });
     assert.deepEqual(msgs.map(m => m.content), ['主链问', '子 agent 说话']);
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// ── SDK 选的叶子不是用户最后看到的那条时不剪（2026-10-15）──────────────────────
+// 「终端闲置 + 手机续聊」：终端 CLI 停在自己那一轮末尾，手机经 SDK 接着往下写；之后闲置的终端进程
+// 往它【记得的旧叶子】下面追加 system 行（away_summary 离开摘要、informational 提示，isMeta:false）。
+// SDK 0.3.283 起选叶把这类 system 行也算分支末端、取物理最靠后的那个，当前链于是落回终端那一轮，
+// 手机续聊的那段成了「撤销的分支」，照剪就整段看不到。真机 c78e8b47：终端停在 2153c3f6，sdk-ts
+// 续聊 45 条，away_summary 挂在 2153c3f6 下、informational 又挂在它下面，物理上排在续聊最后一条之后。
+// 夹具照那份文件的形态：system 行的父指针、穿插位置、isMeta:false 都是原样。
+const AWAY_SUMMARY_ENTRIES = [
+  { type: 'user', uuid: 'u-1', parentUuid: null, isSidechain: false, entrypoint: 'cli', message: { role: 'user', content: '终端里的问' }, timestamp: '2026-09-03T12:25:00.000Z' },
+  { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', isSidechain: false, entrypoint: 'cli', message: { role: 'assistant', content: [{ type: 'text', text: '终端里的答' }] }, timestamp: '2026-09-03T12:26:43.779Z' },
+  { type: 'system', subtype: 'stop_hook_summary', uuid: 's-1', parentUuid: 'a-1', isSidechain: false, entrypoint: 'cli', hookCount: 1, level: 'suggestion', timestamp: '2026-09-03T12:26:44.085Z' },
+  { type: 'system', subtype: 'turn_duration', uuid: 's-2', parentUuid: 's-1', isSidechain: false, isMeta: false, entrypoint: 'cli', durationMs: 865346, timestamp: '2026-09-03T12:26:44.088Z' },
+  // ↓ 手机经 SDK 接着终端那一轮往下写
+  { type: 'user', uuid: 'u-2', parentUuid: 's-2', isSidechain: false, entrypoint: 'sdk-ts', message: { role: 'user', content: '手机上接着问' }, timestamp: '2026-09-03T12:28:17.513Z' },
+  // ↓ 闲置的终端进程挂到它记得的旧叶子 s-2 下（真机这一行就夹在续聊中间）
+  { type: 'system', subtype: 'away_summary', uuid: 's-3', parentUuid: 's-2', isSidechain: false, isMeta: false, entrypoint: 'cli', content: 'You asked to reorganize the repo …', timestamp: '2026-09-03T12:29:50.632Z' },
+  { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', isSidechain: false, entrypoint: 'sdk-ts', message: { role: 'assistant', content: [{ type: 'text', text: '手机上接着答' }] }, timestamp: '2026-09-03T12:34:01.953Z' },
+  { type: 'system', subtype: 'informational', uuid: 's-4', parentUuid: 's-3', isSidechain: false, isMeta: false, entrypoint: 'cli', level: 'warning', content: 'Remote Control disconnected — Transport closed', timestamp: '2026-09-03T12:58:41.052Z' },
+];
+const AWAY_SUMMARY_EXPECTED = ['终端里的问', '终端里的答', '手机上接着问', '手机上接着答'];
+
+test('getSessionHistory: 物理最新的主链消息不在 SDK 当前链上时不剪（终端闲置写 away_summary）', async () => {
+  const cwd = '/test/away-summary';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'awaysummary', AWAY_SUMMARY_ENTRIES);
+  // SDK 0.3.283+ 对这份文件的返回：当前链落在终端那一轮（下一条用例喂的是真 SDK）
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }]);
+  try {
+    const msgs = await getSessionHistory('awaysummary', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), AWAY_SUMMARY_EXPECTED,
+      '手机续聊的那段被当成撤销分支剪掉了：SDK 选的叶子不是物理最新的那条主链消息，这时不该按它剪');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 同一份夹具交给真 SDK 去选叶。用例本身不随 SDK 版本变：0.3.281 选对叶子、没东西可剪；0.3.283+
+// 选错叶子、靠上面那道保护兜住。升级 SDK 时它就是那条会先红的回归。
+test('getSessionHistory: 真 SDK 读 away_summary 形态，手机续聊的那段仍回显', async () => {
+  const configDir = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-sdk-')));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-hist-cwd-')));
+  const projects = join(configDir, 'projects');
+  const sessionId = '0c78e8b4-7ead-45e2-b6c2-32bc08f8c612'; // SDK 只认 UUID 形态的会话 id
+  writeJSONL(join(projects, getProjectDir(cwd)), sessionId, AWAY_SUMMARY_ENTRIES);
+  const prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = configDir; // SDK 的 projects 根 = CLAUDE_CONFIG_DIR/projects，每次调用现读
+  __setSdkGetSessionMessagesForTest(sdkGetSessionMessages);
+  try {
+    // 先证明仪器看得见：SDK 没读到夹具会返回空，history 随之 fail-open 回全量，下面的断言就恒绿了
+    const chain = await sdkGetSessionMessages(sessionId, { dir: cwd });
+    assert.ok(chain.some(m => m.uuid === 'a-1'), '真 SDK 没读到夹具，这条用例会因 fail-open 恒绿——先修夹具路径');
+    const msgs = await getSessionHistory(sessionId, cwd, 50, { baseDir: projects });
+    assert.deepEqual(msgs.map(m => m.content), AWAY_SUMMARY_EXPECTED,
+      '真 SDK 把当前链选在终端那一轮，手机续聊的那段被剪掉了');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+    if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
+  }
+});
+
+// 反向：保护只看 user/assistant。当前链末尾挂着 system 行是常态（每一轮都以 stop_hook_summary /
+// turn_duration 收尾，离开久了还有 away_summary），它们本来就不在 SDK 的返回里——拿「物理最后一行
+// 在不在链上」当判据会让每个会话都触发保护，rewind 剪枝就整个失效了。
+test('getSessionHistory: 当前链末尾挂着 system 行时 rewind 废弃段照剪', async () => {
+  const cwd = '/test/rewind-then-away';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'rewindaway', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '第一问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '第一答' }, timestamp: '2024-01-01T00:00:01Z' },
+    // ↓ 这两条后来被 rewind 撤销
+    { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '撤销的答' }, timestamp: '2024-01-01T00:00:03Z' },
+    { type: 'user', uuid: 'u-3', parentUuid: 'a-1', message: { role: 'user', content: '重来的问' }, timestamp: '2024-01-01T00:00:04Z' },
+    { type: 'assistant', uuid: 'a-3', parentUuid: 'u-3', message: { role: 'assistant', content: '重来的答' }, timestamp: '2024-01-01T00:00:05Z' },
+    { type: 'system', subtype: 'turn_duration', uuid: 's-1', parentUuid: 'a-3', isMeta: false, timestamp: '2024-01-01T00:00:06Z' },
+    { type: 'system', subtype: 'away_summary', uuid: 's-2', parentUuid: 's-1', isMeta: false, content: 'You asked …', timestamp: '2024-01-01T01:00:00Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }, { uuid: 'u-3' }, { uuid: 'a-3' }]);
+  try {
+    const msgs = await getSessionHistory('rewindaway', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['第一问', '第一答', '重来的问', '重来的答'],
+      '撤销的分支重新露面了：保护把链尾的 system 行当成了「SDK 选错叶」');
+  } finally {
+    __setSdkGetSessionMessagesForTest(undefined);
+  }
+});
+
+// 同理，带 teamName 的条目两版 SDK 选叶都跳过（sdk.mjs 的候选过滤里写着），它排在最后不说明选错了叶。
+// 下面的链是 0.3.300 对这份文件的真实返回（10/15 用真 SDK 跑过；0.3.281 会选回 u-2/a-2 那条废弃分支，
+// 那种情况保护照样兜得住）。本机 transcript 里没有带 teamName 的条目，形态按 SDK 判的那个字段造。
+test('getSessionHistory: 链尾是带 teamName 的条目时不算 SDK 选错叶，rewind 废弃段照剪', async () => {
+  const cwd = '/test/rewind-then-team';
+  writeJSONL(join(BASE, getProjectDir(cwd)), 'rewindteam', [
+    { type: 'user', uuid: 'u-1', parentUuid: null, message: { role: 'user', content: '第一问' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', message: { role: 'assistant', content: '第一答' }, timestamp: '2024-01-01T00:00:01Z' },
+    // ↓ 这两条后来被 rewind 撤销
+    { type: 'user', uuid: 'u-2', parentUuid: 'a-1', message: { role: 'user', content: '撤销的问' }, timestamp: '2024-01-01T00:00:02Z' },
+    { type: 'assistant', uuid: 'a-2', parentUuid: 'u-2', message: { role: 'assistant', content: '撤销的答' }, timestamp: '2024-01-01T00:00:03Z' },
+    { type: 'user', uuid: 'u-3', parentUuid: 'a-1', message: { role: 'user', content: '重来的问' }, timestamp: '2024-01-01T00:00:04Z' },
+    { type: 'assistant', uuid: 'a-3', parentUuid: 'u-3', message: { role: 'assistant', content: '重来的答' }, timestamp: '2024-01-01T00:00:05Z' },
+    { type: 'user', uuid: 't-1', parentUuid: 'a-3', teamName: 'research', message: { role: 'user', content: '队友发来的' }, timestamp: '2024-01-01T00:00:06Z' },
+  ]);
+  __setSdkGetSessionMessagesForTest(async () => [{ uuid: 'u-1' }, { uuid: 'a-1' }, { uuid: 'u-3' }, { uuid: 'a-3' }]);
+  try {
+    const msgs = await getSessionHistory('rewindteam', cwd, 50, { baseDir: BASE });
+    assert.deepEqual(msgs.map(m => m.content), ['第一问', '第一答', '重来的问', '重来的答'],
+      '撤销的分支重新露面了：保护把 SDK 本就不当叶子的 teamName 条目算成了最新主链消息');
   } finally {
     __setSdkGetSessionMessagesForTest(undefined);
   }

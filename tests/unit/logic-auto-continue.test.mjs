@@ -66,6 +66,7 @@ test('stale：每种原因都要说清为什么没自动继续，按钮是「继
     other_driver: /终端|桌面端/,
     unverified: /无法确认/,
     resume_failed: /重新打开/,
+    diverged: /丢掉/, // 续接会丢掉最近那段对话（SESSION-04）：不说清，用户点「继续」前不知道在确认什么
   };
   for (const [reason, re] of Object.entries(cases)) {
     const b = resolveAutoContinueBanner([entry({ phase: 'stale', reason, fireAt: null })], 's1', NOW);

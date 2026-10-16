@@ -69,7 +69,8 @@ import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent } from '../sessions/session-registry.js';
+import { listTerminalSessionStates, listTerminalSessionStatesOrNull, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, hasWaitingTerminalSessionForCwd, hasTerminalSessionOverlapping, findBlockingLiveAgent, readSessionRegistry } from '../sessions/session-registry.js';
+import { resumeDivergence, readResumeEntries, gateResumeDivergence } from '../sessions/resume-anchor.js';
 import { planRewind, planFork, describeRewindBlocker, readSessionEntries, rewindOutcomeVerdict, createRewindLocks, extractPromptText, listRewindCandidates, rewindStepsFor, rewindConfirmBlocked } from '../sessions/rewind-plan.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff, rewindDirtyOverlap } from '../files/git-workspace.js';
@@ -2344,6 +2345,14 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
 // cliDefaultsByCwd，供同 cwd 下一次 resume 命中缓存。
 const CLI_DEFAULTS_RESUME_BUDGET_MS = 1200;
 
+// 同一会话还有没退完的旧进程时（规则 5 / 切 effort 的置换、空闲回收刚起头），resume 前等它退出的上限。
+// 它退出时把 last-prompt 重贴到自己最后写的那行（CLI 2.1.284 隔离环境实测 dispose 后 4–14ms 落盘，生产 70–80ms，
+// 0.6–2s 退完；见 agent.js exitPromise 处），先等它落盘，下面的分叉判定读到的才是新 CLI 会读到的那份文件——
+// 早读会把「手机侧还没重贴」误判成「会接回终端那支」，平白多问一次。1.5s 覆盖重贴绰绰有余；
+// 退得比这还慢就不等了，代价同上：至多多问一次，用户选「仍然发送」即可。
+// 新 CLI 自己读盘（spawn 后约 210–255ms）本来就晚于那次重贴，这道等待也顺带把那段时序余量变成了确定。
+const RESUME_PRIOR_EXIT_WAIT_MS = 1500;
+
 // resume 开实例的异步封装：新开前先读 transcript 末条 permission-mode 恢复权限档（纯 CLI 会话 sessions.json
 // 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
 // 仅 resume（resumeId 非空）才读——FRESH 无档可恢复、也不该读；已 live 实例由调用方 instanceForSession 去重、不覆盖运行时档。
@@ -2357,18 +2366,22 @@ const CLI_DEFAULTS_RESUME_BUDGET_MS = 1200;
 // CLI 官方给的出路是 `claude agents` attach 或 `--fork-session` 分叉副本，杀掉占用者不在其中。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
-  let transcriptMode = null, transcriptModel = null;
+  let transcriptMode = null, transcriptModel = null, divergence = null;
   if (resumeId) {
-    // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底三路互无数据依赖，从入口就并发。
-    const [[mode, model]] = await Promise.all([
+    await instanceManager.waitForSessionExits(resumeId, RESUME_PRIOR_EXIT_WAIT_MS);
+    // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底 / 分叉判定四路互无数据依赖，从入口就并发。
+    const [[mode, model], , div] = await Promise.all([
       Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]),
       Promise.race([
         ensureCliDefaults(cwd),
         new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
       ]),
+      // 这次续接会不会丢掉最新那段对话（SESSION-04，判据见 sessions/resume-anchor.js）。读不动就当没有。
+      readResumeEntries(cwd, resumeId).then(resumeDivergence).catch(() => null),
     ]);
     transcriptMode = mode;
     transcriptModel = model;
+    divergence = div;
   } else {
     // FRESH 也要等 L3 落定：worktreeGatewayEnv 只在 AgentSession 构造时读一次，冷缓存下不等的话
     // 该会话整个生命周期都拿不到 worktree 网关隔离（正是 503 的原场景：重启后首次切到 worktree 就发消息）。
@@ -2379,8 +2392,32 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     ]);
   }
   const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
+  if (divergence) {
+    instance.resumeDivergence = divergence; // 发送闸（user:message）与自动继续据它拒发
+    interactionLog.addSessionLog(resumeId, 'sys_info',
+      `[SYS] 续接分叉：最新对话 ${divergence.newestUuid}（${divergence.newestEntrypoint}）不在 CLI 会接上的链上，${divergence.droppedCount} 条不进上下文；发送前先问用户`);
+  }
   diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0 }); // Part C：resume 总耗时
   return instance;
+}
+
+// 接管提醒（2026-10-16）：手机开始写的时候，电脑上开着的终端（或桌面端）还挂着这个会话。那个进程内存里停在
+// 旧叶子，之后它再写任何东西（离开摘要、Remote Control 断开提示、本地命令）或退出，下次续接就接回它那一支、
+// 手机这段不进上下文（SESSION-04 的成因）。产品管不了那个进程，只能说一声；每个实例只说一次。
+// 注册表里本实例自己的 SDK 子进程报 sdk-ts，不算。
+const LIVE_HOLDER_NOTICE = {
+  cli: '电脑上的终端还开着这个会话。手机接着聊没问题，但那个终端之后再写任何东西或退出，下次续接会接回终端那一轮。不用终端了就先在电脑上 /exit；回到电脑时用 claude -c 或 claude --resume 重新打开。',
+  'claude-desktop': '桌面端还开着这个会话。手机接着聊没问题，但桌面端之后再写任何东西或关掉它，下次续接会接回桌面端那一轮。不用了就先在桌面端关掉这个会话。',
+};
+function noteLiveTerminalOnTakeover(a) {
+  if (a.liveHolderNoticed || !a.sessionId) return;
+  a.liveHolderNoticed = true;
+  readSessionRegistry(a.sessionId, a.cwd)
+    .then(entry => {
+      const text = LIVE_HOLDER_NOTICE[entry?.entrypoint];
+      if (text && !a.disposed) a.emitNotice(text, 'warning');
+    })
+    .catch(() => { /* 注册表是加分信号，读不动就不提醒 */ });
 }
 
 // resume 并发去重：openResumeInstance 内部有 await（读 transcript 权限档），调用方常见写法是
@@ -2938,6 +2975,17 @@ registerSocketConnection(io, socket => {
         }
         broadcastInstances();
       }
+      // 续接分叉守卫（SESSION-04，2026-10-16）：这个实例 resume 时算出 CLI 会接上的链不含最新那段对话
+      //（开着的旧终端在旧叶子下写过行、又比手机侧晚重贴 last-prompt）。静默发出去，模型就从那一支接上、忘了
+      // 最新那段，回显却照样把它画出来。先拒收，由用户在面板上选「从最新那条分叉」或「仍然发送」。
+      // 不 commit 去重 ID：同一 clientMessageId 带上确认重发要能成功。
+      const divergenceGate = gateResumeDivergence(a.resumeDivergence, payload?.ackDivergence);
+      if (divergenceGate.action === 'reject') {
+        interactionLog.addSessionLog(a.logKey(), 'sys_info', '[SYS] 续接分叉：发送前拒收，等用户选择分叉或仍然发送');
+        ack(divergenceGate.ack);
+        return;
+      }
+      if (divergenceGate.clear) a.resumeDivergence = null;
       // 在途轮拒收（排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
       // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
       // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
@@ -2990,6 +3038,7 @@ registerSocketConnection(io, socket => {
       messageDedupState = commitProcessed(clientMessageId, messageDedupState, { instanceId: a.instanceId });
       // 用户自己接着发了：这个会话的「到点自动继续」作废（人已经接手，到点再代发就是插队的第二条）
       autoContinue.onManualSend(a.sessionId);
+      noteLiveTerminalOnTakeover(a);
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续

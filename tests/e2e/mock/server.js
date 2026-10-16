@@ -285,6 +285,23 @@ let syncAckTimeoutArmed = false;
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
 // 一次性：拒一次就解除，重发那条照常处理。
 let sendTransientFailArmed = false;
+// P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
+// 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
+// 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
+// newestUuid 取 a-archived-2：mock 的 session:fork 护栏只认 keepAnchorTurn=true + a-archived-*，
+// 前端把「从最新那条分叉」的方向送反或锚错 uuid，分叉会被拒。用户确认「仍然发送」后自动解除（同真 server 清掉结论）。
+let resumeDivergenceArmed = null;
+const MOCK_RESUME_DIVERGENCE = Object.freeze({
+  newestUuid: 'a-archived-2', newestEntrypoint: 'sdk-ts', newestAt: '2024-01-01T00:10:00Z',
+  droppedCount: 2, anchorOnlyCount: 0, anchorEntrypoint: 'cli', anchorAt: '2024-01-01T00:06:00Z',
+});
+// P0-RESUME-DIVe：规则 5 置换之后才拒收的那种分叉——终端在旧叶子下真打过一轮，置换时旧 SDK 进程最后重贴、
+// 接上手机那支，最新那条（终端的回答）不在链上；两支各有对方没有的对话。挂在 worktree 会话上：分叉要送驾驶轴 cwd。
+const MOCK_RESUME_DIVERGENCE_TTURN = Object.freeze({
+  newestUuid: 'a-wt-1', newestEntrypoint: 'cli', newestAt: '2024-01-01T00:20:00Z',
+  droppedCount: 2, anchorOnlyCount: 2, anchorEntrypoint: 'sdk-ts', anchorAt: '2024-01-01T00:15:00Z',
+});
+const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -561,6 +578,7 @@ function resetMockState() {
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
   sendTransientFailArmed = false;
+  resumeDivergenceArmed = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -1801,7 +1819,7 @@ io.on('connection', socket => {
     // P0-WT-REWIND：归属校验同 session:fork 的 worktree 那支——真 server 只查传入 cwd 的那一个 project 目录。
     // 唯一一轮既是首轮（不能分叉对话）又是末轮（改动数未知），字段取值与 listRewindCandidates 一致。
     if (sessionId === 'mock-session-worktree') {
-      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') { callback({ ok: false, error: '会话不存在' }); return; }
+      if (cwd !== MOCK_WT_CWD) { callback({ ok: false, error: '会话不存在' }); return; }
       callback({
         ok: true,
         items: [{ promptUuid: 'u-wt-1', text: 'Worktree prompt', timestamp: '2024-01-01T00:00:00Z', changedFiles: null, canForkConversation: false, canRestoreCode: true }],
@@ -1982,34 +2000,26 @@ io.on('connection', socket => {
     const { sessionId, cwd, uuid, keepAnchorTurn } = payload || {};
     console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}, keepAnchorTurn=${keepAnchorTurn}`);
     if (typeof callback !== 'function') return;
-    // 收尾对齐真 server 的 finishOpenFocus：建/聚焦新实例，viewingCwd 落工作区轴（worktree 归父仓），广播，ack。
-    const focusForked = (seed) => {
-      let forkedInst = mockInstances.find(i => i.instanceId === seed.instanceId);
-      if (!forkedInst) {
-        forkedInst = { ...seed, state: 'idle', permissionMode: 'default', effort: null, model: 'claude-3-5-sonnet' };
-        mockInstances.push(forkedInst);
-      }
-      viewingInstanceId = forkedInst.instanceId;
-      io.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { canRestart: mockCanRestart,
-          viewingInstanceId,
-          viewingCwd: workspaceCwdOf(forkedInst.cwd),
-          ...mockDirFields(),
-          instances: mockInstances, service: mockServicePayload()
-        }
-      });
-      callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
-    };
-    // P0-WT-FORK：worktree 会话。真 server 的 session:fork 先 sessionFileExists(cwd, id)，只查这个 cwd 编码出来的
-    // 那一个 project 目录——transcript 在驾驶轴（worktree）下，拿工作区轴（父仓）来分叉必然「会话不存在」
-    // （同 session:history 里 mock-session-worktree 那一支）。新会话由 dedupedResume(cwd, newId) 开在同一棵树里。
+    // P0-RESUME-DIVe：worktree 会话的分叉。归属校验同真 server（sessionFileExists 只查传入 cwd 编码出的那个目录）：
+    // transcript 在驾驶轴（worktree）下，拿工作区轴（父仓）来分叉 → 「会话不存在」。P0-WT-FORK（长按 / 操作栏分叉）同走这支。
     // 真 server 的这两侧由 tests/integration/worktree-fork-rewind.test.mjs 钉住，改判法先看那边。
     if (sessionId === 'mock-session-worktree') {
-      const wt = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
-      if (cwd !== wt) { callback({ ok: false, error: '会话不存在' }); return; }
-      if (keepAnchorTurn === false || uuid !== 'a-wt-1') { callback({ ok: false, error: 'mock fork source not found' }); return; }
-      focusForked({ instanceId: 'inst_worktree_forked', cwd: wt, sessionId: 'mock-session-worktree-forked', title: 'Worktree Driving Session (fork)' });
+      if (cwd !== MOCK_WT_CWD) { callback({ ok: false, error: '会话不存在' }); return; }
+      if (keepAnchorTurn === false || !/^a-wt-\d+$/.test(uuid || '')) { callback({ ok: false, error: 'mock fork source not found' }); return; }
+      let forkedWt = mockInstances.find(i => i.instanceId === 'inst_forked_wt');
+      if (!forkedWt) {
+        forkedWt = {
+          instanceId: 'inst_forked_wt', cwd: MOCK_WT_CWD, sessionId: 'mock-session-worktree-forked',
+          title: 'Worktree Driving Session (fork)', state: 'idle', permissionMode: 'default', effort: null, model: 'claude-3-5-sonnet',
+        };
+        mockInstances.push(forkedWt);
+      }
+      viewingInstanceId = forkedWt.instanceId;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(MOCK_WT_CWD), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+      callback({ ok: true, instanceId: forkedWt.instanceId, sessionId: forkedWt.sessionId });
       return;
     }
     // 【护栏随协议翻转】2026-09-18 起锚点由服务端对着 transcript 算（planFork），前端只送
@@ -2033,7 +2043,32 @@ io.on('connection', socket => {
       callback({ ok: false, error: '这是会话的第一轮，前面没有可回退到的位置。', reason: 'first-turn' });
       return;
     }
-    focusForked({ instanceId: 'inst_forked', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-forked', title: 'Archived Planning Session (fork)' });
+    const forkedId = 'inst_forked';
+    let forkedInst = mockInstances.find(i => i.instanceId === forkedId);
+    if (!forkedInst) {
+      forkedInst = {
+        instanceId: forkedId,
+        cwd: '/Users/you/code/claude-chat-mobile',
+        sessionId: 'mock-session-forked',
+        title: 'Archived Planning Session (fork)',
+        state: 'idle',
+        permissionMode: 'default',
+        effort: null,
+        model: 'claude-3-5-sonnet'
+      };
+      mockInstances.push(forkedInst);
+    }
+    viewingInstanceId = forkedInst.instanceId;
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart,
+        viewingInstanceId,
+        viewingCwd: forkedInst.cwd,
+        ...mockDirFields(),
+        instances: mockInstances, service: mockServicePayload()
+      }
+    });
+    callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
   });
 
   // 存量 fixture 统一落在「今天、彼此相差 1 秒」：消息流时间戳只会在每段历史顶部多一行日期，
@@ -2207,6 +2242,11 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Okay, heading home.', uuid: 'a-archived-7' }
         ]
       });
+    } else if (sessionId === 'mock-session-worktree-forked') {
+      // P0-RESUME-DIVe：worktree 会话分叉出的新会话，历史同样只在驾驶轴下
+      callback(cwd === MOCK_WT_CWD
+        ? { messages: [{ role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' }, { role: 'assistant', content: 'WORKTREE_FORK_READY', uuid: 'a-wt-f1' }] }
+        : { messages: [], error: '会话不存在' });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
       // P0-FORK：session:fork 成功后前端切视图会拉这条会话历史；文案与源会话不同，便于断言真切换了。
       callback({
@@ -2235,18 +2275,6 @@ io.on('connection', socket => {
         messages: [
           { role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' },
           { role: 'assistant', content: 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
-        ]
-      });
-    } else if (sessionId === 'mock-session-worktree-forked') {
-      // P0-WT-FORK：分叉出来的新会话同样落在那棵 worktree 的 project 目录里，归属校验同上一支。
-      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') {
-        callback({ messages: [], error: '会话不存在' });
-        return;
-      }
-      callback({
-        messages: [
-          { role: 'user', content: 'Worktree prompt', uuid: 'u-wtf-1' },
-          { role: 'assistant', content: 'WORKTREE_FORK_READY', uuid: 'a-wtf-1' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
@@ -3148,6 +3176,10 @@ io.on('connection', socket => {
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
+      armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
+      armResumeDivergenceWorktreeSwap: () => {
+        resumeDivergenceArmed = { sessionId: 'mock-session-worktree', divergence: MOCK_RESUME_DIVERGENCE_TTURN, swap: true };
+      },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5441,6 +5473,34 @@ io.on('connection', socket => {
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {
+    // P0-RESUME-DIV：续接分叉的发送闸，镜像真 server 的 gateResumeDivergence（app/src/sessions/resume-anchor.js；
+    // mock 不 import app/src，wire 形状由集成层守，见 docs/testing.md「平行实现」）。位置同真 server：排在在途轮拒收之前。
+    // 确认必须是【这一段】的 newestUuid——前端把确认送错（布尔、旧 uuid），这里照样拒，面板会再弹一次。
+    // 真 server 把结论挂在 resume 出来的实例上；mock 的实例与会话一一对应，按会话挂。
+    const divergenceInst = mockInstances.find(i => i.instanceId === (payload?.instanceId || viewingInstanceId));
+    if (resumeDivergenceArmed && divergenceInst?.sessionId === resumeDivergenceArmed.sessionId) {
+      const { divergence } = resumeDivergenceArmed;
+      if (payload?.ackDivergence !== divergence.newestUuid) {
+        // P0-RESUME-DIVe：规则 5 置换后才过闸（真 server：externalDirty → dispose 旧实例 → resume 新实例 → 广播
+        // instances → 过闸拒收）。前端先收到「同一会话换了新实例」的广播，再收到拒收。只置换一次：新实例就是挂着结论的那个。
+        if (resumeDivergenceArmed.swap) {
+          resumeDivergenceArmed.swap = false;
+          const oldId = divergenceInst.instanceId;
+          divergenceInst.instanceId = `${oldId}_swapped`;
+          if (viewingInstanceId === oldId) viewingInstanceId = divergenceInst.instanceId;
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(divergenceInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+          });
+        }
+        console.log('[mock] user:message refused — resume divergence');
+        if (typeof ack === 'function') {
+          ack({ ok: false, reason: 'resume_divergent', permanent: true, error: '续接会丢掉一段对话（mock）', divergence: { ...divergence } });
+        }
+        return;
+      }
+      resumeDivergenceArmed = null;
+    }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
     const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
