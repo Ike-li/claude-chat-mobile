@@ -91,6 +91,8 @@ export function isSafeSessionId(id) {
 //   ⑤ 再按 message.id 把并行工具调用的兄弟条目、以及挂在它们下面的 tool_result 补回来。
 // 2026-09-18 我自己先猜过一版单链回溯，①⑤ 两步都漏掉：并行工具那一支整条不见（79 个会话的
 // 对照里 34 个有缺口）。
+// ⚠️ ②③ 在 0.3.283 改过：非 progress 的条目（含 system 行）都能当末端，从物理最靠后的往回找。
+// 两种规则各有选错叶的形态，getSessionHistory 里「SDK 选的叶子不是用户最后看到的那条」那道保护兜底。
 // ⚠️ 但 ① 的「缝合」只把 compactMetadata 点名的那几条接回链上，**压缩之前的其余历史仍然不在
 // 返回里**——当时把「compact 过的会话被砍到只剩 3 条（实测 1284 → 3）」一并归因为自己漏了 ①，
 // 是错的：同一个会话（1ee3b415）换成官方算法实测返回 4 条，3 → 4，问题从未被解决。
@@ -165,6 +167,42 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
 
+  let messages;
+  try {
+    let pass = await readHistoryMessages(historyFile, liveUuids);
+    // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
+    // 不在 liveUuids 里，就是 SDK 认定的当前链没走到文件里最后发生的那段对话。当前叶子本该是「物理最靠后
+    // 的分支末端」（readLiveChainUuids 的 ③），rewind 之后的新对话又总写在废弃段后面，所以这条正常恒成立；
+    // 不成立只能是选叶把别的东西当成了末端。
+    // 实例：SDK 0.3.283 起把 system 行（away_summary / informational）也算分支末端，而闲置的终端 CLI
+    // 会把这些行挂在它记得的旧叶子下——「终端停下、手机接着聊」的那段于是被判成撤销分支，照剪就整段
+    // 看不到。这是本产品的核心路径。旧规则也有它的形态：会话以 isMeta 行收尾时 0.3.281 落回压缩前的叶子。
+    // 10/15 全量实测 816 个会话：0.3.281 触发 1 个（cad10f35，回显 344 条只剩 33），0.3.300 触发 2 个
+    // （c78e8b47 丢 36 条、da2b6acb 丢末尾 2 条，都是 away_summary 挂旧叶），其余逐条与不加保护一致。
+    // 退回不剪，方向同 readLiveChainUuids 的 fail-open；代价是这时真被 rewind 掉的段也会露面
+    // （da2b6acb 因此多出一句终端里被丢弃的「继续」）。
+    // 第二遍读只在触发时发生；结果照常进缓存——文件没变，SDK 的选择就不会变。
+    if (liveUuids && pass.newestMainUuid && !liveUuids.has(pass.newestMainUuid)) {
+      pass = await readHistoryMessages(historyFile, null);
+    }
+    ({ messages } = pass);
+  } catch {
+    return []; // 读取失败（含不是普通文件）
+  }
+
+  // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
+  // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
+  // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
+  // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
+
+  return messages.slice(-limit);
+}
+
+// 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见循环里）。
+// 顺带回报物理上最新的那条主链 user/assistant 的 uuid，供调用方判断 SDK 选的叶子对不对。
+// 读不出来（含不是普通文件）直接抛，由调用方回 []。
+async function readHistoryMessages(historyFile, liveUuids) {
   const messages = [];
   // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
   // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
@@ -175,6 +213,8 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
   // 它们不在集合里只说明「已被移出模型上下文」（compact），不说明「已被撤销」（rewind）。
   let chainStarted = false;
+  // 物理上最新的主链 user/assistant（口径与下面剪枝的那道闸相同、另跳过 teamName，剪掉的也算）。
+  let newestMainUuid = null;
   // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
   // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
   // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
@@ -213,10 +253,13 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 仍按当前链剪。全量实测 16 个压缩会话共 3 条，且全部是触发压缩的 `/compact` 命令行本身——要消掉
       // 这个窗口得改成按 compact_boundary 定位，代价是多读一遍最大 22MB 的 transcript（或把边界前的条目
       // 全缓冲起来事后再剪），为剪掉一条本就不该显示的命令行付这个代价不划算。
-      if (liveUuids && entry.uuid && !entry.isSidechain
-          && (entry.type === 'user' || entry.type === 'assistant')) {
-        if (liveUuids.has(entry.uuid)) chainStarted = true;
-        else if (chainStarted) continue;
+      if (entry.uuid && !entry.isSidechain && (entry.type === 'user' || entry.type === 'assistant')) {
+        // teamName 条目 SDK 选叶本就跳过（两版同），它排在最后不说明叶子选错了。
+        if (!entry.teamName) newestMainUuid = entry.uuid;
+        if (liveUuids) {
+          if (liveUuids.has(entry.uuid)) chainStarted = true;
+          else if (chainStarted) continue;
+        }
       }
 
       // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
@@ -301,19 +344,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     if (messages.length > HISTORY_MAX_MESSAGES) {
       messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
     }
-  } catch {
-    return []; // 读取失败（含不是普通文件）
   } finally {
     input?.destroy(); // 读完已自行关闭；中途抛出时也要把句柄关掉
   }
-
-  // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
-  // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
-  // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
-  // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
-
-  return messages.slice(-limit);
+  return { messages, newestMainUuid };
 }
 
 // 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
