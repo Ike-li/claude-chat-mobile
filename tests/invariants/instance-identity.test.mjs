@@ -1,11 +1,12 @@
 // tests/invariants/instance-identity.test.mjs —— 实例句柄跨重启不复用、离线重放核对会话（纯函数那一半）
-// 守护：MSG-02（客户端手里的 instanceId 不得指到另一个会话：发号跨重启不复用；带着入队时 sessionId 的重放，命中的实例换了会话按 stale 拒收）
+// 守护：MSG-02（客户端手里的 instanceId 不得指到另一个会话：发号跨重启不复用；带着入队时 sessionId 的重放，句柄失效或指着别的会话时改投该会话此刻的活实例，没有才按 stale 拒收）
 // 测什么：① createInstanceManager 每建一次（= 一次启动）发出的号，与别的那次不相交
 //         ② resolveInstanceTarget 带上 expectedSessionId 时，命中活实例还要核对它此刻跑的会话
-//         ③ 离线队列条目的 sessionId 活过 localStorage 往返（序列化是白名单，不登记就被静默丢掉）
-// 不测什么 + 为什么：① 真重启后的重放与续传接线 —— 要两次真启动，归 S2（tests/invariants/server/instance-identity.test.mjs）
+//         ③ 句柄失效（规则 5 置换、切 effort 换了号）或指着别的会话时，改投入队时那个会话此刻的活实例；没有活实例照旧 stale
+//         ④ 离线队列条目的 sessionId 活过 localStorage 往返（序列化是白名单，不登记就被静默丢掉）
+// 不测什么 + 为什么：① 真重启后的重放与续传接线、规则 5 置换后同一批第 2 条的真实接线 —— 要真组装根，
+//                      归 S2（tests/invariants/server/instance-identity.test.mjs）
 //                   ② 前端入队时记下哪个 sessionId、重放时有没有带上 —— 在 app.js 里，归 S3（tests/e2e/specs/input-send-empty.spec.ts）
-//                   ③ 规则 5 置换换了号之后，同一批离线消息第 2 条起被判 stale —— 另一个缺陷，本条不管
 // 槽位：S1（纯函数，数据进数据出）
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -82,6 +83,64 @@ test.describe('resolveInstanceTarget：带着入队时的会话，命中活实�
     assert.deepEqual(
       resolveInstanceTarget(null, viewing, isLive, { allowViewingFallback: false, expectedSessionId: 'sess-x', sessionOf }),
       { id: null, stale: false },
+    );
+  });
+});
+
+// 2026-10-16 review P2「离线同一批第 2 条起被判 stale」：第 1 条触发规则 5 置换（dispose + resume 换了实例号），
+// 后面的条目还拿着置换前的句柄。会话没关，只是换了进程——身份是会话，句柄只是入队那一刻的进程号。
+test.describe('resolveInstanceTarget：离线重放的句柄失效了，会话还开着 → 改投这个会话此刻的实例', () => {
+  // inst_new 是 sess-a 置换后的新实例（规则 5 / 切 effort / 另一台设备重开过），inst_gone 是置换前的旧号
+  const sessions = new Map([['inst_new', 'sess-a'], ['inst_b', 'sess-b']]);
+  const isLive = id => sessions.has(id);
+  const sessionOf = id => sessions.get(id) ?? null;
+  const liveInstanceOfSession = sid => [...sessions].find(([, s]) => s === sid)?.[0] ?? null;
+  const replay = extra => ({ allowViewingFallback: false, sessionOf, liveInstanceOfSession, ...extra });
+
+  test('旧句柄已不在、入队时那个会话有活实例 → 改投它', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_gone', 'inst_new', isLive, replay({ expectedSessionId: 'sess-a' })),
+      { id: 'inst_new', stale: false, followed: true },
+      '判成 stale 的话，前端落「目标会话已关闭」永久失败、不给重发，而会话明明还开着',
+    );
+  });
+
+  test('句柄还活着但跑的是别的会话，入队时那个会话在另一个实例上 → 改投那个实例，不投句柄', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_b', null, isLive, replay({ expectedSessionId: 'sess-a' })),
+      { id: 'inst_new', stale: false, followed: true },
+      '句柄指着 sess-b，这条却是给 sess-a 的：投句柄就是把它交给另一段对话执行（MSG-02）',
+    );
+  });
+
+  test('句柄对得上 → 用句柄本身，不改投（正对照：改投只在句柄失效时发生）', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_b', null, isLive, replay({ expectedSessionId: 'sess-b', liveInstanceOfSession: () => 'inst_new' })),
+      { id: 'inst_b', stale: false },
+    );
+  });
+
+  test('会话此刻没有活实例（空闲回收了、用户关掉了）→ 照旧 stale，不替用户把会话重新拉起来', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_gone', null, isLive, replay({ expectedSessionId: 'sess-closed' })),
+      { id: null, stale: true },
+    );
+  });
+
+  test('条目没带会话（升级前入队的、入队时会话还没开出来的）→ 无从知道它属于哪段对话，照旧 stale', () => {
+    for (const expectedSessionId of [undefined, null, '']) {
+      assert.deepEqual(
+        resolveInstanceTarget('inst_gone', null, isLive, replay({ expectedSessionId })),
+        { id: null, stale: true },
+        `expectedSessionId=${JSON.stringify(expectedSessionId)} 时不该改投`,
+      );
+    }
+  });
+
+  test('调用方不给查找函数（在线发送）→ 与改投前一致，只核对不改投', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_gone', null, isLive, { expectedSessionId: 'sess-a', sessionOf }),
+      { id: null, stale: true },
     );
   });
 });

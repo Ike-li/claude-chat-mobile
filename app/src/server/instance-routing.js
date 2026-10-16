@@ -9,6 +9,7 @@
 //   - 显式命中 live                     → { id: <该 id>, stale: false }
 //   - 显式但不在 live（含空串等非 null 假值）→ { id: null, stale: true } 目标已失效，调用方应负 ACK / no-op，
 //                                          【绝不】回退 viewing、【绝不】懒开新实例
+//                                          （离线重放带着会话时可改投该会话的活实例，见下方 liveInstanceOfSession）
 //
 // 缺省且无 viewing（首发 / 无 open tab）返回 { id: null, stale: false }：id 为空但非 stale，调用方据 stale=false
 // 走懒开而非拒绝。据此 { id:null } 的两种成因（缺省无 viewing vs 显式 stale）由 stale 字段区分。
@@ -23,17 +24,26 @@
 // opts.expectedSessionId（非空字符串才算）+ opts.sessionOf(id)：显式命中活实例时再核对它此刻跑的会话（MSG-02）。
 // 离线重放带着入队时那个会话，实例对得上号、跑的却不是它（重启前的旧号、/clear 换了会话）→ 与「已不在」同样 stale。
 // 实例还没有会话而条目有，同样判 stale：客户端只可能从服务端得知 sessionId，而实例的 sessionId 有了就不会变回空。
+//
+// opts.liveInstanceOfSession(sessionId) → 该会话此刻的活实例 id（没有就 null）。只有离线重放传它：句柄失效或指着
+// 别的会话、而入队时那个会话还开着时，改投它 → { id, stale:false, followed:true }。会话没关，只是换了进程——
+// 规则 5 置换、切 effort 都是 dispose + resume，换号不换会话；同一批离线消息的第 1 条触发了置换，后面各条还拿着
+// 旧号（2026-10-16 review P2）。没有活实例（空闲回收了、用户关掉了）照旧 stale：不替用户把会话重新拉起来。
+// 改投之后与客户端直接拿着那个实例的句柄来发同路，下游的规则 5 置换、续接分叉闸、在途轮闸照样过。
+// 本函数只看此刻登记着的实例：置换进行到一半（旧实例已移出、新实例还没登记）时它查不到，调用方（user:message）
+// 在落 stale 之前先等同会话在途的续接（resumeInFlight）落定，再调一次。
 export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, opts = {}) {
   if (requestedId == null) {
     if (opts.allowViewingFallback === false) return { id: null, stale: false };
     return { id: viewingInstanceId ?? null, stale: false };
   }
-  if (!isLive(requestedId)) return { id: null, stale: true };
-  const expected = opts.expectedSessionId;
-  if (typeof expected === 'string' && expected && opts.sessionOf?.(requestedId) !== expected) {
-    return { id: null, stale: true };
+  const expected = typeof opts.expectedSessionId === 'string' && opts.expectedSessionId ? opts.expectedSessionId : null;
+  if (isLive(requestedId) && (!expected || opts.sessionOf?.(requestedId) === expected)) {
+    return { id: requestedId, stale: false };
   }
-  return { id: requestedId, stale: false };
+  const followed = expected ? (opts.liveInstanceOfSession?.(expected) ?? null) : null;
+  if (followed) return { id: followed, stale: false, followed: true };
+  return { id: null, stale: true };
 }
 
 // allowViewingFallback=false 的另一半：关掉实例回退后 outbox 重发会落到懒开分支，而那里的
