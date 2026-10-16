@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setLru } from '../shared/bounded-map.js';
+import { childEnv } from '../shared/child-env.js';
 
 export const FILE_SEARCH_LIMIT = 50;
 const FILE_SEARCH_MAX_CANDIDATES = 5000;
@@ -36,11 +37,12 @@ function runExecFile(execFile, cmd, args, options) {
   });
 }
 
+// env 走 childEnv：ls-files 读 index 时会执行仓库配置里的 core.fsmonitor，不能让它拿到控制面密钥（AUTH-06）。
 async function gitLsFiles(cwd, { execFile, timeoutMs = FILE_SEARCH_TIMEOUT_MS } = {}) {
   try {
     const { stdout } = await runExecFile(
       execFile, 'git', ['-C', cwd, 'ls-files', '--cached', '--others', '--exclude-standard'],
-      { timeout: timeoutMs, maxBuffer: 1 << 20 },
+      { timeout: timeoutMs, maxBuffer: 1 << 20, env: childEnv() },
     );
     return stdout.split('\n').map(s => s.trim()).filter(Boolean);
   } catch {

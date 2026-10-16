@@ -2,7 +2,7 @@
 // 守护：AUTH-06（childEnv / sdkChildEnv 必须剥掉 CCM 控制面密钥；claude 自己那份环境原样透传）
 // 测什么：AUTH_TOKEN 与 VAPID_* / NTFY_* / CF_ACCESS_* 三组前缀被剥；ANTHROPIC_* / CLAUDE_CODE_* /
 //         代理变量 / PATH / HOME 原样透传；一道漂移闸——env-schema 里每个标了密钥的键都必须被剥掉；
-//         以及 server 自己派生的 git（变更面板、状态栏）与 `claude --version`（doctor）真的拿不到它们
+//         以及 server 自己派生的 git（变更面板、状态栏、@ 文件搜索）与 `claude --version`（doctor）真的拿不到它们
 // 不测什么 + 为什么：① worktree settings 的 resolvedEnv 叠加层 —— 那是 agent.js 的 filterSafeResolvedEnv，
 //         方向相反的另一道闸，归 tests/unit/agent-background-tasks.test.mjs ② 两个 origin 标记不可被
 //         调用方覆盖 —— 模块行为不是红线，归 tests/unit/agent-core.test.mjs ③ SDK 会话与启动横幅那次
@@ -30,6 +30,7 @@ import { join } from 'node:path';
 
 import { childEnv, sdkChildEnv } from '../../app/src/shared/child-env.js';
 import { listGitChanges } from '../../app/src/files/git-workspace.js';
+import { searchFiles } from '../../app/src/files/file-search.js';
 import { gitStatus } from '../../app/src/ops/statusline.js';
 import { probeClaudeBin } from '../../app/src/ops/doctor-runtime.js';
 
@@ -175,6 +176,23 @@ test('AUTH-06：状态栏跑的 git 拿不到控制面密钥（core.fsmonitor �
   try {
     await withProcessEnv(HOOK_ENV, () => gitStatus(repo));
     assertDumpClean(dump, 'gitStatus');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 手机上敲 @ 就会触发 git ls-files（2026-10-16 review P1-4：此前它是 server 唯一没走漏斗的 git 出口）。
+// searchFiles 吞掉 git 的失败、静默回落目录遍历，所以要另证这次真走了 git：遍历跳过隐藏文件，
+// 搜得到 .gitignore 只可能来自 ls-files。
+test('AUTH-06：@ 文件搜索跑的 git 拿不到控制面密钥（core.fsmonitor 钩子实测）', async () => {
+  const { root, repo, dump } = makeRepoWithEnvDumpingHook();
+  try {
+    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
+    await withProcessEnv(HOOK_ENV, async () => {
+      const r = await searchFiles(repo, 'gitignore');
+      assert.deepEqual(r, ['.gitignore'], `git ls-files 要真的跑通（结果来自遍历回落就搜不到 .gitignore）：${JSON.stringify(r)}`);
+    });
+    assertDumpClean(dump, 'searchFiles');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
