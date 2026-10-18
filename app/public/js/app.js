@@ -13,6 +13,8 @@ import {
   modelGridEmptyHint,
   resolveGatewayModelName,
   resolveModelPillText,
+  modelTileValueFor,
+  resolveOutgoingModel,
   formatCachePercent,
   effortLevelSubtitle,
   shouldShowBusyWithMirror,
@@ -167,8 +169,6 @@ import {
   permissionModeTileSpecs,
   resolveComposerPlaceholder,
   resolveTurnEndScroll,
-  resolveSendModel,
-  applyGatewaySuffix,
   formatRestartRows,
   formatAgoShort,
   formatAuditEntry,
@@ -368,6 +368,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
+        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
         syncModelUI(value);
       };
@@ -538,11 +539,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     if (pillModelText) pillModelText.textContent = modelPillText;
     if (customModelGrid) {
-      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
-      const activeVal = model || (cliDefault ? 'default' : '');
+      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项。
+      // 在跑的 wire 不是档位 id：映射到它所在的那张磁贴（验收 O53），列表里没有才落到兜底卡（value 即它本身）
+      const activeVal = model
+        ? (modelTileValueFor(model, modelsList, currentGatewaySuffix) || model)
+        : (cliDefault ? 'default' : '');
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;
-        const isCurrent = tileVal === activeVal || (!!model && tileVal === model);
+        const isCurrent = tileVal === activeVal;
         const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
@@ -578,16 +582,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 条数 = SDK 列表；标题 = 真实 wire id（resolvedModel），value 仍用 SDK 档位 id
     const tiles = resolveModelTileDisplay(list);
-    const wireOf = (v) => {
-      if (!v || v === 'default') return v || '';
-      return resolveGatewayModelName(v, list) || String(v);
-    };
+    // 「使用中」只给一张：在跑 / 选中的模型映射到它所在的磁贴（验收 O53）。此前按 wire 相等把同 wire 的几档全标上，
+    // 网关下四档同指一个 wire 时四张一起「使用中」。
+    const activeVal = modelTileValueFor(selectedVal, list, currentModel ? currentGatewaySuffix : '') || selectedVal;
     tiles.forEach(({ value: val, title, subtitle }) => {
       const display = title;
-      const active = val === selectedVal
-        || (!!currentModel && val === currentModel)
-        || (!!currentModel && wireOf(currentModel) && wireOf(currentModel) === wireOf(val))
-        || (!!selectedVal && selectedVal !== 'default' && wireOf(selectedVal) === wireOf(val))
+      const active = val === activeVal
         || (!currentModel && val === 'default' && (selectedVal === 'default' || !selectedVal));
       const using = active ? t(' · 使用中') : '';
       const card = el(`
@@ -601,6 +601,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         haptic('tap');
         // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
         modelInput.value = val === 'default' ? '' : val;
+        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel;
         if (val !== 'default') ensureModelOption(val);
         syncModelUI(val === 'default' ? '' : val);
@@ -2781,7 +2782,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         modelInput.value = pendingSend;
         rebuildCustomModelGrid(modelsList);
       } else if (currentModel) {
-        ensureModelOption(currentModel);
+        // 在跑的 wire 已落在某张磁贴上就不再补一张「当前加载模型」（验收 O53）
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         syncModelUI(currentModel);
       } else if ([...modelInput.options].some(o => o.value === 'default')) {
@@ -3958,6 +3960,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         // value=default 是 CLI /model 「不 pin」语义：对齐 tile 点击路径，select 置空，
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
+        modelInput.dataset.picked = '1'; // /model 是显式选择，与点磁贴同属发送意图
         if (nakedArg === 'default') {
           currentGatewaySuffix = '';
           delete modelInput.dataset.fullModel;
@@ -3980,17 +3983,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       autosize();
       return;
     }
-    // 原样转发 select；空/default → undefined（CLI 不 pin）
-    let model = resolveSendModel({
+    // 运行中的会话用户没点过模型：原样带回在跑模型，不从磁贴重建（会丢网关后缀，验收 O53 / O26）。
+    // 点过或新会话：resolveSendModel pin wire，再按 S5 回贴网关后缀——仅对「不在 supportedModels 候选里的
+    // 自设名」(如 /model 手设并剥离了后缀的)；判据同时认 value 与 resolvedModel，只比 value 会让守卫恒失效、
+    // 每次选模型都送出 grok-4.5[1m][1m]。
+    const model = resolveOutgoingModel({
+      running: Boolean(viewingInstanceId),
+      picked: modelInput.dataset.picked === '1',
+      loadedModel: currentModel ? currentModel + currentGatewaySuffix : '',
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
+      gatewaySuffix: currentGatewaySuffix,
       modelsList,
     });
-    // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
-    // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送。
-    // 判据必须同时认 value 与 resolvedModel：resolveSendModel 自 7febabc 起返回的是 **wire**
-    // （entry.resolvedModel），只比 value 会让守卫恒失效、每次选模型都送出 grok-4.5[1m][1m]。
-    model = applyGatewaySuffix(model, currentGatewaySuffix, modelsList);
     // E17：剥掉本地 _id（非契约字段），data=完整 base64、thumb=小缩略图随消息上传
     const outgoingAttachments = attachments.items().length
       ? attachments.payload()
@@ -4927,8 +4932,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     updateModelAndSuffix(rawModel);
     const effortModelValue = rawModel || currentModel;
     if (modelInput) {
+      delete modelInput.dataset.picked; // 换了会话：上一个会话里点过的模型不是这一个的发送意图
       if (inst.model) {
-        ensureModelOption(currentModel);
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         rebuildEffortOptions(effortModelValue, { silentClear: true });
       } else {
@@ -4988,7 +4994,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (modelInput) {
       delete modelInput.dataset.fullModel;
       if (rawModel) {
-        ensureModelOption(currentModel, t('CLI 当前模型'));
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel, t('CLI 当前模型'));
         modelInput.value = currentModel;
       } else {
         modelInput.value = '';
