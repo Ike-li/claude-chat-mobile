@@ -105,6 +105,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+    // 验收 O65：重发完了「正在重发离线发送队列中的 1 条消息…」还一直挂着
+    await expect(page.locator('#messages'), '重发已经结束，进行中的横幅要撤掉').not.toContainText('正在重发离线发送队列');
 
     await expectNoBrowserErrors(page);
   });
@@ -163,6 +165,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(replay.text).toBe('在线没被确认的那条');
     expect(replay.instanceId).toBe('inst_archived');
     expect(replay.sessionId, `在线转入重发的条目没带会话：${JSON.stringify(replay)}`).toBe('mock-session-archived');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O31：离线重放被服务端永久拒收后，outbox 清了、输入框是空的，原文只剩一行「已停止重试」——这条再也不会发，
+  // 用户也拿不回自己打的字。投给眼前这个会话、输入框空着时，原文放回输入框。
+  test('P0-02d7 离线重放被永久拒收：原文放回输入框，提示说清已停止重试', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    // 武装命令本身不收尾（运行条一直亮着），照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('会被永久拒收的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#input'), '永久拒收后原文丢了：outbox 已清，这条不会再发').toHaveValue('会被永久拒收的那条');
+    await expect(page.locator('#messages')).toContainText('已停止重试');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
     await expectNoBrowserErrors(page);
   });
 
@@ -229,6 +259,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectResendOnSecondBubbleAfterHistory(page, 'Any follow-up questions?');
     await expect(page.locator('[data-testid="user-message"]').filter({ hasText: 'Any follow-up questions?' }),
       '历史里那条旧消息与被拒收的第 2 条应各占一颗').toHaveCount(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O29：第 1 条的回显先于重载的历史到达，把清屏保住的离线气泡认领转正；历史随后落地，落定逻辑只认未确认的
+  // 气泡、跳过了它——它留在历史上方，历史里又渲染出同一条，回复在最底。
+  test('P0-02d8 回显先于重载的历史到达：保住的气泡不留在历史上方，屏幕上只有一颗', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', '离线第二条'], 'test:arm-outbox-replay-swap-echo-first');
+
+    const first = page.locator('[data-testid="user-message"]').filter({ hasText: '离线第一条' });
+    await expect(first, '回显转正的那颗与历史里那颗各占一颗：保住的气泡没被历史认领').toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => {
+      const tops = [...document.querySelectorAll('#messages > [data-top-level="1"]')];
+      const at = (needle: string) => tops.findIndex(el => el.textContent?.includes(needle));
+      return at('离线第一条') > at('Okay, heading home.');
+    }), { message: '第 1 条排在历史最后一轮之前：它被留在了重载的历史上方' }).toBe(true);
+    await expectResendOnSecondBubbleAfterHistory(page, '离线第二条');
     await expectNoBrowserErrors(page);
   });
 

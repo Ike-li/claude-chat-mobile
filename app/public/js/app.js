@@ -1444,7 +1444,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
     const notice = planOutboxDrainNotice({ items, ...outboxViewing() });
-    addBar(notice.text, 'text-info');
+    // 进行中的横幅，批处理结束就撤（验收 O65：此前不留引用，「正在重发 1 条…」重发完了还一直挂着）。
+    // 各条的结局（送达 / 未发送 + 重发 / 永久拒绝）都落在各自的气泡或提示条上，不靠这一条。
+    const drainBar = addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
     // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
@@ -1486,9 +1488,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
           const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
-          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
-          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
-          if (permanentHost) permanentHost.textContent = permanentMsg;
+          // 服务端永久拒收、outbox 已清，这条不会再发——原文得交还给用户（验收 O31：此前只剩一行提示，输入框是空的）。
+          // 投给眼前这个会话且输入框空着：放回输入框，气泡随之撤掉。否则提示落在气泡上（气泡里就是原文）；
+          // 连气泡都不在时把原文写进提示条，至少还看得见、复制得到。
+          if (moveOutboxItemToComposer(planned)) {
+            addBar(`${permanentMsg}${t('，原文已放回输入框')}`, 'text-danger');
+          } else {
+            // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+            const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+            const inBubble = Boolean(permanentHost?.closest?.('[data-testid="user-message"]'));
+            if (permanentHost) permanentHost.textContent = inBubble ? permanentMsg : `${permanentMsg}${t('。原文：')}${item.text || ''}`;
+          }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
@@ -1509,6 +1519,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     } finally {
       _offlineDrainInFlight = false;
+      drainBar?.remove();
       persistOutbox();
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
@@ -7633,7 +7644,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
     // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
     // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
-    for (const node of keptPending) messagesEl.appendChild(node);
+    // 打上 data-carried：在历史回包之前，回显（user_message）可能先把它认领转正、摘掉 .opacity-70。落定逻辑
+    // 只认 .opacity-70 的话会跳过它，它就留在随后落地的历史上方、历史里又画出同一条（验收 O29）。
+    // 原文一并记下：回显转正时会把气泡内容换成 markdown 渲染，.whitespace-pre-wrap 就没了，历史认领按文本找不到它。
+    for (const node of keptPending) {
+      node.dataset.carried = '1';
+      node.dataset.carriedText = node.querySelector('.whitespace-pre-wrap')?.textContent ?? '';
+      messagesEl.appendChild(node);
+    }
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     hideStatuslineWrap();
@@ -8535,14 +8553,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 交给 outbox 的气泡多一道闸（canTextClaimPendingBubble）：没有证据说它进了 transcript 就不认领，直接移到末尾。
   // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
-    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
+    // 认 data-carried 而不只是 .opacity-70：被保住的气泡可能已在历史回包之前被回显认领转正（见 clearView）。
+    // 转正过的就是服务端收下了的证据，可以让历史认领，不必再过 canTextClaimPendingBubble 那道闸。
+    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"][data-carried]')]) {
+      const carriedText = bubble.dataset.carriedText ?? '';
+      delete bubble.dataset.carried;
+      delete bubble.dataset.carriedText;
+      const settled = !bubble.classList.contains('opacity-70');
       const tDiv = bubble.querySelector('.whitespace-pre-wrap');
-      const claim = canTextClaimPendingBubble({
+      const claim = (settled || canTextClaimPendingBubble({
         outboxOutcome: bubble.dataset.outboxOutcome ?? null,
         maybeSent: Boolean(bubble.dataset.outboxMaybeSent),
-      })
+      }))
         ? findHistoryClaimForPending({
-          text: tDiv ? tDiv.textContent : '',
+          text: tDiv ? tDiv.textContent : carriedText,
           attNames: bubble.dataset.attNames || '',
           messages: msgs,
         })
@@ -8552,7 +8576,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         continue;
       }
       const heir = claim.uuid
-        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b.dataset.uuid === claim.uuid)
+        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b !== bubble && b.dataset.uuid === claim.uuid)
         : null;
       if (!heir) {
         // 认领到了历史里的那条，却定位不到它渲染出的气泡（msg.uuid 缺失——真实 transcript 每行都有，

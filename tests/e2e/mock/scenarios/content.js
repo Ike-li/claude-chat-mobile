@@ -117,6 +117,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armSendTransientFail(); },
     },
     {
+      // P0-02d7：武装「下一条离线重放回永久拒绝」（验收 O31）。
+      command: 'test:arm-outbox-permanent',
+      run: async () => { getContext().armOutboxPermanent(); },
+    },
+    {
       // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」，之后在那个会话里发消息被发送闸拒收。
       command: 'test:arm-resume-divergence',
       run: async () => { getContext().armResumeDivergence(); },
@@ -142,6 +147,11 @@ export function createContentScenarios(getContext) {
       // P0-02d6：同上，但同一批后面那条的在途轮拒收压到这个会话的历史回包之后才发；放出之后那一轮跑完，「重发」照常收下。
       command: 'test:arm-outbox-replay-swap-history-first',
       run: async () => { getContext().armOutboxReplaySwapHistoryFirst(); },
+    },
+    {
+      // 验收 O29：同上，但第 1 条的 user_message 回显先于重载的历史回包到达（见 mock 的 outboxReplaySwapEchoFirst）。
+      command: 'test:arm-outbox-replay-swap-echo-first',
+      run: async () => { getContext().armOutboxReplaySwapEchoFirst(); },
     },
     {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
