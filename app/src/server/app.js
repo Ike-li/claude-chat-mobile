@@ -43,6 +43,7 @@ import {
   createConfigReloader,
   loadConfigSources,
   reloadKindOf,
+  describeSavedKeys,
   structuredToStringValues,
 } from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
@@ -4651,7 +4652,10 @@ registerSocketConnection(io, socket => {
     // 会话与后台任务，换来一次完全不必要的停机。判据复用 config-file.js 的 reloadKindOf，
     // 不在这里自己写一份（它缺省 restart，方向已经是保守的那边）。
     const restartRequired = keys.some(k => reloadKindOf(k) === 'restart');
-    ack({ ok: true, results: verdict.results, written: keys, restartRequired });
+    // 逐项回执（验收 O48 / O63）：被 shell 环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——
+    // 笼统一句「重启后生效」是假成功。restartRequired 保留原语义给缓存里的旧前端；新前端读 saved。
+    const saved = describeSavedKeys(keys, { shellEnv: getShellEnvSnapshot() });
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired, saved });
   });
 
   // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
