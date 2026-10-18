@@ -222,6 +222,7 @@ import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
+import { createGateFocusController } from './app/focus-layers.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -386,6 +387,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const deviceDenied = $('deviceDenied'), deviceDeniedRetry = $('deviceDeniedRetry'), deviceDeniedHelp = $('deviceDeniedHelp');
   const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
+  // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
+  createGateFocusController({ gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp] });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
