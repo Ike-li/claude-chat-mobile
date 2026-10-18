@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -409,6 +409,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(cards).toHaveCount(2);
     expect(await cards.nth(0).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(false);
     expect(await cards.nth(1).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 AC-09-12 / O30：重启后过期的审批，transcript 里留下一条没配上 tool_result 的 tool_use；历史渲染恒把它画成
+  // 「进行中」，而这个会话根本没在跑——那一行永远转着。没有在途轮时，没配上结果的历史工具卡应是「已中止」。
+  test('P0-05-UNPAIRED 历史里没配上结果的工具卡：会话没在跑时显示「已中止」，不是一直「进行中」', async ({ page }) => {
+    captureBrowserErrors(page);
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session');
+    await page.goto('/');
+    await waitUntilConnected(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status).toHaveAttribute('aria-label', '已中止');
 
     await expectNoBrowserErrors(page);
   });

@@ -67,12 +67,16 @@ export function shouldRejectOutboxLazyOpen({ fromOutbox = false, cwd = undefined
 //        —— 禁止把视图静默弹到其它工作区（用户切会话 resume 失败时曾闪回 mimo）
 //      · allowCrossWorkspace=true（用户主动 session:close）→ 插入序第一个剩余，cwd 随该实例
 //   3. 无任何剩余 → null + (removedCwd ?? fallbackCwd)
+//   0. stayOnRemoved=true（进程意外退出，不含 resumeFailed）→ 不挑任何剩余实例，直接 null + 保留 removedCwd。
+//      用户正看着的会话没了，换一个同目录的会话顶上去等于静默跳走、什么都没说（验收 O60）；落空视图后前端判
+//      「正在看的实例被摧毁」，显示「会话已中断」，下一步由用户选。
 //
 // remainingIds：移除后仍存活的实例 id（按插入序，对齐 agents.keys()）；removedCwd：刚移除实例的 cwd；
 // cwdOf(id)：id→cwd；fallbackCwd：removedCwd 缺失时的兜底（当前 viewingCwd）。
 export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackCwd, opts = {}) {
   const ids = Array.isArray(remainingIds) ? remainingIds : [];
   const allowCross = opts.allowCrossWorkspace === true;
+  if (opts.stayOnRemoved === true) return { viewingInstanceId: null, viewingCwd: removedCwd ?? fallbackCwd };
   if (removedCwd != null) {
     const sameCwd = ids.find(id => cwdOf(id) === removedCwd);
     if (sameCwd) return { viewingInstanceId: sameCwd, viewingCwd: removedCwd };

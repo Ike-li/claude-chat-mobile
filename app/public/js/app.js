@@ -3159,9 +3159,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (p.outcome === 'integrity_mismatch') {
           addBar(t('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）'), 'text-danger');
         }
+        // 等到 TTL 到期：服务端已按拒绝回给 CLI。此前只是悄悄关卡，用户回来只看到卡片没了，不知道那个操作其实
+        // 没执行（验收 O30）。
+        if (p.outcome === 'expired') addBar(t('⏱ 这条审批等太久已过期，操作没有执行'), 'text-warning');
         approvals.resolvePermission(requestId);
         updateSendButtonState();
       } else if (kind === 'question') {
+        // 同上。多题提问会逐题各发一条（requestId 带 #序号）再发整体那条，只在整体那条上说一次
+        if (p.outcome === 'expired' && !String(requestId).includes('#')) addBar(t('⏱ 这个提问等太久已过期，没有作答'), 'text-warning');
         approvals.resolveQuestion(requestId);
         updateSendButtonState();
       }
@@ -8853,6 +8858,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
       // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
       if (fullReload) settleCarriedPendingBubbles(msgs);
+      // 全量重载完还没配上 tool_result 的工具卡：会话此刻没在跑（没有在途轮、也不是终端在驾驶），结果就不会再来了。
+      // 重启后过期的审批留下的正是这种 tool_use——画成「进行中」会让那一行永远转着（验收 O30）。标中性终态「已中止」。
+      if (fullReload && !cardsOnly && !_turnRunning && !mirrorReadonlySid) {
+        for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
+      }
       if (!cardsOnly) scrollBottom(true);
       if (codeBlocks.length) {
         const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });

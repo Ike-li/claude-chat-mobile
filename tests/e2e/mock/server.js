@@ -285,6 +285,8 @@ let syncAckTimeoutArmed = false;
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
 // 一次性：拒一次就解除，重发那条照常处理。
 let sendTransientFailArmed = false;
+// 验收 O30：主工作区多一条会话，历史末尾是一条没配上 tool_result 的 tool_use（重启后过期的审批留下的就是这个形态）。
+let unpairedToolSessionArmed = false;
 // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
 // 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
 // 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
@@ -591,6 +593,7 @@ function resetMockState() {
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
   sendTransientFailArmed = false;
+  unpairedToolSessionArmed = false;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
@@ -805,6 +808,12 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 // 读坏时就是这个形状。无参，一次性消费。
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
+  res.json({ ok: true });
+});
+
+// 验收 O30：武装后主工作区多一条「Unpaired Tool Session」。无参，/__reset 清除；要在 page.goto 之前武装。
+app.post('/__arm-unpaired-tool-session', (_req, res) => {
+  unpairedToolSessionArmed = true;
   res.json({ ok: true });
 });
 
@@ -1053,6 +1062,9 @@ function mainCwdSessions() {
     lastUsedAt: mockListClockBase - 1400000,
     entrypoint: 'sdk-ts'
   });
+  if (unpairedToolSessionArmed) {
+    sessions.push({ id: 'mock-session-unpaired-tool', title: 'Unpaired Tool Session', lastUsedAt: mockListClockBase - 1500000, entrypoint: 'sdk-ts' });
+  }
   return sessions;
 }
 
@@ -1731,6 +1743,11 @@ io.on('connection', socket => {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
       },
+      // 验收 O30：历史末尾留着一条没配上结果的 tool_use（见 unpairedToolSessionArmed）
+      'mock-session-unpaired-tool': {
+        instanceId: 'inst_unpaired_tool',
+        title: 'Unpaired Tool Session'
+      },
       'mock-session-worktree': {
         instanceId: 'inst_worktree',
         title: 'Worktree Driving Session',
@@ -2222,6 +2239,13 @@ io.on('connection', socket => {
             outputSummary: 'Subagent code-reviewer finished review.', timestamp: sahTs(6)
           },
           { role: 'assistant', content: 'Subagent history follow-up', uuid: 'a-sah-5', timestamp: sahTs(5) }
+        ]
+      });
+    } else if (sessionId === 'mock-session-unpaired-tool') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Push the release branch', uuid: 'u-unpaired-1' },
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'unpaired-tool-1', name: 'Bash', inputSummary: '{"command":"git push origin release"}', uuid: 'a-unpaired-1' },
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
@@ -3511,7 +3535,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-expired'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -3619,6 +3643,30 @@ io.on('connection', socket => {
           });
           socket.emit('agent:event', {
             seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          pendingPermission = null;
+        }
+
+        // 验收 O30：审批等到 TTL 到期——真 agent 的 _expirePermission：request_resolved(expired) + 以 deny 回给 CLI，这一轮照常跑完
+        if (cmd === 'test:permission-expired') {
+          await delay(600);
+          io.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'request_resolved', payload: { requestId: pendingPermission.requestId, kind: 'permission', outcome: 'expired' }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: false, outputSummary: 'Permission request expired (mock)' }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+          });
+          socket.emit('agent:event', {
+            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
           });
           pendingPermission = null;
