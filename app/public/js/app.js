@@ -68,6 +68,7 @@ import {
   formatHooksBridgeRow,
   formatMcpServers,
   formatPushStatusRow,
+  describePushTestResult,
   formatStatuslineBridgeRow,
   pushEnvHint,
   readPushOptOut,
@@ -6089,17 +6090,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = t('发送中…');
-    socket.timeout(8000).emit('push:test', {}, (err, res) => {
+    // 12s：服务端要等 ntfy 的投递结果（它自带 8s 超时），8s 的话 ntfy 一慢就误报成断网
+    socket.timeout(12_000).emit('push:test', {}, (err, res) => {
       btn.disabled = false;
       btn.textContent = original;
-      if (err || !res?.ok) { addBar(t('测试推送失败，请检查网络'), 'text-danger'); return; }
-      if (!res.subscribed) {
-        addBar(t('这台设备还没订阅推送——先点上方的「开启」'), 'text-warning');
-      } else if (res.failed > 0) {
-        addBar(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`, 'text-danger');
-      } else {
-        addBar(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`, 'text-success');
+      const permission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
+      const r = describePushTestResult(err ? null : res, { permission });
+      const cls = { ok: 'text-success', warn: 'text-warning', danger: 'text-danger' }[r.tone];
+      addBar(r.text, cls);
+      // 设置面板是 z-40 的大底栏、盖着消息流，只写 addBar 等于没写（同 renderPushStatusRow 里关闭失败那条）：
+      // 结果就地落在按钮下面，用户此刻正看着这一层
+      let notice = $('pushTestResult');
+      if (!notice) {
+        notice = el(`<div id="pushTestResult" role="status" data-testid="push-test-result"></div>`);
+        btn.after(notice);
       }
+      notice.className = `text-[11px] px-1 ${cls}`;
+      notice.textContent = r.text;
     });
   };
 
