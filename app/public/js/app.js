@@ -1758,6 +1758,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!shouldAttemptReconnect({
       authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
       accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
+      deviceDeniedOpen: gateIsOpen(deviceDenied),
       persisted: opts?.persisted ?? null,
     })) return;
     clearTimeout(_reconnectTimer);
