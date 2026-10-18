@@ -3,7 +3,7 @@
 // 测什么：真 app/server.js 子进程上 folders:browse / folders:add / folders:mkdir / folders:remove 四条事件：
 //   加进去的目录立刻出现在 ack 与广播里、配置文件原有条目（含 sessionLimit）原样保留、留审计；
 //   不能加的一律拒绝且配置文件逐字节不变；配置文件不存在时不替用户建、来源是环境变量时不假装成功；
-//   这两种「手机上改不了」在 instances 广播的 foldersReadonly 里提前说清，能改时是 null；
+//   这两种「手机上改不了」在 instances 广播的 foldersReadonly 里提前说清，能改时是 null，新建也只剩已连接的文件夹里；
 //   已经连着的不重复写；断开只认连接根、其余条目原样保留、剩下的全都找不到也照样生效、开着的会话照常跑。
 // 不测什么 + 为什么：① 判据本身（只回目录名、symlink、worktree、名字校验）在 S1 folder-picker.test.mjs
 //   ② 前端的选择面板属 S3
@@ -167,6 +167,8 @@ test('配置文件不存在：拒绝，也不替用户建一个（hard-rules §4
     assert.equal(await readonlyOf(s), 'no_config_file', '广播没说手机上改不了：零文件夹引导会给一个走完选择面板才报错的按钮');
     assert.deepEqual(await emitOn(s, 'folders:add', { path: 'code/b' }), { ok: false, error: 'no_config_file' });
     assert.equal(existsSync(missing), false);
+    assert.deepEqual(await emitOn(s, 'folders:mkdir', { path: 'code', name: 'no-cfg-proj' }), { ok: false, error: 'no_config_file' });
+    assert.equal(existsSync(join(home, 'code', 'no-cfg-proj')), false, '拒了却已经在磁盘上建出来了');
   } finally {
     s.close();
     await killServer(other.proc);
@@ -203,6 +205,11 @@ test('工作区来自环境变量：写进配置文件也不会生效，拒绝�
     assert.equal(await readonlyOf(s), 'source_readonly', '广播没说手机上改不了：零文件夹引导会给一个走完选择面板才报错的按钮');
     assert.deepEqual(await emitOn(s, 'folders:add', { path: 'code/b' }), { ok: false, error: 'source_readonly' });
     assert.equal(readFileSync(cfg, 'utf8'), before);
+    // 新建也一样：已连接的文件夹之外建出来的加不进清单，只会留一个空目录（验收 O41）；已连接的文件夹里照常建
+    assert.deepEqual(await emitOn(s, 'folders:mkdir', { path: 'code', name: 'ro-proj' }), { ok: false, error: 'source_readonly' });
+    assert.equal(existsSync(join(home, 'code', 'ro-proj')), false, '拒了却已经在磁盘上建出来了');
+    const inner = await emitOn(s, 'folders:mkdir', { path: 'code/a', name: 'ro-inner' });
+    assert.deepEqual(inner, { ok: true, path: join(a, 'ro-inner') });
   } finally {
     s.close();
     await killServer(other.proc);

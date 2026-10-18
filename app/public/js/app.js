@@ -6484,6 +6484,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     $, el, socket, openSheet, closeSheet, haptic,
     getProjects: () => projectsState.entries(),
     getScratchRoot: () => projectsState.scratchRoot(),
+    getFoldersReadonly: () => projectsState.foldersReadonly(),
     onPick: cwd => startNewSessionIn(cwd),
   });
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端

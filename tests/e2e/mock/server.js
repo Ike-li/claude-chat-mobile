@@ -2746,6 +2746,9 @@ io.on('connection', socket => {
     if (name.includes('/')) return ack({ ok: false, error: 'separator' });
     if (!mockFolderRelOk(rel) || !Object.hasOwn(mockFolderTree, rel)) return ack({ ok: false, error: 'out_of_range' });
     if (mockFolderTree[rel].includes(name)) return ack({ ok: false, error: 'exists' });
+    // 同真 server：清单改不了时只能建在已连接的文件夹里（之外建出来的加不进清单，验收 O41）
+    const parentAbs = mockFolderAbs(rel);
+    if (mockFoldersAddError && !mockDirs().some(d => parentAbs === d || parentAbs.startsWith(`${d}/`))) return ack({ ok: false, error: mockFoldersAddError });
     const child = rel ? `${rel}/${name}` : name;
     mockFolderTree[rel] = [...mockFolderTree[rel], name].sort();
     mockFolderTree[child] = [];
@@ -4792,6 +4795,16 @@ io.on('connection', socket => {
       command: 'test:folders-readonly',
       run: async () => {
         mockFoldersAddError = 'source_readonly';
+        // 真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了）；这里中途换安装形态，补一帧让客户端知道
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+            ...mockDirFields(),
+            instances: mockInstances, service: mockServicePayload()
+          }
+        });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { text: 'test:folders-readonly ready' }
