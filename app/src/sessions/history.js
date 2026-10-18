@@ -1247,9 +1247,12 @@ async function scanSessionsViaSdk(cwd, limit) {
     try { st = await stat(file); } catch { return null; }
     let activityAt = null;
     try { activityAt = await readLastMessageActivityMs(file, st.size); } catch { /* 读失败 → 回落 lastModified */ }
+    // SDK 提不出 summary 时回落 readHeadMeta，与搜索、通知横幅同口径——否则搜得到原文、抽屉却是占位（验收 O58）。
+    // 只对空 summary 的那几条才开文件，正常会话不多付一次读。readHeadMeta 读失败返回 {}，落到占位。
+    const title = s.summary || (await readHeadMeta(file, st.size)).title || '(无标题)';
     return {
       id: s.sessionId,
-      title: s.summary || '(无标题)',
+      title,
       lastUsedAt: Math.round(activityAt ?? s.lastModified),
     };
   }))).filter(Boolean);
@@ -1286,8 +1289,10 @@ async function scanSessionsViaSdk(cwd, limit) {
     const extra = await Promise.all(stats.slice(0, fetchLimit).map(async m => {
       const file = join(projectDir, m.name);
       const activityAt = await readLastMessageActivityMs(file, m.size).catch(() => null);
-      // 标题：这类会话主链无消息，readHeadMeta 也提不出，统一回落占位（与快路径空 summary 同口径）
-      return { id: m.name.slice(0, -6), title: '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
+      // 标题回落 readHeadMeta（与快路径空 summary 同口径）。本地 slash 命令跑完的会话主链无消息，提不出就是占位；
+      // 首条以 HTML 标签开头的会话 SDK 同样提不出 summary、整条漏报，但首条 user 文本在（验收 O58）。
+      const meta = await readHeadMeta(file, m.size);
+      return { id: m.name.slice(0, -6), title: meta.title || '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
     }));
     enriched.push(...extra);
   } catch { /* readdir 失败（目录刚被删等）：SDK 结果照常返回，不因补齐失败而整个列表塌掉 */ }

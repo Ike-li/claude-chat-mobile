@@ -14,7 +14,9 @@ import {
   notifySessionTag,
   lookupNotifySessionTitle,
   otherWorkspaceNotifyOpts,
+  displaySessionTitle,
 } from '../../app/public/js/logic/session-search.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 test('matchesSessionTitle: 空/空白 query 全匹配', () => {
   assert.equal(matchesSessionTitle('Hello', ''), true);
@@ -70,6 +72,21 @@ test('resolveSessionListTitle: 展示优先 SDK summary（与浏览行同源）�
   assert.equal(resolveSessionListTitle({ summary: '', metaTitle: '首条用户' }), '首条用户');
   assert.equal(resolveSessionListTitle({}), '(无标题)');
   assert.equal(resolveSessionListTitle({ metaTitle: 'y'.repeat(80) }), 'y'.repeat(60));
+});
+
+// 验收 O42 / O75：服务端给无标题会话写死占位「(无标题)」（通知层与 cross-side-parity 认这个字面量，不动），
+// 前端的 `s.title || t(...)` 兜底因此永远走不到，英文界面上照样是「(无标题)」。
+test('displaySessionTitle: 服务端占位按界面语言显示；空值用调用方给的兜底；正常标题原样', () => {
+  setLang('en');
+  try {
+    assert.equal(displaySessionTitle('(无标题)', 'New session'), 'Untitled session');
+  } finally {
+    setLang('zh');
+  }
+  assert.equal(displaySessionTitle('(无标题)', '新会话'), '无标题会话');
+  assert.equal(displaySessionTitle('', '新会话'), '新会话');
+  assert.equal(displaySessionTitle(undefined, '新会话'), '新会话');
+  assert.equal(displaySessionTitle('修个 bug', '新会话'), '修个 bug');
 });
 
 test('formatNotifyIdentity: 事件 · 项目 · 会话，缺项跳过、占位标题丢弃', () => {

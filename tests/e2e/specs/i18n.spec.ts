@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings } from '../../helpers/playwright';
+import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralPage, openGeneralSettings, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 // zh 原文即词典 key 的运行时 t()，en locale 查表、未收录静默回落中文。本 spec 是唯一跑 en 的用例，
@@ -235,6 +235,55 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toHaveAttribute('placeholder', '给 Claude 发消息...');
     await expect(page.locator('#pillPermText')).toHaveText('Manual');
     await expect(page.locator('#btnNew')).toHaveAttribute('title', '创建新会话');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O42、O43③：会话行时间原来用 toLocaleString() 不传 locale、跟浏览器走（中文界面上是
+  // 「10/17/2026, 8:07:14 AM」）；服务端给无标题会话写死的占位「(无标题)」英文界面上照样原样露出。
+  // 要在 page.goto 之前武装，首屏的会话列表就带上那条无标题会话（gotoMock 会先 /__reset，所以这里手写）。
+  async function gotoWithUntitledSession(page: import('@playwright/test').Page) {
+    captureBrowserErrors(page);
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-untitled-session');
+    await page.goto('/');
+    await waitUntilConnected(page);
+    await page.locator('#btnHome').click(); // mock 有活实例，首屏落在它的会话里
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+  }
+
+  test('P0-I18N-ROWS en：首页与抽屉的会话行时间是英文日历文案，占位标题显示为 Untitled session', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
+    await gotoWithUntitledSession(page);
+    const enWhen = /^(Today|Yesterday|[A-Z][a-z]{2} \d{1,2}(, \d{4})?) \d{2}:\d{2}/;
+
+    const recent = page.locator('#dashRecentsList .dash-recent-item[data-session-id="mock-session-untitled"]');
+    await expect(recent.locator('.dash-recent-title')).toContainText('Untitled session');
+    await expect(recent).not.toContainText('(无标题)');
+    await expect(recent.locator('.dash-when')).toHaveText(enWhen);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-untitled"]');
+    await expect(row).toContainText('Untitled session');
+    await expect(row).not.toContainText('(无标题)');
+    await expect(row.locator('div.truncate.text-ink-faint').first()).toHaveText(enWhen);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-I18N-ROWS zh：会话行时间是「今天 / 昨天 / 10月15日」加 HH:mm，不是浏览器 locale 的格式', async ({ page }) => {
+    await gotoWithUntitledSession(page);
+    const zhWhen = /^(今天|昨天|\d{1,2}月\d{1,2}日|\d{4}年\d{1,2}月\d{1,2}日) \d{2}:\d{2}/;
+
+    const recent = page.locator('#dashRecentsList .dash-recent-item[data-session-id="mock-session-untitled"]');
+    await expect(recent.locator('.dash-recent-title')).toContainText('无标题会话');
+    await expect(recent.locator('.dash-when')).toHaveText(zhWhen);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-untitled"]');
+    await expect(row.locator('div.truncate.text-ink-faint').first()).toHaveText(zhWhen);
 
     await expectNoBrowserErrors(page);
   });

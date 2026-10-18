@@ -35,6 +35,8 @@ import {
   isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
+  formatSessionRowTime,
+  displaySessionTitle,
   summarizeOtherWorkspaces,
   shouldShowComposer,
   shouldShowTopContextPill,
@@ -5792,7 +5794,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     row.appendChild(icon);
     const body = el(`<div class="flex-1 min-w-0"></div>`);
     const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
-    head.textContent = item.title || t('新会话');
+    head.textContent = displaySessionTitle(item.title, t('新会话'));
     const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
     const reasonLabel = isApproval ? t('等待审批') : t('等待输入');
     const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
@@ -6799,7 +6801,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         e.stopPropagation();
         haptic('warning');
         if (await appConfirm({
-          title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+          title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
           body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
           okText: t('关闭会话'),
         })) {
@@ -6822,10 +6824,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     rowContent.dataset.terminalSource = s.terminalSource || '';
     rowContent.dataset.bgLocked = s.bgLocked ? '1' : '';
     const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
-    btn.title = s.title || t('新会话');
+    btn.title = displaySessionTitle(s.title, t('新会话'));
     const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
     const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
-    titleSpan.textContent = s.title || t('新会话');
+    titleSpan.textContent = displaySessionTitle(s.title, t('新会话'));
     head.appendChild(titleSpan);
     // R65 未读：标题加粗变深 + 文字 chip「未读」（原 8px 色点在手机上既不显眼也说不清自己是什么）。
     // 上次打开后有新活动或长按标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
@@ -6852,7 +6854,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.appendChild(head);
     const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
     // 有 id 却没有时间戳的只有 SESSION-02 补画的活实例行——它是存过的会话，不能说「未保存」。
-    const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : (s.id ? '' : t('新会话（未保存）'));
+    const when = s.lastUsedAt ? formatSessionRowTime(s.lastUsedAt) : (s.id ? '' : t('新会话（未保存）'));
     // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
     sub.textContent = formatSessionRowSubtitle({
       whenText: when,
@@ -6905,7 +6907,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         haptic('tap');
         const wasUnread = unread.isUnread(s, { isViewing: isViewingRow });
         const ok = await appConfirm({
-          title: s.title || t('新会话'),
+          title: displaySessionTitle(s.title, t('新会话')),
           body: wasUnread
             ? t('标为已读后，这一行的「未读」提示消失。')
             : t('标为未读后，这一行会一直显示「未读」，直到你再次打开它。'),
@@ -6928,7 +6930,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         e.stopPropagation();
         haptic('warning');
         if (await appConfirm({
-          title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+          title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
           body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
           okText: t('关闭会话'),
         })) {
@@ -6948,7 +6950,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       delBtn.onclick = e => {
         e.stopPropagation();
         haptic('warning');
-        openDeleteSession(s.id, rowCwd, s.title, workspaceCwd);
+        openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId
       };
       rowContent.appendChild(delBtn);
     }
@@ -8054,7 +8056,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const titleEl = $('sessionBlockedTitle'), projectEl = $('sessionBlockedProject');
     // 标题回落短 id：深链与「继续此会话」两条路只有 {sessionId, cwd}，拿不到标题。宁可显示
     // 8 位 id 也不写"会话"——用户要靠这行确认自己点的是不是那一个。
-    if (titleEl) titleEl.textContent = title || (sessionId ? sessionId.slice(0, 8) : t('会话'));
+    if (titleEl) titleEl.textContent = displaySessionTitle(title, sessionId ? sessionId.slice(0, 8) : t('会话'));
     if (projectEl) projectEl.textContent = cwd ? baseName(cwd) : '';
     setBlockedReason(message || t('切换失败'));
     if (!blockedSurfaceWired) {
@@ -8266,7 +8268,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       recentsList.innerHTML = '';
       for (const s of recent) {
-        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
+        const when = s.lastUsedAt ? formatSessionRowTime(s.lastUsedAt) : t('时间未知');
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
