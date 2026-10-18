@@ -280,6 +280,10 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-02j：武装「sync:since 回执在途时传输层断开」（验收 O49）。下一次 sync:since 不回执，50ms 后关掉这条连接的
+// 传输层（engine 级 close，客户端走 Manager 自动重连，不是 io server disconnect）。socket.io-client 在 Manager.onclose
+// 里先回调在途 ack、后排重连定时器——前端若在这个回调里自己 socket.connect()，就和 Manager 的重连撞车。一次性。
+let syncHoldThenDropArmed = false;
 // P0-40c：武装「下一条 user:message 回一个可重试的负 ack（服务端临时失败）」。前端据此把消息转进 outbox
 // 自动重发——「在线发送没被确认」那条路要带上什么（worktree 意图），只有走一遍它才验得到。
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
@@ -590,6 +594,7 @@ function resetMockState() {
   freshTurnRunningArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  syncHoldThenDropArmed = false;
   sendTransientFailArmed = false;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
@@ -2908,6 +2913,12 @@ io.on('connection', socket => {
       ack(0, { diskLen: 11 });
       return;
     }
+    if (syncHoldThenDropArmed) {
+      syncHoldThenDropArmed = false;
+      console.log('[mock] P0-02j — sync:since 回执扣住，50ms 后断开传输层');
+      setTimeout(() => socket.conn.close(), 50);
+      return;
+    }
     // P0-SYNC-ACK-TIMEOUT：吞掉本次 ack、连接保持。前端只能靠 socket.timeout 的 err 分支收尾——
     // 裸 ack 下这个回调永不执行，加载卡永转、历史永不加载（F3）。放在所有分支之前：吞的是整个 ack。
     if (syncAckTimeoutArmed && sessionId === 'mock-session-timeline') {
@@ -3210,6 +3221,7 @@ io.on('connection', socket => {
       armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
       armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
       armResumeDivergenceWorktreeSwap: () => {

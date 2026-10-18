@@ -7,6 +7,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02g 断线时顶部横幅可见并给出重试，重连后变绿再自动收起', async ({ page }) => {
@@ -97,6 +98,60 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O49 / AC-13-01：sync:since 的回执还在路上时传输层断开。socket.io-client 的 Manager.onclose 先同步回调在途 ack、
+  // 后调 reconnect() 排定时器；前端若在这个回调里自己 socket.connect()，会抢先发起一次不带回调的 open，定时器那次 open(fn)
+  // 随后被吞，Manager 的 _reconnecting 永久停在 true。这一次碰巧连上了，看不出毛病——但从此再断线，reconnect() 第一行就
+  // 返回，页面停在「自动重连中…」，「立即重试」也救不回。
+  test('P0-02j sync:since 回执在途时断线：之后再断线，仍能自己连回来', async ({ page }) => {
+    let wsOpened = 0;
+    page.on('websocket', () => { wsOpened++; });
+    await gotoMock(page);
+    // 要有正在看的会话：重连后 requestSync 才会发 sync:since（空首页直接 return，竞态窗口不存在）
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    // 等历史落地再输入：切入时的清屏重载会清掉输入框，提前填进去的命令会被抹掉
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+    await waitUntilConnected(page);
+    const before = wsOpened;
+
+    // 断一次 → 自动重连 → 重连后的 sync:since 被扣住 → 再断一次（回执在途）→ 竞态那次重连
+    await sendChatMessage(page, 'test:sync-inflight-drop');
+    await expect.poll(() => wsOpened, { timeout: 15_000 }).toBeGreaterThanOrEqual(before + 2);
+    await waitUntilConnected(page);
+
+    // 再断一次线：必须不靠任何操作自己连回来
+    await sendChatMessage(page, 'test:transport-drop');
+    await waitUntilDisconnected(page);
+    await waitUntilConnected(page, 15_000);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O49：服务暂停又恢复时，进行中的那次握手请求是挂住而不是立刻失败（TCP 没断）。Manager 要等它 20s 连接超时
+  // 才会进下一轮；这段时间里 socket.connect() 什么都不做（_reconnecting 为 true），「立即重试」点了没反应。
+  // 修复后「立即重试」先 disconnect() 把挂住的 engine 与重连状态清掉，再 connect() 重新握手。
+  test('P0-02k 重连握手挂住时，「立即重试」马上重新握手，不等那次握手超时', async ({ page }) => {
+    test.setTimeout(60_000);
+    await gotoMock(page);
+    // 开关打开期间的新握手一律挂住：既不应答也不失败（已建立的 websocket 不受影响，命令照常发得出去）。
+    // 关掉开关只放行【之后】的请求，已挂住的那次照旧挂着——不能用 unroute，那会把它一并放行、页面自己连上，
+    // 这条就测不到「立即重试」了。
+    let hang = true;
+    await page.route('**/socket.io/**', route => { if (!hang) return route.continue(); /* 挂住：故意不 continue / fulfill */ });
+    await sendChatMessage(page, 'test:transport-drop');
+    await waitUntilDisconnected(page);
+    await expect(page.locator('[data-testid="conn-banner-retry"]')).toBeVisible({ timeout: 15_000 });
+
+    hang = false;
+    await page.locator('[data-testid="conn-banner-retry"]').click();
+    // 5s 远小于 socket.io 默认 20s 连接超时：靠那次挂住的握手自己超时再重试，这里等不到
+    await waitUntilConnected(page, 5_000);
 
     await expectNoBrowserErrors(page);
   });
