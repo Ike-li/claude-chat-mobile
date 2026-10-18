@@ -7231,7 +7231,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           };
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length);
+          const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
           const hintText = remaining != null
             ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
             : t('还有更早的会话，可用搜索查找');
