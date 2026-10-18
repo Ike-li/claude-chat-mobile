@@ -276,3 +276,24 @@ test('en：文案走 t()，detail 单位随之英文', () => {
 });
 
 test.after(() => setLang('zh'));
+
+// 验收 O22：被限速时横幅说出要等多久；连上或开始新一轮连接时撤掉。
+test('markRateLimited：立即显示被拦原因（不转圈、给重试）；连上后撤掉', () => {
+  const h = makeHarness();
+  const banner = createConnectionBannerController(h.context);
+  banner.markConnecting();
+  banner.markRateLimited('登录尝试过多，请 15 分钟后再试');
+  assert.equal(h.visible(), true, '不等 800ms 阈值');
+  assert.equal(h.dom.connBannerText.textContent, '登录尝试过多，请 15 分钟后再试');
+  assert.match(h.dom.connBannerSpinner.className, /\bhidden\b/);
+  assert.doesNotMatch(h.dom.connBannerRetry.className, /\bhidden\b/);
+
+  h.advance(500);
+  assert.equal(h.dom.connBannerText.textContent, '登录尝试过多，请 15 分钟后再试', 'tick 之后不能被「连接中…」盖回去');
+
+  banner.markConnected();
+  assert.equal(h.visible(), false, '连上了就撤掉（隐藏分支只改 className、不清文案，所以判显隐不判 textContent）');
+  banner.markDisconnected();
+  h.advance(1500);
+  assert.equal(h.dom.connBannerText.textContent, '连接断开，自动重连中…', '下一次断线不该还挂着上一次的限速文案');
+});

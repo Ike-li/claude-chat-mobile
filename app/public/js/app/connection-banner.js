@@ -39,6 +39,8 @@ export function createConnectionBannerController(context, {
   // 进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」绿条。秒连不该闪一下。
   // 在 markConnected() 里快照，不在 tick 里反推 DOM。
   let wasVisibleOnConnect = false;
+  // 握手被限速锁拦下时给人看的话（markRateLimited）；相位一变就作废，下一轮连接的结果由下一轮说。
+  let blockedText = '';
   let timer = null;
 
   function startTimer() {
@@ -96,6 +98,7 @@ export function createConnectionBannerController(context, {
       elapsedMs: clock() - phaseSince,
       suppressed: isSuppressed(),
       wasVisible: wasVisibleOnConnect,
+      blockedText,
     });
     apply(next);
     // online 相位下判定只会「从有到无」：wasVisible 已快照固定、elapsed 只增。一旦算出 null
@@ -105,6 +108,7 @@ export function createConnectionBannerController(context, {
 
   function enter(nextPhase) {
     phase = nextPhase;
+    blockedText = '';
     phaseSince = clock();
     startTimer();
     render();
@@ -122,13 +126,20 @@ export function createConnectionBannerController(context, {
     enter('online');
   }
 
+  // 握手被防暴破长锁拦下（connect_error rate_limited）：不换相位，只把原因摆上横幅。
+  function markRateLimited(text) {
+    blockedText = String(text || '');
+    startTimer();
+    render();
+  }
+
   function stop() { stopTimer(); }
 
   const retryBtn = context.dom.connBannerRetry;
   if (retryBtn) retryBtn.onclick = () => onRetry();
 
   const controller = {
-    markConnecting, markDisconnected, markConnected, stop,
+    markConnecting, markDisconnected, markConnected, markRateLimited, stop,
     isVisible: () => visible,
     isConnected: () => phase === 'online',
     hasEverConnected: () => everConnected,
