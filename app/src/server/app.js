@@ -1118,6 +1118,7 @@ const instanceManager = createInstanceManager();
 const agents = instanceManager.agents;
 const permModeByInstance = instanceManager.permissionModes;
 const effortByInstance = instanceManager.efforts;
+const effortSourceByInstance = instanceManager.effortSources;
 const doneInstances = instanceManager.done;
 const errorInstances = instanceManager.errors;
 const abortedInstances = instanceManager.aborted;
@@ -1128,6 +1129,7 @@ const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
+const effortSourceOf = instanceManager.effortSourceOf;
 const inheritedEffort = instanceManager.inheritedEffort;
 const instanceForSession = instanceManager.forSession;
 const instanceState = instanceManager.stateOf;
@@ -1362,6 +1364,8 @@ function instancesPayload() {
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
       effortEffective: a.effectiveEffort ?? null, // 没指定（effort=null）时 CLI 实际生效的档，只进文案
+      // 档位来源：'cli-settings' 的档照样当显式档下发，但用户没选过它，前端按「没指定」显示（O15）
+      effortSource: effortSourceOf(id),
       // 旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。**只有次数没有金额**：
       // 那笔钱由 CLI 计入会话总成本、随 result 一起来，已经在成本行里了；单独再报一份金额
       // 只会出现两个对不上的数字。搭 instances 的便车而不新开一条入向事件——两个整数，
@@ -1419,6 +1423,7 @@ function instancesPayload() {
     });
     payload.defaultPermissionMode = fresh.mode;
     payload.defaultEffort = fresh.effort;
+    payload.defaultEffortSource = fresh.effortSource;
   }
   return payload;
 }
@@ -1985,7 +1990,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
 // （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
-function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
+function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transcriptMode = null, transcriptModel = null }) {
   if (agents.size >= MAX_LIVE_SESSIONS) {
     // permanent：重试多少次都还是满，标不可重试，免得客户端离线队列空转（见 socket.js 负 ack）
     const err = new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
@@ -2036,16 +2041,25 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     }
   }
   let effUi;
-  if (effort !== undefined) effUi = effort;
-  else if (isFresh) {
+  let effSource;
+  if (effort !== undefined) {
+    effUi = effort;
+    effSource = effortSource; // 置换路径带着原实例的来源；没带就是用户刚选的（见下方归一）
+  } else if (isFresh) {
     effUi = fresh.effort;
+    effSource = fresh.effortSource;
     pendingEffortByCwd.delete(routeKey);
   } else {
-    effUi = resolveResumeEffort({
+    const inherited = inheritedEffort(cwd);
+    const resumed = resolveResumeEffort({
       savedEffort: saved?.effort,
-      inheritedEffortValue: inheritedEffort(cwd),
+      savedEffortSource: saved?.effortSource,
+      inheritedEffortValue: inherited.effort,
+      inheritedEffortSource: inherited.source,
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
+    effUi = resumed.effort;
+    effSource = resumed.source;
   }
   // resume 持久化不会保存 ultracode（CLI never persist）→ 规范化后 SDK effort + flag
   // FRESH pending ultracode：resolveFreshPrefs 已拆 sdk+flag；effUi 可能是 sdk 五档或仍带 ui 字面量
@@ -2055,6 +2069,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     || { ui: null, sdk: null, ultracode: false };
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
+  effortSourceByInstance.set(id, !effNorm.ui ? 'default' : (effSource ?? 'user'));
   // 模型：resume 用会话指针；FRESH 不 pin——让 CLI 按原生优先级自行解析
   // （/model > --model > ANTHROPIC_MODEL > settings.model），不再用 effective.model 覆盖。
   // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
@@ -2077,7 +2092,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 没指定时 CLI 实际生效的档变了 → 合成一条 effort_mode 带上它（server 合成、seq 0，不进回放环）。
     onEffortEffective: effective => io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: instance.sessionId, instanceId: id, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortOf(id), effective },
+      type: 'effort_mode', payload: { level: effortOf(id), source: effortSourceOf(id), effective },
     }),
     idleTimeoutMs,
     instanceIdleReclaimMs,
@@ -2303,7 +2318,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, effortSource: effortSourceOf(id), permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
       recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
@@ -2965,7 +2980,7 @@ registerSocketConnection(io, socket => {
           ack({ ok: false, error: nack.error, busy: nack.busy === true, retryable: nack.retryable, reason: nack.reason });
           return;
         }
-        const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);
+        const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId), effSource = effortSourceOf(a.instanceId);
         const disposedId = a.instanceId;
         interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
         // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
@@ -2980,7 +2995,7 @@ registerSocketConnection(io, socket => {
         // R1（2026-08-06）：与 setEffort 同款收口——silent dispose 后 viewing 是死指针，await 抛错
         // 会被 socket.js 兜底 catch 接走，下面的 claim/reselect/broadcast 全不执行、死指针永久留存。
         try {
-          a = await dedupedResume(cwd, sid, { mode, effort: eff });
+          a = await dedupedResume(cwd, sid, { mode, effort: eff, effortSource: effSource });
         } catch (err) {
           if (viewingInstanceId === disposedId) reselectViewingAfter(cwd);
           broadcastInstances();
@@ -3269,6 +3284,7 @@ registerSocketConnection(io, socket => {
     // 持久化只存 SDK effort 或 'auto'；ultracode 不落盘（CLI: interactive toggles never persist）。
     // auto 不能存成 null：null 在 resume 里是「没指定」、会往下兜底到 settings 里存的档。
     const persistedEffort = level === 'auto' ? 'auto' : sdkEffort;
+    const source = level ? 'user' : 'default'; // 用户亲手点的档
     const id = resolveInstanceId(payload?.instanceId);
     const a = agents.get(id);
     if (!a) {
@@ -3276,13 +3292,15 @@ registerSocketConnection(io, socket => {
         pendingEffortByCwd.set(viewingCwd, level);
         socket.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, instanceId: null, ts: Date.now(),
-          type: 'effort_mode', payload: { level }
+          type: 'effort_mode', payload: { level, source }
         });
         return;
       }
       return effortTo(socket);
     }
-    if (level === effortOf(id)) return; // UI 档幂等（xhigh ↔ ultracode 不同，须置换）
+    // UI 档幂等（xhigh ↔ ultracode 不同，须置换）。来源不同不算同一档：settings 来的 high 被点了一下
+    // high，是用户要把它钉成自己的选择——下面轻路径的 a.setEffort 同档直接回 ok，只改来源与落盘。
+    if (level === effortOf(id) && source === effortSourceOf(id)) return;
     // 【2026-09-09】busy 守卫下移到重路径分支（原先在此处无差别拦所有档位）。
     // 它是 7febabc（2026-07-28）加的，那时切档必然 dispose+resume，轮次进行中切会腰斩在途回合；
     // 439bb02 把具体档互切改成 apply_flag_settings 控制请求后轻路径不再置换实例，守卫对它就没了理由，
@@ -3293,9 +3311,10 @@ registerSocketConnection(io, socket => {
     if (!sid) {
       pendingEffortByCwd.set(workspaceCwdOf(cwd), level);
       effortByInstance.set(id, level);
+      effortSourceByInstance.set(id, source);
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-        type: 'effort_mode', payload: { level }
+        type: 'effort_mode', payload: { level, source }
       });
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
@@ -3305,11 +3324,12 @@ registerSocketConnection(io, socket => {
     const light = await a.setEffort(level);
     if (light.ok) {
       effortByInstance.set(id, level);
-      sessions.updateSessionPrefs(sid, { effort: persistedEffort });
+      effortSourceByInstance.set(id, source);
+      sessions.updateSessionPrefs(sid, { effort: persistedEffort, effortSource: source });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level}${ultracode ? ' (Settings.ultracode)' : ''}, 运行时生效（未置换实例）`);
       io.to('approved').emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
-        type: 'effort_mode', payload: { level }
+        type: 'effort_mode', payload: { level, source }
       });
       broadcastInstances();
       return;
@@ -3327,7 +3347,7 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '没指定'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
-    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort });
+    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort, effortSource: source });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
@@ -3335,7 +3355,7 @@ registerSocketConnection(io, socket => {
     disposeInstance(disposedId, { reselect: false });
     let ni;
     try {
-      ni = await dedupedResume(cwd, sid, { mode, effort: level });
+      ni = await dedupedResume(cwd, sid, { mode, effort: level, effortSource: source });
     } catch (err) {
       // R1（2026-08-06）：silent dispose 不 reselect，viewing 故意停在死指针上等 await 结果。
       // 这里若抛出（openInstance 的 MAX_LIVE_SESSIONS、query()/start() 同步失败），控制流会被
@@ -3358,7 +3378,7 @@ registerSocketConnection(io, socket => {
     const broadcast = resolveEffortBroadcast({ requested: level, actual: effortOf(ni.instanceId) });
     io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: ni.instanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: broadcast.level }
+      type: 'effort_mode', payload: { level: broadcast.level, source: effortSourceOf(ni.instanceId) }
     });
     if (broadcast.mismatch) {
       sysTo(socket, '思考强度切换被并发的会话操作合流，未生效，请重试', true);
@@ -5119,7 +5139,7 @@ function permModeTo(socket, id = viewingInstanceId) {
 function effortTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-    type: 'effort_mode', payload: { level: effortOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
+    type: 'effort_mode', payload: { level: effortOf(id), source: effortSourceOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
   });
 }
 

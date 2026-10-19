@@ -2734,6 +2734,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     effort_mode(p) {
       // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
       appContext.state.effortEffective = p.effective ?? null;
+      // 档位来源：'cli-settings' 按「没指定」显示（O15）；缺字段的旧回执按用户自选显示，与改动前一致
+      appContext.state.effortSource = p.source ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -4771,17 +4773,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     effortSeen = true;
     currentEffort = val;
-    effortSelect.value = val || '';
+    // settings 来的档不算选中（不高亮、select 停在占位），候选就是 select 现有的选项
+    const ui = effortUiState(val, [...effortSelect.options].map(o => o.value), {
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      effective: appContext.state.effortEffective,
+      source: appContext.state.effortSource,
+    });
+    effortSelect.value = ui.selected;
 
-    if (pillEffortText) {
-      pillEffortText.textContent = effortUiState(val, [], {
-        mirrorReadonly: Boolean(mirrorReadonlySid),
-        effective: appContext.state.effortEffective,
-      }).label;
-    }
+    if (pillEffortText) pillEffortText.textContent = ui.label;
 
     if (customEffortGrid) {
-      const activeLevel = val || '';
+      const activeLevel = ui.selected;
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
         const isCurrent = activeLevel === tileVal;
@@ -4852,6 +4855,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const ui = effortUiState(currentEffort, show, {
       mirrorReadonly: Boolean(mirrorReadonlySid),
       effective: appContext.state.effortEffective,
+      source: appContext.state.effortSource,
     });
     effortSelect.innerHTML = '';
     if (!ui.selected && !ultracodeArmed) {
@@ -4904,7 +4908,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
     // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
     const uiLevel = effortSelect.value || null;
-    if (uiLevel === currentEffort) return;
+    // settings 来的档点同一档不是空操作：用户要把它钉成自己的选择（服务端只改来源，不动实例）
+    if (uiLevel === currentEffort && appContext.state.effortSource !== 'cli-settings') return;
     socket.emit('user:setEffort', { level: uiLevel });
     // 不做乐观提示：前端预知不了服务端走轻路径（控制请求、不续接会话）还是重路径（dispose+resume），
     // 而这里唯一能写的文案必然在其中一半场景下说谎。两条路径服务端都有回执——轻路径广播
@@ -4938,6 +4943,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     setPermMode(inst.permissionMode || 'default', true);
     appContext.state.effortEffective = inst.effortEffective ?? null;
+    appContext.state.effortSource = inst.effortSource ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -5231,6 +5237,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (!target && !instanceDestroyed) {
         updateModelAndSuffix(''); if (modelInput) modelInput.value = '';
         setPermMode(p.defaultPermissionMode || 'default', true);
+        appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
       bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
@@ -5267,6 +5274,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 若不在此静默刷新，顶部 mode/effort 会卡在首帧硬默认，直到用户切走再回来。
       // 用户在空窗手改档（L0）时 server 会把 pending 编进 default*，这里幂等对齐权威源即可。
       setPermMode(p.defaultPermissionMode || 'default', true);
+      appContext.state.effortSource = p.defaultEffortSource ?? null;
       setEffortMode(p.defaultEffort ?? null, true);
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();

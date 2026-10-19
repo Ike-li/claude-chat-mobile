@@ -33,6 +33,9 @@ let effortLevel = null;
 let activeModel = 'claude-3-5-sonnet';
 let pendingFreshPermissionMode;
 let pendingFreshEffortLevel;
+// 模拟 CLI settings 里存的 effortLevel（真 server 的 L3）。POST /__cli-settings-effort 设置，/__reset 清掉。
+// 与真 server 一样只影响之后的空首页默认档与新开的会话，不改已经开着的实例。
+let mockCliSettingsEffort = null;
 let pendingFreshCwd;
 
 // 真 server 下发的 `viewingCwd` 是【工作区轴】：托管 worktree 的实例归父仓
@@ -527,6 +530,7 @@ function resetMockState() {
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
   pendingFreshCwd = undefined;
+  mockCliSettingsEffort = null;
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
@@ -619,13 +623,20 @@ function pendingFreshPermissionOrDefault() {
 }
 
 function pendingFreshEffortOrDefault() {
-  return pendingFreshEffortLevel === undefined ? null : pendingFreshEffortLevel;
+  return pendingFreshEffortLevel === undefined ? mockCliSettingsEffort : pendingFreshEffortLevel;
+}
+
+// 与真 server 的 resolveFreshPrefs.effortSource 同义：空首页选过的是 user，没选过而 settings 有档是 cli-settings
+function pendingFreshEffortSource() {
+  if (!pendingFreshEffortOrDefault()) return 'default';
+  return pendingFreshEffortLevel === undefined ? 'cli-settings' : 'user';
 }
 
 function consumeFreshPrefs() {
   const prefs = {
     permissionMode: pendingFreshPermissionOrDefault(),
-    effort: pendingFreshEffortOrDefault()
+    effort: pendingFreshEffortOrDefault(),
+    effortSource: pendingFreshEffortSource()
   };
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
@@ -698,6 +709,7 @@ function openFreshMockInstance(requestedModel) {
       state: 'busy',
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
+      effortSource: freshPrefs.effortSource,
       model: freshModel
     };
     mockInstances.push(freshInst);
@@ -709,6 +721,7 @@ function openFreshMockInstance(requestedModel) {
       cwd: drivingCwd,
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
+      effortSource: freshPrefs.effortSource,
       model: freshModel
     });
   }
@@ -855,6 +868,12 @@ app.post('/__arm-no-session-id', (_req, res) => {
 // 的 test:mirror）。body: { readonly, stale, withResult }——withResult 时补一条 result 让 waitForIdle 收口。
 // 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的，把 type 收进辅助函数的形参
 // 会让它报 dynamic_type。
+// O15：模拟 CLI settings 里存了 effortLevel（走 query，理由同下面 /__mirror-state）
+app.post('/__cli-settings-effort', (req, res) => {
+  mockCliSettingsEffort = req.query?.level || null;
+  res.json({ ok: true });
+});
+
 app.post('/__mirror-state', (req, res) => {
   // 走 query 不走 body：本 mock 没装 express.json()，既有 __ 端点（__access-bypass /
   // __arm-read-elsewhere）也都读 req.query。用 body 会静默拿到 undefined 再落到默认值上——
@@ -1153,7 +1172,11 @@ io.on('connection', socket => {
     // 4. effort_mode
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortLevel, effective: mockEffortEffective(effortLevel) }
+      type: 'effort_mode', payload: {
+        level: effortLevel,
+        source: mockInstances.find(i => i.instanceId === viewingInstanceId)?.effortSource ?? null,
+        effective: mockEffortEffective(effortLevel),
+      }
     });
 
     // 5. instances
@@ -1221,7 +1244,7 @@ io.on('connection', socket => {
           ...mockDirFields(),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
         }
       });
     }
@@ -1235,10 +1258,11 @@ io.on('connection', socket => {
     if (!instanceId && viewingInstanceId === null) pendingFreshEffortLevel = level ?? null;
     const targetInstanceId = instanceId || viewingInstanceId;
     const inst = mockInstances.find(i => i.instanceId === targetInstanceId);
-    if (inst) inst.effort = level;
+    const source = level ? 'user' : 'default'; // 用户亲手点的档（同真 server 的 user:setEffort）
+    if (inst) { inst.effort = level; inst.effortSource = source; }
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level, effective: mockEffortEffective(level) }
+      type: 'effort_mode', payload: { level, source, effective: mockEffortEffective(level) }
     });
     // Broadcast instances update
     io.emit('agent:event', {
@@ -1249,7 +1273,7 @@ io.on('connection', socket => {
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-        defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+        defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
       }
     });
   });
@@ -1338,7 +1362,7 @@ io.on('connection', socket => {
           dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
         }
       });
       // 【迟到事件不在这里发，改由用例经 POST /__emit-late-closed-events 显式触发】
@@ -1407,7 +1431,7 @@ io.on('connection', socket => {
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
             instances: mockInstances, service: mockServicePayload(),
             defaultPermissionMode: pendingFreshPermissionOrDefault(),
-            defaultEffort: pendingFreshEffortOrDefault() }
+            defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource() }
         });
         // ③ 送达锚点（见 staleInstancesOnNextNew 处的注释）。
         io.emit('agent:event', {
@@ -1443,7 +1467,7 @@ io.on('connection', socket => {
         ...dirFields,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
-        defaultEffort: pendingFreshEffortOrDefault()
+        defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource()
       }
     });
     // 真 server 这条 handler 末尾有 `lastStatusLine = null; scheduleStatusRefresh()`（src/server/app.js
@@ -1486,7 +1510,7 @@ io.on('connection', socket => {
         scratchRoot: MOCK_SCRATCH_ROOT,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
-        defaultEffort: pendingFreshEffortOrDefault()
+        defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource()
       }
     });
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
