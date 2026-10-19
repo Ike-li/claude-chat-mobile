@@ -233,18 +233,99 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 同上，但重载的历史先于第 2 条的拒收落地：历史渲染时第 2 条还没有结论。按文字认领会把它当成已落盘，clientMessageId
-  // 交给那条同文的旧消息、撤掉气泡；拒收再到时「重发」只能另起一条，点了送达，回显带着同一个 id，被当成「旧消息已在屏幕上」
-  // 吞掉，这条送达的消息哪儿都不显示。mock 放出拒收后那一轮随即跑完，「重发」照常收下并回显。
-  test('P0-02d6 历史先于第 2 条的拒收落地、且与旧消息同文：气泡不被认领，「重发」送达后这条照样显示', async ({ page }) => {
+  // 交给那条同文的旧消息、撤掉气泡；拒收再到时提示只能另起一条，续发送达，回显带着同一个 id，被当成「旧消息已在屏幕上」
+  // 吞掉，这条送达的消息哪儿都不显示。mock 放出拒收后那一轮随即跑完：排着的第 2 条自动续发（O66），不用点「重发」。
+  test('P0-02d6 历史先于第 2 条的拒收落地、且与旧消息同文：气泡不被认领，本轮结束自动续发送达后这条照样显示', async ({ page }) => {
     const second = 'Any follow-up questions?';
     await replayTwoOfflineAcrossSwap(page, ['离线第一条', second], 'test:arm-outbox-replay-swap-history-first');
 
-    await expectResendOnSecondBubbleAfterHistory(page, second);
-    await page.locator('#messages [data-testid="outbox-resend"]').click();
-    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '「重发」送达之后提示应收起').toHaveCount(0);
+    await expect(page.locator('#messages [data-testid="outbox-resend"]'), '本轮结束后排着的第 2 条应自动续发、提示收起').toHaveCount(0);
     const same = page.locator('[data-testid="user-message"]').filter({ hasText: second });
     await expect(same, '「重发」送达的那条没显示出来（回显被当成历史里同文的旧消息吞掉了）').toHaveCount(2);
     await expect(same.last(), '送达的那条应被回显转正').not.toHaveClass(/opacity-70/);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O66：断网时连发三条，恢复后第 1 条送出、开跑，后两条撞上这一轮被拒收。此前它们落「⏸ 未发送 + 重发」，
+  // 回合结束也不会自己续发，得逐条点；而且三颗问气泡挨在一起，界面显示成「问1 问2 问3 答1 答2 答3」。
+  // 终端里忙时打的话会排队、回合结束再发——这里对齐：排队、每轮结束按序自动续发下一条，真正发出时气泡挪到最后。
+  test('P0-02d9 离线连发三条：按序排队，每轮结束自动续发下一条，问答顺序与发送一致', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二', '离线问三']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const answer = (n: string) => page.locator('[data-testid="assistant-message"]').filter({ hasText: `答：离线问${n}` });
+    const queued = page.locator('[data-testid="user-message"].opacity-70');
+    await expect(answer('一')).toBeVisible();
+    await expect(queued, '第 2、3 条撞上第 1 条那一轮，应在排队').toHaveCount(2);
+    await expect(queued.first()).toContainText('本轮结束后自动发送');
+
+    // 不点「重发」：本轮一结束，第 2 条自己发出；第 3 条还得等第 2 条那一轮
+    await page.request.post('/__outbox-turn-end');
+    await expect(answer('二')).toBeVisible();
+    await expect(queued).toHaveCount(1);
+    await expect(answer('三')).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
+    await expect(answer('三')).toBeVisible();
+    await expect(queued).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
+
+    const order = await page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]')
+      .evaluateAll(nodes => nodes
+        .map(n => ((n.getAttribute('data-testid') === 'assistant-message' ? '答' : '问') + ((n.textContent || '').match(/离线问(一|二|三)/)?.[1] || '')))
+        .filter(x => x.length > 1));
+    expect(order, '问答顺序应与发送顺序一致').toEqual(['问一', '答一', '问二', '答二', '问三', '答三']);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同上，但第 1 条那一轮被用户按了停止：停止 = 不想接着跑，排着的不再自动发（终端里中断后排着的话也不会自己发出去），
+  // 退回手动「重发」；手动点了照样送达，问答顺序照样对。
+  test('P0-02d10 排着的离线条目：按了停止就不再自动续发，退回手动「重发」', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const answer = (n: string) => page.locator('[data-testid="assistant-message"]').filter({ hasText: `答：离线问${n}` });
+    const queued = page.locator('[data-testid="user-message"].opacity-70');
+    await expect(answer('一')).toBeVisible();
+    await expect(queued).toHaveCount(1);
+    await expect(queued).toContainText('本轮结束后自动发送');
+
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await page.locator('#btnSend').click();
+    // 停止后那一轮结束（instances 广播 turnRunning:false 到了，主按钮回到发送）——此时若还在排队就会被续发出去
+    await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+    await expect(queued).toContainText('本轮已停止');
+    await expect(answer('二')).toHaveCount(0);
+
+    await queued.locator('[data-testid="outbox-resend"]').click();
+    await expect(answer('二')).toBeVisible();
+    await expect(queued).toHaveCount(0);
+    await page.request.post('/__outbox-turn-end');
     await expectNoBrowserErrors(page);
   });
 

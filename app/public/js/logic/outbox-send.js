@@ -297,6 +297,44 @@ export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewi
   return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
 }
 
+// 离线条目的目标实例（O66）：先按会话认——规则 5 置换、切 effort 之后同一会话换了实例号；条目没带会话才按实例号。
+// 认不出返回 null（实例已被关掉，或广播还没到）。
+export function findOutboxTargetInstance(target, instances) {
+  const list = Array.isArray(instances) ? instances : [];
+  const sid = typeof target?.sessionId === 'string' ? target.sessionId : '';
+  if (sid) {
+    const bySession = list.find(i => i?.sessionId === sid);
+    if (bySession) return bySession;
+  }
+  return target?.instanceId != null ? (list.find(i => i?.instanceId === target.instanceId) || null) : null;
+}
+
+const outboxTargetKey = target => (typeof target?.sessionId === 'string' && target.sessionId
+  ? `s:${target.sessionId}` : `i:${target?.instanceId ?? ''}`);
+
+// 离线重放撞上在途轮的条目排队，本轮结束按序自动续发（O66：终端里忙时打的话也是排队、回合结束再发）。
+// entries 按入队顺序：{ target: {instanceId, sessionId}, sawRunning, inFlight }。返回该续发的那一条或 null：
+//   · 同一目标只看队首——一轮一条，第 3 条要等第 2 条那一轮；
+//   · 队首在发（inFlight）整个目标都等着；
+//   · 目标实例认不出就不发：实例被关掉了，不替用户把会话重新开起来（手动「重发」仍在）；
+//   · sawRunning：上一条发出之后还没看到这一会话开跑，就不算「本轮结束」——迟到的旧广播不能把下一条提前放出去。
+export function pickAfterTurnResend(entries, instances) {
+  const seen = new Set();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const key = outboxTargetKey(e?.target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (e.inFlight || !e.sawRunning) continue;
+    const inst = findOutboxTargetInstance(e.target, instances);
+    if (inst && inst.turnRunning !== true) return e;
+  }
+  return null;
+}
+
+export function sameOutboxTarget(a, b) {
+  return outboxTargetKey(a) === outboxTargetKey(b);
+}
+
 // 离线消息的失败提示（「未发送 · 可重发」/「已停止重试」）该挂在哪儿。判据是两条独立的问题，
 // 只答一条就会把提示放错地方——而放错地方的两种形态都无声：
 //

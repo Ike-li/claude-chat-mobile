@@ -220,6 +220,7 @@ import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
+import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 (() => {
@@ -767,6 +768,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function persistOutbox() {
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
   }
+  // 离线重放撞上在途轮的条目：排队、本轮结束按序自动续发（O66，见 app/outbox-after-turn.js）
+  const outboxAfterTurn = createOutboxAfterTurn({ getInstances: () => instancesList });
   function enqueueOutbox(item) {
     // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）。
     // 投递结论从 'queued' 起记（deliverOutboxItem 改写），历史重载时据此判能不能按文字认领（canTextClaimPendingBubble）。
@@ -1397,33 +1400,52 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return true;
   }
 
-  function markOutboxBlocked(item, message, targetsViewing = false) {
+  // afterTurn（O66）：被在途轮挡下的离线条目——排队，本轮结束由 outboxAfterTurn 替用户点这里的「重发」；
+  // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
+  function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
     if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
     host.classList.remove('animate-pulse');
     host.textContent = '';
     const label = el(`<span></span>`);
-    label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
+    let queued = afterTurn;
+    const blockedText = msg => (queued ? `⏳ ${t('排队中 · 本轮结束后自动发送')}` : `⏸ ${msg || t('未发送 · 任务运行中')}`);
+    label.textContent = blockedText(message);
     host.appendChild(label);
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
-    btn.onclick = async () => {
+    let settled = false;
+    // 返回这次投递的结论（已送达或正在发时返回 null），outboxAfterTurn 据此决定出队还是接着等
+    const resend = async () => {
+      if (settled || btn.disabled) return null;
       btn.disabled = true;
       label.textContent = `🕐 ${t('正在发送...')}`;
+      // 真正发出时挪到消息流最后：它排在这一轮的回答之后，问答顺序才与发送顺序一致（O66）
+      if (item.bubbleEl?.parentElement === messagesEl) appendMessage(item.bubbleEl);
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { host.remove(); return; }
+      if (d.outcome === 'ok') { settled = true; host.remove(); return d.outcome; }
       // 续接会丢掉一段对话（SESSION-04）：再发一遍还是同一道闸。把这条挪回输入框，出在线路径同一块面板——
       // 两个选项都作用于输入框里的话。挪不了（不是眼前这个会话的、输入框里已有新打的字）就留在这里。
       if (d.divergence && moveOutboxItemToComposer(item)) {
+        settled = true;
         host.remove();
         resumeDivergencePrompt.prompt({ divergence: d.divergence, sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) });
-        return;
+        return d.outcome;
       }
       btn.disabled = false;
-      label.textContent = d.outcome === 'blocked'
-        ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
-        : `⚠️ ${d.message || t('发送失败')}`;
+      label.textContent = d.outcome === 'blocked' ? blockedText(d.message) : `⚠️ ${d.message || t('发送失败')}`;
+      return d.outcome;
     };
+    btn.onclick = () => { resend(); };
     host.appendChild(btn);
+    if (afterTurn) {
+      outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
+        resend,
+        cancel: () => {
+          queued = false;
+          if (!settled && !btn.disabled) label.textContent = `⏸ ${t('未发送 · 本轮已停止，需要时点重发')}`;
+        },
+      });
+    }
   }
 
   // 离线批处理眼里的「当前视图」：横幅、逐条 targetsViewing、批后 busy 三处归属判据共用这一份，少传一维就和另外两处分叉。
@@ -1491,8 +1513,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (permanentHost) permanentHost.textContent = permanentMsg;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
-          // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(planned, decision.message, targetsViewing);
+          // 队列首条发出去就开跑，其后各条必被拒。不 requeue 空转：交给 outboxAfterTurn 排队，本轮结束按序续发（O66）。
+          markOutboxBlocked(planned, decision.message, targetsViewing, { afterTurn: !decision.divergence });
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -1510,6 +1532,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     } finally {
       _offlineDrainInFlight = false;
       persistOutbox();
+      outboxAfterTurn.tick(); // 批处理期间那一轮可能已经跑完（广播先到）：不等下一条广播
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
         ...outboxViewing(),
@@ -4621,6 +4644,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (instanceId === viewingInstanceId) addBar(t('停止请求超时，可再试一次'), 'text-ink-faint');
     }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
+    // 停止 = 不想接着跑：这个会话排着的离线条目不再自动发，退回手动「重发」（O66）
+    outboxAfterTurn.cancelTarget({ instanceId, sessionId: instancesList.find(x => x.instanceId === instanceId)?.sessionId ?? null });
   }
 
   if (btnStop) btnStop.onclick = requestInterrupt;
@@ -5098,6 +5123,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     syncDashNoFolders(); // 首页开着时连上/断开了文件夹：引导跟着广播走，不等下次重画首页
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    outboxAfterTurn.tick(); // 排队的离线条目：目标会话这一轮结束了就续发下一条（O66）
     // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
     // 实例的「停止」结算事件会被丢弃、其 interruptPendingByInstance 挂起态无法经 system(p) 清位。这条
     // instances 广播不受视图过滤，靠它独立探测每个挂起实例是否已不再 busy，及时补清——防止切视图后
