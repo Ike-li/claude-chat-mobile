@@ -765,9 +765,11 @@ app.post('/__reset', (_req, res) => {
   res.json({ ok: true });
 });
 
-// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
+// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。empty=1 同时清空列表（新部署的 Access 实例
+// 一台已信任设备都没有，验收 O89）。
 app.post('/__access-bypass', (req, res) => {
   accessBypassActive = req.query?.active === '1';
+  if (req.query?.empty === '1') trustedDevices = [];
   emitTrustedDevices();
   res.json({ ok: true, accessBypassActive });
 });

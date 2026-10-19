@@ -2322,9 +2322,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       note.classList.toggle('text-warning', accessBypassActive);
       note.classList.toggle('text-ink-faint', !accessBypassActive);
     }
-    // 空列表也不显示整段：一台都没有意味着这台 server 只被本机/CF Access 访问过，
-    // 摆一个空框只会让人以为坏了。
-    if (!devices.length) { section.classList.add('hidden'); return; }
+    // 空列表：没开 CF Access 旁路时不显示整段——一台都没有意味着这台 server 只被本机访问过，摆一个空框只会让人
+    // 以为坏了。旁路开着时照样显示（验收 O89）：新部署的 Access 实例正好一台都没有，这时更要看到「这张表管不到
+    // 隧道进来的连接」，给一句空态代替空框。
+    if (!devices.length) {
+      section.classList.toggle('hidden', !accessBypassActive);
+      if (accessBypassActive) {
+        const empty = document.createElement('div');
+        empty.className = 'text-[11px] text-ink-faint px-1';
+        empty.setAttribute('data-testid', 'trusted-devices-empty');
+        empty.textContent = t('还没有已信任的设备：局域网 / 本机直连批准过的设备会列在这里。');
+        list.appendChild(empty);
+      }
+      return;
+    }
     section.classList.remove('hidden');
     for (const d of devices) {
       const row = document.createElement('div');
