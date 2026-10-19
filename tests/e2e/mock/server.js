@@ -436,6 +436,8 @@ let mockRestarts = DEFAULT_MOCK_RESTARTS;
 // false 那一侧此前**零覆盖**——三处广播全硬编码 true，于是「本进程不是常驻托管，请到电脑上重启」
 // 这句从没被渲染过，把它删掉全套 E2E 照样绿。由 test:no-restart 场景翻转。
 let mockCanRestart = true;
+// O87：开发者模式「重启服务」被服务端拒绝（前端以为能重启、服务端判拉不起来的状态漂移）。由 /__dev-mode?deny=1 拨。
+let mockDevRestartDeny = false;
 // 工作区列表（instances 广播的 dirs）的覆盖值。null = 缺省口径：从实例 cwd 现算（沿用至今的行为）。
 // 真 server 的 dirs 来自配置（WORKDIRS），与实例 cwd 无关——实例 cwd 可以不在任何工作区之下
 // （SESSION-02 的「不属于任何工作区的活实例」），而缺省口径下 mock 永远造不出这种形态。
@@ -519,6 +521,7 @@ function resetMockState() {
   mockMissingFolders = 0;
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
+  mockDevRestartDeny = false;
   mockImageRequests = [];
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
@@ -812,6 +815,23 @@ app.post('/__arm-history-error', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+// O87：推一帧带 devMode:true 的 instances，让「⚙ 服务与配置」里的「重启服务」按钮出现。canRestart=0 模拟
+// 前台 npm start（拉不起来）；deny=1 让 dev:restart 回 ok:false，而广播仍说能重启。
+app.post('/__dev-mode', (req, res) => {
+  mockCanRestart = req.query?.canRestart !== '0';
+  mockDevRestartDeny = req.query?.deny === '1';
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart, devMode: true,
+      viewingInstanceId,
+      viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd ?? null,
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true });
+});
+
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
@@ -2525,6 +2545,23 @@ io.on('connection', socket => {
 
   // P0-EDIT：编辑器保存。只认 demo.js，镜像真实 writeFileInScope 的 baseHash 冲突语义——
   // baseHash 不等于当前 mockHashOf(mockDemoJsContent) 即 conflict，不静默覆盖。
+  // O87：开发者模式「重启服务」。同真 server：拉不起来就回 ok:false；否则先 ack，再模拟换进程——
+  // 拨 startedAt、关掉底层连接（真 server 退出时前端看到的也是 transport close），前端自动重连，
+  // 首帧 instances 带上新的 startedAt。
+  socket.on('dev:restart', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (!mockCanRestart || mockDevRestartDeny) {
+      return ack({ ok: false, error: '当前进程没有进程管理器托管（终端里直接 npm start 就是这样），停了不会自动拉起 —— 拒绝重启' });
+    }
+    ack({ ok: true });
+    const gen = mockResetGeneration;
+    setTimeout(() => {
+      if (gen !== mockResetGeneration) return;
+      mockServiceStartedAtOverride = (mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT) + 60_000;
+      socket.conn.close();
+    }, 200);
+  });
+
   socket.on('files:write', (payload, callback) => {
     if (typeof callback !== 'function') return;
     const { relPath, content, baseHash } = payload || {};

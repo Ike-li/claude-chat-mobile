@@ -755,6 +755,10 @@ header {
     opacity: 0.55;
     cursor: not-allowed;
   }
+  #btnRestartServer:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
   #btnSend[data-mode="stop"] .btn-send-stop-icon {
     display: block;
     width: 0.7rem;
