@@ -737,10 +737,12 @@ export function shouldRerenderSessionList({
   prevHasMore = false,
   prevTotal = null,
   prevPinned,
+  prevOpen,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
   nextPinned,
+  nextOpen,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
@@ -754,6 +756,8 @@ export function shouldRerenderSessionList({
   // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
   // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
   if (signature(prevPinned) !== signature(nextPinned)) return true;
+  // open（开着、被分页挤出本页的会话的元数据）同理：成员跟着「开了哪些会话」走，与这一页无关（验收 O46）
+  if (signature(prevOpen) !== signature(nextOpen)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 
