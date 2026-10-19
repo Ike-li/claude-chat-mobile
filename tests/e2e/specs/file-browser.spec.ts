@@ -59,6 +59,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-21c 没有高亮 mode 的文本文件（.txt）也给行号与编辑', async ({ page }) => {
+    await gotoMock(page);
+    await page.locator('#topContextPill').click();
+    await page.locator('[data-testid="browse-entry"]', { hasText: 'notes.txt' }).click();
+
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody > pre')).toHaveCount(0);
+    await expect(page.locator('#fileBrowseBody .CodeMirror-linenumber', { hasText: /^3$/ })).toBeVisible();
+    await expect.poll(() => getCmValue(page)).toBe('first line\nsecond line\nthird line\n');
+
+    await page.locator('#fileBrowseEdit').click();
+    await expect(page.locator('#fileBrowseSave')).toBeVisible();
+    await expect(page.locator('#fileBrowseCancelEdit')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-EDIT 编辑并保存，重新打开后内容确实持久化', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();

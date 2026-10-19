@@ -265,9 +265,10 @@ export function createFileBrowser(context, {
     editMode = 'view';
     baseHash = contentHash || null;
     // CM 只接管「一次性读全」的小文件：分页续读过的文件（>256KB 或用户点过加载更多）全程留在 pre，
-    // 避免重建编辑器丢滚动位置；未 vendor 对应语言 / CM 脚本未加载时静默回退，不是错误态。
+    // 避免重建编辑器丢滚动位置；CM 脚本未加载时静默回退，不是错误态。没有对应高亮 mode 的扩展名（.txt、
+    // Makefile、.env 等）照样挂 CM、用纯文本 mode——行号与编辑不该取决于有没有语法高亮。
     // 只读预览 vs 可编辑不区分 mode 判定——两者都要挂 CM 实例，baseHash 有无才是「能不能点编辑」的唯一判据。
-    const mime = !usedPagination && !truncated ? cmModeForFileName(fileName) : null;
+    const mime = !usedPagination && !truncated ? (cmModeForFileName(fileName) || 'text/plain') : null;
     if (mime && typeof CodeMirror !== 'undefined') {
       const holder = documentRef.createElement('div');
       holder.className = 'cm-ccm-viewer';

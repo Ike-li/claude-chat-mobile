@@ -2461,9 +2461,10 @@ io.on('connection', socket => {
         { name: 'demo.js', kind: 'file', size: 48, mtime: Date.now() },
         { name: 'huge.log', kind: 'file', size: 500_000, mtime: Date.now() },
         { name: 'conflict.js', kind: 'file', size: 20, mtime: Date.now() },
+        { name: 'notes.txt', kind: 'file', size: 30, mtime: Date.now() },
       ],
       truncated: false,
-      totalCount: 4,
+      totalCount: 5,
     });
   });
 
@@ -2495,6 +2496,11 @@ io.on('connection', socket => {
     if (encoding !== 'base64' && String(relPath || '') === 'conflict.js') {
       const text = 'const x = 1;\n';
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: 'conflict-fixture-hash' });
+    }
+    // O40：没有高亮 mode 的扩展名（.txt）一次性读全 + 带 contentHash → 前端照样挂 CM（行号）、给编辑。
+    if (encoding !== 'base64' && String(relPath || '') === 'notes.txt') {
+      const text = 'first line\nsecond line\nthird line\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
     }
     // 附件不再走本通道（2026-09-06 搬家后归 attachment:read），这里不再有 .ccm-uploads 分支。
     console.log(`[mock] browse:read relPath=${relPath} offset=${offset} encoding=${encoding} 未命中 fixture`);
