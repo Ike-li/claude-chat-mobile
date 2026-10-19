@@ -85,12 +85,14 @@ export const MAX_THUMB_CHARS = 100_000;      // FILES-4：thumb 服务端上限�
 
 // 文件名收敛：只取 basename，去路径分隔/控制/危险字符，去前导点（防 . / .. / 隐藏覆盖），空则回退 file。
 // basename 在 posix 不剥 Windows 反斜杠，故显式替换分隔字符——纵深防御，配合 saveAttachments 的落点校验。
+// 结果也是界面上的附件显示名：前端 logic/attachments.js 有一份同名孪生（两侧不能互相 import，边界闸），
+// 由 cross-side-parity 逐条对照。前端洗过的名字到这里再洗一遍，所以必须幂等。
 export function sanitizeName(name) {
   // eslint-disable-next-line no-control-regex -- 本函数职责就是剥离控制字符（\x00-\x1f）
   const base = basename(String(name ?? '')).replace(/[\x00-\x1f\x7f]/g, '');
-  // trim() 必须在去前导点之前跑：BOM(U+FEFF) 等字符属 trim() 承认的空白，若先去前导点（此时开头是
-  // BOM 不是点，不剥离）、trim 才把 BOM 去掉，会让一个本该剥离的前导点重新暴露出来（隐藏文件名逃逸）。
-  const safe = base.replace(/[/\\:*?"<>|]/g, '_').trim().replace(/^\.+/, '');
+  // 前导的点与空白一起剥：只剥点会让「. foo」剩下前导空格（第二遍才去掉，不幂等）；先 trim 再剥点
+  // 又会让「. .foo」的第二个点暴露出来。\s 与 trim() 认的是同一组空白（含 BOM U+FEFF）。
+  const safe = base.replace(/[/\\:*?"<>|]/g, '_').replace(/^[\s.]+/, '').trimEnd();
   return safe || 'file';
 }
 
@@ -162,7 +164,8 @@ export async function saveAttachments(workDir, attachments, env = process.env) {
       throw new Error(`上传目录路径包含可疑符号链接: ${symlink}`);
     }
 
-    const fname = `${Date.now()}-${randomBytes(4).toString('hex')}-${sanitizeName(a.name)}`;
+    const safeName = sanitizeName(a.name);
+    const fname = `${Date.now()}-${randomBytes(4).toString('hex')}-${safeName}`;
     const absPath = resolve(dirResolved, fname);
 
     // 原有的路径穿越检查（保留，纵深防御）——以 realpath 后目录为锚
@@ -204,8 +207,9 @@ export async function saveAttachments(workDir, attachments, env = process.env) {
       throw new Error('上传文件解析后越出工作目录，已拒绝');
     }
 
+    // 显示名就用落盘那段：广播出去的、刷新后 history.js 从 storedName 反推的，是同一个名字。
     saved.push({
-      absPath, name: a.name, mimeType: a.mimeType,
+      absPath, name: safeName, mimeType: a.mimeType,
       size: Buffer.byteLength(a.data, 'base64'), thumb: a.thumb
     });
   }

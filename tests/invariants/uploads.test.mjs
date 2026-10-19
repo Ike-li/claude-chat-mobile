@@ -50,6 +50,15 @@ test.describe('SCOPE-02: sanitizeName 文件名安全清洗', () => {
     assert.equal(sanitizeName('\uFEFF.hidden'), 'hidden');
   });
 
+  // 前端选文件时按同一规则先洗一遍（芯片名），服务端落盘再洗一遍——不幂等，两边就差一个空格（O34）。
+  test('清洗幂等：洗过的名字再洗一遍不变', () => {
+    for (const raw of ['. foo.txt', '.. .x', '\uFEFF . b.md', ' .env', 'a/ .b', 'report.pdf', '...', '../../etc/passwd']) {
+      const once = sanitizeName(raw);
+      assert.equal(sanitizeName(once), once, `sanitizeName(${JSON.stringify(raw)}) = ${JSON.stringify(once)}`);
+    }
+    assert.equal(sanitizeName('. foo.txt'), 'foo.txt');
+  });
+
   test('剥离控制字符（\x00-\x1f 及 \x7f）', () => {
     assert.equal(sanitizeName('test\x00\x08\x1f\x7f.log'), 'test.log');
   });
@@ -187,6 +196,16 @@ test.describe('SCOPE-02 & FILES-2: saveAttachments 真实落盘与 symlink 防�
 
     assert.ok(saved[0].absPath.startsWith(realDir + sep));
     assert.equal(saved[0].absPath.includes('etc/passwd'), false);
+  });
+
+  // O34：落盘名洗过，事件里的显示名却原样——别的设备看到 ../、前导点和隐形的控制字符，刷新后
+  // （history.js 从 storedName 去掉 <ts>-<hex8>- 前缀反推）又换成另一个名字。显示名就该是落盘名那段。
+  test('返回与广播的显示名是清洗后的名字，与落盘名一致', async () => {
+    const raws = ['../../../../etc/passwd-0804.txt', 'ctl\u0001\u0007\u001f-0804.txt', '...hidden-0804.txt', 'C:\\Windows\\sys\\win-0804.txt'];
+    const saved = await saveAttachments(workDir, raws.map(name => ({ name, mimeType: 'text/plain', data: Buffer.from('x').toString('base64') })), env);
+    const meta = toEventMeta(saved);
+    assert.deepEqual(meta.map(m => m.name), ['passwd-0804.txt', 'ctl-0804.txt', 'hidden-0804.txt', 'C__Windows_sys_win-0804.txt']);
+    for (const m of meta) assert.equal(m.storedName.replace(/^\d+-[0-9a-f]{8}-/, ''), m.name);
   });
 
   test('FILES-2: 桶目录被换成外向 symlink 时拒绝落盘', { skip: process.platform === 'win32' }, async () => {
