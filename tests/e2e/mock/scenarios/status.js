@@ -488,6 +488,36 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 验收 O60 后一半：正在看的会话 CLI 进程被 kill。照真 server 的顺序：agent.js consume 收尾先发 error
+      // （带 processExited），再 onExit 摘掉实例、广播 viewing 变化。之后重开这个会话走清屏全量重载（见 armCrashReload）。
+      command: 'test:process-crash',
+      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }) => {
+        const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+        if (idx === -1) return;
+        const crashed = mockInstances[idx];
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
+          type: 'error', payload: {
+            message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
+          },
+        });
+        armCrashReload(crashed.sessionId);
+        mockInstances.splice(idx, 1);
+        setViewingInstanceId(null);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
+            viewingInstanceId: null,
+            viewingCwd: crashed.cwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
+            instances: mockInstances,
+          },
+        });
+      }),
+    },
+    {
       // 修「server 重启都会跳'会话已中断'页」误报：整机重启时 agents Map/viewingInstanceId 全部归零
       //（纯内存态），重连后首条 instances 广播形态（实例从列表消失 + viewing 变 null）与上面
       // test:instance-destroyed 完全同构——唯一区分信号是广播恒带的 service.startedAt（进程级常量，

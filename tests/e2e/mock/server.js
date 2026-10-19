@@ -308,6 +308,9 @@ const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
 // 一次性：置换一次就解除。
 let outboxReplaySwapArmed = null;
 let outboxReplaySwapReloadInstanceId = null;
+// P0-DESTROY-CRASH：test:process-crash 之后，重开该会话的头一次 sync:since 报磁盘 ahead，逼出清屏全量重载
+// （真 server 重开是新实例，磁盘上多了在途那一轮）。一次性。
+let crashReloadSessionId = null;
 // 置换那条（同一批的第 1 条）收下之后，重载拉回来的历史里就有它：真 server 收下即交给 CLI 写进 transcript。
 // 前端那颗被保住的离线气泡要被这条历史认领，屏幕上只能有一颗。
 let outboxReplaySwapDeliveredText = null;
@@ -594,6 +597,7 @@ function resetMockState() {
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
+  crashReloadSessionId = null;
   outboxReplaySwapDeliveredText = null;
   outboxReplaySwapHistoryFirst = false;
   outboxReplaySwapHeldRefusal = null;
@@ -2891,6 +2895,12 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    if (crashReloadSessionId && sessionId === crashReloadSessionId) {
+      crashReloadSessionId = null;
+      console.log('[mock] P0-DESTROY-CRASH — 重开崩溃过的会话，sync:since 报 diskLen，逼出清屏重载');
+      ack(0, { diskLen: 99 });
+      return;
+    }
     // P0-02d4：置换出来的新实例头一次 sync 报磁盘 ahead（终端写过盘才会置换。真 server 在缓冲为空时报 diskLen，缓冲里已有
     // 这一轮时报 diskExternalLen，两者都让前端清屏重载），排着的离线气泡随之脱离 DOM。一次性。
     if (outboxReplaySwapReloadInstanceId && instanceId === outboxReplaySwapReloadInstanceId) {
@@ -3201,6 +3211,7 @@ io.on('connection', socket => {
       // test:server-restart：把 service.startedAt 拨到另一个值（模拟重连到重启后的新 server 进程）
       // + 广播时带上同形 service payload（真 server 的 instances 广播恒带 service 字段）。
       bumpServiceStartedAt: () => { mockServiceStartedAtOverride = (mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT) + 60_000; },
+      armCrashReload: sessionId => { crashReloadSessionId = sessionId; },
       mockServicePayload,
     })),
     ...createContentScenarios(() => ({

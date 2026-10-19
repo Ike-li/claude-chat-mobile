@@ -483,6 +483,9 @@ export class AgentSession {
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
+    // 验收 O30：本轮有审批等到 TTL 过期时置真，随下一条 result 带出 approvalExpired 后复位。那一轮 CLI 以 is_error
+    // 收尾，推送只看 isError 会写成「任务出错」；用户要知道的是审批过期、操作没执行。
+    this._approvalExpiredInTurn = false;
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
@@ -878,9 +881,10 @@ export class AgentSession {
           recoverable: false
         });
       } else if (caught) {
-        this.emit('error', { message: formatLifecycleSessionError(sanitize(caught.message)), recoverable: true });
+        // processExited：前端据此按会话记住这条提示，切回时历史重画完再补出来（验收 O60）；resume 失败那支不带
+        this.emit('error', { message: formatLifecycleSessionError(sanitize(caught.message)), recoverable: true, processExited: true });
       } else {
-        this.emit('error', { message: formatLifecycleProcessExited(), recoverable: true });
+        this.emit('error', { message: formatLifecycleProcessExited(), recoverable: true, processExited: true });
       }
     }
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
@@ -898,6 +902,7 @@ export class AgentSession {
     this.queue = [];
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
     this._awaitingInterruptResult = false;
+    this._approvalExpiredInTurn = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:exit' });
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
@@ -1157,6 +1162,7 @@ export class AgentSession {
       this._openTurns = [];
       this.pendingTurns = 0;
       this._awaitingInterruptResult = false;
+      this._approvalExpiredInTurn = false;
       // 本地 slash 命令的状态机也在此收口：_clearLocalCommandProgress 自称「唯一收口」，但此前只挂在
       // happy path（result / local_command_output / dispose / 下次 slash）上。用户点停止后 SDK 常无
       // 配对 result，于是 grace + 3s 轮询 + localcmd 键全都还活着，面板一直「运行中」、isBusy 拦住
@@ -1650,6 +1656,7 @@ export class AgentSession {
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.pendingPermissions.delete(requestId);
     setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
+    this._approvalExpiredInTurn = true;
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
     approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'system:timeout', decidedAt: Date.now() });
     pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
@@ -1678,6 +1685,7 @@ export class AgentSession {
     // 用户主动 allow/deny，供前端提示"已过期，请重新触发"而非误显示为一次正常的拒绝。
     if (Date.now() > pending.expiresAt) {
       setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
+      this._approvalExpiredInTurn = true;
       this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
       approvalStore.recordDecided(requestId, { status: 'expired', decidedBy, decidedAt: Date.now() });
       pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
@@ -3450,6 +3458,8 @@ export class AgentSession {
         // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
         const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
+        const approvalExpired = this._approvalExpiredInTurn;
+        this._approvalExpiredInTurn = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
           pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
@@ -3464,6 +3474,7 @@ export class AgentSession {
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
           interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          ...(approvalExpired ? { approvalExpired: true } : {}), // 本轮有审批等到过期（推送据此改说「审批已过期」）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
         // 下一步建议：**必须在 emit('result') 之后**且 fire-and-forget——它有一次网络往返，

@@ -48,6 +48,20 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  // 验收 O30：审批等到 TTL 过期的那一轮，CLI 以 is_error 收尾，原来推成「⚠️ 任务出错 · 用时 1814.0s」。
+  // 用户需要知道的是「审批过期了、操作没执行、要重新触发」，不是「出错了」。
+  test('result：这一轮有审批过期 → 标题说审批已过期、正文说操作没执行，不说「出错」', () => {
+    const n = notificationForEvent('result', { isError: true, approvalExpired: true, durationMs: 1814000 }, { hasClients: false });
+    assert.match(n.title, /审批已过期/);
+    assert.doesNotMatch(n.title, /出错/);
+    assert.match(n.body, /操作没有执行/);
+    assert.match(n.body, /1814\.0s/, '用时照旧给出');
+
+    // 用户主动中止优先：那一轮的主因是用户点了停止
+    const stopped = notificationForEvent('result', { interrupted: true, approvalExpired: true, durationMs: 1000 }, { hasClients: false });
+    assert.match(stopped.title, /已中止/);
+  });
+
   test('permission_request：前台有人也照推（用户可能锁屏或在别的 app）', () => {
     const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true });
     assert.notEqual(n, null, '审批是无条件推的类型，hasClients 不得让它静音');

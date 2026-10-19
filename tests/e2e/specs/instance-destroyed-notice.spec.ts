@@ -154,6 +154,33 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O60 后一半：进程异常退出的提示，切走再切回就不见了，看起来像什么都没发生。重开该会话走清屏全量
+  // 重载时，历史从磁盘重画，transcript 里没有这句提示。mock 的 test:process-crash 发出带 processExited 的
+  // error、摘掉实例，并让重开后的头一次 sync:since 报磁盘 ahead，逼出这条重载路径。
+  test('P0-DESTROY-CRASH 进程异常退出后重开该会话 → 历史重画完仍看得到那条崩溃提示，且只有一条', async ({ page }) => {
+    await gotoMock(page);
+    // 用有磁盘历史的会话：重开后能看出 DOM 是从磁盘重画的，而不是 DOM 缓存原样恢复
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    await sendChatMessage(page, 'test:process-crash');
+    const crashText = 'Claude Code process terminated by signal SIGKILL';
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(destroyedSurface).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    // 走的是清屏全量重载：磁盘历史里没有崩溃前发的那条命令，DOM 缓存原样恢复的话它会一直在
+    await expect(page.locator('#messages')).not.toContainText('test:process-crash');
+    await expect(page.locator('#messages')).toContainText(crashText);
+    await expect(page.locator('#messages')).toContainText('这个会话上次异常退出');
+    await expect(page.locator('#messages [data-crash-notice]')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
