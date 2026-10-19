@@ -442,10 +442,14 @@ export function createStatusScenarios(getContext) {
     {
       // 判定化告警注入：后续 service:status ack 带 rateLimitLockout（⛔ 红）+ clientError（🐞 黄），
       // 供 E2E 验证升格告警行渲染与判色（P0-22c）。42 分钟前锁定、3 分钟前前端错误。
-      command: 'test:service-incidents',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }) => {
+      // test:service-incidents-local：同一条锁定来自本机（ip:127.0.0.1）——验收 O23，判色降为黄。
+      commands: ['test:service-incidents', 'test:service-incidents-local'],
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }, { cmd }) => {
         setMockServiceIncidents({
-          rateLimitLockout: { at: Date.now() - 42 * 60_000, count: 2 },
+          rateLimitLockout: {
+            at: Date.now() - 42 * 60_000, count: 2,
+            ...(cmd === 'test:service-incidents-local' ? { source: 'ip:127.0.0.1' } : {}),
+          },
           clientError: { at: Date.now() - 3 * 60_000, count: 5 },
         });
         socket.emit('agent:event', {
