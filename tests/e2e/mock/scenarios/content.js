@@ -1,6 +1,28 @@
 export function createContentScenarios(getContext) {
   return [
     {
+      // 验收 O59：本地 slash 命令（/context、/cost）的输出。真 server 里它是 agent 合成 messageId 的一条 text_delta，
+      // 紧跟着就是 result（不经模型，没有持续几秒的流）；两者都经 io.to('approved') 广播给所有已批准的端。
+      // 这里同样用 io.emit——mock 的通用回显走 socket.emit 只给发送端，那样观察端什么都收不到，测不出东西。
+      command: 'test:local-command-output',
+      run: async ({ activeInst }) => {
+        const { io, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        io.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'text_delta',
+          payload: { messageId: 'local-cmd-mock-1', text: '## Context Usage\n\n| Category | Tokens |\n|---|---|\n| System prompt | 3.1k |' },
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances },
+        });
+        io.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'result', payload: { durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       prefix: 'test:message-edit',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();

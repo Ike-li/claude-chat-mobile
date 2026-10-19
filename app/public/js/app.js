@@ -3559,15 +3559,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (s.done) continue;
       if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
       s.done = true;
+      // 正文同步写进气泡，rAF 只管那一下淡入（验收 O59）。上面刚清掉的预览定时器可能一次都没触发过——本地
+      // slash 命令（/context、/cost）的输出就是一条增量紧跟着 result——而浏览器对后台标签页暂停 rAF：
+      // 正文若也放进 rAF，同一会话开在另一个标签页里的那一端气泡一直是空的，刷新才从磁盘补上。
+      s.el.innerHTML = render(s.raw);
+      // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：高亮抛错不该打断复制按钮注入——高亮失败只该丢高亮。
+      s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+      injectCodeCopyButtons(s.el);
+      appendCopyAction(s.el, () => s.raw, 'left');
       s.el.style.transition = 'opacity .1s';
       s.el.style.opacity = '0.4';
       requestAnimationFrame(() => {
-        s.el.innerHTML = render(s.raw);
-        // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：rAF 回调里抛错会中断后续
-        // 复制按钮注入与 opacity 恢复，气泡永久停在半透明——高亮失败只该丢高亮。
-        s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
-        injectCodeCopyButtons(s.el);
-        appendCopyAction(s.el, () => s.raw, 'left');
         s.el.style.opacity = '1';
         setTimeout(() => s.el.style.transition = '', 120);
       });
