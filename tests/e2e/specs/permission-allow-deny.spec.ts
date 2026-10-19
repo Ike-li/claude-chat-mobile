@@ -224,6 +224,108 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O70（AC-09-23）：面板出现 0.5 秒时，在输入框原来的位置点一下就批准了——原来的 350ms 窗口不够长；
+  // 而且它只靠 pointer-events，键盘（焦点落到「允许」再回车）照样能批，按钮外观也看不出现在不能点。
+  // 取样放在开窗那一刻的 MutationObserver 回调里同步做，不赌 Playwright 往返的耗时：负载高时一次往返
+  // 就可能超过 600ms，那样测到的只是「窗口已经过了」。
+  test('UX-003b 审批卡弹出后约 600ms 内「允许」「拒绝」不响应点击与键盘，且看得出不能点', async ({ page }) => {
+    await gotoMock(page);
+    await page.evaluate(() => {
+      const modal = document.getElementById('permModal') as HTMLElement;
+      const allow = document.getElementById('permAllow') as HTMLButtonElement;
+      const deny = document.getElementById('permDeny') as HTMLButtonElement;
+      const probe: Record<string, unknown> = { opened: null };
+      (window as unknown as { __armProbe: unknown }).__armProbe = probe;
+      new MutationObserver(() => {
+        if (probe.opened || !modal.classList.contains('sheet-open')) return;
+        const opened = performance.now();
+        probe.opened = opened;
+        probe.allowDisabled = allow.disabled;
+        probe.denyDisabled = deny.disabled;
+        probe.allowOpacity = Number(getComputedStyle(allow).opacity);
+        // 键盘能触发它的前提是它能拿到焦点
+        allow.focus();
+        probe.allowFocusable = document.activeElement === allow;
+        // 程序化点击：禁用的按钮不派发 click；没禁用就会直接走到 answerPerm
+        allow.click();
+        deny.click();
+        new MutationObserver((_records, obs) => {
+          if (allow.disabled) return;
+          probe.enabledAfterMs = performance.now() - opened;
+          obs.disconnect();
+        }).observe(allow, { attributes: true, attributeFilter: ['disabled'] });
+      }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+    });
+
+    await sendChatMessage(page, 'test:permission');
+    const readProbe = () => page.evaluate(() => (window as unknown as { __armProbe: Record<string, unknown> }).__armProbe);
+    await expect.poll(async () => (await readProbe()).opened, { message: '审批卡应已弹出' }).not.toBeNull();
+    const probe = await readProbe();
+    expect(probe.allowDisabled, '开窗那一刻「允许」应是禁用的').toBe(true);
+    expect(probe.denyDisabled, '开窗那一刻「拒绝」应是禁用的').toBe(true);
+    expect(probe.allowFocusable, '防误触期内「允许」不该拿得到焦点（否则回车就能批）').toBe(false);
+    expect(probe.allowOpacity as number, '禁用要看得出来').toBeLessThan(1);
+    expect(await (await page.request.get('/__approve-log')).json(), '防误触期内的点击不得发出任何审批').toEqual([]);
+
+    await expect(page.locator('#permAllow')).toBeEnabled();
+    // 计时起点是开窗回调，它要等 showNextPerm 整段同步代码（含 openSheet 的强制重排）跑完才执行，
+    // 比真正上锁晚几到几十毫秒——所以不拿 600 卡。门槛取验收里那一下的时刻：0.5 秒时的点击必须挡住。
+    expect((await readProbe()).enabledAfterMs as number, '验收 O70 里 0.5 秒那一下必须落在防误触期内').toBeGreaterThanOrEqual(500);
+    expect(Number(await page.locator('#permAllow').evaluate(b => getComputedStyle(b).opacity))).toBe(1);
+
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    const after = await (await page.request.get('/__approve-log')).json();
+    expect(after.map((e: { decision: string }) => e.decision)).toEqual(['allow']);
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O28（AC-09-08 所批即所行）：前端预检已经算出「展示的不是服务端锚定的那一份」，却仍让人点「允许」。
+  // 服务端按锚定指纹判，回传的是篡改后的展示值就 fail-closed 拒跑——用户点了「允许」得到的是一次拒绝，
+  // 而他以为自己批准的东西本来就不该被批。现在：「允许」一直禁用，只能拒绝，或刷新重取服务端那一份。
+  test('P0-06-INTEGRITY 完整性预检不符时「允许」一直禁用，只能拒绝', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission-tampered');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permInput')).toHaveText('echo TAMPERED-DISPLAY');
+    await expect(page.locator('#permIntegrityWarn')).toBeVisible();
+    // 「拒绝」可点 = 防误触期已过：以它为栅栏，下面的「允许」禁用就不是防误触造成的
+    await expect(page.locator('#permDeny')).toBeEnabled();
+    await expect(page.locator('#permAllow')).toBeDisabled();
+    await expect(page.locator('[data-testid="perm-integrity-reload"]')).toBeVisible();
+
+    await page.locator('#permAllow').click({ force: true });
+    expect(await (await page.request.get('/__approve-log')).json(), '禁用的「允许」硬点也不能发出审批').toEqual([]);
+
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    const log = await (await page.request.get('/__approve-log')).json();
+    expect(log.map((e: { decision: string }) => e.decision)).toEqual(['deny']);
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-06-INTEGRITY-RELOAD 完整性不符时「刷新重取」拿回服务端那一份，批的就是它', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission-tampered');
+    await expect(page.locator('#permIntegrityWarn')).toBeVisible();
+    await expect(page.locator('#permDeny')).toBeEnabled();
+
+    await page.locator('[data-testid="perm-integrity-reload"]').click();
+    // 刷新后的卡片来自服务端待办快照（mock 里那一份没被改写）
+    await expect(page.locator('#permInput')).toHaveText('git push origin main');
+    await expect(page.locator('#permIntegrityWarn')).toBeHidden();
+    await expect(page.locator('#permAllow')).toBeEnabled();
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    const log = await (await page.request.get('/__approve-log')).json();
+    expect(log).toHaveLength(1);
+    expect(log[0].decision).toBe('allow');
+    expect(log[0].op?.args).toBe('git push origin main');
+    await waitForIdle(page);
+  });
+
   // 1b：「永久不再问」。CLI 在 canUseTool 的 suggestions 里给出会落盘的规则时（实测样本
   // destination=localSettings），才允许用户把这次批准变成持久规则——SDK 自己写文件，我们不碰。
   //

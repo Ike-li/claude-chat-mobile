@@ -203,7 +203,9 @@ export const EN_DICT = Object.freeze({
   // —— 权限审批弹窗 ——
   '⚠️ 权限请求': '⚠️ Permission request',
   '权限请求': 'Permission request',
-  '⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作': "⚠️ Integrity precheck failed: what's shown doesn't match the fingerprint anchored on the server. Confirm with care.",
+  '⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，已禁止「允许」': "⚠️ Integrity precheck failed: what's shown doesn't match the fingerprint anchored on the server, so Allow is disabled.",
+  '可以拒绝，或刷新页面从服务端重新取这张审批': 'You can deny it, or reload the page to fetch this request from the server again.',
+  '刷新重取': 'Reload',
   '退出计划后权限档（对齐 CLI）': 'Permission mode after exiting plan (matches CLI)',
   '拒绝': 'Deny',
   '允许': 'Allow',

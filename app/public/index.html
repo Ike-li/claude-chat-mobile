@@ -267,8 +267,13 @@
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
       <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
-           不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
-      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
+           显示时「允许」一直禁用（验收 O28）：回传的就是这份展示内容，服务端按锚定指纹判必然拒跑。
+           只剩拒绝或刷新重取，见 app/approval-questions.js 的 syncPermButtons。 -->
+      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" data-testid="perm-integrity-warn">
+        <div>⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，已禁止「允许」</div>
+        <div class="mt-1 text-ink-soft">可以拒绝，或刷新页面从服务端重新取这张审批</div>
+        <button type="button" id="permIntegrityReload" data-testid="perm-integrity-reload" class="mt-1.5 px-2.5 py-1 rounded-md border border-danger/50 text-danger font-medium">刷新重取</button>
+      </div>
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
       <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
