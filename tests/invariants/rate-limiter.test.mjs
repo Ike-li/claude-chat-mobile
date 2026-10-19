@@ -100,8 +100,18 @@ test.describe('AUTH-03: 冷却期 (cooldown) 与长锁 (locked) 分档及单一�
     assert.equal(second.next.failCount, 1);
   });
 
-  test('authRejection 语义：cooldown 返回 401 unauthorized（不提示 retryAfter，语义是令牌错）', () => {
+  // 验收 O83（AC-22-09）：冷却期内的请求根本没校验令牌。此前回 401 unauthorized，带着正确令牌的请求也被告知
+  // 「令牌不对」；而说成 rate_limited 又会把只错一次的人说成「尝试过多」（2026-09-02 的误报）。所以单独一档。
+  test('authRejection 语义：cooldown 返回 429 cooldown 且带向上取整的秒数（没校验令牌，既不是令牌错也不是尝试过多）', () => {
     const r = authRejection({ verdict: 'cooldown', retryAfterMs: 300 });
+    assert.equal(r.reason, 'cooldown');
+    assert.equal(r.httpStatus, 429);
+    assert.equal(r.retryAfterMs, 300);
+    assert.equal(r.retryAfterSeconds, 1);
+  });
+
+  test('authRejection 语义：backoff（真校验了令牌并失败的那一次）仍是 401 unauthorized，不带 retryAfter', () => {
+    const r = authRejection({ verdict: 'backoff', retryAfterMs: 500 });
     assert.equal(r.reason, 'unauthorized');
     assert.equal(r.httpStatus, 401);
     assert.equal(r.retryAfterMs, null);

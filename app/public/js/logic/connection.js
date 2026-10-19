@@ -88,10 +88,19 @@ export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen
 // 既看不懂也不知道要等多久，于是用户反复点重连，而每一次都只是撞在刚上的那把锁上。
 //
 // kind 与文案分开：'unauthorized' 归令牌门处理（它要弹输入框，不是显示一句话），
-// 其余两类才由调用方拿 text 去刷状态行。
+// 其余几类才由调用方拿 text 去刷状态行。
+//
+// 'cooldown'（验收 O83）：同一来源刚有一次登录失败，服务端在退避短锁里，这次的令牌根本没校验。
+// 既不是「令牌不对」也不是「尝试过多」——调用方拿 retryAfterMs 到点自动重试一次。
 export function describeHandshakeError(err) {
   const message = String(err?.message ?? '');
   if (message === 'unauthorized') return { kind: 'unauthorized', text: t('需要访问令牌') };
+  if (message === 'cooldown') {
+    const ms = Number(err?.data?.retryAfterMs);
+    const retryAfterMs = Number.isFinite(ms) && ms > 0 ? ms : 1000;
+    const secs = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    return { kind: 'cooldown', retryAfterMs, text: t('刚有一次登录失败，{n} 秒后自动重试').replace('{n}', String(secs)) };
+  }
   if (message !== 'rate_limited') {
     // 网络抖动之类：保留原始信息，它是排查时唯一的线索（对用户没意义，但比空白强）。
     return { kind: 'other', text: `${t('连接失败：')}${message || t('未知错误')}` };

@@ -24,7 +24,7 @@ const mockPermFields = (name, input, cwd, at = Date.now()) => ({
 });
 
 const PORT = process.env.PORT || 3100;
-const { app, httpServer, io } = createMockTransport();
+const { app, httpServer, io, resetAuthCooldown } = createMockTransport();
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
@@ -506,6 +506,7 @@ const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') &
 
 function resetMockState() {
   mockResetGeneration += 1;
+  resetAuthCooldown();
   mockDirsOverride = null;
   mockSubProjects = [];
   mockScratchSessions = [];

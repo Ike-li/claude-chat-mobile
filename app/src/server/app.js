@@ -922,7 +922,7 @@ if (process.stdin.isTTY) {
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
-// message 仍是原来的字符串（'unauthorized' / 'rate_limited'），前端既有判据不受影响；
+// message 是 authRejection 的 reason（'unauthorized' / 'cooldown' / 'rate_limited'），前端按它分流；
 // 新增的 err.data 让客户端能拿到重试提示——socket.io 会把 data 原样送到客户端的
 // connect_error(err) 上，这是 socket 侧对应 HTTP `Retry-After` 头的唯一通道。
 // 此前 socket 侧一个数字都不给，手机端只能盲目重连，而每次重连都只是撞在锁上。
@@ -957,8 +957,8 @@ io.use(async (socket, next) => {
   const rlKey = rlSourceKey(socket.handshake, clientIp, rlTrust);
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
-    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
-    // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
+    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」；'cooldown' 只是上一次
+    // 令牌不对顺带上的短锁，这次的令牌没校验，回 cooldown + 秒数，前端到点自动重试（验收 O83）。
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const gated = gateCheck(st, Date.now());

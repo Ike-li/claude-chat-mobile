@@ -238,10 +238,12 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-03）', async
   assert.equal(locked, 1);
 });
 
-// 退避冷却期内的请求必须回 401 unauthorized，不能回 429 rate_limited（见 rate-limiter.js gateCheck）。
-// HTTP 侧与 socket 握手共用同一个限速桶，所以本机随便一个脚本用错令牌打一次 /health，
-// 就会把浏览器的 socket 握手一起拖进这把 500ms 短锁——那时说「登录尝试过多」同样是在说反话。
-test('createHttpAuth：退避冷却期内 → 401 unauthorized，不是 429 rate_limited', async () => {
+// 验收 O83（AC-22-09）：退避冷却期内的请求根本没校验令牌。此前一律回 401 unauthorized——带着正确令牌的请求也被
+// 告知「令牌不对」，客户端分不出是令牌失效还是被退避（E2 实测窗口 524–544ms）。现在回 429 + Retry-After，status 用
+// cooldown 与长锁的 rate_limited 区分：「尝试过多」只属于长锁（2026-09-02 只错一次就被告知尝试过多的误报，见
+// rate-limiter.js gateCheck）。HTTP 侧与 socket 握手共用同一个限速桶，本机脚本用错令牌打一次 /health 就会把
+// 浏览器的握手一起拖进这把短锁。
+test('createHttpAuth：退避冷却期内 → 429 cooldown + Retry-After，带正确令牌也一样，且不计数', async () => {
   const states = new Map();
   let now = 1_000_000;
   const { onAuthResult } = await import('../../app/src/auth/rate-limiter.js');
@@ -257,24 +259,30 @@ test('createHttpAuth：退避冷却期内 → 401 unauthorized，不是 429 rate
       now: () => now,
     },
   });
-  const run = async () => {
-    const response = { statusCode: 200, body: null, headers: new Map() };
+  const run = async (query) => {
+    const response = { statusCode: 200, body: null, headers: new Map(), passed: false };
     const res = {
       status(code) { response.statusCode = code; return this; },
       json(body) { response.body = body; return this; },
       setHeader(k, v) { response.headers.set(k, v); return this; },
     };
-    await mkAuth()({ headers: { host: 'localhost' }, query: {}, socket: { remoteAddress: '127.0.0.1' } }, res, () => {});
+    await mkAuth()({ headers: { host: 'localhost' }, query, socket: { remoteAddress: '127.0.0.1' } }, res, () => { response.passed = true; });
     return response;
   };
-  const first = await run();                       // 失败 #1：真校验了令牌 → 401 + 上 500ms 退避锁
+  const first = await run({ token: 'wrong' });     // 失败 #1：真校验了令牌 → 401 + 上 500ms 退避锁
   assert.equal(first.statusCode, 401);
+  assert.equal(first.body?.status, 'unauthorized');
+  assert.equal(first.headers.get('Retry-After'), undefined, '令牌真错时不带 Retry-After');
   now += 235;                                      // 生产实测的 235ms（pageshow → 200ms 重连）
-  const second = await run();                      // 撞进退避锁：没校验令牌，但也不是「尝试过多」
-  assert.equal(second.statusCode, 401, '只错一次，不得升级成 429');
-  assert.equal(second.body?.status, 'unauthorized');
-  assert.equal(second.headers.get('Retry-After'), undefined, 'unauthorized 不带 Retry-After');
+  const second = await run({ token: 'secret' });   // 正确令牌撞进退避锁：没校验
+  assert.equal(second.passed, false);
+  assert.equal(second.statusCode, 429, '冷却期内带正确令牌也不能说成「令牌不对」');
+  assert.equal(second.body?.status, 'cooldown', '与长锁的 rate_limited 分开，客户端才不会说成「尝试过多」');
+  assert.equal(second.headers.get('Retry-After'), '1');
   assert.equal(states.get('ip:127.0.0.1').failCount, 1, '冷却期内不计数');
+  now += 300;                                      // 过了 500ms 退避
+  const third = await run({ token: 'secret' });
+  assert.equal(third.passed, true, '冷却过后正确令牌照常放行');
 });
 
 // 2026-09-02：HTTP 侧此前只在「达阈值锁定」那一刻打一行日志，逐次失败连打的哪个端点都不记。
