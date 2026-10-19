@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import { removeBridgeNamespace } from '../app/src/ops/bridge-namespace.js';
 import { resolveStableNodePath } from './node-path.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
@@ -230,6 +231,8 @@ function uninstall(home = homedir()) {
   else settings.statusLine.refreshInterval = manifest.originalRefreshInterval;
   atomicWriteJson(paths.settings, settings);
   unlinkSync(paths.manifest);
+  // 自己的命名空间（快照）一并清掉；此前要等整体 npm run uninstall（验收 O35）
+  removeBridgeNamespace(home, 'statusline-v1');
   return { state: 'uninstalled', restoredCommand: manifest.originalCommand };
 }
 

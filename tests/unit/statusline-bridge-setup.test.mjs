@@ -333,3 +333,41 @@ test('install：dangling settings/manifest symlink 同样 fail-closed，不被�
     }
   }
 });
+
+// 验收 O35（AC-23-06）：单独卸载桥之后，~/.claude/ccm/statusline-v1 下的快照留着，只有整体 npm run uninstall 会清。
+// 现在桥自己卸载就清掉自己的命名空间；~/.claude/ccm 空了一并移除，有别的东西就留着。
+test('uninstall：清掉自己的 ~/.claude/ccm/statusline-v1（含快照），ccm 空了一并移除', () => {
+  const home = makeHome();
+  try {
+    writeSettings(home, { type: 'command', command: 'bash /tmp/original-statusline.sh', refreshInterval: 60 });
+    assert.equal(runSetup(home, 'install').status, 0);
+    const snapshots = join(home, '.claude', 'ccm', 'statusline-v1', 'snapshots');
+    mkdirSync(snapshots, { recursive: true });
+    writeFileSync(join(snapshots, 'session-a.json'), '{}');
+
+    const res = runSetup(home, 'uninstall');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(existsSync(join(home, '.claude', 'ccm', 'statusline-v1')), false, 'statusline-v1 应被清掉');
+    assert.equal(existsSync(join(home, '.claude', 'ccm')), false, 'ccm 只剩空目录时应一并移除');
+    assert.equal(existsSync(settingsPath(home)), true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('uninstall：~/.claude/ccm 下还有别的桥时只清自己那份', () => {
+  const home = makeHome();
+  try {
+    writeSettings(home, { type: 'command', command: 'bash /tmp/original-statusline.sh', refreshInterval: 60 });
+    assert.equal(runSetup(home, 'install').status, 0);
+    const sibling = join(home, '.claude', 'ccm', 'hooks-v1', 'acks');
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, 'verify-1.json'), '{}');
+
+    assert.equal(runSetup(home, 'uninstall').status, 0);
+    assert.equal(existsSync(join(home, '.claude', 'ccm', 'statusline-v1')), false);
+    assert.equal(existsSync(join(sibling, 'verify-1.json')), true, '另一座桥的东西不得被碰');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

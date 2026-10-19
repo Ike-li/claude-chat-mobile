@@ -2,7 +2,7 @@
 // 真相仍由 scanHookEvents 提供；watch 建不起来时退化成现有 2.5s 轮询，功能不缺失。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -130,5 +130,64 @@ test('watch 触发：落一个事件文件后无需手动 scan 也会被消费',
       ]);
       assert.equal(events[0].sessionId, SID);
     } finally { clearTimeout(timer); inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+// 验收 O35：此前 server 启动就替用户建 ~/.claude/ccm/hooks-v1/events（为了「先起 server 后装桥」免重启），
+// 于是没装过桥、或刚卸载干净的机器，server 一重启 ~/.claude/ccm 又冒出来。现在不建：目录在就盯，不在就等，
+// 每隔 rearmMs 看一眼——装上（目录出现）就盯上并立刻扫一遍，卸掉（目录被删）就放手。
+function waitForConsumed(inbox, got, ms = 3000) {
+  let timer;
+  return Promise.race([
+    got,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${ms}ms 内没被消费`)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+test('目录不存在（桥没装）：不替用户建目录', () => {
+  const d = dirs();
+  try {
+    const inbox = createHooksInbox({ eventsDir: d.events, acksDir: d.acks, enabled: true, rearmMs: 20 });
+    try {
+      assert.equal(existsSync(d.events), false, '没装桥的机器上不该凭空出现投递箱目录');
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+test('先起 inbox 后出现目录（先起 server 后装桥）：免重启，事件照样被消费', async () => {
+  const d = dirs();
+  try {
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 20,
+      onEvents: e => { if (e.length) resolveSeen(e); },
+    });
+    try {
+      put(d.events); // 写事件会建目录，等同安装器 / runner 先落了第一条
+      const events = await waitForConsumed(inbox, got);
+      assert.equal(events[0].sessionId, SID);
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});
+
+test('目录被删后又出现（卸载后重装、server 不重启）：照样被消费', async () => {
+  const d = dirs();
+  try {
+    put(d.events); // 目录先在（启动清扫会把这条清掉）
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 20,
+      onEvents: e => { if (e.length) resolveSeen(e); },
+    });
+    try {
+      rmSync(d.events, { recursive: true, force: true });
+      await new Promise(r => setTimeout(r, 100));
+      assert.equal(existsSync(d.events), false, '卸载删掉的目录不该被 inbox 自己建回来');
+      put(d.events);
+      const events = await waitForConsumed(inbox, got);
+      assert.equal(events[0].sessionId, SID);
+    } finally { inbox.close(); }
   } finally { rmSync(d.root, { recursive: true, force: true }); }
 });
