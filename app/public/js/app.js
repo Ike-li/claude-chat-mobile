@@ -733,9 +733,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
-  // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
-  const expandedAllDirs = new Set();
+  // 用户点过「显示全部会话…」的目录 → 已加载的页数（「加载更多」每点一次加一页，O81）。缓存里的 sessions
+  // 是"当下拿到的那一份"，记不住用户要看全量这个意图——而 populateSubtree 每次都会无条件 revalidate，
+  // 不带上 all/pages 就会把展开态悄悄打回截断（P0-11x）或打回第一页。
+  const expandedAllDirs = new Map();
   // session:list 附带的 CLI registry 快照：每个 cwd 的终端聚合态（'waiting' | 'busy'，无则不存键）。
   // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
   // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
@@ -7171,7 +7172,31 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
       // worktree 的会话由服务端并进所属仓库的列表（行带自己的 cwd），不自成一节。
-      const renderRows = (sessions, hasMore, total = null, pinned = []) => {
+      // 「显示全部」与「加载更多」共用：按页数拉全量窗口（每页条数与上限在服务端 sessionListWindow），
+      // 记住页数供后续 revalidate 沿用。
+      const loadAllPages = (pages, button) => {
+        haptic('tap');
+        button.textContent = t('加载中…');
+        button.disabled = true;
+        expandedAllDirs.set(cwd, pages); // 记住意图：后续 revalidate 也得按这个窗口拉，否则重建一次就被打回去
+        const requestGen = ++sessionListRequestGen;
+        socket.emit('session:list', { cwd, all: true, ...(pages > 1 ? { pages } : {}) }, state => {
+          if (requestGen !== sessionListRequestGen) return;
+          if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
+          if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
+          const all = state?.sessions || [];
+          const nextHasMore = !!state?.hasMore;
+          const nextTotal = Number.isFinite(state?.total) ? state.total : null;
+          const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
+          const nextCanLoadMore = state?.canLoadMore === true;
+          unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
+          updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
+          sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, canLoadMore: nextCanLoadMore });
+          renderRows(all, nextHasMore, nextTotal, nextPinned, nextCanLoadMore);
+        });
+      };
+
+      const renderRows = (sessions, hasMore, total = null, pinned = [], canLoadMore = false) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
         mountSearch();
@@ -7188,17 +7213,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           for (const inst of orphanLiveRows(liveMap, listedIds)) {
             rowsHost.appendChild(sessionRow({ id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
           }
-          // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。
-          // 置顶而不是按时间插回原位：插回原位等于没补——它本来就是因为排得太后才看不见的。
-          // 带一行小标，否则「一条上周的会话排在最上面」读起来像排序坏了。
-          if (pinned.length) {
-            const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
-            pinnedHead.textContent = t('稍后再看');
-            rowsHost.appendChild(pinnedHead);
-            for (const s of pinned) {
-              rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-            }
-          }
         }
         for (const s of sessions) {
           rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
@@ -7210,34 +7224,37 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
         if (!query && hasMore && !expandedAllDirs.has(cwd)) {
           const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
-          more.onclick = () => {
-            haptic('tap');
-            more.textContent = t('加载中…');
-            expandedAllDirs.add(cwd); // 记住意图：后续 revalidate 也得按全量拉，否则重建一次就被打回截断
-            const requestGen = ++sessionListRequestGen;
-            socket.emit('session:list', { cwd, all: true }, state => {
-              if (requestGen !== sessionListRequestGen) return;
-              if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
-              if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
-              const all = state?.sessions || [];
-              const nextHasMore = !!state?.hasMore;
-              const nextTotal = Number.isFinite(state?.total) ? state.total : null;
-              const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
-              unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
-              updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned });
-              renderRows(all, nextHasMore, nextTotal, nextPinned);
-            });
-          };
+          more.onclick = () => loadAllPages(1, more);
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
           const remaining = remainingOlderSessionCount(total, sessions.length);
-          const hintText = remaining != null
-            ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
-            : t('还有更早的会话，可用搜索查找');
-          const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
-          hint.textContent = hintText;
-          rowsHost.appendChild(hint);
+          if (canLoadMore) {
+            // 窗口还能放宽：给「加载更多」，一页页往后拉（O81）。到服务端上限后回落成下面的搜索提示。
+            const loadMore = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40" data-testid="session-load-more"></button>`);
+            loadMore.textContent = remaining != null
+              ? t('加载更多会话（还有 {n} 个）').replace('{n}', String(remaining))
+              : t('加载更多会话');
+            loadMore.onclick = () => loadAllPages((expandedAllDirs.get(cwd) || 1) + 1, loadMore);
+            rowsHost.appendChild(loadMore);
+          } else {
+            const hintText = remaining != null
+              ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
+              : t('还有更早的会话，可用搜索查找');
+            const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
+            hint.textContent = hintText;
+            rowsHost.appendChild(hint);
+          }
+        }
+        // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。按时间它们
+        // 都比本页更早，所以排在本页与「显示全部 / 加载更多」之后（O81：此前置顶，读起来像排序坏了；加载到
+        // 覆盖它的那一页时，服务端不再把它算进 pinned，它就落回时间序里）。带一行小标说明这一组为什么在这里。
+        if (!query && pinned.length) {
+          const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
+          pinnedHead.textContent = t('稍后再看');
+          rowsHost.appendChild(pinnedHead);
+          for (const s of pinned) {
+            rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+          }
         }
         refreshDirUnreadCounts(); // 行数据（含 lastUsedAt）刚更新，目录头「N 未读」随之重算
         // 折叠态点角标 → 先展开、发 session:list、等 ack 回来渲染完行，跳转才有落点，就是这里。
@@ -7251,7 +7268,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const cachedEntry = sessionsCache.get(cwd);
         const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
         if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || []);
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.canLoadMore === true);
         } else {
           const rowsHost = bindSessionRowsHost(container, el);
           rowsHost.innerHTML = '';
@@ -7289,9 +7306,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (background && !socket.connected) return;
       const requestGen = ++sessionListRequestGen;
       const query = activeQuery();
+      const loadedPages = expandedAllDirs.get(cwd) || 0;
       const listPayload = query
         ? { cwd, query }
-        : { cwd, all: expandedAllDirs.has(cwd) };
+        : { cwd, all: loadedPages > 0, ...(loadedPages > 1 ? { pages: loadedPages } : {}) };
       socket.emit('session:list', listPayload, state => {
         if (requestGen !== sessionListRequestGen) return;
         if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
@@ -7305,6 +7323,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // pinned：手动标记但被 limit 挤出本页的会话，服务端单独补回（旧服务端不发这个字段 → 空数组，
         // 功能静默退回「标了就可能找不回来」，但不报错、不影响本页任何一行）。
         const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
+        const canLoadMore = state?.canLoadMore === true; // 旧服务端不发 → 回落成「可用搜索查找」提示
         // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
@@ -7322,8 +7341,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           nextTotal: total,
           nextPinned: pinned,
         });
-        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned });
-        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned);
+        const canLoadMoreChanged = (prevEntry?.canLoadMore === true) !== canLoadMore;
+        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, canLoadMore });
+        if (willRerender || readChanged || canLoadMoreChanged) renderRows(sessions, hasMore, total, pinned, canLoadMore);
       });
     };
 

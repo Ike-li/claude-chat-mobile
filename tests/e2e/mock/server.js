@@ -95,6 +95,9 @@ let lateClosedSessionEventsInstanceId = null;
 // 已被关闭、等着用例经 POST /__emit-late-closed-events 放出迟到事件的实例（见 session:close 处注释）。
 let pendingLateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+// O81：session:list 收到的请求（cwd/all/pages）。「加载更多」之后的 revalidate 必须沿用已加载的页数——
+// 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带页数，所以用例直接看请求。
+let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
@@ -542,6 +545,7 @@ function resetMockState() {
   lateClosedSessionEventsInstanceId = null;
   pendingLateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  mockSessionListLog = [];
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
@@ -812,6 +816,8 @@ app.post('/__arm-history-error', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
+
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
@@ -960,6 +966,17 @@ function emitLateClosedSessionEvents(closedInstanceId) {
     seq: 1, epoch: 'mock-epoch-current-after-closed-stale', sessionId: current.sessionId, instanceId: current.instanceId, ts: Date.now(),
     type: 'system', payload: { message: '[MOCK_INFO] Closed-session stale replay finished for current view.' }
   });
+}
+
+// O81：overflow 模式下「加载更多」第二页放出的更早会话（比 Older Migration Session 还早）。
+function overflowOlderSessions(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `mock-session-overflow-older-${i + 1}`,
+    title: `Overflow Older ${i + 1}`,
+    model: 'claude-3-5-sonnet',
+    lastUsedAt: mockListClockBase - 3_000_000 - i * 60_000,
+    entrypoint: 'sdk-ts',
+  }));
 }
 
 function mainCwdSessions() {
@@ -1501,6 +1518,7 @@ io.on('connection', socket => {
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
+    mockSessionListLog.push({ cwd, all: all === true, pages: payload?.pages ?? null, query });
     // pinned 与 readState 一样在包装层统一注入：这个 handler 有五个以上返回分支，漏一个就会让那条
     // 路径下的「稍后再看」组凭空消失。搜索态不补（同真 server）：往结果里塞未匹配的行是污染搜索语义。
     const callback = typeof rawCallback === 'function'
@@ -1565,19 +1583,21 @@ io.on('connection', socket => {
           });
           return;
         }
-        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外会话）
-        const overflowHidden = historyOverflowMode ? 7 : 0;
-        const total = sessions.length + overflowHidden;
-        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : sessions;
-        const hasMore = historyOverflowMode
-          ? (all ? overflowHidden > 0 : true)
-          : false;
+        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外 7 个会话）。
+        // O81：显示全部的第一页可以「加载更多」（canLoadMore）；第二页（pages:2）再放出其中 4 个，并模拟
+        // 到了服务端硬顶（canLoadMore:false）——剩下 3 个只能靠搜索。按钮与提示两种收尾都覆盖到。
+        const pages = Number.isInteger(payload?.pages) && payload.pages > 1 ? payload.pages : 1;
+        const overflowExtra = historyOverflowMode && all && pages >= 2 ? overflowOlderSessions(4) : [];
+        const total = sessions.length + (historyOverflowMode ? 7 : 0);
+        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : [...sessions, ...overflowExtra];
+        const hasMore = historyOverflowMode ? visibleSessions.length < total : false;
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
           terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
           terminalWaiting: terminalWaitingArmed,
           hasMore,
+          canLoadMore: Boolean(historyOverflowMode && all && pages < 2 && hasMore),
           total,
         });
         if (terminalRefreshArmed && terminalRefreshListCount === 1) {

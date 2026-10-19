@@ -89,7 +89,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -4061,7 +4061,7 @@ registerSocketConnection(io, socket => {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
       return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
-        hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+        hasMore: false, canLoadMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
@@ -4069,14 +4069,18 @@ registerSocketConnection(io, socket => {
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
     const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
-    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）每页 MAX_SESSION_LIMIT 条。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
     // history.js 的 SEARCH_SCAN_LIMIT 全量 readdir，不是把 RESULT 抬过 50。
     const all = obj.all === true;
-    const limit = query
-      ? SEARCH_RESULT_LIMIT
+    // 「显示全部」之后的「加载更多」（O81）：pages 按页放宽窗口，硬顶与判据见 sessionListWindow。
+    const { limit, canGrow } = sessionListWindow({
+      query,
+      all,
+      pages: obj.pages,
       // 子文件夹这类项目沿用所属连接根配的条数
-      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT));
+      configuredLimit: sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT,
+    });
     const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
       limit,
       memberOptions,
@@ -4115,7 +4119,8 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
+    // canLoadMore：窗口还能再放宽且确实还有更早的——前端据此给「加载更多」，否则回落「可用搜索查找」。
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, canLoadMore: canGrow && hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
