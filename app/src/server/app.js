@@ -1934,10 +1934,7 @@ if (!statusOff) {
 // 不支持的平台由 sampler 内部早退（process.platform !== 'darwin'），零开销。
 // 先立刻跑一次：盘上有上一条命的快照时，这一次就能认出 server 自己的重启。
 serviceSampler.sample();
-// 非 macOS 的重启历史唯一来源：上面那条 sample() 在这些平台上直接早退，面板「重启记录」段
-// 因此一直是空的。server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
-// darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
-serviceSampler.recordSelfStart();
+// 非 macOS 的自身启动记录（serviceSampler.recordSelfStart）不在这里写，挪到 httpServer.listen 的成功回调里。
 serviceSampleInterval = setInterval(() => serviceSampler.sample(), SERVICE_SAMPLE_INTERVAL_MS);
 serviceSampleInterval.unref?.(); // 不阻止进程退出
 
@@ -5195,6 +5192,12 @@ startApprovalRetentionSweep();
 projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
 httpServer.listen(port, host, () => {
+  // 非 macOS 的重启历史唯一来源：sample() 在这些平台上直接早退，面板「重启记录」段因此一直是空的。
+  // server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
+  // darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
+  // **必须在绑定成功之后**（验收 O18）：此前在模块求值时就写，缺令牌被拒、端口被占这类没起来的启动，
+  // 退出前已记了一条 started / restarted，面板把它们算成重启，崩溃循环告警的频率跟着虚高。
+  serviceSampler.recordSelfStart();
   // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
   // **必须放在绑定成功之后**：早于此处会给一个根本没起来的 server（如端口被占）开出窗口，
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
