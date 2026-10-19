@@ -4491,12 +4491,13 @@ io.on('connection', socket => {
         }
         const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
         if (bgInst) bgInst.state = 'done';
-        activeInst.state = 'idle';
+        // 新会话页上（viewingInstanceId 为 null）通用路径不懒开实例，activeInst 是 undefined（验收 O71）
+        if (activeInst) activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: activeInst.cwd,
+            viewingCwd: activeInst?.cwd ?? workspaceCwdOf(mockInstances[0].cwd),
             ...mockDirFields(),
             instances: mockInstances, service: mockServicePayload()
           }

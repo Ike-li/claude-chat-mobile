@@ -61,7 +61,14 @@ export function createVisualMockScenarioRegistry(entries = []) {
     async run(command, context = {}) {
       const scenario = find(command);
       if (!scenario) return false;
-      await scenario.run({ ...context, cmd: command });
+      try {
+        await scenario.run({ ...context, cmd: command });
+      } catch (err) {
+        // 场景自己的 bug 只该让触发它的那条用例失败（验收 O71）。调用方 user:message 是 async 处理函数，
+        // 拒绝没人接，Node 会直接退出 mock 进程，同一分片里排在后面的用例全部变成「未连接」假红。
+        // 响亮地记下来、不往外抛：触发它的那条用例照样等不到该来的事件而失败，栈在 webServer 日志里。
+        console.error(`[mock] 场景 ${command} 抛错（已隔离，触发它的用例应会失败）：`, err);
+      }
       return true;
     },
   };

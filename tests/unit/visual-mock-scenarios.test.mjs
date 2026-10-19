@@ -65,3 +65,17 @@ test('visual mock business-domain modules expose their commands through the shar
   assert.ok(commands.includes('test:statusline'));
   assert.ok(commands.includes('test:needsyou'));
 });
+
+// 验收 O71：场景自己抛错时，注册表要把它隔离在这一次调用里。user:message 处理函数是 async 的，拒绝没人接
+// Node 会直接退出 mock 进程，同一分片后面的用例全部假红。错误要响亮地记下来（console.error），不能静默吞。
+test('场景抛错被隔离：run() 照常返回 true、不往外抛，并记一条错误日志', async t => {
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args.map(String).join(' ')));
+  const registry = createVisualMockScenarioRegistry([
+    { command: 'test:boom', run: async ({ activeInst }) => { activeInst.state = 'idle'; } },
+  ]);
+  assert.equal(await registry.run('test:boom', { activeInst: undefined }), true);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /test:boom/);
+  assert.match(logged[0], /TypeError/);
+});
