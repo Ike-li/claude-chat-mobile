@@ -20,6 +20,7 @@ import {
   normalizeEffortLevel,
   CCM_EFFORT_LEVELS,
   UI_EFFORT_LEVELS,
+  resolveResumeEffort,
 } from '../../app/src/agent/cli-settings-defaults.js';
 import {
   buildWebStatusLine,
@@ -161,6 +162,19 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     ]);
     assert.equal(hidden, true);
     assert.deepEqual(levels, []);
+  });
+
+  // 验收 O56（AC-07-09）：恢复历史会话时思考档此前会继承同一文件夹里「最后一个实例」的档——只在某个会话里临时
+  // 选过一次 low，之后在这个文件夹里恢复的旧会话（自己从没选过档）全都带着 --effort=low 启动。终端 claude --resume
+  // 不会拿别的会话的档。契约：会话自己存的 > CLI settings（L3）> 没指定；别的会话的档不参与。
+  test('resolveResumeEffort：会话自己存的 > CLI settings > 没指定；不继承同目录别的会话', () => {
+    const cliHigh = { effort: 'high' };
+    assert.equal(resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }), 'low', '会话自己记过就用它');
+    assert.equal(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }), 'auto', 'auto 是显式选的终值');
+    assert.equal(resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'low', cliDefaults: cliHigh }), 'high',
+      '自己没记过：用 CLI settings，不拿同目录末实例的档');
+    assert.equal(resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'low', cliDefaults: null }), null,
+      '自己没记过、settings 也没配：没指定（不带 --effort），不拿同目录末实例的档');
   });
 
   test('resolvePanelState：镜像态整组用 CLI 观察值，禁止 Web 补空', () => {

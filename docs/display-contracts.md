@@ -103,6 +103,10 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 持久化：`sessions.json` 存 SDK 档或 `'auto'` 字面量（ultracode 不落盘）。`resolveResumeEffort` 把 `'auto'` 当终值，
 把 `null` 当「没指定」继续往下兜底——auto 若存成 null，重启后会悄悄换成 settings 里存的档。
+
+恢复会话时的档位：会话自己存的 > CLI settings（`effortLevel`）> 没指定（不带 `--effort`）。**同一文件夹里别的会话的档不参与**
+——此前会继承该文件夹最后一个实例的档，临时选一次 low 就扩散到之后恢复的所有旧会话；终端 `claude --resume` 不会这样。
+新会话（FRESH）另走 `resolveFreshPrefs`：新会话页暂存 > CLI settings > 硬默认。
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
 ### 2.2 UI → SDK 映射（硬契约）
