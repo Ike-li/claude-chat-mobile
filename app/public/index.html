@@ -641,7 +641,9 @@
         <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
           <!-- 可滚动 chip 区：摘要可能很长，横向滚；动作区不进滚动 -->
           <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
-            <div id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" data-testid="pill-defaults">
+            <!-- 原生 button（验收 O13）：它是模型 / 权限 / 思考磁贴的唯一入口，div 版本键盘打不开设置面板。
+                 读屏名称就是可见的三段摘要，title 补「会话设置」/ 完整串 -->
+            <button type="button" id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" aria-haspopup="dialog" data-testid="pill-defaults">
               <span id="pillModelText" class="pill-defaults-part pill-model">默认</span>
               <span class="pill-defaults-sep" aria-hidden="true">·</span>
               <span id="pillPermText" class="pill-defaults-part pill-perm">Manual</span>
@@ -650,7 +652,7 @@
                 <span class="pill-defaults-sep" aria-hidden="true">·</span>
                 <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
-            </div>
+            </button>
             <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
             <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>

@@ -355,10 +355,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 插进 CSS selector 或 HTML 串。
     if (customModelGrid && !customModelGrid.querySelector(`[data-model="${CSS.escape(value)}"]`)) {
       const card = el(`
-        <div class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+        <button type="button" aria-pressed="false" class="model-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
           <div class="text-xs font-semibold truncate text-ink"></div>
           <div class="text-[9.5px] text-ink-soft truncate mt-0.5"></div>
-        </div>
+        </button>
       `);
       card.dataset.model = value;                 // 属性走 dataset，不进 HTML 串
       const [nameDiv, noteDiv] = card.children;   // 两个内层 div，textContent 赋值（自动转义）
@@ -543,6 +543,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;
         const isCurrent = tileVal === activeVal || (!!model && tileVal === model);
+        tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
         const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
@@ -590,11 +591,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         || (!!selectedVal && selectedVal !== 'default' && wireOf(selectedVal) === wireOf(val))
         || (!currentModel && val === 'default' && (selectedVal === 'default' || !selectedVal));
       const using = active ? t(' · 使用中') : '';
+      // 原生 button + aria-pressed（验收 O13），同权限六档：选中态给读屏的那一路靠 aria-pressed，syncModelUI 跟着改
       const card = el(`
-        <div data-model="${esc(val)}" class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+        <button type="button" data-model="${esc(val)}" aria-pressed="${active ? 'true' : 'false'}" class="model-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
           <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
           <div class="text-xs text-ink-soft truncate mt-0.5">${esc(subtitle || val)}</div>
-        </div>
+        </button>
       `);
       card.onclick = () => {
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
@@ -8267,8 +8269,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       recentsList.innerHTML = '';
       for (const s of recent) {
         const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
+        // 原生 button 而不是带 onclick 的 div（验收 O11）：同权限六档那次的理由——键盘走得到、Enter/空格能点、
+        // 读屏认得是控件，都由浏览器给。
         const item = el(`
-          <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
+          <button type="button" class="dash-recent-item w-full text-left flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
               <div class="dash-recent-title font-bold text-xs text-ink truncate"></div>
               <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5 min-w-0">
@@ -8279,7 +8283,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
               </div>
             </div>
             <div class="text-xs text-accent font-bold shrink-0">${t('进入 ➔')}</div>
-          </div>
+          </button>
         `);
         item.querySelector('.dash-recent-title').textContent = s.title || t('无标题会话');
         // 判定所需的两个字段留在行上：位点晚到时（read:sync 归并）要能就地重算，而 renderDashRecents
