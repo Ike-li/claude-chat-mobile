@@ -34,6 +34,7 @@ import {
   resolveDrawerStatus,
   isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
+  resolveRowTerminalState,
   formatSessionRowSubtitle,
   summarizeOtherWorkspaces,
   shouldShowComposer,
@@ -5895,14 +5896,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (badge) applyBadge(badge, drawerStateForDir(row.dataset.dir));
     });
   }
+  // 当前生效的只读镜像锁（已接管的不算）——抽屉行据此给被终端占着的会话补终端态（O86）。
+  function mirrorRowLock() {
+    return mirrorReadonlySid ? { sessionId: mirrorReadonlySid, stale: mirrorStaleFlag, waiting: mirrorWaitingFlag } : null;
+  }
   // 初次绘制和 instances 增量广播共用同一个状态 resolver/builder，避免两套角标语义分叉。
+  // 镜像锁变化（applyMirror）也走这里重刷。
   function refreshSessionStatusChips() {
     const instMap = new Map(instancesList.map(x => [x.instanceId, x]));
+    const mirror = mirrorRowLock();
     sessionPanel.querySelectorAll('[data-testid="session-row"]').forEach(row => {
       const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
       const head = row.querySelector('[data-session-head]');
       if (!head) return;
-      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null,
+      const terminalState = resolveRowTerminalState({
+        registryState: row.dataset.terminalState || null,
+        sessionId: row.dataset.sessionId || null,
+        mirror,
+      });
+      appendSessionStatusChip(head, inst?.state, terminalState, row.dataset.terminalSource || null,
         row.dataset.bgLocked === '1');
     });
   }
@@ -6848,7 +6860,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       titleSpan.after(mark);
     };
     applyUnreadMark();
-    appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource, Boolean(s.bgLocked));
+    appendSessionStatusChip(head, liveInst?.state,
+      resolveRowTerminalState({ registryState: s.terminal || null, sessionId: s.id || null, mirror: mirrorRowLock() }),
+      s.terminalSource, Boolean(s.bgLocked));
     btn.appendChild(head);
     const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
     // 有 id 却没有时间戳的只有 SESSION-02 补画的活实例行——它是存过的会话，不能说「未保存」。
@@ -9038,6 +9052,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
+    refreshSessionStatusChips(); // 抽屉里被锁住的那一行跟着标/撤终端态（O86）
   }
 
   // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。

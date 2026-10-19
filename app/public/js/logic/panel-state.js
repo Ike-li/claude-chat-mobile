@@ -172,6 +172,17 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
   return { status, label };
 }
 
+// 会话行的终端态（O86）。注册表（~/.claude/sessions/<PID>.json）有自报就用它——那是终端进程自己说的。
+// 没有自报（老版本 CLI 不写、或注册表读不动）时，服务端照样能从磁盘观测到外部落定新消息、给当前查看的
+// 会话上只读镜像锁；那一行也该看得出被终端占着，而不是和普通「已打开」一样。镜像锁是全局单值、只属于
+// 当前查看的会话（mirror-engine），所以最多补一行。疑似中断（stale）不补：那时多半没人在驾驶。
+// mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting } 或 null。
+export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
+  if (registryState) return registryState;
+  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale) return null;
+  return mirror.waiting ? 'waiting' : 'busy';
+}
+
 // 会话行副文本：时间 / 已打开 / id。CLI 空闲占用提到最前，避免 truncate 吃掉来源；
 // CLI busy 不再写「终端」——主 chip 已是「终端运行中」。
 export function formatSessionRowSubtitle({

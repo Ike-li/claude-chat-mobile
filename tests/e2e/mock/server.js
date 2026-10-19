@@ -861,11 +861,12 @@ app.post('/__mirror-state', (req, res) => {
   // 端点照样回 200，事件却发的是上一态，症状是断言等一个永远不来的状态（本次就踩了一遍）。
   const readonly = req.query?.readonly !== '0';
   const stale = req.query?.stale === '1';
+  const waiting = req.query?.waiting === '1'; // 终端卡在对话框上等人（注册表 status:"waiting"）
   const withResult = req.query?.withResult === '1';
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, cliSeen: true },
+    payload: { readonly, stale, cliSeen: true, ...(waiting ? { waiting } : {}) },
   });
   if (withResult) {
     io.emit('agent:event', {
