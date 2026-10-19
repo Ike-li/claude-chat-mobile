@@ -57,7 +57,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 验收 O5（AC-02-06）：令牌门写着「若你刚清过浏览器数据，原先保存的令牌已被清除」，对第一次打开的人不贴切。
   // 两种情况在浏览器里长得一模一样（什么都没存），服务端在鉴权之前也不该透露「有没有设备登录过」——
   // 所以不去猜，说明文案同时覆盖两种。文案是静态的、与门因何打开无关（mock 不带令牌直接放行，借坏令牌把门打开）。
-  test('P0-20g 令牌门的说明不预设「你清过浏览器数据」，第一次打开的人也读得通', async ({ page }) => {
+  test('P0-20h 令牌门的说明不预设「你清过浏览器数据」，第一次打开的人也读得通', async ({ page }) => {
     await page.request.post('/__reset');
     await page.goto('/#token=bad-token');
     const gate = page.locator('#authGate');
