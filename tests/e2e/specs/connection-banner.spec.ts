@@ -106,7 +106,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 后调 reconnect() 排定时器；前端若在这个回调里自己 socket.connect()，会抢先发起一次不带回调的 open，定时器那次 open(fn)
   // 随后被吞，Manager 的 _reconnecting 永久停在 true。这一次碰巧连上了，看不出毛病——但从此再断线，reconnect() 第一行就
   // 返回，页面停在「自动重连中…」，「立即重试」也救不回。
-  test('P0-02j sync:since 回执在途时断线：之后再断线，仍能自己连回来', async ({ page }) => {
+  test('P0-02q sync:since 回执在途时断线：之后再断线，仍能自己连回来', async ({ page }) => {
     let wsOpened = 0;
     page.on('websocket', () => { wsOpened++; });
     await gotoMock(page);
@@ -136,7 +136,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 验收 O49：服务暂停又恢复时，进行中的那次握手请求是挂住而不是立刻失败（TCP 没断）。Manager 要等它 20s 连接超时
   // 才会进下一轮；这段时间里 socket.connect() 什么都不做（_reconnecting 为 true），「立即重试」点了没反应。
   // 修复后「立即重试」先 disconnect() 把挂住的 engine 与重连状态清掉，再 connect() 重新握手。
-  test('P0-02k 重连握手挂住时，「立即重试」马上重新握手，不等那次握手超时', async ({ page }) => {
+  test('P0-02r 重连握手挂住时，「立即重试」马上重新握手，不等那次握手超时', async ({ page }) => {
     test.setTimeout(60_000);
     await gotoMock(page);
     // 开关打开期间的新握手一律挂住：既不应答也不失败（已建立的 websocket 不受影响，命令照常发得出去）。
