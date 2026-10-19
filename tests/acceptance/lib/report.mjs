@@ -20,7 +20,8 @@ export function summarize(results) {
   return { total: results.length, byStatus };
 }
 
-const cell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+// 先转义反斜杠再转义竖线：反过来做，原文的 \| 会变成 \\|，竖线重新成了分隔符
+const cell = v => String(v ?? '').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r\n|\r|\n/g, ' ');
 
 export function writeRunReport(runDir, results) {
   const capped = results.map(capVerdict);

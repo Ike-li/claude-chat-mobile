@@ -50,3 +50,32 @@ test('writeRunReport：写 results.json 与 report.md，弱证据的 pass 落盘
   assert.match(md, /^\| AC-09-02 \| partial \|/m, 'report.md 里也必须是降档后的结论');
   assert.match(md, /^\| AC-09-01 \| pass \|/m);
 });
+
+// 按 Markdown 表格的转义规则切一行：反斜杠转义下一个字符，未转义的 | 才是分隔符。
+function splitRow(line) {
+  const parts = [];
+  let cur = '';
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '\\' && i + 1 < line.length) { cur += line[i] + line[i + 1]; i++; }
+    else if (line[i] === '|') { parts.push(cur); cur = ''; }
+    else cur += line[i];
+  }
+  parts.push(cur);
+  return parts;
+}
+
+test('report.md：说明里的反斜杠、竖线和换行不会拆坏表格，读回来与原文一致', async t => {
+  const root = await makeRunRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runDir = join(root, 'runs', '2026-10-19T120000Z');
+  // 反斜杠紧跟竖线是最坏的情形：只转义竖线会得到 \\|，反斜杠被吃掉、竖线重新变成分隔符
+  const note = 'C:\\temp\\|x 与 a|b\r\n第二行';
+
+  writeRunReport(runDir, [{ id: 'AC-09-04', status: 'fail', evidence: ['ui'], note }]);
+
+  const md = await readFile(join(runDir, 'report.md'), 'utf8');
+  const row = md.split('\n').find(l => l.startsWith('| AC-09-04 '));
+  const cells = splitRow(row).slice(1, -1).map(c => c.trim().replace(/\\(.)/g, '$1'));
+  assert.equal(cells.length, 4, `应正好 4 列，实际 ${cells.length}：${row}`);
+  assert.equal(cells[3], 'C:\\temp\\|x 与 a|b 第二行');
+});
