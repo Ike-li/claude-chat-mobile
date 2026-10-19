@@ -954,7 +954,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // O86：注册表没有自报（终端只往 transcript 落定消息，或 CLI 版本不写 ~/.claude/sessions）时，服务端
   // 照样能从磁盘观测到外部驾驶、给当前查看的会话上只读镜像锁。此前抽屉那一行只认注册表，被锁住的会话
   // 和普通「已打开」长得一样，只能逐个点进去看输入框。疑似中断不补：那时没人在驾驶。
-  test('P0-11ai 镜像锁住的会话行标终端驾驶态，疑似中断与解锁后撤掉', async ({ page }) => {
+  test('P0-11ar 镜像锁住的会话行标终端驾驶态，疑似中断与解锁后撤掉', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
@@ -1121,7 +1121,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 同一条用例还守第二个面：抽屉一折叠，目录角标就没了，#sessionsDot 是页外等审批唯一的出口，而
   // summarizeOtherWorkspaces 的 rank 表此前也漏了 terminal_waiting。两个面在这里同屏才说得清完整的
   // 分流：图标点亮、顶栏安静——「让你知道」与「喊你去处理」是两件事。
-  test('P0-11ai 页外 CLI 等审批必须可见：目录角标 + 顶部图标都点亮，顶栏 chip 仍安静', async ({ page }) => {
+  test('P0-11ar 页外 CLI 等审批必须可见：目录角标 + 顶部图标都点亮，顶栏 chip 仍安静', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-summary-waiting');
