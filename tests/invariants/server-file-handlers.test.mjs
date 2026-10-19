@@ -54,6 +54,21 @@ test('file socket handlers fail closed and audit out-of-scope browse requests', 
   assert.equal(audits[0].meta.via, 'browse:list');
 });
 
+// 验收 O50：FILE_EDIT=off 时组装根不注入 writeFileInScope（files:write 回「文件编辑未启用」），可 browse:read
+// 照样下发 contentHash——前端拿它当「能不能点编辑」的唯一判据，于是给了编辑入口，改完点保存才报错。
+test('browse:read：写回不可用（FILE_EDIT=off）时不下发 contentHash；可用时照常', async () => {
+  const read = () => ({ content: 'x', truncated: false, totalSize: 1, binary: false, bytesRead: 1, contentHash: 'h' });
+  const off = register({ writeFileInScope: undefined, browseReadFile: read });
+  let response;
+  await off.handlers.get('browse:read')({ cwd: '/repo', relPath: 'a.txt' }, value => { response = value; });
+  assert.equal(response.ok, true);
+  assert.equal(response.content, 'x');
+  assert.equal('contentHash' in response, false, '编辑已关，却给了编辑基线：前端会亮出「编辑」');
+  const on = register({ browseReadFile: read });
+  await on.handlers.get('browse:read')({ cwd: '/repo', relPath: 'a.txt' }, value => { response = value; });
+  assert.equal(response.contentHash, 'h');
+});
+
 // 显式越界的 cwd（routeCwd 判 null，SCOPE-05 起不再回落查看目录）：每个走 routeCwd 的文件事件都要
 // 明确拒绝、不碰盘、不跑 git。ok 必须是 false——前端按 ok 分支，ok:true 带 error 会被当成一次空结果画出来。
 test('显式越界 cwd（routeCwd → null）：八个文件事件一律 ok:false 并说明原因，不读盘、不跑 git', async () => {

@@ -78,6 +78,12 @@ export function registerFileSocketHandlers({
       });
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
     }
+    // 写回不可用（FILE_EDIT=off，组装根不注入 writeFileInScope）时不下发编辑基线：前端拿 contentHash 当「能不能点编辑」
+    // 的唯一判据，给了它就亮出「编辑」，改完点保存才报「文件编辑未启用」（验收 O50）
+    if (typeof writeFileInScope !== 'function' && 'contentHash' in result) {
+      const { contentHash: _omit, ...readOnly } = result;
+      return ack({ ok: true, ...readOnly });
+    }
     return ack({ ok: true, ...result });
   });
 
