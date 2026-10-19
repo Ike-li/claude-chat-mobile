@@ -249,7 +249,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // O34：芯片与发出的气泡显示的名字要和落盘同一规则清洗——前导点、控制字符、路径分隔符都不该出现在界面上。
   // 不用含 '/' 的名字：File 构造函数按规范会把它换成 ':'，测的就不是我方逻辑了。
-  test('P0-18j 附件芯片与发出的气泡显示清洗后的名字', async ({ page }) => {
+  test('P0-18k 附件芯片与发出的气泡显示清洗后的名字', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
