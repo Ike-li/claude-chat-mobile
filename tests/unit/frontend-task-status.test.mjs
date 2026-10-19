@@ -500,3 +500,50 @@ test('B4：skip_transcript 任务仍从活任务表摘掉，横幅不会挂着�
   });
   assert.equal(hidden.has('hidden'), true, '摘掉最后一条后横幅须收起');
 });
+
+// 验收 O82（AC-11-07）：同一条「后台任务完成」在一个标签页里显示了两遍（fake-claude 只发一次；验收与本轮都没复现出
+// 来源）。同一来源、同一 taskId 的完成通知是同一件事：当前消息流里已经画过就不再画、不再响。
+// 以 DOM 为准——清屏重载后那一行没了，重放来的这一条要照常画回来（但不再弹一次通知）。
+function dedupeHarness() {
+  const bars = [];
+  const notes = [];
+  const context = createAppContext({
+    dom: { taskProgressBanner: { classList: { contains: () => true, add() {}, remove() {} } }, taskProgressText: { textContent: '' } },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, {
+    autoBind: false,
+    addBar: (text, cls) => { const bar = { text, cls, isConnected: true }; bars.push(bar); return bar; },
+    notify: (title, body) => notes.push({ title, body }),
+  });
+  return { status, bars, notes };
+}
+
+test('O82：同一来源同一 taskId 的完成通知只画一行、只响一次', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = { instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'bg1', status: 'completed', summary: '后台任务跑完了' } };
+  status.onComplete(done);
+  status.onComplete(structuredClone(done));
+  assert.equal(bars.length, 1, '同一件事画了两行');
+  assert.equal(notes.length, 1, '同一件事响了两次');
+});
+
+test('O82：清屏后那一行不在了，重放来的同一条照常画回来，但不再弹通知', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = { instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'bg2', status: 'completed' } };
+  status.onComplete(done);
+  bars[0].isConnected = false; // clearView 摘掉了它
+  status.onComplete(done);
+  assert.equal(bars.length, 2);
+  assert.equal(notes.length, 1);
+});
+
+test('O82 反向：不同 taskId、不同来源、没有 taskId 都照常各画各的（防修过头）', () => {
+  const { status, bars } = dedupeHarness();
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'a', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'b', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'user_injection', taskId: 'a', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', status: 'completed' } });
+  assert.equal(bars.length, 5);
+});

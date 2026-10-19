@@ -29,6 +29,10 @@ export function createTaskStatusController(context, {
   const progressHistory = new Map();
   const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
   let activeDetailId = null;
+  // 完成通知去重（O82）：同一来源、同一 taskId 是同一件事。画过的那一行记在这里，以它还在不在 DOM 为准——清屏重载
+  // 摘掉之后，重放来的同一条照常画回来；通知只响一次（重放不该再响）。
+  const doneBars = new Map();
+  const notifiedDone = new Set();
 
   // 唯一的滚动容器：详情已内联进任务卡片，若列表不封顶，6 个任务 × 20 条历史会把 composer footer
   // 撑到吃满整屏（#messages 是 flex-1 overflow-y-auto，最小尺寸算 0，挡不住）。上限放这一层、
@@ -400,15 +404,22 @@ export function createTaskStatusController(context, {
       }
       return true;
     }
-    notify(
-      failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
-      (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),
-      {
-        force: alerts?.preferences?.().foregroundComplete,
-        sessionId: event.sessionId,
-        cwd: event.cwd,
-      },
-    );
+    const doneKey = typeof payload.taskId === 'string' && payload.taskId
+      ? `${event.sessionId || ''}|${payload.source || 'system'}|${payload.taskId}` : null;
+    const shownBar = doneKey ? doneBars.get(doneKey) : null;
+    if (shownBar && shownBar.isConnected !== false) return true; // 这一行已经在消息流里：同一件事不画第二遍
+    if (!doneKey || !notifiedDone.has(doneKey)) {
+      if (doneKey) notifiedDone.add(doneKey);
+      notify(
+        failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
+        (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),
+        {
+          force: alerts?.preferences?.().foregroundComplete,
+          sessionId: event.sessionId,
+          cwd: event.cwd,
+        },
+      );
+    }
     if (event.instanceId !== context.state.viewingInstanceId) return false;
 
     const taskId = payload.taskId;
@@ -438,13 +449,15 @@ export function createTaskStatusController(context, {
       hideProgress();
     }
     alertCue(failed ? 'warning' : 'success');
+    let bar;
     if (payload.source === 'user_injection') {
-      addBar(t('🔔 后台任务完成，Claude 正在汇报结果…'), 'text-info');
+      bar = addBar(t('🔔 后台任务完成，Claude 正在汇报结果…'), 'text-info');
     } else {
       const tail = payload.summary ? `：${payload.summary}` : '';
-      const bar = addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
+      bar = addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
       attachTaskOutputButton(bar, payload); // B2：有 output_file 才挂，无则静默略过
     }
+    if (doneKey && bar) doneBars.set(doneKey, bar);
     return true;
   }
 
