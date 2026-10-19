@@ -966,7 +966,7 @@ io.use(async (socket, next) => {
         console.warn(gated.verdict === 'locked'
           ? `[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil(gated.retryAfterMs / 1000)}s，source=${rlKey}）`
           : `[conn] ${ip} 上次鉴权失败的退避冷却中（剩 ${gated.retryAfterMs}ms），拒握手（source=${rlKey}）`);
-        return next(rejectHandshake(gated));
+        return next(rejectHandshake({ ...gated, hasCredential: publicHost || Boolean(socket.handshake.auth?.token) }));
       }
     }
 

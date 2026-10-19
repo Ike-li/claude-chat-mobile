@@ -280,6 +280,11 @@ test('createHttpAuth：退避冷却期内 → 429 cooldown + Retry-After，带�
   assert.equal(second.body?.status, 'cooldown', '与长锁的 rate_limited 分开，客户端才不会说成「尝试过多」');
   assert.equal(second.headers.get('Retry-After'), '1');
   assert.equal(states.get('ip:127.0.0.1').failCount, 1, '冷却期内不计数');
+  const bare = await run({});                       // 冷却期内压根没带令牌：不校验也知道没授权
+  assert.equal(bare.statusCode, 401, '没带令牌说「请输入令牌」是真话，回 cooldown 会让前端拿空令牌自动重试');
+  assert.equal(bare.body?.status, 'unauthorized');
+  assert.equal(bare.headers.get('Retry-After'), undefined);
+  assert.equal((await run({ token: '' })).statusCode, 401, '空令牌与没带同等对待');
   now += 300;                                      // 过了 500ms 退避
   const third = await run({ token: 'secret' });
   assert.equal(third.passed, true, '冷却过后正确令牌照常放行');

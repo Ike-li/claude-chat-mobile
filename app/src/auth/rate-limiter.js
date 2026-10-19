@@ -151,8 +151,10 @@ export function ipRateBucket(ip) {
 //              于是去等 15 分钟（2026-09-02 的生产误报，见 gateCheck 头注）。客户端据此等几百毫秒自动重试。
 //   'backoff'  及其余：unauthorized（401）——那一次请求真的做了 token 校验并失败了，只是顺带上了把短锁。
 // 冷却期回 429 不泄露任何新东西：它只说明「这个来源上一次失败在 30 秒内」，发请求的人本来就知道。
-export function authRejection({ verdict, retryAfterMs = null } = {}) {
-  if (verdict !== 'locked' && verdict !== 'cooldown') {
+// hasCredential：这次请求带没带凭据（令牌非空，或走公网 Access）。冷却期内没带的不校验也知道没授权，照旧回 401——
+// 说「请输入令牌」是真话；回 cooldown 反倒让前端拿着空令牌「N 秒后自动重试」。锁定不分带没带。
+export function authRejection({ verdict, retryAfterMs = null, hasCredential = true } = {}) {
+  if ((verdict !== 'locked' && verdict !== 'cooldown') || (verdict === 'cooldown' && !hasCredential)) {
     // unauthorized 不带 retryAfter：给了就等于暗示「等等就能进」，而它真正的问题是令牌不对。
     return { reason: 'unauthorized', httpStatus: 401, retryAfterMs: null, retryAfterSeconds: null };
   }

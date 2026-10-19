@@ -110,6 +110,16 @@ test.describe('AUTH-03: 冷却期 (cooldown) 与长锁 (locked) 分档及单一�
     assert.equal(r.retryAfterSeconds, 1);
   });
 
+  // 冷却期内根本没带凭据的请求：不校验也知道它没授权，说 401「请输入令牌」是真话；回 cooldown 反倒让前端
+  // 「N 秒后自动重试」——拿着空令牌再试一次，照样不行。锁定（locked）不分带没带，照旧 429。
+  test('authRejection 语义：冷却期内没带凭据仍是 401 unauthorized；锁定不分带没带', () => {
+    const r = authRejection({ verdict: 'cooldown', retryAfterMs: 300, hasCredential: false });
+    assert.equal(r.reason, 'unauthorized');
+    assert.equal(r.httpStatus, 401);
+    assert.equal(r.retryAfterSeconds, null);
+    assert.equal(authRejection({ verdict: 'locked', retryAfterMs: 1000, hasCredential: false }).httpStatus, 429);
+  });
+
   test('authRejection 语义：backoff（真校验了令牌并失败的那一次）仍是 401 unauthorized，不带 retryAfter', () => {
     const r = authRejection({ verdict: 'backoff', retryAfterMs: 500 });
     assert.equal(r.reason, 'unauthorized');
