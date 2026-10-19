@@ -440,3 +440,45 @@ test.describe('test:coverage 与 test:unit 同档', () => {
     assert.ok(decide('npm run test:coverage -- tests/integration/session-delete.test.mjs'));
   });
 });
+
+// 2026-10-19 补的四个缺口：前三个是漏放（该拦没拦 / 该问没问），第四个是误拦。
+test.describe('补缺口：直接跑测试文件、smoke runner、export 写法、--test-only', () => {
+  // 不带 --test 也会执行：node:test 的用例文件被直接 node 起来照样跑完，同样绕过 preload-env
+  test('不带 --test 直接 node 测试文件 → deny；带 preload-env 的单测、--check 语法检查 → 放行', () => {
+    for (const cmd of [
+      'node tests/integration/session-delete.test.mjs',
+      'node tests/unit/history-list.test.mjs',
+      'node --test-name-pattern=x tests/unit/history-list.test.mjs',
+    ]) assert.equal(decideRoute(cmd)?.decision, 'deny', `该拦：${cmd}`);
+    allowed('node --import ./tests/setup/preload-env.mjs tests/unit/history-list.test.mjs');
+    allowed('node --check tests/unit/history-list.test.mjs');
+  });
+
+  // smoke 的 ask 原先只认 npm 脚本名，直接跑 runner 照样花额度却一声不吭
+  test('直接跑 smoke runner 的 --all / --scenario → ask；只 --list → 放行', () => {
+    for (const cmd of [
+      'node tests/smoke/runner.js --all',
+      'node tests/smoke/runner.js --scenario core',
+      'cd tests/smoke && node runner.js --scenario upload',
+    ]) {
+      const r = decideRoute(cmd);
+      assert.equal(r?.decision, 'ask', `该问：${cmd}`);
+      assert.deepEqual(r.costs, ['credentials']);
+    }
+    assert.equal(decideRoute('node tests/smoke/runner.js --list'), null);
+  });
+
+  // 按段判定后，变量在前一段 export、npm test 在后一段，原先判成 deny 并指去 test:docker——
+  // 容器里没有真凭据，那条替代命令跑不了真 turn
+  test('export RUN_CLAUDE_INTEGRATION=1 再跑 npm test → ask；没 export 的提及 → 仍 deny', () => {
+    assert.equal(decideRoute('export RUN_CLAUDE_INTEGRATION=1 && npm test')?.decision, 'ask');
+    assert.equal(decideRoute('export CI=true RUN_CLAUDE_INTEGRATION=1; npm run test:integration')?.decision, 'ask');
+    assert.equal(decideRoute('echo RUN_CLAUDE_INTEGRATION && npm test')?.decision, 'deny');
+    assert.equal(decideRoute('export RUN_CLAUDE_INTEGRATION=0 && npm test')?.decision, 'deny');
+  });
+
+  test('--test-only 这类以 --test 开头的别的参数不算在跑测试', () => {
+    allowed('node scripts/app-build.js --test-only');
+    blocked('node --test tests/unit/history-list.test.mjs');
+  });
+});

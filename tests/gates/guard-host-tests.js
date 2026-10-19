@@ -63,6 +63,22 @@ const ACCEPT_UP_E3 = /^(?=.*(?:^|[\s/])up\.mjs(?:\s|$))(?=.*\s--env(?:=|\s+)(?:[
 // 【认不出来的】：bash -c、docker exec 里套着的命令——命令头不是解释器，同文件头那条边界。
 const ACCEPT_ENV_DIR = /acceptance\b/i;
 
+// 冒烟 runner 直接跑：npm 脚本名之外的同一条路，--all / --scenario 一样真实调用 claude、花额度。
+// 只 --list 不跑场景。路径同样看整条命令，认得出 `cd tests/smoke && node runner.js --all`。
+const SMOKE_RUNNER = /(?:^|[\s/])runner\.js\b(?=.*\s--(?:all|scenario)\b)/;
+const SMOKE_DIR = /\bsmoke\b/;
+
+// 不带 --test 直接 node 一个 *.test.mjs：node:test 的用例文件被直接执行照样会跑完，同样绕过
+// preload-env。--check 只做语法检查、不执行，不算。
+const DIRECT_TEST_FILE = /^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/;
+
+// `export RUN_CLAUDE_INTEGRATION=1 && npm test`：变量在前一段 export，真 turn 发生在后一段。
+// 按段判定只看后一段会把它判成普通 npm test、指去容器——容器里没有真凭据，那条替代跑不了。
+// 只认 export 且值非 0 / false；`X=1; cmd` 不 export，子进程看不到，不算。
+const RCI_EXPORTED = /\bexport\s+(?:[A-Za-z_]\w*=\S*\s+)*RUN_CLAUDE_INTEGRATION=(?!(?:0|false)(?:\s|$)|\s|$)/;
+const RCI_CONSUMER = /\bnpm\s+(?:test|t)\b(?!:)|\bnpm\s+run\s+test:integration\b|\bnode\b[^|&;]*\btests\/integration\//;
+const RCI_WHY = '会跑 tests/integration/ 里需要真 agent turn 的那批文件（按 process.env.RUN_CLAUDE_INTEGRATION 门控）：慢、耗 token、不稳';
+
 // 「这一段会跑测试 / 执行被改坏的源码」——本钩子的管辖范围。
 // 命中即进入白名单判定；不命中直接放行（git/ls/grep/npm run inventory:check 一概不打扰）。
 const TEST_DOMAIN = [
@@ -70,7 +86,8 @@ const TEST_DOMAIN = [
   /\bnpm\s+t\b/,
   /\bnpm\s+run\s+[\w:.-]*mutate[\w:.-]*/,
   /\b(?:scripts|tests\/gates)\/mutate\.js\b/,
-  /\bnode\b[^|&;]*--test\b/,                   // 裸 node --test，绕过 npm 脚本
+  /\bnode\b[^|&;]*--test(?![\w-])/,            // 裸 node --test，绕过 npm 脚本（--test-only 之类不算）
+  DIRECT_TEST_FILE,                             // 不带 --test 直接 node 测试文件
   /\bRUN_CLAUDE_INTEGRATION\b/,
   // 验收套件起 E3 系环境不在这张表里：它还要看整条命令（ACCEPT_ENV_DIR），在 segmentReason 里单独判
 ];
@@ -79,15 +96,16 @@ const TEST_DOMAIN = [
 // 这种抽象说法帮不上归类——看的人还是得自己去查它到底碰什么。
 const REASONS = [
   { re: /\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, why: '变异检查会【故意把源码改坏再跑测试】，被改坏的可能正是算删除路径的代码——上次删库就是这么发生的' },
-  { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
+  { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: RCI_WHY },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, why: '冒烟测试真实调用 claude，消耗额度' },
+  { re: SMOKE_RUNNER, why: '直接跑 tests/smoke/runner.js 的 --all / --scenario：冒烟测试真实调用 claude，消耗额度（只 --list 不算）' },
   { re: ACCEPT_UP_E3, why: 'tests/acceptance/env/up.mjs 的 --env 含 E3 / E3proxy / E3cf / all 且带 --yes：要起真 claude CLI 容器，机主网关凭据会复制进容器，此后在里面跑的每个回合都消耗真实额度——缺省 --env（E1,E2）或不带 --yes（只打印）都不会走到这里' },
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
   { re: /\bnpm\s+run\s+test:invariants:env\b/, why: 'tests/invariants/env/ 跑的是卸载器：它的隔离【依赖被测代码正确性】——createUninstaller 若不认注入的 home/root/appPath 而回落 homedir()/REPO_ROOT//Applications/CCM.app，rmSync 就打在真实家目录上，与 8/2 删库同形态' },
   { re: /\bnpm\s+(?:test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态' },
   // ★ 白名单反转补上的洞：approval-store / audit / devices 的落盘路径是【模块级常量】，在 import
   // 求值那一刻就锁定了，只有 --import 预加载改得动。裸 node --test 会把它们写进真实 data/。
-  { re: /\bnode\b[^|&;]*--test\b/, why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/' },
+  { re: /\bnode\b[^|&;]*--test(?![\w-])|^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/, why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
@@ -214,7 +232,8 @@ function segmentReason(segment, context) {
   const script = segment.match(/\bnpm\s+run\s+([\w:.-]+)/)?.[1];
   if (inContainer(head, script)) return null;                        // 这一段已进容器
   const inDomain = TEST_DOMAIN.some(re => re.test(segment))
-    || (ACCEPT_UP_E3.test(segment) && ACCEPT_ENV_DIR.test(context));
+    || (ACCEPT_UP_E3.test(segment) && ACCEPT_ENV_DIR.test(context))
+    || (SMOKE_RUNNER.test(segment) && SMOKE_DIR.test(context));
   if (!inDomain) return null;                                        // 域外（npm run inventory:check 等）
   if (whitelistedRun(segment, script)) return null;
   if (!script && isIsolatedUnitRun(segment)) return null;
@@ -235,6 +254,7 @@ function segmentReason(segment, context) {
 const NEEDS_HUMAN = [
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, cost: 'credentials' },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, cost: 'credentials' },
+  { re: SMOKE_RUNNER, cost: 'credentials' },
   { re: ACCEPT_UP_E3, cost: 'owner-quota' },
 ];
 const ASK_TEXT = {
@@ -265,6 +285,9 @@ function segmentRoute(segment, context) {
   if (!why) return null;
   const human = NEEDS_HUMAN.find(({ re }) => re.test(segment));
   if (human) return { decision: 'ask', why, alternative: null, costs: [human.cost] };
+  if (RCI_EXPORTED.test(context) && RCI_CONSUMER.test(segment)) {
+    return { decision: 'ask', why: RCI_WHY, alternative: null, costs: ['credentials'] };
+  }
   const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(segment))[1];
   return { decision: 'deny', why, alternative: alt };
 }
