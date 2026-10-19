@@ -10,6 +10,10 @@ import { join } from 'node:path';
 export const SOURCE = Symbol('acceptance.case.source');
 
 export const TIERS = ['A', 'B', 'C', 'D', 'E'];
+/** check.kind：replay 脚本重放 / agent 用浏览器判 / human 真机由人判 */
+export const CHECK_KINDS = ['replay', 'agent', 'human'];
+// 档位与判法的搭配。B 档（真 CLI + 假上游）还没建，先不收窄成一种。
+const KINDS_BY_TIER = { A: ['replay'], B: ['replay', 'agent'], C: ['agent'], D: ['agent'], E: ['human'] };
 export const PRIORITIES = ['P0', 'P1', 'P2'];
 
 /** 用例的 11 个原始字段（与清单页面的 C(id,t,pre,st,ex,b,env,p,m,j,n) 同序），加上定档两字段。 */
@@ -97,6 +101,11 @@ export function validateCases(cases, meta) {
         push(c, 'check 必须是 null 或 {kind, how, spec?} 对象');
       } else {
         if (isBlank(c.check.kind)) push(c, 'check.kind 不能为空');
+        else if (!CHECK_KINDS.includes(c.check.kind)) {
+          push(c, `check.kind 只能是 ${CHECK_KINDS.join('/')}，实际是 ${JSON.stringify(c.check.kind)}`);
+        } else if (KINDS_BY_TIER[c.tier] && !KINDS_BY_TIER[c.tier].includes(c.check.kind)) {
+          push(c, `${c.tier} 档的 check.kind 只能是 ${KINDS_BY_TIER[c.tier].join('/')}，实际是 ${c.check.kind}`);
+        }
         if (isBlank(c.check.how)) push(c, 'check.how 不能为空');
         if ('spec' in c.check && isBlank(c.check.spec)) push(c, 'check.spec 给了就必须是非空字符串');
       }

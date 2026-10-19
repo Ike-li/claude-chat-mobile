@@ -164,6 +164,25 @@ test('validateCases：check 为 null 或带非空 kind 与 how 的对象', () =>
   assert.match(problemsOf(issues, 'AC-01-04'), /spec/);
 });
 
+test('validateCases：check.kind 只认 replay/agent/human，且要与档位搭配', () => {
+  const issues = validateCases([
+    makeCase('AC-01-01', { check: { kind: 'repla', how: 'x' } }),
+    makeCase('AC-01-02', { tier: 'D', check: { kind: 'replay', how: 'x', spec: 'replay/d01.accept.ts' } }),
+    makeCase('AC-01-03', { tier: 'E', check: { kind: 'agent', how: 'x' } }),
+    makeCase('AC-01-04', { tier: 'A', check: { kind: 'agent', how: 'x', spec: 'replay/d01.accept.ts' } }),
+    makeCase('AC-01-05', { tier: 'C', check: { kind: 'agent', how: 'x' } }),
+    makeCase('AC-01-06', { tier: null, check: { kind: 'human', how: 'x' } }),
+    makeCase('AC-01-07', { tier: 'E', check: { kind: 'human', how: 'x' } }),
+  ], META);
+  assert.match(problemsOf(issues, 'AC-01-01'), /kind/, '拼错的 kind 不能当成合法判法');
+  assert.match(problemsOf(issues, 'AC-01-02'), /D 档/);
+  assert.match(problemsOf(issues, 'AC-01-03'), /E 档/);
+  assert.match(problemsOf(issues, 'AC-01-04'), /A 档/);
+  assert.equal(problemsOf(issues, 'AC-01-05'), '');
+  assert.equal(problemsOf(issues, 'AC-01-06'), '', '未定档时只校验 kind 本身');
+  assert.equal(problemsOf(issues, 'AC-01-07'), '');
+});
+
 test('validateCases：A 档必须指明重放脚本，否则重放时它会被静默漏掉', () => {
   const issues = validateCases([
     makeCase('AC-01-01', { tier: 'A', check: null }),

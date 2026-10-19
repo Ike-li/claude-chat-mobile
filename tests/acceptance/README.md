@@ -64,7 +64,7 @@
 | `p` | `P0` / `P1` / `P2` |
 | `m` / `j` / `n` | 设计方法 / 旅程编号数组 / 备注 |
 | `tier` | 见上表 |
-| `check` | `null`，或 `{kind, how, spec?}`：`kind` 取 `replay`（A 档，`spec` 必填，指向 `replay/*.accept.ts`）、`agent`（C/D 档）、`human`（E 档）；`how` 一两句写清怎么判 |
+| `check` | `null`，或 `{kind, how, spec?}`：`kind` 取 `replay`（A 档，`spec` 必填，指向 `replay/*.accept.ts`）、`agent`（C/D 档）、`human`（E 档），B 档待建、暂时 `replay` 与 `agent` 都认；`--check` 会拒绝不在这三个里的 kind 和与档位不搭的组合；`how` 一两句写清怎么判 |
 
 `node tests/acceptance/run.mjs --check` 校验整个用例库。
 
