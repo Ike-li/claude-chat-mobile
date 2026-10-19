@@ -169,7 +169,7 @@ describe('readGitDiff：注入 execFile', () => {
     assert.match(r.patch, /\+new/);
     assert.equal(r.empty, false);
     const gitArgs = seen.args.slice(2);
-    assert.deepEqual(gitArgs, ['diff', '--no-ext-diff', '--no-color', '--', 'a.js']);
+    assert.deepEqual(gitArgs, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--', 'a.js']);
   });
 
   test('staged：git diff --cached -- path', async () => {
@@ -180,7 +180,7 @@ describe('readGitDiff：注入 execFile', () => {
     };
     const r = await readGitDiff('/repo', 'b.js', 'staged', { execFile });
     assert.equal(r.ok, true);
-    assert.deepEqual(seen, ['diff', '--no-ext-diff', '--no-color', '--cached', '--', 'b.js']);
+    assert.deepEqual(seen, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--cached', '--', 'b.js']);
   });
 
   test('重命名（无内容变化）误判整体新增：复核 name-status 命中后带双路径 + -M 重新 diff', async () => {
@@ -430,6 +430,21 @@ describe('真 git：工作区是 monorepo 子目录', () => {
     const renamed = await readGitDiff(foo, 'src/renamed.js', 'staged');
     assert.doesNotMatch(renamed.patch, /EXTERNAL-DIFF-RAN/);
     assert.match(renamed.patch, /rename from/);
+  });
+
+  // 同一类：.gitattributes 指定 diff 驱动、git 配置给它一个 textconv 命令，git diff 会先跑这个命令再出补丁。
+  // 面板取 diff 不执行仓库配置里的外部命令（原会话方案：「调 git diff 时防止仓库配置执行外部命令」）。
+  test('配了 textconv 驱动也不执行它，拿到的是原文补丁', async () => {
+    const { root, foo } = makeMonorepo();
+    const conv = join(root, 'textconv.sh');
+    writeFileSync(conv, '#!/bin/sh\necho TEXTCONV-RAN\n', { mode: 0o755 });
+    execFileSync('git', ['-C', root, 'config', 'diff.spy.textconv', conv]);
+    writeFileSync(join(root, '.gitattributes'), '*.js diff=spy\n');
+
+    const d = await readGitDiff(foo, 'src/a.js', 'unstaged');
+    assert.equal(d.ok, true, JSON.stringify(d));
+    assert.doesNotMatch(d.patch, /TEXTCONV-RAN/, 'textconv 被执行了');
+    assert.match(d.patch, /^\+a2$/m);
   });
 
   test('子目录里的纯改名：diff 复核出改名，而不是显示成整份新增', async () => {

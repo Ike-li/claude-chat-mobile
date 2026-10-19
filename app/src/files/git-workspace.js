@@ -281,9 +281,10 @@ export async function readGitDiff(cwd, relPath, side, opts = {}) {
   const maxBuffer = opts.maxBuffer ?? Math.max(GIT_MAX_BUFFER, maxBytes + 4096);
   const execFile = opts.execFile;
 
-  // --no-ext-diff / --no-color：面板要的是机器可读的标准补丁。仓库或用户配了 diff.external（difftastic 之类）时
-  // git 会把 diff 交给外部程序画，拿到的是它的输出（验收 O24：面板显示「无 diff」）；color.ui=always 会混进 ANSI 转义。
-  const PATCH_FLAGS = ['--no-ext-diff', '--no-color'];
+  // --no-ext-diff / --no-textconv / --no-color：面板要的是机器可读的标准补丁，且取 diff 不执行仓库配置里的外部命令。
+  // 仓库或用户配了 diff.external（difftastic 之类）时 git 会把 diff 交给外部程序画，拿到的是它的输出（验收 O24：
+  // 面板显示「无 diff」）；textconv 驱动同样是一条仓库配置的外部命令；color.ui=always 会混进 ANSI 转义。
+  const PATCH_FLAGS = ['--no-ext-diff', '--no-textconv', '--no-color'];
   const gitArgs = side === 'staged'
     ? ['diff', ...PATCH_FLAGS, '--cached', '--', relPath]
     : ['diff', ...PATCH_FLAGS, '--', relPath];
