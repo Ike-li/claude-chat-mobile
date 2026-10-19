@@ -300,7 +300,8 @@ async function sessionTitleForNotify(cwd, sessionId) {
 function emitNotify(pn, ntfyType) {
   if (!pn) return;
   pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
-  ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
+  // pn.ntfyType：同一类事件里标签要分档的（result 的完成 / 出错 / 已中止），由 notificationForEvent 给出
+  ntfyNotify(pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
 }
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
