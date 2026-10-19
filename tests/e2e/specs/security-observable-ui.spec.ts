@@ -105,7 +105,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // 验收 O83（AC-22-09）：输错一次后紧接着输对，正确令牌撞进服务端的退避短锁（这次根本没校验）。此前服务端回
   // unauthorized，界面说「令牌无效」，用户会怀疑自己输对的令牌；现在服务端回 cooldown + 毫秒数，前端说清在等、到点自动重试。
-  test('P0-20f 输错后紧接着输对：冷却期内不说令牌无效，到点自动重试进去', async ({ page }) => {
+  test('P0-20i 输错后紧接着输对：冷却期内不说令牌无效，到点自动重试进去', async ({ page }) => {
     captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     await page.request.post('/__reset');
 
