@@ -24,7 +24,8 @@ const mockPermFields = (name, input, cwd, at = Date.now()) => ({
 });
 
 const PORT = process.env.PORT || 3100;
-const { app, httpServer, io } = createMockTransport();
+// 用例代数随 /__reset 自增；transport 据此丢弃上一条用例里还没跑完的场景尾巴（见 transport.js caseScope）
+const { app, httpServer, io } = createMockTransport({ caseGeneration: () => mockResetGeneration });
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
