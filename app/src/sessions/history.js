@@ -8,7 +8,7 @@ import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './wor
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
-import { toolSummary, widgetPayload } from '../shared/tool-summary.js';
+import { toolSummary, toolResultCap, widgetPayload } from '../shared/tool-summary.js';
 // 会话里的图片只出引用（{ref, mediaType, bytes}），图本身走鉴权的 image:get 按需取，判据与 live 侧共用。
 import { imageRefsOf, toolImageRef, userImageRef, stripImageBlocks } from '../shared/transcript-image.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
@@ -208,6 +208,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
   // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
   const seenUuids = new Set();
+  const toolNames = new Map(); // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
   // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
   let lastMainAgentToolId = null;
   // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
@@ -275,6 +276,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
         const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
         const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
         const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
+          toolNames,
           isSidechain: isSide,
           parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
           // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
@@ -772,6 +774,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       const id = block.id || block.tool_use_id;
       if (!id || !block.name) continue;
       const widget = widgetPayload(block.name, block.input); // 桌面端 show_widget 的完整源码，见 tool-summary.js
+      opts.toolNames?.set(String(id), String(block.name));
       out.push({
         kind: 'tool_use',
         role: 'assistant',
@@ -791,12 +794,15 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       // 工具截图（浏览器 / computer use / Read 图片）。子代理流水里的带上那张子代理卡的 id：
       // 新版 CLI 把子代理写在 subagents/agent-*.jsonl，按引用取图时主 transcript 里找不到它。
       const images = imageRefsOf(block.content, n => toolImageRef(String(id), n, opts.isSidechain ? opts.parentToolUseId : null));
+      // 上限同 live（display-contracts §5）：按配对 tool_use 的工具名。配不上（tool_use 被削头等）按 600。
+      const cap = toolResultCap(opts.toolNames?.get(String(id)));
+      opts.toolNames?.delete(String(id)); // 每个 id 只配一次，用完即删，长会话里不囤
       out.push({
         kind: 'tool_result',
         role: 'user',
         toolUseId: String(id),
         ok: !block.is_error,
-        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? '')),
+        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? ''), cap),
         ...(images.length ? { images } : {}),
         timestamp,
         ...side,
@@ -2176,6 +2182,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
 
   const items = [];
   let total = 0;
+  const toolNames = new Map(); // 同 getSessionHistory：tool_result 按工具名取摘要上限
   const pushCapped = (item) => {
     items.push(item);
     if (items.length > limit * 2) items.splice(0, items.length - limit);
@@ -2194,6 +2201,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
       // 与主历史同构：复用同一个展开器，前端才能拿同一套渲染跑两条路径。
       // parentToolUseId 一律填这张卡的 id——本函数返回的每一条按定义都属于它。
       const expanded = expandHistoryEntry(entry.message?.content, entry.message?.role || entry.type, entry.timestamp, {
+        toolNames,
         isSidechain: true,
         parentToolUseId: wanted,
         uuid: null, // 分叉锚点只在主链有效（同 getSessionHistory 对 sidechain 的处理）

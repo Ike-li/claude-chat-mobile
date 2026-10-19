@@ -112,6 +112,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armSyncAckTimeout(); },
     },
     {
+      // P0-05-HIST-FULL：武装「Timeline Session 的历史里多一对被截断的 Bash 工具卡」，下一次拉历史生效。
+      command: 'test:arm-history-long-tool',
+      run: async () => { getContext().armHistoryLongTool(); },
+    },
+    {
       // P0-40c：武装「下一条 user:message 回一个可重试的负 ack」，前端会把它转进 outbox 自动重发。
       command: 'test:arm-send-transient-fail',
       run: async () => { getContext().armSendTransientFail(); },
