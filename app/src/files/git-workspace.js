@@ -281,9 +281,12 @@ export async function readGitDiff(cwd, relPath, side, opts = {}) {
   const maxBuffer = opts.maxBuffer ?? Math.max(GIT_MAX_BUFFER, maxBytes + 4096);
   const execFile = opts.execFile;
 
+  // --no-ext-diff / --no-color：面板要的是机器可读的标准补丁。仓库或用户配了 diff.external（difftastic 之类）时
+  // git 会把 diff 交给外部程序画，拿到的是它的输出（验收 O24：面板显示「无 diff」）；color.ui=always 会混进 ANSI 转义。
+  const PATCH_FLAGS = ['--no-ext-diff', '--no-color'];
   const gitArgs = side === 'staged'
-    ? ['diff', '--cached', '--', relPath]
-    : ['diff', '--', relPath];
+    ? ['diff', ...PATCH_FLAGS, '--cached', '--', relPath]
+    : ['diff', ...PATCH_FLAGS, '--', relPath];
 
   let stdout;
   try {
@@ -302,8 +305,8 @@ export async function readGitDiff(cwd, relPath, side, opts = {}) {
     const pair = await findRenamePair(cwd, side, relPath, { timeoutMs, maxBuffer, execFile });
     if (pair) {
       const rediffArgs = side === 'staged'
-        ? ['diff', '--cached', '-M', '--', pair.oldPath, pair.newPath]
-        : ['diff', '-M', '--', pair.oldPath, pair.newPath];
+        ? ['diff', ...PATCH_FLAGS, '--cached', '-M', '--', pair.oldPath, pair.newPath]
+        : ['diff', ...PATCH_FLAGS, '-M', '--', pair.oldPath, pair.newPath];
       try {
         const r2 = await gitExec(cwd, rediffArgs, { timeoutMs, maxBuffer, execFile });
         stdout = r2.stdout || '';
