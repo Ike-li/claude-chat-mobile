@@ -1121,7 +1121,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 同一条用例还守第二个面：抽屉一折叠，目录角标就没了，#sessionsDot 是页外等审批唯一的出口，而
   // summarizeOtherWorkspaces 的 rank 表此前也漏了 terminal_waiting。两个面在这里同屏才说得清完整的
   // 分流：图标点亮、顶栏安静——「让你知道」与「喊你去处理」是两件事。
-  test('P0-11ar 页外 CLI 等审批必须可见：目录角标 + 顶部图标都点亮，顶栏 chip 仍安静', async ({ page }) => {
+  test('P0-11ai 页外 CLI 等审批必须可见：目录角标 + 顶部图标都点亮，顶栏 chip 仍安静', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-summary-waiting');
