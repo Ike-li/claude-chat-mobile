@@ -469,6 +469,14 @@ export const EN_DICT = Object.freeze({
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '危险操作前先问你': 'Prompts for dangerous operations',
+  '只做规划，不执行工具': 'Planning mode, no tool execution',
+  '文件编辑自动通过': 'Auto-accept file edit operations',
+  '没预先放行的一律拒绝，不弹询问': 'Deny if not pre-approved, no prompts',
+  '由模型分类器决定放行或拒绝': 'Model classifier approves or denies',
+  '跳过所有权限检查': 'Bypass all permission checks',
+  '来源：终端（CLI）': 'source CLI',
+  '来源：网页（SDK）': 'source Web SDK',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
   '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
