@@ -223,6 +223,8 @@ test('理由必须具体到可判断，不是一句「有风险」', () => {
 // 那等于任务卡死。而这些命令本来就有等价的容器跑法——agent 收到拒绝理由后自己换一条继续即可。
 // 所以分档判据是「有没有容器替代」，不是「危不危险」：危险的照样 deny，只要换个地方能跑。
 import { readFileSync as _rf } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 const PKG = JSON.parse(_rf(new URL('../../package.json', import.meta.url), 'utf8'));
 
 test.describe('决策分档', () => {
@@ -255,8 +257,8 @@ test.describe('决策分档', () => {
     }
   });
 
-  test('需真凭据的两档仍然 ask——容器替代不了，只有人能决定要不要花那笔额度', () => {
-    for (const cmd of ['npm run test:smoke', 'RUN_CLAUDE_INTEGRATION=1 npm test']) {
+  test('要人决定的三档仍然 ask——真 turn 与 smoke 要真凭据，验收起 E3 花机主额度，只有人能决定要不要花', () => {
+    for (const cmd of ['npm run test:smoke', 'RUN_CLAUDE_INTEGRATION=1 npm test', 'node tests/acceptance/env/up.mjs --env E3 --yes']) {
       assert.equal(decideRoute(cmd)?.decision, 'ask', cmd);
     }
   });
@@ -265,6 +267,166 @@ test.describe('决策分档', () => {
     for (const cmd of ['npm run test:unit', 'npm run check', 'npm run test:docker', 'git status']) {
       assert.equal(decideRoute(cmd), null, cmd);
     }
+  });
+});
+
+// 验收套件真正开始花额度的是起 E3 系环境：那是真 claude CLI 容器，机主网关凭据会复制进去，
+// 此后在里面跑的每个回合都消耗真实额度。run.mjs 选中 C 档只列清单、不执行，所以闸在 up.mjs 上。
+// up.mjs 缺省 --env 是 E1,E2、不带 --yes 只打印——这两条是每次改完都会跑的，钩子必须静默。
+test.describe('验收套件：起 E3 系环境 ask，其余不命中', () => {
+  const UP = 'node tests/acceptance/env/up.mjs';
+
+  test('--env 含 E3 / E3proxy / E3cf / all 且带 --yes → ask，理由点名到额度', () => {
+    for (const args of [
+      '--env E3 --yes',
+      '--env E3proxy --yes',
+      '--env E3cf --yes',
+      '--env all --yes',
+      '--env E1,E2,E3 --yes',
+      '--yes --env E2反代,E3cf',
+      '--env E3 --target ../ccm-under-test --ref worktree --build --yes',
+      // 多次 --env：up.mjs 取最后一次，钩子不替它算，任何一次含 E3 系就按选中处理
+      '--env E3 --env E1 --yes',
+      // up.mjs 现在不认 --env= 与小写（报错退出），钩子不替它担保，按选中处理——误判只多一次确认
+      '--env=E3 --yes',
+      '--env e3 --yes',
+    ]) {
+      const r = decideRoute(`${UP} ${args}`);
+      assert.equal(r?.decision, 'ask', `起 E3 系环境必须问人：${UP} ${args}`);
+      assert.match(r.why, /额度/, `理由要说出代价：${UP} ${args}`);
+    }
+    assert.equal(decideRoute(`CI=1 node ./tests/acceptance/env/up.mjs --env E3 --yes`)?.decision, 'ask');
+  });
+
+  test('缺省 --env、只起 E1/E2、不带 --yes（只打印）→ null', () => {
+    for (const args of ['', '--yes', '--env E1,E2 --yes', '--env E1 --yes', '--env E2反代 --yes',
+      '--env E3', '--env all', '--env E3proxy --dry-run', '--env E1,E2 --target ../E3 --yes']) {
+      assert.equal(decideRoute(`${UP} ${args}`.trim()), null, `不该拦：${UP} ${args}`);
+    }
+    // 收环境不花额度：SKILL 每轮末尾都让 agent 跑这一条，误拦就是每轮一次人工往返
+    assert.equal(decideRoute('node tests/acceptance/env/down.mjs --env all --yes'), null, '收环境被当成了起环境');
+    // 只读命令提到 up.mjs 与那几个参数，命令头不是解释器 → 不归钩子管
+    assert.equal(decideRoute('grep -n -- "--env E3 --yes" tests/acceptance/env/up.mjs'), null, '只读命令不归钩子管');
+    assert.equal(decideRoute('cat tests/acceptance/env/up.mjs'), null, '只读命令不归钩子管');
+  });
+
+  // shell 在执行前就剥掉引号与反斜杠、/./ 与 // 不改变路径——这些写法跑的都是同一条命令，
+  // 钩子按字面匹配的话每种都要单独想到，那又回到了「每种写法都要正确归类」的老路。
+  test('引号、反斜杠、./ 与 // 路径、先 cd 再跑 → 照样 ask', () => {
+    for (const cmd of [
+      `${UP} --env "E3" --yes`,
+      `${UP} --env 'E1,E3proxy' --yes`,
+      '"node" "tests/acceptance/env/up.mjs" "--env" "E3" "--yes"',
+      `${UP} --env E3 --y\\es`,
+      `${UP} --env \\E3cf --yes`,
+      'node ./tests/./acceptance/./env/up.mjs --env E3 --yes',
+      'node tests//acceptance//env//up.mjs --env all --yes',
+      'cd tests/acceptance/env && node up.mjs --env E3 --yes',
+      'cd tests/acceptance/env; CI=1 node ./up.mjs --env all --yes',
+      `cd "tests/acceptance/./env" && node 'up.mjs' --env E3 --yes`,
+      'cd tests/acceptance && node env/up.mjs --env E3 --yes',
+      'node tests/acceptance/lib/../env/up.mjs --env E3 --yes',
+    ]) {
+      assert.equal(decideRoute(cmd)?.decision, 'ask', `换个写法也是起 E3：${cmd}`);
+    }
+  });
+
+  test('规整不只给 E3 用：拿引号、反斜杠拆开的测试命令照样 deny', () => {
+    for (const cmd of [
+      'npm run "mutate" -- app/src/x.js',
+      "npm run 'test:integration'",
+      'n\\pm test',
+      "'node' --test tests/unit/x.test.mjs",
+    ]) {
+      assert.equal(decideRoute(cmd)?.decision, 'deny', `换个写法也该拦：${cmd}`);
+    }
+  });
+
+  test('run.mjs 选中 C 档只列清单、不执行 → null', () => {
+    const RUN = 'node tests/acceptance/run.mjs';
+    for (const args of ['--tier C', '--tier=A,C', '--list --tier C', '--cases AC-01-01 --tier C']) {
+      assert.equal(decideRoute(`${RUN} ${args}`), null, `不该拦：${RUN} ${args}`);
+    }
+  });
+});
+
+// 一条命令里几段各有各的去向：deny 段有容器跑法、agent 自己换；ask 段要人花钱。旧实现拿整条命令
+// 去比 NEEDS_HUMAN，只要任何位置出现一处就整条 ask——于是 mutate 拼在 smoke 后面也去找人点确认，
+// 人点了「允许」，mutate 就在宿主机上跑了。现在按段判：有一段该 deny 整条就 deny，全是 ask 段才 ask。
+test.describe('按段判定：任何一段该 deny 整条就 deny，全部触发段都要人才 ask', () => {
+  const UP_E3 = 'node tests/acceptance/env/up.mjs --env E3 --yes';
+  const scriptOf = alt => /npm run ([\w:.-]+)/.exec(alt ?? '')?.[1];
+
+  test('mutate / npm test 与要人的段拼在同一条 → deny，替代命令按 deny 那一段给', () => {
+    for (const [cmd, script] of [
+      [`npm run mutate -- app/src/x.js && ${UP_E3}`, 'mutate:docker'],
+      [`${UP_E3} && npm run mutate -- app/src/x.js`, 'mutate:docker'],
+      [`${UP_E3}; npm test`, 'test:docker'],
+      [`npm test & ${UP_E3}`, 'test:docker'],
+      ['RUN_CLAUDE_INTEGRATION=1 npm test && npm run mutate -- app/src/x.js', 'mutate:docker'],
+      ['npm run test:smoke; npm run test:integration', 'test:docker:integration'],
+      // 替代命令看的是 deny 那一段：旧实现拿整条命令去比，前面一段的 e2e 字样把它带到了 test:docker:e2e
+      ['npm run test:e2e && npm test', 'test:docker'],
+    ]) {
+      const r = decideRoute(cmd);
+      assert.equal(r?.decision, 'deny', `有一段能换容器跑，整条就该 deny 让 agent 自己换：${cmd}`);
+      assert.equal(scriptOf(r.alternative), script, `替代命令应指向 deny 那一段的容器跑法：${cmd} → ${r.alternative}`);
+    }
+  });
+
+  test('同一段里 NEEDS_HUMAN 优先：RUN_CLAUDE_INTEGRATION=1 npm test 仍是 ask', () => {
+    assert.equal(decideRoute('RUN_CLAUDE_INTEGRATION=1 npm test')?.decision, 'ask');
+    assert.equal(decideRoute('npm run check && RUN_CLAUDE_INTEGRATION=1 npm test 2>&1 | tail')?.decision, 'ask');
+  });
+
+  test('几段都要人 → ask，每一段的理由都列给人看', () => {
+    const r = decideRoute(`npm run test:smoke && ${UP_E3}`);
+    assert.equal(r?.decision, 'ask');
+    assert.match(r.why, /冒烟/, '漏了 smoke 那一段的代价');
+    assert.match(r.why, /up\.mjs/, '漏了起 E3 那一段的代价');
+  });
+});
+
+// ask 的提示文案是人做决定时看到的全部依据，代价说错了人就没法判断：真 turn 与 smoke 是「要真凭据、
+// 容器里跑不了」；验收起 E3 本来就在容器里跑，代价是机主的真实额度。两种说成同一句，总有一种是错的。
+// 走真实 stdin 路径（与 .claude/settings.json 里的调用同形），验的是钩子实际写给 Claude Code 的输出。
+test.describe('钩子输出：ask 的提示按代价分开写', () => {
+  const HOOK = fileURLToPath(new URL('../../tests/gates/guard-host-tests.js', import.meta.url));
+  const runHook = command => {
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, `钩子自己不该失败：${r.stderr}`);
+    return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : null;
+  };
+
+  test('真 turn 与 smoke：要真凭据、容器替代不了', () => {
+    for (const cmd of ['npm run test:smoke', 'RUN_CLAUDE_INTEGRATION=1 npm test']) {
+      const out = runHook(cmd);
+      assert.equal(out?.permissionDecision, 'ask', cmd);
+      assert.match(out.permissionDecisionReason, /容器替代不了/, `没说出换容器也不行：${cmd}`);
+      assert.match(out.permissionDecisionReason, /真凭据/, `没说出要真凭据：${cmd}`);
+      assert.doesNotMatch(out.permissionDecisionReason, /机主/, `这一档不是在容器里花机主额度：${cmd}`);
+    }
+  });
+
+  test('验收起 E3：在容器里跑、花的是机主的真实额度，不说成「容器里跑不了」', () => {
+    const out = runHook('node tests/acceptance/env/up.mjs --env E3 --yes');
+    assert.equal(out?.permissionDecision, 'ask');
+    assert.match(out.permissionDecisionReason, /在容器里跑/);
+    assert.match(out.permissionDecisionReason, /机主的真实额度/);
+    assert.doesNotMatch(out.permissionDecisionReason, /容器替代不了|容器里跑不了/, '它本来就在容器里跑');
+  });
+
+  test('两种代价拼在一条里，两句都要出现', () => {
+    const r = runHook('npm run test:smoke && node tests/acceptance/env/up.mjs --env E3 --yes').permissionDecisionReason;
+    assert.match(r, /真凭据/);
+    assert.match(r, /机主的真实额度/);
+  });
+
+  test('放行的命令不写任何输出', () => {
+    assert.equal(runHook('npm run test:unit'), null);
+    assert.equal(runHook('node tests/acceptance/env/up.mjs --env E1,E2 --yes'), null);
   });
 });
 
