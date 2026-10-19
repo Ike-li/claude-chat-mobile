@@ -1819,6 +1819,11 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 //   assistant 含 tool_use            → pending（正在执行工具，结果未落盘）
 //   assistant 含 text（无 tool_use）  → settled（轮次收尾；'No response requested.' 自然覆盖）
 //   assistant 只有 thinking          → pending（流式中间态，text/tool_use 未落）
+//   assistant 只有【空】thinking     → 跳过，往前看（验收 O96：第三方网关把空 thinking 写在正文后面，
+//                                      链尾因此永远「只有 thinking」→ 永久 pending、手机一直只读。空 thinking
+//                                      不承载内容；前面是 user / tool_result 时跳过之后照样 pending，只有
+//                                      「正文 → 空 thinking」会收尾——与下面「正文落盘、紧接着还要发 tool_use」
+//                                      是同一个已知误判窗，同由 keepAlive 罩住）
 //   user 含 tool_result              → pending（等 assistant 消费结果继续）
 //   user 中断标记 [Request interrupted…] → settled（轮次被 Ctrl+C 掐掉）
 //   user 其他文本                     → pending（等 assistant 回复）
@@ -1862,6 +1867,11 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
   return false;
 }
 
+// thinking 块没有任何文字（签名有无不论）。redacted_thinking 是另一种块、带着加密内容，不算空。
+function isEmptyThinkingBlock(b) {
+  return b?.type === 'thinking' && !String(b.thinking ?? '').trim();
+}
+
 // sidechainOnly=false：只看主链；true：只看子链（isSidechain）。
 // lastChainEntrypoint：链尾那条记录【自报】的写入方（CLI 写 'cli'、本项目 SDK 写 'sdk-ts'）。判「这条
 // pending 是谁留下的」用它——磁盘上的硬证据，比注册表可靠（旧版 CLI 不写注册表）。见 mirrorEntryLock。
@@ -1886,6 +1896,7 @@ function classifyChainTail(entries, sidechainOnly) {
         if (isCliSystemLine(text)) continue; // "No response requested." 等助手噪音：跳过继续往前找真链
         return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
       }
+      if (blocks?.length && blocks.every(isEmptyThinkingBlock)) continue; // 网关噪音：见上方分类表
       return { verdict: 'pending', lastChainTs, lastChainEntrypoint }; // 只有 thinking / 空内容：流式中间态
     }
     // user
