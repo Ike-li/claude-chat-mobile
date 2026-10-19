@@ -2034,6 +2034,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     hint.textContent = t('数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics');
     serviceStatusBody.appendChild(hint);
   }
+  // 桥安装 / 卸载的回执就地写在那一段下面（验收 O62）：原来走 addBar 插进聊天流，而用户此刻正对着设置面板，
+  // 被面板挡住看不到——点了「开启」只看到按钮转一下又回到原样。结果行在 body 外面，段落重画不会把它冲掉。
+  function showBridgeSetupResult(id, text, ok) {
+    const box = $(id);
+    if (!box) return;
+    box.textContent = text;
+    box.classList.toggle('text-danger', !ok);
+    box.classList.toggle('text-ink-soft', ok);
+    box.classList.remove('hidden');
+  }
   // 一键安装/卸载 hooks 桥。安装要写用户全局 ~/.claude/settings.json，所以先明确确认——
   // 这是 server 唯一会动那个文件的路径，必须让用户知道自己在批准什么。
   // 报告直接回显安装器输出（含四种结局文案），不在前端另写一套话术。
@@ -2056,8 +2066,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 同 hooks 侧：用 ack 自带的 state 立刻回填再重渲，不把按钮的解锁押在广播上
       if (res?.state && latestServiceHealth?.statuslineBridge) latestServiceHealth.statuslineBridge.state = res.state;
       renderStatuslineBridgeSection();
-      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
-      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
+      if (err || !res) { showBridgeSetupResult('statuslineBridgeResult', t('操作超时，请重试'), false); loadServiceStatus(); return; }
+      showBridgeSetupResult('statuslineBridgeResult', res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
       loadServiceStatus();
     });
   }
@@ -2081,8 +2091,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // （广播若没来或迟到，这段就再也不会重画）。广播随后到达只是二次确认，不是唯一依赖。
       if (res?.state && latestServiceHealth?.hooksBridge) latestServiceHealth.hooksBridge.state = res.state;
       renderHooksBridgeSection();
-      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
-      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
+      if (err || !res) { showBridgeSetupResult('hooksBridgeResult', t('操作超时，请重试'), false); loadServiceStatus(); return; }
+      showBridgeSetupResult('hooksBridgeResult', res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
       loadServiceStatus(); // 服务状态页开着时顺带刷新
     });
   }

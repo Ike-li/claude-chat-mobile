@@ -469,6 +469,9 @@ export const EN_DICT = Object.freeze({
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '读不出安装清单 ~/.claude/ccm/hooks-v1/install-manifest.json，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看': 'Cannot read the install manifest ~/.claude/ccm/hooks-v1/install-manifest.json (the file may be damaged or its permissions changed); run npm run hooks:status on the computer',
+  '读不出安装清单 ~/.claude/ccm/statusline-v1/install-manifest.json；在电脑上跑 npm run statusline:status 查看': 'Cannot read the install manifest ~/.claude/ccm/statusline-v1/install-manifest.json; run npm run statusline:status on the computer',
+  '要先在电脑上给 Claude Code 配好状态栏（~/.claude/settings.json 里的 statusLine），这里才能接管它': 'Set up a Claude Code status line on the computer first (statusLine in ~/.claude/settings.json); this can only take over an existing one',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
   '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
