@@ -66,6 +66,7 @@ import {
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
+import { PREAUTH_MAX_BUFFER_BYTES, grantAuthedBufferLimit } from '../auth/preauth-buffer.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
@@ -751,11 +752,12 @@ registerOperationalRoutes({
 // Historical replay stays on the authenticated session:history socket event;
 // the HTTP data plane intentionally exposes no unauthenticated transcript route.
 const httpServer = createServer(app);
-// E17：maxHttpBufferSize 默认仅 1MB，会直接拒收带附件的消息。抬到 32MB——
-// 附件总量上限 20MB（解码后），base64 上线 ~1.33x ≈ 27MB + JSON 开销，32MB 留足余量。
+// 单包上限分两档（auth/preauth-buffer.js）：这里给的是鉴权前的小上限，握手鉴权通过时 grantAuthedBufferLimit
+// 再把这条连接抬到 32MB（E17：附件总量上限 20MB 解码后，base64 上线 ~1.33x ≈ 27MB + JSON 开销）。
+// 此前这里直接给 32MB，未鉴权的连接也能先塞满再被拒（验收 O84）。
 const io = new Server(httpServer, {
   perMessageDeflate: { threshold: 1024 },
-  maxHttpBufferSize: 32 * 1024 * 1024
+  maxHttpBufferSize: PREAUTH_MAX_BUFFER_BYTES,
 });
 
 // ---- 设备审批网关：socket 分组解锁/断连、待批广播、trusted-devices.json CLI 审批监听 ----
@@ -1029,6 +1031,9 @@ io.use(async (socket, next) => {
       // 后者会让人反复重试，而每次重试都只是撞在那把刚上的锁上。
       return next(rejectHandshake(rlResult ?? {}));
     }
+
+    // 凭据已验过：这条连接从此收得下带附件的大包（验收 O84，鉴权前只有小上限）。
+    grantAuthedBufferLimit(socket.conn);
 
     // 鉴权通过后，执行设备审批过滤（纵深防御）
     // 反代 loopback：peer=127.0.0.1 但 Host 公网 → 仍须 deviceToken（见 shouldBypassDeviceApproval）
