@@ -1,6 +1,35 @@
 export function createContentScenarios(getContext) {
   return [
     {
+      // 验收 O25 / O90：用户气泡按纯文本显示，和终端里看到的原样输入一致。用户气泡有三个建出点：
+      // 乐观气泡转正（发出去的这条，由通用回显走到）、在线新建（不带 clientMessageId 的 user_message，
+      // 另一台设备发的形态）、历史渲染（history_append 走 renderHistoryBubbles）。这里把后两条也各推一条。
+      prefix: 'test:raw-user',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        const raw = label => `${label} <Header> keep <div className="wrap">w</div> <b>${label}-b</b> **${label}-star**\n  two  spaces`;
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        socket.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'user_message', payload: { text: raw('LIVE'), uuid: 'u-raw-live' },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 0, ts: Date.now(), type: 'history_append',
+          payload: { external: true, messages: [{ role: 'user', content: raw('HIST'), uuid: 'u-raw-hist', timestamp: new Date().toISOString() }] },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'text_delta', payload: { messageId: 'msg_raw_user_1', text: 'raw user fixture' },
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances },
+        });
+        socket.emit('agent:event', {
+          ...base, seq: 3, ts: Date.now(), type: 'result', payload: { messageId: 'msg_raw_user_1', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       prefix: 'test:message-edit',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();

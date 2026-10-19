@@ -3063,18 +3063,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // → 之后每条都被判成时间倒流，连日期行都永久消失）。这个分支直接 return、不走 append，
         // 故须在此单独收口；settleAt 会把 marker 插在这条气泡【前面】而不是容器尾部。
         messageTimeline.settleAt(matchedBubble, ev?.ts, 'user');
-        // FE-005：离线占位曾是纯 textContent——确认时升级为与历史一致的 markdown 渲染（保留附件区）
-        if (p.text && !matchedBubble.classList.contains('um')) {
-          const attWrap = matchedBubble.querySelector('.flex.flex-wrap');
-          matchedBubble.innerHTML = render(p.text);
-          matchedBubble.classList.add('msg-body', 'um');
-          if (attWrap) matchedBubble.appendChild(attWrap);
-          matchedBubble.querySelectorAll('pre code').forEach(b => {
-            try { hljs.highlightElement(b); } catch { /* ignore */ }
-          });
-          injectCodeCopyButtons(matchedBubble);
-          foldLongUserBubble(matchedBubble, p.text);
-        }
+        // 占位本来就是纯文本（appendUserText），确认时只换成已确认气泡的字体，不再重渲染（验收 O25）
+        if (p.text) matchedBubble.classList.add('msg-body', 'um');
 
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
@@ -3110,14 +3100,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
       if (p.uuid) bubble.dataset.uuid = p.uuid;
       if (p.text) {
-        // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
-        bubble.innerHTML = render(p.text);
+        // 与乐观占位、历史路径同一个构建器：纯文本（验收 O25）
         bubble.classList.add('msg-body', 'um');
-        bubble.querySelectorAll('pre code').forEach(b => {
-          try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ }
-        });
-        injectCodeCopyButtons(bubble);
-        foldLongUserBubble(bubble, p.text);
+        appendUserText(bubble, p.text);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
@@ -3866,12 +3851,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (outgoingAttachments?.length) {
       bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
     }
-    if (text) {
-      const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
-      textNode.textContent = text;
-      foldLongUserText(textNode, text); // 长指令发出去那刻就折，与已确认气泡一致
-      bubble.appendChild(textNode);
-    }
+    if (text) appendUserText(bubble, text); // 长指令发出去那刻就折，与已确认气泡一致
     // 待发附件缩略 chip/图片预览：controller items 含完整 data → 点击直开本地预览（无需服务端）
     if (outgoingAttachments?.length) {
       bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
@@ -8802,10 +8782,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         appendNode(bubble, msg);
         return;
       }
-      bubble.innerHTML = render(msg.content || '');
-      bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
-      injectCodeCopyButtons(bubble);
-      if (isUser) foldLongUserBubble(bubble, msg.content || '');
+      if (isUser) {
+        if (msg.content) appendUserText(bubble, msg.content);
+      } else {
+        bubble.innerHTML = render(msg.content || '');
+        bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
+        injectCodeCopyButtons(bubble);
+      }
       // E18：历史附件（history.js 解析 [附件] 块所得）→ 可点击 chip，按需拉原图；纯附件消息（content 空）
       // 渲染 chip-only 气泡、跳过复制按钮（复制空文本无意义）
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
@@ -9396,24 +9379,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     textEl.after(btn);
   }
 
-  // 历史回显气泡（innerHTML 渲染过 markdown）：把渲染产物包进一层限高容器 + 「展开」按钮，
-  // 与 foldLongUserText 视觉一致。不重写已渲染的 innerHTML（避免二次 markdown 解释风险）。
-  function foldLongUserBubble(bubble, rawText) {
-    if (!bubble) return;
-    const { fold } = userBubbleFold(rawText);
-    if (!fold) return;
-    // 把气泡里已渲染的 DOM 节点平移进一个限高包装层
-    const wrap = el(`<div class="overflow-hidden" style="max-height:8rem"></div>`);
-    while (bubble.firstChild) wrap.appendChild(bubble.firstChild);
-    bubble.appendChild(wrap);
-    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
-    let expanded = false;
-    btn.onclick = () => {
-      expanded = !expanded;
-      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = t('收起'); }
-      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = t('展开'); }
-    };
-    wrap.after(btn);
+  // 用户气泡的文字：一律纯文本，保留换行与连续空白（验收 O25 / O90）。终端里看到的就是用户原样打的字；
+  // 原来和助手回复共用 markdown + sanitize，<Header> 被吞、<b> 变粗体、**…** 变加粗、连续空格被压成一个，
+  // 用户会以为自己的话被截断了。乐观占位、在线新建、历史渲染三个建出点共用这一个构建器，字段漂开会认领失败。
+  function appendUserText(bubble, text) {
+    const textNode = el(`<div class="whitespace-pre-wrap break-words" data-testid="user-text"></div>`);
+    textNode.textContent = text;
+    bubble.appendChild(textNode);
+    foldLongUserText(textNode, text);
+    return textNode;
   }
 
   function showLoadingCard() {
