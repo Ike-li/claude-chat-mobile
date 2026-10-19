@@ -487,6 +487,11 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
 // 抽屉告警只说「发生了什么」；这一段回答「是谁、几次、从哪来」。
 // 判定只用在 severity 着色，不做合并。未知 action 兜底渲染，不静默吞。
 const AUDIT_SCOPE_LABEL = { local: tk('本机'), lan: tk('局域网'), public: tk('公网') };
+const AUDIT_FOLDER_TEXT = {
+  folder_created: tk('新建文件夹'),
+  folder_connected: tk('连接文件夹'),
+  folder_disconnected: tk('断开文件夹'),
+};
 const AUDIT_NEUTRAL_TEXT = {
   retention_cleanup: tk('审批记录留存清理'),
   approval_restart_expired: tk('重启使待审批请求失效'),
@@ -505,6 +510,7 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   // 设备 ID 是指纹 hash，全量显示既占宽又没人逐字读；前 8 位足够在几台设备间区分。
   const shortId = tgt.slice(0, 8);
   let text, severity = 'neutral';
+  let outcomeInText = false; // 这一条的文案已经写明成败（如「新建 worktree 失败」）：末尾不再追加 outcome
 
   if (action === 'auth_rate_limited') {
     const src = describeRateLimitSource(tgt);
@@ -538,6 +544,18 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   } else if (action === 'file_write') {
     // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
     text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;
+  } else if (action === 'folder_created' || action === 'folder_connected' || action === 'folder_disconnected') {
+    // 手机上新建 / 连接 / 断开文件夹（socket-folders.js）。此前落到兜底分支，安全日志里原样露出事件码（验收 O78）
+    text = `${t(AUDIT_FOLDER_TEXT[action])} · ${tgt.split('/').pop() || tgt}`;
+  } else if (action === 'worktree_create') {
+    // 新会话页「在新 worktree 里开」的懒创建。失败时 target 是所属仓库、meta.code 是原因码
+    text = outcome === 'failed'
+      ? `${t('新建 worktree 失败')} · ${tgt.split('/').pop() || tgt}${d.code ? ` · ${d.code}` : ''}`
+      : `${t('新建 worktree')} · ${d.branch || tgt.split('/').pop() || tgt}`;
+    if (outcome === 'failed') severity = 'warning';
+    outcomeInText = true;
+  } else if (action === 'scratch_removed') {
+    text = `${t('清理无文件夹目录')} · ${tgt.split('/').pop() || tgt}`;
   } else if (AUDIT_NEUTRAL_TEXT[action]) {
     text = t(AUDIT_NEUTRAL_TEXT[action]);
   } else {
@@ -548,7 +566,7 @@ export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
   // success/allowed 追加等于每行拖一个信息量为零的尾巴；denied/locked 已经写在动词里了
   // （「被拒」「拒绝设备」「限速锁定」）。剩下的 partial_failure / error 才是必须显式说出来的。
   const OUTCOME_ALREADY_IN_TEXT = new Set(['success', 'allowed', 'denied', 'locked', undefined, null, '']);
-  if (!OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
+  if (!outcomeInText && !OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
   return { ts, type: 'audit', text, severity };
 }
 

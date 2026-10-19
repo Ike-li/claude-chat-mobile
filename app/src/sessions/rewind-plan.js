@@ -25,7 +25,7 @@
 import { join } from 'node:path';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 import { readRegularText } from '../shared/regular-file.js';
-import { getProjectDir, isSafeSessionId, splitAttachmentBlock } from './history.js';
+import { getProjectDir, isCliSystemLine, isSafeSessionId, reconstructSlashCommand, splitAttachmentBlock } from './history.js';
 
 // forkSession / resumeSessionAt 真正认得的 entry 类型。逆向 SDK 的 transcript 读取器
 // （Desktop 1.52386.6 内嵌的那份）得到的白名单原文：
@@ -175,7 +175,11 @@ export function listRewindCandidates(entries) {
       snapshots.set(e.messageId, e.snapshot?.trackedFileBackups ?? {});
     }
   }
-  const prompts = entries.filter(e => isHumanPrompt(e) && typeof e.uuid === 'string');
+  // CLI 的注入与包装不是人开的一轮，不进清单（验收 O61：<local-command-caveat>、<local-command-stdout>、打断标记
+  // 原样列在这里，还能选）。判据与会话正文同一份（history.js）。只在这张清单上过滤：isHumanPrompt 还决定轮次边界，
+  // 动它会改 planRewind / planFork 的切点。
+  const prompts = entries.filter(e => isHumanPrompt(e) && typeof e.uuid === 'string'
+    && !e.isMeta && !isCliSystemLine(extractPromptText(e)));
   return prompts.map((e, i) => {
     // 【这一轮动了几个文件 = 下一轮的 snapshot 减本轮的】snapshot 在 prompt 落盘那一刻拍摄，
     // 记的是「本轮【开始前】」的还原点，所以两个相邻 snapshot 的差反映的是【前一轮】干了什么。
@@ -197,9 +201,11 @@ export function listRewindCandidates(entries) {
         .filter(([path, info]) => before[path]?.version !== info?.version)
         .length;
     }
+    const raw = extractPromptText(e);
     return {
       promptUuid: e.uuid,
-      text: extractPromptText(e),
+      // slash 命令的落盘形式是 <command-name>…</command-name> 包装，显示成用户打的那一行（同会话正文）
+      text: reconstructSlashCommand(raw) ?? raw,
       timestamp: e.timestamp ?? null,
       changedFiles,
       // 【两个轴分开，不要压成一个 canRewind】planRewind 是【对话轴】判据：首轮之前没有可保留

@@ -815,7 +815,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
 // 标签顺序不固定（实测两种真实形态都存在），故不锚定起始位置，只按标签名抓取；command-name 缺失视为
 // 不是这类块（交给 isCliSystemLine 走原有噪音判断，不强行重建）。空参数不留多余空格（裸 "/clear" 而非
 // "/clear "）。返回 null 表示"不是 slash 命令块"，调用方据此决定是否继续按噪音过滤判断。
-function reconstructSlashCommand(content) {
+export function reconstructSlashCommand(content) {
   const t = content.trim();
   const nameMatch = /<command-name>([^<]*)<\/command-name>/.exec(t);
   if (!nameMatch) return null;
@@ -840,7 +840,7 @@ function isLocalCommandWrapped(text) {
   return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
 }
 
-function isCliSystemLine(content) {
+export function isCliSystemLine(content) {
   const t = content.trim();
   if (isLocalCommandWrapped(t)) return true;
   // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
