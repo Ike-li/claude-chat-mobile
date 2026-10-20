@@ -244,6 +244,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 要在 page.goto 之前武装，首屏的会话列表就带上那条无标题会话（gotoMock 会先 /__reset，所以这里手写）。
   async function gotoWithUntitledSession(page: import('@playwright/test').Page) {
     captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
     await page.request.post('/__reset');
     await page.request.post('/__arm-untitled-session');
     await page.goto('/');
