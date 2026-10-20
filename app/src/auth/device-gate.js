@@ -171,6 +171,7 @@ export function createDeviceGate({
           const nowTrustedSet = new Set(listTrustedDevices().map(d => d.deviceId));
           const nowPendingSet = new Set(listPendingDevices().map(d => d.deviceToken));
           const selfWrites = takeSelfWrites();
+          const deniedPendingTokens = []; // CLI 拒绝的待审设备，本轮结束后断连（同 Web 侧 user:denyDevice）
           for (const token of nowTrustedSet) {
             if (selfWrites.trustedAdded.has(token)) continue; // Web 侧批准：app.js 已记 via:'web'
             if (!lastTrustedSet.has(token)) {
@@ -197,6 +198,7 @@ export function createDeviceGate({
             if (!nowPendingSet.has(token) && !nowTrustedSet.has(token)) {
               console.log(`[devices] 检测到 ${pendingDevicesFile} 变更，设备 ${token} 被拒绝（CLI）`);
               audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_denied', target: token, outcome: 'denied', meta: { via: 'cli' } });
+              deniedPendingTokens.push(token);
             }
           }
           lastTrustedSet = nowTrustedSet;
@@ -224,6 +226,9 @@ export function createDeviceGate({
             console.log(`[devices] 检测到 ${trustedDevicesFile} 变更，设备 ${token} 信任已被吊销（CLI），断开连接`);
             disconnectDeviceSockets(token); // 复用 Web 侧同款：发 device_status:denied + disconnect(true)
           }
+          // CLI 拒绝待审设备也要告诉它开着的页面：不断的话页面停在「等待授权」，server 一重启或页面一刷新
+          // 就重新进待审，机主又收到一条「新设备请求接入」。
+          for (const token of deniedPendingTokens) disconnectDeviceSockets(token);
           broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
           broadcastTrustedDevices(); // 信任表刚变过——Web 上那份列表不刷就会停在旧快照上，用户对着它做吊销决策
         }, 100);

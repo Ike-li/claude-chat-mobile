@@ -22,6 +22,18 @@ test.describe('P0 长会话切入分块渲染', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O44 / AC-06-13：只回最近 2000 条时，提示若仍写「加载了 2000 条历史消息」，读起来像全部，
+  // 用户会以为会话就从这里开始，更早的那些既看不到也不知道它们存在。
+  test('P0-LH4 削顶的会话说清只显示了最近的多少条、一共多少条', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expect(page.locator('#messages')).toContainText('仅显示最近 2000 条历史消息（共 2100 条），更早的没有加载', { timeout: 15000 });
+    await expect(page.locator('#messages')).not.toContainText('加载了 2000 条历史消息');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-LH2 分块渲染多次让出主线程，而非一次性同步任务跑完', async ({ page }) => {
     await gotoMock(page);
 
