@@ -47,6 +47,24 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 验收 O45：回复里有一张 12 列的宽表格。375 宽下它把整个消息列表撑出横向滚动、每格被压到一字一行。
+      command: 'test:wide-table',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
+        const cols = Array.from({ length: 12 }, (_, i) => `column-${i + 1}`);
+        const table = [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, `| ${cols.map((_, i) => `value-${i + 1}`).join(' | ')} |`].join('\n');
+        await delay(50);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_wide_table', text: `wide table fixture\n\n${table}\n` },
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_wide_table', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       // API 重试态：CLI 会把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"。
       // 【必须是独立命令，绝不并进 test:stream / test:question / test:exitplan】——那三条的 spec 用
       // /^✻ .+… \(\d+s/ 锚定普通 spinner 形态，而重试行不含 "… ("，混进去会把它们一起打红。

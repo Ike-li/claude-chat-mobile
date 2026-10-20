@@ -7993,10 +7993,23 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 没勾时胶囊锁定、显示仓库当前分支：源分支只对新 worktree 有意义，没勾时会话就开在主工作树上。
     // 此前没勾也能选，胶囊写着 feat、会话却开在 main，没有任何提示（2026-10-10 真机）。
     const locked = !st.enabled;
-    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all disabled:opacity-50" data-testid="compose-source-branch"${locked ? ` disabled title="${esc(t('勾选「在新 worktree 里开」后可换源分支'))}"` : ''}>
+    // 锁定用 aria-disabled 而不是 disabled：原生 disabled 的按钮连点击都不派发，手机上没有悬停，原因只放在 title 里
+    // 就永远看不到，点了没反应像是坏了（验收 O54）。点一下把原因写在胶囊下面。
+    const lockedReason = t('勾选「在新 worktree 里开」后可换源分支');
+    const branchBtn = el(`<button type="button" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-line-soft bg-surface text-ink-soft text-[11px] font-semibold active:scale-[0.98] transition-all${locked ? ' opacity-50' : ''}" data-testid="compose-source-branch"${locked ? ` aria-disabled="true" title="${esc(lockedReason)}"` : ''}>
       <span class="text-ink-faint">⑂</span><span class="max-w-[9rem] truncate">${esc(st.sourceBranch || '')}</span>${locked ? '' : '<span class="text-ink-faint">⌄</span>'}
     </button>`);
-    branchBtn.onclick = (e) => { e.stopPropagation(); haptic('tap'); branchListOpen = !branchListOpen; renderWorktreeChips(); };
+    branchBtn.onclick = (e) => {
+      e.stopPropagation();
+      haptic('tap');
+      if (locked) {
+        const hint = host.querySelector('[data-testid="compose-branch-locked-hint"]');
+        if (hint) hint.classList.remove('hidden');
+        return;
+      }
+      branchListOpen = !branchListOpen;
+      renderWorktreeChips();
+    };
     row.appendChild(branchBtn);
 
     const on = st.enabled;
@@ -8012,6 +8025,11 @@ import { createGateFocusController } from './app/focus-layers.js';
     };
     row.appendChild(wtBtn);
     host.appendChild(row);
+    if (locked) {
+      const hint = el('<div class="hidden text-[10px] text-ink-soft" data-testid="compose-branch-locked-hint" role="status"></div>');
+      hint.textContent = lockedReason;
+      host.appendChild(hint);
+    }
 
     if (st.loadError) {
       const errEl = el(`<div class="text-[10px] text-danger"></div>`);
