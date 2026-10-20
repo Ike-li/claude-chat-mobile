@@ -2334,7 +2334,9 @@ io.on('connection', socket => {
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
       }
-      callback({ messages });
+      // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
+      // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
+      callback({ messages, total: 2100 });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [

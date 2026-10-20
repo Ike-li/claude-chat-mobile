@@ -9,6 +9,7 @@ import {
   rttToneClass,
   userBubbleFold,
   formatUptime,
+  historyLoadedNotice,
 } from '../../app/public/js/logic/format.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
@@ -461,3 +462,22 @@ test.describe('formatUptime —— en 语言下的单位', () => {
 });
 
 test.after(() => setLang('zh'));
+
+// 验收 O44 / AC-06-13：服务端只回最近 HISTORY_MAX_MESSAGES 条。总数比显示的多时，提示必须说清只显示了一部分，
+// 否则「加载了 2000 条历史消息」读起来像全部，用户会以为会话就是从第 51 轮开始的。
+test.describe('historyLoadedNotice —— 历史载入提示', () => {
+  test('全量载入：沿用「加载了 N 条历史消息」', () => {
+    assert.equal(historyLoadedNotice(14, 14), '加载了 14 条历史消息');
+  });
+  test('被截掉了更早的：说出显示了几条、一共几条', () => {
+    assert.equal(historyLoadedNotice(2000, 2100), '仅显示最近 2000 条历史消息（共 2100 条），更早的没有加载');
+  });
+  test('旧服务端不回 total：按全量处理，不编造截断', () => {
+    assert.equal(historyLoadedNotice(30, undefined), '加载了 30 条历史消息');
+    assert.equal(historyLoadedNotice(30, null), '加载了 30 条历史消息');
+  });
+  test('英文界面同样说清截断', () => {
+    setLang('en');
+    assert.equal(historyLoadedNotice(2000, 2100), 'Showing only the latest 2000 of 2100 messages from history; earlier ones are not loaded');
+  });
+});
