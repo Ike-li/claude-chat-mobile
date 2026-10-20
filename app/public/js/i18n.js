@@ -26,7 +26,7 @@ export const LANG_STORAGE_KEY = 'ccm_lang';
 export const EN_DICT = Object.freeze({
   // —— 访问令牌页 / Access 重登 ——
   '需要访问令牌才能连接到这台机器。': 'You need an access token to connect to this machine.',
-  '若你刚清过浏览器数据，原先保存的令牌已被清除，重输一次即可。': 'If you just cleared your browser data, the saved token is gone — enter it once more.',
+  '第一次打开、换了浏览器或清过浏览器数据时，这里还没有保存令牌，输入一次即可。': 'On a first visit, in a new browser, or after clearing browser data, no token is saved here yet — enter it once.',
   '访问令牌': 'Access token',
   '粘贴 AUTH_TOKEN': 'Paste AUTH_TOKEN',
   '进入': 'Enter',
