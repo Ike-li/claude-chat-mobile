@@ -7,6 +7,15 @@
 // 放 src/shared 而非任一域：两个消费方分处 agent/ 与 sessions/ 两域，留在任一侧都会制造跨域回边
 // （history.js 原注释写的「本模块独立实现，避免 history↔agent 循环依赖」正是复制的动机）。
 export const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
+export const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
+
+// 工具结果摘要的上限按工具名取（display-contracts §5「截断 600 / Bash 2000」）。live 与历史回放共用这一份：
+// 历史侧原来一律 600，同一张卡刷新前后变短（验收 O55）。
+export function toolResultCap(name) {
+  const n = String(name || '');
+  if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
+  return TOOL_SUMMARY_CAP;
+}
 
 // 长 base64/二进制载荷脱敏（Read 读图片等场景，tool_result 会带回原始字节供模型"看见"图片）：
 // 不猜 SDK 具体字段名（同 file-preview.js 的二进制探测思路，防 SDK 版本漂移改字段名致失效）——

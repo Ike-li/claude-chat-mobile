@@ -1,4 +1,4 @@
-import { attachmentDataUrl, formatAttachmentChipLabel, guessImageMime, pickPasteImageFiles } from '../logic/attachments.js';
+import { attachmentDataUrl, formatAttachmentChipLabel, guessImageMime, pickPasteImageFiles, sanitizeName } from '../logic/attachments.js';
 import { t } from '../i18n.js';
 
 const MAX_FILE = 10 * 1024 * 1024;
@@ -19,10 +19,29 @@ export function createAttachmentController(context, options = {}) {
     scheduleInsetResettle = () => {},
     // 返回 false 则拒绝添加（如 CLI 驾驶只读）；可在回调内自行 addBar 说明。
     canAdd = () => true,
+    // 消息区此刻是不是新会话页（#messages.empty-start）。是的话托盘的提示不能走 addBar：addBar 先 leaveStartScreen，
+    // 一行提示就把整块「新会话已就绪」面板（文件夹、分支、worktree 开关、建议卡）清掉（验收 O68）。
+    isStartScreen = () => false,
   } = options;
   const dom = context.dom;
   const deps = context.dependencies;
   let pending = [];
+
+  // 托盘自己的提示：新会话页上落在托盘旁（#attachNotice），几秒后自己消失；其余时候照旧进消息流。
+  const NOTICE_MS = 5000;
+  let noticeTimer = null;
+  function notify(text, className) {
+    const box = dom.attachNotice;
+    if (!box || !isStartScreen()) {
+      addBar(text, className);
+      return;
+    }
+    box.textContent = text;
+    box.classList.toggle('text-danger', className === 'text-danger');
+    box.classList.remove('hidden');
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => box.classList.add('hidden'), NOTICE_MS);
+  }
 
   function items() { return pending.slice(); }
 
@@ -126,24 +145,27 @@ export function createAttachmentController(context, options = {}) {
     const list = Array.isArray(files) ? files : [...(files || [])];
     for (const file of list) {
       if (!file) continue;
+      // 界面上一律显示与落盘同一规则清洗过的名字（O34）；没名字的粘贴图走下面的 paste- 兜底。
+      const rawName = file.name?.trim();
+      const shownName = rawName ? sanitizeName(rawName) : '';
       if (pending.length >= MAX_COUNT) {
-        addBar(`${t('附件数量已达上限（')}${MAX_COUNT}）`, 'text-danger');
+        notify(`${t('附件数量已达上限（')}${MAX_COUNT}）`, 'text-danger');
         break;
       }
       if (file.size > MAX_FILE) {
-        addBar(`「${file.name || t('附件')}」${t('超过 10MB，未添加')}`, 'text-danger');
+        notify(`「${shownName || t('附件')}」${t('超过 10MB，未添加')}`, 'text-danger');
         continue;
       }
       const total = pending.reduce((sum, attachment) => sum + attachment.size, 0);
       if (total + file.size > MAX_TOTAL) {
-        addBar(t('附件总量将超过 20MB，未添加'), 'text-danger');
+        notify(t('附件总量将超过 20MB，未添加'), 'text-danger');
         break;
       }
       try {
         const [data, thumb] = await Promise.all([readBase64(file), makeThumb(file)]);
         const now = (deps.now || Date.now)();
         const random = (deps.random || Math.random)();
-        const name = file.name?.trim()
+        const name = shownName
           || `paste-${now}.${(file.type || '').split('/')[1] || 'png'}`;
         pending.push({
           _id: `${now}-${random.toString(36).slice(2)}`,
@@ -155,7 +177,7 @@ export function createAttachmentController(context, options = {}) {
         });
         notifyChange();
       } catch {
-        addBar(`「${file.name || t('附件')}」${t('读取失败')}`, 'text-danger');
+        notify(`「${shownName || t('附件')}」${t('读取失败')}`, 'text-danger');
       }
     }
   }
@@ -178,7 +200,7 @@ export function createAttachmentController(context, options = {}) {
   function openPreview(attachment) {
     const url = attachmentDataUrl(attachment);
     if (!url) {
-      addBar(attachment?.name ? `「${attachment.name}」${t('不是可预览图片')}` : t('该附件不可预览'), 'text-ink-faint');
+      notify(attachment?.name ? `「${attachment.name}」${t('不是可预览图片')}` : t('该附件不可预览'), 'text-ink-faint');
       return;
     }
     openPreviewUrl(attachment.name, url);

@@ -113,7 +113,9 @@ export function statuslineBridgeDiagnostic({ webOff = false, bridgeOff = false, 
   if (installState === 'drifted') {
     return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '安装记录与当前 Claude statusLine.command 已漂移/被改写；先运行 npm run statusline:status 检查，勿强行覆盖。', 'The install manifest and the current Claude statusLine.command have drifted; run npm run statusline:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 npm run statusline:install 显式启用。', 'Not installed. The SDK status line works when the web drives, but mirrored CLI sessions will not sync. Run npm run statusline:install to enable it.') };
+  // 没装给 info 不给 warn（验收 O8）：两座桥都是显式 opt-in（装机向导非交互缺省 off），「没装」是多数人的
+  // 默认状态。显式选了 --hooks=off 的人每次 doctor 都看到两条 ⚠，就会学会忽略这一列——包括真该看的漂移。
+  return { status: 'info', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 npm run statusline:install 显式启用。', 'Not installed. The SDK status line works when the web drives, but mirrored CLI sessions will not sync. Run npm run statusline:install to enable it.') };
 }
 
 // 界面语言：CLI doctor 按 locale 传入，web UI 由客户端语言传入（doctor:run 的 payload）。
@@ -134,7 +136,8 @@ export function hooksBridgeDiagnostic({ bridgeOff = false, installState = 'not-i
   if (installState === 'drifted') {
     return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '安装记录与 settings.json 的 hooks 条目已漂移；先运行 npm run hooks:status 检查，勿强行覆盖。', 'The install manifest and the hooks entries in settings.json have drifted; run npm run hooks:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 npm run hooks:install 显式启用。', 'Not installed. Sessions you run in your own terminal rely on 2.5s polling with no push. Run npm run hooks:install to enable it.') };
+  // 没装给 info 不给 warn，理由同 statuslineBridgeDiagnostic。
+  return { status: 'info', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 npm run hooks:install 显式启用。', 'Not installed. Sessions you run in your own terminal rely on 2.5s polling with no push. Run npm run hooks:install to enable it.') };
 }
 
 // 命令名右边界：空白、冒号、行尾。冒号是关键——Claude Code 的规范通配语法是 `Bash(rm:*)`，

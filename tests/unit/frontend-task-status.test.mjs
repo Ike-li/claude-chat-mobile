@@ -500,3 +500,66 @@ test('B4：skip_transcript 任务仍从活任务表摘掉，横幅不会挂着�
   });
   assert.equal(hidden.has('hidden'), true, '摘掉最后一条后横幅须收起');
 });
+
+// 验收 O82（AC-11-07）：同一条「后台任务完成」在一个标签页里显示了两遍（fake-claude 只发一次；验收与本轮都没复现出
+// 来源）。同一来源、同一 taskId 的完成通知是同一件事：当前消息流里已经画过就不再画、不再响。
+// 以 DOM 为准——清屏重载后那一行没了，重放来的这一条要照常画回来（但不再弹一次通知）。
+function dedupeHarness() {
+  const bars = [];
+  const notes = [];
+  const context = createAppContext({
+    dom: { taskProgressBanner: { classList: { contains: () => true, add() {}, remove() {} } }, taskProgressText: { textContent: '' } },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, {
+    autoBind: false,
+    addBar: (text, cls) => { const bar = { text, cls, isConnected: true }; bars.push(bar); return bar; },
+    notify: (title, body) => notes.push({ title, body }),
+  });
+  return { status, bars, notes };
+}
+
+test('O82：同一来源同一 taskId 的完成通知只画一行、只响一次', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = { instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'bg1', status: 'completed', summary: '后台任务跑完了' } };
+  status.onComplete(done);
+  status.onComplete(structuredClone(done));
+  assert.equal(bars.length, 1, '同一件事画了两行');
+  assert.equal(notes.length, 1, '同一件事响了两次');
+});
+
+test('O82：清屏后那一行不在了，重放来的同一条照常画回来，但不再弹通知', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = { instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'bg2', status: 'completed' } };
+  status.onComplete(done);
+  bars[0].isConnected = false; // clearView 摘掉了它
+  status.onComplete(done);
+  assert.equal(bars.length, 2);
+  assert.equal(notes.length, 1);
+});
+
+test('O82 反向：不同 taskId、不同来源、没有 taskId 都照常各画各的（防修过头）', () => {
+  const { status, bars } = dedupeHarness();
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'a', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: 'b', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'user_injection', taskId: 'a', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', status: 'completed' } });
+  status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', status: 'completed' } });
+  assert.equal(bars.length, 5);
+});
+
+// PR #274 review：长开着的 PWA 标签页里，去重记录不能只增不减（每一条完成都留着它那一行的 DOM 子树和键）。
+// 有界：完成过足够多条之后，最早那条被淘汰——它再重放会再响一次；最近的仍记得。
+test('O82：去重记录有界——很久以前的那条被淘汰，最近的仍去重', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = id => ({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: id, status: 'completed' } });
+  for (let i = 0; i < 1000; i++) {
+    status.onComplete(done(`t${i}`));
+    bars[bars.length - 1].isConnected = false; // 清屏摘掉
+  }
+  assert.equal(notes.length, 1000);
+  status.onComplete(done('t999'));
+  assert.equal(notes.length, 1000, '最近那条重放不该再响');
+  status.onComplete(done('t0'));
+  assert.equal(notes.length, 1001, '最早那条应已被淘汰（记录有界）');
+});

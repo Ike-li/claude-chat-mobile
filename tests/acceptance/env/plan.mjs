@@ -226,14 +226,15 @@ export function readState(path) {
 
 /**
  * 逐步执行。某一步失败后只再跑标了 always 的步骤（清凭据），返回第一个失败的退出码。
- * spawn 可注入：单测不能真起 docker。
+ * spawn 可注入：单测不能真起 docker。log 可注入：测试进程的 stdout 是 node:test 运行器回传结果的通道，
+ * 回显直接写进去会混进它的序列化消息。
  */
-export function runSteps({ steps }, { spawn = spawnSync } = {}) {
+export function runSteps({ steps }, { spawn = spawnSync, log = console.log } = {}) {
   let failed = 0;
   for (const s of steps) {
     if (failed && !s.always) continue;
     const shown = formatPlan({ steps: [s] });
-    console.log(shown.startsWith('#') ? shown : `\n$ ${shown}`);
+    log(shown.startsWith('#') ? shown : `\n$ ${shown}`);
     if (s.kind === 'compose') {
       const r = spawn('docker', s.args, { stdio: 'inherit', env: { ...process.env, ...s.env } });
       if (r.status !== 0) failed ||= r.status ?? 1;
