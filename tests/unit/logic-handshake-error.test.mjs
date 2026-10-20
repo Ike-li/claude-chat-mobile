@@ -37,6 +37,22 @@ test.describe('describeHandshakeError：把握手拒绝翻成人话', () => {
     assert.doesNotMatch(r.text, /NaN|undefined|null/, '缺数据时不得把 NaN 漏到界面上');
   });
 
+  // 验收 O83：冷却期内这次令牌根本没校验——既不是「令牌不对」，也不是「尝试过多」。调用方拿 retryAfterMs 到点自动重试。
+  test('cooldown 单独归类：说清几秒后自动重试，不说令牌错、不说尝试过多，并把等待毫秒数交给调用方', () => {
+    const r = describeHandshakeError({ message: 'cooldown', data: { reason: 'cooldown', retryAfterMs: 480, retryAfterSeconds: 1 } });
+    assert.equal(r.kind, 'cooldown');
+    assert.equal(r.retryAfterMs, 480);
+    assert.match(r.text, /1/);
+    assert.doesNotMatch(r.text, /cooldown|尝试过多|令牌无效|令牌不对/);
+  });
+
+  test('cooldown 缺 data 时仍给人话，等待时长回落到 1 秒', () => {
+    const r = describeHandshakeError({ message: 'cooldown' });
+    assert.equal(r.kind, 'cooldown');
+    assert.equal(r.retryAfterMs, 1000);
+    assert.doesNotMatch(r.text, /NaN|undefined|null|cooldown/);
+  });
+
   test('unauthorized 单独归类：交给令牌门处理，不当成普通连接失败', () => {
     assert.equal(describeHandshakeError({ message: 'unauthorized' }).kind, 'unauthorized');
   });
@@ -73,6 +89,13 @@ test.describe('shouldAttemptReconnect：凭据门开着时不许自动重连', (
 
   test('Access 重登门开着 → 同样不重连（公网侧压根没有令牌可试）', () => {
     assert.equal(shouldAttemptReconnect({ accessReloginOpen: true }), false);
+  });
+
+  // 验收 O21 / AC-02-13：设备被拒后，切回标签页 / 网络恢复都会自动重连，而重连握手会让它重新进待审，
+  // 机主又收到一条「新设备请求接入」。被拒遮罩自己有「重新请求接入」按钮——那才是唯一该发起握手的入口。
+  test('「设备未获授权」遮罩开着 → 不重连：重连会重新进待审、再推一次「新设备请求接入」', () => {
+    assert.equal(shouldAttemptReconnect({ deviceDeniedOpen: true }), false);
+    assert.equal(shouldAttemptReconnect({ deviceDeniedOpen: false }), true);
   });
 
   test('pageshow 普通加载（persisted=false）→ 不重连：io() 刚刚才连过', () => {

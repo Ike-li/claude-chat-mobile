@@ -953,6 +953,26 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
+  // 验收 O60：前端按 processExited 记住这条提示，切回该会话、历史重画完再补出来。只认结构化字段，不认文案。
+  // resume 失败不带：那是「这次没打开」，重开时会重新尝试、重新报，不需要记。
+  test('进程中途退出（消息流结束 / 抛错）→ error 带 processExited；resume 失败不带', async () => {
+    const errorOf = async ({ sawInit, resumeId = null }, next) => {
+      const { s, events } = makeSession({ resumeId });
+      s.sawInit = sawInit;
+      await s.consume({ [Symbol.asyncIterator]() { return { next }; } });
+      s.dispose();
+      return events.find(e => e.type === 'error').payload;
+    };
+    const exited = await errorOf({ sawInit: true }, () => Promise.resolve({ done: true }));
+    assert.equal(exited.processExited, true);
+    const killed = await errorOf({ sawInit: true }, () => Promise.reject(new Error('Claude Code process terminated by signal SIGKILL')));
+    assert.match(killed.message, /^进程异常：/);
+    assert.equal(killed.processExited, true);
+    const resumeFailed = await errorOf({ sawInit: false, resumeId: 'bad-id' }, () => Promise.resolve({ done: true }));
+    assert.equal(resumeFailed.recoverable, false, '前提：走的是 resume 失败分支');
+    assert.equal(resumeFailed.processExited, undefined);
+  });
+
   // 彻底删除靠它判断「CLI 退完了没有」（app.js deletePermanent）：dispose 只是让 SDK 关 stdin，
   // CLI 读到 EOF 后还要往 transcript 追加收尾元数据才退。在 dispose 时就结算，删除会落在那几行之前。
   test('exitPromise 在 SDK 消息流结束时才结算，不是 dispose 那一刻', async () => {

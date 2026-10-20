@@ -170,3 +170,20 @@ test.describe('hasPriorHistory：resume 回来的老会话不该被当成刚开�
     assert.equal(shouldRecap({ awayMs: 10 * 60_000, assistantTurns: 0, hasPriorHistory: true, isBusy: true, now: 1 }), false);
   });
 });
+
+// 验收 O32：网关报错时，「猜你接下来想发」卡片显示的是报错原文「(API error: 503 auth_unavailable: …)」，
+// 点一下就把报错填进输入框。askSideQuestion 拿到的不是模型的话：CLI 把报错（或「没有答案」）合成成一段文字
+// 交回来（synthetic）。这种回复一律当作「这次没有」。
+test.describe('askSide：CLI 合成的回复（网关报错等）不当成模型的回答', () => {
+  test('synthetic 为真 → null；不是 synthetic 但内容是 API 报错 → null；正常回答照常', async () => {
+    const { makeSession } = await import('../helpers/agent-unit.mjs');
+    const { s } = makeSession();
+    const answer = (r) => { s.q = { askSideQuestion: async () => r }; return s.askSide('suggestion', 'x'); };
+    assert.equal(await answer({ response: '(API error: 503 auth_unavailable: no auth available)', synthetic: true }), null);
+    assert.equal(await answer({ response: '(No answer available for this side question. Try again, or ask in the main conversation.)', synthetic: true }), null);
+    assert.equal(await answer({ response: '(API error: 503 auth_unavailable: no auth available)', synthetic: false }), null, '没带 synthetic 的报错文本同样不能填进输入框');
+    assert.equal(await answer({ response: 'API Error: 529 overloaded', synthetic: false }), null);
+    assert.equal(await answer({ response: '跑一下测试', synthetic: false }), '跑一下测试');
+    s.dispose();
+  });
+});

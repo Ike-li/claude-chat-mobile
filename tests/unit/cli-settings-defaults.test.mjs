@@ -1,6 +1,6 @@
 // tests/unit/cli-settings-defaults.test.mjs —— FRESH/空首页配置权威源纯函数（零 token）。
 // 契约：新会话 L0 pending > L3 CLI settings > L4 硬默认；resume 的 mode/model 不走本模块，
-// effort 例外（resolveResumeEffort：saved > inherited > L3，见该函数注释）。
+// effort 例外（resolveResumeEffort：saved > L3，见该函数注释）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -188,54 +188,26 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
   });
 });
 
-test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，全部按归一后 ?? 语义折叠）', () => {
+test.describe('resolveResumeEffort（resume 专用：saved > L3，全部按归一后 ?? 语义折叠）', () => {
   const cliHigh = { mode: 'default', effort: 'high', model: undefined };
 
-  test('saved 有非空值 → 直接采用，不看后两层', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'low', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'low',
-    );
+  test('saved 有非空值 → 直接采用，不看 L3', () => {
+    assert.equal(resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }), 'low');
   });
 
-  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 inherited', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'max',
-    );
+  // 验收 O56：此前这里有一层「同 cwd 末个存活实例继承」——只在某个会话里临时选过一次 low，之后恢复的
+  // 旧会话全带着 --effort=low 启动。现在会话自己没记过就看 settings，别的会话的档不参与（调用方也不再传）。
+  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 L3 CLI settings', () => {
+    assert.equal(resolveResumeEffort({ savedEffort: undefined, cliDefaults: cliHigh }), 'high');
   });
 
   test('saved 显式 null（陷阱：可能是用户选过模型默认，也可能只是上次冷启动兜底写入）→ 仍继续往下兜底，不当终值', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'max',
-    );
+    assert.equal(resolveResumeEffort({ savedEffort: null, cliDefaults: cliHigh }), 'high');
   });
 
-  test('saved / inherited 都空 → 落到 L3 CLI settings（本次修复的核心场景：从未碰过 web 的旧会话）', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: undefined, cliDefaults: cliHigh }),
-      'high',
-    );
-  });
-
-  test('inherited 显式 null（该 cwd 末活实例本身也是模型默认）→ 同样继续往下兜底到 L3', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
-  });
-
-  test('三层全空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
+  test('saved 空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
     assert.equal(resolveResumeEffort({}), null);
-    assert.equal(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: null }),
-      null,
-    );
+    assert.equal(resolveResumeEffort({ savedEffort: null, cliDefaults: null }), null);
   });
 
   test('cliDefaults.effort 缺省键 → 视为 null，不把 undefined 当有值', () => {
@@ -243,26 +215,13 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
   });
 
   test('非法档一律归一为 null 再继续兜底', () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
-      'high',
-    );
+    assert.equal(resolveResumeEffort({ savedEffort: 'garbage', cliDefaults: cliHigh }), 'high');
   });
 
-  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3 或继承值——那等于把 auto 悄悄换成
+  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3——那等于把 auto 悄悄换成
   // settings 里存的档（PR #167 review 指出）。auto 与 null 的区别正在这里：null 是「没指定、继续兜底」。
   test("saved 'auto' → 终值 'auto'，不往下兜底", () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: 'auto', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      'auto',
-    );
-  });
-
-  test("inherited 'auto'（该 cwd 末活实例是 auto）→ 与具体档同样被继承", () => {
-    assert.equal(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'auto', cliDefaults: cliHigh }),
-      'auto',
-    );
+    assert.equal(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }), 'auto');
   });
 });
 
