@@ -80,6 +80,7 @@ import {
   mergeRecentSessionsAcrossWorkspaces,
   recentWorkspaceChips,
   remainingOlderSessionCount,
+  historyLoadedNotice,
   formatNotifyIdentity,
   notifySessionTag,
   lookupNotifySessionTitle,
@@ -174,6 +175,7 @@ import {
   formatAuditEntry,
   isLanOrLocalHostname,
   authFailurePath,
+  shouldHandshakeOnBoot,
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
@@ -1299,8 +1301,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
+  // 没令牌、又会走令牌门时不在开页时握手（必然被拒且被记成一次鉴权失败，验收 O20），下面直接出令牌门；
+  // submitAuth 写入令牌后自己 socket.connect()。
+  const handshakeOnBoot = shouldHandshakeOnBoot({ token, lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess });
   const socket = appContext.setSocket(io({
     auth: { token, deviceToken },
+    autoConnect: handshakeOnBoot,
     // 移动端常切后台/息屏，断开后想尽快回来：调小重连退避（默认 1000/5000ms 太久）
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
@@ -1590,7 +1596,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
         replayBuffer.resolve(replayHandle, 'discard');
-        if (socket.connected) socket.disconnect(); socket.connect(); return;
+        // 只有还连着（ack 超时、连接可疑）才自己重连。没连着时这个回调多半是 socket.io-client 在 Manager.onclose 里
+        // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
+        // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
+        // 每次断线 reconnect() 第一行就返回，页面停在「自动重连中…」（验收 O49，对照 socket.io-client 4.8.4 源码）。
+        if (socket.connected) forceReconnect();
+        return;
       }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
       // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
@@ -1659,6 +1670,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+  if (!handshakeOnBoot) {
+    setStatus(t('需要访问令牌'));
+    showAuthGate(''); // 首访不是「令牌无效」，不带错误文案
+  }
 
   // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
   // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
@@ -1724,9 +1739,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // IPv6 按 /64 归桶，同网段另一台设备连错到阈值会连累这台——把一个令牌完全正确的已登录用户
       // 踢回登录门，既答非所问又会诱导他去改本来没问题的令牌。只在登录门本来就开着时把话放进去。
       if (authGate && !authGate.classList.contains('hidden')) showAuthGate(handshake.text);
-      else if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+      else {
+        if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+        // 令牌门没开：话说在连接横幅上（setStatus 写的 #statusLine 恒隐藏，此前用户只看得到「连接中…」，验收 O22）
+        connBanner.markRateLimited(handshake.text);
+      }
       return;
     }
+    connBanner.clearRateLimited(); // 这一轮不是被锁挡下的，别再挂着上一轮的「等 N 分钟」
     if (err.message === 'unauthorized') {
       if (authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'token-gate') {
         setStatus(t('需要访问令牌'));
@@ -1754,6 +1774,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.persisted 只有 pageshow 传（true=真·bfcache 恢复）。门控判定见 logic 的 shouldAttemptReconnect：
   // 凭据门开着、或 pageshow 的普通加载分支，一律不发起——那种重连必然失败，唯一效果是把服务端的
   // 退避锁越推越长，正是「只错一次却被告知登录尝试过多」的触发源（2026-09-02）。
+  // 强制干净重连：disconnect() 经 Manager._destroy → _close 清掉 _reconnecting 与残留的重连定时器、关掉挂住的 engine，
+  // 再 connect() 重新握手。只调 socket.connect() 不够——Manager 正在（或卡在）重连中时它什么都不做，而服务暂停又恢复时
+  // 那次握手可能挂着要等满 20s 连接超时，「立即重试」点了没反应（验收 O49）。
+  function forceReconnect() {
+    socket.disconnect();
+    socket.connect();
+  }
   function reconnectIfNeeded(opts = {}) {
     if (!shouldAttemptReconnect({
       authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
@@ -1765,7 +1792,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     _reconnectTimer = setTimeout(() => {
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
-      if (foregroundReconnectAction(socket.connected) === 'connect') socket.connect();
+      if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();
       else {
         requestSync({ probe: true });
         measureRtt(); // 前台唤醒立即刷新延迟（不依赖 5s 周期）
@@ -7232,7 +7259,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           };
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length);
+          const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
           const hintText = remaining != null
             ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
             : t('还有更早的会话，可用搜索查找');
@@ -8415,7 +8442,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         onDone?.();
         return;
       }
-      addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
+      addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
       renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
