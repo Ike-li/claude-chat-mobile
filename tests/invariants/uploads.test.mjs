@@ -105,6 +105,20 @@ test.describe('SCOPE-02 & FILES-4: validateAttachments 服务端输入校验', (
     assert.match(err, /单文件上限/);
   });
 
+  // 验收 O69：10MiB+1 字节被拒时提示「过大（10.0MB，单文件上限 10MB）」——四舍五入到一位小数后和上限一样，
+  // 读起来像没超也被拒。超了就得显示得比上限大：向上取整。
+  test('超限提示里的大小向上取整：刚超一个字节也不显示成和上限一样', () => {
+    const justOver = Buffer.alloc(MAX_FILE_BYTES + 1).toString('base64');
+    assert.match(validateAttachments([{ name: 'big.bin', mimeType: 'application/octet-stream', data: justOver }]), /过大（10\.1MB，单文件上限 10MB）/);
+    const tenMiB = Buffer.alloc(MAX_FILE_BYTES).toString('base64');
+    const oneByte = Buffer.alloc(1).toString('base64');
+    assert.match(validateAttachments([
+      { name: '1.bin', mimeType: 'application/octet-stream', data: tenMiB },
+      { name: '2.bin', mimeType: 'application/octet-stream', data: tenMiB },
+      { name: '3.bin', mimeType: 'application/octet-stream', data: oneByte },
+    ]), /总量过大（20\.1MB，上限 20MB）/);
+  });
+
   test('附件总量超出 MAX_TOTAL_BYTES 限制报错', () => {
     assert.equal(MAX_TOTAL_BYTES, 20 * 1024 * 1024);
     // 构造总和超出 20MB 的多文件（单个不超过 10MB）

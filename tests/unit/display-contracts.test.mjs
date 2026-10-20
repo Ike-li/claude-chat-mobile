@@ -8,6 +8,8 @@ import {
   resolveSendModel,
   resolveModelPillText,
   resolveGatewayModelName,
+  modelTileValueFor,
+  resolveOutgoingModel,
   effortLevelsFor,
   effortUiState,
   withAutoTier,
@@ -20,11 +22,17 @@ import {
   normalizeEffortLevel,
   CCM_EFFORT_LEVELS,
   UI_EFFORT_LEVELS,
+  resolveResumeEffort,
 } from '../../app/src/agent/cli-settings-defaults.js';
 import {
   buildWebStatusLine,
   buildCliStatusLine,
 } from '../../app/src/ops/statusline.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { toolResultCap, TOOL_SUMMARY_CAP, TOOL_SUMMARY_CAP_BASH } from '../../app/src/shared/tool-summary.js';
+import { getProjectDir, getSessionHistory } from '../../app/src/sessions/history.js';
 
 // ─── §1 Models ─────────────────────────────────────────────
 
@@ -67,6 +75,32 @@ test.describe('契约 §1 模型：条数 = SDK；标题 = wire；发送 pin wir
     assert.equal(resolveSendModel({ selectValue: 'opus', modelsList: GATEWAY_MODELS }), 'grok-4.5');
     assert.equal(resolveSendModel({ selectValue: 'haiku', modelsList: [] }), 'haiku');
     assert.equal(resolveSendModel({ selectValue: '', modelsList: [] }), undefined);
+  });
+
+  // 验收 O53：跑着的会话打开设置多出一张「当前加载模型」并选中——init 报的是 wire（grok-4.5[1m]），不是档位 id，
+  // 按 value 精确匹配找不到磁贴就补了一张。在跑的模型要映射到已有磁贴上，只有列表里确实没有它才补卡。
+  test('在跑模型 → 磁贴：value 精确命中优先；否则按 带后缀全名 → 去后缀 匹配 value 或 wire；都不中给空', () => {
+    assert.equal(modelTileValueFor('grok-4.5', GATEWAY_MODELS, '[1m]'), 'default', 'init 报 grok-4.5[1m]：是 default 那张的 wire');
+    assert.equal(modelTileValueFor('grok-4.5', GATEWAY_MODELS, ''), 'opus', '同 wire 多张时取列表里第一张');
+    assert.equal(modelTileValueFor('haiku', GATEWAY_MODELS, '[1m]'), 'haiku', '用户点的档位 id 精确命中，不被残留后缀带偏');
+    assert.equal(modelTileValueFor('grok-9', GATEWAY_MODELS, ''), '', '列表里没有它：调用方才补「当前加载模型」卡');
+    assert.equal(modelTileValueFor('', GATEWAY_MODELS, ''), '');
+  });
+
+  // 验收 O53 / O26：用户没动模型，下一条却带着从磁贴重建出来的名字发出（grok-4.5，丢了 [1m]），把在跑的
+  // grok-4.5[1m] 换掉。运行中的会话没点过模型时，原样带回服务端报的在跑模型；不能带空——服务端把空当
+  // 「回到 spawn 时的模型」，中途切过的会话刷新后发一条就被切回去。
+  test('发送意图：运行中且没点过 → 原样带回在跑模型；点过或新会话 → 照旧 pin wire', () => {
+    const base = { modelsList: GATEWAY_MODELS, gatewaySuffix: '[1m]', loadedModel: 'grok-4.5[1m]' };
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: false, selectValue: 'grok-4.5' }), 'grok-4.5[1m]');
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: false, loadedModel: '' }), undefined, '不知道在跑什么就不带');
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: true, selectValue: 'haiku' }), 'grok-4.5');
+    assert.equal(resolveOutgoingModel({ ...base, running: false, picked: false, selectValue: '' }), 'grok-4.5[1m]', '新会话：空选 = default 的 wire（§1.2 原规则）');
+  });
+
+  // 验收 O52：中途点了 haiku，胶囊显示「haiku[1m]」——后缀是在跑模型残留的，先拼后缀再查表就查不到。
+  test('pill：带后缀查不到时按原值查 wire，不显示「档位 id + 残留后缀」', () => {
+    assert.equal(resolveModelPillText({ model: 'haiku', gatewaySuffix: '[1m]', modelsList: GATEWAY_MODELS }), 'grok-4.5');
   });
 
   test('pill：有 resolved → wire；无 resolved → 原值+后缀，不得用 displayName 覆盖', () => {
@@ -163,6 +197,19 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     assert.deepEqual(levels, []);
   });
 
+  // 验收 O56（AC-07-09）：恢复历史会话时思考档此前会继承同一文件夹里「最后一个实例」的档——只在某个会话里临时
+  // 选过一次 low，之后在这个文件夹里恢复的旧会话（自己从没选过档）全都带着 --effort=low 启动。终端 claude --resume
+  // 不会拿别的会话的档。契约：会话自己存的 > CLI settings（L3）> 没指定；别的会话的档不参与。
+  test('resolveResumeEffort：会话自己存的 > CLI settings > 没指定；不继承同目录别的会话', () => {
+    const cliHigh = { effort: 'high' };
+    assert.equal(resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }), 'low', '会话自己记过就用它');
+    assert.equal(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }), 'auto', 'auto 是显式选的终值');
+    assert.equal(resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'low', cliDefaults: cliHigh }), 'high',
+      '自己没记过：用 CLI settings，不拿同目录末实例的档');
+    assert.equal(resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'low', cliDefaults: null }), null,
+      '自己没记过、settings 也没配：没指定（不带 --effort），不拿同目录末实例的档');
+  });
+
   test('resolvePanelState：镜像态整组用 CLI 观察值，禁止 Web 补空', () => {
     const panel = resolvePanelState({
       mirrorReadonly: true,
@@ -237,5 +284,43 @@ test.describe('契约 §3 Statusline：结构化对齐；ctx 不误导；折叠�
       cwd: undefined,
     });
     assert.equal(idOnly.model, 'cli-wire-only');
+  });
+});
+
+// ─── §5 工具卡：截断上限 ─────────────────────────────────────
+// 文档表写「截断 600 / Bash 2000」。live 侧按工具名取上限，历史侧原来一律 600（验收 O55：从历史打开的会话，
+// 7013 字的 Bash 输出只显示前 600 字）。两侧必须是同一份判据：同一张卡刷新前后不该变短。
+
+test.describe('契约 §5 工具卡：截断上限 live 与历史同一份（Bash 2000，其余 600）', () => {
+  test('toolResultCap：Bash 类 2000，其余 600', () => {
+    assert.equal(TOOL_SUMMARY_CAP, 600);
+    assert.equal(TOOL_SUMMARY_CAP_BASH, 2000);
+    for (const name of ['Bash', 'bash', 'run_command', 'Shell']) assert.equal(toolResultCap(name), 2000, name);
+    for (const name of ['Read', 'Grep', 'mcp__x__y', undefined]) assert.equal(toolResultCap(name), 600, String(name));
+  });
+
+  test('历史回放：Bash 输出截到 2000、Read 输出截到 600（按 tool_use 的工具名）', async t => {
+    const base = mkdtempSync(join(tmpdir(), 'ccm-dc-tool-cap-'));
+    t.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+    const cwd = '/test/tool-cap';
+    const dir = join(base, getProjectDir(cwd));
+    mkdirSync(dir, { recursive: true });
+    const long = Array.from({ length: 300 }, (_, i) => `line ${i} ok`).join('\n'); // 带空白：纯字母数字长串会被当 base64 脱敏
+    const entries = [
+      { type: 'assistant', uuid: 'a1', timestamp: 't0', message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'tu-bash', name: 'Bash', input: { command: 'cat big.log' } },
+        { type: 'tool_use', id: 'tu-read', name: 'Read', input: { file_path: 'big.txt' } },
+      ] } },
+      { type: 'user', uuid: 'u1', timestamp: 't1', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'tu-bash', content: long },
+        { type: 'tool_result', tool_use_id: 'tu-read', content: long },
+      ] } },
+    ];
+    writeFileSync(join(dir, 's1.jsonl'), entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+    const msgs = await getSessionHistory('s1', cwd, 50, { baseDir: base });
+    const out = id => msgs.find(m => m.kind === 'tool_result' && m.toolUseId === id).outputSummary;
+    assert.ok(long.length > 2000);
+    assert.equal(out('tu-bash'), long.slice(0, 2000) + ' …（已截断）');
+    assert.equal(out('tu-read'), long.slice(0, 600) + ' …（已截断）');
   });
 });

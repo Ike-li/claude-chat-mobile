@@ -96,6 +96,9 @@ export function sanitizeName(name) {
   return safe || 'file';
 }
 
+// 超限时显示的大小向上取整到 0.1MB：四舍五入会把 10MiB+1 字节写成「10.0MB」，和上限一样，读起来像没超也被拒（验收 O69）
+const overMb = bytes => (Math.ceil(bytes / 104857.6) / 10).toFixed(1);
+
 // 纯校验（零 IO，便于 smoke 单元）：返回错误字符串或 null（null=通过；空数组也返回 null，表示「无附件」）。
 export function validateAttachments(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return null;
@@ -105,7 +108,7 @@ export function validateAttachments(attachments) {
     if (!a || typeof a.data !== 'string' || !a.data) return '附件缺少数据';
     if (typeof a.name !== 'string' || typeof a.mimeType !== 'string') return '附件缺少 name/mimeType';
     const bytes = Buffer.byteLength(a.data, 'base64');
-    if (bytes > MAX_FILE_BYTES) return `附件「${a.name}」过大（${(bytes / 1048576).toFixed(1)}MB，单文件上限 ${mb(MAX_FILE_BYTES)}）`;
+    if (bytes > MAX_FILE_BYTES) return `附件「${a.name}」过大（${overMb(bytes)}MB，单文件上限 ${mb(MAX_FILE_BYTES)}）`;
     total += bytes;
     // FILES-4：thumb 进 ring buffer + 广播，须有服务端上限（前端 100k 自限不可信）
     if (a.thumb != null) {
@@ -115,7 +118,7 @@ export function validateAttachments(attachments) {
       }
     }
   }
-  if (total > MAX_TOTAL_BYTES) return `附件总量过大（${(total / 1048576).toFixed(1)}MB，上限 ${mb(MAX_TOTAL_BYTES)}）`;
+  if (total > MAX_TOTAL_BYTES) return `附件总量过大（${overMb(total)}MB，上限 ${mb(MAX_TOTAL_BYTES)}）`;
   return null;
 }
 

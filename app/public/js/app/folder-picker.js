@@ -12,7 +12,7 @@ import { folderReasonText, projectLabel, relPathUnder } from '../logic/projects.
 
 const ACK_TIMEOUT_MS = 8000;
 
-export function createFolderPicker({ $, el, socket, openSheet, closeSheet, haptic = () => {}, getProjects, getScratchRoot, onPick }) {
+export function createFolderPicker({ $, el, socket, openSheet, closeSheet, haptic = () => {}, getProjects, getScratchRoot, getFoldersReadonly = () => null, onPick }) {
   const modal = $('folderPickerModal');
   const body = $('folderPickerBody');
   const title = $('folderPickerTitle');
@@ -134,7 +134,15 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
     const blocked = purpose === 'add' && r.reason && r.reason !== 'already_connected';
     const start = purpose === 'add' ? () => add(r.path) : () => pick(absOf(r.path));
     actions.appendChild(actionButton(t('在这里开始会话'), 'folder-picker-start-here', blocked ? null : start));
-    actions.appendChild(actionButton(t('新建文件夹'), 'folder-picker-mkdir', () => showMkdir(purpose, r.path)));
+    // 手机上改不了清单时（广播里的 foldersReadonly），家目录里新建的接下来加不进去，只会留一个空目录（验收 O41）：
+    // 不给这个按钮，先说清为什么。挑子文件夹时照常给——那是建在已连接的文件夹里，不用写清单。
+    const readonly = purpose === 'add' ? getFoldersReadonly() : null;
+    if (!readonly) actions.appendChild(actionButton(t('新建文件夹'), 'folder-picker-mkdir', () => showMkdir(purpose, r.path)));
+    if (readonly) {
+      const why = el('<div class="w-full text-[11px] text-ink-faint" data-testid="folder-picker-readonly"></div>');
+      why.textContent = folderReasonText(readonly);
+      actions.appendChild(why);
+    }
     if (purpose === 'add' && r.reason) {
       const why = el('<div class="w-full text-[11px] text-ink-faint" data-testid="folder-picker-here-reason"></div>');
       why.textContent = folderReasonText(r.reason);

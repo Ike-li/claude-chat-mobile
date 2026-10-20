@@ -263,4 +263,89 @@ test.describe('config:refresh 在有活跃实例时（2026-09-15 真机 bug）',
       client.disconnect();
     }
   });
+
+  // 验收 O85（AC-05-09）：改名后点 ↻ 能读进新名；可把 settings 还原回去再点 ↻（甚至刷新整页），清单仍停在
+  // 改过的那个名字，只有重启 server 才恢复。接着上一条：此刻清单是 gw-new-model，把配置改回 gw-old-model。
+  test('改回原值再刷新，清单也跟着改回（不只认新出现的名字）', async () => {
+    const client = createClient(refreshPort);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+      writeLocalSettings(workdir, settingsWithGateway('gw-old-model'));
+      client.clearEvents();
+      const ack = await client.emitAck('config:refresh', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+      const reverted = await client.waitForEvent('models', e => hasModel(e, 'gw-old-model'), 25000);
+      assert.ok(hasModel(reverted, 'gw-old-model'));
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+// ——— 验收 O85（AC-05-09）：刷新之前就开着的会话，不得在刷新之后把旧默认模型写回去 ———
+//
+// 真机：把 opus 模型名改成 grok-4.7-acc0509 点 ↻，摘要更新；再改回 grok-4.7 点 ↻、甚至刷新整页，摘要仍停在
+// grok-4.7-acc0509，只有重启 server 才恢复。服务端清单两个方向都推对了（上面那条用例），停住的是新会话页的
+// 「默认模型」（instances.defaultModel ← defaultModelByCwd）：↻ 把它清空之后，改名期间开的那个会话还活着，
+// 它下一轮的 system/init 报的仍是它 spawn 时的模型名——CLI 每轮都吐 init，server 每次都当成「本目录的默认模型」
+// 记回去。整页刷新救不了（状态在 server），只有重启把那个实例杀掉才恢复。
+// 活跃会话照旧用它 spawn 时那套配置（终端等价性），这没错；错的是把它的报告当成「现在新开会话会用什么」。
+test.describe('config:refresh 之后，旧配置下开的会话不再改写默认模型', () => {
+  let proc, port2, workdir, dataDir2;
+  const settingsWith = model => ({ permissions: { defaultMode: 'default' }, env: { ANTHROPIC_DEFAULT_OPUS_MODEL: model } });
+
+  test.before(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'ccm-refresh-default-wd-'));
+    dataDir2 = mkdtempSync(join(tmpdir(), 'ccm-refresh-default-data-'));
+    writeLocalSettings(workdir, settingsWith('gw-renamed'));
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIR: workdir,
+      CCM_DATA_DIR: dataDir2,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'turn',
+      CCM_FAKE_CLAUDE_INIT_EACH_TURN: '1',
+      IDLE_TIMEOUT_MS: '120000',
+    });
+    proc = started.proc;
+    port2 = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [workdir, dataDir2]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('改回配置并 ↻ 后，旧会话的下一轮不会把旧模型名写回「默认模型」', async () => {
+    const client = createClient(port2);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+
+      // ① 改名期间开的新会话：首轮 init 报 gw-renamed，记成本目录默认模型——此刻是对的
+      client.socket.emit('user:message', { text: 'first', clientMessageId: 'o85-1' });
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('instances', e => e.payload?.defaultModel === 'gw-renamed', 10000);
+
+      // ② 改回配置、点 ↻：默认模型应被清掉
+      writeLocalSettings(workdir, settingsWith('gw-original'));
+      client.clearEvents();
+      const ack = await client.emitAck('config:refresh', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+      await client.waitForEvent('instances', e => e.payload?.defaultModel == null, 10000);
+
+      // ③ 旧会话再跑一轮：它的 init 仍报 gw-renamed（spawn 时的配置），这不该再写回默认模型
+      client.clearEvents();
+      client.socket.emit('user:message', { text: 'second', clientMessageId: 'o85-2' });
+      await client.waitForEvent('result', null, 20000);
+      await sleep(300);
+      const stale = client.events.filter(e => e.type === 'instances' && e.payload?.defaultModel === 'gw-renamed');
+      assert.equal(stale.length, 0, '旧配置下开的会话不能把 ↻ 清掉的默认模型写回去');
+    } finally {
+      client.disconnect();
+    }
+  });
 });

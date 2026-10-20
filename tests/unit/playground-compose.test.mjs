@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { SPAWN_ENV_BLOCKLIST } from '../helpers/spawn-env.mjs';
 import { classifyRepositoryPath } from '../../tests/gates/repo-inventory.js';
+import { parseServices } from '../../tests/gates/check-container-config-isolation.js';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const PLAYGROUND_TOKEN = 'playground-local-not-a-secret';
@@ -134,6 +135,25 @@ test('test compose 仍不发端口，并与 playground 共享 claude-chat-mobile
   // 其它项目的构建覆盖，而 compose run 见镜像已存在就直接用 → 测试静默跑在别人的 node_modules 上。
   assert.match(yaml, /image:\s*claude-chat-mobile-test:local/);
   assert.doesNotMatch(yaml, /^\s+ports:/m);
+});
+
+// tests/acceptance/local/ 装着机主的验收配置与网关凭据（被 .gitignore 挡在仓库外，宿主机工作树里却在）。
+// 两份 compose 都会把宿主机的 tests/ 整棵带进容器：test/mutate 用 tar 复制进 /work，playground 直接挂 ../../tests。
+// test/mutate 这边守的只是「不复制进 /work」：仓库根整棵以 /repo 只读挂载，/repo/tests/acceptance/local 在容器里
+// 仍然读得到。这与 ccm.config.json 现有的处理是同一个模型——/repo 里那份生产配置也读得到，tar 之后只把 /work
+// 里的副本清空；测试跑在 /work、不去读 /repo。playground 那边是匿名卷盖住，容器里看不见。
+test('验收套件的本机目录不复制进 /work：tar 排除它；挂 tests/ 的 playground 服务用匿名卷盖住它', () => {
+  const tarLines = read(TEST_COMPOSE).split('\n').filter(line => /\btar -C \/repo -cf\b/.test(line));
+  assert.equal(tarLines.length, 2, 'test compose 应有 test 与 mutate 两处 tar 复制；数目变了这条判据要跟着改');
+  for (const line of tarLines) {
+    assert.match(line, /--exclude=\.\/tests\/acceptance\/local(?=\s)/, `tar 会把本机凭据复制进容器层：${line.trim()}`);
+  }
+
+  const mounting = [...parseServices(read(COMPOSE))].filter(([, { volumes }]) => volumes.includes('../../tests:/app/tests'));
+  assert.ok(mounting.length > 0, '没有服务挂 ../../tests 了——这条判据在空转，跟着改');
+  for (const [name, { volumes }] of mounting) {
+    assert.ok(volumes.includes('/app/tests/acceptance/local'), `${name} 挂了 ../../tests 却没盖住 /app/tests/acceptance/local`);
+  }
 });
 
 // `npm run docker:build` 是 `compose build`，只构建带 build 段的服务。4f0062f9 改挂载方式时连带删了这一段，
