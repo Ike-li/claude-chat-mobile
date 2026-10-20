@@ -28,6 +28,9 @@
 //   turn-screenshot → 同 turn，但回答前先吐一次截图工具调用：assistant tool_use 与一条带 png 图片块的
 //             user tool_result（形态照真 CLI 落盘的 API 形态）。live 截图只存在实例内存里、本文件又不落
 //             transcript，所以「图从内存取到了」可以被单独观察到。
+//   turn-local-command → 同 turn，但不吐助手正文，改吐一条本地 slash 命令的输出（system/local_command_output，
+//             content 带 <local-command-stdout> 包装，形态照 sdk.d.ts SDKLocalCommandOutputMessage）再收尾——
+//             /context、/cost 这类命令在 CLI 本地算完、不经模型。
 //   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
@@ -64,6 +67,10 @@ const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
 // filterSafeResolvedEnv 只放行 ANTHROPIC_/CLAUDE_CODE_ 前缀，别的名字根本进不到子进程。
 // 不置位时 response 仍是 {}，既有 S2 与集成用例建在其上的前提逐字不变（同本文件「显式 opt-in」原则）。
 const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
+// 真 CLI 在 stream-json 输入模式下每一轮都先吐一条 system/init，model 是这次 spawn 解析出的真实模型名。
+// 显式 opt-in（CCM_FAKE_CLAUDE_INIT_EACH_TURN=1）才这样做：init 每轮都吐、model 回显 GATEWAY_MODEL；
+// 不置位时仍只吐一次、model 恒为 'fake-claude'，既有用例的前提逐字不变。
+const INIT_EACH_TURN = process.env.CCM_FAKE_CLAUDE_INIT_EACH_TURN === '1';
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -96,7 +103,7 @@ rl.on('line', (line) => {
 
   if (msg.type !== 'user') return;
 
-  if (!announcedInit) {
+  if (!announcedInit || INIT_EACH_TURN) {
     announcedInit = true;
     out({
       type: 'system',
@@ -105,12 +112,12 @@ rl.on('line', (line) => {
       uuid: randomUUID(),
       cwd: process.cwd(),
       tools: [],
-      model: 'fake-claude',
+      model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
       permissionMode: 'default',
     });
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
@@ -137,13 +144,23 @@ function finishTurn(msg) {
     });
   }
 
-  out({
-    type: 'assistant',
-    session_id: SESSION_ID,
-    uuid: randomUUID(),
-    parent_tool_use_id: null,
-    message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
-  });
+  if (MODE === 'turn-local-command') {
+    out({
+      type: 'system',
+      subtype: 'local_command_output',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      content: `<local-command-stdout>${REPLY}</local-command-stdout>`,
+    });
+  } else {
+    out({
+      type: 'assistant',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
+    });
+  }
   if (MODE === 'turn-bg') {
     out({
       type: 'system',

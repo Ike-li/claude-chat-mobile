@@ -391,7 +391,17 @@ export function describeRateLimitSource(source) {
 // 要么是裸 errno、要么是 'HTTP <code>'、要么是清洗过的短语，不会是长句，宽松匹配只会误伤。
 const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|network error)$/i;
 
+// 抽屉「服务」小节只要文字；判色见 formatServiceNoticeRows。
 export function formatServiceNotices({ service, now } = {}) {
+  return formatServiceNoticeRows({ service, now }).map(r => r.text);
+}
+
+// 告警行 + 判色（服务状态面板）。danger = 错过审批 / 安全事件，warning = 要留意但不是被攻击。
+// 限速锁定按来源判（验收 O23）：此前三档来源都是红色 ⛔，而措辞早已分了「多半是你自己的旧 token」
+// 与「在暴力尝试你的入口」——把自己手滑讲成红色安全告警，真出事那天它已经被当成噪音了。
+// 与安全日志 formatAuditEntry 同一判据：只有公网来源是 danger；说不清来源（旧 server 不带 source）
+// 与反代后的 127.0.0.1（无法确认是否本机）措辞本就按「可能有人」说，判色同样保守。
+export function formatServiceNoticeRows({ service, now } = {}) {
   const notices = [];
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');
   const lockout = service && service.rateLimitLockout;
@@ -415,7 +425,8 @@ export function formatServiceNotices({ service, now } = {}) {
       : src.scope === 'lan' ? `${t('——来自局域网')} ${src.addr}`
         : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
           : t('——可能有人在暴力尝试你的入口');
-    notices.push(`${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`);
+    const selfInflicted = (src.scope === 'local' && !service?.proxyFronted) || src.scope === 'lan';
+    notices.push({ text: `${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`, tone: selfInflicted ? 'warning' : 'danger' });
   }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
@@ -430,17 +441,17 @@ export function formatServiceNotices({ service, now } = {}) {
     const reasonText = reason && DELIVERY_NET_UNREACHABLE.test(reason)
       ? `${df.channel === 'ntfy' ? t('连不上 ntfy 服务') : t('连不上推送服务')}（${reason}）`
       : reason;
-    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`);
+    notices.push({ text: `${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`, tone: 'danger' });
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {
-    notices.push(`${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`);
+    notices.push({ text: `${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`, tone: 'warning' });
   }
   // 清单为空也能启动之后（SCOPE-03），「配置了却全找不到」只剩这一行能说出原因。找不到的目录不进抽屉，
   // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表。
   const missing = service && service.missingFolders;
   if (Number.isFinite(missing) && missing > 0) {
-    notices.push(t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉').replace('{n}', String(missing)));
+    notices.push({ text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉').replace('{n}', String(missing)), tone: 'warning' });
   }
   return notices;
 }

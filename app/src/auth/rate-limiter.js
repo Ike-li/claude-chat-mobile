@@ -22,11 +22,11 @@ export function freshState() {
 // verdict:'locked'，于是同一个语义错误要在三个地方分别犯一次（而修的时候容易只修到一处）。
 //
 // 返回 null = 放行；否则 { verdict, retryAfterMs }，verdict 分两种，区别不是程度而是【该对用户说什么】：
-//   'cooldown' 未达阈值的退避短锁。上一次请求真的校验了令牌并失败，这把锁只是顺带上的。
-//              此刻用户的真实处境仍然是「令牌不对」——说成「尝试过多」会把行动指引从「重输令牌」
-//              错换成「等一下」。生产实测：只失败 1 次的用户被告知「登录尝试过多，请 1 秒后再试」
-//              （2026-09-02，本机 127.0.0.1，前端 pageshow 的 200ms 重连撞进 500ms 退避锁）。
-//   'locked'   failCount 已达阈值的长锁。这才是真·尝试过多，也只有它配得上 429 + Retry-After。
+//   'cooldown' 未达阈值的退避短锁。上一次请求真的校验了令牌并失败，这把锁只是顺带上的；这一次的令牌
+//              根本没校验。说成「尝试过多」是反话——生产实测：只失败 1 次的用户被告知「登录尝试过多，
+//              请 1 秒后再试」（2026-09-02，本机 127.0.0.1，前端 pageshow 的 200ms 重连撞进 500ms 退避锁）；
+//              说成「令牌不对」同样是反话——这一次可能带的就是正确令牌（验收 O83）。所以单独一档，见 authRejection。
+//   'locked'   failCount 已达阈值的长锁。这才是真·尝试过多。
 export function gateCheck(s, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
   const state = s || freshState();
   if (now >= state.lockUntil) return null;
@@ -143,19 +143,24 @@ export function ipRateBucket(ip) {
 // 表现出来就是同一个来源、同一次失败，手机上看到的是「令牌不对」，curl 看到的是「被限速了，
 // 15 分钟后再来」——前者会让人反复重试，而每次重试都只是撞在锁上。
 //
-// 判据是 verdict 而不是 failCount。只有 'locked' 才是 rate_limited——本次达阈值上的长锁，或长锁
-// 期内被门拦下，两者对客户端的含义相同（现在别再试了，等这么久）。另外两种都不算：
-//   'backoff'  那一次请求真的做了 token 校验并失败了，只是顺带上了把短锁，说 rate_limited 会说反话。
-//   'cooldown' 退避短锁期内被拦。同样说反话，而且更伤——用户只错了一次，却被告知「尝试过多」，
-//              于是去等待而不是去改令牌。2026-09-02 的生产误报正是这条（见 gateCheck 头注）。
-export function authRejection({ verdict, retryAfterMs = null } = {}) {
-  if (verdict !== 'locked') {
+// 判据是 verdict 而不是 failCount，三档对客户端说三种话：
+//   'locked'   rate_limited（429 + 秒数）——本次达阈值上的长锁，或长锁期内被门拦下：现在别再试了，等这么久。
+//   'cooldown' cooldown（429 + 秒数）——退避短锁期内被拦，令牌根本没校验。此前回 401 unauthorized，
+//              带着正确令牌的请求也被告知「令牌不对」，客户端分不出是令牌失效还是被退避（验收 O83，
+//              E2 实测窗口 524–544ms）；又不能并进 rate_limited——只错一次的人会被告知「尝试过多」，
+//              于是去等 15 分钟（2026-09-02 的生产误报，见 gateCheck 头注）。客户端据此等几百毫秒自动重试。
+//   'backoff'  及其余：unauthorized（401）——那一次请求真的做了 token 校验并失败了，只是顺带上了把短锁。
+// 冷却期回 429 不泄露任何新东西：它只说明「这个来源上一次失败在 30 秒内」，发请求的人本来就知道。
+// hasCredential：这次请求带没带凭据（令牌非空，或走公网 Access）。冷却期内没带的不校验也知道没授权，照旧回 401——
+// 说「请输入令牌」是真话；回 cooldown 反倒让前端拿着空令牌「N 秒后自动重试」。锁定不分带没带。
+export function authRejection({ verdict, retryAfterMs = null, hasCredential = true } = {}) {
+  if ((verdict !== 'locked' && verdict !== 'cooldown') || (verdict === 'cooldown' && !hasCredential)) {
     // unauthorized 不带 retryAfter：给了就等于暗示「等等就能进」，而它真正的问题是令牌不对。
     return { reason: 'unauthorized', httpStatus: 401, retryAfterMs: null, retryAfterSeconds: null };
   }
   // 秒数向上取整且至少 1：Retry-After: 0 会被读成「立刻可重试」，与锁定的意思相反。
   return {
-    reason: 'rate_limited',
+    reason: verdict === 'locked' ? 'rate_limited' : 'cooldown',
     httpStatus: 429,
     retryAfterMs: retryAfterMs ?? null,
     retryAfterSeconds: Math.max(1, Math.ceil((retryAfterMs || 0) / 1000)),

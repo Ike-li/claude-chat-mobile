@@ -9,7 +9,7 @@ import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { claudeGlobalConfigPath as defaultClaudeGlobalConfigPath } from '../shared/claude-home.js';
-import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP, widgetPayload } from '../shared/tool-summary.js';
+import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP, toolResultCap, widgetPayload } from '../shared/tool-summary.js';
 import { imageRefsOf, toolImageRef, nthImageBlock, stripImageBlocks, parseImageRef } from '../shared/transcript-image.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
@@ -88,7 +88,6 @@ function formatResetClock(resetsAt) {
   return sameDay ? hhmm : `${at.getMonth() + 1}/${at.getDate()} ${hhmm}`;
 }
 
-const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
@@ -3573,12 +3572,6 @@ export class AgentSession {
       permissionMode: this.permissionMode || 'default'
     };
   }
-}
-
-function toolResultCap(name) {
-  const n = String(name || '');
-  if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
-  return TOOL_SUMMARY_CAP;
 }
 
 // 从完整 tool input 估 +/- 行（与前端 summarize 同源口径：块级行数，非精细 diff）。

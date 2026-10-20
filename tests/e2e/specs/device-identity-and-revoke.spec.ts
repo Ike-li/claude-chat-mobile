@@ -98,6 +98,33 @@ test.describe('设备身份与吊销', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O89（AC-02-24）：新部署的 Access 实例一台已信任设备都没有，整段（连同这条脚注）原来跟着空列表隐藏——
+  // 恰恰是最该看到「这张表对隧道流量失效」的时候看不到。空列表时整段照样显示，给一句空态。
+  test('CF Access bypass 生效、列表为空：整段照样显示，脚注说清这张表管不到隧道', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__access-bypass?active=1&empty=1');
+    await openGeneralSettings(page);
+
+    await expect(page.getByTestId('trusted-device-row')).toHaveCount(0);
+    const note = page.locator('#trustedDevicesNote');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('吊销对它们无效');
+    await expect(page.getByTestId('trusted-devices-empty')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('bypass 未生效、列表为空：整段不显示（没什么可说的，空框只会让人以为坏了）', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__access-bypass?active=0&empty=1');
+    await openGeneralSettings(page);
+    // 栅栏：同一面板里的本机设备卡已经画出来，说明面板渲染完了
+    await expect(page.getByTestId('device-fingerprint-full')).toBeAttached();
+    await expect(page.locator('#trustedDevicesSection')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('bypass 未生效时用常规文案（吊销确实立刻生效）', async ({ page }) => {
     await gotoMock(page);
     await openGeneralSettings(page);

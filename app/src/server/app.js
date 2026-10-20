@@ -67,6 +67,7 @@ import {
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
+import { PREAUTH_MAX_BUFFER_BYTES, grantAuthedBufferLimit } from '../auth/preauth-buffer.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
@@ -90,9 +91,9 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
-import { readTranscriptImage } from '../sessions/transcript-image-read.js';
+import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
@@ -301,8 +302,9 @@ async function sessionTitleForNotify(cwd, sessionId) {
 function emitNotify(pn, ntfyType) {
   if (!pn) return;
   pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
+  // ntfy 明文经第三方：标题只留「事件 · 项目」，不带会话标题（可能就是用户原话，验收 O33）。Web Push 端到端加密，照旧
   // pn.ntfyType：同一类事件里标签要分档的（result 的完成 / 出错 / 已中止），由 notificationForEvent 给出
-  ntfyNotify(pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
+  ntfyNotify(pn.ntfyTitle ?? pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
 }
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
@@ -753,11 +755,12 @@ registerOperationalRoutes({
 // Historical replay stays on the authenticated session:history socket event;
 // the HTTP data plane intentionally exposes no unauthenticated transcript route.
 const httpServer = createServer(app);
-// E17：maxHttpBufferSize 默认仅 1MB，会直接拒收带附件的消息。抬到 32MB——
-// 附件总量上限 20MB（解码后），base64 上线 ~1.33x ≈ 27MB + JSON 开销，32MB 留足余量。
+// 单包上限分两档（auth/preauth-buffer.js）：这里给的是鉴权前的小上限，握手鉴权通过时 grantAuthedBufferLimit
+// 再把这条连接抬到 32MB（E17：附件总量上限 20MB 解码后，base64 上线 ~1.33x ≈ 27MB + JSON 开销）。
+// 此前这里直接给 32MB，未鉴权的连接也能先塞满再被拒（验收 O84）。
 const io = new Server(httpServer, {
   perMessageDeflate: { threshold: 1024 },
-  maxHttpBufferSize: 32 * 1024 * 1024
+  maxHttpBufferSize: PREAUTH_MAX_BUFFER_BYTES,
 });
 
 // ---- 设备审批网关：socket 分组解锁/断连、待批广播、trusted-devices.json CLI 审批监听 ----
@@ -924,7 +927,7 @@ if (process.stdin.isTTY) {
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
-// message 仍是原来的字符串（'unauthorized' / 'rate_limited'），前端既有判据不受影响；
+// message 是 authRejection 的 reason（'unauthorized' / 'cooldown' / 'rate_limited'），前端按它分流；
 // 新增的 err.data 让客户端能拿到重试提示——socket.io 会把 data 原样送到客户端的
 // connect_error(err) 上，这是 socket 侧对应 HTTP `Retry-After` 头的唯一通道。
 // 此前 socket 侧一个数字都不给，手机端只能盲目重连，而每次重连都只是撞在锁上。
@@ -959,8 +962,8 @@ io.use(async (socket, next) => {
   const rlKey = rlSourceKey(socket.handshake, clientIp, rlTrust);
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
-    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
-    // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
+    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」；'cooldown' 只是上一次
+    // 令牌不对顺带上的短锁，这次的令牌没校验，回 cooldown + 秒数，前端到点自动重试（验收 O83）。
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const gated = gateCheck(st, Date.now());
@@ -968,7 +971,7 @@ io.use(async (socket, next) => {
         console.warn(gated.verdict === 'locked'
           ? `[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil(gated.retryAfterMs / 1000)}s，source=${rlKey}）`
           : `[conn] ${ip} 上次鉴权失败的退避冷却中（剩 ${gated.retryAfterMs}ms），拒握手（source=${rlKey}）`);
-        return next(rejectHandshake(gated));
+        return next(rejectHandshake({ ...gated, hasCredential: publicHost || Boolean(socket.handshake.auth?.token) }));
       }
     }
 
@@ -1031,6 +1034,9 @@ io.use(async (socket, next) => {
       // 后者会让人反复重试，而每次重试都只是撞在那把刚上的锁上。
       return next(rejectHandshake(rlResult ?? {}));
     }
+
+    // 凭据已验过：这条连接从此收得下带附件的大包（验收 O84，鉴权前只有小上限）。
+    grantAuthedBufferLimit(socket.conn);
 
     // 鉴权通过后，执行设备审批过滤（纵深防御）
     // 反代 loopback：peer=127.0.0.1 但 Host 公网 → 仍须 deviceToken（见 shouldBypassDeviceApproval）
@@ -1120,6 +1126,7 @@ const instanceManager = createInstanceManager();
 const agents = instanceManager.agents;
 const permModeByInstance = instanceManager.permissionModes;
 const effortByInstance = instanceManager.efforts;
+const effortSourceByInstance = instanceManager.effortSources;
 const doneInstances = instanceManager.done;
 const errorInstances = instanceManager.errors;
 const abortedInstances = instanceManager.aborted;
@@ -1130,7 +1137,7 @@ const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
-const inheritedEffort = instanceManager.inheritedEffort;
+const effortSourceOf = instanceManager.effortSourceOf;
 const instanceForSession = instanceManager.forSession;
 const instanceState = instanceManager.stateOf;
 // 新会话预设档（pending = L0）：session:new / 空 cwd 后 viewingInstanceId=null（懒创建无实例），
@@ -1372,6 +1379,8 @@ function instancesPayload() {
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
       effortEffective: a.effectiveEffort ?? null, // 没指定（effort=null）时 CLI 实际生效的档，只进文案
+      // 档位来源：'cli-settings' 的档照样当显式档下发，但用户没选过它，前端按「没指定」显示（O15）
+      effortSource: effortSourceOf(id),
       // 旁路提问（下一步建议 / 回来时的摘要）在本会话触发了几次。**只有次数没有金额**：
       // 那笔钱由 CLI 计入会话总成本、随 result 一起来，已经在成本行里了；单独再报一份金额
       // 只会出现两个对不上的数字。搭 instances 的便车而不新开一条入向事件——两个整数，
@@ -1429,6 +1438,7 @@ function instancesPayload() {
     });
     payload.defaultPermissionMode = fresh.mode;
     payload.defaultEffort = fresh.effort;
+    payload.defaultEffortSource = fresh.effortSource;
   }
   return payload;
 }
@@ -1742,6 +1752,12 @@ const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: st
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
+// per-cwd CLI 配置代数：确认该区配置变过（config:refresh 强制重读、scout 清单签名变了）就加一。实例构造时
+// 抄下当时的代数（resolvedEnv 也是那一刻注入的快照），之后它每轮 init 报的模型只描述它自己那套旧配置——
+// 代数对不上就不再当「本目录的默认模型」记（验收 O85）。不落盘：重启后所有实例都是新 spawn 的。
+const cliConfigGenByCwd = new Map();
+const cliConfigGen = cwd => cliConfigGenByCwd.get(cwd) ?? 0;
+const bumpCliConfigGen = cwd => { cliConfigGenByCwd.set(cwd, cliConfigGen(cwd) + 1); };
 try {
   const c = JSON.parse(readFileSync(INIT_CACHE, 'utf8'));
   lastInit = c.init ?? null;
@@ -1769,8 +1785,12 @@ function saveInitCache() {
   catch { /* 写失败不致命：缓存仅是重启后首轮前的体验增强 */ }
 }
 // scout / fresh 首 init 采纳 cwd 默认模型（判据把 resume-no-record 排除，防污染）；变化才落盘。
-function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel }) {
+// spawnGen：实例构造时的 CLI 配置代数。CLI 每轮都吐 init，config:refresh 清掉默认模型之后，刷新前就开着的
+// 会话下一轮照样会报它 spawn 时的模型名——不拦就写回去，新会话页的摘要停在改过的旧名上，整页刷新也救不回，
+// 只有重启杀掉那个实例才恢复（验收 O85）。
+function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel, spawnGen }) {
   if (!cwd || !isCwdDefaultModel({ resumeId, pinnedModel, reportedModel })) return false;
+  if (spawnGen !== cliConfigGen(cwd)) return false;
   if (defaultModelByCwd.get(cwd) === reportedModel) return false;
   defaultModelByCwd.set(cwd, reportedModel);
   saveInitCache();
@@ -1944,10 +1964,7 @@ if (!statusOff) {
 // 不支持的平台由 sampler 内部早退（process.platform !== 'darwin'），零开销。
 // 先立刻跑一次：盘上有上一条命的快照时，这一次就能认出 server 自己的重启。
 serviceSampler.sample();
-// 非 macOS 的重启历史唯一来源：上面那条 sample() 在这些平台上直接早退，面板「重启记录」段
-// 因此一直是空的。server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
-// darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
-serviceSampler.recordSelfStart();
+// 非 macOS 的自身启动记录（serviceSampler.recordSelfStart）不在这里写，挪到 httpServer.listen 的成功回调里。
 serviceSampleInterval = setInterval(() => serviceSampler.sample(), SERVICE_SAMPLE_INTERVAL_MS);
 serviceSampleInterval.unref?.(); // 不阻止进程退出
 
@@ -1995,7 +2012,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
 // （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
-function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
+function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transcriptMode = null, transcriptModel = null }) {
   if (agents.size >= MAX_LIVE_SESSIONS) {
     // permanent：重试多少次都还是满，标不可重试，免得客户端离线队列空转（见 socket.js 负 ack）
     const err = new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
@@ -2046,16 +2063,22 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     }
   }
   let effUi;
-  if (effort !== undefined) effUi = effort;
-  else if (isFresh) {
+  let effSource;
+  if (effort !== undefined) {
+    effUi = effort;
+    effSource = effortSource; // 置换路径带着原实例的来源；没带就是用户刚选的（见下方归一）
+  } else if (isFresh) {
     effUi = fresh.effort;
+    effSource = fresh.effortSource;
     pendingEffortByCwd.delete(routeKey);
   } else {
-    effUi = resolveResumeEffort({
+    const resumed = resolveResumeEffort({
       savedEffort: saved?.effort,
-      inheritedEffortValue: inheritedEffort(cwd),
+      savedEffortSource: saved?.effortSource,
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
+    effUi = resumed.effort;
+    effSource = resumed.source;
   }
   // resume 持久化不会保存 ultracode（CLI never persist）→ 规范化后 SDK effort + flag
   // FRESH pending ultracode：resolveFreshPrefs 已拆 sdk+flag；effUi 可能是 sdk 五档或仍带 ui 字面量
@@ -2065,6 +2088,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     || { ui: null, sdk: null, ultracode: false };
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
+  effortSourceByInstance.set(id, !effNorm.ui ? 'default' : (effSource ?? 'user'));
   // 模型：resume 用会话指针；FRESH 不 pin——让 CLI 按原生优先级自行解析
   // （/model > --model > ANTHROPIC_MODEL > settings.model），不再用 effective.model 覆盖。
   // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
@@ -2087,7 +2111,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // 没指定时 CLI 实际生效的档变了 → 合成一条 effort_mode 带上它（server 合成、seq 0，不进回放环）。
     onEffortEffective: effective => io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: instance.sessionId, instanceId: id, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortOf(id), effective },
+      type: 'effort_mode', payload: { level: effortOf(id), source: effortSourceOf(id), effective },
     }),
     idleTimeoutMs,
     instanceIdleReclaimMs,
@@ -2313,10 +2337,10 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, effortSource: effortSourceOf(id), permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
-      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
+      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model, spawnGen: instance.cliConfigGen });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
       // 显式广播：此前靠「init 边界的 broadcastInstances 自然带新 sid/title」搭便车，而 sessionId 现在
       // 可能远早于 init 到达（本地 slash 命令下实测早 122s，见 agent.js#_claimSessionIdEarly）。不显式推
@@ -2347,6 +2371,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
   instance.transcriptModel = transcriptModel;
   instance.routeGeneration = generation; // B1：switch 聚焦 live 可刷新
+  instance.cliConfigGen = cliConfigGen(cwd); // 与上面注入的 resolvedEnv 同一时刻的配置代数，见 recordCwdDefaultModel
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -2550,7 +2575,10 @@ function openScoutInstance(cwd) {
         // 误删只是少一行提示。取不到旧签名（首次填缓存）则跳过，"不知道"不等于"变了"。
         const prevSig = modelListSignature(modelsCache.get(cwd));
         modelsCache.set(cwd, envelope.payload);
-        if (prevSig && prevSig !== modelListSignature(envelope.payload)) defaultModelByCwd.delete(cwd);
+        if (prevSig && prevSig !== modelListSignature(envelope.payload)) {
+          defaultModelByCwd.delete(cwd);
+          bumpCliConfigGen(cwd); // 配置确实变了：此前 spawn 的实例报的是旧配置下的默认模型
+        }
         saveInitCache();
         pushModelsForCwd(cwd);
         cleanup();
@@ -2976,7 +3004,7 @@ registerSocketConnection(io, socket => {
           ack({ ok: false, error: nack.error, busy: nack.busy === true, retryable: nack.retryable, reason: nack.reason });
           return;
         }
-        const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);
+        const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId), effSource = effortSourceOf(a.instanceId);
         const disposedId = a.instanceId;
         interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
         // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
@@ -2991,7 +3019,7 @@ registerSocketConnection(io, socket => {
         // R1（2026-08-06）：与 setEffort 同款收口——silent dispose 后 viewing 是死指针，await 抛错
         // 会被 socket.js 兜底 catch 接走，下面的 claim/reselect/broadcast 全不执行、死指针永久留存。
         try {
-          a = await dedupedResume(cwd, sid, { mode, effort: eff });
+          a = await dedupedResume(cwd, sid, { mode, effort: eff, effortSource: effSource });
         } catch (err) {
           if (viewingInstanceId === disposedId) reselectViewingAfter(cwd);
           broadcastInstances();
@@ -3280,6 +3308,7 @@ registerSocketConnection(io, socket => {
     // 持久化只存 SDK effort 或 'auto'；ultracode 不落盘（CLI: interactive toggles never persist）。
     // auto 不能存成 null：null 在 resume 里是「没指定」、会往下兜底到 settings 里存的档。
     const persistedEffort = level === 'auto' ? 'auto' : sdkEffort;
+    const source = level ? 'user' : 'default'; // 用户亲手点的档
     const id = resolveInstanceId(payload?.instanceId);
     const a = agents.get(id);
     if (!a) {
@@ -3287,13 +3316,15 @@ registerSocketConnection(io, socket => {
         pendingEffortByCwd.set(viewingCwd, level);
         socket.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, instanceId: null, ts: Date.now(),
-          type: 'effort_mode', payload: { level }
+          type: 'effort_mode', payload: { level, source }
         });
         return;
       }
       return effortTo(socket);
     }
-    if (level === effortOf(id)) return; // UI 档幂等（xhigh ↔ ultracode 不同，须置换）
+    // UI 档幂等（xhigh ↔ ultracode 不同，须置换）。来源不同不算同一档：settings 来的 high 被点了一下
+    // high，是用户要把它钉成自己的选择——下面轻路径的 a.setEffort 同档直接回 ok，只改来源与落盘。
+    if (level === effortOf(id) && source === effortSourceOf(id)) return;
     // 【2026-09-09】busy 守卫下移到重路径分支（原先在此处无差别拦所有档位）。
     // 它是 7febabc（2026-07-28）加的，那时切档必然 dispose+resume，轮次进行中切会腰斩在途回合；
     // 439bb02 把具体档互切改成 apply_flag_settings 控制请求后轻路径不再置换实例，守卫对它就没了理由，
@@ -3304,9 +3335,10 @@ registerSocketConnection(io, socket => {
     if (!sid) {
       pendingEffortByCwd.set(workspaceCwdOf(cwd), level);
       effortByInstance.set(id, level);
+      effortSourceByInstance.set(id, source);
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-        type: 'effort_mode', payload: { level }
+        type: 'effort_mode', payload: { level, source }
       });
       sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
       return;
@@ -3316,11 +3348,12 @@ registerSocketConnection(io, socket => {
     const light = await a.setEffort(level);
     if (light.ok) {
       effortByInstance.set(id, level);
-      sessions.updateSessionPrefs(sid, { effort: persistedEffort });
+      effortSourceByInstance.set(id, source);
+      sessions.updateSessionPrefs(sid, { effort: persistedEffort, effortSource: source });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level}${ultracode ? ' (Settings.ultracode)' : ''}, 运行时生效（未置换实例）`);
       io.to('approved').emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
-        type: 'effort_mode', payload: { level }
+        type: 'effort_mode', payload: { level, source }
       });
       broadcastInstances();
       return;
@@ -3338,7 +3371,7 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '没指定'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
-    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort });
+    if (sid) sessions.updateSessionPrefs(sid, { effort: persistedEffort, effortSource: source });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
@@ -3346,7 +3379,7 @@ registerSocketConnection(io, socket => {
     disposeInstance(disposedId, { reselect: false });
     let ni;
     try {
-      ni = await dedupedResume(cwd, sid, { mode, effort: level });
+      ni = await dedupedResume(cwd, sid, { mode, effort: level, effortSource: source });
     } catch (err) {
       // R1（2026-08-06）：silent dispose 不 reselect，viewing 故意停在死指针上等 await 结果。
       // 这里若抛出（openInstance 的 MAX_LIVE_SESSIONS、query()/start() 同步失败），控制流会被
@@ -3369,7 +3402,7 @@ registerSocketConnection(io, socket => {
     const broadcast = resolveEffortBroadcast({ requested: level, actual: effortOf(ni.instanceId) });
     io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: ni.instanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: broadcast.level }
+      type: 'effort_mode', payload: { level: broadcast.level, source: effortSourceOf(ni.instanceId) }
     });
     if (broadcast.mismatch) {
       sysTo(socket, '思考强度切换被并发的会话操作合流，未生效，请重试', true);
@@ -4072,7 +4105,7 @@ registerSocketConnection(io, socket => {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
       return ack({ currentSessionId: null, sessions: [], pinned: [], open: [], terminalBusy: false, terminalWaiting: false,
-        hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+        hasMore: false, canLoadMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
@@ -4080,14 +4113,18 @@ registerSocketConnection(io, socket => {
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
     const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
-    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）每页 MAX_SESSION_LIMIT 条。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
     // history.js 的 SEARCH_SCAN_LIMIT 全量 readdir，不是把 RESULT 抬过 50。
     const all = obj.all === true;
-    const limit = query
-      ? SEARCH_RESULT_LIMIT
+    // 「显示全部」之后的「加载更多」（O81）：pages 按页放宽窗口，硬顶与判据见 sessionListWindow。
+    const { limit, canGrow } = sessionListWindow({
+      query,
+      all,
+      pages: obj.pages,
       // 子文件夹这类项目沿用所属连接根配的条数
-      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT));
+      configuredLimit: sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT,
+    });
     const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
       limit,
       memberOptions,
@@ -4135,7 +4172,8 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
+    // canLoadMore：窗口还能再放宽且确实还有更早的——前端据此给「加载更多」，否则回落「可用搜索查找」。
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, canLoadMore: canGrow && hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
@@ -4286,6 +4324,8 @@ registerSocketConnection(io, socket => {
     // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
     isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
+    sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
+    readTranscriptToolResult,
   });
   registerFolderSocketHandlers({
     socket,
@@ -4924,6 +4964,7 @@ registerSocketConnection(io, socket => {
       // 先清旧缓存（前端立即知道模型列表不可用），再由活跃 agent fetchModels 或 scout 补新值。
       modelsCache.delete(cwd);
       defaultModelByCwd.delete(cwd);
+      bumpCliConfigGen(cwd); // 刷新前开着的会话仍用旧配置，它们之后的 init 不再算本目录的默认模型
       saveInitCache();
       // 模型清单一律靠 scout 重新 spawn 去取，**绝不问活跃 agent**——哪怕这个 cwd 正开着会话。
       // 两个原因叠加，都不属于「缓存过期」那一类，加刷新次数、延长等待都解决不了：
@@ -5147,7 +5188,7 @@ function permModeTo(socket, id = viewingInstanceId) {
 function effortTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
-    type: 'effort_mode', payload: { level: effortOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
+    type: 'effort_mode', payload: { level: effortOf(id), source: effortSourceOf(id), effective: agents.get(id)?.effectiveEffort ?? null }
   });
 }
 
@@ -5223,6 +5264,12 @@ startApprovalRetentionSweep();
 projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
 httpServer.listen(port, host, () => {
+  // 非 macOS 的重启历史唯一来源：sample() 在这些平台上直接早退，面板「重启记录」段因此一直是空的。
+  // server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
+  // darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
+  // **必须在绑定成功之后**（验收 O18）：此前在模块求值时就写，缺令牌被拒、端口被占这类没起来的启动，
+  // 退出前已记了一条 started / restarted，面板把它们算成重启，崩溃循环告警的频率跟着虚高。
+  serviceSampler.recordSelfStart();
   // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
   // **必须放在绑定成功之后**：早于此处会给一个根本没起来的 server（如端口被占）开出窗口，
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
