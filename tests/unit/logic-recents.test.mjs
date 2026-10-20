@@ -12,6 +12,14 @@ import { mergeRecentSessionsAcrossWorkspaces, recentWorkspaceChips, summarizeRec
 // 父仓的（无 cwd 字段）与 worktree 的（自带真实 cwd）。这里原本无条件写 `cwd`（工作区那个），
 // 把后者的真实 cwd 覆盖掉——点开时按父仓去找 transcript，落到「会话不存在」页。
 // workspaceName 仍取工作区的：归属展示本来就要显示父仓，那一维没有变。
+// 验收 O42：服务端占位「(无标题)」原样透过合并，首页最近会话行在英文界面上也显示成它
+test('mergeRecentSessionsAcrossWorkspaces: 服务端占位标题换成「无标题会话」，空标题同样兜底', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    { cwd: '/repo', sessions: [{ id: 'a', title: '(无标题)', lastUsedAt: 2000 }, { id: 'b', lastUsedAt: 1000 }] },
+  ], { limit: 10 });
+  assert.deepEqual(merged.map(r => r.title), ['无标题会话', '无标题会话']);
+});
+
 test('mergeRecentSessionsAcrossWorkspaces: 会话自带 cwd 时不被工作区 cwd 覆盖', () => {
   const wt = '/repo/.claude/worktrees/feature-x';
   const merged = mergeRecentSessionsAcrossWorkspaces([
