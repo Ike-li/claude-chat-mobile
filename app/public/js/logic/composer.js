@@ -274,7 +274,7 @@ export function detectAtMentionQuery(textBeforeCursor) {
   return { query: m[1], matchStart: m.index + atIdx };
 }
 
-// 选中候选后重写输入框文本：把 [matchStart, cursorPos) 换成「相对路径 」，光标落在插入内容之后。
+// 选中候选后重写输入框文本：把 [matchStart, cursorPos) 换成「@相对路径 」，光标落在插入内容之后。
 // 尾部若已跟空白（用户在已有文字中间插入引用）则不重复补空格，避免连续两个空格。
 export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {}) {
   const text = typeof fullText === 'string' ? fullText : '';
@@ -282,7 +282,11 @@ export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {
   const cursor = Number(cursorPos) || 0;
   const before = text.slice(0, start);
   const after = text.slice(cursor);
-  const inserted = /^\s/.test(after) ? String(path) : `${path} `;
+  // 保留 @（验收 O67）：终端里选中的是「@路径」，CLI 对 @ 引用会把文件内容附进上下文；裸路径只是一段文字。
+  // 路径里有空白就加引号，否则 @ 引用会在空格处断开。
+  const p = String(path);
+  const ref = /[\s"]/.test(p) ? `@"${p}"` : `@${p}`;
+  const inserted = /^\s/.test(after) ? ref : `${ref} `;
   return { text: before + inserted + after, cursorPos: (before + inserted).length };
 }
 

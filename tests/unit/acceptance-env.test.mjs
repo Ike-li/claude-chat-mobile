@@ -149,10 +149,30 @@ test('E3 的 prepare.mjs 失败：照样删掉 write-settings 写出的凭据源
   const calls = [];
   const spawn = cmd => { calls.push(cmd); return { status: cmd === 'docker' ? 0 : 3 }; };
 
-  assert.equal(runSteps(plan, { spawn }), 3, '退出码应是 prepare.mjs 的');
+  assert.equal(runSteps(plan, { spawn, log: () => {} }), 3, '退出码应是 prepare.mjs 的');
   assert.ok(calls.includes(process.execPath), '夹具没跑到 prepare 那一步，这条在空转');
   assert.ok(!calls.includes('docker'), 'prepare 失败后不该再起 compose');
   assert.equal(existsSync(join(runDir, 'settings.source.json')), false, 'prepare 失败时网关凭据源文件被留在了运行目录里');
+});
+
+// 测试进程的 stdout 是 node:test 运行器回传结果的通道：runSteps 直接 console.log 时，
+// 打印的命令行会混进运行器的序列化消息里（Node 20 下 CI 见过一次 deserialize 失败）。
+// 输出走可注入的 log，测试里收进数组，不碰 stdout。
+test('runSteps 的回显只走注入的 log，不直接写 stdout', async t => {
+  const ws = await makeTarget();
+  t.after(() => rm(ws.root, { recursive: true, force: true }));
+  const statePath = join(ws.root, 'state.json');
+  const plan = { steps: [{ kind: 'state', path: statePath, patch: { e1: { up: true } }, label: '记下 E1 已起' }] };
+  const lines = [];
+  const writes = [];
+  const orig = process.stdout.write;
+  process.stdout.write = (chunk, ...rest) => { writes.push(String(chunk)); return orig.call(process.stdout, chunk, ...rest); };
+  try {
+    assert.equal(runSteps(plan, { log: line => lines.push(line) }), 0);
+  } finally { process.stdout.write = orig; }
+  assert.equal(writes.length, 0, `runSteps 直接写了 stdout：${JSON.stringify(writes)}`);
+  assert.equal(lines.length, 1, '每一步都应该回显一行');
+  assert.ok(existsSync(statePath), '注入 log 不该影响步骤本身的执行');
 });
 
 test('down 删掉运行目录里两份凭据（settings.source.json 与 settings.json）并清掉 state 里的 e3', async t => {

@@ -236,8 +236,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.getByRole('button', { name: '显示全部会话…' }).click();
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
-    await expect(page.getByTestId('session-remaining-hint')).toBeVisible();
-    await expect(page.getByTestId('session-remaining-hint')).toContainText('可用搜索查找');
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
 
     await openSessionByTitle(page, 'Older Migration Session');
@@ -953,6 +951,62 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // O86：注册表没有自报（终端只往 transcript 落定消息，或 CLI 版本不写 ~/.claude/sessions）时，服务端
+  // 照样能从磁盘观测到外部驾驶、给当前查看的会话上只读镜像锁。此前抽屉那一行只认注册表，被锁住的会话
+  // 和普通「已打开」长得一样，只能逐个点进去看输入框。疑似中断不补：那时没人在驾驶。
+  test('P0-11ar 镜像锁住的会话行标终端驾驶态，疑似中断与解锁后撤掉', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = sessionRowByInstance(page, 'inst_1');
+    const chip = row.locator('[data-session-status]');
+    await expect(row).toBeVisible();
+    await expect(chip).toHaveCount(0);
+
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(chip).toHaveText('终端运行中');
+
+    await page.request.post('/__mirror-state?readonly=1&waiting=1');
+    await expect(chip).toHaveText('终端需要你');
+
+    await page.request.post('/__mirror-state?readonly=1&stale=1');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /疑似中断/);
+    await expect(chip).toHaveCount(0);
+
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(chip).toHaveText('终端运行中');
+    await page.request.post('/__mirror-state?readonly=0');
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect(chip).toHaveCount(0);
+
+    // 别的会话行不受这把锁影响
+    await expect(page.locator('[data-testid="session-row"]', { hasText: 'Deleted Remote Session' }).locator('[data-session-status]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 本会话自己的自主循环（ScheduleWakeup/CronCreate）写 transcript 也会上只读镜像锁，但那时没有终端在驾驶：
+  // composer 会单独说明这个来源，抽屉行不能合成一个「终端运行中」。
+  test('P0-11as 自主循环造成的镜像锁不在抽屉行冒充终端驾驶', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = sessionRowByInstance(page, 'inst_1');
+    const chip = row.locator('[data-session-status]');
+    await expect(row).toBeVisible();
+
+    await page.request.post('/__mirror-state?readonly=1&autonomous=1');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /自主循环/);
+    await expect(chip).toHaveCount(0);
+
+    // 同一把锁换成终端驾驶时照常标出来，证明上面的 0 不是行没刷新
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(chip).toHaveText('终端运行中');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 2026-09-06：外部驾驶员不只有终端。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
   // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop 但【不写 status】。
   // 此前它和 sdk 系一起被排除在终端标注之外，桌面端会话在抽屉里【只有一个未读点】，没有任何运行标识。
@@ -1246,11 +1300,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(modal).not.toHaveClass(/sheet-open/);
   }
 
+  // P0-11aq（验收 O81）：一个文件夹超过 50 个会话时，「显示全部」只给前 50 个、更早的只能搜。
+  // 现在显示全部之后还能「加载更多」，一页页往后拉；到了服务端上限再回落成「可用搜索查找」。
+  test('P0-11aq 显示全部之后还能加载更多；到服务端上限后回落成搜索提示', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:history-overflow');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await page.getByRole('button', { name: '显示全部会话…' }).click();
+
+    const loadMore = page.getByTestId('session-load-more');
+    await expect(loadMore).toBeVisible();
+    await expect(loadMore).toContainText('还有 7 个');
+    await expect(page.getByTestId('session-remaining-hint')).toHaveCount(0);
+    await expect(page.locator('#sessionPanel')).not.toContainText('Overflow Older 1');
+
+    await loadMore.click();
+    await expect(sessionButtonByTitle(page, 'Overflow Older 1')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
+    await expect(loadMore).toHaveCount(0);
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
+    // 新拉到的更早会话接在原有行之后（时间序），不是插到前面
+    const rowIds = () => page.locator('[data-testid="session-row"]').evaluateAll(rows => rows.map(r => r.getAttribute('data-session-id')));
+    const ids = await rowIds();
+    expect(ids.indexOf('mock-session-overflow-older-1')).toBeGreaterThan(ids.indexOf('mock-session-older-migration'));
+
+    // 折叠再展开（缓存秒开 + 无条件 revalidate）：已加载的页数不能被打回第一页。缓存会先把行画出来，
+    // 只看 DOM 判不出 revalidate 带没带页数，所以直接看折叠之后发出的 session:list。
+    const listLog = async () => (await page.request.get('/__session-list-log')).json();
+    const before = (await listLog()).length;
+    await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().click();
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect.poll(async () => {
+      const sent = (await listLog()).slice(before)
+        .filter((e: { cwd: string }) => e.cwd === MAIN_WORKSPACE)
+        .map((e: { all: boolean; pages: number | null }) => `${e.all}:${e.pages}`);
+      return sent.length > 0 && sent.every((x: string) => x === 'true:2');
+    }).toBe(true);
+    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-11ao（2026-09-08）：session:list 按 limit 截断（默认 6 条），手动标「稍后再看」的会话滑出
   // 窗口就从抽屉里消失——标记还在 read-state 里，UI 上再也找不回来，而长按确认框刚承诺过
   // 「会一直显示未读，直到你再次打开它」。服务端现在把这些会话单独补回（ack 的 pinned 字段），
-  // 前端渲染成列表顶部的「稍后再看」一组。
-  test('P0-11ao 手动标记的会话被 limit 挤出本页后，仍在列表顶部「稍后再看」组里', async ({ page }) => {
+  // 前端渲染成「稍后再看」一组。验收 O81 起这一组排在本页之后（按时间它本来就更早），不再置顶。
+  test('P0-11ao 手动标记的会话被 limit 挤出本页后，仍在列表里「稍后再看」组（排在本页之后）', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:history-overflow');
     await openSessionsSidebar(page);
@@ -1274,6 +1371,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.getByTestId('session-pinned-head')).toHaveText('稍后再看');
     const pinnedRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-older-migration"]');
     await expect(pinnedRow).toBeVisible();
+    // 按时间位置：本页的行在前，「稍后再看」组（小标 + 被补回的行）在后
+    const order = await dirAfter.locator('xpath=following-sibling::*[1]').evaluate(el =>
+      [...el.querySelectorAll('[data-testid="session-row"], [data-testid="session-pinned-head"]')]
+        .map(n => (n.getAttribute('data-testid') === 'session-pinned-head' ? 'HEAD' : n.getAttribute('data-session-id'))));
+    expect(order.indexOf('HEAD')).toBeGreaterThan(order.indexOf('mock-session-visual-test'));
+    expect(order[order.indexOf('HEAD') + 1]).toBe('mock-session-older-migration');
     await expect(pinnedRow.locator('[data-testid="unread-mark"]')).toHaveText('未读');
     // 角标必须把这一行一起数进去：漏数就是反方向的同一个毛病——行亮着而角标说 0
     await expect(dirAfter.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');

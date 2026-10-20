@@ -3,7 +3,7 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatServiceNoticeRows, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
 import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
@@ -371,6 +371,27 @@ test('formatHooksBridgeRow：读不出安装态时就地说明，不整段消失
   assert.match(unknown.hint || '', /settings\.json/, '要说得出去哪儿看');
 });
 
+// 验收 AC-16-12：读不了的是安装清单时，提示却点名 settings.json，把人引去查一个好好的文件。服务端现在说清是哪个。
+test('两种桥读不出安装态：提示点名真正读不了的那个文件', () => {
+  const hooksManifest = formatHooksBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(hooksManifest.hint, /hooks-v1\/install-manifest\.json/);
+  assert.doesNotMatch(hooksManifest.hint, /settings\.json/);
+  assert.match(formatHooksBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+  const statusManifest = formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(statusManifest.hint, /statusline-v1\/install-manifest\.json/);
+  assert.doesNotMatch(statusManifest.hint, /settings\.json/);
+  assert.match(formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+});
+
+// 验收 O62：用户原本没配 statusLine 时，「开启」点了也装不上（安装脚本要求先配），可面板照给按钮。
+test('终端状态栏：用户自己没配 statusLine 时不给「开启」，说清要先配；旧 server 不带 configured 照旧给', () => {
+  const unconfigured = formatStatuslineBridgeRow({ state: 'not-installed', configured: false });
+  assert.equal(unconfigured.action, null);
+  assert.match(unconfigured.hint, /statusLine/);
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed', configured: true }).action, 'install');
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed' }).action, 'install');
+});
+
 // off 由 env 直接决定、不经读盘，是比「读不出安装态」更确定也更要紧的事实：功能整体停用时，
 // 装没装都不影响它不工作。两者同时成立时先说停用，否则用户会去修一个修好了也没用的东西。
 test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
@@ -385,6 +406,25 @@ test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
 // 这条告警在手机上无从下钻：既看不到是哪个 IP，也看不到历史上发生过几次、是不是同一个来源。
 // 本函数把一条记录译成一行人话 + severity，接线层只管渲染。
 test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
+  // 验收 O78（AC-17-02）：安全日志里新建文件夹那条显示原始事件码「folder_created · /home/…」，其余条目都是中文。
+  // 服务端写的审计 action 每一种都要有人话，不能落到兜底分支原样吐码。
+  test('文件夹、worktree、无文件夹目录这几类条目说人话，不原样吐事件码', () => {
+    const cases = [
+      [{ action: 'folder_created', target: '/home/me/code/new-proj', outcome: 'allowed' }, /^新建文件夹 · new-proj$/],
+      [{ action: 'folder_connected', target: '/home/me/code/app', outcome: 'allowed' }, /^连接文件夹 · app$/],
+      [{ action: 'folder_disconnected', target: '/home/me/code/app', outcome: 'allowed' }, /^断开文件夹 · app$/],
+      [{ action: 'worktree_create', target: '/home/me/code/app/.claude/worktrees/fix-x', outcome: 'ok', meta: { branch: 'fix-x' } }, /^新建 worktree · fix-x$/],
+      [{ action: 'worktree_create', target: '/home/me/code/app', outcome: 'failed', meta: { code: 'dirty' } }, /^新建 worktree 失败 · app · dirty$/],
+      [{ action: 'scratch_removed', target: '/tmp/ccm-scratch/abc', outcome: 'success' }, /^清理无文件夹目录 · abc$/],
+    ];
+    for (const [entry, re] of cases) {
+      const row = formatAuditEntry({ ts: 1, ...entry });
+      assert.match(row.text, re, `${entry.action}：${row.text}`);
+      assert.doesNotMatch(row.text, /[a-z]+_[a-z]+/, `${entry.action} 还露着事件码`);
+    }
+    assert.equal(formatAuditEntry({ ts: 1, action: 'worktree_create', target: '/x', outcome: 'failed', meta: { code: 'dirty' } }).severity, 'warning');
+  });
+
   test('限速锁定：来源画像决定措辞与 severity（公网才是真警报）', () => {
     const pub = formatAuditEntry({ ts: 1, action: 'auth_rate_limited', target: 'ip:203.0.113.7', outcome: 'locked', meta: { via: 'http' } });
     assert.equal(pub.text, '登录限速锁定 · 公网 203.0.113.7 · http');
@@ -524,4 +564,39 @@ test('statusline 行：配置被改动（drifted）同样不给动作，交给�
   const row = formatStatuslineBridgeRow({ state: 'drifted', off: false });
   assert.equal(row.tone, 'warn');
   assert.equal(row.action, null);
+});
+
+// 验收 O23（AC-17-03）：限速锁定的措辞早按来源分了三档（本机「多半是你自己的旧 token」、局域网、公网「在暴力尝试」），
+// 安全日志也按来源分色（公网红、本机与局域网琥珀），唯独服务状态「异常告警」那一行三档都是红色 ⛔。
+// 把自己手滑讲成红色安全告警，比不报还糟——真出事那天它已经被当成噪音了。判色与安全日志同一判据。
+test.describe('formatServiceNoticeRows：告警行判色按类别与来源', () => {
+  const now = 100 * 60_000;
+  const lockoutFrom = (source, extra = {}) => formatServiceNoticeRows({
+    service: { rateLimitLockout: { at: now - 5 * 60_000, count: 1, source }, ...extra }, now,
+  })[0];
+
+  test('本机、局域网来源的限速锁定 → warning（琥珀）', () => {
+    assert.equal(lockoutFrom('ip:127.0.0.1').tone, 'warning');
+    assert.equal(lockoutFrom('ip:192.168.1.20').tone, 'warning');
+  });
+
+  test('公网来源 → danger（红）', () => {
+    assert.equal(lockoutFrom('ip:203.0.113.7').tone, 'danger');
+  });
+
+  test('说不清来源（旧 server 不带 source）、反代后的 127.0.0.1（无法确认是否本机）→ 仍按 danger，与措辞同样保守', () => {
+    assert.equal(lockoutFrom(undefined).tone, 'danger');
+    assert.equal(lockoutFrom('ip:127.0.0.1', { proxyFronted: true }).tone, 'danger');
+  });
+
+  test('推送投递失败 → danger；前端错误、找不到文件夹 → warning；文案与 formatServiceNotices 一一对应', () => {
+    const service = {
+      deliveryFailure: { channel: 'push', at: now - 60_000, count: 1 },
+      clientError: { at: now - 60_000, count: 2 },
+      missingFolders: 1,
+    };
+    const rows = formatServiceNoticeRows({ service, now });
+    assert.deepEqual(rows.map(r => r.tone), ['danger', 'warning', 'warning']);
+    assert.deepEqual(rows.map(r => r.text), formatServiceNotices({ service, now }));
+  });
 });

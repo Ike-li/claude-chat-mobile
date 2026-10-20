@@ -54,6 +54,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O5（AC-02-06）：令牌门写着「若你刚清过浏览器数据，原先保存的令牌已被清除」，对第一次打开的人不贴切。
+  // 两种情况在浏览器里长得一模一样（什么都没存），服务端在鉴权之前也不该透露「有没有设备登录过」——
+  // 所以不去猜，说明文案同时覆盖两种。文案是静态的、与门因何打开无关（mock 不带令牌直接放行，借坏令牌把门打开）。
+  test('P0-20h 令牌门的说明不预设「你清过浏览器数据」，第一次打开的人也读得通', async ({ page }) => {
+    await page.request.post('/__reset');
+    await page.goto('/#token=bad-token');
+    const gate = page.locator('#authGate');
+    await expect(gate).toBeVisible();
+    await expect(gate).toContainText('第一次打开');
+    await expect(gate).not.toContainText('若你刚清过浏览器数据');
+  });
+
   test('P0-20c 鉴权失败页可打开访问帮助且不泄露令牌', async ({ page }) => {
     const consoleText: string[] = [];
     captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
@@ -100,6 +112,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(consoleText.join('\n')).not.toContain('invalid-token');
     expect(consoleText.join('\n')).not.toContain('mock-token');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O83（AC-22-09）：输错一次后紧接着输对，正确令牌撞进服务端的退避短锁（这次根本没校验）。此前服务端回
+  // unauthorized，界面说「令牌无效」，用户会怀疑自己输对的令牌；现在服务端回 cooldown + 毫秒数，前端说清在等、到点自动重试。
+  test('P0-20i 输错后紧接着输对：冷却期内不说令牌无效，到点自动重试进去', async ({ page }) => {
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
+    await page.request.post('/__reset');
+
+    await page.goto('/#token=bad-token');
+    await expect(page.locator('#authGate')).toBeVisible();
+    await expect(page.locator('#authError')).toContainText('令牌无效，请重新输入');
+
+    // 真 server 上这把短锁是上一次失败顺带上的；mock 里由用例显式上锁，窗口从这一刻算，不赌页面耗时
+    await page.request.post('/__auth-cooldown?ms=1500');
+    await page.locator('#authToken').fill('mock-token');
+    await page.locator('#authSubmit').click();
+    await expect(page.locator('#authError')).toContainText('秒后自动重试');
+    await expect(page.locator('#authError')).not.toContainText('令牌无效');
+    await expect(page.locator('#authError')).not.toContainText('尝试过多');
+
+    await expect(page.locator('#authGate')).toBeHidden({ timeout: 10_000 });
+    await waitUntilConnected(page);
+    expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBe('mock-token');
     await expectNoBrowserErrors(page);
   });
 
