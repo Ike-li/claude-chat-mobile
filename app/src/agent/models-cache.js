@@ -110,3 +110,30 @@ export function modelListSignature(payload) {
   }
   return names.length ? names.sort().join('\n') : '';
 }
+
+// 每个 cwd 的 CLI 配置代数（验收 O85）。确认该区配置变过就加一：采纳了影响默认模型的新 settings 快照、
+// ↻ 强制重读、scout 发现清单在外面变了。实例构造时抄下当时的代数，之后它每轮 init 报的模型只描述它自己
+// 那套旧配置——代数对不上就不再当「本目录的默认模型」记。不落盘：重启后所有实例都是新 spawn 的。
+//
+// 清单出处（listGen）：缓存里那份模型清单是第几代 spawn 的实例报的。scout 用它分辨清单变化有没有被解释过
+// （#260 review）：中间已经采纳新快照 / ↻ 过的，再按「清单变了」加一次代数，会把同一代 spawn 的 fresh 实例
+// 当成旧配置拒掉。没记过出处（启动时从磁盘读回的清单）按第 0 代算。cwd 数受连接清单约束，不设上限。
+export function createCliConfigGen() {
+  const genByCwd = new Map();
+  const listGenByCwd = new Map();
+  const current = cwd => genByCwd.get(cwd) ?? 0;
+  return {
+    current,
+    bump(cwd) { genByCwd.set(cwd, current(cwd) + 1); },
+    noteListGen(cwd, gen) { listGenByCwd.set(cwd, gen); },
+    listChangeUnexplained(cwd, reporterGen) { return (listGenByCwd.get(cwd) ?? 0) === reporterGen; },
+  };
+}
+
+// 采纳的 settings 快照（ensureCliDefaults 的结果）里决定「不带 --model 时 CLI 用哪个模型」的部分：
+// model、env 块（网关地址、模型别名映射）、worktree 网关隔离注入的 gatewayEnv。权限档 / 思考档不影响模型，
+// 不算进来，免得改个默认档就把默认模型作废。env 按键排序，键序不同不算变。
+export function cliDefaultsModelSignature(defaults) {
+  const sorted = obj => (obj && typeof obj === 'object' ? Object.fromEntries(Object.entries(obj).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : null);
+  return JSON.stringify([defaults?.model ?? null, sorted(defaults?.env), sorted(defaults?.gatewayEnv)]);
+}

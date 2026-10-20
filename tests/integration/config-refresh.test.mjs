@@ -349,3 +349,79 @@ test.describe('config:refresh 之后，旧配置下开的会话不再改写默�
     }
   });
 });
+
+// ——— #260 review：采纳改过的配置时当场推进代数，scout 晚到的「清单变了」不再作废当前这一代 ———
+//
+// session:new 会强制重读 settings，然后起 scout 去拿新清单；与此同时用户已经可以发首条消息，fresh 实例与 scout
+// 都按新配置 spawn。此前代数只在 scout 报「清单变了」时才加一：
+//   · 采纳了新快照的那一刻，旧配置记下的默认模型还挂着（新会话页预显一个已经不对的模型名）；
+//   · scout 晚于 fresh 实例 spawn 时，它那一下加一把同一代的 fresh 实例当成旧配置——它报的默认模型被拒，
+//     或者已经记下的被 scout 删掉，要等下一个 fresh 实例才恢复。
+test.describe('session:new 采纳改过的配置：当场作废旧默认模型，scout 不再作废当前这一代', () => {
+  let proc, port3, workdir, dataDir3;
+  const settingsWith = (model, mode) => ({ permissions: { defaultMode: mode }, env: { ANTHROPIC_DEFAULT_OPUS_MODEL: model } });
+
+  test.before(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'ccm-adopt-gen-wd-'));
+    dataDir3 = mkdtempSync(join(tmpdir(), 'ccm-adopt-gen-data-'));
+    writeLocalSettings(workdir, settingsWith('gw-a', 'default'));
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIR: workdir,
+      CCM_DATA_DIR: dataDir3,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'turn',
+      CCM_FAKE_CLAUDE_INIT_EACH_TURN: '1',
+      CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GATEWAY: '1',
+      IDLE_TIMEOUT_MS: '120000',
+    });
+    proc = started.proc;
+    port3 = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [workdir, dataDir3]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('改配置后 session:new：补广播里旧默认模型已作废；之后 fresh 实例报的新默认模型留得住', async () => {
+    const client = createClient(port3);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+
+      // ① 旧配置下开一个新会话：默认模型记成 gw-a，清单缓存也是 gw-a（scout 之后拿它比「变没变」）
+      client.socket.emit('user:message', { text: 'first', clientMessageId: 'gen-1' });
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('instances', e => e.payload?.defaultModel === 'gw-a', 10000);
+
+      // ② 终端侧改配置（模型别名 + 默认权限档；后者只用来认出强制重读之后的那次补广播）
+      writeLocalSettings(workdir, settingsWith('gw-b', 'acceptEdits'));
+      client.clearEvents();
+      const ack = await client.emitAck('session:new', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+      // 用户随即发首条消息：fresh 实例与 scout 都按新配置 spawn
+      client.socket.emit('user:message', { text: 'fresh', clientMessageId: 'gen-2' });
+
+      // ③ 强制重读之后的补广播：与 scout 的 spawn 在同一段同步代码里，scout 还来不及回报。
+      //    采纳了新快照就该当场作废 gw-a——它描述的是已经不在了的那套配置。
+      const adopted = await client.waitForEvent('instances', e => e.payload?.defaultPermissionMode === 'acceptEdits', 10000);
+      assert.notEqual(adopted.payload.defaultModel, 'gw-a', '采纳新配置后，旧配置记下的默认模型不能还挂在新会话页上');
+
+      // ④ scout 报新清单（gw-b）之后，fresh 实例报的 gw-b 必须留得住
+      await client.waitForEvent('models', e => hasModel(e, 'gw-b'), 20000);
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('instances', e => e.payload?.defaultModel === 'gw-b', 10000);
+      client.clearEvents();
+      client.socket.emit('user:message', { text: 'again', clientMessageId: 'gen-3' });
+      await client.waitForEvent('result', null, 20000);
+      await sleep(300);
+      const cleared = client.events.filter(e => e.type === 'instances' && e.payload?.defaultModel !== 'gw-b');
+      assert.equal(cleared.length, 0, 'scout 晚到的「清单变了」不能把当前这一代记下的默认模型作废');
+    } finally {
+      client.disconnect();
+    }
+  });
+});

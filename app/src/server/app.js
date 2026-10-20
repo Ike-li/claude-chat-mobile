@@ -58,6 +58,8 @@ import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, s
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
 import {
+  cliDefaultsModelSignature,
+  createCliConfigGen,
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
@@ -1564,7 +1566,14 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
       const gw = await resolveWorktreeGatewayEnv(cwd, d.env);
       d.gatewayEnv = gw.env;
       d.gatewayEnvSettled = gw.settled;
+      const prev = cliDefaultsByCwd.get(cwd);
       cliDefaultsByCwd.set(cwd, d);
+      // 采纳了影响默认模型的新快照（换网关 / 改模型别名）：当场推进代数、作废旧配置记下的默认模型——赶在 scout 或
+      // fresh 实例按它 spawn 之前（#260 review）。等 scout 报「清单变了」再加，会把同一代 spawn 的 fresh 实例当成旧配置。
+      if (prev && cliDefaultsModelSignature(prev) !== cliDefaultsModelSignature(d)) {
+        cliConfigGen.bump(cwd);
+        if (defaultModelByCwd.delete(cwd)) saveInitCache();
+      }
       return d;
     } catch (err) {
       console.warn(`[cli-settings] resolveSettings 失败 (${cwd}):`, err?.message || err);
@@ -1752,12 +1761,8 @@ const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: st
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
-// per-cwd CLI 配置代数：确认该区配置变过（config:refresh 强制重读、scout 清单签名变了）就加一。实例构造时
-// 抄下当时的代数（resolvedEnv 也是那一刻注入的快照），之后它每轮 init 报的模型只描述它自己那套旧配置——
-// 代数对不上就不再当「本目录的默认模型」记（验收 O85）。不落盘：重启后所有实例都是新 spawn 的。
-const cliConfigGenByCwd = new Map();
-const cliConfigGen = cwd => cliConfigGenByCwd.get(cwd) ?? 0;
-const bumpCliConfigGen = cwd => { cliConfigGenByCwd.set(cwd, cliConfigGen(cwd) + 1); };
+// per-cwd CLI 配置代数与清单出处（验收 O85），语义见 models-cache.js 的 createCliConfigGen。
+const cliConfigGen = createCliConfigGen();
 try {
   const c = JSON.parse(readFileSync(INIT_CACHE, 'utf8'));
   lastInit = c.init ?? null;
@@ -1790,7 +1795,7 @@ function saveInitCache() {
 // 只有重启杀掉那个实例才恢复（验收 O85）。
 function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel, spawnGen }) {
   if (!cwd || !isCwdDefaultModel({ resumeId, pinnedModel, reportedModel })) return false;
-  if (spawnGen !== cliConfigGen(cwd)) return false;
+  if (spawnGen !== cliConfigGen.current(cwd)) return false;
   if (defaultModelByCwd.get(cwd) === reportedModel) return false;
   defaultModelByCwd.set(cwd, reportedModel);
   saveInitCache();
@@ -2135,7 +2140,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         });
         saveInitCache();
       }
-      else if (envelope.type === 'models') { modelsCache.set(drivingCwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
+      else if (envelope.type === 'models') { // 按本实例 cwd 归键，防跨工作区泄漏；出处记本实例 spawn 时的代数（见 createCliConfigGen）
+        modelsCache.set(drivingCwd, envelope.payload);
+        cliConfigGen.noteListGen(drivingCwd, instance.cliConfigGen);
+        saveInitCache();
+      }
       // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
       // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
       // 只可能来自 skill 被删这种极罕见场景，而放行空写会让「CLI 未就绪时报空」也一并冲掉好缓存，
@@ -2371,7 +2380,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
   // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
   instance.transcriptModel = transcriptModel;
   instance.routeGeneration = generation; // B1：switch 聚焦 live 可刷新
-  instance.cliConfigGen = cliConfigGen(cwd); // 与上面注入的 resolvedEnv 同一时刻的配置代数，见 recordCwdDefaultModel
+  instance.cliConfigGen = cliConfigGen.current(cwd); // 与上面注入的 resolvedEnv 同一时刻的配置代数，见 recordCwdDefaultModel
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -2558,6 +2567,7 @@ function disposeScoutFor(cwd, opts) { // config:refresh 用：清除旧 scout �
 function openScoutInstance(cwd) {
   if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
   const id = newInstanceId();
+  const spawnGen = cliConfigGen.current(cwd); // 与下面注入的 resolvedEnv 同一时刻的配置代数
   const instance = new AgentSession({
     instanceId: id, resumeId: null, cwd, claudeBin,
     model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs, instanceIdleReclaimMs: 0, approvalTtlMs,
@@ -2573,12 +2583,16 @@ function openScoutInstance(cwd) {
         // 普通实例只有 fresh 新会话才写），留着会让新会话页预显一个当前根本开不出来的模型名。
         // 方向是刻意的：宁可删成空（前端回落显示「默认」）也不显示错的——漏删给的是错误信息，
         // 误删只是少一行提示。取不到旧签名（首次填缓存）则跳过，"不知道"不等于"变了"。
+        // 缓存清单若出自更早的一代，中间已经采纳过新快照或 ↻（那里已推进代数、作废默认模型），这次变化已被解释：
+        // 再作废一次会删掉 / 拒掉同一代 fresh 实例报的、正确的默认模型（#260 review）。
         const prevSig = modelListSignature(modelsCache.get(cwd));
+        const changed = Boolean(prevSig) && prevSig !== modelListSignature(envelope.payload);
         modelsCache.set(cwd, envelope.payload);
-        if (prevSig && prevSig !== modelListSignature(envelope.payload)) {
+        if (changed && cliConfigGen.listChangeUnexplained(cwd, spawnGen)) {
           defaultModelByCwd.delete(cwd);
-          bumpCliConfigGen(cwd); // 配置确实变了：此前 spawn 的实例报的是旧配置下的默认模型
+          cliConfigGen.bump(cwd); // 配置在外面变了（CLI spawn 时自己读到的新 settings）：此前 spawn 的实例报的是旧配置下的默认模型
         }
+        cliConfigGen.noteListGen(cwd, spawnGen);
         saveInitCache();
         pushModelsForCwd(cwd);
         cleanup();
@@ -4964,7 +4978,7 @@ registerSocketConnection(io, socket => {
       // 先清旧缓存（前端立即知道模型列表不可用），再由活跃 agent fetchModels 或 scout 补新值。
       modelsCache.delete(cwd);
       defaultModelByCwd.delete(cwd);
-      bumpCliConfigGen(cwd); // 刷新前开着的会话仍用旧配置，它们之后的 init 不再算本目录的默认模型
+      cliConfigGen.bump(cwd); // 刷新前开着的会话仍用旧配置，它们之后的 init 不再算本目录的默认模型
       saveInitCache();
       // 模型清单一律靠 scout 重新 spawn 去取，**绝不问活跃 agent**——哪怕这个 cwd 正开着会话。
       // 两个原因叠加，都不属于「缓存过期」那一类，加刷新次数、延长等待都解决不了：

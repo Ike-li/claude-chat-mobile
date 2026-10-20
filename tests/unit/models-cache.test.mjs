@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  cliDefaultsModelSignature,
+  createCliConfigGen,
   createModelsCache,
   createCwdKeyedCache,
   isCwdDefaultModel,
@@ -228,5 +230,55 @@ test.describe('modelListSignature：按集合比较，供 defaultModelByCwd 失�
     }
     // 元素全是空壳时同样落空串，不能拼出一串分隔符冒充「有内容的签名」
     assert.equal(modelListSignature({ models: [{}, { value: '' }, null] }), '');
+  });
+});
+
+// 验收 O85 / #260 review：每个 cwd 的 CLI 配置代数。实例按 spawn 时的代数报默认模型；清单缓存记下出自哪一代，
+// scout 据此分辨「清单变了」是已经被采纳新快照 / ↻ 解释过的，还是配置在外面变了。
+test.describe('createCliConfigGen：配置代数与清单出处', () => {
+  test('各 cwd 从 0 起、各自前进', () => {
+    const g = createCliConfigGen();
+    assert.equal(g.current('/a'), 0);
+    g.bump('/a');
+    g.bump('/a');
+    assert.equal(g.current('/a'), 2);
+    assert.equal(g.current('/b'), 0, '别的目录不受影响');
+  });
+
+  test('缓存清单与这次报告出自同一代：清单变化没被解释过（配置在外面变了）', () => {
+    const g = createCliConfigGen();
+    g.noteListGen('/a', 0);
+    assert.equal(g.listChangeUnexplained('/a', 0), true);
+  });
+
+  test('缓存清单出自更早的一代：中间已采纳新快照或 ↻，这次变化已经解释过', () => {
+    const g = createCliConfigGen();
+    g.noteListGen('/a', 0);
+    g.bump('/a');
+    assert.equal(g.listChangeUnexplained('/a', 1), false);
+  });
+
+  test('没记过出处（启动时从磁盘读回的清单）按第 0 代算', () => {
+    const g = createCliConfigGen();
+    assert.equal(g.listChangeUnexplained('/a', 0), true);
+    assert.equal(g.listChangeUnexplained('/a', 1), false);
+  });
+});
+
+test.describe('cliDefaultsModelSignature：采纳的 settings 快照里影响默认模型的部分', () => {
+  const base = { mode: 'default', effort: null, model: undefined, env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'gw-a', ANTHROPIC_BASE_URL: 'https://gw' }, gatewayEnv: undefined };
+
+  test('改了模型别名 / 网关 / model / gatewayEnv → 签名变', () => {
+    const sig = cliDefaultsModelSignature(base);
+    assert.notEqual(cliDefaultsModelSignature({ ...base, env: { ...base.env, ANTHROPIC_DEFAULT_OPUS_MODEL: 'gw-b' } }), sig);
+    assert.notEqual(cliDefaultsModelSignature({ ...base, env: { ...base.env, ANTHROPIC_BASE_URL: 'https://other' } }), sig);
+    assert.notEqual(cliDefaultsModelSignature({ ...base, model: 'opus' }), sig);
+    assert.notEqual(cliDefaultsModelSignature({ ...base, gatewayEnv: { ANTHROPIC_BASE_URL: 'https://gw' } }), sig);
+  });
+
+  test('只改权限档 / 思考档、或 env 键的顺序不同 → 签名不变', () => {
+    const sig = cliDefaultsModelSignature(base);
+    assert.equal(cliDefaultsModelSignature({ ...base, mode: 'plan', effort: 'high' }), sig);
+    assert.equal(cliDefaultsModelSignature({ ...base, env: { ANTHROPIC_BASE_URL: 'https://gw', ANTHROPIC_DEFAULT_OPUS_MODEL: 'gw-a' } }), sig);
   });
 });

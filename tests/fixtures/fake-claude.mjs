@@ -71,6 +71,10 @@ const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
 // 显式 opt-in（CCM_FAKE_CLAUDE_INIT_EACH_TURN=1）才这样做：init 每轮都吐、model 回显 GATEWAY_MODEL；
 // 不置位时仍只吐一次、model 恒为 'fake-claude'，既有用例的前提逐字不变。
 const INIT_EACH_TURN = process.env.CCM_FAKE_CLAUDE_INIT_EACH_TURN === '1';
+// 清单元素的 value 默认恒为 'opus'（只有 displayName 跟网关走），modelListSignature 按 value 比，换网关名看不出
+// 清单变了。显式 opt-in（CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GATEWAY=1）才让 value 也取 GATEWAY_MODEL，
+// 供需要「scout 发现清单变了」那条路径的用例使用；不置位时既有用例的前提逐字不变。
+const MODEL_VALUE_FROM_GATEWAY = process.env.CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GATEWAY === '1';
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -92,7 +96,7 @@ rl.on('line', (line) => {
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
   if (msg.type === 'control_request') {
     const payload = (msg.request?.subtype === 'initialize' && GATEWAY_MODEL)
-      ? { models: [{ value: 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
+      ? { models: [{ value: MODEL_VALUE_FROM_GATEWAY ? GATEWAY_MODEL : 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }
       : {};
     out({
       type: 'control_response',
