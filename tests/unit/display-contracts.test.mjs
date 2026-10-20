@@ -27,6 +27,11 @@ import {
   buildWebStatusLine,
   buildCliStatusLine,
 } from '../../app/src/ops/statusline.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { toolResultCap, TOOL_SUMMARY_CAP, TOOL_SUMMARY_CAP_BASH } from '../../app/src/shared/tool-summary.js';
+import { getProjectDir, getSessionHistory } from '../../app/src/sessions/history.js';
 
 // ─── §1 Models ─────────────────────────────────────────────
 
@@ -265,5 +270,43 @@ test.describe('契约 §3 Statusline：结构化对齐；ctx 不误导；折叠�
       cwd: undefined,
     });
     assert.equal(idOnly.model, 'cli-wire-only');
+  });
+});
+
+// ─── §5 工具卡：截断上限 ─────────────────────────────────────
+// 文档表写「截断 600 / Bash 2000」。live 侧按工具名取上限，历史侧原来一律 600（验收 O55：从历史打开的会话，
+// 7013 字的 Bash 输出只显示前 600 字）。两侧必须是同一份判据：同一张卡刷新前后不该变短。
+
+test.describe('契约 §5 工具卡：截断上限 live 与历史同一份（Bash 2000，其余 600）', () => {
+  test('toolResultCap：Bash 类 2000，其余 600', () => {
+    assert.equal(TOOL_SUMMARY_CAP, 600);
+    assert.equal(TOOL_SUMMARY_CAP_BASH, 2000);
+    for (const name of ['Bash', 'bash', 'run_command', 'Shell']) assert.equal(toolResultCap(name), 2000, name);
+    for (const name of ['Read', 'Grep', 'mcp__x__y', undefined]) assert.equal(toolResultCap(name), 600, String(name));
+  });
+
+  test('历史回放：Bash 输出截到 2000、Read 输出截到 600（按 tool_use 的工具名）', async t => {
+    const base = mkdtempSync(join(tmpdir(), 'ccm-dc-tool-cap-'));
+    t.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+    const cwd = '/test/tool-cap';
+    const dir = join(base, getProjectDir(cwd));
+    mkdirSync(dir, { recursive: true });
+    const long = Array.from({ length: 300 }, (_, i) => `line ${i} ok`).join('\n'); // 带空白：纯字母数字长串会被当 base64 脱敏
+    const entries = [
+      { type: 'assistant', uuid: 'a1', timestamp: 't0', message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'tu-bash', name: 'Bash', input: { command: 'cat big.log' } },
+        { type: 'tool_use', id: 'tu-read', name: 'Read', input: { file_path: 'big.txt' } },
+      ] } },
+      { type: 'user', uuid: 'u1', timestamp: 't1', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'tu-bash', content: long },
+        { type: 'tool_result', tool_use_id: 'tu-read', content: long },
+      ] } },
+    ];
+    writeFileSync(join(dir, 's1.jsonl'), entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+    const msgs = await getSessionHistory('s1', cwd, 50, { baseDir: base });
+    const out = id => msgs.find(m => m.kind === 'tool_result' && m.toolUseId === id).outputSummary;
+    assert.ok(long.length > 2000);
+    assert.equal(out('tu-bash'), long.slice(0, 2000) + ' …（已截断）');
+    assert.equal(out('tu-read'), long.slice(0, 600) + ' …（已截断）');
   });
 });

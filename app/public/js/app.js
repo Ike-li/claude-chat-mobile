@@ -4,6 +4,7 @@
 import {
   esc,
   formatToolSummary,
+  toolOutputHighlightClass,
   formatToolCardTitle,
   formatTaskToolTitle,
   renderTaskToolResultText,
@@ -3084,12 +3085,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
         code.textContent = taskText ?? formatToolSummary(raw);
-        try { if (!taskText && code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+        if (!taskText && code !== out) highlightToolOutput(code);
         if (taskText) card.open = true; // 清单即结果本体，收起就白渲染了（对齐 CLI 面板可见性）
         out.classList.remove('hidden');
         // 截断时挂「展开全文」——点后走 tool:full 取 agent 缓存的完整输出
+        // 会话坐标有就带：实例内存里的全文 10 分钟过期，之后服务端回落去 transcript 取（同历史卡片）
         if (isToolSummaryTruncated(raw, { truncated: p.truncated }) && p.toolUseId) {
-          attachToolFullExpand(card, p.toolUseId);
+          attachToolFullExpand(card, p.toolUseId, ev?.sessionId && ev?.cwd ? { sessionId: ev.sessionId, cwd: ev.cwd } : null);
         }
       }
       // 截图：只带引用，卡片展开、格子进入可视区才取图。坐标取信封（发出它的那个实例与会话）
@@ -3572,8 +3574,16 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
   };
 
-  // 工具卡「展开全文」：live 路径 agent 缓存截断前全文；成功后替换 .t-out 并去掉按钮。
-  function attachToolFullExpand(card, toolUseId) {
+  // 工具输出代码块：先按内容定高亮 class（JSON 才高亮，见 toolOutputHighlightClass），再交给 hljs
+  function highlightToolOutput(code) {
+    code.className = toolOutputHighlightClass(code.textContent);
+    delete code.dataset.highlighted; // 「展开全文」换了内容要重新判，hljs 对已高亮过的元素会跳过
+    try { hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+  }
+
+  // 工具卡「展开全文」：成功后替换 .t-out 并去掉按钮。全文来源由服务端定：live 卡片先查实例内存；带上会话坐标
+  // （history = { sessionId, cwd, agentToolUseId? }）时内存没有就回落去 transcript 取——历史卡片只能走这条（验收 O55）。
+  function attachToolFullExpand(card, toolUseId, history = null) {
     if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
     // 聚合卡里 .sa-body 也带 space-y-1 且排在结果槽之前，裸 querySelector 会把「展开全文」
     // 塞进子代理流水中间。给结果槽标了 .t-full-host 的卡优先用它；通用工具卡没有这个 class，
@@ -3584,7 +3594,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = t('加载中…');
-      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId }, (err, res) => {
+      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId, ...(history || {}) }, (err, res) => {
         if (err || !res?.ok) {
           btn.textContent = err ? t('请求超时，请重试') : (res?.error || t('全文不可用'));
           btn.disabled = false;
@@ -3594,10 +3604,17 @@ import { createGateFocusController } from './app/focus-layers.js';
         const code = out?.querySelector('code') || out;
         if (code) {
           code.textContent = formatToolSummary(res.text || '');
-          try { if (code !== out) hljs.highlightElement(code); } catch { /* noop */ }
+          if (code !== out) highlightToolOutput(code);
           out?.classList.remove('hidden');
         }
-        btn.remove();
+        if (res.truncated) {
+          // 全文超过服务端上限时只回了开头：不说清楚就像已经完整了（PR #250 review）
+          const note = el(`<div class="text-ink-faint text-[11px]" data-testid="tool-full-truncated"></div>`);
+          note.textContent = `${t('全文过长，只显示了开头')}（${res.totalLength ?? '?'} ${t('字符')}）`;
+          btn.replaceWith(note);
+        } else {
+          btn.remove();
+        }
       });
     };
     host.appendChild(btn);
@@ -8726,6 +8743,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
     // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
     const imageScope = { sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId), instanceId: displayedInstanceId };
+    // 历史卡片「展开全文」的会话坐标：同图片；子代理里的卡带上那次 Agent 调用的 id，服务端到子代理文件里找
+    const histFullScope = msg => ({ sessionId: imageScope.sessionId, cwd: imageScope.cwd, agentToolUseId: msg.parentToolUseId || null });
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
     //  · 全量加载：null —— 这批就是整个会话的开头。
     //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
@@ -8908,8 +8927,10 @@ import { createGateFocusController } from './app/focus-layers.js';
           const code = orphan.querySelector('.t-out code');
           if (code) {
             code.textContent = formatToolSummary(msg.outputSummary || '');
+            code.className = toolOutputHighlightClass(code.textContent);
             codeBlocks.push(code);
           }
+          if (msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(orphan, msg.toolUseId, histFullScope(msg));
           const orphanShots = transcriptImages.render(msg.images, imageScope);
           if (orphanShots) orphan.querySelector('.t-out')?.parentElement.appendChild(orphanShots);
           appendNode(orphan, msg);
@@ -8922,9 +8943,14 @@ import { createGateFocusController } from './app/focus-layers.js';
           // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
           const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
           code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
-          if (!taskText && code !== out) codeBlocks.push(code);
+          if (!taskText && code !== out) {
+            code.className = toolOutputHighlightClass(code.textContent);
+            codeBlocks.push(code);
+          }
           if (taskText) card.open = true; // 清单即结果本体（同 live）
           out.classList.remove('hidden');
+          // 历史卡片的「展开全文」：全文只能从 transcript 取，请求带上这个会话的坐标（验收 O55）
+          if (!taskText && msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(card, msg.toolUseId, histFullScope(msg));
         }
         const shots = transcriptImages.render(msg.images, imageScope);
         if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);

@@ -85,6 +85,8 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// PR #250 review：下一次 tool:full 回「超过服务端上限、只给开头」（truncated:true）。一次性，/__reset 清。
+let toolFullTruncatedArmed = false;
 // 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
 let pushTestNtfy = null;
 // 主工作区会话列表多出一条标题是服务端占位「(无标题)」的会话（真 server 对提不出标题的会话就写这个字面量）。
@@ -266,6 +268,9 @@ let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只�
 // 新 inst_1 的 turnSeq 加一、改写 activeEpoch，下一条用例的 stream-long 当场判定「被新回合取代」而停发——
 // P0-04 间歇红的根因（2026-09-23 用 DEBUG=pw:webserver 成对跑 live-status-tail + long-stream-interrupt 实测）。
 let mockResetGeneration = 0;
+// P0-05-HIST-FULL：武装后 Timeline Session 的历史里多一对被截断的 Bash 工具卡（tl-bash-long）。一次性。
+let historyLongToolArmed = false;
+const MOCK_BUILD_LOG = Array.from({ length: 120 }, (_, i) => `Compiling module ${i}: auth\nWarning: unused variable x in line ${i}`).join('\n') + '\nBUILD DONE';
 let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
 let foregroundSyncReplayMode = false;
@@ -546,6 +551,7 @@ let mockScenarioErrors = [];
 
 function resetMockState() {
   mockResetGeneration += 1;
+  historyLongToolArmed = false;
   mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
@@ -576,6 +582,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  toolFullTruncatedArmed = false;
   pushTestNtfy = null;
   untitledSessionArmed = false;
   syncPendingSnapshot = null;
@@ -886,6 +893,11 @@ app.post('/__arm-bg-locked', (_req, res) => {
 
 // 让紧接着的一次 session:history 回失败形态 { messages: [], error }——真 server 在 jsonl 被删/改名/
 // 读坏时就是这个形状。无参，一次性消费。
+app.post('/__arm-tool-full-truncated', (_req, res) => {
+  toolFullTruncatedArmed = true;
+  res.json({ ok: true });
+});
+
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
@@ -2313,6 +2325,16 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Timeline today long-turn reply', uuid: 'a-tl-8', timestamp: iso(0, 8, 20) },
           { role: 'user', content: 'Timeline today follow-up', uuid: 'u-tl-9', timestamp: iso(0, 8, 30) }
       ];
+      if (historyLongToolArmed) {
+        historyLongToolArmed = false;
+        // 真 server 的历史摘要按工具名截断：Bash 2000 字（display-contracts §5）后接「…（已截断）」。
+        // 构建日志形态：hljs 自动识别会把它认成 yaml 上一片色（验收 O55 附带的那点）
+        const full = MOCK_BUILD_LOG;
+        timelineMessages.push(
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-bash-long', name: 'Bash', inputSummary: '{"command":"cat build.log"}', timestamp: iso(0, 8, 31) },
+          { kind: 'tool_result', role: 'user', toolUseId: 'tl-bash-long', ok: true, outputSummary: `${full.slice(0, 2000)} …（已截断）`, timestamp: iso(0, 8, 31) },
+        );
+      }
       // P0-DUP-OPT ③：武装后历史里多带一条「刚发出的那条用户消息」，对齐真 server 的写盘时序。
       if (dupOptimisticArmed) {
         timelineMessages.push({ role: 'user', content: DUP_OPTIMISTIC_CMD, uuid: 'u-dup-echo', timestamp: iso(0, 8, 35) });
@@ -3385,6 +3407,7 @@ io.on('connection', socket => {
       armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armHistoryLongTool: () => { historyLongToolArmed = true; },
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
       armOutboxPermanent: () => { outboxPermanentArmed = true; },
@@ -6158,8 +6181,18 @@ io.on('connection', socket => {
     ack({ ok: true, mediaType: hit.mediaType, data: hit.data, bytes: Buffer.from(hit.data, 'base64').length });
   });
 
-  socket.on('tool:full', ({ toolUseId } = {}, ack) => {
+  socket.on('tool:full', ({ toolUseId, sessionId, cwd } = {}, ack) => {
     if (typeof ack !== 'function') return;
+    if (toolFullTruncatedArmed) {
+      toolFullTruncatedArmed = false;
+      // 同真 server（socket-files.js）：超过 MAX_TOOL_FULL_BYTES 时只回开头，带 truncated 与原长
+      return ack({ ok: true, text: 'HEAD_OF_HUGE_OUTPUT\n'.repeat(5).trim(), truncated: true, totalLength: 700000 });
+    }
+    // 历史卡片的全文只能从 transcript 取（真 server 的实例内存里没有）：只认带会话坐标的请求
+    if (toolUseId === 'tl-bash-long') {
+      if (sessionId !== 'mock-session-timeline' || !cwd) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });
+      return ack({ ok: true, text: MOCK_BUILD_LOG });
+    }
     if (toolUseId === 't_bash') {
       return ack({ ok: true, text: '✓ All 5 visual regression unit tests passed successfully!\n(extra full lines from tool:full mock)' });
     }

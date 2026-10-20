@@ -92,7 +92,7 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
-import { readTranscriptImage } from '../sessions/transcript-image-read.js';
+import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
@@ -4286,6 +4286,8 @@ registerSocketConnection(io, socket => {
     // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
     isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
+    sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
+    readTranscriptToolResult,
   });
   registerFolderSocketHandlers({
     socket,

@@ -7,7 +7,7 @@
 // 同源的还有 -rendering（ANSI/环形缓冲）、-session（会话态聚合）、-ui-state（UI 判定）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
+import { esc, formatToolSummary, toolOutputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -540,4 +540,15 @@ test('pickPasteImageFiles: items 里混进 null/空对象时跳过而不是抛�
       { kind: 'file', type: 'image/png', getAsFile: () => img },
     ],
   }), [img]);
+});
+
+// 验收 O55 附带：工具输出原来一律交给 hljs 自动识别语言，纯文本日志常被认成 css / vbnet 上色，读起来像代码。
+// 只有能解析的 JSON（formatToolSummary 会把它展开）按 json 高亮，其余一律不高亮（hljs 认 nohighlight 跳过）。
+test('toolOutputHighlightClass：JSON 才高亮，纯文本与残缺 JSON 不高亮', () => {
+  assert.equal(toolOutputHighlightClass('{"ok":true}'), 'language-json');
+  assert.equal(toolOutputHighlightClass('  [1, 2]\n'), 'language-json');
+  assert.equal(toolOutputHighlightClass('line 1 of the build log\nDim x As Integer'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass('body { color: red }'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass('{"cut": "trunc …（已截断）'), 'nohighlight');
+  assert.equal(toolOutputHighlightClass(''), 'nohighlight');
 });
