@@ -57,6 +57,8 @@ const REGISTRY_ROW_RE = /^\|\s*`([A-Z]+(?:-[A-Z]+)*-\d+)`/gm;
 // 用例/门禁守护的编号，不该只因为这道闸自己的源码或测试夹具里出现过同名字符串就被判定
 // "仍有人提及"。
 export const SELF_FILES = new Set(['tests/gates/check-invariant-ids.js', 'tests/unit/check-invariant-ids.test.mjs']);
+// 验收套件只在机主本机跑、CI 永不执行：守护行写在那里等于没人守，不算数。
+const UNRUN_PREFIX = 'tests/acceptance/';
 
 /** 文件头部行数组里的「守护：」声明 ID 列表；没有守护行返回 null（区别于"有守护行但零 ID"）。 */
 function extractGuardIds(headLines) {
@@ -147,7 +149,7 @@ export function checkInvariantIds({ rootDir = ROOT } = {}) {
   // 这半判据的漏洞（见文件头「2026-09 收紧」注）。
   const allGuardedIds = new Set();
   for (const rel of listFiles(rootDir, CORPUS_DIR, name => /\.(mjs|ts|js)$/.test(name))) {
-    if (SELF_FILES.has(rel)) continue;
+    if (SELF_FILES.has(rel) || rel.startsWith(UNRUN_PREFIX)) continue;
     const head = readFileSync(join(rootDir, rel), 'utf8').split('\n').slice(0, HEAD_LINES);
     const ids = extractGuardIds(head);
     if (ids) for (const id of ids) allGuardedIds.add(id);

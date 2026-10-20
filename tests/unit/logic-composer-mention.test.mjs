@@ -40,21 +40,27 @@ test.describe('detectAtMentionQuery（composer @ 文件引用触发检测）', (
   });
 });
 
+// 验收 O67（AC-07-14）：此前插入的是不带 @ 的裸路径（「src/app.js 」）。终端里选中的是「@src/app.js」——CLI 对 @ 引用
+// 会把文件内容直接附进上下文，裸路径只是一段文字、要模型自己去读。现在保留 @，与终端一致。
 test.describe('applyAtMentionPick（选中候选后重写输入框文本）', () => {
-  test('替换 @query 为路径+空格，光标落在空格之后', () => {
+  test('替换 @query 为 @路径+空格，光标落在空格之后', () => {
     const r = applyAtMentionPick('hello @ap', { matchStart: 6, cursorPos: 9, path: 'src/app.js' });
-    assert.deepEqual(r, { text: 'hello src/app.js ', cursorPos: 17 });
+    assert.deepEqual(r, { text: 'hello @src/app.js ', cursorPos: 18 });
   });
   test('@ 之后还有未变动的尾部文本（已带空格）→ 不重复补空格，原样保留尾部', () => {
     const r = applyAtMentionPick('see @ap for details', { matchStart: 4, cursorPos: 7, path: 'src/app.js' });
-    assert.deepEqual(r, { text: 'see src/app.js for details', cursorPos: 14 });
+    assert.deepEqual(r, { text: 'see @src/app.js for details', cursorPos: 15 });
   });
   test('@ 之后紧跟非空白字符（罕见：光标不在真末尾且无空格分隔）→ 仍补一个空格分隔', () => {
     const r = applyAtMentionPick('see @apX', { matchStart: 4, cursorPos: 7, path: 'src/app.js' });
-    assert.deepEqual(r, { text: 'see src/app.js X', cursorPos: 15 });
+    assert.deepEqual(r, { text: 'see @src/app.js X', cursorPos: 16 });
   });
   test('行首 @query', () => {
     const r = applyAtMentionPick('@ap', { matchStart: 0, cursorPos: 3, path: 'app.js' });
-    assert.deepEqual(r, { text: 'app.js ', cursorPos: 7 });
+    assert.deepEqual(r, { text: '@app.js ', cursorPos: 8 });
+  });
+  test('路径里有空格 → 加引号 @"…"，否则 @ 引用会在空格处断开', () => {
+    const r = applyAtMentionPick('@my', { matchStart: 0, cursorPos: 3, path: 'docs/my notes.md' });
+    assert.deepEqual(r, { text: '@"docs/my notes.md" ', cursorPos: 20 });
   });
 });

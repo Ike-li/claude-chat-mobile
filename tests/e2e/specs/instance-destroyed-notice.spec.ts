@@ -154,6 +154,33 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O60 后一半：进程异常退出的提示，切走再切回就不见了，看起来像什么都没发生。重开该会话走清屏全量
+  // 重载时，历史从磁盘重画，transcript 里没有这句提示。mock 的 test:process-crash 发出带 processExited 的
+  // error、摘掉实例，并让重开后的头一次 sync:since 报磁盘 ahead，逼出这条重载路径。
+  test('P0-DESTROY-CRASH 进程异常退出后重开该会话 → 历史重画完仍看得到那条崩溃提示，且只有一条', async ({ page }) => {
+    await gotoMock(page);
+    // 用有磁盘历史的会话：重开后能看出 DOM 是从磁盘重画的，而不是 DOM 缓存原样恢复
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    await sendChatMessage(page, 'test:process-crash');
+    const crashText = 'Claude Code process terminated by signal SIGKILL';
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(destroyedSurface).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    // 走的是清屏全量重载：磁盘历史里没有崩溃前发的那条命令，DOM 缓存原样恢复的话它会一直在
+    await expect(page.locator('#messages')).not.toContainText('test:process-crash');
+    await expect(page.locator('#messages')).toContainText(crashText);
+    await expect(page.locator('#messages')).toContainText('这个会话上次异常退出');
+    await expect(page.locator('#messages [data-crash-notice]')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
@@ -166,6 +193,47 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
 
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+  // PR #245 review：崩溃过的会话重开走分块重载；渲染途中切到别的会话时，renderHistoryBubbles 为了放行历史闸
+  // 照样调 onDone，而补崩溃提示的那一步不看视图是否还在——旧会话的崩溃提示被补进新会话（并可能随之进缓存）。
+  test('P0-DESTROY-CRASH2 重开崩溃过的长会话、渲染途中切走 → 崩溃提示不跟到新会话里', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expect(page.locator('#messages')).toContainText('Long history final message marker', { timeout: 15_000 });
+    await sendChatMessage(page, 'test:process-crash');
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toBeVisible({ timeout: 10_000 });
+
+    // 分块调度改成排队不执行：渲染确定性地停在第一块之后，切走后再由用例手动把队列跑空（同 long-history-render 的 P0-LH3）。
+    // 不用定时器放慢：被打断的那一块什么时候跑、跑没跑完，就成了和用例读状态赛跑（dev 的 push CI 红过 3 次）
+    await page.evaluate(() => {
+      const w = window as unknown as { __idleQueue: IdleRequestCallback[] };
+      w.__idleQueue = [];
+      window.requestIdleCallback = ((fn: IdleRequestCallback) => w.__idleQueue.push(fn)) as typeof window.requestIdleCallback;
+    });
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0, { timeout: 10_000 });
+    // 历史已回包、分块渲染进行中：提示条在，但 frag 要画完才一次性插入，最后一条还看不到
+    // 提示文案随历史总数变（dev 上没加载全时是「仅显示最近 2000 条历史消息（共 N 条）」），只认共有的那段
+    await expect(page.locator('#messages')).toContainText('2000 条历史消息', { timeout: 10_000 });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __idleQueue: unknown[] }).__idleQueue.length), '前提：下一块已排队').toBeGreaterThan(0);
+    await expect(page.locator('#messages'), '前提：切走时渲染还没画完').not.toContainText('Long history final message marker');
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
+    // 现在才放行被打断的那一块：它发现视图已切走、调 onDone 收尾。跑到队列空为止，返回时收尾已同步做完
+    const drained = await page.evaluate(() => {
+      const q = (window as unknown as { __idleQueue: IdleRequestCallback[] }).__idleQueue;
+      let n = 0;
+      for (let fn = q.shift(); fn; fn = q.shift(), n += 1) fn({ didTimeout: true, timeRemaining: () => 0 } as IdleDeadline);
+      return n;
+    });
+    expect(drained, '前提：被打断的那一块确实跑过').toBeGreaterThan(0);
+    await expect(page.locator('#messages [data-crash-notice]'), '旧会话的崩溃提示被补进了新会话').toHaveCount(0);
+    await expect(page.locator('#messages')).not.toContainText('Claude Code process terminated by signal SIGKILL');
 
     await expectNoBrowserErrors(page);
   });

@@ -313,14 +313,21 @@ export function hooksInstalledStateMatches(settings, manifest) {
 }
 
 // 三态安装状态；任何读失败一律按 'unknown' 上报，绝不让它影响调用方主流程。
+// unreadable 说清读不了的是哪个文件（'manifest' 本产品的安装清单 / 'settings' ~/.claude/settings.json）：
+// 两个文件原来在同一个 try 里读，面板只能笼统点名 settings.json，清单坏了也把人引去查 settings（验收 AC-16-12）。
 export function readHooksInstallState({ home = homedir() } = {}) {
+  const paths = hooksPathsForHome(home);
+  let manifest;
   try {
-    const paths = hooksPathsForHome(home);
-    const manifest = readHooksManifest(paths.manifest);
-    if (!manifest) return 'not-installed';
-    return hooksInstalledStateMatches(readClaudeSettings(paths.settings), manifest) ? 'installed' : 'drifted';
+    manifest = readHooksManifest(paths.manifest);
   } catch {
-    return 'unknown';
+    return { state: 'unknown', unreadable: 'manifest' };
+  }
+  if (!manifest) return { state: 'not-installed', unreadable: null };
+  try {
+    return { state: hooksInstalledStateMatches(readClaudeSettings(paths.settings), manifest) ? 'installed' : 'drifted', unreadable: null };
+  } catch {
+    return { state: 'unknown', unreadable: 'settings' };
   }
 }
 
