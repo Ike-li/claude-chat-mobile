@@ -25,7 +25,7 @@ const mockPermFields = (name, input, cwd, at = Date.now()) => ({
 
 const PORT = process.env.PORT || 3100;
 // 用例代数随 /__reset 自增；transport 据此丢弃上一条用例里还没跑完的场景尾巴（见 transport.js caseScope）
-const { app, httpServer, io } = createMockTransport({ caseGeneration: () => mockResetGeneration });
+const { app, httpServer, io, resetAuthCooldown } = createMockTransport({ caseGeneration: () => mockResetGeneration });
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
@@ -34,6 +34,9 @@ let effortLevel = null;
 let activeModel = 'claude-3-5-sonnet';
 let pendingFreshPermissionMode;
 let pendingFreshEffortLevel;
+// 模拟 CLI settings 里存的 effortLevel（真 server 的 L3）。POST /__cli-settings-effort 设置，/__reset 清掉。
+// 与真 server 一样只影响之后的空首页默认档与新开的会话，不改已经开着的实例。
+let mockCliSettingsEffort = null;
 let pendingFreshCwd;
 
 // 真 server 下发的 `viewingCwd` 是【工作区轴】：托管 worktree 的实例归父仓
@@ -85,6 +88,8 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// PR #250 review：下一次 tool:full 回「超过服务端上限、只给开头」（truncated:true）。一次性，/__reset 清。
+let toolFullTruncatedArmed = false;
 // 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
 let pushTestNtfy = null;
 // 主工作区会话列表多出一条标题是服务端占位「(无标题)」的会话（真 server 对提不出标题的会话就写这个字面量）。
@@ -100,6 +105,9 @@ let lateClosedSessionEventsInstanceId = null;
 // 已被关闭、等着用例经 POST /__emit-late-closed-events 放出迟到事件的实例（见 session:close 处注释）。
 let pendingLateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+// O81：session:list 收到的请求（cwd/all/pages）。「加载更多」之后的 revalidate 必须沿用已加载的页数——
+// 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带页数，所以用例直接看请求。
+let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
@@ -266,6 +274,11 @@ let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只�
 // 新 inst_1 的 turnSeq 加一、改写 activeEpoch，下一条用例的 stream-long 当场判定「被新回合取代」而停发——
 // P0-04 间歇红的根因（2026-09-23 用 DEBUG=pw:webserver 成对跑 live-status-tail + long-stream-interrupt 实测）。
 let mockResetGeneration = 0;
+// 每次 user:approve 的载荷（含外发的 op）：审批卡防误触与完整性用例据此断言「批了没有、批的是什么」。
+let mockApproveLog = [];
+// P0-05-HIST-FULL：武装后 Timeline Session 的历史里多一对被截断的 Bash 工具卡（tl-bash-long）。一次性。
+let historyLongToolArmed = false;
+const MOCK_BUILD_LOG = Array.from({ length: 120 }, (_, i) => `Compiling module ${i}: auth\nWarning: unused variable x in line ${i}`).join('\n') + '\nBUILD DONE';
 let orphanReplayArmed = false;    // test:busy-orphan-replay：inst_orphan 回放 user_message+text_delta 但【缺】配对 result（模拟终止事件遗失）
 let orphanMixedArmed = false;     // test:busy-orphan-mixed：inst_orphan_mixed 回放【旧轮完整 FIFO + 当前轮 delta】，实例仍 busy
 let foregroundSyncReplayMode = false;
@@ -337,6 +350,13 @@ const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
 // 同一批后面各条还拿着旧号。终端写过盘才会置换，所以新实例的 sync:since 报磁盘 ahead，前端清屏重载，排着的气泡随之脱离 DOM。
 // 一次性：置换一次就解除。
 let outboxReplaySwapArmed = null;
+// O66（P0-02d9）：离线重放的条目每条开一轮并挂住，由用例调 /__outbox-turn-end 显式收尾——不赌时间窗口。
+// 同一批后面的条目撞上这一轮，走下面的在途轮闸被拒收；前端应排队、本轮结束后按序自动续发。
+let outboxTurnsArmed = false;
+let outboxTurnOpen = null; // { instanceId, messageId, epoch }
+let outboxTurnCount = 0;    // 每轮一个新 epoch：同 epoch 的 seq 会被前端当重放去重
+// 收到过的离线重放（fromOutbox）：在服务端侧记，不受前端传输方式（polling / websocket）影响。GET /__outbox-received
+let mockOutboxReceived = [];
 let outboxReplaySwapReloadInstanceId = null;
 // P0-DESTROY-CRASH：test:process-crash 之后，重开该会话的头一次 sync:since 报磁盘 ahead，逼出清屏全量重载
 // （真 server 重开是新实例，磁盘上多了在途那一轮）。一次性。
@@ -473,6 +493,8 @@ let mockRestarts = DEFAULT_MOCK_RESTARTS;
 // false 那一侧此前**零覆盖**——三处广播全硬编码 true，于是「本进程不是常驻托管，请到电脑上重启」
 // 这句从没被渲染过，把它删掉全套 E2E 照样绿。由 test:no-restart 场景翻转。
 let mockCanRestart = true;
+// O87：开发者模式「重启服务」被服务端拒绝（前端以为能重启、服务端判拉不起来的状态漂移）。由 /__dev-mode?deny=1 拨。
+let mockDevRestartDeny = false;
 // 工作区列表（instances 广播的 dirs）的覆盖值。null = 缺省口径：从实例 cwd 现算（沿用至今的行为）。
 // 真 server 的 dirs 来自配置（WORKDIRS），与实例 cwd 无关——实例 cwd 可以不在任何工作区之下
 // （SESSION-02 的「不属于任何工作区的活实例」），而缺省口径下 mock 永远造不出这种形态。
@@ -546,6 +568,9 @@ let mockScenarioErrors = [];
 
 function resetMockState() {
   mockResetGeneration += 1;
+  resetAuthCooldown();
+  mockApproveLog = [];
+  historyLongToolArmed = false;
   mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
@@ -560,6 +585,7 @@ function resetMockState() {
   mockMissingFolders = 0;
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
+  mockDevRestartDeny = false;
   mockImageRequests = [];
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
@@ -568,6 +594,7 @@ function resetMockState() {
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
   pendingFreshCwd = undefined;
+  mockCliSettingsEffort = null;
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
@@ -576,6 +603,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  toolFullTruncatedArmed = false;
   pushTestNtfy = null;
   untitledSessionArmed = false;
   syncPendingSnapshot = null;
@@ -585,6 +613,7 @@ function resetMockState() {
   lateClosedSessionEventsInstanceId = null;
   pendingLateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  mockSessionListLog = [];
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
@@ -647,6 +676,10 @@ function resetMockState() {
   outboxReplaySwapDeliveredText = null;
   outboxReplaySwapHistoryFirst = false;
   outboxReplaySwapHeldRefusal = null;
+  outboxTurnsArmed = false;
+  outboxTurnOpen = null;
+  outboxTurnCount = 0;
+  mockOutboxReceived = [];
   outboxReplaySwapEchoFirst = false;
   outboxReplaySwapEcho = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
@@ -671,13 +704,20 @@ function pendingFreshPermissionOrDefault() {
 }
 
 function pendingFreshEffortOrDefault() {
-  return pendingFreshEffortLevel === undefined ? null : pendingFreshEffortLevel;
+  return pendingFreshEffortLevel === undefined ? mockCliSettingsEffort : pendingFreshEffortLevel;
+}
+
+// 与真 server 的 resolveFreshPrefs.effortSource 同义：空首页选过的是 user，没选过而 settings 有档是 cli-settings
+function pendingFreshEffortSource() {
+  if (!pendingFreshEffortOrDefault()) return 'default';
+  return pendingFreshEffortLevel === undefined ? 'cli-settings' : 'user';
 }
 
 function consumeFreshPrefs() {
   const prefs = {
     permissionMode: pendingFreshPermissionOrDefault(),
-    effort: pendingFreshEffortOrDefault()
+    effort: pendingFreshEffortOrDefault(),
+    effortSource: pendingFreshEffortSource()
   };
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
@@ -750,6 +790,7 @@ function openFreshMockInstance(requestedModel) {
       state: 'busy',
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
+      effortSource: freshPrefs.effortSource,
       model: freshModel
     };
     mockInstances.push(freshInst);
@@ -761,6 +802,7 @@ function openFreshMockInstance(requestedModel) {
       cwd: drivingCwd,
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
+      effortSource: freshPrefs.effortSource,
       model: freshModel
     });
   }
@@ -812,6 +854,8 @@ function emitTrustedDevices() {
   });
 }
 
+app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
+
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
@@ -821,9 +865,11 @@ app.get('/__scenario-errors', (_req, res) => {
   res.json(mockScenarioErrors);
 });
 
-// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
+// E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。empty=1 同时清空列表（新部署的 Access 实例
+// 一台已信任设备都没有，验收 O89）。
 app.post('/__access-bypass', (req, res) => {
   accessBypassActive = req.query?.active === '1';
+  if (req.query?.empty === '1') trustedDevices = [];
   emitTrustedDevices();
   res.json({ ok: true, accessBypassActive });
 });
@@ -843,6 +889,10 @@ app.post('/__arm-no-models', (_req, res) => {
 // read:sync 的 ack，但前端 socket 不挂在 window 上，从测试里发不出去。
 app.get('/__read-state', (_req, res) => {
   res.json(readStateSnapshot());
+});
+
+app.get('/__outbox-received', (_req, res) => {
+  res.json(mockOutboxReceived);
 });
 
 app.get('/__image-requests', (_req, res) => {
@@ -886,6 +936,11 @@ app.post('/__arm-bg-locked', (_req, res) => {
 
 // 让紧接着的一次 session:history 回失败形态 { messages: [], error }——真 server 在 jsonl 被删/改名/
 // 读坏时就是这个形状。无参，一次性消费。
+app.post('/__arm-tool-full-truncated', (_req, res) => {
+  toolFullTruncatedArmed = true;
+  res.json({ ok: true });
+});
+
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
@@ -914,6 +969,45 @@ app.post('/__arm-untitled-session', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+// O66：结束 test:arm-outbox-turns 挂住的那一轮（result + turnRunning:false 的 instances 广播）。
+app.post('/__outbox-turn-end', (_req, res) => {
+  const open = outboxTurnOpen;
+  outboxTurnOpen = null;
+  const inst = open ? mockInstances.find(i => i.instanceId === open.instanceId) : null;
+  if (inst) {
+    inst.state = 'idle';
+    inst.turnRunning = false;
+    io.emit('agent:event', {
+      seq: 2, epoch: open.epoch, sessionId: inst.sessionId ?? null, instanceId: inst.instanceId, ts: Date.now(),
+      type: 'result', payload: { messageId: open.messageId, durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(inst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+    });
+  }
+  res.json({ ok: true, ended: Boolean(inst) });
+});
+app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
+// O87：推一帧带 devMode:true 的 instances，让「⚙ 服务与配置」里的「重启服务」按钮出现。canRestart=0 模拟
+// 前台 npm start（拉不起来）；deny=1 让 dev:restart 回 ok:false，而广播仍说能重启。
+app.post('/__dev-mode', (req, res) => {
+  mockCanRestart = req.query?.canRestart !== '0';
+  mockDevRestartDeny = req.query?.deny === '1';
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart, devMode: true,
+      viewingInstanceId,
+      // 同连接首帧：首页（viewing=null）也带工作区 cwd。给 null 会让下一帧看起来「换了工作区」而重渲空态，
+      // 把「撤掉重启条后主区空白」掩盖掉。
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true });
+});
+
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
@@ -957,12 +1051,20 @@ app.post('/__arm-no-session-id', (_req, res) => {
 // 的 test:mirror）。body: { readonly, stale, withResult }——withResult 时补一条 result 让 waitForIdle 收口。
 // 逐条写成字面量、type 不走变量：agent-event-contract 的扫描器是静态的，把 type 收进辅助函数的形参
 // 会让它报 dynamic_type。
+// O15：模拟 CLI settings 里存了 effortLevel（走 query，理由同下面 /__mirror-state）
+app.post('/__cli-settings-effort', (req, res) => {
+  mockCliSettingsEffort = req.query?.level || null;
+  res.json({ ok: true });
+});
+
 app.post('/__mirror-state', (req, res) => {
   // 走 query 不走 body：本 mock 没装 express.json()，既有 __ 端点（__access-bypass /
   // __arm-read-elsewhere）也都读 req.query。用 body 会静默拿到 undefined 再落到默认值上——
   // 端点照样回 200，事件却发的是上一态，症状是断言等一个永远不来的状态（本次就踩了一遍）。
   const readonly = req.query?.readonly !== '0';
   const stale = req.query?.stale === '1';
+  const waiting = req.query?.waiting === '1'; // 终端卡在对话框上等人（注册表 status:"waiting"）
+  const autonomous = req.query?.autonomous === '1'; // 本会话自己被 ScheduleWakeup/CronCreate 唤起写 transcript
   const withResult = req.query?.withResult === '1';
   // 观测到的 CLI 设置：model=<名> 给出在跑模型；observed=empty 表示观测到了、但不知道模型（面板说「CLI 模型未知」）
   const observedCli = typeof req.query?.model === 'string' ? { model: req.query.model }
@@ -970,7 +1072,7 @@ app.post('/__mirror-state', (req, res) => {
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, cliSeen: true, ...(observedCli ? { observedCli } : {}) },
+    payload: { readonly, stale, cliSeen: true, ...(waiting ? { waiting } : {}), ...(autonomous ? { autonomous } : {}), ...(observedCli ? { observedCli } : {}) },
   });
   if (withResult) {
     io.emit('agent:event', {
@@ -1065,6 +1167,17 @@ function emitLateClosedSessionEvents(closedInstanceId) {
     seq: 1, epoch: 'mock-epoch-current-after-closed-stale', sessionId: current.sessionId, instanceId: current.instanceId, ts: Date.now(),
     type: 'system', payload: { message: '[MOCK_INFO] Closed-session stale replay finished for current view.' }
   });
+}
+
+// O81：overflow 模式下「加载更多」第二页放出的更早会话（比 Older Migration Session 还早）。
+function overflowOlderSessions(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `mock-session-overflow-older-${i + 1}`,
+    title: `Overflow Older ${i + 1}`,
+    model: 'claude-3-5-sonnet',
+    lastUsedAt: mockListClockBase - 3_000_000 - i * 60_000,
+    entrypoint: 'sdk-ts',
+  }));
 }
 
 function mainCwdSessions() {
@@ -1264,7 +1377,11 @@ io.on('connection', socket => {
     // 4. effort_mode
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level: effortLevel, effective: mockEffortEffective(effortLevel) }
+      type: 'effort_mode', payload: {
+        level: effortLevel,
+        source: mockInstances.find(i => i.instanceId === viewingInstanceId)?.effortSource ?? null,
+        effective: mockEffortEffective(effortLevel),
+      }
     });
 
     // 5. instances
@@ -1332,7 +1449,7 @@ io.on('connection', socket => {
           ...mockDirFields(),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
         }
       });
     }
@@ -1346,10 +1463,11 @@ io.on('connection', socket => {
     if (!instanceId && viewingInstanceId === null) pendingFreshEffortLevel = level ?? null;
     const targetInstanceId = instanceId || viewingInstanceId;
     const inst = mockInstances.find(i => i.instanceId === targetInstanceId);
-    if (inst) inst.effort = level;
+    const source = level ? 'user' : 'default'; // 用户亲手点的档（同真 server 的 user:setEffort）
+    if (inst) { inst.effort = level; inst.effortSource = source; }
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level, effective: mockEffortEffective(level) }
+      type: 'effort_mode', payload: { level, source, effective: mockEffortEffective(level) }
     });
     // Broadcast instances update
     io.emit('agent:event', {
@@ -1360,7 +1478,7 @@ io.on('connection', socket => {
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-        defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+        defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
       }
     });
   });
@@ -1449,7 +1567,7 @@ io.on('connection', socket => {
           dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
-          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
         }
       });
       // 【迟到事件不在这里发，改由用例经 POST /__emit-late-closed-events 显式触发】
@@ -1518,7 +1636,7 @@ io.on('connection', socket => {
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
             instances: mockInstances, service: mockServicePayload(),
             defaultPermissionMode: pendingFreshPermissionOrDefault(),
-            defaultEffort: pendingFreshEffortOrDefault() }
+            defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource() }
         });
         // ③ 送达锚点（见 staleInstancesOnNextNew 处的注释）。
         io.emit('agent:event', {
@@ -1554,7 +1672,7 @@ io.on('connection', socket => {
         ...dirFields,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
-        defaultEffort: pendingFreshEffortOrDefault()
+        defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource()
       }
     });
     // 真 server 这条 handler 末尾有 `lastStatusLine = null; scheduleStatusRefresh()`（src/server/app.js
@@ -1597,7 +1715,7 @@ io.on('connection', socket => {
         scratchRoot: MOCK_SCRATCH_ROOT,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
-        defaultEffort: pendingFreshEffortOrDefault()
+        defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource()
       }
     });
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
@@ -1612,6 +1730,7 @@ io.on('connection', socket => {
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
+    mockSessionListLog.push({ cwd, all: all === true, pages: payload?.pages ?? null, query });
     // pinned 与 readState 一样在包装层统一注入：这个 handler 有五个以上返回分支，漏一个就会让那条
     // 路径下的「稍后再看」组凭空消失。搜索态不补（同真 server）：往结果里塞未匹配的行是污染搜索语义。
     const callback = typeof rawCallback === 'function'
@@ -1677,19 +1796,21 @@ io.on('connection', socket => {
           });
           return;
         }
-        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外会话）
-        const overflowHidden = historyOverflowMode ? 7 : 0;
-        const total = sessions.length + overflowHidden;
-        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : sessions;
-        const hasMore = historyOverflowMode
-          ? (all ? overflowHidden > 0 : true)
-          : false;
+        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外 7 个会话）。
+        // O81：显示全部的第一页可以「加载更多」（canLoadMore）；第二页（pages:2）再放出其中 4 个，并模拟
+        // 到了服务端硬顶（canLoadMore:false）——剩下 3 个只能靠搜索。按钮与提示两种收尾都覆盖到。
+        const pages = Number.isInteger(payload?.pages) && payload.pages > 1 ? payload.pages : 1;
+        const overflowExtra = historyOverflowMode && all && pages >= 2 ? overflowOlderSessions(4) : [];
+        const total = sessions.length + (historyOverflowMode ? 7 : 0);
+        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : [...sessions, ...overflowExtra];
+        const hasMore = historyOverflowMode ? visibleSessions.length < total : false;
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
           terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
           terminalWaiting: terminalWaitingArmed,
           hasMore,
+          canLoadMore: Boolean(historyOverflowMode && all && pages < 2 && hasMore),
           total,
         });
         if (terminalRefreshArmed && terminalRefreshListCount === 1) {
@@ -2316,6 +2437,16 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Timeline today long-turn reply', uuid: 'a-tl-8', timestamp: iso(0, 8, 20) },
           { role: 'user', content: 'Timeline today follow-up', uuid: 'u-tl-9', timestamp: iso(0, 8, 30) }
       ];
+      if (historyLongToolArmed) {
+        historyLongToolArmed = false;
+        // 真 server 的历史摘要按工具名截断：Bash 2000 字（display-contracts §5）后接「…（已截断）」。
+        // 构建日志形态：hljs 自动识别会把它认成 yaml 上一片色（验收 O55 附带的那点）
+        const full = MOCK_BUILD_LOG;
+        timelineMessages.push(
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-bash-long', name: 'Bash', inputSummary: '{"command":"cat build.log"}', timestamp: iso(0, 8, 31) },
+          { kind: 'tool_result', role: 'user', toolUseId: 'tl-bash-long', ok: true, outputSummary: `${full.slice(0, 2000)} …（已截断）`, timestamp: iso(0, 8, 31) },
+        );
+      }
       // P0-DUP-OPT ③：武装后历史里多带一条「刚发出的那条用户消息」，对齐真 server 的写盘时序。
       if (dupOptimisticArmed) {
         timelineMessages.push({ role: 'user', content: DUP_OPTIMISTIC_CMD, uuid: 'u-dup-echo', timestamp: iso(0, 8, 35) });
@@ -2619,9 +2750,11 @@ io.on('connection', socket => {
         { name: 'demo.js', kind: 'file', size: 48, mtime: Date.now() },
         { name: 'huge.log', kind: 'file', size: 500_000, mtime: Date.now() },
         { name: 'conflict.js', kind: 'file', size: 20, mtime: Date.now() },
+        { name: 'notes.txt', kind: 'file', size: 30, mtime: Date.now() },
+        { name: 'dense.log', kind: 'file', size: 12_000, mtime: Date.now() },
       ],
       truncated: false,
-      totalCount: 4,
+      totalCount: 6,
     });
   });
 
@@ -2654,6 +2787,16 @@ io.on('connection', socket => {
       const text = 'const x = 1;\n';
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: 'conflict-fixture-hash' });
     }
+    // O40：没有高亮 mode 的扩展名（.txt）一次性读全 + 带 contentHash → 前端照样挂 CM（行号）、给编辑。
+    if (encoding !== 'base64' && String(relPath || '') === 'notes.txt') {
+      const text = 'first line\nsecond line\nthird line\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
+    }
+    // P0-21d：换行密集的无 mode 文件（6000 行），一次性读全也不该挂 CM（viewportMargin: Infinity 会逐行建 DOM）。
+    if (encoding !== 'base64' && String(relPath || '') === 'dense.log') {
+      const text = 'x\n'.repeat(6000);
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
+    }
     // 附件不再走本通道（2026-09-06 搬家后归 attachment:read），这里不再有 .ccm-uploads 分支。
     console.log(`[mock] browse:read relPath=${relPath} offset=${offset} encoding=${encoding} 未命中 fixture`);
     return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });
@@ -2683,6 +2826,23 @@ io.on('connection', socket => {
 
   // P0-EDIT：编辑器保存。只认 demo.js，镜像真实 writeFileInScope 的 baseHash 冲突语义——
   // baseHash 不等于当前 mockHashOf(mockDemoJsContent) 即 conflict，不静默覆盖。
+  // O87：开发者模式「重启服务」。同真 server：拉不起来就回 ok:false；否则先 ack，再模拟换进程——
+  // 拨 startedAt、关掉底层连接（真 server 退出时前端看到的也是 transport close），前端自动重连，
+  // 首帧 instances 带上新的 startedAt。
+  socket.on('dev:restart', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (!mockCanRestart || mockDevRestartDeny) {
+      return ack({ ok: false, error: '当前进程没有进程管理器托管（终端里直接 npm start 就是这样），停了不会自动拉起 —— 拒绝重启' });
+    }
+    ack({ ok: true });
+    const gen = mockResetGeneration;
+    setTimeout(() => {
+      if (gen !== mockResetGeneration) return;
+      mockServiceStartedAtOverride = (mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT) + 60_000;
+      socket.conn.close();
+    }, 200);
+  });
+
   socket.on('files:write', (payload, callback) => {
     if (typeof callback !== 'function') return;
     const { relPath, content, baseHash } = payload || {};
@@ -3388,6 +3548,7 @@ io.on('connection', socket => {
       armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armHistoryLongTool: () => { historyLongToolArmed = true; },
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
       armOutboxPermanent: () => { outboxPermanentArmed = true; },
@@ -3400,6 +3561,7 @@ io.on('connection', socket => {
       },
       armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
       armOutboxReplaySwapHistoryFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', historyFirst: true }; },
+      armOutboxTurns: () => { outboxTurnsArmed = true; },
       armOutboxReplaySwapEchoFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', echoFirst: true }; },
     })),
     {
@@ -3692,7 +3854,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-expired'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-tampered', 'test:permission-expired'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -3755,7 +3917,8 @@ io.on('connection', socket => {
           type: 'permission_request', payload: {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
-            input: pendingPermission.input,
+            // 验收 O28：传输途中 input 被改写、fp 没跟着改——前端预检会对不上（完整性协议步骤4）
+            input: cmd === 'test:permission-tampered' ? 'echo TAMPERED-DISPLAY' : pendingPermission.input,
             cwd: pendingPermission.cwd,
             ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd),
             // test:permission-persistable 才带——真 server 只在 CLI 给了会落盘的 suggestions 时下发这个字段，
@@ -3763,6 +3926,15 @@ io.on('connection', socket => {
             ...(cmd === 'test:permission-persistable' ? { persistDestinations: ['localSettings'] } : {}),
           }
         });
+
+        // O28：篡改只发生在上面那一帧的传输途中，服务端自己的待办快照仍是原样——「刷新重取」拿回的是这一份。
+        if (cmd === 'test:permission-tampered') {
+          syncPendingSnapshot = {
+            permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd, ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd) }],
+            questions: [],
+          };
+          syncPendingSnapshotInstanceId = viewingInstanceId;
+        }
 
         if (cmd === 'test:permission-result-error') {
           await delay(600);
@@ -5785,7 +5957,14 @@ io.on('connection', socket => {
     }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
-    const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    // 闸按这条消息的目标实例判（同真 server）：带了还活着的 instanceId 就是它，不是眼下查看的那个——
+    // 后台会话排着的离线条目（O66 review ②）要撞上的是它自己那个会话的在途轮。实例号已不在（置换换了号）
+    // 回落 viewing：真 server 按会话改投到新实例，mock 的置换场景里那就是眼下查看的这个。
+    const gateInst = mockInstances.find(i => i.instanceId === payload?.instanceId)
+      || mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (payload?.fromOutbox === true) {
+      mockOutboxReceived.push({ text: payload.text, instanceId: payload.instanceId ?? null, viewing: viewingInstanceId, refused: gateInst?.turnRunning === true });
+    }
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');
       const refuse = () => {
@@ -5841,6 +6020,26 @@ io.on('connection', socket => {
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
+    // O66：离线重放条目开一轮（同真 server：ack 之前广播 turnRunning=true），回复正文在回显之后发，result 等 /__outbox-turn-end。
+    // 新会话页上的离线首条（没带实例号、眼下也没在看任何实例）：同真 server 先懒开实例、接管 viewing，再开这一轮。
+    // 同一批后面的条目也不带实例号，服务端经 viewing 投给它、撞上这一轮被拒收（O66 review ①）。
+    if (outboxTurnsArmed && payload?.fromOutbox === true && !payload?.instanceId && viewingInstanceId === null) {
+      const fresh = openFreshMockInstance(typeof payload?.model === 'string' ? payload.model : '');
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(fresh.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
+    const outboxTurnInst = outboxTurnsArmed && payload?.fromOutbox === true
+      ? (mockInstances.find(i => i.instanceId === payload?.instanceId) || mockInstances.find(i => i.instanceId === viewingInstanceId)) : null;
+    if (outboxTurnInst) {
+      outboxTurnInst.state = 'busy';
+      outboxTurnInst.turnRunning = true;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(outboxTurnInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
       });
     }
     if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' });
@@ -5978,6 +6177,18 @@ io.on('connection', socket => {
       }
     });
 
+    if (outboxTurnInst) {
+      outboxTurnCount += 1;
+      activeEpoch = `mock-epoch-outbox-turn-${outboxTurnCount}`;
+      const messageId = `msg_outbox_turn_${outboxTurnCount}`;
+      outboxTurnOpen = { instanceId: outboxTurnInst.instanceId, messageId, epoch: activeEpoch };
+      socket.emit('agent:event', {
+        seq: 1, epoch: activeEpoch, sessionId: outboxTurnInst.sessionId ?? null, instanceId: outboxTurnInst.instanceId, ts: Date.now(),
+        type: 'text_delta', payload: { messageId, text: `答：${cmd}` },
+      });
+      return;
+    }
+
     // test:external-echo：上面那条回显被本地占位气泡认领之后，再推一条【本地没有占位气泡】的
     // user_message。这是「另一台设备发的消息」与回放的形态——前端 matchedBubble 只在 .opacity-70
     // 里找，找不到就走「在线新建 user 气泡」那条分支，与占位转正是两个调用点。
@@ -6046,10 +6257,14 @@ io.on('connection', socket => {
 
   // Handle user permission decision
   socket.on('user:approve', async payload => {
+    mockApproveLog.push(payload || null);
     const { requestId, decision, alwaysThisSession, instanceId, exitMode } = payload || {};
     console.log(`[mock] User approve received: requestId=${requestId}, decision=${decision}, always=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
 
-    if (pendingPermission && pendingPermission.requestId === requestId) {
+    // 先抓住这一份：下面跨 await，pendingPermission 这个模块级变量随时可能被改写。
+    const perm = pendingPermission;
+    const bornGeneration = mockResetGeneration;
+    if (perm && perm.requestId === requestId) {
       const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
       activeInst.state = 'busy';
       io.emit('agent:event', {
@@ -6064,18 +6279,18 @@ io.on('connection', socket => {
       });
 
       if (decision === 'allow') {
-        if (alwaysThisSession && pendingPermission.name) {
+        if (alwaysThisSession && perm.name) {
           const targetInstanceId = activeInst.instanceId;
           if (!alwaysAllowedPermissionNamesByInstance.has(targetInstanceId)) {
             alwaysAllowedPermissionNamesByInstance.set(targetInstanceId, new Set());
           }
-          alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(pendingPermission.name);
+          alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(perm.name);
         }
         // 对齐 CLI plan-exit：ExitPlanMode 批准时优先用客户端 exitMode，否则用场景预设 setMode
         const EXIT_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
-        const resolvedMode = (pendingPermission.name === 'ExitPlanMode' && EXIT_MODES.has(exitMode))
+        const resolvedMode = (perm.name === 'ExitPlanMode' && EXIT_MODES.has(exitMode))
           ? exitMode
-          : pendingPermission.setMode;
+          : perm.setMode;
         if (resolvedMode) {
           const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
           if (inst) inst.permissionMode = resolvedMode;
@@ -6086,24 +6301,28 @@ io.on('connection', socket => {
         }
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: pendingPermission.approveOutput || 'git push success: branch main -> origin' }
+          type: 'tool_result', payload: { toolUseId: perm.toolUseId, ok: true, outputSummary: perm.approveOutput || 'git push success: branch main -> origin' }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: pendingPermission.approveText || '\n\n✓ Successfully pushed latest codebase additions!' }
+          type: 'text_delta', payload: { messageId: perm.messageId, text: perm.approveText || '\n\n✓ Successfully pushed latest codebase additions!' }
         });
       } else {
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: false, outputSummary: 'user denied command execution', denyKind: 'denied' }
+          type: 'tool_result', payload: { toolUseId: perm.toolUseId, ok: false, outputSummary: 'user denied command execution', denyKind: 'denied' }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\n🚫 Git push command was rejected by user. Aborted.' }
+          type: 'text_delta', payload: { messageId: perm.messageId, text: '\n\n🚫 Git push command was rejected by user. Aborted.' }
         });
       }
 
       await delay(500);
+      // 这 500ms 里 /__reset 可能已开了下一条用例：剩下的收尾属于上一条，发出去只会串进新用例。
+      // 此前这里直接读 pendingPermission.messageId，被 reset 清空后抛 TypeError，整个 mock 进程退出，
+      // 后面所有用例 ECONNREFUSED。
+      if (bornGeneration !== mockResetGeneration) return;
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -6112,12 +6331,15 @@ io.on('connection', socket => {
 
       socket.emit('agent:event', {
         seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 1200, costUsd: 0.001, isError: false, models: [activeModel] }
+        type: 'result', payload: { messageId: perm.messageId, durationMs: 1200, costUsd: 0.001, isError: false, models: [activeModel] }
       });
 
-      pendingPermission = null;
-      syncPendingSnapshot = null;
-      syncPendingSnapshotInstanceId = null;
+      // 同一条用例里这 500ms 内可能已经来了下一张审批卡：只清自己这一张。
+      if (pendingPermission === perm) {
+        pendingPermission = null;
+        syncPendingSnapshot = null;
+        syncPendingSnapshotInstanceId = null;
+      }
     }
   });
 
@@ -6161,8 +6383,18 @@ io.on('connection', socket => {
     ack({ ok: true, mediaType: hit.mediaType, data: hit.data, bytes: Buffer.from(hit.data, 'base64').length });
   });
 
-  socket.on('tool:full', ({ toolUseId } = {}, ack) => {
+  socket.on('tool:full', ({ toolUseId, sessionId, cwd } = {}, ack) => {
     if (typeof ack !== 'function') return;
+    if (toolFullTruncatedArmed) {
+      toolFullTruncatedArmed = false;
+      // 同真 server（socket-files.js）：超过 MAX_TOOL_FULL_BYTES 时只回开头，带 truncated 与原长
+      return ack({ ok: true, text: 'HEAD_OF_HUGE_OUTPUT\n'.repeat(5).trim(), truncated: true, totalLength: 700000 });
+    }
+    // 历史卡片的全文只能从 transcript 取（真 server 的实例内存里没有）：只认带会话坐标的请求
+    if (toolUseId === 'tl-bash-long') {
+      if (sessionId !== 'mock-session-timeline' || !cwd) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });
+      return ack({ ok: true, text: MOCK_BUILD_LOG });
+    }
     if (toolUseId === 't_bash') {
       return ack({ ok: true, text: '✓ All 5 visual regression unit tests passed successfully!\n(extra full lines from tool:full mock)' });
     }
@@ -6368,6 +6600,11 @@ io.on('connection', socket => {
     if (activeInst) {
       activeInst.aborted = true; // WS-008：令仍在跑的流式场景（如 test:stream-long）下个 delay 后提前退出，不再后台续发事件
       activeInst.state = 'idle';
+      // O66：test:arm-outbox-turns 挂住的那一轮随停止结束（同真 server：中断后在途轮清零）
+      if (outboxTurnOpen?.instanceId === targetId) {
+        activeInst.turnRunning = false;
+        outboxTurnOpen = null;
+      }
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }

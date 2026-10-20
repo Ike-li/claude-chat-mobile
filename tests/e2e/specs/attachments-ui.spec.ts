@@ -275,6 +275,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // O34：芯片与发出的气泡显示的名字要和落盘同一规则清洗——前导点、控制字符、路径分隔符都不该出现在界面上。
+  // 不用含 '/' 的名字：File 构造函数按规范会把它换成 ':'，测的就不是我方逻辑了。
+  test('P0-18k 附件芯片与发出的气泡显示清洗后的名字', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: '...hidden-o34.txt', mimeType: 'text/plain', buffer: Buffer.from('a') },
+      { name: 'ctl\u0001\u0007-o34.txt', mimeType: 'text/plain', buffer: Buffer.from('b') },
+      { name: 'C:\\Win\\sys-o34.txt', mimeType: 'text/plain', buffer: Buffer.from('c') },
+    ]);
+    const tray = page.locator('#attachTray');
+    await expect(tray).toContainText('hidden-o34.txt');
+    await expect(tray).toContainText('ctl-o34.txt');
+    await expect(tray).toContainText('C__Win_sys-o34.txt');
+    expect(await tray.textContent()).not.toMatch(/\.\.\.hidden|[\u0001\u0007]/);
+
+    await page.locator('#input').fill('看附件名');
+    await page.locator('#btnSend').click();
+    const userMessage = page.locator('[data-testid="user-message"]').last();
+    await expect(userMessage).toContainText('hidden-o34.txt');
+    await expect(userMessage).toContainText('ctl-o34.txt');
+    await expect(userMessage).toContainText('C__Win_sys-o34.txt');
+    expect(await userMessage.textContent()).not.toMatch(/\.\.\.hidden|[\u0001\u0007]/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // E18 附件预览：三条点击路径（fixture 由 mock 场景 test:attach-preview + mock attachment:read 提供）——
   // live 气泡缩略图（meta.storedName 按需拉原图）、历史 chip（history.js [附件] 解析形态、无 thumb）、
   // 已删文件（attachment:read ok:false → toast 降级、不开灯箱）。断言基于 DOM 状态非像素。

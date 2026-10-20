@@ -4,6 +4,9 @@ import { describePersistScope, describeChromePermission } from '../logic/permiss
 import { verifyIntegrity } from '../canonicalize.js';
 import { t } from '../i18n.js';
 
+// 审批卡弹出后按钮不响应的时长（UX-003 / 验收 O70）。
+const PERM_ARM_MS = 600;
+
 export function createInteractionQueueState(context, { answeredCapacity = 200 } = {}) {
   const permissionQueue = [];
   const questionQueue = [];
@@ -61,6 +64,7 @@ export function createApprovalController(context, {
   const permAlways = byId('permAlways'), permAlwaysLabel = byId('permAlwaysLabel'), permIntegrityWarn = byId('permIntegrityWarn');
   const permPersistWrap = byId('permPersistWrap'), permPersistLabel = byId('permPersistLabel'), permPersistHint = byId('permPersistHint');
   const permExitModeWrap = byId('permExitModeWrap'), permInterrupt = byId('permInterrupt');
+  const permAllowBtn = byId('permAllow'), permDenyBtn = byId('permDeny'), permIntegrityReload = byId('permIntegrityReload');
   const questionText = byId('questionText'), questionOptions = byId('questionOptions');
   const questionHeader = byId('questionHeader'), questionMultiHint = byId('questionMultiHint');
   const questionMultiSubmit = byId('questionMultiSubmit'), questionSkip = byId('questionSkip');
@@ -76,14 +80,18 @@ export function createApprovalController(context, {
   let selectedExitMode = 'default';     // ExitPlanMode 退出后权限档（对齐 CLI plan-exit）；默认 default
   let multiSelectedIndexes = new Set(); // multiSelect 当前题勾选的下标
   let permArmTimer = null;
+  let permArming = false;
   // 别的界面盖在当前会话上（打不开的会话的落地页）时，审批 / 提问卡先收起、不弹（验收 O38）；卡本身留着，
   // resume 时原样再弹出来。期间新到的照常排队。
   let suspended = false;
 
   // ---- 审批完整性预检（协议步骤4）----
   // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
-  // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
-  // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
+  // 未同步改）。不阻塞卡片显示；真正的执行门槛在后端 resolvePermission（agent.js），即使因浏览器兼容性
+  // 等原因未能核验，审批本身仍受后端 fail-closed 保护。
+  // 核验出不符时「允许」一直禁用（验收 O28）：回传的 op 就是这张卡展示的内容，服务端按锚定指纹判，
+  // 必然拒跑——留着「允许」可点，用户以为自己批准了眼前这条命令，得到的却是一次拒绝。只剩拒绝，
+  // 或刷新页面从服务端待办快照重取这张卡。
   // 校验结果不符时记入本集合：请求排队时校验完成（还不是 activePerm）也不丢失判定，
   // showNextPerm() 晋升它为 activePerm 时据此补显示警示条（而不是要求它重新触发一次异步校验）。
   const permIntegrityMismatched = new Set();
@@ -109,7 +117,18 @@ export function createApprovalController(context, {
   }
   function showPermIntegrityWarning() {
     if (permIntegrityWarn) permIntegrityWarn.classList.remove('hidden');
+    syncPermButtons();
   }
+  // 三个动作按钮的可点状态只在这里算：防误触期内全部禁用；完整性不符时「允许」一直禁用。
+  // 用原生 disabled 而不只是 pointer-events：后者挡不住键盘（焦点落到「允许」再回车照样批），
+  // 外观上也看不出现在不能点（验收 O70）。
+  function syncPermButtons() {
+    const mismatch = Boolean(activePerm && permIntegrityMismatched.has(activePerm.requestId));
+    if (permAllowBtn) permAllowBtn.disabled = permArming || mismatch;
+    if (permDenyBtn) permDenyBtn.disabled = permArming;
+    if (permInterrupt) permInterrupt.disabled = permArming;
+  }
+  if (permIntegrityReload) permIntegrityReload.onclick = () => location.reload();
 
   // ---- 审批弹窗（4a：完整命令 + cwd）----
   function showNextPerm() {
@@ -128,6 +147,8 @@ export function createApprovalController(context, {
     // （permIntegrityMismatched），直接补显示——不会再触发一次新的异步校验。
     if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
     if (permIntegrityMismatched.has(activePerm.requestId)) showPermIntegrityWarning();
+    // 先上防误触再开窗：开窗那一刻按钮就已经是禁用的，不留一个「已显示、还没禁用」的间隙。
+    armPermSheetButtons();
     // UX-001：ExitPlanMode 计划用 renderMarkdown（DOMPurify）；普通命令去 JSON 引号、mono 纯文本。
     // M1：超 4000 字显示展开按钮，而非截断（防恶意内容藏尾部）
     permExpandBtn?.remove(); permExpandBtn = null;
@@ -174,9 +195,9 @@ export function createApprovalController(context, {
       if (isExit) paintExitModeChips();
     }
     if (!suspended) {
+      // 先上防误触再开窗（同上）；被别的界面盖着时不弹，resume 时再弹
+      armPermSheetButtons();
       openSheet(permModal);
-      // UX-003：弹出后 350ms 内按钮不可点，防拇指热区误触授权
-      armPermSheetButtons(350);
     }
     updateSendButtonState();
   }
@@ -191,13 +212,19 @@ export function createApprovalController(context, {
       btn.classList.toggle('text-ink-soft', !on);
     });
   }
-  function armPermSheetButtons(ms = 350) {
+  // UX-003：弹出后约 600ms 内按钮不响应，防拇指热区误触授权。验收 O70 实测面板出现 0.5 秒时在输入框
+  // 原位置点一下就批准了（「允许」正好压在输入框上）——原来的 350ms 盖不住这一下。
+  function armPermSheetButtons(ms = PERM_ARM_MS) {
     if (!permModal) return;
     permModal.classList.add('sheet-arming');
+    permArming = true;
+    syncPermButtons();
     if (permArmTimer) clearTimeout(permArmTimer);
     permArmTimer = setTimeout(() => {
       permModal.classList.remove('sheet-arming');
       permArmTimer = null;
+      permArming = false;
+      syncPermButtons();
     }, ms);
   }
   // 勾了「总是允许」才展开范围选择；取消勾选时连同选择一起收起并复位。
@@ -485,6 +512,8 @@ export function createApprovalController(context, {
     // 通用 sheet 关闭路径（背板/手势关窗）复用：清掉防误触 arming 计时器，避免下次打开残留。
     cancelPermArming() {
       if (permArmTimer) { clearTimeout(permArmTimer); permArmTimer = null; }
+      permArming = false;
+      syncPermButtons();
     },
     // 输入区是否该被"先处理当前审批/选择"挡住。
     hasPending() { return Boolean(activePerm || activeQuestion); },
@@ -497,7 +526,7 @@ export function createApprovalController(context, {
     resume() {
       if (!suspended) return;
       suspended = false;
-      if (activePerm) { openSheet(permModal); armPermSheetButtons(350); }
+      if (activePerm) { armPermSheetButtons(); openSheet(permModal); } // 先上锁、后开窗，时长同 showNextPerm（PERM_ARM_MS）
       if (activeQuestion) openSheet(questionModal);
     },
   };

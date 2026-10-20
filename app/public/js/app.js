@@ -4,6 +4,7 @@
 import {
   esc,
   formatToolSummary,
+  toolOutputHighlightClass,
   formatToolCardTitle,
   formatTaskToolTitle,
   renderTaskToolResultText,
@@ -36,6 +37,7 @@ import {
   resolveDrawerStatus,
   isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
+  resolveRowTerminalState,
   formatSessionRowSubtitle,
   formatSessionRowTime,
   displaySessionTitle,
@@ -69,6 +71,7 @@ import {
   armedTakeoverStep,
   presentTurnResult,
   formatServiceNotices,
+  formatServiceNoticeRows,
   formatHooksBridgeRow,
   formatMcpServers,
   formatPushStatusRow,
@@ -131,6 +134,8 @@ import {
   planOutboxWorktreeReuse,
   planOutboxScratchReuse,
   nextOutboxScratchAnchor,
+  nextOutboxLazyOpenAnchor,
+  planOutboxBlockedTarget,
   nextOutboxWorktreeAnchor,
   outboxComposeKey,
   planOutboxEnqueue,
@@ -227,6 +232,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
+import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 import { createGateFocusController } from './app/focus-layers.js';
@@ -746,9 +752,10 @@ import { createGateFocusController } from './app/focus-layers.js';
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
-  // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
-  const expandedAllDirs = new Set();
+  // 用户点过「显示全部会话…」的目录 → 已加载的页数（「加载更多」每点一次加一页，O81）。缓存里的 sessions
+  // 是"当下拿到的那一份"，记不住用户要看全量这个意图——而 populateSubtree 每次都会无条件 revalidate，
+  // 不带上 all/pages 就会把展开态悄悄打回截断（P0-11x）或打回第一页。
+  const expandedAllDirs = new Map();
   // session:list 附带的 CLI registry 快照：每个 cwd 的终端聚合态（'waiting' | 'busy'，无则不存键）。
   // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
   // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
@@ -785,6 +792,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     storage: (() => { try { return localStorage; } catch { return null; } })(),
     targetsViewing: outboxItemTargetsViewing,
   });
+  // 离线重放撞上在途轮的条目：排队、本轮结束按序自动续发（O66，见 app/outbox-after-turn.js）
+  const outboxAfterTurn = createOutboxAfterTurn({ getInstances: () => instancesList });
   function enqueueOutbox(item) {
     // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）。
     // 投递结论从 'queued' 起记（deliverOutboxItem 改写），历史重载时据此判能不能按文字认领（canTextClaimPendingBubble）。
@@ -1422,33 +1431,67 @@ import { createGateFocusController } from './app/focus-layers.js';
     return true;
   }
 
-  function markOutboxBlocked(item, message, targetsViewing = false) {
+  // afterTurn（O66）：被在途轮挡下的离线条目——排队，本轮结束由 outboxAfterTurn 替用户点这里的「重发」；
+  // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
+  function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
-    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
+    // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条提示。但排队照样登记：它已经不在
+    // 持久化队列里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
+    if (!host) {
+      if (afterTurn) outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, { resend: () => resendOutboxHeadless(item) });
+      return;
+    }
     host.classList.remove('animate-pulse');
     host.textContent = '';
     const label = el(`<span></span>`);
-    label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
+    let queued = afterTurn;
+    const blockedText = msg => (queued ? `⏳ ${t('排队中 · 本轮结束后自动发送')}` : `⏸ ${msg || t('未发送 · 任务运行中')}`);
+    label.textContent = blockedText(message);
     host.appendChild(label);
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
-    btn.onclick = async () => {
+    let settled = false;
+    // 返回这次投递的结论（已送达或正在发时返回 null），outboxAfterTurn 据此决定出队还是接着等
+    const resend = async () => {
+      if (settled || btn.disabled) return null;
       btn.disabled = true;
       label.textContent = `🕐 ${t('正在发送...')}`;
+      // 真正发出时挪到消息流最后：它排在这一轮的回答之后，问答顺序才与发送顺序一致（O66）
+      if (item.bubbleEl?.parentElement === messagesEl) appendMessage(item.bubbleEl);
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { host.remove(); return; }
+      if (d.outcome === 'ok') { settled = true; host.remove(); return d.outcome; }
       // 续接会丢掉一段对话（SESSION-04）：再发一遍还是同一道闸。把这条挪回输入框，出在线路径同一块面板——
       // 两个选项都作用于输入框里的话。挪不了（不是眼前这个会话的、输入框里已有新打的字）就留在这里。
       if (d.divergence && moveOutboxItemToComposer(item)) {
+        settled = true;
         host.remove();
         resumeDivergencePrompt.prompt({ divergence: d.divergence, sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) });
-        return;
+        return d.outcome;
       }
       btn.disabled = false;
-      label.textContent = d.outcome === 'blocked'
-        ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
-        : `⚠️ ${d.message || t('发送失败')}`;
+      label.textContent = d.outcome === 'blocked' ? blockedText(d.message) : `⚠️ ${d.message || t('发送失败')}`;
+      return d.outcome;
     };
+    btn.onclick = () => { resend(); };
     host.appendChild(btn);
+    if (afterTurn) {
+      outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
+        resend,
+        cancel: () => {
+          queued = false;
+          if (!settled && !btn.disabled) label.textContent = `⏸ ${t('未发送 · 本轮已停止，需要时点重发')}`;
+        },
+      });
+    }
+  }
+
+  // 没有提示落点的排队条目由 outboxAfterTurn 续发：送达或又撞上一轮（留在队首）照常返回；别的结局放回持久化队列，
+  // 交给下一次批处理按常规处置——不在这里替它决定是死信还是重试，也不能让它在内存里悄悄消失。
+  async function resendOutboxHeadless(item) {
+    const d = await deliverOutboxItem(item);
+    if (d.outcome === 'ok' || (d.outcome === 'blocked' && !d.divergence)) return d.outcome;
+    enqueueOutbox(item);
+    persistOutbox();
+    return 'requeue';
   }
 
   // 离线批处理眼里的「当前视图」：横幅、逐条 targetsViewing、批后 busy 三处归属判据共用这一份，少传一维就和另外两处分叉。
@@ -1487,6 +1530,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 两种锚都按新会话页分（outboxComposeKey）：用户有意新开的另一页要各开各的。
     const worktreeAnchors = new Map();
     const scratchAnchors = new Map();
+    // 普通工作区新会话页上第一条懒开的实例（按页 + 目录分）：后面各条被它那一轮拒收时按它登记，本轮结束才认得出目标。
+    const lazyOpenAnchors = new Map();
     const scratchRoot = projectsState.scratchRoot();
     try {
       for (const item of items) {
@@ -1515,6 +1560,9 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (worktreeAnchor) worktreeAnchors.set(page, worktreeAnchor);
         const scratchAnchor = nextOutboxScratchAnchor(item, decision, scratchAnchors.get(page) ?? null, scratchRoot);
         if (scratchAnchor) scratchAnchors.set(page, scratchAnchor);
+        const lazyKey = `${page}\n${item.cwd ?? ''}`;
+        const lazyAnchor = nextOutboxLazyOpenAnchor(item, decision, lazyOpenAnchors.get(lazyKey) ?? null, scratchRoot);
+        if (lazyAnchor) lazyOpenAnchors.set(lazyKey, lazyAnchor);
         const targetsViewing = outboxItemTargetsViewing(item, outboxViewing());
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -1537,8 +1585,8 @@ import { createGateFocusController } from './app/focus-layers.js';
           }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
-          // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
-          markOutboxBlocked(planned, decision.message, targetsViewing);
+          // 队列首条发出去就开跑，其后各条必被拒。不 requeue 空转：交给 outboxAfterTurn 排队，本轮结束按序续发（O66）。
+          markOutboxBlocked(planOutboxBlockedTarget(planned, lazyOpenAnchors.get(lazyKey) ?? null), decision.message, targetsViewing, { afterTurn: !decision.divergence });
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。
@@ -1557,6 +1605,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       _offlineDrainInFlight = false;
       drainBar?.remove();
       persistOutbox();
+      outboxAfterTurn.tick(); // 批处理期间那一轮可能已经跑完（广播先到）：不等下一条广播
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
         ...outboxViewing(),
@@ -1772,6 +1821,18 @@ import { createGateFocusController } from './app/focus-layers.js';
   socket.on('connect_error', async err => {
     logClientEvent('conn', `连接尝试失败: ${err.message || err}`);
     const handshake = describeHandshakeError(err);
+    if (handshake.kind === 'cooldown') {
+      // 验收 O83：同一来源刚有一次登录失败，服务端在退避短锁里，这次的令牌根本没校验——既不是令牌错，
+      // 也不是尝试过多。说清在等，到点用同一份凭据再握一次手。冷却期内服务端不计数，这次重试不会加锁。
+      // 不另存计时器：到点时 socket 已在握手（active）就跳过，连撞几次锁也只会有一次握手在途。
+      setStatus(handshake.text);
+      if (authGate && !authGate.classList.contains('hidden') && authError) {
+        authError.textContent = handshake.text;
+        authError.classList.remove('hidden');
+      }
+      setTimeout(() => { if (!socket.active) socket.connect(); }, handshake.retryAfterMs + 50);
+      return;
+    }
     if (handshake.kind === 'rate_limited') {
       // 被防暴破限速挡下：说清还要等多久。此前这里落到下面的 else，屏幕上是
       // 「连接失败：rate_limited」——用户看不懂，也不知道要等，于是反复重连撞在刚上的那把锁上。
@@ -2032,7 +2093,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）。
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section(t('异常告警'));
-    const notices = formatServiceNotices({
+    const notices = formatServiceNoticeRows({
       service: {
         deliveryFailure: res.deliveryFailure,
         rateLimitLockout: res.rateLimitLockout,
@@ -2047,11 +2108,11 @@ import { createGateFocusController } from './app/focus-layers.js';
       okRow.textContent = t('✓ 无异常');
       noticesSection.lastChild.appendChild(okRow);
     } else {
-      for (const line of notices) {
+      for (const { text, tone } of notices) {
         const row = el(`<div class="px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"></div>`);
-        // 判色按告警类别：投递失败(🔔)/限速锁定(⛔)红——错过审批与安全事件；重启(🔄)/前端错误(🐞)黄
-        row.classList.add(line.startsWith('🔔') || line.startsWith('⛔') ? 'text-danger' : 'text-warning');
-        row.textContent = line;
+        // 判色在 formatServiceNoticeRows：投递失败红；限速锁定按来源（公网红、本机/局域网黄）；其余黄
+        row.classList.add(tone === 'danger' ? 'text-danger' : 'text-warning');
+        row.textContent = text;
         noticesSection.lastChild.appendChild(row);
       }
     }
@@ -2265,9 +2326,15 @@ import { createGateFocusController } from './app/focus-layers.js';
       tone: 'danger',
     }))) return;
     haptic('warning');
-    addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+    // 服务端答应了才说「正在重启」——被拒时先写的那行会和「重启被拒」一起留在消息流里，前后矛盾（O87）。
+    // 新进程连上来（startedAt 变了）时由 setInstances 撤掉这一行。
     socket.emit('dev:restart', {}, res => {
-      if (res && res.ok === false) addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+      if (res && res.ok === false) {
+        addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+        return;
+      }
+      const bar = addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+      if (bar) bar.dataset.restartPending = '1';
     });
   };
 
@@ -2401,9 +2468,20 @@ import { createGateFocusController } from './app/focus-layers.js';
       note.classList.toggle('text-warning', accessBypassActive);
       note.classList.toggle('text-ink-faint', !accessBypassActive);
     }
-    // 空列表也不显示整段：一台都没有意味着这台 server 只被本机/CF Access 访问过，
-    // 摆一个空框只会让人以为坏了。
-    if (!devices.length) { section.classList.add('hidden'); return; }
+    // 空列表：没开 CF Access 旁路时不显示整段——一台都没有意味着这台 server 只被本机访问过，摆一个空框只会让人
+    // 以为坏了。旁路开着时照样显示（验收 O89）：新部署的 Access 实例正好一台都没有，这时更要看到「这张表管不到
+    // 隧道进来的连接」，给一句空态代替空框。
+    if (!devices.length) {
+      section.classList.toggle('hidden', !accessBypassActive);
+      if (accessBypassActive) {
+        const empty = document.createElement('div');
+        empty.className = 'text-[11px] text-ink-faint px-1';
+        empty.setAttribute('data-testid', 'trusted-devices-empty');
+        empty.textContent = t('还没有已信任的设备：局域网 / 本机直连批准过的设备会列在这里。');
+        list.appendChild(empty);
+      }
+      return;
+    }
     section.classList.remove('hidden');
     for (const d of devices) {
       const row = document.createElement('div');
@@ -2813,6 +2891,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     effort_mode(p) {
       // 没指定时 CLI 实际生效的档（只进文案）；缺字段的旧回执一律当未知
       appContext.state.effortEffective = p.effective ?? null;
+      // 档位来源：'cli-settings' 按「没指定」显示（O15）；缺字段的旧回执按用户自选显示，与改动前一致
+      appContext.state.effortSource = p.source ?? null;
       if (mirrorReadonlySid) {
         if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
         renderCliPanelState();
@@ -3084,12 +3164,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
         code.textContent = taskText ?? formatToolSummary(raw);
-        try { if (!taskText && code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+        if (!taskText && code !== out) highlightToolOutput(code);
         if (taskText) card.open = true; // 清单即结果本体，收起就白渲染了（对齐 CLI 面板可见性）
         out.classList.remove('hidden');
         // 截断时挂「展开全文」——点后走 tool:full 取 agent 缓存的完整输出
+        // 会话坐标有就带：实例内存里的全文 10 分钟过期，之后服务端回落去 transcript 取（同历史卡片）
         if (isToolSummaryTruncated(raw, { truncated: p.truncated }) && p.toolUseId) {
-          attachToolFullExpand(card, p.toolUseId);
+          attachToolFullExpand(card, p.toolUseId, ev?.sessionId && ev?.cwd ? { sessionId: ev.sessionId, cwd: ev.cwd } : null);
         }
       }
       // 截图：只带引用，卡片展开、格子进入可视区才取图。坐标取信封（发出它的那个实例与会话）
@@ -3147,18 +3228,8 @@ import { createGateFocusController } from './app/focus-layers.js';
         // → 之后每条都被判成时间倒流，连日期行都永久消失）。这个分支直接 return、不走 append，
         // 故须在此单独收口；settleAt 会把 marker 插在这条气泡【前面】而不是容器尾部。
         messageTimeline.settleAt(matchedBubble, ev?.ts, 'user');
-        // FE-005：离线占位曾是纯 textContent——确认时升级为与历史一致的 markdown 渲染（保留附件区）
-        if (p.text && !matchedBubble.classList.contains('um')) {
-          const attWrap = matchedBubble.querySelector('.flex.flex-wrap');
-          matchedBubble.innerHTML = render(p.text);
-          matchedBubble.classList.add('msg-body', 'um');
-          if (attWrap) matchedBubble.appendChild(attWrap);
-          matchedBubble.querySelectorAll('pre code').forEach(b => {
-            try { hljs.highlightElement(b); } catch { /* ignore */ }
-          });
-          injectCodeCopyButtons(matchedBubble);
-          foldLongUserBubble(matchedBubble, p.text);
-        }
+        // 占位本来就是纯文本（appendUserText），确认时只换成已确认气泡的字体，不再重渲染（验收 O25）
+        if (p.text) matchedBubble.classList.add('msg-body', 'um');
 
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
@@ -3194,14 +3265,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
       if (p.uuid) bubble.dataset.uuid = p.uuid;
       if (p.text) {
-        // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
-        bubble.innerHTML = render(p.text);
+        // 与乐观占位、历史路径同一个构建器：纯文本（验收 O25）
         bubble.classList.add('msg-body', 'um');
-        bubble.querySelectorAll('pre code').forEach(b => {
-          try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ }
-        });
-        injectCodeCopyButtons(bubble);
-        foldLongUserBubble(bubble, p.text);
+        appendUserText(bubble, p.text);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
@@ -3576,8 +3642,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       linesArr.push(row([
         p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
         p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
-        p.source?.kind === 'cli' && { text: 'source CLI', cls: 'text-info' },
-        p.source?.kind === 'sdk' && { text: 'source Web SDK', cls: 'text-ink-faint' }
+        // 来源标签跟界面语言走（验收 O43②）；「复制」出去贴 issue 的那份（formatStatuslineCopyText）保持英文
+        p.source?.kind === 'cli' && { text: t('来源：终端（CLI）'), cls: 'text-info' },
+        p.source?.kind === 'sdk' && { text: t('来源：网页（SDK）'), cls: 'text-ink-faint' }
       ]));
 
       // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
@@ -3587,8 +3654,16 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
   };
 
-  // 工具卡「展开全文」：live 路径 agent 缓存截断前全文；成功后替换 .t-out 并去掉按钮。
-  function attachToolFullExpand(card, toolUseId) {
+  // 工具输出代码块：先按内容定高亮 class（JSON 才高亮，见 toolOutputHighlightClass），再交给 hljs
+  function highlightToolOutput(code) {
+    code.className = toolOutputHighlightClass(code.textContent);
+    delete code.dataset.highlighted; // 「展开全文」换了内容要重新判，hljs 对已高亮过的元素会跳过
+    try { hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+  }
+
+  // 工具卡「展开全文」：成功后替换 .t-out 并去掉按钮。全文来源由服务端定：live 卡片先查实例内存；带上会话坐标
+  // （history = { sessionId, cwd, agentToolUseId? }）时内存没有就回落去 transcript 取——历史卡片只能走这条（验收 O55）。
+  function attachToolFullExpand(card, toolUseId, history = null) {
     if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
     // 聚合卡里 .sa-body 也带 space-y-1 且排在结果槽之前，裸 querySelector 会把「展开全文」
     // 塞进子代理流水中间。给结果槽标了 .t-full-host 的卡优先用它；通用工具卡没有这个 class，
@@ -3599,7 +3674,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = t('加载中…');
-      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId }, (err, res) => {
+      socket.timeout(8000).emit('tool:full', { instanceId: inst, toolUseId, ...(history || {}) }, (err, res) => {
         if (err || !res?.ok) {
           btn.textContent = err ? t('请求超时，请重试') : (res?.error || t('全文不可用'));
           btn.disabled = false;
@@ -3609,10 +3684,17 @@ import { createGateFocusController } from './app/focus-layers.js';
         const code = out?.querySelector('code') || out;
         if (code) {
           code.textContent = formatToolSummary(res.text || '');
-          try { if (code !== out) hljs.highlightElement(code); } catch { /* noop */ }
+          if (code !== out) highlightToolOutput(code);
           out?.classList.remove('hidden');
         }
-        btn.remove();
+        if (res.truncated) {
+          // 全文超过服务端上限时只回了开头：不说清楚就像已经完整了（PR #250 review）
+          const note = el(`<div class="text-ink-faint text-[11px]" data-testid="tool-full-truncated"></div>`);
+          note.textContent = `${t('全文过长，只显示了开头')}（${res.totalLength ?? '?'} ${t('字符')}）`;
+          btn.replaceWith(note);
+        } else {
+          btn.remove();
+        }
       });
     };
     host.appendChild(btn);
@@ -3649,15 +3731,17 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (s.done) continue;
       if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
       s.done = true;
+      // 正文同步写进气泡，rAF 只管那一下淡入（验收 O59）。上面刚清掉的预览定时器可能一次都没触发过——本地
+      // slash 命令（/context、/cost）的输出就是一条增量紧跟着 result——而浏览器对后台标签页暂停 rAF：
+      // 正文若也放进 rAF，同一会话开在另一个标签页里的那一端气泡一直是空的，刷新才从磁盘补上。
+      s.el.innerHTML = render(s.raw);
+      // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：高亮抛错不该打断复制按钮注入——高亮失败只该丢高亮。
+      s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+      injectCodeCopyButtons(s.el);
+      appendCopyAction(s.el, () => s.raw, 'left');
       s.el.style.transition = 'opacity .1s';
       s.el.style.opacity = '0.4';
       requestAnimationFrame(() => {
-        s.el.innerHTML = render(s.raw);
-        // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：rAF 回调里抛错会中断后续
-        // 复制按钮注入与 opacity 恢复，气泡永久停在半透明——高亮失败只该丢高亮。
-        s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
-        injectCodeCopyButtons(s.el);
-        appendCopyAction(s.el, () => s.raw, 'left');
         s.el.style.opacity = '1';
         setTimeout(() => s.el.style.transition = '', 120);
       });
@@ -3956,12 +4040,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (outgoingAttachments?.length) {
       bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
     }
-    if (text) {
-      const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
-      textNode.textContent = text;
-      foldLongUserText(textNode, text); // 长指令发出去那刻就折，与已确认气泡一致
-      bubble.appendChild(textNode);
-    }
+    if (text) appendUserText(bubble, text); // 长指令发出去那刻就折，与已确认气泡一致
     // 待发附件缩略 chip/图片预览：controller items 含完整 data → 点击直开本地预览（无需服务端）
     if (outgoingAttachments?.length) {
       bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
@@ -4718,6 +4797,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (instanceId === viewingInstanceId) addBar(t('停止请求超时，可再试一次'), 'text-ink-faint');
     }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
+    // 停止 = 不想接着跑：这个会话排着的离线条目不再自动发，退回手动「重发」（O66）
+    outboxAfterTurn.cancelTarget({ instanceId, sessionId: instancesList.find(x => x.instanceId === instanceId)?.sessionId ?? null });
   }
 
   if (btnStop) btnStop.onclick = requestInterrupt;
@@ -4868,17 +4949,18 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
     effortSeen = true;
     currentEffort = val;
-    effortSelect.value = val || '';
+    // settings 来的档不算选中（不高亮、select 停在占位），候选就是 select 现有的选项
+    const ui = effortUiState(val, [...effortSelect.options].map(o => o.value), {
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      effective: appContext.state.effortEffective,
+      source: appContext.state.effortSource,
+    });
+    effortSelect.value = ui.selected;
 
-    if (pillEffortText) {
-      pillEffortText.textContent = effortUiState(val, [], {
-        mirrorReadonly: Boolean(mirrorReadonlySid),
-        effective: appContext.state.effortEffective,
-      }).label;
-    }
+    if (pillEffortText) pillEffortText.textContent = ui.label;
 
     if (customEffortGrid) {
-      const activeLevel = val || '';
+      const activeLevel = ui.selected;
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
         const isCurrent = activeLevel === tileVal;
@@ -4949,6 +5031,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     const ui = effortUiState(currentEffort, show, {
       mirrorReadonly: Boolean(mirrorReadonlySid),
       effective: appContext.state.effortEffective,
+      source: appContext.state.effortSource,
     });
     effortSelect.innerHTML = '';
     if (!ui.selected && !ultracodeArmed) {
@@ -5001,7 +5084,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
     // auto 原样发（服务端映射成 effortLevel:null 控制请求）；它不是 null——null 是「没指定」。
     const uiLevel = effortSelect.value || null;
-    if (uiLevel === currentEffort) return;
+    // settings 来的档点同一档不是空操作：用户要把它钉成自己的选择（服务端只改来源，不动实例）
+    if (uiLevel === currentEffort && appContext.state.effortSource !== 'cli-settings') return;
     socket.emit('user:setEffort', { level: uiLevel });
     // 不做乐观提示：前端预知不了服务端走轻路径（控制请求、不续接会话）还是重路径（dispose+resume），
     // 而这里唯一能写的文案必然在其中一半场景下说谎。两条路径服务端都有回执——轻路径广播
@@ -5036,6 +5120,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
     setPermMode(inst.permissionMode || 'default', true);
     appContext.state.effortEffective = inst.effortEffective ?? null;
+    appContext.state.effortSource = inst.effortSource ?? null;
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
@@ -5199,6 +5284,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     syncDashNoFolders(); // 首页开着时连上/断开了文件夹：引导跟着广播走，不等下次重画首页
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    outboxAfterTurn.tick(); // 排队的离线条目：目标会话这一轮结束了就续发下一条（O66）
     // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
     // 实例的「停止」结算事件会被丢弃、其 interruptPendingByInstance 挂起态无法经 system(p) 清位。这条
     // instances 广播不受视图过滤，靠它独立探测每个挂起实例是否已不再 busy，及时补清——防止切视图后
@@ -5222,6 +5308,9 @@ import { createGateFocusController } from './app/focus-layers.js';
     const newServiceStartedAt = p?.service?.startedAt ?? null;
     const serverRestarted = detectServerRestart({ prevStartedAt: lastServiceStartedAt, newStartedAt: newServiceStartedAt });
     if (newServiceStartedAt != null) lastServiceStartedAt = newServiceStartedAt;
+    // 重启已兑现：撤掉「⟳ 正在重启服务…」那一行，否则它一直挂着、像还没重启完（O87）。
+    const restartBars = serverRestarted ? [...messagesEl.querySelectorAll('[data-restart-pending]')] : [];
+    restartBars.forEach(node => node.remove());
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
@@ -5279,6 +5368,14 @@ import { createGateFocusController } from './app/focus-layers.js';
     // canRestart 与 devMode 是两维：devMode 管上面这个常驻按钮组，canRestart 管配置面板
     // 保存成功后要不要给「立即重启」入口（生产 DEV_MODE=0 但被 launchd 托管时应为 true）。
     _canRestart = p?.canRestart === true;
+    // 开发者模式下拉不起来（前台 npm start、容器里没有托管）时按钮照样显示，但点了服务端只会拒绝——
+    // 不给点，并当场说明原因（与配置面板不给「立即重启」同一判据）。
+    if (btnRestartServer) {
+      btnRestartServer.disabled = !_canRestart;
+      btnRestartServer.textContent = _canRestart
+        ? t('⟳ 重启服务（改代码/配置后生效）')
+        : t('⟳ 重启服务：本进程不是常驻托管，停了不会自动拉起，请到电脑上重启');
+    }
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无 id 时收起胶囊并就地说明缺席原因。
     // 两个空态参数在此处求值：实例懒开于首条消息，故「有 newViewing 却无 sid」＝id 分配在途；
     // _pendingFirstSend 覆盖空首页首发到懒开广播回来之间那一瞬（此时 newViewing 仍是 null）。
@@ -5332,6 +5429,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (!target && !instanceDestroyed) {
         updateModelAndSuffix(''); if (modelInput) modelInput.value = '';
         setPermMode(p.defaultPermissionMode || 'default', true);
+        appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
       bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
@@ -5368,9 +5466,13 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 若不在此静默刷新，顶部 mode/effort 会卡在首帧硬默认，直到用户切走再回来。
       // 用户在空窗手改档（L0）时 server 会把 pending 编进 default*，这里幂等对齐权威源即可。
       setPermMode(p.defaultPermissionMode || 'default', true);
+      appContext.state.effortSource = p.defaultEffortSource ?? null;
       setEffortMode(p.defaultEffort ?? null, true);
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();
+      // 在首页 / 新会话页点的重启：addBar 插那一行时清掉了空态表面，而这条路不进 bindView——
+      // 撤掉那一行后主区若已空，把空态表面还回来，否则一片空白直到用户手动切走。
+      if (restartBars.length && !messagesEl.children.length) ensureEmptySurface();
     }
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
@@ -6002,14 +6104,27 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (badge) applyBadge(badge, drawerStateForDir(row.dataset.dir));
     });
   }
+  // 当前生效的只读镜像锁（已接管的不算）——抽屉行据此给被终端占着的会话补终端态（O86）。
+  function mirrorRowLock() {
+    return mirrorReadonlySid
+      ? { sessionId: mirrorReadonlySid, stale: mirrorStaleFlag, waiting: mirrorWaitingFlag, autonomous: mirrorAutonomousFlag }
+      : null;
+  }
   // 初次绘制和 instances 增量广播共用同一个状态 resolver/builder，避免两套角标语义分叉。
+  // 镜像锁变化（applyMirror）也走这里重刷。
   function refreshSessionStatusChips() {
     const instMap = new Map(instancesList.map(x => [x.instanceId, x]));
+    const mirror = mirrorRowLock();
     sessionPanel.querySelectorAll('[data-testid="session-row"]').forEach(row => {
       const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
       const head = row.querySelector('[data-session-head]');
       if (!head) return;
-      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null, row.dataset.terminalSource || null,
+      const terminalState = resolveRowTerminalState({
+        registryState: row.dataset.terminalState || null,
+        sessionId: row.dataset.sessionId || null,
+        mirror,
+      });
+      appendSessionStatusChip(head, inst?.state, terminalState, row.dataset.terminalSource || null,
         row.dataset.bgLocked === '1');
     });
   }
@@ -6962,7 +7077,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       titleSpan.after(mark);
     };
     applyUnreadMark();
-    appendSessionStatusChip(head, liveInst?.state, s.terminal, s.terminalSource, Boolean(s.bgLocked));
+    appendSessionStatusChip(head, liveInst?.state,
+      resolveRowTerminalState({ registryState: s.terminal || null, sessionId: s.id || null, mirror: mirrorRowLock() }),
+      s.terminalSource, Boolean(s.bgLocked));
     btn.appendChild(head);
     const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
     // 有 id 却没有时间戳的只有 SESSION-02 补画的活实例行——它是存过的会话，不能说「未保存」。
@@ -7285,7 +7402,32 @@ import { createGateFocusController } from './app/focus-layers.js';
 
       // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
       // worktree 的会话由服务端并进所属仓库的列表（行带自己的 cwd），不自成一节。
-      const renderRows = (sessions, hasMore, total = null, pinned = [], open = []) => {
+      // 「显示全部」与「加载更多」共用：按页数拉全量窗口（每页条数与上限在服务端 sessionListWindow），
+      // 记住页数供后续 revalidate 沿用。
+      const loadAllPages = (pages, button) => {
+        haptic('tap');
+        button.textContent = t('加载中…');
+        button.disabled = true;
+        expandedAllDirs.set(cwd, pages); // 记住意图：后续 revalidate 也得按这个窗口拉，否则重建一次就被打回去
+        const requestGen = ++sessionListRequestGen;
+        socket.emit('session:list', { cwd, all: true, ...(pages > 1 ? { pages } : {}) }, state => {
+          if (requestGen !== sessionListRequestGen) return;
+          if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
+          if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
+          const all = state?.sessions || [];
+          const nextHasMore = !!state?.hasMore;
+          const nextTotal = Number.isFinite(state?.total) ? state.total : null;
+          const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
+          const nextOpen = Array.isArray(state?.open) ? state.open : [];
+          const nextCanLoadMore = state?.canLoadMore === true;
+          unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
+          updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
+          sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, open: nextOpen, canLoadMore: nextCanLoadMore });
+          renderRows(all, nextHasMore, nextTotal, nextPinned, nextOpen, nextCanLoadMore);
+        });
+      };
+
+      const renderRows = (sessions, hasMore, total = null, pinned = [], open = [], canLoadMore = false) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
         mountSearch();
@@ -7307,17 +7449,6 @@ import { createGateFocusController } from './app/focus-layers.js';
             const meta = openById.get(inst.sessionId) || { id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null };
             rowsHost.appendChild(sessionRow(meta, inst, cwd));
           }
-          // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。
-          // 置顶而不是按时间插回原位：插回原位等于没补——它本来就是因为排得太后才看不见的。
-          // 带一行小标，否则「一条上周的会话排在最上面」读起来像排序坏了。
-          if (pinned.length) {
-            const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
-            pinnedHead.textContent = t('稍后再看');
-            rowsHost.appendChild(pinnedHead);
-            for (const s of pinned) {
-              rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-            }
-          }
         }
         for (const s of sessions) {
           rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
@@ -7329,35 +7460,37 @@ import { createGateFocusController } from './app/focus-layers.js';
 
         if (!query && hasMore && !expandedAllDirs.has(cwd)) {
           const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
-          more.onclick = () => {
-            haptic('tap');
-            more.textContent = t('加载中…');
-            expandedAllDirs.add(cwd); // 记住意图：后续 revalidate 也得按全量拉，否则重建一次就被打回截断
-            const requestGen = ++sessionListRequestGen;
-            socket.emit('session:list', { cwd, all: true }, state => {
-              if (requestGen !== sessionListRequestGen) return;
-              if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
-              if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
-              const all = state?.sessions || [];
-              const nextHasMore = !!state?.hasMore;
-              const nextTotal = Number.isFinite(state?.total) ? state.total : null;
-              const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
-              const nextOpen = Array.isArray(state?.open) ? state.open : [];
-              unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
-              updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, open: nextOpen });
-              renderRows(all, nextHasMore, nextTotal, nextPinned, nextOpen);
-            });
-          };
+          more.onclick = () => loadAllPages(1, more);
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
           const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
-          const hintText = remaining != null
-            ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
-            : t('还有更早的会话，可用搜索查找');
-          const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
-          hint.textContent = hintText;
-          rowsHost.appendChild(hint);
+          if (canLoadMore) {
+            // 窗口还能放宽：给「加载更多」，一页页往后拉（O81）。到服务端上限后回落成下面的搜索提示。
+            const loadMore = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40" data-testid="session-load-more"></button>`);
+            loadMore.textContent = remaining != null
+              ? t('加载更多会话（还有 {n} 个）').replace('{n}', String(remaining))
+              : t('加载更多会话');
+            loadMore.onclick = () => loadAllPages((expandedAllDirs.get(cwd) || 1) + 1, loadMore);
+            rowsHost.appendChild(loadMore);
+          } else {
+            const hintText = remaining != null
+              ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
+              : t('还有更早的会话，可用搜索查找');
+            const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
+            hint.textContent = hintText;
+            rowsHost.appendChild(hint);
+          }
+        }
+        // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。按时间它们
+        // 都比本页更早，所以排在本页与「显示全部 / 加载更多」之后（O81：此前置顶，读起来像排序坏了；加载到
+        // 覆盖它的那一页时，服务端不再把它算进 pinned，它就落回时间序里）。带一行小标说明这一组为什么在这里。
+        if (!query && pinned.length) {
+          const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
+          pinnedHead.textContent = t('稍后再看');
+          rowsHost.appendChild(pinnedHead);
+          for (const s of pinned) {
+            rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+          }
         }
         refreshDirUnreadCounts(); // 行数据（含 lastUsedAt）刚更新，目录头「N 未读」随之重算
         // 折叠态点角标 → 先展开、发 session:list、等 ack 回来渲染完行，跳转才有落点，就是这里。
@@ -7371,7 +7504,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const cachedEntry = sessionsCache.get(cwd);
         const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
         if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.open || []);
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.open || [], cachedEntry.canLoadMore === true);
         } else {
           const rowsHost = bindSessionRowsHost(container, el);
           rowsHost.innerHTML = '';
@@ -7409,9 +7542,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (background && !socket.connected) return;
       const requestGen = ++sessionListRequestGen;
       const query = activeQuery();
+      const loadedPages = expandedAllDirs.get(cwd) || 0;
       const listPayload = query
         ? { cwd, query }
-        : { cwd, all: expandedAllDirs.has(cwd) };
+        : { cwd, all: loadedPages > 0, ...(loadedPages > 1 ? { pages: loadedPages } : {}) };
       socket.emit('session:list', listPayload, state => {
         if (requestGen !== sessionListRequestGen) return;
         if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
@@ -7427,6 +7561,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
         // open：开着、被分页挤出本页的会话的元数据（验收 O46）；旧服务端不发 → 空数组，那几行回落实例自己的 title
         const open = Array.isArray(state?.open) ? state.open : [];
+        const canLoadMore = state?.canLoadMore === true; // 旧服务端不发 → 回落成「可用搜索查找」提示
         // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
@@ -7446,8 +7581,9 @@ import { createGateFocusController } from './app/focus-layers.js';
           nextPinned: pinned,
           nextOpen: open,
         });
-        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, open });
-        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned, open);
+        const canLoadMoreChanged = (prevEntry?.canLoadMore === true) !== canLoadMore;
+        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, open, canLoadMore });
+        if (willRerender || readChanged || canLoadMoreChanged) renderRows(sessions, hasMore, total, pinned, open, canLoadMore);
       });
     };
 
@@ -8749,6 +8885,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
     // 进入可视区时再读会按别的会话去取。cwd 走驾驶轴，与 loadHistory 的 session:history 同一个值。
     const imageScope = { sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId), instanceId: displayedInstanceId };
+    // 历史卡片「展开全文」的会话坐标：同图片；子代理里的卡带上那次 Agent 调用的 id，服务端到子代理文件里找
+    const histFullScope = msg => ({ sessionId: imageScope.sessionId, cwd: imageScope.cwd, agentToolUseId: msg.parentToolUseId || null });
     // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
     //  · 全量加载：null —— 这批就是整个会话的开头。
     //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
@@ -8931,8 +9069,10 @@ import { createGateFocusController } from './app/focus-layers.js';
           const code = orphan.querySelector('.t-out code');
           if (code) {
             code.textContent = formatToolSummary(msg.outputSummary || '');
+            code.className = toolOutputHighlightClass(code.textContent);
             codeBlocks.push(code);
           }
+          if (msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(orphan, msg.toolUseId, histFullScope(msg));
           const orphanShots = transcriptImages.render(msg.images, imageScope);
           if (orphanShots) orphan.querySelector('.t-out')?.parentElement.appendChild(orphanShots);
           appendNode(orphan, msg);
@@ -8945,9 +9085,14 @@ import { createGateFocusController } from './app/focus-layers.js';
           // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
           const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
           code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
-          if (!taskText && code !== out) codeBlocks.push(code);
+          if (!taskText && code !== out) {
+            code.className = toolOutputHighlightClass(code.textContent);
+            codeBlocks.push(code);
+          }
           if (taskText) card.open = true; // 清单即结果本体（同 live）
           out.classList.remove('hidden');
+          // 历史卡片的「展开全文」：全文只能从 transcript 取，请求带上这个会话的坐标（验收 O55）
+          if (!taskText && msg.toolUseId && isToolSummaryTruncated(msg.outputSummary)) attachToolFullExpand(card, msg.toolUseId, histFullScope(msg));
         }
         const shots = transcriptImages.render(msg.images, imageScope);
         if (shots) (card.querySelector('.t-out')?.parentElement || card).appendChild(shots);
@@ -8971,10 +9116,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         appendNode(bubble, msg);
         return;
       }
-      bubble.innerHTML = render(msg.content || '');
-      bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
-      injectCodeCopyButtons(bubble);
-      if (isUser) foldLongUserBubble(bubble, msg.content || '');
+      if (isUser) {
+        if (msg.content) appendUserText(bubble, msg.content);
+      } else {
+        bubble.innerHTML = render(msg.content || '');
+        bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
+        injectCodeCopyButtons(bubble);
+      }
       // E18：历史附件（history.js 解析 [附件] 块所得）→ 可点击 chip，按需拉原图；纯附件消息（content 空）
       // 渲染 chip-only 气泡、跳过复制按钮（复制空文本无意义）
       if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
@@ -9212,6 +9360,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
+    refreshSessionStatusChips(); // 抽屉里被锁住的那一行跟着标/撤终端态（O86）
   }
 
   // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。
@@ -9570,24 +9719,15 @@ import { createGateFocusController } from './app/focus-layers.js';
     textEl.after(btn);
   }
 
-  // 历史回显气泡（innerHTML 渲染过 markdown）：把渲染产物包进一层限高容器 + 「展开」按钮，
-  // 与 foldLongUserText 视觉一致。不重写已渲染的 innerHTML（避免二次 markdown 解释风险）。
-  function foldLongUserBubble(bubble, rawText) {
-    if (!bubble) return;
-    const { fold } = userBubbleFold(rawText);
-    if (!fold) return;
-    // 把气泡里已渲染的 DOM 节点平移进一个限高包装层
-    const wrap = el(`<div class="overflow-hidden" style="max-height:8rem"></div>`);
-    while (bubble.firstChild) wrap.appendChild(bubble.firstChild);
-    bubble.appendChild(wrap);
-    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
-    let expanded = false;
-    btn.onclick = () => {
-      expanded = !expanded;
-      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = t('收起'); }
-      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = t('展开'); }
-    };
-    wrap.after(btn);
+  // 用户气泡的文字：一律纯文本，保留换行与连续空白（验收 O25 / O90）。终端里看到的就是用户原样打的字；
+  // 原来和助手回复共用 markdown + sanitize，<Header> 被吞、<b> 变粗体、**…** 变加粗、连续空格被压成一个，
+  // 用户会以为自己的话被截断了。乐观占位、在线新建、历史渲染三个建出点共用这一个构建器，字段漂开会认领失败。
+  function appendUserText(bubble, text) {
+    const textNode = el(`<div class="whitespace-pre-wrap break-words" data-testid="user-text"></div>`);
+    textNode.textContent = text;
+    bubble.appendChild(textNode);
+    foldLongUserText(textNode, text);
+    return textNode;
   }
 
   function showLoadingCard() {

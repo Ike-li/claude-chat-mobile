@@ -283,7 +283,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ```
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名与会话标题**（`formatNotifyIdentity` 的「事件 · 项目 · 会话」三段，会话标题取自抽屉里的 SDK summary / AI 生成标题，上限 40 字），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `app/src/server/app.js` 的 `emitNotify`）；**标题只有「事件 · 项目」两段**，不带会话标题——没有 AI 生成标题时，会话标题就是你某条消息的原文。Web Push 端到端加密，标题照旧带会话标题（「事件 · 项目 · 会话」三段，`formatNotifyIdentity`），方便分辨同一项目的多条会话。工作区目录名仍会明文经第三方，故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
