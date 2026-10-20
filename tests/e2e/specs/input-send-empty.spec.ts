@@ -116,11 +116,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 两个入队点都得带：离线时发的、在线发出去没被确认转进重发的。mock 是平行实现、不做这道核对，这里只钉前端送出去的是什么。
   const captureUserMessages = (page: Page) => {
     const sent: Array<Record<string, unknown>> = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
-        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+    const take = (payload: string) => {
+      for (const packet of payload.split('\x1e')) {
+        if (packet.includes('"user:message"')) sent.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
       }
-    }));
+    };
+    page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
+    // 刚连上、还没升级到 websocket 时走 polling：那段时间发的包拼在 HTTP POST 里（\x1e 分隔），framesent 看不到。
+    // 重载后恢复的离线条目恰好在这个窗口里重放。
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
     return sent;
   };
 
