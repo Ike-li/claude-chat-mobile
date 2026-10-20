@@ -469,6 +469,7 @@ export const EN_DICT = Object.freeze({
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '这个会话上次异常退出': 'This session exited unexpectedly last time',
   '连接文件夹': 'Connected folder',
   '断开文件夹': 'Disconnected folder',
   '新建 worktree': 'Created worktree',

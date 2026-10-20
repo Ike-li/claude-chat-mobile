@@ -224,6 +224,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
+import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createWidgetRenderer } from './app/widget-render.js';
@@ -1203,6 +1204,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     pinStreamLiveStatus();
     return bar;
   };
+  // 进程异常退出的提示按会话记住，清屏重载历史后补回（验收 O60，见 crash-notices.js）
+  const crashNotices = createCrashNotices({ addBar, hasNotice: () => Boolean(messagesEl.querySelector('[data-crash-notice]')) });
   // 消息流时间戳：跨天插日期分隔行、用户发言间隔超阈值插一次 HH:mm。只作用于主链 user/assistant
   // 气泡，工具卡/thinking/系统条一律不夹（那些在一个回合里密集刷屏，加时间戳是纯噪音）。
   const messageTimeline = createMessageTimeline({ createElement: el, appendMessage, messagesEl });
@@ -3099,6 +3102,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
     user_message(p, ev) {
+      crashNotices.clear(ev?.sessionId); // 崩溃后在这个会话里接着聊了：那条提示翻篇，重载历史不再补
       // 这条消息可能已经由历史全量重载渲染成【正式气泡】了：settleCarriedPendingBubbles 认领时
       // 把 clientMessageId 从乐观气泡移交了过去（见那里的 ★ 注释）。此时屏幕上已经有它，直接收工——
       // 既不能再建一颗（那是第三颗），也不该走下面的转正流程：它早已是确认态，settleAt 会重复打戳。
@@ -3299,7 +3303,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       failPendingToolCards(p.message);
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
-      addBar(`⚠️ ${p.message}`, 'text-danger');
+      const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
+      if (p.processExited) crashNotices.record(ev?.sessionId, p.message, errBar);
       clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
@@ -8555,12 +8560,18 @@ import { createGateFocusController } from './app/focus-layers.js';
       const msgs = res?.messages || [];
       if (!msgs.length) {
         if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
+        crashNotices.restore(sessionId);
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
         return;
       }
       addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
-      renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true, turnRunningAtRequest });
+      renderHistoryBubbles(msgs, () => {
+        // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
+        if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
+        flushHeldHistoryAppends(gateHandle);
+        onDone?.();
+      }, { fullReload: true, turnRunningAtRequest });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);

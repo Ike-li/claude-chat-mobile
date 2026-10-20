@@ -48,6 +48,20 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  // 验收 O30：审批等到 TTL 过期的那一轮，CLI 以 is_error 收尾，原来推成「⚠️ 任务出错 · 用时 1814.0s」。
+  // 用户需要知道的是「审批过期了、操作没执行、要重新触发」，不是「出错了」。
+  test('result：这一轮有审批过期 → 标题说审批已过期、正文说操作没执行，不说「出错」', () => {
+    const n = notificationForEvent('result', { isError: true, approvalExpired: true, durationMs: 1814000 }, { hasClients: false });
+    assert.match(n.title, /审批已过期/);
+    assert.doesNotMatch(n.title, /出错/);
+    assert.match(n.body, /操作没有执行/);
+    assert.match(n.body, /1814\.0s/, '用时照旧给出');
+
+    // 用户主动中止优先：那一轮的主因是用户点了停止
+    const stopped = notificationForEvent('result', { interrupted: true, approvalExpired: true, durationMs: 1000 }, { hasClients: false });
+    assert.match(stopped.title, /已中止/);
+  });
+
   // 验收 O64：「⚠️ 任务出错」的 ntfy 推送 tags 仍是 white_check_mark，锁屏上显示成「✅ ⚠️ 任务出错」。
   // 标签要跟标题同一个判断：完成 ✅、出错 ⚠️、已中止 ⏹。
   test('result 的 ntfy 标签跟标题一致：出错不带 ✅，已中止也不带', () => {
@@ -58,6 +72,8 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.deepEqual(tagsOf({}), ['white_check_mark']);
     assert.deepEqual(tagsOf({ isError: true }), ['warning']);
     assert.deepEqual(tagsOf({ interrupted: true, isError: true }), ['stop_button']);
+    // 审批过期那一轮（O30）也是 is_error 收尾：标题是「⏰ 审批已过期」，标签同样不能是 ✅
+    assert.deepEqual(tagsOf({ isError: true, approvalExpired: true }), ['warning']);
   });
 
   test('permission_request：前台有人也照推（用户可能锁屏或在别的 app）', () => {

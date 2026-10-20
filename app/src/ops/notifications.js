@@ -95,10 +95,15 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
-        const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
         // ntfyType：ntfy 的标签跟标题同一个判断（ntfy 客户端把标签渲染成标题前的表情，按事件类型一律 ✅ 时
-        // 锁屏上就是「✅ ⚠️ 任务出错」，验收 O64）。emitNotify 优先用它。
+        // 锁屏上就是「✅ ⚠️ 任务出错」，验收 O64）。emitNotify 优先用它。下面审批过期那一支同样要带。
         const ntfyType = p.interrupted ? 'result_interrupted' : (p.isError ? 'result_error' : 'result');
+        // 验收 O30：本轮有审批等到过期时，CLI 以 is_error 收尾；用户要知道的是操作没执行、得重新触发，不是「出错」。
+        // 用户自己点了停止仍优先算「已中止」。
+        if (p.approvalExpired && !p.interrupted) {
+          return { ...withData({ title: titleWithIdentity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType };
+        }
+        const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
         return { ...withData({ title: titleWithIdentity(title), body: `用时 ${secs}s` }), ntfyType };
       }
     case 'permission_request': {
