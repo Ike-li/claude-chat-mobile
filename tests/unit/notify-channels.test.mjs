@@ -206,3 +206,39 @@ test.describe('createNotifyChannels · pushNotify 按订阅 prefs 选 body/previ
     assert.deepEqual(webpush.sent[0].payload.data, { instanceId: 'inst_1' });
   });
 });
+
+// #231 review：发一条测试推送时两条通道各发一条。串行发的话 Web Push 慢、ntfy 又接近 8s 超时，加起来超过前端 12s 的
+// emit 时限，界面报成断网；而且 Web Push 的计数要等 ntfy 回来才取，这段时间别的通知的成功 / 失败会被算进这次测试。
+test.describe('pushTest · 测试推送回执', () => {
+  const ENV_BOTH = { ...ENV_PUSH_ON, NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' };
+
+  test('两条通道并发发：Web Push 不等 ntfy 发完才开始（串行会在这里互等卡死）', { timeout: 3000 }, async t => {
+    let ntfyStarted;
+    const ntfyStartedP = new Promise(resolve => { ntfyStarted = resolve; });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: ENV_BOTH,
+      webpushImpl: { setVapidDetails: () => {}, sendNotification: async () => { await ntfyStartedP; } },
+      fetchImpl: async () => { ntfyStarted(); return { ok: true, status: 200 }; },
+    });
+    n.savePushSubscription({ endpoint: 'https://e/1', keys: {} });
+    assert.deepEqual(await n.pushTest('t', 'b', {}), { sent: 1, failed: 0, ntfy: 'sent' });
+  });
+
+  test('Web Push 的条数在它发完时就取：ntfy 还挂着时别的通知发成功，不算进这次测试', async t => {
+    let releaseNtfy;
+    const ntfyGate = new Promise(resolve => { releaseNtfy = resolve; });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: ENV_BOTH,
+      webpushImpl: fakeWebpush(),
+      fetchImpl: async () => { await ntfyGate; return { ok: true, status: 200 }; },
+    });
+    n.savePushSubscription({ endpoint: 'https://e/1', keys: {} });
+    const pending = n.pushTest('t', 'b', {});
+    await new Promise(resolve => setImmediate(resolve)); // 测试推送的 Web Push 已发完，ntfy 还没回来
+    await n.pushNotify('别的通知', '同一时刻发生的一条'); // 也经 Web Push 发成功
+    releaseNtfy();
+    assert.deepEqual(await pending, { sent: 1, failed: 0, ntfy: 'sent' });
+  });
+});
