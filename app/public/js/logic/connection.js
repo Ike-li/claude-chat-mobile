@@ -68,15 +68,17 @@ export function foregroundReconnectAction(connected) {
 //   t≈235  socket.connect() 撞进那把还没过期的锁 → 被拒且报「尝试过多」
 // 服务端的说法已单独修正（rate-limiter.js 的 gateCheck 区分冷却/长锁），这一层管住触发源。
 //
-// 两条判据，方向都是「宁可不连」：
+// 三条判据，方向都是「宁可不连」：
 //   · 凭据门开着（令牌门 / Access 重登门）：用户还没交出凭据，重连必然失败，唯一效果是把退避
 //     越推越长（500ms→1s→2s→…→30s），切够 8 次标签页就是 15 分钟长锁——纯粹的自伤。
 //     此时唯一正确的入口是用户按下「进入」（submitAuth 自己 connect），不是后台替他试。
 //   · persisted === false：pageshow 的普通加载分支。那一刻 io() 刚刚连过，再连一次没有任何
 //     新信息，只会紧贴着首次失败补一枪。只有 persisted === true（真·bfcache 恢复，页面被冻过、
 //     socket 多半已死）才是这个监听器的本意。其余入口不传 persisted，走默认 null 正常重连。
-export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen = false, persisted = null } = {}) {
-  if (authGateOpen || accessReloginOpen) return false;
+//   · 「设备未获授权」遮罩开着：设备已被拒，重连握手会让它重新进待审、机主又收到一条「新设备请求接入」。
+//     遮罩上的「重新请求接入」按钮自己 connect，那是唯一该发起握手的入口。
+export function shouldAttemptReconnect({ authGateOpen = false, accessReloginOpen = false, deviceDeniedOpen = false, persisted = null } = {}) {
+  if (authGateOpen || accessReloginOpen || deviceDeniedOpen) return false;
   if (persisted === false) return false;
   return true;
 }
