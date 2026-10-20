@@ -88,8 +88,12 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
 .msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
 .msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
-.msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; }
+/* 宽表格在自己内部横向滚动（同 GitHub markdown 的做法）：不然 375 宽下 12 列的表格把整个 #messages 撑出横向滚动、
+   每格被压成一字一行（验收 O45） */
+.msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; display: block; width: max-content; max-width: 100%; overflow-x: auto; }
 .msg-body td, .msg-body th { border: 1px solid var(--line); padding: .3rem .55rem; }
+/* .msg-body 的 word-break: break-word 会把格子的最小宽度压到一个字：表格里按词断行，宽了就让表格自己横向滚动 */
+.msg-body td, .msg-body th { word-break: normal; overflow-wrap: normal; }
 .msg-body th { background: var(--surface-sunk); font-weight: 600; }
 .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 
@@ -536,7 +540,8 @@ header {
   #headerActions {
     display: flex !important;
     min-width: 0 !important;
-    gap: 0.35rem !important;
+    /* 8px：按钮热区各向外扩 4px（hit-44-tight），间距再小两个热区就互相压住 */
+    gap: 0.5rem !important;
   }
   .top-context-pill {
     max-width: min(100%, 46vw);
@@ -835,6 +840,14 @@ header {
   content: '';
   position: absolute;
   inset: -8px;
+}
+/* 顶栏 36px 按钮的热区扩到 44（验收 O76）。::after 以 padding box 为基准、不含 1px 边框，所以扩 5px：34+10=44。
+   不用 hit-44 的 8px：顶栏按钮间距只有 8px，扩 8px 会让相邻按钮的热区互相压住（手机上点右边缘点到隔壁）。 */
+.hit-44-tight { position: relative; }
+.hit-44-tight::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
 }
 .msg-action-btn {
   min-height: 32px;
