@@ -76,6 +76,8 @@ const PREFIX_RULES = [
   ['tests/integration/', 'Integration test'],
   ['tests/e2e/', 'E2E test'],
   ['tests/smoke/', 'Smoke test'],
+  // 机主本机跑的验收套件，永不进 CI。local/ 被 .gitignore 挡在外面，进不到这张表的扫描面。
+  ['tests/acceptance/', 'Acceptance test'],
   ['tests/fixtures/', 'Test support'],
   ['tests/helpers/', 'Test support'],
   ['tests/setup/', 'Test support'],

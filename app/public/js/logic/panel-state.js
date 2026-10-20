@@ -8,6 +8,7 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t, tk } from '../i18n.js';
+import { displaySessionTitle } from './session-search.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -535,7 +536,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
       if (!s || typeof s.id !== 'string' || !s.id) continue;
       rows.push({
         id: s.id,
-        title: s.title || t('无标题会话'),
+        title: displaySessionTitle(s.title, t('无标题会话')),
         lastUsedAt: s.lastUsedAt ?? null,
         // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
         // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
@@ -737,10 +738,12 @@ export function shouldRerenderSessionList({
   prevHasMore = false,
   prevTotal = null,
   prevPinned,
+  prevOpen,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
   nextPinned,
+  nextOpen,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
@@ -754,6 +757,8 @@ export function shouldRerenderSessionList({
   // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
   // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
   if (signature(prevPinned) !== signature(nextPinned)) return true;
+  // open（开着、被分页挤出本页的会话的元数据）同理：成员跟着「开了哪些会话」走，与这一页无关（验收 O46）
+  if (signature(prevOpen) !== signature(nextOpen)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 

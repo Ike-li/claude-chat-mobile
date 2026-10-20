@@ -68,12 +68,51 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 「发一条测试推送」：今晚这条链路的教训——用户没有任何办法自证推送通不通，只能等真事件，
   // 于是"从未订阅成功"被误当成"这功能没用"。未订阅时必须明说，而不是假装发出去了。
   test('P0-26 测试推送：未订阅时如实告知没有收件人，不谎报成功', async ({ page }) => {
+    // 前提是「没订阅、权限也没被拒」。无头 Chromium 的 Notification.permission 缺省就是 denied（grantPermissions
+    // 也改不动它），不显式钉成 default，这条断言的其实是「已被拒绝」那一态，而那一态的正确回执不是「先点开启」
+    // （P0-26b，验收 O1）。
+    await page.addInitScript(() => {
+      try { Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true }); } catch { /* 无 Notification 的环境 */ }
+    });
     await gotoMock(page);
     await waitForIdle(page);
 
     await openGeneralPage(page, 'notify');
     await page.locator('#btnPushTest').click();
     await expect(page.locator('#messages')).toContainText('还没订阅推送');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 AC-16-06 / O1：通知权限已被拒绝时，回执让人「先点上方的『开启』」——此刻状态行上根本没有这个按钮；
+  // 且回执只写进消息流，而设置面板正盖着消息流，用户什么也看不到。
+  test('P0-26b 测试推送：权限已被拒绝时不让人去点不存在的「开启」，结果就地显示在按钮下', async ({ page }) => {
+    await page.addInitScript(() => {
+      try { Object.defineProperty(Notification, 'permission', { get: () => 'denied', configurable: true }); } catch { /* 无 Notification 的环境 */ }
+    });
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await openGeneralPage(page, 'notify');
+    await expect(page.locator('#pushStatusRow')).toContainText('已被拒绝');
+    await page.locator('#btnPushTest').click();
+    const result = page.locator('[data-testid="push-test-result"]');
+    await expect(result).toBeVisible();
+    await expect(result).toContainText('拒绝');
+    await expect(result).not.toContainText('「开启」');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O1：ntfy 明明投递成功，回执只看网页推送、说「还没订阅」。
+  test('P0-26c 测试推送：ntfy 投递成功要报出来，不能只说网页推送没订阅', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-push-test-ntfy?result=sent');
+    await waitForIdle(page);
+
+    await openGeneralPage(page, 'notify');
+    await page.locator('#btnPushTest').click();
+    await expect(page.locator('[data-testid="push-test-result"]')).toContainText('ntfy 已发出一条');
 
     await expectNoBrowserErrors(page);
   });
@@ -117,6 +156,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 关掉之后仍然给得出「再开」这条路，不是死路
     await expect(row.locator('[data-testid="push-subscribe"]')).toBeVisible();
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O62：用户原本没配 statusLine 时仍给「开启」，点了装不上；失败原因是一行英文，还插进了被面板挡住的聊天流。
+  test('P0-25e 终端状态栏：用户自己没配 statusLine 时不给「开启」，说清要先配', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__set-statusline-unconfigured');
+    await openGeneralPage(page, 'host');
+    const section = page.locator('#statuslineBridgeSection');
+    await expect(section).toContainText('未启用');
+    await expect(section).toContainText('statusLine');
+    await expect(section.locator('[data-testid="statusline-bridge-action"]'), '给了一个点了才报错的按钮').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-25f 终端状态栏：开启失败时原因就地写在面板里，不插进面板后面的聊天流', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-statusline-setup-fail');
+    await openGeneralPage(page, 'host');
+    const section = page.locator('#statuslineBridgeSection');
+    await section.locator('[data-testid="statusline-bridge-action"]').click();
+    await page.locator('#confirmOk').click();
+    const result = page.locator('[data-testid="statusline-bridge-result"]');
+    await expect(result, '失败了面板上什么都没说').toContainText('settings.statusLine must be configured before install');
+    await expect(result).toHaveClass(/text-danger/);
+    // 放在结果出现之后：之前断言「没有」会在回执到达前就空过
+    await expect(page.locator('#messages'), '插进了被面板挡住的聊天流').not.toContainText('settings.statusLine');
     await expectNoBrowserErrors(page);
   });
 

@@ -69,6 +69,21 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 验收 O27：permission_request 是 STATE_BOUNDARY 事件，服务端借它广播 instances（含「需要你」聚合）。
+  // 原来先 emit 后写 pendingPermissions，那次广播算 needsYou 时看不到这张卡，计数要等下一次广播才对
+  // （提问那条路是先写后 emit，所以提问一直是即时的）。
+  test('askPermission：emit permission_request 的那一刻，pendingPermissions 里已经有这一条', () => {
+    const { s } = makeSession();
+    let seenAtEmit = null;
+    s.onEvent = (event) => {
+      if (event.type === 'permission_request') seenAtEmit = s.pendingPermissions.has(event.payload.requestId);
+    };
+    s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't-order' });
+    assert.equal(seenAtEmit, true, 'emit 时还没写进 pendingPermissions：那次广播的「需要你」漏掉这张卡');
+    s.resolvePermission('t-order', 'deny');
+    s.dispose();
+  });
+
   test('resolvePermission(allow)：removeEventListener + emit request_resolved + alwaysThisSession', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
@@ -144,6 +159,45 @@ test.describe('权限闸门', () => {
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
     assert.equal(rr?.payload.outcome, 'expired', 'outcome 标 expired');
     assert.equal(s.denyKinds.get('t1'), 'denied');
+    s.dispose();
+  });
+
+  // 验收 O30：TTL 到期那一轮 CLI 以 is_error 收尾，推送只看 isError，写成了「⚠️ 任务出错」。result 带上
+  // approvalExpired，推送据此说清是审批过期、操作没执行；只标这一轮，下一轮不带。
+  test('审批到期的那一轮：result 带 approvalExpired，下一轮不带', { timeout: 3000 }, async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 30 });
+    const promise = s.askPermission('Bash', { command: 'sleep 999' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    await awaitTtlSettled(promise);
+    s.map({ type: 'result', subtype: 'success', is_error: true, duration_ms: 10, modelUsage: {} });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    const results = events.filter(e => e.type === 'result');
+    assert.equal(results.length, 2);
+    assert.equal(results[0].payload.approvalExpired, true, '到期那一轮要带上 approvalExpired');
+    assert.equal(results[1].payload.approvalExpired, undefined, '标记一次性消费，不得误标到下一轮');
+    s.dispose();
+  });
+
+  test('过期后才有人提交（惰性过期分支）：那一轮的 result 同样带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 1 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    // 同步占住事件循环越过 TTL：到期 timer 来不及触发，提交只能撞上惰性过期分支（异步等待的话 timer 先结算）
+    const until = Date.now() + 5;
+    while (Date.now() <= until) { /* busy-wait */ }
+    const outcome = s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
+    assert.equal(outcome, 'expired', '前提：走的是 resolvePermission 的惰性过期分支');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, true);
+    s.dispose();
+  });
+
+  test('用户自己拒绝的那一轮：result 不带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 60_000 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    s.resolvePermission('t1', 'deny');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, undefined);
     s.dispose();
   });
 
