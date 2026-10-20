@@ -6,6 +6,8 @@
 // 【失败回执为什么归这里】它要回答的问题是「用户此刻在看哪一层」，而抽屉的可见性判据
 // （移动端的 -translate-x-full / 桌面端的常驻）本来就只有本模块知道。放在调用方就得把这套
 // 判据复制一份出去，且状态会落回 app.js 顶层作用域（CLAUDE.md 明令禁止）。
+import { focusInto, restoreFocus, setInertReason } from './focus-layers.js';
+
 export function createDrawerController(context, {
   $: byId,
   haptic = () => {},
@@ -20,9 +22,15 @@ export function createDrawerController(context, {
   const drawerNotice = byId('drawerNotice');
 
   let dragStartX = 0, dragStartY = 0, dragActive = false;
+  let focusBefore = null;
 
   // 桌面档侧栏常驻，不带 -translate-x-full 也是可见的——判据不能只看移动端那个 class。
   const drawerVisible = () => win.innerWidth >= desktopMinWidth || !leftSidebar.classList.contains('-translate-x-full');
+  // 收起的抽屉只是移出屏幕，里面的会话行照样能被 Tab 到、回车触发（验收 O77）。桌面档常驻，不 inert；
+  // 窗口宽度跨过 desktopMinWidth 时可见性会变，所以 resize 也要重算。
+  const syncInert = () => setInertReason(leftSidebar, 'closed', !drawerVisible());
+  syncInert();
+  win.addEventListener?.('resize', syncInert);
 
   function clearNotice() {
     if (!drawerNotice) return;
@@ -42,14 +50,23 @@ export function createDrawerController(context, {
   function openLeftSidebar() {
     if (win.innerWidth >= desktopMinWidth) return; // No-op on desktop
     haptic('tap');
+    if (!drawerVisible()) focusBefore = doc.activeElement;
     leftSidebar.classList.remove('-translate-x-full');
     sidebarScrim.classList.remove('hidden');
+    syncInert();
+    focusInto(leftSidebar);
     onOpened();
   }
   function closeLeftSidebar() {
     if (win.innerWidth >= desktopMinWidth) return; // No-op on desktop
+    // 先记下焦点在不在抽屉里：一 inert，浏览器就把里面的焦点丢回 body，事后再问就晚了
+    const hadFocus = leftSidebar.contains(doc.activeElement);
     leftSidebar.classList.add('-translate-x-full');
     sidebarScrim.classList.add('hidden');
+    syncInert();
+    // 只在焦点原本在抽屉里时还回去：选完会话后别处已经把焦点放进输入框的，不抢
+    if (hadFocus) restoreFocus(focusBefore, doc);
+    focusBefore = null;
     clearNotice(); // 这条回执说的是刚才那次操作，抽屉一关它的上下文就结束了
     onClosed();
   }

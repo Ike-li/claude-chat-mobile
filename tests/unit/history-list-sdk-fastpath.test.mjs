@@ -81,8 +81,8 @@ test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不�
     assert.deepEqual(sessions.map(s => s.id).sort(), ['sid-1', 'sid-2']);
     const s1 = sessions.find(s => s.id === 'sid-1');
     assert.equal(s1.title, 'CLI /resume 同款标题');
-    // 空 summary 兜底 '(无标题)'
-    assert.equal(sessions.find(s => s.id === 'sid-2').title, '(无标题)');
+    // 空 summary 回落该 jsonl 的 readHeadMeta（与搜索、通知横幅同口径），读不到才是占位（验收 O58）
+    assert.equal(sessions.find(s => s.id === 'sid-2').title, 'yo');
     // deadweight 字段快路径不返回（前端不消费、SDK 也不给）
     assert.equal(s1.model, undefined);
     assert.equal(s1.entrypoint, undefined);
@@ -183,6 +183,22 @@ test('SDK 漏报的会话（无 summary）仍须出现在列表里——本地 s
     assert.ok(ids.includes('sid-normal'), '正常会话照常在');
     assert.ok(ids.includes('sid-forked'), 'SDK 漏报的会话必须补齐，否则用户在抽屉里找不到它');
     assert.equal(sessions.find(s => s.id === 'sid-forked').title, '(无标题)', '无 summary 回落占位标题');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// 验收 O58：首条消息以 HTML 标签开头的会话，SDK 提不出 summary、整条漏报；补齐时原来一律写占位，
+// 抽屉里是「(无标题)」，搜索却能按原文搜到它——搜索用的就是 readHeadMeta。标题回落同一份。
+test('SDK 漏报但有首条 user 文本的会话：补齐时标题回落 readHeadMeta，不写占位', async () => {
+  const cwd = '/sdk/no-summary-html';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-html', [{ type: 'user', message: { role: 'user', content: '<div>改一下这个页面的布局</div>' } }]);
+  __setSdkListSessionsForTest(async () => []);
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    assert.equal(sessions.find(s => s.id === 'sid-html')?.title, '<div>改一下这个页面的布局</div>');
   } finally {
     __setSdkListSessionsForTest(undefined);
     rmProjectDir(dir);
