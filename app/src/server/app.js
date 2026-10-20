@@ -4272,8 +4272,9 @@ registerSocketConnection(io, socket => {
   registerFolderSocketHandlers({
     socket,
     on,
-    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
-    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
+    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）。
+    // readonly：手机上改不了清单时，新建只剩已连接的文件夹里（之外建出来的加不进清单，只会留一个空目录）
+    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs, readonly: workdirStatus.readonlyReason() }),
     addConnectedFolder,
     removeConnectedFolder,
     audit,
