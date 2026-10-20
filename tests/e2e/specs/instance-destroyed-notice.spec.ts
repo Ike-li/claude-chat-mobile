@@ -218,7 +218,8 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
     await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0, { timeout: 10_000 });
     // 历史已回包、分块渲染进行中：提示条在，但 frag 要画完才一次性插入，最后一条还看不到
-    await expect(page.locator('#messages')).toContainText('加载了 2000 条历史消息', { timeout: 10_000 });
+    // 提示文案随历史总数变（dev 上没加载全时是「仅显示最近 2000 条历史消息（共 N 条）」），只认共有的那段
+    await expect(page.locator('#messages')).toContainText('2000 条历史消息', { timeout: 10_000 });
     await expect(page.locator('#messages'), '前提：切走时渲染还没画完').not.toContainText('Long history final message marker');
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
