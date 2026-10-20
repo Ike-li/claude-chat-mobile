@@ -152,7 +152,9 @@ function installedStateMatches(settings, manifest) {
 function status(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
-  const settings = readSettings(paths.settings);
+  // settings.json 还不存在是新装 claude 的合法起点：确定没装（与 ops 层 readStatuslineInstallState 同判）。
+  // install 仍要求它先存在——那里的 ENOENT 是有意的，见 app/src/ops/cli-statusline-bridge.js 头注。
+  const settings = lstatIfPresent(paths.settings) ? readSettings(paths.settings) : {};
   const currentCommand = typeof settings.statusLine?.command === 'string'
     ? settings.statusLine.command
     : null;

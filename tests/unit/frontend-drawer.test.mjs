@@ -25,9 +25,16 @@ import { createDrawerController } from '../../app/public/js/app/drawer.js';
 // 只做控制器真正碰到的事：class 增删查 + onclick 赋值。不引 jsdom。
 function fakeEl() {
   const classes = new Set();
+  const attrs = new Map();
   return {
     onclick: null,
     textContent: '',
+    inert: false,
+    dataset: {},
+    contains(other) { return other === this; },
+    hasAttribute: (k) => attrs.has(k),
+    setAttribute: (k, v) => attrs.set(k, String(v)),
+    focus() {},
     classList: {
       add: (...c) => c.forEach(x => classes.add(x)),
       remove: (...c) => c.forEach(x => classes.delete(x)),
@@ -46,7 +53,7 @@ function harness({ innerWidth = 400, drawerOpen = false } = {}) {
   els.drawerNotice.classList.add('hidden'); // 真实初始态：提示条默认不占位
 
   const handlers = new Map();
-  const doc = { addEventListener: (type, fn) => handlers.set(type, fn) };
+  const doc = { addEventListener: (type, fn) => handlers.set(type, fn), activeElement: null };
   const win = { innerWidth };
   const calls = { haptic: [], opened: 0, closed: 0, fallback: [] };
   const context = createAppContext();
@@ -120,6 +127,19 @@ test.describe('移动宽度下的开合', () => {
     assert.equal(h.els.sidebarScrim.classList.contains('hidden'), true);
     assert.equal(h.calls.closed, 1);
     assert.deepEqual(h.calls.haptic, [], '收起没有触感反馈——与 open 不对称，是有意的');
+  });
+
+  // 验收 O77：收起的抽屉只是移出屏幕，里面的会话行仍能被 Tab 到、回车触发。桌面档常驻，不能 inert。
+  test('收起态 inert、打开撤掉、再收起又挂上；桌面档常驻不 inert', () => {
+    const h = harness();
+    assert.equal(h.els.leftSidebar.inert, true, '初始收起着就该 inert');
+    h.ctl.openLeftSidebar();
+    assert.equal(h.els.leftSidebar.inert, false);
+    h.ctl.closeLeftSidebar();
+    assert.equal(h.els.leftSidebar.inert, true);
+
+    const desktop = harness({ innerWidth: 1280 });
+    assert.equal(desktop.els.leftSidebar.inert, false, '桌面档抽屉常驻可见，inert 了就整栏点不动');
   });
 
   test('关闭按钮与遮罩都接到 closeLeftSidebar', () => {

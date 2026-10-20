@@ -560,6 +560,27 @@ test('安装态：command 没变但 refreshInterval 被改过 → 同样是 drif
   assert.equal(readStatuslineInstallState({ home }).state, 'drifted');
 });
 
+// 验收 AC-16-12 同类：读不出时说清是哪个文件。验收 O62：用户原本没配 statusLine 时仍给「开启」，点了安装脚本才报
+// 「settings.statusLine must be configured before install」——configured 让面板提前知道。
+test('安装态：读不出时 unreadable 说清是哪个文件；configured 说用户自己配没配 statusLine', () => {
+  const home = statuslineHome();
+  assert.equal(readStatuslineInstallState({ home }).configured, false, 'settings.json 都没有：没配');
+  writeFileSync(settingsPathOf(home), JSON.stringify({ env: {} }));
+  const bare = readStatuslineInstallState({ home });
+  assert.equal(bare.state, 'not-installed');
+  assert.equal(bare.configured, false, '没有 statusLine：装不了，面板不该给「开启」');
+  assert.equal(bare.unreadable, null);
+  writeFileSync(settingsPathOf(home), JSON.stringify({ statusLine: { command: 'mine' } }));
+  assert.equal(readStatuslineInstallState({ home }).configured, true);
+  mkdirSync(dirname(manifestPathOf(home)), { recursive: true });
+  writeFileSync(manifestPathOf(home), '{ 坏的');
+  const badManifest = readStatuslineInstallState({ home });
+  assert.equal(badManifest.state, 'unknown');
+  assert.equal(badManifest.unreadable, 'manifest');
+  writeFileSync(settingsPathOf(home), '{ 坏的');
+  assert.equal(readStatuslineInstallState({ home }).unreadable, 'settings');
+});
+
 test('安装态：settings.json 是坏 JSON → unknown（读不出来就说读不出来，不谎报没装）', () => {
   const home = statuslineHome();
   writeFileSync(settingsPathOf(home), '{ 这不是 JSON');

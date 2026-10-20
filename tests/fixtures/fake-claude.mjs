@@ -28,6 +28,9 @@
 //   turn-screenshot → 同 turn，但回答前先吐一次截图工具调用：assistant tool_use 与一条带 png 图片块的
 //             user tool_result（形态照真 CLI 落盘的 API 形态）。live 截图只存在实例内存里、本文件又不落
 //             transcript，所以「图从内存取到了」可以被单独观察到。
+//   turn-local-command → 同 turn，但不吐助手正文，改吐一条本地 slash 命令的输出（system/local_command_output，
+//             content 带 <local-command-stdout> 包装，形态照 sdk.d.ts SDKLocalCommandOutputMessage）再收尾——
+//             /context、/cost 这类命令在 CLI 本地算完、不经模型。
 //   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
@@ -110,7 +113,7 @@ rl.on('line', (line) => {
     });
   }
 
-  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot') return;
+  if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
@@ -137,13 +140,23 @@ function finishTurn(msg) {
     });
   }
 
-  out({
-    type: 'assistant',
-    session_id: SESSION_ID,
-    uuid: randomUUID(),
-    parent_tool_use_id: null,
-    message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
-  });
+  if (MODE === 'turn-local-command') {
+    out({
+      type: 'system',
+      subtype: 'local_command_output',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      content: `<local-command-stdout>${REPLY}</local-command-stdout>`,
+    });
+  } else {
+    out({
+      type: 'assistant',
+      session_id: SESSION_ID,
+      uuid: randomUUID(),
+      parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] },
+    });
+  }
   if (MODE === 'turn-bg') {
     out({
       type: 'system',
