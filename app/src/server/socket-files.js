@@ -5,6 +5,8 @@ import { isBareStoredName } from '../files/uploads.js';
 
 // 显式传入的 cwd 不在已连接的文件夹里（routeCwd 返回 null）时的统一拒绝文案（SCOPE-05）。组装根也用它。
 export const OUT_OF_SCOPE_ERROR = '这个目录不在已连接的文件夹里';
+// 范围内的文件已经不在了（面板开着时被删、被改名）：列表是旧的，叫人刷新
+const NOT_FOUND_ERROR = '文件不存在（可能已被删除或改名），请刷新列表';
 
 export function registerFileSocketHandlers({
   socket,
@@ -33,6 +35,10 @@ export function registerFileSocketHandlers({
   // 写回的 cwd 裁决（开档：只认当前授权）。routeCwd 是读档，额外放行热移除后仍在跑的实例目录——
   // 查看可以，直写不行（写回不经工具审批）。缺省回落 routeCwd，只为不注入的旧调用方。
   routeWriteCwd = null,
+  // 历史工具卡的「展开全文」（tool:full 带会话坐标时）：会话是否属于这个 cwd、从 transcript 取那条结果的全文。
+  // 缺省 = 没注入就不支持历史路径（只认实例内存，旧行为）。
+  sessionFileExists = null,
+  readTranscriptToolResult = null,
   logger = console,
 }) {
   on(socket, 'browse:list', (payload, ack) => {
@@ -41,6 +47,9 @@ export function registerFileSocketHandlers({
     const cwd = routeCwd(requestedCwd);
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const result = listDir(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxEntries });
+    // 范围门过了、只是不是目录或已经不在（前端点文件 / FIFO 条目时先试 list）：不是越界，不记审计（验收 O39 / O80）
+    if (result?.notDirectory) return ack({ ok: false, error: '不是目录' });
+    if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -67,6 +76,9 @@ export function registerFileSocketHandlers({
       // 让这条真实存在的记录淹没那些真正的越界尝试。
       return ack({ ok: false, error: '目标是符号链接，暂不支持直接读取' });
     }
+    // 同上：FIFO / socket 这类读不了的、编辑器开着时被删的，都不是越界（验收 O39 / O80）
+    if (result?.notOpenable) return ack({ ok: false, error: '这个文件类型不能预览' });
+    if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -77,6 +89,12 @@ export function registerFileSocketHandlers({
         meta: { via: 'browse:read', relPath: typeof relPath === 'string' ? relPath : null },
       });
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
+    }
+    // 写回不可用（FILE_EDIT=off，组装根不注入 writeFileInScope）时不下发编辑基线：前端拿 contentHash 当「能不能点编辑」
+    // 的唯一判据，给了它就亮出「编辑」，改完点保存才报「文件编辑未启用」（验收 O50）
+    if (typeof writeFileInScope !== 'function' && 'contentHash' in result) {
+      const { contentHash: _omit, ...readOnly } = result;
+      return ack({ ok: true, ...readOnly });
     }
     return ack({ ok: true, ...result });
   });
@@ -111,7 +129,7 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, error: '附件不存在或已被删除' });
     }
     const result = browseReadFile(loc.baseDir, loc.storedName, loc.scopeDirs, { offset, maxBytes, encoding: 'base64' });
-    if (result?.blockedSymlink || result === null) return ack({ ok: false, error: '附件不存在或已被删除' });
+    if (!result || result.blockedSymlink || result.notFound || result.notOpenable) return ack({ ok: false, error: '附件不存在或已被删除' });
     return ack({ ok: true, ...result });
   });
 
@@ -321,22 +339,43 @@ export function registerFileSocketHandlers({
     return ack(result);
   });
 
-  on(socket, 'tool:full', ({ instanceId, toolUseId } = {}, ack) => {
+  // 上限：live 卡片走 600/2000 截断，只有这条「展开全文」是裸全文。
+  // 客户端拿到后要同步做 JSON pretty + hljs 高亮（都无长度闸），几 MB 的 Write 内容足以打爆手机标签页。
+  // 与 file-preview 的 64KB 读片上限同量级，超出部分截断并明确告知，不静默丢。
+  const MAX_TOOL_FULL_BYTES = 512 * 1024;
+  const ackToolFull = (ack, text) => (text.length > MAX_TOOL_FULL_BYTES
+    ? ack({ ok: true, text: text.slice(0, MAX_TOOL_FULL_BYTES), truncated: true, totalLength: text.length })
+    : ack({ ok: true, text }));
+  on(socket, 'tool:full', async ({ instanceId, toolUseId, cwd: requestedCwd, sessionId, agentToolUseId } = {}, ack) => {
     if (typeof ack !== 'function') return;
+    // 历史卡片（带会话坐标，验收 O55）：live 卡片的全文在实例内存里，刷新或换台设备就没了，完整内容却一直在
+    // transcript 里。顺序同 image:get：先过范围门与会话归属，再查内存、再读盘——先查内存再过门的话，带一个
+    // 有效实例 id 就能绕开范围门。内存只认「实例就是这个会话」：别的会话的实例里同名 toolUseId 不算。
+    if (sessionId !== undefined && readTranscriptToolResult) {
+      if (typeof toolUseId !== 'string' || !toolUseId) return ack({ ok: false, error: '缺少 toolUseId' });
+      const cwd = routeCwd(requestedCwd);
+      if (cwd === null) return ack({ ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
+      if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+        return ack({ ok: false, code: 'not_found', error: '会话不存在' });
+      }
+      const agent = instanceId ? routeInstance(instanceId) : null;
+      const cached = agent && agent.sessionId === sessionId ? agent.getToolOutput(toolUseId) : null;
+      if (cached != null) return ackToolFull(ack, cached);
+      try {
+        const r = await readTranscriptToolResult(sessionId, cwd, toolUseId, { agentToolUseId: agentToolUseId ?? null });
+        if (!r.ok) return ack({ ok: false, code: r.code, error: '全文不可用（记录里找不到这条结果）' });
+        return ackToolFull(ack, r.text);
+      } catch (err) {
+        return ack({ ok: false, code: 'read_failed', error: err.message });
+      }
+    }
     const agent = routeInstance(instanceId);
     if (!agent) return ack({ ok: false, error: '实例不存在' });
     if (typeof toolUseId !== 'string' || !toolUseId) return ack({ ok: false, error: '缺少 toolUseId' });
     const text = agent.getToolOutput(toolUseId);
     if (text == null) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });
     // getToolOutput 返回时已红线（base64 载荷被替换为占位符），纯文本工具输出不受影响。
-    // 上限：live 卡片走 600/2000 截断，只有这条「展开全文」是裸全文。
-    // 客户端拿到后要同步做 JSON pretty + hljs 高亮（都无长度闸），几 MB 的 Write 内容足以打爆手机标签页。
-    // 与 file-preview 的 64KB 读片上限同量级，超出部分截断并明确告知，不静默丢。
-    const MAX_TOOL_FULL_BYTES = 512 * 1024;
-    if (text.length > MAX_TOOL_FULL_BYTES) {
-      return ack({ ok: true, text: text.slice(0, MAX_TOOL_FULL_BYTES), truncated: true, totalLength: text.length });
-    }
-    return ack({ ok: true, text });
+    return ackToolFull(ack, text);
   });
 
   // B2：读后台任务的输出文件（CLI 的 task_notification.output_file）。

@@ -98,8 +98,16 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
+        // ntfyType：ntfy 的标签跟标题同一个判断（ntfy 客户端把标签渲染成标题前的表情，按事件类型一律 ✅ 时
+        // 锁屏上就是「✅ ⚠️ 任务出错」，验收 O64）。emitNotify 优先用它。下面审批过期那一支同样要带。
+        const ntfyType = p.interrupted ? 'result_interrupted' : (p.isError ? 'result_error' : 'result');
+        // 验收 O30：本轮有审批等到过期时，CLI 以 is_error 收尾；用户要知道的是操作没执行、得重新触发，不是「出错」。
+        // 用户自己点了停止仍优先算「已中止」。
+        if (p.approvalExpired && !p.interrupted) {
+          return { ...withData({ title: titleWithIdentity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType };
+        }
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
-        return withData({ ...identity(title), body: `用时 ${secs}s` });
+        return { ...withData({ ...identity(title), body: `用时 ${secs}s` }), ntfyType };
       }
     case 'permission_request': {
       // body 最小化（SEC-04）：只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
@@ -271,6 +279,8 @@ const NTFY_TAGS = {
   permission_request: ['warning'],
   question: ['question'],
   result: ['white_check_mark'],
+  result_error: ['warning'],
+  result_interrupted: ['stop_button'],
   task_notification: ['robot'],
   background_running: ['hourglass_flowing_sand'],
   // CLI hooks 桥：Stop=完成；Notification=需要你（不得误用 result 的 checkmark + priority 3，J3）
@@ -328,10 +338,15 @@ export function ntfyRequestInit({ url, topic, token }, title, body, meta = {}) {
 // 也没比 'network error' 多说什么，而正则漏一个变体就是凭证外泄，不对称。
 // 优先级 statusCode > code > 纯文本 message：前两者短、稳定、无敏感信息，且正是定位问题要看的那一维
 // （HTTP 401=VAPID 配错，HTTP 502/ETIMEDOUT=网络不通）。
+// ntfy 走 fetch（验收 O51）：AbortSignal.timeout 抛的 DOMException 带的是数字 code（23），不是错误码——归成
+// ETIMEDOUT；断连、DNS 失败只抛「fetch failed」，真正的 ECONNRESET / ENOTFOUND 在 err.cause.code 里。
+// 只认字符串 code，数字 code 跳过。
 export function describeDeliveryError(err) {
   if (!err || typeof err !== 'object') return 'unknown';
   if (typeof err.statusCode === 'number') return `HTTP ${err.statusCode}`;
-  if (err.code) return String(err.code);
+  if (err.name === 'TimeoutError') return 'ETIMEDOUT';
+  if (typeof err.code === 'string' && err.code) return err.code;
+  if (typeof err.cause?.code === 'string' && err.cause.code) return err.cause.code;
   const msg = String(err.message ?? '').trim();
   if (!msg) return 'unknown';
   if (/https?:\/\//.test(msg)) return 'network error';
