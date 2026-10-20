@@ -58,7 +58,7 @@ The rest is about getting work done:
 | `claude` for a new session / `--resume` to dig through history | `+` in the top bar: pick the folder (add or create one right on the phone, or choose "No folder"), the branch, whether to open it in a fresh worktree. The drawer lists every session by project — subfolders get their own section, worktrees sit under their repository — titles generated for you, searchable, live ones marked "running" |
 | `Esc` to interrupt | Stop button in the composer |
 | `/model`, permission mode, effort | Tap the composer chip; takes effect from the next message. All six permission modes |
-| `@` to reference a file | Type `@` to search the workspace and insert the path |
+| `@` to reference a file | Type `@` to search the workspace and insert `@path` (same as the terminal; the CLI attaches the file contents) |
 | `/` slash commands | Type `/` for candidates, including the skills you installed |
 | Seeing what it actually changed | Open a tool card to preview the diff; each turn ends with a changed-files summary (± lines) |
 | A quick `git diff` | The "Changes" tab in the workspace panel |

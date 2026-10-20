@@ -3,7 +3,7 @@
 // 写进命令串（dotfiles 同步/ps 可见）；文件通道无秘密，且 server 离线时仍能做安装回环验证。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,7 @@ import {
   isVerifyEvent,
   writeHookVerifyAck,
   readHookVerifyAck,
+  readHooksInstallState,
 } from '../../app/src/ops/cli-hooks-bridge.js';
 
 const CWD = '/Users/you/code/demo';
@@ -183,4 +184,23 @@ test('verify 事件：isVerifyEvent 识别 + ack 回执可写可读（消灭"被
     assert.equal(readdirSync(dir).some(n => n.includes(verifyId)), false);
     assert.ok(JSON.parse(readFileSync(ackPath, 'utf8')).ackedAt >= 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// 验收 AC-16-12：把安装清单设成不可读，面板说「读不出 ~/.claude/settings.json 的安装记录」——读不了的其实是清单。
+// settings 与清单在同一个 try 里读，失败只剩一个 unknown，说不出是哪个。分开报：unreadable = 'settings' | 'manifest'。
+test('readHooksInstallState：读不出时说清是 settings.json 还是安装清单', () => {
+  const home = tempDir();
+  try {
+    const settings = join(home, '.claude', 'settings.json');
+    const manifest = join(home, '.claude', 'ccm', 'hooks-v1', 'install-manifest.json');
+    mkdirSync(join(home, '.claude', 'ccm', 'hooks-v1'), { recursive: true });
+    assert.deepEqual(readHooksInstallState({ home }), { state: 'not-installed', unreadable: null });
+    writeFileSync(manifest, '{ 坏的');
+    assert.deepEqual(readHooksInstallState({ home }), { state: 'unknown', unreadable: 'manifest' });
+    writeFileSync(manifest, JSON.stringify({ installedCommand: 'x', events: ['Stop'] }));
+    writeFileSync(settings, '{ 坏的');
+    assert.deepEqual(readHooksInstallState({ home }), { state: 'unknown', unreadable: 'settings' });
+  } finally {
+    rmSync(home, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
 });

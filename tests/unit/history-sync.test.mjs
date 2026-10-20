@@ -83,6 +83,48 @@ test('classifyTranscriptTail: assistant 只落了 thinking（text/tool_use 未�
   assert.equal((await classifyTranscriptTail('tthink', cwd, { baseDir: BASE })).verdict, 'pending');
 });
 
+// 验收 O96（AC-12-03）：第三方网关把一个空 thinking 写在正文后面（同一条消息拆成 text 条目 + 空 thinking 条目），
+// 链尾成了「只有 thinking」→ 按流式中间态判 pending，镜像锁永远不放，手机输入框一直只读。
+// 空 thinking 不承载任何内容，跳过它往前看：前面是正文就收尾。真流式中间态不受影响——thinking 有内容照样
+// pending；空 thinking 前面是 user / tool_result 的，跳过之后照样 pending（见下一条）。
+test('classifyTranscriptTail: 正文之后跟一条空 thinking（网关形态）→ settled，不再永久锁', async () => {
+  const cwd = '/test/tail-empty-thinking-after-text';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'temptythink', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-10-17T10:00:00.000Z' },
+    { type: 'assistant', message: { id: 'msg_gw', role: 'assistant', content: [{ type: 'text', text: '答完了' }] }, timestamp: '2026-10-17T10:00:05.000Z' },
+    { type: 'assistant', message: { id: 'msg_gw', role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] }, timestamp: '2026-10-17T10:00:05.100Z' },
+  ]);
+  const r = await classifyTranscriptTail('temptythink', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'settled');
+  assert.equal(r.lastChainTs, Date.parse('2026-10-17T10:00:05.000Z'), '时间戳取真正收尾的那条正文');
+});
+
+test('classifyTranscriptTail: 空 thinking 前面还没有正文（流式刚开始）→ 仍 pending', async () => {
+  const cwd = '/test/tail-empty-thinking-midstream';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'temptymid', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-10-17T10:00:00.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }] }, timestamp: '2026-10-17T10:00:02.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('temptymid', cwd, { baseDir: BASE })).verdict, 'pending');
+  writeJSONL(dir, 'temptytool', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '   ' }] }, timestamp: '2026-10-17T10:00:04.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('temptytool', cwd, { baseDir: BASE })).verdict, 'pending',
+    '工具结果之后的空 thinking 仍是轮次进行中');
+  // 正文之后跟一条【有内容】的 thinking：交错思考，接下来要发 tool_use——真流式中间态，不能收尾。
+  // 这条把「只跳过空 thinking」和「跳过一切 thinking」分开：后者会在这里误判 settled、提前解锁。
+  writeJSONL(dir, 'tinterleaved', [
+    { type: 'user', message: { role: 'user', content: '提问' } },
+    { type: 'assistant', message: { id: 'msg_i', role: 'assistant', content: [{ type: 'text', text: '我先查一下' }] } },
+    { type: 'assistant', message: { id: 'msg_i', role: 'assistant', content: [{ type: 'thinking', thinking: '该读哪个文件' }] }, timestamp: '2026-10-17T10:00:06.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tinterleaved', cwd, { baseDir: BASE })).verdict, 'pending');
+});
+
 test('classifyTranscriptTail: 子 agent（isSidechain）开着 tool_use → pending（防主链 settled 后过早解锁）', async () => {
   const cwd = '/test/tail-sidechain';
   const dir = join(BASE, getProjectDir(cwd));

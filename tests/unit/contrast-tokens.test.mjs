@@ -73,3 +73,14 @@ test('UI-001 深色：danger 文字/surface ≥4.5', () => {
 test('UI-001 深色：info 文字/surface ≥4.5', () => {
   assert.ok(contrastRatio(dark.info, dark.surface) >= 4.5, contrastRatio(dark.info, dark.surface));
 });
+
+// 验收 O79（AC-21-03）：次要文字（text-ink-faint 的时间戳、副标题、小按钮）深色下只有 3.5–3.9:1。它是小字（10–11px），
+// AA 要求 4.5。ink-faint 会落在 surface / canvas / surface-sunk / 用户气泡四种底上，四种都要过。
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`O79 ${name}：ink-faint 小字在 surface / canvas / surface-sunk / user-bubble 上都 ≥4.5`, () => {
+    for (const bg of ['surface', 'canvas', 'surface-sunk', 'user-bubble']) {
+      const ratio = contrastRatio(theme['ink-faint'], theme[bg]);
+      assert.ok(ratio >= 4.5, `ink-faint / ${bg} = ${ratio.toFixed(2)}`);
+    }
+  });
+}
