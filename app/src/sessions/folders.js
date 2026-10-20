@@ -97,6 +97,8 @@ export function validateFolderName(name) {
 // 在家目录内某个目录下新建一层子目录（非递归：父目录必须已存在）。
 // 建完复核（FILES-2 同款）：判定与 mkdir 之间父目录可能被换成 symlink，mkdir 会跟着它建到别处——
 // 真实路径不是预期的那一个，就撤掉这个刚建的空目录再拒。
+// ctx.readonly：清单在手机上改不了时的原因码（同 folders:add 的拒绝原因）。这时已连接的文件夹之外建出来的目录
+// 接下来加不进清单，只会留下一个空目录（验收 O41），建之前就拒；已连接的文件夹里照常建（不用写清单）。
 // ctx.mkdir 是测试注入：建目录并交回刚建好那个目录的 lstat（真实实现建完立刻 lstat）。
 const mkdirAndPin = target => { mkdirSync(target); return lstatSync(target); };
 export function createSubfolder(parentRel, name, ctx = {}) {
@@ -104,6 +106,7 @@ export function createSubfolder(parentRel, name, ctx = {}) {
   if (bad) return { ok: false, error: bad };
   const at = resolveInHome(parentRel ?? '', ctx.home);
   if (!at || inForbidden(at.real, ctx.forbidden)) return { ok: false, error: 'out_of_range' };
+  if (ctx.readonly && !(ctx.connected ?? []).map(realOrNull).some(c => c && isWithin(at.real, c))) return { ok: false, error: ctx.readonly };
   const target = join(at.real, name);
   let made;
   try {

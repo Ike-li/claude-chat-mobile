@@ -188,6 +188,44 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 验收 O53 / O52 / O26：网关下跑着的会话，init 报的是真实 wire（grok-4.5[1m]），不是档位 id；SDK 列表里它是
+      // opus 那张的 resolvedModel，default 与其余几档指裸名 grok-4.5。在跑的刻意不是 default 那张：否则「没点过时
+      // 回落 default 的 wire」碰巧也等于在跑模型，发送意图那条断言就分不出对错。
+      // 实例的 model 一并改掉，instances 广播与 init 说的是同一个在跑模型（/__reset 时复原）。
+      command: 'test:gateway-loaded-wire',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay }) => {
+        mockInstances[0].model = 'grok-4.5[1m]';
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'init', payload: {
+            model: 'grok-4.5[1m]',
+            cwd: mockInstances[0].cwd,
+            claudeVersion: '0.1.0-mock',
+            mcpServers: [],
+            skillsCount: 7,
+            permissionMode,
+            slashCommands: [{ name: 'model', description: 'Switch active model' }],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'models', payload: {
+            models: [
+              { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'grok-4.5' },
+              { value: 'opus', displayName: 'Custom Opus model', resolvedModel: 'grok-4.5[1m]' },
+              { value: 'sonnet', displayName: 'Custom Sonnet model', resolvedModel: 'grok-4.5' },
+              { value: 'haiku', displayName: 'Custom Haiku model', resolvedModel: 'grok-4.5' },
+            ],
+          },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_gateway_loaded_wire_1', durationMs: 100, costUsd: 0, isError: false, models: ['grok-4.5[1m]'] },
+        });
+      }),
+    },
+    {
       // 新会话（未选具体模型）+ 网关默认：CLI 报 cwd 默认为档位别名 opus（instances.defaultModel），SDK
       // supportedModels() 在 resolvedModel 带出真实 wire id。回归 bug：currentModel 空时底栏 pill 须解析出
       // 真实模型名，而不是停在裸别名 'opus'——原表现「选了 opus 才显具体名」。models 列表无 default 项，
@@ -486,6 +524,36 @@ export function createStatusScenarios(getContext) {
             viewingInstanceId: null,
             viewingCwd: removedCwd,
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), removedCwd])),
+            instances: mockInstances,
+          },
+        });
+      }),
+    },
+    {
+      // 验收 O60 后一半：正在看的会话 CLI 进程被 kill。照真 server 的顺序：agent.js consume 收尾先发 error
+      // （带 processExited），再 onExit 摘掉实例、广播 viewing 变化。之后重开这个会话走清屏全量重载（见 armCrashReload）。
+      command: 'test:process-crash',
+      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }) => {
+        const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+        if (idx === -1) return;
+        const crashed = mockInstances[idx];
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
+          type: 'error', payload: {
+            message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
+          },
+        });
+        armCrashReload(crashed.sessionId);
+        mockInstances.splice(idx, 1);
+        setViewingInstanceId(null);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
+            viewingInstanceId: null,
+            viewingCwd: crashed.cwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
             instances: mockInstances,
           },
         });
