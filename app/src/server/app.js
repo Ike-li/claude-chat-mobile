@@ -1748,6 +1748,12 @@ const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: st
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
+// per-cwd CLI 配置代数：确认该区配置变过（config:refresh 强制重读、scout 清单签名变了）就加一。实例构造时
+// 抄下当时的代数（resolvedEnv 也是那一刻注入的快照），之后它每轮 init 报的模型只描述它自己那套旧配置——
+// 代数对不上就不再当「本目录的默认模型」记（验收 O85）。不落盘：重启后所有实例都是新 spawn 的。
+const cliConfigGenByCwd = new Map();
+const cliConfigGen = cwd => cliConfigGenByCwd.get(cwd) ?? 0;
+const bumpCliConfigGen = cwd => { cliConfigGenByCwd.set(cwd, cliConfigGen(cwd) + 1); };
 try {
   const c = JSON.parse(readFileSync(INIT_CACHE, 'utf8'));
   lastInit = c.init ?? null;
@@ -1775,8 +1781,12 @@ function saveInitCache() {
   catch { /* 写失败不致命：缓存仅是重启后首轮前的体验增强 */ }
 }
 // scout / fresh 首 init 采纳 cwd 默认模型（判据把 resume-no-record 排除，防污染）；变化才落盘。
-function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel }) {
+// spawnGen：实例构造时的 CLI 配置代数。CLI 每轮都吐 init，config:refresh 清掉默认模型之后，刷新前就开着的
+// 会话下一轮照样会报它 spawn 时的模型名——不拦就写回去，新会话页的摘要停在改过的旧名上，整页刷新也救不回，
+// 只有重启杀掉那个实例才恢复（验收 O85）。
+function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel, spawnGen }) {
   if (!cwd || !isCwdDefaultModel({ resumeId, pinnedModel, reportedModel })) return false;
+  if (spawnGen !== cliConfigGen(cwd)) return false;
   if (defaultModelByCwd.get(cwd) === reportedModel) return false;
   defaultModelByCwd.set(cwd, reportedModel);
   saveInitCache();
@@ -2319,7 +2329,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
-      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
+      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model, spawnGen: instance.cliConfigGen });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
       // 显式广播：此前靠「init 边界的 broadcastInstances 自然带新 sid/title」搭便车，而 sessionId 现在
       // 可能远早于 init 到达（本地 slash 命令下实测早 122s，见 agent.js#_claimSessionIdEarly）。不显式推
@@ -2350,6 +2360,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
   instance.transcriptModel = transcriptModel;
   instance.routeGeneration = generation; // B1：switch 聚焦 live 可刷新
+  instance.cliConfigGen = cliConfigGen(cwd); // 与上面注入的 resolvedEnv 同一时刻的配置代数，见 recordCwdDefaultModel
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -2553,7 +2564,10 @@ function openScoutInstance(cwd) {
         // 误删只是少一行提示。取不到旧签名（首次填缓存）则跳过，"不知道"不等于"变了"。
         const prevSig = modelListSignature(modelsCache.get(cwd));
         modelsCache.set(cwd, envelope.payload);
-        if (prevSig && prevSig !== modelListSignature(envelope.payload)) defaultModelByCwd.delete(cwd);
+        if (prevSig && prevSig !== modelListSignature(envelope.payload)) {
+          defaultModelByCwd.delete(cwd);
+          bumpCliConfigGen(cwd); // 配置确实变了：此前 spawn 的实例报的是旧配置下的默认模型
+        }
         saveInitCache();
         pushModelsForCwd(cwd);
         cleanup();
@@ -4929,6 +4943,7 @@ registerSocketConnection(io, socket => {
       // 先清旧缓存（前端立即知道模型列表不可用），再由活跃 agent fetchModels 或 scout 补新值。
       modelsCache.delete(cwd);
       defaultModelByCwd.delete(cwd);
+      bumpCliConfigGen(cwd); // 刷新前开着的会话仍用旧配置，它们之后的 init 不再算本目录的默认模型
       saveInitCache();
       // 模型清单一律靠 scout 重新 spawn 去取，**绝不问活跃 agent**——哪怕这个 cwd 正开着会话。
       // 两个原因叠加，都不属于「缓存过期」那一类，加刷新次数、延长等待都解决不了：

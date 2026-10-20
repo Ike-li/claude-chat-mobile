@@ -67,6 +67,10 @@ const REPLY = process.env.CCM_FAKE_CLAUDE_REPLY || '(fake-claude) 收到';
 // filterSafeResolvedEnv 只放行 ANTHROPIC_/CLAUDE_CODE_ 前缀，别的名字根本进不到子进程。
 // 不置位时 response 仍是 {}，既有 S2 与集成用例建在其上的前提逐字不变（同本文件「显式 opt-in」原则）。
 const GATEWAY_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
+// 真 CLI 在 stream-json 输入模式下每一轮都先吐一条 system/init，model 是这次 spawn 解析出的真实模型名。
+// 显式 opt-in（CCM_FAKE_CLAUDE_INIT_EACH_TURN=1）才这样做：init 每轮都吐、model 回显 GATEWAY_MODEL；
+// 不置位时仍只吐一次、model 恒为 'fake-claude'，既有用例的前提逐字不变。
+const INIT_EACH_TURN = process.env.CCM_FAKE_CLAUDE_INIT_EACH_TURN === '1';
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -99,7 +103,7 @@ rl.on('line', (line) => {
 
   if (msg.type !== 'user') return;
 
-  if (!announcedInit) {
+  if (!announcedInit || INIT_EACH_TURN) {
     announcedInit = true;
     out({
       type: 'system',
@@ -108,7 +112,7 @@ rl.on('line', (line) => {
       uuid: randomUUID(),
       cwd: process.cwd(),
       tools: [],
-      model: 'fake-claude',
+      model: (INIT_EACH_TURN && GATEWAY_MODEL) || 'fake-claude',
       permissionMode: 'default',
     });
   }
