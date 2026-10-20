@@ -159,6 +159,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O62：用户原本没配 statusLine 时仍给「开启」，点了装不上；失败原因是一行英文，还插进了被面板挡住的聊天流。
+  test('P0-25e 终端状态栏：用户自己没配 statusLine 时不给「开启」，说清要先配', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__set-statusline-unconfigured');
+    await openGeneralPage(page, 'host');
+    const section = page.locator('#statuslineBridgeSection');
+    await expect(section).toContainText('未启用');
+    await expect(section).toContainText('statusLine');
+    await expect(section.locator('[data-testid="statusline-bridge-action"]'), '给了一个点了才报错的按钮').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-25f 终端状态栏：开启失败时原因就地写在面板里，不插进面板后面的聊天流', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-statusline-setup-fail');
+    await openGeneralPage(page, 'host');
+    const section = page.locator('#statuslineBridgeSection');
+    await section.locator('[data-testid="statusline-bridge-action"]').click();
+    await page.locator('#confirmOk').click();
+    const result = page.locator('[data-testid="statusline-bridge-result"]');
+    await expect(result, '失败了面板上什么都没说').toContainText('settings.statusLine must be configured before install');
+    await expect(result).toHaveClass(/text-danger/);
+    // 放在结果出现之后：之前断言「没有」会在回执到达前就空过
+    await expect(page.locator('#messages'), '插进了被面板挡住的聊天流').not.toContainText('settings.statusLine');
+    await expectNoBrowserErrors(page);
+  });
+
   // 缺口 2：statusline 桥此前在 web 上整段隐身——service:status 连字段都没有，只能回电脑敲
   // npm run statusline:status。两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
   test('P0-25d 终端状态栏（statusline 桥）：未装显示开启按钮 → 二次确认 → 翻为已启用', async ({ page }) => {

@@ -1303,11 +1303,15 @@ function computeServiceHealth() {
     missingFolders: workdirStatus.missing(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
-    hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
+    // unreadable：读不出时是哪个文件，面板据此点名（验收 AC-16-12）
+    hooksBridge: { state: hooksInstallState, unreadable: hooksUnreadable, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
     // statusline 桥同理。此前只有 hooks 桥有这个字段，于是面板上一个桥有安装态与一键安装、
     // 它的孪生兄弟整段隐身——两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
     statuslineBridge: {
       state: statuslineInstallState,
+      // configured：用户自己配没配 statusLine——没配时装不上，面板不给「开启」（验收 O62）
+      configured: statuslineInstallDetail.configured,
+      unreadable: statuslineInstallDetail.unreadable,
       off: process.env.CLI_STATUSLINE_BRIDGE === 'off',
     },
   };
@@ -1318,13 +1322,17 @@ function computeServiceHealth() {
 
 // 安装态缓存：启动时读一次，装/卸后由 refreshHooksInstallState 主动刷新。
 let hooksInstallState = 'unknown';
+let hooksUnreadable = null;
 function refreshHooksInstallState() {
-  hooksInstallState = readHooksInstallState();
+  ({ state: hooksInstallState, unreadable: hooksUnreadable } = readHooksInstallState());
   return hooksInstallState;
 }
 let statuslineInstallState = 'unknown';
+let statuslineInstallDetail = { configured: null, unreadable: null };
 function refreshStatuslineInstallState() {
-  statuslineInstallState = readStatuslineInstallState().state;
+  const { state, configured, unreadable } = readStatuslineInstallState();
+  statuslineInstallState = state;
+  statuslineInstallDetail = { configured, unreadable };
   return statuslineInstallState;
 }
 // approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，

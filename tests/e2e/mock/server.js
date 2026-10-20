@@ -216,6 +216,10 @@ let noModelsMode = false;
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
 let mockStatuslineState = 'not-installed';
+// 验收 O62：用户自己配没配 statusLine（真 server 的 readStatuslineInstallState().configured）。没配时装不上，面板不给「开启」。
+let mockStatuslineConfigured = true;
+// 下一次 statusline:setup 按真安装脚本的失败形态回（一次性）：O62 里那一行英文
+let mockStatuslineSetupFailArmed = false;
 // test:qr-access 拨到「受 Access 保护」档：那一档的码不含 token（判据在 public-target.js）
 let mockAccessProtected = false;
 // test:server-log-missing：拨到「日志文件不存在」档，验前端说清楚而不是给个看起来很干净的空列表
@@ -254,7 +258,7 @@ const mockServicePayload = () => ({
   clientError: mockClientError,
   missingFolders: mockMissingFolders,
   hooksBridge: { state: mockHooksState, off: false },
-  statuslineBridge: { state: mockStatuslineState, off: false },
+  statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 // __reset 代数：每次 resetMockState 自增。user:message 进入时记下，await 醒来发现代数变了就收手。
@@ -599,6 +603,8 @@ function resetMockState() {
   noModelsMode = false;
   mockHooksState = 'not-installed';
   mockStatuslineState = 'not-installed';
+  mockStatuslineConfigured = true;
+  mockStatuslineSetupFailArmed = false;
   mockAccessProtected = false;
   mockServerLogMissing = false;
   mockAutoContinue = [];
@@ -844,6 +850,26 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
   if (!sessionId) return res.status(400).json({ ok: false });
   mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
+  res.json({ ok: true });
+});
+
+// 验收 O62：桥面板的两个夹具。unconfigured = 用户自己没配 statusLine；setup-fail = 下一次安装按真脚本的失败形态回。
+app.post('/__set-statusline-unconfigured', (_req, res) => {
+  mockStatuslineConfigured = false;
+  // 真 server 启动时就读好了、每帧广播都带；这里中途改，补一帧让面板拿到
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true });
+});
+app.post('/__arm-statusline-setup-fail', (_req, res) => {
+  mockStatuslineSetupFailArmed = true;
   res.json({ ok: true });
 });
 
@@ -2884,6 +2910,10 @@ io.on('connection', socket => {
     if (typeof ack !== 'function') return;
     const action = payload?.action;
     if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    if (mockStatuslineSetupFailArmed) {
+      mockStatuslineSetupFailArmed = false;
+      return ack({ ok: false, state: mockStatuslineState, report: 'settings.statusLine must be configured before install' });
+    }
     mockStatuslineState = action === 'install' ? 'installed' : 'not-installed';
     ack({ ok: true, state: mockStatuslineState, report: action === 'install' ? '✅ 已接管 statusLine 命令。' : '已恢复原命令。' });
   });
@@ -2968,7 +2998,7 @@ io.on('connection', socket => {
       restarts: mockRestarts,
       // 「终端会话推送」段夹具：默认未安装（新用户初见的形态，也是最需要被引导的那一态）
       hooksBridge: { state: mockHooksState, off: false },
-      statuslineBridge: { state: mockStatuslineState, off: false },
+      statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });

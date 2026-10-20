@@ -217,7 +217,9 @@ export function formatStatuslineBridgeRow(statuslineBridge) {
       value: t('状态读取失败'),
       tone: 'warn',
       action: null,
-      hint: t('读不出 ~/.claude/settings.json 的安装记录；在电脑上跑 npm run statusline:status 查看'),
+      hint: statuslineBridge.unreadable === 'manifest'
+        ? t('读不出安装清单 ~/.claude/ccm/statusline-v1/install-manifest.json；在电脑上跑 npm run statusline:status 查看')
+        : t('读不出 ~/.claude/settings.json 的安装记录；在电脑上跑 npm run statusline:status 查看'),
     };
   }
   if (state === 'installed') {
@@ -225,6 +227,17 @@ export function formatStatuslineBridgeRow(statuslineBridge) {
   }
   if (state === 'drifted') {
     return { label, value: t('配置已被改动'), tone: 'warn', action: null };
+  }
+  // 用户自己没配 statusLine：这个桥是「接管并透传你原来的输出」，没有原命令可接，安装脚本会拒。
+  // 不给一个点了才报错的按钮，先说清要做什么（验收 O62）。只认显式 false：旧 server 不带这个字段时照旧给按钮。
+  if (statuslineBridge.configured === false) {
+    return {
+      label,
+      value: t('未启用'),
+      tone: 'muted',
+      action: null,
+      hint: t('要先在电脑上给 Claude Code 配好状态栏（~/.claude/settings.json 里的 statusLine），这里才能接管它'),
+    };
   }
   return {
     label,
@@ -251,7 +264,10 @@ export function formatHooksBridgeRow(hooksBridge) {
       value: t('状态读取失败'),
       tone: 'warn',
       action: null,
-      hint: t('读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看'),
+      // 读不了的是哪个文件，服务端说清了就点名哪个（验收 AC-16-12）；旧 server 不带 unreadable → 原来那句
+      hint: hooksBridge.unreadable === 'manifest'
+        ? t('读不出安装清单 ~/.claude/ccm/hooks-v1/install-manifest.json，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看')
+        : t('读不出 ~/.claude/settings.json 的安装记录，可能是文件损坏或权限变更；在电脑上跑 npm run hooks:status 查看'),
     };
   }
   if (state === 'installed') {
