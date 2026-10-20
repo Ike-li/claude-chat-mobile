@@ -1,5 +1,6 @@
 // 会话标题搜索纯决策：数据进数据出，不碰 DOM/socket。
 // 与 src/sessions/history.js 同语义（两侧不能互相 import，边界闸）。
+import { t } from '../i18n.js';
 
 /** 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。 */
 export function matchesSessionTitle(title, query) {
@@ -32,6 +33,16 @@ export function resolveSessionListTitle({ summary, metaTitle } = {}) {
   const m = typeof metaTitle === 'string' ? metaTitle.trim() : '';
   if (m) return m.length > 60 ? m.slice(0, 60) : m;
   return '(无标题)';
+}
+
+// 会话标题的展示形态。服务端给无标题会话写死占位「(无标题)」——通知层与 cross-side-parity 认这个字面量，
+// 不在那边改——于是前端 `s.title || t(...)` 的兜底永远走不到，英文界面上照样是「(无标题)」（验收 O42）。
+// emptyLabel 由调用方给：抽屉里没存过的新会话叫「新会话」，首页叫「无标题会话」，两处本来就不同。
+const SERVER_UNTITLED = '(无标题)';
+export function displaySessionTitle(title, emptyLabel) {
+  const s = typeof title === 'string' ? title.trim() : '';
+  if (s === SERVER_UNTITLED) return t('无标题会话');
+  return s || emptyLabel;
 }
 
 // 系统通知横幅身份。与 src/ops/notifications.js 同语义（两侧不能互相 import，边界闸）：

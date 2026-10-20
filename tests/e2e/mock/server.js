@@ -85,6 +85,8 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// 主工作区会话列表多出一条标题是服务端占位「(无标题)」的会话（真 server 对提不出标题的会话就写这个字面量）。
+let untitledSessionArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
@@ -544,6 +546,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  untitledSessionArmed = false;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   mockUnreadOnEntry = 0;
@@ -822,6 +825,12 @@ app.post('/__arm-history-error', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 验收 O42 / O43③：武装后主工作区多一条无标题会话。无参，/__reset 清除；要在 page.goto 之前武装，首屏的列表就带上它。
+app.post('/__arm-untitled-session', (_req, res) => {
+  untitledSessionArmed = true;
+  res.json({ ok: true });
+});
+
 // P0-PICK-11/12/13：钉住已连接的文件夹清单（instances 广播的 dirs），查看目录停在「无文件夹」、不看任何实例——
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
@@ -1067,6 +1076,9 @@ function mainCwdSessions() {
     lastUsedAt: mockListClockBase - 1400000,
     entrypoint: 'sdk-ts'
   });
+  if (untitledSessionArmed) {
+    sessions.push({ id: 'mock-session-untitled', title: '(无标题)', lastUsedAt: mockListClockBase - 30000, entrypoint: 'sdk-ts' });
+  }
   return sessions;
 }
 
