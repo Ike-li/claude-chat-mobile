@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -38,6 +38,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await fullOutputButton.click();
     await expect(page.locator('details.toolcard').last()).toContainText('extra full lines from tool:full mock');
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // PR #250 review：全文超过服务端上限（512KiB）时 tool:full 只回开头并带 truncated。此前只渲染 res.text、随即
+  // 撤掉按钮，用户看到的是一段不完整的输出，却没有任何标记，也没有别的办法拿到其余部分。
+  test('P0-05-FULL-TRUNC 展开全文超过上限：说清只显示了开头和原长', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-tool-full-truncated');
+    await sendChatMessage(page, 'test:tool');
+    await expect(page.locator('details.toolcard')).toHaveCount(3, { timeout: 15_000 });
+    await waitForIdle(page);
+    await page.locator('details.toolcard summary').last().click();
+    await page.locator('[data-testid="tool-expand-full"]').click();
+    const card = page.locator('details.toolcard').last();
+    await expect(card).toContainText('HEAD_OF_HUGE_OUTPUT');
+    const note = card.locator('[data-testid="tool-full-truncated"]');
+    await expect(note, '拿到的只是开头，不说清楚就像已经完整了').toBeVisible();
+    await expect(note).toContainText('700000');
     await expectNoBrowserErrors(page);
   });
 
@@ -346,6 +364,37 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O55：从历史打开的会话，Bash 输出原来只给 600 字（契约写 2000，服务端那半由 display-contracts 守），
+  // 并且历史卡片没有「展开全文」——那个按钮只挂在 live 卡片上、从实例内存取全文，刷新或换台设备就没了。
+  // 历史卡片截断时同样挂按钮，请求带上会话坐标，服务端回落去 transcript 取（mock 只在带坐标时给全文）。
+  // 附带：纯文本输出不再被 hljs 自动认成 css / vbnet 上色。
+  test('P0-05-HIST-FULL 历史回放里被截断的 Bash 卡：有「展开全文」，点开从记录取回全文；纯文本不上语法色', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-long-tool');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await expect(card).toHaveCount(1);
+    await card.locator('summary').click();
+    const out = card.locator('.t-out code');
+    await expect(out).toContainText('Compiling module 0: auth');
+    await expect(out).not.toContainText('BUILD DONE');
+    // 栅栏：历史里的代码块是空闲时一批高亮的；同一张卡的输入块（JSON）已高亮 ⇒ 输出块也已轮到过
+    await expect(card.locator('.t-in code')).toHaveClass(/\bhljs\b/, { timeout: 5_000 });
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
+
+    const expand = card.locator('[data-testid="tool-expand-full"]');
+    await expect(expand).toBeVisible();
+    await expand.click();
+    await expect(out).toContainText('BUILD DONE');
+    await expect(expand).toHaveCount(0);
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   // 桌面端 show_widget：SVG 必须作为 data URI 图片显示（不进页面 DOM、不执行脚本），颜色随主题；
   // HTML 组件只给提示；源码残缺 / XML 解析失败退回一行工具调用。
   const decodeSvgSrc = (src: string | null) => decodeURIComponent(String(src).replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));
@@ -409,6 +458,56 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(cards).toHaveCount(2);
     expect(await cards.nth(0).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(false);
     expect(await cards.nth(1).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 AC-09-12 / O30：重启后过期的审批，transcript 里留下一条没配上 tool_result 的 tool_use；历史渲染恒把它画成
+  // 「进行中」，而这个会话根本没在跑——那一行永远转着。没有在途轮时，没配上结果的历史工具卡应是「已中止」。
+  test('P0-05-UNPAIRED 历史里没配上结果的工具卡：会话没在跑时显示「已中止」，不是一直「进行中」', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session');
+    await page.goto('/');
+    await waitUntilConnected(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status).toHaveAttribute('aria-label', '已中止');
+
+    await expectNoBrowserErrors(page);
+  });
+  // PR #233 review：重载与在途轮重叠——读盘时 tool_use 已写、tool_result 未写，回包前那一轮跑完。收尾时按「此刻没在跑」
+  // 把这张卡判成「已中止」是错的（它真跑完了）；随后实时到达的结果也只在 live 表里找卡，修不回来。
+  test('P0-05-UNPAIRED2 重载期间那一轮跑完：没配上结果的卡不判「已中止」，随后到的结果照常落上', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session?running=1');
+    await page.goto('/');
+    await waitUntilConnected(page);
+    // 「已中止」只要出现过一次就记下：收尾判错之后被实时结果盖回来，最终态看不出来
+    await page.evaluate(() => {
+      (window as unknown as { __abortedSeen: number }).__abortedSeen = 0;
+      new MutationObserver(records => {
+        for (const r of records) {
+          if ((r.target as Element).getAttribute?.('aria-label') === '已中止') (window as unknown as { __abortedSeen: number }).__abortedSeen += 1;
+        }
+      }).observe(document.getElementById('messages')!, { subtree: true, attributes: true, attributeFilter: ['aria-label'] });
+    });
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status, '实时到达的结果没落到历史里的那张卡上').toHaveAttribute('aria-label', '成功');
+    expect(await page.evaluate(() => (window as unknown as { __abortedSeen: number }).__abortedSeen),
+      '请求历史时那一轮还在跑：没配上结果不等于中止').toBe(0);
 
     await expectNoBrowserErrors(page);
   });

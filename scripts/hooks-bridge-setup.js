@@ -42,6 +42,7 @@ import {
   scanHookEvents,
 } from '../app/src/ops/cli-hooks-bridge.js';
 import { claudeHome, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import { removeBridgeNamespace } from '../app/src/ops/bridge-namespace.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RUNNER = join(ROOT, 'scripts', 'hooks-bridge.js');
@@ -231,6 +232,8 @@ function uninstall(home = homedir()) {
   }
   atomicWriteJson(paths.settings, settings);
   unlinkSync(paths.manifest);
+  // 自己的命名空间（默认 events / acks 与 verify 回执）一并清掉；此前要等整体 npm run uninstall（验收 O35）
+  removeBridgeNamespace(home, 'hooks-v1');
   return { state: 'uninstalled' };
 }
 
