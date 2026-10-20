@@ -287,6 +287,8 @@ let syncAckTimeoutArmed = false;
 let sendTransientFailArmed = false;
 // 验收 O30：主工作区多一条会话，历史末尾是一条没配上 tool_result 的 tool_use（重启后过期的审批留下的就是这个形态）。
 let unpairedToolSessionArmed = false;
+// PR #233 review：同上，但切进来时那一轮还在跑，历史回包之前跑完，结果随后才实时到达（?running=1 武装，一次性）
+let unpairedToolTurnEndsDuringLoad = false;
 // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
 // 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
 // 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
@@ -594,6 +596,7 @@ function resetMockState() {
   syncAckTimeoutArmed = false;
   sendTransientFailArmed = false;
   unpairedToolSessionArmed = false;
+  unpairedToolTurnEndsDuringLoad = false;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
@@ -812,8 +815,9 @@ app.post('/__arm-history-error', (_req, res) => {
 });
 
 // 验收 O30：武装后主工作区多一条「Unpaired Tool Session」。无参，/__reset 清除；要在 page.goto 之前武装。
-app.post('/__arm-unpaired-tool-session', (_req, res) => {
+app.post('/__arm-unpaired-tool-session', (req, res) => {
   unpairedToolSessionArmed = true;
+  unpairedToolTurnEndsDuringLoad = req.query?.running === '1';
   res.json({ ok: true });
 });
 
@@ -1812,6 +1816,10 @@ io.on('connection', socket => {
         effort: null,
         model: 'claude-3-5-sonnet'
       };
+      if (sessionId === 'mock-session-unpaired-tool' && unpairedToolTurnEndsDuringLoad) {
+        archivedInst.state = 'busy';
+        archivedInst.turnRunning = true;
+      }
       mockInstances.push(archivedInst);
     }
     viewingInstanceId = archivedInst.instanceId;
@@ -2242,12 +2250,34 @@ io.on('connection', socket => {
         ]
       });
     } else if (sessionId === 'mock-session-unpaired-tool') {
-      callback({
+      const unpairedHistory = {
         messages: [
           { role: 'user', content: 'Push the release branch', uuid: 'u-unpaired-1' },
           { kind: 'tool_use', role: 'assistant', toolUseId: 'unpaired-tool-1', name: 'Bash', inputSummary: '{"command":"git push origin release"}', uuid: 'a-unpaired-1' },
         ]
+      };
+      if (!unpairedToolTurnEndsDuringLoad) { callback(unpairedHistory); return; }
+      // PR #233 review 的时序：读盘时 tool_use 已写、tool_result 未写；回包之前那一轮跑完（instances 先到），
+      // 结果在历史落地之后才实时到达。
+      unpairedToolTurnEndsDuringLoad = false;
+      const inst = mockInstances.find(i => i.instanceId === 'inst_unpaired_tool');
+      if (inst) { inst.state = 'idle'; inst.turnRunning = false; }
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: '/Users/you/code/claude-chat-mobile', ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
       });
+      const gen = mockResetGeneration;
+      setTimeout(() => {
+        if (gen !== mockResetGeneration) return;
+        callback(unpairedHistory);
+        setTimeout(() => {
+          if (gen !== mockResetGeneration) return;
+          socket.emit('agent:event', {
+            seq: 1, epoch: activeEpoch, sessionId: 'mock-session-unpaired-tool', instanceId: 'inst_unpaired_tool', ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: 'unpaired-tool-1', ok: true, outputSummary: 'pushed release (mock)' }
+          });
+        }, 800);
+      }, 200);
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [

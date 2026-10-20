@@ -2978,7 +2978,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         const sa = subagentCards.get(p.parentToolUseId);
         if (sa) { sa.failures = (sa.failures || 0) + 1; renderSubagentTitle(sa); }
       }
-      const card = toolCards.get(p.toolUseId);
+      // 历史里配不上结果的卡，结果可能随后才实时到达（重载期间那一轮跑完了）：live 表里没有就到历史表里找，
+      // 否则它会一直停在「进行中」或被收尾判成「已中止」（PR #233 review）。历史卡与 live 卡同构（.t-status / .t-out）。
+      const card = toolCards.get(p.toolUseId) || histToolCards.get(p.toolUseId);
+      histToolCards.delete(p.toolUseId);
       if (!card) {
         // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
         if (agentToolIds.has(p.toolUseId)) {
@@ -8392,6 +8395,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   function loadHistory(sessionId, cwd = drivingCwdOf(displayedInstanceId), onDone) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
+    // 发起时那一轮在不在跑：在跑的话，读盘那一刻没配上结果的工具可能随后跑完，渲染收尾时不能判它中止（PR #233 review）
+    const turnRunningAtRequest = _turnRunning;
     // SS-ORDER：从这里到历史真正落地是一段可观的窗口（socket 往返 + renderHistoryBubbles 的分块
     // 渲染，2000 条约 50 块）。期间镜像追平的 history_append 完全可能插进来——它是 out-of-band，
     // 不进 replay buffer，挡不住。扣住它们，等历史落地后按原顺序放行（见 history-load-gate.js）。
@@ -8420,7 +8425,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         return;
       }
       addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
-      renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
+      renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true, turnRunningAtRequest });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -8579,7 +8584,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 用它抑制三个页面级副作用——尤其 scrollBottom：展开一张历史卡片时把页面滚到底是灾难性的。
   // 之所以仍走本函数而不另写一个渲染器：renderOne 是 live/history 共用的那一份，
   // 另写一个就等于再造一套平行实现，而"刷新前后同构"正是这条链要保证的东西。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false } = {}) {
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
@@ -8860,7 +8865,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (fullReload) settleCarriedPendingBubbles(msgs);
       // 全量重载完还没配上 tool_result 的工具卡：会话此刻没在跑（没有在途轮、也不是终端在驾驶），结果就不会再来了。
       // 重启后过期的审批留下的正是这种 tool_use——画成「进行中」会让那一行永远转着（验收 O30）。标中性终态「已中止」。
-      if (fullReload && !cardsOnly && !_turnRunning && !mirrorReadonlySid) {
+      if (fullReload && !cardsOnly && !_turnRunning && !turnRunningAtRequest && !mirrorReadonlySid) {
         for (const card of histToolCards.values()) setStatusIcon(card.querySelector('.t-status'), 'aborted');
       }
       if (!cardsOnly) scrollBottom(true);
