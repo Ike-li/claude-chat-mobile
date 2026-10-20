@@ -105,6 +105,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+    // 验收 O65：重发完了「正在重发离线发送队列中的 1 条消息…」还一直挂着
+    await expect(page.locator('#messages'), '重发已经结束，进行中的横幅要撤掉').not.toContainText('正在重发离线发送队列');
 
     await expectNoBrowserErrors(page);
   });
@@ -114,11 +116,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 两个入队点都得带：离线时发的、在线发出去没被确认转进重发的。mock 是平行实现、不做这道核对，这里只钉前端送出去的是什么。
   const captureUserMessages = (page: Page) => {
     const sent: Array<Record<string, unknown>> = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
-        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
+    const take = (payload: string) => {
+      for (const packet of payload.split('\x1e')) {
+        if (packet.includes('"user:message"')) sent.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
       }
-    }));
+    };
+    page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
+    // 刚连上、还没升级到 websocket 时走 polling：那段时间发的包拼在 HTTP POST 里（\x1e 分隔），framesent 看不到。
+    // 重载后恢复的离线条目恰好在这个窗口里重放。
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
     return sent;
   };
 
@@ -163,6 +169,68 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(replay.text).toBe('在线没被确认的那条');
     expect(replay.instanceId).toBe('inst_archived');
     expect(replay.sessionId, `在线转入重发的条目没带会话：${JSON.stringify(replay)}`).toBe('mock-session-archived');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O31：离线重放被服务端永久拒收后，outbox 清了、输入框是空的，原文只剩一行「已停止重试」——这条再也不会发，
+  // 用户也拿不回自己打的字。投给眼前这个会话、输入框空着时，原文放回输入框。
+  test('P0-02d7 离线重放被永久拒收：原文放回输入框，提示说清已停止重试', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    // 武装命令本身不收尾（运行条一直亮着），照其它 arm 用例的做法切到另一个会话再发
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('会被永久拒收的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#input'), '永久拒收后原文丢了：outbox 已清，这条不会再发').toHaveValue('会被永久拒收的那条');
+    await expect(page.locator('#messages')).toContainText('已停止重试');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expectNoBrowserErrors(page);
+  });
+
+  // PR #232 review：重载页面后恢复出来的 outbox 条目没有气泡。它发往不在眼前的会话、又被服务端永久拒收时，提示没有
+  // 落点，outbox 已清，用户打的字就没了。暂存起来，回到它的会话时交还；别的会话里看不到它。
+  test('P0-02d11 重载后发往别的会话的离线条目被永久拒收：原文暂存，回到那个会话时交还', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    // 重载后恢复出来的条目：发往 Visual Sandbox (Main)，内存里没有气泡。得在应用脚本跑之前写——
+    // 重载前写的会被 pagehide 时的 persistOutbox 用内存里的空队列盖掉。
+    await page.addInitScript(() => localStorage.setItem('ccm-outbox-v1', JSON.stringify([{
+      text: '发往主会话的那条', model: null, clientMessageId: 'p0-02d11-dead-letter',
+      instanceId: 'inst_1', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-visual-test',
+    }])));
+    await page.reload();
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d11-dead-letter' && m.fromOutbox === true),
+      { message: '前提：恢复出来的条目要被重放（mock 已武装成永久拒收）' }).toBe(true);
+    await expect(page.locator('#messages'), '别的会话的失败不该打到眼前这个会话上').not.toContainText('发往主会话的那条');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#input'), '永久拒收、outbox 已清：不交还的话这条就没了').toHaveValue('发往主会话的那条');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
     await expectNoBrowserErrors(page);
   });
 
@@ -229,6 +297,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectResendOnSecondBubbleAfterHistory(page, 'Any follow-up questions?');
     await expect(page.locator('[data-testid="user-message"]').filter({ hasText: 'Any follow-up questions?' }),
       '历史里那条旧消息与被拒收的第 2 条应各占一颗').toHaveCount(2);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O29：第 1 条的回显先于重载的历史到达，把清屏保住的离线气泡认领转正；历史随后落地，落定逻辑只认未确认的
+  // 气泡、跳过了它——它留在历史上方，历史里又渲染出同一条，回复在最底。
+  test('P0-02d8 回显先于重载的历史到达：保住的气泡不留在历史上方，屏幕上只有一颗', async ({ page }) => {
+    await replayTwoOfflineAcrossSwap(page, ['离线第一条', '离线第二条'], 'test:arm-outbox-replay-swap-echo-first');
+
+    const first = page.locator('[data-testid="user-message"]').filter({ hasText: '离线第一条' });
+    await expect(first, '回显转正的那颗与历史里那颗各占一颗：保住的气泡没被历史认领').toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => {
+      const tops = [...document.querySelectorAll('#messages > [data-top-level="1"]')];
+      const at = (needle: string) => tops.findIndex(el => el.textContent?.includes(needle));
+      return at('离线第一条') > at('Okay, heading home.');
+    }), { message: '第 1 条排在历史最后一轮之前：它被留在了重载的历史上方' }).toBe(true);
+    await expectResendOnSecondBubbleAfterHistory(page, '离线第二条');
     await expectNoBrowserErrors(page);
   });
 

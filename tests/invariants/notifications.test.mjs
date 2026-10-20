@@ -48,6 +48,34 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.doesNotMatch(stopped.title, /出错/);
   });
 
+  // 验收 O30：审批等到 TTL 过期的那一轮，CLI 以 is_error 收尾，原来推成「⚠️ 任务出错 · 用时 1814.0s」。
+  // 用户需要知道的是「审批过期了、操作没执行、要重新触发」，不是「出错了」。
+  test('result：这一轮有审批过期 → 标题说审批已过期、正文说操作没执行，不说「出错」', () => {
+    const n = notificationForEvent('result', { isError: true, approvalExpired: true, durationMs: 1814000 }, { hasClients: false });
+    assert.match(n.title, /审批已过期/);
+    assert.doesNotMatch(n.title, /出错/);
+    assert.match(n.body, /操作没有执行/);
+    assert.match(n.body, /1814\.0s/, '用时照旧给出');
+
+    // 用户主动中止优先：那一轮的主因是用户点了停止
+    const stopped = notificationForEvent('result', { interrupted: true, approvalExpired: true, durationMs: 1000 }, { hasClients: false });
+    assert.match(stopped.title, /已中止/);
+  });
+
+  // 验收 O64：「⚠️ 任务出错」的 ntfy 推送 tags 仍是 white_check_mark，锁屏上显示成「✅ ⚠️ 任务出错」。
+  // 标签要跟标题同一个判断：完成 ✅、出错 ⚠️、已中止 ⏹。
+  test('result 的 ntfy 标签跟标题一致：出错不带 ✅，已中止也不带', () => {
+    const tagsOf = (payload) => {
+      const n = notificationForEvent('result', { durationMs: 1000, ...payload }, { hasClients: false });
+      return ntfyMetaFor(n.ntfyType ?? 'result', {}, '').tags;
+    };
+    assert.deepEqual(tagsOf({}), ['white_check_mark']);
+    assert.deepEqual(tagsOf({ isError: true }), ['warning']);
+    assert.deepEqual(tagsOf({ interrupted: true, isError: true }), ['stop_button']);
+    // 审批过期那一轮（O30）也是 is_error 收尾：标题是「⏰ 审批已过期」，标签同样不能是 ✅
+    assert.deepEqual(tagsOf({ isError: true, approvalExpired: true }), ['warning']);
+  });
+
   test('permission_request：前台有人也照推（用户可能锁屏或在别的 app）', () => {
     const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true });
     assert.notEqual(n, null, '审批是无条件推的类型，hasClients 不得让它静音');
@@ -72,6 +100,32 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
 });
 
 test.describe('SEC-04 正文最小化：命令参数不进推送正文', () => {
+  // 验收 O33（AC-22-11）：ntfy 明文经第三方（可能是公共 ntfy.sh），正文早已最小化，标题却带「事件 · 项目 · 会话标题」。
+  // 没有 AI 标题时（关了非必要流量、或标题生成失败），会话标题就是用户某条消息的原文——密钥、敏感信息照样出去。
+  // ntfy 只留「事件 · 项目」（ntfyTitle）；Web Push 端到端加密，title 照旧带会话标题方便分辨。
+  test('每一类会话推送：ntfyTitle 不含会话标题、保留事件与项目；Web Push 的 title 照旧带', () => {
+    const userWords = '把 sk-live-SUPERSECRET 填进配置';
+    const ctx = { cwd: '/home/u/proj', sessionTitle: userWords, instanceId: 'i-1', sessionId: 's-1', hasClients: false };
+    const built = [
+      ['result', notificationForEvent('result', { durationMs: 1000 }, ctx)],
+      // 审批过期那一轮（O30，合并时与本条同时进来）是 result 的另一支，同样要分两份标题
+      ['result_approval_expired', notificationForEvent('result', { durationMs: 1000, isError: true, approvalExpired: true }, ctx)],
+      ['permission_request', notificationForEvent('permission_request', { name: 'Bash' }, ctx)],
+      ['question', notificationForEvent('question', { text: 'q' }, ctx)],
+      ['task_notification', notificationForEvent('task_notification', { status: 'completed' }, ctx)],
+      ['gateway_stall', notificationForEvent('system', { kind: 'notice', notice: 'gateway_stall', seconds: 90 }, ctx)],
+      ['background_running', notificationForBackgroundRunning(ctx)],
+      ['cli_hook', notificationForCliHook('Stop', ctx)],
+    ];
+    for (const [kind, n] of built) {
+      assert.ok(n, `${kind}：前提是这一类会出推送`);
+      assert.ok(typeof n.ntfyTitle === 'string' && n.ntfyTitle, `${kind}：没有 ntfyTitle，ntfy 只能回落到带会话标题的 title`);
+      assert.doesNotMatch(n.ntfyTitle, /SUPERSECRET/, `${kind}：会话标题（可能是用户原话）进了 ntfy 明文标题`);
+      assert.match(n.ntfyTitle, /proj/, `${kind}：项目名要留，否则分不清是哪个项目`);
+      assert.match(n.title, /SUPERSECRET/, `${kind}：Web Push 的标题照旧带会话标题`);
+    }
+  });
+
   test('permission_request 的 body 只有工具名，绝不含 input 参数', () => {
     const secret = 'rm -rf /etc/passwd --token=SUPERSECRET';
     const n = notificationForEvent('permission_request',
@@ -377,6 +431,16 @@ test.describe('投递错误归因与订阅校验', () => {
     assert.equal(describeDeliveryError({ statusCode: 410 }), 'HTTP 410');
     assert.equal(describeDeliveryError({ code: 'ECONNRESET' }), 'ECONNRESET');
     assert.equal(describeDeliveryError({ message: 'boom' }), 'boom');
+  });
+
+  // 验收 O51：ntfy 超时告警写「：23」（AbortSignal.timeout 抛的 DOMException，code 是数字 23）；断连、DNS 失败
+  // 只写「fetch failed」——真正的 ECONNRESET / ENOTFOUND 在 err.cause 里被丢了，前端「连不上 ntfy 服务（错误码）」
+  // 那句永远出不来。数字 code 不是错误码；超时归成 ETIMEDOUT；fetch 的底层原因从 cause 取。
+  test('ntfy（fetch）的失败：超时归 ETIMEDOUT，底层原因从 cause 取，数字 code 不当错误码', () => {
+    assert.equal(describeDeliveryError({ name: 'TimeoutError', code: 23, message: 'The operation was aborted due to timeout' }), 'ETIMEDOUT');
+    assert.equal(describeDeliveryError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })), 'ECONNRESET');
+    assert.equal(describeDeliveryError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })), 'ENOTFOUND');
+    assert.equal(describeDeliveryError({ code: 23, message: 'odd' }), 'odd');
   });
 
   test('含 URL 的消息归一成 network error（不把端点写进日志）', () => {

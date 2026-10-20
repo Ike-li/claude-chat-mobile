@@ -35,6 +35,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O45（AC-21-04）：375 宽下一张 12 列的表格让 #messages 可以左右拖 33px、底部出现横向滚动条，每格被压到一字一行。
+  // 宽表格应在自己内部横向滚动，不撑宽整个对话。
+  test('P0-03f 宽表格在自己内部横向滚动，不把整个对话撑出横向滚动', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:wide-table');
+    await waitForIdle(page);
+    const table = page.locator('.msg-body table').last();
+    await expect(table).toBeVisible();
+    const m = await page.locator('#messages').evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(m.scroll, '整个消息列表被表格撑出了横向滚动').toBeLessThanOrEqual(m.client);
+    const t = await table.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, cell: el.querySelector('td')?.getBoundingClientRect().width ?? 0 }));
+    expect(t.scroll, '表格比屏幕宽，应在自己内部可横向滚动').toBeGreaterThan(t.client);
+    expect(t.cell, '格子被压成一字一行').toBeGreaterThan(50);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-03b 代码块复制按钮提供可见反馈', async ({ page }) => {
     await gotoMock(page);
 
