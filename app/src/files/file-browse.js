@@ -172,6 +172,9 @@ export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } 
   // 范围门必须先于一切入参检查（内容、基线哈希、大小）：越界 relPath 时，socket-files.js 只认 code==='scope'
   // 记 scope_violation 审计（这是无 approval-store 的写路径唯一事后可追溯记录），别的拒绝抢先会让
   // 一次真实越界尝试被记成普通 file_write/denied，漏掉本该报警的那条（验收 O19：缺基线哈希就是这样漏的）。
+  // 唯一的例外是路径本身的类型：不是字符串时 path.join 直接抛，socket 层只能回可重试的通用错误（PR #236 review）。
+  // 缺省（undefined / 空串）照旧当作 cwd 本身，下面按「不是文件」拒。
+  if (relPath != null && typeof relPath !== 'string') return { ok: false, code: 'bad_path', error: '路径不合法' };
   const real = resolveInScope(cwd, relPath, scopeDirs);
   if (real === null) {
     // 范围内已经不在的文件（编辑器开着时被删 / 改名）不是越界（验收 O80）
