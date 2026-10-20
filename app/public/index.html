@@ -95,7 +95,7 @@
       <!-- 顶栏文字 chip：把上面两颗角标（纯色点 / 状态图标）的含义写成人话——手机没有 hover，title 等于不存在。
            按优先级只显一条（未连接 > 需要你 N > 其他工作区 · 需要你/出错），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。
            只说「点开就能处理」的事：推送失败与其他工作区 busy 均不占此位（后者由上面 #sessionsDot 图标表达）。 -->
-      <button id="attentionChip" type="button" class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
+      <button id="attentionChip" type="button" data-opens-drawer class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
     </div>
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
@@ -251,7 +251,7 @@
       <p id="sessionBlockedReason" class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2" data-testid="session-blocked-reason"></p>
       <div class="flex flex-col gap-2 w-full max-w-xs">
         <button id="sessionBlockedRetry" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-retry">重试打开</button>
-        <button id="sessionBlockedSessions" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
+        <button id="sessionBlockedSessions" type="button" data-opens-drawer class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
       </div>
     </div>
   </div>
@@ -553,6 +553,7 @@
       </div>
 
       <!-- E17：待发送附件托盘 -->
+      <div id="attachNotice" class="hidden px-2 pb-1 text-[11px] text-ink-soft" data-testid="attach-notice" role="status" aria-live="polite"></div>
       <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
 
       <!-- 子代理/Workflow 活动横幅 -->
@@ -1034,6 +1035,7 @@
         <div id="hooksBridgeSection" class="hidden">
           <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span></div>
           <div id="hooksBridgeBody" class="space-y-2"></div>
+          <div id="hooksBridgeResult" class="hidden text-[11px] px-1 mt-1.5 break-words" data-testid="hooks-bridge-result" role="status" aria-live="polite"></div>
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
         </div>
 
@@ -1042,6 +1044,7 @@
         <div id="statuslineBridgeSection" class="hidden">
           <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>终端状态栏</span></div>
           <div id="statuslineBridgeBody" class="space-y-2" data-testid="statusline-bridge-body"></div>
+          <div id="statuslineBridgeResult" class="hidden text-[11px] px-1 mt-1.5 break-words" data-testid="statusline-bridge-result" role="status" aria-live="polite"></div>
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">开启后，你在电脑终端里跑的会话，模型 / 额度 / 上下文用量也会同步到手机。它接管 ~/.claude/settings.json 的 statusLine 命令并原样透传你原来的输出。</div>
         </div>
 
