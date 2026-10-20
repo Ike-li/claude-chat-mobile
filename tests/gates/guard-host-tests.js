@@ -21,10 +21,13 @@
 // 【按段判定，不看整条命令】旧实现只要命令里任何位置出现 docker 就整条放行，文件头自己都写了
 // `echo docker && npm run mutate` 能绕过。现在按 | && || ; 切段、逐段判：docker 只豁免它所在的
 // 那一段。这不是为了对抗谁——是因为「先 docker ps 再 npm test」是很自然的手滑形态。
+// deny / ask 也按段定（见 decideRoute）：有一段该 deny 整条就 deny，全部触发段都要人才 ask。
 //
-// 【它仍挡不住什么】判据是命令【文本】，所以间接形态一律看不见：`sh -c "$CMD"`、`$(...)` 里的
-// 命令、shell 别名、以及任何把脚本名拼出来的写法。这是防手滑的护栏，不是对抗性沙箱——真正
-// 不依赖任何判断的隔离是容器本身（Dockerfile.test 里 HOME 是一次性目录），钩子只负责提醒你用它。
+// 【它仍挡不住什么】判据是命令【文本】，所以间接形态一律看不见：`sh -c "$CMD"`、`bash -c '…'`、
+// `docker exec … node …` 里套着的命令、`$(...)`、shell 别名、以及任何把脚本名拼出来的写法。
+// 引号、反斜杠、/./ 与 // 会在匹配前剥掉（normalizeShellText），那几种写法不算间接。
+// 这是防手滑的护栏，不是对抗性沙箱——真正不依赖任何判断的隔离是容器本身
+// （Dockerfile.test 里 HOME 是一次性目录），钩子只负责提醒你用它。
 import { readFileSync } from 'node:fs';
 
 // 宿主机放行的 npm 脚本（CLAUDE.md 的四条 + 同源别名）。
@@ -47,6 +50,35 @@ const HOST_ALLOWED_SCRIPTS = new Set([
   'app:test',
 ]);
 
+// 验收套件里真正开始花额度的一步：起 E3 系环境（tests/acceptance/env/up.mjs --env 含 E3 / E3proxy /
+// E3cf 或 all，且带 --yes）。那是真 claude CLI 容器，机主网关凭据会复制进去，此后在里面跑的每个回合
+// 都消耗真实额度。run.mjs 选中 C 档只列清单、不执行，所以闸设在这里、不在 run.mjs 上。
+// up.mjs 缺省 --env 是 E1,E2，不带 --yes 只打印——这两种都不命中。
+// 三个条件与参数顺序无关，写成三个前瞻：这一段跑的是 up.mjs、--env 列表里有一项是 E3 系或 all、带 --yes。
+// 不区分大小写、也认 --env=：up.mjs 现在不认这两种（报错退出），钩子不替它担保，按选中处理。
+const ACCEPT_UP_E3 = /^(?=.*(?:^|[\s/])up\.mjs(?:\s|$))(?=.*\s--env(?:=|\s+)(?:[^\s,]*,)*(?:E3\w*|all)(?:[\s,]|$))(?=.*\s--yes(?:\s|$))/i;
+// 「这一段跑的 up.mjs 是验收套件那份」看整条命令：`cd tests/acceptance/env && node up.mjs …` 里
+// 路径在前一段。只认 acceptance、不认 acceptance/env：`cd tests/acceptance && node env/up.mjs`、
+// `lib/../env/up.mjs` 都拆开了这两段；仓库里也只有这一个 up.mjs 认 --env E3，放宽的代价只是多问一次。
+// 【认不出来的】：bash -c、docker exec 里套着的命令——命令头不是解释器，同文件头那条边界。
+const ACCEPT_ENV_DIR = /acceptance\b/i;
+
+// 冒烟 runner 直接跑：npm 脚本名之外的同一条路，--all / --scenario 一样真实调用 claude、花额度。
+// 只 --list 不跑场景。路径同样看整条命令，认得出 `cd tests/smoke && node runner.js --all`。
+const SMOKE_RUNNER = /(?:^|[\s/])runner\.js\b(?=.*\s--(?:all|scenario)\b)/;
+const SMOKE_DIR = /\bsmoke\b/;
+
+// 不带 --test 直接 node 一个 *.test.mjs：node:test 的用例文件被直接执行照样会跑完，同样绕过
+// preload-env。--check 只做语法检查、不执行，不算。
+const DIRECT_TEST_FILE = /^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/;
+
+// `export RUN_CLAUDE_INTEGRATION=1 && npm test`：变量在前一段 export，真 turn 发生在后一段。
+// 按段判定只看后一段会把它判成普通 npm test、指去容器——容器里没有真凭据，那条替代跑不了。
+// 只认 export 且值非 0 / false；`X=1; cmd` 不 export，子进程看不到，不算。
+const RCI_EXPORTED = /\bexport\s+(?:[A-Za-z_]\w*=\S*\s+)*RUN_CLAUDE_INTEGRATION=(?!(?:0|false)(?:\s|$)|\s|$)/;
+const RCI_CONSUMER = /\bnpm\s+(?:test|t)\b(?!:)|\bnpm\s+run\s+test:integration\b|\bnode\b[^|&;]*\btests\/integration\//;
+const RCI_WHY = '会跑 tests/integration/ 里需要真 agent turn 的那批文件（按 process.env.RUN_CLAUDE_INTEGRATION 门控）：慢、耗 token、不稳';
+
 // 「这一段会跑测试 / 执行被改坏的源码」——本钩子的管辖范围。
 // 命中即进入白名单判定；不命中直接放行（git/ls/grep/npm run inventory:check 一概不打扰）。
 const TEST_DOMAIN = [
@@ -54,22 +86,26 @@ const TEST_DOMAIN = [
   /\bnpm\s+t\b/,
   /\bnpm\s+run\s+[\w:.-]*mutate[\w:.-]*/,
   /\b(?:scripts|tests\/gates)\/mutate\.js\b/,
-  /\bnode\b[^|&;]*--test\b/,                   // 裸 node --test，绕过 npm 脚本
+  /\bnode\b[^|&;]*--test(?![\w-])/,            // 裸 node --test，绕过 npm 脚本（--test-only 之类不算）
+  DIRECT_TEST_FILE,                             // 不带 --test 直接 node 测试文件
   /\bRUN_CLAUDE_INTEGRATION\b/,
+  // 验收套件起 E3 系环境不在这张表里：它还要看整条命令（ACCEPT_ENV_DIR），在 segmentReason 里单独判
 ];
 
 // 已知形态的具体理由。理由必须点名到文件和形态：8/2 的根因是归类判断失败，而"包含集成测试那一档"
 // 这种抽象说法帮不上归类——看的人还是得自己去查它到底碰什么。
 const REASONS = [
   { re: /\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, why: '变异检查会【故意把源码改坏再跑测试】，被改坏的可能正是算删除路径的代码——上次删库就是这么发生的' },
-  { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
+  { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: RCI_WHY },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, why: '冒烟测试真实调用 claude，消耗额度' },
+  { re: SMOKE_RUNNER, why: '直接跑 tests/smoke/runner.js 的 --all / --scenario：冒烟测试真实调用 claude，消耗额度（只 --list 不算）' },
+  { re: ACCEPT_UP_E3, why: 'tests/acceptance/env/up.mjs 的 --env 含 E3 / E3proxy / E3cf / all 且带 --yes：要起真 claude CLI 容器，机主网关凭据会复制进容器，此后在里面跑的每个回合都消耗真实额度——缺省 --env（E1,E2）或不带 --yes（只打印）都不会走到这里' },
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
   { re: /\bnpm\s+run\s+test:invariants:env\b/, why: 'tests/invariants/env/ 跑的是卸载器：它的隔离【依赖被测代码正确性】——createUninstaller 若不认注入的 home/root/appPath 而回落 homedir()/REPO_ROOT//Applications/CCM.app，rmSync 就打在真实家目录上，与 8/2 删库同形态' },
   { re: /\bnpm\s+(?:test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态' },
   // ★ 白名单反转补上的洞：approval-store / audit / devices 的落盘路径是【模块级常量】，在 import
   // 求值那一刻就锁定了，只有 --import 预加载改得动。裸 node --test 会把它们写进真实 data/。
-  { re: /\bnode\b[^|&;]*--test\b/, why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/' },
+  { re: /\bnode\b[^|&;]*--test(?![\w-])|^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/, why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
@@ -177,36 +213,32 @@ function isIsolatedUnitRun(segment) {
   return specs.length > 0 && specs.every(t => t.rel.startsWith('tests/unit/'));
 }
 
-function segmentReason(segment) {
+// 匹配前把同一条命令的不同写法压成同一份文本：去掉引号与反斜杠，/./ 与 // 规整成 /。
+// shell 在执行前就剥掉了这些字符，`"npm" run 'mutate'`、`n\pm test`、`tests/./gates//mutate.js`
+// 跑的都是原样那条；不先剥，字面正则对每种写法都要单独想到——又回到黑名单那条老路。
+// 只在切段之后做：引号里的 | ; & 照旧会被切开，切碎是安全方向（见 decideRoute）。
+function normalizeShellText(text) {
+  let out = text.replace(/["'\\]/g, '');
+  // a/././b 替换一轮只消掉不重叠的那几处，循环到不动为止
+  while (/\/\.\/|\/\//.test(out)) out = out.replace(/\/\.\//g, '/').replace(/\/{2,}/g, '/');
+  return out;
+}
+
+// segment 与 context（整条命令）都已经过 normalizeShellText。
+function segmentReason(segment, context) {
   if (!segment.trim()) return null;
   const head = commandHead(segment);
   if (!TEST_RUNNERS.has(head)) return null;                          // 命令头不是解释器 → 不归本钩子管
   const script = segment.match(/\bnpm\s+run\s+([\w:.-]+)/)?.[1];
   if (inContainer(head, script)) return null;                        // 这一段已进容器
-  if (!TEST_DOMAIN.some(re => re.test(segment))) return null;        // 域外（npm run inventory:check 等）
+  const inDomain = TEST_DOMAIN.some(re => re.test(segment))
+    || (ACCEPT_UP_E3.test(segment) && ACCEPT_ENV_DIR.test(context))
+    || (SMOKE_RUNNER.test(segment) && SMOKE_DIR.test(context));
+  if (!inDomain) return null;                                        // 域外（npm run inventory:check 等）
   if (whitelistedRun(segment, script)) return null;
   if (!script && isIsolatedUnitRun(segment)) return null;
   return REASONS.find(({ re }) => re.test(segment))?.why ?? FALLBACK_REASON;
 }
-
-function decide(command) {
-  if (typeof command !== 'string' || !command.trim()) return null;
-  // Shell 续行（反斜杠紧跟换行）在真实 shell 里会被整体删除、拼成同一逻辑行；必须在切段前
-  // 先折叠掉，否则下面按字面换行切段会把 `-- ` 之后的测试目标切进独立的一段，第一段附加
-  // 参数变空直接放行、第二段命令头是裸路径不是解释器也放行，整条命令绕过 scope 检查。
-  // 只吃掉字面的 反斜杠+换行 两个字符：两条独立命令各占一行、行尾没有反斜杠的正常形态
-  // 不受影响，仍然会被下面的换行分隔符切开、各自判定——这是切碎更安全那条方向的一部分。
-  const collapsed = command.replace(/\\\r?\n/g, '');
-  // 切段：管道、逻辑连接符，以及【单个 &】（后台符）。少切一种 8/2 那条命令就能整条蒙混——
-  // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
-  // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
-  for (const segment of collapsed.split(/\|\||&&|[|;&\n]/)) {
-    const why = segmentReason(segment);
-    if (why) return why;
-  }
-  return null;
-}
-
 
 // ── 决策分档：deny 还是 ask ──────────────────────────────────────────────
 //
@@ -214,12 +246,27 @@ function decide(command) {
 // 人不在跟前"的用法，那等于任务直接卡死——而这些命令【本来就有等价的容器跑法】，agent 收到
 // 拒绝理由后自己换一条命令继续即可，根本不需要人介入。ask 在这里不是安全，是把人拴在屏幕前。
 //
-// 【什么才值得 ask】没有容器替代、且代价由人承担的那两档：真 agent turn 与 smoke 都要真凭据
-// （容器里没有），且会消耗额度。要不要花那笔钱只有人能决定，agent 换命令也换不出来。
+// 【什么才值得 ask】代价由人承担、换地方也省不掉的那三档。代价有两种，提示文案按它分开写——
+// 说错了代价，人就没法据此决定：
+//   credentials  真 agent turn 与 smoke：要真凭据（容器里没有），且会消耗额度
+//   owner-quota  验收起 E3 系环境：本来就在容器里跑，但机主网关凭据会复制进容器，花的是机主的真实额度
+// 要不要花那笔钱只有人能决定，agent 换命令也换不出来。
 const NEEDS_HUMAN = [
-  /\bRUN_CLAUDE_INTEGRATION\b/,
-  /\bnpm\s+run\s+[\w:.-]*smoke/,
+  { re: /\bRUN_CLAUDE_INTEGRATION\b/, cost: 'credentials' },
+  { re: /\bnpm\s+run\s+[\w:.-]*smoke/, cost: 'credentials' },
+  { re: SMOKE_RUNNER, cost: 'credentials' },
+  { re: ACCEPT_UP_E3, cost: 'owner-quota' },
 ];
+const ASK_TEXT = {
+  credentials: {
+    head: '这条命令需要人来决定，容器替代不了它。',
+    tail: '它要真凭据、且会消耗额度——容器里跑不了，agent 换命令也换不出来。',
+  },
+  'owner-quota': {
+    head: '这条命令需要人来决定，换到容器里也省不掉它的代价。',
+    tail: '它在容器里跑，但花的是机主的真实额度——开不开这一轮只有人能决定，agent 换命令也换不出来。',
+  },
+};
 
 // 命令 → 等价的容器跑法。顺序即优先级，第一条命中为准；最后一条是兜底。
 const CONTAINER_ALTERNATIVE = [
@@ -230,15 +277,57 @@ const CONTAINER_ALTERNATIVE = [
   [/.*/, 'npm run test:docker   （unit + invariants 三档 + 集成，共 5 档）'],
 ];
 
+// 一段的去向。同一段里 NEEDS_HUMAN 优先：`RUN_CLAUDE_INTEGRATION=1 npm test` 这一段同时落在
+// npm test 的 deny 形态里，但它要的是真 turn，换到容器里跑不了。替代命令也只看这一段——拿整条
+// 命令去比的话，`npm run test:e2e && npm test` 会被前一段的 e2e 字样带到 test:docker:e2e。
+function segmentRoute(segment, context) {
+  const why = segmentReason(segment, context);
+  if (!why) return null;
+  const human = NEEDS_HUMAN.find(({ re }) => re.test(segment));
+  if (human) return { decision: 'ask', why, alternative: null, costs: [human.cost] };
+  if (RCI_EXPORTED.test(context) && RCI_CONSUMER.test(segment)) {
+    return { decision: 'ask', why: RCI_WHY, alternative: null, costs: ['credentials'] };
+  }
+  const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(segment))[1];
+  return { decision: 'deny', why, alternative: alt };
+}
+
 /**
- * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null}}
+ * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null, costs?: string[]}}
+ *   costs 只在 ask 时有：ASK_TEXT 的键，按出现顺序去重
  */
 export function decideRoute(command) {
-  const why = decide(command);
-  if (!why) return null;
-  if (NEEDS_HUMAN.some(re => re.test(command))) return { decision: 'ask', why, alternative: null };
-  const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(command))[1];
-  return { decision: 'deny', why, alternative: alt };
+  if (typeof command !== 'string' || !command.trim()) return null;
+  // Shell 续行（反斜杠紧跟换行）在真实 shell 里会被整体删除、拼成同一逻辑行；必须在切段前
+  // 先折叠掉，否则下面按字面换行切段会把 `-- ` 之后的测试目标切进独立的一段，第一段附加
+  // 参数变空直接放行、第二段命令头是裸路径不是解释器也放行，整条命令绕过 scope 检查。
+  // 只吃掉字面的 反斜杠+换行 两个字符：两条独立命令各占一行、行尾没有反斜杠的正常形态
+  // 不受影响，仍然会被下面的换行分隔符切开、各自判定——这是切碎更安全那条方向的一部分。
+  const collapsed = command.replace(/\\\r?\n/g, '');
+  const context = normalizeShellText(collapsed);
+  // 切段：管道、逻辑连接符，以及【单个 &】（后台符）。少切一种 8/2 那条命令就能整条蒙混——
+  // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
+  // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
+  const routes = collapsed.split(/\|\||&&|[|;&\n]/)
+    .map(segment => segmentRoute(normalizeShellText(segment), context))
+    .filter(Boolean);
+  if (!routes.length) return null;
+  // 有一段该 deny 整条就 deny：ask 放行的是【整条】命令，人为 smoke 点了「允许」，拼在后面的
+  // mutate 就跟着在宿主机上跑了。deny 段有容器跑法，agent 拆开重试即可。
+  const denied = routes.find(r => r.decision === 'deny');
+  if (denied) return denied;
+  // 全是要人的段：人是对整条命令点头，每一段会花掉什么都要摆出来
+  return {
+    decision: 'ask',
+    why: [...new Set(routes.map(r => r.why))].join('\n'),
+    alternative: null,
+    costs: [...new Set(routes.flatMap(r => r.costs))],
+  };
+}
+
+/** 只要理由：null = 放行。 */
+function decide(command) {
+  return decideRoute(command)?.why ?? null;
 }
 
 function main() {
@@ -253,13 +342,18 @@ function main() {
   const route = decideRoute(payload?.tool_input?.command);
   if (!route) process.exit(0);
 
-  const reason = route.decision === 'deny'
-    ? `⛔ 这条命令必须在一次性环境里跑，本钩子直接拒绝——【不需要找人】，换成下面那条重试即可。\n\n`
+  let reason;
+  if (route.decision === 'deny') {
+    reason = `⛔ 这条命令必须在一次性环境里跑，本钩子直接拒绝——【不需要找人】，换成下面那条重试即可。\n\n`
       + `原因：${route.why}\n\n`
       + `改跑：${route.alternative}\n（首次用先 npm run docker:build，约 7 分钟）\n\n`
-      + `确实非要在开发机上跑的话，那需要人来决定：请让用户自己敲。\n`
-    : `⚠️ 这条命令需要人来决定，容器替代不了它。\n\n原因：${route.why}\n\n`
-      + `它要真凭据、且会消耗额度——容器里跑不了，agent 换命令也换不出来。\n`;
+      + `确实非要在开发机上跑的话，那需要人来决定：请让用户自己敲。\n`;
+  } else {
+    // 两种代价拼在一条命令里时，开头那句哪种都不能单说，只说「要人决定」；代价那句在 tail，逐条列在后面
+    const texts = route.costs.map(c => ASK_TEXT[c]);
+    const head = texts.length === 1 ? texts[0].head : '这条命令需要人来决定。';
+    reason = `⚠️ ${head}\n\n原因：${route.why}\n\n${texts.map(t => t.tail).join('\n')}\n`;
+  }
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

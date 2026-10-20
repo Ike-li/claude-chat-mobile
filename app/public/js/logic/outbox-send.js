@@ -297,6 +297,44 @@ export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewi
   return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
 }
 
+// 离线条目的目标实例（O66）：先按会话认——规则 5 置换、切 effort 之后同一会话换了实例号；条目没带会话才按实例号。
+// 认不出返回 null（实例已被关掉，或广播还没到）。
+export function findOutboxTargetInstance(target, instances) {
+  const list = Array.isArray(instances) ? instances : [];
+  const sid = typeof target?.sessionId === 'string' ? target.sessionId : '';
+  if (sid) {
+    const bySession = list.find(i => i?.sessionId === sid);
+    if (bySession) return bySession;
+  }
+  return target?.instanceId != null ? (list.find(i => i?.instanceId === target.instanceId) || null) : null;
+}
+
+const outboxTargetKey = target => (typeof target?.sessionId === 'string' && target.sessionId
+  ? `s:${target.sessionId}` : `i:${target?.instanceId ?? ''}`);
+
+// 离线重放撞上在途轮的条目排队，本轮结束按序自动续发（O66：终端里忙时打的话也是排队、回合结束再发）。
+// entries 按入队顺序：{ target: {instanceId, sessionId}, sawRunning, inFlight }。返回该续发的那一条或 null：
+//   · 同一目标只看队首——一轮一条，第 3 条要等第 2 条那一轮；
+//   · 队首在发（inFlight）整个目标都等着；
+//   · 目标实例认不出就不发：实例被关掉了，不替用户把会话重新开起来（手动「重发」仍在）；
+//   · sawRunning：上一条发出之后还没看到这一会话开跑，就不算「本轮结束」——迟到的旧广播不能把下一条提前放出去。
+export function pickAfterTurnResend(entries, instances) {
+  const seen = new Set();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const key = outboxTargetKey(e?.target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (e.inFlight || !e.sawRunning) continue;
+    const inst = findOutboxTargetInstance(e.target, instances);
+    if (inst && inst.turnRunning !== true) return e;
+  }
+  return null;
+}
+
+export function sameOutboxTarget(a, b) {
+  return outboxTargetKey(a) === outboxTargetKey(b);
+}
+
 // 离线消息的失败提示（「未发送 · 可重发」/「已停止重试」）该挂在哪儿。判据是两条独立的问题，
 // 只答一条就会把提示放错地方——而放错地方的两种形态都无声：
 //
@@ -495,14 +533,15 @@ export function shouldClearBusyBySnapshot({ live, localBusy = false, turnStartTs
 export function presentTurnResult(payload = {}, opts = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const durationMs = typeof p.durationMs === 'number' ? p.durationMs : 0;
-  const cost = typeof p.costUsd === 'number' ? ` · $${p.costUsd.toFixed(4)}` : '';
+  // costUsd 是 CLI 的累计费用（resume 的会话里还带着之前的），不是这一轮花的：三种收尾行都不挂，累计成本在状态栏
+  // （验收 O57：网关 503、一个 token 没用的失败轮显示「$0.38」，读起来像这条失败的消息花了这么多钱）
   const secs = (durationMs / 1000).toFixed(1);
   const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
 
   if (p.interrupted) {
     return {
       kind: 'aborted',
-      statusBar: { text: `${t('已中止')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('已中止')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: null,
       notify: { title: t('⏹ 任务已中止'), body: `${t('用时')} ${secs}s` },
       failToolsMessage: t('已中止'),
@@ -512,7 +551,7 @@ export function presentTurnResult(payload = {}, opts = {}) {
   if (p.isError) {
     return {
       kind: 'error',
-      statusBar: { text: `${t('完成')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('出错')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: errorText ? { text: `${t('出错：')}${errorText}`, cls: 'text-danger' } : null,
       notify: { title: t('⚠️ 任务出错'), body: errorText.slice(0, 80) || `${t('用时')} ${secs}s` },
       failToolsMessage: errorText || t('工具执行已因本轮错误停止'),
@@ -580,4 +619,20 @@ export function nextOutboxWorktreeAnchor(item, decision, current) {
   if (!item || item.useWorktree !== true) return current ?? null;
   if (!decision || decision.outcome !== 'ok') return current ?? null;
   return decision.instanceId || null;
+}
+
+// 普通工作区新会话页的同一件事（O66 review）：离线连发的条目都是 {instanceId:null}。第一条懒开实例；后面各条
+// 服务端经 viewing 投给它、撞上它那一轮被拒收。拿着 {instanceId:null} 去排队，本轮结束时 findOutboxTargetInstance
+// 认不出目标，永远不续发。所以记下第一条开出来的实例，被拒收的条目按它登记（planOutboxBlockedTarget）。
+// 只管登记与之后的「重发」：首次投递照旧不带实例号，路由仍由服务端决定。worktree / 无文件夹各有自己的锚，不在这里。
+export function nextOutboxLazyOpenAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || item.instanceId != null || item.useWorktree === true) return null;
+  if (scratchRoot && item.cwd === scratchRoot) return null;
+  if (!decision || decision.outcome !== 'ok') return null;
+  return decision.instanceId || null;
+}
+export function planOutboxBlockedTarget(item, openedInstanceId) {
+  if (!item || item.instanceId != null || !openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
 }

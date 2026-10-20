@@ -92,6 +92,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliStatus')).toContainText('(非实时)');
     await expect(page.locator('#cliStatus')).toContainText('3 分钟前');
     await expect(page.locator('#cliStatus')).not.toContainText('账号级旧值');
+    // 验收 O43②：此前中文界面里露出英文的「source Web SDK」
+    await expect(page.locator('#cliStatus')).toContainText('来源：网页（SDK）');
+    await expect(page.locator('#cliStatus')).not.toContainText('source Web SDK');
     await expectNoBrowserErrors(page);
   });
 
@@ -104,7 +107,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliStatus')).toContainText('Opus 4.8');
     await expect(page.locator('#cliStatus')).toContainText('effort max');
     await expect(page.locator('#cliStatus')).toContainText('think on');
-    await expect(page.locator('#cliStatus')).toContainText('source CLI');
+    // 验收 O43②：来源标签跟界面语言走（中文界面不再露出「source …」）
+    await expect(page.locator('#cliStatus')).toContainText('来源：终端（CLI）');
+    await expect(page.locator('#cliStatus')).not.toContainText('source CLI');
 
     await sendChatMessage(page, 'test:cli-statusline-unavailable');
     await waitForIdle(page);
