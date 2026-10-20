@@ -10,7 +10,7 @@ import { writeFileSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, getSessionHistoryWithTotal, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -538,6 +538,34 @@ test('getSessionHistory: 超上限会话削顶到 HISTORY_MAX_MESSAGES，保留�
   assert.equal(msgs.length, HISTORY_MAX_MESSAGES);                       // 削顶到上限
   assert.equal(msgs[0].content, `消息 ${total - HISTORY_MAX_MESSAGES}`); // 头部被削，首条=倒数第 N 条
   assert.equal(msgs[msgs.length - 1].content, `消息 ${total - 1}`);      // 尾部（最新）保留
+});
+
+// 验收 O44 / AC-06-13：削顶本身是对的（防爆），错在削了不报数——前端只能说「加载了 2000 条」，读起来像全部。
+// total 是削顶前的条数；第二次读走缓存（mtime+size 未变）也必须给出同一个 total，否则重开会话时提示又变回全量。
+test('getSessionHistoryWithTotal: 超上限时 total 是削顶前的条数，缓存命中时照样给', async () => {
+  const cwd = '/test/cap-total-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const total = HISTORY_MAX_MESSAGES + 100;
+  const entries = Array.from({ length: total }, (_, i) => ({
+    type: 'user', message: { role: 'user', content: `消息 ${i}` }
+  }));
+  writeJSONL(dir, 'captotal', entries);
+  const first = await getSessionHistoryWithTotal('captotal', cwd, { baseDir: BASE });
+  assert.equal(first.messages.length, HISTORY_MAX_MESSAGES);
+  assert.equal(first.total, total, '削顶前一共有多少条，前端靠它判断要不要提示「只显示了最近的」');
+  const cached = await getSessionHistoryWithTotal('captotal', cwd, { baseDir: BASE });
+  assert.equal(cached.total, total, '缓存命中路径漏了 total，重开会话时提示会退回成「加载了 2000 条」');
+});
+
+test('getSessionHistoryWithTotal: 没超上限时 total 等于返回条数；文件不存在时是空', async () => {
+  const cwd = '/test/small-total-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'smalltotal', [
+    { type: 'user', message: { role: 'user', content: '你好' } },
+    { type: 'assistant', message: { role: 'assistant', content: '你好！' } },
+  ]);
+  assert.deepEqual(await getSessionHistoryWithTotal('smalltotal', cwd, { baseDir: BASE }).then(r => [r.messages.length, r.total]), [2, 2]);
+  assert.deepEqual(await getSessionHistoryWithTotal('no-such-total', cwd, { baseDir: BASE }), { messages: [], total: 0 });
 });
 
 // ── classifyTranscriptTail：尾部形态判定（单驾驶员模型的核心判据，2026-07-12 实验实证）──────────

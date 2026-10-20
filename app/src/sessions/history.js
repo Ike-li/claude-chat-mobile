@@ -8,7 +8,7 @@ import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './wor
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
-import { toolSummary, widgetPayload } from '../shared/tool-summary.js';
+import { toolSummary, toolResultCap, widgetPayload } from '../shared/tool-summary.js';
 // 会话里的图片只出引用（{ref, mediaType, bytes}），图本身走鉴权的 image:get 按需取，判据与 live 侧共用。
 import { imageRefsOf, toolImageRef, userImageRef, stripImageBlocks } from '../shared/transcript-image.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
@@ -127,8 +127,20 @@ async function readLiveChainUuids(sessionId, cwd, baseDir) {
 //
 // 输出条目：文本 {role,content,timestamp} | tool_use {kind,toolUseId,name,inputSummary,...} |
 // tool_result {kind,toolUseId,ok,outputSummary,...}。前端 loadHistory 据此重建 toolcard。
-export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
-  if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼路径
+export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, opts = {}) {
+  return (await readSessionHistory(sessionId, cwd, limit, opts)).messages;
+}
+
+// 同 getSessionHistory，另带削顶前一共有多少条（total）。削顶本身是防爆、不改；只是削了要报数——
+// 不报的话前端只能说「加载了 2000 条历史消息」，读起来像全部，用户以为会话就从这里开始（验收 O44）。
+export async function getSessionHistoryWithTotal(sessionId, cwd, opts = {}) {
+  return readSessionHistory(sessionId, cwd, HISTORY_MAX_MESSAGES, opts);
+}
+
+const NO_HISTORY = Object.freeze({ messages: [], total: 0 });
+
+async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return NO_HISTORY; // SS-003：非法 id 不拼路径
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
@@ -136,7 +148,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   try {
     ({ mtimeMs, size } = await stat(historyFile));
   } catch {
-    return []; // 文件不存在：新会话或已删
+    return NO_HISTORY; // 文件不存在：新会话或已删
   }
 
   // B6：mtime + size 双判据都未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的
@@ -161,13 +173,13 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
-    return cached.messages.slice(-limit);
+    return { messages: cached.messages.slice(-limit), total: cached.total };
   }
 
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
 
-  let messages;
+  let messages, total;
   try {
     let pass = await readHistoryMessages(historyFile, liveUuids);
     // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
@@ -185,18 +197,18 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     if (liveUuids && pass.newestMainUuid && !liveUuids.has(pass.newestMainUuid)) {
       pass = await readHistoryMessages(historyFile, null);
     }
-    ({ messages } = pass);
+    ({ messages, total } = pass);
   } catch {
-    return []; // 读取失败（含不是普通文件）
+    return NO_HISTORY; // 读取失败（含不是普通文件）
   }
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
-  return messages.slice(-limit);
+  return { messages: messages.slice(-limit), total };
 }
 
 // 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见循环里）。
@@ -208,6 +220,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
   // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
   const seenUuids = new Set();
+  const toolNames = new Map(); // tool_use id → 工具名：tool_result 按它取摘要上限（Bash 2000，见 toolResultCap）
   // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
   let lastMainAgentToolId = null;
   // 当前链是否已经开始（读到第一条命中 liveUuids 的主链消息）。在那之前的主链消息一律保留：
@@ -218,7 +231,10 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
   // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
   // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
+  // total：削顶前一共入列多少条，削掉的也算（getSessionHistoryWithTotal 据此告诉前端「只显示了最近的」）。
+  let total = 0;
   const pushCapped = (item) => {
+    total++;
     messages.push(item);
     if (messages.length > HISTORY_MAX_MESSAGES * 2) {
       messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
@@ -275,6 +291,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
         const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
         const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
         const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
+          toolNames,
           isSidechain: isSide,
           parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
           // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
@@ -347,7 +364,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
   } finally {
     input?.destroy(); // 读完已自行关闭；中途抛出时也要把句柄关掉
   }
-  return { messages, newestMainUuid };
+  return { messages, newestMainUuid, total };
 }
 
 // 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
@@ -772,6 +789,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       const id = block.id || block.tool_use_id;
       if (!id || !block.name) continue;
       const widget = widgetPayload(block.name, block.input); // 桌面端 show_widget 的完整源码，见 tool-summary.js
+      opts.toolNames?.set(String(id), String(block.name));
       out.push({
         kind: 'tool_use',
         role: 'assistant',
@@ -791,12 +809,15 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       // 工具截图（浏览器 / computer use / Read 图片）。子代理流水里的带上那张子代理卡的 id：
       // 新版 CLI 把子代理写在 subagents/agent-*.jsonl，按引用取图时主 transcript 里找不到它。
       const images = imageRefsOf(block.content, n => toolImageRef(String(id), n, opts.isSidechain ? opts.parentToolUseId : null));
+      // 上限同 live（display-contracts §5）：按配对 tool_use 的工具名。配不上（tool_use 被削头等）按 600。
+      const cap = toolResultCap(opts.toolNames?.get(String(id)));
+      opts.toolNames?.delete(String(id)); // 每个 id 只配一次，用完即删，长会话里不囤
       out.push({
         kind: 'tool_result',
         role: 'user',
         toolUseId: String(id),
         ok: !block.is_error,
-        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? '')),
+        outputSummary: toolSummary(images.length ? stripImageBlocks(block.content) : (block.content ?? ''), cap),
         ...(images.length ? { images } : {}),
         timestamp,
         ...side,
@@ -815,7 +836,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
 // 标签顺序不固定（实测两种真实形态都存在），故不锚定起始位置，只按标签名抓取；command-name 缺失视为
 // 不是这类块（交给 isCliSystemLine 走原有噪音判断，不强行重建）。空参数不留多余空格（裸 "/clear" 而非
 // "/clear "）。返回 null 表示"不是 slash 命令块"，调用方据此决定是否继续按噪音过滤判断。
-function reconstructSlashCommand(content) {
+export function reconstructSlashCommand(content) {
   const t = content.trim();
   const nameMatch = /<command-name>([^<]*)<\/command-name>/.exec(t);
   if (!nameMatch) return null;
@@ -840,7 +861,7 @@ function isLocalCommandWrapped(text) {
   return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
 }
 
-function isCliSystemLine(content) {
+export function isCliSystemLine(content) {
   const t = content.trim();
   if (isLocalCommandWrapped(t)) return true;
   // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
@@ -1247,9 +1268,12 @@ async function scanSessionsViaSdk(cwd, limit) {
     try { st = await stat(file); } catch { return null; }
     let activityAt = null;
     try { activityAt = await readLastMessageActivityMs(file, st.size); } catch { /* 读失败 → 回落 lastModified */ }
+    // SDK 提不出 summary 时回落 readHeadMeta，与搜索、通知横幅同口径——否则搜得到原文、抽屉却是占位（验收 O58）。
+    // 只对空 summary 的那几条才开文件，正常会话不多付一次读。readHeadMeta 读失败返回 {}，落到占位。
+    const title = s.summary || (await readHeadMeta(file, st.size)).title || '(无标题)';
     return {
       id: s.sessionId,
-      title: s.summary || '(无标题)',
+      title,
       lastUsedAt: Math.round(activityAt ?? s.lastModified),
     };
   }))).filter(Boolean);
@@ -1286,8 +1310,10 @@ async function scanSessionsViaSdk(cwd, limit) {
     const extra = await Promise.all(stats.slice(0, fetchLimit).map(async m => {
       const file = join(projectDir, m.name);
       const activityAt = await readLastMessageActivityMs(file, m.size).catch(() => null);
-      // 标题：这类会话主链无消息，readHeadMeta 也提不出，统一回落占位（与快路径空 summary 同口径）
-      return { id: m.name.slice(0, -6), title: '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
+      // 标题回落 readHeadMeta（与快路径空 summary 同口径）。本地 slash 命令跑完的会话主链无消息，提不出就是占位；
+      // 首条以 HTML 标签开头的会话 SDK 同样提不出 summary、整条漏报，但首条 user 文本在（验收 O58）。
+      const meta = await readHeadMeta(file, m.size);
+      return { id: m.name.slice(0, -6), title: meta.title || '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
     }));
     enriched.push(...extra);
   } catch { /* readdir 失败（目录刚被删等）：SDK 结果照常返回，不因补齐失败而整个列表塌掉 */ }
@@ -1819,6 +1845,11 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 //   assistant 含 tool_use            → pending（正在执行工具，结果未落盘）
 //   assistant 含 text（无 tool_use）  → settled（轮次收尾；'No response requested.' 自然覆盖）
 //   assistant 只有 thinking          → pending（流式中间态，text/tool_use 未落）
+//   assistant 只有【空】thinking     → 跳过，往前看（验收 O96：第三方网关把空 thinking 写在正文后面，
+//                                      链尾因此永远「只有 thinking」→ 永久 pending、手机一直只读。空 thinking
+//                                      不承载内容；前面是 user / tool_result 时跳过之后照样 pending，只有
+//                                      「正文 → 空 thinking」会收尾——与下面「正文落盘、紧接着还要发 tool_use」
+//                                      是同一个已知误判窗，同由 keepAlive 罩住）
 //   user 含 tool_result              → pending（等 assistant 消费结果继续）
 //   user 中断标记 [Request interrupted…] → settled（轮次被 Ctrl+C 掐掉）
 //   user 其他文本                     → pending（等 assistant 回复）
@@ -1862,6 +1893,11 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
   return false;
 }
 
+// thinking 块没有任何文字（签名有无不论）。redacted_thinking 是另一种块、带着加密内容，不算空。
+function isEmptyThinkingBlock(b) {
+  return b?.type === 'thinking' && !String(b.thinking ?? '').trim();
+}
+
 // sidechainOnly=false：只看主链；true：只看子链（isSidechain）。
 // lastChainEntrypoint：链尾那条记录【自报】的写入方（CLI 写 'cli'、本项目 SDK 写 'sdk-ts'）。判「这条
 // pending 是谁留下的」用它——磁盘上的硬证据，比注册表可靠（旧版 CLI 不写注册表）。见 mirrorEntryLock。
@@ -1886,6 +1922,7 @@ function classifyChainTail(entries, sidechainOnly) {
         if (isCliSystemLine(text)) continue; // "No response requested." 等助手噪音：跳过继续往前找真链
         return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
       }
+      if (blocks?.length && blocks.every(isEmptyThinkingBlock)) continue; // 网关噪音：见上方分类表
       return { verdict: 'pending', lastChainTs, lastChainEntrypoint }; // 只有 thinking / 空内容：流式中间态
     }
     // user
@@ -2176,6 +2213,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
 
   const items = [];
   let total = 0;
+  const toolNames = new Map(); // 同 getSessionHistory：tool_result 按工具名取摘要上限
   const pushCapped = (item) => {
     items.push(item);
     if (items.length > limit * 2) items.splice(0, items.length - limit);
@@ -2194,6 +2232,7 @@ export async function readSubagentFlow(sessionId, cwd, toolUseId, { baseDir = CL
       // 与主历史同构：复用同一个展开器，前端才能拿同一套渲染跑两条路径。
       // parentToolUseId 一律填这张卡的 id——本函数返回的每一条按定义都属于它。
       const expanded = expandHistoryEntry(entry.message?.content, entry.message?.role || entry.type, entry.timestamp, {
+        toolNames,
         isSidechain: true,
         parentToolUseId: wanted,
         uuid: null, // 分叉锚点只在主链有效（同 getSessionHistory 对 sidechain 的处理）

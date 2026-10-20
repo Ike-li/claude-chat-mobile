@@ -10,9 +10,9 @@
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
 import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, chmodSync, fsyncSync, constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
-import { isInScope } from './workdir-scope-guard.js';
+import { isInScope, isMissingInScope } from './workdir-scope-guard.js';
 import { isOpenableTarget } from './file-security.js';
 
 // 256KB/片、500 条/页：本模块把它们同时当默认值与硬顶——弱网上限的含义是"每次最多这么多"，
@@ -28,6 +28,12 @@ function resolveInScope(cwd, relPath, scopeDirs) {
   const candidate = join(cwd, relPath || '.');
   return isInScope(candidate, scopeDirs) ? candidate : null;
 }
+
+// resolveInScope 拒绝之后：是范围内一个已经不在的东西（文件面板开着时被删、被改名），还是真越界。
+// 前者交回可判别值，调用方不记 scope_violation（验收 O80）；访问照样不成功。
+// relPath 写成绝对路径的不算：join 之后是 cwd 下一个不存在的路径，但这种入参本身就是越界意图，照旧记越界。
+const missingInScope = (cwd, relPath, scopeDirs) =>
+  typeof relPath === 'string' && !isAbsolute(relPath) && isMissingInScope(join(cwd, relPath), scopeDirs);
 
 // 按固定字节数分片读取文本文件时，分片边界可能恰好切在一个多字节 UTF-8 字符中间（中文/emoji 等）——
 // 若直接 toString('utf8')，被切断的尾字符会解码成替换字符（U+FFFD）或丢字节，且下一片从这个已损坏的
@@ -50,14 +56,17 @@ function trimIncompleteUtf8Tail(buf) {
 
 export function listDir(cwd, relPath, scopeDirs, opts = {}) {
   const real = resolveInScope(cwd, relPath, scopeDirs);
-  if (real === null) return null;
+  if (real === null) return missingInScope(cwd, relPath, scopeDirs) ? { notFound: true } : null;
   const offset = Math.max(0, opts.offset || 0);
   const maxEntries = Math.min(opts.maxEntries > 0 ? opts.maxEntries : MAX_BROWSE_ENTRIES, MAX_BROWSE_ENTRIES);
   let names;
   try {
     names = readdirSync(real).sort(); // 稳定排序：分页 offset 语义依赖跨调用顺序一致
-  } catch {
-    return null; // 不是目录 / 已被删除等：一律拒绝，不是有效的 list 目标
+  } catch (err) {
+    // 范围门已经过了：不是目录（文件、FIFO、指向文件的 symlink——前端点这类条目先试 list）不是越界，
+    // 交回可判别值，调用方不记 scope_violation（验收 O39）。其余失败照旧拒。
+    if (err?.code === 'ENOTDIR') return { notDirectory: true };
+    return null;
   }
   // FILES-1：readdir 后再校一次 scope——dir→symlink 越界窗口内若已换，fail-closed 整页拒绝。
   if (!isInScope(real, scopeDirs)) return null;
@@ -85,8 +94,10 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
 
 export function readFile(cwd, relPath, scopeDirs, opts = {}) {
   const real = resolveInScope(cwd, relPath, scopeDirs);
-  if (real === null) return null;
-  if (!isOpenableTarget(real)) return null; // FIFO/设备/socket：open 会永久阻塞，必须在 open 前挡
+  if (real === null) return missingInScope(cwd, relPath, scopeDirs) ? { notFound: true } : null;
+  // FIFO/设备/socket：open 会永久阻塞，必须在 open 前挡。范围内的合法东西、只是读不了，交回可判别值
+  // （同下面的 blockedSymlink），不与越界同形（验收 O39）
+  if (!isOpenableTarget(real)) return { notOpenable: true };
   const offset = Math.max(0, opts.offset || 0);
   const maxBytes = Math.min(opts.maxBytes > 0 ? opts.maxBytes : MAX_BROWSE_BYTES, MAX_BROWSE_BYTES);
   // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
@@ -158,13 +169,20 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
 // （fd 一旦拿到，读到的现状与即将写入的目标是同一个 inode 的同一时刻）；仍非绝对防护——见
 // readFile 头注同款免责声明，另一个进程用不同 fd 仍可能与本次写交错，无 flock。
 export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } = {}) {
+  // 范围门必须先于一切入参检查（内容、基线哈希、大小）：越界 relPath 时，socket-files.js 只认 code==='scope'
+  // 记 scope_violation 审计（这是无 approval-store 的写路径唯一事后可追溯记录），别的拒绝抢先会让
+  // 一次真实越界尝试被记成普通 file_write/denied，漏掉本该报警的那条（验收 O19：缺基线哈希就是这样漏的）。
+  // 唯一的例外是路径本身的类型：不是字符串时 path.join 直接抛，socket 层只能回可重试的通用错误（PR #236 review）。
+  // 缺省（undefined / 空串）照旧当作 cwd 本身，下面按「不是文件」拒。
+  if (relPath != null && typeof relPath !== 'string') return { ok: false, code: 'bad_path', error: '路径不合法' };
+  const real = resolveInScope(cwd, relPath, scopeDirs);
+  if (real === null) {
+    // 范围内已经不在的文件（编辑器开着时被删 / 改名）不是越界（验收 O80）
+    if (missingInScope(cwd, relPath, scopeDirs)) return { ok: false, code: 'not_found', error: '文件不存在（可能已被删除或改名）' };
+    return { ok: false, code: 'scope', error: '路径不在授权范围内，或不是文件' };
+  }
   if (typeof content !== 'string') return { ok: false, code: 'bad_content', error: '内容不合法' };
   if (typeof baseHash !== 'string' || !baseHash) return { ok: false, code: 'bad_base_hash', error: '缺少基线哈希' };
-  // 范围门必须先于内容大小检查：越界 relPath 配超大 content 时，socket-files.js 只认 code==='scope'
-  // 记 scope_violation 审计（这是无 approval-store 的写路径唯一事后可追溯记录），too_large 抢先会让
-  // 一次真实越界尝试被记成普通 file_write/denied，漏掉本该报警的那条。
-  const real = resolveInScope(cwd, relPath, scopeDirs);
-  if (real === null) return { ok: false, code: 'scope', error: '路径不在授权范围内，或不是文件' };
   // 写路径同样要在 open 前挡特殊文件：O_RDWR 打开 FIFO 一样会阻塞；且此前只有 isDirectory 一道闸，
   // FIFO/socket 的 size 恒 0（基线哈希= 空串 sha256），能被 rename 顶替成普通文件、销毁正在用的管道。
   if (!isOpenableTarget(real)) return { ok: false, code: 'not_file', error: '目标不是常规文件' };
