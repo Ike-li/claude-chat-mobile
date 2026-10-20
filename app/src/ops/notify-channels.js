@@ -99,8 +99,9 @@ export function createNotifyChannels({
   const NTFY_TIMEOUT_MS = 8000;
 
   // ②2b：向 ntfy 发一条（Node 原生 fetch，零依赖）。没配 / 出错都静默——尽力而为，绝不阻断主流程。
+  // 交回投递结果 'disabled' | 'sent' | 'failed'：只有「发一条测试推送」要看它（验收 O1），其余调用点照旧不 await。
   async function ntfyNotify(title, body, meta = {}) {
-    if (!ntfyEnabled) return;
+    if (!ntfyEnabled) return 'disabled';
     try {
       const { url, init } = ntfyRequestInit({ url: ntfyUrl, topic: ntfyTopic, token: ntfyToken }, title, body, meta);
       const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(NTFY_TIMEOUT_MS) });
@@ -110,11 +111,14 @@ export function createNotifyChannels({
         console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
         metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
         metrics.label('delivery_failure_reason', `HTTP ${res.status}`);
+        return 'failed';
       }
+      return 'sent';
     } catch (e) {
       console.error('[ntfy] 推送失败:', e.message);
       metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
       metrics.label('delivery_failure_reason', describeDeliveryError(e));
+      return 'failed';
     }
   }
 
