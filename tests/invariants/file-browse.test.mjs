@@ -18,6 +18,8 @@ import {
   statSync,
   lstatSync,
 } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -136,6 +138,26 @@ test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
     assert.deepEqual(listDir(cwd, 'README.md', scopeDirs), { notDirectory: true });
     if (process.platform !== 'win32') assert.deepEqual(listDir(cwd, 'named.pipe', scopeDirs), { notDirectory: true });
     assert.deepEqual(listDir(cwd, 'does-not-exist', scopeDirs), { notFound: true });
+  });
+
+  // 同一件事的并发版：范围门放行之后、readdir 之前目录被删（Claude 正在改工作区时常见）。readdir 的 ENOENT
+  // 原来落到 null，与越界同形，browse:list 就记一条并不存在的 scope_violation。
+  // 竞态用替身稳定复现：readdirSync 先真删掉目录再调原函数，拿到的是真实的 ENOENT。
+  test('范围门之后、readdir 之前目录被删：回 {notFound:true}，不是与越界同形的 null', () => {
+    const racy = join(cwd, 'racy-dir');
+    mkdirSync(racy);
+    const original = fs.readdirSync;
+    fs.readdirSync = (path, ...rest) => {
+      if (String(path).endsWith('racy-dir')) rmSync(racy, { recursive: true, force: true });
+      return original(path, ...rest);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(listDir(cwd, 'racy-dir', scopeDirs), { notFound: true });
+    } finally {
+      fs.readdirSync = original;
+      syncBuiltinESMExports();
+    }
   });
 
   test('FI-001: 文件在 readdir 后被删除时跳过，不抛出异常', () => {
