@@ -16,6 +16,9 @@ x-ccm-image: &ccm-image
 
 # 不挂仓库根：Docker Desktop virtiofs 不能把文件叠到父 bind 里已有的同名文件上。
 # 只挂源码目录，配置由 entrypoint 写进容器层。
+# 挂 ../../tests 的服务都带一条 /app/tests/acceptance/local 匿名卷：那个目录装着机主的验收配置与
+# 网关凭据（gitignore 挡在仓库外，宿主机工作树里却在），整棵 tests/ 挂进来就会一起进容器。
+# 匿名卷把它盖成空目录，写法同 /app/node_modules（盖的是目录，不触发上面那条同名文件的限制）。
 x-runtime-env: &runtime-env
   HOME: /home/ccm-test
   AUTH_TOKEN: playground-local-not-a-secret
@@ -62,6 +65,7 @@ services:
       - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
+      - /app/tests/acceptance/local
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test
@@ -88,6 +92,7 @@ services:
       - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
+      - /app/tests/acceptance/local
       - ../../package.json:/app/package.json
       - /app/node_modules
     ports:
@@ -123,6 +128,7 @@ services:
       - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
+      - /app/tests/acceptance/local
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test
@@ -149,6 +155,7 @@ services:
       - ../../app:/app/app
       - ../../scripts:/app/scripts
       - ../../tests:/app/tests
+      - /app/tests/acceptance/local
       - ../../package.json:/app/package.json
       - /app/node_modules
       - playground-home:/home/ccm-test
