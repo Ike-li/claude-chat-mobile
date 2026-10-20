@@ -85,6 +85,8 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
+let pushTestNtfy = null;
 // 主工作区会话列表多出一条标题是服务端占位「(无标题)」的会话（真 server 对提不出标题的会话就写这个字面量）。
 let untitledSessionArmed = false;
 let pendingPermission = null;
@@ -546,6 +548,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  pushTestNtfy = null;
   untitledSessionArmed = false;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
@@ -823,6 +826,12 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
+});
+
+// 验收 O1：让接下来的 push:test 回报 ntfy 投递结果。走 query（本 mock 没装 body parser），/__reset 清除。
+app.post('/__arm-push-test-ntfy', (req, res) => {
+  pushTestNtfy = req.query?.result === 'failed' ? 'failed' : 'sent';
+  res.json({ ok: true, pushTestNtfy });
 });
 
 // 验收 O42 / O43③：武装后主工作区多一条无标题会话。无参，/__reset 清除；要在 page.goto 之前武装，首屏的列表就带上它。
@@ -2810,7 +2819,7 @@ io.on('connection', socket => {
   // 测试推送：mock 默认无订阅（与真机初见形态一致，也是最需要被说清的那一态）
   socket.on('push:test', (_payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, sent: 0, failed: 0, subscribed: false });
+    ack({ ok: true, sent: 0, failed: 0, subscribed: false, ...(pushTestNtfy ? { ntfy: pushTestNtfy } : {}) });
   });
 
   // 配置面板的读取路径。夹具刻意混了三种形态：普通值、敏感项（只给 set+length）、未设置的空值，

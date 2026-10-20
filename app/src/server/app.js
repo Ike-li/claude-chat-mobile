@@ -4470,12 +4470,14 @@ registerSocketConnection(io, socket => {
     const before = metrics.snapshot().counters;
     const title = '🔔 测试推送 · ccm';
     await pushNotify(title, '如果你看到这条，推送链路是通的');
-    ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
+    // ntfy 是另一条独立通道：等它的结果一起回报（验收 O1——此前不 await，ntfy 投递成功界面也不知道）。
+    // ntfyNotify 自带 8s 超时；前端这条 emit 的 timeout 放到 12s，留出 Web Push 那段的余量，ntfy 挂死时也不会误报成断网。
+    const ntfy = await ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
     const after = metrics.snapshot().counters;
     const sent = (after.push_success ?? 0) - (before.push_success ?? 0);
     const failed = (after.push_failure ?? 0) - (before.push_failure ?? 0);
-    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条`);
-    ack({ ok: true, sent, failed, subscribed: sent + failed > 0 });
+    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条；ntfy ${ntfy}`);
+    ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });
   });
 
   on(socket, 'doctor:run', (_payload, ack) => {
