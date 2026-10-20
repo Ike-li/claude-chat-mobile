@@ -108,6 +108,8 @@ test.describe('SEC-04 正文最小化：命令参数不进推送正文', () => {
     const ctx = { cwd: '/home/u/proj', sessionTitle: userWords, instanceId: 'i-1', sessionId: 's-1', hasClients: false };
     const built = [
       ['result', notificationForEvent('result', { durationMs: 1000 }, ctx)],
+      // 审批过期那一轮（O30，合并时与本条同时进来）是 result 的另一支，同样要分两份标题
+      ['result_approval_expired', notificationForEvent('result', { durationMs: 1000, isError: true, approvalExpired: true }, ctx)],
       ['permission_request', notificationForEvent('permission_request', { name: 'Bash' }, ctx)],
       ['question', notificationForEvent('question', { text: 'q' }, ctx)],
       ['task_notification', notificationForEvent('task_notification', { status: 'completed' }, ctx)],

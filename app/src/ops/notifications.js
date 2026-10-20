@@ -104,7 +104,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
         // 验收 O30：本轮有审批等到过期时，CLI 以 is_error 收尾；用户要知道的是操作没执行、得重新触发，不是「出错」。
         // 用户自己点了停止仍优先算「已中止」。
         if (p.approvalExpired && !p.interrupted) {
-          return { ...withData({ title: titleWithIdentity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType };
+          return { ...withData({ ...identity('⏰ 审批已过期'), body: `等太久没批，操作没有执行 · 用时 ${secs}s` }), ntfyType };
         }
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
         return { ...withData({ ...identity(title), body: `用时 ${secs}s` }), ntfyType };
