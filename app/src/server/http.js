@@ -85,11 +85,12 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null, onAuthFa
         const key = rl.sourceKey(req);
         const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
         const now = rl.now ? rl.now() : Date.now();
-        // gateCheck 区分「未达阈值的退避冷却」与「达阈值的长锁」——前者语义仍是令牌不对（401），
-        // 说成 429 rate_limited 会把行动指引从「重输令牌」错换成「等一下」。
+        // gateCheck 区分「未达阈值的退避冷却」与「达阈值的长锁」：两者都回 429 + Retry-After（这次没校验令牌），
+        // status 分别是 cooldown 与 rate_limited——只有长锁才是「尝试过多」。语义见 authRejection。
         const gated = gateCheck(st, now);
         if (gated) {
-          const rej = authRejection(gated);
+          const hasCredential = publicHost || Boolean(req.query?.token) || Boolean(req.headers?.['x-auth-token']);
+          const rej = authRejection({ ...gated, hasCredential });
           if (rej.retryAfterSeconds !== null) res.setHeader?.('Retry-After', String(rej.retryAfterSeconds));
           reportFailure(gated.verdict, key);
           return res.status(rej.httpStatus).json({ status: rej.reason });

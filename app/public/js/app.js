@@ -1773,6 +1773,18 @@ import { createGateFocusController } from './app/focus-layers.js';
   socket.on('connect_error', async err => {
     logClientEvent('conn', `连接尝试失败: ${err.message || err}`);
     const handshake = describeHandshakeError(err);
+    if (handshake.kind === 'cooldown') {
+      // 验收 O83：同一来源刚有一次登录失败，服务端在退避短锁里，这次的令牌根本没校验——既不是令牌错，
+      // 也不是尝试过多。说清在等，到点用同一份凭据再握一次手。冷却期内服务端不计数，这次重试不会加锁。
+      // 不另存计时器：到点时 socket 已在握手（active）就跳过，连撞几次锁也只会有一次握手在途。
+      setStatus(handshake.text);
+      if (authGate && !authGate.classList.contains('hidden') && authError) {
+        authError.textContent = handshake.text;
+        authError.classList.remove('hidden');
+      }
+      setTimeout(() => { if (!socket.active) socket.connect(); }, handshake.retryAfterMs + 50);
+      return;
+    }
     if (handshake.kind === 'rate_limited') {
       // 被防暴破限速挡下：说清还要等多久。此前这里落到下面的 else，屏幕上是
       // 「连接失败：rate_limited」——用户看不懂，也不知道要等，于是反复重连撞在刚上的那把锁上。
