@@ -5128,7 +5128,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const serverRestarted = detectServerRestart({ prevStartedAt: lastServiceStartedAt, newStartedAt: newServiceStartedAt });
     if (newServiceStartedAt != null) lastServiceStartedAt = newServiceStartedAt;
     // 重启已兑现：撤掉「⟳ 正在重启服务…」那一行，否则它一直挂着、像还没重启完（O87）。
-    if (serverRestarted) messagesEl.querySelectorAll('[data-restart-pending]').forEach(node => node.remove());
+    const restartBars = serverRestarted ? [...messagesEl.querySelectorAll('[data-restart-pending]')] : [];
+    restartBars.forEach(node => node.remove());
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
@@ -5286,6 +5287,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       setEffortMode(p.defaultEffort ?? null, true);
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();
+      // 在首页 / 新会话页点的重启：addBar 插那一行时清掉了空态表面，而这条路不进 bindView——
+      // 撤掉那一行后主区若已空，把空态表面还回来，否则一片空白直到用户手动切走。
+      if (restartBars.length && !messagesEl.children.length) ensureEmptySurface();
     }
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。

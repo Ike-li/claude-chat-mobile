@@ -824,7 +824,9 @@ app.post('/__dev-mode', (req, res) => {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'instances', payload: { canRestart: mockCanRestart, devMode: true,
       viewingInstanceId,
-      viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd ?? null,
+      // 同连接首帧：首页（viewing=null）也带工作区 cwd。给 null 会让下一帧看起来「换了工作区」而重渲空态，
+      // 把「撤掉重启条后主区空白」掩盖掉。
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
       ...mockDirFields(),
       instances: mockInstances, service: mockServicePayload(),
     },

@@ -184,6 +184,28 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 首页 / 新会话页上点重启：addBar 会先清掉空态表面再插那一行；撤掉那一行后要把空态表面还回来，
+  // 否则 viewing 仍是 null、广播不进 bindView，主区一片空白，只能手动切走或刷新。
+  for (const [label, enter, surface] of [
+    ['首页', '#btnHome', '[data-testid="home-dashboard"]'],
+    ['新会话页', '#btnNew', '[data-testid="compose-surface"]'],
+  ] as const) {
+    test(`P0-31o 开发者模式：在${label}重启，撤掉那一行后空态表面回来`, async ({ page }) => {
+      await gotoMock(page);
+      await page.locator(enter).click();
+      await expect(page.locator(surface)).toBeVisible();
+      await page.request.post('/__dev-mode?canRestart=1');
+      await openGeneralPage(page, 'behavior');
+      await page.locator('#btnRestartServer').click();
+      await page.locator('#confirmOk').click();
+      await expect(page.locator('#messages')).toContainText('正在重启服务');
+      await expect(page.locator(surface)).toHaveCount(0);
+      await expect(page.locator('#messages')).not.toContainText('正在重启服务', { timeout: 10_000 });
+      await expect(page.locator(surface)).toHaveCount(1);
+      await expectNoBrowserErrors(page);
+    });
+  }
+
   test('P0-31f 保存成功后出现「立即重启」入口（mock 广播 canRestart:true）', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');
