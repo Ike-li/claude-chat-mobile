@@ -1136,7 +1136,6 @@ const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
-const inheritedEffort = instanceManager.inheritedEffort;
 const instanceForSession = instanceManager.forSession;
 const instanceState = instanceManager.stateOf;
 // 新会话预设档（pending = L0）：session:new / 空 cwd 后 viewingInstanceId=null（懒创建无实例），
@@ -2066,7 +2065,6 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   } else {
     effUi = resolveResumeEffort({
       savedEffort: saved?.effort,
-      inheritedEffortValue: inheritedEffort(cwd),
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
   }

@@ -38,14 +38,6 @@ export function createInstanceManager() {
     return null;
   }
 
-  function inheritedEffort(cwd) {
-    let effort = null;
-    for (const agent of agents.values()) {
-      if (agent.cwd === cwd) effort = agent.effortAuto ? 'auto' : agent.effort;
-    }
-    return effort;
-  }
-
   function stateOf(id) {
     const agent = agents.get(id);
     if (!agent) return 'idle';
@@ -159,7 +151,6 @@ export function createInstanceManager() {
     permissionModeOf,
     effortOf,
     forSession,
-    inheritedEffort,
     stateOf,
     driverStateOf,
     anyTurnRunning,
