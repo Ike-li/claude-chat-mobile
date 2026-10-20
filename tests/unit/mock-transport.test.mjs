@@ -44,11 +44,12 @@ async function harness(t) {
     });
   });
   const { port } = httpServer.address();
-  const client = ioClient(`http://127.0.0.1:${port}`, { transports: ['websocket'], forceNew: true });
+  // mock 不放行无令牌握手（同真 server，见 transport.js 的 io.use）；握手被拒时立刻失败，不在这里干等
+  const client = ioClient(`http://127.0.0.1:${port}`, { transports: ['websocket'], forceNew: true, auth: { token: 'mock-transport-test' } });
   t.after(() => client.close());
   const received = [];
   client.on('agent:event', ev => received.push(ev.payload.text));
-  await new Promise(resolve => client.on('connect', resolve));
+  await new Promise((resolve, reject) => { client.on('connect', resolve); client.on('connect_error', reject); });
   return { client, received, tail, nextCase: () => { generation += 1; } };
 }
 

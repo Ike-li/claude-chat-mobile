@@ -11,6 +11,8 @@ import { setSecurityHeaders } from '../../../app/src/server/http.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = join(HERE, '..', '..', '..', 'app', 'public');
 const DEFAULT_REJECTED_TOKENS = ['bad-token', 'invalid-token', 'expired-token'];
+// 带这个令牌的握手按「来源已被长锁」拒（P0-20g）。
+const RATE_LIMITED_TOKEN = 'rate-limited-token';
 
 function javascriptFiles(directory) {
   const files = [];
@@ -100,8 +102,18 @@ export function createMockTransport({
 
   guardAgentEvents(io, caseGeneration);
   io.use((socket, next) => {
-    if (rejectedTokens.has(socket.handshake.auth?.token)) {
+    const token = socket.handshake.auth?.token;
+    // 不带令牌一律拒：真 server 在非公网 Host 上不留「无 token 放行」的分支（AUTH_TOKEN 是启动前提）。
+    // mock 此前放行无令牌握手，「开页没令牌也照样连上」在 E2E 里成立、在真机上不成立（验收 O20）。
+    if (!token || rejectedTokens.has(token)) {
       next(new Error('unauthorized'));
+      return;
+    }
+    // 被防暴破长锁拦下：与真 server 的 rejectHandshake 同形（message + data.retryAfterSeconds）。
+    if (token === RATE_LIMITED_TOKEN) {
+      const err = new Error('rate_limited');
+      err.data = { reason: 'rate_limited', retryAfterMs: 900_000, retryAfterSeconds: 900 };
+      next(err);
       return;
     }
     guardAgentEvents(socket, caseGeneration); // 单播也要过闸：hydration 的 instances 走的就是 socket.emit

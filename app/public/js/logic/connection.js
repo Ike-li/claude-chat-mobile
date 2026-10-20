@@ -121,10 +121,16 @@ export const CONN_BANNER_RECONNECTED_LINGER_MS = 1600; // 「已重新连接」�
 // phase：'connecting'（从未连上过）| 'offline'（连上过又断了）| 'online'
 // elapsedMs：当前 phase 已持续时长；suppressed：鉴权门/Access 重登门打开中（全屏页与横幅不能并存）
 // wasVisible：进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」，秒连不该闪绿条
+// blockedText：握手被防暴破长锁拦下时给人看的话（describeHandshakeError 的 text，已是当前语言、带分钟数）。
+//   未连上时立刻显示、不转圈（没有在自动重连）、保留重试（锁期内重试不计数，锁过了点一下就能进）。此前这句话
+//   只写进恒隐藏的状态元素，屏幕上只有「连接中…」，用户会以为服务挂了（验收 O22）。t(已翻译的句子) 原样返回。
 // 返回 null（不显示）或 { tone, label, detail, spinner, retry }；label 是 tk() 标记的中文原文（key），接线层才 t()
-export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false } = {}) {
+export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false, blockedText = '' } = {}) {
   if (suppressed) return null;
   if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  if (blockedText && (phase === 'connecting' || phase === 'offline')) {
+    return { tone: 'warn', label: blockedText, detail: '', spinner: false, retry: true };
+  }
   if (phase === 'connecting') {
     if (elapsedMs < CONN_BANNER_CONNECTING_DELAY_MS) return null;
     // 首连不报「已断开 N 秒」：从没连上过，无「断开」可言
@@ -396,4 +402,12 @@ export function isLanOrLocalHostname(h) {
 // 唯一合法的「已启用」是 === '1'；dataset 缺失（替换没匹配上）同样落 token 门，失败方向必须有门可弹。
 export function authFailurePath({ lanOrLocal, cfAccessFlag } = {}) {
   return (lanOrLocal || cfAccessFlag !== '1') ? 'token-gate' : 'access-relogin';
+}
+
+// 开页时要不要发起握手。走令牌门的路径上没有令牌，握手必然被拒，而服务端把每一次都记成鉴权失败——
+// 新用户找令牌时反复打开 App，第 8 次就被锁 15 分钟，之后带正确令牌也 429（验收 O20）。
+// 判据与 authFailurePath 同一份：只有「公网 + Access 已启用」那条路不需要令牌（凭边缘注入的 JWT）。
+export function shouldHandshakeOnBoot({ token, lanOrLocal, cfAccessFlag } = {}) {
+  if (token) return true;
+  return authFailurePath({ lanOrLocal, cfAccessFlag }) === 'access-relogin';
 }

@@ -175,6 +175,7 @@ import {
   formatAuditEntry,
   isLanOrLocalHostname,
   authFailurePath,
+  shouldHandshakeOnBoot,
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
@@ -1300,8 +1301,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
+  // 没令牌、又会走令牌门时不在开页时握手（必然被拒且被记成一次鉴权失败，验收 O20），下面直接出令牌门；
+  // submitAuth 写入令牌后自己 socket.connect()。
+  const handshakeOnBoot = shouldHandshakeOnBoot({ token, lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess });
   const socket = appContext.setSocket(io({
     auth: { token, deviceToken },
+    autoConnect: handshakeOnBoot,
     // 移动端常切后台/息屏，断开后想尽快回来：调小重连退避（默认 1000/5000ms 太久）
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
@@ -1665,6 +1670,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+  if (!handshakeOnBoot) {
+    setStatus(t('需要访问令牌'));
+    showAuthGate(''); // 首访不是「令牌无效」，不带错误文案
+  }
 
   // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
   // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
@@ -1730,9 +1739,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // IPv6 按 /64 归桶，同网段另一台设备连错到阈值会连累这台——把一个令牌完全正确的已登录用户
       // 踢回登录门，既答非所问又会诱导他去改本来没问题的令牌。只在登录门本来就开着时把话放进去。
       if (authGate && !authGate.classList.contains('hidden')) showAuthGate(handshake.text);
-      else if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+      else {
+        if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+        // 令牌门没开：话说在连接横幅上（setStatus 写的 #statusLine 恒隐藏，此前用户只看得到「连接中…」，验收 O22）
+        connBanner.markRateLimited(handshake.text);
+      }
       return;
     }
+    connBanner.clearRateLimited(); // 这一轮不是被锁挡下的，别再挂着上一轮的「等 N 分钟」
     if (err.message === 'unauthorized') {
       if (authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'token-gate') {
         setStatus(t('需要访问令牌'));
