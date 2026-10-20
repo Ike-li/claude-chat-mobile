@@ -138,6 +138,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O21 / AC-02-13：被拒之后，切回标签页、网络恢复都会经 reconnectIfNeeded 自动重连，而重连握手会让设备
+  // 重新进待审、机主又收到一条「新设备请求接入」。只有遮罩上的「重新请求接入」该发起握手。
+  // reconnectIfNeeded 的 200ms 定时器交给 page.clock 确定地走过去，不赌墙钟（waitForTimeout 被门禁禁掉）。
+  test('P0-15j 设备被拒后切回前台 / 网络恢复都不自动重连，点「重新请求接入」才握手', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-denied');
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+    // mock 先发 denied、50ms 后才断开；要等真断开了再测，否则 200ms 定时器里走的是「已连接→探活」那条分支
+    await expect(page.locator('#statusLine')).toHaveText('连接断开，自动重连中…');
+
+    // 新握手＝不带 sid 的 engine.io 请求（已建立连接上的轮询与升级都带 sid）
+    const handshakes: string[] = [];
+    page.on('request', req => {
+      const url = req.url();
+      if (/\/socket\.io\/\?.*\bEIO=/.test(url) && !/[?&]sid=/.test(url)) handshakes.push(url);
+    });
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.runFor(2000);
+    expect(handshakes, '被拒遮罩开着时自动重连了：设备会重新进待审，机主又收到一条「新设备请求接入」').toEqual([]);
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+
+    // 正对照：同一套计数看得见握手——点「重新请求接入」必有一条
+    await page.locator('#deviceDeniedRetry').click();
+    await expect.poll(() => handshakes.length).toBeGreaterThan(0);
+    await expect(page.locator('#deviceModal')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-15e 等待设备授权期间保留草稿且禁止发送', async ({ page }) => {
     await gotoMock(page);
 

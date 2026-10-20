@@ -98,10 +98,12 @@ export function otherWorkspaceNotifyOpts(cwd) {
   };
 }
 
-/** 计算「还有 N 个更早的会话」提示用的剩余数。无法计算时返回 null。 */
-export function remainingOlderSessionCount(total, visibleCount) {
+/** 计算「还有 N 个更早的会话」提示用的剩余数。无法计算时返回 null。
+ *  pinnedCount：服务端 session:list 补回的「稍后再看」行（被分页挤出本页、手动标过未读），它们也画在列表里，
+ *  不减掉会多报（验收 AC-04-13：73 个会话、50 + 1 行可见，提示写 23、实际藏 22）。服务端保证它们不在本页。 */
+export function remainingOlderSessionCount(total, visibleCount, pinnedCount = 0) {
   const totalNum = Number(total);
-  const visibleNum = Number(visibleCount);
+  const visibleNum = Number(visibleCount) + (Number(pinnedCount) || 0);
   if (!Number.isFinite(totalNum) || !Number.isFinite(visibleNum) || totalNum <= visibleNum) return null;
   return Math.floor(totalNum - visibleNum);
 }

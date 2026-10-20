@@ -127,8 +127,20 @@ async function readLiveChainUuids(sessionId, cwd, baseDir) {
 //
 // 输出条目：文本 {role,content,timestamp} | tool_use {kind,toolUseId,name,inputSummary,...} |
 // tool_result {kind,toolUseId,ok,outputSummary,...}。前端 loadHistory 据此重建 toolcard。
-export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
-  if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼路径
+export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, opts = {}) {
+  return (await readSessionHistory(sessionId, cwd, limit, opts)).messages;
+}
+
+// 同 getSessionHistory，另带削顶前一共有多少条（total）。削顶本身是防爆、不改；只是削了要报数——
+// 不报的话前端只能说「加载了 2000 条历史消息」，读起来像全部，用户以为会话就从这里开始（验收 O44）。
+export async function getSessionHistoryWithTotal(sessionId, cwd, opts = {}) {
+  return readSessionHistory(sessionId, cwd, HISTORY_MAX_MESSAGES, opts);
+}
+
+const NO_HISTORY = Object.freeze({ messages: [], total: 0 });
+
+async function readSessionHistory(sessionId, cwd, limit, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return NO_HISTORY; // SS-003：非法 id 不拼路径
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
@@ -136,7 +148,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   try {
     ({ mtimeMs, size } = await stat(historyFile));
   } catch {
-    return []; // 文件不存在：新会话或已删
+    return NO_HISTORY; // 文件不存在：新会话或已删
   }
 
   // B6：mtime + size 双判据都未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的
@@ -161,13 +173,13 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
-    return cached.messages.slice(-limit);
+    return { messages: cached.messages.slice(-limit), total: cached.total };
   }
 
   // 当前链的 uuid 集合。放在缓存判定【之后】：文件没变链就没变，命中缓存时连这次读盘也省掉。
   const liveUuids = await readLiveChainUuids(sessionId, cwd, baseDir);
 
-  let messages;
+  let messages, total;
   try {
     let pass = await readHistoryMessages(historyFile, liveUuids);
     // 【SDK 选的叶子不是用户最后看到的那条 ⇒ 不剪】（2026-10-15）物理上最新的那条主链 user/assistant
@@ -185,18 +197,18 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     if (liveUuids && pass.newestMainUuid && !liveUuids.has(pass.newestMainUuid)) {
       pass = await readHistoryMessages(historyFile, null);
     }
-    ({ messages } = pass);
+    ({ messages, total } = pass);
   } catch {
-    return []; // 读取失败（含不是普通文件）
+    return NO_HISTORY; // 读取失败（含不是普通文件）
   }
 
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, size, messages, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages, total, unfiltered: chainSourceAvailable && !liveUuids }, HIST_CACHE_MAX);
 
-  return messages.slice(-limit);
+  return { messages: messages.slice(-limit), total };
 }
 
 // 流式读一遍 transcript 出回显条目；liveUuids 非 null 时剪掉当前链开始之后的废弃分支（判据见循环里）。
@@ -218,7 +230,10 @@ async function readHistoryMessages(historyFile, liveUuids) {
   // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
   // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
   // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
+  // total：削顶前一共入列多少条，削掉的也算（getSessionHistoryWithTotal 据此告诉前端「只显示了最近的」）。
+  let total = 0;
   const pushCapped = (item) => {
+    total++;
     messages.push(item);
     if (messages.length > HISTORY_MAX_MESSAGES * 2) {
       messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
@@ -347,7 +362,7 @@ async function readHistoryMessages(historyFile, liveUuids) {
   } finally {
     input?.destroy(); // 读完已自行关闭；中途抛出时也要把句柄关掉
   }
-  return { messages, newestMainUuid };
+  return { messages, newestMainUuid, total };
 }
 
 // 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
