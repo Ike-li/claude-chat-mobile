@@ -72,6 +72,8 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
     assert.deepEqual(tagsOf({}), ['white_check_mark']);
     assert.deepEqual(tagsOf({ isError: true }), ['warning']);
     assert.deepEqual(tagsOf({ interrupted: true, isError: true }), ['stop_button']);
+    // 审批过期那一轮（O30）也是 is_error 收尾：标题是「⏰ 审批已过期」，标签同样不能是 ✅
+    assert.deepEqual(tagsOf({ isError: true, approvalExpired: true }), ['warning']);
   });
 
   test('permission_request：前台有人也照推（用户可能锁屏或在别的 app）', () => {
