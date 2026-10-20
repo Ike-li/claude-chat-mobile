@@ -299,8 +299,7 @@ body.ccm-sheet-open #messages {
 .composer-discover-hint {
   font-size: 10px;
   line-height: 1;
-  color: var(--ink-faint);
-  opacity: 0.75;
+  color: var(--ink-faint); /* 不再叠 opacity：10px 小字要 ≥4.5:1，ink-faint 本身刚好够（#244 review） */
   padding: 0 0.25rem;
   white-space: nowrap;
   pointer-events: none;
@@ -431,7 +430,8 @@ body.ccm-sheet-open #messages {
   color: var(--success);
 }
 .conn-banner__detail {
-  color: var(--ink-faint);
+  /* 落在 color-mix 出来的横幅底上，不是 surface：深色 warn 底上 ink-faint 只有约 4.18，换 ink-soft（#244 review） */
+  color: var(--ink-soft);
   font-size: 10px;
 }
 .conn-banner__detail.hidden {

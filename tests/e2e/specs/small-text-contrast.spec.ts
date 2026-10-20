@@ -7,7 +7,7 @@
 // 半透明的中间底色（如 bg-sunk/40）被跳过、按其下的不透明底算——误差方向是略偏乐观，所以 token 测试另外覆盖了 sunk。
 
 import { test, expect, type Locator } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function effectiveContrast(locator: Locator): Promise<number> {
   return locator.evaluate((el) => {
@@ -55,6 +55,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
         const ratio = await effectiveContrast(loc);
         expect(ratio, `${scheme} ${label} 对比度 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
       }
+      await expectNoBrowserErrors(page);
+    });
+
+    // #244 review：空输入框获得焦点时露出的「/ · @」提示，10px ink-faint 上还叠着 opacity 0.75。
+    test(`P0-A11Y-CONTRAST2 ${scheme}：输入框聚焦时的「/ · @」提示 ≥4.5:1`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await gotoMock(page);
+      await ensureComposerReady(page);
+      await page.locator('#input').focus();
+      const hint = page.locator('#composerDiscoverHint');
+      await expect(hint, '提示没露出来').toBeVisible();
+      const ratio = await effectiveContrast(hint);
+      expect(ratio, `${scheme} 输入框提示对比度 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
       await expectNoBrowserErrors(page);
     });
   }
