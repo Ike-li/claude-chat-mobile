@@ -162,4 +162,8 @@ export async function waitForIdle(page: Page) {
 export async function expectNoBrowserErrors(page: Page) {
   const errors = (page as Page & { __ccmErrors?: string[] }).__ccmErrors || [];
   expect(errors).toEqual([]);
+  // mock 场景抛错只隔离不外抛（保住同分片后面的用例），账记在 mock 里——这里收尾，触发它的用例必红，
+  // 不会因为 DOM 断言碰巧已满足而假绿（PR #249 review）。栈在 webServer 日志里。
+  const scenarioErrors = await (await page.request.get('/__scenario-errors')).json();
+  expect(scenarioErrors, 'mock 场景抛错（栈见 webServer 日志）').toEqual([]);
 }

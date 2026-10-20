@@ -15,6 +15,7 @@
 | `e2e/specs/` | 真浏览器 + 假后端，移动视口 | S3 | `npm run test:e2e` |
 | `e2e/mock/` | 那个假后端本身（零外部依赖，不碰 `~/.claude`） | — | — |
 | `smoke/` | 真 Claude，需显式授权 | S5 | `npm run test:smoke` |
+| `acceptance/` | 机主本机跑的 agent 驱动验收：agent 首跑用浏览器执行用例并写下判法，判法确定的之后由脚本重放；不是回归套件，见 [acceptance/README.md](acceptance/README.md) | 本机编排：A 档零 token（同 S3·S4 形态，连 127.0.0.1 上的 E1/E2 容器）· C 档真模型在 E3 容器（S5）；永不进 CI | `node tests/acceptance/run.mjs` |
 | `playground/` | 干净 Linux 用户视角的装机/拓扑验收 | — | `npm run test:docker:playground` |
 | `gates/` | 门禁脚本（边界、契约、i18n、破坏性删除、变异…） | S0 | `npm run check` |
 | `infra/` | 测试基建：Dockerfile、compose、playwright config、分片编排 | — | — |
@@ -55,7 +56,7 @@
 | **S4** 薄跨缝 | 真浏览器 → 真 server → 假 CLI，只覆盖「假后端可能与真 server 字段分叉且用户看得见」的几条 | 模型回合 |
 | **S5** 授权真 Claude | 真 CLI + 真 SDK + 隔离的 `CCM_DATA_DIR` / `HOME` | — |
 | **S6** 变异 | 故意改坏源码再跑 S1（`npm run mutate:docker`） | 永不在宿主机真实 HOME 上跑 |
-| **S7** Darwin | Swift 逻辑 + `CCMProcess` 资源 + 能编出 bundle | 唯一只能在宿主机跑的槽（容器无 `swiftc`） |
+| **S7** Darwin | Swift 逻辑 + `CCMProcess` 资源 + 能编出 bundle | 唯一没有容器跑法的槽（容器无 `swiftc`）。验收编排也只在宿主机跑，但它是调度而不是槽：被测环境与真模型都在容器里 |
 
 ## 不变量编号
 
@@ -125,7 +126,7 @@
 |---|---|
 | `CONFIG-01` | 面板/CLI 写入的必须是启动时读的那一份。schema 单一事实源 `env-schema.js`，读写归一在 `config-file.js`；shell env 压过文件 |
 | `CONFIG-02` | `.env` 的 dotenv 与 `source` 两个消费者必须**同时**安全，不轮流迁就一侧 |
-| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）* |
+| `CONFIG-03` | 存放凭据的配置文件（`ccm.config.json` 三形态 · `.env` 系列 · `workdirs.json` · 验收套件的 `tests/acceptance/local/secrets.json`）必须被 `.gitignore` 覆盖——本仓是 **public** 的。gitleaks 钩子不是替代品：它扫的是「内容像不像凭据」，这条管的是「路径会不会被收进来」。**由门禁守而非用例守**（`tests/gates/check-config-gitignored.js`，在 check 链上）：它要跑 `git`，而 linked worktree 检出的 `.git` 是指向宿主机的指针文件，放进 `tests/invariants/` 会让容器全量档在测到任何代码之前就 128。<br>*（2026-09-17 反向补登：hard-rules §4.6 早写着「删掉那三行 `.gitignore` 不会让任何东西变红」，一直没人管）*<br>*（2026-10-18 补：验收套件的 `local/` 整个目录由一条 `.gitignore` 规则盖住，哨兵挑其中最敏感的 `secrets.json`）* |
 | `NOTIFY-01` | 审批/提问/后台任务完成无条件推；`result` 仅当 approved 房间有**前台可见**连接时抑制，判据是 `client:presence` 而非 socket 连着（`SEC-04` 正文不进第三方明文通道 · `OPS-3` `notify_failed` 须覆盖 push 与 ntfy 双通道） |
 | `ALERT-01` | 服务告警与「需要你(N)」是两根轴，绝不混判（`OPS-1` doctor readiness 假绿） |
 | `DISPLAY-01` | 模型列表、effort、statusline 只做 [display-contracts.md](../docs/display-contracts.md) 允许的变换（`OPS-2` `utilization` 必须夹在 `[0,100]`） |

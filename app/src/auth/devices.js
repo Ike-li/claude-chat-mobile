@@ -265,10 +265,10 @@ export function deviceKindLabel(ua) {
 // 它住在 device-profiles.json，属展示层——不参与任何准入判定。
 export const MAX_DEVICE_ALIAS = 24;
 
-// 归一：剥控制字符 → 折叠空白 → trim → 按码点限长。空白等于「清除别名」，返回 null 而不是
+// 归一：控制/格式字符换成空格 → 折叠空白 → trim → 按码点限长。空白等于「清除别名」，返回 null 而不是
 // 空串，好让展示层用一次 `??` 就回落到「平台 · 浏览器」，不必再判空串。
 // ★ 按【码点】截而不是 UTF-16 长度：`'x'.slice(0, n)` 会把代理对砍成半个，屏幕上是乱码。
-// 控制字符用 \p{Cc} 整类剥掉：换行会把一行卡片撑成多行，制表符能伪造对齐。
+// 控制字符用 \p{Cc} 整类换成空格（不是删掉，删掉会把分开写的两段拼成一个词）：换行会把一行卡片撑成多行，制表符能伪造对齐。
 export function normalizeDeviceAlias(raw) {
   if (typeof raw !== 'string') return null;
   // Cc=控制字符，Cf=格式字符（含 U+202E 等双向文本覆写符、零宽字符）——两者都能让这行别名
