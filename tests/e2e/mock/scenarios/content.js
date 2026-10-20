@@ -16,6 +16,28 @@ export function createContentScenarios(getContext) {
   };
   return [
     {
+      // 验收 O59：本地 slash 命令（/context、/cost）的输出。真 server 里它是 agent 合成 messageId 的一条 text_delta，
+      // 紧跟着就是 result（不经模型，没有持续几秒的流）；两者都经 io.to('approved') 广播给所有已批准的端。
+      // 这里同样用 io.emit——mock 的通用回显走 socket.emit 只给发送端，那样观察端什么都收不到，测不出东西。
+      command: 'test:local-command-output',
+      run: async ({ activeInst }) => {
+        const { io, activeEpoch, viewingInstanceId, activeModel, mockInstances, mockServicePayload, getMockCanRestart } = getContext();
+        const base = { epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId };
+        io.emit('agent:event', {
+          ...base, seq: 1, ts: Date.now(), type: 'text_delta',
+          payload: { messageId: 'local-cmd-mock-1', text: '## Context Usage\n\n| Category | Tokens |\n|---|---|\n| System prompt | 3.1k |' },
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances },
+        });
+        io.emit('agent:event', {
+          ...base, seq: 2, ts: Date.now(), type: 'result', payload: { durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       // 验收 O25 / O90：用户气泡按纯文本显示，和终端里看到的原样输入一致。用户气泡有三个建出点：
       // 乐观气泡转正（发出去的这条，由通用回显走到）、在线新建（不带 clientMessageId 的 user_message，
       // 另一台设备发的形态）、历史渲染（history_append 走 renderHistoryBubbles）。这里把后两条也各推一条。
