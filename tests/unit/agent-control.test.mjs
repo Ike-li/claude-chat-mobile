@@ -124,6 +124,33 @@ test.describe('send()', () => {
     s.dispose();
   });
 
+  // 验收 O53 / O26：未 pin 模型的续接会话（defaultModel / attemptedModel 都空），用户没动模型，前端原样带回
+  // init 报的在跑模型。那就是当前在跑的；再 setModel 一次只多一次控制请求（O26：transcript 里多出一条 /model）。
+  test('未 pin、本进程从没切过：带来的正是 init 报的在跑模型 → 不 setModel，差分基准记下它', async () => {
+    const { s } = makeSession();
+    s.reportedModel = 'grok-4.7[1m]';
+    let calls = 0;
+    s.q = { setModel() { calls++; return Promise.resolve(); } };
+    assert.equal(await s.send('hi', 'grok-4.7[1m]'), true);
+    assert.equal(calls, 0, '在跑的就是它，不该再下发 setModel');
+    assert.equal(s.attemptedModel, 'grok-4.7[1m]');
+    s.dispose();
+  });
+
+  // 上一条的边界：init 快照只在「从没尝试过切换」时可信。切过一次以后它就过期了，拿它当差分依据会让
+  // 「切走再切回」被判成无变化（agent.js 构造函数注释点名否决的那条路）。
+  test('切过一次之后切回 init 报的模型 → 照常 setModel', async () => {
+    const { s } = makeSession();
+    s.reportedModel = 'grok-4.7[1m]';
+    const calls = [];
+    s.q = { setModel(m) { calls.push(m); return Promise.resolve(); } };
+    await s.send('a', 'grok-4.5');
+    s.pendingTurns = 0;
+    await s.send('b', 'grok-4.7[1m]');
+    assert.deepEqual(calls, ['grok-4.5', 'grok-4.7[1m]']);
+    s.dispose();
+  });
+
   test('model 变化 → 调 setModel + activeModel 更新', async () => {
     const { s } = makeSession({ model: 'sonnet' });
     let setModelCalled = null;

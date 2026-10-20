@@ -75,6 +75,13 @@ test.describe('shouldAttemptReconnect：凭据门开着时不许自动重连', (
     assert.equal(shouldAttemptReconnect({ accessReloginOpen: true }), false);
   });
 
+  // 验收 O21 / AC-02-13：设备被拒后，切回标签页 / 网络恢复都会自动重连，而重连握手会让它重新进待审，
+  // 机主又收到一条「新设备请求接入」。被拒遮罩自己有「重新请求接入」按钮——那才是唯一该发起握手的入口。
+  test('「设备未获授权」遮罩开着 → 不重连：重连会重新进待审、再推一次「新设备请求接入」', () => {
+    assert.equal(shouldAttemptReconnect({ deviceDeniedOpen: true }), false);
+    assert.equal(shouldAttemptReconnect({ deviceDeniedOpen: false }), true);
+  });
+
   test('pageshow 普通加载（persisted=false）→ 不重连：io() 刚刚才连过', () => {
     assert.equal(shouldAttemptReconnect({ persisted: false }), false);
   });

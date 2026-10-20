@@ -89,6 +89,11 @@ desktop/build/
 # 排除隐藏文件（include-hidden-files: false），点开头会被静默漏掉。
 /tests/infra/e2e-durations-shard*.json
 
+# 验收套件的本机目录：真实配置、凭据（secrets.json）与每轮产物 runs/<UTC 时间戳>/。
+# 进仓的只有 tests/acceptance/local.example/ 里的占位模板，换电脑时跑 setup.mjs 从模板复制一份，
+# 这里的东西不会跟着 git 走。本仓是 public 的，tests/gates/check-config-gitignored.js 有哨兵锁住这行。
+/tests/acceptance/local/
+
 # 宣传产物（截图素材 + 对外的界面功能一览）：按控件粒度描述 UI，每次界面改动都会失效，
 # 而没有任何门禁能守住它们；宣传层本就不进主分支。不入库：否则会被 inventory 扫成未分类文件。
 docs/marketing-shots

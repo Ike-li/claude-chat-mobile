@@ -69,6 +69,21 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 验收 O27：permission_request 是 STATE_BOUNDARY 事件，服务端借它广播 instances（含「需要你」聚合）。
+  // 原来先 emit 后写 pendingPermissions，那次广播算 needsYou 时看不到这张卡，计数要等下一次广播才对
+  // （提问那条路是先写后 emit，所以提问一直是即时的）。
+  test('askPermission：emit permission_request 的那一刻，pendingPermissions 里已经有这一条', () => {
+    const { s } = makeSession();
+    let seenAtEmit = null;
+    s.onEvent = (event) => {
+      if (event.type === 'permission_request') seenAtEmit = s.pendingPermissions.has(event.payload.requestId);
+    };
+    s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't-order' });
+    assert.equal(seenAtEmit, true, 'emit 时还没写进 pendingPermissions：那次广播的「需要你」漏掉这张卡');
+    s.resolvePermission('t-order', 'deny');
+    s.dispose();
+  });
+
   test('resolvePermission(allow)：removeEventListener + emit request_resolved + alwaysThisSession', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
