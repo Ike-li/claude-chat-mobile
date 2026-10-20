@@ -196,6 +196,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // PR #232 review：重载页面后恢复出来的 outbox 条目没有气泡。它发往不在眼前的会话、又被服务端永久拒收时，提示没有
+  // 落点，outbox 已清，用户打的字就没了。暂存起来，回到它的会话时交还；别的会话里看不到它。
+  test('P0-02d11 重载后发往别的会话的离线条目被永久拒收：原文暂存，回到那个会话时交还', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-permanent');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    // 重载后恢复出来的条目：发往 Visual Sandbox (Main)，内存里没有气泡。得在应用脚本跑之前写——
+    // 重载前写的会被 pagehide 时的 persistOutbox 用内存里的空队列盖掉。
+    await page.addInitScript(() => localStorage.setItem('ccm-outbox-v1', JSON.stringify([{
+      text: '发往主会话的那条', model: null, clientMessageId: 'p0-02d11-dead-letter',
+      instanceId: 'inst_1', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-visual-test',
+    }])));
+    await page.reload();
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d11-dead-letter' && m.fromOutbox === true),
+      { message: '前提：恢复出来的条目要被重放（mock 已武装成永久拒收）' }).toBe(true);
+    await expect(page.locator('#messages'), '别的会话的失败不该打到眼前这个会话上').not.toContainText('发往主会话的那条');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#input'), '永久拒收、outbox 已清：不交还的话这条就没了').toHaveValue('发往主会话的那条');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expectNoBrowserErrors(page);
+  });
+
   // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
   // 离线条目还拿着入队时的旧号。新实例的 sync:since 报磁盘 ahead，前端清屏重载；第 2 条拿着旧号撞上第 1 条开跑的那轮，
   // 落「未发送 + 重发」。mock 的时序是：清屏 → 第 2 条的负 ack → 历史落地。
