@@ -14,7 +14,9 @@ import {
   notifySessionTag,
   lookupNotifySessionTitle,
   otherWorkspaceNotifyOpts,
+  displaySessionTitle,
 } from '../../app/public/js/logic/session-search.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 test('matchesSessionTitle: 空/空白 query 全匹配', () => {
   assert.equal(matchesSessionTitle('Hello', ''), true);
@@ -33,6 +35,14 @@ test('remainingOlderSessionCount: total>visible 时返回差值', () => {
   assert.equal(remainingOlderSessionCount(50, 50), null);
   assert.equal(remainingOlderSessionCount(null, 50), null);
   assert.equal(remainingOlderSessionCount(10, 50), null);
+});
+
+// 验收 AC-04-13：手动标「稍后再看」、被分页挤出本页的会话由服务端放进 pinned 补回列表，它们也是看得见的行。
+// 只减本页行数时，73 个会话、50 + 1 行可见，提示写「还有 23 个」，实际只藏了 22 个。
+test('remainingOlderSessionCount: 补回的「稍后再看」行也算可见，不再计进「还有 N 个」', () => {
+  assert.equal(remainingOlderSessionCount(73, 50, 1), 22);
+  assert.equal(remainingOlderSessionCount(51, 50, 1), null, '页内 + 补回正好等于总数时没有更早的会话');
+  assert.equal(remainingOlderSessionCount(60, 50, 0), 10, '没有补回行时与原来一致');
 });
 
 test('sessionTitleSearchKeys: 收集 summary/aiTitle/firstUser/firstCmd，去掉空白', () => {
@@ -70,6 +80,21 @@ test('resolveSessionListTitle: 展示优先 SDK summary（与浏览行同源）�
   assert.equal(resolveSessionListTitle({ summary: '', metaTitle: '首条用户' }), '首条用户');
   assert.equal(resolveSessionListTitle({}), '(无标题)');
   assert.equal(resolveSessionListTitle({ metaTitle: 'y'.repeat(80) }), 'y'.repeat(60));
+});
+
+// 验收 O42 / O75：服务端给无标题会话写死占位「(无标题)」（通知层与 cross-side-parity 认这个字面量，不动），
+// 前端的 `s.title || t(...)` 兜底因此永远走不到，英文界面上照样是「(无标题)」。
+test('displaySessionTitle: 服务端占位按界面语言显示；空值用调用方给的兜底；正常标题原样', () => {
+  setLang('en');
+  try {
+    assert.equal(displaySessionTitle('(无标题)', 'New session'), 'Untitled session');
+  } finally {
+    setLang('zh');
+  }
+  assert.equal(displaySessionTitle('(无标题)', '新会话'), '无标题会话');
+  assert.equal(displaySessionTitle('', '新会话'), '新会话');
+  assert.equal(displaySessionTitle(undefined, '新会话'), '新会话');
+  assert.equal(displaySessionTitle('修个 bug', '新会话'), '修个 bug');
 });
 
 test('formatNotifyIdentity: 事件 · 项目 · 会话，缺项跳过、占位标题丢弃', () => {
