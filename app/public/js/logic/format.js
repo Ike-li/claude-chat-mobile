@@ -14,6 +14,17 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// 历史载入提示。服务端只回最近 HISTORY_MAX_MESSAGES 条，ack 里的 total 是削顶前的条数；比显示的多时要说清
+// 只显示了一部分，否则「加载了 2000 条历史消息」读起来像全部（验收 O44）。total 缺失（旧服务端）按全量处理。
+export function historyLoadedNotice(shown, total) {
+  const n = Number(shown) || 0;
+  const all = Number(total);
+  if (total != null && Number.isFinite(all) && all > n) {
+    return t('仅显示最近 {n} 条历史消息（共 {total} 条），更早的没有加载').replace('{n}', String(n)).replace('{total}', String(all));
+  }
+  return `${t('加载了')} ${n} ${t('条历史消息')}`;
+}
+
 // E16：24-bit ANSI 前景色(\x1b[38;2;R;G;Bm)与重置(\x1b[0m/\x1b[m) → span；其他 SGR 吞序列保文本；
 // 逐段 esc 后拼接（安全顺序：escape → 着色 → 调用方 DOMPurify），结尾补闭合防未闭合 ANSI。
 export function ansiToHtml(s) {

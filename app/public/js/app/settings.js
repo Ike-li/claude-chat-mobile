@@ -7,6 +7,7 @@
 //   通用设置 #generalSheet（侧栏底部入口，本机偏好 + 主机与服务，全局可达）
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic/panel-state.js';
+import { focusInto, restoreFocus, setInertReason, trapTabIn } from './focus-layers.js';
 
 const SHEET_OPEN_CLASS = 'ccm-sheet-open';
 
@@ -61,6 +62,7 @@ export function createSettingsController(context, {
    *   velocityY: number,
    * }} */
   let drag = null;
+  let focusBefore = null; // 打开前焦点所在，关闭时还回去
 
   function lockBackgroundScroll() {
     doc?.documentElement?.classList?.add(SHEET_OPEN_CLASS);
@@ -120,6 +122,8 @@ export function createSettingsController(context, {
   function open() {
     try { beforeOpen(); } catch { /* 收另一个 sheet 失败不能让本面板打不开 */ }
     haptic('tap');
+    // 已开着时再 open（深链跳页）不覆盖：那时焦点在面板里，记下来就还不回打开它的入口了
+    if (!isOpen()) focusBefore = doc?.activeElement ?? null;
     alerts.ensureAudio?.();
     syncPreferences();
     // 内容区每次打开滚回顶部，避免上次停在底部再打开时「像丢了半截」
@@ -128,17 +132,26 @@ export function createSettingsController(context, {
     resetSheetMotion();
     sheetEl()?.classList.remove('translate-y-full');
     scrimEl()?.classList.remove('hidden');
+    setInertReason(sheetEl(), 'closed', false);
     lockBackgroundScroll();
     try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
+    // 焦点进面板（验收 O77）：不移的话键盘用户按 Tab 走的还是背后的页面
+    if (sheetEl()) focusInto(sheetEl());
   }
 
   function close() {
     haptic('tap');
     drag = null;
+    // 先记下焦点在不在面板里：一 inert，浏览器就把里面的焦点丢回 body，事后再问就晚了
+    const hadFocus = !!sheetEl()?.contains(doc?.activeElement);
     resetSheetMotion();
     sheetEl()?.classList.add('translate-y-full');
     scrimEl()?.classList.add('hidden');
+    // 收起只是移出屏幕，里面的控件照样能被 Tab 到、回车触发
+    setInertReason(sheetEl(), 'closed', true);
     unlockBackgroundScroll();
+    if (hadFocus) restoreFocus(focusBefore, doc);
+    focusBefore = null;
   }
 
   function bindToggle(element, key) {
@@ -159,8 +172,10 @@ export function createSettingsController(context, {
   }
 
   function onKeydown(ev) {
-    if (ev.key !== 'Escape') return;
     if (!isOpen()) return;
+    // sheet 是 aria-modal：Tab 不出面板
+    if (ev.key === 'Tab') { trapTabIn(sheetEl(), ev, doc); return; }
+    if (ev.key !== 'Escape') return;
     ev.preventDefault();
     close();
   }
@@ -325,6 +340,8 @@ export function createSettingsController(context, {
     }
   }
 
+  // 初始就是收起态：不 inert 的话，页面一加载两个面板里的控件就都排在 Tab 序列里
+  if (!isOpen()) setInertReason(sheetEl(), 'closed', true);
   if (autoBind) bind();
   return {
     close,

@@ -520,6 +520,7 @@ test('settings controller synchronizes alert preferences when opening the sheet'
       add: (...names) => names.forEach(name => values.add(name)),
       remove: (...names) => names.forEach(name => values.delete(name)),
       has: name => values.has(name),
+      contains: name => values.has(name),
     };
   };
   const sheetClasses = classes(['translate-y-full']);
@@ -532,7 +533,10 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   const sheetBody = { scrollTop: 42 };
   const context = createAppContext({
     dom: {
-      settingsSheet: { classList: sheetClasses, scrollTop: 0 },
+      settingsSheet: {
+        classList: sheetClasses, scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
       settingsSheetBody: sheetBody,
       settingsScrim: { classList: scrimClasses },
       prefAlertSound: sound,
@@ -543,6 +547,7 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   const fakeDoc = {
     documentElement: { classList: htmlClasses },
     body: { classList: bodyClasses },
+    activeElement: null,
   };
   const controller = createSettingsController(context, {
     alerts: { preferences: () => ({ sound: false, vibrate: true, foregroundComplete: false }), ensureAudio: () => {} },
@@ -561,9 +566,12 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   assert.equal(htmlClasses.has('ccm-sheet-open'), true);
   assert.equal(sheetBody.scrollTop, 0);
 
+  assert.equal(context.dom.settingsSheet.inert, false, '打开后面板里的控件要能被 Tab 到');
+
   controller.close();
   assert.equal(sheetClasses.has('translate-y-full'), true);
   assert.equal(scrimClasses.has('hidden'), true);
+  assert.equal(context.dom.settingsSheet.inert, true, '收起的面板只是移出屏幕，不 inert 就还能被 Tab 到（验收 O77）');
   assert.equal(bodyClasses.has('ccm-sheet-open'), false);
   assert.equal(htmlClasses.has('ccm-sheet-open'), false);
 });
