@@ -336,7 +336,7 @@ To revoke a mistaken approval or a lost device:
 node scripts/device.js deny <ID>
 ```
 
-Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` / `127.0.0.1` / `::1` (an empty Host does not count).
+Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` or `127.0.0.1` (an empty Host does not count; a page opened as `http://[::1]:<port>` does not skip it and needs one approval).
 Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js`.
 
 ## 8. Complete the first-run check
@@ -370,7 +370,7 @@ npm run statusline:install
 - `status` is read-only and does not modify `~/.claude`.
 - `install` is explicit opt-in and wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
 - Reopen the terminal Claude CLI and restart the persistent server after installation.
-- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration.
+- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration. It also removes `~/.claude/ccm/statusline-v1` (including snapshots), and `~/.claude/ccm` itself once it is empty.
 
 ## Optional: CLI hooks bridge
 
@@ -388,6 +388,7 @@ npm run hooks:uninstall
 - Open a new terminal Claude CLI session after installation; an existing process does not reload hooks.
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
+- `uninstall` removes its own hook entries per the manifest and deletes `~/.claude/ccm/hooks-v1` (the inbox and receipts), plus `~/.claude/ccm` once it is empty. Neither install nor uninstall needs a server restart.
 
 The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
 notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.
@@ -711,10 +712,12 @@ fully and open it again.
 The product never checks upstream on its own. Look yourself:
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
 That does not require a local git repository (it asks the remote directly), so it works for archive installs too.
+Keep `--sort=-v:refname`: the remote lists tags in dictionary order, so taking the last line without sorting gives `v1.9.1`,
+and every release from `v1.10.0` on sorts before it.
 Your local version:
 
 ```bash
@@ -753,7 +756,7 @@ site data and the installed PWA must be cleared manually.
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | Phone is in the main shell, but sending shows `Not logged in · Please run /login` | This is **Claude CLI not logged in**, not a broken CCM token/device gate. On the host run `claude auth status`; if logged out, `/login` inside `claude`, then retry from the phone. **A third-party gateway never shows this line** — it does not use Anthropic login, and an ineffective config surfaces the gateway's own error instead; see "A third-party gateway is ignored" below. See §1 prerequisites |
-| After one wrong token, the correct one is rejected too (HTTP 401) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **This tier answers 401 `unauthorized` with no `Retry-After`** — the wording deliberately avoids "too many attempts" when you only got it wrong once. **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` / HTTP 429 |
+| After one wrong token, the correct one is rejected too (HTTP 429 `cooldown`) | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). Requests inside the lock are not checked against the token: **they get 429 `{"status":"cooldown"}` with `Retry-After`**, distinct from a wrong token (401) and never worded as "too many attempts" — you only got it wrong once. The web UI shows "retrying automatically in Ns" and reconnects on its own; scripts should **wait `Retry-After` seconds and retry**, since hammering keeps you inside the lock. Only the 15-minute lockout, which needs 8 consecutive failures, answers `{"status":"rate_limited"}` |
 | You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | Put `ANTHROPIC_*` where the CLI reads it: the `env` block of the workspace's `.claude/settings.local.json` or of `~/.claude/settings.json`, or the shell that starts the server; values in `ccm.config.json` are stripped. Only the settings-file route works under the desktop console |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
