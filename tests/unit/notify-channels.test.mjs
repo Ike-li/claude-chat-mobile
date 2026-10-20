@@ -140,6 +140,17 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     assert.ok(seenSignal instanceof AbortSignal, 'fetch init 必须带 AbortSignal 超时信号');
   });
 
+  // 验收 AC-16-06 / O1：「发一条测试推送」只看 Web Push 的计数，ntfy 明明投递成功，界面只说「还没订阅」。
+  // 测试推送要能如实回报 ntfy 这条通道，ntfyNotify 就得把投递结果交回来（其余调用点照旧不 await、不看）。
+  test('ntfyNotify 交回投递结果：没配 disabled、2xx sent、非 2xx 与抛错都是 failed', async t => {
+    const dir = tempDataDir(t);
+    const env = { NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' };
+    assert.equal(await createNotifyChannels({ dataDir: dir, env: ENV_OFF }).ntfyNotify('t', 'b'), 'disabled');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => ({ ok: true, status: 200 }) }).ntfyNotify('t', 'b'), 'sent');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => ({ ok: false, status: 404 }) }).ntfyNotify('t', 'b'), 'failed');
+    assert.equal(await createNotifyChannels({ dataDir: dir, env, fetchImpl: async () => { throw new Error('boom'); } }).ntfyNotify('t', 'b'), 'failed');
+  });
+
   test('ntfy 2xx → 不触发 onDeliveryFailure', async t => {
     let failures = 0;
     const n = createNotifyChannels({

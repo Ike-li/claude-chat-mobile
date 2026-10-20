@@ -23,6 +23,8 @@ export default [
       '.reasonix/**',
       '.worktrees/**',
       'tests/infra/playground/seed/**',
+      // 验收套件的本机配置与每轮产物（gitignore），不是源码
+      'tests/acceptance/local/**',
     ],
   },
   js.configs.recommended,

@@ -371,6 +371,27 @@ test('formatHooksBridgeRow：读不出安装态时就地说明，不整段消失
   assert.match(unknown.hint || '', /settings\.json/, '要说得出去哪儿看');
 });
 
+// 验收 AC-16-12：读不了的是安装清单时，提示却点名 settings.json，把人引去查一个好好的文件。服务端现在说清是哪个。
+test('两种桥读不出安装态：提示点名真正读不了的那个文件', () => {
+  const hooksManifest = formatHooksBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(hooksManifest.hint, /hooks-v1\/install-manifest\.json/);
+  assert.doesNotMatch(hooksManifest.hint, /settings\.json/);
+  assert.match(formatHooksBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+  const statusManifest = formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'manifest' });
+  assert.match(statusManifest.hint, /statusline-v1\/install-manifest\.json/);
+  assert.doesNotMatch(statusManifest.hint, /settings\.json/);
+  assert.match(formatStatuslineBridgeRow({ state: 'unknown', unreadable: 'settings' }).hint, /settings\.json/);
+});
+
+// 验收 O62：用户原本没配 statusLine 时，「开启」点了也装不上（安装脚本要求先配），可面板照给按钮。
+test('终端状态栏：用户自己没配 statusLine 时不给「开启」，说清要先配；旧 server 不带 configured 照旧给', () => {
+  const unconfigured = formatStatuslineBridgeRow({ state: 'not-installed', configured: false });
+  assert.equal(unconfigured.action, null);
+  assert.match(unconfigured.hint, /statusLine/);
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed', configured: true }).action, 'install');
+  assert.equal(formatStatuslineBridgeRow({ state: 'not-installed' }).action, 'install');
+});
+
 // off 由 env 直接决定、不经读盘，是比「读不出安装态」更确定也更要紧的事实：功能整体停用时，
 // 装没装都不影响它不工作。两者同时成立时先说停用，否则用户会去修一个修好了也没用的东西。
 test('formatHooksBridgeRow：env 停用压过状态读取失败', () => {
