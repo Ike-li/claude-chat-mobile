@@ -370,7 +370,7 @@ npm run statusline:install
 - `status` is read-only and does not modify `~/.claude`.
 - `install` is explicit opt-in and wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
 - Reopen the terminal Claude CLI and restart the persistent server after installation.
-- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration.
+- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration. It also removes `~/.claude/ccm/statusline-v1` (including snapshots), and `~/.claude/ccm` itself once it is empty.
 
 ## Optional: CLI hooks bridge
 
@@ -388,6 +388,7 @@ npm run hooks:uninstall
 - Open a new terminal Claude CLI session after installation; an existing process does not reload hooks.
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
 - Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
+- `uninstall` removes its own hook entries per the manifest and deletes `~/.claude/ccm/hooks-v1` (the inbox and receipts), plus `~/.claude/ccm` once it is empty. Neither install nor uninstall needs a server restart.
 
 The phone UI can also install or remove the bridge explicitly under Settings → 🖥 This computer → Terminal session
 notifications — a sibling of the "📊 Service status" button on that page, **not** something inside the service status panel.

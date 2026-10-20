@@ -400,7 +400,7 @@ npm run statusline:install
 - `status` 只读，不改 `~/.claude`。
 - `install` 是显式 opt-in，会包装已有的 Claude CLI statusline 命令；未配置 statusline 时安装器会拒绝。
 - 安装后重开终端里的 Claude CLI，并重启常驻 server。
-- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并拒绝覆盖发生漂移的配置。
+- 卸载用 `npm run statusline:uninstall`，安装器会按 manifest 恢复原命令并拒绝覆盖发生漂移的配置；`~/.claude/ccm/statusline-v1`（含快照）一并清掉，`~/.claude/ccm` 空了也会移除。
 
 ## 可选：CLI hooks bridge
 
@@ -418,6 +418,7 @@ npm run hooks:uninstall
 - 安装后必须新开终端里的 Claude CLI 会话，旧进程不会重新加载 hooks。
 - server 不在线时 hook 只落盘并静默退出，不阻断 CLI。
 - 配置里设 `CLI_HOOKS_BRIDGE: false` 可让 server 暂停消费，不必卸载全局配置。
+- `uninstall` 按 manifest 移除自己的 hook 条目，并清掉 `~/.claude/ccm/hooks-v1`（投递箱与回执）；`~/.claude/ccm` 空了也会移除。装、卸都不必重启 server。
 
 手机端也可在“设置 → 🖥 宿主机 → 终端会话推送”中显式安装或卸载（与该页里的「📊 服务状态」按钮平级——
 桥的装卸控件**不在**服务状态面板内部）。
