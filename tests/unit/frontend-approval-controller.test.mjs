@@ -116,3 +116,17 @@ test('作答与 resolvePermission 各自清掉自己那条指纹记录', async (
     assert.equal(warnHidden(), true, `${settle} 之后同号新卡片仍带着旧的指纹警示`);
   }
 });
+
+// 验收 O28：完整性核验是异步的，结果可能晚于防误触结束才出来——那时「允许」已经解禁，
+// 得在出结果那一刻重新禁用，而不是只在防误触结束时算一次。
+test('防误触结束后才核验出指纹不符，「允许」也随即禁用，「拒绝」不受影响', async () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1', { fp: BAD_FP }));
+  assert.equal(byId('permAllow').disabled, true, '前提：刚弹出时处在防误触期');
+  approvals.cancelPermArming(); // 与防误触计时器到点走同一处状态转移
+  assert.equal(byId('permAllow').disabled, false, '前提：防误触结束、核验还没出结果时「允许」可点');
+
+  await approvals.verifyPermIntegrity(permRequest('perm_1', { fp: BAD_FP }));
+  assert.equal(byId('permAllow').disabled, true, '核验出不符后「允许」仍可点');
+  assert.equal(byId('permDeny').disabled, false, '「拒绝」不该因完整性不符被禁用');
+});

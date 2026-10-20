@@ -249,3 +249,40 @@ test('L2 探活只做 TCP 握手，绝不向 server 发 HTTP 请求（否则撞�
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// 验收 O35（AC-23-07）：单独卸载桥之后，~/.claude/ccm/hooks-v1（默认 events / acks 与回执文件）原样留着，只有整体
+// npm run uninstall 会清。现在桥自己卸载就清掉自己的命名空间；~/.claude/ccm 空了一并移除，有别的东西就留着。
+// 用户自定义到命名空间外的 CLI_HOOKS_DIR 不是我们建的目录，绝不碰。
+test('uninstall：清掉自己的 ~/.claude/ccm/hooks-v1，ccm 空了一并移除；命名空间外的自定义目录不碰', () => {
+  const home = makeHome();
+  try {
+    assert.equal(runSetup(home, 'install').status, 0);
+    const ns = join(home, '.claude', 'ccm', 'hooks-v1');
+    mkdirSync(join(ns, 'acks'), { recursive: true });
+    mkdirSync(join(ns, 'events'), { recursive: true });
+    writeFileSync(join(ns, 'acks', 'verify-1.json'), '{}');
+    writeFileSync(join(ns, 'acks', 'verify-2.json'), '{}');
+    mkdirSync(join(home, 'events'), { recursive: true }); // runSetup 指过去的自定义 CLI_HOOKS_DIR
+
+    const res = runSetup(home, 'uninstall');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(existsSync(ns), false, 'hooks-v1 应被清掉');
+    assert.equal(existsSync(join(home, '.claude', 'ccm')), false, 'ccm 只剩空目录时应一并移除');
+    assert.equal(existsSync(join(home, 'events')), true, '命名空间外的自定义目录不是我们建的，不得删');
+    assert.equal(existsSync(settingsPath(home)), true, 'settings.json 本身不得被删');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('uninstall：~/.claude/ccm 下还有别的桥时只清自己那份', () => {
+  const home = makeHome();
+  try {
+    assert.equal(runSetup(home, 'install').status, 0);
+    const sibling = join(home, '.claude', 'ccm', 'statusline-v1');
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, 'install-manifest.json'), '{}');
+
+    assert.equal(runSetup(home, 'uninstall').status, 0);
+    assert.equal(existsSync(join(home, '.claude', 'ccm', 'hooks-v1')), false);
+    assert.equal(existsSync(join(sibling, 'install-manifest.json')), true, '另一座桥的东西不得被碰');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

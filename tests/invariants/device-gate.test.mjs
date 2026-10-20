@@ -422,6 +422,42 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     };
   }
 
+  // 验收 O21 / AC-02-13：CLI 拒绝一台待审设备后，它开着的页面收不到任何通知——停在「等待授权」，server 一重启
+  // （或页面一刷新）就自动重新进待审，机主反复收到「新设备请求接入」推送。Web 侧拒绝一直走 disconnectDeviceSockets，
+  // CLI 这条只记了审计、没断连。本进程自己移出的（容量淘汰 / Web 侧已处理）不归这里断。
+  test('CLI 拒绝待审设备 → 它开着的未批准连接收到 device_status:denied 并被断开；本进程自己移出的不断', async (t) => {
+    const f = makeFixture(t);
+    const CLI_DENIED = `gate-cli-deny-live-${Date.now()}`;
+    const EVICTED = `gate-evicted-live-${Date.now()}`;
+    f.writeTrusted([]);
+    f.writePending([
+      { deviceToken: CLI_DENIED, ip: '10.0.0.6', userAgent: 'ua', ts: Date.now() },
+      { deviceToken: EVICTED, ip: '10.0.0.7', userAgent: 'ua', ts: Date.now() },
+    ]);
+    const deniedSock = fakeSocket({ deviceToken: CLI_DENIED });
+    const evictedSock = fakeSocket({ deviceToken: EVICTED });
+    const self = selfWriteStub();
+    createDeviceGate({
+      io: fakeIo(deniedSock, evictedSock),
+      deviceFiles: filesIn(f.tempDir),
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+      takeSelfWrites: self.take,
+    });
+    await settleWatcher();
+
+    self.queue({ pendingRemoved: new Set([EVICTED]) });
+    f.writePending([]);
+
+    const ok = await waitUntil(() => deniedSock.disconnected !== null);
+    assert.ok(ok, 'CLI 拒绝之后它开着的页面没被断开：会停在「等待授权」，重启或刷新后自动重新入列');
+    assert.equal(deniedSock.disconnected, true);
+    assert.equal(deniedSock.emitted[0]?.payload?.payload?.status, 'denied',
+      '要先告诉页面「被拒绝了」，它才显示「设备未获授权」而不是去自动重连');
+    assert.equal(evictedSock.disconnected, null, '本进程自己移出的（容量淘汰 / Web 侧已处理）不归这里断');
+  });
+
   test('本进程自己移出待审的条目不记 device_denied，同一 tick 里 CLI 的拒绝仍照记', async (t) => {
     const f = makeFixture(t);
     const EVICTED = `gate-self-evicted-${Date.now()}`;   // 容量淘汰或 Web 侧 deny
