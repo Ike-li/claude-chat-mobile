@@ -581,6 +581,16 @@ test('安装态：读不出时 unreadable 说清是哪个文件；configured 说
   assert.equal(readStatuslineInstallState({ home }).unreadable, 'settings');
 });
 
+// #241 review：command 是空串或只有空白时，安装脚本照样拒（must be a non-empty string），面板却当成配过、给「开启」。
+// configured 要与安装脚本的判据一致。
+test('安装态：statusLine.command 是空串或只有空白 → configured 为 false（安装脚本同样会拒）', () => {
+  const home = statuslineHome();
+  for (const command of ['', '   ', '\t\n']) {
+    writeFileSync(settingsPathOf(home), JSON.stringify({ statusLine: { command } }));
+    assert.equal(readStatuslineInstallState({ home }).configured, false, JSON.stringify(command));
+  }
+});
+
 test('安装态：settings.json 是坏 JSON → unknown（读不出来就说读不出来，不谎报没装）', () => {
   const home = statuslineHome();
   writeFileSync(settingsPathOf(home), '{ 这不是 JSON');

@@ -433,7 +433,9 @@ export function readStatuslineInstallState({ home = homedir() } = {}) {
   const currentCommand = typeof settings?.statusLine?.command === 'string'
     ? settings.statusLine.command
     : null;
-  const configured = currentCommand !== null;
+  // 与安装脚本的判据一致（scripts/statusline-bridge-setup.js：command 须是去掉空白后非空的字符串）——空串 / 只有空白
+  // 它照样拒，面板不能当成配过（#241 review）。
+  const configured = currentCommand !== null && currentCommand.trim() !== '';
   let manifest;
   try {
     manifest = readStatuslineManifest(statuslineManifestPath(home));
