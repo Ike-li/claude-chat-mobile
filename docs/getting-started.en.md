@@ -336,7 +336,7 @@ To revoke a mistaken approval or a lost device:
 node scripts/device.js deny <ID>
 ```
 
-Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` / `127.0.0.1` / `::1` (an empty Host does not count).
+Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` or `127.0.0.1` (an empty Host does not count; a page opened as `http://[::1]:<port>` does not skip it and needs one approval).
 Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `app/src/auth/rate-limiter.js`.
 
 ## 8. Complete the first-run check
@@ -711,10 +711,12 @@ fully and open it again.
 The product never checks upstream on its own. Look yourself:
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
 That does not require a local git repository (it asks the remote directly), so it works for archive installs too.
+Keep `--sort=-v:refname`: the remote lists tags in dictionary order, so taking the last line without sorting gives `v1.9.1`,
+and every release from `v1.10.0` on sorts before it.
 Your local version:
 
 ```bash

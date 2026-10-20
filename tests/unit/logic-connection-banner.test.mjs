@@ -121,4 +121,23 @@ test('en：label 仍返回中文原文交给接线层 t()，detail 因复用 for
   }
 });
 
+// 验收 O22：被限速锁住时，原来只把「登录尝试过多，请 N 分钟后再试」写进一个恒隐藏的状态元素，屏幕上只有「连接中…」
+// 和「立即重试」，用户会以为服务挂了。令牌门没开（本地令牌没错、同网段被别人连累锁住）时，这句话归横幅说。
+test('blockedText：未连上时立刻说出被拦的原因，不转圈、不等延迟阈值，保留重试', () => {
+  const text = '登录尝试过多，请 15 分钟后再试';
+  for (const phase of ['connecting', 'offline']) {
+    const r = resolveConnectionBanner({ phase, elapsedMs: 0, blockedText: text });
+    assert.ok(r, `${phase}：被拦了就该立刻显示，不等 800/1000ms`);
+    assert.equal(r.label, text);
+    assert.equal(r.tone, 'warn');
+    assert.equal(r.spinner, false, '没有在自动重连，转圈是在说谎');
+    assert.equal(r.retry, true, '锁期内重试不计数（gateCheck），锁过了点一下就能进');
+  }
+});
+
+test('blockedText：鉴权门开着照样让位；已连上时不再显示', () => {
+  assert.equal(resolveConnectionBanner({ phase: 'offline', elapsedMs: 0, blockedText: 'x', suppressed: true }), null);
+  assert.equal(resolveConnectionBanner({ phase: 'online', elapsedMs: 0, blockedText: 'x', wasVisible: false }), null);
+});
+
 test.after(() => setLang('zh'));

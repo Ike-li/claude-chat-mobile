@@ -159,6 +159,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 去程从未建起来。真机后果：模型问多选题，用户看到单选卡片，手指点中第一个想选的弹窗就关，
   // 模型拿着残缺答案继续跑，界面上没有任何东西提示他这题本可多选。
   // 单选仍然「点一下就关」的对照档由上面的 P0-08 钉住（第 21-22 行），此处不重复。
+  // 验收 O36（AC-09-16）：一项都没选时「确认选择」是 disabled（点了没反应，这部分对），但外观和可点时完全一样——
+  // 一个鲜红的按钮点不动，用户会以为卡住了。
+  test('P0-08i 多选「确认选择」禁用时看得出来，勾上一项后恢复', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:question-multi');
+    const submit = page.locator('#questionMultiSubmit');
+    await expect(submit).toBeDisabled();
+    await expect(submit, '禁用态与可点态长得一样').toHaveCSS('opacity', '0.4');
+    await page.locator('#questionOptions button').first().click();
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveCSS('opacity', '1');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-08h AskUserQuestion 多选：☐ 勾选累积、计数按钮、一次提交多项', async ({ page }) => {
     await gotoMock(page);
 
