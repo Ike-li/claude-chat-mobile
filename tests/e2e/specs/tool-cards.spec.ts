@@ -417,6 +417,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 「进行中」，而这个会话根本没在跑——那一行永远转着。没有在途轮时，没配上结果的历史工具卡应是「已中止」。
   test('P0-05-UNPAIRED 历史里没配上结果的工具卡：会话没在跑时显示「已中止」，不是一直「进行中」', async ({ page }) => {
     captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
     await page.request.post('/__reset');
     await page.request.post('/__arm-unpaired-tool-session');
     await page.goto('/');
@@ -434,6 +436,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 把这张卡判成「已中止」是错的（它真跑完了）；随后实时到达的结果也只在 live 表里找卡，修不回来。
   test('P0-05-UNPAIRED2 重载期间那一轮跑完：没配上结果的卡不判「已中止」，随后到的结果照常落上', async ({ page }) => {
     captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
     await page.request.post('/__reset');
     await page.request.post('/__arm-unpaired-tool-session?running=1');
     await page.goto('/');
