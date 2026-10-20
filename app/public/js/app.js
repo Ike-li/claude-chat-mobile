@@ -5088,11 +5088,14 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (rawModel) {
         if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel, t('CLI 当前模型'));
         modelInput.value = currentModel;
+        // 兜底卡是在上面 updateModelAndSuffix → syncModelUI 之后才插进来的：再同步一次，它的选中态（含 aria-pressed）才对（#246 review）
+        syncModelUI(currentModel);
       } else {
         modelInput.value = '';
         if (pillModelText) pillModelText.textContent = t('CLI 模型未知');
         syncDefaultsPillTitle();
         customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
+          tile.setAttribute('aria-pressed', 'false'); // 界面说不知道，读屏也不能说某一张选中（#246 review）
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs');
           title?.classList.remove('text-accent');

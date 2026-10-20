@@ -964,10 +964,13 @@ app.post('/__mirror-state', (req, res) => {
   const readonly = req.query?.readonly !== '0';
   const stale = req.query?.stale === '1';
   const withResult = req.query?.withResult === '1';
+  // 观测到的 CLI 设置：model=<名> 给出在跑模型；observed=empty 表示观测到了、但不知道模型（面板说「CLI 模型未知」）
+  const observedCli = typeof req.query?.model === 'string' ? { model: req.query.model }
+    : req.query?.observed === 'empty' ? {} : null;
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, cliSeen: true },
+    payload: { readonly, stale, cliSeen: true, ...(observedCli ? { observedCli } : {}) },
   });
   if (withResult) {
     io.emit('agent:event', {

@@ -702,6 +702,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #246 review：模型磁贴的 aria-pressed 要跟着只读镜像观测到的 CLI 模型走。① 在跑的模型不在已加载的列表里时，
+  // 兜底卡是在 syncModelUI 之后才插进去的，一直是 false，读屏说「没有一个选中」；② 不知道 CLI 模型时界面清掉了
+  // 选中样式、胶囊写「CLI 模型未知」，Default 却还是 aria-pressed=true。
+  test('P0-09-ARIA2 只读镜像下模型磁贴的 aria-pressed 跟 CLI 在跑的模型走：不在列表里也选中兜底卡，不知道时一张都不选', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    const grid = page.locator('#customModelGrid');
+    await expect(grid.locator('.model-tile[data-model="default"]'), '前提：模型列表已加载').toBeAttached();
+
+    await page.request.post('/__mirror-state?readonly=1&model=claude-opus-4-8');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#pillModelText')).toContainText('claude-opus-4-8');
+    await expect(grid.locator('.model-tile[data-model="claude-opus-4-8"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(grid.locator('.model-tile[aria-pressed="true"]')).toHaveCount(1);
+
+    await page.request.post('/__mirror-state?readonly=1&observed=empty');
+    await expect(page.locator('#pillModelText')).toHaveText('CLI 模型未知');
+    await expect(grid.locator('.model-tile[aria-pressed="true"]'), '界面说不知道，读屏却说 Default 选中').toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 验收 O53 / O26：网关下跑着的会话打开设置，多出第 5 张「当前加载模型」并选中；用户没动模型，下一条却带着
   // 从磁贴重建出来的 grok-4.5（丢了 [1m]）发出，把在跑的 grok-4.5[1m] 换掉。
   // 验收 O52：中途点 haiku，胶囊显示「haiku[1m]」——后缀是在跑模型残留的。
