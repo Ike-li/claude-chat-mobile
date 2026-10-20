@@ -176,10 +176,11 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
 // 没有自报（老版本 CLI 不写、或注册表读不动）时，服务端照样能从磁盘观测到外部落定新消息、给当前查看的
 // 会话上只读镜像锁；那一行也该看得出被终端占着，而不是和普通「已打开」一样。镜像锁是全局单值、只属于
 // 当前查看的会话（mirror-engine），所以最多补一行。疑似中断（stale）不补：那时多半没人在驾驶。
-// mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting } 或 null。
+// 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
+// mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
 export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
   if (registryState) return registryState;
-  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale) return null;
+  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale || mirror.autonomous) return null;
   return mirror.waiting ? 'waiting' : 'busy';
 }
 

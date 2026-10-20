@@ -5898,7 +5898,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   }
   // 当前生效的只读镜像锁（已接管的不算）——抽屉行据此给被终端占着的会话补终端态（O86）。
   function mirrorRowLock() {
-    return mirrorReadonlySid ? { sessionId: mirrorReadonlySid, stale: mirrorStaleFlag, waiting: mirrorWaitingFlag } : null;
+    return mirrorReadonlySid
+      ? { sessionId: mirrorReadonlySid, stale: mirrorStaleFlag, waiting: mirrorWaitingFlag, autonomous: mirrorAutonomousFlag }
+      : null;
   }
   // 初次绘制和 instances 增量广播共用同一个状态 resolver/builder，避免两套角标语义分叉。
   // 镜像锁变化（applyMirror）也走这里重刷。

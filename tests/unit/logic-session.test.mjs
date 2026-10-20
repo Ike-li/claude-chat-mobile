@@ -115,6 +115,14 @@ test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住�
   assert.equal(resolveRowTerminalState(), null);
 });
 
+test('resolveRowTerminalState: 本会话自主循环（ScheduleWakeup/CronCreate）造成的镜像锁不冒充终端驾驶', () => {
+  // 那时没有终端在驾驶，是会话自己被定时唤起写了 transcript；composer 会单独说明这个来源，抽屉行不该写「终端运行中」。
+  const mirror = { sessionId: 's1', stale: false, waiting: false, autonomous: true };
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror }), null);
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror }), 'busy', '注册表自报仍然优先');
+});
+
 test('resolveDrawerStatusChip: Web 与 CLI 同时 busy（续接重叠 / 双写窗口）仍标终端运行中', () => {
   // Web 续接了但 CLI 回合未结束，或 Web 会话被 CLI --resume 抢走且 Web 实例还没 settle。
   // 终端 registry 是「别人正在写」的权威信号，chip 必须把来源写在标题行上。

@@ -986,6 +986,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 本会话自己的自主循环（ScheduleWakeup/CronCreate）写 transcript 也会上只读镜像锁，但那时没有终端在驾驶：
+  // composer 会单独说明这个来源，抽屉行不能合成一个「终端运行中」。
+  test('P0-11as 自主循环造成的镜像锁不在抽屉行冒充终端驾驶', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = sessionRowByInstance(page, 'inst_1');
+    const chip = row.locator('[data-session-status]');
+    await expect(row).toBeVisible();
+
+    await page.request.post('/__mirror-state?readonly=1&autonomous=1');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /自主循环/);
+    await expect(chip).toHaveCount(0);
+
+    // 同一把锁换成终端驾驶时照常标出来，证明上面的 0 不是行没刷新
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(chip).toHaveText('终端运行中');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 2026-09-06：外部驾驶员不只有终端。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
   // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop 但【不写 status】。
   // 此前它和 sdk 系一起被排除在终端标注之外，桌面端会话在抽屉里【只有一个未读点】，没有任何运行标识。
