@@ -146,6 +146,15 @@ test.describe('reselectViewingTarget（BE-016：移除当前查看实例后原�
     );
   });
 
+  // 验收 O60：CLI 进程被 kill 后，页面静默跳到同目录另一个会话——用户正看着的那个没了，屏幕上却是别的会话、
+  // 什么都没说。进程意外退出时不替用户挑下一个：落空视图、保留本工作区，前端据此显示「会话已中断」。
+  test('stayOnRemoved（进程意外退出）→ 有同 cwd 的剩余实例也不挑，落空视图保留刚移除实例的 cwd', () => {
+    assert.deepEqual(
+      reselectViewingTarget(['b', 'a2'], '/repo/a', cwdOf, '/fallback', { stayOnRemoved: true }),
+      { viewingInstanceId: null, viewingCwd: '/repo/a' }
+    );
+  });
+
   test('allowCrossWorkspace + 多个异 cwd → 取插入序第一个', () => {
     assert.deepEqual(
       reselectViewingTarget(['b', 'a'], '/repo/x', cwdOf, '/fallback', { allowCrossWorkspace: true }),

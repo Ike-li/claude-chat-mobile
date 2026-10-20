@@ -81,6 +81,9 @@ export function createApprovalController(context, {
   let multiSelectedIndexes = new Set(); // multiSelect 当前题勾选的下标
   let permArmTimer = null;
   let permArming = false;
+  // 别的界面盖在当前会话上（打不开的会话的落地页）时，审批 / 提问卡先收起、不弹（验收 O38）；卡本身留着，
+  // resume 时原样再弹出来。期间新到的照常排队。
+  let suspended = false;
 
   // ---- 审批完整性预检（协议步骤4）----
   // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
@@ -191,7 +194,11 @@ export function createApprovalController(context, {
       permExitModeWrap.classList.toggle('hidden', !isExit);
       if (isExit) paintExitModeChips();
     }
-    openSheet(permModal);
+    if (!suspended) {
+      // 先上防误触再开窗（同上）；被别的界面盖着时不弹，resume 时再弹
+      armPermSheetButtons();
+      openSheet(permModal);
+    }
     updateSendButtonState();
   }
   function paintExitModeChips() {
@@ -353,7 +360,7 @@ export function createApprovalController(context, {
       }
       questionOptions.appendChild(wrap);
     });
-    openSheet(questionModal);
+    if (!suspended) openSheet(questionModal);
     updateSendButtonState();
   }
   function finishQuestionUI(barText) {
@@ -510,6 +517,18 @@ export function createApprovalController(context, {
     },
     // 输入区是否该被"先处理当前审批/选择"挡住。
     hasPending() { return Boolean(activePerm || activeQuestion); },
+    suspend() {
+      if (suspended) return;
+      suspended = true;
+      if (activePerm) closeSheet(permModal);
+      if (activeQuestion) closeSheet(questionModal);
+    },
+    resume() {
+      if (!suspended) return;
+      suspended = false;
+      if (activePerm) { armPermSheetButtons(); openSheet(permModal); } // 先上锁、后开窗，时长同 showNextPerm（PERM_ARM_MS）
+      if (activeQuestion) openSheet(questionModal);
+    },
   };
   context.state.approvals = controller;
   return controller;

@@ -39,8 +39,20 @@ export async function waitUntilDisconnected(page: Page, timeout = 10_000) {
   await expect(page.locator('#connDotWrap')).toHaveAttribute('data-conn', 'offline', { timeout });
 }
 
+const mockTokenSeeded = new WeakSet<Page>();
+
 export async function gotoMock(page: Page) {
   captureBrowserErrors(page);
+  // 带着令牌进来（同真用户扫过码 / 点过 #token= 链接）：mock 与真 server 一样拒绝无令牌握手，前端没令牌时直接出令牌门、不握手。
+  // 用 init script 预置而不是 goto('/#token=…')：页面加载后地址被 replaceState 成 '/'，再 goto('/#token=…') 只算同文档的
+  // hash 跳转、不重新加载——beforeEach 里 gotoMock 过、用例里再调一次的那些（folder-picker 等）就不会建新连接，
+  // 先挂上的 framesent 监听一帧都录不到。本地已有令牌（用例自己用 #token= 进来过）时不覆盖。
+  if (!mockTokenSeeded.has(page)) {
+    mockTokenSeeded.add(page);
+    await page.addInitScript(() => {
+      try { if (!localStorage.getItem('auth_token')) localStorage.setItem('auth_token', 'mock-token'); } catch { /* about:blank 等不透明源 */ }
+    });
+  }
   await page.request.post('/__reset');
   await page.goto('/');
   // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + data-conn=online。
@@ -150,4 +162,8 @@ export async function waitForIdle(page: Page) {
 export async function expectNoBrowserErrors(page: Page) {
   const errors = (page as Page & { __ccmErrors?: string[] }).__ccmErrors || [];
   expect(errors).toEqual([]);
+  // mock 场景抛错只隔离不外抛（保住同分片后面的用例），账记在 mock 里——这里收尾，触发它的用例必红，
+  // 不会因为 DOM 断言碰巧已满足而假绿（PR #249 review）。栈在 webServer 日志里。
+  const scenarioErrors = await (await page.request.get('/__scenario-errors')).json();
+  expect(scenarioErrors, 'mock 场景抛错（栈见 webServer 日志）').toEqual([]);
 }

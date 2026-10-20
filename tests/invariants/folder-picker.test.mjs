@@ -173,6 +173,22 @@ test('新建：在范围内建出单层目录，返回真实路径', () => {
   assert.ok(existsSync(res.path));
 });
 
+// 清单在手机上改不了（来源是环境变量 / 外置文件、或没有配置文件）时，在已连接的文件夹之外建出来的目录接下来加不进清单，
+// 只会在家目录里留一个空目录（验收 O41：先建出来、再报「改不了」）。已连接的文件夹里照常能建：那不用写清单。
+test('新建：清单只读时，已连接的文件夹之外拒绝且什么都没建；已连接的文件夹里照常建', () => {
+  const { home, ctx } = fixture();
+  const ro = { ...ctx, readonly: 'source_readonly', connected: [join(home, 'code', 'app')] };
+  assert.deepEqual(createSubfolder('code', 'ro-proj', ro), { ok: false, error: 'source_readonly' },
+    '原因码与 folders:add 拒绝时同一个，前端同一套文案');
+  assert.equal(existsSync(join(home, 'code', 'ro-proj')), false, '拒了却已经在磁盘上建出来了');
+  assert.deepEqual(createSubfolder('', 'ro-top', { ...ro, readonly: 'no_config_file' }), { ok: false, error: 'no_config_file' });
+  assert.equal(existsSync(join(home, 'ro-top')), false);
+  const inner = createSubfolder('code/app', 'inner', ro);
+  assert.equal(inner.ok, true, JSON.stringify(inner));
+  assert.equal(inner.path, join(home, 'code', 'app', 'inner'));
+  assert.equal(createSubfolder('code', 'rw-proj', { ...ro, readonly: null }).ok, true, '能改清单时不受影响');
+});
+
 // 建完再 realpath 复核：判完父目录到 mkdir 之间，路径可能被换成 symlink（家目录里的东西模型写得动）。
 // mkdir 注入成「先换、再建」，把这个窗口确定地复现出来。
 test('新建后复核：父目录在建的一刻被换成指向外面的 symlink——拒绝，并把被骗建到外面的空目录删掉', () => {

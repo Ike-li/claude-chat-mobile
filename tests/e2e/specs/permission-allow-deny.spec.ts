@@ -95,6 +95,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 AC-09-12 / O30：审批等到过期，服务端以拒绝回给 CLI、发 request_resolved(expired)，前端只是悄悄关掉卡片——
+  // 用户回来只看到卡片没了，不知道那个操作其实没执行。
+  test('P0-06-EXPIRED 审批过期：卡片关掉的同时说清「已过期、没有执行」', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission-expired');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('审批等太久已过期，操作没有执行');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-06d 本会话总是允许不会泄漏到另一会话', async ({ page }) => {
     await gotoMock(page);
 

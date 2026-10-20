@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isInScope } from '../../app/src/files/workdir-scope-guard.js';
+import { isInScope, isMissingInScope } from '../../app/src/files/workdir-scope-guard.js';
 import { validateEnvChanges } from '../../app/src/ops/env-schema.js';
 import { resolveGoneWorktreeParent } from '../../app/src/sessions/workdirs.js';
 
@@ -108,6 +108,65 @@ test.describe('SCOPE-01: workdir-scope-guard', () => {
     assert.equal(isInScope(scopeA, []), false);
     assert.equal(isInScope(scopeA, null), false);
     assert.equal(isInScope(scopeA, undefined), false);
+  });
+});
+
+// ── 「不存在」与「越界」分开（验收 O80）────────────────────────────────────────
+// isInScope 对不存在的路径一律 false（上面那条，fail-closed 不变），调用方随后把它记成 scope_violation——
+// 文件面板开着时 Claude 删掉或改名的文件，点旧条目就在安全日志里留一条「越界访问被拒」。
+// isMissingInScope 只回答「它是不是范围内一个已经不在的东西」：只影响审计分类和报错文案，不放行任何访问。
+// 判据：叶子本身 lstat 不存在（悬空 symlink 不算——它存在，只是指向的东西不在），且最近一个存在的祖先
+// realpath 之后仍在范围内（祖先是指出去的 symlink、或 ../ 走出去的，都不算）。
+test.describe('SCOPE-01: isMissingInScope 只把「范围内已经不在的东西」认作不存在', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-inv-scope-missing-')));
+  test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
+  const scope = join(base, 'scope');
+  const outside = join(base, 'outside');
+  mkdirSync(join(scope, 'sub'), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(scope, 'sub', 'here.txt'), 'x');
+  writeFileSync(join(outside, 'secret.txt'), 'x');
+  if (process.platform !== 'win32') {
+    symlinkSync(outside, join(scope, 'link-out'));
+    symlinkSync(join(outside, 'gone.txt'), join(scope, 'dangling-out'));
+  }
+  const dirs = [scope];
+
+  test('范围内被删掉的文件、被删掉的整层目录：是', () => {
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), dirs), true);
+    assert.equal(isMissingInScope(join(scope, 'sub', 'renamed.txt'), dirs), true);
+    assert.equal(isMissingInScope(join(scope, 'gone-dir', 'deeper', 'x.txt'), dirs), true);
+  });
+
+  // 只有 ENOENT 算「不在了」；把文件当目录往下走（ENOTDIR）、没权限之类的失败照旧按越界记，判据 fail-closed
+  test('叶子不是 ENOENT 而是别的失败（文件底下再走一层）：不是', () => {
+    assert.equal(isMissingInScope(join(scope, 'sub', 'here.txt', 'child'), dirs), false);
+  });
+
+  test('还在的东西不是（不管在不在范围内）', () => {
+    assert.equal(isMissingInScope(join(scope, 'sub', 'here.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(outside, 'secret.txt'), dirs), false);
+  });
+
+  test('范围外的不存在路径不是：直接在外面、经 ../ 走出去', () => {
+    assert.equal(isMissingInScope(join(outside, 'nope.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(scope, '..', 'outside', 'nope.txt'), dirs), false);
+    assert.equal(isMissingInScope(join(base, 'no-such-dir', 'x.txt'), dirs), false);
+  });
+
+  test('经指向范围外的 symlink 落到一个不存在的位置：不是', { skip: process.platform === 'win32' }, () => {
+    assert.equal(isMissingInScope(join(scope, 'link-out', 'nope.txt'), dirs), false);
+  });
+
+  test('悬空 symlink 本身存在，不是「不存在」（照旧按越界记）', { skip: process.platform === 'win32' }, () => {
+    assert.equal(isMissingInScope(join(scope, 'dangling-out'), dirs), false);
+  });
+
+  test('非法入参一律不是', () => {
+    assert.equal(isMissingInScope('', dirs), false);
+    assert.equal(isMissingInScope(null, dirs), false);
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), []), false);
+    assert.equal(isMissingInScope(join(scope, 'deleted.txt'), null), false);
   });
 });
 

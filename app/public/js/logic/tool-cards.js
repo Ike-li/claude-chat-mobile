@@ -27,6 +27,14 @@ export function formatToolSummary(summary) {
   }
 }
 
+// 工具输出代码块的高亮 class（验收 O55 附带）：原来一律交给 hljs 自动识别，纯文本日志常被认成 css / vbnet /
+// yaml 上一片色，读起来像代码。只有能完整解析的 JSON 按 json 高亮，其余写 nohighlight（hljs 认这个 class 跳过）。
+export function toolOutputHighlightClass(text) {
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return 'nohighlight';
+  try { JSON.parse(trimmed); return 'language-json'; } catch { return 'nohighlight'; }
+}
+
 // UX-001：审批 sheet 内容可读化（数据→数据）。
 // ExitPlanMode 计划书走 markdown 源文（调用方 renderMarkdown + DOMPurify）；
 // 普通命令去掉 JSON.stringify 对字符串包的引号/\n 转义，保留纯文本供 mono 展示。
