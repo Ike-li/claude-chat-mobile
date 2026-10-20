@@ -842,6 +842,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       btnAttach,
       fileInput,
       attachTray,
+      attachNotice: $('attachNotice'),
       attachPreviewModal,
       attachPreviewImg,
       attachPreviewName,
@@ -4424,6 +4425,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       showMirrorComposerHint();
       return false;
     },
+    isStartScreen: () => messagesEl.classList.contains('empty-start'),
   });
   // E18：气泡附件按需预览——live/历史点击经 browse:read 拉原图，复用托盘灯箱
   const storedPreview = createStoredPreviewLoader(appContext, {
