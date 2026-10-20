@@ -347,6 +347,13 @@ const MOCK_WT_CWD = '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x';
 // 同一批后面各条还拿着旧号。终端写过盘才会置换，所以新实例的 sync:since 报磁盘 ahead，前端清屏重载，排着的气泡随之脱离 DOM。
 // 一次性：置换一次就解除。
 let outboxReplaySwapArmed = null;
+// O66（P0-02d9）：离线重放的条目每条开一轮并挂住，由用例调 /__outbox-turn-end 显式收尾——不赌时间窗口。
+// 同一批后面的条目撞上这一轮，走下面的在途轮闸被拒收；前端应排队、本轮结束后按序自动续发。
+let outboxTurnsArmed = false;
+let outboxTurnOpen = null; // { instanceId, messageId, epoch }
+let outboxTurnCount = 0;    // 每轮一个新 epoch：同 epoch 的 seq 会被前端当重放去重
+// 收到过的离线重放（fromOutbox）：在服务端侧记，不受前端传输方式（polling / websocket）影响。GET /__outbox-received
+let mockOutboxReceived = [];
 let outboxReplaySwapReloadInstanceId = null;
 // P0-DESTROY-CRASH：test:process-crash 之后，重开该会话的头一次 sync:since 报磁盘 ahead，逼出清屏全量重载
 // （真 server 重开是新实例，磁盘上多了在途那一轮）。一次性。
@@ -665,6 +672,10 @@ function resetMockState() {
   outboxReplaySwapDeliveredText = null;
   outboxReplaySwapHistoryFirst = false;
   outboxReplaySwapHeldRefusal = null;
+  outboxTurnsArmed = false;
+  outboxTurnOpen = null;
+  outboxTurnCount = 0;
+  mockOutboxReceived = [];
   outboxReplaySwapEchoFirst = false;
   outboxReplaySwapEcho = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
@@ -867,6 +878,10 @@ app.get('/__read-state', (_req, res) => {
   res.json(readStateSnapshot());
 });
 
+app.get('/__outbox-received', (_req, res) => {
+  res.json(mockOutboxReceived);
+});
+
 app.get('/__image-requests', (_req, res) => {
   res.json(mockImageRequests);
 });
@@ -941,6 +956,25 @@ app.post('/__arm-untitled-session', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+// O66：结束 test:arm-outbox-turns 挂住的那一轮（result + turnRunning:false 的 instances 广播）。
+app.post('/__outbox-turn-end', (_req, res) => {
+  const open = outboxTurnOpen;
+  outboxTurnOpen = null;
+  const inst = open ? mockInstances.find(i => i.instanceId === open.instanceId) : null;
+  if (inst) {
+    inst.state = 'idle';
+    inst.turnRunning = false;
+    io.emit('agent:event', {
+      seq: 2, epoch: open.epoch, sessionId: inst.sessionId ?? null, instanceId: inst.instanceId, ts: Date.now(),
+      type: 'result', payload: { messageId: open.messageId, durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(inst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+    });
+  }
+  res.json({ ok: true, ended: Boolean(inst) });
+});
 app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
 // O87：推一帧带 devMode:true 的 instances，让「⚙ 服务与配置」里的「重启服务」按钮出现。canRestart=0 模拟
 // 前台 npm start（拉不起来）；deny=1 让 dev:restart 回 ok:false，而广播仍说能重启。
@@ -3500,6 +3534,7 @@ io.on('connection', socket => {
       },
       armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
       armOutboxReplaySwapHistoryFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', historyFirst: true }; },
+      armOutboxTurns: () => { outboxTurnsArmed = true; },
       armOutboxReplaySwapEchoFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', echoFirst: true }; },
     })),
     {
@@ -5895,7 +5930,14 @@ io.on('connection', socket => {
     }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
-    const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    // 闸按这条消息的目标实例判（同真 server）：带了还活着的 instanceId 就是它，不是眼下查看的那个——
+    // 后台会话排着的离线条目（O66 review ②）要撞上的是它自己那个会话的在途轮。实例号已不在（置换换了号）
+    // 回落 viewing：真 server 按会话改投到新实例，mock 的置换场景里那就是眼下查看的这个。
+    const gateInst = mockInstances.find(i => i.instanceId === payload?.instanceId)
+      || mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (payload?.fromOutbox === true) {
+      mockOutboxReceived.push({ text: payload.text, instanceId: payload.instanceId ?? null, viewing: viewingInstanceId, refused: gateInst?.turnRunning === true });
+    }
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');
       const refuse = () => {
@@ -5951,6 +5993,26 @@ io.on('connection', socket => {
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
+    // O66：离线重放条目开一轮（同真 server：ack 之前广播 turnRunning=true），回复正文在回显之后发，result 等 /__outbox-turn-end。
+    // 新会话页上的离线首条（没带实例号、眼下也没在看任何实例）：同真 server 先懒开实例、接管 viewing，再开这一轮。
+    // 同一批后面的条目也不带实例号，服务端经 viewing 投给它、撞上这一轮被拒收（O66 review ①）。
+    if (outboxTurnsArmed && payload?.fromOutbox === true && !payload?.instanceId && viewingInstanceId === null) {
+      const fresh = openFreshMockInstance(typeof payload?.model === 'string' ? payload.model : '');
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(fresh.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
+    const outboxTurnInst = outboxTurnsArmed && payload?.fromOutbox === true
+      ? (mockInstances.find(i => i.instanceId === payload?.instanceId) || mockInstances.find(i => i.instanceId === viewingInstanceId)) : null;
+    if (outboxTurnInst) {
+      outboxTurnInst.state = 'busy';
+      outboxTurnInst.turnRunning = true;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(outboxTurnInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
       });
     }
     if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' });
@@ -6087,6 +6149,18 @@ io.on('connection', socket => {
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
+
+    if (outboxTurnInst) {
+      outboxTurnCount += 1;
+      activeEpoch = `mock-epoch-outbox-turn-${outboxTurnCount}`;
+      const messageId = `msg_outbox_turn_${outboxTurnCount}`;
+      outboxTurnOpen = { instanceId: outboxTurnInst.instanceId, messageId, epoch: activeEpoch };
+      socket.emit('agent:event', {
+        seq: 1, epoch: activeEpoch, sessionId: outboxTurnInst.sessionId ?? null, instanceId: outboxTurnInst.instanceId, ts: Date.now(),
+        type: 'text_delta', payload: { messageId, text: `答：${cmd}` },
+      });
+      return;
+    }
 
     // test:external-echo：上面那条回显被本地占位气泡认领之后，再推一条【本地没有占位气泡】的
     // user_message。这是「另一台设备发的消息」与回放的形态——前端 matchedBubble 只在 .opacity-70
@@ -6499,6 +6573,11 @@ io.on('connection', socket => {
     if (activeInst) {
       activeInst.aborted = true; // WS-008：令仍在跑的流式场景（如 test:stream-long）下个 delay 后提前退出，不再后台续发事件
       activeInst.state = 'idle';
+      // O66：test:arm-outbox-turns 挂住的那一轮随停止结束（同真 server：中断后在途轮清零）
+      if (outboxTurnOpen?.instanceId === targetId) {
+        activeInst.turnRunning = false;
+        outboxTurnOpen = null;
+      }
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }

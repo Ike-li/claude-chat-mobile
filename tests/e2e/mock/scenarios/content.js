@@ -243,6 +243,18 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armOutboxReplaySwapEchoFirst(); },
     },
     {
+      // P0-02d9（验收 O66）：之后的离线重放条目每条开一轮、挂到 /__outbox-turn-end 才收尾；本条自身立即收尾。
+      command: 'test:arm-outbox-turns',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, activeModel } = getContext();
+        getContext().armOutboxTurns();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_arm_outbox_turns', durationMs: 10, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。
