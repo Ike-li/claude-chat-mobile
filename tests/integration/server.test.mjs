@@ -723,12 +723,34 @@ test.describe('env:set — 写入→读回全链路 (S2)：面板写的必须是
       });
       assert.equal(ack.ok, true, `env:set 应成功：${JSON.stringify(ack)}`);
       assert.ok(ack.written?.includes('SESSION_DELETE_QUIET_MS'), `written 应含该键：${JSON.stringify(ack.written)}`);
+      assert.deepEqual(ack.saved, [{ key: 'SESSION_DELETE_QUIET_MS', effect: 'restart' }], '没被环境变量压着的需重启项：回执说重启后生效');
 
       // 直接读磁盘上的写入目标（ENV_FILE_PATH 的隔离覆盖，指向 tmpDir/.env），
       // 而不是通过另一次 socket 事件——这样断言的是【文件内容】，不是「server 内存里还记得」。
       const onDisk = readFileSync(join(tmpDir, '.env'), 'utf8');
       assert.match(onDisk, /SESSION_DELETE_QUIET_MS=123456/,
         `写入目标文件里必须真的出现新值，实际内容：${onDisk}`);
+    } finally {
+      s.disconnect();
+    }
+  });
+
+  // 验收 AC-17-11 / O48：本 server 子进程是带着 shell 变量 PORT 起的，PORT 写进文件也不生效。回执说「重启后生效」
+  // 就是 hard-rules §4.6 的假成功——重启后仍是环境变量的值。快照必须是投影之前的那份（getShellEnvSnapshot）。
+  test('被 shell 环境变量压着的项：回执说 shadowed 并点名要 unset 的变量，不说重启后生效', async () => {
+    const s = connectSocket();
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('connect timeout')), 3000);
+    });
+    try {
+      const ack = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('env:set ack 超时（3s）')), 3000);
+        s.emit('env:set', { changes: { PORT: String(PORT + 101) } }, res => { clearTimeout(t); resolve(res); });
+      });
+      assert.equal(ack.ok, true, `env:set 应成功：${JSON.stringify(ack)}`);
+      assert.deepEqual(ack.saved, [{ key: 'PORT', effect: 'shadowed', shadowedBy: ['PORT'] }]);
     } finally {
       s.disconnect();
     }
