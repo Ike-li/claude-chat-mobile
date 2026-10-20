@@ -8,6 +8,7 @@
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
 import { t, tk } from '../i18n.js';
+import { displaySessionTitle } from './session-search.js';
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
@@ -170,6 +171,18 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
       ? (terminalSource === 'claude-desktop' ? tk('桌面端运行中') : tk('终端运行中'))
       : (DRAWER_STATUS_LABELS[status] || tk('运行中'));
   return { status, label };
+}
+
+// 会话行的终端态（O86）。注册表（~/.claude/sessions/<PID>.json）有自报就用它——那是终端进程自己说的。
+// 没有自报（老版本 CLI 不写、或注册表读不动）时，服务端照样能从磁盘观测到外部落定新消息、给当前查看的
+// 会话上只读镜像锁；那一行也该看得出被终端占着，而不是和普通「已打开」一样。镜像锁是全局单值、只属于
+// 当前查看的会话（mirror-engine），所以最多补一行。疑似中断（stale）不补：那时多半没人在驾驶。
+// 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
+// mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
+export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
+  if (registryState) return registryState;
+  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale || mirror.autonomous) return null;
+  return mirror.waiting ? 'waiting' : 'busy';
 }
 
 // 会话行副文本：时间 / 已打开 / id。CLI 空闲占用提到最前，避免 truncate 吃掉来源；
@@ -535,7 +548,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
       if (!s || typeof s.id !== 'string' || !s.id) continue;
       rows.push({
         id: s.id,
-        title: s.title || t('无标题会话'),
+        title: displaySessionTitle(s.title, t('无标题会话')),
         lastUsedAt: s.lastUsedAt ?? null,
         // 托管 worktree 的会话自带真实 cwd；无条件写工作区那个会把它覆盖掉，点开时按父仓去找
         // transcript，落到「会话不存在」页。workspaceName 不跟着变——归属展示本来就要显示父仓。
@@ -737,10 +750,12 @@ export function shouldRerenderSessionList({
   prevHasMore = false,
   prevTotal = null,
   prevPinned,
+  prevOpen,
   nextSessions,
   nextHasMore = false,
   nextTotal = null,
   nextPinned,
+  nextOpen,
 } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
@@ -754,6 +769,8 @@ export function shouldRerenderSessionList({
   // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、
   // 或在本机把某条标回已读，只有这里能察觉。漏掉就等于那一组永远停在首次渲染的内容上。
   if (signature(prevPinned) !== signature(nextPinned)) return true;
+  // open（开着、被分页挤出本页的会话的元数据）同理：成员跟着「开了哪些会话」走，与这一页无关（验收 O46）
+  if (signature(prevOpen) !== signature(nextOpen)) return true;
   return signature(prevSessions) !== signature(nextSessions);
 }
 

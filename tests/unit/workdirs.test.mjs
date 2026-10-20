@@ -11,6 +11,7 @@ import {
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
   foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
+  SEARCH_SCAN_LIMIT, SEARCH_RESULT_LIMIT, sessionListWindow,
 } from '../../app/src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -422,4 +423,18 @@ test.describe('resolveEnvPrimaryWorkdir：投影之后仍分得清 WORK_DIR 是�
       projectedPrimary: '/legacy/repo',
     }), '');
   });
+});
+
+// O81：「显示全部」之后还能「加载更多」——每页 MAX_SESSION_LIMIT 条，按页数放宽窗口，硬顶 SEARCH_SCAN_LIMIT。
+test('sessionListWindow：搜索 / 截断 / 显示全部按页放宽，到硬顶就不能再加载', () => {
+  assert.deepEqual(sessionListWindow({ query: 'foo', all: true, pages: 3 }), { limit: SEARCH_RESULT_LIMIT, canGrow: false }, '搜索态不分页');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 8 }), { limit: 8, canGrow: false }, '截断态用配置条数，入口是「显示全部」不是「加载更多」');
+  assert.deepEqual(sessionListWindow({ all: true }), { limit: MAX_SESSION_LIMIT, canGrow: true });
+  assert.deepEqual(sessionListWindow({ all: true, pages: 2 }), { limit: MAX_SESSION_LIMIT * 2, canGrow: true });
+  const last = Math.ceil(SEARCH_SCAN_LIMIT / MAX_SESSION_LIMIT);
+  assert.deepEqual(sessionListWindow({ all: true, pages: last }), { limit: SEARCH_SCAN_LIMIT, canGrow: false }, '到硬顶：再往后用搜索');
+  assert.deepEqual(sessionListWindow({ all: true, pages: last + 50 }), { limit: SEARCH_SCAN_LIMIT, canGrow: false }, '页数再大也不越过硬顶');
+  for (const bad of [0, -1, 1.5, '2', null, NaN]) {
+    assert.deepEqual(sessionListWindow({ all: true, pages: bad }), { limit: MAX_SESSION_LIMIT, canGrow: true }, `脏页数 ${String(bad)} 当第一页`);
+  }
 });

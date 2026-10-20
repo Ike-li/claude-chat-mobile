@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -43,6 +43,7 @@ import {
   createConfigReloader,
   loadConfigSources,
   reloadKindOf,
+  describeSavedKeys,
   structuredToStringValues,
 } from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
@@ -66,6 +67,7 @@ import {
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { originAllowedOnPublicHost } from '../auth/origin-gate.js';
+import { PREAUTH_MAX_BUFFER_BYTES, grantAuthedBufferLimit } from '../auth/preauth-buffer.js';
 import { onAuthResult, freshState, gateCheck, rlSourceKey, clientSourceAddress, authRejection, shouldTrustCfConnectingIp, shouldTrustForwardedFor, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
@@ -89,9 +91,9 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
-import { readTranscriptImage } from '../sessions/transcript-image-read.js';
+import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
@@ -300,7 +302,9 @@ async function sessionTitleForNotify(cwd, sessionId) {
 function emitNotify(pn, ntfyType) {
   if (!pn) return;
   pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
-  ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
+  // ntfy 明文经第三方：标题只留「事件 · 项目」，不带会话标题（可能就是用户原话，验收 O33）。Web Push 端到端加密，照旧
+  // pn.ntfyType：同一类事件里标签要分档的（result 的完成 / 出错 / 已中止），由 notificationForEvent 给出
+  ntfyNotify(pn.ntfyTitle ?? pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
 }
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
@@ -751,11 +755,12 @@ registerOperationalRoutes({
 // Historical replay stays on the authenticated session:history socket event;
 // the HTTP data plane intentionally exposes no unauthenticated transcript route.
 const httpServer = createServer(app);
-// E17：maxHttpBufferSize 默认仅 1MB，会直接拒收带附件的消息。抬到 32MB——
-// 附件总量上限 20MB（解码后），base64 上线 ~1.33x ≈ 27MB + JSON 开销，32MB 留足余量。
+// 单包上限分两档（auth/preauth-buffer.js）：这里给的是鉴权前的小上限，握手鉴权通过时 grantAuthedBufferLimit
+// 再把这条连接抬到 32MB（E17：附件总量上限 20MB 解码后，base64 上线 ~1.33x ≈ 27MB + JSON 开销）。
+// 此前这里直接给 32MB，未鉴权的连接也能先塞满再被拒（验收 O84）。
 const io = new Server(httpServer, {
   perMessageDeflate: { threshold: 1024 },
-  maxHttpBufferSize: 32 * 1024 * 1024
+  maxHttpBufferSize: PREAUTH_MAX_BUFFER_BYTES,
 });
 
 // ---- 设备审批网关：socket 分组解锁/断连、待批广播、trusted-devices.json CLI 审批监听 ----
@@ -922,7 +927,7 @@ if (process.stdin.isTTY) {
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
-// message 仍是原来的字符串（'unauthorized' / 'rate_limited'），前端既有判据不受影响；
+// message 是 authRejection 的 reason（'unauthorized' / 'cooldown' / 'rate_limited'），前端按它分流；
 // 新增的 err.data 让客户端能拿到重试提示——socket.io 会把 data 原样送到客户端的
 // connect_error(err) 上，这是 socket 侧对应 HTTP `Retry-After` 头的唯一通道。
 // 此前 socket 侧一个数字都不给，手机端只能盲目重连，而每次重连都只是撞在锁上。
@@ -957,8 +962,8 @@ io.use(async (socket, next) => {
   const rlKey = rlSourceKey(socket.handshake, clientIp, rlTrust);
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
-    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
-    // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
+    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」；'cooldown' 只是上一次
+    // 令牌不对顺带上的短锁，这次的令牌没校验，回 cooldown + 秒数，前端到点自动重试（验收 O83）。
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const gated = gateCheck(st, Date.now());
@@ -966,7 +971,7 @@ io.use(async (socket, next) => {
         console.warn(gated.verdict === 'locked'
           ? `[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil(gated.retryAfterMs / 1000)}s，source=${rlKey}）`
           : `[conn] ${ip} 上次鉴权失败的退避冷却中（剩 ${gated.retryAfterMs}ms），拒握手（source=${rlKey}）`);
-        return next(rejectHandshake(gated));
+        return next(rejectHandshake({ ...gated, hasCredential: publicHost || Boolean(socket.handshake.auth?.token) }));
       }
     }
 
@@ -1029,6 +1034,9 @@ io.use(async (socket, next) => {
       // 后者会让人反复重试，而每次重试都只是撞在那把刚上的锁上。
       return next(rejectHandshake(rlResult ?? {}));
     }
+
+    // 凭据已验过：这条连接从此收得下带附件的大包（验收 O84，鉴权前只有小上限）。
+    grantAuthedBufferLimit(socket.conn);
 
     // 鉴权通过后，执行设备审批过滤（纵深防御）
     // 反代 loopback：peer=127.0.0.1 但 Host 公网 → 仍须 deviceToken（见 shouldBypassDeviceApproval）
@@ -1128,7 +1136,6 @@ const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
-const inheritedEffort = instanceManager.inheritedEffort;
 const instanceForSession = instanceManager.forSession;
 const instanceState = instanceManager.stateOf;
 // 新会话预设档（pending = L0）：session:new / 空 cwd 后 viewingInstanceId=null（懒创建无实例），
@@ -1301,11 +1308,15 @@ function computeServiceHealth() {
     missingFolders: workdirStatus.missing(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
-    hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
+    // unreadable：读不出时是哪个文件，面板据此点名（验收 AC-16-12）
+    hooksBridge: { state: hooksInstallState, unreadable: hooksUnreadable, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
     // statusline 桥同理。此前只有 hooks 桥有这个字段，于是面板上一个桥有安装态与一键安装、
     // 它的孪生兄弟整段隐身——两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
     statuslineBridge: {
       state: statuslineInstallState,
+      // configured：用户自己配没配 statusLine——没配时装不上，面板不给「开启」（验收 O62）
+      configured: statuslineInstallDetail.configured,
+      unreadable: statuslineInstallDetail.unreadable,
       off: process.env.CLI_STATUSLINE_BRIDGE === 'off',
     },
   };
@@ -1316,13 +1327,17 @@ function computeServiceHealth() {
 
 // 安装态缓存：启动时读一次，装/卸后由 refreshHooksInstallState 主动刷新。
 let hooksInstallState = 'unknown';
+let hooksUnreadable = null;
 function refreshHooksInstallState() {
-  hooksInstallState = readHooksInstallState();
+  ({ state: hooksInstallState, unreadable: hooksUnreadable } = readHooksInstallState());
   return hooksInstallState;
 }
 let statuslineInstallState = 'unknown';
+let statuslineInstallDetail = { configured: null, unreadable: null };
 function refreshStatuslineInstallState() {
-  statuslineInstallState = readStatuslineInstallState().state;
+  const { state, configured, unreadable } = readStatuslineInstallState();
+  statuslineInstallState = state;
+  statuslineInstallDetail = { configured, unreadable };
   return statuslineInstallState;
 }
 // approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，
@@ -1732,6 +1747,12 @@ const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: st
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
+// per-cwd CLI 配置代数：确认该区配置变过（config:refresh 强制重读、scout 清单签名变了）就加一。实例构造时
+// 抄下当时的代数（resolvedEnv 也是那一刻注入的快照），之后它每轮 init 报的模型只描述它自己那套旧配置——
+// 代数对不上就不再当「本目录的默认模型」记（验收 O85）。不落盘：重启后所有实例都是新 spawn 的。
+const cliConfigGenByCwd = new Map();
+const cliConfigGen = cwd => cliConfigGenByCwd.get(cwd) ?? 0;
+const bumpCliConfigGen = cwd => { cliConfigGenByCwd.set(cwd, cliConfigGen(cwd) + 1); };
 try {
   const c = JSON.parse(readFileSync(INIT_CACHE, 'utf8'));
   lastInit = c.init ?? null;
@@ -1759,8 +1780,12 @@ function saveInitCache() {
   catch { /* 写失败不致命：缓存仅是重启后首轮前的体验增强 */ }
 }
 // scout / fresh 首 init 采纳 cwd 默认模型（判据把 resume-no-record 排除，防污染）；变化才落盘。
-function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel }) {
+// spawnGen：实例构造时的 CLI 配置代数。CLI 每轮都吐 init，config:refresh 清掉默认模型之后，刷新前就开着的
+// 会话下一轮照样会报它 spawn 时的模型名——不拦就写回去，新会话页的摘要停在改过的旧名上，整页刷新也救不回，
+// 只有重启杀掉那个实例才恢复（验收 O85）。
+function recordCwdDefaultModel(cwd, { resumeId, pinnedModel, reportedModel, spawnGen }) {
   if (!cwd || !isCwdDefaultModel({ resumeId, pinnedModel, reportedModel })) return false;
+  if (spawnGen !== cliConfigGen(cwd)) return false;
   if (defaultModelByCwd.get(cwd) === reportedModel) return false;
   defaultModelByCwd.set(cwd, reportedModel);
   saveInitCache();
@@ -1934,10 +1959,7 @@ if (!statusOff) {
 // 不支持的平台由 sampler 内部早退（process.platform !== 'darwin'），零开销。
 // 先立刻跑一次：盘上有上一条命的快照时，这一次就能认出 server 自己的重启。
 serviceSampler.sample();
-// 非 macOS 的重启历史唯一来源：上面那条 sample() 在这些平台上直接早退，面板「重启记录」段
-// 因此一直是空的。server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
-// darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
-serviceSampler.recordSelfStart();
+// 非 macOS 的自身启动记录（serviceSampler.recordSelfStart）不在这里写，挪到 httpServer.listen 的成功回调里。
 serviceSampleInterval = setInterval(() => serviceSampler.sample(), SERVICE_SAMPLE_INTERVAL_MS);
 serviceSampleInterval.unref?.(); // 不阻止进程退出
 
@@ -2043,7 +2065,6 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   } else {
     effUi = resolveResumeEffort({
       savedEffort: saved?.effort,
-      inheritedEffortValue: inheritedEffort(cwd),
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
   }
@@ -2306,7 +2327,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       sessions.upsertSession({ id: sid, title: firstMessage, cwd: drivingCwd, routeCwd: routeKey, model, effort: instance.effortAuto ? 'auto' : instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       // 归键用驾驶轴：消费方是 defaultModelByCwd.get(viewingCwdOf())，而 viewingCwdOf 取的就是实例 cwd。
-      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
+      recordCwdDefaultModel(drivingCwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model, spawnGen: instance.cliConfigGen });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
       // 显式广播：此前靠「init 边界的 broadcastInstances 自然带新 sid/title」搭便车，而 sessionId 现在
       // 可能远早于 init 到达（本地 slash 命令下实测早 122s，见 agent.js#_claimSessionIdEarly）。不显式推
@@ -2325,8 +2346,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
         // 只清表、不 dispose（实例已在退出路径上）。与 remove() 共用 clearTables，防再漏表。
         instanceManager.clearTables(id);
-        // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
-        if (viewingInstanceId === id) reselectViewingAfter(cwd);
+        // 意外退出（被 kill / 挂死自杀）不替用户挑同目录的另一个会话：静默跳走等于什么都没说（验收 O60），
+        // 落空视图让前端显示「会话已中断」。resumeFailed 维持原规则（同 cwd tab 或空表面、不跨工作区）。
+        if (viewingInstanceId === id) reselectViewingAfter(cwd, { stayOnRemoved: !instance.resumeFailed });
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
@@ -2336,6 +2358,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
   instance.transcriptModel = transcriptModel;
   instance.routeGeneration = generation; // B1：switch 聚焦 live 可刷新
+  instance.cliConfigGen = cliConfigGen(cwd); // 与上面注入的 resolvedEnv 同一时刻的配置代数，见 recordCwdDefaultModel
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -2539,7 +2562,10 @@ function openScoutInstance(cwd) {
         // 误删只是少一行提示。取不到旧签名（首次填缓存）则跳过，"不知道"不等于"变了"。
         const prevSig = modelListSignature(modelsCache.get(cwd));
         modelsCache.set(cwd, envelope.payload);
-        if (prevSig && prevSig !== modelListSignature(envelope.payload)) defaultModelByCwd.delete(cwd);
+        if (prevSig && prevSig !== modelListSignature(envelope.payload)) {
+          defaultModelByCwd.delete(cwd);
+          bumpCliConfigGen(cwd); // 配置确实变了：此前 spawn 的实例报的是旧配置下的默认模型
+        }
         saveInitCache();
         pushModelsForCwd(cwd);
         cleanup();
@@ -4060,8 +4086,8 @@ registerSocketConnection(io, socket => {
     if (cwd === null) {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
-      return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
-        hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+      return ack({ currentSessionId: null, sessions: [], pinned: [], open: [], terminalBusy: false, terminalWaiting: false,
+        hasMore: false, canLoadMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
@@ -4069,14 +4095,18 @@ registerSocketConnection(io, socket => {
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
     const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
-    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）每页 MAX_SESSION_LIMIT 条。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
     // history.js 的 SEARCH_SCAN_LIMIT 全量 readdir，不是把 RESULT 抬过 50。
     const all = obj.all === true;
-    const limit = query
-      ? SEARCH_RESULT_LIMIT
+    // 「显示全部」之后的「加载更多」（O81）：pages 按页放宽窗口，硬顶与判据见 sessionListWindow。
+    const { limit, canGrow } = sessionListWindow({
+      query,
+      all,
+      pages: obj.pages,
       // 子文件夹这类项目沿用所属连接根配的条数
-      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT));
+      configuredLimit: sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT,
+    });
     const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
       limit,
       memberOptions,
@@ -4099,12 +4129,21 @@ registerSocketConnection(io, socket => {
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
     const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
-    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
-    // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
+    // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样把它们画在前面（SESSION-02），可实例广播里
+    // 的 title 只来自 sessions.json——终端来的会话那里是 null，画出来是一行没有时间的「新会话」。按 transcript
+    // 补回元数据。listSessionsByIds 只认这个项目（及其成员目录）下的 transcript，别处开着的不会混进来；
+    // 搜索态不补（同 pinned）。
+    const listedIds = new Set([...list, ...pinned].map(s => s.id));
+    const openIds = query ? [] : [...new Set([...agents.values()].map(a => a.sessionId))]
+      .filter(sid => sid && !listedIds.has(sid) && !pendingDeleteIds.has(sid));
+    const open = openIds.length ? await listSessionsByIds(cwd, openIds, { memberOptions }) : [];
+    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分几次调用
+    // 等于把这个成本翻倍，而几组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
     // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
-    const terminal = await annotateTerminalStates(cwd, pinned.length ? [...list, ...pinned] : list);
-    const pinnedRows = pinned.length ? terminal.list.slice(list.length) : [];
-    const pageRows = pinned.length ? terminal.list.slice(0, list.length) : terminal.list;
+    const terminal = await annotateTerminalStates(cwd, [...list, ...pinned, ...open]);
+    const pageRows = terminal.list.slice(0, list.length);
+    const pinnedRows = terminal.list.slice(list.length, list.length + pinned.length);
+    const openRows = terminal.list.slice(list.length + pinned.length);
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
@@ -4115,7 +4154,8 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
+    // canLoadMore：窗口还能再放宽且确实还有更早的——前端据此给「加载更多」，否则回落「可用搜索查找」。
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, canLoadMore: canGrow && hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
@@ -4266,12 +4306,15 @@ registerSocketConnection(io, socket => {
     // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
     isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
+    sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
+    readTranscriptToolResult,
   });
   registerFolderSocketHandlers({
     socket,
     on,
-    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
-    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
+    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）。
+    // readonly：手机上改不了清单时，新建只剩已连接的文件夹里（之外建出来的加不进清单，只会留一个空目录）
+    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs, readonly: workdirStatus.readonlyReason() }),
     addConnectedFolder,
     removeConnectedFolder,
     audit,
@@ -4332,7 +4375,9 @@ registerSocketConnection(io, socket => {
       return ack({ messages: [], error: '会话不存在' });
     }
     try {
-      ack({ messages: await getSessionHistory(sessionId, cwd) }); // M6：async 避免阻塞事件循环
+      // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
+      const { messages, total } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      ack({ messages, total });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }
@@ -4467,12 +4512,14 @@ registerSocketConnection(io, socket => {
     const before = metrics.snapshot().counters;
     const title = '🔔 测试推送 · ccm';
     await pushNotify(title, '如果你看到这条，推送链路是通的');
-    ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
+    // ntfy 是另一条独立通道：等它的结果一起回报（验收 O1——此前不 await，ntfy 投递成功界面也不知道）。
+    // ntfyNotify 自带 8s 超时；前端这条 emit 的 timeout 放到 12s，留出 Web Push 那段的余量，ntfy 挂死时也不会误报成断网。
+    const ntfy = await ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
     const after = metrics.snapshot().counters;
     const sent = (after.push_success ?? 0) - (before.push_success ?? 0);
     const failed = (after.push_failure ?? 0) - (before.push_failure ?? 0);
-    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条`);
-    ack({ ok: true, sent, failed, subscribed: sent + failed > 0 });
+    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条；ntfy ${ntfy}`);
+    ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });
   });
 
   on(socket, 'doctor:run', (_payload, ack) => {
@@ -4651,7 +4698,10 @@ registerSocketConnection(io, socket => {
     // 会话与后台任务，换来一次完全不必要的停机。判据复用 config-file.js 的 reloadKindOf，
     // 不在这里自己写一份（它缺省 restart，方向已经是保守的那边）。
     const restartRequired = keys.some(k => reloadKindOf(k) === 'restart');
-    ack({ ok: true, results: verdict.results, written: keys, restartRequired });
+    // 逐项回执（验收 O48 / O63）：被 shell 环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——
+    // 笼统一句「重启后生效」是假成功。restartRequired 保留原语义给缓存里的旧前端；新前端读 saved。
+    const saved = describeSavedKeys(keys, { shellEnv: getShellEnvSnapshot() });
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired, saved });
   });
 
   // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
@@ -4896,6 +4946,7 @@ registerSocketConnection(io, socket => {
       // 先清旧缓存（前端立即知道模型列表不可用），再由活跃 agent fetchModels 或 scout 补新值。
       modelsCache.delete(cwd);
       defaultModelByCwd.delete(cwd);
+      bumpCliConfigGen(cwd); // 刷新前开着的会话仍用旧配置，它们之后的 init 不再算本目录的默认模型
       saveInitCache();
       // 模型清单一律靠 scout 重新 spawn 去取，**绝不问活跃 agent**——哪怕这个 cwd 正开着会话。
       // 两个原因叠加，都不属于「缓存过期」那一类，加刷新次数、延长等待都解决不了：
@@ -5195,6 +5246,12 @@ startApprovalRetentionSweep();
 projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
 httpServer.listen(port, host, () => {
+  // 非 macOS 的重启历史唯一来源：sample() 在这些平台上直接早退，面板「重启记录」段因此一直是空的。
+  // server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
+  // darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
+  // **必须在绑定成功之后**（验收 O18）：此前在模块求值时就写，缺令牌被拒、端口被占这类没起来的启动，
+  // 退出前已记了一条 started / restarted，面板把它们算成重启，崩溃循环告警的频率跟着虚高。
+  serviceSampler.recordSelfStart();
   // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
   // **必须放在绑定成功之后**：早于此处会给一个根本没起来的 server（如端口被占）开出窗口，
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。

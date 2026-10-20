@@ -370,6 +370,22 @@ export function createEnvConfigPanel({
     body.scrollTop = 0;
   }
 
+  // 逐项回执（验收 O48 / O63）：服务端按项给出 applied / restart / shadowed（describeSavedKeys）。
+  // 被环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——它不算「需要重启」，单独说清要 unset 谁。
+  function describeReceipt(saved) {
+    const keysOf = (effect) => saved.filter((x) => x.effect === effect).map((x) => x.key);
+    const parts = [];
+    const applied = keysOf('applied');
+    const restart = keysOf('restart');
+    if (applied.length) parts.push(`${t('已生效：')}${applied.join('、')}`);
+    if (restart.length) parts.push(`${t('重启后生效：')}${restart.join('、')}`);
+    for (const x of saved.filter((y) => y.effect === 'shadowed')) {
+      parts.push(t('{key} 被环境变量 {vars} 压着：写进文件也不生效，重启后仍是环境变量的值，先 unset 再重启')
+        .replace('{key}', x.key).replace('{vars}', (x.shadowedBy || []).join(', ')));
+    }
+    return { text: parts.join('；'), needsRestart: restart.length > 0 };
+  }
+
   async function save() {
     const changes = collectChanges();
     if (Object.keys(changes).length === 0) return;
@@ -416,18 +432,22 @@ export function createEnvConfigPanel({
     // 会话与后台任务。同一份面板里 WORKDIRS 的说明写着「改完即生效，无需重启」，保存后却弹重启，
     // 两句话自相矛盾。
     // 严格判 `=== false`：字段缺失（旧 server）时回落到提示重启，方向保守 —— 多点一次重启无害，
-    // 漏提示则是「改了没生效还以为生效了」。
-    if (res.restartRequired === false) {
-      hint.textContent = t('已写入 N 项，已生效').replace('N', String(n));
+    // 漏提示则是「改了没生效还以为生效了」。有逐项回执（saved）时以它为准。
+    const receipt = Array.isArray(res.saved) ? describeReceipt(res.saved) : null;
+    const needsRestart = receipt ? receipt.needsRestart : res.restartRequired !== false;
+    if (!needsRestart) {
+      hint.textContent = receipt ? receipt.text : t('已写入 N 项，已生效').replace('N', String(n));
       return;
     }
 
     // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
     if (!canRestart()) {
-      hint.textContent = t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
+      hint.textContent = receipt
+        ? `${receipt.text}${t('（本进程不是常驻托管，请到电脑上重启）')}`
+        : t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
       return;
     }
-    hint.textContent = t('已写入 N 项，重启后生效').replace('N', String(n));
+    hint.textContent = receipt ? receipt.text : t('已写入 N 项，重启后生效').replace('N', String(n));
     const btn = el('button', 'hit-44 px-3 py-2 rounded-xl border border-line text-xs text-ink active:bg-sunk', t('立即重启'));
     btn.type = 'button';
     btn.id = 'envConfigRestart';

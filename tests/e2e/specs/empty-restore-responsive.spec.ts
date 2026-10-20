@@ -49,6 +49,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O76（AC-21-08）：手机宽度下顶栏「回首页」「会话日志」「新建会话」与抽屉按钮的可点范围只有 36×36，
+  // 而输入区的按钮都扩到了 44 以上。每个按钮的可点范围要到 44×44（视觉不变），且相邻按钮的热区不能互相压住。
+  test('P0-19e 手机顶栏按钮的可点范围到 44×44，且不压住相邻按钮', async ({ page }) => {
+    await gotoMock(page);
+    const ids = ['btnSessions', 'btnHome', 'btnConsole', 'btnNew'];
+    const report = await page.evaluate((list) => list.map(id => {
+      const btn = document.getElementById(id);
+      if (!btn || btn.offsetParent === null) return { id, visible: false };
+      const r = btn.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const hit = (x, y) => document.elementFromPoint(x, y)?.closest('button')?.id || null;
+      return {
+        id, visible: true,
+        // 按钮边框外 3px（44 的热区比 36 的按钮每边多 4px）
+        above: hit(cx, r.top - 3), below: hit(cx, r.bottom + 3),
+        left: hit(r.left - 3, cy), right: hit(r.right + 3, cy),
+      };
+    }), ids);
+    for (const r of report.filter(x => x.visible)) {
+      expect(r.above, `${r.id} 上沿外 3px 点不到它`).toBe(r.id);
+      expect(r.below, `${r.id} 下沿外 3px 点不到它`).toBe(r.id);
+      expect([r.id, null], `${r.id} 左边外 3px 落到了别的按钮上`).toContain(r.left);
+      expect([r.id, null], `${r.id} 右边外 3px 落到了别的按钮上`).toContain(r.right);
+    }
+    expect(report.filter(x => x.visible).length, '顶栏按钮一个都没找到').toBeGreaterThanOrEqual(3);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
     await gotoMock(page);
 

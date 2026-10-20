@@ -77,7 +77,7 @@
   <header class="flex items-center justify-between px-4 py-2.5 bg-surface border-b border-line shrink-0 sticky top-0 z-20">
     <!-- Left Section: Sidebar/Workspaces Toggler -->
     <div class="relative flex items-center gap-1.5 shrink-0">
-      <button id="btnSessions" class="relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
+      <button id="btnSessions" class="hit-44-tight relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5 text-ink-soft">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
@@ -95,7 +95,7 @@
       <!-- 顶栏文字 chip：把上面两颗角标（纯色点 / 状态图标）的含义写成人话——手机没有 hover，title 等于不存在。
            按优先级只显一条（未连接 > 需要你 N > 其他工作区 · 需要你/出错），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。
            只说「点开就能处理」的事：推送失败与其他工作区 busy 均不占此位（后者由上面 #sessionsDot 图标表达）。 -->
-      <button id="attentionChip" type="button" class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
+      <button id="attentionChip" type="button" data-opens-drawer class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
     </div>
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
@@ -119,16 +119,16 @@
     </div>
 
     <!-- Right Section: Home / Log / New Session（三钮同材质，＋ 不单独上色） -->
-    <div id="headerActions" class="flex items-center justify-end gap-1 min-w-0 shrink-0">
+    <div id="headerActions" class="flex items-center justify-end gap-2 min-w-0 shrink-0">
       <!-- 回空首页（最近工作区与会话枢纽；不清会话指针，与 ＋ 新建分工） -->
-      <button id="btnHome" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
+      <button id="btnHome" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 2.25 21.75 12M4.5 10.5v9.75a.75.75 0 00.75.75h4.5v-6h4.5v6h4.5a.75.75 0 00.75-.75V10.5" />
         </svg>
       </button>
 
       <!-- 会话运行日志：排障高频保留在顶栏 -->
-      <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看当前会话运行日志" aria-label="查看会话日志">
+      <button id="btnConsole" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看当前会话运行日志" aria-label="查看会话日志">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 5.25A1.5 1.5 0 016 3.75h12A1.5 1.5 0 0119.5 5.25v13.5A1.5 1.5 0 0118 20.25H6A1.5 1.5 0 014.5 18.75V5.25z" />
           <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 9.75 10.5 12l-2.25 2.25M12.75 14.25h3" />
@@ -136,7 +136,7 @@
       </button>
 
       <!-- 新会话 ＋：与 home/日志同材质 -->
-      <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
+      <button id="btnNew" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
@@ -251,7 +251,7 @@
       <p id="sessionBlockedReason" class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2" data-testid="session-blocked-reason"></p>
       <div class="flex flex-col gap-2 w-full max-w-xs">
         <button id="sessionBlockedRetry" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-retry">重试打开</button>
-        <button id="sessionBlockedSessions" type="button" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
+        <button id="sessionBlockedSessions" type="button" data-opens-drawer class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="session-blocked-sessions">选择其他会话</button>
       </div>
     </div>
   </div>
@@ -267,8 +267,13 @@
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
       <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
-           不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
-      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
+           显示时「允许」一直禁用（验收 O28）：回传的就是这份展示内容，服务端按锚定指纹判必然拒跑。
+           只剩拒绝或刷新重取，见 app/approval-questions.js 的 syncPermButtons。 -->
+      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" data-testid="perm-integrity-warn">
+        <div>⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，已禁止「允许」</div>
+        <div class="mt-1 text-ink-soft">可以拒绝，或刷新页面从服务端重新取这张审批</div>
+        <button type="button" id="permIntegrityReload" data-testid="perm-integrity-reload" class="mt-1.5 px-2.5 py-1 rounded-md border border-danger/50 text-danger font-medium">刷新重取</button>
+      </div>
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
       <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
@@ -317,7 +322,7 @@
       <div id="questionText" class="text-sm mb-2 text-ink"></div>
       <div id="questionMultiHint" class="hidden text-xs text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
       <div id="questionOptions" class="space-y-2 mb-3"></div>
-      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">确认选择</button>
+      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">确认选择</button>
       <div id="questionOtherWrap" class="mb-3 space-y-2">
         <button type="button" id="questionOtherToggle" class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3">其他…</button>
         <div id="questionOtherPanel" class="hidden space-y-2">
@@ -529,7 +534,7 @@
           </span>
           <!-- 点按复制：独立按钮，stopPropagation 避免误触展开/折叠 -->
           <button type="button" id="cliStatusCopy" class="shrink-0 px-1.5 py-0.5 rounded text-[10px] text-ink-faint hover:text-ink hover:bg-sunk active:scale-95" data-testid="cli-status-copy" title="复制状态摘要" aria-label="复制状态摘要">复制</button>
-          <span class="cli-arrow text-xs text-ink-faint opacity-60 transition-transform duration-200 shrink-0">▼</span>
+          <span class="cli-arrow text-xs text-ink-faint transition-transform duration-200 shrink-0">▼</span>
         </summary>
         <div id="cliStatus" class="px-3 py-2 text-xs leading-relaxed bg-surface text-ink-soft space-y-1"></div>
       </details>
@@ -553,6 +558,7 @@
       </div>
 
       <!-- E17：待发送附件托盘 -->
+      <div id="attachNotice" class="hidden px-2 pb-1 text-[11px] text-ink-soft" data-testid="attach-notice" role="status" aria-live="polite"></div>
       <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
 
       <!-- 子代理/Workflow 活动横幅 -->
@@ -641,7 +647,9 @@
         <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
           <!-- 可滚动 chip 区：摘要可能很长，横向滚；动作区不进滚动 -->
           <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
-            <div id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" data-testid="pill-defaults">
+            <!-- 原生 button（验收 O13）：它是模型 / 权限 / 思考磁贴的唯一入口，div 版本键盘打不开设置面板。
+                 读屏名称就是可见的三段摘要，title 补「会话设置」/ 完整串 -->
+            <button type="button" id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" aria-haspopup="dialog" data-testid="pill-defaults">
               <span id="pillModelText" class="pill-defaults-part pill-model">默认</span>
               <span class="pill-defaults-sep" aria-hidden="true">·</span>
               <span id="pillPermText" class="pill-defaults-part pill-perm">Manual</span>
@@ -650,7 +658,7 @@
                 <span class="pill-defaults-sep" aria-hidden="true">·</span>
                 <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
-            </div>
+            </button>
             <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
             <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>
@@ -1034,6 +1042,7 @@
         <div id="hooksBridgeSection" class="hidden">
           <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span></div>
           <div id="hooksBridgeBody" class="space-y-2"></div>
+          <div id="hooksBridgeResult" class="hidden text-[11px] px-1 mt-1.5 break-words" data-testid="hooks-bridge-result" role="status" aria-live="polite"></div>
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
         </div>
 
@@ -1042,6 +1051,7 @@
         <div id="statuslineBridgeSection" class="hidden">
           <div class="text-xs font-semibold text-ink-soft mb-2">📊 <span>终端状态栏</span></div>
           <div id="statuslineBridgeBody" class="space-y-2" data-testid="statusline-bridge-body"></div>
+          <div id="statuslineBridgeResult" class="hidden text-[11px] px-1 mt-1.5 break-words" data-testid="statusline-bridge-result" role="status" aria-live="polite"></div>
           <div class="text-[10px] text-ink-faint px-1 mt-1.5">开启后，你在电脑终端里跑的会话，模型 / 额度 / 上下文用量也会同步到手机。它接管 ~/.claude/settings.json 的 statusLine 命令并原样透传你原来的输出。</div>
         </div>
 

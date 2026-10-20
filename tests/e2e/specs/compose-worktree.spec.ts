@@ -107,6 +107,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 2026-10-10 真机：没勾 worktree 时也能点胶囊选 feat，胶囊一直写 feat，会话却开在 main 的主工作树，
   // 没有任何提示。源分支只对新 worktree 有意义（桌面端同样只在 useWorktree 为真时才传 sourceBranch），
   // 所以没勾时胶囊锁定、如实显示仓库当前分支；勾上→换分支→取消，也要退回当前分支。
+  // 验收 O54（AC-05-03）：锁定原因「勾选『在新 worktree 里开』后可换源分支」只放在 title（悬停提示）里，手机上点了
+  // 没有任何反应、也看不到原因，像是选分支坏了。点一下就把原因写出来。
+  test('P0-40e 没勾 worktree 时点分支胶囊：当场说清为什么选不了', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    const branchChip = surface.locator('[data-testid="compose-source-branch"]');
+    await expect(branchChip).toBeDisabled();
+    await branchChip.click({ force: true });
+    await expect(surface.locator('[data-testid="compose-branch-locked-hint"]'), '点了没有任何反应').toHaveText('勾选「在新 worktree 里开」后可换源分支');
+    await expect(surface.locator('[data-testid="compose-branch-list"]')).toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-40d 没勾 worktree 时分支胶囊锁定在当前分支：选不了，取消勾选也退回', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
