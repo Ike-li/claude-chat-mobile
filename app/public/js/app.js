@@ -3586,8 +3586,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       linesArr.push(row([
         p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
         p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
-        p.source?.kind === 'cli' && { text: 'source CLI', cls: 'text-info' },
-        p.source?.kind === 'sdk' && { text: 'source Web SDK', cls: 'text-ink-faint' }
+        // 来源标签跟界面语言走（验收 O43②）；「复制」出去贴 issue 的那份（formatStatuslineCopyText）保持英文
+        p.source?.kind === 'cli' && { text: t('来源：终端（CLI）'), cls: 'text-info' },
+        p.source?.kind === 'sdk' && { text: t('来源：网页（SDK）'), cls: 'text-ink-faint' }
       ]));
 
       // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
