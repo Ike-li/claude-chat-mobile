@@ -1591,7 +1591,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
         replayBuffer.resolve(replayHandle, 'discard');
-        if (socket.connected) socket.disconnect(); socket.connect(); return;
+        // 只有还连着（ack 超时、连接可疑）才自己重连。没连着时这个回调多半是 socket.io-client 在 Manager.onclose 里
+        // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
+        // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
+        // 每次断线 reconnect() 第一行就返回，页面停在「自动重连中…」（验收 O49，对照 socket.io-client 4.8.4 源码）。
+        if (socket.connected) forceReconnect();
+        return;
       }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
       // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
@@ -1755,6 +1760,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.persisted 只有 pageshow 传（true=真·bfcache 恢复）。门控判定见 logic 的 shouldAttemptReconnect：
   // 凭据门开着、或 pageshow 的普通加载分支，一律不发起——那种重连必然失败，唯一效果是把服务端的
   // 退避锁越推越长，正是「只错一次却被告知登录尝试过多」的触发源（2026-09-02）。
+  // 强制干净重连：disconnect() 经 Manager._destroy → _close 清掉 _reconnecting 与残留的重连定时器、关掉挂住的 engine，
+  // 再 connect() 重新握手。只调 socket.connect() 不够——Manager 正在（或卡在）重连中时它什么都不做，而服务暂停又恢复时
+  // 那次握手可能挂着要等满 20s 连接超时，「立即重试」点了没反应（验收 O49）。
+  function forceReconnect() {
+    socket.disconnect();
+    socket.connect();
+  }
   function reconnectIfNeeded(opts = {}) {
     if (!shouldAttemptReconnect({
       authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
@@ -1765,7 +1777,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     _reconnectTimer = setTimeout(() => {
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
-      if (foregroundReconnectAction(socket.connected) === 'connect') socket.connect();
+      if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();
       else {
         requestSync({ probe: true });
         measureRtt(); // 前台唤醒立即刷新延迟（不依赖 5s 周期）
