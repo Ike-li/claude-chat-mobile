@@ -154,6 +154,17 @@ function pinnedRowsFor(cwd, rows) {
   return pool.filter(s => s && s.id && !inPage.has(s.id)
     && (mockReadState.manual[s.id] ?? -Infinity) > (mockReadState.seen[s.id] ?? -Infinity));
 }
+// open（验收 O46）：开着、但不在本页也不在 pinned 里的会话的元数据（同真 server 的 session:list）。
+// 抽屉照样把它们画在前面（SESSION-02），标题与时间用这里的，不再是实例广播里的 title（终端来的会话那里是 null）。
+// 池同 pinnedRowsFor：只有主 cwd 会截断。transcript 被搬走的（mainCwdSessions 里没有）自然不在其中。
+function openRowsFor(cwd, listed) {
+  const inList = new Set((listed || []).map(s => s && s.id));
+  const live = new Set(mockInstances.map(i => i.sessionId).filter(Boolean));
+  const pool = cwd === '/Users/you/code/claude-chat-mobile'
+    ? mainCwdSessions().filter(s => !deletedSessionIds.has(s.id))
+    : [];
+  return pool.filter(s => s && s.id && live.has(s.id) && !inList.has(s.id));
+}
 // 逐 key 取较晚时间戳，与真 server 的 read-state.js#mergeLatest 同语义。
 function mergeIntoReadState(field, incoming) {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
@@ -833,6 +844,13 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
   if (!sessionId) return res.status(400).json({ ok: false });
   mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
+  res.json({ ok: true });
+});
+
+// 同 test:bg-locked，但不占一轮：那条命令不发 result，这一轮一直在途，之后就发不出别的命令。
+// P0-11aj3 要先让当前会话挂一张待批卡（test:permission），再去撞打不开的会话。
+app.post('/__arm-bg-locked', (_req, res) => {
+  bgLockedArmed = true;
   res.json({ ok: true });
 });
 
@@ -1567,7 +1585,8 @@ io.on('connection', socket => {
       ? (res) => {
         const rows = res?.sessions || [];
         const pinned = query ? [] : pinnedRowsFor(cwd, rows);
-        rawCallback({ ...res, pinned, readState: readStateForRows([...rows, ...pinned]) });
+        const open = query ? [] : openRowsFor(cwd, [...rows, ...pinned]);
+        rawCallback({ ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open]) });
       }
       : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
@@ -4904,13 +4923,18 @@ io.on('connection', socket => {
       // EnterWorktree 整份迁到了别的 project 目录；或被分页挤出本页）。mainCwdSessions 里没有这个 id。
       // test:live-unowned：同样在跑，但 cwd 不在任何工作区之下（刚进了仓库外的平级 worktree）——
       // 用 mockDirsOverride 把 dirs 钉在进场前的列表上，否则缺省口径会把它的 cwd 现算成一个新工作区。
-      commands: ['test:live-not-in-list', 'test:live-unowned'],
+      // test:live-paged-out（验收 O46）：开着的是一条 transcript 还在、只是被分页挤出本页的旧会话。真 server 上
+      // 从终端来的会话不在 sessions.json 里，实例广播的 title 是 null；元数据要靠 session:list 的 open 补回。
+      commands: ['test:live-not-in-list', 'test:live-unowned', 'test:live-paged-out'],
       run: async ({ cmd }) => {
         const unowned = cmd === 'test:live-unowned';
         if (unowned) mockDirsOverride = mockDirs();
+        if (cmd === 'test:live-paged-out') historyOverflowMode = true;
         const inst = unowned
           ? { instanceId: 'inst_sibling', cwd: '/Users/you/code/claude-chat-mobile-feat-x', sessionId: 'mock-session-sibling', title: '平级 worktree 里的会话' }
-          : { instanceId: 'inst_moved', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-moved-away', title: '搬走了 transcript 的会话' };
+          : cmd === 'test:live-paged-out'
+            ? { instanceId: 'inst_paged', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-older-migration', title: null }
+            : { instanceId: 'inst_moved', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-moved-away', title: '搬走了 transcript 的会话' };
         if (!mockInstances.some(i => i.instanceId === inst.instanceId)) {
           mockInstances.push({ ...inst, state: 'busy', permissionMode: 'default', effort: null, model: activeModel });
         }

@@ -4521,7 +4521,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 点抽屉外面任意处 = 收抽屉。通用确认 sheet（z-50，盖在抽屉之上）不算「外面」：从抽屉里发起的
     // 确认（长按标为未读 / 🗑 删除）答完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
     const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal'));
-    if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && !insideConfirmSheet && e.target.isConnected)
+    // 本身就是「打开抽屉」入口的按钮（顶栏「需要你」chip、落地页「选择其他会话」）：同一次点击冒泡到这里，
+    // 不豁免就是开了又立刻关上（验收 O37）。新入口在 index.html 上标 data-opens-drawer 即可。
+    const opensDrawer = Boolean(e.target.closest?.('[data-opens-drawer]'));
+    if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && !insideConfirmSheet && !opensDrawer && e.target.isConnected)
       closeLeftSidebar();
   });
   const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
@@ -7260,7 +7263,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
       // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
       // worktree 的会话由服务端并进所属仓库的列表（行带自己的 cwd），不自成一节。
-      const renderRows = (sessions, hasMore, total = null, pinned = []) => {
+      const renderRows = (sessions, hasMore, total = null, pinned = [], open = []) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
         mountSearch();
@@ -7273,9 +7276,14 @@ import { createGateFocusController } from './app/focus-layers.js';
           }
           // SESSION-02：在跑、但列表没返回的会话（被分页挤出、transcript 被迁走）照样画一行，排在前面——
           // 否则它正在跑，抽屉里却既看不见也关不掉。
+          // 标题与时间用 session:list 的 open（服务端按 transcript 补回的元数据，验收 O46）：实例广播里的 title
+          // 只来自 sessions.json，终端来的会话那里是 null，画出来就是一行没有时间的「新会话」。
+          // transcript 被搬走的找不到元数据，才回落实例自己的 title。
           const listedIds = new Set([...sessions, ...pinned].map(s => s.id));
+          const openById = new Map(open.map(s => [s.id, s]));
           for (const inst of orphanLiveRows(liveMap, listedIds)) {
-            rowsHost.appendChild(sessionRow({ id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+            const meta = openById.get(inst.sessionId) || { id: inst.sessionId, title: inst.title, lastUsedAt: null, entrypoint: null };
+            rowsHost.appendChild(sessionRow(meta, inst, cwd));
           }
           // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。
           // 置顶而不是按时间插回原位：插回原位等于没补——它本来就是因为排得太后才看不见的。
@@ -7312,10 +7320,11 @@ import { createGateFocusController } from './app/focus-layers.js';
               const nextHasMore = !!state?.hasMore;
               const nextTotal = Number.isFinite(state?.total) ? state.total : null;
               const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
+              const nextOpen = Array.isArray(state?.open) ? state.open : [];
               unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
               updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned });
-              renderRows(all, nextHasMore, nextTotal, nextPinned);
+              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, open: nextOpen });
+              renderRows(all, nextHasMore, nextTotal, nextPinned, nextOpen);
             });
           };
           rowsHost.appendChild(more);
@@ -7340,7 +7349,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const cachedEntry = sessionsCache.get(cwd);
         const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
         if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || []);
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.open || []);
         } else {
           const rowsHost = bindSessionRowsHost(container, el);
           rowsHost.innerHTML = '';
@@ -7394,6 +7403,8 @@ import { createGateFocusController } from './app/focus-layers.js';
         // pinned：手动标记但被 limit 挤出本页的会话，服务端单独补回（旧服务端不发这个字段 → 空数组，
         // 功能静默退回「标了就可能找不回来」，但不报错、不影响本页任何一行）。
         const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
+        // open：开着、被分页挤出本页的会话的元数据（验收 O46）；旧服务端不发 → 空数组，那几行回落实例自己的 title
+        const open = Array.isArray(state?.open) ? state.open : [];
         // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
@@ -7406,13 +7417,15 @@ import { createGateFocusController } from './app/focus-layers.js';
           prevHasMore: prevEntry?.hasMore,
           prevTotal: prevEntry?.total ?? null,
           prevPinned: prevEntry?.pinned,
+          prevOpen: prevEntry?.open,
           nextSessions: sessions,
           nextHasMore: hasMore,
           nextTotal: total,
           nextPinned: pinned,
+          nextOpen: open,
         });
-        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned });
-        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned);
+        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, open });
+        if (willRerender || readChanged) renderRows(sessions, hasMore, total, pinned, open);
       });
     };
 
@@ -8113,6 +8126,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   function hideSessionBlockedSurface() {
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
+    approvals.resume();
   }
   // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
   // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
@@ -8160,6 +8174,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       $('sessionBlockedSessions').onclick = () => { haptic('tap'); hideSessionBlockedSurface(); openLeftSidebar(); };
     }
     surface.classList.remove('hidden');
+    // 底下那个会话（视图没动）的审批 / 提问卡是 z-40 的 sheet，会浮在这张落地页上，读起来像是这个打不开的会话的
+    // （验收 O38）。收起而不是清掉：卡还是原会话的，返回时原样恢复。
+    approvals.suspend();
   }
 
   // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→

@@ -4062,7 +4062,7 @@ registerSocketConnection(io, socket => {
     if (cwd === null) {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
-      return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
+      return ack({ currentSessionId: null, sessions: [], pinned: [], open: [], terminalBusy: false, terminalWaiting: false,
         hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
@@ -4101,12 +4101,21 @@ registerSocketConnection(io, socket => {
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
     const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
-    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
-    // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
+    // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样把它们画在前面（SESSION-02），可实例广播里
+    // 的 title 只来自 sessions.json——终端来的会话那里是 null，画出来是一行没有时间的「新会话」。按 transcript
+    // 补回元数据。listSessionsByIds 只认这个项目（及其成员目录）下的 transcript，别处开着的不会混进来；
+    // 搜索态不补（同 pinned）。
+    const listedIds = new Set([...list, ...pinned].map(s => s.id));
+    const openIds = query ? [] : [...new Set([...agents.values()].map(a => a.sessionId))]
+      .filter(sid => sid && !listedIds.has(sid) && !pendingDeleteIds.has(sid));
+    const open = openIds.length ? await listSessionsByIds(cwd, openIds, { memberOptions }) : [];
+    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分几次调用
+    // 等于把这个成本翻倍，而几组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
     // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
-    const terminal = await annotateTerminalStates(cwd, pinned.length ? [...list, ...pinned] : list);
-    const pinnedRows = pinned.length ? terminal.list.slice(list.length) : [];
-    const pageRows = pinned.length ? terminal.list.slice(0, list.length) : terminal.list;
+    const terminal = await annotateTerminalStates(cwd, [...list, ...pinned, ...open]);
+    const pageRows = terminal.list.slice(0, list.length);
+    const pinnedRows = terminal.list.slice(list.length, list.length + pinned.length);
+    const openRows = terminal.list.slice(list.length + pinned.length);
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
@@ -4117,7 +4126,7 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
