@@ -127,8 +127,15 @@ test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
       assert.equal(listDir(cwd, 'link-outside', scopeDirs), null);
     }
     assert.equal(listDir(cwd, '../outside', scopeDirs), null);
-    assert.equal(listDir(cwd, 'does-not-exist', scopeDirs), null);
-    assert.equal(listDir(cwd, 'README.md', scopeDirs), null); // 文件非目录返回 null
+    assert.equal(listDir(cwd, '../outside/does-not-exist', scopeDirs), null, '范围外不存在的目录照旧是越界');
+  });
+
+  // 验收 O39 / O80：前端点 symlink / special 条目时先试 browse:list、失败再试 browse:read。范围内的文件、FIFO、
+  // 已经不在的目录，原来都回 null，与越界同形，点一下就在安全日志里留越界记录。交回可判别值，调用方不记越界。
+  test('范围内但不是目录（普通文件、FIFO）回 {notDirectory:true}；已经不在的回 {notFound:true}', () => {
+    assert.deepEqual(listDir(cwd, 'README.md', scopeDirs), { notDirectory: true });
+    if (process.platform !== 'win32') assert.deepEqual(listDir(cwd, 'named.pipe', scopeDirs), { notDirectory: true });
+    assert.deepEqual(listDir(cwd, 'does-not-exist', scopeDirs), { notFound: true });
   });
 
   test('FI-001: 文件在 readdir 后被删除时跳过，不抛出异常', () => {
@@ -223,18 +230,28 @@ test.describe('SCOPE-01 & FILE-02: readFile 内容分片与特殊文件闸', () 
     assert.deepEqual(combined, rawBytes);
   });
 
-  test('越界访问、指向目录或不存在文件均返回 null', () => {
+  test('越界访问（symlink 逃逸、../、范围外不存在）返回 null；范围内的目录读不了但不是越界', () => {
     if (process.platform !== 'win32') {
       assert.equal(readFile(cwd, 'link-outside/secret.txt', scopeDirs), null);
     }
     assert.equal(readFile(cwd, '../outside/secret.txt', scopeDirs), null);
-    assert.equal(readFile(cwd, 'src', scopeDirs), null);
-    assert.equal(readFile(cwd, 'not-found.txt', scopeDirs), null);
+    // 指向目录：这个夹具原来没有 src，那一行测到的其实是「不存在」——真建一个目录。范围内的目录不是越界（验收 O39 同类）
+    mkdirSync(join(cwd, 'a-dir'), { recursive: true });
+    assert.deepEqual(readFile(cwd, 'a-dir', scopeDirs), { notOpenable: true });
+    assert.equal(readFile(cwd, '../outside/not-found.txt', scopeDirs), null, '范围外不存在的路径照旧是越界');
   });
 
-  test('FILE-02: readFile 遇到 FIFO 管道立即返回 null，不调用 openSync 阻塞', { skip: process.platform === 'win32' }, () => {
+  // 验收 O80：文件面板开着时文件被删或改名，点旧条目被记成「越界访问被拒」。范围内已经不在的东西
+  // 交回可判别值，调用方不记 scope_violation；访问照样不成功。
+  test('范围内已经不在的文件：readFile 返回 {notFound:true}，不是与越界同形的 null', () => {
+    assert.deepEqual(readFile(cwd, 'not-found.txt', scopeDirs), { notFound: true });
+    assert.deepEqual(readFile(cwd, 'gone-dir/not-found.txt', scopeDirs), { notFound: true });
+  });
+
+  // 验收 O39：范围内的 FIFO / socket 是合法的东西，只是读不了。原来回 null，与越界同形，点一下记一条越界。
+  test('FILE-02: readFile 遇到 FIFO 管道立即返回 {notOpenable:true}，不调用 openSync 阻塞，也不与越界同形', { skip: process.platform === 'win32' }, () => {
     const res = readFile(cwd, 'pipe.fifo', scopeDirs);
-    assert.equal(res, null);
+    assert.deepEqual(res, { notOpenable: true });
   });
 
   // 范围【内】的合法 symlink（如 dotfile 仓、node_modules/.bin）与「越界逃逸」是两回事：
@@ -306,11 +323,21 @@ test.describe('FILE-01 & FILE-02: writeFileInScope 编辑器写回与并发保�
     assert.equal(res.code, 'too_large');
   });
 
-  test('目标文件不存在拒绝（不隐式创建新文件）', () => {
+  // 范围内已经不在的文件（编辑器开着时被删 / 改名）回 not_found，不按越界记（验收 O80；此前这里钉的是 scope）
+  test('目标文件不存在拒绝（不隐式创建新文件），code 是 not_found 不是 scope', () => {
     const res = writeFileInScope(cwd, 'non-existent.txt', 'content', scopeDirs, { baseHash: sha256('') });
     assert.equal(res.ok, false);
-    assert.equal(res.code, 'scope');
+    assert.equal(res.code, 'not_found');
     assert.equal(existsSync(join(cwd, 'non-existent.txt')), false);
+  });
+
+  // 验收 O19：越界写入不带基线哈希（或内容不是字符串）时，先被那两道闸拦下，记成普通 file_write/denied，
+  // 漏掉本该报警的 scope_violation。范围门必须排在所有入参检查之前（同上面 too_large 那条的理由）。
+  test('越界写入：缺基线哈希、内容不是字符串，也一律先按越界拒（code scope）', () => {
+    assert.equal(writeFileInScope(cwd, '../outside/secret.txt', 'x', scopeDirs, {}).code, 'scope');
+    assert.equal(writeFileInScope(cwd, '../outside/secret.txt', 42, scopeDirs, {}).code, 'scope');
+    if (process.platform !== 'win32') assert.equal(writeFileInScope(cwd, 'link-outside/secret.txt', 'x', scopeDirs, { baseHash: '' }).code, 'scope');
+    assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'outside');
   });
 
   test('目标是目录拒绝（code: not_file）', () => {
@@ -367,6 +394,7 @@ test.describe('writeFileInScope 的拒绝必须带 ok:false，不能只靠 code 
   const scopeDirs = [cwd];
   test.after(() => rmSync(base, { recursive: true, force: true })); // safe-rm: mkdtemp 一次性目录
 
+  // relPath 写成绝对路径：join 之后其实是 cwd 下一个不存在的路径，但这种入参本身就是越界意图，照旧按越界记
   test('越界路径 → ok:false 且 code:scope', () => {
     const outside = mkdtempSync(join(tmpdir(), 'ccm-inv-write-outside-'));
     try {
@@ -397,10 +425,13 @@ test.describe('writeFileInScope 的拒绝必须带 ok:false，不能只靠 code 
     assert.equal(readFileSync(big, 'utf8').length, MAX_BROWSE_BYTES + 1, '原文件不得被截断或覆盖');
   });
 
-  test('不存在的文件 → ok:false（编辑器写回不负责新建）', () => {
+  test('不存在的文件 → ok:false（编辑器写回不负责新建）；范围内已经不在的回 not_found，不按越界算（验收 O80）', () => {
     const res = writeFileInScope(cwd, 'never-existed.txt', 'x', scopeDirs, { baseHash: 'x' });
     assert.equal(res.ok, false);
+    assert.equal(res.code, 'not_found');
+    assert.equal(writeFileInScope(cwd, '../outside/never-existed.txt', 'x', scopeDirs, { baseHash: 'x' }).code, 'scope');
   });
+
 });
 
 test('空字符串 baseHash 与缺失同等拒绝（typeof 判串挡不住空串）', () => {

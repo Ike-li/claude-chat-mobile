@@ -252,7 +252,7 @@ IdP 管的公网 Host 上是「对方已过 IdP」，其余入口上是「对方
 
 `Sec-CH-UA-Model`（UA Client Hints）是 Chromium 系拿真实机型的唯一途径，但它要求**安全上下文**——局域网 `http://` 入口下不可用，恰好是最需要分辨的那一档。故本产品不走这条路。
 
-**别名是唯一对所有平台都成立的分辨手段**：用户在列表里点 ✎ 就地起名，存进 `device-profiles.json` 的 `alias`，设了就压过所有自动信息。归一在 `normalizeDeviceAlias`（剥控制字符 → 折叠空白 → 按**码点**限长 24；空白等于清除）。改名走 `user:renameTrustedDevice`，寻址同吊销用 `shortId`，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。
+**别名是唯一对所有平台都成立的分辨手段**：用户在列表里点 ✎ 就地起名，存进 `device-profiles.json` 的 `alias`，设了就压过所有自动信息。归一在 `normalizeDeviceAlias`（控制字符与格式字符换成空格 → 折叠空白 → 按**码点**限长 24；空白等于清除）。换成空格而不是删掉：删掉会把用户分开写的两段拼成一个词。改名走 `user:renameTrustedDevice`，寻址同吊销用 `shortId`，但**没有自改守卫**——给自己这台起名不像吊销那样会把自己踢下线。
 
 Web 侧那份列表经 `agent:event` 的 `trusted_devices` 下发，**载荷里没有任何全量 token**，只有 `shortId`（前 8…后 4）+ `kind`/`browser`/`model`/`alias`/`ua`/`ip`/`approvedAt`/`isCurrent`，顶层另带 `accessBypassActive`（告诉界面这张表此刻对隧道流量是否失效）；吊销走 `user:revokeTrustedDevice` 并按 `shortId` 反查，0 命中或多命中一律拒绝、绝不任选一条。这条红线守的不是「防局域网窃听」（该广播只发给已批准连接），而是**让吊销真的能吊销**：一台拿到过全量信任表的设备，日后被吊销时手里仍握着其余设备的 token。同理，当前这台设备在 Web 上不给吊销按钮（服务端也拦），否则一键就能把自己踢下线，若那是唯一在线的可信端就只能回到电脑前才能重批。
 

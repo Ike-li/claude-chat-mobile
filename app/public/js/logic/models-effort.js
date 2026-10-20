@@ -111,6 +111,32 @@ export function resolveSendModel({ selectValue = '', fullModel = '', modelsList 
   return wire || raw;
 }
 
+// 某个模型名落在哪张磁贴上（验收 O53）。用户点的档位 id 精确命中优先；否则依次拿「带网关后缀的全名」与
+// 「去后缀」匹配 value 或 resolvedModel——init 报的在跑模型多半是某张磁贴的 wire，不是档位 id。
+// 都不中返回 ''：列表里确实没有它，调用方才补一张「当前加载模型」卡。
+export function modelTileValueFor(model, modelsList, gatewaySuffix = '') {
+  const m = String(model || '').trim();
+  if (!m) return '';
+  const entries = (Array.isArray(modelsList) ? modelsList : [])
+    .map(e => (typeof e === 'string' ? { value: e } : e))
+    .filter(e => e && e.value);
+  if (entries.some(e => e.value === m)) return m;
+  for (const name of [m + (gatewaySuffix || ''), m.replace(/\[[^\]]+\]$/, '')]) {
+    const hit = entries.find(e => e.value === name || (e.resolvedModel != null && String(e.resolvedModel).trim() === name));
+    if (hit) return hit.value;
+  }
+  return '';
+}
+
+// 这条消息带什么 model（验收 O53 / O26）。运行中的会话用户没点过模型时，原样带回服务端报的在跑模型
+// （loadedModel = init / instances 报的那串，含网关后缀），不从磁贴重建——重建会丢后缀，把 grok-4.5[1m]
+// 换成 grok-4.5。也不能带空：服务端把空当「回到 spawn 时的模型」，中途切过的会话刷新后发一条就被切回去。
+// 点过模型或还没有实例（新会话）时走 §1.2 原规则：resolveSendModel pin wire，再按需回贴网关后缀。
+export function resolveOutgoingModel({ running = false, picked = false, loadedModel = '', selectValue = '', fullModel = '', gatewaySuffix = '', modelsList = [] } = {}) {
+  if (running && !picked) return String(loadedModel || '').trim() || undefined;
+  return applyGatewaySuffix(resolveSendModel({ selectValue, fullModel, modelsList }), gatewaySuffix, modelsList);
+}
+
 // UX-015：cache 比例/百分数取整为 "N%"。
 export function formatCachePercent(ratio) {
   if (ratio == null || !Number.isFinite(Number(ratio))) return '—';
@@ -241,7 +267,9 @@ export function resolveModelPillText({ model, gatewaySuffix = '', modelsList, cw
   const sfx = gatewaySuffix || '';
   if (model) {
     const raw = String(model) + sfx;
-    return resolveGatewayModelName(raw, modelsList) || raw;
+    // 带后缀的全名先查（/model opus[1m] 这类显式全名）；查不到再按原值查——后缀可能是在跑模型残留的，
+    // 用户中途点了 haiku，胶囊不该显示「haiku[1m]」（验收 O52）
+    return resolveGatewayModelName(raw, modelsList) || resolveGatewayModelName(String(model), modelsList) || raw;
   }
   const defWire = defaultResolvedModel(modelsList);
   if (defWire) return defWire;

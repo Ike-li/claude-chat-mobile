@@ -1,6 +1,6 @@
 // tests/unit/cli-settings-defaults.test.mjs —— FRESH/空首页配置权威源纯函数（零 token）。
 // 契约：新会话 L0 pending > L3 CLI settings > L4 硬默认；resume 的 mode/model 不走本模块，
-// effort 例外（resolveResumeEffort：saved > inherited > L3，见该函数注释）。
+// effort 例外（resolveResumeEffort：saved > L3，见该函数注释）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -188,61 +188,36 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
   });
 });
 
-test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，全部按归一后 ?? 语义折叠；带出来源）', () => {
+test.describe('resolveResumeEffort（resume 专用：saved > L3，全部按归一后 ?? 语义折叠；带出来源）', () => {
   const cliHigh = { mode: 'default', effort: 'high', model: undefined };
 
-  test('saved 有非空值 → 直接采用，不看后两层', () => {
+  test('saved 有非空值 → 直接采用，不看 L3', () => {
     assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'low', savedEffortSource: 'user', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      resolveResumeEffort({ savedEffort: 'low', savedEffortSource: 'user', cliDefaults: cliHigh }),
       { effort: 'low', source: 'user' },
     );
   });
 
   test('saved 没记来源（本字段之前落盘的旧会话）→ 按用户自选处理，与改动前显示一致', () => {
     assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'low', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }),
       { effort: 'low', source: 'user' },
     );
   });
 
-  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 inherited，来源随它', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'max', inheritedEffortSource: 'user', cliDefaults: cliHigh }),
-      { effort: 'max', source: 'user' },
-    );
+  // 验收 O56：此前这里有一层「同 cwd 末个存活实例继承」——只在某个会话里临时选过一次 low，之后恢复的
+  // 旧会话全带着 --effort=low 启动。现在会话自己没记过就看 settings，别的会话的档不参与（调用方也不再传）。
+  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 L3 CLI settings', () => {
+    assert.deepEqual(resolveResumeEffort({ savedEffort: undefined, cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
   test('saved 显式 null（陷阱：可能是用户选过模型默认，也可能只是上次冷启动兜底写入）→ 仍继续往下兜底，不当终值', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      { effort: 'max', source: 'user' },
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: null, cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
-  test('saved / inherited 都空 → 落到 L3 CLI settings（本次修复的核心场景：从未碰过 web 的旧会话）', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      { effort: 'high', source: 'cli-settings' },
-    );
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: undefined, cliDefaults: cliHigh }),
-      { effort: 'high', source: 'cli-settings' },
-    );
-  });
-
-  test('inherited 显式 null（该 cwd 末活实例本身也是模型默认）→ 同样继续往下兜底到 L3', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: null, cliDefaults: cliHigh }),
-      { effort: 'high', source: 'cli-settings' },
-    );
-  });
-
-  test('三层全空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
+  test('saved 空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
     assert.deepEqual(resolveResumeEffort({}), { effort: null, source: 'default' });
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: null }),
-      { effort: null, source: 'default' },
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: null, cliDefaults: null }), { effort: null, source: 'default' });
   });
 
   test('cliDefaults.effort 缺省键 → 视为 null，不把 undefined 当有值', () => {
@@ -250,26 +225,13 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
   });
 
   test('非法档一律归一为 null 再继续兜底', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
-      { effort: 'high', source: 'cli-settings' },
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'garbage', cliDefaults: cliHigh }), { effort: 'high', source: 'cli-settings' });
   });
 
-  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3 或继承值——那等于把 auto 悄悄换成
+  // 用户显式选过 auto 的会话，重启 / 实例回收后 resume 不得落回 L3——那等于把 auto 悄悄换成
   // settings 里存的档（PR #167 review 指出）。auto 与 null 的区别正在这里：null 是「没指定、继续兜底」。
   test("saved 'auto' → 终值 'auto'，不往下兜底", () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'auto', savedEffortSource: 'user', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
-      { effort: 'auto', source: 'user' },
-    );
-  });
-
-  test("inherited 'auto'（该 cwd 末活实例是 auto）→ 与具体档同样被继承", () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'auto', cliDefaults: cliHigh }),
-      { effort: 'auto', source: 'user' },
-    );
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }), { effort: 'auto', source: 'user' });
   });
 
   // 当初从 CLI settings 继承来的档不是会话自己的选择。终端 claude --resume 每次现读 settings，
@@ -285,23 +247,16 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
       'settings 已改成 low：终端续接用 low，这里不能还钉着当初的 high',
     );
     assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', inheritedEffortValue: 'max', cliDefaults: { mode: 'default', effort: null } }),
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: { mode: 'default', effort: null } }),
       { effort: null, source: 'default' },
-      'settings 里已删掉 effortLevel：回到没指定，也不去拿同目录别的实例的档',
+      'settings 里已删掉 effortLevel：回到没指定',
     );
   });
 
   test('saved 来源是 CLI settings、settings 这次没读到 → 沿用记下的档，仍标 CLI 默认', () => {
     assert.deepEqual(
-      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', inheritedEffortValue: 'max', cliDefaults: null }),
+      resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: null }),
       { effort: 'high', source: 'cli-settings' },
-    );
-  });
-
-  test('inherited 来源是 CLI settings → 同样按 settings 此刻的值，标 CLI 默认', () => {
-    assert.deepEqual(
-      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'high', inheritedEffortSource: 'cli-settings', cliDefaults: { mode: 'default', effort: 'medium' } }),
-      { effort: 'medium', source: 'cli-settings' },
     );
   });
 });

@@ -9,7 +9,7 @@ import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { claudeGlobalConfigPath as defaultClaudeGlobalConfigPath } from '../shared/claude-home.js';
-import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP, widgetPayload } from '../shared/tool-summary.js';
+import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP, toolResultCap, widgetPayload } from '../shared/tool-summary.js';
 import { imageRefsOf, toolImageRef, nthImageBlock, stripImageBlocks, parseImageRef } from '../shared/transcript-image.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
@@ -88,7 +88,6 @@ function formatResetClock(resetsAt) {
   return sameDay ? hhmm : `${at.getMonth() + 1}/${at.getDate()} ${hhmm}`;
 }
 
-const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
@@ -483,6 +482,9 @@ export class AgentSession {
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功且确有在途轮时置真，标记"下一条 result 是这次中断的终态确认"
+    // 验收 O30：本轮有审批等到 TTL 过期时置真，随下一条 result 带出 approvalExpired 后复位。那一轮 CLI 以 is_error
+    // 收尾，推送只看 isError 会写成「任务出错」；用户要知道的是审批过期、操作没执行。
+    this._approvalExpiredInTurn = false;
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
@@ -763,6 +765,8 @@ export class AgentSession {
         // 只有进程级计数器答得了。金额仍不单独记——见上面 sideQuestionCalls 的说明。
         metrics.inc(`side_question_${kind}`);
       }
+      // synthetic：这段文字不是模型说的，是 CLI 合成的（网关报错、「没有答案」之类）——当作这次没有（验收 O32）
+      if (r?.synthetic) return null;
       return normalizeSideAnswer(r?.response);
     } catch {
       return null; // 限速/中止/未公开 API 变形——一律当作"这次没有建议"
@@ -878,9 +882,10 @@ export class AgentSession {
           recoverable: false
         });
       } else if (caught) {
-        this.emit('error', { message: formatLifecycleSessionError(sanitize(caught.message)), recoverable: true });
+        // processExited：前端据此按会话记住这条提示，切回时历史重画完再补出来（验收 O60）；resume 失败那支不带
+        this.emit('error', { message: formatLifecycleSessionError(sanitize(caught.message)), recoverable: true, processExited: true });
       } else {
-        this.emit('error', { message: formatLifecycleProcessExited(), recoverable: true });
+        this.emit('error', { message: formatLifecycleProcessExited(), recoverable: true, processExited: true });
       }
     }
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
@@ -898,6 +903,7 @@ export class AgentSession {
     this.queue = [];
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
     this._awaitingInterruptResult = false;
+    this._approvalExpiredInTurn = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny', undefined, undefined, { decidedBy: 'system:exit' });
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
@@ -939,6 +945,12 @@ export class AgentSession {
     // 差分基准是 attemptedModel 而非 activeModel：失败/超时后同一目标不再每轮重试（见构造函数注释）。
     // setModel 是 await 让出点，之后须重检 disposed/pendingTurns（S3 + 双重检查）。
     const target = model || this.defaultModel;
+    // 未 pin 模型、本进程从没尝试过切换时，init 报的 reportedModel 就是当前在跑的：前端原样带回它（用户没动模型）
+    // 不算切换，直接记进差分基准（验收 O53 / O26）。只在 attemptedModel 为空时信它——切过一次之后 init 快照即过期，
+    // 拿它当依据会让「切走再切回」被判成无变化（见构造函数注释）。
+    if (target !== undefined && this.attemptedModel === undefined && target === this.reportedModel) {
+      this.attemptedModel = target;
+    }
     if (target !== undefined && target !== this.attemptedModel) {
       this.attemptedModel = target; // await 之前置位：并发 send 不重复下发，失败也不再重试
       try {
@@ -1157,6 +1169,7 @@ export class AgentSession {
       this._openTurns = [];
       this.pendingTurns = 0;
       this._awaitingInterruptResult = false;
+      this._approvalExpiredInTurn = false;
       // 本地 slash 命令的状态机也在此收口：_clearLocalCommandProgress 自称「唯一收口」，但此前只挂在
       // happy path（result / local_command_output / dispose / 下次 slash）上。用户点停止后 SDK 常无
       // 配对 result，于是 grace + 3s 轮询 + localcmd 键全都还活着，面板一直「运行中」、isBusy 拦住
@@ -1609,15 +1622,6 @@ export class AgentSession {
       && sessionRules[0].behavior === 'allow' && sessionRules[0].rules?.length === 1 ? sessionRules[0].rules[0] : null;
     const chromeSite = siteRule?.toolName === 'ClaudeInChromeDomain' && typeof siteRule.ruleContent === 'string' && siteRule.ruleContent
       ? siteRule.ruleContent : null;
-    this.emit('permission_request', {
-      requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
-      ...(persistDestinations.length ? { persistDestinations } : {}),
-      ...(claudeInChrome ? { claudeInChrome } : {}),
-      ...(chromeSite ? { chromeSite } : {}),
-    });
-    // 持久化台账：只是台账记录，写入失败
-    // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
-    approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     return new Promise(resolve => {
       const abortHandler = () => {
         const p = this.pendingPermissions.get(requestId);
@@ -1638,6 +1642,18 @@ export class AgentSession {
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
+      // emit 必须在写进 pendingPermissions 之后（同 handleQuestion）：permission_request 是 STATE_BOUNDARY 事件，
+      // 服务端借它广播 instances，那次广播的「需要你」聚合读的就是 pendingPermissions——先 emit 就漏掉这张卡，
+      // 计数要等下一次广播才对（验收 O27）。
+      this.emit('permission_request', {
+        requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
+        ...(persistDestinations.length ? { persistDestinations } : {}),
+        ...(claudeInChrome ? { claudeInChrome } : {}),
+        ...(chromeSite ? { chromeSite } : {}),
+      });
+      // 持久化台账：只是台账记录，写入失败
+      // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
+      approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     });
   }
 
@@ -1650,6 +1666,7 @@ export class AgentSession {
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.pendingPermissions.delete(requestId);
     setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
+    this._approvalExpiredInTurn = true;
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
     approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'system:timeout', decidedAt: Date.now() });
     pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
@@ -1678,6 +1695,7 @@ export class AgentSession {
     // 用户主动 allow/deny，供前端提示"已过期，请重新触发"而非误显示为一次正常的拒绝。
     if (Date.now() > pending.expiresAt) {
       setCapped(this.denyKinds, requestId, 'denied', TOOL_INPUT_MAX);
+      this._approvalExpiredInTurn = true;
       this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
       approvalStore.recordDecided(requestId, { status: 'expired', decidedBy, decidedAt: Date.now() });
       pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
@@ -3450,6 +3468,8 @@ export class AgentSession {
         // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
         const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
+        const approvalExpired = this._approvalExpiredInTurn;
+        this._approvalExpiredInTurn = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
           pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
@@ -3464,6 +3484,7 @@ export class AgentSession {
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
           interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          ...(approvalExpired ? { approvalExpired: true } : {}), // 本轮有审批等到过期（推送据此改说「审批已过期」）
           ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
         // 下一步建议：**必须在 emit('result') 之后**且 fire-and-forget——它有一次网络往返，
@@ -3551,12 +3572,6 @@ export class AgentSession {
       permissionMode: this.permissionMode || 'default'
     };
   }
-}
-
-function toolResultCap(name) {
-  const n = String(name || '');
-  if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
-  return TOOL_SUMMARY_CAP;
 }
 
 // 从完整 tool input 估 +/- 行（与前端 summarize 同源口径：块级行数，非精细 diff）。

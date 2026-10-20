@@ -334,7 +334,12 @@ export function resolveFreshPrefs({
 
 /**
  * RESUME 会话 effort 兜底链（resume 场景专用；FRESH 走 resolveFreshPrefs，不要混用）。
- * 权威源优先级：saved（sessions.json 持久值）> inherited（同 cwd 存活实例继承）> L3 CLI settings > null（L4）。
+ * 权威源优先级：saved（sessions.json 持久值）> L3 CLI settings > null（L4）。
+ *
+ * 【不再继承同目录别的实例】（验收 O56）：此前 saved 之后还有一层 inherited（同 cwd 末个存活实例的档）。
+ * 只在某个会话里临时选过一次 low，之后在这个文件夹里恢复的旧会话（自己从没选过档）全都带着 --effort=low
+ * 启动、服务端登记表还把 low 写回它们的 effort——一次临时选择悄悄扩散到同目录所有旧会话。终端 claude --resume
+ * 只看会话自己与 settings，不会拿别的会话的档；这里对齐它。
  *
  * 三层一律经 normalizeEffortLevel 归一——它把 null/undefined/''/非法档统一收作 null，这天然让
  * "显式记了 null"与"压根没记"在这条链里等价、一并继续往下兜底，不再被当成"已确定的终值"锁死。
@@ -348,7 +353,7 @@ export function resolveFreshPrefs({
  * 'auto' 不同：它是用户显式选的「模型内置默认」（CLI {kind:'default'}），持久化成 'auto' 字面量，
  * 在这条链里与具体档同样是终值。若折成 null 往下兜底，重启后会悄悄换成 settings 里存的档。
  *
- * 来源（source）随取值的那一层带出：会话自己 / 继承来的档按当初登记的来源，L3 是 'cli-settings'，
+ * 来源（source）随取值的那一层带出：会话自己存的档按当初登记的来源，L3 是 'cli-settings'，
  * 都没有是 'default'。登记为 'cli-settings' 的档不是谁选的，只是当时 settings 的值——settings 此刻
  * 读得到就跟它（终端 claude --resume 也是每次现读 settings），读不到才沿用记下的档。没记来源的
  * 旧条目按 'user' 处理，显示与改动前一致。
@@ -356,12 +361,10 @@ export function resolveFreshPrefs({
  * @param {object} opts
  * @param {string|null|undefined} [opts.savedEffort] sessions.json 持久值（saved?.effort，键不存在则 undefined）
  * @param {string|null|undefined} [opts.savedEffortSource] sessions.json 里同时记下的来源（saved?.effortSource）
- * @param {string|null|undefined} [opts.inheritedEffortValue] 同 cwd 存活实例继承档（inheritedEffort(cwd).effort）
- * @param {string|null|undefined} [opts.inheritedEffortSource] 该实例档位的来源（inheritedEffort(cwd).source）
  * @param {{ effort?: string|null }|null} [opts.cliDefaults] L3 缓存（cliDefaultsByCwd.get(cwd) || null）
  * @returns {{ effort: string|null, source: 'user'|'cli-settings'|'default' }}
  */
-export function resolveResumeEffort({ savedEffort, savedEffortSource, inheritedEffortValue, inheritedEffortSource, cliDefaults = null } = {}) {
+export function resolveResumeEffort({ savedEffort, savedEffortSource, cliDefaults = null } = {}) {
   const keep = v => (v === 'auto' ? 'auto' : normalizeEffortLevel(v));
   const l3Known = Boolean(cliDefaults) && 'effort' in cliDefaults;
   const l3 = l3Known ? normalizeEffortLevel(cliDefaults.effort) : null;
@@ -372,7 +375,5 @@ export function resolveResumeEffort({ savedEffort, savedEffortSource, inheritedE
     if (source !== 'cli-settings') return { effort: v, source: 'user' };
     return l3Known ? fromL3() : { effort: v, source: 'cli-settings' };
   };
-  return tier(savedEffort, savedEffortSource)
-    ?? tier(inheritedEffortValue, inheritedEffortSource)
-    ?? fromL3();
+  return tier(savedEffort, savedEffortSource) ?? fromL3();
 }

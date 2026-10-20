@@ -76,6 +76,14 @@ const PAIRS = {
     ['0123456789abcdef0123456789abcdef'], ['0123456789abcdef'], ['0123456789abcdef0'],
     ['abcd'], [''], [null], [undefined], [123], ['a'.repeat(17)], ['a'.repeat(64)],
   ],
+  // 附件显示名：前端选文件时洗一遍（芯片、乐观气泡），服务端落盘再洗一遍（落盘名、广播、history 反推）。
+  // 两边差一点，同一个附件在发送方和别的设备上就是两个名字（O34）。'/'、'a//' 是 posix basename 的边界。
+  sanitizeName: [
+    ['report.pdf'], ['folder/file.png'], ['a/b/'], ['/'], ['a//'], ['a:b<c>d"e|f?g*h.txt'],
+    ['.hidden'], ['...secret.env'], ['\uFEFF.hidden'], ['. foo.txt'], ['test\x00\x08\x1f\x7f.log'],
+    ['C:\\Windows\\sys\\win.txt'], ['  spaced  .txt  '], ['中文 文件.md'], [''], ['.'], ['..'],
+    [null], [undefined], [123],
+  ],
   // ★ 这一组的每一行都对应上面注释里实测到的一处分叉，删任何一行都会让那个 bug 变得可回归。
   formatNotifyIdentity: [
     ['✅ 完成', { cwd: '/Users/x/code/proj', sessionTitle: '改bug' }],

@@ -733,4 +733,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 验收 O53 / O26：网关下跑着的会话打开设置，多出第 5 张「当前加载模型」并选中；用户没动模型，下一条却带着
+  // 从磁贴重建出来的 grok-4.5（丢了 [1m]）发出，把在跑的 grok-4.5[1m] 换掉。
+  // 验收 O52：中途点 haiku，胶囊显示「haiku[1m]」——后缀是在跑模型残留的。
+  test('P0-09-LOADED 网关下跑着的会话：在跑的 wire 落在已有磁贴上；没动模型原样带回在跑模型；点档位后胶囊不带残留后缀', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:gateway-loaded-wire');
+    await waitForIdle(page);
+
+    await openSessionSettings(page);
+    await expect(page.locator('#customModelGrid .model-tile')).toHaveCount(4);
+    await expect(page.locator('#customModelGrid')).not.toContainText('当前加载模型');
+    await expect(page.locator('.model-tile[data-model="opus"]')).toHaveClass(/ring-accent/);
+    await expect(page.locator('#customModelGrid .model-tile.ring-accent')).toHaveCount(1);
+    await closeSettings(page);
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=grok-4.5[1m];');
+
+    await openSessionSettings(page);
+    await page.locator('.model-tile[data-model="haiku"]').click();
+    await expect(page.locator('#pillModelText')).toHaveText('grok-4.5');
+    await closeSettings(page);
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=grok-4.5;');
+
+    await expectNoBrowserErrors(page);
+  });
 });
