@@ -1740,6 +1740,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       return;
     }
+    connBanner.clearRateLimited(); // 这一轮不是被锁挡下的，别再挂着上一轮的「等 N 分钟」
     if (err.message === 'unauthorized') {
       if (authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'token-gate') {
         setStatus(t('需要访问令牌'));

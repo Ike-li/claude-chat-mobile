@@ -133,13 +133,21 @@ export function createConnectionBannerController(context, {
     render();
   }
 
+  // 这一轮不是被锁挡下的（别的原因失败 / 开了新一轮）：锁定文案作废，横幅回到按相位说话，
+  // 否则「等 N 分钟」会压住真正的原因（PR #225 review）。
+  function clearRateLimited() {
+    if (!blockedText) return;
+    blockedText = '';
+    render();
+  }
+
   function stop() { stopTimer(); }
 
   const retryBtn = context.dom.connBannerRetry;
-  if (retryBtn) retryBtn.onclick = () => onRetry();
+  if (retryBtn) retryBtn.onclick = () => { clearRateLimited(); onRetry(); };
 
   const controller = {
-    markConnecting, markDisconnected, markConnected, markRateLimited, stop,
+    markConnecting, markDisconnected, markConnected, markRateLimited, clearRateLimited, stop,
     isVisible: () => visible,
     isConnected: () => phase === 'online',
     hasEverConnected: () => everConnected,
