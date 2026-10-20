@@ -425,3 +425,76 @@ test.describe('session:new 采纳改过的配置：当场作废旧默认模型�
     }
   });
 });
+
+// ——— #290 review：旧代数的实例回报的清单不再覆盖缓存 ———
+//
+// ↻ 之后旧实例照旧活着，它之后每轮 init 都会 fetchModels，回报的是 spawn 时固化的旧清单（见上面 config:refresh 的
+// 注释）。此前它照样写进清单缓存（新连接重放的就是这份），而且把清单出处的代数往回改——之后 scout 遇到 ↻ 探测
+// 不到的变化（CLI 升级、网关侧改了清单）时，会误以为变化已被解释过，默认模型不作废。
+test.describe('↻ 之后旧代数的实例回报的清单不覆盖缓存', () => {
+  let proc, port4, workdir, dataDir4;
+  const settingsWith = model => ({ permissions: { defaultMode: 'default' }, env: { ANTHROPIC_DEFAULT_OPUS_MODEL: model } });
+
+  test.before(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'ccm-stale-list-wd-'));
+    dataDir4 = mkdtempSync(join(tmpdir(), 'ccm-stale-list-data-'));
+    writeLocalSettings(workdir, settingsWith('gw-old'));
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIR: workdir,
+      CCM_DATA_DIR: dataDir4,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'turn',
+      CCM_FAKE_CLAUDE_INIT_EACH_TURN: '1',
+      IDLE_TIMEOUT_MS: '120000',
+    });
+    proc = started.proc;
+    port4 = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [workdir, dataDir4]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('旧实例 ↻ 之后再跑一轮：新连接重放的仍是新清单', async () => {
+    const client = createClient(port4);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+
+      // ① 旧配置下开的实例
+      client.socket.emit('user:message', { text: 'first', clientMessageId: 'stale-1' });
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('models', e => hasModel(e, 'gw-old'), 20000);
+
+      // ② 改配置、↻：scout 按新配置报回 gw-new
+      writeLocalSettings(workdir, settingsWith('gw-new'));
+      client.clearEvents();
+      const ack = await client.emitAck('config:refresh', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+      await client.waitForEvent('models', e => hasModel(e, 'gw-new'), 25000);
+
+      // ③ 旧实例再跑一轮：它的 init 触发 fetchModels，回报 spawn 时的 gw-old
+      client.clearEvents();
+      client.socket.emit('user:message', { text: 'second', clientMessageId: 'stale-2' });
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('models', e => hasModel(e, 'gw-old'), 10000);
+      await sleep(300);
+    } finally {
+      client.disconnect();
+    }
+
+    // ④ 新连接：重放的清单来自缓存，必须仍是新配置的
+    const fresh = createClient(port4);
+    try {
+      await fresh.waitForConnect();
+      const replay = await fresh.waitForEvent('models', null, 10000);
+      assert.ok(hasModel(replay, 'gw-new') && !hasModel(replay, 'gw-old'), '旧代数的实例把旧清单写回了缓存');
+    } finally {
+      fresh.disconnect();
+    }
+  });
+});

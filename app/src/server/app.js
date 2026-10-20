@@ -2140,10 +2140,14 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         });
         saveInitCache();
       }
-      else if (envelope.type === 'models') { // 按本实例 cwd 归键，防跨工作区泄漏；出处记本实例 spawn 时的代数（见 createCliConfigGen）
-        modelsCache.set(drivingCwd, envelope.payload);
-        cliConfigGen.noteListGen(drivingCwd, instance.cliConfigGen);
-        saveInitCache();
+      else if (envelope.type === 'models') { // 按本实例 cwd 归键，防跨工作区泄漏
+        // 只认与本目录当前配置同一代 spawn 的实例：↻ / 采纳新快照之后旧实例照旧活着，它每轮 init 都会 fetchModels，
+        // 回报的是 spawn 时固化的旧清单——写进缓存是让新连接重放旧清单，记成出处还会把代数往回改（#290 review）。
+        if (instance.cliConfigGen === cliConfigGen.current(drivingCwd)) {
+          modelsCache.set(drivingCwd, envelope.payload);
+          cliConfigGen.noteListGen(drivingCwd, instance.cliConfigGen);
+          saveInitCache();
+        }
       }
       // CLI 中途发现新命令/skill 的全量推送（SDK commands_changed）。缓存策略与上面 init 那条**共用同一条**：
       // 同样按 cwd 归键、同样「空列表不写」。故意不在这里为 REPLACE 语义单开一条清空路径——空推送
