@@ -216,6 +216,7 @@ import { createGeneralNav } from './app/general-nav.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
+import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
 import { createProjectsState } from './app/projects-state.js';
 import { createFolderPicker } from './app/folder-picker.js';
@@ -776,6 +777,11 @@ import { createGateFocusController } from './app/focus-layers.js';
   function persistOutbox() {
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
   }
+  // 永久拒收、此刻又没地方交还原文的条目：暂存（落盘），回到它的会话时交还（见模块头注、deliverOutboxDeadLetters）
+  const outboxDeadLetters = createOutboxDeadLetters({
+    storage: (() => { try { return localStorage; } catch { return null; } })(),
+    targetsViewing: outboxItemTargetsViewing,
+  });
   function enqueueOutbox(item) {
     // 交给 outbox 的气泡记下它发往哪个会话：同一会话清屏重载时 clearView 据此保住它（shouldCarryOutboxBubbleOnClear）。
     // 投递结论从 'queued' 起记（deliverOutboxItem 改写），历史重载时据此判能不能按文字认领（canTextClaimPendingBubble）。
@@ -1444,6 +1450,14 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
   const outboxViewing = () => ({ viewingInstanceId, viewingCwd: currentCwd, viewingSessionId: sendSessionId() });
 
+  // 交还暂存的永久拒收条目：只交给它自己的会话；输入框空着就放回输入框，否则原文写进提示条（看得见、复制得到）。
+  function deliverOutboxDeadLetters() {
+    for (const d of outboxDeadLetters.takeFor(outboxViewing())) {
+      if (moveOutboxItemToComposer(d)) addBar(`${d.message}${t('，原文已放回输入框')}`, 'text-danger');
+      else addBar(`${d.message}${t('。原文：')}${d.text}`, 'text-danger');
+    }
+  }
+
   async function processOfflineQueue() {
     if (_offlineDrainInFlight || offlineQueue.length === 0) return;
     // 断线时根本不开工：下面的横幅是无条件同步贴的，若此时离线，用户会看到「正在重发 N 条…」
@@ -1457,7 +1471,9 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
     const notice = planOutboxDrainNotice({ items, ...outboxViewing() });
-    addBar(notice.text, 'text-info');
+    // 进行中的横幅，批处理结束就撤（验收 O65：此前不留引用，「正在重发 1 条…」重发完了还一直挂着）。
+    // 各条的结局（送达 / 未发送 + 重发 / 永久拒绝）都落在各自的气泡或提示条上，不靠这一条。
+    const drainBar = addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
     // 本批里第一条「在新 worktree 里开」真正开出来的实例。后续同意图的条目改投它，不再各建一棵树。
@@ -1499,9 +1515,20 @@ import { createGateFocusController } from './app/focus-layers.js';
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
           const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
-          // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
-          const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
-          if (permanentHost) permanentHost.textContent = permanentMsg;
+          // 服务端永久拒收、outbox 已清，这条不会再发——原文得交还给用户（验收 O31：此前只剩一行提示，输入框是空的）。
+          // 投给眼前这个会话且输入框空着：放回输入框，气泡随之撤掉。否则提示落在气泡上（气泡里就是原文）；
+          // 连气泡都不在时把原文写进提示条，至少还看得见、复制得到。
+          if (moveOutboxItemToComposer(planned)) {
+            addBar(`${permanentMsg}${t('，原文已放回输入框')}`, 'text-danger');
+          } else {
+            // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
+            const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
+            const inBubble = Boolean(permanentHost?.closest?.('[data-testid="user-message"]'));
+            if (permanentHost) permanentHost.textContent = inBubble ? permanentMsg : `${permanentMsg}${t('。原文：')}${item.text || ''}`;
+            // 没有落点：重载后恢复的条目没有气泡，又不是发往眼前这个会话。outbox 已清，这里不留就丢了——
+            // 暂存，回到它的会话时交还（PR #232 review）。
+            else outboxDeadLetters.park(planned, permanentMsg);
+          }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
@@ -1522,6 +1549,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
     } finally {
       _offlineDrainInFlight = false;
+      drainBar?.remove();
       persistOutbox();
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
@@ -5404,7 +5432,13 @@ import { createGateFocusController } from './app/focus-layers.js';
   // count：sync:since ack 带回的 unreadOnEntry（第一次为这个会话结算的权威数字）。必须在渲染真正稳定后调用
   // （bindView 的 'keep' 分支直接调用；'load'/'reload' 分支要等 loadHistory 的 onDone 回调），否则
   // topLevelBubbles() 数不全，锚点会算错位置。
+  // 切入会话、渲染稳定后的汇合点（keep / load / reload / 超时 / 重连补同步各分支都在这时调用）：
+  // 先放未读胶囊（锚点按此刻的气泡算），再交还暂存的永久拒收条目——它们写的提示条排在锚点之后。
   function showUnreadPillIfAny(count) {
+    placeUnreadPill(count);
+    deliverOutboxDeadLetters();
+  }
+  function placeUnreadPill(count) {
     hideUnreadPill(); // 先清上一个会话可能残留的胶囊态，防止跨会话串味
     if (!unreadPillEl || !(count > 0)) return;
     const list = topLevelBubbles();
@@ -7679,7 +7713,14 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
     // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
     // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
-    for (const node of keptPending) messagesEl.appendChild(node);
+    // 打上 data-carried：在历史回包之前，回显（user_message）可能先把它认领转正、摘掉 .opacity-70。落定逻辑
+    // 只认 .opacity-70 的话会跳过它，它就留在随后落地的历史上方、历史里又画出同一条（验收 O29）。
+    // 原文一并记下：回显转正时会把气泡内容换成 markdown 渲染，.whitespace-pre-wrap 就没了，历史认领按文本找不到它。
+    for (const node of keptPending) {
+      node.dataset.carried = '1';
+      node.dataset.carriedText = node.querySelector('.whitespace-pre-wrap')?.textContent ?? '';
+      messagesEl.appendChild(node);
+    }
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     hideStatuslineWrap();
@@ -8581,14 +8622,20 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 交给 outbox 的气泡多一道闸（canTextClaimPendingBubble）：没有证据说它进了 transcript 就不认领，直接移到末尾。
   // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
-    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
+    // 认 data-carried 而不只是 .opacity-70：被保住的气泡可能已在历史回包之前被回显认领转正（见 clearView）。
+    // 转正过的就是服务端收下了的证据，可以让历史认领，不必再过 canTextClaimPendingBubble 那道闸。
+    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"][data-carried]')]) {
+      const carriedText = bubble.dataset.carriedText ?? '';
+      delete bubble.dataset.carried;
+      delete bubble.dataset.carriedText;
+      const settled = !bubble.classList.contains('opacity-70');
       const tDiv = bubble.querySelector('.whitespace-pre-wrap');
-      const claim = canTextClaimPendingBubble({
+      const claim = (settled || canTextClaimPendingBubble({
         outboxOutcome: bubble.dataset.outboxOutcome ?? null,
         maybeSent: Boolean(bubble.dataset.outboxMaybeSent),
-      })
+      }))
         ? findHistoryClaimForPending({
-          text: tDiv ? tDiv.textContent : '',
+          text: tDiv ? tDiv.textContent : carriedText,
           attNames: bubble.dataset.attNames || '',
           messages: msgs,
         })
@@ -8598,7 +8645,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         continue;
       }
       const heir = claim.uuid
-        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b.dataset.uuid === claim.uuid)
+        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b !== bubble && b.dataset.uuid === claim.uuid)
         : null;
       if (!heir) {
         // 认领到了历史里的那条，却定位不到它渲染出的气泡（msg.uuid 缺失——真实 transcript 每行都有，

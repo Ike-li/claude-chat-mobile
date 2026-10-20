@@ -469,6 +469,8 @@ export const EN_DICT = Object.freeze({
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '，原文已放回输入框': '; the original text is back in the input box',
+  '。原文：': '. Original text: ',
   '这个浏览器已拒绝通知，网页推送到不了这台设备——到浏览器或系统的站点设置里改回「允许」': 'This browser has blocked notifications, so web push cannot reach this device — set it back to "Allow" in the browser or system site settings',
   'ntfy 已发出一条': 'ntfy sent one',
   'ntfy 发送失败': 'ntfy delivery failed',

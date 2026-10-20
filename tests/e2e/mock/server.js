@@ -294,6 +294,8 @@ let syncHoldThenDropArmed = false;
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
 // 一次性：拒一次就解除，重发那条照常处理。
 let sendTransientFailArmed = false;
+// 下一条离线重放（fromOutbox）回永久拒绝的负 ack（验收 O31）。由 test:arm-outbox-permanent 置起，一次性。
+let outboxPermanentArmed = false;
 // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
 // 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
 // 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
@@ -324,6 +326,10 @@ let outboxReplaySwapDeliveredText = null;
 // 放出拒收后那一轮随即跑完，之后的「重发」照常收下并回显。
 let outboxReplaySwapHistoryFirst = false;
 let outboxReplaySwapHeldRefusal = null;
+// 验收 O29：第 1 条的 user_message 回显压到重载的 session:history 回包之前发（echoFirst）——真 server 收下即回显，
+// 而前端清屏后发出的历史请求要等它读完 transcript。回显先把被保住的离线气泡认领转正，历史随后落地。
+let outboxReplaySwapEchoFirst = false;
+let outboxReplaySwapEcho = null;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -607,12 +613,15 @@ function resetMockState() {
   syncAckTimeoutArmed = false;
   syncHoldThenDropArmed = false;
   sendTransientFailArmed = false;
+  outboxPermanentArmed = false;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
   outboxReplaySwapDeliveredText = null;
   outboxReplaySwapHistoryFirst = false;
   outboxReplaySwapHeldRefusal = null;
+  outboxReplaySwapEchoFirst = false;
+  outboxReplaySwapEcho = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -2260,6 +2269,12 @@ io.on('connection', socket => {
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
+      // O29（echoFirst）：回显先于历史回包到达——同一连接保序，emit 在前、ack 在后
+      if (outboxReplaySwapEcho) {
+        const echo = outboxReplaySwapEcho;
+        outboxReplaySwapEcho = null;
+        socket.emit('agent:event', echo);
+      }
       callback({
         messages: [
           // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 app/src/sessions/history.js）。
@@ -3255,6 +3270,7 @@ io.on('connection', socket => {
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
+      armOutboxPermanent: () => { outboxPermanentArmed = true; },
       armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
       armResumeDivergenceWorktreeSwap: () => {
         resumeDivergenceArmed = { sessionId: 'mock-session-worktree', divergence: MOCK_RESUME_DIVERGENCE_TTURN, swap: true };
@@ -3264,6 +3280,7 @@ io.on('connection', socket => {
       },
       armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
       armOutboxReplaySwapHistoryFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', historyFirst: true }; },
+      armOutboxReplaySwapEchoFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', echoFirst: true }; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -5596,6 +5613,7 @@ io.on('connection', socket => {
       : undefined;
     if (replaySwapInst) {
       outboxReplaySwapHistoryFirst = outboxReplaySwapArmed.historyFirst === true;
+      outboxReplaySwapEchoFirst = outboxReplaySwapArmed.echoFirst === true;
       outboxReplaySwapArmed = null;
       const oldId = replaySwapInst.instanceId;
       replaySwapInst.instanceId = `${oldId}_swapped`;
@@ -5633,6 +5651,12 @@ io.on('connection', socket => {
       refuse();
       return;
     }
+    if (outboxPermanentArmed && payload?.fromOutbox === true) {
+      outboxPermanentArmed = false;
+      console.log('[mock] outbox replay permanently refused (armed)');
+      if (typeof ack === 'function') ack({ ok: false, error: '消息被服务端拒收（mock）', permanent: true });
+      return;
+    }
     if (sendTransientFailArmed) {
       sendTransientFailArmed = false;
       console.log('[mock] user:message transient failure (armed)');
@@ -5648,6 +5672,13 @@ io.on('connection', socket => {
       replaySwapInst.state = 'busy';
       replaySwapInst.turnRunning = true;
       outboxReplaySwapDeliveredText = typeof payload?.text === 'string' ? payload.text : null;
+      if (outboxReplaySwapEchoFirst) {
+        outboxReplaySwapEchoFirst = false;
+        outboxReplaySwapEcho = {
+          seq: 1, epoch: 'mock-epoch-replay-swap', sessionId: replaySwapInst.sessionId, instanceId: replaySwapInst.instanceId, ts: Date.now(),
+          type: 'user_message', payload: { text: outboxReplaySwapDeliveredText, clientMessageId: payload?.clientMessageId },
+        };
+      }
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
