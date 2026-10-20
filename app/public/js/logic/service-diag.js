@@ -109,6 +109,25 @@ export function formatPushStatusRow({ hint = 'ready', permission = 'default', su
     hint: t('开启后，需要你审批、有提问、任务完成时手机会收到通知') };
 }
 
+// 「发一条测试推送」的回执（验收 AC-16-06 / O1）。两条通道各说各的：Web Push 是这台设备自己的订阅；ntfy 是服务端
+// 配的另一条通道（手机装 ntfy App 收），没配时 res.ntfy 为 'disabled'，回执里不提它。此前只看 Web Push：ntfy 明明
+// 投递成功，回执只说「还没订阅」；权限已被拒绝时，还让人去点状态行上此刻根本没有的「开启」（那一态上面
+// formatPushStatusRow 给的 action 是 null）。
+// tone：任一条失败即 danger；至少一条真的发出去即 ok；一条都没发出去即 warn。
+export function describePushTestResult(res, { permission = 'default' } = {}) {
+  if (!res?.ok) return { text: t('测试推送失败，请检查网络'), tone: 'danger' };
+  const parts = [];
+  if (res.failed > 0) parts.push(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`);
+  else if (res.subscribed) parts.push(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`);
+  else if (permission === 'denied') parts.push(t('这个浏览器已拒绝通知，网页推送到不了这台设备——到浏览器或系统的站点设置里改回「允许」'));
+  else parts.push(t('这台设备还没订阅推送——先点上方的「开启」'));
+  if (res.ntfy === 'sent') parts.push(t('ntfy 已发出一条'));
+  else if (res.ntfy === 'failed') parts.push(t('ntfy 发送失败'));
+  const anyFailed = res.failed > 0 || res.ntfy === 'failed';
+  const anySent = (res.subscribed && res.sent > 0) || res.ntfy === 'sent';
+  return { text: parts.join('；'), tone: anyFailed ? 'danger' : anySent ? 'ok' : 'warn' };
+}
+
 // 完成提示（提示音 / 震动 / 前台系统通知）本地偏好——默认全开，仅显式存 '0' 为关。
 // storage 键与 localStorage 对齐；纯函数便于单测，不直接碰 window。
 export const ALERT_PREF_KEYS = Object.freeze({

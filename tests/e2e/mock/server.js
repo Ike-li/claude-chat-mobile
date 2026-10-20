@@ -24,7 +24,8 @@ const mockPermFields = (name, input, cwd, at = Date.now()) => ({
 });
 
 const PORT = process.env.PORT || 3100;
-const { app, httpServer, io } = createMockTransport();
+// 用例代数随 /__reset 自增；transport 据此丢弃上一条用例里还没跑完的场景尾巴（见 transport.js caseScope）
+const { app, httpServer, io } = createMockTransport({ caseGeneration: () => mockResetGeneration });
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
@@ -84,6 +85,10 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// 测试推送回执里 ntfy 那条通道的结果（'sent' / 'failed'）；null = 没配 ntfy，ack 里不带这个字段（同真 server 的旧形态）。
+let pushTestNtfy = null;
+// 主工作区会话列表多出一条标题是服务端占位「(无标题)」的会话（真 server 对提不出标题的会话就写这个字面量）。
+let untitledSessionArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
@@ -148,6 +153,17 @@ function pinnedRowsFor(cwd, rows) {
     : [];
   return pool.filter(s => s && s.id && !inPage.has(s.id)
     && (mockReadState.manual[s.id] ?? -Infinity) > (mockReadState.seen[s.id] ?? -Infinity));
+}
+// open（验收 O46）：开着、但不在本页也不在 pinned 里的会话的元数据（同真 server 的 session:list）。
+// 抽屉照样把它们画在前面（SESSION-02），标题与时间用这里的，不再是实例广播里的 title（终端来的会话那里是 null）。
+// 池同 pinnedRowsFor：只有主 cwd 会截断。transcript 被搬走的（mainCwdSessions 里没有）自然不在其中。
+function openRowsFor(cwd, listed) {
+  const inList = new Set((listed || []).map(s => s && s.id));
+  const live = new Set(mockInstances.map(i => i.sessionId).filter(Boolean));
+  const pool = cwd === '/Users/you/code/claude-chat-mobile'
+    ? mainCwdSessions().filter(s => !deletedSessionIds.has(s.id))
+    : [];
+  return pool.filter(s => s && s.id && live.has(s.id) && !inList.has(s.id));
 }
 // 逐 key 取较晚时间戳，与真 server 的 read-state.js#mergeLatest 同语义。
 function mergeIntoReadState(field, incoming) {
@@ -284,11 +300,21 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-02j：武装「sync:since 回执在途时传输层断开」（验收 O49）。下一次 sync:since 不回执，50ms 后关掉这条连接的
+// 传输层（engine 级 close，客户端走 Manager 自动重连，不是 io server disconnect）。socket.io-client 在 Manager.onclose
+// 里先回调在途 ack、后排重连定时器——前端若在这个回调里自己 socket.connect()，就和 Manager 的重连撞车。一次性。
+let syncHoldThenDropArmed = false;
 // P0-40c：武装「下一条 user:message 回一个可重试的负 ack（服务端临时失败）」。前端据此把消息转进 outbox
 // 自动重发——「在线发送没被确认」那条路要带上什么（worktree 意图），只有走一遍它才验得到。
 // 用负 ack 而不是吞 ack：两者进的是同一条 requeue 分支，吞 ack 要白等 SEND_ACK_TRANSPORT_MS（30s）。
 // 一次性：拒一次就解除，重发那条照常处理。
 let sendTransientFailArmed = false;
+// 验收 O30：主工作区多一条会话，历史末尾是一条没配上 tool_result 的 tool_use（重启后过期的审批留下的就是这个形态）。
+let unpairedToolSessionArmed = false;
+// PR #233 review：同上，但切进来时那一轮还在跑，历史回包之前跑完，结果随后才实时到达（?running=1 武装，一次性）
+let unpairedToolTurnEndsDuringLoad = false;
+// 下一条离线重放（fromOutbox）回永久拒绝的负 ack（验收 O31）。由 test:arm-outbox-permanent 置起，一次性。
+let outboxPermanentArmed = false;
 // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
 // 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
 // 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
@@ -319,6 +345,10 @@ let outboxReplaySwapDeliveredText = null;
 // 放出拒收后那一轮随即跑完，之后的「重发」照常收下并回显。
 let outboxReplaySwapHistoryFirst = false;
 let outboxReplaySwapHeldRefusal = null;
+// 验收 O29：第 1 条的 user_message 回显压到重载的 session:history 回包之前发（echoFirst）——真 server 收下即回显，
+// 而前端清屏后发出的历史请求要等它读完 transcript。回显先把被保住的离线气泡认领转正，历史随后落地。
+let outboxReplaySwapEchoFirst = false;
+let outboxReplaySwapEcho = null;
 // P0-12f：复现「显式新建之后，一条【在 session:new 之前就在途、之后才到】的 instances 包」。
 // 这是 FE-001 那个分支唯一的激发条件，而 mock 原本从不产出这种包——session:new 只发一条
 // viewingInstanceId=null 的权威包。于是 app.js 里 `!sessionIdClearedByNav` 那道守卫在整套 E2E 里
@@ -508,8 +538,12 @@ function mockFolderReason(rel) {
 }
 const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') && !rel.split('/').includes('..');
 
+// 场景抛错的账：registry 每个连接各建一份，所以记在模块级。/__reset 清空，E2E 收尾经 /__scenario-errors 断言为空。
+let mockScenarioErrors = [];
+
 function resetMockState() {
   mockResetGeneration += 1;
+  mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
   mockScratchSessions = [];
@@ -539,6 +573,8 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  pushTestNtfy = null;
+  untitledSessionArmed = false;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   mockUnreadOnEntry = 0;
@@ -596,13 +632,19 @@ function resetMockState() {
   freshTurnRunningArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  syncHoldThenDropArmed = false;
   sendTransientFailArmed = false;
+  unpairedToolSessionArmed = false;
+  unpairedToolTurnEndsDuringLoad = false;
+  outboxPermanentArmed = false;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
   outboxReplaySwapDeliveredText = null;
   outboxReplaySwapHistoryFirst = false;
   outboxReplaySwapHeldRefusal = null;
+  outboxReplaySwapEchoFirst = false;
+  outboxReplaySwapEcho = null;
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -771,6 +813,10 @@ app.post('/__reset', (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/__scenario-errors', (_req, res) => {
+  res.json(mockScenarioErrors);
+});
+
 // E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
 app.post('/__access-bypass', (req, res) => {
   accessBypassActive = req.query?.active === '1';
@@ -827,10 +873,36 @@ app.post('/__arm-statusline-setup-fail', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 同 test:bg-locked，但不占一轮：那条命令不发 result，这一轮一直在途，之后就发不出别的命令。
+// P0-11aj3 要先让当前会话挂一张待批卡（test:permission），再去撞打不开的会话。
+app.post('/__arm-bg-locked', (_req, res) => {
+  bgLockedArmed = true;
+  res.json({ ok: true });
+});
+
 // 让紧接着的一次 session:history 回失败形态 { messages: [], error }——真 server 在 jsonl 被删/改名/
 // 读坏时就是这个形状。无参，一次性消费。
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
+  res.json({ ok: true });
+});
+
+// 验收 O30：武装后主工作区多一条「Unpaired Tool Session」。无参，/__reset 清除；要在 page.goto 之前武装。
+app.post('/__arm-unpaired-tool-session', (req, res) => {
+  unpairedToolSessionArmed = true;
+  unpairedToolTurnEndsDuringLoad = req.query?.running === '1';
+  res.json({ ok: true });
+});
+
+// 验收 O1：让接下来的 push:test 回报 ntfy 投递结果。走 query（本 mock 没装 body parser），/__reset 清除。
+app.post('/__arm-push-test-ntfy', (req, res) => {
+  pushTestNtfy = req.query?.result === 'failed' ? 'failed' : 'sent';
+  res.json({ ok: true, pushTestNtfy });
+});
+
+// 验收 O42 / O43③：武装后主工作区多一条无标题会话。无参，/__reset 清除；要在 page.goto 之前武装，首屏的列表就带上它。
+app.post('/__arm-untitled-session', (_req, res) => {
+  untitledSessionArmed = true;
   res.json({ ok: true });
 });
 
@@ -1079,6 +1151,12 @@ function mainCwdSessions() {
     lastUsedAt: mockListClockBase - 1400000,
     entrypoint: 'sdk-ts'
   });
+  if (unpairedToolSessionArmed) {
+    sessions.push({ id: 'mock-session-unpaired-tool', title: 'Unpaired Tool Session', lastUsedAt: mockListClockBase - 1500000, entrypoint: 'sdk-ts' });
+  }
+  if (untitledSessionArmed) {
+    sessions.push({ id: 'mock-session-untitled', title: '(无标题)', lastUsedAt: mockListClockBase - 30000, entrypoint: 'sdk-ts' });
+  }
   return sessions;
 }
 
@@ -1533,7 +1611,8 @@ io.on('connection', socket => {
       ? (res) => {
         const rows = res?.sessions || [];
         const pinned = query ? [] : pinnedRowsFor(cwd, rows);
-        rawCallback({ ...res, pinned, readState: readStateForRows([...rows, ...pinned]) });
+        const open = query ? [] : openRowsFor(cwd, [...rows, ...pinned]);
+        rawCallback({ ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open]) });
       }
       : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
@@ -1757,6 +1836,11 @@ io.on('connection', socket => {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
       },
+      // 验收 O30：历史末尾留着一条没配上结果的 tool_use（见 unpairedToolSessionArmed）
+      'mock-session-unpaired-tool': {
+        instanceId: 'inst_unpaired_tool',
+        title: 'Unpaired Tool Session'
+      },
       'mock-session-worktree': {
         instanceId: 'inst_worktree',
         title: 'Worktree Driving Session',
@@ -1821,6 +1905,10 @@ io.on('connection', socket => {
         effort: null,
         model: 'claude-3-5-sonnet'
       };
+      if (sessionId === 'mock-session-unpaired-tool' && unpairedToolTurnEndsDuringLoad) {
+        archivedInst.state = 'busy';
+        archivedInst.turnRunning = true;
+      }
       mockInstances.push(archivedInst);
     }
     viewingInstanceId = archivedInst.instanceId;
@@ -2250,7 +2338,42 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Subagent history follow-up', uuid: 'a-sah-5', timestamp: sahTs(5) }
         ]
       });
+    } else if (sessionId === 'mock-session-unpaired-tool') {
+      const unpairedHistory = {
+        messages: [
+          { role: 'user', content: 'Push the release branch', uuid: 'u-unpaired-1' },
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'unpaired-tool-1', name: 'Bash', inputSummary: '{"command":"git push origin release"}', uuid: 'a-unpaired-1' },
+        ]
+      };
+      if (!unpairedToolTurnEndsDuringLoad) { callback(unpairedHistory); return; }
+      // PR #233 review 的时序：读盘时 tool_use 已写、tool_result 未写；回包之前那一轮跑完（instances 先到），
+      // 结果在历史落地之后才实时到达。
+      unpairedToolTurnEndsDuringLoad = false;
+      const inst = mockInstances.find(i => i.instanceId === 'inst_unpaired_tool');
+      if (inst) { inst.state = 'idle'; inst.turnRunning = false; }
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: '/Users/you/code/claude-chat-mobile', ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+      });
+      const gen = mockResetGeneration;
+      setTimeout(() => {
+        if (gen !== mockResetGeneration) return;
+        callback(unpairedHistory);
+        setTimeout(() => {
+          if (gen !== mockResetGeneration) return;
+          socket.emit('agent:event', {
+            seq: 1, epoch: activeEpoch, sessionId: 'mock-session-unpaired-tool', instanceId: 'inst_unpaired_tool', ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: 'unpaired-tool-1', ok: true, outputSummary: 'pushed release (mock)' }
+          });
+        }, 800);
+      }, 200);
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
+      // O29（echoFirst）：回显先于历史回包到达——同一连接保序，emit 在前、ack 在后
+      if (outboxReplaySwapEcho) {
+        const echo = outboxReplaySwapEcho;
+        outboxReplaySwapEcho = null;
+        socket.emit('agent:event', echo);
+      }
       callback({
         messages: [
           // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 app/src/sessions/history.js）。
@@ -2351,7 +2474,9 @@ io.on('connection', socket => {
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
       }
-      callback({ messages });
+      // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
+      // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
+      callback({ messages, total: 2100 });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [
@@ -2772,6 +2897,9 @@ io.on('connection', socket => {
     if (name.includes('/')) return ack({ ok: false, error: 'separator' });
     if (!mockFolderRelOk(rel) || !Object.hasOwn(mockFolderTree, rel)) return ack({ ok: false, error: 'out_of_range' });
     if (mockFolderTree[rel].includes(name)) return ack({ ok: false, error: 'exists' });
+    // 同真 server：清单改不了时只能建在已连接的文件夹里（之外建出来的加不进清单，验收 O41）
+    const parentAbs = mockFolderAbs(rel);
+    if (mockFoldersAddError && !mockDirs().some(d => parentAbs === d || parentAbs.startsWith(`${d}/`))) return ack({ ok: false, error: mockFoldersAddError });
     const child = rel ? `${rel}/${name}` : name;
     mockFolderTree[rel] = [...mockFolderTree[rel], name].sort();
     mockFolderTree[child] = [];
@@ -2812,7 +2940,7 @@ io.on('connection', socket => {
   // 测试推送：mock 默认无订阅（与真机初见形态一致，也是最需要被说清的那一态）
   socket.on('push:test', (_payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, sent: 0, failed: 0, subscribed: false });
+    ack({ ok: true, sent: 0, failed: 0, subscribed: false, ...(pushTestNtfy ? { ntfy: pushTestNtfy } : {}) });
   });
 
   // 配置面板的读取路径。夹具刻意混了三种形态：普通值、敏感项（只给 set+length）、未设置的空值，
@@ -2936,6 +3064,12 @@ io.on('connection', socket => {
     if (dupOptimisticArmed && sessionId === 'mock-session-timeline') {
       console.log('[mock] P0-DUP-OPT — sync:since ack 带 diskLen=11，逼出全量重载');
       ack(0, { diskLen: 11 });
+      return;
+    }
+    if (syncHoldThenDropArmed) {
+      syncHoldThenDropArmed = false;
+      console.log('[mock] P0-02j — sync:since 回执扣住，50ms 后断开传输层');
+      setTimeout(() => socket.conn.close(), 50);
       return;
     }
     // P0-SYNC-ACK-TIMEOUT：吞掉本次 ack、连接保持。前端只能靠 socket.timeout 的 err 分支收尾——
@@ -3240,7 +3374,9 @@ io.on('connection', socket => {
       armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
+      armOutboxPermanent: () => { outboxPermanentArmed = true; },
       armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
       armResumeDivergenceWorktreeSwap: () => {
         resumeDivergenceArmed = { sessionId: 'mock-session-worktree', divergence: MOCK_RESUME_DIVERGENCE_TTURN, swap: true };
@@ -3250,6 +3386,7 @@ io.on('connection', socket => {
       },
       armOutboxReplaySwap: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived' }; },
       armOutboxReplaySwapHistoryFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', historyFirst: true }; },
+      armOutboxReplaySwapEchoFirst: () => { outboxReplaySwapArmed = { sessionId: 'mock-session-archived', echoFirst: true }; },
     })),
     {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
@@ -3541,7 +3678,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-expired'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -3649,6 +3786,30 @@ io.on('connection', socket => {
           });
           socket.emit('agent:event', {
             seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          pendingPermission = null;
+        }
+
+        // 验收 O30：审批等到 TTL 到期——真 agent 的 _expirePermission：request_resolved(expired) + 以 deny 回给 CLI，这一轮照常跑完
+        if (cmd === 'test:permission-expired') {
+          await delay(600);
+          io.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'request_resolved', payload: { requestId: pendingPermission.requestId, kind: 'permission', outcome: 'expired' }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: false, outputSummary: 'Permission request expired (mock)' }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+          });
+          socket.emit('agent:event', {
+            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
           });
           pendingPermission = null;
@@ -4521,12 +4682,13 @@ io.on('connection', socket => {
         }
         const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
         if (bgInst) bgInst.state = 'done';
-        activeInst.state = 'idle';
+        // 新会话页上（viewingInstanceId 为 null）通用路径不懒开实例，activeInst 是 undefined（验收 O71）
+        if (activeInst) activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: activeInst.cwd,
+            viewingCwd: activeInst?.cwd ?? workspaceCwdOf(mockInstances[0].cwd),
             ...mockDirFields(),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -4791,13 +4953,18 @@ io.on('connection', socket => {
       // EnterWorktree 整份迁到了别的 project 目录；或被分页挤出本页）。mainCwdSessions 里没有这个 id。
       // test:live-unowned：同样在跑，但 cwd 不在任何工作区之下（刚进了仓库外的平级 worktree）——
       // 用 mockDirsOverride 把 dirs 钉在进场前的列表上，否则缺省口径会把它的 cwd 现算成一个新工作区。
-      commands: ['test:live-not-in-list', 'test:live-unowned'],
+      // test:live-paged-out（验收 O46）：开着的是一条 transcript 还在、只是被分页挤出本页的旧会话。真 server 上
+      // 从终端来的会话不在 sessions.json 里，实例广播的 title 是 null；元数据要靠 session:list 的 open 补回。
+      commands: ['test:live-not-in-list', 'test:live-unowned', 'test:live-paged-out'],
       run: async ({ cmd }) => {
         const unowned = cmd === 'test:live-unowned';
         if (unowned) mockDirsOverride = mockDirs();
+        if (cmd === 'test:live-paged-out') historyOverflowMode = true;
         const inst = unowned
           ? { instanceId: 'inst_sibling', cwd: '/Users/you/code/claude-chat-mobile-feat-x', sessionId: 'mock-session-sibling', title: '平级 worktree 里的会话' }
-          : { instanceId: 'inst_moved', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-moved-away', title: '搬走了 transcript 的会话' };
+          : cmd === 'test:live-paged-out'
+            ? { instanceId: 'inst_paged', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-older-migration', title: null }
+            : { instanceId: 'inst_moved', cwd: '/Users/you/code/claude-chat-mobile', sessionId: 'mock-session-moved-away', title: '搬走了 transcript 的会话' };
         if (!mockInstances.some(i => i.instanceId === inst.instanceId)) {
           mockInstances.push({ ...inst, state: 'busy', permissionMode: 'default', effort: null, model: activeModel });
         }
@@ -4822,6 +4989,16 @@ io.on('connection', socket => {
       command: 'test:folders-readonly',
       run: async () => {
         mockFoldersAddError = 'source_readonly';
+        // 真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了）；这里中途换安装形态，补一帧让客户端知道
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart,
+            viewingInstanceId,
+            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+            ...mockDirFields(),
+            instances: mockInstances, service: mockServicePayload()
+          }
+        });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { text: 'test:folders-readonly ready' }
@@ -5539,7 +5716,7 @@ io.on('connection', socket => {
         setTimeout(() => socket.disconnect(true), 50);
       },
     },
-  ]);
+  ], { onError: (command, err) => mockScenarioErrors.push({ command, error: String(err?.stack || err) }) });
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {
@@ -5581,6 +5758,7 @@ io.on('connection', socket => {
       : undefined;
     if (replaySwapInst) {
       outboxReplaySwapHistoryFirst = outboxReplaySwapArmed.historyFirst === true;
+      outboxReplaySwapEchoFirst = outboxReplaySwapArmed.echoFirst === true;
       outboxReplaySwapArmed = null;
       const oldId = replaySwapInst.instanceId;
       replaySwapInst.instanceId = `${oldId}_swapped`;
@@ -5618,6 +5796,12 @@ io.on('connection', socket => {
       refuse();
       return;
     }
+    if (outboxPermanentArmed && payload?.fromOutbox === true) {
+      outboxPermanentArmed = false;
+      console.log('[mock] outbox replay permanently refused (armed)');
+      if (typeof ack === 'function') ack({ ok: false, error: '消息被服务端拒收（mock）', permanent: true });
+      return;
+    }
     if (sendTransientFailArmed) {
       sendTransientFailArmed = false;
       console.log('[mock] user:message transient failure (armed)');
@@ -5633,6 +5817,13 @@ io.on('connection', socket => {
       replaySwapInst.state = 'busy';
       replaySwapInst.turnRunning = true;
       outboxReplaySwapDeliveredText = typeof payload?.text === 'string' ? payload.text : null;
+      if (outboxReplaySwapEchoFirst) {
+        outboxReplaySwapEchoFirst = false;
+        outboxReplaySwapEcho = {
+          seq: 1, epoch: 'mock-epoch-replay-swap', sessionId: replaySwapInst.sessionId, instanceId: replaySwapInst.instanceId, ts: Date.now(),
+          type: 'user_message', payload: { text: outboxReplaySwapDeliveredText, clientMessageId: payload?.clientMessageId },
+        };
+      }
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(replaySwapInst.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
