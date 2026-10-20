@@ -2326,8 +2326,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
         // 只清表、不 dispose（实例已在退出路径上）。与 remove() 共用 clearTables，防再漏表。
         instanceManager.clearTables(id);
-        // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
-        if (viewingInstanceId === id) reselectViewingAfter(cwd);
+        // 意外退出（被 kill / 挂死自杀）不替用户挑同目录的另一个会话：静默跳走等于什么都没说（验收 O60），
+        // 落空视图让前端显示「会话已中断」。resumeFailed 维持原规则（同 cwd tab 或空表面、不跨工作区）。
+        if (viewingInstanceId === id) reselectViewingAfter(cwd, { stayOnRemoved: !instance.resumeFailed });
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
