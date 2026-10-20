@@ -2280,9 +2280,15 @@ import { createGateFocusController } from './app/focus-layers.js';
       tone: 'danger',
     }))) return;
     haptic('warning');
-    addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+    // 服务端答应了才说「正在重启」——被拒时先写的那行会和「重启被拒」一起留在消息流里，前后矛盾（O87）。
+    // 新进程连上来（startedAt 变了）时由 setInstances 撤掉这一行。
     socket.emit('dev:restart', {}, res => {
-      if (res && res.ok === false) addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+      if (res && res.ok === false) {
+        addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
+        return;
+      }
+      const bar = addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
+      if (bar) bar.dataset.restartPending = '1';
     });
   };
 
@@ -5244,6 +5250,9 @@ import { createGateFocusController } from './app/focus-layers.js';
     const newServiceStartedAt = p?.service?.startedAt ?? null;
     const serverRestarted = detectServerRestart({ prevStartedAt: lastServiceStartedAt, newStartedAt: newServiceStartedAt });
     if (newServiceStartedAt != null) lastServiceStartedAt = newServiceStartedAt;
+    // 重启已兑现：撤掉「⟳ 正在重启服务…」那一行，否则它一直挂着、像还没重启完（O87）。
+    const restartBars = serverRestarted ? [...messagesEl.querySelectorAll('[data-restart-pending]')] : [];
+    restartBars.forEach(node => node.remove());
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
@@ -5301,6 +5310,14 @@ import { createGateFocusController } from './app/focus-layers.js';
     // canRestart 与 devMode 是两维：devMode 管上面这个常驻按钮组，canRestart 管配置面板
     // 保存成功后要不要给「立即重启」入口（生产 DEV_MODE=0 但被 launchd 托管时应为 true）。
     _canRestart = p?.canRestart === true;
+    // 开发者模式下拉不起来（前台 npm start、容器里没有托管）时按钮照样显示，但点了服务端只会拒绝——
+    // 不给点，并当场说明原因（与配置面板不给「立即重启」同一判据）。
+    if (btnRestartServer) {
+      btnRestartServer.disabled = !_canRestart;
+      btnRestartServer.textContent = _canRestart
+        ? t('⟳ 重启服务（改代码/配置后生效）')
+        : t('⟳ 重启服务：本进程不是常驻托管，停了不会自动拉起，请到电脑上重启');
+    }
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无 id 时收起胶囊并就地说明缺席原因。
     // 两个空态参数在此处求值：实例懒开于首条消息，故「有 newViewing 却无 sid」＝id 分配在途；
     // _pendingFirstSend 覆盖空首页首发到懒开广播回来之间那一瞬（此时 newViewing 仍是 null）。
@@ -5393,6 +5410,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       setEffortMode(p.defaultEffort ?? null, true);
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();
+      // 在首页 / 新会话页点的重启：addBar 插那一行时清掉了空态表面，而这条路不进 bindView——
+      // 撤掉那一行后主区若已空，把空态表面还回来，否则一片空白直到用户手动切走。
+      if (restartBars.length && !messagesEl.children.length) ensureEmptySurface();
     }
     // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
     // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
