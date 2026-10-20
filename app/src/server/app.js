@@ -301,8 +301,9 @@ async function sessionTitleForNotify(cwd, sessionId) {
 function emitNotify(pn, ntfyType) {
   if (!pn) return;
   pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
+  // ntfy 明文经第三方：标题只留「事件 · 项目」，不带会话标题（可能就是用户原话，验收 O33）。Web Push 端到端加密，照旧
   // pn.ntfyType：同一类事件里标签要分档的（result 的完成 / 出错 / 已中止），由 notificationForEvent 给出
-  ntfyNotify(pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
+  ntfyNotify(pn.ntfyTitle ?? pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
 }
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----

@@ -100,6 +100,32 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
 });
 
 test.describe('SEC-04 正文最小化：命令参数不进推送正文', () => {
+  // 验收 O33（AC-22-11）：ntfy 明文经第三方（可能是公共 ntfy.sh），正文早已最小化，标题却带「事件 · 项目 · 会话标题」。
+  // 没有 AI 标题时（关了非必要流量、或标题生成失败），会话标题就是用户某条消息的原文——密钥、敏感信息照样出去。
+  // ntfy 只留「事件 · 项目」（ntfyTitle）；Web Push 端到端加密，title 照旧带会话标题方便分辨。
+  test('每一类会话推送：ntfyTitle 不含会话标题、保留事件与项目；Web Push 的 title 照旧带', () => {
+    const userWords = '把 sk-live-SUPERSECRET 填进配置';
+    const ctx = { cwd: '/home/u/proj', sessionTitle: userWords, instanceId: 'i-1', sessionId: 's-1', hasClients: false };
+    const built = [
+      ['result', notificationForEvent('result', { durationMs: 1000 }, ctx)],
+      // 审批过期那一轮（O30，合并时与本条同时进来）是 result 的另一支，同样要分两份标题
+      ['result_approval_expired', notificationForEvent('result', { durationMs: 1000, isError: true, approvalExpired: true }, ctx)],
+      ['permission_request', notificationForEvent('permission_request', { name: 'Bash' }, ctx)],
+      ['question', notificationForEvent('question', { text: 'q' }, ctx)],
+      ['task_notification', notificationForEvent('task_notification', { status: 'completed' }, ctx)],
+      ['gateway_stall', notificationForEvent('system', { kind: 'notice', notice: 'gateway_stall', seconds: 90 }, ctx)],
+      ['background_running', notificationForBackgroundRunning(ctx)],
+      ['cli_hook', notificationForCliHook('Stop', ctx)],
+    ];
+    for (const [kind, n] of built) {
+      assert.ok(n, `${kind}：前提是这一类会出推送`);
+      assert.ok(typeof n.ntfyTitle === 'string' && n.ntfyTitle, `${kind}：没有 ntfyTitle，ntfy 只能回落到带会话标题的 title`);
+      assert.doesNotMatch(n.ntfyTitle, /SUPERSECRET/, `${kind}：会话标题（可能是用户原话）进了 ntfy 明文标题`);
+      assert.match(n.ntfyTitle, /proj/, `${kind}：项目名要留，否则分不清是哪个项目`);
+      assert.match(n.title, /SUPERSECRET/, `${kind}：Web Push 的标题照旧带会话标题`);
+    }
+  });
+
   test('permission_request 的 body 只有工具名，绝不含 input 参数', () => {
     const secret = 'rm -rf /etc/passwd --token=SUPERSECRET';
     const n = notificationForEvent('permission_request',
