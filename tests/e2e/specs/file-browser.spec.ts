@@ -76,6 +76,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-21d 换行密集的无 mode 文本文件仍走 <pre>，不让 CM 逐行建 DOM', async ({ page }) => {
+    await gotoMock(page);
+    await page.locator('#topContextPill').click();
+    await page.locator('[data-testid="browse-entry"]', { hasText: 'dense.log' }).click();
+
+    await expect(page.locator('#fileBrowseBody > pre')).toBeVisible();
+    await expect.poll(() => page.locator('#fileBrowseBody > pre').evaluate(el => el.textContent?.length)).toBe(12_000);
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-EDIT 编辑并保存，重新打开后内容确实持久化', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();

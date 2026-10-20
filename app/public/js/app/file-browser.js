@@ -27,6 +27,9 @@ const CM_MIME_BY_EXT = {
   yml: 'text/x-yaml', yaml: 'text/x-yaml',
 };
 
+// 无高亮 mode 的文件挂 CM 的行数上限（见 renderContent）；有 mode 的文件不受此限，沿用既有行为。
+const PLAIN_CM_MAX_LINES = 2000;
+
 export function cmModeForFileName(name) {
   const dot = String(name || '').lastIndexOf('.');
   if (dot < 0) return null;
@@ -266,9 +269,12 @@ export function createFileBrowser(context, {
     baseHash = contentHash || null;
     // CM 只接管「一次性读全」的小文件：分页续读过的文件（>256KB 或用户点过加载更多）全程留在 pre，
     // 避免重建编辑器丢滚动位置；CM 脚本未加载时静默回退，不是错误态。没有对应高亮 mode 的扩展名（.txt、
-    // Makefile、.env 等）照样挂 CM、用纯文本 mode——行号与编辑不该取决于有没有语法高亮。
+    // Makefile、.env 等）照样挂 CM、用纯文本 mode——行号与编辑不该取决于有没有语法高亮。但超过
+    // PLAIN_CM_MAX_LINES 行的仍回 pre：viewportMargin: Infinity 会逐行建 DOM，换行密集的日志能拖死手机。
     // 只读预览 vs 可编辑不区分 mode 判定——两者都要挂 CM 实例，baseHash 有无才是「能不能点编辑」的唯一判据。
-    const mime = !usedPagination && !truncated ? (cmModeForFileName(fileName) || 'text/plain') : null;
+    const highlighted = cmModeForFileName(fileName);
+    const plainOk = !highlighted && contentText.split('\n').length <= PLAIN_CM_MAX_LINES;
+    const mime = !usedPagination && !truncated ? (highlighted || (plainOk ? 'text/plain' : null)) : null;
     if (mime && typeof CodeMirror !== 'undefined') {
       const holder = documentRef.createElement('div');
       holder.className = 'cm-ccm-viewer';
