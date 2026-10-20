@@ -35,6 +35,14 @@ test('remainingOlderSessionCount: total>visible 时返回差值', () => {
   assert.equal(remainingOlderSessionCount(10, 50), null);
 });
 
+// 验收 AC-04-13：手动标「稍后再看」、被分页挤出本页的会话由服务端放进 pinned 补回列表，它们也是看得见的行。
+// 只减本页行数时，73 个会话、50 + 1 行可见，提示写「还有 23 个」，实际只藏了 22 个。
+test('remainingOlderSessionCount: 补回的「稍后再看」行也算可见，不再计进「还有 N 个」', () => {
+  assert.equal(remainingOlderSessionCount(73, 50, 1), 22);
+  assert.equal(remainingOlderSessionCount(51, 50, 1), null, '页内 + 补回正好等于总数时没有更早的会话');
+  assert.equal(remainingOlderSessionCount(60, 50, 0), 10, '没有补回行时与原来一致');
+});
+
 test('sessionTitleSearchKeys: 收集 summary/aiTitle/firstUser/firstCmd，去掉空白', () => {
   assert.deepEqual(
     sessionTitleSearchKeys({

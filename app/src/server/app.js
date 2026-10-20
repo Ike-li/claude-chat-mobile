@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -4332,7 +4332,9 @@ registerSocketConnection(io, socket => {
       return ack({ messages: [], error: '会话不存在' });
     }
     try {
-      ack({ messages: await getSessionHistory(sessionId, cwd) }); // M6：async 避免阻塞事件循环
+      // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
+      const { messages, total } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      ack({ messages, total });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }

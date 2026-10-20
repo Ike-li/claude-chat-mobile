@@ -37,16 +37,26 @@ const MUST_IGNORE = [
   '.env.local',
   '.env.production',
   'workdirs.json',          // 旧版工作区列表：泄露的是本机目录结构
+  // 验收套件的本机凭据（网关地址与令牌）。整个 local/ 目录由一条规则盖住，哨兵挑最敏感的那个文件。
+  'tests/acceptance/local/secrets.json',
 ];
 
 // 反向锚点：证明这个判据不是恒真。少了它，一个恒返回 0 的 git 环境会让整条闸全绿而毫无保护力。
-const MUST_NOT_IGNORE = ['app/server.js', 'package.json', '.gitignore'];
+const MUST_NOT_IGNORE = [
+  'app/server.js', 'package.json', '.gitignore',
+  // 验收套件的占位模板必须进仓（换电脑时 setup.mjs 从它复制）。防的是把上面那条规则写宽成 local* 连模板一起盖住
+  'tests/acceptance/local.example/secrets.json',
+];
 
 // check-ignore 的退出码：0 = 被忽略，1 = 未被忽略，其它 = git 自己出错。
 // 「git 出错」与「未被忽略」必须分开报：前者是环境问题，后者才是缺陷，混成一句会让
 // 环境问题看起来像安全回归。
-function ignoreStatus(path) {
-  const r = spawnSync('git', ['check-ignore', '-q', '--', path], { cwd: REPO, encoding: 'utf8' });
+//
+// noIndex：缺省的 check-ignore 先查索引，已跟踪的文件一律报「未被忽略」（exit 1），不管规则怎么写。
+// 反向锚点全是已跟踪文件，不加 --no-index 它们对规则恒绿——local* 盖住模板也照样绿（2026-10-18 实测）。
+// 正向那几条反而要查索引：凭据文件被 git add -f 收进去时，报「未被忽略」正是该红的。
+function ignoreStatus(path, { noIndex = false } = {}) {
+  const r = spawnSync('git', ['check-ignore', '-q', ...noIndex ? ['--no-index'] : [], '--', path], { cwd: REPO, encoding: 'utf8' });
   if (r.error) return { err: `git 无法执行：${r.error.message}` };
   if (r.status === 0) return { ignored: true };
   if (r.status === 1) return { ignored: false };
@@ -65,10 +75,10 @@ for (const path of MUST_IGNORE) {
 }
 
 for (const path of MUST_NOT_IGNORE) {
-  const s = ignoreStatus(path);
+  const s = ignoreStatus(path, { noIndex: true });
   if (s.err) problems.push(`${path}：${s.err}`);
   else if (s.ignored) {
-    problems.push(`${path} 是被跟踪的源文件，却被判成已忽略——判据失真了，上面那几条的绿不可信`);
+    problems.push(`${path} 是要进仓的源文件，却被 .gitignore 规则盖住了——要么规则写宽了，要么判据失真、上面那几条的绿不可信`);
   }
 }
 

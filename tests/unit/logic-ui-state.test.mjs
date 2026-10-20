@@ -6,7 +6,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -1209,5 +1209,24 @@ test.describe('authFailurePath：unauthorized 时弹 token 门还是走 Access �
   test('对照（防修过头）：CF Access 配着 + 真公网域名 → 仍是 access-relogin', () => {
     const lanOrLocal = isLanOrLocalHostname('chat.example.com');
     assert.equal(authFailurePath({ lanOrLocal, cfAccessFlag: '1' }), 'access-relogin');
+  });
+});
+
+// 验收 O20：令牌页每次打开都发一次不带令牌的握手，服务端记一次鉴权失败，8 次就锁 15 分钟——新用户找令牌时
+// 反复打开 App 就被锁，之后带正确令牌也 429。走令牌门的路径上没有令牌，握手必然失败，不该发。
+// 判据与 unauthorized 之后走哪扇门（authFailurePath）同一份：只有 Access 那条路不需要令牌。
+test.describe('shouldHandshakeOnBoot：开页时要不要发起握手', () => {
+  test('没有令牌、会走令牌门（本机/局域网/没开 Access）→ 不握手，直接出令牌门', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: true, cfAccessFlag: '0' }), false);
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: false, cfAccessFlag: '0' }), false);
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: true, cfAccessFlag: '1' }), false, '局域网直连不经 Access，照样要令牌');
+    assert.equal(shouldHandshakeOnBoot({ token: null, lanOrLocal: false, cfAccessFlag: undefined }), false);
+  });
+  test('公网 + Access 已启用 → 照常握手（凭边缘注入的 JWT，不需要令牌）', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: '', lanOrLocal: false, cfAccessFlag: '1' }), true);
+  });
+  test('有令牌 → 照常握手', () => {
+    assert.equal(shouldHandshakeOnBoot({ token: 'abc', lanOrLocal: true, cfAccessFlag: '0' }), true);
+    assert.equal(shouldHandshakeOnBoot({ token: 'abc', lanOrLocal: false, cfAccessFlag: '1' }), true);
   });
 });
