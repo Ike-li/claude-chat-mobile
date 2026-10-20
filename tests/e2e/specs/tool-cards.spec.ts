@@ -41,6 +41,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // PR #250 review：全文超过服务端上限（512KiB）时 tool:full 只回开头并带 truncated。此前只渲染 res.text、随即
+  // 撤掉按钮，用户看到的是一段不完整的输出，却没有任何标记，也没有别的办法拿到其余部分。
+  test('P0-05-FULL-TRUNC 展开全文超过上限：说清只显示了开头和原长', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-tool-full-truncated');
+    await sendChatMessage(page, 'test:tool');
+    await expect(page.locator('details.toolcard')).toHaveCount(3, { timeout: 15_000 });
+    await waitForIdle(page);
+    await page.locator('details.toolcard summary').last().click();
+    await page.locator('[data-testid="tool-expand-full"]').click();
+    const card = page.locator('details.toolcard').last();
+    await expect(card).toContainText('HEAD_OF_HUGE_OUTPUT');
+    const note = card.locator('[data-testid="tool-full-truncated"]');
+    await expect(note, '拿到的只是开头，不说清楚就像已经完整了').toBeVisible();
+    await expect(note).toContainText('700000');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-05b 工具结果乱序返回仍落到正确卡片', async ({ page }) => {
     await gotoMock(page);
 

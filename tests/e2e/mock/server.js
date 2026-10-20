@@ -84,6 +84,8 @@ let queuedUndeliveredClientMessageIds = [];
 const mockStoppedTaskIds = new Set();
 // 一次性开关：让紧接着的那一次 session:history 走失败支。由 POST /__arm-history-error 置起。
 let historyErrorArmed = false;
+// PR #250 review：下一次 tool:full 回「超过服务端上限、只给开头」（truncated:true）。一次性，/__reset 清。
+let toolFullTruncatedArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
@@ -539,6 +541,7 @@ function resetMockState() {
   queuedUndeliveredClientMessageIds = [];
   mockStoppedTaskIds.clear();
   historyErrorArmed = false;
+  toolFullTruncatedArmed = false;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   mockUnreadOnEntry = 0;
@@ -807,6 +810,11 @@ app.post('/__arm-read-elsewhere', (req, res) => {
 
 // 让紧接着的一次 session:history 回失败形态 { messages: [], error }——真 server 在 jsonl 被删/改名/
 // 读坏时就是这个形状。无参，一次性消费。
+app.post('/__arm-tool-full-truncated', (_req, res) => {
+  toolFullTruncatedArmed = true;
+  res.json({ ok: true });
+});
+
 app.post('/__arm-history-error', (_req, res) => {
   historyErrorArmed = true;
   res.json({ ok: true });
@@ -5943,6 +5951,11 @@ io.on('connection', socket => {
 
   socket.on('tool:full', ({ toolUseId, sessionId, cwd } = {}, ack) => {
     if (typeof ack !== 'function') return;
+    if (toolFullTruncatedArmed) {
+      toolFullTruncatedArmed = false;
+      // 同真 server（socket-files.js）：超过 MAX_TOOL_FULL_BYTES 时只回开头，带 truncated 与原长
+      return ack({ ok: true, text: 'HEAD_OF_HUGE_OUTPUT\n'.repeat(5).trim(), truncated: true, totalLength: 700000 });
+    }
     // 历史卡片的全文只能从 transcript 取（真 server 的实例内存里没有）：只认带会话坐标的请求
     if (toolUseId === 'tl-bash-long') {
       if (sessionId !== 'mock-session-timeline' || !cwd) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });

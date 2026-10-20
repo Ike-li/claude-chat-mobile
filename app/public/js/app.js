@@ -3532,7 +3532,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           if (code !== out) highlightToolOutput(code);
           out?.classList.remove('hidden');
         }
-        btn.remove();
+        if (res.truncated) {
+          // 全文超过服务端上限时只回了开头：不说清楚就像已经完整了（PR #250 review）
+          const note = el(`<div class="text-ink-faint text-[11px]" data-testid="tool-full-truncated"></div>`);
+          note.textContent = `${t('全文过长，只显示了开头')}（${res.totalLength ?? '?'} ${t('字符')}）`;
+          btn.replaceWith(note);
+        } else {
+          btn.remove();
+        }
       });
     };
     host.appendChild(btn);
