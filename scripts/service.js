@@ -890,6 +890,13 @@ export function createServiceManager(deps = {}) {
       };
     }
     if (res?.status === 429) {
+      // 服务端的 429 有两档（app/src/auth/rate-limiter.js 的 authRejection）：cooldown 是同一来源刚有一次失败
+      // 顺带上的短锁，几百毫秒就过；rate_limited 才是连续失败达阈值的 15 分钟长锁。
+      let status = null;
+      try { status = JSON.parse(res.body)?.status ?? null; } catch { /* 非 JSON：按长锁说，宁可让人多等 */ }
+      if (status === 'cooldown') {
+        return { ok: false, reason: 'auth-cooldown', error: '同一来源刚有一次鉴权失败，服务端在短暂冷却中。几秒后再试一次。' };
+      }
       return { ok: false, reason: 'rate-limited', error: '已被登录限速锁定（15 分钟）。等锁自然过期，别再重试。' };
     }
     if (res?.status !== 200) {

@@ -338,7 +338,7 @@ node scripts/device.js approve <ID>
 node scripts/device.js deny <ID>
 ```
 
-跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` / `127.0.0.1` / `::1`（空 Host 不算）。
+跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` 或 `127.0.0.1`（空 Host 不算；用 `http://[::1]:端口` 打开的页面不跳过，要审批一次）。
 经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
@@ -707,10 +707,10 @@ v1.13.0 及更早的版本里，`WORKDIRS` 是一份精确白名单：会话目�
 产品不主动检查上游版本。自己看：
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
-这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。本地版本：
+这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。`--sort=-v:refname` 不能省：远端按字典序列 tag，不排序取最后一行拿到的是 `v1.9.1`，而 `v1.10.0` 之后的版本都排在它前面。本地版本：
 
 ```bash
 node -p "require('./package.json').version"
@@ -744,7 +744,7 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 手机已进主壳，发消息却出现「Not logged in · Please run /login」 | 这是 **Claude CLI 未登录**，不是 CCM 令牌/设备门坏了。到主机终端跑 `claude auth status`；未登录则在 `claude` 里 `/login`，完成后再从手机重试。**用第三方网关则不会出现这条**——它不走 Anthropic 登录，配置没生效时报的是网关自己的错，见下面「第三方网关配置不生效」。前置条件见上文 §1 |
-| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 401） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**这一档回的是 401 `unauthorized`、不带 `Retry-After`**（措辞刻意不说「尝试过多」——你只错了一次）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` / HTTP 429 |
+| 输错一次 token 后，紧接着用正确 token 也被拒（HTTP 429 `cooldown`） | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。锁里的请求不校验令牌，**回 429 `{"status":"cooldown"}` 并带 `Retry-After`**，和「令牌不对」（401）分得开，也不说「尝试过多」——你只错了一次。网页端会显示「N 秒后自动重试」并到点自己重连；脚本**等 `Retry-After` 秒后再试**即可，不停重试反而一直落在锁里。只有连续 8 次失败触发的 15 分钟长锁才回 `{"status":"rate_limited"}` |
 | 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 要放在 CLI 自己的通道里：工作区 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的 `env` 块，或启动 server 的 shell；写进 `ccm.config.json` 会被剥除。桌面控制台入口只认前一种 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
