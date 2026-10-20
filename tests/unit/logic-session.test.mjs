@@ -104,7 +104,7 @@ test('resolveDrawerStatusChip: CLI 正在跑（纯终端 / Web 只读镜像 / We
 // O86：注册表没自报时，被镜像锁住的那一行也要看得出终端在驾驶。
 test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住的那一行补终端态', () => {
   const mirror = { sessionId: 's1', stale: false, waiting: false };
-  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'alive', '注册表是终端进程自己说的，压过推断');
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's2', mirror }), 'busy', '别的会话的锁不碰这一行的注册表态');
   assert.equal(resolveRowTerminalState({ registryState: null, sessionId: 's1', mirror }), 'busy');
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断时没人在驾驶，不补');
@@ -113,6 +113,19 @@ test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住�
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: null }), null);
   assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's2', mirror: null }), 'busy');
   assert.equal(resolveRowTerminalState(), null);
+});
+
+// #268 review：行上的 registryState 是上一次 session:list 的快照（最多晚 12 秒才刷新），镜像锁是实时推来的。
+// 两者说的是同一个会话时，镜像锁的转变更新：闲着的终端开跑 / 卡到对话框上，抽屉行当场就要变；
+// 镜像判成疑似中断（服务端在注册表 busy 时不会判 stale）后，快照里的 busy / waiting 已经过时。
+test('resolveRowTerminalState: 同一会话的实时镜像锁比行上缓存的注册表快照新', () => {
+  const mirror = { sessionId: 's1', stale: false, waiting: false };
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'busy', '快照还是空闲，终端已经开跑');
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断后快照里的 busy 已过时');
+  assert.equal(resolveRowTerminalState({ registryState: 'waiting', sessionId: 's1', mirror: { ...mirror, stale: true } }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror: { ...mirror, stale: true } }), 'alive', '终端开着但没在跑：照常说已打开');
 });
 
 test('resolveRowTerminalState: 本会话自主循环（ScheduleWakeup/CronCreate）造成的镜像锁不冒充终端驾驶', () => {

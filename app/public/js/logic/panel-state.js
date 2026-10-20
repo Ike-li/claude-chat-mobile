@@ -179,9 +179,15 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
 // 当前查看的会话（mirror-engine），所以最多补一行。疑似中断（stale）不补：那时多半没人在驾驶。
 // 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
 // mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
+//
+// registryState 是行上缓存的上一次 session:list 快照（最多晚 12 秒才刷新），镜像锁是实时推来的。两者说的是
+// 同一个会话时，镜像锁的转变更新（#268 review）：闲着（alive）的终端开跑或卡到对话框上，行上当场就要变；
+// 镜像判成疑似中断后，快照里的 busy / waiting 已经过时（服务端在注册表 busy / waiting 时不会判 stale），
+// 只留下「终端开着」这一层。autonomous 的锁不是终端在驾驶，不参与覆盖。
 export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
-  if (registryState) return registryState;
-  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale || mirror.autonomous) return null;
+  const ownMirror = Boolean(sessionId && mirror?.sessionId && mirror.sessionId === sessionId && !mirror.autonomous);
+  if (!ownMirror) return registryState || null;
+  if (mirror.stale) return registryState === 'alive' ? 'alive' : null;
   return mirror.waiting ? 'waiting' : 'busy';
 }
 
