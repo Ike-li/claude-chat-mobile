@@ -5,6 +5,8 @@ import { isBareStoredName } from '../files/uploads.js';
 
 // 显式传入的 cwd 不在已连接的文件夹里（routeCwd 返回 null）时的统一拒绝文案（SCOPE-05）。组装根也用它。
 export const OUT_OF_SCOPE_ERROR = '这个目录不在已连接的文件夹里';
+// 范围内的文件已经不在了（面板开着时被删、被改名）：列表是旧的，叫人刷新
+const NOT_FOUND_ERROR = '文件不存在（可能已被删除或改名），请刷新列表';
 
 export function registerFileSocketHandlers({
   socket,
@@ -41,6 +43,9 @@ export function registerFileSocketHandlers({
     const cwd = routeCwd(requestedCwd);
     if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
     const result = listDir(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxEntries });
+    // 范围门过了、只是不是目录或已经不在（前端点文件 / FIFO 条目时先试 list）：不是越界，不记审计（验收 O39 / O80）
+    if (result?.notDirectory) return ack({ ok: false, error: '不是目录' });
+    if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -67,6 +72,9 @@ export function registerFileSocketHandlers({
       // 让这条真实存在的记录淹没那些真正的越界尝试。
       return ack({ ok: false, error: '目标是符号链接，暂不支持直接读取' });
     }
+    // 同上：FIFO / socket 这类读不了的、编辑器开着时被删的，都不是越界（验收 O39 / O80）
+    if (result?.notOpenable) return ack({ ok: false, error: '这个文件类型不能预览' });
+    if (result?.notFound) return ack({ ok: false, error: NOT_FOUND_ERROR });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -117,7 +125,7 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, error: '附件不存在或已被删除' });
     }
     const result = browseReadFile(loc.baseDir, loc.storedName, loc.scopeDirs, { offset, maxBytes, encoding: 'base64' });
-    if (result?.blockedSymlink || result === null) return ack({ ok: false, error: '附件不存在或已被删除' });
+    if (!result || result.blockedSymlink || result.notFound || result.notOpenable) return ack({ ok: false, error: '附件不存在或已被删除' });
     return ack({ ok: true, ...result });
   });
 

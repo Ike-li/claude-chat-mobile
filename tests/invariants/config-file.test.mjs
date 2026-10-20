@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   loadConfigSources, resolveConfigValues, reloadKindOf, diffReloadKinds,
-  applyConfigChanges, structuredToStringValues, projectToEnv, createConfigReloader,
+  applyConfigChanges, structuredToStringValues, projectToEnv, createConfigReloader, describeSavedKeys,
 } from '../../app/src/ops/config-file.js';
 import {
   isSerializableEnvValue, serializeEnvValue, maskSecret, shellOverriddenKeys, applyEnvChanges,
@@ -193,6 +193,31 @@ test.describe('CONFIG-02 .env 可表达性：两个消费者必须同时安全',
 
 // ── 热加载分类、写入侧归一与 .env 文本编辑 ─────────────────────────────────
 // 本节补的是变异对比里本文件相对已退役旧测试【整块缺失】的覆盖面（约 37 个变异点）。
+// 验收 AC-17-11 / O48：改了被环境变量压着的项，面板说「重启后生效」，重启后其实仍是环境变量的值——
+// hard-rules §4.6 定义的假成功。O63：同时存了热加载项和需重启项，只笼统说一句「需要重启」。
+test.describe('CONFIG-01 保存回执：逐项说清什么时候真的生效', () => {
+  test('被 shell 同名变量压着 → shadowed，并给出要 unset 的变量名；不说成重启后生效', () => {
+    assert.deepEqual(describeSavedKeys(['PORT'], { shellEnv: { PORT: '4000' } }),
+      [{ key: 'PORT', effect: 'shadowed', shadowedBy: ['PORT'] }]);
+  });
+
+  test('别名也算压着：WORKDIRS 被 WORK_DIRS 压着，热加载也救不了它', () => {
+    assert.deepEqual(describeSavedKeys(['WORKDIRS'], { shellEnv: { WORK_DIRS: '/a' } }),
+      [{ key: 'WORKDIRS', effect: 'shadowed', shadowedBy: ['WORK_DIRS'] }]);
+  });
+
+  test('没被压着：reload:hot 的已生效，其余重启后生效，逐项分开', () => {
+    assert.deepEqual(describeSavedKeys(['WORKDIRS', 'PORT'], { shellEnv: {} }), [
+      { key: 'WORKDIRS', effect: 'applied' },
+      { key: 'PORT', effect: 'restart' },
+    ]);
+  });
+
+  test('shell 里的空串等同未设置，不算压着（与启动期口径一致）', () => {
+    assert.equal(describeSavedKeys(['PORT'], { shellEnv: { PORT: '' } })[0].effect, 'restart');
+  });
+});
+
 test.describe('热加载分类：漏报比误报危险得多', () => {
   test('只有 schema 标 reload:hot 的键能热加载，其余一律 restart', () => {
     // 缺省 restart 是刻意的保守方向：误报重启只是让用户多操作一次，
