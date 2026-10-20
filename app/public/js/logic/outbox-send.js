@@ -495,14 +495,15 @@ export function shouldClearBusyBySnapshot({ live, localBusy = false, turnStartTs
 export function presentTurnResult(payload = {}, opts = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const durationMs = typeof p.durationMs === 'number' ? p.durationMs : 0;
-  const cost = typeof p.costUsd === 'number' ? ` · $${p.costUsd.toFixed(4)}` : '';
+  // costUsd 是 CLI 的累计费用（resume 的会话里还带着之前的），不是这一轮花的：三种收尾行都不挂，累计成本在状态栏
+  // （验收 O57：网关 503、一个 token 没用的失败轮显示「$0.38」，读起来像这条失败的消息花了这么多钱）
   const secs = (durationMs / 1000).toFixed(1);
   const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
 
   if (p.interrupted) {
     return {
       kind: 'aborted',
-      statusBar: { text: `${t('已中止')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('已中止')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: null,
       notify: { title: t('⏹ 任务已中止'), body: `${t('用时')} ${secs}s` },
       failToolsMessage: t('已中止'),
@@ -512,7 +513,7 @@ export function presentTurnResult(payload = {}, opts = {}) {
   if (p.isError) {
     return {
       kind: 'error',
-      statusBar: { text: `${t('完成')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('出错')} · ${secs}s`, cls: 'text-ink-faint' },
       errorBar: errorText ? { text: `${t('出错：')}${errorText}`, cls: 'text-danger' } : null,
       notify: { title: t('⚠️ 任务出错'), body: errorText.slice(0, 80) || `${t('用时')} ${secs}s` },
       failToolsMessage: errorText || t('工具执行已因本轮错误停止'),
