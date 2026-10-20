@@ -763,6 +763,8 @@ export class AgentSession {
         // 只有进程级计数器答得了。金额仍不单独记——见上面 sideQuestionCalls 的说明。
         metrics.inc(`side_question_${kind}`);
       }
+      // synthetic：这段文字不是模型说的，是 CLI 合成的（网关报错、「没有答案」之类）——当作这次没有（验收 O32）
+      if (r?.synthetic) return null;
       return normalizeSideAnswer(r?.response);
     } catch {
       return null; // 限速/中止/未公开 API 变形——一律当作"这次没有建议"
@@ -1615,15 +1617,6 @@ export class AgentSession {
       && sessionRules[0].behavior === 'allow' && sessionRules[0].rules?.length === 1 ? sessionRules[0].rules[0] : null;
     const chromeSite = siteRule?.toolName === 'ClaudeInChromeDomain' && typeof siteRule.ruleContent === 'string' && siteRule.ruleContent
       ? siteRule.ruleContent : null;
-    this.emit('permission_request', {
-      requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
-      ...(persistDestinations.length ? { persistDestinations } : {}),
-      ...(claudeInChrome ? { claudeInChrome } : {}),
-      ...(chromeSite ? { chromeSite } : {}),
-    });
-    // 持久化台账：只是台账记录，写入失败
-    // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
-    approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     return new Promise(resolve => {
       const abortHandler = () => {
         const p = this.pendingPermissions.get(requestId);
@@ -1644,6 +1637,18 @@ export class AgentSession {
       // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
       // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
       signal?.addEventListener('abort', abortHandler);
+      // emit 必须在写进 pendingPermissions 之后（同 handleQuestion）：permission_request 是 STATE_BOUNDARY 事件，
+      // 服务端借它广播 instances，那次广播的「需要你」聚合读的就是 pendingPermissions——先 emit 就漏掉这张卡，
+      // 计数要等下一次广播才对（验收 O27）。
+      this.emit('permission_request', {
+        requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt,
+        ...(persistDestinations.length ? { persistDestinations } : {}),
+        ...(claudeInChrome ? { claudeInChrome } : {}),
+        ...(chromeSite ? { chromeSite } : {}),
+      });
+      // 持久化台账：只是台账记录，写入失败
+      // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
+      approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     });
   }
 
