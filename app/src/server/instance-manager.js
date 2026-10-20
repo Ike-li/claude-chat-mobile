@@ -9,6 +9,8 @@ export function createInstanceManager() {
   const agents = new Map();
   const permissionModes = new Map();
   const efforts = new Map();
+  // 档位从哪来（'user' | 'cli-settings' | 'default'）：只管显示与落盘，CLI 怎么跑只看 efforts
+  const effortSources = new Map();
   const done = new Set();
   const errors = new Set();
   const aborted = new Set();
@@ -23,6 +25,7 @@ export function createInstanceManager() {
   const nextId = () => `inst_${bootTag}_${++counter}`;
   const permissionModeOf = id => permissionModes.get(id) ?? 'default';
   const effortOf = id => efforts.get(id) ?? null;
+  const effortSourceOf = id => effortSources.get(id) ?? null;
 
   function forSession(sessionId) {
     if (!sessionId) return null;
@@ -76,6 +79,7 @@ export function createInstanceManager() {
     agents.delete(id);
     permissionModes.delete(id);
     efforts.delete(id);
+    effortSources.delete(id);
     done.delete(id);
     errors.delete(id);
     aborted.delete(id);
@@ -141,6 +145,7 @@ export function createInstanceManager() {
     agents,
     permissionModes,
     efforts,
+    effortSources,
     done,
     errors,
     aborted,
@@ -150,6 +155,7 @@ export function createInstanceManager() {
     nextId,
     permissionModeOf,
     effortOf,
+    effortSourceOf,
     forSession,
     stateOf,
     driverStateOf,
