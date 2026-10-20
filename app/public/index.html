@@ -54,7 +54,7 @@
   <div id="authGate" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
       <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">Claude</div>
-      <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">若你刚清过浏览器数据，原先保存的令牌已被清除，重输一次即可。</span></div>
+      <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">第一次打开、换了浏览器或清过浏览器数据时，这里还没有保存令牌，输入一次即可。</span></div>
       <label class="block text-xs text-ink-faint mb-1.5" for="authToken">访问令牌</label>
       <input id="authToken" type="password" autocomplete="current-password" enterkeyhint="go" placeholder="粘贴 AUTH_TOKEN"
         class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
@@ -267,8 +267,13 @@
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
       <!-- 审批完整性预检警示（NFR-17，审批协议步骤 4）：默认隐藏，前端重算指纹与服务端不符时显示。
-           不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
-      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
+           显示时「允许」一直禁用（验收 O28）：回传的就是这份展示内容，服务端按锚定指纹判必然拒跑。
+           只剩拒绝或刷新重取，见 app/approval-questions.js 的 syncPermButtons。 -->
+      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" data-testid="perm-integrity-warn">
+        <div>⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，已禁止「允许」</div>
+        <div class="mt-1 text-ink-soft">可以拒绝，或刷新页面从服务端重新取这张审批</div>
+        <button type="button" id="permIntegrityReload" data-testid="perm-integrity-reload" class="mt-1.5 px-2.5 py-1 rounded-md border border-danger/50 text-danger font-medium">刷新重取</button>
+      </div>
       <!-- UX-001：ExitPlanMode 走 markdown（msg-body）；普通命令 mono 纯文本。由 showNextPerm 切换 class。 -->
       <div id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft whitespace-pre-wrap break-words"></div>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
@@ -642,7 +647,9 @@
         <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
           <!-- 可滚动 chip 区：摘要可能很长，横向滚；动作区不进滚动 -->
           <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
-            <div id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" data-testid="pill-defaults">
+            <!-- 原生 button（验收 O13）：它是模型 / 权限 / 思考磁贴的唯一入口，div 版本键盘打不开设置面板。
+                 读屏名称就是可见的三段摘要，title 补「会话设置」/ 完整串 -->
+            <button type="button" id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" aria-haspopup="dialog" data-testid="pill-defaults">
               <span id="pillModelText" class="pill-defaults-part pill-model">默认</span>
               <span class="pill-defaults-sep" aria-hidden="true">·</span>
               <span id="pillPermText" class="pill-defaults-part pill-perm">Manual</span>
@@ -651,7 +658,7 @@
                 <span class="pill-defaults-sep" aria-hidden="true">·</span>
                 <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
-            </div>
+            </button>
             <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
             <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>

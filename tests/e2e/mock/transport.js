@@ -101,7 +101,17 @@ export function createMockTransport({
   const assetVersion = computeMockAssetVersion(publicDir);
 
   guardAgentEvents(io, caseGeneration);
+  // 验收 O83：模拟真 server 的退避短锁。上锁后窗口内的握手一律回 cooldown（令牌不校验），
+  // err.data 的形状与真 server 的 rejectHandshake 一致。
+  let authCooldownUntil = 0;
   io.use((socket, next) => {
+    const cooldownLeft = authCooldownUntil - Date.now();
+    if (cooldownLeft > 0) {
+      const err = new Error('cooldown');
+      err.data = { reason: 'cooldown', retryAfterMs: cooldownLeft, retryAfterSeconds: Math.max(1, Math.ceil(cooldownLeft / 1000)) };
+      next(err);
+      return;
+    }
     const token = socket.handshake.auth?.token;
     // 不带令牌一律拒：真 server 在非公网 Host 上不留「无 token 放行」的分支（AUTH_TOKEN 是启动前提）。
     // mock 此前放行无令牌握手，「开页没令牌也照样连上」在 E2E 里成立、在真机上不成立（验收 O20）。
@@ -129,6 +139,11 @@ export function createMockTransport({
   app.use((req, res, next) => {
     setSecurityHeaders(res, req.headers?.host);
     next();
+  });
+
+  app.post('/__auth-cooldown', (req, res) => {
+    authCooldownUntil = Date.now() + Math.max(0, Number(req.query?.ms) || 0);
+    res.json({ ok: true });
   });
 
   app.get('/__ready', (req, res) => {
@@ -177,5 +192,6 @@ export function createMockTransport({
     },
   }));
 
-  return { app, httpServer, io, assetVersion };
+  const resetAuthCooldown = () => { authCooldownUntil = 0; };
+  return { app, httpServer, io, assetVersion, resetAuthCooldown };
 }

@@ -741,6 +741,11 @@ header {
   #permModal.sheet-arming button {
     pointer-events: none;
   }
+  /* 验收 O70：禁用要看得出来（防误触期内的三个动作按钮、完整性不符时的「允许」） */
+  #permModal button:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
 
   /* ── 流内 live 活动行（busy 时挂在 #messages 末尾，不进 history/cache）── */
   #streamLiveStatus {
@@ -753,6 +758,10 @@ header {
     cursor: pointer;
   }
   #btnSend[data-mode="stop"]:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  #btnRestartServer:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
