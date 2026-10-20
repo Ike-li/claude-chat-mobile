@@ -196,4 +196,39 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
 
     await expectNoBrowserErrors(page);
   });
+  // PR #245 review：崩溃过的会话重开走分块重载；渲染途中切到别的会话时，renderHistoryBubbles 为了放行历史闸
+  // 照样调 onDone，而补崩溃提示的那一步不看视图是否还在——旧会话的崩溃提示被补进新会话（并可能随之进缓存）。
+  test('P0-DESTROY-CRASH2 重开崩溃过的长会话、渲染途中切走 → 崩溃提示不跟到新会话里', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expect(page.locator('#messages')).toContainText('Long history final message marker', { timeout: 15_000 });
+    await sendChatMessage(page, 'test:process-crash');
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toBeVisible({ timeout: 10_000 });
+
+    // 让 2000 条（50 块）的分块渲染慢下来，保证切走时它还没画完
+    // __idleFired 计数：切走之后它再涨一次，就说明被打断的那一块已经跑过（onDone 已调），可以下结论
+    await page.evaluate(() => {
+      const w = window as unknown as { __idleFired: number };
+      w.__idleFired = 0;
+      window.requestIdleCallback = ((fn: IdleRequestCallback) =>
+        window.setTimeout(() => { w.__idleFired += 1; fn({ didTimeout: true, timeRemaining: () => 0 } as IdleDeadline); }, 100)) as typeof window.requestIdleCallback;
+    });
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0, { timeout: 10_000 });
+    // 历史已回包、分块渲染进行中：提示条在，但 frag 要画完才一次性插入，最后一条还看不到
+    await expect(page.locator('#messages')).toContainText('加载了 2000 条历史消息', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '前提：切走时渲染还没画完').not.toContainText('Long history final message marker');
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
+    // 被打断的那次渲染在下一块发现视图已切走并收尾：等计数再涨一次再看
+    const firedAtSwitch = await page.evaluate(() => (window as unknown as { __idleFired: number }).__idleFired);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __idleFired: number }).__idleFired)).toBeGreaterThan(firedAtSwitch);
+    await expect(page.locator('#messages [data-crash-notice]'), '旧会话的崩溃提示被补进了新会话').toHaveCount(0);
+    await expect(page.locator('#messages')).not.toContainText('Claude Code process terminated by signal SIGKILL');
+
+    await expectNoBrowserErrors(page);
+  });
 });

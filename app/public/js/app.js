@@ -8421,7 +8421,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         return;
       }
       addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
-      renderHistoryBubbles(msgs, () => { crashNotices.restore(sessionId); flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
+      renderHistoryBubbles(msgs, () => {
+        // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
+        if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
+        flushHeldHistoryAppends(gateHandle);
+        onDone?.();
+      }, { fullReload: true });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);

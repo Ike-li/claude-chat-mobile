@@ -2898,7 +2898,7 @@ io.on('connection', socket => {
     if (crashReloadSessionId && sessionId === crashReloadSessionId) {
       crashReloadSessionId = null;
       console.log('[mock] P0-DESTROY-CRASH — 重开崩溃过的会话，sync:since 报 diskLen，逼出清屏重载');
-      ack(0, { diskLen: 99 });
+      ack(0, { diskLen: 100_000 }); // 比任何已渲染过的长度都大：长历史会话也要判成「磁盘变长」
       return;
     }
     // P0-02d4：置换出来的新实例头一次 sync 报磁盘 ahead（终端写过盘才会置换。真 server 在缓冲为空时报 diskLen，缓冲里已有
