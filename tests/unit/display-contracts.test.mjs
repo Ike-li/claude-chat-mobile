@@ -22,6 +22,8 @@ import {
   normalizeEffortLevel,
   CCM_EFFORT_LEVELS,
   UI_EFFORT_LEVELS,
+  resolveFreshPrefs,
+  resolveResumeEffort,
 } from '../../app/src/agent/cli-settings-defaults.js';
 import {
   buildWebStatusLine,
@@ -178,6 +180,54 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     assert.equal(ui.label, 'auto');
   });
 
+  // L3（CLI settings 的 effortLevel）照常当显式档下发给 CLI——跑起来与终端读 settings 一样——但用户
+  // 没选过它，对用户而言就是「没指定」。发之前（空首页）与发之后（实例）都得是「<档> · CLI 默认」，
+  // 不能发完一条就变成光秃秃的档（验收 O15）。
+  test('effortUiState：来源是 CLI settings 的档视同没指定——文案带「CLI 默认」、不高亮磁贴', () => {
+    const levels = withAutoTier(['low', 'medium', 'high']);
+    const fromCli = effortUiState('high', levels, { mirrorReadonly: false, source: 'cli-settings' });
+    assert.equal(fromCli.label, 'high · CLI 默认');
+    assert.equal(fromCli.placeholder, 'high · CLI 默认');
+    assert.equal(fromCli.selected, '',
+      '不是用户钉的档：高亮了就点不动它，想把它钉成自己的选择也无从下手');
+    // effective 是「没指定」时向 CLI 问来的档；L3 档本身就是 CLI 在用的档，以它为准
+    assert.equal(
+      effortUiState('high', levels, { source: 'cli-settings', effective: 'low' }).label,
+      'high · CLI 默认',
+    );
+
+    const fromUser = effortUiState('high', levels, { source: 'user' });
+    assert.equal(fromUser.label, 'high');
+    assert.equal(fromUser.selected, 'high');
+    // 缺来源（旧回执、E2E mock）按用户自选显示，与改动前一致
+    assert.equal(effortUiState('high', levels, {}).label, 'high');
+    // 镜像态整组只认 CLI 观察值，Web 实例的来源不参与
+    assert.equal(
+      effortUiState('high', levels, { mirrorReadonly: true, source: 'cli-settings' }).label,
+      'high',
+    );
+  });
+
+  test('档位来源：新会话与续接按同一优先级给出 user / cli-settings / default', () => {
+    const cliHigh = { mode: 'default', effort: 'high' };
+    // 新会话：用户在空首页选的（L0）> CLI settings（L3）> 没指定
+    assert.equal(resolveFreshPrefs({ cliDefaults: cliHigh }).effortSource, 'cli-settings');
+    assert.equal(resolveFreshPrefs({ hasPendingEffort: true, pendingEffort: 'low', cliDefaults: cliHigh }).effortSource, 'user');
+    assert.equal(resolveFreshPrefs({ hasPendingEffort: true, pendingEffort: 'high', cliDefaults: cliHigh }).effortSource, 'user',
+      '与 settings 同档也是用户自己选的');
+    assert.equal(resolveFreshPrefs({}).effortSource, 'default');
+    assert.equal(resolveFreshPrefs({ hasPendingEffort: true, pendingEffort: null, cliDefaults: cliHigh }).effortSource, 'default');
+
+    // 续接：会话自己存的（带来源）> CLI settings > 没指定
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'low', savedEffortSource: 'user', cliDefaults: cliHigh }),
+      { effort: 'low', source: 'user' });
+    assert.deepEqual(resolveResumeEffort({ savedEffort: 'high', savedEffortSource: 'cli-settings', cliDefaults: cliHigh }),
+      { effort: 'high', source: 'cli-settings' }, '当初从 settings 来的档，续接后仍标 CLI 默认');
+    assert.deepEqual(resolveResumeEffort({ savedEffort: null, cliDefaults: cliHigh }),
+      { effort: 'high', source: 'cli-settings' });
+    assert.deepEqual(resolveResumeEffort({}), { effort: null, source: 'default' });
+  });
+
   test('withAutoTier：auto 恒在末位（CLI usage `[…|ultracode|auto]`），幂等；无档可调时不凭空加', () => {
     assert.deepEqual(
       withAutoTier(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']),
@@ -194,6 +244,19 @@ test.describe('契约 §2 Effort：UI 档 vs SDK 档；ultracode 映射', () => 
     ]);
     assert.equal(hidden, true);
     assert.deepEqual(levels, []);
+  });
+
+  // 验收 O56（AC-07-09）：恢复历史会话时思考档此前会继承同一文件夹里「最后一个实例」的档——只在某个会话里临时
+  // 选过一次 low，之后在这个文件夹里恢复的旧会话（自己从没选过档）全都带着 --effort=low 启动。终端 claude --resume
+  // 不会拿别的会话的档。契约：会话自己存的 > CLI settings（L3）> 没指定；别的会话的档不参与。
+  test('resolveResumeEffort：会话自己存的 > CLI settings > 没指定；不继承同目录别的会话', () => {
+    const cliHigh = { effort: 'high' };
+    assert.equal(resolveResumeEffort({ savedEffort: 'low', cliDefaults: cliHigh }).effort, 'low', '会话自己记过就用它');
+    assert.equal(resolveResumeEffort({ savedEffort: 'auto', cliDefaults: cliHigh }).effort, 'auto', 'auto 是显式选的终值');
+    assert.equal(resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'low', cliDefaults: cliHigh }).effort, 'high',
+      '自己没记过：用 CLI settings，不拿同目录末实例的档');
+    assert.equal(resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'low', cliDefaults: null }).effort, null,
+      '自己没记过、settings 也没配：没指定（不带 --effort），不拿同目录末实例的档');
   });
 
   test('resolvePanelState：镜像态整组用 CLI 观察值，禁止 Web 补空', () => {

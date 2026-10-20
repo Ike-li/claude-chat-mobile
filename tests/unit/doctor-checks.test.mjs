@@ -169,7 +169,8 @@ test('statuslineConfigDiagnostic：实际读取 off 状态，不再是恒定装�
 test('statuslineBridgeDiagnostic：区分已安装、未安装与用户改写后的 drift', () => {
   assert.equal(statuslineBridgeDiagnostic({ installState: 'installed' }).status, 'ok');
   assert.match(statuslineBridgeDiagnostic({ installState: 'installed' }).detail, /CLI.*同步/);
-  assert.equal(statuslineBridgeDiagnostic({ installState: 'not-installed' }).status, 'warn');
+  // 验收 O8：桥是显式 opt-in 的，「没装」是默认状态，不是要处理的问题——给提示（info），不给警告
+  assert.equal(statuslineBridgeDiagnostic({ installState: 'not-installed' }).status, 'info');
   assert.match(statuslineBridgeDiagnostic({ installState: 'not-installed' }).detail, /statusline:install/);
   assert.equal(statuslineBridgeDiagnostic({ installState: 'drifted' }).status, 'warn');
   assert.match(statuslineBridgeDiagnostic({ installState: 'drifted' }).detail, /改写|漂移/);
@@ -471,7 +472,7 @@ test('hooksBridgeDiagnostic：off / 已安装 / 漂移 / 未安装 四态', () =
   assert.equal(drifted.status, 'warn');
   assert.match(drifted.detail, /勿强行覆盖/);
   const missing = hooksBridgeDiagnostic({ installState: 'not-installed' });
-  assert.equal(missing.status, 'warn');
+  assert.equal(missing.status, 'info', '没装是 opt-in 的默认状态，不算警告（验收 O8）');
   assert.match(missing.detail, /hooks:install/);
 });
 

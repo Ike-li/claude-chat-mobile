@@ -285,6 +285,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O15：CLI settings 里存了 effortLevel 时，新会话首发照样带上它（与终端读 settings 一致），
+  // 但用户没选过它。发之前胶囊是「high · CLI 默认」，发完一条变成光秃的「high」——两处说法不一致，
+  // 也看不出这档是不是自己选的。来源跟着实例走之后，发前发后都按「没指定」显示。
+  test('P0-09za 思考强度：CLI settings 来的档发前发后都标「CLI 默认」、不高亮；点同一档才钉成自己的', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__cli-settings-effort?level=high');
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#pillEffortText')).toHaveText('high · CLI 默认');
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await waitForIdle(page);
+    // 行为不变：settings 的档照样当显式档下发
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('effort=high');
+    await expect(page.locator('#pillEffortText')).toHaveText('high · CLI 默认');
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'effort');
+    await expect(page.locator('.effort-tile.ring-accent')).toHaveCount(0);
+
+    // 高亮了就点不动它：不高亮，点一下同一档，来源改成用户自己的
+    const high = page.locator('.effort-tile[data-level="high"]');
+    await high.click();
+    await expect(high).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillEffortText')).toHaveText('high');
+    await closeSettings(page);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09d 新会话空首页设置会应用到首条消息', async ({ page }) => {
     await gotoMock(page);
 

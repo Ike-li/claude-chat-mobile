@@ -106,6 +106,10 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 持久化：`sessions.json` 存 SDK 档或 `'auto'` 字面量（ultracode 不落盘）。`resolveResumeEffort` 把 `'auto'` 当终值，
 把 `null` 当「没指定」继续往下兜底——auto 若存成 null，重启后会悄悄换成 settings 里存的档。
+
+恢复会话时的档位：会话自己存的 > CLI settings（`effortLevel`）> 没指定（不带 `--effort`）。**同一文件夹里别的会话的档不参与**
+——此前会继承该文件夹最后一个实例的档，临时选一次 low 就扩散到之后恢复的所有旧会话；终端 `claude --resume` 不会这样。
+新会话（FRESH）另走 `resolveFreshPrefs`：新会话页暂存 > CLI settings > 硬默认。
 | **settings.effortLevel** | 通常无 max；`normalizeEffortLevel` **不认** ultracode | L3 CLI 默认 |
 
 ### 2.2 UI → SDK 映射（硬契约）
@@ -154,11 +158,14 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | **候选来源** | 当前模型条目的 `supportedEffortLevels`；解析不到 → 全候选并集；明确不支持 → 隐藏整行 |
 | **auto** | 有档可调就在末位追加 `auto`（`withAutoTier`，顺序同 CLI usage `[…\|ultracode\|auto]`）；wire 上原样发 `'auto'` |
 | **没指定（null）** | **不高亮任何磁贴**（尤其不高亮 auto）；pill / 占位显「`<实际档> · CLI 默认`」，实际档未知时只显「CLI 默认」 |
+| **CLI settings 来的档** | 没在 Web 上选过档时，L3（settings 的 `effortLevel`）照常当显式档下发（`--effort`，跑起来同终端读 settings），但用户没选过它，**视同没指定**：pill / 占位显「`<档> · CLI 默认`」、不高亮磁贴。发之前（空首页）与发之后（实例）一致，不能发完一条就变成光秃的档（验收 O15）。点同一档 = 钉成用户自选：服务端只改来源与落盘，不置换实例（`user:setEffort` 的幂等闸按「档 + 来源」判） |
+| **来源字段** | `effortSource`：`user`（Web 上点的）/ `cli-settings`（L3）/ `default`（没指定）。随 instances（实例的 `effortSource`、空首页的 `defaultEffortSource`）与 `effort_mode.source` 下发，随 sessions.json 落盘。缺字段（旧回执、本字段之前落盘的会话）按 `user` 显示，与改动前一致 |
+| **续接时的来源** | `resolveResumeEffort` 随取值的那一层带出来源。存的是 `cli-settings` 来的档时，settings 此刻读得到就跟它（终端 `claude --resume` 也每次现读 settings），读不到（缓存冷 / 读失败）才沿用记下的档 |
 | **实际档来源** | 只能问 CLI：`AgentSession.refreshEffectiveEffort()` 调 `get_settings` 取 `applied.effort`（init 后、切模型后，仅在没指定时问）；server 经 `effort_mode.effective` 与 instances 的 `effortEffective` 下发。只进文案，不当成钉住的档 |
 | **未知档** | `effortUiState` **不得**把 `null` 猜成 `low` |
 | **CLI 镜像** | `mirrorReadonly` 时 null 文案为「CLI 档位未知」，不用 Web 实例的实际档补 |
 | **面板数据源** | `resolvePanelState`：镜像态**整组**只用 CLI 观察值，禁止 Web 偏好补空 |
-| **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` · `logic-session.test.mjs` · E2E P0-09z / P0-09f |
+| **锚点** | `effortLevelsFor` `effortUiState` `withAutoTier` `resolvePanelState` `resolveFreshPrefs` `resolveResumeEffort` · `logic-session.test.mjs` · `cli-settings-defaults.test.mjs` · 集成 `effort-source.test.mjs` · E2E P0-09z / P0-09za / P0-09f |
 
 ### 2.4 Statusline 中的 effort
 
