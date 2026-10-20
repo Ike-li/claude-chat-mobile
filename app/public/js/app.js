@@ -125,6 +125,8 @@ import {
   planOutboxWorktreeReuse,
   planOutboxScratchReuse,
   nextOutboxScratchAnchor,
+  nextOutboxLazyOpenAnchor,
+  planOutboxBlockedTarget,
   nextOutboxWorktreeAnchor,
   outboxComposeKey,
   planOutboxEnqueue,
@@ -1404,7 +1406,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
   function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
-    if (!host) return; // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条
+    // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条提示。但排队照样登记：它已经不在
+    // 持久化队列里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
+    if (!host) {
+      if (afterTurn) outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, { resend: () => resendOutboxHeadless(item) });
+      return;
+    }
     host.classList.remove('animate-pulse');
     host.textContent = '';
     const label = el(`<span></span>`);
@@ -1448,6 +1455,16 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
 
+  // 没有提示落点的排队条目由 outboxAfterTurn 续发：送达或又撞上一轮（留在队首）照常返回；别的结局放回持久化队列，
+  // 交给下一次批处理按常规处置——不在这里替它决定是死信还是重试，也不能让它在内存里悄悄消失。
+  async function resendOutboxHeadless(item) {
+    const d = await deliverOutboxItem(item);
+    if (d.outcome === 'ok' || (d.outcome === 'blocked' && !d.divergence)) return d.outcome;
+    enqueueOutbox(item);
+    persistOutbox();
+    return 'requeue';
+  }
+
   // 离线批处理眼里的「当前视图」：横幅、逐条 targetsViewing、批后 busy 三处归属判据共用这一份，少传一维就和另外两处分叉。
   // 每次现取——drain 期间到达的 instances 广播（规则 5 置换、切 effort）会换掉视图的实例号。会话取 sendSessionId()：
   // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
@@ -1474,6 +1491,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // 两种锚都按新会话页分（outboxComposeKey）：用户有意新开的另一页要各开各的。
     const worktreeAnchors = new Map();
     const scratchAnchors = new Map();
+    // 普通工作区新会话页上第一条懒开的实例（按页 + 目录分）：后面各条被它那一轮拒收时按它登记，本轮结束才认得出目标。
+    const lazyOpenAnchors = new Map();
     const scratchRoot = projectsState.scratchRoot();
     try {
       for (const item of items) {
@@ -1502,6 +1521,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (worktreeAnchor) worktreeAnchors.set(page, worktreeAnchor);
         const scratchAnchor = nextOutboxScratchAnchor(item, decision, scratchAnchors.get(page) ?? null, scratchRoot);
         if (scratchAnchor) scratchAnchors.set(page, scratchAnchor);
+        const lazyKey = `${page}\n${item.cwd ?? ''}`;
+        const lazyAnchor = nextOutboxLazyOpenAnchor(item, decision, lazyOpenAnchors.get(lazyKey) ?? null, scratchRoot);
+        if (lazyAnchor) lazyOpenAnchors.set(lazyKey, lazyAnchor);
         const targetsViewing = outboxItemTargetsViewing(item, outboxViewing());
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -1514,7 +1536,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
           // 队列首条发出去就开跑，其后各条必被拒。不 requeue 空转：交给 outboxAfterTurn 排队，本轮结束按序续发（O66）。
-          markOutboxBlocked(planned, decision.message, targetsViewing, { afterTurn: !decision.divergence });
+          markOutboxBlocked(planOutboxBlockedTarget(planned, lazyOpenAnchors.get(lazyKey) ?? null), decision.message, targetsViewing, { afterTurn: !decision.divergence });
           // viewingInstanceId 非空才锁发送闸：首页没有「当前会话」可被别的轮次挡住，而按 cwd 归属
           // 的判据在首页会对 {instanceId:null, cwd:同目录} 返回 true（那对横幅文案是对的，对这里不是）。
           // 漏这个前提会在空首页把 compose 的发送钮禁掉，直到下一次 instances 广播才自愈。

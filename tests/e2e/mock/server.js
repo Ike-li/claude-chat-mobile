@@ -312,6 +312,8 @@ let outboxReplaySwapArmed = null;
 let outboxTurnsArmed = false;
 let outboxTurnOpen = null; // { instanceId, messageId, epoch }
 let outboxTurnCount = 0;    // 每轮一个新 epoch：同 epoch 的 seq 会被前端当重放去重
+// 收到过的离线重放（fromOutbox）：在服务端侧记，不受前端传输方式（polling / websocket）影响。GET /__outbox-received
+let mockOutboxReceived = [];
 let outboxReplaySwapReloadInstanceId = null;
 // 置换那条（同一批的第 1 条）收下之后，重载拉回来的历史里就有它：真 server 收下即交给 CLI 写进 transcript。
 // 前端那颗被保住的离线气泡要被这条历史认领，屏幕上只能有一颗。
@@ -605,6 +607,7 @@ function resetMockState() {
   outboxTurnsArmed = false;
   outboxTurnOpen = null;
   outboxTurnCount = 0;
+  mockOutboxReceived = [];
   // 漏归零过：同进程里 optimistic-bubble-history-dup 跑过之后，它一直 true，sync:since 分支里排在
   // 上面的 DUP-OPT 分支抢先回 diskLen=11，P0-SYNC-ACK-TIMEOUT 的「吞 ack」永远走不到——那条用例
   // 同片时 1.2s 假绿（单跑要真等 15s）。
@@ -797,6 +800,10 @@ app.get('/__read-state', (_req, res) => {
   res.json(readStateSnapshot());
 });
 
+app.get('/__outbox-received', (_req, res) => {
+  res.json(mockOutboxReceived);
+});
+
 app.get('/__image-requests', (_req, res) => {
   res.json(mockImageRequests);
 });
@@ -829,7 +836,7 @@ app.post('/__outbox-turn-end', (_req, res) => {
     inst.state = 'idle';
     inst.turnRunning = false;
     io.emit('agent:event', {
-      seq: 2, epoch: open.epoch, sessionId: 'mock-session-visual-test', instanceId: inst.instanceId, ts: Date.now(),
+      seq: 2, epoch: open.epoch, sessionId: inst.sessionId ?? null, instanceId: inst.instanceId, ts: Date.now(),
       type: 'result', payload: { messageId: open.messageId, durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
     });
     io.emit('agent:event', {
@@ -5592,7 +5599,14 @@ io.on('connection', socket => {
     }
     // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
     // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
-    const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    // 闸按这条消息的目标实例判（同真 server）：带了还活着的 instanceId 就是它，不是眼下查看的那个——
+    // 后台会话排着的离线条目（O66 review ②）要撞上的是它自己那个会话的在途轮。实例号已不在（置换换了号）
+    // 回落 viewing：真 server 按会话改投到新实例，mock 的置换场景里那就是眼下查看的这个。
+    const gateInst = mockInstances.find(i => i.instanceId === payload?.instanceId)
+      || mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (payload?.fromOutbox === true) {
+      mockOutboxReceived.push({ text: payload.text, instanceId: payload.instanceId ?? null, viewing: viewingInstanceId, refused: gateInst?.turnRunning === true });
+    }
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');
       const refuse = () => {
@@ -5638,8 +5652,17 @@ io.on('connection', socket => {
       });
     }
     // O66：离线重放条目开一轮（同真 server：ack 之前广播 turnRunning=true），回复正文在回显之后发，result 等 /__outbox-turn-end。
+    // 新会话页上的离线首条（没带实例号、眼下也没在看任何实例）：同真 server 先懒开实例、接管 viewing，再开这一轮。
+    // 同一批后面的条目也不带实例号，服务端经 viewing 投给它、撞上这一轮被拒收（O66 review ①）。
+    if (outboxTurnsArmed && payload?.fromOutbox === true && !payload?.instanceId && viewingInstanceId === null) {
+      const fresh = openFreshMockInstance(typeof payload?.model === 'string' ? payload.model : '');
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: workspaceCwdOf(fresh.cwd), ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+      });
+    }
     const outboxTurnInst = outboxTurnsArmed && payload?.fromOutbox === true
-      ? mockInstances.find(i => i.instanceId === viewingInstanceId) : null;
+      ? (mockInstances.find(i => i.instanceId === payload?.instanceId) || mockInstances.find(i => i.instanceId === viewingInstanceId)) : null;
     if (outboxTurnInst) {
       outboxTurnInst.state = 'busy';
       outboxTurnInst.turnRunning = true;
@@ -5789,7 +5812,7 @@ io.on('connection', socket => {
       const messageId = `msg_outbox_turn_${outboxTurnCount}`;
       outboxTurnOpen = { instanceId: outboxTurnInst.instanceId, messageId, epoch: activeEpoch };
       socket.emit('agent:event', {
-        seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        seq: 1, epoch: activeEpoch, sessionId: outboxTurnInst.sessionId ?? null, instanceId: outboxTurnInst.instanceId, ts: Date.now(),
         type: 'text_delta', payload: { messageId, text: `答：${cmd}` },
       });
       return;

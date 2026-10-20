@@ -329,6 +329,76 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // O66 review ①：普通工作区的新会话页上离线连发，条目都不带实例号。第一条懒开实例并开跑，第二条被服务端经 viewing
+  // 投给它、撞上那一轮被拒收。此前它按 {instanceId:null} 排队，本轮结束认不出目标，永远不续发。
+  test('P0-02d12 新会话页上离线连发：第一条懒开的那一轮结束后，第二条自动续发', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['新页离线一', '新页离线二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; instanceId: string | null; viewing: string | null; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect.poll(async () => (await sentOf('新页离线一')).length).toBe(1);
+    expect((await sentOf('新页离线一'))[0].instanceId, '前提：第一条是懒开（不带实例号）').toBeNull();
+    await expect.poll(async () => (await sentOf('新页离线二')).length).toBe(1);
+    await expect(page.locator('#messages'), '前提：第二条撞上第一条那一轮，在排队').toContainText('本轮结束后自动发送');
+
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('新页离线二')).length, '本轮结束应自动续发第二条').toBe(2);
+    expect((await sentOf('新页离线二'))[1].instanceId).toBe('inst_fresh');
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
+  // O66 review ②：页面重载后从持久化队列恢复的条目没有气泡；发往的又不是眼下查看的会话，就连提示条也没有落点。
+  // 此前没有落点就直接返回、不登记排队，而它已经从持久化队列里移除——既不自动续发，也没有手动「重发」。
+  test('P0-02d13 重载后恢复的离线条目发往后台会话：撞上那一轮也排队，结束后自动续发', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:tab'); // 备好后台实例 inst_2，眼下仍看 inst_1
+    await waitForIdle(page);
+    // 在新文档起步时写持久化队列：pagehide 会用内存里的空队列覆盖重载前写进去的东西
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem('seed-bg-outbox')) return;
+      sessionStorage.setItem('seed-bg-outbox', '1');
+      const row = (n: number, text: string) => ({
+        text, model: null, clientMessageId: `cm-bg-${n}`,
+        instanceId: 'inst_2', sessionId: 'mock-session-another', cwd: '/Users/you/code/another-react-project',
+      });
+      localStorage.setItem('ccm-outbox-v1', JSON.stringify([row(1, '后台离线一'), row(2, '后台离线二')]));
+    });
+    await page.reload();
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; instanceId: string | null; viewing: string | null; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect.poll(async () => (await sentOf('后台离线一')).length).toBe(1);
+    await expect.poll(async () => (await sentOf('后台离线二')).length, '前提：第二条被投过一次、撞上第一条那一轮').toBe(1);
+    expect((await sentOf('后台离线二'))[0], '前提：发往后台实例 inst_2、眼下查看的是 inst_1，且被它那一轮拒收').toMatchObject({ instanceId: 'inst_2', viewing: 'inst_1', refused: true });
+    await expect(page.locator('#messages'), '前提：眼下的会话里没有它的提示条').not.toContainText('本轮结束后自动发送');
+
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('后台离线二')).length, '本轮结束应自动续发第二条').toBe(2);
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-02f 前台恢复 sync 不重复已见回复', async ({ page }) => {
     await gotoMock(page);
 

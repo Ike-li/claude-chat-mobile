@@ -619,3 +619,19 @@ export function nextOutboxWorktreeAnchor(item, decision, current) {
   if (!decision || decision.outcome !== 'ok') return current ?? null;
   return decision.instanceId || null;
 }
+
+// 普通工作区新会话页的同一件事（O66 review）：离线连发的条目都是 {instanceId:null}。第一条懒开实例；后面各条
+// 服务端经 viewing 投给它、撞上它那一轮被拒收。拿着 {instanceId:null} 去排队，本轮结束时 findOutboxTargetInstance
+// 认不出目标，永远不续发。所以记下第一条开出来的实例，被拒收的条目按它登记（planOutboxBlockedTarget）。
+// 只管登记与之后的「重发」：首次投递照旧不带实例号，路由仍由服务端决定。worktree / 无文件夹各有自己的锚，不在这里。
+export function nextOutboxLazyOpenAnchor(item, decision, current, scratchRoot) {
+  if (current) return current;
+  if (!item || item.instanceId != null || item.useWorktree === true) return null;
+  if (scratchRoot && item.cwd === scratchRoot) return null;
+  if (!decision || decision.outcome !== 'ok') return null;
+  return decision.instanceId || null;
+}
+export function planOutboxBlockedTarget(item, openedInstanceId) {
+  if (!item || item.instanceId != null || !openedInstanceId) return item;
+  return { ...item, instanceId: openedInstanceId };
+}
