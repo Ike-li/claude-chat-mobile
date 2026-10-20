@@ -438,8 +438,11 @@ export function formatSpawnDescription(inputSummary, maxLen = 120) {
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。
 // 前端据此显「展开全文」；payload.truncated 优先（布尔），缺省时嗅探摘要串。
+// 嗅探用服务端写进摘要的原文，不过 t()：它不随界面语言变，英文界面下翻译成「…(truncated)」再比，历史里截断过的
+// 卡就永远不给「展开全文」（#250 review）。
+const SERVER_TRUNCATION_MARK = '…（已截断）';
 export function isToolSummaryTruncated(summary, { truncated } = {}) {
   if (truncated === true) return true;
   if (truncated === false) return false;
-  return typeof summary === 'string' && summary.includes(t('…（已截断）'));
+  return typeof summary === 'string' && summary.includes(SERVER_TRUNCATION_MARK);
 }
