@@ -83,6 +83,7 @@ export function createAttachmentController(context, options = {}) {
     const before = pending.length;
     pending = pending.filter(item => item._id !== id);
     if (pending.length === before) return false;
+    if (!pending.length) hideNotice(); // 手动删到空：托盘收起，说这些附件的提示一并撤掉（#284 review）
     notifyChange();
     return true;
   }

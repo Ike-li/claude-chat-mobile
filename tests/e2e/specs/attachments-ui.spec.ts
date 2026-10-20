@@ -90,6 +90,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #284 review：用户点 ✕ 删掉唯一的附件时托盘收起，提示（说的正是这个附件）却还挂着——clear() 只覆盖发送这类
+  // 程序清空，没覆盖手动移除。删到空时一并撤掉。
+  test('P0-18n 手动移除最后一个附件：托盘收起时提示一起撤掉', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    await page.locator('#fileInput').setInputFiles([{ name: 'acc-18n.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
+    await page.locator('#attachTray > div').first().click();
+    const notice = page.locator('[data-testid="attach-notice"]');
+    await expect(notice).toHaveText('「acc-18n.txt」不是可预览图片');
+    await expect(notice).toBeVisible();
+    // 停住时间：不让 5 秒的自动收起替修复把它藏起来
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+
+    await page.locator('#attachTray').getByRole('button', { name: '移除附件' }).click();
+    await expect(page.locator('#attachTray > div'), '前提：唯一的附件已移除').toHaveCount(0);
+    await expect(notice, '附件都删了，说它的提示还挂着').toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-18b 附件超限被拒且重复选择同一文件仍生效', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
