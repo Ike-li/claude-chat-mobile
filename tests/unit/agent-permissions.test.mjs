@@ -162,6 +162,45 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 验收 O30：TTL 到期那一轮 CLI 以 is_error 收尾，推送只看 isError，写成了「⚠️ 任务出错」。result 带上
+  // approvalExpired，推送据此说清是审批过期、操作没执行；只标这一轮，下一轮不带。
+  test('审批到期的那一轮：result 带 approvalExpired，下一轮不带', { timeout: 3000 }, async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 30 });
+    const promise = s.askPermission('Bash', { command: 'sleep 999' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    await awaitTtlSettled(promise);
+    s.map({ type: 'result', subtype: 'success', is_error: true, duration_ms: 10, modelUsage: {} });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    const results = events.filter(e => e.type === 'result');
+    assert.equal(results.length, 2);
+    assert.equal(results[0].payload.approvalExpired, true, '到期那一轮要带上 approvalExpired');
+    assert.equal(results[1].payload.approvalExpired, undefined, '标记一次性消费，不得误标到下一轮');
+    s.dispose();
+  });
+
+  test('过期后才有人提交（惰性过期分支）：那一轮的 result 同样带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 1 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    // 同步占住事件循环越过 TTL：到期 timer 来不及触发，提交只能撞上惰性过期分支（异步等待的话 timer 先结算）
+    const until = Date.now() + 5;
+    while (Date.now() <= until) { /* busy-wait */ }
+    const outcome = s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
+    assert.equal(outcome, 'expired', '前提：走的是 resolvePermission 的惰性过期分支');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, true);
+    s.dispose();
+  });
+
+  test('用户自己拒绝的那一轮：result 不带 approvalExpired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 60_000 });
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    s.resolvePermission('t1', 'deny');
+    await promise;
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(events.find(e => e.type === 'result').payload.approvalExpired, undefined);
+    s.dispose();
+  });
+
   test('resolvePermission：未过期时 TTL 机制不影响正常 allow/deny（回归）', async () => {
     const { s, events } = makeSession({ approvalTtlMs: 60_000 }); // 60s，测试期间不可能过期
     const ac = new AbortController();

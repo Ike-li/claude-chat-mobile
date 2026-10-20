@@ -325,6 +325,19 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     assert.equal(r.reason, 'rate-limited');
   });
 
+  // 验收 O83：服务端退避短锁（status=cooldown）也回 429，但那只是同一来源刚有一次失败、几百毫秒就过——
+  // 说成「锁定 15 分钟」会让人白等一刻钟。
+  test('429 cooldown 不重试，也不说成锁 15 分钟', () => {
+    let n = 0;
+    const { mgr } = setup({ httpGet: () => { n += 1; return { status: 429, body: '{"status":"cooldown"}' }; } });
+    const r = mgr.health();
+    assert.equal(n, 1);
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'auth-cooldown');
+    assert.doesNotMatch(r.error, /15 分钟/);
+    assert.match(r.error, /几秒后/);
+  });
+
   test('连不上 → 报服务没在跑，不误导成鉴权问题', () => {
     const { mgr } = setup({ httpGet: () => { throw new Error('ECONNREFUSED'); } });
     const r = mgr.health();
