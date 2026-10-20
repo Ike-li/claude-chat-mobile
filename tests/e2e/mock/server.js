@@ -268,6 +268,8 @@ let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只�
 // 新 inst_1 的 turnSeq 加一、改写 activeEpoch，下一条用例的 stream-long 当场判定「被新回合取代」而停发——
 // P0-04 间歇红的根因（2026-09-23 用 DEBUG=pw:webserver 成对跑 live-status-tail + long-stream-interrupt 实测）。
 let mockResetGeneration = 0;
+// 每次 user:approve 的载荷（含外发的 op）：审批卡防误触与完整性用例据此断言「批了没有、批的是什么」。
+let mockApproveLog = [];
 // P0-05-HIST-FULL：武装后 Timeline Session 的历史里多一对被截断的 Bash 工具卡（tl-bash-long）。一次性。
 let historyLongToolArmed = false;
 const MOCK_BUILD_LOG = Array.from({ length: 120 }, (_, i) => `Compiling module ${i}: auth\nWarning: unused variable x in line ${i}`).join('\n') + '\nBUILD DONE';
@@ -551,6 +553,7 @@ let mockScenarioErrors = [];
 
 function resetMockState() {
   mockResetGeneration += 1;
+  mockApproveLog = [];
   historyLongToolArmed = false;
   mockScenarioErrors = [];
   mockDirsOverride = null;
@@ -818,6 +821,8 @@ function emitTrustedDevices() {
     type: 'trusted_devices', payload: { accessBypassActive, devices: trustedDevices }
   });
 }
+
+app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
 
 app.post('/__reset', (_req, res) => {
   resetMockState();
@@ -3714,7 +3719,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-expired'],
+      commands: ['test:permission', 'test:permission-persistable', 'test:permission-remote-resolved', 'test:permission-result-error', 'test:permission-tampered', 'test:permission-expired'],
       run: async ({ cmd, activeInst }) => {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
@@ -3777,7 +3782,8 @@ io.on('connection', socket => {
           type: 'permission_request', payload: {
             requestId: pendingPermission.requestId,
             name: pendingPermission.name,
-            input: pendingPermission.input,
+            // 验收 O28：传输途中 input 被改写、fp 没跟着改——前端预检会对不上（完整性协议步骤4）
+            input: cmd === 'test:permission-tampered' ? 'echo TAMPERED-DISPLAY' : pendingPermission.input,
             cwd: pendingPermission.cwd,
             ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd),
             // test:permission-persistable 才带——真 server 只在 CLI 给了会落盘的 suggestions 时下发这个字段，
@@ -3785,6 +3791,15 @@ io.on('connection', socket => {
             ...(cmd === 'test:permission-persistable' ? { persistDestinations: ['localSettings'] } : {}),
           }
         });
+
+        // O28：篡改只发生在上面那一帧的传输途中，服务端自己的待办快照仍是原样——「刷新重取」拿回的是这一份。
+        if (cmd === 'test:permission-tampered') {
+          syncPendingSnapshot = {
+            permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd, ...mockPermFields(pendingPermission.name, pendingPermission.input, pendingPermission.cwd) }],
+            questions: [],
+          };
+          syncPendingSnapshotInstanceId = viewingInstanceId;
+        }
 
         if (cmd === 'test:permission-result-error') {
           await delay(600);
@@ -6068,10 +6083,14 @@ io.on('connection', socket => {
 
   // Handle user permission decision
   socket.on('user:approve', async payload => {
+    mockApproveLog.push(payload || null);
     const { requestId, decision, alwaysThisSession, instanceId, exitMode } = payload || {};
     console.log(`[mock] User approve received: requestId=${requestId}, decision=${decision}, always=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
 
-    if (pendingPermission && pendingPermission.requestId === requestId) {
+    // 先抓住这一份：下面跨 await，pendingPermission 这个模块级变量随时可能被改写。
+    const perm = pendingPermission;
+    const bornGeneration = mockResetGeneration;
+    if (perm && perm.requestId === requestId) {
       const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
       activeInst.state = 'busy';
       io.emit('agent:event', {
@@ -6086,18 +6105,18 @@ io.on('connection', socket => {
       });
 
       if (decision === 'allow') {
-        if (alwaysThisSession && pendingPermission.name) {
+        if (alwaysThisSession && perm.name) {
           const targetInstanceId = activeInst.instanceId;
           if (!alwaysAllowedPermissionNamesByInstance.has(targetInstanceId)) {
             alwaysAllowedPermissionNamesByInstance.set(targetInstanceId, new Set());
           }
-          alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(pendingPermission.name);
+          alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(perm.name);
         }
         // 对齐 CLI plan-exit：ExitPlanMode 批准时优先用客户端 exitMode，否则用场景预设 setMode
         const EXIT_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
-        const resolvedMode = (pendingPermission.name === 'ExitPlanMode' && EXIT_MODES.has(exitMode))
+        const resolvedMode = (perm.name === 'ExitPlanMode' && EXIT_MODES.has(exitMode))
           ? exitMode
-          : pendingPermission.setMode;
+          : perm.setMode;
         if (resolvedMode) {
           const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
           if (inst) inst.permissionMode = resolvedMode;
@@ -6108,24 +6127,28 @@ io.on('connection', socket => {
         }
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: pendingPermission.approveOutput || 'git push success: branch main -> origin' }
+          type: 'tool_result', payload: { toolUseId: perm.toolUseId, ok: true, outputSummary: perm.approveOutput || 'git push success: branch main -> origin' }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: pendingPermission.approveText || '\n\n✓ Successfully pushed latest codebase additions!' }
+          type: 'text_delta', payload: { messageId: perm.messageId, text: perm.approveText || '\n\n✓ Successfully pushed latest codebase additions!' }
         });
       } else {
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: false, outputSummary: 'user denied command execution', denyKind: 'denied' }
+          type: 'tool_result', payload: { toolUseId: perm.toolUseId, ok: false, outputSummary: 'user denied command execution', denyKind: 'denied' }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\n🚫 Git push command was rejected by user. Aborted.' }
+          type: 'text_delta', payload: { messageId: perm.messageId, text: '\n\n🚫 Git push command was rejected by user. Aborted.' }
         });
       }
 
       await delay(500);
+      // 这 500ms 里 /__reset 可能已开了下一条用例：剩下的收尾属于上一条，发出去只会串进新用例。
+      // 此前这里直接读 pendingPermission.messageId，被 reset 清空后抛 TypeError，整个 mock 进程退出，
+      // 后面所有用例 ECONNREFUSED。
+      if (bornGeneration !== mockResetGeneration) return;
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -6134,12 +6157,15 @@ io.on('connection', socket => {
 
       socket.emit('agent:event', {
         seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 1200, costUsd: 0.001, isError: false, models: [activeModel] }
+        type: 'result', payload: { messageId: perm.messageId, durationMs: 1200, costUsd: 0.001, isError: false, models: [activeModel] }
       });
 
-      pendingPermission = null;
-      syncPendingSnapshot = null;
-      syncPendingSnapshotInstanceId = null;
+      // 同一条用例里这 500ms 内可能已经来了下一张审批卡：只清自己这一张。
+      if (pendingPermission === perm) {
+        pendingPermission = null;
+        syncPendingSnapshot = null;
+        syncPendingSnapshotInstanceId = null;
+      }
     }
   });
 
