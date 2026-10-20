@@ -67,7 +67,8 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
     // 交回可判别值，调用方不记 scope_violation（验收 O39）。其余失败照旧拒。
     if (err?.code === 'ENOTDIR') return { notDirectory: true };
     // 范围门之后、readdir 之前目录被删 / 改名（Claude 正在改工作区时常见）：是「已经不在」，不是越界。
-    if (err?.code === 'ENOENT') return { notFound: true };
+    // 但同一个窗口里被换成指向范围外的悬空 symlink 也报 ENOENT——那是越界，所以照范围门之前的判据再认一次。
+    if (err?.code === 'ENOENT') return missingInScope(cwd, relPath, scopeDirs) ? { notFound: true } : null;
     return null;
   }
   // FILES-1：readdir 后再校一次 scope——dir→symlink 越界窗口内若已换，fail-closed 整页拒绝。

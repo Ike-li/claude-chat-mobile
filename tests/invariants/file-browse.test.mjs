@@ -160,6 +160,30 @@ test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
     }
   });
 
+  // #278 review：同一个窗口里目录若被换成【指向范围外的悬空 symlink】，readdir 同样报 ENOENT。那不是「已经不在」，
+  // 是越界——照旧回 null，browse:list 记 scope_violation。ENOENT 之后得再过一遍 missingInScope 才能说「不在」。
+  test('范围门之后、readdir 之前目录被换成指向范围外的悬空 symlink：仍按越界回 null', () => {
+    if (process.platform === 'win32') return;
+    const racy = join(cwd, 'racy-swap');
+    mkdirSync(racy);
+    const original = fs.readdirSync;
+    fs.readdirSync = (path, ...rest) => {
+      if (String(path).endsWith('racy-swap')) {
+        rmSync(racy, { recursive: true, force: true });
+        symlinkSync(join(outside, 'gone-target'), racy);
+      }
+      return original(path, ...rest);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.equal(listDir(cwd, 'racy-swap', scopeDirs), null);
+    } finally {
+      fs.readdirSync = original;
+      syncBuiltinESMExports();
+      rmSync(racy, { force: true });
+    }
+  });
+
   test('FI-001: 文件在 readdir 后被删除时跳过，不抛出异常', () => {
     const vanish = join(cwd, 'vanish.txt');
     writeFileSync(vanish, 'temp');
