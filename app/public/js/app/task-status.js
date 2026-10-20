@@ -29,10 +29,17 @@ export function createTaskStatusController(context, {
   const progressHistory = new Map();
   const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
   let activeDetailId = null;
-  // 完成通知去重（O82）：同一来源、同一 taskId 是同一件事。画过的那一行记在这里，以它还在不在 DOM 为准——清屏重载
-  // 摘掉之后，重放来的同一条照常画回来；通知只响一次（重放不该再响）。
-  const doneBars = new Map();
-  const notifiedDone = new Set();
+  // 完成通知去重（O82）：同一来源、同一 taskId 是同一件事。键在 = 响过（重放不该再响）；值是画出来的那一行，以它还在
+  // 不在 DOM 为准——清屏重载摘掉之后，重放来的同一条照常画回来。有界：长开着的标签页里不能只增不减，摘掉的行换成 null
+  // 释放 DOM 子树，超过上限淘汰最早的。
+  const doneSeen = new Map();
+  const DONE_SEEN_CAP = 200;
+  function rememberDone(key, bar) {
+    doneSeen.delete(key);
+    doneSeen.set(key, bar);
+    for (const [k, b] of doneSeen) if (b && b.isConnected === false) doneSeen.set(k, null);
+    while (doneSeen.size > DONE_SEEN_CAP) doneSeen.delete(doneSeen.keys().next().value);
+  }
 
   // 唯一的滚动容器：详情已内联进任务卡片，若列表不封顶，6 个任务 × 20 条历史会把 composer footer
   // 撑到吃满整屏（#messages 是 flex-1 overflow-y-auto，最小尺寸算 0，挡不住）。上限放这一层、
@@ -406,10 +413,10 @@ export function createTaskStatusController(context, {
     }
     const doneKey = typeof payload.taskId === 'string' && payload.taskId
       ? `${event.sessionId || ''}|${payload.source || 'system'}|${payload.taskId}` : null;
-    const shownBar = doneKey ? doneBars.get(doneKey) : null;
+    const shownBar = doneKey ? doneSeen.get(doneKey) : null;
     if (shownBar && shownBar.isConnected !== false) return true; // 这一行已经在消息流里：同一件事不画第二遍
-    if (!doneKey || !notifiedDone.has(doneKey)) {
-      if (doneKey) notifiedDone.add(doneKey);
+    if (!doneKey || !doneSeen.has(doneKey)) {
+      if (doneKey) rememberDone(doneKey, null);
       notify(
         failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
         (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),
@@ -457,7 +464,7 @@ export function createTaskStatusController(context, {
       bar = addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
       attachTaskOutputButton(bar, payload); // B2：有 output_file 才挂，无则静默略过
     }
-    if (doneKey && bar) doneBars.set(doneKey, bar);
+    if (doneKey && bar) rememberDone(doneKey, bar);
     return true;
   }
 

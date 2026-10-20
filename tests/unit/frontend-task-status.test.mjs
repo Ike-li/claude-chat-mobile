@@ -547,3 +547,19 @@ test('O82 反向：不同 taskId、不同来源、没有 taskId 都照常各画�
   status.onComplete({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', status: 'completed' } });
   assert.equal(bars.length, 5);
 });
+
+// PR #274 review：长开着的 PWA 标签页里，去重记录不能只增不减（每一条完成都留着它那一行的 DOM 子树和键）。
+// 有界：完成过足够多条之后，最早那条被淘汰——它再重放会再响一次；最近的仍记得。
+test('O82：去重记录有界——很久以前的那条被淘汰，最近的仍去重', () => {
+  const { status, bars, notes } = dedupeHarness();
+  const done = id => ({ instanceId: 'inst-1', sessionId: 's1', payload: { source: 'system', taskId: id, status: 'completed' } });
+  for (let i = 0; i < 1000; i++) {
+    status.onComplete(done(`t${i}`));
+    bars[bars.length - 1].isConnected = false; // 清屏摘掉
+  }
+  assert.equal(notes.length, 1000);
+  status.onComplete(done('t999'));
+  assert.equal(notes.length, 1000, '最近那条重放不该再响');
+  status.onComplete(done('t0'));
+  assert.equal(notes.length, 1001, '最早那条应已被淘汰（记录有界）');
+});
