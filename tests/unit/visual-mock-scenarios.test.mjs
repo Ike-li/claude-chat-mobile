@@ -79,3 +79,20 @@ test('场景抛错被隔离：run() 照常返回 true、不往外抛，并记一
   assert.match(logged[0], /test:boom/);
   assert.match(logged[0], /TypeError/);
 });
+
+// 只打 console.error 不够：Playwright 不看 webServer 的 stderr，场景若在满足 DOM 断言之后才抛，触发它的用例
+// 照样绿（PR #249 review）。注册表把错误交给调用方的 onError，mock 记账、E2E 收尾断言它为空。
+test('场景抛错交给 onError：带命令名与原始错误，供 E2E 收尾断言', async t => {
+  t.mock.method(console, 'error', () => {});
+  const seen = [];
+  const registry = createVisualMockScenarioRegistry([
+    { command: 'test:boom', run: async () => { throw new TypeError('boom'); } },
+    { command: 'test:ok', run: async () => {} },
+  ], { onError: (command, err) => seen.push([command, err]) });
+  assert.equal(await registry.run('test:ok'), true);
+  assert.equal(seen.length, 0, '没抛错的场景不该记账');
+  assert.equal(await registry.run('test:boom'), true);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], 'test:boom');
+  assert.ok(seen[0][1] instanceof TypeError);
+});

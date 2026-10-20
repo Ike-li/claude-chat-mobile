@@ -21,7 +21,9 @@ function validateScenario(entry) {
   }
 }
 
-export function createVisualMockScenarioRegistry(entries = []) {
+// onError(command, err)：场景抛错时交给调用方记账。只打 stderr 不够——Playwright 不看 webServer 的 stderr，
+// 场景若在满足 DOM 断言之后才抛，触发它的用例照样绿（PR #249 review）。
+export function createVisualMockScenarioRegistry(entries = [], { onError } = {}) {
   const exactScenarios = new Map();
   const prefixScenarios = [];
   const orderedKeys = [];
@@ -66,8 +68,10 @@ export function createVisualMockScenarioRegistry(entries = []) {
       } catch (err) {
         // 场景自己的 bug 只该让触发它的那条用例失败（验收 O71）。调用方 user:message 是 async 处理函数，
         // 拒绝没人接，Node 会直接退出 mock 进程，同一分片里排在后面的用例全部变成「未连接」假红。
-        // 响亮地记下来、不往外抛：触发它的那条用例照样等不到该来的事件而失败，栈在 webServer 日志里。
+        // 响亮地记下来、不往外抛：栈打进 webServer 日志，再交给 onError 记账，由 E2E 收尾断言它为空
+        // （tests/helpers/playwright.ts 的 expectNoBrowserErrors），触发它的那条用例因此必红。
         console.error(`[mock] 场景 ${command} 抛错（已隔离，触发它的用例应会失败）：`, err);
+        onError?.(command, err);
       }
       return true;
     },

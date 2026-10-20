@@ -504,8 +504,12 @@ function mockFolderReason(rel) {
 }
 const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') && !rel.split('/').includes('..');
 
+// 场景抛错的账：registry 每个连接各建一份，所以记在模块级。/__reset 清空，E2E 收尾经 /__scenario-errors 断言为空。
+let mockScenarioErrors = [];
+
 function resetMockState() {
   mockResetGeneration += 1;
+  mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
   mockScratchSessions = [];
@@ -763,6 +767,10 @@ function emitTrustedDevices() {
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
+});
+
+app.get('/__scenario-errors', (_req, res) => {
+  res.json(mockScenarioErrors);
 });
 
 // E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
@@ -5510,7 +5518,7 @@ io.on('connection', socket => {
         setTimeout(() => socket.disconnect(true), 50);
       },
     },
-  ]);
+  ], { onError: (command, err) => mockScenarioErrors.push({ command, error: String(err?.stack || err) }) });
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {
