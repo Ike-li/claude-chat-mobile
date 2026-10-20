@@ -206,13 +206,12 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await sendChatMessage(page, 'test:process-crash');
     await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toBeVisible({ timeout: 10_000 });
 
-    // 让 2000 条（50 块）的分块渲染慢下来，保证切走时它还没画完
-    // __idleFired 计数：切走之后它再涨一次，就说明被打断的那一块已经跑过（onDone 已调），可以下结论
+    // 分块调度改成排队不执行：渲染确定性地停在第一块之后，切走后再由用例手动把队列跑空（同 long-history-render 的 P0-LH3）。
+    // 不用定时器放慢：被打断的那一块什么时候跑、跑没跑完，就成了和用例读状态赛跑（dev 的 push CI 红过 3 次）
     await page.evaluate(() => {
-      const w = window as unknown as { __idleFired: number };
-      w.__idleFired = 0;
-      window.requestIdleCallback = ((fn: IdleRequestCallback) =>
-        window.setTimeout(() => { w.__idleFired += 1; fn({ didTimeout: true, timeRemaining: () => 0 } as IdleDeadline); }, 100)) as typeof window.requestIdleCallback;
+      const w = window as unknown as { __idleQueue: IdleRequestCallback[] };
+      w.__idleQueue = [];
+      window.requestIdleCallback = ((fn: IdleRequestCallback) => w.__idleQueue.push(fn)) as typeof window.requestIdleCallback;
     });
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Long History Session');
@@ -220,13 +219,19 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     // 历史已回包、分块渲染进行中：提示条在，但 frag 要画完才一次性插入，最后一条还看不到
     // 提示文案随历史总数变（dev 上没加载全时是「仅显示最近 2000 条历史消息（共 N 条）」），只认共有的那段
     await expect(page.locator('#messages')).toContainText('2000 条历史消息', { timeout: 10_000 });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __idleQueue: unknown[] }).__idleQueue.length), '前提：下一块已排队').toBeGreaterThan(0);
     await expect(page.locator('#messages'), '前提：切走时渲染还没画完').not.toContainText('Long history final message marker');
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
     await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
-    // 被打断的那次渲染在下一块发现视图已切走并收尾：等计数再涨一次再看
-    const firedAtSwitch = await page.evaluate(() => (window as unknown as { __idleFired: number }).__idleFired);
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __idleFired: number }).__idleFired)).toBeGreaterThan(firedAtSwitch);
+    // 现在才放行被打断的那一块：它发现视图已切走、调 onDone 收尾。跑到队列空为止，返回时收尾已同步做完
+    const drained = await page.evaluate(() => {
+      const q = (window as unknown as { __idleQueue: IdleRequestCallback[] }).__idleQueue;
+      let n = 0;
+      for (let fn = q.shift(); fn; fn = q.shift(), n += 1) fn({ didTimeout: true, timeRemaining: () => 0 } as IdleDeadline);
+      return n;
+    });
+    expect(drained, '前提：被打断的那一块确实跑过').toBeGreaterThan(0);
     await expect(page.locator('#messages [data-crash-notice]'), '旧会话的崩溃提示被补进了新会话').toHaveCount(0);
     await expect(page.locator('#messages')).not.toContainText('Claude Code process terminated by signal SIGKILL');
 
