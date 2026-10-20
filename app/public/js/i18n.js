@@ -557,6 +557,7 @@ export const EN_DICT = Object.freeze({
   '历史消息加载失败': 'Could not load history',
   '加载了': 'Loaded',
   '条历史消息': 'messages from history',
+  '仅显示最近 {n} 条历史消息（共 {total} 条），更早的没有加载': 'Showing only the latest {n} of {total} messages from history; earlier ones are not loaded',
   '子 agent': 'subagent',
   '📄 预览文件': '📄 Preview file',
   '📄 预览变更': '📄 Preview changes',

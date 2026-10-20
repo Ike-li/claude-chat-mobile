@@ -13,6 +13,8 @@ import {
   modelGridEmptyHint,
   resolveGatewayModelName,
   resolveModelPillText,
+  modelTileValueFor,
+  resolveOutgoingModel,
   formatCachePercent,
   effortLevelSubtitle,
   shouldShowBusyWithMirror,
@@ -35,6 +37,8 @@ import {
   isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   formatSessionRowSubtitle,
+  formatSessionRowTime,
+  displaySessionTitle,
   summarizeOtherWorkspaces,
   shouldShowComposer,
   shouldShowTopContextPill,
@@ -80,6 +84,7 @@ import {
   mergeRecentSessionsAcrossWorkspaces,
   recentWorkspaceChips,
   remainingOlderSessionCount,
+  historyLoadedNotice,
   formatNotifyIdentity,
   notifySessionTag,
   lookupNotifySessionTitle,
@@ -167,13 +172,12 @@ import {
   permissionModeTileSpecs,
   resolveComposerPlaceholder,
   resolveTurnEndScroll,
-  resolveSendModel,
-  applyGatewaySuffix,
   formatRestartRows,
   formatAgoShort,
   formatAuditEntry,
   isLanOrLocalHostname,
   authFailurePath,
+  shouldHandshakeOnBoot,
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
@@ -222,6 +226,7 @@ import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
+import { createGateFocusController } from './app/focus-layers.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -368,6 +373,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
+        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
         syncModelUI(value);
       };
@@ -386,6 +392,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const deviceDenied = $('deviceDenied'), deviceDeniedRetry = $('deviceDeniedRetry'), deviceDeniedHelp = $('deviceDeniedHelp');
   const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
+  // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
+  createGateFocusController({ gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp] });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
@@ -538,11 +546,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     if (pillModelText) pillModelText.textContent = modelPillText;
     if (customModelGrid) {
-      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
-      const activeVal = model || (cliDefault ? 'default' : '');
+      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项。
+      // 在跑的 wire 不是档位 id：映射到它所在的那张磁贴（验收 O53），列表里没有才落到兜底卡（value 即它本身）
+      const activeVal = model
+        ? (modelTileValueFor(model, modelsList, currentGatewaySuffix) || model)
+        : (cliDefault ? 'default' : '');
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;
-        const isCurrent = tileVal === activeVal || (!!model && tileVal === model);
+        const isCurrent = tileVal === activeVal;
         const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
@@ -578,16 +589,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
     // 条数 = SDK 列表；标题 = 真实 wire id（resolvedModel），value 仍用 SDK 档位 id
     const tiles = resolveModelTileDisplay(list);
-    const wireOf = (v) => {
-      if (!v || v === 'default') return v || '';
-      return resolveGatewayModelName(v, list) || String(v);
-    };
+    // 「使用中」只给一张：在跑 / 选中的模型映射到它所在的磁贴（验收 O53）。此前按 wire 相等把同 wire 的几档全标上，
+    // 网关下四档同指一个 wire 时四张一起「使用中」。
+    const activeVal = modelTileValueFor(selectedVal, list, currentModel ? currentGatewaySuffix : '') || selectedVal;
     tiles.forEach(({ value: val, title, subtitle }) => {
       const display = title;
-      const active = val === selectedVal
-        || (!!currentModel && val === currentModel)
-        || (!!currentModel && wireOf(currentModel) && wireOf(currentModel) === wireOf(val))
-        || (!!selectedVal && selectedVal !== 'default' && wireOf(selectedVal) === wireOf(val))
+      const active = val === activeVal
         || (!currentModel && val === 'default' && (selectedVal === 'default' || !selectedVal));
       const using = active ? t(' · 使用中') : '';
       const card = el(`
@@ -601,6 +608,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         haptic('tap');
         // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
         modelInput.value = val === 'default' ? '' : val;
+        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel;
         if (val !== 'default') ensureModelOption(val);
         syncModelUI(val === 'default' ? '' : val);
@@ -1299,8 +1307,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
+  // 没令牌、又会走令牌门时不在开页时握手（必然被拒且被记成一次鉴权失败，验收 O20），下面直接出令牌门；
+  // submitAuth 写入令牌后自己 socket.connect()。
+  const handshakeOnBoot = shouldHandshakeOnBoot({ token, lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess });
   const socket = appContext.setSocket(io({
     auth: { token, deviceToken },
+    autoConnect: handshakeOnBoot,
     // 移动端常切后台/息屏，断开后想尽快回来：调小重连退避（默认 1000/5000ms 太久）
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
@@ -1590,7 +1602,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
         replayBuffer.resolve(replayHandle, 'discard');
-        if (socket.connected) socket.disconnect(); socket.connect(); return;
+        // 只有还连着（ack 超时、连接可疑）才自己重连。没连着时这个回调多半是 socket.io-client 在 Manager.onclose 里
+        // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
+        // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
+        // 每次断线 reconnect() 第一行就返回，页面停在「自动重连中…」（验收 O49，对照 socket.io-client 4.8.4 源码）。
+        if (socket.connected) forceReconnect();
+        return;
       }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
       // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
@@ -1659,6 +1676,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
   // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
   connBanner.markConnecting();
+  if (!handshakeOnBoot) {
+    setStatus(t('需要访问令牌'));
+    showAuthGate(''); // 首访不是「令牌无效」，不带错误文案
+  }
 
   // ---- 额度墙「到点自动继续」横幅：数据 = instances 广播的 autoContinue，按钮 → user:autoContinue ----
   // 结果以服务端下一次广播为准；只有请求失败（超时 / 相位已变 / 设备未批准）才就地重画、解锁按钮。
@@ -1724,9 +1745,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // IPv6 按 /64 归桶，同网段另一台设备连错到阈值会连累这台——把一个令牌完全正确的已登录用户
       // 踢回登录门，既答非所问又会诱导他去改本来没问题的令牌。只在登录门本来就开着时把话放进去。
       if (authGate && !authGate.classList.contains('hidden')) showAuthGate(handshake.text);
-      else if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+      else {
+        if (authSubmit?.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
+        // 令牌门没开：话说在连接横幅上（setStatus 写的 #statusLine 恒隐藏，此前用户只看得到「连接中…」，验收 O22）
+        connBanner.markRateLimited(handshake.text);
+      }
       return;
     }
+    connBanner.clearRateLimited(); // 这一轮不是被锁挡下的，别再挂着上一轮的「等 N 分钟」
     if (err.message === 'unauthorized') {
       if (authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'token-gate') {
         setStatus(t('需要访问令牌'));
@@ -1754,17 +1780,25 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // opts.persisted 只有 pageshow 传（true=真·bfcache 恢复）。门控判定见 logic 的 shouldAttemptReconnect：
   // 凭据门开着、或 pageshow 的普通加载分支，一律不发起——那种重连必然失败，唯一效果是把服务端的
   // 退避锁越推越长，正是「只错一次却被告知登录尝试过多」的触发源（2026-09-02）。
+  // 强制干净重连：disconnect() 经 Manager._destroy → _close 清掉 _reconnecting 与残留的重连定时器、关掉挂住的 engine，
+  // 再 connect() 重新握手。只调 socket.connect() 不够——Manager 正在（或卡在）重连中时它什么都不做，而服务暂停又恢复时
+  // 那次握手可能挂着要等满 20s 连接超时，「立即重试」点了没反应（验收 O49）。
+  function forceReconnect() {
+    socket.disconnect();
+    socket.connect();
+  }
   function reconnectIfNeeded(opts = {}) {
     if (!shouldAttemptReconnect({
       authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
       accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
+      deviceDeniedOpen: gateIsOpen(deviceDenied),
       persisted: opts?.persisted ?? null,
     })) return;
     clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(() => {
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
-      if (foregroundReconnectAction(socket.connected) === 'connect') socket.connect();
+      if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();
       else {
         requestSync({ probe: true });
         measureRtt(); // 前台唤醒立即刷新延迟（不依赖 5s 周期）
@@ -2781,7 +2815,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         modelInput.value = pendingSend;
         rebuildCustomModelGrid(modelsList);
       } else if (currentModel) {
-        ensureModelOption(currentModel);
+        // 在跑的 wire 已落在某张磁贴上就不再补一张「当前加载模型」（验收 O53）
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         syncModelUI(currentModel);
       } else if ([...modelInput.options].some(o => o.value === 'default')) {
@@ -3958,6 +3993,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
         // value=default 是 CLI /model 「不 pin」语义：对齐 tile 点击路径，select 置空，
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
+        modelInput.dataset.picked = '1'; // /model 是显式选择，与点磁贴同属发送意图
         if (nakedArg === 'default') {
           currentGatewaySuffix = '';
           delete modelInput.dataset.fullModel;
@@ -3980,17 +4016,19 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       autosize();
       return;
     }
-    // 原样转发 select；空/default → undefined（CLI 不 pin）
-    let model = resolveSendModel({
+    // 运行中的会话用户没点过模型：原样带回在跑模型，不从磁贴重建（会丢网关后缀，验收 O53 / O26）。
+    // 点过或新会话：resolveSendModel pin wire，再按 S5 回贴网关后缀——仅对「不在 supportedModels 候选里的
+    // 自设名」(如 /model 手设并剥离了后缀的)；判据同时认 value 与 resolvedModel，只比 value 会让守卫恒失效、
+    // 每次选模型都送出 grok-4.5[1m][1m]。
+    const model = resolveOutgoingModel({
+      running: Boolean(viewingInstanceId),
+      picked: modelInput.dataset.picked === '1',
+      loadedModel: currentModel ? currentModel + currentGatewaySuffix : '',
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
+      gatewaySuffix: currentGatewaySuffix,
       modelsList,
     });
-    // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
-    // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送。
-    // 判据必须同时认 value 与 resolvedModel：resolveSendModel 自 7febabc 起返回的是 **wire**
-    // （entry.resolvedModel），只比 value 会让守卫恒失效、每次选模型都送出 grok-4.5[1m][1m]。
-    model = applyGatewaySuffix(model, currentGatewaySuffix, modelsList);
     // E17：剥掉本地 _id（非契约字段），data=完整 base64、thumb=小缩略图随消息上传
     const outgoingAttachments = attachments.items().length
       ? attachments.payload()
@@ -4927,8 +4965,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     updateModelAndSuffix(rawModel);
     const effortModelValue = rawModel || currentModel;
     if (modelInput) {
+      delete modelInput.dataset.picked; // 换了会话：上一个会话里点过的模型不是这一个的发送意图
       if (inst.model) {
-        ensureModelOption(currentModel);
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
         rebuildEffortOptions(effortModelValue, { silentClear: true });
       } else {
@@ -4988,7 +5027,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (modelInput) {
       delete modelInput.dataset.fullModel;
       if (rawModel) {
-        ensureModelOption(currentModel, t('CLI 当前模型'));
+        if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel, t('CLI 当前模型'));
         modelInput.value = currentModel;
       } else {
         modelInput.value = '';
@@ -5792,7 +5831,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     row.appendChild(icon);
     const body = el(`<div class="flex-1 min-w-0"></div>`);
     const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
-    head.textContent = item.title || t('新会话');
+    head.textContent = displaySessionTitle(item.title, t('新会话'));
     const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
     const reasonLabel = isApproval ? t('等待审批') : t('等待输入');
     const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
@@ -6799,7 +6838,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         e.stopPropagation();
         haptic('warning');
         if (await appConfirm({
-          title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+          title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
           body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
           okText: t('关闭会话'),
         })) {
@@ -6822,10 +6861,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     rowContent.dataset.terminalSource = s.terminalSource || '';
     rowContent.dataset.bgLocked = s.bgLocked ? '1' : '';
     const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
-    btn.title = s.title || t('新会话');
+    btn.title = displaySessionTitle(s.title, t('新会话'));
     const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
     const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
-    titleSpan.textContent = s.title || t('新会话');
+    titleSpan.textContent = displaySessionTitle(s.title, t('新会话'));
     head.appendChild(titleSpan);
     // R65 未读：标题加粗变深 + 文字 chip「未读」（原 8px 色点在手机上既不显眼也说不清自己是什么）。
     // 上次打开后有新活动或长按标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
@@ -6852,7 +6891,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     btn.appendChild(head);
     const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
     // 有 id 却没有时间戳的只有 SESSION-02 补画的活实例行——它是存过的会话，不能说「未保存」。
-    const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : (s.id ? '' : t('新会话（未保存）'));
+    const when = s.lastUsedAt ? formatSessionRowTime(s.lastUsedAt) : (s.id ? '' : t('新会话（未保存）'));
     // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
     sub.textContent = formatSessionRowSubtitle({
       whenText: when,
@@ -6905,7 +6944,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         haptic('tap');
         const wasUnread = unread.isUnread(s, { isViewing: isViewingRow });
         const ok = await appConfirm({
-          title: s.title || t('新会话'),
+          title: displaySessionTitle(s.title, t('新会话')),
           body: wasUnread
             ? t('标为已读后，这一行的「未读」提示消失。')
             : t('标为未读后，这一行会一直显示「未读」，直到你再次打开它。'),
@@ -6928,7 +6967,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         e.stopPropagation();
         haptic('warning');
         if (await appConfirm({
-          title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+          title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
           body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
           okText: t('关闭会话'),
         })) {
@@ -6948,7 +6987,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       delBtn.onclick = e => {
         e.stopPropagation();
         haptic('warning');
-        openDeleteSession(s.id, rowCwd, s.title, workspaceCwd);
+        openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId
       };
       rowContent.appendChild(delBtn);
     }
@@ -7231,7 +7270,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           };
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length);
+          const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
           const hintText = remaining != null
             ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
             : t('还有更早的会话，可用搜索查找');
@@ -8054,7 +8093,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const titleEl = $('sessionBlockedTitle'), projectEl = $('sessionBlockedProject');
     // 标题回落短 id：深链与「继续此会话」两条路只有 {sessionId, cwd}，拿不到标题。宁可显示
     // 8 位 id 也不写"会话"——用户要靠这行确认自己点的是不是那一个。
-    if (titleEl) titleEl.textContent = title || (sessionId ? sessionId.slice(0, 8) : t('会话'));
+    if (titleEl) titleEl.textContent = displaySessionTitle(title, sessionId ? sessionId.slice(0, 8) : t('会话'));
     if (projectEl) projectEl.textContent = cwd ? baseName(cwd) : '';
     setBlockedReason(message || t('切换失败'));
     if (!blockedSurfaceWired) {
@@ -8266,7 +8305,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
       recentsList.innerHTML = '';
       for (const s of recent) {
-        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
+        const when = s.lastUsedAt ? formatSessionRowTime(s.lastUsedAt) : t('时间未知');
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
@@ -8414,7 +8453,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         onDone?.();
         return;
       }
-      addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
+      addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
       renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。

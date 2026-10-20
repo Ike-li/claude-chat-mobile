@@ -16,17 +16,24 @@
 （加同档的 `npm run test:invariants`、分片并行的 `npm run test:e2e:parallel`，以及若干同源别名，
 名单在 `tests/gates/guard-host-tests.js`）。
 **其余一切会跑测试的命令一律进容器。**
+验收编排器 `node tests/acceptance/run.mjs` 与 `tests/acceptance/env/up.mjs` 是宿主机侧调度，不是这条的例外：
+A 档重放只连 127.0.0.1 上的 E1/E2 容器、零 token；真模型只在 E3 容器里（起 E3 那一步钩子走 `ask`，见下）。
 
 这是白名单不是黑名单。黑名单要求「每遇到一个新命令都正确归类」，而那正是 2026-08-02 失败的那一步——
 `npm run mutate` 没被归类成破坏性操作，它把用户 `~/.claude/projects` 整棵树删光了（70 个项目 / 291 memory / 2990 transcript）。
 白名单反过来：不在名单上的默认进容器，判断错了顶多多跑一次容器，代价不对称地小。
 
 > ⚠ **`guard-host-tests.js` 不是安全网。** 它是 PreToolUse 钩子，**只在 agent 走 Bash 工具时
-> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`$(...)`、别名一概看不见）。
+> 触发——人在终端手敲命令它一次都不会响**，判据又是命令文本（`sh -c "$CMD"`、`bash -c`、`docker exec`
+> 里套的命令、`$(...)`、别名一概看不见）。
 >
 > 它的决策分两档（`decideRoute`）：**有等价容器跑法的一律 `deny` 并指出改跑哪条**，agent 自己换命令
-> 继续，不打断人；只有真 agent turn 与 smoke 是 `ask`——那两档要真凭据、容器里跑不了，
-> 要不要花那笔额度只有人能决定。**别把 deny 当保护**：它防的是手滑，不是对抗。
+> 继续，不打断人；只有三类是 `ask`：真 agent turn、smoke、起验收的 E3 环境
+> （`node tests/acceptance/env/up.mjs --env <含 E3 / E3proxy / E3cf，或 all> --yes`）。
+> 前两类要真凭据、容器里跑不了；第三类的真模型虽在容器里跑，机主网关凭据会复制进容器，此后每个回合
+> 都花真额度——要不要花那笔额度只有人能决定。验收入口 `run.mjs` 只调度、列清单（`--tier C` 也只列不跑），
+> 额度闸不在它上面。一条命令有多段时逐段判：有一段该 `deny` 整条就 `deny`，触发的段全属这三类才 `ask`。
+> **别把 deny 当保护**：它防的是手滑，不是对抗。
 >
 > 2026-09-11 起，`invariants/env`、`invariants/server`、`integration` 三个目录的测试文件与
 > `mutate` 自带**进程级**执行位守卫（`tests/setup/require-disposable-env.mjs`）：不在一次性环境里
@@ -466,7 +473,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 ## 8. 行业常用名怎么落到这里
 
 有人（或某个模型）说"该补集成测试了"、"要加一层安全测试"时，先把那个词翻译过来。
-**它们在本项目不是并列的十五层，而是槽或问法。**
+**它们在本项目不是并列的十六层，而是槽或问法。**
 
 | 常用名 | 落到这里 | 不要把它当成 |
 |---|---|---|
@@ -485,6 +492,7 @@ PR 默认只跑 S0–S3。S5 不是「在 PR 上持续缺席」——它本就�
 | 兼容性 | Node 声明的最低 + 当前；CLI 靠上游守望；Safari 发版手测 | 每 CLI × 每浏览器的 PR 矩阵 |
 | 安装 / 升级 / 卸载 | `DIST-01` + `tests/invariants/env/` | 只当文档附录 |
 | 冒烟与回归 | 发版横切（上一节） | 再开一个 runner |
+| 验收（acceptance） | [`tests/acceptance/`](../tests/acceptance/README.md)：机主本机跑，agent 首跑执行用例并写下判法，判法确定的之后由脚本重放 | 回归套件或 CI 必跑 |
 
 ---
 
