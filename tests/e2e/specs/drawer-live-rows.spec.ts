@@ -24,6 +24,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(row).not.toContainText('新会话（未保存）');
   });
 
+  // 验收 O46：开着的旧会话按时间排不进收起列表的这一页，被画在最前面，标题却是「新会话」、没有时间——
+  // 那一行只拿得到实例广播里的 title（终端来的会话不在 sessions.json 里，是 null）。看起来像多出一个空白新会话。
+  test('P0-LIVE-3 被分页挤出本页的已开会话：照样画在前面，但标题和时间是它自己的', async ({ page }) => {
+    await sendChatMessage(page, 'test:live-paged-out');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+
+    const row = sessionRowByInstance(page, 'inst_paged');
+    await expect(row).toHaveCount(1);
+    await expect(row, '标题落成了「新会话」：用户会以为多出来一个空白会话').toContainText('Older Migration Session');
+    // 副标题是「时间 · 已打开 · 短 id」；没有时间时就只剩「已打开 · …」（验收里看到的就是这样）
+    const subtitle = row.locator('button').first().locator(':scope > div').last();
+    await expect(subtitle).toContainText('已打开');
+    await expect(subtitle, '没有时间').not.toHaveText(/^已打开/);
+  });
+
   test('P0-LIVE-2 cwd 不在任何工作区之下的在跑会话单独成一节，点开即切过去', async ({ page }) => {
     await sendChatMessage(page, 'test:live-unowned');
     await waitForIdle(page);

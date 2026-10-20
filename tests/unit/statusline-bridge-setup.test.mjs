@@ -50,6 +50,21 @@ function runSetup(home, action, extraEnv = {}) {
   });
 }
 
+// 验收 O8 顺带：新装 claude 还没写过 settings.json 时，status 此前抛 ENOENT、exit 1，doctor 据此报 ⚠「无法只读检查
+// 安装状态」。文件不存在是合法起点，确定是没装（ops 层 readStatuslineInstallState 早就这样判），且只读、什么都不建。
+test('status：settings.json 还不存在 → not-installed，不报错也不创建任何文件', () => {
+  const home = makeHome();
+  try {
+    const result = runSetup(home, 'status');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { state: 'not-installed', currentCommand: null, manifestExists: false });
+    assert.equal(existsSync(settingsPath(home)), false);
+    assert.equal(existsSync(join(home, '.claude')), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('status：未安装时只读报告，不创建 manifest 或改写 settings', () => {
   const home = makeHome();
   try {
