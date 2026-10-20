@@ -48,6 +48,16 @@ test('shouldRerenderSessionList: total 变化需要重渲染（「还有 N 个�
   }), false);
 });
 
+// open（验收 O46）：开着、但被分页挤出本页的会话的元数据，服务端单独补回。它的成员跟着「开了哪些会话」走，
+// 主列表一个字都不变时也会增删、改标题——不进判据，那几行就停在首次渲染的样子（或一直是「新会话」）。
+test('shouldRerenderSessionList: open 组增删或改标题需要重渲染，主列表不变也不豁免', () => {
+  const sessions = [{ id: 's1', title: 'Foo', lastUsedAt: 100 }];
+  const base = { hasPrevEntry: true, prevSessions: sessions, nextSessions: sessions };
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [], nextOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }] }), true);
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }], nextOpen: [{ id: 'old', title: 'Renamed', lastUsedAt: 1 }] }), true);
+  assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }], nextOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }] }), false);
+});
+
 test('shouldRerenderSessionList: 空/未定义入参安全，不抛异常', () => {
   assert.equal(shouldRerenderSessionList(), true); // hasPrevEntry 缺省 false → 必须渲染
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true }), false); // 两边都是"无数据"视为无变化
