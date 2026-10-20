@@ -58,12 +58,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(toggle).toBeVisible();
     const notice = page.locator('[data-testid="attach-notice"]');
     await expect(notice).toHaveText('「acc-0801.txt」不是可预览图片');
+    await expect(notice, '提示没露出来').toBeVisible();
     await page.clock.runFor(6000);
     await expect(notice, '轻提示一直挂着').toBeHidden();
 
     await page.locator('#fileInput').setInputFiles([{ name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) }]);
     await expect(notice).toHaveText('「too-large.txt」超过 10MB，未添加');
+    await expect(notice, '提示没露出来').toBeVisible();
     await expect(surface).toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
+
+  // #239 review：托盘旁的提示只靠 5 秒定时器收起。5 秒内发出消息（托盘清空）或换到别的会话（托盘换面），提示照样挂着，
+  // 说的是上一个界面的附件。托盘清空 / 换面时一并撤掉。
+  test('P0-18m 托盘旁的提示随托盘清空撤掉：发出去之后不留到下一个界面', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    await page.locator('#fileInput').setInputFiles([{ name: 'acc-18k.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
+    await page.locator('#attachTray > div').first().click();
+    const notice = page.locator('[data-testid="attach-notice"]');
+    await expect(notice).toBeVisible();
+    // 停住时间：不让 5 秒的自动收起替修复把它藏起来
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+
+    await page.locator('#input').fill('带着附件发出去');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#attachTray > div'), '前提：发出后托盘清空').toHaveCount(0);
+    await expect(notice, '托盘清空了，上一个界面的提示还挂着').toBeHidden();
     await expectNoBrowserErrors(page);
   });
 
