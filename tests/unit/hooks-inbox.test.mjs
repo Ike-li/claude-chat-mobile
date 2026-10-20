@@ -191,3 +191,29 @@ test('目录被删后又出现（卸载后重装、server 不重启）：照样�
     } finally { inbox.close(); }
   } finally { rmSync(d.root, { recursive: true, force: true }); }
 });
+
+// PR #259 review：目录在两次检查之间被删又建（hooks:uninstall 紧接 hooks:install、面板一键重装），每次检查时路径都在，
+// 定时检查永远看不到「目录没了」；而 Linux 的 inotify 盯的是旧 inode，之后的事件文件不再有人消费，直到 server 重启。
+// rearmMs 拉到 60s，保证这条只靠 watcher 自己发现目录被换掉。macOS 的 FSEvents 按路径盯，修不修这里都绿——
+// 红的那一侧只在 Linux（容器 / CI）上看得见。
+test('目录在两次检查之间被删又建：仍能消费之后的事件', async () => {
+  const d = dirs();
+  try {
+    put(d.events);
+    let resolveSeen;
+    const got = new Promise(r => { resolveSeen = r; });
+    const inbox = createHooksInbox({
+      eventsDir: d.events, acksDir: d.acks, enabled: true, debounceMs: 20, rearmMs: 60_000,
+      // 只认重建之后才落的那条：删目录本身会让旧 watcher 触发一次扫描，顺手消费掉重建时同步落下的那条
+      onEvents: e => { if (e.some(x => x.sessionId === 'sess-after-replace')) resolveSeen(e); },
+    });
+    try {
+      rmSync(d.events, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录下
+      put(d.events); // 立刻重建并落一条：中间没有任何定时检查
+      await new Promise(r => setTimeout(r, 200));
+      put(d.events, { session_id: 'sess-after-replace' });
+      const events = await waitForConsumed(inbox, got);
+      assert.ok(events.some(x => x.sessionId === 'sess-after-replace'));
+    } finally { inbox.close(); }
+  } finally { rmSync(d.root, { recursive: true, force: true }); }
+});

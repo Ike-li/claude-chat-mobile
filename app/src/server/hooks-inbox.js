@@ -4,7 +4,8 @@
 // catchUpTick 轮询。watch 建不起来（平台限制/句柄耗尽）时功能不缺失，只是退回轮询延迟。
 // 监听目录而非文件：事件文件是 tmp+rename 原子写，watch 单个文件会绑在旧 inode 上收不到后续
 // 事件（device-gate.js / workdirs.json 都踩过这个坑）。
-import { existsSync, watch } from 'node:fs';
+import { statSync, watch } from 'node:fs';
+import { basename } from 'node:path';
 
 import {
   DEFAULT_CLI_HOOKS_ACKS_DIR,
@@ -69,10 +70,21 @@ export function createHooksInbox({
   // 又冒出来。现在由下面的定时检查兑现免重启：装上（目录出现）就盯上并立刻扫一遍——安装器的 verify 事件
   // 可能已经落在里面等回执；卸掉（目录被删）就放手——Linux 的 inotify 盯的是 inode，目录删了再建，
   // 旧 watcher 再也收不到，不放手重盯就成了「卸载后重装、server 不重启 = 永远收不到」。
+  // 目录换没换：路径还在不等于还是盯着的那个目录——两次检查之间删了又建（卸载紧接安装），路径一直在，
+  // 而 inotify 还挂在旧 inode 上（PR #259 review）。
+  const selfName = basename(eventsDir);
+  let watchedIno = null;
+  const inoOf = () => { try { return statSync(eventsDir).ino; } catch { return null; } };
   function arm() {
-    if (watcher || closed || !existsSync(eventsDir)) return;
+    const ino = inoOf();
+    if (watcher || closed || ino == null) return;
     try {
-      watcher = watch(eventsDir, () => schedule());
+      watcher = watch(eventsDir, (eventType, filename) => {
+        // 被盯的目录本身被删 / 移走：Linux 上是 IN_DELETE_SELF → 'rename' + 目录自己的名字（有的平台不给名字）。
+        // 这个 watcher 已经废了，当场重盯——目录若已被重建，就盯上新的并顺手扫一遍。
+        if (eventType === 'rename' && (filename == null || filename === selfName)) { disarm(); arm(); return; }
+        schedule();
+      });
       watcher.on?.('error', error => logger.warn?.(`[hooks] 投递箱监听出错: ${error?.message || error}`));
       watcher.unref?.();
     } catch (error) {
@@ -80,11 +92,13 @@ export function createHooksInbox({
       logger.warn?.(`[hooks] 无法监听投递箱（退化为轮询触发）: ${error?.message || error}`);
       return;
     }
+    watchedIno = ino;
     consume();
   }
   function disarm() {
     try { watcher?.close(); } catch { /* already closed */ }
     watcher = null;
+    watchedIno = null;
   }
 
   if (enabled) {
@@ -95,7 +109,8 @@ export function createHooksInbox({
     } catch { /* 目录不存在：桥没装 */ }
     arm();
     rearmTimer = setInterval(() => {
-      if (watcher && !existsSync(eventsDir)) disarm();
+      // 目录没了、或换成了另一个（inode 变了，给拿不到「目录自身被删」事件的平台兜底）：放手再重盯
+      if (watcher && inoOf() !== watchedIno) disarm();
       arm();
     }, rearmMs);
     rearmTimer.unref?.();

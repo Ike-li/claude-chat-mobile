@@ -8,13 +8,16 @@
 // 那不是我们建的，绝不碰。~/.claude/ccm 只剩空目录（或 macOS 的 .DS_Store）时一并移除，有别的东西就留着。
 
 import { readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { ccmUnderClaudeHome } from '../shared/claude-home.js';
 
 const BRIDGE_NAMESPACES = new Set(['hooks-v1', 'statusline-v1']);
 
 export function removeBridgeNamespace(home, name) {
   if (!BRIDGE_NAMESPACES.has(name)) throw new Error(`unknown bridge namespace: ${name}`);
+  // HOME 为空串时 os.homedir() 原样返回 ""，join 出来是相对当前目录的路径——递归删除会打到别处。
+  // 删除点自己守住，不指望每个调用方都给对。
+  if (typeof home !== 'string' || !isAbsolute(home)) throw new Error(`bridge namespace home must be an absolute path: ${JSON.stringify(home)}`);
   // safe-rm: name 只能是上面两个字面量之一，路径是调用方注入的 home（生产为 homedir()）+ '.claude/ccm/<name>'，
   // 各段都不来自外部输入；两个调用方（桥的 uninstall）只在 settings 已按 manifest 恢复、manifest 已删之后才调用
   rmSync(ccmUnderClaudeHome(home, name), { recursive: true, force: true });
