@@ -227,6 +227,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createWidgetRenderer } from './app/widget-render.js';
+import { createModelIntent } from './app/model-intent.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 import { createGateFocusController } from './app/focus-layers.js';
 (() => {
@@ -305,6 +306,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 三块始终展开的设置分区 id 留在 HTML（#modelSection / #effortSection / #permSection）供滚动与 E2E，JS 不握引用。
 
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
+  const modelIntent = createModelIntent(); // 当前会话里亲手选过模型没有（发送意图，见 app/model-intent.js）
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
   const cliSummaryEl = $('cliSummary'); // E16：折叠条摘要 git · ctx（formatStatuslineCollapsedSummary）
@@ -375,7 +377,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
-        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
+        modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
         syncModelUI(value);
       };
@@ -610,7 +612,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         haptic('tap');
         // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
         modelInput.value = val === 'default' ? '' : val;
-        modelInput.dataset.picked = '1'; // 用户点的才算发送意图（见 resolveOutgoingModel）
+        modelIntent.markPicked(); // 用户点的才算发送意图（见 resolveOutgoingModel）
         delete modelInput.dataset.fullModel;
         if (val !== 'default') ensureModelOption(val);
         syncModelUI(val === 'default' ? '' : val);
@@ -4031,7 +4033,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         }
         // value=default 是 CLI /model 「不 pin」语义：对齐 tile 点击路径，select 置空，
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
-        modelInput.dataset.picked = '1'; // /model 是显式选择，与点磁贴同属发送意图
+        modelIntent.markPicked(); // /model 是显式选择，与点磁贴同属发送意图
         if (nakedArg === 'default') {
           currentGatewaySuffix = '';
           delete modelInput.dataset.fullModel;
@@ -4060,7 +4062,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 每次选模型都送出 grok-4.5[1m][1m]。
     const model = resolveOutgoingModel({
       running: Boolean(viewingInstanceId),
-      picked: modelInput.dataset.picked === '1',
+      picked: modelIntent.isPicked(),
       loadedModel: currentModel ? currentModel + currentGatewaySuffix : '',
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
@@ -5007,7 +5009,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     updateModelAndSuffix(rawModel);
     const effortModelValue = rawModel || currentModel;
     if (modelInput) {
-      delete modelInput.dataset.picked; // 换了会话：上一个会话里点过的模型不是这一个的发送意图
+      modelIntent.reset(); // 换了会话：上一个会话里点过的模型不是这一个的发送意图
       if (inst.model) {
         if (!modelTileValueFor(currentModel, modelsList, currentGatewaySuffix)) ensureModelOption(currentModel);
         modelInput.value = currentModel;
