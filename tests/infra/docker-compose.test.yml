@@ -40,13 +40,14 @@ services:
     # 排除 node_modules（用镜像里平台匹配的那份，软链过去）。**不排除 .git**：
     # dist-manifest.test.mjs 用 git check-attr / ls-files / archive 复算分发裁剪，缺了它会
     # 报 fatal: not a git repository。printf 那行把配置清空——写的是容器层，不是宿主机。
-    # 末尾 `--` 让 `exec "$@"` 能接住追加参数。
+    # 也排除 tests/acceptance/local（机主的验收配置与网关凭据，gitignore 挡在仓库外，工作树里却在）：
+    # 测试用不到它，复制进来只会让凭据多一份落点。末尾 `--` 让 `exec "$@"` 能接住追加参数。
     entrypoint:
       - sh
       - -lc
       - >-
         mkdir -p /work &&
-        tar -C /repo -cf - --exclude=./node_modules . | tar -C /work -xf - &&
+        tar -C /repo -cf - --exclude=./node_modules --exclude=./tests/acceptance/local . | tar -C /work -xf - &&
         printf '{}' > /work/ccm.config.json &&
         ln -sfn /app/node_modules /work/node_modules &&
         exec "$@"
@@ -73,7 +74,8 @@ services:
       CI: "true"
       CLAUDE_BIN: /work/tests/fixtures/fake-claude.sh
     # 排除 node_modules（用镜像里平台匹配的那份）与 .git（worktree 的 .git 是指向宿主机的
-    # 指针文件，容器里解析不到；变异也不需要它）。末尾 `--` 让 `exec "$@"` 能接住追加参数。
+    # 指针文件，容器里解析不到；变异也不需要它），以及 tests/acceptance/local（同 test service）。
+    # 末尾 `--` 让 `exec "$@"` 能接住追加参数。
     #
     # tar 之后把 ccm.config.json 清空：/repo 是只读挂载，复制出来的那份带着维护者的生产配置
     # （同 test service 那段的理由①）。写的是 /work——容器层，不是挂载，碰不到宿主机那份。
@@ -83,7 +85,7 @@ services:
       - -lc
       - >-
         mkdir -p /work &&
-        tar -C /repo -cf - --exclude=./node_modules --exclude=./.git . | tar -C /work -xf - &&
+        tar -C /repo -cf - --exclude=./node_modules --exclude=./.git --exclude=./tests/acceptance/local . | tar -C /work -xf - &&
         printf '{}' > /work/ccm.config.json &&
         ln -sfn /app/node_modules /work/node_modules &&
         exec "$@"
