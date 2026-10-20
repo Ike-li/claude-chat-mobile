@@ -88,9 +88,11 @@ const bi = (zh, en) => (LANG === 'en' ? en : zh);
 function ok(name, detail) { results.push({ name, status: 'ok', detail }); }
 function warn(name, detail) { results.push({ name, status: 'warn', detail }); }
 function fail(name, detail) { results.push({ name, status: 'fail', detail }); }
+// 提示：不是问题，只是告诉你还有这个选项（如没装的可选桥）。不计入警告。
+function info(name, detail) { results.push({ name, status: 'info', detail }); }
 
 // 彩色输出
-const colors = { ok: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
+const colors = { ok: '\x1b[32m✓\x1b[0m', info: '\x1b[36mℹ\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
 
 function print() {
   console.log(bi('\n=== 配置诊断 ===\n', '\n=== Configuration diagnostics ===\n'));
@@ -100,7 +102,9 @@ function print() {
   }
   const failed = results.filter(r => r.status === 'fail').length;
   const warned = results.filter(r => r.status === 'warn').length;
-  console.log(bi(`=== 结果: ${results.length - failed - warned} 通过, ${warned} 警告, ${failed} 失败 ===\n`, `=== Result: ${results.length - failed - warned} passed, ${warned} warning(s), ${failed} failed ===\n`));
+  const noted = results.filter(r => r.status === 'info').length;
+  const passed = results.length - failed - warned - noted;
+  console.log(bi(`=== 结果: ${passed} 通过, ${noted} 提示, ${warned} 警告, ${failed} 失败 ===\n`, `=== Result: ${passed} passed, ${noted} note(s), ${warned} warning(s), ${failed} failed ===\n`));
   process.exit(failed > 0 ? 1 : 0);
 }
 
@@ -370,7 +374,7 @@ function checkStatuslineBridge() {
     return;
   }
   const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState, lang: LANG });
-  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+  ({ ok, info, warn })[result.status](result.name, result.detail);
 }
 
 // D12: CLI hooks 桥安装态。与 D6 同款：execFileSync 调只读 status 子命令，只消费 state。
@@ -400,7 +404,7 @@ function checkHooksBridge() {
     return;
   }
   const result = hooksBridgeDiagnostic({ bridgeOff, installState, lang: LANG });
-  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+  ({ ok, info, warn })[result.status](result.name, result.detail);
 }
 
 // D7: 网关环境一致性（配置文件里若有 ANTHROPIC_* 提示已被剥除）

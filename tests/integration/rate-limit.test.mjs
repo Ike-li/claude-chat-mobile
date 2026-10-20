@@ -1,6 +1,7 @@
 // tests/integration/rate-limit.test.mjs —— 鉴权门口防暴破限速接线集成测试（承接 NFR-03）
 // 纯函数状态机的单测见 tests/unit/rate-limiter.test.mjs；本文件只验握手中间件的【接线】：
-//   ①正确 token 不被限速误伤；②退避短锁期内仍报 unauthorized；③真令牌错误不带重试提示。
+//   ①正确 token 不被限速误伤；②退避短锁期内报 cooldown + 毫秒数（令牌没校验，带正确令牌也一样）；
+//   ③真令牌错误不带重试提示。
 // 独立文件 = 独立进程 = 独立 server 单例，不与 auth-token.test.mjs 的失败计数耦合。
 //
 // 【为什么这里不覆盖「达阈值长锁 → rate_limited + retryAfter」】制造它需要 8 次【真】失败，
@@ -86,34 +87,41 @@ test.describe('鉴权限速接线集成测试', () => {
     await connectExpectOk('secret-token');
   });
 
-  // 退避短锁期内被拦下的那些尝试，对客户端【仍然是 unauthorized】。
+  // 退避短锁期内被拦下的那些尝试，令牌根本没校验，对客户端说 cooldown + 毫秒数。
   //
-  // 这条用例此前断言的恰好相反（名字就叫「出现 rate_limited」），把一个真实缺陷当契约钉住了：
-  // 用户只输错一次令牌，紧接着的第二次握手（浏览器侧由 pageshow 的 200ms 重连发出）撞进那把
-  // 500ms 退避锁，屏幕上就是「登录尝试过多，请 1 秒后再试」——行动指引从「重输令牌」被错换成
-  // 「等一下」，于是用户等一秒再点，又撞一次。2026-09-02 在本机 127.0.0.1 实测复现。
-  // 判据收敛到 rate-limiter.js 的 gateCheck：未达阈值的退避锁 = cooldown（仍是令牌不对），
-  // 只有 failCount 达 threshold 的长锁才配叫 rate_limited。
-  test('退避短锁期内仍报 unauthorized（只错一次不是「尝试过多」）', async () => {
+  // 这里的契约改过两次。最早断言「出现 rate_limited」：只输错一次令牌，紧接着的第二次握手（浏览器侧由 pageshow 的
+  // 200ms 重连发出）撞进 500ms 退避锁，屏幕上就是「登录尝试过多，请 1 秒后再试」（2026-09-02 本机实测）。于是改成
+  // 「仍报 unauthorized」，可那又把没校验的令牌说成了错的：输错一次后马上输对，正确令牌也被告知「令牌不对」，客户端
+  // 分不出是令牌失效还是被退避（验收 O83，E2 实测窗口 524–544ms）。所以单独一档，前端据此到点自动重试。
+  test('退避短锁期内报 cooldown + 毫秒数，不是 unauthorized 也不是 rate_limited', async () => {
     const results = [];
     for (let i = 0; i < 3; i++) {
       results.push(await connectExpectError('wrong-token'));
     }
-    const msgs = results.map(r => r.message);
     // 第 1 次是真做了 token 校验并失败（backoff）；第 2、3 次是撞进退避锁没校验（cooldown）。
-    // 两者对客户端的含义相同：你的令牌不对。
-    assert.deepEqual(msgs, ['unauthorized', 'unauthorized', 'unauthorized'],
-      `退避期内不得升级成 rate_limited，实际：${JSON.stringify(msgs)}`);
-    for (const [i, r] of results.entries()) {
-      assert.equal(r.data?.retryAfterMs, undefined,
-        `第 ${i + 1} 次不该带 retryAfterMs——给了就等于暗示「等等就能进」，而真正的问题是令牌不对`);
+    assert.deepEqual(results.map(r => r.message), ['unauthorized', 'cooldown', 'cooldown'],
+      `实际：${JSON.stringify(results.map(r => r.message))}`);
+    assert.equal(results[0].data?.retryAfterMs, undefined, '真校验失败的那一次不该带 retryAfterMs——它的问题是令牌不对');
+    for (const r of results.slice(1)) {
+      assert.equal(r.data?.reason, 'cooldown');
+      assert.ok(r.data?.retryAfterMs > 0 && r.data.retryAfterMs <= 500, `冷却毫秒数应落在首次退避内，实际 ${r.data?.retryAfterMs}`);
+      assert.equal(r.data?.retryAfterSeconds, 1);
     }
+  });
+
+  test('冷却期内带正确令牌也是 cooldown（没校验），到点再连就进去', async () => {
+    await new Promise(r => setTimeout(r, 1200));         // 等过上一条留下的短锁
+    const bad = await connectExpectError('wrong-again');
+    assert.equal(bad.message, 'unauthorized');
+    const early = await connectExpectError('secret-token');
+    assert.equal(early.message, 'cooldown', '冷却期内的正确令牌不能被说成「令牌不对」');
+    await new Promise(r => setTimeout(r, early.data.retryAfterMs + 50));
+    await connectExpectOk('secret-token');
   });
 
   // 反向：单纯的令牌错误不该带重试提示，否则等于暗示「等等就能进」，而它真正的问题是令牌不对。
   test('unauthorized 不带重试提示（不误导成「等一会儿就能进」）', async () => {
-    // 先等过上一条留下的短锁，确保这一次真的走到 token 校验而不是被门拦下
-    await new Promise(r => setTimeout(r, 1200));
+    // 上一条以成功收尾，计数已清零：这一次真的走到 token 校验而不是被门拦下
     const first = await connectExpectError('another-wrong-token');
     assert.match(first.message, /unauthorized/, `应为 unauthorized，实际：${first.message}`);
     assert.equal(first.data?.retryAfterMs, undefined, 'unauthorized 不该带 retryAfterMs');

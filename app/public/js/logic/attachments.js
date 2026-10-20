@@ -9,6 +9,18 @@
 
 import { t } from '../i18n.js';
 
+// 附件显示名：与落盘同一规则清洗（后端 app/src/files/uploads.js 的同名函数，两侧不能互相 import，
+// 由 tests/unit/cross-side-parity.test.mjs 逐条对照）。芯片、乐观气泡、广播、刷新后的历史都是这一个名字。
+// 只取最后一段（posix basename：先去尾部斜杠，全是斜杠得空串）→ 去控制字符 → 危险字符换 _ →
+// 前导的点与空白一起剥、去尾部空白 → 空则 file。
+export function sanitizeName(name) {
+  const trimmedSlashes = String(name ?? '').replace(/\/+$/, '');
+  // eslint-disable-next-line no-control-regex -- 本函数职责就是剥离控制字符（\x00-\x1f）
+  const base = trimmedSlashes.slice(trimmedSlashes.lastIndexOf('/') + 1).replace(/[\x00-\x1f\x7f]/g, '');
+  const safe = base.replace(/[/\\:*?"<>|]/g, '_').replace(/^[\s.]+/, '').trimEnd();
+  return safe || 'file';
+}
+
 // UX-020：同名附件序号；可选大小。
 export function formatAttachmentChipLabel(name, occurrence = 1, sizeBytes) {
   const base = (name != null && String(name).trim()) ? String(name).trim() : t('附件');

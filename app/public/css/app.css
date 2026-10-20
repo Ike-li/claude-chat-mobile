@@ -3,7 +3,8 @@
   color-scheme: light dark;
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
   --line:#E3E0D6; --line-soft:#ECEAE1;
-  --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+  /* ink-faint 是小字（10–11px 的时间戳、副标题、小按钮）：在 surface / canvas / sunk / 用户气泡上都要 ≥4.5（验收 O79，原 #73706A 在 sunk 上 4.21） */
+  --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#6B6863;
   /* UI-001：accent 提至 AA 正文对比（白字 5.17 / 字面 4.95）；cta 专供实底白字按钮（深浅一致） */
   --accent:#AE5238; --accent-deep:#8F422C; --accent-bright:#D97757; --accent-wash:#F0E4DD;
   --cta:#AE5238;
@@ -28,7 +29,7 @@
     --line-soft:#242221;
     --ink:#EEEEEC;
     --ink-soft:#A3A19D;
-    --ink-faint:#7A7874;
+    --ink-faint:#8F8C88; /* 原 #7A7874 在 surface 上只有 3.90（验收 O79） */
     --accent:#D97757;
     --accent-deep:#F0E4DD;
     --accent-bright:#E2886A;
@@ -54,7 +55,8 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
 .msg-body pre code { padding: 0; }
 .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
-/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px */
+/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px。
+   不再半透明：11px 的字叠 opacity .7 只剩 2.6:1（验收 O79），降调交给 ink-faint 本身。手机没有 hover，「悬停才显形」从来不成立 */
 .code-block-wrap { position: relative; }
 .code-block-wrap > pre {
   padding-top: 2rem; /* 给右上角 copy 钮留行，避免压住首行代码 */
@@ -67,8 +69,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
   border-radius: 0.3rem; font-size: 11px;
   color: var(--ink-faint); background: var(--surface);
   border: 1px solid var(--line);
-  cursor: pointer; opacity: 0.7;
-  transition: opacity 0.15s;
+  cursor: pointer;
   z-index: 1;
 }
 /* 热区扩充：按钮本体 32px，::after 再扩一点 */
@@ -77,7 +78,6 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
   position: absolute;
   inset: -6px;
 }
-.code-block-wrap:hover .code-copy-btn { opacity: 1; }
 .code-block-wrap .code-copy-btn:hover {
   color: var(--accent-deep); border-color: var(--accent-deep);
 }
@@ -480,16 +480,12 @@ body.ccm-sheet-open #messages {
 .empty-start {
   min-height: 0;
 }
+/* 消息操作栏（复制 / 改写 / 分叉）：原来整条 opacity .5、悬停才恢复——手机上没有悬停，11px 的字只剩 ~2:1（验收 O79） */
 .msg-action-bar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.4rem;
-  opacity: 0.5;
-  transition: opacity 0.2s;
-}
-.msg-action-bar:hover, .msg-action-bar:focus-within {
-  opacity: 1;
 }
 .msg-action-btn {
   display: inline-flex;
@@ -745,6 +741,11 @@ header {
   #permModal.sheet-arming button {
     pointer-events: none;
   }
+  /* 验收 O70：禁用要看得出来（防误触期内的三个动作按钮、完整性不符时的「允许」） */
+  #permModal button:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
 
   /* ── 流内 live 活动行（busy 时挂在 #messages 末尾，不进 history/cache）── */
   #streamLiveStatus {
@@ -757,6 +758,10 @@ header {
     cursor: pointer;
   }
   #btnSend[data-mode="stop"]:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  #btnRestartServer:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }

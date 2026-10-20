@@ -3,7 +3,7 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatServiceNoticeRows, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
 import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
@@ -564,4 +564,39 @@ test('statusline 行：配置被改动（drifted）同样不给动作，交给�
   const row = formatStatuslineBridgeRow({ state: 'drifted', off: false });
   assert.equal(row.tone, 'warn');
   assert.equal(row.action, null);
+});
+
+// 验收 O23（AC-17-03）：限速锁定的措辞早按来源分了三档（本机「多半是你自己的旧 token」、局域网、公网「在暴力尝试」），
+// 安全日志也按来源分色（公网红、本机与局域网琥珀），唯独服务状态「异常告警」那一行三档都是红色 ⛔。
+// 把自己手滑讲成红色安全告警，比不报还糟——真出事那天它已经被当成噪音了。判色与安全日志同一判据。
+test.describe('formatServiceNoticeRows：告警行判色按类别与来源', () => {
+  const now = 100 * 60_000;
+  const lockoutFrom = (source, extra = {}) => formatServiceNoticeRows({
+    service: { rateLimitLockout: { at: now - 5 * 60_000, count: 1, source }, ...extra }, now,
+  })[0];
+
+  test('本机、局域网来源的限速锁定 → warning（琥珀）', () => {
+    assert.equal(lockoutFrom('ip:127.0.0.1').tone, 'warning');
+    assert.equal(lockoutFrom('ip:192.168.1.20').tone, 'warning');
+  });
+
+  test('公网来源 → danger（红）', () => {
+    assert.equal(lockoutFrom('ip:203.0.113.7').tone, 'danger');
+  });
+
+  test('说不清来源（旧 server 不带 source）、反代后的 127.0.0.1（无法确认是否本机）→ 仍按 danger，与措辞同样保守', () => {
+    assert.equal(lockoutFrom(undefined).tone, 'danger');
+    assert.equal(lockoutFrom('ip:127.0.0.1', { proxyFronted: true }).tone, 'danger');
+  });
+
+  test('推送投递失败 → danger；前端错误、找不到文件夹 → warning；文案与 formatServiceNotices 一一对应', () => {
+    const service = {
+      deliveryFailure: { channel: 'push', at: now - 60_000, count: 1 },
+      clientError: { at: now - 60_000, count: 2 },
+      missingFolders: 1,
+    };
+    const rows = formatServiceNoticeRows({ service, now });
+    assert.deepEqual(rows.map(r => r.tone), ['danger', 'warning', 'warning']);
+    assert.deepEqual(rows.map(r => r.text), formatServiceNotices({ service, now }));
+  });
 });

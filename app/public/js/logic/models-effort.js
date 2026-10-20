@@ -302,13 +302,18 @@ export function effortLevelsFor(modelValue, modelsList) {
 // 就用存的，否则模型默认）——不高亮任何磁贴，尤其不能冒充 auto（auto 是模型内置默认、无视 settings）；
 // mirrorReadonly 时是「外部 CLI 活进程档位不可观测」。effective 是服务端向 CLI 问来的实际生效档，
 // 只进文案、不当成钉住的档；镜像态不用它（那是 Web 实例的档，不是终端那个进程的）。
-export function effortUiState(level, supportedLevels, { mirrorReadonly = false, effective = null } = {}) {
-  const normalized = level || null;
+// source='cli-settings'：档是从 CLI settings 继承来的（服务端照样当显式档下发），用户没选过它，
+// 按「没指定」显示——文案带「CLI 默认」、不高亮磁贴，点一下同档才钉成用户自己的。镜像态不看来源。
+export function effortUiState(level, supportedLevels, { mirrorReadonly = false, effective = null, source = null } = {}) {
+  const raw = level || null;
+  const fromCli = !mirrorReadonly && raw && source === 'cli-settings' ? raw : null;
+  const normalized = fromCli ? null : raw;
   const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
   const selected = normalized && levels.includes(normalized) ? normalized : '';
-  const inherited = effective ? `${effective} · ${t('CLI 默认')}` : t('CLI 默认');
+  const actual = fromCli || effective;
+  const inherited = actual ? `${actual} · ${t('CLI 默认')}` : t('CLI 默认');
   return {
-    level: normalized,
+    level: raw,
     selected,
     label: normalized || (mirrorReadonly ? t('CLI 档位未知') : inherited),
     placeholder: normalized
