@@ -180,6 +180,21 @@ test('排除自引用：编号只出现在本闸自身文件（或其单测夹�
   } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
 });
 
+// tests/acceptance/ 是机主本机才跑的验收套件，CI 永远不执行它。守护行写在那里，登记表条目
+// 看着有人守，实际上没有任何会跑的东西守着——正是本闸要抓的死条目。
+test('验收套件不算守护者：守护行只出现在 tests/acceptance/ 里 → 仍判 dead_registry_entry', () => {
+  const root = fakeRepo({
+    registryRows: [['AUTH-01', '令牌门'], ['SRV-555', '只有验收套件在「守」']],
+    files: { 'a.test.mjs': '// x\n// 守护：AUTH-01\n' },
+    extraCorpus: { 'acceptance/replay/d02.accept.ts': '// 守护：SRV-555\n' },
+  });
+  try {
+    const r = checkInvariantIds({ rootDir: root });
+    assert.deepEqual(codes(r), ['dead_registry_entry']);
+    assert.equal(r.problems[0].id, 'SRV-555');
+  } finally { rmSync(root, { recursive: true, force: true }); } // safe-rm: mkdtemp 一次性目录
+});
+
 // SELF_FILES 是写死的两条路径。文件一旦改名/搬走，排除就【静默失效】——而失效方向恰好是
 // 这个 PR 要堵的那种：自满足回路复活，门禁又开始给自己作弊，且没有任何信号。
 // 这类「守卫本身悄悄失去管辖面」的缺口，就是本闸存在的理由，它自己不能犯。

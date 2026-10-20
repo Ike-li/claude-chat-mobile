@@ -23,6 +23,8 @@ const TOKEN = 'inv-request-cwd-scope-token';
 const SID_A = randomUUID();
 const IMG_UUID = randomUUID();
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X2Xb0AAAAASUVORK5CYII=';
+const TOOL_ID = 'toolu_scope_bash';
+const LONG_OUT = Array.from({ length: 400 }, (_, i) => `A 的构建日志第 ${i} 行`).join('\n'); // 超过 Bash 摘要上限 2000
 
 let root, a, b, c, configPath, auditFile, server, sock;
 const projectDirs = [];
@@ -46,6 +48,12 @@ test.before(async () => {
     type: 'user', uuid: IMG_UUID, parentUuid: null, timestamp: new Date().toISOString(),
     sessionId: SID_A, cwd: a, isMeta: false,
     message: { role: 'user', content: [{ type: 'text', text: 'A 里贴的图' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } }] },
+  })}\n${JSON.stringify({
+    type: 'assistant', uuid: randomUUID(), parentUuid: null, timestamp: new Date().toISOString(), sessionId: SID_A, cwd: a,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: TOOL_ID, name: 'Bash', input: { command: 'cat build.log' } }] },
+  })}\n${JSON.stringify({
+    type: 'user', uuid: randomUUID(), parentUuid: null, timestamp: new Date().toISOString(), sessionId: SID_A, cwd: a, isMeta: false,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: TOOL_ID, content: LONG_OUT }] },
   })}\n`);
 
   configPath = join(root, 'ccm.config.json');
@@ -139,6 +147,28 @@ test('取图：越界 cwd 与「会话不属于这个目录」都拿不到图', 
   // 带一个不存在的实例 id 不能绕过上面两道
   const viaInstance = await emit('image:get', { instanceId: 'no-such-instance', cwd: c, sessionId: SID_A, ref });
   assert.equal(viaInstance.data, undefined);
+});
+
+// 历史工具卡的「展开全文」（验收 O55）：tool:full 带会话坐标时回落去 transcript 取全文，门与 image:get 同款。
+test('tool:full 的历史路径：越界 cwd、会话不属于这个目录都拿不到全文；带不存在的实例 id 也绕不过去', async () => {
+  // 正对照：历史里那张卡确实被截断了，按 A 取得到全文——否则下面的「拒绝」可能只是这条通道本身不通
+  const hist = await emit('session:history', { sessionId: SID_A, cwd: a });
+  const card = hist.messages.find(m => m.kind === 'tool_result' && m.toolUseId === TOOL_ID);
+  assert.ok(card?.outputSummary.endsWith('…（已截断）'), `前提：历史摘要被截断，实际 ${JSON.stringify(card)}`);
+  const ok = await emit('tool:full', { cwd: a, sessionId: SID_A, toolUseId: TOOL_ID });
+  assert.deepEqual(ok, { ok: true, text: LONG_OUT });
+
+  const out = await emit('tool:full', { cwd: c, sessionId: SID_A, toolUseId: TOOL_ID });
+  assert.equal(out.ok, false, '拿越界 cwd 取到了 A 的全文 = 回落把别的目录的数据交了出去');
+  assert.equal(out.text, undefined);
+  assert.match(out.error ?? '', /不在已连接的文件夹里/);
+
+  const wrongDir = await emit('tool:full', { cwd: b, sessionId: SID_A, toolUseId: TOOL_ID });
+  assert.equal(wrongDir.ok, false, `会话不属于这个目录也给了全文：${JSON.stringify(wrongDir).slice(0, 200)}`);
+  assert.equal(wrongDir.text, undefined);
+
+  const viaInstance = await emit('tool:full', { instanceId: 'no-such-instance', cwd: c, sessionId: SID_A, toolUseId: TOOL_ID });
+  assert.equal(viaInstance.text, undefined);
 });
 
 test('显式越界的首条消息：拒绝且不在别的工作区里懒开实例', async () => {

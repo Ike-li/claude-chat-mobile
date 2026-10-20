@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -43,6 +43,7 @@ import {
   createConfigReloader,
   loadConfigSources,
   reloadKindOf,
+  describeSavedKeys,
   structuredToStringValues,
 } from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
@@ -92,7 +93,7 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
-import { readTranscriptImage } from '../sessions/transcript-image-read.js';
+import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
 import { composeProjects, createProjectIndex, discoverSubProjects, hasScratchSessions } from '../sessions/projects.js';
 import { createScratchAllocator, removeScratchWorkspace } from '../sessions/scratch-workspaces.js';
@@ -301,7 +302,9 @@ async function sessionTitleForNotify(cwd, sessionId) {
 function emitNotify(pn, ntfyType) {
   if (!pn) return;
   pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
-  ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
+  // ntfy 明文经第三方：标题只留「事件 · 项目」，不带会话标题（可能就是用户原话，验收 O33）。Web Push 端到端加密，照旧
+  // pn.ntfyType：同一类事件里标签要分档的（result 的完成 / 出错 / 已中止），由 notificationForEvent 给出
+  ntfyNotify(pn.ntfyTitle ?? pn.title, pn.body, ntfyMetaFor(pn.ntfyType ?? ntfyType, pn.data, notify.publicUrl));
 }
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
@@ -924,7 +927,7 @@ if (process.stdin.isTTY) {
 }
 
 // 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
-// message 仍是原来的字符串（'unauthorized' / 'rate_limited'），前端既有判据不受影响；
+// message 是 authRejection 的 reason（'unauthorized' / 'cooldown' / 'rate_limited'），前端按它分流；
 // 新增的 err.data 让客户端能拿到重试提示——socket.io 会把 data 原样送到客户端的
 // connect_error(err) 上，这是 socket 侧对应 HTTP `Retry-After` 头的唯一通道。
 // 此前 socket 侧一个数字都不给，手机端只能盲目重连，而每次重连都只是撞在锁上。
@@ -959,8 +962,8 @@ io.use(async (socket, next) => {
   const rlKey = rlSourceKey(socket.handshake, clientIp, rlTrust);
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把用户越锁越久 = 自我 DoS）
-    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」，'cooldown' 只是上一次
-    // 令牌不对顺带上的 500ms 短锁，仍按 unauthorized 回复——否则只错一次的用户会被告知「尝试过多」。
+    // 两种锁对客户端说的话不同（gateCheck 判定）：'locked' 才是「尝试过多」；'cooldown' 只是上一次
+    // 令牌不对顺带上的短锁，这次的令牌没校验，回 cooldown + 秒数，前端到点自动重试（验收 O83）。
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const gated = gateCheck(st, Date.now());
@@ -968,7 +971,7 @@ io.use(async (socket, next) => {
         console.warn(gated.verdict === 'locked'
           ? `[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil(gated.retryAfterMs / 1000)}s，source=${rlKey}）`
           : `[conn] ${ip} 上次鉴权失败的退避冷却中（剩 ${gated.retryAfterMs}ms），拒握手（source=${rlKey}）`);
-        return next(rejectHandshake(gated));
+        return next(rejectHandshake({ ...gated, hasCredential: publicHost || Boolean(socket.handshake.auth?.token) }));
       }
     }
 
@@ -1306,11 +1309,15 @@ function computeServiceHealth() {
     missingFolders: workdirStatus.missing(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
-    hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
+    // unreadable：读不出时是哪个文件，面板据此点名（验收 AC-16-12）
+    hooksBridge: { state: hooksInstallState, unreadable: hooksUnreadable, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
     // statusline 桥同理。此前只有 hooks 桥有这个字段，于是面板上一个桥有安装态与一键安装、
     // 它的孪生兄弟整段隐身——两个桥在 CLAUDE.md 里是并列的，web 上待遇不该差一个量级。
     statuslineBridge: {
       state: statuslineInstallState,
+      // configured：用户自己配没配 statusLine——没配时装不上，面板不给「开启」（验收 O62）
+      configured: statuslineInstallDetail.configured,
+      unreadable: statuslineInstallDetail.unreadable,
       off: process.env.CLI_STATUSLINE_BRIDGE === 'off',
     },
   };
@@ -1321,13 +1328,17 @@ function computeServiceHealth() {
 
 // 安装态缓存：启动时读一次，装/卸后由 refreshHooksInstallState 主动刷新。
 let hooksInstallState = 'unknown';
+let hooksUnreadable = null;
 function refreshHooksInstallState() {
-  hooksInstallState = readHooksInstallState();
+  ({ state: hooksInstallState, unreadable: hooksUnreadable } = readHooksInstallState());
   return hooksInstallState;
 }
 let statuslineInstallState = 'unknown';
+let statuslineInstallDetail = { configured: null, unreadable: null };
 function refreshStatuslineInstallState() {
-  statuslineInstallState = readStatuslineInstallState().state;
+  const { state, configured, unreadable } = readStatuslineInstallState();
+  statuslineInstallState = state;
+  statuslineInstallDetail = { configured, unreadable };
   return statuslineInstallState;
 }
 // approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，
@@ -2330,8 +2341,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         if (instance.resumeFailed) sessions.setCurrent(routeKey, null);
         // 只清表、不 dispose（实例已在退出路径上）。与 remove() 共用 clearTables，防再漏表。
         instanceManager.clearTables(id);
-        // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
-        if (viewingInstanceId === id) reselectViewingAfter(cwd);
+        // 意外退出（被 kill / 挂死自杀）不替用户挑同目录的另一个会话：静默跳走等于什么都没说（验收 O60），
+        // 落空视图让前端显示「会话已中断」。resumeFailed 维持原规则（同 cwd tab 或空表面、不跨工作区）。
+        if (viewingInstanceId === id) reselectViewingAfter(cwd, { stayOnRemoved: !instance.resumeFailed });
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
@@ -4065,7 +4077,7 @@ registerSocketConnection(io, socket => {
     if (cwd === null) {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
-      return ack({ currentSessionId: null, sessions: [], pinned: [], terminalBusy: false, terminalWaiting: false,
+      return ack({ currentSessionId: null, sessions: [], pinned: [], open: [], terminalBusy: false, terminalWaiting: false,
         hasMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
@@ -4104,12 +4116,21 @@ registerSocketConnection(io, socket => {
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
     const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
-    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分两次调用
-    // 等于把这个成本翻倍，而两组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
+    // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样把它们画在前面（SESSION-02），可实例广播里
+    // 的 title 只来自 sessions.json——终端来的会话那里是 null，画出来是一行没有时间的「新会话」。按 transcript
+    // 补回元数据。listSessionsByIds 只认这个项目（及其成员目录）下的 transcript，别处开着的不会混进来；
+    // 搜索态不补（同 pinned）。
+    const listedIds = new Set([...list, ...pinned].map(s => s.id));
+    const openIds = query ? [] : [...new Set([...agents.values()].map(a => a.sessionId))]
+      .filter(sid => sid && !listedIds.has(sid) && !pendingDeleteIds.has(sid));
+    const open = openIds.length ? await listSessionsByIds(cwd, openIds, { memberOptions }) : [];
+    // 拼成一趟标注：annotateTerminalStates 每次都要读一遍终端注册表（可能还带尾窗读盘），分几次调用
+    // 等于把这个成本翻倍，而几组行本来就同属一个 cwd、同一时刻的状态。标完按长度切回来——
     // applyTerminalStatesToSessions 只做等长克隆映射，顺序与入参一致。
-    const terminal = await annotateTerminalStates(cwd, pinned.length ? [...list, ...pinned] : list);
-    const pinnedRows = pinned.length ? terminal.list.slice(list.length) : [];
-    const pageRows = pinned.length ? terminal.list.slice(0, list.length) : terminal.list;
+    const terminal = await annotateTerminalStates(cwd, [...list, ...pinned, ...open]);
+    const pageRows = terminal.list.slice(0, list.length);
+    const pinnedRows = terminal.list.slice(list.length, list.length + pinned.length);
+    const openRows = terminal.list.slice(list.length + pinned.length);
     // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
@@ -4120,7 +4141,7 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows]) });
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
@@ -4271,12 +4292,15 @@ registerSocketConnection(io, socket => {
     // 与 routeCwd 的读档同一口径：已开会话的目录（工作区已被热移除）git / 搜索也照常可读。
     isAuthorizedCwd: c => Boolean(routableAuth(c)) || isLiveInstanceCwd(c),
     scopeRootsFor: fileScopeRootsFor,
+    sessionFileExists, // 历史工具卡「展开全文」：会话归属同 image:get
+    readTranscriptToolResult,
   });
   registerFolderSocketHandlers({
     socket,
     on,
-    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）
-    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs }),
+    // 浏览 / 添加以家目录为界；scratch 根也不能加成已连接的文件夹（它是「无文件夹」的落点）。
+    // readonly：手机上改不了清单时，新建只剩已连接的文件夹里（之外建出来的加不进清单，只会留一个空目录）
+    folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs, readonly: workdirStatus.readonlyReason() }),
     addConnectedFolder,
     removeConnectedFolder,
     audit,
@@ -4337,7 +4361,9 @@ registerSocketConnection(io, socket => {
       return ack({ messages: [], error: '会话不存在' });
     }
     try {
-      ack({ messages: await getSessionHistory(sessionId, cwd) }); // M6：async 避免阻塞事件循环
+      // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
+      const { messages, total } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      ack({ messages, total });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }
@@ -4472,12 +4498,14 @@ registerSocketConnection(io, socket => {
     const before = metrics.snapshot().counters;
     const title = '🔔 测试推送 · ccm';
     await pushNotify(title, '如果你看到这条，推送链路是通的');
-    ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
+    // ntfy 是另一条独立通道：等它的结果一起回报（验收 O1——此前不 await，ntfy 投递成功界面也不知道）。
+    // ntfyNotify 自带 8s 超时；前端这条 emit 的 timeout 放到 12s，留出 Web Push 那段的余量，ntfy 挂死时也不会误报成断网。
+    const ntfy = await ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
     const after = metrics.snapshot().counters;
     const sent = (after.push_success ?? 0) - (before.push_success ?? 0);
     const failed = (after.push_failure ?? 0) - (before.push_failure ?? 0);
-    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条`);
-    ack({ ok: true, sent, failed, subscribed: sent + failed > 0 });
+    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条；ntfy ${ntfy}`);
+    ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });
   });
 
   on(socket, 'doctor:run', (_payload, ack) => {
@@ -4656,7 +4684,10 @@ registerSocketConnection(io, socket => {
     // 会话与后台任务，换来一次完全不必要的停机。判据复用 config-file.js 的 reloadKindOf，
     // 不在这里自己写一份（它缺省 restart，方向已经是保守的那边）。
     const restartRequired = keys.some(k => reloadKindOf(k) === 'restart');
-    ack({ ok: true, results: verdict.results, written: keys, restartRequired });
+    // 逐项回执（验收 O48 / O63）：被 shell 环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——
+    // 笼统一句「重启后生效」是假成功。restartRequired 保留原语义给缓存里的旧前端；新前端读 saved。
+    const saved = describeSavedKeys(keys, { shellEnv: getShellEnvSnapshot() });
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired, saved });
   });
 
   // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。

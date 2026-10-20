@@ -415,22 +415,36 @@ export function statuslineInstalledStateMatches(settings, manifest) {
  * （"我看过了，没装"），会让用户以为不必再查。唯一的例外是 settings.json 根本不存在：
  * 那是新装 claude 的合法起点，确定是没装。
  *
+ * unreadable：读不出时是哪个文件（'settings' / 'manifest'），面板据此点名，不笼统说 settings.json（验收 AC-16-12）。
+ * configured：用户自己配没配 statusLine。没配时安装脚本会拒（它要透传的原命令不存在），面板据此不给「开启」，
+ * 而不是让人点了才看到一行英文报错（验收 O62）。读不出 settings 时为 null（不知道）。
+ *
  * @param {{home?: string}} [opts]
- * @returns {{state: 'installed'|'drifted'|'not-installed'|'unknown', currentCommand: string|null}}
+ * @returns {{state: 'installed'|'drifted'|'not-installed'|'unknown', currentCommand: string|null,
+ *   configured: boolean|null, unreadable: 'settings'|'manifest'|null}}
  */
 export function readStatuslineInstallState({ home = homedir() } = {}) {
+  let settings;
   try {
-    const settings = readClaudeSettings(claudeSettingsPath(home));
-    const currentCommand = typeof settings?.statusLine?.command === 'string'
-      ? settings.statusLine.command
-      : null;
-    const manifest = readStatuslineManifest(statuslineManifestPath(home));
-    if (!manifest) return { state: 'not-installed', currentCommand };
-    return {
-      state: statuslineInstalledStateMatches(settings, manifest) ? 'installed' : 'drifted',
-      currentCommand,
-    };
+    settings = readClaudeSettings(claudeSettingsPath(home));
   } catch {
-    return { state: 'unknown', currentCommand: null };
+    return { state: 'unknown', currentCommand: null, configured: null, unreadable: 'settings' };
   }
+  const currentCommand = typeof settings?.statusLine?.command === 'string'
+    ? settings.statusLine.command
+    : null;
+  const configured = currentCommand !== null;
+  let manifest;
+  try {
+    manifest = readStatuslineManifest(statuslineManifestPath(home));
+  } catch {
+    return { state: 'unknown', currentCommand, configured, unreadable: 'manifest' };
+  }
+  if (!manifest) return { state: 'not-installed', currentCommand, configured, unreadable: null };
+  return {
+    state: statuslineInstalledStateMatches(settings, manifest) ? 'installed' : 'drifted',
+    currentCommand,
+    configured,
+    unreadable: null,
+  };
 }

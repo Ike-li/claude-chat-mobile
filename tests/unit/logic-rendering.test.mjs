@@ -5,7 +5,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-session、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex, formatPushStatusRow } from '../../app/public/js/logic.js';
+import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex, formatPushStatusRow, describePushTestResult } from '../../app/public/js/logic.js';
 import { createRingBuffer } from '../../app/public/js/ring-buffer.js';
 
 test('ansiToHtml: 纯文本被 esc', () => {
@@ -186,6 +186,40 @@ test.describe('resolveUnreadAnchorIndex', () => {
 // 推送订阅状态行：这一整段是"我从来没收到过推送、界面上却看不出任何异常"逼出来的——
 // 真机实测中 push-subscription.json 压根不存在（从未订阅），而 UI 里没有任何地方显示这件事，
 // 铃铛按钮在"权限被拒"时还会永久隐藏。状态必须能被看见，且看得出下一步该做什么。
+// 验收 AC-16-06 / O1：通知权限已被拒绝时，测试推送的回执让人「先点上方的『开启』」——此刻状态行根本没有这个按钮；
+// ntfy 明明投递成功，回执只看 Web Push，说「还没订阅」。两条通道各说各的，结论看有没有一条真的发出去。
+test.describe('describePushTestResult：测试推送回执两条通道各说各的', () => {
+  const base = { ok: true, sent: 0, failed: 0, subscribed: false };
+
+  test('权限已被拒绝且没订阅：说清要去站点设置改回允许，不让人去点不存在的「开启」', () => {
+    const r = describePushTestResult({ ...base, ntfy: 'disabled' }, { permission: 'denied' });
+    assert.match(r.text, /拒绝/);
+    assert.doesNotMatch(r.text, /「开启」/);
+    assert.equal(r.tone, 'warn');
+  });
+
+  test('网页推送没订阅但 ntfy 发出去了：报成功并点名 ntfy，不只说「还没订阅」', () => {
+    const r = describePushTestResult({ ...base, ntfy: 'sent' }, { permission: 'default' });
+    assert.match(r.text, /ntfy/);
+    assert.equal(r.tone, 'ok');
+  });
+
+  test('ntfy 投递失败：任一条失败即报错', () => {
+    assert.equal(describePushTestResult({ ...base, sent: 1, subscribed: true, ntfy: 'failed' }).tone, 'danger');
+  });
+
+  test('网页推送发出且没配 ntfy：照旧报发出条数，不提 ntfy', () => {
+    const r = describePushTestResult({ ...base, sent: 1, subscribed: true, ntfy: 'disabled' });
+    assert.match(r.text, /已发出测试推送 1 条/);
+    assert.doesNotMatch(r.text, /ntfy/);
+    assert.equal(r.tone, 'ok');
+  });
+
+  test('请求本身失败（超时 / 断网）→ 报错', () => {
+    assert.equal(describePushTestResult(null).tone, 'danger');
+  });
+});
+
 test.describe('formatPushStatusRow：推送订阅状态可见化', () => {
   // 只能进不能出：此前 subscribed 恒 action:null，订上之后 UI 上再没有任何退订入口，
   // 想关只能去浏览器站点设置里把权限改成「阻止」——而那会让本行翻成「已被拒绝」，

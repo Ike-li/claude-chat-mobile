@@ -1,5 +1,6 @@
 // 会话标题搜索纯决策：数据进数据出，不碰 DOM/socket。
 // 与 src/sessions/history.js 同语义（两侧不能互相 import，边界闸）。
+import { t } from '../i18n.js';
 
 /** 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。 */
 export function matchesSessionTitle(title, query) {
@@ -32,6 +33,16 @@ export function resolveSessionListTitle({ summary, metaTitle } = {}) {
   const m = typeof metaTitle === 'string' ? metaTitle.trim() : '';
   if (m) return m.length > 60 ? m.slice(0, 60) : m;
   return '(无标题)';
+}
+
+// 会话标题的展示形态。服务端给无标题会话写死占位「(无标题)」——通知层与 cross-side-parity 认这个字面量，
+// 不在那边改——于是前端 `s.title || t(...)` 的兜底永远走不到，英文界面上照样是「(无标题)」（验收 O42）。
+// emptyLabel 由调用方给：抽屉里没存过的新会话叫「新会话」，首页叫「无标题会话」，两处本来就不同。
+const SERVER_UNTITLED = '(无标题)';
+export function displaySessionTitle(title, emptyLabel) {
+  const s = typeof title === 'string' ? title.trim() : '';
+  if (s === SERVER_UNTITLED) return t('无标题会话');
+  return s || emptyLabel;
 }
 
 // 系统通知横幅身份。与 src/ops/notifications.js 同语义（两侧不能互相 import，边界闸）：
@@ -87,10 +98,12 @@ export function otherWorkspaceNotifyOpts(cwd) {
   };
 }
 
-/** 计算「还有 N 个更早的会话」提示用的剩余数。无法计算时返回 null。 */
-export function remainingOlderSessionCount(total, visibleCount) {
+/** 计算「还有 N 个更早的会话」提示用的剩余数。无法计算时返回 null。
+ *  pinnedCount：服务端 session:list 补回的「稍后再看」行（被分页挤出本页、手动标过未读），它们也画在列表里，
+ *  不减掉会多报（验收 AC-04-13：73 个会话、50 + 1 行可见，提示写 23、实际藏 22）。服务端保证它们不在本页。 */
+export function remainingOlderSessionCount(total, visibleCount, pinnedCount = 0) {
   const totalNum = Number(total);
-  const visibleNum = Number(visibleCount);
+  const visibleNum = Number(visibleCount) + (Number(pinnedCount) || 0);
   if (!Number.isFinite(totalNum) || !Number.isFinite(visibleNum) || totalNum <= visibleNum) return null;
   return Math.floor(totalNum - visibleNum);
 }
