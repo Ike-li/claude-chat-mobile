@@ -236,8 +236,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.getByRole('button', { name: '显示全部会话…' }).click();
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
-    await expect(page.getByTestId('session-remaining-hint')).toBeVisible();
-    await expect(page.getByTestId('session-remaining-hint')).toContainText('可用搜索查找');
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
 
     await openSessionByTitle(page, 'Older Migration Session');
@@ -1302,11 +1300,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(modal).not.toHaveClass(/sheet-open/);
   }
 
+  // P0-11aq（验收 O81）：一个文件夹超过 50 个会话时，「显示全部」只给前 50 个、更早的只能搜。
+  // 现在显示全部之后还能「加载更多」，一页页往后拉；到了服务端上限再回落成「可用搜索查找」。
+  test('P0-11aq 显示全部之后还能加载更多；到服务端上限后回落成搜索提示', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:history-overflow');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await page.getByRole('button', { name: '显示全部会话…' }).click();
+
+    const loadMore = page.getByTestId('session-load-more');
+    await expect(loadMore).toBeVisible();
+    await expect(loadMore).toContainText('还有 7 个');
+    await expect(page.getByTestId('session-remaining-hint')).toHaveCount(0);
+    await expect(page.locator('#sessionPanel')).not.toContainText('Overflow Older 1');
+
+    await loadMore.click();
+    await expect(sessionButtonByTitle(page, 'Overflow Older 1')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
+    await expect(loadMore).toHaveCount(0);
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
+    // 新拉到的更早会话接在原有行之后（时间序），不是插到前面
+    const rowIds = () => page.locator('[data-testid="session-row"]').evaluateAll(rows => rows.map(r => r.getAttribute('data-session-id')));
+    const ids = await rowIds();
+    expect(ids.indexOf('mock-session-overflow-older-1')).toBeGreaterThan(ids.indexOf('mock-session-older-migration'));
+
+    // 折叠再展开（缓存秒开 + 无条件 revalidate）：已加载的页数不能被打回第一页。缓存会先把行画出来，
+    // 只看 DOM 判不出 revalidate 带没带页数，所以直接看折叠之后发出的 session:list。
+    const listLog = async () => (await page.request.get('/__session-list-log')).json();
+    const before = (await listLog()).length;
+    await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().click();
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect.poll(async () => {
+      const sent = (await listLog()).slice(before)
+        .filter((e: { cwd: string }) => e.cwd === MAIN_WORKSPACE)
+        .map((e: { all: boolean; pages: number | null }) => `${e.all}:${e.pages}`);
+      return sent.length > 0 && sent.every((x: string) => x === 'true:2');
+    }).toBe(true);
+    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-11ao（2026-09-08）：session:list 按 limit 截断（默认 6 条），手动标「稍后再看」的会话滑出
   // 窗口就从抽屉里消失——标记还在 read-state 里，UI 上再也找不回来，而长按确认框刚承诺过
   // 「会一直显示未读，直到你再次打开它」。服务端现在把这些会话单独补回（ack 的 pinned 字段），
-  // 前端渲染成列表顶部的「稍后再看」一组。
-  test('P0-11ao 手动标记的会话被 limit 挤出本页后，仍在列表顶部「稍后再看」组里', async ({ page }) => {
+  // 前端渲染成「稍后再看」一组。验收 O81 起这一组排在本页之后（按时间它本来就更早），不再置顶。
+  test('P0-11ao 手动标记的会话被 limit 挤出本页后，仍在列表里「稍后再看」组（排在本页之后）', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:history-overflow');
     await openSessionsSidebar(page);
@@ -1330,6 +1371,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.getByTestId('session-pinned-head')).toHaveText('稍后再看');
     const pinnedRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-older-migration"]');
     await expect(pinnedRow).toBeVisible();
+    // 按时间位置：本页的行在前，「稍后再看」组（小标 + 被补回的行）在后
+    const order = await dirAfter.locator('xpath=following-sibling::*[1]').evaluate(el =>
+      [...el.querySelectorAll('[data-testid="session-row"], [data-testid="session-pinned-head"]')]
+        .map(n => (n.getAttribute('data-testid') === 'session-pinned-head' ? 'HEAD' : n.getAttribute('data-session-id'))));
+    expect(order.indexOf('HEAD')).toBeGreaterThan(order.indexOf('mock-session-visual-test'));
+    expect(order[order.indexOf('HEAD') + 1]).toBe('mock-session-older-migration');
     await expect(pinnedRow.locator('[data-testid="unread-mark"]')).toHaveText('未读');
     // 角标必须把这一行一起数进去：漏数就是反方向的同一个毛病——行亮着而角标说 0
     await expect(dirAfter.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');

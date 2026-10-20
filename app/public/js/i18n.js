@@ -471,6 +471,8 @@ export const EN_DICT = Object.freeze({
   '仍然保存': 'Save anyway',
   '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
+  '加载更多会话（还有 {n} 个）': 'Load more sessions ({n} more)',
+  '加载更多会话': 'Load more sessions',
   '⟳ 重启服务：本进程不是常驻托管，停了不会自动拉起，请到电脑上重启': '⟳ Restart server: this process is not supervised, so nothing would start it again — restart it on the computer',
   '危险操作前先问你': 'Prompts for dangerous operations',
   '只做规划，不执行工具': 'Planning mode, no tool execution',
