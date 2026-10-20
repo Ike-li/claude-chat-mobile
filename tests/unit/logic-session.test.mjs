@@ -394,18 +394,21 @@ test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画
   });
   assert.equal(ui.kind, 'aborted');
   assert.equal(ui.errorBar, null, 'CLI 不对用户暴露 interrupt 伴随的 is_error 诊断');
-  assert.match(ui.statusBar.text, /^已中止 · 249\.4s · \$18\.6533$/);
+  // costUsd 是 CLI 的累计费用，不是这一轮花的（验收 O57）——收尾行不挂，累计成本在状态栏
+  assert.match(ui.statusBar.text, /^已中止 · 249\.4s$/);
   assert.equal(ui.statusBar.cls, 'text-ink-faint');
   assert.equal(ui.notify.title, '⏹ 任务已中止');
   assert.equal(ui.failToolsMessage, '已中止');
   assert.equal(ui.haptic, 'warning');
 });
 
-// 出错分支有意不改 CLI 化：出错时更需要显式秒数+成本，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
-test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）', () => {
+// 出错分支有意不改 CLI 化：出错时更需要显式秒数，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
+// 2026-10-19 验收 O57：原来那行还挂着「· $成本」，可 costUsd 是 CLI 的累计费用（恢复的会话里网关 503、一个 token
+// 没用，也显示 $0.38），读起来像这条失败的消息花了这么多钱；标签还写着「完成」。去掉成本、标签改「出错」，秒数照留。
+test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）；灰条写「出错」、不挂累计成本', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');
-  assert.match(err.statusBar.text, /^完成 · 1\.2s · \$0\.1000$/);
+  assert.match(err.statusBar.text, /^出错 · 1\.2s$/);
   assert.equal(err.errorBar.text, '出错：boom');
   assert.equal(err.errorBar.cls, 'text-danger');
   assert.equal(err.notify.title, '⚠️ 任务出错');

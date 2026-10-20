@@ -30,14 +30,16 @@ export function isSdkPermissionMode(mode) {
 }
 
 /**
- * CLI / 桌面端展示名 + SDK 注释级说明（固定英文，禁止 t()/中文本地化）。
- * title/pill/bar 对齐桌面菜单：Manual · Accept edits · Plan · Auto · Bypass permissions
- * （dontAsk 桌面菜单常不露出，用 SDK 语义 Don't ask）。
+ * CLI / 桌面端展示名 + 一句话说明。
+ * title/pill/bar/selectLabel 固定英文、禁止 t()：对齐桌面菜单 Manual · Accept edits · Plan · Auto · Bypass permissions
+ * （dontAsk 桌面菜单常不露出，用 SDK 语义 Don't ask），用户在终端和桌面端看到的就是这些名字。
+ * desc 是给人读的说明，跟界面语言走（验收 O43①）：常量表里 tk() 标中文原文，permissionModeTileSpecs 取用时 t()；
+ * 英文词典里就是原来那句 SDK 注释级英文。
  */
 const PERMISSION_MODE_TILE_META = Object.freeze({
   default: {
     title: 'Manual',
-    desc: 'Prompts for dangerous operations',
+    desc: tk('危险操作前先问你'),
     selectLabel: 'Manual',
     pill: 'Manual',
     bar: 'Manual',
@@ -45,7 +47,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
   plan: {
     title: 'Plan',
-    desc: 'Planning mode, no tool execution',
+    desc: tk('只做规划，不执行工具'),
     selectLabel: 'Plan',
     pill: 'Plan',
     bar: 'Plan',
@@ -53,7 +55,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
   acceptEdits: {
     title: 'Accept edits',
-    desc: 'Auto-accept file edit operations',
+    desc: tk('文件编辑自动通过'),
     selectLabel: 'Accept edits',
     pill: 'Accept edits',
     bar: 'Accept edits',
@@ -61,7 +63,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
   dontAsk: {
     title: "Don't ask",
-    desc: 'Deny if not pre-approved, no prompts',
+    desc: tk('没预先放行的一律拒绝，不弹询问'),
     selectLabel: "Don't ask",
     pill: "Don't ask",
     bar: "Don't ask",
@@ -69,7 +71,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
   auto: {
     title: 'Auto',
-    desc: 'Model classifier approves or denies',
+    desc: tk('由模型分类器决定放行或拒绝'),
     selectLabel: 'Auto',
     pill: 'Auto',
     bar: 'Auto',
@@ -77,7 +79,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
   bypassPermissions: {
     title: 'Bypass permissions',
-    desc: 'Bypass all permission checks',
+    desc: tk('跳过所有权限检查'),
     selectLabel: 'Bypass permissions',
     pill: 'Bypass',
     bar: 'Bypass permissions',
@@ -86,7 +88,7 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
 });
 
 /**
- * 按 SDK 清单生成权限磁贴规格（只数据，不碰 DOM；文案固定英文，调用方勿再 t()）。
+ * 按 SDK 清单生成权限磁贴规格（只数据，不碰 DOM）。title/pill/bar 固定英文；desc 已按当前语言翻好，调用方勿再 t()。
  * @param {readonly string[]} [modes=SDK_PERMISSION_MODES]
  * @returns {{ id: string, title: string, desc: string, selectLabel: string, pill: string, bar: string, danger: boolean }[]}
  */
@@ -97,7 +99,7 @@ export function permissionModeTileSpecs(modes = SDK_PERMISSION_MODES) {
     return {
       id,
       title: meta?.title || id,
-      desc: meta?.desc || '',
+      desc: meta?.desc ? t(meta.desc) : '',
       selectLabel: meta?.selectLabel || id,
       pill: meta?.pill || id,
       bar: meta?.bar || id,

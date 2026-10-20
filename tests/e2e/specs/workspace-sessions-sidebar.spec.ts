@@ -639,7 +639,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     // 顶栏文字 chip：把会话按钮上那颗琥珀色小点写成人话（手机看不到 title，之前只能猜）
     await expect(page.locator('[data-testid="header-attention-chip"]')).toHaveText('需要你 1');
-    await openSessionsSidebar(page);
+    // chip 本身就是入口：点它打开抽屉。此前同一次点击冒泡到「点外面收抽屉」，开了又立刻关上
+    await page.locator('[data-testid="header-attention-chip"]').click();
+    await expectSidebarOpen(page);
 
     const section = page.locator('#needsYouSection');
     const row = page.locator('[data-testid="needs-you-row"]');
@@ -1411,6 +1413,44 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 那个会话】的消息流，视图从头到尾没动过；点击时又已经先关了侧栏。于是「blog_static 的会话被
   // 占用」这句话出现在另一个工作区会话的工具卡中间，读起来像是当前会话出了事。
   // 三条断言各自独立会红：①行上的预警 ②落地页自报的是目标会话 ③当前会话流一个字都没多。
+  // 验收 O37：落地页上的「选择其他会话」打开抽屉，同一次点击冒泡到「点外面收抽屉」又把它关上，看起来跟「←」一样。
+  test('P0-11aj2 打不开的会话落地页：「选择其他会话」打开抽屉并停在那里', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:bg-locked');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openSessionByTitle(page, 'Archived Gap Session');
+    await expect(page.locator('[data-testid="session-blocked-surface"]')).toBeVisible();
+
+    await page.locator('[data-testid="session-blocked-sessions"]').click();
+    await expect(page.locator('[data-testid="session-blocked-surface"]')).toBeHidden();
+    await expectSidebarOpen(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O38：会话 A 有待批卡时切到打不开的会话 B，B 的落地页上仍浮着 A 的审批卡（切到能打开的会话时会收起，
+  // 只有切换失败这条路没管）。落地页盖着时收起，回到 A 时原样恢复——那张卡还是 A 的，不能丢。
+  test('P0-11aj3 当前会话有待批卡时撞上打不开的会话：落地页上不浮着它，返回后照旧在', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__arm-bg-locked');
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openSessionByTitle(page, 'Archived Gap Session');
+    await expect(page.locator('[data-testid="session-blocked-surface"]')).toBeVisible();
+    await expect(page.locator('#permModal'), '别的会话的审批卡浮在这个会话的落地页上').toBeHidden();
+
+    await page.locator('[data-testid="session-blocked-back"]').click();
+    await expect(page.locator('[data-testid="session-blocked-surface"]')).toBeHidden();
+    await expect(page.locator('#permModal'), '回到原会话，那张没批的卡不见了').toBeVisible();
+    await expect(page.locator('#permTool')).toHaveText('run_command');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11aj: 被后台 agent 独占的会话——行上先预警，点开落到目标会话自己的页面', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
