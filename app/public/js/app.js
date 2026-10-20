@@ -70,6 +70,7 @@ import {
   armedTakeoverStep,
   presentTurnResult,
   formatServiceNotices,
+  formatServiceNoticeRows,
   formatHooksBridgeRow,
   formatMcpServers,
   formatPushStatusRow,
@@ -2045,7 +2046,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）。
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section(t('异常告警'));
-    const notices = formatServiceNotices({
+    const notices = formatServiceNoticeRows({
       service: {
         deliveryFailure: res.deliveryFailure,
         rateLimitLockout: res.rateLimitLockout,
@@ -2060,11 +2061,11 @@ import { createGateFocusController } from './app/focus-layers.js';
       okRow.textContent = t('✓ 无异常');
       noticesSection.lastChild.appendChild(okRow);
     } else {
-      for (const line of notices) {
+      for (const { text, tone } of notices) {
         const row = el(`<div class="px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"></div>`);
-        // 判色按告警类别：投递失败(🔔)/限速锁定(⛔)红——错过审批与安全事件；重启(🔄)/前端错误(🐞)黄
-        row.classList.add(line.startsWith('🔔') || line.startsWith('⛔') ? 'text-danger' : 'text-warning');
-        row.textContent = line;
+        // 判色在 formatServiceNoticeRows：投递失败红；限速锁定按来源（公网红、本机/局域网黄）；其余黄
+        row.classList.add(tone === 'danger' ? 'text-danger' : 'text-warning');
+        row.textContent = text;
         noticesSection.lastChild.appendChild(row);
       }
     }
