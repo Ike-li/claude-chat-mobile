@@ -472,6 +472,10 @@ export const EN_DICT = Object.freeze({
   '这个浏览器已拒绝通知，网页推送到不了这台设备——到浏览器或系统的站点设置里改回「允许」': 'This browser has blocked notifications, so web push cannot reach this device — set it back to "Allow" in the browser or system site settings',
   'ntfy 已发出一条': 'ntfy sent one',
   'ntfy 发送失败': 'ntfy delivery failed',
+  '已生效：': 'In effect: ',
+  '重启后生效：': 'After a restart: ',
+  '{key} 被环境变量 {vars} 压着：写进文件也不生效，重启后仍是环境变量的值，先 unset 再重启': '{key} is overridden by the environment variable {vars}: the saved value has no effect and a restart keeps the environment value — unset it first, then restart',
+  '（本进程不是常驻托管，请到电脑上重启）': ' (this process is not supervised — restart it from your computer)',
   '当前安装用的是 .env，工作区列表在这里既读不出也改不了。先迁移到 ccm.config.json（在电脑上跑 node scripts/config.js migrate）再回来编辑。':
     'This install still uses .env, where the workspace list can neither be read nor edited. Migrate to ccm.config.json first (run `node scripts/config.js migrate` on the computer), then come back.',
   '工作区列表此刻由 WORK_DIRS_FILE 指向的外置文件决定，这里改了不生效。先把下面的 WORK_DIRS_FILE 清空并保存，重启 server 后再回来编辑（重启前生效的仍是那份文件）。':
@@ -556,6 +560,7 @@ export const EN_DICT = Object.freeze({
   '历史消息加载失败': 'Could not load history',
   '加载了': 'Loaded',
   '条历史消息': 'messages from history',
+  '仅显示最近 {n} 条历史消息（共 {total} 条），更早的没有加载': 'Showing only the latest {n} of {total} messages from history; earlier ones are not loaded',
   '子 agent': 'subagent',
   '📄 预览文件': '📄 Preview file',
   '📄 预览变更': '📄 Preview changes',

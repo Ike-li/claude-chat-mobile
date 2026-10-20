@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import { getSessionHistory, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -43,6 +43,7 @@ import {
   createConfigReloader,
   loadConfigSources,
   reloadKindOf,
+  describeSavedKeys,
   structuredToStringValues,
 } from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
@@ -4332,7 +4333,9 @@ registerSocketConnection(io, socket => {
       return ack({ messages: [], error: '会话不存在' });
     }
     try {
-      ack({ messages: await getSessionHistory(sessionId, cwd) }); // M6：async 避免阻塞事件循环
+      // total = 削顶前的条数：超过 HISTORY_MAX_MESSAGES 时前端据此说「只显示了最近的」（验收 O44）
+      const { messages, total } = await getSessionHistoryWithTotal(sessionId, cwd); // M6：async 避免阻塞事件循环
+      ack({ messages, total });
     } catch (err) {
       ack({ messages: [], error: err.message });
     }
@@ -4653,7 +4656,10 @@ registerSocketConnection(io, socket => {
     // 会话与后台任务，换来一次完全不必要的停机。判据复用 config-file.js 的 reloadKindOf，
     // 不在这里自己写一份（它缺省 restart，方向已经是保守的那边）。
     const restartRequired = keys.some(k => reloadKindOf(k) === 'restart');
-    ack({ ok: true, results: verdict.results, written: keys, restartRequired });
+    // 逐项回执（验收 O48 / O63）：被 shell 环境变量压着的项写进文件也不生效，重启后仍是环境变量的值——
+    // 笼统一句「重启后生效」是假成功。restartRequired 保留原语义给缓存里的旧前端；新前端读 saved。
+    const saved = describeSavedKeys(keys, { shellEnv: getShellEnvSnapshot() });
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired, saved });
   });
 
   // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。

@@ -939,6 +939,12 @@ export class AgentSession {
     // 差分基准是 attemptedModel 而非 activeModel：失败/超时后同一目标不再每轮重试（见构造函数注释）。
     // setModel 是 await 让出点，之后须重检 disposed/pendingTurns（S3 + 双重检查）。
     const target = model || this.defaultModel;
+    // 未 pin 模型、本进程从没尝试过切换时，init 报的 reportedModel 就是当前在跑的：前端原样带回它（用户没动模型）
+    // 不算切换，直接记进差分基准（验收 O53 / O26）。只在 attemptedModel 为空时信它——切过一次之后 init 快照即过期，
+    // 拿它当依据会让「切走再切回」被判成无变化（见构造函数注释）。
+    if (target !== undefined && this.attemptedModel === undefined && target === this.reportedModel) {
+      this.attemptedModel = target;
+    }
     if (target !== undefined && target !== this.attemptedModel) {
       this.attemptedModel = target; // await 之前置位：并发 send 不重复下发，失败也不再重试
       try {
