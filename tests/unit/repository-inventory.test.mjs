@@ -42,6 +42,22 @@ test('docs/ 不再通配放行：新 .md 须显式登记，未登记的历史文
   assert.equal(classifyRepositoryPath('docs/deployment.md')?.category, 'Documentation');
 });
 
+// tests/acceptance/ 是机主本机跑的验收套件（用例 JSON、重放脚本、runbook、skill、容器编排），
+// 整棵树一条前缀。没有它，那棵树里任何一个文件都会让 check 红在「未分类」上。
+test('tests/acceptance/ 整棵树归为验收套件', () => {
+  for (const path of [
+    'tests/acceptance/README.md',
+    'tests/acceptance/run.mjs',
+    'tests/acceptance/cases/meta.json',
+    'tests/acceptance/replay/playwright.config.ts',
+    'tests/acceptance/local.example/secrets.json',
+  ]) {
+    assert.equal(classifyRepositoryPath(path)?.category, 'Acceptance test', path);
+  }
+  // 前缀带尾斜杠：同名前缀的兄弟路径不能顺带过闸
+  assert.equal(classifyRepositoryPath('tests/acceptance-notes.md'), null);
+});
+
 // 扫描面塌了必须红。空清单在结构上与「全部合规」无法区分，而本闸的失效恰恰是静默的：
 // 没有任何别的东西会因为它扫了 0 个文件而报警。
 // 用真实的空 git 仓库测——git 视图正常、只是一个文件都没有，这才是「扫描面塌陷」的真形态

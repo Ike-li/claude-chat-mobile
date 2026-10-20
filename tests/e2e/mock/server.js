@@ -24,7 +24,8 @@ const mockPermFields = (name, input, cwd, at = Date.now()) => ({
 });
 
 const PORT = process.env.PORT || 3100;
-const { app, httpServer, io } = createMockTransport();
+// 用例代数随 /__reset 自增；transport 据此丢弃上一条用例里还没跑完的场景尾巴（见 transport.js caseScope）
+const { app, httpServer, io } = createMockTransport({ caseGeneration: () => mockResetGeneration });
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
@@ -508,8 +509,12 @@ function mockFolderReason(rel) {
 }
 const mockFolderRelOk = rel => typeof rel === 'string' && !rel.startsWith('/') && !rel.split('/').includes('..');
 
+// 场景抛错的账：registry 每个连接各建一份，所以记在模块级。/__reset 清空，E2E 收尾经 /__scenario-errors 断言为空。
+let mockScenarioErrors = [];
+
 function resetMockState() {
   mockResetGeneration += 1;
+  mockScenarioErrors = [];
   mockDirsOverride = null;
   mockSubProjects = [];
   mockScratchSessions = [];
@@ -768,6 +773,10 @@ function emitTrustedDevices() {
 app.post('/__reset', (_req, res) => {
   resetMockState();
   res.json({ ok: true });
+});
+
+app.get('/__scenario-errors', (_req, res) => {
+  res.json(mockScenarioErrors);
 });
 
 // E2E 专用：翻转 accessBypassActive，覆盖信任列表脚注的两档文案。
@@ -2330,7 +2339,9 @@ io.on('connection', socket => {
           content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
         });
       }
-      callback({ messages });
+      // total：真 server 的 session:history 回削顶前的条数（getSessionHistoryWithTotal）。这个会话按「磁盘上有 2100 条、
+      // 只回最近 2000 条」摆，前端据此要说清只显示了一部分（P0-LH4）。
+      callback({ messages, total: 2100 });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [
@@ -4503,12 +4514,13 @@ io.on('connection', socket => {
         }
         const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
         if (bgInst) bgInst.state = 'done';
-        activeInst.state = 'idle';
+        // 新会话页上（viewingInstanceId 为 null）通用路径不懒开实例，activeInst 是 undefined（验收 O71）
+        if (activeInst) activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { canRestart: mockCanRestart,
             viewingInstanceId,
-            viewingCwd: activeInst.cwd,
+            viewingCwd: activeInst?.cwd ?? workspaceCwdOf(mockInstances[0].cwd),
             ...mockDirFields(),
             instances: mockInstances, service: mockServicePayload()
           }
@@ -5521,7 +5533,7 @@ io.on('connection', socket => {
         setTimeout(() => socket.disconnect(true), 50);
       },
     },
-  ]);
+  ], { onError: (command, err) => mockScenarioErrors.push({ command, error: String(err?.stack || err) }) });
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {

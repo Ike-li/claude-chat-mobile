@@ -1,0 +1,349 @@
+{
+  "domain": 23,
+  "name": "运维 CLI 与桌面端",
+  "cases": [
+    {
+      "id": "AC-23-01",
+      "t": "device.js",
+      "pre": "",
+      "st": "list、list --json、approve、deny",
+      "ex": "列出待审与已信任设备；--json 可机读；批准与拒绝生效",
+      "b": "GS 命令速查",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-02",
+      "t": "qr.js",
+      "pre": "",
+      "st": "窗口小于 90×45 时运行；用 --url；对 Access 域名用 --public",
+      "ex": "窗口太小拒绝输出；--url 用指定地址；Access 域名的码不带令牌",
+      "b": "GS 命令速查",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "边界值",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-03",
+      "t": "service.js 在 Linux",
+      "pre": "",
+      "st": "在容器里跑 status、health、logs",
+      "ex": "没有 launchd 时给出合理说明",
+      "b": "GS 命令速查",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "等价类",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-04",
+      "t": "copy-token",
+      "pre": "",
+      "st": "跑 service.js copy-token",
+      "ex": "不把令牌打到终端",
+      "b": "GS 命令速查",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "安全",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-05",
+      "t": "卸载",
+      "pre": "容器里的完整安装",
+      "st": "依次跑 --dry-run、--yes、--purge --yes",
+      "ex": "dry-run 不改任何东西；只删产品自己装的；purge 按白名单删数据，uploads 只报告不删；永不碰 ~/.claude/projects",
+      "b": "GS 卸载；INV DIST-01",
+      "env": [
+        "T"
+      ],
+      "p": "P0",
+      "m": "两侧验收",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-06",
+      "t": "statusline 桥",
+      "pre": "",
+      "st": "没配 statusline 时安装；配好后安装；卸载",
+      "ex": "没配时拒绝安装；装后可用；卸载按 manifest 恢复原命令",
+      "b": "GS statusline bridge",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "状态迁移",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-07",
+      "t": "hooks 桥",
+      "pre": "",
+      "st": "安装、verify、server 离线时跑 CLI、卸载",
+      "ex": "只追加自己的条目并做回环验证；server 离线时不阻断 CLI；卸载干净",
+      "b": "GS hooks bridge",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "状态迁移",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-08",
+      "t": "稳定的 node 路径",
+      "pre": "",
+      "st": "装桥后看 settings 里写的 node 路径",
+      "ex": "是稳定链接，不是带版本号的真身",
+      "b": "INV OPS-05",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "错误推测",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-09",
+      "t": "原地更新",
+      "pre": "先装旧包",
+      "st": "按「方式 A」覆盖新包后重启",
+      "ex": "配置与数据不动；/health 报新版本",
+      "b": "GS 更新",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-10",
+      "t": "从 v1.13.0 升级",
+      "pre": "先装 v1.13.0 并积一条离线消息",
+      "st": "升级到被测版本",
+      "ex": "原 WORKDIRS 照常生效；旧的离线条目判 stale，不误投",
+      "b": "GS 升级；10/16 review P0-2",
+      "env": [
+        "T",
+        "E3"
+      ],
+      "p": "P1",
+      "m": "回归",
+      "j": [
+        "J5"
+      ],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-11",
+      "t": "分发包裁剪",
+      "pre": "",
+      "st": "检查 tarball 内容并装起来",
+      "ex": "包里没有 tests/ 与 testing.md；doctor 文档一致性全过；npm ci --omit=dev 能装能起",
+      "b": "INV DIST-01",
+      "env": [
+        "T"
+      ],
+      "p": "P1",
+      "m": "两侧验收",
+      "j": [],
+      "n": "R0：tarball 里 tests/ 条目为 0，doctor 无 ✗ ✓",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-12",
+      "t": "菜单栏服务操作",
+      "pre": "",
+      "st": "用服务行的重启、日志、配置窗口、二维码窗口",
+      "ex": "都能用",
+      "b": "GS macOS 桌面控制台",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-13",
+      "t": "菜单栏设备操作",
+      "pre": "",
+      "st": "看待审设备与已信任设备子菜单，吊销一台",
+      "ex": "待审设备平铺；吊销需要强确认",
+      "b": "ARCH 四个入口",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-14",
+      "t": "更新桌面端",
+      "pre": "",
+      "st": "点「更新桌面端（重新编译）」",
+      "ex": "编译成功，菜单栏换成新版",
+      "b": "GS 更新",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-15",
+      "t": "桌面端能编译",
+      "pre": "",
+      "st": "npm run app:build",
+      "ex": "编译成功",
+      "b": "CLAUDE.md",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "宿主机执行，白名单内的 app:test 已含类型检查",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-16",
+      "t": "迁移配置提示",
+      "pre": "只有旧版 .env 的安装",
+      "st": "打开桌面端配置窗口",
+      "ex": "顶部有「迁移配置」",
+      "b": "GS§3",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-17",
+      "t": "service:adopt",
+      "pre": "手工装过的 unit",
+      "st": "跑 service:adopt",
+      "ex": "只写 manifest，不动 plist",
+      "b": "GS 命令速查",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-18",
+      "t": "日志窗口",
+      "pre": "LOG_TERMINAL 开",
+      "st": "打开桌面端日志窗口",
+      "ex": "能看到服务日志",
+      "b": "env-schema",
+      "env": [
+        "E4"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-19",
+      "t": "doctor --env",
+      "pre": "",
+      "st": "doctor.js --env=<另一份配置>",
+      "ex": "诊断的是指定的那份",
+      "b": "GS 命令速查",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    },
+    {
+      "id": "AC-23-20",
+      "t": "查新版本",
+      "pre": "",
+      "st": "跑文档里的 git ls-remote 命令",
+      "ex": "能拿到最新 tag",
+      "b": "GS 更新",
+      "env": [
+        "T"
+      ],
+      "p": "P2",
+      "m": "场景",
+      "j": [],
+      "n": "",
+      "tier": null,
+      "check": null
+    }
+  ]
+}

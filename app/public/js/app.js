@@ -80,6 +80,7 @@ import {
   mergeRecentSessionsAcrossWorkspaces,
   recentWorkspaceChips,
   remainingOlderSessionCount,
+  historyLoadedNotice,
   formatNotifyIdentity,
   notifySessionTag,
   lookupNotifySessionTitle,
@@ -7243,7 +7244,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           };
           rowsHost.appendChild(more);
         } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length);
+          const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
           const hintText = remaining != null
             ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
             : t('还有更早的会话，可用搜索查找');
@@ -8426,7 +8427,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         onDone?.();
         return;
       }
-      addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
+      addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
       renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。

@@ -338,7 +338,7 @@ node scripts/device.js approve <ID>
 node scripts/device.js deny <ID>
 ```
 
-跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` / `127.0.0.1` / `::1`（空 Host 不算）。
+跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` 或 `127.0.0.1`（空 Host 不算；用 `http://[::1]:端口` 打开的页面不跳过，要审批一次）。
 经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `app/src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
@@ -707,10 +707,10 @@ v1.13.0 及更早的版本里，`WORKDIRS` 是一份精确白名单：会话目�
 产品不主动检查上游版本。自己看：
 
 ```bash
-git ls-remote --tags --refs https://github.com/Ike-li/claude-chat-mobile.git | tail -1
+git ls-remote --tags --refs --sort=-v:refname https://github.com/Ike-li/claude-chat-mobile.git | head -1
 ```
 
-这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。本地版本：
+这条不要求本地是 git 仓库（它直接问远端），归档装的也能跑。`--sort=-v:refname` 不能省：远端按字典序列 tag，不排序取最后一行拿到的是 `v1.9.1`，而 `v1.10.0` 之后的版本都排在它前面。本地版本：
 
 ```bash
 node -p "require('./package.json').version"
