@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../app/src/shared/claude-home.js';
+import { removeBridgeNamespace } from '../app/src/ops/bridge-namespace.js';
 import { resolveStableNodePath } from './node-path.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
@@ -151,7 +152,9 @@ function installedStateMatches(settings, manifest) {
 function status(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
-  const settings = readSettings(paths.settings);
+  // settings.json 还不存在是新装 claude 的合法起点：确定没装（与 ops 层 readStatuslineInstallState 同判）。
+  // install 仍要求它先存在——那里的 ENOENT 是有意的，见 app/src/ops/cli-statusline-bridge.js 头注。
+  const settings = lstatIfPresent(paths.settings) ? readSettings(paths.settings) : {};
   const currentCommand = typeof settings.statusLine?.command === 'string'
     ? settings.statusLine.command
     : null;
@@ -230,6 +233,8 @@ function uninstall(home = homedir()) {
   else settings.statusLine.refreshInterval = manifest.originalRefreshInterval;
   atomicWriteJson(paths.settings, settings);
   unlinkSync(paths.manifest);
+  // 自己的命名空间（快照）一并清掉；此前要等整体 npm run uninstall（验收 O35）
+  removeBridgeNamespace(home, 'statusline-v1');
   return { state: 'uninstalled', restoredCommand: manifest.originalCommand };
 }
 

@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -99,6 +99,28 @@ test('resolveDrawerStatusChip: CLI 正在跑（纯终端 / Web 只读镜像 / We
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'idle', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'done', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
   assert.deepEqual(resolveDrawerStatusChip({ liveState: 'aborted', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+});
+
+// O86：注册表没自报时，被镜像锁住的那一行也要看得出终端在驾驶。
+test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住的那一行补终端态', () => {
+  const mirror = { sessionId: 's1', stale: false, waiting: false };
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'alive', '注册表是终端进程自己说的，压过推断');
+  assert.equal(resolveRowTerminalState({ registryState: null, sessionId: 's1', mirror }), 'busy');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断时没人在驾驶，不补');
+  assert.equal(resolveRowTerminalState({ sessionId: 's2', mirror }), null, '锁只属于被锁的那个会话');
+  assert.equal(resolveRowTerminalState({ sessionId: null, mirror }), null, '没有 id 的新会话行不认领');
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: null }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's2', mirror: null }), 'busy');
+  assert.equal(resolveRowTerminalState(), null);
+});
+
+test('resolveRowTerminalState: 本会话自主循环（ScheduleWakeup/CronCreate）造成的镜像锁不冒充终端驾驶', () => {
+  // 那时没有终端在驾驶，是会话自己被定时唤起写了 transcript；composer 会单独说明这个来源，抽屉行不该写「终端运行中」。
+  const mirror = { sessionId: 's1', stale: false, waiting: false, autonomous: true };
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror }), null);
+  assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), null);
+  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror }), 'busy', '注册表自报仍然优先');
 });
 
 test('resolveDrawerStatusChip: Web 与 CLI 同时 busy（续接重叠 / 双写窗口）仍标终端运行中', () => {

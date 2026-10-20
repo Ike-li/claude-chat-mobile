@@ -480,10 +480,14 @@ export function createStatusScenarios(getContext) {
     {
       // 判定化告警注入：后续 service:status ack 带 rateLimitLockout（⛔ 红）+ clientError（🐞 黄），
       // 供 E2E 验证升格告警行渲染与判色（P0-22c）。42 分钟前锁定、3 分钟前前端错误。
-      command: 'test:service-incidents',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }) => {
+      // test:service-incidents-local：同一条锁定来自本机（ip:127.0.0.1）——验收 O23，判色降为黄。
+      commands: ['test:service-incidents', 'test:service-incidents-local'],
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }, { cmd }) => {
         setMockServiceIncidents({
-          rateLimitLockout: { at: Date.now() - 42 * 60_000, count: 2 },
+          rateLimitLockout: {
+            at: Date.now() - 42 * 60_000, count: 2,
+            ...(cmd === 'test:service-incidents-local' ? { source: 'ip:127.0.0.1' } : {}),
+          },
           clientError: { at: Date.now() - 3 * 60_000, count: 5 },
         });
         socket.emit('agent:event', {
@@ -520,6 +524,36 @@ export function createStatusScenarios(getContext) {
             viewingInstanceId: null,
             viewingCwd: removedCwd,
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), removedCwd])),
+            instances: mockInstances,
+          },
+        });
+      }),
+    },
+    {
+      // 验收 O60 后一半：正在看的会话 CLI 进程被 kill。照真 server 的顺序：agent.js consume 收尾先发 error
+      // （带 processExited），再 onExit 摘掉实例、广播 viewing 变化。之后重开这个会话走清屏全量重载（见 armCrashReload）。
+      command: 'test:process-crash',
+      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }) => {
+        const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+        if (idx === -1) return;
+        const crashed = mockInstances[idx];
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
+          type: 'error', payload: {
+            message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
+          },
+        });
+        armCrashReload(crashed.sessionId);
+        mockInstances.splice(idx, 1);
+        setViewingInstanceId(null);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            service: mockServicePayload(),
+            viewingInstanceId: null,
+            viewingCwd: crashed.cwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
             instances: mockInstances,
           },
         });
