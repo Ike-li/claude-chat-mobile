@@ -53,7 +53,8 @@ transcript 事实            stream / control / usage     status_line 组装    
 | **FE 标题** | 有 `resolvedModel` → **标题 = wire id**；无 → `displayName` 或 `value` |
 | **FE 副标题** | 有 wire 时用档位 id / displayName（同 wire 多卡可区分） |
 | **FE value** | 保持 SDK `value`（`default`/`opus`/…），供选中与 data-model |
-| **锚点** | `resolveModelTileDisplay` · `tests/unit/display-contracts.test.mjs` · `logic-ui-ux-remaining.test.mjs` |
+| **FE 在跑模型** | init / instances 报的多是 wire 而非档位 id：`modelTileValueFor` 映射到已有磁贴（value 精确 → 带后缀全名 → 去后缀，匹配 value 或 `resolvedModel`），「使用中」只标一张；**映射不到才**补一张「当前加载模型」卡 |
+| **锚点** | `resolveModelTileDisplay` · `modelTileValueFor` · `tests/unit/display-contracts.test.mjs` · `logic-ui-ux-remaining.test.mjs` · E2E P0-09-LOADED |
 
 ### 1.2 发送 model id
 
@@ -61,15 +62,17 @@ transcript 事实            stream / control / usage     status_line 组装    
 |----|------|
 | **意图** | 用户点的是档位；发出去的应是**网关认的 wire**，避免 alias 再被 env 映射错 |
 | **规则** | `resolveSendModel`：空/`default` → `default` 条目的 `resolvedModel`（无则 `undefined` 让 CLI 自选）；其它档位有 `resolvedModel` 则 **pin wire**；无列表则原样 |
-| **禁止** | 前端自造模型 id；把 displayName 当 send value |
-| **锚点** | `resolveSendModel` · `logic-session.test.mjs` · display-contracts |
+| **运行中未点选** | `resolveOutgoingModel`：有实例、且用户没点过磁贴 / 没用 `/model` → **原样带回服务端报的在跑模型**（含网关后缀），不从磁贴重建；也不能带空——服务端把空当「回到 spawn 时的 `defaultModel`」 |
+| **服务端兜底** | 未 pin 且本进程从没尝试过切换时，带来的等于 init 的 `reportedModel` → 不 `setModel`，只记进差分基准 |
+| **禁止** | 前端自造模型 id；把 displayName 当 send value；把「显示在跑的模型」当成用户的选择发出去 |
+| **锚点** | `resolveSendModel` · `resolveOutgoingModel` · `logic-session.test.mjs` · display-contracts · `agent-control.test.mjs` |
 
 ### 1.3 当前模型文案（底栏 pill / compose）
 
 | 项 | 契约 |
 |----|------|
 | **有选中 + 有 resolved** | 显示 **wire**（`resolveGatewayModelName` / `resolveModelPillText`） |
-| **有选中无 resolved** | 原值 + 网关后缀（如 `[1m]`） |
+| **有选中无 resolved** | 原值 + 网关后缀（如 `[1m]`）；带后缀的全名查不到 `resolvedModel` 时**先按原值查**——后缀可能是在跑模型残留的，点了 haiku 不显示 `haiku[1m]` |
 | **未选** | `default.resolvedModel` → CLI default 文案 → cwd 默认 →「默认」 |
 | **禁止** | 无 `resolvedModel` 时用 displayName **覆盖** pill（历史 P0 锁：诊断/原值语义） |
 | **锚点** | `resolveModelPillText` · `logic-session.test.mjs` · E2E P0-09\* |

@@ -37,7 +37,7 @@
 
 后端 `app/src/` 按域分层：`agent/`（SDK 会话驱动、审批生命周期与存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp、工作区、「需要你」聚合）· `server/`（组装根：接线、多实例管理、mirror-engine、hooks 投递箱）· `auth/`（限速、CF Access、设备指纹与信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置、doctor、通知与推送通道、statusline 与额度、metrics、审计、受管服务）· `shared/`（叶子工具层；`protocol.js` 是事件契约真相源）。
 
-**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**两个门禁不能移进 `tests/`**：`scripts/doc-consistency.js`（check 链第 4 环）与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 整棵被 `export-ignore` 裁掉——移过去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`（判据见 hard-rules §4.1.1，由 `dist-manifest.test.mjs` 单列断言保护）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,invariants,integration,e2e,smoke,playground,acceptance}/` 是用例，`tests/infra/` 是测试基建（Dockerfile、compose、playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是门禁脚本。`scripts/` 是用户装机/运维会执行的命令 + 少量维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**两个门禁不能移进 `tests/`**：`scripts/doc-consistency.js`（check 链第 4 环）与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 整棵被 `export-ignore` 裁掉——移过去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`（判据见 hard-rules §4.1.1，由 `dist-manifest.test.mjs` 单列断言保护）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
 
 `unit/` 与 `invariants/` **执行槽相同**（纯函数 + 一次性目录真磁盘，CI 同 job），分的是组织轴：前者按被测模块，后者按不变量（文件头声明守护哪条 `XXX-NN`、不测什么）。目录职责、执行槽 S0–S7、以及那两套并存的编号（新的 `AUTH-01` 类 与生产代码注释里先有的 `FILES-1`/`SEC-01`/`SRV-003` 类）都在 [tests/README.md](tests/README.md)——**看到 `// 守护：SRV-003` 不知道是什么就去查那份**，别照着编号猜。
 
@@ -83,7 +83,9 @@
 外加与 `test:unit` 同档的 `test:invariants` 与 `test:coverage`、与 `test:e2e` 同源的 `test:e2e:parallel`，
 见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
-已核实不碰 `~/.claude`）。
+已核实不碰 `~/.claude`）。验收编排器 `node tests/acceptance/run.mjs` 与 `tests/acceptance/env/up.mjs`
+是宿主机侧调度，不是这份名单的例外：A 档重放只连 127.0.0.1 上的 E1/E2 容器、零 token；
+真模型只在 E3 容器里（起 E3 那一步钩子走 `ask`，见下文三类例外）。
 
 > ⚠️ **`test:invariants` 的两个兄弟不在白名单上，别照着后缀类推**：`test:invariants:server` 起真 `app/server.js` 子进程；
 > `test:invariants:env` 跑的是卸载器（`tests/invariants/env/`），它的隔离**依赖被测代码认注入的 `home`/`root`/`appPath`**
@@ -119,8 +121,9 @@
 > **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
 >
 > 钩子对**有容器替代**的命令直接 `deny` 并指出改跑哪条（不是 `ask`）——agent 自己换命令继续，
-> 长任务不会卡在一条本可自助解决的命令上。只有真 agent turn 与 smoke 走 `ask`：那两档要真凭据、
-> 容器里跑不了，花不花那笔额度只有人能决定。
+> 长任务不会卡在一条本可自助解决的命令上。只有三类走 `ask`：真 agent turn、smoke、起验收的 E3 环境。
+> 前两类要真凭据、容器里跑不了；第三类的真模型虽在容器里跑，起它要把机主网关凭据复制进容器，
+> 此后每个回合都花真额度。花不花那笔额度只有人能决定。
 
 容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
 和仓库里那几层代码级防护（执行位守卫、单测的目录级 `CCM_DATA_DIR` 隔离、`mutate` 的沙箱 HOME、
@@ -130,8 +133,12 @@
 否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`。
 **两种标记不通用**——为单文件删除批的豁免不放行递归删除。
 
-**两档例外不进容器**（需要真凭据，得单独授权）：`RUN_CLAUDE_INTEGRATION=1`（需真 agent turn 的那批文件）
-与 `npm run test:smoke`。其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
+**三类例外**（需要真凭据、花真额度，得单独授权）：`RUN_CLAUDE_INTEGRATION=1`（需真 agent turn 的那批文件）
+与 `npm run test:smoke` 不进容器；验收的额度闸在起 E3 那一步：
+`node tests/acceptance/env/up.mjs --env <含 E3 / E3proxy / E3cf，或 all> --yes` 钩子走 `ask`
+（`up.mjs` 缺省 `--env` 是 E1,E2，不带 `--yes` 只打印，都不命中）。`run.mjs` 只调度、列清单，
+`--tier C` 也只列不跑，闸不设在它上面。真模型只在容器里跑（见 [tests/acceptance/README.md](tests/acceptance/README.md)）。
+其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
 
 ## 常用命令
 

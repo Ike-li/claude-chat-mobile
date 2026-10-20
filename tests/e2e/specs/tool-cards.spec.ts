@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { captureBrowserErrors, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -458,6 +458,56 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(cards).toHaveCount(2);
     expect(await cards.nth(0).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(false);
     expect(await cards.nth(1).evaluate(el => el.nextElementSibling?.matches('figure.widget-card') ?? false)).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 AC-09-12 / O30：重启后过期的审批，transcript 里留下一条没配上 tool_result 的 tool_use；历史渲染恒把它画成
+  // 「进行中」，而这个会话根本没在跑——那一行永远转着。没有在途轮时，没配上结果的历史工具卡应是「已中止」。
+  test('P0-05-UNPAIRED 历史里没配上结果的工具卡：会话没在跑时显示「已中止」，不是一直「进行中」', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session');
+    await page.goto('/');
+    await waitUntilConnected(page);
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status).toHaveAttribute('aria-label', '已中止');
+
+    await expectNoBrowserErrors(page);
+  });
+  // PR #233 review：重载与在途轮重叠——读盘时 tool_use 已写、tool_result 未写，回包前那一轮跑完。收尾时按「此刻没在跑」
+  // 把这张卡判成「已中止」是错的（它真跑完了）；随后实时到达的结果也只在 live 表里找卡，修不回来。
+  test('P0-05-UNPAIRED2 重载期间那一轮跑完：没配上结果的卡不判「已中止」，随后到的结果照常落上', async ({ page }) => {
+    captureBrowserErrors(page);
+    // 同 gotoMock：mock 与真 server 一样拒绝无令牌握手，先预置令牌再开页。
+    await page.addInitScript(() => localStorage.setItem('auth_token', 'mock-token'));
+    await page.request.post('/__reset');
+    await page.request.post('/__arm-unpaired-tool-session?running=1');
+    await page.goto('/');
+    await waitUntilConnected(page);
+    // 「已中止」只要出现过一次就记下：收尾判错之后被实时结果盖回来，最终态看不出来
+    await page.evaluate(() => {
+      (window as unknown as { __abortedSeen: number }).__abortedSeen = 0;
+      new MutationObserver(records => {
+        for (const r of records) {
+          if ((r.target as Element).getAttribute?.('aria-label') === '已中止') (window as unknown as { __abortedSeen: number }).__abortedSeen += 1;
+        }
+      }).observe(document.getElementById('messages')!, { subtree: true, attributes: true, attributeFilter: ['aria-label'] });
+    });
+
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Unpaired Tool Session');
+    await expect(page.locator('#messages')).toContainText('Push the release branch');
+    const status = page.locator('details.toolcard .t-status').last();
+    await expect(status, '实时到达的结果没落到历史里的那张卡上').toHaveAttribute('aria-label', '成功');
+    expect(await page.evaluate(() => (window as unknown as { __abortedSeen: number }).__abortedSeen),
+      '请求历史时那一轮还在跑：没配上结果不等于中止').toBe(0);
 
     await expectNoBrowserErrors(page);
   });

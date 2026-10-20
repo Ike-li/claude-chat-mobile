@@ -8,6 +8,8 @@ import {
   resolveSendModel,
   resolveModelPillText,
   resolveGatewayModelName,
+  modelTileValueFor,
+  resolveOutgoingModel,
   effortLevelsFor,
   effortUiState,
   withAutoTier,
@@ -72,6 +74,32 @@ test.describe('契约 §1 模型：条数 = SDK；标题 = wire；发送 pin wir
     assert.equal(resolveSendModel({ selectValue: 'opus', modelsList: GATEWAY_MODELS }), 'grok-4.5');
     assert.equal(resolveSendModel({ selectValue: 'haiku', modelsList: [] }), 'haiku');
     assert.equal(resolveSendModel({ selectValue: '', modelsList: [] }), undefined);
+  });
+
+  // 验收 O53：跑着的会话打开设置多出一张「当前加载模型」并选中——init 报的是 wire（grok-4.5[1m]），不是档位 id，
+  // 按 value 精确匹配找不到磁贴就补了一张。在跑的模型要映射到已有磁贴上，只有列表里确实没有它才补卡。
+  test('在跑模型 → 磁贴：value 精确命中优先；否则按 带后缀全名 → 去后缀 匹配 value 或 wire；都不中给空', () => {
+    assert.equal(modelTileValueFor('grok-4.5', GATEWAY_MODELS, '[1m]'), 'default', 'init 报 grok-4.5[1m]：是 default 那张的 wire');
+    assert.equal(modelTileValueFor('grok-4.5', GATEWAY_MODELS, ''), 'opus', '同 wire 多张时取列表里第一张');
+    assert.equal(modelTileValueFor('haiku', GATEWAY_MODELS, '[1m]'), 'haiku', '用户点的档位 id 精确命中，不被残留后缀带偏');
+    assert.equal(modelTileValueFor('grok-9', GATEWAY_MODELS, ''), '', '列表里没有它：调用方才补「当前加载模型」卡');
+    assert.equal(modelTileValueFor('', GATEWAY_MODELS, ''), '');
+  });
+
+  // 验收 O53 / O26：用户没动模型，下一条却带着从磁贴重建出来的名字发出（grok-4.5，丢了 [1m]），把在跑的
+  // grok-4.5[1m] 换掉。运行中的会话没点过模型时，原样带回服务端报的在跑模型；不能带空——服务端把空当
+  // 「回到 spawn 时的模型」，中途切过的会话刷新后发一条就被切回去。
+  test('发送意图：运行中且没点过 → 原样带回在跑模型；点过或新会话 → 照旧 pin wire', () => {
+    const base = { modelsList: GATEWAY_MODELS, gatewaySuffix: '[1m]', loadedModel: 'grok-4.5[1m]' };
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: false, selectValue: 'grok-4.5' }), 'grok-4.5[1m]');
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: false, loadedModel: '' }), undefined, '不知道在跑什么就不带');
+    assert.equal(resolveOutgoingModel({ ...base, running: true, picked: true, selectValue: 'haiku' }), 'grok-4.5');
+    assert.equal(resolveOutgoingModel({ ...base, running: false, picked: false, selectValue: '' }), 'grok-4.5[1m]', '新会话：空选 = default 的 wire（§1.2 原规则）');
+  });
+
+  // 验收 O52：中途点了 haiku，胶囊显示「haiku[1m]」——后缀是在跑模型残留的，先拼后缀再查表就查不到。
+  test('pill：带后缀查不到时按原值查 wire，不显示「档位 id + 残留后缀」', () => {
+    assert.equal(resolveModelPillText({ model: 'haiku', gatewaySuffix: '[1m]', modelsList: GATEWAY_MODELS }), 'grok-4.5');
   });
 
   test('pill：有 resolved → wire；无 resolved → 原值+后缀，不得用 displayName 覆盖', () => {

@@ -110,6 +110,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O41：清单改不了时，家目录里新建的文件夹接下来加不进去，只会在磁盘上留一个空目录（服务端也拒，FOLDER-01）。
+  // 浏览家目录时就不给「新建文件夹」，并先说清为什么，不等点完才报。
+  test('P0-PICK-17 手机上改不了清单：添加文件夹时不给「新建文件夹」，先说清为什么', async ({ page }) => {
+    await sendChatMessage(page, 'test:folders-readonly');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    await page.locator('[data-testid="drawer-add-folder"]').click();
+    await entry(page, 'code').locator('button').first().click();
+    await expect(picker(page).locator('[data-testid="folder-picker-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(picker(page).locator('[data-testid="folder-picker-mkdir"]'), '给了一个建完才报「改不了」、还留下空目录的按钮').toHaveCount(0);
+    await expect(picker(page).locator('[data-testid="folder-picker-start-here"]')).toBeEnabled();
+    await expectNoBrowserErrors(page);
+  });
+
   // 浏览家目录时新建（2026-10-15 起）：建好就连上、就在里面开新会话——建一个空文件夹本来就是为了在里面干活。
   test('P0-PICK-3 就地新建文件夹：名字不合法时说清为什么；建好之后直接在新文件夹里开新会话', async ({ page }) => {
     await openPickerFromCompose(page);
