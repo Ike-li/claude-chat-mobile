@@ -41,6 +41,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // PR #250 review：全文超过服务端上限（512KiB）时 tool:full 只回开头并带 truncated。此前只渲染 res.text、随即
+  // 撤掉按钮，用户看到的是一段不完整的输出，却没有任何标记，也没有别的办法拿到其余部分。
+  test('P0-05-FULL-TRUNC 展开全文超过上限：说清只显示了开头和原长', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-tool-full-truncated');
+    await sendChatMessage(page, 'test:tool');
+    await expect(page.locator('details.toolcard')).toHaveCount(3, { timeout: 15_000 });
+    await waitForIdle(page);
+    await page.locator('details.toolcard summary').last().click();
+    await page.locator('[data-testid="tool-expand-full"]').click();
+    const card = page.locator('details.toolcard').last();
+    await expect(card).toContainText('HEAD_OF_HUGE_OUTPUT');
+    const note = card.locator('[data-testid="tool-full-truncated"]');
+    await expect(note, '拿到的只是开头，不说清楚就像已经完整了').toBeVisible();
+    await expect(note).toContainText('700000');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-05b 工具结果乱序返回仍落到正确卡片', async ({ page }) => {
     await gotoMock(page);
 
@@ -343,6 +361,37 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(st).toHaveClass(/text-success/);
     await expect(st).not.toHaveClass(/text-warning/);
 
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O55：从历史打开的会话，Bash 输出原来只给 600 字（契约写 2000，服务端那半由 display-contracts 守），
+  // 并且历史卡片没有「展开全文」——那个按钮只挂在 live 卡片上、从实例内存取全文，刷新或换台设备就没了。
+  // 历史卡片截断时同样挂按钮，请求带上会话坐标，服务端回落去 transcript 取（mock 只在带坐标时给全文）。
+  // 附带：纯文本输出不再被 hljs 自动认成 css / vbnet 上色。
+  test('P0-05-HIST-FULL 历史回放里被截断的 Bash 卡：有「展开全文」，点开从记录取回全文；纯文本不上语法色', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-long-tool');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await expect(card).toHaveCount(1);
+    await card.locator('summary').click();
+    const out = card.locator('.t-out code');
+    await expect(out).toContainText('Compiling module 0: auth');
+    await expect(out).not.toContainText('BUILD DONE');
+    // 栅栏：历史里的代码块是空闲时一批高亮的；同一张卡的输入块（JSON）已高亮 ⇒ 输出块也已轮到过
+    await expect(card.locator('.t-in code')).toHaveClass(/\bhljs\b/, { timeout: 5_000 });
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
+
+    const expand = card.locator('[data-testid="tool-expand-full"]');
+    await expect(expand).toBeVisible();
+    await expand.click();
+    await expect(out).toContainText('BUILD DONE');
+    await expect(expand).toHaveCount(0);
+    await expect(out.locator('[class^="hljs-"]')).toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
 

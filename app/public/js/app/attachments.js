@@ -1,4 +1,4 @@
-import { attachmentDataUrl, formatAttachmentChipLabel, guessImageMime, pickPasteImageFiles } from '../logic/attachments.js';
+import { attachmentDataUrl, formatAttachmentChipLabel, guessImageMime, pickPasteImageFiles, sanitizeName } from '../logic/attachments.js';
 import { t } from '../i18n.js';
 
 const MAX_FILE = 10 * 1024 * 1024;
@@ -153,12 +153,15 @@ export function createAttachmentController(context, options = {}) {
     const list = Array.isArray(files) ? files : [...(files || [])];
     for (const file of list) {
       if (!file) continue;
+      // 界面上一律显示与落盘同一规则清洗过的名字（O34）；没名字的粘贴图走下面的 paste- 兜底。
+      const rawName = file.name?.trim();
+      const shownName = rawName ? sanitizeName(rawName) : '';
       if (pending.length >= MAX_COUNT) {
         notify(`${t('附件数量已达上限（')}${MAX_COUNT}）`, 'text-danger');
         break;
       }
       if (file.size > MAX_FILE) {
-        notify(`「${file.name || t('附件')}」${t('超过 10MB，未添加')}`, 'text-danger');
+        notify(`「${shownName || t('附件')}」${t('超过 10MB，未添加')}`, 'text-danger');
         continue;
       }
       const total = pending.reduce((sum, attachment) => sum + attachment.size, 0);
@@ -170,7 +173,7 @@ export function createAttachmentController(context, options = {}) {
         const [data, thumb] = await Promise.all([readBase64(file), makeThumb(file)]);
         const now = (deps.now || Date.now)();
         const random = (deps.random || Math.random)();
-        const name = file.name?.trim()
+        const name = shownName
           || `paste-${now}.${(file.type || '').split('/')[1] || 'png'}`;
         pending.push({
           _id: `${now}-${random.toString(36).slice(2)}`,
@@ -182,7 +185,7 @@ export function createAttachmentController(context, options = {}) {
         });
         notifyChange();
       } catch {
-        notify(`「${file.name || t('附件')}」${t('读取失败')}`, 'text-danger');
+        notify(`「${shownName || t('附件')}」${t('读取失败')}`, 'text-danger');
       }
     }
   }

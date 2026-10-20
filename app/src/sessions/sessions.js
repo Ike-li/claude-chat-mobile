@@ -119,13 +119,14 @@ export function setCurrent(cwd, sessionId) {
 // workspaceCwd，产品判据是「worktree 是临时模式、不占抽屉条目」）。传一个值满足不了两者：
 // 跟驾驶轴走会让 worktree 变成一个工作区条目，跟工作区轴走会让条目 cwd 指向一个没有该
 // transcript 的目录（/clear 之后新会话就会记错，历史按父仓查空）。
-export function upsertSession({ id, title, cwd, routeCwd, model, effort, permissionMode, generation }) {
+export function upsertSession({ id, title, cwd, routeCwd, model, effort, effortSource, permissionMode, generation }) {
   const routeKey = routeCwd ?? cwd;
   const existing = state.sessions.find(s => s.id === id);
   if (existing) {
     if (model) existing.model = model;
     // effort/permissionMode：init 事件到达时同步持久化（与 model 对称），resume 时可恢复
     if (effort !== undefined) existing.effort = effort;
+    if (effortSource !== undefined) existing.effortSource = effortSource;
     if (permissionMode !== undefined) existing.permissionMode = permissionMode;
     // /clear 场景：条目先以占位标题登记，该会话首条消息到达后回填；不覆盖已有真实标题
     if (title && existing.title === '新会话') existing.title = String(title).slice(0, 40);
@@ -140,6 +141,8 @@ export function upsertSession({ id, title, cwd, routeCwd, model, effort, permiss
       model: model || null,
       // 思考强度与权限档持久化：web 端续接会话时恢复（CLI 不存，是 web 端增强）
       effort: effort ?? null,
+      // 档位来源（'user' | 'cli-settings' | 'default'）：续接时分辨会话自己选的与 CLI settings 来的
+      effortSource: effortSource ?? null,
       permissionMode: permissionMode || null,
       createdAt: now,
       lastUsedAt: now
@@ -186,6 +189,7 @@ export function updateSessionPrefs(id, prefs) {
   if (!existing) return;
   if (prefs.permissionMode !== undefined) existing.permissionMode = prefs.permissionMode;
   if (prefs.effort !== undefined) existing.effort = prefs.effort;
+  if (prefs.effortSource !== undefined) existing.effortSource = prefs.effortSource;
   save();
 }
 
