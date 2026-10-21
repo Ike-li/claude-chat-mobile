@@ -2,11 +2,13 @@
 // 该文件由 claude CLI 自己写入（entrypoint/kind/status 等自报字段），是「这个会话此刻
 // 是否有终端进程在驾驶」的权威声明——用于替代磁盘 transcript 尾部形态猜测（猜测的两个
 // 已知盲区见 history.js:1008-1012）。7/26 实测：status+statusUpdatedAt 只出现在
-// entrypoint=cli 的条目上（sdk-ts/sdk-cli/claude-desktop 无 status）；文件按 PID 命名、
-// 非持久化，进程崩溃可能留陈尸文件，故消费前必须 pid 验活。
+// entrypoint=cli 的条目上（sdk-ts/sdk-cli/claude-desktop 无 status；桌面端 2.1.299 实测也自报，
+// 从哪一版开始不详，见 TERMINAL_ENTRYPOINTS）；文件按 PID 命名、非持久化，进程崩溃可能留陈尸文件，
+// 故消费前必须 pid 验活。
 // 7/29 pty 实证补正两点（见 TERMINAL_BUSY_STATUSES / registryIndicatesTerminalBusy）：跑命令期间
 // 自报 "shell" 而非 "busy"；statusUpdatedAt 只在取值变化时写一次、不是心跳。条目还带 ccm 目前
-// 未消费的 tempo/state/detail/waitingFor/needs 字段（取值时机未实证，别凭猜接入）。
+// 未消费的 tempo/state/detail/waitingFor/needs 字段（除桌面端 2.1.299 观察到的两种 waitingFor 取值外，
+// 取值时机未实证，别凭猜接入）。
 // 注册表缺失/损坏一律 fail-open 返回 null——调用方回落既有尾部形态判定，绝不因本模块锁死。
 import { readdir, lstat, readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -247,19 +249,21 @@ export function hasTerminalSessionOverlapping(cwd, states, wants = ['busy', 'wai
 //                     ~/Library/Application Support/Claude/claude-code/<ver>/），用
 //                     --input-format stream-json headless 驱动、自己画 UI 与权限框；transcript
 //                     每行自报 entrypoint='claude-desktop'。2026-09-06 实测（2.1.260）：它写活体
-//                     条目、进程退出照样删文件，但【从不写 status】——所以"在不在跑"拿不到自报，
-//                     只能回落磁盘尾部形态（classifyTail）。此前它和 sdk 系一起被排除，后果是
-//                     桌面端会话在列表里【没有任何运行标识】，只剩一个未读点（未读走 transcript
-//                     增长那条轴，与 entrypoint 无关，所以照常工作）。
+//                     条目、进程退出照样删文件，但【不写 status】——那时"在不在跑"拿不到自报，
+//                     只能回落磁盘尾部形态（classifyTail）。2.1.299 实测会自报 idle/busy/waiting（从哪一版开始不详）
+//                     （权限审批时 waitingFor 为 "permission prompt"，AskUserQuestion/dialog 为
+//                     "input needed"）；判据按 `!entry.status` 写，两种版本都对。
+//                     此前它和 sdk 系一起被排除，后果是桌面端会话在列表里【没有任何运行标识】，
+//                     只剩一个未读点（未读走 transcript 增长那条轴，与 entrypoint 无关，所以照常工作）。
 // 仍然排除 sdk-ts/sdk-cli：那是 ccm 自己或别的 SDK 工具驱动的，列表里已有 live 实例徽标，标了会双份。
 const TERMINAL_ENTRYPOINTS = new Set(['cli', 'claude-desktop']);
 
 // 批量：返回 Map<terminalStateKey, { state, source }>，只收 TERMINAL_ENTRYPOINTS 且 pid 存活的条目。
-//   'busy'    = 在跑。cli 看自报 busy/shell；桌面端无自报 → 看尾部形态 pending
+//   'busy'    = 在跑。看自报 busy/shell；无自报（如 2.1.260 的桌面端）→ 看尾部形态 pending
 //   'waiting' = 自报 waiting（终端卡在对话框上等人，含权限审批框）—— 2026-09-04 新增，此前被折进
 //               alive，于是抽屉里「CLI 正等你批准」与「终端开着但闲着」完全同形。
-//               桌面端拿不到这一档（无 status），它的等审批状态在列表上与 alive 同形。
-//   'alive'   = 进程活着但不在跑（cli 自报 idle / 无自报；桌面端尾部 settled）
+//               不写 status 的桌面端（2.1.260）拿不到这一档，等审批状态在列表上与 alive 同形；2.1.299 实测已自报。
+//   'alive'   = 进程活着但不在跑（自报 idle / 无自报；无自报的桌面端尾部 settled）
 // source = 该状态的来源 entrypoint，只用于选文案（把桌面端说成"终端"是在说错话）。
 // 状态轴与来源轴刻意保持正交：合成一个枚举（desktop_busy…）会让取值域随来源×状态爆炸，
 // 且 hasBusyTerminalSessionForCwd 这类汇总判据每加一个来源都要改一次。
