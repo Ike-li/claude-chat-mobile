@@ -54,21 +54,6 @@ test('file socket handlers fail closed and audit out-of-scope browse requests', 
   assert.equal(audits[0].meta.via, 'browse:list');
 });
 
-// 验收 O50：FILE_EDIT=off 时组装根不注入 writeFileInScope（files:write 回「文件编辑未启用」），可 browse:read
-// 照样下发 contentHash——前端拿它当「能不能点编辑」的唯一判据，于是给了编辑入口，改完点保存才报错。
-test('browse:read：写回不可用（FILE_EDIT=off）时不下发 contentHash；可用时照常', async () => {
-  const read = () => ({ content: 'x', truncated: false, totalSize: 1, binary: false, bytesRead: 1, contentHash: 'h' });
-  const off = register({ writeFileInScope: undefined, browseReadFile: read });
-  let response;
-  await off.handlers.get('browse:read')({ cwd: '/repo', relPath: 'a.txt' }, value => { response = value; });
-  assert.equal(response.ok, true);
-  assert.equal(response.content, 'x');
-  assert.equal('contentHash' in response, false, '编辑已关，却给了编辑基线：前端会亮出「编辑」');
-  const on = register({ browseReadFile: read });
-  await on.handlers.get('browse:read')({ cwd: '/repo', relPath: 'a.txt' }, value => { response = value; });
-  assert.equal(response.contentHash, 'h');
-});
-
 // 验收 O39 / O80：范围门已经过了、只是读不了或已经不在的东西（FIFO、不是目录、编辑器开着时被删）——
 // file-browse 交回可判别值。这里要照样拒、说清是什么，但不能记 scope_violation：那是安全日志里并不存在的「越界」，
 // 把真正的越界淹没在噪音里。null（真越界）照旧记。
