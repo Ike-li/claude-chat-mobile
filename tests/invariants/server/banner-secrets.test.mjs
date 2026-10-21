@@ -107,7 +107,8 @@ test.describe('AUTH-05: 服务端输出不得含完整 AUTH_TOKEN', () => {
         CCM_DATA_DIR: dataDir,
         WORK_DIRS: workdir,
         BIND_MODE: bindMode,
-        PORT: '0',
+        // 不能写 PORT: '0'：配置层把它当无效值回落 3000，不是临时端口，会和任何同样落到 3000 的进程撞。
+        CCM_TEST_EPHEMERAL_PORT: '1',
       });
       const out = `${r.stdout}\n${r.stderr}`;
 

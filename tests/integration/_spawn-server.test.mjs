@@ -5,13 +5,33 @@ import '../setup/require-disposable-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createServerSpawner, waitForCondition } from './_spawn-server.mjs';
+import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createServerSpawner, killServer, waitForCondition } from './_spawn-server.mjs';
 import { SPAWN_ENV_BLOCKLIST } from '../helpers/spawn-env.mjs';
 
-test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', async () => {
+// 假 child：helper 会从 stdout 读 server 绑定后打的 CCM_TEST_LISTENING_PORT 行，假的也得有这条流。
+// before 是端口行之前的输出（横幅之类），用来验证调用方事后挂监听仍收得到它。
+const REPORTED_PORT = 45678;
+function fakeChild({ before = '' } = {}) {
   const child = new EventEmitter();
   child.exitCode = null;
   child.signalCode = null;
+  child.kill = () => true;
+  child.stdout = new PassThrough();
+  child.stdout.write(`${before}CCM_TEST_LISTENING_PORT=${REPORTED_PORT}\n`);
+  return child;
+}
+// helper 挂上 stdout 监听后，流要到下一个 tick 才开始吐数据；`async () => {}` 只让出一个微任务，
+// 轮不到它。真实 sleep 是 250ms，这里让出一轮事件循环即可。
+const yieldTick = () => new Promise(resolve => setImmediate(resolve));
+
+test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', async () => {
+  const child = fakeChild();
   const signals = [];
   child.kill = signal => {
     signals.push(signal);
@@ -27,7 +47,7 @@ test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', as
   const spawnServer = createServerSpawner({
     spawnProcess: () => child,
     requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: 'other-server' }),
-    sleep: async () => {},
+    sleep: yieldTick,
     maxAttempts: 1,
   });
 
@@ -41,9 +61,7 @@ test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', as
 });
 
 test('readiness 成功：保留调用方对 child 的收尾责任', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null;
-  child.signalCode = null;
+  const child = fakeChild();
   const signals = [];
   child.kill = signal => { signals.push(signal); return true; };
   let spawnOptions;
@@ -57,7 +75,7 @@ test('readiness 成功：保留调用方对 child 的收尾责任', async () => 
       status: 'ok',
       buildNonce: spawnOptions.env.CCM_BUILD_NONCE,
     }),
-    sleep: async () => {},
+    sleep: yieldTick,
     maxAttempts: 1,
   });
 
@@ -69,7 +87,7 @@ test('readiness 成功：保留调用方对 child 的收尾责任', async () => 
   });
 
   assert.equal(result.proc, child);
-  assert.equal(result.port, Number(spawnOptions.env.PORT));
+  assert.equal(result.port, REPORTED_PORT, '返回的端口必须是 server 自己报告的监听端口');
   assert.equal(result.buildNonce, spawnOptions.env.CCM_BUILD_NONCE);
   assert.equal(spawnOptions.env.CCM_TEST_PRESERVE_EMPTY_ENV, '1');
   assert.deepEqual(signals, []);
@@ -79,10 +97,7 @@ test('readiness 成功：保留调用方对 child 的收尾责任', async () => 
 // 就会 osascript 开 Terminal.app 窗口；kill 时 zsh/tail 又常弹「是否终止进程」确认框，窗口堆满桌面。
 // 必须在 spawn 侧强制关掉——关窗路径（stopLogTerminalSync）依赖优雅退出，SIGKILL/竞态下不可靠。
 test('spawn 强制 LOG_TERMINAL=off：隔离本机 .env，且忽略 envOverrides 试图重新打开', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null;
-  child.signalCode = null;
-  child.kill = () => true;
+  const child = fakeChild();
   let spawnOptions;
   const prev = process.env.LOG_TERMINAL;
   process.env.LOG_TERMINAL = 'on';
@@ -96,7 +111,7 @@ test('spawn 强制 LOG_TERMINAL=off：隔离本机 .env，且忽略 envOverrides
         status: 'ok',
         buildNonce: spawnOptions.env.CCM_BUILD_NONCE,
       }),
-      sleep: async () => {},
+      sleep: yieldTick,
       maxAttempts: 1,
     });
     await spawnServer({
@@ -142,72 +157,45 @@ test('waitForCondition：条件恒假（不抛错）也会超时，错误里不�
   );
 });
 
-// 端口选择：抽签换成向 OS 要空闲端口（见 _spawn-server.mjs reserveFreePort 的算术）。
-// 调用方显式钉 PORT 的既有用法（WS-6「重启后端口不变」）不能被这个改动带偏。
-test('不传 PORT 时向 OS 要空闲端口，而不是随机抽签', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null; child.signalCode = null; child.kill = () => true;
+// 调用方显式钉 PORT 的既有用法（WS-6「重启后端口不变」）不能被「让 server 自己 listen(0)」带偏。
+test('显式传 PORT 时照用，不改成临时端口（重启同端口的用法不能被带偏）', async () => {
+  const child = fakeChild();
   let spawnOptions;
-  let pickCalls = 0;
 
   const spawnServer = createServerSpawner({
     spawnProcess: (_c, _a, options) => { spawnOptions = options; return child; },
     requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
-    sleep: async () => {},
+    sleep: yieldTick,
     maxAttempts: 1,
-    pickPort: async () => { pickCalls += 1; return 45678; },
-  });
-
-  const result = await spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
-
-  assert.equal(pickCalls, 1, '未指定 PORT 时必须问 OS 要，不能自己抽');
-  assert.equal(result.port, 45678);
-  assert.equal(spawnOptions.env.PORT, '45678');
-});
-
-test('显式传 PORT 时照用，不去问 OS（重启同端口的用法不能被带偏）', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null; child.signalCode = null; child.kill = () => true;
-  let spawnOptions;
-  let pickCalls = 0;
-
-  const spawnServer = createServerSpawner({
-    spawnProcess: (_c, _a, options) => { spawnOptions = options; return child; },
-    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
-    sleep: async () => {},
-    maxAttempts: 1,
-    pickPort: async () => { pickCalls += 1; return 45678; },
   });
 
   const result = await spawnServer({ PORT: '31999', AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
 
-  assert.equal(pickCalls, 0);
   assert.equal(result.port, 31999);
   assert.equal(spawnOptions.env.PORT, '31999');
+  assert.notEqual(spawnOptions.env.CCM_TEST_EPHEMERAL_PORT, '1', '钉了端口还让 server 随机绑，重启后就连不回原端口');
 });
 
-test('reserveFreePort 真的给出可立即绑定的空闲端口（不是占着不放）', async () => {
+// 读端口要消费 stdout。device-gate / device-token-wire / workdir-source 都是拿到返回值之后才挂
+// stdout 监听，并指望收到从启动起的全部输出（device-gate 文件头写明了这个依赖）——读端口不能把它吃掉。
+test('拿到返回值后再挂 stdout 监听，仍收得到端口行之前的输出', async () => {
+  const child = fakeChild({ before: '==== 启动横幅 ====\n' });
+  let spawnOptions;
   const spawnServer = createServerSpawner({
-    spawnProcess: () => {
-      const c = new EventEmitter();
-      c.exitCode = null; c.signalCode = null;
-      // 必须真的响应 SIGTERM：否则 killServer 会走满 3s+3s 两轮超时，这条用例白耗 6 秒。
-      c.kill = () => { queueMicrotask(() => { c.exitCode = 0; c.emit('exit', 0, 'SIGTERM'); }); return true; };
-      return c;
-    },
-    requestHealth: async () => { throw new Error('不探测'); },
-    sleep: async () => {},
-    maxAttempts: 0,
+    spawnProcess: (_c, _a, options) => { spawnOptions = options; return child; },
+    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
+    sleep: yieldTick,
+    maxAttempts: 1,
   });
-  // maxAttempts=0 直接走超时分支，但端口已由真实 reserveFreePort 选出并写进错误信息
-  await assert.rejects(
-    spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
-    err => {
-      const port = Number(err.message.match(/端口 (\d+)/)?.[1]);
-      assert.ok(Number.isInteger(port) && port > 1024, `应拿到合法端口，得到 ${port}`);
-      return true;
-    },
-  );
+
+  const { proc } = await spawnServer({ AUTH_TOKEN: '', WORK_DIRS: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+  await yieldTick(); // 调用方不是立刻挂监听的，中间这段时间里 helper 那边的流照样在吐数据
+  let seen = '';
+  proc.stdout.on('data', c => { seen += c; });
+  child.stdout.end();
+  await new Promise(resolve => proc.stdout.on('end', resolve));
+
+  assert.match(seen, /启动横幅/, `调用方漏掉了启动早期的输出，实际只收到：${JSON.stringify(seen)}`);
 });
 
 // 同 LOG_TERMINAL 那条的动机，但覆盖面从「一个键」扩到「一批生产键」。
@@ -216,9 +204,7 @@ test('reserveFreePort 真的给出可立即绑定的空闲端口（不是占着�
 // CF_ACCESS_* 会让被测 server 真的启用 Access 并对外拉生产 team 的 JWKS，VAPID_* 则把推送密钥
 // 一并带进测试进程。baseEnv 注入的是一个构造出来的「脏」环境——不能依赖宿主 env，否则在干净机器上恒绿。
 test('spawn 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等），但保留无关键', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null;
-  child.signalCode = null;
+  const child = fakeChild();
   child.kill = () => true;
   let spawnOptions;
 
@@ -233,7 +219,7 @@ test('spawn 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等），但保留
     },
     spawnProcess: (_command, _args, options) => { spawnOptions = options; return child; },
     requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
-    sleep: async () => {},
+    sleep: yieldTick,
     maxAttempts: 1,
   });
 
@@ -248,9 +234,7 @@ test('spawn 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等），但保留
 });
 
 test('调用方显式传入的键不受 blocklist 影响（overrides 排在 strip 之后）', async () => {
-  const child = new EventEmitter();
-  child.exitCode = null;
-  child.signalCode = null;
+  const child = fakeChild();
   child.kill = () => true;
   let spawnOptions;
 
@@ -258,11 +242,79 @@ test('调用方显式传入的键不受 blocklist 影响（overrides 排在 stri
     baseEnv: { CF_ACCESS_TEAM: 'inherited-prod-team' },
     spawnProcess: (_command, _args, options) => { spawnOptions = options; return child; },
     requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
-    sleep: async () => {},
+    sleep: yieldTick,
     maxAttempts: 1,
   });
 
   // cf-access-gate 那批用例要显式构造 CF 场景——摘的是「继承来的」，不是「显式要的」。
   await spawnServer({ CF_ACCESS_TEAM: 'test-team', AUTH_TOKEN: 't', WORK_DIRS: '/tmp/x', CCM_DATA_DIR: '/tmp/x' });
   assert.equal(spawnOptions.env.CF_ACCESS_TEAM, 'test-team');
+});
+
+// 端口抢占（TOCTOU）。2026-10-21 PR #289 的 CI（run 39592963626，unit-test (24)）里 config-refresh
+// 整份文件红在「启动失败：端口 43443 已被占用」，被测 PR 根本没碰它。只要端口是测试这边先选好、
+// 再交给 server 去 listen，中间就隔着子进程启动 + 加载整棵模块图（几百毫秒），并行的另一个测试进程
+// （它自己的 listen(0)，或一条出向连接占的临时端口）随时可能先拿到同一个端口。
+//
+// 这里把那段窗口的最坏情况做成确定性的：spawn 的那一刻，交给子进程的端口号【已经被别人占着】。
+// 对手是同步 bind 的——listen 不带 host 时 Node 在调用栈里就完成 bind，只有 'listening' 事件延到
+// 下一 tick——所以子进程连 fork 都还没开始，端口已经没了，不赌时序。
+function stealHandedOutPort(thieves) {
+  return (command, args, options) => {
+    const handedOut = Number(options.env.PORT);
+    if (Number.isInteger(handedOut) && handedOut > 0 && handedOut < 65536) {
+      // 接了就断：真实的抢占者要么是别的测试起的 server（/health 带的是别人的 nonce），要么是出向连接
+      // 占的源端口（连过去直接被拒），都不会吊着连接不应答——那会让就绪探测一直挂在这条连接上。
+      const thief = createServer(socket => socket.destroy());
+      thief.on('error', () => {}); // 端口若已被第三方占着，bind 失败也无妨：子进程照样拿不到它
+      thief.listen(handedOut);
+      thieves.push(thief);
+    }
+    return spawn(command, args, options);
+  };
+}
+
+test.describe('端口抢占：交给 server 的端口在它 listen 之前被别人占走', () => {
+  let dataDir;
+  const thieves = [];
+  test.before(() => { dataDir = mkdtempSync(join(tmpdir(), 'ccm-spawn-toctou-')); });
+  test.after(() => {
+    for (const t of thieves) t.close();
+    rmSync(dataDir, { recursive: true, force: true }); // safe-rm: 本文件 mkdtemp 的一次性目录
+  });
+
+  // 正对照：仪器先证明自己咬得住。显式钉 PORT 是「重启后端口不变」（WS-6）的既有用法，
+  // 那个端口被占时 server 必须起不来——这条不红，说明对手没占上，下面那条的绿就不算数。
+  test('对照：显式钉的端口被占，server 起不来', async () => {
+    const probe = createServer();
+    await new Promise(r => probe.listen(0, '127.0.0.1', r));
+    const pinned = probe.address().port;
+    await new Promise(r => probe.close(r));
+
+    const spawnServer = createServerSpawner({ spawnProcess: stealHandedOutPort(thieves) });
+    await assert.rejects(
+      spawnServer({ PORT: String(pinned), AUTH_TOKEN: 'toctou-token', WORK_DIRS: dataDir, CCM_DATA_DIR: dataDir }),
+      /提前退出/,
+      '钉死的端口已被占，server 却「起来了」——对手没占上，这组用例测不到端口抢占',
+    );
+  });
+
+  test('不钉端口时，任何交给子进程的端口号都被抢走，server 照样起得来', async () => {
+    const spawnServer = createServerSpawner({ spawnProcess: stealHandedOutPort(thieves) });
+    let started;
+    try {
+      started = await spawnServer({ AUTH_TOKEN: 'toctou-token', WORK_DIRS: dataDir, CCM_DATA_DIR: dataDir });
+    } catch (err) {
+      assert.fail(
+        `端口在交给 server 之后、它 listen 之前被别人占走，启动就失败了（${err.message}）。` +
+        '这正是并行跑集成测试时偶发的「端口 X 已被占用」：端口必须由 server 自己 listen(0) 当场向 OS 要，' +
+        '不能由测试先选好再交过去。',
+      );
+    }
+    try {
+      assert.ok(started.port > 0, `应拿到 server 实际监听的端口，实际 ${started.port}`);
+    } finally {
+      await killServer(started.proc);
+    }
+  });
 });

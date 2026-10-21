@@ -16,7 +16,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stripInheritedEnv } from '../helpers/spawn-env.mjs';
-import { spawnServer, killServer, reserveFreePort } from './_spawn-server.mjs';
+import { spawnServer, killServer } from './_spawn-server.mjs';
 
 const dirs = [];
 function tempDir(prefix) {
@@ -75,7 +75,7 @@ test('端口被占、启动失败 → 不记 started / restarted', async () => {
 test('缺令牌被拒绝启动 → 不记 started / restarted', async () => {
   const dataDir = tempDir('ccm-selfstart-refused-');
   const { code } = await runFailingServer({
-    PORT: String(await reserveFreePort()), AUTH_TOKEN: '',
+    CCM_TEST_EPHEMERAL_PORT: '1', AUTH_TOKEN: '',
     CCM_DATA_DIR: dataDir, WORK_DIRS: dataDir,
   });
   assert.notEqual(code, 0);

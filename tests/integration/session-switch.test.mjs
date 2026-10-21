@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { reserveFreePort } from './_spawn-server.mjs';
+import { importServerInProcess } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 
@@ -29,7 +29,6 @@ async function startServer() {
 
   // 设置环境变量
   process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(await reserveFreePort());
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
   process.env.AUTH_TOKEN = 'ccm-integration-test-token';   // §1.9：没有 token server 拒绝启动
@@ -38,7 +37,7 @@ async function startServer() {
   delete process.env.CF_ACCESS_AUD;
 
   // 动态导入 server 模块
-  const serverModule = await import('../../app/server.js');
+  const serverModule = await importServerInProcess();
   httpServer = serverModule.httpServer;
   io = serverModule.io;
   port = serverModule.port;
