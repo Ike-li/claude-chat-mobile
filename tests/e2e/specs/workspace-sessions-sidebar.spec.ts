@@ -1007,6 +1007,110 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #289 方案 F：行上的注册表快照优先于镜像锁（镜像侧的 waiting 只认 cli，桌面端等审批时会被说成运行中、丢「需要你」），
+  // 快照过时靠源头补——镜像锁真正转变时立刻 revalidate 那一行所在目录，不等 12 秒一轮的周期刷新。
+  // 超时只给 4 秒：开抽屉时排下的那一轮周期刷新还远，等得到就说明是转变触发的那一次。
+  // 周期刷新给所有工作区一起发 session:list，转变触发的只发 MAIN。默认 mock 只有一个工作区，两者分不开，
+  // 所以先挂上第二个工作区：计数窗口里出现非 MAIN 的请求，就是撞上了周期刷新。
+  const sessionListLog = async (page: Page): Promise<{ cwd: string }[]> => (await page.request.get('/__session-list-log')).json();
+  const mainListsSince = async (page: Page, from: number) =>
+    (await sessionListLog(page)).slice(from).filter(e => e.cwd === MAIN_WORKSPACE).length;
+  // 返回做判断用的那份日志：后续计数要用同一份，再取一次可能已经混进新的一轮
+  const expectNoPeriodicRefreshSince = async (page: Page, from: number) => {
+    const log = await sessionListLog(page);
+    expect(log.slice(from).filter(e => e.cwd !== MAIN_WORKSPACE), '撞上了 12s 周期刷新，计数无效').toEqual([]);
+    return log;
+  };
+  const openSidebarWithSecondWorkspace = async (page: Page) => {
+    await sendChatMessage(page, 'test:scroll-replay-setup'); // 只广播 instances（ANOTHER 多一个实例），不产生 busy/result
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, ANOTHER_WORKSPACE)).toBeVisible();
+    // 开抽屉那一轮给 ANOTHER 的请求落进日志后再取基线，免得它被算进后面的窗口
+    await expect.poll(async () => (await sessionListLog(page)).some(e => e.cwd === ANOTHER_WORKSPACE)).toBe(true);
+  };
+
+  test('P0-11at 镜像锁转变时立即刷新那一行的目录，换上注册表给的态与来源', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__viewing-row-registry?terminal=alive&source=claude-desktop');
+    await openSidebarWithSecondWorkspace(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = sessionRowByInstance(page, 'inst_1');
+    const chip = row.locator('[data-session-status]');
+    // 前置：快照是「桌面端开着、空闲」，没有 chip
+    await expect(row).toContainText('桌面端已打开');
+    await expect(chip).toHaveCount(0);
+
+    const before = (await sessionListLog(page)).length;
+    // 桌面端开跑：注册表先变，镜像锁随后推到（mock 的 session:list 只在被拉时才给出新态）
+    await page.request.post('/__viewing-row-registry?terminal=busy&source=claude-desktop');
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect.poll(() => mainListsSince(page, before), { timeout: 4000 }).toBeGreaterThan(0);
+    await expectNoPeriodicRefreshSince(page, before);
+    // 来源是注册表给的桌面端，不是镜像锁推断出来的「终端」
+    await expect(chip).toHaveText('桌面端运行中', { timeout: 4000 });
+
+    // 回合结束：注册表先回到空闲，锁随后撤掉。锁消失后 mirrorRowLock() 是 null，
+    // 只能按变化前那把锁的 sessionId 找到这一行；找不到就不刷新，chip 停在快照里的「运行中」。
+    await page.request.post('/__viewing-row-registry?terminal=alive&source=claude-desktop');
+    const beforeRelease = (await sessionListLog(page)).length;
+    await page.request.post('/__mirror-state?readonly=0');
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect.poll(() => mainListsSince(page, beforeRelease), { timeout: 4000 }).toBeGreaterThan(0);
+    await expectNoPeriodicRefreshSince(page, beforeRelease);
+    await expect(chip).toHaveCount(0, { timeout: 4000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11au 字段不变的重复镜像广播不额外发 session:list', async ({ page }) => {
+    await gotoMock(page);
+    await openSidebarWithSecondWorkspace(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const chip = sessionRowByInstance(page, 'inst_1').locator('[data-session-status]');
+    await expect(sessionRowByInstance(page, 'inst_1')).toBeVisible();
+
+    // 锁出现：一次真转变，等它触发的那一轮落进日志，作为基线
+    const before = (await sessionListLog(page)).length;
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(chip).toHaveText('终端运行中');
+    await expect.poll(() => mainListsSince(page, before), { timeout: 4000 }).toBeGreaterThan(0);
+    const base = (await sessionListLog(page)).length;
+
+    // 同一把锁再推一次（倒计时之类的重复广播），紧接着一次真转变（waiting）当栅栏：
+    // 两条按序到达，栅栏触发的那次落进日志时，重复广播若也触发过，必然已经排在它前面。
+    await page.request.post('/__mirror-state?readonly=1');
+    await page.request.post('/__mirror-state?readonly=1&waiting=1');
+    await expect(chip).toHaveText('终端需要你');
+    await expect.poll(() => mainListsSince(page, base), { timeout: 4000 }).toBeGreaterThan(0);
+    const log = await expectNoPeriodicRefreshSince(page, before);
+    expect(log.slice(base).filter(e => e.cwd === MAIN_WORKSPACE)).toHaveLength(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 快照优先的方向守在渲染层：桌面端卡在审批上时，镜像侧推来的锁 waiting=0、非 stale（它只认 cli 注册表）。
+  // 让锁压过快照，这一行就从「需要你」那一档（warning）掉成运行中（accent）。锁出现照样触发 revalidate，
+  // mock 下一次 session:list 仍给 waiting/claude-desktop，所以正确实现下这一档从头到尾不变。
+  test('P0-11av 镜像锁出现不压过行上快照：桌面端等审批时仍是「需要你」那一档', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__viewing-row-registry?terminal=waiting&source=claude-desktop');
+    await openSidebarWithSecondWorkspace(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const chip = sessionRowByInstance(page, 'inst_1').locator('[data-session-status]');
+    await expect(chip).toHaveClass(/\btext-warning\b/); // 前置：快照就是 waiting
+
+    const before = (await sessionListLog(page)).length;
+    await page.request.post('/__mirror-state?readonly=1');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect.poll(() => mainListsSince(page, before), { timeout: 4000 }).toBeGreaterThan(0);
+    await expectNoPeriodicRefreshSince(page, before);
+    await expect(chip).toHaveClass(/\btext-warning\b/);
+    await expect(chip).not.toHaveClass(/\btext-accent\b/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 2026-09-06：外部驾驶员不只有终端。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
   // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop 但【不写 status】。
   // 此前它和 sdk 系一起被排除在终端标注之外，桌面端会话在抽屉里【只有一个未读点】，没有任何运行标识。

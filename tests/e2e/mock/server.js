@@ -212,6 +212,9 @@ let terminalSummaryOtherWaitingArmed = false;
 let terminalRaceArmed = false;
 let terminalRaceListCount = 0;
 let terminalCloseRaceOtherArmed = false;
+// #289 方案 F：当前查看会话（mock-session-visual-test）那一行的注册表自报，由用例经 /__viewing-row-registry
+// 逐步改写（null = 不自报，回落上面那几个开关）。验的是镜像锁转变时前端立刻 revalidate、换上注册表给的态与来源。
+let viewingRowRegistry = null;
 // P0-NOSID（2026-07-30 真机 bc29ccc2）：CLI 迟迟不吐 system/init 时，实例活着、事件在实时流，但
 // server 侧还没有 sessionId，磁盘 transcript 也一条主链消息都没有。此时整页刷新若清屏改走
 // session:history，换回来的是「会话不存在」→ 白屏。武装后 inst_1 的 sessionId 变 null（刷新后
@@ -631,6 +634,7 @@ function resetMockState() {
   terminalRaceArmed = false;
   terminalRaceListCount = 0;
   terminalCloseRaceOtherArmed = false;
+  viewingRowRegistry = null;
   noSessionIdMode = false;
   noModelsMode = false;
   mockHooksState = 'not-installed';
@@ -1057,6 +1061,14 @@ app.post('/__cli-settings-effort', (req, res) => {
   res.json({ ok: true });
 });
 
+// 走 query（理由同下面 /__mirror-state）。terminal 缺省 = 撤掉自报。只改下一次 session:list 的返回，
+// 不推任何事件：前端什么时候去拉，正是用例要观察的。
+app.post('/__viewing-row-registry', (req, res) => {
+  const terminal = req.query?.terminal || null;
+  viewingRowRegistry = terminal ? { terminal, terminalSource: req.query?.source || 'cli' } : null;
+  res.json({ ok: true });
+});
+
 app.post('/__mirror-state', (req, res) => {
   // 走 query 不走 body：本 mock 没装 express.json()，既有 __ 端点（__access-bypass /
   // __arm-read-elsewhere）也都读 req.query。用 body 会静默拿到 undefined 再落到默认值上——
@@ -1187,8 +1199,8 @@ function mainCwdSessions() {
       model: 'claude-3-5-sonnet',
       lastUsedAt: mockListClockBase - 10000,
       entrypoint: 'sdk-ts',
-      ...(desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
-        : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {}),
+      ...(viewingRowRegistry || (desktopBadgeArmed ? { terminal: 'busy', terminalSource: 'claude-desktop' }
+        : terminalBadgeArmed ? { terminal: 'busy', terminalSource: 'cli' } : {})),
     },
     {
       id: 'mock-session-archived',
@@ -1747,6 +1759,8 @@ io.on('connection', socket => {
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
         const sessions = mainCwdSessions().filter(s => !deletedSessionIds.has(s.id));
+        // cwd 级汇总与行出自同一份注册表（真 server 的 annotateTerminalStates），行被改写时汇总跟着变
+        const viewingRowTerminal = viewingRowRegistry?.terminal;
         if (terminalRaceArmed) {
           terminalRaceListCount += 1;
           if (terminalRaceListCount === 2) {
@@ -1786,8 +1800,9 @@ io.on('connection', socket => {
           callback({
             currentSessionId: 'mock-session-visual-test',
             sessions: matched,
-            terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
-            terminalWaiting: terminalWaitingArmed,
+            terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2)
+              || viewingRowTerminal === 'busy',
+            terminalWaiting: terminalWaitingArmed || viewingRowTerminal === 'waiting',
             hasMore: false,
             total: sessions.length,
           });
@@ -1804,8 +1819,9 @@ io.on('connection', socket => {
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
-          terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
-          terminalWaiting: terminalWaitingArmed,
+          terminalBusy: terminalBadgeArmed || desktopBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2)
+            || viewingRowTerminal === 'busy',
+          terminalWaiting: terminalWaitingArmed || viewingRowTerminal === 'waiting',
           hasMore,
           canLoadMore: Boolean(historyOverflowMode && all && pages < 2 && hasMore),
           total,

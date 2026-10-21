@@ -58,6 +58,15 @@ test('shouldRerenderSessionList: open 组增删或改标题需要重渲染，主
   assert.equal(shouldRerenderSessionList({ ...base, prevOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }], nextOpen: [{ id: 'old', title: 'Old', lastUsedAt: 1 }] }), false);
 });
 
+// #289 方案 F：镜像锁转变后 revalidate 回来，状态不变、只有来源变（终端 → 桌面端）也得重画——
+// 行上的 dataset.terminalSource 与 chip 措辞只在重画时更新，不重画就停在旧来源上。
+test('shouldRerenderSessionList: 只有 terminalSource 变也要重渲染', () => {
+  const prev = [{ id: 's1', title: 'Foo', lastUsedAt: 100, terminal: 'busy', terminalSource: 'cli' }];
+  const next = [{ id: 's1', title: 'Foo', lastUsedAt: 100, terminal: 'busy', terminalSource: 'claude-desktop' }];
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: next }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: prev.map(s => ({ ...s })) }), false);
+});
+
 test('shouldRerenderSessionList: 空/未定义入参安全，不抛异常', () => {
   assert.equal(shouldRerenderSessionList(), true); // hasPrevEntry 缺省 false → 必须渲染
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true }), false); // 两边都是"无数据"视为无变化

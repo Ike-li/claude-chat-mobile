@@ -180,15 +180,23 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
 // 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
 // mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
 //
-// registryState 是行上缓存的上一次 session:list 快照（最多晚 12 秒才刷新），镜像锁是实时推来的。两者说的是
-// 同一个会话时，镜像锁的转变更新（#268 review）：闲着（alive）的终端开跑或卡到对话框上，行上当场就要变；
-// 镜像判成疑似中断后，快照里的 busy / waiting 已经过时（服务端在注册表 busy / waiting 时不会判 stale），
-// 只留下「终端开着」这一层。autonomous 的锁不是终端在驾驶，不参与覆盖。
+// 快照优先、不让镜像锁压过它（#289 方案 F）：来源始终取行快照，镜像锁压过的只是状态，而那份状态有三处说错——
+// 镜像侧的 waiting 只认 cli 注册表，桌面端（已自报 status）等审批时会被说成运行中、丢掉「需要你」；
+// 锁判成 stale 时会把快照里的 busy / waiting chip 抹掉；锁释放有 ~12.5s 迟滞，每个回合结束后多挂一截「运行中」。
+// 快照过时的问题从源头补：镜像锁真正转变时（mirrorRowLockChanged），applyMirror 立刻 revalidate 那一行
+// 所在目录，一个往返内换成权威态。
 export function resolveRowTerminalState({ registryState = null, sessionId = null, mirror = null } = {}) {
-  const ownMirror = Boolean(sessionId && mirror?.sessionId && mirror.sessionId === sessionId && !mirror.autonomous);
-  if (!ownMirror) return registryState || null;
-  if (mirror.stale) return registryState === 'alive' ? 'alive' : null;
+  if (registryState) return registryState;
+  if (!sessionId || !mirror?.sessionId || mirror.sessionId !== sessionId || mirror.stale || mirror.autonomous) return null;
   return mirror.waiting ? 'waiting' : 'busy';
+}
+
+// 镜像锁（mirrorRowLock 的形状，或 null）是否真正转变：出现/消失，或行能读到的字段翻转。
+// 字段不变的重复广播（倒计时之类）不算——否则每次广播都会多打一轮 session:list。
+export function mirrorRowLockChanged(prev = null, next = null) {
+  if (!prev || !next) return Boolean(prev) !== Boolean(next);
+  return prev.sessionId !== next.sessionId || Boolean(prev.stale) !== Boolean(next.stale)
+    || Boolean(prev.waiting) !== Boolean(next.waiting) || Boolean(prev.autonomous) !== Boolean(next.autonomous);
 }
 
 // 会话行副文本：时间 / 已打开 / id。CLI 空闲占用提到最前，避免 truncate 吃掉来源；
@@ -768,8 +776,9 @@ export function shouldRerenderSessionList({
   // total 变化会影响「还有 N 个更早的会话」提示，即使行签名不变也要重渲。
   if ((prevTotal ?? null) !== (nextTotal ?? null)) return true;
   // terminal 进签名：CLI 进程 busy/alive 状态或副文本变化必须重渲，否则抽屉会陈旧。
+  // terminalSource 同理：状态不变、驾驶方从终端换成桌面端时，chip 与副文本的措辞也得跟着换。
   const signature = list => (Array.isArray(list) ? list : [])
-    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
+    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}:${s?.terminalSource || ''}`)
     .join('|');
   // pinned（手动标「稍后再看」、被 limit 挤出本页而单独补回的那组）必须单独进判据：它的成员来自
   // read-state 而不是这一页，主列表签名一个字都不变时它照样会增删——用户在另一台设备上标一条、

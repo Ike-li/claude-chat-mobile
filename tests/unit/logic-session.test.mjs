@@ -7,7 +7,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-ui-state。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, resolvePanelCwd, resolveSessionCwd, resolveWorktreeGoneNotice, aggregateStates, owningWorkspace, resolveDrawerStatus, resolveDrawerStatusChip, resolveRowTerminalState, mirrorRowLockChanged, isBlockedSurfaceTarget, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, draftKeyFor, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../app/public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -104,7 +104,7 @@ test('resolveDrawerStatusChip: CLI 正在跑（纯终端 / Web 只读镜像 / We
 // O86：注册表没自报时，被镜像锁住的那一行也要看得出终端在驾驶。
 test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住的那一行补终端态', () => {
   const mirror = { sessionId: 's1', stale: false, waiting: false };
-  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's2', mirror }), 'busy', '别的会话的锁不碰这一行的注册表态');
+  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'alive', '注册表是终端进程自己说的，压过推断');
   assert.equal(resolveRowTerminalState({ registryState: null, sessionId: 's1', mirror }), 'busy');
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断时没人在驾驶，不补');
@@ -115,25 +115,26 @@ test('resolveRowTerminalState: 注册表自报优先；否则只给镜像锁住�
   assert.equal(resolveRowTerminalState(), null);
 });
 
-// #268 review：行上的 registryState 是上一次 session:list 的快照（最多晚 12 秒才刷新），镜像锁是实时推来的。
-// 两者说的是同一个会话时，镜像锁的转变更新：闲着的终端开跑 / 卡到对话框上，抽屉行当场就要变；
-// 镜像判成疑似中断（服务端在注册表 busy 时不会判 stale）后，快照里的 busy / waiting 已经过时。
-test('resolveRowTerminalState: 同一会话的实时镜像锁比行上缓存的注册表快照新', () => {
-  const mirror = { sessionId: 's1', stale: false, waiting: false };
-  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror }), 'busy', '快照还是空闲，终端已经开跑');
-  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
-  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror: { ...mirror, waiting: true } }), 'waiting');
-  assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror: { ...mirror, stale: true } }), null, '疑似中断后快照里的 busy 已过时');
-  assert.equal(resolveRowTerminalState({ registryState: 'waiting', sessionId: 's1', mirror: { ...mirror, stale: true } }), null);
-  assert.equal(resolveRowTerminalState({ registryState: 'alive', sessionId: 's1', mirror: { ...mirror, stale: true } }), 'alive', '终端开着但没在跑：照常说已打开');
-});
-
 test('resolveRowTerminalState: 本会话自主循环（ScheduleWakeup/CronCreate）造成的镜像锁不冒充终端驾驶', () => {
   // 那时没有终端在驾驶，是会话自己被定时唤起写了 transcript；composer 会单独说明这个来源，抽屉行不该写「终端运行中」。
   const mirror = { sessionId: 's1', stale: false, waiting: false, autonomous: true };
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror }), null);
   assert.equal(resolveRowTerminalState({ sessionId: 's1', mirror: { ...mirror, waiting: true } }), null);
   assert.equal(resolveRowTerminalState({ registryState: 'busy', sessionId: 's1', mirror }), 'busy', '注册表自报仍然优先');
+});
+
+// 方案 F（#289）：行上快照优先，镜像锁真正转变时由 applyMirror 立刻 revalidate 那一行所在目录。
+// 「真正转变」只看行能读到的那几个字段；倒计时之类的重复广播不该每次都打一轮 session:list。
+test('mirrorRowLockChanged: 只有锁出现/消失或 sessionId/stale/waiting/autonomous 翻转才算转变', () => {
+  const lock = { sessionId: 's1', stale: false, waiting: false, autonomous: false };
+  assert.equal(mirrorRowLockChanged(lock, { ...lock }), false, '字段相同的重复广播不算');
+  assert.equal(mirrorRowLockChanged(null, null), false);
+  assert.equal(mirrorRowLockChanged(null, lock), true, '锁出现');
+  assert.equal(mirrorRowLockChanged(lock, null), true, '锁消失（含已接管导致 effective=false）');
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, sessionId: 's2' }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, stale: true }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, waiting: true }), true);
+  assert.equal(mirrorRowLockChanged(lock, { ...lock, autonomous: true }), true);
 });
 
 test('resolveDrawerStatusChip: Web 与 CLI 同时 busy（续接重叠 / 双写窗口）仍标终端运行中', () => {

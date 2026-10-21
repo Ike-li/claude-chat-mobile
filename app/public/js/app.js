@@ -38,6 +38,7 @@ import {
   isBlockedSurfaceTarget,
   resolveDrawerStatusChip,
   resolveRowTerminalState,
+  mirrorRowLockChanged,
   formatSessionRowSubtitle,
   formatSessionRowTime,
   displaySessionTitle,
@@ -9305,6 +9306,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   }
 
   function applyMirror(readonly, sessionId, stale = false, observedCli, autonomous = false, waiting = false) {
+    const prevRowLock = mirrorRowLock();
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -9358,6 +9360,18 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
     refreshSessionStatusChips(); // 抽屉里被锁住的那一行跟着标/撤终端态（O86）
+    // #289 方案 F：行上终端态以注册表快照为准，快照最多晚 12 秒。锁真正转变时立刻 revalidate 那一行所在目录，
+    // 一个往返内换成服务端给的权威态与来源。锁消失时按变化前那把锁找行；行不在已渲染的目录里就不管，
+    // 下一轮周期刷新或重开抽屉兜住。
+    const rowLock = mirrorRowLock();
+    if (mirrorRowLockChanged(prevRowLock, rowLock) && isSessionPanelRevalidateActive() && socket.connected) {
+      const sids = [...new Set([prevRowLock?.sessionId, rowLock?.sessionId].filter(Boolean))];
+      for (const section of dirSectionNodes.values()) {
+        if (sids.some(sid => section.subtree.querySelector(`[data-testid="session-row"][data-session-id="${CSS.escape(sid)}"]`))) {
+          section.revalidate?.();
+        }
+      }
+    }
   }
 
   // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。
