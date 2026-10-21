@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 const tinyPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
@@ -80,8 +80,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#attachTray > div').first().click();
     const notice = page.locator('[data-testid="attach-notice"]');
     await expect(notice).toBeVisible();
-    // 停住时间：不让 5 秒的自动收起替修复把它藏起来
-    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+    // 停住时间：不让 5 秒的自动收起替修复把它藏起来。余量给 500ms：取值到 pauseAt 生效之间若超过余量，
+    // Playwright 会抛 Cannot fast-forward to the past（负载高时 50ms 不够）；500ms 离 5 秒自收还远
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 500));
 
     await page.locator('#input').fill('带着附件发出去');
     await page.locator('#btnSend').click();
@@ -103,11 +104,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(notice).toHaveText('「acc-18n.txt」不是可预览图片');
     await expect(notice).toBeVisible();
     // 停住时间：不让 5 秒的自动收起替修复把它藏起来
-    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 500));
 
     await page.locator('#attachTray').getByRole('button', { name: '移除附件' }).click();
     await expect(page.locator('#attachTray > div'), '前提：唯一的附件已移除').toHaveCount(0);
     await expect(notice, '附件都删了，说它的提示还挂着').toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
+  // #239 review 的另一半：托盘换面。提示露出后 5 秒内从抽屉点进别的会话，bindView 走 swap → setItems，
+  // 提示若不跟着撤，就挂到那个会话的输入框上方。发送清空（18m）走 clear()、删到空（18n）走 remove()，都不经过这里。
+  test('P0-18o 新会话页的提示随换面撤掉：从抽屉切到别的会话不带过去', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
+    await page.locator('#fileInput').setInputFiles([{ name: 'acc-18o.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
+    await page.locator('#attachTray > div').first().click();
+    const notice = page.locator('[data-testid="attach-notice"]');
+    await expect(notice).toHaveText('「acc-18o.txt」不是可预览图片');
+    // 停住时间：不让 5 秒的自动收起替修复把它藏起来
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 500));
+
+    await openSessionsSidebar(page);
+    await expect(notice, '前提：换面前提示仍挂着').toBeVisible();
+    // mock 初始只列当前工作区（另一个要先发 test:tab 才放出来），切进本工作区里已打开的会话，同样走 bindView 的 swap
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await expect(page.locator('[data-testid="compose-surface"]'), '前提：已离开新会话页').toBeHidden();
+    await expect(page.locator('#attachTray > div'), '前提：新界面的托盘是空的').toHaveCount(0);
+    await expect(notice, '换到别的会话了，上一个界面的提示还挂着').toBeHidden();
     await expectNoBrowserErrors(page);
   });
 
