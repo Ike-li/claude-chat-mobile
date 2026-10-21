@@ -122,6 +122,23 @@ export function createNotifyChannels({
     }
   }
 
+  // 「发一条测试推送」（push:test）：两条通道各发一条，回报各自结果。sent / failed 是这次 Web Push 的成功 / 失败条数
+  // （按进程计数器前后差算），ntfy 是 ntfyNotify 的投递结果。
+  // 两条通道互不相干，并发发：串行时 Web Push 慢、ntfy 又接近 8s 超时，加起来会超过前端的 emit 时限（#231 review）。
+  // Web Push 的差值在它发完时就取，不等 ntfy：那段时间别的通知也在动同一组计数器。
+  async function pushTest(title, body, ntfyMeta) {
+    const before = metrics.snapshot().counters;
+    const webPush = pushNotify(title, body).then(() => {
+      const after = metrics.snapshot().counters;
+      return {
+        sent: (after.push_success ?? 0) - (before.push_success ?? 0),
+        failed: (after.push_failure ?? 0) - (before.push_failure ?? 0),
+      };
+    });
+    const [{ sent, failed }, ntfy] = await Promise.all([webPush, ntfyNotify(title, body, ntfyMeta)]);
+    return { sent, failed, ntfy };
+  }
+
   return {
     pushEnabled,
     ntfyEnabled,
@@ -131,6 +148,7 @@ export function createNotifyChannels({
     removePushSubscription,
     pushNotify,
     ntfyNotify,
+    pushTest,
     subscriptionCount: () => pushSubscriptions.length,
   };
 }
