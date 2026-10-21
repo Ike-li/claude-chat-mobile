@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -1034,6 +1035,17 @@ test.describe('isToolSummaryTruncated（工具卡展开全文门）', () => {
     assert.equal(isToolSummaryTruncated('hello …（已截断）'), true);
     assert.equal(isToolSummaryTruncated('hello full output'), false);
     assert.equal(isToolSummaryTruncated(null), false);
+  });
+  // #250 review：后缀是服务端写进摘要的原文，不随界面语言变。英文界面下拿 t() 翻译后的「…(truncated)」去比，
+  // 历史里截断过的工具卡就永远不给「展开全文」。
+  test('英文界面下照样认出服务端写的中文后缀', () => {
+    setLang('en');
+    try {
+      assert.equal(isToolSummaryTruncated('hello …（已截断）'), true);
+      assert.equal(isToolSummaryTruncated('hello full output'), false);
+    } finally {
+      setLang('zh');
+    }
   });
 });
 
