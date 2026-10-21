@@ -18,6 +18,8 @@ import {
   statSync,
   lstatSync,
 } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -136,6 +138,50 @@ test.describe('SCOPE-01 & FILES-1: listDir 文件目录浏览', () => {
     assert.deepEqual(listDir(cwd, 'README.md', scopeDirs), { notDirectory: true });
     if (process.platform !== 'win32') assert.deepEqual(listDir(cwd, 'named.pipe', scopeDirs), { notDirectory: true });
     assert.deepEqual(listDir(cwd, 'does-not-exist', scopeDirs), { notFound: true });
+  });
+
+  // 同一件事的并发版：范围门放行之后、readdir 之前目录被删（Claude 正在改工作区时常见）。readdir 的 ENOENT
+  // 原来落到 null，与越界同形，browse:list 就记一条并不存在的 scope_violation。
+  // 竞态用替身稳定复现：readdirSync 先真删掉目录再调原函数，拿到的是真实的 ENOENT。
+  test('范围门之后、readdir 之前目录被删：回 {notFound:true}，不是与越界同形的 null', () => {
+    const racy = join(cwd, 'racy-dir');
+    mkdirSync(racy);
+    const original = fs.readdirSync;
+    fs.readdirSync = (path, ...rest) => {
+      if (String(path).endsWith('racy-dir')) rmSync(racy, { recursive: true, force: true });
+      return original(path, ...rest);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(listDir(cwd, 'racy-dir', scopeDirs), { notFound: true });
+    } finally {
+      fs.readdirSync = original;
+      syncBuiltinESMExports();
+    }
+  });
+
+  // #278 review：同一个窗口里目录若被换成【指向范围外的悬空 symlink】，readdir 同样报 ENOENT。那不是「已经不在」，
+  // 是越界——照旧回 null，browse:list 记 scope_violation。ENOENT 之后得再过一遍 missingInScope 才能说「不在」。
+  test('范围门之后、readdir 之前目录被换成指向范围外的悬空 symlink：仍按越界回 null', () => {
+    if (process.platform === 'win32') return;
+    const racy = join(cwd, 'racy-swap');
+    mkdirSync(racy);
+    const original = fs.readdirSync;
+    fs.readdirSync = (path, ...rest) => {
+      if (String(path).endsWith('racy-swap')) {
+        rmSync(racy, { recursive: true, force: true });
+        symlinkSync(join(outside, 'gone-target'), racy);
+      }
+      return original(path, ...rest);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.equal(listDir(cwd, 'racy-swap', scopeDirs), null);
+    } finally {
+      fs.readdirSync = original;
+      syncBuiltinESMExports();
+      rmSync(racy, { force: true });
+    }
   });
 
   test('FI-001: 文件在 readdir 后被删除时跳过，不抛出异常', () => {
