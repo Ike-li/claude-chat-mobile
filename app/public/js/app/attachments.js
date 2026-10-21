@@ -42,6 +42,12 @@ export function createAttachmentController(context, options = {}) {
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => box.classList.add('hidden'), NOTICE_MS);
   }
+  // 托盘清空（发出去了）或换面（切到别的会话 / 新会话页）时一并撤掉：提示说的是上一个界面的附件（#239 review）
+  function hideNotice() {
+    clearTimeout(noticeTimer);
+    noticeTimer = null;
+    dom.attachNotice?.classList.add('hidden');
+  }
 
   function items() { return pending.slice(); }
 
@@ -68,6 +74,7 @@ export function createAttachmentController(context, options = {}) {
   function setItems(next) {
     // payload()/发送失败回灌可能无 _id；补齐后 ✕ 才能按 id 移除（否则 undefined!==undefined 永 false）
     pending = Array.isArray(next) ? next.map(ensureId) : [];
+    hideNotice();
     notifyChange();
   }
 
@@ -76,12 +83,14 @@ export function createAttachmentController(context, options = {}) {
     const before = pending.length;
     pending = pending.filter(item => item._id !== id);
     if (pending.length === before) return false;
+    if (!pending.length) hideNotice(); // 手动删到空：托盘收起，说这些附件的提示一并撤掉（#284 review）
     notifyChange();
     return true;
   }
 
   function clear() {
     pending = [];
+    hideNotice();
     notifyChange();
   }
 
