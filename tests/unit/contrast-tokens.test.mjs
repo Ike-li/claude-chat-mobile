@@ -84,3 +84,24 @@ for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
     }
   });
 }
+
+// #244 review：连接横幅的小字（断线多久那一行，10px）落在 color-mix(<tone> N%, surface) 的横幅底上，不是 surface。
+// 深色 warn 底上 ink-faint 只有约 4.18。从 app.css 里读出小字用的 token 与三种横幅底的配比，按 sRGB 线性混合算底色。
+function mixHex(a, pct, b) {
+  const ch = (h, i) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
+  return '#' + [0, 1, 2].map(i => Math.round(ch(a, i) * pct + ch(b, i) * (1 - pct)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+const detailToken = css.match(/\.conn-banner__detail\s*\{[^}]*?color:\s*var\(--([a-z0-9-]+)\)/)?.[1];
+const bannerTones = [...css.matchAll(/\.conn-banner--([a-z]+)\s*\{[^}]*?background:\s*color-mix\(in srgb,\s*var\(--([a-z0-9-]+)\)\s*(\d+)%,\s*var\(--surface\)\)/g)]
+  .map(m => ({ tone: m[1], token: m[2], pct: Number(m[3]) / 100 }));
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`#244 ${name}：连接横幅的小字在 info / warn / success 三种横幅底上都 ≥4.5`, () => {
+    assert.ok(detailToken && theme[detailToken], `读不出 .conn-banner__detail 的颜色 token：${detailToken}`);
+    assert.equal(bannerTones.length, 3, JSON.stringify(bannerTones));
+    for (const { tone, token, pct } of bannerTones) {
+      const bg = mixHex(theme[token], pct, theme.surface);
+      const ratio = contrastRatio(theme[detailToken], bg);
+      assert.ok(ratio >= 4.5, `${tone}（${bg}）上 ${detailToken} = ${ratio.toFixed(2)}`);
+    }
+  });
+}
