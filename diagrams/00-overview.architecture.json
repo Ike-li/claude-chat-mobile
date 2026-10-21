@@ -102,7 +102,7 @@
       "id": "sdk",
       "type": "external",
       "label": "Claude Agent SDK",
-      "sublabel": "claude-agent-sdk 0.3.301",
+      "sublabel": "claude-agent-sdk 0.3.302",
       "pos": [
         1020,
         110
