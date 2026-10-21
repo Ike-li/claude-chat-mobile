@@ -4528,7 +4528,8 @@ registerSocketConnection(io, socket => {
   on(socket, 'push:test', async (_payload, ack) => {
     if (typeof ack !== 'function') return;
     // ntfy 是另一条独立通道：等它的结果一起回报（验收 O1——此前不 await，ntfy 投递成功界面也不知道）。
-    // ntfyNotify 自带 8s 超时；前端这条 emit 的 timeout 放到 12s，留出 Web Push 那段的余量，ntfy 挂死时也不会误报成断网。
+    // 两条通道在 notify.pushTest 里并发发，前端这条 emit 的 12s 时限只需盖住较慢的那一路：ntfy 自带 8s 超时，挂死时也不会误报成断网；
+    // Web Push 没有自己的超时，它本身超过 12s 时前端仍会报成断网。
     const { sent, failed, ntfy } = await notify.pushTest('🔔 测试推送 · ccm', '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
     console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条；ntfy ${ntfy}`);
     ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });

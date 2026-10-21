@@ -212,14 +212,17 @@ test.describe('createNotifyChannels · pushNotify 按订阅 prefs 选 body/previ
 test.describe('pushTest · 测试推送回执', () => {
   const ENV_BOTH = { ...ENV_PUSH_ON, NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' };
 
-  test('两条通道并发发：Web Push 不等 ntfy 发完才开始（串行会在这里互等卡死）', { timeout: 3000 }, async t => {
-    let ntfyStarted;
+  // 双向屏障：两条通道各自在开始发时报到，都等对方也开始了才返回。先 Web Push 后 ntfy、先 ntfy 后 Web Push
+  // 两种串行顺序都会在这里互等卡死、超时变红；只等一个方向的话，另一种顺序的串行照样绿。
+  test('两条通道并发发：两边都等对方开始了才返回（任一种串行顺序都会在这里互等卡死）', { timeout: 3000 }, async t => {
+    let webPushStarted, ntfyStarted;
+    const webPushStartedP = new Promise(resolve => { webPushStarted = resolve; });
     const ntfyStartedP = new Promise(resolve => { ntfyStarted = resolve; });
     const n = createNotifyChannels({
       dataDir: tempDataDir(t),
       env: ENV_BOTH,
-      webpushImpl: { setVapidDetails: () => {}, sendNotification: async () => { await ntfyStartedP; } },
-      fetchImpl: async () => { ntfyStarted(); return { ok: true, status: 200 }; },
+      webpushImpl: { setVapidDetails: () => {}, sendNotification: async () => { webPushStarted(); await ntfyStartedP; } },
+      fetchImpl: async () => { ntfyStarted(); await webPushStartedP; return { ok: true, status: 200 }; },
     });
     n.savePushSubscription({ endpoint: 'https://e/1', keys: {} });
     assert.deepEqual(await n.pushTest('t', 'b', {}), { sent: 1, failed: 0, ntfy: 'sent' });
