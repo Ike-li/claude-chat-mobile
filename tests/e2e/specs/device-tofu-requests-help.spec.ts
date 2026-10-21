@@ -172,6 +172,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #226 review：上一条是被拒【之后】才触发重连。另一种时序：切回前台 / 网络恢复先排上了那个 200ms 定时器，拒绝随后
+  // 才到——门控在排队时已经放行，定时器走到时连接已被服务端断开，于是照样握手、设备重新进待审。
+  test('P0-15k 重连定时器排上之后设备才被拒：定时器走到时不再握手', async ({ page }) => {
+    await page.clock.install();
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-denied');
+    await expect(page.locator('#deviceModal')).toBeVisible(); // 先到的是 pending，拒绝还在路上
+    // install 之后时间照常流动：不停住的话定时器在拒绝到来之前就走掉了（那时还连着，走的是探活分支）
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+    await page.evaluate(() => window.dispatchEvent(new Event('online'))); // 此刻门控放行，排上 200ms 定时器
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+    await expect(page.locator('#statusLine')).toHaveText('连接断开，自动重连中…');
+
+    const handshakes: string[] = [];
+    page.on('request', req => {
+      const url = req.url();
+      if (/\/socket\.io\/\?.*\bEIO=/.test(url) && !/[?&]sid=/.test(url)) handshakes.push(url);
+    });
+    await page.clock.runFor(2000);
+    expect(handshakes, '被拒之前排上的重连照样握手了：设备会重新进待审').toEqual([]);
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+
+    // 正对照：同一套计数看得见握手
+    await page.locator('#deviceDeniedRetry').click();
+    await expect.poll(() => handshakes.length).toBeGreaterThan(0);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-15e 等待设备授权期间保留草稿且禁止发送', async ({ page }) => {
     await gotoMock(page);
 

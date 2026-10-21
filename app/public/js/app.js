@@ -1692,7 +1692,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 同步回调在途 ack 触发的——Manager 紧接着就会排自己的重连；此刻再 socket.connect() 会抢先发起一次不带回调
         // 的 open，Manager 定时器那次 open(fn) 随后被吞，_reconnecting 永久停在 true：这次碰巧连上看不出毛病，之后
         // 每次断线 reconnect() 第一行就返回，页面停在「自动重连中…」（验收 O49，对照 socket.io-client 4.8.4 源码）。
-        if (socket.connected) forceReconnect();
+        if (socket.connected && reconnectAllowed()) forceReconnect();
         return;
       }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
@@ -1885,15 +1885,19 @@ import { createGateFocusController } from './app/focus-layers.js';
     socket.disconnect();
     socket.connect();
   }
+  const reconnectAllowed = (opts = {}) => shouldAttemptReconnect({
+    authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
+    accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
+    deviceDeniedOpen: gateIsOpen(deviceDenied),
+    persisted: opts?.persisted ?? null,
+  });
   function reconnectIfNeeded(opts = {}) {
-    if (!shouldAttemptReconnect({
-      authGateOpen: !!authGate && !authGate.classList.contains('hidden'),
-      accessReloginOpen: !!accessRelogin && !accessRelogin.classList.contains('hidden'),
-      deviceDeniedOpen: gateIsOpen(deviceDenied),
-      persisted: opts?.persisted ?? null,
-    })) return;
+    if (!reconnectAllowed(opts)) return;
     clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(() => {
+      // 排上之后门可能才关上：拒绝（device_status: denied）赶在这 200ms 之内到达，连接随即被服务端断开——
+      // 走到这里照样握手，设备就重新进了待审（#226 review）。执行前再问一次。
+      if (!reconnectAllowed()) return;
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
       if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();
@@ -2340,7 +2344,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     });
   };
 
-  function showDeniedOverlay() { deviceDenied?.classList.remove('hidden'); }
+  function showDeniedOverlay() {
+    deviceDenied?.classList.remove('hidden');
+    clearTimeout(_reconnectTimer); // 已经排上的前台重连作废：只有「重新请求接入」该发起握手
+  }
   if (deviceDeniedHelp) deviceDeniedHelp.onclick = showAccessHelp;
   if (deviceDeniedRetry) deviceDeniedRetry.onclick = () => {
     deviceDenied?.classList.add('hidden');
