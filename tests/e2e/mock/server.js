@@ -1066,10 +1066,13 @@ app.post('/__mirror-state', (req, res) => {
   const waiting = req.query?.waiting === '1'; // 终端卡在对话框上等人（注册表 status:"waiting"）
   const autonomous = req.query?.autonomous === '1'; // 本会话自己被 ScheduleWakeup/CronCreate 唤起写 transcript
   const withResult = req.query?.withResult === '1';
+  // 观测到的 CLI 设置：model=<名> 给出在跑模型；observed=empty 表示观测到了、但不知道模型（面板说「CLI 模型未知」）
+  const observedCli = typeof req.query?.model === 'string' ? { model: req.query.model }
+    : req.query?.observed === 'empty' ? {} : null;
   io.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, cliSeen: true, ...(waiting ? { waiting } : {}), ...(autonomous ? { autonomous } : {}) },
+    payload: { readonly, stale, cliSeen: true, ...(waiting ? { waiting } : {}), ...(autonomous ? { autonomous } : {}), ...(observedCli ? { observedCli } : {}) },
   });
   if (withResult) {
     io.emit('agent:event', {
