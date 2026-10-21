@@ -188,7 +188,7 @@ const probeLocalPort = (port) => new Promise(resolve => {
   setTimeout(() => done(false), 500);
 });
 const {
-  port,
+  port: configuredPort,
   authToken: AUTH_TOKEN,
   idleTimeoutMs,
   instanceIdleReclaimMs,
@@ -203,6 +203,8 @@ const {
   accessProfile: ACCESS_PROFILE,     // 声明的公网方案，已归一（未知值 = ''）
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
+// 实际监听的端口。只有 CCM_TEST_EPHEMERAL_PORT 那条测试路径会在绑定后改写它，见「监听」一节。
+let port = configuredPort;
 // 写错的 DEVICE_APPROVAL_SCOPE（'ALL' / 'yes'）按默认档运行、零报错，而默认档恰是较松的那一档。语义不改
 // （rate-limiter 不变量钉着「非法值按未声明处理」），启动时吵一声；与两个 doctor 同一份判据（2026-09-22 review P2）。
 {
@@ -5259,6 +5261,13 @@ if (bindPlan.refuse) {
   process.exit(1);
 }
 const host = bindPlan.host;
+// 集成测试专用：CCM_TEST_EPHEMERAL_PORT=1 时不用配置的端口，listen(0) 由 OS 当场分配，绑定成功后
+// 回写 port 并打一行 CCM_TEST_LISTENING_PORT=<n> 给 tests/integration/_spawn-server.mjs 读。
+// 测试先选好空闲端口再交过来的做法有抢占窗口（子进程启动 + 加载整棵模块图，几百毫秒），2026-10-21
+// PR #289 的 CI 就在这里撞上「端口 43443 已被占用」；只有 server 自己当场要才没有窗口。
+// 不复用 PORT=0：配置层一直把它当无效值回落 3000（positiveNumber），改那条语义会让写了 PORT=0 的
+// 用户换到随机端口上。CCM_TEST_* 只有测试会设，不进 env-schema / 面板 / doctor（env-schema 单测钉着）。
+const listenPort = process.env.CCM_TEST_EPHEMERAL_PORT === '1' ? 0 : port;
 // 启动期致命错误必须 fail-fast 并给可读提示（A9 精神），不能落进 uncaughtException 兜底静默退出
 httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
@@ -5277,7 +5286,12 @@ expireOrphanedPending();
 startApprovalRetentionSweep();
 projectIndex.start(60_000, () => (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0);
 
-httpServer.listen(port, host, () => {
+httpServer.listen(listenPort, host, () => {
+  // 必须排在横幅之前：横幅、接入二维码、doctor 的 serve 提示都读 port。
+  if (listenPort === 0) {
+    port = httpServer.address().port;
+    console.log(`CCM_TEST_LISTENING_PORT=${port}`);
+  }
   // 非 macOS 的重启历史唯一来源：sample() 在这些平台上直接早退，面板「重启记录」段因此一直是空的。
   // server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
   // darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。

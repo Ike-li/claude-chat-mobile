@@ -113,7 +113,8 @@ function runServer(env, { timeoutMs = 15_000 } = {}) {
         ...stripInheritedEnv(process.env), DEV_MODE: '0', LOG_TERMINAL: 'off', CCM_TEST_PRESERVE_EMPTY_ENV: '1',
         // 预检先查工作区、再查 claude：找不到 claude 也是非 0 退出，会让「没拒绝」的缺陷照样过退出码那一关
         CLAUDE_BIN: join(process.cwd(), 'tests', 'fixtures', 'fake-claude.sh'),
-        PORT: '0', ...env,
+        // 不能写 PORT: '0'：配置层把它当无效值回落 3000，不是临时端口；缺陷在场、server 真起来时就去抢 3000。
+        CCM_TEST_EPHEMERAL_PORT: '1', ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: process.cwd(),
