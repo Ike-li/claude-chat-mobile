@@ -247,8 +247,17 @@ test.describe('createCliConfigGen：配置代数与清单出处', () => {
 
   test('缓存清单与这次报告出自同一代：清单变化没被解释过（配置在外面变了）', () => {
     const g = createCliConfigGen();
-    g.noteListGen('/a', 0);
-    assert.equal(g.listChangeUnexplained('/a', 0), true);
+    g.bump('/a');
+    g.bump('/a');
+    g.noteListGen('/a', 2); // 非 0 代：没记下出处时按第 0 代算，用第 0 代分不出「记了」和「没记」
+    assert.equal(g.listChangeUnexplained('/a', 2), true);
+  });
+
+  test('缓存清单出自比这次报告更晚的一代（报告的是更早 spawn 的实例）：也不算没解释过', () => {
+    const g = createCliConfigGen();
+    g.bump('/a');
+    g.noteListGen('/a', 1);
+    assert.equal(g.listChangeUnexplained('/a', 0), false);
   });
 
   test('缓存清单出自更早的一代：中间已采纳新快照或 ↻，这次变化已经解释过', () => {

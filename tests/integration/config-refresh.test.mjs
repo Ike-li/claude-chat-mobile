@@ -498,3 +498,104 @@ test.describe('↻ 之后旧代数的实例回报的清单不覆盖缓存', () =
     }
   });
 });
+
+// ——— #290 复核：同一代的 scout 发现清单在外面变了，作废默认模型并推进代数 ———
+//
+// 上面几组都先 ↻（缓存清单被清空，比不出「变了」）或让 scout 本就是新一代，走不进 scout 那条「清单变了且没被解释过」
+// 的分支。这里造它的本来形态：settings 一字未改（session:new 强制重读采纳到的快照签名不变，代数不动），网关侧却
+// 换了清单——缓存里是第 0 代实例报的清单 A，同为第 0 代的 scout 报回清单 B。
+test.describe('同代 scout 发现清单在外面变了：作废默认模型并推进代数', () => {
+  let proc, port5, workdir, dataDir5, listFile;
+
+  test.before(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'ccm-scout-unexplained-wd-'));
+    dataDir5 = mkdtempSync(join(tmpdir(), 'ccm-scout-unexplained-data-'));
+    listFile = join(dataDir5, 'gateway-model-list.txt');
+    writeFileSync(listFile, 'list-a', 'utf8');
+    writeLocalSettings(workdir, { permissions: { defaultMode: 'default' }, env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'gw-a' } });
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIR: workdir,
+      CCM_DATA_DIR: dataDir5,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'turn',
+      CCM_FAKE_CLAUDE_INIT_EACH_TURN: '1',
+      CCM_FAKE_CLAUDE_MODEL_LIST_FILE: listFile,
+      IDLE_TIMEOUT_MS: '120000',
+    });
+    proc = started.proc;
+    port5 = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [workdir, dataDir5]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('scout 报回不同的清单：新会话页的默认模型作废；此前 spawn 的实例之后写不回旧默认模型与旧清单', async () => {
+    const client = createClient(port5);
+    let oldInstanceId;
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+
+      // ① 第 0 代的实例：默认模型记成 gw-a，清单缓存是它报的 list-a
+      const sent = await client.emitAck('user:message', { text: 'first', clientMessageId: 'unexplained-1' }, 20000);
+      assert.equal(sent.ok, true);
+      oldInstanceId = sent.instanceId;
+      await client.waitForEvent('result', null, 20000);
+      await client.waitForEvent('instances', e => e.payload?.defaultModel === 'gw-a', 10000);
+      await client.waitForEvent('models', e => hasModel(e, 'list-a'), 20000);
+
+      // ② 网关侧换了清单，settings 不动；session:new 起的 scout 与缓存清单同为第 0 代
+      // 前提（未单独断言）：这次强制重读采纳到的快照签名不变、不推进代数。若哪天它也推进了，ensureCliDefaults 那边会
+      // 先作废 gw-a，③④ 照样绿而 scout 分支已走不到——这条前提目前只靠注入「scout 条件恒 false」后本用例变红来守。
+      writeFileSync(listFile, 'list-b', 'utf8');
+      client.clearEvents();
+      const ack = await client.emitAck('session:new', { cwd: workdir }, 10000);
+      assert.equal(ack.ok, true);
+      await client.waitForEvent('models', e => hasModel(e, 'list-b'), 20000);
+    } finally {
+      client.disconnect();
+    }
+
+    // ③ 这次变化没被任何采纳 / ↻ 解释过：gw-a 描述的是已经不在了的那套配置，新会话页不能再预显它
+    const probe = createClient(port5);
+    try {
+      await probe.waitForConnect();
+      const inst = await probe.waitForEvent('instances', null, 10000);
+      assert.notEqual(inst.payload.defaultModel, 'gw-a', '同代 scout 发现清单变了，旧默认模型必须作废');
+    } finally {
+      probe.disconnect();
+    }
+
+    // ④ 代数前进了：第 0 代的旧实例再跑一轮，它的 init 仍报 gw-a、fetchModels 仍报 list-a，两样都不能写回去
+    const again = createClient(port5);
+    try {
+      await again.waitForConnect();
+      await again.waitForEvent('instances');
+      again.clearEvents();
+      const sent = await again.emitAck('user:message', { text: 'second', clientMessageId: 'unexplained-2', instanceId: oldInstanceId }, 20000);
+      assert.equal(sent.ok, true);
+      assert.equal(sent.instanceId, oldInstanceId, '前置条件：这一轮必须落在第 0 代的旧实例上');
+      await again.waitForEvent('result', null, 20000);
+      await again.waitForEvent('models', e => hasModel(e, 'list-a'), 10000);
+      await sleep(300);
+      const stale = again.events.filter(e => e.type === 'instances' && e.payload?.defaultModel === 'gw-a');
+      assert.equal(stale.length, 0, '代数没前进：旧实例把旧默认模型写回去了');
+    } finally {
+      again.disconnect();
+    }
+
+    const replay = createClient(port5);
+    try {
+      await replay.waitForConnect();
+      const models = await replay.waitForEvent('models', null, 10000);
+      assert.ok(hasModel(models, 'list-b') && !hasModel(models, 'list-a'), '代数没前进：旧实例把旧清单写回了缓存');
+    } finally {
+      replay.disconnect();
+    }
+  });
+});
