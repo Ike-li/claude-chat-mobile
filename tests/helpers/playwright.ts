@@ -25,6 +25,11 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
     // 用例刻意断网（context.setOffline）时，socket.io 按退避发出的重连长轮询必然失败——那是重连在工作，
     // 不是页面出错。只放过 /socket.io/ 这一种：离线时别的资源加载失败照样记错。
     if (text.includes('net::ERR_INTERNET_DISCONNECTED') && (message.location()?.url || '').includes('/socket.io/')) return;
+    // Chrome 156 起（Playwright 1.64 的 chromium-1248），DOMPurify 用 DOMParser 解析不可信 HTML 时，浏览器在解析
+    // 那一刻就按本页 CSP 检查 on* 属性并报一条 script-src-attr 违规。那份文档是惰性的、不执行脚本，属性随后被剥掉，
+    // 处理器从未有机会运行（P0-03d 的 DOM 断言另外钉着）。只放过位置在 DOMPurify 自身的这一种：处理器真进了
+    // 活文档时，解析发生在应用代码里，报告位置是 app.js 之类，照样记错。
+    if (text.startsWith('Executing inline event handler violates') && /\/vendor\/purify\.min\.js$/.test(message.location()?.url || '')) return;
     if (message.type() === 'error') errors.push(text);
   });
 }
