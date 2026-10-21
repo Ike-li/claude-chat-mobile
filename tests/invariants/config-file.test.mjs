@@ -206,6 +206,13 @@ test.describe('CONFIG-01 保存回执：逐项说清什么时候真的生效', (
       [{ key: 'WORKDIRS', effect: 'shadowed', shadowedBy: ['WORK_DIRS'] }]);
   });
 
+  // #230 review：同名键与别名同时设着时，只报同名键不够——运行时读的是 WORK_DIRS，照着回执 unset WORKDIRS 之后
+  // 重启照样被 WORK_DIRS 压着。要 unset 的变量全部列出来。
+  test('同名键与别名同时设着：shadowedBy 列出全部要 unset 的变量', () => {
+    assert.deepEqual(describeSavedKeys(['WORKDIRS'], { shellEnv: { WORKDIRS: '/x', WORK_DIRS: '/a', WORK_DIRS_FILE: '/f' } }),
+      [{ key: 'WORKDIRS', effect: 'shadowed', shadowedBy: ['WORKDIRS', 'WORK_DIRS', 'WORK_DIRS_FILE'] }]);
+  });
+
   test('没被压着：reload:hot 的已生效，其余重启后生效，逐项分开', () => {
     assert.deepEqual(describeSavedKeys(['WORKDIRS', 'PORT'], { shellEnv: {} }), [
       { key: 'WORKDIRS', effect: 'applied' },
