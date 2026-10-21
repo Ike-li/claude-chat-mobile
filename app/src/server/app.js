@@ -4075,8 +4075,9 @@ registerSocketConnection(io, socket => {
   // 返回不带 terminal 的克隆列表（fail-open，且不污染 listSessionsPage 的缓存对象）。
   //
   // classifyTranscriptTail 注入（2026-09-06）：桌面端 Code 模式（entrypoint=claude-desktop）写活体
-  // 条目但不写 status，"在不在跑"只能看磁盘尾部形态。注入而非让 session-registry 直接 import，是为
-  // 了保住它的叶子性（它现在只依赖 shared/claude-home）并让判定可注入假函数单测。
+  // 条目，2.1.260 时不写 status（2.1.299 实测已自报），无自报时"在不在跑"只能看磁盘尾部形态。
+  // 注入而非让 session-registry 直接 import，是为了保住它的叶子性（它现在只依赖 shared/claude-home）
+  // 并让判定可注入假函数单测。
   // 成本：只对【无 status 自报且进程活着】的条目读一次尾窗（实测本机 6 个，远少于列表候选窗的 51 个），
   // 且与镜像锁走同一个 classifyTranscriptTail —— 判据同源，不另造一份 64KB 版本。
   async function annotateTerminalStates(cwd, list) {

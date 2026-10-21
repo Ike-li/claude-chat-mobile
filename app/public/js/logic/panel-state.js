@@ -180,8 +180,8 @@ export function resolveDrawerStatusChip({ liveState, terminalState, terminalSour
 // 本会话自主循环（ScheduleWakeup/CronCreate）写出的锁（autonomous）也不补：没有终端在驾驶，来源由 composer 单独说明。
 // mirror 由调用方给有效锁（已接管的不算）：{ sessionId, stale, waiting, autonomous } 或 null。
 //
-// 快照优先、不让镜像锁压过它（#289 方案 F）：来源始终取行快照，镜像锁压过的只是状态，而那份状态有三处说错——
-// 镜像侧的 waiting 只认 cli 注册表，桌面端（已自报 status）等审批时会被说成运行中、丢掉「需要你」；
+// 快照优先、不让镜像锁压过它（#289 方案 F）。来源始终取行快照；若让锁压过快照的状态，有三处会说错——
+// 镜像侧的 waiting 只认 cli 注册表，桌面端（2.1.299 实测已自报 status）等审批时会被说成运行中、丢掉「需要你」；
 // 锁判成 stale 时会把快照里的 busy / waiting chip 抹掉；锁释放有 ~12.5s 迟滞，每个回合结束后多挂一截「运行中」。
 // 快照过时的问题从源头补：镜像锁真正转变时（mirrorRowLockChanged），applyMirror 立刻 revalidate 那一行
 // 所在目录，一个往返内换成权威态。

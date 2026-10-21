@@ -1012,7 +1012,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 超时只给 4 秒：开抽屉时排下的那一轮周期刷新还远，等得到就说明是转变触发的那一次。
   // 周期刷新给所有工作区一起发 session:list，转变触发的只发 MAIN。默认 mock 只有一个工作区，两者分不开，
   // 所以先挂上第二个工作区：计数窗口里出现非 MAIN 的请求，就是撞上了周期刷新。
-  const sessionListLog = async (page: Page): Promise<{ cwd: string }[]> => (await page.request.get('/__session-list-log')).json();
+  const sessionListLog = async (page: Page): Promise<{ cwd: string; query: string }[]> => (await page.request.get('/__session-list-log')).json();
   const mainListsSince = async (page: Page, from: number) =>
     (await sessionListLog(page)).slice(from).filter(e => e.cwd === MAIN_WORKSPACE).length;
   // 返回做判断用的那份日志：后续计数要用同一份，再取一次可能已经混进新的一轮
@@ -1077,14 +1077,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => mainListsSince(page, before), { timeout: 4000 }).toBeGreaterThan(0);
     const base = (await sessionListLog(page)).length;
 
-    // 同一把锁再推一次（倒计时之类的重复广播），紧接着一次真转变（waiting）当栅栏：
-    // 两条按序到达，栅栏触发的那次落进日志时，重复广播若也触发过，必然已经排在它前面。
+    // 同一把锁再推一次（倒计时之类的重复广播），紧接着一次真转变（waiting）当栅栏。chip 换成「终端需要你」时，
+    // 栅栏那次 session:list 已在同一个同步任务里发出（applyMirror 先刷 chip 再 revalidate），重复广播若也触发过，
+    // 在同一条 socket 上发得更早。但日志里两条长得一样，认不出哪条是栅栏的；所以之后再从这条 socket 发一个
+    // 认得出的哨兵（MAIN 的搜索请求）：哨兵落进日志时，排在它前面的必然都已被 mock 处理，数哨兵之前的即可。
     await page.request.post('/__mirror-state?readonly=1');
     await page.request.post('/__mirror-state?readonly=1&waiting=1');
     await expect(chip).toHaveText('终端需要你');
-    await expect.poll(() => mainListsSince(page, base), { timeout: 4000 }).toBeGreaterThan(0);
+    const sentinel = 'p0-11au-sentinel';
+    await workspaceRow(page, MAIN_WORKSPACE).locator('xpath=following-sibling::*[1]').getByTestId('session-search').fill(sentinel);
+    await expect.poll(async () => (await sessionListLog(page)).some(e => e.query === sentinel), { timeout: 4000 }).toBe(true);
     const log = await expectNoPeriodicRefreshSince(page, before);
-    expect(log.slice(base).filter(e => e.cwd === MAIN_WORKSPACE)).toHaveLength(1);
+    const sentinelAt = log.findIndex(e => e.query === sentinel);
+    expect(log.slice(base, sentinelAt).filter(e => e.cwd === MAIN_WORKSPACE)).toHaveLength(1);
 
     await expectNoBrowserErrors(page);
   });
@@ -1112,7 +1117,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 2026-09-06：外部驾驶员不只有终端。桌面端 Code 模式（Claude.app 的 Code 标签）跑的是同一份
-  // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop 但【不写 status】。
+  // claude 二进制、写同一份 transcript，注册表条目自报 entrypoint=claude-desktop；2.1.260 时【不写 status】
+  // （2.1.299 实测已自报 idle/busy/waiting）。
   // 此前它和 sdk 系一起被排除在终端标注之外，桌面端会话在抽屉里【只有一个未读点】，没有任何运行标识。
   // 这条守的是**渲染层最后一米**（与 P0-11ag 同理）：判据、Map 注入、纯函数文案都在单测里绿了，
   // 但字段还要过 dataset 往返 + DRAWER_STATUS_META 白名单——漏一环就静默显示成"终端"或干脆没有。
