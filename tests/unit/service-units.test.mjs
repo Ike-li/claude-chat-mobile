@@ -569,12 +569,20 @@ test.describe('describeSchedule —— 待机说明由事实算出，不是硬�
   });
 });
 
-test('willBeRespawned：判据是「退出后有人拉起」——托管或 npm run dev 的 watch；DEV_MODE 不算数', () => {
+test('willBeRespawned：判据是「退出后有人拉起」——只有进程管理器托管算；npm run dev、DEV_MODE 都不算', () => {
   // launchd 托管：KeepAlive 拉起
-  assert.equal(willBeRespawned({ supervised: true, npmLifecycleEvent: 'start' }), true);
-  // npm run dev：node --watch 拉起（watch 无法从子进程自证，认 npm_lifecycle_event）
-  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: 'dev' }), true);
+  assert.equal(willBeRespawned({ supervised: true }), true);
   // 前台 npm start：退出即死——2026-08-19 真机上 DEV_MODE=1 时假成功真死亡的那条路
-  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: 'start' }), false);
-  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: undefined }), false);
+  assert.equal(willBeRespawned({ supervised: false }), false);
+  // npm run dev 的 node --watch 只在被监视的文件变了才重启，进程自己退出后它只打印
+  // 「Waiting for file changes before restarting」（验收 O87，Node 22/26 实测）——退出即死，同 npm start。
+  // 按 npm run dev 的真实形态设环境变量，而不是传参：判据若又去读 npm_lifecycle_event，这里会红。
+  const prev = process.env.npm_lifecycle_event;
+  process.env.npm_lifecycle_event = 'dev';
+  try {
+    assert.equal(willBeRespawned({ supervised: false }), false, 'npm run dev 不会拉起自己退出的进程，不能放行重启');
+  } finally {
+    if (prev === undefined) delete process.env.npm_lifecycle_event;
+    else process.env.npm_lifecycle_event = prev;
+  }
 });
