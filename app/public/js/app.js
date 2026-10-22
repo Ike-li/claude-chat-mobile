@@ -3431,7 +3431,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
-      if (p.processExited) crashNotices.record(ev?.sessionId, p.message, errBar);
+      if (p.processExited) {
+        crashNotices.record(ev?.sessionId, p.message, errBar);
+        crashNotices.noteInstance(ev?.instanceId, p.message);
+      }
       clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
@@ -5486,6 +5489,16 @@ import { createGateFocusController } from './app/focus-layers.js';
       const destroyedResume = restartPrevEntry?.sessionId && restartPrevEntry?.cwd
         ? { sessionId: restartPrevEntry.sessionId, cwd: restartPrevEntry.cwd }
         : null;
+      // 进程异常退出：带 processExited 的 error 先到、已按实例（与会话）记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
+      // 按实例记：进程可能在 init 之前就退出，那时还没有会话 id（#329 review P2）。
+      // 刚切过来 / 重连时那条 error 可能还排在回放缓冲里，接下来的 bindView 会把队列丢掉，先收下来（见 adoptQueued）。
+      const destroyedInstanceId = instanceDestroyed && !destroyedByRestart ? displayedInstanceId : null;
+      const destroyedSid = destroyedInstanceId
+        ? prevInstances.find(x => x.instanceId === destroyedInstanceId)?.sessionId : null;
+      if (destroyedInstanceId) {
+        crashNotices.adoptQueued({ instanceId: destroyedInstanceId, sessionId: destroyedSid, queued: replayBuffer.queued(destroyedInstanceId) });
+      }
+      const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor(destroyedInstanceId) : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
@@ -5500,7 +5513,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, composeRelocatedFrom }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
+      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, destroyedReason, composeRelocatedFrom }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -5846,7 +5859,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       live: shouldSeedBusyFromInstanceState(entry?.state) || entry?.turnRunning === true,
     });
     if (emptySurface === 'destroyed') {
-      showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null });
+      showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null, reason: opts.destroyedReason || null });
       return;
     }
     if (emptySurface === 'home') {
@@ -8446,7 +8459,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 摧毁，文案换成准确的「服务已重启」，并加「继续此会话」一键重开（resume={sessionId,cwd} 走既有
   // session:switch 打开路径懒 resume，与侧栏/最近列表点击同源）。不自动切换：尊重「重启后不自动
   // session:switch」的既有产品决策（见 _dashRecentsGen 注释），按钮是用户主动点的。
-  function showInstanceDestroyedSurface({ byRestart = false, resume = null } = {}) {
+  function showInstanceDestroyedSurface({ byRestart = false, resume = null, reason = null } = {}) {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = t('新聊天');
@@ -8461,13 +8474,18 @@ import { createGateFocusController } from './app/focus-layers.js';
     hideStatuslineWrap();
 
     const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
+    // reason：进程异常退出的原因（O121）。有它时说明换掉「停止操作未能正常结束」——那是停止路径的说法，
+    // 进程被 kill 时用户根本没点过停止。
     const body = byRestart
       ? t('服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。')
-      : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。');
+      : reason
+        ? t('后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。')
+        : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。');
     const canResume = byRestart && resume?.sessionId && resume?.cwd;
     const container = el(`
       <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
         <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">${title}</div>
+        ${!byRestart && reason ? `<p class="text-xs text-danger text-center mb-2 max-w-sm leading-relaxed px-2 break-words" data-testid="instance-destroyed-reason">${esc(reason)}</p>` : ''}
         <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">${body}</p>
         <div class="flex flex-col gap-2 w-full max-w-xs">
           ${canResume ? `<button type="button" class="instance-destroyed-resume inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-resume">${t('继续此会话')}</button>` : ''}

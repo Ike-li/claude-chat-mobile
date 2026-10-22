@@ -316,6 +316,8 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// #329 review P2：同上吞 ack，且吞掉后马上让正在看的实例进程崩溃——error 落进还开着的回放缓冲，摘实例的广播随后就到。
+let syncAckTimeoutCrashArmed = false;
 // P0-02j：武装「sync:since 回执在途时传输层断开」（验收 O49）。下一次 sync:since 不回执，50ms 后关掉这条连接的
 // 传输层（engine 级 close，客户端走 Manager 自动重连，不是 io server disconnect）。socket.io-client 在 Manager.onclose
 // 里先回调在途 ack、后排重连定时器——前端若在这个回调里自己 socket.connect()，就和 Manager 的重连撞车。一次性。
@@ -679,6 +681,7 @@ function resetMockState() {
   freshTurnRunningArmed = false;
   historyAckTimeoutArmed = false;
   syncAckTimeoutArmed = false;
+  syncAckTimeoutCrashArmed = false;
   syncHoldThenDropArmed = false;
   sendTransientFailArmed = false;
   unpairedToolSessionArmed = false;
@@ -3338,6 +3341,10 @@ io.on('connection', socket => {
     if (syncAckTimeoutArmed && sessionId === 'mock-session-timeline') {
       syncAckTimeoutArmed = false;
       console.log('[mock] sync:since swallowed (sync-ack-timeout armed)');
+      if (syncAckTimeoutCrashArmed) {
+        syncAckTimeoutCrashArmed = false;
+        setTimeout(() => { void scenarioRegistry.run('test:process-crash', {}); }, 100);
+      }
       return;
     }
     // P0-NOSID：无 sessionId 的活实例——回放 live 事件（replayed>0），模拟「事件在流、磁盘还没有」。
@@ -3636,6 +3643,7 @@ io.on('connection', socket => {
       armFreshTurnRunning: () => { freshTurnRunningArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
       armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
+      armSyncAckTimeoutCrash: () => { syncAckTimeoutArmed = true; syncAckTimeoutCrashArmed = true; },
       armHistoryLongTool: () => { historyLongToolArmed = true; },
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },

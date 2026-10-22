@@ -453,6 +453,20 @@ test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => 
     assert.deepEqual(dispatched, []);
   });
 
+  // 「会话已中断」面要在缓冲被 discard 之前读出排着队的崩溃原因（#329 review P2）
+  test('queued：只给当前缓冲实例的排队事件，且是副本', (t) => {
+    const { buf } = makeBuffer(t, { timeoutMs: 60_000 });
+    buf.begin('inst-1');
+    const err = { type: 'error', instanceId: 'inst-1', epoch: 'e1', seq: 3, payload: { processExited: true, message: 'SIGKILL' } };
+    buf.offer(err);
+    assert.deepEqual(buf.queued('inst-1'), [err]);
+    assert.deepEqual(buf.queued('inst-2'), []);
+    buf.queued('inst-1').length = 0;
+    assert.equal(buf.bufferedCount('inst-1'), 1);
+    buf.discard();
+    assert.deepEqual(buf.queued('inst-1'), []);
+  });
+
   test("resolve('reload')：只推进基线、不派发缓冲事件", (t) => {
     const { buf, dispatched, getSeq, getEpoch } = makeBuffer(t, { timeoutMs: 60_000 });
     const h = buf.begin('inst-1');

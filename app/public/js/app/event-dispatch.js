@@ -224,6 +224,11 @@ export function createReplayBuffer({
     return (active && active.instanceId === instanceId) ? active.queue.length : 0;
   }
 
+  // 只读副本：切视图会 discard 队列，调用方要在那之前从里面取东西（如崩溃原因）时用
+  function queued(instanceId) {
+    return (active && active.instanceId === instanceId) ? active.queue.slice() : [];
+  }
+
   // 缓冲队列尾部最后一条"真实"事件（跳过 seq:0/epoch:'server' 的合成事件，如 gap 提示）：'reload' 丢弃
   // 缓冲前，续传基线须从这里取，不能沿用缓冲前的旧值——否则下次 sync 会重复播放本次被丢弃的这批事件，
   // 或因 seq 跳跃被误判 gap。events 按到达顺序入队 = 按真实 seq 顺序，故末尾往前找到的第一条即最新。
@@ -264,5 +269,5 @@ export function createReplayBuffer({
     if (action === 'flush') flushQueue(handle.queue);
   }
 
-  return { begin, discard, offer, bufferedCount, resolve };
+  return { begin, discard, offer, bufferedCount, queued, resolve };
 }

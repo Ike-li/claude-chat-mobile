@@ -181,6 +181,45 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O121：进程被 kill 后「会话已中断」面只有通用文案，原因（SIGKILL 等）要点回该会话才看得到——
+  // 表面一出来就清空了消息流，那条红字错误跟着没了。原因此刻已经到了（error 先于摘实例的广播），当场带上。
+  test('P0-DESTROY-REASON 进程异常退出 →「会话已中断」面当场写出原因，不再说是停止操作没结束', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    await sendChatMessage(page, 'test:process-crash');
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    await expect(destroyedSurface.getByTestId('instance-destroyed-reason'), '原因没写在中断面上').toContainText('terminated by signal SIGKILL');
+    await expect(destroyedSurface, '这不是停止操作引起的，那句说明是错的').not.toContainText('停止操作未能正常结束');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-DESTROY-REASON2 刚切进会话、回放缓冲还开着时进程崩溃 → 中断面仍写出原因', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-sync-ack-timeout-crash');
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    await expect(destroyedSurface.getByTestId('instance-destroyed-reason'), '排在回放缓冲里的崩溃原因被切视图一起丢了').toContainText('terminated by signal SIGKILL');
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-DESTROY-REASON3 新开的进程还没有会话 id 就崩溃 → 中断面仍写出原因', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    await sendChatMessage(page, 'test:process-crash-before-init');
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    await expect(destroyedSurface.getByTestId('instance-destroyed-reason'), '没有会话 id 的实例崩溃，原因没地方记').toContainText('terminated by signal SIGKILL');
+    await expect(destroyedSurface).not.toContainText('停止操作未能正常结束');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);

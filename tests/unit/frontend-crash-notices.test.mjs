@@ -68,3 +68,36 @@ test('会话之间互不串：别的会话没崩过就不补，清一个不影�
   h.notices.restore('s2');
   assert.equal(h.screen().length, 1, 's1 被清不影响 s2');
 });
+
+// #329 review P2：新开的进程还没吐 init 就退出，实例没有会话 id——「会话已中断」面要的原因按实例也得查得到
+test('reasonFor：只认按实例记的原因——没有会话 id 也查得到，实例之间互不串，不回落会话级', () => {
+  const h = harness();
+  h.notices.noteInstance('inst-1', MESSAGE);
+  assert.equal(h.notices.reasonFor('inst-1'), MESSAGE);
+  assert.equal(h.notices.reasonFor('inst-2'), null);
+  h.notices.record('s2', '会话级原因', null, at);
+  // #329 review P2：会话级记录可能是上一个进程的（重开后没再发消息就不清）。这个实例是被别的设备关掉的、没有自己的
+  // 崩溃原因时，拿它来解释就成了把一次正常关闭说成崩溃
+  assert.equal(h.notices.reasonFor('inst-2'), null, '没有实例级记录时回落了会话级的旧原因');
+});
+
+// #329 review P2：回放缓冲里排着的崩溃 error 要在切视图丢队列之前收下来。会话级的旧原因（上一个进程的、没再发消息
+// 所以没清）不能挡住它——只有这个实例自己已经记过才跳过。
+test('adoptQueued：收下队列里最后一条进程退出的 error；会话级旧原因不挡，实例自己记过才跳过', () => {
+  const h = harness();
+  h.notices.record('s1', '上一个进程：SIGKILL', null, at);
+  const queued = [
+    { type: 'text_delta', payload: {} },
+    { type: 'error', payload: { message: '没退出的错误' } },
+    { type: 'error', payload: { message: '这一次：SIGTERM', processExited: true } },
+  ];
+  h.notices.adoptQueued({ instanceId: 'inst-2', sessionId: 's1', queued });
+  assert.equal(h.notices.reasonFor('inst-2'), '这一次：SIGTERM');
+  h.clearScreen();
+  h.notices.restore('s1');
+  assert.match(h.screen()[0].text, /这一次：SIGTERM/, '重载历史补回的也该是这一次的原因');
+
+  h.notices.noteInstance('inst-3', '已记过');
+  h.notices.adoptQueued({ instanceId: 'inst-3', sessionId: 's1', queued });
+  assert.equal(h.notices.reasonFor('inst-3'), '已记过');
+});
