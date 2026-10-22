@@ -115,9 +115,11 @@ export function createNotifyChannels({
       }
       return 'sent';
     } catch (e) {
-      console.error('[ntfy] 推送失败:', e.message);
+      // 日志带上与告警同一个原因码：fetch 的 e.message 对 DNS 失败、拒连、断连都是同一句 fetch failed（验收 O110）
+      const reason = describeDeliveryError(e);
+      console.error(`[ntfy] 推送失败: ${reason}`, e.message);
       metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
-      metrics.label('delivery_failure_reason', describeDeliveryError(e));
+      metrics.label('delivery_failure_reason', reason);
       return 'failed';
     }
   }

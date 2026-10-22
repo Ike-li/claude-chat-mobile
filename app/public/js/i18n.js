@@ -25,7 +25,8 @@ export const LANG_STORAGE_KEY = 'ccm_lang';
 // 拼起来才成句——改这类句子必须整句一起改，单看一条 key 是读不出上下文的。
 export const EN_DICT = Object.freeze({
   // —— 访问令牌页 / Access 重登 ——
-  '需要访问令牌才能连接到这台机器。': 'You need an access token to connect to this machine.',
+  // 结尾空格是有意的（O114）：index.html 里这句后面紧跟 <span> 第二句，中文不需要空格，英文需要
+  '需要访问令牌才能连接到这台机器。': 'You need an access token to connect to this machine. ',
   '第一次打开、换了浏览器或清过浏览器数据时，这里还没有保存令牌，输入一次即可。': 'On a first visit, in a new browser, or after clearing browser data, no token is saved here yet — enter it once.',
   '访问令牌': 'Access token',
   '粘贴 AUTH_TOKEN': 'Paste AUTH_TOKEN',
@@ -531,6 +532,8 @@ export const EN_DICT = Object.freeze({
   '新会话（未保存）': 'New session (unsaved)',
   '无标题会话': 'Untitled session',
   '{keys} 被环境变量压着：保存了也不生效，重启后仍是环境变量的值': '{keys} is overridden by an environment variable: saving here won\'t take effect, and after a restart the environment value still wins',
+  '还没配置 statusLine：先在 ~/.claude/settings.json 里给 Claude Code 配好 statusLine，再回来开启': 'statusLine isn\'t configured yet: set up Claude Code\'s statusLine in ~/.claude/settings.json first, then come back and turn this on',
+  '当前目录不是 git 仓库': 'This folder is not a git repository',
   '时间未知': 'time unknown',
   '进入 ➔': 'Open ➔',
   ' · 使用中': ' · in use',
@@ -1057,6 +1060,7 @@ export const EN_DICT = Object.freeze({
   '🔔 发一条测试推送': '🔔 Send a test notification',
   '发送中…': 'Sending…',
   '测试推送失败，请检查网络': 'Test notification failed — check your connection',
+  '上下文已压缩': 'Context compacted',
   '这台设备还没订阅推送——先点上方的「开启」': 'This device has no push subscription yet — tap "Turn on" above first',
   '网页推送到不了这台设备：浏览器只在 HTTPS 下允许订阅，用隧道域名（https）打开本站': 'Web push can\'t reach this device: browsers only allow subscribing over HTTPS — open this site via the tunnel (https) address',
   '网页推送到不了这台设备：iOS 要先「添加到主屏幕」，再从主屏图标打开本站': 'Web push can\'t reach this device: on iOS, first "Add to Home Screen", then open this site from the home-screen icon',

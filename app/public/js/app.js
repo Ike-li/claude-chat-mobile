@@ -2240,7 +2240,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (res?.state && latestServiceHealth?.statuslineBridge) latestServiceHealth.statuslineBridge.state = res.state;
       renderStatuslineBridgeSection();
       if (err || !res) { showBridgeSetupResult('statuslineBridgeResult', t('操作超时，请重试'), false); loadServiceStatus(); return; }
-      showBridgeSetupResult('statuslineBridgeResult', res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
+      // report 是安装器的英文原话；认得出的原因码按界面语言说（验收 O125）
+      const reason = res.code === 'statusline_not_configured'
+        ? t('还没配置 statusLine：先在 ~/.claude/settings.json 里给 Claude Code 配好 statusLine，再回来开启') : '';
+      showBridgeSetupResult('statuslineBridgeResult', reason || res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
       loadServiceStatus();
     });
   }
@@ -2569,19 +2572,28 @@ import { createGateFocusController } from './app/focus-layers.js';
         input.className = 'min-w-0 w-32 px-2 py-1 rounded-lg border border-accent bg-surface text-ink text-xs font-normal';
         input.value = d.alias || '';
         input.placeholder = autoName;
-        input.maxLength = 24; // 与后端 MAX_DEVICE_ALIAS 一致；后端仍会再归一一次（这里只是省一次往返）
+        // 限长与后端 MAX_DEVICE_ALIAS 同一口径：按【码点】24 个（后端仍会再归一一次，这里只是省一次往返）。
+        // 不用 maxLength：它按 UTF-16 单元计，emoji 占两个，纯 emoji 别名只写得下 12 个（验收 O106）。
+        // 输入法组字途中不截——截了会把正在拼的那个字打断，等 compositionend 再截。
+        const clampAlias = () => {
+          const points = [...input.value];
+          if (points.length > 24) input.value = points.slice(0, 24).join('');
+        };
+        input.addEventListener('input', (e) => { if (!e.isComposing) clampAlias(); });
+        input.addEventListener('compositionend', clampAlias);
         input.setAttribute('data-testid', 'trusted-device-alias-input');
         let done = false;
         const commit = (save) => {
           if (done) return;
           done = true;
-          if (save) socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value });
+          if (save) { clampAlias(); socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value }); }
           // 不手动还原 DOM：提交后服务端会重播 trusted_devices，整段重渲染；
           // 取消时也重渲染一次，省掉一条只在这里用的回滚路径。
           renderTrustedDevices(lastTrustedDevices, lastTrustedBypass);
         };
         input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+          // 输入法组字中的 Enter 是「确认候选词」，不是提交（#320 review）：同 2036 行令牌门的双检
+          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); commit(true); }
           else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
         });
         input.addEventListener('blur', () => commit(true));
@@ -9041,6 +9053,14 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (msg?.isApiErrorMessage) {
         const bar = el('<div class="msg-frame text-center text-xs text-danger"></div>');
         bar.textContent = `⚠️ ${msg.content || ''}`;
+        appendNode(bar, msg);
+        return;
+      }
+      // /compact 的压缩摘要（O115）：history.js 换成了这个标记——与 live 侧 system「上下文已压缩」同一观感，
+      // 不是用户气泡（摘要是给模型的上下文，终端主视图也不显示它）
+      if (msg?.kind === 'compact_summary') {
+        const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="compact-marker"></div>');
+        bar.textContent = t('上下文已压缩');
         appendNode(bar, msg);
         return;
       }

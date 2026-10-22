@@ -64,6 +64,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="general-nav-host"]').click();
     await expect(page.locator('[data-scope-note="host"]')).toContainText('this computer');
 
+    // 验收 O114：令牌门两句话是相邻的文本节点与 <span>（中文不需要空格），英文原先连成「machine.On a first visit」
+    await expect(page.locator('#authGate .text-ink-soft').first()).toContainText('this machine. On a first visit');
+
     await expectNoBrowserErrors(page);
   });
 

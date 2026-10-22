@@ -14,6 +14,13 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// git 面板回执的错误文案（验收 O97）。服务端不分界面语言，not_git 的 error 是写死的中文；这一种由前端按 code
+// 出文案。其余错误（git 自己的报错、超时）照旧显示原文——那是 git 的原话，翻不了也不该改写。
+export function gitErrorText(response, fallback) {
+  if (response?.code === 'not_git') return t('当前目录不是 git 仓库');
+  return response?.error || fallback;
+}
+
 // 历史载入提示。服务端只回最近 HISTORY_MAX_MESSAGES 条，ack 里的 total 是削顶前的条数；比显示的多时要说清
 // 只显示了一部分，否则「加载了 2000 条历史消息」读起来像全部（验收 O44）。total 缺失（旧服务端）按全量处理。
 export function historyLoadedNotice(shown, total) {

@@ -199,10 +199,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await section.locator('[data-testid="statusline-bridge-action"]').click();
     await page.locator('#confirmOk').click();
     const result = page.locator('[data-testid="statusline-bridge-result"]');
-    await expect(result, '失败了面板上什么都没说').toContainText('settings.statusLine must be configured before install');
+    // 验收 O125：原因按界面语言说，不是安装器的英文原话
+    await expect(result, '失败了面板上什么都没说').toContainText('还没配置 statusLine');
+    await expect(result, '中文界面里一行红色英文').not.toContainText('is not configured yet');
     await expect(result).toHaveClass(/text-danger/);
     // 放在结果出现之后：之前断言「没有」会在回执到达前就空过
-    await expect(page.locator('#messages'), '插进了被面板挡住的聊天流').not.toContainText('settings.statusLine');
+    await expect(page.locator('#messages'), '插进了被面板挡住的聊天流').not.toContainText('statusLine');
     await expectNoBrowserErrors(page);
   });
 
