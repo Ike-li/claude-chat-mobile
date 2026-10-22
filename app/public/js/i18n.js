@@ -1056,6 +1056,7 @@ export const EN_DICT = Object.freeze({
   '🔔 发一条测试推送': '🔔 Send a test notification',
   '发送中…': 'Sending…',
   '测试推送失败，请检查网络': 'Test notification failed — check your connection',
+  '上下文已压缩': 'Context compacted',
   '这台设备还没订阅推送——先点上方的「开启」': 'This device has no push subscription yet — tap "Turn on" above first',
   '测试推送发送失败': 'Test notification failed for',
   '条（订阅可能已过期，重新开启一次）': 'subscription(s) — they may have expired; turn it on again',

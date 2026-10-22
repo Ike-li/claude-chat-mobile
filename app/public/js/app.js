@@ -9034,6 +9034,14 @@ import { createGateFocusController } from './app/focus-layers.js';
         appendNode(bar, msg);
         return;
       }
+      // /compact 的压缩摘要（O115）：history.js 换成了这个标记——与 live 侧 system「上下文已压缩」同一观感，
+      // 不是用户气泡（摘要是给模型的上下文，终端主视图也不显示它）
+      if (msg?.kind === 'compact_summary') {
+        const bar = el('<div class="msg-frame text-center text-xs text-ink-faint" data-testid="compact-marker"></div>');
+        bar.textContent = t('上下文已压缩');
+        appendNode(bar, msg);
+        return;
+      }
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking text-xs text-ink-faint">

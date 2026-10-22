@@ -10,7 +10,7 @@ import { writeFileSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { getProjectDir, getSessionHistory, getSessionHistoryWithTotal, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
+import { catchUpStep, getProjectDir, getSessionHistory, getSessionHistoryWithTotal, HISTORY_MAX_MESSAGES, splitAttachmentBlock, __setSdkGetSessionMessagesForTest } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -105,23 +105,52 @@ test('getSessionHistory: isMeta 条目被过滤', async () => {
   assert.equal(msgs[0].content, '真实消息');
 });
 
-test('getSessionHistory: /compact 写下的压缩摘要行不回显成用户气泡（O115 / AC-06-18）', async () => {
-  // 夹具照 CLI 2.1.238 真实落盘：type:user、content 是字符串、没有 isMeta，只靠 isCompactSummary /
-  // isVisibleInTranscriptOnly 标明「这是给模型的摘要，终端主视图不显示」。带 isMeta 的夹具会被既有的
-  // isMeta 闸吃掉，测不出这个缺陷。
+// 夹具照 CLI 2.1.238 真实落盘：type:user、content 是字符串、没有 isMeta，只靠 isCompactSummary /
+// isVisibleInTranscriptOnly 标明「这是给模型的摘要，终端主视图不显示」。带 isMeta 的夹具会被既有的
+// isMeta 闸吃掉，测不出这个缺陷。
+const COMPACT_ROWS = [
+  { type: 'system', subtype: 'compact_boundary', uuid: 'b-1', entrypoint: 'cli', content: 'Conversation compacted', timestamp: '2026-08-21T16:28:27Z' },
+  { type: 'user', uuid: 'u-sum', parentUuid: 'b-1', entrypoint: 'cli', isVisibleInTranscriptOnly: true, isCompactSummary: true,
+    message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. ...' },
+    timestamp: '2026-08-21T16:28:27.400Z' },
+];
+
+test('getSessionHistory: /compact 写下的压缩摘要换成「已压缩」标记，不回显成用户气泡（O115 / AC-06-18）', async () => {
   const cwd = '/test/compact-summary-hist';
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'compacthist', [
     { type: 'user', uuid: 'u-1', message: { role: 'user', content: '压缩前的问题' }, timestamp: '2026-08-21T16:20:00Z' },
-    { type: 'system', subtype: 'compact_boundary', uuid: 'b-1', content: 'Conversation compacted', timestamp: '2026-08-21T16:28:27Z' },
-    { type: 'user', uuid: 'u-sum', parentUuid: 'b-1', isVisibleInTranscriptOnly: true, isCompactSummary: true,
-      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. ...' },
-      timestamp: '2026-08-21T16:28:27Z' },
+    ...COMPACT_ROWS,
     { type: 'user', uuid: 'u-2', message: { role: 'user', content: '压缩后的问题' }, timestamp: '2026-08-21T16:29:00Z' },
   ]);
   const msgs = await getSessionHistory('compacthist', cwd, 50, { baseDir: BASE });
-  assert.deepEqual(msgs.map(m => m.content), ['压缩前的问题', '压缩后的问题'],
-    '压缩摘要不是用户说的话：回显成用户气泡会让人以为自己发过这一大段，还会挂上「改写重发 / 分叉」入口');
+  assert.deepEqual(msgs.map(m => [m.role, m.kind ?? null, m.content]), [
+    ['user', null, '压缩前的问题'],
+    ['system', 'compact_summary', ''],
+    ['user', null, '压缩后的问题'],
+  ], '压缩摘要不是用户说的话：回显成用户气泡会让人以为自己发过这一大段，还会挂上「改写重发 / 分叉」入口');
+  assert.equal(msgs[1].uuid, undefined, '标记不是对话节点，不能带分叉锚点');
+});
+
+// Codex review（PR #312）：终端里 /compact 落盘的只有 compact_boundary（本就不回显）和这行摘要。
+// 若把摘要整条跳过，getSessionHistory 前后一模一样，catchUpStep 看不到这次外部写入、不标脏，
+// 手机下一条消息就从压缩前的叶子写下去，两端分叉（单驾驶员模型）。
+test('getSessionHistory: 终端 /compact 之后 catchUpStep 仍能看到这次外部写入（不得因隐藏摘要而失明）', async () => {
+  const cwd = '/test/compact-summary-sync';
+  const dir = join(BASE, getProjectDir(cwd));
+  const before = [
+    { type: 'user', uuid: 'u-1', entrypoint: 'cli', message: { role: 'user', content: '终端里的问题' }, timestamp: '2026-08-21T16:20:00Z' },
+    { type: 'assistant', uuid: 'a-1', entrypoint: 'cli', message: { role: 'assistant', content: '终端里的回答' }, timestamp: '2026-08-21T16:20:05Z' },
+  ];
+  writeJSONL(dir, 'compactsync', before);
+  const first = catchUpStep({ baseline: 0, wasBusy: false },
+    { messages: await getSessionHistory('compactsync', cwd, 50, { baseDir: BASE }) });
+
+  writeJSONL(dir, 'compactsync', [...before, ...COMPACT_ROWS]);
+  const after = await getSessionHistory('compactsync', cwd, 50, { baseDir: BASE });
+  const step = catchUpStep(first.state, { messages: after });
+  assert.ok(step.emit.length > 0 || step.reload,
+    '终端 /compact 是一次外部写入：既不推增量也不重载，mirror-engine 就不标 externalDirty，手机会从压缩前的叶子写出分叉');
 });
 
 test('getSessionHistory: type:mode 记录（claude --resume 写入）被过滤、不当消息', async () => {

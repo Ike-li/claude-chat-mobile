@@ -79,6 +79,30 @@ test.describe('P0 API 重试与 SDK 提示的可见性', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 AC-06-18 / O115：/compact 之后重载历史，压缩摘要整段被渲染成用户气泡（带复制 / 改写重发）。
+  test('P0-30d 历史里的压缩摘要渲染成「上下文已压缩」标记，不是用户气泡', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await sendChatMessage(page, 'test:history-compact');
+
+    const marker = page.locator('#messages [data-testid="compact-marker"]');
+    await expect(marker).toHaveCount(1, { timeout: 20_000 });
+    await expect(marker).toHaveText('上下文已压缩');
+    // 前后两条真用户消息照常是气泡；标记夹在中间，位置与 transcript 顺序一致
+    const texts = await page.locator('#messages > *').allInnerTexts();
+    const iBefore = texts.findIndex(x => x.includes('压缩前的问题'));
+    const iMarker = texts.findIndex(x => x.includes('上下文已压缩'));
+    const iAfter = texts.findIndex(x => x.includes('压缩后的问题'));
+    expect(iBefore).toBeGreaterThan(-1);
+    expect(iMarker).toBeGreaterThan(iBefore);
+    expect(iAfter).toBeGreaterThan(iMarker);
+    // 关键回归：标记不能落进用户气泡分支（空内容的用户气泡也算）
+    await expect(page.locator('[data-testid="user-message"]').filter({ hasText: '上下文已压缩' })).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-30b SDK 自由文本提示（notice）按级别上屏，不再蒸发进日志', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

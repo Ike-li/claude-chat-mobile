@@ -278,10 +278,6 @@ async function readHistoryMessages(historyFile, liveUuids) {
         }
       }
 
-      // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
-      // 说的话：终端主视图不显示它（只在 transcript 视图里），live 侧也只发一条「上下文已压缩」通知。
-      // 放在上面的链判定之后：它是主链节点，仍要计入 newestMainUuid / chainStarted。
-      if (entry.isCompactSummary) continue;
 
       // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
       // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
@@ -291,6 +287,17 @@ async function readHistoryMessages(historyFile, liveUuids) {
         // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
         // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
         if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
+
+        // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
+        // 说的话（O115）：终端主视图不显示它，live 侧只发一条「上下文已压缩」。这里换成同义的标记条目，
+        // 【不能整条跳过】：终端 /compact 落盘的只有它和被忽略的 compact_boundary，丢掉它 catchUpStep
+        // 就看不到这次外部写入、不标 externalDirty，手机下一条会从压缩前的叶子写下去，两端分叉。
+        if (entry.isCompactSummary) {
+          const marker = { role: 'system', kind: 'compact_summary', content: '', timestamp: entry.timestamp };
+          if (entry.entrypoint) marker.entrypoint = entry.entrypoint;
+          pushCapped(marker);
+          continue;
+        }
 
         const role = entry.message?.role || entry.type;
         const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
