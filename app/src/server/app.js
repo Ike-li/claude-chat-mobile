@@ -90,6 +90,7 @@ import {
   canDeleteSessionGuard,
   externalDirtyBusyNack,
   resolveEffortBroadcast,
+  createComposeRegistry,
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
@@ -2484,15 +2485,7 @@ function noteLiveTerminalOnTakeover(a) {
 // 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
 // miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
 const resumeInFlight = new Map(); // key → Promise<AgentSession>
-// 新会话页（composeId）→ 它的首发开出来的实例（O107）。同一页面的后续消息在 instances 广播到达之前、或离线
-// 重放时仍不带 instanceId，按它落回自己开的实例，而不是回退全局 viewing。实例没了就当没开过；只留最近一批。
-const composeInstances = new Map();
-const COMPOSE_INSTANCES_MAX = 100;
-function rememberComposeInstance(composeId, instanceId) {
-  composeInstances.delete(composeId);
-  composeInstances.set(composeId, instanceId);
-  if (composeInstances.size > COMPOSE_INSTANCES_MAX) composeInstances.delete(composeInstances.keys().next().value);
-}
+const composeInstances = createComposeRegistry({ isLive: id => agents.has(id) }); // 新会话页 → 它开出的实例（O107）
 // 回退并发锁（G3）。键是 sessionId 而非实例 id——confirm 中途会置换实例，
 // 挂在实例上的锁解锁时已不是同一个对象。状态与判据都在 sessions/rewind-plan.js。
 const rewindLocks = createRewindLocks();
@@ -2528,10 +2521,11 @@ const SESSION_EXIT_WAIT_MS = 10_000;
 // 下游 dedupedResume 的 `fresh:${cwd}` 就合不掉它们——会各建一棵树、各开一个实例。
 // 窗口很窄（第一条 ack 回来 UI 就进会话视图了），但合并的代价只有一个 Map。
 const worktreeCreateInFlight = new Map(); // `${cwd}\u0000${sourceBranch}` → Promise<result>
-function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
+function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage, composeId = null) {
   // key 不含消息文本：并发首消息要共用同一棵树，否则各建一棵、下游 dedupedResume 也合不掉。
   // 名字取第一个到达的那条消息——后到的那条本来就该进同一个会话。
-  const key = `${cwd}\u0000${sourceBranch ?? ''}`;
+  // 按新会话页（composeId）再分一层：两个新会话页是两个会话，下游各开实例，共用一棵树就是两个会话改同一棵（O107）。
+  const key = `${cwd}\u0000${sourceBranch ?? ''}\u0000${composeId ?? ''}`;
   let p = worktreeCreateInFlight.get(key);
   if (!p) {
     p = createSessionWorktree(cwd, { name: worktreeNameFromMessage(firstMessage), sourceBranch })
@@ -2910,8 +2904,8 @@ registerSocketConnection(io, socket => {
         ...(composeId ? { allowViewingFallback: false } : {}),
         expectedSessionId: payload?.sessionId, // 离线重放带着入队时那个会话（MSG-02）
       };
-      const composeOwned = composeId ? composeInstances.get(composeId) : undefined;
-      let target = composeOwned && agents.has(composeOwned) ? { id: composeOwned, stale: false } : resolveTarget(rawInstanceId, targetOpts);
+      const composeOwned = composeInstances.lookup(composeId);
+      let target = composeOwned ? { id: composeOwned, stale: false } : resolveTarget(rawInstanceId, targetOpts);
       // 那个会话此刻正在续接（另一台设备触发的规则 5 置换、切 effort 的重路径，或别处正在打开它）：置换都是先把旧实例
       // 移出、再 await dedupedResume，新实例要等 openResumeInstance 走完才登记——这段窗口里改投查不到它。
       // 等那次续接落定再判一次，不在窗口里判死（PR #218 review）。续接失败就照常落 stale。
@@ -2949,7 +2943,7 @@ registerSocketConnection(io, socket => {
         let cwd;
         if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
           try {
-            scratchLease = scratchAllocator.acquire();
+            scratchLease = scratchAllocator.acquire(composeId ?? '');
           } catch (err) {
             sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
             ack({ ok: false, error: 'scratch_unavailable' });
@@ -2974,7 +2968,7 @@ registerSocketConnection(io, socket => {
           const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
           cwd = workspaceCwd;
           if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
-            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
+            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text, composeId);
             if (!made.ok) {
               console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
               audit.recordAudit({
@@ -3008,7 +3002,7 @@ registerSocketConnection(io, socket => {
         } finally {
           scratchLease?.release();
         }
-        if (composeId) rememberComposeInstance(composeId, a.instanceId);
+        if (composeId) composeInstances.remember(composeId, a.instanceId);
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。

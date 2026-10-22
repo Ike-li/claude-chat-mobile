@@ -13,7 +13,8 @@ import '../setup/require-disposable-env.mjs';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -66,6 +67,57 @@ test('新会话页带 composeId 的首发开新会话；同一页面的下一条
     const b2 = await emit('user:message', { text: 'B 的第二条', cwd: repo, composeId: 'page-b', clientMessageId: 'compose-b2' });
     assert.equal(b2?.ok, true, `B 的第二条应被接受：${JSON.stringify(b2)}`);
     assert.equal(b2.instanceId, b.instanceId, '同一个新会话页的第二条没回到它自己开的实例');
+  } finally {
+    try { sock.close(); } catch { /* 已关闭 */ }
+    await killServer(server.proc);
+    rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  }
+});
+
+// #328 review：两个新会话页并发首发、都勾了「在新 worktree 里开」——是两个会话，就得是两棵树。只按页拆开
+// 下游的实例单飞、不拆 worktree 的建树单飞，两个实例会落在同一棵树里同时改它。
+test('两个新会话页并发首发到新 worktree：各开各的实例，也各在各的树里', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-int-compose-wt-')));
+  const repo = join(root, 'repo');
+  mkdirSync(repo);
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(repo, 'README.md'), '# fixture\n');
+  git('add', '.');
+  git('commit', '-m', 'init');
+
+  const server = await spawnServer({ AUTH_TOKEN: TOKEN, WORK_DIRS: repo, CCM_DATA_DIR: join(root, 'data') });
+  const events = [];
+  const sock = ioClient(`http://127.0.0.1:${server.port}`, {
+    auth: { token: TOKEN, deviceToken: 'int-compose-wt-device' },
+    transports: ['websocket'], reconnection: false, timeout: 4000,
+    extraHeaders: { Host: 'localhost' },
+  });
+  sock.on('agent:event', e => events.push(e));
+  try {
+    await new Promise((resolve, reject) => {
+      sock.on('connect', resolve);
+      sock.on('connect_error', reject);
+      setTimeout(() => reject(new Error('socket 未能在 5s 内连上')), 5000);
+    });
+    const emit = (event, payload) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${event} 的 ack 超时`)), 30000);
+      sock.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
+    });
+    await emit('session:new', { cwd: repo });
+    const [x, y] = await Promise.all([
+      emit('user:message', { text: '页面 X', cwd: repo, useWorktree: true, sourceBranch: 'main', composeId: 'page-x', clientMessageId: 'wt-x' }),
+      emit('user:message', { text: '页面 Y', cwd: repo, useWorktree: true, sourceBranch: 'main', composeId: 'page-y', clientMessageId: 'wt-y' }),
+    ]);
+    assert.equal(x?.ok, true, JSON.stringify(x));
+    assert.equal(y?.ok, true, JSON.stringify(y));
+    assert.notEqual(x.instanceId, y.instanceId, '两个新会话页并成了一个会话');
+    const cwdOf = id => events.filter(e => e.type === 'instances').pop()?.payload?.instances?.find(i => i.instanceId === id)?.cwd;
+    assert.ok(cwdOf(x.instanceId)?.includes(join('.claude', 'worktrees')), `前提：X 开在新 worktree 里，实际 ${cwdOf(x.instanceId)}`);
+    assert.notEqual(cwdOf(x.instanceId), cwdOf(y.instanceId), '两个会话落在同一棵 worktree 里，会同时改它');
   } finally {
     try { sock.close(); } catch { /* 已关闭 */ }
     await killServer(server.proc);

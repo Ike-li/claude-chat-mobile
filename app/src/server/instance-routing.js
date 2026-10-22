@@ -46,6 +46,25 @@ export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, op
   return { id: null, stale: true };
 }
 
+// 新会话页（composeId）→ 它的首发开出来的实例（验收 O107）。服务端 viewingInstanceId 是全局单值，新会话页
+// 的后续消息在 instances 广播到达之前、或离线重放时仍不带 instanceId——按 composeId 落回这一页自己开的实例，
+// 而不是回退全局 viewing。实例没了就当没开过；只留最近 max 页（每个新会话页一条，常驻进程里会一直攒）。
+export function createComposeRegistry({ max = 100, isLive = () => false } = {}) {
+  const byCompose = new Map();
+  return {
+    lookup(composeId) {
+      const id = composeId ? byCompose.get(composeId) : undefined;
+      return id && isLive(id) ? id : null;
+    },
+    remember(composeId, instanceId) {
+      if (!composeId || !instanceId) return;
+      byCompose.delete(composeId);
+      byCompose.set(composeId, instanceId);
+      if (byCompose.size > max) byCompose.delete(byCompose.keys().next().value);
+    },
+  };
+}
+
 // allowViewingFallback=false 的另一半：关掉实例回退后 outbox 重发会落到懒开分支，而那里的
 // routeCwd(undefined) 缺省仍回退服务端 viewingCwd——换条路径把消息投给它从没指向过的会话。
 // outbox 项入队时一定带 cwd（app.js 的 outboxPayload），缺了就是数据不全，宁可落死信让用户手动重发。

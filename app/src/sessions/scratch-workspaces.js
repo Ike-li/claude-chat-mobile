@@ -87,22 +87,26 @@ export function removeScratchWorkspace(dir, { root, home, baseDir, liveCwds }) {
 // 「无文件夹」首条消息的目录分配。懒开是「建目录 → 查当前会话 → 开实例」，中间有 await：两条并发的
 // 首条消息若各建一个目录，下游按 cwd 的单飞（dedupedResume）就合不掉，会各开一个会话。
 // 在途期间（从建目录到实例开好）来的请求拿到同一个目录；全部释放之后，下一条才建新的。
+// group：按新会话页分（验收 O107 的 composeId）——两个新会话页并发首发是两个会话，下游按页各开实例，
+// 共用一个目录就成了两个会话同时改同一棵目录。不传即同一组（原行为）。
 export function createScratchAllocator(root, { create = createScratchWorkspace } = {}) {
-  let current = null;
-  let holders = 0;
+  const groups = new Map(); // group → { cwd, holders }
   return {
-    acquire() {
-      if (!current) current = create(root);
-      holders += 1;
-      const cwd = current;
+    acquire(group = '') {
+      let slot = groups.get(group);
+      if (!slot) {
+        slot = { cwd: create(root), holders: 0 };
+        groups.set(group, slot);
+      }
+      slot.holders += 1;
       let released = false;
       return {
-        cwd,
+        cwd: slot.cwd,
         release() {
           if (released) return;
           released = true;
-          holders -= 1;
-          if (holders === 0) current = null;
+          slot.holders -= 1;
+          if (slot.holders === 0 && groups.get(group) === slot) groups.delete(group);
         },
       };
     },

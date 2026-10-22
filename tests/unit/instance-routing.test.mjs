@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveInstanceTarget,
+  createComposeRegistry,
   shouldRejectOutboxLazyOpen,
   reselectViewingTarget,
   shouldClaimViewingAfterSwap,
@@ -303,5 +304,28 @@ test.describe('resolveEffortBroadcast（R7 置换后档位广播）', () => {
   test('actual 未提供（注册表尚未写入等边角）→ 回落请求值，保持旧行为', () => {
     assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh' }),
       { level: 'xhigh', mismatch: false });
+  });
+});
+
+// 验收 O107：新会话页（composeId）→ 它的首发开出来的实例。同一页的后续消息不带 instanceId 时按它落回去。
+test.describe('createComposeRegistry：新会话页认领它自己开出的实例', () => {
+  test('记下之后按页查得到；实例没了就当没开过', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    assert.equal(reg.lookup('page-a'), null);
+    reg.remember('page-a', 'inst_1');
+    assert.equal(reg.lookup('page-a'), 'inst_1');
+    live.delete('inst_1');
+    assert.equal(reg.lookup('page-a'), null, '实例已退出还落回它，消息就进了一个不存在的实例');
+  });
+  test('只留最近 max 页，最早的先出；再记一次算最近', () => {
+    const reg = createComposeRegistry({ max: 2, isLive: () => true });
+    reg.remember('p1', 'i1');
+    reg.remember('p2', 'i2');
+    reg.remember('p1', 'i1');
+    reg.remember('p3', 'i3');
+    assert.equal(reg.lookup('p2'), null, '最久没用的那页应该先被挤掉');
+    assert.equal(reg.lookup('p1'), 'i1');
+    assert.equal(reg.lookup('p3'), 'i3');
   });
 });
