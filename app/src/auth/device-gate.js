@@ -26,6 +26,7 @@ export function createDeviceGate({
 }) {
   // 与 devices.js 读写同一对文件（它认 CCM_*_DEVICES_FILE 覆盖）。只给测试留注入口，不再从 dataDir 自己拼。
   const { trusted: trustedDevicesFile, pending: pendingDevicesFile } = deviceFiles;
+  let stopWatching = () => {};
 
   function getSocketsByDeviceToken(deviceToken) {
     const list = [];
@@ -234,6 +235,8 @@ export function createDeviceGate({
         }, 100);
       });
       watcher.unref?.(); // 常驻 server 不受影响；避免在单测等短生命周期进程里吊住事件循环
+      // 但 Windows 上 unref 过的它仍让单测进程跑完不退出（2026-10-22 CI 实测），短生命周期调用方须显式 close()
+      stopWatching = () => { clearTimeout(timer); watcher.close(); };
     } catch (err) {
       console.error('[devices] 无法监视设备信任/待审文件所在目录:', err.message);
     }
@@ -251,5 +254,6 @@ export function createDeviceGate({
     broadcastPendingDevices,
     trustedDevicesPayload,
     broadcastTrustedDevices,
+    close: () => stopWatching(),
   };
 }
