@@ -55,6 +55,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(hint).toContainText('PORT');
     await expect(hint).toContainText('环境变量');
     await expect(hint, '只改了被压着的项，却叫人去重启').not.toContainText('重启服务才生效');
+    // 前端只知道「被压着」不知道是哪个变量（WORKDIRS 可能是被 WORK_DIRS 压着）：不能叫人 unset 配置键名（#321 review）
+    await expect(hint).not.toContainText('unset');
 
     // 再改一项正常的：两句都要在
     await page.locator('#envConfigBody input[data-key="CLAUDE_BIN"]').fill('/opt/claude');
