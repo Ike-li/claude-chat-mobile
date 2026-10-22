@@ -278,6 +278,11 @@ async function readHistoryMessages(historyFile, liveUuids) {
         }
       }
 
+      // /compact 写下的压缩摘要（type:user、没有 isMeta、带 isCompactSummary）是给模型的上下文，不是用户
+      // 说的话：终端主视图不显示它（只在 transcript 视图里），live 侧也只发一条「上下文已压缩」通知。
+      // 放在上面的链判定之后：它是主链节点，仍要计入 newestMainUuid / chainStarted。
+      if (entry.isCompactSummary) continue;
+
       // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
       // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
       // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。

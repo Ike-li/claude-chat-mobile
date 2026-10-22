@@ -105,6 +105,25 @@ test('getSessionHistory: isMeta 条目被过滤', async () => {
   assert.equal(msgs[0].content, '真实消息');
 });
 
+test('getSessionHistory: /compact 写下的压缩摘要行不回显成用户气泡（O115 / AC-06-18）', async () => {
+  // 夹具照 CLI 2.1.238 真实落盘：type:user、content 是字符串、没有 isMeta，只靠 isCompactSummary /
+  // isVisibleInTranscriptOnly 标明「这是给模型的摘要，终端主视图不显示」。带 isMeta 的夹具会被既有的
+  // isMeta 闸吃掉，测不出这个缺陷。
+  const cwd = '/test/compact-summary-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'compacthist', [
+    { type: 'user', uuid: 'u-1', message: { role: 'user', content: '压缩前的问题' }, timestamp: '2026-08-21T16:20:00Z' },
+    { type: 'system', subtype: 'compact_boundary', uuid: 'b-1', content: 'Conversation compacted', timestamp: '2026-08-21T16:28:27Z' },
+    { type: 'user', uuid: 'u-sum', parentUuid: 'b-1', isVisibleInTranscriptOnly: true, isCompactSummary: true,
+      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. ...' },
+      timestamp: '2026-08-21T16:28:27Z' },
+    { type: 'user', uuid: 'u-2', message: { role: 'user', content: '压缩后的问题' }, timestamp: '2026-08-21T16:29:00Z' },
+  ]);
+  const msgs = await getSessionHistory('compacthist', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => m.content), ['压缩前的问题', '压缩后的问题'],
+    '压缩摘要不是用户说的话：回显成用户气泡会让人以为自己发过这一大段，还会挂上「改写重发 / 分叉」入口');
+});
+
 test('getSessionHistory: type:mode 记录（claude --resume 写入）被过滤、不当消息', async () => {
   // 回归护栏：web 端 resume 会话时 claude --resume 会向 transcript 追加一条 {type:'mode'} 权限模式记录
   // 并刷新 mtime。该记录不得进入历史消息流——否则会改变消息长度、令只读追平 catchUpStep 把「己方 resume
