@@ -431,7 +431,14 @@ const MOCK_SERVICE_STARTED_AT = Date.now();
 // 本 mock 刻意零 import app/src/（改 app/src/ 不该让 E2E 变红）。只放够断言的最小集：
 // 一个只读敏感项、一个普通值、一个未设置的空值、一个可写敏感项、一个开关。
 const mockLabel = (zh, en) => ({ zh, en });
+// 验收 O111：被 shell 环境变量压着的键（真 server 的 buildEnvView 给 overriddenByEnv:true）。由 /__env-overridden 拨，/__reset 清。
+let mockEnvOverridden = new Set();
 function buildMockEnvView() {
+  const view = buildMockEnvViewBase();
+  for (const g of view.groups) for (const item of g.items) if (mockEnvOverridden.has(item.key)) item.overriddenByEnv = true;
+  return view;
+}
+function buildMockEnvViewBase() {
   return {
     groups: [
       {
@@ -647,6 +654,7 @@ function resetMockState() {
   mockAccessProtected = false;
   mockServerLogMissing = false;
   mockAutoContinue = [];
+  mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
     { path: '/Users/you/code/other', sessionLimit: 3 },
@@ -1033,6 +1041,12 @@ function setMockFoldersReadonly(code) {
 // 选择面板开着时切成只读（验收 O41）：test:folders-readonly 要从输入框发，面板盖着输入框
 app.post('/__folders-readonly', (req, res) => {
   setMockFoldersReadonly(typeof req.query?.code === 'string' ? req.query.code : 'source_readonly');
+  res.json({ ok: true });
+});
+
+app.post('/__env-overridden', (req, res) => {
+  const raw = typeof req.query?.keys === 'string' ? req.query.keys : '';
+  mockEnvOverridden = new Set(raw ? raw.split(',') : []);
   res.json({ ok: true });
 });
 

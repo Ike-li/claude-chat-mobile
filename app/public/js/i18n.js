@@ -531,6 +531,7 @@ export const EN_DICT = Object.freeze({
   '新建会话': 'New session',
   '新会话（未保存）': 'New session (unsaved)',
   '无标题会话': 'Untitled session',
+  '{keys} 被环境变量压着：保存了也不生效，重启后仍是环境变量的值': '{keys} is overridden by an environment variable: saving here won\'t take effect, and after a restart the environment value still wins',
   '还没配置 statusLine：先在 ~/.claude/settings.json 里给 Claude Code 配好 statusLine，再回来开启': 'statusLine isn\'t configured yet: set up Claude Code\'s statusLine in ~/.claude/settings.json first, then come back and turn this on',
   '当前目录不是 git 仓库': 'This folder is not a git repository',
   '时间未知': 'time unknown',
