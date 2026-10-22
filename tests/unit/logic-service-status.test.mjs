@@ -109,6 +109,18 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       ['🔔 推送最近失败于 1 分钟前（ntfy，累计 1 次）：连不上 ntfy 服务（ECONNREFUSED）']
     );
   });
+  // 验收 O109：ntfy 对端收下请求却不回响应、直接关连接（FIN）时，undici 报 UND_ERR_SOCKET——同样是「连不上」，
+  // 此前不在白名单里，告警只剩一个内部码。连接超时 UND_ERR_CONNECT_TIMEOUT 同理。
+  test('undici 的连接层错误码（ntfy 走 fetch）同样译成「连不上」', () => {
+    const now = 100 * 60_000;
+    for (const code of ['UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']) {
+      assert.deepEqual(
+        formatServiceNotices({ service: { deliveryFailure: { channel: 'ntfy', at: now - 60_000, count: 1, reason: code } }, now }),
+        [`🔔 推送最近失败于 1 分钟前（ntfy，累计 1 次）：连不上 ntfy 服务（${code}）`],
+        code
+      );
+    }
+  });
   test('HTTP 状态码不动：服务端答了话就不是"连不上"，混为一谈会误导排查方向', () => {
     const now = 100 * 60_000;
     for (const reason of ['HTTP 502', 'HTTP 401', 'unknown', 'socket hang up']) {

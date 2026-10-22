@@ -16,6 +16,8 @@ test('result 的 ntfy 标签跟标题一致：出错不带 ✅，已中止也不
   assert.deepEqual(tagsOf({ interrupted: true, isError: true }), ['stop_button']);
   // 审批过期那一轮（O30）也是 is_error 收尾：标题是「⏰ 审批已过期」，标签同样不能是 ✅
   assert.deepEqual(tagsOf({ isError: true, approvalExpired: true }), ['warning']);
+  // O120：过期了但那一轮模型正常收尾（没有 is_error）时，标签此前跟着回合走成 ✅，锁屏上是「✅ ⏰ 审批已过期」
+  assert.deepEqual(tagsOf({ approvalExpired: true }), ['warning']);
 });
 
 // 验收 O51：ntfy 超时告警写「：23」（AbortSignal.timeout 抛的 DOMException，code 是数字 23）；断连、DNS 失败

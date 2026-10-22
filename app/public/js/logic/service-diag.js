@@ -394,7 +394,8 @@ export function describeRateLimitSource(source) {
 // 「连不上」与「对方答了话但拒绝了」是两类根因，下一步动作毫无交集（前者查网络/代理，
 // 后者查 VAPID/token 配置），故只翻译前者。整串精确匹配而非子串：describeDeliveryError 的输出
 // 要么是裸 errno、要么是 'HTTP <code>'、要么是清洗过的短语，不会是长句，宽松匹配只会误伤。
-const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|network error)$/i;
+// UND_ERR_*：ntfy 走 Node 自带的 fetch（undici），对端收下请求不回响应就关连接时报 UND_ERR_SOCKET（验收 O109）。
+const DELIVERY_NET_UNREACHABLE = /^(ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT|network error)$/i;
 
 // 抽屉「服务」小节只要文字；判色见 formatServiceNoticeRows。
 export function formatServiceNotices({ service, now } = {}) {
