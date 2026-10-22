@@ -49,7 +49,7 @@ import {
 import { applyEnvChanges } from '../ops/env-file.js';
 import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
 import { dataFile } from '../shared/data-dir.js';
-import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
+import { parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
 import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { encodeQr } from '../shared/qrcode.js';
@@ -1587,7 +1587,7 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
   cliDefaultsInflight.set(cwd, p);
   return p;
 }
-// 「配置改完能不能就地重启生效」——判据是「退出后有人拉起」（托管或 npm run dev 的 watch），
+// 「配置改完能不能就地重启生效」——判据是「退出后有人拉起」（进程管理器托管；npm run dev 的 watch 不算，见 willBeRespawned），
 // **不再看 DEV_MODE**：2026-08-19 真机实测 DEV_MODE=1 + 前台 npm start 时，按钮出现、点击后
 // 进程退出、无人拉起、前端提示成功——假成功真死亡。DEV_MODE 保留其余能力面，但「重启」承诺
 // 的兑现前提是拉起者存在，判据必须对准它。与 dev:restart handler 用同一个判据，两处不能分叉。
@@ -4361,10 +4361,10 @@ registerSocketConnection(io, socket => {
   });
 
   // web 端一键重启 server（改完配置/代码后免上电脑动手）。放行判据见 willBeRespawned；
-  // 优雅退出复用 shutdown（flush sessions + dispose 实例 + close），靠拉起者（LaunchAgent
-  // KeepAlive 或 npm run dev 的 watch）自动重启，前端 socket.io 自动重连 + epoch init 恢复。
+  // 优雅退出复用 shutdown（flush sessions + dispose 实例 + close），靠进程管理器（LaunchAgent
+  // KeepAlive / systemd）自动重启，前端 socket.io 自动重连 + epoch init 恢复。
   on(socket, 'dev:restart', (payload, ack) => {
-    // 判据＝「退出后有人拉起」（willBeRespawned：托管或 npm run dev 的 watch）。此前是
+    // 判据＝「退出后有人拉起」（willBeRespawned：只认进程管理器托管，npm run dev 的 watch 不会拉起）。此前是
     // DEV_MODE || isSupervised()，注释里就写着「太松」那侧没堵——DEV_MODE=1 + 前台 npm start
     // 会被停掉后永远起不来。2026-08-19 它在真机上炸了（假成功真死亡），故把 DEV_MODE 从
     // 本判据里拿掉：重启承诺的兑现前提是拉起者存在，与操作者是不是开发者无关。
@@ -4386,16 +4386,12 @@ registerSocketConnection(io, socket => {
     // recordAudit 内部是防抖写，shutdown 里的 flush 会把它落盘。
     audit.recordAudit({
       actor: actorFromSocket(socket), action: 'server_restart', target: 'server',
-      outcome: 'allowed', meta: { via: isSupervised() ? 'supervised' : 'dev-watch' },
+      outcome: 'allowed', meta: { via: 'supervised' },
     });
     // 声明「接下来那次换 pid 是用户按的」。采样器只看得见 pid 变了、看不出为什么变，而配置
     // 面板每次保存成功都给一个「立即重启」按钮 —— 不记这一条的话，手机上改三次配置就会被
     // 判成「1 小时内重启 3 次·疑似崩溃重启循环」。必须在退出**之前**落盘。
-    //
-    // 只在 launchd 托管时记。npm run dev 的 watch 拉起不经 launchd、采样器看不到那次 pid
-    // 变化 —— 记一条 intent 只会留下一份孤儿声明，它会在 120s 窗口内认领掉恰好撞上来的
-    // 下一条 restarted（比如你手动重开 server 那次），把一次真实重启从频率统计里抹掉。
-    if (isSupervised()) serviceSampler.recordRestartIntent();
+    serviceSampler.recordRestartIntent();
     if (typeof ack === 'function') ack({ ok: true });
     // 稍延后再退出，确保 ack 先发回客户端（客户端据此显示「重启中…」并等待重连）
     setTimeout(() => shutdown('DEV_RESTART'), 200);
