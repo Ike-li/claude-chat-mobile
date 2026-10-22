@@ -106,6 +106,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const add = page.locator('[data-testid="drawer-add-folder"]');
     await expect(add).toBeDisabled();
     await expect(page.locator('[data-testid="drawer-folders-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    // 抽屉的打开判据只看 class，滑入动画还在走：force 点击不等动画，会点在视口外（并行 8 片下 10 次红过多次）
+    await expect(add).toBeInViewport();
     await add.click({ force: true });
     await expect(picker(page), '置灰的入口点了照样开面板，等于没置灰').not.toHaveClass(/sheet-open/);
     await expectNoBrowserErrors(page);
