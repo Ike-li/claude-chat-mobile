@@ -331,6 +331,9 @@ let unpairedToolSessionArmed = false;
 let unpairedToolTurnEndsDuringLoad = false;
 // 下一条离线重放（fromOutbox）回永久拒绝的负 ack（验收 O31）。由 test:arm-outbox-permanent 置起，一次性。
 let outboxPermanentArmed = false;
+// P0-02d14（验收 O31）：'armed' → 下一次连入时按 server 重启处理（实例全部消失、viewing 归 null、startedAt 变）；
+// 之后（'restarted'）离线重放指向不在册的实例，照真 server 的 BE-001 分支回 sysTo + stale 负 ack。
+let outboxRestartStaleArmed = null;
 // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」。真 server 在 resume 时按 CLI 选叶规则算出结论、
 // 挂在实例上（app/src/sessions/resume-anchor.js），之后在那个会话里发消息被发送闸拒收，前端出分叉面板。
 // 结论的形态取真机 c78e8b47：终端后重贴，手机那一问一答不在会接上的链上，终端那支没有手机缺的对话。
@@ -673,6 +676,7 @@ function resetMockState() {
   unpairedToolSessionArmed = false;
   unpairedToolTurnEndsDuringLoad = false;
   outboxPermanentArmed = false;
+  outboxRestartStaleArmed = null;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
   outboxReplaySwapReloadInstanceId = null;
@@ -1331,6 +1335,14 @@ io.on('connection', socket => {
   // Auto-approve socket for standard testing (simulates local trust)
   socket.deviceApproved = true;
 
+  if (outboxRestartStaleArmed === 'armed') {
+    outboxRestartStaleArmed = 'restarted';
+    mockDirsOverride = mockDirs(); // 工作区清单在配置里，活过重启；缺省口径从实例现算，清空实例前先定住
+    mockInstances.length = 0; // 同 test:server-restart：重启 = 所有 live 实例消失
+    viewingInstanceId = null;
+    mockServiceStartedAtOverride = (mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT) + 60_000;
+  }
+
   // 真 server 在可信端连入时重放已受信任设备列表（app.js 的 unlockSocket 之后那两条 emit）。
   // 不重放的话「设置 › 🔐 接入与设备 › 已受信任的设备」在 E2E 里恒为空段，那一整块不可测。
   socket.emit('agent:event', {
@@ -1345,7 +1357,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'init', payload: {
         model: activeModel,
-        cwd: mockInstances[0].cwd,
+        cwd: mockInstances[0]?.cwd ?? '/Users/you/code/claude-chat-mobile', // 重启后（P0-02d14）一个实例都没有
         claudeVersion: '0.1.0-mock',
         // 一正常一失败：让「宿主机」页的 MCP 段两条渲染分支都走得到（失败态要带原始 status）
         mcpServers: [
@@ -1401,7 +1413,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd),
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0]?.cwd || '/Users/you/code/claude-chat-mobile'),
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -3568,6 +3580,7 @@ io.on('connection', socket => {
       armSyncHoldThenDrop: () => { syncHoldThenDropArmed = true; },
       armSendTransientFail: () => { sendTransientFailArmed = true; },
       armOutboxPermanent: () => { outboxPermanentArmed = true; },
+      armOutboxRestartStale: () => { outboxRestartStaleArmed = 'armed'; },
       armResumeDivergence: () => { resumeDivergenceArmed = { sessionId: 'mock-session-archived', divergence: MOCK_RESUME_DIVERGENCE }; },
       armResumeDivergenceWorktreeSwap: () => {
         resumeDivergenceArmed = { sessionId: 'mock-session-worktree', divergence: MOCK_RESUME_DIVERGENCE_TTURN, swap: true };
@@ -6003,6 +6016,16 @@ io.on('connection', socket => {
         return;
       }
       refuse();
+      return;
+    }
+    if (outboxRestartStaleArmed === 'restarted' && payload?.fromOutbox === true
+        && !mockInstances.some(i => i.instanceId === payload.instanceId)) {
+      // 逐字对齐 app/src/server/app.js user:message 的 target.stale 分支：先 sysTo（recoverable → system），再负 ack
+      socket.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, instanceId: null, ts: Date.now(),
+        type: 'system', payload: { message: '目标会话已关闭，请刷新后重发' },
+      });
+      if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
       return;
     }
     if (outboxPermanentArmed && payload?.fromOutbox === true) {

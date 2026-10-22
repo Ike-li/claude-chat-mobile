@@ -220,6 +220,42 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O31（R6 AC-13-07）：断线期间 server 重启，离线重放回 stale「目标会话已关闭，请刷新后重发」。重连后视图已回到
+  // 「服务已重启」提示页（viewing=null），条目既不是眼前这个会话的、气泡又随清屏进了那个会话的 DOM 缓存——提示写进缓存里
+  // 那颗脱离的气泡，而实例已经没了，重开会话不会再用那份缓存。修之前原文哪儿都找不回：输入框空、死信暂存是空的。
+  test('P0-02d14 断线期间 server 重启、离线重放被判目标会话已关闭：回到那个会话时原文放回输入框', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-restart-stale');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('重启前离线打的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#messages'), '前提：重放要真的撞上 stale').toContainText('目标会话已关闭', { timeout: 10_000 });
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('ccm-outbox-v1')), { message: '前提：stale 是死信，outbox 已清' }).toBe('[]');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#input'), '目标会话已关闭、outbox 已清：不交还的话这条就没了').toHaveValue('重启前离线打的那条');
+    await expect(page.locator('#messages')).toContainText('原文已放回输入框');
+    await expect(page.locator('#messages [data-testid="user-message"]', { hasText: '重启前离线打的那条' }), '原文已回到输入框，不该再留一颗没发出去的气泡').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
   // 离线条目还拿着入队时的旧号。新实例的 sync:since 报磁盘 ahead，前端清屏重载；第 2 条拿着旧号撞上第 1 条开跑的那轮，
   // 落「未发送 + 重发」。mock 的时序是：清屏 → 第 2 条的负 ack → 历史落地。

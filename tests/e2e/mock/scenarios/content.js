@@ -211,6 +211,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armOutboxPermanent(); },
     },
     {
+      // P0-02d14：武装「下一次连入时 server 已重启」——所有实例消失，离线重放指向的实例按真 server 落 stale（验收 O31）。
+      command: 'test:arm-outbox-restart-stale',
+      run: async () => { getContext().armOutboxRestartStale(); },
+    },
+    {
       // P0-RESUME-DIV：武装「Archived Planning Session 续接会丢掉最近那段对话」，之后在那个会话里发消息被发送闸拒收。
       command: 'test:arm-resume-divergence',
       run: async () => { getContext().armResumeDivergence(); },
