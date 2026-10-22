@@ -92,8 +92,10 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
    每格被压成一字一行（验收 O45） */
 .msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; display: block; width: max-content; max-width: 100%; overflow-x: auto; }
 .msg-body td, .msg-body th { border: 1px solid var(--line); padding: .3rem .55rem; }
-/* .msg-body 的 word-break: break-word 会把格子的最小宽度压到一个字：表格里按词断行，宽了就让表格自己横向滚动 */
-.msg-body td, .msg-body th { word-break: normal; overflow-wrap: normal; }
+/* .msg-body 的 word-break: break-word 会把格子的最小宽度压到一个字：表格里按词断行，宽了就让表格自己横向滚动。
+   keep-all：中文每个字之间都是合法断行点，normal 下中文格照样被压成一字一行（O45 残留）；keep-all 让中文
+   只在标点、空格处断，与英文按词断同一语义 */
+.msg-body td, .msg-body th { word-break: keep-all; overflow-wrap: normal; }
 .msg-body th { background: var(--surface-sunk); font-weight: 600; }
 .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 

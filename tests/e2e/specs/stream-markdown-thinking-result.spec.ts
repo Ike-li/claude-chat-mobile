@@ -41,13 +41,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:wide-table');
     await waitForIdle(page);
-    const table = page.locator('.msg-body table').last();
+    const table = page.locator('.msg-body table').nth(-2);
     await expect(table).toBeVisible();
     const m = await page.locator('#messages').evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
     expect(m.scroll, '整个消息列表被表格撑出了横向滚动').toBeLessThanOrEqual(m.client);
     const t = await table.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, cell: el.querySelector('td')?.getBoundingClientRect().width ?? 0 }));
     expect(t.scroll, '表格比屏幕宽，应在自己内部可横向滚动').toBeGreaterThan(t.client);
     expect(t.cell, '格子被压成一字一行').toBeGreaterThan(50);
+    // 全中文的那张（O45 残留）：每个字之间都是合法断行点，R6 实测仍被压到 32px、一字一行
+    const zh = page.locator('.msg-body table').last();
+    const zt = await zh.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, cell: el.querySelector('td')?.getBoundingClientRect().width ?? 0 }));
+    expect(zt.cell, '中文格子被压成一字一行').toBeGreaterThan(50);
+    expect(zt.scroll, '中文宽表格同样应在自己内部横向滚动').toBeGreaterThan(zt.client);
     await expectNoBrowserErrors(page);
   });
 

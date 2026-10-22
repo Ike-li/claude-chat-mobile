@@ -104,10 +104,14 @@ export function createContentScenarios(getContext) {
         const { socket, activeEpoch, viewingInstanceId, activeModel, delay } = getContext();
         const cols = Array.from({ length: 12 }, (_, i) => `column-${i + 1}`);
         const table = [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, `| ${cols.map((_, i) => `value-${i + 1}`).join(' | ')} |`].join('\n');
+        // 再来一张全中文的（O45 残留）：英文格宽落在最长单词上，中文每个字之间都能断行，只修英文那张会漏掉它。
+        // 必须整列都是中文——和英文同列时列宽被英文撑开，看不出来
+        const zhCols = Array.from({ length: 12 }, (_, i) => `第${i + 1}列`);
+        const zhTable = [`| ${zhCols.join(' | ')} |`, `| ${zhCols.map(() => '---').join(' | ')} |`, `| ${zhCols.map((_, i) => `第${i + 1}项的说明`).join(' | ')} |`].join('\n');
         await delay(50);
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_wide_table', text: `wide table fixture\n\n${table}\n` },
+          type: 'text_delta', payload: { messageId: 'msg_wide_table', text: `wide table fixture\n\n${table}\n\n${zhTable}\n` },
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
