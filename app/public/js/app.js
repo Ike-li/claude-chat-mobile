@@ -5398,8 +5398,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     }
     // 新会话页停在的文件夹被断开（本机或别的设备）→ 服务端把它归位到别处（O119）：记下从哪来，新会话页重画时说一句。
     // 只在原来就在新会话页上、旧目录确实已不在清单里时算——用户自己换文件夹不提示。必须在 currentCwd 覆写之前取。
+    // 「无文件夹」不算：它只在用着时才在清单里，换走就不在了，那不是被断开（#330 review P2）。
     const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd
-      && !availableDirs.includes(currentCwd) && Boolean(messagesEl.querySelector('[data-testid="compose-surface"]'))
+      && !availableDirs.includes(currentCwd) && !projectsState.isNoFolder(currentCwd)
+      && Boolean(messagesEl.querySelector('[data-testid="compose-surface"]'))
       ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;

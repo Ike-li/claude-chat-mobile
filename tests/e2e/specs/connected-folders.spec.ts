@@ -113,6 +113,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #330 review P2：「无文件夹」只在用着时出现在广播的工作区里（没有 scratch 会话时），别的设备把这一页换到
+  // 某个文件夹后它就不在清单里了——那不是被断开，不提示。
+  test('P0-PROJ-6b 新会话页停在「无文件夹」时别的设备换了文件夹 → 不说「已断开」', async ({ page }) => {
+    const compose = page.locator('[data-testid="compose-surface"]');
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(SCRATCH)}`);
+    await expect(compose.getByTestId('compose-project-pill'), '前提：这一页停在「无文件夹」').toContainText('无文件夹');
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(SUB)}`);
+    await expect(compose.getByTestId('compose-project-pill')).toContainText('web');
+    await expect(compose.getByTestId('compose-relocated'), '「无文件夹」被说成「已断开」').toHaveCount(0);
+    await expectNoBrowserErrors(page);
+  });
+
   // 清单来自环境变量 / 外置文件、或没有配置文件时，手机上断不开（folders:remove 回 source_readonly / no_config_file）。
   // 不给「⋯」：点下去只会在确认之后才报「改不了」（同首页零文件夹引导，2026-10-15 Codex review #204）。
   // 能改时给入口由 P0-PROJ-3 钉着。
