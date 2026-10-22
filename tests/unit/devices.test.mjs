@@ -132,7 +132,11 @@ test.describe('devices.js 单元测试', () => {
     assert.equal(isDeviceTrusted('device-1'), false);
   });
 
-  test('添加多个待审批设备，保持最新排在前面', () => {
+  // 同一毫秒到达也要分得出先后：此前按 ts 降序、相等时保留插入序，先到的反而排前面。CI 机器上与上一条用例
+  // 落在同一毫秒时偶发红（2026-10-22 PR #321 的 unit-test (24)）。把时间钉成同一毫秒，每次都走到这个分支。
+  test('添加多个待审批设备，保持最新排在前面（同一毫秒到达也一样）', (t) => {
+    const sameMs = getPendingDevices()[0].ts;
+    t.mock.method(Date, 'now', () => sameMs);
     addPendingDevice('device-2', { ip: '192.168.1.200', userAgent: 'iPad' });
     
     const pending = getPendingDevices();
