@@ -41,6 +41,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(subtitle, '没有时间').not.toHaveText(/^已打开/);
   });
 
+  // 验收 O104：关掉一条只在活实例里的会话行（搬走了 transcript 的、平级 worktree 的、被挤出页的）后，服务端
+  // 广播已不含它，抽屉开着时那一行却还留着，写着「已打开 ✕」，要关掉抽屉再开才消失（R6 · E1）。
+  // 2026-10-22 在 dev@8c616a67 上桌面 / 手机两种宽度都复现不了；这条守的是那个症状：手机上关闭会顺手收起
+  // 抽屉，桌面宽度下侧栏常驻、走 setInstances 的局部重建——把那次 rebuildDirSections 去掉，三条全红。
+  for (const [scenario, inst, sid] of [['test:live-not-in-list', 'inst_moved', 'mock-session-moved-away'], ['test:live-unowned', 'inst_sibling', 'mock-session-sibling'], ['test:live-paged-out', 'inst_paged', 'mock-session-older-migration']]) {
+    test(`P0-LIVE-4 侧栏常驻时关掉只在活实例里的行（${scenario}），行当场消失`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await gotoMock(page);
+      await sendChatMessage(page, scenario);
+      await waitForIdle(page);
+      if (inst !== 'inst_sibling') await expandWorkspace(page, MAIN_WORKSPACE);
+      const row = page.locator(`[data-testid="session-row"][data-instance-id="${inst}"]`);
+      await expect(row).toHaveCount(1);
+      await row.locator('[data-testid="session-close"]').click();
+      await page.locator('#confirmOk').click();
+      // 按会话 id 找，不按实例 id：残留的那一行实例 id 可能已经清空，按实例 id 找会把它漏掉、恒绿
+      const after = page.locator(`[data-testid="session-row"][data-session-id="${sid}"]`);
+      await expect(after, '关掉的会话还挂在侧栏里，写着「已打开 ✕」').toHaveCount(0);
+    });
+  }
+
   test('P0-LIVE-2 cwd 不在任何工作区之下的在跑会话单独成一节，点开即切过去', async ({ page }) => {
     await sendChatMessage(page, 'test:live-unowned');
     await waitForIdle(page);
