@@ -1022,6 +1022,7 @@ export const EN_DICT = Object.freeze({
   '运行相关测试并解读失败': 'Run the relevant tests and explain the failures',
   '🧪 运行测试并解读': '🧪 Run tests and explain',
   '⏹ 会话已中断': '⏹ Session interrupted',
+  '后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。': 'The background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this workspace.',
   '停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。': 'The stop didn\'t finish cleanly and the background session process exited unexpectedly, so it can\'t continue. Go home, or start a new session in this workspace.',
   '🔄 服务已重启': '🔄 Service restarted',
   '服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。': 'The service was restarted and the previous session process exited with it. The session is still saved on disk — continue this session, go home, or start a new one.',

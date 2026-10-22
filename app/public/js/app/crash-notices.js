@@ -23,5 +23,9 @@ export function createCrashNotices({ addBar = () => null, hasNotice = () => fals
     clear(sessionId) {
       bySession.delete(sessionId);
     },
+    // 「会话已中断」面当场写原因用（验收 O121）：error 先于摘实例的广播到达，出面那一刻这里已经有了
+    peek(sessionId) {
+      return (sessionId && bySession.get(sessionId)) || null;
+    },
   };
 }
