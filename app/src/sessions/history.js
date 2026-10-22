@@ -1579,7 +1579,9 @@ async function cachedHeadMeta(file, size, mtimeMs) {
   const hit = _headMetaCache.get(file);
   if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.meta;
   const meta = await readHeadMeta(file, size);
-  if ('title' in meta) setCapped(_headMetaCache, file, { size, mtimeMs, meta }, HEAD_META_CACHE_CAP); // 读失败（{}）不缓存
+  // 读失败（{}）不缓存。满了就只更新已有的、不再收新的：搜索按「新→旧」顺序扫，超过上限的大目录里先进先出会让
+  // 每次扫描都把下一段要用的条目挤掉，缓存永远打不中（#333 review）。代价是满了之后新会话每次重读。
+  if ('title' in meta && (hit || _headMetaCache.size < HEAD_META_CACHE_CAP)) _headMetaCache.set(file, { size, mtimeMs, meta });
   return meta;
 }
 
