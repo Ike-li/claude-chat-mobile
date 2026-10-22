@@ -110,7 +110,31 @@ jobs:
   #   由下面那个汇总 job 提供。matrix job 的名字必然带参数（`e2e (1)`…），直接把 e2e 改成 matrix
   #   会让 `e2e` 这个 context 再也不出现，PR 永久停在 pending —— 与本文件上面记的
   #   「被 skip 的 job 若列进 required checks 会永久 pending」是同一个坑的另一种形态。
+  # 8 个分片各自排队起跑，前后能差十分钟；这期间 dev 上一次合并的汇总 job 会存一份更新的时长缓存。
+  # 分片若各自按前缀取「最近一份」，同一个 run 里就会有的拿旧表、有的拿新表，算出两套 LPT 分组，
+  # 于是有 spec 谁都没跑（TEST-02 报漏跑，2026-10-22 连续两个 PR 都是这样红的）。
+  # 所以只在这里查一次键，分片按这个确切的键恢复，同一 run 必然共用同一份表。
+  e2e-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      durations-key: ${{ steps.lookup.outputs.cache-matched-key }}
+    steps:
+      - name: Look up E2E duration cache
+        id: lookup
+        uses: actions/cache/restore@v6
+        with:
+          path: tests/infra/.e2e-durations.json
+          key: e2e-durations-${{ github.run_id }}
+          lookup-only: true
+          # ★ 值必须留在下一行（actions/cache 官方支持的多行列表形式）。把前缀写回与键名同一行
+          # 会被 gitleaks 的 generic-api-key 规则命中：键名含 keys、值的熵 3.52 刚过阈值，
+          # 于是一个 cache 前缀被当成泄漏的密钥，pre-commit 当场拦下 commit。
+          restore-keys: |
+            e2e-durations-
+
   e2e-shard:
+    needs: e2e-plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -163,17 +187,14 @@ jobs:
       # 时长缓存决定 LPT 分配。它不进版本库（本机测量值，进了就是会漂移的第二真相），
       # 所以 CI 上只能靠 cache 跨 run 复用 —— 在建这道 cache 之前，CI 日志里【每一次】
       # 都打的是「首次运行（无时长数据，等权重分配）」，LPT 从上线起在 CI 上一次都没生效过。
-      # restore-keys 前缀匹配取最近一份：PR 继承 base 分支（dev）的缓存，dev 每次 push 刷新。
+      # 键由 e2e-plan 前缀匹配取最近一份（PR 继承 base 分支 dev 的缓存，dev 每次 push 刷新），
+      # 这里只按那个确切的键恢复。没有任何缓存时键为空、整步跳过，所有分片一致地等权重分配。
       - name: Restore E2E duration cache
+        if: needs.e2e-plan.outputs.durations-key != ''
         uses: actions/cache/restore@v6
         with:
           path: tests/infra/.e2e-durations.json
-          key: e2e-durations-${{ github.run_id }}
-          # ★ 值必须留在下一行（actions/cache 官方支持的多行列表形式）。把前缀写回与键名同一行
-          # 会被 gitleaks 的 generic-api-key 规则命中：键名含 keys、值的熵 3.52 刚过阈值，
-          # 于是一个 cache 前缀被当成泄漏的密钥，pre-commit 当场拦下 commit。
-          restore-keys: |
-            e2e-durations-
+          key: ${{ needs.e2e-plan.outputs.durations-key }}
 
       # 浏览器二进制单独缓存（~170MB）。key 跟 package-lock 走：Playwright 一升版就自然换 key，
       # 不会拿旧浏览器配新 driver。`install-deps` 装的是系统 apt 依赖、不属于这个缓存，仍要跑，
