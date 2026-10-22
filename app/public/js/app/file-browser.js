@@ -61,6 +61,7 @@ export function createFileBrowser(context, {
   let cmInstance = null;   // 当前 content 视图里活的 CM 实例（只读预览态也是它，编辑态只是切它的 readOnly）
   let editMode = 'view';   // 'view' | 'editing'；离开 content 模式（back/loadContent 新文件）即复位
   let baseHash = null;     // files:write 的冲突基线——来自最近一次 browse:read 或 files:write 成功后的 contentHash
+  let editOnDemand = false; // 行多的纯文本：查看留在 <pre>，点「编辑」才挂 CM（验收 O103，见 renderContent）
 
   function relativePath() { return segments.join('/') || '.'; }
 
@@ -209,16 +210,20 @@ export function createFileBrowser(context, {
     dom.fileBrowseSaveError.classList.remove('hidden');
   }
 
-  // 三态互斥：可编辑且未在编辑 → 编辑；正在编辑 → 保存+取消。不可编辑（无 baseHash：截断/二进制/纯文本
-  // 回退路径）→ 三个都不显，file-browse.js 只读铁律的既有语义在这些场景下原样保留。
+  // 三态互斥：可编辑且未在编辑 → 编辑；正在编辑 → 保存+取消。不可编辑（无 baseHash：截断/二进制，或分页续读过）
+  // → 三个都不显，file-browse.js 只读铁律的既有语义在这些场景下原样保留。
   function syncEditButtons() {
-    const editable = Boolean(baseHash) && Boolean(cmInstance);
+    const editable = Boolean(baseHash) && (Boolean(cmInstance) || editOnDemand);
     dom.fileBrowseEdit?.classList.toggle('hidden', !(editable && editMode === 'view'));
     dom.fileBrowseSave?.classList.toggle('hidden', editMode !== 'editing');
     dom.fileBrowseCancelEdit?.classList.toggle('hidden', editMode !== 'editing');
   }
 
   function enterEditMode() {
+    if (!cmInstance && editOnDemand && baseHash) {
+      dom.fileBrowseBody.innerHTML = '';
+      mountCodeMirror('text/plain');
+    }
     if (!cmInstance || editMode !== 'view') return;
     haptic('tap');
     hideSaveError();
@@ -261,35 +266,42 @@ export function createFileBrowser(context, {
     });
   }
 
+  function mountCodeMirror(mime) {
+    const holder = documentRef.createElement('div');
+    holder.className = 'cm-ccm-viewer';
+    dom.fileBrowseBody.appendChild(holder);
+    cmInstance = CodeMirror(holder, {
+      value: contentText,
+      mode: mime,
+      readOnly: 'nocursor',
+      lineNumbers: true,
+      lineWrapping: true,
+      viewportMargin: Infinity,
+    });
+  }
+
   function renderContent(truncated, totalSize, contentHash) {
     if (!dom.fileBrowseBody) return;
     dom.fileBrowseBody.innerHTML = '';
     cmInstance = null;
     editMode = 'view';
+    editOnDemand = false;
     baseHash = contentHash || null;
     // CM 只接管「一次性读全」的小文件：分页续读过的文件（>256KB 或用户点过加载更多）全程留在 pre，
     // 避免重建编辑器丢滚动位置；CM 脚本未加载时静默回退，不是错误态。没有对应高亮 mode 的扩展名（.txt、
     // Makefile、.env 等）照样挂 CM、用纯文本 mode——行号与编辑不该取决于有没有语法高亮。但超过
     // PLAIN_CM_MAX_LINES 行的仍回 pre：viewportMargin: Infinity 会逐行建 DOM，换行密集的日志能拖死手机。
-    // 只读预览 vs 可编辑不区分 mode 判定——两者都要挂 CM 实例，baseHash 有无才是「能不能点编辑」的唯一判据。
+    // 但能不能编辑只看 baseHash：这类文件「编辑」照给，点了才挂 CM——那时的逐行建 DOM 是用户要编辑才付的，
+    // 而只是看一眼的不付（验收 O103：几 KB 的 .txt 因行多不能编辑，256KB 的 .js 却能）。
     const highlighted = cmModeForFileName(fileName);
     const plainOk = !highlighted && contentText.split('\n').length <= PLAIN_CM_MAX_LINES;
     const mime = !usedPagination && !truncated ? (highlighted || (plainOk ? 'text/plain' : null)) : null;
     if (mime && typeof CodeMirror !== 'undefined') {
-      const holder = documentRef.createElement('div');
-      holder.className = 'cm-ccm-viewer';
-      dom.fileBrowseBody.appendChild(holder);
-      cmInstance = CodeMirror(holder, {
-        value: contentText,
-        mode: mime,
-        readOnly: 'nocursor',
-        lineNumbers: true,
-        lineWrapping: true,
-        viewportMargin: Infinity,
-      });
+      mountCodeMirror(mime);
       syncEditButtons();
       return;
     }
+    editOnDemand = !highlighted && !plainOk && !usedPagination && !truncated && typeof CodeMirror !== 'undefined';
     syncEditButtons();
     const pre = documentRef.createElement('pre');
     pre.className = 'p-4 text-[11px] leading-relaxed font-mono text-ink whitespace-pre-wrap break-words';
@@ -312,6 +324,7 @@ export function createFileBrowser(context, {
   function resetEditState() {
     cmInstance = null;
     editMode = 'view';
+    editOnDemand = false;
     baseHash = null;
     hideSaveError();
     syncEditButtons();
