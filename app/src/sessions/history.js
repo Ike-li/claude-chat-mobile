@@ -2114,26 +2114,30 @@ export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPendin
 
 // 从 fromByte 读到文件尾，看这段新写的条目里有没有不是己方（sdk-ts）写的。只认自报了 entrypoint 的条目
 // （user / assistant 等主链记录都带）；没带的（快照、last-prompt 之类）不作证据，空行与切开的半行跳过。
-// 读不出、或这段大过尾窗上限 → 保守当有：多一次冷重启可以接受，漏标致分叉不可逆。
+// 返回 { foreign, size }：size 是这次打开时的 fstat，也就是扫到的位置——调用方必须拿它当新基线，不能另外
+// stat 一次：终端恰好在两次读之间追加，扫描没看见、另一次 stat 却已越过它，那段就被吸收进基线（Codex review）。
+// 读不出 → { foreign: true, size: -1 }；这段大过尾窗上限 → foreign 保守为 true：多一次冷重启可以接受，
+// 漏标致分叉不可逆。
 export async function appendedForeignWrite(sessionId, cwd, fromByte, { baseDir = CLAUDE_DIR } = {}) {
-  if (!isSafeSessionId(sessionId)) return true;
+  if (!isSafeSessionId(sessionId)) return { foreign: true, size: -1 };
   let fh;
   try {
     let st;
     ({ fh, st } = await openRegularFile(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`)));
-    const len = st.size - fromByte;
-    if (len <= 0) return false;
-    if (len > TAIL_READ_BYTES) return true;
+    const size = st.size;
+    const len = size - fromByte;
+    if (len <= 0) return { foreign: false, size };
+    if (len > TAIL_READ_BYTES) return { foreign: true, size };
     const buf = Buffer.allocUnsafe(len);
     const { bytesRead } = await fh.read(buf, 0, len, fromByte);
     for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
       let entry;
       try { entry = JSON.parse(line); } catch { continue; }
-      if (typeof entry?.entrypoint === 'string' && !isOwnSdkTail(entry.entrypoint)) return true;
+      if (typeof entry?.entrypoint === 'string' && !isOwnSdkTail(entry.entrypoint)) return { foreign: true, size };
     }
-    return false;
+    return { foreign: false, size };
   } catch {
-    return true;
+    return { foreign: true, size: -1 };
   } finally {
     await fh?.close().catch(() => {});
   }

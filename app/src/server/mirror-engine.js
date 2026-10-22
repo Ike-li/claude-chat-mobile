@@ -341,16 +341,22 @@ export function createMirrorEngine({
       let busySize = -1;
       let busyRegistryEntry = null;
       let busyAppendedForeign = false;
+      let busyScan = null;
       // permission 态下 web 侧不写盘，故并行取一次 size 作为「终端是否在写」的判据（见 externalGrowthWhilePaused）。
       // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
       try {
-        [busyTail, busySize, busyRegistryEntry, busyAppendedForeign] = await Promise.all([
+        [busyTail, busySize, busyRegistryEntry, busyScan] = await Promise.all([
           classifyTranscriptTail(a.sessionId, a.cwd, diskOpts).catch(() => ({ verdict: 'settled', lastChainTs: null })),
           sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1),
           readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null),
           // 审批窗里上一拍之后新写的那段：挂起集合变过时靠它分辨有没有终端写入（O122）
-          st === 'permission' && mirrorLastSize >= 0 ? appendedForeignWrite(a.sessionId, a.cwd, mirrorLastSize, diskOpts) : false,
+          st === 'permission' && mirrorLastSize >= 0 ? appendedForeignWrite(a.sessionId, a.cwd, mirrorLastSize, diskOpts) : null,
         ]);
+        // 扫描与基线用同一份快照：size 取扫描那次打开时的 fstat，而不是并行的另一次 stat（Codex review）
+        if (busyScan) {
+          busyAppendedForeign = busyScan.foreign;
+          if (busyScan.size >= 0) busySize = busyScan.size;
+        }
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
       const busyRegistryWaiting = registryIndicatesTerminalWaiting(busyRegistryEntry);
