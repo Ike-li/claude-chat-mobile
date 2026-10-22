@@ -411,6 +411,33 @@ test('listSessionsPage: 会话数超过 fd 上限时搜索照样扫得到最旧�
   assert.deepEqual(JSON.parse(r.stdout), ['needle-fd'], '超过 fd 上限的那批 open 报 EMFILE，最旧的会话从搜索结果里消失了');
 });
 
+// #333 review P1（第二轮）：每次扫描各自按批打开，并发的几次扫描（同一项目的多个 worktree 成员、同时到达的几次请求）
+// 加起来照样超过 fd 上限。打开 transcript 的并发要整个进程共用一个上限。
+test('listSessionsPage: 并发的几次搜索加起来也不超过 fd 上限', { skip: process.platform === 'win32' }, () => {
+  const nowSec = Date.now() / 1000;
+  const cwds = [];
+  for (let d = 0; d < 6; d++) {
+    const cwd = `/test/page-query-fd-concurrent-${d}`;
+    cwds.push(cwd);
+    const dir = join(BASE, getProjectDir(cwd));
+    writeJSONL(dir, `needle-${d}`, [
+      { type: 'user', timestamp: new Date(Date.now() - 9_999_000).toISOString(), message: { role: 'user', content: 'ConcurrentNeedle' } },
+    ]);
+    utimesSync(join(dir, `needle-${d}.jsonl`), nowSec - 9999, nowSec - 9999);
+    for (let i = 0; i < 60; i++) {
+      writeJSONL(dir, `c${d}-${i}`, [{ type: 'user', timestamp: new Date(Date.now() - i * 1000).toISOString(), message: { role: 'user', content: `noise ${i}` } }]);
+    }
+  }
+  const mod = new URL('../../app/src/sessions/history.js', import.meta.url).href;
+  const script = `const m = await import(${JSON.stringify(mod)});
+    const pages = await Promise.all(${JSON.stringify(cwds)}.map(cwd => m.listSessionsPage(cwd, { baseDir: ${JSON.stringify(BASE)}, limit: 50, query: 'ConcurrentNeedle' })));
+    process.stdout.write(JSON.stringify(pages.map(p => p.sessions.map(s => s.id))));`;
+  const r = spawnSync('bash', ['-c', 'ulimit -n 128 && exec ' + 'node --input-type=module'],
+    { input: script, encoding: 'utf8', timeout: 20_000, cwd: fileURLToPath(new URL('.', import.meta.url)) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), cwds.map((_, d) => [`needle-${d}`]), '几次扫描各自按批打开，加起来超过 fd 上限，有的会话从结果里消失了');
+});
+
 // #333 review P2：meta 按文件缓存、最多 8192 条，首条消息原文全留着的话（头窗 64KB）最坏要常驻几百 MB。
 // 搜索键只取首条消息的前 1000 字。
 test('listSessionsPage: 首条消息超长时，搜索只看前 1000 字', async () => {
