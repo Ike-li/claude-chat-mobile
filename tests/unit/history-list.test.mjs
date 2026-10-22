@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, appendFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { getProjectDir, listSessions, listSessionsPage, listSessionsByIds, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
@@ -381,6 +383,31 @@ test('listSessionsPage: query 扫全量，排在 500 名以外的旧会话也搜
   appendFileSync(join(dir, 'needle-ancient.jsonl'), `${JSON.stringify({ type: 'ai-title', aiTitle: 'RenamedAncient' })}\n`);
   const renamed = await listSessionsPage(cwd, { baseDir: BASE, limit: 50, query: 'RenamedAncient' });
   assert.deepEqual(renamed.sessions.map(s => s.id), ['needle-ancient'], '文件变了还按旧标题匹配：meta 缓存没跟着失效');
+});
+
+// #333 review P1：全量读 meta 不能一次打开所有 transcript。文件数超过进程的 fd 上限时 open 报 EMFILE，
+// readHeadMeta 把它当成「读不出」，那批会话就从搜索结果里静默消失。子进程里把上限压到 128 再搜。
+test('listSessionsPage: 会话数超过 fd 上限时搜索照样扫得到最旧的', { skip: process.platform === 'win32' }, () => {
+  const cwd = '/test/page-query-fd-limit';
+  const dir = join(BASE, getProjectDir(cwd));
+  const nowSec = Date.now() / 1000;
+  writeJSONL(dir, 'needle-fd', [
+    { type: 'user', timestamp: new Date(Date.now() - 9_999_000).toISOString(), message: { role: 'user', content: 'FdLimitNeedle' } },
+  ]);
+  utimesSync(join(dir, 'needle-fd.jsonl'), nowSec - 9999, nowSec - 9999);
+  for (let i = 0; i < 300; i++) {
+    const id = `f${String(i).padStart(3, '0')}`;
+    writeJSONL(dir, id, [{ type: 'user', timestamp: new Date(Date.now() - i * 1000).toISOString(), message: { role: 'user', content: `noise ${i}` } }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  const mod = new URL('../../app/src/sessions/history.js', import.meta.url).href;
+  const script = `const m = await import(${JSON.stringify(mod)});
+    const r = await m.listSessionsPage(${JSON.stringify(cwd)}, { baseDir: ${JSON.stringify(BASE)}, limit: 50, query: 'FdLimitNeedle' });
+    process.stdout.write(JSON.stringify(r.sessions.map(s => s.id)));`;
+  const r = spawnSync('bash', ['-c', 'ulimit -n 128 && exec "$0" --input-type=module -e "$1"', process.execPath, script],
+    { encoding: 'utf8', timeout: 20_000, cwd: fileURLToPath(new URL('.', import.meta.url)) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), ['needle-fd'], '超过 fd 上限的那批 open 报 EMFILE，最旧的会话从搜索结果里消失了');
 });
 
 test('listSessionsPage: query 能命中 firstUser 超过展示 60 字的尾部', async () => {

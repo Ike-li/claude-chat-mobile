@@ -1093,6 +1093,13 @@ export async function projectCwdsOf(projectDir) {
 // 才读头尾两窗，取其中最后一个匹配的。按文件缓存，大小与修改时间都没变才复用：一追加，最近的记录就可能换了 cwd。
 const OWNER_TAIL_BYTES = 16 * 1024;
 const OWNER_SCAN_BATCH = 32; // 同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
+
+// 按批并发：一次全开，超过 fd 上限的 open 报 EMFILE，读盘函数把它当「读不出」吞掉，会话就静默掉出结果（#333 review P1）
+async function mapInBatches(items, fn, size = OWNER_SCAN_BATCH) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
+  return out;
+}
 const OWNER_CACHE_CAP = 8192;
 const _ownerCache = new Map(); // file → { owner, size, mtimeMs }
 
@@ -1409,22 +1416,21 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
     .map(r => r.value);
 
   // 全量读尾窗活动时间再排序（只读 64KB 尾，不对全量 readHeadMeta）——保证 limit 截断窗口本身按真消息时间取最近 N。
-  const activityResults = await Promise.allSettled(
-    stated.map(async s => {
+  const withActivity = (await mapInBatches(stated, async s => {
+    try {
       const activityAt = await readLastMessageActivityMs(s.file, s.size);
       return { ...s, activityAt: activityAt ?? s.mtimeMs };
-    })
-  );
-  const withActivity = activityResults
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.value);
+    } catch {
+      return null;
+    }
+  })).filter(Boolean);
   // 活动时间相同（或都回落 mtime）时按 id 稳定排序，避免两次 list 顺序抖动。
   withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
 
   const total = withActivity.length;
   const metaBudget = query ? total : Math.min(total, limit);
   const ranked = withActivity.slice(0, metaBudget);
-  const metas = await Promise.all(ranked.map(s => cachedHeadMeta(s.file, s.size, s.mtimeMs)));
+  const metas = await mapInBatches(ranked, s => cachedHeadMeta(s.file, s.size, s.mtimeMs));
   const decorated = ranked.map((s, i) => {
     const meta = metas[i] || {};
     const overlay = titleById.get(s.id) || '';
