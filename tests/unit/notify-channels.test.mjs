@@ -127,6 +127,22 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     assert.equal(failures, 1);
   });
 
+  // 验收 O110：ntfy 失败的日志只记 e.message——DNS 失败、拒连、断连在日志里都是同一句「fetch failed」，原因码只进了
+  // 告警面板。日志要带上与告警同一个原因码，排查时从日志就看得出是哪一类。
+  test('ntfy fetch 抛异常 → 日志带上原因码（底层 cause.code），不只一句 fetch failed', async t => {
+    const lines = [];
+    t.mock.method(console, 'error', (...args) => { lines.push(args.join(' ')); });
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: { NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' },
+      fetchImpl: async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); },
+    });
+    await n.ntfyNotify('title', 'body');
+    const ntfyLines = lines.filter(l => l.includes('[ntfy]'));
+    assert.equal(ntfyLines.length, 1);
+    assert.match(ntfyLines[0], /ENOTFOUND/);
+  });
+
   // 2026-08-03 review：ntfy 请求此前无显式超时，靠 undici 默认（headers 300s）兜底——挂死的
   // ntfy 网关会把每次通知的 pending promise 吊住数分钟。对齐 cf-access.js 的显式超时纪律。
   test('ntfy 请求带显式超时 signal（挂死网关不再靠 undici 默认 300s 兜底）', async t => {
