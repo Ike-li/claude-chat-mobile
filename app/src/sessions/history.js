@@ -4,7 +4,7 @@ import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { MAX_SESSION_LIMIT, BROWSE_HARD_LIMIT, managedWorktreeRoot } from './workdirs.js';
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
@@ -37,6 +37,8 @@ const CLAUDE_DIR = CLAUDE_PROJECTS_DIR;
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
 export const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
+// 首条消息作搜索键只留前这么多字：meta 按文件缓存（最多 HEAD_META_CACHE_CAP 条），原文全留着最坏常驻几百 MB（#333 review）
+const FIRST_USER_KEY_CHARS = 1000;
 // CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
 // 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
 const TAIL_READ_BYTES = 512 * 1024;
@@ -1092,7 +1094,24 @@ export async function projectCwdsOf(projectDir) {
 // 先读尾部 OWNER_TAIL_BYTES——CLI 每条记录都带 cwd，最近的一条几乎总在这里；找不到（尾部是一条超长的工具输出）
 // 才读头尾两窗，取其中最后一个匹配的。按文件缓存，大小与修改时间都没变才复用：一追加，最近的记录就可能换了 cwd。
 const OWNER_TAIL_BYTES = 16 * 1024;
-const OWNER_SCAN_BATCH = 32; // 同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
+const TRANSCRIPT_READ_LIMIT = 32; // 整个进程同时打开的 transcript 数：macOS 缺省 256 个文件句柄，一个目录几百份会话
+
+// 列表/搜索读 transcript 的并发上限，整个进程共用：一次全开、或几次扫描（同一项目的多个 worktree 成员、同时到达的
+// 几次请求）各自按批开，加起来都会超过 fd 上限；超出的 open 报 EMFILE，读盘函数把它当「读不出」吞掉，会话就
+// 静默掉出结果（#333 review P1）。释放时名额直接交给排队的下一个，不让新来的插队把并发顶过上限。
+let transcriptReadsActive = 0;
+const transcriptReadWaiters = [];
+async function withTranscriptReadSlot(fn) {
+  if (transcriptReadsActive < TRANSCRIPT_READ_LIMIT) transcriptReadsActive++;
+  else await new Promise(resolve => transcriptReadWaiters.push(resolve));
+  try {
+    return await fn();
+  } finally {
+    const next = transcriptReadWaiters.shift();
+    if (next) next(); else transcriptReadsActive--;
+  }
+}
+const mapWithReadSlots = (items, fn) => Promise.all(items.map(item => withTranscriptReadSlot(() => fn(item))));
 const OWNER_CACHE_CAP = 8192;
 const _ownerCache = new Map(); // file → { owner, size, mtimeMs }
 
@@ -1122,11 +1141,9 @@ async function transcriptOwners(dir) {
   let names;
   try { names = (await readdir(dir)).filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6))); } catch { return new Map(); }
   const out = new Map();
-  for (let i = 0; i < names.length; i += OWNER_SCAN_BATCH) {
-    await Promise.all(names.slice(i, i + OWNER_SCAN_BATCH).map(async n => {
-      out.set(n.slice(0, -6), await transcriptOwnerCwd(join(dir, n), dirName));
-    }));
-  }
+  await mapWithReadSlots(names, async n => {
+    out.set(n.slice(0, -6), await transcriptOwnerCwd(join(dir, n), dirName));
+  });
   return out;
 }
 
@@ -1175,7 +1192,7 @@ export function matchesSessionTitle(title, query) {
   return String(title || '').toLowerCase().includes(q);
 }
 
-// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / 未截断 firstUser / 命令名）。
+// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / firstUser 前 FIRST_USER_KEY_CHARS 字、不按展示的 60 字截 / 命令名）。
 // 浏览走 SDK summary，搜索走扫盘——两套标题不是同一串，必须 OR，否则按看见的词会搜空。
 export function sessionTitleSearchKeys({ summary, aiTitle, firstUser, firstCmd } = {}) {
   const keys = [];
@@ -1341,11 +1358,12 @@ async function scanSessionsViaSdk(cwd, limit) {
   };
 }
 
-// 搜索 overlay：向 SDK 要浏览窗同量级的 summary，叠到扫盘候选上当匹配键/展示标题。
-// 不拿 SDK 当候选集（窗仍 ≈51）；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
+// 搜索 overlay：向 SDK 要 summary，叠到扫盘候选上当匹配键/展示标题。范围到浏览窗硬顶——抽屉「加载更多」最多显示到
+// 那里，显示的就是 SDK summary（/rename 后的标题）；overlay 只要 51 条的话，窗外改过名的会话看得到新标题却搜不到
+// （PR #333 review）。不拿 SDK 当候选集；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
 async function fetchSdkSummaryMap(cwd) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  const fetchLimit = LIST_LIMIT + 1;
+  const fetchLimit = BROWSE_HARD_LIMIT + 1;
   const all = await fn({ dir: cwd, limit: fetchLimit });
   const map = new Map();
   for (const s of Array.isArray(all) ? all : []) {
@@ -1382,7 +1400,8 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '', 
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
 // readdir + N×stat + 全量尾窗活动时间 + readHeadMeta。
-// 浏览：只对前 limit 条读 meta。搜索：对前 SEARCH_SCAN_LIMIT 条读 meta 再按标题过滤。
+// 浏览：只对前 limit 条读 meta。搜索：对全部会话读 meta 再按标题过滤——浏览窗硬顶之后的提示就是「用搜索找」，
+// 搜索再设顶，那批会话就既加载不出也搜不到（验收 O100）。meta 按文件 (size, mtime) 缓存，只有首次搜索付全量读盘。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
 async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map(), exclude = new Set()) {
   let names;
@@ -1408,22 +1427,21 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
     .map(r => r.value);
 
   // 全量读尾窗活动时间再排序（只读 64KB 尾，不对全量 readHeadMeta）——保证 limit 截断窗口本身按真消息时间取最近 N。
-  const activityResults = await Promise.allSettled(
-    stated.map(async s => {
+  const withActivity = (await mapWithReadSlots(stated, async s => {
+    try {
       const activityAt = await readLastMessageActivityMs(s.file, s.size);
       return { ...s, activityAt: activityAt ?? s.mtimeMs };
-    })
-  );
-  const withActivity = activityResults
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.value);
+    } catch {
+      return null;
+    }
+  })).filter(Boolean);
   // 活动时间相同（或都回落 mtime）时按 id 稳定排序，避免两次 list 顺序抖动。
   withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
 
   const total = withActivity.length;
-  const metaBudget = query ? Math.min(total, SEARCH_SCAN_LIMIT) : Math.min(total, limit);
+  const metaBudget = query ? total : Math.min(total, limit);
   const ranked = withActivity.slice(0, metaBudget);
-  const metas = await Promise.all(ranked.map(s => readHeadMeta(s.file, s.size)));
+  const metas = await mapWithReadSlots(ranked, s => cachedHeadMeta(s.file, s.size, s.mtimeMs));
   const decorated = ranked.map((s, i) => {
     const meta = metas[i] || {};
     const overlay = titleById.get(s.id) || '';
@@ -1556,6 +1574,18 @@ export function invalidateListCache(cwd) {
 // model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
 // 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
 // size 由 listSessionsPage 的 stat 透传（与排序用的同一份）；未传时用打开时 fstat 的。
+const HEAD_META_CACHE_CAP = 8192;
+const _headMetaCache = new Map(); // file → { size, mtimeMs, meta }
+async function cachedHeadMeta(file, size, mtimeMs) {
+  const hit = _headMetaCache.get(file);
+  if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.meta;
+  const meta = await readHeadMeta(file, size);
+  // 读失败（{}）不缓存。满了就只更新已有的、不再收新的：搜索按「新→旧」顺序扫，超过上限的大目录里先进先出会让
+  // 每次扫描都把下一段要用的条目挤掉，缓存永远打不中（#333 review）。代价是满了之后新会话每次重读。
+  if ('title' in meta && (hit || _headMetaCache.size < HEAD_META_CACHE_CAP)) _headMetaCache.set(file, { size, mtimeMs, meta });
+  return meta;
+}
+
 async function readHeadMeta(file, size) {
   const meta = { title: '', model: null, entrypoint: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
@@ -1588,7 +1618,7 @@ async function readHeadMeta(file, size) {
           } else if (c.startsWith('<command-') || c.startsWith('<local-command-')) {
             /* 其他命令片段 / 本地命令 stdout/stderr 包裹：纯噪声，跳过 */
           } else if (c && !firstUser) {
-            firstUser = c;
+            firstUser = c.slice(0, FIRST_USER_KEY_CHARS);
           }
         }
       }

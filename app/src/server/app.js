@@ -4138,7 +4138,7 @@ registerSocketConnection(io, socket => {
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）每页 MAX_SESSION_LIMIT 条。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
-    // history.js 的 SEARCH_SCAN_LIMIT 全量 readdir，不是把 RESULT 抬过 50。
+    // history.js 对全部会话读 meta 再过滤（O100），不是把 RESULT 抬过 50。
     const all = obj.all === true;
     // 「显示全部」之后的「加载更多」（O81）：pages 按页放宽窗口，硬顶与判据见 sessionListWindow。
     const { limit, canGrow } = sessionListWindow({
