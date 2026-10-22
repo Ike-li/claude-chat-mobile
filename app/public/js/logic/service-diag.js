@@ -114,11 +114,16 @@ export function formatPushStatusRow({ hint = 'ready', permission = 'default', su
 // 投递成功，回执只说「还没订阅」；权限已被拒绝时，还让人去点状态行上此刻根本没有的「开启」（那一态上面
 // formatPushStatusRow 给的 action 是 null）。
 // tone：任一条失败即 danger；至少一条真的发出去即 ok；一条都没发出去即 warn。
-export function describePushTestResult(res, { permission = 'default' } = {}) {
+// hint 是 pushEnvHint 的结果：环境不满足的三态与 denied 一样，状态行上没有「开启」按钮（O108），要先判。
+// iOS Safari 标签页里 Notification 未定义、permission 回落 'default'，只看 permission 会落进最后那句。
+export function describePushTestResult(res, { permission = 'default', hint = 'ready' } = {}) {
   if (!res?.ok) return { text: t('测试推送失败，请检查网络'), tone: 'danger' };
   const parts = [];
   if (res.failed > 0) parts.push(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`);
   else if (res.subscribed) parts.push(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`);
+  else if (hint === 'need-https') parts.push(t('网页推送到不了这台设备：浏览器只在 HTTPS 下允许订阅，用隧道域名（https）打开本站'));
+  else if (hint === 'ios-add-home') parts.push(t('网页推送到不了这台设备：iOS 要先「添加到主屏幕」，再从主屏图标打开本站'));
+  else if (hint === 'unsupported') parts.push(t('网页推送到不了这台设备：当前浏览器不支持 Web Push'));
   else if (permission === 'denied') parts.push(t('这个浏览器已拒绝通知，网页推送到不了这台设备——到浏览器或系统的站点设置里改回「允许」'));
   else parts.push(t('这台设备还没订阅推送——先点上方的「开启」'));
   if (res.ntfy === 'sent') parts.push(t('ntfy 已发出一条'));
