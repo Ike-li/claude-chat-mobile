@@ -304,3 +304,18 @@ test('waitForSessionExits 有上限：等不到按时放行并返回 false，不
   await flush();
   assert.equal(result, false, '到上限必须结算，并如实说明没等到');
 });
+
+// PR #328 review P1：新会话页认领它开出的实例时，「还活着」要与 forSession 同口径——空闲回收置了 terminating、
+// 还没被 onExit 清表的实例照样在 agents 里，往它投消息会在清理时连队列一起丢掉
+test('isRoutable：在表里但正在终止 / 已 dispose 的实例不算能投递', () => {
+  const manager = createInstanceManager();
+  const agent = { instanceId: manager.nextId(), sessionId: 's-r', terminating: false, disposed: false };
+  manager.agents.set(agent.instanceId, agent);
+  assert.equal(manager.isRoutable(agent.instanceId), true);
+  agent.terminating = true;
+  assert.equal(manager.isRoutable(agent.instanceId), false, '正在终止的实例还被当成活的，消息会投进将死的进程');
+  agent.terminating = false;
+  agent.disposed = true;
+  assert.equal(manager.isRoutable(agent.instanceId), false);
+  assert.equal(manager.isRoutable('inst-none'), false);
+});

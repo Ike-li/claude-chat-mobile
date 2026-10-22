@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveInstanceTarget,
+  createComposeRegistry,
   shouldRejectOutboxLazyOpen,
   reselectViewingTarget,
   shouldClaimViewingAfterSwap,
@@ -303,5 +304,56 @@ test.describe('resolveEffortBroadcast（R7 置换后档位广播）', () => {
   test('actual 未提供（注册表尚未写入等边角）→ 回落请求值，保持旧行为', () => {
     assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh' }),
       { level: 'xhigh', mismatch: false });
+  });
+});
+
+// 验收 O107：新会话页（composeId）→ 它的首发开出来的实例。同一页的后续消息不带 instanceId 时按它落回去。
+test.describe('createComposeRegistry：新会话页认领它自己开出的实例', () => {
+  test('记下之后按页查得到；实例没了就当没开过', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    assert.equal(reg.lookup('page-a'), null);
+    reg.remember('page-a', 'inst_1');
+    assert.equal(reg.lookup('page-a'), 'inst_1');
+    live.delete('inst_1');
+    assert.equal(reg.lookup('page-a'), null, '实例已退出还落回它，消息就进了一个不存在的实例');
+  });
+  // #328 review P2：这一页开出的实例没了，但它已经有了会话——后面的消息要续接那个会话
+  test('实例拿到会话 id 后记下；实例没了仍能按页查到那个会话', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    reg.remember('page-a', 'inst_1');
+    assert.equal(reg.resumeOf('page-a'), null, '首轮 init 之前还没有会话');
+    reg.noteSession('inst_1', 'sess-1');
+    reg.noteSession('inst_9', 'sess-9');
+    live.delete('inst_1');
+    assert.equal(reg.lookup('page-a'), null);
+    assert.equal(reg.resumeOf('page-a')?.sessionId, 'sess-1');
+    reg.remember('page-b', 'inst_2', 'sess-2');
+    assert.equal(reg.resumeOf('page-b')?.sessionId, 'sess-2', '续接开出的实例，会话 id 当场就有');
+  });
+  // #328 review P1：会话中途 EnterWorktree / ExitWorktree 后 transcript 跟着驾驶目录走，sessions.json 里的 cwd 不变。
+  // 实例没了再续接，要用它最后的驾驶目录，否则找不到 transcript
+  test('记下实例最后的驾驶目录；实例没了按页查得到会话与那个目录', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    reg.remember('page-a', 'inst_1', null, '/repo');
+    reg.noteSession('inst_1', 'sess-1');
+    reg.noteCwd('inst_1', '/repo/.claude/worktrees/wt-1');
+    reg.noteCwd('inst_9', '/elsewhere');
+    live.delete('inst_1');
+    assert.deepEqual(reg.resumeOf('page-a'), { sessionId: 'sess-1', cwd: '/repo/.claude/worktrees/wt-1' }, '续接用的还是开实例时的目录');
+    reg.remember('page-b', 'inst_2', null, '/repo');
+    assert.equal(reg.resumeOf('page-b'), null, '还没有会话的不续接');
+  });
+  test('只留最近 max 页，最早的先出；再记一次算最近', () => {
+    const reg = createComposeRegistry({ max: 2, isLive: () => true });
+    reg.remember('p1', 'i1');
+    reg.remember('p2', 'i2');
+    reg.remember('p1', 'i1');
+    reg.remember('p3', 'i3');
+    assert.equal(reg.lookup('p2'), null, '最久没用的那页应该先被挤掉');
+    assert.equal(reg.lookup('p1'), 'i1');
+    assert.equal(reg.lookup('p3'), 'i3');
   });
 });

@@ -1386,6 +1386,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         ...(item.sessionId ? { sessionId: item.sessionId } : {}), // 服务端据它核对命中的实例还是不是那个会话（MSG-02）
         ...(item.useWorktree === true ? { useWorktree: true } : {}),
         ...(item.sourceBranch ? { sourceBranch: item.sourceBranch } : {}),
+        ...(item.composeId ? { composeId: item.composeId } : {}), // 新会话页入队的：开它自己的新会话（O107）
         // 告诉服务端「这是入队时刻的快照，不是眼下的意图」：缺 instanceId 时不得回退到服务端
         // 当前 viewing（断线期间可能已换工作区），见 instance-routing.js 的 allowViewingFallback。
         fromOutbox: true,
@@ -4239,7 +4240,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 放到在线分支里会让离线入队撞 TDZ——而 ESLint 的 no-undef 查不出这个，症状是离线路径整条炸掉
     // （2026-09-11 实测：三条离线队列 E2E 一起红，而 lint 全绿）。
     const worktreeArgs = viewingInstanceId ? {} : newSessionWorktree.newSessionArgs();
-    // 只进 outbox、不上线：服务端用不着它，离线重放靠它分开两个新会话页（见 outboxComposeKey）
+    // 新会话页的标记，在线与离线重放都带：服务端据它开新会话、不回退全局 viewing（验收 O107），
+    // 同一页的后续消息按它落回这一页开出的实例；离线队列也靠它分开两个新会话页（见 outboxComposeKey）
     const composeArgs = viewingInstanceId ? {} : { composeId: composePage.id() };
 
     // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
@@ -4347,7 +4349,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 窗口用 SEND_ACK_TRANSPORT_MS 而非上面那个 UI 兜底：见其声明处的注释（服务端慢路径 ≫ 5s）。
     socket.timeout(SEND_ACK_TRANSPORT_MS).emit(
       'user:message',
-      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs, ...(ackDivergence ? { ackDivergence } : {}) },
+      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId, ...worktreeArgs, ...composeArgs, ...(ackDivergence ? { ackDivergence } : {}) },
       (err, ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendTransport(err, ack);

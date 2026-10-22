@@ -41,6 +41,12 @@ export function createInstanceManager() {
     return null;
   }
 
+  // 按 instanceId 问「能不能往它投消息」，口径同 forSession：正在终止 / 已 dispose 的不算（PR #328 review）
+  function isRoutable(id) {
+    const agent = agents.get(id);
+    return Boolean(agent && !agent.terminating && !agent.disposed);
+  }
+
   function stateOf(id) {
     const agent = agents.get(id);
     if (!agent) return 'idle';
@@ -157,6 +163,7 @@ export function createInstanceManager() {
     effortOf,
     effortSourceOf,
     forSession,
+    isRoutable,
     stateOf,
     driverStateOf,
     anyTurnRunning,

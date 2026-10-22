@@ -55,3 +55,17 @@ test('全部释放后再来：建的是新目录', () => {
   a.release();
   assert.notEqual(alloc.acquire().cwd, a.cwd);
 });
+
+// 验收 O107 / #328 review：两个新会话页（不同 composeId）并发首发是两个会话，各开各的实例；共用一个 scratch
+// 目录就成了两个会话同时改同一棵目录。按组分配：同一页的并发仍共用，不同页各建各的。
+test('按组分配：同一组在途共用，不同组各建各的目录', () => {
+  const alloc = createScratchAllocator('/scratch', { create: counter() });
+  const a1 = alloc.acquire('page-a');
+  const a2 = alloc.acquire('page-a');
+  const b = alloc.acquire('page-b');
+  assert.equal(a2.cwd, a1.cwd);
+  assert.notEqual(b.cwd, a1.cwd, '两个新会话页拿到了同一个目录');
+  a1.release(); a2.release();
+  assert.equal(alloc.acquire('page-b').cwd, b.cwd, 'page-a 释放不影响 page-b 的在途共用');
+  b.release();
+});

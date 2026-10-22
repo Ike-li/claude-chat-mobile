@@ -90,6 +90,7 @@ import {
   canDeleteSessionGuard,
   externalDirtyBusyNack,
   resolveEffortBroadcast,
+  createComposeRegistry,
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
@@ -2334,6 +2335,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed', channel } });
         return null;
       }
+      composeInstances.noteCwd(id, resolved); // 新会话页续接要用最后的驾驶目录（#328 review）
       return resolved;
     },
     onSessionId: (sid, firstMessage, model) => {
@@ -2349,6 +2351,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
       const drivingCwd = instance.cwd;
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
+      composeInstances.noteSession(id, sid); // 新会话页开出的实例没了之后，这一页的消息据此续接（#328 review P2）
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
@@ -2484,6 +2487,7 @@ function noteLiveTerminalOnTakeover(a) {
 // 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
 // miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
 const resumeInFlight = new Map(); // key → Promise<AgentSession>
+const composeInstances = createComposeRegistry({ isLive: id => instanceManager.isRoutable(id) }); // 新会话页 → 它开出的实例（O107）
 // 回退并发锁（G3）。键是 sessionId 而非实例 id——confirm 中途会置换实例，
 // 挂在实例上的锁解锁时已不是同一个对象。状态与判据都在 sessions/rewind-plan.js。
 const rewindLocks = createRewindLocks();
@@ -2519,10 +2523,11 @@ const SESSION_EXIT_WAIT_MS = 10_000;
 // 下游 dedupedResume 的 `fresh:${cwd}` 就合不掉它们——会各建一棵树、各开一个实例。
 // 窗口很窄（第一条 ack 回来 UI 就进会话视图了），但合并的代价只有一个 Map。
 const worktreeCreateInFlight = new Map(); // `${cwd}\u0000${sourceBranch}` → Promise<result>
-function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage) {
+function dedupedWorktreeCreate(cwd, sourceBranch, firstMessage, composeId = null) {
   // key 不含消息文本：并发首消息要共用同一棵树，否则各建一棵、下游 dedupedResume 也合不掉。
   // 名字取第一个到达的那条消息——后到的那条本来就该进同一个会话。
-  const key = `${cwd}\u0000${sourceBranch ?? ''}`;
+  // 按新会话页（composeId）再分一层：两个新会话页是两个会话，下游各开实例，共用一棵树就是两个会话改同一棵（O107）。
+  const key = `${cwd}\u0000${sourceBranch ?? ''}\u0000${composeId ?? ''}`;
   let p = worktreeCreateInFlight.get(key);
   if (!p) {
     p = createSessionWorktree(cwd, { name: worktreeNameFromMessage(firstMessage), sourceBranch })
@@ -2549,8 +2554,9 @@ const panelCwdOf = c => resolveGoneWorktreeParent(c, workDirs) || c;
 const worktreeGoneError = (cwd, consequence) => `这个会话的 worktree「${projectNameFromCwd(cwd)}」已被删除，${consequence}。`
   + '对话记录还在磁盘上，把那棵 worktree 重新建回原路径即可恢复。';
 
-function dedupedResume(cwd, resumeId, extra = {}) {
-  const key = resumeId || `fresh:${cwd}`;
+function dedupedResume(cwd, resumeId, extra = {}, { composeId = null } = {}) {
+  // 新会话页的首发（O107）按页面再分一层：两个新会话页并发首发是两个会话，不该合成一个
+  const key = resumeId || (composeId ? `fresh:${cwd}:${composeId}` : `fresh:${cwd}`);
   let p = resumeInFlight.get(key);
   if (!p) {
     p = openResumeInstance(cwd, resumeId, extra).finally(() => resumeInFlight.delete(key));
@@ -2890,12 +2896,18 @@ registerSocketConnection(io, socket => {
       // 快照，而断线期间服务端 viewing 可能已换到别的工作区/会话。此时缺省回退 viewing 会把一条旧消息
       // 投给它从没指向过的会话，故关掉回退；交互式首发不置此位，回退仍是正确行为。
       const fromOutbox = payload && typeof payload === 'object' && payload.fromOutbox === true;
+      // 新会话页发的（O107）：前端在没有查看实例时带上这一页的 composeId，意思是「开一个新会话」。服务端的
+      // viewingInstanceId 是全局单值，回退它会把这条消息送进另一台设备刚开、正在看的会话；项目的「当前会话」
+      // 指针与 justOpened 同理，下面懒开分支里一并不用。
+      const composeId = rawInstanceId == null && typeof payload?.composeId === 'string' && payload.composeId ? payload.composeId : null;
       const targetOpts = {
         // 离线重放的句柄失效了（规则 5 置换、切 effort 换了号）而入队时那个会话还开着 → 改投它（MSG-02）
         ...(fromOutbox ? { allowViewingFallback: false, liveInstanceOfSession: sid => instanceForSession(sid)?.instanceId ?? null } : {}),
+        ...(composeId ? { allowViewingFallback: false } : {}),
         expectedSessionId: payload?.sessionId, // 离线重放带着入队时那个会话（MSG-02）
       };
-      let target = resolveTarget(rawInstanceId, targetOpts);
+      const composeOwned = composeInstances.lookup(composeId);
+      let target = composeOwned ? { id: composeOwned, stale: false } : resolveTarget(rawInstanceId, targetOpts);
       // 那个会话此刻正在续接（另一台设备触发的规则 5 置换、切 effort 的重路径，或别处正在打开它）：置换都是先把旧实例
       // 移出、再 await dedupedResume，新实例要等 openResumeInstance 走完才登记——这段窗口里改投查不到它。
       // 等那次续接落定再判一次，不在窗口里判死（PR #218 review）。续接失败就照常落 stale。
@@ -2931,9 +2943,17 @@ registerSocketConnection(io, socket => {
         // 并发的首条消息共用一个目录（分配器），下游按 cwd 的单飞才合得掉。租约在实例开好之后释放。
         let scratchLease = null;
         let cwd;
-        if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
+        // 这一页先前开出的实例已经没了（关闭、空闲回收、置换），而它有会话：在那个会话的驾驶目录里续接它，
+        // 不再建树 / 建 scratch / 另开新会话（#328 review P2）。目录已被移出清单的照常走下面，按新开处理。
+        // 目录取实例最后的驾驶目录（会话中途进出 worktree 后 transcript 跟着它走），没记到再回落 sessions.json。
+        const composeResume = composeId ? composeInstances.resumeOf(composeId) : null;
+        const composeSessionId = composeResume?.sessionId ?? null;
+        const composeSessionCwd = composeResume ? (composeResume.cwd ?? sessions.getSession(composeSessionId)?.cwd ?? null) : null;
+        if (composeSessionCwd && routableAuth(composeSessionCwd)) {
+          cwd = composeSessionCwd;
+        } else if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
           try {
-            scratchLease = scratchAllocator.acquire();
+            scratchLease = scratchAllocator.acquire(composeId ?? '');
           } catch (err) {
             sysTo(socket, `无法创建无文件夹会话的目录：${err?.message || err}`, true);
             ack({ ok: false, error: 'scratch_unavailable' });
@@ -2958,7 +2978,7 @@ registerSocketConnection(io, socket => {
           const wantsWorktree = payload && typeof payload === 'object' && payload.useWorktree === true;
           cwd = workspaceCwd;
           if (wantsWorktree && !authorize(workspaceCwd)?.worktreeRoot) {
-            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text);
+            const made = await dedupedWorktreeCreate(workspaceCwd, payload.sourceBranch, payload.text, composeId);
             if (!made.ok) {
               console.warn(`[worktree] 懒创建失败（${made.code}）：${made.error}`);
               audit.recordAudit({
@@ -2981,17 +3001,20 @@ registerSocketConnection(io, socket => {
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
         try {
-          const saved = await currentSessionForCwd(cwd);
+          const saved = composeId
+            ? (cwd === composeSessionCwd ? { id: composeSessionId } : null)
+            : await currentSessionForCwd(cwd);
           // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
           // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
           // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
-          const justOpened = agents.get(viewingInstanceId);
+          const justOpened = composeId ? null : agents.get(viewingInstanceId);
           a = (saved && instanceForSession(saved.id))
             || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-            || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+            || await dedupedResume(cwd, saved?.id ?? null, {}, { composeId }); // resume / FRESH 均 single-flight
         } finally {
           scratchLease?.release();
         }
+        if (composeId) composeInstances.remember(composeId, a.instanceId, a.sessionId, a.cwd);
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
