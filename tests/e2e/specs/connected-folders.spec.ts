@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, sessionRowByInstance, workspaceRow } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, sessionRowByInstance, startNewSessionInWorkspace, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
 //   · 已连接文件夹里有会话的子文件夹自成一节，紧跟所属文件夹，标题「根 › 相对路径」；
@@ -80,6 +80,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(workspaceRow(page, MAIN_WORKSPACE), '断开之后那一节还在').toHaveCount(0);
     await expect(page.locator('[data-testid="unowned-live-section"]').locator('[data-testid="session-row"][data-instance-id="inst_1"]'),
       '断开把开着的会话从抽屉里弄丢了').toHaveCount(1);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O119：断开一个文件夹后，停在它新会话页上的页面被服务端归位到别的工作区——胶囊换了名字、@ 搜索也跟着换了，
+  // 页面上什么都没说，用户以为还在原来的文件夹里开会话。归位时在新会话页上说一句。
+  test('P0-PROJ-6 新会话页所在的文件夹被断开 → 归位到别的工作区，并在页面上说明', async ({ page }) => {
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    const compose = page.locator('[data-testid="compose-surface"]');
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    await expect(compose.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
+
+    // 另一台设备把新会话页换到别的文件夹（原来那个还连着）：服务端广播的工作区变了，但不是断开——不提示
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(SUB)}`);
+    await expect(compose.getByTestId('compose-project-pill'), '前提：共享视图下这一页跟着换了工作区').toContainText('web');
+    await expect(compose.getByTestId('compose-relocated'), '别的设备换个文件夹也被说成「已断开」').toHaveCount(0);
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    await expect(compose.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
+
+    await openSessionsSidebar(page);
+    await workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-disconnect"]').click();
+    await page.locator('#confirmOk').click();
+    await expect(workspaceRow(page, MAIN_WORKSPACE)).toHaveCount(0);
+
+    await expect(compose.getByTestId('compose-project-pill'), '前提：新会话页被归位到别的工作区').not.toContainText('claude-chat-mobile');
+    await expect(compose.getByTestId('compose-relocated'), '悄悄换了工作区，页面上什么都没说').toContainText('claude-chat-mobile');
     await expectNoBrowserErrors(page);
   });
 

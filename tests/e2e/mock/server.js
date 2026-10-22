@@ -1055,6 +1055,22 @@ app.post('/__set-connected-folders', (req, res) => {
   res.json({ ok: true, dirs: mockDirs() });
 });
 
+// P0-PROJ-6：另一台设备在别的文件夹开了新会话页——服务端的 viewing 是全局单值，广播的工作区随之变（同 session:new）。
+app.post('/__compose-cwd', (req, res) => {
+  const cwd = typeof req.query?.cwd === 'string' ? req.query.cwd : '';
+  if (!cwd) return res.status(400).json({ ok: false });
+  viewingInstanceId = null;
+  pendingFreshCwd = cwd;
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId: null, viewingCwd: cwd, ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true });
+});
+
 // P0-11o / P0-13e：发出「关闭的那个实例的迟到事件」。由用例在【确认视图切换已完成之后】显式调用，
 // 理由见 session:close 里 pendingLateClosedSessionEventsInstanceId 处的注释（时间驱动会让事件被
 // shouldDropAgentEvent 或 replayBuffer 的 'reload' 丢掉，且不重发）。
@@ -3092,11 +3108,14 @@ io.on('connection', socket => {
     if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
     mockDirsOverride = dirs.filter(d => d !== path);
     mockAddedFolders = mockAddedFolders.filter(d => d !== path);
+    // 同真 server reloadWorkdirs：新会话页（没有查看实例）停在被移除的目录上 → 归位到首个剩余目录（O119）
+    const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (!viewingInst && pendingFreshCwd === path) pendingFreshCwd = mockDirs()[0] ?? MOCK_SCRATCH_ROOT; // 清单空了就是「无文件夹」（同 primaryWorkDir）
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+        viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload()
       }
