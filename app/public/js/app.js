@@ -2583,13 +2583,14 @@ import { createGateFocusController } from './app/focus-layers.js';
         const commit = (save) => {
           if (done) return;
           done = true;
-          if (save) socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value });
+          if (save) { clampAlias(); socket.emit('user:renameTrustedDevice', { shortId: d.shortId, alias: input.value }); }
           // 不手动还原 DOM：提交后服务端会重播 trusted_devices，整段重渲染；
           // 取消时也重渲染一次，省掉一条只在这里用的回滚路径。
           renderTrustedDevices(lastTrustedDevices, lastTrustedBypass);
         };
         input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+          // 输入法组字中的 Enter 是「确认候选词」，不是提交（#320 review）：同 2036 行令牌门的双检
+          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); commit(true); }
           else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
         });
         input.addEventListener('blur', () => commit(true));
