@@ -766,10 +766,11 @@ export function createContentScenarios(getContext) {
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, mockServicePayload, getMockCanRestart } = getContext();
         console.log('[mock] Completing current turn, then forcing a socket disconnect');
-        activeInst.state = 'busy';
+        // 新会话页上发的（没有查看实例）：没有那一轮可收尾，只断线（P0-02d16）
+        if (activeInst) activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst?.cwd ?? mockInstances[0].cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
 
         await delay(100);
@@ -778,10 +779,10 @@ export function createContentScenarios(getContext) {
           type: 'text_delta', payload: { messageId: 'msg_disconnect_now_1', text: '模拟断线前的最后一条回复。' }
         });
 
-        activeInst.state = 'idle';
+        if (activeInst) activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst.cwd, ...getContext().mockDirFields(), instances: mockInstances }
+          type: 'instances', payload: { canRestart: getMockCanRestart(), service: mockServicePayload(), viewingInstanceId, viewingCwd: activeInst?.cwd ?? mockInstances[0].cwd, ...getContext().mockDirFields(), instances: mockInstances }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),

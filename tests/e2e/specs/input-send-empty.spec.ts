@@ -2,7 +2,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { captureUserMessages, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession, startNewSessionInWorkspace } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -133,6 +133,49 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(replay.instanceId).toBe('inst_1');
     expect(replay.sessionId, `重放没带入队时的会话，服务端认不出同号的另一个会话：${JSON.stringify(replay)}`)
       .toBe('mock-session-visual-test');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O107：服务端 viewingInstanceId 是全局单值，新会话页的首发不带 instanceId 就会被回退进另一台设备正看着的
+  // 会话。新会话页每次发送都带这一页的 composeId，服务端据此开新会话（路由本身在
+  // tests/integration/new-session-compose-routing.test.mjs）；进了会话之后靠 instanceId，不再带它。
+  // mock 是平行实现、不做这道路由，这里只钉前端送出去的是什么。
+  test('P0-02d16 新会话页发的消息带 composeId（在线与离线重放都带），会话里发的不带', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    // 会话里发的：靠 instanceId 路由，不带 composeId
+    const s0 = sent.length;
+    await sendChatMessage(page, 'test:stream');
+    await expect.poll(() => sent.length).toBeGreaterThan(s0);
+    expect(sent[s0].instanceId, '前提：会话里有查看实例').toBeTruthy();
+    expect(sent[s0].composeId, '会话里发的带了 composeId：服务端会把它当成新会话页').toBeUndefined();
+    await waitForIdle(page);
+
+    // 新会话页发的：不带 instanceId，必须带这一页的 composeId
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    const s1 = sent.length;
+    await sendChatMessage(page, 'test:disconnect-now');
+    await expect.poll(() => sent.length).toBeGreaterThan(s1);
+    const first = sent[s1];
+    expect(first.instanceId ?? null, '前提：新会话页没有查看实例').toBeNull();
+    expect(typeof first.composeId === 'string' && first.composeId.length > 0,
+      `新会话页的首发没带 composeId，服务端会回退到全局 viewing：${JSON.stringify(first)}`).toBe(true);
+
+    // 同一页离线时打的字：重放带着同一枚 composeId——服务端据它落回这一页开出的实例
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('离线的新会话消息');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.filter(m => m.fromOutbox === true && m.text === '离线的新会话消息').length).toBe(1);
+    const replay = sent.find(m => m.fromOutbox === true && m.text === '离线的新会话消息')!;
+    expect(replay.composeId, `离线重放没带 composeId，服务端懒开时会续上项目的「当前会话」：${JSON.stringify(replay)}`)
+      .toBe(first.composeId);
     await expectNoBrowserErrors(page);
   });
 
