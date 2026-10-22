@@ -885,6 +885,15 @@ test.describe('attachLongPress：长按/右键触发，位移与抬手取消，�
     assert.equal(fired.length, 1);
   });
 
+  test('contextmenu 晚于 pointerup 到达（规范允许的次序）→ 仍算同一次长按，不重复触发', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    timers.flush();
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    assert.equal(el.fire('contextmenu').defaultPrevented, true);
+    assert.equal(fired.length, 1, '再弹一次会多一下震动、再调一次确认框');
+  });
+
   // 2026-09-07：桌面右键连按两次，第二次静默无反应。根因是 swallowNextClick 一个标志同时承担
   // 两件生命周期不同的事——「吞掉长按松手补发的那次 click」（到下一次 click 或 pointerdown 为止）
   // 与「去重 Android 长按补发的 contextmenu」（本次指针手势内）。右键既不走主键 pointerdown
