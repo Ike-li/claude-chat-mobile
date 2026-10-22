@@ -37,9 +37,11 @@ export function createCrashNotices({ addBar = () => null, hasNotice = () => fals
       this.record(sessionId, crash.payload.message, null);
       this.noteInstance(instanceId, crash.payload.message);
     },
-    // 「会话已中断」面当场写原因用（验收 O121）：error 先于摘实例的广播到达，出面那一刻这里已经有了
-    reasonFor({ instanceId = null, sessionId = null } = {}) {
-      return (instanceId && byInstance.get(instanceId)) || (sessionId && bySession.get(sessionId)?.message) || null;
+    // 「会话已中断」面当场写原因用（验收 O121）：error 先于摘实例的广播到达，出面那一刻这里已经有了。
+    // 只认按实例记的：会话级记录可能是上一个进程的（重开后没再发消息就不清），实例被别的设备正常关掉时拿它来
+    // 解释，就成了把一次关闭说成崩溃（#329 review P2）。
+    reasonFor(instanceId) {
+      return (instanceId && byInstance.get(instanceId)) || null;
     },
   };
 }

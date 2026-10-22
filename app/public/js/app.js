@@ -5488,7 +5488,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (destroyedInstanceId) {
         crashNotices.adoptQueued({ instanceId: destroyedInstanceId, sessionId: destroyedSid, queued: replayBuffer.queued(destroyedInstanceId) });
       }
-      const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor({ instanceId: destroyedInstanceId, sessionId: destroyedSid }) : null;
+      const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor(destroyedInstanceId) : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
