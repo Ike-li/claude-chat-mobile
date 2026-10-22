@@ -353,14 +353,27 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
 
   // 验收 O116：Bash 的 tool_use_result 是 {stdout,stderr,interrupted,…}。卡片和「展开全文」要的是终端里那份纯文本
   // （与历史折叠态同取 block.content），不是这个对象的 JSON——那样换行成了字面 \n、整段挤成一行
-  test('tool_result：shell 输出形状的结构化结果 → 摘要与全文都是纯文本，不是 JSON', () => {
+  test('tool_result：Bash 的结构化结果 → 摘要与全文都是纯文本，不是 JSON', () => {
     const { s, events } = makeSession();
     const text = 'line one\nline two';
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-bash', name: 'Bash', input: { command: 'ls' } }] } });
     s.map({ type: 'user', tool_use_result: { stdout: text, stderr: '', interrupted: false, isImage: false },
       message: { content: [{ type: 'tool_result', tool_use_id: 'tool-bash', is_error: false, content: text }] } });
     const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-bash');
     assert.equal(tr.payload.outputSummary, text);
     assert.equal(s.getToolOutput('tool-bash'), text);
+    s.dispose();
+  });
+
+  // PR #332 review：MCP / 动态工具可以返回任意结构，带个字符串 stdout 不等于它是 Bash——照旧展示整个结构化结果
+  test('tool_result：别的工具的结构化结果碰巧带 stdout → 仍展示结构化结果，不丢字段', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-mcp', name: 'mcp__ci__run', input: {} }] } });
+    s.map({ type: 'user', tool_use_result: { stdout: 'log', result: { passed: 3 } },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-mcp', is_error: false, content: 'log' }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-mcp');
+    assert.match(tr.payload.outputSummary, /"passed":3/, 'MCP 工具的 result 字段被丢了');
+    assert.match(s.getToolOutput('tool-mcp'), /"passed":3/);
     s.dispose();
   });
 
