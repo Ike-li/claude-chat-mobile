@@ -2486,7 +2486,7 @@ function noteLiveTerminalOnTakeover(a) {
 // 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
 // miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
 const resumeInFlight = new Map(); // key → Promise<AgentSession>
-const composeInstances = createComposeRegistry({ isLive: id => agents.has(id) }); // 新会话页 → 它开出的实例（O107）
+const composeInstances = createComposeRegistry({ isLive: id => instanceManager.isRoutable(id) }); // 新会话页 → 它开出的实例（O107）
 // 回退并发锁（G3）。键是 sessionId 而非实例 id——confirm 中途会置换实例，
 // 挂在实例上的锁解锁时已不是同一个对象。状态与判据都在 sessions/rewind-plan.js。
 const rewindLocks = createRewindLocks();
