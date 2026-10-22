@@ -4,7 +4,7 @@ import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { MAX_SESSION_LIMIT, BROWSE_HARD_LIMIT, managedWorktreeRoot } from './workdirs.js';
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
@@ -1358,11 +1358,12 @@ async function scanSessionsViaSdk(cwd, limit) {
   };
 }
 
-// 搜索 overlay：向 SDK 要浏览窗同量级的 summary，叠到扫盘候选上当匹配键/展示标题。
-// 不拿 SDK 当候选集（窗仍 ≈51）；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
+// 搜索 overlay：向 SDK 要 summary，叠到扫盘候选上当匹配键/展示标题。范围到浏览窗硬顶——抽屉「加载更多」最多显示到
+// 那里，显示的就是 SDK summary（/rename 后的标题）；overlay 只要 51 条的话，窗外改过名的会话看得到新标题却搜不到
+// （PR #333 review）。不拿 SDK 当候选集；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
 async function fetchSdkSummaryMap(cwd) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  const fetchLimit = LIST_LIMIT + 1;
+  const fetchLimit = BROWSE_HARD_LIMIT + 1;
   const all = await fn({ dir: cwd, limit: fetchLimit });
   const map = new Map();
   for (const s of Array.isArray(all) ? all : []) {

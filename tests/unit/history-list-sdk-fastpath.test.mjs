@@ -303,6 +303,34 @@ test('搜索: query 不把 SDK 窗当候选集——窗外旧会话仍能命中'
   }
 });
 
+// PR #333 review：抽屉「加载更多」到 500 时显示的是 SDK summary（/rename 后的标题）。搜索的 overlay 只要 51 条的话，
+// 第 52 名以后改过名的会话在抽屉里看得到新标题、按它却搜不到。overlay 要覆盖到浏览窗的硬顶。
+test('搜索: 排在 51 名以外、/rename 过的会话按抽屉显示的标题也搜得到', async () => {
+  const cwd = '/sdk/search-overlay-beyond-51';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const nowSec = Date.now() / 1000;
+  const ids = [];
+  for (let i = 0; i < 120; i++) {
+    const id = `r${String(i).padStart(3, '0')}`;
+    ids.push(id);
+    writeJSONL(dir, id, [{ type: 'user', timestamp: new Date(Date.now() - i * 1000).toISOString(), message: { role: 'user', content: `prompt ${i}` } }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  // 照 SDK 的行为：按新→旧最多给 limit 条
+  __setSdkListSessionsForTest(async (opts) => ids.slice(0, opts.limit).map((id, i) => ({
+    sessionId: id,
+    summary: id === 'r100' ? 'Renamed Far Away' : `prompt ${i}`,
+    lastModified: Date.now() - i * 1000,
+  })));
+  try {
+    const found = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 50, query: 'Renamed Far' });
+    assert.deepEqual(found.sessions.map(s => s.id), ['r100'], '抽屉里显示得出的新标题，搜索却搜不到');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
 test('搜索: 按抽屉可见的 SDK summary 能命中，firstUser 也能命中，展示用 summary', async () => {
   const cwd = '/sdk/search-summary-overlay';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
