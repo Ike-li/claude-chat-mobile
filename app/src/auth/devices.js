@@ -423,7 +423,9 @@ export function removePendingDevice(deviceToken) {
 
 export function getPendingDevices() {
   loadPendingDevices();
-  return [...pendingDevices].sort((a, b) => b.ts - a.ts); // 最新请求排在最前面
+  // 最新请求排在最前面。先反转再排：同一毫秒到达的两台 ts 相等，稳定排序保留的是反转后的序——后到的在前；
+  // 不反转的话先到的反而排前面，「最新的待审设备」就指错了那台
+  return [...pendingDevices].reverse().sort((a, b) => b.ts - a.ts);
 }
 
 export function getLatestPendingDevice() {
