@@ -323,14 +323,28 @@ test.describe('createComposeRegistry：新会话页认领它自己开出的实�
     const live = new Set(['inst_1']);
     const reg = createComposeRegistry({ isLive: id => live.has(id) });
     reg.remember('page-a', 'inst_1');
-    assert.equal(reg.sessionOf('page-a'), null, '首轮 init 之前还没有会话');
+    assert.equal(reg.resumeOf('page-a'), null, '首轮 init 之前还没有会话');
     reg.noteSession('inst_1', 'sess-1');
     reg.noteSession('inst_9', 'sess-9');
     live.delete('inst_1');
     assert.equal(reg.lookup('page-a'), null);
-    assert.equal(reg.sessionOf('page-a'), 'sess-1');
+    assert.equal(reg.resumeOf('page-a')?.sessionId, 'sess-1');
     reg.remember('page-b', 'inst_2', 'sess-2');
-    assert.equal(reg.sessionOf('page-b'), 'sess-2', '续接开出的实例，会话 id 当场就有');
+    assert.equal(reg.resumeOf('page-b')?.sessionId, 'sess-2', '续接开出的实例，会话 id 当场就有');
+  });
+  // #328 review P1：会话中途 EnterWorktree / ExitWorktree 后 transcript 跟着驾驶目录走，sessions.json 里的 cwd 不变。
+  // 实例没了再续接，要用它最后的驾驶目录，否则找不到 transcript
+  test('记下实例最后的驾驶目录；实例没了按页查得到会话与那个目录', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    reg.remember('page-a', 'inst_1', null, '/repo');
+    reg.noteSession('inst_1', 'sess-1');
+    reg.noteCwd('inst_1', '/repo/.claude/worktrees/wt-1');
+    reg.noteCwd('inst_9', '/elsewhere');
+    live.delete('inst_1');
+    assert.deepEqual(reg.resumeOf('page-a'), { sessionId: 'sess-1', cwd: '/repo/.claude/worktrees/wt-1' }, '续接用的还是开实例时的目录');
+    reg.remember('page-b', 'inst_2', null, '/repo');
+    assert.equal(reg.resumeOf('page-b'), null, '还没有会话的不续接');
   });
   test('只留最近 max 页，最早的先出；再记一次算最近', () => {
     const reg = createComposeRegistry({ max: 2, isLive: () => true });

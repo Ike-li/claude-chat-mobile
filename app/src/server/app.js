@@ -2335,6 +2335,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         audit.recordAudit({ action: 'scope_violation', target: nextCwd, outcome: 'denied', meta: { via: 'cwd_changed', channel } });
         return null;
       }
+      composeInstances.noteCwd(id, resolved); // 新会话页续接要用最后的驾驶目录（#328 review）
       return resolved;
     },
     onSessionId: (sid, firstMessage, model) => {
@@ -2944,8 +2945,10 @@ registerSocketConnection(io, socket => {
         let cwd;
         // 这一页先前开出的实例已经没了（关闭、空闲回收、置换），而它有会话：在那个会话的驾驶目录里续接它，
         // 不再建树 / 建 scratch / 另开新会话（#328 review P2）。目录已被移出清单的照常走下面，按新开处理。
-        const composeSessionId = composeId ? composeInstances.sessionOf(composeId) : null;
-        const composeSessionCwd = composeSessionId ? (sessions.getSession(composeSessionId)?.cwd ?? null) : null;
+        // 目录取实例最后的驾驶目录（会话中途进出 worktree 后 transcript 跟着它走），没记到再回落 sessions.json。
+        const composeResume = composeId ? composeInstances.resumeOf(composeId) : null;
+        const composeSessionId = composeResume?.sessionId ?? null;
+        const composeSessionCwd = composeResume ? (composeResume.cwd ?? sessions.getSession(composeSessionId)?.cwd ?? null) : null;
         if (composeSessionCwd && routableAuth(composeSessionCwd)) {
           cwd = composeSessionCwd;
         } else if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
@@ -3011,7 +3014,7 @@ registerSocketConnection(io, socket => {
         } finally {
           scratchLease?.release();
         }
-        if (composeId) composeInstances.remember(composeId, a.instanceId, a.sessionId);
+        if (composeId) composeInstances.remember(composeId, a.instanceId, a.sessionId, a.cwd);
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。
