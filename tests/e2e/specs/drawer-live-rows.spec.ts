@@ -58,7 +58,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await page.locator('#confirmOk').click();
       // 按会话 id 找，不按实例 id：残留的那一行实例 id 可能已经清空，按实例 id 找会把它漏掉、恒绿
       const after = page.locator(`[data-testid="session-row"][data-session-id="${sid}"]`);
-      await expect(after.filter({ has: page.locator('[data-testid="session-close"]') }), '关掉的会话还挂在侧栏里，写着「已打开 ✕」').toHaveCount(0);
+      await expect(after, '关掉的会话还挂在侧栏里，写着「已打开 ✕」').toHaveCount(0);
     });
   }
 
