@@ -168,6 +168,43 @@ test.describe('设备身份与吊销', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O106：输入框 maxLength=24 按 UTF-16 单元计，而服务端与文档按码点限长 24——emoji 占两个单元，
+  // 真键盘连打只收得下 12 个，纯 emoji 别名永远到不了 24。限长要和服务端同一个口径（码点）。
+  test('别名输入框按码点限长 24：emoji 能写满 24 个，中文同样 24 个封顶', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await input.fill('');
+    await input.pressSequentially('😀'.repeat(30));
+    expect([...await input.inputValue()].length, 'emoji 被按 UTF-16 单元截到了一半').toBe(24);
+    await input.fill('');
+    await input.pressSequentially('中'.repeat(30));
+    expect([...await input.inputValue()].length).toBe(24);
+    await input.press('Escape');
+    await expectNoBrowserErrors(page);
+  });
+
+  // #320 review（Codex P2）：中文输入法里 Enter 是「确认候选词」，keydown 带 isComposing（或 keyCode 229）。
+  // 此前它直接提交改名、整段重渲染——正在拼的字被打断，compositionend 的码点截断也来不及跑。
+  test('输入法组字中按 Enter 只是选词，不提交改名', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+
+    const row = page.getByTestId('trusted-device-row').filter({ hasText: 'cd2760a5…ec82' });
+    await row.getByTestId('trusted-device-rename').click();
+    const input = row.getByTestId('trusted-device-alias-input');
+    await input.fill('wo de');
+    for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+      await input.evaluate((el, i) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...i })), init);
+      await expect(input, `组字中的 Enter（${JSON.stringify(init)}）把改名提交了`).toBeVisible();
+    }
+    await input.press('Escape');
+    await expectNoBrowserErrors(page);
+  });
+
   test('Esc 放弃改名，标题回到原样', async ({ page }) => {
     await gotoMock(page);
     await openGeneralSettings(page);
