@@ -326,7 +326,10 @@ export function resolveFreshPrefs({
       ultracode = false;
     }
   }
-  // 来源只管显示：L3 的档照样当显式档下发，但用户没选过它，界面按「没指定」显示（docs/display-contracts.md §2.3）
+  // 来源只管显示：L3 的档照样当显式档下发，但用户没选过它，界面按「没指定」显示（docs/display-contracts.md §2.3）。
+  // 「照样下发」以 L3 读到为前提：spawn 前只等 ensureCliDefaults 一个预算（app.js CLI_DEFAULTS_RESUME_BUDGET_MS），
+  // 超时或读失败时 cliDefaults 为空、effort 为 null，不传 --effort，CLI 自己读同一份 settings——实际档不变，
+  // 只是进程命令行里看不到 --effort（验收 O117）。
   const effortSource = !effort ? 'default' : (hasPendingEffort ? 'user' : 'cli-settings');
 
   return { mode, effort, effortSource, ultracode, model: baseModel };
