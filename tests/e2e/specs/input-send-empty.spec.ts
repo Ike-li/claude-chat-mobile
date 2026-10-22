@@ -1,7 +1,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { captureUserMessages, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -114,20 +114,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // MSG-02：离线队列里的实例句柄活得比 server 进程久，重启后可能撞上同号的另一个会话。重放要带上入队时
   // 那个实例跑的会话，服务端据此核对（核对本身在 tests/invariants/server/instance-identity.test.mjs）。
   // 两个入队点都得带：离线时发的、在线发出去没被确认转进重发的。mock 是平行实现、不做这道核对，这里只钉前端送出去的是什么。
-  const captureUserMessages = (page: Page) => {
-    const sent: Array<Record<string, unknown>> = [];
-    const take = (payload: string) => {
-      for (const packet of payload.split('\x1e')) {
-        if (packet.includes('"user:message"')) sent.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
-      }
-    };
-    page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
-    // 刚连上、还没升级到 websocket 时走 polling：那段时间发的包拼在 HTTP POST 里（\x1e 分隔），framesent 看不到。
-    // 重载后恢复的离线条目恰好在这个窗口里重放。
-    page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
-    return sent;
-  };
-
   test('P0-02d2 离线时发的消息，重放带上入队时那个会话（MSG-02）', async ({ page }) => {
     const sent = captureUserMessages(page);
     await gotoMock(page);

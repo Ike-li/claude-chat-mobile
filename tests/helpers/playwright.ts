@@ -34,6 +34,23 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
   });
 }
 
+/**
+ * 抓页面发出的每条 user:message（解析后的 payload）。须在 gotoMock 之前调用，否则错过这条连接。
+ * 刚连上、还没升级到 websocket 时走 polling：那段时间发的包拼在 HTTP POST 里（\x1e 分隔），只听 framesent
+ * 看不到——重连后重放的离线条目恰好落在这个窗口里（P0-02d11、P0-PICK-10 都因此假红过）。
+ */
+export function captureUserMessages(page: Page) {
+  const sent: Array<Record<string, unknown>> = [];
+  const take = (payload: string) => {
+    for (const packet of payload.split('\x1e')) {
+      if (packet.includes('"user:message"')) sent.push(JSON.parse(packet.slice(packet.indexOf('[')))[1]);
+    }
+  };
+  page.on('websocket', ws => ws.on('framesent', frame => { if (typeof frame.payload === 'string') take(frame.payload); }));
+  page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/socket.io/')) take(req.postData() || ''); });
+  return sent;
+}
+
 /** 等 socket 真正连上。角标健康时隐藏，所以读 data-conn 而不是元素可见性。 */
 export async function waitUntilConnected(page: Page, timeout = 10_000) {
   await expect(page.locator('#connDotWrap')).toHaveAttribute('data-conn', 'online', { timeout });

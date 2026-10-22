@@ -8,7 +8,7 @@
 // 热加载生没生效由真 server 判（tests/invariants/folder-picker.test.mjs 与 server/folders.test.mjs），
 // mock 只用一棵假家目录树回放那几种原因码。
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
+import { captureUserMessages, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
 
 const SCRATCH = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
@@ -166,10 +166,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 挑中的是仓库里的 linked worktree：它归仓库这个项目，新会话页的 viewingCwd 因而是仓库。首条消息要是按
   // viewingCwd 投，就开进了仓库的主工作树——用户以为隔离了的改动全落在主分支上。抓出向帧看它投到哪。
   test('P0-PICK-7 在仓库里的 worktree 上开新会话：首条消息投到 worktree，不是它所属的仓库', async ({ page }) => {
-    const sent: string[] = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) sent.push(frame.payload);
-    }));
+    const sent = captureUserMessages(page);
     await gotoMock(page);
     await waitForIdle(page);
     await openPickerFromCompose(page);
@@ -183,8 +180,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, '在 worktree 里干活');
     await expect.poll(() => sent.length).toBeGreaterThan(0);
-    const [, payload] = JSON.parse(sent[0].slice(sent[0].indexOf('[')));
-    expect(payload.cwd, '首条消息投到了 worktree 所属的仓库').toBe('/Users/you/code/claude-chat-mobile/wt-feat-z');
+    expect(sent[0].cwd, '首条消息投到了 worktree 所属的仓库').toBe('/Users/you/code/claude-chat-mobile/wt-feat-z');
     await expectNoBrowserErrors(page);
   });
 
@@ -192,12 +188,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 广播来清是来不及的——广播落地前发出去的首条消息会开进上一页的 worktree（2026-10-10 第五轮 review P1）。
   // 断网把广播挡在外面，「广播前就发」这个窗口就稳定可复现。
   test('P0-PICK-10 worktree 新会话页上点 ＋ 再发：开在仓库里，不沿用上一页的 worktree', async ({ page }) => {
-    const sent: Array<{ text?: string; cwd?: string }> = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
-        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
-      }
-    }));
+    const sent = captureUserMessages(page);
     await gotoMock(page);
     await waitForIdle(page);
     await openPickerFromCompose(page);
@@ -226,12 +217,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 撞上第一条开跑的回合就落「未发送 + 重发」。「重发」要投给改投后的那个会话——拿入队时的原始条目
   // （instanceId 为空、cwd 是 scratch 根）去发，服务端会再建一个目录、再开一个会话，同一件事被拆成两半。
   test('P0-PICK-8 离线在「无文件夹」里连发两条：第二条撞上在途轮后，「重发」投给第一条开出来的会话', async ({ page }) => {
-    const sent: Array<{ text?: string; instanceId?: string | null; cwd?: string }> = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
-        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
-      }
-    }));
+    const sent = captureUserMessages(page);
     await gotoMock(page);
     await waitForIdle(page);
     await sendChatMessage(page, 'test:arm-fresh-turn-running');
@@ -265,12 +251,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 两页的条目都是 instanceId:null + scratch 根，只按这两个字段认，第二页的话就被投进第一页开出来的会话，
   // 带着别人的上下文跑（2026-10-10 第四轮 review P2）。
   test('P0-PICK-9 离线时开了两个「无文件夹」新会话页：重放时各开各的，第二页的话不并进第一页的会话', async ({ page }) => {
-    const sent: Array<{ text?: string; instanceId?: string | null; cwd?: string }> = [];
-    page.on('websocket', ws => ws.on('framesent', frame => {
-      if (typeof frame.payload === 'string' && frame.payload.includes('"user:message"')) {
-        sent.push(JSON.parse(frame.payload.slice(frame.payload.indexOf('[')))[1]);
-      }
-    }));
+    const sent = captureUserMessages(page);
     await gotoMock(page);
     await waitForIdle(page);
     await page.context().setOffline(true);
