@@ -318,6 +318,20 @@ test.describe('createComposeRegistry：新会话页认领它自己开出的实�
     live.delete('inst_1');
     assert.equal(reg.lookup('page-a'), null, '实例已退出还落回它，消息就进了一个不存在的实例');
   });
+  // #328 review P2：这一页开出的实例没了，但它已经有了会话——后面的消息要续接那个会话
+  test('实例拿到会话 id 后记下；实例没了仍能按页查到那个会话', () => {
+    const live = new Set(['inst_1']);
+    const reg = createComposeRegistry({ isLive: id => live.has(id) });
+    reg.remember('page-a', 'inst_1');
+    assert.equal(reg.sessionOf('page-a'), null, '首轮 init 之前还没有会话');
+    reg.noteSession('inst_1', 'sess-1');
+    reg.noteSession('inst_9', 'sess-9');
+    live.delete('inst_1');
+    assert.equal(reg.lookup('page-a'), null);
+    assert.equal(reg.sessionOf('page-a'), 'sess-1');
+    reg.remember('page-b', 'inst_2', 'sess-2');
+    assert.equal(reg.sessionOf('page-b'), 'sess-2', '续接开出的实例，会话 id 当场就有');
+  });
   test('只留最近 max 页，最早的先出；再记一次算最近', () => {
     const reg = createComposeRegistry({ max: 2, isLive: () => true });
     reg.remember('p1', 'i1');

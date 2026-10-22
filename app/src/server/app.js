@@ -2350,6 +2350,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
       const drivingCwd = instance.cwd;
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, drivingCwd);
+      composeInstances.noteSession(id, sid); // 新会话页开出的实例没了之后，这一页的消息据此续接（#328 review P2）
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值。web 端续接恢复依赖这两字段。auto 存 'auto' 字面量——存成 null 会被
       // resolveResumeEffort 当「没指定」往下兜底，重启后悄悄换成 settings 里存的档。
@@ -2941,7 +2942,13 @@ registerSocketConnection(io, socket => {
         // 并发的首条消息共用一个目录（分配器），下游按 cwd 的单飞才合得掉。租约在实例开好之后释放。
         let scratchLease = null;
         let cwd;
-        if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
+        // 这一页先前开出的实例已经没了（关闭、空闲回收、置换），而它有会话：在那个会话的驾驶目录里续接它，
+        // 不再建树 / 建 scratch / 另开新会话（#328 review P2）。目录已被移出清单的照常走下面，按新开处理。
+        const composeSessionId = composeId ? composeInstances.sessionOf(composeId) : null;
+        const composeSessionCwd = composeSessionId ? (sessions.getSession(composeSessionId)?.cwd ?? null) : null;
+        if (composeSessionCwd && routableAuth(composeSessionCwd)) {
+          cwd = composeSessionCwd;
+        } else if (isNoFolderKey(typeof rawCwd === 'string' && rawCwd ? rawCwd : viewingCwdOf())) {
           try {
             scratchLease = scratchAllocator.acquire(composeId ?? '');
           } catch (err) {
@@ -2991,7 +2998,9 @@ registerSocketConnection(io, socket => {
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
         try {
-          const saved = composeId ? null : await currentSessionForCwd(cwd);
+          const saved = composeId
+            ? (cwd === composeSessionCwd ? { id: composeSessionId } : null)
+            : await currentSessionForCwd(cwd);
           // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
           // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
           // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
@@ -3002,7 +3011,7 @@ registerSocketConnection(io, socket => {
         } finally {
           scratchLease?.release();
         }
-        if (composeId) composeInstances.remember(composeId, a.instanceId);
+        if (composeId) composeInstances.remember(composeId, a.instanceId, a.sessionId);
         if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧的主工作目录。

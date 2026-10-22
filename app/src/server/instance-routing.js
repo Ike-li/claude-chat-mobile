@@ -48,19 +48,30 @@ export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, op
 
 // 新会话页（composeId）→ 它的首发开出来的实例（验收 O107）。服务端 viewingInstanceId 是全局单值，新会话页
 // 的后续消息在 instances 广播到达之前、或离线重放时仍不带 instanceId——按 composeId 落回这一页自己开的实例，
-// 而不是回退全局 viewing。实例没了就当没开过；只留最近 max 页（每个新会话页一条，常驻进程里会一直攒）。
+// 而不是回退全局 viewing。只留最近 max 页（每个新会话页一条，常驻进程里会一直攒）。
+// 实例没了（关闭、空闲回收、置换）而它已经有了会话：sessionOf 给出那个会话，调用方续接它，不另开一个没有前文的
+// 新会话（#328 review P2）。会话 id 要等首轮 init 才有，实例拿到时经 noteSession 记进来；那之前就没了的当没开过。
 export function createComposeRegistry({ max = 100, isLive = () => false } = {}) {
-  const byCompose = new Map();
+  const byCompose = new Map(); // composeId → { instanceId, sessionId }
   return {
     lookup(composeId) {
-      const id = composeId ? byCompose.get(composeId) : undefined;
-      return id && isLive(id) ? id : null;
+      const entry = composeId ? byCompose.get(composeId) : undefined;
+      return entry && isLive(entry.instanceId) ? entry.instanceId : null;
     },
-    remember(composeId, instanceId) {
+    sessionOf(composeId) {
+      return (composeId && byCompose.get(composeId)?.sessionId) || null;
+    },
+    remember(composeId, instanceId, sessionId = null) {
       if (!composeId || !instanceId) return;
       byCompose.delete(composeId);
-      byCompose.set(composeId, instanceId);
+      byCompose.set(composeId, { instanceId, sessionId: sessionId || null });
       if (byCompose.size > max) byCompose.delete(byCompose.keys().next().value);
+    },
+    noteSession(instanceId, sessionId) {
+      if (!instanceId || !sessionId) return;
+      for (const entry of byCompose.values()) {
+        if (entry.instanceId === instanceId) entry.sessionId = sessionId;
+      }
     },
   };
 }

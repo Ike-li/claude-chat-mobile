@@ -67,6 +67,21 @@ test('新会话页带 composeId 的首发开新会话；同一页面的下一条
     const b2 = await emit('user:message', { text: 'B 的第二条', cwd: repo, composeId: 'page-b', clientMessageId: 'compose-b2' });
     assert.equal(b2?.ok, true, `B 的第二条应被接受：${JSON.stringify(b2)}`);
     assert.equal(b2.instanceId, b.instanceId, '同一个新会话页的第二条没回到它自己开的实例');
+
+    // #328 review P2：B 那一页开出的实例没了（关闭、空闲回收、置换），这一页还排着的消息到达——续接它已有的会话，
+    // 不另开一个没有前文的新会话
+    const sessionOf = id => events.filter(e => e.type === 'instances').pop()?.payload?.instances?.find(i => i.instanceId === id)?.sessionId;
+    const bSession = sessionOf(b.instanceId);
+    assert.ok(bSession, '前提：B 的实例已经有了会话 id');
+    sock.emit('session:close', { instanceId: b.instanceId });
+    await waitForCondition(() => {
+      const last = events.filter(e => e.type === 'instances').pop();
+      return last && !last.payload.instances.some(i => i.instanceId === b.instanceId);
+    }, { timeoutMs: 10_000, label: 'B 的实例已关闭' });
+    const b3 = await emit('user:message', { text: 'B 的第三条', cwd: repo, composeId: 'page-b', clientMessageId: 'compose-b3', fromOutbox: true });
+    assert.equal(b3?.ok, true, `B 的第三条应被接受：${JSON.stringify(b3)}`);
+    await waitForCondition(() => sessionOf(b3.instanceId), { timeoutMs: 10_000, label: 'B 第三条的实例有了会话 id' });
+    assert.equal(sessionOf(b3.instanceId), bSession, '实例没了之后，这一页的消息另开了一个新会话，前文丢了');
   } finally {
     try { sock.close(); } catch { /* 已关闭 */ }
     await killServer(server.proc);
