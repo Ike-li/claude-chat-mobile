@@ -111,6 +111,7 @@ test('MSG-02（review P0-2）：重启后，带着旧句柄的离线重放不得
 
       // A 重连，离线队列按 deliverOutboxItem 的形状重放。升级前入队的条目没有 sessionId，只有句柄和 cwd。
       const a = await connect('a-again');
+      const seenBeforeReplay = a.events.length;
       const replay = await a.call('user:message', {
         text: '离线时排在 projA 的', cwd: dirs.projA, instanceId: handleA, clientMessageId: 'a-queued', fromOutbox: true,
       });
@@ -120,7 +121,12 @@ test('MSG-02（review P0-2）：重启后，带着旧句柄的离线重放不得
         `A 排在 projA 的消息落进了 B 的会话（projB=${dirs.projB}，sessionId=${doneB.sessionId}）：模型会在错误的仓库里执行它`);
       assert.equal(replay.ok, false, `旧句柄在新进程里不该命中任何实例，实际 ${JSON.stringify(replay)}`);
       assert.equal(replay.stale, true,
-        `必须按 stale 拒收：客户端据此停止重试、提示刷新，而不是当成忙碌留着「重发」按钮，实际 ${JSON.stringify(replay)}`);
+        `必须按 stale 拒收：客户端据此停止重试、交还原文，而不是当成忙碌留着「重发」按钮，实际 ${JSON.stringify(replay)}`);
+      // 验收 O126：离线重放的拒收由前端按条目交代（原文进了死信暂存、回到那个会话才交还）。服务端再推一行
+      // 「目标会话已关闭，请刷新后重发」会落在用户眼前那一屏上——刷新找不回原文，这是错误指引。
+      const notices = a.events.slice(seenBeforeReplay).filter(e => e.type === 'system' || e.type === 'error');
+      assert.deepEqual(notices.map(e => e.payload?.message), [],
+        '离线重放被判 stale 时服务端不该再推提示行：回执归前端（它知道原文存在哪、该回哪个会话）');
     });
   } finally {
     rmSync(dirs.root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录

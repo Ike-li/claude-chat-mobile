@@ -6020,11 +6020,7 @@ io.on('connection', socket => {
     }
     if (outboxRestartStaleArmed === 'restarted' && payload?.fromOutbox === true
         && !mockInstances.some(i => i.instanceId === payload.instanceId)) {
-      // 逐字对齐 app/src/server/app.js user:message 的 target.stale 分支：先 sysTo（recoverable → system），再负 ack
-      socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: null, instanceId: null, ts: Date.now(),
-        type: 'system', payload: { message: '目标会话已关闭，请刷新后重发' },
-      });
+      // 逐字对齐 app/src/server/app.js user:message 的 target.stale 分支：离线重放只回负 ack，不推 sysTo 提示行（O126）
       if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
       return;
     }

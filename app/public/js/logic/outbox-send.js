@@ -244,7 +244,7 @@ export function presentOfflineResendAck(err, ack) {
   // 逐字对齐（error==='stale_instance' || ack.stale），并把裸协议串换成人话——用户看到的是提示不是错误码。
   if (!err && ack && ack.ok === false && (ack.stale === true || ack.error === 'stale_instance')) {
     return {
-      outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true,
+      outcome: 'permanent', permanent: true, stale: true, requeue: false, clearBusyIfViewing: true,
       message: t('目标会话已关闭，请刷新后重发'),
     };
   }
@@ -354,6 +354,16 @@ export function outboxNoticePlacement({
   if (indicatorExists && indicatorConnected) return 'indicator';
   if (targetsViewing) return 'bar';
   return indicatorExists ? 'stale' : 'none';
+}
+
+// 永久拒收、眼前又没有落点的条目进了死信暂存（app.js 的 outboxDeadLetters），回到它的会话才交还。
+// 眼前没有会话时（server 重启后的提示页、首页）不说一句，用户只看得到服务端那行「请刷新后重发」，
+// 会以为原文没了、只能凭记忆重打（验收 O126）。这时没有 B 会话可污染，可以说；正在看别的会话时
+// 仍守 outboxNoticePlacement 的判据，不说。stale 的原因不带「请刷新后重发」：原文在暂存里，刷新找不回它。
+export function outboxParkedNotice({ viewingInstanceId = null, stale = false, message = '' } = {}) {
+  if (viewingInstanceId) return null;
+  const reason = stale ? t('目标会话已关闭') : (message || t('发送失败'));
+  return `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}${t('。原文已保存，回到该会话时会放回输入框')}`;
 }
 
 // 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：
