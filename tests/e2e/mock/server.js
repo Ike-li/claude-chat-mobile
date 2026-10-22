@@ -2845,6 +2845,11 @@ io.on('connection', socket => {
       const text = 'x\n'.repeat(6000);
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
     }
+    // O102：markdown 标题在 CM 里走 .cm-header——CM5 默认主题给的是 #00f，深色底上只有 2:1。
+    if (encoding !== 'base64' && String(relPath || '') === 'README.md') {
+      const text = '# CCM playground workspace\n\nSee [docs](https://example.com).\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
+    }
     // 附件不再走本通道（2026-09-06 搬家后归 attachment:read），这里不再有 .ccm-uploads 分支。
     console.log(`[mock] browse:read relPath=${relPath} offset=${offset} encoding=${encoding} 未命中 fixture`);
     return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });

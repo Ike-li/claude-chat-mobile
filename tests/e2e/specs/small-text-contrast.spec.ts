@@ -7,7 +7,8 @@
 // 半透明的中间底色（如 bg-sunk/40）被跳过、按其下的不透明底算——误差方向是略偏乐观，所以 token 测试另外覆盖了 sunk。
 
 import { test, expect, type Locator } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 async function effectiveContrast(locator: Locator): Promise<number> {
   return locator.evaluate((el) => {
@@ -55,6 +56,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
         const ratio = await effectiveContrast(loc);
         expect(ratio, `${scheme} ${label} 对比度 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
       }
+      await expectNoBrowserErrors(page);
+    });
+
+    // 验收 O102：不走 token 的几处——第三方配色（hljs github 主题、CM5 默认主题）、Tailwind 原色叠透明度
+    // （Bypass 说明的 text-red-500/80）、白字压实底红（侧滑露出的「关闭」）。token 本身由 contrast-tokens 单测钉。
+    test(`P0-A11Y-CONTRAST3 ${scheme}：代码高亮、Bypass 说明、侧滑「关闭」、markdown 标题 ≥4.5:1`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await gotoMock(page);
+      await sendChatMessage(page, 'test:stream');
+      const last = page.locator('[data-testid="assistant-message"]').last();
+      await expect(last.locator('pre code')).toContainText('tester', { timeout: 20_000 });
+      await waitForIdle(page);
+
+      const targets: Array<[string, Locator]> = [
+        ['代码块关键字 const', last.locator('pre code .hljs-keyword').first()],
+      ];
+      for (const [label, loc] of targets) {
+        await expect(loc, `${label} 没渲染出来`).toBeVisible();
+        const ratio = await effectiveContrast(loc);
+        expect(ratio, `${scheme} ${label} 对比度 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      }
+
+      await page.locator('#pillDefaults').click();
+      await openSettingsSection(page, 'perm');
+      const bypassDesc = page.locator('.perm-tile[data-mode="bypassPermissions"] > div').nth(1);
+      await expect(bypassDesc).toBeVisible();
+      const descRatio = await effectiveContrast(bypassDesc);
+      expect(descRatio, `${scheme} Bypass 说明对比度 ${descRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      await page.keyboard.press('Escape');
+
+      // 侧滑「关闭」平时压在行内容下面，不可见也照样按它自己的实底算
+      await openSessionsSidebar(page);
+      const swipeClose = page.locator('.swipe-row-container > div', { hasText: /^关闭$/ }).first();
+      await expect(swipeClose).toHaveCount(1);
+      const closeRatio = await effectiveContrast(swipeClose);
+      expect(closeRatio, `${scheme} 侧滑「关闭」对比度 ${closeRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      await expectNoBrowserErrors(page);
+    });
+
+    test(`P0-A11Y-CONTRAST4 ${scheme}：文件页 markdown 标题 ≥4.5:1`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await gotoMock(page);
+      await page.locator('#topContextPill').click();
+      await page.locator('[data-testid="browse-entry"]', { hasText: 'README.md' }).click();
+      const header = page.locator('#fileBrowseBody .cm-header').first();
+      await expect(header).toContainText('CCM playground workspace');
+      const ratio = await effectiveContrast(header);
+      expect(ratio, `${scheme} markdown 标题对比度 ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      const link = page.locator('#fileBrowseBody .cm-link').first();
+      await expect(link).toContainText('docs');
+      const linkRatio = await effectiveContrast(link);
+      expect(linkRatio, `${scheme} markdown 链接对比度 ${linkRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
       await expectNoBrowserErrors(page);
     });
 

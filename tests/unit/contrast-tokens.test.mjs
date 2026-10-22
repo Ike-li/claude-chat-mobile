@@ -105,3 +105,36 @@ for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
     }
   });
 }
+
+// 验收 O102（AC-21-03）：语义色作为【文字】落在五种底上——surface / canvas / surface-sunk（未读 chip、代码块）/
+// user-bubble（用户消息「展开」）/ accent-wash（语言选中项「中文 ✓」）。浅色 accent 在 wash 上只有 4.15、
+// sunk 上 4.41；深色 danger 在 bubble 上 4.31；success 两套主题都不到 4.5（深色此前直接沿用浅色值）。
+for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
+  test(`O102 ${name}：accent / danger / warning / info / success 文字在五种底上都 ≥4.5`, () => {
+    const fails = [];
+    for (const fg of ['accent', 'danger', 'warning', 'info', 'success']) {
+      for (const bg of ['surface', 'canvas', 'surface-sunk', 'user-bubble', 'accent-wash']) {
+        const ratio = contrastRatio(theme[fg], theme[bg]);
+        if (ratio < 4.5) fails.push(`${fg} / ${bg} = ${ratio.toFixed(2)}`);
+      }
+    }
+    assert.deepEqual(fails, []);
+  });
+
+  // 横幅主文案（「连接已断开…」与 ⚙）用的就是横幅自己的语气色，落在 color-mix 出来的淡底上：浅色 warn 只有 4.25。
+  test(`O102 ${name}：warn / success 横幅的主文案在自己的淡底上 ≥4.5`, () => {
+    for (const { tone, token, pct } of bannerTones.filter(b => b.tone !== 'info')) {
+      const bg = mixHex(theme[token], pct, theme.surface);
+      const ratio = contrastRatio(theme[token], bg);
+      assert.ok(ratio >= 4.5, `${tone}（${bg}）上 ${token} = ${ratio.toFixed(2)}`);
+    }
+  });
+
+  // 抽屉行侧滑露出的「关闭」是白字压实底红：深色 danger 为了当文字够亮而提亮，当底色白字只剩 3.5。
+  // 实底另用 danger-solid（同 cta 的做法：深色实底仍用深一档的红）。
+  test(`O102 ${name}：danger-solid 实底上的白字 ≥4.5`, () => {
+    assert.ok(theme['danger-solid'], '缺 --danger-solid');
+    const ratio = contrastRatio('#FFFFFF', theme['danger-solid']);
+    assert.ok(ratio >= 4.5, `white / danger-solid = ${ratio.toFixed(2)}`);
+  });
+}

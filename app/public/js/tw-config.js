@@ -23,6 +23,7 @@ tailwind.config = {
         info: 'var(--info)',
         success: 'var(--success)',
         danger: 'var(--danger)',
+        'danger-solid': 'var(--danger-solid)',
         warning: 'var(--warning)',
         line: 'var(--line)',
         'line-soft': 'var(--line-soft)',

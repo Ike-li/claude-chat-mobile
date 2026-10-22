@@ -4889,7 +4889,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       for (const s of specs) {
         const dangerCls = s.danger ? ' text-danger' : '';
         const titleCls = s.danger ? 'text-danger' : 'text-ink';
-        const descCls = s.danger ? 'text-red-500/80' : 'text-ink-soft';
+        const descCls = s.danger ? 'text-danger' : 'text-ink-soft'; // 原 text-red-500/80：Tailwind 原色叠透明度，浅 2.89 / 深 3.34（O102）
         // 元素是 <button> 而不是套了 class 的 <div>：这六张里有一张是 Bypass permissions
         // （绕过全部权限检查），而 div 版本 Tab 走不到、辅助技术不认得是控件、也读不出当前选的是哪档
         // （2026-08-26 探索性测试 VC-D4-03 实测：role/tabindex/aria-pressed 全为 null）。
@@ -7083,7 +7083,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 背景红底“关闭”按钮
     let deleteBtn;
     if (liveInst) {
-      deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">${t('关闭')}</div>`);
+      deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger-solid text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">${t('关闭')}</div>`);
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
         haptic('warning');
