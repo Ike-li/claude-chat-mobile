@@ -351,6 +351,19 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // 验收 O116：Bash 的 tool_use_result 是 {stdout,stderr,interrupted,…}。卡片和「展开全文」要的是终端里那份纯文本
+  // （与历史折叠态同取 block.content），不是这个对象的 JSON——那样换行成了字面 \n、整段挤成一行
+  test('tool_result：shell 输出形状的结构化结果 → 摘要与全文都是纯文本，不是 JSON', () => {
+    const { s, events } = makeSession();
+    const text = 'line one\nline two';
+    s.map({ type: 'user', tool_use_result: { stdout: text, stderr: '', interrupted: false, isImage: false },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-bash', is_error: false, content: text }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-bash');
+    assert.equal(tr.payload.outputSummary, text);
+    assert.equal(s.getToolOutput('tool-bash'), text);
+    s.dispose();
+  });
+
   test('tool_result：超长输出 → truncated:true + getToolOutput 可取全文（展开全文）', () => {
     const { s, events } = makeSession();
     // 必须含空白/标点：纯 base64 字符集会被 redactBase64 整段省略，测不到截断路径

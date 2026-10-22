@@ -410,6 +410,14 @@ function mergeMessageUsage(prev, next) {
   return out;
 }
 
+// 工具结果的展示原文。结构化的 tool_use_result 优先——前端按它特化渲染（TaskCreate/TaskUpdate 等，见
+// logic/tool-cards.js）。shell 类工具例外：它的结构是 {stdout,stderr,interrupted,…}，要显示的是终端里那份纯文本，
+// 取 block.content，与历史折叠态、历史「展开全文」同口径；否则换行成了字面 \n、整段挤成一行 JSON（验收 O116）。
+function toolResultRaw(structured, content) {
+  if (content != null && typeof structured?.stdout === 'string') return content;
+  return structured ?? content;
+}
+
 export class AgentSession {
   constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
@@ -3355,7 +3363,7 @@ export class AgentSession {
           const subType = this.subagentTypeByParent.get(msg.parent_tool_use_id) ?? null;
           for (const block of asArray(msg.message?.content)) {
             if (block?.type === 'tool_result') {
-              const raw = msg.tool_use_result ?? block.content;
+              const raw = toolResultRaw(msg.tool_use_result, block.content);
               this.cacheToolOutput(block.tool_use_id, raw);        // 缓存原始结构，getToolOutput 返回时红线
               // 截图引用一律取自 block.content（API 形态）：tool_use_result 对 Read 是 {file:{base64}}、对 MCP 是
               // 块数组，两种都不稳；同主链分支，引用带上子代理那次调用的 id 供落盘后到子代理文件里找。
@@ -3408,7 +3416,7 @@ export class AgentSession {
         const toolResultCount = asArray(msg.message?.content).filter(b => b?.type === 'tool_result').length;
         for (const block of asArray(msg.message?.content)) {
           if (block?.type === 'tool_result') {
-            const raw = msg.tool_use_result ?? block.content;
+            const raw = toolResultRaw(msg.tool_use_result, block.content);
             // denyKind：deny+message 通道（审批拒绝/取消、AskUserQuestion 作答/取消）的真实语义，
             // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
             const denyKind = this.denyKinds.get(block.tool_use_id);
