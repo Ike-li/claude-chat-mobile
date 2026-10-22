@@ -196,6 +196,17 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-DESTROY-REASON2 刚切进会话、回放缓冲还开着时进程崩溃 → 中断面仍写出原因', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-sync-ack-timeout-crash');
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    await expect(destroyedSurface.getByTestId('instance-destroyed-reason'), '排在回放缓冲里的崩溃原因被切视图一起丢了').toContainText('terminated by signal SIGKILL');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);

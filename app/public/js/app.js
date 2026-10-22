@@ -5476,9 +5476,15 @@ import { createGateFocusController } from './app/focus-layers.js';
       const destroyedResume = restartPrevEntry?.sessionId && restartPrevEntry?.cwd
         ? { sessionId: restartPrevEntry.sessionId, cwd: restartPrevEntry.cwd }
         : null;
-      // 进程异常退出：带 processExited 的 error 先到、已按会话记下原因（SIGKILL 等），中断面当场写出来（验收 O121）
+      // 进程异常退出：带 processExited 的 error 先到、已按会话记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
+      // 刚切过来 / 重连时 sync:since 回放缓冲还开着，那条 error 排在队里没派发，而接下来的 bindView 会把队列丢掉，
+      // 所以从队列里也找一遍，并补记到 crashNotices，之后重载历史仍能补出那条提示（#329 review P2）。
       const destroyedSid = instanceDestroyed && !destroyedByRestart
         ? prevInstances.find(x => x.instanceId === displayedInstanceId)?.sessionId : null;
+      const queuedCrash = destroyedSid && !crashNotices.peek(destroyedSid)
+        ? replayBuffer.queued(displayedInstanceId).findLast(e => e.type === 'error' && e.payload?.processExited)
+        : null;
+      if (queuedCrash) crashNotices.record(destroyedSid, queuedCrash.payload.message, null);
       const destroyedReason = crashNotices.peek(destroyedSid)?.message ?? null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）

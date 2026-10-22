@@ -200,6 +200,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armSyncAckTimeout(); },
     },
     {
+      // #329 review P2：同上，吞掉 ack 后 100ms 让 Timeline Session 的进程崩溃（回放缓冲还开着）。
+      command: 'test:arm-sync-ack-timeout-crash',
+      run: async () => { getContext().armSyncAckTimeoutCrash(); },
+    },
+    {
       // P0-05-HIST-FULL：武装「Timeline Session 的历史里多一对被截断的 Bash 工具卡」，下一次拉历史生效。
       command: 'test:arm-history-long-tool',
       run: async () => { getContext().armHistoryLongTool(); },
