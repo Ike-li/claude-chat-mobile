@@ -1341,10 +1341,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 长按会话行 → 标为未读 / 标为已读（2026-09-02）。触屏路径只发 pointerdown、不发 pointerup——
+  // 长按会话行 → 标为未读 / 标为已读（2026-09-02）。触屏路径先只发 pointerdown——
   // 500ms 后由前端自己的计时器触发（web-first 断言等它到点，不用被门禁禁掉的 waitForTimeout）；
-  // 桌面右键（contextmenu）走同一个入口。长按松手时浏览器仍会派发 click，必须被吞掉，否则弹出
-  // 确认 sheet 的同时会话也被切走。标记落 localStorage，刷新后仍在；只有再次打开该会话才清。
+  // 桌面右键（contextmenu）走同一个入口。长按松手时浏览器仍会派发 click，必须被吞掉：触屏的 click
+  // 按抬手位置命中，此时确认 sheet 已盖在行上，click 落在遮罩上会把 sheet 当场关掉（O101）。
+  // 标记落 localStorage，刷新后仍在；只有再次打开该会话才清。
   test('P0-11ad 长按会话行标为未读：行上出现「未读」、目录头计数、刷新仍在、再长按标回已读', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
@@ -1360,6 +1361,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(modal).toHaveClass(/sheet-open/);
     await expect(page.locator('#confirmTitle')).toHaveText('Archived Planning Session');
     await expect(page.locator('#confirmOk')).toHaveText('标为未读');
+    // 抬手：pointerup 在行上，补发的 click 落在确认 sheet 的遮罩上——必须被吞掉，sheet 不能被它关掉
+    await row.dispatchEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 200 });
+    await modal.dispatchEvent('click');
+    await expect(modal).toHaveClass(/sheet-open/);
     await page.locator('#confirmOk').click();
     await expect(modal).not.toHaveClass(/sheet-open/);
     // 答完确认要回到抽屉看见那一行的新状态：确认 sheet 上的点击不算「点抽屉外面」（app.js 全局 click 收抽屉的豁免）
@@ -1370,12 +1375,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
     await expect(row.locator('[data-session-head] > span').first()).toHaveClass(/font-semibold/);
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
-
-    // 长按松手：pointerup + click 落到行按钮上，click 必须被吞掉——抽屉仍开着、没有切会话
-    await row.dispatchEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 200 });
-    await row.locator('button').first().dispatchEvent('click');
-    await expectSidebarOpen(page);
-    await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
 
     // 刷新后仍未读（localStorage 持久）：手动标记不受「基线不追溯」影响
     await page.reload();
