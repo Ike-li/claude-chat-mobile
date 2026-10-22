@@ -8,7 +8,7 @@
 
 import { test, expect, type Locator } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { openSessionsSidebar } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 async function effectiveContrast(locator: Locator): Promise<number> {
   return locator.evaluate((el) => {
@@ -92,6 +92,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await expect(swipeClose).toHaveCount(1);
       const closeRatio = await effectiveContrast(swipeClose);
       expect(closeRatio, `${scheme} 侧滑「关闭」对比度 ${closeRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      await expectNoBrowserErrors(page);
+    });
+
+    // Codex review：确认 sheet 的危险档按钮（彻底删除、吊销设备、开 Bypass、重启服务）同样是白字压实底红
+    test(`P0-A11Y-CONTRAST5 ${scheme}：危险确认按钮的白字 ≥4.5:1`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await gotoMock(page);
+      await openSessionsSidebar(page);
+      await expandWorkspace(page, MAIN_WORKSPACE);
+      await page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]').getByTestId('session-delete').click();
+      const ok = page.locator('#confirmOk');
+      await expect(ok).toHaveText('彻底删除');
+      await expect(page.locator('#confirmModal')).toHaveClass(/sheet-open/);
+      // sheet 是淡入的：祖先 opacity 还没到 1 时量到的是过渡中的值，等它稳定（稳态不达标会在这里超时变红）
+      await expect.poll(() => effectiveContrast(ok), { message: `${scheme} 「彻底删除」白字对比度` }).toBeGreaterThanOrEqual(4.5);
       await expectNoBrowserErrors(page);
     });
 
