@@ -37,6 +37,8 @@ const CLAUDE_DIR = CLAUDE_PROJECTS_DIR;
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
 export const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
+// 首条消息作搜索键只留前这么多字：meta 按文件缓存（最多 HEAD_META_CACHE_CAP 条），原文全留着最坏常驻几百 MB（#333 review）
+const FIRST_USER_KEY_CHARS = 1000;
 // CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
 // 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
 const TAIL_READ_BYTES = 512 * 1024;
@@ -1182,7 +1184,7 @@ export function matchesSessionTitle(title, query) {
   return String(title || '').toLowerCase().includes(q);
 }
 
-// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / 未截断 firstUser / 命令名）。
+// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / firstUser 前 FIRST_USER_KEY_CHARS 字、不按展示的 60 字截 / 命令名）。
 // 浏览走 SDK summary，搜索走扫盘——两套标题不是同一串，必须 OR，否则按看见的词会搜空。
 export function sessionTitleSearchKeys({ summary, aiTitle, firstUser, firstCmd } = {}) {
   const keys = [];
@@ -1605,7 +1607,7 @@ async function readHeadMeta(file, size) {
           } else if (c.startsWith('<command-') || c.startsWith('<local-command-')) {
             /* 其他命令片段 / 本地命令 stdout/stderr 包裹：纯噪声，跳过 */
           } else if (c && !firstUser) {
-            firstUser = c;
+            firstUser = c.slice(0, FIRST_USER_KEY_CHARS);
           }
         }
       }

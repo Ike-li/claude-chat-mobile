@@ -404,10 +404,23 @@ test('listSessionsPage: 会话数超过 fd 上限时搜索照样扫得到最旧�
   const script = `const m = await import(${JSON.stringify(mod)});
     const r = await m.listSessionsPage(${JSON.stringify(cwd)}, { baseDir: ${JSON.stringify(BASE)}, limit: 50, query: 'FdLimitNeedle' });
     process.stdout.write(JSON.stringify(r.sessions.map(s => s.id)));`;
-  const r = spawnSync('bash', ['-c', 'ulimit -n 128 && exec "$0" --input-type=module -e "$1"', process.execPath, script],
-    { encoding: 'utf8', timeout: 20_000, cwd: fileURLToPath(new URL('.', import.meta.url)) });
+  // 脚本走 stdin、node 取 PATH 上的：命令串里不拼任何来自环境的值（CodeQL：shell 命令由环境值构造）
+  const r = spawnSync('bash', ['-c', 'ulimit -n 128 && exec ' + 'node --input-type=module'],
+    { input: script, encoding: 'utf8', timeout: 20_000, cwd: fileURLToPath(new URL('.', import.meta.url)) });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), ['needle-fd'], '超过 fd 上限的那批 open 报 EMFILE，最旧的会话从搜索结果里消失了');
+});
+
+// #333 review P2：meta 按文件缓存、最多 8192 条，首条消息原文全留着的话（头窗 64KB）最坏要常驻几百 MB。
+// 搜索键只取首条消息的前 1000 字。
+test('listSessionsPage: 首条消息超长时，搜索只看前 1000 字', async () => {
+  const cwd = '/test/page-query-first-user-cap';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'long-first', [{ type: 'user', message: { role: 'user', content: `HeadToken ${'y '.repeat(600)}TailBeyondCap` } }]);
+  const head = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: 'HeadToken' });
+  assert.deepEqual(head.sessions.map(s => s.id), ['long-first']);
+  const tail = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: 'TailBeyondCap' });
+  assert.deepEqual(tail.sessions.map(s => s.id), [], '首条消息全文都进了搜索键（也就全进了缓存）');
 });
 
 test('listSessionsPage: query 能命中 firstUser 超过展示 60 字的尾部', async () => {
