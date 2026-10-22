@@ -360,10 +360,13 @@ export function outboxNoticePlacement({
 // 眼前没有会话时（server 重启后的提示页、首页）不说一句，用户只看得到服务端那行「请刷新后重发」，
 // 会以为原文没了、只能凭记忆重打（验收 O126）。这时没有 B 会话可污染，可以说；正在看别的会话时
 // 仍守 outboxNoticePlacement 的判据，不说。stale 的原因不带「请刷新后重发」：原文在暂存里，刷新找不回它。
-export function outboxParkedNotice({ viewingInstanceId = null, stale = false, message = '' } = {}) {
+// 条目没带会话号（升级前入队）就回不去：只剩的实例号在 server 重启后不复用（MSG-02），暂存永远认不出它——
+// 不许诺交还，原文直接写进提示，看得见、复制得到（PR #310 review）。
+export function outboxParkedNotice({ viewingInstanceId = null, stale = false, message = '', sessionId = null, text = '' } = {}) {
   if (viewingInstanceId) return null;
   const reason = stale ? t('目标会话已关闭') : (message || t('发送失败'));
-  return `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}${t('。原文已保存，回到该会话时会放回输入框')}`;
+  const head = `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}`;
+  return sessionId ? `${head}${t('。原文已保存，回到该会话时会放回输入框')}` : `${head}${t('。原文：')}${text}`;
 }
 
 // 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：

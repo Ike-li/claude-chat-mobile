@@ -1618,7 +1618,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             else {
               dropPendingUserBubble(item.bubbleEl);
               outboxDeadLetters.park(planned, permanentMsg);
-              const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message });
+              const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message, sessionId: planned.sessionId, text: planned.text });
               if (parkedText) addOutboxParkedBar(parkedText, planned);
             }
           }
