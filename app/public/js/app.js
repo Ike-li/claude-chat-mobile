@@ -1581,10 +1581,14 @@ import { createGateFocusController } from './app/focus-layers.js';
             // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
             const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
             const inBubble = Boolean(permanentHost?.closest?.('[data-testid="user-message"]'));
-            if (permanentHost) permanentHost.textContent = inBubble ? permanentMsg : `${permanentMsg}${t('。原文：')}${item.text || ''}`;
-            // 没有落点：重载后恢复的条目没有气泡，又不是发往眼前这个会话。outbox 已清，这里不留就丢了——
-            // 暂存，回到它的会话时交还（PR #232 review）。
-            else outboxDeadLetters.park(planned, permanentMsg);
+            if (permanentHost?.isConnected) permanentHost.textContent = inBubble ? permanentMsg : `${permanentMsg}${t('。原文：')}${item.text || ''}`;
+            // 眼前看不到的都暂存，回到它的会话时交还（PR #232 review）：重载后恢复的条目没有气泡（落点 'none'）；
+            // 气泡只在 DOM 缓存里（'stale'）也不能指望——断线期间 server 重启时那个实例已经没了，重开会话不再用那份缓存，
+            // 写在缓存气泡上的提示和原文一起丢（验收 O31 / AC-13-07）。气泡一并摘掉，交还时只剩输入框里那一份。
+            else {
+              dropPendingUserBubble(item.bubbleEl);
+              outboxDeadLetters.park(planned, permanentMsg);
+            }
           }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else if (decision.outcome === 'blocked') {
