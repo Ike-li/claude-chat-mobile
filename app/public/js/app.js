@@ -194,6 +194,7 @@ import {
   openSessionsUnderRoot,
   dashboardDirs,
   folderReasonText,
+  isPathWithin,
 } from './logic.js';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
@@ -5396,6 +5397,15 @@ import { createGateFocusController } from './app/focus-layers.js';
       armedTakeoverSid = null;
       applyMirror(false, null);
     }
+    // 新会话页停在的文件夹被断开（本机或别的设备）→ 服务端把它归位到别处（O119）：记下从哪来，新会话页重画时说一句。
+    // 只在原来就在新会话页上、旧目录确实已不在任何已连接的文件夹（p.dirs）之下时算——用户自己换文件夹不提示。
+    // 不看展示用的项目清单：「无文件夹」只在用着时、子文件夹只在有会话时才占一节，换走就不在了，那不是被断开
+    // （#330 review P2）。「无文件夹」本来就不是连接来的，单独排除。必须在 currentCwd 覆写之前取。
+    const connectedRoots = Array.isArray(p?.dirs) ? p.dirs : [];
+    const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd
+      && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
+      && Boolean(messagesEl.querySelector('[data-testid="compose-surface"]'))
+      ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     viewingInstanceId = newViewing;
@@ -5490,7 +5500,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
+      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, composeRelocatedFrom }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -5844,7 +5854,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       return;
     }
     if (emptySurface === 'compose') {
-      showComposeSurface();
+      showComposeSurface({ relocatedFrom: opts.composeRelocatedFrom || null });
       return;
     }
 
@@ -8275,7 +8285,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   }
 
   // 干净新会话页（＋ / session:new）：当前工作区 + 将开 CLI 的默认档 + 示例 prompt；无最近列表。
-  function showComposeSurface() {
+  function showComposeSurface({ relocatedFrom = null } = {}) {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = t('新聊天');
@@ -8309,6 +8319,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
             <span class="text-xs text-ink-faint">⌄</span>
           </button>
+          ${relocatedFrom ? `<div class="mt-2 text-xs text-warning" data-testid="compose-relocated">${t('文件夹「')}${esc(baseName(relocatedFrom))}${t('」已断开，新会话改在这里开')}</div>` : ''}
           <div class="mt-2 flex flex-col items-center gap-1.5" data-worktree-chips></div>
           <div class="mt-2 flex items-center justify-center gap-1">
             <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>

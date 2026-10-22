@@ -927,6 +927,8 @@ export const EN_DICT = Object.freeze({
 
   // —— 会话管理（删除 / 关闭 / 分叉 / 首页）——
   '会话「': 'The transcript for "',
+  '文件夹「': 'Folder "',
+  '」已断开，新会话改在这里开': '" was disconnected, so the new session will start here instead',
   '」在主机上的记录将被真正抹除。': '" on the host will be truly erased.',
   '此操作不可恢复。': 'This cannot be undone.',
   '彻底删除': 'Delete permanently',
