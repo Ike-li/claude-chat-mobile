@@ -131,12 +131,13 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
     const actions = el('<div class="px-4 py-2 flex flex-wrap items-center gap-2 border-b border-line"></div>');
     // 主按钮一律「在这里开始会话」：挑子文件夹时直接开；浏览家目录时先连上再开（已经连着的不重复加）。
     // 「已经连接」只是提示，不挡路；其余原因（家目录、禁区、托管 worktree……）才置灰。
-    const blocked = purpose === 'add' && r.reason && r.reason !== 'already_connected';
+    // 手机上改不了清单时（广播里的 foldersReadonly），家目录里新建的接下来加不进去，只会留一个空目录（验收 O41）：
+    // 「新建文件夹」不给，先说清为什么；未连接的目录同样连不上，「在这里开始会话」一并置灰（已连接的照常可开）。
+    // 挑子文件夹时都照常给——那是在已连接的文件夹里，不用写清单。
+    const readonly = purpose === 'add' ? getFoldersReadonly() : null;
+    const blocked = purpose === 'add' && r.reason !== 'already_connected' && Boolean(r.reason || readonly);
     const start = purpose === 'add' ? () => add(r.path) : () => pick(absOf(r.path));
     actions.appendChild(actionButton(t('在这里开始会话'), 'folder-picker-start-here', blocked ? null : start));
-    // 手机上改不了清单时（广播里的 foldersReadonly），家目录里新建的接下来加不进去，只会留一个空目录（验收 O41）：
-    // 不给这个按钮，先说清为什么。挑子文件夹时照常给——那是建在已连接的文件夹里，不用写清单。
-    const readonly = purpose === 'add' ? getFoldersReadonly() : null;
     if (!readonly) actions.appendChild(actionButton(t('新建文件夹'), 'folder-picker-mkdir', () => showMkdir(purpose, r.path)));
     if (readonly) {
       const why = el('<div class="w-full text-[11px] text-ink-faint" data-testid="folder-picker-readonly"></div>');

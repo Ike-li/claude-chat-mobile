@@ -97,30 +97,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-PICK-5 工作区列表来自环境变量的安装：添加被拒时说清为什么，面板不关', async ({ page }) => {
+  // 验收 O41：清单改不了时，抽屉的「＋ 选择文件夹」此前照样可点，走完选择面板才被拒。
+  // 与首页引导（P0-FOLDERS-RO）同一取舍：入口置灰，就地说清为什么。
+  test('P0-PICK-5 工作区列表来自环境变量的安装：抽屉的「选择文件夹」置灰并说清为什么，点不开面板', async ({ page }) => {
     await sendChatMessage(page, 'test:folders-readonly');
     await waitForIdle(page);
     await openSessionsSidebar(page);
-    await page.locator('[data-testid="drawer-add-folder"]').click();
-    await entry(page, 'code').locator('button').first().click();
-    await entry(page, 'new-idea').locator('button').first().click();
-    await picker(page).locator('[data-testid="folder-picker-start-here"]').click();
-    await expect(page.locator('[data-testid="folder-picker-status"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
-    await expect(picker(page), '没加上却关了面板，用户会以为加上了').toHaveClass(/sheet-open/);
+    const add = page.locator('[data-testid="drawer-add-folder"]');
+    await expect(add).toBeDisabled();
+    await expect(page.locator('[data-testid="drawer-folders-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await add.click({ force: true });
+    await expect(picker(page), '置灰的入口点了照样开面板，等于没置灰').not.toHaveClass(/sheet-open/);
     await expectNoBrowserErrors(page);
   });
 
-  // 验收 O41：清单改不了时，家目录里新建的文件夹接下来加不进去，只会在磁盘上留一个空目录（服务端也拒，FOLDER-01）。
-  // 浏览家目录时就不给「新建文件夹」，并先说清为什么，不等点完才报。
-  test('P0-PICK-17 手机上改不了清单：添加文件夹时不给「新建文件夹」，先说清为什么', async ({ page }) => {
-    await sendChatMessage(page, 'test:folders-readonly');
-    await waitForIdle(page);
+  // 验收 O41：面板开着时清单变成改不了的（换了安装形态），未连接的目录上「新建文件夹」「在这里开始会话」
+  // 都是点了才被拒、前者还会留下空目录（服务端也拒，FOLDER-01）。先说清为什么，两个都不给点。
+  test('P0-PICK-17 手机上改不了清单：未连接的目录上不给「新建文件夹」「在这里开始会话」，先说清为什么', async ({ page }) => {
     await openSessionsSidebar(page);
     await page.locator('[data-testid="drawer-add-folder"]').click();
+    await page.request.post('/__folders-readonly?code=source_readonly');
     await entry(page, 'code').locator('button').first().click();
+    await entry(page, 'new-idea').locator('button').first().click();
     await expect(picker(page).locator('[data-testid="folder-picker-readonly"]')).toHaveText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
     await expect(picker(page).locator('[data-testid="folder-picker-mkdir"]'), '给了一个建完才报「改不了」、还留下空目录的按钮').toHaveCount(0);
-    await expect(picker(page).locator('[data-testid="folder-picker-start-here"]')).toBeEnabled();
+    await expect(picker(page).locator('[data-testid="folder-picker-start-here"]'), '未连接的目录加不进清单，点了只会被拒').toBeDisabled();
     await expectNoBrowserErrors(page);
   });
 
