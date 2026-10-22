@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, appendedForeignWrite, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -754,6 +754,32 @@ test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须�
   test('缺参不抛', () => {
     assert.doesNotThrow(() => externalGrowthWhilePaused());
     assert.equal(externalGrowthWhilePaused(), false);
+  });
+});
+
+// O122：挂起集合变过（有审批结算）时，那段增长里有没有不是己方写的条目。
+test.describe('appendedForeignWrite：审批结算那一拍新写的那段里有没有别人的写入', () => {
+  const cwd = '/test/appended-foreign';
+  const dir = join(BASE, getProjectDir(cwd));
+  const head = { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: '起头' }, timestamp: '2026-10-22T10:00:00.000Z' };
+  const headBytes = Buffer.byteLength(JSON.stringify(head) + '\n');
+
+  test('新写的只有 sdk-ts 与不带 entrypoint 的记录 → false', async () => {
+    writeJSONL(dir, 'af-own', [head,
+      { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } },
+      { type: 'last-prompt' }]);
+    assert.equal(await appendedForeignWrite('af-own', cwd, headBytes, { baseDir: BASE }), false);
+  });
+  test('新写的里有 cli 条目 → true；起点之前的 cli 条目不算', async () => {
+    writeJSONL(dir, 'af-cli', [head, { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端' } }]);
+    assert.equal(await appendedForeignWrite('af-cli', cwd, headBytes, { baseDir: BASE }), true);
+    writeJSONL(dir, 'af-old-cli', [{ ...head, entrypoint: 'cli' }, { type: 'last-prompt' }]);
+    assert.equal(await appendedForeignWrite('af-old-cli', cwd, headBytes, { baseDir: BASE }), false);
+  });
+  test('没有新写入 → false；文件读不出 → 保守 true', async () => {
+    writeJSONL(dir, 'af-none', [head]);
+    assert.equal(await appendedForeignWrite('af-none', cwd, headBytes, { baseDir: BASE }), false);
+    assert.equal(await appendedForeignWrite('af-missing', cwd, 0, { baseDir: BASE }), true);
   });
 });
 

@@ -11,7 +11,7 @@
 import {
   getSessionHistory, historyTailKey, sessionFileSize, classifyTranscriptTail,
   catchUpStep, mirrorReleaseStep, mirrorEntryLock, mirrorStaleFlag,
-  externalGrowthWhilePaused, rebaselineAbsorbedExternal, describeMirrorEntryLock,
+  externalGrowthWhilePaused, appendedForeignWrite, rebaselineAbsorbedExternal, describeMirrorEntryLock,
 } from '../sessions/history.js';
 import { readSessionRegistry, registryIndicatesTerminalBusy, registryIndicatesTerminalWaiting, cliPresenceStep } from '../sessions/session-registry.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
@@ -340,13 +340,16 @@ export function createMirrorEngine({
       let busyTail = { verdict: 'settled', lastChainTs: null };
       let busySize = -1;
       let busyRegistryEntry = null;
+      let busyAppendedForeign = false;
       // permission 态下 web 侧不写盘，故并行取一次 size 作为「终端是否在写」的判据（见 externalGrowthWhilePaused）。
       // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
       try {
-        [busyTail, busySize, busyRegistryEntry] = await Promise.all([
+        [busyTail, busySize, busyRegistryEntry, busyAppendedForeign] = await Promise.all([
           classifyTranscriptTail(a.sessionId, a.cwd, diskOpts).catch(() => ({ verdict: 'settled', lastChainTs: null })),
           sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1),
           readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null),
+          // 审批窗里上一拍之后新写的那段：挂起集合变过时靠它分辨有没有终端写入（O122）
+          st === 'permission' && mirrorLastSize >= 0 ? appendedForeignWrite(a.sessionId, a.cwd, mirrorLastSize, diskOpts) : false,
         ]);
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
@@ -358,9 +361,9 @@ export function createMirrorEngine({
       mirrorCliSeen = busyCliPresence.seen;
       // 等审批（可长达 APPROVAL_TTL_MS 30min）期间 web 不写盘 → 磁盘长大必是终端写的，必须标脏，
       // 否则下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉出第二条链。
-      // 挂起的审批 / 提问集合：两拍之间变过 = 有审批结算、SDK 写了 tool_result，那段增长是己方的（O122）
+      // 挂起的审批 / 提问集合：两拍之间变过 = 有审批结算、SDK 写了 tool_result；那段增长要看有没有别人写的（O122）
       const pendingKey = [...a.pendingPermissions.keys(), ...a.pendingQuestions.keys()].sort().join('\n');
-      if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize, prevPending: mirrorLastPendingKey, curPending: pendingKey })) {
+      if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize, prevPending: mirrorLastPendingKey, curPending: pendingKey, appendedForeign: busyAppendedForeign })) {
         a.externalDirty = true;
       }
       // wasOwnTurn 只在 st==='busy' 时置：permission（等审批）期间 web 侧未必不写盘（并行工具调用里免审批

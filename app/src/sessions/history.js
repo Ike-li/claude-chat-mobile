@@ -2102,12 +2102,41 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
 //
 // 「web 侧不写盘」只在【同一批】审批挂着时成立（O122）：两次 tick 之间若有审批结算（过期 / 批准 / 拒绝），
 // SDK 会写下那条 tool_result、继续跑，几毫秒内下一个审批又挂起——CLI 对并行的多个审批是逐个问的。
-// 两拍看到的都是 'permission'，中间的增长却是己方写的。所以要求两拍的挂起集合（prevPending/curPending，
-// 审批与提问 id 拼成的键）相同；不同就交回调用方重建基线、不判增长。id 每次请求唯一，旧键不会碰巧等于新集合。
-export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPending, curPending } = {}) {
+// 两拍看到的都是 'permission'，中间的增长却是己方写的。所以两拍的挂起集合（prevPending/curPending，
+// 审批与提问 id 拼成的键）相同时，增长照旧全归终端；不同时只说明己方写过、不说明这段里【只有】己方，
+// 改看这段新写的条目里有没有别人写的（appendedForeign，见 appendedForeignWrite）。id 每次请求唯一，
+// 旧键不会碰巧等于新集合。
+export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPending, curPending, appendedForeign } = {}) {
   if (state !== 'permission') return false;
-  if (prevPending !== curPending) return false;
-  return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
+  if (!(Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize))) return false;
+  return prevPending === curPending || appendedForeign === true;
+}
+
+// 从 fromByte 读到文件尾，看这段新写的条目里有没有不是己方（sdk-ts）写的。只认自报了 entrypoint 的条目
+// （user / assistant 等主链记录都带）；没带的（快照、last-prompt 之类）不作证据，空行与切开的半行跳过。
+// 读不出、或这段大过尾窗上限 → 保守当有：多一次冷重启可以接受，漏标致分叉不可逆。
+export async function appendedForeignWrite(sessionId, cwd, fromByte, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return true;
+  let fh;
+  try {
+    let st;
+    ({ fh, st } = await openRegularFile(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`)));
+    const len = st.size - fromByte;
+    if (len <= 0) return false;
+    if (len > TAIL_READ_BYTES) return true;
+    const buf = Buffer.allocUnsafe(len);
+    const { bytesRead } = await fh.read(buf, 0, len, fromByte);
+    for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.entrypoint === 'string' && !isOwnSdkTail(entry.entrypoint)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }
 
 // ---- 子代理进度观察（本地 slash 命令的唯一可见来源）----

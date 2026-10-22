@@ -806,6 +806,28 @@ test('两次 tick 之间有审批结算、下一个审批又挂起 → 增长是
   assert.equal(a.externalDirty, true, '基线要在结算那一拍重建，而不是作废——否则第二个审批窗里的终端写入就漏标了');
 });
 
+test('审批结算那一拍里终端也写了（entrypoint=cli）→ 照样标脏，不能被「集合变了」整段吞掉', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-mixed');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入
+
+  h.setState('inst-A', 'permission');
+  a.pendingPermissions.set('req-a', {});
+  await h.engine.catchUpTick();                       // 第一个审批挂着：建 size 基线
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', [
+    ...settledTail(base),
+    { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端里同时敲了一句' }, timestamp: iso(base + 4_000) },
+    { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-a', is_error: true, content: '审批已过期' }] }, timestamp: iso(base + 5_000) },
+  ]);
+  a.pendingPermissions.delete('req-a');
+  a.pendingPermissions.set('req-b', {});
+  await h.engine.catchUpTick();
+  assert.equal(a.externalDirty, true, '集合变了只说明己方写过，不说明这段里只有己方——漏标就从旧 parentUuid 分叉');
+});
+
 test('同一族：idle 一拍之后直接是审批挂起（发消息后首个工具就要审批，中间没赶上 busy 那拍）→ 己方写的不标脏', async () => {
   const h = makeEngine();
   const a = h.view('inst-A', 'sess-first');
