@@ -3430,7 +3430,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
-      if (p.processExited) crashNotices.record(ev?.sessionId, p.message, errBar);
+      if (p.processExited) {
+        crashNotices.record(ev?.sessionId, p.message, errBar);
+        crashNotices.noteInstance(ev?.instanceId, p.message);
+      }
       clearBusyFromTurnEndEvent(ev, { unlockSendGate: false });
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
@@ -5476,16 +5479,21 @@ import { createGateFocusController } from './app/focus-layers.js';
       const destroyedResume = restartPrevEntry?.sessionId && restartPrevEntry?.cwd
         ? { sessionId: restartPrevEntry.sessionId, cwd: restartPrevEntry.cwd }
         : null;
-      // 进程异常退出：带 processExited 的 error 先到、已按会话记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
+      // 进程异常退出：带 processExited 的 error 先到、已按实例（与会话）记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
+      // 按实例记：进程可能在 init 之前就退出，那时还没有会话 id（#329 review P2）。
       // 刚切过来 / 重连时 sync:since 回放缓冲还开着，那条 error 排在队里没派发，而接下来的 bindView 会把队列丢掉，
-      // 所以从队列里也找一遍，并补记到 crashNotices，之后重载历史仍能补出那条提示（#329 review P2）。
-      const destroyedSid = instanceDestroyed && !destroyedByRestart
-        ? prevInstances.find(x => x.instanceId === displayedInstanceId)?.sessionId : null;
-      const queuedCrash = destroyedSid && !crashNotices.peek(destroyedSid)
-        ? replayBuffer.queued(displayedInstanceId).findLast(e => e.type === 'error' && e.payload?.processExited)
+      // 所以从队列里也找一遍并补记，之后重载历史仍能补出那条提示（#329 review P2）。
+      const destroyedInstanceId = instanceDestroyed && !destroyedByRestart ? displayedInstanceId : null;
+      const destroyedSid = destroyedInstanceId
+        ? prevInstances.find(x => x.instanceId === destroyedInstanceId)?.sessionId : null;
+      const queuedCrash = destroyedInstanceId && !crashNotices.reasonFor({ instanceId: destroyedInstanceId, sessionId: destroyedSid })
+        ? replayBuffer.queued(destroyedInstanceId).findLast(e => e.type === 'error' && e.payload?.processExited)
         : null;
-      if (queuedCrash) crashNotices.record(destroyedSid, queuedCrash.payload.message, null);
-      const destroyedReason = crashNotices.peek(destroyedSid)?.message ?? null;
+      if (queuedCrash) {
+        crashNotices.record(destroyedSid, queuedCrash.payload.message, null);
+        crashNotices.noteInstance(destroyedInstanceId, queuedCrash.payload.message);
+      }
+      const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor({ instanceId: destroyedInstanceId, sessionId: destroyedSid }) : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）

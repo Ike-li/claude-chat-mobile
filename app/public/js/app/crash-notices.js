@@ -7,6 +7,7 @@ import { formatClockHm } from '../logic/message-time.js';
 // 接着发了消息就算翻篇，不再补。只记在本页内存里：刷新页面、换设备都看不到（服务端不留这份状态）。
 export function createCrashNotices({ addBar = () => null, hasNotice = () => false } = {}) {
   const bySession = new Map();
+  const byInstance = new Map(); // 「会话已中断」面用：进程可能在 init 之前就退出，那时还没有会话 id
   // 标记让「DOM 缓存原样恢复、当场那条还在」时不重复补
   const mark = bar => { if (bar) bar.dataset.crashNotice = '1'; };
 
@@ -23,9 +24,12 @@ export function createCrashNotices({ addBar = () => null, hasNotice = () => fals
     clear(sessionId) {
       bySession.delete(sessionId);
     },
+    noteInstance(instanceId, message) {
+      if (instanceId) byInstance.set(instanceId, message);
+    },
     // 「会话已中断」面当场写原因用（验收 O121）：error 先于摘实例的广播到达，出面那一刻这里已经有了
-    peek(sessionId) {
-      return (sessionId && bySession.get(sessionId)) || null;
+    reasonFor({ instanceId = null, sessionId = null } = {}) {
+      return (instanceId && byInstance.get(instanceId)) || (sessionId && bySession.get(sessionId)?.message) || null;
     },
   };
 }

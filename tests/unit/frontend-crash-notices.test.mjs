@@ -68,3 +68,13 @@ test('会话之间互不串：别的会话没崩过就不补，清一个不影�
   h.notices.restore('s2');
   assert.equal(h.screen().length, 1, 's1 被清不影响 s2');
 });
+
+// #329 review P2：新开的进程还没吐 init 就退出，实例没有会话 id——「会话已中断」面要的原因按实例也得查得到
+test('reasonFor：按实例记的原因在没有会话 id 时也查得到；实例之间互不串', () => {
+  const h = harness();
+  h.notices.noteInstance('inst-1', MESSAGE);
+  assert.equal(h.notices.reasonFor({ instanceId: 'inst-1', sessionId: null }), MESSAGE);
+  assert.equal(h.notices.reasonFor({ instanceId: 'inst-2', sessionId: null }), null);
+  h.notices.record('s2', '会话级原因', null, at);
+  assert.equal(h.notices.reasonFor({ instanceId: 'inst-2', sessionId: 's2' }), '会话级原因', '没有实例级记录时回落会话级');
+});

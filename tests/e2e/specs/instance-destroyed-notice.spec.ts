@@ -207,6 +207,19 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-DESTROY-REASON3 新开的进程还没有会话 id 就崩溃 → 中断面仍写出原因', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.');
+    await sendChatMessage(page, 'test:process-crash-before-init');
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    await expect(destroyedSurface.getByTestId('instance-destroyed-reason'), '没有会话 id 的实例崩溃，原因没地方记').toContainText('terminated by signal SIGKILL');
+    await expect(destroyedSurface).not.toContainText('停止操作未能正常结束');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);

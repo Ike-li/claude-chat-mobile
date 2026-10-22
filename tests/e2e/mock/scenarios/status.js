@@ -2,6 +2,38 @@ function withContext(getContext, handler) {
   return async args => handler(getContext(), args);
 }
 
+async function crashViewingInstance({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }, { beforeInit = false } = {}) {
+  const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+  if (idx === -1) return;
+  const crashed = mockInstances[idx];
+  const broadcast = viewingId => io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: {
+      canRestart: getMockCanRestart(),
+      service: mockServicePayload(),
+      viewingInstanceId: viewingId,
+      viewingCwd: crashed.cwd,
+      dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
+      instances: mockInstances,
+    },
+  });
+  if (beforeInit) {
+    crashed.sessionId = null;
+    broadcast(crashed.instanceId);
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  io.emit('agent:event', {
+    seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
+    type: 'error', payload: {
+      message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
+    },
+  });
+  if (crashed.sessionId) armCrashReload(crashed.sessionId);
+  mockInstances.splice(idx, 1);
+  setViewingInstanceId(null);
+  broadcast(null);
+}
+
 export function createStatusScenarios(getContext) {
   const run = handler => withContext(getContext, handler);
 
@@ -533,31 +565,12 @@ export function createStatusScenarios(getContext) {
       // 验收 O60 后一半：正在看的会话 CLI 进程被 kill。照真 server 的顺序：agent.js consume 收尾先发 error
       // （带 processExited），再 onExit 摘掉实例、广播 viewing 变化。之后重开这个会话走清屏全量重载（见 armCrashReload）。
       command: 'test:process-crash',
-      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId, mockServicePayload, getMockCanRestart, armCrashReload }) => {
-        const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
-        if (idx === -1) return;
-        const crashed = mockInstances[idx];
-        io.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: crashed.sessionId, instanceId: crashed.instanceId, ts: Date.now(),
-          type: 'error', payload: {
-            message: '进程异常：Claude Code process terminated by signal SIGKILL', recoverable: true, processExited: true,
-          },
-        });
-        armCrashReload(crashed.sessionId);
-        mockInstances.splice(idx, 1);
-        setViewingInstanceId(null);
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            canRestart: getMockCanRestart(),
-            service: mockServicePayload(),
-            viewingInstanceId: null,
-            viewingCwd: crashed.cwd,
-            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), crashed.cwd])),
-            instances: mockInstances,
-          },
-        });
-      }),
+      run: run(ctx => crashViewingInstance(ctx)),
+    },
+    {
+      // #329 review P2：新开的进程还没吐 init 就退出——实例此时没有 sessionId，中断面照样要写出原因。
+      command: 'test:process-crash-before-init',
+      run: run(ctx => crashViewingInstance(ctx, { beforeInit: true })),
     },
     {
       // 修「server 重启都会跳'会话已中断'页」误报：整机重启时 agents Map/viewingInstanceId 全部归零
