@@ -53,9 +53,15 @@ export function createEnvConfigPanel({
   }
 
   function markDirty() {
-    const dirty = [...fields.values()].some((f) => f.el.getAttribute(CHANGED_MARK) === '1');
-    saveBtn.disabled = !dirty;
-    hint.textContent = dirty ? t('保存后需重启服务才生效') : '';
+    const changed = [...fields.values()].filter((f) => f.el.getAttribute(CHANGED_MARK) === '1');
+    saveBtn.disabled = changed.length === 0;
+    // 被环境变量压着的项写进文件也不生效、重启后仍是环境变量的值（验收 O111）：保存前就说清，
+    // 不等保存后的逐项回执（describeReceipt 的 shadowed）。
+    const shadowed = changed.filter((f) => f.overriddenByEnv).map((f) => f.key);
+    const parts = [];
+    if (changed.length > shadowed.length) parts.push(t('保存后需重启服务才生效'));
+    if (shadowed.length) parts.push(t('{keys} 被环境变量压着：保存了也不生效，要先在启动它的 shell 里 unset').replace('{keys}', shadowed.join('、')));
+    hint.textContent = parts.join('；');
   }
 
   function watch(input, field) {
@@ -261,7 +267,7 @@ export function createEnvConfigPanel({
 
   function renderItem(item) {
     const row = el('div', 'space-y-1');
-    const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret };
+    const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret, overriddenByEnv: !!item.overriddenByEnv };
 
     if (item.kind === 'toggle') {
       row.append(buildToggle(item, field));
