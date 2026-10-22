@@ -39,10 +39,6 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      # 临时诊断（定位 device-gate 在 Windows 上挂死的用例），查清后删除
-      - run: node --import ./tests/setup/preload-env.mjs --test --test-timeout=20000 --test-reporter=spec tests/invariants/device-gate.test.mjs
-        timeout-minutes: 4
-        continue-on-error: true
       - run: npm run test:unit
       # unit 红了也要看 invariants 的结果：这个 job 的产出是完整的差距清单，不是第一处失败。
       - run: npm run test:invariants

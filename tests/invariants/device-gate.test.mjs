@@ -18,6 +18,15 @@ import {
 } from '../../app/src/auth/devices.js';
 import * as audit from '../../app/src/ops/audit.js';
 
+// 每个 gate 都建了目录监听；文件跑完统一 close()，否则 Windows 上子进程不退出（见 device-gate.js 的 close）。
+const openGates = [];
+function openGate(opts) {
+  const gate = createDeviceGate(opts);
+  openGates.push(gate);
+  return gate;
+}
+test.after(() => { for (const gate of openGates) gate.close(); });
+
 // 一次性目录里的一对设备文件。不注入就会用 devices.js 真正读写的路径（本进程里是 preload 那份），用例之间会互相干扰。
 const filesIn = (dir) => ({ trusted: join(dir, 'trusted-devices.json'), pending: join(dir, 'pending-devices.json') });
 
@@ -52,7 +61,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
   });
 
   test('DEVICE-02: 启动时确保 trusted/pending 两个文件存在且为 owner-only', () => {
-    createDeviceGate({ io: fakeIo(), deviceFiles: filesIn(tempDir), onUnlockSocket: () => {} });
+    openGate({ io: fakeIo(), deviceFiles: filesIn(tempDir), onUnlockSocket: () => {} });
     assert.ok(existsSync(join(tempDir, 'trusted-devices.json')));
     assert.ok(existsSync(join(tempDir, 'pending-devices.json')));
   });
@@ -72,7 +81,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const s1 = fakeSocket({ deviceToken: token });
     const unlocked = [];
     // 与生产调用同形：不注入文件路径（修复前传的是 dataDir，监听的是它下面那一对，不是覆盖路径）。
-    createDeviceGate({ io: fakeIo(s1), onUnlockSocket: (s) => unlocked.push(s) });
+    openGate({ io: fakeIo(s1), onUnlockSocket: (s) => unlocked.push(s) });
 
     await new Promise(r => setTimeout(r, 50)); // 让 watcher 先挂上
     writeFileSync(`${trustedFile}.tmp`, JSON.stringify([token]));
@@ -86,7 +95,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const s2 = fakeSocket({ deviceToken: 'token-2' });
     const unlocked = [];
 
-    const gate = createDeviceGate({
+    const gate = openGate({
       io: fakeIo(s1, s2),
       deviceFiles: filesIn(tempDir),
       onUnlockSocket: (s) => unlocked.push(s),
@@ -98,7 +107,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
 
   test('DEVICE-02: disconnectDeviceSockets 触发 device_status denied 并强行断连', () => {
     const s1 = fakeSocket({ deviceToken: 'revoked-token' });
-    const gate = createDeviceGate({
+    const gate = openGate({
       io: fakeIo(s1),
       deviceFiles: filesIn(tempDir),
       onUnlockSocket: () => {},
@@ -117,7 +126,7 @@ test.describe('createDeviceGate 生命周期与事件分发', () => {
     const trustedClient = fakeSocket({ deviceToken: 'tok-trusted', approved: true });
     const unapprovedClient = fakeSocket({ deviceToken: 'tok-pending', approved: false });
 
-    const gate = createDeviceGate({
+    const gate = openGate({
       io: fakeIo(trustedClient, unapprovedClient),
       deviceFiles: filesIn(tempDir),
       onUnlockSocket: () => {},
@@ -208,7 +217,7 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     // createDeviceGate 会建两个文件并起 watcher，必须给它一次性目录里的路径
     const dir = mkdtempSync(join(tmpdir(), 'ccm-trusted-payload-'));
     t.after(() => rmSync(dir, { recursive: true, force: true })); // safe-rm: 上一行 mkdtemp 建的一次性目录
-    const gate = createDeviceGate({
+    const gate = openGate({
       io: fakeIo(),
       deviceFiles: filesIn(dir),
       onUnlockSocket: () => {},
@@ -228,7 +237,7 @@ test.describe('DEVICE-02 & DEVICE-03: 设备信任事务性与信息安全', () 
     // ★ true 那一档必须单独造出来。只验缺省 false 的话，把这个字段写死成 false 也一样全绿——
     //   而写死成 false 正是缺陷本身（面板永远不警告，用户回到「按文案吊销、设备照常能用」的老坑）。
     //   2026-09-10 注入实测：只有下面这条能咬住。
-    const bypassGate = createDeviceGate({
+    const bypassGate = openGate({
       io: fakeIo(),
       deviceFiles: filesIn(dir),
       onUnlockSocket: () => {},
@@ -316,7 +325,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const TOK = `gate-diff-approve-${Date.now()}`;
     f.writeTrusted([]);
     f.writePending([{ deviceToken: TOK, ip: '10.0.0.1', userAgent: 'ua', ts: Date.now() }]);
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } }, // 零连接：证明审计不依赖 io.sockets.sockets 遍历
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -342,7 +351,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const TOK = `gate-diff-revoke-${Date.now()}`;
     f.writeTrusted([TOK]);
     f.writePending([]);
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } },
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -363,7 +372,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const TOK = `gate-diff-deny-${Date.now()}`;
     f.writeTrusted([]);
     f.writePending([{ deviceToken: TOK, ip: '10.0.0.2', userAgent: 'ua', ts: Date.now() }]);
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } },
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -384,12 +393,35 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     assert.equal(recordsFor('device_revoked', TOK).length, 0);
   });
 
+  // close() 关掉目录监听。Windows 上 unref 过的 fs.watch 仍会吊住事件循环：本文件 16 条用例 2s 跑完、
+  // 子进程却不退出，CI 一直挂到 job 超时（2026-10-22 windows-trial run 39805325489）。
+  test('close() 之后再改信任表 → 监听器不再响应（不记审计）', async (t) => {
+    const f = makeFixture(t);
+    const TOK = `gate-closed-${Date.now()}`;
+    f.writeTrusted([]);
+    f.writePending([]);
+    const gate = openGate({
+      io: { sockets: { sockets: new Map() } },
+      deviceFiles: filesIn(f.tempDir),
+      onUnlockSocket: () => {},
+      listTrustedDevices: () => f.readTrusted().map(id => ({ deviceId: id })),
+      listPendingDevices: () => f.readPending().map(d => ({ deviceToken: d.deviceToken })),
+    });
+    await settleWatcher();
+
+    gate.close();
+    f.writeTrusted([TOK]);
+
+    const fired = await waitUntil(() => recordsFor('device_approved', TOK).length > 0, { timeoutMs: 1000 });
+    assert.equal(fired, false, 'close() 之后监听器不应再记 device_approved');
+  });
+
   test('新增一条待审批请求（addPendingDevice 效果）不产生任何审计噪音', async (t) => {
     const f = makeFixture(t);
     const TOK = `gate-diff-newpending-${Date.now()}`;
     f.writeTrusted([]);
     f.writePending([]);
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } },
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -437,7 +469,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     const deniedSock = fakeSocket({ deviceToken: CLI_DENIED });
     const evictedSock = fakeSocket({ deviceToken: EVICTED });
     const self = selfWriteStub();
-    createDeviceGate({
+    openGate({
       io: fakeIo(deniedSock, evictedSock),
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -468,7 +500,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
       { deviceToken: CLI_DENIED, ip: '10.0.0.5', userAgent: 'ua', ts: Date.now() },
     ]);
     const self = selfWriteStub();
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } },
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
@@ -495,7 +527,7 @@ test.describe('DEVICE-02: 审计与在线连接解耦（diff-based，覆盖 CLI 
     f.writeTrusted([WEB_REVOKED, CLI_REVOKED]);
     f.writePending([]);
     const self = selfWriteStub();
-    createDeviceGate({
+    openGate({
       io: { sockets: { sockets: new Map() } },
       deviceFiles: filesIn(f.tempDir),
       onUnlockSocket: () => {},
