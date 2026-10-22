@@ -396,6 +396,27 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 历史里的 /compact 压缩摘要（O115）。字段形态复刻 app/src/sessions/history.js 的产出：摘要行换成
+      // { role:'system', kind:'compact_summary', content:'' } 标记，不带 uuid。走 history_append，与刷新后
+      // loadHistory 同一渲染器。
+      command: 'test:history-compact',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '压缩前的问题', uuid: 'u-compact-1' },
+              { role: 'system', kind: 'compact_summary', content: '' },
+              { role: 'user', content: '压缩后的问题', uuid: 'u-compact-2' },
+            ],
+          },
+        });
+      },
+    },
+    {
       // 桌面端 visualize 工具（show_widget）画的图。字段形态复刻 app/src/shared/tool-summary.js 的 widgetPayload：
       // SVG 带完整 code；超限的后端根本不带 widget（与普通工具卡无异，这里不再造）。
       // 四张卡各验一条：① 完整 SVG → 图片 ② HTML 组件 → 只显示提示，带了 code 也不执行

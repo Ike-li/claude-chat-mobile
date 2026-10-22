@@ -1059,6 +1059,7 @@ export const EN_DICT = Object.freeze({
   '🔔 发一条测试推送': '🔔 Send a test notification',
   '发送中…': 'Sending…',
   '测试推送失败，请检查网络': 'Test notification failed — check your connection',
+  '上下文已压缩': 'Context compacted',
   '这台设备还没订阅推送——先点上方的「开启」': 'This device has no push subscription yet — tap "Turn on" above first',
   '网页推送到不了这台设备：浏览器只在 HTTPS 下允许订阅，用隧道域名（https）打开本站': 'Web push can\'t reach this device: browsers only allow subscribing over HTTPS — open this site via the tunnel (https) address',
   '网页推送到不了这台设备：iOS 要先「添加到主屏幕」，再从主屏图标打开本站': 'Web push can\'t reach this device: on iOS, first "Add to Home Screen", then open this site from the home-screen icon',
