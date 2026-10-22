@@ -2908,7 +2908,9 @@ registerSocketConnection(io, socket => {
         // BE-001：显式指定了一个已关闭 / 未知实例，或命中的实例跑的已不是入队时那个会话、而那个会话也没有
         // 活实例可改投（MSG-02）——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
         // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
-        sysTo(socket, '目标会话已关闭，请刷新后重发', true);
+        // 离线重放不推提示行：前端按条目交代（原文暂存、回到那个会话交还），这行「请刷新后重发」会落在用户眼前
+        // 那一屏上，而刷新找不回原文（验收 O126）。
+        if (!fromOutbox) sysTo(socket, '目标会话已关闭，请刷新后重发', true);
         ack({ ok: false, error: 'stale_instance', stale: true });
         return;
       }
@@ -2921,7 +2923,7 @@ registerSocketConnection(io, socket => {
         // outbox 重发既无 live 实例、又没带入队时刻的 cwd → 目标无从确定。下面 routeCwd 的缺省回退会落到
         // 服务端当前 viewingCwd（多半已是别的工作区），那就换条路径误投了。同 BE-001 fail-closed。
         if (shouldRejectOutboxLazyOpen({ fromOutbox, cwd: rawCwd })) {
-          sysTo(socket, '目标会话已关闭，请刷新后重发', true);
+          // 只有离线重放走得到这里，同上不推提示行
           ack({ ok: false, error: 'stale_instance', stale: true });
           return;
         }

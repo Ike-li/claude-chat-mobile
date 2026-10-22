@@ -148,8 +148,10 @@ test.describe('presentOfflineResendAck：离线队列排空时的五条分支', 
       { outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: false });
   });
 
+  // stale 标记同理是显式登记的：原文进死信暂存时，outboxParkedNotice 据它说「目标会话已关闭」而不照搬
+  // 带「请刷新后重发」的 message（验收 O126，2026-10-22）。permanent 分支不带它。
   test('stale → 死信出队并清忙碌态（服务端不带 permanent，靠这里识别）', () => {
-    const expected = { outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true };
+    const expected = { outcome: 'permanent', permanent: true, stale: true, requeue: false, clearBusyIfViewing: true };
     assert.deepEqual(flagsOf(null, { ok: false, stale: true }), expected, '认 stale 标志位');
     assert.deepEqual(flagsOf(null, { ok: false, error: 'stale_instance' }), expected, '也认裸协议串');
   });

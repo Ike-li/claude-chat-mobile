@@ -126,6 +126,7 @@ import {
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
   outboxNoticePlacement,
+  outboxParkedNotice,
   shouldCarryOutboxBubbleOnClear,
   canTextClaimPendingBubble,
   SEND_ACK_FALLBACK_MS,
@@ -1502,6 +1503,35 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
   const outboxViewing = () => ({ viewingInstanceId, viewingCwd: currentCwd, viewingSessionId: sendSessionId() });
 
+  // 进了死信暂存、眼前又没有会话（outboxParkedNotice 判过）：说一句，并给一个回到那个会话的入口——回去之后
+  // deliverOutboxDeadLetters 照常把原文放回输入框。切换的 ack / 4s 兜底同 dashboard 最近列表的 switchToSession。
+  // 眼前多半是起始类表面（「服务已重启」面板、首页、新会话页）：addBar 会先 leaveStartScreen 把整张表面清空——
+  // R7 截图里那片空白，就是服务端那行提示条冲掉了带「继续此会话」的重启面板。挂在表面顶上，不清它。
+  function addOutboxParkedBar(text, item) {
+    let bar;
+    if (messagesEl.classList.contains('empty-start')) {
+      bar = el(`<div class="msg-frame text-center text-xs text-danger"></div>`);
+      bar.textContent = text;
+      messagesEl.insertBefore(bar, messagesEl.firstChild);
+    } else {
+      bar = addBar(text, 'text-danger');
+    }
+    if (!bar || !item.sessionId) return;
+    const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-parked-goto">${t('回到该会话')}</button>`);
+    btn.onclick = () => {
+      haptic('tap');
+      let acked = false;
+      const blocked = message => showSessionBlockedSurface({ sessionId: item.sessionId, cwd: item.cwd, message });
+      socket.emit('session:switch', { sessionId: item.sessionId, cwd: item.cwd }, res => {
+        acked = true;
+        if (!res?.ok) blocked(res?.error || t('切换失败'));
+        else dismissBlockedSurfaceIfTarget(item.sessionId, item.cwd);
+      });
+      setTimeout(() => { if (!acked) blocked(t('切换无响应，请刷新页面后重试')); }, 4000);
+    };
+    bar.appendChild(btn);
+  }
+
   // 交还暂存的永久拒收条目：只交给它自己的会话；输入框空着就放回输入框，否则原文写进提示条（看得见、复制得到）。
   function deliverOutboxDeadLetters() {
     for (const d of outboxDeadLetters.takeFor(outboxViewing())) {
@@ -1588,6 +1618,8 @@ import { createGateFocusController } from './app/focus-layers.js';
             else {
               dropPendingUserBubble(item.bubbleEl);
               outboxDeadLetters.park(planned, permanentMsg);
+              const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message, sessionId: planned.sessionId, text: planned.text });
+              if (parkedText) addOutboxParkedBar(parkedText, planned);
             }
           }
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);

@@ -256,6 +256,39 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O126（R7 AC-13-07）：同上一条的场景，P0-02d14 之后原文不再丢，但提示出现那一屏只有服务端那行「目标会话已关闭，
+  // 请刷新后重发」、下面整片空白——没说原文还在，刷新也找不回它，用户只会凭记忆重打。这一屏眼前没有会话，说一句不会污染别的会话。
+  test('P0-02d15 server 重启后的提示页：说明原文已保存，点「回到该会话」原文回到输入框', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-restart-stale');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('重启前离线打的那条');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#messages'), '提示页上没说原文还在').toContainText('原文已保存，回到该会话时会放回输入框', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '「请刷新后重发」是错误指引：原文在死信暂存里，刷新找不回它').not.toContainText('请刷新后重发');
+    // R7 那片空白的真凶：提示条走 addBar → leaveStartScreen，把「服务已重启」面板（继续此会话 / 回首页 / 新建会话）整个清掉
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]'), '提示把「服务已重启」面板冲掉了').toBeVisible();
+    const goto = page.locator('#messages [data-testid="outbox-parked-goto"]');
+    await expect(goto).toHaveCount(1);
+    await goto.click();
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#input'), '点「回到该会话」之后原文没回到输入框').toHaveValue('重启前离线打的那条');
+    await expectNoBrowserErrors(page);
+  });
+
   // 离线攒了两条，重放的第 1 条在服务端触发规则 5 置换：同一会话换了实例号，前端先收到新号的广播、再收到 ack，
   // 离线条目还拿着入队时的旧号。新实例的 sync:since 报磁盘 ahead，前端清屏重载；第 2 条拿着旧号撞上第 1 条开跑的那轮，
   // 落「未发送 + 重发」。mock 的时序是：清屏 → 第 2 条的负 ack → 历史落地。

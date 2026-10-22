@@ -644,6 +644,10 @@ export const EN_DICT = Object.freeze({
   '停止请求未生效：任务可能已结束': 'The stop request had no effect — the task may have already finished',
   '{n}条': '{n} update(s)', // 后台任务行尾「· 3条」：这个任务已经上报过的进度条数
   '目标会话已关闭，请刷新后重发': 'The target session is closed — refresh and send again',
+  '目标会话已关闭': 'the target session is closed',
+  '离线时发的一条消息没有发出：': 'A message sent while offline was not delivered: ',
+  '。原文已保存，回到该会话时会放回输入框': '. The text is saved and will be put back in the input box when you return to that session',
+  '回到该会话': 'Go to that session',
   '发送失败：': 'Send failed: ',
   '未确认送达': 'Delivery unconfirmed',
   '未确认送达，已排队重试': 'Delivery unconfirmed — queued for retry',
