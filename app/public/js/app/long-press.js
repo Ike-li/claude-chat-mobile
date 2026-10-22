@@ -11,7 +11,8 @@
 // 侧滑手势（app.js 会话行 touchmove）与本手势天然互斥——横向位移一超过容差本计时就撤销。
 //
 // 「去重 Android 补发的 contextmenu」是另一件事，生命周期是本次指针手势：firedByTimer 在下一次
-// 任意键 pointerdown 时复位——不在 pointerup 复位，Pointer Events 规范允许 contextmenu 晚于 pointerup 到达。它曾与吞 click 共用一个闩（swallowNextClick），
+// 任意键 pointerdown 或行上的 keydown 时复位——不在 pointerup 复位，Pointer Events 规范允许 contextmenu
+// 晚于 pointerup 到达；键盘呼出的菜单（Shift+F10 / Menu 键）前面没有 pointerdown，靠 keydown 开新一轮。它曾与吞 click 共用一个闩（swallowNextClick），
 // 而那个闩只被落在本行的 click 清除——click 落在别处、或右键（不走主键 pointerdown、也不派发 click）
 // 时都清不掉，同一行接下来的右键就被静默吞掉（2026-09-07 与 O101 两次）。
 //
@@ -69,6 +70,7 @@ export function attachLongPress(el, onLongPress, {
     if (Math.abs(ev.clientX - startX) > moveTolerance || Math.abs(ev.clientY - startY) > moveTolerance) cancel();
   });
   for (const type of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(type, cancel);
+  el.addEventListener('keydown', () => { firedByTimer = false; });
 
   el.addEventListener('contextmenu', ev => {
     ev.preventDefault();
