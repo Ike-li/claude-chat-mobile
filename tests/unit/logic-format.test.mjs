@@ -10,6 +10,7 @@ import {
   userBubbleFold,
   formatUptime,
   historyLoadedNotice,
+  gitErrorText,
 } from '../../app/public/js/logic/format.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
@@ -480,4 +481,23 @@ test.describe('historyLoadedNotice —— 历史载入提示', () => {
     setLang('en');
     assert.equal(historyLoadedNotice(2000, 2100), 'Showing only the latest 2000 of 2100 messages from history; earlier ones are not loaded');
   });
+});
+
+// 验收 O97：英文界面里，工作区面板「改动」页在非 git 目录显示中文「当前目录不是 git 仓库」——服务端把中文
+// 写进回执 error，前端原样显示。服务端不分语言，翻译由前端按 code 做。
+test('gitErrorText：not_git 按界面语言出文案，不用服务端写死的中文', () => {
+  setLang('en');
+  try {
+    const text = gitErrorText({ ok: false, code: 'not_git', error: '当前目录不是 git 仓库' }, 'fallback');
+    assert.doesNotMatch(text, /[一-鿿]/, '英文界面里漏出服务端的中文原文');
+    assert.match(text, /git/i);
+  } finally {
+    setLang('zh');
+  }
+});
+
+test('gitErrorText：其余错误照旧显示服务端原文（git 自己的报错没法翻），没有原文才用兜底', () => {
+  assert.equal(gitErrorText({ ok: false, code: 'git_error', error: 'fatal: bad object' }, '兜底'), 'fatal: bad object');
+  assert.equal(gitErrorText({ ok: false }, '兜底'), '兜底');
+  assert.equal(gitErrorText(null, '兜底'), '兜底');
 });

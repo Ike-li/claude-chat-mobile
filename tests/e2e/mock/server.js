@@ -229,7 +229,7 @@ let mockHooksState = 'not-installed';
 let mockStatuslineState = 'not-installed';
 // 验收 O62：用户自己配没配 statusLine（真 server 的 readStatuslineInstallState().configured）。没配时装不上，面板不给「开启」。
 let mockStatuslineConfigured = true;
-// 下一次 statusline:setup 按真安装脚本的失败形态回（一次性）：O62 里那一行英文
+// 下一次 statusline:setup 按真安装脚本的失败形态回（一次性）：O62 / O125 里那一行英文
 let mockStatuslineSetupFailArmed = false;
 // test:qr-access 拨到「受 Access 保护」档：那一档的码不含 token（判据在 public-target.js）
 let mockAccessProtected = false;
@@ -3107,7 +3107,9 @@ io.on('connection', socket => {
     if (!['install', 'uninstall'].includes(action)) return ack({ ok: false, error: '未知操作' });
     if (mockStatuslineSetupFailArmed) {
       mockStatuslineSetupFailArmed = false;
-      return ack({ ok: false, state: mockStatuslineState, report: 'settings.statusLine must be configured before install' });
+      // 同真 server：report 是安装器 stderr 的英文原话，code 来自它 stdout 的 {"error":…}
+      return ack({ ok: false, state: mockStatuslineState, code: 'statusline_not_configured',
+        report: 'statusLine is not configured yet: set statusLine.command in /home/you/.claude/settings.json (Claude Code\'s own status line) first, then install' });
     }
     mockStatuslineState = action === 'install' ? 'installed' : 'not-installed';
     ack({ ok: true, state: mockStatuslineState, report: action === 'install' ? '✅ 已接管 statusLine 命令。' : '已恢复原命令。' });

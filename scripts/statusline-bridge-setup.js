@@ -168,16 +168,27 @@ function status(home = homedir()) {
   };
 }
 
+// 用户还没配 statusLine：拒装是对的（桥只包一层用户自己的命令），但要说人话（验收 O105 / O125）。reason 由 main()
+// 以 JSON 写到 stdout，server 透传给面板按码出文案；message 走 stderr，给敲 npm run statusline:install 的人看。
+function notConfigured(settingsPath) {
+  return Object.assign(
+    new Error(`statusLine is not configured yet: set statusLine.command in ${settingsPath} (Claude Code's own status line) first, then install`),
+    { reason: 'statusline_not_configured' },
+  );
+}
+
 function install(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
+  // settings.json 还不存在＝新装 claude、肯定没配（同 status 的判法）；此前这里直接抛 fs 的 ENOENT
+  if (!lstatIfPresent(paths.settings)) throw notConfigured(paths.settings);
   const settings = readSettings(paths.settings);
   if (!settings.statusLine || typeof settings.statusLine !== 'object' || Array.isArray(settings.statusLine)) {
-    throw new Error('settings.statusLine must be configured before install');
+    throw notConfigured(paths.settings);
   }
   const originalCommand = settings.statusLine.command;
   if (typeof originalCommand !== 'string' || !originalCommand.trim()) {
-    throw new Error('settings.statusLine.command must be a non-empty string');
+    throw notConfigured(paths.settings);
   }
   const existingManifest = readManifest(paths.manifest);
   if (existingManifest) {
@@ -251,6 +262,7 @@ function main() {
         : status();
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
+    if (error?.reason) process.stdout.write(`${JSON.stringify({ error: error.reason })}\n`);
     process.stderr.write(`${error?.message || error}\n`);
     process.exitCode = 1;
   }
