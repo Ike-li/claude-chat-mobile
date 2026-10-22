@@ -341,7 +341,7 @@ export function createMirrorEngine({
       let busySize = -1;
       let busyRegistryEntry = null;
       let busyAppendedForeign = false;
-      let busyScan = null;
+      let busyScan;
       // permission 态下 web 侧不写盘，故并行取一次 size 作为「终端是否在写」的判据（见 externalGrowthWhilePaused）。
       // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
       try {
