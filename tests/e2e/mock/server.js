@@ -433,7 +433,14 @@ const MOCK_SERVICE_STARTED_AT = Date.now();
 // 本 mock 刻意零 import app/src/（改 app/src/ 不该让 E2E 变红）。只放够断言的最小集：
 // 一个只读敏感项、一个普通值、一个未设置的空值、一个可写敏感项、一个开关。
 const mockLabel = (zh, en) => ({ zh, en });
+// 验收 O111：被 shell 环境变量压着的键（真 server 的 buildEnvView 给 overriddenByEnv:true）。由 /__env-overridden 拨，/__reset 清。
+let mockEnvOverridden = new Set();
 function buildMockEnvView() {
+  const view = buildMockEnvViewBase();
+  for (const g of view.groups) for (const item of g.items) if (mockEnvOverridden.has(item.key)) item.overriddenByEnv = true;
+  return view;
+}
+function buildMockEnvViewBase() {
   return {
     groups: [
       {
@@ -649,6 +656,7 @@ function resetMockState() {
   mockAccessProtected = false;
   mockServerLogMissing = false;
   mockAutoContinue = [];
+  mockEnvOverridden = new Set();
   mockWorkdirsList = [
     { path: '/Users/you/code/claude-chat-mobile' },
     { path: '/Users/you/code/other', sessionLimit: 3 },
@@ -1039,6 +1047,12 @@ app.post('/__folders-readonly', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/__env-overridden', (req, res) => {
+  const raw = typeof req.query?.keys === 'string' ? req.query.keys : '';
+  mockEnvOverridden = new Set(raw ? raw.split(',') : []);
+  res.json({ ok: true });
+});
+
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
@@ -1056,6 +1070,22 @@ app.post('/__set-connected-folders', (req, res) => {
     },
   });
   res.json({ ok: true, dirs: mockDirs() });
+});
+
+// P0-PROJ-6：另一台设备在别的文件夹开了新会话页——服务端的 viewing 是全局单值，广播的工作区随之变（同 session:new）。
+app.post('/__compose-cwd', (req, res) => {
+  const cwd = typeof req.query?.cwd === 'string' ? req.query.cwd : '';
+  if (!cwd) return res.status(400).json({ ok: false });
+  viewingInstanceId = null;
+  pendingFreshCwd = cwd;
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId: null, viewingCwd: cwd, ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+  res.json({ ok: true });
 });
 
 // P0-11o / P0-13e：发出「关闭的那个实例的迟到事件」。由用例在【确认视图切换已完成之后】显式调用，
@@ -2848,6 +2878,11 @@ io.on('connection', socket => {
       const text = 'x\n'.repeat(6000);
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
     }
+    // O102：markdown 标题在 CM 里走 .cm-header——CM5 默认主题给的是 #00f，深色底上只有 2:1。
+    if (encoding !== 'base64' && String(relPath || '') === 'README.md') {
+      const text = '# CCM playground workspace\n\nSee [docs](https://example.com).\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
+    }
     // 附件不再走本通道（2026-09-06 搬家后归 attachment:read），这里不再有 .ccm-uploads 分支。
     console.log(`[mock] browse:read relPath=${relPath} offset=${offset} encoding=${encoding} 未命中 fixture`);
     return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });
@@ -3095,11 +3130,14 @@ io.on('connection', socket => {
     if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
     mockDirsOverride = dirs.filter(d => d !== path);
     mockAddedFolders = mockAddedFolders.filter(d => d !== path);
+    // 同真 server reloadWorkdirs：新会话页（没有查看实例）停在被移除的目录上 → 归位到首个剩余目录（O119）
+    const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (!viewingInst && pendingFreshCwd === path) pendingFreshCwd = mockDirs()[0] ?? MOCK_SCRATCH_ROOT; // 清单空了就是「无文件夹」（同 primaryWorkDir）
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+        viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload()
       }

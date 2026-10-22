@@ -42,6 +42,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O111：保存前的底栏对被环境变量压着的项仍说「保存后需重启服务才生效」——可这类项写进文件也不生效、
+  // 重启后仍是环境变量的值，逐项回执要保存后才出现。保存前就要说清。
+  test('P0-31k 改的是被环境变量压着的项：保存前底栏就说清写了也不生效，不再只说「重启后生效」', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__env-overridden?keys=PORT');
+    await openGeneralPage(page, 'behavior');
+    await page.locator('#btnEnvConfig').click();
+
+    const hint = page.locator('#envConfigHint');
+    await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
+    await expect(hint).toContainText('PORT');
+    await expect(hint).toContainText('环境变量');
+    await expect(hint, '只改了被压着的项，却叫人去重启').not.toContainText('重启服务才生效');
+    // 前端只知道「被压着」不知道是哪个变量（WORKDIRS 可能是被 WORK_DIRS 压着）：不能叫人 unset 配置键名（#321 review）
+    await expect(hint).not.toContainText('unset');
+
+    // 再改一项正常的：两句都要在
+    await page.locator('#envConfigBody input[data-key="CLAUDE_BIN"]').fill('/opt/claude');
+    await expect(hint).toContainText('重启服务才生效');
+    await expect(hint).toContainText('PORT');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-31b 保存按钮：无改动时禁用，改一项后启用', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');

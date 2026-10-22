@@ -2099,9 +2099,48 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
 // 原实现把两者并进同一个 localBusy，一起抑制追平 + 上锁 + 标脏，于是「手机上弹着审批卡片、人走到电脑前
 // 用终端继续同一会话」这 30 分钟里：终端的回合不上屏、手机没有只读横幅、externalDirty 也不置位 ——
 // 下一条手机消息直接送进停在 30 分钟前的 SDK 子进程，从旧 parentUuid 写出第二条链（transcript 分叉）。
-export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
+//
+// 「web 侧不写盘」只在【同一批】审批挂着时成立（O122）：两次 tick 之间若有审批结算（过期 / 批准 / 拒绝），
+// SDK 会写下那条 tool_result、继续跑，几毫秒内下一个审批又挂起——CLI 对并行的多个审批是逐个问的。
+// 两拍看到的都是 'permission'，中间的增长却是己方写的。所以两拍的挂起集合（prevPending/curPending，
+// 审批与提问 id 拼成的键）相同时，增长照旧全归终端；不同时只说明己方写过、不说明这段里【只有】己方，
+// 改看这段新写的条目里有没有别人写的（appendedForeign，见 appendedForeignWrite）。id 每次请求唯一，
+// 旧键不会碰巧等于新集合。
+export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPending, curPending, appendedForeign } = {}) {
   if (state !== 'permission') return false;
-  return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
+  if (!(Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize))) return false;
+  return prevPending === curPending || appendedForeign === true;
+}
+
+// 从 fromByte 读到文件尾，看这段新写的条目里有没有不是己方（sdk-ts）写的。只认自报了 entrypoint 的条目
+// （user / assistant 等主链记录都带）；没带的（快照、last-prompt 之类）不作证据，空行与切开的半行跳过。
+// 返回 { foreign, size }：size 是这次打开时的 fstat，也就是扫到的位置——调用方必须拿它当新基线，不能另外
+// stat 一次：终端恰好在两次读之间追加，扫描没看见、另一次 stat 却已越过它，那段就被吸收进基线（Codex review）。
+// 读不出 → { foreign: true, size: -1 }；这段大过尾窗上限 → foreign 保守为 true：多一次冷重启可以接受，
+// 漏标致分叉不可逆。
+export async function appendedForeignWrite(sessionId, cwd, fromByte, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return { foreign: true, size: -1 };
+  let fh;
+  try {
+    let st;
+    ({ fh, st } = await openRegularFile(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`)));
+    const size = st.size;
+    const len = size - fromByte;
+    if (len <= 0) return { foreign: false, size };
+    if (len > TAIL_READ_BYTES) return { foreign: true, size };
+    const buf = Buffer.allocUnsafe(len);
+    const { bytesRead } = await fh.read(buf, 0, len, fromByte);
+    for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.entrypoint === 'string' && !isOwnSdkTail(entry.entrypoint)) return { foreign: true, size };
+    }
+    return { foreign: false, size };
+  } catch {
+    return { foreign: true, size: -1 };
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }
 
 // ---- 子代理进度观察（本地 slash 命令的唯一可见来源）----

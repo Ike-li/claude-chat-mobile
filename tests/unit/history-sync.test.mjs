@@ -7,10 +7,10 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files、-list、-messages。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
+import { writeFileSync, mkdirSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, appendedForeignWrite, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -754,6 +754,40 @@ test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须�
   test('缺参不抛', () => {
     assert.doesNotThrow(() => externalGrowthWhilePaused());
     assert.equal(externalGrowthWhilePaused(), false);
+  });
+});
+
+// O122：挂起集合变过（有审批结算）时，那段增长里有没有不是己方写的条目。
+test.describe('appendedForeignWrite：审批结算那一拍新写的那段里有没有别人的写入', () => {
+  const cwd = '/test/appended-foreign';
+  const dir = join(BASE, getProjectDir(cwd));
+  const head = { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: '起头' }, timestamp: '2026-10-22T10:00:00.000Z' };
+  const headBytes = Buffer.byteLength(JSON.stringify(head) + '\n');
+  const sizeOf = id => statSync(join(dir, `${id}.jsonl`)).size;
+
+  test('新写的只有 sdk-ts 与不带 entrypoint 的记录 → foreign=false', async () => {
+    writeJSONL(dir, 'af-own', [head,
+      { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } },
+      { type: 'last-prompt' }]);
+    assert.deepEqual(await appendedForeignWrite('af-own', cwd, headBytes, { baseDir: BASE }), { foreign: false, size: sizeOf('af-own') });
+  });
+  test('新写的里有 cli 条目 → foreign=true；起点之前的 cli 条目不算', async () => {
+    writeJSONL(dir, 'af-cli', [head, { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端' } }]);
+    assert.equal((await appendedForeignWrite('af-cli', cwd, headBytes, { baseDir: BASE })).foreign, true);
+    writeJSONL(dir, 'af-old-cli', [{ ...head, entrypoint: 'cli' }, { type: 'last-prompt' }]);
+    assert.equal((await appendedForeignWrite('af-old-cli', cwd, headBytes, { baseDir: BASE })).foreign, false);
+  });
+  // Codex review：扫描与基线必须是同一份快照。size 另外 stat 的话，终端恰好在两次读之间追加，
+  // 扫描没看见、size 却已越过它，那段就被吸收进新基线。这里钉「返回的 size 就是扫到的那个位置」。
+  test('返回的 size 就是这次扫到的位置（同一次打开的 fstat）', async () => {
+    writeJSONL(dir, 'af-size', [head, { type: 'last-prompt' }]);
+    const r = await appendedForeignWrite('af-size', cwd, headBytes, { baseDir: BASE });
+    assert.equal(r.size, sizeOf('af-size'));
+  });
+  test('没有新写入 → foreign=false；文件读不出 → 保守 foreign=true、size 未知（-1）', async () => {
+    writeJSONL(dir, 'af-none', [head]);
+    assert.deepEqual(await appendedForeignWrite('af-none', cwd, headBytes, { baseDir: BASE }), { foreign: false, size: headBytes });
+    assert.deepEqual(await appendedForeignWrite('af-missing', cwd, 0, { baseDir: BASE }), { foreign: true, size: -1 });
   });
 });
 

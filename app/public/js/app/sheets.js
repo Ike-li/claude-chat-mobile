@@ -99,7 +99,7 @@ export function createSheetController(context, {
   const CONFIRM_TONES = {
     default: { border: 'var(--accent)', title: 'text-accent-deep', ok: 'bg-cta' },
     warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
-    danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
+    danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger-solid' }, // 白字实底：深色 danger 为当文字而亮，压白字只剩 3.3（O102）
   };
   // altText 存在时多出一个次动作按钮，Promise 兑现成 'ok' | 'alt' | false（两个字符串都是 truthy，
   // 老调用点的 `if (!ok) return` 语义不变）；不传 altText 时行为与扩展前【逐字相同】——

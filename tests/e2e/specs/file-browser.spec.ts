@@ -85,6 +85,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => page.locator('#fileBrowseBody > pre').evaluate(el => el.textContent?.length)).toBe(12_000);
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer')).toHaveCount(0);
 
+    // 验收 O103：查看仍走 <pre>，但服务端给了 contentHash 就能编辑——点了才挂 CM，直接进编辑态
+    const editBtn = page.locator('#fileBrowseEdit');
+    await expect(editBtn, '几 KB 的 .txt 因为行多就不能编辑，同样大的 .js 却能').toBeVisible();
+    await editBtn.click();
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody > pre')).toHaveCount(0);
+    await expect(page.locator('#fileBrowseSave')).toBeVisible();
+    await expect.poll(() => getCmValue(page)).toBe('x\n'.repeat(6000));
+
+    await page.locator('#fileBrowseCancelEdit').click();
+    await expect(editBtn).toBeVisible();
+
     await expectNoBrowserErrors(page);
   });
 
