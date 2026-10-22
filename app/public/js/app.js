@@ -194,6 +194,7 @@ import {
   openSessionsUnderRoot,
   dashboardDirs,
   folderReasonText,
+  isPathWithin,
 } from './logic.js';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
@@ -5397,10 +5398,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       applyMirror(false, null);
     }
     // 新会话页停在的文件夹被断开（本机或别的设备）→ 服务端把它归位到别处（O119）：记下从哪来，新会话页重画时说一句。
-    // 只在原来就在新会话页上、旧目录确实已不在清单里时算——用户自己换文件夹不提示。必须在 currentCwd 覆写之前取。
-    // 「无文件夹」不算：它只在用着时才在清单里，换走就不在了，那不是被断开（#330 review P2）。
+    // 只在原来就在新会话页上、旧目录确实已不在任何已连接的文件夹（p.dirs）之下时算——用户自己换文件夹不提示。
+    // 不看展示用的项目清单：「无文件夹」只在用着时、子文件夹只在有会话时才占一节，换走就不在了，那不是被断开
+    // （#330 review P2）。「无文件夹」本来就不是连接来的，单独排除。必须在 currentCwd 覆写之前取。
+    const connectedRoots = Array.isArray(p?.dirs) ? p.dirs : [];
     const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd
-      && !availableDirs.includes(currentCwd) && !projectsState.isNoFolder(currentCwd)
+      && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
       && Boolean(messagesEl.querySelector('[data-testid="compose-surface"]'))
       ? currentCwd : null;
     currentCwd = newCwd;

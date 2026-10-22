@@ -113,9 +113,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // #330 review P2：「无文件夹」只在用着时出现在广播的工作区里（没有 scratch 会话时），别的设备把这一页换到
-  // 某个文件夹后它就不在清单里了——那不是被断开，不提示。
-  test('P0-PROJ-6b 新会话页停在「无文件夹」时别的设备换了文件夹 → 不说「已断开」', async ({ page }) => {
+  // #330 review P2：展示用的项目清单不能当「连没连着」的依据——「无文件夹」只在用着时占一节、子文件夹只在有会话时
+  // 占一节。别的设备把这一页换走后它们不在清单里了，那不是被断开，不提示。
+  test('P0-PROJ-6b 新会话页停在「无文件夹」/ 没有会话的子文件夹时别的设备换了文件夹 → 不说「已断开」', async ({ page }) => {
     const compose = page.locator('[data-testid="compose-surface"]');
     await openSessionsSidebar(page);
     await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
@@ -125,6 +125,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(SUB)}`);
     await expect(compose.getByTestId('compose-project-pill')).toContainText('web');
     await expect(compose.getByTestId('compose-relocated'), '「无文件夹」被说成「已断开」').toHaveCount(0);
+    // 子文件夹同理：没有会话时它不占一节（这里没跑 test:projects，web 不在清单里），但仍在已连接的根之下
+    await page.request.post(`/__compose-cwd?cwd=${encodeURIComponent(MAIN_WORKSPACE)}`);
+    await expect(compose.getByTestId('compose-project-pill')).not.toContainText('web');
+    await expect(compose.getByTestId('compose-relocated'), '仍在已连接文件夹之下的子文件夹被说成「已断开」').toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
 
