@@ -1016,6 +1016,26 @@ app.post('/__dev-mode', (req, res) => {
   res.json({ ok: true });
 });
 
+// 中途换成「手机上改不了清单」的安装形态。真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了），
+// 这里补一帧让客户端知道；不动工作区与当前视图（那是 __set-connected-folders 的事）。
+function setMockFoldersReadonly(code) {
+  mockFoldersAddError = code || null;
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload()
+    }
+  });
+}
+// 选择面板开着时切成只读（验收 O41）：test:folders-readonly 要从输入框发，面板盖着输入框
+app.post('/__folders-readonly', (req, res) => {
+  setMockFoldersReadonly(typeof req.query?.code === 'string' ? req.query.code : 'source_readonly');
+  res.json({ ok: true });
+});
+
 app.post('/__set-connected-folders', (req, res) => {
   const raw = typeof req.query?.dirs === 'string' ? req.query.dirs : '';
   mockDirsOverride = raw ? raw.split(',') : [];
@@ -5203,17 +5223,7 @@ io.on('connection', socket => {
       // 回 source_readonly。面板要把原因说出来，而不是静默没反应。
       command: 'test:folders-readonly',
       run: async () => {
-        mockFoldersAddError = 'source_readonly';
-        // 真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了）；这里中途换安装形态，补一帧让客户端知道
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { canRestart: mockCanRestart,
-            viewingInstanceId,
-            viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
-            ...mockDirFields(),
-            instances: mockInstances, service: mockServicePayload()
-          }
-        });
+        setMockFoldersReadonly('source_readonly');
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { text: 'test:folders-readonly ready' }

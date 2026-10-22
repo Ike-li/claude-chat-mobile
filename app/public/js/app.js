@@ -7692,10 +7692,18 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     // 「选择文件夹」放在文件夹清单之上：放末尾时文件夹一多（真机 11 个）就沉到折叠线以下，得先滚才看得到。
     // 点开是家目录浏览（只看得到目录名，能不能加由服务端判）。
-    const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk" data-testid="drawer-add-folder"></button>`);
+    // 手机上改不了清单时（验收 O41）与首页引导同一取舍：不给一个走完选择面板才被拒的入口，置灰并就地说清为什么。
+    const foldersReadonly = projectsState.foldersReadonly();
+    const addFolder = el(`<button type="button" class="w-full text-left px-3 py-2.5 text-xs text-accent hover:bg-sunk/40 active:bg-sunk disabled:text-ink-faint disabled:hover:bg-transparent disabled:active:bg-transparent" data-testid="drawer-add-folder"></button>`);
     addFolder.textContent = `＋ ${t('选择文件夹')}`;
-    addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
+    if (foldersReadonly) addFolder.disabled = true;
+    else addFolder.onclick = () => { haptic('tap'); closeLeftSidebar(); folderPicker.open({ mode: 'add' }); };
     sessionPanel.appendChild(addFolder);
+    if (foldersReadonly) {
+      const why = el('<div class="px-3 pb-2 -mt-1 text-[11px] text-ink-faint" data-testid="drawer-folders-readonly"></div>');
+      why.textContent = folderReasonText(foldersReadonly);
+      sessionPanel.appendChild(why);
+    }
 
     // 按项目清单顺序（已连接的文件夹按配置顺序、各自的子文件夹紧随其后、「无文件夹」垫底），每节一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
