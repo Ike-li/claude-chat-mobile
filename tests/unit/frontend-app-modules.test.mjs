@@ -764,14 +764,34 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
 // ---- attachLongPress：抽屉会话行的长按手势（触屏/鼠标走 Pointer Events 计时，桌面右键同效）----
 // 用 EventTarget + 注入计时器，不依赖 DOM：钉的是手势判定契约（到时触发 / 位移取消 / 抬手取消 /
 // 右键直达 / 触发后吞掉紧随的 click），不是浏览器细节。
+// ownerDocument 只模拟 capture 阶段：el.fire 先过文档的 capture 监听、没被 stopPropagation 才到行本身；
+// el.fireElsewhere 是落在别处（确认框遮罩）的事件，只经过文档、不到这一行。
 function fakePointerTarget() {
+  const docListeners = [];
+  const doc = {
+    addEventListener: (type, fn, capture) => { if (capture === true) docListeners.push({ type, fn }); },
+    removeEventListener: (type, fn) => {
+      const i = docListeners.findIndex(l => l.type === type && l.fn === fn);
+      if (i >= 0) docListeners.splice(i, 1);
+    },
+    listenerCount: () => docListeners.length,
+  };
   const el = new EventTarget();
-  el.fire = (type, init = {}) => {
+  el.ownerDocument = doc;
+  const make = (type, init) => {
     const ev = new Event(type, { cancelable: true, bubbles: true });
     Object.assign(ev, init);
-    el.dispatchEvent(ev);
+    let stopped = false;
+    ev.stopPropagation = () => { stopped = true; };
+    for (const l of docListeners.filter(x => x.type === type)) l.fn(ev);
+    return { ev, stopped: () => stopped };
+  };
+  el.fire = (type, init = {}) => {
+    const { ev, stopped } = make(type, init);
+    if (!stopped()) el.dispatchEvent(ev);
     return ev;
   };
+  el.fireElsewhere = (type, init = {}) => make(type, init).ev;
   return el;
 }
 
@@ -886,6 +906,55 @@ test.describe('attachLongPress：长按/右键触发，位移与抬手取消，�
     el.fire('contextmenu');
     assert.equal(fired.length, 1);
     assert.equal(el.fire('click').defaultPrevented, false, '右键标记之后第一次左键点这一行不该被吃掉');
+  });
+
+  // O101（R6 复测）：触屏长按抬手补发的 click 是按【抬手位置】命中的，而确认框此时已盖在行上——
+  // click 落在遮罩上把确认框当场关掉。行上的 capture 拦不到它，闩也因此不被清除、吞掉下一次右键。
+  test('★ 长按抬手的 click 落在别处（确认框遮罩）→ 照样吞掉，且只吞这一次', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    timers.flush();
+    assert.equal(fired.length, 1);
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    const onOverlay = el.fireElsewhere('click');
+    assert.equal(onOverlay.defaultPrevented, true, '不吞的话刚弹出的确认框立刻被关掉');
+
+    el.fireElsewhere('pointerdown', DOWN);
+    assert.equal(el.fireElsewhere('click').defaultPrevented, false, '用户下一次真点确认框必须放行');
+    assert.equal(el.ownerDocument.listenerCount(), 0, '文档级监听用完即撤，不随行重建累积');
+  });
+
+  test('★ 长按 click 落在别处之后，同一行右键照常触发（闩不能卡住）', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    timers.flush();
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    el.fireElsewhere('click');
+
+    el.fire('pointerdown', { ...DOWN, button: 2 });
+    assert.equal(el.fire('contextmenu').defaultPrevented, true);
+    assert.equal(fired.length, 2, '此前 swallowNextClick 只被落在本行的 click 清除，这次右键被静默吞掉');
+  });
+
+  test('主键按着、计时未到 Android 先发 contextmenu → 触发一次，抬手的 click 同样吞掉', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    el.fire('contextmenu');
+    assert.equal(timers.pending(), 0, '计时撤销，不会再触发第二次');
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    assert.equal(el.fireElsewhere('click').defaultPrevented, true);
+    assert.equal(fired.length, 1);
+  });
+
+  test('长按后没有补发 click（被系统接管）→ 下一次键盘 / 指针操作前撤掉拦截，不误吞', () => {
+    for (const next of ['keydown', 'pointerdown']) {
+      const { el, timers } = mountLongPress();
+      el.fire('pointerdown', DOWN);
+      timers.flush();
+      el.fire('pointercancel');
+      el.fireElsewhere(next, next === 'pointerdown' ? DOWN : { key: 'Enter' });
+      assert.equal(el.fireElsewhere('click').defaultPrevented, false, `${next} 之后的 click 属于新的操作`);
+    }
   });
 
   test('第二根手指（isPrimary=false）不参与；重复 pointerdown 只保留最后一个计时', () => {
