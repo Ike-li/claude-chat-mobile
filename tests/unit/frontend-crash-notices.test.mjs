@@ -78,3 +78,24 @@ test('reasonFor：按实例记的原因在没有会话 id 时也查得到；实�
   h.notices.record('s2', '会话级原因', null, at);
   assert.equal(h.notices.reasonFor({ instanceId: 'inst-2', sessionId: 's2' }), '会话级原因', '没有实例级记录时回落会话级');
 });
+
+// #329 review P2：回放缓冲里排着的崩溃 error 要在切视图丢队列之前收下来。会话级的旧原因（上一个进程的、没再发消息
+// 所以没清）不能挡住它——只有这个实例自己已经记过才跳过。
+test('adoptQueued：收下队列里最后一条进程退出的 error；会话级旧原因不挡，实例自己记过才跳过', () => {
+  const h = harness();
+  h.notices.record('s1', '上一个进程：SIGKILL', null, at);
+  const queued = [
+    { type: 'text_delta', payload: {} },
+    { type: 'error', payload: { message: '没退出的错误' } },
+    { type: 'error', payload: { message: '这一次：SIGTERM', processExited: true } },
+  ];
+  h.notices.adoptQueued({ instanceId: 'inst-2', sessionId: 's1', queued });
+  assert.equal(h.notices.reasonFor({ instanceId: 'inst-2', sessionId: 's1' }), '这一次：SIGTERM');
+  h.clearScreen();
+  h.notices.restore('s1');
+  assert.match(h.screen()[0].text, /这一次：SIGTERM/, '重载历史补回的也该是这一次的原因');
+
+  h.notices.noteInstance('inst-3', '已记过');
+  h.notices.adoptQueued({ instanceId: 'inst-3', sessionId: 's1', queued });
+  assert.equal(h.notices.reasonFor({ instanceId: 'inst-3', sessionId: 's1' }), '已记过');
+});

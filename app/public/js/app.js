@@ -5481,17 +5481,12 @@ import { createGateFocusController } from './app/focus-layers.js';
         : null;
       // 进程异常退出：带 processExited 的 error 先到、已按实例（与会话）记下原因（SIGKILL 等），中断面当场写出来（验收 O121）。
       // 按实例记：进程可能在 init 之前就退出，那时还没有会话 id（#329 review P2）。
-      // 刚切过来 / 重连时 sync:since 回放缓冲还开着，那条 error 排在队里没派发，而接下来的 bindView 会把队列丢掉，
-      // 所以从队列里也找一遍并补记，之后重载历史仍能补出那条提示（#329 review P2）。
+      // 刚切过来 / 重连时那条 error 可能还排在回放缓冲里，接下来的 bindView 会把队列丢掉，先收下来（见 adoptQueued）。
       const destroyedInstanceId = instanceDestroyed && !destroyedByRestart ? displayedInstanceId : null;
       const destroyedSid = destroyedInstanceId
         ? prevInstances.find(x => x.instanceId === destroyedInstanceId)?.sessionId : null;
-      const queuedCrash = destroyedInstanceId && !crashNotices.reasonFor({ instanceId: destroyedInstanceId, sessionId: destroyedSid })
-        ? replayBuffer.queued(destroyedInstanceId).findLast(e => e.type === 'error' && e.payload?.processExited)
-        : null;
-      if (queuedCrash) {
-        crashNotices.record(destroyedSid, queuedCrash.payload.message, null);
-        crashNotices.noteInstance(destroyedInstanceId, queuedCrash.payload.message);
+      if (destroyedInstanceId) {
+        crashNotices.adoptQueued({ instanceId: destroyedInstanceId, sessionId: destroyedSid, queued: replayBuffer.queued(destroyedInstanceId) });
       }
       const destroyedReason = destroyedInstanceId ? crashNotices.reasonFor({ instanceId: destroyedInstanceId, sessionId: destroyedSid }) : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
