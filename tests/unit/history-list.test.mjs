@@ -6,7 +6,7 @@
 // 这份从原 history.test.mjs 拆出，同源的还有 -files（路径编码）、-messages、-sync。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, appendFileSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, appendFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir, listSessions, listSessionsPage, listSessionsByIds, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../app/src/sessions/history.js';
@@ -331,7 +331,7 @@ test('listSessionsPage: query 按标题大小写不敏感匹配', async () => {
 test('listSessionsPage: query 能命中排在 limit=50 窗外的旧会话', async () => {
   const cwd = '/test/page-query-deep';
   const dir = join(BASE, getProjectDir(cwd));
-  const { utimesSync } = await import('node:fs');
+
   const nowSec = Date.now() / 1000;
   // 先写最旧的目标，再写 59 条噪声并抬高 mtime——保证 needle 落在浏览 50 窗外
   writeJSONL(dir, 'needle-old', [
@@ -358,6 +358,29 @@ test('listSessionsPage: query 能命中排在 limit=50 窗外的旧会话', asyn
   assert.equal(found.sessions.length, 1);
   assert.equal(found.sessions[0].id, 'needle-old');
   assert.equal(found.hasMore, false);
+});
+
+// 验收 O100：「加载更多」硬顶 500 之后提示「可用搜索查找」，搜索就得真能扫到 500 名以外
+test('listSessionsPage: query 扫全量，排在 500 名以外的旧会话也搜得到；标题改了按新标题搜得到', async () => {
+  const cwd = '/test/page-query-beyond-500';
+  const dir = join(BASE, getProjectDir(cwd));
+  const nowSec = Date.now() / 1000;
+  writeJSONL(dir, 'needle-ancient', [
+    { type: 'user', timestamp: new Date(Date.now() - 9_999_000).toISOString(), message: { role: 'user', content: 'AncientNeedleTitle' } },
+  ]);
+  utimesSync(join(dir, 'needle-ancient.jsonl'), nowSec - 9999, nowSec - 9999);
+  for (let i = 0; i < 520; i++) {
+    const id = `m${String(i).padStart(3, '0')}`;
+    writeJSONL(dir, id, [{ type: 'user', timestamp: new Date(Date.now() - i * 1000).toISOString(), message: { role: 'user', content: `noise ${i}` } }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  const found = await listSessionsPage(cwd, { baseDir: BASE, limit: 50, query: 'AncientNeedle' });
+  assert.equal(found.total, 521);
+  assert.deepEqual(found.sessions.map(s => s.id), ['needle-ancient'], '第 521 名的会话搜不到，提示却叫人用搜索');
+
+  appendFileSync(join(dir, 'needle-ancient.jsonl'), `${JSON.stringify({ type: 'ai-title', aiTitle: 'RenamedAncient' })}\n`);
+  const renamed = await listSessionsPage(cwd, { baseDir: BASE, limit: 50, query: 'RenamedAncient' });
+  assert.deepEqual(renamed.sessions.map(s => s.id), ['needle-ancient'], '文件变了还按旧标题匹配：meta 缓存没跟着失效');
 });
 
 test('listSessionsPage: query 能命中 firstUser 超过展示 60 字的尾部', async () => {

@@ -4,7 +4,7 @@ import { stat, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join } from 'node:path';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo, getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT, managedWorktreeRoot } from './workdirs.js';
+import { MAX_SESSION_LIMIT, managedWorktreeRoot } from './workdirs.js';
 import { listLinkedWorktrees } from './folder-access.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
@@ -1382,7 +1382,8 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '', 
 
 // 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
 // readdir + N×stat + 全量尾窗活动时间 + readHeadMeta。
-// 浏览：只对前 limit 条读 meta。搜索：对前 SEARCH_SCAN_LIMIT 条读 meta 再按标题过滤。
+// 浏览：只对前 limit 条读 meta。搜索：对全部会话读 meta 再按标题过滤——浏览窗硬顶之后的提示就是「用搜索找」，
+// 搜索再设顶，那批会话就既加载不出也搜不到（验收 O100）。meta 按文件 (size, mtime) 缓存，只有首次搜索付全量读盘。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
 async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map(), exclude = new Set()) {
   let names;
@@ -1421,9 +1422,9 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
   withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
 
   const total = withActivity.length;
-  const metaBudget = query ? Math.min(total, SEARCH_SCAN_LIMIT) : Math.min(total, limit);
+  const metaBudget = query ? total : Math.min(total, limit);
   const ranked = withActivity.slice(0, metaBudget);
-  const metas = await Promise.all(ranked.map(s => readHeadMeta(s.file, s.size)));
+  const metas = await Promise.all(ranked.map(s => cachedHeadMeta(s.file, s.size, s.mtimeMs)));
   const decorated = ranked.map((s, i) => {
     const meta = metas[i] || {};
     const overlay = titleById.get(s.id) || '';
@@ -1556,6 +1557,16 @@ export function invalidateListCache(cwd) {
 // model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
 // 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
 // size 由 listSessionsPage 的 stat 透传（与排序用的同一份）；未传时用打开时 fstat 的。
+const HEAD_META_CACHE_CAP = 8192;
+const _headMetaCache = new Map(); // file → { size, mtimeMs, meta }
+async function cachedHeadMeta(file, size, mtimeMs) {
+  const hit = _headMetaCache.get(file);
+  if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.meta;
+  const meta = await readHeadMeta(file, size);
+  if ('title' in meta) setCapped(_headMetaCache, file, { size, mtimeMs, meta }, HEAD_META_CACHE_CAP); // 读失败（{}）不缓存
+  return meta;
+}
+
 async function readHeadMeta(file, size) {
   const meta = { title: '', model: null, entrypoint: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
