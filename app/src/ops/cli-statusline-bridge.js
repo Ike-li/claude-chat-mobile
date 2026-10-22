@@ -30,6 +30,20 @@ const DEFAULT_CLI_STATUSLINE_DIR = join(
   ccmUnderClaudeHome(homedir(), 'statusline-v1', 'snapshots'),
 );
 
+// 安装器（scripts/statusline-bridge-setup.js）拒装时在 stdout 写一行 {"error":"<原因码>"}（验收 O125）。
+// server 走 execFile 调它（运行时禁止 import scripts/），从输出里认出这个码透传给面板，面板按码出文案。
+// 成功时 stdout 也是一行 JSON（安装结果），没有 error 字段，不算。
+export function setupFailureCode(stdout) {
+  for (const line of String(stdout ?? '').split('\n')) {
+    if (!line.trim().startsWith('{')) continue;
+    try {
+      const code = JSON.parse(line)?.error;
+      if (typeof code === 'string' && code) return code;
+    } catch { /* 半行或别的东西 */ }
+  }
+  return null;
+}
+
 export function cliStatuslineTtlMs(refreshIntervalSec = 60) {
   const candidate = nonNegative(refreshIntervalSec);
   const intervalSec = candidate !== null && candidate > 0 ? candidate : 60;

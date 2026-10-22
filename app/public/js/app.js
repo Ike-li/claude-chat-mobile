@@ -2240,7 +2240,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (res?.state && latestServiceHealth?.statuslineBridge) latestServiceHealth.statuslineBridge.state = res.state;
       renderStatuslineBridgeSection();
       if (err || !res) { showBridgeSetupResult('statuslineBridgeResult', t('操作超时，请重试'), false); loadServiceStatus(); return; }
-      showBridgeSetupResult('statuslineBridgeResult', res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
+      // report 是安装器的英文原话；认得出的原因码按界面语言说（验收 O125）
+      const reason = res.code === 'statusline_not_configured'
+        ? t('还没配置 statusLine：先在 ~/.claude/settings.json 里给 Claude Code 配好 statusLine，再回来开启') : '';
+      showBridgeSetupResult('statuslineBridgeResult', reason || res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok);
       loadServiceStatus();
     });
   }

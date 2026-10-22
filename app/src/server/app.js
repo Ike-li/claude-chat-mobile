@@ -54,7 +54,7 @@ import { createServiceSampler } from '../ops/service-sampler.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, getFallbackUsageAgeMs, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { encodeQr } from '../shared/qrcode.js';
 import { resolvePublicTarget, isProxyFronted } from '../shared/public-target.js';
-import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
+import { readCliStatusSnapshot, readStatuslineInstallState, selectStatusOwner, selectStatusReplay, selectStatusSource, setupFailureCode } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta, locateStoredAttachment } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
 import {
@@ -4533,10 +4533,13 @@ registerSocketConnection(io, socket => {
         + (err ? `：${String(err.message || err).split('\n')[0]}` : ''));
       broadcastInstances();
       const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
+      // 安装器拒装时带原因码：透传给面板按码出文案（验收 O125），stderr 那句英文留给 report 兜底
+      const code = err ? setupFailureCode(stdout) : null;
       ack({
         ok: !err,
         state,
         report: report || String(stderr || '').trim().split('\n').slice(-3).join('\n') || (err ? '执行失败' : ''),
+        ...(code ? { code } : {}),
       });
     });
   });

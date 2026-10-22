@@ -21,6 +21,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { setupFailureCode } from '../../app/src/ops/cli-statusline-bridge.js';
+
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const SETUP = join(ROOT, 'scripts', 'statusline-bridge-setup.js');
 
@@ -386,3 +388,29 @@ test('uninstall：~/.claude/ccm 下还有别的桥时只清自己那份', () => 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// 验收 O105 / O125：用户还没配 statusLine 时 install 拒装是对的，但两种形态措辞不一：settings.json 不存在时只吐
+// 原始的「ENOENT: no such file or directory, open …」；面板上则是一行英文原文。失败要带一个稳定的原因码
+// （stdout 的 JSON，供 server 透传、前端按码出文案），stderr 给敲命令的人一句看得懂的话。
+for (const [label, prepare] of [
+  ['settings.json 还不存在', () => {}],
+  ['settings.json 里没有 statusLine', home => writeSettings(home, undefined)],
+]) {
+  test(`install：${label} → 拒装，给出原因码与可读说明，不建任何文件`, () => {
+    const home = makeHome();
+    try {
+      prepare(home);
+      const before = existsSync(settingsPath(home)) ? readFileSync(settingsPath(home), 'utf8') : null;
+      const result = runSetup(home, 'install');
+      assert.equal(result.status, 1);
+      assert.deepEqual(JSON.parse(result.stdout), { error: 'statusline_not_configured' });
+      assert.equal(setupFailureCode(result.stdout), 'statusline_not_configured', 'server 那一侧的解析认不出安装器真实的输出');
+      assert.doesNotMatch(result.stderr, /ENOENT|no such file/, '把 fs 的原始报错甩给用户');
+      assert.match(result.stderr, /statusLine/);
+      assert.equal(existsSync(manifestPath(home)), false);
+      assert.equal(existsSync(settingsPath(home)) ? readFileSync(settingsPath(home), 'utf8') : null, before);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}

@@ -31,6 +31,7 @@ import {
   readCliStatusSnapshot,
   readStatuslineInstallState,
   selectStatusReplay,
+  setupFailureCode,
   selectStatusOwner,
   selectStatusSource,
   snapshotFilePath,
@@ -595,4 +596,16 @@ test('安装态：settings.json 是坏 JSON → unknown（读不出来就说读�
   const home = statuslineHome();
   writeFileSync(settingsPathOf(home), '{ 这不是 JSON');
   assert.equal(readStatuslineInstallState({ home }).state, 'unknown');
+});
+
+// 验收 O125：安装器拒装时在 stdout 写一行 {"error":"<原因码>"}，server 透传给面板按码出文案。
+// 成功时 stdout 也是一行 JSON（安装结果），那不是失败原因，不能被当成码。
+test('setupFailureCode：只认安装器失败时的 {"error":…}，别的 JSON / 杂行一律 null', () => {
+  assert.equal(setupFailureCode('{"error":"statusline_not_configured"}\n'), 'statusline_not_configured');
+  assert.equal(setupFailureCode('some log line\n{"error":"statusline_not_configured"}\n'), 'statusline_not_configured');
+  assert.equal(setupFailureCode('{"state":"installed","idempotent":true}\n'), null);
+  assert.equal(setupFailureCode('not json\n'), null);
+  assert.equal(setupFailureCode(''), null);
+  assert.equal(setupFailureCode(undefined), null);
+  assert.equal(setupFailureCode('{"error":42}\n'), null, '原因码只收字符串');
 });
