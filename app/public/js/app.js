@@ -6362,7 +6362,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       btn.disabled = false;
       btn.textContent = original;
       const permission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
-      const r = describePushTestResult(err ? null : res, { permission });
+      const r = describePushTestResult(err ? null : res, { permission, hint: pushEnvHint(notifications.environment()) });
       const cls = { ok: 'text-success', warn: 'text-warning', danger: 'text-danger' }[r.tone];
       addBar(r.text, cls);
       // 设置面板是 z-40 的大底栏、盖着消息流，只写 addBar 等于没写（同 renderPushStatusRow 里关闭失败那条）：
@@ -6374,6 +6374,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       notice.className = `text-[11px] px-1 ${cls}`;
       notice.textContent = r.text;
+      // 按钮在通知页底部：iPhone 13（390×664）下这一行刚好落在视口外，只露半行（O112）
+      notice.scrollIntoView({ block: 'nearest' });
     });
   };
 

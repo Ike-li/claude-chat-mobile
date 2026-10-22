@@ -198,6 +198,23 @@ test.describe('describePushTestResult：测试推送回执两条通道各说各�
     assert.equal(r.tone, 'warn');
   });
 
+  // O108：need-https / ios-add-home / unsupported 三态的状态行同样没有「开启」按钮（formatPushStatusRow
+  // 给 action:null）。iOS Safari 标签页里 Notification 未定义、permission 回落 'default'，只看 permission
+  // 就会落进「先点开启」那句——手机上最常见的一种。
+  for (const [hint, cue] of [['need-https', /HTTPS/], ['ios-add-home', /添加到主屏幕/], ['unsupported', /不支持/]]) {
+    test(`环境不满足（${hint}）：说清卡在哪，不让人去点状态行上没有的「开启」`, () => {
+      const r = describePushTestResult({ ...base, ntfy: 'disabled' }, { permission: 'default', hint });
+      assert.doesNotMatch(r.text, /「开启」/);
+      assert.match(r.text, cue);
+      assert.equal(r.tone, 'warn');
+    });
+  }
+
+  test('环境满足（ready）且没订阅：仍指向「开启」，那一态状态行确实有这个按钮', () => {
+    const r = describePushTestResult({ ...base, ntfy: 'disabled' }, { permission: 'default', hint: 'ready' });
+    assert.match(r.text, /「开启」/);
+  });
+
   test('网页推送没订阅但 ntfy 发出去了：报成功并点名 ntfy，不只说「还没订阅」', () => {
     const r = describePushTestResult({ ...base, ntfy: 'sent' }, { permission: 'default' });
     assert.match(r.text, /ntfy/);

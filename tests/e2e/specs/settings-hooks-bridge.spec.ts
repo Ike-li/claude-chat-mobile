@@ -117,6 +117,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O112：iPhone 13 视口（390×664）下，就地结果行落在面板可视区底缘之外，只露上半行。
+  // 面板贴底、随内容往上长，到最大高度后才在内部滚动：真 server 的通知页内容多，面板早已到顶；mock 的
+  // 内容少，664 高时面板还在长，结果行被顶进视口、用例恒绿。560 让面板先到顶，复现的是同一个机制。
+  test('P0-26d 测试推送：结果行出来时整行在视口里，不用再上滑找', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 560 });
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await openGeneralPage(page, 'notify');
+    // 状态行与预览说明是异步渲染、插在按钮上方的；先等它们落定，否则点完后布局还会再下移一截
+    await expect(page.locator('#pushStatusRow')).not.toBeEmpty();
+    await expect(page.locator('#pushPreviewInertNote')).toBeVisible();
+    await page.locator('#btnPushTest').click();
+    const result = page.locator('[data-testid="push-test-result"]');
+    await expect(result).toBeVisible();
+    await expect(result).toBeInViewport({ ratio: 0.95 }); // 不写 1：面板 top 落在亚像素上，完整可见实测 0.997；修复前 0.149
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P0-27：点齿轮打开面板后，推送订阅状态行必须真的渲染出来。
   // 这条是真机截图逼出来的——首版把渲染挂在 app.js 自己的 openSettingsSheet 包装上，可齿轮按钮是
   // settings 控制器 autoBind 到它自己的 open() 的，包装从不生效，于是整行在真机上永远空白。
