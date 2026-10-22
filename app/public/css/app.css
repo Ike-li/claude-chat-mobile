@@ -787,6 +787,10 @@ header {
     right: -6px;
     bottom: -6px;
   }
+  /* 附件键与发送键只隔 2px（gap-0.5）：两边各向外扩 6px 时，发送键的热区（DOM 在后、叠在上面）压住附件键
+     右缘约 10px，点附件键边缘会把消息发出去（O98）。相邻那一侧各只扩到间隙中线，两键横向仍有 47px。 */
+  .chat-input-pill #btnAttach::after { right: -1px; }
+  .chat-input-pill #btnSend::after { left: -1px; }
 
   /* ── 规则动画选中过渡 ── */
   .perm-tile {
@@ -865,10 +869,12 @@ header {
   min-width: 32px;
   position: relative;
 }
+/* 纵向 7px：::after 以 padding box 为基准、不含 1px 边框，扩 6px 只到 30+12=42（O99，同 O76 顶栏）。
+   横向不动，相邻按钮之间不再多压。 */
 .msg-action-btn::after {
   content: '';
   position: absolute;
-  inset: -6px;
+  inset: -7px -6px;
 }
 
 /* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡）。

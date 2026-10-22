@@ -77,6 +77,50 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O98（AC-21-08）：输入框有字时发送键显出来，它的热区（DOM 在后、叠在上面）压住附件键右缘——
+  // 附件键右缘内 3px 处 elementFromPoint 命中的是 #btnSend，点附件键边缘会把消息发出去。
+  test('P0-19f 输入框有字时，附件键的右缘点得到附件键，不会误触发送', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.locator('#input').fill('有字了');
+    await expect(page.locator('#btnSend')).toBeVisible();
+    const r = await page.evaluate(() => {
+      const hit = (x, y) => document.elementFromPoint(x, y)?.closest('button')?.id || null;
+      const a = document.getElementById('btnAttach').getBoundingClientRect();
+      const s = document.getElementById('btnSend').getBoundingClientRect();
+      const ay = a.top + a.height / 2, sy = s.top + s.height / 2;
+      return {
+        attachRightInside: hit(a.right - 3, ay), attachLeftOutside: hit(a.left - 3, ay),
+        sendLeftInside: hit(s.left + 3, sy), sendRightOutside: hit(s.right + 3, sy),
+      };
+    });
+    expect(r.attachRightInside, '附件键自己的右缘点到了发送键').toBe('btnAttach');
+    expect(r.attachLeftOutside, '附件键左侧的扩展热区没了').toBe('btnAttach');
+    expect(r.sendLeftInside).toBe('btnSend');
+    expect(r.sendRightOutside, '发送键右侧的扩展热区没了').toBe('btnSend');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O99（AC-21-08）：消息操作按钮（复制 / 朗读 / 分叉 / 改写重发）名义热区 44，实测只有 42——::after 以
+  // padding box 为基准、不含 1px 边框（同 O76 顶栏那次），32 高的按钮扩 6px 只到 30+12。
+  test('P0-19g 消息操作按钮的可点高度到 44', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stream');
+    await waitForIdle(page);
+    const heights = await page.evaluate(() => [...document.querySelectorAll('.msg-action-btn')].map(b => {
+      const r = b.getBoundingClientRect(); const cx = r.left + r.width / 2;
+      const self = y => { const e = document.elementFromPoint(cx, y); return e === b || b.contains(e); };
+      let up = 0; while (up < 12 && self(r.top - up - 1)) up++;
+      let dn = 0; while (dn < 12 && self(r.bottom + dn)) dn++;
+      return { label: b.title, total: Math.round(r.height + up + dn) };
+    }));
+    expect(heights.length, '一个消息操作按钮都没找到').toBeGreaterThanOrEqual(2);
+    for (const h of heights) expect(h.total, `${h.label} 的可点高度`).toBeGreaterThanOrEqual(44);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
     await gotoMock(page);
 
