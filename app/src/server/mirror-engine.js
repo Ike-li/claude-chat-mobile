@@ -174,6 +174,7 @@ export function createMirrorEngine({
   // 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
   let mirrorRelease = { readonly: false, quietTicks: 0 };
   let mirrorLastSize = -1;                            // 上一 tick 的 transcript 字节大小（keep-alive 判文件增长）；-1=基线未建立（切入 / localBusy 后首个正常 tick 只记 size 不判增长）
+  let mirrorLastPendingKey = null;                    // 上一次 localBusy tick 时挂起的审批 / 提问 id 集合（externalGrowthWhilePaused 判同一审批窗）
   let mirrorCliSeen = false;                          // 负证据槽（session-registry cliPresenceStep）：观察期内是否见过 entrypoint=cli 的活注册表条目；「曾见→消失」= 终端已死，喂 mirrorStaleFlag 立即判 stale；切会话在 entry 分支重置
   // 接管 fencing token（R2/2026-08-06）。tick 的三重提交守卫比对 viewing / 实例引用 / cwd+sessionId，
   // 而用户接管【不改变其中任何一项】——一个在 takeOver 之前开始读盘、之后才 resolve 的 tick 会带着
@@ -357,7 +358,9 @@ export function createMirrorEngine({
       mirrorCliSeen = busyCliPresence.seen;
       // 等审批（可长达 APPROVAL_TTL_MS 30min）期间 web 不写盘 → 磁盘长大必是终端写的，必须标脏，
       // 否则下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉出第二条链。
-      if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize })) {
+      // 挂起的审批 / 提问集合：两拍之间变过 = 有审批结算、SDK 写了 tool_result，那段增长是己方的（O122）
+      const pendingKey = [...a.pendingPermissions.keys(), ...a.pendingQuestions.keys()].sort().join('\n');
+      if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize, prevPending: mirrorLastPendingKey, curPending: pendingKey })) {
         a.externalDirty = true;
       }
       // wasOwnTurn 只在 st==='busy' 时置：permission（等审批）期间 web 侧未必不写盘（并行工具调用里免审批
@@ -365,6 +368,7 @@ export function createMirrorEngine({
       catchUpState = { baseline: catchUpState.baseline, wasBusy: true, wasOwnTurn: st === 'busy', lastTailKey: catchUpState.lastTailKey ?? null, anchorKey: catchUpState.anchorKey ?? null };
       // busy（己方 turn 在写盘）作废 size 基线；permission（己方不写盘）维持基线，供下一 tick 判终端增长
       mirrorLastSize = st === 'permission' && busySize >= 0 ? busySize : -1;
+      mirrorLastPendingKey = pendingKey;
       mirrorRelease = rel.state;
       setMirror(
         rel.readonly,

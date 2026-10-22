@@ -2099,8 +2099,14 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
 // 原实现把两者并进同一个 localBusy，一起抑制追平 + 上锁 + 标脏，于是「手机上弹着审批卡片、人走到电脑前
 // 用终端继续同一会话」这 30 分钟里：终端的回合不上屏、手机没有只读横幅、externalDirty 也不置位 ——
 // 下一条手机消息直接送进停在 30 分钟前的 SDK 子进程，从旧 parentUuid 写出第二条链（transcript 分叉）。
-export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
+//
+// 「web 侧不写盘」只在【同一批】审批挂着时成立（O122）：两次 tick 之间若有审批结算（过期 / 批准 / 拒绝），
+// SDK 会写下那条 tool_result、继续跑，几毫秒内下一个审批又挂起——CLI 对并行的多个审批是逐个问的。
+// 两拍看到的都是 'permission'，中间的增长却是己方写的。所以要求两拍的挂起集合（prevPending/curPending，
+// 审批与提问 id 拼成的键）相同；不同就交回调用方重建基线、不判增长。id 每次请求唯一，旧键不会碰巧等于新集合。
+export function externalGrowthWhilePaused({ state, prevSize, curSize, prevPending, curPending } = {}) {
   if (state !== 'permission') return false;
+  if (prevPending !== curPending) return false;
   return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
 }
 
