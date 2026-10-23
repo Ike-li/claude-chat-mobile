@@ -216,12 +216,15 @@ wait_pr_mergeable() {
 # 装上 trap 再让测试进程退出，等于每跑一次单测就吞掉开发者在这三个文件里未提交的改动。
 if [ -n "${CCM_RELEASE_LIB_ONLY:-}" ]; then return 0; fi
 
-trap cleanup EXIT
-
 # ── 预检 ─────────────────────────────────────────────
 command -v gh >/dev/null || die "需要 gh CLI"
 gh auth status >/dev/null 2>&1 || die "gh 未登录：先 gh auth login"
 [ -z "$(git status --porcelain)" ] || { git status -s; die "工作树不干净，先提交或暂存"; }
+
+# 【为什么 trap 装在「工作树干净」之后】cleanup 无条件还原那三个文件，它只该还原脚本自己写的。
+# 装在这道检查之前，被拒的那一刻还原掉的就是用户没提交的改动（--dry-run 一样）。过了这道检查，
+# 三个文件里再有改动只可能来自下面的 bump 与 write_changelog。
+trap cleanup EXIT
 
 git fetch -q origin || die "git fetch 失败（网络？）"
 # --tags 显式拉：下面的 FINALIZING 判据要问「origin/master 的 HEAD 上有没有 tag」，
