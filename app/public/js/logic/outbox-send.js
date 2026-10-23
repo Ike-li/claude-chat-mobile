@@ -364,9 +364,19 @@ export function outboxNoticePlacement({
 // 不许诺交还，原文直接写进提示，看得见、复制得到（PR #310 review）。
 export function outboxParkedNotice({ viewingInstanceId = null, stale = false, message = '', sessionId = null, text = '' } = {}) {
   if (viewingInstanceId) return null;
-  const reason = stale ? t('目标会话已关闭') : (message || t('发送失败'));
-  const head = `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}`;
+  const head = outboxDeadLetterHead({ stale, message });
   return sessionId ? `${head}${t('。原文已保存，回到该会话时会放回输入框')}` : `${head}${t('。原文：')}${text}`;
+}
+
+export function outboxDeadLetterHead({ stale = false, message = '' } = {}) {
+  const reason = stale ? t('目标会话已关闭') : (message || t('发送失败'));
+  return `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}`;
+}
+
+// 死信暂存里交还不了的条目：只有实例号、没有会话号（升级前入队）。实例号在 server 重启后不复用（MSG-02），
+// 按会话、按实例号都认不出它；两样都没有的是新会话页发的，按目录还能交还（outboxItemTargetsViewing）。
+export function isUnreturnableDeadLetter(item) {
+  return !(typeof item?.sessionId === 'string' && item.sessionId) && item?.instanceId != null;
 }
 
 // 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：

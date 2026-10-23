@@ -8,6 +8,8 @@
 // targetsViewing(item, viewing) 由调用方注入（logic/outbox-send.js 的 outboxItemTargetsViewing），
 // 与离线重放判「是不是眼前这个会话」用同一条判据。
 
+import { isUnreturnableDeadLetter } from '../logic/outbox-send.js';
+
 const STORAGE_KEY = 'ccm-outbox-dead-letters-v1';
 
 export function createOutboxDeadLetters({ storage, targetsViewing, max = 50 } = {}) {
@@ -37,9 +39,10 @@ export function createOutboxDeadLetters({ storage, targetsViewing, max = 50 } = 
       if (items.length > max) items = items.slice(-max);
       write();
     },
-    // 取走发往眼前这个会话的那些（取走即删），按暂存顺序
+    // 取走发往眼前这个会话的那些（取走即删），按暂存顺序。交还不了的（升级前入队）等不到它自己的会话，
+    // 落到哪个会话就在哪个会话交出来，否则它就悄悄没了（验收 O135）
     takeFor(viewing) {
-      const mine = items.filter(d => targetsViewing(d, viewing));
+      const mine = items.filter(d => isUnreturnableDeadLetter(d) || targetsViewing(d, viewing));
       if (!mine.length) return [];
       items = items.filter(d => !mine.includes(d));
       write();

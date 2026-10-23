@@ -27,6 +27,16 @@ test('暂存后只交给它自己的会话：别的会话拿不到，拿走一�
   assert.deepEqual(box.takeFor(A), [], '交还过一次就不再留着');
 });
 
+test('回不去的条目（升级前入队，只剩实例号、没有会话号）：落到哪个会话就在哪个会话交出来（验收 O135）', () => {
+  // 升级重启后那个实例号不复用，按会话认、按实例号认都等不到它；只等「它自己的会话」就是永远交不出去
+  const box = createOutboxDeadLetters({ storage: memoryStorage(), targetsViewing: outboxItemTargetsViewing });
+  box.park({ instanceId: 'inst_9', cwd: '/w', text: '升级前离线打的那条' }, '⚠️ 离线时发的一条消息没有发出：目标会话已关闭');
+  box.park(itemForA, '已停止重试');
+  assert.deepEqual(box.takeFor(B).map(d => d.text), ['升级前离线打的那条'], '能交还的 A 那条仍只交给 A');
+  assert.deepEqual(box.takeFor(B), [], '交出来一次就不再留着');
+  assert.deepEqual(box.takeFor(A).map(d => d.text), ['发往 A 的那条']);
+});
+
 test('落盘：重载页面（新建实例、同一份 storage）后仍在', () => {
   const storage = memoryStorage();
   createOutboxDeadLetters({ storage, targetsViewing: outboxItemTargetsViewing }).park(itemForA, '已停止重试');
