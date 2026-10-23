@@ -36,7 +36,7 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
     status.classList.toggle('hidden', !text);
   }
 
-  function row({ icon, label, sub = '', testid, muted = false, onClick, onEnter }) {
+  function row({ icon, label, sub = '', testid, muted = false, disabled = false, onClick, onEnter }) {
     const wrap = el(`<div class="flex items-stretch border-b border-line-soft/60" data-testid="${testid}"></div>`);
     const main = el(`<button type="button" class="flex-1 min-w-0 text-left px-4 py-2.5 flex items-center gap-3 hover:bg-sunk/40 active:bg-sunk${muted ? ' text-ink-faint' : ' text-ink'}"></button>`);
     const ic = el('<span class="shrink-0 w-5 text-center"></span>');
@@ -51,7 +51,8 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
       text.appendChild(s);
     }
     main.append(ic, text);
-    main.onclick = () => { haptic('tap'); onClick(); };
+    if (disabled) main.disabled = true;
+    else main.onclick = () => { haptic('tap'); onClick(); };
     wrap.appendChild(main);
     if (onEnter) {
       const enter = el(`<button type="button" class="shrink-0 w-11 flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk/40" data-testid="folder-picker-enter" aria-label="${t('查看子文件夹')}" title="${t('查看子文件夹')}">›</button>`);
@@ -89,8 +90,11 @@ export function createFolderPicker({ $, el, socket, openSheet, closeSheet, hapti
         onClick: () => pick(scratch),
       }));
     }
+    // 手机上改不了清单时同抽屉的「选择文件夹」（验收 O41 / O129）：置灰，原因写在副标题里，不给一个走进去才被拒的入口
+    const readonly = getFoldersReadonly();
     body.appendChild(row({
-      icon: '＋', label: t('添加文件夹'), sub: t('从家目录里选一个文件夹连接进来'), testid: 'folder-picker-add',
+      icon: '＋', label: t('添加文件夹'), sub: readonly ? folderReasonText(readonly) : t('从家目录里选一个文件夹连接进来'), testid: 'folder-picker-add',
+      muted: Boolean(readonly), disabled: Boolean(readonly),
       onClick: () => enterBrowse('add', null),
     }));
     const head = el('<div class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-ink-faint"></div>');
