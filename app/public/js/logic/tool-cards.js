@@ -13,10 +13,12 @@ import { bgTaskUsageText, isSyntheticTaskId } from './bg-tasks.js';
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
 // 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
 // 只做数据→数据，不碰 DOM/hljs（高亮由 app.js 渲染层复用现有 hljs）。
-export function formatToolSummary(summary) {
+// truncated：调用方手里的截断元数据（实时 tool_result 事件带；「展开全文」恒为 false）。明说没截断就不动尾巴——原文可能
+// 恰好以同样几个字结尾（#341 review）；没有元数据（历史、输入摘要）才按尾巴认，与 isToolSummaryTruncated 同口径。
+export function formatToolSummary(summary, { truncated } = {}) {
   if (summary == null) return '';
   if (typeof summary !== 'string') return String(summary);
-  const s = localizeServerTruncationTail(summary);
+  const s = truncated === false ? summary : localizeServerTruncationTail(summary);
   if (!s) return '';
   const trimmed = s.trim();
   if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return s;

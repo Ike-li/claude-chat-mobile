@@ -32,6 +32,16 @@ test('formatToolSummary: 英文界面把服务端的截断尾巴换成 …(trunc
   } finally { setLang('zh'); }
 });
 
+// #341 review：没截断的工具内容也可能恰好以这几个字结尾（命令打印、搜索这句话），「展开全文」拿回的全文也走 formatToolSummary。
+// 有截断元数据时以它为准：明说没截断就一个字不改；没有元数据（历史、输入摘要）才按尾巴认，与 isToolSummaryTruncated 同口径。
+test('formatToolSummary: 明说没截断（truncated: false）时，以同样几个字结尾的原文不被翻译', () => {
+  try {
+    setLang('en');
+    assert.equal(formatToolSummary('grep 命中：row …（已截断）', { truncated: false }), 'grep 命中：row …（已截断）');
+    assert.equal(formatToolSummary('row-01 …（已截断）', { truncated: true }), 'row-01 …(truncated)');
+  } finally { setLang('zh'); }
+});
+
 test('localizeServerThinkingText: 历史思考块里服务端写的截断尾巴与脱敏占位，英文界面下换成英文（验收 O131 同类）', () => {
   try {
     setLang('en');
