@@ -14,9 +14,13 @@ import { tmpdir } from 'node:os';
 
 import { createReadStateStore } from '../../app/src/sessions/read-state.js';
 import { isSessionUnread, isManualUnreadNow } from '../../app/public/js/logic/unread.js';
+import { BROWSE_HARD_LIMIT, MAX_LIVE_SESSIONS } from '../../app/src/sessions/workdirs.js';
 
 const T0 = 1_700_000_000_000;
 const MIN = 60_000;
+// 服务端时钟：晚于各用例上报的全部时间戳——这些用例模拟的是时钟正常的设备。
+// 设备时钟偏快（上报落在服务端 now 之后）另有一组 clamp 用例，那组才用 T0 作 now。
+const LATER = T0 + 60 * MIN;
 
 let TMP_DIR;
 let fileSeq = 0;
@@ -56,14 +60,14 @@ test.describe('READ-01: 服务端共享已读位点单调合并与基线保护',
   });
 
   test('seen 位点按会话取最新时间戳，单调不回退（乱序到达旧 ack 不拨旧位点）', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.markRead('session-1', T0 + 5 * MIN);
     s.markRead('session-1', T0 + 1 * MIN); // 较旧的晚到达
     assert.equal(s.getState().seen['session-1'], T0 + 5 * MIN, '必须保留较晚时间戳');
   });
 
   test('applyClientState 增量归并：逐会话取 max 时间戳', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.markRead('s-a', T0 + 10 * MIN);
     s.markRead('s-b', T0 + 20 * MIN);
 
@@ -83,7 +87,7 @@ test.describe('READ-01: 服务端共享已读位点单调合并与基线保护',
 
 test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整屏复亮核心）', () => {
   test('setManual(false) 必须同时记 seen，阻止另一台离线设备把旧 manual 同步回来后复活', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
 
     // 设备 A：在 T0+10MIN 手动标未读
     s.setManual('sess-target', true, T0 + 10 * MIN);
@@ -115,7 +119,7 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
   // 的 LWW 合并又把它搬回本地，形成永不收敛的不对称。判定上通常被 seen 盖住看不出来，但两台设备
   // 时钟有偏移时那份复活的旧标记就会翻成假未读。清理的判据必须是时间戳比较，不是无条件删。
   test('markRead 盖过手动标记后必须清掉该 manual 条目：不留下会被 hydrate 搬回来的不对称', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.setManual('session-1', true, T0 + 1 * MIN);   // 设备 A 长按「标为未读」
     s.markRead('session-1', T0 + 2 * MIN);          // 设备 B 打开该会话（markEntered 只发 seenAt）
 
@@ -126,7 +130,7 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
   });
 
   test('markRead 不得清掉晚于它的手动标记：乱序到达的旧已读不能吃掉「稍后再看」', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.setManual('session-1', true, T0 + 5 * MIN);   // 标记在后
     s.markRead('session-1', T0 + 2 * MIN);          // 较早的一笔已读乱序到达
 
@@ -136,7 +140,7 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
   });
 
   test('setManual(false) 的 seen 也单调不回退：乱序旧「标为已读」不得把位点拨回过去', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.markRead('session-1', T0 + 5 * MIN);
     s.setManual('session-1', false, T0 + 1 * MIN);  // 另一台设备很久以前那笔「标为已读」晚到
 
@@ -144,7 +148,7 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
   });
 
   test('多设备乱序交织上报：最终状态收敛且判定幂等', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
 
     // 设备 1 和设备 2 交叉上报位点
     s.applyClientState({
@@ -170,9 +174,47 @@ test.describe('READ-01: 手动标已读写 seen 阻断旧 manual 复活（防整
   });
 });
 
+// #300：位点时间戳是客户端时钟。设备时钟快 10 分钟时，它写下的 seen 落在服务端时间轴的未来，
+// 此后 10 分钟内服务端（lastUsedAt 用的是服务端时钟）来的新活动全部 <= seen，在所有设备上被吞掉。
+// 写入一律 clamp 到服务端 now；read:sync 那条全量归并也要 clamp，否则快钟设备每次重连都把未来值推回来。
+test.describe('READ-01: 设备时钟偏快——写入时间戳 clamp 到服务端 now', () => {
+  const FAST = 10 * MIN;
+
+  test('标为已读（setManual off）：位点不超过服务端 now，之后立刻来的新活动仍亮未读', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('s1', false, T0 + FAST);
+    const st = s.getState();
+    assert.equal(st.seen.s1, T0, '未来时间戳必须被压到服务端 now');
+    assert.equal(isSessionUnread({ lastUsedAt: T0 + 1000, seenAt: st.seen.s1, baselineTs: st.baselineTs }), true,
+      '标完 1 秒服务端就有新活动：不 clamp 的话这条要等设备时钟的 10 分钟偏差走完才亮');
+  });
+
+  test('打开会话（markRead）同样 clamp', () => {
+    const s = createStore({ now: () => T0 });
+    s.markRead('s1', T0 + FAST);
+    assert.equal(s.getState().seen.s1, T0);
+  });
+
+  test('标为未读（setManual on）也 clamp：另一台正常时钟的设备随后打开，标记就该失效', () => {
+    const s = createStore({ now: () => T0 });
+    s.setManual('s1', true, T0 + FAST);
+    s.markRead('s1', T0 + MIN); // 另一台设备一分钟后打开
+    const st = s.getState();
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 's1'), false, '未来的手动标记会压过此后 10 分钟内的每一次打开');
+  });
+
+  test('read:sync 全量归并也 clamp：快钟设备重连推上来的未来值不得进权威态', () => {
+    const s = createStore({ now: () => T0 });
+    const st = s.applyClientState({ seen: { a: T0 + FAST, b: T0 - MIN }, manual: { c: T0 + FAST } });
+    assert.equal(st.seen.a, T0);
+    assert.equal(st.seen.b, T0 - MIN, '过去的时间戳原样保留');
+    assert.equal(st.manual.c, T0);
+  });
+});
+
 test.describe('READ-01: 容量限制与持久化健壮性', () => {
   test('超出 seenCap / manualCap 时按时间戳淘汰最旧记录', () => {
-    const s = createStore({ now: () => T0, seenCap: 2, manualCap: 2 });
+    const s = createStore({ now: () => LATER, seenCap: 2, manualCap: 2 });
     s.markRead('s-old', T0 + 1 * MIN);
     s.markRead('s-mid', T0 + 2 * MIN);
     s.markRead('s-new', T0 + 3 * MIN);
@@ -187,7 +229,7 @@ test.describe('READ-01: 容量限制与持久化健壮性', () => {
   });
 
   test('脏输入防御：非字符串 sessionId / NaN 时间戳直接忽略，不抛异常', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.markRead(null, T0);
     s.markRead(undefined, T0);
     s.markRead('', T0);
@@ -206,9 +248,29 @@ test.describe('READ-01: 容量限制与持久化健壮性', () => {
     assert.deepEqual(s.getState(), { baselineTs: T0, seen: {}, manual: {} });
   });
 
+  // #300 文件夹「全部标为已读」：一个分组最多画出 浏览窗口硬顶 + 稍后再看（MANUAL_CAP=100）+ live 实例上限
+  // 那么多行，一次逐条写进来。seen 表装不下这一批时，按时间淘汰会把同一批里先写的位点挤掉，
+  // 重载后那几行又亮起来——用户刚点完「全部标为已读」。所以容量必须装得下最大的一批，外加已有的旧位点。
+  test('一次标完最大的分组：同一批位点在真实落盘重载后一条不少（表里原本已满也一样）', () => {
+    const file = join(TMP_DIR, 'mark-all-capacity.json');
+    const maxGroup = BROWSE_HARD_LIMIT + 100 + MAX_LIVE_SESSIONS;
+    let now = LATER;
+    const s = createReadStateStore({ file, now: () => now });
+    s.applyClientState({ seen: Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`old-${i}`, T0 + i])) }); // 先把表填满更早的位点
+
+    now = LATER + MIN;
+    const batch = Array.from({ length: maxGroup }, (_, i) => `group-${i}`);
+    for (const id of batch) s.setManual(id, false, now); // 前端逐条发 read:mark { manual: false }
+    s.flushSaveSync();
+
+    const reloaded = createReadStateStore({ file, now: () => now }).getState();
+    const lost = batch.filter(id => reloaded.seen[id] !== now);
+    assert.deepEqual(lost, [], `同一批里有 ${lost.length} 条被淘汰，重载后会重新亮未读`);
+  });
+
   test('落盘权限 0600 并保证原子写', () => {
     const file = join(TMP_DIR, 'secure-read-state.json');
-    const s = createReadStateStore({ file, now: () => T0 });
+    const s = createReadStateStore({ file, now: () => LATER });
     s.markRead('s-sec', T0 + MIN);
     s.flushSaveSync();
 
@@ -282,7 +344,7 @@ test.describe('落盘位点在重启后读得回来', () => {
 test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，判据与前端同义', () => {
 
   test('manual > seen 算未读；缺 seen 算未读；相等算已读', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     // 三种状态直接注入（公开写入路径会互相清理，构造不出 manual === seen 的并存态）
     s.applyClientState({
       seen: { 'read-after-mark': T0 + MIN, 'equal': T0, 'marked-later': T0 },
@@ -293,7 +355,7 @@ test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，
   });
 
   test('与前端 isManualUnreadNow 对同一份状态给出相同集合（前后端各一份实现，不得漂移）', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     // 覆盖全部相对位置：manual 早于/等于/晚于 seen、无 seen、无 manual
     const seen = { a: T0 + MIN, b: T0, c: T0, e: T0 };
     const manual = { a: T0, b: T0, c: T0 + MIN, d: T0 };
@@ -306,7 +368,7 @@ test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，
   });
 
   test('标为已读后立刻从补回名单里消失（不再占着列表顶部那一行）', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.setManual('later', true, T0);
     assert.deepEqual(s.manualUnreadIds(), ['later']);
     s.setManual('later', false, T0 + MIN);
@@ -314,7 +376,7 @@ test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，
   });
 
   test('打开会话（markRead）同样解除补回，与「再次打开即清除」的承诺一致', () => {
-    const s = createStore({ now: () => T0 });
+    const s = createStore({ now: () => LATER });
     s.setManual('later', true, T0);
     s.markRead('later', T0 + MIN);
     assert.deepEqual(s.manualUnreadIds(), []);

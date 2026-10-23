@@ -19,7 +19,9 @@ import {
 } from '../logic/unread.js';
 
 const STORAGE_KEY = 'ccm-unread-v1';
-const SEEN_CAP = 500;
+// 1000：文件夹「全部标为已读」（#300）一次最多写 500（浏览窗口硬顶）+ 100（稍后再看）+ 20（live 上限）条，
+// 表装不下这一批就会把同一批里先写的挤掉、重载后复亮。与服务端 read-state.js 的 SEEN_CAP 同值。
+const SEEN_CAP = 1000;
 const MANUAL_CAP = 100;
 
 // onChange：写入点的增量上报口（app.js 转成 socket 的 read:mark）。不注入时功能退化为纯本地，
@@ -78,6 +80,22 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
     emit({ sessionId, manual: Boolean(on), at: ts });
   }
 
+  // 文件夹长按「全部标为已读」（#300）：逐条等同 setManualUnread(id, false)，但只落盘一次——
+  // 一个分组最多几百条，逐条 persist 会把整张表序列化几百遍。上报仍逐条走「标为已读」形状。
+  function markAllRead(sessionIds) {
+    const ids = (sessionIds || []).filter(Boolean);
+    if (!ids.length) return;
+    const ts = now();
+    let { seen, manual } = state;
+    for (const id of ids) {
+      manual = setManualUnreadEntry(manual, id, false);
+      seen = markSeenEntry(seen, id, ts, SEEN_CAP);
+    }
+    state = { ...state, seen, manual };
+    persist();
+    for (const id of ids) emit({ sessionId: id, manual: false, at: ts });
+  }
+
   // 下行同步：服务端权威态并入本地。【不】触发 onChange——那是上行口，回声会绕成写放大。
   // 返回值是「内容真的变了吗」，不是「远端有没有回话」：调用方拿它决定要不要重画会话列表，而
   // session:list 每趟都会捎一份 readState 回来。恒 true 会让每次 SWR revalidate 都重建 DOM 子树，
@@ -114,5 +132,5 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
     return isManualUnreadNow(state.manual, state.seen, sessionId);
   }
 
-  return { markSeen, markEntered, setManualUnread, isManualUnread, isUnread, hydrate, snapshot };
+  return { markSeen, markEntered, setManualUnread, markAllRead, isManualUnread, isUnread, hydrate, snapshot };
 }

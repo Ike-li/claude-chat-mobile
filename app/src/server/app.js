@@ -4229,7 +4229,7 @@ registerSocketConnection(io, socket => {
   // read:sync = 连上时把本地表推来归并、取回权威态（升级前攒的记录与离线期间的记录都由这趟迁移）；
   // read:mark = 单条增量，刻意不带 ack——丢一条不致命，下次 read:sync 的全量归并会把它补回来。
 
-  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 500 条（约 27KB），而抽屉每 12 秒
+  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 1000 条（约 55KB），而抽屉每 12 秒
   // 就 revalidate 一次、多目录并发，全量搭车纯属浪费手机流量。裁剪安全的前提是前端 hydrate 逐 key
   // 取 max、只增不减——少回的 key 不会把本地已有的位点抹掉，最坏只是这一趟没带来新信息。
   function readStateForRows(rows) {

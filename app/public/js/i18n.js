@@ -549,6 +549,11 @@ export const EN_DICT = Object.freeze({
   '标为已读': 'Mark as read',
   '标为未读后，这一行会一直显示「未读」，直到你再次打开它。': 'Marked as unread, this row keeps its "Unread" tag until you open the session again.',
   '标为已读后，这一行的「未读」提示消失。': 'Marked as read, the "Unread" tag on this row goes away.',
+  // 文件夹行长按「全部标为已读」（#300）
+  '全部标为已读': 'Mark all as read',
+  '把这里的 {n} 个未读会话标为已读。': 'Mark the {n} unread sessions here as read.',
+  '这里没有未读会话': 'No unread sessions here',
+  '未读数加载中，稍后再试': 'Still loading the unread count, try again in a moment',
   // 手动标记的会话被分页挤出本页时，服务端单独补回来，前端渲染成列表顶部这一组（2026-09-08）
   '稍后再看': 'Saved for later',
   '点按跳到下一条': 'Tap to jump to the next one',

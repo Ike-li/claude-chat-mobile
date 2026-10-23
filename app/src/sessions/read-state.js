@@ -21,7 +21,7 @@ import { dataFile } from '../shared/data-dir.js';
 // 与 sessions.js 同款优先级：CCM_READ_STATE_FILE（仅测试）> CCM_DATA_DIR/read-state.json > data/read-state.json。
 const FILE = process.env.CCM_READ_STATE_FILE || dataFile('read-state.json');
 
-const SEEN_CAP = 500;    // 与前端 unread-tracker.js 的 SEEN_CAP 同值
+const SEEN_CAP = 1000;   // 与前端 unread-tracker.js 的 SEEN_CAP 同值；为什么是 1000 见那边的注释（#300）
 const MANUAL_CAP = 100;  // 同上 MANUAL_CAP
 
 // n=1 单用户：一份全局位点，不按设备分档。多租户那天要先改 docs/hard-rules.md §2 的立场。
@@ -69,8 +69,9 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
   // 迁移上来（否则升级瞬间用户在本机读过的记录全丢，屏幕上是一整屏假未读）。离线期间攒的位点同理。
   function applyClientState(client) {
     ensureBaseline();
-    const seen = mergeLatest(state.seen, client?.seen);
-    const manual = mergeLatest(state.manual, client?.manual);
+    const ts = now();
+    const seen = mergeLatest(state.seen, clampMap(client?.seen, ts));
+    const manual = mergeLatest(state.manual, clampMap(client?.manual, ts));
     state = { ...state, seen: capNewest(seen, seenCap), manual: capNewest(manual, manualCap) };
     save();
     return snapshot();
@@ -159,9 +160,17 @@ function isId(v) {
   return typeof v === 'string' && v.length > 0;
 }
 
+// 位点时间戳来自客户端时钟，一律 clamp 到服务端 now（#300）：设备时钟偏快时写下的未来位点，会让
+// 此后那段偏差里服务端来的新活动（lastUsedAt 是服务端时钟）在所有设备上被吞掉。
 function normalizeTs(at, now) {
   if (at === undefined) return now();
-  return typeof at === 'number' && Number.isFinite(at) ? at : null;
+  return typeof at === 'number' && Number.isFinite(at) ? Math.min(at, now()) : null;
+}
+
+function clampMap(src, ts) {
+  const out = numericMap(src);
+  for (const k of Object.keys(out)) if (out[k] > ts) out[k] = ts;
+  return out;
 }
 
 function numericMap(src) {

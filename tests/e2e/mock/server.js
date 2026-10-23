@@ -926,6 +926,15 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   res.json({ ok: true });
 });
 
+// 把全局基线拨到 agoMs 之前：mock 的旧会话（主工作区 -10s…-40min、无文件夹 -1h）随之晚于基线、按时间判据亮未读。
+// 缺省基线钉在 reset 时刻，这些行全在它之前——「本页 / 页外开着的」两组就造不出按时间亮的未读（#300）。
+app.post('/__arm-read-baseline', (req, res) => {
+  const agoMs = Number(req.query?.agoMs);
+  if (!Number.isFinite(agoMs)) return res.status(400).json({ ok: false });
+  mockReadState.baselineTs = Date.now() - agoMs;
+  res.json({ ok: true });
+});
+
 // 验收 O62：桥面板的两个夹具。unconfigured = 用户自己没配 statusLine；setup-fail = 下一次安装按真脚本的失败形态回。
 app.post('/__set-statusline-unconfigured', (_req, res) => {
   mockStatuslineConfigured = false;
@@ -1838,7 +1847,7 @@ io.on('connection', socket => {
     // 已读位点搭 session:list 回去（与真 server 一致：不另开广播，保证行数据与未读判定同帧）。
     // 包一层统一注入而不是逐个 callback 出口加——这个 handler 有五个以上返回分支，漏一个就会让
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
-    // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
+    // 与真 server 一致只回本页行的位点（全量表最多 1000 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
