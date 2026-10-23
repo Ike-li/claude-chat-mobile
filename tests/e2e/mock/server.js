@@ -223,6 +223,14 @@ let viewingRowRegistry = null;
 let noSessionIdMode = false;
 // 握手不发 models 事件：复现真 server「该 cwd 无 models 缓存 → 不推、等 scout」的窗口。见 /__arm-no-models。
 let noModelsMode = false;
+// 握手推的模型清单（/__replay-models 重发同一份，再多带一条）
+const MOCK_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
+  { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
+  { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
+  { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
+  { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
+];
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
@@ -924,6 +932,16 @@ app.post('/__arm-no-models', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 模型清单整份重发：真 server 在重连回放、每轮 init 后的 supportedModels() 都会再推一次。
+// 多带一条 claude-replayed-model，spec 等它的 option 出现，确认前端真的按新清单重建过下拉框。
+app.post('/__replay-models', (_req, res) => {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'models', payload: { models: [...MOCK_MODELS, { value: 'claude-replayed-model', displayName: 'Claude Replayed' }] },
+  });
+  res.json({ ok: true });
+});
+
 // 跨设备已读位点：模拟「这个会话已经在另一台设备上读过了」——直接往服务端共享位点写一条 seen。
 // 本设备的 localStorage 里没有任何该会话的记录，正是换设备后的真实处境。
 // 服务端共享位点的读出面，供 E2E 断言「本机的已读/标记确实上报了」——真 server 那边这是
@@ -945,6 +963,15 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
   if (!sessionId) return res.status(400).json({ ok: false });
   mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
+  res.json({ ok: true });
+});
+
+// 把全局基线拨到 agoMs 之前：mock 的旧会话（主工作区 -10s…-40min、无文件夹 -1h）随之晚于基线、按时间判据亮未读。
+// 缺省基线钉在 reset 时刻，这些行全在它之前——「本页 / 页外开着的」两组就造不出按时间亮的未读（#300）。
+app.post('/__arm-read-baseline', (req, res) => {
+  const agoMs = Number(req.query?.agoMs);
+  if (!Number.isFinite(agoMs)) return res.status(400).json({ ok: false });
+  mockReadState.baselineTs = Date.now() - agoMs;
   res.json({ ok: true });
 });
 
@@ -1495,15 +1522,7 @@ io.on('connection', socket => {
     // 2. models（noModelsMode 武装时整条不发——复现真 server 无缓存不推、等 scout 的窗口）
     if (!noModelsMode) socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'models', payload: {
-        models: [
-          { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
-          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
-          { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
-          { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
-          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
-        ]
-      }
+      type: 'models', payload: { models: MOCK_MODELS }
     });
 
     // 3. permission_mode
@@ -1870,7 +1889,7 @@ io.on('connection', socket => {
     // 已读位点搭 session:list 回去（与真 server 一致：不另开广播，保证行数据与未读判定同帧）。
     // 包一层统一注入而不是逐个 callback 出口加——这个 handler 有五个以上返回分支，漏一个就会让
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
-    // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
+    // 与真 server 一致只回本页行的位点（全量表最多 1000 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';

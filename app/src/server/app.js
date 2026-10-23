@@ -446,7 +446,14 @@ function removeConnectedFolder(path) {
   }
   const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
   const realOf = p => { try { return realpathSync.native(p); } catch { return null; } };
-  const next = list.filter(e => realOf(typeof e === 'string' ? e : e?.path) !== path);
+  // 目录已经不在了（外置盘拔了、被删了）realpath 解析不出：按配置里记的原样比。断开不能要求目录还在——
+  // 清单要到下一次重读才剔掉缺失的目录，这之前抽屉照样给「断开」，认不出就每点一次都报没连接。
+  const isTarget = e => {
+    const stored = typeof e === 'string' ? e : e?.path;
+    const real = realOf(stored);
+    return real === null ? stored === path : real === path;
+  };
+  const next = list.filter(e => !isTarget(e));
   // 清单里有它、配置的 WORKDIRS 里却没有：是退役的 WORK_DIR 折进来的那一项，删 WORKDIRS 删不掉它
   if (next.length === list.length) return { ok: false, error: 'not_connected' };
   try {
@@ -4231,7 +4238,7 @@ registerSocketConnection(io, socket => {
   // read:sync = 连上时把本地表推来归并、取回权威态（升级前攒的记录与离线期间的记录都由这趟迁移）；
   // read:mark = 单条增量，刻意不带 ack——丢一条不致命，下次 read:sync 的全量归并会把它补回来。
 
-  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 500 条（约 27KB），而抽屉每 12 秒
+  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 1000 条（约 55KB），而抽屉每 12 秒
   // 就 revalidate 一次、多目录并发，全量搭车纯属浪费手机流量。裁剪安全的前提是前端 hydrate 逐 key
   // 取 max、只增不减——少回的 key 不会把本地已有的位点抹掉，最坏只是这一趟没带来新信息。
   function readStateForRows(rows) {

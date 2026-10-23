@@ -3,7 +3,7 @@
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge, isManualUnreadNow, mergeReadState } from '../../app/public/js/logic/unread.js';
+import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge, isManualUnreadNow, mergeReadState, unreadSessionsInGroup } from '../../app/public/js/logic/unread.js';
 
 const T0 = 1_700_000_000_000; // 基线
 const MIN = 60_000;
@@ -268,5 +268,35 @@ test.describe('mergeReadState：服务端权威态并入本地', () => {
     );
     assert.deepEqual(merged.seen, { b: T0 });
     assert.deepEqual(merged.manual, { d: T0 });
+  });
+});
+
+// ---- unreadSessionsInGroup：抽屉一个分组里「画出来且未读」的会话（#300）----
+// 目录角标的计数与长按「全部标为已读」的目标共用这一个集合。此前角标只数 sessions + pinned，
+// 页外开着的会话（open）照样画成一行、照样亮「未读」chip，角标却不数它——数字与 chip 不同源。
+test.describe('unreadSessionsInGroup：角标计数与「全部标为已读」同源', () => {
+  const unreadIds = new Set(['p1', 'pin1', 'open1', 'viewing']);
+  const isUnread = s => unreadIds.has(s.id);
+
+  test('本页 + 稍后再看 + 页外开着的三组都算，未读的才进集合', () => {
+    const got = unreadSessionsInGroup({
+      sessions: [{ id: 'p1' }, { id: 'p2' }, { id: 'viewing' }],
+      pinned: [{ id: 'pin1' }],
+      open: [{ id: 'open1' }, { id: 'open2' }],
+    }, isUnread);
+    assert.deepEqual(got.map(s => s.id), ['p1', 'viewing', 'pin1', 'open1'],
+      'open 组漏数就回到角标说 N、行上亮着 N+1 个 chip 的老毛病');
+  });
+
+  test('同一会话出现在两组里只算一次（角标不重复计、标已读不重复发）', () => {
+    const got = unreadSessionsInGroup({ sessions: [{ id: 'p1' }], pinned: [{ id: 'p1' }], open: [{ id: 'p1' }] }, isUnread);
+    assert.deepEqual(got.map(s => s.id), ['p1']);
+  });
+
+  test('无 id 的行（还没落盘的新会话）不进集合；缺字段的分组按空处理', () => {
+    const got = unreadSessionsInGroup({ sessions: [{ id: null }, null, { id: 'p1' }] }, () => true);
+    assert.deepEqual(got.map(s => s.id), ['p1']);
+    assert.deepEqual(unreadSessionsInGroup({}, () => true), []);
+    assert.deepEqual(unreadSessionsInGroup(null, () => true), []);
   });
 });
