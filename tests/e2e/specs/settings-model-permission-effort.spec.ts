@@ -222,6 +222,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 模型清单会整份重发（重连回放、每轮 init 后的 supportedModels()）。前端重建下拉框时若先清空再读待发选择，
+  // 读到的是新列表首项，用户刚点、还没发出去的模型被静默换掉，下一条就用错了模型。
+  test('P0-09-REPLAY 选了模型还没发，模型清单重发一次：下一条消息仍带用户选的模型', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillDefaults').click();
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
+    await closeSettings(page);
+
+    await page.request.post('/__replay-models');
+    await expect(page.locator('#modelInput option[value="claude-replayed-model"]')).toHaveCount(1);
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('model=claude-3-5-haiku');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09c 不支持 thinking effort 的模型不会沿用旧 effort', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

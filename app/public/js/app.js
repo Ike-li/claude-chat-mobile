@@ -2993,6 +2993,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       rebuildEffortOptions(currentModel || cwdDefaultModel); // 列表到达 → 按当前/默认模型刷新 effort
       rebuildCustomModelGrid(modelsList);                    // 刷新自定义设置面板中的模型选择
       if (!modelInput) return;
+      // 待发模型必须在清空 options 之前读：清空重建后 select.value 已是新列表首项，
+      // 用户点了磁贴、还没发出去的选择会被静默换掉（磁贴只写 value，不写 dataset.fullModel）。
+      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
       modelInput.innerHTML = '';
       (p.models || []).forEach(m => {
         const opt = document.createElement('option');
@@ -3002,9 +3005,9 @@ import { createGateFocusController } from './app/focus-layers.js';
         modelInput.appendChild(opt);
       });
       // 预选：若用户已选「下一条才生效」的待发模型，保留 modelInput（H2）；
-      // 否则 currentModel → CLI default → 空。
-      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
-      const pendingIsIntentional = !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
+      // 否则 currentModel → CLI default → 空。「是不是用户选的」以 modelIntent 为准（与 resolveOutgoingModel 同一判据）：
+      // 没点过时 select 里可能只是落后于 init 的旧在跑模型（网关场景 init 先把 currentModel 换成 opus），不是待发选择。
+      const pendingIsIntentional = modelIntent.isPicked() && !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
       if (pendingIsIntentional) {
         ensureModelOption(pendingSend);
         modelInput.value = pendingSend;
