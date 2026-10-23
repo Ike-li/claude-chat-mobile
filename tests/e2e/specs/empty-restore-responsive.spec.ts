@@ -121,6 +121,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O130（AC-21-08）：代码块右上角「复制」可点高度只有 43，靠下的几行点下去命中代码文字——同 O99：::after 以 padding
+  // box 为基准、不含 1px 边框，扩 6px 到不了 44。
+  test('P0-19h 代码块「复制」的可点高度到 44', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:stream');
+    await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre code')).toContainText('tester', { timeout: 20_000 });
+    await waitForIdle(page);
+    const heights = await page.evaluate(() => [...document.querySelectorAll('.code-copy-btn')].map(b => {
+      const r = b.getBoundingClientRect(); const cx = r.left + r.width / 2;
+      const self = y => { const e = document.elementFromPoint(cx, y); return e === b || b.contains(e); };
+      let up = 0; while (up < 12 && self(r.top - up - 1)) up++;
+      let dn = 0; while (dn < 12 && self(r.bottom + dn)) dn++;
+      return Math.round(r.height + up + dn);
+    }));
+    expect(heights.length, '一个代码块「复制」都没找到').toBeGreaterThanOrEqual(1);
+    for (const h of heights) expect(h, '代码块「复制」的可点高度').toBeGreaterThanOrEqual(44);
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
     await gotoMock(page);
 
