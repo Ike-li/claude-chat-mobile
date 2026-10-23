@@ -190,8 +190,12 @@ export function stripProcessExitPrefix(message) {
   const m = /^Claude Code process (?:exited with code \d+|terminated by signal \w+)\. stderr: /.exec(s);
   return m ? s.slice(m[0].length).trim() : s;
 }
+// 被信号终止（kill、OOM killer）时，SDK 照样拼上 stderr 尾巴，但信号来自进程外，那截 stderr 说的不是死因：第三方网关下
+// CLI 每次启动都写一条 unrecognized_model，读起来像「模型不认识」才是原因（验收 O132）。只留信号那半句；
+// 非零退出码的 stderr 才是原因，照留。完整 stderr 仍走 LOG_STDERR。
+const SIGNAL_EXIT_WITH_STDERR = /^(Claude Code process terminated by signal \w+)\. stderr: [\s\S]*$/;
 export function formatLifecycleSessionError(detail) {
-  const d = detail != null ? String(detail).trim() : '';
+  const d = (detail != null ? String(detail).trim() : '').replace(SIGNAL_EXIT_WITH_STDERR, '$1');
   if (!d) return '进程异常：未知错误（可重新发送继续）';
   return `进程异常：${d.length > SESSION_ERROR_DETAIL_MAX ? `${d.slice(0, SESSION_ERROR_DETAIL_MAX)}…` : d}`;
 }
