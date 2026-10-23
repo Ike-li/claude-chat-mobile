@@ -22,6 +22,8 @@ export default [
       '.codegraph/**',
       '.reasonix/**',
       '.worktrees/**',
+      // 其它会话的 worktree（gitignore）：不忽略的话主检出每次 lint 都把每个分支的源码再扫一遍
+      '.claude/worktrees/**',
       'tests/infra/playground/seed/**',
       // 验收套件的本机配置与每轮产物（gitignore），不是源码
       'tests/acceptance/local/**',
