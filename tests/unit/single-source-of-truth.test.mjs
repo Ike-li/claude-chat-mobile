@@ -13,7 +13,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,14 +32,16 @@ function codeLines(src) {
     });
 }
 
+// 文件来源走 git：被跟踪的 + 未跟踪但没被忽略的（还没提交的新文件照样要扫）。不用 readdirSync 遍历，
+// 是因为它看不见 .gitignore——机主本机跑验收留在 tests/acceptance/local/ 的产物（含悬空的
+// node_modules 软链）会被扫进来，本机 test:unit 恒红而 CI 干净检出恒绿（2026-10-23；
+// 同型见 tests/gates/check-destructive-deletes.js）。--cached 会列出已删未提交的文件，所以再按存在性过滤。
 function walk(dir, exts = ['.js']) {
-  const out = [];
-  for (const name of readdirSync(join(ROOT, dir))) {
-    const rel = join(dir, name);
-    if (statSync(join(ROOT, rel)).isDirectory()) out.push(...walk(rel, exts));
-    else if (exts.some(e => name.endsWith(e))) out.push(rel);
-  }
-  return out;
+  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', dir],
+    { cwd: ROOT, encoding: 'utf8' })
+    .split('\0').filter(Boolean)
+    .filter(rel => exts.some(e => rel.endsWith(e)))
+    .filter(rel => { try { return statSync(join(ROOT, rel)).isFile(); } catch { return false; } });
 }
 
 const SOURCE_FILES = [...walk('app/src'), ...walk('scripts')];
