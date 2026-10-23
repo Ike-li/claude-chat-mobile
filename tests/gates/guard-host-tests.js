@@ -292,7 +292,7 @@ const CONTAINER_ALTERNATIVE = [
 // 一段的去向。同一段里 NEEDS_HUMAN 优先：`RUN_CLAUDE_INTEGRATION=1 npm test` 这一段同时落在
 // npm test 的 deny 形态里，但它要的是真 turn，换到容器里跑不了。替代命令也只看这一段——拿整条
 // 命令去比的话，`npm run test:e2e && npm test` 会被前一段的 e2e 字样带到 test:docker:e2e。
-function segmentRoute(segment, context) {
+function segmentRoute(segment, context, raw) {
   const why = segmentReason(segment, context);
   if (!why) return null;
   const human = NEEDS_HUMAN.find(({ re }) => re.test(segment));
@@ -300,7 +300,7 @@ function segmentRoute(segment, context) {
   if (RCI_EXPORTED.test(context) && RCI_CONSUMER.test(segment)) {
     return { decision: 'ask', why: RCI_WHY, alternative: null, costs: ['credentials'] };
   }
-  const file = MUTATE_CMD.test(segment) ? null : singleFileRoute(segment);
+  const file = MUTATE_CMD.test(segment) ? null : singleFileRoute(segment, raw);
   if (file) return { decision: 'deny', why, ...file };
   const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(segment))[1];
   return { decision: 'deny', why, alternative: alt, where: 'container' };
@@ -311,23 +311,27 @@ function segmentRoute(segment, context) {
 //   文件都在宿主机范围内（只是缺 preload）→ 补上 preload，留在宿主机
 //   否则 → npm run test:docker:file -- 那几个文件（glob 原样保留，由敲命令的 shell 或 node --test 自己展开）
 // 没点名文件 → null，回到 CONTAINER_ALTERNATIVE。
-function singleFileRoute(segment) {
-  const tokens = segment.trim().split(/\s+/);
-  const end = tokens.findIndex(t => /^\d*[<>]/.test(t));  // 重定向及其后不属于这条命令
-  const words = end === -1 ? tokens : tokens.slice(0, end);
+// 判定看规整后的 segment；替代命令要能原样再敲一遍，所以词从原文 raw 里切、保留引号——
+// 从规整文本拼的话 `--test-name-pattern="foo bar"` 会被 shell 拆成两个参数。
+function singleFileRoute(segment, raw) {
+  const tokens = shellWords(raw).map(word => ({ word, plain: normalizeShellText(word) }));
+  const end = tokens.findIndex(t => /^\d*[<>]/.test(t.plain));  // 重定向及其后不属于这条命令
+  const all = end === -1 ? tokens : tokens.slice(0, end);
   const head = commandHead(segment);
   let args;
   let at = -1;
   if (head === 'node') {
-    at = words.findIndex(t => t.replace(/^.*\//, '') === 'node');
-    args = words.slice(at + 1).filter((t, i, a) => t !== '--test'
-      && !(t === '--import' && /tests\/setup\//.test(a[i + 1] ?? ''))
-      && !/^(?:\.\/)?tests\/setup\//.test(t));
+    at = all.findIndex(t => t.plain.replace(/^.*\//, '') === 'node');
+    args = all.slice(at + 1).filter((t, i, a) => t.plain !== '--test'
+      && !(t.plain === '--import' && /tests\/setup\//.test(a[i + 1]?.plain ?? ''))
+      && !/^(?:\.\/)?tests\/setup\//.test(t.plain));
   } else {
-    const sep = words.indexOf('--');
-    args = sep === -1 ? [] : words.slice(sep + 1);
+    const sep = all.findIndex(t => t.plain === '--');
+    args = sep === -1 ? [] : all.slice(sep + 1);
   }
-  if (!args.some(t => /^(?:\.\/)?tests\//.test(t))) return null;
+  if (!args.some(t => /^(?:\.\/)?tests\//.test(t.plain))) return null;
+  const words = all.map(t => t.word);
+  args = args.map(t => t.word);
   const targets = testTargets(segment);
   if (targets.length && targets.every(onHost)) {
     const alternative = head === 'node'
@@ -336,6 +340,33 @@ function singleFileRoute(segment) {
     return { alternative, where: 'host' };
   }
   return { alternative: `npm run test:docker:file -- ${args.join(' ')}`, where: 'container' };
+}
+
+// 按 shell 规则在引号外的空白处切词，每个词保留原文（引号、反斜杠原样留着）。
+function shellWords(text) {
+  const words = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) cur += text[++i];
+    } else if (c === '\\' && i + 1 < text.length) {
+      cur += c + text[++i];
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+    } else if (/\s/.test(c)) {
+      if (cur) words.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  if (cur) words.push(cur);
+  return words;
 }
 
 /**
@@ -356,7 +387,7 @@ export function decideRoute(command) {
   // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
   // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
   const routes = collapsed.split(/\|\||&&|[|;&\n]/)
-    .map(segment => segmentRoute(normalizeShellText(segment), context))
+    .map(segment => segmentRoute(normalizeShellText(segment), context, segment))
     .filter(Boolean);
   if (!routes.length) return null;
   // 有一段该 deny 整条就 deny：ask 放行的是【整条】命令，人为 smoke 点了「允许」，拼在后面的

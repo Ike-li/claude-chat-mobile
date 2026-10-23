@@ -533,6 +533,20 @@ test.describe('开发循环：点名文件的段，替代命令只跑那几个�
     }
   });
 
+  // 判定看的是剥掉引号后的文本，替代命令却要原样再敲一遍：从剥过的文本拼出来，
+  // `--test-name-pattern="foo bar"` 会被 shell 拆成两个参数，bar 被当成测试文件（PR #351 review）
+  test('替代命令保留原命令的引号：shell 重新切词后参数边界不变', () => {
+    const argv = cmd => spawnSync('sh', ['-c', `printf '%s\\n' ${cmd}`], { encoding: 'utf8' }).stdout.trimEnd().split('\n');
+    for (const [cmd, arg] of [
+      ['node --test --test-name-pattern="foo bar" tests/unit/history-list.test.mjs', '--test-name-pattern=foo bar'],
+      ["node --test --test-name-pattern='a b' tests/integration/b.test.mjs", '--test-name-pattern=a b'],
+      ['npm run test:unit -- --test-name-pattern="x y" tests/integration/b.test.mjs', '--test-name-pattern=x y'],
+    ]) {
+      const { alternative } = decideRoute(cmd);
+      assert.ok(argv(alternative).includes(arg), `替代命令里 ${arg} 被拆开了：${alternative}`);
+    }
+  });
+
   test('没点名文件的、变异检查 → 替代命令不变', () => {
     assert.match(decideRoute('npm test').alternative, /^npm run test:docker\s/);
     assert.equal(decideRoute('npm run test:integration').alternative, 'npm run test:docker:integration');
