@@ -4403,7 +4403,8 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') {
         // 不点名具体的进程管理器：headless `npm start` 是本仓正当入口之一，说「你没用
         // LaunchAgent/systemd」会把用户支去装一套仓库并不提供的东西。要说的是后果。
-        ack({ ok: false, error: '当前进程没有进程管理器托管（终端里直接 npm start 就是这样），停了不会自动拉起 —— 拒绝重启' });
+        // 举例要覆盖两种前台起法：只写 npm start，用 npm run dev 起的人认不出说的是自己（验收 O133）。
+        ack({ ok: false, error: '当前进程没有进程管理器托管（在终端里用 npm start 或 npm run dev 起的都是这样），停了不会自动拉起 —— 拒绝重启' });
       }
       return;
     }

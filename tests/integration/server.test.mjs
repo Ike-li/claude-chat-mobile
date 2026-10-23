@@ -452,6 +452,10 @@ test.describe('dev:restart — DEV_MODE 关闭时拒绝', () => {
     });
     assert.equal(ack.ok, false);
     assert.ok(ack.error);
+    // 验收 O133（R9 AC-16-15）：被拒提示要让用户认出自己的起法。终端里起 server 的两种前台形态都不被托管，
+    // 只点名 npm start 时，用 npm run dev 起的人会以为说的不是自己。
+    assert.match(ack.error, /npm start/);
+    assert.match(ack.error, /npm run dev/);
     s.disconnect();
   });
 });
