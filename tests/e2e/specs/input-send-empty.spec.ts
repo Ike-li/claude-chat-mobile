@@ -252,6 +252,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitUntilConnected(page);
     await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d11-dead-letter' && m.fromOutbox === true),
       { message: '前提：恢复出来的条目要被重放（mock 已武装成永久拒收）' }).toBe(true);
+    // 重载前看的就是这个会话：离线重放的提示先于首次 bindView 写进 #messages，曾被当成它的 DOM 缓存贴回去，
+    // 走 'keep' 不拉历史，整屏只剩空白（R10 修 O135 时发现）
+    await expect(page.locator('#messages'), '眼前这个会话的历史没加载').toContainText('Archived plan replay', { timeout: 10_000 });
     await expect(page.locator('#messages'), '别的会话的失败不该打到眼前这个会话上').not.toContainText('发往主会话的那条');
 
     await openSessionsSidebar(page);
@@ -329,6 +332,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await goto.click();
     await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
     await expect(page.locator('#input'), '点「回到该会话」之后原文没回到输入框').toHaveValue('重启前离线打的那条');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O135（R10 AC-23-10）：v1.13.0 入队的离线条目只有 inst_N、没有会话号。升级重启后发号不复用，重放判 stale；
+  // 重连时全局「正在看」已是别人刚开的会话。修之前提示按「别把 A 的失败写进 B」压掉，原文进了永远交还不了的死信暂存，
+  // 界面上什么都没有，这条话就没了。
+  test('P0-02d17 升级前入队、只剩实例号的离线条目被判 stale：正在看别的会话也把原文写出来', async ({ page }) => {
+    const sent = captureUserMessages(page);
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay', { timeout: 10_000 });
+
+    await page.addInitScript(() => localStorage.setItem('ccm-outbox-v1', JSON.stringify([{
+      text: '升级前离线打的那条', model: null, clientMessageId: 'p0-02d17-legacy',
+      instanceId: 'inst_9', cwd: '/Users/you/code/claude-chat-mobile',
+    }])));
+    await page.reload();
+    await waitUntilConnected(page);
+    await expect.poll(() => sent.some(m => m.clientMessageId === 'p0-02d17-legacy' && m.fromOutbox === true),
+      { message: '前提：升级前的条目要被重放' }).toBe(true);
+    await expect(page.locator('#messages'), '眼前这个会话的历史没加载').toContainText('Archived plan replay', { timeout: 10_000 });
+    await expect(page.locator('#messages'), '交还不了的死信没当场说，这条话就悄悄没了').toContainText('离线时发的一条消息没有发出', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('原文：升级前离线打的那条');
+    await expect(page.locator('#messages [data-testid="outbox-parked-goto"]'), '没有会话号，没有「回到该会话」可去').toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('ccm-outbox-dead-letters-v1') || '[]'), '交还不了的条目不该留在死信暂存里')
+      .not.toContain('升级前离线打的那条');
     await expectNoBrowserErrors(page);
   });
 

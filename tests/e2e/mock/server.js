@@ -6100,6 +6100,14 @@ io.on('connection', socket => {
       if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
       return;
     }
+    // 同真 server 的 resolveInstanceTarget：离线重放点名的实例已不在、条目也没带能改投的会话 → stale，同样不推提示行。
+    // 升级前入队的条目只有 v1.13.0 的 inst_N、没有会话号，升级重启后正落在这里（验收 O135）。
+    if (payload?.fromOutbox === true && payload?.instanceId
+      && !mockInstances.some(i => i.instanceId === payload.instanceId)
+      && !(payload?.sessionId && mockInstances.some(i => i.sessionId === payload.sessionId))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
+      return;
+    }
     // 同真 server user:message 懒开分支（routeCwd 判越界）：离线队列里的首条带着入队时的 cwd，那个文件夹随后被断开 →
     // 永久拒收，不投进别的工作区；离线重放只回负 ack，不推提示行（O128）。
     if (payload?.fromOutbox === true && !payload?.instanceId && typeof payload?.cwd === 'string' && payload.cwd !== MOCK_SCRATCH_ROOT

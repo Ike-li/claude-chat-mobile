@@ -128,6 +128,8 @@ import {
   outboxItemTargetsViewing,
   outboxNoticePlacement,
   outboxParkedNotice,
+  outboxDeadLetterHead,
+  isUnreturnableDeadLetter,
   shouldCarryOutboxBubbleOnClear,
   canTextClaimPendingBubble,
   SEND_ACK_FALLBACK_MS,
@@ -1622,8 +1624,13 @@ import { createGateFocusController } from './app/focus-layers.js';
             // 写在缓存气泡上的提示和原文一起丢（验收 O31 / AC-13-07）。气泡一并摘掉，交还时只剩输入框里那一份。
             else {
               dropPendingUserBubble(item.bubbleEl);
-              outboxDeadLetters.park(planned, permanentMsg);
               const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message, sessionId: planned.sessionId, text: planned.text });
+              // 交还不了的（升级前入队）：眼前没有会话时上面已把原文写出来，不再暂存；正在看某个会话时暂存，由这个视图落定时的
+              // deliverOutboxDeadLetters 交出来——不当场写，是因为首次 bindView 还没走完，写进去的会被它清掉（验收 O135）
+              const unreturnable = isUnreturnableDeadLetter({ stale: decision.stale, sessionId: planned.sessionId, instanceId: planned.instanceId });
+              if (!(unreturnable && parkedText)) {
+                outboxDeadLetters.park(planned, unreturnable ? outboxDeadLetterHead({ stale: decision.stale, message: decision.message }) : permanentMsg, { unreturnable });
+              }
               if (parkedText) addOutboxParkedBar(parkedText, planned);
             }
           }
@@ -5803,7 +5810,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     // Phase 2: Save DOM nodes of current session to cache before clearing.
     // S1：连同去重基线(lastSeq/epoch)一并缓存——切回时据此「只增量续传缓存之后的新事件」，而非
     // sync:since(0) 全量回放（会与缓存重复，且旧逻辑用 innerHTML='' 清重复时把回放也一起清掉 → 空屏）。
-    if (currentSessionId && !messagesEl.classList.contains('empty-start') && messagesEl.childNodes.length > 0) {
+    // 页面还没绑过任何视图（prevInstanceId 仍是初值 undefined）时，#messages 里的东西不属于任何会话：currentSessionId
+    // 是 localStorage 里上次那个，离线重放的提示又可能先于首次 bindView 写进来——当成它的缓存贴回去，sync:since 就走
+    // 'keep' 不拉历史，整屏只剩那一行（R10 修 O135 时发现，P0-02d11 守着）
+    if (prevInstanceId !== undefined && currentSessionId && !messagesEl.classList.contains('empty-start') && messagesEl.childNodes.length > 0) {
       // strip ephemeral live 行，避免切回会话时把 busy 状态行当历史气泡
       const nodes = stripEphemeralMessageNodes(Array.from(messagesEl.childNodes));
       if (nodes.length === 0) { /* 仅有 ephemeral 时不缓存空壳 */ }

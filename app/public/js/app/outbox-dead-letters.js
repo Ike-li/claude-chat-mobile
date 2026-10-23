@@ -24,7 +24,8 @@ export function createOutboxDeadLetters({ storage, targetsViewing, max = 50 } = 
   }
 
   return {
-    park(item, message) {
+    // unreturnable：判了 stale 又没有会话号（isUnreturnableDeadLetter），等不到它自己的会话，由调用方判了传进来、随条目落盘
+    park(item, message, { unreturnable = false } = {}) {
       items.push({
         instanceId: item?.instanceId ?? null,
         sessionId: typeof item?.sessionId === 'string' && item.sessionId ? item.sessionId : null,
@@ -32,14 +33,16 @@ export function createOutboxDeadLetters({ storage, targetsViewing, max = 50 } = 
         text: item?.text == null ? '' : String(item.text),
         attachments: Array.isArray(item?.attachments) ? item.attachments : undefined,
         message: String(message || ''),
+        unreturnable: unreturnable === true || undefined,
         at: Date.now(),
       });
       if (items.length > max) items = items.slice(-max);
       write();
     },
-    // 取走发往眼前这个会话的那些（取走即删），按暂存顺序
+    // 取走发往眼前这个会话的那些（取走即删），按暂存顺序。交还不了的（升级前入队）等不到它自己的会话，
+    // 落到哪个会话就在哪个会话交出来，否则它就悄悄没了（验收 O135）
     takeFor(viewing) {
-      const mine = items.filter(d => targetsViewing(d, viewing));
+      const mine = items.filter(d => d.unreturnable === true || targetsViewing(d, viewing));
       if (!mine.length) return [];
       items = items.filter(d => !mine.includes(d));
       write();
