@@ -91,7 +91,7 @@ export const EN_DICT = Object.freeze({
   '先跑这个': 'Start here',
   '⚙ 全部配置 · 端口 / 工作区 / 推送 →': '⚙ All settings · port / workspaces / push →',
   '在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。': 'When checking the trusted device list below, this string identifies the device in your hand.',
-  // L1 目录六行（logic/general-nav.js 算出，非静态文案）
+  // L1 目录七行（logic/general-nav.js 算出，非静态文案）
   '通知': 'Notifications',
   '接入与设备': 'Access & devices',
   '行为与开关': 'Behavior & toggles',

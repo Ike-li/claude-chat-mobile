@@ -5,7 +5,7 @@
 // 内容一变就漂（上线时四个词已有两个和面板里的组标题对不上）。改成活数据后，摘要由本函数从当前
 // 状态算出，不可能漂——但也因此，"算错"会直接变成"面板上写着假话"，故这里逐行钉住。
 //
-// 覆盖：六行的 id 与顺序、通知行随订阅态变文案、设备行的计数与待批红点、主机行的运行时长/版本/两个桥、
+// 覆盖：七行的 id 与顺序、通知行随订阅态变文案、设备行的计数与待批红点、主机行的运行时长/版本/两个桥、
 //       三条静态行不受状态影响，以及★每一项都指得到页面里一个真实元素。
 // 不覆盖：DOM 渲染与页面切换（归 tests/e2e/specs/settings-scope-split.spec.ts）。
 import test from 'node:test';
@@ -20,7 +20,7 @@ test.beforeEach(() => setLang('zh'));
 const INDEX_HTML = readFileSync(
   fileURLToPath(new URL('../../app/public/index.html', import.meta.url)), 'utf8');
 
-// 六行全部喂满：条件项（两个桥、待批台数）缺状态时会从摘要里消失，而消失的项测不到锚点。
+// 七行全部喂满：条件项（两个桥、待批台数）缺状态时会从摘要里消失，而消失的项测不到锚点。
 const FULL_STATE = Object.freeze({
   push: { subscribed: true, preview: false },
   alerts: { sound: true, vibrate: true },
@@ -35,7 +35,7 @@ const FULL_STATE = Object.freeze({
   now: 1_700_000_000_000,
 });
 
-// ---- 骨架：六行、顺序固定 ----
+// ---- 骨架：七行、顺序固定 ----
 
 test('返回七行，id 与顺序固定（L1 目录的骨架契约）', () => {
   const rows = summarizeGeneralNav();

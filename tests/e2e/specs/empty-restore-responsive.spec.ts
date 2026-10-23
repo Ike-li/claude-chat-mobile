@@ -201,7 +201,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
-      // 通用设置两级化后 L1 目录只有六行、滚不动；内容最长、底部控件最容易被顶出视口的是
+      // 通用设置两级化后 L1 目录只有七行；内容最长、底部控件最容易被顶出视口的是
       // 「通知」页（推送状态 + 四个开关 + 两个试一下按钮）。
       await openGeneralPage(page, 'notify');
       await page.locator('#generalSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
