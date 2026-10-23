@@ -1929,7 +1929,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         authError.textContent = handshake.text;
         authError.classList.remove('hidden');
       }
-      setTimeout(() => { if (!socket.active) socket.connect(); }, handshake.retryAfterMs + 50);
+      setTimeout(() => { if (!socket.active && !localReset.isResetting()) socket.connect(); }, handshake.retryAfterMs + 50);
       return;
     }
     if (handshake.kind === 'rate_limited') {
@@ -1994,7 +1994,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     _reconnectTimer = setTimeout(() => {
       // 排上之后门可能才关上：拒绝（device_status: denied）赶在这 200ms 之内到达，连接随即被服务端断开——
       // 走到这里照样握手，设备就重新进了待审（#226 review）。执行前再问一次。
-      if (!reconnectAllowed()) return;
+      // 重置也一样：确认前排上的这一次活过了 beforeReset，等退订期间握上手就会把要丢弃的 outbox 发出去（#352 review）
+      if (localReset.isResetting() || !reconnectAllowed()) return;
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
       if (foregroundReconnectAction(socket.connected) === 'connect') forceReconnect();

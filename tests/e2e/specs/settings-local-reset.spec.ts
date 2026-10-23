@@ -208,4 +208,41 @@ test.describe('#302 重新加载与重置本机数据', () => {
     expect(await (await page.request.get('/__outbox-received')).json(), '服务端收到了已丢弃的离线重放').toEqual([]);
     await expectNoBrowserErrors(page);
   });
+
+  // #352 review：确认之前一刻排上的前台重连（200ms 定时器）活过了 beforeReset。重置在等推送退订的那几秒里它照样
+  // forceReconnect，连上后 processOfflineQueue 把刚确认要丢弃的消息发了出去。
+  test('P0-RESET-5 确认前已排上的前台重连，在重置等推送退订期间不再握手，已丢弃的消息不会发出去', async ({ page }) => {
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [503] });
+    await page.request.post('/__reset');
+    await page.goto('/#token=mock-token');
+    await waitUntilConnected(page);
+    await ensureComposerReady(page);
+
+    await sendOffline(page, ['重置会丢的三']);
+    // 确认之前握手一律 503（连不上、outbox 留着）；确认之后放行：此时还能握上手的只有绕过了重置的那一次
+    let allowHandshake = false;
+    const handshake = (url: URL) => url.pathname.startsWith('/socket.io/') && url.searchParams.has('EIO');
+    await page.route(handshake, route => (allowHandshake ? route.continue() : route.fulfill({ status: 503, body: '' })));
+    await page.context().setOffline(false);
+
+    await openGeneralSettings(page);
+    await page.locator('#btnResetLocal').click();
+    await expect(page.locator('#confirmTitle')).toHaveText('重置本机数据');
+    // 推送退订挂住：重置停在「已断开、还没清存储」这一段，等满退订超时
+    await page.evaluate(() => {
+      const pm = (window as unknown as { PushManager: { prototype: { getSubscription: () => Promise<unknown> } } }).PushManager;
+      pm.prototype.getSubscription = () => new Promise(() => {});
+    });
+    await markPage(page);
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'));
+      document.getElementById('confirmOk')?.click();
+    });
+    allowHandshake = true;
+
+    await expect.poll(() => pageWasReloaded(page).catch(() => false), { message: '退订超时后没走完重置', timeout: 15_000 }).toBe(true);
+    await expect(page.locator('#authGate')).toBeVisible();
+    expect(await (await page.request.get('/__outbox-received')).json(), '重置期间排上的重连把已丢弃的消息发出去了').toEqual([]);
+    await expectNoBrowserErrors(page);
+  });
 });
