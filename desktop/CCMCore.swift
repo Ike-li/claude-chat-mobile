@@ -494,6 +494,14 @@ func toggleArgValue(_ isOn: Bool) -> String { isOn ? "true" : "false" }
 
 let LOG_TAIL_BYTES = 256 * 1024
 
+/// 尾读拿到的字节解码成文本。起点是按字节算的，常落在一个多字节字符中间：严格解码
+/// （`String(data:encoding:.utf8)`）遇到半个字符整段返回 nil，窗口就整屏空白。
+/// 跳过开头那半个字符的续字节（最多 3 个）；其余不合法的字节按替换字符显示，不让一个坏字节吞掉整段。
+func decodeLogTail(_ data: Data) -> String {
+    let partial = data.prefix(3).prefix(while: { $0 & 0xC0 == 0x80 }).count
+    return String(decoding: data.dropFirst(partial), as: UTF8.self)
+}
+
 /// 从一段日志文本里取最后 n 行。**按行数截而不是按字节**：按字节截会把第一行切成半截，
 /// 而日志的第一个字符往往是时间戳，半截时间戳比没有更让人困惑。
 func lastLines(_ text: String, _ n: Int) -> [String] {

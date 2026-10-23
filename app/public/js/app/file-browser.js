@@ -57,6 +57,7 @@ export function createFileBrowser(context, {
   let listTotal = 0;
   let contentText = '';
   let contentOffset = 0;
+  let contentReadGen = 0; // 每发一次 browse:read 加一，见 fetchContentPage
   let usedPagination = false; // 一旦分页续读过，本文件全程走 pre 纯文本，不中途切 CM（避免重建/滚动跳动）
   let cmInstance = null;   // 当前 content 视图里活的 CM 实例（只读预览态也是它，编辑态只是切它的 readOnly）
   let editMode = 'view';   // 'view' | 'editing'；离开 content 模式（back/loadContent 新文件）即复位
@@ -168,10 +169,13 @@ export function createFileBrowser(context, {
     });
   }
 
+  // 只认最近一次读请求的回执。只比路径不够：打开、返回、再打开同一个文件（或换了 cwd 后同名的相对路径），
+  // 两次回执都过得了路径检查，正文被接两遍，而 baseHash 仍是合法的，保存会把两遍的正文写回磁盘。
   function fetchContentPage(requestedPath, offset) {
+    const gen = ++contentReadGen;
     context.socket.emit('browse:read', { cwd, relPath: requestedPath, offset }, response => {
       const currentPath = segments.concat(fileName || '').join('/');
-      if (mode !== 'content' || currentPath !== requestedPath) return;
+      if (gen !== contentReadGen || mode !== 'content' || currentPath !== requestedPath) return;
       if (!response?.ok) {
         showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
         return;

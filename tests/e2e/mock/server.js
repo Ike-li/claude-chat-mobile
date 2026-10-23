@@ -223,6 +223,14 @@ let viewingRowRegistry = null;
 let noSessionIdMode = false;
 // 握手不发 models 事件：复现真 server「该 cwd 无 models 缓存 → 不推、等 scout」的窗口。见 /__arm-no-models。
 let noModelsMode = false;
+// 握手推的模型清单（/__replay-models 重发同一份，再多带一条）
+const MOCK_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
+  { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
+  { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
+  { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
+  { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
+];
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
@@ -902,6 +910,16 @@ app.post('/__arm-no-models', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 模型清单整份重发：真 server 在重连回放、每轮 init 后的 supportedModels() 都会再推一次。
+// 多带一条 claude-replayed-model，spec 等它的 option 出现，确认前端真的按新清单重建过下拉框。
+app.post('/__replay-models', (_req, res) => {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'models', payload: { models: [...MOCK_MODELS, { value: 'claude-replayed-model', displayName: 'Claude Replayed' }] },
+  });
+  res.json({ ok: true });
+});
+
 // 跨设备已读位点：模拟「这个会话已经在另一台设备上读过了」——直接往服务端共享位点写一条 seen。
 // 本设备的 localStorage 里没有任何该会话的记录，正是换设备后的真实处境。
 // 服务端共享位点的读出面，供 E2E 断言「本机的已读/标记确实上报了」——真 server 那边这是
@@ -1463,15 +1481,7 @@ io.on('connection', socket => {
     // 2. models（noModelsMode 武装时整条不发——复现真 server 无缓存不推、等 scout 的窗口）
     if (!noModelsMode) socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'models', payload: {
-        models: [
-          { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
-          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
-          { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
-          { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
-          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
-        ]
-      }
+      type: 'models', payload: { models: MOCK_MODELS }
     });
 
     // 3. permission_mode

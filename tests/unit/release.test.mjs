@@ -10,7 +10,7 @@
 // 打假 gh 而不是打真 GitHub：被测的是脚本对 gh 输出的**判定**，不是 gh 本身。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,4 +154,44 @@ test('wait_pr_mergeable：DIRTY —— 有冲突时立刻停，不要空等到�
   `, 'wait_pr_mergeable 105');
   assert.notEqual(r.status, 0, '有冲突的 PR 被当成可合并');
   assert.match(r.stderr, /冲突/, `没说清是冲突，人会以为又是检查没跑完：${r.stderr}`);
+});
+
+// ── 预检失败时的 cleanup ────────────────────────────────
+// cleanup 无条件 `git checkout -- package.json package-lock.json CHANGELOG.md`：它只该还原【脚本自己】
+// 写进去的 bump 与变更记录。预检在工作树不干净时拒绝发版，那时这三个文件里的改动是用户的，
+// 拒绝之后必须原样还在。整条脚本跑在一次性 git 仓库里（脚本自己 cd 到 git 顶层），预检之后的步骤走不到。
+function runReleaseInDirtyRepo(fakeGhBody) {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-release-repo-'));
+  try {
+    const bin = join(dir, 'bin');
+    const repo = join(dir, 'repo');
+    spawnSync('mkdir', ['-p', bin, repo]);
+    writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash\nset -u\n${fakeGhBody}\n`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const git = (...args) => spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8' });
+    git('init', '-q', '-b', 'dev');
+    for (const f of ['package.json', 'package-lock.json', 'CHANGELOG.md']) writeFileSync(join(repo, f), `${f} committed\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    writeFileSync(join(repo, 'CHANGELOG.md'), '用户还没提交的变更记录\n');
+    const r = spawnSync('bash', [RELEASE_SH, '--dry-run'], {
+      cwd: repo, encoding: 'utf8', timeout: 30_000,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    return { r, changelog: readFileSync(join(repo, 'CHANGELOG.md'), 'utf8') };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('预检拒绝发版时，用户在 CHANGELOG 等三个文件里的未提交改动原样保留', () => {
+  for (const [why, gh, expect] of [
+    ['工作树不干净', 'exit 0', /工作树不干净/],
+    ['gh 未登录', 'exit 1', /gh 未登录/],
+  ]) {
+    const { r, changelog } = runReleaseInDirtyRepo(gh);
+    assert.notEqual(r.status, 0, `${why}：预检本该拒绝发版：${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, expect, `${why}：没停在预认的那道预检上：${r.stderr}`);
+    assert.equal(changelog, '用户还没提交的变更记录\n', `${why}：预检拒绝之后，cleanup 把用户没提交的 CHANGELOG 改动还原掉了`);
+  }
 });

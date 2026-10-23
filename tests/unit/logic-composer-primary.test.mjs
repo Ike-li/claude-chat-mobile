@@ -433,6 +433,17 @@ test('outbox: enqueue 去重同 clientMessageId + 超 cap 丢最旧', () => {
   assert.equal(r2.queue.find(x => x.clientMessageId === 'c').text, '3b');
 });
 
+// 已经取出队列、还没有结论的条目（投递中、排队等本轮结束）照样落盘：刷新之后下一次批处理重新投递它们。
+// 同一条既在队列里又在途时只落一行，否则刷新后会被投递两次。
+test('outbox: durable dump 合并队列与在途条目，同 clientMessageId 只落一行、队列里那份优先', () => {
+  const rows = parseDurableOutbox(dumpDurableOutbox(
+    [{ clientMessageId: 'q', text: '排队中' }, { clientMessageId: 'both', text: '重新入队后的' }],
+    [{ clientMessageId: 'held', text: '等本轮结束', bubbleEl: { fake: true } }, { clientMessageId: 'both', text: '在途时的' }],
+  ));
+  assert.deepEqual(rows.map(r => r.clientMessageId), ['q', 'both', 'held'], '在途条目没落盘 = 刷新即丢；重复落盘 = 刷新后投两遍');
+  assert.equal(rows.find(r => r.clientMessageId === 'both').text, '重新入队后的');
+});
+
 test('outbox: durable dump/parse 剥 bubbleEl', () => {
   const raw = dumpDurableOutbox([{ clientMessageId: 'x', text: 'hi', bubbleEl: { fake: true } }]);
   assert.ok(!raw.includes('bubbleEl'));

@@ -449,6 +449,9 @@ test.describe('补缺口：直接跑测试文件、smoke runner、export 写法�
       'node tests/integration/session-delete.test.mjs',
       'node tests/unit/history-list.test.mjs',
       'node --test-name-pattern=x tests/unit/history-list.test.mjs',
+      // 写在脚本之后的 --check 是传给脚本的参数，node 照样执行这个文件
+      'node tests/unit/history-list.test.mjs --check',
+      'node tests/integration/session-delete.test.mjs --check',
     ]) assert.equal(decideRoute(cmd)?.decision, 'deny', `该拦：${cmd}`);
     allowed('node --import ./tests/setup/preload-env.mjs tests/unit/history-list.test.mjs');
     allowed('node --check tests/unit/history-list.test.mjs');

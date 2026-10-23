@@ -239,6 +239,7 @@ import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
+import { createOutboxInFlight } from './app/outbox-in-flight.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { createModelIntent } from './app/model-intent.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
@@ -792,8 +793,19 @@ import { createGateFocusController } from './app/focus-layers.js';
   try {
     offlineQueue = parseDurableOutbox(localStorage.getItem(OUTBOX_STORAGE_KEY));
   } catch { offlineQueue = []; }
+  // 取出队列、还没有结论的条目，与 offlineQueue 一起落盘（见 app/outbox-in-flight.js）
+  const outboxInFlight = createOutboxInFlight();
   function persistOutbox() {
-    try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
+    try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue, outboxInFlight.items())); } catch { /* quota */ }
+  }
+  // 登记即落盘：改投后的那份要在投递（await ack）之前写下去，等 ack 时被刷新，恢复的才是改投后的路由
+  function holdOutbox(item) {
+    outboxInFlight.hold(item);
+    persistOutbox();
+  }
+  function settleOutbox(item) {
+    outboxInFlight.settle(item);
+    persistOutbox();
   }
   // 永久拒收、此刻又没地方交还原文的条目：暂存（落盘），回到它的会话时交还（见模块头注、deliverOutboxDeadLetters）
   const outboxDeadLetters = createOutboxDeadLetters({
@@ -1443,11 +1455,19 @@ import { createGateFocusController } from './app/focus-layers.js';
   // afterTurn（O66）：被在途轮挡下的离线条目——排队，本轮结束由 outboxAfterTurn 替用户点这里的「重发」；
   // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
   function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
+    // 有结论之前一直落盘：刷新之后下一次批处理还能重新投递它（见 app/outbox-in-flight.js）。
+    // 这里的 item 可能刚按懒开锚改投过（planOutboxBlockedTarget），立即落盘，不等整批结束。
+    holdOutbox(item);
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
     // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条提示。但排队照样登记：它已经不在
-    // 持久化队列里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
+    // offlineQueue 里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
     if (!host) {
-      if (afterTurn) outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, { resend: () => resendOutboxHeadless(item) });
+      if (afterTurn) {
+        outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
+          resend: () => resendOutboxHeadless(item),
+          cancel: () => settleOutbox(item),
+        });
+      }
       return;
     }
     host.classList.remove('animate-pulse');
@@ -1467,12 +1487,13 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 真正发出时挪到消息流最后：它排在这一轮的回答之后，问答顺序才与发送顺序一致（O66）
       if (item.bubbleEl?.parentElement === messagesEl) appendMessage(item.bubbleEl);
       const d = await deliverOutboxItem(item);
-      if (d.outcome === 'ok') { settled = true; host.remove(); return d.outcome; }
+      if (d.outcome === 'ok') { settled = true; host.remove(); settleOutbox(item); return d.outcome; }
       // 续接会丢掉一段对话（SESSION-04）：再发一遍还是同一道闸。把这条挪回输入框，出在线路径同一块面板——
       // 两个选项都作用于输入框里的话。挪不了（不是眼前这个会话的、输入框里已有新打的字）就留在这里。
       if (d.divergence && moveOutboxItemToComposer(item)) {
         settled = true;
         host.remove();
+        settleOutbox(item);
         resumeDivergencePrompt.prompt({ divergence: d.divergence, sessionId: displayedSessionId, cwd: drivingCwdOf(displayedInstanceId) });
         return d.outcome;
       }
@@ -1485,8 +1506,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (afterTurn) {
       outboxAfterTurn.wait({ instanceId: item.instanceId ?? null, sessionId: item.sessionId ?? null }, {
         resend,
+        // 按了停止就不再自动发，也不再落盘：留着的话，刷新后下一次批处理会替用户把它发出去（与停止的意思相反）
         cancel: () => {
           queued = false;
+          settleOutbox(item);
           if (!settled && !btn.disabled) label.textContent = `⏸ ${t('未发送 · 本轮已停止，需要时点重发')}`;
         },
       });
@@ -1497,9 +1520,10 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 交给下一次批处理按常规处置——不在这里替它决定是死信还是重试，也不能让它在内存里悄悄消失。
   async function resendOutboxHeadless(item) {
     const d = await deliverOutboxItem(item);
-    if (d.outcome === 'ok' || (d.outcome === 'blocked' && !d.divergence)) return d.outcome;
+    if (d.outcome === 'ok') { settleOutbox(item); return d.outcome; }
+    if (d.outcome === 'blocked' && !d.divergence) return d.outcome;
     enqueueOutbox(item);
-    persistOutbox();
+    settleOutbox(item);
     return 'requeue';
   }
 
@@ -1555,7 +1579,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (!socket.connected) return;
     _offlineDrainInFlight = true;
     const items = offlineQueue;
-    offlineQueue = []; // 本批取出；requeue 的再 enqueue
+    // 本批取出；requeue 的再 enqueue。取出的条目有结论之前照样落盘（outboxInFlight）：投递中途、排队等本轮结束时
+    // 被刷新或被系统回收标签页，下一次批处理还能把它们找回来。
+    for (const item of items) outboxInFlight.hold(item);
+    offlineQueue = [];
     persistOutbox();
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：在 Official 实例 看到 third-party 的重发提示）。
@@ -1582,6 +1609,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 改投过的条目此后一律按改投后的走（重新入队、「重发」按钮都是）：拿原始条目再发，锚点已不在，又会另开一个。
         const page = outboxComposeKey(item);
         const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchors.get(page) ?? null), scratchAnchors.get(page) ?? null, scratchRoot);
+        holdOutbox(planned); // 落盘的是改投后的那份：刷新后再投不能又另建一棵树 / 一个 scratch 目录
         // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
         // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
         // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
@@ -1590,6 +1618,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 等 reconnect——那本来就是 outbox 的语义，不必替它在离线时空转。
         if (!socket.connected) {
           enqueueOutbox(planned);
+          settleOutbox(planned);
           if (indicator) indicator.textContent = t('🕐 正在等待连接...');
           continue;
         }
@@ -1605,9 +1634,11 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (lazyAnchor) lazyOpenAnchors.set(lazyKey, lazyAnchor);
         const targetsViewing = outboxItemTargetsViewing(item, outboxViewing());
         if (decision.outcome === 'ok') {
+          settleOutbox(planned);
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
+          settleOutbox(planned); // 原文交还输入框或进死信暂存（它自己落盘），不再重投
           const permanentMsg = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
           // 服务端永久拒收、outbox 已清，这条不会再发——原文得交还给用户（验收 O31：此前只剩一行提示，输入框是空的）。
           // 投给眼前这个会话且输入框空着：放回输入框，气泡随之撤掉。否则提示落在气泡上（气泡里就是原文）；
@@ -1649,6 +1680,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
           enqueueOutbox(planned);
+          settleOutbox(planned);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
       }
@@ -2993,6 +3025,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       rebuildEffortOptions(currentModel || cwdDefaultModel); // 列表到达 → 按当前/默认模型刷新 effort
       rebuildCustomModelGrid(modelsList);                    // 刷新自定义设置面板中的模型选择
       if (!modelInput) return;
+      // 待发模型必须在清空 options 之前读：清空重建后 select.value 已是新列表首项，
+      // 用户点了磁贴、还没发出去的选择会被静默换掉（磁贴只写 value，不写 dataset.fullModel）。
+      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
       modelInput.innerHTML = '';
       (p.models || []).forEach(m => {
         const opt = document.createElement('option');
@@ -3002,9 +3037,9 @@ import { createGateFocusController } from './app/focus-layers.js';
         modelInput.appendChild(opt);
       });
       // 预选：若用户已选「下一条才生效」的待发模型，保留 modelInput（H2）；
-      // 否则 currentModel → CLI default → 空。
-      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
-      const pendingIsIntentional = !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
+      // 否则 currentModel → CLI default → 空。「是不是用户选的」以 modelIntent 为准（与 resolveOutgoingModel 同一判据）：
+      // 没点过时 select 里可能只是落后于 init 的旧在跑模型（网关场景 init 先把 currentModel 换成 opus），不是待发选择。
+      const pendingIsIntentional = modelIntent.isPicked() && !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
       if (pendingIsIntentional) {
         ensureModelOption(pendingSend);
         modelInput.value = pendingSend;
