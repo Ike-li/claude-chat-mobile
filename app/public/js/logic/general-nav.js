@@ -1,4 +1,4 @@
-// logic/general-nav.js —— 通用设置 L1 目录（六行）的摘要判定层。
+// logic/general-nav.js —— 通用设置 L1 目录（七行）的摘要判定层。
 //
 // 红线同 logic/ 其余模块：只做数据→数据，不碰 DOM / window / socket / 应用可变状态。
 // 唯一允许的宿主外 import 是 ../i18n.js。
@@ -28,9 +28,9 @@
 import { t, getLang } from '../i18n.js';
 import { formatUptime } from './format.js';
 
-// L1 六行的 id 与顺序。接线层据此定位 L2 页容器（#generalPage-<id>），测试据此钉住顺序。
+// L1 七行的 id 与顺序。接线层据此定位 L2 页容器（#generalPage-<id>），测试据此钉住顺序。
 export const GENERAL_NAV_IDS = Object.freeze([
-  'notify', 'devices', 'host', 'behavior', 'diag', 'help',
+  'notify', 'devices', 'host', 'behavior', 'diag', 'help', 'about',
 ]);
 
 // 中文「提示音开」不插空格，其余语言必须插——上一版直接拼接，英文界面渲染出的是
@@ -146,6 +146,18 @@ function helpRow() {
   ]);
 }
 
+// 版本号与「宿主机」行同一份 versions（service:status），两行不会各说一个数。
+// 有没有新版要点进去查（会打 GitHub），L1 不预判、不亮红点。
+function aboutRow({ service = null } = {}) {
+  const items = [];
+  const server = service?.versions?.server;
+  if (typeof server === 'string' && server && server !== 'unknown') items.push({ text: `v${server}`, el: 'aboutVersion' });
+  items.push({ text: t('许可证'), el: 'aboutLicense' });
+  items.push({ text: t('第三方组件'), el: 'aboutComponents' });
+  items.push({ text: t('检查更新'), el: 'btnCheckUpdate' });
+  return row('about', 'ℹ️', t('关于'), items);
+}
+
 // MCP 服务器里「一切正常」的唯一取值。SDK 的 d.ts 只声明 `status: string`，没给取值集合——
 // 所以这里用**白名单**而不是黑名单：不认识的值一律落到「有问题」一侧。
 // 把一个连不上的服务器显示成正常，比显示成未知更糟——用户会拿着一个绿灯去别处找原因。
@@ -174,7 +186,7 @@ export function formatMcpServers(servers) {
 }
 
 /**
- * 算出 L1 六行的展示态。
+ * 算出 L1 七行的展示态。
  *
  * @param {object} [state]
  * @param {{subscribed?: boolean, preview?: boolean}} [state.push] 本设备的 web-push 订阅态与锁屏预览偏好
@@ -197,5 +209,6 @@ export function summarizeGeneralNav(state = {}) {
     behaviorRow(state),
     diagRow(),
     helpRow(),
+    aboutRow(state),
   ];
 }

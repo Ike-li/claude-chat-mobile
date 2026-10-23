@@ -33,6 +33,8 @@ import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '
 import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
+import { aboutInfo } from '../ops/about.js';
+import { checkForUpdate } from '../ops/update-check.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
@@ -4827,6 +4829,17 @@ registerSocketConnection(io, socket => {
       },
       timestamp: Date.now(),
     });
+  });
+
+  // 设置「关于」页（#303）。走 on() 的鉴权闸，不开 HTTP 端点（守「不开无鉴权数据端点」）。
+  on(socket, 'about:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack(aboutInfo());
+  });
+  // 请求从服务端发（GitHub 未鉴权每小时 60 次，几台设备共用一份缓存）；失败收成 { ok: false }，不抛。
+  on(socket, 'about:checkUpdate', async (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack(await checkForUpdate(versions.server));
   });
 
   // 安全日志：审计记录的**唯一**读取面（2026-09-02）。此前 audit-records.json 只写不读——

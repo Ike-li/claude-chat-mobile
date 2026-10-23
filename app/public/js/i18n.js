@@ -91,12 +91,16 @@ export const EN_DICT = Object.freeze({
   '先跑这个': 'Start here',
   '⚙ 全部配置 · 端口 / 工作区 / 推送 →': '⚙ All settings · port / workspaces / push →',
   '在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。': 'When checking the trusted device list below, this string identifies the device in your hand.',
-  // L1 目录六行（logic/general-nav.js 算出，非静态文案）
+  // L1 目录七行（logic/general-nav.js 算出，非静态文案）
   '通知': 'Notifications',
   '接入与设备': 'Access & devices',
   '行为与开关': 'Behavior & toggles',
   '排查': 'Troubleshoot',
   '帮助': 'Help',
+  '关于': 'About',
+  '许可证': 'License',
+  '第三方组件': 'Third-party components',
+  '检查更新': 'Check for updates',
   '推送未开启': 'Push off',
   '推送已开': 'Push on',
   '台已信任': 'trusted',
@@ -386,6 +390,17 @@ export const EN_DICT = Object.freeze({
   '📊 服务状态 · 运行时长 / 版本 / 告警 →': '📊 Service status · uptime / version / alerts →',
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',
   '在浏览器打开 GitHub 仓库': 'Open the GitHub repo in your browser',
+  // 设置「关于」页（#303）。许可证与声明原文不进词典：原样显示，不翻译
+  '作者': 'Author',
+  '仓库': 'Repository',
+  '升级说明': 'Upgrade guide',
+  '第三方组件与许可': 'Third-party components & licenses',
+  '服务端运行时依赖与浏览器端 Socket.IO 客户端': 'Server runtime dependencies and the browser Socket.IO client',
+  '浏览器端': 'browser',
+  '未声明许可': 'no license declared',
+  '有新版 {latest}（当前 {current}）': 'Update available: {latest} · you have {current}',
+  '已是最新（{current}）': 'Up to date: {current}',
+  '本地领先：当前 {current}，GitHub 最新 {latest}': 'Ahead of the latest release: you have {current}, GitHub\'s latest is {latest}',
   '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——
