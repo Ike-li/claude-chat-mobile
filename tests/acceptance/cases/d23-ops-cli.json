@@ -146,14 +146,18 @@
       "ex": "配置与数据不动；/health 报新版本",
       "b": "GS 更新",
       "env": [
-        "T"
+        "T",
+        "E3"
       ],
       "p": "P1",
       "m": "场景",
       "j": [],
       "n": "",
-      "tier": null,
-      "check": null
+      "tier": "D",
+      "check": {
+        "kind": "agent",
+        "how": "E3 lan 用 up.mjs --ref <旧版本> 装旧包，记下 ccm.config.json 与 data/ 各文件的 sha256、/health 的 versions；把被测提交 git archive（前缀 claude-chat-mobile-master/）拷进容器，tar xzf --strip-components=1 解进安装目录、npm ci --omit=dev、docker restart。判：config 与 trusted-devices.json 的 sha 不变、data/ 原有文件一个不少、升级前的会话 transcript 还在、旧设备不用重新审批；/health 的 versions 换成新依赖（dev 未发版时 server 号不变，看 sdk）。"
+      }
     },
     {
       "id": "AC-23-10",
@@ -172,8 +176,11 @@
         "J5"
       ],
       "n": "",
-      "tier": null,
-      "check": null
+      "tier": "C",
+      "check": {
+        "kind": "agent",
+        "how": "接 AC-23-09 的流程，旧版本取 v1.13.0：WORKDIRS 先配 workspace 加一个子目录 Y；两台设备在同一会话里各自断网发一条（outbox 条目带 inst_N），升级重启后另一台在新 server 开新会话当诱饵，一台旧页面直接恢复网络、一台先刷新再恢复。判：页面里包 io.Socket.prototype.emit 记下重放的 user:message 与 ack，两条都是 fromOutbox 且 ack={ok:false,stale:true}；容器 ~/.claude/projects 里 grep 不到这两条；files:search cwd=Y 返回 ok、cwd=/tmp 被拒。断网只挡带 EIO= 的传输请求，别挡 /socket.io/socket.io.js；等回合落定看「✻ … for Ns」，别用回复文字。"
+      }
     },
     {
       "id": "AC-23-11",
