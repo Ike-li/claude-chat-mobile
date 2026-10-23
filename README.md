@@ -13,6 +13,7 @@
   <a href="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml"><img src="https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
+  <a href="https://deepwiki.com/Ike-li/claude-chat-mobile"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 ![登录与设备准入](https://ike-li.github.io/claude-chat-mobile/screenshots/01-login.webp)
