@@ -2,7 +2,7 @@
 paths:
   - "app/src/**"
   - "app/server.js"
-  - "scripts/config.js"
+  - "scripts/*.js"
 ---
 
 # 后端
