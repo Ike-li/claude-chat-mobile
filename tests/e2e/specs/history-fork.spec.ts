@@ -1,6 +1,6 @@
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
@@ -12,8 +12,8 @@ import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSideb
 // uuid，「保留轮的最后一条 entry 是 tool_result」这种形态在前端结构上就看不见，而 SDK 的
 // forkSession 是纯 inclusive slice、零修正，锚早了它照切、tool_use 就悬空。
 // mock 的护栏随之从「只收 assistant 侧 uuid」翻成「uuid 侧别必须与 keepAnchorTurn 一致」。
-// 长按靠真实 550ms setTimeout 触发（见 app.js bindBubbleLongPress），不用 waitForTimeout
-// （禁用模式）——派发 touchstart 后直接轮询等确认弹层出现，天然把这段延迟吃掉。
+// 长按靠真实 550ms setTimeout 触发（见 app.js bindBubbleLongPress → long-press.js），不用 waitForTimeout
+// （禁用模式）——派发触屏 pointerdown 后直接轮询等确认弹层出现，天然把这段延迟吃掉。
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-FORK 长按 assistant 气泡可从该点分叉新会话', async ({ page }) => {
     await gotoMock(page);
@@ -25,10 +25,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
 
     const assistantBubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
-    const box = await assistantBubble.boundingBox();
-    if (!box) throw new Error('assistant bubble bounding box not found');
-    const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
-    await assistantBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
+    await touchHold(assistantBubble);
 
     await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
     await expect(page.locator('#confirmTitle')).toContainText('分叉');
@@ -54,10 +51,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // u-archived-2 + keepAnchorTurn=false，把语义送反（配成 true）会被 mock 拒绝、
     // 下面的「切到新会话」断言就失败——护栏守的东西换了，区分力仍在。
     const secondUserBubble = page.locator('[data-testid="user-message"]', { hasText: 'Any follow-up questions?' });
-    const box = await secondUserBubble.boundingBox();
-    if (!box) throw new Error('user bubble bounding box not found');
-    const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
-    await secondUserBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
+    await touchHold(secondUserBubble);
 
     // 2026-09-20：user 气泡长按【直达分叉】。原先这里先弹「回退 / 分叉」二选一，回退改走
     // /rewind 斜杠命令之后，长按只剩分叉这一个动作，中间那次选择没有了。
@@ -119,10 +113,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
 
     const firstUserBubble = page.locator('[data-testid="user-message"]', { hasText: 'Summarize archived plan' });
-    const box = await firstUserBubble.boundingBox();
-    if (!box) throw new Error('user bubble bounding box not found');
-    const touch = { identifier: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
-    await firstUserBubble.dispatchEvent('touchstart', { touches: [touch], changedTouches: [touch], targetTouches: [touch] });
+    await touchHold(firstUserBubble);
 
     // 长按直达分叉（2026-09-20 起不再弹二选一），随即撞上"前面没有 assistant 可作锚点"这一档：
     // 不该弹确认框，直接说清楚为什么分不了。
@@ -131,7 +122,69 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // O136（E4 真机 Android Chrome）：长按气泡文字时系统先接管选字——发 pointercancel 撤掉计时，
+  // 之后只剩一个 contextmenu。气泡长按此前只听 touch 事件、不认 contextmenu，真机上什么都不弹。
+  // 这里按真机的事件次序派发，不派发 touchstart（真机那一路的计时早被系统撤了）。
+  test('P0-FORKf Android 长按序列（系统选字接管后只剩 contextmenu）照样弹分叉确认', async ({ page }) => {
+    await gotoMock(page);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
+
+    const assistantBubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
+    const at = await bubbleCenter(assistantBubble);
+    await assistantBubble.dispatchEvent('pointerdown', { ...at, pointerType: 'touch', isPrimary: true, button: 0 });
+    await assistantBubble.dispatchEvent('pointercancel', { ...at, pointerType: 'touch', isPrimary: true });
+    await assistantBubble.dispatchEvent('contextmenu', at);
+
+    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('#confirmTitle')).toContainText('分叉');
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 修 O136 时气泡改认 contextmenu，但只认触屏手势：桌面右键要留给浏览器菜单（选中文字后「复制」）。
+  test('P0-FORKg 桌面右键气泡：不弹分叉，也不拦浏览器自己的右键菜单', async ({ page }) => {
+    await gotoMock(page);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
+    await expectSidebarClosed(page);
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
+
+    await page.evaluate(() => {
+      document.addEventListener('contextmenu', ev => {
+        (window as unknown as { __ctxPrevented?: boolean }).__ctxPrevented = ev.defaultPrevented;
+        ev.preventDefault(); // 测试自己收尾，免得无头浏览器真弹菜单
+      });
+    });
+    const assistantBubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
+    await assistantBubble.click({ button: 'right' });
+
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __ctxPrevented?: boolean }).__ctxPrevented))
+      .toBe(false);
+    await expect(page.locator('#confirmModal')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });
+
+async function touchHold(bubble: Locator) {
+  await bubble.dispatchEvent('pointerdown', { ...(await bubbleCenter(bubble)), pointerType: 'touch', isPrimary: true, button: 0 });
+}
+
+async function bubbleCenter(bubble: Locator) {
+  const box = await bubble.boundingBox();
+  if (!box) throw new Error('bubble bounding box not found');
+  return { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 };
+}
 
 // ── 文件轴 Rewind ──
 test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {

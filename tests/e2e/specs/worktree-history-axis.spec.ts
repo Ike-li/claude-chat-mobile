@@ -55,7 +55,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 分叉同样是「按 cwd 去磁盘找这个会话」：真 server 的 session:fork 先 sessionFileExists(cwd, id)，
   // 只查这个 cwd 编码出来的那一个 project 目录，worktree 会话的 transcript 在驾驶轴那边。
   // 送工作区轴（父仓）就是「会话不存在」，新会话也就开不到那棵 worktree 里去。
-  // 长按气泡与操作栏「分叉」走同一个 requestSessionFork，这里点按钮（长按只绑 touch，见 history-fork.spec.ts）。
+  // 长按气泡与操作栏「分叉」走同一个 requestSessionFork，这里点按钮（长按只认触屏，见 history-fork.spec.ts）。
   test('P0-WT-FORK worktree 会话里点「分叉」：按驾驶轴分叉，新会话开在同一棵 worktree', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

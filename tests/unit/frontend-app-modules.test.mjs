@@ -1003,6 +1003,61 @@ test.describe('attachLongPress：长按/右键触发，位移与抬手取消，�
   });
 });
 
+// 消息气泡（O136）：触屏长按要认，鼠标和桌面右键必须原样留给浏览器——气泡里的文字要能拖选、
+// 右键菜单要能「复制」。Android 长按文字时系统先接管选字（pointercancel 撤掉计时），随后才发
+// contextmenu，所以「这是触屏手势」的判断不能随 pointercancel 一起丢掉。
+test.describe('attachLongPress touchOnly：只认触屏，鼠标与右键交还浏览器', () => {
+  function mountTouchOnly() {
+    const el = fakePointerTarget();
+    const timers = fakeTimers();
+    const fired = [];
+    attachLongPress(el, ev => { fired.push(ev.type); }, {
+      holdMs: 550, moveTolerance: 8, touchOnly: true,
+      setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+    });
+    return { el, timers, fired };
+  }
+  const TOUCH = { ...DOWN, pointerType: 'touch' };
+  const MOUSE = { ...DOWN, pointerType: 'mouse' };
+
+  test('触屏按住到时 → 触发', () => {
+    const { el, timers, fired } = mountTouchOnly();
+    el.fire('pointerdown', TOUCH);
+    timers.flush();
+    assert.deepEqual(fired, ['pointerdown']);
+  });
+
+  test('★ 触屏长按被系统选字接管（pointercancel）后才到 contextmenu → 仍触发一次并拦下系统菜单', () => {
+    const { el, timers, fired } = mountTouchOnly();
+    el.fire('pointerdown', TOUCH);
+    el.fire('pointercancel');
+    timers.flush();
+    const ctx = el.fire('contextmenu');
+    assert.equal(ctx.defaultPrevented, true, '不拦的话系统选字菜单盖在分叉确认框上');
+    assert.equal(fired.length, 1, 'Android 真机上长按气泡什么都不弹（O136）');
+  });
+
+  test('鼠标按住不计时：拖选文字的按压不能弹分叉', () => {
+    const { el, timers, fired } = mountTouchOnly();
+    el.fire('pointerdown', MOUSE);
+    assert.equal(timers.pending(), 0);
+    timers.flush();
+    assert.equal(fired.length, 0);
+  });
+
+  test('桌面右键与键盘菜单键 → 不触发、不阻止原生菜单（右键「复制」要留着）', () => {
+    const { el, fired } = mountTouchOnly();
+    el.fire('pointerdown', { ...MOUSE, button: 2 });
+    assert.equal(el.fire('contextmenu').defaultPrevented, false, '右键');
+
+    el.fire('pointerdown', TOUCH);
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    el.fire('keydown', { key: 'ContextMenu' });
+    assert.equal(el.fire('contextmenu').defaultPrevented, false, '触屏点过一下之后的键盘菜单键');
+    assert.equal(fired.length, 0);
+  });
+});
+
 
 // ── createDrawerUnreadJump ─────────────────────────────────────────────────
 // 目录头「N 未读」角标点击 → 依次跳到下一条未读行。游标必须活过目录子树的整段替换
