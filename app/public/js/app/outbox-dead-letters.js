@@ -48,5 +48,6 @@ export function createOutboxDeadLetters({ storage, targetsViewing, max = 50 } = 
       write();
       return mine;
     },
+    count: () => items.length,
   };
 }

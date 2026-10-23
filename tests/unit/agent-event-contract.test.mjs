@@ -350,9 +350,18 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + folders:remove（2026-10-15，抽屉里「⋯ → 断开这个文件夹」，添加的对称面。不走 env:set 改 WORKDIRS，
   //        理由同 folders:add：那条是整份覆盖写，手机上拿到的列表可能已过期；也不并进 folders:add：一个扩授权面、
   //        一个缩，审计动作与失败处置不同。入向 62→63）
+  //      + folders:recheck（2026-10-23，#301：「N 个文件夹找不到了」告警里的「重新检查」。热加载只盯配置文件，
+  //        外置盘挂回来服务端察觉不到，只能手动让它重跑一次清单加载。不复用 folders:add / env:set：那两条写配置，
+  //        这条一个字节都不写、不动授权面，回执只带重算后的找不到的个数与路径。入向 63→64）
+  //      + about:get / about:checkUpdate（2026-10-23，设置「关于」页 #303：许可证原文与组件清单、检查更新。
+  //        不开 HTTP 端点（守「不开无鉴权数据端点」）；不并进 service:status：那条每次进「宿主机」页都发，
+  //        而许可证原文几十 KB、检查更新要打 GitHub。两个不合一：一个读本地文件，一个打外网、可能等 5s。入向 64→66）
   //      + folders:pin（2026-10-23，抽屉文件夹长按「置顶 / 取消置顶」#305。只改展示顺序、存数据目录，不写 WORKDIRS，
-  //        所以不并进 folders:add / folders:remove——那两条改的是授权面。不新增出向事件：成功后复用 instances 快照。入向 63→64）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 64);
+  //        所以不并进 folders:add / folders:remove——那两条改的是授权面。不新增出向事件：成功后复用 instances 快照。入向 66→67）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 67);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:checkUpdate'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:pin'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:remove'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));

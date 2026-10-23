@@ -69,3 +69,15 @@ test('有上限：超出时丢最旧的；storage 读写抛错时退回内存，
   mem.park(itemForA, 'x');
   assert.equal(mem.takeFor(A).length, 1);
 });
+
+test('count：暂存了几条（「重置本机数据」确认框据此说会丢几条，#302），交还后随之减少，重载后从存储读回', () => {
+  const storage = memoryStorage();
+  const box = createOutboxDeadLetters({ storage, targetsViewing: outboxItemTargetsViewing });
+  assert.equal(box.count(), 0);
+  box.park(itemForA, '已停止重试');
+  box.park({ ...itemForA, instanceId: 'inst_2', sessionId: 'sid-b', clientMessageId: 'c2' }, '已停止重试');
+  assert.equal(box.count(), 2);
+  assert.equal(createOutboxDeadLetters({ storage, targetsViewing: outboxItemTargetsViewing }).count(), 2, '重载后数不到落盘的那些');
+  box.takeFor(A);
+  assert.equal(box.count(), 1);
+});

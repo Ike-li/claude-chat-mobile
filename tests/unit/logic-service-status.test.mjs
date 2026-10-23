@@ -3,7 +3,8 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatServiceNoticeRows, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../app/public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatServiceNoticeRows, formatHooksBridgeRow, formatStatuslineBridgeRow, describeRateLimitSource, formatAuditEntry, serviceNoticeFingerprint, undismissedServiceNotices } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
 import { rlSourceKey } from '../../app/src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
@@ -170,10 +171,11 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
   // 清单为空也能启动之后（SCOPE-03），「配置了却一个都找不到」不再拒绝启动，抽屉里只剩「无文件夹」——
   // 没有这一行，用户看到的就是文件夹凭空消失、说不出原因。恢复路径两条都写上：抽屉里的「断开」
   // 够不着它们（找不到的目录根本不进抽屉），只能去配置里的工作区列表删。
+  // 恢复后不必重启服务了（#301）：告警行内有「重新检查」，服务端重跑一次清单加载、重算找不到的个数。
   test('配置的文件夹找不到 → 📁 行：个数 + 可能原因 + 怎么恢复', () => {
     assert.deepEqual(
       formatServiceNotices({ service: { missingFolders: 2 }, now: 1000 }),
-      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉']
+      ['📁 2 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉']
     );
   });
   test('missingFolders 为 0 / 缺席（旧 server）/ 脏值 → 不出这一行', () => {
@@ -610,5 +612,47 @@ test.describe('formatServiceNoticeRows：告警行判色按类别与来源', () 
     const rows = formatServiceNoticeRows({ service, now });
     assert.deepEqual(rows.map(r => r.tone), ['danger', 'warning', 'warning']);
     assert.deepEqual(rows.map(r => r.text), formatServiceNotices({ service, now }));
+  });
+});
+
+// #301「忽略」：按告警的稳定 id + 找不到的路径集合记指纹，不按文案。集合变了（A 回来了、B 丢了）就重新出现，
+// 个数相同也一样；切换语言不影响（文案变了，id 与路径没变）。
+test.describe('服务告警的忽略指纹', () => {
+  const rowsOf = service => formatServiceNoticeRows({ service, now: 1000 });
+  const missingRow = paths => rowsOf({ missingFolders: paths.length, missingFolderPaths: paths }).find(r => r.id === 'missing-folders');
+
+  test('找不到的文件夹那一行带稳定 id 与路径；其余几类没有 id，不提供忽略', () => {
+    const row = missingRow(['/b', '/a']);
+    assert.equal(row.id, 'missing-folders');
+    assert.deepEqual(row.paths, ['/b', '/a']);
+    const others = rowsOf({ clientError: { at: 900 }, deliveryFailure: { channel: 'push', at: 900 } });
+    assert.deepEqual(others.map(r => r.id ?? null), [null, null]);
+  });
+
+  test('指纹只看 id 与路径集合：顺序无关，集合变了就不同', () => {
+    assert.equal(serviceNoticeFingerprint(missingRow(['/a', '/b'])), serviceNoticeFingerprint(missingRow(['/b', '/a'])));
+    assert.notEqual(serviceNoticeFingerprint(missingRow(['/a', '/b'])), serviceNoticeFingerprint(missingRow(['/a', '/c'])),
+      '个数相同但换了一个路径：必须当成新告警');
+  });
+
+  test('切换语言后指纹不变（不是按文案匹配）', () => {
+    const zh = serviceNoticeFingerprint(missingRow(['/a']));
+    setLang('en');
+    try {
+      const row = missingRow(['/a']);
+      assert.doesNotMatch(row.text, /找不到/, '前提：英文界面下文案确实换了');
+      assert.equal(serviceNoticeFingerprint(row), zh);
+    } finally {
+      setLang('zh');
+    }
+  });
+
+  test('过滤掉已忽略的：指纹对得上才隐藏；没有 id 的几类永远不被过滤', () => {
+    const rows = rowsOf({ clientError: { at: 900 }, missingFolders: 1, missingFolderPaths: ['/a'] });
+    const dismissed = { 'missing-folders': serviceNoticeFingerprint(missingRow(['/a'])) };
+    assert.deepEqual(undismissedServiceNotices(rows, dismissed).map(r => r.id ?? null), [null]);
+    const changed = rowsOf({ missingFolders: 1, missingFolderPaths: ['/b'] });
+    assert.equal(undismissedServiceNotices(changed, dismissed).length, 1, '路径换了，旧的忽略不再生效');
+    assert.equal(undismissedServiceNotices(rows, null).length, 2);
   });
 });
