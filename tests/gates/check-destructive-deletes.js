@@ -23,6 +23,7 @@
 // 【判据为什么是 mkdtemp 而不是"路径看起来在 /tmp 下"】mkdtemp 保证目录是本进程刚建出来的、
 // 名字随机、不可能撞上任何既有数据。而"看起来在 /tmp 下"是字符串判断，被测代码算歪之后
 // 恰恰就不成立了——那正是这次事故的形态。判据必须锚在【来源】上，不能锚在【长相】上。
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { maskCodePositions } from './mutate.js';
@@ -384,14 +385,24 @@ export function checkSourceFile(rawSource, relPath) {
   return violations;
 }
 
+// rootDir 缺省不传：单测传临时目录夹具（含一份 mini git 仓库），CLI 入口用真实 ROOT。
+// 文件来源走 git：被跟踪的 + 未跟踪但没被忽略的（还没提交的新测试照样要扫）。
+// 不用 readdirSync 遍历，是因为它看不见 .gitignore——机主本机跑验收留下的
+// tests/acceptance/local/ 产物会被扫进来，本机恒红而 CI 干净检出恒绿（2026-10-22）。
+// --cached 会列出工作区里已删但未提交的文件，所以再按存在性过滤一遍。
+export function collectScanFiles(rootDir = ROOT) {
+  const list = paths => execFileSync(
+    'git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...paths],
+    { cwd: rootDir, encoding: 'utf8' },
+  ).split('\0').filter(Boolean)
+    .filter(rel => /\.(m?[jt]s)$/.test(rel))
+    .map(rel => join(rootDir, rel))
+    .filter(f => { try { return statSync(f).isFile(); } catch { return false; } });
+  return { testFiles: list(TEST_DIRS), srcFiles: list([...SRC_DIRS, ...SRC_FILES]) };
+}
+
 function main() {
-  const gather = dirs => dirs.flatMap(d => {
-    const p = join(ROOT, d);
-    try { statSync(p); } catch { return []; }
-    return collectFiles(p);
-  });
-  const testFiles = gather(TEST_DIRS);
-  const srcFiles = [...gather(SRC_DIRS), ...SRC_FILES.map(f => join(ROOT, f)).filter(f => { try { statSync(f); return true; } catch { return false; } })];
+  const { testFiles, srcFiles } = collectScanFiles();
   const all = [];
   for (const file of testFiles) {
     all.push(...checkFile(readFileSync(file, 'utf8'), relative(ROOT, file)));
