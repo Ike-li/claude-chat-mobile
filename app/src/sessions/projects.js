@@ -66,19 +66,28 @@ export async function hasScratchSessions({ baseDir, scratchRoot }) {
 
 // 组出下发给前端的清单。连接根在这里现算（加 / 删文件夹后立刻准确，不等下一次扫盘）；
 // subProjects 是扫盘结果与活实例的项目键之并，所属根已被移出清单的丢掉。
-export function composeProjects({ connected = [], subProjects = [], scratchRoot = null }) {
-  const out = [];
+//
+// pinnedRoots（#305）只改展示顺序：先按根组成块（根 + 它的子文件夹小节），只对块排序——置顶的按数组顺序在前，
+// 其余按 connected 的原顺序——再展开。不在 connected 里的路径直接忽略（断开的根留着记录，重连后回到原位）。
+// connected 本身不动：主工作目录、回落、新会话缺省、文件范围都读它，不读这里的顺序。
+export function composeProjects({ connected = [], subProjects = [], scratchRoot = null, pinnedRoots = [] }) {
+  const blocks = [];
   const seen = new Set();
   for (const root of connected) {
     if (seen.has(root)) continue;
     seen.add(root);
-    out.push({ key: root, root, label: basename(root), kind: 'connected' });
+    const block = [{ key: root, root, label: basename(root), kind: 'connected' }];
     for (const s of subProjects.filter(x => x.root === root).sort(byKey)) {
       if (seen.has(s.key)) continue;
       seen.add(s.key);
-      out.push({ key: s.key, root, label: `${basename(root)} › ${relative(root, s.key)}`, kind: 'subfolder' });
+      block.push({ key: s.key, root, label: `${basename(root)} › ${relative(root, s.key)}`, kind: 'subfolder' });
     }
+    blocks.push(block);
   }
+  const rank = new Map(pinnedRoots.map((root, i) => [root, i]));
+  const pinned = blocks.filter(b => rank.has(b[0].key)).sort((a, b) => rank.get(a[0].key) - rank.get(b[0].key));
+  for (const b of pinned) b[0].pinned = true;
+  const out = [...pinned, ...blocks.filter(b => !rank.has(b[0].key))].flat();
   // label 留空：「无文件夹」的文案归前端 i18n
   if (scratchRoot) out.push({ key: scratchRoot, root: scratchRoot, label: null, kind: 'scratch' });
   return out;

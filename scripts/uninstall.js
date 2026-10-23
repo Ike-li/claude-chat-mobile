@@ -52,6 +52,7 @@ export const DATA_FILE_WHITELIST = Object.freeze([
   'service-install.json',
   'log-terminal.json',
   'read-state.json',
+  'pinned-roots.json',
 ]);
 // ⚠ uploads/ **有意不在这张表里**：它进来就意味着 --purge 会删光用户所有附件，而历史消息里的
 // 图片预览全部依赖这些文件（对话正文不受影响，但图片会集体变成打不开）。这与 doctor 的立场一致，

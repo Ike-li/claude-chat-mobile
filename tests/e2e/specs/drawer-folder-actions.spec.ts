@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
 
-// 抽屉文件夹行的长按动作（#300 全部标为已读）。
+// 抽屉文件夹行的长按动作（#300 全部标为已读、#305 置顶 / 取消置顶）。
 // 长按挂在文件夹行的主按钮上；桌面右键（contextmenu）与触屏长按走同一个入口（见 long-press.js），这里用右键触发。
 const SCRATCH_ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
 const SUBFOLDER = `${MAIN_WORKSPACE}/packages/web`;
@@ -16,6 +16,16 @@ async function markRowUnread(page: Page, sessionId: string) {
   await expect(page.locator('#confirmOk')).toHaveText('标为未读');
   await page.locator('#confirmOk').click();
   await expect(page.locator('#confirmModal')).not.toHaveClass(/sheet-open/);
+}
+
+// 抽屉里各节的先后（连接根、子文件夹小节、「无文件夹」都算）
+function sectionOrder(page: Page) {
+  return page.locator('#sessionPanel div[data-dir]').evaluateAll(els => els.map(e => e.getAttribute('data-dir')));
+}
+
+// test:projects 只连着主工作区；置顶要比顺序，得有第二个连接根
+async function connectTwoRoots(page: Page) {
+  await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(`${MAIN_WORKSPACE},${ANOTHER_WORKSPACE}`)}`);
 }
 
 function unreadChips(page: Page, cwd: string) {
@@ -149,6 +159,71 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#confirmOk')).toHaveText('全部标为已读');
     await page.locator('#confirmOk').click();
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #305：置顶只改抽屉顺序；不做乐观更新，等服务端广播新清单再重画，所以按钮文字与顺序都来自服务端。
+  // 同一次长按两件事：有未读时主按钮仍是「全部标为已读」、置顶是次按钮；没有未读时置顶就是主按钮。
+  test('P0-FOLDER-PIN-1 长按连接根「置顶」：连同子文件夹一起移到最前；再长按变「取消置顶」，取消后回到原顺序', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await connectTwoRoots(page);
+    await openSessionsSidebar(page);
+    const before = await sectionOrder(page);
+    expect(before, '前提：主工作区、它的子文件夹、另一个工作区、「无文件夹」').toEqual([MAIN_WORKSPACE, SUBFOLDER, ANOTHER_WORKSPACE, SCRATCH_ROOT]);
+
+    // 有未读：置顶是次按钮
+    await longPressFolder(page, ANOTHER_WORKSPACE);
+    await expect(page.locator('#confirmTitle')).toHaveText('another-react-project');
+    await expect(page.locator('#confirmOk')).toHaveText('全部标为已读');
+    await expect(page.locator('#confirmAlt')).toHaveText('置顶');
+    await page.locator('#confirmAlt').click();
+    await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
+    await expect(workspaceRow(page, ANOTHER_WORKSPACE).locator('[data-testid="dir-unread"]'), '点的是置顶，不该顺手把未读清了').toHaveText(/^\d+ 未读$/);
+
+    // 主工作区这时没有未读：置顶就是主按钮。最后置顶的在最前，子文件夹跟着根走，「无文件夹」仍垫底
+    await longPressFolder(page, MAIN_WORKSPACE);
+    await expect(page.locator('#confirmOk')).toHaveText('置顶');
+    await expect(page.locator('#confirmAlt')).toBeHidden();
+    await page.locator('#confirmOk').click();
+    await expect.poll(() => sectionOrder(page)).toEqual([MAIN_WORKSPACE, SUBFOLDER, ANOTHER_WORKSPACE, SCRATCH_ROOT]);
+
+    // 取消置顶：按钮文字跟着服务端清单变，取消后回到配置顺序
+    await longPressFolder(page, MAIN_WORKSPACE);
+    await expect(page.locator('#confirmOk')).toHaveText('取消置顶');
+    await page.locator('#confirmOk').click();
+    await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
+    await longPressFolder(page, ANOTHER_WORKSPACE);
+    await expect(page.locator('#confirmAlt')).toHaveText('取消置顶');
+    await page.locator('#confirmAlt').click();
+    await expect.poll(() => sectionOrder(page)).toEqual(before);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-FOLDER-PIN-2 子文件夹小节没有置顶入口；服务端回失败时界面上没有假置顶', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await connectTwoRoots(page);
+    await openSessionsSidebar(page);
+
+    await expandWorkspace(page, SUBFOLDER);
+    await longPressFolder(page, SUBFOLDER);
+    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('这里没有未读会话');
+    await expect(page.locator('#confirmModal'), '子文件夹不是连接根，没有置顶这回事').not.toHaveClass(/sheet-open/);
+
+    const before = await sectionOrder(page);
+    await page.request.post('/__folder-pin-fail');
+    await longPressFolder(page, ANOTHER_WORKSPACE);
+    await page.locator('#confirmAlt').click();
+    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('置顶没成功，稍后再试');
+    expect(await sectionOrder(page), '服务端拒了，顺序却变了 = 假置顶').toEqual(before);
+    await longPressFolder(page, ANOTHER_WORKSPACE);
+    await expect(page.locator('#confirmAlt')).toHaveText('置顶');
+    await page.locator('#confirmCancel').click();
 
     await expectNoBrowserErrors(page);
   });

@@ -34,11 +34,14 @@ export function normalizeProjects(payload) {
   for (const p of raw) {
     if (typeof p?.key !== 'string' || !p.key || seen.has(p.key)) continue;
     seen.add(p.key);
+    const kind = KINDS.has(p.kind) ? p.kind : 'connected';
     out.push({
       key: p.key,
       root: typeof p.root === 'string' && p.root ? p.root : p.key,
       label: typeof p.label === 'string' && p.label ? p.label : null,
-      kind: KINDS.has(p.kind) ? p.kind : 'connected',
+      kind,
+      // 置顶（#305）只有连接根有；没置顶的不带这个字段
+      ...(kind === 'connected' && p.pinned === true ? { pinned: true } : {}),
     });
   }
   return out;

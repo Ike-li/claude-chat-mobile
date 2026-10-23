@@ -1,4 +1,4 @@
-// socket-folders.js —— 手机上「添加文件夹」「新建文件夹」「断开文件夹」「重新检查」的 socket 面（FOLDER-01）
+// socket-folders.js —— 手机上「添加文件夹」「新建文件夹」「断开文件夹」「重新检查」「置顶」的 socket 面（FOLDER-01、#305）
 //
 // 判据全在 sessions/folders.js；写配置与热加载由组装根注入的 addConnectedFolder / removeConnectedFolder 负责。
 // 这里只做三件事：取参、调用、留痕——越界尝试记 scope_violation（同文件浏览），扩授权面、缩授权面与在磁盘上
@@ -7,7 +7,7 @@ import { browseFolderNames, createSubfolder, resolveFolderToAdd } from '../sessi
 
 const OUT_OF_RANGE = new Set(['out_of_range', 'outside_home']);
 
-export function registerFolderSocketHandlers({ socket, on, folderContext, addConnectedFolder, removeConnectedFolder, recheckFolders, audit, actorFromSocket }) {
+export function registerFolderSocketHandlers({ socket, on, folderContext, addConnectedFolder, removeConnectedFolder, recheckFolders, pinConnectedFolder, audit, actorFromSocket }) {
   const record = (action, target, outcome, meta) => audit.recordAudit({ actor: actorFromSocket(socket), action, target, outcome, meta });
   const recordIfOutOfRange = (res, target, via) => {
     if (!res.ok && OUT_OF_RANGE.has(res.error)) record('scope_violation', String(target), 'denied', { via });
@@ -54,5 +54,13 @@ export function registerFolderSocketHandlers({ socket, on, folderContext, addCon
   on(socket, 'folders:recheck', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack(recheckFolders());
+  });
+
+  // 置顶 / 取消置顶（#305）。on() 只拦 deviceApproved === false，这里再收紧成「必须是 true」：
+  // 值为 undefined 的连接（走漏了审批分支）不能改所有设备共享的顺序。
+  on(socket, 'folders:pin', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (socket.deviceApproved !== true) return ack({ ok: false, error: 'device_not_approved' });
+    ack(pinConnectedFolder(payload?.root, payload?.pinned));
   });
 }
