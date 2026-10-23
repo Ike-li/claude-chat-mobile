@@ -1505,19 +1505,21 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 当前查看实例此刻跑的会话，与 viewingInstanceId 同一份 instances 快照。
   const outboxViewing = () => ({ viewingInstanceId, viewingCwd: currentCwd, viewingSessionId: sendSessionId() });
 
+  // 离线条目的拒收提示：眼前多半是起始类表面（「服务已重启」面板、首页、新会话页）。addBar 会先 leaveStartScreen
+  // 把整张表面清空——R7 截图里那片空白，就是服务端那行提示条冲掉了带「继续此会话」的重启面板（O126）；新会话页被冲掉时
+  // 「文件夹已断开、改在这里开」那句跟着没了，输入框里的原文再发就悄悄换了文件夹（O128）。挂在表面顶上，不清它。
+  function addOutboxRejectBar(text) {
+    if (!messagesEl.classList.contains('empty-start')) return addBar(text, 'text-danger');
+    const bar = el(`<div class="msg-frame text-center text-xs text-danger"></div>`);
+    bar.textContent = text;
+    messagesEl.insertBefore(bar, messagesEl.firstChild);
+    return bar;
+  }
+
   // 进了死信暂存、眼前又没有会话（outboxParkedNotice 判过）：说一句，并给一个回到那个会话的入口——回去之后
   // deliverOutboxDeadLetters 照常把原文放回输入框。切换的 ack / 4s 兜底同 dashboard 最近列表的 switchToSession。
-  // 眼前多半是起始类表面（「服务已重启」面板、首页、新会话页）：addBar 会先 leaveStartScreen 把整张表面清空——
-  // R7 截图里那片空白，就是服务端那行提示条冲掉了带「继续此会话」的重启面板。挂在表面顶上，不清它。
   function addOutboxParkedBar(text, item) {
-    let bar;
-    if (messagesEl.classList.contains('empty-start')) {
-      bar = el(`<div class="msg-frame text-center text-xs text-danger"></div>`);
-      bar.textContent = text;
-      messagesEl.insertBefore(bar, messagesEl.firstChild);
-    } else {
-      bar = addBar(text, 'text-danger');
-    }
+    const bar = addOutboxRejectBar(text);
     if (!bar || !item.sessionId) return;
     const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-parked-goto">${t('回到该会话')}</button>`);
     btn.onclick = () => {
@@ -1608,7 +1610,7 @@ import { createGateFocusController } from './app/focus-layers.js';
           // 投给眼前这个会话且输入框空着：放回输入框，气泡随之撤掉。否则提示落在气泡上（气泡里就是原文）；
           // 连气泡都不在时把原文写进提示条，至少还看得见、复制得到。
           if (moveOutboxItemToComposer(planned)) {
-            addBar(`${permanentMsg}${t('，原文已放回输入框')}`, 'text-danger');
+            addOutboxRejectBar(`${permanentMsg}${t('，原文已放回输入框')}`);
           } else {
             // 同 markOutboxBlocked：走同一套落点判据，不能只看 indicator 取不取得到。
             const permanentHost = outboxNoticeHost(item, targetsViewing, 'text-danger');
@@ -5406,10 +5408,11 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 只在原来就在新会话页上、旧目录确实已不在任何已连接的文件夹（p.dirs）之下时算——用户自己换文件夹不提示。
     // 不看展示用的项目清单：「无文件夹」只在用着时、子文件夹只在有会话时才占一节，换走就不在了，那不是被断开
     // （#330 review P2）。「无文件夹」本来就不是连接来的，单独排除。必须在 currentCwd 覆写之前取。
+    // 「在新会话页上」认 _composeReady，不认 DOM 里有没有 compose-surface：在新会话页上断线发的首条会先挂一个
+    // 等待气泡、把表面顶掉，可这一页仍是新会话页——重连时被归位，那句「已断开」正是这时最要紧（O128）。
     const connectedRoots = Array.isArray(p?.dirs) ? p.dirs : [];
-    const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd
+    const composeRelocatedFrom = !viewingInstanceId && !newViewing && cwdChanged && currentCwd && _composeReady
       && !connectedRoots.some(root => isPathWithin(currentCwd, root)) && !projectsState.isNoFolder(currentCwd)
-      && Boolean(messagesEl.querySelector('[data-testid="compose-surface"]'))
       ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;

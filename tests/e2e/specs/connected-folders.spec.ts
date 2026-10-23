@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, sessionRowByInstance, startNewSessionInWorkspace, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
@@ -110,6 +110,37 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(compose.getByTestId('compose-project-pill'), '前提：新会话页被归位到别的工作区').not.toContainText('claude-chat-mobile');
     await expect(compose.getByTestId('compose-relocated'), '悄悄换了工作区，页面上什么都没说').toContainText('claude-chat-mobile');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 验收 O128：新会话页停在一个文件夹上、断线时发了一条（进离线队列），别的设备随后断开了这个文件夹。重连后这一页被归位到
+  // 别的工作区，离线那条被永久拒收、原文放回输入框——拒收提示把整张新会话页冲掉了，「已断开」那句跟着没了，用户直接再按
+  // 发送，消息就换了个文件夹发出去。新会话页要留着，拒收提示和「已断开」都看得见。
+  test('P0-PROJ-6c 新会话页离线发出的消息因文件夹被断开而拒收 → 新会话页与「已断开」提示都留着，原文回输入框', async ({ page, request }) => {
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    const compose = page.locator('[data-testid="compose-surface"]');
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, MAIN_WORKSPACE);
+    await expectSidebarClosed(page);
+    await expect(compose.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    await page.locator('#input').fill('断线时在这个文件夹里写的');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveValue('');
+    // 另一台设备断开这个文件夹：这一页断着线，经 HTTP 让 mock 照 folders:remove 处理
+    expect((await (await request.post(`/__disconnect-folder?path=${encodeURIComponent(MAIN_WORKSPACE)}`)).json()).ok).toBe(true);
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    await expect(page.locator('#input'), '前提：拒收后原文放回输入框').toHaveValue('断线时在这个文件夹里写的');
+    await expect(page.locator('#messages'), '前提：拒收要说清已停止重试').toContainText('已停止重试');
+    await expect(compose, '拒收提示把新会话页冲掉了：看不出输入框里这条再发会发到哪').toHaveCount(1);
+    await expect(compose.getByTestId('compose-project-pill'), '前提：新会话页被归位到别的工作区').not.toContainText('claude-chat-mobile');
+    await expect(compose.getByTestId('compose-relocated'), '「已断开」那句被冲掉了').toContainText('claude-chat-mobile');
     await expectNoBrowserErrors(page);
   });
 

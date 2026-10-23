@@ -2966,7 +2966,9 @@ registerSocketConnection(io, socket => {
           const routedCwd = routeCwd(rawCwd);
           if (routedCwd === null) {
             // 显式带着越界 cwd（例如离线队列里的消息，入队后那个文件夹被移出了清单）：拒绝，不投进别的工作区。
-            sysTo(socket, OUT_OF_SCOPE_ERROR, true);
+            // 离线重放不推提示行：前端把原文放回输入框、在新会话页上说明（同 stale 分支，O126）；这一行会先清掉
+            // 新会话页，连同「文件夹已断开、改在这里开」（O128）。
+            if (!fromOutbox) sysTo(socket, OUT_OF_SCOPE_ERROR, true);
             ack({ ok: false, error: OUT_OF_SCOPE_ERROR, permanent: true });
             return;
           }
