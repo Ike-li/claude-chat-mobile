@@ -350,7 +350,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + folders:remove（2026-10-15，抽屉里「⋯ → 断开这个文件夹」，添加的对称面。不走 env:set 改 WORKDIRS，
   //        理由同 folders:add：那条是整份覆盖写，手机上拿到的列表可能已过期；也不并进 folders:add：一个扩授权面、
   //        一个缩，审计动作与失败处置不同。入向 62→63）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 63);
+  //      + folders:recheck（2026-10-23，#301：「N 个文件夹找不到了」告警里的「重新检查」。热加载只盯配置文件，
+  //        外置盘挂回来服务端察觉不到，只能手动让它重跑一次清单加载。不复用 folders:add / env:set：那两条写配置，
+  //        这条一个字节都不写、不动授权面，回执只带重算后的找不到的个数与路径。入向 63→64）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 64);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:remove'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:browse'));

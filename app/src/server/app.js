@@ -330,7 +330,8 @@ function readInlineWorkdirConfig() {
       primary: typeof parsed?.WORK_DIR === 'string' ? parsed.WORK_DIR : '',
     };
   } catch {
-    return { list: null, primary: '' }; // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，这里静默回落即可
+    // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，到这里只会是运行中被写坏了（编辑器写到一半）
+    return { list: null, primary: '', unreadable: true };
   }
 }
 
@@ -355,6 +356,9 @@ function readWorkdirSource() {
     }),
     inlinePrimary: inline.primary,
   });
+  // 清单本该来自配置文件（没有环境变量压着）而文件解析不了：按读不出处理，别读成「什么都没配」——那会把白名单
+  // 清空。文件监听那条路自己挡了坏 JSON，「重新检查」（folders:recheck）直接走这里，得在这一层挡（#349 review）。
+  if (inline.unreadable && from === 'WORKDIRS') return { result: null, warnings: [], from, filePath };
   return { result, warnings, from, filePath };
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
@@ -367,16 +371,18 @@ function applyWorkdirs(source) {
   const { dirs, limits, warnings: rw, missing } = resolveWorkdirs(source.entries);
   workDirs = dirs;
   sessionLimitByDir = limits;
-  workdirStatus.setMissing(missing.length);
+  workdirStatus.setMissing(missing);
   return [...source.warnings, ...rw];
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
 // 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
 // explicit：调用方是用户明确的操作（手机上断开文件夹），哪怕剩下的条目一个都解析不出也照常生效。
+// 返回这一趟的结局：'applied' 生效；'source_unreadable' 清单来源读不出；'kept_previous' 一个都解析不出而保留旧清单。
+// 后两种不重算 missing——「重新检查」据此回失败，不把上一次的结果当成这一次的（#349 review）。
 function reloadWorkdirs({ explicit = false } = {}) {
   const { result: source, warnings: srcWarnings, from } = readWorkdirSource();
   workdirStatus.setSource(from);
-  if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
+  if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return 'source_unreadable'; }
   for (const w of srcWarnings) console.warn(`⚠️  [workdirs 热加载] ${w}`);
   // 「有条目却一个都解析不出」时保留旧白名单：起因多半是编辑器写到一半、或外置盘临时掉线，这时把
   // 正在用的文件夹一把清空，代价远大于晚一拍生效（与 source === null 同档）。
@@ -385,7 +391,7 @@ function reloadWorkdirs({ explicit = false } = {}) {
   const { dirs: probe } = resolveWorkdirs(source.entries);
   if (!explicit && !probe.length && source.entries.length && workDirs.length) {
     console.warn('⚠️  [workdirs 热加载] 新配置里没有一个可用工作区，保留旧白名单（未生效）');
-    return;
+    return 'kept_previous';
   }
   const prevKey = workDirs.join('|');
   for (const w of applyWorkdirs(source)) console.warn(`⚠️  [workdirs 热加载] ${w}`);
@@ -397,6 +403,7 @@ function reloadWorkdirs({ explicit = false } = {}) {
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
   projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
+  return 'applied';
 }
 
 // 手机上「添加文件夹」（FOLDER-01）：追加进配置文件的内联 WORKDIRS，同步热加载，回报生效后的列表。
@@ -1318,8 +1325,10 @@ function computeServiceHealth() {
       : null,
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
     // 配置里有、却找不到的文件夹个数（被删、改名、外置盘没挂上）。清单为空也能启动之后（SCOPE-03），
-    // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。只给个数，路径不出网。
+    // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。
     missingFolders: workdirStatus.missing(),
+    // 找不到的路径（#301）：告警的「忽略」按路径集合记指纹，A 回来了、B 丢了要重新出现。这份载荷只发 approved 房间。
+    missingFolderPaths: workdirStatus.missingPaths(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     // unreadable：读不出时是哪个文件，面板据此点名（验收 AC-16-12）
@@ -4389,6 +4398,12 @@ registerSocketConnection(io, socket => {
     // readonly：手机上改不了清单时，新建只剩已连接的文件夹里（之外建出来的加不进清单，只会留一个空目录）
     folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs, readonly: workdirStatus.readonlyReason() }),
     addConnectedFolder,
+    // 告警里的「重新检查」（#301）：热加载只盯配置文件，目录本身回没回来服务端察觉不到，这里手动重跑一次
+    recheckFolders: () => {
+      const outcome = reloadWorkdirs();
+      if (outcome !== 'applied') return { ok: false, error: outcome };
+      return { ok: true, missingFolders: workdirStatus.missing(), missingFolderPaths: workdirStatus.missingPaths() };
+    },
     removeConnectedFolder,
     audit,
     actorFromSocket,
@@ -4797,6 +4812,7 @@ registerSocketConnection(io, socket => {
       // 与「服务状态」面板对同一次限速锁定会显示不一致的措辞（见 app.js renderServiceStatus）。
       proxyFronted: health.proxyFronted,
       missingFolders: health.missingFolders, // 同上：抽屉与面板对「配置的文件夹找不到」得是同一句话
+      missingFolderPaths: health.missingFolderPaths,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。
