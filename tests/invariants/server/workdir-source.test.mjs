@@ -262,6 +262,23 @@ test('重新检查：缺失的目录回来后计数减一、进清单并广播�
   assert.deepEqual(status.missingFolderPaths, [c], '服务状态面板那条读路径与广播得是同一份');
 });
 
+// #349 review：热加载有两条早退路径（清单来源读不出、有条目却一个都解析不出且原清单非空）不重算，
+// 「重新检查」这时不能回 ok:true 带着上一次的结果——那等于告诉用户「查过了，还是这样」。
+test('重新检查：清单来源读不出、或一个都解析不出而保留旧清单时，回失败而不是旧结果', async () => {
+  const a = join(home, 'code', 'recheck-stale-a');
+  mkdirSync(a, { recursive: true });
+  const s = await start({ WORKDIRS: [a] });
+  assert.equal((await s.instances()).service?.missingFolders, 0);
+
+  rmSync(a, { recursive: true, force: true }); // 唯一的文件夹没了：保留旧清单（外置盘临时掉线）
+  const kept = await s.emit('folders:recheck', {});
+  assert.deepEqual(kept, { ok: false, error: 'kept_previous' }, JSON.stringify(kept));
+
+  writeFileSync(s.configPath, '{ "WORKDIRS": [ 写到一半'); // 编辑器写到一半
+  const unreadable = await s.emit('folders:recheck', {});
+  assert.deepEqual(unreadable, { ok: false, error: 'source_unreadable' }, JSON.stringify(unreadable));
+});
+
 test('找不到的路径只走鉴权通道：不带令牌握手失败，一条广播都收不到', async () => {
   const s = await start({ WORKDIRS: [join(home, 'code', 'gone-private')] });
   assert.deepEqual((await s.instances()).service?.missingFolderPaths, [join(home, 'code', 'gone-private')], '前提：鉴权通道上有这份数据');

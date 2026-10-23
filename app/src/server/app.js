@@ -330,7 +330,8 @@ function readInlineWorkdirConfig() {
       primary: typeof parsed?.WORK_DIR === 'string' ? parsed.WORK_DIR : '',
     };
   } catch {
-    return { list: null, primary: '' }; // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，这里静默回落即可
+    // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，到这里只会是运行中被写坏了（编辑器写到一半）
+    return { list: null, primary: '', unreadable: true };
   }
 }
 
@@ -355,6 +356,9 @@ function readWorkdirSource() {
     }),
     inlinePrimary: inline.primary,
   });
+  // 清单本该来自配置文件（没有环境变量压着）而文件解析不了：按读不出处理，别读成「什么都没配」——那会把白名单
+  // 清空。文件监听那条路自己挡了坏 JSON，「重新检查」（folders:recheck）直接走这里，得在这一层挡（#349 review）。
+  if (inline.unreadable && from === 'WORKDIRS') return { result: null, warnings: [], from, filePath };
   return { result, warnings, from, filePath };
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。列表首项即主工作目录。
@@ -373,10 +377,12 @@ function applyWorkdirs(source) {
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
 // 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
 // explicit：调用方是用户明确的操作（手机上断开文件夹），哪怕剩下的条目一个都解析不出也照常生效。
+// 返回这一趟的结局：'applied' 生效；'source_unreadable' 清单来源读不出；'kept_previous' 一个都解析不出而保留旧清单。
+// 后两种不重算 missing——「重新检查」据此回失败，不把上一次的结果当成这一次的（#349 review）。
 function reloadWorkdirs({ explicit = false } = {}) {
   const { result: source, warnings: srcWarnings, from } = readWorkdirSource();
   workdirStatus.setSource(from);
-  if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
+  if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return 'source_unreadable'; }
   for (const w of srcWarnings) console.warn(`⚠️  [workdirs 热加载] ${w}`);
   // 「有条目却一个都解析不出」时保留旧白名单：起因多半是编辑器写到一半、或外置盘临时掉线，这时把
   // 正在用的文件夹一把清空，代价远大于晚一拍生效（与 source === null 同档）。
@@ -385,7 +391,7 @@ function reloadWorkdirs({ explicit = false } = {}) {
   const { dirs: probe } = resolveWorkdirs(source.entries);
   if (!explicit && !probe.length && source.entries.length && workDirs.length) {
     console.warn('⚠️  [workdirs 热加载] 新配置里没有一个可用工作区，保留旧白名单（未生效）');
-    return;
+    return 'kept_previous';
   }
   const prevKey = workDirs.join('|');
   for (const w of applyWorkdirs(source)) console.warn(`⚠️  [workdirs 热加载] ${w}`);
@@ -397,6 +403,7 @@ function reloadWorkdirs({ explicit = false } = {}) {
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
   projectIndex.refresh(); // 新连上的文件夹下已有的子项目（连接根本身在广播里现算，不等这一趟）
+  return 'applied';
 }
 
 // 手机上「添加文件夹」（FOLDER-01）：追加进配置文件的内联 WORKDIRS，同步热加载，回报生效后的列表。
@@ -4393,7 +4400,8 @@ registerSocketConnection(io, socket => {
     addConnectedFolder,
     // 告警里的「重新检查」（#301）：热加载只盯配置文件，目录本身回没回来服务端察觉不到，这里手动重跑一次
     recheckFolders: () => {
-      reloadWorkdirs();
+      const outcome = reloadWorkdirs();
+      if (outcome !== 'applied') return { ok: false, error: outcome };
       return { ok: true, missingFolders: workdirStatus.missing(), missingFolderPaths: workdirStatus.missingPaths() };
     },
     removeConnectedFolder,
