@@ -67,7 +67,7 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 @media (prefers-color-scheme: dark) {
   .hljs .hljs-section { color: #337CED; }
 }
-/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px。
+/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；按钮本体 32px，热区 44。
    不再半透明：11px 的字叠 opacity .7 只剩 2.6:1（验收 O79），降调交给 ink-faint 本身。手机没有 hover，「悬停才显形」从来不成立 */
 .code-block-wrap { position: relative; }
 .code-block-wrap > pre {
@@ -84,11 +84,11 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
   cursor: pointer;
   z-index: 1;
 }
-/* 热区扩充：按钮本体 32px，::after 再扩一点 */
+/* 热区扩到 44：纵向 7px，::after 以 padding box 为基准、不含 1px 边框，扩 6px 只到 30+12=42（O130，同 O99） */
 .code-block-wrap .code-copy-btn::after {
   content: '';
   position: absolute;
-  inset: -6px;
+  inset: -7px -6px;
 }
 .code-block-wrap .code-copy-btn:hover {
   color: var(--accent-deep); border-color: var(--accent-deep);
