@@ -22,7 +22,8 @@ const DEAD_LETTER = JSON.stringify([{
 // 页面被换掉了没有：真 reload 之后 window 上的标记就没了
 const markPage = (page: Page) => page.evaluate(() => { (window as unknown as { __ccmMarker?: number }).__ccmMarker = 1; });
 const pageWasReloaded = (page: Page) => page.evaluate(() => (window as unknown as { __ccmMarker?: number }).__ccmMarker !== 1);
-const storageSnapshot = (page: Page) => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)])));
+// 不收 ccm_client_logs：日志节流写盘，随时可能落进两次快照之间，与取消/重置无关（负载高时 P0-RESET-4 因此偶发红）
+const storageSnapshot = (page: Page) => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter(k => k !== 'ccm_client_logs').sort().map(k => [k, localStorage.getItem(k)])));
 
 async function sendOffline(page: Page, texts: string[]) {
   await page.context().setOffline(true);
