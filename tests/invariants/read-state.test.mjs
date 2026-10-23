@@ -203,6 +203,17 @@ test.describe('READ-01: 设备时钟偏快——写入时间戳 clamp 到服务�
     assert.equal(isManualUnreadNow(st.manual, st.seen, 's1'), false, '未来的手动标记会压过此后 10 分钟内的每一次打开');
   });
 
+  // Codex review #348：快钟设备离线时先读（seen）、后标未读（manual），两个值都在服务端未来。各自 clamp 会把它们
+  // 压成相等，而相等算已读——那次「标为未读」在服务端与别的设备上被吞掉。clamp 必须保住同一会话里两者的先后。
+  test('read:sync 的 clamp 保住同一会话 seen 与 manual 的先后：离线「先读后标未读」不能被压成已读', () => {
+    const s = createStore({ now: () => T0 });
+    const st = s.applyClientState({ seen: { a: T0 + 5 * MIN, b: T0 + 8 * MIN }, manual: { a: T0 + 8 * MIN, b: T0 + 5 * MIN } });
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'a'), true, '先读后标未读：clamp 后仍得是未读');
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'b'), false, '先标未读后读：clamp 后仍得是已读');
+    assert.deepEqual(s.manualUnreadIds(), ['a'], 'session:list 补回名单与判定同义');
+    assert.ok(Math.max(st.seen.a, st.manual.a, st.seen.b, st.manual.b) <= T0, '仍然不得超过服务端 now');
+  });
+
   test('read:sync 全量归并也 clamp：快钟设备重连推上来的未来值不得进权威态', () => {
     const s = createStore({ now: () => T0 });
     const st = s.applyClientState({ seen: { a: T0 + FAST, b: T0 - MIN }, manual: { c: T0 + FAST } });

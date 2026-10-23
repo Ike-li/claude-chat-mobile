@@ -69,9 +69,9 @@ export function createReadStateStore({ file = FILE, now = () => Date.now(), seen
   // 迁移上来（否则升级瞬间用户在本机读过的记录全丢，屏幕上是一整屏假未读）。离线期间攒的位点同理。
   function applyClientState(client) {
     ensureBaseline();
-    const ts = now();
-    const seen = mergeLatest(state.seen, clampMap(client?.seen, ts));
-    const manual = mergeLatest(state.manual, clampMap(client?.manual, ts));
+    const { seen: clientSeen, manual: clientManual } = clampClientState(client, now());
+    const seen = mergeLatest(state.seen, clientSeen);
+    const manual = mergeLatest(state.manual, clientManual);
     state = { ...state, seen: capNewest(seen, seenCap), manual: capNewest(manual, manualCap) };
     save();
     return snapshot();
@@ -171,6 +171,19 @@ function clampMap(src, ts) {
   const out = numericMap(src);
   for (const k of Object.keys(out)) if (out[k] > ts) out[k] = ts;
   return out;
+}
+
+// read:sync 上报的整表 clamp。同一会话的 seen 与 manual 都落在未来时，各自 clamp 会把两者压成相等，而相等算已读——
+// 快钟设备离线时「先读、后标未读」的那次标记就被吞掉（Codex review #348）。原本 manual > seen 的，clamp 后仍要保住先后。
+function clampClientState(client, ts) {
+  const rawSeen = numericMap(client?.seen);
+  const rawManual = numericMap(client?.manual);
+  const seen = clampMap(rawSeen, ts);
+  const manual = clampMap(rawManual, ts);
+  for (const id of Object.keys(manual)) {
+    if (id in seen && rawManual[id] > rawSeen[id] && seen[id] >= manual[id]) seen[id] = manual[id] - 1;
+  }
+  return { seen, manual };
 }
 
 function numericMap(src) {
