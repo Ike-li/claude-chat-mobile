@@ -151,7 +151,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 两级导航取代了平铺 + sticky 分段 chip。入口文案换到作用域轴（「设置与状态」），副标题点名
   // 「会有人专门来找」的四件事——旧文案里「本机提醒」在面板中根本不存在，而设备信任/吊销这个
   // 全站唯一能踢掉丢失手机的地方，四个词零指向。
-  test('P0-28g 侧栏入口文案与 L1 目录：六行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
+  test('P0-28g 侧栏入口文案与 L1 目录：七行可扫，点进去是 L2 页，返回回得来', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await page.locator('#btnSessions').click();
@@ -160,15 +160,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnGeneralSettings').click();
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 
-    // L1：六行目录，且默认就停在目录层（不记住上次翻到哪一页）
+    // L1：七行目录，且默认就停在目录层（不记住上次翻到哪一页）
     await expect(page.locator('[data-testid="general-nav-home"]')).toBeVisible();
-    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(6);
+    await expect(page.locator('#generalNavRows > [data-nav-to]')).toHaveCount(7);
     await expect(page.locator('[data-testid="general-back"]')).toBeHidden();
 
     // 平铺时代的 sticky 分段导航已随两级化退役
     await expect(page.locator('[data-testid="general-section-nav"]')).toHaveCount(0);
 
-    // L1 → L2：标题跟着换，返回键出现，其余五页收起
+    // L1 → L2：标题跟着换，返回键出现，其余六页收起
     await page.locator('[data-testid="general-nav-devices"]').click();
     await expect(page.locator('#generalPage-devices')).toBeVisible();
     await expect(page.locator('#generalPage-notify')).toBeHidden();

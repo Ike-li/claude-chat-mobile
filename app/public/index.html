@@ -1189,6 +1189,45 @@
           </a>
         </div>
       </div>
+
+      <!-- ═══ L2 · ℹ️ 关于（#303）═══
+           许可证与声明原文由 about:get 原样下发，app/about-page.js 只用 textContent 放进 <pre>。
+           静态外壳的整树翻译只在启动时跑一次，那时这几个 <pre> 还是空的，原文碰不到词典。 -->
+      <div id="generalPage-about" class="hidden space-y-4" data-general-page="about">
+        <div class="p-2.5 rounded-xl border border-line bg-surface text-xs space-y-1.5">
+          <div class="flex items-center justify-between gap-2"><span class="text-ink-soft shrink-0">版本</span><span id="aboutVersion" class="text-ink font-mono">—</span></div>
+          <div class="flex items-center justify-between gap-2"><span class="text-ink-soft shrink-0">作者</span><a id="aboutAuthor" target="_blank" rel="noopener noreferrer" class="text-accent truncate">—</a></div>
+          <div class="flex items-center justify-between gap-2"><span class="text-ink-soft shrink-0">仓库</span><a id="aboutRepo" target="_blank" rel="noopener noreferrer" class="text-accent truncate">—</a></div>
+        </div>
+
+        <!-- 只比较、不更新：手机端一键更新等于远程触发「拉代码 → 装依赖 → 重启自己」，失败了手机上救不回来。
+             升级说明指向 getting-started 的「更新」一节，不指 macOS 菜单的「更新桌面端」——那个只用本地源码重编，拿不到新版。 -->
+        <div class="space-y-2">
+          <button id="btnCheckUpdate" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink disabled:opacity-60">检查更新</button>
+          <div id="aboutUpdateResult" class="hidden text-xs px-1 space-y-1" role="status" aria-live="polite"></div>
+          <div class="flex gap-4 text-xs px-1">
+            <a id="aboutReleasesLink" href="https://github.com/Ike-li/claude-chat-mobile/releases" target="_blank" rel="noopener noreferrer" class="text-accent">Releases</a>
+            <a id="aboutUpgradeGuide" href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.md#更新" target="_blank" rel="noopener noreferrer" class="text-accent">升级说明</a>
+          </div>
+        </div>
+
+        <details id="aboutLicense" class="rounded-xl border border-line bg-surface text-xs">
+          <summary class="p-2.5 cursor-pointer font-semibold text-ink">许可证</summary>
+          <pre id="aboutLicenseText" translate="no" class="px-2.5 pb-2.5 whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-ink-soft"></pre>
+        </details>
+
+        <details id="aboutComponents" class="rounded-xl border border-line bg-surface text-xs">
+          <summary class="p-2.5 cursor-pointer font-semibold text-ink">第三方组件与许可</summary>
+          <div class="px-2.5 pb-2.5 space-y-3">
+            <pre id="aboutNoticeText" translate="no" class="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-ink-soft"></pre>
+            <pre id="aboutVendorNoticesText" translate="no" class="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-ink-soft"></pre>
+            <div>
+              <div class="text-ink-soft mb-1">服务端运行时依赖与浏览器端 Socket.IO 客户端</div>
+              <ul id="aboutComponentList" class="space-y-0.5 font-mono text-[10px] text-ink-soft break-all"></ul>
+            </div>
+          </div>
+        </details>
+      </div>
     </div>
   </div>
 

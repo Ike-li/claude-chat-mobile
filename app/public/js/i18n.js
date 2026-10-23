@@ -91,12 +91,16 @@ export const EN_DICT = Object.freeze({
   '先跑这个': 'Start here',
   '⚙ 全部配置 · 端口 / 工作区 / 推送 →': '⚙ All settings · port / workspaces / push →',
   '在下方「已受信任的设备」里核对时，认准这一串就是你手上这台。': 'When checking the trusted device list below, this string identifies the device in your hand.',
-  // L1 目录六行（logic/general-nav.js 算出，非静态文案）
+  // L1 目录七行（logic/general-nav.js 算出，非静态文案）
   '通知': 'Notifications',
   '接入与设备': 'Access & devices',
   '行为与开关': 'Behavior & toggles',
   '排查': 'Troubleshoot',
   '帮助': 'Help',
+  '关于': 'About',
+  '许可证': 'License',
+  '第三方组件': 'Third-party components',
+  '检查更新': 'Check for updates',
   '推送未开启': 'Push off',
   '推送已开': 'Push on',
   '台已信任': 'trusted',
@@ -399,6 +403,17 @@ export const EN_DICT = Object.freeze({
   '清掉缓存后刷新页面；令牌、没发出去的消息和已读记录都保留': 'Clear caches and reload the page. Your token, unsent messages and read state are kept',
   '清空这台设备上保存的一切，包括令牌和没发出去的消息': 'Erase everything stored on this device, including the token and unsent messages',
   '有消息正在发送，稍后再试': 'A message is being sent. Try again in a moment',
+  // 设置「关于」页（#303）。许可证与声明原文不进词典：原样显示，不翻译
+  '作者': 'Author',
+  '仓库': 'Repository',
+  '升级说明': 'Upgrade guide',
+  '第三方组件与许可': 'Third-party components & licenses',
+  '服务端运行时依赖与浏览器端 Socket.IO 客户端': 'Server runtime dependencies and the browser Socket.IO client',
+  '浏览器端': 'browser',
+  '未声明许可': 'no license declared',
+  '有新版 {latest}（当前 {current}）': 'Update available: {latest} · you have {current}',
+  '已是最新（{current}）': 'Up to date: {current}',
+  '本地领先：当前 {current}，GitHub 最新 {latest}': 'Ahead of the latest release: you have {current}, GitHub\'s latest is {latest}',
   '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——
@@ -876,8 +891,16 @@ export const EN_DICT = Object.freeze({
   '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
-  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉':
-    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — restart the service once they\'re back, or remove them from "Workspaces" in the config',
+  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉':
+    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage workspaces"',
+  // 告警行内的三个动作（#301）
+  '管理工作区': 'Manage workspaces',
+  '重新检查': 'Check again',
+  '忽略': 'Dismiss',
+  '检查中…': 'Checking…',
+  '检查失败': 'Check failed',
+  '还有 {n} 个找不到': '{n} still missing',
+  '都找到了': 'All found',
 
   // —— 安全日志段（审计记录 → 人话）——
   '安全日志': 'Security log',
