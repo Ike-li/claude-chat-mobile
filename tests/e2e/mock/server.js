@@ -1674,6 +1674,7 @@ io.on('connection', socket => {
           viewingInstanceId,
           viewingCwd,
           dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
+          foldersReadonly: mockFoldersAddError, // 同真 server：每条 instances 广播都带（验收 O129）
           instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
           defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined, defaultEffortSource: viewingInstanceId === null ? pendingFreshEffortSource() : undefined
@@ -1743,6 +1744,7 @@ io.on('connection', socket => {
             viewingInstanceId: null,
             viewingCwd,
             dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
+            foldersReadonly: mockFoldersAddError, // 同真 server：每条 instances 广播都带（验收 O129）
             instances: mockInstances, service: mockServicePayload(),
             defaultPermissionMode: pendingFreshPermissionOrDefault(),
             defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource() }
@@ -1771,7 +1773,7 @@ io.on('connection', socket => {
     // scratchRoot 恒带（同真 server）：新会话页的「选文件夹」面板靠它发起无文件夹会话
     const dirFields = viewingCwd === MOCK_SCRATCH_ROOT
       ? mockDirFields()
-      : { dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), repoOfWorktree ?? viewingCwd])), scratchRoot: MOCK_SCRATCH_ROOT };
+      : { dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), repoOfWorktree ?? viewingCwd])), scratchRoot: MOCK_SCRATCH_ROOT, foldersReadonly: mockFoldersAddError };
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
@@ -1822,6 +1824,7 @@ io.on('connection', socket => {
         viewingCwd,
         dirs,
         scratchRoot: MOCK_SCRATCH_ROOT,
+        foldersReadonly: mockFoldersAddError,
         instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault(), defaultEffortSource: pendingFreshEffortSource()

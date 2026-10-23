@@ -113,6 +113,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O129（R9 AC-03-02）：P0-PICK-5 只管了抽屉那个入口，新会话页文件夹胶囊打开的面板根页里，「＋ 添加文件夹」仍可点，
+  // 点进家目录才说改不了——同一个功能两个入口两种处理。
+  test('P0-PICK-18 工作区列表来自环境变量的安装：新会话页面板里的「添加文件夹」同样置灰并说清为什么', async ({ page }) => {
+    await sendChatMessage(page, 'test:folders-readonly');
+    await waitForIdle(page);
+    await openPickerFromCompose(page);
+    const add = picker(page).locator('[data-testid="folder-picker-add"] button');
+    await expect(add, '走进去才发现改不了的入口').toBeDisabled();
+    await expect(picker(page).locator('[data-testid="folder-picker-add"]')).toContainText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
+    await expect(picker(page).locator('[data-testid="folder-picker-project"]').first(), '已连接的文件夹照常可选').toBeEnabled();
+    await expectNoBrowserErrors(page);
+  });
+
   // 验收 O41：面板开着时清单变成改不了的（换了安装形态），未连接的目录上「新建文件夹」「在这里开始会话」
   // 都是点了才被拒、前者还会留下空目录（服务端也拒，FOLDER-01）。先说清为什么，两个都不给点。
   test('P0-PICK-17 手机上改不了清单：未连接的目录上不给「新建文件夹」「在这里开始会话」，先说清为什么', async ({ page }) => {
