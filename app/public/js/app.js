@@ -71,8 +71,9 @@ import {
   resolveDeepLinkTarget,
   armedTakeoverStep,
   presentTurnResult,
-  formatServiceNotices,
   formatServiceNoticeRows,
+  undismissedServiceNotices,
+  MISSING_FOLDERS_NOTICE_ID,
   formatHooksBridgeRow,
   formatMcpServers,
   formatPushStatusRow,
@@ -189,6 +190,7 @@ import {
   isLanOrLocalHostname,
   authFailurePath,
   shouldHandshakeOnBoot,
+  localResetConfirm,
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
@@ -224,7 +226,9 @@ import { createNewSessionWorktree } from './app/new-session-worktree.js';
 import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
+import { createAboutPage } from './app/about-page.js';
 import { createEnvConfigPanel } from './app/env-config.js';
+import { createNoticeDismissals } from './app/notice-dismissals.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
@@ -240,6 +244,7 @@ import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
 import { createOutboxInFlight } from './app/outbox-in-flight.js';
+import { createLocalReset } from './app/local-reset.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { createModelIntent } from './app/model-intent.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
@@ -760,6 +765,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
+  // 服务告警的「忽略」（#301）：本机记住忽略到哪个指纹，状态在模块内，此处只持句柄。
+  const noticeDismissals = createNoticeDismissals();
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
   // 用户点过「显示全部会话…」的目录 → 已加载的页数（「加载更多」每点一次加一页，O81）。缓存里的 sessions
   // 是"当下拿到的那一份"，记不住用户要看全量这个意图——而 populateSubtree 每次都会无条件 revalidate，
@@ -787,6 +794,13 @@ import { createGateFocusController } from './app/focus-layers.js';
     isExpanded: cwd => expandedDirs.has(cwd),
     expandDir: cwd => dirSectionNodes.get(cwd)?.expand?.(),
   });
+  // 设置页底部两档（#302）。建在 outbox 之前：persistOutbox 与 pagehide 回写都要先问 isResetting()。
+  // 依赖全是调用时才取（点按钮之前 socket、notifications、续发队列都已建好）。
+  const localReset = createLocalReset({
+    isSending: () => _offlineDrainInFlight || outboxAfterTurn.size() > 0,
+    beforeReset: () => { socket.io.reconnection(false); socket.disconnect(); },
+    unsubscribePush: () => notifications.unsubscribe(),
+  });
   // 发送 outbox（在线 timeout/retryable + 离线共用）：内存队列 + localStorage 耐久。
   // bubbleEl 仅内存；落盘只写可序列化字段（见 dumpDurableOutbox）。PWA 杀进程后靠 clientMessageId 恢复重试。
   let offlineQueue = [];
@@ -796,6 +810,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 取出队列、还没有结论的条目，与 offlineQueue 一起落盘（见 app/outbox-in-flight.js）
   const outboxInFlight = createOutboxInFlight();
   function persistOutbox() {
+    if (localReset.isResetting()) return; // 重置中：内存里的旧队列不许写回刚清空的存储
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue, outboxInFlight.items())); } catch { /* quota */ }
   }
   // 登记即落盘：改投后的那份要在投递（await ack）之前写下去，等 ack 时被刷新，恢复的才是改投后的路由
@@ -838,6 +853,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 复用 markSeen 而不是 markEntered：前者带「当前是手动未读态就跳过」的守卫——用户刚长按标了
   // 「稍后再看」就切后台，不能被这一笔当场清掉（markEntered 会连手动标记一起作废）。
   function markActiveSessionSeen() {
+    if (localReset.isResetting()) return;
     if (displayedSessionId) unread.markSeen(displayedSessionId);
   }
   window.addEventListener('pagehide', () => {
@@ -969,11 +985,11 @@ import { createGateFocusController } from './app/focus-layers.js';
   // result 完成通知——否则 PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），会被误判为
   // "有人在看"而永久吞掉完成通知。fire-and-forget，无需 ack。
   window.addEventListener('pagehide', () => {
-    clientLogger.flush();
+    if (!localReset.isResetting()) clientLogger.flush();
     socket.emit('client:presence', { hidden: true }); // 页面即将冻结前兜底再同步一次，双保险
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') clientLogger.flush();
+    if (document.visibilityState === 'hidden' && !localReset.isResetting()) clientLogger.flush();
     socket.emit('client:presence', { hidden: document.hidden });
   });
   const alerts = createAlertController(appContext);
@@ -1973,7 +1989,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     persisted: opts?.persisted ?? null,
   });
   function reconnectIfNeeded(opts = {}) {
-    if (!reconnectAllowed(opts)) return;
+    if (localReset.isResetting() || !reconnectAllowed(opts)) return;
     clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(() => {
       // 排上之后门可能才关上：拒绝（device_status: denied）赶在这 200ms 之内到达，连接随即被服务端断开——
@@ -2382,7 +2398,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     $, socket, openSheet, closeSheet, appConfirm,
     pickText: (pair) => (getLang() === 'en' ? (pair.en || pair.zh) : pair.zh),
     beforeOpen: () => general.close(), // 先收通用设置，否则它会拦掉本面板上的点击
-    afterClose: () => reopenGeneralAt('behavior'), // 退出＝退回来源页，不是关到首页（同服务状态面板）
+    // 退出＝退回来源页，不是关到首页（同服务状态面板）。从抽屉告警的「管理工作区」进来的（#301）就直接关掉
+    afterClose: from => { if (from !== 'drawer') reopenGeneralAt('behavior'); },
     canRestart: () => _canRestart,
     onSaved: () => {},
   });
@@ -6172,18 +6189,64 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
   // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
   // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
+  // 「N 个文件夹找不到了」那一行带三个动作（#301）：管理工作区（直达工作区列表编辑器）、重新检查（服务端重跑一次
+  // 清单加载，目录回来了不用重启）、忽略（本机按 id + 路径集合记指纹，集合变了重新出现）。服务状态面板是只读的诊断
+  // 清单，照常列出全部告警、不受「忽略」影响。
   function buildServiceSection() {
     const section = el(`<div id="serviceSection"></div>`);
-    const notices = formatServiceNotices({ service: latestServiceHealth, now: Date.now() });
+    const notices = undismissedServiceNotices(
+      formatServiceNoticeRows({ service: latestServiceHealth, now: Date.now() }),
+      noticeDismissals.dismissed(),
+    );
     if (!notices.length) { section.classList.add('hidden'); return section; }
     const wrap = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line flex flex-col gap-0.5"></div>`);
-    for (const line of notices) {
+    for (const notice of notices) {
       const row = el(`<div></div>`);
-      row.textContent = line; // 动态文案，textContent 插值同现有行渲染惯例（CSP 安全）
+      const text = el(`<div></div>`);
+      text.textContent = notice.text; // 动态文案，textContent 插值同现有行渲染惯例（CSP 安全）
+      row.appendChild(text);
+      if (notice.id) row.dataset.noticeId = notice.id;
+      if (notice.id === MISSING_FOLDERS_NOTICE_ID) row.appendChild(missingFoldersActions(notice));
       wrap.appendChild(row);
     }
     section.appendChild(wrap);
     return section;
+  }
+  function missingFoldersActions(notice) {
+    const bar = el(`<div class="flex flex-wrap gap-1.5 pt-1 pb-0.5 font-normal"></div>`);
+    const action = label => {
+      const btn = el(`<button type="button" class="px-2 py-1 rounded-md border border-line text-ink-soft hover:text-ink hover:bg-sunk active:scale-95"></button>`);
+      btn.textContent = label;
+      bar.appendChild(btn);
+      return btn;
+    };
+    action(t('管理工作区')).onclick = () => {
+      haptic('tap');
+      closeLeftSidebar();
+      envConfigPanel.open({ from: 'drawer', focusKey: 'WORKDIRS' });
+    };
+    const recheck = action(t('重新检查'));
+    recheck.onclick = () => {
+      haptic('tap');
+      recheck.disabled = true;
+      recheck.textContent = t('检查中…');
+      // 带 timeout：后端还没重启到带这个事件的版本时没有 ack，不能让按钮一直转着
+      socket.timeout(10_000).emit('folders:recheck', {}, (err, res) => {
+        recheck.disabled = false;
+        recheck.textContent = t('重新检查');
+        if (err || !res?.ok) { drawer.showNotice(t('检查失败')); return; }
+        drawer.showNotice(res.missingFolders > 0 ? t('还有 {n} 个找不到').replace('{n}', String(res.missingFolders)) : t('都找到了'));
+        // 广播会带着同一份结果到；先按回执把这一行改掉，不等它
+        latestServiceHealth = { ...latestServiceHealth, missingFolders: res.missingFolders, missingFolderPaths: res.missingFolderPaths };
+        refreshServiceSection();
+      });
+    };
+    action(t('忽略')).onclick = () => {
+      haptic('tap');
+      noticeDismissals.dismiss(notice);
+      refreshServiceSection();
+    };
+    return bar;
   }
   function refreshServiceSection() {
     const old = sessionPanel.querySelector('#serviceSection');
@@ -6543,6 +6606,24 @@ import { createGateFocusController } from './app/focus-layers.js';
     pre.scrollTop = pre.scrollHeight;
   }
   $('btnServerLog')?.addEventListener('click', () => loadServerLog());
+
+  // 设置页底部两档（#302，见 app/local-reset.js）
+  $('btnReloadApp')?.addEventListener('click', async () => {
+    const res = await localReset.reloadApp();
+    if (res.ok) return;
+    const hint = $('localResetHint');
+    if (!hint) return;
+    hint.textContent = t('有消息正在发送，稍后再试');
+    hint.classList.remove('hidden');
+    setTimeout(() => hint.classList.add('hidden'), 4000);
+  });
+  $('btnResetLocal')?.addEventListener('click', async () => {
+    // 会丢几条按落盘的口径数（dumpDurableOutbox 按 clientMessageId 去重）：离线队列 + 取出了还没结论的
+    const pending = JSON.parse(dumpDurableOutbox(offlineQueue, outboxInFlight.items())).length;
+    const accessPath = authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'access-relogin';
+    const ok = await appConfirm(localResetConfirm({ pending, deadLetters: outboxDeadLetters.count(), accessPath }));
+    if (ok) await localReset.resetLocalData();
+  });
 
   // 接入二维码。三步态：入口 → 二次确认 → 显示（带倒计时自动隐藏）。
   // 自动隐藏的秒数刻意短：够扫、不够让人忘了它还挂在屏幕上。
@@ -6957,6 +7038,15 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 在四分片并行的 E2E 下把一条依赖广播时序的既有用例挤成了 8s 超时，而它拿到的东西广播里本就有。
   let generalVersions = null;
   let generalVersionsInflight = false;
+  // 「关于」页（#303）。版本号用上面这份 generalVersions，不另发请求；检查更新要等服务端打 GitHub，超时由它自己传。
+  const aboutPage = createAboutPage({
+    $,
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    getVersion: () => generalVersions?.server,
+  });
+  aboutPage.bind();
   async function ensureGeneralVersions() {
     if (generalVersions || generalVersionsInflight) return;
     generalVersionsInflight = true;
@@ -6965,13 +7055,14 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (status?.ok === true && status.versions) {
         generalVersions = status.versions;
         generalNav?.render();
+        aboutPage.renderVersion();
       }
     } finally {
       generalVersionsInflight = false;
     }
   }
 
-  // 两级导航：L1 目录 ↔ 6 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
+  // 两级导航：L1 目录 ↔ 7 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
   generalNav = createGeneralNav({
     haptic,
     state: () => ({
@@ -6998,11 +7089,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
+      if (page === 'about') { ensureGeneralVersions(); aboutPage.load(); }
     },
   });
   generalNav.bind();
 
-  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助 六页。
+  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助/关于 七页。
   // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
   general = createSettingsController(appContext, {
     keys: {
@@ -7471,19 +7563,30 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     // 长按文件夹行（#300）→「全部标为已读」。每一节都有（连接根、子文件夹小节、「无文件夹」），也不看
     // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致。
+    // 连接根还多一项「置顶 / 取消置顶」（#305）：有未读时它是次按钮，没有未读时它就是主按钮。也不看
+    // foldersReadonly：置顶存在数据目录，不写配置。
     attachLongPress(toggleBtn, async () => {
       haptic('tap');
       const targets = unreadSessionsForDir(d);
-      if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
-      if (!targets.length) { drawer.showNotice(t('这里没有未读会话')); return; }
-      const ok = await appConfirm({
-        title: baseName(d),
-        body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(targets.length)),
-        okText: t('全部标为已读'),
+      const pinText = projectsState.kindOf(d) === 'connected' ? (projectsState.isPinned(d) ? t('取消置顶') : t('置顶')) : null;
+      const n = targets?.length ?? 0;
+      if (!pinText) {
+        if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
+        if (!n) { drawer.showNotice(t('这里没有未读会话')); return; }
+      }
+      const choice = await appConfirm(n
+        ? { title: baseName(d), body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(n)), okText: t('全部标为已读'), altText: pinText }
+        : { title: baseName(d), body: targets === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话'), okText: pinText });
+      if (!choice) return;
+      if (n && choice !== 'alt') {
+        unread.markAllRead(targets.map(s => s.id));
+        refreshUnreadMarks();
+        return;
+      }
+      // 不做乐观更新：等服务端广播新清单再重画（前端不存置顶状态）
+      socket.timeout(10_000).emit('folders:pin', { root: d, pinned: !projectsState.isPinned(d) }, (err, res) => {
+        if (err || !res?.ok) drawer.showNotice(t('置顶没成功，稍后再试'));
       });
-      if (!ok) return;
-      unread.markAllRead(targets.map(s => s.id));
-      refreshUnreadMarks();
     });
 
     // 物理热区扩大版 "＋" 新建按钮

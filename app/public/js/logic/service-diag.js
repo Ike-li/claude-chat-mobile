@@ -454,12 +454,31 @@ export function formatServiceNoticeRows({ service, now } = {}) {
     notices.push({ text: `${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`, tone: 'warning' });
   }
   // 清单为空也能启动之后（SCOPE-03），「配置了却全找不到」只剩这一行能说出原因。找不到的目录不进抽屉，
-  // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表。
+  // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表；目录回来后点「重新检查」，不必重启（#301）。
+  // 这一类带稳定 id 与路径：抽屉行内有「忽略」，指纹见 serviceNoticeFingerprint。其余几类没有 id，不能忽略。
   const missing = service && service.missingFolders;
   if (Number.isFinite(missing) && missing > 0) {
-    notices.push({ text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉').replace('{n}', String(missing)), tone: 'warning' });
+    notices.push({
+      id: MISSING_FOLDERS_NOTICE_ID,
+      paths: Array.isArray(service.missingFolderPaths) ? service.missingFolderPaths.filter(p => typeof p === 'string') : [],
+      text: t('📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉').replace('{n}', String(missing)),
+      tone: 'warning',
+    });
   }
   return notices;
+}
+
+export const MISSING_FOLDERS_NOTICE_ID = 'missing-folders';
+
+// 「忽略」的指纹：告警 id + 路径集合（排序后），不含文案——切换语言不能让忽略失效，个数相同但换了一个路径
+// （A 回来了、B 丢了）必须当成新告警重新出现。
+export function serviceNoticeFingerprint(row) {
+  return JSON.stringify([row?.id ?? null, [...(row?.paths || [])].sort()]);
+}
+
+// 去掉已忽略的告警。dismissed = { [id]: 指纹 }（本机存的）；指纹对不上（集合变了）照常显示，没有 id 的永远显示。
+export function undismissedServiceNotices(rows, dismissed) {
+  return (rows || []).filter(r => !r.id || !dismissed || dismissed[r.id] !== serviceNoticeFingerprint(r));
 }
 
 // 诊断时间线（镜像/轮次/停止）文案模板：每条事件译成判定过的一句话 + severity，不裸吐 detail

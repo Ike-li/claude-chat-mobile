@@ -54,7 +54,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#customPermGrid')).toContainText('Accept edits');
     await page.keyboard.press('Escape');
 
-    // L1 目录的六行由 JS 渲染（logic/general-nav.js 的 t()），不经 applyI18nToDocument 的整树扫描
+    // L1 目录的七行由 JS 渲染（logic/general-nav.js 的 t()），不经 applyI18nToDocument 的整树扫描
     await openGeneralSettings(page);
     await expect(page.locator('[data-testid="general-nav-help"]')).toContainText('Help');
     await expect(page.locator('[data-testid="general-nav-devices"]')).toContainText('Access & devices');

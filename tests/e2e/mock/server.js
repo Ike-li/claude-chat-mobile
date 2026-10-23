@@ -3,6 +3,7 @@ import { createContentScenarios } from './scenarios/content.js';
 import { createStatusScenarios } from './scenarios/status.js';
 import { createMockTransport } from './transport.js';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 // 审批指纹只此一份规范化实现：app/public/js/canonicalize.js 是 CLAUDE.md 里唯一被指定「前后端共用」
 // 的叶子（模块边界闸的原文豁免项），本 mock 是它的第三个消费者。mock 若自己再写一遍规范化，就正好复制了
 // 本次要消除的那类分歧——而且前端会拿 verifyIntegrity 校验这个 fp，算错等于在每张审批卡上挂一条假的
@@ -276,6 +277,7 @@ const mockServicePayload = () => ({
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
   missingFolders: mockMissingFolders,
+  missingFolderPaths: mockMissingFolderPaths,
   hooksBridge: { state: mockHooksState, off: false },
   statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
 });
@@ -341,6 +343,8 @@ let unpairedToolSessionArmed = false;
 let unpairedToolTurnEndsDuringLoad = false;
 // 下一条离线重放（fromOutbox）回永久拒绝的负 ack（验收 O31）。由 test:arm-outbox-permanent 置起，一次性。
 let outboxPermanentArmed = false;
+// #302：离线重放（fromOutbox）的 ack 先压住，/__release-outbox-acks 才回 ok——让前端停在「重发中」（批处理在途）。null = 不压。
+let outboxAckHold = null;
 // P0-02d14（验收 O31）：'armed' → 下一次连入时按 server 重启处理（实例全部消失、viewing 归 null、startedAt 变）；
 // 之后（'restarted'）离线重放指向不在册的实例，照真 server 的 BE-001 分支回 sysTo + stale 负 ack。
 let outboxRestartStaleArmed = null;
@@ -506,7 +510,30 @@ let mockServiceStartedAtOverride = null;
 let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
+// 设置「关于」页（#303）「检查更新」的结果：newer / same / ahead / fail / hang（不回 ack，走前端超时）。
+// 由 /__set-update-check?status= 注入；默认已是最新。calls 供用例断言「点了真的发了请求」。
+let mockUpdateCheck = 'same';
+let mockUpdateCheckCalls = 0;
 let mockMissingFolders = 0; // 配置了却找不到的文件夹个数（同真 server 的 service.missingFolders），由 __set-connected-folders?missing= 注入
+// #301：找不到的路径（同真 server 的 service.missingFolderPaths）与「磁盘上此刻不在的目录」。真 server 不盯目录本身，
+// 只在加载清单（启动、热加载、重新检查）时重算——所以 __set-gone-folders 只改磁盘态，不广播；重算走 recomputeMockMissing。
+let mockMissingFolderPaths = [];
+let mockGoneFolders = new Set();
+function recomputeMockMissing() {
+  mockMissingFolderPaths = mockWorkdirsList.map(e => e.path).filter(p => mockGoneFolders.has(p));
+  mockMissingFolders = mockMissingFolderPaths.length;
+}
+function broadcastMockInstances() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+}
 const DEFAULT_MOCK_RESTARTS = {
   units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
   recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
@@ -535,16 +562,22 @@ function mockDirs() {
 const MOCK_SCRATCH_ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
 let mockSubProjects = []; // [{ key, root }]：有会话的子文件夹（真 server 扫盘得出），场景显式开启
 let mockScratchSessions = []; // 「无文件夹」项目 session:list 的行（真 server 由各 scratch 目录的会话并成），场景显式开启
+// 文件夹置顶（#305）：同真 server 的 pinned-roots，有序数组、最后置顶的在最前。mockPinFail 让 folders:pin 回失败 ack
+let mockPinnedRoots = [];
+let mockPinFail = false;
 function mockDirFields() {
   const dirs = mockDirs();
-  const projects = [];
-  for (const d of dirs) {
+  // 同真 server composeProjects：先按根组块（根 + 它的子文件夹），只对块排序，「无文件夹」垫底
+  const blocks = dirs.map(d => {
     const name = d.split('/').pop() || d;
-    projects.push({ key: d, root: d, label: name, kind: 'connected' });
+    const block = [{ key: d, root: d, label: name, kind: 'connected', ...(mockPinnedRoots.includes(d) ? { pinned: true } : {}) }];
     for (const sub of mockSubProjects) {
-      if (sub.root === d) projects.push({ key: sub.key, root: d, label: `${name} › ${sub.key.slice(d.length + 1)}`, kind: 'subfolder' });
+      if (sub.root === d) block.push({ key: sub.key, root: d, label: `${name} › ${sub.key.slice(d.length + 1)}`, kind: 'subfolder' });
     }
-  }
+    return block;
+  });
+  const rank = d => (mockPinnedRoots.includes(d) ? mockPinnedRoots.indexOf(d) : mockPinnedRoots.length);
+  const projects = blocks.sort((a, b) => rank(a[0].key) - rank(b[0].key)).flat();
   // 「无文件夹」只在用着时占一节（同真 server：有实例开在里面，或正停在它的新会话页上）
   if (mockInstances.some(i => i.projectKey === MOCK_SCRATCH_ROOT) || (!viewingInstanceId && pendingFreshCwd === MOCK_SCRATCH_ROOT)) {
     projects.push({ key: MOCK_SCRATCH_ROOT, root: MOCK_SCRATCH_ROOT, label: null, kind: 'scratch' });
@@ -600,12 +633,18 @@ function resetMockState() {
   mockScratchSessions = [];
   mockFolderTree = createMockFolderTree();
   mockAddedFolders = [];
+  mockPinnedRoots = [];
+  mockPinFail = false;
   mockFoldersAddError = null;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
   mockClientError = null;
   mockMissingFolders = 0;
+  mockUpdateCheck = 'same';
+  mockUpdateCheckCalls = 0;
+  mockMissingFolderPaths = [];
+  mockGoneFolders = new Set();
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
   mockDevRestartDeny = false;
@@ -695,6 +734,7 @@ function resetMockState() {
   unpairedToolSessionArmed = false;
   unpairedToolTurnEndsDuringLoad = false;
   outboxPermanentArmed = false;
+  outboxAckHold = null;
   outboxRestartStaleArmed = null;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
@@ -1015,6 +1055,18 @@ app.post('/__arm-untitled-session', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+// #302：压住 / 放行离线重放的 ack（见 outboxAckHold）。放行只回 ok，不补回显：用例只看「收到了、没丢」。
+app.post('/__hold-outbox-acks', (_req, res) => {
+  outboxAckHold = [];
+  res.json({ ok: true });
+});
+app.post('/__release-outbox-acks', (_req, res) => {
+  const held = outboxAckHold || [];
+  outboxAckHold = null;
+  for (const release of held) release();
+  res.json({ ok: true, released: held.length });
+});
+
 // O66：结束 test:arm-outbox-turns 挂住的那一轮（result + turnRunning:false 的 instances 广播）。
 app.post('/__outbox-turn-end', (_req, res) => {
   const open = outboxTurnOpen;
@@ -1035,6 +1087,11 @@ app.post('/__outbox-turn-end', (_req, res) => {
   res.json({ ok: true, ended: Boolean(inst) });
 });
 app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
+app.post('/__set-update-check', (req, res) => {
+  mockUpdateCheck = String(req.query.status || 'same');
+  res.json({ ok: true, status: mockUpdateCheck });
+});
+app.get('/__update-check-calls', (_req, res) => res.json({ calls: mockUpdateCheckCalls }));
 // O87：推一帧带 devMode:true 的 instances，让「⚙ 服务与配置」里的「重启服务」按钮出现。canRestart=0 模拟
 // 前台 npm start（拉不起来）；deny=1 让 dev:restart 回 ok:false，而广播仍说能重启。
 app.post('/__dev-mode', (req, res) => {
@@ -1052,6 +1109,16 @@ app.post('/__dev-mode', (req, res) => {
     },
   });
   res.json({ ok: true });
+});
+
+// #301：磁盘上此刻不在的目录（逗号分隔；缺的会补进工作区列表，让编辑器里看得见它们）。apply=1 模拟「启动时就不在」：
+// 当场重算并广播；不带 apply 只改磁盘态——真 server 察觉不到目录回来或丢了，要等「重新检查」或改配置。
+app.post('/__set-gone-folders', (req, res) => {
+  const paths = typeof req.query?.paths === 'string' && req.query.paths ? req.query.paths.split(',') : [];
+  mockGoneFolders = new Set(paths);
+  for (const p of paths) if (!mockWorkdirsList.some(e => e.path === p)) mockWorkdirsList.push({ path: p });
+  if (req.query?.apply === '1') { recomputeMockMissing(); broadcastMockInstances(); }
+  res.json({ ok: true, missing: mockMissingFolderPaths });
 });
 
 // 中途换成「手机上改不了清单」的安装形态。真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了），
@@ -1121,6 +1188,12 @@ function disconnectMockFolder(path) {
   });
   return null;
 }
+
+// #305：folders:pin 一律回失败 ack（界面上不得出现假置顶）
+app.post('/__folder-pin-fail', (_req, res) => {
+  mockPinFail = true;
+  res.json({ ok: true });
+});
 
 // P0-PROJ-6c：另一台设备断开文件夹，而这一页正断着线（发不了 folders:remove）。
 app.post('/__disconnect-folder', (req, res) => {
@@ -3174,12 +3247,33 @@ io.on('connection', socket => {
     });
     ack({ ok: true, dirs: mockDirs() });
   });
+  // 告警里的「重新检查」（#301，同真 server 的 folders:recheck）：按此刻的磁盘态重算找不到的、广播、回执带结果。
+  socket.on('folders:recheck', (_payload, ack) => {
+    recomputeMockMissing();
+    broadcastMockInstances();
+    if (typeof ack === 'function') ack({ ok: true, missingFolders: mockMissingFolders, missingFolderPaths: mockMissingFolderPaths });
+  });
+
   // 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
   // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
   socket.on('folders:remove', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const error = disconnectMockFolder(payload?.path);
     ack(error ? { ok: false, error } : { ok: true, dirs: mockDirs() });
+  });
+  socket.on('folders:pin', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const root = payload?.root;
+    if (mockPinFail || typeof root !== 'string' || !mockDirs().includes(root)) return ack({ ok: false, error: 'invalid_root' });
+    mockPinnedRoots = payload.pinned === true ? [root, ...mockPinnedRoots.filter(r => r !== root)] : mockPinnedRoots.filter(r => r !== root);
+    const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId,
+        viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
+        ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+    });
+    ack({ ok: true });
   });
   socket.on('folders:mkdir', (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -3268,6 +3362,8 @@ io.on('connection', socket => {
         });
       }
       mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
+      // 同真 server 的 WORKDIRS 热加载：重算找不到的并广播（删掉缺失项并保存后告警随之消失，#301）
+      if (mockGoneFolders.size) { recomputeMockMissing(); broadcastMockInstances(); }
     }
     // restartRequired 按 key 分档，不能恒 true：WORKDIRS 在 schema 里标着 reload:'hot'（全表唯一），
     // 改它即时生效，提示重启会诱导用户白白中断所有会话与后台任务。mock 不能 import app/src
@@ -3286,6 +3382,7 @@ io.on('connection', socket => {
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
       missingFolders: mockMissingFolders,
+      missingFolderPaths: mockMissingFolderPaths,
       // 「重启记录」段夹具：默认给一条例行的（每天一次的 DHCP 漂移重启，**不标黄**）。
       // 默认不给 flapping 样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
       // flapping 那条路径由 test:service-flapping 场景注入 —— 否则 alert→text-warning 这个映射
@@ -3296,6 +3393,37 @@ io.on('connection', socket => {
       statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
+    });
+  });
+
+  // 设置「关于」页（#303）。许可证与声明读仓库里的真文件（不是 app/src，不违反「零 import」）：
+  // 用例据此断言页面显示的是原文本身。组件清单给三条代表：服务端直接依赖、Anthropic 专有的 SDK、浏览器端客户端。
+  socket.on('about:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const repoFile = rel => readFileSync(new URL(`../../../${rel}`, import.meta.url), 'utf8');
+    ack({
+      ok: true,
+      author: { name: 'Ike-li', url: 'https://github.com/Ike-li' },
+      repository: 'https://github.com/Ike-li/claude-chat-mobile',
+      license: repoFile('LICENSE'),
+      notice: repoFile('NOTICE'),
+      thirdPartyNotices: repoFile('app/public/vendor/THIRD-PARTY-NOTICES.md'),
+      components: [
+        { name: '@anthropic-ai/claude-agent-sdk', version: '0.3.201-mock', license: 'SEE LICENSE IN README.md', scope: 'server' },
+        { name: 'express', version: '5.1.0', license: 'MIT', scope: 'server' },
+        { name: 'socket.io-client', version: '4.8.4', license: 'MIT', scope: 'browser' },
+      ],
+    });
+  });
+  socket.on('about:checkUpdate', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockUpdateCheckCalls += 1;
+    if (mockUpdateCheck === 'hang') return;
+    if (mockUpdateCheck === 'fail') { ack({ ok: false, error: 'check_failed' }); return; }
+    const latest = { newer: '1.3.0', same: '1.2.1-mock', ahead: '1.2.0' }[mockUpdateCheck];
+    ack({
+      ok: true, status: mockUpdateCheck, current: '1.2.1-mock', latest,
+      releaseUrl: `https://github.com/Ike-li/claude-chat-mobile/releases/tag/v${latest}`,
     });
   });
 
@@ -6088,6 +6216,10 @@ io.on('connection', socket => {
       || mockInstances.find(i => i.instanceId === viewingInstanceId);
     if (payload?.fromOutbox === true) {
       mockOutboxReceived.push({ text: payload.text, instanceId: payload.instanceId ?? null, viewing: viewingInstanceId, refused: gateInst?.turnRunning === true });
+    }
+    if (outboxAckHold && payload?.fromOutbox === true) {
+      outboxAckHold.push(() => { if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' }); });
+      return;
     }
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');
