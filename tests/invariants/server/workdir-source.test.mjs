@@ -7,7 +7,9 @@
 //   · 热加载时显式清空即生效，而「有条目但一个都解析不出」仍保留原清单（编辑器写到一半、外置盘临时掉线）；
 //     原清单已经是空的时没有什么可保留，照常应用，找不到的进服务告警；
 //   · 外置清单文件（WORK_DIRS_FILE）读不出来是配置坏了：拒绝启动并点名那个文件，不当成「还没连」；
-//   · 正在看的文件夹被移出清单且它是最后一个时，不带参数的新会话页回落到「无文件夹」，不是 undefined。
+//   · 正在看的文件夹被移出清单且它是最后一个时，不带参数的新会话页回落到「无文件夹」，不是 undefined；
+//   · 「重新检查」（folders:recheck，#301）：目录回来后不重启也能重算找不到的个数与路径并广播；
+//     找不到的路径只走鉴权通道（instances 广播、service:status），不带令牌连不上、什么都收不到。
 // 不测什么 + 为什么：① 部分目录无效时的 warn-skip 归 tests/unit/workdirs.test.mjs ② WORK_DIR 折叠的纯函数契约同上
 //   ③ 前端的零文件夹引导属 S3
 // 槽位：S2（真 app/server.js 子进程 + 假 CLI；HOME / 配置文件 / 数据目录都在一次性目录里）
@@ -83,6 +85,7 @@ async function start(config) {
   });
   const handle = {
     configPath,
+    port: server.port,
     output: () => output,
     latest: () => events.filter(e => e.type === 'instances').pop()?.payload,
     instances: () => waitFor(() => handle.latest(), 'instances 广播'),
@@ -234,4 +237,45 @@ test('正在看的文件夹被移出清单且它是最后一个：不带参数�
   assert.equal(res?.ok, true, `新会话页被拒：${JSON.stringify(res)}`);
   await waitFor(() => s.latest()?.viewingCwd === scratchRoot, '新会话页回落到「无文件夹」');
   assert.ok(existsSync(scratchRoot), 'scratch 根没建——scout 会在一个不存在的目录里起');
+});
+
+// #301：热加载监听的是配置文件，不看目录本身在不在——外置盘挂回来，服务端察觉不到，告警里只能写「恢复后重启服务」。
+// 「重新检查」让服务端重跑一次清单加载：回来的目录进清单，找不到的个数与路径重算并广播。
+test('重新检查：缺失的目录回来后计数减一、进清单并广播，不用重启服务', async () => {
+  const a = join(home, 'code', 'recheck-a');
+  const b = join(home, 'code', 'recheck-b');
+  const c = join(home, 'code', 'recheck-c');
+  mkdirSync(a, { recursive: true });
+  const s = await start({ WORKDIRS: [a, b, c] });
+  const inst = await s.instances();
+  assert.equal(inst.service?.missingFolders, 2);
+  assert.deepEqual(inst.service?.missingFolderPaths, [b, c], '找不到的路径要随广播下发（前端按路径集合记「忽略」）');
+
+  mkdirSync(b);
+  const res = await s.emit('folders:recheck', {});
+  assert.equal(res?.ok, true, JSON.stringify(res));
+  assert.equal(res.missingFolders, 1, '目录回来了，重新检查却没重算——还得重启服务');
+  assert.deepEqual(res.missingFolderPaths, [c]);
+  await waitFor(() => s.latest()?.service?.missingFolders === 1, '重算后的个数随 instances 广播下发');
+  assert.ok(s.latest().dirs.includes(b), `回来的目录没进清单：${JSON.stringify(s.latest().dirs)}`);
+  const status = await s.emit('service:status', {});
+  assert.deepEqual(status.missingFolderPaths, [c], '服务状态面板那条读路径与广播得是同一份');
+});
+
+test('找不到的路径只走鉴权通道：不带令牌握手失败，一条广播都收不到', async () => {
+  const s = await start({ WORKDIRS: [join(home, 'code', 'gone-private')] });
+  assert.deepEqual((await s.instances()).service?.missingFolderPaths, [join(home, 'code', 'gone-private')], '前提：鉴权通道上有这份数据');
+  const events = [];
+  const outcome = await new Promise(resolve => {
+    const c = ioClient(`http://127.0.0.1:${s.port}`, {
+      auth: { token: 'wrong-token', deviceToken: 'inv-scope03-anon' },
+      transports: ['websocket'], reconnection: false, timeout: 4000, extraHeaders: { Host: 'localhost' },
+    });
+    c.on('agent:event', e => events.push(e));
+    c.on('connect', () => { c.close(); resolve('connected'); });
+    c.on('connect_error', () => { c.close(); resolve('rejected'); });
+    setTimeout(() => { c.close(); resolve('timeout'); }, 5000);
+  });
+  assert.equal(outcome, 'rejected', '错误令牌竟然连上了');
+  assert.deepEqual(events, []);
 });

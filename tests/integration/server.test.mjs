@@ -641,7 +641,9 @@ const ACK_SHAPES = [
   // 这里是唯一咬得住的地方——E2E 打的是 mock，删掉真 server 的字段那边照样全绿（2026-09-07 实证）。
   // missingFolders 同理：抽屉吃 instances 广播里的那份，面板吃这条 ack，少了它两处对同一件事说法不一。
   { event: 'service:status', payload: () => ({}),
-    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders'] },
+    required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders', 'missingFolderPaths'] },
+  // #301 告警里的「重新检查」：前端拿回执里的个数当场说「还有 N 个找不到」，路径用来刷新「忽略」的指纹
+  { event: 'folders:recheck', payload: () => ({}), required: ['ok', 'missingFolders', 'missingFolderPaths'] },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },

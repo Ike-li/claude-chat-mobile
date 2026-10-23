@@ -367,7 +367,7 @@ function applyWorkdirs(source) {
   const { dirs, limits, warnings: rw, missing } = resolveWorkdirs(source.entries);
   workDirs = dirs;
   sessionLimitByDir = limits;
-  workdirStatus.setMissing(missing.length);
+  workdirStatus.setMissing(missing);
   return [...source.warnings, ...rw];
 }
 // 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
@@ -1311,8 +1311,10 @@ function computeServiceHealth() {
       : null,
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
     // 配置里有、却找不到的文件夹个数（被删、改名、外置盘没挂上）。清单为空也能启动之后（SCOPE-03），
-    // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。只给个数，路径不出网。
+    // 「全部找不到」不再以拒绝启动示警——手机上只会看到一片空，原因得在这里说出来。
     missingFolders: workdirStatus.missing(),
+    // 找不到的路径（#301）：告警的「忽略」按路径集合记指纹，A 回来了、B 丢了要重新出现。这份载荷只发 approved 房间。
+    missingFolderPaths: workdirStatus.missingPaths(),
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     // unreadable：读不出时是哪个文件，面板据此点名（验收 AC-16-12）
@@ -4382,6 +4384,11 @@ registerSocketConnection(io, socket => {
     // readonly：手机上改不了清单时，新建只剩已连接的文件夹里（之外建出来的加不进清单，只会留一个空目录）
     folderContext: () => ({ home: homedir(), forbidden: [...FORBIDDEN_ROOTS, SCRATCH_ROOT], connected: workDirs, readonly: workdirStatus.readonlyReason() }),
     addConnectedFolder,
+    // 告警里的「重新检查」（#301）：热加载只盯配置文件，目录本身回没回来服务端察觉不到，这里手动重跑一次
+    recheckFolders: () => {
+      reloadWorkdirs();
+      return { ok: true, missingFolders: workdirStatus.missing(), missingFolderPaths: workdirStatus.missingPaths() };
+    },
     removeConnectedFolder,
     audit,
     actorFromSocket,
@@ -4790,6 +4797,7 @@ registerSocketConnection(io, socket => {
       // 与「服务状态」面板对同一次限速锁定会显示不一致的措辞（见 app.js renderServiceStatus）。
       proxyFronted: health.proxyFronted,
       missingFolders: health.missingFolders, // 同上：抽屉与面板对「配置的文件夹找不到」得是同一句话
+      missingFolderPaths: health.missingFolderPaths,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       statuslineBridge: health.statuslineBridge, // 面板「终端状态栏」段：同上，此前整段没有下发面
       // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。

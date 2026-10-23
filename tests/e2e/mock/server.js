@@ -268,6 +268,7 @@ const mockServicePayload = () => ({
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
   missingFolders: mockMissingFolders,
+  missingFolderPaths: mockMissingFolderPaths,
   hooksBridge: { state: mockHooksState, off: false },
   statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
 });
@@ -499,6 +500,25 @@ let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
 let mockMissingFolders = 0; // 配置了却找不到的文件夹个数（同真 server 的 service.missingFolders），由 __set-connected-folders?missing= 注入
+// #301：找不到的路径（同真 server 的 service.missingFolderPaths）与「磁盘上此刻不在的目录」。真 server 不盯目录本身，
+// 只在加载清单（启动、热加载、重新检查）时重算——所以 __set-gone-folders 只改磁盘态，不广播；重算走 recomputeMockMissing。
+let mockMissingFolderPaths = [];
+let mockGoneFolders = new Set();
+function recomputeMockMissing() {
+  mockMissingFolderPaths = mockWorkdirsList.map(e => e.path).filter(p => mockGoneFolders.has(p));
+  mockMissingFolders = mockMissingFolderPaths.length;
+}
+function broadcastMockInstances() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+}
 const DEFAULT_MOCK_RESTARTS = {
   units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
   recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
@@ -598,6 +618,8 @@ function resetMockState() {
   mockRateLimitLockout = null;
   mockClientError = null;
   mockMissingFolders = 0;
+  mockMissingFolderPaths = [];
+  mockGoneFolders = new Set();
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
   mockDevRestartDeny = false;
@@ -1025,6 +1047,16 @@ app.post('/__dev-mode', (req, res) => {
     },
   });
   res.json({ ok: true });
+});
+
+// #301：磁盘上此刻不在的目录（逗号分隔；缺的会补进工作区列表，让编辑器里看得见它们）。apply=1 模拟「启动时就不在」：
+// 当场重算并广播；不带 apply 只改磁盘态——真 server 察觉不到目录回来或丢了，要等「重新检查」或改配置。
+app.post('/__set-gone-folders', (req, res) => {
+  const paths = typeof req.query?.paths === 'string' && req.query.paths ? req.query.paths.split(',') : [];
+  mockGoneFolders = new Set(paths);
+  for (const p of paths) if (!mockWorkdirsList.some(e => e.path === p)) mockWorkdirsList.push({ path: p });
+  if (req.query?.apply === '1') { recomputeMockMissing(); broadcastMockInstances(); }
+  res.json({ ok: true, missing: mockMissingFolderPaths });
 });
 
 // 中途换成「手机上改不了清单」的安装形态。真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了），
@@ -3155,6 +3187,13 @@ io.on('connection', socket => {
     });
     ack({ ok: true, dirs: mockDirs() });
   });
+  // 告警里的「重新检查」（#301，同真 server 的 folders:recheck）：按此刻的磁盘态重算找不到的、广播、回执带结果。
+  socket.on('folders:recheck', (_payload, ack) => {
+    recomputeMockMissing();
+    broadcastMockInstances();
+    if (typeof ack === 'function') ack({ ok: true, missingFolders: mockMissingFolders, missingFolderPaths: mockMissingFolderPaths });
+  });
+
   // 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
   // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
   socket.on('folders:remove', (payload, ack) => {
@@ -3249,6 +3288,8 @@ io.on('connection', socket => {
         });
       }
       mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
+      // 同真 server 的 WORKDIRS 热加载：重算找不到的并广播（删掉缺失项并保存后告警随之消失，#301）
+      if (mockGoneFolders.size) { recomputeMockMissing(); broadcastMockInstances(); }
     }
     // restartRequired 按 key 分档，不能恒 true：WORKDIRS 在 schema 里标着 reload:'hot'（全表唯一），
     // 改它即时生效，提示重启会诱导用户白白中断所有会话与后台任务。mock 不能 import app/src
@@ -3267,6 +3308,7 @@ io.on('connection', socket => {
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
       missingFolders: mockMissingFolders,
+      missingFolderPaths: mockMissingFolderPaths,
       // 「重启记录」段夹具：默认给一条例行的（每天一次的 DHCP 漂移重启，**不标黄**）。
       // 默认不给 flapping 样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
       // flapping 那条路径由 test:service-flapping 场景注入 —— 否则 alert→text-warning 这个映射

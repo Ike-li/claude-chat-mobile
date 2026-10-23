@@ -858,8 +858,16 @@ export const EN_DICT = Object.freeze({
   '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
-  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉':
-    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — restart the service once they\'re back, or remove them from "Workspaces" in the config',
+  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉':
+    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage workspaces"',
+  // 告警行内的三个动作（#301）
+  '管理工作区': 'Manage workspaces',
+  '重新检查': 'Check again',
+  '忽略': 'Dismiss',
+  '检查中…': 'Checking…',
+  '检查失败': 'Check failed',
+  '还有 {n} 个找不到': '{n} still missing',
+  '都找到了': 'All found',
 
   // —— 安全日志段（审计记录 → 人话）——
   '安全日志': 'Security log',
