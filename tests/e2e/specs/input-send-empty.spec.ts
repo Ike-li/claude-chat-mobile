@@ -505,6 +505,39 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 同上，但排着的那条还没等到本轮结束，页面就被刷新了（手机上切走被系统回收标签页是常态）。批处理一开始就把整批移出了
+  // 持久化队列，排队的条目只活在内存里：刷新之后它既不续发、也没有「重发」，这条话就没了。
+  test('P0-02d18 排着的离线条目没等到本轮结束页面就刷新了：刷新后照样续发，不丢', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await sendChatMessage(page, 'test:arm-outbox-turns');
+    await waitForIdle(page);
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线问一', '离线问二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const received = async () => (await (await page.request.get('/__outbox-received')).json()) as Array<{ text: string; refused: boolean }>;
+    const sentOf = async (text: string) => (await received()).filter(m => m.text === text);
+    await expect(page.locator('[data-testid="assistant-message"]').filter({ hasText: '答：离线问一' })).toBeVisible();
+    await expect(page.locator('[data-testid="user-message"].opacity-70'), '前提：第 2 条撞上第 1 条那一轮，在排队').toContainText('本轮结束后自动发送');
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await page.request.post('/__outbox-turn-end');
+    await expect.poll(async () => (await sentOf('离线问二')).some(m => !m.refused), '刷新前排着的第 2 条，本轮结束后应被送达').toBe(true);
+    expect((await sentOf('离线问一')).length, '刷新前已经送达的第 1 条不该再留在盘上、刷新后又被投一遍').toBe(1);
+    await page.request.post('/__outbox-turn-end');
+    await expectNoBrowserErrors(page);
+  });
+
   // 同上，但第 1 条那一轮被用户按了停止：停止 = 不想接着跑，排着的不再自动发（终端里中断后排着的话也不会自己发出去），
   // 退回手动「重发」；手动点了照样送达，问答顺序照样对。
   test('P0-02d10 排着的离线条目：按了停止就不再自动续发，退回手动「重发」', async ({ page }) => {

@@ -205,10 +205,13 @@ export function parseDurableOutbox(raw) {
   return out;
 }
 
-export function dumpDurableOutbox(queue) {
-  const items = (Array.isArray(queue) ? queue : [])
+// inFlight：已经取出队列、还没有结论的条目（见 app/outbox-in-flight.js），一并落盘。
+// 同 clientMessageId 只落一行，队列里那份优先（重新入队时可能已被改投）。
+export function dumpDurableOutbox(queue, inFlight = []) {
+  const seen = new Set();
+  const items = [...(Array.isArray(queue) ? queue : []), ...(Array.isArray(inFlight) ? inFlight : [])]
     .map(serializeOutboxItem)
-    .filter(Boolean);
+    .filter(row => row && !seen.has(row.clientMessageId) && seen.add(row.clientMessageId));
   return JSON.stringify(items);
 }
 
