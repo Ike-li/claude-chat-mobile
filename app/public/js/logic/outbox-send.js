@@ -373,10 +373,11 @@ export function outboxDeadLetterHead({ stale = false, message = '' } = {}) {
   return `⚠️ ${t('离线时发的一条消息没有发出：')}${reason}`;
 }
 
-// 死信暂存里交还不了的条目：只有实例号、没有会话号（升级前入队）。实例号在 server 重启后不复用（MSG-02），
-// 按会话、按实例号都认不出它；两样都没有的是新会话页发的，按目录还能交还（outboxItemTargetsViewing）。
-export function isUnreturnableDeadLetter(item) {
-  return !(typeof item?.sessionId === 'string' && item.sessionId) && item?.instanceId != null;
+// 死信暂存里交还不了的条目：判了 stale（点名的实例已不在）、又只有实例号没有会话号（升级前入队）。实例号在 server
+// 重启后不复用（MSG-02），按会话、按实例号都认不出它。只有实例号但不是 stale 的不算：新会话还没拿到会话号时被拒，
+// 那个实例还活着、回去还认得（PR #339 review）；两样都没有的是新会话页发的，按目录还能交还（outboxItemTargetsViewing）。
+export function isUnreturnableDeadLetter({ stale = false, sessionId = null, instanceId = null } = {}) {
+  return stale === true && !(typeof sessionId === 'string' && sessionId) && instanceId != null;
 }
 
 // 清屏时一颗离线条目的未确认气泡要不要保住（app.js 的 clearView）。上面 'bar' 那一档在同一会话的清屏重载里会落空：

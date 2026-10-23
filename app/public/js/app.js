@@ -1626,8 +1626,10 @@ import { createGateFocusController } from './app/focus-layers.js';
               const parkedText = outboxParkedNotice({ viewingInstanceId, stale: decision.stale, message: decision.message, sessionId: planned.sessionId, text: planned.text });
               // 交还不了的（升级前入队）：眼前没有会话时上面已把原文写出来，不再暂存；正在看某个会话时暂存，由这个视图落定时的
               // deliverOutboxDeadLetters 交出来——不当场写，是因为首次 bindView 还没走完，写进去的会被它清掉（验收 O135）
-              const unreturnable = isUnreturnableDeadLetter(planned);
-              if (!(unreturnable && parkedText)) outboxDeadLetters.park(planned, unreturnable ? outboxDeadLetterHead({ stale: decision.stale, message: decision.message }) : permanentMsg);
+              const unreturnable = isUnreturnableDeadLetter({ stale: decision.stale, sessionId: planned.sessionId, instanceId: planned.instanceId });
+              if (!(unreturnable && parkedText)) {
+                outboxDeadLetters.park(planned, unreturnable ? outboxDeadLetterHead({ stale: decision.stale, message: decision.message }) : permanentMsg, { unreturnable });
+              }
               if (parkedText) addOutboxParkedBar(parkedText, planned);
             }
           }

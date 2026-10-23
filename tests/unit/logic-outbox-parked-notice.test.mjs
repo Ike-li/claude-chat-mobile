@@ -1,7 +1,7 @@
 // 验收 O126：离线重放被永久拒收、原文进了死信暂存时，眼前该不该说一句、说什么。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { outboxParkedNotice, presentOfflineResendAck } from '../../app/public/js/logic.js';
+import { isUnreturnableDeadLetter, outboxParkedNotice, presentOfflineResendAck } from '../../app/public/js/logic.js';
 
 test('眼前没有会话（server 重启后的提示页、首页）：说清楚没发出去、原文还在、去哪儿拿', () => {
   const text = outboxParkedNotice({ viewingInstanceId: null, stale: true, message: '目标会话已关闭，请刷新后重发', sessionId: 's1' });
@@ -37,4 +37,11 @@ test('带会话号的照常许诺交还，不把原文铺在提示里（回去�
 test('离线重放的 stale 决策带上 stale 标记，提示才分得清是哪种拒收', () => {
   assert.equal(presentOfflineResendAck(null, { ok: false, error: 'stale_instance', stale: true }).stale, true);
   assert.notEqual(presentOfflineResendAck(null, { ok: false, error: 'x', permanent: true }).stale, true);
+});
+
+test('死信算不算「回不去」：判了 stale、没有会话号、只剩实例号才算（验收 O135 / PR #339 review）', () => {
+  assert.equal(isUnreturnableDeadLetter({ stale: true, instanceId: 'inst_9', sessionId: null }), true);
+  assert.equal(isUnreturnableDeadLetter({ stale: false, instanceId: 'inst_1', sessionId: null }), false, '实例还活着，非 stale 的拒收之后还能回去');
+  assert.equal(isUnreturnableDeadLetter({ stale: true, instanceId: 'inst_9', sessionId: 's1' }), false, '有会话号，回到该会话时交还');
+  assert.equal(isUnreturnableDeadLetter({ stale: true, instanceId: null, sessionId: null }), false, '新会话页发的，按目录交还');
 });
