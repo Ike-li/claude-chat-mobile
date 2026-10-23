@@ -8842,36 +8842,19 @@ import { createGateFocusController } from './app/focus-layers.js';
     else setTimeout(fn, 0);
   }
 
-  // 长按气泡：550ms 触发，touchmove>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
-  // 按气泡归属分流——user → 文件轴 Rewind，assistant → 对话轴 fork，见 setTimeout 里的说明。
-  // 绑定前提是气泡带 dataset.uuid。2026-09-10 起 live 气泡也带（服务端随 user_message 下发 uuid），
+  // 长按气泡：550ms 触发，位移>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
+  // 按气泡归属分流——user → 文件轴 Rewind，assistant → 对话轴 fork，见 requestSessionFork。
+  // 绑定前提是气泡带 dataset.uuid。2026-09-10 起 live 的 user 气泡也带（服务端随 user_message 下发 uuid），
   // 所以「刚发完就想回退」不再需要先刷新页面。
+  // 手势走 long-press.js 的 touchOnly（O136）：此前只听 touch 事件，Android 长按文字时系统先接管选字、
+  // touchcancel 撤掉计时，真机上什么都不弹；现在也认之后那个 contextmenu。代价是触屏长按气泡不再
+  // 出系统选字，复制靠操作栏「复制」。鼠标拖选与桌面右键菜单原样留给浏览器。
+  //
+  // 【2026-09-20 撤掉 user 气泡上的二选一】原来长按 user 气泡会弹「回退 / 分叉」确认框，
+  // 回退现在走 /rewind 斜杠命令（对齐终端的两步交互，见 app/rewind-command.js）——
+  // 长按是隐藏手势、发现不了，而回退在终端里本来就有名字。
   function bindBubbleLongPress(bubble, role) {
-    let timer = null, sx = 0, sy = 0, moved = false;
-    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    bubble.addEventListener('touchstart', ev => {
-      const touch = ev.touches?.[0];
-      if (!touch) return;
-      sx = touch.clientX; sy = touch.clientY; moved = false;
-      cancel();
-      timer = setTimeout(() => {
-        timer = null;
-        if (moved) return;
-        // 长按只剩「从这里分叉」这一个动作。
-        // 【2026-09-20 撤掉 user 气泡上的二选一】原来长按 user 气泡会弹「回退 / 分叉」确认框，
-        // 回退现在走 /rewind 斜杠命令（对齐终端的两步交互，见 app/rewind-command.js）——
-        // 长按是隐藏手势、发现不了，而回退在终端里本来就有名字。
-        requestSessionFork(bubble, role);
-      }, 550);
-    }, { passive: true });
-    bubble.addEventListener('touchmove', ev => {
-      if (!timer) return;
-      const touch = ev.touches?.[0];
-      if (!touch) return;
-      if (Math.abs(touch.clientX - sx) > 8 || Math.abs(touch.clientY - sy) > 8) { moved = true; cancel(); }
-    }, { passive: true });
-    bubble.addEventListener('touchend', cancel, { passive: true });
-    bubble.addEventListener('touchcancel', cancel, { passive: true });
+    attachLongPress(bubble, () => requestSessionFork(bubble, role), { holdMs: 550, moveTolerance: 8, touchOnly: true });
   }
 
   // 沿 DOM 序回溯找最近一条主链 assistant 气泡的 uuid（工具卡/思考块/子agent卡都没有 dataset.uuid，天然跳过）。
@@ -9808,7 +9791,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
     // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
-    // 且 bindBubbleLongPress 只绑 touch 事件，桌面鼠标按不出来。
+    // 且 bindBubbleLongPress 只认触屏，桌面鼠标按不出来。
     //
     // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
     // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——

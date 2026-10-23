@@ -16,16 +16,23 @@
 // 而那个闩只被落在本行的 click 清除——click 落在别处、或右键（不走主键 pointerdown、也不派发 click）
 // 时都清不掉，同一行接下来的右键就被静默吞掉（2026-09-07 与 O101 两次）。
 //
+// touchOnly（消息气泡用，O136）：只认触屏。鼠标按压不计时（那是在拖选文字），本手势里没有触屏
+// pointerdown 的 contextmenu（桌面右键、键盘菜单键）原样交还浏览器，右键「复制」照常可用。触屏标记
+// 跟 firedByTimer 同一生命周期、不在 pointercancel 复位：Android 长按文字时系统先接管选字发
+// pointercancel，之后才发 contextmenu，那一下就是这次长按唯一还收得到的信号。
+//
 // 不做长按中的视觉反馈：确认 sheet 本身就是反馈。计时器可注入，供单测零 DOM 钉手势契约。
 export function attachLongPress(el, onLongPress, {
   holdMs = 500,
   moveTolerance = 10,
+  touchOnly = false,
   setTimer = (fn, ms) => setTimeout(fn, ms),
   clearTimer = (id) => clearTimeout(id),
 } = {}) {
   let timer = null;
   let startX = 0, startY = 0;
   let firedByTimer = false;
+  let touchGesture = false;
   let disarmClickGuard = null;
 
   function cancel() {
@@ -57,6 +64,8 @@ export function attachLongPress(el, onLongPress, {
 
   el.addEventListener('pointerdown', ev => {
     firedByTimer = false;
+    touchGesture = ev.pointerType === 'touch';
+    if (touchOnly && !touchGesture) return;
     // button：0 主键 / 2 右键（右键走 contextmenu，不计时）；isPrimary=false 是第二根手指。
     if (ev.button !== undefined && ev.button !== 0) return;
     if (ev.isPrimary === false) return;
@@ -70,9 +79,10 @@ export function attachLongPress(el, onLongPress, {
     if (Math.abs(ev.clientX - startX) > moveTolerance || Math.abs(ev.clientY - startY) > moveTolerance) cancel();
   });
   for (const type of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(type, cancel);
-  el.addEventListener('keydown', () => { firedByTimer = false; });
+  el.addEventListener('keydown', () => { firedByTimer = false; touchGesture = false; });
 
   el.addEventListener('contextmenu', ev => {
+    if (touchOnly && !touchGesture) return;
     ev.preventDefault();
     if (firedByTimer) return; // 本次手势的计时器刚触发过（Android 长按双信号），不重复弹
     // 主键还按着（计时未到时 Android 先发了 contextmenu）同样会有抬手 click，一并拦；桌面右键不派发 click
