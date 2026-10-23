@@ -118,7 +118,7 @@
       </button>
     </div>
 
-    <!-- Right Section: Home / Log / New Session（三钮同材质，＋ 不单独上色） -->
+    <!-- Right Section: Home / Log / New Session / More（四钮同材质，＋ 不单独上色） -->
     <div id="headerActions" class="flex items-center justify-end gap-2 min-w-0 shrink-0">
       <!-- 回空首页（最近工作区与会话枢纽；不清会话指针，与 ＋ 新建分工） -->
       <button id="btnHome" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
@@ -139,6 +139,14 @@
       <button id="btnNew" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+      </button>
+
+      <!-- 更多 ⋯（#307）：要随时找得到、又不值得占一颗常驻按钮的操作。目前只有「重新加载本会话」——
+           PWA 全屏下没有浏览器的刷新按钮，历史渲染停在只有提示条时这是不刷新整页的出路 -->
+      <button id="btnMore" type="button" class="hit-44-tight w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="更多" aria-label="更多操作" aria-haspopup="dialog" aria-controls="moreModal" data-testid="header-more">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
         </svg>
       </button>
     </div>
@@ -332,6 +340,18 @@
       </div>
       <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过并中止本轮</button>
       <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
+    </div>
+  </div>
+
+  <!-- 顶栏「⋯」的菜单（#307），开合走 sheets.js 的 openSheet / closeSheet -->
+  <div id="moreModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="更多操作">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle"></div>
+      <button id="moreReloadSession" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-sm text-ink disabled:opacity-50" data-testid="more-reload-session">
+        <span class="font-semibold block">重新加载本会话</span>
+        <span class="text-xs text-ink-soft">重新拉取这个会话的历史消息，不刷新整页</span>
+      </button>
+      <button id="moreCancel" type="button" class="mt-3 w-full py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
     </div>
   </div>
 

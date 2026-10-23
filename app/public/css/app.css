@@ -659,6 +659,14 @@ header {
   }
 }
 
+/* 顶栏右侧加了「⋯」（#307）之后，320px 宽装不下左侧延迟胶囊 +「需要你」chip + 右侧四颗按钮：实测整页被撑到 371px，
+   审批 sheet 的右半截出屏。不到 360px 时藏掉延迟胶囊——它只是信息，数值在日志抽屉里也看得到；可点的 chip 与按钮一个不少。 */
+@media (max-width: 359px) {
+  #connRtt {
+    display: none !important;
+  }
+}
+
 /* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
 @media (min-width: 1024px) {
   body {
@@ -733,22 +741,22 @@ header {
 }
 
 /* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
-#permModal, #questionModal, #consoleModal, #confirmModal {
+#permModal, #questionModal, #consoleModal, #confirmModal, #moreModal {
     visibility: hidden;
     pointer-events: none;
     opacity: 0;
     transition: opacity .25s ease, visibility .25s ease;
   }
-  #permModal > div, #questionModal > div, #consoleModal > div, #confirmModal > div {
+  #permModal > div, #questionModal > div, #consoleModal > div, #confirmModal > div, #moreModal > div {
     transform: translateY(100%);
     transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open, #confirmModal.sheet-open {
+  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open, #confirmModal.sheet-open, #moreModal.sheet-open {
     visibility: visible;
     pointer-events: auto;
     opacity: 1;
   }
-  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div, #confirmModal.sheet-open > div {
+  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div, #confirmModal.sheet-open > div, #moreModal.sheet-open > div {
     transform: translateY(0);
   }
   /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */

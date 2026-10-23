@@ -386,6 +386,12 @@ export const EN_DICT = Object.freeze({
   '📊 服务状态 · 运行时长 / 版本 / 告警 →': '📊 Service status · uptime / version / alerts →',
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',
   '在浏览器打开 GitHub 仓库': 'Open the GitHub repo in your browser',
+  // 历史没画完时提示条上的原地重载（#307）
+  '重新加载': 'Reload',
+  '更多': 'More',
+  '更多操作': 'More actions',
+  '重新加载本会话': 'Reload this session',
+  '重新拉取这个会话的历史消息，不刷新整页': "Fetch this session's history again without reloading the page",
   '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——

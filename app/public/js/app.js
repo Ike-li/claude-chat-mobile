@@ -8872,13 +8872,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         onDone?.();
         return;
       }
-      addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
+      const noticeBar = addBar(historyLoadedNotice(msgs.length, res?.total), 'text-ink-faint');
       renderHistoryBubbles(msgs, () => {
         // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
         if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
-      }, { fullReload: true, turnRunningAtRequest });
+      }, { fullReload: true, turnRunningAtRequest, noticeBar });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -9026,7 +9026,33 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 用它抑制三个页面级副作用——尤其 scrollBottom：展开一张历史卡片时把页面滚到底是灾难性的。
   // 之所以仍走本函数而不另写一个渲染器：renderOne 是 live/history 共用的那一份，
   // 另写一个就等于再造一套平行实现，而"刷新前后同构"正是这条链要保证的东西。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false } = {}) {
+  // 历史没画完、屏幕上只剩「加载了 N 条历史消息」提示条时（#307，根因未明），在那条提示条上原地给「重新加载」：
+  // 走 reloadCurrentFromHistory（先清屏再拉），不刷新整页，也不会和残留的内容叠成两份。
+  function offerHistoryReload(bar) {
+    if (!bar?.isConnected || bar.querySelector('[data-testid="history-reload"]')) return;
+    const btn = el('<button type="button" class="ml-2 underline text-accent" data-testid="history-reload"></button>');
+    btn.textContent = t('重新加载');
+    btn.addEventListener('click', () => reloadCurrentFromHistory());
+    bar.appendChild(btn);
+  }
+
+  // 顶栏「⋯」→「重新加载本会话」（#307）：原地按钮只挂在已知的两处停下的地方上，别的路径停住时靠这一项。
+  // 没在看会话时（首页等）不可点，判据同 reloadCurrentFromHistory 自己的守卫。
+  const moreModal = $('moreModal');
+  const closeMoreMenu = () => { if (moreModal?.classList.contains('sheet-open')) closeSheet(moreModal); };
+  $('btnMore')?.addEventListener('click', () => {
+    if (!moreModal) return;
+    const item = $('moreReloadSession');
+    if (item) item.disabled = !displayedSessionId;
+    openSheet(moreModal);
+  });
+  $('moreReloadSession')?.addEventListener('click', () => { closeMoreMenu(); reloadCurrentFromHistory(); });
+  $('moreCancel')?.addEventListener('click', closeMoreMenu);
+  moreModal?.addEventListener('click', e => { if (e.target === moreModal) closeMoreMenu(); });
+  moreModal?.addEventListener('keydown', e => { if (e.key === 'Escape') closeMoreMenu(); });
+
+  // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
@@ -9306,15 +9332,32 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 注意：不得放宽为「同 sessionId 即可续渲」——同会话 instance 置换时 bindView 会 clearView + 重新
     // loadHistory，旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
+    const targetSessionId = displayedSessionId;
     let i = 0;
     function processChunk() {
       // ★ 中断也必须通知收尾。onDone 是 flushHeldHistoryAppends 的唯一调用点，早年这里直接 return
       // 把它一并跳过了：闸门既不 release 也不 abort，永久开着，此后该实例每条 history_append 都被
       // 静默吞掉——终端在跑、手机再也不刷新、无任何报错。此刻视图已切走，flush 出来的事件会被
       // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
-      if (displayedInstanceId !== targetInstanceId) { onDone?.(); return; }
+      if (displayedInstanceId !== targetInstanceId) {
+        // #307 观测：这一趟画的东西整段作废。同一会话换了实例却没有再全量重载的话，屏幕就停在只有提示条
+        logClientEvent('recv', `[HISTORY_RENDER] 渲染途中实例变了，放弃本次历史渲染 session=${targetSessionId} instance=${targetInstanceId}→${displayedInstanceId} 已渲染 ${i}/${msgs.length}`);
+        if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
+        onDone?.();
+        return;
+      }
       const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
-      for (; i < end; i++) renderOne(msgs[i]);
+      for (; i < end; i++) {
+        try {
+          renderOne(msgs[i]);
+        } catch (error) {
+          // #307 观测：分块链在这里断了，后面的块不再调度、frag 不插入、onDone 不调（历史闸要等看门狗）。
+          // 根因未修：照旧抛出去（全局错误上报照常记「前端错误」），只多记一条带坐标的日志、给原地重新加载。
+          logClientEvent('error', `[HISTORY_RENDER] 渲染第 ${i + 1}/${msgs.length} 条历史时抛错，后面的都没画出来 session=${targetSessionId} instance=${targetInstanceId} 当前=${displayedInstanceId} 已渲染 ${i}/${msgs.length}：${error?.message || error}`);
+          if (displayedSessionId === targetSessionId) offerHistoryReload(noticeBar);
+          throw error;
+        }
+      }
       if (!done) {
         scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
         return;
