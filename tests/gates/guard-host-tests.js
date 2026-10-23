@@ -69,8 +69,9 @@ const SMOKE_RUNNER = /(?:^|[\s/])runner\.js\b(?=.*\s--(?:all|scenario)\b)/;
 const SMOKE_DIR = /\bsmoke\b/;
 
 // 不带 --test 直接 node 一个 *.test.mjs：node:test 的用例文件被直接执行照样会跑完，同样绕过
-// preload-env。--check 只做语法检查、不执行，不算。
-const DIRECT_TEST_FILE = /^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/;
+// preload-env。--check 只做语法检查、不执行，不算——但只认写在测试文件路径之前的那个（node 自己的选项）：
+// `node tests/x.test.mjs --check` 里的 --check 是传给脚本的参数，node 照样执行这个文件。
+const DIRECT_TEST_FILE = /^(?!(?:(?!\btests\/[\w./-]*\.test\.m?js\b).)*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/;
 
 // `export RUN_CLAUDE_INTEGRATION=1 && npm test`：变量在前一段 export，真 turn 发生在后一段。
 // 按段判定只看后一段会把它判成普通 npm test、指去容器——容器里没有真凭据，那条替代跑不了。
@@ -105,7 +106,7 @@ const REASONS = [
   { re: /\bnpm\s+(?:test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态' },
   // ★ 白名单反转补上的洞：approval-store / audit / devices 的落盘路径是【模块级常量】，在 import
   // 求值那一刻就锁定了，只有 --import 预加载改得动。裸 node --test 会把它们写进真实 data/。
-  { re: /\bnode\b[^|&;]*--test(?![\w-])|^(?!.*\s--check\b)(?=.*\bnode\b).*\btests\/[\w./-]*\.test\.m?js\b/, why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
+  { re: new RegExp(`\\bnode\\b[^|&;]*--test(?![\\w-])|${DIRECT_TEST_FILE.source}`), why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
