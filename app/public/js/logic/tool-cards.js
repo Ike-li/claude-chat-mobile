@@ -13,10 +13,12 @@ import { bgTaskUsageText, isSyntheticTaskId } from './bg-tasks.js';
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
 // 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
 // 只做数据→数据，不碰 DOM/hljs（高亮由 app.js 渲染层复用现有 hljs）。
-export function formatToolSummary(summary) {
+// truncated：调用方手里的截断元数据（实时 tool_result 事件带；「展开全文」恒为 false）。明说没截断就不动尾巴——原文可能
+// 恰好以同样几个字结尾（#341 review）；没有元数据（历史、输入摘要）才按尾巴认，与 isToolSummaryTruncated 同口径。
+export function formatToolSummary(summary, { truncated } = {}) {
   if (summary == null) return '';
   if (typeof summary !== 'string') return String(summary);
-  const s = summary;
+  const s = truncated === false ? summary : localizeServerTruncationTail(summary);
   if (!s) return '';
   const trimmed = s.trim();
   if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return s;
@@ -441,6 +443,20 @@ export function formatSpawnDescription(inputSummary, maxLen = 120) {
 // 嗅探用服务端写进摘要的原文，不过 t()：它不随界面语言变，英文界面下翻译成「…(truncated)」再比，历史里截断过的
 // 卡就永远不给「展开全文」（#250 review）。
 const SERVER_TRUNCATION_MARK = '…（已截断）';
+const SERVER_TRUNCATION_TAIL = ` ${SERVER_TRUNCATION_MARK}`;
+
+// 截断尾巴是服务端写进摘要的中文原文（shared/tool-summary.js、sessions/history.js），显示时按界面语言换掉（验收 O131）。
+// 只换末尾那一处：正文里恰好出现同样几个字的不动。
+function localizeServerTruncationTail(text) {
+  return text.endsWith(SERVER_TRUNCATION_TAIL) ? text.slice(0, -SERVER_TRUNCATION_TAIL.length) + t(SERVER_TRUNCATION_TAIL) : text;
+}
+
+// 历史思考块的正文同样带服务端写的中文：超长截断的尾巴，或脱敏占位（sessions/history.js）。
+const SERVER_REDACTED_THINKING = '（思考内容已脱敏）';
+export function localizeServerThinkingText(text) {
+  if (typeof text !== 'string') return '';
+  return text === SERVER_REDACTED_THINKING ? t(SERVER_REDACTED_THINKING) : localizeServerTruncationTail(text);
+}
 export function isToolSummaryTruncated(summary, { truncated } = {}) {
   if (truncated === true) return true;
   if (truncated === false) return false;

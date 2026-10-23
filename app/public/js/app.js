@@ -103,6 +103,7 @@ import {
   summarizeTurnFileChanges,
   formatSubagentCardTitle,
   isToolSummaryTruncated,
+  localizeServerThinkingText,
   formatMirrorBannerText,
   formatMirrorComposerHint,
   shouldEmitThrottledHint,
@@ -3225,7 +3226,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const code = out.querySelector('code') || out;
         // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
         const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
-        code.textContent = taskText ?? formatToolSummary(raw);
+        code.textContent = taskText ?? formatToolSummary(raw, { truncated: p.truncated });
         if (!taskText && code !== out) highlightToolOutput(code);
         if (taskText) card.open = true; // 清单即结果本体，收起就白渲染了（对齐 CLI 面板可见性）
         out.classList.remove('hidden');
@@ -3748,7 +3749,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const out = card.querySelector('.t-out');
         const code = out?.querySelector('code') || out;
         if (code) {
-          code.textContent = formatToolSummary(res.text || '');
+          code.textContent = formatToolSummary(res.text || '', { truncated: false }); // 全文不带服务端尾巴：超长另有提示条
           if (code !== out) highlightToolOutput(code);
           out?.classList.remove('hidden');
         }
@@ -9104,7 +9105,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
-        wrap.querySelector('.t-body').textContent = msg.content || '';
+        wrap.querySelector('.t-body').textContent = localizeServerThinkingText(msg.content);
         appendNode(wrap, msg);
         return;
       }
