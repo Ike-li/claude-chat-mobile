@@ -66,6 +66,20 @@ test.describe('formatLifecycle*', () => {
     // 截断只对超长生效：正常长度的原因必须逐字保留，否则排障信息被闸吃掉
     assert.equal(formatLifecycleSessionError('spawn ENOENT'), '进程异常：spawn ENOENT');
   });
+  // 验收 O132（R9 AC-13-15）：进程被 kill 后中断面上的原因带着 CLI 的 stderr——「…terminated by signal SIGKILL. stderr:
+  // [claude-code:unrecognized_model] …」，后半句是 CLI 每次启动都写的告警，读起来像「模型不认识」才是死因。信号来自进程外，
+  // stderr 尾巴说的不是它；非零退出码的 stderr 才是原因，照留。完整 stderr 仍走 LOG_STDERR。
+  test('sessionError：被信号终止时不带 stderr 尾巴；非零退出码照带', () => {
+    assert.equal(
+      formatLifecycleSessionError('Claude Code process terminated by signal SIGKILL. stderr: [claude-code:unrecognized_model] {"model":"grok-4.7[1m]"}'),
+      '进程异常：Claude Code process terminated by signal SIGKILL',
+    );
+    assert.equal(formatLifecycleSessionError('Claude Code process terminated by signal SIGTERM'), '进程异常：Claude Code process terminated by signal SIGTERM');
+    assert.equal(
+      formatLifecycleSessionError('Claude Code process exited with code 1. stderr: Error: ENOSPC'),
+      '进程异常：Claude Code process exited with code 1. stderr: Error: ENOSPC',
+    );
+  });
   // 同一个 0.3.211 变更的第二处后果：resume 失败文案的字符预算只有 120，而上游前缀就占掉约 47，
   // 只剩 72 个字符留给 CLI 真正说的那句话。剥掉前缀，把预算全给真实原因。
   test('stripProcessExitPrefix：剥掉 SDK 拼的 process-exit 前缀，保留 CLI 原文', () => {
