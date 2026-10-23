@@ -251,8 +251,11 @@
         "J11"
       ],
       "n": "",
-      "tier": null,
-      "check": null
+      "tier": "D",
+      "check": {
+        "kind": "agent",
+        "how": "E3 里两台设备：P 连上 X 进新会话页，用 routeWebSocket 掐断 socket 后发一条（查 localStorage ccm-outbox-v1 有这条且 cwd=X）；B 在抽屉里断开 X；P 恢复网络等约 15 秒。判：#messages 里有「这个目录不在已连接的文件夹里，已停止重试，原文已放回输入框」、#input 是原文、outbox 为 []；容器 ~/.claude/projects 里 grep 不到这条；data/audit-records.json 新增 action=scope_violation、target=X（写盘有延迟，事后读文件为准）；归位后 [data-testid=compose-surface] 仍在且 [data-testid=compose-relocated] 写着「文件夹「X」已断开」（O128）。"
+      }
     },
     {
       "id": "AC-03-14",
