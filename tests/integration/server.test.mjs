@@ -642,6 +642,10 @@ const ACK_SHAPES = [
   // missingFolders 同理：抽屉吃 instances 广播里的那份，面板吃这条 ack，少了它两处对同一件事说法不一。
   { event: 'service:status', payload: () => ({}),
     required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders'] },
+  // 设置「关于」页（#303）。版本号不在这里——前端复用上面 service:status 的 versions。
+  { event: 'about:get', payload: () => ({}),
+    required: ['ok', 'author', 'repository', 'license', 'notice', 'thirdPartyNotices', 'components'],
+    check: ack => assert.ok(Array.isArray(ack.components), 'components 必须是数组——前端无条件遍历') },
 
   { event: 'browse:list', branch: '空目录', payload: () => ({ cwd: tmpDir, path: '.' }), required: ['ok', 'entries', 'totalCount', 'truncated'] },
   { event: 'browse:read', branch: '文件不存在', payload: () => ({ cwd: tmpDir, path: 'nope.txt' }), required: ['ok', 'error'] },
@@ -679,6 +683,7 @@ const ACK_SHAPES = [
 // 未纳入（各有理由，不是遗漏）：
 //   dev:restart —— 本文件另有专测（DEV_MODE=0 拒绝支）；合法路径会杀掉被测 server。
 //   files:write —— 会真写文件；push:test —— 会真发推送；doctor:run / config:refresh —— 会 spawn，慢且与形状无关。
+//   about:checkUpdate —— 会真打 GitHub；三种比较结果、超时、缓存、并发合并在 tests/unit/update-check.test.mjs 用假 fetch 钉住。
 //   各事件的【成功支】—— 要先造实例 / 会话 jsonl / git 仓库，成本另计；本表只覆盖免夹具那一档。
 test.describe('ack 形状守卫 —— 守键集而非键值', () => {
   for (const spec of ACK_SHAPES) {
@@ -699,6 +704,41 @@ test.describe('ack 形状守卫 —— 守键集而非键值', () => {
       s.disconnect();
     });
   }
+});
+
+// 设置「关于」页（#303）的验收：许可证接口返回的原始响应体与仓库根文件逐字节相等——比的是 ack 里的字符串，
+// 不是页面 innerText（DOM 会折叠空白，那样比「看起来一样」就绿了）。未鉴权拒绝那条在 auth-token.test.mjs：
+// 本文件共用一台 server，一次失败鉴权就把 127.0.0.1 锁 500ms，后面的用例全被挡在握手外（见那个文件头注）。
+test.describe('about:get —— 许可证原文逐字节 (#303)', () => {
+  async function connected(opts) {
+    const s = connectSocket({ reconnection: false, ...opts });
+    const outcome = await new Promise(resolve => {
+      s.on('connect', () => resolve('connected'));
+      s.on('connect_error', () => resolve('rejected'));
+      setTimeout(() => resolve('timeout'), 3000);
+    });
+    return { s, outcome };
+  }
+
+  test('LICENSE / NOTICE / vendor 声明逐字节相等；组件清单含浏览器端 Socket.IO 客户端、不含 dev 依赖', async () => {
+    const { s, outcome } = await connected();
+    assert.equal(outcome, 'connected');
+    const ack = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('about:get ack 超时')), 3000);
+      s.emit('about:get', {}, res => { clearTimeout(t); resolve(res); });
+    });
+    s.disconnect();
+    for (const [field, rel] of [['license', 'LICENSE'], ['notice', 'NOTICE'], ['thirdPartyNotices', 'app/public/vendor/THIRD-PARTY-NOTICES.md']]) {
+      const onDisk = readFileSync(new URL(`../../${rel}`, import.meta.url));
+      assert.ok(Buffer.from(ack[field] ?? '', 'utf8').equals(onDisk), `${field} 与仓库根 ${rel} 不是逐字节相等`);
+    }
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    assert.ok(ack.components.some(c => c.name === 'socket.io-client' && c.scope === 'browser'), '浏览器端 Socket.IO 客户端没列');
+    // 只看服务端那部分：socket.io-client 也是 devDependency（测试用它连 server），与浏览器端那一条同名不同物
+    const names = new Set(ack.components.filter(c => c.scope === 'server').map(c => c.name));
+    for (const dep of Object.keys(pkg.dependencies)) assert.ok(names.has(dep), `直接依赖 ${dep} 没列`);
+    for (const dep of Object.keys(pkg.devDependencies)) assert.ok(!names.has(dep), `dev 依赖 ${dep} 不随 npm ci --omit=dev 分发，却列进来了`);
+  });
 });
 
 // CLAUDE.md「读写必须同源」的核心代码（CONFIG_FILE_PATH/ENV_FILE_PATH 与 usingConfigJson 的分流）

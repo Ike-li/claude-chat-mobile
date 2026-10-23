@@ -37,11 +37,11 @@ const FULL_STATE = Object.freeze({
 
 // ---- 骨架：六行、顺序固定 ----
 
-test('返回六行，id 与顺序固定（L1 目录的骨架契约）', () => {
+test('返回七行，id 与顺序固定（L1 目录的骨架契约）', () => {
   const rows = summarizeGeneralNav();
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 7);
   assert.deepEqual(rows.map(r => r.id), [
-    'notify', 'devices', 'host', 'behavior', 'diag', 'help',
+    'notify', 'devices', 'host', 'behavior', 'diag', 'help', 'about',
   ]);
   // 导出的常量与实际返回保持一致——接线层按 id 找 L2 页，两处分叉会让某一页永远打不开
   assert.deepEqual(GENERAL_NAV_IDS, rows.map(r => r.id));
@@ -267,6 +267,26 @@ test('behavior 行随语言偏好变，其余静态行不受任何状态影响',
   const idle = summarizeGeneralNav();
   assert.equal(busy[4].summary, idle[4].summary);
   assert.equal(busy[5].summary, idle[5].summary);
+});
+
+// ---- 关于（#303）----
+
+test('关于行：报出 server 版本（与「宿主机」行同一份 versions），再列许可证、第三方组件、检查更新', () => {
+  const row = summarizeGeneralNav({ service: { versions: { server: '1.13.0' } } })[6];
+  assert.equal(row.id, 'about');
+  assert.match(row.summary, /^v1\.13\.0 · /);
+  assert.match(row.summary, /许可证/);
+  assert.match(row.summary, /第三方组件/);
+  assert.match(row.summary, /检查更新/);
+  assert.equal(row.dot, false, '有没有新版要点进去查，L1 不预判、不亮红点');
+});
+
+test('关于行：版本还没回来或是缺省字面量 unknown 时，不写版本号', () => {
+  for (const service of [undefined, { versions: { server: 'unknown' } }]) {
+    const row = summarizeGeneralNav({ service })[6];
+    assert.doesNotMatch(row.summary, /unknown|\bv\s/);
+    assert.match(row.summary, /^许可证/);
+  }
 });
 
 // ---- MCP 服务器（「宿主机」页）----

@@ -3,6 +3,7 @@ import { createContentScenarios } from './scenarios/content.js';
 import { createStatusScenarios } from './scenarios/status.js';
 import { createMockTransport } from './transport.js';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 // 审批指纹只此一份规范化实现：app/public/js/canonicalize.js 是 CLAUDE.md 里唯一被指定「前后端共用」
 // 的叶子（模块边界闸的原文豁免项），本 mock 是它的第三个消费者。mock 若自己再写一遍规范化，就正好复制了
 // 本次要消除的那类分歧——而且前端会拿 verifyIntegrity 校验这个 fp，算错等于在每张审批卡上挂一条假的
@@ -498,6 +499,10 @@ let mockServiceStartedAtOverride = null;
 let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
+// 设置「关于」页（#303）「检查更新」的结果：newer / same / ahead / fail / hang（不回 ack，走前端超时）。
+// 由 /__set-update-check?status= 注入；默认已是最新。calls 供用例断言「点了真的发了请求」。
+let mockUpdateCheck = 'same';
+let mockUpdateCheckCalls = 0;
 let mockMissingFolders = 0; // 配置了却找不到的文件夹个数（同真 server 的 service.missingFolders），由 __set-connected-folders?missing= 注入
 const DEFAULT_MOCK_RESTARTS = {
   units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
@@ -598,6 +603,8 @@ function resetMockState() {
   mockRateLimitLockout = null;
   mockClientError = null;
   mockMissingFolders = 0;
+  mockUpdateCheck = 'same';
+  mockUpdateCheckCalls = 0;
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
   mockDevRestartDeny = false;
@@ -1008,6 +1015,11 @@ app.post('/__outbox-turn-end', (_req, res) => {
   res.json({ ok: true, ended: Boolean(inst) });
 });
 app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
+app.post('/__set-update-check', (req, res) => {
+  mockUpdateCheck = String(req.query.status || 'same');
+  res.json({ ok: true, status: mockUpdateCheck });
+});
+app.get('/__update-check-calls', (_req, res) => res.json({ calls: mockUpdateCheckCalls }));
 // O87：推一帧带 devMode:true 的 instances，让「⚙ 服务与配置」里的「重启服务」按钮出现。canRestart=0 模拟
 // 前台 npm start（拉不起来）；deny=1 让 dev:restart 回 ok:false，而广播仍说能重启。
 app.post('/__dev-mode', (req, res) => {
@@ -3277,6 +3289,37 @@ io.on('connection', socket => {
       statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
+    });
+  });
+
+  // 设置「关于」页（#303）。许可证与声明读仓库里的真文件（不是 app/src，不违反「零 import」）：
+  // 用例据此断言页面显示的是原文本身。组件清单给三条代表：服务端直接依赖、Anthropic 专有的 SDK、浏览器端客户端。
+  socket.on('about:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const repoFile = rel => readFileSync(new URL(`../../../${rel}`, import.meta.url), 'utf8');
+    ack({
+      ok: true,
+      author: { name: 'Ike-li', url: 'https://github.com/Ike-li' },
+      repository: 'https://github.com/Ike-li/claude-chat-mobile',
+      license: repoFile('LICENSE'),
+      notice: repoFile('NOTICE'),
+      thirdPartyNotices: repoFile('app/public/vendor/THIRD-PARTY-NOTICES.md'),
+      components: [
+        { name: '@anthropic-ai/claude-agent-sdk', version: '0.3.201-mock', license: 'SEE LICENSE IN README.md', scope: 'server' },
+        { name: 'express', version: '5.1.0', license: 'MIT', scope: 'server' },
+        { name: 'socket.io-client', version: '4.8.4', license: 'MIT', scope: 'browser' },
+      ],
+    });
+  });
+  socket.on('about:checkUpdate', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    mockUpdateCheckCalls += 1;
+    if (mockUpdateCheck === 'hang') return;
+    if (mockUpdateCheck === 'fail') { ack({ ok: false, error: 'check_failed' }); return; }
+    const latest = { newer: '1.3.0', same: '1.2.1-mock', ahead: '1.2.0' }[mockUpdateCheck];
+    ack({
+      ok: true, status: mockUpdateCheck, current: '1.2.1-mock', latest,
+      releaseUrl: `https://github.com/Ike-li/claude-chat-mobile/releases/tag/v${latest}`,
     });
   });
 

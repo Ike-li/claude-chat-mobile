@@ -224,6 +224,7 @@ import { createNewSessionWorktree } from './app/new-session-worktree.js';
 import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
+import { createAboutPage } from './app/about-page.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
@@ -6923,6 +6924,15 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 在四分片并行的 E2E 下把一条依赖广播时序的既有用例挤成了 8s 超时，而它拿到的东西广播里本就有。
   let generalVersions = null;
   let generalVersionsInflight = false;
+  // 「关于」页（#303）。版本号用上面这份 generalVersions，不另发请求；检查更新要等服务端打 GitHub，超时由它自己传。
+  const aboutPage = createAboutPage({
+    $,
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    getVersion: () => generalVersions?.server,
+  });
+  aboutPage.bind();
   async function ensureGeneralVersions() {
     if (generalVersions || generalVersionsInflight) return;
     generalVersionsInflight = true;
@@ -6931,13 +6941,14 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (status?.ok === true && status.versions) {
         generalVersions = status.versions;
         generalNav?.render();
+        aboutPage.renderVersion();
       }
     } finally {
       generalVersionsInflight = false;
     }
   }
 
-  // 两级导航：L1 目录 ↔ 6 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
+  // 两级导航：L1 目录 ↔ 7 个 L2 页。摘要是活数据，故 state() 每次现取，不缓存。
   generalNav = createGeneralNav({
     haptic,
     state: () => ({
@@ -6964,11 +6975,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
+      if (page === 'about') { ensureGeneralVersions(); aboutPage.load(); }
     },
   });
   generalNav.bind();
 
-  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助 六页。
+  // 通用设置（侧栏底部入口，全局可达）：L1 目录 + 通知/设备/主机/行为/排查/帮助/关于 七页。
   // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
   general = createSettingsController(appContext, {
     keys: {

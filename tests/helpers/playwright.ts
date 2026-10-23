@@ -133,12 +133,12 @@ export async function openGeneralSettings(page: Page) {
 }
 
 /** 通用设置的 L2 页 id（与 logic/general-nav.js 的 GENERAL_NAV_IDS 同名）。 */
-export type GeneralPageId = 'notify' | 'devices' | 'host' | 'behavior' | 'diag' | 'help';
+export type GeneralPageId = 'notify' | 'devices' | 'host' | 'behavior' | 'diag' | 'help' | 'about';
 
 /**
  * 打开通用设置并切到某个 L2 页。
  *
- * 面板是两级结构（L1 目录 + 6 个 L2 页），未切页时目标控件在 hidden 的子页里——DOM 查得到、
+ * 面板是两级结构（L1 目录 + 7 个 L2 页），未切页时目标控件在 hidden 的子页里——DOM 查得到、
  * 点不到。**凡是要操作面板内某个按钮的用例都得先切页**，否则会红在「元素不可见」而不是被测行为上。
  * 取代了旧的 openGeneralDiagSection：那时三个诊断按钮同住一个 <details> 折叠段，
  * 现在按可写/只读拆开了（服务状态→host、安全体检→diag、全部配置→behavior）。

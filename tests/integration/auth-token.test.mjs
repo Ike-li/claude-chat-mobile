@@ -192,6 +192,32 @@ test.describe('AUTH_TOKEN 鉴权集成测试', () => {
     }
   });
 
+  // #303「关于」页：about:get 与其余数据接口同走握手鉴权。先用正确令牌拿到数据（正向对照：接口确实在），
+  // 再用错误令牌——握手被拒，什么都拿不到。顺序不能反：失败鉴权之后 500ms 内连正确令牌也会被锁（见文件头注）。
+  test('Socket.IO: about:get 正确令牌拿得到，错误令牌握手被拒、拿不到', async () => {
+    const good = createClient({ auth: { token: AUTH_TOKEN } });
+    try {
+      await good.waitForConnect();
+      const res = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('about:get ack 超时')), 5000);
+        good.socket.emit('about:get', {}, r => { clearTimeout(timer); resolve(r); });
+      });
+      assert.equal(res?.ok, true, '前提：正确令牌拿得到 about:get');
+    } finally {
+      good.disconnect();
+    }
+    const bad = createClient({ auth: { token: 'wrong-token' } });
+    let acked = false;
+    try {
+      await bad.waitForConnectError();
+      bad.socket.emit('about:get', {}, () => { acked = true; });
+      await new Promise(r => setTimeout(r, 300));
+      assert.equal(acked, false, '错误令牌拿到了 about:get 的回执');
+    } finally {
+      bad.disconnect();
+    }
+  });
+
   // 测试 8: Socket.IO 握手无 token 被拒绝
   test('Socket.IO: 无 token 握手失败', async () => {
     const client = createClient({ auth: {} });

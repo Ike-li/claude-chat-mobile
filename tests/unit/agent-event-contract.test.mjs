@@ -350,7 +350,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + folders:remove（2026-10-15，抽屉里「⋯ → 断开这个文件夹」，添加的对称面。不走 env:set 改 WORKDIRS，
   //        理由同 folders:add：那条是整份覆盖写，手机上拿到的列表可能已过期；也不并进 folders:add：一个扩授权面、
   //        一个缩，审计动作与失败处置不同。入向 62→63）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 63);
+  //      + about:get / about:checkUpdate（2026-10-23，设置「关于」页 #303：许可证原文与组件清单、检查更新。
+  //        不开 HTTP 端点（守「不开无鉴权数据端点」）；不并进 service:status：那条每次进「宿主机」页都发，
+  //        而许可证原文几十 KB、检查更新要打 GitHub。两个不合一：一个读本地文件，一个打外网、可能等 5s。入向 63→65）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 65);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('about:checkUpdate'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:remove'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('image:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:browse'));
