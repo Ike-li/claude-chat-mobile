@@ -538,6 +538,50 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 新会话页勾了「新 worktree」后离线连发：第 2 条在投递前被改投到第 1 条开出的实例（不再各建一棵树）。改投后的那份
+  // 必须在发出之前就落盘——等 ack 时页面被刷新，盘上若还是改投前的那份（useWorktree:true），恢复后会再建一棵树。
+  // 观察点放在第 2 条真正发出的那一刻（mock 没有扣住 ack 的开关）；socket.io 先轮询后升级，两条传输都挂上。
+  test('P0-02d19 离线连发两条「新 worktree」消息：第 2 条改投后，发出之前盘上就已是改投后的那份', async ({ page }) => {
+    await page.addInitScript(() => {
+      const snap = (data: unknown) => {
+        if (typeof data === 'string' && data.includes('user:message') && data.includes('离线树二')) {
+          const w = window as unknown as { __outboxAtSend?: string | null };
+          if (w.__outboxAtSend === undefined) w.__outboxAtSend = localStorage.getItem('ccm-outbox-v1');
+        }
+      };
+      const wsSend = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (data) { snap(data); return wsSend.call(this, data); };
+      const xhrSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (body) { snap(body); return xhrSend.call(this, body); };
+    });
+    await gotoMock(page);
+    await waitForIdle(page);
+    await page.locator('#btnNew').click();
+    const surface = page.locator('[data-testid="compose-surface"]');
+    await expect(surface).toBeVisible();
+    await surface.locator('[data-testid="compose-worktree-toggle"]').click();
+
+    await page.context().setOffline(true);
+    await waitUntilDisconnected(page);
+    for (const text of ['离线树一', '离线树二']) {
+      await page.locator('#input').fill(text);
+      await page.locator('#btnSend').click();
+      await expect(page.locator('#input')).toHaveValue('');
+    }
+    const queuedRow = async (text: string) => (JSON.parse(await page.evaluate(() => localStorage.getItem('ccm-outbox-v1') || '[]')) as Array<{ text: string; useWorktree?: boolean }>).find(r => r.text === text);
+    expect((await queuedRow('离线树二'))?.useWorktree, '前提：第 2 条入队时也带着 worktree 意图（否则谈不上改投）').toBe(true);
+    await page.context().setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await waitUntilConnected(page);
+
+    const atSend = () => page.evaluate(() => (window as unknown as { __outboxAtSend?: string | null }).__outboxAtSend);
+    await expect.poll(async () => (await atSend()) !== undefined, '第 2 条应被投递').toBe(true);
+    const second = (JSON.parse((await atSend()) || '[]') as Array<{ text: string; useWorktree?: boolean }>).find(r => r.text === '离线树二');
+    expect(second, '第 2 条发出时已不在盘上：等 ack 时刷新就丢').toBeTruthy();
+    expect(second?.useWorktree, '第 2 条发出时盘上还是改投前的那份：等 ack 时刷新，恢复后会再建一棵 worktree').not.toBe(true);
+    await expectNoBrowserErrors(page);
+  });
+
   // 同上，但第 1 条那一轮被用户按了停止：停止 = 不想接着跑，排着的不再自动发（终端里中断后排着的话也不会自己发出去），
   // 退回手动「重发」；手动点了照样送达，问答顺序照样对。
   test('P0-02d10 排着的离线条目：按了停止就不再自动续发，退回手动「重发」', async ({ page }) => {

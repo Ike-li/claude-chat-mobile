@@ -798,6 +798,11 @@ import { createGateFocusController } from './app/focus-layers.js';
   function persistOutbox() {
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue, outboxInFlight.items())); } catch { /* quota */ }
   }
+  // 登记即落盘：改投后的那份要在投递（await ack）之前写下去，等 ack 时被刷新，恢复的才是改投后的路由
+  function holdOutbox(item) {
+    outboxInFlight.hold(item);
+    persistOutbox();
+  }
   function settleOutbox(item) {
     outboxInFlight.settle(item);
     persistOutbox();
@@ -1450,8 +1455,9 @@ import { createGateFocusController } from './app/focus-layers.js';
   // afterTurn（O66）：被在途轮挡下的离线条目——排队，本轮结束由 outboxAfterTurn 替用户点这里的「重发」；
   // 手动点照样可以。续接分叉闸挡下的（divergence）不排队：那边没有在途轮，等多久都是同一道闸。
   function markOutboxBlocked(item, message, targetsViewing = false, { afterTurn = false } = {}) {
-    // 有结论之前一直落盘：刷新之后下一次批处理还能重新投递它（见 app/outbox-in-flight.js）
-    outboxInFlight.hold(item);
+    // 有结论之前一直落盘：刷新之后下一次批处理还能重新投递它（见 app/outbox-in-flight.js）。
+    // 这里的 item 可能刚按懒开锚改投过（planOutboxBlockedTarget），立即落盘，不等整批结束。
+    holdOutbox(item);
     const host = outboxNoticeHost(item, targetsViewing, 'text-warning');
     // 无正确落点（气泡没了且不属于当前会话）——不在别的会话里凭空多一条提示。但排队照样登记：它已经不在
     // offlineQueue 里，不登记就既不续发、也没有手动「重发」，这条话就丢了（重载后恢复、发往后台会话的条目）。
@@ -1603,7 +1609,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 改投过的条目此后一律按改投后的走（重新入队、「重发」按钮都是）：拿原始条目再发，锚点已不在，又会另开一个。
         const page = outboxComposeKey(item);
         const planned = planOutboxScratchReuse(planOutboxWorktreeReuse(item, worktreeAnchors.get(page) ?? null), scratchAnchors.get(page) ?? null, scratchRoot);
-        outboxInFlight.hold(planned); // 落盘的是改投后的那份：刷新后再投不能又另建一棵树 / 一个 scratch 目录
+        holdOutbox(planned); // 落盘的是改投后的那份：刷新后再投不能又另建一棵树 / 一个 scratch 目录
         // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
         // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
         // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
