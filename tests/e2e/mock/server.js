@@ -341,6 +341,8 @@ let unpairedToolSessionArmed = false;
 let unpairedToolTurnEndsDuringLoad = false;
 // 下一条离线重放（fromOutbox）回永久拒绝的负 ack（验收 O31）。由 test:arm-outbox-permanent 置起，一次性。
 let outboxPermanentArmed = false;
+// #302：离线重放（fromOutbox）的 ack 先压住，/__release-outbox-acks 才回 ok——让前端停在「重发中」（批处理在途）。null = 不压。
+let outboxAckHold = null;
 // P0-02d14（验收 O31）：'armed' → 下一次连入时按 server 重启处理（实例全部消失、viewing 归 null、startedAt 变）；
 // 之后（'restarted'）离线重放指向不在册的实例，照真 server 的 BE-001 分支回 sysTo + stale 负 ack。
 let outboxRestartStaleArmed = null;
@@ -695,6 +697,7 @@ function resetMockState() {
   unpairedToolSessionArmed = false;
   unpairedToolTurnEndsDuringLoad = false;
   outboxPermanentArmed = false;
+  outboxAckHold = null;
   outboxRestartStaleArmed = null;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
@@ -1015,6 +1018,18 @@ app.post('/__arm-untitled-session', (_req, res) => {
 // 真 server 一个文件夹都没连时就是这样起来的（SCOPE-03），之后在电脑上改配置连上一个、热加载广播也不挪查看目录。
 // dirs 走 query、逗号分隔，空串 = 零文件夹；missing = 配置了却找不到的个数（本 mock 没装 body parser，同上面几个端点）。
 // readonly = 手机上改不了清单的原因码（来源是环境变量 / 外置文件、或没有配置文件），只在显式给出时才改。
+// #302：压住 / 放行离线重放的 ack（见 outboxAckHold）。放行只回 ok，不补回显：用例只看「收到了、没丢」。
+app.post('/__hold-outbox-acks', (_req, res) => {
+  outboxAckHold = [];
+  res.json({ ok: true });
+});
+app.post('/__release-outbox-acks', (_req, res) => {
+  const held = outboxAckHold || [];
+  outboxAckHold = null;
+  for (const release of held) release();
+  res.json({ ok: true, released: held.length });
+});
+
 // O66：结束 test:arm-outbox-turns 挂住的那一轮（result + turnRunning:false 的 instances 广播）。
 app.post('/__outbox-turn-end', (_req, res) => {
   const open = outboxTurnOpen;
@@ -6088,6 +6103,10 @@ io.on('connection', socket => {
       || mockInstances.find(i => i.instanceId === viewingInstanceId);
     if (payload?.fromOutbox === true) {
       mockOutboxReceived.push({ text: payload.text, instanceId: payload.instanceId ?? null, viewing: viewingInstanceId, refused: gateInst?.turnRunning === true });
+    }
+    if (outboxAckHold && payload?.fromOutbox === true) {
+      outboxAckHold.push(() => { if (typeof ack === 'function') ack({ ok: true, instanceId: payload?.instanceId || viewingInstanceId || 'inst_fresh' }); });
+      return;
     }
     if (gateInst?.turnRunning === true) {
       console.log('[mock] user:message refused — turn running');

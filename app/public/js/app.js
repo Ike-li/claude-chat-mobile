@@ -189,6 +189,7 @@ import {
   isLanOrLocalHostname,
   authFailurePath,
   shouldHandshakeOnBoot,
+  localResetConfirm,
   summarizeRecentsLoad,
   shortDeviceId,
   formatRelativeApprovedAt,
@@ -240,6 +241,7 @@ import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
 import { createOutboxAfterTurn } from './app/outbox-after-turn.js';
 import { createOutboxInFlight } from './app/outbox-in-flight.js';
+import { createLocalReset } from './app/local-reset.js';
 import { createWidgetRenderer } from './app/widget-render.js';
 import { createModelIntent } from './app/model-intent.js';
 import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
@@ -787,6 +789,13 @@ import { createGateFocusController } from './app/focus-layers.js';
     isExpanded: cwd => expandedDirs.has(cwd),
     expandDir: cwd => dirSectionNodes.get(cwd)?.expand?.(),
   });
+  // 设置页底部两档（#302）。建在 outbox 之前：persistOutbox 与 pagehide 回写都要先问 isResetting()。
+  // 依赖全是调用时才取（点按钮之前 socket、notifications、续发队列都已建好）。
+  const localReset = createLocalReset({
+    isSending: () => _offlineDrainInFlight || outboxAfterTurn.size() > 0,
+    beforeReset: () => { socket.io.reconnection(false); socket.disconnect(); },
+    unsubscribePush: () => notifications.unsubscribe(),
+  });
   // 发送 outbox（在线 timeout/retryable + 离线共用）：内存队列 + localStorage 耐久。
   // bubbleEl 仅内存；落盘只写可序列化字段（见 dumpDurableOutbox）。PWA 杀进程后靠 clientMessageId 恢复重试。
   let offlineQueue = [];
@@ -796,6 +805,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 取出队列、还没有结论的条目，与 offlineQueue 一起落盘（见 app/outbox-in-flight.js）
   const outboxInFlight = createOutboxInFlight();
   function persistOutbox() {
+    if (localReset.isResetting()) return; // 重置中：内存里的旧队列不许写回刚清空的存储
     try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue, outboxInFlight.items())); } catch { /* quota */ }
   }
   // 登记即落盘：改投后的那份要在投递（await ack）之前写下去，等 ack 时被刷新，恢复的才是改投后的路由
@@ -838,6 +848,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 复用 markSeen 而不是 markEntered：前者带「当前是手动未读态就跳过」的守卫——用户刚长按标了
   // 「稍后再看」就切后台，不能被这一笔当场清掉（markEntered 会连手动标记一起作废）。
   function markActiveSessionSeen() {
+    if (localReset.isResetting()) return;
     if (displayedSessionId) unread.markSeen(displayedSessionId);
   }
   window.addEventListener('pagehide', () => {
@@ -969,11 +980,11 @@ import { createGateFocusController } from './app/focus-layers.js';
   // result 完成通知——否则 PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），会被误判为
   // "有人在看"而永久吞掉完成通知。fire-and-forget，无需 ack。
   window.addEventListener('pagehide', () => {
-    clientLogger.flush();
+    if (!localReset.isResetting()) clientLogger.flush();
     socket.emit('client:presence', { hidden: true }); // 页面即将冻结前兜底再同步一次，双保险
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') clientLogger.flush();
+    if (document.visibilityState === 'hidden' && !localReset.isResetting()) clientLogger.flush();
     socket.emit('client:presence', { hidden: document.hidden });
   });
   const alerts = createAlertController(appContext);
@@ -1973,7 +1984,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     persisted: opts?.persisted ?? null,
   });
   function reconnectIfNeeded(opts = {}) {
-    if (!reconnectAllowed(opts)) return;
+    if (localReset.isResetting() || !reconnectAllowed(opts)) return;
     clearTimeout(_reconnectTimer);
     _reconnectTimer = setTimeout(() => {
       // 排上之后门可能才关上：拒绝（device_status: denied）赶在这 200ms 之内到达，连接随即被服务端断开——
@@ -6543,6 +6554,24 @@ import { createGateFocusController } from './app/focus-layers.js';
     pre.scrollTop = pre.scrollHeight;
   }
   $('btnServerLog')?.addEventListener('click', () => loadServerLog());
+
+  // 设置页底部两档（#302，见 app/local-reset.js）
+  $('btnReloadApp')?.addEventListener('click', async () => {
+    const res = await localReset.reloadApp();
+    if (res.ok) return;
+    const hint = $('localResetHint');
+    if (!hint) return;
+    hint.textContent = t('有消息正在发送，稍后再试');
+    hint.classList.remove('hidden');
+    setTimeout(() => hint.classList.add('hidden'), 4000);
+  });
+  $('btnResetLocal')?.addEventListener('click', async () => {
+    // 会丢几条按落盘的口径数（dumpDurableOutbox 按 clientMessageId 去重）：离线队列 + 取出了还没结论的
+    const pending = JSON.parse(dumpDurableOutbox(offlineQueue, outboxInFlight.items())).length;
+    const accessPath = authFailurePath({ lanOrLocal: isLanOrLocal(), cfAccessFlag: document.body.dataset.cfAccess }) === 'access-relogin';
+    const ok = await appConfirm(localResetConfirm({ pending, deadLetters: outboxDeadLetters.count(), accessPath }));
+    if (ok) await localReset.resetLocalData();
+  });
 
   // 接入二维码。三步态：入口 → 二次确认 → 显示（带倒计时自动隐藏）。
   // 自动隐藏的秒数刻意短：够扫、不够让人忘了它还挂在屏幕上。

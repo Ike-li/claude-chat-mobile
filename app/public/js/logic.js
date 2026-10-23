@@ -21,6 +21,7 @@ export * from './logic/device-id.js';
 export * from './logic/connection.js';
 export * from './logic/format.js';
 export * from './logic/general-nav.js';
+export * from './logic/local-reset.js';
 export * from './logic/message-time.js';
 export * from './logic/mirror.js';
 export * from './logic/models-effort.js';

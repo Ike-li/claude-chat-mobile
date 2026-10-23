@@ -386,6 +386,19 @@ export const EN_DICT = Object.freeze({
   '📊 服务状态 · 运行时长 / 版本 / 告警 →': '📊 Service status · uptime / version / alerts →',
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',
   '在浏览器打开 GitHub 仓库': 'Open the GitHub repo in your browser',
+  // 设置页底部两档（#302）
+  '这台设备经 Cloudflare Access 登录：重置后会自动重新连上，只是本机保存的东西都清空了。': 'This device signs in through Cloudflare Access: it will reconnect on its own after the reset, but everything stored on it is cleared.',
+  '重置后要重新输入访问令牌或扫码。': 'After the reset you will need to enter the access token again or scan the QR code.',
+  '这台设备可能需要重新审批。': 'This device may need to be approved again.',
+  '{n} 条待发送或未确认送达的消息会丢失。': '{n} message(s) waiting to send or not yet confirmed as delivered will be lost.',
+  '{n} 条被拒收暂存的消息会丢失。': '{n} rejected message(s) kept for you will be lost.',
+  '服务端的已读位点和设备信任表不受影响。': 'Read positions and the trusted-device list on the server are not affected.',
+  '重置本机数据': 'Reset this device',
+  '重置': 'Reset',
+  '重新加载': 'Reload',
+  '清掉缓存后刷新页面；令牌、没发出去的消息和已读记录都保留': 'Clear caches and reload the page. Your token, unsent messages and read state are kept',
+  '清空这台设备上保存的一切，包括令牌和没发出去的消息': 'Erase everything stored on this device, including the token and unsent messages',
+  '有消息正在发送，稍后再试': 'A message is being sent. Try again in a moment',
   '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——
