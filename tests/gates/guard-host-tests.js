@@ -109,7 +109,7 @@ const REASONS = [
   { re: new RegExp(`\\bnode\\b[^|&;]*--test(?![\\w-])|${DIRECT_TEST_FILE.source}`), why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
-  + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
+  + '（白名单只有 npm run lint / check / test:unit / test:invariants / test:e2e，外加带 preload-env 的 tests/unit/、tests/invariants/ 顶层单文件跑法）';
 
 // 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
 // `grep -rn RUN_CLAUDE_INTEGRATION app/src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
@@ -181,6 +181,21 @@ function scopeOf(script) {
   return typeof raw === 'string' ? { allow: raw, deny: [] } : raw;
 }
 
+function targetInScope(scope, { rel, truncated }) {
+  // allow 侧不受截断影响：前缀本身落在 allow 内 ⇒ 所有以它开头的展开结果也落在 allow 内。
+  if (!rel.startsWith(scope.allow)) return false;
+  // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
+  // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
+  // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
+  // 点名 deny 目录本身也算命中：normalizeRel 剥掉了尾斜杠，`tests/invariants/env` 不以
+  // `tests/invariants/env/` 开头，而 node --test 会递归跑目录。
+  return !scope.deny.some(d => rel.startsWith(d) || `${rel}/` === d || (truncated && d.startsWith(rel)));
+}
+
+// 宿主机能直接跑的单文件范围：与 test:unit、test:invariants 两条白名单脚本的 scope 同一份。
+const HOST_FILE_SCOPES = ['test:unit', 'test:invariants'].map(scopeOf);
+const onHost = target => HOST_FILE_SCOPES.some(scope => targetInScope(scope, target));
+
 function whitelistedRun(segment, script) {
   if (!script || !HOST_ALLOWED_SCRIPTS.has(script)) return false;
   const extra = segment.split(/\s--\s/).slice(1).join(' ');
@@ -189,14 +204,7 @@ function whitelistedRun(segment, script) {
   const targets = testTargets(extra);
   if (!targets.length) return true;                    // 附加参数没点名测试文件（--grep 之类）
   if (!scope) return false;
-  return targets.every(({ rel, truncated }) => {
-    // allow 侧不受截断影响：前缀本身落在 allow 内 ⇒ 所有以它开头的展开结果也落在 allow 内。
-    if (!rel.startsWith(scope.allow)) return false;
-    // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
-    // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
-    // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
-    return !scope.deny.some(d => rel.startsWith(d) || (truncated && d.startsWith(rel)));
-  });
+  return targets.every(target => targetInScope(scope, target));
 }
 
 // 这一段是不是在容器里跑。容器里 HOME 是一次性目录，够不到宿主机家目录。
@@ -206,12 +214,15 @@ function inContainer(head, script) {
   return head === 'docker' || (script ? /docker/.test(script) : false);
 }
 
-// 带 preload-env、且只碰 tests/unit 的单文件跑法：隔离与 npm run test:unit 完全同款，
-// 必须放行——否则 TDD 的「写一个失败测试 → 最小实现」每一步都会被确认框打断。
-function isIsolatedUnitRun(segment) {
-  if (!/--import\s+\S*tests\/setup\/preload-env\.mjs/.test(segment)) return false;
+// 带 preload-env、且只碰 tests/unit/ 与 tests/invariants/ 顶层的单文件跑法：隔离与
+// npm run test:unit / test:invariants 完全同款，必须放行——否则 TDD 的「写一个失败测试 → 最小实现」
+// 每一步都会被拦下。
+const PRELOAD_FLAG = '--import ./tests/setup/preload-env.mjs';
+const HAS_PRELOAD = /--import\s+\S*tests\/setup\/preload-env\.mjs/;
+function isIsolatedFileRun(segment) {
+  if (!HAS_PRELOAD.test(segment)) return false;
   const specs = testTargets(segment);
-  return specs.length > 0 && specs.every(t => t.rel.startsWith('tests/unit/'));
+  return specs.length > 0 && specs.every(onHost);
 }
 
 // 匹配前把同一条命令的不同写法压成同一份文本：去掉引号与反斜杠，/./ 与 // 规整成 /。
@@ -237,7 +248,7 @@ function segmentReason(segment, context) {
     || (SMOKE_RUNNER.test(segment) && SMOKE_DIR.test(context));
   if (!inDomain) return null;                                        // 域外（npm run inventory:check 等）
   if (whitelistedRun(segment, script)) return null;
-  if (!script && isIsolatedUnitRun(segment)) return null;
+  if (!script && isIsolatedFileRun(segment)) return null;
   return REASONS.find(({ re }) => re.test(segment))?.why ?? FALLBACK_REASON;
 }
 
@@ -270,8 +281,10 @@ const ASK_TEXT = {
 };
 
 // 命令 → 等价的容器跑法。顺序即优先级，第一条命中为准；最后一条是兜底。
+// 点名了测试文件的段先走 singleFileRoute，到不了这张表（变异检查除外）。
+const MUTATE_CMD = /\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/;
 const CONTAINER_ALTERNATIVE = [
-  [/\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, 'npm run mutate:docker -- <文件> [--lines=A-B]'],
+  [MUTATE_CMD, 'npm run mutate:docker -- <文件> [--lines=A-B]'],
   [/\bnpm\s+run\s+test:integration\b/, 'npm run test:docker:integration'],
   [/\bnpm\s+run\s+test:invariants:(server|env)\b/, 'npm run test:docker:invariants'],
   [/\bnpm\s+run\s+[\w:.-]*e2e|playwright/, 'npm run test:docker:e2e'],
@@ -281,7 +294,7 @@ const CONTAINER_ALTERNATIVE = [
 // 一段的去向。同一段里 NEEDS_HUMAN 优先：`RUN_CLAUDE_INTEGRATION=1 npm test` 这一段同时落在
 // npm test 的 deny 形态里，但它要的是真 turn，换到容器里跑不了。替代命令也只看这一段——拿整条
 // 命令去比的话，`npm run test:e2e && npm test` 会被前一段的 e2e 字样带到 test:docker:e2e。
-function segmentRoute(segment, context) {
+function segmentRoute(segment, context, raw) {
   const why = segmentReason(segment, context);
   if (!why) return null;
   const human = NEEDS_HUMAN.find(({ re }) => re.test(segment));
@@ -289,12 +302,82 @@ function segmentRoute(segment, context) {
   if (RCI_EXPORTED.test(context) && RCI_CONSUMER.test(segment)) {
     return { decision: 'ask', why: RCI_WHY, alternative: null, costs: ['credentials'] };
   }
+  const file = MUTATE_CMD.test(segment) ? null : singleFileRoute(segment, raw);
+  if (file) return { decision: 'deny', why, ...file };
   const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(segment))[1];
-  return { decision: 'deny', why, alternative: alt };
+  return { decision: 'deny', why, alternative: alt, where: 'container' };
+}
+
+// 点名了测试文件的段：替代命令只跑那几个文件。开发循环里一次单文件验证被拒后若指去 test:docker，
+// 等于每轮跑 5 档全量（2026-10-23 实测 101s，同一个单测文件在宿主机上 0.3s）。
+//   文件都在宿主机范围内（只是缺 preload）→ 补上 preload，留在宿主机
+//   否则 → npm run test:docker:file -- 那几个文件（glob 原样保留，由敲命令的 shell 或 node --test 自己展开）
+// 没点名文件 → null，回到 CONTAINER_ALTERNATIVE。
+// 判定看规整后的 segment；替代命令要能原样再敲一遍，所以词从原文 raw 里切、保留引号——
+// 从规整文本拼的话 `--test-name-pattern="foo bar"` 会被 shell 拆成两个参数。
+function singleFileRoute(segment, raw) {
+  const tokens = shellWords(raw).map(word => ({ word, plain: normalizeShellText(word) }));
+  const end = tokens.findIndex(t => /^\d*[<>]/.test(t.plain));  // 重定向及其后不属于这条命令
+  const all = end === -1 ? tokens : tokens.slice(0, end);
+  const head = commandHead(segment);
+  let args;
+  let at = -1;
+  if (head === 'node') {
+    at = all.findIndex(t => t.plain.replace(/^.*\//, '') === 'node');
+    args = all.slice(at + 1).filter((t, i, a) => t.plain !== '--test'
+      && !(t.plain === '--import' && /tests\/setup\//.test(a[i + 1]?.plain ?? ''))
+      && !/^(?:\.\/)?tests\/setup\//.test(t.plain));
+  } else {
+    const sep = all.findIndex(t => t.plain === '--');
+    args = sep === -1 ? [] : all.slice(sep + 1);
+  }
+  if (!args.some(t => /^(?:\.\/)?tests\//.test(t.plain))) return null;
+  // node --test 不认目录（当成模块去 import，报 ERR_UNSUPPORTED_DIR_IMPORT）：
+  // 没有扩展名也没有 glob 的测试路径按目录处理，展开成与 npm 脚本同款的 <目录>/*.test.mjs
+  const asRunnable = t => (/^(?:\.\/)?tests\/[\w./-]*$/.test(t.plain) && !/\.[cm]?[jt]s$/.test(t.plain)
+    ? `${t.word.replace(/\/$/, '')}/*.test.mjs` : t.word);
+  const words = all.map(asRunnable);
+  args = args.map(asRunnable);
+  const targets = testTargets(segment);
+  if (targets.length && targets.every(onHost)) {
+    const alternative = head === 'node'
+      ? [...words.slice(0, at + 1), PRELOAD_FLAG, ...words.slice(at + 1)].join(' ')
+      : `node ${PRELOAD_FLAG} --test ${args.join(' ')}`;
+    return { alternative, where: 'host' };
+  }
+  return { alternative: `npm run test:docker:file -- ${args.join(' ')}`, where: 'container' };
+}
+
+// 按 shell 规则在引号外的空白处切词，每个词保留原文（引号、反斜杠原样留着）。
+function shellWords(text) {
+  const words = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) cur += text[++i];
+    } else if (c === '\\' && i + 1 < text.length) {
+      cur += c + text[++i];
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+    } else if (/\s/.test(c)) {
+      if (cur) words.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  if (cur) words.push(cur);
+  return words;
 }
 
 /**
- * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null, costs?: string[]}}
+ * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null, where?: 'host'|'container', costs?: string[]}}
+ *   where 只在 deny 时有：替代命令在宿主机还是容器里跑
  *   costs 只在 ask 时有：ASK_TEXT 的键，按出现顺序去重
  */
 export function decideRoute(command) {
@@ -310,7 +393,7 @@ export function decideRoute(command) {
   // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
   // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
   const routes = collapsed.split(/\|\||&&|[|;&\n]/)
-    .map(segment => segmentRoute(normalizeShellText(segment), context))
+    .map(segment => segmentRoute(normalizeShellText(segment), context, segment))
     .filter(Boolean);
   if (!routes.length) return null;
   // 有一段该 deny 整条就 deny：ask 放行的是【整条】命令，人为 smoke 点了「允许」，拼在后面的
@@ -344,7 +427,11 @@ function main() {
   if (!route) process.exit(0);
 
   let reason;
-  if (route.decision === 'deny') {
+  if (route.decision === 'deny' && route.where === 'host') {
+    reason = `⛔ 这条命令绕过了 preload-env，本钩子直接拒绝——【不需要找人】，在开发机上换成下面那条重试即可。\n\n`
+      + `原因：${route.why}\n\n`
+      + `改跑：${route.alternative}\n`;
+  } else if (route.decision === 'deny') {
     reason = `⛔ 这条命令必须在一次性环境里跑，本钩子直接拒绝——【不需要找人】，换成下面那条重试即可。\n\n`
       + `原因：${route.why}\n\n`
       + `改跑：${route.alternative}\n（首次用先 npm run docker:build，约 7 分钟）\n\n`
