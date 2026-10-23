@@ -10,6 +10,9 @@ export const DEFAULT_DOC_GLOBS = Object.freeze([
   'README.md',
   'README.en.md',
   'CLAUDE.md',
+  // 从 CLAUDE.md 拆出的按路径加载指令。里面同样写着 npm script 名与文件路径，
+  // 不扫的话它们会比 CLAUDE.md 先漂移。分发树里没有 .claude/，这条自然展开为空。
+  '.claude/rules/*.md',
   'SECURITY.md',
   '.github/copilot-instructions.md',
   'docs/*.md',

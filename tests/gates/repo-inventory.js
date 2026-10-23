@@ -55,6 +55,8 @@ const ROOT_FILES = new Map([
 // 前缀先匹配先赢，所以更具体的必须排在通配之前。
 const PREFIX_RULES = [
   ['.github/', 'Automation'],
+  // 从 CLAUDE.md 拆出的按路径加载指令，与 CLAUDE.md 同类
+  ['.claude/rules/', 'Instructions'],
   // desktop/ = macOS 专属入口整体；launchd/ 更具体，必须排在前面
   ['desktop/launchd/', 'Desktop integration'],
   ['desktop/', 'Desktop integration'],

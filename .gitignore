@@ -37,6 +37,9 @@ ccm.config.json.*
 # 它若只存在于某一个 worktree，其余 worktree（含生产 server 所在的主树）就毫无防护。
 # 入库后 git 会把它带到每个 worktree 与每次 clone。settings.local.json 仍不入库（个人/凭据）。
 !/.claude/settings.json
+# 例外：rules/ 是从 CLAUDE.md 拆出来、按路径按需加载的 agent 指令，理由同上——
+# 不入库的话 worktree 与 clone 都拿不到（Claude Code 只为 worktree 回读主树的 skills/agents/commands，不含 rules）。
+!/.claude/rules/
 
 # 历史遗留守卫：常驻 worktree 现已改为仓库外的平级兄弟目录（../claude-chat-mobile-<分支名>，
 # 见 CLAUDE.md 分支纪律），本目录不再使用。留着以防日后有人在仓内建 worktree。
