@@ -109,7 +109,7 @@ const REASONS = [
   { re: new RegExp(`\\bnode\\b[^|&;]*--test(?![\\w-])|${DIRECT_TEST_FILE.source}`), why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
-  + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit/、tests/invariants/ 顶层单文件跑法）';
+  + '（白名单只有 npm run lint / check / test:unit / test:invariants / test:e2e，外加带 preload-env 的 tests/unit/、tests/invariants/ 顶层单文件跑法）';
 
 // 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
 // `grep -rn RUN_CLAUDE_INTEGRATION app/src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
