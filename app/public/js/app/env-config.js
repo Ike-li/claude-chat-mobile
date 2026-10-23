@@ -21,7 +21,7 @@ export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
   // 退出本面板后回哪：本面板是通用设置切出去的第二层，默认退回来源页而不是关到首页
   // （理由见 index.html #envConfigBack 的注释）。注入而不是在这里 import general——
-  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」。
+  // 本模块不认识通用设置面板，只知道「退出后该通知调用方」，并把 open({ from }) 原样交回去。
   afterClose = () => {},
   // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或有进程管理器
   // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路，
@@ -269,6 +269,7 @@ export function createEnvConfigPanel({
 
   function renderItem(item) {
     const row = el('div', 'space-y-1');
+    row.dataset.envKey = item.key; // open({ focusKey }) 的落点（告警里的「管理工作区」直达工作区列表，#301）
     const field = { key: item.key, original: item.value ?? '', replacing: false, isSecret: !!item.secret, overriddenByEnv: !!item.overriddenByEnv };
 
     if (item.kind === 'toggle') {
@@ -484,8 +485,11 @@ export function createEnvConfigPanel({
     footer.insertBefore(btn, saveBtn);
   }
 
-  function open() {
+  // from：从哪打开（退出时原样交给 afterClose，由调用方决定退回哪）；focusKey：读完后滚到哪一项。
+  let openedFrom = null;
+  function open({ from = null, focusKey = null } = {}) {
     if (!modal || loading) return;
+    openedFrom = from;
     beforeOpen?.();
     loading = true;
     body.replaceChildren(el('div', 'text-xs text-ink-soft', t('读取中…')));
@@ -498,17 +502,18 @@ export function createEnvConfigPanel({
         return;
       }
       render(res);
+      if (focusKey) body.querySelector(`[data-env-key="${focusKey}"]`)?.scrollIntoView({ block: 'start' });
     });
   }
 
   function close() {
     if (modal) closeSheet(modal);
-    afterClose();
+    afterClose(openedFrom);
   }
 
   function bind() {
     const trigger = $('btnEnvConfig');
-    if (trigger) trigger.onclick = open;
+    if (trigger) trigger.onclick = () => open();
     // 点 ← 与点遮罩同义（都是「退回上一级」）：同一张面板两种关法落到两个地方会再坑一次。
     const backBtn = $('envConfigBack');
     if (backBtn) backBtn.onclick = close;

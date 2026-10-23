@@ -224,6 +224,14 @@ let viewingRowRegistry = null;
 let noSessionIdMode = false;
 // 握手不发 models 事件：复现真 server「该 cwd 无 models 缓存 → 不推、等 scout」的窗口。见 /__arm-no-models。
 let noModelsMode = false;
+// 握手推的模型清单（/__replay-models 重发同一份，再多带一条）
+const MOCK_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
+  { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
+  { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
+  { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
+  { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
+];
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // statusline 桥默认未装：面板上「未装 · 安装」那条分支才走得到（已装态由 statusline:setup 切换）
@@ -269,6 +277,7 @@ const mockServicePayload = () => ({
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
   missingFolders: mockMissingFolders,
+  missingFolderPaths: mockMissingFolderPaths,
   hooksBridge: { state: mockHooksState, off: false },
   statuslineBridge: { state: mockStatuslineState, configured: mockStatuslineConfigured, off: false },
 });
@@ -504,6 +513,25 @@ let mockClientError = null;
 let mockUpdateCheck = 'same';
 let mockUpdateCheckCalls = 0;
 let mockMissingFolders = 0; // 配置了却找不到的文件夹个数（同真 server 的 service.missingFolders），由 __set-connected-folders?missing= 注入
+// #301：找不到的路径（同真 server 的 service.missingFolderPaths）与「磁盘上此刻不在的目录」。真 server 不盯目录本身，
+// 只在加载清单（启动、热加载、重新检查）时重算——所以 __set-gone-folders 只改磁盘态，不广播；重算走 recomputeMockMissing。
+let mockMissingFolderPaths = [];
+let mockGoneFolders = new Set();
+function recomputeMockMissing() {
+  mockMissingFolderPaths = mockWorkdirsList.map(e => e.path).filter(p => mockGoneFolders.has(p));
+  mockMissingFolders = mockMissingFolderPaths.length;
+}
+function broadcastMockInstances() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd),
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload(),
+    },
+  });
+}
 const DEFAULT_MOCK_RESTARTS = {
   units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
   recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
@@ -605,6 +633,8 @@ function resetMockState() {
   mockMissingFolders = 0;
   mockUpdateCheck = 'same';
   mockUpdateCheckCalls = 0;
+  mockMissingFolderPaths = [];
+  mockGoneFolders = new Set();
   mockRestarts = DEFAULT_MOCK_RESTARTS;
   mockCanRestart = true;
   mockDevRestartDeny = false;
@@ -909,6 +939,16 @@ app.post('/__arm-no-models', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 模型清单整份重发：真 server 在重连回放、每轮 init 后的 supportedModels() 都会再推一次。
+// 多带一条 claude-replayed-model，spec 等它的 option 出现，确认前端真的按新清单重建过下拉框。
+app.post('/__replay-models', (_req, res) => {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'models', payload: { models: [...MOCK_MODELS, { value: 'claude-replayed-model', displayName: 'Claude Replayed' }] },
+  });
+  res.json({ ok: true });
+});
+
 // 跨设备已读位点：模拟「这个会话已经在另一台设备上读过了」——直接往服务端共享位点写一条 seen。
 // 本设备的 localStorage 里没有任何该会话的记录，正是换设备后的真实处境。
 // 服务端共享位点的读出面，供 E2E 断言「本机的已读/标记确实上报了」——真 server 那边这是
@@ -930,6 +970,15 @@ app.post('/__arm-read-elsewhere', (req, res) => {
   const sessionId = req.query?.sessionId;
   if (!sessionId) return res.status(400).json({ ok: false });
   mockReadState.seen[sessionId] = mockListClockBase + 60_000; // 晚于该行 lastUsedAt
+  res.json({ ok: true });
+});
+
+// 把全局基线拨到 agoMs 之前：mock 的旧会话（主工作区 -10s…-40min、无文件夹 -1h）随之晚于基线、按时间判据亮未读。
+// 缺省基线钉在 reset 时刻，这些行全在它之前——「本页 / 页外开着的」两组就造不出按时间亮的未读（#300）。
+app.post('/__arm-read-baseline', (req, res) => {
+  const agoMs = Number(req.query?.agoMs);
+  if (!Number.isFinite(agoMs)) return res.status(400).json({ ok: false });
+  mockReadState.baselineTs = Date.now() - agoMs;
   res.json({ ok: true });
 });
 
@@ -1037,6 +1086,16 @@ app.post('/__dev-mode', (req, res) => {
     },
   });
   res.json({ ok: true });
+});
+
+// #301：磁盘上此刻不在的目录（逗号分隔；缺的会补进工作区列表，让编辑器里看得见它们）。apply=1 模拟「启动时就不在」：
+// 当场重算并广播；不带 apply 只改磁盘态——真 server 察觉不到目录回来或丢了，要等「重新检查」或改配置。
+app.post('/__set-gone-folders', (req, res) => {
+  const paths = typeof req.query?.paths === 'string' && req.query.paths ? req.query.paths.split(',') : [];
+  mockGoneFolders = new Set(paths);
+  for (const p of paths) if (!mockWorkdirsList.some(e => e.path === p)) mockWorkdirsList.push({ path: p });
+  if (req.query?.apply === '1') { recomputeMockMissing(); broadcastMockInstances(); }
+  res.json({ ok: true, missing: mockMissingFolderPaths });
 });
 
 // 中途换成「手机上改不了清单」的安装形态。真 server 的每帧 instances 广播都带 foldersReadonly（启动时就定了），
@@ -1475,15 +1534,7 @@ io.on('connection', socket => {
     // 2. models（noModelsMode 武装时整条不发——复现真 server 无缓存不推、等 scout 的窗口）
     if (!noModelsMode) socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'models', payload: {
-        models: [
-          { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
-          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
-          { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
-          { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
-          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
-        ]
-      }
+      type: 'models', payload: { models: MOCK_MODELS }
     });
 
     // 3. permission_mode
@@ -1850,7 +1901,7 @@ io.on('connection', socket => {
     // 已读位点搭 session:list 回去（与真 server 一致：不另开广播，保证行数据与未读判定同帧）。
     // 包一层统一注入而不是逐个 callback 出口加——这个 handler 有五个以上返回分支，漏一个就会让
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
-    // 与真 server 一致只回本页行的位点（全量表最多 500 条，而抽屉每 12 秒 revalidate 一次）：
+    // 与真 server 一致只回本页行的位点（全量表最多 1000 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
     const { cwd, all } = payload || {};
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
@@ -3167,6 +3218,13 @@ io.on('connection', socket => {
     });
     ack({ ok: true, dirs: mockDirs() });
   });
+  // 告警里的「重新检查」（#301，同真 server 的 folders:recheck）：按此刻的磁盘态重算找不到的、广播、回执带结果。
+  socket.on('folders:recheck', (_payload, ack) => {
+    recomputeMockMissing();
+    broadcastMockInstances();
+    if (typeof ack === 'function') ack({ ok: true, missingFolders: mockMissingFolders, missingFolderPaths: mockMissingFolderPaths });
+  });
+
   // 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
   // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
   socket.on('folders:remove', (payload, ack) => {
@@ -3261,6 +3319,8 @@ io.on('connection', socket => {
         });
       }
       mockWorkdirsList = changes.WORKDIRS.map((e) => (typeof e === 'string' ? { path: e } : e));
+      // 同真 server 的 WORKDIRS 热加载：重算找不到的并广播（删掉缺失项并保存后告警随之消失，#301）
+      if (mockGoneFolders.size) { recomputeMockMissing(); broadcastMockInstances(); }
     }
     // restartRequired 按 key 分档，不能恒 true：WORKDIRS 在 schema 里标着 reload:'hot'（全表唯一），
     // 改它即时生效，提示重启会诱导用户白白中断所有会话与后台任务。mock 不能 import app/src
@@ -3279,6 +3339,7 @@ io.on('connection', socket => {
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
       missingFolders: mockMissingFolders,
+      missingFolderPaths: mockMissingFolderPaths,
       // 「重启记录」段夹具：默认给一条例行的（每天一次的 DHCP 漂移重启，**不标黄**）。
       // 默认不给 flapping 样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
       // flapping 那条路径由 test:service-flapping 场景注入 —— 否则 alert→text-warning 这个映射

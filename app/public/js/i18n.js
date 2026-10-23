@@ -398,8 +398,6 @@ export const EN_DICT = Object.freeze({
   '服务端运行时依赖与浏览器端 Socket.IO 客户端': 'Server runtime dependencies and the browser Socket.IO client',
   '浏览器端': 'browser',
   '未声明许可': 'no license declared',
-  '检查中…': 'Checking…',
-  '检查失败': 'Check failed',
   '有新版 {latest}（当前 {current}）': 'Update available: {latest} · you have {current}',
   '已是最新（{current}）': 'Up to date: {current}',
   '本地领先：当前 {current}，GitHub 最新 {latest}': 'Ahead of the latest release: you have {current}, GitHub\'s latest is {latest}',
@@ -566,6 +564,11 @@ export const EN_DICT = Object.freeze({
   '标为已读': 'Mark as read',
   '标为未读后，这一行会一直显示「未读」，直到你再次打开它。': 'Marked as unread, this row keeps its "Unread" tag until you open the session again.',
   '标为已读后，这一行的「未读」提示消失。': 'Marked as read, the "Unread" tag on this row goes away.',
+  // 文件夹行长按「全部标为已读」（#300）
+  '全部标为已读': 'Mark all as read',
+  '把这里的 {n} 个未读会话标为已读。': 'Mark the {n} unread sessions here as read.',
+  '这里没有未读会话': 'No unread sessions here',
+  '未读数加载中，稍后再试': 'Still loading the unread count, try again in a moment',
   // 手动标记的会话被分页挤出本页时，服务端单独补回来，前端渲染成列表顶部这一组（2026-09-08）
   '稍后再看': 'Saved for later',
   '点按跳到下一条': 'Tap to jump to the next one',
@@ -875,8 +878,16 @@ export const EN_DICT = Object.freeze({
   '连不上 ntfy 服务': 'can\'t reach the ntfy server',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
-  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后重启服务，或在配置的「工作区列表」里删掉':
-    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — restart the service once they\'re back, or remove them from "Workspaces" in the config',
+  '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉':
+    '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage workspaces"',
+  // 告警行内的三个动作（#301）
+  '管理工作区': 'Manage workspaces',
+  '重新检查': 'Check again',
+  '忽略': 'Dismiss',
+  '检查中…': 'Checking…',
+  '检查失败': 'Check failed',
+  '还有 {n} 个找不到': '{n} still missing',
+  '都找到了': 'All found',
 
   // —— 安全日志段（审计记录 → 人话）——
   '安全日志': 'Security log',

@@ -58,6 +58,20 @@ export function resolveDirUnreadBadge(count) {
   return { state: 'unread', visible: true, text: t('{n} 未读').replace('{n}', String(count)) };
 }
 
+// 抽屉一个分组里「画出来且未读」的会话（#300）：本页 sessions + 稍后再看 pinned + 页外开着的 open，按 id 去重。
+// 目录角标的计数与长按「全部标为已读」的目标共用这一个集合——此前角标只数前两组，open 行照样亮
+// 「未读」chip，角标却不数它。isUnread 由调用方给（含「正在看」与手动标记的判定），这里只管集合。
+export function unreadSessionsInGroup(group, isUnread) {
+  const ids = new Set();
+  const out = [];
+  for (const s of [...(group?.sessions || []), ...(group?.pinned || []), ...(group?.open || [])]) {
+    if (!s?.id || ids.has(s.id)) continue;
+    ids.add(s.id);
+    if (isUnread(s)) out.push(s);
+  }
+  return out;
+}
+
 // 手动未读的当前判据：标记时刻是否晚于已看时刻。相等算已读（与 `lastUsedAt > seenBar` 的
 // 「恰好相等不亮」同向）。脏值/缺失一律 false——失败方向是「不亮」，不制造无法消除的假未读。
 export function isManualUnreadNow(manual, seen, sessionId) {
