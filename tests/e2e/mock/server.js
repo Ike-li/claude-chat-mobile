@@ -2950,7 +2950,7 @@ io.on('connection', socket => {
   socket.on('dev:restart', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     if (!mockCanRestart || mockDevRestartDeny) {
-      return ack({ ok: false, error: '当前进程没有进程管理器托管（终端里直接 npm start 就是这样），停了不会自动拉起 —— 拒绝重启' });
+      return ack({ ok: false, error: '当前进程没有进程管理器托管（在终端里用 npm start 或 npm run dev 起的都是这样），停了不会自动拉起 —— 拒绝重启' });
     }
     ack({ ok: true });
     const gen = mockResetGeneration;
