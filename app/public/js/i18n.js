@@ -551,6 +551,10 @@ export const EN_DICT = Object.freeze({
   '标为已读后，这一行的「未读」提示消失。': 'Marked as read, the "Unread" tag on this row goes away.',
   // 文件夹行长按「全部标为已读」（#300）
   '全部标为已读': 'Mark all as read',
+  // 文件夹置顶（#305）
+  '置顶': 'Pin to top',
+  '取消置顶': 'Unpin',
+  '置顶没成功，稍后再试': 'Couldn\'t pin — try again later',
   '把这里的 {n} 个未读会话标为已读。': 'Mark the {n} unread sessions here as read.',
   '这里没有未读会话': 'No unread sessions here',
   '未读数加载中，稍后再试': 'Still loading the unread count, try again in a moment',

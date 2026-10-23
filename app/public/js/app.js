@@ -7471,19 +7471,30 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     // 长按文件夹行（#300）→「全部标为已读」。每一节都有（连接根、子文件夹小节、「无文件夹」），也不看
     // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致。
+    // 连接根还多一项「置顶 / 取消置顶」（#305）：有未读时它是次按钮，没有未读时它就是主按钮。也不看
+    // foldersReadonly：置顶存在数据目录，不写配置。
     attachLongPress(toggleBtn, async () => {
       haptic('tap');
       const targets = unreadSessionsForDir(d);
-      if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
-      if (!targets.length) { drawer.showNotice(t('这里没有未读会话')); return; }
-      const ok = await appConfirm({
-        title: baseName(d),
-        body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(targets.length)),
-        okText: t('全部标为已读'),
+      const pinText = projectsState.kindOf(d) === 'connected' ? (projectsState.isPinned(d) ? t('取消置顶') : t('置顶')) : null;
+      const n = targets?.length ?? 0;
+      if (!pinText) {
+        if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
+        if (!n) { drawer.showNotice(t('这里没有未读会话')); return; }
+      }
+      const choice = await appConfirm(n
+        ? { title: baseName(d), body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(n)), okText: t('全部标为已读'), altText: pinText }
+        : { title: baseName(d), body: targets === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话'), okText: pinText });
+      if (!choice) return;
+      if (n && choice !== 'alt') {
+        unread.markAllRead(targets.map(s => s.id));
+        refreshUnreadMarks();
+        return;
+      }
+      // 不做乐观更新：等服务端广播新清单再重画（前端不存置顶状态）
+      socket.timeout(10_000).emit('folders:pin', { root: d, pinned: !projectsState.isPinned(d) }, (err, res) => {
+        if (err || !res?.ok) drawer.showNotice(t('置顶没成功，稍后再试'));
       });
-      if (!ok) return;
-      unread.markAllRead(targets.map(s => s.id));
-      refreshUnreadMarks();
     });
 
     // 物理热区扩大版 "＋" 新建按钮

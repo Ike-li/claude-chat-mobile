@@ -67,6 +67,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'folders:add',
   'folders:browse',
   'folders:mkdir',
+  'folders:pin',
   'folders:remove',
   'git:branches',
   'git:diff',

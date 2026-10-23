@@ -535,16 +535,22 @@ function mockDirs() {
 const MOCK_SCRATCH_ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
 let mockSubProjects = []; // [{ key, root }]：有会话的子文件夹（真 server 扫盘得出），场景显式开启
 let mockScratchSessions = []; // 「无文件夹」项目 session:list 的行（真 server 由各 scratch 目录的会话并成），场景显式开启
+// 文件夹置顶（#305）：同真 server 的 pinned-roots，有序数组、最后置顶的在最前。mockPinFail 让 folders:pin 回失败 ack
+let mockPinnedRoots = [];
+let mockPinFail = false;
 function mockDirFields() {
   const dirs = mockDirs();
-  const projects = [];
-  for (const d of dirs) {
+  // 同真 server composeProjects：先按根组块（根 + 它的子文件夹），只对块排序，「无文件夹」垫底
+  const blocks = dirs.map(d => {
     const name = d.split('/').pop() || d;
-    projects.push({ key: d, root: d, label: name, kind: 'connected' });
+    const block = [{ key: d, root: d, label: name, kind: 'connected', ...(mockPinnedRoots.includes(d) ? { pinned: true } : {}) }];
     for (const sub of mockSubProjects) {
-      if (sub.root === d) projects.push({ key: sub.key, root: d, label: `${name} › ${sub.key.slice(d.length + 1)}`, kind: 'subfolder' });
+      if (sub.root === d) block.push({ key: sub.key, root: d, label: `${name} › ${sub.key.slice(d.length + 1)}`, kind: 'subfolder' });
     }
-  }
+    return block;
+  });
+  const rank = d => (mockPinnedRoots.includes(d) ? mockPinnedRoots.indexOf(d) : mockPinnedRoots.length);
+  const projects = blocks.sort((a, b) => rank(a[0].key) - rank(b[0].key)).flat();
   // 「无文件夹」只在用着时占一节（同真 server：有实例开在里面，或正停在它的新会话页上）
   if (mockInstances.some(i => i.projectKey === MOCK_SCRATCH_ROOT) || (!viewingInstanceId && pendingFreshCwd === MOCK_SCRATCH_ROOT)) {
     projects.push({ key: MOCK_SCRATCH_ROOT, root: MOCK_SCRATCH_ROOT, label: null, kind: 'scratch' });
@@ -600,6 +606,8 @@ function resetMockState() {
   mockScratchSessions = [];
   mockFolderTree = createMockFolderTree();
   mockAddedFolders = [];
+  mockPinnedRoots = [];
+  mockPinFail = false;
   mockFoldersAddError = null;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
@@ -1121,6 +1129,12 @@ function disconnectMockFolder(path) {
   });
   return null;
 }
+
+// #305：folders:pin 一律回失败 ack（界面上不得出现假置顶）
+app.post('/__folder-pin-fail', (_req, res) => {
+  mockPinFail = true;
+  res.json({ ok: true });
+});
 
 // P0-PROJ-6c：另一台设备断开文件夹，而这一页正断着线（发不了 folders:remove）。
 app.post('/__disconnect-folder', (req, res) => {
@@ -3180,6 +3194,20 @@ io.on('connection', socket => {
     if (typeof ack !== 'function') return;
     const error = disconnectMockFolder(payload?.path);
     ack(error ? { ok: false, error } : { ok: true, dirs: mockDirs() });
+  });
+  socket.on('folders:pin', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const root = payload?.root;
+    if (mockPinFail || typeof root !== 'string' || !mockDirs().includes(root)) return ack({ ok: false, error: 'invalid_root' });
+    mockPinnedRoots = payload.pinned === true ? [root, ...mockPinnedRoots.filter(r => r !== root)] : mockPinnedRoots.filter(r => r !== root);
+    const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId,
+        viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
+        ...mockDirFields(), instances: mockInstances, service: mockServicePayload() },
+    });
+    ack({ ok: true });
   });
   socket.on('folders:mkdir', (payload, ack) => {
     if (typeof ack !== 'function') return;

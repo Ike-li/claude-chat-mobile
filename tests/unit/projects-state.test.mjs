@@ -48,3 +48,21 @@ test('Windows 路径：scratch 根下的目录照样认作「无文件夹」，�
   assert.equal(state.labelFor(`${W}\\scratch-2026-10-10-abcdef`), '无文件夹');
   assert.equal(state.isNoFolder(`${W}-other\\x`), false, '前缀相邻的目录不算');
 });
+
+// #305：长按连接根时显示「置顶」还是「取消置顶」只看服务端清单里的 pinned，前端不存任何置顶状态。
+test('置顶：只认服务端清单里连接根上的 pinned；子文件夹带了也不算；新清单整份替换', () => {
+  const state = createProjectsState();
+  state.set({
+    dirs: ['/c/a', '/c/b'],
+    projects: [
+      { key: '/c/b', root: '/c/b', label: 'b', kind: 'connected', pinned: true },
+      { key: '/c/b/x', root: '/c/b', label: 'b › x', kind: 'subfolder', pinned: true },
+      { key: '/c/a', root: '/c/a', label: 'a', kind: 'connected' },
+    ],
+  });
+  assert.equal(state.isPinned('/c/b'), true);
+  assert.equal(state.isPinned('/c/a'), false);
+  assert.equal(state.isPinned('/c/b/x'), false, '子文件夹没有置顶这回事');
+  state.set({ dirs: ['/c/a', '/c/b'], projects: [{ key: '/c/a', kind: 'connected' }, { key: '/c/b', kind: 'connected' }] });
+  assert.equal(state.isPinned('/c/b'), false, '取消置顶的广播到了还显示「取消置顶」');
+});
