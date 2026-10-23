@@ -285,6 +285,23 @@ test('断开：剩下的都找不到时照样生效，不被「保留旧清单�
   }
 });
 
+// 外置盘拔了、目录被删了：清单里还挂着它（缺失的目录要到下一次重读才被剔掉），抽屉里照样给「断开」。
+// 断开按 realpath 认配置里的条目，目录不在时 realpath 失败，那一条就永远认不出来、删不掉。
+test('断开：目录已经被删了也能断开，配置里那一条一并删掉', async () => {
+  const gone = join(home, 'code', 'deleted-later');
+  mkdirSync(gone, { recursive: true });
+  const srv = await startWith([a, gone]);
+  try {
+    await waitFor(() => srv.latest()?.dirs?.includes(gone), '启动时的广播里有这个目录');
+    rmSync(gone, { recursive: true, force: true }); // safe-rm: 在 mkdtemp 一次性目录 root 之下
+    const res = await emitOn(srv.s, 'folders:remove', { path: gone });
+    assert.deepEqual(res, { ok: true, dirs: [a] }, `目录不在了就断不开，抽屉里的「断开」每点一次都报没连接：${JSON.stringify(res)}`);
+    assert.deepEqual(JSON.parse(readFileSync(srv.cfg, 'utf8')).WORKDIRS, [a], '配置文件里那一条还留着');
+  } finally {
+    await srv.stop();
+  }
+});
+
 test('断开正在用的文件夹：已开会话继续，只拒新开', async () => {
   const srv = await startWith([a, b]);
   try {
