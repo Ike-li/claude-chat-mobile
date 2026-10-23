@@ -499,6 +499,11 @@ test.describe('开发循环：点名文件的段，替代命令只跑那几个�
     blocked(`node ${PRELOAD} --test tests/invariants/env/uninstall-symmetry.test.mjs`);
     blocked(`node ${PRELOAD} --test tests/invariants/server/x.test.mjs`);
     blocked(`node ${PRELOAD} --test tests/invariants/e*/uninstall-symmetry.test.mjs`);
+    // 点名排除目录本身：normalizeRel 剥掉尾斜杠后匹配不上以 / 结尾的 deny 前缀，而 node --test
+    // 会递归跑目录（PR #351 review）
+    blocked(`node ${PRELOAD} --test tests/invariants/env`);
+    blocked(`node ${PRELOAD} --test tests/invariants/server/`);
+    blocked('npm run test:invariants -- tests/invariants/env');
   });
 
   test('只缺 preload 的宿主机单文件 → 替代命令补上 preload，且它自己能过钩子', () => {
@@ -522,6 +527,9 @@ test.describe('开发循环：点名文件的段，替代命令只跑那几个�
     for (const [cmd, files] of [
       [`node ${PRELOAD} --test tests/integration/session-delete.test.mjs`, 'tests/integration/session-delete.test.mjs'],
       ['node --test tests/invariants/server/x.test.mjs', 'tests/invariants/server/x.test.mjs'],
+      // node --test 不认目录（当成模块 import，报 ERR_UNSUPPORTED_DIR_IMPORT），替代命令展开成该目录的 glob
+      ['node --test tests/invariants/env', 'tests/invariants/env/*.test.mjs'],
+      ['node --test tests/invariants/server/', 'tests/invariants/server/*.test.mjs'],
       ['npm run test:unit -- tests/integration/session-delete.test.mjs', 'tests/integration/session-delete.test.mjs'],
       ['node --test tests/unit/a.test.mjs tests/integration/b.test.mjs', 'tests/unit/a.test.mjs tests/integration/b.test.mjs'],
       // glob 原样交给容器里的 shell 展开

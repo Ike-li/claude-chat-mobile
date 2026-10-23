@@ -187,7 +187,9 @@ function targetInScope(scope, { rel, truncated }) {
   // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
   // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
   // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
-  return !scope.deny.some(d => rel.startsWith(d) || (truncated && d.startsWith(rel)));
+  // 点名 deny 目录本身也算命中：normalizeRel 剥掉了尾斜杠，`tests/invariants/env` 不以
+  // `tests/invariants/env/` 开头，而 node --test 会递归跑目录。
+  return !scope.deny.some(d => rel.startsWith(d) || `${rel}/` === d || (truncated && d.startsWith(rel)));
 }
 
 // 宿主机能直接跑的单文件范围：与 test:unit、test:invariants 两条白名单脚本的 scope 同一份。
@@ -330,8 +332,12 @@ function singleFileRoute(segment, raw) {
     args = sep === -1 ? [] : all.slice(sep + 1);
   }
   if (!args.some(t => /^(?:\.\/)?tests\//.test(t.plain))) return null;
-  const words = all.map(t => t.word);
-  args = args.map(t => t.word);
+  // node --test 不认目录（当成模块去 import，报 ERR_UNSUPPORTED_DIR_IMPORT）：
+  // 没有扩展名也没有 glob 的测试路径按目录处理，展开成与 npm 脚本同款的 <目录>/*.test.mjs
+  const asRunnable = t => (/^(?:\.\/)?tests\/[\w./-]*$/.test(t.plain) && !/\.[cm]?[jt]s$/.test(t.plain)
+    ? `${t.word.replace(/\/$/, '')}/*.test.mjs` : t.word);
+  const words = all.map(asRunnable);
+  args = args.map(asRunnable);
   const targets = testTargets(segment);
   if (targets.length && targets.every(onHost)) {
     const alternative = head === 'node'
