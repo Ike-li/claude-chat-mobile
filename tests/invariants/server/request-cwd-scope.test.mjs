@@ -179,6 +179,24 @@ test('显式越界的首条消息：拒绝且不在别的工作区里懒开实�
   assert.equal(insts.length, 0, `不得在别的工作区懒开实例，实际 ${JSON.stringify(insts.map(i => i.cwd))}`);
 });
 
+// 验收 O128：离线队列里的首条带着入队时的 cwd，那个文件夹随后被断开。拒收的回执归前端——它把原文放回输入框、
+// 在新会话页上说清楚；服务端再推一行提示，前端的提示条会先清掉整张新会话页，「已断开、改在这里开」跟着没了。
+test('离线重放的首条撞上越界 cwd：照样永久拒收，但不推提示行（在线发送照推，作正对照）', async () => {
+  const notices = from => events.slice(from).filter(e => e.type === 'system' || e.type === 'error').map(e => e.payload?.message);
+  const seenOnline = events.length;
+  const online = await emit('user:message', { text: '在线发到 C', cwd: c, clientMessageId: 'reqscope-c-online' });
+  assert.equal(online.ok, false);
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(notices(seenOnline).length, 1, `正对照：在线发送被拒时服务端推一行提示，这里要看得见，实际 ${JSON.stringify(notices(seenOnline))}`);
+
+  const seenReplay = events.length;
+  const replay = await emit('user:message', { text: '离线时排在 C 的', cwd: c, clientMessageId: 'reqscope-c-outbox', fromOutbox: true });
+  assert.equal(replay.ok, false, `越界 cwd 的离线重放必须拒绝，实际 ${JSON.stringify(replay)}`);
+  assert.equal(replay.permanent, true, '离线队列要据此停止重试');
+  await new Promise(r => setTimeout(r, 200));
+  assert.deepEqual(notices(seenReplay), [], '离线重放被拒时服务端不该再推提示行：回执归前端（它会把原文放回输入框、留着新会话页）');
+});
+
 test('热移除之后：已开会话自己的目录仍可读，但不能在那里新开、也不再列它', async () => {
   writeFileSync(join(b, 'kept.txt'), '移除之前的内容');
   const first = await emit('user:message', { text: '在 B 里开', cwd: b, clientMessageId: 'reqscope-b-1' });

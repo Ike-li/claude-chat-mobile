@@ -1072,6 +1072,35 @@ app.post('/__set-connected-folders', (req, res) => {
   res.json({ ok: true, dirs: mockDirs() });
 });
 
+// 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
+// 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。返回错误码或 null。
+function disconnectMockFolder(path) {
+  const dirs = mockDirs();
+  if (typeof path !== 'string' || !dirs.includes(path)) return 'not_connected';
+  if (mockFoldersAddError) return mockFoldersAddError;
+  mockDirsOverride = dirs.filter(d => d !== path);
+  mockAddedFolders = mockAddedFolders.filter(d => d !== path);
+  // 同真 server reloadWorkdirs：新会话页（没有查看实例）停在被移除的目录上 → 归位到首个剩余目录（O119）
+  const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  if (!viewingInst && pendingFreshCwd === path) pendingFreshCwd = mockDirs()[0] ?? MOCK_SCRATCH_ROOT; // 清单空了就是「无文件夹」（同 primaryWorkDir）
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: { canRestart: mockCanRestart,
+      viewingInstanceId,
+      viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
+      ...mockDirFields(),
+      instances: mockInstances, service: mockServicePayload()
+    }
+  });
+  return null;
+}
+
+// P0-PROJ-6c：另一台设备断开文件夹，而这一页正断着线（发不了 folders:remove）。
+app.post('/__disconnect-folder', (req, res) => {
+  const error = disconnectMockFolder(typeof req.query?.path === 'string' ? req.query.path : '');
+  res.json(error ? { ok: false, error } : { ok: true, dirs: mockDirs() });
+});
+
 // P0-PROJ-6：另一台设备在别的文件夹开了新会话页——服务端的 viewing 是全局单值，广播的工作区随之变（同 session:new）。
 app.post('/__compose-cwd', (req, res) => {
   const cwd = typeof req.query?.cwd === 'string' ? req.query.cwd : '';
@@ -1466,7 +1495,10 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: { canRestart: mockCanRestart,
         viewingInstanceId,
-        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0]?.cwd || '/Users/you/code/claude-chat-mobile'),
+        // 同真 server：连入时下发的是全局 viewingCwd——新会话页（没有查看实例）停在哪就是哪，断开文件夹时它已被归位
+        // （O128：断线期间别的设备断开了这一页的文件夹，重连时这一页要收到归位后的工作区）
+        viewingCwd: workspaceCwdOf(mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
+          || (viewingInstanceId === null && pendingFreshCwd) || mockInstances[0]?.cwd || '/Users/you/code/claude-chat-mobile'),
         ...mockDirFields(),
         instances: mockInstances, service: mockServicePayload()
       }
@@ -3124,25 +3156,8 @@ io.on('connection', socket => {
   // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
   socket.on('folders:remove', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const path = payload?.path;
-    const dirs = mockDirs();
-    if (typeof path !== 'string' || !dirs.includes(path)) return ack({ ok: false, error: 'not_connected' });
-    if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
-    mockDirsOverride = dirs.filter(d => d !== path);
-    mockAddedFolders = mockAddedFolders.filter(d => d !== path);
-    // 同真 server reloadWorkdirs：新会话页（没有查看实例）停在被移除的目录上 → 归位到首个剩余目录（O119）
-    const viewingInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
-    if (!viewingInst && pendingFreshCwd === path) pendingFreshCwd = mockDirs()[0] ?? MOCK_SCRATCH_ROOT; // 清单空了就是「无文件夹」（同 primaryWorkDir）
-    io.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'instances', payload: { canRestart: mockCanRestart,
-        viewingInstanceId,
-        viewingCwd: viewingInst ? workspaceCwdOf(viewingInst.cwd) : pendingFreshCwd,
-        ...mockDirFields(),
-        instances: mockInstances, service: mockServicePayload()
-      }
-    });
-    ack({ ok: true, dirs: mockDirs() });
+    const error = disconnectMockFolder(payload?.path);
+    ack(error ? { ok: false, error } : { ok: true, dirs: mockDirs() });
   });
   socket.on('folders:mkdir', (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -6080,6 +6095,13 @@ io.on('connection', socket => {
         && !mockInstances.some(i => i.instanceId === payload.instanceId)) {
       // 逐字对齐 app/src/server/app.js user:message 的 target.stale 分支：离线重放只回负 ack，不推 sysTo 提示行（O126）
       if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
+      return;
+    }
+    // 同真 server user:message 懒开分支（routeCwd 判越界）：离线队列里的首条带着入队时的 cwd，那个文件夹随后被断开 →
+    // 永久拒收，不投进别的工作区；离线重放只回负 ack，不推提示行（O128）。
+    if (payload?.fromOutbox === true && !payload?.instanceId && typeof payload?.cwd === 'string' && payload.cwd !== MOCK_SCRATCH_ROOT
+      && !mockDirs().some(d => payload.cwd === d || payload.cwd.startsWith(`${d}/`))) {
+      if (typeof ack === 'function') ack({ ok: false, error: '这个目录不在已连接的文件夹里', permanent: true });
       return;
     }
     if (outboxPermanentArmed && payload?.fromOutbox === true) {
