@@ -294,6 +294,26 @@ done | sort -rn | head
   不要指望每个调用点记得传。这和 `HOST_ALLOWED_SCRIPTS` 用白名单而不用黑名单是同一条理由，
   也和 `gate-wiring.test.mjs` 列例外而不是逐个加断言是同一条：**默认安全，例外显式**。
 
+### 跑哪条命令：`npm test`、集成门控与 E2E
+
+- `npm test` = 单测 + `tests/integration/*.test.mjs` 全部，带 `--test-force-exit`。**CI 不跑它**
+  （force-exit 会腰斩异步单测），拆成 `npm run test:unit` 与 `npm run test:integration` 两步。
+- 需要真 agent turn 的集成文件由 `RUN_CLAUDE_INTEGRATION` 门控。列清单用
+  `grep -rl 'process\.env\.RUN_CLAUDE_INTEGRATION' tests/integration/`，**必须带 `process.env` 前缀**：
+  有几个文件的注释里写着「不挂 RUN_CLAUDE_INTEGRATION」，裸词 grep 会把零 token 的用例误判成要真凭据的。
+- `npm run test:e2e` 是 `workers:1` 串行，全量十几分钟；开发循环只跑相关的那几条：
+  `-- tests/e2e/specs/xxx.spec.ts` 或 `-- --grep "P0-08 …"`。本机必带 `NO_PROXY=127.0.0.1,localhost`，
+  否则就绪探针走代理，恒 30s 假红。两个漏跑表现为全绿的坑：
+  - **`--grep` 的模式带空格必须加引号**。不加会被 shell 拆成「第一个词 + 若干位置参数」，而它照样打印
+    「Running 1 test … passed」——2026-09-18 据此得出过「单跑绿、整份跑红」的假对照。
+  - **`--only-changed` 在本仓不可用**。spec 经浏览器访问页面、不 import `app/public`，Playwright 的依赖图
+    看不见产品代码：改 `app.js` 时它选出 0 个测试然后报绿。只有改 spec 自身时才有意义。
+- 全量用 `npm run test:e2e:parallel`：按实测时长 LPT 分片，缺省 `min(8, 核数-2)` 片，`CCM_E2E_SHARDS=N`
+  覆盖；地板约等于最大那个 spec 文件自己的耗时。分片原理、CI 横向分片（`CCM_E2E_SHARD_INDEX`）与
+  `--merge-durations` 并集校验（TEST-02）的来龙去脉和实测数字在 `tests/infra/e2e-parallel.js` 头注释。
+- 遇到疑似时序假红（并行度越高，「等固定时间窗」的用例越容易超时），先用 `CCM_E2E_SHARDS=4` 重跑对照。
+  `P0-SYNC-ACK-TIMEOUT` 记过「4 片下偶发红」，根因未定。
+
 ### 不做：测试时长门禁
 
 阈值必然漂移，且慢不等于错（见 §9）。这一维靠上面那条判据人工判，不进必绿闸。
