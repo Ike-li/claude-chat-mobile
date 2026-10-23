@@ -202,7 +202,7 @@ import {
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
-import { resolveDirUnreadBadge } from './logic/unread.js';
+import { resolveDirUnreadBadge, unreadSessionsInGroup } from './logic/unread.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -6308,17 +6308,16 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 目录头「N 未读」：按该目录已加载的会话页（SWR 缓存）计。搜索态缓存不是全量、不作数；没缓存
   // （从未展开、后台保鲜还没回来）就不显示——不显示 0，也不为了这个数字多发一次 session:list。
   //
-  // pinned（手动标「稍后再看」、被 limit 挤出本页而由服务端单独补回的那组）必须一起数：它们在屏幕上
-  // 有行、有「未读」chip，漏数就成了反方向的同一个毛病——行亮着而角标说 0。数字与 chip 必须同源，
-  // 这也是这两处共用 unread.isUnread 而不是各判一次的原因。
-  function unreadCountForDir(cwd) {
+  // pinned（手动标「稍后再看」、被 limit 挤出本页而由服务端单独补回的那组）与 open（页外开着的会话）
+  // 必须一起数：它们在屏幕上有行、有「未读」chip，漏数就成了反方向的同一个毛病——行亮着而角标说 0。
+  // 数字与 chip 必须同源；文件夹长按「全部标为已读」的目标也是这同一个集合（#300）。
+  function unreadSessionsForDir(cwd) {
     const entry = sessionsCache.get(cwd);
     if (!entry || String(entry.query || '')) return null;
-    let n = 0;
-    for (const s of [...(entry.sessions || []), ...(entry.pinned || [])]) {
-      if (s?.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) n += 1;
-    }
-    return n;
+    return unreadSessionsInGroup(entry, s => unread.isUnread(s, { isViewing: s.id === displayedSessionId }));
+  }
+  function unreadCountForDir(cwd) {
+    return unreadSessionsForDir(cwd)?.length ?? null;
   }
   // 三态渲染（判定在 logic resolveDirUnreadBadge）：pending=缓存还没到位，必须占位说「不知道」，
   // 不能什么都不画——不画就与「确定没有未读」同形，等于在空窗期报一个错误事实。
@@ -7469,6 +7468,23 @@ import { createGateFocusController } from './app/focus-layers.js';
     toggleBtn.appendChild(name);
     toggleBtn.appendChild(badgeGroup);
     dirRow.appendChild(toggleBtn);
+
+    // 长按文件夹行（#300）→「全部标为已读」。每一节都有（连接根、子文件夹小节、「无文件夹」），也不看
+    // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致。
+    attachLongPress(toggleBtn, async () => {
+      haptic('tap');
+      const targets = unreadSessionsForDir(d);
+      if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
+      if (!targets.length) { drawer.showNotice(t('这里没有未读会话')); return; }
+      const ok = await appConfirm({
+        title: baseName(d),
+        body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(targets.length)),
+        okText: t('全部标为已读'),
+      });
+      if (!ok) return;
+      unread.markAllRead(targets.map(s => s.id));
+      refreshUnreadMarks();
+    });
 
     // 物理热区扩大版 "＋" 新建按钮
     const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此工作区新建会话')}">＋</button>`);

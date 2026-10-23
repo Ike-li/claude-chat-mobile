@@ -773,6 +773,41 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     const tracker = createUnreadTracker({ storage: memoryStorage(), now: () => T0 });
     assert.doesNotThrow(() => { tracker.markEntered('s1'); tracker.markSeen('s1'); tracker.setManualUnread('s2', true); });
   });
+
+  // 文件夹长按「全部标为已读」（#300）：每个目标都要同时记 seen、清手动标记，逐条走 read:mark 的
+  // 「标为已读」形状上报——只记 seen 的话服务端那份旧 manual 不清，旧设备回连照样能把它合并回来。
+  test('markAllRead：一批会话全部变已读（含手动标未读的），落盘且逐条上报「标为已读」', () => {
+    const events = [];
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: { m: T0 + 1 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10, onChange: e => events.push(e) });
+    const rows = [{ id: 'a', lastUsedAt: T0 + 5 }, { id: 'm', lastUsedAt: T0 - 100 }];
+    assert.deepEqual(rows.map(r => tracker.isUnread(r, { isViewing: r.id === 'm' })), [true, true], '前提：一条按时间亮、一条是正看着却手动标的');
+
+    tracker.markAllRead(['a', 'm']);
+
+    assert.deepEqual(rows.map(r => tracker.isUnread(r, { isViewing: r.id === 'm' })), [false, false]);
+    const persisted = JSON.parse(storage.dump());
+    assert.deepEqual(persisted.manual, {}, '手动标记清掉');
+    assert.deepEqual(persisted.seen, { a: T0 + 10, m: T0 + 10 });
+    assert.deepEqual(events, [
+      { sessionId: 'a', manual: false, at: T0 + 10 },
+      { sessionId: 'm', manual: false, at: T0 + 10 },
+    ], '复用单条「标为已读」的上报形状，服务端走同一条写入路径');
+  });
+
+  // 一个分组最多画出 500（浏览窗口硬顶）+ 100（稍后再看，受 MANUAL_CAP）+ 20（live 实例上限）行。
+  // 本地表装不下这一批时，同一批里先写的位点被挤掉，重新加载后那几行又亮——服务端那份同理，见 READ-01。
+  test('markAllRead 一次标完最大的分组：重新加载后同一批一条不少（表里原本已满也一样）', () => {
+    const old = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`old-${i}`, T0 + i]));
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: old, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10_000 });
+    const batch = Array.from({ length: 620 }, (_, i) => ({ id: `group-${i}`, lastUsedAt: T0 + 5_000 }));
+    tracker.markAllRead(batch.map(s => s.id));
+
+    const reloaded = createUnreadTracker({ storage, now: () => T0 + 20_000 });
+    const relit = batch.filter(s => reloaded.isUnread(s)).length;
+    assert.equal(relit, 0, `重新加载后 ${relit} 行重新亮起未读`);
+  });
 });
 
 // ---- attachLongPress：抽屉会话行的长按手势（触屏/鼠标走 Pointer Events 计时，桌面右键同效）----
