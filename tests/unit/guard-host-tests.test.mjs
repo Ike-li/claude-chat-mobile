@@ -91,7 +91,7 @@ test('拦: docker 只在命令头/脚本名里才算进了容器', () => {
   blocked('npm test -- --test-name-pattern docker');
 });
 
-// ★ 第六个洞：isIsolatedUnitRun 只做 startsWith('tests/unit/')，不消解 ..
+// ★ 第六个洞：isIsolatedUnitRun（现 isIsolatedFileRun）只做 startsWith('tests/unit/')，不消解 ..
 test('拦: tests/unit/../integration 路径穿越', () => {
   blocked('node --import ./tests/setup/preload-env.mjs --test tests/unit/../integration/session-delete.test.mjs');
 });
@@ -234,7 +234,8 @@ test.describe('决策分档', () => {
     ['npm run test:invariants:server', 'test:docker:invariants'],
     ['npm run test:invariants:env', 'test:docker:invariants'],
     ['npm run mutate -- app/src/x.js', 'mutate:docker'],
-    ['node --test tests/integration/server.test.mjs', 'test:docker'],
+    // 点名了文件就只在容器里跑那几个文件，不把一次单文件验证放大成 5 档全量
+    ['node --test tests/integration/server.test.mjs', 'test:docker:file'],
   ];
 
   for (const [cmd, expectScript] of DENY) {
@@ -483,5 +484,100 @@ test.describe('补缺口：直接跑测试文件、smoke runner、export 写法�
   test('--test-only 这类以 --test 开头的别的参数不算在跑测试', () => {
     allowed('node scripts/app-build.js --test-only');
     blocked('node --test tests/unit/history-list.test.mjs');
+  });
+});
+
+// 2026-10-23：开发循环里一次单文件验证被拒，替代命令却是 5 档全量（npm run test:docker，实测 101s），
+// agent 照着跑，每轮都在等全量。点名了文件的那一段，替代命令只跑那几个文件。
+test.describe('开发循环：点名文件的段，替代命令只跑那几个文件', () => {
+  const PRELOAD = '--import ./tests/setup/preload-env.mjs';
+
+  test('放行: invariants 顶层带 preload 的单文件（与 npm run test:invariants 同档）', () => {
+    allowed(`node ${PRELOAD} --test tests/invariants/auth.test.mjs`);
+    allowed(`node ${PRELOAD} --test tests/unit/a.test.mjs tests/invariants/b.test.mjs`);
+    // env/、server/ 两个子目录与 test:invariants:env / :server 同理，仍不放行
+    blocked(`node ${PRELOAD} --test tests/invariants/env/uninstall-symmetry.test.mjs`);
+    blocked(`node ${PRELOAD} --test tests/invariants/server/x.test.mjs`);
+    blocked(`node ${PRELOAD} --test tests/invariants/e*/uninstall-symmetry.test.mjs`);
+    // 点名排除目录本身：normalizeRel 剥掉尾斜杠后匹配不上以 / 结尾的 deny 前缀，而 node --test
+    // 会递归跑目录（PR #351 review）
+    blocked(`node ${PRELOAD} --test tests/invariants/env`);
+    blocked(`node ${PRELOAD} --test tests/invariants/server/`);
+    blocked('npm run test:invariants -- tests/invariants/env');
+  });
+
+  test('只缺 preload 的宿主机单文件 → 替代命令补上 preload，且它自己能过钩子', () => {
+    for (const [cmd, keep] of [
+      ['node --test tests/unit/history-list.test.mjs', 'tests/unit/history-list.test.mjs'],
+      ['node tests/unit/history-list.test.mjs', 'tests/unit/history-list.test.mjs'],
+      ['node --test-name-pattern=x tests/unit/history-list.test.mjs', '--test-name-pattern=x'],
+      ['node --test tests/invariants/auth.test.mjs 2>&1 | tail -5', 'tests/invariants/auth.test.mjs'],
+      ["'node' --test tests/unit/x.test.mjs", 'tests/unit/x.test.mjs'],
+    ]) {
+      const r = decideRoute(cmd);
+      assert.equal(r?.decision, 'deny', cmd);
+      assert.match(r.alternative, /preload-env\.mjs/, `替代命令应补上 preload：${cmd} → ${r.alternative}`);
+      assert.ok(r.alternative.includes(keep), `替代命令丢了原命令的 ${keep}：${r.alternative}`);
+      assert.doesNotMatch(r.alternative, /docker/, `宿主机就能跑，不该指去容器：${r.alternative}`);
+      assert.equal(decideRoute(r.alternative), null, `钩子给的替代命令自己被拦：${r.alternative}`);
+    }
+  });
+
+  test('点名宿主机跑不了的文件 → npm run test:docker:file -- 那几个文件（不是 5 档全量）', () => {
+    for (const [cmd, files] of [
+      [`node ${PRELOAD} --test tests/integration/session-delete.test.mjs`, 'tests/integration/session-delete.test.mjs'],
+      ['node --test tests/invariants/server/x.test.mjs', 'tests/invariants/server/x.test.mjs'],
+      // node --test 不认目录（当成模块 import，报 ERR_UNSUPPORTED_DIR_IMPORT），替代命令展开成该目录的 glob
+      ['node --test tests/invariants/env', 'tests/invariants/env/*.test.mjs'],
+      ['node --test tests/invariants/server/', 'tests/invariants/server/*.test.mjs'],
+      ['npm run test:unit -- tests/integration/session-delete.test.mjs', 'tests/integration/session-delete.test.mjs'],
+      ['node --test tests/unit/a.test.mjs tests/integration/b.test.mjs', 'tests/unit/a.test.mjs tests/integration/b.test.mjs'],
+      // glob 原样交给容器里的 shell 展开
+      [`node ${PRELOAD} --test tests/invariants/e*/uninstall-symmetry.test.mjs`, 'tests/invariants/e*/uninstall-symmetry.test.mjs'],
+    ]) {
+      const r = decideRoute(cmd);
+      assert.equal(r?.decision, 'deny', cmd);
+      assert.equal(r.alternative, `npm run test:docker:file -- ${files}`, cmd);
+    }
+  });
+
+  // 判定看的是剥掉引号后的文本，替代命令却要原样再敲一遍：从剥过的文本拼出来，
+  // `--test-name-pattern="foo bar"` 会被 shell 拆成两个参数，bar 被当成测试文件（PR #351 review）
+  test('替代命令保留原命令的引号：shell 重新切词后参数边界不变', () => {
+    const argv = cmd => spawnSync('sh', ['-c', `printf '%s\\n' ${cmd}`], { encoding: 'utf8' }).stdout.trimEnd().split('\n');
+    for (const [cmd, arg] of [
+      ['node --test --test-name-pattern="foo bar" tests/unit/history-list.test.mjs', '--test-name-pattern=foo bar'],
+      ["node --test --test-name-pattern='a b' tests/integration/b.test.mjs", '--test-name-pattern=a b'],
+      ['npm run test:unit -- --test-name-pattern="x y" tests/integration/b.test.mjs', '--test-name-pattern=x y'],
+    ]) {
+      const { alternative } = decideRoute(cmd);
+      assert.ok(argv(alternative).includes(arg), `替代命令里 ${arg} 被拆开了：${alternative}`);
+    }
+  });
+
+  test('没点名文件的、变异检查 → 替代命令不变', () => {
+    assert.match(decideRoute('npm test').alternative, /^npm run test:docker\s/);
+    assert.equal(decideRoute('npm run test:integration').alternative, 'npm run test:docker:integration');
+    assert.match(decideRoute('npm run mutate -- app/src/x.js --tests=tests/unit/x.test.mjs').alternative, /mutate:docker/);
+  });
+
+  test('放行: npm run test:docker:file 已在容器里', () => {
+    allowed('npm run test:docker:file -- tests/integration/session-delete.test.mjs');
+  });
+
+  test('钩子输出：宿主机替代命令不说「必须在一次性环境里跑」，也不提 docker:build', () => {
+    const HOOK = fileURLToPath(new URL('../../tests/gates/guard-host-tests.js', import.meta.url));
+    const reasonOf = command => {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8',
+      });
+      return JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+    };
+    const host = reasonOf('node --test tests/unit/history-list.test.mjs');
+    assert.match(host, /preload-env/);
+    assert.doesNotMatch(host, /一次性环境|docker:build/, `宿主机替代命令的文案说成了要进容器：${host}`);
+    const container = reasonOf('node --test tests/integration/b.test.mjs');
+    assert.match(container, /一次性环境/);
+    assert.match(container, /test:docker:file -- tests\/integration\/b\.test\.mjs/);
   });
 });
