@@ -122,7 +122,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const add = picker(page).locator('[data-testid="folder-picker-add"] button');
     await expect(add, '走进去才发现改不了的入口').toBeDisabled();
     await expect(picker(page).locator('[data-testid="folder-picker-add"]')).toContainText('工作区列表来自环境变量 WORK_DIRS，手机上改不了');
-    await expect(picker(page).locator('[data-testid="folder-picker-project"]').first(), '已连接的文件夹照常可选').toBeEnabled();
+    // 断言打在行里的主按钮上：data-testid 挂在外层 div，div 永远算 enabled（#340 review）
+    await expect(picker(page).locator('[data-testid="folder-picker-project"]').first().locator('button').first(), '已连接的文件夹照常可选').toBeEnabled();
     await expectNoBrowserErrors(page);
   });
 
