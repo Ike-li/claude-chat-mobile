@@ -1,5 +1,5 @@
-# 依赖
-/node_modules/
+# 依赖。不带尾斜杠：测试容器与 linked worktree 里 node_modules 是软链，带斜杠只匹配目录，软链会被当成未跟踪文件
+/node_modules
 
 # 环境变量与密钥（绝不提交）
 # 覆盖 .env / .env.local / .env.production / .env.*.local 等
