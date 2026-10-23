@@ -395,6 +395,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 验收 O131（R9 AC-06-06）：英文界面里截断尾巴仍是服务端写的「…（已截断）」，同一张卡的按钮却已是「Show full text」。
+  // 顺带补上 #288 只有单测的那半：英文界面下历史卡照样给「展开全文」（嗅探认服务端原文，不随界面语言变）。
+  test('P0-05-HIST-FULL-EN 英文界面的历史 Bash 卡：截断尾巴显示成英文，照样有「展开全文」', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('ccm_lang', 'en'));
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-long-tool');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await card.locator('summary').click();
+    const out = card.locator('.t-out code');
+    await expect(out).toContainText('…(truncated)');
+    await expect(out, '英文界面里冒出服务端写的中文尾巴').not.toContainText('已截断');
+    await expect(card.locator('[data-testid="tool-expand-full"]')).toHaveText('Show full text');
+    await expectNoBrowserErrors(page);
+  });
+
   // 桌面端 show_widget：SVG 必须作为 data URI 图片显示（不进页面 DOM、不执行脚本），颜色随主题；
   // HTML 组件只给提示；源码残缺 / XML 解析失败退回一行工具调用。
   const decodeSvgSrc = (src: string | null) => decodeURIComponent(String(src).replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));

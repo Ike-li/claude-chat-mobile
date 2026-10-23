@@ -565,6 +565,7 @@ export const EN_DICT = Object.freeze({
   ' …（已截断）': ' …(truncated)',
   '\n…（已截断）': '\n…(truncated)',
   '…（已截断）': '…(truncated)',
+  '（思考内容已脱敏）': '(thinking redacted)',
   '展开全文': 'Show full text',
   '全文不可用': 'Full text unavailable',
   '💭 思考过程': '💭 Thinking',

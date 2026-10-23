@@ -103,6 +103,7 @@ import {
   summarizeTurnFileChanges,
   formatSubagentCardTitle,
   isToolSummaryTruncated,
+  localizeServerThinkingText,
   formatMirrorBannerText,
   formatMirrorComposerHint,
   shouldEmitThrottledHint,
@@ -9104,7 +9105,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
-        wrap.querySelector('.t-body').textContent = msg.content || '';
+        wrap.querySelector('.t-body').textContent = localizeServerThinkingText(msg.content);
         appendNode(wrap, msg);
         return;
       }

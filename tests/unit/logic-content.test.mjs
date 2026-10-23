@@ -7,7 +7,8 @@
 // 同源的还有 -rendering（ANSI/环形缓冲）、-session（会话态聚合）、-ui-state（UI 判定）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, toolOutputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
+import { setLang } from '../../app/public/js/i18n.js';
+import { esc, formatToolSummary, localizeServerThinkingText, toolOutputHighlightClass, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../app/public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -18,6 +19,30 @@ test('esc: 转义 HTML 元字符', () => {
 
 // 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开一坨难读。
 // formatToolSummary 只负责「能 parse 的 JSON → 缩进 pretty；非 JSON/空 → 原样」，不碰 DOM/hljs。
+// 验收 O131（R9 AC-06-06）：截断尾巴是服务端写进摘要的中文原文（shared/tool-summary.js），英文界面照样显示「…（已截断）」，
+// 同一张卡的按钮却已是「Show full text」。显示时按界面语言换掉；嗅探仍认原文（isToolSummaryTruncated，#288）。
+test('formatToolSummary: 英文界面把服务端的截断尾巴换成 …(truncated)，中文界面原样', () => {
+  try {
+    setLang('en');
+    assert.equal(formatToolSummary('row-00\nrow-01 …（已截断）'), 'row-00\nrow-01 …(truncated)');
+    assert.equal(formatToolSummary('{"a":"xx …（已截断）'), '{"a":"xx …(truncated)', '截断残缺的 JSON 走原样分支，尾巴也要换');
+    assert.equal(formatToolSummary('正文里提到 …（已截断） 但没在末尾'), '正文里提到 …（已截断） 但没在末尾', '只认末尾那一处');
+    setLang('zh');
+    assert.equal(formatToolSummary('row-01 …（已截断）'), 'row-01 …（已截断）');
+  } finally { setLang('zh'); }
+});
+
+test('localizeServerThinkingText: 历史思考块里服务端写的截断尾巴与脱敏占位，英文界面下换成英文（验收 O131 同类）', () => {
+  try {
+    setLang('en');
+    assert.equal(localizeServerThinkingText('想了很久 …（已截断）'), '想了很久 …(truncated)');
+    assert.equal(localizeServerThinkingText('（思考内容已脱敏）'), '(thinking redacted)');
+    assert.equal(localizeServerThinkingText('普通思考'), '普通思考');
+    setLang('zh');
+    assert.equal(localizeServerThinkingText('（思考内容已脱敏）'), '（思考内容已脱敏）');
+  } finally { setLang('zh'); }
+});
+
 test('formatToolSummary: 紧凑 JSON 对象 → 2 空格缩进', () => {
   const raw = '{"file_path":"/a.js","old_string":"x"}';
   assert.equal(formatToolSummary(raw), '{\n  "file_path": "/a.js",\n  "old_string": "x"\n}');
