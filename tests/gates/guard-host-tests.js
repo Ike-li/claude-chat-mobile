@@ -109,7 +109,7 @@ const REASONS = [
   { re: new RegExp(`\\bnode\\b[^|&;]*--test(?![\\w-])|${DIRECT_TEST_FILE.source}`), why: '直接跑测试文件绕过了 --import ./tests/setup/preload-env.mjs，而 approval-store/audit/devices 的落盘路径是模块级常量、只有预加载改得动——不带它就会写进真实 data/（不写 --test 也一样：node:test 的用例文件被直接执行照样跑完）' },
 ];
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
-  + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
+  + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit/、tests/invariants/ 顶层单文件跑法）';
 
 // 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
 // `grep -rn RUN_CLAUDE_INTEGRATION app/src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
@@ -181,6 +181,19 @@ function scopeOf(script) {
   return typeof raw === 'string' ? { allow: raw, deny: [] } : raw;
 }
 
+function targetInScope(scope, { rel, truncated }) {
+  // allow 侧不受截断影响：前缀本身落在 allow 内 ⇒ 所有以它开头的展开结果也落在 allow 内。
+  if (!rel.startsWith(scope.allow)) return false;
+  // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
+  // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
+  // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
+  return !scope.deny.some(d => rel.startsWith(d) || (truncated && d.startsWith(rel)));
+}
+
+// 宿主机能直接跑的单文件范围：与 test:unit、test:invariants 两条白名单脚本的 scope 同一份。
+const HOST_FILE_SCOPES = ['test:unit', 'test:invariants'].map(scopeOf);
+const onHost = target => HOST_FILE_SCOPES.some(scope => targetInScope(scope, target));
+
 function whitelistedRun(segment, script) {
   if (!script || !HOST_ALLOWED_SCRIPTS.has(script)) return false;
   const extra = segment.split(/\s--\s/).slice(1).join(' ');
@@ -189,14 +202,7 @@ function whitelistedRun(segment, script) {
   const targets = testTargets(extra);
   if (!targets.length) return true;                    // 附加参数没点名测试文件（--grep 之类）
   if (!scope) return false;
-  return targets.every(({ rel, truncated }) => {
-    // allow 侧不受截断影响：前缀本身落在 allow 内 ⇒ 所有以它开头的展开结果也落在 allow 内。
-    if (!rel.startsWith(scope.allow)) return false;
-    // deny 侧必须双向判：精确目标只需看自己在不在 deny 前缀下；被 glob 截断的前缀展开面是
-    // 「所有以它开头的路径」，与某条 deny 前缀互为前缀就可能命中（`tests/invariants/e` 之于
-    // `tests/invariants/env/`），按命中处理——fail-closed，方向与本文件其余判据一致。
-    return !scope.deny.some(d => rel.startsWith(d) || (truncated && d.startsWith(rel)));
-  });
+  return targets.every(target => targetInScope(scope, target));
 }
 
 // 这一段是不是在容器里跑。容器里 HOME 是一次性目录，够不到宿主机家目录。
@@ -206,12 +212,15 @@ function inContainer(head, script) {
   return head === 'docker' || (script ? /docker/.test(script) : false);
 }
 
-// 带 preload-env、且只碰 tests/unit 的单文件跑法：隔离与 npm run test:unit 完全同款，
-// 必须放行——否则 TDD 的「写一个失败测试 → 最小实现」每一步都会被确认框打断。
-function isIsolatedUnitRun(segment) {
-  if (!/--import\s+\S*tests\/setup\/preload-env\.mjs/.test(segment)) return false;
+// 带 preload-env、且只碰 tests/unit/ 与 tests/invariants/ 顶层的单文件跑法：隔离与
+// npm run test:unit / test:invariants 完全同款，必须放行——否则 TDD 的「写一个失败测试 → 最小实现」
+// 每一步都会被拦下。
+const PRELOAD_FLAG = '--import ./tests/setup/preload-env.mjs';
+const HAS_PRELOAD = /--import\s+\S*tests\/setup\/preload-env\.mjs/;
+function isIsolatedFileRun(segment) {
+  if (!HAS_PRELOAD.test(segment)) return false;
   const specs = testTargets(segment);
-  return specs.length > 0 && specs.every(t => t.rel.startsWith('tests/unit/'));
+  return specs.length > 0 && specs.every(onHost);
 }
 
 // 匹配前把同一条命令的不同写法压成同一份文本：去掉引号与反斜杠，/./ 与 // 规整成 /。
@@ -237,7 +246,7 @@ function segmentReason(segment, context) {
     || (SMOKE_RUNNER.test(segment) && SMOKE_DIR.test(context));
   if (!inDomain) return null;                                        // 域外（npm run inventory:check 等）
   if (whitelistedRun(segment, script)) return null;
-  if (!script && isIsolatedUnitRun(segment)) return null;
+  if (!script && isIsolatedFileRun(segment)) return null;
   return REASONS.find(({ re }) => re.test(segment))?.why ?? FALLBACK_REASON;
 }
 
@@ -270,8 +279,10 @@ const ASK_TEXT = {
 };
 
 // 命令 → 等价的容器跑法。顺序即优先级，第一条命中为准；最后一条是兜底。
+// 点名了测试文件的段先走 singleFileRoute，到不了这张表（变异检查除外）。
+const MUTATE_CMD = /\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/;
 const CONTAINER_ALTERNATIVE = [
-  [/\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, 'npm run mutate:docker -- <文件> [--lines=A-B]'],
+  [MUTATE_CMD, 'npm run mutate:docker -- <文件> [--lines=A-B]'],
   [/\bnpm\s+run\s+test:integration\b/, 'npm run test:docker:integration'],
   [/\bnpm\s+run\s+test:invariants:(server|env)\b/, 'npm run test:docker:invariants'],
   [/\bnpm\s+run\s+[\w:.-]*e2e|playwright/, 'npm run test:docker:e2e'],
@@ -289,12 +300,47 @@ function segmentRoute(segment, context) {
   if (RCI_EXPORTED.test(context) && RCI_CONSUMER.test(segment)) {
     return { decision: 'ask', why: RCI_WHY, alternative: null, costs: ['credentials'] };
   }
+  const file = MUTATE_CMD.test(segment) ? null : singleFileRoute(segment);
+  if (file) return { decision: 'deny', why, ...file };
   const alt = CONTAINER_ALTERNATIVE.find(([re]) => re.test(segment))[1];
-  return { decision: 'deny', why, alternative: alt };
+  return { decision: 'deny', why, alternative: alt, where: 'container' };
+}
+
+// 点名了测试文件的段：替代命令只跑那几个文件。开发循环里一次单文件验证被拒后若指去 test:docker，
+// 等于每轮跑 5 档全量（2026-10-23 实测 101s，同一个单测文件在宿主机上 0.3s）。
+//   文件都在宿主机范围内（只是缺 preload）→ 补上 preload，留在宿主机
+//   否则 → npm run test:docker:file -- 那几个文件（glob 原样保留，由敲命令的 shell 或 node --test 自己展开）
+// 没点名文件 → null，回到 CONTAINER_ALTERNATIVE。
+function singleFileRoute(segment) {
+  const tokens = segment.trim().split(/\s+/);
+  const end = tokens.findIndex(t => /^\d*[<>]/.test(t));  // 重定向及其后不属于这条命令
+  const words = end === -1 ? tokens : tokens.slice(0, end);
+  const head = commandHead(segment);
+  let args;
+  let at = -1;
+  if (head === 'node') {
+    at = words.findIndex(t => t.replace(/^.*\//, '') === 'node');
+    args = words.slice(at + 1).filter((t, i, a) => t !== '--test'
+      && !(t === '--import' && /tests\/setup\//.test(a[i + 1] ?? ''))
+      && !/^(?:\.\/)?tests\/setup\//.test(t));
+  } else {
+    const sep = words.indexOf('--');
+    args = sep === -1 ? [] : words.slice(sep + 1);
+  }
+  if (!args.some(t => /^(?:\.\/)?tests\//.test(t))) return null;
+  const targets = testTargets(segment);
+  if (targets.length && targets.every(onHost)) {
+    const alternative = head === 'node'
+      ? [...words.slice(0, at + 1), PRELOAD_FLAG, ...words.slice(at + 1)].join(' ')
+      : `node ${PRELOAD_FLAG} --test ${args.join(' ')}`;
+    return { alternative, where: 'host' };
+  }
+  return { alternative: `npm run test:docker:file -- ${args.join(' ')}`, where: 'container' };
 }
 
 /**
- * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null, costs?: string[]}}
+ * @returns {null | {decision: 'deny'|'ask', why: string, alternative: string|null, where?: 'host'|'container', costs?: string[]}}
+ *   where 只在 deny 时有：替代命令在宿主机还是容器里跑
  *   costs 只在 ask 时有：ASK_TEXT 的键，按出现顺序去重
  */
 export function decideRoute(command) {
@@ -344,7 +390,11 @@ function main() {
   if (!route) process.exit(0);
 
   let reason;
-  if (route.decision === 'deny') {
+  if (route.decision === 'deny' && route.where === 'host') {
+    reason = `⛔ 这条命令绕过了 preload-env，本钩子直接拒绝——【不需要找人】，在开发机上换成下面那条重试即可。\n\n`
+      + `原因：${route.why}\n\n`
+      + `改跑：${route.alternative}\n`;
+  } else if (route.decision === 'deny') {
     reason = `⛔ 这条命令必须在一次性环境里跑，本钩子直接拒绝——【不需要找人】，换成下面那条重试即可。\n\n`
       + `原因：${route.why}\n\n`
       + `改跑：${route.alternative}\n（首次用先 npm run docker:build，约 7 分钟）\n\n`

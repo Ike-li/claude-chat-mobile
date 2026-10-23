@@ -22,6 +22,10 @@
 
 - **宿主机只跑** `npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e` 及其同源别名（真相源 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。`test:invariants:server` 与 `test:invariants:env` 不在名单上，别照后缀类推。
 - **其余一律进容器**：`npm run test:docker`、`npm run mutate:docker -- <文件>` 等，首次先 `npm run docker:build`。PreToolUse 钩子对有容器替代的命令直接 deny 并指出改跑哪条。
+- **改动过程中只跑相关文件，全量留到开 PR 前跑一次**（CI 会再跑全套）：
+  - 单测与 `tests/invariants/` 顶层：`node --import ./tests/setup/preload-env.mjs --test <文件>`。`npm run test:unit -- <文件>` 不是单文件跑法：脚本里写死了 glob，追加的文件会连同全量一起跑。
+  - 集成测试、`tests/invariants/env/`、`tests/invariants/server/`：`npm run test:docker:file -- <文件>`。
+  - E2E：`npm run test:e2e -- <spec>`。
 - **要人单独授权的三类**（真凭据、花真额度）：`RUN_CLAUDE_INTEGRATION=1`、`npm run test:smoke`、用 `tests/acceptance/env/up.mjs` 起含 E3 的验收环境。
 - 为什么是白名单：2026-08-02 宿主机跑 `mutate` 删光了 `~/.claude/projects`。不在名单上的默认进容器，判断错了顶多多跑一次容器。详见 [docs/hard-rules.md](docs/hard-rules.md) §4.2。
 - 跑 E2E：本机必带 `NO_PROXY=127.0.0.1,localhost`；`--grep` 的模式带空格必须加引号；`--only-changed` 在本仓会选出 0 个测试然后报绿；全量用 `npm run test:e2e:parallel`。见 docs/testing.md §4。
