@@ -7,7 +7,7 @@
 // 根因修好之后，这里的「停在只有提示条」应当改成「最终有完整气泡」（见 Issue 处理顺序第 2 步）。
 
 import { test, expect, type Page } from '@playwright/test';
-import { gotoMock } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 const LONG_NOTICE = '仅显示最近 2000 条历史消息（共 2100 条），更早的没有加载';
@@ -131,5 +131,84 @@ test.describe('#307 历史渲染停在提示条：观测与原地重新加载', 
     await expect(bubbles(page), '重新加载后条数不对（丢了或重复了）').toHaveCount(2000);
     await expect(page.locator('#messages').getByText(LONG_NOTICE), '提示条重复了').toHaveCount(1);
     expect(pageErrorsExcept(page, 'injected render failure')).toEqual([]);
+  });
+
+  // #354 review：手动重新加载时实例没变，上一轮还在分块渲染的话，实例守卫拦不住它——画完会把自己那份也插进来
+  test('P0-HIST-STALL-4 长历史还在分块渲染时从「⋯」重新加载：上一轮作废，不会和新一轮叠成两份', async ({ page }) => {
+    await gotoMock(page);
+    // 三段式调度：先全部攥住（上一轮停在第 2 块）→ 放行新排的（重新加载那一轮照常画完）→ 再把攥住的放出去，
+    // 数着还没跑的空闲回调，等它们清空再数气泡，不靠固定等待
+    await page.evaluate(() => {
+      const w = window as unknown as { __held: IdleRequestCallback[]; __passThrough: boolean; __idlePending: number };
+      const original = window.requestIdleCallback.bind(window);
+      w.__held = [];
+      w.__passThrough = false;
+      w.__idlePending = 0;
+      window.requestIdleCallback = ((cb: IdleRequestCallback, opts?: IdleRequestOptions) => {
+        if (!w.__passThrough) { w.__held.push(cb); return 0; }
+        w.__idlePending++;
+        return original(deadline => { w.__idlePending--; cb(deadline); }, opts);
+      }) as typeof window.requestIdleCallback;
+    });
+    await openLongHistory(page);
+    await expect(page.locator('#messages')).toContainText(LONG_NOTICE, { timeout: 15_000 });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __held: unknown[] }).__held.length)).toBeGreaterThan(0);
+    await expect(bubbles(page), '前提：上一轮停在半路，还没插入').toHaveCount(0);
+
+    await page.evaluate(() => { (window as unknown as { __passThrough: boolean }).__passThrough = true; });
+    await page.locator('#btnMore').click();
+    await page.locator('#moreReloadSession').click();
+    await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
+    await expect(bubbles(page)).toHaveCount(2000);
+
+    await page.evaluate(() => {
+      const w = window as unknown as { __held: IdleRequestCallback[] };
+      for (const cb of w.__held.splice(0)) cb({ didTimeout: false, timeRemaining: () => 0 } as IdleDeadline);
+    });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __idlePending: number }).__idlePending), { timeout: 15_000 }).toBe(0);
+    await expect(bubbles(page), '上一轮画完又插了一份').toHaveCount(2000);
+    await expect(page.locator('#messages').getByText(LONG_NOTICE), '提示条重复了').toHaveCount(1);
+    expect((page as unknown as { __ccmErrors?: string[] }).__ccmErrors ?? []).toEqual([]);
+  });
+
+  test('P0-HIST-STALL-4b 历史回执还在路上就从「⋯」重新加载：迟到的上一份回执作废并记日志，提示条不重复', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__hold-next-history-ack');
+    await openLongHistory(page);
+    await expect(page.locator('#moreReloadSession')).toBeAttached();
+
+    await page.locator('#btnMore').click();
+    await page.locator('#moreReloadSession').click();
+    await expect(page.locator('[data-testid="assistant-message"]', { hasText: 'Long history final message marker' })).toBeVisible({ timeout: 15_000 });
+    await expect(bubbles(page)).toHaveCount(2000);
+
+    expect((await (await page.request.post('/__release-history-ack')).json()).released, '前提：第一份回执一直扣着').toBe(1);
+    // 日志与作废在同一个回调里：看到这一行，迟到的回执就已经处理完了，再数提示条不会抢跑
+    const log = await consoleLogText(page);
+    await expect(log).toContainText('上一轮历史回执迟到，已作废', { timeout: 10_000 });
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#messages').getByText(LONG_NOTICE), '迟到的回执又插了一条提示条').toHaveCount(1);
+    await expect(bubbles(page)).toHaveCount(2000);
+    expect((page as unknown as { __ccmErrors?: string[] }).__ccmErrors ?? []).toEqual([]);
+  });
+
+  // #354 review：重新加载会 clearView（连审批 / 提问卡一起清），而 session:history 不带待办——得像重连那条路一样，
+  // 画完后用 sync:since 回执里的 pending 快照补回来，否则服务端还在等批、手机上却没了卡
+  test('P0-HIST-STALL-5 有待审批时从「⋯」重新加载：审批卡按服务端快照补回来，不会凭空消失', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:pendingsnapshot');
+    await expect(page.locator('#permModal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#permInput')).toContainText('rm -rf /tmp/stale');
+
+    // 审批挂起时顶栏抬在 sheet 之上（body.nav-escape），「⋯」点得到
+    await page.locator('#btnMore').click();
+    await page.locator('#moreReloadSession').click();
+    await expect(page.locator('#moreModal')).toBeHidden();
+    await expect(page.locator('#historyLoadingCard'), '前提：重新加载那一趟走完').toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator('#permModal'), '重新加载后审批卡没了').toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#permInput')).toContainText('rm -rf /tmp/stale');
+    await expectNoBrowserErrors(page);
   });
 });

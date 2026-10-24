@@ -8956,6 +8956,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
     // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，下面 err 分支负责收尾。
     socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => {
+      // 之后同一实例又发起了一次加载（手动「重新加载」、gap 重载）：这一轮整段作废，收尾归新一轮。
+      // 排在 err 分支之前——超时的旧 ACK 不能 hideLoadingCard 把新一轮的加载卡收掉（#354 review）
+      if (historyLoadGate.superseded(gateHandle)) {
+        logClientEvent('recv', `[HISTORY_RENDER] 上一轮历史回执迟到，已作废（之后又发起了新一轮加载） session=${sessionId} instance=${reqInstanceId}`);
+        return;
+      }
       // ★ 这里必须 release+drain 而【不是】abort：ACK 失败 ≠ 视图已切走。超时（15s）时连接常常还活着，
       // 断线时也可能不触发全量重载，而扣住的那些 history_append 是 out-of-band 的单程票——不进 replay
       // buffer，server 的 catch-up 基线又已前移，abort 掉就是永久丢失（终端在跑、手机上少几条，直到
@@ -8982,7 +8988,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
-      }, { fullReload: true, turnRunningAtRequest, noticeBar });
+      }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle) });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -9136,9 +9142,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (!bar?.isConnected || bar.querySelector('[data-testid="history-reload"]')) return;
     const btn = el('<button type="button" class="ml-2 underline text-accent" data-testid="history-reload"></button>');
     btn.textContent = t('重新加载');
-    btn.addEventListener('click', () => reloadCurrentFromHistory());
+    btn.addEventListener('click', reloadSessionByHand);
     bar.appendChild(btn);
   }
+  // 手动重载（提示条上的「重新加载」与顶栏「⋯」）：clearView 连审批 / 提问卡一起清，session:history 又不带待办——
+  // 画完后照重连那条路补一次 sync:since，用回执里的 pending 快照重建，否则服务端还在等批、手机上却没了卡（#354 review）
+  function reloadSessionByHand() { reloadCurrentFromHistory(() => requestSync({ probe: false })); }
 
   // 顶栏「⋯」→「重新加载本会话」（#307）：原地按钮只挂在已知的两处停下的地方上，别的路径停住时靠这一项。
   // 没在看会话时（首页等）不可点，判据同 reloadCurrentFromHistory 自己的守卫。
@@ -9150,13 +9159,14 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (item) item.disabled = !displayedSessionId;
     openSheet(moreModal);
   });
-  $('moreReloadSession')?.addEventListener('click', () => { closeMoreMenu(); reloadCurrentFromHistory(); });
+  $('moreReloadSession')?.addEventListener('click', () => { closeMoreMenu(); reloadSessionByHand(); });
   $('moreCancel')?.addEventListener('click', closeMoreMenu);
   moreModal?.addEventListener('click', e => { if (e.target === moreModal) closeMoreMenu(); });
   moreModal?.addEventListener('keydown', e => { if (e.key === 'Escape') closeMoreMenu(); });
 
   // noticeBar：loadHistory 刚插的那条「加载了 N 条」提示条。渲染半路停下时，在它上面给「重新加载」（offerHistoryReload）。
-  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null } = {}) {
+  // superseded：loadHistory 传入，这一轮之后同实例又发起了加载时为真（见 processChunk 开头）。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false, cardsOnly = false, turnRunningAtRequest = false, noticeBar = null, superseded = null } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     // 历史里的图片按需取，坐标在【渲染时】快照（同子代理卡的 flowSid）：格子会留在 DOM 里跨越会话切换，
@@ -9450,6 +9460,10 @@ import { createGateFocusController } from './app/focus-layers.js';
         onDone?.();
         return;
       }
+      // 实例没变、但同一实例上又发起了一次全量加载（手动「重新加载」）：上面的守卫拦不住，这一轮整段作废——
+      // 不再 renderOne（它会写进新一轮刚清空的配对表）、不插 frag。也不调 onDone：闸门已归新一轮，
+      // 旧 handle 的 release 本来就拿不到东西，crashNotices.restore 反而会在新一轮半路多补一份（#354 review）
+      if (superseded?.()) return;
       const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
       for (; i < end; i++) {
         try {

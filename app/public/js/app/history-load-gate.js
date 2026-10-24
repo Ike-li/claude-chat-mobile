@@ -38,6 +38,7 @@ const DEFAULT_TIMEOUT_MS = 20000;
 
 export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   let current = null;   // { instanceId, queue, timeoutId }；null = 闸门关闭。对象身份即 handle
+  let latest = null;    // 最近一次 begin 发出的 handle；release / abort / 看门狗都不动它（见 superseded）
   let onTimeoutFlush = () => {};
 
   const isStale = handle => handle != null && handle !== current;
@@ -56,6 +57,7 @@ export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT
       disarm(); // 换轮：撤掉上一轮的兜底，避免旧定时器到点后打中新一轮的队列
       const handle = { instanceId: instanceId ?? null, queue: [], timeoutId: null };
       current = handle;
+      latest = handle;
       handle.timeoutId = timers.setTimeout(() => {
         if (current !== handle) return; // 已被更晚一次 begin/release/abort 顶替，本次兜底失效
         const held = handle.queue;
@@ -80,6 +82,11 @@ export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT
       const released = current.queue;
       current = null;
       return released;
+    },
+    // 这一轮之后又发起过新的一轮（同实例也算）：上一轮的 ACK 与分块渲染整段作废，由新一轮负责落地。
+    // 不用 isStale：看门狗到点、正常 release 之后 current 都是 null，那样慢机上渲染超过 20s 会被自己的兜底掐断。
+    superseded(handle) {
+      return handle != null && handle !== latest;
     },
     // 关闸并丢弃。loadHistory 的每条早退路径（空历史 / error / 迟到 ACK 被守卫丢弃）都要调，
     // 否则闸门永远开着，之后所有追平被静默吞掉。非本轮的 handle 是 no-op。

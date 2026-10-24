@@ -174,3 +174,26 @@ test('迟到 ACK 的 release 也不得抢走另一轮的队列', () => {
   assert.deepEqual(gate.release(handleA), [], 'A 那轮早已被顶替，只能拿到空');
   assert.deepEqual(gate.release(handleB).map(e => e.payload.messages[0]), [1], 'B 的队列完好');
 });
+
+// —— 代次：同一实例又发起了一次全量加载，上一轮的渲染链要整段作废（#354 review）——
+// 手动「重新加载」时实例没变，renderHistoryBubbles 的实例守卫拦不住上一轮：它会把自己那一份 frag 也插进来，
+// 和新一轮叠成两份。只认「之后又 begin 过」：release / abort / 看门狗到点都不算顶替——
+// 否则慢机上分块渲染超过看门狗的 20s，正常的那一轮会被自己的兜底掐断。
+test('superseded：只有之后又 begin 过才算被顶替', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  const first = gate.begin('inst_1');
+  assert.equal(gate.superseded(first), false, '刚开的这一轮不算被顶替');
+
+  timers.fire();
+  assert.equal(gate.superseded(first), false, '看门狗到点放行不算被顶替');
+  gate.release(first);
+  gate.abort(first);
+  assert.equal(gate.superseded(first), false, 'release / abort 之后也不算');
+
+  const second = gate.begin('inst_1');
+  assert.equal(gate.superseded(first), true, '同实例再 begin 一次，上一轮就被顶替了');
+  assert.equal(gate.superseded(second), false);
+  gate.release(second);
+  assert.equal(gate.superseded(second), false, '最新一轮正常收尾后仍不算被顶替');
+});
