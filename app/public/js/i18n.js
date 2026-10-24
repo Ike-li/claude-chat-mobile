@@ -414,6 +414,11 @@ export const EN_DICT = Object.freeze({
   '有新版 {latest}（当前 {current}）': 'Update available: {latest} · you have {current}',
   '已是最新（{current}）': 'Up to date: {current}',
   '本地领先：当前 {current}，GitHub 最新 {latest}': 'Ahead of the latest release: you have {current}, GitHub\'s latest is {latest}',
+  // 历史没画完时提示条上的原地重载（#307）；按钮文字「重新加载」与 #302 共用上面那条
+  '更多': 'More',
+  '更多操作': 'More actions',
+  '重新加载本会话': 'Reload this session',
+  '重新拉取这个会话的历史消息，不刷新整页': "Fetch this session's history again without reloading the page",
   '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——

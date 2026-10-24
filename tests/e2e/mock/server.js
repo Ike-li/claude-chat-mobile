@@ -345,6 +345,9 @@ let unpairedToolTurnEndsDuringLoad = false;
 let outboxPermanentArmed = false;
 // #302：离线重放（fromOutbox）的 ack 先压住，/__release-outbox-acks 才回 ok——让前端停在「重发中」（批处理在途）。null = 不压。
 let outboxAckHold = null;
+// #354 review：下一次 session:history 的回执先扣住（一次性），/__release-history-ack 才回——让前端停在「历史回执在路上」
+let historyAckHoldArmed = false;
+let heldHistoryAcks = [];
 // P0-02d14（验收 O31）：'armed' → 下一次连入时按 server 重启处理（实例全部消失、viewing 归 null、startedAt 变）；
 // 之后（'restarted'）离线重放指向不在册的实例，照真 server 的 BE-001 分支回 sysTo + stale 负 ack。
 let outboxRestartStaleArmed = null;
@@ -735,6 +738,8 @@ function resetMockState() {
   unpairedToolTurnEndsDuringLoad = false;
   outboxPermanentArmed = false;
   outboxAckHold = null;
+  historyAckHoldArmed = false;
+  heldHistoryAcks = [];
   outboxRestartStaleArmed = null;
   resumeDivergenceArmed = null;
   outboxReplaySwapArmed = null;
@@ -1063,6 +1068,18 @@ app.post('/__hold-outbox-acks', (_req, res) => {
 app.post('/__release-outbox-acks', (_req, res) => {
   const held = outboxAckHold || [];
   outboxAckHold = null;
+  for (const release of held) release();
+  res.json({ ok: true, released: held.length });
+});
+
+// #354 review：扣住 / 放行 session:history 的回执（见 historyAckHoldArmed）
+app.post('/__hold-next-history-ack', (_req, res) => {
+  historyAckHoldArmed = true;
+  res.json({ ok: true });
+});
+app.post('/__release-history-ack', (_req, res) => {
+  const held = heldHistoryAcks;
+  heldHistoryAcks = [];
   for (const release of held) release();
   res.json({ ok: true, released: held.length });
 });
@@ -2563,7 +2580,13 @@ io.on('connection', socket => {
     // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 app/src/sessions/history.js）。
     // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
     // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
-    const callback = res => rawCallback(stampHistoryMessages(res));
+    const holdThis = historyAckHoldArmed;
+    historyAckHoldArmed = false;
+    const callback = res => {
+      const reply = () => rawCallback(stampHistoryMessages(res));
+      if (holdThis) heldHistoryAcks.push(reply);
+      else reply();
+    };
     // P0-NOSID 区分度标记：真 server 在无 sessionId 时压根查不到（回「会话不存在」）。这里故意返回一段
     // 可识别文案——只要它出现在页面上，就说明前端仍然清屏改走了磁盘，即修复失效。断言它「不出现」。
     if (noSessionIdMode) {
