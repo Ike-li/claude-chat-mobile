@@ -328,6 +328,8 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜 `[http-auth] 鉴权失败（access_jwt）`（socket 握手侧是 `[conn] … 握手鉴权`），核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
+| PWA 仍装成 shortcut（长按只有「移除」），但 §2b 的 `curl` 已返回 `image/png` | 安装那一刻手机连不上 Google：WebAPK 由 Google 服务器打包、再经 Google Play 装回手机，任一步连不上，Chrome 都会退回 shortcut 且不报错。在 Google 服务受限的网络里，先开代理（Chrome、Google Play 商店、Google Play 服务都要走代理），再删图标重装 |
+| 开着代理装，Chrome 通知一直停在「正在安装」 | Chrome 已把安装交给 Google Play，Play 还在忙别的下载（实测是正在更新 Chrome 本身），这次安装一直轮不到。到 Play 的「管理应用和设备」停掉或等完进行中的更新，再从 Chrome 重新安装 |
 | 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在工作区 `.claude/settings.local.json` 的 `env` 块写 `"ANTHROPIC_MODEL": "<带后缀名>"`（或在启动 shell `export` 后重启），或 web 端 `/model <带后缀名>` 切换（本项目配置文件里的 `ANTHROPIC_*` 启动期被剥除） |
