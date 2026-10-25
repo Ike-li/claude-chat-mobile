@@ -702,6 +702,51 @@ test('等审批期间终端写入、随后 state 翻 idle 时重连 → 仍须�
   assert.equal(a.externalDirty, true, '审批窗里的终端写入必须标脏，否则下条手机消息从旧位置分叉');
 });
 
+// 2026-10-25 实证会话 342a2654：Monitor 事件触发的自动汇报轮不一定计入在途轮，引擎眼里 state 一直是 idle，
+// 上面两条靠时序的豁免都用不上。它写盘期间新设备获批触发重定基线，己方写的被判成终端写入、标脏；后台任务
+// 一直在跑，之后每次发送都回「需先吸收终端写入，但后台任务仍在运行」。transcript 逐条自报 entrypoint，
+// 增量全是 sdk-ts 就是己方写的。
+const ownEntry = e => ({ ...e, entrypoint: 'sdk-ts' });
+const autoReportRound = ts => ([
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'auto-1', name: 'Bash', input: { command: 'tail pull.log' } }] }, timestamp: iso(ts) },
+  { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto-1', content: '[AUTO-RUN] done' }] }, timestamp: iso(ts + 500) },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '自动汇报轮写的' }] }, timestamp: iso(ts + 1_000) },
+]);
+
+test('idle 时重连、上一拍之后的增长全是 sdk-ts 自报 → 不标脏（己方自动汇报轮，不是终端写入）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-own-auto');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-auto', settledTail(base).map(ownEntry));
+  await h.engine.catchUpTick();          // 切入定基线（idle）
+
+  // 上一拍之后己方又写了一轮，state 仍是 idle；下一拍之前恰好有设备获批
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-auto',
+    [...settledTail(base), ...autoReportRound(base + 5_000)].map(ownEntry));
+  h.engine.requestRebaseline('sock-new');
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, false, '己方写的那一轮被当成终端写入：有后台任务时之后每次发送都会被拒');
+});
+
+// 上一条的对照：同一轮里夹着一条终端写的，整段按外部走（与 catchUpStep 增长分支同口径），防修过头。
+test('idle 时重连、增长里夹着 entrypoint=cli 的条目 → 仍须标脏', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-mixed');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', settledTail(base).map(ownEntry));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-mixed', [
+    ...[...settledTail(base), ...autoReportRound(base + 5_000)].map(ownEntry),
+    { type: 'user', entrypoint: 'cli', message: { role: 'user', content: '终端插进来问的' }, timestamp: iso(base + 8_000) },
+  ]);
+  h.engine.requestRebaseline('sock-new');
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, true, '终端写入混在己方写盘里也必须标脏，否则下条手机消息从旧位置分叉');
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 以下用例由 `npm run mutate -- app/src/server/mirror-engine.js` 反推补齐（2026-08-02）。
 // 上面那批用例首轮全绿，但变异检查显示 129 个变异体里存活 67 个——存活的意思是「这行被

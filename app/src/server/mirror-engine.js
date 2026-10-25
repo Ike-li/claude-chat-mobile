@@ -250,6 +250,8 @@ export function createMirrorEngine({
             wasOwnTurn: catchUpState.wasOwnTurn === true,
             prevTailKey: catchUpState.lastTailKey ?? null,
             curTailKey,
+            // 增量逐条自报 entrypoint：全是 sdk-ts 就是己方写的，罩住上面两维时序豁免漏掉的己方写盘
+            messages: curMsgs,
           })) {
             a.externalDirty = true; // 被 rebaseline 吸收的终端外部增长 → 标脏防分叉
           }
