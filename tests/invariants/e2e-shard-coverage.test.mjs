@@ -43,9 +43,11 @@ function writeShards(dir, specs, shardCount = 3) {
   });
 }
 
+// GITHUB_STEP_SUMMARY 清空：CI 的 unit-test job 自己也设了它，不清的话这里假数据算出的
+// 「E2E 分片时长」会写进那个 job 的摘要页。
 function runMerge(dir) {
   return spawnSync(process.execPath, [SCRIPT, '--merge-durations', dir], {
-    cwd: ROOT, encoding: 'utf8',
+    cwd: ROOT, encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '' },
   });
 }
 

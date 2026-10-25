@@ -355,6 +355,8 @@ jobs:
           path: e2e-durations
           merge-multiple: true
 
+      # 同一步顺带写 run 摘要页（总时长、平均每片、最大的几个 spec），并在最大的单个文件超过
+      # 平均每片时出一条点名它的 ::warning——只提醒、不红，理由见 e2e-parallel.js 的 reportFloor。
       - name: 并集校验 + 合并时长
         run: node tests/infra/e2e-parallel.js --merge-durations e2e-durations
 
