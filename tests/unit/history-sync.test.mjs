@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, appendedForeignWrite, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, externalHistoryExtent, historyTailKey, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, appendedForeignWrite, scanSubagents, readSubagentFlow } from '../../app/src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -579,6 +579,44 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
     assert.equal(rebaselineAbsorbedExternal({
       sameSession: true, curLen: 130, baseline: 100, localBusy: false, wasOwnTurn: false,
     }), true);
+  });
+  // 2026-10-25 实证会话 342a2654：Monitor 事件触发的自动汇报轮不一定计入在途轮，state 一直是 idle，
+  // localBusy / wasOwnTurn 都罩不住。它写盘期间新设备获批触发重定基线，己方写的被判成终端写入、标脏；
+  // 后台任务一直在，之后每次发送都回「需先吸收终端写入，但后台任务仍在运行」。entrypoint 是磁盘自报，
+  // 不依赖时序：上次的尾条还在、之后全是 sdk-ts，就是己方写的。
+  test('同会话重连 + 上次尾条之后的增长全是 sdk-ts 自报 → false（己方写盘，不是终端写入）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = OWN_TS(0, 6);
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), false, '己方 SDK 写的增量被当成终端写入，会白白标脏；有后台任务时发送会一直被拒');
+  });
+  test('上次尾条之后夹着一条 entrypoint=cli → true（混合增量整段按外部走，防修过头）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = [...OWN_TS(0, 4), { role: 'user', content: '终端插进来问的', timestamp: 't4', entrypoint: 'cli' }, ...OWN_TS(5, 1)];
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), true, '终端写入混在己方写盘里也必须标脏，否则下条手机消息从旧位置分叉');
+  });
+  test('上次尾条已不在（rewind 换了链）+ 之后全是 sdk-ts → true（找不到锚点就不豁免）', () => {
+    const before = OWN_TS(0, 3);
+    const messages = [...OWN_TS(0, 2), ...OWN_TS(10, 4)]; // t2 被撤销，换成另一条链
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: messages.length, baseline: before.length,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), true, '已推送的那段被换掉了，SDK 子进程还停在旧叶子上，不标脏就会从废弃链分叉');
+  });
+  // 满窗时己方写盘不让长度变，只换尾指纹（catchUpStep 满窗分支的同一形态），同一判据一并吸收
+  test('满窗 + 同长 + 尾指纹变，但上次尾条之后全是 sdk-ts → false', () => {
+    const cap = 5;
+    const before = OWN_TS(0, cap);
+    const messages = OWN_TS(2, cap); // m0/m1 被挤出窗口，尾接上己方写的 m5/m6
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap,
+      prevTailKey: historyTailKey(before), curTailKey: historyTailKey(messages), messages,
+    }), false, '满窗会话里己方写盘也会被当成终端写入');
   });
 });
 

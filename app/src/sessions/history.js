@@ -574,11 +574,18 @@ export function rebaselineAbsorbedExternal({
   // 一律标脏，不再需要知道窗口上限。全仓无调用方传过它。
   prevTailKey = null,
   curTailKey = null,
+  // 读出 curLen 的那份历史。传了才看 entrypoint；不传（读盘失败）按长度与指纹判，保守标脏。
+  messages = null,
 } = {}) {
   if (sameSession !== true) return false;
   if (localBusy === true) return false;
   if (wasOwnTurn === true) return false; // 己方 turn 上一 tick 还在写盘 → 这次增长是自己写的，baseline 只是尚未吸收
   if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
+  // 2026-10-25：localBusy / wasOwnTurn 都靠时序，罩不住不计在途轮的己方写盘（实证会话 342a2654：Monitor
+  // 事件触发的自动汇报轮写盘时新设备获批，己方写的被判成终端写入，后台任务在跑时发送一直被拒）。
+  // 与 catchUpStep 的增长分支、满窗分支同一判据：上次的尾条还在，之后全是 sdk-ts 自报 = 己方写的。
+  // 尾条找不到（rewind 换了链）或夹着别的 entrypoint，照旧往下按长度与指纹判。
+  if (Array.isArray(messages) && ownWritesSince(messages, prevTailKey)) return false;
   if (curLen > baseline) return true;
   // 变短 = CLI /rewind 撤销了一段（不是削头：削头后 curLen 恒等于 cap）。这时更要标脏——SDK 子进程
   // 的内存上下文还停在 rewind 前的叶子上，不置换实例就发消息等于从一条已被撤销的链上继续写。
