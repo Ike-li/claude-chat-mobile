@@ -290,7 +290,7 @@ jobs:
       # ★ if-no-files-found: error（不是默认的 warn）。这里捞空【永远不正常】：分片只要跑到
       # 最后就一定写出片段。默认的 warn 会让上传出一个空 artifact 而 job 照样绿，错误一路
       # 推迟到汇总 job 炸在 readdir 上——报错指向 fs，不指向真正的原因。
-      # 注意这跟下面 test-results 那个不同：那边捞空是正常的（全绿时没有失败产物），所以留 warn。
+      # 注意这跟下面 test-results 那个不同：那边捞空是正常的（全绿时没有失败产物），所以用 ignore。
       - name: Upload shard durations
         if: always()
         uses: actions/upload-artifact@v7
@@ -311,10 +311,11 @@ jobs:
       # ——job 结论是 success，failure() 根本抓不到，trace 当场丢掉，flaky 就又变回查不动的了，
       # 那等于只拿了 retries 的「不阻塞」，丢掉了它的「可诊断」。
       #
-      # 全绿那一轮这一步会打一条 `No files were found ... test-results*/` 的 warning
-      # （实测 run 34713413770）：Playwright 没有失败产物时压根不建 outputDir。这是预期噪音，
-      # 不是配错了。仍保留默认的 if-no-files-found: warn 而不改成 ignore——**路径写错导致的
-      # 捞空必须留得下痕迹**，那正是这次改 path 之前的形态，静音掉就再也发现不了。
+      # ★ if-no-files-found: ignore（2026-10-25 起；此前是默认的 warn）。全绿时 Playwright 压根不建
+      # outputDir，这一步捞空是常态（实测 run 34713413770）。warn 会让每片每轮各出一条
+      # 「No files were found ... test-results*/」——14 片就是 14 条，汇总 job 的地板提醒
+      # （e2e-parallel.js 的 reportFloor）会淹在里面，大家也会被训练成对 warning 视而不见。
+      # 当初留 warn 是怕路径写错了没痕迹；但这种失效自己会暴露：有用例失败、人去下载截图时就是空的。
       #
       # ★ 名字带 shard 号：upload-artifact v4 起同名 artifact 直接报错（不再像 v3 那样合并），
       # matrix 下六个 job 同时上传同一个名字会让整个 job 红，且红在与测试无关的地方。
@@ -324,6 +325,7 @@ jobs:
         with:
           name: playwright-e2e-artifacts-shard-${{ matrix.shard }}
           path: test-results*/
+          if-no-files-found: ignore
           retention-days: 7
 
   # ★ 这个 job 必须叫 `e2e`：它是分支保护里那个 required context（dev 与 master 都要求
