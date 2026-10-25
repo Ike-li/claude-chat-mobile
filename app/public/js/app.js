@@ -6191,8 +6191,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
   // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
   // 「N 个文件夹找不到了」那一行带三个动作（#301）：管理工作区（直达工作区列表编辑器）、重新检查（服务端重跑一次
-  // 清单加载，目录回来了不用重启）、忽略（本机按 id + 路径集合记指纹，集合变了重新出现）。服务状态面板是只读的诊断
-  // 清单，照常列出全部告警、不受「忽略」影响。
+  // 清单加载，目录回来了不用重启）、忽略（本机按 id + 路径集合记指纹，集合变了重新出现）。限速锁定、推送失败、前端错误
+  // 只有「忽略」（按发生时刻记指纹，再发生一次重新出现）。服务状态面板是只读的诊断清单，照常列出全部告警、不受「忽略」影响。
   function buildServiceSection() {
     const section = el(`<div id="serviceSection"></div>`);
     const notices = undismissedServiceNotices(
@@ -6206,14 +6206,16 @@ import { createGateFocusController } from './app/focus-layers.js';
       const text = el(`<div></div>`);
       text.textContent = notice.text; // 动态文案，textContent 插值同现有行渲染惯例（CSP 安全）
       row.appendChild(text);
-      if (notice.id) row.dataset.noticeId = notice.id;
-      if (notice.id === MISSING_FOLDERS_NOTICE_ID) row.appendChild(missingFoldersActions(notice));
+      if (notice.id) {
+        row.dataset.noticeId = notice.id;
+        row.appendChild(serviceNoticeActions(notice));
+      }
       wrap.appendChild(row);
     }
     section.appendChild(wrap);
     return section;
   }
-  function missingFoldersActions(notice) {
+  function serviceNoticeActions(notice) {
     const bar = el(`<div class="flex flex-wrap gap-1.5 pt-1 pb-0.5 font-normal"></div>`);
     const action = label => {
       const btn = el(`<button type="button" class="px-2 py-1 rounded-md border border-line text-ink-soft hover:text-ink hover:bg-sunk active:scale-95"></button>`);
@@ -6221,27 +6223,29 @@ import { createGateFocusController } from './app/focus-layers.js';
       bar.appendChild(btn);
       return btn;
     };
-    action(t('管理工作区')).onclick = () => {
-      haptic('tap');
-      closeLeftSidebar();
-      envConfigPanel.open({ from: 'drawer', focusKey: 'WORKDIRS' });
-    };
-    const recheck = action(t('重新检查'));
-    recheck.onclick = () => {
-      haptic('tap');
-      recheck.disabled = true;
-      recheck.textContent = t('检查中…');
-      // 带 timeout：后端还没重启到带这个事件的版本时没有 ack，不能让按钮一直转着
-      socket.timeout(10_000).emit('folders:recheck', {}, (err, res) => {
-        recheck.disabled = false;
-        recheck.textContent = t('重新检查');
-        if (err || !res?.ok) { drawer.showNotice(t('检查失败')); return; }
-        drawer.showNotice(res.missingFolders > 0 ? t('还有 {n} 个找不到').replace('{n}', String(res.missingFolders)) : t('都找到了'));
-        // 广播会带着同一份结果到；先按回执把这一行改掉，不等它
-        latestServiceHealth = { ...latestServiceHealth, missingFolders: res.missingFolders, missingFolderPaths: res.missingFolderPaths };
-        refreshServiceSection();
-      });
-    };
+    if (notice.id === MISSING_FOLDERS_NOTICE_ID) {
+      action(t('管理工作区')).onclick = () => {
+        haptic('tap');
+        closeLeftSidebar();
+        envConfigPanel.open({ from: 'drawer', focusKey: 'WORKDIRS' });
+      };
+      const recheck = action(t('重新检查'));
+      recheck.onclick = () => {
+        haptic('tap');
+        recheck.disabled = true;
+        recheck.textContent = t('检查中…');
+        // 带 timeout：后端还没重启到带这个事件的版本时没有 ack，不能让按钮一直转着
+        socket.timeout(10_000).emit('folders:recheck', {}, (err, res) => {
+          recheck.disabled = false;
+          recheck.textContent = t('重新检查');
+          if (err || !res?.ok) { drawer.showNotice(t('检查失败')); return; }
+          drawer.showNotice(res.missingFolders > 0 ? t('还有 {n} 个找不到').replace('{n}', String(res.missingFolders)) : t('都找到了'));
+          // 广播会带着同一份结果到；先按回执把这一行改掉，不等它
+          latestServiceHealth = { ...latestServiceHealth, missingFolders: res.missingFolders, missingFolderPaths: res.missingFolderPaths };
+          refreshServiceSection();
+        });
+      };
+    }
     action(t('忽略')).onclick = () => {
       haptic('tap');
       noticeDismissals.dismiss(notice);

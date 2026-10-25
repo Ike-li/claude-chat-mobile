@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, waitUntilConnected } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 import { openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 // 抽屉「服务」小节里「N 个已连接的文件夹找不到了」的三个动作（#301）：管理工作区 / 重新检查 / 忽略。
@@ -89,6 +89,68 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await setGone(page, [B], { apply: true }); // A 回来了、B 丢了：个数还是 1
     await expect(alertRow(page)).toContainText('1 connected folder(s) can\'t be found');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 推送失败此前也没有任何关闭入口，只能等 24 小时时效窗过去或重启服务。它没有路径集合，指纹是发生时刻：
+  // 忽略的是这一次失败，再失败一次必须重新出现——宿主机连不出去时，这一行是唯一的可见面。
+  test('P0-SVC-ALERT-4 推送失败「忽略」：刷新后不再出现；再失败一次就重新出现', async ({ page }) => {
+    const pushRow = page.locator('#serviceSection [data-notice-id="delivery-failure"]');
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:service-delivery-failure');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    await expect(pushRow).toContainText('推送最近失败于');
+    await pushRow.getByRole('button', { name: '忽略' }).click();
+    await expect(page.locator('#serviceSection')).toBeHidden();
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    await expect(page.locator('#serviceSection'), '忽略要落盘，刷新后不能又冒出来').toBeHidden();
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await sendChatMessage(page, 'test:service-delivery-failure'); // 又失败了一次：发生时刻变了
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+    await expect(pushRow).toContainText('推送最近失败于');
+    await expectNoBrowserErrors(page);
+  });
+
+  // 限速锁定与前端错误同理，按发生时刻忽略。真 server 发生这两类时不立刻广播，要等下一次广播或重连才到抽屉，
+  // 所以注入后刷新取数，不让 mock 替它广播。
+  test('P0-SVC-ALERT-5 限速锁定、前端错误「忽略」：刷新后不再出现；再发生一次就重新出现', async ({ page }) => {
+    const section = page.locator('#serviceSection');
+    const lockoutRow = section.locator('[data-notice-id="rate-limit-lockout"]');
+    const errorRow = section.locator('[data-notice-id="client-error"]');
+    const injectAndReload = async () => {
+      await sendChatMessage(page, 'test:service-incidents');
+      await waitForIdle(page);
+      await page.reload();
+      await waitUntilConnected(page);
+    };
+    await gotoMock(page);
+    await injectAndReload();
+    await openSessionsSidebar(page);
+    await expect(lockoutRow).toContainText('登录限速锁定于');
+    await expect(errorRow).toContainText('前端错误发生于');
+    await lockoutRow.getByRole('button', { name: '忽略' }).click();
+    await expect(lockoutRow).toHaveCount(0);
+    await errorRow.getByRole('button', { name: '忽略' }).click();
+    await expect(section).toBeHidden();
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    await expect(section, '忽略要落盘，刷新后不能又冒出来').toBeHidden();
+
+    await page.reload();
+    await waitUntilConnected(page);
+    await injectAndReload(); // 又各发生了一次：发生时刻变了
+    await openSessionsSidebar(page);
+    await expect(lockoutRow).toContainText('登录限速锁定于');
+    await expect(errorRow).toContainText('前端错误发生于');
     await expectNoBrowserErrors(page);
   });
 });
