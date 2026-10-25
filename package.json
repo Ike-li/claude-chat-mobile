@@ -68,7 +68,7 @@
     "test": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --import ./tests/setup/preload-env.mjs --test tests/unit/*.test.mjs",
     "test:invariants": "node --import ./tests/setup/preload-env.mjs --test tests/invariants/*.test.mjs",
-    "test:invariants:server": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/invariants/server/*.test.mjs",
+    "test:invariants:server": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit --test-concurrency=6 tests/invariants/server/*.test.mjs",
     "test:invariants:env": "node --import ./tests/setup/preload-env.mjs --test tests/invariants/env/*.test.mjs",
     "test:integration": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/*.test.mjs",
     "test:coverage": "node --import ./tests/setup/preload-env.mjs --experimental-test-coverage --test tests/unit/*.test.mjs",

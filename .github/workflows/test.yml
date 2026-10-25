@@ -90,6 +90,12 @@ jobs:
       # 不变量树的 S2 层（tests/invariants/server/）：起真 app/server.js 子进程，宿主机上不允许跑
       # （不在 guard-host-tests 白名单里），但 CI runner 本身是一次性的，隔离强于本机容器。
       # CLAUDE_BIN 指向 stub 让 preflight 过关；需要真 agent turn 的断言不在这一层。
+      #
+      # 脚本里的 --test-concurrency=6：这一层大半时间在等子进程，默认并发（核数 - 1 = 3）下 4 核
+      # 只用掉约 1 核。2026-10-25 在钉 4 核的容器里量：并发 3/6/8 的 real 是 37.0/23.2/22.5s，
+      # user+sys 基本不变——6 是拐点，再高只多烧 CPU。真 server 一律 listen(0) 现要端口，不怕并发撞端口。
+      # test:integration 没跟着改：它在并发 6 时要吃掉约 3 核，CI 的核更慢，容易压满 CPU 撞出时序假红，
+      # 而这个 job 加速后已经短于 e2e 那条线，省下的几秒不在关键路径上。
       - run: npm run test:invariants:server
         env:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
@@ -149,16 +155,16 @@ jobs:
         #   matrix 多于 SHARDS ⇒ 多出来的 SHARD_INDEX 非法，脚本回落成「跑全部分片」，
         #     结果正确但慢几倍。GitHub Actions 的 matrix 引用不了 env，只能靠这两行对齐。
         #
-        # 【为什么是 12】2026-09-13 定 8 片时串行基线 ~690s、地板（最大单文件
-        # workspace-sessions-sidebar）约 92s，8 片理想值 86s 已贴着地板，8 片墙钟 140s
-        # （run 34744392463）。到 2026-10-25 用例涨到 69 个 spec、净时长 1091s，8 片各 131-140s，
-        # 地板涨到 105s——理想值又比地板高出一截，加片重新有收益。按当时的时长表模拟 LPT：
-        #   10 片最慢 109s · 11 片 105s（到地板）· 12 片 105s · 13 片起仍是 105s
-        # 选 12 而不是刚好到地板的 11：用例 6 周涨了约 400s，12 片在超过地板前还能吸收约 170s 增长，
-        # 11 片只有约 60s。再往上加片一秒都省不到，想再快只能拆那个 spec 文件。
+        # 【为什么是 14】2026-09-13 定 8 片时串行基线 ~690s、地板（最大单文件
+        # workspace-sessions-sidebar）约 92s，8 片墙钟 140s（run 34744392463）。到 2026-10-25 用例
+        # 涨到净时长约 1090s、地板 105s，先加到 12 片（#396，墙钟 142s），同日把地板文件和第二大的
+        # task-progress 按主题各拆成两份，最大单文件降到约 54s（permission-allow-deny），地板不再卡人。
+        # 此后分片数只受并发预算限制。按拆分后的时长表模拟 LPT：
+        #   12 片最慢 86s · 13 片 79s · 14 片 73s · 15 片 68s · 16 片 64s
         #
-        # 【并发预算】每轮峰值 job 数 ≈ 分片数 + quality + 2 个 unit-test + CodeQL。GitHub Free 账号
-        # 全账号同时最多 20 个 job，12 片时约 17 个；再加片会和 CodeQL、同账号别的仓库抢位排队。
+        # 【并发预算】每轮峰值 job 数 = 分片数 + quality + 2 个 unit-test + 2 个 CodeQL。GitHub Free
+        # 账号全账号同时最多 20 个 job：14 片时 19 个，留一个空位给同账号别的仓库。15 片恰好顶满，
+        # 一旦有一片排队，它要等 quality 跑完（约 30s）才起跑，比少一片亏得多。
         #
         # 【首次 run 会慢，这是预期】缓存为空时 LPT 退化成按文件数轮转，两个大文件撞进同一片，
         # 最慢片 209-213s（前两轮都是）。仍快于改造前的 255s——横向消除的 CPU 争抢盖过了
@@ -168,7 +174,7 @@ jobs:
         # 【要改这个数之前先确认】分片数变化会重排「哪些 spec 共用一个 mock server 进程、按什么
         # 顺序跑」，而 mock server 用模块级全局变量存状态 ⇒ 可能照出新的隐藏耦合。由 retries:1 兜，
         # 但改完要看一眼有没有新的 flaky。
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - uses: actions/checkout@v7
 
@@ -268,12 +274,13 @@ jobs:
       # 同理「别用串行时长 ÷ 分片数估耗时」（实测偏乐观 57%）——那个偏差的成因是 CPU 供给不足，
       # 独占 runner 后成因消失。但**它仍然只是推算，以真 run 为准**。
       #
-      # 【地板】同一个 spec 文件不跨分片，最大那个文件自己的耗时任何分片数都突破不了（2026-10-25 是
-      # workspace-sessions-sidebar，CI 上 105s）。再要快只能拆那个文件——那是重组测试内容，不是调这里的参数。
-      - name: Run Playwright E2E (shard ${{ matrix.shard }}/12)
+      # 【地板】同一个 spec 文件不跨分片，最大那个文件自己的耗时任何分片数都突破不了。2026-10-25 拆分
+      # 之后是 permission-allow-deny，CI 上约 54s，低于 14 片的理想值。等理想值跌到它附近再拆它——
+      # 那是重组测试内容，不是调这里的参数。
+      - name: Run Playwright E2E (shard ${{ matrix.shard }}/14)
         run: npm run test:e2e:parallel
         env:
-          CCM_E2E_SHARDS: '12'   # ★ 必须等于上面 matrix.shard 列表的长度，理由见那里
+          CCM_E2E_SHARDS: '14'   # ★ 必须等于上面 matrix.shard 列表的长度，理由见那里
           CCM_E2E_SHARD_INDEX: ${{ matrix.shard }}
 
       # 本片实测到的每个 spec 的时长。汇总 job 拿它做两件事：并集校验（TEST-02，少一个就红）
