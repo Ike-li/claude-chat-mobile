@@ -432,7 +432,7 @@ export function formatServiceNoticeRows({ service, now } = {}) {
         : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
           : t('——可能有人在暴力尝试你的入口');
     const selfInflicted = (src.scope === 'local' && !service?.proxyFronted) || src.scope === 'lan';
-    notices.push({ text: `${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`, tone: selfInflicted ? 'warning' : 'danger' });
+    notices.push({ id: RATE_LIMIT_LOCKOUT_NOTICE_ID, at: lockout.at, text: `${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`, tone: selfInflicted ? 'warning' : 'danger' });
   }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
@@ -447,15 +447,15 @@ export function formatServiceNoticeRows({ service, now } = {}) {
     const reasonText = reason && DELIVERY_NET_UNREACHABLE.test(reason)
       ? `${df.channel === 'ntfy' ? t('连不上 ntfy 服务') : t('连不上推送服务')}（${reason}）`
       : reason;
-    notices.push({ text: `${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`, tone: 'danger' });
+    notices.push({ id: DELIVERY_FAILURE_NOTICE_ID, at: df.at, text: `${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reasonText ? `：${reasonText}` : ''}`, tone: 'danger' });
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {
-    notices.push({ text: `${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`, tone: 'warning' });
+    notices.push({ id: CLIENT_ERROR_NOTICE_ID, at: ce.at, text: `${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`, tone: 'warning' });
   }
   // 清单为空也能启动之后（SCOPE-03），「配置了却全找不到」只剩这一行能说出原因。找不到的目录不进抽屉，
   // 抽屉里的「断开」够不着它们，所以恢复路径指向配置里的工作区列表；目录回来后点「重新检查」，不必重启（#301）。
-  // 这一类带稳定 id 与路径：抽屉行内有「忽略」，指纹见 serviceNoticeFingerprint。其余几类没有 id，不能忽略。
+  // 每一类都带稳定 id，抽屉行内有「忽略」，指纹见 serviceNoticeFingerprint：这一类按路径集合认，上面三类按发生时刻认。
   const missing = service && service.missingFolders;
   if (Number.isFinite(missing) && missing > 0) {
     notices.push({
@@ -469,11 +469,17 @@ export function formatServiceNoticeRows({ service, now } = {}) {
 }
 
 export const MISSING_FOLDERS_NOTICE_ID = 'missing-folders';
+export const RATE_LIMIT_LOCKOUT_NOTICE_ID = 'rate-limit-lockout';
+export const DELIVERY_FAILURE_NOTICE_ID = 'delivery-failure';
+export const CLIENT_ERROR_NOTICE_ID = 'client-error';
 
-// 「忽略」的指纹：告警 id + 路径集合（排序后），不含文案——切换语言不能让忽略失效，个数相同但换了一个路径
-// （A 回来了、B 丢了）必须当成新告警重新出现。
+// 「忽略」的指纹：告警 id + 路径集合（排序后）+ 发生时刻（有的话），不含文案——切换语言不能让忽略失效，个数相同但换了一个路径
+// （A 回来了、B 丢了）必须当成新告警重新出现；限速锁定、推送失败、前端错误没有路径，按时刻认，再发生一次就重新出现。
+// 不带时刻的行不追加这一项，已存下的找不到文件夹的指纹保持原样。
 export function serviceNoticeFingerprint(row) {
-  return JSON.stringify([row?.id ?? null, [...(row?.paths || [])].sort()]);
+  const parts = [row?.id ?? null, [...(row?.paths || [])].sort()];
+  if (typeof row?.at === 'number') parts.push(row.at);
+  return JSON.stringify(parts);
 }
 
 // 去掉已忽略的告警。dismissed = { [id]: 指纹 }（本机存的）；指纹对不上（集合变了）照常显示，没有 id 的永远显示。

@@ -621,13 +621,28 @@ test.describe('服务告警的忽略指纹', () => {
   const rowsOf = service => formatServiceNoticeRows({ service, now: 1000 });
   const missingRow = paths => rowsOf({ missingFolders: paths.length, missingFolderPaths: paths }).find(r => r.id === 'missing-folders');
 
-  test('找不到的文件夹那一行带稳定 id 与路径；其余几类没有 id，不提供忽略', () => {
+  test('四类告警都带稳定 id，抽屉行内都能忽略；找不到的文件夹另带路径', () => {
     const row = missingRow(['/b', '/a']);
     assert.equal(row.id, 'missing-folders');
     assert.deepEqual(row.paths, ['/b', '/a']);
-    const others = rowsOf({ clientError: { at: 900 }, deliveryFailure: { channel: 'push', at: 900 } });
-    assert.deepEqual(others.map(r => r.id ?? null), [null, null]);
+    const others = rowsOf({ rateLimitLockout: { at: 900 }, deliveryFailure: { channel: 'push', at: 900 }, clientError: { at: 900 } });
+    assert.deepEqual(others.map(r => r.id ?? null), ['rate-limit-lockout', 'delivery-failure', 'client-error']);
   });
+
+  // 限速锁定、推送失败、前端错误没有路径集合可比，「同一条」只能按发生时刻认：忽略的是这一次，之后再发生必须重新出现——
+  // 否则一次忽略就把此后的同类告警全藏了。宿主机连不出去时推送失败那一行是唯一的可见面，限速锁定是安全信号。
+  for (const [id, occurredAt] of [
+    ['rate-limit-lockout', at => ({ rateLimitLockout: { at, count: 1, source: 'ip:203.0.113.7' } })],
+    ['delivery-failure', at => ({ deliveryFailure: { channel: 'push', at, count: 1 } })],
+    ['client-error', at => ({ clientError: { at, count: 1 } })],
+  ]) {
+    test(`${id} 按发生时刻记指纹：同一次一直隐藏，再发生一次就重新出现`, () => {
+      const dismissed = { [id]: serviceNoticeFingerprint(rowsOf(occurredAt(900))[0]) };
+      const anHourLater = formatServiceNoticeRows({ service: occurredAt(900), now: 1000 + 3_600_000 });
+      assert.equal(undismissedServiceNotices(anHourLater, dismissed).length, 0, '同一次：文案从「刚刚」变成「1 小时前」也仍隐藏');
+      assert.equal(undismissedServiceNotices(rowsOf(occurredAt(950)), dismissed).length, 1, '又发生了一次：必须重新出现');
+    });
+  }
 
   test('指纹只看 id 与路径集合：顺序无关，集合变了就不同', () => {
     assert.equal(serviceNoticeFingerprint(missingRow(['/a', '/b'])), serviceNoticeFingerprint(missingRow(['/b', '/a'])));
@@ -647,10 +662,10 @@ test.describe('服务告警的忽略指纹', () => {
     }
   });
 
-  test('过滤掉已忽略的：指纹对得上才隐藏；没有 id 的几类永远不被过滤', () => {
+  test('过滤掉已忽略的：指纹对得上才隐藏，没忽略的照常显示', () => {
     const rows = rowsOf({ clientError: { at: 900 }, missingFolders: 1, missingFolderPaths: ['/a'] });
     const dismissed = { 'missing-folders': serviceNoticeFingerprint(missingRow(['/a'])) };
-    assert.deepEqual(undismissedServiceNotices(rows, dismissed).map(r => r.id ?? null), [null]);
+    assert.deepEqual(undismissedServiceNotices(rows, dismissed).map(r => r.id ?? null), ['client-error']);
     const changed = rowsOf({ missingFolders: 1, missingFolderPaths: ['/b'] });
     assert.equal(undismissedServiceNotices(changed, dismissed).length, 1, '路径换了，旧的忽略不再生效');
     assert.equal(undismissedServiceNotices(rows, null).length, 2);

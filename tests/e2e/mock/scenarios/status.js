@@ -455,12 +455,25 @@ export function createStatusScenarios(getContext) {
     {
       // 服务状态面板告警注入：后续 service:status ack 将带 deliveryFailure（+pushFailure=3），
       // 供 E2E 验证面板告警段渲染（P0-22b）。18 分钟前 → 文案「推送最近失败于 18 分钟前」。
+      // 同时推一帧 instances：真 server 投递失败时 onDeliveryFailure → scheduleBgBroadcast 也会广播，
+      // 抽屉「服务」小节只从这条广播取数（P0-SVC-ALERT-4）。
       command: 'test:service-delivery-failure',
-      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockDeliveryFailure }) => {
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId, activeModel, setMockDeliveryFailure, getMockCanRestart, mockInstances, mockServicePayload }) => {
         setMockDeliveryFailure({ channel: 'push', at: Date.now() - 18 * 60_000, count: 3 });
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_svc_fail_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: getMockCanRestart(),
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            ...getContext().mockDirFields(),
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
         });
       }),
     },
