@@ -1026,6 +1026,7 @@ export const EN_DICT = Object.freeze({
   '代码改动待确认': 'Code changes not known yet',
   '个文件改动': 'file(s) changed',
   '无代码改动': 'No code changes',
+  '快照在原会话': 'Snapshot is in the original session',
   '会话首轮，只能恢复代码': 'First turn of the session — code only',
   '（空消息）': '(empty message)',
   '确认要恢复到这条消息发出之前：': 'Confirm you want to restore to the point before this message:',
@@ -1036,6 +1037,7 @@ export const EN_DICT = Object.freeze({
   '这是会话首轮，无法分叉对话，只能恢复代码。': 'This is the session\'s first turn: the conversation can\'t be forked, only the code can be restored.',
   '这一轮既没有可恢复的文件，也无法分叉对话。': 'This turn has no files to restore, and the conversation can\'t be forked.',
   '找不到这一轮的文件快照，只能恢复对话。': 'No file snapshot was found for this turn, so only the conversation can be restored.',
+  '这一轮在分叉之前，文件快照留在原会话里，这里只能恢复对话。要恢复代码，请回原会话执行 /rewind。': 'This turn is from before the fork, so its file snapshot stayed in the original session and only the conversation can be restored here. To restore code, run /rewind in the original session.',
   '这一轮没有代码改动，只能恢复对话。': 'This turn made no code changes, so only the conversation can be restored.',
   '这一轮没有代码改动。': 'This turn made no code changes.',
   // 「将恢复 N 个文件：a、b」「其中 N 个文件有未提交的改动…：a、b」由片段与数字拼成，译文按英文语序分给各片段

@@ -2333,7 +2333,7 @@ io.on('connection', socket => {
       if (cwd !== MOCK_WT_CWD) { callback({ ok: false, error: '会话不存在' }); return; }
       callback({
         ok: true,
-        items: [{ promptUuid: 'u-wt-1', text: 'Worktree prompt', timestamp: '2024-01-01T00:00:00Z', changedFiles: null, canForkConversation: false, canRestoreCode: true }],
+        items: [{ promptUuid: 'u-wt-1', text: 'Worktree prompt', timestamp: '2024-01-01T00:00:00Z', changedFiles: null, inheritedFromFork: false, canForkConversation: false, canRestoreCode: true }],
       });
       return;
     }
@@ -2350,13 +2350,16 @@ io.on('connection', socket => {
     callback({
       ok: true,
       items: [
-        { promptUuid: 'u-archived-1', text: 'Summarize archived plan', timestamp: '2024-01-01T00:00:00Z', changedFiles: 0, canForkConversation: false, canRestoreCode: true },
-        { promptUuid: 'u-archived-2', text: 'Any follow-up questions?', timestamp: '2024-01-01T00:05:00Z', changedFiles: 3, canForkConversation: true, canRestoreCode: true },
-        { promptUuid: 'u-archived-3', text: 'One more thing please', timestamp: '2024-01-01T00:09:00Z', changedFiles: 2, canForkConversation: true, canRestoreCode: true },
-        { promptUuid: 'u-archived-4', text: 'Just run some shell commands', timestamp: '2024-01-01T00:12:00Z', changedFiles: 0, canForkConversation: true, canRestoreCode: true },
-        { promptUuid: 'u-archived-5', text: 'An old turn with no snapshot', timestamp: '2024-01-01T00:15:00Z', changedFiles: 0, canForkConversation: true, canRestoreCode: true },
-        { promptUuid: 'u-archived-6', text: 'Switch away while I decide', timestamp: '2024-01-01T00:18:00Z', changedFiles: 1, canForkConversation: true, canRestoreCode: true },
-        { promptUuid: 'u-archived-7', text: 'Go home while I decide', timestamp: '2024-01-01T00:21:00Z', changedFiles: null, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-1', text: 'Summarize archived plan', timestamp: '2024-01-01T00:00:00Z', changedFiles: 0, inheritedFromFork: false, canForkConversation: false, canRestoreCode: true },
+        { promptUuid: 'u-archived-2', text: 'Any follow-up questions?', timestamp: '2024-01-01T00:05:00Z', changedFiles: 3, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-3', text: 'One more thing please', timestamp: '2024-01-01T00:09:00Z', changedFiles: 2, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-4', text: 'Just run some shell commands', timestamp: '2024-01-01T00:12:00Z', changedFiles: 0, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-5', text: 'An old turn with no snapshot', timestamp: '2024-01-01T00:15:00Z', changedFiles: 0, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-6', text: 'Switch away while I decide', timestamp: '2024-01-01T00:18:00Z', changedFiles: 1, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        { promptUuid: 'u-archived-7', text: 'Go home while I decide', timestamp: '2024-01-01T00:21:00Z', changedFiles: null, inheritedFromFork: false, canForkConversation: true, canRestoreCode: true },
+        // 分叉会话里从原会话复制来的轮次（真 server：条目带 forkedFrom ⇒ inheritedFromFork，changedFiles 恒 null）。
+        // 真实会话里它们排在最前；放末尾只是为了不挪动上面各档已有用例依赖的夹具。
+        { promptUuid: 'u-archived-8', text: 'A turn copied in from before the fork', timestamp: '2024-01-01T00:24:00Z', changedFiles: null, inheritedFromFork: true, canForkConversation: true, canRestoreCode: true },
       ],
     });
   });
@@ -2446,6 +2449,11 @@ io.on('connection', socket => {
     // 另一种 canRewind:false：SDK 侧根本没有这条消息的检查点（res.canRewind 为 false），
     // 不是「这一轮没改文件」。出路一样，成因不同，文案必须不同。
     if (promptUuid === 'u-archived-5') {
+      callback({ ok: true, canRewind: false, reason: 'no-checkpoint', filesChanged: [], insertions: 0, deletions: 0 });
+      return;
+    }
+    // 分叉前复制来的那一轮：快照留在原会话，本会话的 rewindFiles 找不到检查点，真 server 同样回 no-checkpoint。
+    if (promptUuid === 'u-archived-8') {
       callback({ ok: true, canRewind: false, reason: 'no-checkpoint', filesChanged: [], insertions: 0, deletions: 0 });
       return;
     }

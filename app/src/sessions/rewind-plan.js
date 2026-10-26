@@ -188,8 +188,13 @@ export function listRewindCandidates(entries) {
     // 错位一行：真动了文件的那轮报 0，紧随其后的纯提问轮报 N。
     const cur = snapshots.get(e.uuid);
     const next = i + 1 < prompts.length ? snapshots.get(prompts[i + 1].uuid) : undefined;
+    // 从原会话复制来的轮次（forkSession 给每条打 forkedFrom）：它们的快照没有跟过来，留在原会话里。
+    // 报 0 是说「这一轮没改代码」，其实是这里查不到——/rewind 本身就产生分叉会话，第二次回退必然撞上。
+    const inheritedFromFork = !!e.forkedFrom;
     let changedFiles;
-    if (i + 1 >= prompts.length) {
+    if (inheritedFromFork) {
+      changedFiles = null;
+    } else if (i + 1 >= prompts.length) {
       // 最后一轮的改动还没有「下一个 snapshot」来反映，从 transcript 上无从得知。报 0 是撒谎
       // （它可能改了一堆）；标未知，准确值由第二步的 preview（rewindFiles dryRun）给。
       changedFiles = null;
@@ -208,6 +213,7 @@ export function listRewindCandidates(entries) {
       text: reconstructSlashCommand(raw) ?? raw,
       timestamp: e.timestamp ?? null,
       changedFiles,
+      inheritedFromFork,
       // 【两个轴分开，不要压成一个 canRewind】planRewind 是【对话轴】判据：首轮之前没有可保留
       // 的锚点，fork 会退化成复制一个空会话。但「只恢复代码」根本不 fork，首轮的文件快照照样能
       // 还原——压成一个字段等于让单轮会话完全用不了 Restore code，而终端能（PR #102 review）。

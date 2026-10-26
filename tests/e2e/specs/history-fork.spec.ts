@@ -386,4 +386,24 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expect(page.locator('#rewindModeBoth')).toBeEnabled();
     await expectNoBrowserErrors(page);
   });
+
+  // 分叉出来的会话里，从原会话复制来的那几轮：快照没跟过来（SDK 的 forkSession 不复制 file-history）。
+  // /rewind 本身就产生分叉会话，所以第二次回退必然遇到。清单不能说「无代码改动」（那是另一回事），
+  // 第二步要给出路：要恢复代码就回原会话。
+  test('P0-REWINDp 分叉前复制来的轮次：清单不说「无代码改动」，第二步指回原会话', async ({ page }) => {
+    await openArchived(page);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    await runRewindCommand(page);
+
+    const row = page.locator('#rewindList [data-uuid="u-archived-8"]');
+    await expect(row).toContainText('快照在原会话', { timeout: 3_000 });
+    await expect(row).not.toContainText('无代码改动');
+    await row.click();
+
+    await expect(page.locator('#rewindEffect')).toContainText('回原会话', { timeout: 3_000 });
+    await expect(page.locator('#rewindModeCode')).toBeDisabled();
+    await expect(page.locator('#rewindModeBoth')).toBeDisabled();
+    await expect(page.locator('#rewindModeConversation'), '对话照样能恢复，不能整条变死路').toBeEnabled();
+    await expectNoBrowserErrors(page);
+  });
 });
