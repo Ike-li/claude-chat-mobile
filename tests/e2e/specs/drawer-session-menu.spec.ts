@@ -109,6 +109,42 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // Codex review（#407）：菜单项先收菜单再开确认，菜单 300ms 收起动画到点时会把焦点还给「⋯」——那时它已压在确认框后面。
+  // 机制在 frontend-sheets 单测的「接力」两条。真浏览器里确认框（带 visibility 过渡）首帧接不住 openSheet 的开场移焦
+  // （存量问题，不止这条路径），所以「焦点进了确认框就不被抢」在这里观察不到，只能守：焦点不丢、取消后回到「⋯」。
+  test('P0-ROW-MENU-6 键盘：菜单里选删除 → 菜单收完焦点不丢；取消后回到这一行的「⋯」', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+    const trigger = row.getByTestId('session-menu');
+
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(menu(page)).toHaveClass(/sheet-open/);
+    await expect(sessionMenuItem(page, 'toggle-read')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(sessionMenuItem(page, 'delete')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#confirmModal')).toHaveClass(/sheet-open/);
+    // 菜单加 hidden 与还焦是同一个回调：等到 hidden 出现，还焦那一步就已经走过了
+    await expect(menu(page)).toHaveClass(/\bhidden\b/);
+    const focusPlace = await page.evaluate(() => {
+      const a = document.activeElement;
+      if (!a || a === document.body) return 'body';
+      if (a.closest('#sessionMenuModal')) return 'hidden-menu';
+      if (a.closest('#confirmModal')) return 'confirm';
+      return a.getAttribute('data-testid') || a.tagName;
+    });
+    expect(['confirm', 'session-menu'], `焦点落在 ${focusPlace}：丢了或留在已藏起的菜单里`).toContain(focusPlace);
+
+    await page.locator('#confirmCancel').click();
+    await expect(page.locator('#confirmModal')).toHaveClass(/\bhidden\b/);
+    await expect(trigger, '取消后焦点该回到发起的那一行，而不是丢进已收起的菜单').toBeFocused();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-ROW-MENU-5 取消、点遮罩、Esc 都只收菜单，抽屉留着', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
