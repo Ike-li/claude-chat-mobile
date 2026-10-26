@@ -207,32 +207,31 @@ test('composeProjects：连接根互相嵌套时，子项目挂在它记的那�
   assert.deepEqual(projects.map(p => [p.key, p.label]), [['/c', 'c'], ['/c/app', 'app'], ['/c/app/sub', 'app › sub']]);
 });
 
-// #305 置顶：只排「块」（连接根 + 它的子文件夹小节），不排展开后的列表——子文件夹跟着根走、「无文件夹」垫底
-// 都靠结构保证。下面这组用例对这几种变异各自会红：去掉置顶排序；展开后整体按路径排；把「无文件夹」排到
-// 置顶块之前；只移动根、不移动子文件夹。
-const PIN_FIXTURE = {
+// 手动顺序（2026-10-26，取代 #305 置顶）：只排「块」（连接根 + 它的子文件夹小节），不排展开后的列表——子文件夹跟着根走、
+// 「无文件夹」垫底都靠结构保证。下面这组用例对这几种变异各自会红：去掉按顺序排；展开后整体按路径排；把「无文件夹」排到
+// 前面；只移动根、不移动子文件夹；新连接的根插到前面。
+const ORDER_FIXTURE = {
   connected: ['/r/A', '/r/B', '/r/C'],
   subProjects: [{ key: '/r/A/a', root: '/r/A' }, { key: '/r/B/b', root: '/r/B' }, { key: '/r/C/c', root: '/r/C' }],
   scratchRoot: '/s',
 };
 
-test('composeProjects 置顶：置顶的根连同子文件夹整块移到最前，其余按配置顺序，「无文件夹」仍垫底', () => {
-  const projects = composeProjects({ ...PIN_FIXTURE, pinnedRoots: ['/r/C'] });
+test('composeProjects 手动顺序：根连同子文件夹整块按顺序排，「无文件夹」仍垫底；不再带 pinned 标记', () => {
+  const projects = composeProjects({ ...ORDER_FIXTURE, rootOrder: ['/r/C', '/r/A', '/r/B'] });
   assert.deepEqual(projects.map(p => p.key), ['/r/C', '/r/C/c', '/r/A', '/r/A/a', '/r/B', '/r/B/b', '/s']);
-  assert.deepEqual(projects.filter(p => p.pinned).map(p => p.key), ['/r/C'], '只有置顶的连接根带 pinned（前端据此显示「取消置顶」）');
+  assert.deepEqual(projects.filter(p => 'pinned' in p), [], '置顶已经取消，清单里不该还有 pinned');
 });
 
-test('composeProjects 置顶：多个置顶按数组顺序（最后置顶的在最前）', () => {
+test('composeProjects 手动顺序：顺序里没有的根（排序之后才连接的）按配置顺序排在后面', () => {
   assert.deepEqual(
-    composeProjects({ ...PIN_FIXTURE, pinnedRoots: ['/r/C', '/r/B'] }).filter(p => p.kind === 'connected').map(p => p.key),
+    composeProjects({ ...ORDER_FIXTURE, rootOrder: ['/r/C', '/r/B'] }).filter(p => p.kind === 'connected').map(p => p.key),
     ['/r/C', '/r/B', '/r/A'],
   );
 });
 
-test('composeProjects 置顶：不在当前清单里的路径忽略；「无文件夹」、子文件夹不会因为出现在数组里被提前', () => {
-  const projects = composeProjects({ ...PIN_FIXTURE, pinnedRoots: ['/s', '/r/gone', '/r/A/a', '/r/B'] });
+test('composeProjects 手动顺序：不在当前清单里的路径忽略；「无文件夹」、子文件夹不会因为出现在数组里被提前', () => {
+  const projects = composeProjects({ ...ORDER_FIXTURE, rootOrder: ['/s', '/r/gone', '/r/A/a', '/r/B'] });
   assert.deepEqual(projects.map(p => p.key), ['/r/B', '/r/B/b', '/r/A', '/r/A/a', '/r/C', '/r/C/c', '/s']);
-  assert.deepEqual(projects.filter(p => p.pinned).map(p => p.key), ['/r/B']);
 });
 
 test('createProjectIndex：并发刷新合并成一次在途 + 一次补跑，结果不变不通知', async () => {

@@ -581,12 +581,12 @@ export const EN_DICT = Object.freeze({
   // 会话行「⋯」菜单
   '会话操作': 'Session actions',
   '先关闭会话才能删除': 'Close the session before deleting it',
-  // 文件夹行长按「全部标为已读」（#300）
+  // 文件夹行「⋯」菜单（#300 全部标为已读）与长按拖动排序
+  '文件夹操作': 'Folder actions',
   '全部标为已读': 'Mark all as read',
-  // 文件夹置顶（#305）
-  '置顶': 'Pin to top',
-  '取消置顶': 'Unpin',
-  '置顶没成功，稍后再试': 'Couldn\'t pin — try again later',
+  '全部标为已读（{n}）': 'Mark all {n} as read',
+  '断开连接': 'Disconnect',
+  '顺序没保存上，稍后再试': 'Couldn\'t save the order — try again later',
   '把这里的 {n} 个未读会话标为已读。': 'Mark the {n} unread sessions here as read.',
   '把这里的 {n} 个未读会话标为已读，还没显示的更早会话也一起。': 'Mark the {n} unread sessions here as read, including older ones not shown yet.',
   '这里没有未读会话': 'No unread sessions here',
@@ -740,7 +740,6 @@ export const EN_DICT = Object.freeze({
   '这里有 {n} 个会话开着，会照常继续。': '{n} open session(s) here will keep running.',
   '断开「{name}」？': 'Disconnect "{name}"?',
   '断开': 'Disconnect',
-  '断开这个文件夹': 'Disconnect this folder',
   '选一个项目文件夹，claude 就在里面读写代码。只是聊聊的话，点 ＋ 直接在「无文件夹」里开。':
     'Pick a project folder and claude will read and write code there. Just want to chat? Tap ＋ to start in "No folder".',
   '已连接的文件夹': 'Connected folders',

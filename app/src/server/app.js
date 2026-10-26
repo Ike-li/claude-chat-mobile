@@ -26,7 +26,7 @@ import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resol
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
-import * as pinnedRoots from '../sessions/pinned-roots.js';
+import * as folderOrder from '../sessions/folder-order.js';
 import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
@@ -475,11 +475,14 @@ function removeConnectedFolder(path) {
   return workDirs.includes(path) ? { ok: false, error: 'not_applied', dirs: workDirs } : { ok: true, dirs: workDirs };
 }
 
-// 置顶 / 取消置顶（#305）：只认与当前清单精确相等的连接根——子文件夹、前缀相似的路径、已移除的根都拒绝，
-// 存储与广播都不动。成功后广播完整清单（不新增出向事件，重连时的快照自然带上新顺序）。
-function pinConnectedFolder(root, pinned) {
-  if (typeof root !== 'string' || !workDirs.includes(root)) return { ok: false, error: 'invalid_root' };
-  pinnedRoots.setRootPinned(root, pinned === true);
+// 拖动排序（取代 #305 置顶）：roots 必须恰好是当前清单的一个排列——少一个、多一个（子文件夹、前缀相似的路径、
+// 已移除的根）、重复都拒绝，存储与广播都不动。拖动期间另一台设备加 / 断了文件夹就会撞上这条，手机按最新广播重画即可。
+// 成功后广播完整清单（不新增出向事件，重连时的快照自然带上新顺序）。
+function reorderConnectedFolders(roots) {
+  const ok = Array.isArray(roots) && roots.length === workDirs.length && new Set(roots).size === roots.length
+    && roots.every(r => typeof r === 'string' && workDirs.includes(r));
+  if (!ok) return { ok: false, error: 'invalid_order' };
+  folderOrder.setRootOrder(roots);
   broadcastInstances();
   return { ok: true };
 }
@@ -1448,8 +1451,8 @@ function instancesPayload() {
     connected: workDirs,
     subProjects: [...(scanned?.subProjects ?? []), ...liveSubProjects(list)],
     scratchRoot: scratchInUse ? payload.scratchRoot : null,
-    // 抽屉文件夹「置顶」（#305）：只改展示顺序，workDirs 与一切回落都不读它
-    pinnedRoots: pinnedRoots.listPinnedRoots(),
+    // 抽屉文件夹的手动顺序（长按拖动）：只改展示顺序，workDirs 与一切回落都不读它
+    rootOrder: folderOrder.listRootOrder(),
   });
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
@@ -4428,7 +4431,7 @@ registerSocketConnection(io, socket => {
       return { ok: true, missingFolders: workdirStatus.missing(), missingFolderPaths: workdirStatus.missingPaths() };
     },
     removeConnectedFolder,
-    pinConnectedFolder,
+    reorderConnectedFolders,
     audit,
     actorFromSocket,
   });
@@ -5494,7 +5497,7 @@ function shutdown(sig) {
   approvalStore.flushSaveSync();
   audit.flushSaveSync();
   readState.flushSaveSync(); // 同上：防抖窗内的已读位点不落盘，换设备就会看到一屏假未读
-  pinnedRoots.flushSaveSync(); // 同上：置顶顺序
+  folderOrder.flushSaveSync(); // 同上：文件夹顺序
   io.close(() => process.exit(0)); // 主动关所有 socket 连接再关底层 http server；否则 WS 长连接把 close 回调拖到 3s 兜底才退（实测断连窗口 ~3.5s → 近乎即时）
   setTimeout(() => process.exit(0), 3000).unref(); // 兜底：io.close 万一挂起仍强退
 }
