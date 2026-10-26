@@ -86,11 +86,14 @@ export function createRewindCommandController({
       const disabled = !item.canForkConversation && !item.canRestoreCode;
       // changedFiles=null 是「未知」而不是 0：最后一轮的改动还没有下一个 snapshot 来反映，
       // 报「无代码改动」会把「改了一堆」说成没改。准确值由第二步的 preview 给。
-      const changed = item.changedFiles == null
-        ? `<span class="text-ink-soft">${t('代码改动待确认')}</span>`
-        : item.changedFiles > 0
-          ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
-          : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
+      // 分叉前复制来的轮次另说一句：它的快照留在原会话里，这里永远查不到，「待确认」等于让人白点一次。
+      const changed = item.inheritedFromFork
+        ? `<span class="text-ink-soft">${t('快照在原会话')}</span>`
+        : item.changedFiles == null
+          ? `<span class="text-ink-soft">${t('代码改动待确认')}</span>`
+          : item.changedFiles > 0
+            ? `<span class="text-accent-deep">${item.changedFiles} ${t('个文件改动')}</span>`
+            : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
       const reason = !item.canForkConversation
         ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，只能恢复代码')}</div>` : '';
       return `<div class="py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
@@ -158,9 +161,11 @@ export function createRewindCommandController({
       // 两个轴都不行 = 没有任何模式可点，得说清是死路而不是让人对着全灰的按钮猜。
       codeLine = !canFork
         ? t('这一轮既没有可恢复的文件，也无法分叉对话。')
-        : res.reason === 'no-checkpoint'
-          ? t('找不到这一轮的文件快照，只能恢复对话。')
-          : t('这一轮没有代码改动，只能恢复对话。');
+        : picked.inheritedFromFork
+          ? t('这一轮在分叉之前，文件快照留在原会话里，这里只能恢复对话。要恢复代码，请回原会话执行 /rewind。')
+          : res.reason === 'no-checkpoint'
+            ? t('找不到这一轮的文件快照，只能恢复对话。')
+            : t('这一轮没有代码改动，只能恢复对话。');
     } else if (files.length) {
       const shown = files.slice(0, 3).map(esc).join(t('、'));
       codeLine = `${t('将恢复')} ${files.length} ${t('个文件：')}${shown}${files.length > 3 ? '…' : ''}`;

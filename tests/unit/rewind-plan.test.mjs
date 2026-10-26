@@ -667,6 +667,27 @@ test.describe('listRewindCandidates', () => {
     assert.deepEqual(got.map(c => c.changedFiles), [0, null]);
   });
 
+  // 【2026-10-26】分叉出来的会话不带原会话的文件快照（sdk.d.ts forkSession：「file-history snapshots are not
+  // copied」；本机 3 个分叉会话实测，继承来的 8 个 prompt 无一带 snapshot）。复制过来的条目都带 forkedFrom。
+  // 这些轮次不是「没改代码」，是快照留在了原会话里——/rewind 本身就产生分叉会话，第二次回退必然撞上。
+  // 上一条「没有 snapshot 报 0」只对本会话自己写的轮次成立，与这条不冲突。
+  test('从原会话复制来的轮次（forkedFrom）：文件数未知，并标出快照在原会话', () => {
+    const from = (uuid) => ({ sessionId: 'src', messageUuid: `orig-${uuid}` });
+    const entries = [
+      { uuid: 'u1', type: 'user', forkedFrom: from('u1'), message: { content: '分叉前一' } },
+      { uuid: 'u2', type: 'user', forkedFrom: from('u2'), message: { content: '分叉前二' } },
+      { type: 'custom-title', uuid: 'ct', customTitle: 'X (fork)' },
+      { uuid: 'u3', type: 'user', message: { content: '分叉后一' } },
+      snap('u3', {}),
+      { uuid: 'u4', type: 'user', message: { content: '分叉后二' } },
+      snap('u4', { 'a.py': { version: 1 } }),
+    ];
+    const got = listRewindCandidates(entries);
+    assert.deepEqual(got.map(c => c.changedFiles), [null, null, 1, null],
+      '继承来的轮次报 0 等于告诉用户「这一轮没改代码」，而它的快照只是留在了原会话');
+    assert.deepEqual(got.map(c => c.inheritedFromFork), [true, true, false, false]);
+  });
+
   // 【2026-09-21 拆分（PR #102 review）】canRewind 原先只来自 planRewind，那是【对话轴】的判据
   // （首轮之前没有可保留的锚点，fork 会退化成复制一个空会话）。但「只恢复代码」不 fork，
   // 首轮的文件快照照样能还原——把两个轴压成一个字段，等于让单轮会话完全用不了 Restore code，
