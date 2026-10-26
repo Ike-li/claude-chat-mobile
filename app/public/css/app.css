@@ -818,14 +818,17 @@ header {
   }
 
   /* ── 侧边栏工作区与会话高级动效 ── */
+  /* 展开后高度随内容走，不设上限：此前 max-height:1200px 只放得下二十来行，「显示全部」拉来的 50 行连同底部按钮
+     被裁掉一大半（2026-10-26 真机）。interpolate-size 让 0 ↔ auto 也能过渡；不支持的浏览器直接跳变，照样不裁。 */
   .subtree-container {
-    max-height: 0;
+    height: 0;
     opacity: 0;
     overflow: hidden;
-    transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
+    interpolate-size: allow-keywords;
+    transition: height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
   }
   .subtree-container.expanded {
-    max-height: 1200px; /* 容纳多会话 */
+    height: auto;
     opacity: 1;
   }
   .dir-arrow {

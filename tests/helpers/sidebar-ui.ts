@@ -35,6 +35,22 @@ export async function expandWorkspace(page: Page, cwd: string) {
   return row;
 }
 
+export function workspaceSubtree(page: Page, cwd: string) {
+  return workspaceRow(page, cwd).locator('xpath=following-sibling::*[1]');
+}
+
+// 点 times 次「显示更多」，每次等新的一档真画出来（行数变多）再点下一次——按钮点下去先变「加载中…」，
+// 连点会点在被禁用的旧按钮上。
+export async function showMoreSessions(page: Page, cwd: string, times = 1) {
+  const subtree = workspaceSubtree(page, cwd);
+  const rows = subtree.locator('[data-testid="session-row"]');
+  for (let i = 0; i < times; i += 1) {
+    const before = await rows.count();
+    await subtree.getByTestId('session-show-more').click();
+    await expect.poll(() => rows.count()).toBeGreaterThan(before);
+  }
+}
+
 export function sessionButtonByTitle(page: Page, title: string) {
   return page.locator(`button[title="${cssAttr(title)}"]`);
 }

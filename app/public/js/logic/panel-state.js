@@ -756,7 +756,7 @@ export function resolveSheetDragEnd({
 // session:list 响应回来后，判断内容是否真的变了再决定要不要重渲染该目录的会话行列表——避免"缓存已
 // 秒开正确内容→响应回来后又无条件整段重渲"的多余闪烁/重排。hasPrevEntry=false（此前无缓存，正显示
 // 骨架屏）时恒需要渲染：骨架屏必须被替换，哪怕真实数据恰好是空列表。粒度：id+title(前 40 字)+
-// lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示全部"按钮的
+// lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示更多"按钮的
 // 出现/消失，不影响每一行的签名本身）。
 export function shouldRerenderSessionList({
   hasPrevEntry = false,
@@ -810,7 +810,7 @@ export function buildDirInstanceSignatures(instances = [], dirs = []) {
 }
 
 // 比较前后两份"按目录分键的签名"，返回签名变化的 cwd 列表（升序排序，确定性）——调用方只需重建这些
-// 目录的 DOM 子树，其余目录原样不动（不撤离滚动位置/侧滑态/"显示全部"展开态等本地态）。目录集合本身
+// 目录的 DOM 子树，其余目录原样不动（不撤离滚动位置/侧滑态/"显示更多"展开态等本地态）。目录集合本身
 // 变化（新增/删除工作区）、viewingInstanceId 变化两类"结构性"场景不经这个函数——调用方应直接全量
 // 重建，不必对这两种低频场景做精细化 diff。
 export function diffDirSignatures(prev = {}, next = {}) {

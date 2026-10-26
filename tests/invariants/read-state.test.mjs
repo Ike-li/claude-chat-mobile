@@ -3,6 +3,7 @@
 // 覆盖：多设备增量归并（LWW 单调递增）+ baselineTs 免疫污染 + 手动标已读记 seen 阻断旧 manual 复活 + 乱序上报不整屏复亮
 //       + 已读盖过手动标记后清干净（消除本地删/服务端留的不对称）+ 两条写入路径的 seen 都单调不回退
 //       + manualUnreadIds 与前端 isManualUnreadNow 逐条同义（标记必须能被 session:list 补回列表）
+//       + 文件夹「全部标为已读」水位：单调、clamp、随 read:sync 归并、回执折进本文件夹的行、盖过之前的手动标记
 // 槽位：S1（纯函数 + 一次性目录状态机）
 // 不测什么 + 为什么：不测浏览器 localStorage 与真实 DOM 渲染（属于 S3 UI/E2E 槽）
 
@@ -391,5 +392,70 @@ test.describe('READ-01: manualUnreadIds —— 标记必须能被补回列表，
     s.setManual('later', true, T0);
     s.markRead('later', T0 + MIN);
     assert.deepEqual(s.manualUnreadIds(), []);
+  });
+});
+
+// 2026-10-26 真机：长按文件夹「全部标为已读」只标了屏幕上那 6 行，点「显示更多」拉出来的旧会话一片未读（34 个）。
+// 现在它在服务端记一条文件夹水位，session:list 回执把水位折进每行 seen——没加载出来的行同样被覆盖。
+// 不逐条写 seen：SEEN_CAP=1000，一个仓库就有几百个会话，挤掉的旧记录会复亮。
+test.describe('READ-01: 文件夹「全部标为已读」是一条水位，覆盖没加载出来的旧会话', () => {
+  test('水位单调不回退：乱序到达的旧标记不拨回', () => {
+    const s = createStore({ now: () => LATER });
+    s.markFolder('/repo', T0 + 2 * MIN);
+    s.markFolder('/repo', T0 + MIN);
+    assert.equal(s.folderReadAt('/repo'), T0 + 2 * MIN);
+    assert.equal(s.folderReadAt('/other'), null);
+  });
+
+  test('设备时钟偏快：水位 clamp 到服务端 now（否则此后那段偏差里的新活动在所有设备上被吞掉）', () => {
+    const s = createStore({ now: () => T0 });
+    s.markFolder('/repo', T0 + 10 * MIN);
+    assert.equal(s.folderReadAt('/repo'), T0);
+  });
+
+  test('read:sync 整表归并带上水位（离线时标的不丢）：取较晚、clamp、丢脏值', () => {
+    const s = createStore({ now: () => LATER });
+    s.markFolder('/repo', T0 + MIN);
+    s.applyClientState({ seen: {}, manual: {}, folders: { '/repo': T0, '/b': T0 + 5 * MIN, '/c': LATER + MIN, '/bad': 'x' } });
+    assert.equal(s.folderReadAt('/repo'), T0 + MIN, '较旧的上报不拨回');
+    assert.equal(s.folderReadAt('/b'), T0 + 5 * MIN);
+    assert.equal(s.folderReadAt('/c'), LATER);
+    assert.equal(s.folderReadAt('/bad'), null);
+  });
+
+  test('回执折叠：本文件夹的行 seen 至少是水位，水位之后的新活动照样亮，别的文件夹不受影响', () => {
+    const s = createStore({ now: () => LATER });
+    s.markRead('read-late', T0 + 3 * MIN);
+    s.markFolder('/repo', T0 + 2 * MIN);
+    const st = s.stateForRows(['never-opened', 'read-late'], '/repo');
+    assert.equal(st.seen['never-opened'], T0 + 2 * MIN);
+    assert.equal(st.seen['read-late'], T0 + 3 * MIN, '比水位晚的位点不能被压回水位');
+    const unreadAt = lastUsedAt => isSessionUnread({ lastUsedAt, seenAt: st.seen['never-opened'], baselineTs: st.baselineTs });
+    assert.equal(unreadAt(T0 + MIN), false, '标已读之前的活动不亮——这正是那 34 个');
+    assert.equal(unreadAt(T0 + 4 * MIN), true, '标已读之后的新活动照样亮');
+    assert.equal(s.stateForRows(['never-opened'], '/other').seen['never-opened'], undefined, '别的文件夹不受这条水位影响');
+    assert.equal(s.stateForRows(['never-opened']).seen['never-opened'], undefined, '不给文件夹就不折叠');
+  });
+
+  test('水位之前的手动标记失效：回执里不再亮，也不再被补回「稍后再看」；之后标的照旧', () => {
+    const s = createStore({ now: () => LATER });
+    s.setManual('marked-before', true, T0);
+    s.setManual('marked-after', true, T0 + 3 * MIN);
+    s.markFolder('/repo', T0 + 2 * MIN);
+    const st = s.stateForRows(['marked-before', 'marked-after'], '/repo');
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'marked-before'), false);
+    assert.equal(isManualUnreadNow(st.manual, st.seen, 'marked-after'), true);
+    assert.deepEqual(s.manualUnreadIds({ floor: s.folderReadAt('/repo') }), ['marked-after']);
+    assert.deepEqual(s.manualUnreadIds().sort(), ['marked-after', 'marked-before'], '不给水位时行为不变');
+  });
+
+  test('水位随文件落盘，重启后还在；快照形状不变（read:sync 回执不搬这张表）', () => {
+    const file = join(TMP_DIR, `read-state-${++fileSeq}.json`);
+    const a = createReadStateStore({ file, now: () => LATER });
+    a.markFolder('/repo', T0);
+    a.flushSaveSync();
+    const b = createReadStateStore({ file, now: () => LATER });
+    assert.equal(b.folderReadAt('/repo'), T0);
+    assert.deepEqual(Object.keys(b.getState()).sort(), ['baselineTs', 'manual', 'seen']);
   });
 });

@@ -14,7 +14,9 @@ import {
   openSessionsSidebar,
   sessionButtonByTitle,
   sessionRowByInstance,
-  workspaceRow
+  showMoreSessions,
+  workspaceRow,
+  workspaceSubtree
 } from '../../helpers/sidebar-ui';
 
 // P3 抽屉局部重建 + SWR 保鲜回归专用：给指定工作区 subtree 下所有会话行元素打一个自定义 JS 属性
@@ -795,33 +797,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(modal).not.toHaveClass(/sheet-open/);
   }
 
-  // P0-11aq（验收 O81）：一个文件夹超过 50 个会话时，「显示全部」只给前 50 个、更早的只能搜。
-  // 现在显示全部之后还能「加载更多」，一页页往后拉；到了服务端上限再回落成「可用搜索查找」。
-  test('P0-11aq 显示全部之后还能加载更多；到服务端上限后回落成搜索提示', async ({ page }) => {
+  // P0-11aq（照抄桌面端 Show more；前身是验收 O81 的「显示全部 / 加载更多」）：每点一次多显示一档（mock 每档 3 条），
+  // 按钮上报下一档多几个；到了服务端硬顶回落成「可用搜索查找」。
+  test('P0-11aq 显示更多一档档往下显示；到服务端硬顶后回落成搜索提示；折叠再展开不被打回第一档', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:history-overflow');
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
 
-    const loadMore = page.getByTestId('session-load-more');
-    await expect(loadMore).toBeVisible();
-    await expect(loadMore).toContainText('还有 7 个');
-    await expect(page.getByTestId('session-remaining-hint')).toHaveCount(0);
+    const more = page.getByTestId('session-show-more');
+    await expect(more).toHaveText('显示更多 3 个（还有 13 个）');
+    await expect(page.getByTestId('session-show-less'), '没点过「显示更多」就没有可收起的').toHaveCount(0);
     await expect(page.locator('#sessionPanel')).not.toContainText('Overflow Older 1');
 
-    await loadMore.click();
+    await showMoreSessions(page, MAIN_WORKSPACE, 3); // 3 → 6 → 9 → 12（mock 硬顶）
     await expect(sessionButtonByTitle(page, 'Overflow Older 1')).toBeVisible();
-    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
-    await expect(loadMore).toHaveCount(0);
-    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
-    // 新拉到的更早会话接在原有行之后（时间序），不是插到前面
+    await expect(sessionButtonByTitle(page, 'Overflow Older 3')).toBeVisible();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Overflow Older 4');
+    await expect(more).toHaveCount(0);
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 4 个更早的会话');
+    await expect(page.getByTestId('session-show-less'), '到了硬顶照样能收起').toBeVisible();
+    // 新显示的更早会话接在原有行之后（时间序），不是插到前面
     const rowIds = () => page.locator('[data-testid="session-row"]').evaluateAll(rows => rows.map(r => r.getAttribute('data-session-id')));
     const ids = await rowIds();
     expect(ids.indexOf('mock-session-overflow-older-1')).toBeGreaterThan(ids.indexOf('mock-session-older-migration'));
 
-    // 折叠再展开（缓存秒开 + 无条件 revalidate）：已加载的页数不能被打回第一页。缓存会先把行画出来，
-    // 只看 DOM 判不出 revalidate 带没带页数，所以直接看折叠之后发出的 session:list。
+    // 折叠再展开（缓存秒开 + 无条件 revalidate）：点过的次数不能被打回第一档。缓存会先把行画出来，
+    // 只看 DOM 判不出 revalidate 带没带次数，所以直接看折叠之后发出的 session:list。
     const listLog = async () => (await page.request.get('/__session-list-log')).json();
     const before = (await listLog()).length;
     await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().click();
@@ -829,11 +831,72 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(async () => {
       const sent = (await listLog()).slice(before)
         .filter((e: { cwd: string }) => e.cwd === MAIN_WORKSPACE)
-        .map((e: { all: boolean; pages: number | null }) => `${e.all}:${e.pages}`);
-      return sent.length > 0 && sent.every((x: string) => x === 'true:2');
+        .map((e: { more: number }) => e.more);
+      return sent.length > 0 && sent.every((x: number) => x === 3);
     }).toBe(true);
-    await expect(sessionButtonByTitle(page, 'Overflow Older 4')).toBeVisible();
-    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 3 个更早的会话');
+    await expect(sessionButtonByTitle(page, 'Overflow Older 3')).toBeVisible();
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('还有 4 个更早的会话');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 「收起」回到第一档。桌面端只在全部显示完才给 Show less，这里点过一次就给（几百个会话的文件夹点不到底）。
+  test('P0-11aw 收起：回到第一档、不再带 more，按钮那一行留在视野里', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:history-overflow');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const rows = workspaceSubtree(page, MAIN_WORKSPACE).locator('[data-testid="session-row"]');
+    await expect(page.getByTestId('session-show-more')).toHaveText('显示更多 3 个（还有 13 个）');
+    await expect(rows).toHaveCount(3); // mock 每档 3 条
+
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
+    const less = page.getByTestId('session-show-less');
+    await expect(less).toHaveText('收起');
+
+    const listLog = async () => (await page.request.get('/__session-list-log')).json();
+    const before = (await listLog()).length;
+    await less.click();
+    await expect(rows).toHaveCount(3);
+    await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
+    await expect(page.getByTestId('session-show-more')).toHaveText('显示更多 3 个（还有 13 个）');
+    await expect(less).toHaveCount(0);
+    await expect(page.getByTestId('session-show-more-bar')).toBeInViewport();
+    const sent = (await listLog()).slice(before).filter((e: { cwd: string }) => e.cwd === MAIN_WORKSPACE);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.filter((e: { more: number }) => e.more !== 0), '收起后的请求不能再带 more，否则下一次 revalidate 又展开回去').toEqual([]);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 2026-10-26 真机：展开区写死 max-height:1200px，「显示全部」拉来的 50 行只放得下二十来行，其余连同底部按钮
+  // 被 overflow:hidden 裁掉——看起来像「点了也不显示更多旧会话」。Playwright 的 toBeVisible 不管祖先的裁切，
+  // 被裁掉的行照样算可见，所以这里量几何：展开区的内容高度不得超出它自己的可视高度，按钮栏的底边不得越过展开区的底边。
+  test('P0-11ax 展开区不设高度上限：一屏放不下的长列表不被裁掉，底部按钮看得见', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-history-many'); // 每档 30 条、主工作区 69 个会话
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const subtree = workspaceSubtree(page, MAIN_WORKSPACE);
+    const rows = subtree.locator('[data-testid="session-row"]');
+    await expect(page.getByTestId('session-show-more')).toHaveText('显示更多 30 个（还有 39 个）');
+    expect(await rows.count()).toBeGreaterThanOrEqual(30);
+
+    const clipped = () => subtree.evaluate(el => {
+      const bar = el.querySelector('[data-testid="session-show-more-bar"]');
+      const box = el.getBoundingClientRect();
+      return { hidden: el.scrollHeight - el.clientHeight, barBelow: bar ? bar.getBoundingClientRect().bottom - box.bottom : null };
+    });
+    // 展开有过渡，等它停下来；被裁的话永远停不到 0
+    await expect.poll(async () => (await clipped()).hidden, { message: '展开区内容被裁掉了（scrollHeight > clientHeight）' }).toBeLessThanOrEqual(1);
+    expect((await clipped()).barBelow).toBeLessThanOrEqual(1);
+
+    await showMoreSessions(page, MAIN_WORKSPACE);
+    expect(await rows.count()).toBeGreaterThanOrEqual(60);
+    await expect(page.getByTestId('session-show-more'), '最后一档：剩下的正好一档，不再重复报「还有」').toHaveText('显示更多 9 个');
+    await expect.poll(async () => (await clipped()).hidden).toBeLessThanOrEqual(1);
+    expect((await clipped()).barBelow).toBeLessThanOrEqual(1);
 
     await expectNoBrowserErrors(page);
   });
@@ -852,16 +915,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
     await expect(page.getByTestId('session-pinned-head')).toHaveCount(0);
 
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
     await markRowUnread(page, 'mock-session-older-migration');
 
-    // 刷新回到截断态（「显示全部」是内存态，不落盘）——这正是缺陷现场：标记还在，承载它的行没了
+    // 刷新回到第一档（「显示更多」是内存态，不落盘）——这正是缺陷现场：标记还在，承载它的行没了
     await page.reload();
     await waitUntilConnected(page);
     await openSessionsSidebar(page);
     const dirAfter = await expandWorkspace(page, MAIN_WORKSPACE);
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
+    await expect(page.getByTestId('session-show-more')).toBeVisible();
 
     await expect(page.getByTestId('session-pinned-head')).toHaveText('稍后再看');
     const pinnedRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-older-migration"]');

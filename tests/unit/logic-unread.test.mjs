@@ -129,15 +129,15 @@ test.describe('parseUnreadState / serializeUnreadState：localStorage 序列化�
     }
   });
 
-  test('往返保真：serialize → parse 保留基线、seen 表与 manual 表', () => {
-    const state = { baselineTs: T0, seen: { a: T0 + 1, b: T0 + 2 }, manual: { c: T0 + 3 } };
+  test('往返保真：serialize → parse 保留基线、seen 表、manual 表与文件夹水位', () => {
+    const state = { baselineTs: T0, seen: { a: T0 + 1, b: T0 + 2 }, manual: { c: T0 + 3 }, folders: { '/repo': T0 + 4 } };
     const back = parseUnreadState(serializeUnreadState(state), T0 + 999);
     assert.deepEqual(back, state, '已有基线不得被 now 覆盖——覆盖=每次启动都重置基线，点永远不亮');
   });
 
-  test('旧版本落盘（无 manual 字段）→ manual 回空表，其余原样（升级不丢已读表）', () => {
+  test('旧版本落盘（无 manual / folders 字段）→ 回空表，其余原样（升级不丢已读表）', () => {
     const back = parseUnreadState(JSON.stringify({ baselineTs: T0, seen: { a: T0 } }), T0 + 999);
-    assert.deepEqual(back, { baselineTs: T0, seen: { a: T0 }, manual: {} });
+    assert.deepEqual(back, { baselineTs: T0, seen: { a: T0 }, manual: {}, folders: {} });
   });
 
   test('seen / manual 里的非数字值被丢弃（防手改/旧版本残留）', () => {
@@ -146,8 +146,8 @@ test.describe('parseUnreadState / serializeUnreadState：localStorage 序列化�
     assert.deepEqual(back.manual, { d: T0 });
   });
 
-  test('全新状态也带空 manual 表', () => {
-    assert.deepEqual(parseUnreadState(null, T0), { baselineTs: T0, seen: {}, manual: {} });
+  test('全新状态也带空 manual 与 folders 表', () => {
+    assert.deepEqual(parseUnreadState(null, T0), { baselineTs: T0, seen: {}, manual: {}, folders: {} });
   });
 });
 
