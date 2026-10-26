@@ -1842,6 +1842,7 @@ export class AgentSession {
       // createdAt：供 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
       this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
 
+      const openQuestionIndexes = questions.map((_, k) => k);
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         // 对齐 CLI：保留 header / multiSelect / option.description|preview，前端才能完整呈现
@@ -1855,6 +1856,8 @@ export class AgentSession {
           // 多题时前端合成一张卡、各题答案攒着最后整组提交（对齐 CLI）；靠这两个字段在第一题到达时就认出是一组
           questionIndex: i,
           questionCount: questions.length,
+          // 各题分开送达：前端据此知道还有哪几题没到，收齐前不放行整组提交（resolveQuestionGroup 要恰好覆盖未答题）
+          openQuestionIndexes,
           createdAt,
           expiresAt,
         });
@@ -2838,6 +2841,7 @@ export class AgentSession {
     }
     const questions = [];
     for (const [toolUseID, p] of this.pendingQuestions) {
+      const openQuestionIndexes = p.answers.flatMap((a, k) => (a === null ? [k] : []));
       for (let i = 0; i < p.questions.length; i++) {
         if (p.answers[i] !== null) continue; // 已答的不补发（切入只重建仍待回答的问题）
         const q = p.questions[i];
@@ -2850,6 +2854,7 @@ export class AgentSession {
           options,
           questionIndex: i,
           questionCount: p.questions.length,
+          openQuestionIndexes,
           // AG-NEW-001：与 live emit('question') / permissions 快照对称，切会话重建卡片可显 TTL
           createdAt: p.createdAt,
           expiresAt: p.expiresAt,

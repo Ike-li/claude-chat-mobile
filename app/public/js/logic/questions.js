@@ -31,13 +31,17 @@ export function questionDraftLabel(q, draft) {
 }
 
 // 整组提交的回程 answers（每项带 questionIndex），以及还没答的题；missing 非空时不该提交。
-export function buildQuestionGroupAnswers(questions, drafts) {
+// openIndexes 是服务端说仍未作答的各题：各题分开送达，还没到的题同样算没答——只交已到的那几题会被服务端整组拒收。
+export function buildQuestionGroupAnswers(questions, drafts, openIndexes = []) {
   const answers = [];
   const missing = [];
-  for (const q of questions) {
-    const draft = drafts.get(q.questionIndex);
-    if (!questionDraftLabel(q, draft)) {
-      missing.push(q.questionIndex);
+  const byIndex = new Map(questions.map(q => [q.questionIndex, q]));
+  const indexes = [...new Set([...openIndexes, ...byIndex.keys()])].sort((a, b) => a - b);
+  for (const i of indexes) {
+    const q = byIndex.get(i);
+    const draft = drafts.get(i);
+    if (!q || !questionDraftLabel(q, draft)) {
+      missing.push(i);
     } else if (typeof draft.freeText === 'string') {
       answers.push({ index: q.questionIndex, freeText: draft.freeText.trim() });
     } else if (Array.isArray(draft.optionIndexes)) {

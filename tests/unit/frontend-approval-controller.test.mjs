@@ -176,3 +176,23 @@ test('多题组卡：切会话收卡（clearAll）再切回来，快照重建的
   assert.deepEqual(lastAnswer(emitted)?.answers, [{ index: 0, optionIndex: 1 }, { index: 1, optionIndex: 0 }],
     '第 1 题的草稿在收卡后丢了，用户切个会话回来就得从头答');
 });
+
+// PR #413 review（Codex P2）：各题的 question 事件分开送达。后几题还在路上时只答了已到的就能提交——服务端因没覆盖
+// 全部未答题整组拒收，本机却已关卡、把整组标成已答，后到的题和重连快照都被吞掉，这一轮挂到 TTL。
+test('多题组卡：后几题还没送到时不放行提交，收齐答完才交整组', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion(groupQ(0));
+  pickOption(byId, 0); // 唯一已到的题答完 → 复查页
+  assert.equal(byId('questionGroupSubmit').disabled, true, '还有两题没送到，提交不该可点');
+  byId('questionGroupSubmit').onclick();
+  assert.equal(lastAnswer(emitted), undefined, '不完整的整组被发了出去');
+  assert.equal(approvals.hasPending(), true);
+
+  approvals.enqueueQuestion(groupQ(1));
+  approvals.enqueueQuestion(groupQ(2));
+  byId('questionTabs').children[1].onclick();
+  pickOption(byId, 1); // 第 2 题，自动跳第 3 题
+  pickOption(byId, 0); // 第 3 题，跳复查页
+  byId('questionGroupSubmit').onclick();
+  assert.deepEqual(lastAnswer(emitted)?.answers.map(a => a.index), [0, 1, 2]);
+});

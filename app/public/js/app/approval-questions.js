@@ -288,8 +288,9 @@ export function createApprovalController(context, {
   // ---- 选择题弹窗（E7：AskUserQuestion）----
   // 单题：点选项即交（多选点「确认选择」）。多题（服务端标了 questionCount > 1）：对齐 CLI 合成一张组卡，
   // 顶部标签栏来回切题，答案先攒成草稿，最后在复查页整组一次提交；没答完时「提交」禁用（机主定，CLI 允许缺题）。
-  // activeGroup = { key: toolUseID, questions（按 questionIndex 升序）, drafts, cursor }，cursor 等于题数时停在
-  // 复查页；组卡期间 activeQuestion 恒为 null。
+  // activeGroup = { key: toolUseID, questions（按 questionIndex 升序）, drafts, cursor, openIndexes }，cursor 等于
+  // 题数时停在复查页；openIndexes 是仍未作答的题，含还没送到的——各题分开送达，收齐答完才放行提交。
+  // 组卡期间 activeQuestion 恒为 null。
   let activeGroup = null;
   // 组卡草稿按 toolUseID 留着：切会话时 clearAll 收卡，切回来 pending 快照重建组卡时接着用。只在提交 / 整组
   // 终态时删；上限兜住没等到终态的组（abort 只发逐题 resolved，不发整组那条）。
@@ -327,7 +328,9 @@ export function createApprovalController(context, {
         if (questionGroupKey(questionQueue[i].requestId) === key) questions.push(...questionQueue.splice(i, 1));
       }
       questions.sort((a, b) => a.questionIndex - b.questionIndex);
-      activeGroup = { key, questions, drafts: draftsFor(key), cursor: 0 };
+      // 服务端说仍未作答的题（含还没送到的）；旧 server 不带这个字段时按整组算
+      const open = Array.isArray(next.openQuestionIndexes) ? next.openQuestionIndexes : Array.from({ length: next.questionCount }, (_, k) => k);
+      activeGroup = { key, questions, drafts: draftsFor(key), cursor: 0, openIndexes: new Set(open) };
       paintGroup();
     } else {
       activeQuestion = next;
@@ -487,7 +490,7 @@ export function createApprovalController(context, {
   // 复查页：逐题列答案，点一行回那题改；没答的标「未作答」，答完才能提交。
   function paintGroupReview() {
     const g = activeGroup;
-    const { missing } = buildQuestionGroupAnswers(g.questions, g.drafts);
+    const { missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
     if (questionReviewList) {
       questionReviewList.innerHTML = '';
       g.questions.forEach((q, i) => {
@@ -515,7 +518,7 @@ export function createApprovalController(context, {
   function submitQuestionGroup() {
     const g = activeGroup;
     if (!g) return;
-    const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts);
+    const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
     if (missing.length) return; // 按钮此时是禁用的
     if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
     // 先标记已答再 emit/关窗（同 answerQuestion）；整组 key 入库即覆盖组里每一个 #i
@@ -633,8 +636,12 @@ export function createApprovalController(context, {
       dropActiveQuestion();
       return;
     }
+    if (questionGroupKey(requestId) === g.key) g.openIndexes.delete(Number(requestId.slice(g.key.length + 1))); // 那题可能还没送到
     const idx = g.questions.findIndex(q => q.requestId === requestId);
-    if (idx === -1) return;
+    if (idx === -1) {
+      if (g.cursor >= g.questions.length) paintGroupReview(); // 「还有 N 题没答」跟着变
+      return;
+    }
     g.drafts.delete(g.questions[idx].questionIndex);
     g.questions.splice(idx, 1);
     if (!g.questions.length) {

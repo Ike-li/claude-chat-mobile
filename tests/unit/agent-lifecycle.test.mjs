@@ -1240,7 +1240,7 @@ test.describe('pendingRequestsSnapshot()', () => {
     assert.deepEqual(snap.questions, [{
       requestId: 'tool_1#0', text: 'Q0?', header: undefined, multiSelect: false,
       options: [{ label: 'A' }, { label: 'B' }],
-      questionIndex: 0, questionCount: 2,
+      questionIndex: 0, questionCount: 2, openQuestionIndexes: [0],
       createdAt: 111, expiresAt: 222,
     }]);
     assert.deepEqual(snap.permissions, []);

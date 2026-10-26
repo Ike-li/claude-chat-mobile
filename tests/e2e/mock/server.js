@@ -4161,7 +4161,7 @@ io.on('connection', socket => {
         questions.forEach((q, i) => {
           socket.emit('agent:event', {
             seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'question', payload: { requestId: `${toolUseId}#${i}`, ...q, questionIndex: i, questionCount: questions.length }
+            type: 'question', payload: { requestId: `${toolUseId}#${i}`, ...q, questionIndex: i, questionCount: questions.length, openQuestionIndexes: questions.map((_, k) => k) }
           });
         });
         if (cmd === 'test:question-group-remote-resolved') {

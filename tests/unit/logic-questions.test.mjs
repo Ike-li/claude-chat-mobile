@@ -52,6 +52,15 @@ test('buildQuestionGroupAnswers：全答完 → 每题一项、按 questionIndex
   });
 });
 
+// 各题分开送达，后几题可能还在路上：没到的题也算没答，否则只答了已到的就能提交，被服务端整组拒收（PR #413 review）
+test('buildQuestionGroupAnswers：openIndexes 里还没送到的题也列进 missing', () => {
+  const drafts = new Map([[0, { optionIndex: 0 }]]);
+  assert.deepEqual(buildQuestionGroupAnswers([q(0)], drafts, [0, 1, 2]), {
+    answers: [{ index: 0, optionIndex: 0 }],
+    missing: [1, 2],
+  });
+});
+
 test('buildQuestionGroupAnswers：没答的题（含勾了又全取消的多选、只填空白的其他）列进 missing', () => {
   const questions = [q(0), q(1, { multiSelect: true }), q(2)];
   const drafts = new Map([[1, { optionIndexes: [] }], [2, { freeText: '  ' }]]);

@@ -30,6 +30,8 @@ test.describe('AskUserQuestion', () => {
     assert.equal(qs[1].payload.requestId, 'q1#1');
     // 前端靠这两个字段在第一题到达时就认出「这是一组」：单题单选是点了即交，判错就是误提交
     assert.deepEqual(qs.map(q => [q.payload.questionIndex, q.payload.questionCount]), [[0, 2], [1, 2]]);
+    // 各题分开送达：前端靠它知道还有哪几题没到，收齐前不放行整组提交（PR #413 review）
+    assert.deepEqual(qs.map(q => q.payload.openQuestionIndexes), [[0, 1], [0, 1]]);
     // 清理
     s.resolveQuestion('q1#0', 0);
     s.resolveQuestion('q1#1', 0);
@@ -384,6 +386,8 @@ test.describe('AskUserQuestion', () => {
       [['q1#1', 1, 3], ['q1#2', 2, 3]],
       '切会话重建的卡片要能认出自己属于三题一组，否则会退回逐题即交'
     );
+    // 已答的第 1 题不补发，也不能算进「还没到」，否则重建的组卡永远等不齐、提交永远禁用
+    assert.deepEqual(snap.questions.map(q => q.openQuestionIndexes), [[1, 2], [1, 2]]);
     s.dispose();
   });
 });
