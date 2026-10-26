@@ -40,6 +40,7 @@ import {
   resolveRowTerminalState,
   mirrorRowLockChanged,
   formatSessionRowSubtitle,
+  sessionRowMenuItems,
   formatSessionRowTime,
   displaySessionTitle,
   summarizeOtherWorkspaces,
@@ -239,6 +240,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
+import { createSessionRowMenu } from './app/session-row-menu.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
@@ -4743,9 +4745,9 @@ import { createGateFocusController } from './app/focus-layers.js';
   document.addEventListener('click', e => {
     if (!hints.contains(e.target) && e.target !== inputEl) hints.classList.add('hidden');
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
-    // 点抽屉外面任意处 = 收抽屉。通用确认 sheet（z-50，盖在抽屉之上）不算「外面」：从抽屉里发起的
-    // 确认（长按标为未读 / 🗑 删除）答完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
-    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal'));
+    // 点抽屉外面任意处 = 收抽屉。通用确认 sheet 与会话行「⋯」菜单（z-50，盖在抽屉之上）不算「外面」：
+    // 从抽屉里发起的操作（标为已读 / 未读、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
+    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal'));
     // 本身就是「打开抽屉」入口的按钮（顶栏「需要你」chip、落地页「选择其他会话」）：同一次点击冒泡到这里，
     // 不豁免就是开了又立刻关上（验收 O37）。新入口在 index.html 上标 data-opens-drawer 即可。
     const opensDrawer = Boolean(e.target.closest?.('[data-opens-drawer]'));
@@ -6839,6 +6841,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       openSessionPanel();
     },
   });
+  const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
 
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
@@ -7247,36 +7250,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     const rowCwd = s.cwd || workspaceCwd;
     const active = liveInst && liveInst.instanceId === viewingInstanceId;
 
-    // 使用相对定位的包装容器来实现侧滑关闭
-    const container = el(`<div class="relative overflow-hidden w-full select-none swipe-row-container"></div>`);
-
-    // 背景红底“关闭”按钮
-    let deleteBtn;
-    if (liveInst) {
-      deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger-solid text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">${t('关闭')}</div>`);
-      deleteBtn.onclick = async (e) => {
-        e.stopPropagation();
-        haptic('warning');
-        if (await appConfirm({
-          title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
-          body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
-          okText: t('关闭会话'),
-        })) {
-          // 点停止顿一下跳主页的回归修复：若关的正是当前正在看的会话，记下 id 供
-          // wasViewingInstanceDestroyed 排除——这是用户自己确认过的主动关闭，不是"被摧毁"。
-          explicitCloseInstanceId = liveInst.instanceId;
-          socket.emit('session:close', { instanceId: liveInst.instanceId });
-          closeLeftSidebar();
-        } else {
-          rowContent.style.transform = 'translateX(0px)';
-          rowSwiped = false;
-        }
-      };
-      container.appendChild(deleteBtn);
-    }
-
-    // 行内容 (可滑动的前景卡片)
-    const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
+    const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft cursor-pointer select-none${active ? ' bg-accent-wash' : ' bg-surface'}" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
     rowContent.dataset.terminalState = s.terminal || '';
     rowContent.dataset.terminalSource = s.terminalSource || '';
     rowContent.dataset.bgLocked = s.bgLocked ? '1' : '';
@@ -7287,8 +7261,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     titleSpan.textContent = displaySessionTitle(s.title, t('新会话'));
     head.appendChild(titleSpan);
     // R65 未读：标题加粗变深 + 文字 chip「未读」（原 8px 色点在手机上既不显眼也说不清自己是什么）。
-    // 上次打开后有新活动或长按标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
-    // 抽成函数：长按标记后原地重刷这一行，不等整个列表重画。
+    // 上次打开后有新活动或在「⋯」菜单里标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
+    // 抽成函数：菜单里标记后原地重刷这一行，不等整个列表重画。
     const isViewingRow = active || s.id === displayedSessionId;
     const applyUnreadMark = () => {
       const on = Boolean(s.id) && unread.isUnread(s, { isViewing: isViewingRow });
@@ -7326,19 +7300,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     });
     btn.appendChild(sub);
 
-    let rowSwiped = false;
-    btn.onclick = (e) => {
-      // 拦截滑动/滚动导致的误触
-      if (rowContent.getAttribute('data-preventClick') === 'true') {
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (rowSwiped) {
-        rowContent.style.transform = 'translateX(0px)';
-        rowSwiped = false;
-        return;
-      }
+    btn.onclick = () => {
       haptic('tap');
       if (liveInst) {                      // 已打开：切视图，不重新 resume
         if (liveInst.instanceId !== viewingInstanceId) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
@@ -7357,136 +7319,48 @@ import { createGateFocusController } from './app/focus-layers.js';
     };
     rowContent.appendChild(btn);
 
-    // 长按（触屏按住 / 鼠标按住 / 桌面右键）→ 标为未读 / 标为已读。只有落盘会话（有 id）才有「未读」可言。
-    // 正看着的会话同样能标「稍后再看」并当场亮起：手动标记不受 isViewing 管辖（见 logic/unread.js
-    // 里那两条短路的顺序注），所以这里问 isUnread 一个就够，不必再叠 isManualUnread。
-    if (s.id) {
-      attachLongPress(rowContent, async () => {
-        if (rowContent.getAttribute('data-preventClick') === 'true') return; // 已被侧滑手势认领
+    // 行尾「⋯」是这一行唯一的入口（2026-10-25，对齐桌面端）：此前 ✕、🗑、红色侧滑「关闭」三处并存，侧滑还和
+    // 抽屉的左滑收起抢同一次手势——露出按钮后多滑 30px 抽屉就被收走。长按不再有动作。
+    // 哪些项、何时灰掉见 logic 的 sessionRowMenuItems。
+    const menuItems = () => sessionRowMenuItems({
+      hasId: Boolean(s.id),
+      live: Boolean(liveInst),
+      // 正看着的会话同样能标「稍后再看」并当场亮起：手动标记不受 isViewing 管辖（见 logic/unread.js
+      // 里那两条短路的顺序注），所以这里问 isUnread 一个就够，不必再叠 isManualUnread。
+      unread: Boolean(s.id) && unread.isUnread(s, { isViewing: isViewingRow }),
+    });
+    const runMenuAction = async action => {
+      if (action === 'toggle-read') {
         haptic('tap');
-        const wasUnread = unread.isUnread(s, { isViewing: isViewingRow });
-        const ok = await appConfirm({
-          title: displaySessionTitle(s.title, t('新会话')),
-          body: wasUnread
-            ? t('标为已读后，这一行的「未读」提示消失。')
-            : t('标为未读后，这一行会一直显示「未读」，直到你再次打开它。'),
-          okText: wasUnread ? t('标为已读') : t('标为未读'),
-        });
-        if (!ok) return;
-        unread.setManualUnread(s.id, !wasUnread);
+        unread.setManualUnread(s.id, !unread.isUnread(s, { isViewing: isViewingRow }));
         applyUnreadMark();
         refreshDirUnreadCounts();
-      });
-    }
-
-    // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
-    // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
-    // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
-    if (liveInst) {
-      // ✕ 保留字符（E2E hasText:'✕'）；红=不可逆留给 🗑，故 hover 用中性色。
-      const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-ink hover:bg-sunk active:bg-line text-sm" data-testid="session-close" title="${t('关闭会话')}" aria-label="${t('关闭会话')}">✕</button>`);
-      closeBtn.onclick = async e => {
-        e.stopPropagation();
+      } else if (action === 'close') {
         haptic('warning');
         if (await appConfirm({
           title: `${t('关闭会话「')}${displaySessionTitle(s.title, t('新会话'))}${t('」？')}`,
           body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
           okText: t('关闭会话'),
         })) {
-          // 同上（侧滑关闭按钮走的是另一条 DOM 路径，但同一个 session:close 语义）。
+          // 点停止顿一下跳主页的回归修复：若关的正是当前正在看的会话，记下 id 供
+          // wasViewingInstanceDestroyed 排除——这是用户自己确认过的主动关闭，不是"被摧毁"。
           explicitCloseInstanceId = liveInst.instanceId;
           socket.emit('session:close', { instanceId: liveInst.instanceId });
           closeLeftSidebar();
         }
-      };
-      rowContent.appendChild(closeBtn);
-    }
-
-    // 未打开的历史会话：彻底删除入口。已打开的会话走上面的关闭 tab，不在此重复给删除入口
-    // （删一个正被本产品驱动的会话语义混乱，后端保护①也会拒）。无 id 的新会话（未落盘）无从删。
-    if (s.id && !liveInst) {
-      const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" data-testid="session-delete" title="${t('删除会话')}" aria-label="${t('删除会话')}">🗑</button>`);
-      delBtn.onclick = e => {
-        e.stopPropagation();
+      } else if (action === 'delete') {
         haptic('warning');
         openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId
-      };
-      rowContent.appendChild(delBtn);
-    }
+      }
+    };
+    const menuBtn = el(`<button type="button" class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="session-menu" aria-haspopup="dialog" aria-controls="sessionMenuModal" title="${t('会话操作')}" aria-label="${t('会话操作')}">⋯</button>`);
+    menuBtn.onclick = () => {
+      haptic('tap');
+      sessionRowMenu.open({ title: displaySessionTitle(s.title, t('新会话')), items: menuItems(), onSelect: runMenuAction });
+    };
+    rowContent.appendChild(menuBtn);
 
-    container.appendChild(rowContent);
-
-    // 手机端：侧滑触控手势监听 (Swipe left gestures) - 贴合指尖且防点击误触
-    if (liveInst) {
-      let rowStartX = 0, rowStartY = 0;
-      let isDragging = false;
-
-      rowContent.addEventListener('touchstart', ev => {
-        rowStartX = ev.touches[0].clientX;
-        rowStartY = ev.touches[0].clientY;
-        isDragging = true;
-        rowContent.classList.add('swiping'); // 禁用过渡
-      }, { passive: true });
-
-      rowContent.addEventListener('touchmove', ev => {
-        if (!rowStartX || !isDragging) return;
-        const currentX = ev.touches[0].clientX;
-        const currentY = ev.touches[0].clientY;
-        const diffX = currentX - rowStartX;
-        const diffY = currentY - rowStartY;
-
-        // 只要手指发生了明显移动（超过 8px），就标记为拖拽，防止触发点击事件
-        if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
-          rowContent.setAttribute('data-preventClick', 'true');
-        }
-
-        // 横向滑动优势判定
-        if (Math.abs(diffX) > Math.abs(diffY) * 1.2) {
-          let targetX = rowSwiped ? -70 + diffX : diffX;
-          // 边缘阻尼
-          if (targetX > 15) {
-            targetX = 15 * 0.3;
-          } else if (targetX < -100) {
-            targetX = -100 + (targetX + 100) * 0.3;
-          }
-          rowContent.style.transform = `translateX(${targetX}px)`;
-        }
-      }, { passive: true });
-
-      rowContent.addEventListener('touchend', ev => {
-        if (!isDragging) return;
-        isDragging = false;
-        rowContent.classList.remove('swiping'); // 启用过渡
-
-        const currentX = ev.changedTouches[0].clientX;
-        const diffX = currentX - rowStartX;
-
-        let finalSwiped = rowSwiped;
-        if (rowSwiped) {
-          if (diffX > 30) finalSwiped = false;
-        } else {
-          if (diffX < -35) finalSwiped = true;
-        }
-
-        rowSwiped = finalSwiped;
-        if (rowSwiped) {
-          rowContent.style.transform = 'translateX(-70px)';
-          haptic('tap');
-        } else {
-          rowContent.style.transform = 'translateX(0px)';
-        }
-
-        // 延迟清除防误触标志，确保拦截 touchend 后产生的 click 事件
-        setTimeout(() => {
-          rowContent.removeAttribute('data-preventClick');
-        }, 100);
-
-        rowStartX = 0;
-        rowStartY = 0;
-      }, { passive: true });
-    }
-
-    return container;
+    return rowContent;
   };
 
   // 在指定目录开一个新会话（进空首页，首条消息时服务端懒开实例）。抽屉每节的 ＋ 与「选文件夹」面板共用。

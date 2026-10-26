@@ -838,13 +838,10 @@ header {
   .dir-arrow.rotated {
     transform: rotate(90deg);
   }
-  /* 侧滑动画及手势优化 */
+  /* 抽屉会话行 */
   .row-content {
     touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
-    -webkit-touch-callout: none; /* 长按是本 app 的手势（标为未读/已读），不要 iOS 原生弹出 */
-  }
-  .row-content.swiping {
-    transition: none !important; /* 拖拽中禁用过渡，紧贴指尖 */
+    -webkit-touch-callout: none; /* 长按会话行不弹 iOS 原生菜单（操作都在行尾「⋯」里） */
   }
   /* 骨架屏脉冲动画 */
   .skeleton-shimmer {

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, sessionRowByInstance } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, openSessionsSidebar, sessionRowByInstance } from '../../helpers/sidebar-ui';
 
 // SESSION-02：活着的实例在抽屉里必须有一行。
 // 2026-09-23 真机会话 1c401b5d：EnterWorktree 把 transcript 迁到了平级目录的 project 目录，
@@ -54,7 +54,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       if (inst !== 'inst_sibling') await expandWorkspace(page, MAIN_WORKSPACE);
       const row = page.locator(`[data-testid="session-row"][data-instance-id="${inst}"]`);
       await expect(row).toHaveCount(1);
-      await row.locator('[data-testid="session-close"]').click();
+      await chooseSessionMenuItem(page, row, 'close');
       await page.locator('#confirmOk').click();
       // 按会话 id 找，不按实例 id：残留的那一行实例 id 可能已经清空，按实例 id 找会把它漏掉、恒绿
       const after = page.locator(`[data-testid="session-row"][data-session-id="${sid}"]`);

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, showMoreSessions, workspaceRow } from '../../helpers/sidebar-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionMenu, openSessionsSidebar, sessionMenuItem, showMoreSessions, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 抽屉文件夹行的长按动作（#300 全部标为已读、#305 置顶 / 取消置顶）。
 // 长按挂在文件夹行的主按钮上；桌面右键（contextmenu）与触屏长按走同一个入口（见 long-press.js），这里用右键触发。
@@ -12,10 +12,10 @@ async function longPressFolder(page: Page, cwd: string) {
 }
 
 async function markRowUnread(page: Page, sessionId: string) {
-  await page.locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`).dispatchEvent('contextmenu');
-  await expect(page.locator('#confirmOk')).toHaveText('标为未读');
-  await page.locator('#confirmOk').click();
-  await expect(page.locator('#confirmModal')).not.toHaveClass(/sheet-open/);
+  await openSessionMenu(page, page.locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`));
+  await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为未读');
+  await sessionMenuItem(page, 'toggle-read').click();
+  await expect(page.locator('#sessionMenuModal')).not.toHaveClass(/sheet-open/);
 }
 
 // 抽屉里各节的先后（连接根、子文件夹小节、「无文件夹」都算）
