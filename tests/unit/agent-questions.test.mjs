@@ -28,6 +28,10 @@ test.describe('AskUserQuestion', () => {
     assert.equal(qs.length, 2);
     assert.equal(qs[0].payload.requestId, 'q1#0');
     assert.equal(qs[1].payload.requestId, 'q1#1');
+    // 前端靠这两个字段在第一题到达时就认出「这是一组」：单题单选是点了即交，判错就是误提交
+    assert.deepEqual(qs.map(q => [q.payload.questionIndex, q.payload.questionCount]), [[0, 2], [1, 2]]);
+    // 各题分开送达：前端靠它知道还有哪几题没到，收齐前不放行整组提交（PR #413 review）
+    assert.deepEqual(qs.map(q => q.payload.openQuestionIndexes), [[0, 1], [0, 1]]);
     // 清理
     s.resolveQuestion('q1#0', 0);
     s.resolveQuestion('q1#1', 0);
@@ -282,6 +286,121 @@ test.describe('AskUserQuestion', () => {
     assert.equal(typeof snap.questions[0].createdAt, 'number');
     assert.equal(typeof snap.questions[0].expiresAt, 'number');
     assert.ok(snap.questions[0].expiresAt >= snap.questions[0].createdAt);
+    s.dispose();
+  });
+
+  // 多题整组提交（对齐 CLI：答案在手机上攒着、可来回改，最后一次交出）
+  const threeQuestions = {
+    questions: [
+      { question: 'Q1', options: ['A', 'B'] },
+      { question: 'Q2', multiSelect: true, options: ['X', 'Y', 'Z'] },
+      { question: 'Q3', options: ['P'] },
+    ],
+  };
+
+  test('resolveQuestionGroup：整组合法 → 一次交给模型，答案按题序拼，逐题与整组 request_resolved 都发', async () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+    // 提交顺序与题序无关：拼给模型的那句话只靠顺序对应题目，必须按题序
+    s.resolveQuestionGroup('q1', [
+      { index: 2, freeText: ' 自定义 ' },
+      { index: 0, optionIndex: 1 },
+      { index: 1, optionIndexes: [0, 2] },
+    ]);
+    const result = await promise;
+    assert.equal(result.behavior, 'deny');
+    assert.equal(result.message, '用户选择了：「B」、「X、Z」、「自定义」');
+    assert.equal(s.pendingQuestions.size, 0);
+    assert.equal(s.denyKinds.get('q1'), 'answered');
+    const rrs = events.filter(e => e.type === 'request_resolved' && e.payload.kind === 'question').map(e => e.payload.requestId);
+    // 逐题那三条是回放去重与其它设备关卡的依据，整组那条是终态
+    assert.deepEqual([...rrs].sort(), ['q1', 'q1#0', 'q1#1', 'q1#2']);
+    s.dispose();
+  });
+
+  test('resolveQuestionGroup：任一项不合法 → 整组不收，一题都不写入', () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestionGroup('q1', [
+      { index: 0, optionIndex: 0 },
+      { index: 1, optionIndexes: [99] },
+      { index: 2, freeText: 'ok' },
+    ]);
+    assert.equal(s.pendingQuestions.size, 1);
+    assert.equal(events.filter(e => e.type === 'request_resolved').length, 0, '不合法的整组不得广播任何一题已答');
+    // 半组写入的后果：快照只补发未答项，已写入的题在重连后消失、再也改不回来
+    assert.deepEqual(s.pendingRequestsSnapshot().questions.map(q => q.requestId), ['q1#0', 'q1#1', 'q1#2']);
+    s.dispose();
+  });
+
+  test('resolveQuestionGroup：必须覆盖每一道仍未作答的题（缺题、重题都不收）', () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 1, optionIndexes: [1] }]);
+    assert.equal(s.pendingQuestions.get('q1').remaining, 3, '缺一题不收');
+    // 三题都覆盖了、只是第 1 题交了两个不同答案：哪个算数说不清，整组不收
+    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }]);
+    assert.equal(s.pendingQuestions.get('q1').remaining, 3, '同一题交两次不收');
+    s.dispose();
+  });
+
+  // PR #413 review（Codex P2）：没刷新的旧页面逐题答掉第 1 题、那条广播还在路上时，本机整组提交仍带着第 1 题。
+  // 整组拒收的话，本机已乐观关卡、把整组标成已答，剩下的题连重连快照都被吞掉，这一轮挂到 TTL。
+  test('resolveQuestionGroup：别处已抢先答掉的题，整组里那一条忽略（先到先得、不改写），其余照收', async () => {
+    for (const items of [
+      [{ index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }], // 广播还没到，本机仍带着第 1 题
+      [{ index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }], // 广播已到，第 1 题已从组卡移除
+    ]) {
+      const { s } = makeSession();
+      const ac = new AbortController();
+      const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+      s.resolveQuestion('q1#0', 0); // 旧页面逐题答了「A」
+      s.resolveQuestionGroup('q1', items);
+      // 先同步判：被拒收时 promise 要到 TTL 才结算，直接 await 会把测试挂住而不是变红
+      assert.equal(s.pendingQuestions.size, 0, `提交了 ${items.length} 项却被整组拒收，这一轮会挂到 TTL`);
+      const result = await promise;
+      assert.equal(result.message, '用户选择了：「A」、「Y」、「P」', `提交了 ${items.length} 项`);
+      s.dispose();
+    }
+  });
+
+  test('resolveQuestionGroup：过期后整组提交不作答（fail-closed，与逐题作答对称）', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 60_000 });
+    const ac = new AbortController();
+    const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 120_000; // 到期 timer 还没轮到，提交先到
+    try {
+      s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 1, optionIndexes: [0] }, { index: 2, optionIndex: 0 }]);
+    } finally {
+      Date.now = realNow;
+    }
+    const result = await promise;
+    assert.doesNotMatch(result.message, /用户选择了/);
+    assert.equal(s.denyKinds.get('q1'), 'denied');
+    assert.ok(events.some(e => e.type === 'request_resolved' && e.payload.requestId === 'q1' && e.payload.outcome === 'expired'));
+    s.dispose();
+  });
+
+  test('pendingRequestsSnapshot：多题只补发未答项，但 questionIndex / questionCount 仍按整组算', () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{ question: 'Q1', options: ['A'] }, { question: 'Q2', options: ['B'] }, { question: 'Q3', options: ['C'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', 0);
+    const snap = s.pendingRequestsSnapshot();
+    assert.deepEqual(
+      snap.questions.map(q => [q.requestId, q.questionIndex, q.questionCount]),
+      [['q1#1', 1, 3], ['q1#2', 2, 3]],
+      '切会话重建的卡片要能认出自己属于三题一组，否则会退回逐题即交'
+    );
+    // 已答的第 1 题不补发，也不能算进「还没到」，否则重建的组卡永远等不齐、提交永远禁用
+    assert.deepEqual(snap.questions.map(q => q.openQuestionIndexes), [[1, 2], [1, 2]]);
     s.dispose();
   });
 });

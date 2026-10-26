@@ -326,6 +326,27 @@ function normalizeQuestionOption(o) {
   if (o.preview != null && String(o.preview)) out.preview = String(o.preview);
   return out;
 }
+// 一道题的作答 → 回给模型的文案；不合法（空 Other、空/全非法多选、越界下标）返回 null，调用方据此不作答。
+function questionAnswerLabel(q, { optionIndex, optionIndexes, freeText } = {}) {
+  // Other：自由文本优先（即使同时传了 optionIndex 也用 freeText，对齐「用户最终写的内容」）
+  const free = typeof freeText === 'string' ? freeText.trim() : '';
+  if (free) return free;
+  const qopts = q.options || [];
+  if (Array.isArray(optionIndexes)) {
+    const labels = [];
+    const seen = new Set();
+    for (const idx of optionIndexes) {
+      if (!Number.isInteger(idx) || idx < 0 || idx >= qopts.length || seen.has(idx)) continue;
+      seen.add(idx);
+      const opt = qopts[idx];
+      labels.push(typeof opt === 'string' ? opt : (opt?.label ?? String(idx)));
+    }
+    return labels.length ? labels.join('、') : null;
+  }
+  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= qopts.length) return null; // S6：越界 optionIndex 不作答
+  const opt = qopts[optionIndex];
+  return typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
+}
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 // 后台任务 TTL 分两档（按 key 是否为真实 SDK task_id，而非 taskType）：
@@ -1821,6 +1842,7 @@ export class AgentSession {
       // createdAt：供 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
       this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
 
+      const openQuestionIndexes = questions.map((_, k) => k);
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         // 对齐 CLI：保留 header / multiSelect / option.description|preview，前端才能完整呈现
@@ -1831,6 +1853,11 @@ export class AgentSession {
           header: q.header ? String(q.header) : undefined,
           multiSelect: Boolean(q.multiSelect),
           options,
+          // 多题时前端合成一张卡、各题答案攒着最后整组提交（对齐 CLI）；靠这两个字段在第一题到达时就认出是一组
+          questionIndex: i,
+          questionCount: questions.length,
+          // 各题分开送达：前端据此知道还有哪几题没到，收齐前不放行整组提交（resolveQuestionGroup 要恰好覆盖未答题）
+          openQuestionIndexes,
           createdAt,
           expiresAt,
         });
@@ -1875,31 +1902,8 @@ export class AgentSession {
       return;
     }
 
-    const freeText = typeof opts?.freeText === 'string' ? opts.freeText.trim() : '';
-    let label;
-    if (freeText) {
-      // Other：自由文本优先（即使同时传了 optionIndex 也用 freeText，对齐「用户最终写的内容」）
-      label = freeText;
-    } else if (Array.isArray(opts?.optionIndexes)) {
-      const q = pending.questions[qIdx];
-      const qopts = q.options || [];
-      const labels = [];
-      const seen = new Set();
-      for (const idx of opts.optionIndexes) {
-        if (!Number.isInteger(idx) || idx < 0 || idx >= qopts.length || seen.has(idx)) continue;
-        seen.add(idx);
-        const opt = qopts[idx];
-        labels.push(typeof opt === 'string' ? opt : (opt?.label ?? String(idx)));
-      }
-      if (!labels.length) return; // 空/全非法 multiSelect 不作答
-      label = labels.join('、');
-    } else {
-      const q = pending.questions[qIdx];
-      const qopts = q.options || [];
-      if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= qopts.length) return; // S6：越界 optionIndex 不作答
-      const opt = qopts[optionIndex];
-      label = typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
-    }
+    const label = questionAnswerLabel(pending.questions[qIdx], { optionIndex, ...opts });
+    if (label == null) return;
     pending.answers[qIdx] = label;
     pending.remaining--;
 
@@ -1908,17 +1912,51 @@ export class AgentSession {
     // 虽已跳过 answers[i]!=null，但 buffer 回放仍会送 question——单题 resolved + eventsSince 过滤双保险。
     this.emit('request_resolved', { requestId, kind: 'question', outcome: 'answered' });
 
-    if (pending.remaining === 0) {
-      // 移除 abort 监听器防僵尸累积
-      pending.signal?.removeEventListener('abort', pending.abortHandler);
-      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
-      this.pendingQuestions.delete(toolUseID);
-      this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
-      const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
-      this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4 整组终态
-      setCapped(this.denyKinds, toolUseID, 'answered', TOOL_INPUT_MAX); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
-      pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
+    if (pending.remaining === 0) this._settleAnsweredQuestions(toolUseID, pending);
+  }
+
+  // 多题整组提交（对齐 CLI：答案在手机上攒着、可来回改，最后一次交出）。items 是 [{ index, optionIndex |
+  // optionIndexes | freeText }]，必须覆盖每一道仍未作答的题、且每项都合法才写入，任一项不收就整组不收：
+  // 半组写入后快照只补发未答项，已写入的题在重连后消失，用户再也改不回来——正是整组提交要避免的。
+  // 别处已答掉的题（没刷新的旧页面逐题即交，广播还在路上）那一条忽略、不改写，与逐题路径的防重复一致：
+  // 若因此整组拒收，本机早已乐观关卡、把整组标成已答，剩下的题连重连快照都被吞掉，这一轮挂到 TTL。
+  resolveQuestionGroup(toolUseID, items) {
+    const pending = this.pendingQuestions.get(toolUseID);
+    if (!pending || !Array.isArray(items)) return;
+    if (pending.expiresAt != null && Date.now() > pending.expiresAt) {
+      this._expireQuestion(toolUseID);
+      return;
     }
+    const seen = new Set();
+    const labels = new Map();
+    for (const item of items) {
+      const i = item?.index;
+      if (!Number.isInteger(i) || i < 0 || i >= pending.questions.length || seen.has(i)) return;
+      seen.add(i);
+      if (pending.answers[i] !== null) continue; // 别处已答：先到先得
+      const label = questionAnswerLabel(pending.questions[i], item);
+      if (label == null) return;
+      labels.set(i, label);
+    }
+    if (labels.size !== pending.remaining) return; // 缺题不收
+    for (const [i, label] of labels) {
+      pending.answers[i] = label;
+      pending.remaining--;
+      this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'answered' });
+    }
+    this._settleAnsweredQuestions(toolUseID, pending);
+  }
+
+  _settleAnsweredQuestions(toolUseID, pending) {
+    // 移除 abort 监听器防僵尸累积
+    pending.signal?.removeEventListener('abort', pending.abortHandler);
+    if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
+    this.pendingQuestions.delete(toolUseID);
+    this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
+    const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
+    this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4 整组终态
+    setCapped(this.denyKinds, toolUseID, 'answered', TOOL_INPUT_MAX); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
+    pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
   }
 
   // 静默看护豁免留痕：只在【豁免原因变化】时记一条（无→有、一种→另一种、有→无）。
@@ -2808,6 +2846,7 @@ export class AgentSession {
     }
     const questions = [];
     for (const [toolUseID, p] of this.pendingQuestions) {
+      const openQuestionIndexes = p.answers.flatMap((a, k) => (a === null ? [k] : []));
       for (let i = 0; i < p.questions.length; i++) {
         if (p.answers[i] !== null) continue; // 已答的不补发（切入只重建仍待回答的问题）
         const q = p.questions[i];
@@ -2818,6 +2857,9 @@ export class AgentSession {
           header: q.header ? String(q.header) : undefined,
           multiSelect: Boolean(q.multiSelect),
           options,
+          questionIndex: i,
+          questionCount: p.questions.length,
+          openQuestionIndexes,
           // AG-NEW-001：与 live emit('question') / permissions 快照对称，切会话重建卡片可显 TTL
           createdAt: p.createdAt,
           expiresAt: p.expiresAt,

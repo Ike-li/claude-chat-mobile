@@ -226,6 +226,89 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // P0-08j（2026-10-26）：对齐 CLI 的多题提问——顶部题目标签栏可来回切，答案先攒成草稿，最后在复查页整组提交。
+  // 此前每题点完就提交给服务端、服务端拒收重答，误点一题只能「跳过」中止整轮。
+  // 机主定：没答完时「提交」禁用，并标出哪几题没答（CLI 允许缺题提交，这里有意不跟）。
+  test('P0-08j 多题提问：可切回前一题改答案，没答完禁用提交并标出未答题，提交的是改过的答案', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:question-group');
+    const modal = page.locator('#questionModal');
+    await expect(modal).toBeVisible();
+    const tabs = page.locator('#questionTabs button');
+    const text = page.locator('#questionText');
+    const opts = page.locator('#questionOptions button');
+    const submit = page.locator('#questionGroupSubmit');
+    const missing = page.locator('#questionReviewMissing');
+    const rows = page.locator('#questionReviewList > button');
+    await expect(tabs).toHaveText(['☐ Branch', '☐ Checks', '☐ Notify', '✓ 提交']);
+    await expect(text).toHaveText('Which branch should we deploy?');
+
+    // 第 1 题单选：点了不提交，跳到下一题
+    await opts.filter({ hasText: 'main' }).click();
+    await expect(text).toHaveText('Which checks must pass first?');
+    await expect(modal).toBeVisible();
+    await expect(tabs.nth(0)).toHaveText('☑ Branch');
+
+    // 跳过第 2、3 题直接去提交页：提交禁用，没答的两题标出来
+    await tabs.last().click();
+    await expect(submit).toBeVisible();
+    await expect(submit).toBeDisabled();
+    await expect(missing).toBeVisible();
+    await expect(missing).toContainText('2');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText('main');
+    await expect(rows.nth(1)).toContainText('未作答');
+    await expect(rows.nth(2)).toContainText('未作答');
+
+    // 从复查页点第 2 题回去答：多选勾两项，「下一题」
+    await rows.nth(1).click();
+    await expect(text).toHaveText('Which checks must pass first?');
+    await opts.filter({ hasText: 'lint' }).click();
+    await opts.filter({ hasText: 'e2e' }).click();
+    await page.locator('#questionMultiSubmit').click();
+
+    // 第 3 题先填「其他」，切走再切回来，草稿还在
+    await expect(text).toHaveText('Who should we notify?');
+    await page.locator('#questionOtherToggle').click();
+    await page.locator('#questionOtherInput').fill('ops');
+    await page.locator('#questionOtherSubmit').click();
+    await expect(submit).toBeEnabled();
+    await expect(missing).toBeHidden();
+    await expect(rows.nth(2)).toContainText('ops');
+    await tabs.nth(2).click();
+    await expect(page.locator('#questionOtherPanel')).toBeVisible();
+    await expect(page.locator('#questionOtherInput')).toHaveValue('ops');
+    await opts.filter({ hasText: 'team' }).click();
+
+    // 切回第 1 题：原答案仍选中，改成 dev；自动跳到的第 2 题勾选也原样恢复
+    await tabs.nth(0).click();
+    await expect(opts.filter({ hasText: 'main' })).toHaveAttribute('aria-pressed', 'true');
+    await opts.filter({ hasText: 'dev' }).click();
+    await expect(opts).toHaveText(['☑ lint', '☐ unit', '☑ e2e']);
+
+    await tabs.last().click();
+    await expect(rows.nth(0)).toContainText('dev');
+    await expect(rows.nth(1)).toContainText('lint、e2e');
+    await expect(rows.nth(2)).toContainText('team');
+    await submit.click();
+    await expect(modal).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Group answers: Branch=dev; Checks=lint、e2e; Notify=team');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-08k 多题提问：其它设备整组提交后，本机的组卡自动关闭', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:question-group-remote-resolved');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionTabs button')).toHaveCount(4);
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Answered on another trusted device');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-08g AskUserQuestion 可跳过并按取消收敛', async ({ page }) => {
     await gotoMock(page);
 

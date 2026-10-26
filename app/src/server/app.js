@@ -3526,8 +3526,13 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:answer', payload => {
-    const { requestId, optionIndex, optionIndexes, freeText, instanceId } = payload || {};
+    const { requestId, optionIndex, optionIndexes, freeText, answers, instanceId } = payload || {};
     if (typeof requestId !== 'string') return;
+    // 多题整组提交：requestId 是整组的 toolUseID，逐项校验在 resolveQuestionGroup
+    if (Array.isArray(answers)) {
+      routeInstance(instanceId)?.resolveQuestionGroup(requestId, answers);
+      return;
+    }
     // 三选一：optionIndex / optionIndexes(multiSelect) / freeText(Other)
     const hasIdx = typeof optionIndex === 'number';
     const hasMulti = Array.isArray(optionIndexes) && optionIndexes.length > 0;

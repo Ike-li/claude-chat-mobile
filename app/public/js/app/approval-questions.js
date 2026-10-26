@@ -1,6 +1,7 @@
 import { isAnsweredQuestionId } from '../logic/composer.js';
 import { formatPermInputDisplay } from '../logic/tool-cards.js';
 import { describePersistScope, describeChromePermission } from '../logic/permissions.js';
+import { questionGroupKey, isGroupedQuestion, questionDraftLabel, buildQuestionGroupAnswers } from '../logic/questions.js';
 import { verifyIntegrity } from '../canonicalize.js';
 import { t } from '../i18n.js';
 
@@ -70,6 +71,9 @@ export function createApprovalController(context, {
   const questionMultiSubmit = byId('questionMultiSubmit'), questionSkip = byId('questionSkip');
   const questionOtherToggle = byId('questionOtherToggle'), questionOtherPanel = byId('questionOtherPanel');
   const questionOtherInput = byId('questionOtherInput'), questionOtherSubmit = byId('questionOtherSubmit');
+  const questionOtherWrap = byId('questionOtherWrap'), questionTabs = byId('questionTabs');
+  const questionReview = byId('questionReview'), questionReviewList = byId('questionReviewList');
+  const questionReviewMissing = byId('questionReviewMissing'), questionGroupSubmit = byId('questionGroupSubmit');
 
   const { permissionQueue: permQueue, questionQueue, markQuestionAnswered, isQuestionAnswered } = queues;
 
@@ -282,6 +286,23 @@ export function createApprovalController(context, {
   }
 
   // ---- 选择题弹窗（E7：AskUserQuestion）----
+  // 单题：点选项即交（多选点「确认选择」）。多题（服务端标了 questionCount > 1）：对齐 CLI 合成一张组卡，
+  // 顶部标签栏来回切题，答案先攒成草稿，最后在复查页整组一次提交；没答完时「提交」禁用（机主定，CLI 允许缺题）。
+  // activeGroup = { key: toolUseID, questions（按 questionIndex 升序）, drafts, cursor, openIndexes }，cursor 等于
+  // 题数时停在复查页；openIndexes 是仍未作答的题，含还没送到的——各题分开送达，收齐答完才放行提交。
+  // 组卡期间 activeQuestion 恒为 null。
+  let activeGroup = null;
+  // 组卡草稿按 toolUseID 留着：切会话时 clearAll 收卡，切回来 pending 快照重建组卡时接着用。只在提交 / 整组
+  // 终态时删；上限兜住没等到终态的组（abort 只发逐题 resolved，不发整组那条）。
+  const groupDrafts = new Map();
+  const GROUP_DRAFTS_MAX = 20;
+  function draftsFor(key) {
+    if (!groupDrafts.has(key)) {
+      groupDrafts.set(key, new Map());
+      while (groupDrafts.size > GROUP_DRAFTS_MAX) groupDrafts.delete(groupDrafts.keys().next().value);
+    }
+    return groupDrafts.get(key);
+  }
   function resetQuestionOtherUI() {
     if (questionOtherPanel) questionOtherPanel.classList.add('hidden');
     if (questionOtherInput) questionOtherInput.value = '';
@@ -298,29 +319,74 @@ export function createApprovalController(context, {
     btn.classList.toggle('bg-sunk', !selected);
   }
   function showNextQuestion() {
-    if (activeQuestion || questionQueue.length === 0) return;
-    activeQuestion = questionQueue.shift();
-    multiSelectedIndexes = new Set();
-    const multi = Boolean(activeQuestion.multiSelect);
+    if (activeQuestion || activeGroup || questionQueue.length === 0) return;
+    const next = questionQueue.shift();
+    if (isGroupedQuestion(next)) {
+      const key = questionGroupKey(next.requestId);
+      const questions = [next];
+      for (let i = questionQueue.length - 1; i >= 0; i--) {
+        if (questionGroupKey(questionQueue[i].requestId) === key) questions.push(...questionQueue.splice(i, 1));
+      }
+      questions.sort((a, b) => a.questionIndex - b.questionIndex);
+      // 服务端说仍未作答的题（含还没送到的）；旧 server 不带这个字段时按整组算
+      const open = Array.isArray(next.openQuestionIndexes) ? next.openQuestionIndexes : Array.from({ length: next.questionCount }, (_, k) => k);
+      activeGroup = { key, questions, drafts: draftsFor(key), cursor: 0, openIndexes: new Set(open) };
+      paintGroup();
+    } else {
+      activeQuestion = next;
+      questionTabs?.classList.add('hidden');
+      showQuestionPage(true);
+      paintQuestion(activeQuestion);
+    }
+    if (!suspended) openSheet(questionModal);
+    updateSendButtonState();
+  }
+  // 题面与复查页互斥；单题卡恒为题面。
+  function showQuestionPage(onQuestion) {
+    for (const node of [questionText, questionOptions, questionOtherWrap]) node?.classList.toggle('hidden', !onQuestion);
+    questionReview?.classList.toggle('hidden', onQuestion);
+    if (!onQuestion) for (const node of [questionHeader, questionMultiHint, questionMultiSubmit]) node?.classList.add('hidden');
+  }
+  // 多选按钮：单题卡是「确认选择」，一项不选不可点；组卡里是去下一题（最后一题去复查页），不选也能走。
+  function syncMultiSubmit() {
+    if (!questionMultiSubmit) return;
+    const n = multiSelectedIndexes.size;
+    const base = !activeGroup ? t('确认选择')
+      : activeGroup.cursor === activeGroup.questions.length - 1 ? t('检查回答') : t('下一题');
+    questionMultiSubmit.disabled = !activeGroup && n === 0;
+    questionMultiSubmit.textContent = n ? `${base} (${n})` : base;
+  }
+  // 题面：header / 正文 / 选项（含说明与预览），单题卡与组卡共用。picked 是要画成已选的下标；
+  // 点选项后单题卡直接交，组卡记草稿并跳下一题。
+  function paintQuestion(q, picked = []) {
+    multiSelectedIndexes = new Set(picked);
+    const multi = Boolean(q.multiSelect);
     if (questionHeader) {
-      const h = activeQuestion.header ? String(activeQuestion.header) : '';
+      const h = q.header ? String(q.header) : '';
       questionHeader.textContent = h;
-      questionHeader.classList.toggle('hidden', !h);
+      questionHeader.classList.toggle('hidden', !h || Boolean(activeGroup)); // 组卡的 header 已在标签栏上
     }
-    questionText.textContent = activeQuestion.text;
-    if (questionMultiHint) questionMultiHint.classList.toggle('hidden', !multi);
-    if (questionMultiSubmit) {
-      questionMultiSubmit.classList.toggle('hidden', !multi);
-      questionMultiSubmit.disabled = true;
-      questionMultiSubmit.textContent = t('确认选择');
+    questionText.textContent = q.text;
+    if (questionMultiHint) {
+      questionMultiHint.classList.toggle('hidden', !multi);
+      questionMultiHint.textContent = activeGroup ? t('可多选') : t('可多选，选完点下方「确认选择」');
     }
+    if (questionMultiSubmit) questionMultiSubmit.classList.toggle('hidden', !multi);
+    syncMultiSubmit();
+    // 组卡里「其他」只是记一份草稿，还没提交
+    if (questionOtherSubmit) questionOtherSubmit.textContent = activeGroup ? t('确定') : t('提交其他答案');
     questionOptions.innerHTML = '';
     resetQuestionOtherUI();
-    (activeQuestion.options || []).forEach((opt, i) => {
+    (q.options || []).forEach((opt, i) => {
       const wrap = el(`<div class="rounded-lg border border-line bg-sunk overflow-hidden"></div>`);
       const btn = el(`<button type="button" class="w-full py-2.5 px-3 text-ink text-sm text-left"></button>`);
       const label = optionLabel(opt);
-      btn.textContent = multi ? `☐ ${label}` : label;
+      const pickedNow = multiSelectedIndexes.has(i);
+      btn.textContent = multi ? `${pickedNow ? '☑' : '☐'} ${label}` : label;
+      if (pickedNow) {
+        paintMultiOption(wrap, true);
+        if (!multi) btn.setAttribute('aria-pressed', 'true');
+      }
       if (opt && typeof opt === 'object' && opt.description) {
         const desc = el(`<div class="px-3 pb-2 text-[11px] text-ink-faint leading-snug"></div>`);
         desc.textContent = opt.description;
@@ -348,23 +414,124 @@ export function createApprovalController(context, {
           const on = multiSelectedIndexes.has(i);
           btn.textContent = `${on ? '☑' : '☐'} ${label}`;
           paintMultiOption(wrap, on);
-          if (questionMultiSubmit) {
-            questionMultiSubmit.disabled = multiSelectedIndexes.size === 0;
-            questionMultiSubmit.textContent = multiSelectedIndexes.size
-              ? `${t('确认选择')} (${multiSelectedIndexes.size})`
-              : t('确认选择');
-          }
+          if (activeGroup) setGroupDraft(multiSelectedIndexes.size ? { optionIndexes: [...multiSelectedIndexes] } : null);
+          syncMultiSubmit();
         };
       } else {
-        btn.onclick = () => answerQuestion(i);
+        btn.onclick = () => {
+          if (!activeGroup) { answerQuestion(i); return; }
+          setGroupDraft({ optionIndex: i });
+          goToGroupStep(activeGroup.cursor + 1);
+        };
       }
       questionOptions.appendChild(wrap);
     });
-    if (!suspended) openSheet(questionModal);
-    updateSendButtonState();
   }
+
+  // ---- 多题组卡 ----
+  function groupQuestionTitle(q) {
+    return q.header ? String(q.header) : t('第 {n} 题').replace('{n}', q.questionIndex + 1);
+  }
+  function setGroupDraft(draft) {
+    const g = activeGroup;
+    const q = g.questions[g.cursor];
+    if (draft) g.drafts.set(q.questionIndex, draft);
+    else g.drafts.delete(q.questionIndex);
+    paintGroupTabs(); // ☐ / ☑ 跟着变
+  }
+  function goToGroupStep(cursor) {
+    activeGroup.cursor = Math.max(0, Math.min(cursor, activeGroup.questions.length));
+    paintGroup();
+  }
+  // 标签栏 + 当前题（或复查页）。切回某题时按草稿恢复单选、多选勾选与「其他」里写的字。
+  function paintGroup() {
+    const g = activeGroup;
+    paintGroupTabs();
+    const onReview = g.cursor >= g.questions.length;
+    showQuestionPage(!onReview);
+    if (onReview) {
+      paintGroupReview();
+    } else {
+      const q = g.questions[g.cursor];
+      const draft = g.drafts.get(q.questionIndex);
+      paintQuestion(q, draft?.optionIndexes ?? (Number.isInteger(draft?.optionIndex) ? [draft.optionIndex] : []));
+      if (typeof draft?.freeText === 'string') {
+        questionOtherPanel?.classList.remove('hidden');
+        if (questionOtherInput) questionOtherInput.value = draft.freeText;
+      }
+    }
+    const sheet = questionModal?.firstElementChild;
+    if (sheet) sheet.scrollTop = 0; // 换题回到顶部：上一题选项长时，不至于看不到这题的题目
+  }
+  function paintGroupTabs() {
+    if (!questionTabs) return;
+    const g = activeGroup;
+    questionTabs.classList.remove('hidden');
+    questionTabs.innerHTML = '';
+    const addTab = (text, step) => {
+      const tab = el(`<button type="button" class="shrink-0 max-w-[10rem] truncate px-2.5 py-1 rounded-full border text-xs"></button>`);
+      tab.textContent = text;
+      const on = step === g.cursor;
+      tab.classList.toggle('border-accent', on);
+      tab.classList.toggle('bg-accent-wash', on);
+      tab.classList.toggle('text-ink', on);
+      tab.classList.toggle('border-line', !on);
+      tab.classList.toggle('text-ink-soft', !on);
+      if (on) tab.setAttribute('aria-current', 'step');
+      tab.onclick = () => goToGroupStep(step);
+      questionTabs.appendChild(tab);
+    };
+    g.questions.forEach((q, i) => {
+      const answered = Boolean(questionDraftLabel(q, g.drafts.get(q.questionIndex)));
+      addTab(`${answered ? '☑' : '☐'} ${groupQuestionTitle(q)}`, i);
+    });
+    addTab(`✓ ${t('提交')}`, g.questions.length);
+  }
+  // 复查页：逐题列答案，点一行回那题改；没答的标「未作答」，答完才能提交。
+  function paintGroupReview() {
+    const g = activeGroup;
+    const { missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
+    if (questionReviewList) {
+      questionReviewList.innerHTML = '';
+      g.questions.forEach((q, i) => {
+        const label = questionDraftLabel(q, g.drafts.get(q.questionIndex));
+        const row = el(`<button type="button" class="w-full text-left rounded-lg border bg-sunk px-3 py-2 ${label ? 'border-line' : 'border-warning'}"></button>`);
+        const title = el(`<div class="text-xs text-ink-faint"></div>`);
+        title.textContent = groupQuestionTitle(q);
+        const body = el(`<div class="text-sm text-ink"></div>`);
+        body.textContent = q.text;
+        const answer = el(`<div class="text-sm mt-1 ${label ? 'text-success' : 'text-warning'}"></div>`);
+        answer.textContent = label ? `→ ${label}` : t('未作答');
+        row.appendChild(title);
+        row.appendChild(body);
+        row.appendChild(answer);
+        row.onclick = () => goToGroupStep(i);
+        questionReviewList.appendChild(row);
+      });
+    }
+    if (questionReviewMissing) {
+      questionReviewMissing.textContent = missing.length ? t('还有 {n} 题没答，答完才能提交').replace('{n}', missing.length) : '';
+      questionReviewMissing.classList.toggle('hidden', !missing.length);
+    }
+    if (questionGroupSubmit) questionGroupSubmit.disabled = missing.length > 0;
+  }
+  function submitQuestionGroup() {
+    const g = activeGroup;
+    if (!g) return;
+    const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
+    if (missing.length) return; // 按钮此时是禁用的
+    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
+    // 先标记已答再 emit/关窗（同 answerQuestion）；整组 key 入库即覆盖组里每一个 #i
+    markQuestionAnswered(g.key);
+    groupDrafts.delete(g.key);
+    socket.emit('user:answer', { requestId: g.key, answers, instanceId: getViewingInstanceId() });
+    const labels = g.questions.map(q => `「${questionDraftLabel(q, g.drafts.get(q.questionIndex))}」`);
+    finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
+  }
+
   function finishQuestionUI(barText) {
     activeQuestion = null;
+    activeGroup = null;
     multiSelectedIndexes = new Set();
     closeSheet(questionModal);
     resetQuestionOtherUI();
@@ -394,11 +561,16 @@ export function createApprovalController(context, {
     finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
   function answerQuestionOther() {
-    if (!activeQuestion) return;
+    if (!activeQuestion && !activeGroup) return;
     const freeText = (questionOtherInput?.value || '').trim();
     if (!freeText) {
       addBar(t('请先输入其他答案'), 'text-info');
       questionOtherInput?.focus();
+      return;
+    }
+    if (activeGroup) { // 组卡：只记草稿，整组提交时才发
+      setGroupDraft({ freeText });
+      goToGroupStep(activeGroup.cursor + 1);
       return;
     }
     if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
@@ -406,7 +578,8 @@ export function createApprovalController(context, {
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: getViewingInstanceId() });
     finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
   }
-  if (questionMultiSubmit) questionMultiSubmit.onclick = () => answerQuestionMulti();
+  if (questionMultiSubmit) questionMultiSubmit.onclick = () => (activeGroup ? goToGroupStep(activeGroup.cursor + 1) : answerQuestionMulti());
+  if (questionGroupSubmit) questionGroupSubmit.onclick = () => submitQuestionGroup();
   if (questionOtherToggle) {
     questionOtherToggle.onclick = () => {
       if (!questionOtherPanel) return;
@@ -425,7 +598,7 @@ export function createApprovalController(context, {
   // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
   if (questionSkip) {
     questionSkip.onclick = () => {
-      if (!activeQuestion) return;
+      if (!activeQuestion && !activeGroup) return;
       haptic('tap');
       addBar(t('已跳过提问（中止本轮）'), 'text-ink-faint');
       requestInterrupt();
@@ -449,9 +622,35 @@ export function createApprovalController(context, {
     permExpandBtn?.remove(); permExpandBtn = null;
   }
   function dropActiveQuestion() {
-    if (!activeQuestion) return;
+    if (!activeQuestion && !activeGroup) return;
     activeQuestion = null;
+    activeGroup = null;
     closeSheet(questionModal);
+  }
+  // 组里某题已在别处作答（别的设备整组提交时逐题各来一条，或没刷新的旧页面逐题即交）：从组卡拿掉、草稿作废，
+  // 否则本机整组提交会带上它而被服务端整组拒收。整组 key 是终态，整张卡收掉。
+  function resolveInActiveGroup(requestId) {
+    const g = activeGroup;
+    if (requestId === g.key) {
+      groupDrafts.delete(g.key);
+      dropActiveQuestion();
+      return;
+    }
+    if (questionGroupKey(requestId) === g.key) g.openIndexes.delete(Number(requestId.slice(g.key.length + 1))); // 那题可能还没送到
+    const idx = g.questions.findIndex(q => q.requestId === requestId);
+    if (idx === -1) {
+      if (g.cursor >= g.questions.length) paintGroupReview(); // 「还有 N 题没答」跟着变
+      return;
+    }
+    g.drafts.delete(g.questions[idx].questionIndex);
+    g.questions.splice(idx, 1);
+    if (!g.questions.length) {
+      groupDrafts.delete(g.key);
+      dropActiveQuestion();
+      return;
+    }
+    if (idx < g.cursor) g.cursor--;
+    paintGroup();
   }
 
   const controller = {
@@ -462,10 +661,25 @@ export function createApprovalController(context, {
     // 问题侧多一道：已本地作答/已收 request_resolved 的忽略重放（切会话、probe、整页刷新后的 sync）。
     isDuplicateQuestion(requestId) {
       if (activeQuestion?.requestId === requestId || questionQueue.some(q => q.requestId === requestId)) return true;
+      if (activeGroup?.questions.some(q => q.requestId === requestId)) return true;
       return isQuestionAnswered(requestId);
     },
     enqueuePermission(p) { permQueue.push(p); showNextPerm(); },
-    enqueueQuestion(p) { questionQueue.push(p); showNextQuestion(); },
+    enqueueQuestion(p) {
+      // 同组后到的题（服务端逐题下发，紧跟第一题）并进当前组卡，不另排队
+      const g = activeGroup;
+      if (g && questionGroupKey(p.requestId) === g.key) {
+        let at = g.questions.findIndex(q => q.questionIndex > p.questionIndex);
+        if (at === -1) at = g.questions.length;
+        g.questions.splice(at, 0, p);
+        if (at <= g.cursor) g.cursor++;
+        paintGroupTabs();
+        if (g.cursor >= g.questions.length) paintGroupReview();
+        return;
+      }
+      questionQueue.push(p);
+      showNextQuestion();
+    },
     verifyPermIntegrity,
     // M4：审批完成后广播（多设备或重放缓冲），关闭陈旧弹窗并晋升下一张。
     resolvePermission(requestId) {
@@ -482,6 +696,7 @@ export function createApprovalController(context, {
     resolveQuestion(requestId) {
       const matchQ = qId => qId === requestId || qId.startsWith(requestId + '#');
       markQuestionAnswered(requestId); // 整组 toolUseID 也入库 → isAnsweredQuestionId 覆盖所有 #i
+      if (activeGroup) resolveInActiveGroup(requestId);
       if (activeQuestion && matchQ(activeQuestion.requestId)) {
         markQuestionAnswered(activeQuestion.requestId);
         dropActiveQuestion();
@@ -516,18 +731,18 @@ export function createApprovalController(context, {
       syncPermButtons();
     },
     // 输入区是否该被"先处理当前审批/选择"挡住。
-    hasPending() { return Boolean(activePerm || activeQuestion); },
+    hasPending() { return Boolean(activePerm || activeQuestion || activeGroup); },
     suspend() {
       if (suspended) return;
       suspended = true;
       if (activePerm) closeSheet(permModal);
-      if (activeQuestion) closeSheet(questionModal);
+      if (activeQuestion || activeGroup) closeSheet(questionModal);
     },
     resume() {
       if (!suspended) return;
       suspended = false;
       if (activePerm) { armPermSheetButtons(); openSheet(permModal); } // 先上锁、后开窗，时长同 showNextPerm（PERM_ARM_MS）
-      if (activeQuestion) openSheet(questionModal);
+      if (activeQuestion || activeGroup) openSheet(questionModal);
     },
   };
   context.state.approvals = controller;

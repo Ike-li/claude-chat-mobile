@@ -1236,9 +1236,11 @@ test.describe('pendingRequestsSnapshot()', () => {
     const snap = s.pendingRequestsSnapshot();
     // 对齐 CLI rich options：字符串选项也会归一成 {label}；multiSelect 缺省 false
     // AG-NEW-001：createdAt/expiresAt 与 live emit('question') 对称
+    // questionIndex / questionCount 按整组算（已答的那题不补发，但仍计入 questionCount）
     assert.deepEqual(snap.questions, [{
       requestId: 'tool_1#0', text: 'Q0?', header: undefined, multiSelect: false,
       options: [{ label: 'A' }, { label: 'B' }],
+      questionIndex: 0, questionCount: 2, openQuestionIndexes: [0],
       createdAt: 111, expiresAt: 222,
     }]);
     assert.deepEqual(snap.permissions, []);
