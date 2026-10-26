@@ -862,6 +862,23 @@ header {
     touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
     -webkit-touch-callout: none; /* 长按会话行不弹 iOS 原生菜单（操作都在行尾「⋯」里） */
   }
+  /* 抽屉文件夹拖动排序（app/folder-drag.js）：拖起来后只剩各连接根的头行——展开区高矮不一，不收起来的话越过一个展开的根
+     要拖过它整段会话列表。收起是瞬时的（display 不走上面的高度过渡），被拖的行由 folder-drag.js 补 scrollTop 留在手指下。 */
+  #sessionPanel.folder-dragging .subtree-container,
+  #sessionPanel.folder-dragging [data-dir-kind="subfolder"] {
+    display: none;
+  }
+  #sessionPanel .folder-drag-active {
+    position: relative;
+    z-index: 1;
+    background: var(--surface-sunk);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.12);
+  }
+  [data-dir-kind="connected"] > button:first-child {
+    -webkit-touch-callout: none; /* 长按连接根是拖动：不弹 iOS 原生菜单、不选中文字 */
+    -webkit-user-select: none;
+    user-select: none;
+  }
   /* 骨架屏脉冲动画 */
   .skeleton-shimmer {
     background: linear-gradient(90deg, var(--surface-sunk) 25%, var(--line-soft) 50%, var(--surface-sunk) 75%);

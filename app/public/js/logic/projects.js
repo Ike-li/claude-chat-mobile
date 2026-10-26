@@ -40,8 +40,6 @@ export function normalizeProjects(payload) {
       root: typeof p.root === 'string' && p.root ? p.root : p.key,
       label: typeof p.label === 'string' && p.label ? p.label : null,
       kind,
-      // 置顶（#305）只有连接根有；没置顶的不带这个字段
-      ...(kind === 'connected' && p.pinned === true ? { pinned: true } : {}),
     });
   }
   return out;
@@ -78,6 +76,18 @@ const FOLDER_REASON_TEXT = Object.freeze({
 export const FOLDER_REASON_CODES = Object.freeze(Object.keys(FOLDER_REASON_TEXT));
 export function folderReasonText(code) {
   return t(Object.hasOwn(FOLDER_REASON_TEXT, code) ? FOLDER_REASON_TEXT[code] : tk('操作失败'));
+}
+
+// 抽屉文件夹行「⋯」菜单里有哪些项（2026-10-26：长按改成拖动排序，「全部标为已读」从长按挪进来）。每一节都有「⋯」：
+// 标已读不改配置，子文件夹小节、「无文件夹」、只读来源下都能用；「断开连接」只给手机上改得了清单的连接根。
+// unreadCount 与目录角标同源；null = 还没算出来。没有可标的时候照样列出、灰掉写原因（同会话行菜单的删除）。
+export function folderRowMenuItems({ unreadCount = null, canDisconnect = false } = {}) {
+  const n = unreadCount;
+  const items = [n > 0
+    ? { action: 'mark-all-read', label: t('全部标为已读（{n}）').replace('{n}', String(n)) }
+    : { action: 'mark-all-read', label: t('全部标为已读'), disabled: true, hint: n === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话') }];
+  if (canDisconnect) items.push({ action: 'disconnect', label: t('断开连接'), danger: true });
+  return items;
 }
 
 // 抽屉「⋯ → 断开这个文件夹」的确认框（2026-10-15）。断开只是不再显示、不能在里面新开：文件和会话记录都不动，

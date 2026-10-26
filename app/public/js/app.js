@@ -197,6 +197,7 @@ import {
   formatRelativeApprovedAt,
   rewindOutcomeNotes,
   disconnectFolderConfirm,
+  folderRowMenuItems,
   openSessionsUnderRoot,
   dashboardDirs,
   folderReasonText,
@@ -222,6 +223,7 @@ import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
 import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
 import { attachLongPress } from './app/long-press.js';
+import { attachFolderDrag } from './app/folder-drag.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createNewSessionWorktree } from './app/new-session-worktree.js';
 import { createComposePage } from './app/compose-page.js';
@@ -7356,7 +7358,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     const menuBtn = el(`<button type="button" class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="session-menu" aria-haspopup="dialog" aria-controls="sessionMenuModal" title="${t('会话操作')}" aria-label="${t('会话操作')}">⋯</button>`);
     menuBtn.onclick = () => {
       haptic('tap');
-      sessionRowMenu.open({ title: displaySessionTitle(s.title, t('新会话')), items: menuItems(), onSelect: runMenuAction });
+      sessionRowMenu.open({ title: displaySessionTitle(s.title, t('新会话')), label: t('会话操作'), items: menuItems(), onSelect: runMenuAction });
     };
     rowContent.appendChild(menuBtn);
 
@@ -7404,6 +7406,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     const dirRow = el(`<div class="w-full px-3 py-1.5 border-b border-line flex items-center justify-between hover:bg-sunk/30${isCurrent ? ' text-accent' : ' text-ink'}"></div>`);
     dirRow.dataset.dir = d;
     dirRow.title = d;
+    const kind = projectsState.kindOf(d);
+    if (kind) dirRow.dataset.dirKind = kind; // 拖动排序据此认块：连接根带着紧随其后的子文件夹小节一起走（folder-drag.js）
 
     const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-1.5 active:opacity-70"></button>`);
     const icon = el(`<span class="shrink-0"></span>`); icon.textContent = isExpanded ? '📂' : '📁';
@@ -7440,35 +7444,25 @@ import { createGateFocusController } from './app/focus-layers.js';
     toggleBtn.appendChild(badgeGroup);
     dirRow.appendChild(toggleBtn);
 
-    // 长按文件夹行（#300）→「全部标为已读」。每一节都有（连接根、子文件夹小节、「无文件夹」），也不看
-    // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致；
-    // 还没显示出来的更早会话由文件夹水位一并盖住（markAllRead 的 folder，READ-01），确认框里说出来。
-    // 连接根还多一项「置顶 / 取消置顶」（#305）：有未读时它是次按钮，没有未读时它就是主按钮。也不看
-    // foldersReadonly：置顶存在数据目录，不写配置。
-    attachLongPress(toggleBtn, async () => {
-      haptic('tap');
-      const targets = unreadSessionsForDir(d);
-      const pinText = projectsState.kindOf(d) === 'connected' ? (projectsState.isPinned(d) ? t('取消置顶') : t('置顶')) : null;
-      const n = targets?.length ?? 0;
-      if (!pinText) {
-        if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
-        if (!n) { drawer.showNotice(t('这里没有未读会话')); return; }
-      }
-      const body = sessionsCache.get(d)?.hasMore ? t('把这里的 {n} 个未读会话标为已读，还没显示的更早会话也一起。') : t('把这里的 {n} 个未读会话标为已读。');
-      const choice = await appConfirm(n
-        ? { title: baseName(d), body: body.replace('{n}', String(n)), okText: t('全部标为已读'), altText: pinText }
-        : { title: baseName(d), body: targets === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话'), okText: pinText });
-      if (!choice) return;
-      if (n && choice !== 'alt') {
-        unread.markAllRead(targets.map(s => s.id), d);
-        refreshUnreadMarks();
-        return;
-      }
-      // 不做乐观更新：等服务端广播新清单再重画（前端不存置顶状态）
-      socket.timeout(10_000).emit('folders:pin', { root: d, pinned: !projectsState.isPinned(d) }, (err, res) => {
-        if (err || !res?.ok) drawer.showNotice(t('置顶没成功，稍后再试'));
+    // 长按连接根 = 拖动调整上下位置（2026-10-26，取代 #305 置顶），子文件夹小节跟着根走、「无文件夹」不动。
+    // 顺序存数据目录、不写配置，所以也不看 foldersReadonly。松手时 DOM 已按拖出来的样子摆好，服务端广播新清单后
+    // 整段重画；拒了就按手里那份服务端清单重画回去。「全部标为已读」原来挂在长按上，挪进了下面的「⋯」。
+    if (kind === 'connected') {
+      attachFolderDrag(toggleBtn, {
+        row: dirRow,
+        panel: sessionPanel,
+        haptic,
+        onCancel: openSessionPanel,
+        onDrop: roots => {
+          socket.timeout(10_000).emit('folders:reorder', { roots }, (err, res) => {
+            if (err || !res?.ok) {
+              openSessionPanel();
+              drawer.showNotice(t('顺序没保存上，稍后再试'));
+            }
+          });
+        },
       });
-    });
+    }
 
     // 物理热区扩大版 "＋" 新建按钮
     const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此工作区新建会话')}">＋</button>`);
@@ -7480,22 +7474,40 @@ import { createGateFocusController } from './app/focus-layers.js';
     };
     dirRow.appendChild(newSessionBtn);
 
-    // 断开（2026-10-15）：只给连接根——子文件夹小节与「无文件夹」不是连接根，断开它们什么也断不掉（服务端也拒）。
+    // 「⋯」（2026-10-26，同会话行共用 #sessionMenuModal）：每一节都有。
+    // 全部标为已读（#300）：不改配置，子文件夹小节、「无文件夹」、只读来源下都能用。目标就是目录角标数的那个集合，
+    // 确认框里的 N 与角标一致；还没显示出来的更早会话由文件夹水位一并盖住（markAllRead 的 folder，READ-01），确认框里说出来。
+    // 断开连接（2026-10-15）：只给连接根——子文件夹小节与「无文件夹」不是连接根，断开它们什么也断不掉（服务端也拒）；
+    // 手机上改不了清单时（来源是环境变量 / 外置文件、或没有配置文件）也不给：点下去只会在确认之后报「改不了」。
     // 已开在里面的会话照常跑，只是不能再在这里新开；确认框里说出这里开着几个。
-    // 手机上改不了清单时（来源是环境变量 / 外置文件、或没有配置文件）不给：点下去只会在确认之后报「改不了」。
-    if (projectsState.kindOf(d) === 'connected' && !projectsState.foldersReadonly()) {
-      const disconnectBtn = el(`<button class="shrink-0 w-8 h-8 ml-1 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="dir-disconnect" title="${t('断开这个文件夹')}" aria-label="${t('断开这个文件夹')}">⋯</button>`);
-      disconnectBtn.onclick = async (e) => {
-        e.stopPropagation();
-        haptic('tap');
-        const openSessions = openSessionsUnderRoot({ projects: projectsState.entries(), instances: instancesList, root: d, sectionKeys: availableDirs });
-        if (!(await appConfirm(disconnectFolderConfirm({ name: baseName(d), openSessions })))) return;
-        socket.emit('folders:remove', { path: d }, res => {
-          if (!res?.ok) drawer.showNotice(folderReasonText(res?.error));
-        });
-      };
-      dirRow.appendChild(disconnectBtn);
-    }
+    const markAllReadHere = async () => {
+      const targets = unreadSessionsForDir(d); // 按点下去这一刻算：菜单开着时可能又来了新的
+      if (!targets?.length) { drawer.showNotice(targets === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话')); return; }
+      const body = sessionsCache.get(d)?.hasMore ? t('把这里的 {n} 个未读会话标为已读，还没显示的更早会话也一起。') : t('把这里的 {n} 个未读会话标为已读。');
+      if (!(await appConfirm({ title: baseName(d), body: body.replace('{n}', String(targets.length)), okText: t('全部标为已读') }))) return;
+      unread.markAllRead(targets.map(s => s.id), d);
+      refreshUnreadMarks();
+    };
+    const disconnectHere = async () => {
+      const openSessions = openSessionsUnderRoot({ projects: projectsState.entries(), instances: instancesList, root: d, sectionKeys: availableDirs });
+      if (!(await appConfirm(disconnectFolderConfirm({ name: baseName(d), openSessions })))) return;
+      socket.emit('folders:remove', { path: d }, res => {
+        if (!res?.ok) drawer.showNotice(folderReasonText(res?.error));
+      });
+    };
+    const menuBtn = el(`<button type="button" class="shrink-0 w-8 h-8 ml-1 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="dir-menu" aria-haspopup="dialog" aria-controls="sessionMenuModal" title="${t('文件夹操作')}" aria-label="${t('文件夹操作')}">⋯</button>`);
+    menuBtn.onclick = (e) => {
+      e.stopPropagation();
+      haptic('tap');
+      const targets = unreadSessionsForDir(d);
+      sessionRowMenu.open({
+        title: baseName(d),
+        label: t('文件夹操作'),
+        items: folderRowMenuItems({ unreadCount: targets ? targets.length : null, canDisconnect: kind === 'connected' && !projectsState.foldersReadonly() }),
+        onSelect: action => (action === 'disconnect' ? disconnectHere() : markAllReadHere()),
+      });
+    };
+    dirRow.appendChild(menuBtn);
 
     // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
 

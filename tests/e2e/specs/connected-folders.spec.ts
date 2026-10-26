@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, expectSidebarClosed, openSessionsSidebar, sessionRowByInstance, startNewSessionInWorkspace, workspaceRow } from '../../helpers/sidebar-ui';
+import {
+  MAIN_WORKSPACE, chooseFolderMenuItem, chooseSessionMenuItem, expandWorkspace, expectSidebarClosed, folderMenuItem, openFolderMenu, openSessionsSidebar,
+  sessionRowByInstance, startNewSessionInWorkspace, workspaceRow,
+} from '../../helpers/sidebar-ui';
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
 //   · 已连接文件夹里有会话的子文件夹自成一节，紧跟所属文件夹，标题「根 › 相对路径」；
@@ -58,19 +61,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).toContainText('临时目录已一并删除');
   });
 
-  // 抽屉里断开文件夹（2026-10-15）：只有连接根给「⋯」（子文件夹小节、「无文件夹」不是连接根）。确认框说清
-  // 断开不动文件与会话，并说出这里开着几个会话；断开后那一节消失，开着的会话照常在（挪到「不在已连接的文件夹里」）。
+  // 抽屉里断开文件夹（2026-10-15）：只有连接根的「⋯」里有「断开连接」（子文件夹小节、「无文件夹」不是连接根；
+  // 2026-10-26 起每一节都有「⋯」，里面至少有「全部标为已读」）。确认框说清断开不动文件与会话，并说出这里开着几个会话；
+  // 断开后那一节消失，开着的会话照常在（挪到「不在已连接的文件夹里」）。
   test('P0-PROJ-3 断开文件夹：只有连接根有入口；确认框说出开着几个会话；断开后那一节消失，会话照常在', async ({ page }) => {
     await sendChatMessage(page, 'test:projects');
     await waitForIdle(page);
     await openSessionsSidebar(page);
 
-    const more = (cwd: string) => workspaceRow(page, cwd).locator('[data-testid="dir-disconnect"]');
-    await expect(more(SUB), '子文件夹小节不是连接根，断开它什么也断不掉').toHaveCount(0);
-    await expect(more(SCRATCH), '「无文件夹」不能断开').toHaveCount(0);
-    await expect(more(MAIN_WORKSPACE)).toHaveCount(1);
+    const disconnectItemCount = async (cwd: string) => {
+      await openFolderMenu(page, cwd);
+      const n = await folderMenuItem(page, 'disconnect').count();
+      await page.locator('#sessionMenuCancel').click();
+      await expect(page.locator('#sessionMenuModal')).not.toHaveClass(/sheet-open/);
+      return n;
+    };
+    expect(await disconnectItemCount(SUB), '子文件夹小节不是连接根，断开它什么也断不掉').toBe(0);
+    expect(await disconnectItemCount(SCRATCH), '「无文件夹」不能断开').toBe(0);
 
-    await more(MAIN_WORKSPACE).click();
+    await chooseFolderMenuItem(page, MAIN_WORKSPACE, 'disconnect');
     await expect(page.locator('#confirmTitle')).toHaveText('断开「claude-chat-mobile」？');
     // 开着的：inst_1、仓库外 worktree 里的（归这个仓库）、子文件夹小节里的——子文件夹那一节会跟着一起消失
     await expect(page.locator('#confirmBody'), '没说开着的会话会怎样，或者说少了（子文件夹小节里在跑的没算）')
@@ -104,7 +113,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(compose.getByTestId('compose-project-pill')).toContainText('claude-chat-mobile');
 
     await openSessionsSidebar(page);
-    await workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-disconnect"]').click();
+    await chooseFolderMenuItem(page, MAIN_WORKSPACE, 'disconnect');
     await page.locator('#confirmOk').click();
     await expect(workspaceRow(page, MAIN_WORKSPACE)).toHaveCount(0);
 
@@ -164,13 +173,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 清单来自环境变量 / 外置文件、或没有配置文件时，手机上断不开（folders:remove 回 source_readonly / no_config_file）。
-  // 不给「⋯」：点下去只会在确认之后才报「改不了」（同首页零文件夹引导，2026-10-15 Codex review #204）。
+  // 「⋯」里不给「断开连接」：点下去只会在确认之后才报「改不了」（同首页零文件夹引导，2026-10-15 Codex review #204）。
   // 能改时给入口由 P0-PROJ-3 钉着。
   test('P0-PROJ-4 手机上改不了清单时不给断开入口', async ({ page }) => {
     await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(MAIN_WORKSPACE)}&readonly=source_readonly`);
     await openSessionsSidebar(page);
     await expect(workspaceRow(page, MAIN_WORKSPACE)).toHaveCount(1);
-    await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-disconnect"]'), '断不开却给了入口，确认之后才报改不了').toHaveCount(0);
+    await openFolderMenu(page, MAIN_WORKSPACE);
+    await expect(folderMenuItem(page, 'mark-all-read'), '前提：菜单确实打开了').toHaveCount(1);
+    await expect(folderMenuItem(page, 'disconnect'), '断不开却给了入口，确认之后才报改不了').toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
 });

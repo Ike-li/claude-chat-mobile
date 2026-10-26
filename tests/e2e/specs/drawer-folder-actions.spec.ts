@@ -1,15 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionMenu, openSessionsSidebar, sessionMenuItem, showMoreSessions, workspaceRow } from '../../helpers/sidebar-ui';
+import {
+  ANOTHER_WORKSPACE, MAIN_WORKSPACE, chooseFolderMenuItem, dragFolderWithMouse, expandWorkspace, expectSidebarOpen, folderDragDelta, folderMenuItem,
+  openFolderMenu, openSessionMenu, openSessionsSidebar, sessionMenuItem, showMoreSessions, workspaceRow, workspaceSubtree,
+} from '../../helpers/sidebar-ui';
 
-// 抽屉文件夹行的长按动作（#300 全部标为已读、#305 置顶 / 取消置顶）。
-// 长按挂在文件夹行的主按钮上；桌面右键（contextmenu）与触屏长按走同一个入口（见 long-press.js），这里用右键触发。
+// 抽屉文件夹行的动作（2026-10-26）：「⋯」菜单里的「全部标为已读」（#300）与「断开连接」，长按拖动调整连接根的上下位置
+// （取代 #305 置顶）。此前长按弹「全部标为已读 / 置顶」的确认框，长按就没法再拿来拖。
 const SCRATCH_ROOT = '/Users/you/Library/Application Support/claude-chat-mobile/scratch-workspaces';
 const SUBFOLDER = `${MAIN_WORKSPACE}/packages/web`;
-
-async function longPressFolder(page: Page, cwd: string) {
-  await workspaceRow(page, cwd).locator('button').first().dispatchEvent('contextmenu');
-}
 
 async function markRowUnread(page: Page, sessionId: string) {
   await openSessionMenu(page, page.locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`));
@@ -23,7 +22,7 @@ function sectionOrder(page: Page) {
   return page.locator('#sessionPanel div[data-dir]').evaluateAll(els => els.map(e => e.getAttribute('data-dir')));
 }
 
-// test:projects 只连着主工作区；置顶要比顺序，得有第二个连接根
+// test:projects 只连着主工作区；排序要比顺序，得有第二个连接根
 async function connectTwoRoots(page: Page) {
   await page.request.post(`/__set-connected-folders?dirs=${encodeURIComponent(`${MAIN_WORKSPACE},${ANOTHER_WORKSPACE}`)}`);
 }
@@ -35,7 +34,7 @@ function unreadChips(page: Page, cwd: string) {
 test.describe('P0 日常零 token Mock UI 回归', () => {
   // 很久没打开时，CLI 那边跑过的会话在抽屉里堆出一片未读。目标集合与目录角标同源：本页、「稍后再看」（pinned）、
   // 页外开着的（open）、被手动标未读的当前会话，四种来源一起清。此前角标不数 open 那组——行亮着 chip，数字却少一个。
-  test('P0-FOLDER-READ-1 长按文件夹「全部标为已读」：四种来源的未读一起清，角标与 chip 同源，刷新后仍是已读', async ({ page }) => {
+  test('P0-FOLDER-READ-1 文件夹「⋯ → 全部标为已读」：四种来源的未读一起清，角标与 chip 同源，刷新后仍是已读', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:live-paged-out'); // 截断成 3 条/页 + 开着一条被挤出本页的旧会话（open 组）
     await waitForIdle(page);
@@ -63,7 +62,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(chipCount).toBe(5); // 本页 archived + worktree、pinned gap、open older-migration、当前会话
     await expect(mainDir.locator('[data-testid="dir-unread"]'), '角标漏数 open 组就会说 4').toHaveText(`${chipCount} 未读`);
 
-    await longPressFolder(page, MAIN_WORKSPACE);
+    await openFolderMenu(page, MAIN_WORKSPACE);
+    await expect(page.locator('#sessionMenuTitle')).toHaveText('claude-chat-mobile');
+    await expect(folderMenuItem(page, 'mark-all-read'), '菜单里的个数与角标同源').toHaveText(`全部标为已读（${chipCount}）`);
+    await folderMenuItem(page, 'mark-all-read').click();
     const modal = page.locator('#confirmModal');
     await expect(modal).toHaveClass(/sheet-open/);
     await expect(page.locator('#confirmTitle')).toHaveText('claude-chat-mobile');
@@ -107,7 +109,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.context().setOffline(true);
     await waitUntilDisconnected(page);
-    await longPressFolder(page, MAIN_WORKSPACE);
+    await chooseFolderMenuItem(page, MAIN_WORKSPACE, 'mark-all-read');
     await page.locator('#confirmOk').click();
     await expect(unreadChips(page, MAIN_WORKSPACE)).toHaveCount(0);
     const before = await (await request.get('/__read-state')).json();
@@ -130,7 +132,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 2026-10-26 真机：长按「全部标为已读」只标了屏幕上那 6 行，点开更早的会话一看冒出 34 个未读。
+  // 2026-10-26 真机：「全部标为已读」只标了屏幕上那 6 行，点开更早的会话一看冒出 34 个未读。
   // 现在它同时记一条文件夹水位，服务端在 session:list 回执里把水位折进每行。按机主当时的顺序走：
   // 先确认更早的会话确实会亮（不然这条在「旧会话本来就不亮」时也会绿），收起回第一档，再标、再展开。
   test('P0-FOLDER-READ-4 全部标为已读后再「显示更多」：拉出来的更早会话不亮', async ({ page }) => {
@@ -149,7 +151,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.getByTestId('session-show-less').click();
     await expect(older).toHaveCount(0);
 
-    await longPressFolder(page, MAIN_WORKSPACE);
+    await chooseFolderMenuItem(page, MAIN_WORKSPACE, 'mark-all-read');
     await expect(page.locator('#confirmBody')).toContainText('还没显示的更早会话也一起');
     await page.locator('#confirmOk').click();
     await expect(unreadChips(page, MAIN_WORKSPACE)).toHaveCount(0);
@@ -162,8 +164,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 入口不挂在「⋯」上：「⋯」只给连接根、只读配置来源下也没有。标已读不改配置，所以每一节都要有。
-  test('P0-FOLDER-READ-2 子文件夹小节、「无文件夹」、只读配置来源下，长按入口都在', async ({ page }) => {
+  // 标已读不改配置，所以每一节的「⋯」里都有；「断开连接」只给手机上改得了清单的连接根。
+  test('P0-FOLDER-READ-2 子文件夹小节、「无文件夹」、只读配置来源下，「⋯」里都有全部标为已读', async ({ page }) => {
     await gotoMock(page);
     await page.request.post('/__arm-read-baseline?agoMs=7200000'); // 无文件夹那条旧会话（-1h）晚于基线
     await sendChatMessage(page, 'test:projects');
@@ -172,27 +174,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.reload();
     await waitUntilConnected(page);
     await openSessionsSidebar(page);
-    await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-disconnect"]'), '前提：只读来源下没有「⋯」').toHaveCount(0);
 
     // 无文件夹：有一条按时间亮的未读
     const scratch = await expandWorkspace(page, SCRATCH_ROOT);
     await expect(scratch.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
-    await longPressFolder(page, SCRATCH_ROOT);
+    await chooseFolderMenuItem(page, SCRATCH_ROOT, 'mark-all-read');
     await expect(page.locator('#confirmTitle')).toHaveText('无文件夹');
     await page.locator('#confirmOk').click();
     await expect(scratch.locator('[data-testid="dir-unread"]')).toBeHidden();
     await expect(unreadChips(page, SCRATCH_ROOT)).toHaveCount(0);
 
-    // 子文件夹小节：没有未读，长按照样有反应（说一声没有，而不是毫无动静）
+    // 子文件夹小节：没有未读，这一项照样在、灰掉并说明（而不是点了毫无动静）
     await expandWorkspace(page, SUBFOLDER);
     await expect(workspaceRow(page, SUBFOLDER).locator('[data-testid="dir-unread"]')).toBeHidden();
-    await longPressFolder(page, SUBFOLDER);
-    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('这里没有未读会话');
+    await openFolderMenu(page, SUBFOLDER);
+    await expect(folderMenuItem(page, 'mark-all-read')).toBeDisabled();
+    await expect(folderMenuItem(page, 'mark-all-read')).toContainText('这里没有未读会话');
+    await expect(folderMenuItem(page, 'disconnect'), '子文件夹不是连接根，断开它什么也断不掉').toHaveCount(0);
+    await page.locator('#sessionMenuCancel').click();
+    await expect(page.locator('#sessionMenuModal')).not.toHaveClass(/sheet-open/);
 
-    // 只读来源下的连接根（基线拨早后它的旧会话按时间亮）
+    // 只读来源下的连接根（基线拨早后它的旧会话按时间亮）：没有「断开连接」，标已读照常
     await expandWorkspace(page, MAIN_WORKSPACE);
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toHaveText(/^\d+ 未读$/);
-    await longPressFolder(page, MAIN_WORKSPACE);
+    await openFolderMenu(page, MAIN_WORKSPACE);
+    await expect(folderMenuItem(page, 'disconnect'), '只读来源下断不开，菜单里不该给').toHaveCount(0);
+    await folderMenuItem(page, 'mark-all-read').click();
     await expect(page.locator('#confirmOk')).toHaveText('全部标为已读');
     await page.locator('#confirmOk').click();
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toBeHidden();
@@ -200,9 +207,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // #305：置顶只改抽屉顺序；不做乐观更新，等服务端广播新清单再重画，所以按钮文字与顺序都来自服务端。
-  // 同一次长按两件事：有未读时主按钮仍是「全部标为已读」、置顶是次按钮；没有未读时置顶就是主按钮。
-  test('P0-FOLDER-PIN-1 长按连接根「置顶」：连同子文件夹一起移到最前；再长按变「取消置顶」，取消后回到原顺序', async ({ page }) => {
+  // 长按连接根拖动（2026-10-26，取代 #305 置顶）：拖的是整块（根 + 它的子文件夹小节），「无文件夹」恒垫底。
+  // 顺序存服务端（所有设备共享），松手先按拖出来的样子摆，服务端广播新清单后整段重画。
+  test('P0-FOLDER-ORDER-1 长按连接根拖到别的根上方 / 下方：子文件夹跟着走、「无文件夹」垫底；原地松手不误触展开；刷新后顺序还在', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:projects');
     await waitForIdle(page);
@@ -210,57 +217,81 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openSessionsSidebar(page);
     const before = await sectionOrder(page);
     expect(before, '前提：主工作区、它的子文件夹、另一个工作区、「无文件夹」').toEqual([MAIN_WORKSPACE, SUBFOLDER, ANOTHER_WORKSPACE, SCRATCH_ROOT]);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const mainSubtree = workspaceSubtree(page, MAIN_WORKSPACE);
+    await expect(mainSubtree).toHaveClass(/expanded/);
 
-    // 有未读：置顶是次按钮
-    await longPressFolder(page, ANOTHER_WORKSPACE);
-    await expect(page.locator('#confirmTitle')).toHaveText('another-react-project');
-    await expect(page.locator('#confirmOk')).toHaveText('全部标为已读');
-    await expect(page.locator('#confirmAlt')).toHaveText('置顶');
-    await page.locator('#confirmAlt').click();
+    // 拖起来又原地松手（改主意了）：顺序不变；浏览器照常补发 click，不拦就把这一节折叠了。用最上面那一行：
+    // 它上方没有会收起的展开区，拖起来不会离开指针，抬手的 click 一定落回它身上。
+    // 点击切换是同步的，mouse.up 返回时已经发生过，紧接着断言是有效的。
+    await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().hover();
+    await page.mouse.down();
+    await expect(page.locator('#sessionPanel')).toHaveClass(/folder-dragging/);
+    await page.mouse.up();
+    await expect(page.locator('#sessionPanel')).not.toHaveClass(/folder-dragging/);
+    await expect(mainSubtree, '原地松手补发的 click 把这一节折叠了').toHaveClass(/expanded/);
+    expect(await sectionOrder(page)).toEqual(before);
+
+    await dragFolderWithMouse(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'above');
     await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
-    await expect(workspaceRow(page, ANOTHER_WORKSPACE).locator('[data-testid="dir-unread"]'), '点的是置顶，不该顺手把未读清了').toHaveText(/^\d+ 未读$/);
 
-    // 主工作区这时没有未读：置顶就是主按钮。最后置顶的在最前，子文件夹跟着根走，「无文件夹」仍垫底
-    await longPressFolder(page, MAIN_WORKSPACE);
-    await expect(page.locator('#confirmOk')).toHaveText('置顶');
-    await expect(page.locator('#confirmAlt')).toBeHidden();
-    await page.locator('#confirmOk').click();
-    await expect.poll(() => sectionOrder(page)).toEqual([MAIN_WORKSPACE, SUBFOLDER, ANOTHER_WORKSPACE, SCRATCH_ROOT]);
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    expect(await sectionOrder(page), '顺序没存到服务端').toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
 
-    // 取消置顶：按钮文字跟着服务端清单变，取消后回到配置顺序
-    await longPressFolder(page, MAIN_WORKSPACE);
-    await expect(page.locator('#confirmOk')).toHaveText('取消置顶');
-    await page.locator('#confirmOk').click();
-    await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
-    await longPressFolder(page, ANOTHER_WORKSPACE);
-    await expect(page.locator('#confirmAlt')).toHaveText('取消置顶');
-    await page.locator('#confirmAlt').click();
+    await dragFolderWithMouse(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'below');
     await expect.poll(() => sectionOrder(page)).toEqual(before);
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-FOLDER-PIN-2 子文件夹小节没有置顶入口；服务端回失败时界面上没有假置顶', async ({ page }) => {
+  // 会话行此前的教训：行上的横向手势和抽屉自己的左滑收起抢同一次触摸。拖文件夹时手指难免横着带一下，
+  // 不能因此把抽屉收走；拖动中页面也不能跟着滚（浏览器一接管滚动就发 pointercancel，拖动就断了）。
+  test('P0-FOLDER-ORDER-2 触屏长按拖动：横着带出 120px 抽屉也不收，松手后顺序生效', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:projects');
     await waitForIdle(page);
     await connectTwoRoots(page);
     await openSessionsSidebar(page);
 
-    await expandWorkspace(page, SUBFOLDER);
-    await longPressFolder(page, SUBFOLDER);
-    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('这里没有未读会话');
-    await expect(page.locator('#confirmModal'), '子文件夹不是连接根，没有置顶这回事').not.toHaveClass(/sheet-open/);
+    const handle = workspaceRow(page, ANOTHER_WORKSPACE).locator('button').first();
+    await handle.hover({ trial: true }); // 等抽屉滑入完、行稳定了再量坐标
+    const from = await handle.boundingBox();
+    if (!from) throw new Error('另一个工作区的行不可见');
+    const x = from.x + from.width / 2;
+    const y = from.y + from.height / 2;
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', px = 0, py = 0) =>
+      cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: px, y: py }] });
 
+    await touch('touchStart', x, y);
+    await expect(page.locator('#sessionPanel'), '触屏长按没拖起来').toHaveClass(/folder-dragging/);
+    const dy = await folderDragDelta(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'above'); // 横移前量：行会跟着手指走
+    for (let i = 1; i <= 4; i++) await touch('touchMove', x - 30 * i, y); // 抽屉的左滑收起阈值是 65px
+    await expectSidebarOpen(page);
+    for (let i = 1; i <= 4; i++) await touch('touchMove', x - 120, y + dy * (i / 4));
+    await touch('touchEnd');
+
+    await expect(page.locator('#sessionPanel')).not.toHaveClass(/folder-dragging/);
+    await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
+    await expectSidebarOpen(page);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-FOLDER-ORDER-3 服务端拒了：回到服务端的顺序，并说一声', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await connectTwoRoots(page);
+    await openSessionsSidebar(page);
     const before = await sectionOrder(page);
-    await page.request.post('/__folder-pin-fail');
-    await longPressFolder(page, ANOTHER_WORKSPACE);
-    await page.locator('#confirmAlt').click();
-    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('置顶没成功，稍后再试');
-    expect(await sectionOrder(page), '服务端拒了，顺序却变了 = 假置顶').toEqual(before);
-    await longPressFolder(page, ANOTHER_WORKSPACE);
-    await expect(page.locator('#confirmAlt')).toHaveText('置顶');
-    await page.locator('#confirmCancel').click();
+
+    await page.request.post('/__folder-reorder-fail');
+    await dragFolderWithMouse(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'above');
+    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('顺序没保存上，稍后再试');
+    expect(await sectionOrder(page), '服务端拒了，界面却留着拖出来的顺序').toEqual(before);
 
     await expectNoBrowserErrors(page);
   });
