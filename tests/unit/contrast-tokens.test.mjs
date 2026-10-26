@@ -130,7 +130,7 @@ for (const [name, theme] of [['浅色', light], ['深色', dark]]) {
     }
   });
 
-  // 抽屉行侧滑露出的「关闭」是白字压实底红：深色 danger 为了当文字够亮而提亮，当底色白字只剩 3.5。
+  // 确认 sheet 的危险档按钮（彻底删除等）是白字压实底红：深色 danger 为了当文字够亮而提亮，当底色白字只剩 3.5。
   // 实底另用 danger-solid（同 cta 的做法：深色实底仍用深一档的红）。
   test(`O102 ${name}：danger-solid 实底上的白字 ≥4.5`, () => {
     assert.ok(theme['danger-solid'], '缺 --danger-solid');

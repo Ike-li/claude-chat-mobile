@@ -7,6 +7,7 @@ import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, 
 import {
   ANOTHER_WORKSPACE,
   MAIN_WORKSPACE,
+  chooseSessionMenuItem,
   expandWorkspace,
   expectNoSessionStatusChip,
   expectSessionStatusChip,
@@ -104,7 +105,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
 
-    await backgroundRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, backgroundRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
     await expectSidebarClosed(page);
@@ -287,14 +288,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-11-delete 🗑 二次确认后从列表移除', async ({ page }) => {
+  test('P0-11-delete 菜单「删除会话」二次确认后从列表移除', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
     await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toBeVisible();
 
     const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
-    await row.getByTestId('session-delete').click();
+    await chooseSessionMenuItem(page, row, 'delete');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.getByRole('button', { name: '彻底删除' }).click();
     await expect(page.locator('#confirmModal')).toBeHidden({ timeout: 5_000 });
@@ -313,7 +314,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(sessionButtonByTitle(page, 'Deleted Remote Session')).toBeVisible();
 
     const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-deleted"]');
-    await row.getByTestId('session-delete').click();
+    await chooseSessionMenuItem(page, row, 'delete');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.getByRole('button', { name: '彻底删除' }).click();
     await expect(page.locator('#confirmModal')).toBeHidden({ timeout: 5_000 });
@@ -463,7 +464,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await expandWorkspace(page, ANOTHER_WORKSPACE);
     }
     await expect(currentRow).toBeVisible();
-    await currentRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, currentRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 
@@ -492,7 +493,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
 
-    await currentRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, currentRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 
@@ -528,7 +529,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
     await expectSessionStatusChip(page, 'inst_1', '需要你');
 
-    await currentRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, currentRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 
@@ -559,7 +560,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
     await expectSessionStatusChip(page, 'inst_1', '需要你');
 
-    await currentRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, currentRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 

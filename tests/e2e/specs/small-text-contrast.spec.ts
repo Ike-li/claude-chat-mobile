@@ -8,7 +8,7 @@
 
 import { test, expect, type Locator } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, openSessionMenu, openSessionsSidebar } from '../../helpers/sidebar-ui';
 
 async function effectiveContrast(locator: Locator): Promise<number> {
   return locator.evaluate((el) => {
@@ -60,8 +60,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     });
 
     // 验收 O102：不走 token 的几处——第三方配色（hljs github 主题、CM5 默认主题）、Tailwind 原色叠透明度
-    // （Bypass 说明的 text-red-500/80）、白字压实底红（侧滑露出的「关闭」）。token 本身由 contrast-tokens 单测钉。
-    test(`P0-A11Y-CONTRAST3 ${scheme}：代码高亮、Bypass 说明、侧滑「关闭」、markdown 标题 ≥4.5:1`, async ({ page }) => {
+    // （Bypass 说明的 text-red-500/80）。token 本身由 contrast-tokens 单测钉。
+    // 原先还量侧滑露出的「关闭」（白字压实底红）；2026-10-25 侧滑撤了，换成会话菜单里灰掉项下面那行说明小字。
+    test(`P0-A11Y-CONTRAST3 ${scheme}：代码高亮、Bypass 说明、会话菜单说明小字、markdown 标题 ≥4.5:1`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
       await gotoMock(page);
       await sendChatMessage(page, 'test:stream');
@@ -86,12 +87,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       expect(descRatio, `${scheme} Bypass 说明对比度 ${descRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
       await page.keyboard.press('Escape');
 
-      // 侧滑「关闭」平时压在行内容下面，不可见也照样按它自己的实底算
+      // 已打开的会话：菜单里「删除会话」灰掉，下面一行小字说要先关闭。灰掉的按钮本身不计对比度（WCAG 豁免禁用控件），
+      // 说明小字不豁免——它正是告诉人怎样才能删的那句话
       await openSessionsSidebar(page);
-      const swipeClose = page.locator('.swipe-row-container > div', { hasText: /^关闭$/ }).first();
-      await expect(swipeClose).toHaveCount(1);
-      const closeRatio = await effectiveContrast(swipeClose);
-      expect(closeRatio, `${scheme} 侧滑「关闭」对比度 ${closeRatio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      await expandWorkspace(page, MAIN_WORKSPACE);
+      await openSessionMenu(page, page.locator('[data-testid="session-row"][data-session-id="mock-session-visual-test"]'));
+      const hint = page.locator('#sessionMenuModal [data-testid="session-menu-hint"]');
+      await expect(hint).toHaveText('先关闭会话才能删除');
+      // sheet 是淡入的：等祖先 opacity 稳定再量（稳态不达标会在这里超时变红）
+      await expect.poll(() => effectiveContrast(hint), { message: `${scheme} 会话菜单说明小字对比度` }).toBeGreaterThanOrEqual(4.5);
       await expectNoBrowserErrors(page);
     });
 
@@ -101,7 +105,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await gotoMock(page);
       await openSessionsSidebar(page);
       await expandWorkspace(page, MAIN_WORKSPACE);
-      await page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]').getByTestId('session-delete').click();
+      await chooseSessionMenuItem(page, page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]'), 'delete');
       const ok = page.locator('#confirmOk');
       await expect(ok).toHaveText('彻底删除');
       await expect(page.locator('#confirmModal')).toHaveClass(/sheet-open/);

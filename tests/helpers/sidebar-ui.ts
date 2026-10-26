@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 export const MAIN_WORKSPACE = '/Users/you/code/claude-chat-mobile';
 export const ANOTHER_WORKSPACE = '/Users/you/code/another-react-project';
@@ -72,6 +72,21 @@ export async function startNewSessionInWorkspace(page: Page, cwd: string) {
 
 export function sessionRowByInstance(page: Page, instanceId: string) {
   return page.locator(`[data-testid="session-row"][data-instance-id="${cssAttr(instanceId)}"]`);
+}
+
+// 会话行只有一个入口：行尾「⋯」打开底部菜单（#sessionMenuModal），关闭 / 删除 / 标已读未读都在里面
+export function sessionMenuItem(page: Page, action: 'toggle-read' | 'close' | 'delete') {
+  return page.locator(`#sessionMenuModal [data-menu-action="${action}"]`);
+}
+
+export async function openSessionMenu(page: Page, row: Locator) {
+  await row.getByTestId('session-menu').click();
+  await expect(page.locator('#sessionMenuModal')).toHaveClass(/sheet-open/);
+}
+
+export async function chooseSessionMenuItem(page: Page, row: Locator, action: 'toggle-read' | 'close' | 'delete') {
+  await openSessionMenu(page, row);
+  await sessionMenuItem(page, action).click();
 }
 
 export function sessionStatusChipByInstance(page: Page, instanceId: string) {

@@ -26,6 +26,8 @@ export function createSheetController(context, {
   // （如「放弃未保存的修改？」）。单槽位下内层关闭会把外层的 keydown 监听器一并摘掉
   // （变量被内层开启时覆盖，内层 close 时置 null），外层就此永久失去 Tab 陷阱，直到重新打开。
   let sheetStack = []; // { el, focusPrev, keyHandler }
+  // 已关、收起动画（300ms）还没走完、还没还焦的层：{ el, focusPrev }。见 openSheet 的接力。
+  let closingSheets = [];
   let confirmResolve = null;
 
   function sheetFocusables(root) {
@@ -44,7 +46,12 @@ export function createSheetController(context, {
 
   function openSheet(el) {
     haptic('tap');
-    const focusPrev = doc.activeElement;
+    let focusPrev = doc.activeElement;
+    // 接力：焦点还停在一层正在收起的 sheet 里（抽屉会话行「⋯」菜单点「删除」：先收菜单、再开确认）。
+    // 本层关闭时该还的是那层当初的触发按钮，不是那层里的项——那层到时已 display:none，接不住焦点，会丢到 body。
+    // 那层到点还焦时不抢本层的焦点，见 closeSheet。
+    const relay = closingSheets.find(c => c.el.contains?.(focusPrev));
+    if (relay) focusPrev = relay.focusPrev;
     el.classList.remove('hidden');
     // Force reflow
     el.offsetHeight;
@@ -85,10 +92,18 @@ export function createSheetController(context, {
     syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
+    const pending = { el, focusPrev: entry?.focusPrev };
+    closingSheets.push(pending);
     setTimeout(() => {
+      closingSheets = closingSheets.filter(c => c !== pending);
       if (!el.classList.contains('sheet-open')) {
         el.classList.add('hidden');
-        try { entry?.focusPrev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
+        // 这 300ms 里焦点已进了另一层开着的 sheet（接力开的确认框）：不抢——还回去的触发按钮压在它后面，
+        // 之后 Tab / 回车都落在模态层背后（Codex review #407）
+        const focusInOpenSheet = sheetStack.some(s => s.el !== el && s.el.classList.contains('sheet-open') && s.el.contains?.(doc.activeElement));
+        if (!focusInOpenSheet) {
+          try { pending.focusPrev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
+        }
       }
     }, 300);
   }

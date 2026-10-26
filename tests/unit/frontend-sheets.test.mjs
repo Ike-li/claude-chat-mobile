@@ -34,6 +34,7 @@ function mkClassList() {
 }
 
 // 极简 sheet 元素：classList + querySelectorAll（忽略选择器字符串，直接返回注入的可聚焦子项）。
+// contains 只认注入的可聚焦子项——够判断「焦点在不在这层 sheet 里」。
 function sheetNode(focusables = []) {
   return {
     _attrs: {},
@@ -43,6 +44,7 @@ function sheetNode(focusables = []) {
     getAttribute(k) { return this._attrs[k] ?? null; },
     setAttribute(k, v) { this._attrs[k] = String(v); },
     querySelectorAll() { return this._focusables; },
+    contains(n) { return this._focusables.includes(n); },
   };
 }
 
@@ -125,6 +127,38 @@ test('嵌套 sheet：appConfirm 在已开着的业务 sheet 之上打开——�
 
   controller.closeSheet(outer);
   assert.equal(doc._count('keydown'), 0);
+});
+
+// 接力：收起一层、紧接着开另一层（抽屉会话行「⋯」菜单里点「删除」：先收菜单、再开确认）。
+// 收起那层要等 300ms 动画才还焦；还焦目标是它打开前的触发按钮——此刻已经压在确认框后面了。
+function relayHarness() {
+  const { doc, controller } = harness();
+  const node = () => { const n = focusableNode(); n._doc = doc; return n; };
+  const trigger = node(), item = node(), ok = node();
+  const menu = sheetNode([item]), confirm = sheetNode([ok]);
+  doc.activeElement = trigger;
+  controller.openSheet(menu); // 焦点进菜单（rAF 已桩成同步）
+  assert.equal(doc.activeElement, item);
+  controller.closeSheet(menu);
+  controller.openSheet(confirm);
+  assert.equal(doc.activeElement, ok);
+  return { doc, controller, trigger, confirm, ok };
+}
+
+test('接力：前一层到点还焦时，不得把焦点从刚打开的下一层里拽走', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { doc, ok } = relayHarness();
+  t.mock.timers.tick(300); // 菜单的收起动画到点
+  assert.equal(doc.activeElement, ok, '焦点被还到确认框背后的触发按钮：之后 Tab / 回车都落在模态层后面');
+});
+
+test('接力：下一层关闭后，焦点回到最初的触发按钮，而不是前一层里已经藏起来的项', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { doc, controller, trigger, confirm } = relayHarness();
+  t.mock.timers.tick(300);
+  controller.closeSheet(confirm);
+  t.mock.timers.tick(300);
+  assert.equal(doc.activeElement, trigger, '焦点还给了已收起菜单里的项：真实 DOM 里它 display:none，焦点直接丢到 body');
 });
 
 // appConfirm 的接线要真跑到，就必须把 confirmModal / confirmOk / confirmCancel 这几个节点造出来：

@@ -3,6 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import {
+  chooseSessionMenuItem,
   expandWorkspace,
   expectSidebarClosed,
   MAIN_WORKSPACE,
@@ -99,7 +100,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(questionRow.locator('[data-session-status]')).toHaveText('需要你');
     await expect(questionRow.locator('[data-session-status]')).toHaveAttribute('aria-label', '需要你');
 
-    await questionRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, questionRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 
@@ -132,7 +133,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(closedRow.locator('[data-session-status]')).toHaveText('需要你');
     await expect(closedRow.locator('[data-session-status]')).toHaveAttribute('aria-label', '需要你');
 
-    await closedRow.locator('button', { hasText: '✕' }).click();
+    await chooseSessionMenuItem(page, closedRow, 'close');
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
 

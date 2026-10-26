@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, sessionRowByInstance, startNewSessionInWorkspace, workspaceRow } from '../../helpers/sidebar-ui';
+import { MAIN_WORKSPACE, chooseSessionMenuItem, expandWorkspace, expectSidebarClosed, openSessionsSidebar, sessionRowByInstance, startNewSessionInWorkspace, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 「已连接的文件夹」（2026-09-24）：抽屉按项目分组，照官方桌面端的侧栏——
 //   · 已连接文件夹里有会话的子文件夹自成一节，紧跟所属文件夹，标题「根 › 相对路径」；
@@ -51,7 +51,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expandWorkspace(page, SCRATCH);
     const row = subtreeOf(page, SCRATCH).locator('[data-testid="session-row"]', { hasText: '以前的无文件夹会话' });
     await expect(row).toHaveCount(1);
-    await row.locator('[data-testid="session-delete"]').click();
+    await chooseSessionMenuItem(page, row, 'delete');
     await expect(page.locator('#confirmBody'), '不说一声就把模型写在临时目录里的文件一起删了').toContainText('临时目录和里面的文件会一并删除');
     await page.locator('#confirmOk').click();
     await expect(subtreeOf(page, SCRATCH).locator('[data-testid="session-row"]', { hasText: '以前的无文件夹会话' })).toHaveCount(0);

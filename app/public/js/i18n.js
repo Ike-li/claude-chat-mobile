@@ -578,8 +578,9 @@ export const EN_DICT = Object.freeze({
   '{n} 个工作区未能加载': '{n} workspaces failed to load',
   '标为未读': 'Mark as unread',
   '标为已读': 'Mark as read',
-  '标为未读后，这一行会一直显示「未读」，直到你再次打开它。': 'Marked as unread, this row keeps its "Unread" tag until you open the session again.',
-  '标为已读后，这一行的「未读」提示消失。': 'Marked as read, the "Unread" tag on this row goes away.',
+  // 会话行「⋯」菜单
+  '会话操作': 'Session actions',
+  '先关闭会话才能删除': 'Close the session before deleting it',
   // 文件夹行长按「全部标为已读」（#300）
   '全部标为已读': 'Mark all as read',
   // 文件夹置顶（#305）

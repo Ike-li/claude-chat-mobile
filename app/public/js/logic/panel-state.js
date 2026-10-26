@@ -225,6 +225,21 @@ export function formatSessionRowSubtitle({
   return parts.join(' · ');
 }
 
+// 会话行「⋯」菜单的项（一行只有这一个入口，对齐桌面端 SessionDropdownMenu 的顺序：标已读/未读在最上，删除垫底）。
+// 删除对已打开的会话灰掉而不是藏起来：服务端会拒删正被驱动的会话，藏起来用户不知道怎样才能删。
+// 无 id 的新会话还没落盘，无从标记也无从删除，只剩关闭。
+export function sessionRowMenuItems({ hasId = false, live = false, unread = false } = {}) {
+  const items = [];
+  if (hasId) items.push({ action: 'toggle-read', label: unread ? t('标为已读') : t('标为未读') });
+  if (live) items.push({ action: 'close', label: t('关闭会话') });
+  if (hasId) {
+    items.push(live
+      ? { action: 'delete', label: t('删除会话'), danger: true, disabled: true, hint: t('先关闭会话才能删除') }
+      : { action: 'delete', label: t('删除会话'), danger: true });
+  }
+  return items;
+}
+
 // 文件 / 改动面板的目标目录（2026-09-11）。
 //
 // 【为什么不能直接用工作区 cwd】托管 worktree 的会话打开后，工作区轴仍归父仓（产品判据：

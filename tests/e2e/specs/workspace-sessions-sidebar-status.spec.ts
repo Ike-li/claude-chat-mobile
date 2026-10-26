@@ -11,8 +11,10 @@ import {
   expectSessionStatusChip,
   expectSidebarClosed,
   expectSidebarOpen,
+  openSessionMenu,
   openSessionsSidebar,
   sessionButtonByTitle,
+  sessionMenuItem,
   sessionRowByInstance,
   showMoreSessions,
   workspaceRow,
@@ -729,12 +731,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 长按会话行 → 标为未读 / 标为已读（2026-09-02）。触屏路径先只发 pointerdown——
-  // 500ms 后由前端自己的计时器触发（web-first 断言等它到点，不用被门禁禁掉的 waitForTimeout）；
-  // 桌面右键（contextmenu）走同一个入口。长按松手时浏览器仍会派发 click，必须被吞掉：触屏的 click
-  // 按抬手位置命中，此时确认 sheet 已盖在行上，click 落在遮罩上会把 sheet 当场关掉（O101）。
+  // 会话行「⋯」→ 标为未读 / 标为已读（2026-09-02 起是长按，2026-10-25 挪进菜单，长按不再有动作）。
+  // 菜单项本身就是显式操作，点了直接生效，不再追问一次确认。
   // 标记落 localStorage，刷新后仍在；只有再次打开该会话才清。
-  test('P0-11ad 长按会话行标为未读：行上出现「未读」、目录头计数、刷新仍在、再长按标回已读', async ({ page }) => {
+  test('P0-11ad 菜单里标为未读：行上出现「未读」、目录头计数、刷新仍在、再标回已读', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
     const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
@@ -744,20 +744,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
     await markSessionRows(page, MAIN_WORKSPACE);
 
-    await row.dispatchEvent('pointerdown', { pointerId: 1, button: 0, isPrimary: true, clientX: 120, clientY: 200 });
-    const modal = page.locator('#confirmModal');
-    await expect(modal).toHaveClass(/sheet-open/);
-    await expect(page.locator('#confirmTitle')).toHaveText('Archived Planning Session');
-    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
-    // 抬手：pointerup 在行上，补发的 click 落在确认 sheet 的遮罩上——必须被吞掉，sheet 不能被它关掉
-    await row.dispatchEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 200 });
-    await modal.dispatchEvent('click');
-    await expect(modal).toHaveClass(/sheet-open/);
-    await page.locator('#confirmOk').click();
+    const modal = page.locator('#sessionMenuModal');
+    await openSessionMenu(page, row);
+    await expect(page.locator('#sessionMenuTitle')).toHaveText('Archived Planning Session');
+    await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为未读');
+    await sessionMenuItem(page, 'toggle-read').click();
     await expect(modal).not.toHaveClass(/sheet-open/);
-    // 答完确认要回到抽屉看见那一行的新状态：确认 sheet 上的点击不算「点抽屉外面」（app.js 全局 click 收抽屉的豁免）
+    // 点完要回到抽屉看见那一行的新状态：菜单 sheet 上的点击不算「点抽屉外面」（app.js 全局 click 收抽屉的豁免）
     await expectSidebarOpen(page);
-    // 标记是原地重刷这一行，不重建节点（长按监听仍挂在原节点上）
+    // 标记是原地重刷这一行，不重建节点
     expect(await readSessionRowMarks(page, MAIN_WORKSPACE)).toContain('preserved');
 
     await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
@@ -773,11 +768,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(rowAfter.locator('[data-testid="unread-mark"]')).toHaveText('未读');
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
 
-    // 桌面右键同效；已标过的这次是「标为已读」
-    await rowAfter.dispatchEvent('contextmenu');
-    await expect(modal).toHaveClass(/sheet-open/);
-    await expect(page.locator('#confirmOk')).toHaveText('标为已读');
-    await page.locator('#confirmOk').click();
+    // 已标过的这次是「标为已读」
+    await openSessionMenu(page, rowAfter);
+    await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为已读');
+    await sessionMenuItem(page, 'toggle-read').click();
     await expect(rowAfter.locator('[data-testid="unread-mark"]')).toHaveCount(0);
     await expect(rowAfter.locator('[data-session-head] > span').first()).not.toHaveClass(/font-semibold/);
     await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toBeHidden();
@@ -785,16 +779,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 长按标未读的公共动作：桌面右键走与触屏长按同一个入口（见 P0-11ad）。
+  // 在「⋯」菜单里标未读的公共动作（见 P0-11ad）。
   async function markRowUnread(page: Page, sessionId: string) {
     const row = page.locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`);
     await expect(row).toBeVisible();
-    await row.dispatchEvent('contextmenu');
-    const modal = page.locator('#confirmModal');
-    await expect(modal).toHaveClass(/sheet-open/);
-    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
-    await page.locator('#confirmOk').click();
-    await expect(modal).not.toHaveClass(/sheet-open/);
+    await openSessionMenu(page, row);
+    await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为未读');
+    await sessionMenuItem(page, 'toggle-read').click();
+    await expect(page.locator('#sessionMenuModal')).not.toHaveClass(/sheet-open/);
   }
 
   // P0-11aq（照抄桌面端 Show more；前身是验收 O81 的「显示全部 / 加载更多」）：每点一次多显示一档（mock 每档 3 条），
@@ -970,7 +962,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // P0-11ak（2026-09-07 真机报告）：在【当前正打开的】会话上长按标未读，屏幕上什么都没发生——
+  // P0-11ak（2026-09-07 真机报告）：在【当前正打开的】会话上标未读（当时是长按，现在在「⋯」菜单里），屏幕上什么都没发生——
   // 确认框刚承诺「这一行会一直显示未读」，得切到别的会话才看见它浮出来。根因是 isSessionUnread 里
   // isViewing 短路排在 manual 前面，把「时间判据不可信」这条理由错施加到了用户的显式输入上。
   // 上面的 P0-11ad 标的是非当前会话（mock-session-archived），结构上走不到这条路径，故单开一条。
@@ -986,11 +978,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
 
-    await viewingRow.dispatchEvent('contextmenu');
-    const modal = page.locator('#confirmModal');
-    await expect(modal).toHaveClass(/sheet-open/);
-    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
-    await page.locator('#confirmOk').click();
+    const modal = page.locator('#sessionMenuModal');
+    await openSessionMenu(page, viewingRow);
+    await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为未读');
+    await sessionMenuItem(page, 'toggle-read').click();
     await expect(modal).not.toHaveClass(/sheet-open/);
 
     // 核心：没有切会话、没有刷新，这一行当场就带上 chip（修复前此处恒为 0，正是那份真机报告）
@@ -1000,14 +991,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
 
     // 标回已读同样当场生效：菜单此前靠 isManualUnread 旁路才能改口，现在 isUnread 一个口就够。
-    // 这里连着第二次 contextmenu 是有意的——它同时是 long-press.js swallowNextClick 闩的集成层见证：
-    // 那个闩此前由 contextmenu 也置起，而右键既不走主键 pointerdown 也不派发 click，两条清除路都不走，
-    // 于是同一行右键第二次起静默无反应（2026-09-07 同批修复；P0-11ad 两次之间恰好夹了个 click 才没撞上）。
-    await viewingRow.dispatchEvent('contextmenu');
-    // 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，这条断言会恒绿
-    await expect(modal).toHaveClass(/sheet-open/);
-    await expect(page.locator('#confirmOk')).toHaveText('标为已读');
-    await page.locator('#confirmOk').click();
+    // （右键连按两次第二次静默的那个 long-press.js 闩，会话行不再用长按后由 frontend-app-modules 单测守。）
+    // openSessionMenu 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，这条断言会恒绿
+    await openSessionMenu(page, viewingRow);
+    await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为已读');
+    await sessionMenuItem(page, 'toggle-read').click();
     await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
 
