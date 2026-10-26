@@ -378,15 +378,6 @@ export function isRestoredBoundary(prevEntry, entry) {
   return !!prevEntry?.restored && !entry?.restored;
 }
 
-// 长按历史气泡「从这里分叉」该发哪条消息的 uuid 给 forkSession（upToMessageId）：
-// assistant 气泡 = 分叉点就是它自己；user 气泡故意不用自身 uuid，而是取它前面最近一条 assistant 的
-// uuid——语义是「从这里开始重新问」（新会话里下一步就是重新打字），而非把这条提问原样复制进新会话末尾。
-// DOM 侧负责找 precedingAssistantUuid（沿 previousElementSibling 回溯），本函数只做决策、不碰 DOM。
-export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistantUuid = null } = {}) {
-  if (role === 'assistant') return ownUuid || null;
-  return precedingAssistantUuid || null;
-}
-
 // 页面是否从「本地/局域网/隧道内」打开——决定 unauthorized 时有没有 token 门可弹。
 // 100.64.0.0/10 是 Tailscale 用的 CGNAT 段（正则精确到 /10，不放整个 100/8：100/8 其余部分是可路由公网）。
 // `.ts.net` 是同一件事的域名那半：MagicDNS 开着时手机上输入的是 `<主机名>.<tailnet>.ts.net`，

@@ -1,7 +1,7 @@
 // public/js/app/folder-drag.js —— 抽屉文件夹行长按拖动排序（2026-10-26，取代 #305 置顶）。
 //
 // 只挂在连接根的行上；拖的是整块：根的头行 + 展开区 + 紧随其后的子文件夹小节（composeProjects 保证它们相邻），
-// 「无文件夹」与「不在已连接的文件夹里」不参与。按住 holdMs 不动（容差同 long-press.js）才拖起来，之前手指一动就交还
+// 「无文件夹」与「不在已连接的文件夹里」不参与。按住 holdMs 不动（容差 moveTolerance）才拖起来，之前手指一动就交还
 // 给浏览器滚动。拖起来后 #sessionPanel 加 folder-dragging，CSS 收起所有展开区与子文件夹小节，只剩各根的头行——
 // 展开区高矮不一，不收起来的话越过一个展开的根要拖过它整段会话列表。收起与放下时各补一次 scrollTop，让被拖的行
 // 尽量停在手指下；列表已经滚到顶时补不满，行会离开手指——所以之后只认手指的【位移】：行中线 = 拖起来时的中线 +
@@ -12,7 +12,7 @@
 // - 触屏 touchmove 在行上 preventDefault：不拦浏览器就开始滚动并发 pointercancel，拖动当场断掉；同时 stopPropagation，
 //   文档上抽屉的左滑收起（drawer.js）收不到这次横向位移——会话行的侧滑曾因此把抽屉整个收走。
 // - 松手补发的 click：拖起来又原地松手时浏览器照常补发（行挪过位置的话 Chrome 不发），不拦就把这一节展开或折叠。
-//   拦法照 long-press.js：文档 capture 阶段吞一次，下一次 pointerdown / keydown 撤掉。
+//   拦法：文档 capture 阶段吞一次，下一次 pointerdown / keydown 撤掉。
 // - 触屏长按的 contextmenu（Android 会补发）：拦掉，免得弹系统菜单。鼠标右键不拦。
 //
 // 拖动中行可能被局部重建换掉（instances 广播），那时手里的节点已不在文档里：放弃这次拖动，交给 onCancel 按服务端顺序重画。
