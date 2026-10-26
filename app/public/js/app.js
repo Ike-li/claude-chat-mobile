@@ -181,6 +181,7 @@ import {
   shouldRerenderSessionList,
   buildDirInstanceSignatures,
   diffDirSignatures,
+  dirPanelStructuralKey,
   permissionModeTileSpecs,
   resolveComposerPlaceholder,
   resolveTurnEndScroll,
@@ -783,6 +784,9 @@ import { createGateFocusController } from './app/focus-layers.js';
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
+  // 纯换序（拖动排序广播回来的新顺序，集合不变）单独判——不算结构性变化，只挪 DOM 位置，不触发
+  // openSessionPanel 的 UX-007 强制展开（2026-10-26 回归：挪别的文件夹顺序，当前工作区被连带强制展开）。
+  let _lastDirOrderKey = null;
   // P3：按目录分键的实例签名（cwd → 签名片段，见 logic.js buildDirInstanceSignatures）+ diff 出的
   // "签名变了的目录"只重建那几个目录的 DOM 子树，其余目录保持原样（不撤离滚动位置/侧滑态等本地态）。
   let _lastDirSignatures = {};
@@ -5652,9 +5656,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     //   "显示更多"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
     // 状态（busy/idle/permission/error）不进任何一层——由更新后的 workdirStates 驱动 refreshDirBadges
     // 实时刷新角标。expandedDirs 变化由 toggleBtn.onclick 直接调 populateSubtree，不经此路径。
-    const _structuralKey = `${availableDirs.join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
+    const _structuralKey = dirPanelStructuralKey({ dirs: availableDirs, viewingInstanceId, currentCwd });
     const _structuralChanged = _structuralKey !== _lastPanelStructKey;
     _lastPanelStructKey = _structuralKey;
+    const _dirOrderKey = availableDirs.join('|');
+    const _orderChanged = !_structuralChanged && _dirOrderKey !== _lastDirOrderKey;
+    _lastDirOrderKey = _dirOrderKey;
     const _nextDirSignatures = buildDirInstanceSignatures(instancesList, availableDirs);
     const _changedDirs = diffDirSignatures(_lastDirSignatures, _nextDirSignatures);
     _lastDirSignatures = _nextDirSignatures;
@@ -5663,6 +5670,11 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (isDesktop || isPanelOpen) {
       if (_structuralChanged) {
         openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
+      } else if (_orderChanged) {
+        reorderDirSections(availableDirs); // 纯换序：只挪 DOM 位置，不碰 expandedDirs/不强制展开
+        refreshDirBadges();
+        refreshSessionStatusChips();
+        refreshNeedsYou();
       } else if (_changedDirs.length) {
         rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
         refreshDirBadges();
@@ -7846,6 +7858,26 @@ import { createGateFocusController } from './app/focus-layers.js';
       section.appendChild(sessionRow({ id: inst.sessionId || null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, inst.cwd));
     }
     return section;
+  }
+
+  // 纯换序（拖动排序广播回来的新顺序，目录集合不变）：按新顺序把已有的 dirRow/subtree 节点挪位置，
+  // 不重建内容、不碰 expandedDirs——换序不该触发 openSessionPanel() 那条全量重建路径（它会顺带把
+  // UX-007「当前工作区强制展开」套在跟这次换序无关的目录上，2026-10-26 回归）。「无文件夹」之外
+  // 的「运行中（不在已连接的文件夹里）」那一节不在 dirSectionNodes 里，挪完后把它续回最后。
+  function reorderDirSections(order) {
+    for (const d of order) {
+      const section = dirSectionNodes.get(d);
+      if (!section || !section.dirRow.isConnected) {
+        // 防御：面板还没针对这个目录做过全量渲染（同 rebuildDirSections 的同名防御）。
+        // 自愈：退化为全量重建，好过留下一段挪了一半的面板。
+        openSessionPanel();
+        return;
+      }
+      sessionPanel.appendChild(section.dirRow);
+      sessionPanel.appendChild(section.subtree);
+    }
+    const unowned = sessionPanel.querySelector('[data-testid="unowned-live-section"]');
+    if (unowned) sessionPanel.appendChild(unowned);
   }
 
   // P3 抽屉局部重建：只重建 changedDirs 列出的目录（调用方=setInstances，changedDirs 来自
