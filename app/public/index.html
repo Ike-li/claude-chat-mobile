@@ -326,11 +326,20 @@
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <div class="sheet-handle"></div>
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
+      <!-- 多题提问的题目标签栏，对齐 CLI 的「☐ 题1  ☑ 题2  ✓ Submit」；单题时隐藏 -->
+      <div id="questionTabs" class="hidden flex gap-1.5 overflow-x-auto pb-1 mb-2"></div>
       <div id="questionHeader" class="hidden text-xs text-ink-faint mb-1"></div>
       <div id="questionText" class="text-sm mb-2 text-ink"></div>
       <div id="questionMultiHint" class="hidden text-xs text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
       <div id="questionOptions" class="space-y-2 mb-3"></div>
       <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">确认选择</button>
+      <!-- 多题提问的复查页（对齐 CLI 的 Review your answers）：逐题列答案、点一题回去改，全答完才能提交 -->
+      <div id="questionReview" class="hidden mb-3">
+        <div class="text-sm text-ink mb-2">检查你的回答，点一题可回去改</div>
+        <div id="questionReviewList" class="space-y-2 mb-2"></div>
+        <div id="questionReviewMissing" class="hidden text-xs text-warning mb-2"></div>
+        <button type="button" id="questionGroupSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">提交回答</button>
+      </div>
       <div id="questionOtherWrap" class="mb-3 space-y-2">
         <button type="button" id="questionOtherToggle" class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3">其他…</button>
         <div id="questionOtherPanel" class="hidden space-y-2">

@@ -4,6 +4,7 @@
 // 本文件只覆盖「跨卡片/跨会话的残留状态」这一域——那是整体搬迁最容易漏的一类：
 // 原来散在顶层的量各自被四段逐字复制的清理序列照顾，收敛成一个 clearAll() 之后，
 // 漏进那个动词的量就再也没人清了。
+// 多题组卡的两条也属这一域：别的设备先答掉组里一题、切会话收卡后再重建（E2E 造不出旧页面逐题作答那一档）。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -20,7 +21,9 @@ function fakeEl(id = '') {
     id,
     children: [],
     textContent: '',
-    innerHTML: '',
+    // 控制器重绘列表前写 innerHTML = '' 清空；替身照做，否则 children 会叠着上一次的选项
+    set innerHTML(v) { if (v === '') el.children.length = 0; },
+    get innerHTML() { return ''; },
     value: '',
     checked: false,
     disabled: false,
@@ -129,4 +132,47 @@ test('防误触结束后才核验出指纹不符，「允许」也随即禁用�
   await approvals.verifyPermIntegrity(permRequest('perm_1', { fp: BAD_FP }));
   assert.equal(byId('permAllow').disabled, true, '核验出不符后「允许」仍可点');
   assert.equal(byId('permDeny').disabled, false, '「拒绝」不该因完整性不符被禁用');
+});
+
+// ── 多题组卡（对齐 CLI：一次问多道时合成一张卡，答案攒成草稿、最后整组提交）──────────────
+const groupQ = (i, count = 3) => ({
+  requestId: `toolu_g#${i}`, text: `Q${i + 1}`, options: ['A', 'B'], questionIndex: i, questionCount: count,
+});
+// 点当前题的第 n 个选项（选项外包一层 wrap，按钮是 wrap 的第一个子节点）
+const pickOption = (byId, n) => byId('questionOptions').children[n].children[0].onclick();
+const lastAnswer = emitted => emitted.filter(e => e.name === 'user:answer').at(-1)?.payload;
+
+// 别的设备上没刷新的旧页面仍走逐题即交：服务端已收下那一题，整组提交再带上它会被整组拒收
+// （agent.js resolveQuestionGroup 要求恰好覆盖未答题），而本机早已乐观关卡——这一轮就悬到 TTL。
+test('多题组卡：别的设备先答掉组里一题，那题从组卡移除，本机整组提交只交剩下的题', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i)));
+  approvals.resolveQuestion('toolu_g#0');
+  assert.equal(approvals.hasPending(), true, '组里还有没答的题，卡不能关');
+
+  pickOption(byId, 1); // 第 2 题 → B，自动跳第 3 题
+  pickOption(byId, 0); // 第 3 题 → A，跳到复查页
+  byId('questionGroupSubmit').onclick();
+
+  assert.deepEqual(lastAnswer(emitted), {
+    requestId: 'toolu_g',
+    answers: [{ index: 1, optionIndex: 1 }, { index: 2, optionIndex: 0 }],
+    instanceId: null,
+  });
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('多题组卡：切会话收卡（clearAll）再切回来，快照重建的组卡接着用之前的草稿', () => {
+  const { approvals, byId, emitted } = mount();
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  pickOption(byId, 1); // 第 1 题 → B
+  approvals.clearAll();
+
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2))); // 切回来时 pending 快照补发
+  byId('questionTabs').children[1].onclick(); // 直接切到第 2 题
+  pickOption(byId, 0);
+  byId('questionGroupSubmit').onclick();
+
+  assert.deepEqual(lastAnswer(emitted)?.answers, [{ index: 0, optionIndex: 1 }, { index: 1, optionIndex: 0 }],
+    '第 1 题的草稿在收卡后丢了，用户切个会话回来就得从头答');
 });

@@ -97,6 +97,7 @@ let pushTestNtfy = null;
 let untitledSessionArmed = false;
 let pendingPermission = null;
 let pendingQuestion = null;
+let pendingQuestionGroup = null; // test:question-group*：一次问多道、整组作答
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
@@ -675,6 +676,7 @@ function resetMockState() {
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
+  pendingQuestionGroup = null;
   trustedDevices = createTrustedDevices();
   accessBypassActive = false;
   queuedUndeliveredClientMessageIds = [];
@@ -1782,6 +1784,7 @@ io.on('connection', socket => {
       const shouldEmitLateClosedSessionEvents = lateClosedSessionEventsInstanceId === instanceId;
       if (pendingPermission?.instanceId === instanceId) pendingPermission = null;
       if (pendingQuestion?.instanceId === instanceId) pendingQuestion = null;
+      if (pendingQuestionGroup?.instanceId === instanceId) pendingQuestionGroup = null;
       if (syncPendingSnapshotInstanceId === instanceId) {
         syncPendingSnapshot = null;
         syncPendingSnapshotInstanceId = null;
@@ -4122,6 +4125,48 @@ io.on('connection', socket => {
             type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
           });
           pendingQuestion = null;
+        }
+      },
+    },
+    {
+      // P0-08j/k：一次问三道（单选 / 多选 / 单选），逐题各发一条 question、带 questionIndex / questionCount，
+      // 与真 server 的 handleQuestion 同形（agent.js）。回程是整组一条 user:answer { requestId: toolUseID, answers }。
+      commands: ['test:question-group', 'test:question-group-remote-resolved'],
+      run: async ({ cmd, activeInst }) => {
+        console.log(`[mock] Starting ${cmd} sequence`);
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+        });
+        questSeq += 1;
+        const toolUseId = `t_ask_group_${questSeq}`;
+        const messageId = `msg_quest_group_${questSeq}`;
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId, name: 'AskUserQuestion', inputSummary: 'Deploy plan (3 questions)' }
+        });
+        await delay(300);
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+        });
+        const questions = [
+          { header: 'Branch', text: 'Which branch should we deploy?', multiSelect: false, options: ['main', 'dev'] },
+          { header: 'Checks', text: 'Which checks must pass first?', multiSelect: true, options: ['lint', 'unit', 'e2e'] },
+          { header: 'Notify', text: 'Who should we notify?', multiSelect: false, options: ['nobody', 'team'] },
+        ];
+        pendingQuestionGroup = { toolUseId, messageId, questions, instanceId: viewingInstanceId };
+        questions.forEach((q, i) => {
+          socket.emit('agent:event', {
+            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'question', payload: { requestId: `${toolUseId}#${i}`, ...q, questionIndex: i, questionCount: questions.length }
+          });
+        });
+        if (cmd === 'test:question-group-remote-resolved') {
+          await delay(600);
+          await finishMockQuestionGroup(activeInst, questions.map(q => q.options[0]), 'Answered on another trusted device');
         }
       },
     },
@@ -6779,7 +6824,55 @@ io.on('connection', socket => {
   });
 
   // Handle user question choice selection (optionIndex / optionIndexes / freeText)
+  // 整组作答收尾：逐题 + 整组 request_resolved（与真 server 同序）、tool_result、复述答案、result。
+  // 本机整组提交与「其它设备已答」共用。
+  async function finishMockQuestionGroup(activeInst, labels, via) {
+    const group = pendingQuestionGroup;
+    pendingQuestionGroup = null;
+    const summary = group.questions.map((q, i) => `${q.header}=${labels[i]}`).join('; ');
+    group.questions.forEach((_, i) => io.emit('agent:event', {
+      seq: 5 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'request_resolved', payload: { requestId: `${group.toolUseId}#${i}`, kind: 'question', outcome: 'answered' }
+    }));
+    io.emit('agent:event', {
+      seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'request_resolved', payload: { requestId: group.toolUseId, kind: 'question', outcome: summary }
+    });
+    socket.emit('agent:event', {
+      seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'tool_result', payload: { toolUseId: group.toolUseId, ok: true, outputSummary: `${via}: ${summary}`, denyKind: 'answered' }
+    });
+    socket.emit('agent:event', {
+      seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'text_delta', payload: { messageId: group.messageId, text: `${via}: ${summary}` }
+    });
+    await delay(250);
+    activeInst.state = 'idle';
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: activeInst.cwd, ...mockDirFields(), instances: mockInstances, service: mockServicePayload() }
+    });
+    socket.emit('agent:event', {
+      seq: 11, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'result', payload: { messageId: group.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+    });
+  }
+
   socket.on('user:answer', async payload => {
+    // 整组提交：与真 server 一样，没覆盖全部题就整组不收（agent.js resolveQuestionGroup）
+    if (Array.isArray(payload?.answers) && pendingQuestionGroup?.toolUseId === payload.requestId) {
+      const { questions } = pendingQuestionGroup;
+      if (payload.answers.length !== questions.length) return;
+      const labels = questions.map((q, i) => {
+        const a = payload.answers.find(x => x?.index === i) || {};
+        if (typeof a.freeText === 'string') return a.freeText;
+        if (Array.isArray(a.optionIndexes)) return a.optionIndexes.map(k => q.options[k]).join('、');
+        return q.options[a.optionIndex];
+      });
+      const activeInst = mockInstances.find(i => i.instanceId === (payload.instanceId || viewingInstanceId));
+      await finishMockQuestionGroup(activeInst, labels, 'Group answers');
+      return;
+    }
     const { requestId, optionIndex, optionIndexes, freeText, instanceId } = payload || {};
     console.log(`[mock] User answer received: requestId=${requestId}, choice=${optionIndex}, multi=${Array.isArray(optionIndexes) ? optionIndexes.join(',') : ''}, freeText=${freeText ? '[set]' : ''}`);
 

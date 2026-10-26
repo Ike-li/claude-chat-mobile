@@ -226,6 +226,16 @@ export const EN_DICT = Object.freeze({
   '提交其他答案': 'Submit other answer',
   '跳过并中止本轮': 'Skip and interrupt turn',
   '可点选项、多选确认、填「其他」，或跳过中止本轮': 'Tap an option, confirm a multi-select, fill in "Other", or skip to interrupt the turn',
+  // 多题提问的组卡（对齐 CLI 的题目标签栏与 Review your answers）
+  '可多选': 'Multiple choices allowed',
+  '下一题': 'Next',
+  '检查回答': 'Review answers',
+  '第 {n} 题': 'Q{n}',
+  '提交': 'Submit',
+  '检查你的回答，点一题可回去改': 'Review your answers — tap a question to change it',
+  '未作答': 'Not answered',
+  '还有 {n} 题没答，答完才能提交': '{n} unanswered — answer all questions to submit',
+  '提交回答': 'Submit answers',
 
   // —— 删除会话 / 通用确认 ——
   '🗑 删除会话？': '🗑 Delete session?',
