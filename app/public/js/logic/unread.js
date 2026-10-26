@@ -84,7 +84,8 @@ export function isManualUnreadNow(manual, seen, sessionId) {
 
 // 服务端权威态并入本地态。remote 无效（离线、ack 超时、老服务端不认这个事件）时原样返回 local：
 // 功能降级回「每设备独立」，绝不清空——本地已读表丢一次，用户面前就是一整屏假未读。
-export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 } = {}) {
+// folders（文件夹「全部标为已读」的水位）服务端不回传，本地这份只为离线后随 read:sync 补报，原样带过去。
+export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100, folderCap = 200 } = {}) {
   if (!remote || typeof remote !== 'object' || Array.isArray(remote)
     || typeof remote.baselineTs !== 'number' || !Number.isFinite(remote.baselineTs)) {
     return local;
@@ -93,6 +94,7 @@ export function mergeReadState(local, remote, { seenCap = 500, manualCap = 100 }
     baselineTs: remote.baselineTs,
     seen: capNewest(mergeLatest(local?.seen, remote.seen), seenCap),
     manual: capNewest(mergeLatest(local?.manual, remote.manual), manualCap),
+    folders: capNewest(mergeLatest(local?.folders, remote.folders), folderCap),
   };
 }
 
@@ -143,16 +145,16 @@ export function setManualUnreadEntry(manual, sessionId, on, now, cap = 100) {
 
 // localStorage 原文 → 状态。任何解析失败/形状不对都回落全新状态（基线=now）：
 // 隐私模式、首装、坏数据同一条降级路径，绝不抛。已有合法基线必须保留——被 now 覆盖
-// 等于每次启动重置基线，点永远不亮。manual 字段是后加的：旧落盘缺它时回空表，不重置基线/seen。
+// 等于每次启动重置基线，点永远不亮。manual、folders 字段是后加的：旧落盘缺它们时回空表，不重置基线/seen。
 export function parseUnreadState(raw, now) {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       && typeof parsed.baselineTs === 'number' && Number.isFinite(parsed.baselineTs)) {
-      return { baselineTs: parsed.baselineTs, seen: numericMap(parsed.seen), manual: numericMap(parsed.manual) };
+      return { baselineTs: parsed.baselineTs, seen: numericMap(parsed.seen), manual: numericMap(parsed.manual), folders: numericMap(parsed.folders) };
     }
   } catch { /* 坏 JSON → 全新状态 */ }
-  return { baselineTs: now, seen: {}, manual: {} };
+  return { baselineTs: now, seen: {}, manual: {}, folders: {} };
 }
 
 // 只保留「值是有限数」的条目——防手改/旧版本残留把非数字混进比较。
@@ -166,5 +168,5 @@ function numericMap(src) {
 }
 
 export function serializeUnreadState(state) {
-  return JSON.stringify({ baselineTs: state.baselineTs, seen: state.seen, manual: state.manual || {} });
+  return JSON.stringify({ baselineTs: state.baselineTs, seen: state.seen, manual: state.manual || {}, folders: state.folders || {} });
 }

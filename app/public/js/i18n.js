@@ -507,8 +507,6 @@ export const EN_DICT = Object.freeze({
   '已写入 N 项，已生效': 'Wrote N item(s); already in effect',
   '排队中 · 本轮结束后自动发送': 'Queued · sends automatically when this turn ends',
   '未发送 · 本轮已停止，需要时点重发': 'Not sent · this turn was stopped; tap Resend if you still want it',
-  '加载更多会话（还有 {n} 个）': 'Load more sessions ({n} more)',
-  '加载更多会话': 'Load more sessions',
   '⟳ 重启服务：本进程不是常驻托管，停了不会自动拉起，请到电脑上重启': '⟳ Restart server: this process is not supervised, so nothing would start it again — restart it on the computer',
   '危险操作前先问你': 'Prompts for dangerous operations',
   '只做规划，不执行工具': 'Planning mode, no tool execution',
@@ -589,6 +587,7 @@ export const EN_DICT = Object.freeze({
   '取消置顶': 'Unpin',
   '置顶没成功，稍后再试': 'Couldn\'t pin — try again later',
   '把这里的 {n} 个未读会话标为已读。': 'Mark the {n} unread sessions here as read.',
+  '把这里的 {n} 个未读会话标为已读，还没显示的更早会话也一起。': 'Mark the {n} unread sessions here as read, including older ones not shown yet.',
   '这里没有未读会话': 'No unread sessions here',
   '未读数加载中，稍后再试': 'Still loading the unread count, try again in a moment',
   // 手动标记的会话被分页挤出本页时，服务端单独补回来，前端渲染成列表顶部这一组（2026-09-08）
@@ -992,7 +991,8 @@ export const EN_DICT = Object.freeze({
   '关闭会话': 'Close session',
   '切换失败': 'Switch failed',
   '切换无响应，请刷新页面后重试': 'No response switching — refresh the page and try again',
-  '显示全部会话…': 'Show all sessions…',
+  '显示更多 {n} 个': 'Show {n} more',
+  '显示更多 {n} 个（还有 {m} 个）': 'Show {n} more ({m} left)',
   '在此工作区新建会话': 'New session in this workspace',
   '深链目标会话已不可用': 'The linked session is no longer available',
   // —— 会话打不开的落地页（session:switch 被拒时的四合一落地） ——

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
-import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, workspaceRow } from '../../helpers/sidebar-ui';
+import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, showMoreSessions, workspaceRow } from '../../helpers/sidebar-ui';
 
 // 抽屉文件夹行的长按动作（#300 全部标为已读、#305 置顶 / 取消置顶）。
 // 长按挂在文件夹行的主按钮上；桌面右键（contextmenu）与触屏长按走同一个入口（见 long-press.js），这里用右键触发。
@@ -39,10 +39,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:live-paged-out'); // 截断成 3 条/页 + 开着一条被挤出本页的旧会话（open 组）
     await waitForIdle(page);
-    // pinned：「显示全部」后手动标一条会被挤出本页的会话；刷新回到截断态，session:list 把它补回「稍后再看」
+    // pinned：「显示更多」后手动标一条会被挤出本页的会话；刷新回到第一档，session:list 把它补回「稍后再看」
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await showMoreSessions(page, MAIN_WORKSPACE);
     await markRowUnread(page, 'mock-session-gap');
     // 再把基线拨到两小时前：主工作区的旧会话都晚于基线，按时间判据亮（先拨的话 gap 已经亮了，就标不成「稍后再看」）
     await page.request.post('/__arm-read-baseline?agoMs=7200000');
@@ -67,7 +67,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const modal = page.locator('#confirmModal');
     await expect(modal).toHaveClass(/sheet-open/);
     await expect(page.locator('#confirmTitle')).toHaveText('claude-chat-mobile');
-    await expect(page.locator('#confirmBody')).toHaveText('把这里的 5 个未读会话标为已读。');
+    await expect(page.locator('#confirmBody')).toHaveText('把这里的 5 个未读会话标为已读，还没显示的更早会话也一起。');
     await expect(page.locator('#confirmOk')).toHaveText('全部标为已读');
     await page.locator('#confirmOk').click();
 
@@ -121,6 +121,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       const remote = (await (await request.get('/__read-state')).json()).seen || {};
       return targets.filter(id => typeof local[id] !== 'number' || remote[id] !== local[id]);
     }).toEqual([]);
+    // 文件夹水位同理：离线时报不出去，随重连的 read:sync 补上（否则更早的会话在别的设备上照样亮）
+    const localFolders = await page.evaluate(() => JSON.parse(localStorage.getItem('ccm-unread-v1') || '{}').folders || {});
+    expect(typeof localFolders[MAIN_WORKSPACE], '前提：本地记下了水位').toBe('number');
+    expect(before.folders?.[MAIN_WORKSPACE], '前提：离线期间水位没到服务端').toBeUndefined();
+    await expect.poll(async () => (await (await request.get('/__read-state')).json()).folders?.[MAIN_WORKSPACE]).toBe(localFolders[MAIN_WORKSPACE]);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 2026-10-26 真机：长按「全部标为已读」只标了屏幕上那 6 行，点开更早的会话一看冒出 34 个未读。
+  // 现在它同时记一条文件夹水位，服务端在 session:list 回执里把水位折进每行。按机主当时的顺序走：
+  // 先确认更早的会话确实会亮（不然这条在「旧会话本来就不亮」时也会绿），收起回第一档，再标、再展开。
+  test('P0-FOLDER-READ-4 全部标为已读后再「显示更多」：拉出来的更早会话不亮', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:history-overflow'); // 主工作区每档 3 条
+    await waitForIdle(page);
+    await page.request.post('/__arm-read-baseline?agoMs=7200000'); // 基线拨到两小时前：主工作区的会话都按时间亮
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    const older = page.locator('[data-testid="session-row"][data-session-id="mock-session-older-migration"]');
+
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
+    await expect(older.locator('[data-testid="unread-mark"]'), '前提：更早的这条按时间判据会亮').toHaveText('未读');
+    await page.getByTestId('session-show-less').click();
+    await expect(older).toHaveCount(0);
+
+    await longPressFolder(page, MAIN_WORKSPACE);
+    await expect(page.locator('#confirmBody')).toContainText('还没显示的更早会话也一起');
+    await page.locator('#confirmOk').click();
+    await expect(unreadChips(page, MAIN_WORKSPACE)).toHaveCount(0);
+
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
+    await expect(older).toBeVisible();
+    await expect(unreadChips(page, MAIN_WORKSPACE), '更早的会话没在屏幕上出现过，只能靠文件夹水位算读过').toHaveCount(0);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });

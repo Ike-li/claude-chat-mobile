@@ -768,10 +768,10 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 服务告警的「忽略」（#301）：本机记住忽略到哪个指纹，状态在模块内，此处只持句柄。
   const noticeDismissals = createNoticeDismissals();
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  // 用户点过「显示全部会话…」的目录 → 已加载的页数（「加载更多」每点一次加一页，O81）。缓存里的 sessions
-  // 是"当下拿到的那一份"，记不住用户要看全量这个意图——而 populateSubtree 每次都会无条件 revalidate，
-  // 不带上 all/pages 就会把展开态悄悄打回截断（P0-11x）或打回第一页。
-  const expandedAllDirs = new Map();
+  // 目录 → 「显示更多」点了几次（照抄桌面端 Show more，每次多显示一档；「收起」回到 0 即删键）。缓存里的 sessions
+  // 是"当下拿到的那一份"，记不住用户要看更多这个意图——而 populateSubtree 每次都会无条件 revalidate，
+  // 不带上 more 就会把展开态悄悄打回第一档（P0-11x）。
+  const moreStepsByDir = new Map();
   // session:list 附带的 CLI registry 快照：每个 cwd 的终端聚合态（'waiting' | 'busy'，无则不存键）。
   // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
   // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
@@ -5647,7 +5647,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     //   dirRow 高亮与自动展开）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
     // ② 其余情况按目录分键 diff（见 logic.js buildDirInstanceSignatures/diffDirSignatures：id/sessionId/
     //   title 前20字），只重建签名真变化的目录子树，未涉及目录的 DOM 原样不动（不撤离滚动位置/侧滑态/
-    //   "显示全部"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
+    //   "显示更多"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
     // 状态（busy/idle/permission/error）不进任何一层——由更新后的 workdirStates 驱动 refreshDirBadges
     // 实时刷新角标。expandedDirs 变化由 toggleBtn.onclick 直接调 populateSubtree，不经此路径。
     const _structuralKey = `${availableDirs.join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
@@ -7567,7 +7567,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     dirRow.appendChild(toggleBtn);
 
     // 长按文件夹行（#300）→「全部标为已读」。每一节都有（连接根、子文件夹小节、「无文件夹」），也不看
-    // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致。
+    // foldersReadonly：标已读不改配置。目标就是目录角标数的那个集合，确认框里的 N 与角标一致；
+    // 还没显示出来的更早会话由文件夹水位一并盖住（markAllRead 的 folder，READ-01），确认框里说出来。
     // 连接根还多一项「置顶 / 取消置顶」（#305）：有未读时它是次按钮，没有未读时它就是主按钮。也不看
     // foldersReadonly：置顶存在数据目录，不写配置。
     attachLongPress(toggleBtn, async () => {
@@ -7579,12 +7580,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (targets === null) { drawer.showNotice(t('未读数加载中，稍后再试')); return; }
         if (!n) { drawer.showNotice(t('这里没有未读会话')); return; }
       }
+      const body = sessionsCache.get(d)?.hasMore ? t('把这里的 {n} 个未读会话标为已读，还没显示的更早会话也一起。') : t('把这里的 {n} 个未读会话标为已读。');
       const choice = await appConfirm(n
-        ? { title: baseName(d), body: t('把这里的 {n} 个未读会话标为已读。').replace('{n}', String(n)), okText: t('全部标为已读'), altText: pinText }
+        ? { title: baseName(d), body: body.replace('{n}', String(n)), okText: t('全部标为已读'), altText: pinText }
         : { title: baseName(d), body: targets === null ? t('未读数加载中，稍后再试') : t('这里没有未读会话'), okText: pinText });
       if (!choice) return;
       if (n && choice !== 'alt') {
-        unread.markAllRead(targets.map(s => s.id));
+        unread.markAllRead(targets.map(s => s.id), d);
         refreshUnreadMarks();
         return;
       }
@@ -7642,7 +7644,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     let subtreeGen = 0;
     let sessionListRequestGen = 0;
     const populateSubtree = (cwd, container, { background = false } = {}) => {
-      // 后台保鲜不使现有 renderRows /「显示全部」闭包失效；首次（折叠目录尚未画过）仍建立代次。
+      // 后台保鲜不使现有 renderRows /「显示更多」闭包失效；首次（折叠目录尚未画过）仍建立代次。
       if (!background || subtreeGen === 0) subtreeGen += 1;
       const myGen = subtreeGen;
       const activeQuery = () => String(sessionSearchQueryByDir.get(cwd) || '').trim();
@@ -7658,34 +7660,38 @@ import { createGateFocusController } from './app/focus-layers.js';
         el,
       });
 
-      // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
+      // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示更多 / 收起」/剩余提示
       // worktree 的会话由服务端并进所属仓库的列表（行带自己的 cwd），不自成一节。
-      // 「显示全部」与「加载更多」共用：按页数拉全量窗口（每页条数与上限在服务端 sessionListWindow），
-      // 记住页数供后续 revalidate 沿用。
-      const loadAllPages = (pages, button) => {
+      // 「显示更多」与「收起」共用：按点过的次数拉窗口（每档条数与上限在服务端 sessionListWindow），
+      // 记住次数供后续 revalidate 沿用；收起 = 回到 0 次。
+      const loadMoreSteps = (steps, button) => {
         haptic('tap');
         button.textContent = t('加载中…');
         button.disabled = true;
-        expandedAllDirs.set(cwd, pages); // 记住意图：后续 revalidate 也得按这个窗口拉，否则重建一次就被打回去
+        // 记住意图：后续 revalidate 也得按这个窗口拉，否则重建一次就被打回去
+        if (steps > 0) moreStepsByDir.set(cwd, steps);
+        else moreStepsByDir.delete(cwd);
         const requestGen = ++sessionListRequestGen;
-        socket.emit('session:list', { cwd, all: true, ...(pages > 1 ? { pages } : {}) }, state => {
+        socket.emit('session:list', { cwd, ...(steps > 0 ? { more: steps } : {}) }, state => {
           if (requestGen !== sessionListRequestGen) return;
           if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
           if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
-          const all = state?.sessions || [];
+          const rows = state?.sessions || [];
           const nextHasMore = !!state?.hasMore;
           const nextTotal = Number.isFinite(state?.total) ? state.total : null;
           const nextPinned = Array.isArray(state?.pinned) ? state.pinned : [];
           const nextOpen = Array.isArray(state?.open) ? state.open : [];
-          const nextCanLoadMore = state?.canLoadMore === true;
+          const nextMoreCount = Number.isInteger(state?.moreCount) ? state.moreCount : 0;
           unread.hydrate(state?.readState); // 下面无条件 renderRows，只需保证灌在渲染之前
-          updateTerminalStateForDir(cwd, all, state?.terminalBusy, state?.terminalWaiting);
-          sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, open: nextOpen, canLoadMore: nextCanLoadMore });
-          renderRows(all, nextHasMore, nextTotal, nextPinned, nextOpen, nextCanLoadMore);
+          updateTerminalStateForDir(cwd, rows, state?.terminalBusy, state?.terminalWaiting);
+          sessionsCache.set(cwd, { sessions: rows, hasMore: nextHasMore, total: nextTotal, query: '', pinned: nextPinned, open: nextOpen, moreCount: nextMoreCount });
+          renderRows(rows, nextHasMore, nextTotal, nextPinned, nextOpen, nextMoreCount);
+          // 收起后列表一下子短了，人会落到下面别的文件夹里。同桌面端：把按钮那一行滚回视野。
+          if (steps === 0) container.querySelector('[data-testid="session-show-more-bar"]')?.scrollIntoView({ block: 'nearest' });
         });
       };
 
-      const renderRows = (sessions, hasMore, total = null, pinned = [], open = [], canLoadMore = false) => {
+      const renderRows = (sessions, hasMore, total = null, pinned = [], open = [], moreCount = 0) => {
         const { liveMap, freshTabs } = currentLiveRows();
         const query = activeQuery();
         mountSearch();
@@ -7716,32 +7722,44 @@ import { createGateFocusController } from './app/focus-layers.js';
           rowsHost.appendChild(empty);
         }
 
-        if (!query && hasMore && !expandedAllDirs.has(cwd)) {
-          const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
-          more.onclick = () => loadAllPages(1, more);
-          rowsHost.appendChild(more);
-        } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
-          const remaining = remainingOlderSessionCount(total, sessions.length, pinned.length);
-          if (canLoadMore) {
-            // 窗口还能放宽：给「加载更多」，一页页往后拉（O81）。到服务端上限后回落成下面的搜索提示。
-            const loadMore = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40" data-testid="session-load-more"></button>`);
-            loadMore.textContent = remaining != null
-              ? t('加载更多会话（还有 {n} 个）').replace('{n}', String(remaining))
-              : t('加载更多会话');
-            loadMore.onclick = () => loadAllPages((expandedAllDirs.get(cwd) || 1) + 1, loadMore);
-            rowsHost.appendChild(loadMore);
-          } else {
-            const hintText = remaining != null
-              ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
-              : t('还有更早的会话，可用搜索查找');
-            const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
-            hint.textContent = hintText;
-            rowsHost.appendChild(hint);
+        // 「显示更多 N 个」/「收起」，照抄桌面端 Show more / Show less：每点一次多显示一档（N 由服务端按窗口算）。
+        // 偏离两处：桌面端只在全部显示完才给 Show less，几百个会话的文件夹点不到底，所以这里点过一次就给；
+        // 桌面端不报还剩多少，这里在按钮上带上（验收 AC-04-13：有剩余数量提示、总数准确）。
+        // 到服务端硬顶后「显示更多」回落成搜索提示；剩下的全是页尾「稍后再看」行时什么都不给（没有藏着的）。
+        if (!query) {
+          const steps = moreStepsByDir.get(cwd) || 0;
+          const remaining = hasMore ? remainingOlderSessionCount(total, sessions.length, pinned.length) : null;
+          let hintText = null;
+          if (hasMore && moreCount <= 0) {
+            if (remaining != null) hintText = t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining));
+            else if (total == null) hintText = t('还有更早的会话，可用搜索查找');
+          }
+          if (moreCount > 0 || hintText || steps > 0) {
+            const bar = el(`<div class="flex items-center border-b border-line-soft/40" data-testid="session-show-more-bar"></div>`);
+            if (moreCount > 0) {
+              const more = el(`<button class="flex-1 text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50" data-testid="session-show-more"></button>`);
+              more.textContent = (remaining != null && remaining > moreCount
+                ? t('显示更多 {n} 个（还有 {m} 个）').replace('{m}', String(remaining))
+                : t('显示更多 {n} 个')).replace('{n}', String(moreCount));
+              more.onclick = () => loadMoreSteps(steps + 1, more);
+              bar.appendChild(more);
+            } else if (hintText) {
+              const hint = el(`<div class="flex-1 pl-6 pr-3 py-2 text-xs text-ink-faint" data-testid="session-remaining-hint"></div>`);
+              hint.textContent = hintText;
+              bar.appendChild(hint);
+            }
+            if (steps > 0) {
+              const less = el(`<button class="ml-auto shrink-0 px-3 py-2 text-xs text-ink-soft hover:text-accent hover:bg-sunk/50" data-testid="session-show-less"></button>`);
+              less.textContent = t('收起');
+              less.onclick = () => loadMoreSteps(0, less);
+              bar.appendChild(less);
+            }
+            rowsHost.appendChild(bar);
           }
         }
         // 手动标「稍后再看」、已被 limit 挤出时间序这一页的会话（服务端 session:list 的 pinned）。按时间它们
-        // 都比本页更早，所以排在本页与「显示全部 / 加载更多」之后（O81：此前置顶，读起来像排序坏了；加载到
-        // 覆盖它的那一页时，服务端不再把它算进 pinned，它就落回时间序里）。带一行小标说明这一组为什么在这里。
+        // 都比本页更早，所以排在本页与「显示更多」之后（O81：此前置顶，读起来像排序坏了；显示到覆盖它的那一档时，
+        // 服务端不再把它算进 pinned，它就落回时间序里）。带一行小标说明这一组为什么在这里。
         if (!query && pinned.length) {
           const pinnedHead = el(`<div class="pl-6 pr-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint" data-testid="session-pinned-head"></div>`);
           pinnedHead.textContent = t('稍后再看');
@@ -7762,7 +7780,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const cachedEntry = sessionsCache.get(cwd);
         const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
         if (cacheMatchesQuery) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.open || [], cachedEntry.canLoadMore === true);
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null, cachedEntry.pinned || [], cachedEntry.open || [], cachedEntry.moreCount || 0);
         } else {
           const rowsHost = bindSessionRowsHost(container, el);
           rowsHost.innerHTML = '';
@@ -7800,10 +7818,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (background && !socket.connected) return;
       const requestGen = ++sessionListRequestGen;
       const query = activeQuery();
-      const loadedPages = expandedAllDirs.get(cwd) || 0;
-      const listPayload = query
-        ? { cwd, query }
-        : { cwd, all: loadedPages > 0, ...(loadedPages > 1 ? { pages: loadedPages } : {}) };
+      const steps = moreStepsByDir.get(cwd) || 0;
+      const listPayload = query ? { cwd, query } : { cwd, ...(steps > 0 ? { more: steps } : {}) };
       socket.emit('session:list', listPayload, state => {
         if (requestGen !== sessionListRequestGen) return;
         if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
@@ -7819,7 +7835,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const pinned = Array.isArray(state?.pinned) ? state.pinned : [];
         // open：开着、被分页挤出本页的会话的元数据（验收 O46）；旧服务端不发 → 空数组，那几行回落实例自己的 title
         const open = Array.isArray(state?.open) ? state.open : [];
-        const canLoadMore = state?.canLoadMore === true; // 旧服务端不发 → 回落成「可用搜索查找」提示
+        const moreCount = Number.isInteger(state?.moreCount) ? state.moreCount : 0; // 旧服务端不发 → 回落成「可用搜索查找」提示
         // 已读位点搭 session:list 回来（服务端刻意不另开广播）：必须在渲染前灌进去，让「行数据」
         // 与「未读判定」同帧——否则会出现行已更新、未读标记还是旧的这种撕裂。返回值是「内容真变了吗」，
         // 拿它并进重渲染条件；恒真会打掉 shouldRerenderSessionList 的省渲优化。
@@ -7839,9 +7855,9 @@ import { createGateFocusController } from './app/focus-layers.js';
           nextPinned: pinned,
           nextOpen: open,
         });
-        const canLoadMoreChanged = (prevEntry?.canLoadMore === true) !== canLoadMore;
-        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, open, canLoadMore });
-        if (willRerender || readChanged || canLoadMoreChanged) renderRows(sessions, hasMore, total, pinned, open, canLoadMore);
+        const moreCountChanged = (prevEntry?.moreCount || 0) !== moreCount;
+        sessionsCache.set(cwd, { sessions, hasMore, total, query, pinned, open, moreCount });
+        if (willRerender || readChanged || moreCountChanged) renderRows(sessions, hasMore, total, pinned, open, moreCount);
       });
     };
 
@@ -7950,7 +7966,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
   // P3 抽屉局部重建：只重建 changedDirs 列出的目录（调用方=setInstances，changedDirs 来自
   // diffDirSignatures），其余目录的 dirRow/subtree 保持原 DOM 节点不动——滚动位置、侧滑态、
-  // "显示全部"展开态等本地态都不受影响，不会像全量重建那样连坐撤离。dirRow 与 subtree 必须保持
+  // "显示更多"展开态等本地态都不受影响，不会像全量重建那样连坐撤离。dirRow 与 subtree 必须保持
   // 相邻兄弟节点（expandWorkspace 等测试辅助函数按 nextElementSibling 定位 subtree），两次
   // replaceWith 各自原地替换，不改变整体顺序，故这个不变量始终成立。
   function rebuildDirSections(changedDirs) {

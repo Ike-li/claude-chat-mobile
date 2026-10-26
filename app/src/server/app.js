@@ -97,7 +97,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -4172,7 +4172,7 @@ registerSocketConnection(io, socket => {
   }
 
   on(socket, 'session:list', async (payload, maybeAck) => {
-    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, all?, query?}, cb)
+    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, more?, query?}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
     if (typeof ack !== 'function') return;
     const obj = payload && typeof payload === 'object' ? payload : {};
@@ -4183,7 +4183,7 @@ registerSocketConnection(io, socket => {
       // 键集与正常回执一致（前端按字段取，不因为拒绝就换形状），外加 error。回落成别的目录的会话
       // 就会被画在这个项目的标题下——那是错数据，不是降级。
       return ack({ currentSessionId: null, sessions: [], pinned: [], open: [], terminalBusy: false, terminalWaiting: false,
-        hasMore: false, canLoadMore: false, total: 0, readState: readStateForRows([]), error: OUT_OF_SCOPE_ERROR });
+        hasMore: false, moreCount: 0, total: 0, readState: readState.stateForRows([]), error: OUT_OF_SCOPE_ERROR });
     }
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
@@ -4191,29 +4191,30 @@ registerSocketConnection(io, socket => {
     // 工作区级判断：指针存在父仓名下，值可能是托管 worktree 里的会话（见 history.js 同名注释）
     const currentSessionId = (id && await sessionExistsInWorkspace(cwd, id, { memberOptions })) ? id : null;
     const query = typeof obj.query === 'string' ? obj.query.trim() : '';
-    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）每页 MAX_SESSION_LIMIT 条。
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；more = 前端「显示更多」点了几次，
+    // 每次再放宽同样条数（照抄桌面端 Show more，判据见 sessionListWindow）。
     // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
     // history.js 对全部会话读 meta 再过滤（O100），不是把 RESULT 抬过 50。
-    const all = obj.all === true;
-    // 「显示全部」之后的「加载更多」（O81）：pages 按页放宽窗口，硬顶与判据见 sessionListWindow。
-    const { limit, canGrow } = sessionListWindow({
+    const { limit, nextLimit } = sessionListWindow({
       query,
-      all,
-      pages: obj.pages,
+      more: obj.more,
       // 子文件夹这类项目沿用所属连接根配的条数
       configuredLimit: sessionLimitByDir.get(authorize(cwd)?.root ?? cwd) ?? DEFAULT_SESSION_LIMIT,
     });
-    const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
-      limit,
+    // 多扫 1 条：分得清「只多 1 条」（整页全给，不藏单条）与「还有一堆」，见 fitSessionPage。
+    const scanned = await listSessionsPage(cwd, {
+      limit: limit + 1,
       memberOptions,
       query: query || undefined,
       excludeIds: pendingDeleteIds.size ? new Set(pendingDeleteIds) : undefined,
     });
+    const { sessions: list, hasMore } = fitSessionPage(scanned, limit);
+    const { total } = scanned;
     // 手动标「稍后再看」的会话不受分页截断（2026-09-08）：limit 只管时间序的那一页，而手动标记是
     // 用户显式输入的待办——长按确认框承诺「这一行会一直显示未读，直到你再次打开它」，被 limit 滑出
     // 窗口就是当场食言：标记还在 read-state 里，UI 上却再也找不回来，只能靠标题搜索。
     // 触发不需要极端条件——默认窗口只有 6 条（DEFAULT_SESSION_LIMIT），活跃工作区几天就能把一条
-    // 标记挤出去；「显示全部」的 50 条硬顶只是把期限拉长。
+    // 标记挤出去；「显示更多」只是把期限拉长。
     // 与 isSessionUnread 里 `if (manual) return true` 压过所有时间判据同向：显式标记同样压过时间截断。
     //
     // 搜索态不补：搜索是另一条轴，往结果里塞未匹配的行等于污染搜索语义（用户搜 "foo" 却看见 "bar"）。
@@ -4223,7 +4224,9 @@ registerSocketConnection(io, socket => {
     // pinned（手动标未读、不受分页截断）走的是 listSessionsByIds——它没有 excludeIds 形参，
     // 此前完全没挡，删除在途（sdkDeleteSession 的 await 窗口内）又恰好被手动标过未读的会话，
     // 会在并发的 session:list 响应里继续出现在 pinned 数组里。
-    const pinnedIds = query ? [] : readState.manualUnreadIds().filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
+    // 文件夹「全部标为已读」的水位之前标的，已被它盖过，不再补回。
+    const pinnedIds = query ? [] : readState.manualUnreadIds({ floor: readState.folderReadAt(cwd) ?? undefined })
+      .filter(id => !inPage.has(id) && !pendingDeleteIds.has(id));
     const pinned = pinnedIds.length ? await listSessionsByIds(cwd, pinnedIds, { memberOptions }) : [];
     // 开着、但不在本页也不在 pinned 里的会话（验收 O46）：抽屉照样把它们画在前面（SESSION-02），可实例广播里
     // 的 title 只来自 sessions.json——终端来的会话那里是 null，画出来是一行没有时间的「新会话」。按 transcript
@@ -4240,7 +4243,7 @@ registerSocketConnection(io, socket => {
     const pageRows = terminal.list.slice(0, list.length);
     const pinnedRows = terminal.list.slice(list.length, list.length + pinned.length);
     const openRows = terminal.list.slice(list.length + pinned.length);
-    // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
+    // 诚实返回 hasMore：点过「显示更多」也不得强制 false——否则「还有更早会话」对用户不可见。
     // readState 搭这趟车回去（不另开广播）：列表数据与已读位点必须同帧到达，否则会出现
     // 「行更新了、位点还是旧的」的撕裂——抽屉每次 SWR revalidate 都会重算未读，撕裂立刻可见。
     // terminalBusy / terminalWaiting 必须【成对】上线：前端 updateTerminalStateForDir 对每个字段各自
@@ -4250,8 +4253,11 @@ registerSocketConnection(io, socket => {
     // pinned 与 sessions 分开回而不是拼进同一个数组：sessions 的语义是「时间序的这一页」，
     // hasMore/total 都是对它说的，混进去会让三个字段互相说不通；前端也要单独渲染成一组。
     // readState 必须覆盖两组行——pinned 行的 manual 位点若不搭车，前端拿不到判据，那一行反而不亮未读。
-    // canLoadMore：窗口还能再放宽且确实还有更早的——前端据此给「加载更多」，否则回落「可用搜索查找」。
-    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, canLoadMore: canGrow && hasMore, total, readState: readStateForRows([...pageRows, ...pinnedRows, ...openRows]) });
+    // moreCount：再点一次「显示更多」多出几行（按钮上的数字）；0 = 不能再点，前端有更早的就回落「可用搜索查找」。
+    const moreCount = showMoreCount({ hasMore, total, shown: list.length, nextLimit, pinnedCount: pinned.length });
+    // readState 折进这个文件夹的「全部标为已读」水位（stateForRows）：没加载出来的旧会话靠这一步才算读过。
+    const readStateRows = readState.stateForRows([...pageRows, ...pinnedRows, ...openRows].map(s => s.id), cwd);
+    ack({ currentSessionId, sessions: pageRows, pinned: pinnedRows, open: openRows, terminalBusy: terminal.terminalBusy, terminalWaiting: terminal.terminalWaiting, hasMore, moreCount, total, readState: readStateRows });
   });
 
   // 跨设备已读位点（2026-09-03）。此前位点只在各设备的 localStorage 里，换一台设备 seen 表为空、
@@ -4259,26 +4265,29 @@ registerSocketConnection(io, socket => {
   // read:sync = 连上时把本地表推来归并、取回权威态（升级前攒的记录与离线期间的记录都由这趟迁移）；
   // read:mark = 单条增量，刻意不带 ack——丢一条不致命，下次 read:sync 的全量归并会把它补回来。
 
-  // session:list 搭车用的裁剪版：只回本页这些行的位点。全量表上限 1000 条（约 55KB），而抽屉每 12 秒
-  // 就 revalidate 一次、多目录并发，全量搭车纯属浪费手机流量。裁剪安全的前提是前端 hydrate 逐 key
-  // 取 max、只增不减——少回的 key 不会把本地已有的位点抹掉，最坏只是这一趟没带来新信息。
-  function readStateForRows(rows) {
-    const state = readState.getReadState();
-    const seen = {};
-    const manual = {};
-    for (const row of rows || []) {
-      if (!row?.id) continue;
-      if (state.seen[row.id] !== undefined) seen[row.id] = state.seen[row.id];
-      if (state.manual[row.id] !== undefined) manual[row.id] = state.manual[row.id];
-    }
-    return { baselineTs: state.baselineTs, seen, manual };
-  }
+  // session:list 搭车的是裁剪版（readState.stateForRows）：全量表上限 1000 条（约 55KB），而抽屉每 12 秒
+  // 就 revalidate 一次、多目录并发，全量搭车纯属浪费手机流量。
+
+  // 文件夹水位的键必须与 session:list 的 cwd 同一套（回执按那个 cwd 折叠），所以照 session:list 的解析走；
+  // 只是不走 routeCwd——本地存着的旧文件夹（已断开）随 read:sync 上来时，不该在服务面板记一条越界。
+  const folderKeyOf = raw => (isNoFolderKey(raw) ? scratchRootKey() : routableAuth(raw)?.path ?? null);
   on(socket, 'read:sync', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, state: readState.applyClientReadState(payload) });
+    const folders = {};
+    for (const [raw, at] of Object.entries(payload?.folders && typeof payload.folders === 'object' ? payload.folders : {})) {
+      const key = folderKeyOf(raw);
+      if (key) folders[key] = at;
+    }
+    ack({ ok: true, state: readState.applyClientReadState({ ...payload, folders }) });
   });
 
   on(socket, 'read:mark', payload => {
+    // 文件夹「全部标为已读」：{ folder, at }，记一条水位（见 read-state.js markFolder）
+    if (typeof payload?.folder === 'string') {
+      const key = folderKeyOf(payload.folder);
+      if (key) readState.markFolderRead(key, payload.at);
+      return;
+    }
     const sessionId = payload?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) return;
     if (typeof payload?.manual === 'boolean') readState.setManualUnread(sessionId, payload.manual, payload.at);

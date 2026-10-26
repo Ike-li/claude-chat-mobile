@@ -17,6 +17,7 @@ import {
   openWorkspaceSession,
   sessionButtonByTitle,
   sessionRowByInstance,
+  showMoreSessions,
   startNewSessionInWorkspace,
   workspaceRow
 } from '../../helpers/sidebar-ui';
@@ -200,18 +201,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-11m sidebar 显示全部后可打开较早历史会话', async ({ page }) => {
+  test('P0-11m sidebar 显示更多后可打开较早历史会话', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:history-overflow');
 
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
+    await expect(page.getByTestId('session-show-more')).toHaveText('显示更多 3 个（还有 13 个）');
     await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
 
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+    await showMoreSessions(page, MAIN_WORKSPACE, 2); // 它排第 7，每档 3 条
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
 
     await openSessionByTitle(page, 'Older Migration Session');
@@ -257,7 +257,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await search.fill('Timeline');
     await expect(sessionButtonByTitle(page, 'Timeline Session')).toBeVisible({ timeout: 5_000 });
     await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+    await expect(page.getByTestId('session-show-more-bar')).toHaveCount(0);
 
     await search.fill('definitely-no-match-xyz');
     await expect(page.getByTestId('session-search-empty')).toBeVisible({ timeout: 5_000 });
@@ -335,17 +335,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
     await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toBeVisible();
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+    await expect(page.getByTestId('session-show-more')).toHaveCount(0);
     await page.locator('#sidebarClose').click();
 
     await sendChatMessage(page, 'test:history-overflow');
     await waitForIdle(page);
 
     await openSessionsSidebar(page);
-    await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
+    await expect(page.getByTestId('session-show-more')).toBeVisible();
     await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
 
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
     await openSessionByTitle(page, 'Older Migration Session');
     await expect(page.locator('#messages')).toContainText('Older migration history loaded from session:list overflow.', { timeout: 10_000 });
@@ -353,10 +353,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // revalidate 改成无条件后新增的守卫：「显示全部会话…」是用户的显式意图，一次全量重建（这里用新增
-  // 工作区触发结构性变化 → openSessionPanel）不该把它悄悄打回截断态。缓存本身不记这件事——记的是
-  // expandedAllDirs，revalidate 得带着 all 一起发。
-  test('P0-11x 点开"显示全部会话…"后遇到全量重建，展开态仍保持（不被 revalidate 打回截断）', async ({ page }) => {
+  // revalidate 改成无条件后新增的守卫：「显示更多」是用户的显式意图，一次全量重建（这里用新增
+  // 工作区触发结构性变化 → openSessionPanel）不该把它悄悄打回第一档。缓存本身不记这件事——记的是
+  // moreStepsByDir，revalidate 得带着 more 一起发。
+  test('P0-11x 点过"显示更多"后遇到全量重建，展开态仍保持（不被 revalidate 打回第一档）', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:history-overflow');
@@ -364,7 +364,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
-    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await showMoreSessions(page, MAIN_WORKSPACE, 2);
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
     await page.locator('#sidebarClose').click();
 

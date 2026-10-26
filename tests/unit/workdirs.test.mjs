@@ -11,7 +11,7 @@ import {
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
   foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
-  BROWSE_HARD_LIMIT, SEARCH_RESULT_LIMIT, sessionListWindow,
+  BROWSE_HARD_LIMIT, SEARCH_RESULT_LIMIT, sessionListWindow, fitSessionPage, showMoreCount,
 } from '../../app/src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -425,16 +425,54 @@ test.describe('resolveEnvPrimaryWorkdir：投影之后仍分得清 WORK_DIR 是�
   });
 });
 
-// O81：「显示全部」之后还能「加载更多」——每页 MAX_SESSION_LIMIT 条，按页数放宽窗口，硬顶 BROWSE_HARD_LIMIT。
-test('sessionListWindow：搜索 / 截断 / 显示全部按页放宽，到硬顶就不能再加载', () => {
-  assert.deepEqual(sessionListWindow({ query: 'foo', all: true, pages: 3 }), { limit: SEARCH_RESULT_LIMIT, canGrow: false }, '搜索态不分页');
-  assert.deepEqual(sessionListWindow({ configuredLimit: 8 }), { limit: 8, canGrow: false }, '截断态用配置条数，入口是「显示全部」不是「加载更多」');
-  assert.deepEqual(sessionListWindow({ all: true }), { limit: MAX_SESSION_LIMIT, canGrow: true });
-  assert.deepEqual(sessionListWindow({ all: true, pages: 2 }), { limit: MAX_SESSION_LIMIT * 2, canGrow: true });
-  const last = Math.ceil(BROWSE_HARD_LIMIT / MAX_SESSION_LIMIT);
-  assert.deepEqual(sessionListWindow({ all: true, pages: last }), { limit: BROWSE_HARD_LIMIT, canGrow: false }, '到硬顶：再往后用搜索');
-  assert.deepEqual(sessionListWindow({ all: true, pages: last + 50 }), { limit: BROWSE_HARD_LIMIT, canGrow: false }, '页数再大也不越过硬顶');
-  for (const bad of [0, -1, 1.5, '2', null, NaN]) {
-    assert.deepEqual(sessionListWindow({ all: true, pages: bad }), { limit: MAX_SESSION_LIMIT, canGrow: true }, `脏页数 ${String(bad)} 当第一页`);
+// 照抄桌面端 Code 侧栏的 Show more：初始条数 = 该连接根配的条数，每点一次「显示更多」再放宽同样条数，硬顶 BROWSE_HARD_LIMIT。
+test('sessionListWindow：初始用配置条数，每点一次加一档同样条数；搜索不分档；到硬顶不能再点', () => {
+  assert.deepEqual(sessionListWindow({ query: 'foo', more: 3 }), { limit: SEARCH_RESULT_LIMIT, nextLimit: null }, '搜索态不分档');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 8 }), { limit: 8, nextLimit: 16 }, '没点过：配置条数，下一档再加 8');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 2 }), { limit: 18, nextLimit: 24 }, '点过两次：6 × 3');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 83 }), { limit: BROWSE_HARD_LIMIT, nextLimit: null }, '到硬顶：再往后用搜索');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 82 }), { limit: 498, nextLimit: BROWSE_HARD_LIMIT }, '最后一档不越过硬顶');
+  assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: 1e9 }), { limit: BROWSE_HARD_LIMIT, nextLimit: null }, '次数再大也不越过硬顶');
+  for (const bad of [-1, 1.5, '2', null, NaN]) {
+    assert.deepEqual(sessionListWindow({ configuredLimit: 6, more: bad }), { limit: 6, nextLimit: 12 }, `脏次数 ${String(bad)} 当没点过`);
   }
+});
+
+// 调用方按 limit + 1 扫，fitSessionPage 收尾。rows(n) = 按时间排好的 n 行。
+const rows = n => Array.from({ length: n }, (_, i) => ({ id: `s${i}` }));
+
+test('fitSessionPage：不藏单条——只比窗口多 1 条时整页全给，没有更早的', () => {
+  const page = fitSessionPage({ sessions: rows(7), hasMore: false }, 6);
+  assert.equal(page.sessions.length, 7, '藏 1 条再给一个「显示更多 1 个」不如让它直接出现（桌面端 len > t+n+1 才截断）');
+  assert.equal(page.hasMore, false);
+});
+
+test('fitSessionPage：多出的不止 1 条就照常截到窗口', () => {
+  const page = fitSessionPage({ sessions: rows(7), hasMore: true }, 6);
+  assert.deepEqual(page.sessions.map(s => s.id), ['s0', 's1', 's2', 's3', 's4', 's5'], '多扫的那 1 条不能漏进本页');
+  assert.equal(page.hasMore, true);
+});
+
+test('fitSessionPage：不满一页照原样，hasMore 照实（删除在途被剔掉几条时仍可能还有更早的）', () => {
+  assert.deepEqual(fitSessionPage({ sessions: rows(4), hasMore: false }, 6), { sessions: rows(4), hasMore: false });
+  assert.deepEqual(fitSessionPage({ sessions: rows(5), hasMore: true }, 6), { sessions: rows(5), hasMore: true });
+});
+
+test('showMoreCount：还远没到底时是一档的条数', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: 40, shown: 6, nextLimit: 12 }), 6);
+});
+
+test('showMoreCount：下一档会把剩下的全给时报确切剩余数，不把「稍后再看」组算成新行', () => {
+  // 13 个：下一档 12 只差 1 条，按不藏单条会全给 → 再点一次多出 7 条，其中 2 条已作为「稍后再看」画在页尾
+  assert.equal(showMoreCount({ hasMore: true, total: 13, shown: 6, nextLimit: 12, pinnedCount: 2 }), 5);
+});
+
+test('showMoreCount：到硬顶（nextLimit=null）、没有更早的、剩下的全是「稍后再看」行，都是 0', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: 900, shown: 500, nextLimit: null }), 0, '到硬顶只能搜');
+  assert.equal(showMoreCount({ hasMore: false, total: 4, shown: 4, nextLimit: 12 }), 0);
+  assert.equal(showMoreCount({ hasMore: true, total: 8, shown: 6, nextLimit: 12, pinnedCount: 2 }), 0);
+});
+
+test('showMoreCount：total 缺失时按一档报，不报 0（报 0 就再也点不出更早的）', () => {
+  assert.equal(showMoreCount({ hasMore: true, total: null, shown: 6, nextLimit: 12 }), 6);
 });

@@ -23,6 +23,7 @@ const STORAGE_KEY = 'ccm-unread-v1';
 // 表装不下这一批就会把同一批里先写的挤掉、重载后复亮。与服务端 read-state.js 的 SEEN_CAP 同值。
 const SEEN_CAP = 1000;
 const MANUAL_CAP = 100;
+const FOLDER_CAP = 200; // 文件夹水位，一个文件夹一条；与服务端 read-state.js 的 FOLDER_CAP 同值
 
 // onChange：写入点的增量上报口（app.js 转成 socket 的 read:mark）。不注入时功能退化为纯本地，
 // 离线壳与老接线都照常工作。
@@ -82,18 +83,22 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
 
   // 文件夹长按「全部标为已读」（#300）：逐条等同 setManualUnread(id, false)，但只落盘一次——
   // 一个分组最多几百条，逐条 persist 会把整张表序列化几百遍。上报仍逐条走「标为已读」形状。
-  function markAllRead(sessionIds) {
+  // folder（2026-10-26）：屏幕上只有已加载的那几行，更早的标不到；另报一条文件夹水位，服务端在
+  // session:list 回执里把它折进这个文件夹的每一行（READ-01）。本地也记一份，离线时随 read:sync 补报。
+  function markAllRead(sessionIds, folder) {
     const ids = (sessionIds || []).filter(Boolean);
-    if (!ids.length) return;
+    if (!ids.length && !folder) return;
     const ts = now();
-    let { seen, manual } = state;
+    let { seen, manual, folders } = state;
     for (const id of ids) {
       manual = setManualUnreadEntry(manual, id, false);
       seen = markSeenEntry(seen, id, ts, SEEN_CAP);
     }
-    state = { ...state, seen, manual };
+    if (folder) folders = markSeenEntry(folders, folder, ts, FOLDER_CAP);
+    state = { ...state, seen, manual, folders };
     persist();
     for (const id of ids) emit({ sessionId: id, manual: false, at: ts });
+    if (folder) emit({ folder, at: ts });
   }
 
   // 下行同步：服务端权威态并入本地。【不】触发 onChange——那是上行口，回声会绕成写放大。
@@ -101,7 +106,7 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
   // session:list 每趟都会捎一份 readState 回来。恒 true 会让每次 SWR revalidate 都重建 DOM 子树，
   // 打掉 shouldRerenderSessionList 的省渲优化（P0-11t/11z 钉的正是这条）。
   function hydrate(remote) {
-    const next = mergeReadState(state, remote, { seenCap: SEEN_CAP, manualCap: MANUAL_CAP });
+    const next = mergeReadState(state, remote, { seenCap: SEEN_CAP, manualCap: MANUAL_CAP, folderCap: FOLDER_CAP });
     if (next === state) return false; // 远端无效：本地原样保留，功能降级回每设备独立
     const before = serializeUnreadState(state);
     state = next;
@@ -110,9 +115,9 @@ export function createUnreadTracker({ storage, now = () => Date.now(), onChange 
     return true;
   }
 
-  // 连上后把本地表整个推给服务端归并：升级前攒的已读记录、离线期间的新记录都靠这一趟迁移上去。
+  // 连上后把本地表整个推给服务端归并：升级前攒的已读记录、离线期间的新记录（含文件夹水位）都靠这一趟迁移上去。
   function snapshot() {
-    return { baselineTs: state.baselineTs, seen: { ...state.seen }, manual: { ...state.manual } };
+    return { baselineTs: state.baselineTs, seen: { ...state.seen }, manual: { ...state.manual }, folders: { ...state.folders } };
   }
 
   function isUnread(session, { isViewing = false } = {}) {

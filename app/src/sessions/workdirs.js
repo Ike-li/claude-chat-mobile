@@ -10,23 +10,38 @@ import { encodeProjectDir } from '../shared/project-dir.js';
 import { CLAUDE_DIR_NAME } from '../shared/claude-home.js';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
-export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与下方 sessionListWindow 直接用本常量（= 前端「显示全部」的一页条数）
+export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 直接用本常量
 export const MAX_LIVE_SESSIONS = 20;      // 全局硬上限：live 会话实例数量，防止有意保留过多 CLI 子进程
-// 「加载更多」的硬顶：再往后的会话用标题搜索找——搜索扫全部会话、不设顶（验收 O100，见 history.js scanViaReaddir）。
+// 「显示更多」的硬顶：再往后的会话用标题搜索找——搜索扫全部会话、不设顶（验收 O100，见 history.js scanViaReaddir）。
 export const BROWSE_HARD_LIMIT = 500;
 // 会话标题搜索的返回条数上限，与浏览一页同量级（结果列表也不该一次吐上百行）。
 export const SEARCH_RESULT_LIMIT = 50;
 
-// session:list 的窗口条数（O81）。搜索走 SEARCH_RESULT_LIMIT；截断态用该连接根配置的条数（入口是「显示全部」）；
-// 「显示全部」按页放宽，每页 MAX_SESSION_LIMIT 条——服务端没有 offset，每次照旧全量 readdir 排序、只对前
-// limit 条读 meta，所以「下一页」就是把窗口放宽一页。硬顶 BROWSE_HARD_LIMIT，再往后用搜索。
-// canGrow：窗口还能再放宽（回执里与 hasMore 合成 canLoadMore）。
-export function sessionListWindow({ query = '', all = false, pages = 1, configuredLimit = DEFAULT_SESSION_LIMIT } = {}) {
-  if (query) return { limit: SEARCH_RESULT_LIMIT, canGrow: false };
-  if (!all) return { limit: configuredLimit, canGrow: false };
-  const n = Number.isInteger(pages) && pages > 1 ? pages : 1;
-  const limit = Math.min(MAX_SESSION_LIMIT * n, BROWSE_HARD_LIMIT);
-  return { limit, canGrow: limit < BROWSE_HARD_LIMIT };
+// session:list 的窗口条数，照抄桌面端 Code 侧栏的 Show more（每组初始 5 条，每点一次再显示同样条数）。
+// 初始用该连接根配置的条数，more = 用户点了几次「显示更多」，每次放宽同样条数——服务端没有 offset，
+// 每次照旧全量 readdir 排序、只对前 limit 条读 meta，所以「再显示一档」就是把窗口放宽一档。
+// 硬顶 BROWSE_HARD_LIMIT，再往后用搜索。搜索走 SEARCH_RESULT_LIMIT、不分档。
+// nextLimit：再点一次时的窗口；null = 不能再点。
+export function sessionListWindow({ query = '', more = 0, configuredLimit = DEFAULT_SESSION_LIMIT } = {}) {
+  if (query) return { limit: SEARCH_RESULT_LIMIT, nextLimit: null };
+  const n = Number.isInteger(more) && more > 0 ? more : 0;
+  const limit = Math.min(configuredLimit * (1 + n), BROWSE_HARD_LIMIT);
+  return { limit, nextLimit: limit < BROWSE_HARD_LIMIT ? Math.min(limit + configuredLimit, BROWSE_HARD_LIMIT) : null };
+}
+
+// 一页的收尾。调用方按 limit + 1 扫（多看一条才分得清「只多 1 条」与「还有一堆」）。
+// 不藏单条：只比窗口多 1 条时整页全给——同桌面端（len > t+n+1 才截断），「显示更多 1 个」不如让它直接出现。
+export function fitSessionPage({ sessions, hasMore }, limit) {
+  if (sessions.length > limit && hasMore) return { sessions: sessions.slice(0, limit), hasMore: true };
+  return { sessions, hasMore: hasMore && sessions.length <= limit };
+}
+
+// 再点一次「显示更多」多出几行，0 = 不能再点（没有更早的，或到了硬顶，或剩下的全是已画在页尾的「稍后再看」行）。
+// 下一档会把剩下的全给（不藏单条）时报确切剩余数，pinnedCount 那几行已在屏幕上，不算新行。
+export function showMoreCount({ hasMore, total, shown, nextLimit, pinnedCount = 0 }) {
+  if (!hasMore || nextLimit === null) return 0;
+  const all = Number.isFinite(total) ? total : Infinity;
+  return all <= nextLimit + 1 ? Math.max(0, all - shown - pinnedCount) : nextLimit - shown;
 }
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。

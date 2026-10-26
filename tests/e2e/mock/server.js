@@ -106,8 +106,16 @@ let lateClosedSessionEventsInstanceId = null;
 // 已被关闭、等着用例经 POST /__emit-late-closed-events 放出迟到事件的实例（见 session:close 处注释）。
 let pendingLateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
-// O81：session:list 收到的请求（cwd/all/pages）。「加载更多」之后的 revalidate 必须沿用已加载的页数——
-// 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带页数，所以用例直接看请求。
+// overflow 模式下主工作区的分档（同真 server 的 sessionListWindow）：每档 MOCK_LIST_STEP 条（模拟该连接根
+// sessionLimit=3），「显示更多」每点一次放宽一档；池 = 主工作区会话 + mockOverflowExtra 条更早的；
+// mockListHardTop 模拟 BROWSE_HARD_LIMIT——到顶后剩下的只能靠搜索。/__arm-history-many 把三者调大，
+// 造出一屏放不下的长列表（展开区高度上限曾把它裁掉一大半）。
+const MOCK_LIST_STEP_DEFAULT = 3;
+let mockListStep = MOCK_LIST_STEP_DEFAULT;
+let mockOverflowExtra = 7;
+let mockListHardTop = 12;
+// session:list 收到的请求（cwd/more/query）。「显示更多」之后的 revalidate 必须沿用点过的次数——
+// 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带次数，所以用例直接看请求。
 let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
@@ -132,19 +140,22 @@ let mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
 // mock-session-another 压到基线之前，P0-11u 赖以成立的「基线后有活动＝亮未读」当场失效。
 let mockReadState = null;
 function resetReadState() {
-  mockReadState = { baselineTs: mockListClockBase - MOCK_LIST_CLOCK_LEAD_MS, seen: {}, manual: {} };
+  mockReadState = { baselineTs: mockListClockBase - MOCK_LIST_CLOCK_LEAD_MS, seen: {}, manual: {}, folders: {} };
 }
 resetReadState();
 function readStateSnapshot() {
   return { baselineTs: mockReadState.baselineTs, seen: { ...mockReadState.seen }, manual: { ...mockReadState.manual } };
 }
-// session:list 搭车的裁剪版（同真 server 的 readStateForRows）。
-function readStateForRows(rows) {
+// session:list 搭车的裁剪版（同真 server 的 read-state.js#stateForRows）：给了 cwd 就把该文件夹
+// 「全部标为已读」的水位折进每行 seen——没加载出来的更早会话靠这一步算读过（READ-01）。
+function readStateForRows(rows, cwd) {
+  const floor = cwd === undefined ? undefined : mockReadState.folders[cwd];
   const seen = {};
   const manual = {};
   for (const row of rows || []) {
     if (!row?.id) continue;
-    if (mockReadState.seen[row.id] !== undefined) seen[row.id] = mockReadState.seen[row.id];
+    const at = Math.max(mockReadState.seen[row.id] ?? -Infinity, floor ?? -Infinity);
+    if (at !== -Infinity) seen[row.id] = at;
     if (mockReadState.manual[row.id] !== undefined) manual[row.id] = mockReadState.manual[row.id];
   }
   return { baselineTs: mockReadState.baselineTs, seen, manual };
@@ -160,8 +171,9 @@ function pinnedRowsFor(cwd, rows) {
   const pool = cwd === '/Users/you/code/claude-chat-mobile'
     ? mainCwdSessions().filter(s => !deletedSessionIds.has(s.id))
     : [];
+  const floor = mockReadState.folders[cwd] ?? -Infinity; // 水位之前标的已被「全部标为已读」盖过
   return pool.filter(s => s && s.id && !inPage.has(s.id)
-    && (mockReadState.manual[s.id] ?? -Infinity) > (mockReadState.seen[s.id] ?? -Infinity));
+    && (mockReadState.manual[s.id] ?? -Infinity) > Math.max(mockReadState.seen[s.id] ?? -Infinity, floor));
 }
 // open（验收 O46）：开着、但不在本页也不在 pinned 里的会话的元数据（同真 server 的 session:list）。
 // 抽屉照样把它们画在前面（SESSION-02），标题与时间用这里的，不再是实例广播里的 title（终端来的会话那里是 null）。
@@ -678,6 +690,9 @@ function resetMockState() {
   lateClosedSessionEventsInstanceId = null;
   pendingLateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  mockListStep = MOCK_LIST_STEP_DEFAULT;
+  mockOverflowExtra = 7;
+  mockListHardTop = 12;
   mockSessionListLog = [];
   deletedSessionIds.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
@@ -970,7 +985,7 @@ app.post('/__replay-models', (_req, res) => {
 // 服务端共享位点的读出面，供 E2E 断言「本机的已读/标记确实上报了」——真 server 那边这是
 // read:sync 的 ack，但前端 socket 不挂在 window 上，从测试里发不出去。
 app.get('/__read-state', (_req, res) => {
-  res.json(readStateSnapshot());
+  res.json({ ...readStateSnapshot(), folders: { ...mockReadState.folders } }); // 水位只给用例看，read:sync 回执不搬
 });
 
 app.get('/__outbox-received', (_req, res) => {
@@ -1104,6 +1119,13 @@ app.post('/__outbox-turn-end', (_req, res) => {
   res.json({ ok: true, ended: Boolean(inst) });
 });
 app.get('/__session-list-log', (_req, res) => res.json(mockSessionListLog));
+app.post('/__arm-history-many', (req, res) => {
+  historyOverflowMode = true;
+  mockListStep = Number(req.query.step) || 30;
+  mockOverflowExtra = Number(req.query.extra) || 60;
+  mockListHardTop = 500;
+  res.json({ ok: true, step: mockListStep, extra: mockOverflowExtra });
+});
 app.post('/__set-update-check', (req, res) => {
   mockUpdateCheck = String(req.query.status || 'same');
   res.json({ ok: true, status: mockUpdateCheck });
@@ -1949,9 +1971,10 @@ io.on('connection', socket => {
     // 那条路径下的抽屉用旧位点渲染，而症状（少数几行未读不对）几乎不可能在 E2E 里被归因。
     // 与真 server 一致只回本页行的位点（全量表最多 1000 条，而抽屉每 12 秒 revalidate 一次）：
     // mock 若整份回，「裁剪后前端还够不够用」这个问题在 E2E 里就永远暴露不出来。
-    const { cwd, all } = payload || {};
+    const { cwd } = payload || {};
+    const more = Number.isInteger(payload?.more) && payload.more > 0 ? payload.more : 0;
     const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
-    mockSessionListLog.push({ cwd, all: all === true, pages: payload?.pages ?? null, query });
+    mockSessionListLog.push({ cwd, more, query });
     // pinned 与 readState 一样在包装层统一注入：这个 handler 有五个以上返回分支，漏一个就会让那条
     // 路径下的「稍后再看」组凭空消失。搜索态不补（同真 server）：往结果里塞未匹配的行是污染搜索语义。
     const callback = typeof rawCallback === 'function'
@@ -1959,7 +1982,7 @@ io.on('connection', socket => {
         const rows = res?.sessions || [];
         const pinned = query ? [] : pinnedRowsFor(cwd, rows);
         const open = query ? [] : openRowsFor(cwd, [...rows, ...pinned]);
-        rawCallback({ ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open]) });
+        rawCallback({ moreCount: 0, ...res, pinned, open, readState: readStateForRows([...rows, ...pinned, ...open], cwd) });
       }
       : rawCallback;
     console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
@@ -2020,14 +2043,17 @@ io.on('connection', socket => {
           });
           return;
         }
-        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外 7 个会话）。
-        // O81：显示全部的第一页可以「加载更多」（canLoadMore）；第二页（pages:2）再放出其中 4 个，并模拟
-        // 到了服务端硬顶（canLoadMore:false）——剩下 3 个只能靠搜索。按钮与提示两种收尾都覆盖到。
-        const pages = Number.isInteger(payload?.pages) && payload.pages > 1 ? payload.pages : 1;
-        const overflowExtra = historyOverflowMode && all && pages >= 2 ? overflowOlderSessions(4) : [];
-        const total = sessions.length + (historyOverflowMode ? 7 : 0);
-        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : [...sessions, ...overflowExtra];
-        const hasMore = historyOverflowMode ? visibleSessions.length < total : false;
+        // overflow：按档截断（见 mockListStep 头注），不藏单条、moreCount 与真 server 的 fitSessionPage /
+        // showMoreCount 同算法；到硬顶后 moreCount=0，前端回落「可用搜索查找」。按钮与提示两种收尾都覆盖到。
+        const pool = historyOverflowMode ? [...sessions, ...overflowOlderSessions(mockOverflowExtra)] : sessions;
+        const total = pool.length;
+        const limit = historyOverflowMode ? Math.min(mockListStep * (1 + more), mockListHardTop) : total;
+        const nextLimit = limit < mockListHardTop ? Math.min(limit + mockListStep, mockListHardTop) : null;
+        const visibleSessions = total <= limit + 1 ? pool : pool.slice(0, limit);
+        const hasMore = visibleSessions.length < total;
+        const pinnedCount = pinnedRowsFor(cwd, visibleSessions).length;
+        const moreCount = !hasMore || nextLimit === null ? 0
+          : total <= nextLimit + 1 ? Math.max(0, total - visibleSessions.length - pinnedCount) : nextLimit - visibleSessions.length;
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
@@ -2035,7 +2061,7 @@ io.on('connection', socket => {
             || viewingRowTerminal === 'busy',
           terminalWaiting: terminalWaitingArmed || viewingRowTerminal === 'waiting',
           hasMore,
-          canLoadMore: Boolean(historyOverflowMode && all && pages < 2 && hasMore),
+          moreCount,
           total,
         });
         if (terminalRefreshArmed && terminalRefreshListCount === 1) {
@@ -3165,10 +3191,15 @@ io.on('connection', socket => {
   socket.on('read:sync', (payload, ack) => {
     mergeIntoReadState('seen', payload?.seen);
     mergeIntoReadState('manual', payload?.manual);
+    mergeIntoReadState('folders', payload?.folders);
     if (typeof ack === 'function') ack({ ok: true, state: readStateSnapshot() });
   });
 
   socket.on('read:mark', payload => {
+    if (typeof payload?.folder === 'string') { // 文件夹「全部标为已读」的水位
+      mergeIntoReadState('folders', { [payload.folder]: payload.at ?? Date.now() });
+      return;
+    }
     const sessionId = payload?.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) return;
     if (typeof payload?.manual === 'boolean') {
@@ -5321,7 +5352,7 @@ io.on('connection', socket => {
     {
       command: 'test:history-overflow',
       run: async () => {
-        console.log('[mock] test:history-overflow — session:list 默认截断，显示全部后返回较早历史');
+        console.log('[mock] test:history-overflow — session:list 默认截断，显示更多后返回较早历史');
         historyOverflowMode = true;
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),

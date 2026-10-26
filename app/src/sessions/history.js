@@ -1290,7 +1290,7 @@ const useSdk = (baseDir) => baseDir === CLAUDE_DIR;
 // lastUsedAt：优先读 transcript 尾窗「最后主链 user/assistant」时间；读不到才回落 SDK lastModified。
 async function scanSessionsViaSdk(cwd, limit) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  // 候选窗口 ≥ 显示 limit，且至少覆盖「显示全部」硬顶，便于按活动时间重排后仍能选出真最近 N。
+  // 候选窗口 ≥ 显示 limit，且至少覆盖一页上限 LIST_LIMIT，便于按活动时间重排后仍能选出真最近 N。
   const fetchLimit = Math.max(limit, LIST_LIMIT) + 1;
   const all = await fn({ dir: cwd, limit: fetchLimit });
   const arr = Array.isArray(all) ? all : [];

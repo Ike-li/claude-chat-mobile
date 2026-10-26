@@ -740,7 +740,8 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { a: T0 + 10 }, manual: {} }));
     const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
     for (const bad of [null, undefined, {}, 'x']) tracker.hydrate(bad);
-    assert.deepEqual(tracker.snapshot(), { baselineTs: T0, seen: { a: T0 + 10 }, manual: {} });
+    // folders：文件夹「全部标为已读」的水位，随 snapshot 走 read:sync（见下方 markAllRead 带文件夹那条）
+    assert.deepEqual(tracker.snapshot(), { baselineTs: T0, seen: { a: T0 + 10 }, manual: {}, folders: {} });
   });
 
   test('snapshot 供连上后上推本地表；返回副本，调用方改不动内部状态', () => {
@@ -807,6 +808,31 @@ test.describe('createUnreadTracker：手动未读的生命周期', () => {
     const reloaded = createUnreadTracker({ storage, now: () => T0 + 20_000 });
     const relit = batch.filter(s => reloaded.isUnread(s)).length;
     assert.equal(relit, 0, `重新加载后 ${relit} 行重新亮起未读`);
+  });
+
+  // 2026-10-26 真机：「全部标为已读」只标得到屏幕上那几行，更早的没加载出来，「显示更多」拉出一片未读。
+  // 现在另报一条文件夹水位，由服务端在 session:list 回执里折进每行（READ-01）。上报发不出去（离线）时
+  // 水位留在本地，随 read:sync 的 snapshot 带上去——与逐条位点同一条补偿路径。
+  test('markAllRead 带文件夹：逐条上报之外再报一条水位；水位落盘、进 snapshot', () => {
+    const events = [];
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 10, onChange: e => events.push(e) });
+    tracker.markAllRead(['a'], '/repo');
+    assert.deepEqual(events, [
+      { sessionId: 'a', manual: false, at: T0 + 10 },
+      { folder: '/repo', at: T0 + 10 },
+    ]);
+    assert.deepEqual(tracker.snapshot().folders, { '/repo': T0 + 10 });
+    const reloaded = createUnreadTracker({ storage, now: () => T0 + 20 });
+    assert.deepEqual(reloaded.snapshot().folders, { '/repo': T0 + 10 }, '离线时报不出去，重开 app 后要靠这份去 read:sync');
+  });
+
+  test('hydrate 不抹掉本地水位（服务端回执不搬这张表）', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {}, manual: {}, folders: { '/repo': T0 + 5 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 500 });
+    tracker.hydrate({ baselineTs: T0, seen: { s: T0 + 1 }, manual: {} });
+    assert.deepEqual(tracker.snapshot().folders, { '/repo': T0 + 5 });
+    assert.deepEqual(JSON.parse(storage.dump()).folders, { '/repo': T0 + 5 });
   });
 });
 
