@@ -340,4 +340,31 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await expect(page.locator('#rewindModeBoth')).toBeEnabled();
     await expectNoBrowserErrors(page);
   });
+
+  // 只恢复代码之后对话一条没变，屏幕上也不能变：rewind_applied 曾对当前会话再拉一遍历史，
+  // 而 loadHistory 只追加不清屏，整段对话在下面又出现一遍（mock 实测 14 条气泡变 28 条）。
+  // 历史是空闲回调里分块渲染的，直接数会赶在重复落地之前、恒绿。所以钉住时序：再开一次 /rewind，
+  // 清单回来说明之前那次 session:history 的回执已处理（socket 按序送达、mock 同步回复）；
+  // 再用假时钟冲掉空闲回调，分块渲染此时必然已经落进 DOM。
+  test('P0-REWINDo 只恢复代码之后，对话不在屏幕上重复一遍', async ({ page }) => {
+    await page.clock.install();
+    await openArchived(page);
+    const firstTurn = page.locator('[data-testid="user-message"]', { hasText: 'Summarize archived plan' });
+    await expect(firstTurn).toHaveCount(1, { timeout: 10_000 });
+    const bubbles = page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]');
+    const before = await bubbles.count();
+
+    await pickRewindTurn(page, 'Summarize archived plan');
+    await expect(page.locator('#rewindModeCode')).toBeEnabled({ timeout: 3_000 });
+    await page.locator('#rewindModeCode').click();
+    await expect(page.locator('#messages')).toContainText('对话未改动', { timeout: 10_000 });
+
+    await runRewindCommand(page);
+    await expect(page.locator('#rewindList')).toContainText('Summarize archived plan', { timeout: 3_000 });
+    await page.clock.runFor(2_000);
+
+    await expect(firstTurn, '只恢复代码后整段历史被追加了一遍').toHaveCount(1);
+    expect(await bubbles.count(), '气泡总数变了').toBe(before);
+    await expectNoBrowserErrors(page);
+  });
 });

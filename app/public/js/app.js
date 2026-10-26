@@ -2721,7 +2721,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
       rewind_applied: (ev) => {
         const p = ev?.payload || {};
-        // 只有正看着这个会话时才需要动 UI：对话树被截断、文件也变了，本地这两份都过期。
+        // 只有正看着这个会话时才需要说一声。
         if (!ev?.sessionId || ev.sessionId !== displayedSessionId) return;
         const n = Array.isArray(p.filesChanged) ? p.filesChanged.length : 0;
         // 三个模式的成功形态不同，不能只看 forkedSessionId 在不在：
@@ -2735,8 +2735,11 @@ import { createGateFocusController } from './app/focus-layers.js';
         } else {
           addBar(t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n), 'text-ink-faint');
         }
+        // 【不重拉这个会话的历史】三个模式都不改它的对话：分叉是复制到新会话（原会话一个字节不动，
+        // 见 sessions/rewind-plan.js 头注），只恢复代码根本不碰 transcript。这里原先调 loadHistory 是
+        // 原地截断时代留下的，而 loadHistory 只追加不清屏，整段对话会在下面再出现一遍（P0-REWINDo）。
+        // 新会话由 instances 广播切过去时照常加载。
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
-        loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
