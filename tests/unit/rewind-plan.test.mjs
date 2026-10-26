@@ -108,6 +108,60 @@ test.describe('planRewind：拒绝路径（失败方向必须是拒绝）', () =
   });
 });
 
+// ── 同一文件里有多条分支：丢弃方向也只能沿父链取锚点（2026-10-26）──
+// 同一个父节点下挂着两条 prompt 是常态：先发的那条被 Esc 放弃或重发，后一条接着从同一个父节点写。
+// 按物理行序取「前一条」会拿到被放弃那条的尾巴，新会话就停在一句已经放弃的话上，模型也看得见它。
+// 形态取自本机真实 transcript（984 个会话 / 7932 个可回退的 prompt 里 39 个踩中，另有 3 个是根 prompt 重发），
+// 其余 7174 个新旧锚点逐个相同。
+test.describe('planRewind：沿父链取锚点，不按物理行序', () => {
+  test('兄弟 prompt：前一条被放弃，锚点是两者共同的父节点，不是被放弃那条的尾巴（真机 9243e688）', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'first' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 's1', parentUuid: 'a1', type: 'system', subtype: 'turn_duration' },
+      { uuid: 'u2x', parentUuid: 's1', type: 'user', message: { content: '改题加难重跑' } },   // 被放弃的那条
+      { uuid: 'at2x', parentUuid: 'u2x', type: 'attachment' },
+      { uuid: 'u2', parentUuid: 's1', type: 'user', message: { content: '硬着头皮往下评' } },
+      { uuid: 'at2', parentUuid: 'u2', type: 'attachment' },
+    ];
+    assert.deepEqual(planRewind(entries, 'u2'), { ok: true, keepUuid: 's1' },
+      '锚到 at2x 的话，forkSession 切出来的新会话停在被放弃的「改题加难重跑」上');
+    assert.deepEqual(planFork(entries, 'u2', { keepAnchorTurn: false }), { ok: true, keepUuid: 's1' }, '丢弃方向与 planRewind 同源');
+  });
+
+  test('根 prompt 重发（parentUuid 为 null）：前面被放弃的那条不当锚点，按首轮拒绝（真机 64304e4a）', () => {
+    const entries = [
+      { uuid: 'u1x', parentUuid: null, type: 'user', message: { content: '1' } },
+      { uuid: 'at1x', parentUuid: 'u1x', type: 'attachment' },
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: '1' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ];
+    assert.deepEqual(planRewind(entries, 'u1'), { ok: false, reason: 'first-turn' },
+      '根 prompt 之前没有本支的内容；锚到 at1x 会复制出一个只剩被放弃那句话的会话');
+  });
+
+  test('父节点不在这份 transcript 里 → 拒绝，不退回按行序猜', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'u2', parentUuid: 'gone', type: 'user', message: { content: 'next' } },
+    ];
+    const plan = planRewind(entries, 'u2');
+    assert.equal(plan.ok, false, '父链断了还按行序取 a1，等于在不知道分支的情况下猜一个');
+    assert.notEqual(plan.reason, 'first-turn', '这不是首轮，文案不能说「这是会话的第一轮」');
+  });
+
+  test('压缩边界后：父指针为 null 时经 logicalParentUuid 接续', () => {
+    const entries = [
+      { uuid: 'u1', parentUuid: null, type: 'user', message: { content: 'go' } },
+      { uuid: 'a1', parentUuid: 'u1', type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+      { uuid: 'b1', parentUuid: null, logicalParentUuid: 'a1', type: 'system', subtype: 'compact_boundary' },
+      { uuid: 'u2', parentUuid: null, logicalParentUuid: 'b1', type: 'user', message: { content: 'next' } },
+    ];
+    assert.deepEqual(planRewind(entries, 'u2'), { ok: true, keepUuid: 'b1' }, '把压缩后的这一轮当成首轮会让它回退不了');
+  });
+});
+
 test.describe('describeRewindBlocker：分档说明是什么挡住的', () => {
   test('first-turn 与「无法确定位置」分开表述', () => {
     assert.match(describeRewindBlocker({ ok: false, reason: 'first-turn' }), /第一轮/);
