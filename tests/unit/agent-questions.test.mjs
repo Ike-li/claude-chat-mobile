@@ -335,23 +335,36 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  test('resolveQuestionGroup：必须恰好覆盖仍未作答的题（缺题、重题都不收；已逐题答过的不必再交）', async () => {
+  test('resolveQuestionGroup：必须覆盖每一道仍未作答的题（缺题、重题都不收）', () => {
     const { s } = makeSession();
     const ac = new AbortController();
-    const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+    s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
     s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 1, optionIndexes: [1] }]);
     assert.equal(s.pendingQuestions.get('q1').remaining, 3, '缺一题不收');
-    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }]);
+    // 三题都覆盖了、只是第 1 题交了两个不同答案：哪个算数说不清，整组不收
+    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 0 }, { index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }]);
     assert.equal(s.pendingQuestions.get('q1').remaining, 3, '同一题交两次不收');
-
-    // 旧版页面（缓存未刷新）可能已逐题答过第 1 题：整组只需交剩下的
-    s.resolveQuestion('q1#0', 0);
-    s.resolveQuestionGroup('q1', [{ index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }]);
-    assert.equal(s.pendingQuestions.get('q1').remaining, 2, '已答的题不得被整组提交改写');
-    s.resolveQuestionGroup('q1', [{ index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }]);
-    const result = await promise;
-    assert.equal(result.message, '用户选择了：「A」、「Y」、「P」');
     s.dispose();
+  });
+
+  // PR #413 review（Codex P2）：没刷新的旧页面逐题答掉第 1 题、那条广播还在路上时，本机整组提交仍带着第 1 题。
+  // 整组拒收的话，本机已乐观关卡、把整组标成已答，剩下的题连重连快照都被吞掉，这一轮挂到 TTL。
+  test('resolveQuestionGroup：别处已抢先答掉的题，整组里那一条忽略（先到先得、不改写），其余照收', async () => {
+    for (const items of [
+      [{ index: 0, optionIndex: 1 }, { index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }], // 广播还没到，本机仍带着第 1 题
+      [{ index: 1, optionIndexes: [1] }, { index: 2, optionIndex: 0 }], // 广播已到，第 1 题已从组卡移除
+    ]) {
+      const { s } = makeSession();
+      const ac = new AbortController();
+      const promise = s.handleQuestion(threeQuestions, { signal: ac.signal, toolUseID: 'q1' });
+      s.resolveQuestion('q1#0', 0); // 旧页面逐题答了「A」
+      s.resolveQuestionGroup('q1', items);
+      // 先同步判：被拒收时 promise 要到 TTL 才结算，直接 await 会把测试挂住而不是变红
+      assert.equal(s.pendingQuestions.size, 0, `提交了 ${items.length} 项却被整组拒收，这一轮会挂到 TTL`);
+      const result = await promise;
+      assert.equal(result.message, '用户选择了：「A」、「Y」、「P」', `提交了 ${items.length} 项`);
+      s.dispose();
+    }
   });
 
   test('resolveQuestionGroup：过期后整组提交不作答（fail-closed，与逐题作答对称）', async () => {

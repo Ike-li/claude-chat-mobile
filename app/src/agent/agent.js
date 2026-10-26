@@ -1916,8 +1916,10 @@ export class AgentSession {
   }
 
   // 多题整组提交（对齐 CLI：答案在手机上攒着、可来回改，最后一次交出）。items 是 [{ index, optionIndex |
-  // optionIndexes | freeText }]，必须恰好覆盖仍未作答的各题、且每项都合法才写入，任一项不收就整组不收：
+  // optionIndexes | freeText }]，必须覆盖每一道仍未作答的题、且每项都合法才写入，任一项不收就整组不收：
   // 半组写入后快照只补发未答项，已写入的题在重连后消失，用户再也改不回来——正是整组提交要避免的。
+  // 别处已答掉的题（没刷新的旧页面逐题即交，广播还在路上）那一条忽略、不改写，与逐题路径的防重复一致：
+  // 若因此整组拒收，本机早已乐观关卡、把整组标成已答，剩下的题连重连快照都被吞掉，这一轮挂到 TTL。
   resolveQuestionGroup(toolUseID, items) {
     const pending = this.pendingQuestions.get(toolUseID);
     if (!pending || !Array.isArray(items)) return;
@@ -1925,15 +1927,18 @@ export class AgentSession {
       this._expireQuestion(toolUseID);
       return;
     }
-    if (items.length !== pending.remaining) return;
+    const seen = new Set();
     const labels = new Map();
     for (const item of items) {
       const i = item?.index;
-      if (!Number.isInteger(i) || pending.answers[i] !== null || labels.has(i)) return; // 越界下标的 answers[i] 是 undefined
+      if (!Number.isInteger(i) || i < 0 || i >= pending.questions.length || seen.has(i)) return;
+      seen.add(i);
+      if (pending.answers[i] !== null) continue; // 别处已答：先到先得
       const label = questionAnswerLabel(pending.questions[i], item);
       if (label == null) return;
       labels.set(i, label);
     }
+    if (labels.size !== pending.remaining) return; // 缺题不收
     for (const [i, label] of labels) {
       pending.answers[i] = label;
       pending.remaining--;
