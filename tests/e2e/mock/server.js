@@ -2306,17 +2306,12 @@ io.on('connection', socket => {
     if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
   });
 
-  // P0-FORK：镜像真实 session:fork handler 的收尾（app/src/server/app.js）——建/聚焦新实例、广播 instances、ack。
-  // 只认 mock-session-archived → mock-session-forked 这一条固定映射，够验前端长按→confirm→切视图链路。
-  // uuid 白名单只收 assistant 侧（a-archived-*）：user 气泡长按理应解析出前一条 assistant 的 uuid、不是
-  // 自己的（u-archived-*）——若前端解析回归成送自己的 uuid，这里会拒绝，P0-FORKc 能抓到。
   // 文件轴 Rewind 预览。ack 形状与真 server 逐字对齐（app/src/server/app.js 的 session:rewind:preview）——
   // 这里是平行实现，字段漂了 E2E 也不会红，改真 server 的 ack 时必须回来同步这一处。
   //
   // uuid 白名单【只收 user 侧】（u-archived-*），与上面 fork handler 恰好相反（它只收 a-archived-*）。
   // 这不是笔误：rewindFiles 要的是【被丢弃那轮 prompt 自身】的 uuid，而 fork 的锚点语义是
-  // 「保留到这条为止」故取前一条 assistant。两个功能会并排出现在同一个长按菜单里，前端若图省事
-  // 复用 resolveForkAnchorUuid，送来的就是 a-archived-*，这里拒绝，E2E 能当场抓到。
+  // 「保留到这条为止」故取 assistant 侧。前端若把两边的 uuid 接反，送来的就是 a-archived-*，这里拒绝，E2E 能当场抓到。
   // `/rewind` 第一步的候选清单。ack 形状与真 server 的 session:rewind:candidates 逐字对齐——
   // 同样是平行实现，改真 server 的 ack 必须回来同步这一处。
   //
@@ -2779,9 +2774,7 @@ io.on('connection', socket => {
       }
       callback({
         messages: [
-          // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 app/src/sessions/history.js）。
-          // 两轮对话：验证长按第二条 user 气泡时前端解析出的是前一条 assistant 的 uuid（a-archived-1），
-          // 不是它自己的 uuid（u-archived-2）——见下方 session:fork handler 只认 assistant uuid。
+          // uuid：分叉锚点（P0-FORKd 的操作栏按钮）定位用（expandHistoryEntry 透出，见 app/src/sessions/history.js）。
           { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
           { role: 'assistant', content: 'Archived plan replay from session history.', uuid: 'a-archived-1' },
           { role: 'user', content: 'Any follow-up questions?', uuid: 'u-archived-2' },
@@ -2825,7 +2818,7 @@ io.on('connection', socket => {
         ? { messages: [{ role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' }, { role: 'assistant', content: 'WORKTREE_FORK_READY', uuid: 'a-wt-f1' }] }
         : { messages: [], error: '会话不存在' });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
-      // P0-FORK：session:fork 成功后前端切视图会拉这条会话历史；文案与源会话不同，便于断言真切换了。
+      // P0-FORKd：session:fork 成功后前端切视图会拉这条会话历史；文案与源会话不同，便于断言真切换了。
       callback({
         messages: [
           { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },

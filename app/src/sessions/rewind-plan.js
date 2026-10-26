@@ -88,12 +88,35 @@ export function planRewind(entries, promptUuid) {
   const at = entries.findIndex(e => e && e.uuid === promptUuid);
   if (at < 0) return { ok: false, reason: 'prompt-not-found' };
 
-  // K = 目标轮之前最后一条 chain entry。取「最后一条」而不是「最后一条 assistant」：
+  // K = 目标轮之前、【本支上】最后一条 chain entry。取「最后一条」而不是「最后一条 assistant」：
   // 被中断（Esc）且完成过工具的轮次尾部是 tool_result，它同样是保留轮自己的内容，
   // 锚在更早的 assistant 上会把它一起丢掉。
+  //
+  // 【沿父链，不按物理行序】（2026-10-26）同一个父节点下常挂着两条 prompt：先发的那条被放弃或重发，
+  // 后一条从同一个父节点接着写。物理上的前一条于是是被放弃那条的尾巴，forkSession 切出来的新会话
+  // 停在一句已经放弃的话上。父指针为 null 的是根 prompt，本支在它之前什么都没有。
+  // 压缩边界 parentUuid 为 null、接续写在 logicalParentUuid 上（同 planFork）。
+  // 没有 parentUuid 字段的老形态行沿用物理行序：那种 transcript 里本就分不出支。
+  const target = entries[at];
   let keepUuid = null;
-  for (let i = at - 1; i >= 0; i--) {
-    if (isChainEntry(entries[i])) { keepUuid = entries[i].uuid; break; }
+  if ('parentUuid' in target) {
+    const before = new Map();
+    for (let i = 0; i < at; i++) if (entries[i]?.uuid) before.set(entries[i].uuid, entries[i]);
+    const parentOf = e => e?.parentUuid ?? e?.logicalParentUuid;
+    let cur = parentOf(target);
+    const seen = new Set();
+    while (typeof cur === 'string' && cur && !seen.has(cur)) {
+      seen.add(cur);
+      const e = before.get(cur);
+      // 父链断在这份文件外：不知道本支在哪，拒绝而不是退回行序去猜。
+      if (!e) return { ok: false, reason: 'anchor-not-found' };
+      if (isChainEntry(e)) { keepUuid = e.uuid; break; }
+      cur = parentOf(e);
+    }
+  } else {
+    for (let i = at - 1; i >= 0; i--) {
+      if (isChainEntry(entries[i])) { keepUuid = entries[i].uuid; break; }
+    }
   }
   // 目标轮就是会话第一轮：其前面没有可保留的锚点，分叉退化成「复制一个空会话」，不做。
   // 与 Desktop 同款判断（它的措辞是 "has assistant-less history before it; declining rather than clearing"）。

@@ -166,7 +166,6 @@ import {
   findHistoryClaimForPending,
   resolveUnreadAnchorIndex,
   shouldAckUnreadOnScroll,
-  resolveForkAnchorUuid,
   detectAtMentionQuery,
   applyAtMentionPick,
   buildSlashCommandHints,
@@ -222,7 +221,6 @@ import { createAgentEventDispatcher, createReplayBuffer } from './app/event-disp
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
 import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
-import { attachLongPress } from './app/long-press.js';
 import { attachFolderDrag } from './app/folder-drag.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createNewSessionWorktree } from './app/new-session-worktree.js';
@@ -2723,7 +2721,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
       rewind_applied: (ev) => {
         const p = ev?.payload || {};
-        // 只有正看着这个会话时才需要动 UI：对话树被截断、文件也变了，本地这两份都过期。
+        // 只有正看着这个会话时才需要说一声。
         if (!ev?.sessionId || ev.sessionId !== displayedSessionId) return;
         const n = Array.isArray(p.filesChanged) ? p.filesChanged.length : 0;
         // 三个模式的成功形态不同，不能只看 forkedSessionId 在不在：
@@ -2737,8 +2735,11 @@ import { createGateFocusController } from './app/focus-layers.js';
         } else {
           addBar(t('已回退 {n} 个文件，并分叉出回到那一刻的新会话（原会话保留）').replace('{n}', n), 'text-ink-faint');
         }
+        // 【不重拉这个会话的历史】三个模式都不改它的对话：分叉是复制到新会话（原会话一个字节不动，
+        // 见 sessions/rewind-plan.js 头注），只恢复代码根本不碰 transcript。这里原先调 loadHistory 是
+        // 原地截断时代留下的，而 loadHistory 只追加不清屏，整段对话会在下面再出现一遍（P0-REWINDo）。
+        // 新会话由 instances 广播切过去时照常加载。
         // 不必失效文件预览：附件/文件预览走 browse:read 按需拉取，前端不留缓存（已核实）。
-        loadHistory(ev.sessionId, p.cwd || drivingCwdOf(displayedInstanceId));
       },
       // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
       task_progress: (ev) => {
@@ -3375,10 +3376,9 @@ import { createGateFocusController } from './app/focus-layers.js';
         if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
           appendCopyAction(matchedBubble, () => p.text, 'right');
         }
-        // Rewind 锚点：占位转正时补上服务端权威 uuid，并补绑长按（占位创建时还没有 uuid）。
+        // 占位转正时补上服务端权威 uuid（占位创建时还没有 uuid）。
         if (p.uuid && !matchedBubble.dataset.uuid) {
           matchedBubble.dataset.uuid = p.uuid;
-          bindBubbleLongPress(matchedBubble, 'user');
         }
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
@@ -3388,8 +3388,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用：user_message 在线新建分支（离线占位分支在 send() 创建时已挂，这里走 matchedBubble 复用不重复创建）
       // 排队撤回/标记转正都按 clientMessageId 定位气泡（离线占位分支已挂，此处补齐在线新建分支）
       if (p.clientMessageId) bubble.dataset.clientMessageId = p.clientMessageId;
-      // Rewind 锚点：live 气泡从这一刻起就带 uuid，用户不必刷新页面就能回退「刚才那一轮」。
-      // 这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
+      // live 气泡从这一刻起就带 uuid。这个 uuid 与 transcript 落盘值逐字相同（2026-09-10 实测），所以刷新前后行为一致。
       if (p.uuid) bubble.dataset.uuid = p.uuid;
       if (p.text) {
         // 与乐观占位、历史路径同一个构建器：纯文本（验收 O25）
@@ -3401,7 +3400,6 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
       if (p.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 额度墙到点续跑发的，不是用户打的
-      if (p.uuid) bindBubbleLongPress(bubble, 'user');
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
     },
@@ -8909,45 +8907,16 @@ import { createGateFocusController } from './app/focus-layers.js';
     else setTimeout(fn, 0);
   }
 
-  // 长按气泡：550ms 触发，位移>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
-  // 按气泡归属分流——user → 文件轴 Rewind，assistant → 对话轴 fork，见 requestSessionFork。
-  // 绑定前提是气泡带 dataset.uuid。2026-09-10 起 live 的 user 气泡也带（服务端随 user_message 下发 uuid），
-  // 所以「刚发完就想回退」不再需要先刷新页面。
-  // 手势走 long-press.js 的 touchOnly（O136）：此前只听 touch 事件，Android 长按文字时系统先接管选字、
-  // touchcancel 撤掉计时，真机上什么都不弹；现在也认之后那个 contextmenu。代价是触屏长按气泡不再
-  // 出系统选字，复制靠操作栏「复制」。鼠标拖选与桌面右键菜单原样留给浏览器。
-  //
-  // 【2026-09-20 撤掉 user 气泡上的二选一】原来长按 user 气泡会弹「回退 / 分叉」确认框，
-  // 回退现在走 /rewind 斜杠命令（对齐终端的两步交互，见 app/rewind-command.js）——
-  // 长按是隐藏手势、发现不了，而回退在终端里本来就有名字。
-  function bindBubbleLongPress(bubble, role) {
-    attachLongPress(bubble, () => requestSessionFork(bubble, role), { holdMs: 550, moveTolerance: 8, touchOnly: true });
-  }
-
-  // 沿 DOM 序回溯找最近一条主链 assistant 气泡的 uuid（工具卡/思考块/子agent卡都没有 dataset.uuid，天然跳过）。
-  function findPrecedingAssistantUuid(bubble) {
-    let node = bubble.previousElementSibling;
-    while (node) {
-      if (node.dataset?.uuid && node.getAttribute('data-testid') === 'assistant-message') return node.dataset.uuid;
-      node = node.previousElementSibling;
-    }
-    return null;
-  }
-
-  async function requestSessionFork(bubble, role) {
-    // 【锚点不再由前端算】只送这条气泡自己的 uuid + 语义，真正的 upToMessageId 由服务端对着
+  // 【气泡上不挂长按】（2026-10-26）长按曾是分叉的入口（O136 起还认 Android 的 contextmenu 并拦下），
+  // 真机上系统选字照样出来、分叉确认又盖在上面，想复制一段文字复制不了。浏览器没有「保留系统选字、
+  // 同时把长按另作他用」的可靠做法，于是长按整个还给系统：入口只剩 assistant 操作栏的「分叉」按钮；
+  // user 气泡原来那个「丢弃这条及之后」就是 /rewind 的「只恢复对话」，服务端同一个 planRewind。
+  async function requestSessionFork(bubble) {
+    // 【锚点不再由前端算】只送这条气泡自己的 uuid，真正的 upToMessageId 由服务端对着
     // transcript 算（见 sessions/rewind-plan.js 的 planFork）。前端 DOM 里工具卡没有 uuid，
     // 「保留轮尾部是 tool_result」这种形态在这一侧结构上就看不见，算不对。
     const ownUuid = bubble.dataset.uuid || null;
-    // resolveForkAnchorUuid 仍用来做【值不值得发这一趟】的快速判断：user 气泡前面没有任何
-    // assistant 时，分叉出来就是个空会话，本地拦掉比让服务端拒绝一次更快。
-    const reachable = resolveForkAnchorUuid({
-      role,
-      ownUuid,
-      precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
-    });
-    if (!ownUuid || !reachable) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
-    if (!displayedSessionId) return;
+    if (!ownUuid || !displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 cwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
     // 消息的 anchor 和 await 后已变成 B 的 cwd/sessionId 拼到一起发出去。
@@ -8965,10 +8934,9 @@ import { createGateFocusController } from './app/focus-layers.js';
       return;
     }
     haptic('tap');
-    // keepAnchorTurn 表达语义而非位置：assistant 气泡=「保留到这一轮」，user 气泡=「丢弃这条及之后」。
-    // 两者锚点相反，交给服务端按 transcript 解析，前端不做位置计算。
+    // keepAnchorTurn 表达语义而非位置：assistant 气泡＝「保留到这一轮」，交给服务端按 transcript 解析。
     socket.emit('session:fork', {
-      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: role === 'assistant',
+      cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: ownUuid, keepAnchorTurn: true,
     }, res => {
       if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
@@ -9335,10 +9303,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left', msg.uuid);
       if (isUser && msg.origin === 'auto-continuation') tagAutoContinueBubble(bubble); // 与 live 的 user_message 同一判据
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
-      if (msg.uuid) {
-        bubble.dataset.uuid = msg.uuid;
-        bindBubbleLongPress(bubble, isUser ? 'user' : 'assistant');
-      }
+      if (msg.uuid) bubble.dataset.uuid = msg.uuid;
       // 历史条目的 timestamp 是 transcript 原样透传的 ISO 串（src/sessions/history.js）。
       // 节点先进游离的 frag，故 prevTs 优先读 frag、空了再回落 #messages（增量追加场景）。
       stampIntoFrag(bubble, msg.timestamp, msg.role);
@@ -9908,8 +9873,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     bar.appendChild(speakBtn);
 
     // 对话轴分叉的可见入口。对齐 Claude Desktop 1.52386.6——它把「Fork from here」放在
-    // assistant 消息的操作栏里，与复制/朗读同排。本仓此前只有长按一条路：没有任何视觉提示，
-    // 且 bindBubbleLongPress 只认触屏，桌面鼠标按不出来。
+    // assistant 消息的操作栏里，与复制/朗读同排。2026-10-26 起它是唯一入口（气泡长按还给了系统选字，
+    // 见 requestSessionFork 头注）。
     //
     // 【为什么判 anchorUuid】没有锚点就分叉不了（requestSessionFork 开头直接 return）。
     // 流式气泡由 getStream 建、不带 dataset.uuid，旧 transcript 里也有缺 uuid 的条目——
@@ -9926,7 +9891,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 确认框在 requestSessionFork 里，haptic 同理——按钮可见不等于一键执行。
       // uuid 在点击时由该函数从 container.dataset 读，不用这里的 anchorUuid：
       // 气泡的 dataset 才是权威值，且历史回显路径是先挂操作栏、后补 uuid。
-      forkBtn.onclick = () => requestSessionFork(container, 'assistant');
+      forkBtn.onclick = () => requestSessionFork(container);
       bar.appendChild(forkBtn);
     }
 

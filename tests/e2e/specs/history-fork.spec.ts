@@ -4,64 +4,20 @@ import { test, expect, type Locator } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
 import { MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
-// 长按历史气泡的两个动作：assistant → 对话轴 fork（forkSession upToMessageId）；
-// user → 先弹二选一，可选文件轴 Rewind（session:rewind:preview/confirm）或 fork。
+// 对话轴分叉：assistant 气泡操作栏的「分叉」按钮（forkSession upToMessageId）。
+// 气泡长按 2026-10-26 起交还给系统选字复制，不承载任何动作（见 P0-FORKf）。
 //
 // 【2026-09-18 起锚点由服务端算】前端只送「这条气泡自己的 uuid + 方向」，upToMessageId 由
 // sessions/rewind-plan.js 的 planFork 对着 transcript 解析。原因：工具卡在前端 DOM 里没有
 // uuid，「保留轮的最后一条 entry 是 tool_result」这种形态在前端结构上就看不见，而 SDK 的
 // forkSession 是纯 inclusive slice、零修正，锚早了它照切、tool_use 就悬空。
 // mock 的护栏随之从「只收 assistant 侧 uuid」翻成「uuid 侧别必须与 keepAnchorTurn 一致」。
-// 长按靠真实 550ms setTimeout 触发（见 app.js bindBubbleLongPress → long-press.js），不用 waitForTimeout
-// （禁用模式）——派发触屏 pointerdown 后直接轮询等确认弹层出现，天然把这段延迟吃掉。
+//
+// 【2026-10-26 退役】P0-FORK（长按 assistant 气泡分叉）、P0-FORKc（长按 user 气泡「丢弃这条及之后」）、
+// P0-FORKb（长按首条 user 气泡提示「这是最早一条消息」）。不是测试删了，是被测的入口随气泡长按一起没了：
+// assistant 侧的分叉由 P0-FORKd 的按钮守；user 侧那个语义就是 /rewind 的「只恢复对话」，
+// 服务端同一个 planRewind（rewind-plan.test.mjs）。
 test.describe('P0 日常零 token Mock UI 回归', () => {
-  test('P0-FORK 长按 assistant 气泡可从该点分叉新会话', async ({ page }) => {
-    await gotoMock(page);
-
-    await openSessionsSidebar(page);
-    await expandWorkspace(page, MAIN_WORKSPACE);
-    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
-    await expectSidebarClosed(page);
-    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
-
-    const assistantBubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
-    await touchHold(assistantBubble);
-
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await expect(page.locator('#confirmTitle')).toContainText('分叉');
-    await page.locator('#confirmOk').click();
-
-    // mock session:fork 切到 mock-session-forked，其 session:history 回一段带独立文案的历史，验证真切换了会话。
-    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
-
-    await expectNoBrowserErrors(page);
-  });
-
-  test('P0-FORKc 长按用户消息分叉：送自己的 uuid + keepAnchorTurn=false（语义而非位置）', async ({ page }) => {
-    await gotoMock(page);
-
-    await openSessionsSidebar(page);
-    await expandWorkspace(page, MAIN_WORKSPACE);
-    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
-    await expectSidebarClosed(page);
-    await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
-
-    // 2026-09-18 起锚点由服务端算（planFork），前端只送「自己的 uuid + 语义标志」。
-    // mock 的护栏随之翻转成【uuid 侧别必须与 keepAnchorTurn 一致】：这条 user 气泡要送
-    // u-archived-2 + keepAnchorTurn=false，把语义送反（配成 true）会被 mock 拒绝、
-    // 下面的「切到新会话」断言就失败——护栏守的东西换了，区分力仍在。
-    const secondUserBubble = page.locator('[data-testid="user-message"]', { hasText: 'Any follow-up questions?' });
-    await touchHold(secondUserBubble);
-
-    // 2026-09-20：user 气泡长按【直达分叉】。原先这里先弹「回退 / 分叉」二选一，回退改走
-    // /rewind 斜杠命令之后，长按只剩分叉这一个动作，中间那次选择没有了。
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
-
-    await expectNoBrowserErrors(page);
-  });
-
   test('P0-FORKd assistant 气泡有常驻「分叉」入口，点击直达确认', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
@@ -103,53 +59,55 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-FORKb 长按会话首条用户消息（前面无 assistant 回复）时禁用分叉', async ({ page }) => {
+  // 【2026-10-26 气泡长按还给系统】O136 起气泡长按改认 Android 的 contextmenu 并 preventDefault，
+  // 以为拦下它就能压住系统选字。真机上不是：系统选字照样出来，分叉确认又盖在上面，想复制一段文字复制不了。
+  // 两条触屏路径都要看：按住不放到点（iOS 长按不发 contextmenu，只有计时这一路），与 Android 的
+  // pointerdown → pointercancel（系统接管选字）→ contextmenu。假时钟快进而不是等，越过原来 550ms 的阈值。
+  test('P0-FORKf 触屏长按气泡不弹分叉、不拦系统菜单（长按留给系统选字复制）', async ({ page }) => {
+    await page.clock.install();
     await gotoMock(page);
 
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
     await expectSidebarClosed(page);
-    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Any follow-up questions?', { timeout: 10_000 });
 
-    const firstUserBubble = page.locator('[data-testid="user-message"]', { hasText: 'Summarize archived plan' });
-    await touchHold(firstUserBubble);
+    await page.evaluate(() => {
+      const w = window as unknown as { __ctxPrevented: boolean[] };
+      w.__ctxPrevented = [];
+      document.addEventListener('contextmenu', ev => {
+        w.__ctxPrevented.push(ev.defaultPrevented);
+        ev.preventDefault(); // 测试自己收尾，免得无头浏览器真弹菜单
+      });
+    });
+    // 两条都带 uuid（a-archived-* / u-archived-*）：原来正是这两类气泡挂着长按。
+    const bubbles = [
+      page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' }),
+      page.locator('[data-testid="user-message"]', { hasText: 'Any follow-up questions?' }),
+    ];
+    for (const bubble of bubbles) {
+      const at = await bubbleCenter(bubble);
+      const touch = { ...at, pointerType: 'touch', isPrimary: true, button: 0 };
+      await bubble.dispatchEvent('pointerdown', touch);
+      await page.clock.runFor(1_000);
+      await bubble.dispatchEvent('pointerup', touch);
 
-    // 长按直达分叉（2026-09-20 起不再弹二选一），随即撞上"前面没有 assistant 可作锚点"这一档：
-    // 不该弹确认框，直接说清楚为什么分不了。
-    await expect(page.locator('#messages')).toContainText('这是最早一条消息', { timeout: 3_000 });
-    await expect(page.locator('#confirmModal')).toBeHidden();
+      await bubble.dispatchEvent('pointerdown', touch);
+      await bubble.dispatchEvent('pointercancel', touch);
+      await bubble.dispatchEvent('contextmenu', at);
+      await page.clock.runFor(1_000);
+    }
 
-    await expectNoBrowserErrors(page);
-  });
-
-  // O136（E4 真机 Android Chrome）：长按气泡文字时系统先接管选字——发 pointercancel 撤掉计时，
-  // 之后只剩一个 contextmenu。气泡长按此前只听 touch 事件、不认 contextmenu，真机上什么都不弹。
-  // 这里按真机的事件次序派发，不派发 touchstart（真机那一路的计时早被系统撤了）。
-  test('P0-FORKf Android 长按序列（系统选字接管后只剩 contextmenu）照样弹分叉确认', async ({ page }) => {
-    await gotoMock(page);
-
-    await openSessionsSidebar(page);
-    await expandWorkspace(page, MAIN_WORKSPACE);
-    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
-    await expectSidebarClosed(page);
-    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history.', { timeout: 10_000 });
-
-    const assistantBubble = page.locator('[data-testid="assistant-message"]', { hasText: 'Archived plan replay' });
-    const at = await bubbleCenter(assistantBubble);
-    await assistantBubble.dispatchEvent('pointerdown', { ...at, pointerType: 'touch', isPrimary: true, button: 0 });
-    await assistantBubble.dispatchEvent('pointercancel', { ...at, pointerType: 'touch', isPrimary: true });
-    await assistantBubble.dispatchEvent('contextmenu', at);
-
-    await expect(page.locator('#confirmModal')).toBeVisible({ timeout: 3_000 });
-    await expect(page.locator('#confirmTitle')).toContainText('分叉');
-    await page.locator('#confirmOk').click();
-    await expect(page.locator('#messages')).toContainText('Forked session ready.', { timeout: 10_000 });
+    // 判 classList 不判可见性：假时钟下 sheet 的过渡停在半路，弹出来了也是 visibility:hidden，toBeHidden 恒绿。
+    await expect(page.locator('#confirmModal'), '长按气泡弹出了分叉确认，盖住系统选字').toHaveClass(/(^|\s)hidden(\s|$)/);
+    expect(await page.evaluate(() => (window as unknown as { __ctxPrevented: boolean[] }).__ctxPrevented),
+      'contextmenu 被拦下，系统的复制菜单出不来').toEqual([false, false]);
 
     await expectNoBrowserErrors(page);
   });
 
-  // 修 O136 时气泡改认 contextmenu，但只认触屏手势：桌面右键要留给浏览器菜单（选中文字后「复制」）。
+  // 桌面右键要留给浏览器菜单（选中文字后「复制」）。
   test('P0-FORKg 桌面右键气泡：不弹分叉，也不拦浏览器自己的右键菜单', async ({ page }) => {
     await gotoMock(page);
 
@@ -175,10 +133,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 });
-
-async function touchHold(bubble: Locator) {
-  await bubble.dispatchEvent('pointerdown', { ...(await bubbleCenter(bubble)), pointerType: 'touch', isPrimary: true, button: 0 });
-}
 
 async function bubbleCenter(bubble: Locator) {
   const box = await bubble.boundingBox();
@@ -384,6 +338,33 @@ test.describe('P0 日常零 token Mock UI 回归 · Rewind', () => {
     await page.locator('#rewindList').getByText('Any follow-up questions?', { exact: false }).click();
     await expect(page.locator('#rewindModeConversation')).toBeEnabled({ timeout: 3_000 });
     await expect(page.locator('#rewindModeBoth')).toBeEnabled();
+    await expectNoBrowserErrors(page);
+  });
+
+  // 只恢复代码之后对话一条没变，屏幕上也不能变：rewind_applied 曾对当前会话再拉一遍历史，
+  // 而 loadHistory 只追加不清屏，整段对话在下面又出现一遍（mock 实测 14 条气泡变 28 条）。
+  // 历史是空闲回调里分块渲染的，直接数会赶在重复落地之前、恒绿。所以钉住时序：再开一次 /rewind，
+  // 清单回来说明之前那次 session:history 的回执已处理（socket 按序送达、mock 同步回复）；
+  // 再用假时钟冲掉空闲回调，分块渲染此时必然已经落进 DOM。
+  test('P0-REWINDo 只恢复代码之后，对话不在屏幕上重复一遍', async ({ page }) => {
+    await page.clock.install();
+    await openArchived(page);
+    const firstTurn = page.locator('[data-testid="user-message"]', { hasText: 'Summarize archived plan' });
+    await expect(firstTurn).toHaveCount(1, { timeout: 10_000 });
+    const bubbles = page.locator('#messages [data-testid="user-message"], #messages [data-testid="assistant-message"]');
+    const before = await bubbles.count();
+
+    await pickRewindTurn(page, 'Summarize archived plan');
+    await expect(page.locator('#rewindModeCode')).toBeEnabled({ timeout: 3_000 });
+    await page.locator('#rewindModeCode').click();
+    await expect(page.locator('#messages')).toContainText('对话未改动', { timeout: 10_000 });
+
+    await runRewindCommand(page);
+    await expect(page.locator('#rewindList')).toContainText('Summarize archived plan', { timeout: 3_000 });
+    await page.clock.runFor(2_000);
+
+    await expect(firstTurn, '只恢复代码后整段历史被追加了一遍').toHaveCount(1);
+    expect(await bubbles.count(), '气泡总数变了').toBe(before);
     await expectNoBrowserErrors(page);
   });
 

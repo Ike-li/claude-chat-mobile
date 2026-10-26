@@ -359,9 +359,8 @@ async function readHistoryMessages(historyFile, liveUuids) {
         //
         // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
         // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
-        // type:'system' 的条目，带出 uuid 会让前端在这个气泡上挂长按分叉入口（renderOne 设
-        // dataset.uuid → resolveForkAnchorUuid 认 role==='assistant' 即采纳），sdkForkSession 遂拿到
-        // 一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
+        // type:'system' 的条目，带出 uuid 会让前端在这个气泡的操作栏挂「分叉」按钮（appendCopyAction
+        // 见 anchorUuid 即挂），sdkForkSession 遂拿到一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
         for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
           // 同 225 行：catchUpStep 判「这段增量是不是己方写盘」靠 entrypoint，local_command 分支
           // （斜杠命令的 web 端输出）同样要透出，否则秒回的 /status、/model 等命令会重现

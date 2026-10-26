@@ -1003,7 +1003,6 @@ export const EN_DICT = Object.freeze({
   '返回': 'Back',
   '返回设置': 'Back to settings',
   '会话': 'Session',
-  '这是最早一条消息，前面没有可分叉的起点': 'This is the earliest message — there\'s nothing before it to fork from',
   '从这里分叉新会话？': 'Fork a new session from here?',
   '会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。': 'Copies the conversation up to this message into a separate new session; the original is untouched.',
   '分叉': 'Fork',
