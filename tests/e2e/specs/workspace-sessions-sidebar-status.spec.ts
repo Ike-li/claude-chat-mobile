@@ -991,7 +991,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
 
     // 标回已读同样当场生效：菜单此前靠 isManualUnread 旁路才能改口，现在 isUnread 一个口就够。
-    // （右键连按两次第二次静默的那个 long-press.js 闩，会话行不再用长按后由 frontend-app-modules 单测守。）
     // openSessionMenu 先断言 sheet 真的开了再读按钮文字：不然读到的是上一次残留的 DOM，这条断言会恒绿
     await openSessionMenu(page, viewingRow);
     await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为已读');
