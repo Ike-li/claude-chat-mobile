@@ -310,6 +310,8 @@
           <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">Bypass</button>
         </div>
       </div>
+      <!-- #371：断线/失败原因写在浮层内（与按钮同层），避免只 addBar 到被 z-40 盖住的消息流 -->
+      <div id="permSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="perm-sheet-error"></div>
       <div class="flex gap-2">
         <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
         <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
@@ -347,6 +349,8 @@
           <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">提交其他答案</button>
         </div>
       </div>
+      <!-- #371：断线/校验失败写在浮层内，与选项/跳过按钮同层可见 -->
+      <div id="questionSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="question-sheet-error"></div>
       <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过并中止本轮</button>
       <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
     </div>

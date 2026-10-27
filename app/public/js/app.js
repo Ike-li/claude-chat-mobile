@@ -4930,7 +4930,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (!interruptPendingByInstance.has(instanceId)) return;
       clearInterruptPending(instanceId);
       // 只在仍看着这个会话时提示——若已切走，超时是别的（此刻无关）会话的事，不该冒到当前视图上
-      if (instanceId === viewingInstanceId) addBar(t('停止请求超时，可再试一次'), 'text-ink-faint');
+      if (instanceId === viewingInstanceId) {
+        const msg = t('停止请求超时，可再试一次');
+        addBar(msg, 'text-ink-faint');
+        // #371：审批/提问浮层开着时，超时原因写进浮层（addBar 会被 z-40 挡住）
+        approvals.surfaceError(msg);
+      }
     }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
     // 停止 = 不想接着跑：这个会话排着的离线条目不再自动发，退回手动「重发」（O66）

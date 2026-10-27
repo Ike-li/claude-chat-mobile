@@ -51,13 +51,24 @@ function fakeEl(id = '') {
   return el;
 }
 
-function mount({ getViewingInstanceId = () => null } = {}) {
+function mount({ getViewingInstanceId = () => null, connected = true } = {}) {
   const dom = new Map();
   const byId = id => {
     if (!dom.has(id)) dom.set(id, fakeEl(id));
     return dom.get(id);
   };
   const emitted = [];
+  const bars = [];
+  const interrupts = [];
+  const socketListeners = new Map();
+  const socket = {
+    connected,
+    emit: (name, payload) => emitted.push({ name, payload }),
+    on: (name, fn) => {
+      if (!socketListeners.has(name)) socketListeners.set(name, []);
+      socketListeners.get(name).push(fn);
+    },
+  };
   const context = createAppContext({});
   const queues = createInteractionQueueState(context);
   const approvals = createApprovalController(context, {
@@ -65,12 +76,21 @@ function mount({ getViewingInstanceId = () => null } = {}) {
     $: byId,
     el: () => fakeEl(),
     render: t => t,
-    socket: { connected: true, emit: (name, payload) => emitted.push({ name, payload }) },
+    addBar: (text, cls) => bars.push({ text, cls }),
+    socket,
     permModal: byId('permModal'),
     questionModal: byId('questionModal'),
+    requestInterrupt: () => interrupts.push(1),
     getViewingInstanceId,
   });
-  return { approvals, byId, emitted, warnHidden: () => byId('permIntegrityWarn').classList.contains('hidden') };
+  return {
+    approvals, byId, emitted, bars, interrupts, socket, socketListeners,
+    warnHidden: () => byId('permIntegrityWarn').classList.contains('hidden'),
+    sheetError: id => {
+      const el = byId(id);
+      return el.classList.contains('hidden') ? null : el.textContent;
+    },
+  };
 }
 
 // 服务端算的指纹；随便给个对不上的值就能让前端预检判"不符"，不需要 mock crypto。
@@ -228,4 +248,57 @@ test('多题组卡：整组提交路由到首题所属实例，不受 viewing �
   byId('questionGroupSubmit').onclick();
   assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
   assert.equal(lastAnswer(emitted)?.requestId, 'toolu_g');
+});
+
+
+// ── #371：断线/校验失败写进浮层内，不被 z-40 遮罩挡住 ─────────────────────────
+test('审批：断线点允许时浮层内可见错误，且不 emit', () => {
+  const { approvals, byId, emitted, sheetError } = mount({ connected: false });
+  approvals.enqueuePermission(permRequest('perm_1'));
+  byId('permAllow').onclick();
+  assert.match(sheetError('permSheetError') || '', /网络未连接/);
+  assert.equal(emitted.length, 0);
+  assert.equal(approvals.hasPending(), true, '断线时浮层应保持打开');
+});
+
+test('单题提问：断线点选项时浮层内可见错误，且不 emit', () => {
+  const { approvals, byId, emitted, sheetError } = mount({ connected: false });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  pickOption(byId, 0);
+  assert.match(sheetError('questionSheetError') || '', /网络未连接/);
+  assert.equal(emitted.length, 0);
+  assert.equal(approvals.hasPending(), true);
+});
+
+test('提问跳过：断线时不 requestInterrupt，错误写在浮层内', () => {
+  const { approvals, byId, interrupts, sheetError } = mount({ connected: false });
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  byId('questionSkip').onclick();
+  assert.equal(interrupts.length, 0, '断线时不应 emit/触发 interrupt');
+  assert.match(sheetError('questionSheetError') || '', /网络未连接/);
+});
+
+test('空「其他答案」提示写在提问浮层内', () => {
+  const { approvals, byId, sheetError } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  byId('questionOtherInput').value = '   ';
+  byId('questionOtherSubmit').onclick();
+  assert.match(sheetError('questionSheetError') || '', /请先输入其他答案/);
+  assert.equal(approvals.hasPending(), true);
+});
+
+test('重连后清掉浮层内断线错误', () => {
+  const { approvals, byId, socketListeners, sheetError } = mount({ connected: false });
+  approvals.enqueuePermission(permRequest('perm_1'));
+  byId('permAllow').onclick();
+  assert.match(sheetError('permSheetError') || '', /网络未连接/);
+  for (const fn of socketListeners.get('connect') || []) fn();
+  assert.equal(sheetError('permSheetError'), null);
+});
+
+test('surfaceError 写到当前打开的审批浮层', () => {
+  const { approvals, sheetError } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.surfaceError('停止请求超时，可再试一次');
+  assert.equal(sheetError('permSheetError'), '停止请求超时，可再试一次');
 });
