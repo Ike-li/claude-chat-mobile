@@ -87,6 +87,7 @@ export function createApprovalController(context, {
   let multiSelectedIndexes = new Set(); // multiSelect 当前题勾选的下标
   let permArmTimer = null;
   let permArming = false;
+  let questionArmTimer = null;
   // 别的界面盖在当前会话上（打不开的会话的落地页）时，审批 / 提问卡先收起、不弹（验收 O38）；卡本身留着，
   // resume 时原样再弹出来。期间新到的照常排队。
   let suspended = false;
@@ -265,6 +266,16 @@ export function createApprovalController(context, {
       syncPermButtons();
     }, ms);
   }
+  // #372：提问 sheet 对齐审批——弹出后约 600ms 内选项 / 跳过等按钮不响应，防拇指热区误触即交或中止本轮。
+  function armQuestionSheetButtons(ms = PERM_ARM_MS) {
+    if (!questionModal) return;
+    questionModal.classList.add('sheet-arming');
+    if (questionArmTimer) clearTimeout(questionArmTimer);
+    questionArmTimer = setTimeout(() => {
+      questionModal.classList.remove('sheet-arming');
+      questionArmTimer = null;
+    }, ms);
+  }
   // 勾了「总是允许」才展开范围选择；取消勾选时连同选择一起收起并复位。
   permAlways?.addEventListener?.('change', () => {
     if (!permPersistWrap) return;
@@ -375,6 +386,8 @@ export function createApprovalController(context, {
       showQuestionPage(true);
       paintQuestion(activeQuestion);
     }
+    // 先上防误触再开窗：开窗那一刻选项 / 跳过就已经不可点（#372，对齐 showNextPerm）。
+    armQuestionSheetButtons();
     if (!suspended) openSheet(questionModal);
     updateSendButtonState();
   }
@@ -786,6 +799,11 @@ export function createApprovalController(context, {
       permArming = false;
       syncPermButtons();
     },
+    // #372：提问 sheet 关窗 / 单测结束防误触窗口时清计时器与 class，避免下次打开残留。
+    cancelQuestionArming() {
+      if (questionArmTimer) { clearTimeout(questionArmTimer); questionArmTimer = null; }
+      questionModal?.classList.remove('sheet-arming');
+    },
     // 输入区是否该被"先处理当前审批/选择"挡住。
     hasPending() { return Boolean(activePerm || activeQuestion || activeGroup); },
     // #371：外部（如停止超时）把失败原因写进当前打开的浮层；无浮层时 no-op。
@@ -804,7 +822,7 @@ export function createApprovalController(context, {
       if (!suspended) return;
       suspended = false;
       if (activePerm) { armPermSheetButtons(); openSheet(permModal); } // 先上锁、后开窗，时长同 showNextPerm（PERM_ARM_MS）
-      if (activeQuestion || activeGroup) openSheet(questionModal);
+      if (activeQuestion || activeGroup) { armQuestionSheetButtons(); openSheet(questionModal); } // #372：提问同审批先上锁
     },
   };
   context.state.approvals = controller;

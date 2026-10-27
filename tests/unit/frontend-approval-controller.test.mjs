@@ -302,3 +302,47 @@ test('surfaceError 写到当前打开的审批浮层', () => {
   approvals.surfaceError('停止请求超时，可再试一次');
   assert.equal(sheetError('permSheetError'), '停止请求超时，可再试一次');
 });
+
+
+// ── #372：提问 sheet 对齐审批的 600ms 防误触窗口 ─────────────────────────────
+test('提问弹出后 questionModal 带 sheet-arming；cancelQuestionArming 解除', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '刚弹出时应处于防误触期（对齐 #permModal.sheet-arming）');
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false,
+    'cancelQuestionArming 应清掉 sheet-arming，与计时器到点同效');
+});
+
+test('提问防误触解除后点选项才 emit user:answer', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true);
+  // 程序化 onclick 不走 pointer-events；这里钉的是「窗口结束后状态干净、作答仍可达」
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('排队的下一题再次弹出时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false);
+  pickOption(byId, 0);
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '下一题开窗应再次 sheet-arming，不能沿用上一题已解除的状态');
+});
+
+test('resume 提问浮层时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  approvals.suspend();
+  approvals.resume();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    'resume 开窗应先上锁，时长同 showNextQuestion');
+});

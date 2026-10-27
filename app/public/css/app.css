@@ -778,8 +778,9 @@ header {
   #sessionMenuModal.sheet-open > div {
     transform: translateY(0);
   }
-  /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */
-  #permModal.sheet-arming button {
+  /* UX-003：审批 / 提问 sheet 弹出后短暂防误触（过渡期按钮不可点） */
+  #permModal.sheet-arming button,
+  #questionModal.sheet-arming button {
     pointer-events: none;
   }
   /* 验收 O70：禁用要看得出来（防误触期内的三个动作按钮、完整性不符时的「允许」） */
