@@ -195,7 +195,7 @@
       <span>Claude Chat Mobile</span>
     </a>
     <div class="nav-spacer"></div>
-    <a class="meta" href="../docs-site/pages/quickstart.html">快速开始</a>
+    <a class="meta" href="../en/quickstart.html">快速开始</a>
     <a class="meta" href="../en/compare.html" hreflang="en">English</a>
     <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
   </div>
@@ -320,7 +320,7 @@
   <p>继续用终端，只是换到手机上。安卓用 Termux；iOS 用 Blink 或 Prompt 这类 SSH 客户端。Tailscale 让手机有一条到你电脑的私有线路，网络不稳时 mosh 更好用，tmux 让 <code>claude</code> 会话在两次连接之间一直跑着。出处：<a href="https://www.skeptrune.com/posts/claude-code-on-mobile-termux-tailscale" target="_blank" rel="noopener">How I Use Claude Code on My Phone with Termux and Tailscale</a>。</p>
 
   <h3 id="this-project">Claude Chat Mobile（本项目）</h3>
-  <p>以手机为先的网页界面，可以作为 PWA 装到主屏幕，目标是和终端对齐：工具审批、<code>AskUserQuestion</code>、后台任务，以及你在终端里开着的那个会话，同一时刻只有一个驾驶端。服务跑在你的电脑上，通过 Agent SDK 驱动本机的 <code>claude</code> CLI，所以那个 CLI 配的是哪家模型通路，它就用哪家。可以走局域网，也可以走你自己选的隧道、VPN 或反向代理；没有令牌就拒绝启动，新的远程设备要先审批一次，除非前面有 Cloudflare Access 这样的身份层。出处：<a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">README</a>、<a href="../docs-site/pages/security-model.html">安全模型</a>。</p>
+  <p>以手机为先的网页界面，可以作为 PWA 装到主屏幕，目标是和终端对齐：工具审批、<code>AskUserQuestion</code>、后台任务，以及你在终端里开着的那个会话，同一时刻只有一个驾驶端。服务跑在你的电脑上，通过 Agent SDK 驱动本机的 <code>claude</code> CLI，所以那个 CLI 配的是哪家模型通路，它就用哪家。可以走局域网，也可以走你自己选的隧道、VPN 或反向代理；没有令牌就拒绝启动，新的远程设备要先审批一次，除非前面有 Cloudflare Access 这样的身份层。出处：<a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">README</a>、<a href="../en/security.html">安全模型</a>。</p>
 
   <h2 id="faq">常见问题</h2>
   <h3>该用 Claude Chat Mobile 还是官方的 Claude Code Remote Control？</h3>
@@ -336,7 +336,7 @@
 
   <div class="callout">
     <strong>还是觉得适合你？</strong>
-    先试试<a href="../demo/">在线演示</a>：跑的是真实前端加假后端，装之前就能判断界面合不合用。然后看<a href="../docs-site/pages/quickstart.html">快速开始</a>。
+    先试试<a href="../demo/">在线演示</a>：跑的是真实前端加假后端，装之前就能判断界面合不合用。然后看<a href="../en/quickstart.html">快速开始</a>。
   </div>
 </main>
 
@@ -345,8 +345,8 @@
     <span>Apache-2.0</span>
     <a href="https://github.com/Ike-li/claude-chat-mobile">GitHub</a>
     <a href="../zh/">首页</a>
-    <a href="../docs-site/pages/quickstart.html">快速开始</a>
-    <a href="../docs-site/pages/security-model.html">安全模型</a>
+    <a href="../en/quickstart.html">快速开始</a>
+    <a href="../en/security.html">安全模型</a>
     <a href="../demo/">演示</a>
   </div>
 </footer>

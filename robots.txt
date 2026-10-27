@@ -22,11 +22,8 @@ Allow: /
 Allow: /claude-chat-mobile/llms.txt
 Allow: /claude-chat-mobile/llms-full.txt
 Allow: /claude-chat-mobile/skill.md
-Allow: /claude-chat-mobile/docs-site/pages/*.md
 
 # Build sources / authoring notes are not public handbook pages
 # （实际拦截靠各页自己的 meta robots，见文件头说明）
-Disallow: /claude-chat-mobile/docs-site/fragments/
-Disallow: /claude-chat-mobile/docs-site/AUTHORING-components.html
 
 Sitemap: https://ccm.osolee.cc.cd/sitemap.xml

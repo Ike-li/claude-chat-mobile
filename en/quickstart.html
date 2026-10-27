@@ -7,7 +7,7 @@
 <meta name="description" content="Install and run Claude Chat Mobile: Node ≥20, local claude CLI, setup, doctor, LAN or temporary tunnel. Self-hosted, single-user per instance.">
 <link rel="canonical" href="https://ccm.osolee.cc.cd/en/quickstart.html">
 <link rel="alternate" hreflang="en" href="https://ccm.osolee.cc.cd/en/quickstart.html">
-<link rel="alternate" hreflang="zh-CN" href="https://ccm.osolee.cc.cd/docs-site/pages/quickstart.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ccm.osolee.cc.cd/en/quickstart.html">
 <link rel="alternate" hreflang="x-default" href="https://ccm.osolee.cc.cd/en/quickstart.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 <meta property="og:type" content="article">
@@ -140,7 +140,7 @@
       <span>Claude Chat Mobile</span>
     </a>
     <div class="nav-spacer"></div>
-    <a class="meta" href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文手册 · 快速开始</a>
+    <a class="meta" href="../en/quickstart.html" hreflang="zh-CN">中文手册 · 快速开始</a>
     <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
   </div>
 </nav>
@@ -150,7 +150,7 @@
     <div class="kicker">English install path</div>
     <h1>Quickstart</h1>
     <p class="lead">Self-hosted mobile Web UI for your <strong>real local</strong> <code>claude</code> CLI—same agent, same <code>CLAUDE.md</code>, same session. Not a remote desktop, not multi-tenant SaaS.</p>
-    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> and <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.en.md">Getting Started</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a> · <time datetime="2026-09-24">Updated 2026-09-24</time></p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> and <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.en.md">Getting Started</a> · <time datetime="2026-09-24">Updated 2026-09-24</time></p>
   </div>
 </header>
 
@@ -212,7 +212,7 @@ node scripts/doctor.js --fix   # only tightens permissions on the config file an
       </tr>
       <tr>
         <td>Long-term public</td>
-        <td>A fixed domain with Cloudflare Tunnel + Access, or Tailscale, another encrypted tunnel, or your own reverse proxy. Keep the server running with <code>npm start</code> under a supervisor of your choice, or with the macOS menu-bar app. See the Chinese handbook page <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a> and the repo’s <code>docs/deployment.md</code>.</td>
+        <td>A fixed domain with Cloudflare Tunnel + Access, or Tailscale, another encrypted tunnel, or your own reverse proxy. Keep the server running with <code>npm start</code> under a supervisor of your choice, or with the macOS menu-bar app. See the Chinese handbook page <a href="../en/quickstart.html" hreflang="zh-CN">生产部署</a> and the repo’s <code>docs/deployment.md</code>.</td>
       </tr>
     </tbody>
   </table>
@@ -224,7 +224,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
   <p>Only two kinds of connection skip approval: one already validated by Cloudflare Access, and a genuine local one (loopback peer <em>and</em> a <code>localhost</code> / <code>127.0.0.1</code> / <code>::1</code> Host). Traffic forwarded by cloudflared, nginx or an SSH tunnel also arrives from loopback, but with a public Host, so it still needs approval unless Access validated it. Set <code>DEVICE_APPROVAL_SCOPE=all</code> to require approval on every path.</p>
   <div class="callout warn">
     <strong>Security</strong>
-    This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="./security.html" hreflang="en">English Security Model</a> · <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文安全模型</a> · <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md</a>.
+    This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="./security.html" hreflang="en">English Security Model</a> · <a href="../en/security.html" hreflang="zh-CN">中文安全模型</a> · <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md</a>.
   </div>
 
   <h2 id="iron-rules">Security iron rules (quotable)</h2>
@@ -288,7 +288,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
   </ul>
   <div class="callout ok">
     <strong>Already running the server on port 3000?</strong>
-    Do not start a second <code>npm start</code> “just to check.” Restart from the desktop menu, or in the same terminal for headless. See the Chinese ops page <a href="../docs-site/pages/ops-troubleshoot.html" hreflang="zh-CN">运维与排错</a>.
+    Do not start a second <code>npm start</code> “just to check.” Restart from the desktop menu, or in the same terminal for headless. See the Chinese ops page <a href="../en/quickstart.html" hreflang="zh-CN">运维与排错</a>.
   </div>
 
   <h2 id="next">Next</h2>
@@ -296,7 +296,6 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     <li><a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/docs/getting-started.en.md">Getting Started</a> — the full English guide: configuration, non-interactive setup, updating, command reference</li>
     <li><a href="./security.html">English security model</a></li>
     <li><a href="../">Product landing</a></li>
-    <li><a href="../docs-site/" hreflang="zh-CN">Full project handbook (Chinese)</a></li>
     <li><a href="https://github.com/Ike-li/claude-chat-mobile">Source on GitHub</a></li>
   </ul>
 </main>
@@ -308,7 +307,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     <span>Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a></span>
     <a href="./quickstart.html" hreflang="en">English quickstart</a>
     <a href="./security.html" hreflang="en">English security</a>
-    <a href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文快速开始</a>
+    <a href="../en/quickstart.html" hreflang="zh-CN">中文快速开始</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">Apache-2.0</a>
     <time datetime="2026-09-24">Updated 2026-09-24</time>
   </div>

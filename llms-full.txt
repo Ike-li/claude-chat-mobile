@@ -50,7 +50,6 @@ Node ≥20 · ESM · Express 5 · Socket.IO 4 · Agent SDK 驱动本机 CLI。�
 
 > **WARNING:** 事实基线约定 — 手册关键数字、协议契约与模块边界以当前 dev 代码为准。若代码演进后行为与手册发生漂移，以生产代码及 tests/gates/ 门禁为准，并应在漂移清单中透明登记。
 
-> **NOTE:** 范围 — 本手册描述产品源码（dev 分支），产物部署于 gh-pages 分支的 docs-site/ 目录，与展示站点统一维护。
 
 ## 三条阅读路线
 

@@ -4,7 +4,7 @@ description: Self-hosted mobile web interface bridging terminal Claude Code CLI 
 version: 2.1 (dev@3f488861)
 license: Apache-2.0
 repository: https://github.com/Ike-li/claude-chat-mobile
-docs: https://ccm.osolee.cc.cd/docs-site/
+docs: https://ccm.osolee.cc.cd/en/quickstart.html
 llms-txt: https://ccm.osolee.cc.cd/llms.txt
 ---
 
@@ -59,5 +59,5 @@ npm run app:install
 ```
 
 ## 7. Fast Links for Agents
-- Complete Markdown Docs: `https://ccm.osolee.cc.cd/docs-site/pages/<slug>.md`
+- Complete Markdown Docs: `https://ccm.osolee.cc.cd/en/quickstart.htmlpages/<slug>.md`
 - Master Combined Text: `https://ccm.osolee.cc.cd/llms-full.txt`

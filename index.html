@@ -380,10 +380,6 @@
       <button data-lang="en">EN</button>
       <button data-lang="zh">中文</button>
     </div>
-    <a class="ghlink" href="./docs-site/index.html" data-i18n-aria="nav.docsAria" aria-label="Project handbook">
-      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 1.75A1.75 1.75 0 014.75 0h6.5C12.216 0 13 .784 13 1.75v12.5A1.75 1.75 0 0111.25 16h-6.5A1.75 1.75 0 013 14.25Zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h6.5a.25.25 0 00.25-.25V1.75a.25.25 0 00-.25-.25ZM6 4.75A.75.75 0 016.75 4h2.5a.75.75 0 010 1.5h-2.5A.75.75 0 016 4.75Zm0 3A.75.75 0 016.75 7h2.5a.75.75 0 010 1.5h-2.5A.75.75 0 016 7.75Zm0 3A.75.75 0 016.75 10h1.5a.75.75 0 010 1.5h-1.5A.75.75 0 016 10.75Z"/></svg>
-      <span class="txt" data-i18n="nav.docs">Docs</span>
-    </a>
     <a class="ghlink" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">
       <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       <span class="txt">GitHub</span>
@@ -622,8 +618,6 @@
       <a href="./en/compare.html" data-i18n-href="hub.compareHref" data-i18n="hub.compare">Should you use this?</a>
       <a href="./en/quickstart.html" data-i18n-href="hub.quickstartHref" data-i18n="hub.quickstart">Quickstart</a>
       <a href="./en/security.html" data-i18n-href="hub.securityHref" data-i18n="hub.security">Security model</a>
-      <a href="./docs-site/pages/production-deploy.html" data-i18n="hub.deploy">Production deploy</a>
-      <a href="./docs-site/pages/overview.html" data-i18n="hub.overview">Project overview</a>
     </nav>
     <div class="clone">
 <span class="c"># download the latest release, install runtime deps, configure, run</span>
@@ -644,7 +638,6 @@ npm start              <span class="c"># prints the addresses to open; token sho
   <div class="wrap foot-in">
     <span>Claude Chat Mobile</span>
     <span aria-hidden="true">·</span>
-    <a href="./docs-site/index.html" data-i18n="nav.docs">Docs</a>
     <a href="./diagrams/" data-i18n="nav.diagrams">Architecture diagrams</a>
     <a href="./demo/" data-i18n="nav.demo">Live demo</a>
     <a href="./en/quickstart.html" data-i18n-href="hub.quickstartHref" data-i18n="hub.quickstart">Quickstart</a>
@@ -780,13 +773,13 @@ npm start              <span class="c"># prints the addresses to open; token sho
     'hero.note': '审批在 App 内展示完整命令与工作目录；推送默认只有类型级提示（工具名，不含命令正文），锁屏预览要你自己打开。',
     'hero.notOfficial': '不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。',
     'hero.whatIsTitle': '什么是 Claude Chat Mobile？',
-    'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> 是一层自托管的<strong>手机 UI</strong>：通过 Claude Agent SDK 驱动<strong>你终端里的</strong> <code>claude</code>——同一会话、同一套本机配置（user/project/local）。界面为触控重排（气泡、工具卡），不是远程桌面投屏，也不是云端另一套 Claude 或 Anthropic 官方手机 App。</p><p>面向已在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；同一时刻只有一个写端（单驾驶员）。公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>没有 <code>AUTH_TOKEN</code> 就不启动：令牌是启动前提。</li><li>继承 CLI settings 白名单；未命中则挂起，在 <em>App 内</em>展示完整命令与工作目录。推送默认只含工具名。</li><li>独立开源（Apache-2.0）。公网暴露前请读<a href="./docs-site/pages/security-model.html">安全模型</a>。</li></ul>',
+    'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> 是一层自托管的<strong>手机 UI</strong>：通过 Claude Agent SDK 驱动<strong>你终端里的</strong> <code>claude</code>——同一会话、同一套本机配置（user/project/local）。界面为触控重排（气泡、工具卡），不是远程桌面投屏，也不是云端另一套 Claude 或 Anthropic 官方手机 App。</p><p>面向已在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；同一时刻只有一个写端（单驾驶员）。公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>没有 <code>AUTH_TOKEN</code> 就不启动：令牌是启动前提。</li><li>继承 CLI settings 白名单；未命中则挂起，在 <em>App 内</em>展示完整命令与工作目录。推送默认只含工具名。</li><li>独立开源（Apache-2.0）。公网暴露前请读<a href="./en/security.html">安全模型</a>。</li></ul>',
     'hero.cta1': '打开快速开始手册',
-    'hero.cta1Href': './docs-site/pages/quickstart.html',
-    'get.ctaHref': './docs-site/pages/quickstart.html',
+    'hero.cta1Href': './en/quickstart.html',
+    'get.ctaHref': './en/quickstart.html',
     'hub.compareHref': './zh/compare.html',
-    'hub.quickstartHref': './docs-site/pages/quickstart.html',
-    'hub.securityHref': './docs-site/pages/security-model.html',
+    'hub.quickstartHref': './en/quickstart.html',
+    'hub.securityHref': './en/security.html',
     'hero.cta2': '看实际效果',
     'hero.ctaDemo': '在线体验',
     'hub.compare': '该不该用本项目',
