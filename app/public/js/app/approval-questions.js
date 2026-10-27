@@ -364,11 +364,21 @@ export function createApprovalController(context, {
     if (typeof opt === 'string') return opt;
     return opt.label || '';
   }
-  function paintMultiOption(btn, selected) {
-    btn.classList.toggle('border-accent', selected);
-    btn.classList.toggle('bg-accent-wash', selected);
-    btn.classList.toggle('border-line', !selected);
-    btn.classList.toggle('bg-sunk', !selected);
+  function paintMultiOption(wrap, selected, btn = null) {
+    wrap.classList.toggle('border-accent', selected);
+    wrap.classList.toggle('bg-accent-wash', selected);
+    wrap.classList.toggle('border-line', !selected);
+    wrap.classList.toggle('bg-sunk', !selected);
+    // #382：多选选项暴露 checkbox 语义；视觉 ☐/☑ 保留，aria-checked 同步勾选态
+    if (btn) {
+      btn.setAttribute('role', 'checkbox');
+      btn.setAttribute('aria-checked', selected ? 'true' : 'false');
+    }
+  }
+  // 选项标题（含多选 ☐/☑）；description 放进 button 内以免点说明落在死区（#400）
+  function applyOptionCaption(btn, { multi, selected, label, descEl = null }) {
+    btn.textContent = multi ? `${selected ? '☑' : '☐'} ${label}` : label;
+    if (descEl) btn.appendChild(descEl);
   }
   function showNextQuestion() {
     if (activeQuestion || activeGroup || questionQueue.length === 0) return;
@@ -461,19 +471,20 @@ export function createApprovalController(context, {
       const btn = el(`<button type="button" class="w-full py-2.5 px-3 text-ink text-sm text-left"></button>`);
       const label = optionLabel(opt);
       const pickedNow = multiSelectedIndexes.has(i);
-      btn.textContent = multi ? `${pickedNow ? '☑' : '☐'} ${label}` : label;
-      if (pickedNow) {
-        paintMultiOption(wrap, true);
-        if (!multi) btn.setAttribute('aria-pressed', 'true');
-      }
+      // #400：description 放进 button，整张选项卡（标题+说明）都可点；preview 仍在 button 外以免误触
+      let descEl = null;
       if (opt && typeof opt === 'object' && opt.description) {
-        const desc = el(`<div class="px-3 pb-2 text-[11px] text-ink-faint leading-snug"></div>`);
-        desc.textContent = opt.description;
-        wrap.appendChild(btn);
-        wrap.appendChild(desc);
-      } else {
-        wrap.appendChild(btn);
+        descEl = el(`<div class="pt-1 text-[11px] text-ink-faint leading-snug"></div>`);
+        descEl.textContent = opt.description;
       }
+      applyOptionCaption(btn, { multi, selected: pickedNow, label, descEl });
+      if (multi) {
+        paintMultiOption(wrap, pickedNow, btn);
+      } else if (pickedNow) {
+        paintMultiOption(wrap, true);
+        btn.setAttribute('aria-pressed', 'true');
+      }
+      wrap.appendChild(btn);
       if (opt && typeof opt === 'object' && opt.preview) {
         const prevBtn = el(`<button type="button" class="w-full text-left px-3 pb-2 text-[11px] text-info underline">${t('查看预览')}</button>`);
         const prevBox = el(`<pre class="hidden mx-3 mb-2 p-2 rounded bg-canvas border border-line-soft text-[11px] whitespace-pre-wrap break-words text-ink-soft max-h-40 overflow-y-auto"></pre>`);
@@ -492,8 +503,8 @@ export function createApprovalController(context, {
           if (multiSelectedIndexes.has(i)) multiSelectedIndexes.delete(i);
           else multiSelectedIndexes.add(i);
           const on = multiSelectedIndexes.has(i);
-          btn.textContent = `${on ? '☑' : '☐'} ${label}`;
-          paintMultiOption(wrap, on);
+          applyOptionCaption(btn, { multi: true, selected: on, label, descEl });
+          paintMultiOption(wrap, on, btn);
           if (activeGroup) setGroupDraft(multiSelectedIndexes.size ? { optionIndexes: [...multiSelectedIndexes] } : null);
           syncMultiSubmit();
         };
