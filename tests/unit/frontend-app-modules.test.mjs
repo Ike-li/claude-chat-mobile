@@ -557,7 +557,7 @@ test('settings controller synchronizes alert preferences when opening the sheet'
     },
   });
   const fakeDoc = {
-    documentElement: { classList: htmlClasses },
+    documentElement: { classList: htmlClasses, dataset: {} },
     body: { classList: bodyClasses },
     activeElement: null,
   };

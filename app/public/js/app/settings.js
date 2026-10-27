@@ -8,8 +8,7 @@
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic/panel-state.js';
 import { focusInto, restoreFocus, setInertReason, trapTabIn } from './focus-layers.js';
-
-const SHEET_OPEN_CLASS = 'ccm-sheet-open';
+import { acquireSheetScrollLock, releaseSheetScrollLock } from './sheet-scroll-lock.js';
 
 // 默认指向会话设置那套 id——现有调用点与单测因此零改动。
 const DEFAULT_KEYS = {
@@ -65,13 +64,11 @@ export function createSettingsController(context, {
   let focusBefore = null; // 打开前焦点所在，关闭时还回去
 
   function lockBackgroundScroll() {
-    doc?.documentElement?.classList?.add(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.add(SHEET_OPEN_CLASS);
+    acquireSheetScrollLock(doc);
   }
 
   function unlockBackgroundScroll() {
-    doc?.documentElement?.classList?.remove(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.remove(SHEET_OPEN_CLASS);
+    releaseSheetScrollLock(doc);
   }
 
   function resetSheetMotion() {

@@ -267,7 +267,7 @@
   <!-- 权限审批弹窗（底部 sheet） -->
   <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
-      <div class="sheet-handle"></div>
+      <!-- #399：强拦截审批不画假拖拽把手（不可手势关闭） -->
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
       <!-- Claude in Chrome 工具的一句话标题（「Claude in Chrome 想在 example.org 上读取页面」），其它工具隐藏。
            文案由 logic/permissions.js 的 describeChromePermission 算，showNextPerm 每张卡片重写。 -->
@@ -326,7 +326,7 @@
        跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
   <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
-      <div class="sheet-handle"></div>
+      <!-- #399：强拦截提问不画假拖拽把手（不可手势关闭） -->
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
       <!-- 多题提问的题目标签栏，对齐 CLI 的「☐ 题1  ☑ 题2  ✓ Submit」；单题时隐藏 -->
       <div id="questionTabs" class="hidden flex gap-1.5 overflow-x-auto pb-1 mb-2"></div>
@@ -382,7 +382,7 @@
        会话彻底删除等不可逆操作也走这里（不再另开两级删除 sheet）。 -->
   <div id="confirmModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
     <div id="confirmSheet" class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
-      <div class="sheet-handle"></div>
+      <!-- #399：确认弹窗需明确点按钮/遮罩，不画假拖拽把手 -->
       <div id="confirmTitle" class="text-accent-deep font-semibold mb-2"></div>
       <div id="confirmBody" class="text-sm text-ink-soft whitespace-pre-wrap break-words mb-4"></div>
       <div class="flex gap-2">
