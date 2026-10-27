@@ -173,3 +173,41 @@ test.describe('rewind confirm 失败：保留 preview 的 canCode/canFork', () =
     assert.equal(h.modeBoth.disabled, true);
   });
 });
+
+test.describe('#403 rewind 候选列表键盘可达', () => {
+  test('可选项渲染为 button type=button，禁用项仍为 div', async () => {
+    const h = harness({
+      candidates: {
+        ok: true,
+        items: [
+          {
+            promptUuid: 'u-ok',
+            text: 'reachable',
+            changedFiles: 1,
+            inheritedFromFork: false,
+            canForkConversation: true,
+            canRestoreCode: true,
+          },
+          {
+            promptUuid: 'u-dead',
+            text: 'disabled both axes',
+            changedFiles: 0,
+            inheritedFromFork: false,
+            canForkConversation: false,
+            canRestoreCode: false,
+          },
+        ],
+      },
+    });
+    await h.ctl.openPanel('s-1', '/w/a');
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const html = h.listEl.innerHTML;
+    assert.match(html, /<button type="button"[^>]*data-uuid="u-ok"/,
+      '可选轮次须是 button，才能进 sheets.js Tab 循环');
+    assert.match(html, /<div class="[^"]*opacity-40/,
+      '双轴都不可用的轮次仍用 div（不进 Tab）');
+    assert.doesNotMatch(html, /<button[^>]*data-uuid="u-dead"/,
+      '禁用轮次不得变成可聚焦 button');
+  });
+});

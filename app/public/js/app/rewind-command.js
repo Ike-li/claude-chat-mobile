@@ -103,12 +103,15 @@ export function createRewindCommandController({
             : `<span class="text-ink-soft">${t('无代码改动')}</span>`;
       const reason = !item.canForkConversation
         ? `<div class="text-xs text-ink-soft mt-0.5">${t('会话首轮，只能恢复代码')}</div>` : '';
-      return `<div class="py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
+      // 可选项用原生 button：接入 sheets.js 焦点陷阱 Tab 循环，Enter/Space 激活（#403）
+      const tag = disabled ? 'div' : 'button';
+      const typeAttr = disabled ? '' : ' type="button"';
+      return `<${tag}${typeAttr} class="w-full text-left py-2.5 border-b border-line ${disabled ? 'opacity-40' : 'active:bg-sunk cursor-pointer'}"
         ${disabled ? '' : `data-uuid="${esc(item.promptUuid)}"`}>
         <div class="text-sm text-ink break-words line-clamp-2">${esc(item.text) || `<em class="text-ink-soft">${t('（空消息）')}</em>`}</div>
         <div class="text-xs mt-1">${changed}</div>
         ${reason}
-      </div>`;
+      </${tag}>`;
     }).join('');
   }
 
