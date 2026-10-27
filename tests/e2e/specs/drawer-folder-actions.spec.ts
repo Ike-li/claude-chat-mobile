@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE, MAIN_WORKSPACE, chooseFolderMenuItem, dragFolderWithMouse, expandWorkspace, expectSidebarOpen, folderDragDelta, folderMenuItem,
-  openFolderMenu, openSessionMenu, openSessionsSidebar, sessionMenuItem, showMoreSessions, workspaceRow, workspaceSubtree,
+  openFolderMenu, openSessionMenu, openSessionsSidebar, openWorkspaceSession, sessionMenuItem, showMoreSessions, workspaceRow, workspaceSubtree,
 } from '../../helpers/sidebar-ui';
 
 // 抽屉文件夹行的动作（2026-10-26）：「⋯」菜单里的「全部标为已读」（#300）与「断开连接」，长按拖动调整连接根的上下位置
@@ -292,6 +292,45 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await dragFolderWithMouse(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'above');
     await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('顺序没保存上，稍后再试');
     expect(await sectionOrder(page), '服务端拒了，界面却留着拖出来的顺序').toEqual(before);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 回归（2026-10-26）：MAIN_WORKSPACE 是当前正在看的工作区——先点开 inst_1 的会话把 currentCwd 钉在
+  // 这里（connectTwoRoots 本身会把 viewing 归位到「无文件夹」，不代表真实场景），UX-007 让重开抽屉时
+  // 默认展开它；用户手动折叠它之后，挪动别的文件夹顺序不该把它重新强制展开——那次广播只是顺序变了，
+  // 目录集合、viewingInstanceId、currentCwd 都没变，不该走全量重建那条路径。
+  //
+  // 排序本身是客户端拖动时就地摆好的（folder-drag.js），sectionOrder 松手即对；但「是否被连带强制展开」
+  // 取决于服务端回广播、落地处理完之后的状态，必须等这条广播真落地再断言——否则在它赶到前就断言，
+  // 测试会在 bug 仍在的情况下也通过（见 PR 调试记录）。监听器须挂在 gotoMock 之前，否则错过这条连接。
+  test('P0-FOLDER-ORDER-4 折叠当前工作区后拖别的文件夹换序，不该把它连带强制展开', async ({ page }) => {
+    const instancesFrames: string[] = [];
+    page.on('websocket', ws => {
+      ws.on('framereceived', frame => {
+        if (typeof frame.payload === 'string' && frame.payload.includes('"type":"instances"')) instancesFrames.push(frame.payload);
+      });
+    });
+
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:projects');
+    await waitForIdle(page);
+    await connectTwoRoots(page);
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+
+    const mainSubtree = workspaceSubtree(page, MAIN_WORKSPACE);
+    await expect(mainSubtree, '前提：UX-007 默认展开当前工作区').toHaveClass(/expanded/);
+    await workspaceRow(page, MAIN_WORKSPACE).locator('button').first().click();
+    await expect(mainSubtree, '手动折叠').not.toHaveClass(/expanded/);
+
+    const framesBeforeDrag = instancesFrames.length;
+    await dragFolderWithMouse(page, ANOTHER_WORKSPACE, MAIN_WORKSPACE, 'above');
+    await expect.poll(() => sectionOrder(page)).toEqual([ANOTHER_WORKSPACE, MAIN_WORKSPACE, SUBFOLDER, SCRATCH_ROOT]);
+    await expect.poll(() => instancesFrames.length, '等服务端换序广播真的落地，不能在它赶到前就断言').toBeGreaterThan(framesBeforeDrag);
+    await expect(mainSubtree, '换序不该把手动折叠的当前工作区重新展开').not.toHaveClass(/expanded/);
 
     await expectNoBrowserErrors(page);
   });

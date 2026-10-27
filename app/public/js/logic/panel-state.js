@@ -836,3 +836,11 @@ export function diffDirSignatures(prev = {}, next = {}) {
   }
   return changed.sort();
 }
+
+// 面板"结构性"指纹：目录集合（忽略顺序）+ viewingInstanceId + 当前查看 cwd 之一变了才算——这三者才
+// 决定 dirRow 高亮与 UX-007 的"当前工作区强制展开"。纯换序（拖动排序广播回来的新顺序，集合不变）
+// 不该算在内：换序只需要调整展示顺序，调用方若把它当结构性变化去触发全量重建，会把强制展开误套在
+// 跟这次换序无关的目录上（2026-10-26：挪别的文件夹顺序，却把当前正在看的工作区连带强制展开了）。
+export function dirPanelStructuralKey({ dirs = [], viewingInstanceId = null, currentCwd = null } = {}) {
+  return `${[...(dirs || [])].sort().join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
+}
