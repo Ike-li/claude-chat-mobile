@@ -1040,12 +1040,13 @@ import { createGateFocusController } from './app/focus-layers.js';
     messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
   };
   // 流内 live 活动行：ephemeral，busy 时挂在 #messages 末尾；不进 disk/history；sessionDomCache 前 strip。
+  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。文案 aria-hidden。
   let streamLiveStatusEl = null;
   function ensureStreamLiveStatus() {
     if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
     streamLiveStatusEl = el(`
-      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1" aria-live="polite" aria-busy="true">
-        <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
+      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1">
+        <span id="streamLiveStatusText" class="font-medium truncate max-w-full" aria-hidden="true"></span>
       </div>`);
     return streamLiveStatusEl;
   }
@@ -3869,7 +3870,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     let s = streams.get(key);
     if (!s) {
       // UX-004：直接 msg-body 容器，流式走 innerHTML=render，不再用纯文本 textNode 裸显 markdown
-      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message" aria-live="polite"></div>`);
+      // #379：流式气泡不挂 aria-live——每 ~80ms 全量 innerHTML 重写会让读屏反复重读生长中的消息；定稿后用户可自行浏览。
+      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message"></div>`);
       wrap.dataset.topLevel = '1'; // 未读角标锚点定位用：仅主链 assistant 流式气泡（子agent走 getSubagentStream，不经过这里）
       messageTimeline.appendWithTime(wrap, ts, 'assistant');
       s = { el: wrap, raw: '', done: false };
