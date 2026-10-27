@@ -204,7 +204,7 @@ import {
   folderReasonText,
   isPathWithin,
 } from './logic.js';
-import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
+import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, confirmAndWriteLangPref, applyI18nToDocument } from './i18n.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge, unreadSessionsInGroup } from './logic/unread.js';
@@ -6974,17 +6974,18 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') void notifications.subscribe();
     },
   };
-  // ⑨ 语言偏好：切换后写 storage + 提示刷新（不做响应式重渲——已翻译的静态串只在启动时应用一次，
+  // ⑨ 语言偏好：先确认刷新，同意后再写 storage + reload（不做响应式重渲——已翻译的静态串只在启动时应用一次，
   // 运行中改语言若不刷新，会停留在混杂态；appConfirm 走已有的确认 sheet，不新开一套 UI）。
   const langPref = {
     // 回显设置面板下拉框用原始存储值（含 auto）；语言渲染/t() 走 getLang() 的运行时折叠值，两者用途不同。
+    // 切换：先确认刷新，同意后再 writeLangPref + reload（取消不落盘，避免磁贴/文案半切换）。
     get: () => readLangPref(k => localStorage.getItem(k)),
-    set: async (lang) => {
-      writeLangPref((k, v) => localStorage.setItem(k, v), lang);
-      if (await appConfirm({ title: t('需要刷新页面才能生效'), body: t('现在刷新吗？'), okText: t('刷新') })) {
-        location.reload();
-      }
-    },
+    set: async (lang) => confirmAndWriteLangPref({
+      lang,
+      confirm: () => appConfirm({ title: t('需要刷新页面才能生效'), body: t('现在刷新吗？'), okText: t('刷新') }),
+      write: (next) => writeLangPref((k, v) => localStorage.setItem(k, v), next),
+      reload: () => location.reload(),
+    }),
   };
   // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
   // 会话设置（入口=底栏 #pillDefaults 摘要 chip，随 composer 显隐）：模型 / 权限 / 思考 / 会话 ID。

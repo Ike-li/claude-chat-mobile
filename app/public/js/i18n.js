@@ -1400,3 +1400,14 @@ export function writeLangPref(setItem, lang) {
   setItem(LANG_STORAGE_KEY, lang);
   return true;
 }
+
+// 切换语言：先确认刷新，用户同意后再落盘并 reload。
+// 若先 write 再 confirm，取消后 storage 已是新语言、磁贴跟着新高亮，但 DOM 文案仍是旧语言（半切换）。
+// 返回 'reloaded' | 'cancelled'，方便调用方在取消后重绘磁贴（此时 get 仍是旧值）。
+export async function confirmAndWriteLangPref({ lang, confirm, write, reload }) {
+  if (typeof confirm !== 'function' || typeof write !== 'function') return 'cancelled';
+  if (!(await confirm())) return 'cancelled';
+  write(lang);
+  if (typeof reload === 'function') reload();
+  return 'reloaded';
+}

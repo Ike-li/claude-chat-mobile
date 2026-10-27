@@ -3,7 +3,7 @@
 // 未收录 key 静默回落中文（渐进式覆盖，不是"未翻译就报错"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
+import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, confirmAndWriteLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../app/public/js/i18n.js';
 
 test.afterEach(() => setLang('zh')); // 每个用例后复位，测试间不串扰全局 currentLang
 
@@ -136,6 +136,42 @@ test.describe('writeLangPref', () => {
   test('非函数 setItem → 不写、返回 false，不抛错', () => {
     assert.equal(writeLangPref(null, 'en'), false);
     assert.doesNotThrow(() => writeLangPref(undefined, 'en'));
+  });
+});
+
+
+test.describe('confirmAndWriteLangPref：先确认再落盘，取消不半切换', () => {
+  test('用户同意 → write 新语言 + reload，返回 reloaded', async () => {
+    const store = { [LANG_STORAGE_KEY]: 'zh' };
+    let reloaded = 0;
+    const result = await confirmAndWriteLangPref({
+      lang: 'en',
+      confirm: async () => true,
+      write: (lang) => writeLangPref((k, v) => { store[k] = v; }, lang),
+      reload: () => { reloaded += 1; },
+    });
+    assert.equal(result, 'reloaded');
+    assert.equal(store[LANG_STORAGE_KEY], 'en');
+    assert.equal(reloaded, 1);
+  });
+
+  test('用户取消 → 不 write、不 reload，返回 cancelled（偏好保持原值）', async () => {
+    const store = { [LANG_STORAGE_KEY]: 'zh' };
+    let reloaded = 0;
+    const result = await confirmAndWriteLangPref({
+      lang: 'en',
+      confirm: async () => false,
+      write: (lang) => writeLangPref((k, v) => { store[k] = v; }, lang),
+      reload: () => { reloaded += 1; },
+    });
+    assert.equal(result, 'cancelled');
+    assert.equal(store[LANG_STORAGE_KEY], 'zh', '取消后 storage 必须仍是旧语言');
+    assert.equal(reloaded, 0);
+  });
+
+  test('confirm/write 缺失 → cancelled，不抛错', async () => {
+    assert.equal(await confirmAndWriteLangPref({ lang: 'en' }), 'cancelled');
+    assert.equal(await confirmAndWriteLangPref({ lang: 'en', confirm: async () => true }), 'cancelled');
   });
 });
 
