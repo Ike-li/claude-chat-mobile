@@ -6897,6 +6897,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
     },
   });
+  // #399 / #425：把手下拉走 rewind close（清 picked/session），不要裸 closeSheet 留下脏态
+  setGestureDismiss($('rewindModal'), () => rewindCommand.close());
 
   // ---- 续接会丢掉一段对话（SESSION-04）：发送被拒后问「分叉到新会话 / 仍然发送」----
   // 话的去留在这里：分叉要把它从这个会话的输入框挪进新会话（正看着就直接放，否则放进草稿槽，
@@ -10047,6 +10049,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     consoleFrom = null;
     reopenGeneralAt(back);
   }
+  // #399 / #425：把手下拉与 ✕ / 遮罩同一条 closeConsole（含从排查页退回设置）
+  setGestureDismiss(consoleModal, () => closeConsole());
 
   if (btnConsole) {
     btnConsole.onclick = () => {

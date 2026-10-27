@@ -112,6 +112,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // Codex review（#407）：菜单项先收菜单再开确认，菜单 300ms 收起动画到点时会把焦点还给「⋯」——那时它已压在确认框后面。
   // 机制在 frontend-sheets 单测的「接力」两条。真浏览器里确认框（带 visibility 过渡）首帧接不住 openSheet 的开场移焦
   // （存量问题，不止这条路径），所以「焦点进了确认框就不被抢」在这里观察不到，只能守：焦点不丢、取消后回到「⋯」。
+  // #399 / #425：openSheet 初始焦点走 focusInto(容器)，不再落在第一个菜单项；Tab 才进首项。
   test('P0-ROW-MENU-6 键盘：菜单里选删除 → 菜单收完焦点不丢；取消后回到这一行的「⋯」', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
@@ -122,6 +123,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await trigger.focus();
     await page.keyboard.press('Enter');
     await expect(menu(page)).toHaveClass(/sheet-open/);
+    await expect(menu(page), 'focusInto 应把焦点落到菜单 dialog 容器，而不是首个菜单项').toBeFocused();
+    await page.keyboard.press('Tab');
     await expect(sessionMenuItem(page, 'toggle-read')).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(sessionMenuItem(page, 'delete')).toBeFocused();
@@ -162,8 +165,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarOpen(page);
 
     await openSessionMenu(page, row);
-    // openSheet 下一帧才把焦点移进 sheet；人不会在那一帧里按 Esc，测试也等焦点到位再按
-    await expect(menu(page).locator(':focus')).toHaveCount(1);
+    // openSheet 下一帧才把焦点移进 sheet；人不会在那一帧里按 Esc，测试也等焦点到位再按。
+    // #399 / #425：焦点在 dialog 容器本身（focusInto），不是子控件——用 toBeFocused 守容器，
+    // 勿再用 .locator(':focus')（只匹配后代，容器自己有焦点时 count=0）。
+    await expect(menu(page)).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(menu(page)).not.toHaveClass(/sheet-open/);
     await expectSidebarOpen(page);

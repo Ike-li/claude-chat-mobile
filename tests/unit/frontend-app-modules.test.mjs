@@ -588,6 +588,60 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   assert.equal(htmlClasses.has('ccm-sheet-open'), false);
 });
 
+test('settings scroll-lock is idempotent on repeated open/close', () => {
+  // #425：深链 / 再点入口会二次 open；若每次都 acquire，关一次就留下 ccm-sheet-open。
+  const classes = initial => {
+    const values = new Set(initial);
+    return {
+      add: (...names) => names.forEach(name => values.add(name)),
+      remove: (...names) => names.forEach(name => values.delete(name)),
+      has: name => values.has(name),
+      contains: name => values.has(name),
+    };
+  };
+  const sheetClasses = classes(['translate-y-full']);
+  const scrimClasses = classes(['hidden']);
+  const bodyClasses = classes([]);
+  const htmlClasses = classes([]);
+  const dataset = {};
+  const context = createAppContext({
+    dom: {
+      settingsSheet: {
+        classList: sheetClasses, scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
+      settingsSheetBody: { scrollTop: 0 },
+      settingsScrim: { classList: scrimClasses },
+      prefAlertSound: {},
+      prefAlertVibrate: {},
+      prefAlertForeground: {},
+    },
+  });
+  const fakeDoc = {
+    documentElement: { classList: htmlClasses, dataset },
+    body: { classList: bodyClasses },
+    activeElement: null,
+  };
+  const controller = createSettingsController(context, {
+    alerts: { preferences: () => ({ sound: false, vibrate: false, foregroundComplete: false }), ensureAudio: () => {} },
+    autoBind: false,
+    doc: fakeDoc,
+  });
+
+  controller.open();
+  assert.equal(dataset.ccmSheetLocks, '1');
+  controller.open(); // 已开再开
+  assert.equal(dataset.ccmSheetLocks, '1', '重复 open 不得再加锁');
+  assert.equal(bodyClasses.has('ccm-sheet-open'), true);
+
+  controller.close();
+  assert.equal(bodyClasses.has('ccm-sheet-open'), false, '关一次必须解锁');
+  assert.equal(dataset.ccmSheetLocks, undefined);
+
+  controller.close(); // 已关再关
+  assert.equal(bodyClasses.has('ccm-sheet-open'), false, '重复 close 不得 underflow 再去动别人的锁');
+});
+
 test('session workspace state exposes isolated caches through app context', () => {
   const firstContext = createAppContext();
   const secondContext = createAppContext();
