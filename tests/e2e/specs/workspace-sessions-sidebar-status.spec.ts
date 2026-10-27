@@ -599,7 +599,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-11aa 页外 CLI busy 仍点亮工作区汇总，关闭抽屉后不残留陈旧提示', async ({ page }) => {
+  // P0-11aa（#398 / 2026-10-27）：抽屉关闭后【保留】terminalStateByDir last-known，主界面
+  // #sessionsDot 继续显示 terminal_waiting/busy 作被动感知。旧契约断言 Dot 隐藏——与产品决定倒置。
+  // 夹具仍先打开抽屉拿到 cwd 级 terminalBusy，再关抽屉，否则「保留」无从验证。
+  // 取舍：last-known 可能略旧（关抽屉后停轮询）；宁可短暂滞后，也不要主界面恒盲。
+  // P0-11ac 另守「关抽屉后才到的迟到 ack 不得点亮」——无先见状态时仍应隐藏。
+  test('P0-11aa 页外 CLI busy 点亮工作区汇总，关闭抽屉后 #sessionsDot 仍保留 last-known', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-summary');
@@ -620,7 +625,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#sidebarClose').click();
     await expectSidebarClosed(page);
-    await expect(page.locator('#sessionsDot')).toBeHidden();
+    // #398：关抽屉停轮询，但不得 clear terminalStateByDir——主 UI 仍靠 last-known 点亮 Dot。
+    await expect(page.locator('#sessionsDot')).toBeVisible();
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
     await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);
