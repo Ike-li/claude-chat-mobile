@@ -60,4 +60,3 @@ npm run app:install
 
 ## 7. Fast Links for Agents
 - Complete Markdown Docs: `https://ccm.osolee.cc.cd/en/quickstart.htmlpages/<slug>.md`
-- Master Combined Text: `https://ccm.osolee.cc.cd/llms-full.txt`

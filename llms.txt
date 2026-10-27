@@ -26,5 +26,4 @@
 ### 第七部分 · 参考与规范
 
 ## Agent Quick-Load (Combined)
-- [Full Knowledge Base (https://ccm.osolee.cc.cd/llms-full.txt)](https://ccm.osolee.cc.cd/llms-full.txt): Complete 28 chapters compiled into single document
 - [Skill Self-Declaration (https://ccm.osolee.cc.cd/skill.md)](https://ccm.osolee.cc.cd/skill.md): Agent capability card for Cursor / Claude Code

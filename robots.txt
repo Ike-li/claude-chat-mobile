@@ -20,7 +20,6 @@ Allow: /
 
 # Agent & LLM quick indexes
 Allow: /claude-chat-mobile/llms.txt
-Allow: /claude-chat-mobile/llms-full.txt
 Allow: /claude-chat-mobile/skill.md
 
 # Build sources / authoring notes are not public handbook pages
