@@ -783,10 +783,14 @@ header {
   #questionModal.sheet-arming button {
     pointer-events: none;
   }
-  /* 验收 O70：禁用要看得出来（防误触期内的动作按钮、完整性不符时的「允许」；提问同审批） */
-  #permModal button:disabled,
-  #questionModal button:disabled {
+  /* 验收 O70：禁用要看得出来（防误触期内的动作按钮、完整性不符时的「允许」） */
+  #permModal button:disabled {
     opacity: .45;
+    cursor: not-allowed;
+  }
+  /* 提问 sheet 禁用态对齐 #questionMultiSubmit / #questionGroupSubmit 的 disabled:opacity-40（P0-08i），勿与 perm 的 .45 共用 */
+  #questionModal button:disabled {
+    opacity: .4;
     cursor: not-allowed;
   }
 
