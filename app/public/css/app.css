@@ -783,8 +783,9 @@ header {
   #questionModal.sheet-arming button {
     pointer-events: none;
   }
-  /* 验收 O70：禁用要看得出来（防误触期内的三个动作按钮、完整性不符时的「允许」） */
-  #permModal button:disabled {
+  /* 验收 O70：禁用要看得出来（防误触期内的动作按钮、完整性不符时的「允许」；提问同审批） */
+  #permModal button:disabled,
+  #questionModal button:disabled {
     opacity: .45;
     cursor: not-allowed;
   }

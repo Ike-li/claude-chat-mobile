@@ -88,6 +88,7 @@ export function createApprovalController(context, {
   let permArmTimer = null;
   let permArming = false;
   let questionArmTimer = null;
+  let questionArming = false;
   // 别的界面盖在当前会话上（打不开的会话的落地页）时，审批 / 提问卡先收起、不弹（验收 O38）；卡本身留着，
   // resume 时原样再弹出来。期间新到的照常排队。
   let suspended = false;
@@ -267,13 +268,18 @@ export function createApprovalController(context, {
     }, ms);
   }
   // #372：提问 sheet 对齐审批——弹出后约 600ms 内选项 / 跳过等按钮不响应，防拇指热区误触即交或中止本轮。
+  // 同审批：class（pointer-events）+ 原生 disabled（挡键盘 Enter）+ questionArming 守卫。
   function armQuestionSheetButtons(ms = PERM_ARM_MS) {
     if (!questionModal) return;
     questionModal.classList.add('sheet-arming');
+    questionArming = true;
+    syncQuestionButtons();
     if (questionArmTimer) clearTimeout(questionArmTimer);
     questionArmTimer = setTimeout(() => {
       questionModal.classList.remove('sheet-arming');
       questionArmTimer = null;
+      questionArming = false;
+      syncQuestionButtons();
     }, ms);
   }
   // 勾了「总是允许」才展开范围选择；取消勾选时连同选择一起收起并复位。
@@ -403,8 +409,31 @@ export function createApprovalController(context, {
     const n = multiSelectedIndexes.size;
     const base = !activeGroup ? t('确认选择')
       : activeGroup.cursor === activeGroup.questions.length - 1 ? t('检查回答') : t('下一题');
-    questionMultiSubmit.disabled = !activeGroup && n === 0;
+    // 防误触期内一律禁用；结束后再套「单题卡未勾选」规则（组卡允许空选前进）
+    questionMultiSubmit.disabled = questionArming || (!activeGroup && n === 0);
     questionMultiSubmit.textContent = n ? `${base} (${n})` : base;
+  }
+  // 提问 sheet 动作按钮可点状态只在这里算：防误触期内全部禁用；结束后尊重空多选 / 组卡未答完。
+  // 用原生 disabled 而不只是 pointer-events：后者挡不住键盘 Enter（对齐 syncPermButtons / 验收 O70）。
+  function syncQuestionButtons() {
+    if (questionSkip) questionSkip.disabled = questionArming;
+    if (questionOtherSubmit) questionOtherSubmit.disabled = questionArming;
+    syncMultiSubmit();
+    if (questionGroupSubmit) {
+      let missing = 0;
+      if (activeGroup) {
+        missing = buildQuestionGroupAnswers(activeGroup.questions, activeGroup.drafts, [...activeGroup.openIndexes]).missing.length;
+      }
+      questionGroupSubmit.disabled = questionArming || missing > 0;
+    }
+    // 选项按钮（及同 wrap 内预览按钮）随 arming 禁用；desc 等非按钮子节点没有 onclick，跳过
+    if (questionOptions) {
+      for (const wrap of questionOptions.children) {
+        for (const child of wrap.children || []) {
+          if (typeof child.onclick === 'function') child.disabled = questionArming;
+        }
+      }
+    }
   }
   // 题面：header / 正文 / 选项（含说明与预览），单题卡与组卡共用。picked 是要画成已选的下标；
   // 点选项后单题卡直接交，组卡记草稿并跳下一题。
@@ -459,6 +488,7 @@ export function createApprovalController(context, {
       }
       if (multi) {
         btn.onclick = () => {
+          if (questionArming) return;
           if (multiSelectedIndexes.has(i)) multiSelectedIndexes.delete(i);
           else multiSelectedIndexes.add(i);
           const on = multiSelectedIndexes.has(i);
@@ -469,11 +499,13 @@ export function createApprovalController(context, {
         };
       } else {
         btn.onclick = () => {
+          if (questionArming) return;
           if (!activeGroup) { answerQuestion(i); return; }
           setGroupDraft({ optionIndex: i });
           goToGroupStep(activeGroup.cursor + 1);
         };
       }
+      if (questionArming) btn.disabled = true;
       questionOptions.appendChild(wrap);
     });
   }
@@ -563,9 +595,10 @@ export function createApprovalController(context, {
       questionReviewMissing.textContent = missing.length ? t('还有 {n} 题没答，答完才能提交').replace('{n}', missing.length) : '';
       questionReviewMissing.classList.toggle('hidden', !missing.length);
     }
-    if (questionGroupSubmit) questionGroupSubmit.disabled = missing.length > 0;
+    if (questionGroupSubmit) questionGroupSubmit.disabled = questionArming || missing.length > 0;
   }
   function submitQuestionGroup() {
+    if (questionArming) return;
     const g = activeGroup;
     if (!g) return;
     const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
@@ -591,6 +624,7 @@ export function createApprovalController(context, {
     updateSendButtonState();
   }
   function answerQuestion(index) {
+    if (questionArming) return;
     if (!activeQuestion) return;
     // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答（#371 浮层内可见）
     if (failIfDisconnected('question')) return;
@@ -601,6 +635,7 @@ export function createApprovalController(context, {
     finishQuestionUI(`${t('已选择：')}${label}`);
   }
   function answerQuestionMulti() {
+    if (questionArming) return;
     if (!activeQuestion || !multiSelectedIndexes.size) {
       // #371：校验提示写浮层内；不再只靠被遮罩盖住的 addBar
       showQuestionSheetError(t('请至少选择一项'));
@@ -614,6 +649,7 @@ export function createApprovalController(context, {
     finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
   function answerQuestionOther() {
+    if (questionArming) return;
     if (!activeQuestion && !activeGroup) return;
     const freeText = (questionOtherInput?.value || '').trim();
     if (!freeText) {
@@ -632,7 +668,11 @@ export function createApprovalController(context, {
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
     finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
   }
-  if (questionMultiSubmit) questionMultiSubmit.onclick = () => (activeGroup ? goToGroupStep(activeGroup.cursor + 1) : answerQuestionMulti());
+  if (questionMultiSubmit) questionMultiSubmit.onclick = () => {
+    if (questionArming) return;
+    if (activeGroup) goToGroupStep(activeGroup.cursor + 1);
+    else answerQuestionMulti();
+  };
   if (questionGroupSubmit) questionGroupSubmit.onclick = () => submitQuestionGroup();
   if (questionOtherToggle) {
     questionOtherToggle.onclick = () => {
@@ -644,7 +684,7 @@ export function createApprovalController(context, {
   if (questionOtherSubmit) questionOtherSubmit.onclick = () => answerQuestionOther();
   if (questionOtherInput) {
     questionOtherInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); answerQuestionOther(); }
+      if (e.key === 'Enter') { e.preventDefault(); if (!questionArming) answerQuestionOther(); }
     });
   }
   // 跳过/中止：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」；
@@ -652,6 +692,7 @@ export function createApprovalController(context, {
   // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
   if (questionSkip) {
     questionSkip.onclick = () => {
+      if (questionArming) return;
       if (!activeQuestion && !activeGroup) return;
       // #371：断线时不要 emit interrupt（恢复后可能补送一次中止）；失败原因写浮层内
       if (failIfDisconnected('question')) return;
@@ -799,10 +840,12 @@ export function createApprovalController(context, {
       permArming = false;
       syncPermButtons();
     },
-    // #372：提问 sheet 关窗 / 单测结束防误触窗口时清计时器与 class，避免下次打开残留。
+    // #372：提问 sheet 关窗 / 单测结束防误触窗口时清计时器、class、arming 旗，并刷新 disabled。
     cancelQuestionArming() {
       if (questionArmTimer) { clearTimeout(questionArmTimer); questionArmTimer = null; }
+      questionArming = false;
       questionModal?.classList.remove('sheet-arming');
+      syncQuestionButtons();
     },
     // 输入区是否该被"先处理当前审批/选择"挡住。
     hasPending() { return Boolean(activePerm || activeQuestion || activeGroup); },
