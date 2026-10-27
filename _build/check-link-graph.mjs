@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, relative } from 'node:path';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BASE = 'https://ike-li.github.io/claude-chat-mobile';
+const BASE = 'https://ccm.osolee.cc.cd';
 
 const fileFor = (urlPath) => {
   const rel = urlPath.replace(/^\//, '');

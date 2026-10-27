@@ -28,7 +28,7 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BASE = 'https://ike-li.github.io/claude-chat-mobile';
+const BASE = 'https://ccm.osolee.cc.cd';
 const SECTION = '## Full Handbook Pages (Markdown)';
 
 const cfg = createRequire(import.meta.url)(join(ROOT, 'docs-site/book.config.cjs'));

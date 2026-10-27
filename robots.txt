@@ -29,4 +29,4 @@ Allow: /claude-chat-mobile/docs-site/pages/*.md
 Disallow: /claude-chat-mobile/docs-site/fragments/
 Disallow: /claude-chat-mobile/docs-site/AUTHORING-components.html
 
-Sitemap: https://ike-li.github.io/claude-chat-mobile/sitemap.xml
+Sitemap: https://ccm.osolee.cc.cd/sitemap.xml

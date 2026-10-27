@@ -33,7 +33,7 @@ python3 ../seo-baseline/compare.py    # 与基线对比，期望 Findings: 0
 ```
 
 Google 不在 IndexNow 这条链上 —— 它只认 Search Console，必须人工提交。
-站点已验证的 GSC 资源是「网址前缀」`https://ike-li.github.io/claude-chat-mobile/`，
+站点已验证的 GSC 资源是「网址前缀」`https://ccm.osolee.cc.cd/`，
 验证文件是根目录下的 `google*.html`，**别删**。
 
 ## 两个反直觉的点

@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIR = join(ROOT, 'diagrams');
-const BASE = 'https://ike-li.github.io/claude-chat-mobile/diagrams/';
+const BASE = 'https://ccm.osolee.cc.cd/diagrams/';
 
 const stripTags = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 

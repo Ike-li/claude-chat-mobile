@@ -3,363 +3,363 @@
         xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
         xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/</loc>
+    <loc>https://ccm.osolee.cc.cd/</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/03-approval-en.png</image:loc>
       <image:title>Dangerous actions approved from the phone</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/01-stream-en.png</image:loc>
       <image:title>Streaming output with Markdown rendering</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/02-tools-en.png</image:loc>
       <image:title>Tool-call cards</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/04-workspace-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/04-workspace-en.png</image:loc>
       <image:title>Multi-repository workspace session switcher</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/05-settings-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/05-settings-en.png</image:loc>
       <image:title>Fine-grained settings control</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/06-console-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/06-console-en.png</image:loc>
       <image:title>Direct log viewing</image:title>
     </image:image>
     <video:video>
-      <video:thumbnail_loc>https://ike-li.github.io/claude-chat-mobile/demo-poster.jpg</video:thumbnail_loc>
+      <video:thumbnail_loc>https://ccm.osolee.cc.cd/demo-poster.jpg</video:thumbnail_loc>
       <video:title>Driving your terminal claude CLI from a phone</video:title>
       <video:description>A reply streams in, tool cards appear inline, then a git push is approved from the phone.</video:description>
-      <video:content_loc>https://ike-li.github.io/claude-chat-mobile/demo.mp4</video:content_loc>
+      <video:content_loc>https://ccm.osolee.cc.cd/demo.mp4</video:content_loc>
       <video:duration>25</video:duration>
       <video:family_friendly>yes</video:family_friendly>
     </video:video>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/zh/</loc>
+    <loc>https://ccm.osolee.cc.cd/zh/</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/assets/hero-zh.jpg</image:loc>
       <image:title>Claude Chat Mobile — 终端里的 claude，手机上也能用</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/03-approval-zh.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/03-approval-zh.png</image:loc>
       <image:title>Dangerous actions approved from the phone</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/01-stream-zh.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/01-stream-zh.png</image:loc>
       <image:title>Streaming output with Markdown rendering</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/02-tools-zh.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/02-tools-zh.png</image:loc>
       <image:title>Tool-call cards</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/04-workspace-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/04-workspace-en.png</image:loc>
       <image:title>Multi-repository workspace session switcher</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/05-settings-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/05-settings-en.png</image:loc>
       <image:title>Fine-grained settings control</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://ike-li.github.io/claude-chat-mobile/screenshots/06-console-en.png</image:loc>
+      <image:loc>https://ccm.osolee.cc.cd/screenshots/06-console-en.png</image:loc>
       <image:title>Direct log viewing</image:title>
     </image:image>
     <video:video>
-      <video:thumbnail_loc>https://ike-li.github.io/claude-chat-mobile/demo-poster.jpg</video:thumbnail_loc>
+      <video:thumbnail_loc>https://ccm.osolee.cc.cd/demo-poster.jpg</video:thumbnail_loc>
       <video:title>在手机上驾驶你终端里的 claude CLI</video:title>
       <video:description>回复流式吐出、工具卡就地展开，然后在手机上放行一次 git push。</video:description>
-      <video:content_loc>https://ike-li.github.io/claude-chat-mobile/demo.mp4</video:content_loc>
+      <video:content_loc>https://ccm.osolee.cc.cd/demo.mp4</video:content_loc>
       <video:duration>25</video:duration>
       <video:family_friendly>yes</video:family_friendly>
     </video:video>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/demo/</loc>
+    <loc>https://ccm.osolee.cc.cd/demo/</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/en/compare.html</loc>
+    <loc>https://ccm.osolee.cc.cd/en/compare.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/zh/compare.html</loc>
+    <loc>https://ccm.osolee.cc.cd/zh/compare.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/en/quickstart.html</loc>
+    <loc>https://ccm.osolee.cc.cd/en/quickstart.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/en/security.html</loc>
+    <loc>https://ccm.osolee.cc.cd/en/security.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/</loc>
     <lastmod>2026-10-11</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/agent-session.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/agent-session.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/api-events.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/api-events.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/architecture.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/architecture.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/auth-device.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/auth-device.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/boundaries.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/boundaries.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/contracts-gates.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/contracts-gates.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/data-store.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/data-store.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/drift.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/drift.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/env-reference.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/env-reference.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/events-sync.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/events-sync.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/evolution.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/evolution.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/files-upload.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/files-upload.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/frontend-pwa.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/frontend-pwa.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/glossary.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/glossary.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/integrations.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/integrations.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/notify-status.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/notify-status.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/ops-troubleshoot.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/ops-troubleshoot.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/overview.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/production-deploy.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/production-deploy.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/project-rules.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/project-rules.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/quickstart.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/reading-guide.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/reading-guide.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/runtime-assembly.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/runtime-assembly.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/security-model.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/sessions-history.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/sessions-history.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/single-driver.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/single-driver.html</loc>
     <lastmod>2026-09-24</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/pages/terminal-parity.html</loc>
+    <loc>https://ccm.osolee.cc.cd/docs-site/pages/terminal-parity.html</loc>
     <lastmod>2026-10-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/00-overview.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/00-overview.html</loc>
     <lastmod>2026-10-15</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/01-web-drive.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/01-web-drive.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/02-cli-mirror.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/02-cli-mirror.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/03-single-driver.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/03-single-driver.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/04-auth-gates.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/04-auth-gates.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/05-approval.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/05-approval.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/06-push.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/06-push.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/07-files.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/07-files.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/08-envelope.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/08-envelope.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/09-ops.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/09-ops.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/10-sessions.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/10-sessions.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/11-frontend.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/11-frontend.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://ike-li.github.io/claude-chat-mobile/diagrams/12-testing.html</loc>
+    <loc>https://ccm.osolee.cc.cd/diagrams/12-testing.html</loc>
     <lastmod>2026-09-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>

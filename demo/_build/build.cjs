@@ -101,7 +101,7 @@ function rewriteCssUrls(css, depthFromDemoRoot) {
  * 演示站的 SEO 头。只在演示站注入，不回流产品——产品页不需要被任何人抓取。
  * og:image 必须是绝对 URL（相对路径在抓取端解析不出来），其余用相对路径即可。
  */
-const SITE = 'https://ike-li.github.io/claude-chat-mobile';
+const SITE = 'https://ccm.osolee.cc.cd';
 const DEMO_TITLE = '在线演示 · Claude Chat Mobile — 浏览器里直接试手机端 Claude Code 界面';
 const DEMO_DESC = '在浏览器里直接操作 Claude Chat Mobile 的真实前端：审批卡、工具卡、'
   + '会话列表与流式输出。假后端跑在本地，不连任何服务器，也不用安装。';

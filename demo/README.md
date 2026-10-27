@@ -1,6 +1,6 @@
 # 在线演示站 `/demo/`
 
-线上地址：<https://ike-li.github.io/claude-chat-mobile/demo/>
+线上地址：<https://ccm.osolee.cc.cd/demo/>
 
 让人在浏览器里摸一遍产品界面，不用先装。**跑的是主仓 `app/public/` 的真前端**，一行业务代码都没改；
 假的只有后端——一层几百行的浏览器内 shim。

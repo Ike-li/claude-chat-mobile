@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SITE = 'https://ike-li.github.io/claude-chat-mobile';
+const SITE = 'https://ccm.osolee.cc.cd';
 
 // gh-pages 是孤儿分支、没有自己的 node_modules。playwright 装在主工作树里，
 // 位置用 git 问出来而不是写死——worktree 可以被挪走。

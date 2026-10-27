@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { createRequire } from 'node:module';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BASE = 'https://ike-li.github.io/claude-chat-mobile';
+const BASE = 'https://ccm.osolee.cc.cd';
 const fail = [];
 
 // URL -> 磁盘文件（与 sitemap 生成脚本同一套规则）

@@ -4,8 +4,8 @@ description: Self-hosted mobile web interface bridging terminal Claude Code CLI 
 version: 2.1 (dev@3f488861)
 license: Apache-2.0
 repository: https://github.com/Ike-li/claude-chat-mobile
-docs: https://ike-li.github.io/claude-chat-mobile/docs-site/
-llms-txt: https://ike-li.github.io/claude-chat-mobile/llms.txt
+docs: https://ccm.osolee.cc.cd/docs-site/
+llms-txt: https://ccm.osolee.cc.cd/llms.txt
 ---
 
 # Claude Chat Mobile — Agent Capability & Architecture Card
@@ -59,5 +59,5 @@ npm run app:install
 ```
 
 ## 7. Fast Links for Agents
-- Complete Markdown Docs: `https://ike-li.github.io/claude-chat-mobile/docs-site/pages/<slug>.md`
-- Master Combined Text: `https://ike-li.github.io/claude-chat-mobile/llms-full.txt`
+- Complete Markdown Docs: `https://ccm.osolee.cc.cd/docs-site/pages/<slug>.md`
+- Master Combined Text: `https://ccm.osolee.cc.cd/llms-full.txt`

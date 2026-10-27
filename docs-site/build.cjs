@@ -222,7 +222,7 @@ function shell(p, bodyHtml, toc, flat) {
   const mermaidTag = needMermaid ? `<script src="${b}assets/mermaid.min.js"></script>` : '';
 
   // SEO & 结构化数据
-  const siteRoot = 'https://ike-li.github.io/claude-chat-mobile/';
+  const siteRoot = 'https://ccm.osolee.cc.cd/';
   const siteBase = `${siteRoot}docs-site/`;
   const canonicalUrl = p.home ? siteBase : `${siteBase}pages/${p.slug}.html`;
   const breadcrumbItems = [

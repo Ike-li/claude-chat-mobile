@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BASE = 'https://ike-li.github.io/claude-chat-mobile';
+const BASE = 'https://ccm.osolee.cc.cd';
 const TODAY = new Date().toISOString().slice(0, 10);
 
 const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
