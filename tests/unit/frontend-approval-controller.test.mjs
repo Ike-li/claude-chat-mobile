@@ -1345,3 +1345,55 @@ test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）
   assert.match(btn0.textContent, /^☐ /);
   assert.equal(wrap0.classList.contains('border-accent'), false);
 });
+
+
+// ── #377：连续审批/提问浮层写明队列剩余条数 ───────────────────────────────────
+function queueProgress(byId, id) {
+  const el = byId(id);
+  return el.classList.contains('hidden') ? null : el.textContent;
+}
+
+test('单条审批不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+});
+
+test('连续多条审批显示「第 N 条，后面还有 M 条」，答完推进', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  byId('permAllow').onclick();
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 2 条，后面还有 1 条');
+
+  byId('permAllow').onclick();
+  // 最后一条仍属同批，应能看出「不是新的打断」；M=0。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 3 条，后面还有 0 条');
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null, '整批结束后进度应隐藏并归零');
+});
+
+test('单条提问不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});
+
+test('连续多条提问显示队列进度；clearAll 清掉', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+
+  approvals.clearAll();
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});

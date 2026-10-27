@@ -208,6 +208,8 @@ export const EN_DICT = Object.freeze({
   // —— 权限审批弹窗 ——
   '⚠️ 权限请求': '⚠️ Permission request',
   '权限请求': 'Permission request',
+  // #377：审批/提问浮层队列进度（N=当前序号，M=shift 后仍在队列里的条数）
+  '第 {n} 条，后面还有 {m} 条': 'Item {n}, {m} more remaining',
   '⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，已禁止「允许」': "⚠️ Integrity precheck failed: what's shown doesn't match the fingerprint anchored on the server, so Allow is disabled.",
   '可以拒绝，或刷新页面从服务端重新取这张审批': 'You can deny it, or reload the page to fetch this request from the server again.',
   '刷新重取': 'Reload',
