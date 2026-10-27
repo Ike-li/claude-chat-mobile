@@ -8,16 +8,19 @@
        外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。
        defer + 排在 viewport meta 之后：脚本不碰 DOM，没理由在渲染阻塞窗口里抢跑，
        解析器应该先拿到 viewport 才开始布局。 -->
-  <!-- 主题启动：在 CSS 前同步写 data-theme，避免手动浅/深下的 FOUC（外置以保 CSP） -->
+  <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /sw.js（零缓存逻辑，非 offline 方案——
+       §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/sw.js。
+       放站点根而非 /js/ 下：SW 默认 scope 即脚本所在目录，只有根目录才能控制整站）。
+       双 manifest（light/dark）：Web Manifest 无媒体查询；theme-boot / theme.js 按 ccm_theme
+       解析结果切换 href（#387）。默认 light；兼容路径 /manifest.webmanifest 仍伺服浅色副本。 -->
+  <link rel="manifest" href="/manifest-light.webmanifest" crossorigin="use-credentials">
+  <!-- 主题启动：在 CSS 前同步写 data-theme，并切换 manifest href，避免手动浅/深下的 FOUC（外置以保 CSP）。
+       须在 manifest link 之后，boot 才能改到 href。 -->
   <script src="/js/theme-boot.js"></script>
   <script src="/js/sw-cleanup.js" defer></script>
   <meta name="theme-color" data-ccm-palette="light" media="(prefers-color-scheme: light)" content="#F4F3EE">
   <meta name="theme-color" data-ccm-palette="dark" media="(prefers-color-scheme: dark)" content="#121211">
   <title>Claude Chat Mobile</title>
-  <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /sw.js（零缓存逻辑，非 offline 方案——
-       §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/sw.js。
-       放站点根而非 /js/ 下：SW 默认 scope 即脚本所在目录，只有根目录才能控制整站） -->
-  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
   <meta name="mobile-web-app-capable" content="yes">

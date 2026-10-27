@@ -1,4 +1,4 @@
-// theme.js —— 把 logic/theme 的偏好落到 DOM：data-theme、theme-color meta、hljs 样式表 media。
+// theme.js —— 把 logic/theme 的偏好落到 DOM：data-theme、theme-color meta、hljs 样式表 media、PWA manifest。
 // 跟随系统时清掉 data-theme，并把 meta/link 的 media 还原成 prefers-color-scheme；
 // 强制浅/深时写 data-theme，并把对应资源的 media 设为 all、另一侧 not all。
 import {
@@ -6,6 +6,7 @@ import {
   readThemePref,
   resolveTheme,
   themeHtmlAttribute,
+  manifestHrefForTheme,
 } from './logic/theme.js';
 
 const LIGHT_MEDIA = '(prefers-color-scheme: light)';
@@ -57,6 +58,13 @@ export function applyThemeToDocument(doc, pref, { systemDark = false } = {}) {
     setMedia(darkLink, 'all');
   }
 
+  // PWA manifest：无媒体查询，按解析后的色板切换 href（安装时 Chrome 读当时的 manifest）。
+  const manifestLink = doc.querySelector('link[rel="manifest"]');
+  if (manifestLink) {
+    const href = manifestHrefForTheme(resolved);
+    if (manifestLink.getAttribute('href') !== href) manifestLink.setAttribute('href', href);
+  }
+
   return resolved;
 }
 
@@ -69,4 +77,4 @@ export function readAndApplyTheme(doc, {
   return pref;
 }
 
-export { readThemePref, writeThemePref, resolveTheme, THEME_STORAGE_KEY, THEME_COLORS } from './logic/theme.js';
+export { readThemePref, writeThemePref, resolveTheme, THEME_STORAGE_KEY, THEME_COLORS, MANIFEST_HREF, manifestHrefForTheme } from './logic/theme.js';

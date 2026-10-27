@@ -6,20 +6,24 @@ import { join } from 'node:path';
 import {
   THEME_STORAGE_KEY,
   THEME_COLORS,
+  MANIFEST_HREF,
   readThemePref,
   writeThemePref,
   resolveTheme,
   themeHtmlAttribute,
   themePrefLabelKey,
+  manifestHrefForTheme,
 } from '../../app/public/js/logic/theme.js';
 import { applyThemeToDocument } from '../../app/public/js/theme.js';
 
 const HERE = import.meta.dirname;
 const bootSrc = readFileSync(join(HERE, '../../app/public/js/theme-boot.js'), 'utf8');
 
-test('THEME_STORAGE_KEY 与 theme-boot.js 字面量一致（boot 不能 import module）', () => {
+test('THEME_STORAGE_KEY / MANIFEST_HREF 与 theme-boot.js 字面量一致（boot 不能 import module）', () => {
   assert.equal(THEME_STORAGE_KEY, 'ccm_theme');
   assert.match(bootSrc, /localStorage\.getItem\(['"]ccm_theme['"]\)/);
+  assert.match(bootSrc, /\/manifest-light\.webmanifest/);
+  assert.match(bootSrc, /\/manifest-dark\.webmanifest/);
 });
 
 test('THEME_COLORS 与 index.html theme-color / :root --canvas 同源', () => {
@@ -86,6 +90,11 @@ function fakeDoc() {
     hljsThemeLight: { media: '(prefers-color-scheme: light)', getAttribute(k) { return k === 'media' ? this.media : null; }, setAttribute(k, v) { if (k === 'media') this.media = v; }, removeAttribute(k) { if (k === 'media') this.media = null; } },
     hljsThemeDark: { media: '(prefers-color-scheme: dark)', getAttribute(k) { return k === 'media' ? this.media : null; }, setAttribute(k, v) { if (k === 'media') this.media = v; }, removeAttribute(k) { if (k === 'media') this.media = null; } },
   };
+  const manifestLink = {
+    href: MANIFEST_HREF.light,
+    getAttribute(k) { return k === 'href' ? this.href : null; },
+    setAttribute(k, v) { if (k === 'href') this.href = v; },
+  };
   return {
     documentElement: {
       setAttribute(k, v) { attrs.set(k, v); },
@@ -96,15 +105,20 @@ function fakeDoc() {
       if (sel.includes('theme-color')) return metas;
       return [];
     },
+    querySelector(sel) {
+      if (sel === 'link[rel="manifest"]') return manifestLink;
+      return null;
+    },
     getElementById(id) { return links[id] || null; },
     _attrs: attrs,
     _metas: metas,
     _links: links,
+    _manifest: manifestLink,
   };
 }
 
 test.describe('applyThemeToDocument', () => {
-  test('dark：写 data-theme，点亮 dark meta/link', () => {
+  test('dark：写 data-theme，点亮 dark meta/link，切到 dark manifest', () => {
     const doc = fakeDoc();
     assert.equal(applyThemeToDocument(doc, 'dark', { systemDark: false }), 'dark');
     assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark');
@@ -112,15 +126,17 @@ test.describe('applyThemeToDocument', () => {
     assert.equal(doc._metas.find(m => m.palette === 'light').media, 'not all');
     assert.equal(doc._links.hljsThemeDark.media, 'all');
     assert.equal(doc._links.hljsThemeLight.media, 'not all');
+    assert.equal(doc._manifest.href, MANIFEST_HREF.dark);
   });
-  test('light：写 data-theme=light，挡住系统深色', () => {
+  test('light：写 data-theme=light，挡住系统深色，切到 light manifest', () => {
     const doc = fakeDoc();
     applyThemeToDocument(doc, 'light', { systemDark: true });
     assert.equal(doc.documentElement.getAttribute('data-theme'), 'light');
     assert.equal(doc._metas.find(m => m.palette === 'light').media, 'all');
     assert.equal(doc._links.hljsThemeLight.media, 'all');
+    assert.equal(doc._manifest.href, MANIFEST_HREF.light);
   });
-  test('system：去掉 data-theme，还原 prefers-color-scheme media', () => {
+  test('system：去掉 data-theme，还原 prefers-color-scheme media，manifest 跟系统色板', () => {
     const doc = fakeDoc();
     applyThemeToDocument(doc, 'dark', { systemDark: false });
     applyThemeToDocument(doc, 'system', { systemDark: true });
@@ -129,5 +145,14 @@ test.describe('applyThemeToDocument', () => {
     assert.equal(doc._metas.find(m => m.palette === 'dark').media, '(prefers-color-scheme: dark)');
     assert.equal(doc._links.hljsThemeLight.media, '(prefers-color-scheme: light)');
     assert.equal(doc._links.hljsThemeDark.media, '(prefers-color-scheme: dark)');
+    assert.equal(doc._manifest.href, MANIFEST_HREF.dark);
+    applyThemeToDocument(doc, 'system', { systemDark: false });
+    assert.equal(doc._manifest.href, MANIFEST_HREF.light);
   });
+});
+
+test('manifestHrefForTheme 按解析色板选 light/dark 路径', () => {
+  assert.equal(manifestHrefForTheme('light'), MANIFEST_HREF.light);
+  assert.equal(manifestHrefForTheme('dark'), MANIFEST_HREF.dark);
+  assert.equal(manifestHrefForTheme('nope'), MANIFEST_HREF.light);
 });
