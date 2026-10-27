@@ -420,9 +420,15 @@ import { createGateFocusController } from './app/focus-layers.js';
   const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
   // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
-  // sessionBlockedSurface（z-20）也是 aria-modal，不进列表则 Tab 会穿到被盖住的顶栏/composer（#393）。
+  // sessionBlockedSurface（z-20）是中层 aria-modal（#393）：走 overlays，不要塞进 gates——
+  // 否则会 inert 掉更高的 leftSidebar（层序注释：落地页在侧栏之下，要能直接翻会话列表）。
   const sessionBlockedSurface = $('sessionBlockedSurface');
-  createGateFocusController({ gates: [authGate, accessRelogin, sessionBlockedSurface, deviceModalEl, deviceDenied, accessHelp] });
+  const sidebarScrim = $('sidebarScrim');
+  createGateFocusController({
+    gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp],
+    overlays: [sessionBlockedSurface],
+    keepInteractiveWhenOverlay: [leftSidebar, sidebarScrim],
+  });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');

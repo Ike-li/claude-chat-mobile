@@ -95,7 +95,7 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     assert.equal(h.settingsSheet.inert, true);
   });
 
-  // #393：sessionBlockedSurface 与令牌门同走 createGateFocusController；开着时背景 inert，关后还焦点。
+  // #393：sessionBlockedSurface 是中层 overlay（不是 z-50 gate）；开着时背景 inert，关后还焦点。
   test('sessionBlockedSurface 开着时背景 inert，关掉后恢复', () => {
     const surface = fakeEl('sessionBlockedSurface', { hidden: true });
     const header = fakeEl('header');
@@ -106,7 +106,7 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     surface.focus = () => { focused = surface; };
     header.focus = () => { focused = header; };
     const doc = { body, get activeElement() { return focused; } };
-    const ctl = createGateFocusController({ gates: [surface], doc, Observer: null });
+    const ctl = createGateFocusController({ gates: [], overlays: [surface], doc, Observer: null });
     focused = header;
     surface.classList.remove('hidden');
     ctl.sync();
@@ -119,5 +119,54 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     assert.equal(header.inert, false);
     assert.equal(composer.inert, false);
     assert.equal(focused, header, '关掉后焦点应还给打开前的元素');
+  });
+
+  // #429：落地页 z-20 在侧栏 z-40 之下；挂进 gates 会 inert 掉 leftSidebar，桌面常驻侧栏翻不了会话。
+  test('sessionBlockedSurface 开着时 leftSidebar 保持可交互', () => {
+    const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const leftSidebar = fakeEl('leftSidebar');
+    const sidebarScrim = fakeEl('sidebarScrim');
+    const header = fakeEl('header');
+    const body = fakeEl('body');
+    body.children = [header, sidebarScrim, leftSidebar, surface];
+    const doc = { body, activeElement: body };
+    const ctl = createGateFocusController({
+      gates: [],
+      overlays: [surface],
+      keepInteractiveWhenOverlay: [leftSidebar, sidebarScrim],
+      doc,
+      Observer: null,
+    });
+    surface.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(surface.inert, false);
+    assert.equal(header.inert, true, '被盖住的顶栏仍须 inert');
+    assert.equal(leftSidebar.inert, false, '侧栏在落地页之上，inert 了就翻不了会话列表');
+    assert.equal(sidebarScrim.inert, false, '抽屉遮罩跟侧栏同层，一并豁免');
+  });
+
+  // 中层 overlay 不得按 DOM 序压过 z-50 全屏门：两者同开时门才是顶，侧栏也要跟门一起 inert。
+  test('全屏门与 sessionBlockedSurface 同开时以门为顶，侧栏仍 inert', () => {
+    const authGate = fakeEl('authGate', { hidden: true });
+    const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const leftSidebar = fakeEl('leftSidebar');
+    const header = fakeEl('header');
+    const body = fakeEl('body');
+    body.children = [authGate, header, leftSidebar, surface];
+    const doc = { body, activeElement: body };
+    const ctl = createGateFocusController({
+      gates: [authGate],
+      overlays: [surface],
+      keepInteractiveWhenOverlay: [leftSidebar],
+      doc,
+      Observer: null,
+    });
+    surface.classList.remove('hidden');
+    authGate.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(authGate.inert, false, 'z-50 门才是顶层');
+    assert.equal(surface.inert, true, '落地页被门盖住，不该还能 Tab');
+    assert.equal(leftSidebar.inert, true, '全屏门开着时侧栏豁免不生效');
+    assert.equal(header.inert, true);
   });
 });

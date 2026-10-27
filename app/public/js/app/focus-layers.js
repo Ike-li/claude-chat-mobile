@@ -52,25 +52,48 @@ export function trapTabIn(root, ev, doc) {
   }
 }
 
-// 全屏门：令牌门、Access 重登、会话打不开落地页、等待授权、被拒、访问帮助。它们盖住整屏，背后的东西点不到，却仍能被
+// 全屏门：令牌门、Access 重登、等待授权、被拒、访问帮助。它们盖住整屏，背后的东西点不到，却仍能被
 // Tab 到。最上面那层开着时，body 下其余子节点一律 inert。几层同为 z-50，谁在上面看 DOM 顺序——
-// gates 按 DOM 顺序传，取最后一个开着的（会话打不开页是 z-20，仍按 DOM 序挂进同一列表）。
+// gates 按 DOM 顺序传，取最后一个开着的。
+//
+// 中层 aria-modal（overlays，如会话打不开落地页 z-20）不能塞进 gates：它比侧栏/审批 sheet 矮，
+// 按「列表末开着的当顶」会把更高的 z-50 门盖错，也会把 leftSidebar（z-40）一起 inert 掉——
+// 而落地页的设计就是「仍在侧栏之下，从这里要能直接翻会话列表」。overlays 单独一层：只 inert
+// 被盖住的背景，keepInteractiveWhenOverlay 里的侧栏/scrim 保持可交互；真全屏门开着时仍走 gate，
+// 侧栏照样 inert（门盖住一切）。
 //
 // 显隐由各处直接切 hidden class，散在十几个调用点；用 MutationObserver 盯 class，不要求每个调用点
 // 都记得通知一声。不盯 body 的子节点增删：剪贴板兜底会临时往 body 挂一个 textarea 再 focus 它，
 // 访问帮助里的「复制命令」走的就是这条路，把它也 inert 掉会让复制静默失败。
-export function createGateFocusController({ gates, doc = document, Observer = globalThis.MutationObserver } = {}) {
+export function createGateFocusController({
+  gates,
+  overlays = [],
+  keepInteractiveWhenOverlay = [],
+  doc = document,
+  Observer = globalThis.MutationObserver,
+} = {}) {
   const layers = gates.filter(Boolean);
+  const midLayers = overlays.filter(Boolean);
+  const keepWhenOverlay = new Set(keepInteractiveWhenOverlay.filter(Boolean));
   let top = null;
   let focusBefore = null;
 
   function sync() {
-    const open = layers.filter(el => !el.classList.contains('hidden'));
-    const next = open[open.length - 1] || null;
+    const openGates = layers.filter(el => !el.classList.contains('hidden'));
+    const topGate = openGates[openGates.length - 1] || null;
+    const openOverlays = midLayers.filter(el => !el.classList.contains('hidden'));
+    const topOverlay = openOverlays[openOverlays.length - 1] || null;
+    // 全屏门压过中层落地页：两者同时开着时焦点与 inert 以门为准。
+    const next = topGate || topOverlay || null;
     if (next === top) return;
     if (!top) focusBefore = doc.activeElement;
     top = next;
-    for (const child of doc.body.children) setInertReason(child, 'gate', !!top && child !== top);
+    for (const child of doc.body.children) {
+      setInertReason(child, 'gate', !!topGate && child !== topGate);
+      // 仅无全屏门时才挂 overlay 原因；门一开就清掉，避免和 gate 叠出「侧栏该 inert 却被 keep 豁免」的错觉。
+      const overlayInert = !topGate && !!topOverlay && child !== topOverlay && !keepWhenOverlay.has(child);
+      setInertReason(child, 'overlay', overlayInert);
+    }
     if (top) {
       if (!top.contains(doc.activeElement)) focusInto(top);
     } else {
@@ -81,7 +104,7 @@ export function createGateFocusController({ gates, doc = document, Observer = gl
 
   if (Observer) {
     const observer = new Observer(sync);
-    for (const el of layers) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+    for (const el of [...layers, ...midLayers]) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
   }
   sync();
   return { sync };
