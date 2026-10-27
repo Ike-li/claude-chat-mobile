@@ -7964,12 +7964,13 @@ import { createGateFocusController } from './app/focus-layers.js';
   function stopSessionPanelRevalidator() {
     if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
     sessionPanelRevalidateTimer = null;
-    // 抽屉不可见时不再刷新 CLI registry；与其让顶部/目录无限保留旧状态，不如撤下这条临时信号。
-    if (terminalStateByDir.size) {
-      terminalStateByDir.clear();
-      refreshDirBadges();
-      updateSessionsDot();
-    }
+    // 抽屉不可见时停掉 session:list 轮询（省流量）。但【保留】terminalStateByDir：#sessionsDot 在主界面
+    // 正是靠这份 last-known 做「其他工作区终端需要你 / 运行中」的被动感知（product #398，2026-10-27）。
+    // 旧实现这里 clear() 再 updateSessionsDot()，等于用户一回到主 UI 就把角标信号擦掉——与 summarizeOtherWorkspaces
+    // 把 terminal_waiting/busy 排进 #sessionsDot 的设计初衷互斥。
+    // 取舍：保留值可能略旧（抽屉关掉后不再轮询），宁可角标短暂滞后，也不要主界面恒盲。
+    // 抽屉行 chip 仍剥 sessionsCache.terminal（见下），那是重开时防一帧假「运行中」；与顶栏角标无关。
+    //
     // SWR 缓存仍保留标题/时间以便下次秒开，但 terminal 是短时活体状态，关闭后必须剥掉，避免重开时
     // 先画一帧已经结束的“终端运行中”。
     for (const [cwd, entry] of sessionsCache) {
