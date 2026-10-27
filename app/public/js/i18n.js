@@ -117,6 +117,13 @@ export const EN_DICT = Object.freeze({
   '已运行': 'Up',
   '状态读取中': 'Reading status…',
   '跟随浏览器': 'Auto',
+  '主题': 'Theme',
+  '浅色': 'Light',
+  '深色': 'Dark',
+  '跟随系统': 'System',
+  '浅色 / Light': 'Light',
+  '深色 / Dark': 'Dark',
+  '跟随系统 / System': 'System',
   '审批规则': 'Approval rules',
   // 「永久不再问」（审批弹窗）
   '总是允许此类操作': 'Always allow this kind of operation',

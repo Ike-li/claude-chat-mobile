@@ -115,11 +115,17 @@ function hostRow({ service = null, now = Date.now() } = {}) {
   return row('host', '🖥', t('宿主机'), items);
 }
 
-function behaviorRow({ lang = 'zh' } = {}) {
+function behaviorRow({ lang = 'zh', theme = 'system' } = {}) {
   // 语言名用它自己的写法，不翻译：英文界面里「中文」仍是中文，与 English 同理
   const langLabel = { zh: '中文', en: 'English', auto: t('跟随浏览器') }[lang] || '中文';
+  const themeLabel = {
+    light: t('浅色'),
+    dark: t('深色'),
+    system: t('跟随系统'),
+  }[theme] || t('跟随系统');
   return row('behavior', '🛠', t('行为与开关'), [
     { text: langLabel, el: 'prefLangGroup' },
+    { text: themeLabel, el: 'prefThemeGroup' },
     { text: t('审批规则'), el: 'permissionRulesSection' },
     // 旧文案第三项是「会花钱的功能」——那个词在页面里从来不存在。这一项真正对应的是
     // 「全部配置」按钮，它后面才是端口 / 工作区 / 推送那张表。

@@ -37,7 +37,10 @@ function tokenMap(block) {
 }
 
 const lightRoot = css.match(/:root\s*\{([^}]+)\}/)?.[1] || '';
-const darkRoot = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]+)\}/)?.[1] || '';
+// 深色 token 真相源是 :root[data-theme="dark"]（手动深色与系统深色共用同一套变量块）
+const darkRoot = css.match(/:root\[data-theme=["']dark["']\]\s*\{([^}]+)\}/)?.[1]
+  || css.match(/prefers-color-scheme:\s*dark\)[^{]*\{\s*:root(?::not\([^)]+\))?\s*\{([^}]+)\}/)?.[1]
+  || '';
 const light = tokenMap(lightRoot);
 const dark = { ...light, ...tokenMap(darkRoot) }; // dark 覆盖同名
 

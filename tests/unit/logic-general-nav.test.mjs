@@ -253,11 +253,19 @@ test('主机行：桥被 env 停用时读成关', () => {
 
 // ---- 静态三行：不受状态影响 ----
 
-test('behavior 行随语言偏好变，其余静态行不受任何状态影响', () => {
+test('behavior 行随语言与主题偏好变，其余静态行不受任何状态影响', () => {
   const zh = summarizeGeneralNav({ lang: 'zh' })[3];
   const en = summarizeGeneralNav({ lang: 'en' })[3];
   assert.match(zh.summary, /中文/);
   assert.match(en.summary, /English/);
+
+  const light = summarizeGeneralNav({ theme: 'light' })[3];
+  const dark = summarizeGeneralNav({ theme: 'dark' })[3];
+  const system = summarizeGeneralNav({ theme: 'system' })[3];
+  assert.match(light.summary, /浅色/);
+  assert.match(dark.summary, /深色/);
+  assert.match(system.summary, /跟随系统/);
+  assert.ok(light.items.some(i => i.el === 'prefThemeGroup'));
 
   // diag / help 两行在任何状态下都该一字不差——它们是纯目录项
   const busy = summarizeGeneralNav({

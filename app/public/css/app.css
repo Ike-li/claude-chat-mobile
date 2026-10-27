@@ -1,4 +1,4 @@
-/* ── Claude 设计 token（暖米白浅色单主题；改色只动此处，tw-config.js 把它们桥接成语义类）── */
+/* ── Claude 设计 token（暖米白浅色默认；深色走 data-theme=dark 或系统 prefers-color-scheme；改色只动此处，tw-config.js 把它们桥接成语义类）── */
 :root {
   color-scheme: light dark;
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
@@ -21,8 +21,31 @@
   --shadow-lift:0 4px 12px rgba(60,50,40,.08);
 }
 
+/* 手动深色（data-theme=dark）与「跟随系统且系统为深色」共用同一套 token。
+   强制浅色写 data-theme=light，把下面媒体查询挡掉；跟随系统则不写 data-theme。 */
+:root[data-theme="dark"] {
+    --canvas:#121211;
+    --surface:#1C1B1A;
+    --surface-sunk:#161514;
+    --line:#2E2C2A;
+    --line-soft:#242221;
+    --ink:#EEEEEC;
+    --ink-soft:#A3A19D;
+    --ink-faint:#8F8C88; /* 原 #7A7874 在 surface 上只有 3.90（验收 O79） */
+    --accent:#D97757;
+    --accent-deep:#F0E4DD;
+    --accent-bright:#E2886A;
+    --accent-wash:#2D231E;
+    --cta:#AE5238; /* 深色实底白字仍用深砖橙，勿用提亮的 accent */
+    --user-bubble:#282623;
+    /* UI-001：深色 danger/info 提亮一档；warning 保持可读（继承浅色过深会掉到 3.3） */
+    --danger:#E66555;
+    --info:#4493D5;
+    --success:#47A15D; /* 此前沿用浅色值，深色 user-bubble 上只有 3.56（O102） */
+    --warning:#D4A04A;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --canvas:#121211;
     --surface:#1C1B1A;
     --surface-sunk:#161514;
@@ -65,14 +88,19 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body pre code { padding: 0; }
 .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
 /* github 主题的几种 token 色是按白底调的，落在 pre 的 surface-sunk 暖底上不到 4.5（O102）：只调明度、色相不变 */
+:root[data-theme="light"] .hljs .hljs-doctag, :root[data-theme="light"] .hljs .hljs-keyword, :root[data-theme="light"] .hljs .hljs-meta .hljs-keyword, :root[data-theme="light"] .hljs .hljs-template-tag, :root[data-theme="light"] .hljs .hljs-template-variable, :root[data-theme="light"] .hljs .hljs-type, :root[data-theme="light"] .hljs .hljs-variable.language_ { color: #CB2939; }
+:root[data-theme="light"] .hljs .hljs-built_in, :root[data-theme="light"] .hljs .hljs-symbol { color: #B14C07; }
+:root[data-theme="light"] .hljs .hljs-code, :root[data-theme="light"] .hljs .hljs-comment, :root[data-theme="light"] .hljs .hljs-formula { color: #636C75; }
+:root[data-theme="light"] .hljs .hljs-name, :root[data-theme="light"] .hljs .hljs-quote, :root[data-theme="light"] .hljs .hljs-selector-pseudo, :root[data-theme="light"] .hljs .hljs-selector-tag { color: #1F7A35; }
 @media (prefers-color-scheme: light) {
-  .hljs .hljs-doctag, .hljs .hljs-keyword, .hljs .hljs-meta .hljs-keyword, .hljs .hljs-template-tag, .hljs .hljs-template-variable, .hljs .hljs-type, .hljs .hljs-variable.language_ { color: #CB2939; }
-  .hljs .hljs-built_in, .hljs .hljs-symbol { color: #B14C07; }
-  .hljs .hljs-code, .hljs .hljs-comment, .hljs .hljs-formula { color: #636C75; }
-  .hljs .hljs-name, .hljs .hljs-quote, .hljs .hljs-selector-pseudo, .hljs .hljs-selector-tag { color: #1F7A35; }
+  :root:not([data-theme="dark"]) .hljs .hljs-doctag, :root:not([data-theme="dark"]) .hljs .hljs-keyword, :root:not([data-theme="dark"]) .hljs .hljs-meta .hljs-keyword, :root:not([data-theme="dark"]) .hljs .hljs-template-tag, :root:not([data-theme="dark"]) .hljs .hljs-template-variable, :root:not([data-theme="dark"]) .hljs .hljs-type, :root:not([data-theme="dark"]) .hljs .hljs-variable.language_ { color: #CB2939; }
+  :root:not([data-theme="dark"]) .hljs .hljs-built_in, :root:not([data-theme="dark"]) .hljs .hljs-symbol { color: #B14C07; }
+  :root:not([data-theme="dark"]) .hljs .hljs-code, :root:not([data-theme="dark"]) .hljs .hljs-comment, :root:not([data-theme="dark"]) .hljs .hljs-formula { color: #636C75; }
+  :root:not([data-theme="dark"]) .hljs .hljs-name, :root:not([data-theme="dark"]) .hljs .hljs-quote, :root:not([data-theme="dark"]) .hljs .hljs-selector-pseudo, :root:not([data-theme="dark"]) .hljs .hljs-selector-tag { color: #1F7A35; }
 }
+:root[data-theme="dark"] .hljs .hljs-section { color: #337CED; }
 @media (prefers-color-scheme: dark) {
-  .hljs .hljs-section { color: #337CED; }
+  :root:not([data-theme="light"]) .hljs .hljs-section { color: #337CED; }
 }
 /* Per-code-block copy button — UI-003：pre 顶留白防遮代码；按钮本体 32px，热区 44。
    不再半透明：11px 的字叠 opacity .7 只剩 2.6:1（验收 O79），降调交给 ink-faint 本身。手机没有 hover，「悬停才显形」从来不成立 */

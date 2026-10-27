@@ -10,7 +10,7 @@ test.beforeEach(() => setLang('zh'));
 
 test('「重新加载」只清可再生的键：斜杠命令缓存、展开目录、current_session；不可再生的一个都不在里面', () => {
   assert.deepEqual([...RELOAD_CLEARABLE_KEYS].sort(), ['ccm_expanded_dirs', 'current_session', 'slash_commands', 'slash_commands_terminal']);
-  for (const keep of ['auth_token', 'device_token', 'ccm-outbox-v1', 'ccm-outbox-dead-letters-v1', 'ccm-unread-v1', 'ccm_lang', 'ccm_push_preview', 'ccm_push_opt_out']) {
+  for (const keep of ['auth_token', 'device_token', 'ccm-outbox-v1', 'ccm-outbox-dead-letters-v1', 'ccm-unread-v1', 'ccm_lang', 'ccm_theme', 'ccm_push_preview', 'ccm_push_opt_out']) {
     assert.ok(!RELOAD_CLEARABLE_KEYS.includes(keep), keep);
   }
 });

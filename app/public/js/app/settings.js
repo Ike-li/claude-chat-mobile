@@ -23,7 +23,7 @@ const DEFAULT_KEYS = {
 export function createSettingsController(context, {
   // 本控制器操作哪一组 DOM（见 DEFAULT_KEYS）。
   keys: keyOverrides = null,
-  // 本 sheet 是否承载「提示音/震动/前台通知/推送预览/语言」这套本机偏好。拆分后它们全在通用设置里，
+  // 本 sheet 是否承载「提示音/震动/前台通知/推送预览/语言/主题」这套本机偏好。拆分后它们全在通用设置里，
   // 会话设置传 false 跳过回填与开关绑定（那些 DOM 根本不在它的子树内）。
   syncPrefs = true,
   // 打开前的钩子：通用设置用它收掉可能还开着的会话设置，避免两层 sheet 叠着。
@@ -36,6 +36,8 @@ export function createSettingsController(context, {
   pushPreview = { get: () => false, set: () => {} },
   // ⑨ 语言偏好：get/set 由 app.js 注入；set 先确认刷新再落盘（取消不写；不做响应式重渲，见 index.html 头注）。
   langPref = { get: () => 'zh', set: () => {} },
+  // ⑩ 主题偏好：get/set 由 app.js 注入；set 即时落盘并改 data-theme（无需刷新）。
+  themePref = { get: () => 'system', set: () => {} },
   autoBind = true,
   // 面板打开时的回调：给需要"每次打开重算"的动态段用（如推送订阅状态——权限可能在系统设置里被
   // 改过，渲染一次会过期）。**必须挂在这里而不是包装 open()**：trigger 按钮由下方 autoBind 直接绑到
@@ -106,6 +108,24 @@ export function createSettingsController(context, {
     }
   }
 
+  // 主题三选一与语言组同构（自绘 radio + aria-checked）；选中态同样双通道更新。
+  function renderThemeOptions() {
+    const group = dom.prefThemeGroup;
+    if (!group) return;
+    const current = themePref.get();
+    for (const btn of group.querySelectorAll('[data-theme-pref]')) {
+      const on = btn.dataset.themePref === current;
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+      btn.classList.toggle('border-line', !on);
+      btn.classList.toggle('bg-surface', !on);
+      btn.classList.toggle('text-ink', !on);
+      btn.classList.toggle('border-accent', on);
+      btn.classList.toggle('bg-accent-wash', on);
+      btn.classList.toggle('text-accent', on);
+      btn.querySelector('[data-theme-check]')?.classList.toggle('opacity-0', !on);
+    }
+  }
+
   function syncPreferences() {
     if (!syncPrefs) return;
     const preferences = alerts.preferences();
@@ -114,6 +134,7 @@ export function createSettingsController(context, {
     if (dom.prefAlertForeground) dom.prefAlertForeground.checked = !!preferences.foregroundComplete;
     if (dom.prefPushPreview) dom.prefPushPreview.checked = !!pushPreview.get();
     renderLangOptions();
+    renderThemeOptions();
   }
 
   function open() {
@@ -331,6 +352,14 @@ export function createSettingsController(context, {
         // langPref.set 先确认刷新，同意后才落盘并 reload；取消时 storage 未改。
         // 等 set 结束后再重绘：取消后磁贴仍跟旧偏好一致；同意则页面已 reload，这行通常到不了。
         void Promise.resolve(langPref.set(lang)).finally(() => renderLangOptions());
+      };
+    }
+    if (dom.prefThemeGroup) {
+      dom.prefThemeGroup.onclick = (e) => {
+        const theme = e.target?.closest?.('[data-theme-pref]')?.dataset?.themePref;
+        if (!theme) return;
+        // 主题即时生效：set 落盘并 applyTheme，无需刷新；重绘磁贴反映新选中态。
+        void Promise.resolve(themePref.set(theme)).finally(() => renderThemeOptions());
       };
     }
     if (dom.btnAlertPreview) {

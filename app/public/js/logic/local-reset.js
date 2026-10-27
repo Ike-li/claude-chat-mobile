@@ -5,7 +5,7 @@
 import { t } from '../i18n.js';
 
 // 「重新加载」只删这几个可再生的键，其余一律保留：令牌、离线 outbox、拒收暂存、已读表（可能含还没同步的离线修改）、
-// 语言与推送偏好都不可再生。写成白名单而不是黑名单：漏列一个只是少清一点缓存，多清一个就是丢数据。
+// 语言、主题与推送偏好都不可再生。写成白名单而不是黑名单：漏列一个只是少清一点缓存，多清一个就是丢数据。
 export const RELOAD_CLEARABLE_KEYS = Object.freeze(['slash_commands', 'slash_commands_terminal', 'ccm_expanded_dirs', 'current_session']);
 
 // 当前唯一合法的 SW 是推送用的 /sw.js（判据同 sw-cleanup.js：按 pathname，不看查询串）。

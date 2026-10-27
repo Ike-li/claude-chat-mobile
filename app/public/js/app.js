@@ -207,6 +207,7 @@ import {
   isPathWithin,
 } from './logic.js';
 import { t, tk, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, confirmAndWriteLangPref, applyI18nToDocument } from './i18n.js';
+import { readThemePref, writeThemePref, applyThemeToDocument } from './theme.js';
 // 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
 // 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
 import { resolveDirUnreadBadge, unreadSessionsInGroup } from './logic/unread.js';
@@ -296,6 +297,25 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 静态壳靠整树扫描（免逐句标注、进词典即生效），app.js 运行时生成的模板则各自包 t()。
   setLang(resolveInitialLang(k => localStorage.getItem(k), navigator.language));
   applyI18nToDocument(document);
+
+  // ⑩ 主题：theme-boot.js 已在首屏写过 data-theme；这里再跑一遍以同步 theme-color / hljs media，
+  // 并在「跟随系统」时监听系统切换（强制档不听——用户显式钉死了）。
+  const systemDarkMq = window.matchMedia?.('(prefers-color-scheme: dark)') || null;
+  const systemDarkNow = () => !!(systemDarkMq && systemDarkMq.matches);
+  const applyStoredTheme = () => applyThemeToDocument(
+    document,
+    readThemePref(k => localStorage.getItem(k)),
+    { systemDark: systemDarkNow() },
+  );
+  applyStoredTheme();
+  if (systemDarkMq) {
+    const onScheme = () => {
+      if (readThemePref(k => localStorage.getItem(k)) === 'system') applyStoredTheme();
+    };
+    // 新旧 Safari：addEventListener 与 addListener 都要兜
+    if (typeof systemDarkMq.addEventListener === 'function') systemDarkMq.addEventListener('change', onScheme);
+    else if (typeof systemDarkMq.addListener === 'function') systemDarkMq.addListener(onScheme);
+  }
 
   // ---- DOM ----
   const $ = id => document.getElementById(id);
@@ -946,6 +966,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       btnAlertPreview: $('btnAlertPreview'),
       prefPushPreview: $('prefPushPreview'),
       prefLangGroup: $('prefLangGroup'),
+      prefThemeGroup: $('prefThemeGroup'),
       btnPush,
       taskProgressBanner,
       taskProgressText,
@@ -7150,6 +7171,14 @@ import { createGateFocusController } from './app/focus-layers.js';
       reload: () => location.reload(),
     }),
   };
+  // ⑩ 主题偏好：即时落盘 + apply（色板是 CSS 变量，无需刷新）；回显用原始 'light'|'dark'|'system'。
+  const themePref = {
+    get: () => readThemePref(k => localStorage.getItem(k)),
+    set: (theme) => {
+      writeThemePref((k, v) => localStorage.setItem(k, v), theme);
+      applyThemeToDocument(document, theme, { systemDark: systemDarkNow() });
+    },
+  };
   // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
   // 会话设置（入口=底栏 #pillDefaults 摘要 chip，随 composer 显隐）：模型 / 权限 / 思考 / 会话 ID。
   // 原独立齿轮与三 chip 打开同一个 sheet、纯重复，已收敛为一条摘要。DEFAULT_KEYS.trigger 的
@@ -7278,6 +7307,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         statuslineBridge: latestServiceHealth?.statuslineBridge,
       },
       lang: langPref.get(),
+      theme: themePref.get(),
     }),
     // 「宿主机」页进来时补一次版本号（只拉一次，之后复用）。运行时长不用管——
     // 它跟着 instances 广播实时更新。
@@ -7301,7 +7331,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       sheet: 'generalSheet', body: 'generalSheetBody', scrim: 'generalScrim',
       dragZone: 'generalDragZone', close: 'generalClose', trigger: 'btnGeneralSettings',
     },
-    alerts, haptic, pushPreview, langPref,
+    alerts, haptic, pushPreview, langPref, themePref,
     beforeOpen: () => { if (settings.isOpen()) settings.close(); },
     // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
     onOpen: () => {

@@ -49,7 +49,7 @@ function fakeBrowser({ local = {}, session = {}, scripts = ['https://h.test/sw.j
 
 const KEEP = {
   auth_token: 't', device_token: 'd', 'ccm-outbox-v1': '[{"text":"离线那条"}]', 'ccm-outbox-dead-letters-v1': '[{"text":"拒收那条"}]',
-  'ccm-unread-v1': '{}', ccm_lang: 'en', ccm_push_preview: '1', ccm_push_opt_out: '0', ccm_client_logs: '[]',
+  'ccm-unread-v1': '{}', ccm_lang: 'en', ccm_theme: 'dark', ccm_push_preview: '1', ccm_push_opt_out: '0', ccm_client_logs: '[]',
 };
 const CLEARABLE = { slash_commands: '[]', slash_commands_terminal: '[]', ccm_expanded_dirs: '[]', current_session: 'abc' };
 
