@@ -681,6 +681,7 @@
              @ 文件引用候选不再横滑 chips：与 / 斜杠提示同款纵向浮层（#atMentionHints，JS 挂到 input 父级 absolute bottom-full） -->
         <div class="w-full flex items-start relative">
           <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"
+            aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"
             class="flex-1 resize-none bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
         </div>
 

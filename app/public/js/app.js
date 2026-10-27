@@ -170,6 +170,8 @@ import {
   detectAtMentionQuery,
   applyAtMentionPick,
   buildSlashCommandHints,
+  composerHintOptionId,
+  resolveComposerHintKeydown,
   unifiedDiffLines,
   MAX_DIFF_LINES_FOR_LCS,
   formatStatuslineCollapsedSummary,
@@ -4562,19 +4564,6 @@ import { createGateFocusController } from './app/focus-layers.js';
     composing = false;
     checkAtMention();
   });
-  inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
-      e.preventDefault();
-      send();
-    }
-    // ESC 关候选浮层（排队撤回已随排队功能一并移除，ESC 不再有第三个语义）
-    if (e.key === 'Escape') {
-      if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
-      const cmdHintsEl = document.getElementById('cmdHints');
-      if (cmdHintsEl && !cmdHintsEl.classList.contains('hidden')) { cmdHintsEl.classList.add('hidden'); return; }
-    }
-  });
-
   // ---- @ 文件引用：与 / 斜杠同款纵向浮层（absolute bottom-full），不再横滑 chips ----
   // 语义只插相对路径文本，agent 自己 Read；移动端纯触摸点选。
   // 面板挂在 input 父级（与 #cmdHints 同层），见下方 slash 提示初始化。
@@ -4582,13 +4571,116 @@ import { createGateFocusController } from './app/focus-layers.js';
   let atMentionState = null; // { matchStart } —— 当前触发态；null=未触发
   let atMentionReqId = 0;    // 每次触发/取消自增；files:search ack 里比对，迟到结果直接丢弃
   let atMentionDebounceTimer = null;
+  // #392：listbox 高亮下标；-1 = 尚未用方向键选中（Enter 仍走发送）
+  let atMentionActiveIndex = -1;
+  let cmdHintActiveIndex = -1;
+
+  function clearComposerHintA11y() {
+    inputEl.setAttribute('aria-expanded', 'false');
+    inputEl.removeAttribute('aria-controls');
+    inputEl.removeAttribute('aria-activedescendant');
+  }
+
+  function applyComposerHintActive(listEl, dataAttr, index) {
+    if (!listEl) return;
+    const opts = [...listEl.querySelectorAll(`[${dataAttr}]`)];
+    opts.forEach((row, i) => {
+      const on = i === index;
+      row.setAttribute('aria-selected', on ? 'true' : 'false');
+      row.classList.toggle('bg-sunk', on);
+    });
+    if (index >= 0 && opts[index]) {
+      inputEl.setAttribute('aria-activedescendant', opts[index].id);
+      opts[index].scrollIntoView({ block: 'nearest' });
+    } else {
+      inputEl.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function setComposerHintExpanded(listId) {
+    if (!listId) { clearComposerHintA11y(); return; }
+    inputEl.setAttribute('aria-expanded', 'true');
+    inputEl.setAttribute('aria-controls', listId);
+  }
+
+  function hideCmdHints() {
+    const cmdHintsEl = document.getElementById('cmdHints');
+    if (cmdHintsEl) { cmdHintsEl.classList.add('hidden'); cmdHintsEl.innerHTML = ''; }
+    cmdHintActiveIndex = -1;
+    if (!atMentionList || atMentionList.classList.contains('hidden')) clearComposerHintA11y();
+  }
 
   function hideAtMentionList() {
     atMentionState = null;
     atMentionReqId++;
+    atMentionActiveIndex = -1;
     if (atMentionDebounceTimer) { clearTimeout(atMentionDebounceTimer); atMentionDebounceTimer = null; }
     if (atMentionList) { atMentionList.classList.add('hidden'); atMentionList.innerHTML = ''; }
+    const cmdHintsEl = document.getElementById('cmdHints');
+    if (!cmdHintsEl || cmdHintsEl.classList.contains('hidden')) clearComposerHintA11y();
   }
+
+  inputEl.addEventListener('keydown', e => {
+    const composingNow = e.isComposing || e.keyCode === 229 || composing;
+    // #392：开着的候选浮层优先吃方向键 / Enter 选中 / Escape（拦在发送之前）
+    if (!composingNow) {
+      const atOpts = (atMentionList && !atMentionList.classList.contains('hidden'))
+        ? atMentionList.querySelectorAll('[data-path]') : [];
+      const cmdHintsEl = document.getElementById('cmdHints');
+      const cmdOpts = (cmdHintsEl && !cmdHintsEl.classList.contains('hidden'))
+        ? cmdHintsEl.querySelectorAll('[data-cmd]') : [];
+      const openKind = atOpts.length ? 'at' : (cmdOpts.length ? 'cmd' : null);
+      if (openKind) {
+        const optionCount = openKind === 'at' ? atOpts.length : cmdOpts.length;
+        const activeIndex = openKind === 'at' ? atMentionActiveIndex : cmdHintActiveIndex;
+        const decision = resolveComposerHintKeydown({
+          key: e.key,
+          open: true,
+          optionCount,
+          activeIndex,
+          composing: false,
+        });
+        if (decision.action === 'move') {
+          e.preventDefault();
+          if (openKind === 'at') {
+            atMentionActiveIndex = decision.nextIndex;
+            applyComposerHintActive(atMentionList, 'data-path', atMentionActiveIndex);
+          } else {
+            cmdHintActiveIndex = decision.nextIndex;
+            applyComposerHintActive(cmdHintsEl, 'data-cmd', cmdHintActiveIndex);
+          }
+          return;
+        }
+        if (decision.action === 'select') {
+          e.preventDefault();
+          if (openKind === 'at') {
+            const path = atOpts[decision.nextIndex]?.dataset?.path;
+            if (path) pickAtMention(path);
+          } else {
+            const cmd = cmdOpts[decision.nextIndex]?.dataset?.cmd;
+            if (cmd) pickCmdHint(cmd);
+          }
+          return;
+        }
+        if (decision.action === 'dismiss') {
+          e.preventDefault();
+          if (openKind === 'at') hideAtMentionList();
+          else hideCmdHints();
+          return;
+        }
+      }
+    }
+    if (e.key === 'Enter' && !composingNow && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
+      e.preventDefault();
+      send();
+    }
+    // ESC 关候选浮层（排队撤回已随排队功能一并移除，ESC 不再有第三个语义）
+    if (e.key === 'Escape') {
+      if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
+      const cmdHintsEl = document.getElementById('cmdHints');
+      if (cmdHintsEl && !cmdHintsEl.classList.contains('hidden')) { hideCmdHints(); return; }
+    }
+  });
   // hideAtMentionList 即关闭 @ 候选（Escape / 选中后）；不再保留未使用的 hideAtMentionChips 别名
 
   function pickAtMention(path) {
@@ -4606,29 +4698,39 @@ import { createGateFocusController } from './app/focus-layers.js';
   function renderAtMentionList(paths, { emptyHint = '' } = {}) {
     if (!atMentionList) return;
     // 与 / 互斥：出文件列表时收起斜杠提示（hints 在下方初始化，调用时已就绪）
-    document.getElementById('cmdHints')?.classList.add('hidden');
+    hideCmdHints();
+    atMentionActiveIndex = -1;
     atMentionList.innerHTML = '';
     if (!paths?.length) {
       if (emptyHint) {
         atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-empty">${esc(emptyHint)}</div>`;
         atMentionList.classList.remove('hidden');
+        setComposerHintExpanded('atMentionHints');
+        inputEl.removeAttribute('aria-activedescendant');
       } else {
         atMentionList.classList.add('hidden');
+        clearComposerHintA11y();
       }
       return;
     }
-    atMentionList.innerHTML = paths.map(p => {
+    atMentionList.innerHTML = paths.map((p, i) => {
       const safe = esc(p);
-      return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono truncate" data-testid="at-mention-chip" data-path="${safe}" title="${safe}">${safe}</div>`;
+      const id = composerHintOptionId('at', i);
+      return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono truncate" data-testid="at-mention-chip" data-path="${safe}" title="${safe}">${safe}</div>`;
     }).join('');
     atMentionList.classList.remove('hidden');
+    setComposerHintExpanded('atMentionHints');
+    applyComposerHintActive(atMentionList, 'data-path', atMentionActiveIndex);
   }
 
   function renderAtMentionLoading() {
     if (!atMentionList) return;
-    document.getElementById('cmdHints')?.classList.add('hidden');
+    hideCmdHints();
+    atMentionActiveIndex = -1;
     atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-loading">${esc(t('查找文件…'))}</div>`;
     atMentionList.classList.remove('hidden');
+    setComposerHintExpanded('atMentionHints');
+    inputEl.removeAttribute('aria-activedescendant');
   }
 
   function checkAtMention() {
@@ -4724,18 +4826,29 @@ import { createGateFocusController } from './app/focus-layers.js';
     for (const a of atts) wrap.appendChild(buildAttachmentNode(a));
     return wrap;
   }
-  // ---- 斜杠命令提示 + @ 文件引用列表（同款纵向浮层，互斥显示）----
-  const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="cmd-hints"></div>`);
-  atMentionList = el(`<div id="atMentionHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="at-mention-chips"></div>`);
+  // ---- 斜杠命令提示 + @ 文件引用列表（同款纵向浮层，互斥显示；#392 listbox）----
+  const hints = el(`<div id="cmdHints" role="listbox" aria-label="${esc(t('斜杠命令候选'))}" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="cmd-hints"></div>`);
+  atMentionList = el(`<div id="atMentionHints" role="listbox" aria-label="${esc(t('文件引用候选'))}" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="at-mention-chips"></div>`);
+  inputEl.setAttribute('aria-expanded', 'false');
+  inputEl.setAttribute('aria-autocomplete', 'list');
+  inputEl.setAttribute('aria-haspopup', 'listbox');
   inputEl.parentElement.style.position = 'relative';
   inputEl.parentElement.appendChild(hints);
   inputEl.parentElement.appendChild(atMentionList);
   // mousedown 防 blur 清空列表（点选行时 input 不失焦）
   atMentionList.addEventListener('mousedown', e => e.preventDefault());
+  hints.addEventListener('mousedown', e => e.preventDefault());
   atMentionList.addEventListener('click', e => {
     const row = e.target.closest?.('[data-path]');
     if (row?.dataset?.path) pickAtMention(row.dataset.path);
   });
+  function pickCmdHint(cmd) {
+    inputEl.value = cmd + ' ';
+    hideCmdHints();
+    inputEl.focus();
+    autosize();
+    updateSendButtonState();
+  }
   // 前端本地拦截命令（不透传后端），并入提示列表
   const LOCAL_COMMANDS = ['model', 'rewind'];
 
@@ -4752,27 +4865,32 @@ import { createGateFocusController } from './app/focus-layers.js';
         localCommands: LOCAL_COMMANDS,
         prefix: val.slice(1),
       });
+      cmdHintActiveIndex = -1;
       if (matches.length > 0) {
-        hints.innerHTML = matches.map(cmd => {
+        hints.innerHTML = matches.map((cmd, i) => {
           const safe = esc(cmd);
-          return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
+          const id = composerHintOptionId('cmd', i);
+          return `<div id="${id}" role="option" aria-selected="false" class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
         }).join('');
         hints.classList.remove('hidden');
+        setComposerHintExpanded('cmdHints');
+        applyComposerHintActive(hints, 'data-cmd', cmdHintActiveIndex);
       } else {
-        hints.classList.add('hidden');
+        hideCmdHints();
       }
     } else {
-      hints.classList.add('hidden');
+      hideCmdHints();
     }
     autosize();
   });
 
   hints.addEventListener('click', e => {
-    const cmd = e.target.dataset.cmd;
-    if (cmd) { inputEl.value = cmd + ' '; inputEl.focus(); hints.classList.add('hidden'); autosize(); }
+    const row = e.target.closest?.('[data-cmd]');
+    const cmd = row?.dataset?.cmd;
+    if (cmd) pickCmdHint(cmd);
   });
   document.addEventListener('click', e => {
-    if (!hints.contains(e.target) && e.target !== inputEl) hints.classList.add('hidden');
+    if (!hints.contains(e.target) && e.target !== inputEl) hideCmdHints();
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
     // 点抽屉外面任意处 = 收抽屉。通用确认 sheet 与会话行「⋯」菜单（z-50，盖在抽屉之上）不算「外面」：
     // 从抽屉里发起的操作（标为已读 / 未读、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。

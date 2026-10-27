@@ -1146,3 +1146,9 @@ details.thinking.thinking-live > summary::before {
 body.nav-escape header { z-index: 45; }
 body.nav-escape #sidebarScrim { z-index: 46; }
 body.nav-escape #leftSidebar { z-index: 47; }
+
+/* #392：composer / 与 @ 候选 listbox 当前项（键盘高亮；触控仍走 hover/active） */
+#cmdHints [role="option"][aria-selected="true"],
+#atMentionHints [role="option"][aria-selected="true"] {
+  background: var(--surface-sunk);
+}
