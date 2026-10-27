@@ -10124,7 +10124,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (!fold) return;
     textEl.classList.add('overflow-hidden');
     textEl.style.maxHeight = '8rem';
-    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
+    // #395：长用户消息「展开」挂 hit-44，补足 44px 触控热区（同屏工具卡「展开全文」另案）
+    const btn = el(`<button type="button" class="hit-44 text-xs text-accent mt-1 block">${t('展开')}</button>`);
     let expanded = false;
     btn.onclick = () => {
       expanded = !expanded;

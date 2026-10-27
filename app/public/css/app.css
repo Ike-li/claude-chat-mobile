@@ -476,14 +476,15 @@ body.ccm-sheet-open #messages {
 /* 重试按钮：继承横幅当前 tone 色（currentColor），不自带配色，三态下都不打架 */
 .conn-banner__retry {
   margin-left: auto;
-  padding: 0.15rem 0.6rem;
+  /* #395：断线「立即重试」抬到 ~32px 热区；不向外扩 ::after，避免压住下方消息首行 */
+  padding: 0.3rem 0.75rem;
   border-radius: 9999px;
   border: 1px solid currentColor;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.4;
   white-space: nowrap;
-  min-height: 26px;
+  min-height: 32px;
 }
 .conn-banner__retry:active {
   transform: scale(0.96);
@@ -949,12 +950,12 @@ header {
   min-width: 32px;
   position: relative;
 }
-/* 纵向 7px：::after 以 padding box 为基准、不含 1px 边框，扩 6px 只到 30+12=42（O99，同 O76 顶栏）。
-   横向不动，相邻按钮之间不再多压。 */
+/* #375 / O99：纵向 7px 扩热区（padding box 不含边框）；横向 0，与 .msg-action-bar gap 0.5rem
+   相接不重叠——此前 inset 左右 -6px 会使相邻热区互相压住 4px。 */
 .msg-action-btn::after {
   content: '';
   position: absolute;
-  inset: -7px -6px;
+  inset: -7px 0;
 }
 
 /* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡）。
