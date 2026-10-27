@@ -225,6 +225,7 @@ import { createAgentEventDispatcher, createReplayBuffer } from './app/event-disp
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
 import { createDrawerUnreadJump } from './app/drawer-unread-jump.js';
+import { createScrollToBottomController } from './app/scroll-to-bottom.js';
 import { attachFolderDrag } from './app/folder-drag.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createNewSessionWorktree } from './app/new-session-worktree.js';
@@ -1752,6 +1753,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   function reloadCurrentFromHistory(onDone) {
     if (!displayedSessionId) return;
     hideUnreadPill(); // 即将清屏重载：旧胶囊指向的 DOM 节点马上失效，先清，onDone 到达后再按新数字重建
+    scrollToBottom.reset(); // 同上：回到最新钮的基线/可见态跟着旧 DOM 一起作废
     // 与 bindView reload 同理：clearView 前的 lastSeq/curEpoch 可能刚被 sync 回放推进；
     // 归零后若再 sync 会把环形缓冲整段再叠到磁盘历史上。恢复基线，仅丢未落盘的实时中间态。
     const keepSeq = lastSeq;
@@ -5949,6 +5951,25 @@ import { createGateFocusController } from './app/focus-layers.js';
     });
   }, { passive: true });
 
+  // ---- 回到最新（#376）：上翻离开底部时出现；状态在 app/scroll-to-bottom.js，不散落顶层 let ----
+  // 与未读胶囊分层：不 emit user:ackUnread、不改应用图标角标；定位相对 #composerFooter 顶边。
+  const scrollToBottomBtn = $('scrollToBottomBtn');
+  const scrollToBottomLabel = $('scrollToBottomLabel');
+  const composerFooterForScrollBtn = $('composerFooter');
+  const scrollToBottom = createScrollToBottomController({
+    buttonEl: scrollToBottomBtn,
+    labelEl: scrollToBottomLabel,
+    messagesEl,
+    composerFooterEl: composerFooterForScrollBtn,
+    countTopLevel: () => topLevelBubbles().length,
+    onJump: () => { haptic('tap'); scrollBottom(true); },
+    isProgrammaticScroll: () => Date.now() < programmaticScrollUntil,
+    // 空首页 / composer 隐藏时不露这颗钮（没有消息流可贴底）。
+    isEnabled: () => Boolean(composerFooterForScrollBtn)
+      && !composerFooterForScrollBtn.classList.contains('hidden')
+      && !messagesEl.classList.contains('empty-start'),
+  });
+
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
@@ -6004,6 +6025,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   function bindView(entry, id, opts = {}) {
     hidePromptSuggestion(); // 建议属于【上一个会话的上一轮】，跟着视图一起走
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
+    scrollToBottom.reset(); // 同上：回到最新钮不跨会话残留
     // 无条件先丢弃上一个实例的回放缓冲——同 hideUnreadPill：含下方提前 return 的空首页/compose/
     // pendingFirstSend 分支也要清，否则遗留缓冲会静默吞掉那个旧实例后续的实时事件（缓冲一直挂着、
     // 却再没人来 resolve() 它）。真正切入某个会话时 begin() 自身也会 discard，这里是兜底覆盖全分支。
@@ -8303,6 +8325,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     });
     if (!composerFooterEl) return;
     composerFooterEl.classList.toggle('hidden', !show);
+    // composer 显隐会改「回到最新」的 isEnabled 与定位；无滚动事件时也要立刻同步。
+    scrollToBottom.sync();
   }
   // 顶部文件夹 pill：真实会话 + compose 页（工作区已定，文件/改动与 session 无关）显示；空首页隐藏。
   // composeReady 显式传参而不是直接读 _composeReady：三个空表面里 destroyed 那张调用时 _composeReady

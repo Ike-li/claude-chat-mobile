@@ -330,6 +330,39 @@ export function shouldAckUnreadOnScroll({
   return shouldStickScrollToBottom({ scrollHeight, scrollTop, clientHeight });
 }
 
+// 「回到最新」悬浮钮（#376）：与未读胶囊分层——未读是「离开期间没看过，看过即清」；
+// 本钮是「我现在不在底部」。上翻读历史的人并没有未读，不能合成一颗。
+// 显示条件是 stick 判据的反面：距底 ≥ threshold（默认 120，与 shouldStickScrollToBottom 对齐）。
+export function shouldShowScrollToBottom({
+  scrollHeight, scrollTop, clientHeight,
+  threshold = 120,
+} = {}) {
+  const dist = Number(scrollHeight) - Number(scrollTop) - Number(clientHeight);
+  return Number.isFinite(dist) && dist >= threshold;
+}
+
+// 自离开底部以来新增的顶层气泡数。baseline 在「刚离开底部」时钉死；脏输入回 0。
+export function resolveScrollToBottomNewCount(baselineCount, currentCount) {
+  // null/undefined 必须先挡：Number(null)===0，会把「尚未钉基线」算成从 0 起的假新增。
+  if (baselineCount == null || currentCount == null) return 0;
+  const base = Number(baselineCount);
+  const cur = Number(currentCount);
+  if (!Number.isFinite(base) || !Number.isFinite(cur)) return 0;
+  return Math.max(0, Math.floor(cur) - Math.floor(base));
+}
+
+// 按钮文案：有新增顶层气泡写「N 条新内容」，否则「回到最新」。不上报 ackUnread、不改角标。
+export function formatScrollToBottomLabel(newCount = 0) {
+  const n = Number(newCount);
+  if (Number.isFinite(n) && n > 0) {
+    const shown = n > 99 ? '99+' : String(Math.floor(n));
+    const text = t('{n} 条新内容').replace('{n}', shown);
+    return { text, ariaLabel: text, hasNew: true };
+  }
+  const text = t('回到最新');
+  return { text, ariaLabel: text, hasNew: false };
+}
+
 // 同 sessionId 的 DOM 缓存恢复策略：已完成的对话/工具卡片按会话不可变，与当前 instanceId 无关。
 // instance 会因 effort/model 切档被 dispose+open 换新（新 epoch/seq 空间），但历史 DOM 仍可秒恢复；
 // 仅当「缓存归属实例 === 当前实例」时才复用 lastSeq/epoch 做增量续传，否则 seq 从 0 跟新实例，

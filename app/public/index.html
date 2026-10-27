@@ -237,6 +237,14 @@
     <span id="unreadPillCount">0</span> 条未读 ↑
   </button>
 
+  <!-- 回到最新（#376）：上翻离开底部时出现；与未读胶囊分层（清除条件不同），左下角相对 #composerFooter 顶定位，
+       不复用未读胶囊的 bottom:84px。点击 force 落底；有新增顶层气泡时文案变为「N 条新内容」。
+       同为 #messages 的兄弟——bindView/loadHistory 会清空 #messages 子节点。 -->
+  <button id="scrollToBottomBtn" type="button" class="hidden flex items-center gap-1 rounded-full bg-surface text-ink text-xs font-semibold px-3.5 py-2 active:scale-95 border border-line" style="box-shadow:var(--shadow-pop)" aria-label="回到最新" data-testid="scroll-to-bottom">
+    <span id="scrollToBottomLabel">回到最新</span>
+    <span aria-hidden="true">↓</span>
+  </button>
+
   <!-- 会话打不开时的落地页（2026-09-07）。**不是弹窗，是一张属于目标会话的页面**：
        此前 session:switch 被拒时只在【当前正看着的那个会话】的消息流里插一条红字，而视图根本没动过，
        于是「blog_static 的会话打不开」这句话出现在 third-party 的工具卡中间，读起来像是当前会话出了事。
