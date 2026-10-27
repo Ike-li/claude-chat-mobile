@@ -90,6 +90,7 @@ test('openSheet/closeSheet：Tab 陷阱在打开期间生效、关闭后摘除�
 
   controller.openSheet(sheet);
   assert.equal(doc._count('keydown'), 1, '打开后应注册 1 个 Tab 陷阱监听器');
+  assert.ok(sheet.classList.contains('ccm-sheet'), '#369：openSheet 必须给根节点补上 .ccm-sheet，CSS 过渡不再认 ID 白名单');
   assert.ok(sheet.classList.contains('sheet-open'));
   // #399：初始焦点在容器本身，不在第一个子控件
   assert.equal(doc.activeElement, sheet, 'focusInto 应把焦点放到 sheet 容器');

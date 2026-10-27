@@ -265,7 +265,7 @@
   </div>
 
   <!-- 权限审批弹窗（底部 sheet） -->
-  <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
+  <div id="permModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <!-- #399：强拦截审批不画假拖拽把手（不可手势关闭） -->
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
@@ -324,7 +324,7 @@
   <!-- AskUserQuestion 弹窗（E7） -->
   <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
        跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
-  <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
+  <div id="questionModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <!-- #399：强拦截提问不画假拖拽把手（不可手势关闭） -->
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
@@ -357,7 +357,7 @@
   </div>
 
   <!-- 顶栏「⋯」的菜单（#307），开合走 sheets.js 的 openSheet / closeSheet -->
-  <div id="moreModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="更多操作">
+  <div id="moreModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="更多操作">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle"></div>
       <button id="moreReloadSession" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-sm text-ink disabled:opacity-50" data-testid="more-reload-session">
@@ -369,7 +369,7 @@
   </div>
 
   <!-- 抽屉会话行「⋯」的菜单：项由 app/session-row-menu.js 按行现画（标为已读/未读 · 关闭 · 删除） -->
-  <div id="sessionMenuModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="会话操作">
+  <div id="sessionMenuModal" class="ccm-sheet ccm-sheet-kb hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="会话操作">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle"></div>
       <div id="sessionMenuTitle" class="font-semibold text-ink mb-3 truncate"></div>
@@ -380,7 +380,7 @@
 
   <!-- 通用确认弹窗：替代原生 confirm()，样式对齐 permModal；appConfirm() 接线在 app.js。
        会话彻底删除等不可逆操作也走这里（不再另开两级删除 sheet）。 -->
-  <div id="confirmModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
+  <div id="confirmModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
     <div id="confirmSheet" class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <!-- #399：确认弹窗需明确点按钮/遮罩，不画假拖拽把手 -->
       <div id="confirmTitle" class="text-accent-deep font-semibold mb-2"></div>
@@ -394,7 +394,7 @@
   </div>
 
   <!-- /rewind 面板：两步，对齐终端 /rewind（先选回到哪一轮之前，再选三个模式之一） -->
-  <div id="rewindModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="回退">
+  <div id="rewindModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="回退">
     <div id="rewindSheet" class="w-full max-h-[80vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <div class="sheet-handle shrink-0"></div>
       <div class="px-4 pb-2 shrink-0">
@@ -422,7 +422,7 @@
   </div>
 
   <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
-  <div id="consoleModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+  <div id="consoleModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end">
     <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle bg-gray-700 mt-3 shrink-0"></div>
       
@@ -465,7 +465,7 @@
        合并成 tab 后点一次 pill 就同时看见两个能力，互切零成本。
        两个 tab 各自的工具行与 body 保留原 id——file-browser.js / git-changes.js 两个控制器只操作
        自己的那几个节点，换壳对它们透明；开合与 tab 切换权归 createWorkspacePanel 统一持有。 -->
-  <div id="workspaceModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
+  <div id="workspaceModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
     <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
       <!-- tab 行：两个能力平铺可见，不再需要"先发现再选择" -->
@@ -507,7 +507,7 @@
 
   <!-- 「选文件夹」面板（已连接的文件夹，2026-09-24）：新会话在哪开——已连接的文件夹（可进子文件夹、就地新建）、
        无文件夹、添加文件夹（浏览家目录）。内容由 app/folder-picker.js 渲染，开合走 openSheet/closeSheet。 -->
-  <div id="folderPickerModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="选择文件夹" data-testid="folder-picker">
+  <div id="folderPickerModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="选择文件夹" data-testid="folder-picker">
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
       <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
@@ -522,7 +522,7 @@
 
   <!-- 服务状态面板（NFR-15 可见性）：设置「访问与设备」组入口 → 两段式（基础/异常告警，判定化：裸计数留 /metrics）。
        数据走鉴权 service:status ack，面板开着时 5s 定时重拉；结构同 workspaceModal，开合走 openSheet/closeSheet。 -->
-  <div id="serviceStatusModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
+  <div id="serviceStatusModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
       <!-- 返回箭头而不是 ✕：这张面板是通用设置「🖥 宿主机」页切出去的第二层，退出语义是
@@ -537,7 +537,7 @@
     </div>
   </div>
 
-  <div id="envConfigModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务与配置">
+  <div id="envConfigModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务与配置">
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
       <!-- 同 #serviceStatusBack：第二层面板，退出＝退回「🛠 行为与开关」页，不是关到首页 -->

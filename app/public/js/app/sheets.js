@@ -78,6 +78,8 @@ export function createSheetController(context, {
     if (relay) focusPrev = relay.focusPrev;
     const wasEmpty = sheetStack.length === 0;
     el.classList.remove('hidden');
+    // #369：CSS 过渡认 .ccm-sheet，不认 ID 白名单；HTML 已标类，这里再补一次防漏标新面板。
+    el.classList.add('ccm-sheet');
     // Force reflow
     el.offsetHeight;
     el.classList.add('sheet-open');
