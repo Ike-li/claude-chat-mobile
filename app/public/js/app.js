@@ -116,6 +116,7 @@ import {
   shouldHideComposerSendButton,
   pillPermTone,
   shouldShowComposerDiscoverHint,
+  resolveComposerDiscoverAriaDescription,
   formatLiveActivityText,
   INTERRUPT_PENDING_TIMEOUT_MS,
   shouldClearInterruptPendingOnSystem,
@@ -178,6 +179,7 @@ import {
   formatStatuslineCopyText,
   formatStatuslineCtxLeft,
   formatWorkspaceChangeBadge,
+  formatTopContextPillAriaLabel,
   shouldRenderStatusline,
   readPushPreviewPref,
   writePushPreviewPref,
@@ -5011,6 +5013,12 @@ import { createGateFocusController } from './app/focus-layers.js';
       mirrorReadonly: Boolean(mirrorReadonlySid),
     });
     hint.classList.toggle('hidden', !show);
+    // 视觉 "/ · @" 仍 aria-hidden（碎读无益）；空聚焦时把可发现性写进 textarea aria-description（#370）。
+    // 不走 aria-live：聚焦/失焦各改一次即可，避免与 #379 的刷屏顾虑冲突。
+    hint.setAttribute('aria-hidden', 'true');
+    const desc = resolveComposerDiscoverAriaDescription({ show });
+    if (desc) inputEl.setAttribute('aria-description', desc);
+    else inputEl.removeAttribute('aria-description');
   }
 
   // 下一步建议条：每轮收尾后 server 推来一条（prompt_suggestion），点一下把整句填进输入框。
@@ -8386,7 +8394,10 @@ import { createGateFocusController } from './app/focus-layers.js';
     const text = formatWorkspaceChangeBadge(git);
     topContextChanges.textContent = text;
     topContextChanges.classList.toggle('hidden', !text);
+    // 有文案时对 AT 可见；空/隐藏时继续藏（#366）
+    topContextChanges.setAttribute('aria-hidden', text ? 'false' : 'true');
     topContextChanges.dataset.cwd = currentCwd || '';
+    syncTopContextPillAriaLabel();
   }
   // 顶栏主 pill 文案：固定工作区 basename（维护者拍板不要会话标题——同仓多会话靠侧栏区分）。
   // #topTitleText 仍 hidden；title 挂点开会浏览的那个完整目录供长按辨认——取 panelCwd()，与 onclick 同源。
@@ -8406,6 +8417,16 @@ import { createGateFocusController } from './app/focus-layers.js';
         ? `${t('工作区：浏览或查看改动')} · ${target}`
         : t('工作区：浏览或查看改动');
     }
+    syncTopContextPillAriaLabel();
+  }
+  /** pill 无障碍名：工作区名 + 可选改动数（角标单独可读，但 pill 名也要带数，避免只摸到文件夹图标）（#366） */
+  function syncTopContextPillAriaLabel() {
+    if (!topContextPill) return;
+    const project = (topProjectText?.textContent || '').trim() || baseName(currentCwd) || '';
+    const changesText = (topContextChanges && !topContextChanges.classList.contains('hidden'))
+      ? (topContextChanges.textContent || '').trim()
+      : '';
+    topContextPill.setAttribute('aria-label', formatTopContextPillAriaLabel({ project, changesText }));
   }
   function enterComposeReady() {
     _composeReady = true;

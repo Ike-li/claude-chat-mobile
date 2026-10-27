@@ -56,7 +56,7 @@
 
   <!-- 访问令牌输入页：鉴权失败（connect_error=unauthorized）时显示；输入后存 localStorage 以新 token 重连。
        不改握手契约，替代手动改 #token= URL（后者仍兼容）。app.js 控制显隐。 -->
-  <div id="authGate" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+  <div id="authGate" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="访问令牌">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
       <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">Claude</div>
       <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">第一次打开、换了浏览器或清过浏览器数据时，这里还没有保存令牌，输入一次即可。</span></div>
@@ -70,7 +70,7 @@
   </div>
 
   <!-- Access 会话过期重登：公网 Cloudflare Access 会话失效时显示，按钮触发整页跳转重过 Access（非 auto-reload）。 -->
-  <div id="accessRelogin" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+  <div id="accessRelogin" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="会话已过期">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
       <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">会话已过期</div>
       <div class="text-sm text-ink-soft mb-5">登录态已失效，请重新通过验证后继续。</div>
@@ -190,7 +190,7 @@
             <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
           </svg>
         </a>
-        <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+        <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="关闭">✕</button>
       </div>
     </div>
     <!-- 抽屉内操作的失败回执（当前唯一来源：🗑 彻底删除被服务端拒绝）。
@@ -262,7 +262,7 @@
          / `querySelector('header')` 变成歧义选择器（P0-02i 当场撞红）。它在 dialog 内部，语义靠
          aria-label 表达即可。 -->
     <div class="flex items-center gap-2 px-3 py-2.5 bg-surface border-b border-line shrink-0">
-      <button id="sessionBlockedBack" type="button" class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft active:bg-sunk" aria-label="返回" data-testid="session-blocked-back">←</button>
+      <button id="sessionBlockedBack" type="button" class="hit-44 shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft active:bg-sunk" aria-label="返回" data-testid="session-blocked-back">←</button>
       <div class="min-w-0 flex-1">
         <div id="sessionBlockedTitle" class="truncate font-medium text-ink text-sm" data-testid="session-blocked-title"></div>
         <div id="sessionBlockedProject" class="truncate text-[11px] text-ink-faint" data-testid="session-blocked-project"></div>
@@ -440,7 +440,7 @@
   </div>
 
   <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
-  <div id="consoleModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+  <div id="consoleModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="交互日志">
     <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle bg-gray-700 mt-3 shrink-0"></div>
       
@@ -502,7 +502,7 @@
 
       <!-- 文件 tab 工具行 -->
       <div id="fileBrowseTools" class="px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
-        <button id="fileBrowseBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级">←</button>
+        <button id="fileBrowseBack" class="hit-44 hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级" aria-label="返回上一级">←</button>
         <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
         <!-- CodeMirror 编辑+写回（files:write，见 file-browse.js writeFileInScope）：只在整份小文件在手
              （browse:read 带 contentHash）时出现；三态互斥，同一时刻只显其一。 -->
@@ -529,7 +529,7 @@
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
       <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
-        <button id="folderPickerBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级" aria-label="返回上一级" data-testid="folder-picker-back">←</button>
+        <button id="folderPickerBack" class="hit-44 hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级" aria-label="返回上一级" data-testid="folder-picker-back">←</button>
         <div id="folderPickerTitle" class="flex-1 min-w-0 text-sm font-semibold text-ink truncate" data-testid="folder-picker-title">选择文件夹</div>
         <button id="folderPickerClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
       </div>
@@ -752,7 +752,7 @@
   </footer>
 
   <!-- 设备待授权遮罩层 (TOFU Device Waiting Overlay) -->
-  <div id="deviceModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+  <div id="deviceModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="等待授权">
     <div class="w-full max-w-sm bg-surface rounded-2xl p-6 text-center border border-line" style="box-shadow: var(--shadow-pop)">
       <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent/10 text-accent mb-4 animate-pulse">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
@@ -788,7 +788,7 @@
   <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-30 p-3 space-y-2 pointer-events-none"></div>
 
   <!-- 本设备被主机所有者拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
-  <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+  <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="设备未获授权">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6 text-center" style="box-shadow:var(--shadow-pop)">
       <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sunk text-danger mb-4">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
@@ -803,7 +803,7 @@
   </div>
 
   <!-- 访问帮助：怎么连接 / 令牌在哪 / 新设备怎么批。常驻入口在配置面板，也从令牌页/被拒页打开。 -->
-  <div id="accessHelp" class="hidden fixed inset-0 z-50 bg-canvas overflow-y-auto p-6 safe-top safe-bottom">
+  <div id="accessHelp" class="hidden fixed inset-0 z-50 bg-canvas overflow-y-auto p-6 safe-top safe-bottom" role="dialog" aria-modal="true" aria-label="如何连接与使用">
     <div class="w-full max-w-md mx-auto">
       <div class="flex items-center justify-between mb-5">
         <div class="text-lg font-semibold text-ink" style="font-family:var(--font-read)">如何连接与使用</div>
@@ -851,7 +851,7 @@
         </div>
       </div>
       <!-- 终端改了 settings 后手动重读；与 compose 页 ↻ 同源 config:refresh -->
-      <button id="btnConfigRefresh" type="button" class="shrink-0 mt-2.5 mr-3 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置" aria-label="重新读取 CLI 配置">
+      <button id="btnConfigRefresh" type="button" class="hit-44 shrink-0 mt-2.5 mr-3 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置" aria-label="重新读取 CLI 配置">
         <span class="text-base leading-none" data-spin>↻</span>
       </button>
     </div>
@@ -943,7 +943,7 @@
       <!-- 标题栏在拖拽区内，但 settings.js 的 onDragPointerDown 会跳过 button/a/input——
            返回键放这里不会被下拉手势吃掉。 -->
       <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface flex items-center gap-2">
-        <button id="generalBack" type="button" class="hidden shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回" data-testid="general-back">←</button>
+        <button id="generalBack" type="button" class="hit-44 hidden shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base" aria-label="返回" data-testid="general-back">←</button>
         <div class="min-w-0 flex-1">
           <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 设置与状态</div>
           <div id="generalSheetSub" class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭 · 不含本会话的模型与权限</div>
