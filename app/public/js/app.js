@@ -5220,9 +5220,10 @@ import { createGateFocusController } from './app/focus-layers.js';
         const isUltra = lv === 'ultracode';
         // UX-014：副文案增量信息，非「思考等级: low」同义反复
         const sub = effortLevelSubtitle(lv) || (isUltra ? t('xhigh + 多 agent · 最彻底') : '');
-        // 原生 button + aria-pressed：与 .perm-tile / .model-tile 对齐，Tab 可达、读屏能报选中态（#403）
+        // 原生 button + aria-pressed：与 .perm-tile / .model-tile 对齐，Tab 可达、读屏能报选中态（#403）。
+        // 故意不加 w-full：#customEffortGrid 是 flex-wrap 芯片行；w-full 会竖排撑高，把权限尾格挤出首屏（P0-09r）。
         const lvTile = el(`
-          <button type="button" data-level="${esc(lv)}" aria-pressed="${active ? 'true' : 'false'}" class="effort-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+          <button type="button" data-level="${esc(lv)}" aria-pressed="${active ? 'true' : 'false'}" class="effort-tile text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
             ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
           </button>

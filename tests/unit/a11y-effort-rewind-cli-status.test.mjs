@@ -33,6 +33,12 @@ test('#403 .effort-tile 用 button + aria-pressed（对齐 .perm-tile / .model-t
     /<div data-level="\$\{esc\(lv\)\}" class="effort-tile/,
     '不得恢复 <div class="effort-tile">',
   );
+  // flex-wrap 芯片行：不得加 w-full，否则竖排撑高把 bypassPermissions 挤出首屏（P0-09r）
+  assert.doesNotMatch(
+    appJs,
+    /class="effort-tile w-full/,
+    'effort-tile 不得带 w-full（#customEffortGrid 是 flex-wrap，不是 grid-cols-2）',
+  );
 });
 
 test('#403 renderCliPermissionMode(null) 须清掉 perm-tile 的 aria-pressed', () => {
