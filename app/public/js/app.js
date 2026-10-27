@@ -84,6 +84,7 @@ import {
   readPushOptOut,
   serviceStatusBasicRows,
   shouldSendOnEnter,
+  isSoftKeyboardPrimaryDevice,
   whatNeedsAttention,
   resolveHeaderConnBadge,
   resolveHeaderAttentionChip,
@@ -4531,9 +4532,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     send();
   };
   // 移动端回车发送截断修复（2026-07-13 排查）：触屏软键盘没有 Shift+Enter 这个换行
-  // 逃生舱，回车恒当发送键会把长消息在换行处截断。触摸设备下回车走 textarea 默认换行，发送收窄为
+  // 逃生舱，回车恒当发送键会把长消息在换行处截断。软键盘主设备下回车走 textarea 默认换行，发送收窄为
   // 仅走发送按钮；enterkeyhint 同步改 'enter'，避免部分输入法把回车当 action 直接派发而非插入换行符。
-  const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  // #386：勿 OR maxTouchPoints——触屏笔记本有触摸硬件但主指针是 fine，物理 Enter 应发送。
+  const isTouchDevice = isSoftKeyboardPrimaryDevice({
+    pointerCoarse: matchMedia('(pointer: coarse)').matches,
+  });
   inputEl.enterKeyHint = isTouchDevice ? 'enter' : 'send';
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
