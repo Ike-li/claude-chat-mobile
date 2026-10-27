@@ -86,16 +86,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-03c 用户气泡「改写重发」填回提问原文（UX-012）', async ({ page }) => {
+  test('P0-03c 用户气泡「填入输入框」填回提问原文（UX-012 / #362）', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:message-edit 复制 README');
     await waitForIdle(page);
     const reply = page.locator('[data-testid="assistant-message"]').last();
     await expect(reply).toContainText('message edit fixture');
-    // UX-012：改写重发放在用户气泡，不再挂在助手动作栏
+    // UX-012 / #362：填入输入框放在用户气泡，不再挂在助手动作栏；只回填不 rewind
     const user = page.locator('[data-testid="user-message"]').last();
-    await user.getByRole('button', { name: /改写重发/ }).click();
+    await user.getByRole('button', { name: /填入输入框/ }).click();
     await expect(page.locator('#input')).toHaveValue('test:message-edit 复制 README');
 
     await expectNoBrowserErrors(page);

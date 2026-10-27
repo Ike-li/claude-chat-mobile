@@ -657,8 +657,9 @@ export const EN_DICT = Object.freeze({
   '…（仅显示末尾）': '… (tail only)',
   '（空输出）': '(empty output)',
   '已终止': 'Killed',
-  '改写后重发': 'Edit and resend',
-  '改写重发': 'Edit & resend',
+  // #362：按钮只回填输入框，不 rewind；中性「填入」说法，避免暗示就地编辑历史
+  '将原文填入输入框（不回退历史）': 'Fill into input (does not rewind history)',
+  '填入输入框': 'Fill into input',
   '语音朗读': 'Read aloud',
   '朗读': 'Read aloud',
   '此设备不支持语音朗读': 'This device doesn\'t support speech',

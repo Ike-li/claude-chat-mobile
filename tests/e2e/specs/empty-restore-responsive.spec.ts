@@ -102,7 +102,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 验收 O99（AC-21-08）：消息操作按钮（复制 / 朗读 / 分叉 / 改写重发）名义热区 44，实测只有 42——::after 以
+  // 验收 O99（AC-21-08）：消息操作按钮（复制 / 朗读 / 分叉 / 填入输入框）名义热区 44，实测只有 42——::after 以
   // padding box 为基准、不含 1px 边框（同 O76 顶栏那次），32 高的按钮扩 6px 只到 30+12。
   test('P0-19g 消息操作按钮的可点高度到 44', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

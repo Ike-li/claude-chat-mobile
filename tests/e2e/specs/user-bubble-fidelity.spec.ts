@@ -37,8 +37,8 @@ test.describe('用户气泡保真：按纯文本显示', () => {
     await expectVerbatim(users.filter({ hasText: 'LIVE' }), rawText('LIVE'));
     await expectVerbatim(users.filter({ hasText: 'HIST' }), rawText('HIST'));
 
-    // 「改写重发」照旧填回原文
-    await users.filter({ hasText: 'test:raw-user' }).getByRole('button', { name: /改写重发/ }).click();
+    // 「填入输入框」照旧填回原文（#362）
+    await users.filter({ hasText: 'test:raw-user' }).getByRole('button', { name: /填入输入框/ }).click();
     await expect(page.locator('#input')).toHaveValue(sent);
     await expectNoBrowserErrors(page);
   });

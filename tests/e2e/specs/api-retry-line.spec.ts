@@ -79,7 +79,7 @@ test.describe('P0 API 重试与 SDK 提示的可见性', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 验收 AC-06-18 / O115：/compact 之后重载历史，压缩摘要整段被渲染成用户气泡（带复制 / 改写重发）。
+  // 验收 AC-06-18 / O115：/compact 之后重载历史，压缩摘要整段被渲染成用户气泡（带复制 / 填入输入框）。
   test('P0-30d 历史里的压缩摘要渲染成「上下文已压缩」标记，不是用户气泡', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

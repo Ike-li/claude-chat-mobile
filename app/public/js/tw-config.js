@@ -27,6 +27,16 @@ tailwind.config = {
         warning: 'var(--warning)',
         line: 'var(--line)',
         'line-soft': 'var(--line-soft)',
+        // #368：console 抽屉色板（固定深色 token，见 app.css --console-*）
+        console: {
+          DEFAULT: 'var(--console-bg)',
+          surface: 'var(--console-surface)',
+          sunk: 'var(--console-sunk)',
+          line: 'var(--console-line)',
+          ink: 'var(--console-ink)',
+          'ink-soft': 'var(--console-ink-soft)',
+          'ink-faint': 'var(--console-ink-faint)',
+        },
       },
       fontFamily: {
         read: 'var(--font-read)',

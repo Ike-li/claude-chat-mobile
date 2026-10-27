@@ -10072,13 +10072,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
       };
       row.appendChild(btn);
-      // UX-012：改写重发放在用户气泡，操作对象与位置一致
+      // UX-012 / #362：填入输入框放在用户气泡；只回填原文，不 rewind / 不改历史
       const rewrite = el(`
-        <button class="msg-action-btn hit-44" title="${t('改写后重发')}">
+        <button class="msg-action-btn hit-44" title="${t('将原文填入输入框（不回退历史）')}">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
           </svg>
-          <span>${t('改写重发')}</span>
+          <span>${t('填入输入框')}</span>
         </button>
       `);
       rewrite.onclick = () => {
@@ -10208,7 +10208,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       bar.appendChild(forkBtn);
     }
 
-    // UX-012：编辑已迁到用户气泡「改写重发」
+    // UX-012 / #362：编辑已迁到用户气泡「填入输入框」
 
     container.appendChild(bar);
   }
@@ -10316,9 +10316,10 @@ import { createGateFocusController } from './app/focus-layers.js';
   function updateConsoleFilterButtons() {
     for (const btn of consoleFilterButtons) {
       const active = btn.dataset.filter === consoleFilter;
-      btn.classList.toggle('bg-gray-700', active);
-      btn.classList.toggle('text-gray-200', active);
-      btn.classList.toggle('text-gray-500', !active);
+      // #368：过滤钮高亮用 --console-*，不用 Tailwind gray
+      btn.classList.toggle('bg-console-sunk', active);
+      btn.classList.toggle('text-console-ink', active);
+      btn.classList.toggle('text-console-ink-faint', !active);
     }
   }
   for (const btn of consoleFilterButtons) {
@@ -10392,7 +10393,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     for (const entry of entries) {
       if (isRestoredBoundary(prev, entry)) {
         const sep = document.createElement('div');
-        sep.className = 'text-center text-[10px] text-gray-600 select-none py-1';
+        sep.className = 'text-center text-[10px] text-console-ink-faint select-none py-1';
         sep.textContent = t('—— 本次会话 ——');
         consoleLogArea.appendChild(sep);
       }
@@ -10416,7 +10417,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     const tsStr = p.ts ? new Date(p.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
     const tsSpan = document.createElement('span');
-    tsSpan.className = 'text-gray-500 select-none shrink-0 font-semibold';
+    tsSpan.className = 'text-console-ink-faint select-none shrink-0 font-semibold';
     tsSpan.textContent = `[${tsStr}]`;
     meta.appendChild(tsSpan);
 
@@ -10476,32 +10477,32 @@ import { createGateFocusController } from './app/focus-layers.js';
       case 'diag_mirror':
         badgeSpan.className += ' bg-indigo-950/60 text-indigo-400 border border-indigo-800/40';
         badgeText = 'mirror';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
         break;
       case 'diag_queue':
         badgeSpan.className += ' bg-orange-950/60 text-orange-400 border border-orange-800/40';
         badgeText = 'queue';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
         break;
       case 'diag_interrupt':
         badgeSpan.className += ' bg-red-950/60 text-red-400 border border-red-800/40';
         badgeText = 'interrupt';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
         break;
       case 'diag_control':
         badgeSpan.className += ' bg-slate-800 text-slate-400 border border-slate-600/40';
         badgeText = 'control';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
         break;
       case 'diag_statusline':
         badgeSpan.className += ' bg-cyan-950/60 text-cyan-400 border border-cyan-800/40';
         badgeText = 'usage';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
         break;
       default:
-        badgeSpan.className += ' bg-gray-800 text-gray-400 border border-gray-700';
+        badgeSpan.className += ' bg-console-surface text-console-ink-soft border border-console-line';
         badgeText = p.type || 'log';
-        textClass = 'text-gray-300';
+        textClass = 'text-console-ink';
     }
     // 诊断事件正文按 severity 覆盖着色（身份色留在徽标上，见上面 diag_* 分支注释）
     if (p.severity === 'danger') textClass = 'text-red-300';
