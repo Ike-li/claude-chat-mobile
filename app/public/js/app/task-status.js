@@ -109,10 +109,12 @@ export function createTaskStatusController(context, {
     if (activeDetailId && !tasks.has(activeDetailId)) activeDetailId = null;
   }
 
-  // 折叠热区是整条横幅头行（#taskBannerToggle），恒可见、恒可点——不再有单独的 ▸/▾ 三角按钮，
-  // 也不再按任务数隐藏它（单任务同样可折叠）。这里只同步无障碍状态。
+  // 折叠热区是整条横幅头行（#taskBannerToggle），恒可见、恒可点；尾随 #taskBannerChevron 作 ▸/▾ 视觉指示。
+  // 不再按任务数隐藏它（单任务同样可折叠）。同步 aria-expanded 与 chevron 文案。
   function syncBannerToggle(collapsed) {
-    dom.taskBannerToggle?.setAttribute('aria-expanded', String(!collapsed));
+    const expanded = !collapsed;
+    dom.taskBannerToggle?.setAttribute('aria-expanded', String(expanded));
+    if (dom.taskBannerChevron) dom.taskBannerChevron.textContent = expanded ? '▾' : '▸';
   }
 
   function toggleTaskList() {
@@ -207,8 +209,13 @@ export function createTaskStatusController(context, {
         // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
         // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
         const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
-        const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
+        // 头行容器不挂 role=button：展开热区是左侧 expand 按钮，右侧「停」是兄弟 button，避免嵌套。
+        const row = createElement('<div class="px-2 py-1.5 select-none" data-testid="bg-task-row"></div>');
         const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
+        const expandBtn = createElement('<button type="button" class="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer"></button>');
+        expandBtn.setAttribute('aria-expanded', String(isActive));
+        const rowChevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
+        rowChevron.textContent = isActive ? '▾' : '▸';
         const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
         const title = formatBgTaskRowLabel({
           taskType: task.taskType,
@@ -218,6 +225,7 @@ export function createTaskStatusController(context, {
         const histTag = histLen > 0 ? ` · ${t('{n}条').replace('{n}', histLen)}` : '';
         label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
         label.title = task.message || taskId;
+        expandBtn.append(rowChevron, label);
         // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
         // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
         // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
@@ -236,7 +244,7 @@ export function createTaskStatusController(context, {
           stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
           tail.push(stop);
         }
-        top.append(label, ...tail);
+        top.append(expandBtn, ...tail);
 
         const metaParts = [];
         if (statusView?.error) metaParts.push(statusView.error); // 失败原因排在最前，别被 truncate 吃掉
@@ -259,8 +267,8 @@ export function createTaskStatusController(context, {
         } else {
           row.append(top);
         }
-        // 点击行文本区域 → 展开/收起该任务自己的详情
-        row.addEventListener('click', () => toggleDetail(taskId));
+        // 左侧 expand 按钮展开/收起详情（原生 button 自带键盘可达）；与「停」兄弟，无嵌套。
+        expandBtn.addEventListener('click', () => toggleDetail(taskId));
         card.appendChild(row);
         if (isActive) {
           const panel = buildDetailPanel(taskId);
