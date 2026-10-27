@@ -360,8 +360,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        所以不并进 folders:add / folders:remove——那两条改的是授权面。不新增出向事件：成功后复用 instances 快照。入向 66→67）
   //      folders:pin → folders:reorder（2026-10-26，置顶换成长按拖动排序：载荷从「一个根 + 置顶与否」变成连接根的完整新顺序，
   //        同一类展示偏好、同一个存储，旧事件不留。入向不变 67）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 67);
+  //      + folders:removeMissing（2026-10-27，#355：「N 个文件夹找不到了」告警里一键按原始配置条目移除仍缺失的。
+  //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 68);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:checkUpdate'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:reorder'));

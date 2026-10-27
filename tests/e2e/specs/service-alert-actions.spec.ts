@@ -66,6 +66,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #355：一键按原始配置条目删掉仍找不到的；目录已恢复的那项不能被旧告警误删。
+  test('P0-SVC-ALERT-6 「从列表移除缺失项」：只删仍缺失的，已恢复的保留', async ({ page }) => {
+    await gotoMock(page);
+    await setGone(page, [A, B], { apply: true });
+    await openSessionsSidebar(page);
+    await expect(alertRow(page)).toContainText('2 个已连接的文件夹找不到了');
+
+    await setGone(page, [B]); // A 挂回来了，但还没点重新检查——告警仍写着 2 个
+    await alertRow(page).getByRole('button', { name: '从列表移除缺失项' }).click();
+    // 服务端复核后只删仍缺失的 B；A 已恢复，不能被旧告警误删
+    await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('已移除 1 项');
+    await expect(page.locator('#serviceSection')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
+
   // 指纹 = 告警 id + 路径集合，不是文案：切语言仍有效；个数相同但换了一个路径要重新出现。
   test('P0-SVC-ALERT-3 「忽略」：刷新、切语言后都不再出现；缺失数量相同但路径换了就重新出现', async ({ page }) => {
     await gotoMock(page);

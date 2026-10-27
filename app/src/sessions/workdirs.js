@@ -332,6 +332,45 @@ export function resolveWorkdirs(entries) {
   return { dirs, limits, warnings, missing };
 }
 
+// #355：告警「从列表移除缺失项」——按**原始配置条目**决定删哪几条（纯函数，I/O 在组装根）。
+//
+// list 是配置文件里的 WORKDIRS 原文（string | {path, sessionLimit}），不是 realpath 后的连接根。
+// confirmedMissing 是这一趟重读+复核后确认仍找不到的原样路径；requested 是手机提交的候选
+// （通常就是告警里的路径集合）。两边都命中才删——目录刚挂回来的不能被旧告警误删。
+//
+// legacyPrimary = 配置里退役的 WORK_DIR：来源是它的条目不给自动移除（删 WORKDIRS 也删不掉它，
+// 折进列表后还会再冒出来；要去掉只能人手清 WORK_DIR）。其余条目连同 sessionLimit 原样保留。
+export function planRemoveMissingWorkdirEntries(list = [], {
+  confirmedMissing = [],
+  requested = null,
+  legacyPrimary = '',
+} = {}) {
+  const missing = new Set(
+    (Array.isArray(confirmedMissing) ? confirmedMissing : []).filter(p => typeof p === 'string' && p),
+  );
+  const reqList = Array.isArray(requested)
+    ? requested.filter(p => typeof p === 'string' && p)
+    : null;
+  // 没带候选 = 按这一趟复核出的全部缺失项来（一键移除）
+  const want = new Set(reqList && reqList.length ? reqList : missing);
+  const legacy = String(legacyPrimary ?? '').trim();
+  const next = [];
+  const removed = [];
+  const skippedLegacy = [];
+  for (const entry of Array.isArray(list) ? list : []) {
+    const path = typeof entry === 'string' ? entry : (entry && typeof entry === 'object' ? entry.path : null);
+    if (typeof path !== 'string' || !path) { next.push(entry); continue; }
+    if (!want.has(path) || !missing.has(path)) { next.push(entry); continue; }
+    if (legacy && path === legacy) {
+      skippedLegacy.push(path);
+      next.push(entry);
+      continue;
+    }
+    removed.push(path);
+  }
+  return { next, removed, skippedLegacy };
+}
+
 // 清单的运行态：从哪来（WORKDIRS / WORK_DIRS / WORK_DIRS_FILE）、配置了却找不到（被删、改名、外置盘没挂上）
 // 几个。组装根在启动、每次热加载与「重新检查」（#301）应用清单时写入，服务告警、体检、instances 广播、启动日志读取；
 // 广播时不重读外置文件。找不到的路径也存（配置里的原样写法）：告警的「忽略」按路径集合记指纹，集合变了要重新出现；

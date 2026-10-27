@@ -644,6 +644,7 @@ const ACK_SHAPES = [
     required: ['ok', 'timestamp', 'startedAt', 'restarts', 'deliveryFailure', 'rateLimitLockout', 'clientError', 'proxyFronted', 'hooksBridge', 'statuslineBridge', 'logging', 'versions', 'missingFolders', 'missingFolderPaths'] },
   // #301 告警里的「重新检查」：前端拿回执里的个数当场说「还有 N 个找不到」，路径用来刷新「忽略」的指纹
   { event: 'folders:recheck', payload: () => ({}), required: ['ok', 'missingFolders', 'missingFolderPaths'] },
+  { event: 'folders:removeMissing', payload: () => ({ paths: [] }), required: ['ok', 'error'] },
   // 设置「关于」页（#303）。版本号不在这里——前端复用上面 service:status 的 versions。
   { event: 'about:get', payload: () => ({}),
     required: ['ok', 'author', 'repository', 'license', 'notice', 'thirdPartyNotices', 'components'],

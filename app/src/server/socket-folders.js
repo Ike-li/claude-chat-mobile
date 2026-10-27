@@ -1,13 +1,13 @@
-// socket-folders.js —— 手机上「添加文件夹」「新建文件夹」「断开文件夹」「重新检查」「拖动排序」的 socket 面（FOLDER-01、FOLDER-02）
+// socket-folders.js —— 手机上「添加文件夹」「新建文件夹」「断开文件夹」「重新检查」「移除缺失」「拖动排序」的 socket 面（FOLDER-01、FOLDER-02）
 //
-// 判据全在 sessions/folders.js；写配置与热加载由组装根注入的 addConnectedFolder / removeConnectedFolder 负责。
+// 判据全在 sessions/folders.js；写配置与热加载由组装根注入的 addConnectedFolder / removeConnectedFolder / removeMissingFolders 负责。
 // 这里只做三件事：取参、调用、留痕——越界尝试记 scope_violation（同文件浏览），扩授权面、缩授权面与在磁盘上
 // 建东西的成功操作各记一条。
 import { browseFolderNames, createSubfolder, resolveFolderToAdd } from '../sessions/folders.js';
 
 const OUT_OF_RANGE = new Set(['out_of_range', 'outside_home']);
 
-export function registerFolderSocketHandlers({ socket, on, folderContext, addConnectedFolder, removeConnectedFolder, recheckFolders, reorderConnectedFolders, audit, actorFromSocket }) {
+export function registerFolderSocketHandlers({ socket, on, folderContext, addConnectedFolder, removeConnectedFolder, removeMissingFolders, recheckFolders, reorderConnectedFolders, audit, actorFromSocket }) {
   const record = (action, target, outcome, meta) => audit.recordAudit({ actor: actorFromSocket(socket), action, target, outcome, meta });
   const recordIfOutOfRange = (res, target, via) => {
     if (!res.ok && OUT_OF_RANGE.has(res.error)) record('scope_violation', String(target), 'denied', { via });
@@ -54,6 +54,18 @@ export function registerFolderSocketHandlers({ socket, on, folderContext, addCon
   on(socket, 'folders:recheck', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack(recheckFolders());
+  });
+
+  // 告警里一键「从列表移除缺失项」（#355）：缩授权面，与 folders:reorder 一样再收紧设备闸（必须是 true）。
+  // 只读来源 / WORK_DIR / 复核后已不缺失 都在 removeMissingFolders 里拒绝——前端隐藏按钮不够。
+  on(socket, 'folders:removeMissing', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (socket.deviceApproved !== true) return ack({ ok: false, error: 'device_not_approved' });
+    const res = removeMissingFolders(payload?.paths);
+    if (res.ok) {
+      for (const p of res.removed) record('folder_disconnected', p, 'allowed');
+    }
+    ack(res);
   });
 
   // 拖动排序（取代 #305 置顶）：roots 是连接根的完整新顺序。on() 只拦 deviceApproved === false，这里再收紧成

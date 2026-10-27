@@ -6414,9 +6414,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
   // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
   // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
-  // 「N 个文件夹找不到了」那一行带三个动作（#301）：管理工作区（直达工作区列表编辑器）、重新检查（服务端重跑一次
-  // 清单加载，目录回来了不用重启）、忽略（本机按 id + 路径集合记指纹，集合变了重新出现）。限速锁定、推送失败、前端错误
-  // 只有「忽略」（按发生时刻记指纹，再发生一次重新出现）。服务状态面板是只读的诊断清单，照常列出全部告警、不受「忽略」影响。
+  // 「N 个文件夹找不到了」那一行带动作（#301 / #355）：管理工作区、重新检查、从列表移除缺失项（可写来源才给）、忽略。
+  // 限速锁定、推送失败、前端错误只有「忽略」。服务状态面板是只读的诊断清单，照常列出全部告警、不受「忽略」影响。
   function buildServiceSection() {
     const section = el(`<div id="serviceSection"></div>`);
     const notices = undismissedServiceNotices(
@@ -6469,6 +6468,25 @@ import { createGateFocusController } from './app/focus-layers.js';
           refreshServiceSection();
         });
       };
+      // #355：一键按原始配置条目删掉仍找不到的。只读来源前端不给按钮，服务端仍会拒——不能只靠隐藏。
+      if (!projectsState.foldersReadonly()) {
+        const removeMissing = action(t('从列表移除缺失项'));
+        removeMissing.onclick = () => {
+          haptic('tap');
+          removeMissing.disabled = true;
+          removeMissing.textContent = t('移除中…');
+          const paths = Array.isArray(notice.paths) ? notice.paths : [];
+          socket.timeout(10_000).emit('folders:removeMissing', { paths }, (err, res) => {
+            removeMissing.disabled = false;
+            removeMissing.textContent = t('从列表移除缺失项');
+            if (err || !res?.ok) { drawer.showNotice(err ? t('移除失败') : folderReasonText(res?.error)); return; }
+            const n = Array.isArray(res.removed) ? res.removed.length : 0;
+            drawer.showNotice(t('已移除 {n} 项').replace('{n}', String(n)));
+            latestServiceHealth = { ...latestServiceHealth, missingFolders: res.missingFolders, missingFolderPaths: res.missingFolderPaths };
+            refreshServiceSection();
+          });
+        };
+      }
     }
     action(t('忽略')).onclick = () => {
       haptic('tap');

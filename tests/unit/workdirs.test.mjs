@@ -10,7 +10,7 @@ import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
   findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
-  foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir,
+  foldPrimaryWorkdir, pickPrimaryWorkdir, resolveEnvPrimaryWorkdir, planRemoveMissingWorkdirEntries,
   BROWSE_HARD_LIMIT, SEARCH_RESULT_LIMIT, sessionListWindow, fitSessionPage, showMoreCount,
 } from '../../app/src/sessions/workdirs.js';
 
@@ -475,4 +475,55 @@ test('showMoreCount：到硬顶（nextLimit=null）、没有更早的、剩下�
 
 test('showMoreCount：total 缺失时按一档报，不报 0（报 0 就再也点不出更早的）', () => {
   assert.equal(showMoreCount({ hasMore: true, total: null, shown: 6, nextLimit: 12 }), 6);
+});
+
+// #355：告警「从列表移除缺失项」——按原始配置条目删，保留 sessionLimit；WORK_DIR 不给自动移除。
+test.describe('planRemoveMissingWorkdirEntries', () => {
+  test('只删「请求 ∩ 仍缺失」的原始条目，其余连同 sessionLimit 原样保留', () => {
+    const list = ['/ok', { path: '/gone', sessionLimit: 12 }, { path: '/other-gone', sessionLimit: 3 }, '/still-here'];
+    const r = planRemoveMissingWorkdirEntries(list, {
+      confirmedMissing: ['/gone', '/other-gone'],
+      requested: ['/gone'],
+    });
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.skippedLegacy, []);
+    assert.deepEqual(r.next, ['/ok', { path: '/other-gone', sessionLimit: 3 }, '/still-here']);
+  });
+
+  test('没带 requested 时按全部仍缺失的来（一键移除）', () => {
+    const r = planRemoveMissingWorkdirEntries(['/a', '/b', '/c'], {
+      confirmedMissing: ['/a', '/c'],
+    });
+    assert.deepEqual(r.removed, ['/a', '/c']);
+    assert.deepEqual(r.next, ['/b']);
+  });
+
+  test('目录已恢复（不在 confirmedMissing）的候选不删——旧告警不能误删刚挂回来的', () => {
+    const r = planRemoveMissingWorkdirEntries(['/back', '/gone'], {
+      confirmedMissing: ['/gone'],
+      requested: ['/back', '/gone'],
+    });
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.next, ['/back']);
+  });
+
+  test('legacy WORK_DIR 路径不给自动移除，记进 skippedLegacy', () => {
+    const r = planRemoveMissingWorkdirEntries(
+      [{ path: '/legacy', sessionLimit: 9 }, '/gone'],
+      { confirmedMissing: ['/legacy', '/gone'], legacyPrimary: '/legacy' },
+    );
+    assert.deepEqual(r.removed, ['/gone']);
+    assert.deepEqual(r.skippedLegacy, ['/legacy']);
+    assert.deepEqual(r.next, [{ path: '/legacy', sessionLimit: 9 }]);
+  });
+
+  test('只剩 WORK_DIR 缺失时 removed 为空，留给调用方回 legacy_workdir', () => {
+    const r = planRemoveMissingWorkdirEntries(['/legacy'], {
+      confirmedMissing: ['/legacy'],
+      legacyPrimary: '/legacy',
+    });
+    assert.deepEqual(r.removed, []);
+    assert.deepEqual(r.skippedLegacy, ['/legacy']);
+    assert.deepEqual(r.next, ['/legacy']);
+  });
 });

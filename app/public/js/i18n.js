@@ -766,6 +766,9 @@ export const EN_DICT = Object.freeze({
   '还没有连接文件夹': 'No folders connected yet',
   '已连接的文件夹都找不到了': 'Your connected folders can\'t be found',
   '这个文件夹已经不在已连接的清单里了': 'This folder is no longer in your connected list',
+  '没有可移除的缺失项（可能都已恢复，或只剩 WORK_DIR）': 'Nothing removable (they may already be back, or only a legacy WORK_DIR remains)',
+  '这项来自已退役的 WORK_DIR，请在配置里手动删掉 WORK_DIR': 'This entry comes from the retired WORK_DIR key — delete WORK_DIR in the config by hand',
+  '这台设备还没通过信任审批': 'This device hasn\'t been approved yet',
   '断开后抽屉里不再显示它，也不能在里面新开会话；文件夹里的文件和会话记录都不动，随时可以再选回来。':
     'It disappears from the drawer and you can\'t start new sessions in it. Its files and session history stay untouched, and you can pick it again anytime. ',
   '这里有 {n} 个会话开着，会照常继续。': '{n} open session(s) here will keep running.',
@@ -932,14 +935,18 @@ export const EN_DICT = Object.freeze({
   '，详见日志面板': ' — see the log panel',
   '📁 {n} 个已连接的文件夹找不到了（被删、改名或外置盘没挂上）——恢复后点「重新检查」，不再需要的在「管理工作区」里删掉':
     '📁 {n} connected folder(s) can\'t be found (deleted, renamed, or the drive isn\'t mounted) — tap "Check again" once they\'re back, or remove the ones you no longer need in "Manage workspaces"',
-  // 告警行内的三个动作（#301）
+  // 告警行内的动作（#301 / #355）
   '管理工作区': 'Manage workspaces',
   '重新检查': 'Check again',
+  '从列表移除缺失项': 'Remove missing from list',
   '忽略': 'Dismiss',
   '检查中…': 'Checking…',
+  '移除中…': 'Removing…',
   '检查失败': 'Check failed',
+  '移除失败': 'Remove failed',
   '还有 {n} 个找不到': '{n} still missing',
   '都找到了': 'All found',
+  '已移除 {n} 项': 'Removed {n}',
 
   // —— 安全日志段（审计记录 → 人话）——
   '安全日志': 'Security log',
