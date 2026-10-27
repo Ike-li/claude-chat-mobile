@@ -209,10 +209,11 @@ export function createTaskStatusController(context, {
         // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
         // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
         const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
-        // 头行容器不挂 role=button：展开热区是左侧 expand 按钮，右侧「停」是兄弟 button，避免嵌套。
-        const row = createElement('<div class="px-2 py-1.5 select-none" data-testid="bg-task-row"></div>');
+        // 头行可点展开（含 meta），左侧 expand 按钮保留键盘/aria；右侧「停」是兄弟 button，避免嵌套。
+        // 整行 click 恢复 Playwright/触控中心点命中；expand 上 stopPropagation 防双触发 toggle。
+        const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
         const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
-        const expandBtn = createElement('<button type="button" class="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer"></button>');
+        const expandBtn = createElement('<button type="button" class="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer" data-testid="bg-task-expand"></button>');
         expandBtn.setAttribute('aria-expanded', String(isActive));
         const rowChevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
         rowChevron.textContent = isActive ? '▾' : '▸';
@@ -267,8 +268,16 @@ export function createTaskStatusController(context, {
         } else {
           row.append(top);
         }
-        // 左侧 expand 按钮展开/收起详情（原生 button 自带键盘可达）；与「停」兄弟，无嵌套。
-        expandBtn.addEventListener('click', () => toggleDetail(taskId));
+        // 整行可点展开（meta 也在热区内）；「停」已 stopPropagation。expand 自带键盘/aria，
+        // 其 click 须 stopPropagation，否则会冒泡到 row 再 toggle 一次（展开立刻收起）。
+        expandBtn.addEventListener('click', (e) => {
+          e?.stopPropagation?.();
+          toggleDetail(taskId);
+        });
+        row.addEventListener('click', (e) => {
+          if (e?.target?.closest?.('[data-testid="bg-task-stop"]')) return;
+          toggleDetail(taskId);
+        });
         card.appendChild(row);
         if (isActive) {
           const panel = buildDetailPanel(taskId);

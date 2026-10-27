@@ -27,20 +27,19 @@ test('#402 syncBannerToggle 同步 aria-expanded 与 chevron ▸/▾', () => {
   assert.match(taskStatusJs, /setAttribute\('aria-expanded', String\(expanded\)\)/);
 });
 
-test('#402 bg-task-row 左侧 expand 按钮带 aria-expanded 与 ▸/▾，停钮为兄弟', () => {
+test('#402 bg-task-row 左侧 expand 按钮带 aria-expanded 与 ▸/▾，停钮为兄弟；整行也可点', () => {
   assert.match(
     taskStatusJs,
-    /createElement\('<button type="button" class="flex items-center gap-1\.5 flex-1 min-w-0 text-left cursor-pointer"><\/button>'\)/,
+    /createElement\('<button type="button" class="flex items-center gap-1\.5 flex-1 min-w-0 text-left cursor-pointer" data-testid="bg-task-expand"><\/button>'\)/,
   );
   assert.match(taskStatusJs, /expandBtn\.setAttribute\('aria-expanded', String\(isActive\)\)/);
   assert.match(taskStatusJs, /rowChevron\.textContent = isActive \? '▾' : '▸'/);
   assert.match(taskStatusJs, /top\.append\(expandBtn, \.\.\.tail\)/);
   assert.match(taskStatusJs, /expandBtn\.addEventListener\('click'/);
-  // 不再在整行 div 上绑 click（避免与停钮语义冲突）
-  assert.doesNotMatch(
-    taskStatusJs,
-    /data-testid="bg-task-row"[\s\S]{0,1200}?row\.addEventListener\('click'/,
-  );
+  assert.match(taskStatusJs, /e\?\.stopPropagation\?\.\(\)/);
+  // 整行 click 恢复 meta/中心点命中；停钮 closest 排除
+  assert.match(taskStatusJs, /row\.addEventListener\('click'/);
+  assert.match(taskStatusJs, /e\?\.target\?\.closest\?\.\('\[data-testid="bg-task-stop"\]'\)/);
 });
 
 test('#402 .tfc-row-btn 有 chevron 与 aria-expanded 同步', () => {

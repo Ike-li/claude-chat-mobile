@@ -593,6 +593,7 @@ test('#402 bg-task-row expand button exposes aria-expanded and ▸/▾', () => {
   const expand = rowExpandBtn(context.dom.taskProgressList.children[0]);
   assert.ok(expand, 'row must have expand button');
   assert.match(String(expand.html || ''), /type="button"/);
+  assert.match(String(expand.html || ''), /data-testid="bg-task-expand"/);
   assert.equal(expand.getAttribute('aria-expanded'), 'false');
   assert.equal(expand.children[0]?.textContent, '▸');
 
@@ -601,4 +602,26 @@ test('#402 bg-task-row expand button exposes aria-expanded and ▸/▾', () => {
   assert.equal(expandOpen.getAttribute('aria-expanded'), 'true');
   assert.equal(expandOpen.children[0]?.textContent, '▾');
   assert.ok(cardDetail(context.dom.taskProgressList.children[0]), 'detail opens');
+});
+
+test('#402 bg-task-row click (not only expand btn) opens detail panel', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }] },
+  });
+  const row = cardHeaderRow(context.dom.taskProgressList.children[0]);
+  assert.ok(row, 'bg-task-row header present');
+  row.click();
+  assert.ok(cardDetail(context.dom.taskProgressList.children[0]), 'row click opens detail');
+  // 再点同行收起（回归：整行热区，不只 expand 按钮）
+  cardHeaderRow(context.dom.taskProgressList.children[0]).click();
+  assert.equal(cardDetail(context.dom.taskProgressList.children[0]), null, 'row click again collapses');
 });
