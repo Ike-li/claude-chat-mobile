@@ -3,7 +3,7 @@ import { resolveSheetDragEnd } from '../logic/panel-state.js';
 import { focusInto } from './focus-layers.js';
 import { acquireSheetScrollLock, releaseSheetScrollLock } from './sheet-scroll-lock.js';
 
-// 底部 sheet 的开合原语（焦点管理 + Tab 陷阱 + 导航层抬升 + 背景滚动锁 + 把手下拉）与建立其上的通用确认弹窗。
+// 底部 sheet 的开合原语（焦点管理 + Tab 陷阱 + Esc 关闭 + 导航层抬升 + 背景滚动锁 + 把手下拉）与建立其上的通用确认弹窗。
 //
 // 【为什么合成一个模块】appConfirm 只是 openSheet 的一个应用：它的 confirmResolve 与 sheet 的
 // sheetFocusPrev/sheetKeyHandler 生命周期完全绑定（开=存焦点+挂键盘钩子，关=还焦点+摘钩子+兑现
@@ -92,8 +92,18 @@ export function createSheetController(context, {
     });
     // 每层自己的 handler，只在自己的 sheet-open 期间生效——同时挂多个不冲突：非本层的 Tab
     // 事件命中不了本层的 first/last，直接 no-op（见上方模块注释）。
+    // #380：同一套 keydown 顺带处理 Esc——只关栈顶、走 requestGestureDismiss（含业务自定义 close），
+    // 审批/提问经 blockingSheets() 排除（不静默关、也不代点批准/拒绝）。
     const keyHandler = (e) => {
-      if (e.key !== 'Tab' || !el.classList.contains('sheet-open')) return;
+      if (!el.classList.contains('sheet-open')) return;
+      if (e.key === 'Escape') {
+        if (sheetStack[sheetStack.length - 1]?.el !== el) return; // 只关栈顶一层
+        e.preventDefault();
+        if (blockingSheets().some(b => b === el)) return; // 等你答复：Esc 不是取消
+        requestGestureDismiss(el);
+        return;
+      }
+      if (e.key !== 'Tab') return;
       const list = sheetFocusables(el);
       if (!list.length) return;
       const first = list[0], last = list[list.length - 1];
@@ -328,6 +338,8 @@ export function createSheetController(context, {
   if (confirmCancel) confirmCancel.onclick = () => settleConfirm(false);
   // 点遮罩空白处 = 取消（对齐移动端 sheet 习惯；permModal 因审批语义不做，这里是普通确认、可以做）
   if (confirmModal) confirmModal.addEventListener('click', e => { if (e.target === confirmModal) settleConfirm(false); });
+  // #380：Esc / 把手（若有）与点遮罩同义——兑现 false，避免裸 closeSheet 把 Promise 挂死
+  if (confirmModal) setGestureDismiss(confirmModal, () => settleConfirm(false));
 
   const controller = {
     openSheet,
