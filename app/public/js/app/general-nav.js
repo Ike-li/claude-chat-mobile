@@ -64,6 +64,8 @@ export function createGeneralNav({
     // 切层后滚回顶部：L2 页可能被滚到过底部，返回时若不复位，L1 会停在一片空白上。
     const body = $('generalSheetBody');
     if (body) body.scrollTop = 0;
+    // 回 L1 也算离开上一页：让 onEnterPage 做「离开页」清理（收码、清推送回执等）
+    onEnterPage(null);
   }
 
   /**

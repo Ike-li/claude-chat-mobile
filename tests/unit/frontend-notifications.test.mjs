@@ -383,7 +383,6 @@ test('notification controller requestSubscription() 是显式启用：清掉 opt
         return { ok: true, json: async () => ({ key: 'test-vapid-key' }) };
       },
       storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
-      alert: () => {},
     },
   });
   const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
@@ -464,7 +463,6 @@ test('notification controller keeps the push bell reachable after permission is 
       window: { isSecureContext: true, PushManager: function () {}, matchMedia: () => ({ matches: false }) },
       Notification: NotificationMock,
       fetch: async () => ({ ok: true, json: async () => ({ key: 'test-vapid-key' }) }),
-      alert: () => {},
     },
   });
   const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
@@ -483,10 +481,65 @@ test('notification controller routes the bell to the injected action instead of 
   const btnPush = { classList: { add() {}, remove() {} } };
   const context = createAppContext({
     dom: { btnPush },
-    dependencies: { navigator: {}, window: {}, alert: () => {} },
+    dependencies: { navigator: {}, window: {} },
   });
   createNotificationController(context, { bellAction: () => clicks.push('routed') });
 
   btnPush.onclick();
   assert.deepEqual(clicks, ['routed']);
+});
+
+// #381：推送订阅反馈不得再弹原生 alert——设置 sheet 盖住消息流时，结果必须写在
+// #pushSubscribeResult（与 #hooksBridgeResult 同构的行内 role=status）。
+test('notification controller writes subscribe feedback to inline status, not window.alert', async () => {
+  const alerts = [];
+  const bars = [];
+  const classes = new Set(['hidden']);
+  const pushSubscribeResult = {
+    textContent: '',
+    className: 'hidden',
+    classList: {
+      add: (...names) => names.forEach(n => classes.add(n)),
+      remove: (...names) => names.forEach(n => classes.delete(n)),
+      contains: (n) => classes.has(n),
+    },
+  };
+  class NotificationMock {
+    static permission = 'default';
+    static async requestPermission() { return 'denied'; }
+  }
+  const context = createAppContext({
+    dom: {
+      btnPush: { classList: { add() {}, remove() {} } },
+      pushSubscribeResult,
+    },
+    dependencies: {
+      navigator: { serviceWorker: {}, userAgent: 'Mozilla/5.0 (Linux; Android 14)' },
+      window: {
+        isSecureContext: true,
+        PushManager: function () {},
+        matchMedia: () => ({ matches: false }),
+        alert: (msg) => alerts.push(msg),
+      },
+      Notification: NotificationMock,
+      fetch: async () => ({ ok: true, json: async () => ({ key: 'test-vapid-key' }) }),
+    },
+  });
+  const notifications = createNotificationController(context, {
+    autoBind: false,
+    getToken: () => '',
+    addBar: (msg, cls) => bars.push({ msg, cls }),
+  });
+
+  await notifications.setup();
+  await notifications.requestSubscription();
+
+  assert.equal(alerts.length, 0, '不得再调用 window.alert');
+  assert.match(pushSubscribeResult.textContent, /权限已被拒绝/, `行内回执应写出拒绝原因，实际：${pushSubscribeResult.textContent}`);
+  assert.equal(classes.has('hidden'), false, '回执应可见');
+  assert.equal(bars.length, 1, '仍写 addBar，关掉面板后可回看');
+
+  notifications.clearSubscribeResult();
+  assert.equal(pushSubscribeResult.textContent, '');
+  assert.equal(classes.has('hidden') || /\bhidden\b/.test(pushSubscribeResult.className), true, '清除后应隐藏');
 });
