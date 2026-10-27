@@ -256,7 +256,9 @@ export function createApprovalController(context, {
       // 没勾「总是允许」时 persistRules 恒 false——单选钮的状态不参与。
       persistRules: permAlways.checked && permPersistAvailable
         && permPersistWrap?.querySelector?.('input[value="persist"]')?.checked === true,
-      instanceId: getViewingInstanceId(), // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
+      // 路由到【审批所属】实例，不是当前查看实例。nav-escape 允许审批卡开着切会话，
+      // 此时 viewing ≠ owning；用 viewing 会静默打到错误实例（#388）。
+      instanceId: activePerm.instanceId ?? getViewingInstanceId(),
       // op：回传本卡片渲染时所见的确切操作（审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
       op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
@@ -330,7 +332,8 @@ export function createApprovalController(context, {
       questions.sort((a, b) => a.questionIndex - b.questionIndex);
       // 服务端说仍未作答的题（含还没送到的）；旧 server 不带这个字段时按整组算
       const open = Array.isArray(next.openQuestionIndexes) ? next.openQuestionIndexes : Array.from({ length: next.questionCount }, (_, k) => k);
-      activeGroup = { key, questions, drafts: draftsFor(key), cursor: 0, openIndexes: new Set(open) };
+      // instanceId 取自首题（同组各题同属一实例）；作答路由用它，不取 viewing（#388）
+      activeGroup = { key, questions, drafts: draftsFor(key), cursor: 0, openIndexes: new Set(open), instanceId: next.instanceId ?? null };
       paintGroup();
     } else {
       activeQuestion = next;
@@ -524,7 +527,7 @@ export function createApprovalController(context, {
     // 先标记已答再 emit/关窗（同 answerQuestion）；整组 key 入库即覆盖组里每一个 #i
     markQuestionAnswered(g.key);
     groupDrafts.delete(g.key);
-    socket.emit('user:answer', { requestId: g.key, answers, instanceId: getViewingInstanceId() });
+    socket.emit('user:answer', { requestId: g.key, answers, instanceId: g.instanceId ?? getViewingInstanceId() });
     const labels = g.questions.map(q => `「${questionDraftLabel(q, g.drafts.get(q.questionIndex))}」`);
     finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
@@ -544,7 +547,7 @@ export function createApprovalController(context, {
     if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
     // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
     markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: getViewingInstanceId() }); // 台阶3 路由
+    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
     const label = optionLabel(activeQuestion.options[index]);
     finishQuestionUI(`${t('已选择：')}${label}`);
   }
@@ -556,7 +559,7 @@ export function createApprovalController(context, {
     if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
     const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
     markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: getViewingInstanceId() });
+    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
     const labels = indexes.map(i => optionLabel(activeQuestion.options[i])).filter(Boolean);
     finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
@@ -575,7 +578,7 @@ export function createApprovalController(context, {
     }
     if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
     markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: getViewingInstanceId() });
+    socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
     finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
   }
   if (questionMultiSubmit) questionMultiSubmit.onclick = () => (activeGroup ? goToGroupStep(activeGroup.cursor + 1) : answerQuestionMulti());
@@ -664,20 +667,28 @@ export function createApprovalController(context, {
       if (activeGroup?.questions.some(q => q.requestId === requestId)) return true;
       return isQuestionAnswered(requestId);
     },
-    enqueuePermission(p) { permQueue.push(p); showNextPerm(); },
-    enqueueQuestion(p) {
+    // instanceId：事件信封上的所属实例（handler 第二参传入）。作答必须回这个实例，
+    // 不能用 getViewingInstanceId()——nav-escape 下审批卡可盖在别的会话上（#388）。
+    enqueuePermission(p, instanceId) {
+      permQueue.push({ ...p, instanceId: instanceId ?? p.instanceId ?? null });
+      showNextPerm();
+    },
+    enqueueQuestion(p, instanceId) {
+      const entry = { ...p, instanceId: instanceId ?? p.instanceId ?? null };
       // 同组后到的题（服务端逐题下发，紧跟第一题）并进当前组卡，不另排队
       const g = activeGroup;
-      if (g && questionGroupKey(p.requestId) === g.key) {
-        let at = g.questions.findIndex(q => q.questionIndex > p.questionIndex);
+      if (g && questionGroupKey(entry.requestId) === g.key) {
+        let at = g.questions.findIndex(q => q.questionIndex > entry.questionIndex);
         if (at === -1) at = g.questions.length;
-        g.questions.splice(at, 0, p);
+        g.questions.splice(at, 0, entry);
         if (at <= g.cursor) g.cursor++;
+        // 组卡若首题没带 instanceId（旧路径），后到的题补上
+        if (g.instanceId == null && entry.instanceId != null) g.instanceId = entry.instanceId;
         paintGroupTabs();
         if (g.cursor >= g.questions.length) paintGroupReview();
         return;
       }
-      questionQueue.push(p);
+      questionQueue.push(entry);
       showNextQuestion();
     },
     verifyPermIntegrity,
