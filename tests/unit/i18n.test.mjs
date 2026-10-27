@@ -173,6 +173,17 @@ test.describe('confirmAndWriteLangPref：先确认再落盘，取消不半切换
     assert.equal(await confirmAndWriteLangPref({ lang: 'en' }), 'cancelled');
     assert.equal(await confirmAndWriteLangPref({ lang: 'en', confirm: async () => true }), 'cancelled');
   });
+
+  test('同意且 write、但无 reload → 落盘并返回 written（不谎报 reloaded）', async () => {
+    const store = { [LANG_STORAGE_KEY]: 'zh' };
+    const result = await confirmAndWriteLangPref({
+      lang: 'en',
+      confirm: async () => true,
+      write: (lang) => writeLangPref((k, v) => { store[k] = v; }, lang),
+    });
+    assert.equal(result, 'written');
+    assert.equal(store[LANG_STORAGE_KEY], 'en');
+  });
 });
 
 test.describe('登录帮助把 AUTH_TOKEN 指到现行配置文件', () => {

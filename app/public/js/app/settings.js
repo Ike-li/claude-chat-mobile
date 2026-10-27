@@ -325,6 +325,8 @@ export function createSettingsController(context, {
       dom.prefLangGroup.onclick = (e) => {
         const lang = e.target?.closest?.('[data-lang]')?.dataset?.lang;
         if (!lang) return;
+        // 已是当前档：不再弹确认（同语言无切换可做）。
+        if (lang === langPref.get()) return;
         // langPref.set 先确认刷新，同意后才落盘并 reload；取消时 storage 未改。
         // 等 set 结束后再重绘：取消后磁贴仍跟旧偏好一致；同意则页面已 reload，这行通常到不了。
         void Promise.resolve(langPref.set(lang)).finally(() => renderLangOptions());
