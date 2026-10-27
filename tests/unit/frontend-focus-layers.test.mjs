@@ -94,4 +94,30 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     assert.equal(h.header.inert, false);
     assert.equal(h.settingsSheet.inert, true);
   });
+
+  // #393：sessionBlockedSurface 与令牌门同走 createGateFocusController；开着时背景 inert，关后还焦点。
+  test('sessionBlockedSurface 开着时背景 inert，关掉后恢复', () => {
+    const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const header = fakeEl('header');
+    const composer = fakeEl('composer');
+    const body = fakeEl('body');
+    body.children = [surface, header, composer];
+    let focused = body;
+    surface.focus = () => { focused = surface; };
+    header.focus = () => { focused = header; };
+    const doc = { body, get activeElement() { return focused; } };
+    const ctl = createGateFocusController({ gates: [surface], doc, Observer: null });
+    focused = header;
+    surface.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(surface.inert, false);
+    assert.equal(header.inert, true, '落地页开着时顶栏不该还能被 Tab 到');
+    assert.equal(composer.inert, true);
+    assert.equal(focused, surface, '焦点应移入落地页');
+    surface.classList.add('hidden');
+    ctl.sync();
+    assert.equal(header.inert, false);
+    assert.equal(composer.inert, false);
+    assert.equal(focused, header, '关掉后焦点应还给打开前的元素');
+  });
 });

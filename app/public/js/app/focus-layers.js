@@ -52,9 +52,9 @@ export function trapTabIn(root, ev, doc) {
   }
 }
 
-// 全屏门：令牌门、Access 重登、等待授权、被拒、访问帮助。它们盖住整屏，背后的东西点不到，却仍能被
+// 全屏门：令牌门、Access 重登、会话打不开落地页、等待授权、被拒、访问帮助。它们盖住整屏，背后的东西点不到，却仍能被
 // Tab 到。最上面那层开着时，body 下其余子节点一律 inert。几层同为 z-50，谁在上面看 DOM 顺序——
-// gates 按 DOM 顺序传，取最后一个开着的。
+// gates 按 DOM 顺序传，取最后一个开着的（会话打不开页是 z-20，仍按 DOM 序挂进同一列表）。
 //
 // 显隐由各处直接切 hidden class，散在十几个调用点；用 MutationObserver 盯 class，不要求每个调用点
 // 都记得通知一声。不盯 body 的子节点增删：剪贴板兜底会临时往 body 挂一个 textarea 再 focus 它，
