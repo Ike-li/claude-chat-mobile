@@ -1149,6 +1149,7 @@ export const EN_DICT = Object.freeze({
   '开启后，需要你审批、有提问、任务完成时手机会收到通知': 'Once on, your phone is notified for approvals, questions, and finished tasks',
   '只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。': 'Affects only sessions you start by running claude yourself in a computer terminal — those could never send notifications before. Sessions started from your phone or the web already notify you and are unaffected by this switch.',
   '✓ 已刷新': '✓ Refreshed',
+  '刷新失败': 'Refresh failed',
   '电脑终端里跑的会话，完成或需要你时通知手机': 'Sessions running in your computer terminal notify your phone when they finish or need you',
   '提示：开启「终端会话推送」后，电脑终端里的会话跑完会通知你手机（设置 → 服务状态）': 'Tip: turn on Terminal session alerts and your phone gets notified when a session running in your computer terminal finishes (Settings → Service status)',
   '已停用（CLI_HOOKS_BRIDGE=off）': 'Disabled (CLI_HOOKS_BRIDGE=off)',

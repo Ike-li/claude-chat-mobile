@@ -8261,6 +8261,47 @@ import { createGateFocusController } from './app/focus-layers.js';
   // （常驻，已有会话里也能用）。spinEl 单独传：只转图标，避免整块按钮旋转。
   function wireConfigRefreshButton(btn, spinEl = btn) {
     if (!btn) return;
+    // 图标字形节点：settings 用 [data-spin]；compose ↻ 无 data-spin，落在内层 span（spinEl 是整颗按钮）。
+    const iconGlyphEl = () => btn.querySelector('[data-spin]')
+      || (spinEl !== btn ? spinEl : null)
+      || btn.querySelector('span')
+      || btn;
+    // 有 [data-label] 改文案；纯图标钮改字形+色（手机无 hover，只改 title 等于没反馈）。
+    // 超时 / ack ok:false 必须同样可见，不能只 restore（面板盖住消息流时 addBar 也看不见）。
+    const showFeedback = (ok) => {
+      const labelEl = btn.querySelector('[data-label]');
+      if (labelEl) {
+        if (labelEl.dataset.reverting === '1') return;
+        const original = labelEl.textContent;
+        labelEl.dataset.reverting = '1';
+        labelEl.textContent = ok ? t('✓ 已刷新') : t('刷新失败');
+        setTimeout(() => {
+          labelEl.textContent = original;
+          delete labelEl.dataset.reverting;
+        }, 2000);
+        return;
+      }
+      if (btn.dataset.iconReverting === '1') return;
+      const glyph = iconGlyphEl();
+      const originalText = glyph.textContent;
+      const originalTitle = btn.getAttribute('title') || '';
+      const hadAria = btn.hasAttribute('aria-label');
+      const originalAria = btn.getAttribute('aria-label') || '';
+      btn.dataset.iconReverting = '1';
+      glyph.classList.remove('text-success', 'text-danger');
+      glyph.classList.add(ok ? 'text-success' : 'text-danger');
+      glyph.textContent = ok ? '✓' : '✗';
+      const feedbackTitle = ok ? t('✓ 已刷新') : t('刷新失败');
+      btn.setAttribute('title', feedbackTitle);
+      if (hadAria) btn.setAttribute('aria-label', feedbackTitle);
+      setTimeout(() => {
+        glyph.textContent = originalText;
+        glyph.classList.remove('text-success', 'text-danger');
+        btn.setAttribute('title', originalTitle);
+        if (hadAria) btn.setAttribute('aria-label', originalAria);
+        delete btn.dataset.iconReverting;
+      }, 2000);
+    };
     btn.onclick = () => {
       if (btn.disabled) return;
       haptic('tap');
@@ -8271,36 +8312,17 @@ import { createGateFocusController } from './app/focus-layers.js';
         btn.disabled = false;
         spinEl.classList.remove('animate-spin');
       };
-      socket.emit('config:refresh', { cwd: currentCwd }, () => {
+      socket.emit('config:refresh', { cwd: currentCwd }, (res) => {
         acked = true;
         restore();
-        // 成功反馈：有 [data-label] 就改文案；图标按钮则改 title 两秒（面板盖住消息流时 addBar 看不见）。
-        const labelEl = btn.querySelector('[data-label]');
-        if (labelEl) {
-          if (labelEl.dataset.reverting === '1') return;
-          const original = labelEl.textContent;
-          labelEl.dataset.reverting = '1';
-          labelEl.textContent = t('✓ 已刷新');
-          setTimeout(() => {
-            labelEl.textContent = original;
-            delete labelEl.dataset.reverting;
-          }, 2000);
-          return;
-        }
-        if (btn.dataset.titleReverting === '1') return;
-        const originalTitle = btn.getAttribute('title') || '';
-        btn.dataset.titleReverting = '1';
-        btn.setAttribute('title', t('✓ 已刷新'));
-        setTimeout(() => {
-          btn.setAttribute('title', originalTitle);
-          delete btn.dataset.titleReverting;
-        }, 2000);
+        showFeedback(res?.ok !== false);
       });
       // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
-      // ack 丢了也不能让按钮永久卡在禁用+转圈态。
+      // ack 丢了也不能让按钮永久卡在禁用+转圈态；超时须在图标上显失败，不只靠 addBar。
       setTimeout(() => {
         if (acked) return;
         restore();
+        showFeedback(false);
         addBar(t('刷新无响应，请检查网络后重试'), 'text-danger');
       }, 4000);
     };
