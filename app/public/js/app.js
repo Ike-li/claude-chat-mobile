@@ -7510,10 +7510,24 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       head.querySelector('[data-testid="unread-mark"]')?.remove();
       if (!on) return;
-      const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent"></span>`);
+      // #383：chip 本身是可见慢路径（同目录头 dir-unread）——只挂长按/「⋯」时不知道手势的人永远发现不了
+      // 「未读状态可以手动管」。嵌在会话打开按钮里，不能再套 <button>，用 span role=button + 拦住冒泡。
+      const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent" role="button" tabindex="0"></span>`);
       mark.textContent = t('未读');
-      mark.title = t('未读');
-      mark.setAttribute('aria-label', t('未读'));
+      // 手机没有 hover，title ≈ 不存在；aria-label 是读屏听到的那句，补「点按标为已读」才说得清动作。
+      const markLabel = `${t('未读')} · ${t('点按标为已读')}`;
+      mark.title = markLabel;
+      mark.setAttribute('aria-label', markLabel);
+      const onMarkActivate = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        haptic('tap');
+        unread.setManualUnread(s.id, false);
+        applyUnreadMark();
+        refreshDirUnreadCounts();
+      };
+      mark.onclick = onMarkActivate;
+      mark.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') onMarkActivate(e); };
       titleSpan.after(mark);
     };
     applyUnreadMark();
@@ -7555,8 +7569,9 @@ import { createGateFocusController } from './app/focus-layers.js';
     };
     rowContent.appendChild(btn);
 
-    // 行尾「⋯」是这一行唯一的入口（2026-10-25，对齐桌面端）：此前 ✕、🗑、红色侧滑「关闭」三处并存，侧滑还和
+    // 行尾「⋯」是完整操作入口（2026-10-25，对齐桌面端）：此前 ✕、🗑、红色侧滑「关闭」三处并存，侧滑还和
     // 抽屉的左滑收起抢同一次手势——露出按钮后多滑 30px 抽屉就被收走。长按不再有动作。
+    // #383：未读 chip 另开一条可见慢路径（点按 → 标为已读）；「标为未读」仍走「⋯」（chip 只在未读时出现）。
     // 哪些项、何时灰掉见 logic 的 sessionRowMenuItems。
     const menuItems = () => sessionRowMenuItems({
       hasId: Boolean(s.id),
