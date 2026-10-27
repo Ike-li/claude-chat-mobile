@@ -8421,7 +8421,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
     const on = st.enabled;
     const wtBtn = el(`<button type="button" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold active:scale-[0.98] transition-all ${on ? 'border-accent-bright bg-accent-wash text-accent-deep' : 'border-line-soft bg-surface text-ink-soft'}" data-testid="compose-worktree-toggle" aria-pressed="${on}">
-      <span class="inline-block w-3.5 h-3.5 rounded-[4px] border ${on ? 'bg-accent border-accent text-white' : 'border-line'} leading-[13px] text-[9px] text-center">${on ? '✓' : ''}</span>
+      <span class="inline-block w-3.5 h-3.5 rounded-[4px] border ${on ? 'bg-cta border-cta text-white' : 'border-line'} leading-[13px] text-[9px] text-center">${on ? '✓' : ''}</span>
       <span>${t('在新 worktree 里开')}</span>
     </button>`);
     wtBtn.onclick = (e) => {
