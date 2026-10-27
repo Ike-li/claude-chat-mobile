@@ -279,7 +279,7 @@
       <!-- #399：强拦截审批不画假拖拽把手（不可手势关闭） -->
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
       <!-- #377：队列进度（「第 N 条，后面还有 M 条」）；仅连续多张时显示，单条隐藏。放在可滚动内容区顶部。 -->
-      <div id="permQueueProgress" class="hidden text-xs text-ink-faint mb-1" data-testid="perm-queue-progress"></div>
+      <div id="permQueueProgress" class="hidden text-xs text-ink-faint mb-1" data-testid="perm-queue-progress" role="status"></div>
       <!-- Claude in Chrome 工具的一句话标题（「Claude in Chrome 想在 example.org 上读取页面」），其它工具隐藏。
            文案由 logic/permissions.js 的 describeChromePermission 算，showNextPerm 每张卡片重写。 -->
       <div id="permTitle" class="hidden text-sm mb-1 text-ink" data-testid="perm-title"></div>
@@ -340,7 +340,7 @@
       <!-- #399：强拦截提问不画假拖拽把手（不可手势关闭） -->
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
       <!-- #377：队列进度；仅连续多张提问浮层时显示（组卡内部题数仍走 questionTabs）。 -->
-      <div id="questionQueueProgress" class="hidden text-xs text-ink-faint mb-1" data-testid="question-queue-progress"></div>
+      <div id="questionQueueProgress" class="hidden text-xs text-ink-faint mb-1" data-testid="question-queue-progress" role="status"></div>
       <!-- 多题提问的题目标签栏，对齐 CLI 的「☐ 题1  ☑ 题2  ✓ Submit」；单题时隐藏 -->
       <div id="questionTabs" class="hidden flex gap-1.5 overflow-x-auto pb-1 mb-2"></div>
       <div id="questionHeader" class="hidden text-xs text-ink-faint mb-1"></div>

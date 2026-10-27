@@ -1397,3 +1397,53 @@ test('连续多条提问显示队列进度；clearAll 清掉', () => {
   approvals.clearAll();
   assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
 });
+
+test('卡仍开着时 resolve 掉排队项：M 下降；只剩当前卡时隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  // 多设备/回放：别的客户端已处理 perm_2，本机仍停在第 1 张。
+  approvals.resolvePermission('perm_2');
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolvePermission('perm_3');
+  // 队列空、当前卡仍开 → 整批看起来又只剩一张，进度应隐藏（与单条 enqueue 一致）。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问卡仍开着时 resolve 掉排队项：M 下降并最终隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_c#0', text: 'Q3', options: ['E'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 2 条');
+
+  approvals.resolveQuestion('toolu_b#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_c#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('组卡仍开着时 resolve 掉后面排队的单题：M 下降', () => {
+  const { approvals, byId } = mount();
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  // 同组两题合成一张组卡后队列空 → 无进度；再排队一张别的单题。
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+  approvals.enqueueQuestion({ requestId: 'toolu_solo#0', text: 'Solo', options: ['X'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_solo#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null, '组卡单独留下时应隐藏进度');
+  assert.equal(approvals.hasPending(), true, '组卡仍在');
+});

@@ -183,9 +183,11 @@ export function createApprovalController(context, {
       el.classList.add('hidden');
       return;
     }
-    el.textContent = t('第 {n} 条，后面还有 {m} 条')
-      .replace('{n}', String(ordinal))
-      .replace('{m}', String(remaining));
+    // m=0 用独立文案，避免 EN「0 more remaining」读起来像还在排队。
+    const raw = remaining === 0
+      ? t('第 {n} 条，后面还有 0 条')
+      : t('第 {n} 条，后面还有 {m} 条').replace('{m}', String(remaining));
+    el.textContent = raw.replace('{n}', String(ordinal));
     el.classList.remove('hidden');
   }
   function resetPermQueueProgress() {
@@ -852,12 +854,17 @@ export function createApprovalController(context, {
     resolvePermission(requestId) {
       if (activePerm?.requestId === requestId) {
         dropActivePerm();
-      } else {
-        const idx = permQueue.findIndex(r => r.requestId === requestId);
-        if (idx !== -1) permQueue.splice(idx, 1);
+        permIntegrityMismatched.delete(requestId);
+        showNextPerm();
+        return;
       }
+      const idx = permQueue.findIndex(r => r.requestId === requestId);
+      if (idx !== -1) permQueue.splice(idx, 1);
       permIntegrityMismatched.delete(requestId);
-      showNextPerm();
+      // #377：多设备/回放可在卡仍开着时削掉排队项——与 enqueue 对称，刷新「后面还有 M 条」。
+      // 只有丢掉当前卡时才 showNext 晋升；卡仍开着只刷进度。
+      if (activePerm) paintQueueProgress(permQueueProgress, permBatchOrdinal, permQueue.length);
+      else showNextPerm();
     },
     // question requestId 格式 '${toolUseID}#i'；单题 resolved 用 '#i'，整组终态用 toolUseID。
     resolveQuestion(requestId) {
@@ -867,16 +874,24 @@ export function createApprovalController(context, {
       if (activeQuestion && matchQ(activeQuestion.requestId)) {
         markQuestionAnswered(activeQuestion.requestId);
         dropActiveQuestion();
-      } else {
-        // 可能一次终态清掉队列里同 tool 的多题
-        for (let i = questionQueue.length - 1; i >= 0; i--) {
-          if (matchQ(questionQueue[i].requestId)) {
-            markQuestionAnswered(questionQueue[i].requestId);
-            questionQueue.splice(i, 1);
-          }
+        showNextQuestion();
+        return;
+      }
+      // 可能一次终态清掉队列里同 tool 的多题
+      let removedQueued = false;
+      for (let i = questionQueue.length - 1; i >= 0; i--) {
+        if (matchQ(questionQueue[i].requestId)) {
+          markQuestionAnswered(questionQueue[i].requestId);
+          questionQueue.splice(i, 1);
+          removedQueued = true;
         }
       }
-      showNextQuestion();
+      // resolveInActiveGroup 可能已 drop 组卡 → 走 showNext 晋升；卡仍开着则只刷 M（与 enqueue 对称）。
+      if (activeQuestion || activeGroup) {
+        if (removedQueued) paintQueueProgress(questionQueueProgress, questionBatchOrdinal, questionQueue.length);
+      } else {
+        showNextQuestion();
+      }
     },
     // 清空两条队列与当前卡片。epoch 重置 / result / error / 切会话四处共用同一份实现——
     // 此前是四份逐字复制，漏抄一行就是弹窗关不掉。
