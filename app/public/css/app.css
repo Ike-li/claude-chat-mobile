@@ -946,16 +946,32 @@ header {
     100% { background-position: -150% 0; }
   }
 
-  /* ── 尊重用户减弱动效偏好 ── */
+  /* ── 尊重用户减弱动效偏好 ──
+     #384：补全 sheet 之外仍未降级的动画——dashboard 入场、status-pill 闪烁、
+     thinking shimmer、未读锚点高亮，以及 Tailwind 的 animate-spin / animate-pulse
+     （原先只豁免了 #connBanner 那一颗）。thinking-shimmer 降级后仍保留 ::before
+     「思考中 · 」静态前缀。 */
   @media (prefers-reduced-motion: reduce) {
     .ccm-sheet, .ccm-sheet > div,
     #leftSidebar, #settingsSheet, #generalSheet {
       transition: none !important;
     }
-    #connBanner .animate-spin {
+    .animate-spin, .animate-pulse {
       animation: none !important;
     }
     .skeleton-shimmer {
+      animation: none !important;
+    }
+    .dashboard-container {
+      animation: none !important;
+    }
+    .status-pill-chip.status-pill-flash {
+      animation: none !important;
+    }
+    details.thinking.thinking-live > summary {
+      animation: none !important;
+    }
+    .unread-anchor-flash {
       animation: none !important;
     }
   }
