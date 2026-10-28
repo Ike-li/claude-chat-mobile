@@ -978,6 +978,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       prefLangGroup: $('prefLangGroup'),
       prefThemeGroup: $('prefThemeGroup'),
       btnPush,
+      pushSubscribeResult: $('pushSubscribeResult'),
       taskProgressBanner,
       taskProgressText,
       taskBannerLabel,
@@ -1001,7 +1002,6 @@ import { createGateFocusController } from './app/focus-layers.js';
       DOMPurify,
       Notification: window.Notification,
       fetch: window.fetch.bind(window),
-      alert: window.alert.bind(window),
       console,
     },
   });
@@ -6718,7 +6718,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       btn.textContent = row.actionText;
       btn.onclick = async () => {
         btn.disabled = true;
-        // 开启那条走 requestSubscription，它自己用 explain()（系统 alert）说话——弹窗压在面板之上，看得见。
+        // 开启那条走 requestSubscription，它自己用 explain() 写 #pushSubscribeResult（#381，不再系统 alert）。
         if (!off) {
           await notifications.requestSubscription();
           btn.disabled = false;
@@ -7347,6 +7347,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     onEnterPage: page => {
       // 离开「接入与设备」页就收码：钥匙不该挂在一个用户以为已经翻过去的界面上
       if (page !== 'devices') hideQr();
+      // #381：推送订阅回执只在通知页有上下文；离开（含回 L1 的 page=null）就清掉
+      if (page !== 'notify') notifications.clearSubscribeResult();
       // MCP / skills 那一段按 cwd 归键，而切到一个**已经 live** 的会话不会重放 init——
       // 只靠 init 回调重画的话，换过工作区之后这一页还挂着上一处的数据。每次进页现取一次。
       if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }

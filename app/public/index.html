@@ -998,6 +998,10 @@
         <!-- #generalSectionPush 是侧栏 #btnPush 与铃铛的深链锚点，**不可改名** -->
         <div id="generalSectionPush" class="scroll-mt-8">
           <div id="pushStatusRow" class="mb-2"></div>
+          <!-- #381：推送订阅结果就地回执（替代原生 alert）。放在 #pushStatusRow 旁而不是其子节点——
+               renderPushStatusRow 用 replaceChildren 重画状态卡，放进去会被静默抹掉；
+               清除时机由代码显式决定（下次订阅操作 / 离开通知页），见 notifications.js explain()。 -->
+          <div id="pushSubscribeResult" class="hidden text-[11px] px-1 mt-1.5 break-words" data-testid="push-subscribe-result" role="status" aria-live="polite"></div>
         </div>
 
         <div>
