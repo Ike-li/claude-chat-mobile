@@ -46,6 +46,7 @@ function fakeEl(id = '') {
     setAttribute: (k, v) => el.attrs.set(k, v),
     querySelectorAll: () => [],
     appendChild: child => { el.children.push(child); return child; },
+    prepend: child => { el.children.unshift(child); return child; },
     after: sibling => { el.children.push(sibling); return sibling; },
     remove: () => {},
     focus: () => {},
@@ -259,6 +260,21 @@ test('多题组卡：整组提交路由到首题所属实例，不受 viewing �
   assert.equal(lastAnswer(emitted)?.requestId, 'toolu_g');
 });
 
+// ── #373：连续审批换卡回到顶部 ───────────────────────────────────────────────
+// answerPerm 里 closeSheet→showNextPerm→openSheet 同步发生，面板不隐藏、scrollTop 不会自己归零：
+// 上一张卡滚到按钮处作答，下一张卡就停在同一滚动位置，工具名与命令开头在视口外。
+test('连续审批：上一张卡滚到底后作答，下一张卡回到面板顶部（#373）', () => {
+  const { approvals, byId, emitted } = mount();
+  const panel = fakeEl('permPanel');
+  byId('permModal').firstElementChild = panel;
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2', { name: 'Write' }));
+  panel.scrollTop = 240;
+  byId('permAllow').onclick();
+  assert.equal(lastApprove(emitted)?.requestId, 'perm_1');
+  assert.equal(approvals.hasPending(), true, '第二张卡应接着弹出');
+  assert.equal(panel.scrollTop, 0, '第二张卡沿用了上一张卡的滚动位置');
+});
 
 // ── #371：断线/校验失败写进浮层内，不被 z-40 遮罩挡住 ─────────────────────────
 test('审批：断线点允许时浮层内可见错误，且不 emit', () => {
@@ -453,20 +469,26 @@ test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）
   approvals.cancelQuestionArming();
   const wrap0 = byId('questionOptions').children[0];
   const btn0 = wrap0.children[0];
+  // 子节点顺序：[☐/☑ 字形, description]；标签是 button 自己的文本
+  const mark = () => btn0.children[0];
   assert.equal(btn0.getAttribute('role'), 'checkbox');
   assert.equal(btn0.getAttribute('aria-checked'), 'false');
-  assert.equal(btn0.children[0].textContent, 'desc A');
+  assert.equal(btn0.textContent, 'A', '可访问名称里只该有选项标签');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true', '☐/☑ 字形应对读屏隐藏，勾选态交给 aria-checked');
+  assert.equal(btn0.children[1].textContent, 'desc A');
 
   btn0.onclick();
   assert.equal(btn0.getAttribute('aria-checked'), 'true');
-  assert.match(btn0.textContent, /^☑ /);
-  assert.equal(btn0.children.length, 1, '切换勾选后 description 仍在 button 内');
-  assert.equal(btn0.children[0].textContent, 'desc A');
+  assert.equal(mark().textContent, '☑ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true');
+  assert.equal(btn0.children.length, 2, '切换勾选后 description 仍在 button 内');
+  assert.equal(btn0.children[1].textContent, 'desc A');
   assert.equal(wrap0.classList.contains('border-accent'), true);
 
   btn0.onclick();
   assert.equal(btn0.getAttribute('aria-checked'), 'false');
-  assert.match(btn0.textContent, /^☐ /);
+  assert.equal(mark().textContent, '☐ ');
   assert.equal(wrap0.classList.contains('border-accent'), false);
 });
 
