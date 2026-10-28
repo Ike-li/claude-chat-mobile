@@ -32,6 +32,39 @@ test.describe('P0 流内 live 活动行恒在消息流末尾', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #379：流式气泡与秒表行都不挂 aria-live（高频重写会刷屏），读屏用户靠 #turnAnnouncer 在回合两端各听一句。
+  test('P0-33c 读屏播报：回合开始写一句「Claude 正在回复」，状态行对读屏可见', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    const announcer = page.getByTestId('turn-announcer');
+    await expect(announcer).toHaveAttribute('role', 'status');
+
+    // test:slow-echo 把回合撑住，开始端点可稳定断言
+    await page.locator('#input').fill('test:slow-echo');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(announcer).toHaveText('Claude 正在回复');
+    // 状态行不在 live region 里，但「正在停止…」/ 重试状态要对读屏可见
+    await expect(page.locator('#streamLiveStatusText')).not.toHaveAttribute('aria-hidden', /.*/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-33d 读屏播报：回合结束写一句，与回合状态条同文', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    const announcer = page.getByTestId('turn-announcer');
+
+    await sendChatMessage(page, 'test:settings-echo'); // 一轮正常走完、发 result 的最短场景
+    await waitForIdle(page);
+    await expect(announcer).not.toHaveText('Claude 正在回复');
+    const said = (await announcer.textContent())?.trim() ?? '';
+    expect(said, '回合结束应有一句播报').not.toBe('');
+    await expect(page.locator('#messages')).toContainText(said);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // busy 静默窗口切回：sync 判 reload → clearView → 按 server 权威 state=busy 重种 live 行 →
   // loadHistory 的 fragment 一次性落地。未修时整段历史插在 live 行【下面】。
   test('P0-33b busy 会话切回历史重载后 live 行仍在末尾', async ({ page }) => {

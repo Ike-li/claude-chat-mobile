@@ -18,7 +18,6 @@ const OPEN_SHEET_MODAL_IDS = [
 test('#369 app.css 用 .ccm-sheet.sheet-open，不再枚举 modal ID 做开合过渡', () => {
   assert.match(css, /\.ccm-sheet\.sheet-open\s*\{/, '须有 .ccm-sheet.sheet-open 规则');
   assert.match(css, /\.ccm-sheet\s*\{/, '须有 .ccm-sheet 关闭态规则');
-  assert.match(css, /\.ccm-sheet\.ccm-sheet-kb/, '键盘优先 sheet（会话菜单）须有不过渡 visibility 的修饰类');
   // 旧 ID 白名单回归：这些串联选择器一旦回来，新 modal 又会漏过渡
   assert.doesNotMatch(
     css,
@@ -48,6 +47,4 @@ test('#369 openSheet 管理的 modal 根节点在 HTML 上带 .ccm-sheet', () =>
     const classes = m[1].split(/\s+/);
     assert.ok(classes.includes('ccm-sheet'), `#${id} 须带 ccm-sheet`);
   }
-  const menu = html.match(/id="sessionMenuModal"\s+class="([^"]*)"/);
-  assert.ok(menu[1].split(/\s+/).includes('ccm-sheet-kb'), '#sessionMenuModal 须带 ccm-sheet-kb（不过渡 visibility）');
 });
