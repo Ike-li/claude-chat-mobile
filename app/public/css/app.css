@@ -19,6 +19,15 @@
   --shadow-card:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.06);
   --shadow-pop:0 8px 32px rgba(40,32,24,.16);
   --shadow-lift:0 4px 12px rgba(60,50,40,.08);
+  /* #368：交互日志抽屉固定用深色终端色板（设计 token 深色变体，非 Tailwind gray）。
+     浅/深主题都保持终端感；色相跟 --canvas/--ink 深色档对齐，避免冷灰块。 */
+  --console-bg:#121211;
+  --console-surface:#1C1B1A;
+  --console-sunk:#161514;
+  --console-line:#2E2C2A;
+  --console-ink:#EEEEEC;
+  --console-ink-soft:#A3A19D;
+  --console-ink-faint:#8F8C88;
 }
 
 /* 手动深色（data-theme=dark）与「跟随系统且系统为深色」共用同一套 token。
@@ -480,6 +489,11 @@ body.ccm-sheet-open #messages {
 .attention-chip:active {
   transform: scale(0.97);
 }
+
+/* #368：交互日志抽屉的半透明底。tw-config 把 console-* 映射成裸 var(--x)，`bg-console/95` 这类透明度类
+   生成不出任何 CSS（同下方横幅注释）——写成那样，抽屉面板就是全透明的，近白字直接压在模糊的聊天上。 */
+.console-panel { background: color-mix(in srgb, var(--console-bg) 95%, transparent); }
+.console-footer { background: color-mix(in srgb, var(--console-sunk) 50%, transparent); }
 
 /* 连接状态横幅（header 与消息区之间的一行，非阻断）。
    刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
