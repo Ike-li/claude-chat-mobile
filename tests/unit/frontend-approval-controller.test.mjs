@@ -530,6 +530,17 @@ test('单条提问不显示队列进度', () => {
   assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
 });
 
+test('提问进度按「还要弹几张卡」数：排队的 3 题组卡只算 1 条', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.cancelQuestionArming();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i, 3)));
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条', '一张 3 页签的组卡被数成了 3 条');
+
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+});
+
 test('连续多条提问显示队列进度；clearAll 清掉', () => {
   const { approvals, byId } = mount();
   approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });

@@ -194,6 +194,17 @@ export function createApprovalController(context, {
     permBatchOrdinal = 0;
     paintQueueProgress(permQueueProgress, 0, 0);
   }
+  // 提问的「后面还有 M 条」数的是还要弹几张卡：同组多题会被 showNextQuestion 抽成一张组卡，按组键去重。
+  // 直接用 questionQueue.length 会把一个 3 题的 AskUserQuestion 说成「还有 3 条」，实际只剩一张（带 3 个页签）。
+  function remainingQuestionCards() {
+    const groups = new Set();
+    let singles = 0;
+    for (const q of questionQueue) {
+      if (isGroupedQuestion(q)) groups.add(questionGroupKey(q.requestId));
+      else singles += 1;
+    }
+    return singles + groups.size;
+  }
   function resetQuestionQueueProgress() {
     questionBatchOrdinal = 0;
     paintQueueProgress(questionQueueProgress, 0, 0);
@@ -454,9 +465,9 @@ export function createApprovalController(context, {
       showQuestionPage(true);
       paintQuestion(activeQuestion);
     }
-    // #377：组卡会再从队列抽同组题，进度用抽完后的剩余条数。
+    // #377：组卡会再从队列抽同组题，进度用抽完后的剩余卡数。
     questionBatchOrdinal += 1;
-    paintQueueProgress(questionQueueProgress, questionBatchOrdinal, questionQueue.length);
+    paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
     // 先上防误触再开窗：开窗那一刻选项 / 跳过就已经不可点（#372，对齐 showNextPerm）。
     armQuestionSheetButtons();
     if (!suspended) openSheet(questionModal);
@@ -858,7 +869,7 @@ export function createApprovalController(context, {
       questionQueue.push(entry);
       // #377：同审批——已打开一张时只刷新剩余条数，不另开窗。
       if (activeQuestion || activeGroup) {
-        paintQueueProgress(questionQueueProgress, questionBatchOrdinal, questionQueue.length);
+        paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
       } else {
         showNextQuestion();
       }
@@ -902,7 +913,7 @@ export function createApprovalController(context, {
       }
       // resolveInActiveGroup 可能已 drop 组卡 → 走 showNext 晋升；卡仍开着则只刷 M（与 enqueue 对称）。
       if (activeQuestion || activeGroup) {
-        if (removedQueued) paintQueueProgress(questionQueueProgress, questionBatchOrdinal, questionQueue.length);
+        if (removedQueued) paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
       } else {
         showNextQuestion();
       }
