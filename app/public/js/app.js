@@ -6488,11 +6488,19 @@ import { createGateFocusController } from './app/focus-layers.js';
       // #355：一键按原始配置条目删掉仍找不到的。只读来源前端不给按钮，服务端仍会拒——不能只靠隐藏。
       if (!projectsState.foldersReadonly()) {
         const removeMissing = action(t('从列表移除缺失项'));
-        removeMissing.onclick = () => {
+        removeMissing.onclick = async () => {
           haptic('tap');
+          const paths = Array.isArray(notice.paths) ? notice.paths : [];
+          // 一点就改写配置、连各自的 sessionLimit 一起删；告警自己就说了可能只是外置盘没挂上，而家目录外的路径
+          // 从手机上加不回来（添加文件夹只浏览家目录）——先确认，并把要删的路径列出来（同「断开连接」）。
+          if (!(await appConfirm({
+            title: t('从工作区列表移除这些文件夹？'),
+            body: `${t('会改写配置文件，连同各自的会话上限设置一起删掉。只是外置盘没挂上的话，挂回来点「重新检查」即可。')}\n${paths.join('\n')}`,
+            okText: t('移除'),
+            tone: 'danger',
+          }))) return;
           removeMissing.disabled = true;
           removeMissing.textContent = t('移除中…');
-          const paths = Array.isArray(notice.paths) ? notice.paths : [];
           socket.timeout(10_000).emit('folders:removeMissing', { paths }, (err, res) => {
             removeMissing.disabled = false;
             removeMissing.textContent = t('从列表移除缺失项');

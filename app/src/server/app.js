@@ -97,7 +97,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus, normalizeWorkdirEntries, planRemoveMissingWorkdirEntries } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, pickPrimaryWorkdir, createWorkdirStatus, normalizeWorkdirEntries, planRemoveMissingWorkdirEntries } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -494,7 +494,13 @@ function removeMissingFolders(paths) {
   const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
   // 复核：对着刚读出的原始条目再跑一遍 resolveWorkdirs，只信这一趟确认仍缺失的原样路径
   const { missing: confirmedMissing } = resolveWorkdirs(normalizeWorkdirEntries(list).entries);
-  const legacyPrimary = typeof config.WORK_DIR === 'string' ? config.WORK_DIR.trim() : '';
+  // 退役的 WORK_DIR 会被折进列表首位，与 readWorkdirSource 同一判据算它：shell 里 export 的 WORK_DIR 压过文件里的。
+  // 只读配置文件会漏掉 shell 那一份——删了 WORKDIRS 里的同名条目、回「已移除 1 项」，shell 值又把它折回来，告警原样还在。
+  const legacyPrimary = pickPrimaryWorkdir({
+    kind: 'inline',
+    envPrimary: resolveEnvPrimaryWorkdir({ shellEnv: getShellEnvSnapshot(), projectedPrimary: process.env.WORK_DIR || '' }),
+    inlinePrimary: typeof config.WORK_DIR === 'string' ? config.WORK_DIR : '',
+  });
   const requested = Array.isArray(paths) ? paths.filter(p => typeof p === 'string' && p) : null;
   const { next, removed, skippedLegacy } = planRemoveMissingWorkdirEntries(list, {
     confirmedMissing,

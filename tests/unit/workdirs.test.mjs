@@ -479,6 +479,13 @@ test('showMoreCount：total 缺失时按一档报，不报 0（报 0 就再也�
 
 // #355：告警「从列表移除缺失项」——按原始配置条目删，保留 sessionLimit；WORK_DIR 不给自动移除。
 test.describe('planRemoveMissingWorkdirEntries', () => {
+  test('原文带空白的条目按 trim 后的路径对上（confirmedMissing 来自已 trim 的 normalizeWorkdirEntries）', () => {
+    const list = [' /gone ', { path: '/other-gone\t', sessionLimit: 3 }, '/ok'];
+    const r = planRemoveMissingWorkdirEntries(list, { confirmedMissing: ['/gone', '/other-gone'] });
+    assert.deepEqual(r.removed, ['/gone', '/other-gone'], '带空白的条目永远删不掉，只会回 nothing_removable');
+    assert.deepEqual(r.next, ['/ok']);
+  });
+
   test('只删「请求 ∩ 仍缺失」的原始条目，其余连同 sessionLimit 原样保留', () => {
     const list = ['/ok', { path: '/gone', sessionLimit: 12 }, { path: '/other-gone', sessionLimit: 3 }, '/still-here'];
     const r = planRemoveMissingWorkdirEntries(list, {

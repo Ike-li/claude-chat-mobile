@@ -358,8 +358,10 @@ export function planRemoveMissingWorkdirEntries(list = [], {
   const removed = [];
   const skippedLegacy = [];
   for (const entry of Array.isArray(list) ? list : []) {
-    const path = typeof entry === 'string' ? entry : (entry && typeof entry === 'object' ? entry.path : null);
-    if (typeof path !== 'string' || !path) { next.push(entry); continue; }
+    const raw = typeof entry === 'string' ? entry : (entry && typeof entry === 'object' ? entry.path : null);
+    // 与 normalizeWorkdirEntries 同口径 trim：confirmedMissing 来自它，原文带空白的条目否则永远对不上、删不掉
+    const path = typeof raw === 'string' ? raw.trim() : null;
+    if (!path) { next.push(entry); continue; }
     if (!want.has(path) || !missing.has(path)) { next.push(entry); continue; }
     if (legacy && path === legacy) {
       skippedLegacy.push(path);

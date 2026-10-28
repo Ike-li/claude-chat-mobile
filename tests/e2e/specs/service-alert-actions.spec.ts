@@ -74,7 +74,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(alertRow(page)).toContainText('2 个已连接的文件夹找不到了');
 
     await setGone(page, [B]); // A 挂回来了，但还没点重新检查——告警仍写着 2 个
+    // 改写配置是破坏性的：先确认，并列出要删的路径；取消就什么都不动
     await alertRow(page).getByRole('button', { name: '从列表移除缺失项' }).click();
+    await expect(page.locator('#confirmModal')).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmBody')).toContainText(A);
+    await expect(page.locator('#confirmBody')).toContainText(B);
+    await page.locator('#confirmCancel').click();
+    await expect(page.locator('#confirmModal')).not.toHaveClass(/sheet-open/);
+    await expect(alertRow(page)).toContainText('2 个已连接的文件夹找不到了');
+
+    await alertRow(page).getByRole('button', { name: '从列表移除缺失项' }).click();
+    await page.locator('#confirmOk').click();
     // 服务端复核后只删仍缺失的 B；A 已恢复，不能被旧告警误删
     await expect(page.locator('#leftSidebar [data-testid="drawer-notice"]')).toHaveText('已移除 1 项');
     await expect(page.locator('#serviceSection')).toBeHidden();
