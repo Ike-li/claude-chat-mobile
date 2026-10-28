@@ -29,15 +29,16 @@ test('#379 流式助手气泡不得挂 aria-live（~80ms 全量 innerHTML 重写
   );
 });
 
-test('#379 #streamLiveStatus 不得挂 aria-live / aria-busy；秒表文案 aria-hidden', () => {
+test('#379 #streamLiveStatus 不得挂 aria-live / aria-busy；文案对读屏可见', () => {
   const m = appJs.match(/id="streamLiveStatus"[^>]*>/);
   assert.ok(m, 'streamLiveStatus 模板须存在');
   assert.doesNotMatch(m[0], /aria-live/, `streamLiveStatus tag: ${m[0]}`);
   assert.doesNotMatch(m[0], /aria-busy/, `streamLiveStatus tag: ${m[0]}`);
-  assert.match(
+  // 这一行还承载「正在停止…」与 API 重试状态：不在 live region 里就不会刷屏，没有理由再对读屏藏起来
+  assert.doesNotMatch(
     appJs,
-    /id="streamLiveStatusText"[^>]*aria-hidden="true"/,
-    '秒表文案须 aria-hidden，避免探索焦点时也被反复读',
+    /id="streamLiveStatusText"[^>]*aria-hidden/,
+    '状态行文案不得 aria-hidden（会连「正在停止…」/ 重试状态一起藏掉）',
   );
 });
 

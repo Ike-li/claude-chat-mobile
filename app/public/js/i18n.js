@@ -856,6 +856,7 @@ export const EN_DICT = Object.freeze({
   '出错：': 'Error: ',
   '已完成': 'Done',
   '已中止': 'Interrupted',
+  'Claude 正在回复': 'Claude is responding',
   '已等待 <1 分钟': 'Waiting <1 min',
   '已等待': 'Waiting',
   '用时': 'took',
