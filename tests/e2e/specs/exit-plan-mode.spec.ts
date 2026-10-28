@@ -31,4 +31,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-07b 矮视口下审批面板超高时，拒绝/允许/中止不用先滚就在视口内（#373）', async ({ page }) => {
+    // 手机横屏的逻辑高度。ExitPlanMode 多出三档权限选择，是最容易把面板撑过视口的一张卡。
+    await page.setViewportSize({ width: 740, height: 360 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:exitplan');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permTool')).toHaveText('ExitPlanMode');
+
+    // 前提：面板确实超高——否则下面的断言量不到「钉在底部」，恒绿。
+    const panel = page.locator('#permModal > div').first();
+    // 量位置前等滑入过渡（translateY 100%→0，.3s）走完；中途量到的是动画帧，不是停稳后的布局
+    await panel.evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
+    const overflow = await panel.evaluate(el => el.scrollHeight - el.clientHeight);
+    expect(overflow, '面板内容应超过视口（否则本用例测不到 #373）').toBeGreaterThan(0);
+
+    await expect(panel).toHaveJSProperty('scrollTop', 0);
+    for (const id of ['#permDeny', '#permAllow', '#permInterrupt']) {
+      const box = await page.locator(id).boundingBox();
+      expect(box, `${id} 应可见`).not.toBeNull();
+      expect(box!.y + box!.height, `${id} 底边应在视口内（不需先滚面板）`).toBeLessThanOrEqual(360);
+    }
+    // 工具名也在视口内：钉住按钮不能以把卡片头部挤出屏幕为代价
+    const tool = await page.locator('#permTool').boundingBox();
+    expect(tool!.y, '#permTool 顶边应在视口内').toBeGreaterThanOrEqual(0);
+
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await expectNoBrowserErrors(page);
+  });
 });
