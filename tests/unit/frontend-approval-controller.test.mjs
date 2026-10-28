@@ -171,6 +171,7 @@ test('多题组卡：别的设备先答掉组里一题，那题从组卡移除�
   approvals.resolveQuestion('toolu_g#0');
   assert.equal(approvals.hasPending(), true, '组里还有没答的题，卡不能关');
 
+  approvals.cancelQuestionArming(); // 过防误触窗再作答（对齐 cancelPermArming）
   pickOption(byId, 1); // 第 2 题 → B，自动跳第 3 题
   pickOption(byId, 0); // 第 3 题 → A，跳到复查页
   byId('questionGroupSubmit').onclick();
@@ -186,10 +187,12 @@ test('多题组卡：别的设备先答掉组里一题，那题从组卡移除�
 test('多题组卡：切会话收卡（clearAll）再切回来，快照重建的组卡接着用之前的草稿', () => {
   const { approvals, byId, emitted } = mount();
   [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  approvals.cancelQuestionArming();
   pickOption(byId, 1); // 第 1 题 → B
   approvals.clearAll();
 
   [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2))); // 切回来时 pending 快照补发
+  approvals.cancelQuestionArming(); // 重建开窗再次上锁
   byId('questionTabs').children[1].onclick(); // 直接切到第 2 题
   pickOption(byId, 0);
   byId('questionGroupSubmit').onclick();
@@ -203,6 +206,7 @@ test('多题组卡：切会话收卡（clearAll）再切回来，快照重建的
 test('多题组卡：后几题还没送到时不放行提交，收齐答完才交整组', () => {
   const { approvals, byId, emitted } = mount();
   approvals.enqueueQuestion(groupQ(0));
+  approvals.cancelQuestionArming();
   pickOption(byId, 0); // 唯一已到的题答完 → 复查页
   assert.equal(byId('questionGroupSubmit').disabled, true, '还有两题没送到，提交不该可点');
   byId('questionGroupSubmit').onclick();
@@ -236,6 +240,7 @@ test('单题提问：切会话后作答仍路由到所属实例', () => {
   approvals.enqueueQuestion({
     requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'],
   }, 'inst-A');
+  approvals.cancelQuestionArming();
   pickOption(byId, 0);
   assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
 });
@@ -243,6 +248,7 @@ test('单题提问：切会话后作答仍路由到所属实例', () => {
 test('多题组卡：整组提交路由到首题所属实例，不受 viewing 影响', () => {
   const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
   [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2), 'inst-A'));
+  approvals.cancelQuestionArming();
   pickOption(byId, 0);
   pickOption(byId, 1);
   byId('questionGroupSubmit').onclick();
@@ -279,6 +285,7 @@ test('审批：断线点允许时浮层内可见错误，且不 emit', () => {
 test('单题提问：断线点选项时浮层内可见错误，且不 emit', () => {
   const { approvals, byId, emitted, sheetError } = mount({ connected: false });
   approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  approvals.cancelQuestionArming();
   pickOption(byId, 0);
   assert.match(sheetError('questionSheetError') || '', /网络未连接/);
   assert.equal(emitted.length, 0);
@@ -288,6 +295,7 @@ test('单题提问：断线点选项时浮层内可见错误，且不 emit', () 
 test('提问跳过：断线时不 requestInterrupt，错误写在浮层内', () => {
   const { approvals, byId, interrupts, sheetError } = mount({ connected: false });
   approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
   byId('questionSkip').onclick();
   assert.equal(interrupts.length, 0, '断线时不应 emit/触发 interrupt');
   assert.match(sheetError('questionSheetError') || '', /网络未连接/);
@@ -296,6 +304,7 @@ test('提问跳过：断线时不 requestInterrupt，错误写在浮层内', () 
 test('空「其他答案」提示写在提问浮层内', () => {
   const { approvals, byId, sheetError } = mount();
   approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
   byId('questionOtherInput').value = '   ';
   byId('questionOtherSubmit').onclick();
   assert.match(sheetError('questionSheetError') || '', /请先输入其他答案/);
@@ -316,4 +325,86 @@ test('surfaceError 写到当前打开的审批浮层', () => {
   approvals.enqueuePermission(permRequest('perm_1'));
   approvals.surfaceError('停止请求超时，可再试一次');
   assert.equal(sheetError('permSheetError'), '停止请求超时，可再试一次');
+});
+
+
+// ── #372：提问 sheet 对齐审批的 600ms 防误触窗口 ─────────────────────────────
+test('提问弹出后 questionModal 带 sheet-arming；cancelQuestionArming 解除', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '刚弹出时应处于防误触期（对齐 #permModal.sheet-arming）');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    '防误触期内选项应 native disabled（挡键盘 Enter，不只靠 pointer-events）');
+  assert.equal(byId('questionSkip').disabled, true, '防误触期内跳过应 disabled');
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false,
+    'cancelQuestionArming 应清掉 sheet-arming，与计时器到点同效');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, false,
+    '解除后选项应恢复可点');
+  assert.equal(byId('questionSkip').disabled, false, '解除后跳过应恢复可点');
+});
+
+test('提问防误触期内选项点击与跳过不 emit', () => {
+  const { approvals, byId, emitted, interrupts } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true);
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  assert.equal(byId('questionSkip').disabled, true);
+  // 程序化 onclick 仍会跑到 handler；arming 守卫必须 no-op，不能只靠 CSS pointer-events
+  pickOption(byId, 0);
+  byId('questionSkip').onclick();
+  assert.equal(emitted.filter(e => e.name === 'user:answer').length, 0,
+    '防误触期内点选项不得 emit user:answer');
+  assert.equal(interrupts.length, 0, '防误触期内跳过不得 requestInterrupt');
+  assert.equal(approvals.hasPending(), true, '防误触期内误触不得关卡');
+});
+
+test('提问防误触解除后点选项才 emit user:answer', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true);
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  // cancel 与计时器到点走同一处状态转移（清 flag + sync disabled）
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, false);
+  pickOption(byId, 0);
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问防误触计时器到点后选项可 emit', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'] });
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true);
+  // 与 cancelQuestionArming 同效：模拟 arm 窗口自然到期
+  approvals.cancelQuestionArming();
+  pickOption(byId, 1);
+  assert.equal(lastAnswer(emitted)?.optionIndex, 1);
+});
+
+test('排队的下一题再次弹出时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  approvals.cancelQuestionArming();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), false);
+  pickOption(byId, 0);
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['B'] });
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    '下一题开窗应再次 sheet-arming，不能沿用上一题已解除的状态');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    '下一题开窗时选项应再次 native disabled');
+});
+
+test('resume 提问浮层时重新上防误触锁', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_q#0', text: 'Pick', options: ['A'] });
+  approvals.cancelQuestionArming();
+  approvals.suspend();
+  approvals.resume();
+  assert.equal(byId('questionModal').classList.contains('sheet-arming'), true,
+    'resume 开窗应先上锁，时长同 showNextQuestion');
+  assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
+    'resume 后选项应再次 native disabled');
+  assert.equal(byId('questionSkip').disabled, true, 'resume 后跳过应再次 disabled');
 });

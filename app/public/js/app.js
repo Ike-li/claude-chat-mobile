@@ -1013,10 +1013,14 @@ import { createGateFocusController } from './app/focus-layers.js';
     $, haptic,
     blockingSheets: () => [permModal, questionModal],
     onClosed: (elm) => {
-      // UX-003：关闭审批弹窗时清防误触 arming（计时器归审批模块所有）。
+      // UX-003 / #372：关闭审批 / 提问弹窗时清防误触 arming（计时器归审批模块所有）。
       if (elm === permModal) {
         elm.classList.remove('sheet-arming');
         appContext.state.approvals?.cancelPermArming();
+      }
+      if (elm === questionModal) {
+        elm.classList.remove('sheet-arming');
+        appContext.state.approvals?.cancelQuestionArming();
       }
     },
   });
