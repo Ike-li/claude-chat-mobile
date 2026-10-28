@@ -198,6 +198,10 @@ export function createSettingsController(context, {
     // sheet 是 aria-modal：Tab 不出面板
     if (ev.key === 'Tab') { trapTabIn(sheetEl(), ev, doc); return; }
     if (ev.key !== 'Escape') return;
+    if (ev.isComposing || ev.keyCode === 229) return; // 这次 Esc 是在取消输入法候选，不是关面板
+    // 叠在设置之上的 sheet（appConfirm、从诊断进的服务状态/环境配置/日志）已在捕获阶段处理这次 Esc 并
+    // preventDefault——只收栈顶那一层；设置面板跟着关，等于连来源页一起关掉、焦点落到 body（#380）
+    if (ev.defaultPrevented) return;
     ev.preventDefault();
     close();
   }

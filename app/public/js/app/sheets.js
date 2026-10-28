@@ -77,6 +77,8 @@ export function createSheetController(context, {
     const relay = closingSheets.find(c => c.el.contains?.(focusPrev));
     if (relay) focusPrev = relay.focusPrev;
     const wasEmpty = sheetStack.length === 0;
+    // 已在栈里（开着时又被 open 一次）只重做视觉：再压一条会让栈永远清不空，滚动锁随之永不释放
+    const alreadyOpen = sheetStack.some(s => s.el === el);
     el.classList.remove('hidden');
     // #369：CSS 过渡认 .ccm-sheet，不认 ID 白名单；HTML 已标类，这里再补一次防漏标新面板。
     el.classList.add('ccm-sheet');
@@ -97,6 +99,7 @@ export function createSheetController(context, {
     const keyHandler = (e) => {
       if (!el.classList.contains('sheet-open')) return;
       if (e.key === 'Escape') {
+        if (e.isComposing || e.keyCode === 229) return; // 输入法候选的 Esc 交给输入法
         if (sheetStack[sheetStack.length - 1]?.el !== el) return; // 只关栈顶一层
         e.preventDefault();
         if (blockingSheets().some(b => b === el)) return; // 等你答复：Esc 不是取消
@@ -116,9 +119,11 @@ export function createSheetController(context, {
         e.preventDefault(); first.focus();
       }
     };
-    doc.addEventListener('keydown', keyHandler, true);
-    sheetStack.push({ el, focusPrev, keyHandler });
-    if (wasEmpty) acquireSheetScrollLock(doc);
+    if (!alreadyOpen) {
+      doc.addEventListener('keydown', keyHandler, true);
+      sheetStack.push({ el, focusPrev, keyHandler });
+      if (wasEmpty) acquireSheetScrollLock(doc);
+    }
     syncNavEscapeLayer();
     ensureGestureDismiss(el);
   }
@@ -135,7 +140,9 @@ export function createSheetController(context, {
     const entry = idx >= 0 ? sheetStack[idx] : null;
     if (idx >= 0) sheetStack.splice(idx, 1);
     if (entry) doc.removeEventListener('keydown', entry.keyHandler, true);
-    if (sheetStack.length === 0) releaseSheetScrollLock(doc);
+    // 只有真从栈里摘下一层、且摘空了才还锁：给一个本来就没开着的 sheet 再关一次（别处已答掉的审批、
+    // 拖关动画期间又点了遮罩）不得把设置面板还持有的那份锁一并扣掉
+    if (entry && sheetStack.length === 0) releaseSheetScrollLock(doc);
     syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.

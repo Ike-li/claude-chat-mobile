@@ -238,6 +238,7 @@ import { createGeneralNav } from './app/general-nav.js';
 import { createAboutPage } from './app/about-page.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNoticeDismissals } from './app/notice-dismissals.js';
+import { createLastKnownExpiry } from './app/terminal-state-expiry.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
@@ -447,12 +448,17 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
   // sessionBlockedSurface（z-20）是中层 aria-modal（#393）：走 overlays，不要塞进 gates——
   // 否则会 inert 掉更高的 leftSidebar（层序注释：落地页在侧栏之下，要能直接翻会话列表）。
+  // overlayCovers 点名它（fixed inset-0 z-20）实际盖住的东西：顶栏、连接横幅、消息区、未读胶囊、输入区；
+  // 桌面（≥1024）常驻侧栏是 relative z-10，也在它下面。设备授权卡（z-30）、手机抽屉（z-40）与各类 sheet
+  // 在它上面，不点名、照常可用。
   const sessionBlockedSurface = $('sessionBlockedSurface');
-  const sidebarScrim = $('sidebarScrim');
   createGateFocusController({
     gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp],
     overlays: [sessionBlockedSurface],
-    keepInteractiveWhenOverlay: [leftSidebar, sidebarScrim],
+    overlayCovers: () => [
+      document.querySelector('header'), $('connBanner'), $('messages'), $('unreadPill'), $('composerFooter'),
+      window.innerWidth >= 1024 ? leftSidebar : null,
+    ],
   });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
@@ -813,6 +819,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
   // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
   const terminalStateByDir = new Map();
+  // #398：抽屉关上后这份 last-known 继续喂 #sessionsDot，但只信 60s（从最后一次观测起算），见 terminal-state-expiry.js
+  const terminalStateExpiry = createLastKnownExpiry({ ttlMs: 60_000 });
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
   let sessionPanelRevalidateTimer = null;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
@@ -1067,15 +1075,21 @@ import { createGateFocusController } from './app/focus-layers.js';
     messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
   };
   // 流内 live 活动行：ephemeral，busy 时挂在 #messages 末尾；不进 disk/history；sessionDomCache 前 strip。
-  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。文案 aria-hidden。
+  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。
+  // 文案不 aria-hidden：它还承载「正在停止…」与 API 重试状态，读屏用户浏览到这一行时要读得到。
+  // 回合开始 / 结束的播报改由 #turnAnnouncer 各写一次（announceTurn）。
   let streamLiveStatusEl = null;
   function ensureStreamLiveStatus() {
     if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
     streamLiveStatusEl = el(`
       <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1">
-        <span id="streamLiveStatusText" class="font-medium truncate max-w-full" aria-hidden="true"></span>
+        <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
       </div>`);
     return streamLiveStatusEl;
+  }
+  const turnAnnouncer = $('turnAnnouncer');
+  function announceTurn(text) {
+    if (turnAnnouncer) turnAnnouncer.textContent = text || '';
   }
   function setStreamLiveStatusText(text) {
     // busy 期间保证挂在 #messages 末尾（仅 ensure 不 append 会留下断链节点）
@@ -3521,6 +3535,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
+      announceTurn(ui.statusBar.text); // 读屏的回合结束端点（#379）：与状态条同一句
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
       notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
       // P0：回合末锚定——有文件汇总卡则滚到卡（手机扫结果）；否则落底
@@ -3550,6 +3565,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
+      announceTurn(`${t('出错：')}${p.message}`); // 读屏的回合结束端点（#379）
       if (p.processExited) {
         crashNotices.record(ev?.sessionId, p.message, errBar);
         crashNotices.noteInstance(ev?.instanceId, p.message);
@@ -3585,6 +3601,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
+        announceTurn(t('已中止')); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
         finalizeStreams();
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
@@ -6532,6 +6549,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     const waiting = typeof terminalWaiting === 'boolean' ? terminalWaiting : rowHas('waiting');
     // 等人 > 在跑：目录行只有一个角标位，卡在审批上的那个才是要用户动手的
     const next = waiting ? 'waiting' : busy ? 'busy' : null;
+    terminalStateExpiry.observe(); // 状态没变也算一次新观测（有效期从这里起算）
     const prev = terminalStateByDir.get(cwd) ?? null;
     if (next === prev) return;
     if (next) terminalStateByDir.set(cwd, next);
@@ -7041,6 +7059,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       };
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
+      announceTurn(t('Claude 正在回复'));
     } else {
       clearInterruptPending(viewingInstanceId, { keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
@@ -7530,24 +7549,10 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       head.querySelector('[data-testid="unread-mark"]')?.remove();
       if (!on) return;
-      // #383：chip 本身是可见慢路径（同目录头 dir-unread）——只挂长按/「⋯」时不知道手势的人永远发现不了
-      // 「未读状态可以手动管」。嵌在会话打开按钮里，不能再套 <button>，用 span role=button + 拦住冒泡。
-      const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent" role="button" tabindex="0"></span>`);
+      const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent"></span>`);
       mark.textContent = t('未读');
-      // 手机没有 hover，title ≈ 不存在；aria-label 是读屏听到的那句，补「点按标为已读」才说得清动作。
-      const markLabel = `${t('未读')} · ${t('点按标为已读')}`;
-      mark.title = markLabel;
-      mark.setAttribute('aria-label', markLabel);
-      const onMarkActivate = (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        haptic('tap');
-        unread.setManualUnread(s.id, false);
-        applyUnreadMark();
-        refreshDirUnreadCounts();
-      };
-      mark.onclick = onMarkActivate;
-      mark.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') onMarkActivate(e); };
+      mark.title = t('未读');
+      mark.setAttribute('aria-label', t('未读'));
       titleSpan.after(mark);
     };
     applyUnreadMark();
@@ -7589,9 +7594,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     };
     rowContent.appendChild(btn);
 
-    // 行尾「⋯」是完整操作入口（2026-10-25，对齐桌面端）：此前 ✕、🗑、红色侧滑「关闭」三处并存，侧滑还和
+    // 行尾「⋯」是这一行唯一的入口（2026-10-25，对齐桌面端）：此前 ✕、🗑、红色侧滑「关闭」三处并存，侧滑还和
     // 抽屉的左滑收起抢同一次手势——露出按钮后多滑 30px 抽屉就被收走。长按不再有动作。
-    // #383：未读 chip 另开一条可见慢路径（点按 → 标为已读）；「标为未读」仍走「⋯」（chip 只在未读时出现）。
     // 哪些项、何时灰掉见 logic 的 sessionRowMenuItems。
     const menuItems = () => sessionRowMenuItems({
       hasId: Boolean(s.id),
@@ -8204,14 +8208,23 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (window.innerWidth >= 1024) return !document.body.classList.contains('sidebar-collapsed');
     return !leftSidebar.classList.contains('-translate-x-full');
   }
+  // 关着抽屉时 last-known 到期撤下（#398）。到点时抽屉若又开着，轮询在刷，交给它；下次关抽屉再排。
+  function expireTerminalState() {
+    if (isSessionPanelRevalidateActive() || !terminalStateByDir.size) return;
+    terminalStateByDir.clear();
+    refreshDirBadges();
+    updateSessionsDot();
+  }
   function stopSessionPanelRevalidator() {
     if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
     sessionPanelRevalidateTimer = null;
+    terminalStateExpiry.arm(expireTerminalState);
     // 抽屉不可见时停掉 session:list 轮询（省流量）。但【保留】terminalStateByDir：#sessionsDot 在主界面
     // 正是靠这份 last-known 做「其他工作区终端需要你 / 运行中」的被动感知（product #398，2026-10-27）。
     // 旧实现这里 clear() 再 updateSessionsDot()，等于用户一回到主 UI 就把角标信号擦掉——与 summarizeOtherWorkspaces
     // 把 terminal_waiting/busy 排进 #sessionsDot 的设计初衷互斥。
-    // 取舍：保留值可能略旧（抽屉关掉后不再轮询），宁可角标短暂滞后，也不要主界面恒盲。
+    // 取舍：保留值可能略旧（抽屉关掉后不再轮询），宁可角标短暂滞后，也不要主界面恒盲；
+    // 「短暂」由 terminalStateExpiry 兑现——最后一次观测满 60s 就撤下（expireTerminalState）。
     // 抽屉行 chip 仍剥 sessionsCache.terminal（见下），那是重开时防一帧假「运行中」；与顶栏角标无关。
     //
     // SWR 缓存仍保留标题/时间以便下次秒开，但 terminal 是短时活体状态，关闭后必须剥掉，避免重开时
