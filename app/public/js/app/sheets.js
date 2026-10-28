@@ -99,6 +99,7 @@ export function createSheetController(context, {
     const keyHandler = (e) => {
       if (!el.classList.contains('sheet-open')) return;
       if (e.key === 'Escape') {
+        if (e.isComposing || e.keyCode === 229) return; // 输入法候选的 Esc 交给输入法
         if (sheetStack[sheetStack.length - 1]?.el !== el) return; // 只关栈顶一层
         e.preventDefault();
         if (blockingSheets().some(b => b === el)) return; // 等你答复：Esc 不是取消

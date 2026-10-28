@@ -358,6 +358,16 @@ test('Escape：关闭栈顶可关闭 sheet', () => {
   assert.equal(sheet.classList.contains('sheet-open'), false, 'Esc 应关闭可关闭 sheet');
 });
 
+test('Escape：输入法组字中的 Esc 交给输入法，不关 sheet', () => {
+  const { doc, controller } = harness();
+  const sheet = sheetNode([]); sheet._doc = doc;
+  controller.openSheet(sheet);
+  const evt = { ...escEvent(), isComposing: true };
+  doc._dispatch('keydown', evt);
+  assert.ok(sheet.classList.contains('sheet-open'), '取消候选词的 Esc 关掉了整个面板');
+  assert.notEqual(evt._prevented, true);
+});
+
 test('Escape：嵌套时只关栈顶一层，外层保持打开', () => {
   const { doc, controller } = harness();
   const outer = sheetNode([]); outer._doc = doc;
