@@ -421,7 +421,20 @@ import { createGateFocusController } from './app/focus-layers.js';
   const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
   // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
-  createGateFocusController({ gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp] });
+  // sessionBlockedSurface（z-20）是中层 aria-modal（#393）：走 overlays，不要塞进 gates——
+  // 否则会 inert 掉更高的 leftSidebar（层序注释：落地页在侧栏之下，要能直接翻会话列表）。
+  // overlayCovers 点名它（fixed inset-0 z-20）实际盖住的东西：顶栏、连接横幅、消息区、未读胶囊、输入区；
+  // 桌面（≥1024）常驻侧栏是 relative z-10，也在它下面。设备授权卡（z-30）、手机抽屉（z-40）与各类 sheet
+  // 在它上面，不点名、照常可用。
+  const sessionBlockedSurface = $('sessionBlockedSurface');
+  createGateFocusController({
+    gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp],
+    overlays: [sessionBlockedSurface],
+    overlayCovers: () => [
+      document.querySelector('header'), $('connBanner'), $('messages'), $('unreadPill'), $('composerFooter'),
+      window.innerWidth >= 1024 ? leftSidebar : null,
+    ],
+  });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');

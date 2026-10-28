@@ -56,32 +56,61 @@ export function trapTabIn(root, ev, doc) {
 // Tab 到。最上面那层开着时，body 下其余子节点一律 inert。几层同为 z-50，谁在上面看 DOM 顺序——
 // gates 按 DOM 顺序传，取最后一个开着的。
 //
+// 中层 aria-modal（overlays，如会话打不开落地页 z-20）不能塞进 gates：它比侧栏/审批 sheet 矮，
+// 按「列表末开着的当顶」会把更高的 z-50 门盖错，也会把 leftSidebar（z-40）一起 inert 掉——
+// 而落地页的设计就是「仍在侧栏之下，从这里要能直接翻会话列表」。overlays 单独一层，而且只 inert
+// overlayCovers() 点名的那几块（它【实际盖住】的东西），不按「除了谁之外全部」：比它高的层——
+// 设备授权卡（z-30）、抽屉、抽屉里弹的菜单与设置、各类 sheet——都是 body 子节点，排除法会把它们
+// 一起变成「看得见、点不动」。overlayCovers 在每次打开时求值：桌面常驻侧栏（z-10）在落地页下面、
+// 手机抽屉（z-40）在上面，同一个元素该不该 inert 取决于此刻的布局。真全屏门开着时仍走 gate。
+//
 // 显隐由各处直接切 hidden class，散在十几个调用点；用 MutationObserver 盯 class，不要求每个调用点
 // 都记得通知一声。不盯 body 的子节点增删：剪贴板兜底会临时往 body 挂一个 textarea 再 focus 它，
 // 访问帮助里的「复制命令」走的就是这条路，把它也 inert 掉会让复制静默失败。
-export function createGateFocusController({ gates, doc = document, Observer = globalThis.MutationObserver } = {}) {
+export function createGateFocusController({
+  gates,
+  overlays = [],
+  overlayCovers = () => [],
+  doc = document,
+  Observer = globalThis.MutationObserver,
+} = {}) {
   const layers = gates.filter(Boolean);
+  const midLayers = overlays.filter(Boolean);
   let top = null;
   let focusBefore = null;
+  let covered = new Set();
 
   function sync() {
-    const open = layers.filter(el => !el.classList.contains('hidden'));
-    const next = open[open.length - 1] || null;
+    const openGates = layers.filter(el => !el.classList.contains('hidden'));
+    const topGate = openGates[openGates.length - 1] || null;
+    const openOverlays = midLayers.filter(el => !el.classList.contains('hidden'));
+    const topOverlay = openOverlays[openOverlays.length - 1] || null;
+    // 全屏门压过中层落地页：两者同时开着时焦点与 inert 以门为准。
+    const next = topGate || topOverlay || null;
     if (next === top) return;
     if (!top) focusBefore = doc.activeElement;
+    const prevTop = top;
     top = next;
-    for (const child of doc.body.children) setInertReason(child, 'gate', !!top && child !== top);
+    for (const child of doc.body.children) setInertReason(child, 'gate', !!topGate && child !== topGate);
+    // 仅无全屏门时才挂 overlay 原因；门一开就清掉（门盖住一切，由 gate 原因负责）。
+    const nextCovered = new Set(!topGate && topOverlay ? overlayCovers().filter(el => el && el !== topOverlay) : []);
+    for (const el of covered) if (!nextCovered.has(el)) setInertReason(el, 'overlay', false);
+    for (const el of nextCovered) setInertReason(el, 'overlay', true);
+    covered = nextCovered;
     if (top) {
       if (!top.contains(doc.activeElement)) focusInto(top);
     } else {
-      restoreFocus(focusBefore, doc);
+      // 关层的那段代码可能已经把焦点交给了别处（落地页「选择其他会话」：收起自己、再打开抽屉移焦）。
+      // 焦点还在这一层里或已掉到 body，才轮到这里还焦——否则会把人从刚打开的抽屉里拽回顶栏。
+      const active = doc.activeElement;
+      if (!active || active === doc.body || prevTop?.contains(active)) restoreFocus(focusBefore, doc);
       focusBefore = null;
     }
   }
 
   if (Observer) {
     const observer = new Observer(sync);
-    for (const el of layers) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+    for (const el of [...layers, ...midLayers]) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
   }
   sync();
   return { sync };
