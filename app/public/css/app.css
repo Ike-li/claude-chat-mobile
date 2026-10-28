@@ -22,8 +22,12 @@
 }
 
 /* 手动深色（data-theme=dark）与「跟随系统且系统为深色」共用同一套 token。
-   强制浅色写 data-theme=light，把下面媒体查询挡掉；跟随系统则不写 data-theme。 */
+   强制浅色写 data-theme=light，把下面媒体查询挡掉；跟随系统则不写 data-theme。
+   color-scheme 也要跟着手动档走：:root 的 light dark 让原生控件（滚动条、未勾选的复选框、<select> 弹层）
+   按【系统】配色，手动深色配浅色系统时就是深色页面上一排白色原生控件。 */
+:root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] {
+    color-scheme: dark;
     --canvas:#121211;
     --surface:#1C1B1A;
     --surface-sunk:#161514;
