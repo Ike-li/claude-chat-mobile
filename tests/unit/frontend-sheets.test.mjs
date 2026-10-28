@@ -1,4 +1,4 @@
-// tests/unit/frontend-sheets.test.mjs —— sheets.js 的开合原语（焦点管理 + Tab 陷阱 + 滚动锁 + 把手手势）单测。
+// tests/unit/frontend-sheets.test.mjs —— sheets.js 的开合原语（焦点管理 + Tab 陷阱 + Esc 关闭 + 滚动锁 + 把手手势）单测。
 //
 // 之前零覆盖，只靠 E2E 走过 happy path。真正容易出错的是嵌套场景：appConfirm 会在已开着的
 // 业务 sheet（如 #workspaceModal，见 git-changes.js createWorkspacePanel）之上再开一层
@@ -71,10 +71,10 @@ function fakeDoc() {
   return doc;
 }
 
-function harness() {
+function harness(opts = {}) {
   const doc = fakeDoc();
   const ctx = { state: {} };
-  const controller = createSheetController(ctx, { $: () => null, doc });
+  const controller = createSheetController(ctx, { $: () => null, doc, ...opts });
   return { doc, controller };
 }
 
@@ -340,4 +340,74 @@ test('无 .sheet-handle 时不绑定手势（阻断弹窗）', () => {
   controller.openSheet(sheet);
   // 只要不抛、且 _test.getDrag 仍为 null 即可
   assert.equal(controller._test.getDrag(), null);
+});
+
+// ── #380 Escape ──────────────────────────────────────────────
+function escEvent() {
+  return { key: 'Escape', preventDefault() { this._prevented = true; } };
+}
+
+test('Escape：关闭栈顶可关闭 sheet', () => {
+  const { doc, controller } = harness();
+  const sheet = sheetNode([]); sheet._doc = doc;
+  controller.openSheet(sheet);
+  assert.ok(sheet.classList.contains('sheet-open'));
+  const evt = escEvent();
+  doc._dispatch('keydown', evt);
+  assert.equal(evt._prevented, true);
+  assert.equal(sheet.classList.contains('sheet-open'), false, 'Esc 应关闭可关闭 sheet');
+});
+
+test('Escape：输入法组字中的 Esc 交给输入法，不关 sheet', () => {
+  const { doc, controller } = harness();
+  const sheet = sheetNode([]); sheet._doc = doc;
+  controller.openSheet(sheet);
+  const evt = { ...escEvent(), isComposing: true };
+  doc._dispatch('keydown', evt);
+  assert.ok(sheet.classList.contains('sheet-open'), '取消候选词的 Esc 关掉了整个面板');
+  assert.notEqual(evt._prevented, true);
+});
+
+test('Escape：嵌套时只关栈顶一层，外层保持打开', () => {
+  const { doc, controller } = harness();
+  const outer = sheetNode([]); outer._doc = doc;
+  const inner = sheetNode([]); inner._doc = doc;
+  controller.openSheet(outer);
+  controller.openSheet(inner);
+  doc._dispatch('keydown', escEvent());
+  assert.equal(inner.classList.contains('sheet-open'), false, '内层应关');
+  assert.ok(outer.classList.contains('sheet-open'), '外层必须仍开着');
+  doc._dispatch('keydown', escEvent());
+  assert.equal(outer.classList.contains('sheet-open'), false, '再按 Esc 才关外层');
+});
+
+test('Escape：blockingSheets 不关闭（不代点批准/拒绝）', () => {
+  const blocking = sheetNode([]);
+  const { doc, controller } = harness({ blockingSheets: () => [blocking] });
+  blocking._doc = doc;
+  controller.openSheet(blocking);
+  const evt = escEvent();
+  doc._dispatch('keydown', evt);
+  assert.equal(evt._prevented, true, '仍应 preventDefault，避免冒泡到别处');
+  assert.ok(blocking.classList.contains('sheet-open'), '审批/提问不得被 Esc 关掉');
+});
+
+test('Escape：appConfirm 兑现 false（与点遮罩同义）', { timeout: 2000 }, async () => {
+  const { doc, controller, nodes } = confirmHarness();
+  const p = controller.appConfirm({ title: '放弃？' });
+  assert.ok(nodes.confirmModal.classList.contains('sheet-open'));
+  doc._dispatch('keydown', escEvent());
+  assert.equal(await p, false, 'Esc = 取消');
+  assert.equal(nodes.confirmModal.classList.contains('sheet-open'), false);
+});
+
+test('Escape：走 setGestureDismiss 自定义关闭，不裸 closeSheet', () => {
+  const { doc, controller } = harness();
+  const sheet = sheetNode([]); sheet._doc = doc;
+  let custom = 0;
+  controller.setGestureDismiss(sheet, () => { custom += 1; controller.closeSheet(sheet); });
+  controller.openSheet(sheet);
+  doc._dispatch('keydown', escEvent());
+  assert.equal(custom, 1, 'Esc 应走业务自定义 close（工作区丢弃确认 / 退回设置等）');
+  assert.equal(sheet.classList.contains('sheet-open'), false);
 });
