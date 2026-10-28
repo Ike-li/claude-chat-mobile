@@ -627,6 +627,8 @@ export const EN_DICT = Object.freeze({
   '…显示全部': '…Show all',
   '字符': 'chars',
   '以下为新消息': 'New messages below',
+  '回到最新': 'Back to latest',
+  '{n} 条新内容': '{n} new',
   '—— 本次会话 ——': '—— This session ——',
   '复制代码': 'Copy code',
   '复制消息': 'Copy message',

@@ -6,7 +6,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, isSoftKeyboardPrimaryDevice, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldShowScrollToBottom, resolveScrollToBottomNewCount, formatScrollToBottomLabel, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, isSoftKeyboardPrimaryDevice, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
@@ -630,6 +630,50 @@ test.describe('shouldAckUnreadOnScroll：未读胶囊「用户手动滚到底部
   test('缺省入参不抛，保守回 false（默认 pillVisible/withinProgrammaticWindow 均 false，且几何字段缺失时 shouldStickScrollToBottom 本就判 false）', () => {
     assert.doesNotThrow(() => shouldAckUnreadOnScroll());
     assert.equal(shouldAckUnreadOnScroll(), false);
+  });
+});
+
+// 「回到最新」悬浮钮（#376）：与未读胶囊分层。显示 = stick 的反面（距底 ≥ threshold）。
+test.describe('shouldShowScrollToBottom：上翻露出入口 / 贴底隐藏', () => {
+  const base = { scrollHeight: 1000, clientHeight: 400 }; // 可滚 600
+
+  test('贴底（dist=0）与距底 119 → 不显示', () => {
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 600 }), false);
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 481 }), false); // dist 119
+  });
+
+  test('距底恰好 120 与更大 → 显示', () => {
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 480 }), true); // dist 120
+    assert.equal(shouldShowScrollToBottom({ ...base, scrollTop: 0 }), true);
+  });
+
+  test('缺字段 / NaN → 不显示（失败方向是藏）', () => {
+    assert.equal(shouldShowScrollToBottom({}), false);
+    assert.equal(shouldShowScrollToBottom({ scrollHeight: NaN, scrollTop: 0, clientHeight: 100 }), false);
+  });
+
+  test('自定义 threshold：距底 50 在 40 时显示、在 60 时不显示', () => {
+    const geo = { scrollHeight: 500, scrollTop: 150, clientHeight: 300 }; // dist 50
+    assert.equal(shouldShowScrollToBottom({ ...geo, threshold: 40 }), true);
+    assert.equal(shouldShowScrollToBottom({ ...geo, threshold: 60 }), false);
+  });
+});
+
+test.describe('resolveScrollToBottomNewCount / formatScrollToBottomLabel', () => {
+  test('新增数 = max(0, current - baseline)；脏输入回 0', () => {
+    assert.equal(resolveScrollToBottomNewCount(10, 13), 3);
+    assert.equal(resolveScrollToBottomNewCount(10, 10), 0);
+    assert.equal(resolveScrollToBottomNewCount(10, 8), 0); // 历史重载变短
+    assert.equal(resolveScrollToBottomNewCount(null, 5), 0);
+    assert.equal(resolveScrollToBottomNewCount(3, NaN), 0);
+  });
+
+  test('无新增 →「回到最新」；有新增 →「N 条新内容」；>99 封顶', () => {
+    assert.equal(formatScrollToBottomLabel(0).text, '回到最新');
+    assert.equal(formatScrollToBottomLabel(0).hasNew, false);
+    assert.equal(formatScrollToBottomLabel(3).text, '3 条新内容');
+    assert.equal(formatScrollToBottomLabel(3).hasNew, true);
+    assert.equal(formatScrollToBottomLabel(120).text, '99+ 条新内容');
   });
 });
 
