@@ -184,10 +184,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // 语言选择器本身：从原生 <select> 换成自绘按钮组之后的回归点（换的理由见 index.html
   // #prefLangGroup 的注释——原生下拉在 fixed+transform 的 sheet 里，手机上弹层会飘到页面别处）。
-  // 四组断言各有分工：localStorage 守真落盘、aria-checked 守单选语义（读屏那条通道）、
-  // border-accent 守视觉高亮（看得见的那条通道，与 aria 是两条独立的路、要分别守）、
-  // 确认框守「改完提示刷新」。只断言初始默认高亮会恒绿（默认值天然对），核心在**点过之后**那一组。
-  test('P0-I18N 语言选择器：点一项即落盘、高亮随之移动、并弹刷新确认', async ({ page }) => {
+  // 产品是 confirm-then-write：先弹刷新确认，同意后才 writeLangPref + reload；取消不落盘、
+  // 磁贴保持旧高亮（避免 storage/磁贴新语言、DOM 文案旧语言的半切换）。
+  // 断言分工：确认框先于落盘、取消保旧、确认后 reload+落盘、aria/border 互斥、open 重读 storage。
+  // 真 reload 用 window 标记判定（同 settings-local-reset.spec.ts）。
+  const markPage = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => { (window as unknown as { __ccmMarker?: number }).__ccmMarker = 1; });
+  const pageWasReloaded = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => (window as unknown as { __ccmMarker?: number }).__ccmMarker !== 1);
+
+  test('P0-I18N 语言选择器：先确认再落盘，取消保持旧语言，确认后 reload', async ({ page }) => {
     await gotoMock(page);
     await openGeneralPage(page, 'behavior');
 
@@ -196,28 +202,55 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const en = group.locator('[data-lang="en"]');
     const auto = group.locator('[data-lang="auto"]');
 
-    // 未设过偏好：回显保底 zh（readLangPref 的 fallback）
+    // 未设过偏好：回显保底 zh（readLangPref 的 fallback）；storage 可能仍是 null
     await expect(zh).toHaveAttribute('aria-checked', 'true');
     await expect(en).toHaveAttribute('aria-checked', 'false');
+    const before = await page.evaluate(() => localStorage.getItem('ccm_lang'));
 
+    // 点已选中项：不弹确认、不改 storage（同语言跳过）
+    await zh.click();
+    await expect(page.locator('#confirmModal')).toBeHidden();
+    expect(await page.evaluate(() => localStorage.getItem('ccm_lang'))).toBe(before);
+
+    await markPage(page);
     await en.click();
 
-    // ① 真落盘（不是只改了样式）
-    await expect.poll(() => page.evaluate(() => localStorage.getItem('ccm_lang'))).toBe('en');
-    // ② 单选语义移过去了，且旧项被取消——「只设当前项、不动其他项」的写法会在 zh 那行红
-    await expect(en).toHaveAttribute('aria-checked', 'true');
-    await expect(zh).toHaveAttribute('aria-checked', 'false');
-    await expect(auto).toHaveAttribute('aria-checked', 'false');
-    // ③ 视觉高亮同样是互斥的。这条与 ② 不可互相替代：aria 正确而配色三个全亮，
-    //    看得见的人就选不出来了；反过来配色对而 aria 不动，读屏用户听到三个一样的按钮。
-    await expect(en).toHaveClass(/border-accent/);
-    await expect(zh).not.toHaveClass(/border-accent/);
-    await expect(auto).not.toHaveClass(/border-accent/);
-    // ④ 静态串要等刷新才变，所以必须提示；点「取消」不回滚偏好（已经存下了）
+    // ① 确认框先出现；落盘尚未发生
     await expect(page.locator('#confirmModal')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('ccm_lang')), '确认前不该写 storage').toBe(before);
+    // ② 确认框打开期间磁贴仍是旧高亮（set 还在 await confirm，finally 重绘未跑）
+    await expect(zh).toHaveAttribute('aria-checked', 'true');
+    await expect(en).toHaveAttribute('aria-checked', 'false');
+    await expect(zh).toHaveClass(/border-accent/);
+    await expect(en).not.toHaveClass(/border-accent/);
+
+    // ③ 取消 → storage 与磁贴都保持旧语言（不再是「已落盘、取消不回滚」）
     await page.locator('#confirmCancel').click();
     await expect(page.locator('#confirmModal')).toBeHidden();
-    await expect(en).toHaveAttribute('aria-checked', 'true');
+    expect(await page.evaluate(() => localStorage.getItem('ccm_lang')), '取消后 storage 必须仍是旧值').toBe(before);
+    await expect(zh).toHaveAttribute('aria-checked', 'true');
+    await expect(en).toHaveAttribute('aria-checked', 'false');
+    await expect(auto).toHaveAttribute('aria-checked', 'false');
+    await expect(zh).toHaveClass(/border-accent/);
+    await expect(en).not.toHaveClass(/border-accent/);
+    expect(await pageWasReloaded(page), '取消后不该刷新').toBe(false);
+
+    // ④ 再点 en 并确认 → 落盘 + reload
+    await en.click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('ccm_lang')), '第二次确认前仍不该写').toBe(before);
+    await page.locator('#confirmOk').click();
+    await expect.poll(() => pageWasReloaded(page).catch(() => false), { message: '确认后没刷新' }).toBe(true);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('ccm_lang'))).toBe('en');
+    await waitUntilConnected(page);
+
+    // reload 后高亮跟 storage：en 选中，zh/auto 取消；aria 与 border 两条通道都互斥
+    await openGeneralPage(page, 'behavior');
+    await expect(page.locator('#prefLangGroup [data-lang="en"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('#prefLangGroup [data-lang="zh"]')).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('#prefLangGroup [data-lang="auto"]')).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('#prefLangGroup [data-lang="en"]')).toHaveClass(/border-accent/);
+    await expect(page.locator('#prefLangGroup [data-lang="zh"]')).not.toHaveClass(/border-accent/);
 
     // ⑤ 每次打开都从 storage 重读，而不是记住上次画过什么——偏好存在 localStorage 里，
     //    另一个标签页改了它这边也得跟上。这条独立于上面那组：上面验的是点击那条路，

@@ -35,7 +35,7 @@ export function createSettingsController(context, {
   // 独立于 alerts（那是本地提示音/震动，不涉网络）；duck-typed 最小接口，settings.js 不需要认识整个
   // notifications 控制器。
   pushPreview = { get: () => false, set: () => {} },
-  // ⑨ 语言偏好：get/set 由 app.js 注入；set 里写 storage + 提示刷新（不做响应式重渲，见 index.html 头注）。
+  // ⑨ 语言偏好：get/set 由 app.js 注入；set 先确认刷新再落盘（取消不写；不做响应式重渲，见 index.html 头注）。
   langPref = { get: () => 'zh', set: () => {} },
   autoBind = true,
   // 面板打开时的回调：给需要"每次打开重算"的动态段用（如推送订阅状态——权限可能在系统设置里被
@@ -325,11 +325,11 @@ export function createSettingsController(context, {
       dom.prefLangGroup.onclick = (e) => {
         const lang = e.target?.closest?.('[data-lang]')?.dataset?.lang;
         if (!lang) return;
-        // langPref.set 先落盘、再弹「要不要刷新」的确认框，落盘那段是同步的——所以紧跟着重绘
-        // 拿到的已经是新值。用户在确认框上点「取消」也不回滚高亮：偏好确实存下来了，下次打开
-        // 就是新语言，高亮跟着走才不撒谎。
-        void langPref.set(lang);
-        renderLangOptions();
+        // 已是当前档：不再弹确认（同语言无切换可做）。
+        if (lang === langPref.get()) return;
+        // langPref.set 先确认刷新，同意后才落盘并 reload；取消时 storage 未改。
+        // 等 set 结束后再重绘：取消后磁贴仍跟旧偏好一致；同意则页面已 reload，这行通常到不了。
+        void Promise.resolve(langPref.set(lang)).finally(() => renderLangOptions());
       };
     }
     if (dom.btnAlertPreview) {
