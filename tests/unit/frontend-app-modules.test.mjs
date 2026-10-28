@@ -385,6 +385,13 @@ test('RTT monitor renders latency through app context and clears stale values', 
   assert.match(rtt.className, /text-warning/);
   assert.doesNotMatch(rtt.className, /\bhidden\b/);
 
+  // #379：同签名不重写 DOM（格式化标签相同 → 不碰 textContent）
+  const before = rtt.textContent;
+  rtt.textContent = 'STALE';
+  assert.equal(monitor.render(500), '500ms');
+  assert.equal(rtt.textContent, 'STALE', '同 label/tone/title 须跳过写入');
+  rtt.textContent = before;
+
   monitor.clear();
   assert.equal(rtt.textContent, '');
   assert.match(rtt.className, /hidden/);

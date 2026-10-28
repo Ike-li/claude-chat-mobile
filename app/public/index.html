@@ -91,7 +91,8 @@
         </div>
       </button>
       <!-- 手机 ↔ 主机 socket 往返延迟：迷你胶囊「延迟 Nms」，与中间 top-context-pill 同语汇；连上后由 app.js 周期测，断线隐藏 -->
-      <span id="connRtt" class="hidden conn-rtt-chip tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
+      <!-- #379：不挂 aria-live——createRttMonitor 每 5s 无条件重写 textContent，挂 live 会每 5s 打断读屏。数值仍可经焦点/探索读到。 -->
+      <span id="connRtt" class="hidden conn-rtt-chip tabular-nums leading-none select-none" title="手机到主机的往返延迟"></span>
       <!-- 顶栏文字 chip：把上面两颗角标（纯色点 / 状态图标）的含义写成人话——手机没有 hover，title 等于不存在。
            按优先级只显一条（未连接 > 需要你 N > 其他工作区 · 需要你/出错），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。
            只说「点开就能处理」的事：推送失败与其他工作区 busy 均不占此位（后者由上面 #sessionsDot 图标表达）。 -->
@@ -228,6 +229,9 @@
 
   <!-- 消息区 -->
   <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
+  <!-- #379：回合两端的读屏播报。流式气泡与秒表行都不挂 live（高频重写会刷屏），但读屏用户仍要知道
+       「开始回了」「回完了 / 出错 / 中止」——只在这两个端点各写一次，中间过程不进 live region。 -->
+  <div id="turnAnnouncer" class="sr-only" role="status" data-testid="turn-announcer"></div>
 
   <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
        （app.js jumpToUnreadAnchor）。#messages 的兄弟节点而非子节点——bindView/loadHistory 的整体清空/

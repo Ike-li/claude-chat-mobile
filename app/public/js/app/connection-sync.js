@@ -29,9 +29,12 @@ export function createRttMonitor(context, {
   let timer = null;
   let inFlight = false;
   let lastMs = null; // 最近一次成功测得的 RTT 数值；断线/清空归 null（服务状态面板经 last() 复用，不另发 ping）
+  // #379：上次写入芯片的签名（text|class|title）；同签名跳过 DOM——对齐 connection-banner「值真变了才写」。
+  let lastChipSig = null;
 
   function clear() {
     lastMs = null;
+    lastChipSig = null;
     const rtt = context.dom.connRtt;
     if (!rtt) return;
     rtt.textContent = '';
@@ -50,16 +53,28 @@ export function createRttMonitor(context, {
     // 状态行始终带延迟（排障用）；芯片全时段常驻显示（好网中性灰，差网告警色）。角标 title 归注意力信号，不在这里写。
     setStatus(`${t('已连接')} · ${t('延迟')} ${label}`);
     if (!shouldShowRttChip(milliseconds)) {
-      rtt.textContent = '';
-      rtt.title = `${t('手机到主机往返延迟')} ${label}`;
-      rtt.className = `hidden ${RTT_CHIP_BASE}`;
+      const title = `${t('手机到主机往返延迟')} ${label}`;
+      const className = `hidden ${RTT_CHIP_BASE}`;
+      const sig = `|${className}|${title}`;
+      if (sig !== lastChipSig) {
+        lastChipSig = sig;
+        rtt.textContent = '';
+        rtt.title = title;
+        rtt.className = className;
+      }
       return label;
     }
     const toneClass = TONE_CLASSES[rttToneClass(milliseconds)] || 'text-ink-soft';
     // 人话前缀「延迟」：主界面可读；formatRttMs 仍只产出数值（42ms / 1.2s），便于单测与复用。
-    rtt.textContent = `${t('延迟')} ${label}`;
-    rtt.className = `${toneClass} ${RTT_CHIP_BASE}`;
-    rtt.title = `${t('手机到主机往返延迟')} ${label}`;
+    const text = `${t('延迟')} ${label}`;
+    const className = `${toneClass} ${RTT_CHIP_BASE}`;
+    const title = `${t('手机到主机往返延迟')} ${label}`;
+    const sig = `${text}|${className}|${title}`;
+    if (sig === lastChipSig) return label;
+    lastChipSig = sig;
+    rtt.textContent = text;
+    rtt.className = className;
+    rtt.title = title;
     return label;
   }
 
