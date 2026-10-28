@@ -234,6 +234,10 @@ export function createApprovalController(context, {
       permExitModeWrap.classList.toggle('hidden', !isExit);
       if (isExit) paintExitModeChips();
     }
+    // 换卡回到顶部（同 showNextQuestion）：连续审批时 closeSheet→openSheet 同步发生、面板不隐藏，
+    // 不归零会沿用上一张卡的滚动位置，新卡的工具名与命令开头被滚出视口（#373）
+    const permPanel = permModal?.firstElementChild;
+    if (permPanel) permPanel.scrollTop = 0;
     if (!suspended) {
       // 先上防误触再开窗（同上）；被别的界面盖着时不弹，resume 时再弹
       armPermSheetButtons();
@@ -305,8 +309,9 @@ export function createApprovalController(context, {
       // 没勾「总是允许」时 persistRules 恒 false——单选钮的状态不参与。
       persistRules: permAlways.checked && permPersistAvailable
         && permPersistWrap?.querySelector?.('input[value="persist"]')?.checked === true,
-      // 路由到【审批所属】实例，不是当前查看实例。nav-escape 允许审批卡开着切会话，
-      // 此时 viewing ≠ owning；用 viewing 会静默打到错误实例（#388）。
+      // 路由到【审批所属】实例，不是当前查看实例。抽屉里切会话会经 bindView→clearView→clearAll
+      // 收卡，碰不到这里；但「＋」/文件夹内新建会本地把 viewing 置 null 且不走 clearView，
+      // 广播回来前的一个往返里卡片仍开着——此时用 viewing 会把答复送给 null、被服务端静默丢弃（#388）。
       instanceId: activePerm.instanceId ?? getViewingInstanceId(),
       // op：回传本卡片渲染时所见的确切操作（审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
@@ -766,7 +771,7 @@ export function createApprovalController(context, {
       return isQuestionAnswered(requestId);
     },
     // instanceId：事件信封上的所属实例（handler 第二参传入）。作答必须回这个实例，
-    // 不能用 getViewingInstanceId()——nav-escape 下审批卡可盖在别的会话上（#388）。
+    // 不能用 getViewingInstanceId()——新建会话那一个往返里 viewing 已置 null 而卡片仍开着（#388）。
     enqueuePermission(p, instanceId) {
       permQueue.push({ ...p, instanceId: instanceId ?? p.instanceId ?? null });
       showNextPerm();
