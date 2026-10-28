@@ -20,7 +20,10 @@ function fakeEl(id = '') {
   const el = {
     id,
     children: [],
-    textContent: '',
+    _textContent: '',
+    get textContent() { return el._textContent; },
+    // 对齐真实 DOM：写 textContent 会清掉子节点（多选切换 ☐/☑ 时靠此再挂回 description）
+    set textContent(v) { el._textContent = v; el.children.length = 0; },
     // 控制器重绘列表前写 innerHTML = '' 清空；替身照做，否则 children 会叠着上一次的选项
     set innerHTML(v) { if (v === '') el.children.length = 0; },
     get innerHTML() { return ''; },
@@ -43,6 +46,7 @@ function fakeEl(id = '') {
     setAttribute: (k, v) => el.attrs.set(k, v),
     querySelectorAll: () => [],
     appendChild: child => { el.children.push(child); return child; },
+    prepend: child => { el.children.unshift(child); return child; },
     after: sibling => { el.children.push(sibling); return sibling; },
     remove: () => {},
     focus: () => {},
@@ -407,4 +411,83 @@ test('resume 提问浮层时重新上防误触锁', () => {
   assert.equal(byId('questionOptions').children[0].children[0].disabled, true,
     'resume 后选项应再次 native disabled');
   assert.equal(byId('questionSkip').disabled, true, 'resume 后跳过应再次 disabled');
+});
+
+// ── #400 / #382：选项卡可点区域与多选 checkbox 语义 ─────────────────────────
+test('选项 description 在 button 内，点说明与点标题走同一 onclick（#400）', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick',
+    options: [{ label: 'Alpha', description: 'details about Alpha' }, 'B'],
+  });
+  approvals.cancelQuestionArming();
+  const wrap = byId('questionOptions').children[0];
+  const btn = wrap.children[0];
+  assert.equal(wrap.children.length, 1, 'description 不应再作为 wrap 的兄弟节点（死区）');
+  assert.equal(btn.children.length, 1, 'description 应挂在 button 内');
+  assert.equal(btn.children[0].textContent, 'details about Alpha');
+  // 点「说明」等价于激活按钮（同一控件）
+  btn.onclick();
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+});
+
+test('选项 preview 仍在 button 外，可独立展开且不代替选题（#400）', () => {
+  const { approvals, byId, emitted } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick',
+    options: [{ label: 'Alpha', description: 'd', preview: 'secret preview' }, 'B'],
+  });
+  approvals.cancelQuestionArming();
+  const wrap = byId('questionOptions').children[0];
+  const btn = wrap.children[0];
+  const prevBtn = wrap.children[1];
+  const prevBox = wrap.children[2];
+  assert.ok(prevBtn && prevBox, 'preview 开关与内容应在 wrap 上、button 外');
+  assert.equal(btn.children.length, 1, 'preview 不应塞进 button');
+  assert.equal(prevBox.textContent, 'secret preview');
+  const before = prevBox.classList.contains('hidden');
+  prevBtn.onclick({ stopPropagation() {} });
+  assert.notEqual(prevBox.classList.contains('hidden'), before, '预览应能单独切换显隐');
+  assert.equal(emitted.length, 0, '点预览不应提交答案');
+  btn.onclick();
+  assert.equal(lastAnswer(emitted)?.optionIndex, 0);
+});
+
+test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0',
+    text: 'Pick many',
+    multiSelect: true,
+    options: [
+      { label: 'A', description: 'desc A' },
+      { label: 'B', description: 'desc B' },
+    ],
+  });
+  approvals.cancelQuestionArming();
+  const wrap0 = byId('questionOptions').children[0];
+  const btn0 = wrap0.children[0];
+  // 子节点顺序：[☐/☑ 字形, description]；标签是 button 自己的文本
+  const mark = () => btn0.children[0];
+  assert.equal(btn0.getAttribute('role'), 'checkbox');
+  assert.equal(btn0.getAttribute('aria-checked'), 'false');
+  assert.equal(btn0.textContent, 'A', '可访问名称里只该有选项标签');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true', '☐/☑ 字形应对读屏隐藏，勾选态交给 aria-checked');
+  assert.equal(btn0.children[1].textContent, 'desc A');
+
+  btn0.onclick();
+  assert.equal(btn0.getAttribute('aria-checked'), 'true');
+  assert.equal(mark().textContent, '☑ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true');
+  assert.equal(btn0.children.length, 2, '切换勾选后 description 仍在 button 内');
+  assert.equal(btn0.children[1].textContent, 'desc A');
+  assert.equal(wrap0.classList.contains('border-accent'), true);
+
+  btn0.onclick();
+  assert.equal(btn0.getAttribute('aria-checked'), 'false');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(wrap0.classList.contains('border-accent'), false);
 });
