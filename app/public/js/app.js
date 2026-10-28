@@ -1754,15 +1754,17 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
   // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
   // pendingPermissions/pendingQuestions 才是权威真相。视图稳定后调用（bindView / connect 两路径）。
-  function applyPendingSnapshot(pending) {
+  function applyPendingSnapshot(pending, instanceId) {
     if (!pending) return;
     // 走 sync:since ack 的 pending 字段重建卡片，不经过 dispatchAgentEvent，故不带 event.replay 标记；
     // 这里单独置位 isReplayBatch 防止环形缓冲被冲出窗口（gap）时，这条旁路漏静音重新弹响。
     // try/finally：handle.* 会动 DOM，若中途抛错也必须复位，否则 isReplayBatch 卡在 true 会静默吞掉后续所有实时提示音。
+    // instanceId：快照属于这次 sync 的实例；合成信封第二参，让 enqueue 存下所属实例（#388）。
+    const env = instanceId ? { instanceId } : undefined;
     appContext.state.isReplayBatch = true;
     try {
-      for (const p of pending.permissions || []) handle.permission_request(p);
-      for (const q of pending.questions || []) handle.question(q);
+      for (const p of pending.permissions || []) handle.permission_request(p, env);
+      for (const q of pending.questions || []) handle.question(q, env);
     } finally {
       appContext.state.isReplayBatch = false;
     }
@@ -1823,7 +1825,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
       // reconnect 已 return——它触发干净重连，届时新一轮 sync 会带新快照。
-      applyPendingSnapshot(res?.pending);
+      applyPendingSnapshot(res?.pending, reqInstanceId);
     };
     if (probe) {
       if (_probeInFlight) return;       // ack 异步，防 200ms debounce 外的并发探测
@@ -3407,23 +3409,24 @@ import { createGateFocusController } from './app/focus-layers.js';
       messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
     },
-    permission_request(p) {
+    permission_request(p, ev) {
       // 幂等：sync:since 切入补发的 pending 快照可能与 buffer 回放的原始事件同 requestId → 只保留一份
       if (approvals.isDuplicatePermission(p.requestId)) return;
       alertCue('need');
-      approvals.enqueuePermission(p);
+      // 信封 instanceId 随队列条目存下，作答路由到所属实例（#388；dispatch 契约第二参）
+      approvals.enqueuePermission(p, ev?.instanceId);
       // FE-NEW-002：JSON.stringify(undefined) 为 undefined，.slice 抛错会中断 handler（verify 也不跑）
       // sensitive：正文是工具入参原文（Bash 的 command、Write 的 file_path/content 头部）。
       // 预览开关关闭时 notify 只保留标题，与 Web Push / ntfy 两条通道的隐私口径对齐。
       notify(t('⚠️ 等待审批'), `${p.name}：${safeJsonPreview(p.input, 80)}`, { sensitive: true });
       approvals.verifyPermIntegrity(p); // 异步、不阻塞渲染——完整性协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
-    question(p) {
+    question(p, ev) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
       // 含「已本地作答/已收 request_resolved」判定：忽略重放（切会话、probe、整页刷新后的 sync）
       if (approvals.isDuplicateQuestion(p.requestId)) return;
       alertCue('need');
-      approvals.enqueueQuestion(p);
+      approvals.enqueueQuestion(p, ev?.instanceId);
       // FE-003：text 可能缺失/非字符串（畸形 AskUserQuestion / SDK 漂移），slice 会抛并中断 handler。
       const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
       notify(t('❓ 需要选择'), qPreview.slice(0, 80), { sensitive: true }); // 问题正文同属预览开关管辖
@@ -6075,7 +6078,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
-      applyPendingSnapshot(res?.pending);
+      applyPendingSnapshot(res?.pending, id);
     });
   }
 

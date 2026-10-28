@@ -51,7 +51,7 @@ function fakeEl(id = '') {
   return el;
 }
 
-function mount() {
+function mount({ getViewingInstanceId = () => null } = {}) {
   const dom = new Map();
   const byId = id => {
     if (!dom.has(id)) dom.set(id, fakeEl(id));
@@ -68,6 +68,7 @@ function mount() {
     socket: { connected: true, emit: (name, payload) => emitted.push({ name, payload }) },
     permModal: byId('permModal'),
     questionModal: byId('questionModal'),
+    getViewingInstanceId,
   });
   return { approvals, byId, emitted, warnHidden: () => byId('permIntegrityWarn').classList.contains('hidden') };
 }
@@ -195,4 +196,36 @@ test('多题组卡：后几题还没送到时不放行提交，收齐答完才�
   pickOption(byId, 0); // 第 3 题，跳复查页
   byId('questionGroupSubmit').onclick();
   assert.deepEqual(lastAnswer(emitted)?.answers.map(a => a.index), [0, 1, 2]);
+});
+
+
+// ── #388：作答路由到审批/提问所属实例，不是当前查看实例 ──────────────────────
+// nav-escape 允许审批卡开着切会话；若 emit 仍带 viewingInstanceId，服务端打到错误实例静默 no-op。
+const lastApprove = emitted => emitted.filter(e => e.name === 'user:approve').at(-1)?.payload;
+
+test('审批：切到别的会话后作答，仍路由到入队时的所属实例', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueuePermission(permRequest('perm_1'), 'inst-A');
+  byId('permAllow').onclick();
+  assert.equal(lastApprove(emitted)?.instanceId, 'inst-A', '作答带了当前查看实例而非所属实例');
+  assert.equal(lastApprove(emitted)?.requestId, 'perm_1');
+});
+
+test('单题提问：切会话后作答仍路由到所属实例', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  approvals.enqueueQuestion({
+    requestId: 'toolu_q#0', text: 'Pick', options: ['A', 'B'],
+  }, 'inst-A');
+  pickOption(byId, 0);
+  assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
+});
+
+test('多题组卡：整组提交路由到首题所属实例，不受 viewing 影响', () => {
+  const { approvals, byId, emitted } = mount({ getViewingInstanceId: () => 'inst-B' });
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2), 'inst-A'));
+  pickOption(byId, 0);
+  pickOption(byId, 1);
+  byId('questionGroupSubmit').onclick();
+  assert.equal(lastAnswer(emitted)?.instanceId, 'inst-A');
+  assert.equal(lastAnswer(emitted)?.requestId, 'toolu_g');
 });
