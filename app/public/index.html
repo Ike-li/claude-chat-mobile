@@ -8,9 +8,11 @@
        外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。
        defer + 排在 viewport meta 之后：脚本不碰 DOM，没理由在渲染阻塞窗口里抢跑，
        解析器应该先拿到 viewport 才开始布局。 -->
+  <!-- 主题启动：在 CSS 前同步写 data-theme，避免手动浅/深下的 FOUC（外置以保 CSP） -->
+  <script src="/js/theme-boot.js"></script>
   <script src="/js/sw-cleanup.js" defer></script>
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
+  <meta name="theme-color" data-ccm-palette="light" media="(prefers-color-scheme: light)" content="#F4F3EE">
+  <meta name="theme-color" data-ccm-palette="dark" media="(prefers-color-scheme: dark)" content="#121211">
   <title>Claude Chat Mobile</title>
   <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /sw.js（零缓存逻辑，非 offline 方案——
        §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/sw.js。
@@ -29,8 +31,8 @@
   <script src="/js/tw-config.js"></script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
-  <link rel="stylesheet" href="/vendor/github-light.min.css" media="(prefers-color-scheme: light)">
-  <link rel="stylesheet" href="/vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
+  <link id="hljsThemeLight" rel="stylesheet" href="/vendor/github-light.min.css" media="(prefers-color-scheme: light)">
+  <link id="hljsThemeDark" rel="stylesheet" href="/vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
   <script src="/vendor/highlight.min.js"></script>
   <!-- 文件浏览器代码查看/编辑（CM5，见 public/js/app/file-browser.js）；核心须先于各语言 mode 加载 -->
   <link rel="stylesheet" href="/vendor/codemirror/codemirror.min.css">
@@ -1186,6 +1188,27 @@
               </button>
             </div>
             <div class="text-[11px] text-ink-faint px-1">切换后请刷新页面生效。</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-ink-soft mb-2">🎨 <span>主题</span> / Theme
+            <span class="text-[10px] font-normal text-ink-faint bg-sunk rounded px-1.5 py-0.5 ml-1" data-scope-chip="device">📱 仅此设备</span>
+          </div>
+          <div class="space-y-2">
+            <!-- 与语言组同构的自绘 radio：sheet 带 transform，原生 select 在手机 Safari 会飘坐标。
+                 即时生效（不刷新）——色板已是 CSS 变量，只需改 data-theme / meta / hljs media。 -->
+            <div id="prefThemeGroup" role="radiogroup" aria-label="主题 / Theme" class="space-y-1.5">
+              <button type="button" role="radio" aria-checked="false" data-theme-pref="light" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>浅色 / Light</span><span data-theme-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-theme-pref="dark" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>深色 / Dark</span><span data-theme-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+              <button type="button" role="radio" aria-checked="false" data-theme-pref="system" class="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">
+                <span>跟随系统 / System</span><span data-theme-check class="opacity-0" aria-hidden="true">✓</span>
+              </button>
+            </div>
           </div>
         </div>
 
