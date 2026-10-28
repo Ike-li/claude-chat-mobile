@@ -250,6 +250,21 @@ test('多题组卡：整组提交路由到首题所属实例，不受 viewing �
   assert.equal(lastAnswer(emitted)?.requestId, 'toolu_g');
 });
 
+// ── #373：连续审批换卡回到顶部 ───────────────────────────────────────────────
+// answerPerm 里 closeSheet→showNextPerm→openSheet 同步发生，面板不隐藏、scrollTop 不会自己归零：
+// 上一张卡滚到按钮处作答，下一张卡就停在同一滚动位置，工具名与命令开头在视口外。
+test('连续审批：上一张卡滚到底后作答，下一张卡回到面板顶部（#373）', () => {
+  const { approvals, byId, emitted } = mount();
+  const panel = fakeEl('permPanel');
+  byId('permModal').firstElementChild = panel;
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2', { name: 'Write' }));
+  panel.scrollTop = 240;
+  byId('permAllow').onclick();
+  assert.equal(lastApprove(emitted)?.requestId, 'perm_1');
+  assert.equal(approvals.hasPending(), true, '第二张卡应接着弹出');
+  assert.equal(panel.scrollTop, 0, '第二张卡沿用了上一张卡的滚动位置');
+});
 
 // ── #371：断线/校验失败写进浮层内，不被 z-40 遮罩挡住 ─────────────────────────
 test('审批：断线点允许时浮层内可见错误，且不 emit', () => {

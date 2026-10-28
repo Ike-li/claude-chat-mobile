@@ -232,6 +232,10 @@ export function createApprovalController(context, {
       permExitModeWrap.classList.toggle('hidden', !isExit);
       if (isExit) paintExitModeChips();
     }
+    // 换卡回到顶部（同 showNextQuestion）：连续审批时 closeSheet→openSheet 同步发生、面板不隐藏，
+    // 不归零会沿用上一张卡的滚动位置，新卡的工具名与命令开头被滚出视口（#373）
+    const permPanel = permModal?.firstElementChild;
+    if (permPanel) permPanel.scrollTop = 0;
     if (!suspended) {
       // 先上防误触再开窗（同上）；被别的界面盖着时不弹，resume 时再弹
       armPermSheetButtons();

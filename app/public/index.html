@@ -266,7 +266,7 @@
 
   <!-- 权限审批弹窗（底部 sheet） -->
   <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
-    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <div class="sheet-handle"></div>
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
       <!-- Claude in Chrome 工具的一句话标题（「Claude in Chrome 想在 example.org 上读取页面」），其它工具隐藏。
@@ -310,14 +310,19 @@
           <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">Bypass</button>
         </div>
       </div>
-      <!-- #371：断线/失败原因写在浮层内（与按钮同层），避免只 addBar 到被 z-40 盖住的消息流 -->
-      <div id="permSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="perm-sheet-error"></div>
-      <div class="flex gap-2">
-        <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
-        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
+      <!-- #373：拒绝 / 允许 / 中止钉在面板底部（sticky），面板超高时滚的是上面的命令与目录，
+           按钮始终在视口内——只给面板 overflow-y-auto 会把按钮从「够不着」变成「要先滚」。
+           -bottom-4 / -mb-4 / pb-4 吃掉面板的底部内边距：否则命令正文会从按钮下方那条 16px 缝里透出来。 -->
+      <div id="permActions" class="sticky -bottom-4 -mb-4 pt-2 pb-4 bg-surface" data-testid="perm-actions">
+        <!-- #371：断线/失败原因写在浮层内（与按钮同层），避免只 addBar 到被 z-40 盖住的消息流 -->
+        <div id="permSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="perm-sheet-error"></div>
+        <div class="flex gap-2">
+          <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
+          <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
+        </div>
+        <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
+        <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
       </div>
-      <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
-      <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
     </div>
   </div>
 
