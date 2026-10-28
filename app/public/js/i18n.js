@@ -620,8 +620,6 @@ export const EN_DICT = Object.freeze({
   // 手动标记的会话被分页挤出本页时，服务端单独补回来，前端渲染成列表顶部这一组（2026-09-08）
   '稍后再看': 'Saved for later',
   '点按跳到下一条': 'Tap to jump to the next one',
-  // #383：会话行未读 chip 点按 → 标为已读（与目录角标「点按跳到下一条」同形的动作提示）
-  '点按标为已读': 'Tap to mark as read',
 
   // —— 消息流 / 工具卡 / 思考 ——
   '工具执行已因本轮错误停止': 'Tool execution stopped by an error this turn',
@@ -875,6 +873,7 @@ export const EN_DICT = Object.freeze({
   '出错：': 'Error: ',
   '已完成': 'Done',
   '已中止': 'Interrupted',
+  'Claude 正在回复': 'Claude is responding',
   '已等待 <1 分钟': 'Waiting <1 min',
   '已等待': 'Waiting',
   '用时': 'took',

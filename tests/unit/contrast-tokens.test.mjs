@@ -44,6 +44,14 @@ const darkRoot = css.match(/:root\[data-theme=["']dark["']\]\s*\{([^}]+)\}/)?.[1
 const light = tokenMap(lightRoot);
 const dark = { ...light, ...tokenMap(darkRoot) }; // dark 覆盖同名
 
+// 深色 token 写了两份（手动 data-theme=dark / 跟随系统的媒体查询），上面的对比度断言只读第一份：
+// 两份一旦漂移，系统深色那一份就再没人量。这里钉住两份逐项相同。
+test('#385 手动深色与系统深色两份 token 逐项一致', () => {
+  const systemDark = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme=["']light["']\]\)\s*\{([^}]+)\}/)?.[1] || '';
+  assert.ok(systemDark, '找不到跟随系统的深色 token 块');
+  assert.deepEqual(tokenMap(systemDark), tokenMap(darkRoot), '系统深色与手动深色 token 不一致');
+});
+
 test('UI-001 token 表可从 app.css 解析出浅色/深色关键色', () => {
   for (const k of ['surface', 'accent', 'cta', 'warning', 'danger', 'info']) {
     assert.ok(light[k], `light missing --${k}`);

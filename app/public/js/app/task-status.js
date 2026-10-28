@@ -179,6 +179,11 @@ export function createTaskStatusController(context, {
     if (!list) return;
     // list 是滚动容器：replaceChildren 会把 scrollTop 归零，心跳重绘时先存后还，否则每拍跳回顶部。
     const prevScroll = list.scrollTop;
+    // 焦点同理（#402）：行里的「展开」「停」每次重绘都是新节点，键盘用户按一下展开，按住的那颗钮
+    // 随 replaceChildren 被摘掉、焦点掉到 body，新的 aria-expanded 也没人听到；心跳每拍重绘同样甩焦点。
+    // 重绘前记下焦点在哪个任务的哪颗钮（data-task-focus），画完对回新节点。
+    const active = list.ownerDocument?.activeElement;
+    const focusKey = active && list.contains?.(active) ? active.getAttribute?.('data-task-focus') : null;
     list.replaceChildren();
     if (tasks.size === 0) {
       list.classList.add('hidden');
@@ -215,6 +220,7 @@ export function createTaskStatusController(context, {
         const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
         const expandBtn = createElement('<button type="button" class="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer" data-testid="bg-task-expand"></button>');
         expandBtn.setAttribute('aria-expanded', String(isActive));
+        expandBtn.setAttribute('data-task-focus', `${taskId}:expand`);
         const rowChevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
         rowChevron.textContent = isActive ? '▾' : '▸';
         const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
@@ -242,6 +248,7 @@ export function createTaskStatusController(context, {
         }
         if (rowStop.canStop) {
           const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
+          stop.setAttribute('data-task-focus', `${taskId}:stop`);
           stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
           tail.push(stop);
         }
@@ -287,6 +294,10 @@ export function createTaskStatusController(context, {
       }
     }
     list.scrollTop = prevScroll;
+    if (focusKey) {
+      const again = [...(list.querySelectorAll?.('[data-task-focus]') || [])].find(n => n.getAttribute('data-task-focus') === focusKey);
+      again?.focus({ preventScroll: true });
+    }
   }
 
   // ---- 详情面板：累积 task_progress 历史，点击任务行展开 ----

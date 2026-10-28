@@ -8,24 +8,38 @@ import { widgetDisplayMode, widgetSvgDataUri, widgetTitleText } from '../logic/w
 // 安全面：SVG 只经 data:image/svg+xml 的 <img> 显示（图片文档不执行脚本、不加载外部资源），
 // 交互 HTML 一律不执行，只显示标题和提示。两条都不需要改 CSP。
 //
-// 主题：CCM 只跟系统深浅色（app.css 的 prefers-color-scheme），图片里的 SVG 看不到页面变量，
-// 所以按当前主题现算颜色；系统切换深浅色时把已渲染的图重算一遍。源码记在 WeakMap 里，
-// 节点随消息被清掉时一并释放。
-export function createWidgetRenderer({ doc = document, win = window, openPreviewUrl = () => {} } = {}) {
+// 主题：手动档写在 <html data-theme>（theme.js），跟随系统时不写、由 prefers-color-scheme 决定。
+// 图片里的 SVG 看不到页面变量，所以按当前主题现算颜色；手动切档或系统切换深浅色时把已渲染的图
+// 重算一遍。只看系统会出现「手动深色 + 浅色系统」时浅色字画在深色卡片底上，几乎看不见（#385）。
+// 源码记在 WeakMap 里，节点随消息被清掉时一并释放。
+export function createWidgetRenderer({
+  doc = document,
+  win = window,
+  openPreviewUrl = () => {},
+  Observer = globalThis.MutationObserver,
+} = {}) {
   const sources = new WeakMap();
   const darkQuery = win.matchMedia?.('(prefers-color-scheme: dark)') ?? null;
-  const theme = () => (darkQuery?.matches ? 'dark' : 'light');
+  const theme = () => {
+    const forced = doc.documentElement?.dataset?.theme;
+    if (forced === 'dark' || forced === 'light') return forced;
+    return darkQuery?.matches ? 'dark' : 'light';
+  };
   // 图片底色取界面卡片色，灯箱的黑色遮罩上也看得清深色字
   const background = () => win.getComputedStyle?.(doc.documentElement).getPropertyValue('--surface').trim() || '';
   const srcFor = code => widgetSvgDataUri(code, { theme: theme(), background: background() });
 
-  darkQuery?.addEventListener?.('change', () => {
+  function repaint() {
     for (const img of doc.querySelectorAll('img.widget-svg')) {
       const code = sources.get(img);
       const src = code ? srcFor(code) : null;
       if (src) img.src = src;
     }
-  });
+  }
+  darkQuery?.addEventListener?.('change', repaint);
+  if (Observer && doc.documentElement) {
+    new Observer(repaint).observe(doc.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
 
   function render(widget) {
     const mode = widgetDisplayMode(widget);

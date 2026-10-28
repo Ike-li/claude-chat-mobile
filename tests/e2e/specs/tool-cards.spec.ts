@@ -454,6 +454,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBe(680);
 
+    // #385 手动档压过系统：系统深色 + 手动浅色 → 已显示的图按浅色重算；改回跟随系统又回到深色。
+    // （theme.js 的 applyThemeToDocument 就是写 / 清 <html data-theme>）
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}');
+    // 原生控件（滚动条、复选框、select 弹层）也要跟手动档，不跟系统
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+    await expect.poll(async () => decodeSvgSrc(await img.getAttribute('src')))
+      .toContain('rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}');
+
     // 点开看大图：复用附件灯箱
     await img.click();
     await expect(page.locator('#attachPreviewModal')).not.toHaveClass(/\bhidden\b/);
