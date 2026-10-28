@@ -380,9 +380,17 @@ export function createApprovalController(context, {
       btn.setAttribute('aria-checked', selected ? 'true' : 'false');
     }
   }
-  // 选项标题（含多选 ☐/☑）；description 放进 button 内以免点说明落在死区（#400）
+  // 选项标题（含多选 ☐/☑）；description 放进 button 内以免点说明落在死区（#400）。
+  // ☐/☑ 只是视觉：勾选态已由 role=checkbox + aria-checked 表达，字形进 aria-hidden，
+  // 否则读屏把「ballot box」读进选项名、再报一遍 checked（#382）。
   function applyOptionCaption(btn, { multi, selected, label, descEl = null }) {
-    btn.textContent = multi ? `${selected ? '☑' : '☐'} ${label}` : label;
+    btn.textContent = label;
+    if (multi) {
+      const mark = el(`<span></span>`);
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = `${selected ? '☑' : '☐'} `;
+      btn.prepend(mark);
+    }
     if (descEl) btn.appendChild(descEl);
   }
   function showNextQuestion() {
@@ -479,7 +487,8 @@ export function createApprovalController(context, {
       // #400：description 放进 button，整张选项卡（标题+说明）都可点；preview 仍在 button 外以免误触
       let descEl = null;
       if (opt && typeof opt === 'object' && opt.description) {
-        descEl = el(`<div class="pt-1 text-[11px] text-ink-faint leading-snug"></div>`);
+        // span.block 而非 div：<button> 的内容模型只收 phrasing content
+        descEl = el(`<span class="block pt-1 text-[11px] text-ink-faint leading-snug"></span>`);
         descEl.textContent = opt.description;
       }
       applyOptionCaption(btn, { multi, selected: pickedNow, label, descEl });

@@ -46,6 +46,7 @@ function fakeEl(id = '') {
     setAttribute: (k, v) => el.attrs.set(k, v),
     querySelectorAll: () => [],
     appendChild: child => { el.children.push(child); return child; },
+    prepend: child => { el.children.unshift(child); return child; },
     after: sibling => { el.children.push(sibling); return sibling; },
     remove: () => {},
     focus: () => {},
@@ -468,19 +469,25 @@ test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）
   approvals.cancelQuestionArming();
   const wrap0 = byId('questionOptions').children[0];
   const btn0 = wrap0.children[0];
+  // 子节点顺序：[☐/☑ 字形, description]；标签是 button 自己的文本
+  const mark = () => btn0.children[0];
   assert.equal(btn0.getAttribute('role'), 'checkbox');
   assert.equal(btn0.getAttribute('aria-checked'), 'false');
-  assert.equal(btn0.children[0].textContent, 'desc A');
+  assert.equal(btn0.textContent, 'A', '可访问名称里只该有选项标签');
+  assert.equal(mark().textContent, '☐ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true', '☐/☑ 字形应对读屏隐藏，勾选态交给 aria-checked');
+  assert.equal(btn0.children[1].textContent, 'desc A');
 
   btn0.onclick();
   assert.equal(btn0.getAttribute('aria-checked'), 'true');
-  assert.match(btn0.textContent, /^☑ /);
-  assert.equal(btn0.children.length, 1, '切换勾选后 description 仍在 button 内');
-  assert.equal(btn0.children[0].textContent, 'desc A');
+  assert.equal(mark().textContent, '☑ ');
+  assert.equal(mark().getAttribute('aria-hidden'), 'true');
+  assert.equal(btn0.children.length, 2, '切换勾选后 description 仍在 button 内');
+  assert.equal(btn0.children[1].textContent, 'desc A');
   assert.equal(wrap0.classList.contains('border-accent'), true);
 
   btn0.onclick();
   assert.equal(btn0.getAttribute('aria-checked'), 'false');
-  assert.match(btn0.textContent, /^☐ /);
+  assert.equal(mark().textContent, '☐ ');
   assert.equal(wrap0.classList.contains('border-accent'), false);
 });
