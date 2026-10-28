@@ -6,7 +6,7 @@
 // 这份从原 logic.test.mjs 拆出，同源的还有 -content、-rendering、-session。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, describeSubscribeError, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, isSoftKeyboardPrimaryDevice, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, formatSubagentLastToolLine, formatSpawnDescription, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath, shouldHandshakeOnBoot } from '../../app/public/js/logic.js';
 import { setLang } from '../../app/public/js/i18n.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
@@ -782,10 +782,22 @@ test.describe('defaultModelTileLabel: 默认磁贴文案', () => {
   });
 });
 
-// ── shouldSendOnEnter：移动端回车发送截断修复（2026-07-13 排查报告 §8.1）──
-// 桌面物理键盘有 Shift+Enter 这个「换行逃生舱」，触屏软键盘没有——同样一律拿「非 Shift 回车」当
-// 发送信号，会把触屏用户想换行分段的操作误判成发送，截断成两条消息。触屏设备下回车不再发送，
-// 只走 textarea 默认换行，发送收窄为仅走发送按钮。
+// ── isSoftKeyboardPrimaryDevice / shouldSendOnEnter（#386 + 2026-07-13 §8.1）──
+// 软键盘主设备（手机/平板，主指针 coarse）回车=换行；物理键盘主设备（含触屏笔记本）Enter=发送。
+// 判据只用 pointer: coarse，不用 maxTouchPoints——触屏笔记本 maxTouchPoints>0 但主指针 fine。
+test.describe('isSoftKeyboardPrimaryDevice（#386 软键盘主设备判据）', () => {
+  test('pointerCoarse=true → true（手机/平板主指针触摸）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({ pointerCoarse: true }), true);
+  });
+  test('pointerCoarse=false → false（桌面 / 触屏笔记本主指针 fine）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({ pointerCoarse: false }), false);
+  });
+  test('空入参 → false（默认按物理键盘主设备，Enter 发送）', () => {
+    assert.equal(isSoftKeyboardPrimaryDevice({}), false);
+    assert.equal(isSoftKeyboardPrimaryDevice(), false);
+  });
+});
+
 test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车语义修复）', () => {
   test('非触摸设备 + 无 Shift → true（桌面 Enter 发送，维持现状）', () => {
     assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice: false }), true);
@@ -802,6 +814,16 @@ test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车
   test('空入参安全 → true（不崩，且延续修复前的桌面默认行为）', () => {
     assert.equal(shouldSendOnEnter({}), true);
     assert.equal(shouldSendOnEnter(), true);
+  });
+  test('#386 触屏笔记本：coarse=false → Enter 发送（即使设备有触摸点）', () => {
+    const isTouchDevice = isSoftKeyboardPrimaryDevice({ pointerCoarse: false });
+    assert.equal(isTouchDevice, false);
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice }), true);
+  });
+  test('#386 手机软键盘：coarse=true → Enter 换行不发送', () => {
+    const isTouchDevice = isSoftKeyboardPrimaryDevice({ pointerCoarse: true });
+    assert.equal(isTouchDevice, true);
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice }), false);
   });
 });
 
