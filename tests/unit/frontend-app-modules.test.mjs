@@ -649,6 +649,51 @@ test('settings scroll-lock is idempotent on repeated open/close', () => {
   assert.equal(bodyClasses.has('ccm-sheet-open'), false, '重复 close 不得 underflow 再去动别人的锁');
 });
 
+test('settings Escape: 上层 sheet 已在捕获阶段处理（defaultPrevented）时不跟着关设置（#380）', () => {
+  const sheetClasses = new Set(['translate-y-full']);
+  const classList = set => ({
+    add: (...n) => n.forEach(x => set.add(x)),
+    remove: (...n) => n.forEach(x => set.delete(x)),
+    contains: n => set.has(n),
+  });
+  const context = createAppContext({
+    dom: {
+      settingsSheet: {
+        classList: classList(sheetClasses), scrollTop: 0, inert: false, dataset: {},
+        contains: () => false, hasAttribute: () => true, setAttribute: () => {}, focus: () => {},
+      },
+      settingsSheetBody: { scrollTop: 0 },
+      settingsScrim: { classList: classList(new Set(['hidden'])) },
+    },
+  });
+  const keydown = [];
+  const fakeDoc = {
+    documentElement: { classList: classList(new Set()), dataset: {} },
+    body: { classList: classList(new Set()) },
+    activeElement: null,
+    addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); },
+  };
+  const controller = createSettingsController(context, {
+    alerts: { preferences: () => ({ sound: false, vibrate: false, foregroundComplete: false }), ensureAudio: () => {} },
+    syncPrefs: false,
+    doc: fakeDoc,
+  });
+  const esc = extra => {
+    const ev = { key: 'Escape', defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; }, ...extra };
+    keydown.forEach(fn => fn(ev));
+  };
+  assert.equal(keydown.length, 1, '设置控制器应挂上 keydown');
+
+  controller.open();
+  assert.equal(sheetClasses.has('translate-y-full'), false);
+  esc({ defaultPrevented: true }); // appConfirm 叠在设置上：sheets.js 已收掉栈顶并 preventDefault
+  assert.equal(sheetClasses.has('translate-y-full'), false, '上层 sheet 的 Esc 把设置面板也一起关了');
+  esc({ isComposing: true });
+  assert.equal(sheetClasses.has('translate-y-full'), false, '取消输入法候选的 Esc 关掉了设置');
+  esc();
+  assert.equal(sheetClasses.has('translate-y-full'), true, '设置自己在顶层时 Esc 应关闭');
+});
+
 test('session workspace state exposes isolated caches through app context', () => {
   const firstContext = createAppContext();
   const secondContext = createAppContext();
