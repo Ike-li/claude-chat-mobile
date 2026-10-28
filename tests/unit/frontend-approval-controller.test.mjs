@@ -491,3 +491,116 @@ test('多选选项带 role=checkbox 与 aria-checked，切换时同步（#382）
   assert.equal(mark().textContent, '☐ ');
   assert.equal(wrap0.classList.contains('border-accent'), false);
 });
+
+
+// ── #377：连续审批/提问浮层写明队列剩余条数 ───────────────────────────────────
+function queueProgress(byId, id) {
+  const el = byId(id);
+  return el.classList.contains('hidden') ? null : el.textContent;
+}
+
+test('单条审批不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+});
+
+test('连续多条审批显示「第 N 条，后面还有 M 条」，答完推进', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  byId('permAllow').onclick();
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 2 条，后面还有 1 条');
+
+  byId('permAllow').onclick();
+  // 最后一条仍属同批，应能看出「不是新的打断」；M=0。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 3 条，后面还有 0 条');
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null, '整批结束后进度应隐藏并归零');
+});
+
+test('单条提问不显示队列进度', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});
+
+test('提问进度按「还要弹几张卡」数：排队的 3 题组卡只算 1 条', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.cancelQuestionArming();
+  [0, 1, 2].forEach(i => approvals.enqueueQuestion(groupQ(i, 3)));
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条', '一张 3 页签的组卡被数成了 3 条');
+
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+});
+
+test('连续多条提问显示队列进度；clearAll 清掉', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 2 条，后面还有 0 条');
+
+  approvals.clearAll();
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+});
+
+test('卡仍开着时 resolve 掉排队项：M 下降；只剩当前卡时隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueuePermission(permRequest('perm_1'));
+  approvals.enqueuePermission(permRequest('perm_2'));
+  approvals.enqueuePermission(permRequest('perm_3'));
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 2 条');
+
+  // 多设备/回放：别的客户端已处理 perm_2，本机仍停在第 1 张。
+  approvals.resolvePermission('perm_2');
+  assert.equal(queueProgress(byId, 'permQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolvePermission('perm_3');
+  // 队列空、当前卡仍开 → 整批看起来又只剩一张，进度应隐藏（与单条 enqueue 一致）。
+  assert.equal(queueProgress(byId, 'permQueueProgress'), null);
+
+  byId('permAllow').onclick();
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('提问卡仍开着时 resolve 掉排队项：M 下降并最终隐藏', () => {
+  const { approvals, byId } = mount();
+  approvals.enqueueQuestion({ requestId: 'toolu_a#0', text: 'Q1', options: ['A', 'B'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_b#0', text: 'Q2', options: ['C', 'D'] });
+  approvals.enqueueQuestion({ requestId: 'toolu_c#0', text: 'Q3', options: ['E'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 2 条');
+
+  approvals.resolveQuestion('toolu_b#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_c#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+
+  approvals.cancelQuestionArming();
+  pickOption(byId, 0);
+  assert.equal(approvals.hasPending(), false);
+});
+
+test('组卡仍开着时 resolve 掉后面排队的单题：M 下降', () => {
+  const { approvals, byId } = mount();
+  [0, 1].forEach(i => approvals.enqueueQuestion(groupQ(i, 2)));
+  // 同组两题合成一张组卡后队列空 → 无进度；再排队一张别的单题。
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null);
+  approvals.enqueueQuestion({ requestId: 'toolu_solo#0', text: 'Solo', options: ['X'] });
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), '第 1 条，后面还有 1 条');
+
+  approvals.resolveQuestion('toolu_solo#0');
+  assert.equal(queueProgress(byId, 'questionQueueProgress'), null, '组卡单独留下时应隐藏进度');
+  assert.equal(approvals.hasPending(), true, '组卡仍在');
+});

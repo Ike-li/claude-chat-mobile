@@ -76,6 +76,8 @@ export function createApprovalController(context, {
   const questionReviewMissing = byId('questionReviewMissing'), questionGroupSubmit = byId('questionGroupSubmit');
   // #371：浮层内错误槽（与按钮同层）。断线/校验失败写这里；仅 addBar 会被 z-40 遮罩盖住。
   const permSheetError = byId('permSheetError'), questionSheetError = byId('questionSheetError');
+  // #377：队列进度行（标题下、可滚动内容区顶部）；单条时隐藏。
+  const permQueueProgress = byId('permQueueProgress'), questionQueueProgress = byId('questionQueueProgress');
 
   const { permissionQueue: permQueue, questionQueue, markQuestionAnswered, isQuestionAnswered } = queues;
 
@@ -169,10 +171,55 @@ export function createApprovalController(context, {
   // 重连后清掉浮层内「未连接」提示（socket.io 客户端；测试替身可能没有 .on）
   socket?.on?.('connect', clearSheetErrors);
 
+  // #377：连续多张审批/提问时在浮层标题下写进度。「第 N 条」是本批已弹出序号，
+  // 「后面还有 M 条」用 shift 之后的队列长度（不含当前卡）。整批只有一条时不显示。
+  let permBatchOrdinal = 0;
+  let questionBatchOrdinal = 0;
+  function paintQueueProgress(el, ordinal, remaining) {
+    if (!el) return;
+    const alone = ordinal <= 1 && remaining === 0;
+    if (alone) {
+      el.textContent = '';
+      el.classList.add('hidden');
+      return;
+    }
+    // m=0 用独立文案，避免 EN「0 more remaining」读起来像还在排队。
+    const raw = remaining === 0
+      ? t('第 {n} 条，后面还有 0 条')
+      : t('第 {n} 条，后面还有 {m} 条').replace('{m}', String(remaining));
+    el.textContent = raw.replace('{n}', String(ordinal));
+    el.classList.remove('hidden');
+  }
+  function resetPermQueueProgress() {
+    permBatchOrdinal = 0;
+    paintQueueProgress(permQueueProgress, 0, 0);
+  }
+  // 提问的「后面还有 M 条」数的是还要弹几张卡：同组多题会被 showNextQuestion 抽成一张组卡，按组键去重。
+  // 直接用 questionQueue.length 会把一个 3 题的 AskUserQuestion 说成「还有 3 条」，实际只剩一张（带 3 个页签）。
+  function remainingQuestionCards() {
+    const groups = new Set();
+    let singles = 0;
+    for (const q of questionQueue) {
+      if (isGroupedQuestion(q)) groups.add(questionGroupKey(q.requestId));
+      else singles += 1;
+    }
+    return singles + groups.size;
+  }
+  function resetQuestionQueueProgress() {
+    questionBatchOrdinal = 0;
+    paintQueueProgress(questionQueueProgress, 0, 0);
+  }
+
   // ---- 审批弹窗（4a：完整命令 + cwd）----
   function showNextPerm() {
-    if (activePerm || permQueue.length === 0) return;
+    if (activePerm || permQueue.length === 0) {
+      // 队列空且无当前卡：本批结束，下次 enqueue 从第 1 条重新计。
+      if (!activePerm && permQueue.length === 0) resetPermQueueProgress();
+      return;
+    }
     activePerm = permQueue.shift();
+    permBatchOrdinal += 1;
+    paintQueueProgress(permQueueProgress, permBatchOrdinal, permQueue.length);
     clearSheetErrors();
     // Claude in Chrome：标题写出网站，勾选文案写明实际放行范围。两处都每张卡片重写——上一张的改写不能粘到下一张。
     const chrome = describeChromePermission(activePerm);
@@ -394,7 +441,10 @@ export function createApprovalController(context, {
     if (descEl) btn.appendChild(descEl);
   }
   function showNextQuestion() {
-    if (activeQuestion || activeGroup || questionQueue.length === 0) return;
+    if (activeQuestion || activeGroup || questionQueue.length === 0) {
+      if (!activeQuestion && !activeGroup && questionQueue.length === 0) resetQuestionQueueProgress();
+      return;
+    }
     clearSheetErrors();
     const next = questionQueue.shift();
     if (isGroupedQuestion(next)) {
@@ -415,6 +465,9 @@ export function createApprovalController(context, {
       showQuestionPage(true);
       paintQuestion(activeQuestion);
     }
+    // #377：组卡会再从队列抽同组题，进度用抽完后的剩余卡数。
+    questionBatchOrdinal += 1;
+    paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
     // 先上防误触再开窗：开窗那一刻选项 / 跳过就已经不可点（#372，对齐 showNextPerm）。
     armQuestionSheetButtons();
     if (!suspended) openSheet(questionModal);
@@ -794,7 +847,9 @@ export function createApprovalController(context, {
     // 不能用 getViewingInstanceId()——新建会话那一个往返里 viewing 已置 null 而卡片仍开着（#388）。
     enqueuePermission(p, instanceId) {
       permQueue.push({ ...p, instanceId: instanceId ?? p.instanceId ?? null });
-      showNextPerm();
+      // #377：已有卡片打开时 showNextPerm 会直接 return，但仍要刷新「后面还有 M 条」。
+      if (activePerm) paintQueueProgress(permQueueProgress, permBatchOrdinal, permQueue.length);
+      else showNextPerm();
     },
     enqueueQuestion(p, instanceId) {
       const entry = { ...p, instanceId: instanceId ?? p.instanceId ?? null };
@@ -812,19 +867,29 @@ export function createApprovalController(context, {
         return;
       }
       questionQueue.push(entry);
-      showNextQuestion();
+      // #377：同审批——已打开一张时只刷新剩余条数，不另开窗。
+      if (activeQuestion || activeGroup) {
+        paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
+      } else {
+        showNextQuestion();
+      }
     },
     verifyPermIntegrity,
     // M4：审批完成后广播（多设备或重放缓冲），关闭陈旧弹窗并晋升下一张。
     resolvePermission(requestId) {
       if (activePerm?.requestId === requestId) {
         dropActivePerm();
-      } else {
-        const idx = permQueue.findIndex(r => r.requestId === requestId);
-        if (idx !== -1) permQueue.splice(idx, 1);
+        permIntegrityMismatched.delete(requestId);
+        showNextPerm();
+        return;
       }
+      const idx = permQueue.findIndex(r => r.requestId === requestId);
+      if (idx !== -1) permQueue.splice(idx, 1);
       permIntegrityMismatched.delete(requestId);
-      showNextPerm();
+      // #377：多设备/回放可在卡仍开着时削掉排队项——与 enqueue 对称，刷新「后面还有 M 条」。
+      // 只有丢掉当前卡时才 showNext 晋升；卡仍开着只刷进度。
+      if (activePerm) paintQueueProgress(permQueueProgress, permBatchOrdinal, permQueue.length);
+      else showNextPerm();
     },
     // question requestId 格式 '${toolUseID}#i'；单题 resolved 用 '#i'，整组终态用 toolUseID。
     resolveQuestion(requestId) {
@@ -834,16 +899,24 @@ export function createApprovalController(context, {
       if (activeQuestion && matchQ(activeQuestion.requestId)) {
         markQuestionAnswered(activeQuestion.requestId);
         dropActiveQuestion();
-      } else {
-        // 可能一次终态清掉队列里同 tool 的多题
-        for (let i = questionQueue.length - 1; i >= 0; i--) {
-          if (matchQ(questionQueue[i].requestId)) {
-            markQuestionAnswered(questionQueue[i].requestId);
-            questionQueue.splice(i, 1);
-          }
+        showNextQuestion();
+        return;
+      }
+      // 可能一次终态清掉队列里同 tool 的多题
+      let removedQueued = false;
+      for (let i = questionQueue.length - 1; i >= 0; i--) {
+        if (matchQ(questionQueue[i].requestId)) {
+          markQuestionAnswered(questionQueue[i].requestId);
+          questionQueue.splice(i, 1);
+          removedQueued = true;
         }
       }
-      showNextQuestion();
+      // resolveInActiveGroup 可能已 drop 组卡 → 走 showNext 晋升；卡仍开着则只刷 M（与 enqueue 对称）。
+      if (activeQuestion || activeGroup) {
+        if (removedQueued) paintQueueProgress(questionQueueProgress, questionBatchOrdinal, remainingQuestionCards());
+      } else {
+        showNextQuestion();
+      }
     },
     // 清空两条队列与当前卡片。epoch 重置 / result / error / 切会话四处共用同一份实现——
     // 此前是四份逐字复制，漏抄一行就是弹窗关不掉。
@@ -852,6 +925,8 @@ export function createApprovalController(context, {
       dropActivePerm();
       questionQueue.length = 0;
       dropActiveQuestion();
+      resetPermQueueProgress();
+      resetQuestionQueueProgress();
       clearSheetErrors();
       // 指纹不符集合也归零：requestId 在 toolUseID 缺失时回落成 `perm_${++permSeq}`，而 permSeq 是
       // AgentSession 的实例字段、构造期归零（src/agent/agent.js）——dispose+resume / 切会话都会造出
