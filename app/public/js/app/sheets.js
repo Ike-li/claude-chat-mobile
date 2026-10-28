@@ -80,6 +80,8 @@ export function createSheetController(context, {
     // 已在栈里（开着时又被 open 一次）只重做视觉：再压一条会让栈永远清不空，滚动锁随之永不释放
     const alreadyOpen = sheetStack.some(s => s.el === el);
     el.classList.remove('hidden');
+    // #369：CSS 过渡认 .ccm-sheet，不认 ID 白名单；HTML 已标类，这里再补一次防漏标新面板。
+    el.classList.add('ccm-sheet');
     // Force reflow
     el.offsetHeight;
     el.classList.add('sheet-open');
