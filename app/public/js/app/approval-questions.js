@@ -74,6 +74,8 @@ export function createApprovalController(context, {
   const questionOtherWrap = byId('questionOtherWrap'), questionTabs = byId('questionTabs');
   const questionReview = byId('questionReview'), questionReviewList = byId('questionReviewList');
   const questionReviewMissing = byId('questionReviewMissing'), questionGroupSubmit = byId('questionGroupSubmit');
+  // #371：浮层内错误槽（与按钮同层）。断线/校验失败写这里；仅 addBar 会被 z-40 遮罩盖住。
+  const permSheetError = byId('permSheetError'), questionSheetError = byId('questionSheetError');
 
   const { permissionQueue: permQueue, questionQueue, markQuestionAnswered, isQuestionAnswered } = queues;
 
@@ -134,10 +136,42 @@ export function createApprovalController(context, {
   }
   if (permIntegrityReload) permIntegrityReload.onclick = () => location.reload();
 
+  // ---- 浮层内错误提示（#371）----
+  // 审批/提问铺满视口 z-40，addBar 进 #messages 会被挡住；失败原因必须写在浮层里才看得见。
+  // 不断开浮层：请求仍挂起，关窗等于把「需要你」藏起来。连接恢复后清掉。
+  function setSheetError(el, msg) {
+    if (!el) return;
+    if (!msg) {
+      el.textContent = '';
+      el.classList.add('hidden');
+      return;
+    }
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+  function showPermSheetError(msg) { setSheetError(permSheetError, msg); }
+  function showQuestionSheetError(msg) { setSheetError(questionSheetError, msg); }
+  function clearSheetErrors() {
+    setSheetError(permSheetError, null);
+    setSheetError(questionSheetError, null);
+  }
+  // 断线时：浮层内提示 + 仍 addBar（关窗后历史里能看见）。返回 true = 调用方应中止。
+  function failIfDisconnected(sheet) {
+    if (socket.connected) return false;
+    const msg = t('网络未连接，请等待重新连接后再操作');
+    addBar(msg, 'text-danger');
+    if (sheet === 'perm') showPermSheetError(msg);
+    else showQuestionSheetError(msg);
+    return true;
+  }
+  // 重连后清掉浮层内「未连接」提示（socket.io 客户端；测试替身可能没有 .on）
+  socket?.on?.('connect', clearSheetErrors);
+
   // ---- 审批弹窗（4a：完整命令 + cwd）----
   function showNextPerm() {
     if (activePerm || permQueue.length === 0) return;
     activePerm = permQueue.shift();
+    clearSheetErrors();
     // Claude in Chrome：标题写出网站，勾选文案写明实际放行范围。两处都每张卡片重写——上一张的改写不能粘到下一张。
     const chrome = describeChromePermission(activePerm);
     if (permTitle) {
@@ -243,10 +277,8 @@ export function createApprovalController(context, {
 
   function answerPerm(decision) {
     if (!activePerm) return;
-    if (!socket.connected) { // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决
-      addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger');
-      return;
-    }
+    // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决（#371 浮层内可见）
+    if (failIfDisconnected('perm')) return;
     const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
     const payload = {
       requestId: activePerm.requestId,
@@ -267,6 +299,7 @@ export function createApprovalController(context, {
     // 仅 ExitPlanMode 批准时带 exitMode；拒绝/其它工具不传
     if (wasExitPlanMode && decision === 'allow') payload.exitMode = selectedExitMode || 'default';
     socket.emit('user:approve', payload);
+    clearSheetErrors();
     const exitNote = (wasExitPlanMode && decision === 'allow') ? ` → ${payload.exitMode}` : '';
     addBar(`${decision === 'allow' ? t('✅ 已允许：') : t('🚫 已拒绝：')}${activePerm.name}${exitNote}`, 'text-ink-faint');
     permIntegrityMismatched.delete(activePerm.requestId);
@@ -323,6 +356,7 @@ export function createApprovalController(context, {
   }
   function showNextQuestion() {
     if (activeQuestion || activeGroup || questionQueue.length === 0) return;
+    clearSheetErrors();
     const next = questionQueue.shift();
     if (isGroupedQuestion(next)) {
       const key = questionGroupKey(next.requestId);
@@ -524,7 +558,7 @@ export function createApprovalController(context, {
     if (!g) return;
     const { answers, missing } = buildQuestionGroupAnswers(g.questions, g.drafts, [...g.openIndexes]);
     if (missing.length) return; // 按钮此时是禁用的
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
+    if (failIfDisconnected('question')) return;
     // 先标记已答再 emit/关窗（同 answerQuestion）；整组 key 入库即覆盖组里每一个 #i
     markQuestionAnswered(g.key);
     groupDrafts.delete(g.key);
@@ -534,6 +568,7 @@ export function createApprovalController(context, {
   }
 
   function finishQuestionUI(barText) {
+    clearSheetErrors();
     activeQuestion = null;
     activeGroup = null;
     multiSelectedIndexes = new Set();
@@ -545,7 +580,8 @@ export function createApprovalController(context, {
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
+    // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答（#371 浮层内可见）
+    if (failIfDisconnected('question')) return;
     // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
@@ -554,10 +590,11 @@ export function createApprovalController(context, {
   }
   function answerQuestionMulti() {
     if (!activeQuestion || !multiSelectedIndexes.size) {
-      addBar(t('请至少选择一项'), 'text-info');
+      // #371：校验提示写浮层内；不再只靠被遮罩盖住的 addBar
+      showQuestionSheetError(t('请至少选择一项'));
       return;
     }
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
+    if (failIfDisconnected('question')) return;
     const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
@@ -568,7 +605,8 @@ export function createApprovalController(context, {
     if (!activeQuestion && !activeGroup) return;
     const freeText = (questionOtherInput?.value || '').trim();
     if (!freeText) {
-      addBar(t('请先输入其他答案'), 'text-info');
+      // #371：空「其他答案」写浮层内，勿只丢进被盖住的消息流
+      showQuestionSheetError(t('请先输入其他答案'));
       questionOtherInput?.focus();
       return;
     }
@@ -577,7 +615,7 @@ export function createApprovalController(context, {
       goToGroupStep(activeGroup.cursor + 1);
       return;
     }
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
+    if (failIfDisconnected('question')) return;
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: activeQuestion.instanceId ?? getViewingInstanceId() });
     finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
@@ -603,7 +641,10 @@ export function createApprovalController(context, {
   if (questionSkip) {
     questionSkip.onclick = () => {
       if (!activeQuestion && !activeGroup) return;
+      // #371：断线时不要 emit interrupt（恢复后可能补送一次中止）；失败原因写浮层内
+      if (failIfDisconnected('question')) return;
       haptic('tap');
+      clearSheetErrors();
       addBar(t('已跳过提问（中止本轮）'), 'text-ink-faint');
       requestInterrupt();
     };
@@ -612,7 +653,10 @@ export function createApprovalController(context, {
   if (permInterrupt) {
     permInterrupt.onclick = () => {
       if (!activePerm) return;
+      // #371：断线时不要 emit；失败原因写浮层内
+      if (failIfDisconnected('perm')) return;
       haptic('tap');
+      clearSheetErrors();
       addBar(t('已请求中止本轮'), 'text-ink-faint');
       requestInterrupt();
     };
@@ -730,6 +774,7 @@ export function createApprovalController(context, {
       dropActivePerm();
       questionQueue.length = 0;
       dropActiveQuestion();
+      clearSheetErrors();
       // 指纹不符集合也归零：requestId 在 toolUseID 缺失时回落成 `perm_${++permSeq}`，而 permSeq 是
       // AgentSession 的实例字段、构造期归零（src/agent/agent.js）——dispose+resume / 切会话都会造出
       // 新实例、重新从 perm_1 发号。而本 Set 活在页面生命周期里，不清就会让一次真实的指纹不符
@@ -744,6 +789,12 @@ export function createApprovalController(context, {
     },
     // 输入区是否该被"先处理当前审批/选择"挡住。
     hasPending() { return Boolean(activePerm || activeQuestion || activeGroup); },
+    // #371：外部（如停止超时）把失败原因写进当前打开的浮层；无浮层时 no-op。
+    surfaceError(msg) {
+      if (activePerm) showPermSheetError(msg);
+      else if (activeQuestion || activeGroup) showQuestionSheetError(msg);
+    },
+    clearSheetErrors,
     suspend() {
       if (suspended) return;
       suspended = true;
