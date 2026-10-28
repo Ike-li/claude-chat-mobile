@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createSheetController } from '../../app/public/js/app/sheets.js';
+import { acquireSheetScrollLock } from '../../app/public/js/app/sheet-scroll-lock.js';
 
 // openSheet 用 requestAnimationFrame 延后移焦；Node 没有这个全局，桩成同步执行即可
 // （本测试只关心 Tab 陷阱与焦点栈，不关心移焦的确切时序）。
@@ -133,6 +134,32 @@ test('openSheet：背景滚动锁随栈增减（ccm-sheet-open）', (t) => {
   controller.closeSheet(a);
   assert.equal(doc.body.classList.contains('ccm-sheet-open'), false, '最后一层关闭后解锁');
   assert.equal(doc.documentElement.classList.contains('ccm-sheet-open'), false);
+});
+
+test('滚动锁：关一个本来没开着的 sheet 不得扣掉别处（设置面板）持有的锁', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { doc, controller } = harness();
+  acquireSheetScrollLock(doc); // 设置面板开着
+  const a = sheetNode([]); a._doc = doc;
+  controller.closeSheet(a);    // 例：审批在别处答掉后 dropActivePerm 又关一次
+  assert.equal(doc.documentElement.dataset.ccmSheetLocks, '1', '没开过的 sheet 关闭时扣掉了别人的锁');
+  assert.ok(doc.body.classList.contains('ccm-sheet-open'), '设置面板还开着，背景却解锁了');
+
+  controller.openSheet(a);
+  controller.closeSheet(a);
+  controller.closeSheet(a);    // 拖关动画期间又点遮罩：同一层关两次
+  assert.equal(doc.documentElement.dataset.ccmSheetLocks, '1', '同一层关两次扣了两份锁');
+});
+
+test('滚动锁：开着的 sheet 再 open 一次不重复入栈，关一次就解锁', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { doc, controller } = harness();
+  const a = sheetNode([]); a._doc = doc;
+  controller.openSheet(a);
+  controller.openSheet(a);
+  assert.equal(doc._count('keydown'), 1, '重复 open 叠了第二个 Tab 陷阱');
+  controller.closeSheet(a);
+  assert.equal(doc.body.classList.contains('ccm-sheet-open'), false, '重复 open 后关闭仍锁着背景滚动');
 });
 
 test('嵌套 sheet：appConfirm 在已开着的业务 sheet 之上打开——内层关闭不得摘掉外层的 Tab 陷阱', () => {
@@ -329,6 +356,16 @@ test('Escape：关闭栈顶可关闭 sheet', () => {
   doc._dispatch('keydown', evt);
   assert.equal(evt._prevented, true);
   assert.equal(sheet.classList.contains('sheet-open'), false, 'Esc 应关闭可关闭 sheet');
+});
+
+test('Escape：输入法组字中的 Esc 交给输入法，不关 sheet', () => {
+  const { doc, controller } = harness();
+  const sheet = sheetNode([]); sheet._doc = doc;
+  controller.openSheet(sheet);
+  const evt = { ...escEvent(), isComposing: true };
+  doc._dispatch('keydown', evt);
+  assert.ok(sheet.classList.contains('sheet-open'), '取消候选词的 Esc 关掉了整个面板');
+  assert.notEqual(evt._prevented, true);
 });
 
 test('Escape：嵌套时只关栈顶一层，外层保持打开', () => {

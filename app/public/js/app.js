@@ -232,6 +232,7 @@ import { createGeneralNav } from './app/general-nav.js';
 import { createAboutPage } from './app/about-page.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNoticeDismissals } from './app/notice-dismissals.js';
+import { createLastKnownExpiry } from './app/terminal-state-expiry.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createOutboxDeadLetters } from './app/outbox-dead-letters.js';
@@ -422,12 +423,17 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 全屏门开着时背后的页面不可 Tab（验收 O74）。按 DOM 顺序传：同为 z-50，靠后的在上面。
   // sessionBlockedSurface（z-20）是中层 aria-modal（#393）：走 overlays，不要塞进 gates——
   // 否则会 inert 掉更高的 leftSidebar（层序注释：落地页在侧栏之下，要能直接翻会话列表）。
+  // overlayCovers 点名它（fixed inset-0 z-20）实际盖住的东西：顶栏、连接横幅、消息区、未读胶囊、输入区；
+  // 桌面（≥1024）常驻侧栏是 relative z-10，也在它下面。设备授权卡（z-30）、手机抽屉（z-40）与各类 sheet
+  // 在它上面，不点名、照常可用。
   const sessionBlockedSurface = $('sessionBlockedSurface');
-  const sidebarScrim = $('sidebarScrim');
   createGateFocusController({
     gates: [authGate, accessRelogin, deviceModalEl, deviceDenied, accessHelp],
     overlays: [sessionBlockedSurface],
-    keepInteractiveWhenOverlay: [leftSidebar, sidebarScrim],
+    overlayCovers: () => [
+      document.querySelector('header'), $('connBanner'), $('messages'), $('unreadPill'), $('composerFooter'),
+      window.innerWidth >= 1024 ? leftSidebar : null,
+    ],
   });
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
@@ -788,6 +794,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 与 Web workdirStates 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
   // 存单值而后端给两个布尔：目录行只有一个角标位，同 cwd 两态并存时取更要紧的那个（等人 > 在跑）。
   const terminalStateByDir = new Map();
+  // #398：抽屉关上后这份 last-known 继续喂 #sessionsDot，但只信 60s（从最后一次观测起算），见 terminal-state-expiry.js
+  const terminalStateExpiry = createLastKnownExpiry({ ttlMs: 60_000 });
   const SESSION_PANEL_REVALIDATE_MS = 12_000;
   let sessionPanelRevalidateTimer = null;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
@@ -6337,6 +6345,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     const waiting = typeof terminalWaiting === 'boolean' ? terminalWaiting : rowHas('waiting');
     // 等人 > 在跑：目录行只有一个角标位，卡在审批上的那个才是要用户动手的
     const next = waiting ? 'waiting' : busy ? 'busy' : null;
+    terminalStateExpiry.observe(); // 状态没变也算一次新观测（有效期从这里起算）
     const prev = terminalStateByDir.get(cwd) ?? null;
     if (next === prev) return;
     if (next) terminalStateByDir.set(cwd, next);
@@ -7983,14 +7992,23 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (window.innerWidth >= 1024) return !document.body.classList.contains('sidebar-collapsed');
     return !leftSidebar.classList.contains('-translate-x-full');
   }
+  // 关着抽屉时 last-known 到期撤下（#398）。到点时抽屉若又开着，轮询在刷，交给它；下次关抽屉再排。
+  function expireTerminalState() {
+    if (isSessionPanelRevalidateActive() || !terminalStateByDir.size) return;
+    terminalStateByDir.clear();
+    refreshDirBadges();
+    updateSessionsDot();
+  }
   function stopSessionPanelRevalidator() {
     if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
     sessionPanelRevalidateTimer = null;
+    terminalStateExpiry.arm(expireTerminalState);
     // 抽屉不可见时停掉 session:list 轮询（省流量）。但【保留】terminalStateByDir：#sessionsDot 在主界面
     // 正是靠这份 last-known 做「其他工作区终端需要你 / 运行中」的被动感知（product #398，2026-10-27）。
     // 旧实现这里 clear() 再 updateSessionsDot()，等于用户一回到主 UI 就把角标信号擦掉——与 summarizeOtherWorkspaces
     // 把 terminal_waiting/busy 排进 #sessionsDot 的设计初衷互斥。
-    // 取舍：保留值可能略旧（抽屉关掉后不再轮询），宁可角标短暂滞后，也不要主界面恒盲。
+    // 取舍：保留值可能略旧（抽屉关掉后不再轮询），宁可角标短暂滞后，也不要主界面恒盲；
+    // 「短暂」由 terminalStateExpiry 兑现——最后一次观测满 60s 就撤下（expireTerminalState）。
     // 抽屉行 chip 仍剥 sessionsCache.terminal（见下），那是重开时防一帧假「运行中」；与顶栏角标无关。
     //
     // SWR 缓存仍保留标题/时间以便下次秒开，但 terminal 是短时活体状态，关闭后必须剥掉，避免重开时
