@@ -9,6 +9,7 @@ import {
 } from '../logic/connection.js';
 
 const GAP_ABOVE_COMPOSER_PX = 12;
+const INSET_FROM_COLUMN_PX = 12; // 与 CSS 回落值 left:0.75rem 相同
 
 export function createScrollToBottomController({
   buttonEl,
@@ -48,6 +49,9 @@ export function createScrollToBottomController({
 
   function positionAboveComposer() {
     if (!buttonEl) return;
+    // 横向贴消息列左沿，不贴视口左沿：桌面（≥1024）常驻侧栏开着时消息列从 300px 起，
+    // left:0.75rem 会让按钮浮在侧栏的会话列表上、挡住那几行的点击。
+    if (messagesEl) buttonEl.style.left = `${Math.max(0, messagesEl.getBoundingClientRect().left) + INSET_FROM_COLUMN_PX}px`;
     // composer 隐藏（空首页）时按钮也不该露；bottom 仍写一个合理回落以免闪一下错位。
     if (!composerFooterEl || composerFooterEl.classList.contains('hidden')) {
       buttonEl.style.bottom = `calc(84px + env(safe-area-inset-bottom))`;
@@ -129,7 +133,9 @@ export function createScrollToBottomController({
   let ro = null;
   if (composerFooterEl && typeof ResizeObserver === 'function') {
     ro = new ResizeObserver(() => schedulePosition());
-    ro.observe(composerFooterEl);
+    // border-box：iOS 软键盘改的是 footer 的 paddingBottom（app.js），content-box 观察看不到这次变化，
+    // 按钮会停在键盘后面直到下一次滚动。侧栏收起/展开改的是宽度，同样经这里重排横向位置。
+    ro.observe(composerFooterEl, { box: 'border-box' });
   }
   window.addEventListener('resize', schedulePosition, { passive: true });
 

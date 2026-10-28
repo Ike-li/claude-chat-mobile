@@ -231,6 +231,9 @@
 
   <!-- 消息区 -->
   <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
+  <!-- #379：回合两端的读屏播报。流式气泡与秒表行都不挂 live（高频重写会刷屏），但读屏用户仍要知道
+       「开始回了」「回完了 / 出错 / 中止」——只在这两个端点各写一次，中间过程不进 live region。 -->
+  <div id="turnAnnouncer" class="sr-only" role="status" data-testid="turn-announcer"></div>
 
   <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
        （app.js jumpToUnreadAnchor）。#messages 的兄弟节点而非子节点——bindView/loadHistory 的整体清空/
@@ -323,14 +326,19 @@
           <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">Bypass</button>
         </div>
       </div>
-      <!-- #371：断线/失败原因写在浮层内（与按钮同层），避免只 addBar 到被 z-40 盖住的消息流 -->
-      <div id="permSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="perm-sheet-error"></div>
-      <div class="flex gap-2">
-        <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
-        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
+      <!-- #373：拒绝 / 允许 / 中止钉在面板底部（sticky），面板超高时滚的是上面的命令与目录，
+           按钮始终在视口内——只给面板 overflow-y-auto 会把按钮从「够不着」变成「要先滚」。
+           -bottom-4 / -mb-4 / pb-4 吃掉面板的底部内边距：否则命令正文会从按钮下方那条 16px 缝里透出来。 -->
+      <div id="permActions" class="sticky -bottom-4 -mb-4 pt-2 pb-4 bg-surface" data-testid="perm-actions">
+        <!-- #371：断线/失败原因写在浮层内（与按钮同层），避免只 addBar 到被 z-40 盖住的消息流 -->
+        <div id="permSheetError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="perm-sheet-error"></div>
+        <div class="flex gap-2">
+          <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
+          <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
+        </div>
+        <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
+        <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
       </div>
-      <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
-      <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
     </div>
   </div>
 
@@ -384,7 +392,7 @@
   </div>
 
   <!-- 抽屉会话行「⋯」的菜单：项由 app/session-row-menu.js 按行现画（标为已读/未读 · 关闭 · 删除） -->
-  <div id="sessionMenuModal" class="ccm-sheet ccm-sheet-kb hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="会话操作">
+  <div id="sessionMenuModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="会话操作">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle"></div>
       <div id="sessionMenuTitle" class="font-semibold text-ink mb-3 truncate"></div>
