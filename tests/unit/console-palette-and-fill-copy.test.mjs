@@ -41,7 +41,10 @@ test('#368 tw-config 桥接 console 语义色', () => {
 test('#368 #consoleModal 壳层不用 Tailwind gray-*', () => {
   const block = consoleModalBlock();
   assert.doesNotMatch(block, /\b(?:bg|text|border|hover:bg|hover:text|hover:border)-gray-\d+/);
-  assert.match(block, /\bbg-console\b|\bbg-console\/95\b/);
+  // console-* 是裸 var(--x)：`bg-console/95` 这类透明度修饰生成不出 CSS，面板会变全透明（半透明底走 app.css 的 color-mix）
+  assert.doesNotMatch(block, /\b(?:bg|text|border)-console(?:-[a-z-]+)?\/\d+/, '#consoleModal 不得用 console-* 透明度类');
+  assert.match(block, /\bconsole-panel\b/);
+  assert.match(css, /\.console-panel\s*\{[^}]*color-mix\(in srgb, var\(--console-bg\)/);
   assert.match(block, /\bborder-console-line\b/);
   assert.match(block, /\btext-console-ink\b/);
   assert.match(block, /id="consoleClose"[^>]*\btext-console-ink-soft\b/);

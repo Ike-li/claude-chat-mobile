@@ -450,7 +450,7 @@
   <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
   <div id="consoleModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="交互日志">
     <!-- #368：色板走 --console-*（设计 token 深色变体），不用 Tailwind gray -->
-    <div class="w-full h-[70vh] bg-console/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-console-line" style="box-shadow:var(--shadow-pop)">
+    <div class="console-panel w-full h-[70vh] backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-console-line" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle bg-console-line mt-3 shrink-0"></div>
       
       <!-- Drawer Header -->
@@ -476,7 +476,7 @@
       </div>
       
       <!-- Drawer Footer -->
-      <div class="px-4 py-2 border-t border-console-line bg-console-sunk/50 flex items-center justify-between shrink-0 text-xs text-console-ink-faint font-mono">
+      <div class="console-footer px-4 py-2 border-t border-console-line flex items-center justify-between shrink-0 text-xs text-console-ink-faint font-mono">
         <span>最多存 500 条，落盘本机、重开恢复</span>
         <div class="flex items-center gap-1.5">
           <button id="consoleCopy" class="px-2 py-0.5 rounded border border-console-line text-console-ink-soft hover:border-console-ink-faint hover:text-console-ink active:scale-95">复制</button>

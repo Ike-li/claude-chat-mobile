@@ -490,6 +490,11 @@ body.ccm-sheet-open #messages {
   transform: scale(0.97);
 }
 
+/* #368：交互日志抽屉的半透明底。tw-config 把 console-* 映射成裸 var(--x)，`bg-console/95` 这类透明度类
+   生成不出任何 CSS（同下方横幅注释）——写成那样，抽屉面板就是全透明的，近白字直接压在模糊的聊天上。 */
+.console-panel { background: color-mix(in srgb, var(--console-bg) 95%, transparent); }
+.console-footer { background: color-mix(in srgb, var(--console-sunk) 50%, transparent); }
+
 /* 连接状态横幅（header 与消息区之间的一行，非阻断）。
    刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
    免得自建样式表与 Play CDN 运行时注入的 <style> 谁先谁后决定显隐，那是不确定的。
