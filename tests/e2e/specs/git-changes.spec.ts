@@ -11,6 +11,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#topContextPill').click();
     await expect(page.locator('#workspaceModal')).toBeVisible();
+    // #369 统一成 .ccm-sheet 过渡后，打开首帧若仍是 visibility:hidden，openSheet 的移焦落空、
+    // 焦点留在 sheet 背后的 pill 上（Tab 陷阱、Esc 都收不到）
+    await expect(page.locator('#workspaceModal')).toBeFocused();
 
     await page.locator('[data-testid="workspace-tab-changes"]').click();
     await expect(page.locator('#gitChangesBody')).toBeVisible();

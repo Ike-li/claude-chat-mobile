@@ -95,8 +95,8 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     assert.equal(h.settingsSheet.inert, true);
   });
 
-  // #393：sessionBlockedSurface 是中层 overlay（不是 z-50 gate）；开着时背景 inert，关后还焦点。
-  test('sessionBlockedSurface 开着时背景 inert，关掉后恢复', () => {
+  // #393：sessionBlockedSurface 是中层 overlay（不是 z-50 gate）；开着时它盖住的背景 inert，关后还焦点。
+  test('sessionBlockedSurface 开着时它盖住的背景 inert，关掉后恢复', () => {
     const surface = fakeEl('sessionBlockedSurface', { hidden: true });
     const header = fakeEl('header');
     const composer = fakeEl('composer');
@@ -106,7 +106,9 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     surface.focus = () => { focused = surface; };
     header.focus = () => { focused = header; };
     const doc = { body, get activeElement() { return focused; } };
-    const ctl = createGateFocusController({ gates: [], overlays: [surface], doc, Observer: null });
+    const ctl = createGateFocusController({
+      gates: [], overlays: [surface], overlayCovers: () => [header, composer], doc, Observer: null,
+    });
     focused = header;
     surface.classList.remove('hidden');
     ctl.sync();
@@ -115,34 +117,85 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     assert.equal(composer.inert, true);
     assert.equal(focused, surface, '焦点应移入落地页');
     surface.classList.add('hidden');
+    focused = body; // 落地页 display:none，焦点随之掉到 body
     ctl.sync();
     assert.equal(header.inert, false);
     assert.equal(composer.inert, false);
     assert.equal(focused, header, '关掉后焦点应还给打开前的元素');
   });
 
-  // #429：落地页 z-20 在侧栏 z-40 之下；挂进 gates 会 inert 掉 leftSidebar，桌面常驻侧栏翻不了会话。
-  test('sessionBlockedSurface 开着时 leftSidebar 保持可交互', () => {
+  // #429：落地页 z-20 只盖住主栏。比它高的层都是 body 子节点——排除法（「除了谁全部 inert」）会把它们
+  // 一起变成看得见、点不动：设备授权卡 z-30、手机抽屉 z-40、抽屉里弹的会话菜单 z-50。
+  test('sessionBlockedSurface 只 inert overlayCovers 点名的元素，更高层照常可交互', () => {
     const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const header = fakeEl('header');
     const leftSidebar = fakeEl('leftSidebar');
     const sidebarScrim = fakeEl('sidebarScrim');
-    const header = fakeEl('header');
+    const deviceRequests = fakeEl('deviceRequests');
+    const sessionMenuModal = fakeEl('sessionMenuModal');
     const body = fakeEl('body');
-    body.children = [header, sidebarScrim, leftSidebar, surface];
+    body.children = [header, sidebarScrim, leftSidebar, surface, sessionMenuModal, deviceRequests];
     const doc = { body, activeElement: body };
     const ctl = createGateFocusController({
-      gates: [],
-      overlays: [surface],
-      keepInteractiveWhenOverlay: [leftSidebar, sidebarScrim],
-      doc,
-      Observer: null,
+      gates: [], overlays: [surface], overlayCovers: () => [header], doc, Observer: null,
     });
     surface.classList.remove('hidden');
     ctl.sync();
     assert.equal(surface.inert, false);
     assert.equal(header.inert, true, '被盖住的顶栏仍须 inert');
-    assert.equal(leftSidebar.inert, false, '侧栏在落地页之上，inert 了就翻不了会话列表');
-    assert.equal(sidebarScrim.inert, false, '抽屉遮罩跟侧栏同层，一并豁免');
+    assert.equal(leftSidebar.inert, false, '手机抽屉在落地页之上，inert 了就翻不了会话列表');
+    assert.equal(sidebarScrim.inert, false);
+    assert.equal(deviceRequests.inert, false, '设备授权卡（z-30）在落地页之上，被 inert 后批准/拒绝点不动');
+    assert.equal(sessionMenuModal.inert, false, '抽屉里弹的菜单在落地页之上，被 inert 后看得见点不动');
+  });
+
+  // 桌面常驻侧栏（relative z-10）在落地页之下：同一个元素该不该 inert 取决于打开那一刻的布局，
+  // overlayCovers 每次打开时求值。
+  test('overlayCovers 每次打开时重新求值（桌面常驻侧栏被盖住时一并 inert）', () => {
+    const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const leftSidebar = fakeEl('leftSidebar');
+    const body = fakeEl('body');
+    body.children = [leftSidebar, surface];
+    const doc = { body, activeElement: body };
+    let docked = false;
+    const ctl = createGateFocusController({
+      gates: [], overlays: [surface], overlayCovers: () => (docked ? [leftSidebar] : []), doc, Observer: null,
+    });
+    surface.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(leftSidebar.inert, false);
+    surface.classList.add('hidden');
+    ctl.sync();
+    docked = true;
+    surface.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(leftSidebar.inert, true, '桌面常驻侧栏在落地页下面，Tab 到的是看不见的会话行');
+    surface.classList.add('hidden');
+    ctl.sync();
+    assert.equal(leftSidebar.inert, false, '关掉后撤掉自己挂的 overlay 原因');
+  });
+
+  // 「选择其他会话」：收起落地页、再打开抽屉移焦。关层这一刻焦点已在抽屉里，不得被拽回打开前的顶栏按钮。
+  test('关掉 sessionBlockedSurface 时焦点已移到别处，不还焦', () => {
+    const surface = fakeEl('sessionBlockedSurface', { hidden: true });
+    const header = fakeEl('header');
+    const drawerItem = fakeEl('drawerItem');
+    const body = fakeEl('body');
+    body.children = [header, surface];
+    let focused = header;
+    surface.focus = () => { focused = surface; };
+    header.focus = () => { focused = header; };
+    const doc = { body, get activeElement() { return focused; } };
+    const ctl = createGateFocusController({
+      gates: [], overlays: [surface], overlayCovers: () => [header], doc, Observer: null,
+    });
+    surface.classList.remove('hidden');
+    ctl.sync();
+    assert.equal(focused, surface);
+    surface.classList.add('hidden');
+    focused = drawerItem; // openLeftSidebar() 已把焦点移进抽屉
+    ctl.sync();
+    assert.equal(focused, drawerItem, '焦点被从抽屉拽回了顶栏');
   });
 
   // 中层 overlay 不得按 DOM 序压过 z-50 全屏门：两者同开时门才是顶，侧栏也要跟门一起 inert。
@@ -157,7 +210,7 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     const ctl = createGateFocusController({
       gates: [authGate],
       overlays: [surface],
-      keepInteractiveWhenOverlay: [leftSidebar],
+      overlayCovers: () => [header],
       doc,
       Observer: null,
     });
@@ -166,7 +219,7 @@ test.describe('createGateFocusController：全屏门开着时其余 body 子节�
     ctl.sync();
     assert.equal(authGate.inert, false, 'z-50 门才是顶层');
     assert.equal(surface.inert, true, '落地页被门盖住，不该还能 Tab');
-    assert.equal(leftSidebar.inert, true, '全屏门开着时侧栏豁免不生效');
+    assert.equal(leftSidebar.inert, true, '全屏门开着时侧栏一并 inert');
     assert.equal(header.inert, true);
   });
 });

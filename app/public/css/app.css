@@ -163,6 +163,14 @@ details > summary::-webkit-details-marker { display: none; }
   margin: 0 auto .75rem;
   touch-action: none;
   cursor: grab;
+  position: relative;
+}
+/* 画出来的把手只有 36×4，手指几乎按不中；下拉手势绑在它身上（sheets.js），热区靠透明伪元素放大到约
+   124×26。上沿不越过面板 p-4 内边距，下沿不压到标题行（margin-bottom .75rem）。 */
+.sheet-handle::before {
+  content: '';
+  position: absolute;
+  inset: -12px -44px -10px;
 }
 /* 配置面板下拉关闭热区：扩大把手可点范围，禁浏览器默认手势抢 pointer */
 .settings-drag-zone {
@@ -765,11 +773,14 @@ header {
 /* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ──
    #369：用 .ccm-sheet 类选择器，不再枚举 modal ID——新 sheet 只要带这个类（openSheet
    也会补上）就自动具备同一开合过渡；ID 白名单会漏 #workspaceModal 等新面板。 */
+/* visibility 打开时【立即】切 visible、关闭时等淡出（.25s）后再切 hidden。不能双向都过渡 visibility：
+   打开那一帧还是 visibility:hidden，openSheet 在 rAF 里移焦落不进去，焦点留在 sheet 背后的触发按钮上，
+   Tab 陷阱与挂在 sheet 上的 Esc 也就都收不到（会话行「⋯」菜单曾为此单开一个只过渡 opacity 的修饰类）。 */
 .ccm-sheet {
   visibility: hidden;
   pointer-events: none;
   opacity: 0;
-  transition: opacity .25s ease, visibility .25s ease;
+  transition: opacity .25s ease, visibility 0s linear .25s;
 }
 .ccm-sheet > div {
   transform: translateY(100%);
@@ -779,23 +790,10 @@ header {
   visibility: visible;
   pointer-events: auto;
   opacity: 1;
+  transition: opacity .25s ease, visibility 0s;
 }
 .ccm-sheet.sheet-open > div {
   transform: translateY(0);
-}
-/* 会话行「⋯」菜单同样滑入滑出，但不过渡 visibility：默认 .ccm-sheet 打开的首帧还是
-   visibility:hidden，openSheet 在 rAF 里移焦落不进去，焦点留在触发按钮上，挂在 sheet
-   上的 Esc 也就收不到。菜单靠键盘也要能用，所以 .ccm-sheet-kb 只过渡 opacity；
-   收起后照旧由 closeSheet 300ms 后加 hidden。 */
-.ccm-sheet.ccm-sheet-kb {
-  visibility: visible;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity .25s ease;
-}
-.ccm-sheet.ccm-sheet-kb.sheet-open {
-  pointer-events: auto;
-  opacity: 1;
 }
   /* UX-003：审批 / 提问 sheet 弹出后短暂防误触（过渡期按钮不可点） */
   #permModal.sheet-arming button,
