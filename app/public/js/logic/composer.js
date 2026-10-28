@@ -131,6 +131,12 @@ export function shouldShowComposerDiscoverHint({ focused = false, hasContent = f
 // Composer placeholder：在途轮期间说明发不出去（输入框仍可打字、草稿保留）。
 // mirrorReadonly 优先（镜像态整框只读，placeholder 由镜像文案接管）。
 // busy 与 turnRunning 分开：busy 含后台任务/待审批，而发送闸只认在途轮——挂着后台任务时仍可发送。
+
+/** 空聚焦发现 hint 暴露给读屏的描述（视觉 span 仍可 aria-hidden，避免 "/ · @" 碎读）（#370） */
+export function resolveComposerDiscoverAriaDescription({ show = false } = {}) {
+  return show ? t('可输入 / 斜杠命令或 @ 引用文件') : '';
+}
+
 export function resolveComposerPlaceholder({
   busy: _busy = false,
   turnRunning = false,

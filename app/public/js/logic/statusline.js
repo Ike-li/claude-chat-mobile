@@ -7,6 +7,8 @@
 // 同层 logic/ 子模块之间可以互相 import，但不得成环（npm run check 的 import 边界守卫会拒）。
 // 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
 
+import { t } from '../i18n.js';
+
 /** token 短格式：1.0m / 13k / 42；round 到 k 后 ≥1000 抬升 m，避免 1000k */
 export function statuslineFmtTok(n) {
   if (!Number.isFinite(n)) return '';
@@ -52,6 +54,20 @@ export function formatWorkspaceChangeBadge(git) {
 }
 
 /**
+ * 顶栏工作区 pill 的无障碍名：有改动数时读出数量，避免角标被 aria-hidden 藏掉后读屏一无所知（#366）。
+ * changesText 为空则只报工作区名；角标视觉仍可保留，但 pill 本身要能被读完整。
+ */
+export function formatTopContextPillAriaLabel({ project = '', changesText = '' } = {}) {
+  const name = (project && String(project).trim()) || '…';
+  const n = changesText != null ? String(changesText).trim() : '';
+  if (n) {
+    return t('工作区 {name}，{n} 处改动').replace('{name}', name).replace('{n}', n);
+  }
+  return t('工作区 {name}').replace('{name}', name);
+}
+
+
+/**
  * 状态栏（#cliStatusWrap：git 分支/三分计数 · ctx · 模型 · 额度）该不该在当前表面渲染。
  *
  * emptyStart 单独一条判据是不够的：compose 页（点 ＋ 的会话懒创建窗口）与空首页共用 `empty-start`
@@ -68,6 +84,7 @@ export function formatWorkspaceChangeBadge(git) {
  * 于是「会话已中断」表面上 _composeReady 仍是 true。拿那个标志当判据，下一条周期性 status_line
  * 就会把上一个实例的 ctx/模型渲染到中断表面上。调用方据此传 DOM 里在不在 compose 表面。
  */
+
 export function shouldRenderStatusline({ emptyStart = false, composeSurface = false } = {}) {
   return !emptyStart || composeSurface;
 }
