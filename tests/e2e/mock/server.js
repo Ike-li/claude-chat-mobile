@@ -3312,6 +3312,27 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, missingFolders: mockMissingFolders, missingFolderPaths: mockMissingFolderPaths });
   });
 
+  // 告警里一键「从列表移除缺失项」（#355，同真 server 的 folders:removeMissing）：只删仍找不到的原始 WORKDIRS 条目。
+  socket.on('folders:removeMissing', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (mockFoldersAddError) return ack({ ok: false, error: mockFoldersAddError });
+    recomputeMockMissing();
+    const requested = Array.isArray(payload?.paths) ? payload.paths.filter(p => typeof p === 'string' && p) : [];
+    const want = new Set(requested.length ? requested : mockMissingFolderPaths);
+    const removed = [];
+    mockWorkdirsList = mockWorkdirsList.filter(e => {
+      if (want.has(e.path) && mockGoneFolders.has(e.path)) { removed.push(e.path); return false; }
+      return true;
+    });
+    if (!removed.length) return ack({ ok: false, error: 'nothing_removable' });
+    mockGoneFolders = new Set([...mockGoneFolders].filter(p => !removed.includes(p)));
+    if (mockDirsOverride) mockDirsOverride = mockDirsOverride.filter(d => !removed.includes(d));
+    mockAddedFolders = mockAddedFolders.filter(d => !removed.includes(d));
+    recomputeMockMissing();
+    broadcastMockInstances();
+    ack({ ok: true, removed, dirs: mockDirs(), missingFolders: mockMissingFolders, missingFolderPaths: mockMissingFolderPaths });
+  });
+
   // 断开（同真 server 的 folders:remove）：只认清单里的连接根（绝对路径）。钉住断开后的清单——缺省口径从实例 cwd
   // 现算，开着会话的文件夹会被算回来；钉住之后它的会话落到「不在已连接的文件夹里」，与真 server 一致。
   socket.on('folders:remove', (payload, ack) => {

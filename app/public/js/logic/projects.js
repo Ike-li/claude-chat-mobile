@@ -46,7 +46,7 @@ export function normalizeProjects(payload) {
 }
 
 // 「选文件夹」面板里服务端回的原因码 → 给人看的一句话（能不能加、为什么建不了、为什么没加上）。
-// 码的出处：sessions/folders.js（判据）、app.js addConnectedFolder / removeConnectedFolder（写配置）、socket-folders.js。
+// 码的出处：sessions/folders.js（判据）、app.js addConnectedFolder / removeConnectedFolder / removeMissingFolders（写配置）、socket-folders.js。
 const FOLDER_REASON_TEXT = Object.freeze({
   home: tk('不能添加整个家目录'),
   root: tk('不能添加磁盘根目录'),
@@ -63,6 +63,9 @@ const FOLDER_REASON_TEXT = Object.freeze({
   not_applied: tk('已写入配置，但没有生效'),
   invalid: tk('配置校验没通过'),
   not_connected: tk('这个文件夹已经不在已连接的清单里了'),
+  nothing_removable: tk('没有可移除的缺失项（可能都已恢复，或只剩 WORK_DIR）'),
+  legacy_workdir: tk('这项来自已退役的 WORK_DIR，请在配置里手动删掉 WORK_DIR'),
+  device_not_approved: tk('这台设备还没通过信任审批'),
   exists: tk('同名文件夹已存在'),
   hidden: tk('名字不能以 . 开头'),
   separator: tk('名字里不能有斜杠'),

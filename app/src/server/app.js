@@ -97,7 +97,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, createWorkdirStatus } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_LIVE_SESSIONS, sessionListWindow, fitSessionPage, showMoreCount, resolveWorkdirs, resolveGoneWorktreeParent, resolveWorkdirsFilePath, resolveWorkdirSource, resolveEnvPrimaryWorkdir, pickPrimaryWorkdir, createWorkdirStatus, normalizeWorkdirEntries, planRemoveMissingWorkdirEntries } from '../sessions/workdirs.js';
 import { resolveAuthorizedCwd, isWithin } from '../sessions/folder-access.js';
 import { readTranscriptImage, readTranscriptToolResult } from '../sessions/transcript-image-read.js';
 import { parseImageRef, checkImagePayload } from '../shared/transcript-image.js';
@@ -478,6 +478,55 @@ function removeConnectedFolder(path) {
 // 拖动排序（取代 #305 置顶）：roots 必须恰好是当前清单的一个排列——少一个、多一个（子文件夹、前缀相似的路径、
 // 已移除的根）、重复都拒绝，存储与广播都不动。拖动期间另一台设备加 / 断了文件夹就会撞上这条，手机按最新广播重画即可。
 // 成功后广播完整清单（不新增出向事件，重连时的快照自然带上新顺序）。
+// 告警里一键「从列表移除缺失项」（#355 / #301 第二期）：按配置文件里的**原始 WORKDIRS 条目**删，
+// 提交时重读配置并复核「现在仍找不到」——目录刚挂回来的不能被旧告警误删；其余条目连同 sessionLimit 原样保留。
+// 退役的 WORK_DIR 不给自动移除（删 WORKDIRS 删不掉它，折进列表后还会再冒出来）。
+// 只读来源 / 没有配置文件在这一层拒绝；设备信任闸在 socket-folders 里（不能只靠前端隐藏按钮）。
+function removeMissingFolders(paths) {
+  if (!usingConfigJson()) return { ok: false, error: 'no_config_file' };
+  if (readWorkdirSource().from !== 'WORKDIRS') return { ok: false, error: 'source_readonly' };
+  let config;
+  try {
+    config = loadConfigSources({ configPath: CONFIG_FILE_PATH, envPath: ENV_FILE_PATH }).fileValues;
+  } catch {
+    return { ok: false, error: 'config_unreadable' };
+  }
+  const list = Array.isArray(config.WORKDIRS) ? config.WORKDIRS : [];
+  // 复核：对着刚读出的原始条目再跑一遍 resolveWorkdirs，只信这一趟确认仍缺失的原样路径
+  const { missing: confirmedMissing } = resolveWorkdirs(normalizeWorkdirEntries(list).entries);
+  // 退役的 WORK_DIR 会被折进列表首位，与 readWorkdirSource 同一判据算它：shell 里 export 的 WORK_DIR 压过文件里的。
+  // 只读配置文件会漏掉 shell 那一份——删了 WORKDIRS 里的同名条目、回「已移除 1 项」，shell 值又把它折回来，告警原样还在。
+  const legacyPrimary = pickPrimaryWorkdir({
+    kind: 'inline',
+    envPrimary: resolveEnvPrimaryWorkdir({ shellEnv: getShellEnvSnapshot(), projectedPrimary: process.env.WORK_DIR || '' }),
+    inlinePrimary: typeof config.WORK_DIR === 'string' ? config.WORK_DIR : '',
+  });
+  const requested = Array.isArray(paths) ? paths.filter(p => typeof p === 'string' && p) : null;
+  const { next, removed, skippedLegacy } = planRemoveMissingWorkdirEntries(list, {
+    confirmedMissing,
+    requested,
+    legacyPrimary,
+  });
+  if (!removed.length) {
+    if (skippedLegacy.length) return { ok: false, error: 'legacy_workdir' };
+    return { ok: false, error: 'nothing_removable' };
+  }
+  try {
+    writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(config, { WORKDIRS: next }), null, 2)}\n`);
+  } catch {
+    return { ok: false, error: 'write_failed' };
+  }
+  // 显式：剩下的条目可能全找不到，「保留旧清单」那道保护不能把这次移除吞掉
+  reloadWorkdirs({ explicit: true });
+  return {
+    ok: true,
+    removed,
+    dirs: workDirs,
+    missingFolders: workdirStatus.missing(),
+    missingFolderPaths: workdirStatus.missingPaths(),
+  };
+}
+
 function reorderConnectedFolders(roots) {
   const ok = Array.isArray(roots) && roots.length === workDirs.length && new Set(roots).size === roots.length
     && roots.every(r => typeof r === 'string' && workDirs.includes(r));
@@ -4436,6 +4485,7 @@ registerSocketConnection(io, socket => {
       return { ok: true, missingFolders: workdirStatus.missing(), missingFolderPaths: workdirStatus.missingPaths() };
     },
     removeConnectedFolder,
+    removeMissingFolders,
     reorderConnectedFolders,
     audit,
     actorFromSocket,

@@ -50,6 +50,7 @@ test('folderReasonText：服务端的原因码都有人话，未知码回落「�
   // 服务端（sessions/folders.js、app.js addConnectedFolder / removeConnectedFolder、socket-folders.js）会回的每一个码
   for (const code of ['home', 'root', 'outside_home', 'forbidden', 'worktree', 'already_connected', 'not_found', 'not_directory',
     'no_config_file', 'source_readonly', 'config_unreadable', 'write_failed', 'not_applied', 'invalid', 'not_connected',
+    'nothing_removable', 'legacy_workdir', 'device_not_approved',
     'exists', 'hidden', 'separator', 'control', 'too_long', 'empty', 'out_of_range', 'mkdir_failed', 'unreadable']) {
     assert.ok(FOLDER_REASON_CODES.includes(code), `${code} 没有文案：用户只会看到一个英文码`);
     assert.notEqual(folderReasonText(code), '操作失败', code);
