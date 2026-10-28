@@ -28,6 +28,8 @@ export function createRewindCommandController({
   // 拿打开面板时冻结的 sessionId 继续做，等于对一个用户已经不在看的会话执行破坏性操作。
   getCurrentSession = () => ({ sessionId: null, cwd: null }),
   onRewound = () => {},
+  // 单测可压短；生产默认 20s（candidates / preview / confirm 共用）
+  emitTimeoutMs = 20_000,
 } = {}) {
   const modal = byId('rewindModal');
   const listEl = byId('rewindList');
@@ -48,23 +50,28 @@ export function createRewindCommandController({
   let session = null;       // { sessionId, cwd } —— 打开面板那一刻冻结，避免中途切会话打到别的会话上
   let busy = false;         // confirm 在飞：防连击（服务端 G3 也有锁，这里是少发一次请求）
   let items = [];           // 当前清单：返回上一步要重渲它，选中某条时正文/文件数也直接取自它
+  // 第二步预览算出的模式轴约束。confirm 失败/超时要按这两轴重新启用按钮——
+  // setModeButtons 的 code/fork 默认 true，丢了会把原本禁用的模式错误解锁（#404）。
+  let modeCaps = { canCode: true, canFork: true };
 
   function emitAsync(event, payload) {
     return new Promise(resolve => {
       let settled = false;
       const done = (r) => { if (!settled) { settled = true; resolve(r); } };
       socket.emit(event, payload, done);
-      setTimeout(() => done({ ok: false, error: t('请求超时，请重试') }), 20000);
+      setTimeout(() => done({ ok: false, error: t('请求超时，请重试') }), emitTimeoutMs);
     });
   }
 
   function close() {
     closeSheet(modal);
     picked = null; session = null; busy = false;
+    modeCaps = { canCode: true, canFork: true };
   }
 
   function showStep1() {
     picked = null;
+    modeCaps = { canCode: true, canFork: true };
     listEl.classList.remove('hidden');
     step2El.classList.add('hidden');
     backBtn.classList.add('hidden');
@@ -181,6 +188,7 @@ export function createRewindCommandController({
     }
     effectEl.innerHTML = `${forkLine}<div class="mt-1">${codeLine}</div>`;
     // 对话轴以 preview 的回答为准（清单那份是同源算的，但 preview 更晚、更权威）。
+    modeCaps = { canCode, canFork };
     setModeButtons(true, canCode, canFork);
   }
 
@@ -221,7 +229,9 @@ export function createRewindCommandController({
       // 失败留在面板里说，不写进被 sheet 盖住的消息流（2026-09-12 的教训：
       // 操作在哪一层发起，回执就得在哪一层）。
       effectEl.innerHTML = `<span class="text-danger">${esc(res?.error || t('回退失败'))}</span>`;
-      setModeButtons(true);
+      // 必须带回 preview 时记下的 canCode/canFork：裸 setModeButtons(true) 默认两轴都 true，
+      // 会把「无快照 / 首轮」原本禁用的模式错误解锁（#404）。
+      setModeButtons(true, modeCaps.canCode, modeCaps.canFork);
       return;
     }
     close();
