@@ -299,7 +299,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   setLang(resolveInitialLang(k => localStorage.getItem(k), navigator.language));
   applyI18nToDocument(document);
 
-  // ⑩ 主题：theme-boot.js 已在首屏写过 data-theme；这里再跑一遍以同步 theme-color / hljs media，
+  // ⑩ 主题：theme-boot.js 已在首屏写过 data-theme / manifest；这里再跑一遍以同步 theme-color / hljs media / manifest，
   // 并在「跟随系统」时监听系统切换（强制档不听——用户显式钉死了）。
   const systemDarkMq = window.matchMedia?.('(prefers-color-scheme: dark)') || null;
   const systemDarkNow = () => !!(systemDarkMq && systemDarkMq.matches);

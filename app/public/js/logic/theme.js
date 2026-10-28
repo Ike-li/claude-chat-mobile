@@ -45,3 +45,13 @@ export function themePrefLabelKey(pref) {
   if (pref === 'dark') return '深色';
   return '跟随系统';
 }
+
+/** PWA manifest href for a resolved palette (Web Manifest has no media queries). */
+export const MANIFEST_HREF = Object.freeze({
+  light: '/manifest-light.webmanifest',
+  dark: '/manifest-dark.webmanifest',
+});
+
+export function manifestHrefForTheme(resolved) {
+  return resolved === 'dark' ? MANIFEST_HREF.dark : MANIFEST_HREF.light;
+}
