@@ -156,6 +156,14 @@ details > summary::-webkit-details-marker { display: none; }
   margin: 0 auto .75rem;
   touch-action: none;
   cursor: grab;
+  position: relative;
+}
+/* 画出来的把手只有 36×4，手指几乎按不中；下拉手势绑在它身上（sheets.js），热区靠透明伪元素放大到约
+   124×26。上沿不越过面板 p-4 内边距，下沿不压到标题行（margin-bottom .75rem）。 */
+.sheet-handle::before {
+  content: '';
+  position: absolute;
+  inset: -12px -44px -10px;
 }
 /* 配置面板下拉关闭热区：扩大把手可点范围，禁浏览器默认手势抢 pointer */
 .settings-drag-zone {
