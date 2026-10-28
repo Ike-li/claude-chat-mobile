@@ -332,12 +332,12 @@ import { createGateFocusController } from './app/focus-layers.js';
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const modelIntent = createModelIntent(); // 当前会话里亲手选过模型没有（发送意图，见 app/model-intent.js）
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
-  const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
+  const cliStatusBarEl = $('cliStatusBar'); // E16：状态栏外层（含 details + 复制按钮；揭示=去 hidden）
+  const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏 <details>（open=展开明细）
   const cliSummaryEl = $('cliSummary'); // E16：折叠条摘要 git · ctx（formatStatuslineCollapsedSummary）
-  const cliStatusCopyBtn = $('cliStatusCopy'); // 点按复制（不触发展开）
+  const cliStatusCopyBtn = $('cliStatusCopy'); // 点按复制（summary 外独立按钮，#403）
   let lastStatusLinePayload = null; // 最近一次 status_line，供复制
   if (cliStatusCopyBtn) {
-    // mousedown 也拦截：部分浏览器在 summary 内点按钮会先 toggle details
     cliStatusCopyBtn.addEventListener('click', async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -1914,7 +1914,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     updateAttentionSignal();
     setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
-    cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
+    cliStatusBarEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
     // 台阶3：首连由 instances 事件驱动加载当前查看实例（见 setInstances）；重连（非首连、已有绑定实例）
     // 续传该实例缓冲补齐断线期间漏掉的事件。
@@ -1943,7 +1943,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
     clearRttDisplay();
-    cliStatusWrapEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
+    cliStatusBarEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
     logClientEvent('conn', `网络连接断开，原因: ${reason || '未知'}`);
   });
   socket.on('connect_error', async err => {
@@ -3713,7 +3713,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         }
         lastStatusLinePayload = p;
         if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? t('statusline · CLI 暂不可用（额度沿用旧值）') : t('statusline · CLI 暂不可用');
-        cliStatusWrapEl?.classList.remove('hidden');
+        cliStatusBarEl?.classList.remove('hidden');
         return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来（额度回落值是唯一例外，见上）
       }
 
@@ -3810,7 +3810,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
       cliStatusEl.textContent = '';
       linesArr.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
-      cliStatusWrapEl?.classList.remove('hidden'); // 揭示折叠包裹（默认折叠为 summary 摘要）
+      cliStatusBarEl?.classList.remove('hidden'); // 揭示折叠包裹（默认折叠为 summary 摘要）
     }
   };
 
@@ -5133,6 +5133,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
         const isCurrent = activeLevel === tileVal;
+        // 选中态两条通道同 perm/model 磁贴：ring 给看得见的人，aria-pressed 给读屏（#403）
+        tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs') || tile;
@@ -5226,11 +5228,13 @@ import { createGateFocusController } from './app/focus-layers.js';
         const isUltra = lv === 'ultracode';
         // UX-014：副文案增量信息，非「思考等级: low」同义反复
         const sub = effortLevelSubtitle(lv) || (isUltra ? t('xhigh + 多 agent · 最彻底') : '');
+        // 原生 button + aria-pressed：与 .perm-tile / .model-tile 对齐，Tab 可达、读屏能报选中态（#403）。
+        // 故意不加 w-full：#customEffortGrid 是 flex-wrap 芯片行；w-full 会竖排撑高，把权限尾格挤出首屏（P0-09r）。
         const lvTile = el(`
-          <div data-level="${esc(lv)}" class="effort-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+          <button type="button" data-level="${esc(lv)}" aria-pressed="${active ? 'true' : 'false'}" class="effort-tile text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
             ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
-          </div>
+          </button>
         `);
         lvTile.onclick = () => {
           haptic('tap');
@@ -5326,6 +5330,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
       tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
       tile.querySelector('.text-xs')?.classList.remove('text-accent');
+      tile.setAttribute('aria-pressed', 'false'); // CLI 模式未知：读屏也不能说某一张选中（#403）
     });
   }
 
@@ -8170,7 +8175,9 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
     if (cliStatusWrapEl) {
       cliStatusWrapEl.removeAttribute('open'); // 折叠 <details>
-      cliStatusWrapEl.classList.add('hidden');
+    }
+    if (cliStatusBarEl) {
+      cliStatusBarEl.classList.add('hidden');
     }
   }
 
