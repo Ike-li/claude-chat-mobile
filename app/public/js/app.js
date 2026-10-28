@@ -1048,15 +1048,21 @@ import { createGateFocusController } from './app/focus-layers.js';
     messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
   };
   // 流内 live 活动行：ephemeral，busy 时挂在 #messages 末尾；不进 disk/history；sessionDomCache 前 strip。
-  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。文案 aria-hidden。
+  // #379：不挂 aria-live / aria-busy——秒表每 1s 变；旧 polite+恒 busy 既刷屏又（按 WAI-ARIA）全程静默。
+  // 文案不 aria-hidden：它还承载「正在停止…」与 API 重试状态，读屏用户浏览到这一行时要读得到。
+  // 回合开始 / 结束的播报改由 #turnAnnouncer 各写一次（announceTurn）。
   let streamLiveStatusEl = null;
   function ensureStreamLiveStatus() {
     if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
     streamLiveStatusEl = el(`
       <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1">
-        <span id="streamLiveStatusText" class="font-medium truncate max-w-full" aria-hidden="true"></span>
+        <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
       </div>`);
     return streamLiveStatusEl;
+  }
+  const turnAnnouncer = $('turnAnnouncer');
+  function announceTurn(text) {
+    if (turnAnnouncer) turnAnnouncer.textContent = text || '';
   }
   function setStreamLiveStatusText(text) {
     // busy 期间保证挂在 #messages 末尾（仅 ensure 不 append 会留下断链节点）
@@ -3501,6 +3507,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
+      announceTurn(ui.statusBar.text); // 读屏的回合结束端点（#379）：与状态条同一句
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
       notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
       // P0：回合末锚定——有文件汇总卡则滚到卡（手机扫结果）；否则落底
@@ -3530,6 +3537,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       const errBar = addBar(`⚠️ ${p.message}`, 'text-danger');
+      announceTurn(`${t('出错：')}${p.message}`); // 读屏的回合结束端点（#379）
       if (p.processExited) {
         crashNotices.record(ev?.sessionId, p.message, errBar);
         crashNotices.noteInstance(ev?.instanceId, p.message);
@@ -3565,6 +3573,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
+        announceTurn(t('已中止')); // 读屏的回合结束端点（#379）：interrupted 走这里，不发 result
         finalizeStreams();
         // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
         failPendingToolCards(t('已中止'));
@@ -6857,6 +6866,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       };
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
+      announceTurn(t('Claude 正在回复'));
     } else {
       clearInterruptPending(viewingInstanceId, { keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
