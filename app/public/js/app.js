@@ -329,7 +329,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
-  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle'), taskBannerChevron = $('taskBannerChevron');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -983,6 +983,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       taskBannerLabel,
       btnTaskStop,
       taskBannerToggle,
+      taskBannerChevron,
     },
     state: {},
     dependencies: {
@@ -4163,7 +4164,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     for (const f of summary.files) {
       const row = el(`
         <div class="tfc-row" data-testid="turn-file-row">
-          <button type="button" class="tfc-row-btn w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-sunk/60 active:bg-sunk transition-colors">
+          <button type="button" class="tfc-row-btn w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-sunk/60 active:bg-sunk transition-colors" aria-expanded="false">
+            <span class="tfc-chevron text-[10px] text-ink-faint shrink-0" aria-hidden="true">▸</span>
             <span class="tfc-name flex-1 min-w-0 truncate text-xs text-ink font-medium"></span>
             <span class="tfc-file-stats shrink-0 text-[11px] tabular-nums"><span class="text-success"></span> <span class="text-danger"></span></span>
           </button>
@@ -4176,9 +4178,13 @@ import { createGateFocusController } from './app/focus-layers.js';
       fs.children[1].textContent = `-${f.removed}`;
       const btn = row.querySelector('.tfc-row-btn');
       const preview = row.querySelector('.tfc-preview');
+      const chevron = row.querySelector('.tfc-chevron');
       let loaded = false;
       btn.onclick = () => {
         preview.classList.toggle('hidden');
+        const open = !preview.classList.contains('hidden');
+        btn.setAttribute('aria-expanded', String(open));
+        if (chevron) chevron.textContent = open ? '▾' : '▸';
         if (loaded || !f.toolUseId) return;
         loaded = true;
         socket.timeout(8000).emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, (err, res) => {

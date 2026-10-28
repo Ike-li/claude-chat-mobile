@@ -109,10 +109,12 @@ export function createTaskStatusController(context, {
     if (activeDetailId && !tasks.has(activeDetailId)) activeDetailId = null;
   }
 
-  // 折叠热区是整条横幅头行（#taskBannerToggle），恒可见、恒可点——不再有单独的 ▸/▾ 三角按钮，
-  // 也不再按任务数隐藏它（单任务同样可折叠）。这里只同步无障碍状态。
+  // 折叠热区是整条横幅头行（#taskBannerToggle），恒可见、恒可点；尾随 #taskBannerChevron 作 ▸/▾ 视觉指示。
+  // 不再按任务数隐藏它（单任务同样可折叠）。同步 aria-expanded 与 chevron 文案。
   function syncBannerToggle(collapsed) {
-    dom.taskBannerToggle?.setAttribute('aria-expanded', String(!collapsed));
+    const expanded = !collapsed;
+    dom.taskBannerToggle?.setAttribute('aria-expanded', String(expanded));
+    if (dom.taskBannerChevron) dom.taskBannerChevron.textContent = expanded ? '▾' : '▸';
   }
 
   function toggleTaskList() {
@@ -177,6 +179,11 @@ export function createTaskStatusController(context, {
     if (!list) return;
     // list 是滚动容器：replaceChildren 会把 scrollTop 归零，心跳重绘时先存后还，否则每拍跳回顶部。
     const prevScroll = list.scrollTop;
+    // 焦点同理（#402）：行里的「展开」「停」每次重绘都是新节点，键盘用户按一下展开，按住的那颗钮
+    // 随 replaceChildren 被摘掉、焦点掉到 body，新的 aria-expanded 也没人听到；心跳每拍重绘同样甩焦点。
+    // 重绘前记下焦点在哪个任务的哪颗钮（data-task-focus），画完对回新节点。
+    const active = list.ownerDocument?.activeElement;
+    const focusKey = active && list.contains?.(active) ? active.getAttribute?.('data-task-focus') : null;
     list.replaceChildren();
     if (tasks.size === 0) {
       list.classList.add('hidden');
@@ -207,8 +214,15 @@ export function createTaskStatusController(context, {
         // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
         // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
         const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
+        // 头行可点展开（含 meta），左侧 expand 按钮保留键盘/aria；右侧「停」是兄弟 button，避免嵌套。
+        // 整行 click 恢复 Playwright/触控中心点命中；expand 上 stopPropagation 防双触发 toggle。
         const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
         const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
+        const expandBtn = createElement('<button type="button" class="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer" data-testid="bg-task-expand"></button>');
+        expandBtn.setAttribute('aria-expanded', String(isActive));
+        expandBtn.setAttribute('data-task-focus', `${taskId}:expand`);
+        const rowChevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
+        rowChevron.textContent = isActive ? '▾' : '▸';
         const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
         const title = formatBgTaskRowLabel({
           taskType: task.taskType,
@@ -218,6 +232,7 @@ export function createTaskStatusController(context, {
         const histTag = histLen > 0 ? ` · ${t('{n}条').replace('{n}', histLen)}` : '';
         label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
         label.title = task.message || taskId;
+        expandBtn.append(rowChevron, label);
         // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
         // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
         // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
@@ -233,10 +248,11 @@ export function createTaskStatusController(context, {
         }
         if (rowStop.canStop) {
           const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
+          stop.setAttribute('data-task-focus', `${taskId}:stop`);
           stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
           tail.push(stop);
         }
-        top.append(label, ...tail);
+        top.append(expandBtn, ...tail);
 
         const metaParts = [];
         if (statusView?.error) metaParts.push(statusView.error); // 失败原因排在最前，别被 truncate 吃掉
@@ -259,8 +275,16 @@ export function createTaskStatusController(context, {
         } else {
           row.append(top);
         }
-        // 点击行文本区域 → 展开/收起该任务自己的详情
-        row.addEventListener('click', () => toggleDetail(taskId));
+        // 整行可点展开（meta 也在热区内）；「停」已 stopPropagation。expand 自带键盘/aria，
+        // 其 click 须 stopPropagation，否则会冒泡到 row 再 toggle 一次（展开立刻收起）。
+        expandBtn.addEventListener('click', (e) => {
+          e?.stopPropagation?.();
+          toggleDetail(taskId);
+        });
+        row.addEventListener('click', (e) => {
+          if (e?.target?.closest?.('[data-testid="bg-task-stop"]')) return;
+          toggleDetail(taskId);
+        });
         card.appendChild(row);
         if (isActive) {
           const panel = buildDetailPanel(taskId);
@@ -270,6 +294,10 @@ export function createTaskStatusController(context, {
       }
     }
     list.scrollTop = prevScroll;
+    if (focusKey) {
+      const again = [...(list.querySelectorAll?.('[data-task-focus]') || [])].find(n => n.getAttribute('data-task-focus') === focusKey);
+      again?.focus({ preventScroll: true });
+    }
   }
 
   // ---- 详情面板：累积 task_progress 历史，点击任务行展开 ----

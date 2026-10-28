@@ -113,10 +113,14 @@ test('task status controller collapses the multi-task list by default and expand
   });
   const status = createTaskStatusController(context, { createElement: fakeNode });
 
+  const taskBannerChevron = { textContent: '▸' };
+  context.dom.taskBannerChevron = taskBannerChevron;
+
   status.onProgress({ instanceId: 'inst-1', payload: { tasks: [{ taskId: 't1', message: 'one' }] } });
   assert.equal(taskProgressText.textContent, '运行中');
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), false, '单任务默认展开');
   assert.equal(taskBannerToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(taskBannerChevron.textContent, '▾');
 
   status.onProgress({
     instanceId: 'inst-1',
@@ -125,10 +129,12 @@ test('task status controller collapses the multi-task list by default and expand
   assert.equal(taskProgressText.textContent, '2 个运行中');
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '多任务默认收起');
   assert.equal(taskBannerToggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(taskBannerChevron.textContent, '▸');
 
   taskBannerToggle.click();
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), false, '点击后展开');
   assert.equal(taskBannerToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(taskBannerChevron.textContent, '▾');
 
   taskBannerToggle.click();
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '再次点击收起');
@@ -150,13 +156,25 @@ test('task status controller collapses the multi-task list by default and expand
 });
 
 // 记录型 fakeNode：把 createElement 收到的 HTML 串留在 .html 上，才能断言「详情块渲染在哪张卡片里」。
+// 焦点替身：taskCardFakeNode 的 focus() 写这里，ownerDocument 指向它（#402 重绘还焦）
+const fakeTaskDoc = { activeElement: null };
 function taskCardFakeNode(html = '') {
   const classes = new Set();
   const attrs = {};
   const listeners = {};
   const children = [];
+  const walk = function* (node) {
+    for (const c of node.children || []) { yield c; yield* walk(c); }
+  };
   return {
     html: String(html),
+    ownerDocument: fakeTaskDoc,
+    focus() { fakeTaskDoc.activeElement = this; },
+    contains(n) { for (const c of walk(this)) if (c === n) return true; return n === this; },
+    querySelectorAll(sel) {
+      const m = /^\[([a-z-]+)\]$/.exec(sel);
+      return m ? [...walk(this)].filter(c => c.getAttribute?.(m[1]) != null) : [];
+    },
     classList: {
       add: (...names) => names.forEach(n => classes.add(n)),
       remove: (...names) => names.forEach(n => classes.delete(n)),
@@ -181,8 +199,10 @@ function taskCardFakeNode(html = '') {
 }
 
 // 卡片结构：children[0] 恒为 bg-task-row 头行，展开时 children[1] 才是详情块。
+// 头行内 top.children[0] 是左侧 expand 按钮（▸/▾ + 标题），「停」是其兄弟。
 const cardHeaderRow = card => card.children[0];
 const cardDetail = card => card.children.find(c => String(c.html).includes('task-detail-panel')) || null;
+const rowExpandBtn = card => cardHeaderRow(card)?.children?.[0]?.children?.[0] || null;
 
 test('task status 详情面板渲染在被点击任务的卡片内，而非整列表下方', () => {
   const banner = taskCardFakeNode();
@@ -206,14 +226,14 @@ test('task status 详情面板渲染在被点击任务的卡片内，而非整�
   assert.equal(cardDetail(cards[0]), null, '未点击时不渲染详情');
 
   // 点 t1 的头行 → 详情必须落在 t1 自己的卡片里，t2 卡片不受影响。
-  cardHeaderRow(cards[0]).click();
+  rowExpandBtn(cards[0]).click();
   const detail = cardDetail(context.dom.taskProgressList.children[0]);
   assert.ok(detail, 't1 卡片内应含详情块');
   assert.ok(detail.children.length > 0, '应渲染出历史条目');
   assert.equal(cardDetail(context.dom.taskProgressList.children[1]), null, 't2 卡片不应有详情');
 
   // 再点同一行 → 收起
-  cardHeaderRow(context.dom.taskProgressList.children[0]).click();
+  rowExpandBtn(context.dom.taskProgressList.children[0]).click();
   assert.equal(cardDetail(context.dom.taskProgressList.children[0]), null, '再次点击应收起详情');
 });
 
@@ -232,7 +252,7 @@ test('task status 折叠整列表不遗留详情，展开后详情仍在原卡�
     payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }] },
   });
   const list = context.dom.taskProgressList;
-  cardHeaderRow(list.children[0]).click();
+  rowExpandBtn(list.children[0]).click();
   assert.ok(cardDetail(list.children[0]), '详情已展开');
 
   // 折叠整列表：详情在 list 内部，必须随之隐藏——旧实现里详情面板挂在横幅外，
@@ -266,7 +286,7 @@ test('task status onComplete：清理已完成任务的 progressHistory，若详
   // 点击 t1 所在卡片的头行 → 展开详情（renderTaskList 按 Map 插入序渲染，t1 是第一张卡）
   const cards = context.dom.taskProgressList.children;
   assert.equal(cards.length, 2);
-  cardHeaderRow(cards[0]).click();
+  rowExpandBtn(cards[0]).click();
   assert.ok(cardDetail(context.dom.taskProgressList.children[0]), '详情应展开');
 
   // t1 完成、t2 仍在跑：不整清横幅，但正开着的 t1 详情必须随任务一起消失——否则面板停留在陈旧数据上。
@@ -330,7 +350,11 @@ test('task status 横幅：混合改报构成，列表按种类分组', () => {
   // 组顺序：两个 agent 卡在 bash 卡之前，即使快照里 bash 更靠前
   const rows = kids.filter(n => !isGroupHeader(n));
   assert.equal(rows.length, 3);
-  const rowTitle = card => String(cardHeaderRow(card)?.children?.[0]?.children?.[0]?.textContent || '');
+  const rowTitle = card => {
+    const expand = rowExpandBtn(card);
+    const label = expand?.children?.find(n => String(n.html || '').includes('truncate'));
+    return String(label?.textContent || '');
+  };
   assert.match(rowTitle(rows[0]), /Explore/);
   assert.match(rowTitle(rows[1]), /Plan/);
   assert.match(rowTitle(rows[2]), /npm test/);
@@ -417,7 +441,7 @@ test('task status 混合列表：组头不抢点击，第一张卡是被提前�
   const afterHeaderClick = context.dom.taskProgressList.children.filter(n => !isGroupHeader(n));
   assert.equal(afterHeaderClick.every(card => cardDetail(card) == null), true, '点组头不得展开任何详情');
 
-  cardHeaderRow(rows[0]).click();
+  rowExpandBtn(rows[0]).click();
   const rowsAfter = context.dom.taskProgressList.children.filter(n => !isGroupHeader(n));
   assert.ok(cardDetail(rowsAfter[0]), '第一张卡（Explore，被从 bash 后面提前）应展开详情');
   assert.equal(cardDetail(rowsAfter[1]), null);
@@ -562,4 +586,81 @@ test('O82：去重记录有界——很久以前的那条被淘汰，最近的�
   assert.equal(notes.length, 1000, '最近那条重放不该再响');
   status.onComplete(done('t0'));
   assert.equal(notes.length, 1001, '最早那条应已被淘汰（记录有界）');
+});
+
+
+test('#402 bg-task-row expand button exposes aria-expanded and ▸/▾', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }] },
+  });
+  const expand = rowExpandBtn(context.dom.taskProgressList.children[0]);
+  assert.ok(expand, 'row must have expand button');
+  assert.match(String(expand.html || ''), /type="button"/);
+  assert.match(String(expand.html || ''), /data-testid="bg-task-expand"/);
+  assert.equal(expand.getAttribute('aria-expanded'), 'false');
+  assert.equal(expand.children[0]?.textContent, '▸');
+
+  expand.click();
+  const expandOpen = rowExpandBtn(context.dom.taskProgressList.children[0]);
+  assert.equal(expandOpen.getAttribute('aria-expanded'), 'true');
+  assert.equal(expandOpen.children[0]?.textContent, '▾');
+  assert.ok(cardDetail(context.dom.taskProgressList.children[0]), 'detail opens');
+});
+
+test('#402 键盘按「展开」后焦点留在重绘出来的同一颗钮上，心跳重绘也不甩焦点', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+  const progress = () => status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }, { taskId: 't2', message: 'two' }] },
+  });
+  progress();
+  const list = context.dom.taskProgressList;
+  const expand = rowExpandBtn(list.children[1]);
+  expand.focus();
+  expand.click(); // 键盘回车在 <button> 上等价 click
+  const after = rowExpandBtn(list.children[1]);
+  assert.notEqual(after, expand, '前提：重绘换了新节点');
+  assert.equal(fakeTaskDoc.activeElement, after, '展开后焦点没回到这一行的展开钮');
+  assert.equal(after.getAttribute('aria-expanded'), 'true');
+
+  progress(); // 心跳
+  assert.equal(fakeTaskDoc.activeElement, rowExpandBtn(list.children[1]), '心跳重绘把焦点甩掉了');
+  fakeTaskDoc.activeElement = null;
+});
+
+test('#402 bg-task-row click (not only expand btn) opens detail panel', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }] },
+  });
+  const row = cardHeaderRow(context.dom.taskProgressList.children[0]);
+  assert.ok(row, 'bg-task-row header present');
+  row.click();
+  assert.ok(cardDetail(context.dom.taskProgressList.children[0]), 'row click opens detail');
+  // 再点同行收起（回归：整行热区，不只 expand 按钮）
+  cardHeaderRow(context.dom.taskProgressList.children[0]).click();
+  assert.equal(cardDetail(context.dom.taskProgressList.children[0]), null, 'row click again collapses');
 });

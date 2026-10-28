@@ -122,6 +122,10 @@ export function createGitChangesPanel(context, {
   function appendRow(entry, side) {
     const row = createElement('<div class="border-b border-line-soft" data-testid="git-change-row"></div>');
     const btn = createElement('<button type="button" class="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-sunk/30 active:opacity-70"></button>');
+    btn.setAttribute('aria-expanded', 'false');
+    const chevron = createElement('<span class="text-[10px] text-ink-faint shrink-0" aria-hidden="true"></span>');
+    chevron.textContent = '▸';
+    btn.appendChild(chevron);
     const xy = createElement('<span class="shrink-0 w-7 text-[10px] font-mono text-ink-faint tabular-nums"></span>');
     xy.textContent = side ? (entry.xy || '') : '??';
     btn.appendChild(xy);
@@ -134,6 +138,9 @@ export function createGitChangesPanel(context, {
     btn.onclick = () => {
       haptic('tap');
       preview.classList.toggle('hidden');
+      const open = !preview.classList.contains('hidden');
+      btn.setAttribute('aria-expanded', String(open));
+      chevron.textContent = open ? '▾' : '▸';
       if (loaded) return;
       loaded = true;
       if (!side) loadUntrackedPreview(preview, entry.path);

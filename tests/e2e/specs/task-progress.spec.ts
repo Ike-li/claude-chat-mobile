@@ -78,7 +78,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#taskProgressText')).toContainText('2 个子代理 · 1 条命令', { timeout: 10_000 });
 
     // 默认折叠：行已渲染在 DOM（供断言/无障碍），但列表容器不可见。
-    // 折叠热区是整条头行（无三角按钮），恒可见；右侧「停止」在多任务下隐藏（每行自带「停」）。
+    // 折叠热区是整条头行（#taskBannerToggle），尾随 #taskBannerChevron 作 ▸/▾；右侧「停止」在多任务下隐藏（每行自带「停」）。
     const toggle = page.locator('[data-testid="bg-task-toggle"]');
     await expect(page.locator('[data-testid="task-stop-btn"]')).toBeHidden();
     const list = page.locator('[data-testid="bg-task-list"]');
