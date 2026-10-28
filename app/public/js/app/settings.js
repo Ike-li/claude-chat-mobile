@@ -8,8 +8,7 @@
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic/panel-state.js';
 import { focusInto, restoreFocus, setInertReason, trapTabIn } from './focus-layers.js';
-
-const SHEET_OPEN_CLASS = 'ccm-sheet-open';
+import { acquireSheetScrollLock, releaseSheetScrollLock } from './sheet-scroll-lock.js';
 
 // 默认指向会话设置那套 id——现有调用点与单测因此零改动。
 const DEFAULT_KEYS = {
@@ -65,13 +64,11 @@ export function createSettingsController(context, {
   let focusBefore = null; // 打开前焦点所在，关闭时还回去
 
   function lockBackgroundScroll() {
-    doc?.documentElement?.classList?.add(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.add(SHEET_OPEN_CLASS);
+    acquireSheetScrollLock(doc);
   }
 
   function unlockBackgroundScroll() {
-    doc?.documentElement?.classList?.remove(SHEET_OPEN_CLASS);
-    doc?.body?.classList?.remove(SHEET_OPEN_CLASS);
+    releaseSheetScrollLock(doc);
   }
 
   function resetSheetMotion() {
@@ -123,7 +120,9 @@ export function createSettingsController(context, {
     try { beforeOpen(); } catch { /* 收另一个 sheet 失败不能让本面板打不开 */ }
     haptic('tap');
     // 已开着时再 open（深链跳页）不覆盖：那时焦点在面板里，记下来就还不回打开它的入口了
-    if (!isOpen()) focusBefore = doc?.activeElement ?? null;
+    // 滚动锁也必须幂等：重复 open 不得再 acquire，否则 close 一次会留下 ccm-sheet-open（#425）。
+    const alreadyOpen = isOpen();
+    if (!alreadyOpen) focusBefore = doc?.activeElement ?? null;
     alerts.ensureAudio?.();
     syncPreferences();
     // 内容区每次打开滚回顶部，避免上次停在底部再打开时「像丢了半截」
@@ -133,13 +132,15 @@ export function createSettingsController(context, {
     sheetEl()?.classList.remove('translate-y-full');
     scrimEl()?.classList.remove('hidden');
     setInertReason(sheetEl(), 'closed', false);
-    lockBackgroundScroll();
+    if (!alreadyOpen) lockBackgroundScroll();
     try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
     // 焦点进面板（验收 O77）：不移的话键盘用户按 Tab 走的还是背后的页面
     if (sheetEl()) focusInto(sheetEl());
   }
 
   function close() {
+    // 已关再关：不 release（引用计数否则会 underflow，嵌套 sheets/另一设置页的锁被提前摘掉）
+    if (!isOpen()) return;
     haptic('tap');
     drag = null;
     // 先记下焦点在不在面板里：一 inert，浏览器就把里面的焦点丢回 body，事后再问就晚了

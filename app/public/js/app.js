@@ -1028,7 +1028,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
     },
   });
-  const { openSheet, closeSheet, appConfirm } = sheets;
+  const { openSheet, closeSheet, appConfirm, setGestureDismiss } = sheets;
   const setStatus = messageRenderer.setStatus;
   const leaveStartScreen = () => {
     messageRenderer.leaveStartScreen();
@@ -2402,6 +2402,8 @@ import { createGateFocusController } from './app/focus-layers.js';
   }
   if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => void openServiceStatus({ from: 'host' });
   if ($('serviceStatusBack')) $('serviceStatusBack').onclick = closeServiceStatus;
+  // #399：把手下拉与 ← / 遮罩同一条关闭路径（退回来源设置页）
+  setGestureDismiss(serviceStatusModal, () => closeServiceStatus());
   // 「排查」页的安全日志入口：同一张面板，落点直接滚到审计那一段。此前这一段只有"先开服务状态、
   // 再往下翻三屏"这一条路，而 L1 副标题一直列着「安全日志」。
   if ($('btnDiagSecurityLog')) {
@@ -2421,6 +2423,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     onSaved: () => {},
   });
   envConfigPanel.bind();
+  // #399：把手下拉走 envConfigPanel.close（afterClose 退回设置）
+  setGestureDismiss($('envConfigModal'), () => envConfigPanel.close());
   if (serviceStatusModal) serviceStatusModal.onclick = e => { if (e.target === serviceStatusModal) closeServiceStatus(); };
 
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
@@ -6897,6 +6901,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       }
     },
   });
+  // #399 / #425：把手下拉走 rewind close（清 picked/session），不要裸 closeSheet 留下脏态
+  setGestureDismiss($('rewindModal'), () => rewindCommand.close());
 
   // ---- 续接会丢掉一段对话（SESSION-04）：发送被拒后问「分叉到新会话 / 仍然发送」----
   // 话的去留在这里：分叉要把它从这个会话的输入框挪进新会话（正看着就直接放，否则放进草稿槽，
@@ -6960,6 +6966,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     fileBrowser,
     gitChanges,
   });
+  // #399：把手下拉走面板自己的 close（含未保存编辑丢弃确认），不要直接 closeSheet
+  setGestureDismiss(workspaceModal, () => { void workspacePanel.close(); });
   const openWorkspacePanel = workspacePanel.open;
   // 「选文件夹」面板：新会话在哪开（已连接的文件夹 / 子文件夹 / 无文件夹 / 添加文件夹）
   const folderPicker = createFolderPicker({
@@ -10054,6 +10062,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     consoleFrom = null;
     reopenGeneralAt(back);
   }
+  // #399 / #425：把手下拉与 ✕ / 遮罩同一条 closeConsole（含从排查页退回设置）
+  setGestureDismiss(consoleModal, () => closeConsole());
 
   if (btnConsole) {
     btnConsole.onclick = () => {
