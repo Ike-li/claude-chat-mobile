@@ -156,13 +156,25 @@ test('task status controller collapses the multi-task list by default and expand
 });
 
 // 记录型 fakeNode：把 createElement 收到的 HTML 串留在 .html 上，才能断言「详情块渲染在哪张卡片里」。
+// 焦点替身：taskCardFakeNode 的 focus() 写这里，ownerDocument 指向它（#402 重绘还焦）
+const fakeTaskDoc = { activeElement: null };
 function taskCardFakeNode(html = '') {
   const classes = new Set();
   const attrs = {};
   const listeners = {};
   const children = [];
+  const walk = function* (node) {
+    for (const c of node.children || []) { yield c; yield* walk(c); }
+  };
   return {
     html: String(html),
+    ownerDocument: fakeTaskDoc,
+    focus() { fakeTaskDoc.activeElement = this; },
+    contains(n) { for (const c of walk(this)) if (c === n) return true; return n === this; },
+    querySelectorAll(sel) {
+      const m = /^\[([a-z-]+)\]$/.exec(sel);
+      return m ? [...walk(this)].filter(c => c.getAttribute?.(m[1]) != null) : [];
+    },
     classList: {
       add: (...names) => names.forEach(n => classes.add(n)),
       remove: (...names) => names.forEach(n => classes.delete(n)),
@@ -602,6 +614,33 @@ test('#402 bg-task-row expand button exposes aria-expanded and ▸/▾', () => {
   assert.equal(expandOpen.getAttribute('aria-expanded'), 'true');
   assert.equal(expandOpen.children[0]?.textContent, '▾');
   assert.ok(cardDetail(context.dom.taskProgressList.children[0]), 'detail opens');
+});
+
+test('#402 键盘按「展开」后焦点留在重绘出来的同一颗钮上，心跳重绘也不甩焦点', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+  const progress = () => status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one', description: 'doing one' }, { taskId: 't2', message: 'two' }] },
+  });
+  progress();
+  const list = context.dom.taskProgressList;
+  const expand = rowExpandBtn(list.children[1]);
+  expand.focus();
+  expand.click(); // 键盘回车在 <button> 上等价 click
+  const after = rowExpandBtn(list.children[1]);
+  assert.notEqual(after, expand, '前提：重绘换了新节点');
+  assert.equal(fakeTaskDoc.activeElement, after, '展开后焦点没回到这一行的展开钮');
+  assert.equal(after.getAttribute('aria-expanded'), 'true');
+
+  progress(); // 心跳
+  assert.equal(fakeTaskDoc.activeElement, rowExpandBtn(list.children[1]), '心跳重绘把焦点甩掉了');
+  fakeTaskDoc.activeElement = null;
 });
 
 test('#402 bg-task-row click (not only expand btn) opens detail panel', () => {
