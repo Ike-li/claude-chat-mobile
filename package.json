@@ -105,7 +105,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.302",
     "compression": "^1.8.2",
     "dotenv": "^18.0.8",
-    "express": "^5.0.0",
+    "express": "^5.3.0",
     "jose": "^6.2.12",
     "socket.io": "^4.8.4",
     "web-push": "^3.6.7"
