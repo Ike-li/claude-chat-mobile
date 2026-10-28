@@ -303,6 +303,8 @@ export const EN_DICT = Object.freeze({
   '无匹配文件': 'No matching files',
   '文件搜索失败': 'File search failed',
   '未连接，无法搜索文件': 'Not connected — cannot search files',
+  '斜杠命令候选': 'Slash command suggestions',
+  '文件引用候选': 'File mention suggestions',
 
   // —— 设备授权 / 访问帮助 ——
   '🔒 等待授权': '🔒 Waiting for approval',

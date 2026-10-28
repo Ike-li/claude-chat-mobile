@@ -329,5 +329,65 @@ export function buildSlashCommandHints({ commands = [], terminalCommands = [], l
   return p ? cands.filter(c => c.toLowerCase().startsWith(p)) : cands;
 }
 
+// ---- 候选浮层键盘导航（#392：/ 与 @ 共用 listbox 语义；DOM 接线在 app.js）----
+/** Stable option id for aria-activedescendant (listKey: 'cmd' | 'at'). */
+export function composerHintOptionId(listKey, index) {
+  return `ccm-hint-${listKey}-${Number(index) || 0}`;
+}
+
+/**
+ * Next active index for ↑/↓ in a composer hint listbox.
+ * No current selection (-1 / out of range): ↓ → 0, ↑ → last. Wraps at ends.
+ */
+export function moveComposerHintIndex(optionCount, currentIndex, delta) {
+  const n = Math.max(0, Number(optionCount) || 0);
+  if (n === 0) return -1;
+  const d = Number(delta) || 0;
+  if (d === 0) {
+    const cur = Number(currentIndex);
+    return Number.isFinite(cur) && cur >= 0 && cur < n ? cur : -1;
+  }
+  let i = Number(currentIndex);
+  if (!Number.isFinite(i) || i < 0 || i >= n) {
+    return d > 0 ? 0 : n - 1;
+  }
+  return (i + d + n) % n;
+}
+
+/**
+ * Key routing for an open composer hint listbox.
+ * Returns { action: 'none'|'move'|'select'|'dismiss', nextIndex? }.
+ * Enter with no highlight → 'none' so the normal send path can run.
+ * IME composing → 'none' (caller should also gate on isComposing / keyCode 229).
+ */
+export function resolveComposerHintKeydown({
+  key,
+  open = false,
+  optionCount = 0,
+  activeIndex = -1,
+  composing = false,
+} = {}) {
+  if (composing) return { action: 'none' };
+  const n = Math.max(0, Number(optionCount) || 0);
+  if (!open || n === 0) return { action: 'none' };
+  if (key === 'ArrowDown') {
+    return { action: 'move', nextIndex: moveComposerHintIndex(n, activeIndex, 1) };
+  }
+  if (key === 'ArrowUp') {
+    return { action: 'move', nextIndex: moveComposerHintIndex(n, activeIndex, -1) };
+  }
+  if (key === 'Enter') {
+    const i = Number(activeIndex);
+    if (Number.isFinite(i) && i >= 0 && i < n) {
+      return { action: 'select', nextIndex: i };
+    }
+    return { action: 'none' };
+  }
+  if (key === 'Escape') {
+    return { action: 'dismiss' };
+  }
+  return { action: 'none' };
+}
+
 // ---- statusline 折叠摘要 / 剪贴板（纯数据，DOM 在 app.js）----
 // 折叠态只放 git + ctx：模型/effort/权限已在底栏 pill，勿重复；展开仍有 CLI 级全量。
