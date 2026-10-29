@@ -627,6 +627,9 @@ let mockFolderTree = createMockFolderTree();
 let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
 let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
 let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
+// /__arm-mcp-live（#457）：mcp:status 现查得到（真 server 有活实例时）。null = 没有活实例，回 live:false，前端用 init 快照
+let mockMcpLive = null;
+let mockMcpReconnectTries = 0;
 const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
 function mockFolderReason(rel) {
   if (!Object.hasOwn(mockFolderTree, rel)) return 'not_found';
@@ -655,6 +658,8 @@ function resetMockState() {
   mockReorderFail = false;
   mockFoldersAddError = null;
   mockAutoModeDisabled = false;
+  mockMcpLive = null;
+  mockMcpReconnectTries = 0;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -990,6 +995,20 @@ app.post('/__replay-models', (_req, res) => {
 app.post('/__arm-auto-mode-disabled', (_req, res) => {
   mockAutoModeDisabled = true;
   broadcastMockInstances();
+  res.json({ ok: true });
+});
+
+// MCP 实时状态（#457）：五种状态各一台，名字里塞一段 HTML 验转义（名字是用户 / 插件写的配置键）。
+// postgres 第一次重连失败、第二次成功，前端两条路都走得到。
+app.post('/__arm-mcp-live', (_req, res) => {
+  mockMcpLive = [
+    { name: 'filesystem', status: 'connected', scope: 'user', toolCount: 3 },
+    { name: 'postgres', status: 'failed', error: 'spawn postgres-mcp ENOENT', scope: 'project' },
+    { name: 'linear', status: 'pending', scope: 'user' },
+    { name: 'notion', status: 'disabled', scope: 'project' },
+    { name: '<img src=x onerror="window.__mcpXss=1">', status: 'needs-auth', scope: 'user' },
+  ];
+  mockMcpReconnectTries = 0;
   res.json({ ok: true });
 });
 
@@ -7015,6 +7034,29 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // MCP（#457，真 server：app.js 的 mcp:* → agent.mcpStatus / reconnectMcp / toggleMcp）。ack 形状照真 server。
+  socket.on('mcp:status', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack(mockMcpLive ? { ok: true, live: true, servers: mockMcpLive.map(x => ({ ...x })) } : { ok: true, live: false });
+  });
+  socket.on('mcp:reconnect', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const server = mockMcpLive?.find(x => x.name === payload?.name);
+    if (!server) { ack({ ok: false, error: 'no_instance' }); return; }
+    mockMcpReconnectTries += 1;
+    if (mockMcpReconnectTries === 1) { ack({ ok: false, error: 'Server postgres failed to start: Connection closed' }); return; }
+    server.status = 'connected';
+    delete server.error;
+    ack({ ok: true });
+  });
+  socket.on('mcp:toggle', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const server = mockMcpLive?.find(x => x.name === payload?.name);
+    if (!server || typeof payload?.enabled !== 'boolean') { ack({ ok: false, error: 'no_instance' }); return; }
+    server.status = payload.enabled ? 'connected' : 'disabled';
+    ack({ ok: true });
   });
 
   // 额度墙自动继续横幅的按钮（真 server：app.js 的 user:autoContinue → auto-continue.js 的 act()）。

@@ -193,8 +193,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // 缺口 3：MCP 服务器与 skills 数早就随 init 事件到了浏览器（agent.js emit('init')），
   // 但前端从来没有渲染面——grep mcpServers / skillsCount 在 app/public 下零命中。
-  // 失败态必须带上原始 status：'failed' 与 'needs-auth' 是两种完全不同的处置。
-  test('P0-28j 「宿主机」页显示 MCP 服务器与 skills 数，失败的那台带原始状态', async ({ page }) => {
+  // 失败态必须带上状态：'failed' 与 'needs-auth' 是两种完全不同的处置。
+  // #457 起进页先现查 mcp:status；mock 默认没有活实例（live:false），这里走的是 init 快照那条退路。
+  test('P0-28j 「宿主机」页显示 MCP 服务器与 skills 数，失败的那台带状态；没有活实例时标快照、不出按钮', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await ensureComposerReady(page);
@@ -207,10 +208,55 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toBeVisible();
     await expect(body).toContainText('MCP');
     await expect(body).toContainText('filesystem');
-    // 连不上的那台：名字后面必须跟着原始 status，不能压成一个笼统的「异常」
-    await expect(body).toContainText('postgres（failed）');
+    // 连不上的那台：名字后面必须跟着状态，不能压成一个笼统的「异常」
+    await expect(body.locator('[data-mcp-name="postgres"]')).toContainText('连接失败');
+    await expect(body).toContainText('快照');
+    await expect(body.locator('[data-mcp-action]')).toHaveCount(0);
     await expect(body).toContainText('Skills');
     await expect(body).toContainText('7');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #457：状态改为现查（mcpServerStatus），连接中 / 已停用不算故障；能像终端 /mcp 一样重连、启停。
+  // 名字是用户 / 插件写的配置键、错误来自 CLI：一律按纯文本显示。
+  test('P0-28m MCP 实时状态：连接中 / 已停用是灰档，失败的能重连（失败原因原样显示），停用要确认', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__arm-mcp-live'); // gotoMock 会重置 mock，武装要在它之后
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+
+    const body = page.locator('[data-testid="host-env-body"]');
+    const row = name => body.locator(`[data-mcp-name="${name}"]`);
+    await expect(row('linear')).toContainText('连接中');
+    await expect(row('linear').locator('.text-danger')).toHaveCount(0);
+    await expect(row('notion')).toContainText('已停用');
+    await expect(body).not.toContainText('快照');
+
+    // 失败原因原样显示；第一次重连失败，CLI 的错误落在这一行；再点一次连上了，重连按钮随之消失
+    await expect(row('postgres')).toContainText('spawn postgres-mcp ENOENT');
+    await row('postgres').locator('[data-mcp-action="reconnect"]').click();
+    await expect(row('postgres')).toContainText('Connection closed');
+    await row('postgres').locator('[data-mcp-action="reconnect"]').click();
+    await expect(row('postgres')).not.toContainText('连接失败');
+    await expect(row('postgres').locator('[data-mcp-action="reconnect"]')).toHaveCount(0);
+
+    // 启用不确认；停用是持久写入，先过确认 sheet
+    await row('notion').locator('[data-mcp-action="toggle"]').click();
+    await expect(row('notion')).not.toContainText('已停用');
+    await row('filesystem').locator('[data-mcp-action="toggle"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
+    await expect(row('filesystem')).toContainText('已停用');
+
+    // 要授权的只提示去电脑上授权；名字里的 HTML 不执行
+    const authRow = body.locator('[data-mcp-name^="<img"]');
+    await expect(authRow).toContainText('需在电脑上完成授权');
+    await expect(body.locator('img')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__mcpXss)).toBeUndefined();
 
     await expectNoBrowserErrors(page);
   });

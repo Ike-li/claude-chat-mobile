@@ -80,6 +80,13 @@ const MODEL_VALUE_FROM_GATEWAY = process.env.CCM_FAKE_CLAUDE_MODEL_VALUE_FROM_GA
 // 不置位时既有用例的前提逐字不变。
 const LISTED_MODEL = process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE
   ? readFileSync(process.env.CCM_FAKE_CLAUDE_MODEL_LIST_FILE, 'utf8').trim() : '';
+// MCP（#457）：mcpServerStatus() 发 mcp_status 控制请求、读响应的 mcpServers；reconnect / toggle 失败时 CLI 回
+// subtype:'error'，SDK 据此抛错。显式 opt-in 才这样应答：CCM_FAKE_CLAUDE_MCP_STATUS=<McpServerStatus[] 的 JSON>，
+// CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR=<错误文本>；CCM_FAKE_CLAUDE_CONTROL_LOG=<路径> 把收到的每个控制请求按行记下，
+// 供用例核对参数确实到了 CLI。不置位时一律照旧回 success + {}。
+const MCP_STATUS = process.env.CCM_FAKE_CLAUDE_MCP_STATUS ? JSON.parse(process.env.CCM_FAKE_CLAUDE_MCP_STATUS) : null;
+const MCP_RECONNECT_ERROR = process.env.CCM_FAKE_CLAUDE_MCP_RECONNECT_ERROR || '';
+const CONTROL_LOG = process.env.CCM_FAKE_CLAUDE_CONTROL_LOG || '';
 const EXIT_APPEND = process.env.CCM_FAKE_CLAUDE_EXIT_APPEND || '';
 // turn-screenshot 档的截图：固定 id 与 1×1 PNG，用例据此拼引用 t:<id>:0、比对取回的数据
 const SCREENSHOT_TOOL_USE_ID = 'toolu_fake_screenshot';
@@ -100,6 +107,15 @@ rl.on('line', (line) => {
   // 任何 control_request 一律回 success。不认的子类型也要应答——SDK 在
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
   if (msg.type === 'control_request') {
+    if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
+    if (MCP_RECONNECT_ERROR && msg.request?.subtype === 'mcp_reconnect') {
+      out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: MCP_RECONNECT_ERROR } });
+      return;
+    }
+    if (MCP_STATUS && msg.request?.subtype === 'mcp_status') {
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers: MCP_STATUS } } });
+      return;
+    }
     const payload = msg.request?.subtype !== 'initialize' ? {}
       : LISTED_MODEL ? { models: [{ value: LISTED_MODEL, displayName: LISTED_MODEL, resolvedModel: LISTED_MODEL }] }
         : GATEWAY_MODEL ? { models: [{ value: MODEL_VALUE_FROM_GATEWAY ? GATEWAY_MODEL : 'opus', displayName: GATEWAY_MODEL, resolvedModel: GATEWAY_MODEL }] }

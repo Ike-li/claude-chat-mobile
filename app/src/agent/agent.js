@@ -425,6 +425,16 @@ const LOCAL_COMMAND_PROGRESS_INTERVAL_MS = 3_000;
 // 磁盘观察出来的子代理在 bgTasks 里的键前缀：与 SDK 真实 task_id 分开命名空间，
 // 免得两条来源（SDK task_progress / 我们扫盘）撞键互相覆盖。
 const LOCAL_CMD_TASK_PREFIX = 'localcmd:';
+// mcpServerStatus() 的等待上限（#457），同 fetchUsage 的 1.5s 闸：面板等不起，过了就退回 init 快照
+const MCP_STATUS_TIMEOUT_MS = 1500;
+
+// mcpServerStatus() 的一项 → 面板要的几个字段。tools 可能上百条（带说明与注解），只要个数；config 里有 URL / 命令行，不往外带。
+function mcpStatusView(s) {
+  const view = { name: s.name, status: s.status };
+  for (const key of ['error', 'scope', 'source']) if (typeof s[key] === 'string' && s[key]) view[key] = s[key];
+  if (Array.isArray(s.tools)) view.toolCount = s.tools.length;
+  return view;
+}
 
 // message_delta 常只带 output_tokens；整对象覆盖会抹掉 input/cache → statusline uncached 0。
 // 白名单合并：只写入下一帧里出现的非负有限数字段，保留 prev 其余字段。
@@ -739,6 +749,37 @@ export class AgentSession {
         this.emit('models', { models: Array.isArray(ms) ? ms : [] });
       })
       ?.catch?.(() => {});
+  }
+
+  // MCP 服务器实时状态（#457），对应终端 /mcp 的列表。init 的 mcp_servers 只是那一刻的快照：CLI 异步连 MCP，
+  // init 时多半还是 pending。拿不到（没有 query、旧 CLI、调用失败、超时）→ null，调用方退回 init 快照。
+  async mcpStatus(timeoutMs = MCP_STATUS_TIMEOUT_MS) {
+    const p = this.q?.mcpServerStatus?.();
+    if (!p || typeof p.then !== 'function') return null;
+    let timer = null;
+    try {
+      const list = await Promise.race([
+        p,
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('mcp_status_timeout')), timeoutMs); }),
+      ]);
+      return Array.isArray(list) ? list.filter(x => x && typeof x.name === 'string' && x.name).map(mcpStatusView) : null;
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  // 重连 / 启停某个 MCP 服务器。SDK 失败时抛错，这里原样往上抛，server 把错误文本回给手机。
+  // toggle 是持久写入：CLI 把 disabledMcpServers / enabledMcpServers 写进项目配置，与终端 /mcp 停用同效。
+  async reconnectMcp(name) {
+    if (!this.q?.reconnectMcpServer) throw new Error('no_query');
+    await this._raceControlRequest(() => this.q.reconnectMcpServer(name), 'mcp_reconnect');
+  }
+
+  async toggleMcp(name, enabled) {
+    if (!this.q?.toggleMcpServer) throw new Error('no_query');
+    await this._raceControlRequest(() => this.q.toggleMcpServer(name, enabled), 'mcp_toggle');
   }
 
   // 会话中途换 cwd（SESSION-03）：CwdChanged hook 报上来的那一路。
