@@ -27,7 +27,7 @@ test('sanitizeSessionTitle: 超长截到上限，按字符而不是 UTF-16 单�
   assert.equal(out, '😀'.repeat(SESSION_TITLE_MAX));
 });
 
-function setup() {
+function setup({ beforeRead } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'ccm-rename-'));
   const cwd = '/test/rename-project';
   const sessionId = '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b';
@@ -46,7 +46,7 @@ function setup() {
   };
   const renamer = createSessionRenamer({
     renameSession,
-    readLastCustomTitle: (id, c) => readLastCustomTitle(id, c, { baseDir: base }),
+    readLastCustomTitle: async (id, c) => { await beforeRead?.(); return readLastCustomTitle(id, c, { baseDir: base }); },
     log: { info() {}, warn() {} },
   });
   const lastCustomTitle = () => readFileSync(file, 'utf-8').trim().split('\n').map(l => JSON.parse(l))
@@ -113,4 +113,22 @@ test('活会话改名后实例退了、再在没有活实例时改一次：前�
   await first.afterExit;
   assert.equal(lastCustomTitle(), '第二次');
   assert.deepEqual(calls.map(c => c.title), ['第一次', '第二次']);
+});
+
+test('退出补写正卡在读尾窗时又改了名：最后落盘的是后一次，不把前一次写回来', async () => {
+  const readStarted = deferred();
+  const releaseRead = deferred();
+  const { cwd, sessionId, calls, renamer, lastCustomTitle, cliExitRewritingOldTitle } = setup({
+    beforeRead: async () => { readStarted.resolve(); await releaseRead.promise; },
+  });
+  const exit = deferred();
+  const first = await renamer.rename({ sessionId, cwd, title: '第一次', liveExits: [exit.promise] });
+  cliExitRewritingOldTitle();
+  exit.resolve();
+  await readStarted.promise; // 补写已经开始、正在读尾窗
+  const second = renamer.rename({ sessionId, cwd, title: '第二次', liveExits: [] });
+  releaseRead.resolve();
+  await Promise.all([first.afterExit, second]);
+  assert.equal(lastCustomTitle(), '第二次');
+  assert.equal(calls.at(-1).title, '第二次');
 });

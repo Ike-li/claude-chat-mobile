@@ -120,6 +120,7 @@ let mockListHardTop = 12;
 let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 const renamedSessionTitles = new Map(); // session:rename 后列表行显示的新标题（sessionId → title）
+const heldRenameAcks = []; // 标题以 MOCK_RENAME_HELD 开头的改名回执先扣住，POST /__release-renames 按到达顺序放
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
 // 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
@@ -702,6 +703,7 @@ function resetMockState() {
   mockSessionListLog = [];
   deletedSessionIds.clear();
   renamedSessionTitles.clear();
+  heldRenameAcks.length = 0;
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
   reconnectDrawerTitleChanged = false;
@@ -949,6 +951,14 @@ function emitTrustedDevices() {
 }
 
 app.get('/__approve-log', (_req, res) => res.json(mockApproveLog));
+
+app.get('/__held-renames', (_req, res) => res.json(heldRenameAcks.map(r => r.title)));
+
+app.post('/__release-renames', (_req, res) => {
+  const released = heldRenameAcks.splice(0);
+  for (const { finish } of released) finish();
+  res.json({ released: released.map(r => r.title) });
+});
 
 app.post('/__reset', (_req, res) => {
   resetMockState();
@@ -1804,10 +1814,16 @@ io.on('connection', socket => {
     const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
     if (!title) { ack({ ok: false, error: '标题不能为空' }); return; }
     if (title === 'MOCK_RENAME_FAIL') { ack({ ok: false, error: '改名失败：EACCES: permission denied' }); return; }
-    renamedSessionTitles.set(sessionId, title);
-    const inst = mockInstances.find(i => i.sessionId === sessionId);
-    if (inst) { inst.title = title.slice(0, 40); broadcastMockInstances(); }
-    ack({ ok: true, title, ...(sessionId === 'mock-session-gap' ? { terminalMayOverwrite: true } : {}) });
+    const finish = () => {
+      if (title === 'MOCK_RENAME_HELD_FAIL') { ack({ ok: false, error: '改名失败：迟到的错因' }); return; }
+      renamedSessionTitles.set(sessionId, title);
+      const inst = mockInstances.find(i => i.sessionId === sessionId);
+      if (inst) { inst.title = title.slice(0, 40); broadcastMockInstances(); }
+      ack({ ok: true, title, ...(sessionId === 'mock-session-gap' ? { terminalMayOverwrite: true } : {}) });
+    };
+    // 迟到的回执（P0-ROW-MENU-10）：扣到测试把新 sheet 打开之后再放
+    if (title.startsWith('MOCK_RENAME_HELD')) { heldRenameAcks.push({ title, finish }); return; }
+    finish();
   });
 
   // Handle Tab close

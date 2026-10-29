@@ -23,29 +23,44 @@ export function sanitizeSessionTitle(raw) {
 export function createSessionRenamer({ renameSession, readLastCustomTitle, log = console }) {
   // sessionId → 等退出补写的那个名字。只留最后一次：活会话里连改几次，退出后只该补最后那个。
   const pending = new Map();
+  // sessionId → 这个会话上一次写入的结算。改名与退出补写按会话排队：补写「查 pending → 读尾窗 → 追加」
+  // 中途若插进一次改名，它会先查过 pending、再把前一次的名字写在新名字后面。
+  const queues = new Map();
 
-  async function reconcile(sessionId, cwd, title) {
-    if (pending.get(sessionId) !== title) return; // 之后又改过名（或没有活实例时改过），这一次作废
-    pending.delete(sessionId);
-    try {
-      if (await readLastCustomTitle(sessionId, cwd) === title) return;
-      await renameSession(sessionId, title, { dir: cwd });
-      log.info?.(`[session-rename] CLI 退出时写回了旧标题，已补写 sessionId=${sessionId}`);
-    } catch (err) {
-      log.warn?.(`[session-rename] 退出补写失败 sessionId=${sessionId}: ${err?.message || err}`);
-    }
+  function serial(sessionId, fn) {
+    const run = (queues.get(sessionId) || Promise.resolve()).then(fn);
+    const settled = run.catch(() => {});
+    queues.set(sessionId, settled);
+    settled.then(() => { if (queues.get(sessionId) === settled) queues.delete(sessionId); });
+    return run;
+  }
+
+  function reconcile(sessionId, cwd, title) {
+    return serial(sessionId, async () => {
+      if (pending.get(sessionId) !== title) return; // 之后又改过名（或没有活实例时改过），这一次作废
+      pending.delete(sessionId);
+      try {
+        if (await readLastCustomTitle(sessionId, cwd) === title) return;
+        await renameSession(sessionId, title, { dir: cwd });
+        log.info?.(`[session-rename] CLI 退出时写回了旧标题，已补写 sessionId=${sessionId}`);
+      } catch (err) {
+        log.warn?.(`[session-rename] 退出补写失败 sessionId=${sessionId}: ${err?.message || err}`);
+      }
+    });
   }
 
   // liveExits：这个会话名下还没退完的实例的退出确认（活的、正在关的都算）。
   // 返回的 afterExit 在补写结算后兑现；没有活实例时为 undefined。调用方不必等它。
-  async function rename({ sessionId, cwd, title, liveExits = [] }) {
-    await renameSession(sessionId, title, { dir: cwd });
-    if (!liveExits.length) {
-      pending.delete(sessionId);
-      return { afterExit: undefined };
-    }
-    pending.set(sessionId, title);
-    return { afterExit: Promise.all(liveExits).then(() => reconcile(sessionId, cwd, title)) };
+  function rename({ sessionId, cwd, title, liveExits = [] }) {
+    return serial(sessionId, async () => {
+      await renameSession(sessionId, title, { dir: cwd });
+      if (!liveExits.length) {
+        pending.delete(sessionId);
+        return { afterExit: undefined };
+      }
+      pending.set(sessionId, title);
+      return { afterExit: Promise.all(liveExits).then(() => reconcile(sessionId, cwd, title)) };
+    });
   }
 
   return { rename };

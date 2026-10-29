@@ -33,16 +33,21 @@ export function createSessionRenameController(context, {
 
   function save() {
     if (!target || saving || !input.value.trim()) return;
-    const { sessionId, cwd, sectionKey } = target;
+    const request = target;
+    const { sessionId, cwd, sectionKey } = request;
     saving = true;
     syncSave();
     showError('');
     socket.timeout(RENAME_ACK_TIMEOUT_MS).emit('session:rename', { sessionId, cwd, title: input.value }, (err, res) => {
-      saving = false;
-      syncSave();
-      if (err) { showError(t('改名无响应，请稍后再试')); return; }
-      if (!res?.ok) { showError(res?.error || t('改名失败')); return; }
-      close();
+      // 等回执期间 sheet 被关掉、或又给别的会话打开了（open 换了 target）：结果不再碰眼前这张 sheet。
+      // 改名成功照样交给 onRenamed——服务端确实改了，抽屉得跟上
+      const current = target === request;
+      if (current) { saving = false; syncSave(); }
+      if (err || !res?.ok) {
+        if (current) showError(err ? t('改名无响应，请稍后再试') : (res?.error || t('改名失败')));
+        return;
+      }
+      if (current) close();
       onRenamed({ sessionId, cwd, sectionKey, title: res.title, terminalMayOverwrite: res.terminalMayOverwrite === true });
     });
   }

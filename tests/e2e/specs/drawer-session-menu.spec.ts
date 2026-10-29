@@ -243,6 +243,43 @@ test.describe('会话改名', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-ROW-MENU-10 回执还没到就关掉 sheet、又给别的会话打开：迟到的结果不动新 sheet，成功的照样换名', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const gapRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-gap"]');
+    const mainRow = page.locator('[data-testid="session-row"][data-session-id="mock-session-visual-test"]');
+    const input = page.getByTestId('session-rename-input');
+    const saveAndDismiss = async (row: import('@playwright/test').Locator, title: string) => {
+      await openSessionMenu(page, row);
+      await sessionMenuItem(page, 'rename').click();
+      await input.fill(title);
+      await input.press('Enter');
+      await page.locator('#sessionRenameCancel').click();
+      await expect(renameSheet(page)).not.toHaveClass(/sheet-open/);
+    };
+
+    // mock 把这两条的回执扣住，等新 sheet 开好再按序放：先失败、后成功
+    await saveAndDismiss(archivedRow(page), 'MOCK_RENAME_HELD_FAIL');
+    await saveAndDismiss(gapRow, 'MOCK_RENAME_HELD');
+    await openSessionMenu(page, mainRow);
+    await sessionMenuItem(page, 'rename').click();
+    await input.fill('还没存的草稿');
+    // 两条改名都已到 mock 再放（WebSocket 帧与这里的 HTTP 请求不同路，负载高时前者可能落后）
+    await expect.poll(async () => (await page.request.get('/__held-renames')).json()).toEqual(['MOCK_RENAME_HELD_FAIL', 'MOCK_RENAME_HELD']);
+    await page.request.post('/__release-renames');
+
+    // 成功的回执到了（抽屉换名）就说明同一条连接上更早的失败回执也已处理过
+    await expect(gapRow).toContainText('MOCK_RENAME_HELD');
+    await expect(renameSheet(page)).toHaveClass(/sheet-open/);
+    await expect(input).toHaveValue('还没存的草稿');
+    await expect(page.getByTestId('session-rename-error')).toBeHidden();
+    await expect(page.getByTestId('session-rename-save')).toBeEnabled();
+    await expect(archivedRow(page)).toContainText('Archived Planning Session');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-ROW-MENU-9 终端可能还开着这个会话：照样改名，抽屉提示改名可能被覆盖', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
