@@ -745,6 +745,16 @@ header {
 }
 
 /* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
+/* #359：≥768px（平板竖屏、桌面窄窗、桌面）每条消息的阅读宽度与 composer 内层（max-w-2xl = 42rem）对齐居中。
+   #messages 自己仍铺满整列，滚动条留在列的最右；767 以下由上面那段把 #messages 本身收窄到 640px。 */
+@media (min-width: 768px) {
+  #messages > * {
+    max-width: 42rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
 @media (min-width: 1024px) {
   body {
     display: grid !important;

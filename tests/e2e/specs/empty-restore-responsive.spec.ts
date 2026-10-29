@@ -221,4 +221,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // #359 第 1 项：768–1023（平板竖屏、桌面窄窗）与 ≥1024 下，消息流以前整列贴边拉满、composer 却居中 672px，
+  // 上下基线错开。#messages 自己仍铺满（滚动条留在列的最右），只把每条消息的阅读宽度收到与 composer 内层一致。
+  test('P0-19i 平板与桌面：消息与 composer 同宽居中，消息区本身仍铺满整列', async ({ page }) => {
+    for (const viewport of [{ width: 900, height: 900 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport);
+      await gotoMock(page);
+      await sendChatMessage(page, 'test:stream');
+      await waitForIdle(page);
+      const m = await page.evaluate(() => {
+        const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; };
+        const composer = box(document.querySelector('#composerFooter > .max-w-2xl'));
+        const messages = box(document.getElementById('messages'));
+        const header = box(document.querySelector('header'));
+        const rows = [...document.getElementById('messages').children]
+          .filter(el => el.getClientRects().length && getComputedStyle(el).position !== 'absolute')
+          .map(box);
+        return { composer, messages, header, rows };
+      });
+      expect(m.rows.length, `${viewport.width}px 下消息流里没有可见的行`).toBeGreaterThan(0);
+      expect(Math.abs(m.messages.right - m.header.right), `${viewport.width}px 下消息区没有铺到列的最右（滚动条会跑到中间）`).toBeLessThan(2);
+      const center = (b) => (b.left + b.right) / 2;
+      for (const row of m.rows) {
+        expect(row.width, `${viewport.width}px 下有一行比 composer 宽`).toBeLessThanOrEqual(m.composer.width + 1);
+        expect(Math.abs(center(row) - center(m.composer)), `${viewport.width}px 下有一行没和 composer 对齐居中`).toBeLessThan(2);
+      }
+    }
+    await expectNoBrowserErrors(page);
+  });
 });
