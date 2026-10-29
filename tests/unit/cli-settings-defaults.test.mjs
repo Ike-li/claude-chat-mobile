@@ -3,10 +3,16 @@
 // effort 例外（resolveResumeEffort：saved > L3，见该函数注释）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import {
   normalizePermissionMode,
   normalizeEffortLevel,
   defaultsFromEffectiveSettings,
+  defaultsFromResolvedSettings,
+  autoModeBlocked,
   permissionRulesFromEffectiveSettings,
   resolveFreshPrefs,
   resolveResumeEffort,
@@ -548,4 +554,72 @@ test('审批规则：三档都是空数组 → total 为 0 且不为 null（确�
   });
   assert.notEqual(view, null);
   assert.equal(view.total, 0);
+});
+
+// #461：settings 里禁用了 auto 模式（disableAutoMode）时，CLI 不会进 auto——Shift+Tab 轮换里没有它，
+// defaultMode:'auto' 也从 default 启动（SDK 文档：'default' where auto mode is unavailable）。
+// 手机上照样能点 Auto、新会话页照样预显 Auto，用户就会以为分类器在帮他放行，实际还是逐条审批。
+test.describe('defaultsFromResolvedSettings：disableAutoMode（#461）', () => {
+  const resolvedOf = (effective) => ({ effective, provenance: {}, sources: [] });
+
+  test("顶层 / permissions 下的 'disable'，以及常见误写 true，都判为禁用", () => {
+    for (const effective of [
+      { disableAutoMode: 'disable' },
+      { permissions: { disableAutoMode: 'disable' } },
+      { permissions: { disableAutoMode: true } },   // SDK 0.3.312 之前 resolveSettings 原样返回这种写法，先兼容
+    ]) {
+      assert.equal(defaultsFromResolvedSettings(resolvedOf(effective)).autoModeDisabled, true,
+        `${JSON.stringify(effective)} 没判成禁用：手机上的 Auto 照样可点`);
+    }
+  });
+
+  test('没有这个键、或值不认识 → 不禁用', () => {
+    for (const effective of [{}, { permissions: { allow: ['Read'] } }, { disableAutoMode: 'enable' }, { permissions: { disableAutoMode: false } }]) {
+      assert.equal(defaultsFromResolvedSettings(resolvedOf(effective)).autoModeDisabled, false,
+        `${JSON.stringify(effective)} 被判成禁用：用户没关的 Auto 被置灰`);
+    }
+  });
+
+  // defaultMode:'auto' 要先过 SDK 的 filterEscalatingDefaultMode（看来源层），造的 provenance 喂不准，
+  // 这两条用真 SDK resolveSettings 读一次性目录里的 user 层 settings。
+  let root;
+  const userSettings = (json) => {
+    root ??= mkdtempSync(join(tmpdir(), 'ccm-auto-disabled-'));
+    const dir = join(root, 'user-claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify(json));
+    process.env.CLAUDE_CONFIG_DIR = dir;   // SDK 每次调用现读；不碰真实 ~/.claude
+    return resolveSettings({ settingSources: ['user'] });
+  };
+  test.after(() => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    if (root) rmSync(root, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+  });
+
+  test("禁用且 defaultMode:'auto' → 新会话默认档落 default（与 CLI 实际启动的档一致）", async () => {
+    const d = defaultsFromResolvedSettings(await userSettings({ permissions: { defaultMode: 'auto', disableAutoMode: 'disable' } }));
+    assert.equal(d.mode, 'default', '新会话页预显 Auto，CLI 实际从 default 启动');
+    assert.equal(d.autoModeDisabled, true);
+  });
+
+  test("正对照：没禁用时 user 层 defaultMode:'auto' 照旧是 auto", async () => {
+    const d = defaultsFromResolvedSettings(await userSettings({ permissions: { defaultMode: 'auto' } }));
+    assert.equal(d.mode, 'auto', '没禁用也把 auto 改成了 default：用户自己设的默认档失效');
+    assert.equal(d.autoModeDisabled, false);
+  });
+});
+
+test.describe('autoModeBlocked：服务端拦截切到 Auto 的判据（#461）', () => {
+  test('禁用时拒 auto，其余档照常', () => {
+    const disabled = { autoModeDisabled: true };
+    assert.equal(autoModeBlocked('auto', disabled), true, '禁用了还把 auto 发给 CLI：图标先显 Auto，要等下次 init 对账才拨回');
+    for (const m of CCM_PERMISSION_MODES.filter(x => x !== 'auto')) {
+      assert.equal(autoModeBlocked(m, disabled), false, `${m} 被一并拦掉`);
+    }
+  });
+  test('没禁用、或还没读到 settings → 不拦（不知道就交给 CLI，不在这里替它拒）', () => {
+    assert.equal(autoModeBlocked('auto', { autoModeDisabled: false }), false);
+    assert.equal(autoModeBlocked('auto', null), false);
+    assert.equal(autoModeBlocked('auto', undefined), false);
+  });
 });

@@ -86,6 +86,25 @@ test('权限档说明跟界面语言走：中文界面是中文，英文界面�
   }
 });
 
+// #461：settings 写了 disableAutoMode 时 CLI 不让切 Auto。磁贴照常列出（与终端一样看得到这一档），
+// 但不可选，说明行换成原因——只置灰不说为什么，用户会以为是前端坏了。
+test('permissionModeTileSpecs：autoModeDisabled 时只有 Auto 不可选，说明换成原因；没禁用时六档都可选', () => {
+  const on = Object.fromEntries(permissionModeTileSpecs(undefined, { autoModeDisabled: true }).map((t) => [t.id, t]));
+  assert.equal(on.auto.disabled, true);
+  assert.equal(on.auto.title, 'Auto');
+  assert.match(on.auto.desc, /disableAutoMode/);
+  for (const t of Object.values(on)) if (t.id !== 'auto') assert.equal(t.disabled, false, `${t.id} 不该跟着禁用`);
+  assert.ok(permissionModeTileSpecs().every((t) => t.disabled === false), '没禁用时六档都可选');
+  try {
+    setLang('en');
+    const en = permissionModeTileSpecs(undefined, { autoModeDisabled: true }).find((t) => t.id === 'auto');
+    assert.match(en.desc, /disableAutoMode/);
+    assert.doesNotMatch(en.desc, /[一-鿿]/, `英文界面里原因不该有中文：${en.desc}`);
+  } finally {
+    setLang('zh');
+  }
+});
+
 test('isSdkPermissionMode：manual 不是协议值；default/auto 合法', () => {
   assert.equal(isSdkPermissionMode('default'), true);
   assert.equal(isSdkPermissionMode('auto'), true);

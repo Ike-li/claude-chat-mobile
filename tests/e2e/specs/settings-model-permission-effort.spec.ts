@@ -757,6 +757,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // #461：settings 写了 disableAutoMode 时 Auto 磁贴不可选、说明换成原因。禁用之前就切到 Auto 的会话照常显示 Auto，
+  // 切走之后切不回来。点击（含绕得过原生 disabled 的合成点击）都不能把 user:setPermissionMode 发出去。
+  test('P0-09zb settings 禁用了 Auto：磁贴置灰带原因，切走后切不回来', async ({ page }) => {
+    const permFrames: string[] = [];
+    page.on('websocket', ws => ws.on('framesent', frame => {
+      if (typeof frame.payload === 'string' && frame.payload.includes('user:setPermissionMode')) permFrames.push(frame.payload);
+    }));
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+    await openSettingsSection(page, 'perm');
+    const auto = page.locator('.perm-tile[data-mode="auto"]');
+
+    await auto.click();
+    await expect(page.locator('#pillPermText')).toContainText('Auto');
+
+    await page.request.post('/__arm-auto-mode-disabled');
+    await expect(auto).toBeDisabled();
+    await expect(auto).toContainText('disableAutoMode');
+    await expect(auto).toHaveAttribute('aria-pressed', 'true'); // 还停在 Auto：照常显示，不偷偷改档
+    await expect(page.locator('#pillPermText')).toContainText('Auto');
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toBeEnabled();
+
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
+    const before = permFrames.length;
+    await auto.dispatchEvent('click');
+    // 屏障：再切一档并等它回显。出站帧按序发，Auto 那次要是发了一定排在它前面
+    await page.locator('.perm-tile[data-mode="acceptEdits"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('Accept edits');
+    const sent = permFrames.slice(before);
+    expect(sent.some(f => f.includes('"auto"')), `不该发出切到 auto 的请求：${sent.join(' | ')}`).toBe(false);
+    expect(sent.some(f => f.includes('"acceptEdits"'))).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // #246 review：模型磁贴的 aria-pressed 要跟着只读镜像观测到的 CLI 模型走。① 在跑的模型不在已加载的列表里时，
   // 兜底卡是在 syncModelUI 之后才插进去的，一直是 false，读屏说「没有一个选中」；② 不知道 CLI 模型时界面清掉了
   // 选中样式、胶囊写「CLI 模型未知」，Default 却还是 aria-pressed=true。

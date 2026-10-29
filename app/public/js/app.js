@@ -5148,7 +5148,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   const PERM_PILL_LABEL = Object.fromEntries(_permTileSpecs.map(s => [s.id, s.pill]));
 
   function rebuildPermissionModeUi() {
-    const specs = permissionModeTileSpecs();
+    const specs = permissionModeTileSpecs(undefined, { autoModeDisabled: appContext.state.autoModeDisabled === true });
     if (permModeSelect) {
       const prev = permModeSelect.value;
       permModeSelect.innerHTML = '';
@@ -5156,6 +5156,7 @@ import { createGateFocusController } from './app/focus-layers.js';
         const opt = document.createElement('option');
         opt.value = s.id;
         opt.textContent = s.selectLabel; // CLI 原名，不 t()
+        opt.disabled = s.disabled;       // 禁用之前就开在 Auto 的会话照常显示 Auto（程序设 value 不受 disabled 影响）
         permModeSelect.appendChild(opt);
       }
       if (prev && specs.some(s => s.id === prev)) permModeSelect.value = prev;
@@ -5173,8 +5174,10 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 用原生 button 而不是 div+role+tabindex+键盘处理：焦点、Enter/Space 激活、焦点环全部白送，
         // 且下面那个 click 委托（closest('.perm-tile')）一行都不用改。
         // aria-pressed 是这组按钮的「选中态」——单选语义靠它播报，样式那圈 ring 只有看得见的人能用。
+        // disabled（#461 settings 禁用了 auto）：原生 disabled 让它 Tab 不到、读屏报不可用；说明行已换成原因。
+        const stateCls = s.disabled ? ' opacity-55 cursor-not-allowed' : ' active:bg-sunk cursor-pointer';
         const card = el(`
-          <button type="button" data-mode="${esc(s.id)}" aria-pressed="false" class="perm-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
+          <button type="button" data-mode="${esc(s.id)}" aria-pressed="false"${s.disabled ? ' disabled' : ''} class="perm-tile w-full text-left p-2 rounded-xl border border-line bg-surface transition-all${stateCls}${dangerCls}">
             <div class="text-xs font-semibold ${titleCls} leading-snug">${esc(s.title)}</div>
             <div class="text-[11px] ${descCls} mt-0.5 leading-snug line-clamp-2">${esc(s.desc)}</div>
           </button>
@@ -5638,6 +5641,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
     const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
     cwdDefaultModel = (typeof p?.defaultModel === 'string') ? p.defaultModel : '';
+    // 本区 settings 禁用了 auto（#461）：变了才重建权限档面板（Auto 置灰并换成原因），先于下面的 setPermMode。
+    const autoModeDisabled = p?.autoModeDisabled === true;
+    if (autoModeDisabled !== (appContext.state.autoModeDisabled === true)) {
+      appContext.state.autoModeDisabled = autoModeDisabled;
+      rebuildPermissionModeUi();
+    }
     // 会话缓存不在这里做失效标记（P3 SWR 保鲜）：populateSubtree 拿缓存秒开渲染的同时恒发一次
     // session:list 刷新，新鲜度由那条响应负责——不需要谁来"标脏"。既不整段清空（避免"清空→骨架屏
     // →等网络往返"连坐重建没变化的目录），也不会因为 id 集合没变就把改名/截断变化漏掉。
@@ -7431,7 +7440,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   if (customPermGrid) {
     customPermGrid.addEventListener('click', (ev) => {
       const tile = ev.target.closest?.('.perm-tile');
-      if (!tile || !customPermGrid.contains(tile)) return;
+      if (!tile || !customPermGrid.contains(tile) || tile.disabled) return;
       haptic('tap');
       const mode = tile.dataset.mode;
       if (!mode || mode === currentPermMode) return;

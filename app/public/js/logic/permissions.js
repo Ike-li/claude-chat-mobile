@@ -87,23 +87,29 @@ const PERMISSION_MODE_TILE_META = Object.freeze({
   },
 });
 
+const AUTO_MODE_DISABLED_DESC = tk('已被 settings 禁用（disableAutoMode）');
+
 /**
  * 按 SDK 清单生成权限磁贴规格（只数据，不碰 DOM）。title/pill/bar 固定英文；desc 已按当前语言翻好，调用方勿再 t()。
+ * autoModeDisabled（#461，服务端按本区 settings 的 disableAutoMode 下发）：Auto 照常列出但 disabled，说明换成原因。
  * @param {readonly string[]} [modes=SDK_PERMISSION_MODES]
- * @returns {{ id: string, title: string, desc: string, selectLabel: string, pill: string, bar: string, danger: boolean }[]}
+ * @param {{ autoModeDisabled?: boolean }} [opts]
+ * @returns {{ id: string, title: string, desc: string, selectLabel: string, pill: string, bar: string, danger: boolean, disabled: boolean }[]}
  */
-export function permissionModeTileSpecs(modes = SDK_PERMISSION_MODES) {
+export function permissionModeTileSpecs(modes = SDK_PERMISSION_MODES, { autoModeDisabled = false } = {}) {
   const list = Array.isArray(modes) ? modes : SDK_PERMISSION_MODES;
   return list.filter(isSdkPermissionMode).map((id) => {
     const meta = PERMISSION_MODE_TILE_META[id];
+    const disabled = id === 'auto' && autoModeDisabled === true;
     return {
       id,
       title: meta?.title || id,
-      desc: meta?.desc ? t(meta.desc) : '',
+      desc: disabled ? t(AUTO_MODE_DISABLED_DESC) : (meta?.desc ? t(meta.desc) : ''),
       selectLabel: meta?.selectLabel || id,
       pill: meta?.pill || id,
       bar: meta?.bar || id,
       danger: Boolean(meta?.danger),
+      disabled,
     };
   });
 }
