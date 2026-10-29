@@ -103,8 +103,10 @@ const CONTROL_TAG_SUBSYSTEM = {
 };
 
 // fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
-// = 一次真实网络请求 + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传），
-// 而我们只用其中的 rate_limits 百分比与 session.lines。CLI 自己的 statusline 走的是另一条路：
+// = 一次真实网络请求 + 一次全量 transcript 扫盘（扫近 7 天 transcript 填 behaviors 段），
+// 而我们只用其中的 rate_limits 百分比与 session.lines。扫盘那半已用 skipBehaviors:true 关掉（#450，
+// 不认识该字段的旧 CLI 会照扫，只是省不下来）；以后要做 behaviors 洞察面板，就在那里单独发一次不跳过的，
+// 别回退这里的轮询。剩下的网络请求仍然昂贵。CLI 自己的 statusline 走的是另一条路：
 // 从 API 响应头 anthropic-ratelimit-unified-* 解析进内存后同步读，成本为零。
 // 既然拿不到便宜那条，就把昂贵这条的频率压到与数据变化率匹配——5h/7d 窗口按分钟变化，
 // 而 statusline 每 10s 兜底轮询 + 每个 assistant usage 边界都会拉起它。
@@ -1403,7 +1405,7 @@ export class AgentSession {
     // 窗内早退不碰 lastUsageFetchFailure——沿用上次判定依据，与快照回落配合保持状态稳定。
     if (this._usageFetchAt && now - this._usageFetchAt < windowMs) return this._usageCached;
     // 在途去重 + 年龄上限。timeoutMs 到点只是【本方放弃等待】，CLI 侧那一发仍在飞
-    // （get_usage = 一次真实网络请求 + 一次全量 transcript 扫盘）。只靠节流窗的话，窗一到就再发
+    // （get_usage 至少是一次真实网络请求）。只靠节流窗的话，窗一到就再发
     // 一发，未返回的请求会在 CLI 侧重叠。
     // 【观察 vs 因果，别混】2026-08-17 排查会话 4d4443ce 时，该实例对 API 的并发连接数显著高于
     // 同机终端 CLI（峰值 20+ vs 稳定 4）。但同期 web 消息取件被拖延数百秒这件事，其因果未能证实：
@@ -1420,7 +1422,7 @@ export class AgentSession {
     const seq = ++this._usageSeq; // 发出顺序：settle 顺序可能与它相反（见 _adoptUsage 的时序守卫）
     let timer = null;
     try {
-      const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET());
+      const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
       this._usageInFlight = rpc;
       this._usageInFlightAt = now;
       // 结算挂在 rpc 自身的 settle 上，不在下面的 try/finally 里——那两处在【本地超时】那一刻就跑，
