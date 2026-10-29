@@ -318,17 +318,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:fg-task');
     const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    const cardBtn = page.locator('details.toolcard[data-tool-name="Bash"] [data-testid="tool-background"]');
     await expect(composerBtn).toBeVisible();
+    await expect(cardBtn).toBeVisible();
 
     // 切到同工作区的新会话：那边没有前台任务
     await openSessionsSidebar(page);
     await startNewSessionInWorkspace(page, '/Users/you/code/claude-chat-mobile');
     await expect(composerBtn).toBeHidden();
 
-    // 切回 inst_1：它的前台任务还挡着本轮，按钮回来
+    // 切回 inst_1：它的前台任务还挡着本轮，两处按钮都回来。＋ 进新会话页不留 DOM 缓存，切回走拉历史：
+    // 卡从历史渲染、不进 toolCards 表，而且比 sync:since 补推的前台任务快照晚到——卡上那颗得在历史落地后
+    // 按 DOM 找回来（#469 review）
     await openSessionsSidebar(page);
     await sessionRowByInstance(page, 'inst_1').click();
     await expect(composerBtn).toBeVisible();
+    await expect(cardBtn).toBeVisible();
+    await cardBtn.click();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(cardBtn).toHaveCount(0);
 
     await expectNoBrowserErrors(page);
   });

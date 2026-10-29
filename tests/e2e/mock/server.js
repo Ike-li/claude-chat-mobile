@@ -2650,6 +2650,17 @@ io.on('connection', socket => {
       callback({ messages: [], error: '会话不存在' });
       return;
     }
+    // 转后台（#459）：test:fg-task 那条前台 Bash 还挡着本轮时，磁盘上已有它的 tool_use、还没有结果——
+    // 切回会话走拉历史时，卡是从这里渲染出来的，不经 tool_use 事件
+    if (mockFgTask && sessionId === 'mock-session-visual-test') {
+      callback({
+        messages: [
+          { role: 'user', content: 'test:fg-task', uuid: 'u-fg-task-1' },
+          { kind: 'tool_use', role: 'assistant', toolUseId: mockFgTask.toolUseId, name: 'Bash', inputSummary: '{"command":"sleep 120 && echo done"}', uuid: 'a-fg-task-1' },
+        ],
+      });
+      return;
+    }
     // P0-ORDER：在 ack【之前】推一条 history_append，精确复刻真实时序——web 拉历史的往返窗口里，
     // server 的 catchUpTick 检出终端刚落定的消息就直接推过来了。前端先渲染这条增量、再收到历史本体，
     // 若历史只会 appendChild 到尾部，就会出现「新消息在上、整段旧历史在下」。
@@ -3569,6 +3580,16 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // 转后台（#459）：真 server 在 sync:since 收尾后给当前查看的实例补推一份前台任务快照（瞬时事件不进缓冲）。
+    // 照它的次序放在 ack 之后——这一份到的时候，切回走拉历史的话卡还没渲染出来
+    if (mockFgTask && instanceId === mockFgTask.instanceId) {
+      const fg = mockFgTask;
+      setTimeout(() => socket.emit('agent:event', {
+        seq: 1, epoch: fg.epoch, sessionId: 'mock-session-visual-test', instanceId: fg.instanceId, ts: Date.now(),
+        type: 'foreground_tasks', transient: true,
+        payload: { tasks: [{ taskId: fg.taskId, toolUseId: fg.toolUseId, taskType: 'local_bash', description: 'sleep 120 && echo done' }] },
+      }), 0);
+    }
     if (crashReloadSessionId && sessionId === crashReloadSessionId) {
       crashReloadSessionId = null;
       console.log('[mock] P0-DESTROY-CRASH — 重开崩溃过的会话，sync:since 报 diskLen，逼出清屏重载');
