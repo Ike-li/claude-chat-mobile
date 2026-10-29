@@ -231,6 +231,8 @@ export function formatSessionRowSubtitle({
 export function sessionRowMenuItems({ hasId = false, live = false, unread = false } = {}) {
   const items = [];
   if (hasId) items.push({ action: 'toggle-read', label: unread ? t('标为已读') : t('标为未读') });
+  // 打开着也能改：活会话的 CLI 退出时会把旧名写回来，服务端在它退出后补写（#458）
+  if (hasId) items.push({ action: 'rename', label: t('重命名') });
   if (live) items.push({ action: 'close', label: t('关闭会话') });
   if (hasId) {
     items.push(live

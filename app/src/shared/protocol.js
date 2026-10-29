@@ -95,6 +95,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'session:home',
   'session:list',
   'session:new',
+  'session:rename',
   'session:rewind:candidates',
   'session:rewind:confirm',
   'session:rewind:preview',

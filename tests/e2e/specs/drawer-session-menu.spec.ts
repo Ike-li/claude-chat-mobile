@@ -34,7 +34,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-ROW-MENU-2 已打开的会话：标已读/未读 · 关闭会话 · 删除会话（灰掉，说要先关闭）；关闭走原确认', async ({ page }) => {
+  test('P0-ROW-MENU-2 已打开的会话：标已读/未读 · 重命名 · 关闭会话 · 删除会话（灰掉，说要先关闭）；关闭走原确认', async ({ page }) => {
     await gotoMock(page);
     await page.setViewportSize({ width: 900, height: 812 });
     await sendChatMessage(page, 'test:tab');
@@ -46,7 +46,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await openSessionMenu(page, row);
     await expect(page.locator('#sessionMenuTitle')).toHaveText('Another App Concurrency');
-    await expect(menu(page).locator('[data-menu-action]')).toHaveCount(3);
+    await expect(menu(page).locator('[data-menu-action]')).toHaveCount(4);
+    await expect(sessionMenuItem(page, 'rename'), '打开着也能改名').toBeEnabled();
     // 后台会话有新活动，此刻是未读：文案随未读态二选一（单测钉住），这里只要它在、能点
     await expect(sessionMenuItem(page, 'toggle-read')).toBeEnabled();
     await expect(sessionMenuItem(page, 'close')).toContainText('关闭会话');
@@ -68,7 +69,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-ROW-MENU-3 没打开的会话：标为未读 · 删除会话（能点），删除走原「彻底删除」确认', async ({ page }) => {
+  test('P0-ROW-MENU-3 没打开的会话：标为未读 · 重命名 · 删除会话（能点），删除走原「彻底删除」确认', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);
     await expandWorkspace(page, MAIN_WORKSPACE);
@@ -77,8 +78,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await openSessionMenu(page, row);
     await expect(page.locator('#sessionMenuTitle')).toHaveText('Archived Planning Session');
-    await expect(menu(page).locator('[data-menu-action]')).toHaveCount(2);
+    await expect(menu(page).locator('[data-menu-action]')).toHaveCount(3);
     await expect(sessionMenuItem(page, 'toggle-read')).toContainText('标为未读');
+    await expect(sessionMenuItem(page, 'rename')).toContainText('重命名');
     await expect(sessionMenuItem(page, 'close')).toHaveCount(0);
     await expect(sessionMenuItem(page, 'delete')).toBeEnabled();
 
@@ -127,6 +129,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.keyboard.press('Tab');
     await expect(sessionMenuItem(page, 'toggle-read')).toBeFocused();
     await page.keyboard.press('Tab');
+    await expect(sessionMenuItem(page, 'rename')).toBeFocused();
+    await page.keyboard.press('Tab');
     await expect(sessionMenuItem(page, 'delete')).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(page.locator('#confirmModal')).toHaveClass(/sheet-open/);
@@ -172,6 +176,85 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.keyboard.press('Escape');
     await expect(menu(page)).not.toHaveClass(/sheet-open/);
     await expectSidebarOpen(page);
+
+    await expectNoBrowserErrors(page);
+  });
+});
+
+// 网页端改名（#458），对应终端 /rename。服务端那一侧（renameSession、清洗、活会话退出补写）由
+// tests/integration/session-rename.test.mjs 与 tests/unit/session-rename.test.mjs 守；这里守界面：
+// 菜单进得去、预填当前名字、改完抽屉当场换名且抽屉留着、别的标签页也看得到、失败原因留在 sheet 里。
+test.describe('会话改名', () => {
+  const renameSheet = (page: import('@playwright/test').Page) => page.locator('#sessionRenameModal');
+  const archivedRow = (page: import('@playwright/test').Page) =>
+    page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+
+  test('P0-ROW-MENU-7 菜单「重命名」→ 预填当前名字，保存后抽屉当场换名、抽屉留着；另一个标签页打开抽屉也是新名字', async ({ page, context }) => {
+    const other = await context.newPage();
+    await gotoMock(other);
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openSessionMenu(page, archivedRow(page));
+    await sessionMenuItem(page, 'rename').click();
+
+    await expect(renameSheet(page)).toHaveClass(/sheet-open/);
+    const input = page.getByTestId('session-rename-input');
+    await expect(input).toHaveValue('Archived Planning Session');
+    await input.fill('  ');
+    await expect(page.getByTestId('session-rename-save'), '空名字不让存').toBeDisabled();
+    await input.fill('规划 v2');
+    await page.getByTestId('session-rename-save').click();
+
+    await expect(renameSheet(page)).not.toHaveClass(/sheet-open/);
+    await expectSidebarOpen(page);
+    await expect(archivedRow(page)).toContainText('规划 v2');
+    await expect(archivedRow(page)).not.toContainText('Archived Planning Session');
+    await expect(page.locator('#drawerNotice')).toBeHidden();
+
+    await openSessionsSidebar(other);
+    await expandWorkspace(other, MAIN_WORKSPACE);
+    await expect(archivedRow(other)).toContainText('规划 v2');
+
+    await expectNoBrowserErrors(page);
+    await expectNoBrowserErrors(other);
+  });
+
+  test('P0-ROW-MENU-8 改名失败：原因写在 sheet 里、sheet 不关，改了再存能成功', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openSessionMenu(page, archivedRow(page));
+    await sessionMenuItem(page, 'rename').click();
+
+    const input = page.getByTestId('session-rename-input');
+    await input.fill('MOCK_RENAME_FAIL');
+    await input.press('Enter');
+    await expect(page.getByTestId('session-rename-error')).toHaveText('改名失败：EACCES: permission denied');
+    await expect(renameSheet(page)).toHaveClass(/sheet-open/);
+    await expect(archivedRow(page)).toContainText('Archived Planning Session');
+
+    await input.fill('第二次');
+    await expect(page.getByTestId('session-rename-error'), '一改输入，上一次的错因就作废').toBeHidden();
+    await page.getByTestId('session-rename-save').click();
+    await expect(renameSheet(page)).not.toHaveClass(/sheet-open/);
+    await expect(archivedRow(page)).toContainText('第二次');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-ROW-MENU-9 终端可能还开着这个会话：照样改名，抽屉提示改名可能被覆盖', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-gap"]');
+    await openSessionMenu(page, row);
+    await sessionMenuItem(page, 'rename').click();
+    await page.getByTestId('session-rename-input').fill('终端里的会话');
+    await page.getByTestId('session-rename-save').click();
+
+    await expect(row).toContainText('终端里的会话');
+    await expect(page.locator('#drawerNotice')).toContainText('终端正在使用这个会话，改名可能被覆盖');
 
     await expectNoBrowserErrors(page);
   });

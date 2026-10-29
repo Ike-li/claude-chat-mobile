@@ -968,6 +968,7 @@ export const EN_DICT = Object.freeze({
   '修改配置': 'Config changed',
   '重启服务': 'Service restart',
   '永久删除会话': 'Permanently deleted session',
+  '重命名会话': 'Renamed session',
   // 删除被拒的原因，跟在「永久删除会话 <id> · 」后面（service-diag.js AUDIT_DELETE_REJECT_REASON）
   '会话正被本产品驱动': 'the session is being driven by this app',
   '会话正在打开中': 'the session is still opening',
@@ -1026,6 +1027,12 @@ export const EN_DICT = Object.freeze({
   '已彻底删除：': 'Permanently deleted: ',
   '彻底删除失败': 'Permanent delete failed',
   '删除会话': 'Delete session',
+  // 会话改名（#458，app/session-rename.js）
+  '重命名': 'Rename',
+  '给会话改名': 'Rename session',
+  '改名失败': 'Rename failed',
+  '改名无响应，请稍后再试': 'No response renaming — try again later',
+  '终端正在使用这个会话，改名可能被覆盖': 'A terminal is using this session; it may overwrite the new name',
   '关闭会话「': 'Close session "',
   '」？': '"?',
   '会话将从 tab 列表移除，但历史保留可重新打开。': 'It leaves the tab list, but the history stays and can be reopened.',

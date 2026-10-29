@@ -406,6 +406,19 @@
 
   <!-- 通用确认弹窗：替代原生 confirm()，样式对齐 permModal；appConfirm() 接线在 app.js。
        会话彻底删除等不可逆操作也走这里（不再另开两级删除 sheet）。 -->
+  <!-- 会话改名（#458）：抽屉会话行「⋯」→「重命名」，预填当前标题。失败原因写在 sheet 里、不关 sheet，改完再保存 -->
+  <div id="sessionRenameModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="给会话改名">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="text-accent-deep font-semibold mb-2">给会话改名</div>
+      <input id="sessionRenameInput" type="text" maxlength="200" enterkeyhint="done" autocomplete="off" class="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink" data-testid="session-rename-input">
+      <div id="sessionRenameError" class="hidden text-sm text-danger mt-2 break-words" data-testid="session-rename-error"></div>
+      <div class="flex gap-2 mt-4">
+        <button id="sessionRenameCancel" type="button" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
+        <button id="sessionRenameSave" type="button" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium disabled:opacity-50" data-testid="session-rename-save">保存</button>
+      </div>
+    </div>
+  </div>
+
   <div id="confirmModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
     <div id="confirmSheet" class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <!-- #399：确认弹窗需明确点按钮/遮罩，不画假拖拽把手 -->

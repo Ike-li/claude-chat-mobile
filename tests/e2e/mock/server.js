@@ -119,6 +119,7 @@ let mockListHardTop = 12;
 // 缓存秒开会让行先画出来，只看 DOM 判不出 revalidate 带没带次数，所以用例直接看请求。
 let mockSessionListLog = [];
 const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
+const renamedSessionTitles = new Map(); // session:rename 后列表行显示的新标题（sessionId → title）
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
 // 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
@@ -700,6 +701,7 @@ function resetMockState() {
   mockListHardTop = 12;
   mockSessionListLog = [];
   deletedSessionIds.clear();
+  renamedSessionTitles.clear();
   mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   resetReadState(); // 必须排在 mockListClockBase 之后：基线由它推算
   reconnectDrawerTitleChanged = false;
@@ -1527,6 +1529,9 @@ function mainCwdSessions() {
   if (untitledSessionArmed) {
     sessions.push({ id: 'mock-session-untitled', title: '(无标题)', lastUsedAt: mockListClockBase - 30000, entrypoint: 'sdk-ts' });
   }
+  for (const row of sessions) {
+    if (renamedSessionTitles.has(row.id)) row.title = renamedSessionTitles.get(row.id);
+  }
   return sessions;
 }
 
@@ -1783,6 +1788,26 @@ io.on('connection', socket => {
     // 「无文件夹」会话：真 server 在它是那个 scratch 目录里最后一个会话时连目录一起删，ack 带 scratchRemoved
     const scratch = typeof payload?.cwd === 'string' && payload.cwd.startsWith(`${MOCK_SCRATCH_ROOT}/`);
     if (typeof ack === 'function') ack({ ok: true, ...(scratch ? { scratchRemoved: true } : {}) });
+  });
+
+  // 会话改名（#458，真 server：app.js 的 session:rename → SDK renameSession）。ack 形状照真 server。
+  // 清洗只做 trim 判空——真 server 的换行 / 控制字符 / 限长由 tests/unit/session-rename.test.mjs 守。
+  // 失败与「终端可能盖回去」两条路钉在固定输入上，不做一次性开关（理由同上面 deletePermanent 那段）：
+  // 标题 MOCK_RENAME_FAIL 走写入失败；mock-session-gap 的夹具语义本来就是「终端还开着它」的那一行。
+  socket.on('session:rename', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    if (typeof sessionId !== 'string' || !mainCwdSessions().some(s => s.id === sessionId)) {
+      ack({ ok: false, error: '会话不存在' });
+      return;
+    }
+    const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
+    if (!title) { ack({ ok: false, error: '标题不能为空' }); return; }
+    if (title === 'MOCK_RENAME_FAIL') { ack({ ok: false, error: '改名失败：EACCES: permission denied' }); return; }
+    renamedSessionTitles.set(sessionId, title);
+    const inst = mockInstances.find(i => i.sessionId === sessionId);
+    if (inst) { inst.title = title.slice(0, 40); broadcastMockInstances(); }
+    ack({ ok: true, title, ...(sessionId === 'mock-session-gap' ? { terminalMayOverwrite: true } : {}) });
   });
 
   // Handle Tab close

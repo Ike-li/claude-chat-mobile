@@ -496,6 +496,11 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     assert.equal(formatAuditEntry({ action: 'file_write', target: '/a/b/c/notes.md' }).text, '写入文件 notes.md');
   });
 
+  test('网页改名会话（#458）写成人话，不露事件码', () => {
+    assert.equal(formatAuditEntry({ action: 'session_rename', target: 'sess_1', outcome: 'success' }).text, '重命名会话 sess_1');
+    assert.equal(formatAuditEntry({ action: 'session_rename', target: 'sess_1', outcome: 'error' }).text, '重命名会话 sess_1（error）');
+  });
+
   test('outcome 非成功 → 追加结果（同一个 action 成功与失败必须看得出区别）', () => {
     assert.equal(
       formatAuditEntry({ action: 'session_delete_l2', target: 'sess_1', outcome: 'partial_failure' }).text,

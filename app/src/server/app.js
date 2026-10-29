@@ -22,12 +22,13 @@ import { createRequire } from 'node:module';
 import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
-import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, renameSession as sdkRenameSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, autoModeBlocked, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
-import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, isSafeSessionId } from '../sessions/history.js';
+import { getSessionHistory, getSessionHistoryWithTotal, externalHistoryExtent, readSubagentFlow, listSessionsPage, listSessionsByIds, sessionFileExists, sessionExistsInWorkspace, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed, classifyTranscriptTail, readTranscriptTailEntries, readLastCustomTitle, isSafeSessionId } from '../sessions/history.js';
+import { createSessionRenamer, sanitizeSessionTitle } from '../sessions/session-rename.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -1206,6 +1207,8 @@ io.use(async (socket, next) => {
 
 // ---- 实例并行内核（台阶3：每「会话/tab」一个常驻实例，显式 open、后台并行存活）----
 const instanceManager = createInstanceManager();
+// 网页改名的退出补写（#458）：pending 状态挂在这里，handler 只管调
+const sessionRenamer = createSessionRenamer({ renameSession: sdkRenameSession, readLastCustomTitle });
 const agents = instanceManager.agents;
 const permModeByInstance = instanceManager.permissionModes;
 const effortByInstance = instanceManager.efforts;
@@ -4420,6 +4423,39 @@ registerSocketConnection(io, socket => {
       };
     }
     ack({ ok: true, worktreeLeft, ...(scratchRemoved === undefined ? {} : { scratchRemoved }) });
+  });
+
+  // 改名（#458）：SDK renameSession 往 transcript 尾追加一条 custom-title，不改写已有内容。校验口径同 deletePermanent。
+  // 活会话的 CLI 退出时会把内存里的旧标题写回来，退出补写见 sessions/session-rename.js。
+  on(socket, 'session:rename', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    const cwd = routeCwd(payload?.cwd);
+    if (cwd === null) return ack({ ok: false, error: OUT_OF_SCOPE_ERROR });
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, error: '会话不存在' });
+    }
+    const title = sanitizeSessionTitle(payload?.title);
+    if (!title) return ack({ ok: false, error: '标题不能为空' });
+    // 本产品没有实例在驱动它、transcript 却刚被写过：多半是终端开着它。CLI 之后回写旧名会盖掉这次改名，
+    // 而终端进程的退出信号本进程挂不上。照样改（改名是轻操作，禁止反而怪），只在回执里提示一句。
+    // 判据沿用删除那边的 mtime 静默期启发式。
+    const liveExits = instanceManager.sessionExitPromises(sessionId);
+    const mtimeMs = liveExits.length ? -1 : await sessionFileMtime(sessionId, cwd);
+    const terminalMayOverwrite = mtimeMs >= 0 && Date.now() - mtimeMs < sessionDeleteQuietMs;
+    try {
+      await sessionRenamer.rename({ sessionId, cwd, title, liveExits });
+    } catch (err) {
+      console.error(`[session-rename] 改名失败 sessionId=${sessionId}:`, err.message);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_rename', target: sessionId, outcome: 'error', meta: { cwd } });
+      return ack({ ok: false, error: `改名失败：${err.message}` });
+    }
+    invalidateListCache(cwd);
+    // 实例广播的标题来自会话注册表：抽屉「运行中」那一行与别的设备靠它跟上；列表行由各端下一次 session:list 刷新
+    sessions.setSessionTitle(sessionId, title);
+    broadcastInstances();
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_rename', target: sessionId, outcome: 'success', meta: { cwd } });
+    ack({ ok: true, title, ...(terminalMayOverwrite ? { terminalMayOverwrite: true } : {}) });
   });
 
   // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable

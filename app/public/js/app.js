@@ -250,6 +250,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createSessionRenameController } from './app/session-rename.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
@@ -4941,8 +4942,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     if (!hints.contains(e.target) && e.target !== inputEl) hideCmdHints();
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
     // 点抽屉外面任意处 = 收抽屉。通用确认 sheet 与会话行「⋯」菜单（z-50，盖在抽屉之上）不算「外面」：
-    // 从抽屉里发起的操作（标为已读 / 未读、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
-    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal'));
+    // 从抽屉里发起的操作（标为已读 / 未读、重命名、删除）做完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
+    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal, #sessionMenuModal, #sessionRenameModal'));
     // 本身就是「打开抽屉」入口的按钮（顶栏「需要你」chip、落地页「选择其他会话」）：同一次点击冒泡到这里，
     // 不豁免就是开了又立刻关上（验收 O37）。新入口在 index.html 上标 data-opens-drawer 即可。
     const opensDrawer = Boolean(e.target.closest?.('[data-opens-drawer]'));
@@ -7118,6 +7119,16 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
   });
   const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
+  const sessionRename = createSessionRenameController(appContext, {
+    $, socket, openSheet, closeSheet,
+    onRenamed: ({ cwd, sectionKey, terminalMayOverwrite } = {}) => {
+      // 同删除：丢掉这一行所在小节的 SWR 缓存再重建，免得先画一帧旧名字
+      if (sectionKey) sessionsCache.delete(sectionKey);
+      if (cwd) sessionsCache.delete(cwd);
+      openSessionPanel();
+      drawer.showNotice(terminalMayOverwrite ? t('终端正在使用这个会话，改名可能被覆盖') : '');
+    },
+  });
 
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），
@@ -7640,6 +7651,9 @@ import { createGateFocusController } from './app/focus-layers.js';
           socket.emit('session:close', { instanceId: liveInst.instanceId });
           closeLeftSidebar();
         }
+      } else if (action === 'rename') {
+        haptic('tap');
+        sessionRename.open({ sessionId: s.id, cwd: rowCwd, title: displaySessionTitle(s.title, ''), sectionKey: workspaceCwd });
       } else if (action === 'delete') {
         haptic('warning');
         openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId

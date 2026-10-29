@@ -1198,11 +1198,11 @@ export function matchesSessionTitle(title, query) {
   return String(title || '').toLowerCase().includes(q);
 }
 
-// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / firstUser 前 FIRST_USER_KEY_CHARS 字、不按展示的 60 字截 / 命令名）。
+// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（custom-title / ai-title / firstUser 前 FIRST_USER_KEY_CHARS 字、不按展示的 60 字截 / 命令名）。
 // 浏览走 SDK summary，搜索走扫盘——两套标题不是同一串，必须 OR，否则按看见的词会搜空。
-export function sessionTitleSearchKeys({ summary, aiTitle, firstUser, firstCmd } = {}) {
+export function sessionTitleSearchKeys({ summary, customTitle, aiTitle, firstUser, firstCmd } = {}) {
   const keys = [];
-  for (const raw of [summary, aiTitle, firstUser, firstCmd]) {
+  for (const raw of [summary, customTitle, aiTitle, firstUser, firstCmd]) {
     const s = typeof raw === 'string' ? raw.trim() : '';
     if (s) keys.push(s);
   }
@@ -1227,7 +1227,7 @@ export function resolveSessionListTitle({ summary, metaTitle } = {}) {
 //   生产（baseDir === CLAUDE_DIR）→ SDK getSessionInfo.summary（= listSessions 映射到 title 的那串，
 //     含 /rename 自定义标题 / 自动摘要 / 首条 prompt，见 SDKSessionInfo.summary）；
 //   SDK 无 summary（sidechain / 提不出摘要，getSessionInfo 返回 undefined）或隔离测试 baseDir
-//     → 该 jsonl 的 readHeadMeta（ai-title > firstUser > firstCmd）。
+//     → 该 jsonl 的 readHeadMeta（custom-title > ai-title > firstUser > firstCmd）。
 // 占位 '(无标题)' 返回空串，让通知层跳过会话段、只留项目名。非法 id 不拼路径。
 export async function peekSessionListTitle(cwd, sessionId, { baseDir = CLAUDE_DIR } = {}) {
   if (!cwd || !isSafeSessionId(sessionId)) return '';
@@ -1466,6 +1466,7 @@ async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new 
       _keys: query
         ? sessionTitleSearchKeys({
           summary: overlay,
+          customTitle: meta.customTitle,
           aiTitle: meta.aiTitle,
           firstUser: meta.firstUser,
           firstCmd: meta.firstCmd,
@@ -1579,9 +1580,9 @@ export function invalidateListCache(cwd) {
   }
 }
 
-// 读文件头部 HEAD_READ_BYTES，提取 title（ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
-// model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
-// 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
+// 读文件头部 HEAD_READ_BYTES，提取 title（custom-title > ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
+// model/entrypoint/firstUser 都在会话开头，只读头部即可；custom-title / ai-title 是事后追加、位置不定，
+// 还要读尾窗（见 readHeadMeta 里的两档窗口）。末行可能被截断 → JSON.parse 失败即跳过。
 // size 由 listSessionsPage 的 stat 透传（与排序用的同一份）；未传时用打开时 fstat 的。
 const HEAD_META_CACHE_CAP = 8192;
 const _headMetaCache = new Map(); // file → { size, mtimeMs, meta }
@@ -1597,9 +1598,10 @@ async function cachedHeadMeta(file, size, mtimeMs) {
 
 async function readHeadMeta(file, size) {
   const meta = { title: '', model: null, entrypoint: null };
-  // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
+  // 标题优先级与 SDK summary 同口径：用户起的名（/rename、renameSession 写的 custom-title）> CLI 生成的
+  // ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
-  let aiTitle = '', firstUser = '', firstCmd = '';
+  let customTitle = '', aiTitle = '', firstUser = '', firstCmd = '';
   try {
     const { fh, st } = await openRegularFile(file);
     try {
@@ -1618,7 +1620,9 @@ async function readHeadMeta(file, size) {
         // entrypoint 全部被它抢先误判成 cli。
         if (!meta.entrypoint && entry.entrypoint && entry.type !== 'entrypoint-marker') meta.entrypoint = entry.entrypoint;
         if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
-        if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+        if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+          customTitle = entry.customTitle.trim(); // 后写者胜
+        } else if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
           aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
         } else if (entry.type === 'user' && !entry.isMeta) {
           const c = extractContent(entry.message?.content).trim();
@@ -1631,15 +1635,20 @@ async function readHeadMeta(file, size) {
           }
         }
       }
-      // 头窗没抓到 ai-title 且文件比头窗大 → 补读尾窗取最新 ai-title。单独 try 兜底：这第二次读失败绝不能
-      // 连累头窗已提取的 title/model/entrypoint（否则一条好会话反被降级成「(无标题)」）。半行 parse 失败被跳过，
-      // 完整的 ai-title 行仍可读到。⚠️ 头窗与尾窗之间 [64KB, size-512KB) 存在死区：ai-title 若只落在这中间
-      // （早期生成后 CLI 再没更新、且其后堆了 >512KB 内容）会两窗皆漏、回退 firstUser——实测现有会话未触发。
-      if (!aiTitle && size > HEAD_READ_BYTES) {
+      // 文件比头窗大 → 补读尾窗：custom-title 后写者胜，头窗里有也可能被后来的改名盖过，所以总要读；
+      // ai-title 只在头窗没抓到时才从尾窗取。窗口两档：头窗已有 ai-title 时只为找 custom-title，
+      // 读末尾 HEAD_READ_BYTES（与 SDK 列会话读的尾窗同大；CLI 回写元数据就是为了让它留在这个窗里）；
+      // 没有时照旧读 TAIL_READ_BYTES 找 ai-title。单独 try 兜底：这第二次读失败绝不能连累头窗已提取的
+      // title/model/entrypoint（否则一条好会话反被降级成「(无标题)」）。半行 parse 失败被跳过，
+      // 完整的标题行仍可读到。⚠️ 头窗与尾窗之间存在死区：标题若只落在这中间（早期生成后再没更新、
+      // 且其后堆了超过尾窗的内容）会两窗皆漏、回退下一档——实测现有会话未触发。
+      if (size > HEAD_READ_BYTES) {
         try {
-          // 尾窗起点跳过头窗已扫区省重复读，但回退 4KB 重叠——保证跨 64KB 边界的 ai-title 行（短，远小于 4KB）
-          // 被尾窗完整包含、不被两窗各切一半而漏读。>512KB 文件仍只读末尾 512KB。
-          const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : Math.max(0, HEAD_READ_BYTES - 4096);
+          const headAiTitle = Boolean(aiTitle);
+          const tailBytes = headAiTitle ? HEAD_READ_BYTES : TAIL_READ_BYTES;
+          // 尾窗起点跳过头窗已扫区省重复读，但回退 4KB 重叠——保证跨 64KB 边界的标题行（短，远小于 4KB）
+          // 被尾窗完整包含、不被两窗各切一半而漏读。大文件只读末尾 tailBytes。
+          const start = size > tailBytes ? size - tailBytes : Math.max(0, HEAD_READ_BYTES - 4096);
           const tbuf = Buffer.allocUnsafe(size - start);
           const { bytesRead: tRead } = await fh.read(tbuf, 0, size - start, start);
           for (const line of tbuf.toString('utf-8', 0, tRead).split('\n')) {
@@ -1647,11 +1656,13 @@ async function readHeadMeta(file, size) {
             let entry;
             try { entry = JSON.parse(line); } catch { continue; }
             if (!entry) continue; // 字面 "null" 行合法 parse 为 null，不判空会抛 TypeError 连累整个尾窗（头窗同款守卫）
-            if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+            if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+              customTitle = entry.customTitle.trim(); // 尾窗内最后一次 = 最新
+            } else if (entry.type === 'ai-title' && !headAiTitle && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
               aiTitle = entry.aiTitle.trim(); // 尾窗内最后一次 = 最新
             }
           }
-        } catch { /* 尾窗补读失败：保留头窗结果、回退 firstUser，不清空 meta */ }
+        } catch { /* 尾窗补读失败：保留头窗结果，不清空 meta */ }
       }
     } finally {
       await fh.close().catch(() => {}); // close 失败同样不该连累已提取的 meta
@@ -1659,10 +1670,11 @@ async function readHeadMeta(file, size) {
   } catch {
     return {};
   }
+  meta.customTitle = customTitle;
   meta.aiTitle = aiTitle;
   meta.firstUser = firstUser;
   meta.firstCmd = firstCmd;
-  meta.title = (aiTitle || firstUser || firstCmd).slice(0, 60);
+  meta.title = (customTitle || aiTitle || firstUser || firstCmd).slice(0, 60);
   return meta;
 }
 
@@ -2063,6 +2075,15 @@ export async function readTranscriptTailEntries(sessionId, cwd, { baseDir = CLAU
   } catch {
     return null;
   }
+}
+
+// 尾窗里最后一条 custom-title 的标题；尾窗里没有、或读不到，都返回 null。
+// 网页改名的退出补写（sessions/session-rename.js）拿它判断 CLI 收尾时有没有把旧名写回来——
+// 两种 null 都按「最后一条不是用户的名字」处理，再追加一次是无害的。
+export async function readLastCustomTitle(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  const entries = await readTranscriptTailEntries(sessionId, cwd, { baseDir });
+  const last = entries?.findLast(e => e?.type === 'custom-title' && typeof e.customTitle === 'string');
+  return last ? last.customTitle.trim() : null;
 }
 
 // IO 包装：读 transcript 尾窗 → classifyTailEntries。

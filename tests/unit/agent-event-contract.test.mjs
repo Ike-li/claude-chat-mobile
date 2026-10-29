@@ -362,7 +362,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        同一类展示偏好、同一个存储，旧事件不留。入向不变 67）
   //      + folders:removeMissing（2026-10-27，#355：「N 个文件夹找不到了」告警里一键按原始配置条目移除仍缺失的。
   //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 68);
+  //      + session:rename（2026-10-29，#458：网页端给会话改名，对应终端 /rename。写的是 transcript 而不是授权面，
+  //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 68→69）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 69);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
