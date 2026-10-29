@@ -1291,13 +1291,16 @@ async function scanSessionsViaSdk(cwd, limit) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
   // 候选窗口 ≥ 显示 limit，且至少覆盖一页上限 LIST_LIMIT，便于按活动时间重排后仍能选出真最近 N。
   const fetchLimit = Math.max(limit, LIST_LIMIT) + 1;
-  const all = await fn({ dir: cwd, limit: fetchLimit });
+  // includeWorktrees 缺省 true：SDK 会跑 git worktree list，把每棵 worktree 的会话都并进来。成员目录本模块
+  // 自己枚举（listProjectMemberDirs → 逐个 scanOneCwd），SDK 再展开一次只会挤占候选窗、多扫 N 遍盘（#451）。
+  const all = await fn({ dir: cwd, limit: fetchLimit, includeWorktrees: false });
   const arr = Array.isArray(all) ? all : [];
   const projectDir = join(CLAUDE_DIR, getProjectDir(cwd));
   const enriched = (await Promise.all(arr.map(async s => {
     const file = join(projectDir, `${s.sessionId}.jsonl`);
-    // 归属过滤（2026-07-19 实测）：SDK listSessions 的 dir 匹配含祖先目录——查 worktree 路径会混入
-    // 主仓（祖先 cwd）的会话。jsonl 不在本 cwd 项目目录 = 非本 cwd 会话，滤掉；与 session:switch 的
+    // 归属过滤（2026-07-19 实测）：查 worktree 路径会混入主仓的会话。当时归因成「dir 匹配含祖先目录」，
+    // 读 SDK 0.3.310 实现后更正：混入来自 includeWorktrees 缺省 true 的 worktree 展开，上面已关（#451）。
+    // 过滤仍保留兜底（编码撞名等）：jsonl 不在本 cwd 项目目录 = 非本 cwd 会话，滤掉；与 session:switch 的
     // sessionFileExists 归属校验同一语义（列表 ≡ 可切换，不出「点了报会话不存在」的幽灵行）。
     let st;
     try { st = await stat(file); } catch { return null; }
@@ -1370,7 +1373,7 @@ async function scanSessionsViaSdk(cwd, limit) {
 async function fetchSdkSummaryMap(cwd) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
   const fetchLimit = BROWSE_HARD_LIMIT + 1;
-  const all = await fn({ dir: cwd, limit: fetchLimit });
+  const all = await fn({ dir: cwd, limit: fetchLimit, includeWorktrees: false }); // 同 scanSessionsViaSdk（#451）
   const map = new Map();
   for (const s of Array.isArray(all) ? all : []) {
     if (!s || typeof s.sessionId !== 'string') continue;
