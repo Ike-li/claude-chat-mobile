@@ -10,6 +10,7 @@ const FILES = [
   'app/statusline-view.js',
   'app/empty-surfaces.js',
   'app/session-sidebar.js',
+  'app/composer-controls.js',
 ];
 
 export function readAppJsSource() {
