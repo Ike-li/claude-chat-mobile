@@ -1600,9 +1600,11 @@ io.on('connection', socket => {
         ],
         skillsCount: 7,
         permissionMode: permissionMode,
+        // 故意不列 model：真 CLI 的 init 清单里有 model，前端据此把 /model 透传给 CLI；mock 不列，
+        // P0-09e/j 才测得到前端本地的 /model 分支（CLI 不列 model 时走它）。#456 之前靠的是 mock 发对象、
+        // includes('model') 匹配不上——改成按名字判断后，列着它这两条就测不到本地分支了。
         slashCommands: [
           { name: 'help', description: 'Show help guide' },
-          { name: 'model', description: 'Switch active model' },
           { name: 'effort', description: 'Adjust Claude thinking effort' },
           // terminal 绑定命令：故意留在 slashCommands 里（真 SDK 也是这样——terminal_slash_commands
           // 是 slash_commands 的【子集】，不是从中剔除后的补集）。前端负责在补全菜单里滤掉它。
@@ -3922,9 +3924,11 @@ io.on('connection', socket => {
       // commands_changed（SDK 0.3.229）：CLI 中途发现新命令/skill 时的全量推送。真 server 侧由
       // app/src/agent/agent.js 的同名 subtype 分支转成 slash_commands 事件，这里直接产出那个事件。
       //
-      // 列表故意与首帧 init 的（help / model / effort）**不同且不是超集**：契约语义是 REPLACE 整份
-      // 列表而非合并，只有让旧命令真的消失，E2E 才区分得出这两种实现。保留 model 一项是因为
-      // app.js 对 `/model` 有条 includes('model') 的特判分支，去掉它会顺带改变那条无关行为。
+      // 列表故意与首帧 init 的（help / effort）**不同且不是超集**：契约语义是 REPLACE 整份
+      // 列表而非合并，只有让旧命令真的消失，E2E 才区分得出这两种实现。
+      // model 给 P0-02q：CLI 列了 model 时 /model 透传给 CLI（真机 init 就是这样，首帧 init 不列它的理由见那里）。
+      // review-pr / usage / xss-probe 给 P0-02o（#456）：参数提示、别名匹配、第三方说明按纯文本显示。
+      // 别名不取 c / h 开头：P0-02n 用 /c、/h 断言菜单为空。
       commands: ['test:commands-changed'],
       run: async ({ activeInst }) => {
         // epoch:'server' 与首帧 init/models 同源：这类会话元信息不属于任何一轮对话，
@@ -3935,7 +3939,10 @@ io.on('connection', socket => {
             slashCommands: [
               { name: 'deploy', description: 'Deploy to production' },
               { name: 'rollback', description: 'Roll back the last deploy' },
-              { name: 'model', description: 'Switch active model' },
+              { name: 'model', description: 'Set the AI model for Claude Code' },
+              { name: 'review-pr', description: 'Review a pull request', argumentHint: '<pr-number>' },
+              { name: 'usage', description: 'Show plan usage', aliases: ['stats'] },
+              { name: 'xss-probe', description: '<img src=x onerror="window.__slashXss=1">' },
               // ★ color 必须留在这份新列表里，否则「推送后 /color 仍不出现在补全」那条断言恒真
               // ——新列表本来就没有它，测的就不是「名单是否被沿用」了（正对照：仪器得先看得见）。
               // 真 server 侧这条路【带不到】terminal 名单（SDK 的 SlashCommand[] 无该标记），

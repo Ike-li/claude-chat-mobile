@@ -413,8 +413,8 @@ test.describe('map() — 子 agent 的 API 报错', () => {
 
 // commands_changed（SDK 0.3.229 起）：CLI 中途发现新命令/skill 时的**全量**推送。
 // 上游契约原话：「Clients should REPLACE their cached command list with this payload;
-// supportedCommands() tracks the latest push」——也就是说 supportedCommands() 只在 initialize
-// 时捕获一次、拿不到中途变化，这条消息是唯一的增量来源。
+// supportedCommands() tracks the latest push」——推送是中途变化的来源，事后再拉 supportedCommands()
+// 拿到的也是这份（sdk.mjs: `return this.latestCommands ?? initialization.commands`）。
 //
 // 【为什么必须自成一型，不能并进 init】server 对 init 有两个副作用，这条一个都不该触发：
 //  ① app.js:1657 `lastInit = envelope.payload` —— 整体覆盖全局 lastInit，会把 model/cwd 冲掉；
@@ -456,6 +456,57 @@ test.describe('map() — commands_changed（slash 命令中途变化）', () => 
 
     assert.deepEqual(events.find(e => e.type === 'slash_commands').payload.slashCommands, []);
     s.dispose();
+  });
+});
+
+// supportedCommands()（#456）：走 initialize 响应，首条消息之前就拿得到，带说明 / 参数提示 / 别名。
+// init.slash_commands 只有名字、且要等首条消息之后才来，新工作区的菜单此前一直只剩本地 /model、/rewind。
+test.describe('fetchCommands() — supportedCommands() 的完整清单', () => {
+  const tick = () => new Promise(r => setImmediate(r));
+  const COMMANDS = [
+    { name: 'deploy', description: 'Deploy the app', argumentHint: '<env>' },
+    { name: 'usage', description: 'Show usage', argumentHint: '', aliases: ['cost'], builtin: true },
+  ];
+
+  test('拉到的对象原样进 slash_commands 事件（归一仍只在 server 一处）', async () => {
+    const { s, events } = makeSession();
+    s.q = { supportedCommands: async () => COMMANDS };
+    await s.fetchCommands();
+    assert.deepEqual(events.find(e => e.type === 'slash_commands')?.payload.slashCommands, COMMANDS);
+    s.dispose();
+  });
+
+  // init 只带名字：到达时再拉一次，让手机上的菜单立刻补回说明（start() 那一次可能早于 CLI 就绪）
+  test('init 到达时再拉一次', async () => {
+    const { s, events } = makeSession();
+    s.q = { supportedCommands: async () => COMMANDS };
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-cmds', model: 'm1', slash_commands: ['deploy', 'usage'] });
+    await tick();
+    assert.deepEqual(events.find(e => e.type === 'slash_commands')?.payload.slashCommands, COMMANDS);
+    s.dispose();
+  });
+
+  // 空数组发出去，前端会按 REPLACE 语义把菜单清空；拿不到（旧 CLI 没有这个方法、调用失败）就当不知道
+  test('拿到空清单、方法不存在、调用失败、已 dispose → 都不发事件', async () => {
+    for (const q of [
+      { supportedCommands: async () => [] },
+      {},
+      { supportedCommands: async () => { throw new Error('not ready'); } },
+    ]) {
+      const { s, events } = makeSession();
+      s.q = q;
+      await s.fetchCommands();
+      assert.equal(events.filter(e => e.type === 'slash_commands').length, 0);
+      s.dispose();
+    }
+    const { s, events } = makeSession();
+    let release;
+    s.q = { supportedCommands: () => new Promise(r => { release = r; }) };
+    const pending = s.fetchCommands();
+    s.dispose();
+    release(COMMANDS);
+    await pending;
+    assert.equal(events.filter(e => e.type === 'slash_commands').length, 0);
   });
 });
 
