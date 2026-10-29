@@ -7645,7 +7645,8 @@ import { createGateFocusController } from './app/focus-layers.js';
         openDeleteSession(s.id, rowCwd, displaySessionTitle(s.title, ''), workspaceCwd); // 空串 → 内部回落 sessionId
       }
     };
-    const menuBtn = el(`<button type="button" class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="session-menu" aria-haspopup="dialog" aria-controls="sessionMenuModal" title="${t('会话操作')}" aria-label="${t('会话操作')}">⋯</button>`);
+    // hit-44（#359）：视觉 32px，触控热区四周各扩 8px；向左正好补满与行本体之间的 gap-2，不吞行本体的点击。
+    const menuBtn = el(`<button type="button" class="hit-44 shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 text-base" data-testid="session-menu" aria-haspopup="dialog" aria-controls="sessionMenuModal" title="${t('会话操作')}" aria-label="${t('会话操作')}">⋯</button>`);
     menuBtn.onclick = () => {
       haptic('tap');
       sessionRowMenu.open({ title: displaySessionTitle(s.title, t('新会话')), label: t('会话操作'), items: menuItems(), onSelect: runMenuAction });

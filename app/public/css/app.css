@@ -1238,7 +1238,7 @@ details.thinking.thinking-live > summary::before {
    挂起期间（body.nav-escape，由 openSheet/closeSheet 同步）把顶栏与侧栏抬到 sheet 之上，
    答复完自动落回。刻意不改静态层级：deviceRequests 等页面级提示的 header < cards < modal
    契约（P0-15g 钉住）保持原样；登录门 / 确认弹窗（z-50）仍在最上，导航压不过它们。
-   注：≥1024px 桌面布局另有一套 !important 层级，未随此调整。 */
+   注：≥1024px 桌面布局另有一套 !important 层级，这几条压不过；桌面改由 .ccm-sheet-blocking 让开常驻侧栏（#359）。 */
 body.nav-escape header { z-index: 45; }
 body.nav-escape #sidebarScrim { z-index: 46; }
 body.nav-escape #leftSidebar { z-index: 47; }

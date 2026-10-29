@@ -74,11 +74,24 @@ export function createDrawerController(context, {
   if (sidebarClose) sidebarClose.onclick = closeLeftSidebar;
   if (sidebarScrim) sidebarScrim.onclick = closeLeftSidebar;
 
+  // 手势要让位的两种场合（#359）：
+  // ① sheet 开着：侧栏会开在 sheet 下面——看不见，焦点却被拿走。判据是两套 sheet 控制器共用的背景滚动锁
+  //    body.ccm-sheet-open；审批 / 提问挂着时 body.nav-escape 把侧栏抬到 sheet 之上（挂着审批也能切会话），照常可开。
+  // ② 起点在横向可滚的容器里（代码块、diff、表格）：横滑是在滚它。只认 overflow-x 可滚的——截断标题
+  //    （overflow:hidden）同样 scrollWidth > clientWidth，却滚不动。
+  const sheetCovers = () => doc.body.classList.contains('ccm-sheet-open') && !doc.body.classList.contains('nav-escape');
+  function inHorizontalScroller(node) {
+    for (let n = node; n && n !== doc.body; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth && /^(auto|scroll)$/.test(win.getComputedStyle(n).overflowX)) return true;
+    }
+    return false;
+  }
+
   // 移动端：边缘滑动呼出侧边栏，向左滑动收起侧边栏
   doc.addEventListener('touchstart', e => {
     dragStartX = e.touches[0].clientX;
     dragStartY = e.touches[0].clientY;
-    dragActive = true;
+    dragActive = !sheetCovers() && !inHorizontalScroller(e.target);
   }, { passive: true });
 
   doc.addEventListener('touchmove', e => {
