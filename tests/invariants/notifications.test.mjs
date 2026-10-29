@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   notificationForEvent,
   notifyHasClientsAtSend,
+  NOTIFY_CATEGORY,
   hasForegroundApprovedClient,
   formatNotifyIdentity,
   sanitizeNotifySessionTitle,
@@ -71,6 +72,14 @@ test.describe('NOTIFY-01 抑制矩阵：只有 result 让位于前台', () => {
   test('question：前台有人也照推', () => {
     const n = notificationForEvent('question', { text: '选哪个？' }, { hasClients: true });
     assert.notEqual(n, null);
+  });
+
+  test('elicitation（MCP 要表单 / 授权，#460）：前台有人也照推；body 不带 message 正文，只在 previewBody 里', () => {
+    const n = notificationForEvent('elicitation', { serverName: 'github', message: '粘贴你的 token：ghp_secret', mode: 'form' }, { hasClients: true });
+    assert.notEqual(n, null, '与审批、提问同属「需要你」，hasClients 不得让它静音');
+    assert.match(n.body, /github/);
+    assert.doesNotMatch(n.body, /ghp_secret/, 'message 是第三方正文，body 会进 ntfy 明文通道');
+    assert.match(n.previewBody, /ghp_secret/);
   });
 
   test('未知事件类型 → null，不构造出无意义通知', () => {
@@ -169,6 +178,10 @@ test.describe('发送时刻的判据：result 用现场值，其余用快照', (
     assert.equal(notifyHasClientsAtSend('question', false, true), false);
   });
 
+  test('elicitation 与提问同节流类别（input）：作答后 request_resolved 清的是同一格', () => {
+    assert.equal(NOTIFY_CATEGORY.elicitation, 'input');
+  });
+
   test('非布尔值一律不算「有前台」（=== true 严格判定）', () => {
     assert.equal(notifyHasClientsAtSend('result', undefined, undefined), false);
     assert.equal(notifyHasClientsAtSend('question', 1, 1), false, '真值但非 true 不算数');
@@ -213,7 +226,7 @@ test.describe('ntfy 深链：第三方明文通道不带完整 cwd', () => {
   });
 
   test('需即时响应的四类走高优先级，其余普通', () => {
-    for (const t of ['permission_request', 'question', 'cli_hook_notification', 'device_request']) {
+    for (const t of ['permission_request', 'question', 'elicitation', 'cli_hook_notification', 'device_request']) {
       assert.equal(ntfyMetaFor(t, {}, '').priority, 5, `${t} 需要用户立刻处理`);
     }
     assert.equal(ntfyMetaFor('result', {}, '').priority, 3);

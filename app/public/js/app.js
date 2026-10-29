@@ -250,6 +250,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createElicitationSheet } from './app/elicitation-sheet.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
@@ -1055,7 +1056,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 故落在 haptic/el 就绪之后的最早位置。两个「等你答复」型弹窗以取值函数注入，模块本身不认识它们。
   const sheets = createSheetController(appContext, {
     $, haptic,
-    blockingSheets: () => [permModal, questionModal],
+    blockingSheets: () => [permModal, questionModal, $('elicitationModal')],
     onClosed: (elm) => {
       // UX-003 / #372：关闭审批 / 提问弹窗时清防误触 arming（计时器归审批模块所有）。
       if (elm === permModal) {
@@ -1821,6 +1822,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     try {
       for (const p of pending.permissions || []) handle.permission_request(p, env);
       for (const q of pending.questions || []) handle.question(q, env);
+      for (const e of pending.elicitations || []) handle.elicitation(e, env);
     } finally {
       appContext.state.isReplayBatch = false;
     }
@@ -2864,6 +2866,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
     onEpochReset() {
       approvals.clearAll();
+      elicitationSheet.clearAll();
     },
     onSessionId(sessionId) {
       localStorage.setItem('current_session', sessionId);
@@ -3491,6 +3494,13 @@ import { createGateFocusController } from './app/focus-layers.js';
       const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
       notify(t('❓ 需要选择'), qPreview.slice(0, 80), { sensitive: true }); // 问题正文同属预览开关管辖
     },
+    // MCP 服务器要表单输入或 URL 授权（#460）。去重同提问：快照补发与 buffer 回放可能同 requestId，已结算的不再弹
+    elicitation(p, ev) {
+      if (elicitationSheet.isDuplicate(p.requestId)) return;
+      alertCue('need');
+      elicitationSheet.enqueue(p, ev?.instanceId);
+      notify(t('🔐 MCP 需要你'), String(p.message ?? '').slice(0, 80), { sensitive: true }); // message 是第三方正文，同属预览开关管辖
+    },
     // M4：审批/选题完成后广播，多设备或重放缓冲时关闭陈旧弹窗
     request_resolved(p) {
       const { requestId, kind } = p;
@@ -3510,6 +3520,10 @@ import { createGateFocusController } from './app/focus-layers.js';
         // 同上。多题提问会逐题各发一条（requestId 带 #序号）再发整体那条，只在整体那条上说一次
         if (p.outcome === 'expired' && !String(requestId).includes('#')) addBar(t('⏱ 这个提问等太久已过期，没有作答'), 'text-warning');
         approvals.resolveQuestion(requestId);
+        updateSendButtonState();
+      } else if (kind === 'elicitation') {
+        if (p.outcome === 'expired') addBar(t('⏱ 这个 MCP 请求等太久已过期，已按取消处理'), 'text-warning');
+        elicitationSheet.resolve(requestId, p.outcome);
         updateSendButtonState();
       }
     },
@@ -3547,6 +3561,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
       // 防御性清理当前 tab 的挂起提问和审批
       approvals.clearAll();
+      elicitationSheet.clearAll();
       updateSendButtonState();
     },
     error(p, ev) {
@@ -3577,6 +3592,7 @@ import { createGateFocusController } from './app/focus-layers.js';
 
       // 防御性清理当前 tab 的挂起提问和审批
       approvals.clearAll();
+      elicitationSheet.clearAll();
       updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
@@ -3596,6 +3612,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
     system(p, ev) {
       addBar(p.message, systemBarClass(p));
+      if (p.kind === 'elicitation_complete') elicitationSheet.complete(p.elicitationId);
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
@@ -4227,6 +4244,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     openSheet, closeSheet, requestInterrupt, updateSendButtonState,
     getViewingInstanceId: () => viewingInstanceId,
   });
+  // MCP 表单 / URL 授权（#460），见 app/elicitation-sheet.js
+  const elicitationSheet = createElicitationSheet(appContext, { $, socket, openSheet, closeSheet });
 
   // ---- 发送 / 停止 ----
 
@@ -4295,7 +4314,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       addBar(t('当前任务运行中，完成后可发送'), 'text-info');
       return;
     }
-    if (approvals.hasPending()) {
+    if (approvals.hasPending() || elicitationSheet.hasPending()) {
       addBar(t('请先处理当前审批或选择，再发送新消息'), 'text-info');
       return;
     }
@@ -4965,7 +4984,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       turnRunning: _turnRunning,
       hasContent,
       interruptPending: interruptPendingByInstance.has(viewingInstanceId),
-      blockedByUserRequest: approvals.hasPending(),
+      blockedByUserRequest: approvals.hasPending() || elicitationSheet.hasPending(),
       blockedByDisabledInput: inputEl.disabled,
       blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
       mirrorReadonly: Boolean(mirrorReadonlySid),
@@ -8365,6 +8384,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     queueMicrotask(() => maybeShowEmptySessionGuide());
     subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
     approvals.clearAll();
+    elicitationSheet.clearAll();
     // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
     // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
@@ -8831,6 +8851,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     blockedSurfaceTarget = null;
     $('sessionBlockedSurface')?.classList.add('hidden');
     approvals.resume();
+    elicitationSheet.resume();
   }
   // 迟到的成功 ack：4s 兜底已经把落地页弹出来了，而这次切换其实成功了——服务端可能先广播导航、
   // 后回 ack。不撤掉的话用户人已经在目标会话里，屏幕上却盖着一张「切换无响应」。
@@ -8881,6 +8902,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     // 底下那个会话（视图没动）的审批 / 提问卡是 z-40 的 sheet，会浮在这张落地页上，读起来像是这个打不开的会话的
     // （验收 O38）。收起而不是清掉：卡还是原会话的，返回时原样恢复。
     approvals.suspend();
+    elicitationSheet.suspend();
   }
 
   // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→

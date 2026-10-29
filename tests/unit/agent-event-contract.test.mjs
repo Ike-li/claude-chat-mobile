@@ -362,7 +362,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        同一类展示偏好、同一个存储，旧事件不留。入向不变 67）
   //      + folders:removeMissing（2026-10-27，#355：「N 个文件夹找不到了」告警里一键按原始配置条目移除仍缺失的。
   //        不复用 folders:remove：那条只认当前有效连接根，缺失路径恰不在 workDirs 里；也不走 env:set 整份覆盖。入向 67→68）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 68);
+  //      + elicitation:respond（2026-10-29，#460 MCP 服务器要表单输入 / URL 授权时手机作答。不并进 user:answer：
+  //        那条是 AskUserQuestion 的选项下标 / 自由文本，这条是 accept|decline|cancel + 按 schema 校验的表单内容。入向 68→69）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 69);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
@@ -414,13 +416,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 31 种一致', () => {
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 32 种一致', () => {
   //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
   //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
   //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
   //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
   //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
-  assert.equal(AGENT_EVENT_TYPES.length, 31);
+  //      + elicitation（2026-10-29，#460：MCP 表单 / URL 授权卡片。与 question 同族：进环形缓冲、走普通 handle，
+  //        进 pending 快照与 eventsSince 过滤；URL 授权完成走既有 system 信封的 kind:'elicitation_complete'，不另开 type。出向 31→32）
+  assert.equal(AGENT_EVENT_TYPES.length, 32);
   assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。

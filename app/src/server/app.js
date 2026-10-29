@@ -770,7 +770,7 @@ const getMetricsPayload = () => {
   const failed = errorInstances.size;
   let awaiting = 0;
   for (const agent of agents.values()) {
-    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) awaiting += 1;
+    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0 || agent.pendingElicitations.size > 0) awaiting += 1;
   }
   // OPS-3：StateProbe notify_failed 必须覆盖双通道——仅计 push 时，纯 ntfy 用户失败永不翻状态。
   const notifyFailed = (counters.push_failure ?? 0) + (counters.ntfy_failure ?? 0);
@@ -1235,13 +1235,13 @@ const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重�
 // 台阶3 Step B 角标：doneInstances = 后台（≠viewingInstanceId）完成但未查看的实例 latch
 // （后台轮次 result 置位；该实例新活动 init/审批 或被切为 viewingInstanceId 时清）。instanceState 由实例
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
-const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification', 'system']);
+const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'elicitation', 'request_resolved', 'tool_use', 'task_notification', 'system']);
 const BG_TYPE_TO_TOOL = { local_agent: 'Agent', local_bash: 'Bash' }; // 后台任务类型 → 前端 TOOL_BADGE 键（🤖 Agent / 🖥 Bash）；未知类型 → null → ⏳
 // "等我"跨会话聚合（AttentionDeriver）：跨全部 live 实例（不限 viewingCwd）
 // 投影 needsYou。数据源=运行时 agents（读模型投影，非新数据源）：
 //   ①审批维度——每个 live 实例的 pendingPermissions（已有 createdAt/expiresAt，承接审批 TTL 阶段），
 //     此处过滤 now<=expiresAt（deriveAttention 契约要求调用方先过滤，保持纯函数不依赖 Date.now()）；
-//   ②输入维度——pendingQuestions（本次新增 createdAt），仅当该实例无 pendingPermissions 时计入
+//   ②输入维度——pendingQuestions（本次新增 createdAt）与 pendingElicitations（MCP 表单 / 授权，#460），仅当该实例无 pendingPermissions 时计入
 //     awaiting_input（镜像 StatusDeriver 优先级：审批 > 输入，与 instanceState() 的 'permission' 判定一致）。
 // 边界（已知盲区，如实登记）：纯终端会话的等待态不经此路径可见——本函数只覆盖 web 后端驱动的 live 实例。
 function computeNeedsYou() {
@@ -1264,10 +1264,10 @@ function computeNeedsYou() {
       hasLiveApproval = true;
       pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
     }
-    if (!hasLiveApproval && a.pendingQuestions.size > 0) {
+    if (!hasLiveApproval && (a.pendingQuestions.size > 0 || a.pendingElicitations.size > 0)) {
       // AG-NEW-003：与 permissions 对称过滤 expiresAt（timer 已删 Map 时此窗极短，仍防 residual）
       let hasLiveQuestion = false;
-      for (const [, q] of a.pendingQuestions) {
+      for (const q of [...a.pendingQuestions.values(), ...a.pendingElicitations.values()]) {
         if (typeof q.expiresAt === 'number' && now > q.expiresAt) continue;
         hasLiveQuestion = true;
         if (awaitingSince === undefined || q.createdAt < awaitingSince) awaitingSince = q.createdAt;
@@ -2299,7 +2299,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
           if (instance.sessionId) {
             sessions.updateSessionCost(instance.sessionId, (instance.historicalCostUsd || 0) + (instance.totalCostUsd || 0));
           }
-        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
+        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question' || envelope.type === 'elicitation') {
           latchEventType = 'new_activity';
           // task_notification 在 STATE_BOUNDARY 里但【不】映射到 new_activity：它到达时 pendingTurns 仍 0（合成发生在
           // 后续 message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
@@ -2321,7 +2321,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, effortSource, transc
         // 使下一次同类别通知不再被①层"未决不重复推"拦截（②层最小间隔仍照常生效，不因此重置）。
         if (envelope.type === 'request_resolved' && envelope.sessionId) {
           const category = envelope.payload?.kind === 'permission' ? 'approval'
-            : envelope.payload?.kind === 'question' ? 'input' : null;
+            : envelope.payload?.kind === 'question' || envelope.payload?.kind === 'elicitation' ? 'input' : null;
           if (category) notifyThrottleState = clearNotifyPending(envelope.sessionId, category, notifyThrottleState);
         }
         // E15 离线 web-push：文案映射抽到 notificationForEvent（纯函数、tests/unit/notifications 覆盖）。
@@ -3097,6 +3097,7 @@ registerSocketConnection(io, socket => {
             bgTaskCount: a.bgTasks?.size ?? 0,
             pendingPermissionCount: a.pendingPermissions?.size ?? 0,
             pendingQuestionCount: a.pendingQuestions?.size ?? 0,
+            pendingElicitationCount: a.pendingElicitations?.size ?? 0,
           });
           interactionLog.addSessionLog(
             a.sessionId,
@@ -3572,6 +3573,19 @@ registerSocketConnection(io, socket => {
     if (hasFree) opts.freeText = freeText;
     else if (hasMulti) opts.optionIndexes = optionIndexes;
     routeInstance(instanceId)?.resolveQuestion(requestId, hasIdx && !hasMulti && !hasFree ? optionIndex : null, Object.keys(opts).length ? opts : undefined); // 台阶3
+  });
+
+  // MCP elicitation 作答（#460）：action 只认三个字面量；表单内容的逐项校验在 agent.resolveElicitation，
+  // 按事件里下发的同一份字段描述（前后端不共用代码，校验只此一处）。不合法回原因、卡片留着让用户改。
+  on(socket, 'elicitation:respond', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { instanceId, requestId, action, content } = payload || {};
+    if (typeof requestId !== 'string' || !requestId || requestId.length > 256 || !['accept', 'decline', 'cancel'].includes(action)) {
+      ack({ ok: false, error: 'invalid_payload' });
+      return;
+    }
+    const a = routeInstance(instanceId);
+    ack(a ? a.resolveElicitation(requestId, action, content) : { ok: false, error: '会话已经关闭' });
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由

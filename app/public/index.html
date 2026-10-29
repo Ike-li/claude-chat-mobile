@@ -382,6 +382,33 @@
     </div>
   </div>
 
+  <!-- MCP 服务器要表单输入或 URL 授权（#460），内容由 app/elicitation-sheet.js 按事件里的字段描述现画。
+       与提问同为强拦截：只能提交 / 拒绝 / 取消，不画拖拽把手。第三方文本一律 textContent。 -->
+  <div id="elicitationModal" class="ccm-sheet hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="MCP 需要你">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
+      <div id="elicitationHeading" class="text-info font-semibold mb-1 break-words" data-testid="elicitation-heading"></div>
+      <div id="elicitationServer" class="text-xs text-ink-faint mb-1 break-words" data-testid="elicitation-server"></div>
+      <div id="elicitationMessage" class="text-sm mb-2 text-ink whitespace-pre-wrap break-words" data-testid="elicitation-message"></div>
+      <div id="elicitationDescription" class="hidden text-xs text-ink-soft mb-2 whitespace-pre-wrap break-words"></div>
+      <form id="elicitationForm" class="hidden space-y-3 mb-3" data-testid="elicitation-form" novalidate></form>
+      <div id="elicitationUrl" class="hidden mb-3 space-y-1" data-testid="elicitation-url">
+        <div class="text-xs text-ink-soft">将在浏览器打开</div>
+        <div id="elicitationUrlOrigin" class="text-sm font-semibold text-ink break-all" data-testid="elicitation-url-origin"></div>
+        <div id="elicitationUrlFull" class="text-xs text-ink-faint break-all"></div>
+        <div id="elicitationUrlLocalHint" class="hidden text-xs text-warning" data-testid="elicitation-url-local">链接指向主机本机，手机上打开时回调落不到主机，请回电脑上完成授权</div>
+      </div>
+      <div id="elicitationUnsupported" class="hidden text-xs text-warning mb-3" data-testid="elicitation-unsupported"></div>
+      <div id="elicitationWaiting" class="hidden text-sm text-ink-soft mb-3" role="status" data-testid="elicitation-waiting">已在浏览器打开，等待服务器确认完成…</div>
+      <div id="elicitationError" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2" role="alert" data-testid="elicitation-error"></div>
+      <button type="button" id="elicitationAccept" class="w-full mb-2 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium disabled:opacity-40" data-testid="elicitation-accept">提交</button>
+      <div id="elicitationSecondary" class="flex gap-2">
+        <button type="button" id="elicitationDecline" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk text-sm font-medium disabled:opacity-40" data-testid="elicitation-decline">拒绝</button>
+        <button type="button" id="elicitationCancel" class="flex-1 py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium disabled:opacity-40" data-testid="elicitation-cancel">取消</button>
+      </div>
+      <button type="button" id="elicitationClose" class="hidden w-full py-2.5 rounded-lg border border-line text-ink active:bg-sunk text-sm font-medium" data-testid="elicitation-close">关闭</button>
+    </div>
+  </div>
+
   <!-- 顶栏「⋯」的菜单（#307），开合走 sheets.js 的 openSheet / closeSheet -->
   <div id="moreModal" class="ccm-sheet hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="更多操作">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop)">

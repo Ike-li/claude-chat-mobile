@@ -1206,9 +1206,9 @@ test.describe('lastActivity 刷新', () => {
 // 或切视图时被前端分流丢弃，pendingPermissions/pendingQuestions 才是权威真相。payload 必须与
 // askPermission 的 emit('permission_request')、handleQuestion 的 emit('question') 逐字段一致。
 test.describe('pendingRequestsSnapshot()', () => {
-  test('全空 → { permissions:[], questions:[] }', () => {
+  test('全空 → { permissions:[], questions:[], elicitations:[] }', () => {
     const { s } = makeSession();
-    assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [] });
+    assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [], elicitations: [] });
   });
 
   test('permission：requestId/name/input/cwd/fp/createdAt/expiresAt 与 emit(permission_request) 一致', () => {

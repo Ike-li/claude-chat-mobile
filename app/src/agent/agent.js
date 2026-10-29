@@ -23,6 +23,7 @@ import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.j
 import * as metrics from '../ops/metrics.js';
 import { uploadsRoot, ensureUploadsRoot } from '../files/uploads.js';
 import { normalizeSideAnswer, shouldRecap, shouldSuggest, RECAP_PROMPT, SUGGEST_PROMPT } from './side-question.js';
+import { describeElicitation, validateElicitationContent } from './elicitation.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -284,6 +285,9 @@ export function buildAgentQueryOptions(session, env = process.env) {
     additionalDirectories: [uploadsRoot(env)],
     // 不注入 options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow
     canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
+    // MCP 服务器要表单输入或 URL 授权（#460）。不传时 SDK 把没被 hooks 接住的一律自动 decline——
+    // 手机上看不到、工具静默失败。用户配置的 Elicitation hooks 仍先于本回调处理。
+    onElicitation: (request, opts) => session.handleElicitation(request, opts),
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     env: { ...sdkChildEnv(env), ...filterSafeResolvedEnv(session.resolvedEnv) },
@@ -397,7 +401,7 @@ const SLASH_QUIET_NOTICE_MS = 20_000;
 // 代码却从不生效。api_retry 尤其要紧：上游限流重试期间本来就长时间没有别的事件，那是「在动」不是「卡死」。
 const SLASH_QUIET_BREAKERS = new Set([
   'text_delta', 'thinking_delta', 'tool_use', 'tool_result',
-  'result', 'error', 'question', 'permission_request',
+  'result', 'error', 'question', 'permission_request', 'elicitation',
   'task_progress', 'task_notification', 'api_retry', 'system',
 ]);
 
@@ -548,6 +552,8 @@ export class AgentSession {
     this._interruptSettleTimer = null;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
+    this.pendingElicitations = new Map(); // requestId → { resolve, view, signal, abortHandler, createdAt, expiresAt, expiryTimer }（#460 MCP 表单 / URL 授权）
+    this.elicitSeq = 0;
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
     this.permSeq = 0;
     this.lastActivity = Date.now();
@@ -957,6 +963,7 @@ export class AgentSession {
       pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
     }
     this.pendingQuestions.clear();
+    this._cancelPendingElicitations();
     this.denyKinds.clear(); // 与 dispose 路径对称：无论哪种退出，denyKind 残留都应清理
     // AG-005：自然退出（CLI 进程结束）也要标 disposed/inputEnded——否则 onExit 删 Map 前的竞态窗口里
     // 陈旧引用仍可 send()，且与 dispose 路径不对称。
@@ -1269,6 +1276,7 @@ export class AgentSession {
         setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
         try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
       }
+      this._cancelPendingElicitations();
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
@@ -1295,6 +1303,7 @@ export class AgentSession {
           setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
           try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
         }
+        this._cancelPendingElicitations({ silent: true });
         _diagOutcome = 'disposed';
         return;
       }
@@ -1320,6 +1329,7 @@ export class AgentSession {
         setCapped(this.denyKinds, toolUseID, 'cancelled', TOOL_INPUT_MAX);
         pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
       }
+      this._cancelPendingElicitations();
       // 被丢弃消息的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
       if (droppedIds.length > 0) {
         this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
@@ -1973,6 +1983,67 @@ export class AgentSession {
     pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
   }
 
+  // ---- MCP elicitation（#460）：服务器要表单输入或 URL 授权 ----
+  // 生命周期照 AskUserQuestion：挂起表 + TTL（复用 approvalTtlMs）+ abort + 各清理路径结算；结算一律广播
+  // request_resolved（kind:'elicitation'）让别的设备关卡。结果是 MCP 的 ElicitResult：{ action, content? }。
+  // requestId 用 SDK 给的 control_request id（唯一、不会撞号）；缺了才自己发号。
+  handleElicitation(request, { signal, requestId } = {}) {
+    if (signal?.aborted) return Promise.resolve({ action: 'cancel' });
+    const id = typeof requestId === 'string' && requestId ? requestId : `elicit_${++this.elicitSeq}`;
+    const view = describeElicitation(request);
+    return new Promise(resolve => {
+      const createdAt = Date.now();
+      const expiresAt = createdAt + this.approvalTtlMs;
+      const expiryTimer = setTimeout(() => this._settleElicitation(id, { action: 'cancel' }, 'expired'), this.approvalTtlMs);
+      expiryTimer.unref?.();
+      const abortHandler = () => this._settleElicitation(id, { action: 'cancel' }, 'aborted');
+      this.pendingElicitations.set(id, { resolve, view, signal, abortHandler, createdAt, expiresAt, expiryTimer });
+      this.emit('elicitation', { requestId: id, ...view, createdAt, expiresAt });
+      signal?.addEventListener('abort', abortHandler);
+    });
+  }
+
+  _settleElicitation(requestId, result, outcome, { silent = false } = {}) {
+    const pending = this.pendingElicitations.get(requestId);
+    if (!pending) return;
+    this.pendingElicitations.delete(requestId);
+    clearTimeout(pending.expiryTimer);
+    pending.signal?.removeEventListener('abort', pending.abortHandler);
+    if (!silent) this.emit('request_resolved', { requestId, kind: 'elicitation', outcome });
+    pending.resolve(result);
+  }
+
+  // 用户作答。accept 的表单内容按事件里下发的同一份字段描述校验，不合法就拒收、卡片留着（返回原因给前端）；
+  // schema 超出子集的卡只能拒绝 / 取消。URL 模式 accept 不带 content（授权在浏览器里完成）。
+  resolveElicitation(requestId, action, content) {
+    const pending = this.pendingElicitations.get(requestId);
+    if (!pending) return { ok: false, error: '这个请求已经结束了' };
+    if (action !== 'accept' && action !== 'decline' && action !== 'cancel') return { ok: false, error: '无效的操作' };
+    if (Date.now() > pending.expiresAt) {
+      this._settleElicitation(requestId, { action: 'cancel' }, 'expired');
+      return { ok: false, error: '这个请求已经过期了' };
+    }
+    let result = { action };
+    if (action === 'accept') {
+      if (pending.view.unsupported) return { ok: false, error: '这个请求超出支持范围，只能拒绝或取消' };
+      if (pending.view.mode === 'form') {
+        const checked = validateElicitationContent(pending.view.fields, content);
+        if (!checked.ok) return { ok: false, error: checked.error };
+        result = { action, content: checked.content };
+      }
+    }
+    this.lastActivity = Date.now(); // 用户作答是主动操作，续期静默看护
+    this._settleElicitation(requestId, result, action);
+    return { ok: true };
+  }
+
+  // 实例结束 / 中断时把挂着的都结算成 cancel。silent：实例已 dispose、没有监听者，不再发事件。
+  _cancelPendingElicitations({ silent = false } = {}) {
+    for (const requestId of [...this.pendingElicitations.keys()]) {
+      this._settleElicitation(requestId, { action: 'cancel' }, 'aborted', { silent });
+    }
+  }
+
   // 静默看护豁免留痕：只在【豁免原因变化】时记一条（无→有、一种→另一种、有→无）。
   // 不能每 tick 都记——一个跑 15 分钟的子代理会灌 30 条一模一样的记录，把诊断缓冲里真正
   // 有价值的事件挤掉（diag-log 的 MAX_ENTRIES_PER_SESSION=100）。
@@ -2030,7 +2101,7 @@ export class AgentSession {
       // 不刷新 lastSeenAt（完成权威仍靠 lifecycle；补推只修展示粘性）。
       this.emitBgTasksSnapshot();
     }
-    if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
+    if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0 || this.pendingElicitations.size > 0) {
       this._noteIdleExemption('pending_approval');
       this.lastActivity = Date.now();
       return;
@@ -2466,7 +2537,8 @@ export class AgentSession {
   // 后台任务(bgTasks)、挂起审批(pendingPermissions)、挂起问题(pendingQuestions)都【不】计入 pendingTurns，
   // 只查 pendingTurns 会在这些非 turn 活动进行时 disposeInstance→abort 误杀它们。
   isBusy() {
-    return this.pendingTurns > 0 || this.hasBgTasks() || this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0;
+    return this.pendingTurns > 0 || this.hasBgTasks() || this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0
+      || this.pendingElicitations.size > 0;
   }
   bgTaskSummary() { // 取 lastSeenAt 最新一条 + 总数：server 据 taskType 映射 activeTool 图标（🤖/🖥），横幅显 message
     if (this.bgTasks.size === 0) return null;
@@ -2646,6 +2718,7 @@ export class AgentSession {
       pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
     }
     this.pendingQuestions.clear();
+    this._cancelPendingElicitations();
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
     this.lastToolName = null;
     this.bgTasks.clear(); // dispose 清空活后台注册表
@@ -2828,6 +2901,7 @@ export class AgentSession {
     const events = this.buffer.filter(e => {
       if (e.seq <= lastSeq) return false;
       if (e.type === 'question') return this.isQuestionStillPending(e.payload?.requestId);
+      if (e.type === 'elicitation') return this.pendingElicitations.has(e.payload?.requestId);
       if (e.type === 'permission_request') {
         const id = e.payload?.requestId;
         return typeof id === 'string' && this.pendingPermissions.has(id);
@@ -2880,7 +2954,11 @@ export class AgentSession {
         });
       }
     }
-    return { permissions, questions };
+    const elicitations = [];
+    for (const [requestId, p] of this.pendingElicitations) {
+      elicitations.push({ requestId, ...p.view, createdAt: p.createdAt, expiresAt: p.expiresAt });
+    }
+    return { permissions, questions, elicitations };
   }
 
   // ---- SDK 消息 → 契约事件映射 ----
@@ -3118,6 +3196,13 @@ export class AgentSession {
         } else if (msg.subtype === 'informational') {
           // 通用文本横幅（level: info/notice/suggestion/warning）。CLI 会在终端显示，web 同步。
           this.emitNotice(msg.content, msg.level === 'warning' ? 'warning' : 'info');
+        } else if (msg.subtype === 'elicitation_complete') {
+          // URL 模式的授权由 MCP 服务器确认完成（#460）。前端按 elicitationId 收起「等待完成」那张卡。
+          const serverName = stringify(msg.mcp_server_name).trim() || 'MCP';
+          this.emit('system', {
+            message: `${serverName} 已确认授权完成`, kind: 'elicitation_complete',
+            serverName, elicitationId: stringify(msg.elicitation_id),
+          });
         } else if (msg.subtype === 'mirror_error') {
           // transcript 落盘失败：不影响本轮对话，但会让「刷新后历史缺失」，属必须让用户知道的降级。
           this.emitNotice(msg.error, 'warning');
