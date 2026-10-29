@@ -250,4 +250,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     }
     await expectNoBrowserErrors(page);
   });
+
+  // #359 第 2 项：桌面上侧栏常驻，但审批 / 提问 sheet 是 fixed inset-0 的遮罩——移动端靠 body.nav-escape 把侧栏抬到
+  // 遮罩之上，桌面那段 z-index:10 !important 把它压死了，挂着审批时连切会话都点不到。桌面改成这类 sheet 从侧栏右边开始。
+  test('P0-19j 桌面挂着审批时，常驻侧栏仍点得到，审批按钮也没被侧栏盖住', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toHaveClass(/sheet-open/);
+    // 防误触期（UX-003）内按钮本就 disabled + pointer-events:none，命中测试要等它过去
+    await expect(page.locator('#permModal')).not.toHaveClass(/sheet-arming/);
+    await expect(page.locator('#permAllow')).toBeEnabled();
+    const hit = await page.evaluate(() => {
+      const at = (el, x = 0.5) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + Math.max(4, r.width * x), r.top + r.height / 2); };
+      const sidebarTarget = document.querySelector('#leftSidebar [data-testid="session-row"]') || document.getElementById('leftSidebar');
+      return {
+        sidebar: Boolean(at(sidebarTarget)?.closest('#leftSidebar')),
+        deny: at(document.getElementById('permDeny'), 0)?.id === 'permDeny',
+        allow: at(document.getElementById('permAllow'))?.id === 'permAllow',
+      };
+    });
+    expect(hit.sidebar, '侧栏被审批遮罩盖住了').toBe(true);
+    // 「拒绝」在面板最左：若改成抬高侧栏 z-index，被侧栏盖住的就是它的左半截（所以测左缘，不测中心）
+    expect(hit.deny, '「拒绝」被盖住了').toBe(true);
+    expect(hit.allow, '「允许」被盖住了').toBe(true);
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -764,7 +764,7 @@ header {
        ★ 未显式定位的非 fixed body 子元素会被自动排版塞进隐式行（对横幅就是 300px 宽卡在侧栏底下，
        且新隐式行会从 1fr 消息行偷高度、被 overflow:hidden 裁掉 composer）——新增此类元素必须在这里定位。 */
     grid-template-rows: auto auto 1fr auto !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     overflow: hidden !important;
   }
 
@@ -776,7 +776,7 @@ header {
     transform: none !important;
     width: 300px !important;
     max-width: 300px !important;
-    height: 100vh !important;
+    height: 100dvh !important; /* #359：同移动端用 dvh，iPad 横屏 Safari 地址栏伸缩时底部不被裁 */
     border-right: 1px solid var(--line) !important;
     box-shadow: none !important;
     background-color: var(--surface) !important;
@@ -824,6 +824,13 @@ header {
   }
   body.sidebar-collapsed #leftSidebar {
     display: none !important;
+  }
+
+  /* #359：等你答复的 sheet（审批 / 提问，带 .ccm-sheet-blocking）从常驻侧栏右边开始，挂着审批也能在侧栏切会话。
+     移动端靠 body.nav-escape 把侧栏抬到遮罩之上，桌面上面那句 z-index:10 !important 把它压死了；而抬 z-index
+     又会让侧栏盖住 sheet 面板最左 300px（按钮可能就在那里），所以让开而不是盖上。 */
+  body:not(.sidebar-collapsed) .ccm-sheet-blocking {
+    left: 300px;
   }
 }
 
