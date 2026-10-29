@@ -345,7 +345,7 @@
       "items": [
         "手机事件按 instanceId 路由到对应 AgentSession",
         "SDK streaming input 驱动本机 CLI，在授权 cwd 工作",
-        "出向统一封装成 agent:event 信封，共 31 种 type"
+        "出向统一封装成 agent:event 信封，共 32 种 type"
       ]
     },
     {
