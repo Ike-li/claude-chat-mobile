@@ -2649,14 +2649,15 @@ function dedupedResume(cwd, resumeId, extra = {}, { composeId = null } = {}) {
 
 // scout 实例：为工作区获取真实模型清单的临时代理。
 // session:new / setWorkdir 到无缓存工作区时，没有活实例调 supportedModels()→前端无模型可选。
-// scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose → 删除 CLI 残留文件。
+// scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose。
+// 不留 transcript 靠的是 CLI 自己的保证（ephemeral → persistSession:false → --no-session-persistence，#452），
+// 不是事后删文件：旧实现按 onSessionId 拿到的 sid 去 unlink，可 scout 拿不到 init、回调从不触发，那段清理是死代码。
 // 与缓存关系：缓存加速后续（免重复 spawn），但第一次靠 scout 保证确定性——不用猜、不等实例、不靠上区残留。
 const activeScouts = new Map(); // cwd → AgentSession：去重，防连点刷新/并发触发重复 spawn
-function disposeScoutFor(cwd, opts) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
+function disposeScoutFor(cwd) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
   const old = activeScouts.get(cwd);
-  // 走 scout 自己的 cleanup 而非裸 dispose：后者不清 20s 兜底定时器、也不删 CLI 建的 <sid>.jsonl 残留。
-  // opts 透传给 cleanup（关闭路径传 { immediate: true }，见 cleanup 的注释）。
-  if (old) { try { (old._scoutCleanup || ((() => old.dispose())))(opts); } finally { activeScouts.delete(cwd); } }
+  // 走 scout 自己的 cleanup 而非裸 dispose：后者不清 20s 兜底定时器。
+  if (old) { try { (old._scoutCleanup || ((() => old.dispose())))(); } finally { activeScouts.delete(cwd); } }
 }
 function openScoutInstance(cwd) {
   if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
@@ -2669,6 +2670,7 @@ function openScoutInstance(cwd) {
     resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，scout 也须注入才能拿到正确网关的模型列表
     // 同上：scout 的模型清单也须来自隔离后的网关（scout 不走 ultracode）
     worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)),
+    ephemeral: true, // 不落盘：抽屉里不出「(无标题)」幽灵会话（#452）。只有这里能传，普通会话传了等于丢数据
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
@@ -2697,9 +2699,7 @@ function openScoutInstance(cwd) {
       // 压制所有其他事件：scout 对前端完全不可见
     },
     onSessionId: (sid, firstMessage, model) => {
-      // 仅记日志并暂存 sid——CLI 的 init 会在 ~/.claude/projects/<projectDir>/ 下创建 <sid>.jsonl，
-      // dispose 后需删掉此残留文件以防幽灵会话出现在 listSessions 中。
-      instance._scoutSid = sid;
+      // 只记日志。
       // ★ 这里【不】调 recordCwdDefaultModel，也别再加回来。
       // 曾经这样写过，注释还宣称「scout 恒 fresh → 其 init.model 即 cwd CLI 默认，权威缓存之」——
       // 那段行为从未发生过。scout 从不发消息，而 CLI 在首条消息前不输出 init（见 agent.js#fetchModels
@@ -2713,51 +2713,21 @@ function openScoutInstance(cwd) {
     // 不设 onExit：cleanup 显式调 dispose，consume 循环以 disposed=true 结束并跳过 onExit。
   });
 
-  // 防重入：models 事件与 20s 兜底定时器都可能进来，只做一次。
-  // 旧实现用 `if (instance.disposed) return` 当重入闸，但 disposeScoutFor（config:refresh 换 scout）
-  // 走的是 instance.dispose() 而非本函数——定时器没被清，20s 后照常进来，此时 disposed 已为 true
-  // 便早早返回，连带跳过下面的 transcript 残留清理，留下这段注释自己声明要防的「(无标题)」幽灵条目。
+  // 防重入：models 事件、20s 兜底定时器、disposeScoutFor 都可能进来，只做一次。
+  // 用独立标志而不是 instance.disposed：实例先在别处被 dispose 时，定时器到点仍要走完摘 activeScouts 这一步，
+  // 否则同 cwd 以后一直复用一个死实例。
   let cleanedUp = false;
-  // immediate：同步删 transcript 残留，不走那条 300ms 延时。关闭路径必须用它——shutdown()
-  // 末尾是 `io.close(() => process.exit(0))`，无长连接时 io.close 几乎立刻回调，进程在 300ms
-  // 定时器 fire 之前就没了，残留照样留在盘上，而 shutdown 里那行注释声称的正是「裸退出留不下这些」。
-  function cleanup({ immediate = false } = {}) {
+  function cleanup() {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimeout(timer);
     activeScouts.delete(cwd);
-    const sid = instance._scoutSid;
-    if (!instance.disposed) instance.dispose();
-    // dispose 触发 abort → CLI 进程退出。CLI 启动时已在 ~/.claude/projects/<projectDir>/
-    // 创建了 <sid>.jsonl 文件（含 init 系统消息等）；留之会在 listSessions 中出现「(无标题)」幽灵条目。
-    // 异步延迟删除：给 CLI 进程一个信号处理的窗口，避免 unlink 与 CLI 写文件竞争。
-    // immediate 下放弃这个窗口是刻意的：进程马上就要退出，「删不干净」的代价确定发生，
-    // 而竞争的代价只是 unlink 早一点（POSIX 下 CLI 持有的 fd 不受影响，也不会把文件写回来）。
-    if (sid) {
-      const removeTranscript = () => {
-        try {
-          const projectDir = getProjectDir(cwd);
-          const file = join(CLAUDE_PROJECTS_DIR, projectDir, `${sid}.jsonl`);
-          // safe-path: projectDir 这一段【目录】是 getProjectDir(cwd) 算出来的。它若返回空串，
-          // 路径就从 <根>/<项目>/<sid>.jsonl 塌成 <根>/<sid>.jsonl——打到 projects 根目录下。
-          // 今天无害的唯一理由是这里用的是 unlinkSync（单文件）：目标不存在就抛、被 catch 吞掉，
-          // 且它对目录会直接抛 EISDIR，删不动任何一棵树。
-          // ⚠️ 谁要把这里改成 rmSync(..., { recursive: true })（比如为了顺带删子 agent 的 transcript
-          // 子目录），先想清楚这一段：2026-08-02 删掉 70 个项目 / 291 memory / 2990 transcript 的，
-          // 就是同一形态的递归版本——同一个 getProjectDir 被变异成恒返回 ''，join 塌成真实根本身。
-          // 真要递归，必须先在删除点加护栏：resolve(target) === resolve(根) 就抛错。
-          unlinkSync(file);
-          invalidateListCache(cwd);
-        } catch { /* 文件可能已被 CLI 清理或不存在——非致命 */ }
-      };
-      if (immediate) removeTranscript();
-      else setTimeout(removeTranscript, 300);
-    }
+    if (!instance.disposed) instance.dispose(); // dispose 触发 abort → CLI 进程退出
   }
 
-  instance._scoutCleanup = cleanup; // 供 disposeScoutFor 走完整清理（清定时器 + 删 transcript 残留）
+  instance._scoutCleanup = cleanup; // 供 disposeScoutFor 走完整清理（清定时器 + dispose）
 
-  // 20s 超时：CLI 卡死时释放资源 + 清理残留文件，避免僵尸实例/文件常驻
+  // 20s 超时：CLI 卡死时释放资源，避免僵尸实例常驻
   const timer = setTimeout(() => {
     console.warn(`[scout] 模型获取超时 (${cwd})，释放实例`);
     cleanup();
@@ -5539,10 +5509,8 @@ function shutdown(sig) {
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
-  // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 删 CLI 建的 <sid>.jsonl 残留，裸退出留不下这些。
-  // immediate:true 不是可选的优化——cleanup 缺省把 unlink 挂在 300ms 定时器上，而本函数末尾
-  // io.close 的回调随即 process.exit(0)，无长连接时几乎立即返回，定时器根本轮不到 fire。
-  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd, { immediate: true });
+  // 走 scout 自己的 cleanup：清 20s 兜底定时器 + 杀 CLI 子进程。
+  for (const cwd of [...activeScouts.keys()]) disposeScoutFor(cwd);
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在

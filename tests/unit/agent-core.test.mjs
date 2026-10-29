@@ -318,6 +318,25 @@ test.describe('hasPriorHistory 接线', () => {
   });
 });
 
+// #452：scout（拉模型清单的临时实例）靠 CLI 的 --no-session-persistence 不落盘，不再事后按 sid 删 jsonl。
+// 这个开关一旦漏到普通会话上，用户的会话就不写 transcript——等于丢数据，所以两个方向都要锁。
+test.describe('buildAgentQueryOptions — persistSession 只给 scout 关', () => {
+  const optsOf = (sessionOpts) => {
+    const { s, dispose } = makeSession(sessionOpts);
+    try { return buildAgentQueryOptions(s, { ...process.env }); } finally { dispose(); }
+  };
+
+  test('ephemeral:true（scout）→ persistSession:false', () => {
+    assert.equal(optsOf({ ephemeral: true }).persistSession, false,
+      'scout 没带 persistSession:false：CLI 会为它写 transcript，抽屉里冒出「(无标题)」幽灵会话');
+  });
+
+  test('普通会话不出现 persistSession 键', () => {
+    assert.equal('persistSession' in optsOf({}), false,
+      '普通会话带上了 persistSession：用户的会话不会写盘，等于丢数据');
+  });
+});
+
 // 会话中途换 cwd（EnterWorktree / ExitWorktree）。
 //
 // 【为什么实例的 cwd 必须跟着走】2026-09-13 真机形态：会话在父仓开，中途 EnterWorktree 进

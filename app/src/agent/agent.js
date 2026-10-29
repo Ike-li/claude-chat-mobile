@@ -103,8 +103,10 @@ const CONTROL_TAG_SUBSYSTEM = {
 };
 
 // fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
-// = 一次真实网络请求 + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传），
-// 而我们只用其中的 rate_limits 百分比与 session.lines。CLI 自己的 statusline 走的是另一条路：
+// = 一次真实网络请求 + 一次全量 transcript 扫盘（扫近 7 天 transcript 填 behaviors 段），
+// 而我们只用其中的 rate_limits 百分比与 session.lines。扫盘那半已用 skipBehaviors:true 关掉（#450，
+// 不认识该字段的旧 CLI 会照扫，只是省不下来）；以后要做 behaviors 洞察面板，就在那里单独发一次不跳过的，
+// 别回退这里的轮询。剩下的网络请求仍然昂贵。CLI 自己的 statusline 走的是另一条路：
 // 从 API 响应头 anthropic-ratelimit-unified-* 解析进内存后同步读，成本为零。
 // 既然拿不到便宜那条，就把昂贵这条的频率压到与数据变化率匹配——5h/7d 窗口按分钟变化，
 // 而 statusline 每 10s 兜底轮询 + 每个 assistant usage 边界都会拉起它。
@@ -258,6 +260,9 @@ export function buildAgentQueryOptions(session, env = process.env) {
     // 要等有人真的点回退才暴露。写入方是 CLI 自己的数据目录，CCM 不碰。
     enableFileCheckpointing: true,
     abortController: session.abort,
+    // 只有 scout（拉模型清单的临时实例）不落盘，对应 CLI --no-session-persistence（#452）。
+    // 判据必须是显式的 ephemeral：误给普通会话就等于用户的会话不写 transcript。
+    ...(session.ephemeral ? { persistSession: false } : {}),
     includePartialMessages: true,                        // E4 流式
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
     agentProgressSummaries: progressOn,                  // ~30s AI 进度 → task_progress.summary（默认开）
@@ -445,7 +450,7 @@ function toolResultRaw(toolName, structured, content) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（instance-manager 的 nextId）。
     this.instanceId = instanceId;
@@ -486,10 +491,12 @@ export class AgentSession {
     // 内含中和后的 env（canonical 独有的网关键置空串，worktree 自配的照常生效）+ ultracode。
     // 走文件而非内联对象，是因为对象形式会被 SDK 拼进子进程 argv、令自配凭据在 ps 里明文可见。
     this.worktreeSettingsPath = worktreeSettingsPath || undefined;
+    this.ephemeral = Boolean(ephemeral); // 只有 scout 传 true：不落盘（见 buildAgentQueryOptions）
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准
     this.sawInit = false;               // F4：init 事件到达置 true；未到即结束 → resume 失败
+    this.cliCapabilities = new Set();   // init 上报的协议能力（#453），见 hasCliCapability
     this.resumeFailed = false;          // F4：onExit 时通知 server 清当前会话，打破死循环
     this.epoch = nextEpoch();
     this.seq = 0;
@@ -1403,7 +1410,7 @@ export class AgentSession {
     // 窗内早退不碰 lastUsageFetchFailure——沿用上次判定依据，与快照回落配合保持状态稳定。
     if (this._usageFetchAt && now - this._usageFetchAt < windowMs) return this._usageCached;
     // 在途去重 + 年龄上限。timeoutMs 到点只是【本方放弃等待】，CLI 侧那一发仍在飞
-    // （get_usage = 一次真实网络请求 + 一次全量 transcript 扫盘）。只靠节流窗的话，窗一到就再发
+    // （get_usage 至少是一次真实网络请求）。只靠节流窗的话，窗一到就再发
     // 一发，未返回的请求会在 CLI 侧重叠。
     // 【观察 vs 因果，别混】2026-08-17 排查会话 4d4443ce 时，该实例对 API 的并发连接数显著高于
     // 同机终端 CLI（峰值 20+ vs 稳定 4）。但同期 web 消息取件被拖延数百秒这件事，其因果未能证实：
@@ -1420,7 +1427,7 @@ export class AgentSession {
     const seq = ++this._usageSeq; // 发出顺序：settle 顺序可能与它相反（见 _adoptUsage 的时序守卫）
     let timer = null;
     try {
-      const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET());
+      const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
       this._usageInFlight = rpc;
       this._usageInFlightAt = now;
       // 结算挂在 rpc 自身的 settle 上，不在下面的 try/finally 里——那两处在【本地超时】那一刻就跑，
@@ -1489,6 +1496,13 @@ export class AgentSession {
   // flag（allowDangerouslySkipPermissions），那会连 default 审批一起跳过；bypass 改由 handleCanUseTool 放行。
   sdkPermissionMode() {
     return this.permissionMode === 'bypassPermissions' ? 'default' : this.permissionMode;
+  }
+
+  // CLI 在 init 里自报的协议能力（SDKSystemMessage.capabilities，如 ask_user_question_unanswered_v1）。
+  // 要按能力开关的功能用它，别按 CLI 版本号猜。init 到达前、或旧 CLI 不报这个字段时一律 false：
+  // 不知道就当不支持——给旧 CLI 发它不认的字段，严格宿主下会被整份拒收。CLI 要到首条消息之后才吐 init。
+  hasCliCapability(name) {
+    return this.cliCapabilities.has(name);
   }
 
   // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
@@ -2923,6 +2937,8 @@ export class AgentSession {
             this.permissionMode = sdkMode;
           }
           if (msg.model) this.reportedModel = msg.model; // A5：交互日志显真实运行模型，不再记 'default'
+          // 每次 init 都整份覆盖：resume / 置换后背后可能是另一个版本的 CLI，旧能力不能残留（#453）。
+          this.cliCapabilities = new Set(Array.isArray(msg.capabilities) ? msg.capabilities : []);
           // 非法 session_id 的防御须贯彻到回调（F4，2026-08-03）：上面维持了 this.sessionId，
           // 这里若仍透传原始值，app.js 会拿它 writeSessionEntrypoint（写出 undefined.jsonl）+
           // upsertSession（sessions.json 垃圾条目，重启 load 才清洗）。不调即不产生下游副作用。

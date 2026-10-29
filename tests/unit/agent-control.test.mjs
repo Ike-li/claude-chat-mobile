@@ -663,6 +663,16 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     s.dispose();
   });
 
+  test('#450 请求带 skipBehaviors:true（只取额度，不让 CLI 每次扫近 7 天 transcript 填 behaviors）', async () => {
+    const { s } = makeSession();
+    const seen = [];
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (opts) => { seen.push(opts); return {}; } };
+    await s.fetchUsage(1500, { minIntervalMs: 0 });
+    assert.deepEqual(seen, [{ skipBehaviors: true }],
+      '没传 skipBehaviors：CLI 会为没人读的 behaviors 段全量扫盘，在大机器上把这条 RPC 推过 1.5s 超时、额度栏停更');
+    s.dispose();
+  });
+
   test('无 q（实例未 start）→ null（不崩）', async () => {
     const { s } = makeSession();
     s.q = null;
@@ -693,7 +703,7 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
 });
 
 // SDK get_usage 在 CLI 侧不是"读一个内存里的百分比"：CLI 2.1.220 实测，它 = 一次真实网络请求
-// + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传）。而 statusline 每
+// + 一次全量 transcript 扫盘（后者已用 skipBehaviors 关掉，见 #450 那条用例）。而 statusline 每
 // 10s 兜底轮询 + 每个 assistant usage 边界都会把它拉起。额度是 5h/7d 窗口、按分钟变化——
 // 频率与数据变化率严重失配，是 1500ms 偶发超时的结构性来源。now 注入而非假时钟：纯函数式、零 flake。
 test.describe('fetchUsage() 节流（昂贵 RPC 的调用频率对齐数据变化率）', () => {

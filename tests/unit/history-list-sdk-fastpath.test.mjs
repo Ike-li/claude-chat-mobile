@@ -57,7 +57,7 @@ function writeJSONL(dir, id, entries) {
 test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不返回 model/entrypoint', async () => {
   const cwd = '/sdk/quick';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  // sid-1/sid-2 写真实 jsonl（归属本 cwd）；sid-ghost 不写——模拟 SDK dir 匹配混入的祖先目录会话
+  // sid-1/sid-2 写真实 jsonl（归属本 cwd）；sid-ghost 不写——模拟 SDK 混入的别处会话（worktree 展开已关，过滤仍兜底）
   writeJSONL(dir, 'sid-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
   writeJSONL(dir, 'sid-2', [{ type: 'user', message: { role: 'user', content: 'yo' } }]);
   let captured;
@@ -75,8 +75,8 @@ test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不�
     assert.equal(captured.dir, cwd);
     // 小 limit 也按硬顶+1 取候选，便于按消息时间重排（默认 6 条时 resume 刷 mtime 的旧会话不占满窗口）
     assert.equal(captured.limit, MAX_SESSION_LIMIT + 1);
-    // ③ 归属过滤：jsonl 不在本 cwd 项目目录的会话滤掉（SDK dir 匹配含祖先目录——worktree 查询会混入
-    //    主仓会话；与 session:switch 的 sessionFileExists 归属校验同一语义，列表≡可切换）
+    // ③ 归属过滤：jsonl 不在本 cwd 项目目录的会话滤掉（兜底编码撞名等；worktree 展开混入已在源头关掉，见 #451；
+    //    与 session:switch 的 sessionFileExists 归属校验同一语义，列表≡可切换）
     assert.equal(sessions.length, 2);
     assert.deepEqual(sessions.map(s => s.id).sort(), ['sid-1', 'sid-2']);
     const s1 = sessions.find(s => s.id === 'sid-1');
@@ -297,6 +297,30 @@ test('搜索: query 不把 SDK 窗当候选集——窗外旧会话仍能命中'
     const found = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 50, query: 'UniqueNeedle' });
     assert.equal(found.sessions.length, 1);
     assert.equal(found.sessions[0].id, 'needle-old');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// #451：SDK listSessions 的 includeWorktrees 缺省 true，会跑 git worktree list 再把每棵 worktree 的会话都返回。
+// 成员目录的并入本模块自己做（listProjectMemberDirs），SDK 再展开一次只会让别棵树的会话占掉候选窗、随后被归属过滤丢掉。
+test('SDK 快路径与搜索 overlay: 两处 listSessions 都关掉 worktree 展开', async () => {
+  const cwd = '/sdk/no-worktree-expand';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'w-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  const calls = [];
+  __setSdkListSessionsForTest(async (opts) => { calls.push(opts); return [{ sessionId: 'w-1', summary: 'hi', lastModified: Date.now() }]; });
+  try {
+    await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
+    const listCalls = calls.splice(0);
+    await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5, query: 'hi' });
+    const searchCalls = calls.splice(0);
+    assert.ok(listCalls.length > 0 && searchCalls.length > 0, '列表和搜索都该走到 SDK listSessions，否则下面的断言是空过');
+    for (const [where, got] of [['列表快路径', listCalls], ['搜索 overlay', searchCalls]]) {
+      assert.ok(got.every(o => o.includeWorktrees === false),
+        `${where}没关 includeWorktrees：别棵 worktree 的会话会挤占本目录的候选窗，实际传参 ${JSON.stringify(got)}`);
+    }
   } finally {
     __setSdkListSessionsForTest(undefined);
     rmProjectDir(dir);
