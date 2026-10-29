@@ -496,6 +496,7 @@ export class AgentSession {
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准
     this.sawInit = false;               // F4：init 事件到达置 true；未到即结束 → resume 失败
+    this.cliCapabilities = new Set();   // init 上报的协议能力（#453），见 hasCliCapability
     this.resumeFailed = false;          // F4：onExit 时通知 server 清当前会话，打破死循环
     this.epoch = nextEpoch();
     this.seq = 0;
@@ -1495,6 +1496,13 @@ export class AgentSession {
   // flag（allowDangerouslySkipPermissions），那会连 default 审批一起跳过；bypass 改由 handleCanUseTool 放行。
   sdkPermissionMode() {
     return this.permissionMode === 'bypassPermissions' ? 'default' : this.permissionMode;
+  }
+
+  // CLI 在 init 里自报的协议能力（SDKSystemMessage.capabilities，如 ask_user_question_unanswered_v1）。
+  // 要按能力开关的功能用它，别按 CLI 版本号猜。init 到达前、或旧 CLI 不报这个字段时一律 false：
+  // 不知道就当不支持——给旧 CLI 发它不认的字段，严格宿主下会被整份拒收。CLI 要到首条消息之后才吐 init。
+  hasCliCapability(name) {
+    return this.cliCapabilities.has(name);
   }
 
   // 当前 UI 思考档（ultracode 是 UI 档，SDK 侧实为 xhigh + Settings.ultracode）。
@@ -2929,6 +2937,8 @@ export class AgentSession {
             this.permissionMode = sdkMode;
           }
           if (msg.model) this.reportedModel = msg.model; // A5：交互日志显真实运行模型，不再记 'default'
+          // 每次 init 都整份覆盖：resume / 置换后背后可能是另一个版本的 CLI，旧能力不能残留（#453）。
+          this.cliCapabilities = new Set(Array.isArray(msg.capabilities) ? msg.capabilities : []);
           // 非法 session_id 的防御须贯彻到回调（F4，2026-08-03）：上面维持了 this.sessionId，
           // 这里若仍透传原始值，app.js 会拿它 writeSessionEntrypoint（写出 undefined.jsonl）+
           // upsertSession（sessions.json 垃圾条目，重启 load 才清洗）。不调即不产生下游副作用。

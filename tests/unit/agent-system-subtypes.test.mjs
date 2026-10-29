@@ -521,3 +521,34 @@ test.describe('map() — status 心跳静默吞（止住兜底日志刷屏）', 
     s.dispose();
   });
 });
+
+// #453：init 带 CLI 自报的协议能力（capabilities）。按能力开关的功能（如 #455 的 unanswered 标注）只能发给
+// 声明了该能力的 CLI，否则较旧的 CLI 在严格宿主下会拒收整份答案——所以不知道时必须当作不支持。
+test.describe('map() — init 的 capabilities 存下来供按能力开关', () => {
+  const init = (s, extra) => s.map({ type: 'system', subtype: 'init', session_id: 'sid-cap', model: 'm1', ...extra });
+
+  test('init 声明了的能力 → true；没声明的 → false', () => {
+    const { s } = makeSession();
+    init(s, { capabilities: ['ask_user_question_unanswered_v1', 'interrupt_receipt_v1'] });
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), true, 'CLI 声明了的能力查不到：依赖它的功能永远不会开');
+    assert.equal(s.hasCliCapability('interrupt_cancel_queued_v1'), false);
+    s.dispose();
+  });
+
+  test('旧 CLI 不带该字段、或 init 还没到 → 一律 false', () => {
+    const { s } = makeSession();
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, 'init 前就答「支持」：会给旧 CLI 发它不认的字段');
+    init(s, {});
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, '没声明却答「支持」：会给旧 CLI 发它不认的字段');
+    s.dispose();
+  });
+
+  test('再来一次 init（resume / 换会话）以新的为准，旧能力不残留', () => {
+    const { s } = makeSession();
+    init(s, { capabilities: ['ask_user_question_unanswered_v1'] });
+    init(s, { capabilities: ['interrupt_receipt_v1'] });
+    assert.equal(s.hasCliCapability('interrupt_receipt_v1'), true, '第二次 init 声明的能力查不到：resume 后能力集没更新');
+    assert.equal(s.hasCliCapability('ask_user_question_unanswered_v1'), false, '上一个 CLI 的能力残留：背后换成旧版 CLI 后仍会按新版行为发');
+    s.dispose();
+  });
+});
