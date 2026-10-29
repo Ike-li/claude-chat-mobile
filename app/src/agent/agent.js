@@ -260,6 +260,9 @@ export function buildAgentQueryOptions(session, env = process.env) {
     // 要等有人真的点回退才暴露。写入方是 CLI 自己的数据目录，CCM 不碰。
     enableFileCheckpointing: true,
     abortController: session.abort,
+    // 只有 scout（拉模型清单的临时实例）不落盘，对应 CLI --no-session-persistence（#452）。
+    // 判据必须是显式的 ephemeral：误给普通会话就等于用户的会话不写 transcript。
+    ...(session.ephemeral ? { persistSession: false } : {}),
     includePartialMessages: true,                        // E4 流式
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
     agentProgressSummaries: progressOn,                  // ~30s AI 进度 → task_progress.summary（默认开）
@@ -447,7 +450,7 @@ function toolResultRaw(toolName, structured, content) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, effortAuto = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, onCwdChanged, onEffortEffective, onQuotaWall, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir, claudeGlobalConfigPath, ephemeral = false }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（instance-manager 的 nextId）。
     this.instanceId = instanceId;
@@ -488,6 +491,7 @@ export class AgentSession {
     // 内含中和后的 env（canonical 独有的网关键置空串，worktree 自配的照常生效）+ ultracode。
     // 走文件而非内联对象，是因为对象形式会被 SDK 拼进子进程 argv、令自配凭据在 ps 里明文可见。
     this.worktreeSettingsPath = worktreeSettingsPath || undefined;
+    this.ephemeral = Boolean(ephemeral); // 只有 scout 传 true：不落盘（见 buildAgentQueryOptions）
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准
