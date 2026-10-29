@@ -5,14 +5,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const css = readFileSync(join(root, 'app/public/css/app.css'), 'utf8');
 const tw = readFileSync(join(root, 'app/public/js/tw-config.js'), 'utf8');
 const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
-const appJs = readFileSync(join(root, 'app/public/js/app.js'), 'utf8');
-// #359：日志抽屉的渲染从 app.js 迁到了 app/console-modal.js
-const consoleJs = readFileSync(join(root, 'app/public/js/app/console-modal.js'), 'utf8');
+const appJs = readAppJsSource();
 const i18n = readFileSync(join(root, 'app/public/js/i18n.js'), 'utf8');
 
 function consoleModalBlock() {
@@ -55,15 +54,15 @@ test('#368 #consoleModal 壳层不用 Tailwind gray-*', () => {
 });
 
 test('#368 过滤钮切换与默认日志正文用 console-*（非 gray）', () => {
-  assert.match(consoleJs, /classList\.toggle\('bg-console-sunk',\s*active\)/);
-  assert.match(consoleJs, /classList\.toggle\('text-console-ink',\s*active\)/);
-  assert.match(consoleJs, /classList\.toggle\('text-console-ink-faint',\s*!active\)/);
-  assert.doesNotMatch(appJs + consoleJs, /classList\.toggle\('bg-gray-\d+'/);
-  assert.doesNotMatch(appJs + consoleJs, /classList\.toggle\('text-gray-\d+'/);
-  assert.match(consoleJs, /textClass = 'text-console-ink'/);
-  assert.match(consoleJs, /bg-console-surface text-console-ink-soft border border-console-line/);
+  assert.match(appJs, /classList\.toggle\('bg-console-sunk',\s*active\)/);
+  assert.match(appJs, /classList\.toggle\('text-console-ink',\s*active\)/);
+  assert.match(appJs, /classList\.toggle\('text-console-ink-faint',\s*!active\)/);
+  assert.doesNotMatch(appJs, /classList\.toggle\('bg-gray-\d+'/);
+  assert.doesNotMatch(appJs, /classList\.toggle\('text-gray-\d+'/);
+  assert.match(appJs, /textClass = 'text-console-ink'/);
+  assert.match(appJs, /bg-console-surface text-console-ink-soft border border-console-line/);
   assert.doesNotMatch(
-    appJs + consoleJs,
+    appJs,
     /tsSpan\.className = 'text-gray-/,
     '时间戳不得再用 text-gray-*',
   );

@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const html = readFileSync(join(root, 'app/public/index.html'), 'utf8');
-const appJs = readFileSync(join(root, 'app/public/js/app.js'), 'utf8');
+const appJs = readAppJsSource();
 const syncJs = readFileSync(join(root, 'app/public/js/app/connection-sync.js'), 'utf8');
 
 test('#379 #connRtt 不得挂 aria-live（每 5s 重写会刷屏）', () => {

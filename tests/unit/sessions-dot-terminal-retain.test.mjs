@@ -6,13 +6,10 @@
 // 若以后抽成可测模块，把断言换成行为层，并删掉本文件的源码扫。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { summarizeOtherWorkspaces } from '../../app/public/js/logic.js';
+import { readAppJsSource } from '../helpers/frontend-source.mjs';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const appSrc = readFileSync(join(ROOT, 'app/public/js/app.js'), 'utf8');
+const appSrc = readAppJsSource();
 
 function extractFunctionBody(src, name) {
   const start = src.indexOf(`function ${name}(`);
