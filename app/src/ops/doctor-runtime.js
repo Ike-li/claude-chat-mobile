@@ -10,7 +10,7 @@ import { ALL_CONFIG_KEYS } from './config-file.js';
 import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
 import { parseProcNetTcpListeners, statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, deviceApprovalScopeDiagnostic, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic, tailscaleDiagnostic, workdirBreadthDiagnostic, workdirPresenceDiagnostic } from './doctor-checks.js';
-import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
+import { resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { childEnv } from '../shared/child-env.js';
 import { findWorktreeOwner, resolveAuthorizedCwd } from '../sessions/folder-access.js';
 
@@ -207,37 +207,36 @@ export function countConfigPermProblems(rootDir, { platform = process.platform, 
   return problems;
 }
 
-// CLI 的 settings 三层链：user(global) → 各 workDir 的 project → 同目录的 local（后者覆盖前者）。
-// 权限合并与模型体检【共用这一份】：两处各写一套遍历时，链一变化（CLI 新增作用域、要支持
-// managed-settings）只会有一个被更新，另一个继续基于陈旧视图出报告——而 doctor 的职责恰恰是
-// 告诉用户配置是否自洽。本次「模型体检丢了用户级 env」正是重复遍历的直接产物。
-// 容错：读/解析失败的源 json 为 null（比照 workdirs.js 的「坏配置不清空」），坏 JSON 不让体检崩。
-function readSettingsChain({ home, workDirs = [] } = {}) {
-  const parse = (file) => {
-    try {
-      return JSON.parse(readFileSync(file, 'utf8'));
-    } catch {
-      return null;                       // 缺文件 / 坏 JSON → skip
+// CLI 的 settings 链：user(global) → 各 workDir 的 project → 同目录的 local（后者覆盖前者），外加 managed。
+// 权限合并与模型体检【共用这一份】：两处各写一套遍历时，链一变化只会有一个被更新，另一个继续基于
+// 陈旧视图出报告——而 doctor 的职责恰恰是告诉用户配置是否自洽。「模型体检丢了用户级 env」正是重复遍历的直接产物。
+//
+// 取数走 SDK resolveSettings 的 sources（#454）：与新会话默认值、设置面板的审批规则同一个合并引擎，
+// 体检不再自己按路径拼 JSON——此前看不到 managed / MDM 策略层，坏文件的跳过口径也跟不上 CLI 的修正。
+// user 与 managed 和目录无关，只取一次（settingSources 只给 user，免得 SDK 按进程 cwd 去读 project/local）；
+// 每个目录再单取 project / local。坏 JSON 的那一层 SDK 直接不列（2026-10-29 实测 0.3.310），同目录别的层照读；
+// 整次调用抛错才当这几层缺席，不让体检崩。flag 层是 --settings 下发的，体检不经过它。
+const SCOPE_OF_SOURCE = { user: 'global', project: 'project', local: 'local', managed: 'managed' };
+async function readSettingsChain({ workDirs = [], resolve = sdkResolveSettings } = {}) {
+  const out = [];
+  const take = async (opts, wanted, dir) => {
+    let sources;
+    try { sources = (await resolve(opts))?.sources; } catch { return; }
+    for (const s of Array.isArray(sources) ? sources : []) {
+      if (wanted.includes(s?.source)) out.push({ scope: SCOPE_OF_SOURCE[s.source], dir, file: s.path ?? null, json: s.settings ?? null });
     }
   };
-  const out = [];
-  if (home) {
-    const file = claudeSettingsPath(home);
-    out.push({ scope: 'global', dir: null, file, json: parse(file) });
-  }
+  await take({ settingSources: ['user'] }, ['user', 'managed'], null);
   for (const dir of workDirs || []) {
-    for (const [scope, name] of [['project', 'settings.json'], ['local', 'settings.local.json']]) {
-      const file = join(claudeHome(dir), name);
-      out.push({ scope, dir, file, json: parse(file) });
-    }
+    await take({ cwd: dir, settingSources: ['project', 'local'] }, ['project', 'local'], dir);
   }
   return out;
 }
 
-// 读并合并 permissions.allow（~/.claude/settings.json + 各 workDir 的 .claude/settings.json[.local]），标注 scope。
-export function readMergedPermissions({ home, workDirs = [] } = {}) {
+// 读并合并各层 permissions.allow（user / managed + 各 workDir 的 project / local），标注 scope。
+export async function readMergedPermissions({ workDirs = [], resolve } = {}) {
   const sources = [];
-  for (const { scope, file, json } of readSettingsChain({ home, workDirs })) {
+  for (const { scope, file, json } of await readSettingsChain({ workDirs, resolve })) {
     const rules = json?.permissions?.allow;
     if (Array.isArray(rules)) sources.push({ scope, file, rules });
   }
@@ -249,7 +248,8 @@ export function readMergedPermissions({ home, workDirs = [] } = {}) {
 // 读 user 的 model + 各 workDir 的 project/local 里 model 与 ANTHROPIC_DEFAULT_<档位>_MODEL（只抽字段，不回显 token）。
 // 按目录分组返回：多网关并存时（本机 9 个目录各配各的），混成一个扁平数组比对会让归属随机、
 // 建议指向错误的目录。档位名从 env key 提取，值只用于判「该档位是否已映射」。
-export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
+// managed 层不参与这里的比对（与改用 SDK 取数之前一致）。
+export async function readModelSettingsSnapshot({ workDirs = [], resolve } = {}) {
   const collectTiers = (j, into) => {
     const env = j?.env && typeof j.env === 'object' ? j.env : null;
     if (!env) return into;
@@ -263,7 +263,7 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
   };
   const modelOf = (j) => (j?.model != null ? String(j.model).trim() : '');
 
-  const chain = readSettingsChain({ home, workDirs });
+  const chain = await readSettingsChain({ workDirs, resolve });
   const global = chain.find(s => s.scope === 'global');
   const userModel = modelOf(global?.json);
   // 用户级 env 是【每个目录的基底】：CLI 把 ~/.claude/settings.json 的 env 合并进所有目录，
@@ -271,10 +271,11 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
   // 漏掉它是双向错的——全局配网关时整条检查恒绿假 OK，全局+目录混合时反过来误报 warn。
   const userTiers = collectTiers(global?.json, {});
 
-  const byDir = new Map();
+  // 每个连接的目录都要有一项：SDK 不列没有 settings 文件（或内容为空）的层，只按链建表的话，
+  // 只继承了全局网关映射的目录会整个消失，全局那份映射就没人比对了。
+  const byDir = new Map((workDirs || []).map(dir => [dir, { dir, projectModel: '', localModel: '', tierTargets: { ...userTiers } }]));
   for (const { scope, dir, json } of chain) {
     if (!dir) continue;
-    if (!byDir.has(dir)) byDir.set(dir, { dir, projectModel: '', localModel: '', tierTargets: { ...userTiers } });
     const entry = byDir.get(dir);
     collectTiers(json, entry.tierTargets);               // project 覆盖 global，local 再覆盖 project
     if (scope === 'project') entry.projectModel = modelOf(json);
@@ -287,7 +288,8 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
 // 项数以下方 checks.push 为准，并由 tests/unit/doctor-runtime.test.mjs 的
 // `assert.equal(rep.checks.length, N)` 硬锁——增删项会让那条断言红，据它更新即可。
 // （这里刻意不写具体数字：此前写死的「6 项」「12 项」都在陆续加项后失真过，注释计数没有闸门盯着。）
-export function runDoctor(ctx = {}) {
+// ctx.resolveSettings 可注入（测试替身）；缺省用 SDK 的，user 层由 CLAUDE_CONFIG_DIR / ~/.claude 决定。
+export async function runDoctor(ctx = {}) {
   const checks = [];
 
   // 分类与措辞都走共用的 authTokenDiagnostic —— 与 scripts/doctor.js 同一份判定。
@@ -425,7 +427,7 @@ export function runDoctor(ctx = {}) {
   checks.push({ id: 'DEVICES', status: (ctx.pendingDevices || 0) > 0 ? 'warn' : 'ok', detail: `信任 ${ctx.trustedDevices || 0} 台 / 待批 ${ctx.pendingDevices || 0} 台`, safe: { trusted: ctx.trustedDevices || 0, pending: ctx.pendingDevices || 0 } });
 
   // 模型设置冲突：全局 model vs local ANTHROPIC_DEFAULT_*（不回显 env 密钥，只报 model 名与映射目标）
-  const modelSnap = readModelSettingsSnapshot({ home: ctx.home, workDirs: ctx.workDirs || [] });
+  const modelSnap = await readModelSettingsSnapshot({ workDirs: ctx.workDirs || [], resolve: ctx.resolveSettings });
   const modelDiag = modelSettingsConflictDiagnostic(modelSnap);
   checks.push({
     id: 'MODEL_SETTINGS',
@@ -455,7 +457,7 @@ export function runDoctor(ctx = {}) {
   });
 
   // 危险白名单：读合并 permissions.allow，危险条附 scope（让用户知道改哪个文件），非危险不列。
-  const merged = readMergedPermissions({ home: ctx.home, workDirs: ctx.workDirs || [] });
+  const merged = await readMergedPermissions({ workDirs: ctx.workDirs || [], resolve: ctx.resolveSettings });
   const sum = summarizeDangerous(merged.allow.map(a => a.rule));
   // SONNET-BUG-1：旧实现 `merged.allow.find(a => a.rule === d.rule)?.scope` 只取首个匹配——同一危险规则若同时
   // 出现在 global 与 project，恒被标成 global（首命中），项目级重复规则误标；且 summarizeDangerous 逐条 map，

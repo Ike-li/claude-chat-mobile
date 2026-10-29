@@ -540,6 +540,7 @@ export const EN_DICT = Object.freeze({
   '没预先放行的一律拒绝，不弹询问': 'Deny if not pre-approved, no prompts',
   '由模型分类器决定放行或拒绝': 'Model classifier approves or denies',
   '跳过所有权限检查': 'Bypass all permission checks',
+  '已被 settings 禁用（disableAutoMode）': 'Disabled by settings (disableAutoMode)',
   '来源：终端（CLI）': 'source CLI',
   '来源：网页（SDK）': 'source Web SDK',
   '刚有一次登录失败，{n} 秒后自动重试': 'A sign-in attempt just failed; retrying automatically in {n}s',

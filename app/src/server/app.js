@@ -23,7 +23,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, defaultsFromResolvedSettings, permissionRulesFromEffectiveSettings, autoModeBlocked, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import * as readState from '../sessions/read-state.js';
 import * as folderOrder from '../sessions/folder-order.js';
@@ -1511,6 +1511,9 @@ function instancesPayload() {
   // 默认档位与默认模型要按首条消息真正开在哪取，暂存档位的键才收回项目轴（2026-10-10 review P2）。
   const defaultsCwd = composeCwdNow() ?? viewingCwdOf();
   payload.defaultModel = defaultModelByCwd.get(defaultsCwd) ?? null;
+  // 本区 settings 禁用了 auto 模式（#461）：权限档面板的 Auto 置灰。与 defaultModel 一样无条件下发——
+  // 看着活会话时也要灰（禁用之前就开着的会话照常显示 Auto，但切走之后不能再切回来）。没读到 settings 时为 false。
+  payload.autoModeDisabled = cliDefaultsByCwd.get(defaultsCwd)?.autoModeDisabled === true;
   // 空首页（viewingInstanceId 为空、无 live 实例）另下发「下一条新会话(FRESH)将用的」权限/思考强度档
   // （L0 pending > L3 CLI settings > L4 硬默认），修「空首页残留上个会话档」+ 与终端 settings 对齐。
   if (!viewingInstanceId) {
@@ -3365,6 +3368,14 @@ registerSocketConnection(io, socket => {
     }
     const id = resolveInstanceId(payload?.instanceId); // 台阶3：作用实例（缺省 viewingInstanceId）
     const a = agents.get(id);
+    // settings 禁用了 auto 模式（#461）：不发给 CLI，也不记成新会话的 pending。前端磁贴已置灰，走到这里的是
+    // 旧页面或刚改完 settings 还没刷新的那一类。cwd 与新会话页取默认档的口径一致（defaultsCwd）。
+    if (autoModeBlocked(mode, cliDefaultsByCwd.get(a ? a.cwd : (composeCwdNow() ?? viewingCwdOf())))) {
+      sysTo(socket, '这个工作区的 settings 禁用了 Auto 模式（disableAutoMode），没有切换', true);
+      if (a) return permModeTo(socket, id);
+      // 新会话页的档来自 instances 的 defaultPermissionMode：单发一次快照把选择器拨回
+      return viewingInstanceId === null ? instancesTo(socket) : permModeTo(socket);
+    }
     if (!a) {
       // 新会话懒创建期（viewingInstanceId=null，无实例可作用）：暂存 pending（按 viewingCwd），首条消息
       // openInstance 消费；echo 新档让 select 立即上屏（不再 echo 旧档拨回——那才是「点了没反应」）。
@@ -4657,12 +4668,13 @@ registerSocketConnection(io, socket => {
     ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });
   });
 
-  on(socket, 'doctor:run', (_payload, ack) => {
+  on(socket, 'doctor:run', async (_payload, ack) => {
     if (typeof ack !== 'function') return;
     // claudeVersion 传的是**启动时的快照**：runDoctor 自己会实时探一次 claude，两者不一致就报
     // 「CLI 升级过、重启才生效」。此前它是 CLAUDE_BIN 那一格的唯一判据，于是 claude 被升级/移走后
     // web 体检照样回放旧版本号并判 ok（2026-08-27 实测：装的 2.1.247，面板显示 2.1.246 绿灯）。
-    ack(runDoctor({
+    // settings 由 SDK resolveSettings 读（#454），所以 runDoctor 是 async。
+    ack(await runDoctor({
       authToken: AUTH_TOKEN,
       claudeVersion: versions.cli,
       workDirs,

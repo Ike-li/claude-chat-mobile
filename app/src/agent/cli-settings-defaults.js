@@ -149,7 +149,26 @@ const SOURCE_GATED_MODES = new Set(['bypassPermissions', 'auto']);
  */
 export function defaultsFromResolvedSettings(resolved) {
   const gated = SOURCE_GATED_MODES.has(resolved.effective?.permissions?.defaultMode);
-  return defaultsFromEffectiveSettings(gated ? filterEscalatingDefaultMode(resolved) : resolved.effective);
+  const d = defaultsFromEffectiveSettings(gated ? filterEscalatingDefaultMode(resolved) : resolved.effective);
+  // settings 禁用了 auto 模式（#461）：CLI 不会进 auto，defaultMode:'auto' 也从 default 启动
+  // （SDK 文档：'default' where auto mode is unavailable）。新会话页照它预显，否则显 Auto、实际是 Manual。
+  const autoModeDisabled = isAutoModeDisabled(resolved.effective);
+  return { ...d, autoModeDisabled, ...(autoModeDisabled && d.mode === 'auto' ? { mode: 'default' } : {}) };
+}
+
+// disableAutoMode 在 Settings 类型里有两处（顶层与 permissions 下），值是 'disable'。true 是常见误写：
+// SDK 0.3.312 起 resolveSettings 才按 CLI 口径读 managed 层的这种写法，在那之前原样返回，两种都认。
+// 判成禁用的代价只是 Auto 置灰，漏判则让用户以为分类器在帮他放行，所以拿不准的写法往禁用那边靠。
+const AUTO_MODE_DISABLE_VALUES = new Set(['disable', true]);
+function isAutoModeDisabled(effective) {
+  return AUTO_MODE_DISABLE_VALUES.has(effective?.disableAutoMode)
+    || AUTO_MODE_DISABLE_VALUES.has(effective?.permissions?.disableAutoMode);
+}
+
+// 服务端拦截切到 Auto 的判据（#461）：前端置灰是体验，这里才是防线。只看 settings 这一种「不可用」；
+// 还没读到 settings（cliDefaults 缺席）就不拦，交给 CLI 自己决定，不在这里替它拒。
+export function autoModeBlocked(mode, cliDefaults) {
+  return mode === 'auto' && cliDefaults?.autoModeDisabled === true;
 }
 
 // 审批规则（allow / deny / ask）。数据源与 defaultsFromEffectiveSettings 同一份 effective——

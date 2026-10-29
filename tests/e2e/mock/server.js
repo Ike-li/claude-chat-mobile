@@ -599,7 +599,8 @@ function mockDirFields() {
     projects.push({ key: MOCK_SCRATCH_ROOT, root: MOCK_SCRATCH_ROOT, label: null, kind: 'scratch' });
   }
   // foldersReadonly：手机上改不了清单时的原因码（同真 server；test:folders-readonly 那种安装下 folders:add 就回它）
-  return { dirs, projects, scratchRoot: MOCK_SCRATCH_ROOT, foldersReadonly: mockFoldersAddError };
+  // autoModeDisabled：真 server 每帧 instances 都带（#461），挂在这里是因为几乎每处 instances 构造都展开本函数
+  return { dirs, projects, scratchRoot: MOCK_SCRATCH_ROOT, foldersReadonly: mockFoldersAddError, autoModeDisabled: mockAutoModeDisabled };
 }
 
 // 「选文件夹」面板的假家目录（只有目录名，同真 server 的 folders:browse）。键 = 家目录相对路径。
@@ -625,6 +626,7 @@ function createMockFolderTree() {
 let mockFolderTree = createMockFolderTree();
 let mockAddedFolders = []; // folders:add 加进来的（绝对路径），并进 mockDirs()
 let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表来自环境变量的安装（真 server 回 source_readonly）
+let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
 const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
 function mockFolderReason(rel) {
   if (!Object.hasOwn(mockFolderTree, rel)) return 'not_found';
@@ -652,6 +654,7 @@ function resetMockState() {
   mockRootOrder = [];
   mockReorderFail = false;
   mockFoldersAddError = null;
+  mockAutoModeDisabled = false;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
@@ -979,6 +982,14 @@ app.post('/__replay-models', (_req, res) => {
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'models', payload: { models: [...MOCK_MODELS, { value: 'claude-replayed-model', displayName: 'Claude Replayed' }] },
   });
+  res.json({ ok: true });
+});
+
+// 本区 settings 写了 disableAutoMode（#461）：真 server 从 resolveSettings 读到后每帧 instances 带 autoModeDisabled。
+// 补一帧让客户端知道；服务端那道拒切由集成测试钉着，mock 不另写一份。
+app.post('/__arm-auto-mode-disabled', (_req, res) => {
+  mockAutoModeDisabled = true;
+  broadcastMockInstances();
   res.json({ ok: true });
 });
 
