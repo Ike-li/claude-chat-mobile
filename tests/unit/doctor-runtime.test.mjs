@@ -20,8 +20,19 @@ import { resolveBindPlan } from '../../app/src/shared/bind-host.js';
 // （紧贴各自的成因注释，不宜上移），函数体到调用时才求值，绕开 const 的 TDZ。
 const stubProbes = () => ({ probeClaudeBin: () => STUB_PROBE, probeTailscale: () => STUB_TS_ABSENT });
 
+// ── user 层的隔离（#454）──────────────────────────────────────────────────
+// settings 改由 SDK resolveSettings 读，它的 user 层只认 CLAUDE_CONFIG_DIR（缺省 ~/.claude），不吃 home 参数。
+// 文件级先指到一个空的一次性目录：任何用例都读不到真实 ~/.claude。要 user 层内容的用例用 useUserDir(home)
+// 换到自己 mkdtemp 的 home/.claude，每条用例结束换回空目录。SDK 每次调用现读这个变量（2026-10-29 实测：
+// 同一进程里改了它，下一次调用的 user 层就跟着换）；本文件的用例按顺序跑，进程级变量不会串。
+const EMPTY_USER_DIR = mkdtempSync(join(tmpdir(), 'ccm-doctor-user-empty-'));
+process.env.CLAUDE_CONFIG_DIR = EMPTY_USER_DIR;
+const useUserDir = (home) => { process.env.CLAUDE_CONFIG_DIR = join(home, '.claude'); };
+test.afterEach(() => { process.env.CLAUDE_CONFIG_DIR = EMPTY_USER_DIR; });
+test.after(() => { rmSync(EMPTY_USER_DIR, { recursive: true, force: true }); }); // safe-rm: mkdtemp 一次性目录
+
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
-  test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', () => {
+  test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ccm-home-'));
     const proj = mkdtempSync(join(tmpdir(), 'ccm-proj-'));
     try {
@@ -30,7 +41,8 @@ test.describe('readMergedPermissions：合并 global/project/local + 容错', ()
       mkdirSync(join(proj, '.claude'), { recursive: true });
       writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Read(//x/**)'] } }));
       writeFileSync(join(proj, '.claude', 'settings.local.json'), '{ bad json'); // 坏 → skip
-      const r = readMergedPermissions({ home, workDirs: [proj] });
+      useUserDir(home);
+      const r = await readMergedPermissions({ workDirs: [proj] });
       const rules = r.allow.map(a => a.rule);
       assert.ok(rules.includes('Bash(*)'));
       assert.ok(rules.includes('Read(//x/**)'));
@@ -41,30 +53,73 @@ test.describe('readMergedPermissions：合并 global/project/local + 容错', ()
       rmSync(proj, { recursive: true, force: true });
     }
   });
-  test('全缺 → 空 allow（不抛）', () => {
-    assert.deepEqual(readMergedPermissions({ home: '/nonexistent-xyz-ccm', workDirs: [] }).allow, []);
+  test('project 层坏 JSON 只跳过那一层：同目录 local 照读（与 CLI 同口径，不连坐）', async () => {
+    const proj = mkdtempSync(join(tmpdir(), 'ccm-proj-badp-'));
+    try {
+      mkdirSync(join(proj, '.claude'), { recursive: true });
+      writeFileSync(join(proj, '.claude', 'settings.json'), '{ bad json');
+      writeFileSync(join(proj, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
+      const r = await readMergedPermissions({ workDirs: [proj] });
+      assert.deepEqual(r.allow.map(a => [a.rule, a.scope]), [['Bash(*)', 'local']], '坏的 project 层把同目录的 local 规则也带没了：体检会漏报 local 里的危险规则');
+    } finally {
+      rmSync(proj, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
+  });
+  test('全缺 → 空 allow（不抛）', async () => {
+    assert.deepEqual((await readMergedPermissions({ workDirs: [] })).allow, []);
+  });
+  test('user 层只出现一次：连了两个目录，全局规则不按目录重复', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ccm-home-once-'));
+    const a = mkdtempSync(join(tmpdir(), 'ccm-proj-a-'));
+    const b = mkdtempSync(join(tmpdir(), 'ccm-proj-b-'));
+    try {
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
+      useUserDir(home);
+      const r = await readMergedPermissions({ workDirs: [a, b] });
+      assert.deepEqual(r.allow.map(x => [x.rule, x.scope]), [['Bash(*)', 'global']], '全局规则按目录数重复出现：规则计数虚高');
+    } finally {
+      for (const d of [home, a, b]) rmSync(d, { recursive: true, force: true }); // safe-rm: mkdtemp 一次性目录
+    }
+  });
+  // managed 层（managed-settings.json / MDM）在测试里写不到系统路径，用替身喂 resolveSettings 的结果；
+  // 形状照 SDK 0.3.310 sdk.d.ts 的 ResolvedSettings.sources（source / settings / path）。
+  test('managed 层的 allow 规则进报告，scope 标 managed（组织策略放行的危险规则也要让用户看见）', async () => {
+    const resolve = async ({ settingSources }) => ({
+      effective: {},
+      provenance: {},
+      sources: settingSources.includes('user')
+        ? [{ source: 'user', settings: {}, path: '/u/settings.json' },
+           { source: 'managed', settings: { permissions: { allow: ['Bash(*)'] } }, path: '/Library/Application Support/ClaudeCode/managed-settings.json' }]
+        : [],
+    });
+    const r = await readMergedPermissions({ workDirs: [], resolve });
+    assert.deepEqual(r.allow.map(x => [x.rule, x.scope]), [['Bash(*)', 'managed']], '体检看不见 managed 层：组织策略放行的危险规则不进报告');
+    const wl = (await runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), workDirs: [], resolveSettings: resolve })).checks.find(c => c.id === 'WHITELIST');
+    assert.equal(wl.safe.dangerous[0]?.scope, 'managed', 'runDoctor 没把注入的 resolveSettings 接到白名单检查上');
   });
 });
 
 test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
-  test('AUTH_TOKEN 明文绝不出现在报告里', () => {
-    const rep = runDoctor({ ...stubProbes(), authToken: 'super-secret-token-1234', home: '/nonexistent-ccm', workDirs: [] });
+  test('AUTH_TOKEN 明文绝不出现在报告里', async () => {
+    const rep = await runDoctor({ ...stubProbes(), authToken: 'super-secret-token-1234', home: '/nonexistent-ccm', workDirs: [] });
     assert.equal(JSON.stringify(rep).includes('super-secret-token-1234'), false);
     const t = rep.checks.find(c => c.id === 'AUTH_TOKEN');
     assert.equal(t.safe.isSet, true);
     assert.equal(t.status, 'ok');
   });
-  test('危险白名单进 WHITELIST.safe.dangerous（带 scope），readiness caution', () => {
+  test('危险白名单进 WHITELIST.safe.dangerous（带 scope），readiness caution', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ccm-h2-'));
     try {
       mkdirSync(join(home, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)', 'Write(//r/**)'] } }));
+      useUserDir(home);
       // 必须注入 CLI 探测，理由同下一条用例：不注入的话 runDoctor 会真的 which + 跑
       // `claude --version`，而末尾那条 readiness 断言是 15 个 check 的综合判定——CLI 探不到
       // 就判 fail，readiness 被拉到 'blocked'，与这条用例要测的白名单毫无关系。
       // 2026-09-06 CI 实测：本地（有真 claude）绿、容器（compose 设了 CLAUDE_BIN）绿、
       // CI 的 test:unit step（两者都没有）红——同一条用例三个环境三种答案，红的还是无关的那一维。
-      const rep = runDoctor({
+      const rep = await runDoctor({
         ...stubProbes(),
         authToken: 'x'.repeat(32), home, workDirs: [], cfEnabled: false,
         probeClaudeBin: () => STUB_PROBE,
@@ -79,10 +134,10 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
-  test('report 含 15 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT / ACCESS_PROFILE / BIND）', () => {
+  test('report 含 15 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT / ACCESS_PROFILE / BIND）', async () => {
     // 注入探测：不注入的话 runDoctor 会真的 which + 跑一次 claude --version，
     // 让这条断言的结果取决于跑测试的机器上装没装 CLI。
-    const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, probeTailscale: () => STUB_TS_ABSENT });
+    const rep = await runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, probeTailscale: () => STUB_TS_ABSENT });
     assert.equal(rep.checks.length, 16);
     assert.ok(rep.checks.some(c => c.id === 'BIND'));
     assert.ok(rep.checks.some(c => c.id === 'ACCESS_PROFILE'));
@@ -97,8 +152,8 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
   // 2026-09-06：此前 CF_ACCESS 未启用恒 warn，而 computeReadiness 把任一 warn 算成 caution ——
   // 于是 LAN / Tailscale / 反代 / 直连的部署**永远到不了 ready**，体检在对不用 Cloudflare 的
   // 用户说「你还差一样东西」，可基线（AUTH_TOKEN + 逐设备审批）他们一样都不少。
-  test('CF Access 未启用 + 其余全净 → CF_ACCESS 为 ok 且 readiness 为 ready（Access 是可选加层，不是就绪条件）', () => {
-    const rep = runDoctor({
+  test('CF Access 未启用 + 其余全净 → CF_ACCESS 为 ok 且 readiness 为 ready（Access 是可选加层，不是就绪条件）', async () => {
+    const rep = await runDoctor({
       authToken: 'x'.repeat(32),
       home: '/nonexistent-ccm',
       workDirs: ['/nonexistent-ccm-work'],
@@ -124,7 +179,7 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
 // 当天现场 CLI 已升到 2.1.247，web 体检仍显示 2.1.246 且判 ok；claude 被卸载/移走同理。
 // 现在与 scripts/doctor.js 共用 probeClaudeBin + claudeBinDiagnostic，两边同一判据。
 const STUB_PROBE = { explicit: '/usr/local/bin/claude', exists: true, executable: true, version: '2.1.247 (Claude Code)' };
-const claudeCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], ...ctx }).checks.find(c => c.id === 'CLAUDE_BIN');
+const claudeCheck = async (ctx) => (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], ...ctx })).checks.find(c => c.id === 'CLAUDE_BIN');
 
 // ── TAILSCALE 探测注入（2026-09-06）───────────────────────────────────────
 // 与 probeClaudeBin 同一形态：有副作用的探测可注入，判定走 doctor-checks.tailscaleDiagnostic。
@@ -134,22 +189,22 @@ const STUB_TS_ABSENT = { found: false };
 const STUB_TS_RUNNING = { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net', ipCount: 1 };
 
 test.describe('TAILSCALE：探测可注入，safe 脱敏，port 透传进 serve 提示', () => {
-  const tsCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }).checks.find(c => c.id === 'TAILSCALE');
+  const tsCheck = async (ctx) => (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })).checks.find(c => c.id === 'TAILSCALE');
 
-  test('注入 Running 事实 + port → ok，detail 带 MagicDNS https 地址与 serve --bg <port>', () => {
-    const c = tsCheck({ probeTailscale: () => STUB_TS_RUNNING, port: 3456, accessProfile: 'vpn' });
+  test('注入 Running 事实 + port → ok，detail 带 MagicDNS https 地址与 serve --bg <port>', async () => {
+    const c = await tsCheck({ probeTailscale: () => STUB_TS_RUNNING, port: 3456, accessProfile: 'vpn' });
     assert.equal(c.status, 'ok');
     assert.match(c.detail, /https:\/\/mac\.tail1234\.ts\.net/);
     assert.match(c.detail, /tailscale serve[^\n]*3456/, 'server 的实际端口必须透传进提示，写死 3000 会误导改过端口的人');
   });
 
-  test('注入 未安装 + 未声明 → ok（不是缺陷）；未安装 + vpn → warn', () => {
-    assert.equal(tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: '' }).status, 'ok');
-    assert.equal(tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: 'vpn' }).status, 'warn');
+  test('注入 未安装 + 未声明 → ok（不是缺陷）；未安装 + vpn → warn', async () => {
+    assert.equal((await tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: '' })).status, 'ok');
+    assert.equal((await tsCheck({ probeTailscale: () => STUB_TS_ABSENT, accessProfile: 'vpn' })).status, 'warn');
   });
 
-  test('★ safe 不回显 MagicDNS 名（报告会被贴进 issue / 聊天）', () => {
-    const c = tsCheck({ probeTailscale: () => STUB_TS_RUNNING, accessProfile: 'vpn' });
+  test('★ safe 不回显 MagicDNS 名（报告会被贴进 issue / 聊天）', async () => {
+    const c = await tsCheck({ probeTailscale: () => STUB_TS_RUNNING, accessProfile: 'vpn' });
     assert.doesNotMatch(JSON.stringify(c.safe), /tail1234/);
     assert.equal(c.safe.hasDnsName, true);
   });
@@ -166,11 +221,11 @@ test.describe('probeTailscale：四种返回形态', () => {
   };
   const withStatus = (bin, handler) => (cmd, args, opts) => (cmd === 'which' ? which(bin)(cmd, args) : handler(cmd, args, opts));
 
-  test('PATH 里没有（非 darwin 不试固定路径）→ found:false', () => {
+  test('PATH 里没有（非 darwin 不试固定路径）→ found:false', async () => {
     assert.deepEqual(probeTailscale({ platform: 'linux', execFile: which('') }), { found: false });
   });
 
-  test('Running：解析 BackendState 与去尾点的 Self.DNSName', () => {
+  test('Running：解析 BackendState 与去尾点的 Self.DNSName', async () => {
     const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', (cmd, args) => {
       assert.equal(cmd, '/usr/bin/tailscale'); assert.deepEqual(args, ['status', '--json']);
       return JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'mac.tail1234.ts.net.', TailscaleIPs: ['100.64.0.1'] } });
@@ -178,7 +233,7 @@ test.describe('probeTailscale：四种返回形态', () => {
     assert.deepEqual(r, { found: true, backendState: 'Running', dnsName: 'mac.tail1234.ts.net' });
   });
 
-  test('NeedsLogin 退出码非零但 stdout 仍是 JSON → 照样解析', () => {
+  test('NeedsLogin 退出码非零但 stdout 仍是 JSON → 照样解析', async () => {
     const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', () => {
       const err = new Error('exit 1'); err.status = 1; err.stdout = JSON.stringify({ BackendState: 'NeedsLogin', Self: { DNSName: '' } }); err.stderr = '';
       throw err;
@@ -186,7 +241,7 @@ test.describe('probeTailscale：四种返回形态', () => {
     assert.deepEqual(r, { found: true, backendState: 'NeedsLogin', dnsName: '' });
   });
 
-  test('守护进程没跑（stderr「failed to connect to local Tailscale service」）→ backendState DaemonNotRunning，不抛', () => {
+  test('守护进程没跑（stderr「failed to connect to local Tailscale service」）→ backendState DaemonNotRunning，不抛', async () => {
     const r = probeTailscale({ platform: 'darwin', execFile: withStatus('/opt/homebrew/bin/tailscale', () => {
       const err = new Error('Command failed'); err.status = 1; err.stdout = ''; err.stderr = 'failed to connect to local Tailscale service; is Tailscale running?\n';
       throw err;
@@ -196,7 +251,7 @@ test.describe('probeTailscale：四种返回形态', () => {
     assert.equal(r.dnsName, '');
   });
 
-  test('其他失败（超时 / 非 JSON 输出）→ found:true 且 backendState 空，带 error，不抛', () => {
+  test('其他失败（超时 / 非 JSON 输出）→ found:true 且 backendState 空，带 error，不抛', async () => {
     const r = probeTailscale({ platform: 'linux', execFile: withStatus('/usr/bin/tailscale', () => { const e = new Error('ETIMEDOUT'); e.stdout = 'garbage'; throw e; }) });
     assert.equal(r.found, true);
     assert.equal(r.backendState, '');
@@ -205,35 +260,35 @@ test.describe('probeTailscale：四种返回形态', () => {
 });
 
 test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {
-  test('探得到且与启动快照一致 → ok，detail 带路径与版本', () => {
-    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.247 (Claude Code)' });
+  test('探得到且与启动快照一致 → ok，detail 带路径与版本', async () => {
+    const c = await claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.247 (Claude Code)' });
     assert.equal(c.status, 'ok');
     assert.match(c.detail, /2\.1\.247/);
     assert.match(c.detail, /claude/);
   });
 
-  test('实时版本 ≠ 启动快照 → warn（CLI 升级过，跑着的 SDK 子进程还是旧版）', () => {
-    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.246 (Claude Code)' });
+  test('实时版本 ≠ 启动快照 → warn（CLI 升级过，跑着的 SDK 子进程还是旧版）', async () => {
+    const c = await claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.246 (Claude Code)' });
     assert.equal(c.status, 'warn', '这正是 2026-08-27 现场那一格：装的是 247，server 启动时是 246');
     assert.equal(c.safe.stale, true);
     assert.match(c.detail, /2\.1\.246/);
     assert.match(c.detail, /重启/);
   });
 
-  test('PATH 上找不到 claude → fail（不能因为快照里还留着版本号就判绿）', () => {
-    const c = claudeCheck({ probeClaudeBin: () => ({ explicit: '', resolvedPath: '' }), claudeVersion: '2.1.247 (Claude Code)' });
+  test('PATH 上找不到 claude → fail（不能因为快照里还留着版本号就判绿）', async () => {
+    const c = await claudeCheck({ probeClaudeBin: () => ({ explicit: '', resolvedPath: '' }), claudeVersion: '2.1.247 (Claude Code)' });
     assert.equal(c.status, 'fail');
     assert.equal(c.safe.found, false);
   });
 
-  test('路径还在但已不可执行 → fail', () => {
-    const c = claudeCheck({ probeClaudeBin: () => ({ explicit: '/x/claude', exists: true, executable: false }) });
+  test('路径还在但已不可执行 → fail', async () => {
+    const c = await claudeCheck({ probeClaudeBin: () => ({ explicit: '/x/claude', exists: true, executable: false }) });
     assert.equal(c.status, 'fail');
     assert.match(c.detail, /不可执行|not executable/);
   });
 
-  test('没有启动快照（旧调用）→ 只按实时结果判，不误报 stale', () => {
-    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE });
+  test('没有启动快照（旧调用）→ 只按实时结果判，不误报 stale', async () => {
+    const c = await claudeCheck({ probeClaudeBin: () => STUB_PROBE });
     assert.equal(c.status, 'ok');
     assert.notEqual(c.safe.stale, true);
   });
@@ -245,53 +300,53 @@ test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {
 test.describe('ENV_OVERRIDE：把 doctor D18 接进手机端的安全体检', () => {
   const base = { ...stubProbes(), home: '/nonexistent-ccm', workDirs: [] };
 
-  test('有 shell env 覆盖 → warn，且逐个列出键名', () => {
-    const rep = runDoctor({ ...base, shellEnv: { WORK_DIR: '/from/shell', DEV_MODE: '1' } });
+  test('有 shell env 覆盖 → warn，且逐个列出键名', async () => {
+    const rep = await runDoctor({ ...base, shellEnv: { WORK_DIR: '/from/shell', DEV_MODE: '1' } });
     const c = rep.checks.find(x => x.id === 'ENV_OVERRIDE');
     assert.equal(c.status, 'warn');
     assert.deepEqual(c.safe.keys.slice().sort(), ['DEV_MODE', 'WORK_DIR']);
     assert.match(c.detail, /WORK_DIR/);
   });
 
-  test('★ 只列键名，绝不回显值 —— 被覆盖的可能正是 AUTH_TOKEN / VAPID 私钥', () => {
-    const rep = runDoctor({ ...base, shellEnv: { AUTH_TOKEN: 'shell-side-secret-token' } });
+  test('★ 只列键名，绝不回显值 —— 被覆盖的可能正是 AUTH_TOKEN / VAPID 私钥', async () => {
+    const rep = await runDoctor({ ...base, shellEnv: { AUTH_TOKEN: 'shell-side-secret-token' } });
     assert.equal(JSON.stringify(rep).includes('shell-side-secret-token'), false);
   });
 
-  test('无覆盖 → ok', () => {
-    const c = runDoctor({ ...base, shellEnv: { PATH: '/usr/bin' } }).checks.find(x => x.id === 'ENV_OVERRIDE');
+  test('无覆盖 → ok', async () => {
+    const c = (await runDoctor({ ...base, shellEnv: { PATH: '/usr/bin' } })).checks.find(x => x.id === 'ENV_OVERRIDE');
     assert.equal(c.status, 'ok');
   });
 
   // 与 BE-013 同一条纪律：缺省不得假绿。调用方忘了传快照时显 ok，等于把「没查」说成「没问题」。
-  test('★ 没传 shellEnv（调用方漏接线）→ 不显 ok，safe.checked=false', () => {
-    const c = runDoctor(base).checks.find(x => x.id === 'ENV_OVERRIDE');
+  test('★ 没传 shellEnv（调用方漏接线）→ 不显 ok，safe.checked=false', async () => {
+    const c = (await runDoctor(base)).checks.find(x => x.id === 'ENV_OVERRIDE');
     assert.notEqual(c.status, 'ok');
     assert.equal(c.safe.checked, false);
   });
 });
 
 test.describe('BE-013：CONFIG_PERMS 不得在「未检查」时假绿 ok', () => {
-  test('未传 configPermsProblems（缺省 undefined）→ 不显 ok（应 warn/未知）', () => {
+  test('未传 configPermsProblems（缺省 undefined）→ 不显 ok（应 warn/未知）', async () => {
     // 旧实现把缺省 undefined 当 0 → 恒显「0600 安全」ok 假绿。修复后：未检查必须显 warn。
-    const cp = runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+    const cp = (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [] })).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.notEqual(cp.status, 'ok');
     assert.equal(cp.safe.checked, false);
   });
-  test('configPermsProblems=null（平台无法检查）→ warn 未知，safe.checked=false', () => {
-    const cp = runDoctor({ ...stubProbes(), configPermsProblems: null, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+  test('configPermsProblems=null（平台无法检查）→ warn 未知，safe.checked=false', async () => {
+    const cp = (await runDoctor({ ...stubProbes(), configPermsProblems: null, home: '/nonexistent-ccm', workDirs: [] })).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'warn');
     assert.equal(cp.safe.checked, false);
     assert.equal(cp.safe.problemCount, null);
   });
-  test('configPermsProblems=0（已检查、干净）→ ok', () => {
-    const cp = runDoctor({ ...stubProbes(), configPermsProblems: 0, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+  test('configPermsProblems=0（已检查、干净）→ ok', async () => {
+    const cp = (await runDoctor({ ...stubProbes(), configPermsProblems: 0, home: '/nonexistent-ccm', workDirs: [] })).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'ok');
     assert.equal(cp.safe.checked, true);
     assert.equal(cp.safe.problemCount, 0);
   });
-  test('configPermsProblems=3（已检查、有过宽）→ warn 且 detail 含数量', () => {
-    const cp = runDoctor({ ...stubProbes(), configPermsProblems: 3, home: '/nonexistent-ccm', workDirs: [] }).checks.find(c => c.id === 'CONFIG_PERMS');
+  test('configPermsProblems=3（已检查、有过宽）→ warn 且 detail 含数量', async () => {
+    const cp = (await runDoctor({ ...stubProbes(), configPermsProblems: 3, home: '/nonexistent-ccm', workDirs: [] })).checks.find(c => c.id === 'CONFIG_PERMS');
     assert.equal(cp.status, 'warn');
     assert.equal(cp.safe.problemCount, 3);
     assert.match(cp.detail, /3/);
@@ -299,10 +354,10 @@ test.describe('BE-013：CONFIG_PERMS 不得在「未检查」时假绿 ok', () =
 });
 
 test.describe('countConfigPermProblems：真实权限检查（BE-013 数据源）', () => {
-  test('win32 平台无 POSIX 权限位 → 返回 null（不可查、绝不假报 0）', () => {
+  test('win32 平台无 POSIX 权限位 → 返回 null（不可查、绝不假报 0）', async () => {
     assert.equal(countConfigPermProblems('/tmp/whatever-ccm', { platform: 'win32' }), null);
   });
-  test('清单非空且与 CLI doctor 共用同一事实源', () => {
+  test('清单非空且与 CLI doctor 共用同一事实源', async () => {
     assert.ok(Array.isArray(CONFIG_FILE_NAMES) && CONFIG_FILE_NAMES.length > 0);
     assert.ok(CONFIG_FILE_NAMES.includes('.env'));
   });
@@ -351,7 +406,7 @@ test.describe('countConfigPermProblems：真实权限检查（BE-013 数据源�
 });
 
 test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope', () => {
-  test('Bash(*) 同时在 global+project → 去重成一条、scope 含两者（不再 first-match 恒 global）', () => {
+  test('Bash(*) 同时在 global+project → 去重成一条、scope 含两者（不再 first-match 恒 global）', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ccm-h3-'));
     const proj = mkdtempSync(join(tmpdir(), 'ccm-p3-'));
     try {
@@ -359,7 +414,8 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
       mkdirSync(join(proj, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
       writeFileSync(join(proj, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
-      const wl = runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [proj] }).checks.find(c => c.id === 'WHITELIST');
+      useUserDir(home);
+      const wl = (await runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [proj] })).checks.find(c => c.id === 'WHITELIST');
       assert.equal(wl.safe.dangerous.length, 1); // 去重：同一条不重复列
       assert.match(wl.safe.dangerous[0].scope, /global/);
       assert.match(wl.safe.dangerous[0].scope, /project/);
@@ -368,12 +424,13 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
       rmSync(proj, { recursive: true, force: true });
     }
   });
-  test('仅 global 单一 scope → scope 精确为 global（不回归）', () => {
+  test('仅 global 单一 scope → scope 精确为 global（不回归）', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ccm-h4-'));
     try {
       mkdirSync(join(home, '.claude'), { recursive: true });
       writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
-      const wl = runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [] }).checks.find(c => c.id === 'WHITELIST');
+      useUserDir(home);
+      const wl = (await runDoctor({ ...stubProbes(), authToken: 'x'.repeat(32), home, workDirs: [] })).checks.find(c => c.id === 'WHITELIST');
       assert.equal(wl.safe.dangerous.length, 1);
       assert.equal(wl.safe.dangerous[0].scope, 'global');
     } finally {
@@ -386,7 +443,7 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
 // CLI 会把 ~/.claude/settings.json 的 env 合并进【每个】目录，所以「全局配一个网关、
 // 各项目不单独配」这个最常见布局下，每个 dir 的 tierTargets 都该带上全局那份映射。
 // 丢掉它的后果是双向的：全局配网关 → 整条检查恒绿假 OK；全局+目录混合布局 → 反过来误报 warn。
-test('readModelSettingsSnapshot：用户级 settings.json 的 env 映射对每个 workDir 生效', () => {
+test('readModelSettingsSnapshot：用户级 settings.json 的 env 映射对每个 workDir 生效', async () => {
   const home = mkdtempSync(join(tmpdir(), 'ccm-doc-home-'));
   mkdirSync(join(home, '.claude'), { recursive: true });
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
@@ -397,7 +454,9 @@ test('readModelSettingsSnapshot：用户级 settings.json 的 env 映射对每�
   mkdirSync(join(wd, '.claude'), { recursive: true });
   writeFileSync(join(wd, '.claude', 'settings.local.json'), JSON.stringify({}));
 
-  const snap = readModelSettingsSnapshot({ home, workDirs: [wd] });
+  useUserDir(home);
+  const snap = await readModelSettingsSnapshot({ workDirs: [wd] });
+  assert.equal(snap.dirs.length, 1, '只继承全局映射、自己没配东西的目录从快照里消失了：全局网关映射没人比对');
   assert.equal(snap.dirs[0].tierTargets.sonnet, 'grok-4.5', '全局网关映射必须下沉到每个 workDir');
 
   const diag = modelSettingsConflictDiagnostic(snap);
@@ -408,7 +467,7 @@ test('readModelSettingsSnapshot：用户级 settings.json 的 env 映射对每�
   rmSync(wd, { recursive: true, force: true });     // safe-rm: mkdtemp 一次性目录
 });
 
-test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映射', () => {
+test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映射', async () => {
   const home = mkdtempSync(join(tmpdir(), 'ccm-doc-home2-'));
   mkdirSync(join(home, '.claude'), { recursive: true });
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
@@ -421,7 +480,8 @@ test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映�
     env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro' },
   }));
 
-  const snap = readModelSettingsSnapshot({ home, workDirs: [wd] });
+  useUserDir(home);
+  const snap = await readModelSettingsSnapshot({ workDirs: [wd] });
   assert.equal(snap.dirs[0].tierTargets.sonnet, 'mimo-v2.5-pro', '目录级优先');
   assert.equal(snap.dirs[0].tierTargets.opus, 'glm-5.2', '目录没覆盖的档位保留全局值');
   assert.equal(modelSettingsConflictDiagnostic(snap).status, 'ok');
@@ -435,33 +495,33 @@ test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映�
 // ——受众重合度比 CLI 侧更高。判定与 scripts/doctor.js D20 共用 fileEditExposureDiagnostic；
 // 公网信号 = CF Access 实际启用（ctx.cfEnabled，auth 层权威判定）或 PUBLIC_URL 已声明。
 test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => {
-  const feCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+  const feCheck = async (ctx) => (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }))
     .checks.find(c => c.id === 'FILE_EDIT');
 
-  test('公网启用 + 直写开 → warn，点名审批链与出路', () => {
-    const c = feCheck({ cfEnabled: true, fileEditOff: false });
+  test('公网启用 + 直写开 → warn，点名审批链与出路', async () => {
+    const c = await feCheck({ cfEnabled: true, fileEditOff: false });
     assert.equal(c.status, 'warn');
     assert.match(c.detail, /审批/);
     assert.match(c.detail, /FILE_EDIT=off/);
   });
 
-  test('FILE_EDIT=off → ok（已只读）', () => {
-    assert.equal(feCheck({ cfEnabled: true, fileEditOff: true }).status, 'ok');
+  test('FILE_EDIT=off → ok（已只读）', async () => {
+    assert.equal((await feCheck({ cfEnabled: true, fileEditOff: true })).status, 'ok');
   });
 
-  test('无公网声明 → ok（不 nag 局域网部署）', () => {
-    assert.equal(feCheck({ cfEnabled: false, fileEditOff: false }).status, 'ok');
+  test('无公网声明 → ok（不 nag 局域网部署）', async () => {
+    assert.equal((await feCheck({ cfEnabled: false, fileEditOff: false })).status, 'ok');
   });
 
-  test('★ safe 与 detail 都绝不回显 PUBLIC_URL 的值——体检报告会被贴进 issue/聊天', () => {
-    const c = feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'https://secret-host.example.com' });
+  test('★ safe 与 detail 都绝不回显 PUBLIC_URL 的值——体检报告会被贴进 issue/聊天', async () => {
+    const c = await feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'https://secret-host.example.com' });
     assert.equal(c.status, 'warn');
     assert.equal(JSON.stringify(c).includes('secret-host'), false);
     assert.equal(c.safe.publicSignal, true);
   });
 
-  test('声明 vpn 时 PUBLIC_URL 不再单独触发 warn（ctx.accessProfile 要真的接进判定）', () => {
-    const c = feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'http://100.64.0.5:3000', accessProfile: 'vpn' });
+  test('声明 vpn 时 PUBLIC_URL 不再单独触发 warn（ctx.accessProfile 要真的接进判定）', async () => {
+    const c = await feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'http://100.64.0.5:3000', accessProfile: 'vpn' });
     assert.equal(c.status, 'ok');
   });
 });
@@ -471,24 +531,24 @@ test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => 
 // 判定与 scripts/doctor.js D21 共用 accessProfileDiagnostic；cfConfigured 用 ctx.cfEnabled
 // （auth 层权威判定）。safe 只出布尔/枚举字面量，绝不回显 PUBLIC_URL 值。
 test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检）', () => {
-  const apCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+  const apCheck = async (ctx) => (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx }))
     .checks.find(c => c.id === 'ACCESS_PROFILE');
 
-  test('未声明 → ok（既有部署零新告警）', () => {
-    const c = apCheck({});
+  test('未声明 → ok（既有部署零新告警）', async () => {
+    const c = await apCheck({});
     assert.ok(c, '体检里应有 ACCESS_PROFILE 一项');
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.declared, false);
   });
 
-  test('声明 vpn 但 CF 层实际开着 → warn（矛盾要在手机上看得到）', () => {
-    const c = apCheck({ accessProfile: 'vpn', cfEnabled: true });
+  test('声明 vpn 但 CF 层实际开着 → warn（矛盾要在手机上看得到）', async () => {
+    const c = await apCheck({ accessProfile: 'vpn', cfEnabled: true });
     assert.equal(c.status, 'warn');
     assert.match(c.detail, /CF_ACCESS/);
   });
 
-  test('★ safe 只出布尔/枚举，报告 JSON 不含传入的 URL 值', () => {
-    const c = apCheck({ accessProfile: 'lan', publicUrl: 'https://secret-host.example.com' });
+  test('★ safe 只出布尔/枚举，报告 JSON 不含传入的 URL 值', async () => {
+    const c = await apCheck({ accessProfile: 'lan', publicUrl: 'https://secret-host.example.com' });
     assert.equal(JSON.stringify(c).includes('secret-host'), false);
     assert.equal(c.safe.profile, 'lan');
     assert.equal(typeof c.safe.publicUrlSet, 'boolean');
@@ -497,8 +557,8 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
   // 接线钉子：判定函数拿 publiclyReachable 做「声明 vs 监听面」的矛盾核对，而这个值只能由
   // 调用方从 bindPlan 取。忘了传不会报错，只会让整条检查静默失效——恰好是 doctor 里最难发现的
   // 一类缺陷（体检全绿地少一项）。所以这里不测判定，测的是「值真的接进去了」。
-  test('publiclyReachable 从 bindPlan 接进 D21：direct + 只绑 loopback → warn', () => {
-    const c = apCheck({
+  test('publiclyReachable 从 bindPlan 接进 D21：direct + 只绑 loopback → warn', async () => {
+    const c = await apCheck({
       accessProfile: 'direct',
       authToken: 'x'.repeat(32),
       bindPlan: resolveBindPlan({ authToken: 'x'.repeat(32), bindMode: 'loopback' }),
@@ -507,8 +567,8 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
     assert.match(c.detail, /BIND_MODE|127\.0\.0\.1|本机/);
   });
 
-  test('对照：direct + 对外监听 → ok（防把 direct 一律报成 warn）', () => {
-    const c = apCheck({
+  test('对照：direct + 对外监听 → ok（防把 direct 一律报成 warn）', async () => {
+    const c = await apCheck({
       accessProfile: 'direct',
       authToken: 'x'.repeat(32),
       bindPlan: resolveBindPlan({ authToken: 'x'.repeat(32), bindMode: 'lan' }),
@@ -522,26 +582,26 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
 // 各的会在同一份报告里自相矛盾。判定与 scripts/doctor.js 共用 deviceApprovalScopeDiagnostic（逐条在
 // doctor-checks.test.mjs）。这里钉接线：server 传的是归一前的原值——归一后只剩 '' / 'all'，写错的痕迹已经没了。
 test.describe('DEVICE_GATE × DEVICE_APPROVAL_SCOPE（web 体检）', () => {
-  const gateCheck = (ctx) => runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], authToken: 'x'.repeat(32), cfEnabled: true, ...ctx })
+  const gateCheck = async (ctx) => (await runDoctor({ ...stubProbes(), home: '/nonexistent-ccm', workDirs: [], authToken: 'x'.repeat(32), cfEnabled: true, ...ctx }))
     .checks.find(c => c.id === 'DEVICE_GATE');
 
-  test('写错 → warn 并点名；safe 只出枚举字面量，不回显原值', () => {
-    const c = gateCheck({ deviceApprovalScopeRaw: 'ALL' });
+  test('写错 → warn 并点名；safe 只出枚举字面量，不回显原值', async () => {
+    const c = await gateCheck({ deviceApprovalScopeRaw: 'ALL' });
     assert.equal(c.status, 'warn', c.detail);
     assert.match(c.detail, /"ALL"/);
     assert.equal(c.safe.scope, 'unknown');
     assert.equal(JSON.stringify(c.safe).includes('ALL'), false);
   });
 
-  test('all → ok，且不再说 Access 已验的连接跳过设备审批', () => {
-    const c = gateCheck({ deviceApprovalScopeRaw: 'all' });
+  test('all → ok，且不再说 Access 已验的连接跳过设备审批', async () => {
+    const c = await gateCheck({ deviceApprovalScopeRaw: 'all' });
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.scope, 'all');
     assert.doesNotMatch(c.detail, /跳过/, c.detail);
   });
 
-  test('未声明 → ok，行为描述不变（既有部署零新告警）', () => {
-    const c = gateCheck({});
+  test('未声明 → ok，行为描述不变（既有部署零新告警）', async () => {
+    const c = await gateCheck({});
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.scope, '');
     assert.match(c.detail, /Access 已验的连接跳过设备审批/);
@@ -552,7 +612,7 @@ test.describe('DEVICE_GATE × DEVICE_APPROVAL_SCOPE（web 体检）', () => {
 // Linux 改走 /proc（零外部工具），macOS 仍用 lsof/ps 但只允许 PATH 查找。这里用一次性目录造一棵假 /proc 树，
 // 与 identifySelfServer 接成整条链：端口 → inode → pid → 命令行/cwd → 认出是自家 server。
 test.describe('probeListeningProcesses —— 端口监听者取数', () => {
-  test('linux：/proc/net/tcp 的 inode 经 /proc/<pid>/fd 反查到 pid，cmdline 的 NUL 还原成空格，cwd 走 readlink', () => {
+  test('linux：/proc/net/tcp 的 inode 经 /proc/<pid>/fd 反查到 pid，cmdline 的 NUL 还原成空格，cwd 走 readlink', async () => {
     const proc = mkdtempSync(join(tmpdir(), 'ccm-fakeproc-'));
     const repo = mkdtempSync(join(tmpdir(), 'ccm-repo-'));
     try {
@@ -583,10 +643,10 @@ test.describe('probeListeningProcesses —— 端口监听者取数', () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
-  test('linux：/proc 不可读 → 空数组不抛（认不出来只会退回原来的 fail 分支）', () => {
+  test('linux：/proc 不可读 → 空数组不抛（认不出来只会退回原来的 fail 分支）', async () => {
     assert.deepEqual(probeListeningProcesses(3000, { platform: 'linux', procRoot: '/nonexistent-ccm-proc' }), []);
   });
-  test('darwin：lsof / ps 只按 PATH 查找，不写死 /usr/sbin 与 /bin', () => {
+  test('darwin：lsof / ps 只按 PATH 查找，不写死 /usr/sbin 与 /bin', async () => {
     const calls = [];
     const execFile = (cmd, args) => {
       calls.push(cmd);
@@ -606,18 +666,18 @@ test.describe('probeListeningProcesses —— 端口监听者取数', () => {
 // 它们带进来。web 体检只报个数——报告会被贴进 issue / 聊天，路径不进报告（同这一格原有的纪律）。
 test.describe('WORK_DIRS：过宽根只报不拦', () => {
   const home = '/home/ccm-doctor-tester';
-  const wd = (workDirs) => runDoctor({ ...stubProbes(), home, workDirs }).checks.find(c => c.id === 'WORK_DIRS');
+  const wd = async (workDirs) => (await runDoctor({ ...stubProbes(), home, workDirs })).checks.find(c => c.id === 'WORK_DIRS');
 
-  test('工作区里有家目录本身或 / → warn，safe 只带个数、不带路径', () => {
-    const c = wd(['/srv/project', home, '/']);
+  test('工作区里有家目录本身或 / → warn，safe 只带个数、不带路径', async () => {
+    const c = await wd(['/srv/project', home, '/']);
     assert.equal(c.status, 'warn');
     assert.equal(c.safe.tooBroad, 2);
     assert.equal(c.safe.count, 3);
     assert.equal(JSON.stringify(c).includes(home), false, '家目录路径不进体检报告');
   });
 
-  test('都是具体项目目录 → ok（正对照）', () => {
-    const c = wd(['/srv/project', `${home}/code/app`]);
+  test('都是具体项目目录 → ok（正对照）', async () => {
+    const c = await wd(['/srv/project', `${home}/code/app`]);
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.tooBroad, 0);
   });
@@ -627,16 +687,16 @@ test.describe('WORK_DIRS：过宽根只报不拦', () => {
 // 「找不到」的个数只能由 server 另外喂进来（ctx.missingFolders，与服务告警同一个数）。
 test.describe('WORK_DIRS：一个都没连是正常状态，配置了却找不到才 warn', () => {
   const home = '/home/ccm-doctor-tester';
-  const wd = (ctx) => runDoctor({ ...stubProbes(), home, ...ctx }).checks.find(c => c.id === 'WORK_DIRS');
+  const wd = async (ctx) => (await runDoctor({ ...stubProbes(), home, ...ctx })).checks.find(c => c.id === 'WORK_DIRS');
 
-  test('一个都没连 → ok（新装、全部断开之后都是这样，不该亮黄）', () => {
-    const c = wd({ workDirs: [] });
+  test('一个都没连 → ok（新装、全部断开之后都是这样，不该亮黄）', async () => {
+    const c = await wd({ workDirs: [] });
     assert.equal(c.status, 'ok');
     assert.equal(c.safe.count, 0);
   });
 
-  test('配置了却找不到 → warn，个数进 safe、路径不进报告', () => {
-    const c = wd({ workDirs: [], missingFolders: 2 });
+  test('配置了却找不到 → warn，个数进 safe、路径不进报告', async () => {
+    const c = await wd({ workDirs: [], missingFolders: 2 });
     assert.equal(c.status, 'warn');
     assert.equal(c.safe.missing, 2);
     assert.match(c.detail, /找不到/);
@@ -649,7 +709,7 @@ test.describe('probeConnectedFolders：已连接文件夹的布局取数', () =>
   const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { stdio: 'pipe' });
 
   // 范围外的 worktree 不随仓库授权（2026-10-10，照官方桌面端）：仓库连着也不算多余，罩住它的父目录连着才算
-  test('WORKDIRS 里的平级 worktree：父目录也连着时算多余，只连了仓库或仓库没连时不算', () => {
+  test('WORKDIRS 里的平级 worktree：父目录也连着时算多余，只连了仓库或仓库没连时不算', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-doctor-')));
     try {
       const repo = join(root, 'repo');
@@ -671,7 +731,7 @@ test.describe('probeConnectedFolders：已连接文件夹的布局取数', () =>
     }
   });
 
-  test('scratch 根：向上找到带 .git 的祖先就报出来；还没建时看最近的已存在祖先能不能写', () => {
+  test('scratch 根：向上找到带 .git 的祖先就报出来；还没建时看最近的已存在祖先能不能写', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-cf-scratch-')));
     try {
       const plain = probeConnectedFolders({ dirs: [], scratchRoot: join(root, 'Library', 'scratch-workspaces') });

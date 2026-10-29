@@ -4657,12 +4657,13 @@ registerSocketConnection(io, socket => {
     ack({ ok: true, sent, failed, subscribed: sent + failed > 0, ntfy });
   });
 
-  on(socket, 'doctor:run', (_payload, ack) => {
+  on(socket, 'doctor:run', async (_payload, ack) => {
     if (typeof ack !== 'function') return;
     // claudeVersion 传的是**启动时的快照**：runDoctor 自己会实时探一次 claude，两者不一致就报
     // 「CLI 升级过、重启才生效」。此前它是 CLAUDE_BIN 那一格的唯一判据，于是 claude 被升级/移走后
     // web 体检照样回放旧版本号并判 ok（2026-08-27 实测：装的 2.1.247，面板显示 2.1.246 绿灯）。
-    ack(runDoctor({
+    // settings 由 SDK resolveSettings 读（#454），所以 runDoctor 是 async。
+    ack(await runDoctor({
       authToken: AUTH_TOKEN,
       claudeVersion: versions.cli,
       workDirs,
