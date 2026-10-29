@@ -3,7 +3,10 @@
 // 用法：
 //   node tests/smoke/runner.js --scenario question
 //
-// 语义断言：模型回答中须包含我们选择的选项文本（防 deny+message 通道失效）
+// 两条断言（#455 作答改走 canUseTool 的 allow 通道）：
+//   ① AskUserQuestion 的 tool_result 不是错误——allow + updatedInput 被 CLI 收下的直接证据；CLI 拒收（改了原始字段、
+//      旧 CLI 不认 annotations）时这里是 is_error
+//   ② 模型回答中包含我们选择的选项文本——答案真的送到了模型手里
 
 import { io } from 'socket.io-client';
 
@@ -21,6 +24,9 @@ let failed = 0;
 let assistantText = '';
 let questionReceived = false;
 let answerLabel = '';
+let askToolUseId = null;
+let askResultOk = null;
+let askResultText = '';
 
 // 选项可能是裸字符串，也可能是 {label, description} 对象——AskUserQuestion 实际下发的是后者
 // （2026-09-02 真机实测）。本函数与前端 app/public/js/app/approval-questions.js 的 optionLabel 同语义：
@@ -56,6 +62,14 @@ socket.on('agent:event', ev => {
     console.log(`   ➜ 自动选择选项 ${idx}：「${answerLabel}」`);
     socket.emit('user:answer', { requestId: p.requestId, optionIndex: idx });
 
+  } else if (ev.type === 'tool_use' && ev.payload?.name === 'AskUserQuestion') {
+    askToolUseId = ev.payload.toolUseId;
+
+  } else if (ev.type === 'tool_result' && askToolUseId && ev.payload?.toolUseId === askToolUseId) {
+    askResultOk = ev.payload.ok;
+    askResultText = String(ev.payload.outputSummary || '');
+    console.log(`\n🔧 AskUserQuestion 结果 ok=${askResultOk}：${askResultText.slice(0, 160)}`);
+
   } else if (ev.type === 'text_delta') {
     assistantText += ev.payload.text;
 
@@ -66,11 +80,14 @@ socket.on('agent:event', ev => {
     if (!questionReceived) {
       console.log(`❌ 失败：模型未调用 AskUserQuestion（question 事件未触发）`);
       failed++;
+    } else if (askResultOk !== true) {
+      console.log(`❌ 失败：AskUserQuestion 的 tool_result 不是成功（ok=${askResultOk}）——allow 通道没被 CLI 收下：${askResultText.slice(0, 200)}`);
+      failed++;
     } else if (assistantText.toLowerCase().includes(answerLabel.toLowerCase())) {
       console.log(`✅ 通过：assistant 回复中包含所选选项「${answerLabel}」（${dur}s）`);
       passed++;
     } else {
-      console.log(`❌ 失败：assistant 回复未包含「${answerLabel}」——deny+message 通道可能失效`);
+      console.log(`❌ 失败：assistant 回复未包含「${answerLabel}」——答案没送到模型手里`);
       failed++;
     }
     console.log(`\n${failed === 0 ? '✅' : '❌'} 完成：${passed} 通过，${failed} 失败`);

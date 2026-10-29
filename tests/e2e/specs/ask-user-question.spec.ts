@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { MAIN_WORKSPACE, expandWorkspace, openSessionsSidebar, openWorkspaceSession } from '../../helpers/sidebar-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-08 AskUserQuestion 多选弹窗', async ({ page }) => {
@@ -228,8 +229,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // P0-08j（2026-10-26）：对齐 CLI 的多题提问——顶部题目标签栏可来回切，答案先攒成草稿，最后在复查页整组提交。
   // 此前每题点完就提交给服务端、服务端拒收重答，误点一题只能「跳过」中止整轮。
-  // 机主定：没答完时「提交」禁用，并标出哪几题没答（CLI 允许缺题提交，这里有意不跟）。
-  test('P0-08j 多题提问：可切回前一题改答案，没答完禁用提交并标出未答题，提交的是改过的答案', async ({ page }) => {
+  // #455（机主 2026-10-29 改判）：没答完也能提交、对齐 CLI，复查页标出没答的题并说明提交后按跳过处理。
+  test('P0-08j 多题提问：可切回前一题改答案，没答的题标出来，提交的是改过的答案', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:question-group');
     const modal = page.locator('#questionModal');
@@ -249,12 +250,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(modal).toBeVisible();
     await expect(tabs.nth(0)).toHaveText('☑ Branch');
 
-    // 跳过第 2、3 题直接去提交页：提交禁用，没答的两题标出来
+    // 跳过第 2、3 题直接去提交页：提交可点，没答的两题标出来，并说明提交后按跳过处理
     await tabs.last().click();
     await expect(submit).toBeVisible();
-    await expect(submit).toBeDisabled();
+    await expect(submit).toBeEnabled();
     await expect(missing).toBeVisible();
     await expect(missing).toContainText('2');
+    await expect(missing).toContainText('跳过');
     await expect(rows).toHaveCount(3);
     await expect(rows.nth(0)).toContainText('main');
     await expect(rows.nth(1)).toContainText('未作答');
@@ -298,6 +300,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-08l 多题提问：留一题不答直接提交，那题按跳过交上去，本轮继续', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:question-group');
+    const modal = page.locator('#questionModal');
+    await expect(modal).toBeVisible();
+    const tabs = page.locator('#questionTabs button');
+    const opts = page.locator('#questionOptions button');
+    await opts.filter({ hasText: 'main' }).click();                // 第 1 题
+    await tabs.nth(2).click();                                      // 第 2 题不答，直接去第 3 题
+    await opts.filter({ hasText: 'team' }).click();                 // 第 3 题 → 复查页
+    await expect(page.locator('#questionReviewList > button').nth(1)).toContainText('未作答');
+    await page.locator('#questionGroupSubmit').click();
+    await expect(modal).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Group answers: Branch=main; Checks=(skipped); Notify=team');
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-08k 多题提问：其它设备整组提交后，本机的组卡自动关闭', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:question-group-remote-resolved');
@@ -309,17 +329,55 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-08g AskUserQuestion 可跳过并按取消收敛', async ({ page }) => {
+  // #455：历史回放只有 ok 与原文（denyKind 只活在实例内存里）。旧 transcript 的答案是 deny 通道写进错误的中文，
+  // 回放时曾把答过的卡显成红色 ❌；新格式是 CLI 自己的非错误文案。四张卡依次：旧·已回答、旧·已取消、新·已回答、新·没回答。
+  test('P0-08-HIST 历史回放的 AskUserQuestion 卡：旧格式答案不再显成出错，新格式按 CLI 文案分已回答 / 未作答', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:arm-history-ask-question');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Timeline Session');
+    await expect(page.locator('#messages')).toContainText('Timeline today follow-up', { timeout: 10_000 });
+
+    const cards = page.locator('details.toolcard[data-tool-name="AskUserQuestion"]');
+    await expect(cards).toHaveCount(4);
+    await expect(cards.last().locator('.t-status')).toHaveAttribute('aria-label', '未作答'); // 屏障：最后一张也画过状态
+    const labels = await cards.locator('.t-status').evaluateAll(els => els.map(e => e.getAttribute('aria-label')));
+    expect(labels).toEqual(['已回答', '已拒绝', '已回答', '未作答']);
+    await cards.first().locator('summary').click();
+    await expect(cards.first().locator('.t-out code')).toHaveText('用户选择了：「main」'); // Error: 前缀剥掉
+    await expectNoBrowserErrors(page);
+  });
+
+  // #455：原来唯一的「跳过」复用 user:interrupt，用户只是不想答，整轮工作却被打断。拆成两条：
+  // 「不回答」关卡、本轮继续（工具卡显「未作答」，不是错误）；「中止本轮」照旧停下这一轮（等价终端 Esc）。
+  test('P0-08g AskUserQuestion「不回答」：关卡后本轮继续，工具卡显未作答', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:question');
     await expect(page.locator('#questionModal')).toBeVisible();
-    await expect(page.locator('#questionSkip')).toBeVisible();
-    await expect(page.locator('#questionSkip')).toContainText('跳过');
+    await expect(page.locator('#questionSkip')).toHaveText('不回答');
 
     await page.locator('#questionSkip').click();
     await expect(page.locator('#questionModal')).toBeHidden();
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '未作答');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('No answer given, carrying on');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-08g2 AskUserQuestion「中止本轮」：按取消收敛，这一轮停下', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionInterrupt')).toHaveText('中止本轮');
+
+    await page.locator('#questionInterrupt').click();
+    await expect(page.locator('#questionModal')).toBeHidden();
     await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已拒绝');
+    await expect(page.getByText('No answer given')).toHaveCount(0); // 中止了就不该走「不回答、本轮继续」那条路
 
     await expectNoBrowserErrors(page);
   });

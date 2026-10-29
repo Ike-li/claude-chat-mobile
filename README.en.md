@@ -49,7 +49,7 @@ Walking away from the desk, the fear isn't losing sight of the output — it's t
 | In the terminal | On the phone |
 | --- | --- |
 | **Tool approval** (y / n) | An approval card: Allow / Deny / **Interrupt turn** (mirrors `Esc`). Tick "always allow" and pick this session only, or permanently |
-| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select, a free-form "Other…", and "skip and interrupt turn" are all there |
+| **It asks you something** (`AskUserQuestion`) | Tap the option. Multi-select and a free-form "Other…" are there; "Don't answer" lets it carry on, "Interrupt turn" stops it |
 | **Did it finish, or is it stuck?** | Pushed to your lock screen. Approvals, questions and background-task completions are pushed **unconditionally**, whether or not you have it open |
 
 The rest is about getting work done:
