@@ -2710,8 +2710,12 @@ function openScoutInstance(cwd) {
         // 命令清单与模型同出一次 initialize、回调紧随其后：当场 dispose 的话它到达时实例已 disposed、被丢掉（#456）
         instance.commandsFetch.then(cleanup);
       } else if (envelope.type === 'slash_commands') {
-        // 从没聊过的新工作区，发消息之前的完整命令清单就靠这一下（init 要等首条消息之后才来）
-        if (adoptSlashCommands(cwd, envelope.payload?.slashCommands)) pushSlashCommandsForCwd(cwd);
+        // 从没聊过的新工作区，发消息之前的完整命令清单就靠这一下（init 要等首条消息之后才来）。
+        // 只在它仍是新会话页 / 当前查看的目标时才推（判据同 session:new 的补播）：用户已切到别区的话，前端的 init handler
+        // 不看 cwd，推了就把那边的菜单换成这一区的（PR #466 review）。缓存照落，切回来时 pushSlashCommandsForCwd 会用上。
+        if (adoptSlashCommands(cwd, envelope.payload?.slashCommands) && (composeCwdNow() ?? viewingCwdOf()) === cwd) {
+          pushSlashCommandsForCwd(cwd);
+        }
       } else if (envelope.type === 'init') {
         // CLI 启动完成，init 已到 → 补调 fetchModels（首次在 start() 中可能因 CLI 未就绪静默失败）
         instance.fetchModels();

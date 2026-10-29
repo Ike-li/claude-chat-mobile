@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { spawnServer, killServer } from './_spawn-server.mjs';
+import { spawnServer, killServer, waitForCondition } from './_spawn-server.mjs';
 
 const TOKEN = 'slash-commands-test-token';
 // 同名两行：标了 builtin 的那行才是 /review 实际执行的，菜单说明要跟它走
@@ -29,6 +29,7 @@ function createClient(port) {
   socket.on('agent:event', e => events.push(e));
   return {
     socket,
+    events,
     waitForConnect(timeout = 5000) {
       return new Promise((resolve, reject) => {
         if (socket.connected) return resolve();
@@ -46,6 +47,12 @@ function createClient(port) {
           if (matches(e)) { clearTimeout(timer); socket.off('agent:event', handler); resolve(e); }
         };
         socket.on('agent:event', handler);
+      });
+    },
+    emitAck(event, payload, timeout = 5000) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${event} ack timeout`)), timeout);
+        socket.emit(event, payload, res => { clearTimeout(timer); resolve(res); });
       });
     },
     disconnect() { socket.disconnect(); },
@@ -108,6 +115,54 @@ test.describe('斜杠命令清单：supportedCommands() 的说明在首条消息
       // 实例自己拉到的清单直播给手机：同样是归一后的，同名只留 builtin 那行
       const pushed = await client.waitForEvent('slash_commands', null, 20000);
       assert.deepEqual(pushed.payload.slashCommands.filter(c => c?.name === 'review'), [{ name: 'review', description: 'builtin review' }]);
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+// PR #466 review：A 区的 scout 还没回来，用户已经切到了 B。A 的清单照样落缓存，但不能推给手机——
+// 前端的 init handler 不看 cwd，推了就把 B 的菜单换成 A 的 project skill，直到下一次清单更新。
+test.describe('scout 回来时用户已切到别的工作区：清单只落缓存，不推', () => {
+  let proc, port, wdA, wdB, dataDir;
+
+  test.before(async () => {
+    wdA = mkdtempSync(join(tmpdir(), 'ccm-slash-a-'));
+    wdB = mkdtempSync(join(tmpdir(), 'ccm-slash-b-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'ccm-slash-ab-data-'));
+    const started = await spawnServer({
+      AUTH_TOKEN: TOKEN,
+      WORK_DIRS: `${wdA},${wdB}`,
+      CCM_DATA_DIR: dataDir,
+      CLAUDE_BIN: join(process.cwd(), 'tests/fixtures/fake-claude.sh'),
+      CCM_FAKE_CLAUDE_MODE: 'init',
+      CCM_FAKE_CLAUDE_COMMANDS: JSON.stringify(COMMANDS),
+    });
+    proc = started.proc;
+    port = started.port;
+  });
+
+  test.after(async () => {
+    if (proc) { await killServer(proc); proc = null; }
+    for (const d of [wdA, wdB, dataDir]) {
+      if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  });
+
+  test('先 A 后 B 连开新会话：只推 B 的', async () => {
+    const client = createClient(port);
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+      client.socket.emit('session:new', { cwd: wdA });
+      client.socket.emit('session:new', { cwd: wdB });
+      // 两个 scout 都报了模型清单；命令清单出自同一次 initialize、紧随其后。再走一个 ack 来回，
+      // 服务端在它之前发出的推送就都已经到了（同一条连接上按序送达）
+      await waitForCondition(() => client.events.filter(e => e.type === 'models').length >= 2, { timeoutMs: 20000, label: '两个 scout 的模型清单' });
+      await client.emitAck('service:status', {});
+      const pushedFor = cwd => client.events.filter(e => e.type === 'init' && e.payload?.cwd === cwd && deployOf(e));
+      assert.equal(pushedFor(wdB).length, 1, '正对照：B 的清单要推到手机');
+      assert.equal(pushedFor(wdA).length, 0, 'A 的 scout 晚到，不该把 A 的清单推给正看着 B 的手机');
     } finally {
       client.disconnect();
     }
