@@ -148,6 +148,8 @@ const DEFAULT_REPLAY_OOB_TYPES = new Set([
   // 屏幕上会一直留着已经不存在的那几轮，且刷新前不自愈。
   // （注意：本行注释里不能出现事件名的字面形状，提取器是裸正则、不跳注释。）
   'rewind_applied',
+  // 前台任务快照（#459）：被丢掉的话「转后台」按钮要等下一次集合变化才出现
+  'foreground_tasks',
 ]);
 
 export function createReplayBuffer({

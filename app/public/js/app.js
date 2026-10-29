@@ -250,6 +250,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createForegroundTasks } from './app/foreground-tasks.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
 import { createResumeDivergencePrompt } from './app/resume-divergence.js';
@@ -2782,6 +2783,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     }),
     outOfBand: {
       task_notification: onTaskNotification,
+      // 前台任务集合（#459）：按实例存、只画当前查看的那个，所以不经视图过滤
+      foreground_tasks: (ev) => foregroundTasks.onEvent(ev),
       // 回退已生效（可能来自本机，也可能来自另一台设备）。走 outOfBand 而非普通 handler：
       // 它是【跨会话】通知，普通分支会因 event.sessionId ≠ currentSessionId 触发 onSessionId
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
@@ -5700,6 +5703,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     viewingInstanceId = newViewing;
+    foregroundTasks.render(); // 「转后台」只跟着当前查看的实例
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
@@ -7118,6 +7122,12 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
   });
   const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
+  // 转后台（#459，终端 Ctrl+B）：输入条「转后台」与工具卡「后台运行」，见 app/foreground-tasks.js
+  const foregroundTasks = createForegroundTasks(appContext, {
+    $, socket, addBar,
+    getViewingInstanceId: () => viewingInstanceId,
+    getToolCard: toolUseId => toolCards.get(toolUseId),
+  });
 
   // ---- /rewind 面板（对齐终端的两步交互）----
   // 成功路径的 UI 更新由 rewind_applied 广播统一驱动（本机与其他设备同一条路径），

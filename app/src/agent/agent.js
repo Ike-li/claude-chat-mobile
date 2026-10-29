@@ -651,6 +651,7 @@ export class AgentSession {
     this.taskBackgrounded = new Map(); // taskId → is_backgrounded（CLI 在 task_started/task_updated 上报）。
                                        // 判「这条 task_notification 是真后台任务，还是跑得久的前台工具」；
                                        // 缺席=未知，保守按后台处理（该字段只在 local_agent/local_bash 上设置）
+    this.foregroundTasks = new Map(); // taskId → { taskId, toolUseId, taskType, description }：此刻挡着本轮的前台任务（#459，见 emitForegroundTasks）
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
     // stream_event（text/thinking delta）与 user（tool_result）都不带。缓存供后二者补标签——否则纯文本子 agent
     // （无 tool_use、只走 stream_event）的卡片永远没有 🤖 类型名。换会话/dispose 清空，不跨会话/实例串标签。
@@ -1385,6 +1386,23 @@ export class AgentSession {
       return true;
     } catch {
       return false; // SDK 无该任务 / 已结束 / 挂起超时：静默吞（幂等）
+    }
+  }
+
+  // 把在跑的前台任务转到后台（#459），对应终端 Ctrl+B。不带 toolUseId = 全部前台任务；带 = 只转那个 tool_use 起的。
+  // 转了之后被挡住的工具调用立刻回一条「running in the background」的 tool_result、本轮继续；CLI 随后发
+  // task_updated（is_backgrounded:true）与 background_tasks_changed，前台集合与后台任务横幅各自接住，这里不额外 emit。
+  // 结果分档给前端写原因：no_instance（已 dispose / 没有 q）· not_found（SDK 回 false：给的 toolUseId 没对上前台任务）·
+  // disabled（会话用 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS 禁了，SDK 抛错）· error（其它异常，含控制请求超时）。不向外抛。
+  async backgroundTasks(toolUseId) {
+    if (this.disposed || !this.q?.backgroundTasks) return { ok: false, reason: 'no_instance' };
+    try {
+      const backgrounded = await this._raceControlRequest(() => this.q.backgroundTasks(toolUseId), 'background_tasks');
+      return backgrounded === false ? { ok: false, reason: 'not_found' } : { ok: true };
+    } catch (err) {
+      const error = String(err?.message || err || 'error').slice(0, 500);
+      // CLI 2.1.309 的原文：「Background tasks are disabled in this session.」
+      return { ok: false, reason: /background tasks are disabled/i.test(error) ? 'disabled' : 'error', error };
     }
   }
 
@@ -2339,6 +2357,17 @@ export class AgentSession {
 
   hasBgTasks() { return this.bgTasks.size > 0; }
 
+  // 前台任务集合的全量快照（#459）。输入条「转后台」与工具卡「后台运行」只在它非空时出现：SDK
+  // backgroundTasks() 不带参数时恒回 true，区分不出「真转了」和「本来就没有前台任务」，UI 只能自己知道。
+  // 电平语义、瞬时发（不占 seq、不进环形缓冲），切回 / 重连由 sync:since 补推——同 task_progress 那份快照。
+  emitForegroundTasks() {
+    this.emitTransient('foreground_tasks', { tasks: [...this.foregroundTasks.values()] });
+  }
+
+  _dropForegroundTask(taskId) {
+    if (taskId != null && this.foregroundTasks.delete(taskId)) this.emitForegroundTasks();
+  }
+
   // checkIdle 豁免专用：只认【SDK 上报的】后台任务，排除我们自己扫盘造出来的 localcmd 条目。
   // 【为什么必须分开】localcmd 任务的「还活着」语义已经由 _localCommandInFlight() 表达了，而那个
   // 判据自带 45 分钟上限。若让它们也算进豁免，就成了自我循环：扫出子代理 → hasBgTasks() 恒真 →
@@ -2997,6 +3026,7 @@ export class AgentSession {
           // task_type（local_workflow / mcp_task）本就没有这个字段，缺席必须维持既有行为。
           const foreground = doneTaskId != null && this.taskBackgrounded.get(doneTaskId) === false;
           if (doneTaskId != null) this.taskBackgrounded.delete(doneTaskId); // 终态：两条路径都不留滞留记录
+          this._dropForegroundTask(doneTaskId);
           if (!foreground) {
             // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
             // 前台工具不武装：它的续写本就由 tool_result 驱动，多武装一次等于把 maybeSynthesizeAutoTurn
@@ -3079,6 +3109,7 @@ export class AgentSession {
           if (updatedTaskId != null && typeof msg.patch?.is_backgrounded === 'boolean') {
             setCapped(this.taskBackgrounded, updatedTaskId, msg.patch.is_backgrounded, TASK_BACKGROUNDED_MAX);
           }
+          if (msg.patch?.is_backgrounded === true) this._dropForegroundTask(updatedTaskId);
           this.bgTaskPatch(updatedTaskId, msg.patch);
         } else if (msg.subtype === 'task_started') {
           // 后台任务开始：background_tasks_changed 全量快照紧邻投递、已覆盖新增，故【增删】不在此处理——
@@ -3093,6 +3124,16 @@ export class AgentSession {
           const startedTaskId = msg.task_id ?? msg.taskId ?? null;
           if (startedTaskId != null && typeof msg.is_backgrounded === 'boolean') {
             setCapped(this.taskBackgrounded, startedTaskId, msg.is_backgrounded, TASK_BACKGROUNDED_MAX);
+          }
+          // 前台任务进集合（#459）。只认明确的 false：别的 task_type 没有这个字段，它们本来就不挡本轮
+          if (startedTaskId != null && msg.is_backgrounded === false) {
+            this.foregroundTasks.set(startedTaskId, {
+              taskId: startedTaskId,
+              toolUseId: typeof msg.tool_use_id === 'string' && msg.tool_use_id ? msg.tool_use_id : null,
+              taskType: msg.task_type ?? null,
+              description: msg.description ? truncate(String(msg.description), TOOL_SUMMARY_CAP) : null,
+            });
+            this.emitForegroundTasks();
           }
           //
           // 【已评估：spawn_depth 不接（2026-09-07，升 SDK 0.3.263 时查证）】0.3.238 给本消息加了
@@ -3530,6 +3571,8 @@ export class AgentSession {
         // 在途前台工具随本轮收尾清账：工具不可能跨轮存活。中断/审批取消时 tool_result 可能永不回来，
         // 只靠上面的 delete 会留下残条目，让下一轮被无依据地豁免看护。
         this.pendingToolUses.clear();
+        // 前台任务同理（#459）：漏了 task_updated / task_notification 时，「转后台」按钮最多残留到这里
+        if (this.foregroundTasks.size) { this.foregroundTasks.clear(); this.emitForegroundTasks(); }
         this.completedTurns += 1;
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;

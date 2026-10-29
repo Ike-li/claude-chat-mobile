@@ -8,6 +8,8 @@ import {
   expandWorkspace,
   expectSessionStatusChip,
   openSessionsSidebar,
+  sessionRowByInstance,
+  startNewSessionInWorkspace,
   workspaceRow
 } from '../../helpers/sidebar-ui';
 
@@ -264,6 +266,86 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(list).toBeVisible();
 
     await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  // 转后台（#459，终端 Ctrl+B）。mock 的 test:fg-task 起一条前台 Bash 挡着本轮；转后台成功后照 CLI 的次序
+  // 回事件：前台集合清空 → 进后台任务横幅 → 工具卡收到「running in background」→ 本轮收尾。
+  test('P0-17q 前台命令挡着本轮时出「转后台」，点了整轮转后台、横幅接住', async ({ page }) => {
+    await gotoMock(page);
+
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    await expect(composerBtn).toBeHidden();
+    await sendChatMessage(page, 'test:fg-task');
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    await expect(composerBtn).toBeVisible();
+    await expect(card.locator('[data-testid="tool-background"]')).toBeVisible();
+
+    await composerBtn.click();
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(composerBtn).toBeHidden();
+    await expect(card.locator('[data-testid="tool-background"]')).toHaveCount(0);
+    await expect(card).toContainText('running in background');
+    // 点卡上的按钮不该顺手展开卡片；点输入条按钮更不该
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17r 工具卡上的「后台运行」只转这一条，且不连带展开卡片', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task');
+    const card = page.locator('details.toolcard[data-tool-name="Bash"]');
+    const cardBtn = card.locator('[data-testid="tool-background"]');
+    await expect(cardBtn).toBeVisible();
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await cardBtn.click();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('sleep 120');
+    await expect(cardBtn).toHaveCount(0);
+    await expect(page.locator('[data-testid="btn-background-tasks"]')).toBeHidden();
+    await expect(card).not.toHaveAttribute('open', '');
+
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17t 「转后台」只跟着当前查看的会话：切走就藏，切回来还在', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task');
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    await expect(composerBtn).toBeVisible();
+
+    // 切到同工作区的新会话：那边没有前台任务
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, '/Users/you/code/claude-chat-mobile');
+    await expect(composerBtn).toBeHidden();
+
+    // 切回 inst_1：它的前台任务还挡着本轮，按钮回来
+    await openSessionsSidebar(page);
+    await sessionRowByInstance(page, 'inst_1').click();
+    await expect(composerBtn).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17s 会话禁用了后台任务：点「转后台」把原因写进消息流，按钮留着', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:fg-task-disabled');
+    const composerBtn = page.locator('[data-testid="btn-background-tasks"]');
+    await expect(composerBtn).toBeVisible();
+
+    await composerBtn.click();
+    await expect(page.locator('#messages')).toContainText('这个会话禁用了后台任务（CLAUDE_CODE_DISABLE_BACKGROUND_TASKS）');
+    await expect(composerBtn).toBeVisible();
+    await expect(composerBtn).toBeEnabled();
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
     await expectNoBrowserErrors(page);
   });
 });

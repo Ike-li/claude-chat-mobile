@@ -9,6 +9,27 @@
 
 import { t, tk } from '../i18n.js';
 
+// 前台任务（#459）：foreground_tasks 快照 → 前端用的列表。输入条「转后台」只看有没有，工具卡「后台运行」
+// 按 toolUseId 对上自己那条；toolUseId 缺席的只能跟着整体转后台。没有 taskId 的条目不认（server 不会发）。
+export function normalizeForegroundTasks(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object' || typeof row.taskId !== 'string' || !row.taskId) continue;
+    out.push({ taskId: row.taskId, toolUseId: typeof row.toolUseId === 'string' && row.toolUseId ? row.toolUseId : null });
+  }
+  return out;
+}
+
+// task:background 回执 → 失败时给用户的一句话，成功回空串。原因分档见 agent.backgroundTasks。
+export function backgroundTasksErrorText(res) {
+  if (res?.ok === true) return '';
+  if (res?.reason === 'disabled') return t('这个会话禁用了后台任务（CLAUDE_CODE_DISABLE_BACKGROUND_TASKS）');
+  if (res?.reason === 'not_found') return t('这个任务已经不在前台了');
+  if (res?.reason === 'no_instance') return t('会话已经关闭，或正由终端驾驶');
+  return res?.error ? `${t('转后台失败：')}${res.error}` : t('转后台失败');
+}
+
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
 // 合成任务 id：SDK 侧不存在这个 id，任何「停止」都必然静默失败，展示上也不该露出内部命名空间。
 // 两类来源：
