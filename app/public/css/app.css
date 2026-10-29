@@ -1129,12 +1129,16 @@ details.thinking.thinking-live > summary::before {
   height: 13px;
 }
 
-/* 未读角标胶囊：#messages 的兄弟节点，viewport-fixed 悬浮于 composer 上方（避免依赖父级 position:relative，
-   composer 高度会随输入内容变化，固定偏移量取常见 1~2 行高度 + 安全距离，不追求逐像素贴合）。 */
+/* 未读角标胶囊（#359）：#composerFooter 的子节点，绝对定位在它顶边外侧——composer 长高（多行输入、横幅、
+   附件托盘、iOS 键盘 padding）时跟着上移。以前写死 viewport bottom:84px，composer 一高就叠在输入框上。
+   footer 是 body 的 flex / grid 子项，z-index 本来就生效，加 relative 不改层叠，只给胶囊当包含块。 */
+#composerFooter {
+  position: relative;
+}
 #unreadPill {
-  position: fixed;
+  position: absolute;
   right: 0.75rem;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(100% + 12px);
   z-index: 15;
   border: none;
 }
