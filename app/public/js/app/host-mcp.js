@@ -37,24 +37,27 @@ export function createHostMcp({ emit, appConfirm, getInstanceId, getSnapshot, on
     onChange();
   }
 
-  async function act(name, event, payload) {
+  // instanceId：卡片画的是哪个实例。别的设备可以在这期间切走共享的查看会话（确认 sheet 开着时尤其），
+  // 那时再发就落到了用户没在看的会话上，停用还会写那个项目的配置——对不上就只刷新、不处置。
+  async function act(instanceId, name, event, payload) {
+    if (instanceId !== getInstanceId()) { await refresh(); return; }
     busy.add(name);
     rowErrors.delete(name);
     onChange();
-    const res = await emit(event, { ...payload, name, instanceId: live?.instanceId ?? getInstanceId() }, ACTION_TIMEOUT_MS);
+    const res = await emit(event, { ...payload, name, instanceId }, ACTION_TIMEOUT_MS);
     busy.delete(name);
     if (res?.ok !== true) rowErrors.set(name, res?.error || t('操作失败'));
     await refresh();
   }
 
-  async function toggle(name, enable) {
+  async function toggle(instanceId, name, enable) {
     if (!enable && !(await appConfirm({
       title: t('停用这个 MCP 服务器？'),
       body: `${name}\n${t('对本项目持久生效，与终端 /mcp 相同：之后新开的会话也不再加载它。')}`,
       okText: t('停用'),
       tone: 'danger',
     }))) return;
-    await act(name, 'mcp:toggle', { enabled: enable });
+    await act(instanceId, name, 'mcp:toggle', { enabled: enable });
   }
 
   function button(action, text, name, onClick) {
@@ -70,6 +73,7 @@ export function createHostMcp({ emit, appConfirm, getInstanceId, getSnapshot, on
   function renderCard() {
     const { mcp, live: isLive } = view();
     if (!mcp) return null;
+    const cardInstanceId = isLive ? live.instanceId : null;
     const card = node('div', 'p-2.5 rounded-xl border border-line bg-surface text-xs');
     const head = node('div', 'font-semibold text-ink', `${t('MCP 服务器')} · ${mcp.total} ${t('个')}${isLive ? '' : ` · ${t('快照')}`}`);
     card.appendChild(head);
@@ -90,8 +94,8 @@ export function createHostMcp({ emit, appConfirm, getInstanceId, getSnapshot, on
       if (item.needsAuth) main.appendChild(node('div', 'text-ink-faint', t('需在电脑上完成授权')));
       row.append(dot, main);
       if (isLive) {
-        if (item.reconnect) row.appendChild(button('reconnect', t('重连'), item.name, () => act(item.name, 'mcp:reconnect', {})));
-        row.appendChild(button('toggle', item.enabled ? t('停用') : t('启用'), item.name, () => toggle(item.name, !item.enabled)));
+        if (item.reconnect) row.appendChild(button('reconnect', t('重连'), item.name, () => act(cardInstanceId, item.name, 'mcp:reconnect', {})));
+        row.appendChild(button('toggle', item.enabled ? t('停用') : t('启用'), item.name, () => toggle(cardInstanceId, item.name, !item.enabled)));
       }
       list.appendChild(row);
     }

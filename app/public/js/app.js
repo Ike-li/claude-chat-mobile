@@ -5699,8 +5699,11 @@ import { createGateFocusController } from './app/focus-layers.js';
       ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
+    const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
     cwdSeen = true;
+    // 「宿主机」页开着时查看的会话换了（含别的设备切走）：MCP 卡片立刻按新会话重画（先退回快照、不留旧按钮），再现查（#457 review）
+    if (viewingChanged && generalNav?.currentPage() === 'host') { renderHostEnvSection(); hostMcp.refresh(); }
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 

@@ -3596,26 +3596,32 @@ registerSocketConnection(io, socket => {
     if (typeof ack === 'function') ack({ ok: ok === true });
   });
   // MCP 服务器（#457），对应终端 /mcp：实时状态 / 重连 / 启停。只对指定实例（缺省当前查看的那个）生效；显式指定但已关闭
-  // 的实例 routeInstance 为 null，不静默落到别的会话上——toggle 会写项目配置。终端驾驶的只读镜像没有 SDK 实例，
-  // status 回 live:false，前端退回 init 快照、不出按钮。名字是用户 / 插件写的配置键，这里只校验形状，显示由前端 textContent。
+  // 的实例 routeInstance 为 null，不静默落到别的会话上——toggle 会写项目配置。
+  // 终端在驾驶这个会话时（只读镜像），本进程的 SDK 子进程还活着、只是闲着：它的 MCP 状态不是终端里那份，对它重连 / 启停
+  // 也作用不到终端——按没有活实例处理，status 回 live:false（前端退回 init 快照、不出按钮），处置回 no_instance（#467 review）。
+  // 名字是用户 / 插件写的配置键，这里只校验形状，显示由前端 textContent。
   const isMcpName = name => typeof name === 'string' && name.length > 0 && name.length <= 256;
   const mcpError = err => String(err?.message || err || 'error').slice(0, 500);
+  const mcpInstance = instanceId => {
+    const a = routeInstance(instanceId);
+    return a && !mirrorOwnedBy(a.sessionId, a.instanceId) ? a : null;
+  };
   on(socket, 'mcp:status', async (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const servers = await routeInstance(payload?.instanceId)?.mcpStatus();
+    const servers = await mcpInstance(payload?.instanceId)?.mcpStatus();
     ack(servers ? { ok: true, live: true, servers } : { ok: true, live: false });
   });
   on(socket, 'mcp:reconnect', async (payload, ack) => {
     if (typeof ack !== 'function') return;
     if (!isMcpName(payload?.name)) { ack({ ok: false, error: 'invalid_payload' }); return; }
-    const a = routeInstance(payload?.instanceId);
+    const a = mcpInstance(payload?.instanceId);
     if (!a) { ack({ ok: false, error: 'no_instance' }); return; }
     try { await a.reconnectMcp(payload.name); ack({ ok: true }); } catch (err) { ack({ ok: false, error: mcpError(err) }); }
   });
   on(socket, 'mcp:toggle', async (payload, ack) => {
     if (typeof ack !== 'function') return;
     if (!isMcpName(payload?.name) || typeof payload?.enabled !== 'boolean') { ack({ ok: false, error: 'invalid_payload' }); return; }
-    const a = routeInstance(payload?.instanceId);
+    const a = mcpInstance(payload?.instanceId);
     if (!a) { ack({ ok: false, error: 'no_instance' }); return; }
     try { await a.toggleMcp(payload.name, payload.enabled); ack({ ok: true }); } catch (err) { ack({ ok: false, error: mcpError(err) }); }
   });

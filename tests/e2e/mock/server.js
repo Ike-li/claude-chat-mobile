@@ -629,6 +629,7 @@ let mockFoldersAddError = null; // test:folders-readonly：模拟工作区列表
 let mockAutoModeDisabled = false; // /__arm-auto-mode-disabled：本区 settings 写了 disableAutoMode（#461）
 // /__arm-mcp-live（#457）：mcp:status 现查得到（真 server 有活实例时）。null = 没有活实例，回 live:false，前端用 init 快照
 let mockMcpLive = null;
+let mockMcpLog = []; // 每条 mcp:* 请求的 { event, instanceId, name }：断言处置落在哪个实例上（#467 review）
 let mockMcpReconnectTries = 0;
 const mockFolderAbs = rel => (rel ? `${MOCK_HOME}/${rel}` : MOCK_HOME);
 function mockFolderReason(rel) {
@@ -659,6 +660,7 @@ function resetMockState() {
   mockFoldersAddError = null;
   mockAutoModeDisabled = false;
   mockMcpLive = null;
+  mockMcpLog = [];
   mockMcpReconnectTries = 0;
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
@@ -1009,6 +1011,19 @@ app.post('/__arm-mcp-live', (_req, res) => {
     { name: '<img src=x onerror="window.__mcpXss=1">', status: 'needs-auth', scope: 'user' },
   ];
   mockMcpReconnectTries = 0;
+  res.json({ ok: true });
+});
+
+app.get('/__mcp-log', (_req, res) => res.json(mockMcpLog));
+
+// 另一台设备把共享的查看会话切到了别的实例（同一个工作区里另开的会话）。用例借它验：「宿主机」页开着时
+// 查看的会话被别处切走，MCP 卡片要跟着换，旧卡片上的按钮不得把处置发到原来那个会话（#467 review）。
+app.post('/__other-device-views', (_req, res) => {
+  if (!mockInstances.some(i => i.instanceId === 'inst_other')) {
+    mockInstances.push({ ...createDefaultInstances()[0], instanceId: 'inst_other', sessionId: 'mock-session-other-device', title: 'Other Device Session' });
+  }
+  viewingInstanceId = 'inst_other';
+  broadcastMockInstances();
   res.json({ ok: true });
 });
 
@@ -7037,12 +7052,14 @@ io.on('connection', socket => {
   });
 
   // MCP（#457，真 server：app.js 的 mcp:* → agent.mcpStatus / reconnectMcp / toggleMcp）。ack 形状照真 server。
-  socket.on('mcp:status', (_payload, ack) => {
+  socket.on('mcp:status', (payload, ack) => {
     if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:status', instanceId: payload?.instanceId ?? null });
     ack(mockMcpLive ? { ok: true, live: true, servers: mockMcpLive.map(x => ({ ...x })) } : { ok: true, live: false });
   });
   socket.on('mcp:reconnect', (payload, ack) => {
     if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:reconnect', instanceId: payload?.instanceId ?? null, name: payload?.name });
     const server = mockMcpLive?.find(x => x.name === payload?.name);
     if (!server) { ack({ ok: false, error: 'no_instance' }); return; }
     mockMcpReconnectTries += 1;
@@ -7053,6 +7070,7 @@ io.on('connection', socket => {
   });
   socket.on('mcp:toggle', (payload, ack) => {
     if (typeof ack !== 'function') return;
+    mockMcpLog.push({ event: 'mcp:toggle', instanceId: payload?.instanceId ?? null, name: payload?.name });
     const server = mockMcpLive?.find(x => x.name === payload?.name);
     if (!server || typeof payload?.enabled !== 'boolean') { ack({ ok: false, error: 'no_instance' }); return; }
     server.status = payload.enabled ? 'connected' : 'disabled';

@@ -220,7 +220,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   // #457：状态改为现查（mcpServerStatus），连接中 / 已停用不算故障；能像终端 /mcp 一样重连、启停。
   // 名字是用户 / 插件写的配置键、错误来自 CLI：一律按纯文本显示。
-  test('P0-28m MCP 实时状态：连接中 / 已停用是灰档，失败的能重连（失败原因原样显示），停用要确认', async ({ page }) => {
+  test('P0-28r MCP 实时状态：连接中 / 已停用是灰档，失败的能重连（失败原因原样显示），停用要确认', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoMock(page);
     await ensureComposerReady(page);
@@ -257,6 +257,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(authRow).toContainText('需在电脑上完成授权');
     await expect(body.locator('img')).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__mcpXss)).toBeUndefined();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // #467 review：「宿主机」页开着时，另一台设备把共享的查看会话切走了。卡片要跟着新会话重画、现查；
+  // 停用的确认 sheet 开着时被切走，确认之后也不得把停用发出去——不管发给原来那个还是新看的那个，
+  // 都不是用户确认时看着的那张卡片（停用会写那个项目的配置）。
+  test('P0-28s MCP 卡片：查看的会话被别的设备切走 → 卡片跟着换，确认中的停用不发出去', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.request.post('/__arm-mcp-live');
+    await page.locator('#btnSessions').click();
+    await page.locator('#btnGeneralSettings').click();
+    await page.locator('[data-testid="general-nav-host"]').click();
+
+    const body = page.locator('[data-testid="host-env-body"]');
+    const row = name => body.locator(`[data-mcp-name="${name}"]`);
+    const mcpLog = async () => (await page.request.get('/__mcp-log')).json();
+    await expect(row('filesystem').locator('[data-mcp-action="toggle"]')).toBeVisible();
+
+    await row('filesystem').locator('[data-mcp-action="toggle"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.request.post('/__other-device-views');
+    await expect.poll(async () => (await mcpLog()).some(r => r.event === 'mcp:status' && r.instanceId === 'inst_other'),
+      { message: '查看的会话换了，卡片要按新会话现查' }).toBe(true);
+
+    await page.locator('#confirmOk').click();
+    await expect(row('filesystem')).not.toContainText('已停用');
+    expect((await mcpLog()).filter(r => r.event === 'mcp:toggle')).toEqual([]);
 
     await expectNoBrowserErrors(page);
   });
