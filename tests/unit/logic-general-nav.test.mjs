@@ -302,8 +302,9 @@ test('关于行：版本还没回来或是缺省字面量 unknown 时，不写�
 // 数据早就随 init 事件到了浏览器（agent.js 的 emit('init', {mcpServers})，SDK 契约是
 // `{name, status}[]`），只是从来没渲染过。这一层把它译成「几个、哪个坏了」。
 //
-// ★ 失败方向：status 的取值集合 SDK 未声明。不认识的值必须**当成有问题**，不能当成正常——
-//   把一个连不上的服务器显示成绿的，比显示成未知更糟：用户会去别处找原因。
+// ★ 失败方向：不认识的 status 必须**当成有问题**，不能当成正常——把一个连不上的服务器显示成绿的，
+//   比显示成未知更糟：用户会去别处找原因。init 字段只声明了 `status: string`；mcpServerStatus() 的类型
+//   声明了 connected / failed / needs-auth / pending / disabled（#457），其中 pending、disabled 是正常态，不算故障。
 
 test('MCP：没有服务器时返回 null，整段不该出现（不给空计数占位）', () => {
   assert.equal(formatMcpServers([]), null);
@@ -319,7 +320,7 @@ test('MCP：全部连上时报总数，每项标记为正常', () => {
   assert.equal(view.total, 2);
   assert.equal(view.failed, 0);
   assert.deepEqual(view.items.map(i => i.name), ['filesystem', 'github']);
-  assert.ok(view.items.every(i => i.ok));
+  assert.ok(view.items.every(i => i.tone === 'ok'));
 });
 
 test('MCP：有连接失败的，failed 计数与该项的 ok 都要反映出来', () => {
@@ -329,7 +330,7 @@ test('MCP：有连接失败的，failed 计数与该项的 ok 都要反映出来
   ]);
   assert.equal(view.total, 2);
   assert.equal(view.failed, 1);
-  assert.equal(view.items.find(i => i.name === 'postgres').ok, false);
+  assert.equal(view.items.find(i => i.name === 'postgres').tone, 'bad');
   // 原始 status 要留给用户看——「failed」和「needs-auth」是两种完全不同的处置
   assert.equal(view.items.find(i => i.name === 'postgres').status, 'failed');
 });
@@ -343,7 +344,38 @@ test('MCP：不认识的 status 一律不当作正常（未知值不得被渲染
     { name: 'c', status: '' },
   ]);
   assert.equal(view.failed, 3);
-  assert.ok(view.items.every(i => i.ok === false));
+  assert.ok(view.items.every(i => i.tone === 'bad'));
+});
+
+// #457：刚启动时 MCP 多半还在连（pending），用户自己停用的是 disabled——两者都不是故障，不能亮红点
+test('MCP：连接中 / 已停用是灰档，不计入故障；各自带上给人看的说法', () => {
+  const view = formatMcpServers([
+    { name: 'linear', status: 'pending' },
+    { name: 'notion', status: 'disabled' },
+    { name: 'postgres', status: 'failed' },
+  ]);
+  assert.equal(view.failed, 1);
+  assert.deepEqual(view.items.map(i => [i.name, i.tone, i.label]), [
+    ['linear', 'muted', '连接中'],
+    ['notion', 'muted', '已停用'],
+    ['postgres', 'bad', '连接失败'],
+  ]);
+});
+
+// 处置跟着状态走：失败的才给「重连」；已停用的开关是「启用」；要授权的只提示去电脑上授权（OAuth 走浏览器）
+test('MCP：每项带出可做的处置与失败原因', () => {
+  const view = formatMcpServers([
+    { name: 'github', status: 'connected' },
+    { name: 'postgres', status: 'failed', error: 'spawn ENOENT' },
+    { name: 'notion', status: 'disabled' },
+    { name: 'slack', status: 'needs-auth' },
+  ]);
+  const by = Object.fromEntries(view.items.map(i => [i.name, i]));
+  assert.deepEqual([by.github.reconnect, by.postgres.reconnect, by.notion.reconnect, by.slack.reconnect], [false, true, false, false]);
+  assert.deepEqual([by.github.enabled, by.postgres.enabled, by.notion.enabled, by.slack.enabled], [true, true, false, true]);
+  assert.equal(by.postgres.error, 'spawn ENOENT');
+  assert.equal(by.slack.needsAuth, true);
+  assert.equal(by.github.needsAuth, false);
 });
 
 test('MCP：条目缺 name 时跳过而不是渲染成空行', () => {

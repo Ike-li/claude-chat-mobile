@@ -76,7 +76,6 @@ import {
   undismissedServiceNotices,
   MISSING_FOLDERS_NOTICE_ID,
   formatHooksBridgeRow,
-  formatMcpServers,
   formatPushStatusRow,
   describePushTestResult,
   formatStatuslineBridgeRow,
@@ -238,6 +237,7 @@ import { createComposePage } from './app/compose-page.js';
 import { createSettingsController } from './app/settings.js';
 import { createGeneralNav } from './app/general-nav.js';
 import { createAboutPage } from './app/about-page.js';
+import { createHostMcp } from './app/host-mcp.js';
 import { createEnvConfigPanel } from './app/env-config.js';
 import { createNoticeDismissals } from './app/notice-dismissals.js';
 import { createLastKnownExpiry } from './app/terminal-state-expiry.js';
@@ -5710,8 +5710,11 @@ import { createGateFocusController } from './app/focus-layers.js';
       ? currentCwd : null;
     currentCwd = newCwd;
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
+    const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
     cwdSeen = true;
+    // 「宿主机」页开着时查看的会话换了（含别的设备切走）：MCP 卡片立刻按新会话重画（先退回快照、不留旧按钮），再现查（#457 review）
+    if (viewingChanged && generalNav?.currentPage() === 'host') { renderHostEnvSection(); hostMcp.refresh(); }
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 
@@ -7291,40 +7294,28 @@ import { createGateFocusController } from './app/focus-layers.js';
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
-  // 「宿主机上的 claude」段：MCP 服务器与 skills 数，来自 init 事件（缺字段不覆盖，见 init handler）。
+  // 「宿主机上的 claude」段：MCP 服务器与 skills 数。skills 数来自 init 事件（缺字段不覆盖，见 init handler）；
+  // MCP 进页时现查（#457，见 app/host-mcp.js），拿不到再用 init 那份快照。
+  const hostMcp = createHostMcp({
+    emit: (event, payload, ms = 3000) => new Promise(resolve => {
+      socket.timeout(ms).emit(event, payload, (err, res) => resolve(err ? null : res));
+    }),
+    appConfirm,
+    getInstanceId: () => viewingInstanceId,
+    // 现取当前 cwd 的那份：没有就是没有，绝不回落到上一个工作区的快照
+    getSnapshot: () => mcpServersByCwd.get(currentCwd) ?? null,
+    onChange: () => renderHostEnvSection(),
+  });
   function renderHostEnvSection() {
     const section = $('hostEnvSection'), body = $('hostEnvBody');
     if (!section || !body) return;
-    // 现取当前 cwd 的那份：没有就是没有（整段隐藏），绝不回落到上一个工作区的快照。
-    const lastMcpServers = mcpServersByCwd.get(currentCwd) ?? null;
     const lastSkillsCount = skillsCountByCwd.get(currentCwd) ?? 0;
-    const mcp = formatMcpServers(lastMcpServers);
+    const mcpCard = hostMcp.renderCard();
     // 两样都没有 = 这个 cwd 确实既没配 MCP 也没有 skill，整段隐藏，不给空计数占位
-    if (!mcp && !lastSkillsCount) { section.classList.add('hidden'); return; }
+    if (!mcpCard && !lastSkillsCount) { section.classList.add('hidden'); return; }
     section.classList.remove('hidden');
     body.replaceChildren();
-
-    if (mcp) {
-      const card = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
-      const head = el('<div class="font-semibold text-ink"></div>');
-      head.textContent = `${t('MCP 服务器')} · ${mcp.total} ${t('个')}`;
-      card.appendChild(head);
-      const list = el('<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1"></div>');
-      for (const item of mcp.items) {
-        const row = el('<span class="inline-flex items-center gap-1"></span>');
-        const dot = el('<span aria-hidden="true"></span>');
-        dot.className = item.ok ? 'text-success' : 'text-danger';
-        dot.textContent = '●';
-        const name = el('<span class="text-ink-soft"></span>');
-        // 非正常态把原始 status 一并显示：'failed' 与 'needs-auth' 是两种完全不同的处置，
-        // 压成一个「异常」会让用户无从下手。
-        name.textContent = item.ok ? item.name : `${item.name}（${item.status || t('状态未知')}）`;
-        row.append(dot, name);
-        list.appendChild(row);
-      }
-      card.appendChild(list);
-      body.appendChild(card);
-    }
+    if (mcpCard) body.appendChild(mcpCard);
 
     if (lastSkillsCount) {
       const skills = el('<div class="p-2.5 rounded-xl border border-line bg-surface text-xs"></div>');
@@ -7397,7 +7388,7 @@ import { createGateFocusController } from './app/focus-layers.js';
       if (page !== 'notify') notifications.clearSubscribeResult();
       // MCP / skills 那一段按 cwd 归键，而切到一个**已经 live** 的会话不会重放 init——
       // 只靠 init 回调重画的话，换过工作区之后这一页还挂着上一处的数据。每次进页现取一次。
-      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); }
+      if (page === 'host') { ensureGeneralVersions(); renderHostEnvSection(); hostMcp.refresh(); }
       // 审批规则每次进页重拉：用户可能刚在电脑上改过 settings.json，缓存一次会显示过期名单
       if (page === 'behavior') loadPermissionRules();
       if (page === 'about') { ensureGeneralVersions(); aboutPage.load(); }
