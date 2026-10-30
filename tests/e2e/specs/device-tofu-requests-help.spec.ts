@@ -178,11 +178,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.clock.install();
     await gotoMock(page);
 
-    await sendChatMessage(page, 'test:tofu-denied');
-    await expect(page.locator('#deviceModal')).toBeVisible(); // 先到的是 pending，拒绝还在路上
-    // install 之后时间照常流动：不停住的话定时器在拒绝到来之前就走掉了（那时还连着，走的是探活分支）
-    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
-    await page.evaluate(() => window.dispatchEvent(new Event('online'))); // 此刻门控放行，排上 200ms 定时器
+    await sendChatMessage(page, 'test:tofu-denied-hold');
+    await expect(page.locator('#deviceModal')).toBeVisible(); // 先到的是 pending，拒绝扣在 mock 里，用例放了才下发
+    // install 之后时间照常流动：不停住的话定时器在拒绝到来之前就走掉了（那时还连着，走的是探活分支）。
+    // 停在「当前时刻」而不是读出来再加个提前量：pauseAt 早于页面内时钟会抛 Cannot fast-forward to the past，
+    // 读数到停住之间隔着两次跨进程往返，负载下间隔不定。先定格再停在同一时刻，快进量恒为 0；随后解除定格让时间随 runFor 走。
+    const now = await page.evaluate(() => Date.now());
+    await page.clock.setFixedTime(now);
+    await page.clock.pauseAt(now);
+    await page.clock.setSystemTime(now);
+    await page.evaluate(() => window.dispatchEvent(new Event('online'))); // 此刻还连着、门控放行，排上 200ms 定时器
+    await page.request.post('/__release-device-denial'); // 定时器排上之后拒绝才到
     await expect(page.locator('#deviceDenied')).toBeVisible();
     await expect(page.locator('#statusLine')).toHaveText('连接断开，自动重连中…');
 
