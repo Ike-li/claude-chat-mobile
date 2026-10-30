@@ -2,6 +2,7 @@
 // 文档：docs/display-contracts.md
 // 改契约：先改本文件期望 → 再改实现 → 同步文档表格。
 import test from 'node:test';
+import { resolveSessionCwd } from '../../app/public/js/logic/panel-state.js';
 import assert from 'node:assert/strict';
 import {
   resolveModelTileDisplay,
@@ -384,4 +385,7 @@ test.describe('契约 §5 工具卡：截断上限 live 与历史同一份（Bas
     assert.equal(out('tu-bash'), long.slice(0, 2000) + ' …（已截断）');
     assert.equal(out('tu-read'), long.slice(0, 600) + ' …（已截断）');
   });
+});
+test('#473：记录位置已迁移而 SDK 目录未变，历史使用 transcriptCwd', () => {
+  assert.equal(resolveSessionCwd({ instances: [{ instanceId: 'live', cwd: '/old', transcriptCwd: '/new' }], viewingInstanceId: 'live', workspaceCwd: '/repo' }), '/new');
 });

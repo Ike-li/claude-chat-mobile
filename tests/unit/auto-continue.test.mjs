@@ -93,6 +93,20 @@ function harness(over = {}) {
 
 const entryOf = h => h.ac.snapshot().find(e => e.sessionId === SID) ?? null;
 
+test('#473 定位失败不代发；定位成功后检查新目录的外部驾驶员', async () => {
+  const failed = harness({ resolveCwd: async () => null });
+  failed.wall();
+  await failed.tickAt(FIRE_AT - 10_000); await failed.tickAt(FIRE_AT + 1);
+  assert.deepEqual([entryOf(failed).phase, entryOf(failed).reason], ['stale', 'unverified']);
+  assert.equal(failed.resumed.length, 0);
+  const moved = harness({ resolveCwd: async () => '/moved' });
+  moved.wall();
+  moved.terminal = new Map([[terminalStateKey('/moved', SID), { state: 'alive', source: 'cli' }]]);
+  await moved.tickAt(FIRE_AT - 10_000); await moved.tickAt(FIRE_AT + 1);
+  assert.deepEqual([entryOf(moved).phase, entryOf(moved).reason], ['stale', 'other_driver']);
+  assert.equal(moved.resumed.length, 0);
+});
+
 test.describe('布防与到点', () => {
   test('撞墙 → 快照里出现 armed 条目（带重置时刻与到点时刻），并通知广播', () => {
     const h = harness();

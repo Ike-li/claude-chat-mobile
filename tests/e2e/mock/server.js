@@ -2379,11 +2379,12 @@ io.on('connection', socket => {
       });
       return;
     }
-    const meta = knownArchived[sessionId];
+    const live = mockInstances.find(i => i.sessionId === sessionId);
+    const meta = knownArchived[sessionId] || (live ? { instanceId: live.instanceId, title: live.title, cwd: live.cwd } : null);
     // 归组后再比：托管 worktree 会话的列表项 cwd 是 `<父仓>/.claude/worktrees/<name>`，
     // 真 server 的 routeCwd 放行这一形态（在仓库子树里，授权判据按子目录直接放行）。只比字面量会把它判成
     // 「session not found」，那条路径在 E2E 里就永远走不到。
-    if (!meta || workspaceCwdOf(cwd) !== '/Users/you/code/claude-chat-mobile') {
+    if (!meta || workspaceCwdOf(cwd) !== (live ? workspaceCwdOf(live.cwd) : '/Users/you/code/claude-chat-mobile')) {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
       return;
     }
@@ -2718,6 +2719,7 @@ io.on('connection', socket => {
     };
   }
 
+  let heldWorktreeSync = null;
   socket.on('session:history', (payload, rawCallback) => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
@@ -2979,16 +2981,18 @@ io.on('connection', socket => {
       // 逐字复刻真 server 的归属校验：transcript 只存在于【驾驶轴】那个 project 目录，
       // 拿工作区轴（父仓）来查必然 sessionFileExists=false → { messages: [], error: '会话不存在' }。
       // 前端若用 currentCwd（=viewingCwd=父仓）拉历史就会踩到这一支，正是 2026-09-13 真机那格。
-      if (cwd !== '/Users/you/code/claude-chat-mobile/.claude/worktrees/wt-x') {
+      const relocated = mockInstances.find(i => i.instanceId === 'inst_worktree')?.transcriptCwd;
+      if (cwd !== (relocated || MOCK_WT_CWD)) {
         callback({ messages: [], error: '会话不存在' });
         return;
       }
       callback({
         messages: [
           { role: 'user', content: 'Worktree prompt', uuid: 'u-wt-1' },
-          { role: 'assistant', content: 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
+          { role: 'assistant', content: relocated ? 'RELOCATED_WORKTREE_HISTORY' : 'WORKTREE_HISTORY_LOADED', uuid: 'a-wt-1' }
         ]
       });
+      if (heldWorktreeSync) { const release = heldWorktreeSync; heldWorktreeSync = null; release(); }
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
       callback({
         messages: [
@@ -3966,7 +3970,19 @@ io.on('connection', socket => {
       // 重连后的 sync:since 回 gap，逼前端走 reloadCurrentFromHistory（**不是** bindView 的 reload
       // 分支——那条用 entry.cwd，早就是对的）。这条路径的注释原话：「锁屏/切后台冻结页面断开 socket，
       // viewingInstanceId 全程不变，故不会走 bindView，只会走到这里」，正是真机复现的那一格。
-      ack(0, { gap: true });
+      const relocated = mockInstances.find(i => i.instanceId === instanceId)?.transcriptCwd;
+      const inst = mockInstances.find(i => i.instanceId === instanceId);
+      if (inst?.relocateAgainOnSync) {
+        delete inst.relocateAgainOnSync;
+        heldWorktreeSync = () => ack(0, { gap: true });
+        inst.transcriptCwd = MOCK_WT_CWD.replace('wt-x', 'wt-relocated');
+        inst.panelCwd = inst.transcriptCwd;
+        inst.projectKey = workspaceCwdOf(inst.cwd);
+        inst.externalObserved = { model: 'external-model-473', permissionMode: 'plan', effort: null };
+        broadcastMockInstances();
+        return;
+      }
+      ack(0, { gap: !relocated, diskLen: 2, diskExternalLen: 2 });
     } else if (instanceId === 'inst_gap') {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
@@ -4691,13 +4707,37 @@ io.on('connection', socket => {
       // 2026-09-13：会话开着的时候那棵 worktree 被删掉（真机顺序就是这样——模型自己
       // `git worktree remove` 完，同一个会话还在跑）。真 server 侧 instance.cwd **保持悬空**
       // （transcript 仍按它解析），另发一个 panelCwd 承担展示轴；这里逐字模拟那份广播。
+      command: 'test:relocate-during-sync',
+      run: async () => {
+        const inst = mockInstances.find(i => i.instanceId === 'inst_worktree');
+        if (inst) inst.relocateAgainOnSync = true;
+      },
+    },
+    {
+      command: 'test:relocate-worktree',
+      run: async () => {
+        const inst = mockInstances.find(i => i.instanceId === 'inst_worktree');
+        if (inst) {
+          // SDK 先前已初始化；这次 init 仍是旧目录，不能充当外部迁移的 cwd 信号。
+          io.emit('agent:event', { seq: 0, epoch: 'server', instanceId: inst.instanceId, sessionId: inst.sessionId, ts: Date.now(),
+            type: 'init', payload: { sessionId: inst.sessionId, cwd: inst.cwd, model: inst.model, permissionMode: inst.permissionMode } });
+          inst.relocateAgainOnSync = true;
+          inst.transcriptCwd = MOCK_WT_CWD.replace('wt-x', 'wt-pending');
+          inst.panelCwd = inst.transcriptCwd;
+          inst.projectKey = workspaceCwdOf(inst.cwd);
+          inst.externalObserved = { model: 'external-model-473', permissionMode: 'plan', effort: null };
+          broadcastMockInstances();
+        }
+      },
+    },
+    {
       command: 'test:worktree-gone',
       run: async () => {
         console.log('[mock] test:worktree-gone — wt-x 被删：列表行标已删、面板回落父仓、switch 拒');
         worktreeGoneArmed = true;
         const inst = mockInstances.find(i => i.instanceId === 'inst_worktree');
         if (inst) {
-          inst.panelCwd = '/Users/you/code/claude-chat-mobile'; // 驾驶轴 cwd 刻意不动
+          inst.panelCwd = inst.transcriptCwd || inst.cwd; // 驾驶轴 cwd 刻意不动
           inst.worktreeGone = true;
         }
         io.emit('agent:event', {

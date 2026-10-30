@@ -80,7 +80,9 @@ export function createFileBrowser(context, {
   }
 
   function fetchListPage(requestedPath, offset) {
+    const requestedCwd = cwd;
     context.socket.emit('browse:list', { cwd, relPath: requestedPath, offset }, response => {
+      if (cwd !== requestedCwd) return;
       if (mode !== 'list' || relativePath() !== requestedPath) return;
       if (!response?.ok) {
         showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
@@ -153,7 +155,9 @@ export function createFileBrowser(context, {
       return;
     }
     const requestedPath = segments.concat(entry.name).join('/');
+    const requestedCwd = cwd;
     context.socket.emit('browse:list', { cwd, relPath: requestedPath }, response => {
+      if (cwd !== requestedCwd) return;
       if (mode !== 'list' || relativePath() !== segments.join('/')) return;
       if (response?.ok) {
         segments.push(entry.name);
@@ -358,6 +362,7 @@ export function createFileBrowser(context, {
   // 进入文件 tab 并从根目录重新载入。**不负责开合 sheet**——外壳（#workspaceModal）的开关与 tab
   // 切换归 createWorkspacePanel 统一持有，本控制器只管自己那半边的数据与渲染。
   function open(nextCwd) {
+    contentReadGen++;
     cwd = nextCwd;
     segments = [];
     mode = 'list';

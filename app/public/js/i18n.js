@@ -314,7 +314,7 @@ export const EN_DICT = Object.freeze({
   '📁 文件': '📁 Files',
   '📝 改动': '📝 Changes',
   // worktree 目录被删后面板改看父仓的提示条。前后各拼一个「名字」，故译文两端留空格。
-  '已删除，下面显示的是主仓': 'was deleted — showing the main checkout',
+  '已删除，无法访问该工作树的代码': 'was deleted — its working tree files are unavailable',
   '（已删除）': ' (deleted)',
   '刷新': 'Refresh',
   '📊 服务状态': '📊 Service status',
@@ -855,6 +855,7 @@ export const EN_DICT = Object.freeze({
   'CLI 模式未知': 'CLI mode unknown',
   'CLI 当前模型': 'Current CLI model',
   'CLI 模型未知': 'CLI model unknown',
+  '外部会话的最近记录；续接后由实际进程确认设置': 'Latest external session records; settings are confirmed by the process after resuming',
   'CLI 档位未知': 'CLI level unknown',
   'CLI 当前档未知': 'Current CLI level unknown',
 

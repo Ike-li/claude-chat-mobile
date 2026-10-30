@@ -2561,7 +2561,7 @@ export class AgentSession {
     // sessionId 可能还没到（本地命令下 init 晚到，见 _claimSessionIdEarly；真机首个带 id 的消息
     // 在 9.5s）——扫盘要它做目录名，没有就跳过本拍，下一拍再试。
     if (!this.sessionId) return;
-    const found = await scanSubagents(this.sessionId, this.cwd, {
+    const found = await scanSubagents(this.sessionId, this.transcriptCwd || this.cwd, {
       baseDir: this.transcriptBaseDir,
       since: this._slashCommandStartedAt || 0, // 上一轮遗留的子代理不算本轮进度（review #5）
     });

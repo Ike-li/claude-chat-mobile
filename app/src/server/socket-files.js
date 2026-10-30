@@ -1,3 +1,4 @@
+import { locationError } from '../sessions/session-location.js';
 import { realpathSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { basename } from 'node:path';
 import { assertSafeRelPath } from '../files/git-workspace.js';
@@ -38,6 +39,7 @@ export function registerFileSocketHandlers({
   // 历史工具卡的「展开全文」（tool:full 带会话坐标时）：会话是否属于这个 cwd、从 transcript 取那条结果的全文。
   // 缺省 = 没注入就不支持历史路径（只认实例内存，旧行为）。
   sessionFileExists = null,
+  resolveTranscriptLocation = null,
   readTranscriptToolResult = null,
   logger = console,
 }) {
@@ -353,10 +355,12 @@ export function registerFileSocketHandlers({
     // 有效实例 id 就能绕开范围门。内存只认「实例就是这个会话」：别的会话的实例里同名 toolUseId 不算。
     if (sessionId !== undefined && readTranscriptToolResult) {
       if (typeof toolUseId !== 'string' || !toolUseId) return ack({ ok: false, error: '缺少 toolUseId' });
-      const cwd = routeCwd(requestedCwd);
+      let cwd = routeCwd(requestedCwd);
       if (cwd === null) return ack({ ok: false, code: 'scope', error: OUT_OF_SCOPE_ERROR });
-      if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
-        return ack({ ok: false, code: 'not_found', error: '会话不存在' });
+      const location = resolveTranscriptLocation ? await resolveTranscriptLocation(cwd, sessionId) : null;
+      if (location?.status === 'found') cwd = location.cwd;
+      if ((location && location.status !== 'found') || typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+        return ack({ ok: false, code: 'not_found', error: location ? locationError(location) : '会话不存在' });
       }
       const agent = instanceId ? routeInstance(instanceId) : null;
       const cached = agent && agent.sessionId === sessionId ? agent.getToolOutput(toolUseId) : null;

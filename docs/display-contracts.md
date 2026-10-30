@@ -269,3 +269,10 @@ CLI 侧这条路有三个**静默失败**边界——都返回成功、都不抛
 | Statusline 双源不混拼 | `buildWeb*` `buildCli*` `selectStatusSource` | `statusline.test` · smoke statusline |
 | 折叠摘要 | `formatStatuslineCollapsedSummary` | `logic-statusline-summary` |
 | ctx 窗口只认真值 | `getContextUsageSafe` `shouldFetchContextUsage` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |
+
+## §6 外部迁移恢复（#473）
+
+- `instances[].cwd` 是 SDK 驾驶目录；可选 `transcriptCwd` 是已验证记录位置。历史读取优先后者，代码面板走 `panelCwd`。同一实例的位置变化也触发历史重新绑定。
+- `externalObserved` 存外部模型、权限与思考强度观察值；整组展示，不用网页偏好补空。未知思考强度显示未知，外部记录与 SDK 运行态分开，续接后以进程确认为准。
+- 已删除 worktree 的代码不可访问，不静默改看父仓。Git 分支和文件描述目标工作树的当前状态，不恢复历史快照。
+- 有会话 ID 的侧栏行均由服务端重新核对位置；无 ID 的新会话标签保留直接聚焦。

@@ -12,7 +12,7 @@ export function createComposerControls(context, {
   isTouchDevice, leftSidebar, modelInput, modelIntent, permModeSelect, pillDefaults, pillEffort,
   pillEffortText, pillModelText, pillPermText, projectsState, refreshComposeDefaultsSummary, requestCwd,
   send, socket, topContextPill, updateSendButtonState, getComposeReady, getComposing, getCurrentEffort,
-  getCurrentGatewaySuffix, getCurrentModel, getCurrentPermMode, getCwdDefaultModel, getMirrorReadonlySid,
+  getCurrentGatewaySuffix, getCurrentModel, getCurrentPermMode, getCwdDefaultModel, getMirrorReadonlySid, getPanelIsExternal = () => false,
   getModelsList, getUltracodeArmed, getViewingInstanceId, setCurrentEffort, setCurrentGatewaySuffix,
   setCurrentModel, setCurrentPermMode, setCurrentSessionIdForCopy, setUltracodeArmed,
 } = {}) {
@@ -604,7 +604,7 @@ export function createComposerControls(context, {
     setCurrentEffort(val);
     // settings 来的档不算选中（不高亮、select 停在占位），候选就是 select 现有的选项
     const ui = effortUiState(val, [...effortSelect.options].map(o => o.value), {
-      mirrorReadonly: Boolean(getMirrorReadonlySid()),
+      mirrorReadonly: Boolean(getMirrorReadonlySid()) || getPanelIsExternal(),
       effective: context.state.effortEffective,
       source: context.state.effortSource,
     });
@@ -657,7 +657,7 @@ export function createComposerControls(context, {
     if (hidden) {
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
-      if (!silentClear && !getMirrorReadonlySid() && getCurrentEffort() !== null) socket.emit('user:setEffort', { level: null });
+      if (!silentClear && !getMirrorReadonlySid() && !getPanelIsExternal() && getCurrentEffort() !== null) socket.emit('user:setEffort', { level: null });
       // 连 option 一起清：只置 value 的话，上个模型的候选还留着，随后到达的 effort_mode 回执经
       // setEffortMode 能把 value 设回其中一档——不支持调档的模型上凭空冒出一个档（CI 上撞过）。
       effortSelect.innerHTML = '';
@@ -684,7 +684,7 @@ export function createComposerControls(context, {
     // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
     // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
     const ui = effortUiState(getCurrentEffort(), show, {
-      mirrorReadonly: Boolean(getMirrorReadonlySid()),
+      mirrorReadonly: Boolean(getMirrorReadonlySid()) || getPanelIsExternal(),
       effective: context.state.effortEffective,
       source: context.state.effortSource,
     });

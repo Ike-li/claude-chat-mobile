@@ -244,50 +244,28 @@ export function sessionRowMenuItems({ hasId = false, live = false, unread = fals
   return items;
 }
 
-// 文件 / 改动面板的目标目录（2026-09-11）。
-//
-// 【为什么不能直接用工作区 cwd】托管 worktree 的会话打开后，工作区轴仍归父仓（产品判据：
-// worktree 是临时模式，不占抽屉条目），但 claude 实际在 `.claude/worktrees/<name>` 里改文件。
-// 拿父仓 cwd 去拉 git 变更，列出来的是父仓那棵树的 diff——它看起来是空的，
-// 而「看起来没改动」和「真的没改动」在 UI 上无法区分，用户会据此判断该不该合并。
-//
-// 【为什么优先 panelCwd 而不是直接读 cwd】worktree 目录被删掉之后（2026-09-13 真机形态），
-// 实例的 cwd 仍指向那条已不存在的路径，而且**必须保持原样**——transcript 就落在按它算出的
-// project 目录里，改掉 cwd 就是「历史消息加载失败」。所以服务端另发一个 panelCwd 承担
-// 展示/文件/git 轴：路径还在时它恒等于 cwd，悬空时回落父仓。前端只管认它。
-// 旧 server 不下发这个字段 → 回落 cwd，与引入它之前逐字同形。
-//
-// 无当前实例（空首页、实例刚关）→ 回落工作区 cwd，与引入本函数之前逐字同形。
+// 文件/改动面板认 server 验证的实际代码目录。SDK cwd 可以暂时留在旧目录，
+// 因而不能用工作区根或 SDK cwd 代替 panelCwd。旧 server 缺字段时保留兼容回落。
 export function resolvePanelCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
   return inst?.panelCwd || inst?.cwd || workspaceCwd || null;
 }
 
-// transcript 轴：「按 cwd 去磁盘找这个会话的东西」时该用哪个目录（loadHistory 拿它算 project 目录）。
-//
-// 【为什么不能和 resolvePanelCwd 合成一个】worktree 目录被删掉那一档两者必然分叉，而合并之后
-// 无论偏向哪一侧都是静默出错、且两种错法毫无相似之处：
-//   · 偏展示轴 → loadHistory 去父仓的 project 目录查，「历史消息加载失败」，而 jsonl 完好无损
-//     （agent.js handleCwdChanged 那段注释讲的就是这个症状）；
-//   · 偏驾驶轴 → 文件面板报「路径不在授权范围内」、改动面板报 git fatal。
-// 同一份 instances 同时喂这两个消费者，分开取值是唯一不出错的写法。
+// 记录位置与 SDK 驾驶目录分开；外部迁移后先恢复读取，发送前再在新位置续接 SDK。
 export function resolveSessionCwd({ instances, viewingInstanceId, workspaceCwd } = {}) {
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
-  return inst?.cwd || workspaceCwd || null;
+  return inst?.transcriptCwd || inst?.cwd || workspaceCwd || null;
 }
 
-// worktree 目录被删掉之后，文件/改动面板会静悄悄地改看父仓（见 resolvePanelCwd）。
-// 【为什么不能只是静悄悄地换】resolvePanelCwd 当初存在的理由就是「拿父仓 cwd 去拉 git 变更，
-// 列出来的是父仓那棵树的 diff——它看起来是空的，而『看起来没改动』和『真的没改动』在 UI 上
-// 无法区分，用户会据此判断该不该合并」。回落时这个风险原样成立，所以必须显式说一句那棵树没了。
-// 返回名字对（结构化），文案留给渲染层拼——i18n 没有插值，句子得在有 t() 的那一层组装。
+// 目标工作树已删时明确提示不可访问，不把父仓文件冒充它的代码。
+// parent 保留旧客户端契约；当前面板只使用 worktree。
 export function resolveWorktreeGoneNotice({ instances, viewingInstanceId } = {}) {
   const list = Array.isArray(instances) ? instances : [];
   const inst = list.find(i => i && i.instanceId === viewingInstanceId);
   if (!inst?.worktreeGone) return null;
-  return { worktree: projectDisplayName(inst.cwd), parent: projectDisplayName(inst.panelCwd) };
+  return { worktree: projectDisplayName(inst.transcriptCwd || inst.cwd), parent: projectDisplayName(inst.panelCwd) };
 }
 
 // 一个实例 cwd 归哪个工作区。托管 worktree 的 cwd 是 `<父仓>/.claude/worktrees/<name>`，

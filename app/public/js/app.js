@@ -3840,6 +3840,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     getComposing: () => composing, getCurrentEffort: () => currentEffort,
     getCurrentGatewaySuffix: () => currentGatewaySuffix, getCurrentModel: () => currentModel,
     getCurrentPermMode: () => currentPermMode, getCwdDefaultModel: () => cwdDefaultModel,
+    getPanelIsExternal: () => Boolean(instancesList.find(i => i.instanceId === viewingInstanceId)?.externalObserved),
     getMirrorReadonlySid: () => mirrorReadonlySid, getModelsList: () => modelsList,
     getUltracodeArmed: () => ultracodeArmed, getViewingInstanceId: () => viewingInstanceId,
     setCurrentEffort: v => { currentEffort = v; },
@@ -4113,6 +4114,12 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
   function adoptPanelState(inst) {
     if (!inst) return; // 新会话尚无实例（viewingInstanceId=null）：保持现状不乱跳
     // 始终更新模型显示——即使 inst.model 为 null/空也清掉旧值，防切换工作区时上个区的模型名泄漏
+    if (inst.externalObserved) {
+      modelIntent.reset();
+      mirrorObservedCli = inst.externalObserved;
+      renderCliPanelState();
+      return;
+    }
     const rawModel = inst.model || '';
     updateModelAndSuffix(rawModel);
     const effortModelValue = rawModel || currentModel;
@@ -4199,6 +4206,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       }
     }
     renderCliPermissionMode(panel.permissionMode);
+    if (pillDefaults) pillDefaults.title = t('外部会话的最近记录；续接后由实际进程确认设置');
     setEffortMode(panel.effort, true);
     rebuildEffortOptions(rawModel || cwdDefaultModel);
   }
@@ -4333,6 +4341,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     }
     const newStates = aggregateStates(instancesList, availableDirs); // per-cwd 聚合（permission>busy>done>idle）
     const newViewing = p?.viewingInstanceId ?? null;
+    const oldViewed = prevInstances.find(x => x.instanceId === newViewing);
+    const nextViewed = instancesList.find(x => x.instanceId === newViewing);
+    const recordLocationChanged = Boolean(oldViewed && nextViewed)
+      && (oldViewed.transcriptCwd || oldViewed.cwd) !== (nextViewed.transcriptCwd || nextViewed.cwd);
     const newCwd = p?.viewingCwd ?? null;
     const cwdChanged = cwdSeen && newCwd && newCwd !== currentCwd;
     if (cwdSeen) notifyStateChanges(newStates, newCwd); // 首次只定基线不通知（刷新/重连不冒假通知）
@@ -4428,7 +4440,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——
     // 否则 dashboard 工作区名 + 模型 chip 残留上个工作区（本次修复的 bug 正出于此：两个 null 空首页被判为「视图没变」）
     const startScreenCwdChanged = !newViewing && cwdChanged;
-    if (newViewing !== displayedInstanceId || startScreenCwdChanged) {
+    if (newViewing !== displayedInstanceId || startScreenCwdChanged || recordLocationChanged) {
       // 点停止顿一下跳主页（回归修复）：须在 displayedInstanceId 被 bindView 覆写之前判定——
       // prevIds/currIds 是本函数顶部按"这次广播前后的 instancesList"算出的旧/新快照，
       // displayedInstanceId 此刻仍是"切视图前实际绑定在屏幕上的那个实例"（bindView 内部才会覆写它）。
@@ -4472,7 +4484,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         appContext.state.effortSource = p.defaultEffortSource ?? null;
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, destroyedReason, composeRelocatedFrom }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
+      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume, destroyedReason, composeRelocatedFrom, forceHistoryReload: recordLocationChanged }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -4532,6 +4544,10 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // marker 留在了原地（见该函数注释，第八轮 P2）。
         forceClearBusyByAuthority(viewedInst);
       }
+    }
+    if (nextViewed?.externalObserved && newViewing === displayedInstanceId && !mirrorReadonlySid) {
+      mirrorObservedCli = nextViewed.externalObserved;
+      renderCliPanelState();
     }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
@@ -4772,7 +4788,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
-    const cwd = entry?.cwd || currentCwd || null;
+    const cwd = entry?.transcriptCwd || entry?.cwd || currentCwd || null;
     sessionWorkspaceState.displayedCwd = cwd;
     // 清除①②：切到别的实例/空表面（id 变了），或该实例这一刻已经拿到 sessionId（sid 非空）——
     // 两种情况都意味着"sessionId 未到即被中断"这个待续档态不再适用，须清掉，否则会悬留到下一个
@@ -4875,7 +4891,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
     let resumeFromSeq = 0;
     const cached = sid ? sessionDomCache.get(sid) : null;
     const cachePlan = sessionDomCachePlan({ cached, currentInstanceId: id });
-    if (cachePlan.restore) {
+    if (cachePlan.restore && !opts.forceHistoryReload) {
       for (const node of cached.nodes) messagesEl.appendChild(node);
       if (cachePlan.reuseSeqBaseline) {
         curEpoch = cachePlan.epoch;
@@ -4902,7 +4918,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // 已切走：丢弃过期回调。显式 discard 本轮 handle——后续 bindView 的 begin/discard 通常已顶替，
       // 但若同一实例被快速 A→B→A 重入，仅靠 displayed 守卫早退而不 resolve，会让中间那批已入队事件
       // 既不 flush 也不推进基线，最终被第三次 begin 无声丢掉。
-      if (displayedInstanceId !== id) {
+      if (displayedInstanceId !== id || drivingCwdOf(id) !== cwd) {
         replayBuffer.resolve(replayHandle, 'discard');
         return;
       }
@@ -4913,7 +4929,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 加载卡，宁可残缺不可白等（同 decideTimeoutAction 的取舍）。unreadOnEntry 随 ack 丢失，按 0。
         if (sid) {
           replayBuffer.resolve(replayHandle, 'reload');
-          loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(0));
+          loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(0));
         } else {
           replayBuffer.resolve(replayHandle, 'flush');
           hideLoadingCard();
@@ -4925,7 +4941,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       //   'load'   无缓存、聊天区空 → 拉磁盘首次填充（不必清屏）；
       //   'reload' gap（缓冲超窗残缺）或磁盘被外部写长（web 离开期间终端 CLI 写盘的盲区）→ 清屏全量重载磁盘；
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
-      const action = shouldReloadOnEnter({
+      const action = opts.forceHistoryReload ? 'load' : shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
         diskLen: res?.diskLen ?? 0, diskExternalLen: res?.diskExternalLen ?? 0,
         seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
@@ -4945,7 +4961,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 缓冲通常本就空（'load' 只在 server replayed===0 时出现）；仍统一走 resolve('reload') 收尾，
         // 防万一有穿插的实时事件——续传基线前移到缓冲尾，不遗漏、不重复。
         replayBuffer.resolve(replayHandle, 'reload');
-        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else if (bufferAction === 'reload') {
         // 覆盖两种来源：action 本就是 'reload'（gap/外部写入），或 'keep' 但缓冲攒太多被这层升级——
         // 统一走清屏 + session:history 批量重载（loadHistory/renderHistoryBubbles 本就是一次性 fragment
@@ -4967,7 +4983,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
         // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
         if (instancesList.find(x => x?.instanceId === id)?.turnRunning === true) _turnRunning = true;
         showLoadingCard();
-        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
+        loadHistory(sid, entry.transcriptCwd || entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else {
         // flush：缓冲队列（若有）按到达顺序正常派发（走原 handler 增量渲染），抑制中间滚动，派发完
         // 只做一次强制落底（resolveReplayBufferAction 内部处理，见 createReplayBuffer flushQueue）。
@@ -5783,6 +5799,7 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
       if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }
+      if (drivingCwdOf(reqInstanceId) !== cwd) { historyLoadGate.abort(gateHandle); return; }
       hideLoadingCard();
       const msgs = res?.messages || [];
       if (!msgs.length) {
@@ -6429,9 +6446,15 @@ import { createKeyboardInset } from './app/keyboard-inset.js';
       // observed CLI state 只是镜像展示层，不能写回 Web 实例偏好；未知字段也必须保持未知。
       renderCliPanelState();
     } else if (wasEffective) {
-      restoreWebPanelState();
+      const external = instancesList.find(i => i.instanceId === displayedInstanceId)?.externalObserved;
+      if (external) {
+        mirrorObservedCli = external;
+        renderCliPanelState();
+      } else {
+        restoreWebPanelState();
+        mirrorObservedCli = { model: null, permissionMode: null, effort: null };
+      }
       mirrorWebPanelSnapshot = null;
-      mirrorObservedCli = { model: null, permissionMode: null, effort: null };
       _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
       // 第三分支：本来就不在镜像态、现在也不在——最常见路径，每次 readonly:false 广播都会走这里。
