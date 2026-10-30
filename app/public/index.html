@@ -763,6 +763,9 @@
               </svg>
             </button>
 
+            <!-- 转后台（#459，终端 Ctrl+B）：有前台命令 / 子代理挡着本轮时才出现，见 app/foreground-tasks.js -->
+            <button id="btnBackgroundTasks" type="button" class="hidden shrink-0 h-8 px-2.5 rounded-full border border-line text-xs font-medium text-ink-soft bg-surface active:bg-sunk disabled:opacity-50" title="把正在跑的前台命令 / 子代理转到后台，本轮继续（终端 Ctrl+B）" data-testid="btn-background-tasks">转后台</button>
+
             <!-- 兼容性保留：隐藏的原 btnStop -->
             <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
 

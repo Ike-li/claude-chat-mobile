@@ -3624,6 +3624,20 @@ registerSocketConnection(io, socket => {
     const ok = await routeInstance(payload?.instanceId)?.stopTask(payload?.taskId);
     if (typeof ack === 'function') ack({ ok: ok === true });
   });
+  // 转后台（#459），对应终端 Ctrl+B：不带 toolUseId = 本实例全部前台任务，带 = 只转那个工具调用起的。
+  // 回执分档见 agent.backgroundTasks。只对本产品驱动的活实例生效：终端在驾驶时（只读镜像）本进程的 SDK 子进程
+  // 闲着、前台任务在终端那边，发过去只会是一次空操作——按没有实例处理（同 MCP 那条，#467 review）。
+  on(socket, 'task:background', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const toolUseId = payload?.toolUseId;
+    if (toolUseId !== undefined && !(typeof toolUseId === 'string' && toolUseId.length > 0 && toolUseId.length <= 256)) {
+      ack({ ok: false, reason: 'invalid_payload' });
+      return;
+    }
+    const a = routeInstance(payload?.instanceId);
+    if (!a || mirrorOwnedBy(a.sessionId, a.instanceId)) { ack({ ok: false, reason: 'no_instance' }); return; }
+    ack(await a.backgroundTasks(toolUseId));
+  });
   // MCP 服务器（#457），对应终端 /mcp：实时状态 / 重连 / 启停。只对指定实例（缺省当前查看的那个）生效；显式指定但已关闭
   // 的实例 routeInstance 为 null，不静默落到别的会话上——toggle 会写项目配置。
   // 终端在驾驶这个会话时（只读镜像），本进程的 SDK 子进程还活着、只是闲着：它的 MCP 状态不是终端里那份，对它重连 / 启停
@@ -5299,6 +5313,8 @@ registerSocketConnection(io, socket => {
       // 切回/重连：task_progress 是 transient（不进环形缓冲、上面 events 回放拿不到）→ 有活后台任务时
       // 重发全量快照，前端 onProgress 按 tasks 数组幂等 reconcile 重建任务明细横幅（否则要等下一次心跳）。
       if (a.hasBgTasks?.()) a.emitBgTasksSnapshot();
+      // 前台任务集合同理（#459），空的也发：断线期间那条前台任务可能已经转后台或跑完，前端手里的「转后台」得收起来
+      a.emitForegroundTasks?.();
     }
   });
 

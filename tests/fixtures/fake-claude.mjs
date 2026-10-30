@@ -31,6 +31,12 @@
 //   turn-local-command → 同 turn，但不吐助手正文，改吐一条本地 slash 命令的输出（system/local_command_output，
 //             content 带 <local-command-stdout> 包装，形态照 sdk.d.ts SDKLocalCommandOutputMessage）再收尾——
 //             /context、/cost 这类命令在 CLI 本地算完、不经模型。
+//   turn-fg-task → 一条跑得久的前台 Bash 挡着本轮（#459）：吐 assistant tool_use 与
+//             system/task_started{is_backgrounded:false}，然后不收尾，直到收到 background_tasks 控制请求
+//             （SDK Query.backgroundTasks，终端 Ctrl+B）。收到后照 SDK d.ts 描述的次序吐：
+//             task_updated{patch.is_backgrounded:true} → background_tasks_changed（它成了后台任务）→
+//             「running in the background」的 tool_result → 回答与 result。给的 tool_use_id 对不上回 backgrounded:false。
+//             CCM_FAKE_CLAUDE_BG_DISABLED=1 → 那条控制请求回 error，原文照 CLI 2.1.309。
 //   turn-autoreport → 同 turn，收尾后再吐一条后台任务完成（system/task_notification）与下一轮的
 //             message_start，且那一轮不收尾——实例停在「后台任务完成触发的自动汇报轮正在跑」。
 //             没有用户输入的轮次，账面靠 agent 自己合成（maybeSynthesizeAutoTurn）。
@@ -100,6 +106,10 @@ const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 const EXIT_MARKER = process.env.CCM_FAKE_CLAUDE_EXIT_MARKER || '';
 const EXIT_TITLE = process.env.CCM_FAKE_CLAUDE_EXIT_TITLE || '';
 const RESULT_DELAY_MS = Number(process.env.CCM_FAKE_CLAUDE_RESULT_DELAY_MS) || 0;
+const BG_DISABLED = process.env.CCM_FAKE_CLAUDE_BG_DISABLED === '1';
+const FG_TOOL_USE_ID = 'toolu_fake_fg';
+const FG_TASK_ID = 'fake-fg-task';
+let fgPendingMsg = null; // turn-fg-task：被前台任务挡着、还没收尾的那条 user 消息
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
@@ -113,6 +123,10 @@ rl.on('line', (line) => {
 
   // 任何 control_request 一律回 success。不认的子类型也要应答——SDK 在
   // pendingControlResponses 里等着，不回它会把调用方挂死（比产出错内容更难查）。
+  if (msg.type === 'control_request' && msg.request?.subtype === 'background_tasks') {
+    answerBackgroundTasks(msg);
+    return;
+  }
   if (msg.type === 'control_request') {
     if (CONTROL_LOG) appendFileSync(CONTROL_LOG, `${JSON.stringify(msg.request)}\n`);
     if (MCP_RECONNECT_ERROR && msg.request?.subtype === 'mcp_reconnect') {
@@ -152,11 +166,52 @@ rl.on('line', (line) => {
     });
   }
 
+  if (MODE === 'turn-fg-task') {
+    startForegroundTask(msg);
+    return;
+  }
+
   if (MODE !== 'turn' && MODE !== 'turn-bg' && MODE !== 'turn-autoreport' && MODE !== 'turn-screenshot' && MODE !== 'turn-local-command') return;
 
   if (RESULT_DELAY_MS > 0) setTimeout(() => finishTurn(msg), RESULT_DELAY_MS);
   else finishTurn(msg);
 });
+
+function startForegroundTask(msg) {
+  fgPendingMsg = msg;
+  out({
+    type: 'assistant', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: FG_TOOL_USE_ID, name: 'Bash', input: { command: 'sleep 120 && echo done' } }] },
+  });
+  out({
+    type: 'system', subtype: 'task_started', session_id: SESSION_ID, uuid: randomUUID(),
+    task_id: FG_TASK_ID, tool_use_id: FG_TOOL_USE_ID, description: 'sleep 120 && echo done',
+    task_type: 'local_bash', is_backgrounded: false,
+  });
+}
+
+function answerBackgroundTasks(msg) {
+  if (BG_DISABLED) {
+    out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Background tasks are disabled in this session.' } });
+    return;
+  }
+  const target = msg.request?.tool_use_id;
+  const hit = fgPendingMsg && (target == null || target === FG_TOOL_USE_ID);
+  out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { backgrounded: Boolean(hit) } } });
+  if (!hit) return;
+  const pending = fgPendingMsg;
+  fgPendingMsg = null;
+  out({ type: 'system', subtype: 'task_updated', session_id: SESSION_ID, uuid: randomUUID(), task_id: FG_TASK_ID, patch: { is_backgrounded: true } });
+  out({
+    type: 'system', subtype: 'background_tasks_changed', session_id: SESSION_ID, uuid: randomUUID(),
+    tasks: [{ task_id: FG_TASK_ID, task_type: 'local_bash', description: 'sleep 120 && echo done' }],
+  });
+  out({
+    type: 'user', session_id: SESSION_ID, uuid: randomUUID(), parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: FG_TOOL_USE_ID, content: `Command running in background with ID: ${FG_TASK_ID}` }] },
+  });
+  finishTurn(pending);
+}
 
 function finishTurn(msg) {
   if (MODE === 'turn-screenshot') {

@@ -454,6 +454,9 @@ let trustedDevices = createTrustedDevices(); // 函数声明已提升；resetMoc
 let accessBypassActive = false;
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
+// 转后台（#459）：test:fg-task 起的那条前台 Bash（null = 没有），以及会话是否禁用了后台任务（-disabled 那档）
+let mockFgTask = null;
+let mockBgTasksDisabled = false;
 let deniedDeviceRetryPending = false;
 let mockSessionLogsByInstance = new Map();
 let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线（test:diag-sample 注入）
@@ -800,6 +803,8 @@ function resetMockState() {
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
+  mockFgTask = null;
+  mockBgTasksDisabled = false;
   deniedDeviceRetryPending = false;
   mockSessionLogsByInstance = new Map();
   mockDiagLogsByInstance = new Map();
@@ -2725,6 +2730,17 @@ io.on('connection', socket => {
       callback({ messages: [], error: '会话不存在' });
       return;
     }
+    // 转后台（#459）：test:fg-task 那条前台 Bash 还挡着本轮时，磁盘上已有它的 tool_use、还没有结果——
+    // 切回会话走拉历史时，卡是从这里渲染出来的，不经 tool_use 事件
+    if (mockFgTask && sessionId === 'mock-session-visual-test') {
+      callback({
+        messages: [
+          { role: 'user', content: 'test:fg-task', uuid: 'u-fg-task-1' },
+          { kind: 'tool_use', role: 'assistant', toolUseId: mockFgTask.toolUseId, name: 'Bash', inputSummary: '{"command":"sleep 120 && echo done"}', uuid: 'a-fg-task-1' },
+        ],
+      });
+      return;
+    }
     // P0-ORDER：在 ack【之前】推一条 history_append，精确复刻真实时序——web 拉历史的往返窗口里，
     // server 的 catchUpTick 检出终端刚落定的消息就直接推过来了。前端先渲染这条增量、再收到历史本体，
     // 若历史只会 appendChild 到尾部，就会出现「新消息在上、整段旧历史在下」。
@@ -3659,6 +3675,16 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // 转后台（#459）：真 server 在 sync:since 收尾后给当前查看的实例补推一份前台任务快照（瞬时事件不进缓冲）。
+    // 照它的次序放在 ack 之后——这一份到的时候，切回走拉历史的话卡还没渲染出来
+    if (mockFgTask && instanceId === mockFgTask.instanceId) {
+      const fg = mockFgTask;
+      setTimeout(() => socket.emit('agent:event', {
+        seq: 1, epoch: fg.epoch, sessionId: 'mock-session-visual-test', instanceId: fg.instanceId, ts: Date.now(),
+        type: 'foreground_tasks', transient: true,
+        payload: { tasks: [{ taskId: fg.taskId, toolUseId: fg.toolUseId, taskType: 'local_bash', description: 'sleep 120 && echo done' }] },
+      }), 0);
+    }
     if (crashReloadSessionId && sessionId === crashReloadSessionId) {
       crashReloadSessionId = null;
       console.log('[mock] P0-DESTROY-CRASH — 重开崩溃过的会话，sync:since 报 diskLen，逼出清屏重载');
@@ -5531,6 +5557,27 @@ io.on('connection', socket => {
       },
     },
     {
+      // 转后台（#459）：一条跑得久的前台 Bash 挡着本轮——工具卡 + foreground_tasks 快照，本轮不收尾，
+      // 等 task:background（handler 在下面，照 SDK d.ts 描述的次序回事件）。-disabled 那档的会话禁用了后台任务。
+      commands: ['test:fg-task', 'test:fg-task-disabled'],
+      run: async ({ activeInst, cmd }) => {
+        mockBgTasksDisabled = cmd === 'test:fg-task-disabled';
+        mockFgTask = { taskId: 'mock-fg-task', toolUseId: 'toolu_mock_fg', epoch: activeEpoch, instanceId: viewingInstanceId };
+        if (activeInst) activeInst.state = 'busy';
+        broadcastMockInstances();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: mockFgTask.toolUseId, name: 'Bash', inputSummary: '{"command":"sleep 120 && echo done"}' },
+        });
+        await delay(100);
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'foreground_tasks', transient: true,
+          payload: { tasks: [{ taskId: mockFgTask.taskId, toolUseId: mockFgTask.toolUseId, taskType: 'local_bash', description: 'sleep 120 && echo done' }] },
+        });
+      },
+    },
+    {
       command: 'test:history-overflow',
       run: async () => {
         console.log('[mock] test:history-overflow — session:list 默认截断，显示更多后返回较早历史');
@@ -7163,6 +7210,35 @@ io.on('connection', socket => {
     const first = !mockStoppedTaskIds.has(taskId);
     mockStoppedTaskIds.add(taskId);
     if (typeof ack === 'function') ack({ ok: first });
+  });
+
+  // 转后台（#459，真 server：app.js 的 task:background → agent.backgroundTasks）。ack 形状照真 server。
+  // 成功后照 SDK d.ts 的次序：前台集合清空 → 它进后台任务快照（横幅接住）→「running in the background」的
+  // tool_result → 本轮收尾。
+  socket.on('task:background', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const fg = mockFgTask;
+    if (!fg) { ack({ ok: false, reason: 'no_instance' }); return; }
+    if (mockBgTasksDisabled) { ack({ ok: false, reason: 'disabled', error: 'Background tasks are disabled in this session.' }); return; }
+    if (payload?.toolUseId !== undefined && payload.toolUseId !== fg.toolUseId) { ack({ ok: false, reason: 'not_found' }); return; }
+    mockFgTask = null;
+    ack({ ok: true });
+    const base = { epoch: fg.epoch, sessionId: 'mock-session-visual-test', instanceId: fg.instanceId };
+    io.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'foreground_tasks', transient: true, payload: { tasks: [] } });
+    const bgTask = { taskId: fg.taskId, taskType: 'local_bash', message: 'sleep 120 && echo done', description: 'sleep 120 && echo done' };
+    io.emit('agent:event', { ...base, seq: 1, ts: Date.now(), type: 'task_progress', transient: true, payload: { ...bgTask, tasks: [bgTask] } });
+    await delay(50);
+    io.emit('agent:event', {
+      ...base, seq: 2, ts: Date.now(), type: 'tool_result',
+      payload: { toolUseId: fg.toolUseId, ok: true, outputSummary: `Command running in background with ID: ${fg.taskId}` },
+    });
+    const inst = mockInstances.find(i => i.instanceId === fg.instanceId);
+    if (inst) inst.state = 'idle';
+    broadcastMockInstances();
+    io.emit('agent:event', {
+      ...base, seq: 3, ts: Date.now(), type: 'result',
+      payload: { messageId: 'msg_fg_task_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+    });
   });
 
   // MCP（#457，真 server：app.js 的 mcp:* → agent.mcpStatus / reconnectMcp / toggleMcp）。ack 形状照真 server。

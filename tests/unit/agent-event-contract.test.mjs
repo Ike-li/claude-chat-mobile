@@ -366,7 +366,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        重连、启停。三条都是对当前实例的控制请求，不开 HTTP 端点；toggle 会写项目配置，所以只认指定实例、不静默回落。入向 68→71）
   //      + session:rename（2026-10-29，#458：网页端给会话改名，对应终端 /rename。写的是 transcript 而不是授权面，
   //        与 deletePermanent 同口径校验；不新增出向事件：别的设备靠 instances 快照与 session:list 刷新跟上。入向 71→72）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 72);
+  //      + task:background（2026-10-29，#459 转后台＝终端 Ctrl+B：SDK Query.backgroundTasks(toolUseId?)。
+  //        不并进 task:stop：一个杀任务、一个只换前后台，载荷与失败原因都不同。入向 72→73）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 73);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:recheck'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('folders:removeMissing'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('about:get'));
@@ -418,13 +420,15 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 // 出向侧对称的数量锚点。CLAUDE.md 对外宣称的种数，此前全仓没有任何断言盯着
 // AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
 // 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
-test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 31 种一致', () => {
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 32 种一致', () => {
   //      + rewind_applied（2026-09-10，文件轴回退已生效的广播。刻意做成出向事件而不是只回 ack：
   //        回退同时改了【文件】和【对话树】，而这两者在别的设备上都缓存着——另一台手机若只靠 ack
   //        就永远不知道该重载，屏幕上会一直留着已被服务端截断的那几轮，且刷新前不自愈。
   //        它走 outOfBand（跨会话通知，不能触发 currentSessionId 切换），因此必须同时登记进
   //        DEFAULT_REPLAY_OOB_TYPES——否则回放缓冲会把它排队再整批丢弃。出向 30→31）
-  assert.equal(AGENT_EVENT_TYPES.length, 31);
+  //      + foreground_tasks（2026-10-29，#459：此刻挡着本轮、可转后台的前台任务全量快照。瞬时、不进环形缓冲，
+  //        切回 / 重连由 sync:since 补推；同样走 outOfBand、登记进 DEFAULT_REPLAY_OOB_TYPES。出向 31→32）
+  assert.equal(AGENT_EVENT_TYPES.length, 32);
   assert.ok(AGENT_EVENT_TYPES.includes('rewind_applied'));
   // trusted_devices（2026-09-09）：已受信任设备列表的下发面。载荷里没有全量 token，
   // 只有 shortId + kind/ua/ip/approvedAt + isCurrent（DEVICE-03）。

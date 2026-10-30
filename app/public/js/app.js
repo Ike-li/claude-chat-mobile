@@ -252,6 +252,7 @@ import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
 import { createSessionRowMenu } from './app/session-row-menu.js';
+import { createForegroundTasks } from './app/foreground-tasks.js';
 import { createSessionRenameController } from './app/session-rename.js';
 import { createCrashNotices } from './app/crash-notices.js';
 import { createRewindCommandController } from './app/rewind-command.js';
@@ -2785,6 +2786,8 @@ import { createGateFocusController } from './app/focus-layers.js';
     }),
     outOfBand: {
       task_notification: onTaskNotification,
+      // 前台任务集合（#459）：按实例存、只画当前查看的那个，所以不经视图过滤
+      foreground_tasks: (ev) => foregroundTasks.onEvent(ev),
       // 回退已生效（可能来自本机，也可能来自另一台设备）。走 outOfBand 而非普通 handler：
       // 它是【跨会话】通知，普通分支会因 event.sessionId ≠ currentSessionId 触发 onSessionId
       // 把当前会话身份改掉——用户正看着 A 会话，B 会话的回退不该改写 A 的状态。
@@ -3217,6 +3220,8 @@ import { createGateFocusController } from './app/focus-layers.js';
         </details>`);
       setStatusIcon(card.querySelector('.t-status'), 'pending');
       card.dataset.toolName = p.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+      // 会话 DOM 缓存放回的卡不进 toolCards，要按 id 找卡的（「后台运行」按钮）靠这个属性，见 getToolCard
+      if (p.toolUseId) card.dataset.toolUseId = p.toolUseId;
       const inCode = card.querySelector('.t-in code');
       if (inCode) {
         // 空对象输入展开也只有「{}」噪音 → 整块藏掉（CLI 对空输入零渲染）
@@ -4074,6 +4079,7 @@ import { createGateFocusController } from './app/focus-layers.js';
   function adoptSpawnCard(sa, p) {
     const wrap = sa.el;
     wrap.dataset.toolName = p.name || ''; // tool_result 无 name，清单工具特化渲染从卡上取（同通用卡）
+    if (p.toolUseId) wrap.dataset.toolUseId = p.toolUseId; // 同通用卡
     setStatusIcon(wrap.querySelector('.t-status'), 'pending');
     // 【只显 description，不铺原始输入】通用工具卡在这个槽里放的是整个 input 的 pretty JSON，
     // 合卡后它就挡在展开区门口——含用户刚打的整段 prompt（2026-09-10 真机撞到）。CLI 在同一
@@ -5713,6 +5719,7 @@ import { createGateFocusController } from './app/focus-layers.js';
     composeCwd = !newViewing && typeof p?.composeCwd === 'string' ? p.composeCwd : null;
     const viewingChanged = viewingInstanceId !== newViewing;
     viewingInstanceId = newViewing;
+    foregroundTasks.render(); // 「转后台」只跟着当前查看的实例
     cwdSeen = true;
     // 「宿主机」页开着时查看的会话换了（含别的设备切走）：MCP 卡片立刻按新会话重画（先退回快照、不留旧按钮），再现查（#457 review）
     if (viewingChanged && generalNav?.currentPage() === 'host') { renderHostEnvSection(); hostMcp.refresh(); }
@@ -6327,6 +6334,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
       applyPendingSnapshot(res?.pending, id);
+      // 'keep' 分支的卡是从 sessionDomCache 放回的，这里视图已稳定，按手里的前台任务快照把「后台运行」挂回去
+      foregroundTasks.render();
     });
   }
 
@@ -7133,6 +7142,15 @@ import { createGateFocusController } from './app/focus-layers.js';
     },
   });
   const sessionRowMenu = createSessionRowMenu(appContext, { $, el, openSheet, closeSheet });
+  // 转后台（#459，终端 Ctrl+B）：输入条「转后台」与工具卡「后台运行」，见 app/foreground-tasks.js
+  const foregroundTasks = createForegroundTasks(appContext, {
+    $, socket, addBar,
+    getViewingInstanceId: () => viewingInstanceId,
+    // 切回会话时卡是从 sessionDomCache 原样放回的，toolCards 已随 clearView 清空；刷新后从历史渲染的卡只在
+    // histToolCards 里。两种都按 DOM 上的 data-tool-use-id 找回（#469 review）
+    getToolCard: toolUseId => toolCards.get(toolUseId)
+      || messagesEl.querySelector(`[data-tool-use-id="${CSS.escape(toolUseId)}"]`),
+  });
   const sessionRename = createSessionRenameController(appContext, {
     $, socket, openSheet, closeSheet,
     onRenamed: ({ cwd, sectionKey, terminalMayOverwrite } = {}) => {
@@ -9267,6 +9285,8 @@ import { createGateFocusController } from './app/focus-layers.js';
       renderHistoryBubbles(msgs, () => {
         // 渲染途中切走时 renderHistoryBubbles 也会调这里（为了放行历史闸），那时补提示就补进了别的会话（PR #245 review）
         if (displayedSessionId === sessionId && displayedInstanceId === reqInstanceId) crashNotices.restore(sessionId);
+        // 前台任务快照随 sync:since 先到、那时卡还没从历史渲染出来——卡落地后再挂一次「后台运行」
+        foregroundTasks.render();
         flushHeldHistoryAppends(gateHandle);
         onDone?.();
       }, { fullReload: true, turnRunningAtRequest, noticeBar, superseded: () => historyLoadGate.superseded(gateHandle) });
@@ -9559,6 +9579,7 @@ import { createGateFocusController } from './app/focus-layers.js';
           </details>`);
         setStatusIcon(card.querySelector('.t-status'), 'pending');
         card.dataset.toolName = msg.name || ''; // tool_result 无 name，结果特化渲染从卡上取
+        if (msg.toolUseId) card.dataset.toolUseId = msg.toolUseId; // 同 live
         const inCode = card.querySelector('.t-in code');
         if (inCode) {
           if (String(msg.inputSummary || '').trim() === '{}') {
@@ -9580,6 +9601,7 @@ import { createGateFocusController } from './app/focus-layers.js';
             // 同 live 的 adoptSpawnCard：接管状态/输入/结果三槽 + 改写 histToolCards 指向，
             // 让本文件下方 tool_result 分支（setStatusIcon / .t-out / dataset.toolName）零改动生效。
             sa.el.dataset.toolName = msg.name || '';
+            sa.el.dataset.toolUseId = msg.toolUseId;
             setStatusIcon(sa.el.querySelector('.t-status'), 'pending');
             // 同 live 的 adoptSpawnCard：只显 description，不铺原始输入 JSON
             const histInEl = sa.el.querySelector('.t-in');
