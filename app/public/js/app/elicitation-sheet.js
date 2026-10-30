@@ -1,5 +1,5 @@
 import { t } from '../i18n.js';
-import { elicitationContentFromInputs, elicitationHeading, isHostLocalOrigin } from '../logic.js';
+import { dateTimeLocalValue, elicitationContentFromInputs, elicitationHeading, isHostLocalOrigin } from '../logic.js';
 
 // MCP 服务器要表单输入或 URL 授权（#460），对应终端里弹出的 elicitation 表单。
 //
@@ -92,9 +92,9 @@ export function createElicitationSheet(context, {
       if (f.maximum !== undefined) input.max = String(f.maximum);
     } else {
       input.type = { email: 'email', uri: 'url', date: 'date', 'date-time': 'datetime-local' }[f.format] || 'text';
-      if (f.maxLength !== undefined) input.maxLength = f.maxLength;
+      // 不设原生 maxLength：它数 UTF-16 码元，服务端按码点校验——上限 2 的字段输不进两个 emoji。超长由服务端回原因
     }
-    if (f.default !== undefined) input.value = String(f.default);
+    if (f.default !== undefined) input.value = f.format === 'date-time' ? dateTimeLocalValue(f.default) : String(f.default);
     return input;
   }
 

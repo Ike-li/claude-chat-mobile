@@ -5440,7 +5440,8 @@ io.on('connection', socket => {
       // MCP elicitation（#460）：服务器要表单输入 / URL 授权，本轮挂着等作答（真 server 的字段描述由
       // app/src/agent/elicitation.js 从 schema 归一，这里直接给归一后的形状）。-html 那档的 message 夹着 HTML，
       // 卡片必须按纯文本显示。作答走下面的 elicitation:respond。
-      commands: ['test:elicitation-form', 'test:elicitation-url', 'test:elicitation-html'],
+      // -defaults 那档：date-time 字段带 Z 结尾的默认值、名字上限 2 个字（服务端按码点数）
+      commands: ['test:elicitation-form', 'test:elicitation-url', 'test:elicitation-html', 'test:elicitation-defaults'],
       run: async ({ activeInst, cmd }) => {
         const createdAt = Date.now();
         const base = { serverName: 'mock-notes', createdAt, expiresAt: createdAt + 30 * 60_000 };
@@ -5449,6 +5450,11 @@ io.on('connection', socket => {
             url: 'https://auth.example.com/authorize?state=1', urlOrigin: 'https://auth.example.com', elicitationId: 'mock-el-1' }
           : cmd === 'test:elicitation-html'
             ? { ...base, requestId: 'mock-elicit-html', message: '<img src=x onerror="window.__elicitXss=1"><b>粗体</b>', mode: 'form', fields: [] }
+            : cmd === 'test:elicitation-defaults'
+              ? { ...base, requestId: 'mock-elicit-defaults', message: '确认提醒', mode: 'form', fields: [
+                { name: 'name', type: 'string', title: '图标', required: true, minLength: 2, maxLength: 2 },
+                { name: 'at', type: 'string', format: 'date-time', title: '提醒时间', required: true, default: '2026-10-29T08:30:00Z' },
+              ] }
             : { ...base, requestId: 'mock-elicit-form', message: '新笔记叫什么？', mode: 'form', title: '新建笔记', fields: [
               { name: 'name', type: 'string', title: '名字', required: true, minLength: 2 },
               { name: 'pin', type: 'boolean', title: '置顶', required: false },

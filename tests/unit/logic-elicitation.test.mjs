@@ -3,7 +3,7 @@
 // 不测：DOM 接线、按钮、等待完成（S3，tests/e2e/specs/elicitation.spec.ts）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { elicitationContentFromInputs, elicitationHeading, isHostLocalOrigin } from '../../app/public/js/logic/elicitation.js';
+import { dateTimeLocalValue, elicitationContentFromInputs, elicitationHeading, isHostLocalOrigin } from '../../app/public/js/logic/elicitation.js';
 
 const fields = [
   { name: 'name', type: 'string', required: true },
@@ -29,6 +29,20 @@ test('数字框里填了解析不了的东西：原样交上去让服务端说�
 test('date-time：datetime-local 的本地时刻转成带时区的 ISO（服务端要 Z / 偏移）', () => {
   const out = elicitationContentFromInputs([fields[6]], { at: '2026-10-29T08:30' });
   assert.equal(out.at, new Date('2026-10-29T08:30').toISOString());
+});
+
+test('date-time 默认值 → datetime-local 控件值：不带时区后缀，交回去还是同一时刻（与本机时区无关）', () => {
+  // 控件不收 Z / 偏移：带着赋值会被清空，没动过的表单就丢了默认值
+  for (const iso of ['2026-10-29T08:30:00Z', '2026-10-29T08:30:00+08:00', '2026-10-29T08:30:15Z', '2026-10-29T08:30:15.250Z']) {
+    const local = dateTimeLocalValue(iso);
+    assert.match(local, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?$/, iso);
+    assert.equal(elicitationContentFromInputs([fields[6]], { at: local }).at, new Date(iso).toISOString(), iso);
+  }
+  assert.doesNotMatch(dateTimeLocalValue('2026-10-29T08:30:00Z'), /:\d{2}:\d{2}/, '秒为零就不带秒：控件默认按分钟显示');
+});
+
+test('date-time 默认值解析不了：给空串，不把乱码塞进控件', () => {
+  for (const bad of ['not a date', '', null, undefined, 42]) assert.equal(dateTimeLocalValue(bad), '', String(bad));
 });
 
 test('标题：permissionDisplay 的 title 优先，其次 displayName，最后服务器名', () => {

@@ -16,7 +16,7 @@ export function elicitationContentFromInputs(fields, raw = {}) {
     if (f.type === 'number' || f.type === 'integer') {
       const n = Number(v);
       content[f.name] = Number.isFinite(n) ? n : v;
-    } else if (f.format === 'date-time' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(v)) {
+    } else if (f.format === 'date-time' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/.test(v)) {
       // datetime-local 给的是不带时区的本地时刻；服务端要带 Z / 偏移的 ISO
       const d = new Date(v);
       content[f.name] = Number.isNaN(d.getTime()) ? v : d.toISOString();
@@ -25,6 +25,18 @@ export function elicitationContentFromInputs(fields, raw = {}) {
     }
   }
   return content;
+}
+
+// date-time 默认值 → datetime-local 控件的值。控件不收 Z / 偏移后缀，带着赋值会被清空：没动过的表单就悄悄丢了
+// 默认值，必填项还会被拒收。按本机时区换算成同一时刻；秒、毫秒非零才带上。解析不了的给空串。
+export function dateTimeLocalValue(value) {
+  const d = typeof value === 'string' && value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  let out = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.getSeconds() || d.getMilliseconds()) out += `:${pad(d.getSeconds())}`;
+  if (d.getMilliseconds()) out += `.${pad(d.getMilliseconds(), 3)}`;
+  return out;
 }
 
 export function elicitationHeading(card = {}) {

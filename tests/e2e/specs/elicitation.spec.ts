@@ -98,4 +98,28 @@ test.describe('MCP elicitation', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-ELICIT-5 带时区的 date-time 默认值照样填进控件、不动就交回同一时刻；上限按码点数，两个 emoji 输得进', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:elicitation-defaults');
+    await expect(sheet(page)).toHaveClass(/sheet-open/);
+
+    // datetime-local 不收 Z 后缀：原样赋值会被清空，必填的默认值就得用户重填
+    const at = page.getByTestId('elicitation-field-at').locator('input');
+    await expect(at).toHaveAttribute('type', 'datetime-local');
+    await expect(at).not.toHaveValue('');
+
+    // 逐键输入（受原生 maxlength 约束，fill 不受）：maxlength=2 数的是 UTF-16 码元，只容得下一个 emoji
+    const name = page.getByTestId('elicitation-field-name').locator('input');
+    await name.pressSequentially('😀😀');
+    await expect(name).toHaveValue('😀😀');
+
+    await page.getByTestId('elicitation-accept').click();
+    await expect(sheet(page)).not.toHaveClass(/sheet-open/);
+    expect((await elicitationLog(page)).at(-1)).toMatchObject({
+      requestId: 'mock-elicit-defaults', action: 'accept', content: { name: '😀😀', at: '2026-10-29T08:30:00.000Z' },
+    });
+
+    await expectNoBrowserErrors(page);
+  });
 });
